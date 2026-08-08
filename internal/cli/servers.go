@@ -5,8 +5,11 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/sshbroker"
+	"ssh-manager-mcp/internal/store"
 )
 
 func newServersCmd() *cobra.Command {
@@ -134,4 +137,22 @@ func serversRmCmd() *cobra.Command {
 // readKeyFile reads a private key from disk.
 func readKeyFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// authForServer resolves a server's stored credential into an SSH auth method.
+func authForServer(st *store.Store, srv *models.Server) (ssh.AuthMethod, error) {
+	cred, err := st.GetCredential(srv.CredentialID)
+	if err != nil {
+		return nil, err
+	}
+	if cred == nil {
+		return nil, fmt.Errorf("credential %s not found", srv.CredentialID)
+	}
+	switch srv.AuthMethod {
+	case models.AuthPassword:
+		return sshbroker.PasswordAuth(string(cred.Secret)), nil
+	case models.AuthPrivateKey:
+		return sshbroker.PrivateKeyAuth(cred.Secret, cred.Passphrase)
+	}
+	return nil, fmt.Errorf("unknown auth method %q", srv.AuthMethod)
 }
