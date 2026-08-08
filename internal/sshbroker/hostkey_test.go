@@ -1,6 +1,7 @@
 package sshbroker
 
 import (
+	"errors"
 	"testing"
 
 	"ssh-manager-mcp/internal/testsshd"
@@ -57,5 +58,8 @@ func TestHostKeyMismatchRejected(t *testing.T) {
 	_, err := Connect(hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), cb)
 	if err == nil {
 		t.Fatal("mismatched host key must be rejected")
+	}
+	if !errors.Is(err, ErrHostKeyMismatch) {
+		t.Fatalf("error must wrap ErrHostKeyMismatch, got %v", err)
 	}
 }
