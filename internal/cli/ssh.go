@@ -29,7 +29,7 @@ func newSSHCmd() *cobra.Command {
 			if srv == nil {
 				return fmt.Errorf("server %q not found", args[0])
 			}
-			auth, err := authForServer(st, srv)
+			auth, err := AuthForServer(st, srv)
 			if err != nil {
 				return err
 			}

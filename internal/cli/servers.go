@@ -139,8 +139,8 @@ func readKeyFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// authForServer resolves a server's stored credential into an SSH auth method.
-func authForServer(st *store.Store, srv *models.Server) (ssh.AuthMethod, error) {
+// AuthForServer resolves a server's stored credential into an SSH auth method.
+func AuthForServer(st *store.Store, srv *models.Server) (ssh.AuthMethod, error) {
 	cred, err := st.GetCredential(srv.CredentialID)
 	if err != nil {
 		return nil, err

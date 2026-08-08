@@ -44,7 +44,10 @@ func (c *Client) ExecSudo(cmd string, sudoPassword []byte, timeout time.Duration
 		return ExecResult{}, err
 	}
 	// Write the sudo password then close stdin so sudo proceeds.
-	if _, err := stdin.Write(append(sudoPassword, '\n')); err != nil {
+	pw := make([]byte, len(sudoPassword)+1)
+	copy(pw, sudoPassword)
+	pw[len(sudoPassword)] = '\n'
+	if _, err := stdin.Write(pw); err != nil {
 		return ExecResult{}, err
 	}
 	stdin.Close()
