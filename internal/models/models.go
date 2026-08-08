@@ -16,6 +16,14 @@ const (
 	CredPrivateKey CredentialType = "private_key"
 )
 
+// AuthMethodForServer maps a credential type to the server's auth_method.
+func (c CredentialType) AuthMethodForServer() AuthMethod {
+	if c == CredPrivateKey {
+		return AuthPrivateKey
+	}
+	return AuthPassword
+}
+
 // Server is an SSH target. Credential holds the login secret; SudoCredential (optional) holds a password for sudo -S.
 type Server struct {
 	ID               string
