@@ -17,6 +17,15 @@ func storePath() (string, error) {
 	return store.DefaultStorePath()
 }
 
+func metaFilePath() (string, error) {
+	p, err := storePath()
+	if err != nil {
+		return "", err
+	}
+	// meta.json lives next to the store file
+	return p + ".meta.json", nil
+}
+
 // openUnlockedStore fails the command with guidance if the vault is locked.
 // (In Plan 1 we pass the master key via SSHMGR_MASTERKEY_HEX for tests; real unlock lands when wired to keyring.)
 func openUnlockedStore(cmd *cobra.Command) (*store.Store, error) {
