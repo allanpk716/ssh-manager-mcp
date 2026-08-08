@@ -48,10 +48,13 @@ func Open(path string, masterKey []byte) (*Store, error) {
 	}
 	// Enable foreign_keys (OFF by default in SQLite — otherwise ON DELETE CASCADE
 	// and FK constraints are dead code) and a 5s busy_timeout to wait on locks.
-	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
+	// WAL mode improves concurrency; MaxOpenConns(1) serializes access so the
+	// single SQLite writer never hits "database is locked" under parallel requests.
+	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1) // SQLite single-writer; serializes access and avoids "database is locked"
 	if err := initSchema(db); err != nil {
 		db.Close()
 		return nil, err

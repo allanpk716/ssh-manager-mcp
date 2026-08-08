@@ -29,3 +29,24 @@ func TestVerifyTokenRejectsUnknown(t *testing.T) {
 		t.Fatalf("unknown token should be nil,nil; got %v", err)
 	}
 }
+
+func TestVerifyTokenPrefiltersByPrefix(t *testing.T) {
+	s := newTestStore(t)
+	pid, _ := s.AddProfile("dev")
+	_, token, _ := s.AddProject("p1", pid)
+
+	// a token with a different 8-char prefix must not verify (and returns nil,nil quickly)
+	other := "AAAAAAAA" + token[8:] // same length, different prefix
+	got, err := s.VerifyToken(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatal("token with wrong prefix must not verify")
+	}
+	// the real token still verifies
+	got, err = s.VerifyToken(token)
+	if err != nil || got == nil {
+		t.Fatalf("real token must verify: got %v err %v", got, err)
+	}
+}
