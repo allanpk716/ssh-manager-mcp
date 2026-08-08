@@ -26,8 +26,14 @@ func (s *Store) AddProject(name, profileID string) (string, string, error) {
 }
 
 // VerifyToken returns the project whose token matches, or (nil, nil) if none.
+// Prefiltering by token_prefix (first 8 chars) bounds work to the rare matching
+// row, so Argon2id (64 MiB) only runs on true candidates.
 func (s *Store) VerifyToken(token string) (*models.Project, error) {
-	rows, err := s.db.Query(`SELECT id,name,token_hash,token_salt,token_prefix,profile_id FROM projects`)
+	prefix := tokenPrefix(token)
+	rows, err := s.db.Query(
+		`SELECT id,name,token_hash,token_salt,token_prefix,profile_id FROM projects WHERE token_prefix=?`,
+		prefix,
+	)
 	if err != nil {
 		return nil, err
 	}
