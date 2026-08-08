@@ -18,7 +18,7 @@ func profilesAddCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		Short: "Create a profile",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openUnlockedStore(cmd)
+			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
@@ -38,7 +38,7 @@ func profilesLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List profiles",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openUnlockedStore(cmd)
+			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
@@ -62,7 +62,7 @@ func profilesGrantCmd() *cobra.Command {
 		Args:  cobra.MinimumNArgs(2),
 		Short: "Grant servers to a profile (by name)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openUnlockedStore(cmd)
+			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}

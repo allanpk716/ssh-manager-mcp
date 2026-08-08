@@ -5,11 +5,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/models"
-	"ssh-manager-mcp/internal/sshbroker"
-	"ssh-manager-mcp/internal/store"
 )
 
 func newServersCmd() *cobra.Command {
@@ -28,7 +25,7 @@ func serversAddCmd() *cobra.Command {
 		Use:   "add",
 		Short: "Add a server (with its credential)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openUnlockedStore(cmd)
+			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
@@ -92,7 +89,7 @@ func serversListCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List servers",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openUnlockedStore(cmd)
+			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
@@ -119,7 +116,7 @@ func serversRmCmd() *cobra.Command {
 		Short: "Remove a server",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openUnlockedStore(cmd)
+			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
@@ -137,22 +134,4 @@ func serversRmCmd() *cobra.Command {
 // readKeyFile reads a private key from disk.
 func readKeyFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
-}
-
-// AuthForServer resolves a server's stored credential into an SSH auth method.
-func AuthForServer(st *store.Store, srv *models.Server) (ssh.AuthMethod, error) {
-	cred, err := st.GetCredential(srv.CredentialID)
-	if err != nil {
-		return nil, err
-	}
-	if cred == nil {
-		return nil, fmt.Errorf("credential %s not found", srv.CredentialID)
-	}
-	switch srv.AuthMethod {
-	case models.AuthPassword:
-		return sshbroker.PasswordAuth(string(cred.Secret)), nil
-	case models.AuthPrivateKey:
-		return sshbroker.PrivateKeyAuth(cred.Secret, cred.Passphrase)
-	}
-	return nil, fmt.Errorf("unknown auth method %q", srv.AuthMethod)
 }

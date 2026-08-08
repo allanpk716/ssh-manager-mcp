@@ -9,6 +9,7 @@ import (
 
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/vault"
 )
 
 func newSSHCmd() *cobra.Command {
@@ -17,7 +18,7 @@ func newSSHCmd() *cobra.Command {
 		Short: "Owner full-access SSH exec (no profile limit). Runs the command on the named server.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := openUnlockedStore(cmd)
+			st, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
@@ -29,7 +30,7 @@ func newSSHCmd() *cobra.Command {
 			if srv == nil {
 				return fmt.Errorf("server %q not found", args[0])
 			}
-			auth, err := AuthForServer(st, srv)
+			auth, err := vault.AuthForServer(st, srv)
 			if err != nil {
 				return err
 			}
