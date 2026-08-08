@@ -49,9 +49,31 @@ func TestExecCommandRejectsOutOfProfile(t *testing.T) {
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{a})
 
-	_, err := ExecCommandForProfile(context.Background(), st, pid, b, "echo hi", false, time.Second)
+	const projectID = "proj-test"
+	_, err := ExecCommandForProfile(context.Background(), st, projectID, pid, b, "echo hi", false, time.Second)
 	if !errors.Is(err, ErrNotInProfile) {
 		t.Fatalf("want ErrNotInProfile, got %v", err)
+	}
+
+	// Fix 1 lock: the denied branch must produce an audited row attributed to projectID.
+	rows, err := st.AuditRows(5)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	var denied store.AuditRow
+	found := false
+	for _, r := range rows {
+		if r.Action == "exec" && r.Status == "denied" && r.ServerID == b && r.ProjectID == projectID {
+			denied = r
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no denied audit row for project=%s server=%s; rows=%+v", projectID, b, rows)
+	}
+	if denied.Command != "echo hi" {
+		t.Fatalf("denied audit command = %q, want %q", denied.Command, "echo hi")
 	}
 }
 
@@ -66,7 +88,7 @@ func TestExecCommandRunsInProfileServer(t *testing.T) {
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{srvID})
 
-	out, err := ExecCommandForProfile(context.Background(), st, pid, srvID, "hello", false, 5*time.Second)
+	out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "hello", false, 5*time.Second)
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -91,7 +113,7 @@ func TestExecCommandSudoWired(t *testing.T) {
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{srvID})
 
-	out, err := ExecCommandForProfile(context.Background(), st, pid, srvID, "whoami", true, 5*time.Second)
+	out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "whoami", true, 5*time.Second)
 	if err != nil {
 		t.Fatalf("sudo exec: %v", err)
 	}

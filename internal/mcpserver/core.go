@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,58 +33,103 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 
 // ExecCommandForProfile runs command on serverID iff serverID is in profileID (iron rule).
 // sudo=true uses sudo -S with the server's stored sudo password.
-func ExecCommandForProfile(ctx context.Context, st *store.Store, profileID, serverID, command string, sudo bool, timeout time.Duration) (ExecOutput, error) {
-	allowed, err := st.ServersForProfile(profileID)
-	if err != nil {
-		return ExecOutput{}, err
+//
+// Every branch is audited via the deferred WriteAudit: denial (out-of-profile), auth
+// failure, host-key mismatch, connect failure, missing sudo, timeout, exec error, and
+// success. projectID attributes the call to the agent's project (empty for any future
+// owner-facing caller — currently the owner path is internal/cli/ssh.go).
+func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeout time.Duration) (out ExecOutput, err error) {
+	var status string
+	var exitCode int
+	start := time.Now()
+	defer func() {
+		if status == "" {
+			status = "error"
+		}
+		_ = st.WriteAudit(store.AuditRow{
+			TS: start, ProjectID: projectID, ServerID: serverID, Action: "exec",
+			Command: command, Sudo: sudo, Status: status, ExitCode: exitCode, DurationMS: time.Since(start).Milliseconds(),
+		})
+	}()
+
+	// Iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
+	allowed, ferr := st.ServersForProfile(profileID)
+	if ferr != nil {
+		err = ferr
+		return
 	}
 	if !contains(allowed, serverID) {
-		return ExecOutput{}, ErrNotInProfile
+		status = "denied"
+		err = ErrNotInProfile
+		return
 	}
-	srv, err := st.GetServer(serverID)
-	if err != nil || srv == nil {
-		return ExecOutput{}, fmt.Errorf("server %s not found", serverID)
+
+	srv, serr := st.GetServer(serverID)
+	if serr != nil || srv == nil {
+		status = "error"
+		err = fmt.Errorf("server %s not found", serverID)
+		return
 	}
-	auth, err := vault.AuthForServer(st, srv)
-	if err != nil {
-		return ExecOutput{}, err
+
+	auth, aerr := vault.AuthForServer(st, srv)
+	if aerr != nil {
+		status = "auth_error"
+		err = aerr
+		return
 	}
-	hkCb, _ := sshbroker.HostKeyTOFU(st, srv.Host)
-	cli, err := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
-	if err != nil {
-		return ExecOutput{}, err
+
+	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host)
+	if herr != nil {
+		status = "error"
+		err = herr
+		return
+	}
+
+	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	if cerr != nil {
+		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+			status = "hostkey_mismatch"
+		} else {
+			status = "connect_error"
+		}
+		err = cerr
+		return
 	}
 	defer cli.Close()
 
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	start := time.Now()
+
 	var res sshbroker.ExecResult
-	status := "ok"
 	if sudo {
 		if srv.SudoCredentialID == "" {
-			return ExecOutput{}, fmt.Errorf("sudo not configured for server %s (call list_servers: has_sudo tells you)", srv.Name)
+			status = "no_sudo"
+			err = fmt.Errorf("sudo not configured for server %s (call list_servers: has_sudo tells you)", srv.Name)
+			return
 		}
-		sudoCred, err := st.GetCredential(srv.SudoCredentialID)
-		if err != nil || sudoCred == nil {
-			return ExecOutput{}, fmt.Errorf("sudo credential for %s not found", srv.Name)
+		sudoCred, gerr := st.GetCredential(srv.SudoCredentialID)
+		if gerr != nil || sudoCred == nil {
+			status = "no_sudo"
+			err = fmt.Errorf("sudo credential for %s not found", srv.Name)
+			return
 		}
 		res, err = cli.ExecSudo(command, sudoCred.Secret, timeout)
 	} else {
 		res, err = cli.Exec(command, timeout)
 	}
+	exitCode = res.ExitCode
+	// sshbroker returns nil err for non-zero exits (*ssh.ExitError) and for timeouts;
+	// both are results, not errors. A non-nil err here is a genuine exec failure.
 	if res.TimedOut {
 		status = "timeout"
 	} else if err != nil {
 		status = "error"
+	} else {
+		status = "ok"
 	}
-	_ = st.WriteAudit(store.AuditRow{
-		TS: start, ServerID: serverID, Action: "exec", Command: command,
-		Sudo: sudo, Status: status, ExitCode: res.ExitCode, DurationMS: time.Since(start).Milliseconds(),
-	})
-	// Connect/exec errors that weren't exit codes surface here; non-zero exit is a result, not an error.
-	return ExecOutput{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, TimedOut: res.TimedOut}, err
+	out = ExecOutput{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, TimedOut: res.TimedOut}
+	return
 }
 
 func contains(haystack []string, needle string) bool {

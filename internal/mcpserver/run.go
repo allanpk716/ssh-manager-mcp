@@ -24,7 +24,7 @@ func RunStdio(token string) error {
 	if project == nil {
 		return fmt.Errorf("invalid or unknown token")
 	}
-	srv, err := NewServer(st, project.ProfileID)
+	srv, err := NewServer(st, project.ProfileID, project.ID)
 	if err != nil {
 		return err
 	}

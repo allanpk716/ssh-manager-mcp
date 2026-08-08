@@ -44,7 +44,7 @@ func TestE2EIronRule(t *testing.T) {
 	pid, _ := st.AddProfile("agent-profile")
 	_ = st.GrantServers(pid, []string{allowedID}) // only allowed in profile
 
-	server, _ := NewServer(st, pid)
+	server, _ := NewServer(st, pid, "proj-test")
 	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "v0"}, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
 	srvSess, _ := server.Connect(context.Background(), t1, nil)
