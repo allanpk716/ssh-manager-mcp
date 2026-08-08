@@ -22,6 +22,9 @@ type Options struct {
 
 // Start launches an in-process SSH server on a random local port.
 // Returns host:port, the server's host public key, and a cleanup func.
+// Teardown note: cleanup() closes only the listener; in-flight sessions drain when
+// the client disconnects. Callers MUST `defer cleanup()` BEFORE `defer cli.Close()`
+// (LIFO) so the client closes first and server goroutines exit cleanly.
 func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 	t.Helper()
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
