@@ -5,33 +5,71 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"ssh-manager-mcp/internal/store"
 )
 
+// keychain is the master-key source (default real OS keychain; tests override).
+var keychain store.KeyProvider = store.KeyringKeyProvider{}
+
+// passphrasePrompt reads a passphrase (default terminal; tests override).
+var passphrasePrompt = func() ([]byte, error) {
+	fmt.Fprint(os.Stderr, "Enter passphrase to unlock vault: ")
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	return b, err
+}
+
 func newUnlockCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "unlock",
-		Short: "Resolve the master key and print SSHMGR_MASTERKEY_HEX for the current shell",
+		Short: "Resolve the master key (keychain, else passphrase) and print SSHMGR_MASTERKEY_HEX",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			kp := store.KeyringKeyProvider{}
-			mk, err := kp.Get()
-			if err == store.ErrNotFound {
-				// first run: generate + store in keychain
-				mk, err = store.GenerateMasterKey()
-				if err != nil {
-					return err
-				}
-				if err := kp.Set(mk); err != nil {
-					return err
-				}
-			} else if err != nil {
+			mk, err := keychain.Get()
+			if err == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "export SSHMGR_MASTERKEY_HEX=%s\n", hexEncode(mk))
+				return nil
+			}
+			if err != store.ErrNotFound {
+				// keychain unavailable (e.g. headless Linux w/o Secret Service) → passphrase fallback
+				return runPassphraseUnlock(cmd)
+			}
+			// first run with a working keychain: generate + store
+			mk, err = store.GenerateMasterKey()
+			if err != nil {
 				return err
+			}
+			if err := keychain.Set(mk); err != nil {
+				// can't persist to keychain → fall back to passphrase path
+				return runPassphraseUnlock(cmd)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "export SSHMGR_MASTERKEY_HEX=%s\n", hexEncode(mk))
 			return nil
 		},
 	}
+}
+
+func runPassphraseUnlock(cmd *cobra.Command) error {
+	metaPath, err := metaFilePath()
+	if err != nil {
+		return err
+	}
+	meta, _ := store.LoadMeta(metaPath)
+	if meta == nil {
+		// first passphrase use: generate salt
+		if err := store.SaveMeta(metaPath, &store.Meta{PassphraseSalt: store.NewSalt16()}); err != nil {
+			return err
+		}
+		meta, _ = store.LoadMeta(metaPath)
+	}
+	pass, err := passphrasePrompt()
+	if err != nil {
+		return err
+	}
+	mk := store.DeriveFromPassphrase(pass, meta.PassphraseSalt)
+	fmt.Fprintf(cmd.OutOrStdout(), "export SSHMGR_MASTERKEY_HEX=%s\n", hexEncode(mk))
+	return nil
 }
 
 func newLockCmd() *cobra.Command {

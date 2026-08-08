@@ -79,6 +79,9 @@ func DeriveFromPassphrase(passphrase, salt []byte) []byte {
 	return argon2.IDKey(passphrase, salt, 1, 64*1024, 4, 32)
 }
 
+// NewSalt16 returns 16 random bytes for passphrase derivation.
+func NewSalt16() []byte { return newSalt() }
+
 // Meta holds vault metadata persisted next to the store (used for passphrase fallback).
 type Meta struct {
 	PassphraseSalt []byte `json:"passphrase_salt"`
