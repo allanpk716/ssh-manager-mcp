@@ -22,7 +22,7 @@ func TestNewServerToolsScopedViaInMemoryClient(t *testing.T) {
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{srvID})
 
-	server, _ := NewServer(st, pid)
+	server, _ := NewServer(st, pid, "proj-test")
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
 	srvSession, err := server.Connect(context.Background(), t1, nil)
