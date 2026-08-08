@@ -61,7 +61,11 @@ func runPassphraseUnlock(cmd *cobra.Command) error {
 		if err := store.SaveMeta(metaPath, &store.Meta{PassphraseSalt: store.NewSalt16()}); err != nil {
 			return err
 		}
-		meta, _ = store.LoadMeta(metaPath)
+		m, err := store.LoadMeta(metaPath)
+		if err != nil {
+			return fmt.Errorf("reload vault metadata: %w", err)
+		}
+		meta = m
 	}
 	pass, err := passphrasePrompt()
 	if err != nil {
