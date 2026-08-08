@@ -125,4 +125,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
   exit_code INTEGER,
   duration_ms INTEGER
 );
+CREATE TABLE IF NOT EXISTS host_keys (
+  host TEXT PRIMARY KEY,
+  key_blob BLOB NOT NULL,
+  created_at INTEGER NOT NULL
+);
 `
