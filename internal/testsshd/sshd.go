@@ -68,7 +68,7 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 				close(stop)
 				return
 			}
-			go serve(conn, cfg, signer, opts.SudoPassword, execFn)
+			go serve(conn, cfg, opts.SudoPassword, execFn)
 		}
 	}()
 	cleanup := func() {
@@ -92,7 +92,7 @@ func bytesEqual(a, b []byte) bool {
 	return d == 0
 }
 
-func serve(c net.Conn, cfg *ssh.ServerConfig, signer ssh.Signer, sudoPw string, execFn func(string, io.Reader) (string, string, int)) {
+func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, execFn func(string, io.Reader) (string, string, int)) {
 	defer c.Close()
 	sc, chans, reqs, err := ssh.NewServerConn(c, cfg)
 	if err != nil {
