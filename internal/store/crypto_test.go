@@ -48,3 +48,20 @@ func TestSealIsRandom(t *testing.T) {
 		t.Fatal("two seals of same plaintext must differ (random salt+nonce)")
 	}
 }
+
+func TestOpenTamperedBlobFails(t *testing.T) {
+	key := make([]byte, 32)
+	rand.Read(key)
+	blob, err := seal(key, []byte("secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// flip one bit in the ciphertext portion (after salt(16)+nonce(12))
+	tampered := make([]byte, len(blob))
+	copy(tampered, blob)
+	last := len(tampered) - 1
+	tampered[last] ^= 0x01
+	if _, err := open(key, tampered); err == nil {
+		t.Fatal("open of tampered blob must fail (GCM auth)")
+	}
+}

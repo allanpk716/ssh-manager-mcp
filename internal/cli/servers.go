@@ -30,6 +30,12 @@ func serversAddCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
+			if password != "" && keyPath != "" {
+				return fmt.Errorf("--password and --key are mutually exclusive; provide exactly one")
+			}
+			if password == "" && keyPath == "" {
+				return fmt.Errorf("required: exactly one of --password or --key")
+			}
 			var cred models.Credential
 			if password != "" {
 				cred = models.Credential{Type: models.CredPassword, Secret: []byte(password)}
