@@ -19,7 +19,7 @@ func projectsAddCmd() *cobra.Command {
 		Short: "Create a project and print its one-time token + .mcp.json snippet",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			profileName, _ := cmd.Flags().GetString("profile")
-			s, err := openUnlockedStore(cmd)
+			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
@@ -58,7 +58,7 @@ func projectsLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List projects (token prefix only)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openUnlockedStore(cmd)
+			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}

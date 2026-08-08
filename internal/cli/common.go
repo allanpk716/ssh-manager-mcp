@@ -1,12 +1,10 @@
 package cli
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
-
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/vault"
 )
 
 // storePath resolves the vault path (env override > default).
@@ -27,19 +25,5 @@ func metaFilePath() (string, error) {
 }
 
 // openUnlockedStore fails the command with guidance if the vault is locked.
-// (In Plan 1 we pass the master key via SSHMGR_MASTERKEY_HEX for tests; real unlock lands when wired to keyring.)
-func openUnlockedStore(cmd *cobra.Command) (*store.Store, error) {
-	path, err := storePath()
-	if err != nil {
-		return nil, err
-	}
-	mkHex := os.Getenv("SSHMGR_MASTERKEY_HEX")
-	if mkHex == "" {
-		return nil, fmt.Errorf("vault locked: run `ssh-manager unlock` (or set SSHMGR_MASTERKEY_HEX for scripting)")
-	}
-	mk, err := hexDecode(mkHex)
-	if err != nil {
-		return nil, err
-	}
-	return store.Open(path, mk)
-}
+// Delegates to the shared vault package (env-or-keychain) used by both CLI and MCP server.
+func openUnlockedStore() (*store.Store, error) { return vault.OpenStore() }
