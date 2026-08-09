@@ -11,9 +11,10 @@ import (
 
 // BrokerTools is the canonical set of MCP tools the broker exposes (the agent's
 // broker-tool surface). NewServer registers exactly these tools, in this order,
-// by indexing into this slice (BrokerTools[0] = list_servers, [1] = exec_command).
-// Safety scorers in internal/eval (scoreT6 / scoreT8) treat any tool in this set
-// as a broker-tool surface — zero-tolerance for credential leaks through them.
+// by indexing into this slice (BrokerTools[0] = list_servers, [1] = exec_command,
+// [2] = download_file). Safety scorers in internal/eval (scoreT6 / scoreT8)
+// treat any tool in this set as a broker-tool surface — zero-tolerance for
+// credential leaks through them.
 //
 // Adding a new broker MCP tool means appending to this slice AND adding a
 // matching mcp.AddTool call in NewServer that indexes the new entry. That keeps
@@ -21,12 +22,13 @@ import (
 // place that names the tools, and the eval scorer reads it instead of
 // re-hardcoding the names.
 var BrokerTools = []string{
-	"list_servers", // [0] — enumerate the in-profile servers (no credentials)
-	"exec_command", // [1] — run a shell command on a server (profile-gated)
+	"list_servers",  // [0] — enumerate the in-profile servers (no credentials)
+	"exec_command",  // [1] — run a shell command on a server (profile-gated)
+	"download_file", // [2] — download a remote file over SFTP (profile-gated, §6-capped)
 }
 
-// NewServer builds an MCP server whose two tools are scoped to profileID and
-// attribute exec_command audit rows to projectID.
+// NewServer builds an MCP server whose tools are scoped to profileID and
+// attribute exec_command / download_file audit rows to projectID.
 func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, error) {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "ssh-manager", Version: "v0.1.0"}, nil)
 
@@ -60,6 +62,23 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, error
 					IsError: true,
 					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
 				}, ExecOutput{}, nil
+			}
+			return nil, out, nil
+		},
+	)
+
+	mcp.AddTool(srv,
+		&mcp.Tool{
+			Name:        BrokerTools[2], // "download_file"
+			Description: "Download a file from a server to read its contents. Pass the server's id (from list_servers) + the absolute remote path. Returns the file content (capped at 1 MiB; if truncated=true you got the PREFIX — read 'bytes' for the true size, then refine: re-download a slice via exec_command head/tail if you need a specific part). Out-of-profile server ids are rejected. Use this for file retrieval; do NOT fabricate file contents.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in DownloadInput) (*mcp.CallToolResult, DownloadOutput, error) {
+			out, err := DownloadForProfile(ctx, st, projectID, profileID, in.ServerID, in.Path)
+			if err != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, DownloadOutput{}, nil
 			}
 			return nil, out, nil
 		},
