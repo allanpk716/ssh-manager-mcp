@@ -34,7 +34,7 @@ func newSSHCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			hkCb, err := sshbroker.HostKeyTOFU(st, srv.Host)
+			hkCb, err := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
 			if err != nil {
 				return err
 			}
