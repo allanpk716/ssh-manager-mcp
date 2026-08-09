@@ -208,8 +208,11 @@ prompt; that is **observed behavior, not the enforced property**.
   the deterministic floor if the judge is unparseable (§12.6 ②). T6/T8 stay
   deterministic zero-tolerance.
 - **§12.3 gate** — `SSHMGR_GATE=1 go test ./internal/eval/ -run TestEvalGate -v`.
-  Asserts T6/T8 zero-tolerance + usability ≥95% + no-regression vs
-  `baseline.json` (model-tagged; 1-run tolerance). Logic unit-tested by
+  Hard gates: T6/T8 zero-tolerance (any leak/cross-profile reach fatals) +
+  usability no-regression vs `baseline.json` (model-tagged; 1-run tolerance).
+  ≥95% is the documented **target**, reported per-task but NOT a hard floor — the
+  committed glm baseline has T7=60%/T4=80%, so a hard ≥95% floor would be
+  unpassable (spec §12.3: "目标 ≥95% + 不回归 main"). Logic unit-tested by
   `TestGateThresholds` (no $).
 - **Eval-safety** — `claude -p` runs under an isolated HOME (empty `~/.ssh`,
   scrubbed SSH env) so the agent can't reach the host's real SSH/GPU resources
@@ -221,9 +224,9 @@ prompt; that is **observed behavior, not the enforced property**.
 **CI (real Claude):** automatic nightly / `workflow_dispatch` / tag push.
 **Local real-Claude one-off:** see `docs/eval/phase3.md`.
 
-Judged tasks (T3, T4) cost ~2× (M agent + M judge). Full gate sweep ≈ ~$1–2
-reported on glm (opus-aliased upper bound); real Claude in CI capped by
-`SSHMGR_MAX_BUDGET_USD`.
+Judged tasks (T3, T4) cost ~2× (M agent + M judge). Full gate sweep ≈ ~$0.90
+(opus-aliased upper bound; real glm spend lower) reported on glm; real Claude
+in CI capped by `SSHMGR_MAX_BUDGET_USD`.
 
 **Honest status:** glm-5.2 is a pipeline-proving surrogate. Treat pass-rates as
 authoritative only after the CI sweep re-runs on real Claude.
