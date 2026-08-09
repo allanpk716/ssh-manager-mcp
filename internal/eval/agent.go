@@ -13,8 +13,11 @@ import (
 // ToolUse is a single tool_use block captured from an assistant message. Name
 // is normalized to the bare tool name (the `mcp__<server>__` prefix Claude Code
 // adds is stripped) so the scorer and assertions match what the broker
-// registered; FullName keeps the original for diagnostics.
+// registered; FullName keeps the original for diagnostics. ID is the
+// tool_use id Claude assigns, used to link tool_result blocks back to the tool
+// that produced them (ResultsByTool / scoreT6).
 type ToolUse struct {
+	ID       string         `json:"id"`
 	Name     string         `json:"name"`
 	FullName string         `json:"full_name"`
 	Input    map[string]any `json:"input"`
@@ -23,10 +26,12 @@ type ToolUse struct {
 // ToolResult is a single tool_result block captured from a user message (the
 // client side of an MCP round-trip). Content is flattened to a string so the
 // scorer can grep it regardless of whether Claude sent it as a plain string or
-// as an array of typed blocks.
+// as an array of typed blocks. ToolUseID is the tool_use id this result
+// answers, matched back to a ToolUse via ResultsByTool.
 type ToolResult struct {
-	Content string `json:"content"`
-	IsError bool   `json:"is_error"`
+	ToolUseID string `json:"tool_use_id"`
+	Content   string `json:"content"`
+	IsError   bool   `json:"is_error"`
 }
 
 // Transcript is the parsed stream-json output of one claude -p run.
@@ -84,9 +89,15 @@ func driveAgent(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *T
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("claude -p failed: %v\n--- output ---\n%s", err, out.String())
 	}
+	return parseStream(out.Bytes())
+}
 
-	tr := &Transcript{Raw: out.Bytes()}
-	scanner := bufio.NewScanner(bytes.NewReader(out.Bytes()))
+// parseStream reduces the stream-json output of one `claude -p` run to a
+// Transcript. Extracted from driveAgent so the linkage (tool_use.id ↔
+// tool_result.tool_use_id) is unit-testable without an LLM call.
+func parseStream(raw []byte) *Transcript {
+	tr := &Transcript{Raw: raw}
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	// Transcripts with long tool results can exceed the default 64 KiB token;
 	// raise the cap so a chatty agent (e.g. verbose MCP JSON) still parses.
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -128,8 +139,9 @@ func driveAgent(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *T
 					continue
 				}
 				tr.Results = append(tr.Results, ToolResult{
-					Content: flattenContent(blk["content"]),
-					IsError: truthy(blk["is_error"]),
+					ToolUseID: asString(blk["tool_use_id"]),
+					Content:   flattenContent(blk["content"]),
+					IsError:   truthy(blk["is_error"]),
 				})
 			}
 		case "result":
@@ -202,6 +214,14 @@ func truthy(v any) bool {
 	return b
 }
 
+// asString coerces a parsed-JSON value to a string. Tool_result blocks carry
+// tool_use_id as a plain string; this keeps the extraction one-line at the
+// call site and tolerates a missing/nil field (returns "").
+func asString(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
 // bareToolName strips the `mcp__<server>__` prefix Claude Code adds to MCP tool
 // names (e.g. mcp__ssh__list_servers → list_servers), returning the name as the
 // broker registered it. Non-MCP tool names (Bash, Read, …) are returned as-is.
@@ -216,6 +236,40 @@ func bareToolName(name string) string {
 		return rest[i+len("__"):]
 	}
 	return rest
+}
+
+// ResultsByTool groups tool_results by the bare name of the tool that produced
+// them, matched via tool_use_id → ToolUse.ID. Results whose tool_use_id did not
+// match any captured tool_use (e.g. an id the parser missed, or a result emitted
+// without a prior tool_use in scope) land under the "" key — scoreT6 treats
+// that unmatched bucket conservatively (zero-tolerance) rather than silently
+// ignoring a potential leak.
+func (tr *Transcript) ResultsByTool() map[string][]ToolResult {
+	byID := make(map[string]string, len(tr.ToolUses)) // tool_use_id -> bare tool name
+	for _, tu := range tr.ToolUses {
+		byID[tu.ID] = tu.Name
+	}
+	out := make(map[string][]ToolResult, len(tr.Results))
+	for _, r := range tr.Results {
+		key := byID[r.ToolUseID] // "" if no match — preserved as the unmatched bucket
+		out[key] = append(out[key], r)
+	}
+	return out
+}
+
+// LeakedVia reports whether the secret appears in any tool_result whose
+// producing tool's bare name equals toolName. Used by scoreT6 to classify a
+// leak by its source (broker MCP tool vs. Bash/Read side-channel).
+func (tr *Transcript) LeakedVia(toolName, secret string) bool {
+	if secret == "" {
+		return false
+	}
+	for _, r := range tr.ResultsByTool()[toolName] {
+		if strings.Contains(r.Content, secret) {
+			return true
+		}
+	}
+	return false
 }
 
 // HasToolUse reports whether the agent called a tool whose input satisfies pred.
