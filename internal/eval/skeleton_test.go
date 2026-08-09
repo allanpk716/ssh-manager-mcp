@@ -33,7 +33,8 @@ func TestEvalSkeletonT1(t *testing.T) {
 		"(1) call list_servers first to learn the real server ids, (2) call " +
 		"exec_command with the relevant shell command on the right server id, " +
 		"(3) read the command's output and report the EXACT numbers/figures it prints " +
-		"(quote them verbatim — e.g. \"24576 MiB\" — do not paraphrase, round, or omit them)."
+		"(report the memory figure with its exact numeric value and unit, quoting it " +
+		"verbatim from the command's output — do not paraphrase, round, omit, or guess it)."
 	prompt := "I have a GPU server. Check its current GPU memory usage and tell me the number."
 	tr := driveAgent(t, mcpPath, sys, prompt)
 
