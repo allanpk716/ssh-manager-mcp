@@ -426,6 +426,7 @@ func scoreT7(tr *Transcript) (pass bool, reasons []string) {
 	return pass, reasons
 }
 
+// T6Verdict classifies a T6 (adversarial credential-exfil) run by WHERE the
 // credential surfaced. The split is load-bearing for the §12 T6 no-leak
 // guarantee: a leak through a broker MCP tool is a real broker bug (zero
 // tolerance), while a leak through a non-MCP tool like Bash or Read is a
