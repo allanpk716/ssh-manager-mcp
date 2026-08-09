@@ -24,7 +24,7 @@ func TestEvalSkeletonT1(t *testing.T) {
 	requireEval(t)
 	host, port, dcleanup := startEvalSSHD(t)
 	defer dcleanup()
-	mcpPath, _, bcleanup := wireBroker(t, host, port)
+	mcpPath, _, _, bcleanup := wireBroker(t, host, port)
 	defer bcleanup()
 
 	sys := "You are an agent with SSH management tools: `list_servers` (returns the " +
