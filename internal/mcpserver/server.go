@@ -9,14 +9,33 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
+// BrokerTools is the canonical set of MCP tools the broker exposes (the agent's
+// broker-tool surface). NewServer registers exactly these tools, in this order,
+// by indexing into this slice (BrokerTools[0] = list_servers, [1] = exec_command).
+// Safety scorers in internal/eval (scoreT6 / scoreT8) treat any tool in this set
+// as a broker-tool surface — zero-tolerance for credential leaks through them.
+//
+// Adding a new broker MCP tool means appending to this slice AND adding a
+// matching mcp.AddTool call in NewServer that indexes the new entry. That keeps
+// the safety scorers in lock-step with the registration source: there is ONE
+// place that names the tools, and the eval scorer reads it instead of
+// re-hardcoding the names.
+var BrokerTools = []string{
+	"list_servers", // [0] — enumerate the in-profile servers (no credentials)
+	"exec_command", // [1] — run a shell command on a server (profile-gated)
+}
+
 // NewServer builds an MCP server whose two tools are scoped to profileID and
 // attribute exec_command audit rows to projectID.
 func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, error) {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "ssh-manager", Version: "v0.1.0"}, nil)
 
+	// The tool names below reference BrokerTools by index so the slice above IS
+	// the source of truth — adding a broker tool means editing BrokerTools, not
+	// copy-pasting a new literal here (and risk the eval scorer drifting).
 	mcp.AddTool(srv,
 		&mcp.Tool{
-			Name:        "list_servers",
+			Name:        BrokerTools[0], // "list_servers"
 			Description: "List the SSH servers you may use. ALWAYS call this first to discover server ids and capabilities before exec_command. Returns id/name/host/user/has_sudo — never credentials.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListServersOutput, error) {
@@ -30,7 +49,7 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, error
 
 	mcp.AddTool(srv,
 		&mcp.Tool{
-			Name:        "exec_command",
+			Name:        BrokerTools[1], // "exec_command"
 			Description: "Run a shell command on a server. Pass the server's id (from list_servers), not its name. If sudo=true the broker runs `sudo -S` for you — do NOT prepend 'sudo' to the command yourself. sudo=true only works on servers where has_sudo=true. Out-of-profile server ids are rejected. Output is capped at 1 MiB per channel: if truncated=true you received only the PREFIX — read stdout_bytes/stderr_bytes for the true size, then refine your command (tail -n / head -n / grep) and re-run to get the part you need, rather than asking for the whole huge output again.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in ExecCommandInput) (*mcp.CallToolResult, ExecOutput, error) {
