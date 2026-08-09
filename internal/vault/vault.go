@@ -15,6 +15,8 @@ import (
 
 // OpenStore resolves the master key and opens the vault.
 // Order: SSHMGR_MASTERKEY_HEX env (dev/CLI scripting) → OS keychain (production/MCP).
+// The keychain service is taken from SSHMGR_KEYRING_SERVICE (empty → production
+// default "ssh-manager"; the eval sets "ssh-manager-eval" to isolate its runs).
 // Returns a "vault locked" error if neither yields a key (e.g. MCP spawned before any `unlock`).
 func OpenStore() (*store.Store, error) {
 	path, err := storePath()
@@ -39,7 +41,7 @@ func resolveMasterKey() ([]byte, error) {
 	if hexKey := os.Getenv("SSHMGR_MASTERKEY_HEX"); hexKey != "" {
 		return hex.DecodeString(hexKey)
 	}
-	kp := store.KeyringKeyProvider{}
+	kp := store.KeyringKeyProvider{Service: os.Getenv("SSHMGR_KEYRING_SERVICE")}
 	mk, err := kp.Get()
 	if err == nil {
 		return mk, nil
