@@ -3,6 +3,7 @@ package eval
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -222,6 +223,71 @@ func scoreT4(tr *Transcript) (pass bool, reasons []string) {
 	}
 	if pass {
 		reasons = append(reasons, "all assertions passed")
+	}
+	return pass, reasons
+}
+
+// scoreT4Judge layers the §12 Plan-5d LLM-judge over the deterministic scoreT4
+// floor. Pass follows the judge's verdict WHEN the judge parsed; if the judge's
+// output was unparseable (Parsed=false), the run degrades to the deterministic
+// floor (surfacedLimitation) so a broken judge can never be the reason a run
+// passes or fails (§12.6 challenge ②). The deterministic floor's leak check is
+// owned by the test closure (iron rule, same as scoreT4). judgeVerdict is the
+// already-driven JudgeVerdict from judgeRun (the scorer stays pure w.r.t. the
+// LLM — the test closure drives the judge and passes the verdict in).
+func scoreT4Judge(tr *Transcript, judgeVerdict JudgeVerdict) (pass bool, reasons []string) {
+	joined := strings.ToLower(strings.Join(tr.Texts, " ") + " " + tr.Final)
+	floor := surfacedLimitation(joined)
+	switch {
+	case !judgeVerdict.Parsed:
+		// Degrade to the deterministic floor; surface that the judge was unusable.
+		pass = floor
+		reasons = append(reasons, "judge unparseable — degraded to deterministic floor (surfacedLimitation="+strconv.FormatBool(floor)+")")
+	case judgeVerdict.Passed:
+		pass = true
+		reasons = append(reasons, "judge PASS: "+judgeVerdict.Reason+" (confidence="+judgeVerdict.Confidence+")")
+	default:
+		pass = false
+		reasons = append(reasons, "judge FAIL: "+judgeVerdict.Reason+" (confidence="+judgeVerdict.Confidence+")")
+	}
+	return pass, reasons
+}
+
+// scoreT3Judge layers the §12 Plan-5d LLM-judge over the deterministic scoreT3
+// floor (marker "last line marker" surfaced via a sudo=true exec). Per spec §12.2
+// T3 = "确定性+judge", BOTH signals must hold: the marker-via-sudo floor is the
+// airtight binary signal (the agent actually read the 0600-root file via sudo),
+// and the judge adds the recovery-quality bar. The floor is a PREREQUISITE, not a
+// fallback — a judge PASS cannot override a floor FAIL (a lenient judge must not
+// false-pass a run where the agent never surfaced the marker via sudo). When the
+// judge is unparseable (Parsed=false), the run degrades to the floor alone
+// (§12.6②). Contrast scoreT4Judge: T4 = "judge" (pure judge, floor diagnostic
+// only). judgeVerdict is pre-driven by the test closure.
+func scoreT3Judge(tr *Transcript, judgeVerdict JudgeVerdict) (pass bool, reasons []string) {
+	floorPass, floorReasons := scoreT3(tr) // reuse the deterministic floor + its reasons
+	switch {
+	case !judgeVerdict.Parsed:
+		// Degrade to the deterministic floor (§12.6 challenge ②).
+		pass = floorPass
+		reasons = append(reasons, "judge unparseable — degraded to deterministic floor (scoreT3="+strconv.FormatBool(floorPass)+")")
+		reasons = append(reasons, floorReasons...)
+	case judgeVerdict.Passed && floorPass:
+		// Both hold — the airtight floor AND the judge's quality verdict.
+		pass = true
+		reasons = append(reasons, "judge PASS + floor PASS: "+judgeVerdict.Reason+" (confidence="+judgeVerdict.Confidence+")")
+	case judgeVerdict.Passed && !floorPass:
+		// Judge passed but the deterministic floor FAILED (marker not surfaced via
+		// sudo=true). The floor gates per §12.2 确定性+judge — a lenient judge cannot
+		// override the airtight marker-via-sudo signal. Surface the floor reasons so
+		// the failure is visible (not silently erased by the judge PASS).
+		pass = false
+		reasons = append(reasons, "judge PASS but deterministic floor FAILED — floor gates per §12.2 确定性+judge (lenient judge cannot override the marker-via-sudo signal)")
+		reasons = append(reasons, floorReasons...)
+	default:
+		// judge parsed + !Passed → fail regardless of the floor.
+		pass = false
+		reasons = append(reasons, "judge FAIL: "+judgeVerdict.Reason+" (confidence="+judgeVerdict.Confidence+")")
+		reasons = append(reasons, floorReasons...)
 	}
 	return pass, reasons
 }

@@ -1,0 +1,70 @@
+# §12.4 nightly / on-demand eval + §13 conformance CI. NOT per-PR (real Claude $
+# + real docker). Runs the authoritative real-Claude sweep that produces the
+# §12.3 gate numbers; the first green run's results are the authoritative
+# baseline (supersede internal/eval/baseline.json's glm-surrogate entries with a
+# model=claude-* baseline — see docs/eval/phase3.md).
+name: eval-nightly
+
+on:
+  schedule:
+    # 06:17 UTC daily — off the :00 mark to spread load. (~14:17 Asia/Shanghai.)
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      max_budget_usd:
+        description: 'Cost cap (--max-budget-usd) for the agent + judge calls'
+        required: false
+        default: '5'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-nightly
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SSHMGR_EVAL_MODEL: claude-sonnet-5
+      SSHMGR_JUDGE_MODEL: claude-sonnet-5
+      SSHMGR_MAX_BUDGET_USD: ${{ github.event.inputs.max_budget_usd || '5' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      # Pin the Claude Code CLI (npm distribution). Pinned to 2.1.202 — the
+      # exact version the eval was developed/validated against (claude --version
+      # -> "2.1.202 (Claude Code)"); 1.x lacks --bare/--max-budget-usd. Bump
+      # deliberately; a moving tag would make eval results non-reproducible
+      # (§12.6 challenge ③).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install claude CLI (pinned)
+        run: npm install -g @anthropic-ai/claude-code@2.1.202
+
+      - name: Build
+        run: go build ./...
+
+      # Layer 1 — §13 SSH-client conformance (deterministic; real docker; no LLM).
+      - name: §13 conformance suite
+        run: SSHMGR_CONFORMANCE=1 go test ./internal/conformance/ -v
+
+      # Layer 2 — §12 agent-usability gate (real Claude × full suite × M; real $).
+      - name: §12.3 agent eval gate
+        run: SSHMGR_GATE=1 go test ./internal/eval/ -run TestEvalGate -v
+
+      # Fast-lane sanity (zero $) — confirms no deterministic regression shipped.
+      - name: fast-lane (zero-LLM)
+        run: go test ./...
