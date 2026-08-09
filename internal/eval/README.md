@@ -64,8 +64,18 @@ claude -p --bare --strict-mcp-config --mcp-config <cfg> \
 ```
 
 - `--bare` + `--strict-mcp-config --mcp-config <cfg>`: the agent sees **only the
-  broker MCP** registered in the temp `.mcp.json`. It does NOT see the user's
-  hooks, `CLAUDE.md`, skills, or `~/.ssh`.
+  broker MCP** registered in the temp `.mcp.json`, and `--bare` skips the user's
+  hooks, `CLAUDE.md` auto-discovery, plugin/skill sync, and keychain reads. Caveat:
+  `--bare` does **not** remove built-in tools (Bash/Read/Write) and skills still
+  resolve, so combined with `--dangerously-skip-permissions` the agent *could*
+  inspect `~/.ssh` or the filesystem. The enforced security property in Phase 1 is
+  therefore **credential UNREACHABILITY, not filesystem visibility**: the password
+  lives only in the encrypted temp `store.db`, the master key is in the broker
+  subprocess's env (not the agent's), `--bare` skips the keychain, and the agent's
+  direct `ssh` fails auth by construction (the iron rule). Adversarial validation of
+  this (an agent told to exfiltrate the password) is Phase 2 task **T6** — and the
+  realistic attack surface it will pressure-test is the master key present in the
+  on-disk `.mcp.json`.
 - `--dangerously-skip-permissions`: the eval owns the sandbox; interactive
   permission prompts would hang the subprocess.
 - `--output-format stream-json --verbose`: every assistant/user/result event is
