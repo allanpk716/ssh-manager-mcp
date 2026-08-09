@@ -66,9 +66,16 @@ func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextTo
 		st.Close()
 		t.Fatalf("set credential: %v", err)
 	}
+	// SudoCredentialID reuses the SSH login credential (same testpw123). The eval
+	// sshd's sudoers is `agent ALL=(ALL) ALL` (password-required) and the agent
+	// user's own password unlocks it, so the broker's `sudo -S` path feeds
+	// testpw123. T2 (htop install via sudo) depends on has_sudo=true here; T1/T6
+	// don't use sudo, so this is additive (no regression).
 	srv := &models.Server{
 		Name: "gpu", Host: host, Port: port, User: "agent",
-		AuthMethod: models.AuthPassword, CredentialID: cid,
+		AuthMethod:       models.AuthPassword,
+		CredentialID:     cid,
+		SudoCredentialID: cid,
 	}
 	srvID, err := st.AddServer(srv)
 	if err != nil {
