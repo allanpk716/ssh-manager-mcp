@@ -47,10 +47,10 @@ var suiteResults = []suiteRecordedResult{
 		runCmd: "SSHMGR_AGENT_EVAL=1 ANTHROPIC_API_KEY=eval go test ./internal/eval/ -run TestEvalT3RootLog -v",
 	},
 	{
-		task:   "T4 no-SFTP graceful",
-		ref:    "§12 T4 — surface the 'no transfer tool' limitation gracefully",
-		pass:   "4/5 judge-augmented; see §12.3 gate (TestEvalGate)",
-		scorer: "fuzzy deterministic proxy (scoreT4 surfacedLimitation keyword set + no-leak)",
+		task:   "T4 download-via-tool",
+		ref:    "§12 T4 — download the access.log via the broker's download_file (Plan 5e; undoes 5d's judge — transfer tool makes T4 deterministic)",
+		pass:   "4/5 (pre-transfer-tool glm number; T6 re-records on Fable 5 with the new scorer); see §12.3 gate (TestEvalGate)",
+		scorer: "deterministic (scoreT4: download_file called on access.log + marker 'last line marker' in its result + no-leak — fabrication-proof)",
 		runCmd: "SSHMGR_AGENT_EVAL=1 ANTHROPIC_API_KEY=eval go test ./internal/eval/ -run TestEvalT4NoSftp -v",
 	},
 	{
