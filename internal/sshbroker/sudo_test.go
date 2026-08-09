@@ -24,7 +24,7 @@ func TestExecSudoFeedsPasswordAndRunsInner(t *testing.T) {
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 
-	res, err := c.ExecSudo("whoami", []byte("sudopw"), 0)
+	res, err := c.ExecSudo("whoami", []byte("sudopw"), 0, 0)
 	if err != nil {
 		t.Fatalf("execSudo: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestExecSudoTimeoutKillsAndFlags(t *testing.T) {
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 
-	res, err := c.ExecSudo("slow", []byte("sudopw"), 200*time.Millisecond)
+	res, err := c.ExecSudo("slow", []byte("sudopw"), 200*time.Millisecond, 0)
 	if err != nil && !res.TimedOut {
 		t.Fatalf("err: %v", err)
 	}
@@ -54,5 +54,31 @@ func TestExecSudoTimeoutKillsAndFlags(t *testing.T) {
 	}
 	if strings.Contains(res.Stdout, "done") {
 		t.Fatal("should not have completed")
+	}
+}
+
+func TestExecSudoTruncatesLargeOutput(t *testing.T) {
+	const cap int64 = 1 << 6
+	big := strings.Repeat("x", int(cap)*4)
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password:     "pw",
+		SudoPassword: "sudopw",
+		Exec:         func(cmd string, _ io.Reader) (string, string, int) { return big, "", 0 },
+	})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	res, err := c.ExecSudo("big", []byte("sudopw"), 0, cap)
+	if err != nil {
+		t.Fatalf("execSudo: %v", err)
+	}
+	if int64(len(res.Stdout)) != cap {
+		t.Fatalf("stdout len=%d want %d", len(res.Stdout), cap)
+	}
+	if res.StdoutBytes != int64(len(big)) {
+		t.Fatalf("total=%d want %d", res.StdoutBytes, len(big))
+	}
+	if !res.Truncated {
+		t.Fatal("want Truncated=true")
 	}
 }

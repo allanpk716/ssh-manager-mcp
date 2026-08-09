@@ -114,9 +114,9 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 			err = fmt.Errorf("sudo credential for %s not found", srv.Name)
 			return
 		}
-		res, err = cli.ExecSudo(command, sudoCred.Secret, timeout)
+		res, err = cli.ExecSudo(command, sudoCred.Secret, timeout, MaxOutputBytes)
 	} else {
-		res, err = cli.Exec(command, timeout)
+		res, err = cli.Exec(command, timeout, MaxOutputBytes)
 	}
 	exitCode = res.ExitCode
 	// sshbroker returns nil err for non-zero exits (*ssh.ExitError) and for timeouts;
@@ -128,7 +128,10 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	} else {
 		status = "ok"
 	}
-	out = ExecOutput{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, TimedOut: res.TimedOut}
+	out = ExecOutput{
+		Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, TimedOut: res.TimedOut,
+		Truncated: res.Truncated, StdoutBytes: res.StdoutBytes, StderrBytes: res.StderrBytes,
+	}
 	return
 }
 

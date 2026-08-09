@@ -13,10 +13,13 @@ type ServerInfo struct {
 
 // ExecOutput is the result of exec_command.
 type ExecOutput struct {
-	Stdout   string `json:"stdout" jsonschema:"combined/normal command stdout"`
-	Stderr   string `json:"stderr,omitempty" jsonschema:"command stderr"`
-	ExitCode int    `json:"exit_code" jsonschema:"process exit code (0 = success)"`
-	TimedOut bool   `json:"timed_out,omitempty" jsonschema:"true if the command exceeded the timeout"`
+	Stdout      string `json:"stdout" jsonschema:"combined/normal command stdout"`
+	Stderr      string `json:"stderr,omitempty" jsonschema:"command stderr"`
+	ExitCode    int    `json:"exit_code" jsonschema:"process exit code (0 = success)"`
+	TimedOut    bool   `json:"timed_out,omitempty" jsonschema:"true if the command exceeded the timeout"`
+	Truncated   bool   `json:"truncated,omitempty" jsonschema:"true if stdout or stderr exceeded the 1 MiB cap — you only received the PREFIX. Check stdout_bytes/stderr_bytes for the true size; if you need more, refine and re-run (e.g. tail -n, head -n, grep) instead of asking for the whole thing"`
+	StdoutBytes int64  `json:"stdout_bytes" jsonschema:"total stdout bytes produced by the command (may exceed len(stdout) when truncated)"`
+	StderrBytes int64  `json:"stderr_bytes" jsonschema:"total stderr bytes produced by the command (may exceed len(stderr) when truncated)"`
 }
 
 // ErrNotInProfile is returned when an agent requests a server outside its Profile (iron rule).
@@ -29,3 +32,11 @@ func (e errWithString) Error() string { return string(e) }
 
 // defaultTimeout caps a single exec_command.
 const defaultTimeout = 120 * time.Second
+
+// MaxOutputBytes caps how much of each output channel exec_command retains and
+// returns to the agent (the prefix). Bytes beyond this are counted (reported as
+// stdout_bytes/stderr_bytes with truncated=true) then discarded, so a huge remote
+// output cannot blow up broker memory or flood the agent's context — the agent
+// learns the true size and can refine its command. The owner `ssh-manager ssh`
+// path is unaffected (it requests unlimited output). 1 MiB per spec §6.
+const MaxOutputBytes int64 = 1 << 20

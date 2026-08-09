@@ -75,7 +75,7 @@ func TestDifferentialParity(t *testing.T) {
 				t.Fatalf("broker connect: %v", err)
 			}
 			defer cli.Close()
-			bRes, err := cli.Exec(sc.cmd, 0)
+			bRes, err := cli.Exec(sc.cmd, 0, 0) // unlimited — differential tests SSH parity, not truncation
 			if err != nil {
 				t.Fatalf("broker exec: %v", err)
 			}
