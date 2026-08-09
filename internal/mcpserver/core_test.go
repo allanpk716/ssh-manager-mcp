@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,6 +120,33 @@ func TestExecCommandSudoWired(t *testing.T) {
 	}
 	if out.Stdout != "root\n" {
 		t.Fatalf("stdout = %q, want root", out.Stdout)
+	}
+}
+
+func TestExecCommandTruncatesLargeOutput(t *testing.T) {
+	big := strings.Repeat("x", int(MaxOutputBytes)*2) // 2 MiB — well over the 1 MiB cap
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		Exec:     func(cmd string, _ io.Reader) (string, string, int) { return big, "", 0 },
+	})
+	defer cleanup()
+	st := newStore(t)
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "big", false, 5*time.Second)
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if !out.Truncated {
+		t.Fatal("want ExecOutput.Truncated=true (stdout exceeded the cap)")
+	}
+	if int64(len(out.Stdout)) != MaxOutputBytes {
+		t.Fatalf("stdout len=%d want %d (the cap)", len(out.Stdout), MaxOutputBytes)
+	}
+	if out.StdoutBytes != int64(len(big)) {
+		t.Fatalf("stdout_bytes=%d want %d (true total)", out.StdoutBytes, len(big))
 	}
 }
 
