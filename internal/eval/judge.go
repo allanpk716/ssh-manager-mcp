@@ -133,12 +133,20 @@ func driveJudgeOnce(t *testing.T, systemPrompt, transcriptSummary string) string
 	if budget := os.Getenv("SSHMGR_MAX_BUDGET_USD"); budget != "" {
 		args = append(args, "--max-budget-usd", budget)
 	}
-	args = append(args, "--system-prompt", systemPrompt, transcriptSummary)
+	// The transcript summary is piped via stdin (NOT a positional CLI arg) so a
+	// verbose transcript cannot exceed the host's command-line limit. On Windows
+	// the argv is bounded at ~32KB; Fable-5 transcripts (many tool results +
+	// agent text) blow that limit → fork/exec claude.exe: invalid argument →
+	// the judge fails to spawn → empty output → unparseable → degrade-to-floor.
+	// `claude -p` reads its prompt from stdin when no positional prompt is given.
+	// The rubric (--system-prompt) stays a CLI arg: it is small (~1-2KB, static).
+	args = append(args, "--system-prompt", systemPrompt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), evalDriveTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Env = evalCmdEnv(isolatedHome(t))
+	cmd.Stdin = strings.NewReader(transcriptSummary)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
