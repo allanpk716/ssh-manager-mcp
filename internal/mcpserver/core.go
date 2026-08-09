@@ -143,3 +143,81 @@ func contains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// DownloadForProfile downloads path from serverID iff serverID is in profileID
+// (iron rule — same gate as ExecCommandForProfile). The download is §6-capped
+// (MaxOutputBytes): a larger file yields Truncated=true with Content as the
+// prefix and Bytes as the true total. Every branch is audited with
+// Action="download" (the path is recorded in the audit Command field).
+//
+// Statuses: denied (out-of-profile), auth_error, hostkey_mismatch,
+// connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
+// download has neither sudo nor a command deadline.
+func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, path string) (out DownloadOutput, err error) {
+	var status string
+	start := time.Now()
+	defer func() {
+		if status == "" {
+			status = "error"
+		}
+		_ = st.WriteAudit(store.AuditRow{
+			TS: start, ProjectID: projectID, ServerID: serverID, Action: "download",
+			Command: path, Status: status, DurationMS: time.Since(start).Milliseconds(),
+		})
+	}()
+
+	// Iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
+	allowed, ferr := st.ServersForProfile(profileID)
+	if ferr != nil {
+		err = ferr
+		return
+	}
+	if !contains(allowed, serverID) {
+		status = "denied"
+		err = ErrNotInProfile
+		return
+	}
+
+	srv, serr := st.GetServer(serverID)
+	if serr != nil || srv == nil {
+		status = "error"
+		err = fmt.Errorf("server %s not found", serverID)
+		return
+	}
+
+	auth, aerr := vault.AuthForServer(st, srv)
+	if aerr != nil {
+		status = "auth_error"
+		err = aerr
+		return
+	}
+
+	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	if herr != nil {
+		status = "error"
+		err = herr
+		return
+	}
+
+	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	if cerr != nil {
+		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+			status = "hostkey_mismatch"
+		} else {
+			status = "connect_error"
+		}
+		err = cerr
+		return
+	}
+	defer cli.Close()
+
+	res, derr := cli.Download(path, MaxOutputBytes)
+	if derr != nil {
+		status = "error"
+		err = derr
+		return
+	}
+	status = "ok"
+	out = DownloadOutput{Content: res.Content, Bytes: res.Bytes, Truncated: res.Truncated}
+	return
+}
