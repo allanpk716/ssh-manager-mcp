@@ -55,6 +55,10 @@ func Open(path string, masterKey []byte) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1) // SQLite single-writer; serializes access and avoids "database is locked"
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := initSchema(db); err != nil {
 		db.Close()
 		return nil, err
@@ -71,6 +75,41 @@ func (s *Store) Close() error {
 func initSchema(db *sql.DB) error {
 	_, err := db.Exec(schemaSQL)
 	return err
+}
+
+// migrate evolves the schema from prior pre-release shapes. host_keys was keyed by
+// host only (PRIMARY KEY host); it is now keyed by host:port so same-host-different-
+// port servers (host sshd:22 + container:2222) don't collide/clobber. Legacy host-only
+// rows are port-ambiguous and are NOT secrets (regenerated via TOFU on next connect),
+// so we drop and let CREATE rebuild. Idempotent: no-op on fresh and already-migrated DBs.
+func migrate(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(host_keys)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasHostCol := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == "host" {
+			hasHostCol = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasHostCol {
+		if _, err := db.Exec(`DROP TABLE host_keys`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const schemaSQL = `
@@ -129,7 +168,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   duration_ms INTEGER
 );
 CREATE TABLE IF NOT EXISTS host_keys (
-  host TEXT PRIMARY KEY,
+  host_port TEXT PRIMARY KEY,
   key_blob BLOB NOT NULL,
   created_at INTEGER NOT NULL
 );
