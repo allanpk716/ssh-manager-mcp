@@ -17,7 +17,7 @@ func TestDriveAgentParsesTranscript(t *testing.T) {
 	requireEval(t)
 	host, port, dcleanup := startEvalSSHD(t)
 	defer dcleanup()
-	mcpPath, _, bcleanup := wireBroker(t, host, port)
+	mcpPath, _, _, bcleanup := wireBroker(t, host, port)
 	defer bcleanup()
 
 	sys := "You are an SSH management assistant. You have MCP tools available: " +
