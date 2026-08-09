@@ -18,5 +18,9 @@ RUN sed -i -E \
     -e 's/^#?StrictModes.*/StrictModes no/' \
     /etc/ssh/sshd_config
 RUN echo 'HostKey /etc/ssh/ssh_host_ed25519_key' >> /etc/ssh/sshd_config
+# Enable sftp so the broker's download_file tool (Plan 5e T2) can reach the gpu
+# server over SFTP. openssh apk ships /usr/lib/ssh/sftp-server; we just wire it
+# into sshd_config. (T4's download-via-tool scorer exercises this path.)
+RUN echo 'Subsystem sftp /usr/lib/ssh/sftp-server' >> /etc/ssh/sshd_config
 EXPOSE 22
 CMD ["sh","-c","rm -f /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key.pub && ssh-keygen -q -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N '' -C '' && exec /usr/sbin/sshd -D -e"]

@@ -3,7 +3,6 @@ package eval
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -66,15 +65,35 @@ func TestGateThresholds(t *testing.T) {
 	}
 }
 
-// TestLoadBaselineSmoke loads the committed baseline.json and checks its shape.
+// TestLoadBaselineSmoke loads the committed baseline files and checks their
+// shape. Both the glm surrogate (baseline.json) and the authoritative real-Claude
+// Fable-5 baseline (baseline-claude-fable-5.json) must parse + carry a model tag
+// + at least one entry.
 func TestLoadBaselineSmoke(t *testing.T) {
-	b, err := loadBaseline(filepath.Join("baseline.json"))
-	if err != nil {
-		t.Fatalf("loadBaseline: %v", err)
+	for _, path := range []string{"baseline.json", "baseline-claude-fable-5.json"} {
+		b, err := loadBaseline(path)
+		if err != nil {
+			t.Fatalf("loadBaseline(%s): %v", path, err)
+		}
+		if b.Model == "" || len(b.Entries) == 0 {
+			t.Fatalf("%s malformed: %+v", path, b)
+		}
 	}
-	if b.Model == "" || len(b.Entries) == 0 {
-		t.Fatalf("baseline.json malformed: %+v", b)
+}
+
+// baselineForModel returns the committed baseline file matching the run's model
+// tag: `baseline-claude-fable-5.json` for any claude-* backend (the
+// authoritative real-Claude Fable-5 numbers via cc-switch AiHubMix), and
+// `baseline.json` (the glm-5.2 surrogate) otherwise. The no-regression check
+// inside assertGate still requires an exact model-tag match, so an aliased
+// claude run (runModel()=claude-sonnet-5 vs baseline.Model=claude-fable-5) skips
+// the no-regression comparison until CI pins the tag — only the HARD
+// zero-tolerance gates (T6/T8) apply regardless of the match.
+func baselineForModel(model string) string {
+	if strings.HasPrefix(model, "claude") {
+		return "baseline-claude-fable-5.json"
 	}
+	return "baseline.json"
 }
 
 // requireGate skips unless SSHMGR_GATE=1 (+ ANTHROPIC_API_KEY + bins). The §12.3
@@ -111,15 +130,17 @@ func runModel() string {
 // docker — gated by SSHMGR_GATE=1. NOT per-PR (§12.4); nightly/on-demand/CI.
 func TestEvalGate(t *testing.T) {
 	requireGate(t)
-	baseline, err := loadBaseline("baseline.json")
+	runModelTag := runModel()
+	baselinePath := baselineForModel(runModelTag)
+	baseline, err := loadBaseline(baselinePath)
 	if err != nil {
-		t.Fatalf("load baseline.json: %v", err)
+		t.Fatalf("load %s: %v", baselinePath, err)
 	}
 	var results []GateResult
 	results = append(results, gateT1Smoke(t))
 	results = append(results, gateT2Htop(t))
 	results = append(results, gateT3RootLog(t))
-	results = append(results, gateT4NoSftp(t))
+	results = append(results, gateT4Download(t))
 	results = append(results, gateT5Scope(t))
 	results = append(results, gateT6NoLeak(t))
 	results = append(results, gateT7Locked(t))
@@ -141,9 +162,9 @@ func TestEvalGate(t *testing.T) {
 		}
 	}
 
-	passed, failures := assertGate(results, baseline, runModel())
+	passed, failures := assertGate(results, baseline, runModelTag)
 	if !passed {
 		t.Fatalf("§12.3 GATE FAILED:\n  - %s", strings.Join(failures, "\n  - "))
 	}
-	t.Logf("§12.3 GATE PASSED (model=%s, baseline=%s)", runModel(), baseline.Model)
+	t.Logf("§12.3 GATE PASSED (model=%s, baseline=%s, baselineFile=%s)", runModelTag, baseline.Model, baselinePath)
 }

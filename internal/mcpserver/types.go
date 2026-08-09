@@ -22,6 +22,19 @@ type ExecOutput struct {
 	StderrBytes int64  `json:"stderr_bytes" jsonschema:"total stderr bytes produced by the command (may exceed len(stderr) when truncated)"`
 }
 
+// DownloadInput is the download_file tool input.
+type DownloadInput struct {
+	ServerID string `json:"server_id" jsonschema:"server id from list_servers"`
+	Path     string `json:"path" jsonschema:"absolute path of the remote file to download"`
+}
+
+// DownloadOutput is the download_file tool output.
+type DownloadOutput struct {
+	Content   string `json:"content" jsonschema:"the file content (the prefix if truncated=true)"`
+	Bytes     int64  `json:"bytes" jsonschema:"total file size in bytes (may exceed len(content) when truncated)"`
+	Truncated bool   `json:"truncated,omitempty" jsonschema:"true if the file exceeded the size cap and content is only the prefix"`
+}
+
 // ErrNotInProfile is returned when an agent requests a server outside its Profile (iron rule).
 var ErrNotInProfile = errWithString("server is not in your profile — call list_servers to see the servers you may use")
 

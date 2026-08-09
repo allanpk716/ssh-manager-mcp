@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -63,5 +65,58 @@ func TestNewServerToolsScopedViaInMemoryClient(t *testing.T) {
 	})
 	if !res3.IsError {
 		t.Fatal("out-of-profile exec_command must be a tool error")
+	}
+}
+
+// TestDownloadFile exercises the download_file broker tool end-to-end through
+// the MCP wire: an in-profile download returns the fixture content; an
+// out-of-profile server_id is rejected as a tool error (IsError), mirroring
+// exec_command. Mirrors TestNewServerToolsScopedViaInMemoryClient's shape.
+func TestDownloadFile(t *testing.T) {
+	st := newStore(t)
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	const want = "file-via-tool\n"
+	remote := filepath.Join(t.TempDir(), "via_tool.bin")
+	if err := os.WriteFile(remote, []byte(want), 0644); err != nil {
+		t.Fatalf("setup write: %v", err)
+	}
+
+	server, _ := NewServer(st, pid, "proj-test")
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
+	t1, t2 := mcp.NewInMemoryTransports()
+	srvSession, err := server.Connect(context.Background(), t1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srvSession.Close()
+	cliSession, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cliSession.Close()
+
+	// download_file on the in-profile server — content round-trips.
+	res, err := cliSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "download_file", Arguments: map[string]any{"server_id": srvID, "path": remote},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("download_file errored: %+v", res.Content)
+	}
+
+	// download_file on an out-of-profile server -> tool error (IsError), same as exec_command.
+	other, _ := st.AddServer(&models.Server{Name: "other", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	res2, _ := cliSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "download_file", Arguments: map[string]any{"server_id": other, "path": "/etc/passwd"},
+	})
+	if !res2.IsError {
+		t.Fatal("out-of-profile download_file must be a tool error")
 	}
 }

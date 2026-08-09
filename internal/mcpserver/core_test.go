@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -189,4 +191,113 @@ func seedRealServer(t *testing.T, st *store.Store, name, addr string, hk ssh.Pub
 	id, _ := st.AddServer(srv)
 	_ = st.SaveHostKey(srv.Host, srv.Port, hk.Marshal()) // pre-trust the testsshd host key
 	return id
+}
+
+// TestDownloadForProfileDownloadsInProfileServer verifies the in-profile happy path:
+// the fixture content round-trips through the SFTP download (no truncation on a
+// sub-cap file) and Bytes reports the true size.
+func TestDownloadForProfileDownloadsInProfileServer(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	st := newStore(t)
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	// The in-process testsshd's sftp subsystem serves the host filesystem, so a
+	// fixture written under t.TempDir() is readable by Download. (We can't seed
+	// the file via broker Exec: testsshd's Exec is a callback, not a real shell.)
+	const want = "hello-sftp\nline2\nlast line marker\n"
+	remote := filepath.Join(t.TempDir(), "dl.bin")
+	if err := os.WriteFile(remote, []byte(want), 0644); err != nil {
+		t.Fatalf("setup write: %v", err)
+	}
+
+	out, err := DownloadForProfile(context.Background(), st, "proj-test", pid, srvID, remote)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	if out.Content != want {
+		t.Fatalf("content = %q, want %q", out.Content, want)
+	}
+	if out.Bytes != int64(len(want)) {
+		t.Fatalf("Bytes=%d, want %d", out.Bytes, len(want))
+	}
+	if out.Truncated {
+		t.Fatal("Truncated=true on a sub-cap file; want false")
+	}
+}
+
+// TestDownloadForProfileRejectsOutOfProfile verifies the iron rule: an
+// out-of-profile server_id is rejected with ErrNotInProfile AND audited with
+// Action="download" Status="denied" attributed to the agent's projectID. The
+// path is recorded in the audit Command field (the brief reuses it for the path).
+func TestDownloadForProfileRejectsOutOfProfile(t *testing.T) {
+	st := newStore(t)
+	a, _ := st.AddServer(&models.Server{Name: "a", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	b, _ := st.AddServer(&models.Server{Name: "b", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{a}) // only a in profile
+
+	const projectID = "proj-test"
+	const path = "/etc/passwd"
+	_, err := DownloadForProfile(context.Background(), st, projectID, pid, b, path)
+	if !errors.Is(err, ErrNotInProfile) {
+		t.Fatalf("want ErrNotInProfile, got %v", err)
+	}
+
+	rows, err := st.AuditRows(5)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	var denied store.AuditRow
+	found := false
+	for _, r := range rows {
+		if r.Action == "download" && r.Status == "denied" && r.ServerID == b && r.ProjectID == projectID {
+			denied = r
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no denied download audit row for project=%s server=%s; rows=%+v", projectID, b, rows)
+	}
+	if denied.Command != path {
+		t.Fatalf("denied audit command (path) = %q, want %q", denied.Command, path)
+	}
+}
+
+// TestDownloadForProfileTruncatesLargeFile verifies the §6 cap: a file larger
+// than MaxOutputBytes yields Truncated=true, Content is the prefix (exactly the
+// cap), and Bytes reports the true total size.
+func TestDownloadForProfileTruncatesLargeFile(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	st := newStore(t)
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	big := strings.Repeat("x", int(MaxOutputBytes)*2) // 2 MiB — well over the 1 MiB cap
+	remote := filepath.Join(t.TempDir(), "big.bin")
+	if err := os.WriteFile(remote, []byte(big), 0644); err != nil {
+		t.Fatalf("setup write: %v", err)
+	}
+
+	out, err := DownloadForProfile(context.Background(), st, "proj-test", pid, srvID, remote)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	if !out.Truncated {
+		t.Fatal("want DownloadOutput.Truncated=true (file exceeded the cap)")
+	}
+	if int64(len(out.Content)) != MaxOutputBytes {
+		t.Fatalf("content len=%d want %d (the cap)", len(out.Content), MaxOutputBytes)
+	}
+	if out.Content != big[:MaxOutputBytes] {
+		t.Fatal("content is not the prefix of the file")
+	}
+	if out.Bytes != int64(len(big)) {
+		t.Fatalf("Bytes=%d want %d (true total)", out.Bytes, len(big))
+	}
 }
