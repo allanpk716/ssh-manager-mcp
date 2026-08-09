@@ -202,22 +202,31 @@ prompt; that is **observed behavior, not the enforced property**.
 | `TestEvalSkeletonT1` | gated | **yes** | the full §12 loop on T1, scored by `scoreT1` (M=1 smoke) |
 | `TestEvalT2Htop` … `TestEvalT8CrossProfile` | gated | **yes** (M=5 each) | the Phase-2 §12.2 suite, scored by `scoreT2` … `scoreT8` |
 
-## Phase 3 → Plan 5d
+## Phase 3 (Plan 5d) — judge + §12.3 gate + CI + eval-safety
 
-- **LLM-as-judge** for the non-deterministic tasks: T3's recovery-arc quality
-  and T4's graceful-decline quality (Phase 2's `surfacedLimitation` keyword
-  proxy is the placeholder; the judge replaces it with semantic scoring).
-- **The §12.3 gate:** safety + adversarial tasks (T6/T8) **100% pass, zero
-  tolerance**; usability tasks **≥95% + no regression** vs a committed baseline.
-- **CI wiring** as a **nightly / on-demand GitHub Actions workflow — NOT per-PR**
-  (each run is real LLM money). Pin the `claude` CLI version **and** the model in
-  the workflow; publish a per-run success-rate report so regressions are visible
-  on the commit/PR without re-running.
-- **Eval-safety hardening (HOME isolation / Bash sandbox for T7/T8):** so the
-  agent's Bash can't reach the developer's real SSH config / host resources
-  during eval (closes the T7 Bash-bypass eval-fidelity gap at the harness layer).
-- **Re-run on real Claude** before treating any rate as authoritative (glm-5.2 is
-  a pipeline-proving surrogate).
+- **LLM-judge** for T3 (recovery-arc) + T4 (graceful) — `judge.go`. Degrades to
+  the deterministic floor if the judge is unparseable (§12.6 ②). T6/T8 stay
+  deterministic zero-tolerance.
+- **§12.3 gate** — `SSHMGR_GATE=1 go test ./internal/eval/ -run TestEvalGate -v`.
+  Asserts T6/T8 zero-tolerance + usability ≥95% + no-regression vs
+  `baseline.json` (model-tagged; 1-run tolerance). Logic unit-tested by
+  `TestGateThresholds` (no $).
+- **Eval-safety** — `claude -p` runs under an isolated HOME (empty `~/.ssh`,
+  scrubbed SSH env) so the agent can't reach the host's real SSH/GPU resources
+  (fixes the 5c T7 bypass). See `docs/eval/phase3.md`.
+- **CI** — `.github/workflows/eval-nightly.yml` (nightly/dispatch/tag, real
+  Claude, NOT per-PR). First green CI run = authoritative baseline.
+
+**Local (glm surrogate):** `SSHMGR_GATE=1 ANTHROPIC_API_KEY=eval go test ./internal/eval/ -run TestEvalGate -v`
+**CI (real Claude):** automatic nightly / `workflow_dispatch` / tag push.
+**Local real-Claude one-off:** see `docs/eval/phase3.md`.
+
+Judged tasks (T3, T4) cost ~2× (M agent + M judge). Full gate sweep ≈ ~$1–2
+reported on glm (opus-aliased upper bound); real Claude in CI capped by
+`SSHMGR_MAX_BUDGET_USD`.
+
+**Honest status:** glm-5.2 is a pipeline-proving surrogate. Treat pass-rates as
+authoritative only after the CI sweep re-runs on real Claude.
 
 ## Testing real Claude
 
