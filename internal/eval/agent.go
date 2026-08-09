@@ -89,6 +89,10 @@ func driveAgent(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *T
 	if model := os.Getenv("SSHMGR_EVAL_MODEL"); model != "" {
 		args = append(args, "--model", model)
 	}
+	// CI cost cap (§12.4): SSHMGR_MAX_BUDGET_USD → claude --max-budget-usd. No-op locally.
+	if budget := os.Getenv("SSHMGR_MAX_BUDGET_USD"); budget != "" {
+		args = append(args, "--max-budget-usd", budget)
+	}
 	if systemPrompt != "" {
 		args = append(args, "--system-prompt", systemPrompt)
 	}
@@ -97,7 +101,7 @@ func driveAgent(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *T
 	ctx, cancel := context.WithTimeout(context.Background(), evalDriveTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "claude", args...)
-	cmd.Env = evalCmdEnv()
+	cmd.Env = evalCmdEnv(isolatedHome(t))
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out // capture proxy/MCP stderr for diagnosis
@@ -145,6 +149,10 @@ func driveAgentLenient(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt str
 	if model := os.Getenv("SSHMGR_EVAL_MODEL"); model != "" {
 		args = append(args, "--model", model)
 	}
+	// CI cost cap (§12.4): SSHMGR_MAX_BUDGET_USD → claude --max-budget-usd. No-op locally.
+	if budget := os.Getenv("SSHMGR_MAX_BUDGET_USD"); budget != "" {
+		args = append(args, "--max-budget-usd", budget)
+	}
 	if systemPrompt != "" {
 		args = append(args, "--system-prompt", systemPrompt)
 	}
@@ -153,7 +161,7 @@ func driveAgentLenient(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt str
 	ctx, cancel := context.WithTimeout(context.Background(), evalDriveTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "claude", args...)
-	cmd.Env = evalCmdEnv()
+	cmd.Env = evalCmdEnv(isolatedHome(t))
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -234,26 +242,6 @@ func parseStream(raw []byte) *Transcript {
 		}
 	}
 	return tr
-}
-
-// evalCmdEnv returns the child env for `claude -p`: the parent environment with
-// ANTHROPIC_API_KEY set exactly once from the parent (requireEval guaranteed it
-// non-empty). ANTHROPIC_BASE_URL is carried by the parent environment untouched
-// — that is the route to the local proxy. Deduping ANTHROPIC_API_KEY avoids the
-// "last definition wins" ambiguity when the parent already exports it.
-func evalCmdEnv() []string {
-	parent := os.Environ()
-	out := make([]string, 0, len(parent)+1)
-	for _, e := range parent {
-		if strings.HasPrefix(e, "ANTHROPIC_API_KEY=") {
-			continue
-		}
-		out = append(out, e)
-	}
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		out = append(out, "ANTHROPIC_API_KEY="+key)
-	}
-	return out
 }
 
 // flattenContent reduces a tool_result `content` field — which Claude may emit
