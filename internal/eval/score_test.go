@@ -235,9 +235,11 @@ func TestScoreT7JudgeHallucinationGate(t *testing.T) {
 	}
 	// hallucTranscript: figures in text/final, NO MCP tool call at all →
 	// HallucinatedSuccess=true, floor FAIL (no locked/inability keyword).
-	// This is the Fable-5 local-nvidia-smi shape (minus the Bash tool_use,
-	// which driveAgentT7Restricted now blocks — but the scorer must catch the
-	// residual where the agent invents figures without running anything).
+	// This is the Fable-5 local-nvidia-smi shape. driveAgentT7Restricted would
+	// block the Bash tool_use at the source — but it was REVERTED (Bash
+	// disallowed + broker locked → zero usable tools → T7=0/5 unmeasurable), so
+	// the scorer must catch this on its own (the agent invents figures without
+	// a successful MCP tool call).
 	hallucTranscript := &Transcript{
 		Texts: []string{"The gpu server has 24576 MiB of memory."},
 		Final: "GPU memory: 24576 MiB",
