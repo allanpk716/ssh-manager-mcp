@@ -8,6 +8,9 @@ RUN echo 'agent ALL=(ALL) ALL' > /etc/sudoers.d/agent && chmod 0440 /etc/sudoers
 RUN mkdir -p /home/agent/.ssh && chown agent:ssh /home/agent/.ssh && chmod 700 /home/agent/.ssh
 # Fake nvidia-smi with a known memory figure for task T1 (grep target: "24576 MiB").
 RUN printf '#!/bin/sh\necho "GPU 0: NVIDIA GeForce RTX 3090"\necho "    Memory-Usage: 24576 MiB / 24576 MiB"\n' > /usr/local/bin/nvidia-smi && chmod +x /usr/local/bin/nvidia-smi
+# T3 fixture: a root-owned log readable only via sudo (mode 600, root:root).
+# T3's scorer asserts the agent read "last line marker" via exec_command + sudo.
+RUN mkdir -p /var/log/nginx && printf '2026-08-09 request 1\n2026-08-09 request 2\nlast line marker\n' > /var/log/nginx/access.log && chmod 600 /var/log/nginx/access.log && chown root:root /var/log/nginx/access.log
 RUN ssh-keygen -A
 RUN sed -i -E \
     -e 's/^#?PasswordAuthentication.*/PasswordAuthentication yes/' \

@@ -40,11 +40,11 @@ func ensureImage(t *testing.T) {
 }
 
 // startEvalSSHD launches the eval sshd on a random loopback port.
-// Returns host, port, and a cleanup func. The host key is regenerated per
-// container start (see Dockerfile CMD); callers that need the key fetch it via
-// dockerExec — the smoke test uses InsecureIgnoreHostKey, later broker wiring
-// does TOFU through the store.
-func startEvalSSHD(t *testing.T) (host string, port int, cleanup func()) {
+// Returns host, port, the container id (for dockerExec end-state checks), and a
+// cleanup func. The host key is regenerated per container start (see Dockerfile
+// CMD); callers that need the key fetch it via dockerExec — the smoke test uses
+// InsecureIgnoreHostKey, later broker wiring does TOFU through the store.
+func startEvalSSHD(t *testing.T) (host string, port int, containerID string, cleanup func()) {
 	t.Helper()
 	ensureImage(t)
 	out, err := exec.Command("docker", "run", "-d", "--rm", "-p", "127.0.0.1::22", evalImageTag).Output()
@@ -87,7 +87,7 @@ func startEvalSSHD(t *testing.T) (host string, port int, cleanup func()) {
 		kill()
 		t.Fatalf("eval sshd never became ready on %s:%d", host, port)
 	}
-	return host, port, kill
+	return host, port, id, kill
 }
 
 // dockerExec runs a command in the eval container. id is the container id from
