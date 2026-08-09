@@ -3,6 +3,7 @@ package eval
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,12 +14,20 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
+// evalKeyringService is the DISTINCT keychain service the eval seeds its master
+// key under. It intentionally differs from the production service ("ssh-manager")
+// so eval runs never touch the user's real keychain entry. The broker subprocess
+// reads this same service name from SSHMGR_KEYRING_SERVICE in the mcp.json env.
+const evalKeyringService = "ssh-manager-eval"
+
 // wireBroker builds the ssh-manager binary, seeds a temp vault with one server
-// (pointing at the eval sshd) in one profile owned by one project+token, and
-// writes an isolated .mcp.json. Returns the mcp config path, the plaintext
-// token the MCP client presents, the master key as hex (so T6 can pass it to
-// scoreT6 as the secret-to-never-leak alongside the password), and a cleanup
-// func.
+// (pointing at the eval sshd) in one profile owned by one project+token, seeds
+// the master key into the OS keychain under evalKeyringService, and writes an
+// isolated .mcp.json that points the broker subprocess at that keychain entry
+// (mirroring production: NO secret on disk). Returns the mcp config path, the
+// plaintext token the MCP client presents, the master key as hex (so T6 can
+// pass it to scoreT6 as the secret-to-never-leak alongside the password), and a
+// cleanup func.
 //
 // No LLM call, no real ANTHROPIC_API_KEY: this only prepares the inputs that a
 // later task (T3) wires into `claude -p`. The token round-trips through
@@ -89,9 +98,19 @@ func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextTo
 		t.Fatalf("close store: %v", err)
 	}
 
-	// 4. Write the isolated .mcp.json. vault.OpenStore() reads SSHMGR_STORE (else
-	// DefaultStorePath) and SSHMGR_MASTERKEY_HEX (else keychain), so both env vars
-	// must be set for the spawned server process to reach this temp vault.
+	// 4. Seed the master key into the OS keychain under the eval-only service.
+	// vault.OpenStore() in the spawned subprocess reads SSHMGR_STORE (else
+	// DefaultStorePath) and — now that mcp.json carries NO master-key secret —
+	// SSHMGR_KEYRING_SERVICE, then resolves the master key from the keychain
+	// (production path). SSHMGR_MASTERKEY_HEX is intentionally NOT set here.
+	evalKP := store.KeyringKeyProvider{Service: evalKeyringService}
+	if err := evalKP.Set(mk); err != nil {
+		t.Fatalf("seed eval keychain: %v", err)
+	}
+
+	// 5. Write the isolated .mcp.json. The env carries the store path + the
+	// keyring service name — NO secret material. The broker subprocess unlocks
+	// the vault by reading the keychain entry the eval just seeded.
 	masterKeyHex = hex.EncodeToString(mk)
 	mcp := map[string]any{
 		"mcpServers": map[string]any{
@@ -99,8 +118,8 @@ func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextTo
 				"command": binPath,
 				"args":    []string{"mcp", "--token", plaintextToken},
 				"env": map[string]string{
-					"SSHMGR_STORE":         storePath,
-					"SSHMGR_MASTERKEY_HEX": masterKeyHex,
+					"SSHMGR_STORE":           storePath,
+					"SSHMGR_KEYRING_SERVICE": evalKeyringService,
 				},
 			},
 		},
@@ -108,7 +127,15 @@ func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextTo
 	mcpConfigPath = filepath.Join(dir, "mcp.json")
 	writeJSON(t, mcpConfigPath, mcp)
 
-	cleanup = func() { _ = os.RemoveAll(dir) }
+	cleanup = func() {
+		// Best-effort: drop the eval keychain entry so repeated runs don't
+		// accumulate. ErrNotFound (entry already gone / Set failed earlier) is
+		// not a failure — wrap-check to tolerate it.
+		if err := evalKP.Delete(); err != nil && !errors.Is(err, store.ErrNotFound) {
+			t.Logf("eval keychain cleanup: %v", err)
+		}
+		_ = os.RemoveAll(dir)
+	}
 	return mcpConfigPath, plaintextToken, masterKeyHex, cleanup
 }
 
