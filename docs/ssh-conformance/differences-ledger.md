@@ -68,8 +68,11 @@ algorithms. The exhaustive KEX×cipher×MAC matrix is deliberately out of scope
 | Multi-algorithm host-key negotiation | broker exposes no `HostKeyAlgorithms` knob on `Connect`; the client accepts whichever host key the server offers first (pinned via `FixedHostKey` or `HostKeyTOFU` after the fact) | client can request a preferred host-key algorithm (`HostKeyAlgorithms`, `HostbasedAcceptedAlgorithms`) | **Out of the conformance claim.** The conformance sshd (`internal/conformance/Dockerfile`) pins `HostKey` to ed25519-only so the negotiated host key is deterministic; this is a test-harness pin, not a broker capability. Multi-algorithm host-key negotiation is not tested and not claimed. |
 | host-key storage keying | runtime store keys host keys by `host:port` unconditionally (even `:22`), so same-host-different-port servers never collide | known_hosts uses bare `host` for `:22` and `[host]:port` otherwise | **Documented micro-difference** — semantic parity (per-port isolation) holds; only the `:22` rendering differs from OpenSSH's bare-host convention. The `knownhosts.go` serializer renders `[host]:port` for the known_hosts *file format*; the runtime store uses `host:port` internally. |
 
-These differences are reflected in the MCP tool descriptions so "consistent
-with ssh" carries an explicit boundary.
+These differences are bounded in this document. The broker deliberately does
+**not** claim "ssh-consistent" anywhere in its agent-facing tool descriptions —
+agents see only the `list_servers` / `exec_command` surface with no SSH-conformance
+nuance, so there is no boundary to state to them (surfacing it would be scope
+creep). "Consistent with ssh" is a developer-facing claim, bounded here.
 
 ### Note on the T2 harness pin (load-bearing)
 
