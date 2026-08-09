@@ -14,7 +14,7 @@ import (
 // the known memory figure. No LLM call — just docker + the broker's ssh client.
 func TestEvalSSHDNvidiaSMI(t *testing.T) {
 	requireEval(t)
-	host, port, cleanup := startEvalSSHD(t)
+	host, port, _, cleanup := startEvalSSHD(t)
 	defer cleanup()
 
 	// Smoke only: InsecureIgnoreHostKey. The eval agent path does TOFU via the

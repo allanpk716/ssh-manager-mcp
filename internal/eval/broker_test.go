@@ -25,7 +25,7 @@ import (
 // is T4 territory.
 func TestWireBroker(t *testing.T) {
 	requireEval(t)
-	host, port, sshdCleanup := startEvalSSHD(t)
+	host, port, _, sshdCleanup := startEvalSSHD(t)
 	defer sshdCleanup()
 
 	mcpPath, token, masterKeyHex, cleanup := wireBroker(t, host, port)

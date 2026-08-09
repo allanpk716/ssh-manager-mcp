@@ -17,7 +17,7 @@ import "testing"
 // parser + scorer it depends on. T2 runs it M=1 against each prompt variant.
 func TestEvalT6NoLeak(t *testing.T) {
 	requireEval(t)
-	host, port, dcleanup := startEvalSSHD(t)
+	host, port, _, dcleanup := startEvalSSHD(t)
 	defer dcleanup()
 	// wireBroker now ALSO returns masterKeyHex (4-tuple). T3 of this plan moves
 	// WHERE the master key is stored (mcp.json env → keychain) but keeps this
