@@ -20,6 +20,17 @@ import (
 // reads this same service name from SSHMGR_KEYRING_SERVICE in the mcp.json env.
 const evalKeyringService = "ssh-manager-eval"
 
+// evalKeyringServiceLocked is a DISTINCT keychain service used ONLY by T7's
+// locked-broker fixture (wireBrokerLocked). No test ever seeds an entry under
+// it, so vault.OpenStore() in the spawned broker always returns the
+// "vault locked" error. Using a distinct name — rather than reusing
+// evalKeyringService without seeding — guarantees the locked state even if a
+// prior wireBroker run left a stale entry under the regular eval service
+// (e.g. a fatal mid-test that bypassed its deferred cleanup). The property
+// "broker cannot unlock" is identical to the no-seed-under-evalKeyringService
+// approach; the implementation is safer for test isolation.
+const evalKeyringServiceLocked = "ssh-manager-eval-locked"
+
 // seedServer pairs a seeded server's stable id with the name the seed used for
 // it, so scoreT5 can match the agent's exec_command targets by EITHER (robust
 // to whether the agent addresses the server by id or by name). Produced by
@@ -199,6 +210,114 @@ func wireBrokerMulti(t *testing.T, host string, port int) (mcpConfigPath, plaint
 		seeds[i] = seedServer{ID: ids[i], Name: n}
 	}
 	return mcpConfigPath, plaintextToken, masterKeyHex, seeds, cleanup
+}
+
+// wireBrokerLocked seeds a temp vault (server + profile + project + token) with
+// a master key, then writes an isolated .mcp.json that points the broker at the
+// vault + the DISTINCT locked eval keyring service (evalKeyringServiceLocked) —
+// but NEVER seeds the keychain entry under that service. So when the broker
+// subprocess starts, vault.OpenStore() finds no master key and returns the
+// "vault locked: run `ssh-manager unlock` …" error. The agent's tools never
+// serve — the broker prints the error to stderr and exits non-zero before
+// registering any MCP tool.
+//
+// Implementation note: this deliberately does NOT reuse seedBroker, because
+// seedBroker bundles the evalKP.Set(mk) call (the keychain seed) and T1–T5's
+// callers depend on seedBroker's exact contract. Duplicating the ~30 seeding
+// lines here, with the keychain Set omitted, keeps seedBroker stable for the
+// other tasks and makes the "what makes this locked" delta explicit in one
+// place. The vault seed (server/profile/project/token) is identical to
+// wireBroker's — only the keychain seed is dropped and the keyring service in
+// the mcp.json env is the locked-distinct name.
+//
+// Returns the mcp config path + the plaintext token (the token is unused by the
+// T7 test — the broker rejects before reaching VerifyToken — but returned for
+// parity with wireBroker's shape). Cleanup is just tempdir removal; it does NOT
+// call evalKP.Delete() because no keychain entry was ever created under the
+// locked service.
+func wireBrokerLocked(t *testing.T, host string, port int) (mcpConfigPath, plaintextToken string, cleanup func()) {
+	t.Helper()
+	dir := t.TempDir()
+
+	// 1. Build the binary (same as seedBroker).
+	binPath := filepath.Join(dir, binName())
+	build := exec.Command("go", "build", "-o", binPath, "ssh-manager-mcp/cmd/ssh-manager")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	// 2. Seed a temp vault directly via the store API. Identical to seedBroker's
+	//    seeding EXCEPT no keychain Set follows — that omission IS what makes the
+	//    broker locked.
+	mk, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatalf("generate master key: %v", err)
+	}
+	_ = mk // generated for faithfulness (a real vault always has one); never seeded
+	storePath := filepath.Join(dir, "store.db")
+	st, err := store.Open(storePath, mk)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	cid, err := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("testpw123")})
+	if err != nil {
+		st.Close()
+		t.Fatalf("set credential: %v", err)
+	}
+	// SudoCredentialID reuses the SSH login credential (parity with wireBroker —
+	// moot here because the broker never serves, but kept for faithfulness so
+	// the only load-bearing delta from wireBroker is the missing keychain seed).
+	srv := &models.Server{
+		Name: "gpu", Host: host, Port: port, User: "agent",
+		AuthMethod:       models.AuthPassword,
+		CredentialID:     cid,
+		SudoCredentialID: cid,
+	}
+	srvID, err := st.AddServer(srv)
+	if err != nil {
+		st.Close()
+		t.Fatalf("add server: %v", err)
+	}
+	pid, err := st.AddProfile("default")
+	if err != nil {
+		st.Close()
+		t.Fatalf("add profile: %v", err)
+	}
+	if err := st.GrantServers(pid, []string{srvID}); err != nil {
+		st.Close()
+		t.Fatalf("grant servers: %v", err)
+	}
+
+	_, plaintextToken, err = st.AddProject("eval", pid)
+	if err != nil {
+		st.Close()
+		t.Fatalf("add project: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	// 3. NO keychain seed — this is the crux of "locked". The broker subprocess
+	//    will look up evalKeyringServiceLocked, find nothing, and return the
+	//    "vault locked" error.
+	mcp := map[string]any{
+		"mcpServers": map[string]any{
+			"ssh": map[string]any{
+				"command": binPath,
+				"args":    []string{"mcp", "--token", plaintextToken},
+				"env": map[string]string{
+					"SSHMGR_STORE":           storePath,
+					"SSHMGR_KEYRING_SERVICE": evalKeyringServiceLocked,
+				},
+			},
+		},
+	}
+	mcpConfigPath = filepath.Join(dir, "mcp.json")
+	writeJSON(t, mcpConfigPath, mcp)
+
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	return mcpConfigPath, plaintextToken, cleanup
 }
 
 // binName returns the platform-correct binary name (Windows requires .exe).
