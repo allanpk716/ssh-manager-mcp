@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -119,42 +120,70 @@ func handleSession(newChan ssh.NewChannel, sudoPw string, execFn func(string, io
 	}
 	defer ch.Close()
 	for req := range reqs {
-		if req.Type != "exec" {
-			req.Reply(false, nil)
-			continue
-		}
-		var payload struct{ Command string }
-		if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
-			req.Reply(false, nil)
-			continue
-		}
-		req.Reply(true, nil)
-		cmd := payload.Command
-		stdin := io.Reader(ch)
-		// If this is a sudo -S invocation and the server is simulating sudo,
-		// read the password line from stdin first, then run the inner command.
-		if strings.HasPrefix(cmd, "sudo -S") && sudoPw != "" {
-			buf := make([]byte, 0, 256)
-			one := make([]byte, 1)
-			for {
-				if _, err := stdin.Read(one); err != nil {
-					break
-				}
-				if one[0] == '\n' {
-					break
-				}
-				buf = append(buf, one[0])
+		switch req.Type {
+		case "exec":
+			var payload struct{ Command string }
+			if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
+				req.Reply(false, nil)
+				continue
 			}
-			cmd = strings.TrimSpace(strings.TrimPrefix(cmd, "sudo -S -p '' --"))
+			req.Reply(true, nil)
+			cmd := payload.Command
+			stdin := io.Reader(ch)
+			// If this is a sudo -S invocation and the server is simulating sudo,
+			// read the password line from stdin first, then run the inner command.
+			if strings.HasPrefix(cmd, "sudo -S") && sudoPw != "" {
+				buf := make([]byte, 0, 256)
+				one := make([]byte, 1)
+				for {
+					if _, err := stdin.Read(one); err != nil {
+						break
+					}
+					if one[0] == '\n' {
+						break
+					}
+					buf = append(buf, one[0])
+				}
+				cmd = strings.TrimSpace(strings.TrimPrefix(cmd, "sudo -S -p '' --"))
+			}
+			stdout, stderr, exit := execFn(cmd, stdin)
+			if stdout != "" {
+				ch.Write([]byte(stdout))
+			}
+			if stderr != "" {
+				ch.Stderr().Write([]byte(stderr))
+			}
+			ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{uint32(exit)}))
+			return
+		case "subsystem":
+			var sub struct{ Subsystem string }
+			if err := ssh.Unmarshal(req.Payload, &sub); err != nil {
+				req.Reply(false, nil)
+				continue
+			}
+			if sub.Subsystem != "sftp" {
+				req.Reply(false, nil)
+				continue
+			}
+			req.Reply(true, nil)
+			// Serve SFTP over this channel against the host filesystem. The
+			// in-process testsshd shares this OS process's FS, so the client can
+			// read/write real paths (the broker download test writes a fixture
+			// under t.TempDir() and Downloads it). Serve blocks until the client
+			// closes the channel; returning then lets `defer ch.Close()` finish it.
+			// Using sftp.NewServer (the canonical host-FS server) instead of the
+			// brief's NewRequestServer+NativeFilesystem: NativeFilesystem was
+			// removed from pkg/sftp; NewServer is its supported replacement.
+			srv, err := sftp.NewServer(ch)
+			if err != nil {
+				return
+			}
+			_ = srv.Serve()
+			_ = srv.Close()
+			return
+		default:
+			req.Reply(false, nil)
+			continue
 		}
-		stdout, stderr, exit := execFn(cmd, stdin)
-		if stdout != "" {
-			ch.Write([]byte(stdout))
-		}
-		if stderr != "" {
-			ch.Stderr().Write([]byte(stderr))
-		}
-		ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{uint32(exit)}))
-		return
 	}
 }
