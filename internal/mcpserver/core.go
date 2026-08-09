@@ -78,7 +78,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host)
+	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
 	if herr != nil {
 		status = "error"
 		err = herr

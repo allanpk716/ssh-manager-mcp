@@ -159,6 +159,6 @@ func seedRealServer(t *testing.T, st *store.Store, name, addr string, hk ssh.Pub
 		srv.SudoCredentialID = sid
 	}
 	id, _ := st.AddServer(srv)
-	_ = st.SaveHostKey(srv.Host, hk.Marshal()) // pre-trust the testsshd host key
+	_ = st.SaveHostKey(srv.Host, srv.Port, hk.Marshal()) // pre-trust the testsshd host key
 	return id
 }

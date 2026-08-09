@@ -32,13 +32,12 @@ func TestE2EIronRule(t *testing.T) {
 
 	allowedID := seedRealServer(t, st, "allowed", allowedAddr, allowedHK, "")
 	// forbidden is routed through the "localhost" loopback alias (same listener as
-	// 127.0.0.1) so its host key is stored under a distinct host string. The TOFU
-	// host-key store is keyed by host only, so two loopback sshd instances seeded
-	// under "127.0.0.1" would collide and clobber allowed's trusted key. Using
-	// "localhost" keeps the entries separate AND keeps forbidden genuinely
-	// dialable — so if the iron rule ever failed, forbidden would actually
-	// connect and return "FORBIDDEN" (failing the test), rather than failing
-	// coincidentally on a host-key mismatch.
+	// 127.0.0.1) so it remains genuinely dialable. The host-key store is keyed by
+	// host:port, so even with both loopback sshd instances on the same host string
+	// their distinct ports keep the pinned keys separate. Using "localhost" also
+	// gives a distinct host string, so if the iron rule ever failed, forbidden
+	// would actually connect and return "FORBIDDEN" (failing the test), rather
+	// than failing coincidentally on a host-key mismatch.
 	forbiddenID := seedServerOnHost(t, st, "forbidden", "localhost", forbiddenAddr, forbiddenHK, "")
 
 	pid, _ := st.AddProfile("agent-profile")
@@ -110,6 +109,6 @@ func seedServerOnHost(t *testing.T, st *store.Store, name, host, addr string, hk
 		srv.SudoCredentialID = sid
 	}
 	id, _ := st.AddServer(srv)
-	_ = st.SaveHostKey(host, hk.Marshal()) // pre-trust the testsshd host key under this host alias
+	_ = st.SaveHostKey(host, srv.Port, hk.Marshal()) // pre-trust the testsshd host key under this host alias
 	return id
 }
