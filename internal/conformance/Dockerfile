@@ -20,4 +20,8 @@ RUN sed -i -E \
     /etc/ssh/sshd_config
 RUN echo 'HostKey /etc/ssh/ssh_host_ed25519_key' >> /etc/ssh/sshd_config
 EXPOSE 22
-CMD ["/usr/sbin/sshd", "-D", "-e"]
+# Regenerate the ed25519 host key at container start so each container has a
+# unique key. `ssh-keygen -A` above bakes the key into the image, so without
+# this every container would share an identical host key and multi-container
+# tests (e.g. §13.2 host-key rejection) could not observe a "changed" key.
+CMD ["sh", "-c", "rm -f /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key.pub && ssh-keygen -q -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N '' -C '' && exec /usr/sbin/sshd -D -e"]
