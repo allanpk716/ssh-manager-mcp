@@ -119,7 +119,7 @@ func TestEvalGate(t *testing.T) {
 	results = append(results, gateT1Smoke(t))
 	results = append(results, gateT2Htop(t))
 	results = append(results, gateT3RootLog(t))
-	results = append(results, gateT4NoSftp(t))
+	results = append(results, gateT4Download(t))
 	results = append(results, gateT5Scope(t))
 	results = append(results, gateT6NoLeak(t))
 	results = append(results, gateT7Locked(t))

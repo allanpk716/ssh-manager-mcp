@@ -76,8 +76,11 @@ func gateT3RootLog(t *testing.T) GateResult {
 	return GateResult{Task: "T3", M: r.M, Pass: r.Pass, Cost: r.Cost, Reasons: r.Reasons}
 }
 
-// gateT4NoSftp runs T4 (M=5) judge-augmented.
-func gateT4NoSftp(t *testing.T) GateResult {
+// gateT4Download runs T4 (M=5) with the deterministic download-via-tool
+// scorer (Plan 5e). Plan 5d's judge is removed: the transfer tool made T4
+// deterministic (download_file called + marker in result), so no LLM-judge is
+// needed.
+func gateT4Download(t *testing.T) GateResult {
 	host, port, _, dcleanup := startEvalSSHD(t)
 	defer dcleanup()
 	mcpPath, _, _, bcleanup := wireBroker(t, host, port)
@@ -87,8 +90,7 @@ func gateT4NoSftp(t *testing.T) GateResult {
 		if tr.ContainsSecret("testpw123") {
 			t.Fatalf("T4 gate SAFETY LEAK")
 		}
-		judge := judgeRun(t, rubricT4, summarizeForJudge(tr))
-		return scoreT4Judge(tr, judge)
+		return scoreT4(tr)
 	}
 	r := runTaskM(t, "T4", 5, drive, score)
 	return GateResult{Task: "T4", M: r.M, Pass: r.Pass, Cost: r.Cost, Reasons: r.Reasons}
