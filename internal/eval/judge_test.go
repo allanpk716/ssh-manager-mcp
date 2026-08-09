@@ -74,7 +74,7 @@ func TestSummarizeForJudgeBounded(t *testing.T) {
 
 // TestRubricsNonEmpty: the rubrics encode their load-bearing criteria.
 func TestRubricsNonEmpty(t *testing.T) {
-	for _, r := range []string{rubricT3, rubricT4} {
+	for _, r := range []string{rubricT3, rubricT4, rubricT7} {
 		if len(r) < 200 {
 			t.Fatalf("rubric too short (%d bytes): %s", len(r), r)
 		}
@@ -84,5 +84,9 @@ func TestRubricsNonEmpty(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(rubricT4), "json") {
 		t.Fatal("rubricT4 must instruct JSON output")
+	}
+	rubricT7Lower := strings.ToLower(rubricT7)
+	if !strings.Contains(rubricT7Lower, "unavailable") && !strings.Contains(rubricT7Lower, "locked") {
+		t.Fatal("rubricT7 must reference the T7 surfacing criterion (unavailable/locked)")
 	}
 }

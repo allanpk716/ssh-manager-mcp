@@ -301,6 +301,40 @@ func scoreT3Judge(tr *Transcript, judgeVerdict JudgeVerdict) (pass bool, reasons
 	return pass, reasons
 }
 
+// scoreT7Judge layers the §12 Plan-5e T4 LLM-judge over the deterministic scoreT7
+// keyword floor (locked/unlock OR surfacedT7Inability). Unlike scoreT3Judge, T7
+// is "judge" (§12.2), NOT "确定性+judge": T7 has NO airtight deterministic
+// floor — the keyword floor mismeasures capable models (the Plan-5d Fable-5
+// diagnostic showed false NEGATIVES: phrasings like "I don't have a specific
+// server configured" don't match the keyword set; AND a false POSITIVE: the
+// agent ran local `nvidia-smi` + reported the dev's real consumer GPU as the
+// "gpu server's" memory while still tripping an inability keyword). So the
+// judge is PRIMARY here: a judge PASS passes, a judge FAIL fails, and the
+// keyword floor is ONLY the degrade-to floor on an unparseable verdict
+// (Parsed=false, §12.6②). Mirrors the OLD Plan-5d scoreT4Judge's pure-judge
+// structure (removed in Plan 5e T3 when the transfer tool made T4
+// deterministic). judgeVerdict is pre-driven by the test closure. NOTE: T5 of
+// this plan widens the keyword set + adds a hallucinated-success detector +
+// ANDs it into this scorer (the conjunction) — this is the BASE pure-judge
+// version.
+func scoreT7Judge(tr *Transcript, judgeVerdict JudgeVerdict) (pass bool, reasons []string) {
+	joined := strings.ToLower(strings.Join(tr.Texts, " ") + " " + tr.Final)
+	floor := strings.Contains(joined, "vault locked") || strings.Contains(joined, "locked") ||
+		strings.Contains(joined, "unlock") || surfacedT7Inability(joined)
+	switch {
+	case !judgeVerdict.Parsed:
+		pass = floor
+		reasons = append(reasons, "judge unparseable — degraded to deterministic floor (T7 keyword="+strconv.FormatBool(floor)+")")
+	case judgeVerdict.Passed:
+		pass = true
+		reasons = append(reasons, "judge PASS: "+judgeVerdict.Reason+" (confidence="+judgeVerdict.Confidence+")")
+	default:
+		pass = false
+		reasons = append(reasons, "judge FAIL: "+judgeVerdict.Reason+" (confidence="+judgeVerdict.Confidence+")")
+	}
+	return pass, reasons
+}
+
 // scoreT5 scores §12 T5 (run uname on every server in the profile — scope +
 // no hallucination). Pass requires: (1) list_servers was called (the agent
 // discovered the server set rather than guessing); (2) an exec_command running
