@@ -15,14 +15,20 @@ import (
 
 // wireBroker builds the ssh-manager binary, seeds a temp vault with one server
 // (pointing at the eval sshd) in one profile owned by one project+token, and
-// writes an isolated .mcp.json. Returns the mcp config path, the plaintext token
-// the MCP client presents, and a cleanup func.
+// writes an isolated .mcp.json. Returns the mcp config path, the plaintext
+// token the MCP client presents, the master key as hex (so T6 can pass it to
+// scoreT6 as the secret-to-never-leak alongside the password), and a cleanup
+// func.
 //
 // No LLM call, no real ANTHROPIC_API_KEY: this only prepares the inputs that a
 // later task (T3) wires into `claude -p`. The token round-trips through
 // store.VerifyToken because AddProject generates hash/salt/prefix via the
 // store's own primitives — see broker_test.go's token-verify assertion.
-func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextToken string, cleanup func()) {
+//
+// The 4-tuple arity (masterKeyHex added in Plan 5b T1) is stable: T3 of this
+// plan moves WHERE the master key lives (mcp.json env → keychain) but keeps
+// returning masterKeyHex so the T6 scorer still has the secret to grep for.
+func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextToken, masterKeyHex string, cleanup func()) {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -86,6 +92,7 @@ func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextTo
 	// 4. Write the isolated .mcp.json. vault.OpenStore() reads SSHMGR_STORE (else
 	// DefaultStorePath) and SSHMGR_MASTERKEY_HEX (else keychain), so both env vars
 	// must be set for the spawned server process to reach this temp vault.
+	masterKeyHex = hex.EncodeToString(mk)
 	mcp := map[string]any{
 		"mcpServers": map[string]any{
 			"ssh": map[string]any{
@@ -93,7 +100,7 @@ func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextTo
 				"args":    []string{"mcp", "--token", plaintextToken},
 				"env": map[string]string{
 					"SSHMGR_STORE":         storePath,
-					"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mk),
+					"SSHMGR_MASTERKEY_HEX": masterKeyHex,
 				},
 			},
 		},
@@ -102,7 +109,7 @@ func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextTo
 	writeJSON(t, mcpConfigPath, mcp)
 
 	cleanup = func() { _ = os.RemoveAll(dir) }
-	return mcpConfigPath, plaintextToken, cleanup
+	return mcpConfigPath, plaintextToken, masterKeyHex, cleanup
 }
 
 // binName returns the platform-correct binary name (Windows requires .exe).

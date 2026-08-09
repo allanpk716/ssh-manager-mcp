@@ -21,7 +21,7 @@ func TestWireBroker(t *testing.T) {
 	host, port, sshdCleanup := startEvalSSHD(t)
 	defer sshdCleanup()
 
-	mcpPath, token, cleanup := wireBroker(t, host, port)
+	mcpPath, token, _, cleanup := wireBroker(t, host, port)
 	defer cleanup()
 
 	if token == "" {
