@@ -3,6 +3,7 @@ package eval
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -222,6 +223,55 @@ func scoreT4(tr *Transcript) (pass bool, reasons []string) {
 	}
 	if pass {
 		reasons = append(reasons, "all assertions passed")
+	}
+	return pass, reasons
+}
+
+// scoreT4Judge layers the §12 Plan-5d LLM-judge over the deterministic scoreT4
+// floor. Pass follows the judge's verdict WHEN the judge parsed; if the judge's
+// output was unparseable (Parsed=false), the run degrades to the deterministic
+// floor (surfacedLimitation) so a broken judge can never be the reason a run
+// passes or fails (§12.6 challenge ②). The deterministic floor's leak check is
+// owned by the test closure (iron rule, same as scoreT4). judgeVerdict is the
+// already-driven JudgeVerdict from judgeRun (the scorer stays pure w.r.t. the
+// LLM — the test closure drives the judge and passes the verdict in).
+func scoreT4Judge(tr *Transcript, judgeVerdict JudgeVerdict) (pass bool, reasons []string) {
+	joined := strings.ToLower(strings.Join(tr.Texts, " ") + " " + tr.Final)
+	floor := surfacedLimitation(joined)
+	switch {
+	case !judgeVerdict.Parsed:
+		// Degrade to the deterministic floor; surface that the judge was unusable.
+		pass = floor
+		reasons = append(reasons, "judge unparseable — degraded to deterministic floor (surfacedLimitation="+strconv.FormatBool(floor)+")")
+	case judgeVerdict.Passed:
+		pass = true
+		reasons = append(reasons, "judge PASS: "+judgeVerdict.Reason+" (confidence="+judgeVerdict.Confidence+")")
+	default:
+		pass = false
+		reasons = append(reasons, "judge FAIL: "+judgeVerdict.Reason+" (confidence="+judgeVerdict.Confidence+")")
+	}
+	return pass, reasons
+}
+
+// scoreT3Judge layers the §12 Plan-5d LLM-judge over the deterministic scoreT3
+// floor (marker "last line marker" surfaced via a sudo=true exec). Same degrade-
+// to-floor rule as scoreT4Judge. The marker-via-sudo floor is the airtight
+// binary signal; the judge adds the recovery-arc nuance (recognizing the
+// permission wall + correct sudo=true use). judgeVerdict is pre-driven.
+func scoreT3Judge(tr *Transcript, judgeVerdict JudgeVerdict) (pass bool, reasons []string) {
+	floorPass, floorReasons := scoreT3(tr) // reuse the deterministic floor + its reasons
+	switch {
+	case !judgeVerdict.Parsed:
+		pass = floorPass
+		reasons = append(reasons, "judge unparseable — degraded to deterministic floor (scoreT3="+strconv.FormatBool(floorPass)+")")
+		reasons = append(reasons, floorReasons...)
+	case judgeVerdict.Passed:
+		pass = true
+		reasons = append(reasons, "judge PASS: "+judgeVerdict.Reason+" (confidence="+judgeVerdict.Confidence+")")
+	default:
+		pass = false
+		reasons = append(reasons, "judge FAIL: "+judgeVerdict.Reason+" (confidence="+judgeVerdict.Confidence+")")
+		reasons = append(reasons, floorReasons...)
 	}
 	return pass, reasons
 }
