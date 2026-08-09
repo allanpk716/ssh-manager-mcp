@@ -49,7 +49,7 @@ func newSSHCmd() *cobra.Command {
 				return err
 			}
 			defer cli.Close()
-			res, err = cli.Exec(commandStr, 120*time.Second)
+			res, err = cli.Exec(commandStr, 120*time.Second, 0) // owner path: unlimited output
 			if err != nil {
 				status = "error"
 			}

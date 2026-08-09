@@ -1,7 +1,6 @@
 package sshbroker
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"time"
@@ -11,7 +10,8 @@ import (
 
 // ExecSudo runs cmd with privilege escalation via `sudo -S`, feeding sudoPassword to sudo's stdin.
 // Use this when the remote user needs a password for sudo. For NOPASSWD sudo, plain Exec("sudo "+cmd) suffices.
-func (c *Client) ExecSudo(cmd string, sudoPassword []byte, timeout time.Duration) (ExecResult, error) {
+// maxBytes has the same meaning as in Exec (0 = unlimited).
+func (c *Client) ExecSudo(cmd string, sudoPassword []byte, timeout time.Duration, maxBytes int64) (ExecResult, error) {
 	sess, err := c.c.NewSession()
 	if err != nil {
 		return ExecResult{}, err
@@ -22,9 +22,10 @@ func (c *Client) ExecSudo(cmd string, sudoPassword []byte, timeout time.Duration
 	if err != nil {
 		return ExecResult{}, err
 	}
-	var stdout, stderr bytes.Buffer
-	sess.Stdout = &stdout
-	sess.Stderr = &stderr
+	stdout := &cappedBuffer{cap: maxBytes}
+	stderr := &cappedBuffer{cap: maxBytes}
+	sess.Stdout = stdout
+	sess.Stderr = stderr
 
 	wrapped := fmt.Sprintf("sudo -S -p '' -- %s", cmd)
 
@@ -53,7 +54,13 @@ func (c *Client) ExecSudo(cmd string, sudoPassword []byte, timeout time.Duration
 	stdin.Close()
 
 	err = sess.Wait()
-	res := ExecResult{Stdout: stdout.String(), Stderr: stderr.String()}
+	res := ExecResult{
+		Stdout:      stdout.buf.String(),
+		Stderr:      stderr.buf.String(),
+		StdoutBytes: stdout.total,
+		StderrBytes: stderr.total,
+		Truncated:   stdout.truncated || stderr.truncated,
+	}
 	if ctx.Err() == context.DeadlineExceeded {
 		res.TimedOut = true
 	}
