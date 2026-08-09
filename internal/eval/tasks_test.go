@@ -634,7 +634,7 @@ func TestEvalT7Locked(t *testing.T) {
 	// if claude -p ever exits non-zero on MCP-init failure, the M-loop must
 	// keep iterating so scoreT7Judge can score the partial transcript.
 	drive := func() *Transcript {
-		return driveAgentT7Restricted(t, mcpPath, sys, prompt)
+		return driveAgentLenient(t, mcpPath, sys, prompt)
 	}
 
 	// Per-run diagnostics: capture each run's tool sequence + whether the agent
