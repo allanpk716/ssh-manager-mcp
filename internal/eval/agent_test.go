@@ -15,7 +15,7 @@ import (
 // Gated by requireEval (real LLM cost via the proxy → glm).
 func TestDriveAgentParsesTranscript(t *testing.T) {
 	requireEval(t)
-	host, port, dcleanup := startEvalSSHD(t)
+	host, port, _, dcleanup := startEvalSSHD(t)
 	defer dcleanup()
 	mcpPath, _, _, bcleanup := wireBroker(t, host, port)
 	defer bcleanup()

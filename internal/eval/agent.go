@@ -3,12 +3,25 @@ package eval
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
+
+// evalDriveTimeout is the per-call ceiling on a `claude -p` run. It exists
+// purely as the "not hang" safety net the §12 T4 score requires: a
+// well-behaved agent must complete (or gracefully decline) within this window.
+// Generous by design — T1/T2/T3/T6 runs finish in <30s each through the local
+// proxy → glm, so this deadline is invisible to them and only catches a true
+// hang (a stuck agent never produces a scoreable transcript; the deadline
+// turns cmd.Run's error into context.DeadlineExceeded → the existing t.Fatalf
+// on run-error fires → the test fails, correctly, because a hang is a failure
+// of graceful handling).
+const evalDriveTimeout = 4 * time.Minute
 
 // ToolUse is a single tool_use block captured from an assistant message. Name
 // is normalized to the bare tool name (the `mcp__<server>__` prefix Claude Code
@@ -81,13 +94,77 @@ func driveAgent(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *T
 	}
 	args = append(args, taskPrompt)
 
-	cmd := exec.Command("claude", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), evalDriveTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Env = evalCmdEnv()
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out // capture proxy/MCP stderr for diagnosis
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("claude -p failed: %v\n--- output ---\n%s", err, out.String())
+	}
+	return parseStream(out.Bytes())
+}
+
+// driveAgentLenient is driveAgent's non-fatal twin, used ONLY by T7 (locked-store
+// handling). It is identical to driveAgent in argv, env, timeout, and stream
+// capture — the ONLY behavioral difference is the error path: when cmd.Run
+// returns an error (claude -p exited non-zero), driveAgent would t.Fatalf and
+// abort the calling test, but driveAgentLenient instead parses whatever
+// stream-json was captured before the exit, sets IsError=true on the Transcript,
+// and returns it. This is necessary for T7 because a locked broker's MCP server
+// prints "vault locked" to stderr and exits non-zero before serving any tool —
+// and claude -p surfaces that MCP-init failure as a non-zero exit. The M-loop
+// (runTaskM) needs to keep iterating so scoreT7 can grep the raw bytes for the
+// surfaced locked signal across all M runs.
+//
+// The raw bytes (tr.Raw) are the load-bearing artifact for scoreT7: they carry
+// whatever stream-json claude -p emitted before bailing, plus the broker's
+// stderr "vault locked" line captured into the same buffer (driveAgent /
+// driveAgentLenient both wire Stderr → the same buffer as Stdout). The strict
+// driveAgent fatals BEFORE returning that buffer to the caller; the lenient
+// variant hands it back so the scorer + test log can show what glm actually
+// said when its tools failed to appear.
+//
+// Used ONLY by T7. T1–T5/T6 keep driveAgent's fatal-on-error behavior: a
+// non-zero claude -p exit there is a real test failure (a tool-using task that
+// can't even start its MCP server has failed, not produced a scoreable
+// outcome). Do not migrate other tasks to this variant without re-thinking
+// their failure semantics.
+func driveAgentLenient(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *Transcript {
+	t.Helper()
+
+	args := []string{
+		"-p",
+		"--bare",
+		"--strict-mcp-config", "--mcp-config", mcpConfigPath,
+		"--dangerously-skip-permissions",
+		"--output-format", "stream-json", "--verbose",
+	}
+	if model := os.Getenv("SSHMGR_EVAL_MODEL"); model != "" {
+		args = append(args, "--model", model)
+	}
+	if systemPrompt != "" {
+		args = append(args, "--system-prompt", systemPrompt)
+	}
+	args = append(args, taskPrompt)
+
+	ctx, cancel := context.WithTimeout(context.Background(), evalDriveTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Env = evalCmdEnv()
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		// Lenient: do NOT t.Fatalf. Parse whatever was captured (there is
+		// typically a partial stream-json transcript + the broker's "vault
+		// locked" stderr) and mark IsError so scoreT7 knows the run exited
+		// non-zero. The raw bytes are scored as-is.
+		tr := parseStream(out.Bytes())
+		tr.IsError = true
+		return tr
 	}
 	return parseStream(out.Bytes())
 }
