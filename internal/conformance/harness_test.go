@@ -23,7 +23,7 @@ func TestHarnessSmoke(t *testing.T) {
 		t.Fatalf("broker connect: %v", err)
 	}
 	defer cli.Close()
-	res, err := cli.Exec("printf %s hi-broker", 0)
+	res, err := cli.Exec("printf %s hi-broker", 0, 0)
 	if err != nil {
 		t.Fatalf("broker exec: %v", err)
 	}

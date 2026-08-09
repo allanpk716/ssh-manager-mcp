@@ -31,7 +31,7 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, error
 	mcp.AddTool(srv,
 		&mcp.Tool{
 			Name:        "exec_command",
-			Description: "Run a shell command on a server. Pass the server's id (from list_servers), not its name. If sudo=true the broker runs `sudo -S` for you — do NOT prepend 'sudo' to the command yourself. sudo=true only works on servers where has_sudo=true. Out-of-profile server ids are rejected.",
+			Description: "Run a shell command on a server. Pass the server's id (from list_servers), not its name. If sudo=true the broker runs `sudo -S` for you — do NOT prepend 'sudo' to the command yourself. sudo=true only works on servers where has_sudo=true. Out-of-profile server ids are rejected. Output is capped at 1 MiB per channel: if truncated=true you received only the PREFIX — read stdout_bytes/stderr_bytes for the true size, then refine your command (tail -n / head -n / grep) and re-run to get the part you need, rather than asking for the whole huge output again.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in ExecCommandInput) (*mcp.CallToolResult, ExecOutput, error) {
 			out, err := ExecCommandForProfile(ctx, st, projectID, profileID, in.ServerID, in.Command, in.Sudo, time.Duration(in.TimeoutSeconds)*time.Second)
@@ -42,7 +42,7 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, error
 					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
 				}, ExecOutput{}, nil
 			}
-			return nil, ExecOutput{Stdout: out.Stdout, Stderr: out.Stderr, ExitCode: out.ExitCode, TimedOut: out.TimedOut}, nil
+			return nil, out, nil
 		},
 	)
 
