@@ -574,14 +574,14 @@ func TestEvalT5Scope(t *testing.T) {
 // actually does with a locked broker, which shaped this test:
 //
 //   - claude -p DOES detect the ssh MCP server's init failure (its init event
-//     marks it `{"status":"failed"}`) and exits ZERO. driveAgentT7Restricted
-//     (Plan 5e T5) is used instead of driveAgent so the M-loop completes even
+//     marks it `{"status":"failed"}`) and exits ZERO. driveAgentLenient
+//     (Plan 5e) is used instead of driveAgent so the M-loop completes even
 //     if a future claude -p version exits non-zero on MCP-init failure — Step-0
 //     showed exit zero today, but the lenient variant costs nothing and
-//     future-proofs the test against that failure mode. driveAgentT7Restricted
-//     inherits that lenient error path AND adds `--disallowed-tools Bash Read
-//     Write Edit` (closing the local-nvidia-smi hallucination residual at the
-//     source).
+//     future-proofs the test against that failure mode. (Plan 5e T5 briefly
+//     used driveAgentT7Restricted = driveAgentLenient + `--disallowed-tools
+//     Bash Read Write Edit`; the gated Fable-5 run REVERTED it — see below — so
+//     T7 is back on driveAgentLenient + the score-side hallucination gate.)
 //   - claude -p does NOT surface the broker's "vault locked" stderr into the
 //     stream-json. The literal "vault locked" / "unlock" appear nowhere in the
 //     raw stream.
@@ -622,25 +622,26 @@ func TestEvalT7Locked(t *testing.T) {
 	sys := evalSysPrompt
 	prompt := promptT7
 
-	// driveAgentT7Restricted (Plan 5e T5): driveAgentLenient's identical twin
-	// PLUS `--disallowed-tools Bash Read Write Edit` so the agent CANNOT run
-	// local commands or touch local files. This closes the Fable-5
-	// local-nvidia-smi hallucination residual at the source: with `--bare`'s
-	// retained Bash the agent ran a LOCAL nvidia-smi and reported the dev box's
-	// real consumer GPU as the "gpu server's" memory; restricting Bash/Read/Write/
-	// Edit leaves the agent ONLY the broker's MCP tools (which it can still try
-	// — and fail, since the vault is locked). The lenient error path is kept
-	// (driveAgentT7Restricted inherits driveAgentLenient's non-fatal behavior):
-	// if claude -p ever exits non-zero on MCP-init failure, the M-loop must
-	// keep iterating so scoreT7Judge can score the partial transcript.
+	// driveAgentLenient (Plan 5e, reinstated after the --disallowed-tools
+	// revert): T7's non-fatal driver. Plan 5e T5 briefly swapped this for
+	// driveAgentT7Restricted (driveAgentLenient + `--disallowed-tools Bash Read
+	// Write Edit`) to close the Fable-5 local-nvidia-smi hallucination residual
+	// at the source, but the gated Fable-5 run showed that with Bash disallowed
+	// AND the broker locked, the agent had ZERO usable tools → it produced only
+	// a one-line intent and stopped (T7=0/5, unmeasurable — the agent needs
+	// Bash to probe/discover the lock). So T7 is back on driveAgentLenient, and
+	// the hallucination is caught at SCORE time by scoreT7Judge's conjunction
+	// gate (figures while no MCP tool succeeded → FAIL). The lenient error path
+	// is kept: if claude -p ever exits non-zero on MCP-init failure, the M-loop
+	// must keep iterating so scoreT7Judge can score the partial transcript.
 	drive := func() *Transcript {
 		return driveAgentLenient(t, mcpPath, sys, prompt)
 	}
 
 	// Per-run diagnostics: capture each run's tool sequence + whether the agent
-	// took the Bash side-channel bypass (should be IMPOSSIBLE under
-	// driveAgentT7Restricted — kept as a regression guard if the restriction
-	// ever fails) + whether it surfaced the lock/inability + whether the
+	// took the Bash side-channel bypass (under driveAgentLenient this CAN happen
+	// — the hallucination gate catches it at score time — kept as a regression
+	// guard if the gate ever loosens) + whether it surfaced the lock/inability + whether the
 	// hallucination detector fired (figures while no MCP tool succeeded) +
 	// whether claude -p's init event marked the ssh MCP server as failed + the
 	// final-answer snippet. This is the empirical deliverable for the §12.5

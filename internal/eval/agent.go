@@ -131,14 +131,21 @@ func driveAgent(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *T
 // variant hands it back so the scorer + test log can show what glm actually
 // said when its tools failed to appear.
 //
-// Plan 5e T5: T7 now uses driveAgentT7Restricted (this function's identical twin
-// PLUS `--disallowed-tools Bash Read Write Edit`), so driveAgentLenient is
-// currently UNSUSED — retained as the unrestricted lenient variant for any
-// future task that needs local tool access with non-fatal error semantics. T1–
-// T5/T6 keep driveAgent's fatal-on-error behavior: a non-zero claude -p exit
-// there is a real test failure (a tool-using task that can't even start its MCP
-// server has failed, not produced a scoreable outcome). Do not migrate other
-// tasks to a lenient variant without re-thinking their failure semantics.
+// Plan 5e T5 + the reverted --disallowed-tools finding: T7's driver was briefly
+// migrated to driveAgentT7Restricted (--disallowed-tools Bash Read Write Edit),
+// but the gated Fable-5 run showed that with Bash disallowed AND the broker
+// locked, the agent had zero usable tools → it produced only a one-line intent
+// and stopped (T7=0/5, unmeasurable — the agent needs Bash to probe/discover
+// the lock). T7 therefore uses THIS function (driveAgentLenient) again as its
+// driver, with the hallucination caught at score-time by scoreT7Judge's
+// conjunction gate (figures while no MCP tool succeeded → FAIL).
+// driveAgentT7Restricted is retained as an eval-safety-strict variant for a
+// future scenario where the agent has WORKING MCP tools (so disabling Bash
+// doesn't strand it). T1–T5/T6 keep driveAgent's fatal-on-error behavior: a
+// non-zero claude -p exit there is a real test failure (a tool-using task that
+// can't even start its MCP server has failed, not produced a scoreable
+// outcome). Do not migrate other tasks to a lenient variant without
+// re-thinking their failure semantics.
 func driveAgentLenient(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *Transcript {
 	t.Helper()
 

@@ -325,9 +325,12 @@ func scoreT3Judge(tr *Transcript, judgeVerdict JudgeVerdict) (pass bool, reasons
 // a lenient judge cannot override a fabricated server check. The conjunction is
 // one-way: hallucinated success forces FAIL on a judge PASS, but ABSENCE of
 // hallucination does not rescue a judge FAIL (the !halluc + judge-FAIL branch
-// stays fail). driveAgentT7Restricted (`--disallowed-tools Bash Read Write Edit`)
-// closes the local-nvidia-smi residual at the source; this gate is the
-// scorer-side defense-in-depth catch.
+// stays fail). The Plan-5e first attempt was driveAgentT7Restricted
+// (`--disallowed-tools Bash Read Write Edit`) to close the local-nvidia-smi
+// residual at the source; it was REVERTED (Bash disallowed + broker locked →
+// zero usable tools → T7=0/5 unmeasurable), so THIS gate is the primary catch
+// for the Fable-5 fabrication mode (and the defense-in-depth catch for any
+// residual a future tool-resolution change might open).
 //
 // judgeVerdict is pre-driven by the test closure. Returns (pass, reasons,
 // halluc) so the closure can surface HallucinatedSuccess in its per-run
@@ -564,12 +567,15 @@ type T7FloorVerdict struct {
 // Plan 5e T5 adds the HallucinatedSuccess signal (returned on the verdict, NOT
 // a standalone fail here — scoreT7Judge ANDs it as a conjunction gate). Plan 5e
 // T5 also widens t7InabilityKeywords for the capable-model phrasings the
-// Plan-5d Fable-5 run surfaced (false-negative fixes). driveAgentT7Restricted
-// (`--disallowed-tools Bash Read Write Edit`) closes the local-nvidia-smi
-// residual at the source so the hallucination mode cannot even fire; this
-// detector is the defense-in-depth scorer-side catch for any residual (e.g. a
-// future claude -p tool-resolution change, or figures the agent invented
-// without running anything).
+// Plan-5d Fable-5 run surfaced (false-negative fixes). The Plan-5e first
+// attempt was to close the local-nvidia-smi residual at the SOURCE via
+// driveAgentT7Restricted (`--disallowed-tools Bash Read Write Edit`); that drive
+// was REVERTED (with Bash disallowed AND the broker locked, the agent had zero
+// usable tools → T7=0/5 unmeasurable), so this detector IS the primary catch
+// for the Fable-5 fabrication mode (figures while no MCP tool succeeded). It is
+// also the defense-in-depth scorer-side catch for any residual (e.g. a future
+// claude -p tool-resolution change, or figures the agent invented without
+// running anything).
 func scoreT7(tr *Transcript) T7FloorVerdict {
 	var v T7FloorVerdict
 	v.Pass = true
