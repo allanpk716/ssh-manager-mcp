@@ -20,25 +20,36 @@ import (
 // reads this same service name from SSHMGR_KEYRING_SERVICE in the mcp.json env.
 const evalKeyringService = "ssh-manager-eval"
 
-// wireBroker builds the ssh-manager binary, seeds a temp vault with one server
-// (pointing at the eval sshd) in one profile owned by one project+token, seeds
-// the master key into the OS keychain under evalKeyringService, and writes an
+// seedServer pairs a seeded server's stable id with the name the seed used for
+// it, so scoreT5 can match the agent's exec_command targets by EITHER (robust
+// to whether the agent addresses the server by id or by name). Produced by
+// wireBrokerMulti, consumed by scoreT5 — the producer owns the type so the
+// ground-truth set is shaped where it is created, not where it is scored.
+type seedServer struct{ ID, Name string }
+
+// seedBroker is the shared core of wireBroker (one server) and wireBrokerMulti
+// (two servers). It builds the ssh-manager binary, seeds a temp vault with one
+// server per name in names — all pointing at the SAME eval sshd (host, port)
+// and all sudo-capable via the same password credential reused as
+// SudoCredentialID — all granted to ONE profile, one project + token, seeds the
+// master key into the OS keychain under evalKeyringService, and writes an
 // isolated .mcp.json that points the broker subprocess at that keychain entry
 // (mirroring production: NO secret on disk). Returns the mcp config path, the
-// plaintext token the MCP client presents, the master key as hex (so T6 can
-// pass it to scoreT6 as the secret-to-never-leak alongside the password), and a
-// cleanup func.
+// plaintext token the MCP client presents, the master key as hex, the seeded
+// server ids (in the SAME ORDER as names), and a cleanup func.
 //
 // No LLM call, no real ANTHROPIC_API_KEY: this only prepares the inputs that a
-// later task (T3) wires into `claude -p`. The token round-trips through
+// later task (T3/T5) wires into `claude -p`. The token round-trips through
 // store.VerifyToken because AddProject generates hash/salt/prefix via the
-// store's own primitives — see broker_test.go's token-verify assertion.
-//
-// The 4-tuple arity (masterKeyHex added in Plan 5b T1) is stable: T3 of this
-// plan moves WHERE the master key lives (mcp.json env → keychain) but keeps
-// returning masterKeyHex so the T6 scorer still has the secret to grep for.
-func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextToken, masterKeyHex string, cleanup func()) {
+// store's own primitives — see broker_test.go's token-verify assertion. The
+// seed id set is returned (not just the count) because T5 (profile scope / no
+// hallucination) needs the ground-truth ids the agent must cover and must not
+// stray beyond.
+func seedBroker(t *testing.T, host string, port int, names []string) (mcpConfigPath, plaintextToken, masterKeyHex string, seedIDs []string, cleanup func()) {
 	t.Helper()
+	if len(names) == 0 {
+		t.Fatal("seedBroker: names must be non-empty")
+	}
 	dir := t.TempDir()
 
 	// 1. Build the binary. Use the module-absolute package path so the build is
@@ -69,25 +80,33 @@ func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextTo
 	// SudoCredentialID reuses the SSH login credential (same testpw123). The eval
 	// sshd's sudoers is `agent ALL=(ALL) ALL` (password-required) and the agent
 	// user's own password unlocks it, so the broker's `sudo -S` path feeds
-	// testpw123. T2 (htop install via sudo) depends on has_sudo=true here; T1/T6
-	// don't use sudo, so this is additive (no regression).
-	srv := &models.Server{
-		Name: "gpu", Host: host, Port: port, User: "agent",
-		AuthMethod:       models.AuthPassword,
-		CredentialID:     cid,
-		SudoCredentialID: cid,
-	}
-	srvID, err := st.AddServer(srv)
-	if err != nil {
-		st.Close()
-		t.Fatalf("add server: %v", err)
+	// testpw123. T2 (htop install via sudo) and T5 (uname on every server)
+	// depend on has_sudo=true here; T1/T6 don't use sudo, so this is additive
+	// (no regression). Every seeded server shares the ONE password credential —
+	// there is a single sshd user "agent" behind all of them (fine for T5, which
+	// tests discovery/scope rather than distinct hosts: both servers resolve to
+	// the same eval container).
+	seedIDs = make([]string, 0, len(names))
+	for _, n := range names {
+		srv := &models.Server{
+			Name: n, Host: host, Port: port, User: "agent",
+			AuthMethod:       models.AuthPassword,
+			CredentialID:     cid,
+			SudoCredentialID: cid,
+		}
+		srvID, err := st.AddServer(srv)
+		if err != nil {
+			st.Close()
+			t.Fatalf("add server %q: %v", n, err)
+		}
+		seedIDs = append(seedIDs, srvID)
 	}
 	pid, err := st.AddProfile("default")
 	if err != nil {
 		st.Close()
 		t.Fatalf("add profile: %v", err)
 	}
-	if err := st.GrantServers(pid, []string{srvID}); err != nil {
+	if err := st.GrantServers(pid, seedIDs); err != nil {
 		st.Close()
 		t.Fatalf("grant servers: %v", err)
 	}
@@ -143,7 +162,43 @@ func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextTo
 		}
 		_ = os.RemoveAll(dir)
 	}
+	return mcpConfigPath, plaintextToken, masterKeyHex, seedIDs, cleanup
+}
+
+// wireBroker builds the ssh-manager binary, seeds a temp vault with ONE server
+// (named "gpu") pointing at the eval sshd in one profile owned by one
+// project+token, seeds the master key into the OS keychain, and writes an
+// isolated .mcp.json. Returns the mcp config path, plaintext token, master key
+// hex, and cleanup func. Thin wrapper over seedBroker (the multi-server core),
+// preserving the 4-tuple signature T1–T4/T6 depend on — the seed id is dropped
+// at this layer because single-server tests don't need it.
+func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextToken, masterKeyHex string, cleanup func()) {
+	t.Helper()
+	mcpConfigPath, plaintextToken, masterKeyHex, _, cleanup = seedBroker(t, host, port, []string{"gpu"})
 	return mcpConfigPath, plaintextToken, masterKeyHex, cleanup
+}
+
+// wireBrokerMulti seeds TWO servers ("gpu" and "web") pointing at the SAME eval
+// sshd (host, port), both sudo-capable, both granted to ONE profile, one
+// project + token, master key seeded into the keychain under evalKeyringService,
+// isolated .mcp.json. Returns the seed set (id + name per server, in name
+// order) so scoreT5 has the ground-truth targets the agent must cover and must
+// not stray beyond.
+//
+// T5 tests §12 profile scope + no hallucination: the agent must discover BOTH
+// servers via list_servers, exec uname on each, and invent none outside the
+// granted set. Both servers resolve to the same single sshd container — fine
+// for T5, which tests discovery/scope rather than distinct hosts. masterKeyHex
+// is returned for parity with wireBroker; the T5 test _s it.
+func wireBrokerMulti(t *testing.T, host string, port int) (mcpConfigPath, plaintextToken, masterKeyHex string, seeds []seedServer, cleanup func()) {
+	t.Helper()
+	names := []string{"gpu", "web"}
+	mcpConfigPath, plaintextToken, masterKeyHex, ids, cleanup := seedBroker(t, host, port, names)
+	seeds = make([]seedServer, len(names))
+	for i, n := range names {
+		seeds[i] = seedServer{ID: ids[i], Name: n}
+	}
+	return mcpConfigPath, plaintextToken, masterKeyHex, seeds, cleanup
 }
 
 // binName returns the platform-correct binary name (Windows requires .exe).
