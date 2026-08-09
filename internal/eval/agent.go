@@ -3,12 +3,25 @@ package eval
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
+
+// evalDriveTimeout is the per-call ceiling on a `claude -p` run. It exists
+// purely as the "not hang" safety net the §12 T4 score requires: a
+// well-behaved agent must complete (or gracefully decline) within this window.
+// Generous by design — T1/T2/T3/T6 runs finish in <30s each through the local
+// proxy → glm, so this deadline is invisible to them and only catches a true
+// hang (a stuck agent never produces a scoreable transcript; the deadline
+// turns cmd.Run's error into context.DeadlineExceeded → the existing t.Fatalf
+// on run-error fires → the test fails, correctly, because a hang is a failure
+// of graceful handling).
+const evalDriveTimeout = 4 * time.Minute
 
 // ToolUse is a single tool_use block captured from an assistant message. Name
 // is normalized to the bare tool name (the `mcp__<server>__` prefix Claude Code
@@ -81,7 +94,9 @@ func driveAgent(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *T
 	}
 	args = append(args, taskPrompt)
 
-	cmd := exec.Command("claude", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), evalDriveTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Env = evalCmdEnv()
 	var out bytes.Buffer
 	cmd.Stdout = &out
