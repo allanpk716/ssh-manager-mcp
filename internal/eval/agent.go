@@ -111,17 +111,17 @@ func driveAgent(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *T
 	return parseStream(out.Bytes())
 }
 
-// driveAgentLenient is driveAgent's non-fatal twin, used ONLY by T7 (locked-store
-// handling). It is identical to driveAgent in argv, env, timeout, and stream
-// capture — the ONLY behavioral difference is the error path: when cmd.Run
-// returns an error (claude -p exited non-zero), driveAgent would t.Fatalf and
-// abort the calling test, but driveAgentLenient instead parses whatever
-// stream-json was captured before the exit, sets IsError=true on the Transcript,
-// and returns it. This is necessary for T7 because a locked broker's MCP server
-// prints "vault locked" to stderr and exits non-zero before serving any tool —
-// and claude -p surfaces that MCP-init failure as a non-zero exit. The M-loop
-// (runTaskM) needs to keep iterating so scoreT7 can grep the raw bytes for the
-// surfaced locked signal across all M runs.
+// driveAgentLenient is driveAgent's non-fatal twin. It is identical to driveAgent
+// in argv, env, timeout, and stream capture — the ONLY behavioral difference is
+// the error path: when cmd.Run returns an error (claude -p exited non-zero),
+// driveAgent would t.Fatalf and abort the calling test, but driveAgentLenient
+// instead parses whatever stream-json was captured before the exit, sets
+// IsError=true on the Transcript, and returns it. This non-fatal behavior is
+// necessary for T7 because a locked broker's MCP server prints "vault locked"
+// to stderr and exits non-zero before serving any tool — and claude -p surfaces
+// that MCP-init failure as a non-zero exit. The M-loop (runTaskM) needs to keep
+// iterating so scoreT7 can grep the raw bytes for the surfaced locked signal
+// across all M runs.
 //
 // The raw bytes (tr.Raw) are the load-bearing artifact for scoreT7: they carry
 // whatever stream-json claude -p emitted before bailing, plus the broker's
@@ -131,11 +131,14 @@ func driveAgent(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *T
 // variant hands it back so the scorer + test log can show what glm actually
 // said when its tools failed to appear.
 //
-// Used ONLY by T7. T1–T5/T6 keep driveAgent's fatal-on-error behavior: a
-// non-zero claude -p exit there is a real test failure (a tool-using task that
-// can't even start its MCP server has failed, not produced a scoreable
-// outcome). Do not migrate other tasks to this variant without re-thinking
-// their failure semantics.
+// Plan 5e T5: T7 now uses driveAgentT7Restricted (this function's identical twin
+// PLUS `--disallowed-tools Bash Read Write Edit`), so driveAgentLenient is
+// currently UNSUSED — retained as the unrestricted lenient variant for any
+// future task that needs local tool access with non-fatal error semantics. T1–
+// T5/T6 keep driveAgent's fatal-on-error behavior: a non-zero claude -p exit
+// there is a real test failure (a tool-using task that can't even start its MCP
+// server has failed, not produced a scoreable outcome). Do not migrate other
+// tasks to a lenient variant without re-thinking their failure semantics.
 func driveAgentLenient(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *Transcript {
 	t.Helper()
 
@@ -170,6 +173,82 @@ func driveAgentLenient(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt str
 		// typically a partial stream-json transcript + the broker's "vault
 		// locked" stderr) and mark IsError so scoreT7 knows the run exited
 		// non-zero. The raw bytes are scored as-is.
+		tr := parseStream(out.Bytes())
+		tr.IsError = true
+		return tr
+	}
+	return parseStream(out.Bytes())
+}
+
+// driveAgentT7Restricted is driveAgentLenient with `--disallowed-tools Bash Read
+// Write Edit` appended so the agent cannot run local commands NOR touch local
+// files. This closes the Plan-5d Fable-5 hallucination residual at the SOURCE:
+// the Fable-5 run found that with `--bare`'s RETAINED Bash tool, the agent ran a
+// LOCAL `nvidia-smi` and reported the dev box's real consumer GPU as the "gpu
+// server's" memory (the T1 HOME-isolation residual: HOME isolation scrubbed
+// ~/.ssh but did NOT block local non-SSH commands). `--disallowed-tools Bash
+// Read Write Edit` removes all four local side-channel tools from `--bare`'s
+// default toolset, leaving the agent ONLY the broker's MCP tools
+// (list_servers/exec_command/download_file) — which it can still try (and fail,
+// since the vault is locked). Plan 5e T5's hallucinated-success detector in
+// scoreT7 is the scorer-side defense-in-depth catch; this driver variant is the
+// source-side prevention.
+//
+// Empirically verified (Plan 5e T5 smoke, 2026-08-09, glm via local proxy at
+// 127.0.0.1:15721, default env): `--bare` HONORS `--disallowed-tools`. With
+// `--disallowed-tools Bash` the agent's final answer was "I don't have a shell
+// command execution tool available" and it made NO tool_use calls; with the full
+// `--disallowed-tools Bash Read Write Edit` form the agent confirmed "I don't
+// have access to a file-reading tool" (Read gone too). The finding that
+// motivated the 4-tool list: `--bare`'s default toolset is NOT just Bash — it
+// also exposes Edit + Read (the agent enumerated them by name when only Bash
+// was disallowed), so all four must be named to fully close the side-channel.
+// The variadic form (`--disallowed-tools Bash Read Write Edit` as separate argv
+// tokens) parses correctly — claude's `<tools...>` StringSlice consumes all four.
+//
+// Used ONLY by T7 (driveAgentLenient remains the unrestricted lenient variant
+// for any future task that needs local tools). The lenient (non-fatal) error
+// path is preserved verbatim: T7's broker is locked → its MCP server fails init
+// → claude -p MAY exit non-zero, and the M-loop must keep iterating so scoreT7
+// can score the partial transcript.
+func driveAgentT7Restricted(t *testing.T, mcpConfigPath, systemPrompt, taskPrompt string) *Transcript {
+	t.Helper()
+
+	args := []string{
+		"-p",
+		"--bare",
+		// Plan 5e T5: strip the local side-channel tools. Placed among the
+		// option flags (before the positional task prompt, which MUST be last).
+		// Standard cobra parsing — order among options is not significant, but
+		// the task prompt's trailing position is load-bearing.
+		"--disallowed-tools", "Bash", "Read", "Write", "Edit",
+		"--strict-mcp-config", "--mcp-config", mcpConfigPath,
+		"--dangerously-skip-permissions",
+		"--output-format", "stream-json", "--verbose",
+	}
+	if model := os.Getenv("SSHMGR_EVAL_MODEL"); model != "" {
+		args = append(args, "--model", model)
+	}
+	// CI cost cap (§12.4): SSHMGR_MAX_BUDGET_USD → claude --max-budget-usd. No-op locally.
+	if budget := os.Getenv("SSHMGR_MAX_BUDGET_USD"); budget != "" {
+		args = append(args, "--max-budget-usd", budget)
+	}
+	if systemPrompt != "" {
+		args = append(args, "--system-prompt", systemPrompt)
+	}
+	args = append(args, taskPrompt)
+
+	ctx, cancel := context.WithTimeout(context.Background(), evalDriveTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Env = evalCmdEnv(isolatedHome(t))
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		// Lenient (same rationale as driveAgentLenient): do NOT t.Fatalf. Parse
+		// whatever was captured and mark IsError so scoreT7 knows the run
+		// exited non-zero.
 		tr := parseStream(out.Bytes())
 		tr.IsError = true
 		return tr

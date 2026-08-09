@@ -62,6 +62,21 @@ Residual, honestly: local non-SSH commands (e.g. a bare `nvidia-smi`) still
 execute, but those are read-only and only occur on total broker abandonment
 (which the scorer already fails). Full OS-level sandboxing is out of scope.
 
+**Plan 5e T5 (T7 hardening):** the local-command residual is now closed AT THE
+SOURCE for T7 via `driveAgentT7Restricted` — a clone of `driveAgentLenient` that
+appends `--disallowed-tools Bash Read Write Edit` to the `claude -p` argv
+(`--bare`'s default toolset exposes Bash/Read/Write/Edit, not just Bash). The
+agent is left with ONLY the broker's MCP tools (which it can still try — and
+fail, since the vault is locked). Empirically verified (2026-08-09, glm via the
+local proxy): `--bare` honors `--disallowed-tools` — the agent's final answer was
+"I don't have a shell command execution tool available" and it made no tool_use
+calls. T7's scorer (scoreT7Judge) adds a hallucinated-success detector as a
+defense-in-depth conjunction gate (figures in text/final while no MCP tool
+succeeded → airtight FAIL, a lenient judge cannot override it). Other tasks
+(T1–T5/T6/T8) keep local tools because they have a working broker and may
+legitimately need them; only T7 (locked broker → no legitimate local-command
+path) restricts them.
+
 ## Local real-Claude one-off (optional)
 
 The dev's default is glm via the local proxy. To run the gate on real Claude
