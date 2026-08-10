@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -109,7 +110,50 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	// Plan 8: owner-notes (servers.description) + project lifecycle (projects.status).
+	// CREATE TABLE IF NOT EXISTS does not evolve existing tables, so these ship as guarded
+	// ALTER TABLE migrations; ADD COLUMN with NOT NULL DEFAULT back-fills existing rows.
+	if err := addColumnIfMissing(db, "servers", "description", "TEXT"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "projects", "status", "TEXT NOT NULL DEFAULT 'active'"); err != nil {
+		return err
+	}
 	return nil
+}
+
+// addColumnIfMissing adds a column to a table iff the table exists and lacks the column
+// (idempotent — safe to run every Open). On a fresh DB migrate() runs BEFORE initSchema,
+// so the table may not exist yet; in that case skip (initSchema will create it WITH the
+// column). Only an existing table missing the column gets ALTERed.
+func addColumnIfMissing(db *sql.DB, table, column, decl string) error {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	sawAny := false
+	for rows.Next() {
+		sawAny = true
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil // already present
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !sawAny {
+		return nil // table absent (pre-initSchema on fresh DB) — initSchema creates it with the column
+	}
+	_, err = db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, decl))
+	return err
 }
 
 const schemaSQL = `
@@ -131,6 +175,7 @@ CREATE TABLE IF NOT EXISTS servers (
   credential_id TEXT NOT NULL REFERENCES credentials(id),
   sudo_credential_id TEXT,
   tags TEXT,
+  description TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -152,6 +197,7 @@ CREATE TABLE IF NOT EXISTS projects (
   token_salt BLOB NOT NULL,
   token_prefix TEXT NOT NULL,
   profile_id TEXT NOT NULL REFERENCES profiles(id),
+  status TEXT NOT NULL DEFAULT 'active',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
