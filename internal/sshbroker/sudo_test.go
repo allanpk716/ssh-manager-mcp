@@ -116,3 +116,28 @@ func TestExecSudoCancelContext(t *testing.T) {
 		t.Fatalf("ExecSudo took %v on cancel, want < 2s", elapsed)
 	}
 }
+
+// TestExecSudoPreCancelledCtx pins the ctxErrOr fix: a pre-cancelled ctx must
+// surface as context.Canceled even when the cancellation bites during the narrow
+// sess.Start → stdin.Write window (the watchdog closes the session on ctx.Done
+// before the password write completes, so Start/Write would otherwise return a
+// generic non-Canceled error). With ctxErrOr every race outcome returns Canceled.
+func TestExecSudoPreCancelledCtx(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw", SudoPassword: "sudopw",
+		Exec: func(cmd string, _ io.Reader) (string, string, int) { return "", "", 0 },
+	})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancelled
+
+	res, err := c.ExecSudo(ctx, "whoami", []byte("sudopw"), 0, 0)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled (pre-cancel must surface as Canceled even in the Start/stdin.Write window)", err)
+	}
+	if res.TimedOut {
+		t.Fatal("TimedOut=true on cancel, want false")
+	}
+}
