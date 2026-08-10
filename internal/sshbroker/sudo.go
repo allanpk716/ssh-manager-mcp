@@ -8,6 +8,20 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// ctxErrOr reports a ctx cancellation as itself, so a caller sees context.Canceled
+// (or DeadlineExceeded) rather than the lower-level error it surfaced as. Used in
+// ExecSudo: a cancel arriving in the narrow sess.Start → stdin.Write window closes
+// the session (via the watchdog) before the password write completes, surfacing as
+// a generic Start/Write error that would otherwise reach the caller as-is instead
+// of as the cancellation it is — and at the MCP layer would map to status="error"
+// rather than status="cancelled".
+func ctxErrOr(ctx context.Context, err error) error {
+	if ce := ctx.Err(); ce != nil {
+		return ce
+	}
+	return err
+}
+
 // ExecSudo runs cmd with privilege escalation via `sudo -S`, feeding sudoPassword
 // to sudo's stdin. ctx is honored exactly as in Exec (cancel → ctx.Err(),
 // TimedOut stays false). Use this when the remote user needs a password for sudo;
@@ -48,13 +62,13 @@ func (c *Client) ExecSudo(ctx context.Context, cmd string, sudoPassword []byte, 
 	}()
 
 	if err := sess.Start(wrapped); err != nil {
-		return ExecResult{}, err
+		return ExecResult{}, ctxErrOr(ctx, err)
 	}
 	pw := make([]byte, len(sudoPassword)+1)
 	copy(pw, sudoPassword)
 	pw[len(sudoPassword)] = '\n'
 	if _, err := stdin.Write(pw); err != nil {
-		return ExecResult{}, err
+		return ExecResult{}, ctxErrOr(ctx, err)
 	}
 	stdin.Close()
 
