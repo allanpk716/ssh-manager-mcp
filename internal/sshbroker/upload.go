@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/pkg/sftp"
@@ -91,22 +92,22 @@ func uploadFile(sc *sftp.Client, localPath, remotePath string, ctr *countingWrit
 // file is started once the cap is exceeded. The root dir itself is the first
 // entry visited, so remoteRoot is always created before any child lands in it.
 func uploadDir(sc *sftp.Client, localRoot, remoteRoot string, ctr *countingWriter, res *UploadResult) error {
-	walkErr := filepath.Walk(localRoot, func(path string, info os.FileInfo, err error) error {
+	walkErr := filepath.Walk(localRoot, func(walkPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if ctr.truncated {
 			return errCapStop
 		}
-		rel, err := filepath.Rel(localRoot, path)
+		rel, err := filepath.Rel(localRoot, walkPath)
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(remoteRoot, rel)
+		target := path.Join(remoteRoot, filepath.ToSlash(rel)) // POSIX remote path — correct for a Linux server on any broker host (Windows-broker→Linux-server is the primary deployment)
 		if info.IsDir() {
 			return sc.Mkdir(target)
 		}
-		return uploadFile(sc, path, target, ctr, res)
+		return uploadFile(sc, walkPath, target, ctr, res)
 	})
 	if walkErr == errCapStop {
 		return nil // truncation is reported via UploadResult.Truncated, not as error
