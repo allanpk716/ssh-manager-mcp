@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -26,7 +27,7 @@ func TestEvalSSHDNvidiaSMI(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer cli.Close()
-	res, err := cli.Exec("nvidia-smi", 0, 0)
+	res, err := cli.Exec(context.Background(), "nvidia-smi", 0, 0)
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}

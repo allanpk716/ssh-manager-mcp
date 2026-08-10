@@ -658,7 +658,7 @@ func TestCloseForwardTearsDown(t *testing.T) {
 	// (2) The long-lived ssh.Client is actually closed — an op on it must error.
 	//     (*sshbroker.Client).Exec opens a session on the ssh.Client; on a closed
 	//     client the session-open fails immediately.
-	if _, err := cli.Exec("anything", time.Second, 64); err == nil {
+	if _, err := cli.Exec(context.Background(), "anything", time.Second, 64); err == nil {
 		t.Fatal("ssh.Client still usable after close — mgr.Close did NOT close the owning client (resource leak)")
 	}
 
@@ -748,7 +748,7 @@ func TestTunnelManagerSweepIdleReapsStaleTunnels(t *testing.T) {
 	if stillThere {
 		t.Fatal("stale tunnel still in registry after SweepIdle")
 	}
-	if _, err := cli.Exec("anything", time.Second, 64); err == nil {
+	if _, err := cli.Exec(context.Background(), "anything", time.Second, 64); err == nil {
 		t.Fatal("ssh.Client still usable after SweepIdle (resource leak)")
 	}
 }

@@ -117,18 +117,21 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 			err = fmt.Errorf("sudo credential for %s not found", srv.Name)
 			return
 		}
-		res, err = cli.ExecSudo(command, sudoCred.Secret, timeout, MaxOutputBytes)
+		res, err = cli.ExecSudo(ctx, command, sudoCred.Secret, timeout, MaxOutputBytes)
 	} else {
-		res, err = cli.Exec(command, timeout, MaxOutputBytes)
+		res, err = cli.Exec(ctx, command, timeout, MaxOutputBytes)
 	}
 	exitCode = res.ExitCode
 	// sshbroker returns nil err for non-zero exits (*ssh.ExitError) and for timeouts;
 	// both are results, not errors. A non-nil err here is a genuine exec failure.
-	if res.TimedOut {
+	switch {
+	case res.TimedOut:
 		status = "timeout"
-	} else if err != nil {
+	case errors.Is(err, context.Canceled):
+		status = "cancelled"
+	case err != nil:
 		status = "error"
-	} else {
+	default:
 		status = "ok"
 	}
 	out = ExecOutput{

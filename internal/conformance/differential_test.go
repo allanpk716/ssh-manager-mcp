@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -75,7 +76,7 @@ func TestDifferentialParity(t *testing.T) {
 				t.Fatalf("broker connect: %v", err)
 			}
 			defer cli.Close()
-			bRes, err := cli.Exec(sc.cmd, 0, 0) // unlimited — differential tests SSH parity, not truncation
+			bRes, err := cli.Exec(context.Background(), sc.cmd, 0, 0) // unlimited — differential tests SSH parity, not truncation
 			if err != nil {
 				t.Fatalf("broker exec: %v", err)
 			}

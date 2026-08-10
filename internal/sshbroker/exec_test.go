@@ -1,6 +1,8 @@
 package sshbroker
 
 import (
+	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -34,7 +36,7 @@ func TestExecStdoutAndExitCode(t *testing.T) {
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 
-	res, err := c.Exec("hello", 0, 0)
+	res, err := c.Exec(context.Background(), "hello", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +44,7 @@ func TestExecStdoutAndExitCode(t *testing.T) {
 		t.Fatalf("unexpected %+v", res)
 	}
 
-	res2, _ := c.Exec("exit 7", 0, 0)
+	res2, _ := c.Exec(context.Background(), "exit 7", 0, 0)
 	if res2.ExitCode != 7 {
 		t.Fatalf("exit code = %d, want 7", res2.ExitCode)
 	}
@@ -60,7 +62,7 @@ func TestExecTimeoutKillsAndFlags(t *testing.T) {
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 
-	res, err := c.Exec("slow", 200*time.Millisecond, 0)
+	res, err := c.Exec(context.Background(), "slow", 200*time.Millisecond, 0)
 	if err != nil && !res.TimedOut {
 		t.Fatalf("err: %v", err)
 	}
@@ -82,7 +84,7 @@ func TestExecTruncatesLargeOutput(t *testing.T) {
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 
-	res, err := c.Exec("big", 0, cap)
+	res, err := c.Exec(context.Background(), "big", 0, cap)
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -107,7 +109,7 @@ func TestExecTruncatesStderrIndependently(t *testing.T) {
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 
-	res, err := c.Exec("bigerr", 0, cap)
+	res, err := c.Exec(context.Background(), "bigerr", 0, cap)
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -132,7 +134,7 @@ func TestExecAtCapNotTruncated(t *testing.T) {
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 
-	res, err := c.Exec("exact", 0, cap)
+	res, err := c.Exec(context.Background(), "exact", 0, cap)
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -157,7 +159,7 @@ func TestExecUnlimitedMaxBytesZero(t *testing.T) {
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 
-	res, err := c.Exec("big", 0, 0) // maxBytes=0 → unlimited
+	res, err := c.Exec(context.Background(), "big", 0, 0) // maxBytes=0 → unlimited
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -169,5 +171,41 @@ func TestExecUnlimitedMaxBytesZero(t *testing.T) {
 	}
 	if res.Truncated {
 		t.Fatal("unlimited must never be truncated")
+	}
+}
+
+// TestExecCancelContext proves a caller cancellation aborts an in-flight Exec
+// promptly via the SIGKILL+Close path (the same one timeout uses) and surfaces as
+// context.Canceled — NOT flagged as TimedOut. The testsshd Exec callback blocks on
+// a fixed sleep so the command is reliably still running when we cancel at 100ms.
+func TestExecCancelContext(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		Exec: func(cmd string, _ io.Reader) (string, string, int) {
+			time.Sleep(30 * time.Second) // in-flight; cancel must abort via sess.Close
+			return "done\n", "", 0
+		},
+	})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	res, err := c.Exec(ctx, "slow", 0, 0) // timeout=0 → only ctx cancel can fire
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if res.TimedOut {
+		t.Fatal("TimedOut=true on cancel, want false (cancel ≠ timeout)")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("Exec took %v on cancel, want < 2s (sleep 30 should have been aborted)", elapsed)
 	}
 }

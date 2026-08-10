@@ -8,10 +8,12 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// ExecSudo runs cmd with privilege escalation via `sudo -S`, feeding sudoPassword to sudo's stdin.
-// Use this when the remote user needs a password for sudo. For NOPASSWD sudo, plain Exec("sudo "+cmd) suffices.
-// maxBytes has the same meaning as in Exec (0 = unlimited).
-func (c *Client) ExecSudo(cmd string, sudoPassword []byte, timeout time.Duration, maxBytes int64) (ExecResult, error) {
+// ExecSudo runs cmd with privilege escalation via `sudo -S`, feeding sudoPassword
+// to sudo's stdin. ctx is honored exactly as in Exec (cancel → ctx.Err(),
+// TimedOut stays false). Use this when the remote user needs a password for sudo;
+// for NOPASSWD sudo, plain Exec(ctx, "sudo "+cmd, …) suffices. maxBytes has the
+// same meaning as in Exec (0 = unlimited).
+func (c *Client) ExecSudo(ctx context.Context, cmd string, sudoPassword []byte, timeout time.Duration, maxBytes int64) (ExecResult, error) {
 	sess, err := c.c.NewSession()
 	if err != nil {
 		return ExecResult{}, err
@@ -29,22 +31,25 @@ func (c *Client) ExecSudo(cmd string, sudoPassword []byte, timeout time.Duration
 
 	wrapped := fmt.Sprintf("sudo -S -p '' -- %s", cmd)
 
-	ctx := context.Background()
 	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
-		go func() {
-			<-ctx.Done()
-			_ = sess.Signal(ssh.SIGKILL)
-			_ = sess.Close() // some servers ignore SIGKILL; closing the channel forces Wait to return (mirrors Exec)
-		}()
 	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = sess.Signal(ssh.SIGKILL)
+			_ = sess.Close() // some servers ignore SIGKILL; closing forces Wait to return
+		case <-done:
+		}
+	}()
 
 	if err := sess.Start(wrapped); err != nil {
 		return ExecResult{}, err
 	}
-	// Write the sudo password then close stdin so sudo proceeds.
 	pw := make([]byte, len(sudoPassword)+1)
 	copy(pw, sudoPassword)
 	pw[len(sudoPassword)] = '\n'
@@ -61,14 +66,15 @@ func (c *Client) ExecSudo(cmd string, sudoPassword []byte, timeout time.Duration
 		StderrBytes: stderr.total,
 		Truncated:   stdout.truncated || stderr.truncated,
 	}
-	if ctx.Err() == context.DeadlineExceeded {
+	switch ctx.Err() {
+	case context.DeadlineExceeded:
 		res.TimedOut = true
+		return res, nil
+	case context.Canceled:
+		return res, ctx.Err()
 	}
 	if exitErr, ok := err.(*ssh.ExitError); ok {
 		res.ExitCode = exitErr.ExitStatus()
-		return res, nil
-	}
-	if err != nil && res.TimedOut {
 		return res, nil
 	}
 	return res, err

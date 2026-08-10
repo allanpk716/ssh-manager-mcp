@@ -1,6 +1,8 @@
 package sshbroker
 
 import (
+	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -24,7 +26,7 @@ func TestExecSudoFeedsPasswordAndRunsInner(t *testing.T) {
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 
-	res, err := c.ExecSudo("whoami", []byte("sudopw"), 0, 0)
+	res, err := c.ExecSudo(context.Background(), "whoami", []byte("sudopw"), 0, 0)
 	if err != nil {
 		t.Fatalf("execSudo: %v", err)
 	}
@@ -45,7 +47,7 @@ func TestExecSudoTimeoutKillsAndFlags(t *testing.T) {
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 
-	res, err := c.ExecSudo("slow", []byte("sudopw"), 200*time.Millisecond, 0)
+	res, err := c.ExecSudo(context.Background(), "slow", []byte("sudopw"), 200*time.Millisecond, 0)
 	if err != nil && !res.TimedOut {
 		t.Fatalf("err: %v", err)
 	}
@@ -68,7 +70,7 @@ func TestExecSudoTruncatesLargeOutput(t *testing.T) {
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 
-	res, err := c.ExecSudo("big", []byte("sudopw"), 0, cap)
+	res, err := c.ExecSudo(context.Background(), "big", []byte("sudopw"), 0, cap)
 	if err != nil {
 		t.Fatalf("execSudo: %v", err)
 	}
@@ -80,5 +82,37 @@ func TestExecSudoTruncatesLargeOutput(t *testing.T) {
 	}
 	if !res.Truncated {
 		t.Fatal("want Truncated=true")
+	}
+}
+
+func TestExecSudoCancelContext(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw", SudoPassword: "sudopw",
+		Exec: func(cmd string, _ io.Reader) (string, string, int) {
+			time.Sleep(30 * time.Second)
+			return "done\n", "", 0
+		},
+	})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	res, err := c.ExecSudo(ctx, "slow", []byte("sudopw"), 0, 0)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if res.TimedOut {
+		t.Fatal("TimedOut=true on cancel, want false")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("ExecSudo took %v on cancel, want < 2s", elapsed)
 	}
 }
