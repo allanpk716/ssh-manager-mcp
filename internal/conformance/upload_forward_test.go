@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -98,7 +99,7 @@ func TestUploadDifferential(t *testing.T) {
 		brokerRemote := "/home/sshuser/up-broker-single.dat"
 		scpRemote := "/home/sshuser/up-scp-single.dat"
 
-		res, err := cli.Upload(localFile, brokerRemote, 0)
+		res, err := cli.Upload(context.Background(), localFile, brokerRemote, 0)
 		if err != nil {
 			t.Fatalf("broker Upload single: %v", err)
 		}
@@ -139,7 +140,7 @@ func TestUploadDifferential(t *testing.T) {
 		brokerRemote := "/home/sshuser/up-broker-dir"
 		scpRemote := "/home/sshuser/up-scp-dir"
 
-		res, err := cli.Upload(localRoot, brokerRemote, 0)
+		res, err := cli.Upload(context.Background(), localRoot, brokerRemote, 0)
 		if err != nil {
 			t.Fatalf("broker Upload dir: %v", err)
 		}

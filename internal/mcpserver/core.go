@@ -217,9 +217,13 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 	}
 	defer cli.Close()
 
-	res, derr := cli.Download(path, MaxOutputBytes)
+	res, derr := cli.Download(ctx, path, MaxOutputBytes)
 	if derr != nil {
-		status = "error"
+		if errors.Is(derr, context.Canceled) {
+			status = "cancelled"
+		} else {
+			status = "error"
+		}
 		err = derr
 		return
 	}
@@ -317,9 +321,13 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		}
 	}
 
-	res, uerr := cli.Upload(localPath, remotePath, MaxOutputBytes)
+	res, uerr := cli.Upload(ctx, localPath, remotePath, MaxOutputBytes)
 	if uerr != nil {
-		status = "error"
+		if errors.Is(uerr, context.Canceled) {
+			status = "cancelled"
+		} else {
+			status = "error"
+		}
 		err = uerr
 		return
 	}
