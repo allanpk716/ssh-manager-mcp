@@ -2,6 +2,8 @@ package store
 
 import (
 	"testing"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 func TestAddProjectReturnsTokenAndVerifies(t *testing.T) {
@@ -48,5 +50,82 @@ func TestVerifyTokenPrefiltersByPrefix(t *testing.T) {
 	got, err = s.VerifyToken(token)
 	if err != nil || got == nil {
 		t.Fatalf("real token must verify: got %v err %v", got, err)
+	}
+}
+
+// TestVerifyTokenRejectsDisabledAndRevoked: only status='active' admits — the Lazy gate.
+// A disabled/revoked token is rejected EVEN with the correct secret.
+func TestVerifyTokenRejectsDisabledAndRevoked(t *testing.T) {
+	s := newTestStore(t)
+	pid, _ := s.AddProfile("dev")
+	projID, token, _ := s.AddProject("p", pid)
+
+	if got, _ := s.VerifyToken(token); got == nil {
+		t.Fatal("active token must verify")
+	}
+	if err := s.SetProjectStatus(projID, models.ProjectDisabled); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.VerifyToken(token); got != nil {
+		t.Fatal("disabled token must NOT verify")
+	}
+	if err := s.SetProjectStatus(projID, models.ProjectActive); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.VerifyToken(token); got == nil {
+		t.Fatal("re-enabled token must verify")
+	}
+	if err := s.SetProjectStatus(projID, models.ProjectRevoked); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.VerifyToken(token); got != nil {
+		t.Fatal("revoked token must NOT verify")
+	}
+}
+
+// TestRotateProject: old token dies, new token lives, project id + profile preserved (in-place).
+func TestRotateProject(t *testing.T) {
+	s := newTestStore(t)
+	pid, _ := s.AddProfile("dev")
+	projID, oldToken, _ := s.AddProject("p", pid)
+
+	newToken, err := s.RotateProject(projID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newToken == "" || newToken == oldToken {
+		t.Fatal("rotate must return a new, different token")
+	}
+	if got, _ := s.VerifyToken(oldToken); got != nil {
+		t.Fatal("old token must NOT verify after rotate")
+	}
+	got, err := s.VerifyToken(newToken)
+	if err != nil || got == nil {
+		t.Fatalf("new token must verify: got %v err %v", got, err)
+	}
+	if got.ID != projID || got.ProfileID != pid {
+		t.Fatalf("rotate must preserve id/profile: got id=%s profile=%s", got.ID, got.ProfileID)
+	}
+	if got.Status != models.ProjectActive {
+		t.Fatalf("status = %v, want active (rotate does not suspend)", got.Status)
+	}
+	if _, err := s.RotateProject("nonexistent"); err == nil {
+		t.Fatal("rotate missing id should error")
+	}
+}
+
+func TestGetProjectByName(t *testing.T) {
+	s := newTestStore(t)
+	pid, _ := s.AddProfile("dev")
+	projID, _, _ := s.AddProject("p", pid)
+	got, err := s.GetProjectByName("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.ID != projID {
+		t.Fatalf("GetProjectByName = %+v", got)
+	}
+	if got2, _ := s.GetProjectByName("nope"); got2 != nil {
+		t.Fatal("missing name should return nil")
 	}
 }
