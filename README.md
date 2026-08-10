@@ -73,6 +73,30 @@ ssh-manager ssh gpu                     # (your own ssh client; the broker provi
 
 ---
 
+## Managing servers & projects (owner CLI)
+
+The owner CLI is how you record servers, group them, and grant an agent access. Each server carries a free-text **description** (your notes — hardware, purpose; **never shown to the agent**).
+
+```bash
+# Edit a server in place: pass any subset of fields — the server id + profile bindings are preserved.
+ssh-manager servers edit gpu --description "8x A100 80GB, CUDA 12"   # add / update notes
+ssh-manager servers edit gpu --host 10.0.1.20 --port 2222            # re-point host/port
+ssh-manager servers edit gpu --password '...'                        # re-credential (or --key)
+ssh-manager servers ls                                                # lists name + notes
+
+# See what an agent can reach, and manage its lifecycle.
+ssh-manager projects show my-agent        # agent → profile → granted servers (no secrets)
+ssh-manager projects rotate my-agent      # re-key the token (old token dies; prints a new one + .mcp.json)
+ssh-manager projects disable my-agent     # suspend (token rejected until enable)
+ssh-manager projects enable  my-agent     # resume
+ssh-manager projects revoke  my-agent     # permanent (token rejected; hidden from ls)
+ssh-manager projects ls [--all]           # status column; --all includes revoked
+```
+
+**Lifecycle is Lazy:** `rotate` / `disable` / `enable` / `revoke` take effect at the agent's **next `mcp` spawn** (`VerifyToken` admits only `active` projects). A currently-running agent session keeps its access until Claude Code restarts its MCP child — by design (your box, your call). `rotate` keeps the same project id + profile; only the token changes. `revoke` is a soft delete — the token is dead and the project is hidden from `ls`, but the audit row is kept. Every lifecycle action is written to the audit log.
+
+---
+
 ## Do I need an LLM API key?
 
 **No.** ssh-manager-mcp is a **credential broker**, not an LLM client — it never calls any LLM API. It only needs the master key (to unlock the vault) + a project token (so the agent authenticates). The LLM key is the **agent's** business (your Claude Code / Cursor already has its own) and is entirely unrelated to this project.
