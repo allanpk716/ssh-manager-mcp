@@ -42,7 +42,7 @@ release:
   draft: false
 
 gomod:
-  proxy: true
+  proxy: false   # module path "ssh-manager-mcp" has no dot -> Go module proxy rejects it ("missing dot in first path element"); the repo itself is the module source
 
 # (No `snapshot:` block — `goreleaser release --snapshot --clean` enables
 #  snapshot mode via the flag and uses GoReleaser's default version template.)
