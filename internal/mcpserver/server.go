@@ -12,9 +12,9 @@ import (
 // BrokerTools is the canonical set of MCP tools the broker exposes (the agent's
 // broker-tool surface). NewServer registers exactly these tools, in this order,
 // by indexing into this slice (BrokerTools[0] = list_servers, [1] = exec_command,
-// [2] = download_file, [3] = upload_file). Safety scorers in internal/eval
-// (scoreT6 / scoreT8) treat any tool in this set as a broker-tool surface —
-// zero-tolerance for credential leaks through them.
+// [2] = download_file, [3] = upload_file, [4] = forward_port, [5] = close_port).
+// Safety scorers in internal/eval (scoreT6 / scoreT8) treat any tool in this set
+// as a broker-tool surface — zero-tolerance for credential leaks through them.
 //
 // Adding a new broker MCP tool means appending to this slice AND adding a
 // matching mcp.AddTool call in NewServer that indexes the new entry. That keeps
@@ -26,12 +26,20 @@ var BrokerTools = []string{
 	"exec_command",  // [1] — run a shell command on a server (profile-gated)
 	"download_file", // [2] — download a remote file over SFTP (profile-gated, §6-capped)
 	"upload_file",   // [3] — push a local file/dir to a server over SFTP (profile-gated, §6-capped)
+	"forward_port",  // [4] — open a `ssh -L` tunnel (profile-gated, STATEFUL — held by TunnelManager)
+	"close_port",    // [5] — tear down a forward_port tunnel by id (closes listener + SSH client)
 }
 
 // NewServer builds an MCP server whose tools are scoped to profileID and
-// attribute exec_command / download_file audit rows to projectID.
-func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, error) {
+// attribute exec_command / download_file / upload_file / forward_port /
+// close_port audit rows to projectID. The returned TunnelManager owns the
+// long-lived SSH clients + listeners opened by forward_port; the caller SHOULD
+// defer its CloseAll (RunStdio does — MCP-shutdown teardown) so that open
+// tunnels are reaped when the agent disconnects.
+func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *TunnelManager, error) {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "ssh-manager", Version: "v0.1.0"}, nil)
+	tunnels := NewTunnelManager()
+	tunnels.StartSweeper() // background idle-reaper (closes tunnels idle > forwardIdleTimeout)
 
 	// The tool names below reference BrokerTools by index so the slice above IS
 	// the source of truth — adding a broker tool means editing BrokerTools, not
@@ -102,7 +110,42 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, error
 		},
 	)
 
-	return srv, nil
+	mcp.AddTool(srv,
+		&mcp.Tool{
+			Name:        BrokerTools[4], // "forward_port"
+			Description: "Open a local port that forwards to a remote service through a server (the `ssh -L` semantic). Use this to reach a service running ON the server (or reachable from it) from your own machine — e.g. a database, web UI, or metrics endpoint. Pass the server's id (from list_servers), remote_host + remote_port (the host:port to forward to FROM THE SERVER'S PERSPECTIVE — usually 127.0.0.1 + the service's port on the server's own loopback), and an optional local_port (omit / 0 = the broker picks a free port). Returns tunnel_id + local_port: reach the remote service at 127.0.0.1:<local_port> on YOUR machine (e.g. `curl http://127.0.0.1:<local_port>` or pointing your client at it). Out-of-profile server ids are rejected. This holds an SSH connection open in the broker for the tunnel's life — call close_port with tunnel_id when done (tunnels also auto-close after ~10 min idle).",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in ForwardInput) (*mcp.CallToolResult, ForwardOutput, error) {
+			out, err := ForwardForProfile(ctx, st, projectID, profileID, in.ServerID, in.RemoteHost, in.RemotePort, in.LocalPort, tunnels)
+			if err != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, ForwardOutput{}, nil
+			}
+			return nil, out, nil
+		},
+	)
+
+	mcp.AddTool(srv,
+		&mcp.Tool{
+			Name:        BrokerTools[5], // "close_port"
+			Description: "Close a tunnel opened by forward_port. Pass the tunnel_id forward_port returned. Tears down the local listener AND the SSH connection that backed it (frees the resource — the broker was holding it open). Returns ok on success; an error if the tunnel_id is unknown (already closed, or never opened). No server_id / profile needed: the tunnel_id is an opaque handle bound to the broker process that opened it. You SHOULD call this when you are done with a forward rather than waiting for the ~10 min idle timeout.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in CloseForwardInput) (*mcp.CallToolResult, any, error) {
+			if err := CloseForwardForProfile(ctx, st, projectID, in.TunnelID, tunnels); err != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, nil, nil
+			}
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: "closed"}},
+			}, nil, nil
+		},
+	)
+
+	return srv, tunnels, nil
 }
 
 // ListServersOutput is the list_servers tool output.
