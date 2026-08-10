@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -44,7 +45,7 @@ func TestInteropMatrix(t *testing.T) {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
 			cb := ssh.FixedHostKey(hostKey) // trust the known host key
-			cli, err := sshbroker.Connect(host, port, "sshuser", c.auth, cb)
+			cli, err := sshbroker.Connect(context.Background(), host, port, "sshuser", c.auth, cb)
 			if c.marker == "" {
 				// Expect auth failure.
 				if err == nil {
@@ -58,7 +59,7 @@ func TestInteropMatrix(t *testing.T) {
 			}
 			defer cli.Close()
 
-			res, err := cli.Exec("printf %s "+c.marker, 0, 0)
+			res, err := cli.Exec(context.Background(), "printf %s "+c.marker, 0, 0)
 			if err != nil {
 				t.Fatalf("exec: %v", err)
 			}
@@ -81,14 +82,14 @@ func TestInteropRealSudo(t *testing.T) {
 	host, port, hostKey, _, cleanup := startOpenSSH(t, OpenSSHOpts{AuthorizedPubKey: pub})
 	defer cleanup()
 
-	cli, err := sshbroker.Connect(host, port, "sshuser", mustPrivAuth(t, privPath, ""), ssh.FixedHostKey(hostKey))
+	cli, err := sshbroker.Connect(context.Background(), host, port, "sshuser", mustPrivAuth(t, privPath, ""), ssh.FixedHostKey(hostKey))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	defer cli.Close()
 
 	// Real sudo here requires a password; broker feeds it via sudo -S.
-	res, err := cli.ExecSudo("whoami", []byte("testpw123"), 0, 0)
+	res, err := cli.ExecSudo(context.Background(), "whoami", []byte("testpw123"), 0, 0)
 	if err != nil {
 		t.Fatalf("execSudo: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestInteropRealSudo(t *testing.T) {
 		t.Fatalf("sudo whoami stdout = %q, want root", res.Stdout)
 	}
 	// A wrong sudo password must NOT escalate.
-	resBad, _ := cli.ExecSudo("whoami", []byte("wrong-sudo-pw"), 0, 0)
+	resBad, _ := cli.ExecSudo(context.Background(), "whoami", []byte("wrong-sudo-pw"), 0, 0)
 	if bytes.Contains([]byte(resBad.Stdout), []byte("root")) {
 		t.Fatalf("wrong sudo password escalated; stdout=%q", resBad.Stdout)
 	}

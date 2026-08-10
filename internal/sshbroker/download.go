@@ -1,6 +1,7 @@
 package sshbroker
 
 import (
+	"context"
 	"fmt"
 	"io"
 
@@ -14,13 +15,14 @@ type DownloadResult struct {
 	Truncated bool   // true if the file exceeded maxBytes and Content is only the prefix
 }
 
-// Download fetches remotePath from the connected server over SFTP. maxBytes > 0
-// caps how much content is retained (the prefix); bytes beyond are counted then
-// discarded, with Truncated set — so a huge file cannot blow up memory while the
-// caller still learns its true size (mirrors Exec's cappedBuffer contract).
-// maxBytes == 0 means unlimited.
-func (c *Client) Download(remotePath string, maxBytes int64) (DownloadResult, error) {
-	sc, err := sftp.NewClient(c.c) // open an SFTP channel over the existing *ssh.Client
+// Download fetches remotePath over SFTP. ctx is honored: on cancellation the
+// watchdog closes the sftp file/client so the in-flight io.Copy aborts, and
+// Download returns ctx.Err() with the partial Content/Bytes it captured before
+// the cancel (Truncated stays false — the cap was not hit). maxBytes > 0 caps
+// retained content (the prefix); bytes beyond are counted then discarded, with
+// Truncated set (mirrors Exec's cappedBuffer contract). maxBytes == 0 = unlimited.
+func (c *Client) Download(ctx context.Context, remotePath string, maxBytes int64) (DownloadResult, error) {
+	sc, err := sftp.NewClient(c.c)
 	if err != nil {
 		return DownloadResult{}, fmt.Errorf("sftp client: %w", err)
 	}
@@ -30,9 +32,26 @@ func (c *Client) Download(remotePath string, maxBytes int64) (DownloadResult, er
 		return DownloadResult{}, err
 	}
 	defer f.Close()
+
 	buf := &cappedBuffer{cap: maxBytes}
-	if _, err := io.Copy(buf, f); err != nil {
-		return DownloadResult{}, err
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = f.Close() // unblock the in-flight io.Copy Read
+			_ = sc.Close()
+		case <-done:
+		}
+	}()
+
+	_, copyErr := io.Copy(buf, f)
+	res := DownloadResult{Content: buf.buf.String(), Bytes: buf.total, Truncated: buf.truncated}
+	if ctx.Err() != nil {
+		return res, ctx.Err() // cancellation — partial Content/Bytes preserved, Truncated stays false
 	}
-	return DownloadResult{Content: buf.buf.String(), Bytes: buf.total, Truncated: buf.truncated}, nil
+	if copyErr != nil {
+		return res, copyErr
+	}
+	return res, nil
 }

@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -48,7 +49,7 @@ func TestUploadDifferential(t *testing.T) {
 	scpArgs := scpBinaryKeyAuthArgs(port, privPath)
 	scpDst := "sshuser@" + host + ":"
 
-	cli, err := sshbroker.Connect(host, port, "sshuser", brokerAuth, ssh.FixedHostKey(hostKey))
+	cli, err := sshbroker.Connect(context.Background(), host, port, "sshuser", brokerAuth, ssh.FixedHostKey(hostKey))
 	if err != nil {
 		t.Fatalf("broker connect: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestUploadDifferential(t *testing.T) {
 		brokerRemote := "/home/sshuser/up-broker-single.dat"
 		scpRemote := "/home/sshuser/up-scp-single.dat"
 
-		res, err := cli.Upload(localFile, brokerRemote, 0)
+		res, err := cli.Upload(context.Background(), localFile, brokerRemote, 0)
 		if err != nil {
 			t.Fatalf("broker Upload single: %v", err)
 		}
@@ -139,7 +140,7 @@ func TestUploadDifferential(t *testing.T) {
 		brokerRemote := "/home/sshuser/up-broker-dir"
 		scpRemote := "/home/sshuser/up-scp-dir"
 
-		res, err := cli.Upload(localRoot, brokerRemote, 0)
+		res, err := cli.Upload(context.Background(), localRoot, brokerRemote, 0)
 		if err != nil {
 			t.Fatalf("broker Upload dir: %v", err)
 		}
@@ -188,7 +189,7 @@ func TestForwardDifferential(t *testing.T) {
 	payload := "FORWARD-DIFFERENTIAL-PAYLOAD-1234567890\n"
 
 	// === Broker path: sshbroker.Client.ForwardLocal (-L tunnel). ===
-	cli, err := sshbroker.Connect(host, port, "sshuser", brokerAuth, ssh.FixedHostKey(hostKey))
+	cli, err := sshbroker.Connect(context.Background(), host, port, "sshuser", brokerAuth, ssh.FixedHostKey(hostKey))
 	if err != nil {
 		t.Fatalf("broker connect: %v", err)
 	}

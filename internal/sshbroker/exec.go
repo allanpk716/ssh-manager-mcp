@@ -18,17 +18,19 @@ type ExecResult struct {
 	Truncated   bool  // true if stdout or stderr exceeded maxBytes and was capped to the prefix
 }
 
-// Exec runs cmd on the remote host. A timeout > 0 bounds execution; on timeout the
-// remote process is signaled to die and TimedOut is set true. maxBytes > 0 caps how
-// much of each output channel is retained (the prefix); bytes beyond that are
-// counted (see StdoutBytes/StderrBytes) then discarded, with Truncated set — so a
-// huge output cannot blow up memory while the caller still learns its true size and
-// can tell the agent to refine the command. maxBytes == 0 means unlimited.
+// Exec runs cmd on the remote host. ctx is honored: if the caller cancels ctx —
+// directly or via the MCP tool-call ctx it flows from — the session is signaled
+// and closed and Exec returns ctx.Err() with TimedOut left false (cancellation is
+// not a timeout). A timeout > 0 additionally bounds execution via a deadline
+// derived from ctx; on timeout the remote process is signaled to die and TimedOut
+// is set true. maxBytes > 0 caps how much of each output channel is retained (the
+// prefix); bytes beyond are counted (StdoutBytes/StderrBytes) then discarded, with
+// Truncated set. maxBytes == 0 means unlimited.
 //
 // Because some servers (notably the in-process testsshd) do not act on signal
 // requests, we also close the session to guarantee Run unblocks; the resulting
-// ExitMissingError is swallowed by the TimedOut branch below.
-func (c *Client) Exec(cmd string, timeout time.Duration, maxBytes int64) (ExecResult, error) {
+// ExitMissingError is swallowed by the timeout/cancellation branches below.
+func (c *Client) Exec(ctx context.Context, cmd string, timeout time.Duration, maxBytes int64) (ExecResult, error) {
 	sess, err := c.c.NewSession()
 	if err != nil {
 		return ExecResult{}, err
@@ -40,17 +42,26 @@ func (c *Client) Exec(cmd string, timeout time.Duration, maxBytes int64) (ExecRe
 	sess.Stdout = stdout
 	sess.Stderr = stderr
 
-	ctx := context.Background()
 	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
-		go func() {
-			<-ctx.Done()
+	}
+
+	// Abort the session on EITHER the (possibly deadline-bearing) ctx OR a caller
+	// cancellation. `done` lets the watchdog exit cleanly when Run returns on its
+	// own, so it never outlives Exec — no goroutine leak when the caller passes a
+	// never-cancelled ctx (e.g. context.Background()).
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
 			_ = sess.Signal(ssh.SIGKILL)
 			_ = sess.Close()
-		}()
-	}
+		case <-done:
+		}
+	}()
 
 	err = sess.Run(cmd)
 	res := ExecResult{
@@ -60,15 +71,16 @@ func (c *Client) Exec(cmd string, timeout time.Duration, maxBytes int64) (ExecRe
 		StderrBytes: stderr.total,
 		Truncated:   stdout.truncated || stderr.truncated,
 	}
-	if ctx.Err() == context.DeadlineExceeded {
+	switch ctx.Err() {
+	case context.DeadlineExceeded:
 		res.TimedOut = true
+		return res, nil // timeout is a result, not an error
+	case context.Canceled:
+		return res, ctx.Err() // caller cancellation — surface as an error, not flagged as TimedOut
 	}
 	if exitErr, ok := err.(*ssh.ExitError); ok {
 		res.ExitCode = exitErr.ExitStatus()
 		return res, nil // non-zero exit is a result, not an error
-	}
-	if err != nil && res.TimedOut {
-		return res, nil
 	}
 	return res, err
 }

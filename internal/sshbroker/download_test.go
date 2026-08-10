@@ -1,9 +1,13 @@
 package sshbroker
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/testsshd"
 )
@@ -29,7 +33,7 @@ func TestDownload(t *testing.T) {
 	}
 
 	// Full download.
-	got, err := c.Download(remote, 0)
+	got, err := c.Download(context.Background(), remote, 0)
 	if err != nil {
 		t.Fatalf("Download: %v", err)
 	}
@@ -41,11 +45,47 @@ func TestDownload(t *testing.T) {
 	}
 
 	// Capped download: maxBytes < len(want) → Truncated=true, content is the prefix.
-	got, _ = c.Download(remote, 5)
+	got, _ = c.Download(context.Background(), remote, 5)
 	if !got.Truncated || got.Content != want[:5] {
 		t.Fatalf("capped: Truncated=%v content=%q, want true/%q", got.Truncated, got.Content, want[:5])
 	}
 	if got.Bytes != int64(len(want)) {
 		t.Fatalf("capped Bytes=%d, want full size %d (Bytes reports true size even when capped)", got.Bytes, len(want))
+	}
+}
+
+// TestDownloadCancelContext proves a cancelled ctx makes Download return
+// context.Canceled promptly (the watchdog closes the sftp file so io.Copy
+// aborts) with Truncated=false. We PRE-CANCEL rather than race a mid-transfer
+// cancel: in-process sftp over loopback+SSH is fast enough that a 1 MiB file can
+// finish inside a 100 ms cancel window, making a partial-bytes assertion flaky.
+// Pre-cancellation deterministically exercises the abort path; the mid-op abort
+// mechanism is covered by TestExecCancelContext (whose testsshd Exec callback
+// blocks on a fixed sleep and is reliably in-flight at cancel time).
+func TestDownloadCancelContext(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	remote := filepath.Join(t.TempDir(), "cancel.bin")
+	if err := os.WriteFile(remote, []byte(strings.Repeat("x", 1<<20)), 0644); err != nil {
+		t.Fatalf("setup write: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancelled — Download must return Canceled without reading the whole file
+
+	start := time.Now()
+	got, err := c.Download(ctx, remote, 0)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if got.Truncated {
+		t.Fatal("Truncated=true on cancel, want false (cap not hit; we were cancelled)")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("Download took %v on pre-cancelled ctx, want < 2s", elapsed)
 	}
 }

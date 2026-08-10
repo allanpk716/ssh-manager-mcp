@@ -1,10 +1,14 @@
 package sshbroker
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/testsshd"
 )
@@ -35,14 +39,14 @@ func TestUpload(t *testing.T) {
 	// Single-file upload: round-trip through Download to verify content landed,
 	// and check UploadResult accounting (Files=1, Bytes=len, Truncated=false).
 	remoteFile := filepath.Join(t.TempDir(), "up-single.txt")
-	res, err := c.Upload(filepath.Join(tmp, "a.txt"), remoteFile, 0)
+	res, err := c.Upload(context.Background(), filepath.Join(tmp, "a.txt"), remoteFile, 0)
 	if err != nil {
 		t.Fatalf("single Upload: %v", err)
 	}
 	if res.Files != 1 || res.Bytes != int64(len("file-a\n")) || res.Truncated {
 		t.Fatalf("single result = %+v, want {Files:1 Bytes:%d Truncated:false}", res, len("file-a\n"))
 	}
-	got, err := c.Download(remoteFile, 0)
+	got, err := c.Download(context.Background(), remoteFile, 0)
 	if err != nil {
 		t.Fatalf("verify Download: %v", err)
 	}
@@ -52,7 +56,7 @@ func TestUpload(t *testing.T) {
 
 	// Dir upload (recursive) — remote root under a fresh temp dir.
 	remoteDir := filepath.Join(t.TempDir(), "up-dir")
-	res, err = c.Upload(tmp, remoteDir, 0)
+	res, err = c.Upload(context.Background(), tmp, remoteDir, 0)
 	if err != nil {
 		t.Fatalf("dir Upload: %v", err)
 	}
@@ -63,10 +67,10 @@ func TestUpload(t *testing.T) {
 		t.Fatalf("dir Truncated=true, want false (res=%+v)", res)
 	}
 	// Verify both files landed at their preserved relative paths.
-	if g, err := c.Download(filepath.Join(remoteDir, "a.txt"), 0); err != nil || g.Content != "file-a\n" {
+	if g, err := c.Download(context.Background(), filepath.Join(remoteDir, "a.txt"), 0); err != nil || g.Content != "file-a\n" {
 		t.Fatalf("dir a.txt: err=%v content=%q", err, g.Content)
 	}
-	if g, err := c.Download(filepath.Join(remoteDir, "sub", "b.txt"), 0); err != nil || g.Content != "file-b\n" {
+	if g, err := c.Download(context.Background(), filepath.Join(remoteDir, "sub", "b.txt"), 0); err != nil || g.Content != "file-b\n" {
 		t.Fatalf("dir sub/b.txt: err=%v content=%q", err, g.Content)
 	}
 	// Cross-platform regression-guard (Plan 6 T2-review fix): the remote SFTP
@@ -78,14 +82,14 @@ func TestUpload(t *testing.T) {
 	// to filepath.Join (backslash targets collapse into one weird nested name,
 	// not the expected dir tree, so the forward-slash Download misses).
 	posixB := path.Join(remoteDir, "sub", "b.txt")
-	if g, err := c.Download(posixB, 0); err != nil || g.Content != "file-b\n" {
+	if g, err := c.Download(context.Background(), posixB, 0); err != nil || g.Content != "file-b\n" {
 		t.Fatalf("POSIX-path regression-guard sub/b.txt (%q): err=%v content=%q", posixB, err, g.Content)
 	}
 
 	// Cap: maxBytes=3 < total=14 → Truncated=true, no error returned (the flag is
 	// the signal). The walk halts after the first file exceeds the cap, so Files
 	// is bounded (1 here: a.txt is uploaded fully, then the walk stops).
-	res, err = c.Upload(tmp, filepath.Join(t.TempDir(), "up-cap"), 3)
+	res, err = c.Upload(context.Background(), tmp, filepath.Join(t.TempDir(), "up-cap"), 3)
 	if err != nil {
 		t.Fatalf("capped Upload: %v", err)
 	}
@@ -129,10 +133,10 @@ func TestClientMkdirAll(t *testing.T) {
 	if err := os.WriteFile(local, []byte("mkdir-ok\n"), 0644); err != nil {
 		t.Fatalf("write local: %v", err)
 	}
-	if _, err := c.Upload(local, file, 0); err != nil {
+	if _, err := c.Upload(context.Background(), local, file, 0); err != nil {
 		t.Fatalf("Upload into MkdirAll'd dir: %v", err)
 	}
-	g, err := c.Download(file, 0)
+	g, err := c.Download(context.Background(), file, 0)
 	if err != nil {
 		t.Fatalf("verify Download: %v", err)
 	}
@@ -142,5 +146,40 @@ func TestClientMkdirAll(t *testing.T) {
 	// (4) Conflict: MkdirAll on a path occupied by a regular file → error.
 	if err := c.MkdirAll(file); err == nil {
 		t.Fatal("MkdirAll on a regular file: want error, got nil")
+	}
+}
+
+// TestUploadCancelContext proves a cancelled ctx makes Upload return
+// context.Canceled promptly (the watchdog closes the sftp client so the in-flight
+// sftp op errors and the walk propagates). Pre-cancelled for determinism (see
+// TestDownloadCancelContext's rationale); the half-written remote file is left
+// as-is (mirrors scp -r interrupted).
+func TestUploadCancelContext(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "big.bin")
+	if err := os.WriteFile(src, []byte(strings.Repeat("x", 1<<20)), 0644); err != nil {
+		t.Fatalf("setup write: %v", err)
+	}
+	remote := filepath.Join(t.TempDir(), "up-cancel.bin")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	res, err := c.Upload(ctx, src, remote, 0)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if res.Truncated {
+		t.Fatal("Truncated=true on cancel, want false (cap not hit)")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("Upload took %v on pre-cancelled ctx, want < 2s", elapsed)
 	}
 }

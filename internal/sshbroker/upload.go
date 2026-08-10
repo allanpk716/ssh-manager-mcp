@@ -1,6 +1,7 @@
 package sshbroker
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -18,29 +19,31 @@ type UploadResult struct {
 	Truncated bool  // true if maxBytes was hit mid-upload
 }
 
-// Upload copies localPath (a file OR a directory, recursively) to remotePath on
-// the server over SFTP — mirrors `scp -r localPath server:remotePath`. A file is
-// put directly; a directory is walked (filepath.Walk), each subdir mkdir'd, each
-// file sftp.Create'd + io.Copy'd. maxBytes > 0 caps the TOTAL bytes uploaded (the
-// §6 bound); on cap, Truncated=true and the walk halts. maxBytes == 0 = unlimited.
-//
-// Cap semantics — "per-file atomic + walk-halt": countingWriter never hard-stops
-// an in-flight io.Copy (that would leave a corrupt, half-written remote file);
-// instead, the moment cumulative bytes exceed the cap the writer flags Truncated,
-// and uploadDir halts the walk so no NEW file is started past the cap. The
-// currently-uploading file completes atomically. Net effect: the cap bounds the
-// worst-case overshoot to one file (a 14-byte tree with cap=3 uploads one ~7-byte
-// file fully then stops, instead of streaming the whole tree). The §6 intent —
-// bound total upload size — is honored, and Truncated is the surfaced signal.
-//
-// The local file is read from the broker's filesystem (the agent's machine); the
-// agent chooses localPath (it already has the file — Upload just transfers it).
-func (c *Client) Upload(localPath, remotePath string, maxBytes int64) (UploadResult, error) {
-	sc, err := sftp.NewClient(c.c) // open an SFTP channel over the existing *ssh.Client
+// Upload copies localPath (a file OR a directory, recursively) to remotePath over
+// SFTP — mirrors `scp -r localPath server:remotePath`. ctx is honored: on
+// cancellation the watchdog closes the sftp client so the in-flight sftp op errors
+// and the walk propagates; Upload returns ctx.Err() with the partial Files/Bytes
+// counted before the cancel. The half-written remote file is left as-is (mirrors
+// scp -r interrupted — cleanup is the caller's job). maxBytes caps TOTAL bytes (§6);
+// on cap, Truncated=true and the walk halts. maxBytes == 0 = unlimited. See the
+// "per-file atomic + walk-halt" note on uploadDir for cap semantics within a file.
+func (c *Client) Upload(ctx context.Context, localPath, remotePath string, maxBytes int64) (UploadResult, error) {
+	sc, err := sftp.NewClient(c.c)
 	if err != nil {
 		return UploadResult{}, fmt.Errorf("sftp client: %w", err)
 	}
 	defer sc.Close()
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = sc.Close() // unblock in-flight sftp Write/Create → uploadFile errors → walk propagates
+		case <-done:
+		}
+	}()
+
 	info, err := os.Stat(localPath)
 	if err != nil {
 		return UploadResult{}, err
@@ -54,6 +57,9 @@ func (c *Client) Upload(localPath, remotePath string, maxBytes int64) (UploadRes
 	}
 	res.Bytes = ctr.total
 	res.Truncated = ctr.truncated
+	if ctx.Err() != nil {
+		return res, ctx.Err() // cancellation precedence over copy/walk error
+	}
 	return res, err
 }
 

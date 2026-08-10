@@ -14,6 +14,18 @@ import (
 	"ssh-manager-mcp/internal/vault"
 )
 
+// clampExecTimeout applies the default (when t <= 0) and the MaxExecTimeout
+// ceiling (when t exceeds it). Pure — unit-tested directly with no server.
+func clampExecTimeout(t time.Duration) time.Duration {
+	if t <= 0 {
+		t = defaultTimeout
+	}
+	if t > MaxExecTimeout {
+		t = MaxExecTimeout
+	}
+	return t
+}
+
 // ListServersForProfile returns the servers the agent may use (Profile-scoped, no credentials).
 func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, error) {
 	ids, err := st.ServersForProfile(profileID)
@@ -88,11 +100,14 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
 	if cerr != nil {
-		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+		switch {
+		case errors.Is(cerr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(cerr, sshbroker.ErrHostKeyMismatch):
 			status = "hostkey_mismatch"
-		} else {
+		default:
 			status = "connect_error"
 		}
 		err = cerr
@@ -100,9 +115,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	}
 	defer cli.Close()
 
-	if timeout <= 0 {
-		timeout = defaultTimeout
-	}
+	timeout = clampExecTimeout(timeout) // <=0 → defaultTimeout; cap at MaxExecTimeout
 
 	var res sshbroker.ExecResult
 	if sudo {
@@ -117,18 +130,21 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 			err = fmt.Errorf("sudo credential for %s not found", srv.Name)
 			return
 		}
-		res, err = cli.ExecSudo(command, sudoCred.Secret, timeout, MaxOutputBytes)
+		res, err = cli.ExecSudo(ctx, command, sudoCred.Secret, timeout, MaxOutputBytes)
 	} else {
-		res, err = cli.Exec(command, timeout, MaxOutputBytes)
+		res, err = cli.Exec(ctx, command, timeout, MaxOutputBytes)
 	}
 	exitCode = res.ExitCode
 	// sshbroker returns nil err for non-zero exits (*ssh.ExitError) and for timeouts;
 	// both are results, not errors. A non-nil err here is a genuine exec failure.
-	if res.TimedOut {
+	switch {
+	case res.TimedOut:
 		status = "timeout"
-	} else if err != nil {
+	case errors.Is(err, context.Canceled):
+		status = "cancelled"
+	case err != nil:
 		status = "error"
-	} else {
+	default:
 		status = "ok"
 	}
 	out = ExecOutput{
@@ -202,11 +218,14 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		return
 	}
 
-	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
 	if cerr != nil {
-		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+		switch {
+		case errors.Is(cerr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(cerr, sshbroker.ErrHostKeyMismatch):
 			status = "hostkey_mismatch"
-		} else {
+		default:
 			status = "connect_error"
 		}
 		err = cerr
@@ -214,9 +233,13 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 	}
 	defer cli.Close()
 
-	res, derr := cli.Download(path, MaxOutputBytes)
+	res, derr := cli.Download(ctx, path, MaxOutputBytes)
 	if derr != nil {
-		status = "error"
+		if errors.Is(derr, context.Canceled) {
+			status = "cancelled"
+		} else {
+			status = "error"
+		}
 		err = derr
 		return
 	}
@@ -292,11 +315,14 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		return
 	}
 
-	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
 	if cerr != nil {
-		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+		switch {
+		case errors.Is(cerr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(cerr, sshbroker.ErrHostKeyMismatch):
 			status = "hostkey_mismatch"
-		} else {
+		default:
 			status = "connect_error"
 		}
 		err = cerr
@@ -314,9 +340,13 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		}
 	}
 
-	res, uerr := cli.Upload(localPath, remotePath, MaxOutputBytes)
+	res, uerr := cli.Upload(ctx, localPath, remotePath, MaxOutputBytes)
 	if uerr != nil {
-		status = "error"
+		if errors.Is(uerr, context.Canceled) {
+			status = "cancelled"
+		} else {
+			status = "error"
+		}
 		err = uerr
 		return
 	}
@@ -400,11 +430,14 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		return
 	}
 
-	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
 	if cerr != nil {
-		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+		switch {
+		case errors.Is(cerr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(cerr, sshbroker.ErrHostKeyMismatch):
 			status = "hostkey_mismatch"
-		} else {
+		default:
 			status = "connect_error"
 		}
 		err = cerr

@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -70,12 +71,12 @@ func TestDifferentialParity(t *testing.T) {
 		sc := sc
 		t.Run(sc.name, func(t *testing.T) {
 			// Broker path (Go SSH client).
-			cli, err := sshbroker.Connect(host, port, "sshuser", brokerAuth, ssh.FixedHostKey(hostKey))
+			cli, err := sshbroker.Connect(context.Background(), host, port, "sshuser", brokerAuth, ssh.FixedHostKey(hostKey))
 			if err != nil {
 				t.Fatalf("broker connect: %v", err)
 			}
 			defer cli.Close()
-			bRes, err := cli.Exec(sc.cmd, 0, 0) // unlimited — differential tests SSH parity, not truncation
+			bRes, err := cli.Exec(context.Background(), sc.cmd, 0, 0) // unlimited — differential tests SSH parity, not truncation
 			if err != nil {
 				t.Fatalf("broker exec: %v", err)
 			}
@@ -123,7 +124,7 @@ func TestDifferentialHostKeyRejection(t *testing.T) {
 		fmt.Sprintf("%s:%d", hostB, portB): keyA.Marshal(),
 	}}
 	cb, _ := sshbroker.HostKeyTOFU(st, hostB, portB)
-	_, err := sshbroker.Connect(hostB, portB, "sshuser", mustPrivAuth(t, privPath, ""), cb)
+	_, err := sshbroker.Connect(context.Background(), hostB, portB, "sshuser", mustPrivAuth(t, privPath, ""), cb)
 	if err == nil {
 		t.Fatal("broker accepted a mismatched host key")
 	}

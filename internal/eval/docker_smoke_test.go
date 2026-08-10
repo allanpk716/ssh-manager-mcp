@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -21,12 +22,12 @@ func TestEvalSSHDNvidiaSMI(t *testing.T) {
 	// broker's host-key store; the per-container key regen in the Dockerfile CMD
 	// makes a pinned key useless across runs anyway.
 	cb := ssh.InsecureIgnoreHostKey()
-	cli, err := sshbroker.Connect(host, port, "agent", sshbroker.PasswordAuth("testpw123"), cb)
+	cli, err := sshbroker.Connect(context.Background(), host, port, "agent", sshbroker.PasswordAuth("testpw123"), cb)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	defer cli.Close()
-	res, err := cli.Exec("nvidia-smi", 0, 0)
+	res, err := cli.Exec(context.Background(), "nvidia-smi", 0, 0)
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}

@@ -97,3 +97,10 @@ const defaultTimeout = 120 * time.Second
 // learns the true size and can refine its command. The owner `ssh-manager ssh`
 // path is unaffected (it requests unlimited output). 1 MiB per spec §6.
 const MaxOutputBytes int64 = 1 << 20
+
+// MaxExecTimeout is the server-side ceiling on a single exec_command's run time
+// (the time analog of MaxOutputBytes). An agent-supplied timeout over this cap is
+// silently clamped down to it — defense-in-depth against a runaway / instructed
+// agent tying up the broker with a very long command. defaultTimeout (120s) sits
+// below this cap, so normal commands are unaffected.
+const MaxExecTimeout = 5 * time.Minute

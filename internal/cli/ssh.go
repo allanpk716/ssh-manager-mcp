@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -42,14 +43,14 @@ func newSSHCmd() *cobra.Command {
 			commandStr := strings.Join(args[1:], " ")
 			status := "ok"
 			var res sshbroker.ExecResult
-			cli, err := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+			cli, err := sshbroker.Connect(context.Background(), srv.Host, srv.Port, srv.User, auth, hkCb)
 			if err != nil {
 				status = "error"
 				_ = st.WriteAudit(store.AuditRow{TS: start, ServerID: srv.ID, Action: "exec", Command: commandStr, Status: status, DurationMS: time.Since(start).Milliseconds()})
 				return err
 			}
 			defer cli.Close()
-			res, err = cli.Exec(commandStr, 120*time.Second, 0) // owner path: unlimited output
+			res, err = cli.Exec(context.Background(), commandStr, 120*time.Second, 0) // owner path: unlimited output
 			if err != nil {
 				status = "error"
 			}

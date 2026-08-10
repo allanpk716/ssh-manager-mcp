@@ -1,12 +1,16 @@
 package sshbroker
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"io"
+	"net"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/testsshd"
 
@@ -49,7 +53,7 @@ func TestConnectPrivateKeyPlain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrivateKeyAuth: %v", err)
 	}
-	cli, err := Connect(hostOf(addr), portOf(addr), "u", auth, ssh.FixedHostKey(hostKey))
+	cli, err := Connect(context.Background(), hostOf(addr), portOf(addr), "u", auth, ssh.FixedHostKey(hostKey))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -64,7 +68,7 @@ func TestConnectPrivateKeyEncrypted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrivateKeyAuth: %v", err)
 	}
-	cli, err := Connect(hostOf(addr), portOf(addr), "u", auth, ssh.FixedHostKey(hostKey))
+	cli, err := Connect(context.Background(), hostOf(addr), portOf(addr), "u", auth, ssh.FixedHostKey(hostKey))
 	if err != nil {
 		t.Fatalf("connect encrypted key: %v", err)
 	}
@@ -75,5 +79,45 @@ func TestPrivateKeyAuthWrongPassphraseFails(t *testing.T) {
 	keyPEM, _ := mustRSAPEM(t, "keypass")
 	if _, err := PrivateKeyAuth(keyPEM, []byte("wrong")); err == nil {
 		t.Fatal("wrong passphrase must fail")
+	}
+}
+
+// TestConnectCancelContext proves a cancelled ctx aborts an in-flight Connect
+// promptly. ssh.Dial cannot be interrupted, so Connect abandons it and returns
+// ctx.Err(); the dial goroutine closes the connection it eventually gets (no
+// *ssh.Client leak). We deterministically hold the dial open with a local
+// listener that Accepts but NEVER sends the SSH banner — ssh.Dial then blocks on
+// the banner wait (no black-hole IP dependency, no OS TCP-timeout minutes).
+func TestConnectCancelContext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return // listener closed
+			}
+			_ = conn // intentionally do NOT send the SSH banner — hold the dial open
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err = Connect(ctx, hostOf(ln.Addr().String()), portOf(ln.Addr().String()), "u", PasswordAuth("pw"), ssh.InsecureIgnoreHostKey())
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("Connect took %v on cancel, want < 2s (dial should have been abandoned)", elapsed)
 	}
 }
