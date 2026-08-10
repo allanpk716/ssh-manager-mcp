@@ -120,3 +120,77 @@ func TestDownloadFile(t *testing.T) {
 		t.Fatal("out-of-profile download_file must be a tool error")
 	}
 }
+
+// TestUploadFile exercises the upload_file broker tool end-to-end through the
+// MCP wire: an in-profile upload round-trips (verify via a follow-up
+// download_file); an out-of-profile server_id is rejected as a tool error
+// (IsError), mirroring download_file / exec_command.
+func TestUploadFile(t *testing.T) {
+	st := newStore(t)
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	const want = "uploaded-via-tool\n"
+	localFile := filepath.Join(t.TempDir(), "to_upload.bin")
+	if err := os.WriteFile(localFile, []byte(want), 0644); err != nil {
+		t.Fatalf("setup write: %v", err)
+	}
+	// Forward-slash remote path so the wire path is POSIX-clean (broker host
+	// accepts both separators; a real remote is POSIX).
+	remote := filepath.ToSlash(filepath.Join(t.TempDir(), "wire_up.bin"))
+
+	server, _ := NewServer(st, pid, "proj-test")
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
+	t1, t2 := mcp.NewInMemoryTransports()
+	srvSession, err := server.Connect(context.Background(), t1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srvSession.Close()
+	cliSession, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cliSession.Close()
+
+	// upload_file on the in-profile server — verify via a follow-up download_file.
+	up, err := cliSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "upload_file", Arguments: map[string]any{
+			"server_id":   srvID,
+			"local_path":  localFile,
+			"remote_path": remote,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if up.IsError {
+		t.Fatalf("upload_file errored: %+v", up.Content)
+	}
+
+	dl, err := cliSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "download_file", Arguments: map[string]any{"server_id": srvID, "path": remote},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dl.IsError {
+		t.Fatalf("verify download_file errored: %+v", dl.Content)
+	}
+
+	// upload_file on an out-of-profile server -> tool error (IsError).
+	other, _ := st.AddServer(&models.Server{Name: "other", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	res2, _ := cliSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "upload_file", Arguments: map[string]any{
+			"server_id":   other,
+			"local_path":  localFile,
+			"remote_path": "/tmp/x",
+		},
+	})
+	if !res2.IsError {
+		t.Fatal("out-of-profile upload_file must be a tool error")
+	}
+}

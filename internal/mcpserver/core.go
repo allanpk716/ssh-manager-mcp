@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"time"
 
 	"ssh-manager-mcp/internal/sshbroker"
@@ -219,5 +220,105 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 	}
 	status = "ok"
 	out = DownloadOutput{Content: res.Content, Bytes: res.Bytes, Truncated: res.Truncated}
+	return
+}
+
+// UploadForProfile uploads localPath to remotePath on serverID iff serverID is in
+// profileID (iron rule — same gate as ExecCommandForProfile / DownloadForProfile).
+// localPath is read from the broker's (= the agent's) filesystem; remotePath is
+// the destination on the server (a file or a directory, uploaded recursively,
+// mirroring `scp -r localPath server:remotePath`). The upload is §6-capped
+// (MaxOutputBytes on TOTAL bytes): a larger payload yields Truncated=true with
+// Bytes as the true total and only a partial tree landed. Every branch is
+// audited with Action="upload"; the audit Command field records "localPath -> remotePath".
+//
+// T1 carry — remote parent creation: sshbroker.Client.Upload puts files via
+// sftp.Create and dirs via sftp.Mkdir, both of which require the destination's
+// PARENT to pre-exist. Before the transfer this function MkdirAll's the parent
+// of remotePath (cli.MkdirAll — broker primitive over SFTP), matching the
+// `scp --parents` UX so an agent can target a freshly-named destination without
+// a preparatory exec_command. remotePath is a POSIX path; path.Dir (not
+// filepath.Dir) computes the parent so the gate stays correct on a Windows broker
+// host too (the remote's path convention is always POSIX).
+//
+// Statuses: denied (out-of-profile), auth_error, hostkey_mismatch,
+// connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
+// upload has neither sudo nor a command deadline.
+func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, localPath, remotePath string) (out UploadOutput, err error) {
+	var status string
+	start := time.Now()
+	defer func() {
+		if status == "" {
+			status = "error"
+		}
+		_ = st.WriteAudit(store.AuditRow{
+			TS: start, ProjectID: projectID, ServerID: serverID, Action: "upload",
+			Command: localPath + " -> " + remotePath, Status: status, DurationMS: time.Since(start).Milliseconds(),
+		})
+	}()
+
+	// Iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
+	allowed, ferr := st.ServersForProfile(profileID)
+	if ferr != nil {
+		err = ferr
+		return
+	}
+	if !contains(allowed, serverID) {
+		status = "denied"
+		err = ErrNotInProfile
+		return
+	}
+
+	srv, serr := st.GetServer(serverID)
+	if serr != nil || srv == nil {
+		status = "error"
+		err = fmt.Errorf("server %s not found", serverID)
+		return
+	}
+
+	auth, aerr := vault.AuthForServer(st, srv)
+	if aerr != nil {
+		status = "auth_error"
+		err = aerr
+		return
+	}
+
+	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	if herr != nil {
+		status = "error"
+		err = herr
+		return
+	}
+
+	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	if cerr != nil {
+		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+			status = "hostkey_mismatch"
+		} else {
+			status = "connect_error"
+		}
+		err = cerr
+		return
+	}
+	defer cli.Close()
+
+	// Ensure remotePath's parent exists before the transfer — T1 carry (see
+	// doc comment). Skipped for root/relative paths (no parent to create).
+	if parent := path.Dir(remotePath); parent != "" && parent != "." && parent != "/" {
+		if merr := cli.MkdirAll(parent); merr != nil {
+			status = "error"
+			err = fmt.Errorf("remote mkdir %s: %w", parent, merr)
+			return
+		}
+	}
+
+	res, uerr := cli.Upload(localPath, remotePath, MaxOutputBytes)
+	if uerr != nil {
+		status = "error"
+		err = uerr
+		return
+	}
+	status = "ok"
+	out = UploadOutput{Files: res.Files, Bytes: res.Bytes, Truncated: res.Truncated}
 	return
 }
