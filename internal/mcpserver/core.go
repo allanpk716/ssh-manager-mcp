@@ -88,11 +88,14 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
 	if cerr != nil {
-		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+		switch {
+		case errors.Is(cerr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(cerr, sshbroker.ErrHostKeyMismatch):
 			status = "hostkey_mismatch"
-		} else {
+		default:
 			status = "connect_error"
 		}
 		err = cerr
@@ -205,11 +208,14 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		return
 	}
 
-	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
 	if cerr != nil {
-		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+		switch {
+		case errors.Is(cerr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(cerr, sshbroker.ErrHostKeyMismatch):
 			status = "hostkey_mismatch"
-		} else {
+		default:
 			status = "connect_error"
 		}
 		err = cerr
@@ -299,11 +305,14 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		return
 	}
 
-	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
 	if cerr != nil {
-		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+		switch {
+		case errors.Is(cerr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(cerr, sshbroker.ErrHostKeyMismatch):
 			status = "hostkey_mismatch"
-		} else {
+		default:
 			status = "connect_error"
 		}
 		err = cerr
@@ -411,11 +420,14 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		return
 	}
 
-	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
 	if cerr != nil {
-		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+		switch {
+		case errors.Is(cerr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(cerr, sshbroker.ErrHostKeyMismatch):
 			status = "hostkey_mismatch"
-		} else {
+		default:
 			status = "connect_error"
 		}
 		err = cerr

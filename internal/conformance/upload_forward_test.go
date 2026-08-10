@@ -49,7 +49,7 @@ func TestUploadDifferential(t *testing.T) {
 	scpArgs := scpBinaryKeyAuthArgs(port, privPath)
 	scpDst := "sshuser@" + host + ":"
 
-	cli, err := sshbroker.Connect(host, port, "sshuser", brokerAuth, ssh.FixedHostKey(hostKey))
+	cli, err := sshbroker.Connect(context.Background(), host, port, "sshuser", brokerAuth, ssh.FixedHostKey(hostKey))
 	if err != nil {
 		t.Fatalf("broker connect: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestForwardDifferential(t *testing.T) {
 	payload := "FORWARD-DIFFERENTIAL-PAYLOAD-1234567890\n"
 
 	// === Broker path: sshbroker.Client.ForwardLocal (-L tunnel). ===
-	cli, err := sshbroker.Connect(host, port, "sshuser", brokerAuth, ssh.FixedHostKey(hostKey))
+	cli, err := sshbroker.Connect(context.Background(), host, port, "sshuser", brokerAuth, ssh.FixedHostKey(hostKey))
 	if err != nil {
 		t.Fatalf("broker connect: %v", err)
 	}

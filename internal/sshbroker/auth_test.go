@@ -1,6 +1,7 @@
 package sshbroker
 
 import (
+	"context"
 	"io"
 	"testing"
 
@@ -16,7 +17,7 @@ func TestConnectPasswordAuth(t *testing.T) {
 	})
 	defer cleanup()
 	cb := ssh.FixedHostKey(hostKey)
-	cli, err := Connect(hostOf(addr), portOf(addr), "u", PasswordAuth("secret"), cb)
+	cli, err := Connect(context.Background(), hostOf(addr), portOf(addr), "u", PasswordAuth("secret"), cb)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -26,7 +27,7 @@ func TestConnectPasswordAuth(t *testing.T) {
 func TestConnectPasswordAuthRejected(t *testing.T) {
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "secret"})
 	defer cleanup()
-	_, err := Connect(hostOf(addr), portOf(addr), "u", PasswordAuth("wrong"), ssh.FixedHostKey(hostKey))
+	_, err := Connect(context.Background(), hostOf(addr), portOf(addr), "u", PasswordAuth("wrong"), ssh.FixedHostKey(hostKey))
 	if err == nil {
 		t.Fatal("connect with wrong password must fail")
 	}

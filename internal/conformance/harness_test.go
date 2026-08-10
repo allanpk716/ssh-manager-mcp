@@ -19,7 +19,7 @@ func TestHarnessSmoke(t *testing.T) {
 
 	// Broker path (Go SSH), trusting the known host key on first use via FixedHostKey.
 	cb := ssh.FixedHostKey(hostKey)
-	cli, err := sshbroker.Connect(host, port, "sshuser", mustPrivAuth(t, privPath, ""), cb)
+	cli, err := sshbroker.Connect(context.Background(), host, port, "sshuser", mustPrivAuth(t, privPath, ""), cb)
 	if err != nil {
 		t.Fatalf("broker connect: %v", err)
 	}

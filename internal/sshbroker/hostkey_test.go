@@ -1,6 +1,7 @@
 package sshbroker
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -33,7 +34,7 @@ func TestHostKeyTOFURecordsThenVerifies(t *testing.T) {
 		t.Fatal(err)
 	}
 	// first connect: records host key
-	cli, err := Connect(hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), cb)
+	cli, err := Connect(context.Background(), hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), cb)
 	if err != nil {
 		t.Fatalf("first connect (TOFU): %v", err)
 	}
@@ -44,7 +45,7 @@ func TestHostKeyTOFURecordsThenVerifies(t *testing.T) {
 
 	// second connect: verifies, succeeds
 	cb2, _ := HostKeyTOFU(st, "h", portOf(addr))
-	cli2, err := Connect(hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), cb2)
+	cli2, err := Connect(context.Background(), hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), cb2)
 	if err != nil {
 		t.Fatalf("second connect (verify): %v", err)
 	}
@@ -58,7 +59,7 @@ func TestHostKeyMismatchRejected(t *testing.T) {
 	defer cleanup()
 	st := &fakeHostKeyStore{keys: map[string][]byte{fmt.Sprintf("h:%d", portOf(addr)): []byte("stale-different-key")}}
 	cb, _ := HostKeyTOFU(st, "h", portOf(addr))
-	_, err := Connect(hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), cb)
+	_, err := Connect(context.Background(), hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), cb)
 	if err == nil {
 		t.Fatal("mismatched host key must be rejected")
 	}

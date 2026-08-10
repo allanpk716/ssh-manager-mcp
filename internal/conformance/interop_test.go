@@ -45,7 +45,7 @@ func TestInteropMatrix(t *testing.T) {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
 			cb := ssh.FixedHostKey(hostKey) // trust the known host key
-			cli, err := sshbroker.Connect(host, port, "sshuser", c.auth, cb)
+			cli, err := sshbroker.Connect(context.Background(), host, port, "sshuser", c.auth, cb)
 			if c.marker == "" {
 				// Expect auth failure.
 				if err == nil {
@@ -82,7 +82,7 @@ func TestInteropRealSudo(t *testing.T) {
 	host, port, hostKey, _, cleanup := startOpenSSH(t, OpenSSHOpts{AuthorizedPubKey: pub})
 	defer cleanup()
 
-	cli, err := sshbroker.Connect(host, port, "sshuser", mustPrivAuth(t, privPath, ""), ssh.FixedHostKey(hostKey))
+	cli, err := sshbroker.Connect(context.Background(), host, port, "sshuser", mustPrivAuth(t, privPath, ""), ssh.FixedHostKey(hostKey))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

@@ -15,7 +15,7 @@ import (
 
 func connectTest(t *testing.T, addr string, hostKey ssh.PublicKey) *Client {
 	t.Helper()
-	cli, err := Connect(hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), ssh.FixedHostKey(hostKey))
+	cli, err := Connect(context.Background(), hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), ssh.FixedHostKey(hostKey))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
