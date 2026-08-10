@@ -14,6 +14,18 @@ import (
 	"ssh-manager-mcp/internal/vault"
 )
 
+// clampExecTimeout applies the default (when t <= 0) and the MaxExecTimeout
+// ceiling (when t exceeds it). Pure — unit-tested directly with no server.
+func clampExecTimeout(t time.Duration) time.Duration {
+	if t <= 0 {
+		t = defaultTimeout
+	}
+	if t > MaxExecTimeout {
+		t = MaxExecTimeout
+	}
+	return t
+}
+
 // ListServersForProfile returns the servers the agent may use (Profile-scoped, no credentials).
 func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, error) {
 	ids, err := st.ServersForProfile(profileID)
@@ -103,9 +115,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	}
 	defer cli.Close()
 
-	if timeout <= 0 {
-		timeout = defaultTimeout
-	}
+	timeout = clampExecTimeout(timeout) // <=0 → defaultTimeout; cap at MaxExecTimeout
 
 	var res sshbroker.ExecResult
 	if sudo {

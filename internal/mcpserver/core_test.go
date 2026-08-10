@@ -29,6 +29,32 @@ func newStore(t *testing.T) *store.Store {
 	return st
 }
 
+// TestClampExecTimeout verifies the pure helper that applies the default (when
+// t <= 0) and the MaxExecTimeout ceiling. No server, no waiting — the cap is
+// exercised by composition with the broker's timeout-enforcement path (proven
+// in Task 1's Exec timeout test), not by running a 5-minute command here.
+func TestClampExecTimeout(t *testing.T) {
+	cases := []struct {
+		name string
+		in   time.Duration
+		want time.Duration
+	}{
+		{"zero defaults to defaultTimeout", 0, defaultTimeout},
+		{"negative defaults to defaultTimeout", -1, defaultTimeout},
+		{"under cap unchanged", 60 * time.Second, 60 * time.Second},
+		{"over cap clamped", time.Hour, MaxExecTimeout},
+		{"at cap unchanged (boundary)", MaxExecTimeout, MaxExecTimeout},
+		{"just over cap clamped", MaxExecTimeout + time.Second, MaxExecTimeout},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := clampExecTimeout(c.in); got != c.want {
+				t.Fatalf("clampExecTimeout(%v) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
 func TestListServersScopedToProfile(t *testing.T) {
 	st := newStore(t)
 	a, _ := st.AddServer(&models.Server{Name: "a", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
