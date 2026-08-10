@@ -1,0 +1,43 @@
+# Config-drift guard — on PRs/pushes touching the release config or the CLI
+# entry, validate .goreleaser.yml and prove one target still compiles.
+# Does NOT publish.
+name: goreleaser-check
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.goreleaser.yml'
+      - 'cmd/**'
+      - '.github/workflows/goreleaser-check.yml'
+  pull_request:
+    paths:
+      - '.goreleaser.yml'
+      - 'cmd/**'
+      - '.github/workflows/goreleaser-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.17.1
+          args: check
+
+      - name: single-target snapshot build
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.17.1
+          args: build --snapshot --single-target --clean

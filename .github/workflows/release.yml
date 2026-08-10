@@ -1,0 +1,39 @@
+# Release pipeline — on a pushed v* tag, builds ssh-manager for
+# Windows/Linux/macOS (6 targets) and publishes a GitHub Release with
+# SHA256 checksums. See docs/superpowers/specs/2026-08-10-github-release-pipeline-design.md.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # goreleaser creates the Release + uploads assets; nothing broader
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history — changelog needs it
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          # Pinned GoReleaser CLI version (supply-chain hygiene; v2.17.1 is
+          # latest stable 2026-08 and clears CVE AIKIDO-2026-10332). NOT 'latest'.
+          version: v2.17.1
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
