@@ -1,0 +1,48 @@
+# GoReleaser config — ssh-manager-mcp (schema v2).
+# Pinned toolchain: GoReleaser CLI v2.17.1 (set in .github/workflows/*.yml).
+# Docs: https://goreleaser.com
+# Local dry-run (no publish):  goreleaser release --snapshot --clean
+version: 2
+
+project_name: ssh-manager
+
+builds:
+  - id: ssh-manager
+    main: ./cmd/ssh-manager
+    binary: ssh-manager
+    env:
+      - CGO_ENABLED=0          # pure-Go dep stack -> static cross-compile
+    flags:
+      - -trimpath              # reproducible: strip local paths
+    ldflags:
+      # -s -w: drop symbol/DWARF tables (smaller binary)
+      # -X:   inject release version (tag v1.0.0 -> Version=1.0.0)
+      - -s -w -X ssh-manager-mcp/internal/cli.Version={{.Version}}
+    goos: [windows, linux, darwin]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]          # v2 plural form (v2.6+)
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: github-native           # GitHub auto release notes (groups by PR)
+
+release:
+  name_template: "ssh-manager {{ .Tag }}"
+  prerelease: auto             # v1.0.0-rc1 -> auto-marked Pre-release
+  draft: false
+
+gomod:
+  proxy: true
+
+# (No `snapshot:` block — `goreleaser release --snapshot --clean` enables
+#  snapshot mode via the flag and uses GoReleaser's default version template.)
