@@ -47,7 +47,7 @@ go build -o ssh-manager ./cmd/ssh-manager        # or: go install ./cmd/ssh-mana
 ssh-manager unlock
 
 # 3. Add a server + its credential (exactly one of --password / --key; optional sudo)
-ssh-manager servers add --name gpu --host 192.168.1.10 --user deploy \
+ssh-manager servers add --name gpu --host 192.0.2.10 --user deploy \
     --password '...'                 # OR: --key ~/.ssh/id_ed25519 [--key-passphrase '...]
     --sudo-password '...'            # optional: enables sudo=true on exec_command
 
@@ -81,7 +81,7 @@ The owner CLI is how you record servers, group them, and grant an agent access. 
 ```bash
 # Edit a server in place: pass any subset of fields — the server id + profile bindings are preserved.
 ssh-manager servers edit gpu --description "8x A100 80GB, CUDA 12"   # add / update notes
-ssh-manager servers edit gpu --host 10.0.1.20 --port 2222            # re-point host/port
+ssh-manager servers edit gpu --host 192.0.2.20 --port 2222            # re-point host/port
 ssh-manager servers edit gpu --password '...'                        # re-credential (or --key)
 ssh-manager servers ls                                                # lists name + notes
 
