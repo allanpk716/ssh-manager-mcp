@@ -12,11 +12,16 @@ RUN ssh-keygen -A
 # HostKey pinned to ed25519 only: by default sshd also presents ecdsa/rsa and the Go client
 # negotiates whichever the server offers first — so a FixedHostKey on ed25519 would mismatch.
 # Pinning the server to a single HostKey makes the negotiated key deterministic for the harness.
+# AllowTcpForwarding yes (overrides alpine's default `no`) so Plan 6 T5's TestForwardDifferential
+# can open a real `ssh -L`-equivalent direct-tcpip channel through this sshd (broker ForwardLocal
+# uses the same x/crypto/ssh direct-tcpip primitive). Benign for the other §13 tests (they don't
+# exercise forwarding).
 RUN sed -i -E \
     -e 's/^#?PasswordAuthentication.*/PasswordAuthentication yes/' \
     -e 's/^#?PubkeyAuthentication.*/PubkeyAuthentication yes/' \
     -e 's/^#?PermitRootLogin.*/PermitRootLogin no/' \
     -e 's/^#?StrictModes.*/StrictModes no/' \
+    -e 's/^#?AllowTcpForwarding.*/AllowTcpForwarding yes/' \
     /etc/ssh/sshd_config
 RUN echo 'HostKey /etc/ssh/ssh_host_ed25519_key' >> /etc/ssh/sshd_config
 EXPOSE 22
