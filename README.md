@@ -39,7 +39,8 @@ Every tool is **profile-gated** (the agent only reaches servers you granted its 
 Build + configure once; then point your AI agent at it.
 
 ```bash
-# 1. Build
+# 1. Build — or skip this: grab a prebuilt binary from Releases
+#          https://github.com/allanpk716/ssh-manager-mcp/releases
 go build -o ssh-manager ./cmd/ssh-manager        # or: go install ./cmd/ssh-manager
 
 # 2. Unlock the vault (master key → OS keychain; passphrase fallback available — see `unlock --help`)
