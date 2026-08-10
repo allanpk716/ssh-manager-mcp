@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"path"
+	"strconv"
 	"time"
 
 	"ssh-manager-mcp/internal/sshbroker"
@@ -220,4 +223,245 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 	status = "ok"
 	out = DownloadOutput{Content: res.Content, Bytes: res.Bytes, Truncated: res.Truncated}
 	return
+}
+
+// UploadForProfile uploads localPath to remotePath on serverID iff serverID is in
+// profileID (iron rule — same gate as ExecCommandForProfile / DownloadForProfile).
+// localPath is read from the broker's (= the agent's) filesystem; remotePath is
+// the destination on the server (a file or a directory, uploaded recursively,
+// mirroring `scp -r localPath server:remotePath`). The upload is §6-capped
+// (MaxOutputBytes on TOTAL bytes): a larger payload yields Truncated=true with
+// Bytes as the true total and only a partial tree landed. Every branch is
+// audited with Action="upload"; the audit Command field records "localPath -> remotePath".
+//
+// T1 carry — remote parent creation: sshbroker.Client.Upload puts files via
+// sftp.Create and dirs via sftp.Mkdir, both of which require the destination's
+// PARENT to pre-exist. Before the transfer this function MkdirAll's the parent
+// of remotePath (cli.MkdirAll — broker primitive over SFTP), matching the
+// `scp --parents` UX so an agent can target a freshly-named destination without
+// a preparatory exec_command. remotePath is a POSIX path; path.Dir (not
+// filepath.Dir) computes the parent so the gate stays correct on a Windows broker
+// host too (the remote's path convention is always POSIX).
+//
+// Statuses: denied (out-of-profile), auth_error, hostkey_mismatch,
+// connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
+// upload has neither sudo nor a command deadline.
+func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, localPath, remotePath string) (out UploadOutput, err error) {
+	var status string
+	start := time.Now()
+	defer func() {
+		if status == "" {
+			status = "error"
+		}
+		_ = st.WriteAudit(store.AuditRow{
+			TS: start, ProjectID: projectID, ServerID: serverID, Action: "upload",
+			Command: localPath + " -> " + remotePath, Status: status, DurationMS: time.Since(start).Milliseconds(),
+		})
+	}()
+
+	// Iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
+	allowed, ferr := st.ServersForProfile(profileID)
+	if ferr != nil {
+		err = ferr
+		return
+	}
+	if !contains(allowed, serverID) {
+		status = "denied"
+		err = ErrNotInProfile
+		return
+	}
+
+	srv, serr := st.GetServer(serverID)
+	if serr != nil || srv == nil {
+		status = "error"
+		err = fmt.Errorf("server %s not found", serverID)
+		return
+	}
+
+	auth, aerr := vault.AuthForServer(st, srv)
+	if aerr != nil {
+		status = "auth_error"
+		err = aerr
+		return
+	}
+
+	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	if herr != nil {
+		status = "error"
+		err = herr
+		return
+	}
+
+	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	if cerr != nil {
+		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+			status = "hostkey_mismatch"
+		} else {
+			status = "connect_error"
+		}
+		err = cerr
+		return
+	}
+	defer cli.Close()
+
+	// Ensure remotePath's parent exists before the transfer — T1 carry (see
+	// doc comment). Skipped for root/relative paths (no parent to create).
+	if parent := path.Dir(remotePath); parent != "" && parent != "." && parent != "/" {
+		if merr := cli.MkdirAll(parent); merr != nil {
+			status = "error"
+			err = fmt.Errorf("remote mkdir %s: %w", parent, merr)
+			return
+		}
+	}
+
+	res, uerr := cli.Upload(localPath, remotePath, MaxOutputBytes)
+	if uerr != nil {
+		status = "error"
+		err = uerr
+		return
+	}
+	status = "ok"
+	out = UploadOutput{Files: res.Files, Bytes: res.Bytes, Truncated: res.Truncated}
+	return
+}
+
+// ForwardForProfile opens a `ssh -L` tunnel through serverID iff serverID is in
+// profileID (iron rule — same gate as ExecCommandForProfile / Download /
+// Upload). This is the first STATEFUL broker operation: the SSH connection
+// opened here is NOT defer-closed — on success the TunnelManager owns it for the
+// tunnel's life (the connection stays open across this call's return so the
+// local listener can keep piping bytes through it). The tunnel + client are
+// reclaimed by close_port (CloseForwardForProfile), the idle sweeper
+// (forwardIdleTimeout), or MCP shutdown (TunnelManager.CloseAll).
+//
+// Resource-cleanup discipline (the load-bearing concern): every error branch
+// that connected a client WITHOUT handing it to the TunnelManager closes it in
+// the deferred cleanup (err != nil && cli != nil) so no ssh.Client leaks on a
+// ForwardLocal failure or any pre-Open error. On success (status="ok", err=nil)
+// the manager owns the client and the deferred cleanup skips the close.
+//
+// Every branch is audited with Action="forward"; the audit Command field
+// records the forward target as "remoteHost:remotePort". Statuses: denied
+// (out-of-profile), auth_error, hostkey_mismatch, connect_error, ok, error.
+// There is no no_sudo / timeout branch — a forward is a listener + pipe with no
+// command deadline.
+func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, remoteHost string, remotePort, localPort int, mgr *TunnelManager) (out ForwardOutput, err error) {
+	var status string
+	var cli *sshbroker.Client
+	start := time.Now()
+	defer func() {
+		if status == "" {
+			status = "error"
+		}
+		// On any error path where we connected a client but did NOT register it
+		// with the manager, close it now so it cannot leak. On success the manager
+		// owns cli (Close/CloseAll/SweepIdle close it) — do NOT close here.
+		if err != nil && cli != nil {
+			_ = cli.Close()
+		}
+		_ = st.WriteAudit(store.AuditRow{
+			TS: start, ProjectID: projectID, ServerID: serverID, Action: "forward",
+			Command:    net.JoinHostPort(remoteHost, strconv.Itoa(remotePort)),
+			Status:     status,
+			DurationMS: time.Since(start).Milliseconds(),
+		})
+	}()
+
+	// Iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
+	allowed, ferr := st.ServersForProfile(profileID)
+	if ferr != nil {
+		err = ferr
+		return
+	}
+	if !contains(allowed, serverID) {
+		status = "denied"
+		err = ErrNotInProfile
+		return
+	}
+
+	srv, serr := st.GetServer(serverID)
+	if serr != nil || srv == nil {
+		status = "error"
+		err = fmt.Errorf("server %s not found", serverID)
+		return
+	}
+
+	auth, aerr := vault.AuthForServer(st, srv)
+	if aerr != nil {
+		status = "auth_error"
+		err = aerr
+		return
+	}
+
+	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	if herr != nil {
+		status = "error"
+		err = herr
+		return
+	}
+
+	cli, cerr := sshbroker.Connect(srv.Host, srv.Port, srv.User, auth, hkCb)
+	if cerr != nil {
+		if errors.Is(cerr, sshbroker.ErrHostKeyMismatch) {
+			status = "hostkey_mismatch"
+		} else {
+			status = "connect_error"
+		}
+		err = cerr
+		return
+	}
+	// NO defer cli.Close() here — on success the TunnelManager owns cli (stateful).
+
+	tun, ferr2 := cli.ForwardLocal(localPort, remoteHost, remotePort)
+	if ferr2 != nil {
+		status = "error"
+		err = ferr2
+		return // deferred cleanup sees err != nil && cli != nil → closes cli (no leak)
+	}
+
+	id := mgr.Open(tun, cli) // manager owns both tunnel + client from here
+	status = "ok"
+	out = ForwardOutput{TunnelID: id, LocalPort: localPortOfAddr(tun.LocalAddr())}
+	return
+}
+
+// CloseForwardForProfile tears down a tunnel by its opaque id. The id is
+// unguessable (a UUID) and CloseForwardForProfile only closes tunnels THIS
+// TunnelManager owns, so there is no profile re-gate (forward_port already
+// gated the targeted server; close_port operates on the broker-local handle).
+// Not-found is surfaced as a tool error (the manager's Close returns false).
+// Audited with Action="close-forward"; the audit Command field records the
+// tunnel_id (the correlation key) and Status is ok (the tunnel existed + was
+// torn down) or error (not found).
+func CloseForwardForProfile(ctx context.Context, st *store.Store, projectID, tunnelID string, mgr *TunnelManager) (err error) {
+	var status string
+	start := time.Now()
+	defer func() {
+		if status == "" {
+			status = "error"
+		}
+		_ = st.WriteAudit(store.AuditRow{
+			TS: start, ProjectID: projectID, Action: "close-forward",
+			Command: tunnelID, Status: status, DurationMS: time.Since(start).Milliseconds(),
+		})
+	}()
+	if !mgr.Close(tunnelID) {
+		status = "error"
+		err = fmt.Errorf("no open tunnel with id %s", tunnelID)
+		return
+	}
+	status = "ok"
+	return
+}
+
+// localPortOfAddr extracts the port from a "host:port" listen address (the
+// tunnel's LocalAddr). Returns 0 on any parse failure (the caller treats <=0 as
+// an error in tests; production just reports it back to the agent).
+func localPortOfAddr(addr string) int {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	p, _ := strconv.Atoi(portStr)
+	return p
 }

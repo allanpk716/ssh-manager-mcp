@@ -46,6 +46,8 @@ func generateKey(t *testing.T, keyType, passphrase string) (privPath, pubLine st
 
 // sshBinaryKeyAuthArgs assembles the common ssh-binary args for key-auth against the
 // conformance sshd: batch mode, identity pinned, no host-key prompts, quiet stderr.
+// The trailing element is the destination (`user@host`) so callers can append a
+// remote command or insert forward flags (`-L`, `-N`) before it.
 func sshBinaryKeyAuthArgs(host string, port int, user, privPath string) []string {
 	return []string{
 		"-p", strconv.Itoa(port),
@@ -56,5 +58,22 @@ func sshBinaryKeyAuthArgs(host string, port int, user, privPath string) []string
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR",
 		user + "@" + host,
+	}
+}
+
+// scpBinaryKeyAuthArgs assembles the scp-binary args (note the uppercase -P, the
+// one flag where scp diverges from ssh) for key-auth against the conformance sshd.
+// Source and destination are POSITIONAL and must be appended by the caller in
+// `[flags...] src dst` order — scp takes no destination flag. Shared -o options
+// mirror sshBinaryKeyAuthArgs so both binaries authenticate identically.
+func scpBinaryKeyAuthArgs(port int, privPath string) []string {
+	return []string{
+		"-P", strconv.Itoa(port),
+		"-i", privPath,
+		"-o", "IdentitiesOnly=yes",
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
 	}
 }
