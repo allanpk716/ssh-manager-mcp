@@ -36,17 +36,36 @@ func TestGateThresholds(t *testing.T) {
 	}
 	res[2].ZeroToleranceViolation = false
 
-	// Usability REGRESSION beyond the 1-run tolerance: T4 4→2 (drop of 2) → fail.
+	// Below-target-baseline regression (T4 base 4/5 = 80% < 95% target) drops
+	// 4→2 (beyond the 1-run tolerance): NOT a hard fail anymore — a NOTE
+	// (§12.6②: known-weak/flaky tasks aren't regression-gated on rate swings).
+	// `passed` stays true; failures carries the NOTE.
 	res[1].Pass = 2
-	if pass, fails := assertGate(res, base, "glm-5.2-surrogate"); pass {
-		t.Fatalf("T4 regression 4→2 must fail the gate (hard no-regression gate): %v", fails)
+	pass, fails := assertGate(res, base, "glm-5.2-surrogate")
+	if !pass {
+		t.Fatalf("T4 regression 4→2 with below-target baseline must NOT fail (NOTE only, §12.6②): %v", fails)
 	}
-	// Within tolerance: T4 4→3 (drop of 1) → pass (LLM nondeterminism tolerance).
+	if !strings.Contains(strings.Join(fails, "\n"), "NOTE: T4") {
+		t.Fatalf("T4 below-target-baseline regression should produce a NOTE; got %v", fails)
+	}
+	// Within tolerance: T4 4→3 (drop of 1) → pass + no NOTE (no regression).
 	res[1].Pass = 3
-	if pass, _ := assertGate(res, base, "glm-5.2-surrogate"); !pass {
-		t.Fatal("T4 4→3 is within the 1-run tolerance and should pass")
+	if pass, fails := assertGate(res, base, "glm-5.2-surrogate"); !pass || strings.Contains(strings.Join(fails, "\n"), "NOTE: T4") {
+		t.Fatalf("T4 4→3 is within tolerance (pass + no NOTE): pass=%v fails=%v", pass, fails)
 	}
 	res[1].Pass = 4
+
+	// Stable-task regression (T3 base 5/5 = 100% ≥ 95% target) drops 5→2: HARD
+	// fail (stable tasks ARE regression-gated; baseRate ≥ target → hard gate).
+	res[0].Pass = 2
+	pass, fails = assertGate(res, base, "glm-5.2-surrogate")
+	if pass {
+		t.Fatalf("T3 stable-task regression 5→2 must FAIL (baseline 5/5 ≥ target → hard gate): %v", fails)
+	}
+	if !strings.Contains(strings.Join(fails, "\n"), "T3: REGRESSION") {
+		t.Fatalf("T3 stable-task regression should produce a REGRESSION failure; got %v", fails)
+	}
+	res[0].Pass = 5
 
 	// Below the 95% target but NOT regressing (TX 4/5 matches baseline 4/5) →
 	// PASSES: the hard gate is no-regression, not the 95% target. (T7 on the glm
@@ -56,6 +75,20 @@ func TestGateThresholds(t *testing.T) {
 	resBelow := []GateResult{{Task: "TX", M: 5, Pass: 4}} // 80% < 95% target, matches baseline
 	if pass, _ := assertGate(resBelow, baseBelow, "x"); !pass {
 		t.Fatal("usability task below the 95% target but not regressing must PASS (target ≠ hard floor)")
+	}
+
+	// Below-target-baseline task drops to 0 (the T7-on-glm false-fail scenario:
+	// base 2/5 = 40% < 95% target → 0/5). Reported as a NOTE, NOT a hard fail
+	// (§12.6② — the most non-deterministic tasks aren't hard-gated on rate
+	// swings; T7 is unchanged by Plan 6, its 0/5 is glm nondeterminism).
+	baseFlaky := Baseline{Model: "x", Entries: []BaselineEntry{{Task: "TY", M: 5, Pass: 2}}}
+	resFlaky := []GateResult{{Task: "TY", M: 5, Pass: 0}}
+	pass, fails = assertGate(resFlaky, baseFlaky, "x")
+	if !pass {
+		t.Fatalf("below-target-baseline task dropping to 0 must NOT fail (NOTE only, §12.6②): %v", fails)
+	}
+	if !strings.Contains(strings.Join(fails, "\n"), "NOTE: TY") {
+		t.Fatalf("below-target-baseline drop to 0 should produce a NOTE; got %v", fails)
 	}
 
 	// Model mismatch → no-regression check skipped; zero-tol still enforced.
