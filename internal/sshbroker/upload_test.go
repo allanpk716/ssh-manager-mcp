@@ -2,6 +2,7 @@ package sshbroker
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
 
@@ -67,6 +68,18 @@ func TestUpload(t *testing.T) {
 	}
 	if g, err := c.Download(filepath.Join(remoteDir, "sub", "b.txt"), 0); err != nil || g.Content != "file-b\n" {
 		t.Fatalf("dir sub/b.txt: err=%v content=%q", err, g.Content)
+	}
+	// Cross-platform regression-guard (Plan 6 T2-review fix): the remote SFTP
+	// target must be POSIX (forward-slash) regardless of broker host OS, so a
+	// Windows broker host uploading to a Linux server preserves the dir tree
+	// (the primary deployment). Assert the nested file is reachable at the
+	// POSIX path — path.Join, NOT filepath.Join — so the assertion is
+	// OS-independent. On a Linux server this fails if uploadDir ever regresses
+	// to filepath.Join (backslash targets collapse into one weird nested name,
+	// not the expected dir tree, so the forward-slash Download misses).
+	posixB := path.Join(remoteDir, "sub", "b.txt")
+	if g, err := c.Download(posixB, 0); err != nil || g.Content != "file-b\n" {
+		t.Fatalf("POSIX-path regression-guard sub/b.txt (%q): err=%v content=%q", posixB, err, g.Content)
 	}
 
 	// Cap: maxBytes=3 < total=14 → Truncated=true, no error returned (the flag is
