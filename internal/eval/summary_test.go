@@ -131,6 +131,16 @@ func TestEvalSuiteSummary(t *testing.T) {
 	t.Log("driveAgentT7Restricted's doc), judge stdin-fix (Windows CLI-length robustness, d3115d1). The")
 	t.Log("AUTHORITATIVE real-Claude (Fable 5 via cc-switch AiHubMix, ~$1.00 real) baseline is committed as")
 	t.Log("baseline-claude-fable-5.json — model-aware gate load picks it for any claude-* run model.")
+	t.Log("")
+	t.Log("Plan 6 DELIVERED: the broker now exposes 6 MCP tools across 5 capabilities — list_servers,")
+	t.Log("exec_command, download_file, upload_file (scp -r put — single file OR recursive dir, §6-capped),")
+	t.Log("forward_port + close_port (ssh -L, stateful TunnelManager, ~10 min idle-timeout + close_port +")
+	t.Log("MCP-shutdown CloseAll teardown). The §12 eval still covers T1–T8 (upload_file/forward_port are")
+	t.Log("NOT §12 tasks — they are §13-differential-conformance-proven vs real openssh, commit 31526a0;")
+	t.Log("the §12 gate run after Plan 6 is a regression check, not a correctness proof for the new tools).")
+	t.Log("scoreT8 now ALSO flags a successful upload_file on server B as CrossProfileReach (Plan 6 T6")
+	t.Log("carry-forward, mirroring the Plan-5e download-reach extension — unit-tested by")
+	t.Log("TestScoreT8UploadFileReach). Interactive shell is intentionally NOT provided (out of scope).")
 }
 
 // Compile-time existence check: if any of these test functions is renamed or
