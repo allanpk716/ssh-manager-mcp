@@ -3,6 +3,7 @@ package testsshd
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -105,11 +106,21 @@ func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, execFn func(string,
 	defer sc.Close()
 	go ssh.DiscardRequests(reqs)
 	for newChan := range chans {
-		if newChan.ChannelType() != "session" {
-			newChan.Reject(ssh.UnknownChannelType, "only session")
-			continue
+		switch newChan.ChannelType() {
+		case "session":
+			go handleSession(newChan, sudoPw, execFn)
+		case "direct-tcpip":
+			// Direct TCP/IP forwarding (RFC 4254 §7.2) — the server-side of `ssh -L`.
+			// The broker's ForwardLocal opens this channel via (*ssh.Client).Dial; the
+			// test sshd resolves the destination from the host's perspective (the
+			// in-process sshd shares the test's loopback, so forwarding to
+			// 127.0.0.1:<echoPort> reaches the test's echo service). No Options flag —
+			// a real sshd supports -L by default, and this is purely additive (existing
+			// session-only tests are unaffected).
+			go handleDirectTCP(newChan)
+		default:
+			newChan.Reject(ssh.UnknownChannelType, "only session or direct-tcpip")
 		}
-		go handleSession(newChan, sudoPw, execFn)
 	}
 }
 
@@ -186,4 +197,43 @@ func handleSession(newChan ssh.NewChannel, sudoPw string, execFn func(string, io
 			continue
 		}
 	}
+}
+
+// directTCPPayload is the channel-open extra data for a "direct-tcpip" channel
+// (RFC 4254 §7.2): the host:port to connect to, plus the originator's address.
+// x/crypto/ssh exposes these fields via NewChannel.ExtraData() (the bytes after
+// the standard SSH_MSG_CHANNEL_OPEN header).
+type directTCPPayload struct {
+	Addr     string // host to connect
+	Port     uint32 // port to connect
+	OrigAddr string // originator IP (informational)
+	OrigPort uint32 // originator port (informational)
+}
+
+// handleDirectTCP accepts a "direct-tcpip" channel, dials the requested
+// host:port from the sshd's perspective (the host's loopback for the in-process
+// testsshd), and pipes both ways until either side closes. Mirrors the broker's
+// Tunnel.handle (symmetric io.Copy pipe with defer-close on both conns).
+func handleDirectTCP(newChan ssh.NewChannel) {
+	var p directTCPPayload
+	if err := ssh.Unmarshal(newChan.ExtraData(), &p); err != nil {
+		newChan.Reject(ssh.ConnectionFailed, "bad direct-tcpip payload")
+		return
+	}
+	ch, reqs, err := newChan.Accept()
+	if err != nil {
+		return
+	}
+	defer ch.Close()
+	go ssh.DiscardRequests(reqs)
+	dest := fmt.Sprintf("%s:%d", p.Addr, p.Port)
+	remote, err := net.Dial("tcp", dest)
+	if err != nil {
+		return // reject-by-close: the channel Accept already succeeded; Close signals failure to the client
+	}
+	defer remote.Close()
+	done := make(chan struct{}, 2)
+	go func() { io.Copy(ch, remote); done <- struct{}{} }()
+	go func() { io.Copy(remote, ch); done <- struct{}{} }()
+	<-done
 }
