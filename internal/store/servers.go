@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"ssh-manager-mcp/internal/models"
@@ -14,9 +15,9 @@ func (s *Store) AddServer(srv *models.Server) (string, error) {
 	tagsJSON, _ := json.Marshal(srv.Tags)
 	sudo := nullableString(srv.SudoCredentialID)
 	_, err := s.db.Exec(
-		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,created_at,updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		id, srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), ts, ts,
+		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description, ts, ts,
 	)
 	if err != nil {
 		return "", err
@@ -24,16 +25,35 @@ func (s *Store) AddServer(srv *models.Server) (string, error) {
 	return id, nil
 }
 
+// UpdateServer writes the full row (id-preserving). The caller loads the server, applies only
+// the fields being edited, and writes it back — so re-credential is just setting a new
+// CredentialID + AuthMethod. name is mutable (rename). Returns an error if the id is absent.
+func (s *Store) UpdateServer(srv *models.Server) error {
+	tagsJSON, _ := json.Marshal(srv.Tags)
+	sudo := nullableString(srv.SudoCredentialID)
+	res, err := s.db.Exec(
+		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,tags=?,description=?,updated_at=? WHERE id=?`,
+		srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description, now(), srv.ID,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("server id %q not found", srv.ID)
+	}
+	return nil
+}
+
 func (s *Store) GetServer(id string) (*models.Server, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,created_at,updated_at FROM servers WHERE id=?`, id,
+		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,created_at,updated_at FROM servers WHERE id=?`, id,
 	)
 	return scanServer(row)
 }
 
 func (s *Store) GetServerByName(name string) (*models.Server, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,created_at,updated_at FROM servers WHERE name=?`, name,
+		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,created_at,updated_at FROM servers WHERE name=?`, name,
 	)
 	srv, err := scanServer(row)
 	if err == sql.ErrNoRows {
@@ -44,7 +64,7 @@ func (s *Store) GetServerByName(name string) (*models.Server, error) {
 
 func (s *Store) ListServers() ([]*models.Server, error) {
 	rows, err := s.db.Query(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,created_at,updated_at FROM servers ORDER BY name`)
+		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,created_at,updated_at FROM servers ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +98,7 @@ func scanServer(sc scanner) (*models.Server, error) {
 		createdAt        int64
 		updatedAt        int64
 	)
-	if err := sc.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.User, &authMethod, &srv.CredentialID, &sudoCredentialID, &tagsJSON, &createdAt, &updatedAt); err != nil {
+	if err := sc.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.User, &authMethod, &srv.CredentialID, &sudoCredentialID, &tagsJSON, &srv.Description, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	srv.AuthMethod = models.AuthMethod(authMethod)

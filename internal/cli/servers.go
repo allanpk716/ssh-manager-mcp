@@ -11,15 +11,15 @@ import (
 
 func newServersCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "servers", Short: "Manage SSH target servers"}
-	cmd.AddCommand(serversAddCmd(), serversListCmd(), serversRmCmd())
+	cmd.AddCommand(serversAddCmd(), serversListCmd(), serversRmCmd(), serversEditCmd())
 	return cmd
 }
 
 func serversAddCmd() *cobra.Command {
 	var (
-		name, host, user, password, keyPath, keyPass, sudoPassword string
-		port                                                       int
-		tags                                                       []string
+		name, host, user, password, keyPath, keyPass, sudoPassword, description string
+		port                                                                    int
+		tags                                                                    []string
 	)
 	c := &cobra.Command{
 		Use:   "add",
@@ -52,7 +52,7 @@ func serversAddCmd() *cobra.Command {
 			}
 			srv := &models.Server{
 				Name: name, Host: host, Port: port, User: user,
-				AuthMethod: cred.Type.AuthMethodForServer(), CredentialID: cid, Tags: tags,
+				AuthMethod: cred.Type.AuthMethodForServer(), CredentialID: cid, Tags: tags, Description: description,
 			}
 			if sudoPassword != "" {
 				sid, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)})
@@ -78,6 +78,7 @@ func serversAddCmd() *cobra.Command {
 	c.Flags().StringVar(&keyPass, "key-passphrase", "", "passphrase for encrypted private key")
 	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "sudo password (enables sudo -S)")
 	c.Flags().StringSliceVar(&tags, "tags", nil, "tags")
+	c.Flags().StringVar(&description, "description", "", "owner notes — hardware/purpose (NOT shown to the agent)")
 	_ = c.MarkFlagRequired("name")
 	_ = c.MarkFlagRequired("host")
 	_ = c.MarkFlagRequired("user")
@@ -103,11 +104,23 @@ func serversListCmd() *cobra.Command {
 				if srv.SudoCredentialID != "" {
 					sudo = "sudo"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-20s %s@%s:%d [%s]\n", srv.Name, srv.ID, srv.User, srv.Host, srv.Port, sudo)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-20s %s@%s:%d [%s] %s\n",
+					srv.Name, srv.ID, srv.User, srv.Host, srv.Port, sudo, truncateDesc(srv.Description))
 			}
 			return nil
 		},
 	}
+}
+
+// truncateDesc clips a description for the ls line (rune-safe; "" → "-").
+func truncateDesc(d string) string {
+	if d == "" {
+		return "-"
+	}
+	if r := []rune(d); len(r) > 40 {
+		return string(r[:37]) + "..."
+	}
+	return d
 }
 
 func serversRmCmd() *cobra.Command {
@@ -129,6 +142,99 @@ func serversRmCmd() *cobra.Command {
 			return s.DeleteServer(id)
 		},
 	}
+}
+
+// serversEditCmd edits a server in place: only flags the operator passed are applied
+// (cobra Changed()), so the server id + profile bindings are preserved. Re-credential is
+// just --password/--key (mutually exclusive): it mints a new credential and repoints the
+// server's credential_id + auth_method.
+func serversEditCmd() *cobra.Command {
+	var (
+		newName, host, user, password, keyPath, keyPass, sudoPassword, description string
+		port                                                                       int
+		tags                                                                       []string
+	)
+	c := &cobra.Command{
+		Use:   "edit [name]",
+		Args:  cobra.ExactArgs(1),
+		Short: "Edit a server's fields and/or re-credential (id + profile bindings preserved)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := openUnlockedStore()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			srv, _ := s.GetServerByName(args[0])
+			if srv == nil {
+				return fmt.Errorf("server %q not found", args[0])
+			}
+			if cmd.Flags().Changed("name") {
+				srv.Name = newName
+			}
+			if cmd.Flags().Changed("host") {
+				srv.Host = host
+			}
+			if cmd.Flags().Changed("port") {
+				srv.Port = port
+			}
+			if cmd.Flags().Changed("user") {
+				srv.User = user
+			}
+			if cmd.Flags().Changed("description") {
+				srv.Description = description
+			}
+			if cmd.Flags().Changed("tags") {
+				srv.Tags = tags
+			}
+			// Re-credential (optional; mutually exclusive).
+			pwSet := cmd.Flags().Changed("password")
+			keySet := cmd.Flags().Changed("key")
+			if pwSet && keySet {
+				return fmt.Errorf("--password and --key are mutually exclusive; provide exactly one")
+			}
+			switch {
+			case pwSet:
+				cid, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(password)})
+				if err != nil {
+					return err
+				}
+				srv.CredentialID, srv.AuthMethod = cid, models.AuthPassword
+			case keySet:
+				keyBytes, err := readKeyFile(keyPath)
+				if err != nil {
+					return err
+				}
+				cid, err := s.SetCredential(&models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)})
+				if err != nil {
+					return err
+				}
+				srv.CredentialID, srv.AuthMethod = cid, models.AuthPrivateKey
+			}
+			if cmd.Flags().Changed("sudo-password") {
+				sid, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)})
+				if err != nil {
+					return err
+				}
+				srv.SudoCredentialID = sid
+			}
+			if err := s.UpdateServer(srv); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "updated server %s\n", srv.Name)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&newName, "name", "", "rename the server")
+	c.Flags().StringVar(&host, "host", "", "hostname or IP")
+	c.Flags().IntVar(&port, "port", 22, "port")
+	c.Flags().StringVar(&user, "user", "", "ssh user")
+	c.Flags().StringVar(&description, "description", "", "owner notes — hardware/purpose (NOT shown to the agent)")
+	c.Flags().StringSliceVar(&tags, "tags", nil, "tags (replaces existing)")
+	c.Flags().StringVar(&password, "password", "", "switch to / replace password auth")
+	c.Flags().StringVar(&keyPath, "key", "", "switch to / replace key auth (path to private key)")
+	c.Flags().StringVar(&keyPass, "key-passphrase", "", "passphrase for encrypted private key (use with --key)")
+	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "set / replace sudo password")
+	return c
 }
 
 // readKeyFile reads a private key from disk.
