@@ -1,23 +1,19 @@
-# §12.4 nightly / on-demand eval + §13 conformance CI. NOT per-PR (real Claude $
-# + real docker). Runs the authoritative real-Claude sweep that produces the
-# §12.3 gate numbers; the first green run's results are the authoritative
-# baseline (supersede internal/eval/baseline.json's glm-surrogate entries with a
-# model=claude-* baseline — see docs/eval/phase3.md).
-name: eval-nightly
+# §12 eval + §13 conformance — ON-DEMAND ONLY (manual workflow_dispatch). NOT
+# scheduled: the project is proven (the authoritative real-Claude numbers are the
+# local claude-fable-5 run, see baseline-claude-fable-5.json); a recurring nightly
+# real-Claude sweep would re-spend $/time re-confirming an already-proven state.
+# Trigger manually (Actions → "Run workflow") when you want a regression check
+# after a broker change. NOT per-PR (real Claude $ + real docker). See
+# docs/eval/phase3.md.
+name: eval-on-demand
 
 on:
-  schedule:
-    # 06:17 UTC daily — off the :00 mark to spread load. (~14:17 Asia/Shanghai.)
-    - cron: '17 6 * * *'
   workflow_dispatch:
     inputs:
       max_budget_usd:
         description: 'Cost cap (--max-budget-usd) for the agent + judge calls'
         required: false
         default: '5'
-  push:
-    tags:
-      - 'v*'
 
 permissions:
   contents: read
