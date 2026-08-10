@@ -8,6 +8,19 @@ Single Go binary. Cross-platform (Windows / Linux / macOS). No daemon — the br
 
 ---
 
+## Documentation (中文使用文档)
+
+A full operator-facing guide in Chinese — from zero to running, server CRUD, authorizing agents, token lifecycle (rotate / disable / revoke), and worked scenarios. Index: [`docs/README.md`](docs/README.md).
+
+| 我想要…… | 看这篇 |
+|---|---|
+| 从零到跑通（安装 / 解锁 / 第一台服务器 / 授权 Claude Code） | [`docs/getting-started.md`](docs/getting-started.md) |
+| 新增 / 编辑 / 维护 / 删除服务器 | [`docs/managing-servers.md`](docs/managing-servers.md) |
+| 授权 Claude Code / Cursor / 其他 agent；token 轮换与吊销 | [`docs/agent-access.md`](docs/agent-access.md) |
+| 应用场景与示例（GPU 巡检、读 root 日志、部署、端口转发……） | [`docs/scenarios.md`](docs/scenarios.md) |
+
+---
+
 ## What the agent gets (the MCP tools)
 
 The MCP server exposes these tools — **ssh-functional-equivalent for operating a server** (interactive shell is intentionally not provided):
