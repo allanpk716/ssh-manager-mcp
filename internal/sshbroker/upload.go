@@ -114,6 +114,30 @@ func uploadDir(sc *sftp.Client, localRoot, remoteRoot string, ctr *countingWrite
 	return walkErr
 }
 
+// MkdirAll creates the directory named remotePath on the server, along with any
+// necessary parents, over SFTP — mirroring os.MkdirAll semantics. If remotePath
+// already exists as a directory this is a no-op; if it exists as a regular file
+// an error is returned. It is the broker primitive UploadForProfile uses to
+// ensure remotePath's PARENT exists before a transfer: T1's Upload puts files via
+// sftp.Create and dirs via sftp.Mkdir, both of which require the destination's
+// parent to pre-exist. MkdirAll-the-parent at the MCP boundary matches the
+// `scp --parents` UX so an agent can target a freshly-named destination without a
+// preparatory exec_command.
+//
+// remotePath is a POSIX path (the remote server's convention). For cross-platform
+// robustness the path is normalized to forward slashes before delegating to
+// sftp.Client.MkdirAll (which scans for '/' as its element separator): a Windows
+// backslash path arriving here still resolves against a Windows-host testsshd,
+// and a POSIX path is the native case for a real Linux remote.
+func (c *Client) MkdirAll(remotePath string) error {
+	sc, err := sftp.NewClient(c.c)
+	if err != nil {
+		return fmt.Errorf("sftp client: %w", err)
+	}
+	defer sc.Close()
+	return sc.MkdirAll(filepath.ToSlash(remotePath))
+}
+
 // countingWriter is a minimal io.Writer that counts bytes and flags truncation at
 // cap WITHOUT retaining content (upload streams to the remote; nothing to keep,
 // unlike cappedBuffer which retains the prefix). The cap is advisory within a

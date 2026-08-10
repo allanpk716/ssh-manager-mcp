@@ -83,3 +83,51 @@ func TestUpload(t *testing.T) {
 		t.Fatalf("capped: Files=0, want at least the file that tripped the cap (res=%+v)", res)
 	}
 }
+
+// TestClientMkdirAll verifies the broker MkdirAll helper creates nested parents
+// over SFTP. It is the primitive UploadForProfile uses to ensure remotePath's
+// parent exists before a transfer (T1 carry: Client.Upload uses sftp.Mkdir +
+// sftp.Create, both of which require the parent to pre-exist). Covers: nested
+// multi-level creation, idempotency on an existing dir, the conflict case
+// (path occupied by a regular file → error), and a composition check
+// (MkdirAll-the-parent then Upload-into-it then Download-verify round-trip).
+func TestClientMkdirAll(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	base := t.TempDir()
+
+	// (1) Nested multi-level creation: base/a/b/c — none exist yet.
+	nested := filepath.Join(base, "a", "b", "c")
+	if err := c.MkdirAll(nested); err != nil {
+		t.Fatalf("MkdirAll nested: %v", err)
+	}
+	// (2) Idempotency: re-MkdirAll on the now-existing dir is a no-op.
+	if err := c.MkdirAll(nested); err != nil {
+		t.Fatalf("MkdirAll on existing dir: %v", err)
+	}
+	// (3) Composition: Upload a file INTO the freshly-created dir, then verify
+	// via Download — proves MkdirAll unblocks a subsequent Client.Upload (the
+	// exact composition UploadForProfile performs at the MCP boundary).
+	file := filepath.Join(nested, "marker.txt")
+	local := filepath.Join(t.TempDir(), "src.txt")
+	if err := os.WriteFile(local, []byte("mkdir-ok\n"), 0644); err != nil {
+		t.Fatalf("write local: %v", err)
+	}
+	if _, err := c.Upload(local, file, 0); err != nil {
+		t.Fatalf("Upload into MkdirAll'd dir: %v", err)
+	}
+	g, err := c.Download(file, 0)
+	if err != nil {
+		t.Fatalf("verify Download: %v", err)
+	}
+	if g.Content != "mkdir-ok\n" {
+		t.Fatalf("round-trip = %q, want %q", g.Content, "mkdir-ok\n")
+	}
+	// (4) Conflict: MkdirAll on a path occupied by a regular file → error.
+	if err := c.MkdirAll(file); err == nil {
+		t.Fatal("MkdirAll on a regular file: want error, got nil")
+	}
+}

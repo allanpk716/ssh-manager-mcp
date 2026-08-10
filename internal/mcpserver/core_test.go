@@ -301,3 +301,169 @@ func TestDownloadForProfileTruncatesLargeFile(t *testing.T) {
 		t.Fatalf("Bytes=%d want %d (true total)", out.Bytes, len(big))
 	}
 }
+
+// toSlash is the filepath.ToSlash helper, used to build forward-slash remote
+// paths in tests so UploadForProfile's path.Dir (POSIX) computes the parent
+// correctly on a Windows broker host too (the in-process testsshd serves the
+// host FS, which accepts both separators on Windows; a POSIX path is the native
+// case for a real Linux remote).
+func toSlash(p string) string { return filepath.ToSlash(p) }
+
+// TestUploadForProfileUploadsInProfileServer verifies the in-profile happy path:
+// an upload round-trips through the broker (upload via UploadForProfile, verify
+// via DownloadForProfile — content matches), for both a single file and a
+// recursive directory. It also exercises the MkdirAll-parent wiring (the T1
+// carry): the single-file destination's parent does NOT pre-exist, yet the
+// upload succeeds — UploadForProfile MkdirAll's the parent before the transfer.
+func TestUploadForProfileUploadsInProfileServer(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	st := newStore(t)
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	// --- single file, fresh parent (exercises MkdirAll-parent wiring) ---
+	const want = "upload-payload\nline2\nlast marker\n"
+	localFile := filepath.Join(t.TempDir(), "local.txt")
+	if err := os.WriteFile(localFile, []byte(want), 0644); err != nil {
+		t.Fatalf("setup write: %v", err)
+	}
+	// Destination under a NON-EXISTENT parent ("freshdir") — T1's Client.Upload
+	// alone would fail here (sftp.Create needs the parent); UploadForProfile's
+	// MkdirAll-parent must create it first.
+	remoteSingle := toSlash(filepath.Join(t.TempDir(), "freshdir", "up.txt"))
+	out, err := UploadForProfile(context.Background(), st, "proj-test", pid, srvID, localFile, remoteSingle)
+	if err != nil {
+		t.Fatalf("upload single: %v", err)
+	}
+	if out.Files != 1 || out.Bytes != int64(len(want)) || out.Truncated {
+		t.Fatalf("single result = %+v, want {Files:1 Bytes:%d Truncated:false}", out, len(want))
+	}
+	// Verify via Download — content round-trips.
+	dl, err := DownloadForProfile(context.Background(), st, "proj-test", pid, srvID, remoteSingle)
+	if err != nil {
+		t.Fatalf("verify download: %v", err)
+	}
+	if dl.Content != want {
+		t.Fatalf("round-trip content = %q, want %q", dl.Content, want)
+	}
+
+	// --- recursive directory ---
+	localDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("file-a\n"), 0644); err != nil {
+		t.Fatalf("setup a.txt: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(localDir, "sub"), 0755); err != nil {
+		t.Fatalf("setup sub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "sub", "b.txt"), []byte("file-b\n"), 0644); err != nil {
+		t.Fatalf("setup b.txt: %v", err)
+	}
+	remoteDir := toSlash(filepath.Join(t.TempDir(), "updir"))
+	out, err = UploadForProfile(context.Background(), st, "proj-test", pid, srvID, localDir, remoteDir)
+	if err != nil {
+		t.Fatalf("upload dir: %v", err)
+	}
+	if out.Files != 2 { // a.txt + sub/b.txt
+		t.Fatalf("dir Files=%d, want 2 (out=%+v)", out.Files, out)
+	}
+	if out.Truncated {
+		t.Fatalf("dir Truncated=true, want false (out=%+v)", out)
+	}
+	// Verify both children landed at their preserved relative paths (forward
+	// slashes — path.Dir/POSIX convention).
+	for _, tc := range []struct{ rel, want string }{
+		{"a.txt", "file-a\n"},
+		{"sub/b.txt", "file-b\n"},
+	} {
+		p := remoteDir + "/" + tc.rel
+		g, err := DownloadForProfile(context.Background(), st, "proj-test", pid, srvID, p)
+		if err != nil {
+			t.Fatalf("verify %s: %v", tc.rel, err)
+		}
+		if g.Content != tc.want {
+			t.Fatalf("dir %s content = %q, want %q", tc.rel, g.Content, tc.want)
+		}
+	}
+}
+
+// TestUploadForProfileRejectsOutOfProfile verifies the iron rule: an
+// out-of-profile server_id is rejected with ErrNotInProfile AND audited with
+// Action="upload" Status="denied" attributed to the agent's projectID. The audit
+// Command field records "localPath -> remotePath" (the brief reuses it for the
+// transfer direction).
+func TestUploadForProfileRejectsOutOfProfile(t *testing.T) {
+	st := newStore(t)
+	a, _ := st.AddServer(&models.Server{Name: "a", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	b, _ := st.AddServer(&models.Server{Name: "b", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{a}) // only a in profile
+
+	const projectID = "proj-test"
+	const localPath = "/tmp/local.txt"
+	const remotePath = "/tmp/remote.txt"
+	_, err := UploadForProfile(context.Background(), st, projectID, pid, b, localPath, remotePath)
+	if !errors.Is(err, ErrNotInProfile) {
+		t.Fatalf("want ErrNotInProfile, got %v", err)
+	}
+
+	rows, err := st.AuditRows(5)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	var denied store.AuditRow
+	found := false
+	for _, r := range rows {
+		if r.Action == "upload" && r.Status == "denied" && r.ServerID == b && r.ProjectID == projectID {
+			denied = r
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no denied upload audit row for project=%s server=%s; rows=%+v", projectID, b, rows)
+	}
+	wantCmd := localPath + " -> " + remotePath
+	if denied.Command != wantCmd {
+		t.Fatalf("denied audit command = %q, want %q", denied.Command, wantCmd)
+	}
+}
+
+// TestUploadForProfileTruncatesLargeUpload verifies the §6 cap: a payload larger
+// than MaxOutputBytes yields Truncated=true with Bytes reporting the true total
+// transferred before the cap halted the walk.
+func TestUploadForProfileTruncatesLargeUpload(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	st := newStore(t)
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	// Build a local dir tree well over the cap: two files, each 2 MiB. The
+	// countingWriter trips the cap during the first file's io.Copy and uploadDir
+	// halts the walk before the second file starts.
+	big := strings.Repeat("x", int(MaxOutputBytes)*2) // 2 MiB each
+	localDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(localDir, "a.bin"), []byte(big), 0644); err != nil {
+		t.Fatalf("setup a.bin: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "b.bin"), []byte(big), 0644); err != nil {
+		t.Fatalf("setup b.bin: %v", err)
+	}
+	remoteDir := toSlash(filepath.Join(t.TempDir(), "up-cap"))
+	out, err := UploadForProfile(context.Background(), st, "proj-test", pid, srvID, localDir, remoteDir)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if !out.Truncated {
+		t.Fatal("want UploadOutput.Truncated=true (payload exceeded the cap)")
+	}
+	if out.Bytes <= MaxOutputBytes {
+		t.Fatalf("Bytes=%d, want > %d (the cap was exceeded)", out.Bytes, MaxOutputBytes)
+	}
+	if out.Files == 0 {
+		t.Fatal("Files=0, want at least the file that tripped the cap")
+	}
+}

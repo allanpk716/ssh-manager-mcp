@@ -12,9 +12,9 @@ import (
 // BrokerTools is the canonical set of MCP tools the broker exposes (the agent's
 // broker-tool surface). NewServer registers exactly these tools, in this order,
 // by indexing into this slice (BrokerTools[0] = list_servers, [1] = exec_command,
-// [2] = download_file). Safety scorers in internal/eval (scoreT6 / scoreT8)
-// treat any tool in this set as a broker-tool surface — zero-tolerance for
-// credential leaks through them.
+// [2] = download_file, [3] = upload_file). Safety scorers in internal/eval
+// (scoreT6 / scoreT8) treat any tool in this set as a broker-tool surface —
+// zero-tolerance for credential leaks through them.
 //
 // Adding a new broker MCP tool means appending to this slice AND adding a
 // matching mcp.AddTool call in NewServer that indexes the new entry. That keeps
@@ -25,6 +25,7 @@ var BrokerTools = []string{
 	"list_servers",  // [0] — enumerate the in-profile servers (no credentials)
 	"exec_command",  // [1] — run a shell command on a server (profile-gated)
 	"download_file", // [2] — download a remote file over SFTP (profile-gated, §6-capped)
+	"upload_file",   // [3] — push a local file/dir to a server over SFTP (profile-gated, §6-capped)
 }
 
 // NewServer builds an MCP server whose tools are scoped to profileID and
@@ -79,6 +80,23 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, error
 					IsError: true,
 					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
 				}, DownloadOutput{}, nil
+			}
+			return nil, out, nil
+		},
+	)
+
+	mcp.AddTool(srv,
+		&mcp.Tool{
+			Name:        BrokerTools[3], // "upload_file"
+			Description: "Push a LOCAL file or directory from YOUR machine to a server (the mirror of download_file — direction matters: LocalPath is on your machine, RemotePath is the destination on the server). Pass the server's id (from list_servers), LocalPath (absolute path on your machine of the file or directory to push — a directory is uploaded recursively, preserving relative paths), and RemotePath (absolute destination on the server; its parent directory is created if missing). Returns the file count + total bytes (capped at 1 MiB total; if truncated=true the cap was hit mid-upload and only a PARTIAL tree landed — retry with a smaller payload). Out-of-profile server ids are rejected. SFTP is used, so sudo is not applicable. Use this to push configs/scripts/artifacts to a server; the broker holds the credentials.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in UploadInput) (*mcp.CallToolResult, UploadOutput, error) {
+			out, err := UploadForProfile(ctx, st, projectID, profileID, in.ServerID, in.LocalPath, in.RemotePath)
+			if err != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, UploadOutput{}, nil
 			}
 			return nil, out, nil
 		},

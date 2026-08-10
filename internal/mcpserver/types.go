@@ -35,6 +35,21 @@ type DownloadOutput struct {
 	Truncated bool   `json:"truncated,omitempty" jsonschema:"true if the file exceeded the size cap and content is only the prefix"`
 }
 
+// UploadInput is the upload_file tool input. LocalPath is read from the broker's
+// (= the agent's) filesystem; RemotePath is the destination on the server.
+type UploadInput struct {
+	ServerID   string `json:"server_id" jsonschema:"server id from list_servers"`
+	LocalPath  string `json:"local_path" jsonschema:"absolute local path (on your machine) of the file or directory to push to the server; a directory is uploaded recursively, preserving relative paths"`
+	RemotePath string `json:"remote_path" jsonschema:"absolute destination path on the server; its parent directory is created if it does not exist"`
+}
+
+// UploadOutput is the upload_file tool output.
+type UploadOutput struct {
+	Files     int   `json:"files" jsonschema:"number of files uploaded (>=1; >1 if local_path was a directory)"`
+	Bytes     int64 `json:"bytes" jsonschema:"total bytes uploaded (may be less than the source size when truncated=true)"`
+	Truncated bool  `json:"truncated,omitempty" jsonschema:"true if the 1 MiB total cap was hit mid-upload (only a partial tree landed — retry with a smaller payload)"`
+}
+
 // ErrNotInProfile is returned when an agent requests a server outside its Profile (iron rule).
 var ErrNotInProfile = errWithString("server is not in your profile — call list_servers to see the servers you may use")
 
