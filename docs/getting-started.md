@@ -193,6 +193,56 @@ agent 会自己：
 
 ---
 
+## 重启 / 关机后，还要做什么吗？（不用——MCP 客户端会自动拉起）
+
+**答：什么都不用做。** ssh-manager-mcp **不是常驻 daemon**——机器重启后，你不需要手动"启动"它。它是 MCP 客户端（Claude Code / Cursor）**按需 spawn 的 stdio 子进程**：重启机器 → 重开 Claude Code → 当你（或 agent）第一次需要用 SSH 工具时，Claude Code 自己会执行 `.mcp.json` 里那条命令把 broker 子进程拉起来。
+
+> 这点和传统的 ssh-agent / vault 不一样——后者是常驻进程，要开机自启（systemd / Windows 服务 / launchd）。本项目**故意不做 daemon**，生命周期完全交给 MCP 客户端管理。所以"重启后要不要启动它"这个问题的答案是：**客户端会替你启动**。
+
+### 重启后会发生什么
+
+```
+开机 → 启动 Claude Code（它读 .mcp.json）
+     → 你让它用 ssh 工具
+     → Claude Code spawn 子进程: ssh-manager mcp --token <TOKEN>
+     → broker 在子进程里跑，stdio 通信
+     → 关掉 Claude Code → 子进程随之退出
+```
+
+重启**不会丢**的东西（都在磁盘 / keychain，不在内存）：
+
+| 东西 | 存哪 | 重启后 |
+|---|---|---|
+| 服务器凭据 / profile / project / 审计日志 | 加密 SQLite `store.db` | ✅ 还在 |
+| 解密 `store.db` 的 master key | OS keychain（Win Credential Manager / Linux Secret Service / macOS Keychain） | ✅ 还在（keychain 本身持久） |
+| `.mcp.json` / token 配置 | 项目目录或用户级配置 | ✅ 还在 |
+
+### 三个"零干预"前提（一次配好，重启后永久成立）
+
+1. **`ssh-manager` 二进制在 PATH**，或 `.mcp.json` 里写了**绝对路径**（Windows 强烈建议绝对路径，见 Step 5）。
+2. **`.mcp.json` 已配好**（项目级或用户级都行），并且别提交 git。
+3. **master key 走 OS keychain**——这是"重启零干预"的根本保证。keychain 模式下 MCP 子进程能自己读到 master key，**你连 `unlock` 都不用再跑**（见上文"日常"：`unlock` 只需第一次跑）。
+
+三点满足后，日常就是：**开机 → 开 Claude Code → 用**。没有任何"启动本程序"这一步。
+
+### 唯一例外：headless / 无 keychain 环境
+
+如果操作端没有 OS keychain，master key 靠 `SSHMGR_MASTERKEY_HEX` 环境变量。重启后若这个变量不在 MCP 子进程能继承的环境里，你会撞到 `vault locked: run ssh-manager unlock`。解决：把 `export SSHMGR_MASTERKEY_HEX=...` 放进 `~/.bashrc`，**或**写死在 `.mcp.json` 的 `env` 字段——任选一种，重启后照样零干预。详见下方"无 keychain 环境"。
+
+### 不用真重启也能验证
+
+模拟一次"刚开机、啥都没起"的场景，确认链路健康：
+
+```bash
+ssh-manager servers ls          # 能列出 = store.db + master key 都健康（数据不依赖任何在跑的进程）
+ssh-manager projects ls         # status=active
+ssh-manager mcp --token <你的token>   # 手动跑客户端会跑的那条命令；不报 vault locked、停在等 stdin = 子进程能独立起来（Ctrl+C 退出）
+```
+
+两步都过 = 重启后 Claude Code 拉它起来时也会一样过——因为**子进程跑的就是同一条命令，读的是同一份磁盘文件**。
+
+---
+
 ## 无 keychain 环境（headless Linux 等）
 
 如果操作端没有可用的 OS keychain / Secret Service，`unlock` 会走 passphrase 回退。此时：

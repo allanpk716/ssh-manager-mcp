@@ -46,4 +46,5 @@
 
 - 命令记不全：每个子命令都支持 `--help`，例如 `ssh-manager servers add --help`、`ssh-manager projects --help`。
 - 报错“vault locked”：回到 [getting-started.md](./getting-started.md) 的“Step 1：解锁保险柜”一节。
+- 机器重启后还要做什么吗？：**不用启动任何东西**——它不是 daemon，MCP 客户端（Claude Code / Cursor）会在你需要时自动 spawn 它。见 [getting-started.md](./getting-started.md) 的“重启 / 关机后”一节。
 - agent 报“server is not in your profile”：说明你让它操作的 server 不在它 project 绑定的 profile 里，见 [agent-access.md](./agent-access.md) 的“隔离与排错”。
