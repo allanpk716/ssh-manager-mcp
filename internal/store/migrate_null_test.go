@@ -15,10 +15,10 @@ import (
 // (servers.go) scans those columns into a Go string, and database/sql errors with
 // "converting NULL to string is unsupported" — making every upgraded vault unreadable.
 //
-// The fix ships DEFAULT ” on both the schema and ALTER paths, plus a back-fill UPDATE
+// The fix ships DEFAULT '' on both the schema and ALTER paths, plus a back-fill UPDATE
 // for DBs already bitten by the buggy release. This test pins BOTH paths:
 //   - "added-by-migrate": old-shape DB lacks the columns; Open adds them via ADD COLUMN
-//     ... DEFAULT ” and the pre-existing row reads back with "" metadata.
+//     ... DEFAULT '' and the pre-existing row reads back with "" metadata.
 //   - "back-fill-null": already-buggy DB has the columns but SQL NULL in them; Open's
 //     back-fill UPDATE repairs them in place and the row reads back with "" metadata.
 func TestMigrateOldRowReadable(t *testing.T) {
@@ -141,7 +141,7 @@ CREATE TABLE projects (
 }
 
 // assertEmptyMetadata fails the test unless all six structured-metadata fields read back
-// as the empty string — the value the DEFAULT ” / back-fill guarantees in place of SQL NULL.
+// as the empty string — the value the DEFAULT '' / back-fill guarantees in place of SQL NULL.
 func assertEmptyMetadata(t *testing.T, got *models.Server) {
 	t.Helper()
 	for _, f := range []struct{ name, val string }{
