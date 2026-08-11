@@ -40,6 +40,15 @@ func TestCacheTokens_AddLsRevoke(t *testing.T) {
 		t.Fatalf("ls missing laptop/active: %s", lsOut.String())
 	}
 
+	// Core safety: ls must NEVER emit the one-time code (only the prefix).
+	// Extract the code from the add output (it trails `--token ` on the last line)
+	// and assert it does not appear in ls output.
+	addLines := strings.Split(strings.TrimSpace(addOut.String()), "\n")
+	code := strings.TrimSpace(strings.Split(addLines[len(addLines)-1], "--token ")[1])
+	if strings.Contains(lsOut.String(), code) {
+		t.Fatalf("ls leaked the one-time code: %s", lsOut.String())
+	}
+
 	// revoke → ls shows revoked
 	mustCli("cache-tokens", "revoke", "laptop")
 	lsOut2 := mustCli("cache-tokens", "ls")
