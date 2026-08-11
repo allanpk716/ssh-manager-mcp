@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -248,5 +249,49 @@ func TestUpdateServer(t *testing.T) {
 	// UpdateServer on a missing id reports not-found.
 	if err := s.UpdateServer(&models.Server{ID: "nonexistent", Name: "x", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid}); err == nil {
 		t.Fatal("UpdateServer missing id should error")
+	}
+}
+
+func TestServerFieldSizeCap(t *testing.T) {
+	s := newTestStore(t)
+	cid := mustCred(t, s, models.CredPassword, "pw")
+
+	// Exactly 4096 bytes is allowed.
+	atLimit := strings.Repeat("x", 4096)
+	id, err := s.AddServer(&models.Server{
+		Name: "ok", Host: "h", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: cid, Caveats: atLimit,
+	})
+	if err != nil {
+		t.Fatalf("at-limit field should be accepted: %v", err)
+	}
+
+	// 4097 bytes is rejected with a field-named error.
+	overLimit := strings.Repeat("x", 4097)
+	_, err = s.AddServer(&models.Server{
+		Name: "big", Host: "h", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: cid, Caveats: overLimit,
+	})
+	if err == nil {
+		t.Fatal("over-limit caveats should be rejected")
+	}
+	if !strings.Contains(err.Error(), "caveats") {
+		t.Fatalf("error should name the field, got: %v", err)
+	}
+
+	// UpdateServer also enforces the cap.
+	loaded, _ := s.GetServer(id)
+	loaded.Hardware = strings.Repeat("h", 4097)
+	if err := s.UpdateServer(loaded); err == nil {
+		t.Fatal("UpdateServer over-limit hardware should be rejected")
+	}
+
+	// Per-tag cap.
+	_, err = s.AddServer(&models.Server{
+		Name: "taggy", Host: "h", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: cid, Tags: []string{strings.Repeat("t", 4097)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "tag") {
+		t.Fatalf("over-limit tag should be rejected with a tag-named error, got: %v", err)
 	}
 }

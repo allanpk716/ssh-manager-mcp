@@ -14,6 +14,9 @@ func (s *Store) AddServer(srv *models.Server) (string, error) {
 	ts := now()
 	tagsJSON, _ := json.Marshal(srv.Tags)
 	sudo := nullableString(srv.SudoCredentialID)
+	if err := validateServerText(srv); err != nil {
+		return "", err
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -32,6 +35,9 @@ func (s *Store) AddServer(srv *models.Server) (string, error) {
 func (s *Store) UpdateServer(srv *models.Server) error {
 	tagsJSON, _ := json.Marshal(srv.Tags)
 	sudo := nullableString(srv.SudoCredentialID)
+	if err := validateServerText(srv); err != nil {
+		return err
+	}
 	res, err := s.db.Exec(
 		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,tags=?,description=?,location=?,hardware=?,services=?,role=?,caveats=?,updated_at=? WHERE id=?`,
 		srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description,
@@ -118,4 +124,33 @@ func nullableString(s string) any {
 		return nil
 	}
 	return s
+}
+
+// maxServerTextFieldBytes caps each free-text server field and each individual tag.
+// All of these fields flow into the agent's context on every list_servers call, so an
+// uncapped field is a context-window DoS vector (intentional or accidental). Bytes —
+// not runes — because bytes are the real context-budget boundary.
+const maxServerTextFieldBytes = 4096
+
+// validateServerText enforces the per-field/per-tag byte cap. Called by AddServer and
+// UpdateServer before the write. No content/charset validation (free text); no tag count limit.
+func validateServerText(srv *models.Server) error {
+	for _, f := range []struct{ name, val string }{
+		{"description", srv.Description},
+		{"location", srv.Location},
+		{"hardware", srv.Hardware},
+		{"services", srv.Services},
+		{"role", srv.Role},
+		{"caveats", srv.Caveats},
+	} {
+		if len(f.val) > maxServerTextFieldBytes {
+			return fmt.Errorf("server field %q exceeds %d-byte limit (%d)", f.name, maxServerTextFieldBytes, len(f.val))
+		}
+	}
+	for i, tag := range srv.Tags {
+		if len(tag) > maxServerTextFieldBytes {
+			return fmt.Errorf("server tag[%d] exceeds %d-byte limit (%d)", i, maxServerTextFieldBytes, len(tag))
+		}
+	}
+	return nil
 }
