@@ -8,6 +8,9 @@ import (
 
 // SetCredential encrypts and stores a credential, returning its id.
 func (s *Store) SetCredential(c *models.Credential) (string, error) {
+	if s.readOnly {
+		return "", ErrReadOnly
+	}
 	secretBlob, err := seal(s.masterKey, c.Secret)
 	if err != nil {
 		return "", err

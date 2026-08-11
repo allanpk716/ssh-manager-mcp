@@ -9,6 +9,9 @@ import (
 
 // AddProject creates a project bound to profileID, returning the project id and the ONE-TIME token plaintext.
 func (s *Store) AddProject(name, profileID string) (string, string, error) {
+	if s.readOnly {
+		return "", "", ErrReadOnly
+	}
 	token, err := GenerateToken()
 	if err != nil {
 		return "", "", err
@@ -124,6 +127,9 @@ func (s *Store) GetProject(id string) (*models.Project, error) {
 // SetProjectStatus sets the lifecycle status (active/disabled/revoked). VerifyToken reads
 // this on the next mcp spawn. Errors if the id is absent.
 func (s *Store) SetProjectStatus(id string, status models.ProjectStatus) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	res, err := s.db.Exec(`UPDATE projects SET status=?, updated_at=? WHERE id=?`, string(status), now(), id)
 	if err != nil {
 		return err
@@ -138,6 +144,9 @@ func (s *Store) SetProjectStatus(id string, status models.ProjectStatus) error {
 // plaintext token. The old token stops verifying immediately — its hash is overwritten, so
 // VerifyToken no longer matches it.
 func (s *Store) RotateProject(id string) (string, error) {
+	if s.readOnly {
+		return "", ErrReadOnly
+	}
 	token, err := GenerateToken()
 	if err != nil {
 		return "", err

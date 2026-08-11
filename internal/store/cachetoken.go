@@ -13,6 +13,9 @@ import (
 // profile binding) and never carried in a Snapshot. The plaintext is shown only here — store
 // only the hash, exactly like project tokens.
 func (s *Store) AddCacheToken(name string) (string, string, error) {
+	if s.readOnly {
+		return "", "", ErrReadOnly
+	}
 	token, err := GenerateToken()
 	if err != nil {
 		return "", "", err
@@ -101,6 +104,9 @@ func (s *Store) ListCacheTokens() ([]*models.CacheToken, error) {
 // RevokeCacheToken permanently revokes a device code by name (Lazy: next /snapshot fetch rejected).
 // Errors if the name is absent.
 func (s *Store) RevokeCacheToken(name string) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	res, err := s.db.Exec(`UPDATE cache_tokens SET status=?, updated_at=? WHERE name=?`, string(models.CacheTokenRevoked), now(), name)
 	if err != nil {
 		return err
@@ -114,6 +120,9 @@ func (s *Store) RevokeCacheToken(name string) error {
 // TouchCacheToken bumps last_pull_at for id (called by /snapshot on a successful fetch).
 // Errors if the id is absent.
 func (s *Store) TouchCacheToken(id string) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	res, err := s.db.Exec(`UPDATE cache_tokens SET last_pull_at=? WHERE id=?`, now(), id)
 	if err != nil {
 		return err
