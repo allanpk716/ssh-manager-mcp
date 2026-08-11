@@ -13,12 +13,20 @@ import (
 // keychain is the master-key source (default real OS keychain; tests override).
 var keychain store.KeyProvider = store.KeyringKeyProvider{}
 
-// passphrasePrompt reads a passphrase (default terminal; tests override).
-var passphrasePrompt = func() ([]byte, error) {
-	fmt.Fprint(os.Stderr, "Enter passphrase to unlock vault: ")
+// readPassphrase prints prompt to stderr and reads a line from the terminal
+// without echo. Shared by unlock / export / import — the single place that
+// knows how to talk to the terminal for a passphrase.
+func readPassphrase(prompt string) ([]byte, error) {
+	fmt.Fprint(os.Stderr, prompt)
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
 	return b, err
+}
+
+// passphrasePrompt reads a passphrase (default terminal; tests override).
+// Shared seam — export and import reuse it for their first prompt.
+var passphrasePrompt = func() ([]byte, error) {
+	return readPassphrase("Enter passphrase to unlock vault: ")
 }
 
 func newUnlockCmd() *cobra.Command {
