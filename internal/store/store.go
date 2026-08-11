@@ -112,24 +112,42 @@ func migrate(db *sql.DB) error {
 	}
 	// Plan 8: owner-notes (servers.description) + project lifecycle (projects.status).
 	// CREATE TABLE IF NOT EXISTS does not evolve existing tables, so these ship as guarded
-	// ALTER TABLE migrations; ADD COLUMN with NOT NULL DEFAULT back-fills existing rows.
-	if err := addColumnIfMissing(db, "servers", "description", "TEXT"); err != nil {
+	// ALTER TABLE migrations; ADD COLUMN with DEFAULT back-fills existing rows (NULL would
+	// break scanServer, which scans these into a Go string — see migrate_null_test.go).
+	if err := addColumnIfMissing(db, "servers", "description", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(db, "servers", "location", "TEXT"); err != nil {
+	if err := addColumnIfMissing(db, "servers", "location", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(db, "servers", "hardware", "TEXT"); err != nil {
+	if err := addColumnIfMissing(db, "servers", "hardware", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(db, "servers", "services", "TEXT"); err != nil {
+	if err := addColumnIfMissing(db, "servers", "services", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(db, "servers", "role", "TEXT"); err != nil {
+	if err := addColumnIfMissing(db, "servers", "role", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(db, "servers", "caveats", "TEXT"); err != nil {
+	if err := addColumnIfMissing(db, "servers", "caveats", "TEXT DEFAULT ''"); err != nil {
 		return err
+	}
+	// Repair any rows that already carry NULL in these columns. Pre-DEFAULT migrations
+	// (the buggy release) left existing rows with SQL NULL here, and rows inserted after
+	// a downgrade would too. Idempotent: UPDATE ... WHERE IS NULL is a no-op once clean.
+	// Gated on the table existing: migrate() runs BEFORE initSchema on a fresh DB, so the
+	// servers table may not yet exist — in that case skip (initSchema creates it WITH the
+	// DEFAULT '' baked in, so no back-fill is ever needed there).
+	serversExists, err := tableExists(db, "servers")
+	if err != nil {
+		return err
+	}
+	if serversExists {
+		for _, col := range []string{"description", "location", "hardware", "services", "role", "caveats"} {
+			if _, err := db.Exec(fmt.Sprintf("UPDATE servers SET %s = '' WHERE %s IS NULL", col, col)); err != nil {
+				return err
+			}
+		}
 	}
 	if err := addColumnIfMissing(db, "projects", "status", "TEXT NOT NULL DEFAULT 'active'"); err != nil {
 		return err
@@ -171,6 +189,21 @@ func addColumnIfMissing(db *sql.DB, table, column, decl string) error {
 	return err
 }
 
+// tableExists reports whether a table is present in the DB. Used by migrate() to gate
+// back-fill UPDATEs that would otherwise error on a fresh DB (where initSchema, which
+// runs after migrate(), has not yet created the table).
+func tableExists(db *sql.DB, table string) (bool, error) {
+	var tmp int
+	err := db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&tmp)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS credentials (
   id TEXT PRIMARY KEY,
@@ -190,12 +223,12 @@ CREATE TABLE IF NOT EXISTS servers (
   credential_id TEXT NOT NULL REFERENCES credentials(id),
   sudo_credential_id TEXT,
   tags TEXT,
-  description TEXT,
-  location TEXT,
-  hardware TEXT,
-  services TEXT,
-  role TEXT,
-  caveats TEXT,
+  description TEXT DEFAULT '',
+  location TEXT DEFAULT '',
+  hardware TEXT DEFAULT '',
+  services TEXT DEFAULT '',
+  role TEXT DEFAULT '',
+  caveats TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
