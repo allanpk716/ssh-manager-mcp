@@ -150,6 +150,7 @@ func cachePullCmd() *cobra.Command {
 			// Atomic write: temp + rename. A failed/interrupted pull never corrupts the prior cache.
 			tmp := bin + ".tmp"
 			if err := os.WriteFile(tmp, blob, 0o600); err != nil {
+				os.Remove(tmp)
 				return err
 			}
 			if err := os.Rename(tmp, bin); err != nil {
