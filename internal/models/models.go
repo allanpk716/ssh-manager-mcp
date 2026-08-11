@@ -88,3 +88,26 @@ type Project struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
+
+// CacheTokenStatus is the lifecycle state of a device-auth-code (for offline cache pull).
+// Only active admits its token at VerifyCacheToken. Lazy: status takes effect on the next pull.
+type CacheTokenStatus string
+
+const (
+	CacheTokenActive  CacheTokenStatus = "active"  // default; token admitted for /snapshot
+	CacheTokenRevoked CacheTokenStatus = "revoked" // permanent; token rejected (device lost/rotated)
+)
+
+// CacheToken is a per-device authorization code for offline-cache pulls. It is OWNER-level
+// (not scoped to a profile), disjoint from project tokens, and NEVER carried in a Snapshot
+// (server-side only). TokenHash/Salt verify the presented code; the plaintext is shown once
+// at AddCacheToken and never stored. LastPullAt is zero until the device's first successful pull.
+type CacheToken struct {
+	ID          string
+	Name        string
+	TokenPrefix string
+	Status      CacheTokenStatus
+	LastPullAt  time.Time // zero value if last_pull_at was NULL (never pulled)
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
