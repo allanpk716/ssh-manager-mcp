@@ -1,10 +1,12 @@
 package mcpserver
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/store"
 )
@@ -106,5 +108,24 @@ func TestHTTPHandler_AuthGate(t *testing.T) {
 				t.Fatalf("%s: status = %d, want %d (body=%q)", c.name, rr.Code, c.want, rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestRunServe_ShutdownOnCancel(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- RunServe(ctx, st, "127.0.0.1:0", "", "") }()
+
+	cancel() // RunServe must exit cleanly regardless of timing
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunServe returned %v; want nil on ctx cancel", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunServe did not shut down within 2s")
 	}
 }

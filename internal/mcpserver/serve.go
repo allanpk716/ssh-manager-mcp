@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -114,4 +115,35 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 	}
 	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, nil)
 	return r.requireProjectToken(mcpHandler)
+}
+
+// RunServe runs the authenticated streamable-HTTP MCP server until ctx is
+// cancelled (SIGINT/SIGTERM, wired by the caller). The listener is created
+// synchronously so bind errors surface before serving. TLS is used when
+// tlsCert != "". Returns nil on clean ctx-cancelled shutdown.
+func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string) error {
+	runner := NewServeRunner(st)
+	defer runner.Close()
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Handler: runner.HTTPHandler()}
+
+	errCh := make(chan error, 1)
+	go func() {
+		if tlsCert != "" {
+			errCh <- srv.ServeTLS(ln, tlsCert, tlsKey)
+		} else {
+			errCh <- srv.Serve(ln)
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return srv.Shutdown(context.Background())
+	case err := <-errCh:
+		return err
+	}
 }
