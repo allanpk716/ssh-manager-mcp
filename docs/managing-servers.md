@@ -24,15 +24,17 @@
 ssh-manager servers ls
 ```
 
-输出每行：`name  id  user@host:port  [sudo|-]  备注前缀`。例如：
+输出每行：`name  id  user@host:port  [sudo|-]  (role|-)  · <special-handling 前 ~40 字符>|-`。例如：
 
 ```
-gpu              <uuid>              deploy@192.0.2.10:22 [sudo] 8x A100 80GB, CUDA 12, 训练专...
-db               <uuid>              pguser@10.0.0.5:22 [-]     -
+gpu              <uuid>              deploy@192.0.2.10:22 [sudo] (prod train) · do not reboot 02-03:00; failover is m...
+db               <uuid>              pguser@10.0.0.5:22 [-] (prod pg primary) · -
 ```
 
-- `[sudo]` 表示这台机器给了 sudo 密码（agent 看到 `has_sudo=true`）；`[-` 表示没有。
-- 备注会被截断到约 40 字符。**密码 / 私钥永远不会出现在任何列表里。**
+- `[sudo]` 表示这台机器给了 sudo 密码（agent 看到 `has_sudo=true`）；`[-]` 表示没有。
+- `(role)` 来自 `--role`（这台机器的用途）；空则显示 `-`。
+- `·` 后面是 `--special-handling`（Caveats）的截断预览——给 agent 看的操作注意事项，约 40 字符截断；空则 `-`。其余结构化字段（location / hardware / services / description）不在 ls 行上，agent 通过 `list_servers` 看全。
+- **密码 / 私钥永远不会出现在任何列表里。**
 
 ---
 
@@ -50,6 +52,12 @@ ssh-manager servers add \
   [--sudo-password '<sudo 密码>']    # 给了才支持 sudo=true
   [--tags prod,gpu]                 # 可选，逗号分隔
   [--description '<你的备注>']        # 可选，给 agent 看的自由文本
+  # 结构化字段（都可选，都会展示给 agent；详见下表）：
+  [--location '<部署位置>']           # e.g. dc2 rack14 / us-east-1a
+  [--hardware '<硬件配置>']           # e.g. 8x A100 80GB, 1TB RAM
+  [--services '<跑了什么>']           # e.g. postgres primary, prometheus
+  [--role '<这台机器的用途>']          # e.g. prod pg primary
+  [--special-handling '<注意事项>']    # agent 行动前必读（Caveats 字段）
 ```
 
 ### 必填 vs 选填
@@ -105,6 +113,11 @@ ssh-manager servers edit <name> [flags...]
 | `--user <用户>` | 改登录用户 |
 | `--description '<备注>'` | 改 / 加备注 |
 | `--tags a,b,c` | **替换**整组 tags（不是追加） |
+| `--location '<部署位置>'` | 改 / 加 location（结构化字段，展示给 agent） |
+| `--hardware '<硬件配置>'` | 改 / 加 hardware |
+| `--services '<跑了什么>'` | 改 / 加 services |
+| `--role '<用途>'` | 改 / 加 role |
+| `--special-handling '<注意事项>'` | 改 / 加 Caveats；传 `--special-handling ""` 清空 |
 | `--password '<新密码>'` | 切换到 / 替换密码认证（会发新凭据） |
 | `--key <私钥路径> [--key-passphrase '<口令>']` | 切换到 / 替换密钥认证 |
 | `--sudo-password '<新sudo密码>'` | 设 / 换 sudo 密码 |
