@@ -66,8 +66,10 @@ func hasColumn(t *testing.T, db *sql.DB, table, col string) bool {
 // TestFreshSchemaHasNewColumns: a brand-new DB (via Open → initSchema) has both columns.
 func TestFreshSchemaHasNewColumns(t *testing.T) {
 	s := newTestStore(t)
-	if !hasColumn(t, s.db, "servers", "description") {
-		t.Fatal("fresh servers table missing description column")
+	for _, col := range []string{"description", "location", "hardware", "services", "role", "caveats"} {
+		if !hasColumn(t, s.db, "servers", col) {
+			t.Fatalf("fresh servers table missing %s column", col)
+		}
 	}
 	if !hasColumn(t, s.db, "projects", "status") {
 		t.Fatal("fresh projects table missing status column")
@@ -93,8 +95,10 @@ func TestMigrateAddsColumnsToOldShape(t *testing.T) {
 		t.Fatalf("Open after migrate: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	if !hasColumn(t, s.db, "servers", "description") {
-		t.Fatal("migrate did not add servers.description")
+	for _, col := range []string{"description", "location", "hardware", "services", "role", "caveats"} {
+		if !hasColumn(t, s.db, "servers", col) {
+			t.Fatalf("migrate did not add servers.%s", col)
+		}
 	}
 	if !hasColumn(t, s.db, "projects", "status") {
 		t.Fatal("migrate did not add projects.status")
