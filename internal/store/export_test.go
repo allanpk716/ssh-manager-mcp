@@ -1,0 +1,151 @@
+package store
+
+import (
+	"bytes"
+	"testing"
+
+	"ssh-manager-mcp/internal/models"
+)
+
+// TestExportSnapshot_CapturesAllTables seeds one of each row kind, exports,
+// and asserts the DTO carries every row with DECRYPTED credential plaintext.
+func TestExportSnapshot_CapturesAllTables(t *testing.T) {
+	s := newTestStore(t) // store_test.go:11 — fresh store w/ random 32-byte master key
+
+	// seed: profile, server (+ its credential), grant, project (hash retained in DB), host key, audit row
+	credID, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("s3cr3t")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// (AddServer via the existing method is fine for SEEDING — it generates ids, which is what we want here)
+	srv := &models.Server{Name: "gpu", Host: "192.0.2.10", Port: 22, User: "deploy",
+		AuthMethod: models.AuthPassword, CredentialID: credID, Tags: []string{"prod"}}
+	srvID, err := s.AddServer(srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profID, err := s.AddProfile("team-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantServers(profID, []string{srvID}); err != nil {
+		t.Fatal(err)
+	}
+	projID, _, err := s.AddProject("my-agent", profID) // plaintext token discarded here
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveHostKey("192.0.2.10", 22, []byte("fake-host-key-blob")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteAudit(AuditRow{Action: "exec", ProjectID: projID, ServerID: srvID, Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := s.ExportSnapshot()
+	if err != nil {
+		t.Fatalf("ExportSnapshot: %v", err)
+	}
+	if snap.Version != 1 {
+		t.Errorf("Version = %d, want 1", snap.Version)
+	}
+	if len(snap.Credentials) != 1 || !bytes.Equal(snap.Credentials[0].Secret, []byte("s3cr3t")) {
+		t.Errorf("credentials not captured/decrypted: %+v", snap.Credentials)
+	}
+	if len(snap.Servers) != 1 || snap.Servers[0].Name != "gpu" {
+		t.Errorf("servers not captured: %+v", snap.Servers)
+	}
+	if len(snap.Profiles) != 1 || snap.Profiles[0].Name != "team-a" {
+		t.Errorf("profiles not captured: %+v", snap.Profiles)
+	}
+	if len(snap.Grants) != 1 || snap.Grants[0].ProfileID != profID || snap.Grants[0].ServerID != srvID {
+		t.Errorf("grants not captured: %+v", snap.Grants)
+	}
+	// CRITICAL: token_hash/salt ARE captured (the whole point — raw SQL, not ListProjects)
+	if len(snap.Projects) != 1 || len(snap.Projects[0].TokenHash) == 0 || len(snap.Projects[0].TokenSalt) == 0 {
+		t.Errorf("projects hash/salt not captured: %+v", snap.Projects)
+	}
+	if len(snap.HostKeys) != 1 || snap.HostKeys[0].HostPort != "192.0.2.10:22" {
+		t.Errorf("host_keys not captured: %+v", snap.HostKeys)
+	}
+	if len(snap.Audit) != 1 || snap.Audit[0].Action != "exec" {
+		t.Errorf("audit not captured: %+v", snap.Audit)
+	}
+}
+
+// TestImportSnapshot_RoundTrip_CrossMasterKey exports from store A (mk1), imports
+// into a SECOND store B with a DIFFERENT master key, and asserts every table
+// matches AND the original project plaintext token still validates on B.
+func TestImportSnapshot_RoundTrip_CrossMasterKey(t *testing.T) {
+	a := newTestStore(t) // mk1
+
+	// seed A: one credential, one server (sudo too, to exercise SudoCredentialID),
+	// one profile + grant, one project (capture the plaintext token!), one host key, one audit row.
+	credID, _ := a.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw-A")})
+	sudoID, _ := a.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("sudo-A")})
+	srvID, _ := a.AddServer(&models.Server{Name: "gpu", Host: "192.0.2.10", Port: 22, User: "deploy",
+		AuthMethod: models.AuthPassword, CredentialID: credID, SudoCredentialID: sudoID, Tags: []string{"prod"}, Description: "box"})
+	profID, _ := a.AddProfile("team-a")
+	a.GrantServers(profID, []string{srvID})
+	projID, token, err := a.AddProject("my-agent", profID) // keep `token` — the proof
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SaveHostKey("192.0.2.10", 22, []byte("hk-blob"))
+	a.WriteAudit(AuditRow{Action: "exec", ProjectID: projID, ServerID: srvID, Status: "ok"})
+
+	snap, err := a.ExportSnapshot()
+	if err != nil {
+		t.Fatalf("export A: %v", err)
+	}
+
+	// B: fresh EMPTY store with a DIFFERENT master key (newTestStore mints a new random key).
+	b := newTestStore(t)
+
+	if err := b.ImportSnapshot(snap); err != nil {
+		t.Fatalf("import into B: %v", err)
+	}
+
+	// servers match (same id — proves id-preserving insert)
+	got, err := b.GetServer(srvID)
+	if err != nil || got == nil || got.Name != "gpu" || got.Host != "192.0.2.10" || got.SudoCredentialID != sudoID {
+		t.Fatalf("server mismatch on B: got=%+v err=%v", got, err)
+	}
+	// credential re-sealed under B's key AND decrypts to the original plaintext
+	gc, err := b.GetCredential(credID)
+	if err != nil || gc == nil || string(gc.Secret) != "pw-A" {
+		t.Fatalf("credential not re-sealed/decrypted under B's key: %+v err=%v", gc, err)
+	}
+	// grants + profiles
+	if ids, _ := b.ServersForProfile(profID); len(ids) != 1 || ids[0] != srvID {
+		t.Fatalf("grants not restored on B: %v", ids)
+	}
+	// host keys
+	hk, _ := b.GetHostKey("192.0.2.10", 22)
+	if !bytes.Equal(hk, []byte("hk-blob")) {
+		t.Fatalf("host key not restored: %v", hk)
+	}
+	// THE PROOF — original plaintext token from A still validates on B (hash preserved verbatim)
+	pj, err := b.VerifyToken(token)
+	if err != nil || pj == nil || pj.ID != projID {
+		t.Fatalf("ORIGINAL TOKEN DOES NOT VALIDATE ON B after import: pj=%+v err=%v", pj, err)
+	}
+}
+
+// TestImportSnapshot_RefusesNonEmpty guards against silent clobber. servers.credential_id
+// is NOT NULL + FK on credentials(id), so the empty-cred seed from the brief's sketch would
+// fail the FK; we seed a real credential on both A and B (the intent — "B has >=1 server" —
+// is unchanged).
+func TestImportSnapshot_RefusesNonEmpty(t *testing.T) {
+	a := newTestStore(t)
+	aCredID, _ := a.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("x")})
+	a.AddServer(&models.Server{Name: "s", Host: "192.0.2.55", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: aCredID})
+	snap, _ := a.ExportSnapshot()
+
+	b := newTestStore(t)
+	bCredID, _ := b.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("y")})
+	b.AddServer(&models.Server{Name: "existing", Host: "192.0.2.56", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: bCredID})
+	if err := b.ImportSnapshot(snap); err != ErrVaultNotEmpty {
+		t.Fatalf("import into non-empty: err=%v, want ErrVaultNotEmpty", err)
+	}
+}

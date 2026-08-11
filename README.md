@@ -109,6 +109,8 @@ ssh-manager projects ls [--all]           # status column; --all includes revoke
 
 **Lifecycle is Lazy:** `rotate` / `disable` / `enable` / `revoke` take effect at the agent's **next `mcp` spawn** (`VerifyToken` admits only `active` projects). A currently-running agent session keeps its access until Claude Code restarts its MCP child — by design (your box, your call). `rotate` keeps the same project id + profile; only the token changes. `revoke` is a soft delete — the token is dead and the project is hidden from `ls`, but the audit row is kept. Every lifecycle action is written to the audit log.
 
+**Back up / migrate the whole vault:** `ssh-manager export` / `import` — a portable, passphrase-encrypted file (backup / migration / disaster recovery). Full guide (中文): [`docs/backup-restore.md`](docs/backup-restore.md).
+
 ---
 
 ## Multi-machine: `serve` mode (remote agents on a VLAN)
