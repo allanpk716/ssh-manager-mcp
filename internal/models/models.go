@@ -36,20 +36,27 @@ func (c CredentialType) AuthMethodForServer() AuthMethod {
 }
 
 // Server is an SSH target. Credential holds the login secret; SudoCredential (optional) holds a password for sudo -S.
-// Description is free-text owner notes (hardware/purpose); it is owner-only — never surfaced to the agent.
+// Structured metadata fields (Location/Hardware/Services/Role/Caveats) plus Tags and Description are surfaced to
+// the agent via list_servers (full-open, reversing Plan-8's owner-only rule — see
+// docs/superpowers/specs/2026-08-11-server-structured-metadata-design.md).
 type Server struct {
-	ID               string
-	Name             string
-	Host             string
-	Port             int
-	User             string
-	AuthMethod       AuthMethod
-	CredentialID     string
+	ID                string
+	Name              string
+	Host              string
+	Port              int
+	User              string
+	AuthMethod        AuthMethod
+	CredentialID      string
 	SudoCredentialID string // empty if none
-	Tags             []string
-	Description      string // owner notes; not exposed via MCP tools
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	Tags              []string
+	Description       string // owner free-text notes; surfaced to agent (supplementary to structured fields below)
+	Location          string // where deployed: datacenter/region/rack/tenant
+	Hardware          string // hardware config: CPU/RAM/disk/GPU
+	Services          string // what is deployed/running here
+	Role              string // this server's purpose (e.g. "prod pg primary")
+	Caveats           string // operational gotchas; agent reads before acting
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // Credential stores an encrypted secret. Secret and Passphrase are decrypted only in memory by the store.

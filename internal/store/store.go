@@ -116,6 +116,21 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "servers", "description", "TEXT"); err != nil {
 		return err
 	}
+	if err := addColumnIfMissing(db, "servers", "location", "TEXT"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "servers", "hardware", "TEXT"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "servers", "services", "TEXT"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "servers", "role", "TEXT"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "servers", "caveats", "TEXT"); err != nil {
+		return err
+	}
 	if err := addColumnIfMissing(db, "projects", "status", "TEXT NOT NULL DEFAULT 'active'"); err != nil {
 		return err
 	}
@@ -176,6 +191,11 @@ CREATE TABLE IF NOT EXISTS servers (
   sudo_credential_id TEXT,
   tags TEXT,
   description TEXT,
+  location TEXT,
+  hardware TEXT,
+  services TEXT,
+  role TEXT,
+  caveats TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
