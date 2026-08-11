@@ -130,6 +130,9 @@ func cachePullCmd() *cobra.Command {
 			}
 			defer res.Body.Close()
 			if res.StatusCode != 200 {
+				// Drain + close so http.DefaultClient can reuse the TCP connection
+				// (a non-read response body keeps the keep-alive socket half-read).
+				io.Copy(io.Discard, res.Body)
 				return fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
 			}
 			body, err := io.ReadAll(res.Body)

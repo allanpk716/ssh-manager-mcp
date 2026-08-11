@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -63,7 +64,7 @@ func cacheTokensLsCmd() *cobra.Command {
 				if !ct.LastPullAt.IsZero() {
 					last = ct.LastPullAt.Format("2006-01-02 15:04:05")
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-20s prefix=%s… status=%s last_pull=%s\n",
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %s prefix=%s… status=%s last_pull=%s\n",
 					ct.Name, ct.ID, ct.TokenPrefix, ct.Status, last)
 			}
 			return nil
@@ -92,7 +93,7 @@ func cacheTokensRevokeCmd() *cobra.Command {
 }
 
 // printCacheToken emits the one-time device code + the cache-pull invocation. Shown once.
-func printCacheToken(out interface{ Write([]byte) (int, error) }, name, code string) {
+func printCacheToken(out io.Writer, name, code string) {
 	fmt.Fprintf(out, "Authorization code for %q (shown once): %s\n\n", name, code)
 	fmt.Fprintln(out, "On the work machine:")
 	fmt.Fprintf(out, "  ssh-manager cache pull --url https://<serve-host>:7878 --token %s\n", code)

@@ -98,6 +98,7 @@ func TestCachePull_FailedPullLeavesExistingCacheIntact(t *testing.T) {
 	root := NewRootCmd()
 	root.SetArgs([]string{"cache", "pull", "--url", url, "--token", "bogus-xxxxxxxxxxxxxxx"})
 	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{}) // capture cobra's "Error: …" echo out of the test runner's stderr
 	if err := root.Execute(); err == nil {
 		t.Fatal("pull with bogus token must error")
 	}
@@ -125,7 +126,7 @@ func TestCacheStatus_ReportsSnapshot(t *testing.T) {
 	}
 	must("cache", "pull", "--url", url, "--token", code)
 	stOut := must("cache", "status")
-	if !strings.Contains(stOut.String(), "1") { // at least "1 server" reported
-		t.Fatalf("status did not report counts: %s", stOut.String())
+	if !strings.Contains(stOut.String(), "servers:  1") {
+		t.Fatalf("status did not report 1 server: %s", stOut.String())
 	}
 }

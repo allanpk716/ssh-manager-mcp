@@ -99,7 +99,9 @@ func TestHydrateReadOnlyStore_TokenValidatesAndReadsWork(t *testing.T) {
 	// (d) offline audit lands in the sidecar, not the cache db. AuditRows reads the db; after
 	// the sidecar write it must still return 0 rows (we never inserted into audit_log). The
 	// store.db field is unexported and cli is a different package, so AuditRows is the seam.
-	_ = hyd.WriteAudit(store.AuditRow{Action: "exec", ProjectID: proj.ID, Status: "ok"})
+	if err := hyd.WriteAudit(store.AuditRow{Action: "exec", ProjectID: proj.ID, Status: "ok"}); err != nil {
+		t.Fatalf("WriteAudit to sidecar: %v", err)
+	}
 	rows, _ := hyd.AuditRows(1)
 	if len(rows) != 0 {
 		t.Fatal("offline audit must NOT write to the cache db")
