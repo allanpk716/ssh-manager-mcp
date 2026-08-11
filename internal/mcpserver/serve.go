@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -94,6 +95,26 @@ func (r *ServeRunner) verifyToken(ctx context.Context, token string, req *http.R
 	}, nil
 }
 
+// verifyCacheToken is the auth.TokenVerifier for the /snapshot route ONLY: it validates a
+// device-auth code via VerifyCacheToken (a disjoint gate from project tokens) and returns a
+// TokenInfo whose UserID is the cache-token id (used by handleSnapshot to TouchCacheToken).
+// It is NEVER passed to the MCP handler's RequireBearerToken; verifyToken is NEVER passed to
+// /snapshot's. Two gates, never bridged — this is what keeps a project token from dumping
+// the whole vault.
+func (r *ServeRunner) verifyCacheToken(ctx context.Context, token string, req *http.Request) (*auth.TokenInfo, error) {
+	ct, err := r.st.VerifyCacheToken(token)
+	if err != nil || ct == nil {
+		return nil, fmt.Errorf("%w: invalid or unknown cache token", auth.ErrInvalidToken)
+	}
+	// SDK's verify() requires a non-zero, non-expired Expiration (auth.go:120-126). Same
+	// nominal-TTL trick as verifyToken: the real lifecycle is VerifyCacheToken's
+	// status='active' filter (revoke), NOT this nominal expiry.
+	return &auth.TokenInfo{
+		UserID:     ct.ID,
+		Expiration: time.Now().Add(projectTokenNominalTTL),
+	}, nil
+}
+
 // resolveServer runs AFTER auth.RequireBearerToken has stashed the *auth.TokenInfo.
 // It resolves the token's project (by UserID) to its cached scoped server and
 // stashes that server under serverKey for the SDK's getServer hook.
@@ -119,14 +140,16 @@ func (r *ServeRunner) resolveServer(next http.Handler) http.Handler {
 	})
 }
 
-// HTTPHandler returns the authenticated streamable-HTTP MCP handler. Composition:
+// HTTPHandler returns the request mux for `ssh-manager serve`. Composition:
 //
-//	auth.RequireBearerToken (outermost) → resolveServer → SDK streamable handler
+//	GET /snapshot  → cache-token RequireBearerToken → handleSnapshot (read-only vault dump)
+//	everything else → project-token RequireBearerToken → resolveServer → SDK streamable MCP handler
 //
-// The SDK's getServer hook reads the server resolveServer stashed in the context.
-// Outermost placement of RequireBearerToken is required so the SDK sees the
-// *auth.TokenInfo on the initialize request that creates the session — that is
-// where UserID is captured (streamable.go:425-435) for later per-request checks.
+// The two RequireBearerToken chains use DISJOINT verifiers (verifyCacheToken vs verifyToken).
+// A project token presented at /snapshot fails verifyCacheToken (it is not a device code) and is
+// rejected; a cache token presented at the MCP path fails verifyToken (it is not a project token)
+// and is rejected. The gates are never bridged — a project token can never dump the whole vault,
+// and a cache token can never drive an MCP tool. This is the two-disjoint-gates keystone.
 func (r *ServeRunner) HTTPHandler() http.Handler {
 	getServer := func(req *http.Request) *mcp.Server {
 		if s, ok := req.Context().Value(serverKey{}).(*mcp.Server); ok {
@@ -138,8 +161,47 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 		return nil
 	}
 	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, nil)
-	authMW := auth.RequireBearerToken(r.verifyToken, &auth.RequireBearerTokenOptions{}) // no scopes
-	return authMW(r.resolveServer(mcpHandler))
+	projectAuth := auth.RequireBearerToken(r.verifyToken, &auth.RequireBearerTokenOptions{}) // no scopes
+	mcpChain := projectAuth(r.resolveServer(mcpHandler))
+
+	cacheAuth := auth.RequireBearerToken(r.verifyCacheToken, &auth.RequireBearerTokenOptions{})
+	snapshotHandler := cacheAuth(http.HandlerFunc(r.handleSnapshot))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/snapshot" {
+			snapshotHandler.ServeHTTP(w, req)
+			return
+		}
+		mcpChain.ServeHTTP(w, req)
+	})
+}
+
+// handleSnapshot writes the full vault Snapshot (Plan-11 ExportSnapshot, reused verbatim) as
+// JSON. Cache tokens are NEVER in the Snapshot (server-side only — ExportSnapshot does not
+// read the cache_tokens table). Best-effort TouchCacheToken AFTER the body is written — a touch
+// failure is logged, not fatal (the pull already succeeded).
+func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ti := auth.TokenInfoFromContext(req.Context())
+	if ti == nil || ti.UserID == "" {
+		http.Error(w, "no authenticated cache token", http.StatusForbidden) // fail closed
+		return
+	}
+	snap, err := r.st.ExportSnapshot()
+	if err != nil {
+		http.Error(w, "snapshot unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(snap); err != nil {
+		return // client gone; nothing more to do
+	}
+	if err := r.st.TouchCacheToken(ti.UserID); err != nil {
+		fmt.Fprintf(os.Stderr, "ssh-manager serve: cache-tokens touch %s: %v\n", ti.UserID, err)
+	}
 }
 
 // RunServe runs the authenticated streamable-HTTP MCP server until ctx is
