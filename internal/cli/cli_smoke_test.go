@@ -75,13 +75,19 @@ func TestServersEditAndDescription(t *testing.T) {
 		return out
 	}
 
-	// add WITH a description
+	// add WITH structured fields + description
 	mustCli("servers", "add", "--name", "gpu", "--host", "h", "--user", "u",
-		"--password", "pw", "--description", "8x A100")
+		"--password", "pw",
+		"--role", "prod ml", "--special-handling", "do not reboot 02-03:00",
+		"--location", "dc2", "--hardware", "8x A100",
+		"--services", "jupyter", "--description", "owner note")
 
-	// ls surfaces the description (owner-only metadata)
-	if out := mustCli("servers", "ls"); !bytes.Contains(out.Bytes(), []byte("8x A100")) {
-		t.Fatalf("ls missing description: %s", out.String())
+	// ls now shows role + truncated caveats (description no longer on the ls line)
+	if out := mustCli("servers", "ls"); !bytes.Contains(out.Bytes(), []byte("prod ml")) || !bytes.Contains(out.Bytes(), []byte("do not reboot 02-03:00")) {
+		t.Fatalf("ls missing role/caveats: %s", out.String())
+	}
+	if out := mustCli("servers", "ls"); bytes.Contains(out.Bytes(), []byte("owner note")) {
+		t.Fatalf("ls should not show description anymore: %s", out.String())
 	}
 
 	// inspect directly via the store to assert id/cred invariants across edit
@@ -98,16 +104,22 @@ func TestServersEditAndDescription(t *testing.T) {
 	if before == nil {
 		t.Fatal("server not found after add")
 	}
-	if before.Description != "8x A100" {
+	if before.Description != "owner note" {
 		t.Fatalf("description = %q", before.Description)
+	}
+	if before.Role != "prod ml" || before.Caveats != "do not reboot 02-03:00" {
+		t.Fatalf("structured fields not stored: %+v", before)
 	}
 	oldCid := before.CredentialID
 
-	// edit host + description; id + cred preserved (no re-credential flag given)
-	mustCli("servers", "edit", "gpu", "--host", "newhost", "--description", "9x A100")
+	// edit host + role + clear caveats (pass empty); id + cred preserved (no re-credential flag given)
+	mustCli("servers", "edit", "gpu", "--host", "newhost", "--role", "prod ml replica", "--special-handling", "")
 	after := inspect()
-	if after.Host != "newhost" || after.Description != "9x A100" {
+	if after.Host != "newhost" || after.Role != "prod ml replica" || after.Caveats != "" {
 		t.Fatalf("edit did not apply: %+v", after)
+	}
+	if after.Description != "owner note" {
+		t.Fatalf("description should be unchanged when --description not passed: %q", after.Description)
 	}
 	if after.ID != before.ID {
 		t.Fatalf("id changed: %s -> %s", before.ID, after.ID)

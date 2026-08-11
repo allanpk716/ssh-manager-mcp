@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -18,6 +19,7 @@ func newServersCmd() *cobra.Command {
 func serversAddCmd() *cobra.Command {
 	var (
 		name, host, user, password, keyPath, keyPass, sudoPassword, description string
+		location, hardware, services, role, caveats                            string
 		port                                                                    int
 		tags                                                                    []string
 	)
@@ -52,7 +54,13 @@ func serversAddCmd() *cobra.Command {
 			}
 			srv := &models.Server{
 				Name: name, Host: host, Port: port, User: user,
-				AuthMethod: cred.Type.AuthMethodForServer(), CredentialID: cid, Tags: tags, Description: description,
+				AuthMethod: cred.Type.AuthMethodForServer(), CredentialID: cid, Tags: tags,
+				Description: strings.TrimSpace(description),
+				Location:    strings.TrimSpace(location),
+				Hardware:    strings.TrimSpace(hardware),
+				Services:    strings.TrimSpace(services),
+				Role:        strings.TrimSpace(role),
+				Caveats:     strings.TrimSpace(caveats),
 			}
 			if sudoPassword != "" {
 				sid, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)})
@@ -78,7 +86,12 @@ func serversAddCmd() *cobra.Command {
 	c.Flags().StringVar(&keyPass, "key-passphrase", "", "passphrase for encrypted private key")
 	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "sudo password (enables sudo -S)")
 	c.Flags().StringSliceVar(&tags, "tags", nil, "tags")
-	c.Flags().StringVar(&description, "description", "", "owner notes — hardware/purpose (NOT shown to the agent)")
+	c.Flags().StringVar(&description, "description", "", "owner notes (shown to the agent); prefer structured fields below")
+	c.Flags().StringVar(&location, "location", "", "where deployed (datacenter/region/rack/tenant) — shown to the agent")
+	c.Flags().StringVar(&hardware, "hardware", "", "hardware config (CPU/RAM/disk/GPU) — shown to the agent")
+	c.Flags().StringVar(&services, "services", "", "what is deployed/running here — shown to the agent")
+	c.Flags().StringVar(&role, "role", "", "this server's purpose (e.g. 'prod pg primary') — shown to the agent")
+	c.Flags().StringVar(&caveats, "special-handling", "", "operational gotchas / special handling rules — the agent reads this BEFORE acting")
 	_ = c.MarkFlagRequired("name")
 	_ = c.MarkFlagRequired("host")
 	_ = c.MarkFlagRequired("user")
@@ -104,23 +117,27 @@ func serversListCmd() *cobra.Command {
 				if srv.SudoCredentialID != "" {
 					sudo = "sudo"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-20s %s@%s:%d [%s] %s\n",
-					srv.Name, srv.ID, srv.User, srv.Host, srv.Port, sudo, truncateDesc(srv.Description))
+				role := srv.Role
+				if role == "" {
+					role = "-"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-20s %s@%s:%d [%s] (%s) · %s\n",
+					srv.Name, srv.ID, srv.User, srv.Host, srv.Port, sudo, role, truncate(srv.Caveats))
 			}
 			return nil
 		},
 	}
 }
 
-// truncateDesc clips a description for the ls line (rune-safe; "" → "-").
-func truncateDesc(d string) string {
-	if d == "" {
+// truncate clips a free-text field for the ls line (rune-safe; "" → "-").
+func truncate(s string) string {
+	if s == "" {
 		return "-"
 	}
-	if r := []rune(d); len(r) > 40 {
+	if r := []rune(s); len(r) > 40 {
 		return string(r[:37]) + "..."
 	}
-	return d
+	return s
 }
 
 func serversRmCmd() *cobra.Command {
@@ -151,6 +168,7 @@ func serversRmCmd() *cobra.Command {
 func serversEditCmd() *cobra.Command {
 	var (
 		newName, host, user, password, keyPath, keyPass, sudoPassword, description string
+		location, hardware, services, role, caveats                               string
 		port                                                                       int
 		tags                                                                       []string
 	)
@@ -181,10 +199,25 @@ func serversEditCmd() *cobra.Command {
 				srv.User = user
 			}
 			if cmd.Flags().Changed("description") {
-				srv.Description = description
+				srv.Description = strings.TrimSpace(description)
 			}
 			if cmd.Flags().Changed("tags") {
 				srv.Tags = tags
+			}
+			if cmd.Flags().Changed("location") {
+				srv.Location = strings.TrimSpace(location)
+			}
+			if cmd.Flags().Changed("hardware") {
+				srv.Hardware = strings.TrimSpace(hardware)
+			}
+			if cmd.Flags().Changed("services") {
+				srv.Services = strings.TrimSpace(services)
+			}
+			if cmd.Flags().Changed("role") {
+				srv.Role = strings.TrimSpace(role)
+			}
+			if cmd.Flags().Changed("special-handling") {
+				srv.Caveats = strings.TrimSpace(caveats)
 			}
 			// Re-credential (optional; mutually exclusive).
 			pwSet := cmd.Flags().Changed("password")
@@ -228,7 +261,12 @@ func serversEditCmd() *cobra.Command {
 	c.Flags().StringVar(&host, "host", "", "hostname or IP")
 	c.Flags().IntVar(&port, "port", 22, "port")
 	c.Flags().StringVar(&user, "user", "", "ssh user")
-	c.Flags().StringVar(&description, "description", "", "owner notes — hardware/purpose (NOT shown to the agent)")
+	c.Flags().StringVar(&description, "description", "", "owner notes (shown to the agent); prefer structured fields below")
+	c.Flags().StringVar(&location, "location", "", "where deployed (datacenter/region/rack/tenant) — shown to the agent")
+	c.Flags().StringVar(&hardware, "hardware", "", "hardware config (CPU/RAM/disk/GPU) — shown to the agent")
+	c.Flags().StringVar(&services, "services", "", "what is deployed/running here — shown to the agent")
+	c.Flags().StringVar(&role, "role", "", "this server's purpose — shown to the agent")
+	c.Flags().StringVar(&caveats, "special-handling", "", "operational gotchas / special handling rules — pass \"\" to clear")
 	c.Flags().StringSliceVar(&tags, "tags", nil, "tags (replaces existing)")
 	c.Flags().StringVar(&password, "password", "", "switch to / replace password auth")
 	c.Flags().StringVar(&keyPath, "key", "", "switch to / replace key auth (path to private key)")
