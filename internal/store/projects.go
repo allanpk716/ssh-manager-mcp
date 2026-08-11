@@ -100,6 +100,27 @@ func (s *Store) GetProjectByName(name string) (*models.Project, error) {
 	return &p, nil
 }
 
+// GetProject resolves a project by id (returns nil, nil when absent). Used by
+// serve mode's resolveServer to map an authenticated TokenInfo.UserID back to
+// its project + profile scope. Not part of the agent surface.
+func (s *Store) GetProject(id string) (*models.Project, error) {
+	var (
+		p      models.Project
+		status string
+	)
+	err := s.db.QueryRow(
+		`SELECT id,name,token_prefix,profile_id,status FROM projects WHERE id=?`, id,
+	).Scan(&p.ID, &p.Name, &p.TokenPrefix, &p.ProfileID, &status)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	p.Status = models.ProjectStatus(status)
+	return &p, nil
+}
+
 // SetProjectStatus sets the lifecycle status (active/disabled/revoked). VerifyToken reads
 // this on the next mcp spawn. Errors if the id is absent.
 func (s *Store) SetProjectStatus(id string, status models.ProjectStatus) error {

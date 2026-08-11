@@ -111,6 +111,29 @@ ssh-manager projects ls [--all]           # status column; --all includes revoke
 
 ---
 
+## Multi-machine: `serve` mode (remote agents on a VLAN)
+
+By default the broker runs **in-process** inside the MCP server the agent spawns (no daemon). For **several machines sharing one authoritative vault** — e.g. you work across multiple boxes on a home/VLAN network — run the broker as a small HTTP server on one trusted host and point the other machines' agents at it.
+
+```bash
+# On the trusted VLAN host (the authoritative broker):
+ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
+# → ssh-manager serve: listening on 0.0.0.0:7878 (tls=true)
+```
+
+- **Auth — same gate as stdio.** Every request carries `Authorization: Bearer <project-token>` (the same token `projects add` prints). The server resolves it per request with `VerifyToken` (`active` projects only); missing / invalid / revoked → `401`. The iron rule (per-call `serverID ∈ profileID`) applies identically — each token maps to its own project/profile scope, and one `serve` process serves many tokens concurrently.
+- **Bind.** Default `127.0.0.1:7878` (loopback — nothing leaves the host). For remote agents pass `--addr 0.0.0.0:7878` or a VLAN IP. ⚠️ **A non-loopback bind without TLS is sniffable** — the bearer token would cross the network in cleartext. Prefer `--tls-cert` / `--tls-key` (a self-signed cert is fine inside a trusted VLAN).
+- **Point the remote agent at it** — streamable-HTTP endpoint `http(s)://<host>:7878/` with the bearer header. Claude Code `.mcp.json`:
+  ```json
+  {"mcpServers":{"ssh":{"type":"http","url":"http://192.0.2.5:7878/","headers":{"Authorization":"Bearer <TOKEN>"}}}}
+  ```
+  Cursor / other streamable-HTTP MCP clients: same URL + header, per their remote-server setup.
+- **Shutdown.** `Ctrl+C` (`SIGINT`) / `SIGTERM` → graceful drain and every open `forward_port` tunnel torn down (no leaked SSH connections).
+
+> **Phase 1 of multi-machine support.** `serve` makes the broker **reachable over the network** — a remote agent works while it can reach the server. Client-side **offline read-only cache**, vault replication, and Synology backup arrive in later phases. Until then, a remote machine that can't reach the server should run its own local `ssh-manager mcp`.
+
+---
+
 ## Do I need an LLM API key?
 
 **No.** ssh-manager-mcp is a **credential broker**, not an LLM client — it never calls any LLM API. It only needs the master key (to unlock the vault) + a project token (so the agent authenticates). The LLM key is the **agent's** business (your Claude Code / Cursor already has its own) and is entirely unrelated to this project.
@@ -137,5 +160,7 @@ ssh-manager projects ls [--all]           # status column; --all includes revoke
 Plans 1–6 delivered: encrypted vault → in-process SSH broker → MCP server with profile enforcement → §13 SSH conformance → §12 agent-usability eval (judge + regression gate + nightly CI) → SFTP download → **upload (`scp -r`) + local port forward (`-L`)**.
 
 Carry-forwards (deferred, non-blocking): `context.Context` cancellation threaded through the broker; a server-side exec-timeout cap.
+
+**Plan 10 — `serve` mode:** run the broker as an authenticated HTTP MCP server so agents on other VLAN machines share one authoritative vault. Phase 1 of multi-machine support (remote live access; offline cache / vault replication / backup are later phases). See "Multi-machine: `serve` mode" above.
 
 Design spec: [`docs/superpowers/specs/2026-08-08-ssh-key-manager-mcp-design.md`](docs/superpowers/specs/2026-08-08-ssh-key-manager-mcp-design.md).
