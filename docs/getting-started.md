@@ -88,7 +88,7 @@ ssh-manager servers add \
   --password '你的密码'              # 或用密钥：--key ~/.ssh/id_ed25519 [--key-passphrase '...']
   # 可选：
   --sudo-password 'sudo密码'         # 给了之后，agent 才能用 exec_command 的 sudo=true
-  --description '8x A100 80GB, CUDA 12, 训练专用'   # 你的备注，**不会**给 agent 看到
+  --hardware '8x A100 80GB, CUDA 12'   # 结构化字段，会给 agent 看到
   --tags prod,gpu
 ```
 
@@ -96,7 +96,7 @@ ssh-manager servers add \
 
 - `--password` 和 `--key` **二选一**，必须恰好给一个。
 - `--name` 全局唯一，后续命令都用这个名字（或它的 id）引用这台机器。
-- `--description` 是给**你自己**看的硬件/用途备注，agent 的 `list_servers` **看不到**这个字段（防止你在这里写敏感信息泄露给 agent）。
+- `--hardware` / `--role` / `--services` / `--location` / `--special-handling`（Caveats）是结构化字段，`--description` / `--tags` 是补充——**全部会通过 `list_servers` 给 agent 看到**（agent 需要机器全貌才能安全操作）。⚠️ **别在这些字段里放任何敏感信息**（密钥 / token / PII）：它们每次都进入 agent 上下文并上行到 LLM 提供方；机密只走凭据保险柜（`--password` / `--key`）。完整字段表见 [managing-servers.md](./managing-servers.md#structured-server-metadata)。
 - `--sudo-password` 只是个“额外的密码”，专门喂给 `sudo -S`；它决定了 agent 看到的 `has_sudo=true/false`。
 
 预期输出：`added server gpu id=<uuid>`
@@ -181,7 +181,7 @@ agent 会自己：
 2. 调 `exec_command`（用那个 `id`，命令如 `nvidia-smi`）—— 拿到输出；
 3. 把结果讲给你听。
 
-**它全程看不到密码，也看不到 `--description`，更碰不到 `team-a` profile 之外的任何机器。**
+**它全程看不到密码，更碰不到 `team-a` profile 之外的任何机器。**（`--description` 等元数据字段它**看得到**——那是给它的上下文；凭据则永远看不到。）
 
 ---
 

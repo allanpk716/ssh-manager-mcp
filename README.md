@@ -27,7 +27,7 @@ The MCP server exposes these tools — **ssh-functional-equivalent for operating
 
 | Tool | Like | What it does |
 |---|---|---|
-| `list_servers` | — | List the servers the agent may use (`id` / `name` / `host` / `user` / `has_sudo`). Always call first — the agent learns real server ids here. |
+| `list_servers` | — | List the servers the agent may use (`id` / `name` / `host` / `user` / `has_sudo`, plus owner-provided context: role, services, location, hardware, caveats, tags, description). Always call first — the agent learns real server ids here. Never includes credentials. |
 | `exec_command` | `ssh host cmd` | Run a shell command on a server. `sudo=true` runs `sudo -S` for you (do **not** prepend `sudo` yourself). |
 | `download_file` | `scp host:path .` | Download a remote file (size-capped; truncated output is flagged). |
 | `upload_file` | `scp -r . host:path` | Upload a local file **or directory** (recursive) to the server. |
@@ -89,14 +89,14 @@ ssh-manager ssh gpu                     # (your own ssh client; the broker provi
 
 ## Managing servers & projects (owner CLI)
 
-The owner CLI is how you record servers, group them, and grant an agent access. Each server carries a free-text **description** (your notes — hardware, purpose; **never shown to the agent**).
+The owner CLI is how you record servers, group them, and grant an agent access. Each server carries structured metadata (`--role` / `--services` / `--location` / `--hardware` / `--special-handling`) plus free-text `--description` and `--tags` — **all shown to the agent** via `list_servers` so it can act on each box safely. ⚠️ Never put secrets in these fields: they enter the agent's context (and the upstream LLM provider) on every call. See [`docs/managing-servers.md`](docs/managing-servers.md).
 
 ```bash
 # Edit a server in place: pass any subset of fields — the server id + profile bindings are preserved.
-ssh-manager servers edit gpu --description "8x A100 80GB, CUDA 12"   # add / update notes
+ssh-manager servers edit gpu --hardware "8x A100 80GB, CUDA 12"     # structured field (agent-visible)
 ssh-manager servers edit gpu --host 192.0.2.20 --port 2222            # re-point host/port
 ssh-manager servers edit gpu --password '...'                        # re-credential (or --key)
-ssh-manager servers ls                                                # lists name + notes
+ssh-manager servers ls                                                # lists name + role + caveats
 
 # See what an agent can reach, and manage its lifecycle.
 ssh-manager projects show my-agent        # agent → profile → granted servers (no secrets)
