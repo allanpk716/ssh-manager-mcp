@@ -163,8 +163,8 @@ ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
 
 ## 限制（如实，必读）
 
-1. **在线 only**：工作机连不上服务器（服务器挂了 / VLAN 断了 / 笔记本带出门）= 该机的 agent **用不了** SSH 工具。
-2. **无离线缓存**：工作机不持有 vault，连不上就没有本地兜底。除非那台机**另外**配了一份本地 stdio vault——但那是**另一份独立、不同步**的清单，不是 serve 的离线模式。真正的"离线只读缓存"是后续计划，**尚未实现**。
+1. **在线 only（serve 本身）**：serve 的远程 MCP 走在线——工作机连不上服务器（服务器挂了 / VLAN 断了 / 笔记本带出门）= 该机的 agent **走不了远程 MCP**。但本地若有缓存（见下条），agent 可以切到只读的 `mcp --cache` 兜底。
+2. **离线缓存：✅ 已实现（Plan 12）**：工作机本地持有一份**加密的只读** vault 快照，连不上服务器时 agent 照常 exec / download / upload / 转发（只读，不能改）。**见本篇[「离线只读缓存（Plan 12）」](#离线只读缓存plan-12)节**——它不是 serve 的"离线模式"，而是一份独立拉取、独立加密、自动刷新的本地缓存。在一台机器上**同时**配 serve（在线）+ cache（离线兜底）也行——两套互不冲突。
 3. **服务器是单点**：服务器挂了 = 所有人暂停，直到它恢复。**自动备份 / 灾难恢复是后续 Plan 13，尚未实现**。目前的备份手段：手动复制服务器上的 `store.db`（恢复时需原机 keychain 的 master key，**不可移植**）；可用 [export/import](./backup-restore.md)（Plan 11，已做）做可移植的加密备份。
 4. **单 owner 设计**：多个人共用同一个 vault、按人隔离访问——**不在范围**。本方案是"一个人、多台机"。多人场景需要 per-user ACL + 审计隔离，是另一个量级的功能。
 5. **bearer token = 钥匙**：谁拿到某项目的 token + 能连到服务器 = 拿到那个项目 profile 里的**所有服务器**。所以：用 **TLS** 防嗅探；用 [`projects rotate`](./agent-access.md)（换发）/ [`revoke`](./agent-access.md)（吊销）管 token 生命周期；token 进密码管理器、别进 git。
@@ -178,12 +178,283 @@ serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问
 | 计划 | 解决什么 | 状态 |
 |---|---|---|
 | Plan 11 · export/import | 整个 vault 口令加密便携文件：备份 / 迁移 / 灾难恢复 | ✅ 已做（[backup-restore.md](./backup-restore.md)） |
-| Plan 12 · 离线只读缓存 | 工作机本地缓存加密 vault，离线时只读用、不能改 | 未做 |
-| Plan 13 · vault 复制 | 服务器 → 工作机的同步机制 | 未做 |
-| Plan 14 · 群晖自动备份 | 服务器定时出加密快照到 NAS，灾难恢复 | 未做 |
-| Plan 15 · 迁移 + DEK enroll | 新机器加入流程、密钥分发 | 未做 |
+| Plan 12 · 离线只读缓存 | 工作机本地缓存加密 vault，断网时只读用、自动刷新 | ✅ 已做（本节[「离线只读缓存」](#离线只读缓存plan-12)） |
+| Plan 13 · 群晖自动备份 | 服务器定时出加密快照到 NAS，灾难恢复 | 未做 |
+| Plan 14 · 迁移 + DEK enroll | 新机器加入流程、密钥分发 | 未做 |
 
-**现在：serve = 在线 live；备份 / 迁移已可（export/import，见 [backup-restore.md](./backup-restore.md)）。** 离线缓存 / vault 复制 / 群晖自动备份 / 新机 enroll 还没到位（见上节"限制"）。
+**现在：serve = 在线 live；备份 / 迁移已可（export/import，见 [backup-restore.md](./backup-restore.md)）；离线只读缓存已落地（本节[「离线只读缓存」](#离线只读缓存plan-12)）。** 群晖自动备份 / 新机 enroll 还没到位（见下节"限制"）。
+
+---
+
+## 离线只读缓存（Plan 12）
+
+> **一句话**：每台工作机在本地持有一份**加密的只读** vault 快照，连不上 serve 服务器时 agent 照常跑（exec / download / upload / 转发），但**任何写都被拒**（`ErrReadOnly`）。
+
+### 它解决什么
+
+serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带出门，该机 agent 就断了 SSH 工具。Plan 12 给工作机一份**本地兜底**：把整个 vault 加密拉到本机，断网时 agent 切到这份缓存继续干活（只读）。**不是双写、不是同步**——缓存是单向、只读、零合并的快照。
+
+### 模型（两道独立的闸门）
+
+```
+ ┌──serve 服务器（owner 在这）─────────────────┐
+ │  vault + master key                         │
+ │  cache-tokens add --name laptop   ──┐       │   ① 发码：每台机一个、可吊销
+ │                                     │       │
+ │  GET /snapshot                      │       │   ② 拉取：设备授权码鉴权
+ │   Authorization: Bearer <设备码> ◀──┼─拉─────┤   （和 project token 是
+ │   → 整个 vault 的 Snapshot JSON      │       │    两套不同的 verifier）
+ └─────────────────────────────────────┼───────┘
+                                       │
+ ┌──工作机（laptop）───────────────────▼────────┐
+ │  cache pull                            ──────►  DEK 加密落盘
+ │   ↓                                            cache.bin (0600)
+ │   OS keychain slot "cache-dek"          ──────►  cache.meta.json
+ │                                                (url + pulled_at)
+ │  系统调度器（systemd timer / 任务计划 / launchd）
+ │   ↓ 每 ~30 min                                 ③ 自动保鲜
+ │   cache pull                                   （进程外，非常驻）
+ │
+ │  .mcp.json（离线时）→ mcp --cache --token <同一个 project token>
+ │   ↓                                            ④ 断网兜底
+ │   读 cache.bin → 验 project token（铁律不变）→ broker 只读跑
+ └────────────────────────────────────────────────┘
+```
+
+关键：**两道闸门，永不桥接**。
+
+| 闸门 | 鉴什么 | 进哪 |
+|---|---|---|
+| project token（`projects add` 发的） | MCP 工具调用（exec / download / upload / forward） | 在线走 serve 的 MCP 路由；离线走 `mcp --cache` |
+| 设备授权码（`cache-tokens add` 发的） | 拉整个 vault 的 `/snapshot` | 只进 `/snapshot` |
+
+一个 project token **不能** dump 整个 vault（被 `/snapshot` 的 verifier 拒）；一个设备码**不能**驱动 MCP 工具。两套独立、从不互通——这是整个设计的**基石**（已被 T5 的 cross-auth 隔离测试证明：project token 打 `/snapshot` 必拒，设备码打 MCP 必拒）。
+
+### enroll 一台新机（3 步）
+
+#### Step 1（服务器侧，一次性）：发一个设备授权码
+
+在 serve 服务器上（同一台常驻 broker 的机器）：
+
+```bash
+ssh-manager cache-tokens add --name laptop
+# Authorization code for "laptop" (shown once): <一长串设备码>
+#
+# On the work machine:
+#   ssh-manager cache pull --url https://192.0.2.5:7878 --token <设备码>
+```
+
+- `--name` **必填**且唯一（比如 `laptop` / `desktop-2`），后续吊销靠它。
+- 设备码**只显示一次**——当场拉、或记进密码管理器。
+- 其他管理命令：
+  ```bash
+  ssh-manager cache-tokens ls          # name / id / prefix / status / last_pull（不显示码）
+  ssh-manager cache-tokens revoke laptop   # 位置参数，吊销（Lazy，下次 pull 被拒）
+  ```
+
+#### Step 2（工作机）：第一次拉缓存 + 配 `.mcp.json`
+
+在工作机装好 `ssh-manager` 后：
+
+```bash
+# 第一次拉（用刚发的设备码；之后会被调度器自动重拉）
+ssh-manager cache pull --url https://192.0.2.5:7878 --token <设备码>
+# → pulled N servers / M credentials into <UserConfigDir>/ssh-manager/cache.bin
+
+# 看缓存状态
+ssh-manager cache status
+# cache:    <UserConfigDir>/ssh-manager/cache.bin
+# age:      12m3s
+# servers:  N
+# creds:    M
+# source:   https://192.0.2.5:7878
+```
+
+| 选项 / 环境变量 | 说明 |
+|---|---|
+| `--url` / `SSHMGR_CACHE_URL` | serve broker 的 URL（`https://host:7878`）。必填 |
+| `--token` / `SSHMGR_CACHE_TOKEN` | 设备授权码（`cache-tokens add` 发的那个）。必填 |
+| `SSHMGR_CACHE_DIR` | 缓存目录覆盖（默认 `UserConfigDir/ssh-manager`） |
+
+> **缓存目录**：默认在 `os.UserConfigDir()/ssh-manager/`，即 Linux `~/.config/ssh-manager/`、macOS `~/Library/Application Support/ssh-manager/`、Windows `%AppData%\ssh-manager\`。三个文件：`cache.bin`（DEK 加密的 vault 快照，0600）、`cache.meta.json`（URL + 拉取时间）、`cache-audit.log`（离线审计，见下）。DEK 存在本机 OS keychain 的 `cache-dek` 槽——**和 master key 是两把不同的钥匙**。
+
+`.mcp.json` 怎么配？**取决于这台机在线为主还是离线为主**——同一个 project token（和 serve 用的是**同一个**）：
+
+**在线为主（推荐默认）**——`.mcp.json` 指 serve URL，断网就临时切 cache：
+```json
+{
+  "mcpServers": {
+    "ssh": {
+      "type": "http",
+      "url": "https://192.0.2.5:7878/",
+      "headers": { "Authorization": "Bearer <项目token>" }
+    }
+  }
+}
+```
+
+**离线为主**（笔记本常出门）——`.mcp.json` 指 `mcp --cache`，缓存兜底：
+```json
+{
+  "mcpServers": {
+    "ssh": {
+      "command": "ssh-manager",
+      "args": ["mcp", "--cache", "--token", "<项目token>"]
+    }
+  }
+}
+```
+
+> 切两种模式只是改 `.mcp.json` + 重启 Claude Code——vault 内容、project token、profile scoping **完全一样**。在线走远程 MCP（可写），离线走本地缓存（只读）。
+
+#### Step 3（工作机）：设系统定时器自动保鲜
+
+缓存不会自己刷新——**进程外的 OS 调度器**定时跑 `cache pull`。建议 **30 min**（按你 vault 的变动频率调）。环境变量走 unit 的 `Environment=` 或独立配置文件（**0600 权限**，里面有设备码）。
+
+**Linux（systemd timer）**：
+
+```ini
+# ~/.config/systemd/user/ssh-manager-cache.service
+[Unit]
+Description=ssh-manager offline cache refresh
+
+[Service]
+Type=oneshot
+Environment=SSHMGR_CACHE_URL=https://192.0.2.5:7878
+Environment=SSHMGR_CACHE_TOKEN=<设备码>
+ExecStart=/usr/local/bin/ssh-manager cache pull
+```
+
+```ini
+# ~/.config/systemd/user/ssh-manager-cache.timer
+[Unit]
+Description=Refresh ssh-manager offline cache every 30 min
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl --user enable --now ssh-manager-cache.timer
+```
+
+**Windows（任务计划，PowerShell）**：
+
+```powershell
+# 0600 配置文件存 URL + 设备码
+@"
+SSHMGR_CACHE_URL=https://192.0.2.5:7878
+SSHMGR_CACHE_TOKEN=<设备码>
+"@ | Set-Content -Path "$env:USERPROFILE\.ssh-manager\cache.env" -Encoding UTF8
+
+$action  = New-ScheduledTaskAction -Execute "ssh-manager.exe" `
+            -Argument "cache pull"
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes 30)
+$set     = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "ssh-manager-cache-refresh" `
+            -Action $action -Trigger $trigger -Settings $set
+```
+
+> Windows 任务计划不直接读 `.env`——把环境变量设进任务（`Register-ScheduledTask … -Environment`）或写在机器/用户的系统环境变量里。
+
+**macOS（launchd）**：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ssh-manager.cache-refresh</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/ssh-manager</string>
+        <string>cache</string>
+        <string>pull</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SSHMGR_CACHE_URL</key>
+        <string>https://192.0.2.5:7878</string>
+        <key>SSHMGR_CACHE_TOKEN</key>
+        <string>&lt;设备码&gt;</string>
+    </dict>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+```
+
+```bash
+launchctl load -w ~/Library/LaunchAgents/com.ssh-manager.cache-refresh.plist
+```
+
+⚠️ **设备码 = 钥匙**：任何机器拿到 `<设备码>` + 能连 serve = 能拉整份 vault 快照。所以：用 **TLS** 防嗅探；设备码进 0600 配置文件 / 密码管理器，**别进 git**；机器失窃 → 立刻 `cache-tokens revoke`（见下）。
+
+### 离线能做什么 / 不能做什么
+
+| | 离线（`mcp --cache`） | 在线（serve） |
+|---|---|---|
+| `exec_command`（含 `sudo=true`） | ✅ 凭据从缓存取，broker 直拨目标机 SSH | ✅ |
+| `download_file` / `upload_file` | ✅ 同上 | ✅ |
+| `forward_port`（`-L`） | ✅ 同上 | ✅ |
+| `list_servers` | ✅（列出缓存里 profile 范围内的） | ✅ |
+| 加 / 改 / 删 server / profile / project / 凭据 | ❌ `ErrReadOnly` | ✅ |
+| 未知目标机 host key | ❌ **fail-closed**（不写 `known_hosts`） | ❌ fail-closed（同 stdio） |
+
+**铁律 + profile scoping 离线不变**：同一个 project token 在线 / 离线走的是**同一套**鉴权（验 token → 解析 project → profile → 只放行 `serverID ∈ profileID` 的命令）。离线只是把 vault 换成本地只读副本，agent 的活动范围（profile）和能做的操作（只读 + 已授权的 exec / 传输 / 转发）**完全一致**。
+
+### 审计：本地 JSONL 边车，不回传、不合并
+
+离线模式下，broker 的每次调用（exec / download / upload / forward / 被拒的写）都写进本机的 `cache-audit.log`（JSONL，每行一条）。**单向、零合并**——这份日志**不会**回传 serve 服务器，**不会**并进服务器的审计表，永远只在本机。
+
+- 路径：`<UserConfigDir>/ssh-manager/cache-audit.log`（和 `cache.bin` 同目录）。
+- 用途：操作者本机自查（谁在什么时候、用哪个 project / server、干了什么、成功没）。
+- 如需集中审计：手工把各机的 `cache-audit.log` 收拢到你的日志系统（程序不代劳）。
+
+### 吊销（机器失窃 / 设备码泄露）
+
+设备失窃 / 设备码泄露 → 在服务器上：
+
+```bash
+ssh-manager cache-tokens revoke laptop
+# → revoked cache token laptop (status=revoked)
+```
+
+**Lazy 生效**：该码**下次 `cache pull`** 直接被拒（`status != active`），那台机再也拉不到新缓存。已经在跑的 `mcp --cache` 会继续到本次 spawn 结束（下次重启 Claude Code 拉新缓存失败 → 该机离线路径断了）。
+
+> ⚠️ **已拉下的 `cache.bin` 仍能被那台机的 DEK 解密**——吊销**只断"拉新"**，不擦"已拉"。这和失窃的 `store.db` 一样处置：**吊销 + 视敏感度轮换相关凭据**（`servers edit --password` / `--key` 换那台机接触过的服务器凭据，`projects rotate` 换 project token）。物理拿到机器的人 + 本机 DEK（keychain）= 能离线爆破那份当时的 vault 快照——这等同于"物理拿到一台配了 stdio vault 的机器"，不在本方案的威胁模型内（host-compromise = out of scope）。
+
+### 与 export/import 的关系
+
+两套不同的工具，**别混**：
+
+| | export / import（[Plan 11](./backup-restore.md)） | cache（Plan 12，本节） |
+|---|---|---|
+| 目的 | 便携**口令加密**备份 / 迁移 / 灾难恢复 | 工作机**只读缓存**，断网兜底 |
+| 鉴权 | 你的**口令**（KeePass 式） | 设备授权码（owner 发、可吊销） |
+| 落地的 vault 可写吗 | ✅ import 进一个**可写** vault | ❌ 只读（`ErrReadOnly`） |
+| 怎么触发 | 手动 `export` / `import` | 设备码 + OS 调度器自动 `cache pull` |
+| 格式 | `SSHMGRV1` 信封（Argon2id + AES-GCM）封 `Snapshot` JSON | 原始 key AES-GCM 封**同一份** `Snapshot` JSON |
+
+两者**复用同一份 `store.Snapshot`**（Plan 11 打的地基）——序列化格式一致，加密信封不同（export 用口令派生 key，cache 用本机 keychain 的 DEK）。
+
+### 限制（如实）
+
+- **缓存只读**：离线能 exec / 传输 / 转发，但**任何写都被拒**（`ErrReadOnly`）。要加改删得连上 serve。
+- **自动刷新靠 OS 调度器**（systemd timer / 任务计划 / launchd），**不是**进程常驻的 daemon——`ssh-manager` 本身没有内置调度器。
+- **运行中的 `mcp --cache` 不会热加载新缓存**——下次 spawn（Claude Code 重启 MCP 子进程）才看到新快照。在线的 serve 是每请求实时鉴权，没有这个问题。
+- **离线审计分散在各机本地**：`cache-audit.log` 不回传、不合并——要集中视图得自己收。
+- **首次 `cache pull` 必须在线**——缓存还没拉下来之前，`mcp --cache` 跑不起来（会报 `cache DEK not found` / `no such file`）。
+- **物理失窃 ≠ 远程吊销能解决**：见上"吊销"——已拉下的缓存被本机 DEK 守着，吊销只断"拉新"。
 
 ---
 

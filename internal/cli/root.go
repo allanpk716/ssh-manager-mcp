@@ -19,7 +19,7 @@ func NewRootCmd() *cobra.Command {
 		Use:   "ssh-manager",
 		Short: "Encrypted SSH credential vault and broker (MCP)",
 	}
-	root.AddCommand(versionCmd, newServersCmd(), newProfilesCmd(), newProjectsCmd(), newUnlockCmd(), newLockCmd(), newSSHCmd(), newMCPCmd(), newServeCmd(), newExportCmd(), newImportCmd())
+	root.AddCommand(versionCmd, newServersCmd(), newProfilesCmd(), newProjectsCmd(), newCacheTokensCmd(), newCacheCmd(), newUnlockCmd(), newLockCmd(), newSSHCmd(), newMCPCmd(), newServeCmd(), newExportCmd(), newImportCmd())
 	return root
 }
 

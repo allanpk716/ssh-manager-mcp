@@ -28,6 +28,9 @@ func (s *Store) GetHostKey(host string, port int) ([]byte, error) {
 
 // SaveHostKey records (trusts on first use) a marshaled host key for host:port.
 func (s *Store) SaveHostKey(host string, port int, marshaledKey []byte) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO host_keys (host_port, key_blob, created_at) VALUES (?,?,?)
 		 ON CONFLICT(host_port) DO UPDATE SET key_blob=excluded.key_blob`,

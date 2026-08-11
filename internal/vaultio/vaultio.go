@@ -13,6 +13,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 
 	"golang.org/x/crypto/argon2"
@@ -101,4 +102,60 @@ func Decrypt(passphrase, blob []byte) ([]byte, error) {
 		return nil, err // wrong passphrase OR tamper — do not distinguish (no oracle)
 	}
 	return pt, nil
+}
+
+// EncryptWithKey AES-256-GCM-seals plaintext under a raw 32-byte key (a DEK), returning
+// magic‖nonce‖ciphertext. No salt, no Argon2id — the key is already high-entropy (e.g. from the
+// OS keychain). Use Encrypt (Argon2id) for a human passphrase; use this for the offline cache's
+// local at-rest encryption.
+func EncryptWithKey(key, plaintext []byte) ([]byte, error) {
+	if len(key) != keyLen {
+		return nil, fmt.Errorf("vaultio: key must be %d bytes (got %d)", keyLen, len(key))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, nonceLen)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	ct := gcm.Seal(nil, nonce, plaintext, nil)
+	out := make([]byte, 0, len(magic)+nonceLen+len(ct))
+	out = append(out, magic...)
+	out = append(out, nonce...)
+	out = append(out, ct...)
+	return out, nil
+}
+
+// DecryptWithKey reverses EncryptWithKey. Wrong key or any tampering → GCM auth failure
+// (indistinguishable from a wrong passphrase, by design — no oracle).
+func DecryptWithKey(key, blob []byte) ([]byte, error) {
+	if len(key) != keyLen {
+		return nil, fmt.Errorf("vaultio: key must be %d bytes (got %d)", keyLen, len(key))
+	}
+	minLen := len(magic) + nonceLen
+	if len(blob) < minLen {
+		return nil, ErrTruncated
+	}
+	if !bytes.Equal(blob[:len(magic)], magic) {
+		return nil, ErrBadMagic
+	}
+	off := len(magic)
+	nonce := blob[off : off+nonceLen]
+	off += nonceLen
+	ct := blob[off:]
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	return gcm.Open(nil, nonce, ct, nil)
 }

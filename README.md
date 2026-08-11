@@ -17,7 +17,9 @@ A full operator-facing guide in Chinese — from zero to running, server CRUD, a
 | 从零到跑通（安装 / 解锁 / 第一台服务器 / 授权 Claude Code） | [`docs/getting-started.md`](docs/getting-started.md) |
 | 新增 / 编辑 / 维护 / 删除服务器 | [`docs/managing-servers.md`](docs/managing-servers.md) |
 | 授权 Claude Code / Cursor / 其他 agent；token 轮换与吊销 | [`docs/agent-access.md`](docs/agent-access.md) |
+| 多台机器共用一份 vault（serve 模式）/ 离线只读缓存兜底 | [`docs/multi-machine.md`](docs/multi-machine.md) |
 | 应用场景与示例（GPU 巡检、读 root 日志、部署、端口转发……） | [`docs/scenarios.md`](docs/scenarios.md) |
+| 备份 / 迁移整个 vault（export / import） | [`docs/backup-restore.md`](docs/backup-restore.md) |
 
 ---
 
@@ -134,7 +136,7 @@ ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
   Cursor / other streamable-HTTP MCP clients: same URL + header, per their remote-server setup.
 - **Shutdown.** `Ctrl+C` (`SIGINT`) / `SIGTERM` → graceful drain and every open `forward_port` tunnel torn down (no leaked SSH connections).
 
-> **Phase 1 of multi-machine support.** `serve` makes the broker **reachable over the network** — a remote agent works while it can reach the server. Client-side **offline read-only cache**, vault replication, and Synology backup arrive in later phases. Until then, a remote machine that can't reach the server should run its own local `ssh-manager mcp`.
+> **Phase 1 of multi-machine support.** `serve` makes the broker **reachable over the network** — a remote agent works while it can reach the server. Client-side **offline read-only cache** (Plan 12, shipped) lets each work machine keep a local encrypted read-only snapshot so the agent stays useful when the server can't be reached (operator guide: [`docs/multi-machine.md`](docs/multi-machine.md#离线只读缓存plan-12)). Vault replication and Synology backup arrive in later phases.
 
 ---
 
@@ -165,6 +167,6 @@ Plans 1–6 delivered: encrypted vault → in-process SSH broker → MCP server 
 
 Carry-forwards (deferred, non-blocking): `context.Context` cancellation threaded through the broker; a server-side exec-timeout cap.
 
-**Plan 10 — `serve` mode:** run the broker as an authenticated HTTP MCP server so agents on other VLAN machines share one authoritative vault. Phase 1 of multi-machine support (remote live access; offline cache / vault replication / backup are later phases). See "Multi-machine: `serve` mode" above.
+**Plan 10 — `serve` mode:** run the broker as an authenticated HTTP MCP server so agents on other VLAN machines share one authoritative vault. Phase 1 of multi-machine support (remote live access). **Plan 12 — offline read-only cache:** each work machine pulls an encrypted read-only snapshot of the vault (`cache pull`) and can run the broker from it (`mcp --cache`) when the server is unreachable. Vault replication and Synology backup are later phases. See "Multi-machine: `serve` mode" above and [`docs/multi-machine.md`](docs/multi-machine.md#离线只读缓存plan-12).
 
 Design spec: [`docs/superpowers/specs/2026-08-08-ssh-key-manager-mcp-design.md`](docs/superpowers/specs/2026-08-08-ssh-key-manager-mcp-design.md).

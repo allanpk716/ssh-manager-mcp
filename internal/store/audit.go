@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -19,6 +20,31 @@ type AuditRow struct {
 }
 
 func (s *Store) WriteAudit(r AuditRow) error {
+	if s.readOnly {
+		if s.auditSidecar == nil {
+			return ErrReadOnly
+		}
+		// Append a JSONL line to the sidecar; never touch s.db. Offline audit is per-machine
+		// and is NOT auto-merged back (single-direction, zero-merge — a grilled-in constraint).
+		rec := map[string]any{
+			"ts":          r.TS.Unix(),
+			"project_id":  r.ProjectID,
+			"server_id":   r.ServerID,
+			"action":      r.Action,
+			"command":     r.Command,
+			"sudo":        r.Sudo,
+			"status":      r.Status,
+			"exit_code":   r.ExitCode,
+			"duration_ms": r.DurationMS,
+		}
+		b, err := json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		b = append(b, '\n')
+		_, err = s.auditSidecar.Write(b)
+		return err
+	}
 	var sudo int
 	if r.Sudo {
 		sudo = 1

@@ -7,6 +7,9 @@ import (
 )
 
 func (s *Store) AddProfile(name string) (string, error) {
+	if s.readOnly {
+		return "", ErrReadOnly
+	}
 	id := newID()
 	ts := now()
 	_, err := s.db.Exec(
@@ -58,6 +61,9 @@ func (s *Store) ListProfiles() ([]*models.Profile, error) {
 // An unknown server_id (absent from servers) raises a foreign-key error and
 // aborts the whole grant (fail-closed). Callers should validate ids beforehand.
 func (s *Store) GrantServers(profileID string, serverIDs []string) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err

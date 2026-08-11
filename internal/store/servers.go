@@ -10,6 +10,9 @@ import (
 )
 
 func (s *Store) AddServer(srv *models.Server) (string, error) {
+	if s.readOnly {
+		return "", ErrReadOnly
+	}
 	// Fail-fast: reject oversized fields BEFORE any allocation/marshal work.
 	if err := validateServerText(srv); err != nil {
 		return "", err
@@ -34,6 +37,9 @@ func (s *Store) AddServer(srv *models.Server) (string, error) {
 // the fields being edited, and writes it back — so re-credential is just setting a new
 // CredentialID + AuthMethod. name is mutable (rename). Returns an error if the id is absent.
 func (s *Store) UpdateServer(srv *models.Server) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	// Fail-fast: reject oversized fields BEFORE marshaling.
 	if err := validateServerText(srv); err != nil {
 		return err
@@ -91,6 +97,9 @@ func (s *Store) ListServers() ([]*models.Server, error) {
 }
 
 func (s *Store) DeleteServer(id string) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	_, err := s.db.Exec(`DELETE FROM servers WHERE id=?`, id)
 	return err
 }

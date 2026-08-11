@@ -260,6 +260,9 @@ var ErrVaultNotEmpty = errors.New("vault is not empty; import into a fresh/empty
 //
 // Refuses a non-empty target (any row in servers) with ErrVaultNotEmpty.
 func (s *Store) ImportSnapshot(snap *Snapshot) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	var n int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM servers`).Scan(&n); err != nil {
 		return err

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,9 +29,27 @@ func newID() string {
 func now() int64 { return time.Now().Unix() }
 
 // Store is the encrypted credential vault. masterKey lives in memory while open.
+// In read-only mode (offline cache), every mutation method returns ErrReadOnly and
+// WriteAudit appends to auditSidecar instead of touching db. Set via SetReadOnly,
+// AFTER ImportSnapshot during cache hydration.
 type Store struct {
-	db        *sql.DB
-	masterKey []byte
+	db           *sql.DB
+	masterKey    []byte
+	readOnly     bool
+	auditSidecar *os.File
+}
+
+// ErrReadOnly is returned by every mutation method when the store is in read-only
+// (offline-cache) mode. The cache is a pulled snapshot — mutations belong on the server.
+var ErrReadOnly = errors.New("store is read-only (offline cache); connect to the server to mutate")
+
+// SetReadOnly puts the store in read-only mode: every mutation returns ErrReadOnly, and
+// WriteAudit appends JSONL to auditSidecar (if non-nil) instead of inserting into audit_log.
+// Called by cache hydration AFTER ImportSnapshot. auditSidecar may be nil (audit writes then
+// return ErrReadOnly too).
+func (s *Store) SetReadOnly(auditSidecar *os.File) {
+	s.readOnly = true
+	s.auditSidecar = auditSidecar
 }
 
 // DefaultStorePath returns the on-disk vault location.
@@ -251,6 +270,17 @@ CREATE TABLE IF NOT EXISTS projects (
   token_prefix TEXT NOT NULL,
   profile_id TEXT NOT NULL REFERENCES profiles(id),
   status TEXT NOT NULL DEFAULT 'active',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cache_tokens (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  token_hash BLOB NOT NULL,
+  token_salt BLOB NOT NULL,
+  token_prefix TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  last_pull_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );

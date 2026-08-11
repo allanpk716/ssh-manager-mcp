@@ -40,23 +40,23 @@ func (c CredentialType) AuthMethodForServer() AuthMethod {
 // the agent via list_servers (full-open, reversing Plan-8's owner-only rule — see
 // docs/superpowers/specs/2026-08-11-server-structured-metadata-design.md).
 type Server struct {
-	ID                string
-	Name              string
-	Host              string
-	Port              int
-	User              string
-	AuthMethod        AuthMethod
-	CredentialID      string
+	ID               string
+	Name             string
+	Host             string
+	Port             int
+	User             string
+	AuthMethod       AuthMethod
+	CredentialID     string
 	SudoCredentialID string // empty if none
-	Tags              []string
-	Description       string // owner free-text notes; surfaced to agent (supplementary to structured fields below)
-	Location          string // where deployed: datacenter/region/rack/tenant
-	Hardware          string // hardware config: CPU/RAM/disk/GPU
-	Services          string // what is deployed/running here
-	Role              string // this server's purpose (e.g. "prod pg primary")
-	Caveats           string // operational gotchas; agent reads before acting
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	Tags             []string
+	Description      string // owner free-text notes; surfaced to agent (supplementary to structured fields below)
+	Location         string // where deployed: datacenter/region/rack/tenant
+	Hardware         string // hardware config: CPU/RAM/disk/GPU
+	Services         string // what is deployed/running here
+	Role             string // this server's purpose (e.g. "prod pg primary")
+	Caveats          string // operational gotchas; agent reads before acting
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // Credential stores an encrypted secret. Secret and Passphrase are decrypted only in memory by the store.
@@ -85,6 +85,29 @@ type Project struct {
 	TokenPrefix string
 	ProfileID   string
 	Status      ProjectStatus
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// CacheTokenStatus is the lifecycle state of a device-auth-code (for offline cache pull).
+// Only active admits its token at VerifyCacheToken. Lazy: status takes effect on the next pull.
+type CacheTokenStatus string
+
+const (
+	CacheTokenActive  CacheTokenStatus = "active"  // default; token admitted for /snapshot
+	CacheTokenRevoked CacheTokenStatus = "revoked" // permanent; token rejected (device lost/rotated)
+)
+
+// CacheToken is a per-device authorization code for offline-cache pulls. It is OWNER-level
+// (not scoped to a profile), disjoint from project tokens, and NEVER carried in a Snapshot
+// (server-side only). TokenHash/Salt verify the presented code; the plaintext is shown once
+// at AddCacheToken and never stored. LastPullAt is zero until the device's first successful pull.
+type CacheToken struct {
+	ID          string
+	Name        string
+	TokenPrefix string
+	Status      CacheTokenStatus
+	LastPullAt  time.Time // zero value if last_pull_at was NULL (never pulled)
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
