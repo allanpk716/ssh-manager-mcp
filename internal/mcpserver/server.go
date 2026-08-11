@@ -47,7 +47,7 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *Tunn
 	mcp.AddTool(srv,
 		&mcp.Tool{
 			Name:        BrokerTools[0], // "list_servers"
-			Description: "List the SSH servers you may use. ALWAYS call this first to discover server ids and capabilities before exec_command. Returns id/name/host/user/has_sudo — never credentials.",
+			Description: "List the SSH servers you may use. ALWAYS call this first to discover server ids and capabilities before exec_command. Returns id/name/host/user/has_sudo, plus owner-provided context: role, services (what's deployed), location, hardware, caveats (special handling — read before acting), tags, description. Never includes credentials.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListServersOutput, error) {
 			servers, err := ListServersForProfile(st, profileID)
