@@ -67,7 +67,7 @@ func TestRevokeCacheToken_UnknownNameErrors(t *testing.T) {
 	}
 }
 
-func TestListCacheTokens_OmitsHash(t *testing.T) {
+func TestListCacheTokens_ReturnsOwnerFacingFields(t *testing.T) {
 	s := newTestStore(t)
 	if _, _, err := s.AddCacheToken("laptop"); err != nil {
 		t.Fatal(err)
@@ -83,12 +83,21 @@ func TestListCacheTokens_OmitsHash(t *testing.T) {
 
 func TestTouchCacheToken_UpdatesLastPullAt(t *testing.T) {
 	s := newTestStore(t)
-	id, plaintext, _ := s.AddCacheToken("laptop")
-	ct, _ := s.VerifyCacheToken(plaintext)
+	id, plaintext, err := s.AddCacheToken("laptop")
+	if err != nil {
+		t.Fatalf("AddCacheToken: %v", err)
+	}
+	ct, err := s.VerifyCacheToken(plaintext)
+	if err != nil || ct == nil {
+		t.Fatalf("VerifyCacheToken: err=%v ct=%v", err, ct)
+	}
 	if err := s.TouchCacheToken(ct.ID); err != nil {
 		t.Fatalf("TouchCacheToken: %v", err)
 	}
-	got, _ := s.VerifyCacheToken(plaintext)
+	got, err := s.VerifyCacheToken(plaintext)
+	if err != nil || got == nil {
+		t.Fatalf("re-VerifyCacheToken: err=%v got=%v", err, got)
+	}
 	if got.ID != id || got.LastPullAt.IsZero() || time.Since(got.LastPullAt) > 5*time.Second {
 		t.Fatalf("last_pull_at not bumped (or stale): %+v", got)
 	}
