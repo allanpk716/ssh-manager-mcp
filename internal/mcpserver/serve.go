@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -153,6 +154,9 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	if err != nil {
 		return err
 	}
+	// Emit the "listening" line only AFTER a successful bind so a bind failure
+	// (the early return above) never prints a misleading "listening" line.
+	fmt.Fprintf(os.Stderr, "ssh-manager serve: listening on %s (tls=%v)\n", addr, tlsCert != "")
 	srv := &http.Server{Handler: runner.HTTPHandler()}
 
 	errCh := make(chan error, 1)

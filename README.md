@@ -125,7 +125,7 @@ ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
 - **Bind.** Default `127.0.0.1:7878` (loopback — nothing leaves the host). For remote agents pass `--addr 0.0.0.0:7878` or a VLAN IP. ⚠️ **A non-loopback bind without TLS is sniffable** — the bearer token would cross the network in cleartext. Prefer `--tls-cert` / `--tls-key` (a self-signed cert is fine inside a trusted VLAN).
 - **Point the remote agent at it** — streamable-HTTP endpoint `http(s)://<host>:7878/` with the bearer header. Claude Code `.mcp.json`:
   ```json
-  {"mcpServers":{"ssh":{"url":"http://192.0.2.5:7878/","headers":{"Authorization":"Bearer <TOKEN>"}}}}
+  {"mcpServers":{"ssh":{"type":"http","url":"http://192.0.2.5:7878/","headers":{"Authorization":"Bearer <TOKEN>"}}}}
   ```
   Cursor / other streamable-HTTP MCP clients: same URL + header, per their remote-server setup.
 - **Shutdown.** `Ctrl+C` (`SIGINT`) / `SIGTERM` → graceful drain and every open `forward_port` tunnel torn down (no leaked SSH connections).

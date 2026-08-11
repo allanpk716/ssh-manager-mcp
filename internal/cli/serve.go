@@ -41,7 +41,8 @@ TLS the bearer token travels in cleartext on the network.`,
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			fmt.Fprintf(os.Stderr, "ssh-manager serve: listening on %s (tls=%v)\n", addr, tlsCert != "")
+			// The "listening on" line is emitted by RunServe AFTER net.Listen
+			// succeeds, so a bind failure no longer prints a misleading line.
 			return mcpserver.RunServe(ctx, st, addr, tlsCert, tlsKey)
 		},
 	}
