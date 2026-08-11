@@ -182,7 +182,8 @@ func TestServerStructuredFieldsRoundTrip(t *testing.T) {
 		AuthMethod: models.AuthPassword, CredentialID: cid,
 	})
 	gotEmpty, _ := s.GetServer(empty)
-	if gotEmpty.Location != "" || gotEmpty.Caveats != "" {
+	if gotEmpty.Location != "" || gotEmpty.Hardware != "" || gotEmpty.Services != "" ||
+		gotEmpty.Role != "" || gotEmpty.Caveats != "" {
 		t.Fatalf("unset fields should be empty: %+v", gotEmpty)
 	}
 }

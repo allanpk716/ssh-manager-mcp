@@ -10,13 +10,14 @@ import (
 )
 
 func (s *Store) AddServer(srv *models.Server) (string, error) {
+	// Fail-fast: reject oversized fields BEFORE any allocation/marshal work.
+	if err := validateServerText(srv); err != nil {
+		return "", err
+	}
 	id := newID()
 	ts := now()
 	tagsJSON, _ := json.Marshal(srv.Tags)
 	sudo := nullableString(srv.SudoCredentialID)
-	if err := validateServerText(srv); err != nil {
-		return "", err
-	}
 	_, err := s.db.Exec(
 		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -33,11 +34,12 @@ func (s *Store) AddServer(srv *models.Server) (string, error) {
 // the fields being edited, and writes it back — so re-credential is just setting a new
 // CredentialID + AuthMethod. name is mutable (rename). Returns an error if the id is absent.
 func (s *Store) UpdateServer(srv *models.Server) error {
-	tagsJSON, _ := json.Marshal(srv.Tags)
-	sudo := nullableString(srv.SudoCredentialID)
+	// Fail-fast: reject oversized fields BEFORE marshaling.
 	if err := validateServerText(srv); err != nil {
 		return err
 	}
+	tagsJSON, _ := json.Marshal(srv.Tags)
+	sudo := nullableString(srv.SudoCredentialID)
 	res, err := s.db.Exec(
 		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,tags=?,description=?,location=?,hardware=?,services=?,role=?,caveats=?,updated_at=? WHERE id=?`,
 		srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description,

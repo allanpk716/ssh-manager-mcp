@@ -38,6 +38,16 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 		if err != nil || srv == nil {
 			continue
 		}
+		// Coalesce a nil Tags slice to an empty array so the agent sees a consistent
+		// schema (the brief's "no omitempty" invariant: empty means "explicitly none",
+		// expressed as [] for arrays just as "" for strings). Required for the MCP SDK:
+		// the MCP SDK validates the marshaled output JSON against the generated jsonschema,
+		// and a nil slice marshals to `null`, which fails the `"type":"array"` constraint
+		// and causes CallTool to return (nil, err) — breaking list_servers end-to-end.
+		tags := srv.Tags
+		if tags == nil {
+			tags = []string{}
+		}
 		out = append(out, ServerInfo{
 			ID:      srv.ID,
 			Name:    srv.Name,
@@ -49,18 +59,9 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 			Caveats:     srv.Caveats,
 			Location:    srv.Location,
 			Hardware:    srv.Hardware,
-			Tags:        srv.Tags,
+			Tags:        tags,
 			Description: srv.Description,
 		})
-		// Coalesce a nil Tags slice to an empty array so the agent sees a consistent
-		// schema (the brief's "no omitempty" invariant: empty means "explicitly none",
-		// expressed as [] for arrays just as "" for strings). Required for the MCP SDK:
-		// server.go validates the marshaled output JSON against the generated jsonschema,
-		// and a nil slice marshals to `null`, which fails the `"type":"array"` constraint
-		// and causes CallTool to return (nil, err) — breaking list_servers end-to-end.
-		if out[len(out)-1].Tags == nil {
-			out[len(out)-1].Tags = []string{}
-		}
 	}
 	return out, nil
 }
