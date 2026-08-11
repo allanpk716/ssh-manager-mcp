@@ -164,25 +164,26 @@ ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
 ## 限制（如实，必读）
 
 1. **在线 only**：工作机连不上服务器（服务器挂了 / VLAN 断了 / 笔记本带出门）= 该机的 agent **用不了** SSH 工具。
-2. **无离线缓存**：工作机不持有 vault，连不上就没有本地兜底。除非那台机**另外**配了一份本地 stdio vault——但那是**另一份独立、不同步**的清单，不是 serve 的离线模式。真正的"离线只读缓存"是后续 Plan 11，**尚未实现**。
-3. **服务器是单点**：服务器挂了 = 所有人暂停，直到它恢复。**自动备份 / 灾难恢复是后续 Plan 13，尚未实现**。目前的备份手段：手动复制服务器上的 `store.db`（恢复时需原机 keychain 的 master key，**不可移植**）；后续的 export/import 功能会提供可移植的加密导出。
+2. **无离线缓存**：工作机不持有 vault，连不上就没有本地兜底。除非那台机**另外**配了一份本地 stdio vault——但那是**另一份独立、不同步**的清单，不是 serve 的离线模式。真正的"离线只读缓存"是后续计划，**尚未实现**。
+3. **服务器是单点**：服务器挂了 = 所有人暂停，直到它恢复。**自动备份 / 灾难恢复是后续 Plan 13，尚未实现**。目前的备份手段：手动复制服务器上的 `store.db`（恢复时需原机 keychain 的 master key，**不可移植**）；可用 [export/import](./backup-restore.md)（Plan 11，已做）做可移植的加密备份。
 4. **单 owner 设计**：多个人共用同一个 vault、按人隔离访问——**不在范围**。本方案是"一个人、多台机"。多人场景需要 per-user ACL + 审计隔离，是另一个量级的功能。
 5. **bearer token = 钥匙**：谁拿到某项目的 token + 能连到服务器 = 拿到那个项目 profile 里的**所有服务器**。所以：用 **TLS** 防嗅探；用 [`projects rotate`](./agent-access.md)（换发）/ [`revoke`](./agent-access.md)（吊销）管 token 生命周期；token 进密码管理器、别进 git。
 
 ---
 
-## 后续路线（尚未实现）
+## 后续路线
 
-serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问**。规划中的后续：
+serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问**。**export/import（Plan 11，便携加密备份 / 迁移）已落地**（见 [backup-restore.md](./backup-restore.md)）。规划中的多机后续：
 
 | 计划 | 解决什么 | 状态 |
 |---|---|---|
-| Plan 11 · 离线只读缓存 | 工作机本地缓存加密 vault，离线时只读用、不能改 | 未做 |
-| Plan 12 · vault 复制 | 服务器 → 工作机的同步机制 | 未做 |
-| Plan 13 · 群晖自动备份 | 服务器定时出加密快照到 NAS，灾难恢复 | 未做 |
-| Plan 14 · 迁移 + DEK enroll | 新机器加入流程、密钥分发 | 未做 |
+| Plan 11 · export/import | 整个 vault 口令加密便携文件：备份 / 迁移 / 灾难恢复 | ✅ 已做（[backup-restore.md](./backup-restore.md)） |
+| Plan 12 · 离线只读缓存 | 工作机本地缓存加密 vault，离线时只读用、不能改 | 未做 |
+| Plan 13 · vault 复制 | 服务器 → 工作机的同步机制 | 未做 |
+| Plan 14 · 群晖自动备份 | 服务器定时出加密快照到 NAS，灾难恢复 | 未做 |
+| Plan 15 · 迁移 + DEK enroll | 新机器加入流程、密钥分发 | 未做 |
 
-**现在 serve = 在线 live。** 这些后续做完之前，离线 / 备份 / 新机迁移都还没到位（见上节"限制"）。
+**现在：serve = 在线 live；备份 / 迁移已可（export/import，见 [backup-restore.md](./backup-restore.md)）。** 离线缓存 / vault 复制 / 群晖自动备份 / 新机 enroll 还没到位（见上节"限制"）。
 
 ---
 
