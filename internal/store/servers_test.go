@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -127,6 +128,66 @@ func TestServerDescriptionRoundTrip(t *testing.T) {
 	}
 }
 
+func TestServerStructuredFieldsRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	cid := mustCred(t, s, models.CredPassword, "pw")
+	const (
+		location = "dc2 rack14"
+		hardware = "8x A100 80GB, 1TB RAM"
+		services = "postgres primary, prometheus"
+		role     = "prod pg primary"
+		caveats  = "do not reboot 02-03:00\nfailover is manual"
+	)
+	id, err := s.AddServer(&models.Server{
+		Name: "db1", Host: "10.0.0.5", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: cid,
+		Location: location, Hardware: hardware, Services: services, Role: role, Caveats: caveats,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetServer(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Location != location || got.Hardware != hardware || got.Services != services ||
+		got.Role != role || got.Caveats != caveats {
+		t.Fatalf("structured fields lost:\nlocation=%q hardware=%q services=%q role=%q caveats=%q",
+			got.Location, got.Hardware, got.Services, got.Role, got.Caveats)
+	}
+	byName, _ := s.GetServerByName("db1")
+	if byName.Role != role || byName.Caveats != caveats {
+		t.Fatalf("GetServerByName lost fields: %+v", byName)
+	}
+	list, _ := s.ListServers()
+	if list[0].Services != services {
+		t.Fatalf("ListServers lost services: %q", list[0].Services)
+	}
+
+	// UpdateServer persists edits to the structured fields.
+	loaded, _ := s.GetServer(id)
+	loaded.Role = "prod pg replica"
+	loaded.Caveats = "drained"
+	if err := s.UpdateServer(loaded); err != nil {
+		t.Fatalf("UpdateServer: %v", err)
+	}
+	updated, _ := s.GetServer(id)
+	if updated.Role != "prod pg replica" || updated.Caveats != "drained" {
+		t.Fatalf("UpdateServer did not persist structured fields: %+v", updated)
+	}
+
+	// Empty fields stay empty (nullable columns, scan as "").
+	empty, _ := s.AddServer(&models.Server{
+		Name: "bare", Host: "h", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: cid,
+	})
+	gotEmpty, _ := s.GetServer(empty)
+	if gotEmpty.Location != "" || gotEmpty.Hardware != "" || gotEmpty.Services != "" ||
+		gotEmpty.Role != "" || gotEmpty.Caveats != "" {
+		t.Fatalf("unset fields should be empty: %+v", gotEmpty)
+	}
+}
+
 func TestUpdateServer(t *testing.T) {
 	s := newTestStore(t)
 	cid := mustCred(t, s, models.CredPassword, "pw")
@@ -189,5 +250,49 @@ func TestUpdateServer(t *testing.T) {
 	// UpdateServer on a missing id reports not-found.
 	if err := s.UpdateServer(&models.Server{ID: "nonexistent", Name: "x", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid}); err == nil {
 		t.Fatal("UpdateServer missing id should error")
+	}
+}
+
+func TestServerFieldSizeCap(t *testing.T) {
+	s := newTestStore(t)
+	cid := mustCred(t, s, models.CredPassword, "pw")
+
+	// Exactly 4096 bytes is allowed.
+	atLimit := strings.Repeat("x", 4096)
+	id, err := s.AddServer(&models.Server{
+		Name: "ok", Host: "h", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: cid, Caveats: atLimit,
+	})
+	if err != nil {
+		t.Fatalf("at-limit field should be accepted: %v", err)
+	}
+
+	// 4097 bytes is rejected with a field-named error.
+	overLimit := strings.Repeat("x", 4097)
+	_, err = s.AddServer(&models.Server{
+		Name: "big", Host: "h", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: cid, Caveats: overLimit,
+	})
+	if err == nil {
+		t.Fatal("over-limit caveats should be rejected")
+	}
+	if !strings.Contains(err.Error(), "caveats") {
+		t.Fatalf("error should name the field, got: %v", err)
+	}
+
+	// UpdateServer also enforces the cap.
+	loaded, _ := s.GetServer(id)
+	loaded.Hardware = strings.Repeat("h", 4097)
+	if err := s.UpdateServer(loaded); err == nil {
+		t.Fatal("UpdateServer over-limit hardware should be rejected")
+	}
+
+	// Per-tag cap.
+	_, err = s.AddServer(&models.Server{
+		Name: "taggy", Host: "h", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: cid, Tags: []string{strings.Repeat("t", 4097)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "tag") {
+		t.Fatalf("over-limit tag should be rejected with a tag-named error, got: %v", err)
 	}
 }

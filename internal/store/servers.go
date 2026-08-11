@@ -10,14 +10,19 @@ import (
 )
 
 func (s *Store) AddServer(srv *models.Server) (string, error) {
+	// Fail-fast: reject oversized fields BEFORE any allocation/marshal work.
+	if err := validateServerText(srv); err != nil {
+		return "", err
+	}
 	id := newID()
 	ts := now()
 	tagsJSON, _ := json.Marshal(srv.Tags)
 	sudo := nullableString(srv.SudoCredentialID)
 	_, err := s.db.Exec(
-		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,created_at,updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description, ts, ts,
+		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description,
+		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, ts, ts,
 	)
 	if err != nil {
 		return "", err
@@ -29,11 +34,16 @@ func (s *Store) AddServer(srv *models.Server) (string, error) {
 // the fields being edited, and writes it back — so re-credential is just setting a new
 // CredentialID + AuthMethod. name is mutable (rename). Returns an error if the id is absent.
 func (s *Store) UpdateServer(srv *models.Server) error {
+	// Fail-fast: reject oversized fields BEFORE marshaling.
+	if err := validateServerText(srv); err != nil {
+		return err
+	}
 	tagsJSON, _ := json.Marshal(srv.Tags)
 	sudo := nullableString(srv.SudoCredentialID)
 	res, err := s.db.Exec(
-		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,tags=?,description=?,updated_at=? WHERE id=?`,
-		srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description, now(), srv.ID,
+		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,tags=?,description=?,location=?,hardware=?,services=?,role=?,caveats=?,updated_at=? WHERE id=?`,
+		srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description,
+		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, now(), srv.ID,
 	)
 	if err != nil {
 		return err
@@ -46,14 +56,14 @@ func (s *Store) UpdateServer(srv *models.Server) error {
 
 func (s *Store) GetServer(id string) (*models.Server, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,created_at,updated_at FROM servers WHERE id=?`, id,
+		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at FROM servers WHERE id=?`, id,
 	)
 	return scanServer(row)
 }
 
 func (s *Store) GetServerByName(name string) (*models.Server, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,created_at,updated_at FROM servers WHERE name=?`, name,
+		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at FROM servers WHERE name=?`, name,
 	)
 	srv, err := scanServer(row)
 	if err == sql.ErrNoRows {
@@ -64,7 +74,7 @@ func (s *Store) GetServerByName(name string) (*models.Server, error) {
 
 func (s *Store) ListServers() ([]*models.Server, error) {
 	rows, err := s.db.Query(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,created_at,updated_at FROM servers ORDER BY name`)
+		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at FROM servers ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +108,7 @@ func scanServer(sc scanner) (*models.Server, error) {
 		createdAt        int64
 		updatedAt        int64
 	)
-	if err := sc.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.User, &authMethod, &srv.CredentialID, &sudoCredentialID, &tagsJSON, &srv.Description, &createdAt, &updatedAt); err != nil {
+	if err := sc.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.User, &authMethod, &srv.CredentialID, &sudoCredentialID, &tagsJSON, &srv.Description, &srv.Location, &srv.Hardware, &srv.Services, &srv.Role, &srv.Caveats, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	srv.AuthMethod = models.AuthMethod(authMethod)
@@ -116,4 +126,33 @@ func nullableString(s string) any {
 		return nil
 	}
 	return s
+}
+
+// maxServerTextFieldBytes caps each free-text server field and each individual tag.
+// All of these fields flow into the agent's context on every list_servers call, so an
+// uncapped field is a context-window DoS vector (intentional or accidental). Bytes —
+// not runes — because bytes are the real context-budget boundary.
+const maxServerTextFieldBytes = 4096
+
+// validateServerText enforces the per-field/per-tag byte cap. Called by AddServer and
+// UpdateServer before the write. No content/charset validation (free text); no tag count limit.
+func validateServerText(srv *models.Server) error {
+	for _, f := range []struct{ name, val string }{
+		{"description", srv.Description},
+		{"location", srv.Location},
+		{"hardware", srv.Hardware},
+		{"services", srv.Services},
+		{"role", srv.Role},
+		{"caveats", srv.Caveats},
+	} {
+		if len(f.val) > maxServerTextFieldBytes {
+			return fmt.Errorf("server field %q exceeds %d-byte limit (%d)", f.name, maxServerTextFieldBytes, len(f.val))
+		}
+	}
+	for i, tag := range srv.Tags {
+		if len(tag) > maxServerTextFieldBytes {
+			return fmt.Errorf("server tag[%d] exceeds %d-byte limit (%d)", i, maxServerTextFieldBytes, len(tag))
+		}
+	}
+	return nil
 }

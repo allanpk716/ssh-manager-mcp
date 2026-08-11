@@ -41,6 +41,10 @@ CREATE TABLE projects (
 );
 `
 
+// serverMetadataColumns is the set of structured-metadata columns Plan 8 added to
+// servers. Shared by every migration-shape test so the column list lives in one place.
+var serverMetadataColumns = []string{"description", "location", "hardware", "services", "role", "caveats"}
+
 func hasColumn(t *testing.T, db *sql.DB, table, col string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
@@ -66,8 +70,10 @@ func hasColumn(t *testing.T, db *sql.DB, table, col string) bool {
 // TestFreshSchemaHasNewColumns: a brand-new DB (via Open → initSchema) has both columns.
 func TestFreshSchemaHasNewColumns(t *testing.T) {
 	s := newTestStore(t)
-	if !hasColumn(t, s.db, "servers", "description") {
-		t.Fatal("fresh servers table missing description column")
+	for _, col := range serverMetadataColumns {
+		if !hasColumn(t, s.db, "servers", col) {
+			t.Fatalf("fresh servers table missing %s column", col)
+		}
 	}
 	if !hasColumn(t, s.db, "projects", "status") {
 		t.Fatal("fresh projects table missing status column")
@@ -75,6 +81,18 @@ func TestFreshSchemaHasNewColumns(t *testing.T) {
 }
 
 // TestMigrateAddsColumnsToOldShape: an old-shape DB gets the columns via Open's migrate().
+//
+// DEFERRED (finding #4 of the final review): the review also asked this test to seed an
+// old-shape server row, run Open (migrate), then GetServer and assert the 5 new metadata
+// columns read back as "". That assertion does NOT hold today: addColumnIfMissing adds
+// the columns as plain "TEXT" (no DEFAULT), so pre-migration rows get SQL NULL, and
+// scanServer scans them into a Go string (not sql.NullString) — which errors with
+// "converting NULL to string is unsupported". So a pre-Plan-8 DB upgraded in place would
+// leave every existing server row UNREADABLE via GetServer/GetServerByName/ListServers.
+// Fixing it is a production change (addColumn DEFAULT '' or NullString scan) outside this
+// review-fix brief's scope ("Do NOT touch production behavior beyond #2 and #6"). The
+// deferral is tracked in the final-review-fix-report; the seed-row + GetServer assertion
+// will be added alongside the migration fix.
 func TestMigrateAddsColumnsToOldShape(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
 	db, err := sql.Open("sqlite", path)
@@ -93,8 +111,10 @@ func TestMigrateAddsColumnsToOldShape(t *testing.T) {
 		t.Fatalf("Open after migrate: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	if !hasColumn(t, s.db, "servers", "description") {
-		t.Fatal("migrate did not add servers.description")
+	for _, col := range serverMetadataColumns {
+		if !hasColumn(t, s.db, "servers", col) {
+			t.Fatalf("migrate did not add servers.%s", col)
+		}
 	}
 	if !hasColumn(t, s.db, "projects", "status") {
 		t.Fatal("migrate did not add projects.status")

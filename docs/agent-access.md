@@ -92,7 +92,7 @@ claude mcp add ssh ssh-manager -- --token <TOKEN>
 
 > 用 ssh 工具列出我能用的服务器。
 
-它应调 `list_servers`，返回你 grant 给那个 profile 的 server 列表（`id` / `name` / `host` / `user` / `has_sudo`，**无凭据**）。能列出来说明整条链路通了。
+它应调 `list_servers`，返回你 grant 给那个 profile 的 server 列表（`id` / `name` / `host` / `user` / `has_sudo`，加上 owner 提供的上下文：`role` / `services`（部署了什么）/ `location` / `hardware` / `caveats`（特殊处理——动手前先读）/ `tags` / `description`，**无凭据**）。能列出来说明整条链路通了。
 
 ---
 
