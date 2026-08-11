@@ -1,6 +1,9 @@
 package mcpserver
 
 import (
+	"context"
+	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -58,4 +61,57 @@ func (r *ServeRunner) Close() {
 	for _, s := range r.cache {
 		s.tunnels.CloseAll()
 	}
+}
+
+// bearerToken parses an "Authorization: Bearer <tok>" header value. Returns ""
+// for anything that is not an exact-case-prefix "Bearer " (RFC 6750 is
+// case-insensitive on the scheme; we accept "Bearer" only, matching clients
+// like Claude Code which send exactly that).
+func bearerToken(h string) string {
+	const scheme = "Bearer "
+	if len(h) <= len(scheme) {
+		return ""
+	}
+	if !strings.EqualFold(h[:len(scheme)], scheme) {
+		return ""
+	}
+	return strings.TrimSpace(h[len(scheme):])
+}
+
+// requireProjectToken is HTTP middleware: extract bearer token, VerifyToken it,
+// build/fetch the scoped server, stash the server in the request context. 401
+// on missing/invalid/inactive token; 503 if the scoped server cannot be built.
+func (r *ServeRunner) requireProjectToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		tok := bearerToken(req.Header.Get("Authorization"))
+		if tok == "" {
+			http.Error(w, "missing bearer token", http.StatusUnauthorized)
+			return
+		}
+		project, err := r.st.VerifyToken(tok)
+		if err != nil || project == nil {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		srv, err := r.ServerForProject(project)
+		if err != nil {
+			http.Error(w, "server unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		ctx := context.WithValue(req.Context(), serverKey{}, srv)
+		next.ServeHTTP(w, req.WithContext(ctx))
+	})
+}
+
+// HTTPHandler returns the authenticated streamable-HTTP MCP handler. The SDK's
+// getServer hook reads the server the middleware stashed in the context.
+func (r *ServeRunner) HTTPHandler() http.Handler {
+	getServer := func(req *http.Request) *mcp.Server {
+		if s, ok := req.Context().Value(serverKey{}).(*mcp.Server); ok {
+			return s
+		}
+		return nil // unreachable: middleware 401/503's before the handler runs
+	}
+	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, nil)
+	return r.requireProjectToken(mcpHandler)
 }

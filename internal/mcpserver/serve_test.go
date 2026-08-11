@@ -1,6 +1,9 @@
 package mcpserver
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/store"
@@ -65,4 +68,43 @@ func seedActiveProjectToken(t *testing.T, st *store.Store) (token, projectID, pr
 		t.Fatalf("AddProject returned empty id or token: projID=%q token=%q", projID, tok)
 	}
 	return tok, projID, pid
+}
+
+func TestHTTPHandler_AuthGate(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+	token, _, _ := seedActiveProjectToken(t, st)
+
+	r := NewServeRunner(st)
+	defer r.Close()
+	h := r.HTTPHandler()
+
+	// Minimal JSON-RPC initialize body the streamable handler accepts.
+	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`
+
+	cases := []struct {
+		name string
+		auth string
+		want int
+	}{
+		{"no token", "", http.StatusUnauthorized},
+		{"bad token", "Bearer not-a-real-token", http.StatusUnauthorized},
+		{"malformed header", "Token " + token, http.StatusUnauthorized},
+		{"valid token", "Bearer " + token, http.StatusOK},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(initBody))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			if c.auth != "" {
+				req.Header.Set("Authorization", c.auth)
+			}
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != c.want {
+				t.Fatalf("%s: status = %d, want %d (body=%q)", c.name, rr.Code, c.want, rr.Body.String())
+			}
+		})
+	}
 }
