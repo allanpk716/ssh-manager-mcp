@@ -196,6 +196,10 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	// The snapshot body is the full decrypted credential dump — never let an
+	// intermediary (CDN/proxy/HTTP cache) store it. no-store + no-cache (the
+	// latter also forbids reading a cached copy without revalidation).
+	w.Header().Set("Cache-Control", "no-store, no-cache")
 	if err := json.NewEncoder(w).Encode(snap); err != nil {
 		return // client gone; nothing more to do
 	}
