@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -245,4 +246,110 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	return snap, nil
+}
+
+// ErrVaultNotEmpty is returned by ImportSnapshot when the target store already
+// has servers. Import is restore-into-empty only — no silent clobber. Delete
+// store.db (or point SSHMGR_STORE at a fresh path) to get an empty vault.
+var ErrVaultNotEmpty = errors.New("vault is not empty; import into a fresh/empty store (move/delete store.db first)")
+
+// ImportSnapshot restores a Snapshot into THIS store in one transaction:
+//   - credentials are RE-SEALED under this store's master key (master-key-independent file);
+//   - rows are inserted id-preserving in FK order (credentials -> servers -> profiles -> profile_servers -> projects -> host_keys -> audit);
+//   - projects.token_hash/salt/prefix are written verbatim so the original plaintext token keeps validating.
+//
+// Refuses a non-empty target (any row in servers) with ErrVaultNotEmpty.
+func (s *Store) ImportSnapshot(snap *Snapshot) error {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM servers`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrVaultNotEmpty
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // no-op after Commit
+
+	// 1. credentials (re-seal under THIS store's master key)
+	for _, c := range snap.Credentials {
+		secretBlob, err := seal(s.masterKey, c.Secret)
+		if err != nil {
+			return fmt.Errorf("seal credential %s: %w", c.ID, err)
+		}
+		var passArg any // nil -> SQL NULL
+		if len(c.Passphrase) > 0 {
+			pb, err := seal(s.masterKey, c.Passphrase)
+			if err != nil {
+				return fmt.Errorf("seal passphrase %s: %w", c.ID, err)
+			}
+			passArg = pb
+		}
+		if _, err := tx.Exec(`INSERT INTO credentials(id,type,secret_blob,passphrase_blob,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
+			c.ID, c.Type, secretBlob, passArg, c.CreatedAt, c.UpdatedAt); err != nil {
+			return fmt.Errorf("insert credential %s: %w", c.ID, err)
+		}
+	}
+
+	// 2. servers (sudo_credential_id "" -> NULL to mirror the original NULL semantics for empty)
+	for _, sv := range snap.Servers {
+		var sudoArg any
+		if sv.SudoCredentialID != "" {
+			sudoArg = sv.SudoCredentialID
+		}
+		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, sv.CredentialID, sudoArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.CreatedAt, sv.UpdatedAt); err != nil {
+			return fmt.Errorf("insert server %s: %w", sv.ID, err)
+		}
+	}
+
+	// 3. profiles
+	for _, p := range snap.Profiles {
+		if _, err := tx.Exec(`INSERT INTO profiles(id,name,created_at,updated_at) VALUES(?,?,?,?)`, p.ID, p.Name, p.CreatedAt, p.UpdatedAt); err != nil {
+			return fmt.Errorf("insert profile %s: %w", p.ID, err)
+		}
+	}
+
+	// 4. grants (profile_servers)
+	for _, g := range snap.Grants {
+		if _, err := tx.Exec(`INSERT INTO profile_servers(profile_id,server_id) VALUES(?,?)`, g.ProfileID, g.ServerID); err != nil {
+			return fmt.Errorf("insert grant %s/%s: %w", g.ProfileID, g.ServerID, err)
+		}
+	}
+
+	// 5. projects — hash/salt/prefix VERBATIM (original plaintext token keeps validating)
+	for _, p := range snap.Projects {
+		if _, err := tx.Exec(`INSERT INTO projects(id,name,token_hash,token_salt,token_prefix,profile_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+			p.ID, p.Name, p.TokenHash, p.TokenSalt, p.TokenPrefix, p.ProfileID, p.Status, p.CreatedAt, p.UpdatedAt); err != nil {
+			return fmt.Errorf("insert project %s: %w", p.ID, err)
+		}
+	}
+
+	// 6. host_keys
+	for _, h := range snap.HostKeys {
+		if _, err := tx.Exec(`INSERT INTO host_keys(host_port,key_blob,created_at) VALUES(?,?,?)`, h.HostPort, h.KeyBlob, h.CreatedAt); err != nil {
+			return fmt.Errorf("insert host_key %s: %w", h.HostPort, err)
+		}
+	}
+
+	// 7. audit (id autoincrement — insert without id, letting the target assign; ts preserved)
+	for _, a := range snap.Audit {
+		if _, err := tx.Exec(`INSERT INTO audit_log(ts,project_id,server_id,action,command,sudo,status,exit_code,duration_ms) VALUES(?,?,?,?,?,?,?,?,?)`,
+			a.TS, nullIfEmpty(a.ProjectID), nullIfEmpty(a.ServerID), a.Action, nullIfEmpty(a.Command), a.Sudo, nullIfEmpty(a.Status), a.ExitCode, a.DurationMS); err != nil {
+			return fmt.Errorf("insert audit: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// nullIfEmpty returns nil (-> SQL NULL) for "", else s. Mirrors COALESCE-on-read.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
