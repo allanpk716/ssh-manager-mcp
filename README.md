@@ -113,6 +113,8 @@ ssh-manager projects ls [--all]           # status column; --all includes revoke
 
 ## Multi-machine: `serve` mode (remote agents on a VLAN)
 
+> Full operator guide (中文): [`docs/multi-machine.md`](docs/multi-machine.md) — architecture / config / scenarios / limitations.
+
 By default the broker runs **in-process** inside the MCP server the agent spawns (no daemon). For **several machines sharing one authoritative vault** — e.g. you work across multiple boxes on a home/VLAN network — run the broker as a small HTTP server on one trusted host and point the other machines' agents at it.
 
 ```bash
