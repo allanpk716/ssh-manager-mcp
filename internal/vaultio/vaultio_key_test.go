@@ -65,3 +65,13 @@ func TestEncryptWithKey_WrongKeyLength(t *testing.T) {
 		t.Fatal("EncryptWithKey must reject a non-32-byte key")
 	}
 }
+
+func TestDecryptWithKey_WrongKeyLength(t *testing.T) {
+	// DecryptWithKey validates len(key)==32 BEFORE parsing the blob (same guard as
+	// EncryptWithKey) — so even a valid-shaped blob is rejected with a key-length error,
+	// not handed to aes.NewCipher (which would silently accept 16/24/32).
+	out, _ := EncryptWithKey(make([]byte, 32), []byte("x"))
+	if _, err := DecryptWithKey(make([]byte, 16), out); err == nil {
+		t.Fatal("DecryptWithKey must reject a non-32-byte key")
+	}
+}

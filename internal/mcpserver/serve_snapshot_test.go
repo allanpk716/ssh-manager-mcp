@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -85,10 +86,14 @@ func TestSnapshot_ProjectTokenRejected(t *testing.T) {
 
 func TestSnapshot_CacheTokenRejectedOnMCPPath(t *testing.T) {
 	srv, cacheToken, _, _ := newSnapshotRunner(t)
-	// The MCP endpoint expects a streamable-HTTP MCP initialize; even a POST with a cache token
-	// must be rejected at the auth layer (401/403), not admitted.
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/", nil)
+	// The MCP endpoint expects a streamable-HTTP MCP initialize. Send a real initialize
+	// body so this exercises the same shape an agent's MCP handshake would — and assert a
+	// cache token is still rejected at the auth layer (401/403), not admitted.
+	initBody := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}`)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/", initBody)
 	req.Header.Set("Authorization", "Bearer "+cacheToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
