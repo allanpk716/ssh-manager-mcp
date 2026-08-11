@@ -1,7 +1,9 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,7 +21,7 @@ func TestServeRunner_CachesByProject(t *testing.T) {
 	st := newTestStore(t)
 	defer st.Close()
 
-	token, projID, profileID := seedActiveProjectToken(t, st)
+	token, projID, profileID := seedActiveProjectToken(t, st, "project-A")
 	project, err := st.VerifyToken(token)
 	if err != nil || project == nil {
 		t.Fatalf("VerifyToken: err=%v project=%v (contract: active project resolves)", err, project)
@@ -53,16 +55,16 @@ func newTestStore(t *testing.T) *store.Store {
 }
 
 // seedActiveProjectToken mirrors internal/store/projects_test.go: create an
-// active project bound to a fresh profile and return (token, projectID,
-// profileID). AddProject's default status is active, so the token verifies.
-// Test-only.
-func seedActiveProjectToken(t *testing.T, st *store.Store) (token, projectID, profileID string) {
+// active project named `name` bound to a fresh profile and return (token,
+// projectID, profileID). AddProject's default status is active, so the token
+// verifies. Test-only.
+func seedActiveProjectToken(t *testing.T, st *store.Store, name string) (token, projectID, profileID string) {
 	t.Helper()
-	pid, err := st.AddProfile("dev")
+	pid, err := st.AddProfile(name + "-profile")
 	if err != nil {
 		t.Fatalf("AddProfile: %v", err)
 	}
-	projID, tok, err := st.AddProject("project-A", pid)
+	projID, tok, err := st.AddProject(name, pid)
 	if err != nil {
 		t.Fatalf("AddProject: %v", err)
 	}
@@ -75,7 +77,7 @@ func seedActiveProjectToken(t *testing.T, st *store.Store) (token, projectID, pr
 func TestHTTPHandler_AuthGate(t *testing.T) {
 	st := newTestStore(t)
 	defer st.Close()
-	token, _, _ := seedActiveProjectToken(t, st)
+	token, _, _ := seedActiveProjectToken(t, st, "project-A")
 
 	r := NewServeRunner(st)
 	defer r.Close()
@@ -108,6 +110,83 @@ func TestHTTPHandler_AuthGate(t *testing.T) {
 				t.Fatalf("%s: status = %d, want %d (body=%q)", c.name, rr.Code, c.want, rr.Body.String())
 			}
 		})
+	}
+}
+
+// TestHTTPHandler_SessionBinding_RejectsCrossProjectReplay is the load-bearing
+// proof that the SDK's session-hijack defense is engaged: a token from project A
+// that initialized a session must NOT be replayable onto that session by a
+// different project B's token. The SDK captures UserID at session creation
+// (streamable.go:425-435) and re-checks it per request (streamable.go:250-258);
+// our auth.TokenVerifier (verifyToken) sets UserID = project ID, so a mismatched
+// project → HTTP 403 "session user mismatch".
+//
+// Uses httptest.NewServer (not NewRecorder) so the SDK's session map persists
+// across the two requests against one handler instance.
+func TestHTTPHandler_SessionBinding_RejectsCrossProjectReplay(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+
+	// Two active projects, each with its own profile + token.
+	tokenA, _, _ := seedActiveProjectToken(t, st, "project-A")
+	tokenB, _, _ := seedActiveProjectToken(t, st, "project-B")
+
+	r := NewServeRunner(st)
+	defer r.Close()
+	ts := httptest.NewServer(r.HTTPHandler())
+	defer ts.Close()
+
+	doPost := func(t *testing.T, body, token, sessionID string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Authorization", "Bearer "+token)
+		if sessionID != "" {
+			req.Header.Set("Mcp-Session-Id", sessionID)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+		return resp
+	}
+
+	// 1) Initialize a session as project A. SDK captures userID = A.
+	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
+	resp := doPost(t, initBody, tokenA, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("initialize: status=%d want 200 (body=%q)", resp.StatusCode, b)
+	}
+	mcpSessionID := resp.Header.Get("Mcp-Session-Id")
+	if mcpSessionID == "" {
+		t.Fatal("initialize did not return Mcp-Session-Id — session was not created; SDK defense cannot be exercised")
+	}
+
+	// 2) Cross-project replay: project B's token + A's session → MUST be 403.
+	//    The SDK check fires at streamable.go:250-258 BEFORE method dispatch.
+	pingBody := `{"jsonrpc":"2.0","id":2,"method":"ping","params":{}}`
+	resp2 := doPost(t, pingBody, tokenB, mcpSessionID)
+	defer resp2.Body.Close()
+	b2, _ := io.ReadAll(resp2.Body)
+	if resp2.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-project replay: status=%d want 403 (body=%q) — SDK session-binding defense is NOT engaged", resp2.StatusCode, b2)
+	}
+	if !bytes.Contains(b2, []byte("session user mismatch")) {
+		t.Fatalf("cross-project replay: body=%q want substring \"session user mismatch\"", b2)
+	}
+
+	// 3) Sanity: same project (A) on A's session → 200 (allowed).
+	resp3 := doPost(t, pingBody, tokenA, mcpSessionID)
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		b3, _ := io.ReadAll(resp3.Body)
+		t.Fatalf("same-project ping: status=%d want 200 (body=%q)", resp3.StatusCode, b3)
 	}
 }
 

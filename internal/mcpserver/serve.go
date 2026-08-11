@@ -2,21 +2,29 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
+	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
-// serverKey carries the request's resolved *mcp.Server (set by the auth
-// middleware after VerifyToken + ServerForProject) so the SDK's getServer hook
-// can return it without re-resolving.
+// serverKey carries the request's resolved *mcp.Server (set by the resolveServer
+// middleware after auth + ServerForProject) so the SDK's getServer hook can
+// return it without re-resolving.
 type serverKey struct{}
+
+// projectTokenNominalTTL is a synthetic far-future expiration attached to every
+// TokenInfo solely to satisfy the SDK auth verifier's non-zero-Expiration
+// requirement (auth.go:120-126). Project tokens have no real expiry — their
+// lifecycle is governed by VerifyToken (status='active': rotate/disable/revoke).
+const projectTokenNominalTTL = 100 * 365 * 24 * time.Hour
 
 // scopedServer is a project-scoped MCP server + its tunnel manager, cached per
 // project so concurrent sessions of the same project share one instance.
@@ -64,34 +72,40 @@ func (r *ServeRunner) Close() {
 	}
 }
 
-// bearerToken parses an "Authorization: Bearer <tok>" header value. Returns ""
-// for anything that is not an exact-case-prefix "Bearer " (RFC 6750 is
-// case-insensitive on the scheme; we accept "Bearer" only, matching clients
-// like Claude Code which send exactly that).
-func bearerToken(h string) string {
-	const scheme = "Bearer "
-	if len(h) <= len(scheme) {
-		return ""
+// verifyToken is the auth.TokenVerifier for auth.RequireBearerToken: it validates
+// the project token via the SAME VerifyToken gate stdio uses, and returns a
+// TokenInfo whose UserID is the project id. The SDK captures UserID at session
+// creation (streamable.go:425-435) and re-checks it per request
+// (streamable.go:250-258) — that is what now blocks a token from one project
+// being replayed onto another project's session (403 "session user mismatch").
+func (r *ServeRunner) verifyToken(ctx context.Context, token string, req *http.Request) (*auth.TokenInfo, error) {
+	project, err := r.st.VerifyToken(token)
+	if err != nil || project == nil {
+		return nil, fmt.Errorf("%w: invalid or unknown token", auth.ErrInvalidToken)
 	}
-	if !strings.EqualFold(h[:len(scheme)], scheme) {
-		return ""
-	}
-	return strings.TrimSpace(h[len(scheme):])
+	// SDK's verify() requires a non-zero, non-expired Expiration (auth.go:120-126).
+	// Our project tokens are long-lived; real lifecycle is VerifyToken's
+	// status='active' filter (rotate/disable/revoke), NOT this nominal expiry.
+	// The far-future expiration solely satisfies the SDK check.
+	return &auth.TokenInfo{
+		UserID:     project.ID,
+		Expiration: time.Now().Add(projectTokenNominalTTL),
+	}, nil
 }
 
-// requireProjectToken is HTTP middleware: extract bearer token, VerifyToken it,
-// build/fetch the scoped server, stash the server in the request context. 401
-// on missing/invalid/inactive token; 503 if the scoped server cannot be built.
-func (r *ServeRunner) requireProjectToken(next http.Handler) http.Handler {
+// resolveServer runs AFTER auth.RequireBearerToken has stashed the *auth.TokenInfo.
+// It resolves the token's project (by UserID) to its cached scoped server and
+// stashes that server under serverKey for the SDK's getServer hook.
+func (r *ServeRunner) resolveServer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		tok := bearerToken(req.Header.Get("Authorization"))
-		if tok == "" {
-			http.Error(w, "missing bearer token", http.StatusUnauthorized)
+		ti := auth.TokenInfoFromContext(req.Context())
+		if ti == nil || ti.UserID == "" {
+			http.Error(w, "no authenticated project", http.StatusForbidden) // fail closed
 			return
 		}
-		project, err := r.st.VerifyToken(tok)
+		project, err := r.st.GetProject(ti.UserID)
 		if err != nil || project == nil {
-			http.Error(w, "invalid token", http.StatusUnauthorized)
+			http.Error(w, "project not found", http.StatusServiceUnavailable)
 			return
 		}
 		srv, err := r.ServerForProject(project)
@@ -104,17 +118,27 @@ func (r *ServeRunner) requireProjectToken(next http.Handler) http.Handler {
 	})
 }
 
-// HTTPHandler returns the authenticated streamable-HTTP MCP handler. The SDK's
-// getServer hook reads the server the middleware stashed in the context.
+// HTTPHandler returns the authenticated streamable-HTTP MCP handler. Composition:
+//
+//	auth.RequireBearerToken (outermost) → resolveServer → SDK streamable handler
+//
+// The SDK's getServer hook reads the server resolveServer stashed in the context.
+// Outermost placement of RequireBearerToken is required so the SDK sees the
+// *auth.TokenInfo on the initialize request that creates the session — that is
+// where UserID is captured (streamable.go:425-435) for later per-request checks.
 func (r *ServeRunner) HTTPHandler() http.Handler {
 	getServer := func(req *http.Request) *mcp.Server {
 		if s, ok := req.Context().Value(serverKey{}).(*mcp.Server); ok {
 			return s
 		}
-		return nil // unreachable: middleware 401/503's before the handler runs
+		// Unreachable in practice: resolveServer stashes a server (or 403/503's)
+		// before the SDK handler runs. If reached, the SDK returns HTTP 400
+		// "no server available" (streamable.go:328-331) — no panic.
+		return nil
 	}
 	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, nil)
-	return r.requireProjectToken(mcpHandler)
+	authMW := auth.RequireBearerToken(r.verifyToken, &auth.RequireBearerTokenOptions{}) // no scopes
+	return authMW(r.resolveServer(mcpHandler))
 }
 
 // RunServe runs the authenticated streamable-HTTP MCP server until ctx is
