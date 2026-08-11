@@ -35,6 +35,12 @@
 6. **No `profiles revoke <server>`** (the "shrink a profile" lever). The user's Q2 answer was "杀" (kill whole project) only; narrowing a live profile is OUT OF SCOPE. (`profiles grant` stays the only profile-mutation command.)
 7. **Agent `list_servers` output unchanged.** `description` is owner-side metadata; it is **not** leaked to the agent. (The agent sees `id/name/host/user/has_sudo` only, as today.) If the owner later wants the agent to see notes, that's a separate, iron-rule-relevant decision — not here.
 
+> **Update (2026-08-11):** the deferred "later decision" has now been made — reversed to
+> **full-open**. Structured fields (location/hardware/services/role/caveats) plus tags and
+> description are surfaced to the agent via `list_servers`. See
+> `docs/superpowers/specs/2026-08-11-server-structured-metadata-design.md` and its
+> implementation plan.
+
 ---
 
 ## File Structure

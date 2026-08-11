@@ -49,7 +49,7 @@ ssh-manager servers add \
   # --key <私钥文件路径> [--key-passphrase '<私钥口令>']
   [--sudo-password '<sudo 密码>']    # 给了才支持 sudo=true
   [--tags prod,gpu]                 # 可选，逗号分隔
-  [--description '<你的备注>']        # 可选，**不给 agent 看**
+  [--description '<你的备注>']        # 可选，给 agent 看的自由文本
 ```
 
 ### 必填 vs 选填
@@ -58,13 +58,32 @@ ssh-manager servers add \
 - `--password` 和 `--key` **互斥**；两个都给或都不给都会报错。
 - `--key` 读的是私钥**文件**的路径（不是把私钥内容贴进来）。加密私钥用 `--key-passphrase` 解密。
 
-### 两个最容易踩的点
+### Structured server metadata
 
-1. **`--description` 是给 agent 看的吗？不是。**
-   它是**你自己的笔记本**——硬件配置、用途、负责人、到期日都行。**agent 的 `list_servers` 不返回这个字段**，所以你哪怕在这里写“生产库，别乱删”也只是给你自己看的。反过来：**不要**把这里当成“给 agent 的使用说明”——agent 看不到。要给 agent 提示，在你的项目 prompt / CLAUDE.md 里写。
+Each server carries structured fields, all shown to the agent via `list_servers` so it
+understands what each box is and how to act safely:
 
-2. **sudo 的真相。**
-   `--sudo-password` 只是存了一个“额外的密码”，专门用于 broker 内部执行 `sudo -S`（从 stdin 喂密码）。它**不**改变 agent 登录用的账号密码。给了它 → agent 在 `list_servers` 看到 `has_sudo=true` → 它可以在 `exec_command` 里传 `sudo=true`，broker 自动用 `sudo -S` 跑这条命令。**agent 不应该自己把 `sudo` 拼到命令前面**（否则会出现 `sudo sudo ...`）。
+| Flag | Field | Example |
+|---|---|---|
+| `--location` | where deployed | `dc2 rack14` / `us-east-1a` |
+| `--hardware` | hardware config | `8x A100 80GB, 1TB RAM` |
+| `--services` | what's deployed/running | `postgres primary, prometheus` |
+| `--role` | this server's purpose | `prod pg primary` |
+| `--special-handling` | operational gotchas the agent must heed | `do not reboot 02-03:00; failover is manual` |
+
+`--description` is supplementary free-text; `--tags` is free-form labels. Both are also
+shown to the agent.
+
+> ⚠️ **Do not put secrets in any of these fields.** Keys, tokens, and PII entered here
+> travel into the agent's context and the upstream LLM provider on every `list_servers`
+> call. Use the credential vault (`--password` / `--key`) for secrets, never these fields.
+
+Each field is capped at 4 KB. Edit any field with `ssh-manager servers edit <name> --<flag> ...`;
+pass an empty value (`--special-handling ""`) to clear.
+
+### sudo 的真相
+
+`--sudo-password` 只是存了一个"额外的密码"，专门用于 broker 内部执行 `sudo -S`（从 stdin 喂密码）。它**不**改变 agent 登录用的账号密码。给了它 → agent 在 `list_servers` 看到 `has_sudo=true` → 它可以在 `exec_command` 里传 `sudo=true`，broker 自动用 `sudo -S` 跑这条命令。**agent 不应该自己把 `sudo` 拼到命令前面**（否则会出现 `sudo sudo ...`）。
 
 ---
 
