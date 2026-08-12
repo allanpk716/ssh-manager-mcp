@@ -90,26 +90,66 @@ ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
 
 **让它常驻 + 开机自启**（serve 是个长驻进程，别在前台手跑就完事）：
 
-- **Linux（systemd）**，示例 unit：
-  ```ini
-  # /etc/systemd/system/ssh-manager-serve.service
-  [Unit]
-  Description=ssh-manager MCP server (serve mode)
-  After=network.target
+- **Windows**（推荐）：跑 `ssh-manager serve install`——程序自己注册 Task Scheduler 任务（at-boot + at-logon + 崩溃自重启），不用你手写 schtasks XML 或 NSSM 包装。详见下面"Windows：`serve install` 一条龙"小节。
+- **Linux**：自己写 systemd unit（示例见下）。`ssh-manager serve install` 在 Linux 上**尚未实现**（会报 `not yet supported on linux`，见 [T6 限制](#linuxmacos-尚未支持)）。
+- **macOS**：自己写 launchd LaunchAgent。`serve install` 同样**尚未实现**。
 
-  [Service]
-  ExecStart=/usr/local/bin/ssh-manager serve --addr 0.0.0.0:7878 \
-            --tls-cert /etc/ssh-manager/cert.pem --tls-key /etc/ssh-manager/key.pem
-  Environment=SSHMGR_MASTERKEY_HEX=<unlock 打印的 hex>   # 服务器若无 keychain 必填；有 keychain 可省
-  Restart=on-failure
-  User=ssh-manager
+#### Windows：`serve install` 一条龙（Plan 14，推荐）
 
-  [Install]
-  WantedBy=multi-user.target
-  ```
-  > **master key**：服务器若是 headless（无 OS keychain），master key 靠 `SSHMGR_MASTERKEY_HEX` 环境变量（同 [getting-started 的无 keychain 小节](./getting-started.md#无-keychain-环境headless-linux-等)）；写在 unit 的 `Environment=` 里。有 keychain 的桌面服务器则让该用户 keychain 持有 master key。
-- **Windows**：用 NSSM 或任务计划把 `ssh-manager.exe serve ...` 注册成开机自启服务。
-- **macOS**：用 launchd。
+```powershell
+# 在交互式 session（本地终端 / RDP，不是 ssh）里跑：
+ssh-manager serve install --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
+```
+
+程序会：
+
+1. **先检查 `master.key` 存在**（没有就报错让你先 `unlock`）。
+2. 生成 Task Scheduler XML（boot + logon 触发，崩溃自重启 PT1M × 3，stdout/stderr 重定向到 `%LocalAppData%\ssh-manager\serve.log`），通过 PowerShell `Register-ScheduledTask` 注册成任务 `ssh-manager-serve`。
+3. **弹 PowerShell `Get-Credential` 对话框让你输 Windows 密码**——任务要 `LogonType=Password` 才能 boot 时就起（无需等人登录）。**密码只活在 PowerShell 进程内存里，不进 ssh-manager.exe argv，不进 4688 审计日志**。
+4. 立即 `schtasks /Run` 跑一次验证 + 生成 serve.log。
+
+配套命令：
+
+```powershell
+ssh-manager serve status      # 查任务状态 + 进程在不在 + HTTP 活着没 + vault 解锁没
+ssh-manager serve uninstall   # 删任务 + 停 serve 进程
+```
+
+`serve status` 四路独立检查：任务注册 / 进程在跑 / HTTP 响应（401 或 200 都算活）/ vault 解锁（扫 `serve.log` 里有没有"master key present but unreadable"硬失败标记——进程活着但 master key 解不开时这路会报 `LOCKED`，区分"进程在跑"和"真正可用"）。
+
+⚠️ **账户密码过期会让任务起不来**：Task Scheduler 存的是你**当时的** Windows 密码，密码过期后任务会因凭据失效而起不来。单用户本地账户建议直接禁用密码过期：
+
+```powershell
+# 以管理员身份跑（NUC10 这种单 owner 机适用）：
+wmic UserAccount where Name='allan716' set PasswordExpires=False
+```
+
+> **新机器升级注意**：已有 v0.2.0 vault 的机器升级到新版后，`master.key` 还没生成（旧 master key 在 keychain 里，新版从非交互 session 读不出）——必须**先在交互式 session 跑一次 `ssh-manager unlock` 触发迁移**，再 `serve install`，否则 serve 读不到 master key 会启动失败。完整流程见 [backup-restore.md 的 Plan 14 升级 Runbook](./backup-restore.md#plan-14--windows-生产部署dpapi-master-key--serve-常驻)。
+
+#### Linux：systemd（自建，`serve install` 尚未实现）
+
+`ssh-manager serve install` 在 Linux 上会报 `not yet supported on linux; see docs/multi-machine.md`（计划在后续 plan 实现，spec §3.4 / §9）。在那之前自己写 unit：
+
+```ini
+# /etc/systemd/system/ssh-manager-serve.service
+[Unit]
+Description=ssh-manager MCP server (serve mode)
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/ssh-manager serve --addr 0.0.0.0:7878 \
+          --tls-cert /etc/ssh-manager/cert.pem --tls-key /etc/ssh-manager/key.pem
+Environment=SSHMGR_MASTERKEY_HEX=<unlock 打印的 hex>   # 服务器若无 keychain 必填；有 keychain 可省
+Restart=on-failure
+User=ssh-manager
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> **master key**：服务器若是 headless（无 OS keychain），master key 靠 `SSHMGR_MASTERKEY_HEX` 环境变量（同 [getting-started 的无 keychain 小节](./getting-started.md#无-keychain-环境headless-linux-等)）；写在 unit 的 `Environment=` 里。有 keychain 的桌面服务器则让该用户 keychain 持有 master key。
+>
+> **注意 Linux 路径上的坑**：systemd unit 以 `User=ssh-manager` 跑时，`os.UserConfigDir()` 解析的是那个用户的家目录，不是 owner 的——别把 vault 装在 owner 家又指望 `User=ssh-manager` 的服务能读到。
 
 ### Step 3（每台工作机）：Claude Code 连远程
 
@@ -165,7 +205,7 @@ ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
 
 1. **在线 only（serve 本身）**：serve 的远程 MCP 走在线——工作机连不上服务器（服务器挂了 / VLAN 断了 / 笔记本带出门）= 该机的 agent **走不了远程 MCP**。但本地若有缓存（见下条），agent 可以切到只读的 `mcp --cache` 兜底。
 2. **离线缓存：✅ 已实现（Plan 12）**：工作机本地持有一份**加密的只读** vault 快照，连不上服务器时 agent 照常 exec / download / upload / 转发（只读，不能改）。**见本篇[「离线只读缓存（Plan 12）」](#离线只读缓存plan-12)节**——它不是 serve 的"离线模式"，而是一份独立拉取、独立加密、自动刷新的本地缓存。在一台机器上**同时**配 serve（在线）+ cache（离线兜底）也行——两套互不冲突。
-3. **服务器是单点**：服务器挂了 = 所有人暂停，直到它恢复。**自动备份 / 灾难恢复是后续 Plan 13，尚未实现**。目前的备份手段：手动复制服务器上的 `store.db`（恢复时需原机 keychain 的 master key，**不可移植**）；可用 [export/import](./backup-restore.md)（Plan 11，已做）做可移植的加密备份。
+3. **服务器是单点**：服务器挂了 = 所有人暂停，直到它恢复。**自动备份 / 灾难恢复已落地**——[Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)（NAS 定时明文备份）+ [export/import](./backup-restore.md)（Plan 11，便携加密备份）。恢复手段：从 NAS 拷最新快照或 export 文件，在新机 `ssh-manager import`（[见 backup-restore 的灾难恢复](./backup-restore.md#场景-③-灾难恢复)）。
 4. **单 owner 设计**：多个人共用同一个 vault、按人隔离访问——**不在范围**。本方案是"一个人、多台机"。多人场景需要 per-user ACL + 审计隔离，是另一个量级的功能。
 5. **bearer token = 钥匙**：谁拿到某项目的 token + 能连到服务器 = 拿到那个项目 profile 里的**所有服务器**。所以：用 **TLS** 防嗅探；用 [`projects rotate`](./agent-access.md)（换发）/ [`revoke`](./agent-access.md)（吊销）管 token 生命周期；token 进密码管理器、别进 git。
 
@@ -179,10 +219,21 @@ serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问
 |---|---|---|
 | Plan 11 · export/import | 整个 vault 口令加密便携文件：备份 / 迁移 / 灾难恢复 | ✅ 已做（[backup-restore.md](./backup-restore.md)） |
 | Plan 12 · 离线只读缓存 | 工作机本地缓存加密 vault，断网时只读用、自动刷新 | ✅ 已做（本节[「离线只读缓存」](#离线只读缓存plan-12)） |
-| Plan 13 · 群晖自动备份 | 服务器定时出加密快照到 NAS，灾难恢复 | 未做 |
-| Plan 14 · 迁移 + DEK enroll | 新机器加入流程、密钥分发 | 未做 |
+| Plan 13 · 群晖自动备份 | 服务器定时出明文快照到 NAS，灾难恢复 | ✅ 已做（[backup-restore.md Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)） |
+| Plan 14 · Windows 生产部署 | DPAPI master key（替代 keychain）+ `serve install` Task Scheduler 常驻 | ✅ 已做（[backup-restore.md Plan 14](./backup-restore.md#plan-14--windows-生产部署dpapi-master-key--serve-常驻)） |
 
-**现在：serve = 在线 live；备份 / 迁移已可（export/import，见 [backup-restore.md](./backup-restore.md)）；离线只读缓存已落地（本节[「离线只读缓存」](#离线只读缓存plan-12)）。** 群晖自动备份 / 新机 enroll 还没到位（见下节"限制"）。
+**现在：serve = 在线 live（Windows 一条龙 `serve install`，Linux/macOS 自建 systemd/launchd）；备份 / 迁移已可（export/import + Plan 13 NAS）；离线只读缓存已落地（Plan 12）。** Linux/macOS 的 `serve install` 还没实现（[见下](#linuxmacos-尚未支持)）。
+
+#### Linux/macOS 尚未支持
+
+Plan 14 只实现了 **Windows Task Scheduler** 的 `serve install`（spec §3.4 scope 收窄）。Linux systemd --user / macOS launchd 各有平台陷阱（linger 权限、D-Bus session、LaunchAgent 仅 GUI login 后启动），**`ssh-manager serve install` 在这两个平台会报**：
+
+```
+serve install/uninstall/status is not yet supported on linux; see docs/multi-machine.md
+(tracked for a follow-up plan — Windows Task Scheduler is the only implemented path)
+```
+
+在那之前，Linux/macOS 用户按上面"Step 2"里的 systemd unit / launchd 模板自己注册开机自启。
 
 ---
 
