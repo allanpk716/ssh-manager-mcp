@@ -82,7 +82,7 @@ var migrateSources = func() (master, dek migrateSource) {
 			new: store.DpapiKeyProvider{Path: filepath.Join(dir, "master.key")},
 		}, migrateSource{
 			old: store.KeyringKeyProvider{Service: keyringService(), User: legacyCacheDEKKeyringUser},
-			new: store.DpapiKeyProvider{Path: filepath.Join(dir, "cache-dek.key")},
+			new: store.DpapiKeyProvider{Path: dpapiCacheDekPath()},
 		}
 }
 
@@ -109,6 +109,20 @@ func dpapiBaseDir() string {
 		return filepath.Join("ssh-manager")
 	}
 	return filepath.Join(appData, "ssh-manager")
+}
+
+// dpapiCacheDekPath is the SINGLE source of truth for the cache-DEK DPAPI file
+// path. Both the migration writer (migrateSources → DpapiKeyProvider{Path: …})
+// and the cache DEK reader (dekProvider in cache_dek_windows.go) MUST resolve
+// the same path — otherwise the migrated cache-dek.key is written to A and read
+// from B, the reader hits ErrNotFound, generates a fresh DEK, and the migrated
+// file is orphaned (Plan 14 T5 review F1). Centralizing the path here keeps the
+// write + read sides locked together; migrateSources and the dekProvider seam
+// both call THIS function, never filepath.Join(dir, "cache-dek.key") inline.
+const cacheDekFileName = "cache-dek.key"
+
+func dpapiCacheDekPath() string {
+	return filepath.Join(dpapiBaseDir(), cacheDekFileName)
 }
 
 func init() {

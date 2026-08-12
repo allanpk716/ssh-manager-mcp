@@ -73,10 +73,20 @@ func newUnlockCmd() *cobra.Command {
 			}
 			if !errors.Is(err, store.ErrNotFound) {
 				// keychain unavailable (e.g. headless Linux w/o Secret Service), or
-				// Windows master.key present but undecryptable (DPAPI failure) →
-				// passphrase fallback (Unix) / hard error (Windows resolveMasterKey).
-				// unlock itself stays platform-neutral: fall through to passphrase
-				// path (Windows resolveMasterKey handles DPAPI hard-fail separately).
+				// Windows master.key present but undecryptable (DPAPI failure on a
+				// corrupt file / admin password reset / session anomaly). unlock is
+				// the interactive CLI entry and ALWAYS falls through to passphrase
+				// here on every platform (this branch is intentionally not a hard
+				// error — the user gets a usable key via passphrase derivation).
+				//
+				// This is DISTINCT from resolveMasterKey (the programmatic master-key
+				// resolver, called only by vault.Open / serve — NOT by unlock):
+				// resolveMasterKey hard-fails on Windows DPAPI decrypt (no TTY, no
+				// safe degradation; spec §5.6). The two paths intentionally diverge:
+				// unlock may degrade to passphrase; programmatic open may not. The
+				// Windows silent-wrong-key concern (passphrase-derived key ≠ DPAPI
+				// master key → printed key can't open the vault) is pre-existing
+				// (T3/T4-approved) and out of scope for T5's migration branch.
 				return runPassphraseUnlock(cmd)
 			}
 			// ErrNotFound — no master key persisted. On Windows this may be a

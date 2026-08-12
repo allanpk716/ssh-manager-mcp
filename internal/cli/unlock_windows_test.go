@@ -258,6 +258,7 @@ func TestMigrate_CleanEnv_FirstRunGenerate(t *testing.T) {
 
 	// Point migrateSources at a UNIQUE service whose slots are absent → migrator
 	// finds nothing to migrate → unlock proceeds to first-run generate.
+	prevSrc := migrateSources
 	migrateSources = func() (m, d migrateSource) {
 		return migrateSource{
 				old: store.KeyringKeyProvider{Service: service, User: "master-key"},
@@ -267,6 +268,7 @@ func TestMigrate_CleanEnv_FirstRunGenerate(t *testing.T) {
 				new: store.DpapiKeyProvider{Path: filepath.Join(dir, "cache-dek.key"), DirUser: os.Getenv("USERNAME")},
 			}
 	}
+	t.Cleanup(func() { migrateSources = prevSrc })
 	// Prompt must not fire in the clean case.
 	prompted := setConfirm(t, true)
 	t.Cleanup(func() {
@@ -411,6 +413,148 @@ type failingGetProvider struct {
 func (f *failingGetProvider) Get() ([]byte, error) { return nil, f.err }
 func (f *failingGetProvider) Set([]byte) error     { return nil }
 func (f *failingGetProvider) Delete() error        { return nil }
+
+// TestMigrate_DEKFile_ReusedByLoadOrCreateDEK is the F1 regression guard (Plan
+// 14 T5 review F2). Before the fix, the v0.2.0 cache-DEK migration was
+// WRITE-ONLY: migrate_windows.go wrote cache-dek.key (DpapiKeyProvider), but
+// dekProvider (cache.go) still returned a KeyringKeyProvider — so the next
+// loadOrCreateDEK() consulted the (deleted) keychain slot, hit ErrNotFound, and
+// generated a FRESH DEK, orphaning the migrated file. This test forces the bug
+// to stay fixed: after migration, the production dekProvider seam (DpapiKeyProvider
+// at the migration's cache-dek.key path) MUST return the migrated DEK, not a
+// newly-generated one.
+//
+// The test mirrors the production shape: dekProvider is swapped to a
+// DpapiKeyProvider pointed at the SAME cache-dek.key path the migration writes.
+// A path mismatch (write A, read B) is exactly the F1 bug — and is now
+// impossible by construction because both sides go through dpapiCacheDekPath().
+// The test pins that contract: change either side to a different path and this
+// test fails.
+func TestMigrate_DEKFile_ReusedByLoadOrCreateDEK(t *testing.T) {
+	service := uniqueService(t)
+	dir := t.TempDir()
+	masterOld, dekOld, _, dekNew := freshMigrateState(t, service, dir)
+
+	// Seed a KNOWN cache DEK in the legacy keychain slot. Distinctive pattern
+	// (0xAB repeated) — a freshly-generated 32-byte DEK won't match it.
+	wantDEK := make([]byte, 32)
+	for i := range wantDEK {
+		wantDEK[i] = byte(0xAB)
+	}
+	if err := dekOld.Set(wantDEK); err != nil {
+		t.Fatalf("seed legacy DEK slot: %v", err)
+	}
+
+	// Also seed a master-key legacy slot so the master migrate outcome is Done
+	// (which gates the DEK migrate on green light — Done || Absent).
+	masterMK := make([]byte, 32)
+	if _, err := rand.Read(masterMK); err != nil {
+		t.Fatal(err)
+	}
+	if err := masterOld.Set(masterMK); err != nil {
+		t.Fatalf("seed legacy master slot: %v", err)
+	}
+
+	setConfirm(t, true) // accept both migrate prompts (master + DEK)
+
+	if _, _, err := runUnlock(t); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+
+	// Migration wrote cache-dek.key at dekNew.Path. Verify.
+	gotMigrated, err := dekNew.Get()
+	if err != nil {
+		t.Fatalf("dekNew.Get after migrate: %v", err)
+	}
+	if !bytesEqual(gotMigrated, wantDEK) {
+		t.Fatalf("migrated DEK file does not hold the legacy DEK: got %x want %x", gotMigrated, wantDEK)
+	}
+
+	// THE F1 REGRESSION CHECK: swap dekProvider to the PRODUCTION shape — a
+	// DpapiKeyProvider at the SAME path the migration just wrote (this is exactly
+	// what cache_dek_windows.go's default seam does, just in a temp dir). Then
+	// loadOrCreateDEK() must return the MIGRATED DEK, not ErrNotFound→generate.
+	prevDekProvider := dekProvider
+	dekProvider = func() store.KeyProvider {
+		return &store.DpapiKeyProvider{Path: dekNew.Path, DirUser: os.Getenv("USERNAME")}
+	}
+	t.Cleanup(func() { dekProvider = prevDekProvider })
+
+	gotDEK, err := loadOrCreateDEK()
+	if err != nil {
+		t.Fatalf("loadOrCreateDEK after migrate: %v", err)
+	}
+	if !bytesEqual(gotDEK, wantDEK) {
+		t.Fatalf("F1 REGRESSION: loadOrCreateDEK did not reuse the migrated DEK file — got %x want %x (a fresh DEK was generated, meaning dekProvider reads a different path than the migration writes)", gotDEK, wantDEK)
+	}
+
+	// Legacy keychain slot MUST be deleted post-migrate (otherwise a future
+	// reader that still consulted the slot would silently resurrect an old DEK).
+	if _, err := dekOld.Get(); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("legacy DEK slot not deleted after migrate: err=%v", err)
+	}
+}
+
+// TestMigrate_DEKFile_PathContractBetweenMigratorAndReader is the FIRST line of
+// defense against the F1 regression (Plan 14 T5 review F1). It asserts — with
+// NO migration, NO keychain, NO DPAPI file, just the production defaults — that
+// the cache-DEK provider seam (cache_dek_windows.go's dekProvider) and the
+// migration's DEK destination (migrate_windows.go's migrateSources) resolve to
+// the SAME cache-dek.key path. Before the fix, the migrator wrote
+// DpapiKeyProvider{Path: <dir>/cache-dek.key} but the reader returned
+// KeyringKeyProvider{...} (no path at all → keychain) → the migrated file was
+// orphaned. This test pins the contract: if either side drifts to a different
+// path (or a different medium), it fails immediately.
+//
+// It uses the production dekProvider + migrateSources AS-IS (no overrides), so
+// a future change that reverts the seam to a keychain slot WILL fail here.
+func TestMigrate_DEKFile_PathContractBetweenMigratorAndReader(t *testing.T) {
+	// dpapiPath extracts the Path from a DpapiKeyProvider whether the seam
+	// returned it by value or by pointer (both are valid — methods are
+	// value-receiver). Returns ok=false for any other type (the F1 bug shape:
+	// a KeyringKeyProvider has no Path at all).
+	dpapiPath := func(kp store.KeyProvider) (string, bool) {
+		switch dp := kp.(type) {
+		case *store.DpapiKeyProvider:
+			return dp.Path, true
+		case store.DpapiKeyProvider:
+			return dp.Path, true
+		}
+		return "", false
+	}
+
+	// Reader side: production dekProvider seam. The seam MUST be a DpapiKeyProvider
+	// (not a KeyringKeyProvider) whose Path matches the migration destination.
+	reader := dekProvider()
+	readerPath, ok := dpapiPath(reader)
+	if !ok {
+		t.Fatalf("F1 REGRESSION: production dekProvider is %T, want a DpapiKeyProvider (cache_dek_windows.go must bind a DpapiKeyProvider so the migrated cache-dek.key is actually read back — a KeyringKeyProvider reads the keychain, not the file, orphaning the migrated DEK)", reader)
+	}
+	if readerPath == "" {
+		t.Fatalf("F1 REGRESSION: production dekProvider DpapiKeyProvider.Path is empty (would fall back to master.key default — wrong file)")
+	}
+
+	// Writer side: production migrateSources DEK destination.
+	_, dek := migrateSources()
+	writerPath, ok := dpapiPath(dek.new)
+	if !ok {
+		t.Fatalf("migrateSources DEK destination is %T, want a DpapiKeyProvider", dek.new)
+	}
+
+	// THE F1 CONTRACT: reader path == writer path.
+	if readerPath != writerPath {
+		t.Fatalf("F1 REGRESSION: dekProvider reads %q but migrateSources writes %q — the migrated DEK would be orphaned (write-only migration, the original F1 bug)", readerPath, writerPath)
+	}
+
+	// And both must resolve via the shared helper (dpapiCacheDekPath), so a
+	// future drift in either side is impossible by construction.
+	if readerPath != dpapiCacheDekPath() {
+		t.Fatalf("F1 REGRESSION: dekProvider Path %q != dpapiCacheDekPath() %q — reader is not using the shared path helper", readerPath, dpapiCacheDekPath())
+	}
+	if writerPath != dpapiCacheDekPath() {
+		t.Fatalf("F1 REGRESSION: migrateSources DEK Path %q != dpapiCacheDekPath() %q — writer is not using the shared path helper", writerPath, dpapiCacheDekPath())
+	}
+}
 
 // bytesEqual is a local equal (no generics needed).
 func bytesEqual(a, b []byte) bool {
