@@ -18,7 +18,7 @@
 - **复用 Plan 11**：`ExportSnapshot()` / `ImportSnapshot()` 不改语义，只修确定性（spec §3.3）。
 - **ORDER BY 统一 `id`**：`export.go` 五条查询（servers:118, credentials:138, profiles:171, grants:189, projects:207）全部用主键 `id` 排序；grants 是 `ORDER BY profile_id, server_id`；现有 servers/profiles 的 `ORDER BY name` 改 `ORDER BY id`（spec §5.5）。
 - **锁文件**：`--dir/.ssh-manager-backup.lock`，`O_EXCL` 建立，内容只有 `<start-ts>`（Unix epoch 秒，十进制 ASCII）。撞锁 + `start-ts` 距今 > 5 min → 窃取重建；否则 exit 0 skip。**无 pidAlive，无 build-tag，无 `golang.org/x/sys/windows`**（spec §3.8）。
-- **超时窗口 = 5 min**（`const staleLockSeconds = 300`）。**不**是 30 min。
+- **超时窗口 = 5 min**（`const staleLockSeconds = 300 * time.Second` —— **typed `time.Duration`**，不能写裸 `300`，否则与 `time.Since()` 比较时被 coerce 成 300 纳秒导致守卫失效）。**不**是 30 min。
 - **边车**：`<file>.sha256`，内容**只有一行** `file_sha256=<hex>\n`（无 size 字段）。0600（Linux）/ ACL（Windows）。
 - **marker**：`--dir/.ssh-manager-backup-marker` 必须存在（只查存在性），否则 fail-closed。
 - **`.git` 护栏**：只查 `--dir` 自身是否含 `.git`（`filepath.Join(dir, ".git")` 存在性），**不向上遍历**。命中 fail-closed。
