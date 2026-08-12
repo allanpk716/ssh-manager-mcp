@@ -124,6 +124,8 @@ ssh-manager serve uninstall   # 删任务 + 停 serve 进程
 wmic UserAccount where Name='allan716' set PasswordExpires=False
 ```
 
+> Win11 22H2+ 不装 `wmic`，改用 `Set-LocalUser -Name 'allan716' -PasswordNeverExpires $true`。
+
 > **新机器升级注意**：已有 v0.2.0 vault 的机器升级到新版后，`master.key` 还没生成（旧 master key 在 keychain 里，新版从非交互 session 读不出）——必须**先在交互式 session 跑一次 `ssh-manager unlock` 触发迁移**，再 `serve install`，否则 serve 读不到 master key 会启动失败。完整流程见 [backup-restore.md 的 Plan 14 升级 Runbook](./backup-restore.md#plan-14--windows-生产部署dpapi-master-key--serve-常驻)。
 
 #### Linux：systemd（自建，`serve install` 尚未实现）

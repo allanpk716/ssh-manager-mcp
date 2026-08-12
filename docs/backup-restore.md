@@ -224,6 +224,12 @@ Task Scheduler 存的是你**装任务当时**的 Windows 密码。**密码过�
 wmic UserAccount where Name='<你的用户名>' set PasswordExpires=False
 ```
 
+> **Win11 22H2+ 注意**：`wmic` 在新版 Windows 默认不装（弃用）。改用 PowerShell cmdlet：
+> ```powershell
+> Set-LocalUser -Name '<你的用户名>' -PasswordNeverExpires $true
+> ```
+> （NUC10 当前是 Win10 19045，`wmic` 可用；未来升级到 24H2 需切到 `Set-LocalUser`。）
+
 域账户通常有强制密码策略，不能这么搞——定期重装任务（`serve uninstall` → 改密码 → `serve install`）是唯一的运维路径。
 
 ### 威胁模型（诚实，非 regression）
