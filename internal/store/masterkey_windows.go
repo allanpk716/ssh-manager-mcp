@@ -113,9 +113,10 @@ func (p DpapiKeyProvider) Delete() error {
 }
 
 // ensureDirACL creates dir (if absent) and locks its ACL to DirUser only:
-// inheritance off, (OI)(CI) FullControl for the user. Idempotent. Called once
-// per Set, but the icacls op is only run when the dir was just created (a
-// best-effort skip if it already exists with correct ACL — see NOTE).
+// inheritance off, (OI)(CI) FullControl for the user. icacls runs
+// UNCONDITIONALLY on every Set (not just on dir creation) — it's idempotent,
+// and re-running it defends against the folder ACL being loosened by an
+// external process between Sets.
 //
 // Windows ignores os.WriteFile mode bits (review consensus D); ACL must be
 // explicit via icacls or SetFileSecurity. We use icacls (simpler than SDDL Go).
