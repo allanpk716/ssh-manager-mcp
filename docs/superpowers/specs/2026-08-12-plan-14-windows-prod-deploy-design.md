@@ -113,7 +113,7 @@ E2E 实测验证了 Plan 10–13 架构核心成立（serve 鉴权、MCP 握手�
 | DPAPI syscall | `internal/store/dpapi_windows.go`（新） | Windows | CryptProtectData/UnprotectData |
 | keychain seam 分流 | `internal/cli/keychain_windows.go` / `_unix.go`（新） | 全平台 | 编译期绑 KeyProvider |
 | v0.2.0 迁移 | `internal/cli/unlock.go`（改）+ `internal/store/masterkey.go`（改） | 全平台 | 检测旧 slot → 迁新存储 |
-| `serve install/uninstall/status` | `internal/cli/serve_install_*.go`（新，build-tag）+ `internal/cli/serve.go`（改） | 全平台 | Task Scheduler / systemd / launchd 注册 |
+| `serve install/uninstall/status` | `internal/cli/serve_install_windows.go`（新，build-tag）+ `internal/cli/serve_install_other.go`（占位）+ `internal/cli/serve.go`（改） | 全平台入口 / **仅 Windows 实现** | Windows Task Scheduler；Linux/macOS 报 "not yet supported, see docs"（§3.4 defer） |
 | export/import `--passphrase-file` | `internal/cli/export.go` / `import.go`（改） | 全平台 | 非交互口令 |
 
 ### 5.2 `DpapiKeyProvider`（Windows 主路径）
@@ -230,7 +230,7 @@ var keychain store.KeyProvider = store.KeyringKeyProvider{}
 
 **UX 边界**：迁移**必须**在交互式 session（owner 本地终端）跑；serve/Service 上下文不跑迁移（serve 启动时 mk 不存在 = 报"locked"，不自动迁移）。
 
-**cache DEK 迁移**（v2 补，评审 pi #4）：Plan 12 的 cache DEK 也存 keychain slot `cache-dek`（同样受 FINDING 9 影响）。迁移逻辑平行于 master key：unlock 检测旧 `cache-dek` slot → 读出 → 写 `DpapiKeyProvider{Path:"cache-dek.key"}`（与 master.key 同目录但不同文件，保持分离）+ 删旧 slot。session 约束同上（交互式 session）。
+**cache DEK 迁移**（v2 补，评审 pi #4；**Windows only**，同 master key 迁移）：Plan 12 的 cache DEK 也存 keychain slot `cache-dek`（同样受 FINDING 9 影响）。迁移逻辑平行于 master key：unlock 检测旧 `cache-dek` slot → 读出 → 写 `DpapiKeyProvider{Path:"cache-dek.key"}`（与 master.key 同目录但不同文件，保持分离）+ 删旧 slot。session 约束同上（交互式 session）。Linux/macOS 的 cache DEK 仍用 keychain（§3.3 不变）→ 无需迁移。
 
 **升级 Runbook**（v2 补，评审 pi #3 + codex #1）：已有 v0.2.0 vault 的机器升级流程**必须**：
 1. 停旧 ssh-manager 进程（v0.2.0 mcp 等，见 E2E FINDING 5）。
@@ -254,7 +254,7 @@ var keychain store.KeyProvider = store.KeyringKeyProvider{}
   - curl localhost:7878（鉴权 401 = HTTP 活）
   - **vault-locked 检查**：读日志/health 端点确认 serve 启动时 master key 解密成功（进程活 + HTTP 响应 ≠ vault 已解锁）。serve 启动失败写日志 `master key undecryptable` → status 报"vault locked"。
 
-**Linux/macOS**（v2 砍，评审 codex #9）：serve install **本 plan 不实现**（defer 到专门 plan）。Linux systemd --user / macOS launchd 各有平台陷阱（linger 权限 codex #5、D-Bus session、LaunchAgent 仅 GUI login 后启动非 boot pi #9），且 §4 不验证 Linux/macOS。本 plan 的 Linux/macOS master key 存储（§3.3）保持，但 serve 常驻留后续。
+**Linux/macOS**（v2 砍，评审 codex #9）：serve install **本 plan 不实现**（defer 到专门 plan）。Linux systemd --user / macOS launchd 各有平台陷阱（linger 权限 codex #5、D-Bus session、LaunchAgent 仅 GUI login 后启动非 boot pi #9），且 §4 不验证 Linux/macOS。本 plan 的 Linux/macOS master key 存储（§3.3）保持，但 serve 常驻留后续。**`serve install` 子命令在 Linux/macOS 编译存在但报** "serve install not yet supported on linux/darwin; see docs/multi-machine.md"（`serve_install_other.go` 占位实现）—— 避免 `unknown command` 误导（命令树统一、平台差异在实现内）。
 
 **`serve`（前台跑）保留不变**——install 只是把 serve 包成常驻。
 
