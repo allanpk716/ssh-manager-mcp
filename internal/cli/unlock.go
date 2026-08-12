@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -10,8 +11,8 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// keychain is the master-key source (default real OS keychain; tests override).
-var keychain store.KeyProvider = store.KeyringKeyProvider{}
+// keychain is the package seam master-key source (defined in keychain_unix.go
+// or keychain_windows.go, build-tag selected). Tests swap it for a fake.
 
 // readPassphrase prints prompt to stderr and reads a line from the terminal
 // without echo. Shared by unlock / export / import — the single place that
@@ -29,6 +30,37 @@ var passphrasePrompt = func() ([]byte, error) {
 	return readPassphrase("Enter passphrase to unlock vault: ")
 }
 
+// firstRunOutcome enumerates the outcome of the v0.2.0 → DPAPI migration
+// probe on `unlock`'s ErrNotFound branch (Windows; nil hook on Unix).
+type firstRunOutcome int
+
+const (
+	// firstRunSkip: nothing to migrate (clean env — no legacy keychain slot).
+	// Caller proceeds to first-run generate + persist.
+	firstRunSkip firstRunOutcome = iota
+	// firstRunMigrated: legacy key migrated to DPAPI file (already persisted).
+	// Caller prints mk (from the return value) — do NOT generate.
+	firstRunMigrated
+	// firstRunStop: abort without generating (declined prompt, or legacy slot
+	// present but unreadable — sshd/1312). err carries the user-facing reason
+	// (already printed to stderr by the migrator when it's the 1312 path).
+	firstRunStop
+)
+
+// firstRunMigrator, if non-nil, is invoked when the platform KeyProvider
+// (keychain seam) reports ErrNotFound on `unlock` — i.e. no master key is
+// persisted yet. It is the single hook for the v0.2.0 keychain → DPAPI
+// migration (Windows only; nil on Unix, see migrate_windows.go). It probes the
+// legacy v0.2.0 keychain slots (master-key + cache-dek) and, in an interactive
+// session, migrates them to DPAPI files. The return outcome tells the caller
+// whether to print the migrated key, first-run generate, or stop. All
+// migration messages route through w (the command's stderr writer) so tests
+// capture them via cmd.ErrOrStderr().
+//
+// Overridable by tests (Unix builds compile a nil default; Windows builds set
+// the real impl via migrate_windows.go init).
+var firstRunMigrator func(w interface{ Write([]byte) (int, error) }) (mk []byte, outcome firstRunOutcome, err error)
+
 func newUnlockCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "unlock",
@@ -36,14 +68,49 @@ func newUnlockCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mk, err := keychain.Get()
 			if err == nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "export SSHMGR_MASTERKEY_HEX=%s\n", hexEncode(mk))
+				printMasterKey(cmd, mk)
 				return nil
 			}
-			if err != store.ErrNotFound {
-				// keychain unavailable (e.g. headless Linux w/o Secret Service) → passphrase fallback
+			if !errors.Is(err, store.ErrNotFound) {
+				// keychain unavailable (e.g. headless Linux w/o Secret Service), or
+				// Windows master.key present but undecryptable (DPAPI failure on a
+				// corrupt file / admin password reset / session anomaly). unlock is
+				// the interactive CLI entry and ALWAYS falls through to passphrase
+				// here on every platform (this branch is intentionally not a hard
+				// error — the user gets a usable key via passphrase derivation).
+				//
+				// This is DISTINCT from resolveMasterKey (the programmatic master-key
+				// resolver, called only by vault.Open / serve — NOT by unlock):
+				// resolveMasterKey hard-fails on Windows DPAPI decrypt (no TTY, no
+				// safe degradation; spec §5.6). The two paths intentionally diverge:
+				// unlock may degrade to passphrase; programmatic open may not. The
+				// Windows silent-wrong-key concern (passphrase-derived key ≠ DPAPI
+				// master key → printed key can't open the vault) is pre-existing
+				// (T3/T4-approved) and out of scope for T5's migration branch.
 				return runPassphraseUnlock(cmd)
 			}
-			// first run with a working keychain: generate + store
+			// ErrNotFound — no master key persisted. On Windows this may be a
+			// v0.2.0 → DPAPI migration opportunity (old keychain slot readable in
+			// an interactive session). On Unix firstRunMigrator is nil → skip.
+			if firstRunMigrator != nil {
+				migrated, outcome, mErr := firstRunMigrator(cmd.ErrOrStderr())
+				if mErr != nil {
+					return mErr
+				}
+				switch outcome {
+				case firstRunMigrated:
+					printMasterKey(cmd, migrated)
+					return nil
+				case firstRunStop:
+					// Declined prompt, or legacy slot present but unreadable
+					// (sshd/1312). The migrator already printed guidance to
+					// stderr. Abort WITHOUT generating a fresh key (generating
+					// would orphan the old vault behind the unreadable slot).
+					return nil
+				}
+				// firstRunSkip: clean env → fall through to first-run generate.
+			}
+			// clean first run (no migration): generate + store
 			mk, err = store.GenerateMasterKey()
 			if err != nil {
 				return err
@@ -52,10 +119,15 @@ func newUnlockCmd() *cobra.Command {
 				// can't persist to keychain → fall back to passphrase path
 				return runPassphraseUnlock(cmd)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "export SSHMGR_MASTERKEY_HEX=%s\n", hexEncode(mk))
+			printMasterKey(cmd, mk)
 			return nil
 		},
 	}
+}
+
+// printMasterKey emits the export line the user sources into their shell.
+func printMasterKey(cmd *cobra.Command, mk []byte) {
+	fmt.Fprintf(cmd.OutOrStdout(), "export SSHMGR_MASTERKEY_HEX=%s\n", hexEncode(mk))
 }
 
 func runPassphraseUnlock(cmd *cobra.Command) error {

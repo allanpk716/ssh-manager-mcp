@@ -13,8 +13,12 @@ import (
 
 // RunStdio resolves the token to a project+profile, builds the scoped server, and runs it over stdio.
 // Returns an error if the store is locked or the token is unknown (caller prints to stderr + exits).
-func RunStdio(token string) error {
-	st, err := vault.OpenStore()
+//
+// The platform master-key KeyProvider is INJECTED by the caller (the cli/keychain
+// seam) so this package stays OS-agnostic and doesn't import cli. vault.OpenStore
+// resolves env → kp → FileProvider (3-tier, spec §5.6).
+func RunStdio(token string, kp store.KeyProvider) error {
+	st, err := vault.OpenStore(kp)
 	if err != nil {
 		return err
 	}
