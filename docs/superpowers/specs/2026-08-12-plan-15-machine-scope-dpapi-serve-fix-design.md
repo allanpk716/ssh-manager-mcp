@@ -1,7 +1,8 @@
-# Plan 15 — machine-scope DPAPI + serve install 修复 — Design Spec
+# Plan 15 — machine-scope DPAPI + serve install 修复 — Design Spec (v2)
 
-> **修订**：Plan 14（`docs/superpowers/specs/2026-08-12-plan-14-windows-prod-deploy-design.md`）的 §3.2（user-scope→machine-scope）、§5.3（DPAPI flag）、§5.8（serve install 对象 API）、§6（威胁模型）、§7.2（真机集成测试）。
+> **修订**：Plan 14（`docs/superpowers/specs/2026-08-12-plan-14-windows-prod-deploy-design.md`）的 §3.2（user-scope→machine-scope）、§5.3（DPAPI flag）、§5.8（serve install 对象 API）、§6（威胁模型）、§7.2（真机集成测试）。Plan 14 正文**不改写**（保留审计轨迹），仅在其顶部加"Superseded by Plan 15"横幅。
 > **依据**：`docs/superpowers/specs/2026-08-12-plan-14-nuc10-e2e-findings.md`（Plan 14 §7.3 NUC10 真机验收暴露的 FINDING B/C/D/E/F）。
+> **v2 依据**：4 家异构 xcheck（codex/opencode/pi/kimi，全部 SUGGEST_CHANGES）+ 主会话核实（读代码 + spike）。`.xcheck/20260812-210000/SUMMARY.md` §5（读代码）/ §6（spike）。v2 采纳**全部经核实成立**的主张；2 条高危误报被 spike 推翻（pi #2 双 trigger、pi #3 ACL 继承——见 §5.4 多实例契约 / §5.2 ACL 契约）。
 > **目标**：让 `ssh-manager serve install` → boot 自起 → serve 可用 这条链在 Windows 生产环境真正跑通。
 
 ---
@@ -25,7 +26,7 @@ Plan 14 的 vault 修复链路（export/import/unlock 迁移）已验证可用�
 ## 2. 目标
 
 1. **machine-scope DPAPI**：master.key + cache-dek.key 改用 `CRYPTPROTECT_LOCAL_MACHINE`，让任何 session（boot Service、sshd、Password-logon、RDP）都能解。
-2. **serve install 能工作**：换对象 API 注册，修三个 XML bug + RestartOnFailure 持久化。
+2. **serve install 能工作**：换对象 API 注册，修三个 XML bug + RestartOnFailure 尽力修复（spike 3 确认 PS 5.1 对象 API 不持久化，R1/R2 二选一或降级，见 §5.4）。
 3. **serve status 准确**：修本地化误报 + process 误报 + 陈旧 log 误报。
 4. **真机集成测试进 CI**：§7.2 gate 在 CI windows-latest 真跑（注册→起→status→uninstall），不再裸奔。
 5. **迁移路径**：现有 user-scope master.key（NUC10 的 key C）→ machine-scope 重 protect，C 值不变，store.db 数据不动。
@@ -46,8 +47,9 @@ machine-scope（解 FINDING B）+ serve install 修复（解 FINDING C/D/E/F）+
 - machine-scope 绑**机器**，不绑用户 SID / logon session → **任何 session 能解**
 - 代价：同机其他用户进程也能解 → 靠 **ACL 兜底**（master.key 文件夹 `icacls /inheritance:r /grant:r allan716:(OI)(CI)F` only，其他用户读不到文件 → 即使理论上能解也读不到）
 
-**user-scope → machine-scope 决策理由**（Plan 14 §3.2 推翻）：
+**user-scope → machine-scope 决策理由**（Plan 14 §3.2 推翻；v2 spike 厘清根因）：
 - Plan 14 §12 spike 测的是**同 session roundtrip**，没测**跨 logon session**（RDP 生成 → Password-logon 读）。生产路径（boot 自起）正是跨 logon session，user-scope 失败。
+- **v2 spike 2b 厘清 FINDING B 根因**：user-scope DPAPI 在 sshd session **内** roundtrip（protect+unprotect）= ok；失败只在**跨 logon session**（RDP 生成 master.key，sshd/Password-logon 读）。根因不是 scope flag、不是 session 类型本身，是**跨 logon session 时 user-scope DPAPI Master Key 不可用**（用户 profile/MK 未加载）。machine-scope 用 `DPAPI_SYSTEM` LSA secret（不依赖用户 profile）→ 跨 session 可解。这也彻底厘清 Plan 14 §12 spike 为何"假阳"：测同 session roundtrip（对），推断跨 session（错）。
 - machine-scope 在"boot 自起必须 LogonType=Password、该 session 解不开 user-scope"的死结下，是唯一满足"无人值守 boot 自起"的方案。
 - 安全性弱于 user-scope（对同机其他用户不保密），但 NUC10 单用户 + ACL 兜底，可接受。未来若多用户共享 vault，machine-scope 反而更合适。
 
@@ -108,13 +110,15 @@ func dpapiProtect(plain []byte, machine bool) ([]byte, error) {
 }
 
 func dpapiUnprotect(blob []byte, machine bool) ([]byte, error) {
-    // 同理：machine=true 时传 flagMachine
-    // 注意：CryptUnprotectData 的 flag 也必须匹配 protect 时的 scope
-    //       ——user-scope 加密的 blob 用 machine flag 解会失败，反之亦然
+    // machine=true 时传 flagMachine。
+    // 注意：v2 spike 2 实测——CryptUnprotectData 的 flag **不强制 scope 隔离**：
+    // machine-protected blob 用 flags=0（user 模式）也能解，反之亦然（DPAPI blob 内嵌
+    // scope 元数据，解密时从 blob 自身判断用哪把 key）。所以这里的 machine bool 参数
+    // 只是"优先尝试的 scope"，不是权威约束——见 §5.2 Get 的双 scope尝试。
 }
 ```
 
-**关键约束**：protect 和 unprotect 的 scope 必须一致。迁移时要先 user-scope unprotect 旧 blob、再 machine-scope protect 新 blob。
+**v2 修正（spike 2 实证）**：protect/unprotect 的 scope **不必一致**（跨 scope 能解）。"关键约束"那句 v1 写错了（codex #6/pi #7，已 spike 确认）。迁移时仍先 user-scope unprotect 旧 blob、再 machine-scope protect 新 blob（写新 blob 用 machine scope），但这只是流程，不是"必须"——即使 flag 不匹配也能解。
 
 ### 5.2 `DpapiKeyProvider` 改 machine-scope（`internal/store/masterkey_windows.go`，改）
 
@@ -125,14 +129,18 @@ func (p DpapiKeyProvider) Get() ([]byte, error) {
     // machine-scope unprotect（主路径）
     mk, err := dpapiUnprotect(blob, true)
     if err == nil { return mk, nil }
-    // 兼容旧 user-scope blob（迁移路径用，§5.5）：user-scope fallback unprotect
+    // 兼容旧 user-scope blob（迁移窗口期）：user-scope fallback unprotect。
+    // spike 2 已证 scope flag 不强制隔离，但双 scope 尝试仍保证"无论旧 blob 是哪个
+    // scope 都能读出"，迁移探测（§5.3）单独判断要不要迁。
     mk2, err2 := dpapiUnprotect(blob, false)
-    if err2 == nil { return mk2, nil }  // 旧 user-scope blob，调用方决定是否迁移
+    if err2 == nil { return mk2, nil }
     return nil, err  // 两个 scope 都失败，返回 machine-scope 的错误
 }
 ```
 
-**注意**：Get 的双 scope 尝试让"读旧 user-scope master.key"在迁移窗口期仍可工作。Set 一律 machine-scope：
+**v2 设计（共识 D）**：Get **不返回 scope**（避免改 KeyProvider 接口签名，影响所有 provider + 所有调用方）。迁移探测由 `migrateDpapiScope`（§5.3）单独读 blob + 判断 scope —— KeyProvider 接口不变，迁移逻辑收敛到一处。Get 的双 scope fallback 是**迁移窗口期的临时容错**（几个 release 后，旧 user-scope blob 清零，fallback 可删——§9 land-later 记）。
+
+Set 一律 machine-scope：
 
 ```go
 func (p DpapiKeyProvider) Set(mk []byte) error {
@@ -143,6 +151,8 @@ func (p DpapiKeyProvider) Set(mk []byte) error {
 ```
 
 ACL 不变（`icacls /inheritance:r /grant:r allan716:(OI)(CI)F`）——machine-scope 削弱了"对同机其他用户保密"，ACL 是兜底防线，必须保留。
+
+**v2 ACL 契约（pi #3 防御性，核实见 SUMMARY §5）**：现有 `masterkey_windows.go:82` 的 `os.CreateTemp(dir, ...)` 已正确（`dir` = protectedDir，temp 继承 allan716-only ACL，rename 后保留）。但 machine-scope 下 ACL 是唯一防线，**spec 钉死契约**：Set 的 temp 文件**必须建在 protectedDir 内**（`os.CreateTemp(protectedDir, ...)`），**严禁**用 `os.TempDir()` 或任何系统临时目录（那些继承宽 ACL，rename 后保留宽 ACL → machine-scope 下全库失守）。单测断言：Set 后 master.key 的 ACL 只含 allan716 + SYSTEM，无 Everyone/Users。
 
 ### 5.3 user-scope → machine-scope 迁移（`internal/cli/migrate_windows.go`，改）
 
@@ -156,16 +166,23 @@ func migrateDpapiScope(w io.Writer) error {
     //    - 成功 = 已经是 machine-scope，无需迁移，返回 nil
     //    - 失败 → 尝试 user-scope unprotect
     //      - 成功 = 旧 user-scope blob → 提示 "migrate to machine-scope? [y/N]"
-    //        - y → 用 machine-scope 重 protect mk，原子写回 master.key
+    //        - y → 用 machine-scope 重 protect mk，原子写回 master.key（ACL 契约见 §5.2）
     //        - N → 报 "master.key 是旧 user-scope，serve 在非交互 session 读不出；建议迁移或重新 unlock"
     //      - 失败 = 两个 scope 都读不出（损坏/admin 重置）→ 报错（不静默降级）
-    // 2. cache-dek.key 同理（如果存在）
+    // 2. cache-dek.key 同理（如果存在）—— 复用 Plan 14 v0.2.0 迁移的"master 拒绝则 dek 跳过"
+    //    一致性策略（migrateSources/confirmMigrate，一次确认管两个 key）
 }
 ```
 
-unlock 触发：unlock 在 keychain seam（DpapiKeyProvider）Get 成功后，调 `migrateDpapiScope`（如果迁移分支返回"已迁移"，继续；"拒绝/失败"按情况报）。
+**v2 关键修复（codex #1，读代码核实 SUMMARY §5）**：**unlock 触发迁移必须加新钩子**。当前 `unlock.go:68-73` 流程是 `keychain.Get() → err==nil → printMasterKey → return`，**Get 成功后直接返回，没有 post-Get 钩子**；现有 `firstRunMigrator` 只在 `ErrNotFound` 触发（unlock.go:95）。而双 scope Get 让旧 user-scope blob 返回 `err==nil` → 永远到不了 `firstRunMigrator` → **迁移不可达**。
+
+修法：在 `unlock.go` 加 `postGetMigrator` package var（类比现有 `firstRunMigrator`），在 **Get 成功后、printMasterKey 前**调用；`migrate_windows.go` 的 `init()` 里赋值 `postGetMigrator = migrateDpapiScope`（Unix builds 留 nil，同 `firstRunMigrator` 模式）。**`unlock.go` 必须列进 §8 触点表**（v1 漏了）。
+
+UX（opencode #6）：只在 master.key 实际是 user-scope blob 时提示（migrateDpapiScope 内部判断），machine-scope blob 直接返回 nil 不打扰；无需"已拒绝"状态文件（拒绝 = master.key 仍 user-scope，下次 unlock 仍会探测到，但 confirmMigrate 的 [y/N] 默认 N 不阻塞，可接受）。
 
 **约束**（同 Plan 14 v0.2.0 迁移）：必须交互 session（RDP/本地）。sshd/非交互 session 读不出 user-scope 旧 blob → 提示"在交互 session 重跑"，**不静默生成新 key**（避免 orphan vault）。
+
+**v2（kimi #7）**：boot 自起的 serve 先于任何交互 unlock 运行，读旧 user-scope blob 失败时，serve 启动失败路径**检测到 user-scope blob 则在 serve.log 写明确迁移指引**（"run 'ssh-manager unlock' in an interactive session to migrate"），不止是"master key unreadable"。
 
 ### 5.4 serve install 对象 API（`internal/cli/serve_install_windows.go`，重写）
 
@@ -174,29 +191,62 @@ unlock 触发：unlock 在 keychain seam（DpapiKeyProvider）Get 成功后，�
 ```go
 func registerTaskViaPowerShell(in taskInputs) error {
     // 构造 PowerShell 脚本（对象 API），Go 把参数（exe path/addr/user/log path）
-    // 作为 stdin 或 -ArgumentList 传入（不走 XML）
+**v2 重写（共识 A spike + 共识 C spike + codex #5 TLS + pi #2 spike + opencode #9 引号声明）**：
+
+删 `buildServeTaskXML` + `registerTaskViaPowerShell`。新 `registerTask` 用对象 API，**密码经 Go 读后 stdin 传 PowerShell**（不弹 Get-Credential）：
+
+```go
+func registerTask(in taskInputs) error {
+    // 1. Go 侧读密码：复用 unlock 的 readPassphrase（golang.org/x/term，TTY 无 echo）。
+    //    这绕开 PowerShell Get-Credential / ConvertTo-SecureString 在无头/非交互环境的
+    //    整体脆弱性（spike 1：-NonInteractive 下 Get-Credential/ConvertTo-SecureString 的
+    //    Microsoft.PowerShell.Security 模块加载/TypeData 不稳）。CI 模式下密码走 env
+    //    SSHMGR_SERVE_INSTALL_PASSWORD（非空则跳过 TTY 读，用 env 值）。
+    password, err := readServeInstallPassword()  // env 优先，否则 TTY
+    if err != nil { return err }
+
+    // 2. PowerShell 脚本：密码 + 参数都经 stdin 传（不进 argv/4688）。
+    //    TLS flags（codex #5）：--tls-cert/--tls-key 若非空，拼进 actionArg。
     const ps = `$ErrorActionPreference='Stop'
-$actionArg = '/C if not exist "' + $logDir + '" mkdir "' + $logDir + '" & "' + $exe + '" serve --addr "' + $addr + '" >> "' + $logPath + '" 2>&1'
+$lines = [string]::Join("` + "\n" + `", $input)  # stdin: exe|addr|user|logPath|logDir|tlsCert|tlsKey|password
+$p = $lines -split "`n"
+$exe=$p[0]; $addr=$p[1]; $user=$p[2]; $logPath=$p[3]; $logDir=$p[4]; $tlsCert=$p[5]; $tlsKey=$p[6]; $password=$p[7]
+$tlsArg = ''
+if ($tlsCert -ne '' -and $tlsKey -ne '') { $tlsArg = ' --tls-cert "' + $tlsCert + '" --tls-key "' + $tlsKey + '"' }
+$actionArg = '/C if not exist "' + $logDir + '" mkdir "' + $logDir + '" & "' + $exe + '" serve --addr "' + $addr + '"' + $tlsArg + ' >> "' + $logPath + '" 2>&1'
 $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument $actionArg
 $trigBoot = New-ScheduledTaskTrigger -AtStartup
 $trigLogon = New-ScheduledTaskTrigger -AtLogOn -User $user
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
-$cred = Get-Credential -UserName $user -Message '...'
-Register-ScheduledTask -TaskName 'ssh-manager-serve' -Action $action -Trigger @($trigBoot,$trigLogon) -Settings $settings -RunLevel Limited -User $cred.UserName -Password $cred.GetNetworkCredential().Password -Force | Out-Null
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
+# 注意：-RestartCount/-RestartInterval 在 New-ScheduledTaskSettingsSet (PS 5.1) 不持久化
+# (spike 3 实测：注册后 Count=0)。见下方 RestartOnFailure 修复。
+$sec = ConvertTo-SecureString $password -AsPlainText -Force
+$cred = New-Object System.Management.Automation.PSCredential($user, $sec)
+Register-ScheduledTask -TaskName 'ssh-manager-serve' -Action $action -Trigger @($trigBoot,$trigLogon) -Settings $settings -RunLevel Limited -User $user -Password $password -Force | Out-Null
 Write-Output "REGISTERED"
 `
-    // 参数（exe/addr/user/logPath/logDir）作为环境变量或 stdin 传给 PowerShell，
-    // 不进 argv（避免 4688 + 避免引号坑）
-    cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps)
-    // 传参：cmd.Env 追加 SSHMGR_INSTALL_EXE / ADDR / USER / LOGPATH 等，
-    //       PowerShell 用 $env:SSHMGR_INSTALL_EXE 读
+    // ConvertTo-SecureString 仍在 PowerShell 内（但密码来自 Go stdin，不依赖 Get-Credential
+    // 弹窗）。如果 CI 环境 ConvertTo-SecureString 也脆弱，备选：Go 侧 SecureString 构造
+    // (DPAPI) 传 PowerShell —— 但先按 stdin + ConvertTo-SecureString 走，CI 真跑验证。
+    cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", ps)  // 不用 -NonInteractive（Go stdin 喂密码，不靠 PS prompt）
+    cmd.Stdin = strings.NewReader(strings.Join([]string{exe, addr, user, logPath, logDir, tlsCert, tlsKey, password}, "\n"))
     // ... CombinedOutput, 检查 "REGISTERED"
 }
 ```
 
-**参数传递**：用环境变量（`$env:SSHMGR_INSTALL_*`）而非 argv——既避免 4688 暴露路径，又避免引号/空格坑。密码仍走 `Get-Credential`（PowerShell 进程内，不进 argv）。
+**参数传递（v2）**：exe/addr/user/log/tls/密码**全部经 stdin**（不进 argv/4688，不靠 PowerShell prompt）。这是共识 A 的解法——Go 读密码（TTY 或 env），PowerShell 只做 Register，凭据处理的环境脆弱性被绕开。
 
-**RestartOnFailure（FINDING D）**：实现时**实证** `-RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)` 是否持久化（验收时 Count=0，可能是参数组合冲突）。若对象 API 参数仍不持久化，注册后用 `Set-ScheduledTask` 补 `RestartOnFailure.Interval='PT1M' Count=3`（CIM 对象，需重新输密码——或在同一 PowerShell 脚本内 Register 后立即 Set，复用 `$cred`）。**契约：注册后 `Get-ScheduledTask` 的 `Settings.RestartOnFailure.Count==3`，CI 断言此**。
+**RestartOnFailure（FINDING D，spike 3 实证不持久化）**：对象 API `-RestartCount/-RestartInterval` 在 PS 5.1 被静默忽略（spike 3：注册后 `Count=0`）。**v2 二选一**（实现时定，spike 已确认现状）：
+- **方案 R1（推荐）**：Register 后用 CIM 直接设 —— `Set-ScheduledTask -TaskName X | %{ $_.Settings.RestartOnFailure.Interval='PT1M'; $_.Settings.RestartOnFailure.Count=3; Set-ScheduledTask -InputObject $_ }`（注意 FINDING D 原文说 PS 5.1 RestartOnFailure 是只读 CIM 视图，Set 可能也修不了——实现时实测；若 Set 也不行，走 R2）。
+- **方案 R2**：仅 RestartOnFailure 这一字段保留 XML 路径 —— XML schema 的 `<RestartOnFailure Interval="PT1M" Count="3">` 是 Task Scheduler 原生支持、能解析的（Plan 14 C1-C3 bug 在 XML 的 stdin/UTF-16/-Xml 链，不在 RestartOnFailure 字段本身）。对象 API 注册主任务，再用 `schtasks /Change /XML` 或 Register 时混用。
+
+**RestartOnFailure 契约降级（共识 C）**：`Count==3` 从 §10 硬契约改为**目标 + 实证契约**——实现时若 R1/R2 都不行，降级 best-effort（文档标注"RestartOnFailure 在 PS 5.1 对象 API 不可靠，崩溃恢复靠 Boot trigger 间接兜底"+ §10 去掉硬勾选）。serve 是稳定长驻进程，RestartOnFailure 只管运行中崩溃，不是 §7.3 核心（Boot trigger 自起 + 跨重启 DPAPI 才是）。
+
+**多实例契约（pi #2，spike 4 推翻 pi 主张但加防御）**：spike 4 实测 Task Scheduler **默认 `MultipleInstances=IgnoreNew`**（任务在跑时新触发被忽略）—— Boot 起了 serve 后 RDP Logon trigger 触发不会起第二个 serve，7878 不冲突。**pi #2 双 trigger 双起的担心不成立**。但 v2 在 `New-ScheduledTaskSettingsSet` **显式 `-MultipleInstances IgnoreNew`**（防未来默认值改变），spec 钉死这个契约。
+
+**引号坑声明（opencode #9）**：actionArg 仍手拼 `--addr` 进 cmd.exe /C 串。`--addr` 由 `serve install` 的 flag 传入（owner 控制，非外部输入），不含 `"`；spec **明确声明"输入受控、不防引号注入"**。若未来 addr 变外部输入，改用 `[Diagnostics.ProcessStartInfo]` 参数数组。
+
+**v2（kimi #7 / codex #2 连锁）serve install precheck 加 machine-scope 验证**：现有 `serve_install_windows.go:130` precheck 只 `keychain.Get()` 验"能读出"（codex #2 误放行）。v2 precheck 额外读 master.key blob 判断 scope：若仍是 user-scope（迁移未完成），**拒绝 install**，提示"run 'ssh-manager unlock' in an interactive session to migrate to machine-scope first"。否则 user-scope 残留 → install 注册 → boot Password-logon 读不出 → FINDING B 复发（codex #1+#2 连锁）。
 
 ### 5.5 serve status 修复（E + F，`internal/cli/serve_install_windows.go`）
 
@@ -211,14 +261,18 @@ func taskState(taskName string) (state string, lastResult uint32, err error) {
 }
 ```
 
-**process running 误报**：`serveProcessRunning()` 改用 `Get-Process ssh-manager` 精确匹配 + 验证 PID 对应的进程确实监听 7878（netstat 关联），避免"匹配到残留进程名"误报。
+**process running 误报（v2 opencode #7）**：`serveProcessRunning()` **保持纯进程存在检查**（不并入端口监听——否则 (b) process-alive 和 (c) HTTP-alive 两个独立信号合并，模糊 status 四路设计初衷，代码注释明确"process-alive ≠ vault-unlocked"）。只修"匹配残留进程名"的宽进：要求进程名**精确等于** `ssh-manager`（去掉 `.exe` 子串宽匹配）。进程存在 ≠ 端口监听，但那正是 (c) HTTP probe 的职责——两路有意分开。
 
-**F（陈旧 log）**：`vaultUnlockedFromLog` 加时间戳检查：
+**F（陈旧 log，v2 共识 E 改进）**：`vaultUnlockedFromLog` 加时间戳检查，但**配合 serve 心跳**避免"健康但空闲误判 unknown"：
+- **serve 加 heartbeat**：serve 进程每 ~1 分钟写一行心跳到 serve.log（如 `heartbeat: still listening on 0.0.0.0:7878 at <ts>`）。这让健康但无请求的 serve log 仍新鲜。
+- `vaultUnlockedFromLog` 时间戳检查：log mtime > 5min 判 stale（心跳是 1min，5min 阈值给 4 次心跳冗余）。
+- **staleness 仅作降级提示，不当否定**：log stale 时报 `vault: unknown (log stale >5min; current state unknown)`，但 (a) task + (b) process + (c) HTTP 三路若全绿，overall 仍可判 HEALTHY（log 只作辅助）。这避免"必然过期的信号废了第四路"（共识 E）。
+
 ```go
 func vaultUnlockedFromLog() (unlocked bool, note string) {
     info, _ := os.Stat(logPath)
     if time.Since(info.ModTime()) > 5*time.Minute {
-        return false, " (log stale >5min; current state unknown)"
+        return false, " (log stale >5min; current state unknown)"  // 仅降级提示
     }
     // ... 原有 marker 扫描
 }
@@ -239,9 +293,9 @@ func vaultUnlockedFromLog() (unlocked bool, note string) {
 
 - **DPAPI machine-scope 的边界（修订）**：master.key 对**同机任何用户的进程**不保密（machine-scope 绑机器不绑 SID）——**这是 user-scope→machine-scope 的安全性 regression**，但靠 ACL 兜底（master.key 文件夹 `icacls allan716:(OI)(CI)F` only，其他用户读不到文件）。NUC10 单用户机适用；未来多用户机要重评。
 - **威胁模型更新**：master.key 的防线从"user-scope DPAPI（对其他用户保密）+ ACL"降级为"**ACL 独力承担**"。ACL 必须 100% 可靠（`ensureDirACL` 每次写 master.key 都无条件 `icacls /inheritance:r /grant:r`，防外部进程松绑——Plan 14 已实现，Plan 15 保留）。
-- **密码变更（不变）**：只有 admin 强制重置密码才让 master.key 解不开（machine-scope 同样依赖用户 DPAPI Master Key，admin reset 会断）；用户自行改密码无影响。
-- **master.key ≠ 备份（不变）**：machine-scope 也绑机器，换机/重装即废物。灾备仍是 Plan 11 export 信封 + Plan 13 NAS 备份。
-- **Task Scheduler 密码（不变）**：Get-Credential + 对象 API Register-ScheduledTask，不进 argv/4688。
+- **密码变更（v2 修正 kimi #2 事实错误）**：machine-scope 用 `DPAPI_SYSTEM` LSA secret（机器级，**不依赖用户 DPAPI Master Key**）。**所以 admin 强制重置用户密码不影响 machine-scope master.key 解密**（与 user-scope 相反——user-scope admin reset 会断）。v1 写"machine-scope 同样依赖用户 Master Key, admin reset 会断"是**事实错误**，v2 改：machine-scope 对密码重置**免疫**，代价是"本机任何能读到文件的用户上下文（SYSTEM/admin/同 ACL 用户）可解"。
+- **master.key ≠ 备份（不变）**：machine-scope 也绑机器，换机/重装即废物（machine key 不跟随）。灾备仍是 Plan 11 export 信封 + Plan 13 NAS 备份。
+- **Task Scheduler 密码（v2 改）**：密码经 Go `readPassphrase`（TTY）或 env `SSHMGR_SERVE_INSTALL_PASSWORD`（CI）读，stdin 传 PowerShell 的 `Register-ScheduledTask -Password`。**不用 Get-Credential**（避开无头/非交互环境的脆弱性，spike 1）。不进 argv/4688。
 - **L2 模型 / iron rule 不变**。
 
 ---
@@ -249,22 +303,23 @@ func vaultUnlockedFromLog() (unlocked bool, note string) {
 ## 7. 测试
 
 ### 7.1 单元测试
-- **`dpapi_windows_test.go`**（build windows）：machine-scope roundtrip（`dpapiProtect(p,true)` → `dpapiUnprotect(b,true)`）；user-scope roundtrip（`machine=false`）；**scope 隔离**（machine protect + user unprotect 必失败，反之亦然）。
-- **`masterkey_windows_test.go`**：DpapiKeyProvider Set(machine) → Get 成功；**Get 的 user-scope fallback**（构造旧 user-scope blob，Get 能读出）；ACL（文件夹 allan716 only）。
+- **`dpapi_windows_test.go`**（build windows）：machine-scope roundtrip（`dpapiProtect(p,true)` → `dpapiUnprotect(b,true)`）；user-scope roundtrip（`machine=false`）；**v2 spike 2 修正断言**：machine protect + user unprotect **互通**（不失败——DPAPI blob 内嵌 scope 元数据，解密从 blob 判断用哪把 key，flag 不强制隔离）。单测断言"跨 scope 能解"（反映 spike 2 实测），而非 v1 的"必失败"。
+- **`masterkey_windows_test.go`**：DpapiKeyProvider Set(machine) → Get 成功；**Get 的 user-scope fallback**（构造旧 user-scope blob，Get 能读出）；**v2 ACL 契约（pi #3）**：Set 后 master.key 的 ACL 只含 allan716 + SYSTEM，无 Everyone/Users（断言 temp 在 protectedDir 内继承正确 ACL）。
 - **迁移测试**（`unlock_windows_test.go`）：构造旧 user-scope master.key → unlock 触发 → machine-scope 重 protect；拒绝迁移 → 正确提示；sshd/非交互 session 读不出旧 user-scope → 提示重跑（不生成新 key）。
 - **serve install 参数构造测试**：测传给 PowerShell 的 action 命令行、trigger（Boot+Logon）、RunLevel=LeastPrivilege（对应 -RunLevel Limited）、RestartCount=3（契约断言）。
 
 ### 7.2 集成测试（CI windows-latest）—— **根因修复，必须真跑**
 - **install → status → uninstall round-trip**：
-  1. `ssh-manager serve install`（CI 通过 env 提供 Windows 账户密码，或用 CI runner 的服务账户——实现时选定）
+  0. **v2 共识 B vault seed（CI 前置，v1 漏）**：CI job 内非交互初始化 vault —— `SSHMGR_MASTERKEY_HEX=<fixed-test-key> ssh-manager unlock`（env 优先，生成空 store.db + machine-scope master.key）→ `ssh-manager servers add ...` 放 1 台测试 server + 凭据。否则全新 runner 上 step 5 "vault ok" 永远验不成。
+  1. `ssh-manager serve install`（CI 通过 `SSHMGR_SERVE_INSTALL_PASSWORD` env 提供账户密码 —— **v2 共识 A 解法**：Go readServeInstallPassword 读 env，stdin 传 PowerShell，不弹 Get-Credential）。CI 里 `net user sshmgrci <password> /add` + `net user sshmgrci /passwordreq:no`（不过期）+ `secedit` 授 SeBatchLogonRight（pi #1 补充）。
   2. 验 task 注册（`Get-ScheduledTask.State == Ready`）
-  3. 验 `Settings.RestartOnFailure.Count == 3`（FINDING D 契约）
+  3. 验 `Settings.MultipleInstances == IgnoreNew`（v2 pi #2 防御契约）
   4. `schtasks /Run` → 等 serve 起 → HTTP `localhost:7878` 返回 401（鉴权工作）
-  5. **验 vault ok**（machine-scope master.key 在 serve 进程能解 store.db）—— 这是 FINDING B 的 CI 级验证
-  6. `serve status` 四路全绿（task/process/http/vault），`overall: HEALTHY`
+  5. **验 vault ok**（machine-scope master.key 在 serve 进程能解 store.db）。**v2 opencode #2 断言降级**：这只证"machine-scope 在 task session 可解"，**不证"user-scope 是 bug"**（CI 同用户同机刚 machine-scope 加密，trivially 通过）。FINDING B 的真正闭环（跨 logon session）只能靠 §7.3 NUC10 reboot 手动验。**CI 测试定位为"machine-scope 回归测试 + serve install 注册路径验证"，不是 FINDING B 验证**。
+  6. `serve status` 四路（task/process/http/vault），`overall: HEALTHY` 或 `DEGRADED` 但四路语义正确（log stale 降级不算 fail）
   7. `serve uninstall` → task 删除 + 进程停
-- **CI workflow**：`.github/workflows/serve-install-windows.yml`，`on` push/PR 改 `internal/cli/serve_install*.go` 或 `internal/store/dpapi*.go`/`masterkey*.go` 时跑；windows-latest runner。**这个集成测试不再 gated（不再默认跳过）——它是 FINDING C 根因的直接修复，必须在 CI 真跑。** 密码通过 GitHub secret 注入（`SSHMGR_SERVE_INSTALL_PASSWORD`），CI runner 的本地账户配不过期密码。
-- **reboot 自起留手动 runbook**（CI 不能 reboot）：docs 里写 NUC10 真机 reboot 验证步骤（Plan 14 §7.3 同款），作为 release 前的人工 checklist 项。
+- **CI workflow**：`.github/workflows/serve-install-windows.yml`，`on` push/PR 改 `internal/cli/serve_install*.go` 或 `internal/store/dpapi*.go`/`masterkey*.go` 时跑；windows-latest runner。**不再 gated** —— FINDING C 根因（gate 从没跑过）的直接修复。账户密码 + SeBatchLogonRight 都在 job 内 `net user`/`secedit` 动态建（GitHub-hosted runner 每次全新，无持久账户）。
+- **reboot 自起留手动 runbook**（CI 不能 reboot）：docs 里写 NUC10 真机 reboot 验证步骤（Plan 14 §7.3 同款），作为 release 前的人工 checklist 项。**FINDING B 的闭环验证在这里**（跨重启 DPAPI 可解），不在 CI。
 
 ### 7.3 端到端（NUC10 真机，Plan 14 §7.3 重做）
 **部署 Plan 15 新版到 NUC10**（已修复的 vault key C 还在，user-scope master.key 待迁移）：
@@ -286,15 +341,17 @@ func vaultUnlockedFromLog() (unlocked bool, note string) {
 
 | 文件 | 改动 |
 |---|---|
-| `internal/store/dpapi_windows.go`（改）| `dpapiProtect`/`dpapiUnprotect` 加 `machine bool` 参数，按 scope 选 flag |
-| `internal/store/masterkey_windows.go`（改）| `DpapiKeyProvider.Set` 用 machine-scope；`Get` 双 scope 尝试（machine 主 + user fallback）|
-| `internal/cli/migrate_windows.go`（改）| 新增 `migrateDpapiScope`（user-scope → machine-scope 重 protect）；unlock 触发 |
-| `internal/cli/serve_install_windows.go`（重写）| 删 `buildServeTaskXML` + `registerTaskViaPowerShell` 的 XML 链；对象 API 注册；修 RestartOnFailure（D）；status 用 Get-ScheduledTask/Info（E）；process 精确匹配（E）；vault-ok 加陈旧检查（F）|
-| `internal/cli/serve_install_windows_test.go`（改）| 单测从 XML 字符串改成对象 API 参数契约；RestartOnFailure 持久化断言 |
-| `internal/store/*_test.go`（改）| DPAPI machine-scope roundtrip + scope 隔离；DpapiKeyProvider 双 scope Get；迁移测试 |
-| `.github/workflows/serve-install-windows.yml`（新）| CI windows-latest 真 run §7.2 集成测试 |
-| `docs/superpowers/specs/2026-08-12-plan-14-windows-prod-deploy-design.md`（改）| §3.2/§5.3/§5.8/§6/§7.2 推翻性修订，指向 Plan 15 spec |
-| `docs/backup-restore.md` + `docs/multi-machine.md`（改）| machine-scope 威胁模型 + ACL 兜底 + user→machine 迁移 runbook |
+| `internal/store/dpapi_windows.go`（改）| `dpapiProtect`/`dpapiUnprotect` 加 `machine bool` 参数，按 scope 选 flag（spike 2 确认 flag 不强制隔离，仅"优先尝试的 scope"）|
+| `internal/store/masterkey_windows.go`（改）| `DpapiKeyProvider.Set` 用 machine-scope + **ACL 契约**（temp 必须在 protectedDir，pi #3）；`Get` 双 scope 尝试（machine 主 + user fallback，临时容错）|
+| `internal/cli/unlock.go`（改，**v2 codex #1 新增触点**）| 加 `postGetMigrator` package var（类比 `firstRunMigrator`），在 **Get 成功后、printMasterKey 前**调用；否则迁移不可达（v1 硬伤）|
+| `internal/cli/migrate_windows.go`（改）| 新增 `migrateDpapiScope`（user-scope → machine-scope 重 protect，复用 v0.2.0 迁移的 confirmMigrate 一致性策略）；`init()` 赋值 `postGetMigrator = migrateDpapiScope` |
+| `internal/cli/serve_install_windows.go`（重写）| 删 `buildServeTaskXML` + `registerTaskViaPowerShell` 的 XML 链；对象 API 注册（密码 Go readPassphrase→stdin→Register-ScheduledTask -Password，共识 A）；**precheck 加 machine-scope 验证**（codex #2）；RestartOnFailure R1/R2（共识 C）；status 用 Get-ScheduledTask/Info（E）；process 精确匹配不并入 HTTP（E opencode #7）；vault-ok 陈旧检查 + serve heartbeat（F 共识 E）；MultipleInstances=IgnoreNew 防御契约（pi #2）；TLS flags 保留（codex #5）|
+| `internal/cli/serve_install_windows_test.go`（改）| 单测从 XML 字符串改成对象 API 参数契约；RestartOnFailure 持久化断言改为目标-非硬契约（共识 C）；MultipleInstances=IgnoreNew 断言 |
+| `internal/cli/serve.go`（改）| serve 进程加 ~1min heartbeat 写 serve.log（共识 E）|
+| `internal/store/*_test.go`（改）| DPAPI machine-scope roundtrip + **跨 scope 互通**（spike 2 断言改）；DpapiKeyProvider 双 scope Get + ACL 契约（pi #3）；迁移测试 |
+| `.github/workflows/serve-install-windows.yml`（新）| CI windows-latest 真 run §7.2 集成测试（含 vault seed step 0 + net user 建账户 + env 密码）|
+| `docs/superpowers/specs/2026-08-12-plan-14-windows-prod-deploy-design.md`（**v2 opencode #8 改**）| **正文不改写**（保留审计轨迹）。仅在文档**顶部加 "⚠ Superseded by Plan 15 (machine-scope DPAPI + serve install fix); see docs/superpowers/specs/2026-08-12-plan-15-...md" 横幅**。Plan 14 的 §3.2/§5.3/§5.8/§6/§7.2 原文留着，读者看横幅跳 Plan 15 |
+| `docs/backup-restore.md` + `docs/multi-machine.md`（改）| machine-scope 威胁模型（对密码重置免疫 kimi #2）+ ACL 兜底 + user→machine 迁移 runbook |
 
 ---
 
@@ -307,19 +364,23 @@ func vaultUnlockedFromLog() (unlocked bool, note string) {
 
 ---
 
-## 10. 落地前 checklist
+## 10. 落地前 checklist（v2）
 
-- [ ] DPAPI machine-scope roundtrip + scope 隔离（单测）
-- [ ] DpapiKeyProvider machine-scope Set / Get（+ user-scope fallback）+ ACL 仍 allan716 only
-- [ ] user-scope → machine-scope 迁移（migrateDpapiScope，交互 session，不 orphan）
-- [ ] cache-dek 也改 machine-scope
-- [ ] serve install 对象 API（删 XML 链）+ 参数经 env 不进 argv + 密码 Get-Credential
-- [ ] RestartOnFailure 持久化（注册后 Count==3 契约）
-- [ ] serve status 用 Get-ScheduledTask/Info（本地化修复）+ process 精确匹配 + vault-ok 陈旧检查
-- [ ] CI serve-install-windows.yml 真 run §7.2（不再 gated，密码走 GitHub secret）
-- [ ] spec §3.2/§5.3/§5.8/§6/§7.2 推翻性修订 + 威胁模型更新
-- [ ] docs 升级 runbook（user→machine 迁移）+ ACL 兜底说明
-- [ ] NUC10 §7.3 重做（unlock 迁移 → serve install → reboot → 自起 → 笔记本 exec）
+- [ ] DPAPI machine-scope roundtrip + **跨 scope 互通**（spike 2 断言）
+- [ ] DpapiKeyProvider machine-scope Set / Get（+ user-scope fallback）+ **ACL 契约**（temp 在 protectedDir，pi #3）
+- [ ] **unlock.go postGetMigrator 钩子**（codex #1）+ migrateDpapiScope（交互 session，不 orphan）
+- [ ] cache-dek 也改 machine-scope（复用 confirmMigrate 一致性）
+- [ ] serve install 对象 API（删 XML 链）+ **密码 Go readPassphrase→stdin→Register-ScheduledTask -Password**（共识 A，不用 Get-Credential）+ 参数经 stdin 不进 argv
+- [ ] **serve install precheck 验 machine-scope**（codex #2，拒绝 user-scope 残留）
+- [ ] **RestartOnFailure**：R1（CIM Set）或 R2（XML 字段）二选一 + **契约降级为目标非硬契约**（共识 C，spike 3 确认对象 API 不持久化）
+- [ ] **MultipleInstances=IgnoreNew 显式契约**（pi #2 spike 4 防御）
+- [ ] **TLS flags 在对象 API 保留**（codex #5）
+- [ ] serve status 用 Get-ScheduledTask/Info（本地化修复）+ process 精确匹配（不并入 HTTP，opencode #7）+ vault-ok 陈旧检查
+- [ ] **serve heartbeat ~1min 写 log**（共识 E）
+- [ ] CI serve-install-windows.yml 真 run §7.2（不再 gated）+ **vault seed step 0**（共识 B）+ **net user 建账户 + env 密码 + SeBatchLogonRight**（共识 A/pi #1）
+- [ ] Plan 14 spec **顶部加 Superseded 横幅**（opencode #8，正文不改）
+- [ ] docs 升级 runbook（user→machine 迁移）+ ACL 兜底 + **machine-scope 对密码重置免疫**（kimi #2）
+- [ ] NUC10 §7.3 重做（unlock 迁移 → serve install → reboot → 自起 → 笔记本 exec）—— **FINDING B 闭环验证在这里，不在 CI**
 
 ---
 
