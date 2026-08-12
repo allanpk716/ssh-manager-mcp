@@ -50,8 +50,8 @@ vault 损坏 / 丢失：删掉坏的 `store.db`（或把 `SSHMGR_STORE` 指向�
 
 ## 格式与后续路线
 
-- 文件格式：`internal/vaultio`（`SSHMGRV1` magic + Argon2id + AES-256-GCM）封 `store.Snapshot`（version 1 的 JSON）。这套**序列化格式已被复用**：群晖定时自动备份（规划中）、客户端只读缓存（[Plan 12，已落地](./multi-machine.md#离线只读缓存plan-12)）都复用同一份 Snapshot——所以 export 不只是个备份功能，它给后续打了地基。
-- 这是 Plan 11（export / import）。**Plan 12（离线只读缓存）复用了本篇的 `Snapshot` + 信封格式**（缓存用本机 keychain 的 DEK 做原始 key AES-GCM，而非口令派生 key）。多机支持的群晖自动备份 / 迁移+enroll 是后续计划（未做）。
+- 文件格式：`internal/vaultio`（`SSHMGRV1` magic + Argon2id + AES-256-GCM）封 `store.Snapshot`（version 1 的 JSON）。这套 **`Snapshot` DTO 被多处复用**：客户端只读缓存（[Plan 12，已落地](./multi-machine.md#离线只读缓存plan-12)）和群晖定时自动备份（[Plan 13，已落地](#plan-13--nas-定时明文备份backup-create--verify)）都复用同一份 Snapshot。注意：Plan 13 是**明文**备份（只复用 DTO，不复用加密信封）；Plan 12 缓存用本机 keychain DEK 做 raw-key AES-GCM（复用 magic 但不口令派生）。所以 export 不只是个备份功能，它给后续打了地基。
+- 这是 Plan 11（export / import）。**Plan 12（离线只读缓存）和 Plan 13（NAS 明文备份）都复用了本篇的 `Snapshot` DTO**。多机支持的 迁移+enroll 仍是后续计划（未做）。
 
 ## 相关文档
 
