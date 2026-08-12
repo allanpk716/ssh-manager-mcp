@@ -58,3 +58,28 @@ func TestEncrypt_DifferentSaltsProduceDifferentCiphertext(t *testing.T) {
 		t.Fatal("two Encrypt calls produced identical output (salt/nonce not random)")
 	}
 }
+
+func TestIsEncrypted(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"magic prefix", append([]byte("SSHMGRV1"), []byte("rest...")...), true},
+		{"plain json object", []byte(`{"version":1}`), false},
+		{"plain json with leading space", []byte("   {\"version\":1}"), false},
+		{"plain json with tab/newline", []byte("\n\t{\"v\":1}"), false},
+		{"plain json with UTF-8 BOM", []byte{0xEF, 0xBB, 0xBF, '{', '}'}, false},
+		{"empty", []byte{}, false},
+		{"only whitespace", []byte("   \n\t "), false},
+		{"magic only exact 8 bytes", []byte("SSHMGRV1"), true},
+		{"short non-magic non-json", []byte("hi"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := IsEncrypted(c.data); got != c.want {
+				t.Fatalf("IsEncrypted(%q) = %v, want %v", c.data, got, c.want)
+			}
+		})
+	}
+}

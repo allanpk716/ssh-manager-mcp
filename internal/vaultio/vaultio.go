@@ -159,3 +159,26 @@ func DecryptWithKey(key, blob []byte) ([]byte, error) {
 	}
 	return gcm.Open(nil, nonce, ct, nil)
 }
+
+// IsEncrypted reports whether data begins (after any leading whitespace and an
+// optional UTF-8 BOM) with the vaultio magic header — i.e. data is a passphrase-
+// encrypted envelope produced by Encrypt/EncryptWithKey, not plaintext.
+//
+// Used by `import` to sniff encrypted exports vs plaintext JSON backups without
+// prompting for a passphrase on the plaintext path. The BOM/whitespace skip
+// tolerates hand-edited JSON that a user may have saved with a BOM or leading
+// newlines; without it, such a file's first byte would not be '{' and would be
+// misclassified as encrypted, causing a pointless GCM auth failure.
+func IsEncrypted(data []byte) bool {
+	// strip UTF-8 BOM
+	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+		data = data[3:]
+	}
+	// lstrip ASCII whitespace
+	i := 0
+	for i < len(data) && (data[i] == ' ' || data[i] == '\t' || data[i] == '\n' || data[i] == '\r') {
+		i++
+	}
+	data = data[i:]
+	return len(data) >= len(magic) && bytes.Equal(data[:len(magic)], magic)
+}
