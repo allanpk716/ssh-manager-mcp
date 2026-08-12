@@ -49,6 +49,13 @@ TLS the bearer token travels in cleartext on the network.`,
 	c.Flags().StringVar(&addr, "addr", "127.0.0.1:7878", "listen address (use 0.0.0.0:port or a VLAN IP for remote agents)")
 	c.Flags().StringVar(&tlsCert, "tls-cert", "", "path to TLS cert (enables HTTPS)")
 	c.Flags().StringVar(&tlsKey, "tls-key", "", "path to TLS key")
+
+	// Subcommands (install/uninstall/status) wrap the foreground RunE above as
+	// a managed background service. Windows implements Task Scheduler
+	// registration; Linux/macOS build a stub that reports not-yet-supported
+	// (see serve_install_windows.go / serve_install_other.go). Cobra allows a
+	// parent command with its own RunE to also have subcommands.
+	c.AddCommand(newServeInstallCmd(), newServeUninstallCmd(), newServeStatusCmd())
 	return c
 }
 
