@@ -597,9 +597,13 @@ func vaultUnlockedFromLog() (bool, string) {
 		return true, " (no log yet)"
 	}
 	tail := tailString(string(data), 8192)
-	// Marker text from resolveMasterKey (vault.go). Match the distinctive
+	// Markers from the two hard-fail sites: resolveMasterKey (vault.go) emits
+	// "master key present but unreadable" (DPAPI/keychain decrypt failure);
+	// serveInstall's own precheck (line ~134) emits "undecryptable". Both
+	// mean the task is crash-looping with a locked vault. Match distinctive
 	// substrings so a future reword stays detected.
 	for _, marker := range []string{
+		"unreadable",
 		"undecryptable",
 		"vault locked",
 		"run `ssh-manager unlock`",
