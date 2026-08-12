@@ -27,13 +27,24 @@ export was made) still validates after import.`,
 			if err != nil {
 				return err
 			}
-			pw, err := passphrasePrompt()
-			if err != nil {
-				return err
-			}
-			plaintext, err := vaultio.Decrypt(pw, blob)
-			if err != nil {
-				return err
+			// Sniff BEFORE prompting: a plaintext JSON backup (Plan 13) must not
+			// trigger a passphrase prompt. Only the SSHMGRV1 envelope path prompts.
+			// NOTE: vaultio.EncryptWithKey (Plan 12 cache) ALSO uses SSHMGRV1 magic.
+			// Feeding a cache file here would classify as encrypted, prompt, then
+			// fail GCM auth (safe — just not the user's intent). Import is for
+			// export/backup files, not cache files.
+			var plaintext []byte
+			if vaultio.IsEncrypted(blob) {
+				pw, err := passphrasePrompt()
+				if err != nil {
+					return err
+				}
+				plaintext, err = vaultio.Decrypt(pw, blob)
+				if err != nil {
+					return err
+				}
+			} else {
+				plaintext = blob
 			}
 			var snap store.Snapshot
 			if err := json.Unmarshal(plaintext, &snap); err != nil {
