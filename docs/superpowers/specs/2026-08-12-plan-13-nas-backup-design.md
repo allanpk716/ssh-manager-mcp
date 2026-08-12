@@ -16,7 +16,7 @@
 
 服务器定时把整个 vault 以**明文 JSON 快照**形式写到挂载的群晖目录；vault 无变化时不产新文件；按份数轮转；防"挂载掉了静默写本地"；灾难时从 NAS 拷文件 + 现有 `import` 恢复。
 
-## 3. 关键决策（两轮 xcheck 评审 + 用户拍板）
+## 3. 关键决策（三轮 xcheck 评审 + 用户拍板）
 
 ### 3.1 砍掉加密，存明文 JSON（本 plan 与最初设想的最大分歧，经评审验证成立）
 
@@ -161,7 +161,7 @@
 - `<--dir>/vault-<UTC>.json` — 明文快照（0600/ACL）
 - `<--dir>/vault-<UTC>.json.sha256` — 边车（`file_sha256=`）
 - `<--dir>/.ssh-manager-backup-marker` — marker（运维建，一次性）
-- `<--dir>/.ssh-manager-backup.lock` — 锁（运行时，含 pid/host/start-ts）
+- `<--dir>/.ssh-manager-backup.lock` — 锁（运行时，内容只有 `<start-ts>`，供 5 min 超时判定；v3 砍了 pid/host）
 
 ## 6. Windows 适配细节（§3.4 展开）
 
@@ -195,7 +195,7 @@ Linux 仍给 systemd timer 模板（`Type=oneshot` 防 timer 自身重叠；`Tim
 ## 7. 安全考虑（写进文档，诚实）
 
 - **明文 = 凭据明文**：适用/不适用见 §3.2。
-- **NAS 受信是部署硬约束**：违反（开 Cloud Sync/公网）→ 必须重新启用加密（v2，见 §10）。
+- **NAS 受信是部署硬约束**：违反（开 Cloud Sync/公网）→ 必须重新启用加密（见 §10 未来工作）。
 - **运维 footgun**：禁 `cat`/`grep -r password`（用 `backup verify` 或恢复到测试 vault 后 `servers ls`）；`--dir` 绝对路径非 git；仓库 `.gitignore` 发模板 `vault-*.json` + `*.sha256`。
 - **master key 来源**（部署文档）：backup unit（systemd 或 schtasks）要能解锁 vault——要么和 serve 同 user 会话（keychain 可达），要么 `SSHMGR_MASTERKEY_HEX` 注入（systemd `Environment=`/`EnvironmentFile=`，或 Windows `setx`）。
 - **长期静态 vault**：skip 让你只握 1 份不刷新文件 → 依赖定期 `backup verify` + NAS 快照做底层兜底（文档点明）。
