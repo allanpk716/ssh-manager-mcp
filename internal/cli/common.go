@@ -25,5 +25,7 @@ func metaFilePath() (string, error) {
 }
 
 // openUnlockedStore fails the command with guidance if the vault is locked.
-// Delegates to the shared vault package (env-or-keychain) used by both CLI and MCP server.
-func openUnlockedStore() (*store.Store, error) { return vault.OpenStore() }
+// Delegates to the shared vault package (env → injected keychain → FileProvider)
+// used by both CLI and MCP server. The platform KeyProvider (cli/keychain seam)
+// is injected here so vault stays OS-agnostic and doesn't import cli.
+func openUnlockedStore() (*store.Store, error) { return vault.OpenStore(keychain) }
