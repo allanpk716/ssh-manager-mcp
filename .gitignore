@@ -24,3 +24,8 @@ known_hosts
 *.sqlite
 *.sqlite3
 *.db
+
+# Worktrees & OMC process state — temp/scratch, not source
+.claude/
+.omc/
+.xcheck/
