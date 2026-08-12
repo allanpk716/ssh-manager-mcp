@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -18,8 +19,30 @@ var passphraseConfirmPrompt = func() ([]byte, error) {
 	return readPassphrase("Confirm passphrase: ")
 }
 
+// readPassphraseFile reads a passphrase from a file for the non-interactive
+// `--passphrase-file` flag (export/import). It trims a single trailing newline
+// (Docker/gpg convention: `echo $PASS > file` writes one). The file is opened
+// read-only; permissions are the operator's responsibility (0600 recommended —
+// enforced at write time by the runbook, not re-checked here, so a deliberately
+// 0644 bundle in CI still works). The caller must NEVER fall through to
+// passphrasePrompt when this returns successfully — the whole point of the
+// flag is to avoid the TTY.
+func readPassphraseFile(path string) ([]byte, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read --passphrase-file: %w", err)
+	}
+	// strip exactly one trailing newline (CRLF or LF) so `echo`/`printf` both
+	// work; a passphrase that genuinely ends in \n is pathological and the
+	// truncation is the user's problem, not ours.
+	return []byte(strings.TrimSuffix(strings.TrimSuffix(string(raw), "\r\n"), "\n")), nil
+}
+
 func newExportCmd() *cobra.Command {
-	var outPath string
+	var (
+		outPath       string
+		passphraseSrc string
+	)
 	c := &cobra.Command{
 		Use:   "export",
 		Short: "Export the entire vault to a passphrase-encrypted portable file",
@@ -48,18 +71,30 @@ To restore: ssh-manager import <file> (into a fresh/empty vault).`,
 				return err
 			}
 
-			// Prompt BEFORE creating the file — a mismatch or empty passphrase
-			// must never produce (or clobber) the output file.
-			pw, err := passphrasePrompt()
-			if err != nil {
-				return err
-			}
-			pw2, err := passphraseConfirmPrompt()
-			if err != nil {
-				return err
-			}
-			if string(pw) != string(pw2) {
-				return fmt.Errorf("passphrases do not match")
+			// Resolve the passphrase BEFORE creating the file — a mismatch,
+			// empty passphrase, or unreadable --passphrase-file must never
+			// produce (or clobber) the output file. Two modes:
+			//   - --passphrase-file: read from file, SKIP confirm (scripted /
+			//     unattended restore). Never touches the TTY.
+			//   - default: interactive prompt + confirm (existing behavior).
+			var pw []byte
+			if passphraseSrc != "" {
+				pw, err = readPassphraseFile(passphraseSrc)
+				if err != nil {
+					return err
+				}
+			} else {
+				pw, err = passphrasePrompt()
+				if err != nil {
+					return err
+				}
+				pw2, err := passphraseConfirmPrompt()
+				if err != nil {
+					return err
+				}
+				if string(pw) != string(pw2) {
+					return fmt.Errorf("passphrases do not match")
+				}
 			}
 			if len(pw) == 0 {
 				return fmt.Errorf("passphrase must not be empty")
@@ -91,5 +126,6 @@ To restore: ssh-manager import <file> (into a fresh/empty vault).`,
 		},
 	}
 	c.Flags().StringVar(&outPath, "out", "", "output file (use '-' for stdout; required for a real file)")
+	c.Flags().StringVar(&passphraseSrc, "passphrase-file", "", "read passphrase from this file (non-interactive; skips confirm). For scripted/DR restore.")
 	return c
 }

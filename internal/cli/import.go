@@ -12,6 +12,7 @@ import (
 )
 
 func newImportCmd() *cobra.Command {
+	var passphraseSrc string
 	c := &cobra.Command{
 		Use:   "import <file>",
 		Short: "Restore a vault from a passphrase-encrypted export file",
@@ -33,11 +34,22 @@ export was made) still validates after import.`,
 			// Feeding a cache file here would classify as encrypted, prompt, then
 			// fail GCM auth (safe — just not the user's intent). Import is for
 			// export/backup files, not cache files.
+			//
+			// --passphrase-file only applies to the ENCRYPTED branch; on plaintext
+			// it is irrelevant and intentionally ignored (no error).
 			var plaintext []byte
 			if vaultio.IsEncrypted(blob) {
-				pw, err := passphrasePrompt()
-				if err != nil {
-					return err
+				var pw []byte
+				if passphraseSrc != "" {
+					pw, err = readPassphraseFile(passphraseSrc)
+					if err != nil {
+						return err
+					}
+				} else {
+					pw, err = passphrasePrompt()
+					if err != nil {
+						return err
+					}
 				}
 				plaintext, err = vaultio.Decrypt(pw, blob)
 				if err != nil {
@@ -62,5 +74,6 @@ export was made) still validates after import.`,
 			return nil
 		},
 	}
+	c.Flags().StringVar(&passphraseSrc, "passphrase-file", "", "read passphrase from this file (non-interactive; encrypted files only). Plaintext imports ignore it.")
 	return c
 }
