@@ -59,3 +59,77 @@ vault 损坏 / 丢失：删掉坏的 `store.db`（或把 `SSHMGR_STORE` 指向�
 - [multi-machine.md](./multi-machine.md)——多机共享 serve 模式（实时同步，**不是**本篇的快照备份）。
 - [agent-access.md](./agent-access.md)——project token 生命周期（导入后原 token 仍有效，见本篇"场景②"）。
 - 仓库根 [README](../README.md)。
+
+## Plan 13 — NAS 定时明文备份（backup create / verify）
+
+> 设计 spec：`docs/superpowers/specs/2026-08-12-plan-13-nas-backup-design.md`（v3）。
+
+`backup create` 把整个 vault 以**明文 JSON 快照**定时写到挂载的群晖目录，无变化不备份，按份数轮转，带 `.sha256` 边车抓 bit-rot。`backup verify` 按需校验。灾难恢复 = 从 NAS 拷文件 + `ssh-manager import`。
+
+### 部署硬约束（违反则必须回加密版）
+
+明文备份**只在以下条件全部满足时安全**：
+
+- NAS 在受信 VLAN 内，外网不可达；
+- **永不开** Cloud Sync / Drive / Universal Search / Snapshot Replication / 公网共享；
+- 目录权限锁死，物理介质单独保管。
+
+**独立风险项 — 审计日志明文 = 新暴露**：备份里的 `audit_log.command` 原样导出，含历史命令行——可能携带**一次性 token / 临时密码 / 无副本 secret**，这些**不在 1Password 里**。明文备份暴露的范围比"1Password 冗余副本"更广。若开了任何 Cloud Sync / 公网，必须停止明文备份，回加密版（见 spec §10 未来工作）。
+
+### marker 文件（挂载在场的硬保证）
+
+`--dir/.ssh-manager-backup-marker` 必须存在（只查存在性）。**顺序**：先挂载 NAS → 在挂载的 NAS 上建 marker → 之后 `backup create` 才会写。这防"先建 marker 再 mount"导致 marker 落 shadow、挂载掉时 shadow marker 露出 → 静默写本地（fail-open）。
+
+### Windows：任务计划程序 + UNC 路径
+
+**用 UNC 路径，不要用 `net use` 映射盘号**：映射盘号 per-user/per-session，任务计划程序以别的 user 或 SYSTEM 跑时看不到 `Z:` → marker fail-closed 表现为"备份永远不跑"（无人值守典型静默失败）。UNC 路径 `\\synology\backups` 任何 session 都可达。
+
+```cmd
+schtasks /Create /SC DAILY /ST 03:30 /TN ssh-manager-backup ^
+  /TR "ssh-manager.exe backup create --dir \\synology\backups --keep 7" ^
+  /RU <user> /RP <password>
+```
+
+- master key：`setx SSHMGR_MASTERKEY_HEX <hex>`（或任务以 serve 同 user 跑、keychain 可达）。
+- **勾"超过 10 分钟停止任务"**：SMB 写挂起无应用层超时，NAS 卡住会无限挂进程；任务计划层硬超时是兜底（陈旧锁 5 min 超时只救下次运行）。
+
+### Linux：systemd timer
+
+```ini
+# /etc/systemd/system/ssh-manager-backup.service
+[Service]
+Type=oneshot
+Environment=SSHMGR_MASTERKEY_HEX=<hex>
+ExecStart=/usr/local/bin/ssh-manager backup create --dir /mnt/nas/backups --keep 7
+TimeoutStartSec=600
+
+# /etc/systemd/system/ssh-manager-backup.timer
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+```
+
+`Type=oneshot` 防 timer 自身重叠；`TimeoutStartSec=600` 兜底 SMB 挂起。
+
+### 恢复
+
+1. 从 NAS 拷最新的 `vault-*.json`（和它的 `.sha256`）到本机。
+2. （可选）`ssh-manager backup verify <file>` 确认没坏。
+3. `ssh-manager import <file>` —— 嗅探自动识别明文，**不弹口令**；导入到**空的** vault（`store.db` 不存在或空）。
+4. **cache_tokens 不在备份里**（设备身份，非 vault 内容）：恢复后需 `ssh-manager cache-tokens add` 重发各工作机授权码，各工作机 `ssh-manager cache pull` 重拉。agent 的 `.mcp.json` 不用动（project token 在备份里）。
+
+### skip 语义（诚实）
+
+活跃服务器上 `backup create` 的"无变化不备份"**几乎不触发**——`audit_log` 每执行一条 SSH 命令就增长，SHA256 必变。skip 主要服务**空闲窗口 / 长期静态 vault**。**rotation 才是兜底**。长期静态 vault（skip 让你只握 1 份不刷新文件）需定期 `backup verify` + 依赖 NAS 自身快照做底层兜底。
+
+### 运维 footgun
+
+- 禁 `cat`/`grep -r password` 查备份；用 `backup verify` 或恢复到测试 vault 后 `ssh-manager servers ls`。
+- `--dir` 必须是绝对路径且不在任何 git 工作树里（`backup create` 会检测 `--dir` 自身含 `.git` 并拒绝）。
+- `.gitignore` 模板：`vault-*.json` + `*.sha256`。
+
+### 限制 / 未来工作
+
+- 不加密（见上"部署硬约束"）、不增量（全量快照）、不事件触发（纯定时）。
+- 无 `backup restore` 一条龙（= 手动拷 + `import`）。
+- 未来若需 Cloud Sync / 公网，回加密版（decrypt-and-compare skip）。
