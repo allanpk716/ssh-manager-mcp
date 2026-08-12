@@ -115,7 +115,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	snap := &Snapshot{Version: 1}
 
 	// servers (COALESCE the two nullable text cols to '')
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,credential_id,COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,created_at,updated_at FROM servers ORDER BY name`)
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,credential_id,COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,created_at,updated_at FROM servers ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	// credentials (decrypt each blob under s.masterKey)
-	rc, err := s.db.Query(`SELECT id,type,secret_blob,COALESCE(passphrase_blob,''),created_at,updated_at FROM credentials`)
+	rc, err := s.db.Query(`SELECT id,type,secret_blob,COALESCE(passphrase_blob,''),created_at,updated_at FROM credentials ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +168,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	// profiles
-	rp, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles ORDER BY name`)
+	rp, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +186,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	// grants (profile_servers)
-	rg, err := s.db.Query(`SELECT profile_id, server_id FROM profile_servers`)
+	rg, err := s.db.Query(`SELECT profile_id, server_id FROM profile_servers ORDER BY profile_id, server_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +204,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	// projects — RAW SQL for token_hash/salt (ListProjects/GetProject omit them)
-	rj, err := s.db.Query(`SELECT id,name,token_hash,token_salt,token_prefix,profile_id,status,created_at,updated_at FROM projects`)
+	rj, err := s.db.Query(`SELECT id,name,token_hash,token_salt,token_prefix,profile_id,status,created_at,updated_at FROM projects ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}

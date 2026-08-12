@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -122,5 +123,105 @@ func TestExportImport_CLIRoundTrip(t *testing.T) {
 	}
 	if pj, err := stB.VerifyToken(token); err != nil || pj == nil {
 		t.Fatalf("ORIGINAL TOKEN does not validate on B after CLI import: err=%v pj=%+v", err, pj)
+	}
+}
+
+// TestImport_PlaintextJSON_NoPassphrase writes a PLAINTEXT snapshot JSON (no
+// SSHMGRV1 envelope), imports it into a fresh store, and asserts the import
+// succeeds WITHOUT ever prompting for a passphrase (the prompt seam fails the
+// test if called).
+func TestImport_PlaintextJSON_NoPassphrase(t *testing.T) {
+	dir := t.TempDir()
+	dbB := filepath.Join(dir, "b.db")
+	inFile := filepath.Join(dir, "vault.json")
+
+	// seed store A, export to PLAINTEXT json (no encryption) by calling ExportSnapshot directly
+	dbA := filepath.Join(dir, "a.db")
+	mk, _ := store.GenerateMasterKey()
+	withEnv(t, map[string]string{"SSHMGR_STORE": dbA, "SSHMGR_MASTERKEY_HEX": hexEncode(mk)})
+	stA, err := store.Open(dbA, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid, _ := stA.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw-A")})
+	stA.AddServer(&models.Server{Name: "gpu", Host: "192.0.2.10", User: "deploy", AuthMethod: models.AuthPassword, CredentialID: cid})
+	snap, err := stA.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stA.Close()
+	plaintext, err := json.MarshalIndent(snap, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inFile, plaintext, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// point at empty B with a DIFFERENT master key
+	mk2, _ := store.GenerateMasterKey()
+	withEnv(t, map[string]string{"SSHMGR_STORE": dbB, "SSHMGR_MASTERKEY_HEX": hexEncode(mk2)})
+
+	// FAIL the test if import prompts for a passphrase on the plaintext path
+	orig := passphrasePrompt
+	passphrasePrompt = func() ([]byte, error) {
+		t.Fatal("passphrasePrompt must NOT be called for plaintext import")
+		return nil, nil
+	}
+	t.Cleanup(func() { passphrasePrompt = orig })
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"import", inFile})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("plaintext import: %v", err)
+	}
+
+	// verify server landed in B
+	stB, err := store.Open(dbB, mk2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stB.Close()
+	got, err := stB.GetServerByName("gpu")
+	if got == nil || err != nil {
+		t.Fatalf("server not imported from plaintext: %v %v", got, err)
+	}
+}
+
+// TestImport_EncryptedFile_StillPrompts guards that the encrypted path is
+// unchanged: a real SSHMGRV1 file still prompts and decrypts.
+func TestImport_EncryptedFile_StillPrompts(t *testing.T) {
+	dir := t.TempDir()
+	dbA := filepath.Join(dir, "a.db")
+	dbB := filepath.Join(dir, "b.db")
+	outFile := filepath.Join(dir, "vault.export")
+
+	mk, _ := store.GenerateMasterKey()
+	withEnv(t, map[string]string{"SSHMGR_STORE": dbA, "SSHMGR_MASTERKEY_HEX": hexEncode(mk)})
+	stA, _ := store.Open(dbA, mk)
+	cid, _ := stA.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw-A")})
+	stA.AddServer(&models.Server{Name: "gpu", Host: "192.0.2.10", User: "deploy", AuthMethod: models.AuthPassword, CredentialID: cid})
+	stA.Close()
+
+	// export encrypted (uses passphrasePrompt seam)
+	orig := passphrasePrompt
+	passphrasePrompt = func() ([]byte, error) { return []byte("strong-passphrase-123"), nil }
+	origConfirm := passphraseConfirmPrompt
+	passphraseConfirmPrompt = func() ([]byte, error) { return []byte("strong-passphrase-123"), nil }
+	t.Cleanup(func() { passphrasePrompt = orig; passphraseConfirmPrompt = origConfirm })
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"export", "--out", outFile})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	// import into fresh B — should prompt (seam already swapped) and succeed
+	mk2, _ := store.GenerateMasterKey()
+	withEnv(t, map[string]string{"SSHMGR_STORE": dbB, "SSHMGR_MASTERKEY_HEX": hexEncode(mk2)})
+	root2 := NewRootCmd()
+	root2.SetArgs([]string{"import", outFile})
+	if err := root2.Execute(); err != nil {
+		t.Fatalf("encrypted import: %v", err)
 	}
 }

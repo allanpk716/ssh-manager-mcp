@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -148,4 +149,78 @@ func TestImportSnapshot_RefusesNonEmpty(t *testing.T) {
 	if err := b.ImportSnapshot(snap); err != ErrVaultNotEmpty {
 		t.Fatalf("import into non-empty: err=%v, want ErrVaultNotEmpty", err)
 	}
+}
+
+// TestExportSnapshot_Deterministic asserts the SAME vault exports byte-identical
+// JSON across repeated calls (the foundation backup's skip-if-unchanged relies on).
+// Guards against missing ORDER BY in any ExportSnapshot query.
+func TestExportSnapshot_Deterministic(t *testing.T) {
+	s := newTestStore(t)
+	cid, _ := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	srv1, _ := s.AddServer(&models.Server{Name: "zeta", Host: "192.0.2.1", User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	srv2, _ := s.AddServer(&models.Server{Name: "alpha", Host: "192.0.2.2", User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	prof1, _ := s.AddProfile("z-team")
+	prof2, _ := s.AddProfile("a-team")
+	s.GrantServers(prof1, []string{srv1, srv2})
+	s.GrantServers(prof2, []string{srv1})
+	s.AddProject("p2", prof2)
+	s.AddProject("p1", prof1)
+	s.SaveHostKey("192.0.2.2", 22, []byte("hk"))
+	s.WriteAudit(AuditRow{Action: "exec", ProjectID: "p1", ServerID: srv1, Status: "ok"})
+	s.WriteAudit(AuditRow{Action: "exec", ProjectID: "p2", ServerID: srv2, Status: "ok"})
+
+	first, err := s.ExportSnapshot()
+	if err != nil {
+		t.Fatalf("first export: %v", err)
+	}
+	b1, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		snap, err := s.ExportSnapshot()
+		if err != nil {
+			t.Fatalf("export %d: %v", i, err)
+		}
+		b, err := json.Marshal(snap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(b1, b) {
+			t.Fatalf("export not deterministic on run %d:\n%s\n%s", i, b1, b)
+		}
+	}
+}
+
+// TestExportSnapshot_Deterministic_SameName covers the ORDER BY id (not name) case:
+// two servers and two profiles with IDENTICAL names must still produce stable order
+// (by primary key), else skip breaks when name collisions exist.
+func TestExportSnapshot_Deterministic_SameName(t *testing.T) {
+	s := newTestStore(t)
+	cid, _ := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	// two servers with SAME name, different ids
+	s1, _ := s.AddServer(&models.Server{Name: "dup", Host: "10.0.0.1", User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	s2, _ := s.AddServer(&models.Server{Name: "dup", Host: "10.0.0.2", User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	// two profiles with SAME name
+	p1, _ := s.AddProfile("dup")
+	p2, _ := s.AddProfile("dup")
+	s.GrantServers(p1, []string{s1})
+	s.GrantServers(p2, []string{s2})
+
+	first, _ := json.Marshal(mustExport(t, s))
+	for i := 0; i < 5; i++ {
+		b, _ := json.Marshal(mustExport(t, s))
+		if !bytes.Equal(first, b) {
+			t.Fatalf("non-deterministic with same-name rows on run %d", i)
+		}
+	}
+}
+
+func mustExport(t *testing.T, s *Store) *Snapshot {
+	t.Helper()
+	snap, err := s.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap
 }
