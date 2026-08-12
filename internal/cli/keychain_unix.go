@@ -1,4 +1,6 @@
-// Package cli: keychain seam.
+//go:build !windows
+
+// Package cli: keychain seam (Unix).
 //
 // keychain is the master-key source (default real OS keychain; tests override).
 // It is the single point the rest of the package uses to fetch/store the vault
@@ -11,10 +13,9 @@
 // sets SSHMGR_KEYRING_SERVICE=ssh-manager-eval via mcp.json) — the prior
 // resolveMasterKey did the same env read inline.
 //
-// T4 (Plan 14) splits this file by build-tag:
-//   - keychain_unix.go (this env-aware KeyringKeyProvider, kept verbatim)
-//   - keychain_windows.go (DpapiKeyProvider — DPAPI doesn't use keychain service
-//     names, so SSHMGR_KEYRING_SERVICE is irrelevant there).
+// Windows builds see keychain_windows.go instead (DpapiKeyProvider — DPAPI
+// doesn't use keychain service names, so SSHMGR_KEYRING_SERVICE is irrelevant
+// there).
 package cli
 
 import (
@@ -36,3 +37,9 @@ func (envKeyringKeyProvider) Get() ([]byte, error) {
 func (envKeyringKeyProvider) Set(mk []byte) error {
 	return store.KeyringKeyProvider{Service: os.Getenv("SSHMGR_KEYRING_SERVICE")}.Set(mk)
 }
+
+// keychain is the master-key source (default real OS keychain; tests override).
+// The default (envKeyringKeyProvider) reads SSHMGR_KEYRING_SERVICE at each call
+// so spawned subprocesses can target an isolated keychain service without a
+// recompile — preserves the eval isolation contract (internal/eval/broker.go).
+var keychain store.KeyProvider = envKeyringKeyProvider{}

@@ -10,11 +10,8 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// keychain is the master-key source (default real OS keychain; tests override).
-// The default (envKeyringKeyProvider) reads SSHMGR_KEYRING_SERVICE at each call
-// so spawned subprocesses can target an isolated keychain service without a
-// recompile — see keychain_env.go. T4 (Plan 14) splits this by build-tag.
-var keychain store.KeyProvider = envKeyringKeyProvider{}
+// keychain is the package seam master-key source (defined in keychain_unix.go
+// or keychain_windows.go, build-tag selected). Tests swap it for a fake.
 
 // readPassphrase prints prompt to stderr and reads a line from the terminal
 // without echo. Shared by unlock / export / import — the single place that
