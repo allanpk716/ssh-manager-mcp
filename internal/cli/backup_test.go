@@ -232,3 +232,60 @@ func TestBackupCreate_SameSecondCollision(t *testing.T) {
 		t.Fatalf("collision files must be distinct content")
 	}
 }
+
+func TestBackupVerify_Ok(t *testing.T) {
+	seedVaultForBackup(t)
+	bdir := t.TempDir()
+	touchMarker(t, bdir)
+	runCreate(t, bdir)
+	matches, _ := filepath.Glob(filepath.Join(bdir, "vault-*.json"))
+	if len(matches) != 1 {
+		t.Fatal("need exactly one backup")
+	}
+	root := NewRootCmd()
+	root.SetArgs([]string{"backup", "verify", matches[0]})
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("verify healthy backup: %v", err)
+	}
+}
+
+func TestBackupVerify_BitRot_Fails(t *testing.T) {
+	seedVaultForBackup(t)
+	bdir := t.TempDir()
+	touchMarker(t, bdir)
+	runCreate(t, bdir)
+	matches, _ := filepath.Glob(filepath.Join(bdir, "vault-*.json"))
+	path := matches[0]
+	// flip one byte deep in the file (not the first byte, to keep it valid-ish JSON shape)
+	b, _ := os.ReadFile(path)
+	if len(b) < 20 {
+		t.Fatal("backup too small to corrupt")
+	}
+	b[len(b)-10] ^= 0xFF
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := NewRootCmd()
+	root.SetArgs([]string{"backup", "verify", path})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("verify must fail on bit-rot")
+	}
+}
+
+func TestBackupVerify_MissingSidecar_Fails(t *testing.T) {
+	seedVaultForBackup(t)
+	bdir := t.TempDir()
+	touchMarker(t, bdir)
+	runCreate(t, bdir)
+	matches, _ := filepath.Glob(filepath.Join(bdir, "vault-*.json"))
+	os.Remove(matches[0] + ".sha256")
+	root := NewRootCmd()
+	root.SetArgs([]string{"backup", "verify", matches[0]})
+	if err := root.Execute(); err == nil {
+		t.Fatal("verify must fail when sidecar is missing")
+	}
+}

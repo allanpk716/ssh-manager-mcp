@@ -21,15 +21,40 @@ import (
 const backupMarkerName = ".ssh-manager-backup-marker"
 
 // newBackupCmd builds the `backup` command tree (create + verify).
-// verify is added in a later task; create here.
 func newBackupCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "backup",
 		Short: "Manage NAS plaintext vault backups",
 	}
-	c.AddCommand(newBackupCreateCmd())
-	// newBackupVerifyCmd() added in Task 6
+	c.AddCommand(newBackupCreateCmd(), newBackupVerifyCmd())
 	return c
+}
+
+func newBackupVerifyCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "verify <file>",
+		Short: "Verify a backup's SHA256 sidecar and JSON structure",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBackupVerify(cmd, args[0])
+		},
+	}
+	return c
+}
+
+// runBackupVerify reads the .sha256 sidecar for file, recomputes the on-disk
+// SHA256, asserts a match, and re-unmarshals into store.Snapshot to catch
+// structural corruption / bit-rot. No passphrase (plaintext).
+func runBackupVerify(cmd *cobra.Command, file string) error {
+	wantSHA, ok := parseSidecar(file + ".sha256")
+	if !ok {
+		return fmt.Errorf("missing or unreadable sidecar %s.sha256", file)
+	}
+	if err := verifyWritten(file, wantSHA); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "ok: %s (sha256 verified, json structurally valid)\n", filepath.Base(file))
+	return nil
 }
 
 func newBackupCreateCmd() *cobra.Command {
