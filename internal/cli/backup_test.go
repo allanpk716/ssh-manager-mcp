@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -287,5 +288,71 @@ func TestBackupVerify_MissingSidecar_Fails(t *testing.T) {
 	root.SetArgs([]string{"backup", "verify", matches[0]})
 	if err := root.Execute(); err == nil {
 		t.Fatal("verify must fail when sidecar is missing")
+	}
+}
+
+// TestRotateBackups_JsonRemoveFails_KeepsPair tests the M1 invariant: when
+// os.Remove fails on a rotated .json (real error — here simulated by holding
+// an open file handle, which on Windows blocks Remove with a sharing
+// violation), rotateBackups MUST also skip that .json's sidecar — leaving the
+// .json + .sha256 pair intact rather than orphaning the .json.
+//
+// On non-Windows (Linux/macOS) an open handle does NOT block unlink, so this
+// test's setup cannot force the failure there. The test is skipped on
+// non-Windows; the logic it guards is identical across platforms (the explicit
+// `continue` on .json remove error).
+//
+// rotateBackups is called as a unit (no CLI plumbing) — fewer fixtures, no
+// vault seeding needed. We pre-create three vault-*.json with sidecars, hold
+// an open handle on the one slated for deletion (oldest, lexicographically
+// smallest => matches[2] after reverse-sort => matches[keep:] with keep=2),
+// then assert both it and its sidecar survive.
+func TestRotateBackups_JsonRemoveFails_KeepsPair(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("open-handle-doesn't-block-unlink on Unix; tested via code review + Windows CI")
+	}
+	dir := t.TempDir()
+	// 3 backups: oldest will be the one slated for removal (keep=2).
+	names := []string{
+		"vault-20260101-010101.json",
+		"vault-20260102-020202.json",
+		"vault-20260103-030303.json",
+	}
+	for _, n := range names {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, n+".sha256"), []byte("file_sha256=deadbeef\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	victim := filepath.Join(dir, names[0]) // lexicographically smallest => rotated out
+	hold, err := os.Open(victim)
+	if err != nil {
+		t.Fatalf("open victim to block remove: %v", err)
+	}
+	t.Cleanup(func() { hold.Close() })
+
+	if err := rotateBackups(dir, "vault", 2); err != nil {
+		t.Fatalf("rotateBackups: %v", err)
+	}
+	// victim .json MUST still exist (its Remove failed).
+	if _, err := os.Stat(victim); err != nil {
+		t.Fatalf("victim .json should survive when Remove fails: %v", err)
+	}
+	// victim sidecar MUST also survive — this is the M1 invariant. If the old
+	// code had deleted the sidecar despite the .json Remove error, we'd see
+	// an orphan .json with no sidecar here.
+	if _, err := os.Stat(victim + ".sha256"); err != nil {
+		t.Fatalf("victim sidecar should survive alongside its .json (M1 invariant): %v", err)
+	}
+	// newest two (with their sidecars) MUST be untouched too.
+	for _, n := range names[1:] {
+		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
+			t.Errorf("kept .json missing: %s: %v", n, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, n+".sha256")); err != nil {
+			t.Errorf("kept sidecar missing: %s: %v", n, err)
+		}
 	}
 }

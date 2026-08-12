@@ -90,3 +90,29 @@ func TestBackupLock_ReleaseRemovesFile(t *testing.T) {
 	// double Release is a no-op (must not panic)
 	lk.Release()
 }
+
+// TestAcquireBackupLock_CorruptContent is the N2 test: a lock file whose
+// content is garbage (not a parseable unix ts) makes lockIsStale return a
+// parse error. acquireBackupLock must NOT panic, NOT get stuck, and either
+// reclaim via retry-create or report ErrConcurrentBackup. Since the corrupt
+// lock file already exists, the retry O_EXCL create will fail with ErrExist,
+// so the expected outcome is ErrConcurrentBackup. This locks in lock.go's
+// "parse failure => retry once => treat as concurrent" branch (lines 52-59),
+// which previously had no direct test.
+func TestAcquireBackupLock_CorruptContent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".ssh-manager-backup.lock"),
+		[]byte("not-a-number\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lk, err := acquireBackupLock(dir)
+	if err == nil {
+		// unexpected but not wrong (a racing second caller could have stolen it);
+		// just make sure to release.
+		lk.Release()
+		return
+	}
+	if err != ErrConcurrentBackup {
+		t.Fatalf("err = %v, want ErrConcurrentBackup (corrupt lock should be treated as concurrent after retry-create fails)", err)
+	}
+}

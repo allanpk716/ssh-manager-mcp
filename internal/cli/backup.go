@@ -311,9 +311,20 @@ func rotateBackups(dir, prefix string, keep int) error {
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(matches))) // newest first
 	for _, p := range matches[keep:] {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-			// continue rather than abort: partial rotation is acceptable
-			continue
+		// Delete .json first. If THAT remove fails (real error — e.g. EACCES,
+		// or another process holds an open handle on Windows), we MUST also
+		// skip the sidecar remove: keeping .json + .sha256 as a consistent
+		// pair is strictly better than an orphan .json whose sidecar was just
+		// deleted (the orphan would force the next run's sidecar read to
+		// fail-open and write a redundant backup). sweepOrphanSidecars below
+		// only removes sidecars whose .json is gone, so a surviving .json
+		// also shields its sidecar from the sweep.
+		if err := os.Remove(p); err != nil {
+			if !os.IsNotExist(err) {
+				// .json delete failed — keep the pair in place, move on.
+				continue
+			}
+			// .json was already gone — fall through to clean up its now-orphan sidecar.
 		}
 		if err := os.Remove(p + ".sha256"); err != nil && !os.IsNotExist(err) {
 			continue
