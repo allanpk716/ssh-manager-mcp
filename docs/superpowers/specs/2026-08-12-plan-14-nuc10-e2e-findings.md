@@ -154,10 +154,10 @@ spec §3.2 选 user-scope DPAPI 的理由是"安全性更强（对同机其他�
 
 Plan 15 不需要重做 vault 修复——vault 已经干净：
 - keychain：空（keychain-clear 已删）
-- master.key：`%AppData%\ssh-manager\master.key`，262 bytes，user-scope DPAPI，key C
+- master.key：`%AppData%\ssh-manager\master.key`，262 bytes，user-scope DPAPI，key C（值不记录于此）
 - store.db：全新，7 条凭据用 C 加密
-- key C = `08437ccd2097e33d4e23e494c391434e031612900ad09500e44ec6aab52d6d7f`
 - key B 已作废（旧 store.db.broken-B 留作记录，B 泄露无害）
+- key C 明文不进任何文档/repo（它是当前活 key；若需轮换，从 NUC10 `unlock` 重新导出）
 
 **Plan 15 要做的**：把 master.key 从 user-scope 改成 machine-scope（重新 DPAPI protect C，用 `CRYPTPROTECT_LOCAL_MACHINE`）。**vault 数据不动**（凭据密文绑 key C，与 master.key 的存储 scope 无关）。
 
