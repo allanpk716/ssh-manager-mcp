@@ -18,7 +18,7 @@ func TestListServersSurfacesMetadata(t *testing.T) {
 		Name: "gpu", Host: "10.0.0.5", Port: 22, User: "u",
 		AuthMethod: models.AuthPassword, CredentialID: cid,
 		Role: "prod ml", Services: "jupyter, trainer",
-		Caveats: "do not reboot 02-03:00",
+		Caveats:  "do not reboot 02-03:00",
 		Location: "dc2 rack14", Hardware: "8x A100",
 		Tags: []string{"gpu"}, Description: "owner notes",
 	})

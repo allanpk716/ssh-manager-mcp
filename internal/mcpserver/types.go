@@ -7,11 +7,11 @@ import "time"
 // Description are surfaced so the agent grasps each server's full picture. Caveats is
 // placed before Location/Hardware so it reads prominently; empty strings mean "none".
 type ServerInfo struct {
-	ID      string `json:"id" jsonschema:"stable server id (use this in exec_command)"`
-	Name    string `json:"name" jsonschema:"human-friendly server name"`
-	Host    string `json:"host" jsonschema:"server host"`
-	User    string `json:"user" jsonschema:"ssh user"`
-	HasSudo bool   `json:"has_sudo" jsonschema:"true if sudo=true is supported on this server"`
+	ID          string   `json:"id" jsonschema:"stable server id (use this in exec_command)"`
+	Name        string   `json:"name" jsonschema:"human-friendly server name"`
+	Host        string   `json:"host" jsonschema:"server host"`
+	User        string   `json:"user" jsonschema:"ssh user"`
+	HasSudo     bool     `json:"has_sudo" jsonschema:"true if sudo=true is supported on this server"`
 	Role        string   `json:"role" jsonschema:"this server's purpose/role (e.g. 'prod pg primary')"`
 	Services    string   `json:"services" jsonschema:"what is deployed/running on this server"`
 	Caveats     string   `json:"caveats" jsonschema:"operational gotchas & special handling rules — READ BEFORE acting on this server; empty means none"`

@@ -49,11 +49,11 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 			tags = []string{}
 		}
 		out = append(out, ServerInfo{
-			ID:      srv.ID,
-			Name:    srv.Name,
-			Host:    srv.Host,
-			User:    srv.User,
-			HasSudo: srv.SudoCredentialID != "",
+			ID:          srv.ID,
+			Name:        srv.Name,
+			Host:        srv.Host,
+			User:        srv.User,
+			HasSudo:     srv.SudoCredentialID != "",
 			Role:        srv.Role,
 			Services:    srv.Services,
 			Caveats:     srv.Caveats,

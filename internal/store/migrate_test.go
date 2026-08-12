@@ -89,7 +89,7 @@ func TestFreshSchemaHasNewColumns(t *testing.T) {
 // scanServer scans them into a Go string (not sql.NullString) — which errors with
 // "converting NULL to string is unsupported". So a pre-Plan-8 DB upgraded in place would
 // leave every existing server row UNREADABLE via GetServer/GetServerByName/ListServers.
-// Fixing it is a production change (addColumn DEFAULT '' or NullString scan) outside this
+// Fixing it is a production change (addColumn DEFAULT ” or NullString scan) outside this
 // review-fix brief's scope ("Do NOT touch production behavior beyond #2 and #6"). The
 // deferral is tracked in the final-review-fix-report; the seed-row + GetServer assertion
 // will be added alongside the migration fix.

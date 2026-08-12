@@ -19,7 +19,7 @@ func newServersCmd() *cobra.Command {
 func serversAddCmd() *cobra.Command {
 	var (
 		name, host, user, password, keyPath, keyPass, sudoPassword, description string
-		location, hardware, services, role, caveats                            string
+		location, hardware, services, role, caveats                             string
 		port                                                                    int
 		tags                                                                    []string
 	)
@@ -168,7 +168,7 @@ func serversRmCmd() *cobra.Command {
 func serversEditCmd() *cobra.Command {
 	var (
 		newName, host, user, password, keyPath, keyPass, sudoPassword, description string
-		location, hardware, services, role, caveats                               string
+		location, hardware, services, role, caveats                                string
 		port                                                                       int
 		tags                                                                       []string
 	)
