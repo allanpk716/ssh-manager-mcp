@@ -1,7 +1,7 @@
 # Plan 14 — Windows 生产部署（DPAPI master key + serve 常驻）— Design Spec
 
 **Date:** 2026-08-12
-**Status:** Design — pending implementation plan
+**Status:** Design v2 — 三家 xcheck 评审（codex/opencode/pi）+ DPAPI spike 实证（推翻共识 A）+ 评审必改项（B/C/D/E + 应改）落地；pending implementation plan
 **Worktree/branch:** `plan-14-windows-prod-deploy`（待开）
 
 > 把 ssh-manager-mcp 从"测试里跑通"推进到"NUC10 真机生产部署"。修两个 E2E 暴露的生产阻断：
@@ -54,14 +54,19 @@ E2E 实测验证了 Plan 10–13 架构核心成立（serve 鉴权、MCP 握手�
 
 - 文件：`%AppData%\ssh-manager\master.key`
 - 内容：`CryptProtectData`（**不加** `CRYPTPROTECT_LOCAL_MACHINE`）加密的 32 字节 mk
-- user-scope DPAPI 绑 `allan716` 的 SID + 密码 hash → **只有 `allan716`（owner 或 serve）能解**，同机其他用户进程解不开
-- ACL：文件 0600 + 文件夹 ACL（仅 `allan716`）
+- user-scope DPAPI 绑 `allan716` 的 SID → **只有 `allan716`（owner 或 serve）能解**，同机其他用户进程解不开
+- ACL：显式 `icacls`（见 §5.2；0600 在 Windows 是 no-op，不靠它）
 
-**安全模型（诚实）**：
-- ✓ master key 对同机其他用户保密（user-scope DPAPI 绑账户）
+**user-scope vs machine-scope 决策理由**（v2 评审 opencode #4 + spike 实证硬化）：
+- **spike 实测**（附录 §12）：user-scope DPAPI 在 **RDP / sshd / Task Scheduler 三种 session** 都正常 Protect/Unprotect，且**跨 session 能解**（sshd protect → Task Scheduler unprotect = ok）。user-scope 在生产场景完全可用，machine-scope 的"省事"优势（不需 Task Scheduler 存密码、扛 admin 重置）在实测下消失。
+- user-scope 安全性严格更强（对同机其他用户保密），且实测可用 → **选 user-scope**。
+- machine-scope（`CRYPTPROTECT_LOCAL_MACHINE`）作为 §9 未来选项（多用户共享 vault 场景），本 plan 不用。
+
+**安全模型（诚实，v2 修密码事实 opencode #2 + pi #2）**：
+- ✓ master key 对同机其他用户保密（user-scope DPAPI 绑账户 SID）
 - ✓ master key 对 agent 保密（agent 进程无 mk，走 broker）
 - ⚠ master key 对 `allan716` 跑的**任意进程**不保密（任何 `allan716` 进程能 `CryptUnprotectData` 解 master.key）—— 这与 v0.2.0 keychain 等级相同（keychain 也对同用户进程不设防），**不是 regression**
-- ⚠ `allan716` 密码改了 → 旧 DPAPI 密文解不开（DPAPI 绑密码 hash）→ 必须在改密码前迁移，或重设 vault
+- ⚠ **只有管理员强制重置密码**（admin reset，不知旧密码、无法 re-wrap DPAPI Master Key）才让 master.key 解不开。**用户自行改密码不会断**（Windows 自动用旧密码 re-wrap DPAPI Master Key，已有密文仍可解）—— 旧版 spec 写"改密码就断"是事实错误，已更正。运维只需在 admin 重置密码前迁移，日常改密码无影响。
 
 ### 3.3 Linux/macOS：保持 keychain + 加 FileKeyProvider fallback（不写迁移）
 
@@ -69,19 +74,21 @@ E2E 实测验证了 Plan 10–13 架构核心成立（serve 鉴权、MCP 握手�
 - 加 `FileKeyProvider`（0600 明文文件，全平台）作为**无 keychain 环境 fallback**（CI / 容器 / 无 secret-service 的 headless Linux）。Windows 不用它（DPAPI 优先）。
 - **不写 Linux/macOS 的 v0.2.0 迁移**（v0.2.0 的 keychain slot 迁移逻辑在所有平台一致，但实测只在 Windows 跑）。
 
-### 3.4 常驻机制用 **Task Scheduler**（不用 kardianos/service）
+### 3.4 常驻机制用 **Task Scheduler**（Windows only，v2 scope 收窄）
 
-- Windows：Task Scheduler `at-startup`（schtasks XML，以 `allan716` 身份，需存密码）。
-- Linux：systemd `--user` unit（或 system unit 指定用户）。
-- macOS：launchd LaunchAgent。
-- `serve install/uninstall/status` 子命令生成原生 scheduler 配置 + 注册。
-- **理由**：无新 Go 依赖（kardianos/service 要 go get）；跨平台"原生 scheduler"模式统一；贴合 P13 文档已写的 schtasks 模式；Windows Service 配用户账户也要密码，Task Scheduler 不更差。
-- ⚠ **kardianos/service 是备选**（若 review 认为 Task Scheduler 的密码存储/可靠性不可接受，切到 kardianos/service——它 Windows 也支持配置用户账户，但同样要密码）。
+- **v2 scope 收窄**（评审 codex #9）：§4 已说"不验证 Linux/macOS"，那 `serve install` 也**只实现 Windows Task Scheduler**。Linux systemd / macOS launchd 的 serve install **defer 到专门 plan**（避免未测试代码 + 各有平台陷阱：linger 权限、D-Bus session、LaunchAgent 仅 GUI login 后启动）。本 plan 的 Linux/macOS master key 存储（§3.3）保持，但 serve install 不做。
+- Windows：Task Scheduler `at-startup`（schtasks，以 `allan716` 身份）。
+- **崩溃恢复**（评审 codex #4）：Task Scheduler 配 `RestartOnFailure`（Interval=1min, Count=3）。
+- `serve install/uninstall/status` 子命令生成 schtasks 配置 + 注册。
+- **理由**：无新 Go 依赖（kardianos/service 要 go get）；贴合 P13 文档已写的 schtasks 模式。
+- ⚠ **kardianos/service 是备选**（若 Task Scheduler 实测可靠性不可接受，切到 kardianos/service——它 Windows 也支持配置用户账户）。
 
-### 3.5 DPAPI **自己 syscall**（不用第三方库）
+### 3.5 DPAPI **自己 syscall**（不用第三方库，spike 已实证可行）
 
-- `golang.org/x/sys/windows` 无 `CryptProtectData`/`CryptUnprotectData` 封装 → 自己封 `crypt32.dll` 两个调用（~30 行，含 `DATA_BLOB` 结构）。
-- **理由**：无新依赖（项目铁律：依赖最小）；DPAPI 调用简单（两个 syscall + 一个结构体）；第三方库（`AdRoll/go-dpapi` 等）都只是这层的薄包装。
+- DPAPI 调用走 `crypt32.dll` 的 `CryptProtectData`/`CryptUnprotectData`（标准库 `syscall.NewLazyDLL`，不用 `golang.org/x/sys/windows`——spike 程序用纯 stdlib syscall 跑通）。
+- ~30 行，含 `DATA_BLOB` 结构 + **`LocalFree` 释放输出 blob**（评审 codex #6 + pi #5：输出 blob 由 DPAPI LocalAlloc 分配，调用方必须 LocalFree，否则每次调用泄漏内存/句柄）。
+- spike 程序（附录 §12）已实证这条路径在三 session × 两 scope 全跑通，含 LocalFree。
+- **理由**：无新依赖（项目铁律：依赖最小）；第三方库（`AdRoll/go-dpapi` 等）都只是这层的薄包装。
 
 ## 4. 非目标（v1 不做）
 
@@ -119,37 +126,51 @@ E2E 实测验证了 Plan 10–13 架构核心成立（serve 鉴权、MCP 握手�
 ```
 blob = os.ReadFile(path)
 if not exist → return ErrNotFound
-mk = CryptUnprotectData(blob)   // user-scope，绑当前用户 SID
+mk, err = CryptUnprotectData(blob)   // user-scope，绑当前用户 SID
+if err != nil → return err   // ⚠ 解密失败硬失败（见 §5.6，不静默降级到 FileProvider）
 return mk
 ```
-**Set**：
+**Set**（v2 修：原子写 + ACL 显式，评审 opencode #3 + codex #2 + pi #11）：
 ```
-blob = CryptProtectData(mk)     // user-scope
-ensureDir(%AppData%\ssh-manager\) with ACL (仅 allan716)
-os.WriteFile(path, blob, 0600)
+blob = CryptProtectData(mk)          // user-scope
+ensureDir(%AppData%\ssh-manager\)    // 见下方 ACL（建目录时一次性设，非每次 Set）
+tmp = path + ".tmp.<rand>"
+os.WriteFile(tmp, blob)              // 写 temp（不加 0600——Windows 忽略 mode，靠文件夹 ACL 继承）
+icacls(tmp) → 仅 allan716            // 文件单独设 ACL（继承可能不够；ACE: ContainerInherit|ObjectInherit）
+os.Rename(tmp, path)                 // 原子替换（同卷 rename 原子）—— 半截崩溃不 corrupt master.key
 ```
 **Delete**：`os.Remove(path)`（忽略 not-found）。
 
-**ACL**：文件夹 `C:\Users\allan716\AppData\Roaming\ssh-manager\` —— 用 `icacls` 设 inheritance off + allan716 FullControl（Windows 不程序强制 0700，文档 + install 时设）。
+**ACL**（v2 修：显式 + 顺序 + inherit flag，评审 codex #2 + opencode #7）：
+- 文件夹 `C:\Users\allan716\AppData\Roaming\ssh-manager\`（在用户 profile 下，自 Vista 起默认继承就是 user-only，但显式设以确定）。
+- **建目录时设一次**（非每次 Set 重设——评审 pi #6）：`icacls <dir> /inheritance:r /grant:r "<user>:(OI)(CI)F"`（`/inheritance:r` 关继承、`(OI)(CI)` 容器+对象继承、`F` 完全控制）。
+- master.key 文件本身：靠文件夹的 `(OI)(CI)` 继承；若实测继承不到位，install 时对文件单独 `icacls`。
+- **不靠 `os.WriteFile(0600)`**——Go 在 Windows 忽略 mode 位（评审三家共识 D），ACL 必须显式 `icacls` 或 Windows Security API（`SetFileSecurity` + SDDL）。
+- 文件夹 ACL 操作用 `icacls` 子进程（实现简单）或 Go 调 `SetFileSecurity`（无子进程；纯 Go SDDL 略重，`icacls` 更省）—— plan 时定，倾向 `icacls`。
 
-### 5.3 DPAPI syscall（`dpapi_windows.go`）
+### 5.3 DPAPI syscall（`dpapi_windows.go`，spike 已实证）
 
 ```go
 //go:build windows
 
 package store
 
-import "golang.org/x/sys/windows"
+import "syscall"   // 纯 stdlib，不用 golang.org/x/sys/windows（spike 验证可行）
 
 type dataBlob struct {
 	cbData uint32
 	pbData *byte
 }
 
-// CryptProtectData / CryptUnprotectData via crypt32.dll
-// 不加 CRYPTPROTECT_LOCAL_MACHINE → user-scope（绑当前用户）
+var (
+	crypt32                = syscall.NewLazyDLL("crypt32.dll")
+	procCryptProtectData   = crypt32.NewProc("CryptProtectData")
+	procCryptUnprotectData = crypt32.NewProc("CryptUnprotectData")
+	kernel32               = syscall.NewLazyDLL("kernel32.dll")
+	procLocalFree          = kernel32.NewProc("LocalFree")   // ⚠ 必须：释放输出 blob
+)
 ```
-（实现细节：`windows.NewLazySystemDLL("crypt32.dll")` + `Proc` 调用，DATA_BLOB 用 `windows.NewLazySystemDLL` 的指针参数。~30 行。Go 侧 byte slice ↔ DATA_BLOB 的转换是唯一易错点，单测 round-trip 覆盖。）
+（实现细节，spike 程序已跑通此路径：`Proc.Call` + `DATA_BLOB` 指针参数 + **`defer LocalFree(out.pbData)` 释放输出 blob**（评审 codex #6 + pi #5：CryptProtectData/UnprotectData 的输出 pbData 由 LocalAlloc 分配，必须 LocalFree，否则泄漏）。byte slice ↔ DATA_BLOB 转换：`(*[1<<30]byte)(unsafe.Pointer(out.pbData))[:out.cbData]`。~40 行含 LocalFree。user-scope = 不传 `CRYPTPROTECT_LOCAL_MACHINE(0x1)` flag。）
 
 ### 5.4 `FileKeyProvider`（全平台 fallback）
 
@@ -176,7 +197,7 @@ var keychain store.KeyProvider = store.KeyringKeyProvider{}
 ```
 （替换现有 `unlock.go:14` 的 `var keychain store.KeyProvider = store.KeyringKeyProvider{}`。）
 
-### 5.6 `resolveMasterKey` 顺序（`vault/vault.go`，改）
+### 5.6 `resolveMasterKey` 顺序（`vault/vault.go`，改；v2 修错误分支 codex #8 + pi #8）
 
 ```
 1. SSHMGR_MASTERKEY_HEX env（dev/脚本）→ hex decode 返回
@@ -184,11 +205,17 @@ var keychain store.KeyProvider = store.KeyringKeyProvider{}
    - Windows: DpapiKeyProvider
    - Unix: KeyringKeyProvider
    成功 → 返回
-   ErrNotFound → 继续下一步
+   ErrNotFound → 继续下一步 3
+   ⚠ 其它错误（DPAPI 解密失败 / keychain 服务不可用）→ **硬失败，报清晰错误**（不 fall-through）
 3. FileKeyProvider Get（fallback）：
    成功 → 返回
    ErrNotFound → "vault locked: run `ssh-manager unlock`"
 ```
+
+**错误分支语义**（v2 明确，评审 codex #8 + pi #8）：
+- 平台 KeyProvider 返回 `ErrNotFound`（master key 未初始化）→ 继续 FileProvider fallback（合法首次运行/无 keychain 环境）。
+- 平台 KeyProvider 返回**其它错误**（DPAPI 解密失败 = master.key corrupt / 密码被 admin 重置 / session 异常；Linux secret-service 连接错误）→ **硬失败 + 清晰报错**（如 "master key present but undecryptable: <err>; if admin-reset password, restore from backup or re-init vault"）。**绝不静默 fall-through 到 FileProvider**（明文回退 = 安全降级，必须显式，不能因解密失败悄悄走明文）。
+- FileProvider 只覆盖"无 keychain/无 DPAPI"环境（CI/容器），不覆盖"解密失败"——解密失败是安全事件，不是 fallback 场景。
 
 ### 5.7 v0.2.0 迁移（Windows only；`unlock` 首次运行）
 
@@ -203,25 +230,31 @@ var keychain store.KeyProvider = store.KeyringKeyProvider{}
 
 **UX 边界**：迁移**必须**在交互式 session（owner 本地终端）跑；serve/Service 上下文不跑迁移（serve 启动时 mk 不存在 = 报"locked"，不自动迁移）。
 
-### 5.8 `serve install/uninstall/status`
+**cache DEK 迁移**（v2 补，评审 pi #4）：Plan 12 的 cache DEK 也存 keychain slot `cache-dek`（同样受 FINDING 9 影响）。迁移逻辑平行于 master key：unlock 检测旧 `cache-dek` slot → 读出 → 写 `DpapiKeyProvider{Path:"cache-dek.key"}`（与 master.key 同目录但不同文件，保持分离）+ 删旧 slot。session 约束同上（交互式 session）。
+
+**升级 Runbook**（v2 补，评审 pi #3 + codex #1）：已有 v0.2.0 vault 的机器升级流程**必须**：
+1. 停旧 ssh-manager 进程（v0.2.0 mcp 等，见 E2E FINDING 5）。
+2. **在交互式 session（本地终端/RDP，非 ssh）跑 `ssh-manager unlock`** → 触发迁移（旧 keychain slot → DPAPI 文件）。
+3. 迁移成功后，`serve install` / SSH CLI 管理才能用新 master key。
+4. **不跑步骤 2 直接 `serve install`** → serve 读不到 master key（旧 slot 在非交互 session 读不出）→ 启动失败。成功标准（§7.3）必须显式包含此步骤。
+
+### 5.8 `serve install/uninstall/status`（v2：Windows only + auto-restart + 日志 + 密码安全 + status vault 检查）
 
 **Windows**（`serve_install_windows.go`）—— Task Scheduler：
 - `serve install [--addr 0.0.0.0:7878]`：
   1. 确认 master.key 存在（DpapiKeyProvider.Get 不报 ErrNotFound）；不存在 → 提示先 `unlock`（交互式）。
-  2. 生成 schtasks XML（at-startup，以 `allan716` 身份，RunLevel Highest）。
-  3. 问 `allan716` 密码（交互 prompt，Task Scheduler 要求）。
-  4. `schtasks /Create /XML ... /RU allan716 /RP <密码>`。
-  5. 立即 `schtasks /Run` 启动一次（验证）。
-- `serve uninstall`：`schtasks /Delete /TN ssh-manager-serve`。
-- `serve status`：`schtasks /Query` + 检测 serve 进程 + curl localhost:7878。
+  2. 生成 schtasks XML：at-startup 触发 + **`RestartOnFailure`（Interval=PT1M, Count=3）**（评审 codex #4 崩溃恢复）+ 以 `allan716` 身份。**不用 RunLevel Highest**（评审 opencode #6 不必要提权，filtered token 足够读 profile + 监听端口）。
+  3. **日志重定向**（评审 opencode #5）：XML 里 `<Exec>` 命令包一层 cmd `serve ... > serve.log 2>&1`，或用 Task Scheduler 的 stdout/stderr 重定向到 `%LocalAppData%\ssh-manager\serve.log`（保证 headless 失败可诊断）。
+  4. **密码安全**（评审 codex #3 + pi #10 + opencode #9）：避免 `schtasks /Create /RP <密码>`（密码明文进命令行 + 审计日志 4688）。优先用 **Task Scheduler COM API**（`Schedule.Service` ProgID → `RegisterTask` + `Definition.LogonType=TaskLogonType.Password` + `SetPassword`，密码不经命令行）；COM 实现 ~50 行 Go（`ole` 调用）或用 PowerShell `Register-ScheduledTask -Password`（仍有进程列表风险但优于 /RP）。若 COM 太重，fallback 到 `/RP` + **文档明确标注风险**（密码进 4688 审计日志）+ 单用户本地账户禁用密码过期（opencode #10）。**"自动登录 + At logon" 不作推荐**（pi #10：把密码写 `HKLM\Winlogon\DefaultPassword` 注册表，比 Task Scheduler 的 LSA 存储更弱）。
+  5. 立即 `schtasks /Run` 启动一次（验证 + 日志生成）。
+- `serve uninstall`：`schtasks /Delete /TN ssh-manager-serve` + 确认 serve 进程停。
+- `serve status`（v2 补，评审 codex #7 区分进程活/vault 可用）：
+  - `schtasks /Query` 任务状态（Running/Ready/Failed + Last Result 码）
+  - 检测 serve 进程在跑
+  - curl localhost:7878（鉴权 401 = HTTP 活）
+  - **vault-locked 检查**：读日志/health 端点确认 serve 启动时 master key 解密成功（进程活 + HTTP 响应 ≠ vault 已解锁）。serve 启动失败写日志 `master key undecryptable` → status 报"vault locked"。
 
-**Linux**（`serve_install_linux.go`）—— systemd `--user`：
-- `serve install`：生成 `~/.config/systemd/user/ssh-manager-serve.service` + `loginctl enable-linger <user>`（让 user service 开机自起）+ `systemctl --user enable/start`。
-- uninstall/status 对应。
-
-**macOS**（`serve_install_darwin.go`）—— launchd LaunchAgent：
-- `serve install`：生成 `~/Library/LaunchAgents/com.ssh-manager.serve.plist` + `launchctl load`。
-- uninstall/status 对应。
+**Linux/macOS**（v2 砍，评审 codex #9）：serve install **本 plan 不实现**（defer 到专门 plan）。Linux systemd --user / macOS launchd 各有平台陷阱（linger 权限 codex #5、D-Bus session、LaunchAgent 仅 GUI login 后启动非 boot pi #9），且 §4 不验证 Linux/macOS。本 plan 的 Linux/macOS master key 存储（§3.3）保持，但 serve 常驻留后续。
 
 **`serve`（前台跑）保留不变**——install 只是把 serve 包成常驻。
 
@@ -241,13 +274,14 @@ C:\Users\allan716\AppData\Roaming\ssh-manager\
 Task Scheduler: ssh-manager-serve        # at-startup, allan716 身份
 ```
 
-## 6. 安全考虑（写进文档，诚实）
+## 6. 安全考虑（写进文档，诚实；v2 修密码事实 + master.key≠备份）
 
 - **DPAPI user-scope 的边界**：master key 对 `allan716` 的任意进程不保密（同 keychain 等级）；对同机其他用户、对 agent 保密。**不是 regression**。
-- **`allan716` 密码变更**：DPAPI 密文绑密码 hash → 改密码后 master.key 解不开。**文档**：改密码前先迁移（`unlock --migrate` 或交互式重跑），或重设 vault（从 backup 恢复）。
-- **Task Scheduler 存密码**：`schtasks /RP <密码>` 把 `allan716` 密码存进 Task Scheduler（系统级加密，但本质是凭据存储）。**文档**：或改用"自动登录 + At logon"触发器（不存密码但需自动登录）。
-- **master.key 文件 ACL**：install 时 `icacls` 设文件夹仅 `allan716`。
-- **恢复流程脚本化**：`--passphrase-file` 让 import 可无人值守——但要确保 passphrase 文件本身受控（0600 + 不进 git + 恢复后删）。
+- **密码变更**（v2 修事实，§3.2）：**只有管理员强制重置密码**才让 master.key 解不开；**用户自行改密码 DPAPI 自动 re-wrap，无影响**。Runbook 只在 admin 重置前迁移。
+- **`master.key` ≠ 备份，不可移植**（v2 补，评审 pi #7）：master.key 被 user-scope DPAPI 绑死本机 profile + 用户 SID——换机/重装/admin 重置密码后即废物。**唯一可移植的灾备恢复手段是 passphrase export 信封**（Plan 11）。Runbook 必须点破：灾备 = 在新机 `ssh-manager import <file> --passphrase-file <p>`（从 NAS 的 P13 明文备份或 export 加密文件恢复）。master.key 只是"本机 serve/owner 日常解锁"的缓存，不是备份。
+- **Task Scheduler 密码**（v2，§5.8）：优先 COM API 避免命令行暴露；fallback `/RP` + 文档标注风险（进 4688 审计日志）+ 禁用密码过期。"自动登录 + At logon" 不推荐（注册表存密码更弱）。
+- **master.key 文件 ACL**：建目录时一次性 `icacls /inheritance:r /grant "<user>:(OI)(CI)F"`（§5.2），不靠 0600。
+- **恢复流程脚本化**：`--passphrase-file` 让 import 无人值守——passphrase 文件本身受控（0600 + 不进 git + 恢复后删）。
 - **威胁模型更新**：L2 模型不变（agent 不触凭据）；新增"master key 持久化文件"是信任根，物理/同机进程访问控制是其防线。
 
 ## 7. 测试
@@ -279,54 +313,83 @@ Task Scheduler: ssh-manager-serve        # at-startup, allan716 身份
 - `go vet ./...` clean。
 - **跨平台编译**：`GOOS=windows/linux/darwin go build ./...` 都过。
 
-## 8. 实现触点（file-by-file）
+## 8. 实现触点（file-by-file；v2 砍 Linux/macOS serve_install）
 
 | 文件 | 改动 |
 |---|---|
-| `internal/store/dpapi_windows.go`（新）| CryptProtectData/UnprotectData syscall（`//go:build windows`）|
-| `internal/store/masterkey_windows.go`（新）| `DpapiKeyProvider`（DPAPI user-scope + 文件）|
-| `internal/store/masterkey_file.go`（新）| `FileKeyProvider`（0600 明文 fallback，全平台）|
-| `internal/store/masterkey.go`（改）| 迁移 helper（检测旧 keychain slot）|
+| `internal/store/dpapi_windows.go`（新）| CryptProtectData/UnprotectData syscall（纯 stdlib `syscall.NewLazyDLL`，`//go:build windows`）+ LocalFree |
+| `internal/store/masterkey_windows.go`（新）| `DpapiKeyProvider`（DPAPI user-scope + 文件，原子写 temp+rename，icacls ACL）|
+| `internal/store/masterkey_file.go`（新）| `FileKeyProvider`（明文 fallback，全平台；Windows 不走主路径）|
+| `internal/store/masterkey.go`（改）| 迁移 helper（检测旧 keychain slot，master key + cache DEK 两条）|
 | `internal/store/*_test.go`（新/改）| DPAPI/File/迁移测试 |
 | `internal/cli/keychain_windows.go`（新）| `var keychain = DpapiKeyProvider{}` |
 | `internal/cli/keychain_unix.go`（新）| `var keychain = KeyringKeyProvider{}` |
-| `internal/cli/unlock.go`（改）| 删 line 14 的 keychain init（移到 build-tag 文件）；加迁移逻辑 |
-| `internal/vault/vault.go`（改）| `resolveMasterKey` 加 FileProvider fallback |
-| `internal/cli/serve.go`（改）| 加 `install`/`uninstall`/`status` 子命令入口 |
-| `internal/cli/serve_install_windows.go`（新）| Task Scheduler schtasks XML + 注册 |
-| `internal/cli/serve_install_linux.go`（新）| systemd --user unit |
-| `internal/cli/serve_install_darwin.go`（新）| launchd LaunchAgent |
+| `internal/cli/unlock.go`（改）| 删 line 14 的 keychain init（移到 build-tag 文件）；加 master key + cache DEK 迁移逻辑 |
+| `internal/vault/vault.go`（改）| `resolveMasterKey` 三级 + **错误分支硬失败语义**（解密失败不降级明文）|
+| `internal/cli/serve.go`（改）| 加 `install`/`uninstall`/`status` 子命令入口（Windows 实现）|
+| `internal/cli/serve_install_windows.go`（新）| Task Scheduler schtasks XML（at-startup + RestartOnFailure + 日志重定向）+ COM API 注册（避免 /RP 命令行暴露密码）|
+| ~~`serve_install_linux.go`~~ / ~~`serve_install_darwin.go`~~ | **v2 砍**（defer 专门 plan，§3.4）|
 | `internal/cli/export.go` / `import.go`（改）| `--passphrase-file` flag |
-| `docs/backup-restore.md`（改）| 升级路径 + DPAPI/master.key 说明 + 密码变更迁移 + serve install 文档 |
-| `docs/multi-machine.md`（改）| serve 部署章节改 Task Scheduler at-startup（配合 Plan 13 UNC 路径模式）|
+| `docs/backup-restore.md`（改）| 升级 Runbook（停旧进程 → 交互式 unlock 迁移 → serve install）+ DPAPI/master.key 说明（master.key ≠ 备份）+ admin 重置密码迁移 |
+| `docs/multi-machine.md`（改）| serve 部署章节改 Windows Task Scheduler at-startup（配合 Plan 13 UNC 路径模式）|
 
 ## 9. 未来工作（显式 deferred）
 
 - **Linux/macOS daemon session keychain 验证**（§3.3，本次不验证）。
-- **kardianos/service 替换 Task Scheduler**（若 review/实测发现 Task Scheduler 密码存储/可靠性问题）。
+- **Linux/macOS serve install**（systemd --user / launchd LaunchAgent）——v2 从本 plan 砍出（§3.4），defer 到专门 plan（含 linger 权限、D-Bus session、LaunchAgent vs LaunchDaemon pi #9 的平台细节）。
+- **kardianos/service 替换 Task Scheduler**（若 review/实测发现 Task Scheduler 密码存储/可靠性问题，尽管 COM API 路径已规避密码暴露）。
 - **serverInfo.version 注入**（Plan 9 land-later，独立修）。
-- **machine-scope DPAPI 选项**（若未来要支持多用户共享 vault）。
+- **machine-scope DPAPI 选项**（若未来要支持多用户共享 vault；v2 spike 实测 user-scope 三 session 全通，machine-scope 无优势，仅多用户场景才需）。
 - **serve 的 admin endpoint**（远程 owner 管理 vault，本次 owner 仍 ssh 到 serve 机本地管理）。
 
-## 10. 落地前 checklist
+## 10. 落地前 checklist（v2 同步评审项）
 
-- [ ] DPAPI user-scope round-trip（Windows 单测）
-- [ ] DpapiKeyProvider Set/Get/Delete + ACL（Windows 单测）
+- [ ] DPAPI user-scope round-trip + LocalFree（Windows 单测，spike §12 已实证）
+- [ ] DpapiKeyProvider Set（**原子写 temp+rename**）/ Get / Delete + **icacls ACL**（非 0600）
 - [ ] FileKeyProvider fallback（全平台单测）
 - [ ] keychain seam build-tag 分流（Windows=DPAPI / Unix=keychain）
-- [ ] resolveMasterKey 三级顺序（env → 平台 → File fallback）
-- [ ] v0.2.0 迁移（旧 slot 读出 → 新存储；读不出 → 清晰提示）
-- [ ] serve install/uninstall/status（Windows Task Scheduler + Linux systemd + macOS launchd）
+- [ ] resolveMasterKey 三级 + **错误分支硬失败**（解密失败不降级明文）
+- [ ] v0.2.0 迁移：master key + **cache DEK** 两条（旧 slot 读出 → DPAPI 文件；读不出 → 清晰提示）
+- [ ] 升级 Runbook（停旧进程 → 交互式 unlock 迁移 → serve install）写进成功标准 + 文档
+- [ ] serve install/uninstall/status（**仅 Windows Task Scheduler**：at-startup + RestartOnFailure + 日志重定向 + COM API 注册避免 /RP）
+- [ ] serve status 区分"进程活"vs"vault 已解锁"
 - [ ] export/import `--passphrase-file`
-- [ ] 跨平台编译（GOOS windows/linux/darwin）
-- [ ] **端到端真机**（NUC10 install → 重启 → 自起 → 笔记本连 → exec_command）
-- [ ] 文档（backup-restore 升级路径 + multi-machine 部署）
+- [ ] 跨平台编译（GOOS windows/linux/darwin —— Linux/macOS 仍编译，只是 serve install 不实现）
+- [ ] **端到端真机**（NUC10：停旧 → 交互 unlock 迁移 → serve install → 重启 → 自起 → 笔记本连 → exec_command）
+- [ ] 文档（backup-restore 升级 Runbook + master.key≠备份 + admin 重置密码；multi-machine Windows 部署）
 
 ## 11. 参考
 
-- E2E 14 个 finding：`.omc/state/e2e-2026-08-12-{phase0,phase1-2,summary-and-plan14-seed}.md`（在 plan-13-nas-backup worktree）
+- E2E 14 个 finding：`.omc/state/e2e-2026-08-12-{phase0,phase1-2,summary-and-plan14-seed}.md`（plan-13-nas-backup worktree；已 gitignore）
 - FINDING 9 根因复现：NUC10 `wincred-test.exe`（sshd session 报 `ERROR_NO_SUCH_LOGON_SESSION 1312`）vs 本机 RDP session（正常）
+- **DPAPI spike**（推翻共识 A，§12）：user-scope DPAPI 在 RDP/sshd/Task-Scheduler 三 session 全通 + 跨 session 解密成功
+- 交叉评审：`.xcheck/20260812-141013-plan14/`（codex/opencode/pi 三家 SUGGEST_CHANGES，已 gitignore）
 - Plan 10（serve 模式）：`internal/cli/serve.go`、`internal/mcpserver/serve.go`
 - Plan 11（export/import）：`internal/vaultio/`、`internal/store/export.go`
-- Plan 12（cache）：`internal/cli/cache.go`（cache DEK 也用 keychain，FINDING 9 同样影响它 → cache DEK 也走 DPAPI-file，**在本 plan 范围内**，见 §4 范围说明）
+- Plan 12（cache）：`internal/cli/cache.go`（cache DEK 也走 DPAPI-file，**在本 plan 范围内**，§4）
 - Plan 13（backup）：`internal/cli/backup.go`、`docs/backup-restore.md`
+
+## 12. 附录：DPAPI spike 结果（2026-08-12，推翻评审共识 A）
+
+**背景**：交叉评审三家（codex/opencode/pi）独立指出"user-scope DPAPI 在 sshd/Task-Scheduler 非交互 session 的可用性未验证"（共识 A，最高优先），codex 给机制推断"LSA 无明文密码 → 解不开 DPAPI Master Key"。要求实现前先 spike。
+
+**spike 程序**：~100 行 Go，纯 stdlib `syscall.NewLazyDLL("crypt32.dll")`，命令行接 `<scope:user|machine> <op:roundtrip|protect|unprotect>`，`defer LocalFree`。
+
+**测试矩阵**（NUC10, user=allan716）：
+
+| Session | user-scope | machine-scope |
+|---|---|---|
+| RDP 交互式（本机基线） | ✅ roundtrip ok | ✅ roundtrip ok |
+| **sshd network logon**（`SESSIONNAME=(empty)`，FINDING 9 那类） | ✅ roundtrip + protect + unprotect 全 ok | ✅ 全 ok |
+| **Task Scheduler batch logon**（`/RU allan716`，生产 serve 跑的 session） | ✅ unprotect ok | ✅ unprotect ok |
+| **跨 session**（sshd protect → Task Scheduler unprotect，模拟 owner 写/serve 读） | ✅ **ok** | ✅ ok |
+
+**结论**：
+1. **共识 A 的担忧被推翻** —— user-scope DPAPI 在 sshd/Task-Scheduler session 都正常，跨 session 能解。codex 的机制推断在这个环境不成立（DPAPI Master Key 解密比 Credential Manager 宽容——可能用 cached logon creds 或 pre-loaded MK，不依赖 Credential Manager 那种交互式 logon session 的 credential store）。
+2. **DPAPI 与 Credential Manager 行为不同** —— 同样"绑 logon session"，但 wincred CredWrite 在 sshd 报 1312，DPAPI 正常。两者底层 API 要求不同（Credential Manager 显式要 logon session 的 credential store；DPAPI 要 Master Key，后者在用户 profile 里已存）。
+3. **spec §3.2 的 user-scope 选择成立** —— 实测可用 + 安全性严格更强（对同机其他用户保密），machine-scope 无优势（§3.2 决策理由硬化）。
+4. **SSH CLI 管理（codex #1）也化解** —— sshd session DPAPI 能用，SSH 跑 `servers add`/`unlock` 没问题（FINDING 9 的 unlock 失败是 Credential Manager 读 v0.2.0 keychain，不是 DPAPI）。
+5. **实现路径被实证** —— `crypt32.dll` syscall + LocalFree 跑通，spec §5.3 的"自己 syscall"可行。
+
+spike 程序源码：`Temp/sshmgr-e2e/dpapi-spike/main.go`（一次性，未提交；可按此重跑）。
+
