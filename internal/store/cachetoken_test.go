@@ -149,13 +149,16 @@ func TestAddCacheToken_ActiveNameStillCollides(t *testing.T) {
 	}
 }
 
-// TestAddCacheToken_CleansMultipleRevokedRows asserts the final re-add collapses ALL prior
-// same-name revoked rows, not just one. The sequence add→revoke three times leaves three revoked
-// rows under "laptop" (each re-add succeeds thanks to the fix); the 4th add (active) must leave
-// exactly one active "laptop" and zero revoked "laptop" rows.
-func TestAddCacheToken_CleansMultipleRevokedRows(t *testing.T) {
+// TestAddCacheToken_ReclaimsWithoutAccumulating asserts that repeated add→revoke cycles under
+// the same name never accumulate revoked rows: because AddCacheToken reclaims same-name revoked
+// rows on every call, at most one revoked "laptop" row exists at any time. The final active add
+// must leave exactly one active "laptop" and zero revoked "laptop" rows — proving the reclaim
+// fires on every re-add, not just the first.
+func TestAddCacheToken_ReclaimsWithoutAccumulating(t *testing.T) {
 	s := newTestStore(t)
-	// Three add→revoke cycles accumulate three revoked rows under the same name.
+	// Repeated add→revoke cycles. Each add reclaims the prior revoked row, so this never
+	// accumulates more than one revoked row; if the reclaim ever stopped firing, a later add
+	// would hit UNIQUE(name) and fail.
 	for i := 0; i < 3; i++ {
 		if _, _, err := s.AddCacheToken("laptop"); err != nil {
 			t.Fatalf("add cycle %d: %v", i, err)
@@ -164,9 +167,10 @@ func TestAddCacheToken_CleansMultipleRevokedRows(t *testing.T) {
 			t.Fatalf("revoke cycle %d: %v", i, err)
 		}
 	}
-	// 4th add — must succeed and collapse all three revoked rows into one active row.
+	// Final active add — must succeed (no UNIQUE collision from a leftover revoked row) and
+	// leave a single active row with zero revoked residue.
 	if _, _, err := s.AddCacheToken("laptop"); err != nil {
-		t.Fatalf("final add after multiple revokes: %v", err)
+		t.Fatalf("final add after repeated revokes: %v", err)
 	}
 	out, err := s.ListCacheTokens()
 	if err != nil {
