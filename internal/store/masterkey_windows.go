@@ -54,7 +54,7 @@ func (p DpapiKeyProvider) Get() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	mk, err := dpapiUnprotect(blob)
+	mk, err := dpapiUnprotect(blob, false)
 	if err != nil {
 		// Decryption failure (corrupt file / admin-reset password / session
 		// anomaly): return the error AS-IS (not ErrNotFound) so resolveMasterKey
@@ -73,7 +73,7 @@ func (p DpapiKeyProvider) Set(mk []byte) error {
 	if err := ensureDirACL(dir, p.dirUser()); err != nil {
 		return fmt.Errorf("dpapi: ensureDirACL: %w", err)
 	}
-	blob, err := dpapiProtect(mk)
+	blob, err := dpapiProtect(mk, false)
 	if err != nil {
 		return err
 	}

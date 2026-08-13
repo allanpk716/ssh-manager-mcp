@@ -22,20 +22,26 @@ var (
 	procLocalFree          = kernel32.NewProc("LocalFree")
 )
 
-const flagMachine = 0x1 // CRYPTPROTECT_LOCAL_MACHINE — NOT used (user-scope only)
+const flagMachine = 0x1 // CRYPTPROTECT_LOCAL_MACHINE — machine-scope (vs user-scope)
 
-// dpapiProtect encrypts plain with user-scope DPAPI (binds to current user SID).
-// The caller must NOT pass CRYPTPROTECT_LOCAL_MACHINE (spec §3.2).
-func dpapiProtect(plain []byte) ([]byte, error) {
+// dpapiProtect encrypts plain. machine=true → CRYPTPROTECT_LOCAL_MACHINE
+// (binds to machine, not user/logon-session → any session can unprotect;
+// Plan 15 spec §3.2). machine=false → user-scope (legacy v0.2.0/Plan-14 path).
+// spike 2 实证:flag 不强制 scope 隔离,blob 自描述 scope(见 TestDpapi_CrossScopeInteroperable)。
+func dpapiProtect(plain []byte, machine bool) ([]byte, error) {
 	if len(plain) == 0 {
 		return nil, fmt.Errorf("dpapi: empty plain")
 	}
 	in := dataBlob{cbData: uint32(len(plain)), pbData: &plain[0]}
 	var out dataBlob
+	flags := uintptr(0)
+	if machine {
+		flags = flagMachine // 0x1 = CRYPTPROTECT_LOCAL_MACHINE
+	}
 	r, _, e := procCryptProtectData.Call(
 		uintptr(unsafe.Pointer(&in)),
 		0, 0, 0, 0,
-		0, // flags=0 → user-scope
+		flags,
 		uintptr(unsafe.Pointer(&out)),
 	)
 	if r == 0 {
@@ -45,19 +51,23 @@ func dpapiProtect(plain []byte) ([]byte, error) {
 	return blobToBytes(out), nil
 }
 
-// dpapiUnprotect decrypts a user-scope DPAPI blob. Returns a non-nil error
-// (NOT ErrNotFound) if decryption fails — callers must hard-fail, not
-// fall through to a plaintext fallback (spec §5.6).
-func dpapiUnprotect(blob []byte) ([]byte, error) {
+// dpapiUnprotect decrypts. machine=true → try machine-scope; the flag is a hint,
+// not a hard gate (spike 2: blob self-describes scope). Callers that must handle
+// legacy user-scope blobs try both (see DpapiKeyProvider.Get, T2).
+func dpapiUnprotect(blob []byte, machine bool) ([]byte, error) {
 	if len(blob) == 0 {
 		return nil, fmt.Errorf("dpapi: empty blob")
 	}
 	in := dataBlob{cbData: uint32(len(blob)), pbData: &blob[0]}
 	var out dataBlob
+	flags := uintptr(0)
+	if machine {
+		flags = flagMachine
+	}
 	r, _, e := procCryptUnprotectData.Call(
 		uintptr(unsafe.Pointer(&in)),
 		0, 0, 0, 0,
-		0,
+		flags,
 		uintptr(unsafe.Pointer(&out)),
 	)
 	if r == 0 {
