@@ -90,8 +90,28 @@ directly in the foreground.`,
 	// a managed background service via github.com/kardianos/service (Windows
 	// Service / systemd / launchd). See serve_service.go. Cobra allows a
 	// parent command with its own RunE to also have subcommands.
-	c.AddCommand(newServeInstallCmd(), newServeUninstallCmd(), newServeStatusCmd())
+	c.AddCommand(newServeInstallCmd(), newServeUninstallCmd(), newServeStatusCmd(), newServeCertInfoCmd())
 	return c
+}
+
+// newServeCertInfoCmd prints the serve TLS cert path, key path, and SPKI
+// fingerprint. If the cert is absent it is generated first (LoadOrCreateServeCert
+// is idempotent), so this command is also the explicit "bootstrap the cert"
+// affordance — useful before `serve` itself auto-loads it (Task 7) and as a
+// diagnostic when a client's pin doesn't match.
+func newServeCertInfoCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "cert-info",
+		Short: "Print the serve TLS cert's SPKI fingerprint (auto-generates on first run)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			certPath, keyPath, fp, err := mcpserver.LoadOrCreateServeCert()
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "serve cert: %s\nserve key: %s\nfingerprint: %s\n", certPath, keyPath, fp)
+			return nil
+		},
+	}
 }
 
 // runServeAsService hands control to kardianos: it constructs the program with

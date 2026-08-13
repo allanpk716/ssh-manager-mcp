@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 )
 
@@ -36,7 +37,11 @@ func cacheTokensAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printCacheToken(cmd.OutOrStdout(), name, code)
+			_, _, fp, err := mcpserver.LoadOrCreateServeCert()
+			if err != nil {
+				return fmt.Errorf("load serve cert for fingerprint: %w (run `serve cert-info` to diagnose)", err)
+			}
+			printCacheToken(cmd.OutOrStdout(), name, code, fp)
 			return nil
 		},
 	}
@@ -92,9 +97,21 @@ func cacheTokensRevokeCmd() *cobra.Command {
 	}
 }
 
-// printCacheToken emits the one-time device code + the cache-pull invocation. Shown once.
-func printCacheToken(out io.Writer, name, code string) {
-	fmt.Fprintf(out, "Authorization code for %q (shown once): %s\n\n", name, code)
+// printCacheToken emits the one-time device code + the server's SPKI fingerprint
+// + the cache-pull invocation (with the pin). Shown once. A blank fingerprint
+// (only possible if LoadOrCreateServeCert failed and the caller chose to print
+// anyway) degrades to the legacy token-only output.
+func printCacheToken(out io.Writer, name, code, fingerprint string) {
+	fmt.Fprintf(out, "Authorization code for %q (shown once): %s\n", name, code)
+	if fingerprint != "" {
+		fmt.Fprintf(out, "Server fingerprint (serve cert SPKI): %s\n", fingerprint)
+	}
+	fmt.Fprintln(out)
 	fmt.Fprintln(out, "On the work machine:")
-	fmt.Fprintf(out, "  ssh-manager cache pull --url https://<serve-host>:7878 --token %s\n", code)
+	if fingerprint != "" {
+		fmt.Fprintf(out, "  ssh-manager cache pull --url https://<serve-host>:7878 --token %s --pin %s\n", code, fingerprint)
+		fmt.Fprintf(out, "  # (or) set SSHMGR_SERVE_PIN=%s and pass --token %s\n", fingerprint, code)
+	} else {
+		fmt.Fprintf(out, "  ssh-manager cache pull --url https://<serve-host>:7878 --token %s\n", code)
+	}
 }

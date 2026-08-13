@@ -16,6 +16,10 @@ func TestCacheTokens_AddLsRevoke(t *testing.T) {
 	withEnv(t, map[string]string{
 		"SSHMGR_STORE":         filepath.Join(dir, "test.db"),
 		"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mk),
+		// Keep LoadOrCreateServeCert (called by `cache-tokens add` for the
+		// fingerprint) from touching the developer's real vault dir.
+		"SSHMGR_SERVE_CERT": filepath.Join(dir, "serve-cert.pem"),
+		"SSHMGR_SERVE_KEY":  filepath.Join(dir, "serve-key.pem"),
 	})
 	mustCli := func(args ...string) *bytes.Buffer {
 		root := NewRootCmd()
@@ -62,5 +66,41 @@ func TestCacheTokens_AddLsRevoke(t *testing.T) {
 	root.SetOut(&bytes.Buffer{})
 	if err := root.Execute(); err == nil {
 		t.Fatal("revoke unknown must error")
+	}
+}
+
+// TestCacheTokensAdd_EmitsFingerprint asserts `cache-tokens add` prints the
+// server's SPKI fingerprint next to the one-time code, plus a cache-pull
+// invocation showing how to pass the pin (--pin or SSHMGR_SERVE_PIN).
+func TestCacheTokensAdd_EmitsFingerprint(t *testing.T) {
+	dir := t.TempDir()
+	mk, _ := store.GenerateMasterKey()
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         filepath.Join(dir, "test.db"),
+		"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mk),
+		"SSHMGR_SERVE_CERT":    filepath.Join(dir, "serve-cert.pem"),
+		"SSHMGR_SERVE_KEY":     filepath.Join(dir, "serve-key.pem"),
+	})
+	mustCli := func(args ...string) *bytes.Buffer {
+		root := NewRootCmd()
+		out := &bytes.Buffer{}
+		root.SetOut(out)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("cli %v: %v", args, err)
+		}
+		return out
+	}
+
+	out := mustCli("cache-tokens", "add", "--name", "laptop")
+	s := out.String()
+	if !strings.Contains(s, "Authorization code") {
+		t.Fatalf("missing code line: %s", s)
+	}
+	if !strings.Contains(s, "sha256:") {
+		t.Fatalf("missing server fingerprint in output: %s", s)
+	}
+	if !strings.Contains(s, "--pin") && !strings.Contains(s, "SSHMGR_SERVE_PIN") {
+		t.Fatalf("output should show how to pass the pin: %s", s)
 	}
 }
