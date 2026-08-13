@@ -99,7 +99,9 @@ schtasks /Create /SC DAILY /ST 03:30 /TN ssh-manager-backup ^
 # /etc/systemd/system/ssh-manager-backup.service
 [Service]
 Type=oneshot
-Environment=SSHMGR_MASTERKEY_HEX=<hex>
+# master key 走固定路径裸文件 /var/lib/ssh-manager/master.key.plain（见上 Windows 段）
+# —— 服务以 root / service 账户跑即可读，不要用 Environment=/EnvironmentFile= 塞 hex
+# （明文落 service config、枚举可见、无 ACL 粒度，比 0600+ACL 裸文件更差，见 threat-model.md §5）
 ExecStart=/usr/local/bin/ssh-manager backup create --dir /mnt/nas/backups --keep 7
 TimeoutStartSec=600
 
