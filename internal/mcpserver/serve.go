@@ -223,6 +223,23 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	// Emit the "listening" line only AFTER a successful bind so a bind failure
 	// (the early return above) never prints a misleading "listening" line.
 	fmt.Fprintf(os.Stderr, "ssh-manager serve: listening on %s (tls=%v)\n", addr, tlsCert != "")
+
+	// Start heartbeat goroutine to keep serve.log fresh so vaultUnlockedFromLog's
+	// staleness check (5min) doesn't false-flag a healthy-but-idle serve as "unknown".
+	// Writes to stderr, which the Task Schedule redirects to serve.log on Windows.
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fmt.Fprintf(os.Stderr, "heartbeat: still listening on %s at %s\n", addr, time.Now().Format(time.RFC3339))
+			}
+		}
+	}()
+
 	srv := &http.Server{Handler: runner.HTTPHandler()}
 
 	errCh := make(chan error, 1)
