@@ -110,13 +110,31 @@ func TestServeInstallIntegration(t *testing.T) {
 
 	// === Per-test isolated vault + serve.log dir ===
 	//
-	// We cannot easily redirect master.key / store.db via flags (the CLI reads
-	// them from UserConfigDir). So we isolate by pointing %AppData% /
-	// %LocalAppData% at temp dirs for the duration of the test. Every
-	// ssh-manager subprocess we spawn inherits this env (cmd.Env below) and
-	// therefore reads/writes the throwaway vault. t.Setenv sets the env for
-	// the test process AND is inherited by any exec.Cmd that does NOT
-	// override Env (we pass t-helper env explicitly).
+	// Three path-resolution seams must land in per-test temp dirs:
+	//
+	//   1. store.db      — T2 rewired store.DefaultStorePath() to paths.StorePath()
+	//                      which reads SSHMGR_STORE (env first) then falls back to
+	//                      the FIXED path C:\ProgramData\ssh-manager\store.db. The
+	//                      old AppData override NO LONGER isolates store.db — it
+	//                      MUST be pinned via SSHMGR_STORE or it lands on the
+	//                      global shared store (cross-run leak + master.key/
+	//                      store.db path-mismatch).
+	//   2. master.key    — TWO resolution tiers must be isolated:
+	//                      (a) The DPAPI seam (cli/keychain_windows.go binds
+	//                          DpapiKeyProvider, masterkey_windows.go:37) reads
+	//                          %AppData%\ssh-manager\master.key directly — still
+	//                          isolated via the %AppData% override below.
+	//                      (b) The FileKeyProvider fallback (vault.go:89) reads
+	//                          SSHMGR_FILEKEY_PATH via paths.MasterKeyPath() —
+	//                          isolated below to match the store.db dir (forward-
+	//                          consistent with T3+ if the seam ever moves off
+	//                          DPAPI).
+	//   3. serve.log     — serve_install_windows.go:77 reads %LocalAppData%
+	//                      directly; isolated via the %LocalAppData% override.
+	//
+	// Every ssh-manager subprocess we spawn inherits this env (buildCmdEnv below
+	// returns os.Environ(), which reflects t.Setenv updates) and therefore
+	// reads/writes the throwaway vault + log.
 	appDataDir := t.TempDir()
 	localAppDataDir := t.TempDir()
 	t.Setenv("AppData", filepath.Join(appDataDir, "Roaming"))
@@ -127,14 +145,32 @@ func TestServeInstallIntegration(t *testing.T) {
 	if err := os.MkdirAll(os.Getenv("LocalAppData"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// T2+: store.DefaultStorePath reads SSHMGR_STORE (NOT AppData). Isolate
+	// store.db inside the same per-test Roaming tree so it never lands on the
+	// shared C:\ProgramData\ssh-manager\store.db. MkdirAll the parent so
+	// store.Open (store.go:66) can create store.db on first write.
+	storePath := filepath.Join(appDataDir, "Roaming", "ssh-manager", "store.db")
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSHMGR_STORE", storePath)
+	// Forward-consistent with T3+: pin the FileKeyProvider fallback path too
+	// (vault.go:89). Today the DPAPI seam wins before this is reached, but if
+	// the seam moves off DPAPI we want this already isolated rather than
+	// silently landing on the fixed default.
+	t.Setenv("SSHMGR_FILEKEY_PATH", filepath.Join(appDataDir, "Roaming", "ssh-manager", "master.key.plain"))
 	// Fixed test master key via env (resolveMasterKey tier 1: env wins over
 	// keychain). Every subprocess we spawn inherits this.
 	t.Setenv("SSHMGR_MASTERKEY_HEX", testMasterKeyHex)
 
 	// buildCmdEnv returns the env to hand to an ssh-manager subprocess so it
-	// inherits the per-test %AppData%/%LocalAppData%/master-key env. We pass
-	// the SAME vars t.Setenv set on the test process (os.Environ reflects
-	// t.Setenv updates).
+	// inherits EVERY per-test override: %AppData% / %LocalAppData% (serve.log,
+	// DPAPI master.key seam), SSHMGR_STORE (store.db), SSHMGR_FILEKEY_PATH
+	// (FileKeyProvider fallback), SSHMGR_MASTERKEY_HEX (resolveMasterKey tier
+	// 1). os.Environ() reflects all of these because t.Setenv mutates the live
+	// process env (testing.Setenv → os.Setenv); cmd.Env = os.Environ() is the
+	// documented way to inherit t.Setenv vars into exec.Cmd. Verified: no
+	// manual env construction here that would silently drop them.
 	buildCmdEnv := func() []string { return os.Environ() }
 
 	// runBin runs the ssh-manager binary with given args, returning combined
