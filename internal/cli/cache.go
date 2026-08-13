@@ -122,13 +122,32 @@ func cachePullCmd() *cobra.Command {
 				return fmt.Errorf("--url and --token are required (or SSHMGR_CACHE_URL / SSHMGR_CACHE_TOKEN)")
 			}
 			// Pin resolution priority: env SSHMGR_SERVE_PIN > --pin flag > token-embedded "<code>:<pin>".
-			// plain=true means no pin anywhere → plaintext HTTP fallback (pre-auto-TLS behavior).
+			// plain=true means no pin anywhere. Per xcheck F4 the no-pin path hard-fails by
+			// default (no silent plaintext); --allow-plaintext opts back into the legacy path.
 			pinFlag, _ := cmd.Flags().GetString("pin")
+			// F7: a pin-shaped but INVALID env/flag value is a hard error. We must NOT let it
+			// silently fall through to plaintext (a typo in SSHMGR_SERVE_PIN must not remove
+			// TLS protection). Only a fully-ABSENT pin is allowed to enter the plain branch.
+			if raw := strings.TrimSpace(os.Getenv("SSHMGR_SERVE_PIN")); raw != "" {
+				if _, ok := mcpserver.ParsePin(raw); !ok {
+					return fmt.Errorf("SSHMGR_SERVE_PIN is set but not a valid sha256:<64hex> fingerprint: %q", raw)
+				}
+			}
+			if raw := strings.TrimSpace(pinFlag); raw != "" {
+				if _, ok := mcpserver.ParsePin(raw); !ok {
+					return fmt.Errorf("--pin is not a valid sha256:<64hex> fingerprint: %q", raw)
+				}
+			}
 			fp, plain := resolvePin(os.Getenv("SSHMGR_SERVE_PIN"), pinFlag, token)
 			code := token
 			var client *http.Client
 			if plain {
-				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: no server pin — falling back to plaintext HTTP (set --pin or SSHMGR_SERVE_PIN for TLS).\n")
+				allowPlain, _ := cmd.Flags().GetBool("allow-plaintext")
+				if !allowPlain {
+					return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
+						"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: --allow-plaintext set: pulling over unverified HTTP (no TLS pin). /snapshot credentials travel in cleartext.\n")
 				client = http.DefaultClient
 			} else {
 				// The device code goes to the Authorization header; the pin is for TLS only.
@@ -207,7 +226,8 @@ func cachePullCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&url, "url", "", "serve broker URL (https://host:7878)")
 	c.Flags().StringVar(&token, "token", "", "device authorization code (from `cache-tokens add`)")
-	c.Flags().String("pin", "", "server SPKI fingerprint sha256:... (or set SSHMGR_SERVE_PIN); omit for plaintext fallback")
+	c.Flags().String("pin", "", "server SPKI fingerprint sha256:... (or set SSHMGR_SERVE_PIN); hard-fails without it unless --allow-plaintext")
+	c.Flags().Bool("allow-plaintext", false, "opt into plaintext HTTP pull when no server pin is set (insecure; default is to refuse)")
 	return c
 }
 
@@ -245,8 +265,13 @@ func cacheStatusCmd() *cobra.Command {
 
 // resolvePin resolves the server SPKI fingerprint by priority:
 // env (SSHMGR_SERVE_PIN) > --pin flag > token-embedded "<code>:<pin>".
-// Returns plain=true when no pin is available (caller falls back to plaintext
-// HTTP, matching pre-auto-TLS behavior — never hard-fail a configured client).
+// Returns plain=true when no pin is available anywhere. Per xcheck F4 the
+// caller now hard-fails on plain=true by default (no silent plaintext); the
+// caller gates the plaintext fallback behind --allow-plaintext. Malformed
+// env/flag pins are rejected earlier by cachePullCmd (F7), so by the time
+// resolvePin runs an env/flag value is either empty or well-formed. A
+// malformed token-embedded pin still falls through to plain here (fail-safe
+// against a hand-typed token), which then hits the --allow-plaintext gate.
 //
 // The embedded-pin split uses the FIRST colon, not the last: the pin itself is
 // "sha256:<hex>" and contains a colon, so LastIndex would split inside the pin

@@ -91,7 +91,10 @@ func TestCachePull_WritesEncryptedCacheAndMeta(t *testing.T) {
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": cacheDir})
 
 	root := NewRootCmd()
-	root.SetArgs([]string{"cache", "pull", "--url", url, "--token", code})
+	// standUpServe is a plaintext httptest server (no TLS), so no pin is
+	// available; under the F4 hard-fail policy this requires --allow-plaintext.
+	// This test is about cache.bin/meta being written, not the transport.
+	root.SetArgs([]string{"cache", "pull", "--url", url, "--token", code, "--allow-plaintext"})
 	out := &bytes.Buffer{}
 	root.SetOut(out)
 	root.SetErr(out) // pull writes its status line to stderr (stdout stays clean for piping)
@@ -158,7 +161,8 @@ func TestCacheStatus_ReportsSnapshot(t *testing.T) {
 		}
 		return out
 	}
-	must("cache", "pull", "--url", url, "--token", code)
+	// standUpServe is plaintext (no pin) → F4 requires --allow-plaintext to pull.
+	must("cache", "pull", "--url", url, "--token", code, "--allow-plaintext")
 	stOut := must("cache", "status")
 	if !strings.Contains(stOut.String(), "servers:  1") {
 		t.Fatalf("status did not report 1 server: %s", stOut.String())
@@ -378,20 +382,23 @@ func TestCachePull_PinWithHttpURL_HardFails(t *testing.T) {
 	}
 }
 
-// TestCachePull_PlaintextFallback_Warns verifies the no-pin branch: when no
-// pin is resolvable (no env / flag / embedded), cache pull falls back to
-// plaintext HTTP and prints a STDERR warning, preserving pre-auto-TLS behavior.
-func TestCachePull_PlaintextFallback_Warns(t *testing.T) {
+// TestCachePull_AllowPlaintext_Warns verifies the opt-in plaintext branch:
+// with no pin resolvable AND --allow-plaintext passed, cache pull falls back
+// to plaintext HTTP and prints a STDERR warning. Under the new hard-fail
+// policy (xcheck F4) the no-pin path refuses by default; this test asserts the
+// --allow-plaintext opt-in still works and still warns. (Was
+// TestCachePull_PlaintextFallback_Warns before F4.)
+func TestCachePull_AllowPlaintext_Warns(t *testing.T) {
 	url, code := standUpServe(t) // plaintext httptest.Server
 	withDEK(t)
 	cacheDir := t.TempDir()
 	withEnv(t, map[string]string{
 		"SSHMGR_CACHE_DIR": cacheDir,
-		"SSHMGR_SERVE_PIN": "", // explicitly unset → plaintext fallback
+		"SSHMGR_SERVE_PIN": "", // explicitly unset → would hard-fail without --allow-plaintext
 	})
 
 	root := NewRootCmd()
-	root.SetArgs([]string{"cache", "pull", "--url", url, "--token", code})
+	root.SetArgs([]string{"cache", "pull", "--url", url, "--token", code, "--allow-plaintext"})
 	out := &bytes.Buffer{}
 	root.SetOut(out)
 	root.SetErr(out)
@@ -400,6 +407,116 @@ func TestCachePull_PlaintextFallback_Warns(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "WARNING") || !strings.Contains(out.String(), "plaintext") {
 		t.Fatalf("plaintext fallback did not warn: %s", out.String())
+	}
+}
+
+// TestCachePull_NoPin_HardFailsByDefault verifies the F4 hard-fail policy:
+// when no pin is resolvable (no env / flag / embedded) and --allow-plaintext
+// is NOT passed, cache pull MUST refuse — silently sending /snapshot
+// credentials over unverified plaintext is a fail-open security bug.
+func TestCachePull_NoPin_HardFailsByDefault(t *testing.T) {
+	url, _ := standUpServe(t) // we don't need a valid token; the hard-fail happens before the request
+	withDEK(t)
+	cacheDir := t.TempDir()
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_URL":   url,
+		"SSHMGR_CACHE_TOKEN": "code-123",
+		"SSHMGR_SERVE_PIN":   "", // none
+		"SSHMGR_CACHE_DIR":   cacheDir,
+	})
+	root := newRootForTest(t)
+	root.SetArgs([]string{"cache", "pull"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected hard-fail with no pin by default, got nil")
+	}
+	if !strings.Contains(err.Error(), "pin") && !strings.Contains(err.Error(), "allow-plaintext") {
+		t.Fatalf("error should mention pin/allow-plaintext, got: %v", err)
+	}
+}
+
+// TestCachePull_NoPin_AllowPlaintext_OptsIn verifies the F4 opt-in: with no
+// pin resolvable, passing --allow-plaintext permits the plaintext pull
+// (still warned, still functional). Uses a plaintext httptest server.
+func TestCachePull_NoPin_AllowPlaintext_OptsIn(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"servers":[],"credentials":[]}`)
+	}))
+	defer srv.Close()
+	withDEK(t)
+	cacheDir := t.TempDir()
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_URL":   srv.URL, // http
+		"SSHMGR_CACHE_TOKEN": "code-123",
+		"SSHMGR_SERVE_PIN":   "",
+		"SSHMGR_CACHE_DIR":   cacheDir,
+	})
+	root := newRootForTest(t)
+	root.SetArgs([]string{"cache", "pull", "--allow-plaintext"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("expected --allow-plaintext to permit plaintext pull, got: %v", err)
+	}
+}
+
+// TestCachePull_MalformedEnvPin_HardFails verifies F7: a pin-shaped but
+// invalid value in SSHMGR_SERVE_PIN (typo, wrong length, non-hex) MUST be a
+// hard error — not silently fall through to plaintext. A typo in the env var
+// must not silently remove TLS protection.
+func TestCachePull_MalformedEnvPin_HardFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"servers":[],"credentials":[]}`)
+	}))
+	defer srv.Close()
+	withDEK(t)
+	cacheDir := t.TempDir()
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_URL":   srv.URL, // http
+		"SSHMGR_CACHE_TOKEN": "code-123",
+		"SSHMGR_SERVE_PIN":   "sha256:NOTVALIDHEX", // pin-shaped but malformed
+		"SSHMGR_CACHE_DIR":   cacheDir,
+	})
+	root := newRootForTest(t)
+	root.SetArgs([]string{"cache", "pull"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected hard-fail on malformed SSHMGR_SERVE_PIN, got nil")
+	}
+	if !strings.Contains(err.Error(), "SSHMGR_SERVE_PIN") {
+		t.Fatalf("error should name SSHMGR_SERVE_PIN, got: %v", err)
+	}
+}
+
+// TestCachePull_MalformedFlagPin_HardFails verifies F7 for the --pin flag:
+// a malformed --pin value must hard-fail (typo protection), not fall through
+// to plaintext.
+func TestCachePull_MalformedFlagPin_HardFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"servers":[],"credentials":[]}`)
+	}))
+	defer srv.Close()
+	withDEK(t)
+	cacheDir := t.TempDir()
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_URL":   srv.URL,
+		"SSHMGR_CACHE_TOKEN": "code-123",
+		"SSHMGR_CACHE_DIR":   cacheDir,
+	})
+	root := newRootForTest(t)
+	root.SetArgs([]string{"cache", "pull", "--pin", "sha256:deadbeef"}) // too short
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected hard-fail on malformed --pin, got nil")
+	}
+	if !strings.Contains(err.Error(), "--pin") {
+		t.Fatalf("error should name --pin, got: %v", err)
 	}
 }
 
