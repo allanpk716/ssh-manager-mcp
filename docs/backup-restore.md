@@ -136,9 +136,9 @@ Persistent=true
 
 ## Plan 14 — Windows 生产部署（DPAPI master key + serve 常驻）
 
-> 设计 spec：`docs/superpowers/specs/2026-08-12-plan-14-windows-prod-deploy-design.md`（v2）。
+> 设计 spec：`docs/superpowers/specs/2026-08-12-plan-14-windows-prod-deploy-design.md`（v2）。**⚠️ SUPERSEDED by Plan 15**（machine-scope DPAPI + serve install fix），正文保留作审计轨迹。实际方案见 `docs/superpowers/specs/2026-08-12-plan-15-machine-scope-dpapi-serve-fix-design.md`。
 
-把 Windows 上的 master key 存储从 **Windows Credential Manager（keychain）** 换成 **DPAPI 加密的本地文件**（`%AppData%\ssh-manager\master.key`），并新增 `ssh-manager serve install` 把 serve 注册成 Task Scheduler 常驻任务。原因：实测发现 Windows Credential Manager 在 sshd / Service / Task-Scheduler 的非交互 session 里报 `ERROR_NO_SUCH_LOGON_SESSION (1312)`——master key 存不进 / 读不出，serve 在这些 session 里拿不到 master key 起不来；DPAPI 不受此限制（spec §12 spike 实证三 session 全通）。
+把 Windows 上的 master key 存储从 **Windows Credential Manager（keychain）** 换成 **DPAPI 加密的本地文件**（`%AppData%\ssh-manager\master.key`），并新增 `ssh-manager serve install` 把 serve 注册成 Task Scheduler 常驻任务。原因：实测发现 Windows Credential Manager 在 sshd / Service / Task-Scheduler 的非交互 session 里报 `ERROR_NO_SUCH_LOGON_SESSION (1312)`——master key 存不进 / 读不出，serve 在这些 session 里拿不到 master key 起不来；DPAPI 不受此限制（spec §12 spike 实证三 session 全通）。**Plan 15 修正为 machine-scope DPAPI**（见下方「升级 Runbook (Plan 15 修正)」）。
 
 ### 升级 Runbook（v0.2.0 → 新版，Windows）
 
@@ -153,13 +153,32 @@ Persistent=true
 
 ⚠️ **跳过步骤 2 直接 `serve install`** → serve 读不到 master key（旧 slot 在非交互 session 读不出，新文件还没生成）→ 任务启动失败循环。`serve install` 自身会在 master.key 缺失时拒绝注册（报"run 'ssh-manager unlock' in an interactive session first"），但别依赖这道闸——正确顺序是先 unlock 迁移。
 
+### 升级 Runbook（Plan 15 修正：user-scope → machine-scope 迁移）
+
+Plan 14 的 user-scope DPAPI 在 NUC10 §7.3 真机验收中暴露了**跨 logon session 失败**（FINDING B）。Plan 15 修正为 **machine-scope DPAPI**（`CRYPTPROTECT_LOCAL_MACHINE`）——master.key 绑**机器**，不绑用户 SID / logon session。
+
+**已有 Plan 14 user-scope vault 的机器升级到 Plan 15 machine-scope**：
+
+1. 部署 Plan 15 新版 `ssh-manager.exe`（覆盖旧版）。
+2. **在交互式 session（本地终端 / RDP）跑** `ssh-manager unlock`：
+   - 程序检测到 `master.key` 是 **user-scope**（可解）→ 自动触发 **`migrateDpapiScope`**（T3 实现）→ 用 **machine-scope** 重新 protect → 覆盖 `master.key`。
+   - **无需手动重设 vault**——master key 内容不变，只换 DPAPI scope。
+   - 若在 sshd / 非交互 session 跑这一步：user-scope `master.key` 读不出 → 程序会明确提示"请在交互式 session 重跑"（不会破坏现有 vault）。
+3. **`ssh-manager serve install`**（如果这台机要常驻 serve）：
+   - Plan 15 修正了 serve install 的 **Go 密码读**（codex #2：`Get-Credential` → PowerShell `secureString` 读密码，不再把密码写进 4688 审计日志）。
+   - Plan 15 修正了 **precheck machine-scope**（安装前检查 master.key 是 machine-scope，避免 user-scope 的跨 session 失败）。
+   - Plan 15 新增 **TLS 支持**（codex #5：`--tls-cert` / `--tls-key` 选项）。
+   - Plan 15 新增 **MultipleInstances 支持**（pi #2：允许多个 serve 实例同时跑，用不同端口）。
+
+⚠️ **跳过步骤 2 直接 `serve install`** → Plan 15 的 `serve install` 会报 **precheck 失败**（"master.key is user-scope, run 'ssh-manager unlock' in an interactive session first to migrate to machine-scope"），不会注册错误配置的任务。
+
 ### master.key ≠ 备份（不可移植）
 
 **`master.key` 不是备份，是本机日常解锁缓存**：
 
-- 它是 **user-scope DPAPI** 加密的——绑死本机 profile + 当前用户 SID。
+- 它是 **machine-scope DPAPI** 加密的（Plan 15 修正）——绑死本机 **机器**，不绑用户 SID / logon session。
 - 换机 / 重装系统 / 换用户账户 → `master.key` 成废物（新环境解不开）。
-- 即便拷到同机另一用户账户，也解不开（user-scope DPAPI 对其他用户保密，见下"威胁模型"）。
+- **machine-scope 对同机其他用户不保密**（见下"威胁模型"）。
 
 **唯一可移植的灾备手段**是：
 
@@ -181,9 +200,9 @@ passphrase 文件自身要 0600、不进 git、恢复后删掉。**口令丢了 
 | 情形 | master.key 还能解吗？ | 要做什么 |
 |---|---|---|
 | **用户自行改密码**（Ctrl+Alt+Del → Change password，知道旧密码） | ✅ 还能解 | 无影响——Windows 用旧密码自动 re-wrap DPAPI Master Key，已有密文仍可解 |
-| **管理员强制重置密码**（admin reset，不知旧密码） | ❌ 解不开 | 重置前先 [export 一份](#场景-①-定期备份)；重置后在新密码环境里 `unlock` 会报"master key present but unreadable"，按错误提示从 export 备份恢复或重设 vault |
+| **管理员强制重置密码**（admin reset，不知旧密码） | ✅ **还能解**（machine-scope DPAPI 免疫） | **machine-scope 对 admin 强制重置密码免疫**（用 DPAPI_SYSTEM LSA secret，不依赖用户 Master Key）—— 与 user-scope 相反。代价：同机其他用户进程能解（靠文件夹 ACL 兜底）。 |
 
-⚠️ 旧版本文档/spec 写过"改密码就断"——**那是事实错误，已修正**。日常改密码无影响，**只有 admin 强制重置**才会断。
+⚠️ **Plan 14 文档写的"user-scope admin 重置密码会断"是事实正确**，但 Plan 15 修正为 machine-scope 后，**这个威胁消失了**。machine-scope 的威胁模型是"同机其他用户能解"（见下），不是"admin 重置密码会断"。
 
 ### Windows：`serve install` / `uninstall` / `status`
 
@@ -232,17 +251,48 @@ wmic UserAccount where Name='<你的用户名>' set PasswordExpires=False
 
 域账户通常有强制密码策略，不能这么搞——定期重装任务（`serve uninstall` → 改密码 → `serve install`）是唯一的运维路径。
 
-### 威胁模型（诚实，非 regression）
+### 威胁模型（诚实，Plan 15 修正为 machine-scope）
 
-- ⚠ **master.key 对同用户（`allan716`）跑的任意进程不保密**——任何 `allan716` 启动的进程都能 `CryptUnprotectData` 解开 `master.key`。**这与 v0.2.0 的 keychain 等级完全相同**（keychain 对同用户进程也不设防），**不是 regression**。
-- ✓ **master.key 对同机其他用户保密**（user-scope DPAPI 绑用户 SID）。
+- ⚠ **master.key 对同机其他用户进程不保密**（machine-scope DPAPI）——任何用户启动的进程都能 `CryptUnprotectData` 解开 `master.key`。**这是 machine-scope 的代价**（换取跨 logon session 可用 + admin 重置密码免疫）。
+- ⚠ **master.key 对同用户（`allan716`）跑的任意进程不保密**——任何 `allan716` 启动的进程都能 `CryptUnprotectData` 解开 `master.key`。**这与 v0.2.0 的 keychain 等级相同**（keychain 对同用户进程也不设防），**不是 regression**。
 - ✓ **master.key 对 agent 保密**（agent 进程无 master key，走 broker；L2 模型不变）。
-- **新增信任根**：`%AppData%\ssh-manager\master.key`（+ `cache-dek.key`）——物理 / 同机进程访问控制是它的防线（文件夹 ACL `icacls /inheritance:r /grant "<user>:(OI)(CI)F"`，不靠 Go 的 0600 位——Windows 忽略 mode 位）。
+- ✓ **master.key 对 admin 强制重置密码免疫**（machine-scope DPAPI 用 DPAPI_SYSTEM LSA secret，不依赖用户 Master Key；与 user-scope 相反）。
+- **新增信任根 + 防线**：`%AppData%\ssh-manager\master.key`（+ `cache-dek.key`）——物理 / 同机进程访问控制是它的防线（文件夹 ACL `icacls /inheritance:r /grant "<user>:(OI)(CI)F"`，不靠 Go 的 0600 位——Windows 忽略 mode 位）。**同机其他用户能解 machine-scope DPAPI，但读不到文件（ACL 阻止）——这是defense-in-depth**。
+
+**威胁模型对比（user-scope vs machine-scope）**：
+
+| 威胁 | user-scope（Plan 14） | machine-scope（Plan 15） |
+|---|---|---|
+| 同机其他用户进程 | ✅ 保密（DPAPI 绑用户 SID） | ⚠️ 不保密（但 ACL 阻止读文件） |
+| admin 强制重置密码 | ❌ 会断（user Master Key 失效） | ✅ 免疫（DPAPI_SYSTEM LSA secret） |
+| 跨 logon session（sshd → Task Scheduler） | ❌ 失败（FINDING B） | ✅ 可用（machine-scope 绑机器） |
+| 同用户进程 | ⚠️ 不保密（与 keychain 同级） | ⚠️ 不保密（与 keychain 同级） |
 
 ### 限制
 
 - **Windows only**：DPAPI master key + `serve install`（Task Scheduler）只在 Windows 实现。Linux/macOS 继续用 keychain（`KeyringKeyProvider`）+ `FileKeyProvider` 兜底（无 keychain 的 headless 环境），**`serve install` 在 Linux/macOS 报 `not yet supported`**（spec §3.4 / §9 defer 到专门 plan，见 [multi-machine.md 的 Linux/macOS 章节](./multi-machine.md#linuxmacos-尚未支持)）。
 - **迁移必须交互式 session**：v0.2.0 → DPAPI 的迁移（`unlock` 触发）依赖读旧 keychain slot，只在本地终端 / RDP 通；sshd / 非交互 session 读不出（1312），程序会提示重跑（不自动生成新 key）。
-- **admin 重置密码 = master.key 失效**：见上"密码变更"——重置前必须 export，否则只能重设 vault。
+- **user→machine 迁移必须交互式 session**：user-scope → machine-scope 的迁移（Plan 15 的 `migrateDpapiScope`）依赖读现有 user-scope master.key，只在本地终端 / RDP 通；sshd / 非交互 session 读不出（user-scope 绑用户 SID），程序会提示重跑（不自动生成新 key）。
+- **machine-scope 威胁模型**：同机其他用户进程能解 DPAPI（machine-scope 不绑用户 SID），但文件夹 ACL 阻止读文件（`icacls /inheritance:r /grant "<user>:(OI)(CI)F"`）。这是 defense-in-depth。
 - **serve install 需交互式 session 装**（PowerShell `Get-Credential` 要弹窗）——不能在纯 sshd session 装。
 - **`serve install` 不是跨平台的**：Linux systemd / macOS launchd 各有平台陷阱（linger 权限、D-Bus session、LaunchAgent 仅 GUI login 后启动），未实现。
+
+### Plan 15 §7.3 NUC10 reboot 验证（release 前 checklist）
+
+CI 不能 reboot，boot 自起（BootTrigger）+ 跨重启 DPAPI（machine-scope）的闭环验证在这里：
+
+1. NUC10 部署新版 ssh-manager.exe。
+2. NUC10 交互式（RDP）跑 `ssh-manager unlock` → 触发 user→machine 迁移（重 protect C）。
+3. `ssh-manager serve install`（输 allan716 密码）→ 对象 API 注册。
+4. **reboot NUC10** → BootTrigger 自起 serve。
+5. NUC10 起来后 `ssh-manager serve status` → `vault: ok`（machine-scope 跨重启可解）+ `overall: HEALTHY`。
+6. 笔记本 MCP 连 `http://192.168.100.235:7878` → `exec_command` 在 1660Super01 跑 `hostname` → 返回 `DESKTOP-UP1MHGT`。
+7. 清理：`serve uninstall`。
+
+**关键验证点**：
+
+- **跨重启 DPAPI**：machine-scope master.key 在 reboot 后仍可解（`vault: ok`）。这是 CI 不能验证的（CI 无 reboot）。
+- **BootTrigger 自起**：Task Scheduler 的 boot trigger 让 serve 在无人登录时自动启动（`overall: HEALTHY`）。
+- **跨机 exec_command**：笔记本 MCP 通过 serve 在目标机（1660Super01）执行命令成功 → end-to-end 多机架构验证。
+
+⚠️ **这个 runbook 是 FINDING B 的 closure**（user-scope 跨 logon session 失败在真机 reboot 验证中被发现；machine-scope 修正后必须通过真机 reboot 验证）。

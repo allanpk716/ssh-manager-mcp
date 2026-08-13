@@ -129,6 +129,114 @@ func init() {
 	// Wire the migration into `unlock`'s ErrNotFound branch. keychain_unix.go
 	// leaves firstRunMigrator nil, so Unix unlock skips this entirely.
 	firstRunMigrator = migrateOnFirstRun
+	// Plan 15 T3: wire the user-scope → machine-scope re-protect hook into
+	// `unlock`'s Get-succeeded branch. Nil on Unix (no migrate_windows.go).
+	postGetMigrator = migrateDpapiScope
+}
+
+// migrateDpapiScope (Plan 15 T3) re-protects a legacy user-scope master.key to
+// machine-scope. Triggered by unlock's postGetMigrator hook (Get succeeded →
+// key was read → maybe it's a legacy user-scope blob needing re-protect so
+// boot auto-start via Task Scheduler can read it without an interactive
+// logon). Fixes codex #1: firstRunMigrator is ErrNotFound-gated and never
+// fires here (dual-scope Get returns success for a user-scope blob).
+//
+// === SPIKE-2 CAVEAT (load-bearing, read before changing the detection rule) ===
+// Plan 15 spike 2 (TestDpapi_CrossScopeInteroperable) proved DPAPI's scope flag
+// is a HINT, not a hard gate: a blob self-describes its scope and BOTH flags
+// decrypt it. Verified symmetric in this task (user-blob + machine-flag also
+// succeeds). Therefore MachineUnprotectForMigrate succeeding does NOT prove the
+// blob is already machine-scope — it succeeds on user-scope blobs too. The
+// brief's proposed detection ("machine-unprotect OK ⇒ already machine-scope,
+// skip") would have short-circuited on the very user-scope blobs we must
+// migrate, recreating codex #1 under a different name. This test was confirmed
+// empirically (see task-3-report.md). Since DPAPI exposes NO way to recover the
+// flag a blob was protected with, scope detection from the blob alone is
+// impossible. We instead ALWAYS offer the re-protect:
+//   - On a legacy user-scope blob: migrates to machine-scope (the goal).
+//   - On an already-machine-scope blob: idempotent re-protect (Set re-protects
+//     with machine flag; master key VALUE unchanged because Get already read
+//     it and we pass mk back to Set). Cost: one Set + icacls per interactive
+//     unlock. UX cost: a [y/N] prompt on EVERY interactive unlock, even when
+//     the file is already machine-scope. Both are accepted as the price of
+//     spike-2; a non-invasive scope probe does not exist. See task-3-report.md
+//     CONCERNS for follow-up options (sentinel file, etc.).
+//
+// Flow:
+//   - Locate master.key via migrateSources().master.new (DpapiKeyProvider).
+//     Non-DPAPI provider / no path / unreadable file ⇒ nothing to do
+//     (return false, nil; firstRunMigrator handles the truly-absent case).
+//   - Sanity-probe the blob (machine then user unprotect): if BOTH fail the
+//     file is corrupt / admin-reset ⇒ print a recovery path, return (false,
+//     nil) without orphaning the vault. (Get already succeeded to reach here,
+//     so this branch is defensive; under spike-2 at least one always succeeds.)
+//   - confirmMigrate [y/N]. N ⇒ guidance ("re-run unlock, accept prompt"),
+//     return (false, nil). Caller prints mk anyway.
+//   - Re-protect mk via master.new.Set(mk) (machine-scope by T2; ACL contract
+//     preserved by DpapiKeyProvider.Set). Return (true, nil) on success.
+//   - cache-DEK piggybacks: if a legacy keyring slot exists it is migrated
+//     too (migrateKeyProvider reads old slot, writes DPAPI file, deletes
+//     slot); best-effort, skips if absent. Reuses v0.2.0 "master succeeds ⇒
+//     DEK migrates" consistency. This does NOT cover a user-scope cache-dek
+//     FILE (only the legacy keyring slot); a user-scope cache-dek.key file
+//     is out of scope for T3 (cache-dek.key is created post-T5 by the DPAPI
+//     writer, always machine-scope; there is no user-scope cache-dek.key in
+//     the wild).
+//
+// mk is the key already read by Get (caller passes it); we only re-protect
+// it, value unchanged. Must be an INTERACTIVE session (the confirm prompt
+// reads stdin; sshd sessions get N implicitly via EOF, no harm done).
+func migrateDpapiScope(w interface{ Write([]byte) (int, error) }, mk []byte) (bool, error) {
+	master, dek := migrateSources() // master.key + cache-dek.key providers
+
+	masterProv, ok := master.new.(store.DpapiKeyProvider)
+	if !ok {
+		return false, nil // 非 Windows DPAPI provider(Windows-only build 不应发生)
+	}
+	masterPath, err := masterProv.PathOrEmpty()
+	if err != nil || masterPath == "" {
+		return false, nil // 无路径 → 无可迁移(master.key 不存在由 firstRunMigrator 处理)
+	}
+	blob, rErr := os.ReadFile(masterPath)
+	if rErr != nil {
+		return false, nil // master.key 不读 / 不存在 → 无可迁移(firstRunMigrator 管 ErrNotFound 路径)
+	}
+	// blob 必须是 Get 能读出的(spin-2 下任一 flag 都能解)——能被 Get 读出说明
+	// 文件有效(非损坏/admin 重置)。若是损坏 blob,Get 早已失败,不会走到这里。
+	// 双 scope 都试一次确认 blob 至少能解(防御性;spike-2 下通常都能解)。
+	if _, mErr := masterProv.MachineUnprotectForMigrate(blob); mErr != nil {
+		if _, uErr := masterProv.UserUnprotectForMigrate(blob); uErr != nil {
+			// 两个 scope 都读不出:损坏 / admin 密码重置。不生成新 key(会 orphan vault),
+			// 不重 protect(可能掩盖更深的 vault 损坏)。给用户一条恢复路径。
+			fmt.Fprintln(w, "\nmaster.key could not be read under either DPAPI scope (possibly corrupt, or admin password reset). To recover, restore from a backup export (see docs/backup-restore.md).")
+			return false, nil
+		}
+	}
+
+	// 确认迁移(复用 confirmMigrate 的 [y/N] 机制)。prompt label 说明意图:
+	// spike-2 使 scope 检测不可行,我们总是确保 machine-scope(对已是 machine-scope
+	// 的 blob 是幂等 re-protect)。label 文案告诉用户"这是 user-scope → machine-scope"。
+	if !confirmMigrate(w, "user-scope master.key (migrate to machine-scope)") {
+		fmt.Fprintln(w, "migration declined; master.key left as-is. serve auto-start at boot needs machine-scope DPAPI; re-run `unlock` and accept the prompt (interactive session).")
+		return false, nil
+	}
+
+	// 重 protect mk 到 machine-scope(值不变 —— Get 读出的 mk,原样回 Set;
+	// T2 的 Set 用 dpapiProtect(mk, true) 即 machine-scope)。ACL 契约由 Set 保证
+	// (temp 在 protectedDir 内,继承 allan716-only ACL)。
+	if err := master.new.Set(mk); err != nil {
+		return false, fmt.Errorf("re-protect master.key to machine-scope: %w", err)
+	}
+
+	// cache-dek 搭车(如果 legacy keyring slot 存在)。复用 v0.2.0 "master 成功才迁 dek"
+	// 一致性。best-effort:ErrNotFound(无 slot)和 errLegacyKeyringUnreadable(sshd 1312)
+	// 都不是硬错;其他错仅记录。
+	if _, _, dErr := migrateKeyProvider(w, dek, "cache DEK"); dErr != nil && !errors.Is(dErr, errLegacyKeyringUnreadable) {
+		fmt.Fprintf(w, "cache DEK scope migration skipped: %v\n", dErr)
+	}
+
+	fmt.Fprintln(w, "master.key re-protected: user-scope to machine-scope DPAPI (idempotent if it already was machine-scope).")
+	return true, nil
 }
 
 // migrateOnFirstRun is the unlock ErrNotFound hook (Windows). It probes the

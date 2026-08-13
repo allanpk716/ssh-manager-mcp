@@ -568,3 +568,102 @@ func bytesEqual(a, b []byte) bool {
 	}
 	return true
 }
+
+// TestUnlock_MigratesUserScopeToMachineScope 验 unlock 在 Get 成功后触发
+// postGetMigrator,把旧 user-scope master.key 重 protect 为 machine-scope。
+// 钉死 codex #1:没有 postGetMigrator 钩子则迁移不可达(firstRunMigrator 只在
+// ErrNotFound 触发,而双 scope Get 对旧 user-scope blob 返回 success)。
+//
+// 严正性:Plan 15 spike 2 证明 DPAPI flag 不隔离 scope(blob 自描述),
+// dpapiUnprotect(userBlob, machineFlag) 同样成功 —— 所以仅靠 MachineUnprotectForMigrate
+// 能否解出无法判定 "已 machine-scope vs 待迁移 user-scope"。测试因此断言两件事:
+//   - (A) 重 protect 后 blob 仍解得出原 mk(简报基本断言,spike-2 下可能假通过)。
+//   - (B) blob 字节确实被改写(Set 会用 DPAPI 非确定性 IV 重 protect,字节必变)——
+//     这是判定 "Set 真的跑了" 的硬证据,不被 spike-2 互通欺骗。
+//   - (C) stderr 含迁移成功消息 + confirm 提示真的触发了 —— 证明走了迁移分支。
+//
+// 若 postGetMigrator 未实现 / 被 spike-2 短路:旧 blob 不被改写,字节相同 → B 失败。
+func TestUnlock_MigratesUserScopeToMachineScope(t *testing.T) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	dir := t.TempDir()
+	masterPath := filepath.Join(dir, "master.key")
+	user := os.Getenv("USERNAME")
+	if user == "" {
+		t.Skip("USERNAME empty (ACL setup needs a real user)")
+	}
+	originalMK := []byte("user-scope-migrate-test-key32-pad00")[:32]
+
+	// 写旧 user-scope master.key(用 Step 4 加的 UserProtectForMigrate 导出 helper)。
+	legacyBlob, err := store.DpapiKeyProvider{}.UserProtectForMigrate(originalMK)
+	if err != nil {
+		t.Fatalf("UserProtectForMigrate: %v", err)
+	}
+	if err := os.WriteFile(masterPath, legacyBlob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// keychain seam 指向这个 master.key;Get 成功 → postGetMigrator 触发。
+	masterProv := store.DpapiKeyProvider{Path: masterPath, DirUser: user}
+	prevKc := keychain
+	keychain = masterProv
+	t.Cleanup(func() { keychain = prevKc })
+
+	// migrateSources 也指向同一 master.key(否则 migrateDpapiScope 找不到路径)。
+	// cache-dek 指向另一个空路径(该文件不存在 → migrateKeyProvider 走 Absent,
+	// 不触发 prompt,不干扰 master 迁移断言)。
+	prevSrc := migrateSources
+	migrateSources = func() (m, d migrateSource) {
+		return migrateSource{
+				old: store.KeyringKeyProvider{Service: uniqueService(t), User: "master-key"}, // absent
+				new: masterProv,
+			}, migrateSource{
+				old: store.KeyringKeyProvider{Service: uniqueService(t), User: "cache-dek"}, // absent
+				new: store.DpapiKeyProvider{Path: filepath.Join(dir, "cache-dek.key"), DirUser: user},
+			}
+	}
+	t.Cleanup(func() { migrateSources = prevSrc })
+
+	// 接受迁移 prompt。
+	seen := setConfirm(t, true)
+
+	// 跑 unlock(postGetMigrator 读 master.key 发现是 user-scope,
+	// confirmMigrate 返回 true → 重 protect 为 machine-scope)。
+	stdout, stderr, err := runUnlock(t)
+	if err != nil {
+		t.Fatalf("unlock: %v (stderr=%q)", err, stderr)
+	}
+
+	// (A) 新 blob 解出原 mk(spike-2 下可能假通过)。
+	newBlob, err := os.ReadFile(masterPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.DpapiKeyProvider{}.MachineUnprotectForMigrate(newBlob)
+	if err != nil {
+		t.Fatalf("重 protect 后 machine-scope unprotect 失败: %v", err)
+	}
+	if !bytesEqual(got, originalMK) {
+		t.Fatalf("迁移后 key 变了: got %x want %x", got, originalMK)
+	}
+
+	// (B) blob 字节被改写 —— 证明 Set 真的跑了(DPAPI 非确定性 IV → 必变)。
+	// 若 postGetMigrator 被 spike-2 短路,Set 没跑,旧 blob 原样 → 这条会失败。
+	if bytesEqual(newBlob, legacyBlob) {
+		t.Fatalf("master.key blob 未被改写:迁移未触发(spike-2 短路或 postGetMigrator 未调 Set)。legacy=%x new=%x", legacyBlob, newBlob)
+	}
+
+	// (C) stderr 含迁移成功消息 + confirm 真的触发了(证明走了迁移分支,不是短路)。
+	if !strings.Contains(stderr, "user-scope to machine-scope") {
+		t.Fatalf("stderr 缺迁移成功消息: %q", stderr)
+	}
+	if len(*seen) == 0 {
+		t.Fatalf("confirm prompt 未触发(迁移分支未到达): seen=%v", *seen)
+	}
+
+	// stdout 含原 mk 的 export 行。
+	if !strings.Contains(stdout, hex.EncodeToString(originalMK)) {
+		t.Fatalf("stdout 缺 mk export 行: %q", stdout)
+	}
+}
