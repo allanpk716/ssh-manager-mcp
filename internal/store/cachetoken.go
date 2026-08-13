@@ -12,6 +12,11 @@ import (
 // and the ONE-TIME plaintext token. Mirrors AddProject's token model but is owner-level (no
 // profile binding) and never carried in a Snapshot. The plaintext is shown only here — store
 // only the hash, exactly like project tokens.
+//
+// Same-name REVOKED rows are reclaimed first (in the same tx) so a device name can be re-issued
+// after a revoke: Lazy soft-delete otherwise keeps the row and UNIQUE(name) blocks the INSERT.
+// Active same-name rows are deliberately left untouched so a duplicate-active INSERT still fails
+// UNIQUE (guards against accidentally issuing two active codes for one device).
 func (s *Store) AddCacheToken(name string) (string, string, error) {
 	if s.readOnly {
 		return "", "", ErrReadOnly
@@ -24,12 +29,27 @@ func (s *Store) AddCacheToken(name string) (string, string, error) {
 	hash := HashToken([]byte(token), salt)
 	id := newID()
 	ts := now()
-	_, err = s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback() // no-op after Commit
+	// Reclaim any same-name revoked rows so the name is free for re-issue. Active rows are
+	// left in place — a duplicate-active INSERT must still hit UNIQUE.
+	if _, err := tx.Exec(
+		`DELETE FROM cache_tokens WHERE name=? AND status=?`,
+		name, string(models.CacheTokenRevoked),
+	); err != nil {
+		return "", "", err
+	}
+	if _, err := tx.Exec(
 		`INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,created_at,updated_at)
 		 VALUES (?,?,?,?,?,?,?,?)`,
 		id, name, hash, salt, tokenPrefix(token), string(models.CacheTokenActive), ts, ts,
-	)
-	if err != nil {
+	); err != nil {
+		return "", "", err
+	}
+	if err := tx.Commit(); err != nil {
 		return "", "", err
 	}
 	return id, token, nil

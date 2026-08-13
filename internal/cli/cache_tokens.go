@@ -40,7 +40,7 @@ func cacheTokensAddCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().String("name", "", "device name (e.g. laptop, desktop-2)")
+	c.Flags().String("name", "", "device name (e.g. laptop, desktop-2); reusable after revoke")
 	_ = c.MarkFlagRequired("name")
 	return c
 }

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +101,90 @@ func TestTouchCacheToken_UpdatesLastPullAt(t *testing.T) {
 	}
 	if got.ID != id || got.LastPullAt.IsZero() || time.Since(got.LastPullAt) > 5*time.Second {
 		t.Fatalf("last_pull_at not bumped (or stale): %+v", got)
+	}
+}
+
+// TestAddCacheToken_ReusesNameAfterRevoke asserts the bug fix: after revoking a device code,
+// the same name can be re-issued (the prior revoked row no longer blocks UNIQUE(name)). The new
+// plaintext verifies; the OLD revoked plaintext must NOT verify (Lazy gate on the prior code).
+func TestAddCacheToken_ReusesNameAfterRevoke(t *testing.T) {
+	s := newTestStore(t)
+	if _, oldPlain, err := s.AddCacheToken("laptop"); err != nil {
+		t.Fatalf("first AddCacheToken: %v", err)
+	} else if ct, _ := s.VerifyCacheToken(oldPlain); ct == nil {
+		t.Fatal("first code must verify before revoke")
+	}
+	if err := s.RevokeCacheToken("laptop"); err != nil {
+		t.Fatalf("RevokeCacheToken: %v", err)
+	}
+	// Re-issue same name — must succeed (no UNIQUE collision).
+	_, newPlain, err := s.AddCacheToken("laptop")
+	if err != nil {
+		t.Fatalf("re-add after revoke must succeed, got: %v", err)
+	}
+	// New plaintext verifies as active.
+	ct, err := s.VerifyCacheToken(newPlain)
+	if err != nil || ct == nil {
+		t.Fatalf("new plaintext must verify active: err=%v ct=%v", err, ct)
+	}
+	if ct.Name != "laptop" || ct.Status != models.CacheTokenActive {
+		t.Fatalf("new active resolve mismatch: %+v", ct)
+	}
+}
+
+// TestAddCacheToken_ActiveNameStillCollides asserts the UNIQUE(name) guard is NOT loosened for
+// ACTIVE rows: issuing a second active code under a live name must still fail (prevents
+// accidentally handing out two active codes for one device).
+func TestAddCacheToken_ActiveNameStillCollides(t *testing.T) {
+	s := newTestStore(t)
+	if _, _, err := s.AddCacheToken("laptop"); err != nil {
+		t.Fatalf("first AddCacheToken: %v", err)
+	}
+	_, _, err := s.AddCacheToken("laptop")
+	if err == nil {
+		t.Fatal("second active add under a live name must fail UNIQUE, got nil error")
+	}
+	if !strings.Contains(strings.ToUpper(err.Error()), "UNIQUE") {
+		t.Fatalf("expected a UNIQUE constraint error, got: %v", err)
+	}
+}
+
+// TestAddCacheToken_CleansMultipleRevokedRows asserts the final re-add collapses ALL prior
+// same-name revoked rows, not just one. The sequence add→revoke three times leaves three revoked
+// rows under "laptop" (each re-add succeeds thanks to the fix); the 4th add (active) must leave
+// exactly one active "laptop" and zero revoked "laptop" rows.
+func TestAddCacheToken_CleansMultipleRevokedRows(t *testing.T) {
+	s := newTestStore(t)
+	// Three add→revoke cycles accumulate three revoked rows under the same name.
+	for i := 0; i < 3; i++ {
+		if _, _, err := s.AddCacheToken("laptop"); err != nil {
+			t.Fatalf("add cycle %d: %v", i, err)
+		}
+		if err := s.RevokeCacheToken("laptop"); err != nil {
+			t.Fatalf("revoke cycle %d: %v", i, err)
+		}
+	}
+	// 4th add — must succeed and collapse all three revoked rows into one active row.
+	if _, _, err := s.AddCacheToken("laptop"); err != nil {
+		t.Fatalf("final add after multiple revokes: %v", err)
+	}
+	out, err := s.ListCacheTokens()
+	if err != nil {
+		t.Fatalf("ListCacheTokens: %v", err)
+	}
+	var active, revoked int
+	for _, ct := range out {
+		if ct.Name != "laptop" {
+			continue
+		}
+		switch ct.Status {
+		case models.CacheTokenActive:
+			active++
+		case models.CacheTokenRevoked:
+			revoked++
+		}
+	}
+	if active != 1 || revoked != 0 {
+		t.Fatalf("expected exactly 1 active + 0 revoked laptop rows, got active=%d revoked=%d", active, revoked)
 	}
 }

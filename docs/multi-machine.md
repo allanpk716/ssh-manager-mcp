@@ -283,7 +283,7 @@ ssh-manager cache-tokens add --name laptop
 #   ssh-manager cache pull --url https://192.0.2.5:7878 --token <设备码>
 ```
 
-- `--name` **必填**且唯一（比如 `laptop` / `desktop-2`），后续吊销靠它。
+- `--name` **必填**且在 **active** 码中唯一（比如 `laptop` / `desktop-2`）；**revoke 后可重发同名**（旧的 revoked 行会被自动清理），后续吊销靠它。
 - 设备码**只显示一次**——当场拉、或记进密码管理器。
 - 其他管理命令：
   ```bash
