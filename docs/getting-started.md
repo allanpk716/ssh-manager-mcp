@@ -11,7 +11,7 @@
 - 一台**你自己的机器**（Windows / Linux / macOS）作为操作端——broker 就跑在这里。
 - 一台**目标服务器**，开放 SSH（默认 22 端口），你有它的密码或私钥。
 - 拿到 `ssh-manager` 二进制（见下一步）。
-- （可选）操作端有一个可用的 **OS keychain**：Windows Credential Manager / macOS Keychain / Linux 的 Secret Service（GNOME Keyring / KWallet）。**没有也能用**，走 passphrase 回退（见末尾“无 keychain 环境”）。
+- master key 的存储由平台自动选：**Windows** 用 DPAPI 加密的本地文件（`master.key`）；**Linux/macOS** 用 OS keychain（Secret Service / Keychain）。**没有 keychain 也能用**，走 passphrase 回退（见末尾”无 keychain 环境”）。
 
 > ssh-manager-mcp **不是** LLM 客户端，不调用任何 LLM API。你不需要为它配任何 LLM key——Claude Code 自己的 key 跟本项目无关。
 
@@ -68,13 +68,15 @@ ssh-manager unlock
 
 默认路径（可以用环境变量 `SSHMGR_STORE` 覆盖）：
 
-| 平台 | 默认路径 |
-|---|---|
-| Windows | `%APPDATA%\ssh-manager\store.db`（通常 `C:\Users\<你>\AppData\Roaming\ssh-manager\store.db`） |
-| Linux | `~/.config/ssh-manager/store.db`（或 `$XDG_CONFIG_HOME/ssh-manager/store.db`） |
-| macOS | `~/Library/Application Support/ssh-manager/store.db` |
+| 平台 | store.db 默认路径 | master key 存哪 |
+|---|---|---|
+| Windows | `%APPDATA%\ssh-manager\store.db`（通常 `C:\Users\<你>\AppData\Roaming\ssh-manager\store.db`） | **`%APPDATA%\ssh-manager\master.key`**（DPAPI 加密文件，Plan 15 后；不再用 Credential Manager） |
+| Linux | `~/.config/ssh-manager/store.db`（或 `$XDG_CONFIG_HOME/ssh-manager/store.db`） | OS keychain（Secret Service） |
+| macOS | `~/Library/Application Support/ssh-manager/store.db` | OS keychain（Keychain） |
 
-passphrase 模式还会在同目录生成 `store.db.meta.json`（存盐）。**这两个文件加 keychain 里的 master key，构成你的全部凭据存储——备份就备份这些，但务必和盘上其它东西一样妥善保管。**
+> **Windows 单机 stdio 用户**：master key 现在（Plan 15, v0.3.0+）存在 `master.key` 文件里，用 **machine-scope DPAPI** 加密（绑本机，不绑用户登录会话——这样 `serve` 在开机/非交互会话里也能读）。日常单机用 `ssh-manager mcp`（stdio）不受影响，`unlock` 照常跑。**多机共享 / serve 常驻 / 开机自起**的部署见 [multi-machine.md](./multi-machine.md)。
+
+passphrase 模式（无 keychain 环境）还会在同目录生成 `store.db.meta.json`（存盐）。**这两个文件加 master key，构成你的全部凭据存储——备份就备份这些，但务必和盘上其它东西一样妥善保管。** 完整备份/迁移/灾难恢复见 [backup-restore.md](./backup-restore.md)。
 
 ---
 
@@ -214,14 +216,14 @@ agent 会自己：
 | 东西 | 存哪 | 重启后 |
 |---|---|---|
 | 服务器凭据 / profile / project / 审计日志 | 加密 SQLite `store.db` | ✅ 还在 |
-| 解密 `store.db` 的 master key | OS keychain（Win Credential Manager / Linux Secret Service / macOS Keychain） | ✅ 还在（keychain 本身持久） |
+| 解密 `store.db` 的 master key | Windows：`master.key` 文件（DPAPI）；Linux/macOS：OS keychain | ✅ 还在（文件 / keychain 本身持久） |
 | `.mcp.json` / token 配置 | 项目目录或用户级配置 | ✅ 还在 |
 
 ### 三个"零干预"前提（一次配好，重启后永久成立）
 
 1. **`ssh-manager` 二进制在 PATH**，或 `.mcp.json` 里写了**绝对路径**（Windows 强烈建议绝对路径，见 Step 5）。
 2. **`.mcp.json` 已配好**（项目级或用户级都行），并且别提交 git。
-3. **master key 走 OS keychain**——这是"重启零干预"的根本保证。keychain 模式下 MCP 子进程能自己读到 master key，**你连 `unlock` 都不用再跑**（见上文"日常"：`unlock` 只需第一次跑）。
+3. **master key 持久化在本地**（Windows 的 `master.key` 文件 / Linux·macOS 的 OS keychain）——这是"重启零干预"的根本保证。MCP 子进程能自己读到 master key，**你连 `unlock` 都不用再跑**（见上文"日常"：`unlock` 只需第一次跑）。
 
 三点满足后，日常就是：**开机 → 开 Claude Code → 用**。没有任何"启动本程序"这一步。
 
@@ -270,5 +272,6 @@ ssh-manager mcp --token <你的token>   # 手动跑客户端会跑的那条命�
 | agent 报 `server is not in your profile` | 你让它操作的 server 不在它 project 绑定的 profile 里。用 `ssh-manager projects show <name>` 核对。 |
 | agent 看不到 sudo / `has_sudo=false` | 加服务器时没给 `--sudo-password`。用 `ssh-manager servers edit <name> --sudo-password '...'` 补上。 |
 | 首次连接弹 host key 确认？ | broker 用 **TOFU**（trust on first use）：第一次连一台机器会自动记下它的 host key，之后变了会拒绝（防中间人）。换机器/IP 后需要清旧记录（见 [managing-servers.md](./managing-servers.md#host-key-与-tofu)）。 |
+| Windows 上想替换 `ssh-manager.exe` 报"文件被占用" | serve 常驻进程锁着二进制。先 `ssh-manager serve uninstall`（停任务 + 杀 serve）→ 替换 exe → 再 `serve install`。见 [multi-machine.md](./multi-machine.md)。 |
 
-下一步：去 [managing-servers.md](./managing-servers.md) 学完整的增删改查，去 [agent-access.md](./agent-access.md) 学授权与吊销，去 [scenarios.md](./scenarios.md) 看真实场景。
+下一步：去 [managing-servers.md](./managing-servers.md) 学完整的增删改查，去 [agent-access.md](./agent-access.md) 学授权与吊销，去 [scenarios.md](./scenarios.md) 看真实场景。**多机共享 vault / Windows 上 `serve` 常驻开机自起 / 备份迁移**——见 [multi-machine.md](./multi-machine.md) 和 [backup-restore.md](./backup-restore.md)。
