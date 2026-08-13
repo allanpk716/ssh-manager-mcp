@@ -135,7 +135,7 @@ func generateServeCert(certPath, keyPath string) error {
 		Subject:      pkix.Name{CommonName: serveCertSubject},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(100 * 365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		KeyUsage:     x509.KeyUsageDigitalSignature, // ed25519 is a pure-signature algorithm; KeyEncipherment is meaningless for it (xcheck F9)
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     []string{host},
 		IPAddresses:  localNonLoopbackIPs(),

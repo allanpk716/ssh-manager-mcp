@@ -166,3 +166,24 @@ func TestLoadOrCreateServeCert_CorruptReturnsError(t *testing.T) {
 		t.Errorf("corrupt cert was overwritten; a corrupt state must not be silently regenerated")
 	}
 }
+
+func TestGenerateServeCert_KeyUsage_NoKeyEncipherment(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "serve-cert.pem")
+	keyPath := filepath.Join(dir, "serve-key.pem")
+	if err := generateServeCert(certPath, keyPath); err != nil {
+		t.Fatal(err)
+	}
+	der, _ := os.ReadFile(certPath)
+	block, _ := pem.Decode(der)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cert.KeyUsage&x509.KeyUsageKeyEncipherment != 0 {
+		t.Errorf("ed25519 cert should NOT set KeyEncipherment (meaningless for pure-signature alg), got KeyUsage=%v", cert.KeyUsage)
+	}
+	if cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
+		t.Errorf("cert should set DigitalSignature, got KeyUsage=%v", cert.KeyUsage)
+	}
+}
