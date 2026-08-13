@@ -155,34 +155,32 @@ jobs:
           }
           # Create the user. /add creates; /passwordreq:no avoids a forced change.
           net user sshmgrci $pw /add /passwordreq:no /expires:never /y
-          Write-Output "net user exit=$LASTEXITCODE"
 
-          # Grant SeBatchLogonRight via secedit (pi #1). DIAGNOSTIC version: the
-          # earlier CI run aborted somewhere in this block under ErrorActionPreference=
-          # Stop without telling us which step. Capture each native exe's exit code +
-          # verify the exported cfg actually has the SeBatchLogonRight line, so the log
-          # shows the real root cause. Native exes' non-zero doesn't trip Stop by
-          # default; we check $LASTEXITCODE explicitly and continue to gather all
-          # diagnostics, then decide.
+          # Grant SeBatchLogonRight via secedit (pi #1). The windows-latest runner
+          # image exports a policy with NO SeBatchLogonRight line (nobody currently
+          # holds the right), so we APPEND the grant line (not -replace an absent
+          # line). secedit /configure is treated best-effort (-ErrorAction
+          # SilentlyContinue + explicit exit-code check): if it fails on the runner
+          # image, we warn and continue — Register-ScheduledTask may not actually
+          # need the right on GitHub-hosted runners (the test itself will surface a
+          # clear "access denied" at Register if it does). configure exit=1 under
+          # ErrorActionPreference=Stop was the original CI abort (diagnosed:
+          # exported cfg lacked the line → -replace no-op'd → re-import rejected).
           $cfg = Join-Path $env:RUNNER_TEMP 'secpol.cfg'
           $db  = Join-Path $env:RUNNER_TEMP 'secpol.sdb'
-          Write-Output "--- secedit /export ---"
           secedit /export /cfg $cfg /quiet
-          Write-Output "export exit=$LASTEXITCODE; cfg exists=$(Test-Path $cfg)"
-          if (Test-Path $cfg) {
-            $cfgSize = (Get-Item $cfg).Length
-            Write-Output "cfg size=$cfgSize"
-            $sebLine = Select-String -Path $cfg -Pattern '^SeBatchLogonRight' -SimpleMatch
-            Write-Output "SeBatchLogonRight line in export: $(if ($sebLine) { $sebLine.Line } else { '<ABSENT>' })"
-          }
-          if (Test-Path $cfg) {
-            (Get-Content $cfg) -replace '^SeBatchLogonRight = .*', "SeBatchLogonRight = *sshmgrci" | Set-Content $cfg
-            Write-Output "replace+Set-Content exit=$LASTEXITCODE"
-            Write-Output "--- secedit /configure ---"
-            secedit /configure /db $db /cfg $cfg /quiet
-            Write-Output "configure exit=$LASTEXITCODE"
+          $grant = "SeBatchLogonRight = *sshmgrci"
+          $existing = Select-String -Path $cfg -Pattern '^SeBatchLogonRight' -SimpleMatch -Quiet
+          if ($existing) {
+            (Get-Content $cfg) -replace '^SeBatchLogonRight = .*', $grant | Set-Content $cfg
           } else {
-            Write-Output "::warning::secedit /export produced no cfg file on this runner image; skipping SeBatchLogonRight grant (Register-ScheduledTask may or may not need it)."
+            Add-Content -Path $cfg -Value $grant
+          }
+          & secedit /configure /db $db /cfg $cfg /quiet 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "::warning::secedit /configure exit=$LASTEXITCODE on this runner image; continuing (Register-ScheduledTask will surface a clear error at install time if SeBatchLogonRight is actually required)."
+          } else {
+            Write-Output "SeBatchLogonRight granted (secedit configure exit=0)."
           }
           Write-Output "secret_present=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
