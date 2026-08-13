@@ -18,10 +18,10 @@ import (
 
 // dekProvider returns the KeyProvider holding the cache DEK. It is a package
 // seam (defined in cache_dek_windows.go / cache_dek_unix.go, build-tag selected)
-// so tests inject MemKeyProvider instead of touching the real OS keychain /
-// DPAPI file. Windows binds a DpapiKeyProvider at the cache-dek.key path (same
-// path the v0.2.0 migration writes — spec §5.7, Plan 14 T5 fix A); Unix keeps
-// the env-aware keychain slot (SSHMGR_KEYRING_SERVICE).
+// so tests inject MemKeyProvider instead of touching the real DEK file. Both
+// platforms bind a FileKeyProvider at paths.CacheDekPath() (Plan 16 T4; spec
+// §3.1 / §4.2). Was DpapiKeyProvider on Windows / KeyringKeyProvider on Unix
+// before Plan 16 — same plaintext-at-fixed-path trust model as master.key.
 
 // cachePaths resolves the cache directory (SSHMGR_CACHE_DIR override, else UserConfigDir/
 // ssh-manager) and the three files within it: the encrypted snapshot, the meta sidecar, and

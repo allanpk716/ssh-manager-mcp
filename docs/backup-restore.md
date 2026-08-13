@@ -4,7 +4,7 @@
 
 ## 它解决什么
 
-你往保险柜里录了很多服务器。万一 `store.db` 损坏 / 丢失，或换机器，需要一份**可移植**的备份。`store.db` 自身虽加密，但绑死在原机的 keychain master key 上（**不可移植**——恢复时需要原机的 keychain）；`export` 解决"可移植"：文件用**你自己的口令**加密，跨机可恢复。
+你往保险柜里录了很多服务器。万一 `store.db` 损坏 / 丢失，或换机器，需要一份**可移植**的备份。`store.db` 自身虽加密，但绑死在原机的 master key 上（**不可移植**——恢复时需要原机的 `master.key.plain`，或同盘拷贝 master.key + store.db，见 [threat-model.md](./threat-model.md)）；`export` 解决"可移植"：文件用**你自己的口令**加密，跨机可恢复。
 
 ## 命令
 
@@ -22,7 +22,7 @@ ssh-manager import vault.sme             # 在目标机（空 vault + 已 unlock
 - **文件 + 口令 = 全部凭据。** 文件泄露 + 弱口令 → 可被离线爆破（和 KeePass 数据库一个道理）。**必须用强口令**（长随机串，存进密码管理器）。
 - 口令丢了 = 文件**无法恢复**（没有后门，找不回）。
 - 明文凭据只在内存里短暂存在（export：解密 → 加密；import：解密 → 重封）；**落盘的始终是密文**。
-- **与「直接复制 `store.db`」对比**：`store.db` 的凭据按**本机 master key** 加密，恢复需原机 keychain（不可移植）；`export` 文件按**你的口令**加密，跨机只要口令即可。
+- **与「直接复制 `store.db`」对比**：`store.db` 的凭据按**本机 master key** 加密，恢复需原机 `master.key.plain`（不可移植——且 master.key + store.db 同盘，L1+ 下离线拷盘可解，见 [threat-model.md](./threat-model.md)）；`export` 文件按**你的口令**加密，跨机只要口令即可。
 
 ## 使用场景
 
@@ -90,7 +90,7 @@ schtasks /Create /SC DAILY /ST 03:30 /TN ssh-manager-backup ^
   /RU <user> /RP <password>
 ```
 
-- master key：`setx SSHMGR_MASTERKEY_HEX <hex>`（或任务以 serve 同 user 跑、keychain 可达）。
+- master key：固定路径裸文件（Win `C:\ProgramData\ssh-manager\master.key.plain` / Unix `/var/lib/ssh-manager/master.key.plain`，见 [getting-started.md](./getting-started.md)）——任务只需以 admin/root / service 账户跑即可读（无需 keychain）。
 - **勾"超过 10 分钟停止任务"**：SMB 写挂起无应用层超时，NAS 卡住会无限挂进程；任务计划层硬超时是兜底（陈旧锁 5 min 超时只救下次运行）。
 
 ### Linux：systemd timer
@@ -99,7 +99,9 @@ schtasks /Create /SC DAILY /ST 03:30 /TN ssh-manager-backup ^
 # /etc/systemd/system/ssh-manager-backup.service
 [Service]
 Type=oneshot
-Environment=SSHMGR_MASTERKEY_HEX=<hex>
+# master key 走固定路径裸文件 /var/lib/ssh-manager/master.key.plain（见上 Windows 段）
+# —— 服务以 root / service 账户跑即可读，不要用 Environment=/EnvironmentFile= 塞 hex
+# （明文落 service config、枚举可见、无 ACL 粒度，比 0600+ACL 裸文件更差，见 threat-model.md §5）
 ExecStart=/usr/local/bin/ssh-manager backup create --dir /mnt/nas/backups --keep 7
 TimeoutStartSec=600
 
@@ -136,7 +138,7 @@ Persistent=true
 
 ## Plan 14 — Windows 生产部署（DPAPI master key + serve 常驻）
 
-> 设计 spec：`docs/superpowers/specs/2026-08-12-plan-14-windows-prod-deploy-design.md`（v2）。**⚠️ SUPERSEDED by Plan 15**（machine-scope DPAPI + serve install fix），正文保留作审计轨迹。实际方案见 `docs/superpowers/specs/2026-08-12-plan-15-machine-scope-dpapi-serve-fix-design.md`。
+> 设计 spec：`docs/superpowers/specs/2026-08-12-plan-14-windows-prod-deploy-design.md`（v2）。**⚠️ SUPERSEDED by Plan 16**（`2026-08-13-plan-16-fixed-path-filekey-design.md`，固定路径 + FileKeyProvider，废弃 DPAPI/keyring 路线）。Plan 14 先被 Plan 15（machine-scope DPAPI）取代，Plan 15 又被 Plan 16 取代——两次撞墙证明"用户态密钥模型 + 服务自起"部署形态下 DPAPI 跨 session 不可靠。**当前生产路径**见本篇末 [Plan 16 迁移 Runbook](#plan-16--固定路径--filekeyprovider迁移-runbook)。Plan 14/15 正文保留作审计轨迹。
 
 把 Windows 上的 master key 存储从 **Windows Credential Manager（keychain）** 换成 **DPAPI 加密的本地文件**（`%AppData%\ssh-manager\master.key`），并新增 `ssh-manager serve install` 把 serve 注册成 Task Scheduler 常驻任务。原因：实测发现 Windows Credential Manager 在 sshd / Service / Task-Scheduler 的非交互 session 里报 `ERROR_NO_SUCH_LOGON_SESSION (1312)`——master key 存不进 / 读不出，serve 在这些 session 里拿不到 master key 起不来；DPAPI 不受此限制（spec §12 spike 实证三 session 全通）。**Plan 15 修正为 machine-scope DPAPI**（见下方「升级 Runbook (Plan 15 修正)」）。
 
@@ -296,3 +298,87 @@ CI 不能 reboot，boot 自起（BootTrigger）+ 跨重启 DPAPI（machine-scope
 - **跨机 exec_command**：笔记本 MCP 通过 serve 在目标机（1660Super01）执行命令成功 → end-to-end 多机架构验证。
 
 ⚠️ **这个 runbook 是 FINDING B 的 closure**（user-scope 跨 logon session 失败在真机 reboot 验证中被发现；machine-scope 修正后必须通过真机 reboot 验证）。
+
+---
+
+## Plan 16 — 固定路径 + FileKeyProvider（迁移 Runbook）
+
+> 设计 spec：`docs/superpowers/specs/2026-08-13-plan-16-fixed-path-filekey-design.md`（v2，**当前生产路径**）。取代 Plan 14/15 的 DPAPI 路线。威胁模型见 [threat-model.md](./threat-model.md)。
+
+Plan 16 把 master key 从 **DPAPI 加密文件**（Plan 14/15）换成**固定路径的裸明文文件 + ACL**（`master.key.plain`），并把 vault 目录从用户目录（`%AppData%\ssh-manager\`）挪到程序固定路径（Win `C:\ProgramData\ssh-manager\` / Unix `/var/lib/ssh-manager/`）。原因见 [Plan 16 §1](./superpowers/specs/2026-08-13-plan-16-fixed-path-filekey-design.md)：machine-scope DPAPI 在 NUC10 §7.3 真机验收中**同样**跨 session 失败（sshd session 读不出），证明"换 scope"不是解药，"砍 DPAPI"才是。
+
+### 新的存储路径
+
+| 平台 | store.db / master.key.plain / cache-dek.key / serve.log |
+|---|---|
+| Windows | `C:\ProgramData\ssh-manager\` |
+| Linux | `/var/lib/ssh-manager/` |
+| macOS | `/var/lib/ssh-manager/` |
+
+环境变量 `SSHMGR_STORE` / `SSHMGR_FILEKEY_PATH` 可覆盖（仅供测试 / 迁移 / 自定义，**生产不建议改**）。
+
+### master.key 形态（L1+）
+
+- **裸明文文件**（不是 DPAPI blob）——service 进程直接 `os.ReadFile` 读，无跨 session / 跨账户的密钥库依赖。
+- **Windows ACL 硬化**：`SYSTEM` + `Administrators` + 当前用户，**移除 `Users` / `Authenticated Users` / `Everyone`，禁用继承**（`SE_DACL_PROTECTED`）。这是 L1+ 唯一的保护层——`store.HardenACL` 用纯 Go `golang.org/x/sys/windows` advapi32 实现，不调 `icacls`。
+- **Unix**：`0600` 文件 / `0700` 目录，属主为 service 账户。
+- **不再依赖**：Windows DPAPI、Windows Credential Manager、zalando/go-keyring、Unix Secret Service / Keychain（Plan 16 全删）。
+
+### 从 Plan 14/15 升级（两条路二选一）
+
+旧 master.key 是 **DPAPI blob**（Plan 14 user-scope 或 Plan 15 machine-scope），新版本（Plan 16）读不了 DPAPI——必须迁移。`migrate-path` 子命令只搬**文件型** vault（不读 DPAPI/keyring，spec §5.3 / Q6/Q10 删干净）；旧 blob 不可解时走 export + import。
+
+**路 A：`migrate-path`（旧 master.key 是文件型，或当前 session 能解 DPAPI blob——少数情况）**
+
+```bash
+# 默认从 UserConfigDir/ssh-manager/（旧默认）搬到 paths.VaultDir()（新固定路径）
+ssh-manager migrate-path
+# 或指定旧目录：
+ssh-manager migrate-path --from /old/path
+# --keep-old 保留旧文件（默认删，N/N 自检通过后才删）
+```
+
+`migrate-path` 会：checkpoint 旧 vault（WAL truncate）→ 复制 `store.db` + `master.key.plain` 到新路径 → N/N 自检（每条凭据 + sudo 都能解）→ 删旧（除非 `--keep-old`）→ 幂等。
+
+**路 B：export + import（NUC10 现状——sshd session 读不出 machine-scope DPAPI blob）**
+
+这是 NUC10 §7.3 触发事实的处置路径。`export` 和 `migrate-path` 一样经旧后端读——sshd session 解不开时，**必须在 RDP / 交互 session 跑**。
+
+```bash
+# 1. 在 RDP / 交互 session（旧 master.key 可解的 session）：
+ssh-manager export --out vault.sme --passphrase-file /secure/vault.pass
+
+# 2. 部署 Plan 16 新版 ssh-manager（覆盖旧二进制）
+
+# 3. admin/root 跑 unlock（建固定路径目录 + 新 master.key.plain + 空 store.db）：
+ssh-manager unlock
+
+# 4. 导入到新固定路径 vault（re-seal 到新 master.key）：
+ssh-manager import --passphrase-file /secure/vault.pass vault.sme
+
+# 5. 手动删旧 DPAPI blob + 旧 store.db（Plan 14/15 留在 UserConfigDir 的旧文件）：
+#    Windows: del "%APPDATA%\ssh-manager\master.key" "%APPDATA%\ssh-manager\store.db"
+#    Unix: rm ~/.config/ssh-manager/master.key ~/.config/ssh-manager/store.db
+```
+
+> ⚠️ **`migrate-path` / `export` / `import` 都受 session 约束**：三者都经旧 master key 后端读。NUC10 sshd session 读不出 machine-scope DPAPI → 三者在 sshd 都会失败并提示去 RDP。**没有"headless 一键迁移"的路径**——这是 Plan 16 §5.3 显式接受的代价（不保留 DPAPI/keyring 读代码，Q6/Q10 删干净）。
+
+### 安全绳（最终兜底）
+
+无论走哪条路，**`.sme` 双份在手 = 最终兜底**：从 `.sme` 总能 `import` 到一个全新的 Plan 16 vault（固定路径 + 新 master.key）。这是"vault 不可解"场景的唯一恢复手段。
+
+### NUC10 §7.2 真机验收（Plan 16，Phase 2 改 RDP）
+
+```
+Phase 1 (SSH)    部署 Plan 16 二进制（备份旧 exe）
+Phase 2 (RDP)    ★ 不是 SSH——sshd 读不出旧 machine-scope DPAPI blob
+                  路 B：RDP 跑 export → unlock → import 到 C:\ProgramData\ssh-manager\
+                  自检 7/7
+Phase 3 (RDP)    serve install（kardianos），admin 跑
+Phase 4 (reboot) ★ reboot 后 serve 自起读固定路径 master.key.plain 成功（纯文件读，无 DPAPI）
+Phase 5 (笔记本)  agent exec_command 在 1660Super01 成功
+```
+
+**通过标准**：Phase 4 reboot 后 `serve status` = `vault: ok` + `service: Running` + `http: responding` + `overall: HEALTHY`。**这次没有 DPAPI 跨 session 赌博**——读文件就是读文件。
+
+详见 [Plan 16 §7.2](./superpowers/specs/2026-08-13-plan-16-fixed-path-filekey-design.md)。

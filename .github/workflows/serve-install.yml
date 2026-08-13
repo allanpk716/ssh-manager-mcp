@@ -1,0 +1,181 @@
+# serve-install REAL-MACHINE integration test (Plan 16 T7, kardianos rewrite).
+#
+# WHY THIS WORKFLOW EXISTS
+#
+# Plan 14 §7.2 specified a gated integration test for `serve install` → status
+# → uninstall. Plan 15 T8 ran it on windows-latest against the Windows Task
+# Scheduler via PowerShell/schtasks. Plan 16 T7 replaces that platform-specific
+# code path with github.com/kardianos/service (one cross-platform API: Windows
+# Service / systemd / launchd), and this workflow follows: it runs the SAME
+# gated test on three platforms (windows / ubuntu / macos-latest).
+#
+# This is the Plan 15 T8 "FINDING C root-cause fix" carried forward — the gate
+# (SSHMGR_SERVE_INSTALL=1) defaults to skip locally so `go test ./...` stays
+# hermetic; CI sets the env to open it on every platform that can host the
+# service.
+#
+# === Plan 16 T7 platform constraints (spec §5.5, kimi #8) ===================
+#
+# Each platform lane has a known constraint. The TEST is written to self-Skip
+# (via t.Skipf with a clear reason) when the host cannot host the service;
+# this workflow does NOT pre-filter — the skip is the value, because it proves
+# the test gracefully degrades rather than failing the matrix.
+#
+#   - windows-latest: works out of the box. windows-latest runners run the
+#     workflow shell as an Administrator-equivalent context, so Windows
+#     Service Install (which needs admin via advapi32 SCM) succeeds. NO
+#     sshmgrci test user, NO SSHMGR_CI_PASSWORD secret, NO SeBatchLogonRight
+#     grant — the Plan 15 T8 hosted-runner account model was a Plan 14/15
+#     artifact of the Task Scheduler path; Windows Service registration does
+#     not need a Password logon.
+#
+#   - ubuntu-latest: github-hosted ubuntu-latest is a full VM with systemd
+#     available (PID 1 is systemd). kardianos installs a systemd unit
+#     directly. If a future runner image (or a self-hosted Linux box) lacks
+#     systemd, kardianos detects this at service.New() time and returns
+#     ErrNoServiceSystemDetected; the test Skips with a clear reason.
+#
+#   - macos-latest: launchd PLIST install needs root for a LaunchDaemon
+#     (/Library/LaunchDaemons). The macOS lane runs the test under `sudo -E`
+#     so install can write the plist + load it via launchctl. As the
+#     root-started service. The master.key is seeded inside the test's per-test
+#     temp dir, which sudo preserves via `-E` + the temp dir being under the
+#     runner user's profile (root can read it; the service runs as root).
+#
+# === USER FOLLOW-UP REQUIRED (cannot be done from this workflow) =============
+#
+# None. Unlike Plan 15 T8, this workflow has NO GitHub-secret dependency. The
+# Plan 15 SSHMGR_CI_PASSWORD secret was an artifact of the Windows Task
+# Scheduler's Password-logon requirement; kardianos uses the service account
+# model (LocalSystem on Windows, root on POSIX via sudo), so no account
+# password needs to be supplied.
+#
+# SCOPE / NON-GOALS
+#
+#   - This test proves the kardianos install → status → uninstall round-trip
+#     on a real service manager. It is NOT the "vault decryptable after a
+#     real reboot" closure (Plan 14 §7.3 NUC10 runbook) — GitHub-hosted
+#     runners cannot reboot. The cross-reboot guarantee stays a manual
+#     release-time checklist item.
+#   - A Skip on a hosted-Linux lane that has no systemd is NOT a failure —
+#     the test design explicitly tolerates it. Look at the test's log to
+#     distinguish "skipped (no systemd)" from a real failure.
+name: serve-install
+
+on:
+  # Manual dispatch only — same rationale as Plan 15 T8's 2026-08-13 disable:
+  # the integration test is most valuable on a real / self-hosted runner that
+  # matches the deployment target (NUC10 = single Windows account, prod Linux
+  # box = systemd, Mac fleet = launchd). Re-enable push/PR trigger when a
+  # self-hosted lane is wired.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One serve-install integration run per ref at a time. cancel-in-progress on a
+# PR superseded by a newer push to the same branch; do NOT cancel release-track
+# (master push) runs mid-flight (a half-registered service would leak).
+concurrency:
+  group: serve-install-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      # Build the ssh-manager binary the integration test will install as the
+      # service action. Resolves to ./ssh-manager (or ssh-manager.exe on
+      # Windows) at the repo root; the test's resolveSSHManagerBin walks up
+      # from the test working dir to find it.
+      - name: Build ssh-manager
+        shell: bash
+        run: |
+          # Windows runner's default shell is pwsh; force bash so the same
+          # `go build -o ssh-manager ./cmd/ssh-manager` works on all 3 lanes.
+          # On Windows Go emits ssh-manager.exe automatically because GOOS=windows
+          # (the .exe suffix is added by the Go linker for windows target).
+          go build -o ssh-manager ./cmd/ssh-manager
+
+      # Cross-platform no-regression (spec §7.4): all three GOOS build clean.
+      # shell: bash is REQUIRED so `VAR=value command` works on the Windows
+      # runner (pwsh parses `GOOS=linux ...` as "run the command GOOS=linux"
+      # → "term not found" → CI fails before the gated test even runs).
+      - name: Cross-platform build (no-regression)
+        shell: bash
+        run: |
+          gofmt -l .
+          GOOS=linux go build ./...
+          GOOS=darwin go build ./...
+          GOOS=windows go build ./...
+
+      # === Linux lane note ============================================
+      #
+      # github-hosted ubuntu-latest is a full VM with systemd available (PID 1
+      # is systemd, /run/systemd/system is present). There is NO container step
+      # because one is not needed on the hosted runner — the gated test runs
+      # systemd-install directly under `sudo -E env ...` below. If for any
+      # reason systemd is unavailable on a future runner image (or a self-hosted
+      # Linux box without systemd), kardianos returns ErrNoServiceSystemDetected
+      # at service.New() time and the test self-skips with a clear reason —
+      # which is the designed graceful-degradation path, NOT a failure.
+
+      # Run the gated integration test. SSHMGR_SERVE_INSTALL=1 OPENS the gate
+      # (local `go test ./...` skips it). The test self-Skips if the host
+      # cannot host the service (no systemd, no sudo, etc.) — see
+      # serve_install_integration_test.go.
+      #
+      # macOS: run under `sudo -E` so launchd can install a LaunchDaemon
+      # (/Library/LaunchDaemons requires root). -E preserves the env
+      # (SSHMGR_SERVE_INSTALL, SSHMGR_STORE, etc.) through the sudo boundary.
+      # Linux: also under sudo; systemd unit install to /etc/systemd/system
+      # needs root.
+      # Windows: no sudo (run as the runner user which is admin-equivalent on
+      # windows-latest).
+      - name: Run serve-install integration test
+        env:
+          SSHMGR_SERVE_INSTALL: '1'
+          # Distinct addr per OS so concurrent matrix lanes don't collide
+          # (they're on separate runners, but belt-and-suspenders). All
+          # loopback; the test does NOT expose serve on the NIC.
+          SSHMGR_SERVE_TEST_ADDR: '127.0.0.1:7878'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            go test ./internal/cli/ -run TestServeInstallIntegration -v
+          else
+            sudo -E env "PATH=$PATH" "SSHMGR_SERVE_INSTALL=1" "SSHMGR_SERVE_TEST_ADDR=127.0.0.1:7878" "HOME=$HOME" go test ./internal/cli/ -run TestServeInstallIntegration -v
+          fi
+
+      # Always uninstall whatever the test left behind. t.Cleanup inside the
+      # test handles the normal path; this is belt-and-suspenders for the case
+      # where the test PANICKED before t.Cleanup ran. Best-effort; do not fail
+      # the job on cleanup errors.
+      - name: Cleanup leftover service (best-effort)
+        if: always()
+        shell: bash
+        run: |
+          if [ -x ./ssh-manager ]; then
+            ./ssh-manager serve uninstall || true
+          fi
+          if [ -x ./ssh-manager.exe ]; then
+            ./ssh-manager.exe serve uninstall || true
+          fi
+          # Windows-specific belt-and-suspenders (the old Task Scheduler path
+          # named the task differently; this clears any stale Plan 15 task).
+          if command -v schtasks >/dev/null 2>&1; then
+            schtasks /Delete /TN ssh-manager-serve /F 2>/dev/null || true
+          fi
+          exit 0

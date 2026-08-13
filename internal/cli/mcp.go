@@ -38,13 +38,13 @@ func newMCPCmd() *cobra.Command {
 				return mcpserver.RunStdioCache(token, snap, auditPath)
 			}
 			// Residual-key guardrail: warn to STDERR only (stdout is the MCP channel).
-			if st, err := vault.OpenStore(keychain); err == nil {
+			if st, err := vault.OpenStore(store.FileKeyProvider{}); err == nil {
 				if found, _ := store.CheckResidualKeys(); len(found) > 0 {
 					fmt.Fprintf(os.Stderr, "WARNING: ssh credential files detected at %v — hard enforcement can be bypassed by an agent that reads them directly. Remove them for full isolation.\n", found)
 				}
 				st.Close()
 			}
-			if err := mcpserver.RunStdio(token, keychain); err != nil {
+			if err := mcpserver.RunStdio(token, store.FileKeyProvider{}); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}

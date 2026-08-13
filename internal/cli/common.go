@@ -25,7 +25,11 @@ func metaFilePath() (string, error) {
 }
 
 // openUnlockedStore fails the command with guidance if the vault is locked.
-// Delegates to the shared vault package (env → injected keychain → FileProvider)
-// used by both CLI and MCP server. The platform KeyProvider (cli/keychain seam)
-// is injected here so vault stays OS-agnostic and doesn't import cli.
-func openUnlockedStore() (*store.Store, error) { return vault.OpenStore(keychain) }
+// Delegates to the shared vault package (env → FileProvider), used by both CLI
+// and MCP server. The master-key KeyProvider (store.FileKeyProvider{}) is
+// injected here so vault stays OS-agnostic and doesn't import cli. Plan 16:
+// the build-tag `keychain` seam is gone; FileKeyProvider is the sole master-key
+// backend (spec §4.2).
+func openUnlockedStore() (*store.Store, error) {
+	return vault.OpenStore(store.FileKeyProvider{})
+}

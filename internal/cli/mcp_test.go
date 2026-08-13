@@ -16,7 +16,7 @@ func TestRunStdioRejectsUnknownToken(t *testing.T) {
 		"SSHMGR_STORE":         filepath.Join(dir, "t.db"),
 		"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mk),
 	})
-	err := mcpserver.RunStdio("not-a-real-token", keychain)
+	err := mcpserver.RunStdio("not-a-real-token", store.FileKeyProvider{})
 	if err == nil {
 		t.Fatal("unknown token must error")
 	}

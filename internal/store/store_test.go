@@ -3,10 +3,50 @@ package store
 import (
 	"bytes"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
 )
+
+// TestDefaultStorePath_FixedLocation pins Plan 16 T2's contract: with no
+// SSHMGR_STORE env, DefaultStorePath returns the program-fixed vault location
+// (Win C:\ProgramData\ssh-manager\store.db; Unix /var/lib/ssh-manager/store.db)
+// — NOT a UserConfigDir-based path. This is the spec §3.1/§5.1 program-fixed
+// location, replacing the pre-T2 UserConfigDir default.
+func TestDefaultStorePath_FixedLocation(t *testing.T) {
+	t.Setenv("SSHMGR_STORE", "")
+	got, err := DefaultStorePath()
+	if err != nil {
+		t.Fatalf("DefaultStorePath: %v", err)
+	}
+	dir := winOrUnix("C:\\ProgramData\\ssh-manager", "/var/lib/ssh-manager")
+	want := filepath.Join(dir, "store.db")
+	if got != want {
+		t.Errorf("DefaultStorePath = %q, want %q", got, want)
+	}
+}
+
+// TestDefaultStorePath_EnvOverride pins that SSHMGR_STORE (test/migrate env)
+// is honored by DefaultStorePath — the escape hatch that keeps tests hermetic
+// now that the default path lives under C:\ProgramData\... / /var/lib/...
+func TestDefaultStorePath_EnvOverride(t *testing.T) {
+	t.Setenv("SSHMGR_STORE", "/tmp/alt.db")
+	got, err := DefaultStorePath()
+	if err != nil {
+		t.Fatalf("DefaultStorePath: %v", err)
+	}
+	if got != "/tmp/alt.db" {
+		t.Errorf("env override lost: got %q want /tmp/alt.db", got)
+	}
+}
+
+func winOrUnix(w, u string) string {
+	if runtime.GOOS == "windows" {
+		return w
+	}
+	return u
+}
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()

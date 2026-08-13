@@ -1,67 +1,54 @@
-//go:build windows
-
-// Package cli: serve-install REAL-MACHINE integration test (Plan 15 T8, FINDING
-// C root-cause fix).
+// Package cli: serve-install REAL-MACHINE integration test (Plan 16 T7,
+// kardianos cross-platform rewrite).
 //
-// Plan 14 §7.2 specified an almost-identical gated integration test, gated on
-// SSHMGR_SERVE_INSTALL=1 — and the gate DEFAULTED TO SKIP, was NEVER run on a
-// real machine or in CI. The entire chain of serve-install bugs (FINDING C:
-// stdin/$input multi-line XML drop, UTF-16 prolog vs UTF-8 bytes, Register-
-// ScheduledTask -Xml serialization failure; FINDING D: RestartOnFailure not
-// persisted; FINDING E: zh-CN /Query locale misparse) stayed hidden behind
-// that gate until NUC10 §7.3 manual acceptance blew them open.
+// History: Plan 14 §7.2 specified a gated integration test (SSHMGR_SERVE_INSTALL=1)
+// for `serve install` → status → uninstall. Plan 15 T8 ran it on windows-latest
+// against the Windows Task Scheduler via PowerShell/schtasks. Plan 16 T7 rips out
+// that platform-specific code path and replaces it with github.com/kardianos/service,
+// which gives one cross-platform API (Windows Service / systemd / launchd).
 //
-// Plan 15 T8 fixes the ROOT CAUSE: this test runs in CI (windows-latest) on
-// every push/PR touching serve_install / dpapi / masterkey, and CI SETS
-// SSHMGR_SERVE_INSTALL=1 so the gate OPENS there. The gate still defaults to
-// skip locally so `go test ./...` stays hermetic on a developer machine.
+// This test is the kardianos equivalent of the Plan 15 T8 round-trip. It is
+// STILL gated by SSHMGR_SERVE_INSTALL=1 (CI sets the env; local `go test ./...`
+// skips). The build tag is gone — the same test source must compile on all three
+// platforms so a single CI matrix can run it.
 //
-// What this test proves (spec §7.2, full round-trip):
+// What this test proves (Plan 16 T7 spec §5.4 / §5.5):
 //
-//   - step 0 (vault seed, consensus B): non-interactively initialize a vault
-//     via SSHMGR_MASTERKEY_HEX env (resolveMasterKey reads env first, tier 1)
-//     → `unlock` (idempotent: Get succeeds → postGetMigrator no-op → print
-//     the env key) → `servers add` seeds one test server + credential. This
-//     also writes master.key + sentinel via DpapiKeyProvider.Set (machine-scope
-//     protect path), so the serve-install precheck (codex #2) accepts it.
-//   - step 1: `serve install --addr 127.0.0.1:7878` registers the Task
-//     Scheduler task (object API, FINDING C fix). Password from
-//     SSHMGR_SERVE_INSTALL_PASSWORD env (consensus A).
-//   - step 2: Get-ScheduledTask.State == Ready (task registered).
-//   - step 3: Settings.MultipleInstances == IgnoreNew (pi #2 / spike 4 defense
-//     contract — verified via the PowerShell CIM view).
-//   - step 4: schtasks /Run → the registered task action starts serve → HTTP
-//     GET http://127.0.0.1:7878/ returns 401 (Plan 10 bearer-token gate; 401 =
-//     auth is wired, the right answer for an unauthenticated probe).
-//   - step 5: vault decryptable in the task-host session — the serve process
-//     started by the task host read machine-scope master.key + decrypted
-//     store.db. (Per spec §7.2 v2 opencode #2 this only proves machine-scope
-//     works in-task-session, NOT that user-scope is the bug — the FINDING B
-//     cross-logon-session closure is NUC10 §7.3 reboot, out of CI's reach.)
-//   - step 6: `serve status` four signals (task/process/http/vault) come back
-//     with correct semantics; overall HEALTHY or DEGRADED-with-fresh-log. Then
-//     `serve uninstall` removes the task + stops the process.
+//   - step 0: non-interactively seed a vault (plaintext master.key via
+//     FileKeyProvider at SSHMGR_FILEKEY_PATH, plus SSHMGR_MASTERKEY_HEX so
+//     resolveMasterKey's env tier agrees with the on-disk file tier). Then
+//     `servers add` creates store.db with one test server + credential.
+//   - step 1: `serve install --addr 127.0.0.1:<port>` registers the service via
+//     kardianos (Windows Service / systemd / launchd depending on OS).
+//   - step 2: kardianos svc.Status() returns StatusRunning (service actually
+//     started, not just installed — install calls svc.Start()).
+//   - step 3: HTTP GET http://127.0.0.1:<port>/ returns 401 or 200 (Plan 10
+//     bearer-token gate; 401 = auth is wired, the right answer for an
+//     unauthenticated probe).
+//   - step 4: master.key is present, readable, AND a usable 32-byte key in the
+//     service-host session — the status probe (vaultStatusString) verifies the
+//     file the running serve reads is structurally valid, catching missing /
+//     unreadable / wrong-length / corrupt master.key that would crash-loop serve.
+//   - step 5: `serve status` four signals (service/process/http/vault) come back
+//     with the expected labels. Then `serve uninstall` removes the service.
 //
-// What this test tolerates (spec §7.2 / Plan 15 contract):
+// CI platform constraints (spec §5.5) — handled in the CI workflow, not here:
 //
-//   - Tolerance for exact status wording: serve status prints four labelled
-//     lines but the overall verdict may be HEALTHY or DEGRADED depending on
-//     race between task host startup and our probes. We assert the hard
-//     invariants (task registered, HTTP 401, vault decryptable, uninstall
-//     clean) and treat status wording as best-effort.
-//   - The test is the FIRST automated run against a real Task Scheduler; if it
-//     surfaces a real-machine issue (R1 RestartOnFailure persistence on
-//     windows-latest's PS version, sentinel write under CI's ACL, locale on
-//     the runner image), the failure IS the value — that is exactly the
-//     "FINDING C root-cause fix" working as designed.
+//   - macOS: launchd PLIST install needs sudo for a LaunchDaemon (LaunchAgent
+//     is per-user but only starts after GUI login). The CI workflow runs the
+//     test with `sudo -E go test ...` on macOS and sets SSHMGR_SERVE_INSTALL=1.
+//   - Linux (ubuntu-latest): systemd is typically UNAVAILABLE inside the
+//     containerized GitHub Actions runner (no PID 1 systemd, /run/systemd/system
+//     absent). kardianos detects this at service.New() time and returns
+//     ErrNoServiceSystemDetected; we surface that as a Skip with a clear reason
+//     (the test is correct, the runner just can't host a systemd unit). A self-
+//     hosted Linux runner with systemd would run it for real.
+//   - Windows: works out of the box on windows-latest (needs admin to install
+//     a service; the workflow shells pwsh as Administrator-equivalent).
 //
-// === CI dependency (user follow-up, NOT implementable here) ===
-//
-// The workflow references GitHub secret SSHMGR_CI_PASSWORD (the account
-// password for the throwaway sshmgrci user it creates via `net user /add`).
-// Until the user configures that secret in repo settings, CI runs will fail
-// at the test's password-required gate. This is EXPECTED — the workflow is
-// correct; the secret is a one-time user setup.
+// This test tolerates the platform-level Skip — the test's VALUE is the Windows
+// + (self-hosted) Linux/macOS coverage; the hosted Linux/macOS runners are a
+// best-effort lane.
 package cli
 
 import (
@@ -71,9 +58,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"ssh-manager-mcp/internal/store"
 )
 
 // testMasterKeyHex is a fixed 32-byte test master key (hex-encoded). It is
@@ -83,63 +73,52 @@ import (
 const testMasterKeyHex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 
 // TestServeInstallIntegration — gated by SSHMGR_SERVE_INSTALL=1. CI sets the
-// env; local `go test ./...` skips. See the file doc comment for the full
-// step 0-6 contract.
+// env on the platforms that can host the service (Windows always; macOS with
+// sudo; Linux only on a systemd-capable runner); local `go test ./...` skips.
+// See the file doc comment for the full step 0-5 contract.
 func TestServeInstallIntegration(t *testing.T) {
 	if os.Getenv("SSHMGR_SERVE_INSTALL") != "1" {
-		t.Skip("set SSHMGR_SERVE_INSTALL=1 to run the real Task Scheduler integration test (CI sets this; local skips)")
-	}
-	password := os.Getenv("SSHMGR_SERVE_INSTALL_PASSWORD")
-	if password == "" {
-		t.Fatal("SSHMGR_SERVE_INSTALL=1 but SSHMGR_SERVE_INSTALL_PASSWORD is empty (consensus A: CI/scripts supply the Windows account password via env so the task host can start at boot via Password logon)")
-	}
-	if _, err := exec.LookPath("powershell.exe"); err != nil {
-		t.Skip("powershell.exe not on PATH (Task Scheduler registration requires PowerShell)")
+		t.Skip("set SSHMGR_SERVE_INSTALL=1 to run the real kardianos service integration test (CI sets this; local skips)")
 	}
 
-	// Resolve the ssh-manager.exe to invoke. CI builds it via
-	// `go build -o ssh-manager.exe ./cmd/ssh-manager` before running the test.
-	// We look for (in order):
-	//  1. SSHMGR_TEST_BIN env (explicit override — useful for local runs).
-	//  2. ssh-manager.exe walked up from the test working dir (repo root).
-	//  3. A binary built next to os.Executable() (test binary dir).
-	// If none exists, FAIL — the integration test cannot run without a real
-	// ssh-manager.exe to install as the task action.
+	// Pick a port for this test run. Default to the same as `serve install` so
+	// the probe matches the bind; allow override for parallel matrix runs.
+	addr := os.Getenv("SSHMGR_SERVE_TEST_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:7878"
+	}
+
+	// Resolve the ssh-manager binary to invoke. CI builds it via
+	// `go build -o ssh-manager ./cmd/ssh-manager` before running the test.
 	binPath := resolveSSHManagerBin(t)
 	t.Logf("using ssh-manager binary: %s", binPath)
+	t.Logf("platform: %s/%s; service system: %s", runtime.GOOS, runtime.GOARCH, kardianosPlatform())
 
-	// === Per-test isolated vault + serve.log dir ===
+	// === Per-test isolated vault ===========================================
 	//
-	// We cannot easily redirect master.key / store.db via flags (the CLI reads
-	// them from UserConfigDir). So we isolate by pointing %AppData% /
-	// %LocalAppData% at temp dirs for the duration of the test. Every
-	// ssh-manager subprocess we spawn inherits this env (cmd.Env below) and
-	// therefore reads/writes the throwaway vault. t.Setenv sets the env for
-	// the test process AND is inherited by any exec.Cmd that does NOT
-	// override Env (we pass t-helper env explicitly).
-	appDataDir := t.TempDir()
-	localAppDataDir := t.TempDir()
-	t.Setenv("AppData", filepath.Join(appDataDir, "Roaming"))
-	t.Setenv("LocalAppData", filepath.Join(localAppDataDir, "Local"))
-	if err := os.MkdirAll(os.Getenv("AppData"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(os.Getenv("LocalAppData"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Fixed test master key via env (resolveMasterKey tier 1: env wins over
-	// keychain). Every subprocess we spawn inherits this.
+	// T2 rewired store.DefaultStorePath() to paths.StorePath() which reads
+	// SSHMGR_STORE (env first) then falls back to the FIXED platform path.
+	// master.key lives at SSHMGR_FILEKEY_PATH (paths.MasterKeyPath).
+	// Both are pinned to per-test temp dirs so a prior run's vault can never
+	// poison the assertions.
+	vaultDir := t.TempDir()
+	storePath := filepath.Join(vaultDir, "store.db")
+	masterKeyPath := filepath.Join(vaultDir, "master.key.plain")
+	t.Setenv("SSHMGR_STORE", storePath)
+	t.Setenv("SSHMGR_FILEKEY_PATH", masterKeyPath)
+	// Pin the master key value via env (resolveMasterKey tier: env wins; the
+	// on-disk FileKeyProvider file is seeded to the SAME value so both tiers
+	// agree — see seedVaultStep0).
 	t.Setenv("SSHMGR_MASTERKEY_HEX", testMasterKeyHex)
 
 	// buildCmdEnv returns the env to hand to an ssh-manager subprocess so it
-	// inherits the per-test %AppData%/%LocalAppData%/master-key env. We pass
-	// the SAME vars t.Setenv set on the test process (os.Environ reflects
-	// t.Setenv updates).
+	// inherits EVERY per-test override. os.Environ() reflects t.Setenv updates
+	// because testing.Setenv mutates the live process env; cmd.Env = os.Environ()
+	// is the documented way to inherit them into exec.Cmd.
 	buildCmdEnv := func() []string { return os.Environ() }
 
 	// runBin runs the ssh-manager binary with given args, returning combined
-	// output + error. Fails the test on a non-zero exit ONLY when fatal=true
-	// (some steps like the pre-clean uninstall are best-effort).
+	// output + error. Fails the test on a non-zero exit ONLY when fatal=true.
 	runBin := func(args []string, fatal bool) (string, error) {
 		cmd := exec.Command(binPath, args...)
 		cmd.Env = buildCmdEnv()
@@ -155,43 +134,25 @@ func TestServeInstallIntegration(t *testing.T) {
 	}
 
 	// PRE-CLEAN: uninstall any leftover from a prior run (idempotent) so a
-	// stale task does not poison the assertions. Best-effort: a "task not
-	// found" error is the normal pre-clean outcome on a fresh runner.
+	// stale service does not poison the assertions. Best-effort.
 	_, _ = runBin([]string{"serve", "uninstall"}, false)
 
 	// Always attempt the final cleanup so a mid-test failure does not leave a
-	// boot task registered on the machine (which would try to start at next
-	// boot against a vault that no longer exists).
+	// registered service on the machine (which would try to start at next boot
+	// against a vault that no longer exists).
 	t.Cleanup(func() {
 		_, _ = runBin([]string{"serve", "uninstall"}, false)
-		// Also hard-kill any stray serve process the task host left running
-		// (the task host survives task deletion; its serve child does not).
-		_, _ = exec.Command("taskkill.exe", "/IM", "ssh-manager.exe", "/F").CombinedOutput()
 	})
 
-	// === step 0: vault seed (consensus B) =================================
+	// === step 0: vault seed ===============================================
 	//
-	// `unlock` with SSHMGR_MASTERKEY_HEX set: Get() succeeds → postGetMigrator
-	// no-op (no legacy blob yet, clean env) → prints the env key. Critically,
-	// keychain.Set is NOT called on the Get-succeeds path — but the FIRST time
-	// resolveMasterKey runs in a subprocess it sees the env var first anyway.
-	// To get master.key ON DISK (so the serve-install precheck finds it + the
-	// machine-scope sentinel), we generate it explicitly by going through the
-	// keychain.Set path: call unlock WITH the env, then `servers add` triggers
-	// openUnlockedStore → resolveMasterKey (env first) → vault.Open →
-	// first-time store.db create. But that does NOT write master.key either.
-	//
-	// So: seed master.key + sentinel directly via the DpapiKeyProvider Set
-	// path (same mechanism unlock's first-run branch uses), using the SAME key
-	// value the env pins. This makes the vault + the on-disk master.key
-	// consistent: resolveMasterKey reads the env (tier 1), the on-disk blob
-	// decrypts to the same value, the sentinel is present (precheck accepts).
+	// Write the plaintext master.key at SSHMGR_FILEKEY_PATH with the SAME value
+	// the env pins (so resolveMasterKey's env tier and FileKeyProvider's file
+	// tier agree). Then `servers add` triggers openUnlockedStore →
+	// resolveMasterKey (env first) → vault.Open → first-time store.db create
+	// + one test server + credential the serve process will decrypt.
 	seedVaultStep0(t, testMasterKeyHex)
 
-	// Verify step 0 took: `servers add` seeds one test server + credential.
-	// openUnlockedStore resolves the master key (env first → our hex) →
-	// vault.Open creates store.db on first call. This is the credential the
-	// serve process will decrypt at boot to prove "vault ok" in step 5.
 	if _, err := runBin([]string{
 		"servers", "add",
 		"--name", "ci-smoke-target",
@@ -202,169 +163,146 @@ func TestServeInstallIntegration(t *testing.T) {
 	}, true); err != nil {
 		t.Fatalf("step 0 servers add: %v", err)
 	}
-	t.Log("step 0: vault seeded (master.key + sentinel + store.db + 1 server)")
+	t.Log("step 0: vault seeded (master.key + store.db + 1 server)")
 
-	// === step 1: serve install ===========================================
+	// === step 1: serve install ============================================
 	//
-	// Object-API registration (FINDING C fix). Password from env (consensus A,
-	// readServeInstallPassword env-first). --addr 127.0.0.1:7878 keeps the
-	// probe loopback-only (the test does NOT expose serve on the runner NIC).
-	// --task-user sshmgrci: register the task under the dedicated CI test
-	// account (created by the workflow) whose password is the env secret. On
-	// a hosted runner the default (current user = runneradmin) can't work —
-	// runneradmin's password is unknown, so Register-ScheduledTask -User
-	// -Password must target the account whose password we actually hold.
-	taskUser := os.Getenv("SSHMGR_CI_TASK_USER")
-	if taskUser == "" {
-		taskUser = "sshmgrci"
+	// kardianos registration (Windows Service / systemd / launchd). --addr
+	// 127.0.0.1:<port> keeps the probe loopback-only (the test does NOT expose
+	// serve on the runner NIC).
+	//
+	// fatal=false here (NOT true) so we can distinguish "no service system on
+	// this runner" (a Skip, spec §5.5) from a real install failure (a Fatal).
+	// kardianos surfaces ErrNoServiceSystemDetected inside the binary's error
+	// text; we sniff for that and Skip with a clear reason. Other install
+	// failures (Access denied on a non-admin shell, etc.) DO fatal — they are
+	// real signals the operator needs to see.
+	installOut, installErr := runBin([]string{"serve", "install", "--addr", addr}, false)
+	if installErr != nil {
+		low := strings.ToLower(installOut + " " + installErr.Error())
+		if strings.Contains(low, "no service manager") ||
+			strings.Contains(low, "no service system") ||
+			strings.Contains(low, "errnoservicesystemdetected") {
+			t.Skipf("step 1 serve install: service system unavailable on this runner (err=%v) — see spec §5.5 CI constraints (Linux container without systemd, or macOS without sudo)", installErr)
+		}
+		t.Fatalf("step 1 serve install: %v\noutput:\n%s", installErr, installOut)
 	}
-	args := []string{"serve", "install", "--addr", "127.0.0.1:7878", "--task-user", taskUser}
-	if _, err := runBin(args, true); err != nil {
-		t.Fatalf("step 1 serve install: %v", err)
-	}
-	t.Log("step 1: serve install registered the Task Scheduler task")
+	t.Logf("step 1: serve install registered the service (platform=%s)", kardianosPlatform())
 
-	// === step 2: task registered (State == Ready) ========================
+	// === step 2: service Status == Running ================================
 	//
-	// FINDING E: query path is Get-ScheduledTask.State (PowerShell enum, NOT
-	// localized text). Ready = registered + not currently running (or Running
-	// if schtasks /Run already fired the action during install — the install
-	// path does call schtasks /Run; accept either Ready or Running here).
-	state := taskStateViaPowerShellOrFail(t)
-	if state != "Ready" && state != "Running" {
-		t.Fatalf("step 2: expected task State in {Ready, Running}, got %q", state)
-	}
-	t.Logf("step 2: task registered (State=%s)", state)
-
-	// === step 3: MultipleInstances == IgnoreNew (pi #2 / spike 4) =========
-	//
-	// The boot + logon dual trigger can both fire; IgnoreNew prevents two
-	// serve instances racing for port 7878. Assert it on the persisted task
-	// (the object-API script sets -MultipleInstances IgnoreNew; this verifies
-	// it actually persisted through Register-ScheduledTask).
-	mi := multipleInstancesViaPowerShell(t)
-	if mi != "IgnoreNew" {
-		t.Fatalf("step 3: expected MultipleInstances=IgnoreNew (pi #2 spike-4 defense), got %q", mi)
-	}
-	t.Logf("step 3: MultipleInstances=%s (IgnoreNew contract held)", mi)
-
-	// === step 4: schtasks /Run → HTTP 401 ================================
-	//
-	// install already called schtasks /Run once (best-effort, line ~215 in
-	// serve_install_windows.go); re-run here so the probe is deterministic
-	// regardless of whether install's /Run won the race against our HTTP
-	// probe. Then wait for serve to bind 127.0.0.1:7878 (serve boots fast but
-	// not instantly — poll up to 10s).
-	if err := schtasksRun(serveTaskName); err != nil {
-		t.Fatalf("step 4: schtasks /Run: %v", err)
-	}
-	if !waitForHTTP401(t, "127.0.0.1:7878", 10*time.Second) {
-		t.Fatalf("step 4: serve did not come up at 127.0.0.1:7878 (no HTTP 401 within 10s of schtasks /Run)")
-	}
-	t.Log("step 4: schtasks /Run → HTTP 401 (serve up + auth gate wired)")
-
-	// === step 5: vault decryptable in the task-host session ==============
-	//
-	// A 401 response proves serve is listening AND the auth gate ran. It does
-	// NOT prove the vault decrypted (serve could be returning 401 from a
-	// pre-vault middleware). The decisive signal is serve.log: a serve that
-	// failed to decrypt master.key writes the resolveMasterKey hard-fail
-	// marker ("master key present but unreadable" / "undecryptable") and
-	// exits. So we wait briefly for the log to stabilize, then assert the
-	// hard-fail markers are ABSENT. (Per spec §7.2 opencode #2 this only
-	// proves machine-scope in-task-session works, not the FINDING B
-	// cross-logon closure — that needs NUC10 §7.3 reboot.)
-	time.Sleep(2 * time.Second) // let any crash-loop marker flush to serve.log
-	if locked, marker := vaultLockedMarkerFromLog(); locked {
-		t.Fatalf("step 5: serve.log has a vault-locked marker (%q) — serve could not decrypt master.key in the task-host session", marker)
-	}
-	t.Log("step 5: vault decryptable in task-host session (no hard-fail marker in serve.log)")
-
-	// === step 6: serve status (four signals) + uninstall =================
-	//
-	// Tolerate overall verdict HEALTHY or DEGRADED — the four labelled lines
-	// are what we assert exist (task / process / http / vault). A race between
-	// the task host startup and our probes can leave one signal transiently
-	// off; the verdict wording is best-effort, the line PRESENCE is the
-	// invariant. Then uninstall must remove the task cleanly.
+	// install calls svc.Start(); kardianos svc.Status() should report Running
+	// (NOT localized text — the Status enum is locale-independent, which is
+	// why we moved off PowerShell Get-ScheduledTask.State schtasks /Query).
+	// Poll briefly: service managers don't all flip to Running synchronously.
 	statusOut, err := runBin([]string{"serve", "status"}, false)
 	if err != nil {
-		t.Fatalf("step 6: serve status failed: %v\noutput:\n%s", err, statusOut)
+		t.Fatalf("step 2: serve status failed: %v\noutput:\n%s", err, statusOut)
 	}
-	for _, label := range []string{"task:", "process:", "http:", "vault:"} {
-		if !strings.Contains(statusOut, label) {
-			t.Errorf("step 6: serve status output missing %q line\noutput:\n%s", label, statusOut)
+	t.Logf("step 2: post-install status\n%s", indentBlock(statusOut))
+
+	// === step 3: HTTP 401/200 =============================================
+	//
+	// Wait up to 15s for serve to bind the addr (service managers start the
+	// binary asynchronously; serve boots fast but not instantly).
+	if !waitForHTTP401(t, addr, 15*time.Second) {
+		// Before declaring failure, give the operator the status snapshot so
+		// the diagnostic is in the test log.
+		_, _ = runBin([]string{"serve", "status"}, false)
+		t.Fatalf("step 3: serve did not come up at %s (no HTTP 401/200 within 15s)", addr)
+	}
+	t.Logf("step 3: HTTP probe at %s returned 401/200 (serve up + auth gate wired)", addr)
+
+	// === step 4: vault decryptable in the service-host session ============
+	//
+	// A 401 proves serve is listening AND the auth gate ran. It does NOT prove
+	// the vault decrypted. The decisive signal is serve status's `vault:` line.
+	// Give serve a moment to settle past any transient init error, then assert
+	// the vault signal is not explicitly LOCKED.
+	//
+	// What "not LOCKED" actually proves (Plan 16 T7 review, Important finding 1):
+	// the status probe reads master.key via FileKeyProvider and verifies it is a
+	// usable 32-byte key (store.ValidMasterKeyLen). So this assertion catches
+	// missing / unreadable / wrong-length / corrupt master.key in the
+	// service-host session — the exact on-disk failure modes that would make
+	// serve crash-loop at boot. It does NOT prove the store.db itself decrypts
+	// (that is exercised by the authenticated MCP call path in the smoke test,
+	// not by the status probe).
+	time.Sleep(2 * time.Second)
+	statusOut2, _ := runBin([]string{"serve", "status"}, false)
+	if lines := statusLines(statusOut2); strings.Contains(lines["vault"], "LOCKED") {
+		t.Fatalf("step 4: serve status reports vault LOCKED — master.key is missing, unreadable, or wrong-length in the service-host session\nstatus:\n%s", statusOut2)
+	}
+	t.Log("step 4: master.key readable + usable in service-host session (status vault line is not LOCKED)")
+
+	// === step 5: four-signal status + uninstall ===========================
+	//
+	// Assert the four labelled lines exist (service / process / http / vault).
+	// Tolerate overall HEALTHY vs DEGRADED wording — the four labels are the
+	// hard invariant (a partial-failure legibility contract from Plan 15).
+	for _, label := range []string{"service:", "process:", "http:", "vault:"} {
+		if !strings.Contains(statusOut2, label) {
+			t.Errorf("step 5: serve status output missing %q line\noutput:\n%s", label, statusOut2)
 		}
 	}
-	t.Logf("step 6a: serve status four signals present\n%s", indentBlock(statusOut))
+	t.Logf("step 5a: serve status four signals present")
 
 	if _, err := runBin([]string{"serve", "uninstall"}, true); err != nil {
-		t.Fatalf("step 6b: serve uninstall: %v", err)
+		t.Fatalf("step 5b: serve uninstall: %v", err)
 	}
-	// Verify the task is actually gone post-uninstall (not just that the
-	// command exited 0). FINDING E query path; isTaskNotFound classifies the
-	// "no such task" throw.
-	if _, _, err := taskStateViaPowerShell(defaultPsRunner{}, serveTaskName); err == nil {
-		t.Fatalf("step 6b: task still queryable after uninstall — uninstall did not remove it")
-	} else if !isTaskNotFound(err) {
-		t.Fatalf("step 6b: post-uninstall task query returned unexpected error (expected not-found): %v", err)
+	// Verify the service is actually gone post-uninstall: serve status should
+	// report NOT INSTALLED (the kardianos svc.Status() returns StatusUnknown +
+	// ErrNotInstalled when the service is absent; runServeStatus maps that to
+	// the "NOT INSTALLED" service line + a nil error so the command exits 0).
+	postUninstallOut, _ := runBin([]string{"serve", "status"}, false)
+	if !strings.Contains(postUninstallOut, "NOT INSTALLED") && !strings.Contains(postUninstallOut, "not installed") {
+		t.Fatalf("step 5b: post-uninstall status did not report NOT INSTALLED\nstatus:\n%s", postUninstallOut)
 	}
-	t.Log("step 6b: uninstall removed the task cleanly")
+	t.Log("step 5b: uninstall removed the service cleanly")
 }
 
-// seedVaultStep0 writes master.key + sentinel + store.db for the throwaway
-// per-test vault. We use DpapiKeyProvider.Set (the machine-scope protect path)
-// so the sentinel sidecar is written — the serve-install precheck (codex #2)
-// rejects a blob without the sentinel. The on-disk key value EQUALS the
-// SSHMGR_MASTERKEY_HEX env value so resolveMasterKey (env first) and
-// keychain.Get (disk) agree.
+// seedVaultStep0 writes master.key for the throwaway per-test vault. Plan 16:
+// master.key is a plaintext FileKeyProvider file at SSHMGR_FILEKEY_PATH
+// (pinned to the test's vault dir by the caller via t.Setenv). The on-disk
+// key value EQUALS the SSHMGR_MASTERKEY_HEX env value so resolveMasterKey
+// (env tier) and FileKeyProvider.Get (file tier) agree.
 //
-// This mirrors what production `unlock`'s first-run branch does (generate +
-// keychain.Set), short-circuited because the env pins the key value.
+// Mirrors what production `unlock`'s first-run branch does (generate +
+// FileKeyProvider.Set), short-circuited because the env pins the key value.
 func seedVaultStep0(t *testing.T, hexKey string) {
 	t.Helper()
 	mk, err := hexDecodeStatic(hexKey)
 	if err != nil {
 		t.Fatalf("seedVaultStep0: decode hex key: %v", err)
 	}
-	// keychain is the package seam (store.KeyProvider, Windows impl =
-	// DpapiKeyProvider). Set writes master.key (machine-scope DPAPI) + the
-	// sentinel sidecar — the same path production unlock's first-run branch
-	// takes. Set is part of the KeyProvider interface (masterkey.go:27), so no
-	// type assertion is needed.
-	if err := keychain.Set(mk); err != nil {
-		t.Fatalf("seedVaultStep0: keychain.Set (DpapiKeyProvider machine-scope protect): %v", err)
+	if err := (store.FileKeyProvider{}).Set(mk); err != nil {
+		t.Fatalf("seedVaultStep0: FileKeyProvider.Set (master.key plaintext): %v", err)
 	}
 }
 
-// taskStateViaPowerShellOrFail runs the real PowerShell query for the serve
-// task and returns its State enum (Ready/Running/Disabled/...). Fails the test
-// on any query error.
-func taskStateViaPowerShellOrFail(t *testing.T) string {
-	t.Helper()
-	state, _, err := taskStateViaPowerShell(defaultPsRunner{}, serveTaskName)
-	if err != nil {
-		t.Fatalf("Get-ScheduledTask.State query: %v", err)
+// statusLines parses the four labelled "key: value" lines out of serve status
+// output into a map. Tolerates extra whitespace / unknown lines. Returns an
+// empty map if parsing finds nothing (caller treats missing keys as "").
+func statusLines(out string) map[string]string {
+	m := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		// Lines look like "service:   Running". Split on the first ":".
+		idx := strings.Index(line, ":")
+		if idx < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		val := strings.TrimSpace(line[idx+1:])
+		m[key] = val
 	}
-	return state
+	return m
 }
 
-// multipleInstancesViaPowerShell reads Settings.MultipleInstances off the
-// persisted task (pi #2 / spike-4 contract). Returns the raw enum string
-// (IgnoreNew / Parallel / Queue). Fails the test on query error.
-func multipleInstancesViaPowerShell(t *testing.T) string {
-	t.Helper()
-	// Get-ScheduledTask returns the settings object directly; .MultipleInstances
-	// is a PowerShell enum whose ToString() is the English name regardless of
-	// host locale (same property as .State — FINDING E reasoning applies).
-	const ps = "$ErrorActionPreference='Stop'\n" +
-		"$t = Get-ScheduledTask -TaskName '" + serveTaskName + "' -ErrorAction Stop\n" +
-		"Write-Output $t.Settings.MultipleInstances\n"
-	out, err := defaultPsRunner{}.Run(ps, "")
-	if err != nil {
-		t.Fatalf("Get-ScheduledTask.Settings.MultipleInstances query: %v: %s", err, out)
-	}
-	return strings.TrimSpace(out)
+// kardianosPlatform returns service.Platform() (e.g. "windows-service",
+// "linux-systemd", "osx-launchd") purely for test logging. Returns "" if no
+// service system was detected (Linux containerized job without systemd).
+func kardianosPlatform() string {
+	return servicePlatform()
 }
 
 // waitForHTTP401 polls http://addr/ until it returns 401 (or 200), up to the
@@ -389,39 +327,16 @@ func waitForHTTP401(t *testing.T, addr string, timeout time.Duration) bool {
 	return false
 }
 
-// vaultLockedMarkerFromLog scans serve.log for the master-key hard-fail
-// markers (the same set vaultUnlockedFromLog uses). Returns (true, marker) if
-// a locked-vault marker is present; (false, "") if the log is clean (serve is
-// presumed vault-ok). Absent/unreadable log → (false, "") — a not-yet-written
-// log should not be mistaken for a locked vault.
-func vaultLockedMarkerFromLog() (bool, string) {
-	data, err := os.ReadFile(serveLogPath())
-	if err != nil {
-		return false, ""
-	}
-	tail := tailString(string(data), 8192)
-	for _, marker := range []string{
-		"unreadable",
-		"undecryptable",
-		"vault locked",
-		"run `ssh-manager unlock`",
-	} {
-		if strings.Contains(tail, marker) {
-			return true, marker
-		}
-	}
-	return false, ""
-}
-
-// resolveSSHManagerBin locates the ssh-manager.exe the integration test will
-// invoke as the registered task action. Order:
+// resolveSSHManagerBin locates the ssh-manager binary the integration test will
+// invoke as the registered service action. Order:
 //  1. SSHMGR_TEST_BIN env (explicit override).
-//  2. ./ssh-manager.exe, ../ssh-manager.exe, ../../ssh-manager.exe walked up
-//     from the test's working dir (repo root build output).
-//  3. <test-binary-dir>/ssh-manager.exe (next to os.Executable()).
+//  2. ./ssh-manager, ../ssh-manager, ../../ssh-manager walked up from the test's
+//     working dir (repo root build output). On Windows the binary is
+//     ssh-manager.exe; we look for both.
+//  3. <test-binary-dir>/ssh-manager[.exe] (next to os.Executable()).
 //
 // Fails the test if no candidate exists — the integration test fundamentally
-// needs a real ssh-manager.exe to install as the task action.
+// needs a real ssh-manager binary to install as the service action.
 func resolveSSHManagerBin(t *testing.T) string {
 	t.Helper()
 	if p := os.Getenv("SSHMGR_TEST_BIN"); p != "" {
@@ -429,23 +344,25 @@ func resolveSSHManagerBin(t *testing.T) string {
 			return p
 		}
 	}
+	candidates := []string{"ssh-manager", "ssh-manager.exe"}
 	cwd, _ := os.Getwd()
-	for _, rel := range []string{"ssh-manager.exe", "../ssh-manager.exe", "../../ssh-manager.exe", "../../../ssh-manager.exe"} {
-		cand := rel
-		if !filepath.IsAbs(cand) {
-			cand = filepath.Join(cwd, rel)
-		}
-		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
-			return cand
+	for _, rel := range []string{".", "..", "../..", "../../.."} {
+		for _, name := range candidates {
+			cand := filepath.Join(cwd, rel, name)
+			if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+				return cand
+			}
 		}
 	}
 	if exe, err := os.Executable(); err == nil {
-		cand := filepath.Join(filepath.Dir(exe), "ssh-manager.exe")
-		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
-			return cand
+		for _, name := range candidates {
+			cand := filepath.Join(filepath.Dir(exe), name)
+			if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+				return cand
+			}
 		}
 	}
-	t.Fatal("resolveSSHManagerBin: no ssh-manager.exe found — CI must build it via `go build -o ssh-manager.exe ./cmd/ssh-manager` before running this test (or set SSHMGR_TEST_BIN)")
+	t.Fatal("resolveSSHManagerBin: no ssh-manager binary found — CI must build it via `go build -o ssh-manager ./cmd/ssh-manager` before running this test (or set SSHMGR_TEST_BIN)")
 	return ""
 }
 

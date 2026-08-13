@@ -42,7 +42,7 @@ Every tool is **profile-gated** (the agent only reaches servers you granted its 
 
 ## The security model (the iron rule)
 
-- **Credentials** (passwords / private keys) are stored only in an **encrypted vault** — AES-256-GCM with a per-record key derived (HKDF) from a master key. The master key lives in the **OS keychain** (or a passphrase fallback for headless hosts).
+- **Credentials** (passwords / private keys) are stored only in an **encrypted vault** — AES-256-GCM with a per-record key derived (HKDF) from a master key. The master key lives in a **fixed-path plaintext file with hardened ACL** (`master.key.plain`, Win `C:\ProgramData\ssh-manager\` / Unix `/var/lib/ssh-manager/`). This is the **L1+ threat model** (Plan 16): protects against same-machine non-privileged process accidental read; does **not** protect against admin/root or offline disk access. Applicable only for single-user, trusted-machine deployments. See [docs/threat-model.md](./docs/threat-model.md).
 - The agent authenticates to the MCP with a **project token**, not a credential. The MCP server (the *broker*) holds the master key, opens the SSH connections itself, and returns only command output / file bytes / a forwarded port — **never credentials**.
 - The agent's own `ssh` (if it even has a shell) **cannot log in** — there are no creds in `~/.ssh` or `ssh-agent` for it to use, so it's forced through the MCP. A residual-key guardrail warns if stray SSH credential files are detected on the host that could undermine this isolation.
 - **Profiles** group servers; a **project** (token) is bound to one profile. The agent sees + reaches only its profile's servers — cross-profile access is rejected by the broker (tested adversarially against a top-tier model).
@@ -58,7 +58,7 @@ Build + configure once; then point your AI agent at it.
 #          https://github.com/allanpk716/ssh-manager-mcp/releases
 go build -o ssh-manager ./cmd/ssh-manager        # or: go install ./cmd/ssh-manager
 
-# 2. Unlock the vault (master key → OS keychain; passphrase fallback available — see `unlock --help`)
+# 2. Unlock the vault (writes master key → fixed-path file `master.key.plain`; admin/root needed first time to create the vault dir + set ACL — see `unlock --help`)
 ssh-manager unlock
 
 # 3. Add a server + its credential (exactly one of --password / --key; optional sudo)

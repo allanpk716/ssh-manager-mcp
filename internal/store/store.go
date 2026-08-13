@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"ssh-manager-mcp/internal/paths"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -52,13 +54,11 @@ func (s *Store) SetReadOnly(auditSidecar *os.File) {
 	s.auditSidecar = auditSidecar
 }
 
-// DefaultStorePath returns the on-disk vault location.
+// DefaultStorePath returns the on-disk vault location (program-fixed, spec §3.1/§5.1).
+// SSHMGR_STORE overrides (test/migrate). Falls back to paths pkg (Win
+// C:\ProgramData\ssh-manager\store.db; Unix /var/lib/ssh-manager/store.db).
 func DefaultStorePath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "ssh-manager", "store.db"), nil
+	return paths.StorePath()
 }
 
 // Open opens (or creates) the vault at path and ensures the schema. The master key decrypts credentials.
@@ -83,6 +83,25 @@ func Open(path string, masterKey []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// HardenACL on the store.db FILE (Plan 16 final review, spec §5.2 xcheck
+	// codex P6): master.key + cache-dek.key are ACL-locked by their providers,
+	// but store.db was created here with the creating token's default DACL —
+	// on Windows that means Users / Authenticated Users have read access to a
+	// file containing plaintext server metadata (host/user/name/tags/description)
+	// + audit logs, which spec §6.1 claims is prevented. HardenACL uses
+	// NO_INHERITANCE so the fresh file does NOT pick up the hardened parent
+	// dir's restrictive DACL — we must explicitly re-ACL it here. Hard-fail on
+	// error: the ACL is the only protection layer for this plaintext metadata
+	// (same rationale as master.key); silent failure leaves it world-readable.
+	// NOTE: the *sql.DB handle above was opened BEFORE this ACL change — on
+	// Windows changing a file's DACL does NOT invalidate an existing open
+	// handle (the handle's access was granted at open time; DACL gates only
+	// future opens), so the just-opened handle remains usable. HardenACL is a
+	// no-op on non-Windows (file mode bits are the protection there).
+	if err := HardenACL(path); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("harden ACL on store %q: %w", path, err)
+	}
 	mk := make([]byte, len(masterKey))
 	copy(mk, masterKey)
 	return &Store{db: db, masterKey: mk}, nil
@@ -90,6 +109,17 @@ func Open(path string, masterKey []byte) (*Store, error) {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// Checkpoint forces a WAL checkpoint (TRUNCATE) so the main database file
+// contains every committed transaction and the -wal sidecar is empty. Used by
+// callers that need a self-contained store.db for byte-level copying (the
+// migrate-path command copies store.db between locations and must NOT miss
+// transactions still buffered in the WAL). Safe to call on a WAL or rollback-
+// journal store; idempotent.
+func (s *Store) Checkpoint() error {
+	_, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	return err
 }
 
 func initSchema(db *sql.DB) error {

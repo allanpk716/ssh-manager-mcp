@@ -1,0 +1,101 @@
+package cli
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// TestVaultStatusString_CorruptKeyReportsLocked covers the regression that
+// motivated Plan 16 T7 review Important finding 1: the old vaultStatusString
+// only did os.ReadFile and reported "ok" for ANY master.key file that existed
+// on disk — including corrupt / truncated / wrong-length / garbage-byte files
+// the running serve would crash-loop on at boot.
+//
+// This is a NON-gated unit test (no SSHMGR_SERVE_INSTALL env required) so it
+// runs in the normal `go test ./...` hermetic loop. It seeds a temp vault dir
+// via SSHMGR_FILEKEY_PATH, writes a corrupt master.key, and asserts the probe
+// returns a LOCKED signal — not "ok".
+func TestVaultStatusString_CorruptKeyReportsLocked(t *testing.T) {
+	// Pin the master.key path into a per-test temp dir so we never touch a
+	// real vault. restoreFileKeyPathEnv restores the prior env on exit.
+	mkPath := filepath.Join(t.TempDir(), "master.key.plain")
+	t.Setenv("SSHMGR_FILEKEY_PATH", mkPath)
+
+	cases := []struct {
+		name       string
+		keyBytes   []byte
+		wantSubstr string // must appear in the LOCKED message
+		wantNotOK  bool   // true → must NOT be "ok"
+	}{
+		{
+			name:       "missing file",
+			keyBytes:   nil, // do not write
+			wantSubstr: "not found",
+			wantNotOK:  true,
+		},
+		{
+			name:       "zero-byte file",
+			keyBytes:   []byte{},
+			wantSubstr: "0 bytes",
+			wantNotOK:  true,
+		},
+		{
+			name:       "truncated 4-byte file",
+			keyBytes:   []byte{0x00, 0x01, 0x02, 0x03},
+			wantSubstr: "4 bytes",
+			wantNotOK:  true,
+		},
+		{
+			name:       "garbage 31-byte file (one short of 32)",
+			keyBytes:   []byte(strings.Repeat("x", 31)),
+			wantSubstr: "31 bytes",
+			wantNotOK:  true,
+		},
+		{
+			name:       "over-length 64-byte file",
+			keyBytes:   []byte(strings.Repeat("y", 64)),
+			wantSubstr: "64 bytes",
+			wantNotOK:  true,
+		},
+		{
+			name:       "valid 32-byte key (control: must be ok)",
+			keyBytes:   make([]byte, 32),
+			wantSubstr: "",
+			wantNotOK:  false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// (Re)create the master.key file per case. Remove first so the
+			// missing-file case is actually missing, not stale from a prior subtest.
+			if err := os.Remove(mkPath); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("setup remove: %v", err)
+			}
+			if tc.keyBytes != nil {
+				if err := os.WriteFile(mkPath, tc.keyBytes, 0o600); err != nil {
+					t.Fatalf("setup write: %v", err)
+				}
+			}
+
+			got := vaultStatusString()
+			if tc.wantNotOK {
+				if got == "ok" {
+					t.Fatalf("vaultStatusString returned %q; want a LOCKED signal containing %q", got, tc.wantSubstr)
+				}
+				if !strings.Contains(got, "LOCKED") {
+					t.Fatalf("vaultStatusString returned %q; want a LOCKED signal", got)
+				}
+				if tc.wantSubstr != "" && !strings.Contains(got, tc.wantSubstr) {
+					t.Fatalf("vaultStatusString returned %q; want it to contain %q", got, tc.wantSubstr)
+				}
+			} else {
+				if got != "ok" {
+					t.Fatalf("vaultStatusString returned %q; want \"ok\" for a valid 32-byte key", got)
+				}
+			}
+		})
+	}
+}
