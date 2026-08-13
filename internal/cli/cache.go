@@ -161,7 +161,7 @@ func cachePullCmd() *cobra.Command {
 				// Hard-fail instead of silently downgrading. (xcheck F8)
 				if u, perr := neturl.Parse(url); perr != nil || u.Scheme != "https" {
 					return fmt.Errorf("--url must be https:// when a server pin is set (got %q); "+
-						"use --allow-plaintext for an explicit plaintext pull", url)
+						"to pull plaintext instead, clear the pin (--pin/SSHMGR_SERVE_PIN) and pass --allow-plaintext", url)
 				}
 				tr, err := pinningTransport(fp)
 				if err != nil {
