@@ -421,10 +421,19 @@ $trigBoot = New-ScheduledTaskTrigger -AtStartup
 $trigLogon = New-ScheduledTaskTrigger -AtLogOn -User $user
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
 Register-ScheduledTask -TaskName '` + serveTaskName + `' -Action $action -Trigger @($trigBoot,$trigLogon) -Settings $settings -RunLevel Limited -User $user -Password $password -Force | Out-Null
-$t = Get-ScheduledTask -TaskName '` + serveTaskName + `'
-$t.Settings.RestartOnFailure.Interval = 'PT1M'
-$t.Settings.RestartOnFailure.Count = 3
-Set-ScheduledTask -InputObject $t | Out-Null
+# RestartOnFailure via CIM (T5 R1): PS 5.1's RestartOnFailure is a READ-ONLY CIM
+# view on the fetched object — $t.Settings.RestartOnFailure.Interval = ... throws
+# "property cannot be found" (confirmed on windows-latest CI). Make it best-effort:
+# try, catch, warn. RestartOnFailure is NOT the §7.3 core (Boot trigger auto-start
+# is); serve is a stable long-running process. Target contract, not hard (consensus C).
+try {
+  $t = Get-ScheduledTask -TaskName '` + serveTaskName + `'
+  $t.Settings.RestartOnFailure.Interval = 'PT1M'
+  $t.Settings.RestartOnFailure.Count = 3
+  Set-ScheduledTask -InputObject $t | Out-Null
+} catch {
+  Write-Output "::warning::RestartOnFailure CIM set failed on this host (PS 5.1 read-only view): $($_.Exception.Message). Boot trigger still auto-starts serve after a reboot; only mid-run crash auto-restart is unavailable."
+}
 Write-Output "REGISTERED"
 `
 	logDir := filepath.Dir(in.LogPath)
