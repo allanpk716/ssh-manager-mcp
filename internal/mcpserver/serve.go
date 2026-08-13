@@ -279,9 +279,9 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 		} else {
 			// Defensive only — unreachable post-auto-TLS: the cert-resolution
 			// block above guarantees tlsCert is non-empty. Kept so a future
-			// refactor that drops auto-TLS fails closed to a hard error
-			// (Serve on a nil-Addr listener) rather than silently serving
-			// plaintext.
+			// refactor that drops auto-TLS has a single, obvious seam to
+			// audit; if reached today it would serve plaintext (NOT safe),
+			// which is why the auto-TLS block above is load-bearing.
 			errCh <- srv.Serve(ln)
 		}
 	}()
