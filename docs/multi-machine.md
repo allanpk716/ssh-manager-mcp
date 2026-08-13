@@ -94,7 +94,7 @@ ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
 - **Linux**：自己写 systemd unit（示例见下）。`ssh-manager serve install` 在 Linux 上**尚未实现**（会报 `not yet supported on linux`，见 [T6 限制](#linuxmacos-尚未支持)）。
 - **macOS**：自己写 launchd LaunchAgent。`serve install` 同样**尚未实现**。
 
-#### Windows：`serve install` 一条龙（Plan 14，推荐）
+#### Windows：`serve install` 一条龙（Plan 14，Plan 15 修正为 machine-scope DPAPI）
 
 ```powershell
 # 在交互式 session（本地终端 / RDP，不是 ssh）里跑：
@@ -103,9 +103,9 @@ ssh-manager serve install --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.
 
 程序会：
 
-1. **先检查 `master.key` 存在**（没有就报错让你先 `unlock`）。
+1. **先检查 `master.key` 存在且是 machine-scope**（Plan 15 修正：检查 DPAPI scope，避免 user-scope 的跨 session 失败）——没有就报错让你先 `unlock`（Plan 15 会触发 user→machine 迁移）。
 2. 生成 Task Scheduler XML（boot + logon 触发，崩溃自重启 PT1M × 3，stdout/stderr 重定向到 `%LocalAppData%\ssh-manager\serve.log`），通过 PowerShell `Register-ScheduledTask` 注册成任务 `ssh-manager-serve`。
-3. **弹 PowerShell `Get-Credential` 对话框让你输 Windows 密码**——任务要 `LogonType=Password` 才能 boot 时就起（无需等人登录）。**密码只活在 PowerShell 进程内存里，不进 ssh-manager.exe argv，不进 4688 审计日志**。
+3. **用 PowerShell `secureString` 读 Windows 密码**（Plan 15 修正：不再用 `Get-Credential` 对话框，避免密码进 4688 审计日志；用 `Read-Host -AsSecureString` 转 plain text 再传给 `Register-ScheduledTask`）——任务要 `LogonType=Password` 才能 boot 时就起（无需等人登录）。**密码只活在 PowerShell 进程内存里，不进 ssh-manager.exe argv，不进 4688 审计日志**。
 4. 立即 `schtasks /Run` 跑一次验证 + 生成 serve.log。
 
 配套命令：
@@ -126,7 +126,7 @@ wmic UserAccount where Name='allan716' set PasswordExpires=False
 
 > Win11 22H2+ 不装 `wmic`，改用 `Set-LocalUser -Name 'allan716' -PasswordNeverExpires $true`。
 
-> **新机器升级注意**：已有 v0.2.0 vault 的机器升级到新版后，`master.key` 还没生成（旧 master key 在 keychain 里，新版从非交互 session 读不出）——必须**先在交互式 session 跑一次 `ssh-manager unlock` 触发迁移**，再 `serve install`，否则 serve 读不到 master key 会启动失败。完整流程见 [backup-restore.md 的 Plan 14 升级 Runbook](./backup-restore.md#plan-14--windows-生产部署dpapi-master-key--serve-常驻)。
+> **新机器升级注意（Plan 15 修正为 machine-scope）**：已有 v0.2.0 vault 的机器升级到新版后，`master.key` 还没生成（旧 master key 在 keychain 里，新版从非交互 session 读不出）——必须**先在交互式 session 跑一次 `ssh-manager unlock` 触发迁移**（v0.2.0 → DPAPI + user→machine），再 `serve install`，否则 serve 读不到 master key 会启动失败。完整流程见 [backup-restore.md 的 Plan 14 升级 Runbook](./backup-restore.md#升级-runbookv020--新版windows) 和 [Plan 15 修正：user-scope → machine-scope 迁移](./backup-restore.md#升级-runbookplan-15-修正user-scope--machine-scope-迁移)。
 
 #### Linux：systemd（自建，`serve install` 尚未实现）
 
@@ -222,7 +222,7 @@ serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问
 | Plan 11 · export/import | 整个 vault 口令加密便携文件：备份 / 迁移 / 灾难恢复 | ✅ 已做（[backup-restore.md](./backup-restore.md)） |
 | Plan 12 · 离线只读缓存 | 工作机本地缓存加密 vault，断网时只读用、自动刷新 | ✅ 已做（本节[「离线只读缓存」](#离线只读缓存plan-12)） |
 | Plan 13 · 群晖自动备份 | 服务器定时出明文快照到 NAS，灾难恢复 | ✅ 已做（[backup-restore.md Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)） |
-| Plan 14 · Windows 生产部署 | DPAPI master key（替代 keychain）+ `serve install` Task Scheduler 常驻 | ✅ 已做（[backup-restore.md Plan 14](./backup-restore.md#plan-14--windows-生产部署dpapi-master-key--serve-常驻)） |
+| Plan 14 · Windows 生产部署 | DPAPI master key（替代 keychain）+ `serve install` Task Scheduler 常驻（**Plan 15 修正为 machine-scope DPAPI + serve install fix**） | ✅ 已做（[backup-restore.md Plan 14](./backup-restore.md#plan-14--windows-生产部署dpapi-master-key--serve-常驻)） |
 
 **现在：serve = 在线 live（Windows 一条龙 `serve install`，Linux/macOS 自建 systemd/launchd）；备份 / 迁移已可（export/import + Plan 13 NAS）；离线只读缓存已落地（Plan 12）。** Linux/macOS 的 `serve install` 还没实现（[见下](#linuxmacos-尚未支持)）。
 

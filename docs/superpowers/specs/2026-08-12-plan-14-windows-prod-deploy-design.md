@@ -1,5 +1,8 @@
 # Plan 14 — Windows 生产部署（DPAPI master key + serve 常驻）— Design Spec
 
+> ⚠️ **SUPERSEDED by Plan 15** (machine-scope DPAPI + serve install fix).
+> Plan 14 的 §3.2（user-scope DPAPI）、§5.8（serve install XML 链）、§6（威胁模型）、§7.2（集成测试）在 NUC10 §7.3 真机验收中暴露了架构缺陷（user-scope 跨 logon session 失败）+ 5 个实现 bug。**正文保留作审计轨迹**，实际方案见 `docs/superpowers/specs/2026-08-12-plan-15-machine-scope-dpapi-serve-fix-design.md` (v2)。验收结论：`docs/superpowers/specs/2026-08-12-plan-14-nuc10-e2e-findings.md`。
+
 **Date:** 2026-08-12
 **Status:** Design v2 — 三家 xcheck 评审（codex/opencode/pi）+ DPAPI spike 实证（推翻共识 A）+ 评审必改项（B/C/D/E + 应改）落地；pending implementation plan
 **Worktree/branch:** `plan-14-windows-prod-deploy`（待开）
