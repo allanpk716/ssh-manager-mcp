@@ -92,6 +92,17 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// Checkpoint forces a WAL checkpoint (TRUNCATE) so the main database file
+// contains every committed transaction and the -wal sidecar is empty. Used by
+// callers that need a self-contained store.db for byte-level copying (the
+// migrate-path command copies store.db between locations and must NOT miss
+// transactions still buffered in the WAL). Safe to call on a WAL or rollback-
+// journal store; idempotent.
+func (s *Store) Checkpoint() error {
+	_, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	return err
+}
+
 func initSchema(db *sql.DB) error {
 	_, err := db.Exec(schemaSQL)
 	return err
