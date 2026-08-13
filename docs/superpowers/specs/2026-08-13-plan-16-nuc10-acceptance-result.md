@@ -1,5 +1,7 @@
 # Plan 16 §7.3 NUC10 真机验收结果
 
+> **2026-08-13 修复状态更新**：F1（store.db ACL 缺用户 ACE）已修 — `b7e3ac5`（HardenACL 只在首次创建时跑，serve 重开不重写）。F2 已修 — `5e1ec15`，**且 F2 根因修正**：不是"CLI 并发写 audit 撞锁"，而是 SQLite WAL 边车（`-shm`/`-wal`）的 ACL 不对（LocalSystem 创建时继承上层 ProgramData 的 Admins-read-only DACL，CLI 经 Administrators 写 `-shm` 失败）；`hardenWALSidecars` 在每次 store.Open 时 HardenACL 边车文件，真机验证 serve 跑着时 CLI `servers ls` 返回 7（不再 readonly）。F3 已订正 — spec §1.1 加 F3 注记（sshd 实测能解 DPAPI，读不出的是 serve/Service session）。F1/F2/F3 全部闭环。详见下文各 finding 段的"修复"小节。
+
 **日期**：2026-08-13
 **验收对象**：Plan 16（fixed path + FileKeyProvider），二进制 `v0.3.0-rc-acceptance`，master `585cc24`
 **方式**：全自动化 SSH（用户未 RDP，未手动操作）— export→import 绕开 DPAPI RDP 墙

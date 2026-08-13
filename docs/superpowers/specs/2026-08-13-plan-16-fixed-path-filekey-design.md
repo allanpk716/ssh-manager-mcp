@@ -13,10 +13,12 @@
 
 | | Plan 14 §7.3（user-scope）| Plan 15 §7.3（machine-scope）|
 |---|---|---|
-| boot 自起 serve 读 master.key | ❌ `Key not valid for use`（跨 logon session）| ❌ **同样 `Key not valid`**（sshd session，B1 迁移成功后仍失败）|
-| 根因诊断 | user-scope 绑用户 SID/logon session | **machine-scope 也不可靠**——spike §12 的 roundtrip 测试不覆盖真实 boot/sshd session |
+| boot 自起 serve 读 master.key | ❌ `Key not valid for use`（跨 logon session）| ❌ **同样 `Key not valid`**（serve/Service session，B1 迁移成功后仍失败）|
+| 根因诊断 | user-scope 绑用户 SID/logon session | **machine-scope 也不可靠**——spike §12 的 roundtrip 测试不覆盖真实 boot/Service session |
 
 两次撞墙说明：**在"服务自起、跨 session、headless"的部署形态下，用户态密钥保护（DPAPI/keyring）的行为不可预测、不可自动化测试**。Plan 14/15 两个大版本在追一个**自找的问题**。
+
+> **F3 实测修正（2026-08-13 §7.3 验收期间）**：本节早期草稿把 Plan 15 §7.3 的失败记为"sshd session 读不出"。但 §7.3 验收实测发现：在 sshd session 跑 `servers ls`（旧 Plan 15 exe + machine-scope DPAPI blob）**成功**（7/7 列出）——sshd 其实能解 machine-scope DPAPI。真正读不出的是 **serve 进程**（Task Scheduler /Run 起的 Password-logon session，或 kardianos Windows Service 的 LocalSystem session）。这两类 session 的 DPAPI 上下文与 sshd 不同。方向不变（DPAPI 在服务自起场景不可预测），但诊断精确化为"serve/Service session"，非"sshd session"。
 
 ### 1.2 探测确认的关键事实
 
