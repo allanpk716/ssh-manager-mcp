@@ -77,16 +77,21 @@ ssh-manager projects add my-agent --profile team-a  # 打印一次性 token（�
 ### Step 2（服务器侧）：启动常驻 broker
 
 ```bash
-ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
-# → ssh-manager serve: listening on 0.0.0.0:7878 (tls=true)
+ssh-manager serve --addr 0.0.0.0:7878
+# → ssh-manager serve: listening on 0.0.0.0:7878 (tls=auto)
+# → auto-TLS cert (self-signed). client pin: sha256:abcd1234...
 ```
 
 | 选项 | 说明 |
 |---|---|
 | `--addr` | 监听地址。默认 `127.0.0.1:7878`（**只本机**——远程用不了）。多机场景写 `0.0.0.0:7878` 或服务器的 VLAN IP。 |
-| `--tls-cert` / `--tls-key` | 启用 HTTPS。**强烈建议**——不挂时 bearer token 在网络明文传输。VLAN 内自签证书即可。 |
+| `--tls-cert` / `--tls-key` | **可选**。不挂时（默认）serve 首次启动**自动生成一张自签 ed25519 证书**，落 vault 固定目录（`serve-cert.pem` / `serve-key.pem`，ACL 与 `master.key.plain` 同级）。要用自己的证书才挂这两个 flag。 |
 
-⚠️ **不挂 TLS + 绑非回环 = token 裸奔**：程序会打一行 STDERR 警告。同 VLAN 也不应假设安全——上 TLS。
+**自签证书 + 指纹钉死 = 零证书分发。** 自签证书首次生成时，serve 把它的 **SPKI 指纹**（`sha256:...`）打印到启动日志（`client pin:` 那行）。客户端（`cache pull` / 工作机）用这个指纹**钉死**对端 —— 连接时校验服务器证书公钥 == 钉死的指纹，不等即拒，**首次连接即校验（零 MITM 窗口）**。无需在每台客户端装根证书。
+
+**指纹怎么交给工作机**：`cache-tokens add` 签发设备码时，会把当前 serve 指纹**一并打印**（默认编进 `cache pull` 示例命令，形态 `<设备码>:<指纹>`）。详见下面「离线只读缓存」Step 1。也可用 `ssh-manager serve cert-info` 随时查当前指纹。
+
+> ⚠️ **客户端不带指纹 = 明文回退**：`cache pull` 在没拿到指纹（env / `--pin` / token 内嵌三处都没有）时，会退回明文 HTTP 并打一行 STDERR 警告 —— 这是为了让**旧客户端平滑升级**（不会硬断），但意味着升级窗口里客户端可能还在明文拉。迁移时请尽快把指纹配上（`SSHMGR_SERVE_PIN=...`）。
 
 **让它常驻 + 开机自启**（serve 是个长驻进程，别在前台手跑就完事）：
 
@@ -96,8 +101,10 @@ ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
 
 ```bash
 # 在已经跑过 unlock（master.key.plain 已生成）的机器上（Windows 需 admin / Linux·macOS 需 sudo）：
-ssh-manager serve install --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
+ssh-manager serve install --addr 0.0.0.0:7878
 ```
+
+（`--tls-cert/--tls-key` 可选；不挂则服务自签证书，同 Step 2。）
 
 程序会：
 
@@ -205,7 +212,7 @@ service 默认账户：
 2. **离线缓存：✅ 已实现（Plan 12）**：工作机本地持有一份**加密的只读** vault 快照，连不上服务器时 agent 照常 exec / download / upload / 转发（只读，不能改）。**见本篇[「离线只读缓存（Plan 12）」](#离线只读缓存plan-12)节**——它不是 serve 的"离线模式"，而是一份独立拉取、独立加密、自动刷新的本地缓存。在一台机器上**同时**配 serve（在线）+ cache（离线兜底）也行——两套互不冲突。
 3. **服务器是单点**：服务器挂了 = 所有人暂停，直到它恢复。**自动备份 / 灾难恢复已落地**——[Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)（NAS 定时明文备份）+ [export/import](./backup-restore.md)（Plan 11，便携加密备份）。恢复手段：从 NAS 拷最新快照或 export 文件，在新机 `ssh-manager import`（[见 backup-restore 的灾难恢复](./backup-restore.md#场景-③-灾难恢复)）。
 4. **单 owner 设计**：多个人共用同一个 vault、按人隔离访问——**不在范围**。本方案是"一个人、多台机"。多人场景需要 per-user ACL + 审计隔离，是另一个量级的功能。
-5. **bearer token = 钥匙**：谁拿到某项目的 token + 能连到服务器 = 拿到那个项目 profile 里的**所有服务器**。所以：用 **TLS** 防嗅探；用 [`projects rotate`](./agent-access.md)（换发）/ [`revoke`](./agent-access.md)（吊销）管 token 生命周期；token 进密码管理器、别进 git。
+5. **bearer token = 钥匙**：谁拿到某项目的 token + 能连到服务器 = 拿到那个项目 profile 里的**所有服务器**。所以：serve 默认**自签 TLS + 指纹钉死**防嗅探/防 MITM；用 [`projects rotate`](./agent-access.md)（换发）/ [`revoke`](./agent-access.md)（吊销）管 token 生命周期；token 进密码管理器、别进 git。
 
 ---
 
@@ -278,13 +285,16 @@ serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带�
 ```bash
 ssh-manager cache-tokens add --name laptop
 # Authorization code for "laptop" (shown once): <一长串设备码>
+# Server fingerprint (serve cert SPKI): sha256:abcd1234...
 #
 # On the work machine:
-#   ssh-manager cache pull --url https://192.0.2.5:7878 --token <设备码>
+#   ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1234...'
+#   # (or) set SSHMGR_SERVE_PIN=sha256:abcd1234... and pass --token <设备码>
 ```
 
 - `--name` **必填**且唯一（比如 `laptop` / `desktop-2`），后续吊销靠它。
 - 设备码**只显示一次**——当场拉、或记进密码管理器。
+- **指纹是自动加密的关键**：设备码旁那行 `Server fingerprint` 是 serve 自签证书的 SPKI 指纹。`cache pull` 拿到它（任一形式：token 内嵌 `<码>:<指纹>`、`--pin`、或 `SSHMGR_SERVE_PIN`）就用 TLS + 指纹钉死连 serve；拿不到就退回明文（仅升级窗口用）。指纹可随时用 `ssh-manager serve cert-info` 重查。
 - 其他管理命令：
   ```bash
   ssh-manager cache-tokens ls          # name / id / prefix / status / last_pull（不显示码）
@@ -296,8 +306,8 @@ ssh-manager cache-tokens add --name laptop
 在工作机装好 `ssh-manager` 后：
 
 ```bash
-# 第一次拉（用刚发的设备码；之后会被调度器自动重拉）
-ssh-manager cache pull --url https://192.0.2.5:7878 --token <设备码>
+# 第一次拉（设备码 + 指纹一起给；之后会被调度器自动重拉）
+ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1234...'
 # → pulled N servers / M credentials into <UserConfigDir>/ssh-manager/cache.bin
 
 # 看缓存状态
@@ -312,7 +322,8 @@ ssh-manager cache status
 | 选项 / 环境变量 | 说明 |
 |---|---|
 | `--url` / `SSHMGR_CACHE_URL` | serve broker 的 URL（`https://host:7878`）。必填 |
-| `--token` / `SSHMGR_CACHE_TOKEN` | 设备授权码（`cache-tokens add` 发的那个）。必填 |
+| `--token` / `SSHMGR_CACHE_TOKEN` | 设备授权码（`cache-tokens add` 发的那个）。可写成 `<设备码>:<指纹>` 把指纹一起带上。必填 |
+| `--pin` / `SSHMGR_SERVE_PIN` | serve 证书 SPKI 指纹（`sha256:...`）。**任一处给了就走 TLS + 指纹钉死**；优先级 `SSHMGR_SERVE_PIN` > `--pin` > token 内嵌；三者都无 → 明文回退（打 STDERR 警告）。`cache-tokens add` 默认把指纹打进输出。 |
 | `SSHMGR_CACHE_DIR` | 缓存目录覆盖（默认 `UserConfigDir/ssh-manager`） |
 
 > **缓存目录**：`cache.bin` / `cache.meta.json` / `cache-audit.log` 进 `SSHMGR_CACHE_DIR`（默认 `os.UserConfigDir()/ssh-manager/`，即 Linux `~/.config/ssh-manager/`、macOS `~/Library/Application Support/ssh-manager/`、Windows `%AppData%\ssh-manager\`）。**DEK** 存在 vault 固定路径下的 `cache-dek.key` 裸文件（Win `C:\ProgramData\ssh-manager\cache-dek.key` / Unix `/var/lib/ssh-manager/cache-dek.key`，Plan 16 T4 从 OS keychain/DPAPI 迁来）。
@@ -363,6 +374,7 @@ Description=ssh-manager offline cache refresh
 Type=oneshot
 Environment=SSHMGR_CACHE_URL=https://192.0.2.5:7878
 Environment=SSHMGR_CACHE_TOKEN=<设备码>
+Environment=SSHMGR_SERVE_PIN=sha256:<指纹>   # 从 `serve cert-info` 或 `cache-tokens add` 输出取
 ExecStart=/usr/local/bin/ssh-manager cache pull
 ```
 
@@ -387,10 +399,11 @@ systemctl --user enable --now ssh-manager-cache.timer
 **Windows（任务计划，PowerShell）**：
 
 ```powershell
-# 0600 配置文件存 URL + 设备码
+# 0600 配置文件存 URL + 设备码 + 指纹
 @"
 SSHMGR_CACHE_URL=https://192.0.2.5:7878
 SSHMGR_CACHE_TOKEN=<设备码>
+SSHMGR_SERVE_PIN=sha256:<指纹>
 "@ | Set-Content -Path "$env:USERPROFILE\.ssh-manager\cache.env" -Encoding UTF8
 
 $action  = New-ScheduledTaskAction -Execute "ssh-manager.exe" `
@@ -425,6 +438,8 @@ Register-ScheduledTask -TaskName "ssh-manager-cache-refresh" `
         <string>https://192.0.2.5:7878</string>
         <key>SSHMGR_CACHE_TOKEN</key>
         <string>&lt;设备码&gt;</string>
+        <key>SSHMGR_SERVE_PIN</key>
+        <string>sha256:&lt;指纹&gt;</string>
     </dict>
     <key>StartInterval</key>
     <integer>1800</integer>
@@ -438,7 +453,9 @@ Register-ScheduledTask -TaskName "ssh-manager-cache-refresh" `
 launchctl load -w ~/Library/LaunchAgents/com.ssh-manager.cache-refresh.plist
 ```
 
-⚠️ **设备码 = 钥匙**：任何机器拿到 `<设备码>` + 能连 serve = 能拉整份 vault 快照。所以：用 **TLS** 防嗅探；设备码进 0600 配置文件 / 密码管理器，**别进 git**；机器失窃 → 立刻 `cache-tokens revoke`（见下）。
+⚠️ **设备码 = 钥匙**：任何机器拿到 `<设备码>` + 能连 serve = 能拉整份 vault 快照。所以：serve 默认**自签 TLS + 指纹钉死**（指纹 = serve 证书公钥，`cache pull` 钉死它防 MITM）；设备码进 0600 配置文件 / 密码管理器，**别进 git**；机器失窃 → 立刻 `cache-tokens revoke`（见下）。
+
+> **指纹失配 ≠ 设备码泄露**。指纹失配意味着你连到的服务器公钥变了（可能是 serve 重装重生证书 = 正常；也可能是中间人 = 异常）。serve 重生证书（如重装、迁移到新机）后，用 `ssh-manager serve cert-info` 拿新指纹，更新各客户端的 `SSHMGR_SERVE_PIN`。这是**指纹钉死**的预期代价：换 key 必须重新交接信任。
 
 ### 离线能做什么 / 不能做什么
 
@@ -496,6 +513,20 @@ ssh-manager cache-tokens revoke laptop
 - **离线审计分散在各机本地**：`cache-audit.log` 不回传、不合并——要集中视图得自己收。
 - **首次 `cache pull` 必须在线**——缓存还没拉下来之前，`mcp --cache` 跑不起来（会报 `cache DEK not found` / `no such file`）。
 - **物理失窃 ≠ 远程吊销能解决**：见上"吊销"——已拉下的缓存被本机 DEK 守着，吊销只断"拉新"。
+
+### 自动 TLS 迁移 Runbook（从旧版明文 / 外部证书升级）
+
+新版 serve **默认强制 TLS**（无 `--tls-cert` 时自签）。已部署的明文或外部证书部署**无需停服、无需清数据**即可平滑切到指纹钉死：
+
+1. **升级服务器二进制**到含自动 TLS 的新版（serve 暂不重启）。
+2. **拿指纹**：`ssh-manager serve cert-info` —— 打印当前（或首次生成）的 SPKI 指纹 `sha256:...`。幂等，不会破坏现有 flag。
+3. **重启 serve** → 从此强制 TLS，启动日志打印 `client pin: <指纹>`。
+4. **升级各工作机二进制**，把指纹配上（任一形式）：
+   - 重新 `cache-tokens add`（默认把指纹打进设备码输出）；或
+   - 在调度器配置（systemd unit / 任务计划 / launchd plist）的 `Environment` / `EnvironmentVariables` 里加 `SSHMGR_SERVE_PIN=sha256:<指纹>`。
+5. **下一次定时 `cache pull`** → 走 TLS + 指纹钉死成功，迁移完成。
+
+**迁移窗口不断链保证**：新 `cache pull` 没拿到指纹时**退回明文 + STDERR 警告**（不硬断），所以"serve 已切 TLS、某工作机还没配指纹"的窗口里，那台机不会硬失败，只是继续明文拉直到指纹配上。**指纹配上后才真正加密**——所以迁移要尽快把指纹分发到所有工作机。
 
 ---
 

@@ -25,6 +25,17 @@
 
 > **降级根因**（不是"选错了 scope"，是"整个用户态密钥模型与部署形态不匹配"）：Plan 14（user-scope DPAPI）和 Plan 15（machine-scope DPAPI）在 NUC10 真机 §7.3 验收中**两次撞墙**——"服务自起、跨 logon session、headless"形态下，DPAPI 跨 session 不可解（`Key not valid for use in specified state`）。详见 [Plan 16 §1.1](./superpowers/specs/2026-08-13-plan-16-fixed-path-filekey-design.md)。
 
+### 1.1 传输层（serve ↔ 工作机，独立于上面的 at-rest 模型）
+
+`serve`↔`cache pull` 同步链路的传输加密**与 L1+ at-rest 模型是两套独立的密码学**：
+
+- **默认强制 TLS**：`serve` 无 `--tls-cert` 时首次启动**自签**一张 ed25519 证书（落 `serve-cert.pem`/`serve-key.pem`，ACL 与 `master.key.plain` 同级），从此监听 TLS。`/snapshot`（整库凭据 dump）与 MCP JSON-RPC 全程密文 + 前向保密。
+- **指纹钉死（SPKI TOFU）**：客户端（`cache pull`）钉死 serve 证书公钥的 SPKI 指纹（`sha256:...`）——`InsecureSkipVerify: true` 跳过对自签证书不可能的 CA 链验证 + `VerifyConnection` 回调做**常量时间** SPKI 比对作为唯一信任锚（HPKP/Tailscale 模式）。**首次连接即校验，零 MITM 窗口**（指纹在 enroll 时随设备码交付，非首次盲连）。
+- **明文回退是迁移窗口**：客户端没拿到指纹（env/`--pin`/token 内嵌三处都无）→ 退回明文 HTTP + STDERR 警告（不硬断，照顾旧客户端）。**这不是稳态**——迁移时应尽快分发指纹。`/snapshot` 明文 = 整库凭据裸奔，与 bearer token 嗅探同风险等级。
+- **信任根**：信任来自"enroll 时人工/流程交接的指纹"，不来自任何 CA。serve 重生 key（重装/迁移）→ 用 `serve cert-info` 拿新指纹重新交接。
+
+详见 [multi-machine.md 的自动 TLS 迁移 Runbook](./multi-machine.md#自动-tls-迁移-runbook从旧版明文--外部证书升级) 与设计 spec `docs/superpowers/specs/2026-08-13-serve-auto-tls-fingerprint-design.md`。
+
 ---
 
 ## 2. 适用前提（必须全部成立）
