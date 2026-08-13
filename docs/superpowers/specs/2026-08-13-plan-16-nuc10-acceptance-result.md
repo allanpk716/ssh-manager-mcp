@@ -104,3 +104,20 @@ F1/F2/F3 均不阻塞发版（F1 功能不影响因 Administrators 兜底；F2 �
 ## Phase 5（agent exec）未测
 
 需 project token（serve 跑着时 CLI 拿不到，F2）。可后续测：停 serve → CLI 拿 token → 起回 serve → 笔记本 .mcp.json 配 token → MCP exec_command 在 1660Super01 跑 `hostname`。非发版阻塞（spec §7.2 通过标准已满足）。
+
+---
+
+## 2026-08-13 更新：Phase 5 端到端已测 — 通过
+
+F2 修复后（`5e1ec15`，serve 跑着时 CLI 能读），Phase 5 全自动化完成：
+
+1. **拿 token**：`projects add phase5-e2e --profile e2e-profile`（serve 跑着，CLI 经 F2 fix 读 WAL 成功）→ 拿完整 project token
+2. **MCP handshake**（笔记本 curl NUC10 serve，HTTP Streamable MCP）：`initialize` → `Mcp-Session-Id` → `notifications/initialized`（202）→ `tools/list`（拿到 exec_command / list_servers / download_file / upload_file / forward_port / close_port）
+3. **exec_command**：`tools/call exec_command {server_id: 1660Super01, command: hostname}` → **`exit_code:0, stdout: DESKTOP-UP1MHGT`**
+
+**完整端到端链路打通**：笔记本 → HTTP MCP → NUC10 serve（reboot 后 LocalSystem 自起）→ SSH → 1660Super01 执行。全程 SSH 自动化，用户零手动（含 Phase 4 reboot 用 `shutdown /r` 远程触发 + sleep 等）。
+
+测后清理：`phase5-e2e` project 已 revoke（token 失效，401 确认）；本地 token 残留扫描 clean（误报已排查：grep 管道 exit code 假阳性）。
+
+**§7.3 五个 Phase 全过**（部署 / 迁移 / serve install / reboot / agent exec）。
+
