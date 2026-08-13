@@ -301,6 +301,83 @@ func TestCachePull_PinnedTLS_Succeeds(t *testing.T) {
 	}
 }
 
+// TestCachePull_PinWithHttpURL_HardFails verifies the hard-fail path: when
+// a server pin is set (non-plaintext mode), the URL MUST be https://. If the
+// user passes http:// with a pin, the request would go in cleartext (the
+// TLSClientConfig is never used because http:// doesn't negotiate TLS) —
+// this is a security critical bug, so we hard-fail instead of silently
+// downgrading. (xcheck F8)
+func TestCachePull_PinWithHttpURL_HardFails(t *testing.T) {
+	// Build a self-signed TLS test server (same as TestCachePull_PinnedTLS_Succeeds)
+	// to get a valid SPKI pin, then we'll intentionally use http:// to trigger
+	// the hard-fail.
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := mcpserver.SPKIFingerprint(cert)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes})
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Spin up the TLS server (we won't actually hit it — the hard-fail happens first).
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"servers":[],"credentials":[]}`)
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{tlsCert}}
+	srv.StartTLS()
+	defer srv.Close()
+
+	// Rewrite the URL to http:// (drop the TLS) but keep a valid pin.
+	httpURL := "http://" + strings.TrimPrefix(srv.URL, "https://")
+	withDEK(t)
+	cacheDir := t.TempDir()
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_URL":   httpURL,
+		"SSHMGR_CACHE_TOKEN": "code-123",
+		"SSHMGR_SERVE_PIN":   fp,
+		"SSHMGR_CACHE_DIR":   cacheDir,
+		"SSHMGR_STORE":       filepath.Join(t.TempDir(), "store.db"),
+	})
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"cache", "pull"})
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	err = root.Execute()
+	if err == nil {
+		t.Fatal("expected hard-fail when pin set but URL is http://, got nil")
+	}
+	if !strings.Contains(err.Error(), "https") {
+		t.Fatalf("error should mention https, got: %v", err)
+	}
+}
+
 // TestCachePull_PlaintextFallback_Warns verifies the no-pin branch: when no
 // pin is resolvable (no env / flag / embedded), cache pull falls back to
 // plaintext HTTP and prints a STDERR warning, preserving pre-auto-TLS behavior.

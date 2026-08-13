@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,6 +135,14 @@ func cachePullCmd() *cobra.Command {
 				// If the token is "<code>:<pin>", strip the pin so the header carries just the code.
 				if c, _, ok := stripEmbeddedPin(token); ok {
 					code = c
+				}
+				// pin is set (TLS path): the URL MUST be https://, else the TLSClientConfig
+				// (with the pin) is silently never used — http:// doesn't negotiate TLS, so
+				// the pin would be dead and the request would go in cleartext with no warning.
+				// Hard-fail instead of silently downgrading. (xcheck F8)
+				if u, perr := neturl.Parse(url); perr != nil || u.Scheme != "https" {
+					return fmt.Errorf("--url must be https:// when a server pin is set (got %q); "+
+						"use --allow-plaintext for an explicit plaintext pull", url)
 				}
 				tr, err := pinningTransport(fp)
 				if err != nil {
