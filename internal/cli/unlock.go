@@ -61,6 +61,30 @@ const (
 // the real impl via migrate_windows.go init).
 var firstRunMigrator func(w interface{ Write([]byte) (int, error) }) (mk []byte, outcome firstRunOutcome, err error)
 
+// postGetMigrator, if non-nil, is invoked AFTER keychain.Get() succeeds but
+// BEFORE printMasterKey. It is the hook for the user-scope → machine-scope
+// DPAPI migration (Windows only; nil on Unix — migrate_windows.go's init sets
+// it, Unix has no migrate_windows.go so it stays nil and the hook is a no-op).
+// Unlike firstRunMigrator (which fires on ErrNotFound / no key yet),
+// postGetMigrator fires when a key WAS read — needed because Plan 15 T2's
+// dual-scope Get returns success for a legacy user-scope blob, so
+// firstRunMigrator (ErrNotFound-gated) never sees it (Plan 15 codex #1).
+//
+// mk is the key just read by Get; the migrator may re-protect the on-disk file
+// in place but the key VALUE is unchanged (re-protect preserves the plaintext
+// master key C). The caller always prints the mk it already has.
+//
+// Return values: (migrated bool, err error).
+//   - migrated=true: master.key was re-protected to machine-scope. Caller
+//     proceeds to print mk (unchanged).
+//   - migrated=false, err=nil: nothing to migrate (already machine-scope, no
+//     master.key at the path, user declined, or scope unreadable) — caller
+//     proceeds to print mk.
+//   - err non-nil: hard failure mid-migrate. Caller surfaces it.
+//
+// Overridable by tests; nil on Unix by construction (no migrate_windows.go).
+var postGetMigrator func(w interface{ Write([]byte) (int, error) }, mk []byte) (bool, error)
+
 func newUnlockCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "unlock",
@@ -68,6 +92,19 @@ func newUnlockCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mk, err := keychain.Get()
 			if err == nil {
+				// Plan 15 codex #1: post-Get migration hook. On Windows this
+				// re-protects a legacy user-scope master.key to machine-scope
+				// (needed for boot auto-start via Task Scheduler, which has no
+				// interactive logon → can't read a user-scope blob). Nil on Unix
+				// (no migrate_windows.go → no-op). MUST run BEFORE printMasterKey
+				// so the printed key matches the now-machine-scope file. The mk
+				// VALUE is unchanged by re-protect (only the DPAPI scope changes),
+				// so we print the mk we already hold either way.
+				if postGetMigrator != nil {
+					if _, mErr := postGetMigrator(cmd.ErrOrStderr(), mk); mErr != nil {
+						return mErr
+					}
+				}
 				printMasterKey(cmd, mk)
 				return nil
 			}

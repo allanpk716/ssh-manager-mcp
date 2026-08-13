@@ -121,6 +121,42 @@ func (p DpapiKeyProvider) Delete() error {
 	return err
 }
 
+// MachineUnprotectForMigrate / UserUnprotectForMigrate / UserProtectForMigrate
+// expose scope-specific protect/unprotect for the Plan 15 T3 user-scope →
+// machine-scope migration logic (cli.migrateDpapiScope) + its tests. They are
+// thin wrappers over the unexported dpapiProtect / dpapiUnprotect syscall
+// helpers. NOT part of the KeyProvider interface (Get/Set only) — inspection /
+// migration helpers only.
+//
+// CAUTION (spike 2, TestDpapi_CrossScopeInteroperable): DPAPI's flag is a
+// hint, NOT a hard scope gate; a blob self-describes its scope and BOTH flags
+// can unprotect it. So MachineUnprotectForMigrate succeeding does NOT prove the
+// blob was machine-protected — it succeeds on user-protected blobs too.
+// migrateDpapiScope must not treat "machine unprotect OK" as proof of
+// already-machine-scope; see its doc comment for the actual decision rule.
+func (p DpapiKeyProvider) MachineUnprotectForMigrate(blob []byte) ([]byte, error) {
+	return dpapiUnprotect(blob, true)
+}
+
+// UserUnprotectForMigrate decrypts blob with the user-scope flag.
+func (p DpapiKeyProvider) UserUnprotectForMigrate(blob []byte) ([]byte, error) {
+	return dpapiUnprotect(blob, false)
+}
+
+// UserProtectForMigrate encrypts plain with the user-scope flag. Used by tests
+// to synthesize a legacy user-scope master.key blob.
+func (p DpapiKeyProvider) UserProtectForMigrate(plain []byte) ([]byte, error) {
+	return dpapiProtect(plain, false)
+}
+
+// PathOrEmpty returns the master.key path this provider resolves to (the value
+// of p.path()), or "" on error. Exported for migrateDpapiScope + serve-install
+// precheck to locate master.key without re-deriving the path. Empty path means
+// %AppData% is unset (production default unavailable).
+func (p DpapiKeyProvider) PathOrEmpty() (string, error) {
+	return p.path()
+}
+
 // ensureDirACL creates dir (if absent) and locks its ACL to DirUser only:
 // inheritance off, (OI)(CI) FullControl for the user. icacls runs
 // UNCONDITIONALLY on every Set (not just on dir creation) — it's idempotent,
