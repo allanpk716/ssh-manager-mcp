@@ -247,10 +247,14 @@ func runServeUninstall(cmd *cobra.Command) error {
 func runServeStatus(cmd *cobra.Command) error {
 	out := cmd.OutOrStdout()
 
-	// (a) Task state from schtasks /Query /FO LIST.
-	state, lastResult, qerr := schtasksQuery(serveTaskName)
+	// (a) Task state via Get-ScheduledTask.State (English enum, not localized
+	//     text — FINDING E). The previous schtasks /Query parser scanned for
+	//     "Status:"/"任务状态:" prefixes which break on zh-CN and other non-
+	//     English hosts; Get-ScheduledTask.State returns a PowerShell enum
+	//     value ("Ready"/"Running"/"Disabled") that is NOT localized.
+	state, lastResult, qerr := taskStateViaPowerShell(defaultPsRunner{}, serveTaskName)
 	if qerr != nil {
-		if isSchtasksNotFound(qerr) {
+		if isTaskNotFound(qerr) {
 			fmt.Fprintf(out, "task:      NOT REGISTERED (run 'ssh-manager serve install')\n")
 			return nil
 		}
@@ -529,44 +533,71 @@ func schtasksDelete(taskName string) error {
 	return nil
 }
 
-// schtasksQuery returns (State, LastResult) lines from `schtasks /Query /FO
-// LIST /V` for the task. Returns an error wrapping the not-found case so
-// callers can branch on isSchtasksNotFound.
-func schtasksQuery(taskName string) (state, lastResult string, err error) {
-	out, oerr := exec.Command("schtasks.exe", "/Query", "/TN", taskName, "/FO", "LIST").CombinedOutput()
-	if oerr != nil {
-		return "", "", fmt.Errorf("%w: %s", oerr, out)
+// taskStateViaPowerShell returns (State, LastTaskResult) for the task via the
+// PowerShell object API (FINDING E fix). The previous schtasks /Query parser
+// scanned localized text prefixes ("Status:" on en-US, "任务状态:" on zh-CN,
+// "計劃工作狀態:" on zh-TW, …) which silently broke `serve status` on every
+// non-English host — the State line came back blank and the status command
+// showed "registered (Unknown, last result Unknown)".
+//
+// Get-ScheduledTask.State is a PowerShell enum value (Microsoft.PowerShell.
+// ScheduledTask.ScheduledTaskState) that is ALWAYS one of {Unknown, Disabled,
+// Queued, Ready, Running} regardless of host UI locale — enum .ToString() is
+// not localized the way schtasks /Query's "Status:" label is. Get-
+// ScheduledTaskInfo.LastTaskResult is the integer HRESULT (0 = success,
+// 0x41301 = "currently running", etc.) — also locale-independent.
+//
+// The function takes a psRunner so tests can inject a fake returning a fixed
+// "Ready\n0" stdout without launching powershell.exe (the brief's
+// TestTaskStateViaPowerShell_ParsesEnumState).
+//
+// Error path: Get-ScheduledTask -ErrorAction Stop throws when the task does
+// not exist; the wrapping error includes the runner's combined output so
+// isTaskNotFound can classify it (the runServeStatus caller reports NOT
+// REGISTERED on that branch).
+func taskStateViaPowerShell(r psRunner, taskName string) (state, lastResult string, err error) {
+	// NOTE: this string cannot be a raw string literal (backticks) with taskName
+	// interpolation — Go raw strings are constant, but the concat makes it non-
+	// constant, which the parser rejects inside a function. Use a double-quoted
+	// literal with \n escapes + taskName concat instead. The script body is
+	// static apart from the task name; nothing user-controlled is interpolated
+	// (and taskName is the package const serveTaskName, not user input).
+	ps := "$ErrorActionPreference='Stop'\n" +
+		"$t = Get-ScheduledTask -TaskName '" + taskName + "' -ErrorAction Stop\n" +
+		"$ti = Get-ScheduledTaskInfo -TaskName '" + taskName + "'\n" +
+		"Write-Output $t.State\n" +
+		"Write-Output $ti.LastTaskResult\n"
+	out, err := r.Run(ps, "")
+	if err != nil {
+		return "", "", fmt.Errorf("powershell: %w: %s", err, out)
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "Status:"):
-			state = strings.TrimSpace(strings.TrimPrefix(line, "Status:"))
-		case strings.HasPrefix(line, "任务状态:"): // localized "Status:" on zh-CN hosts
-			state = strings.TrimSpace(strings.TrimPrefix(line, "任务状态:"))
-		case strings.HasPrefix(line, "Schedule:"):
-			// "Schedule:" line varies; ignore.
-		}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) >= 1 {
+		state = strings.TrimSpace(lines[0])
 	}
-	if state == "" {
-		state = "Unknown"
-	}
-	// Last result requires /V (verbose). Query again with /V to get it.
-	vout, verr := exec.Command("schtasks.exe", "/Query", "/TN", taskName, "/FO", "LIST", "/V").CombinedOutput()
-	if verr == nil {
-		for _, line := range strings.Split(string(vout), "\n") {
-			line = strings.TrimSpace(line)
-			for _, prefix := range []string{"Last Result:", "上次结果:"} {
-				if strings.HasPrefix(line, prefix) {
-					lastResult = strings.TrimSpace(strings.TrimPrefix(line, prefix))
-				}
-			}
-		}
-	}
-	if lastResult == "" {
-		lastResult = "Unknown"
+	if len(lines) >= 2 {
+		lastResult = strings.TrimSpace(lines[1])
 	}
 	return state, lastResult, nil
+}
+
+// isTaskNotFound reports whether err came from a Get-ScheduledTask call that
+// threw because the named task does not exist. PowerShell emits the thrown
+// error record on stderr (UTF-8, NOT the OEM code page schtasks uses), so we
+// match English + zh-CN wording directly without OEM decoding. Substring
+// matching is locale-robust enough for the status branch's "NOT REGISTERED"
+// report (no task ever registered vs. transient query error).
+func isTaskNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	low := strings.ToLower(msg)
+	return strings.Contains(low, "cannot find") ||
+		strings.Contains(low, "no scheduled task") ||
+		strings.Contains(low, "was not found") ||
+		strings.Contains(msg, "找不到") || // zh-CN: "cannot find"
+		strings.Contains(msg, "不存在") // zh-CN: "does not exist"
 }
 
 // isSchtasksNotFound reports whether err came from a schtasks call that
@@ -590,19 +621,36 @@ func isSchtasksNotFound(err error) bool {
 
 // --- process + HTTP + log probes (status) --------------------------------
 
-// serveProcessRunning reports whether any ssh-manager.exe process is currently
-// running (best-effort via tasklist).
+// serveProcessRunning reports whether the ssh-manager.exe serve process is
+// currently running (best-effort via tasklist).
+//
+// opencode #7 fix: the previous version did a substring match on
+// "ssh-manager.exe" which FALSE-POSITIVES on any process whose name contains
+// that substring (e.g. "my-ssh-manager.exe", "ssh-manager.exe-helper"). We now
+// match the FIRST CSV field EXACTLY (case-insensitive equal), which is the
+// process image name in tasklist's CSV output.
+//
+// Process-alive is INTENTIONALLY separate from HTTP-alive (probeServeHTTP):
+// the two signals diagnose different failures (a running serve that is NOT
+// listening = serve crashed mid-init or port conflict; a listening port with
+// no process = stale socket / different binary bound the port). Merging them
+// would collapse that diagnostic distinction.
 func serveProcessRunning() bool {
 	out, err := exec.Command("tasklist.exe", "/FI", "IMAGENAME eq ssh-manager.exe", "/FO", "CSV", "/NH").CombinedOutput()
 	if err != nil {
+		// tasklist prints "INFO: No tasks are running ..." (non-zero exit) when
+		// nothing matches; that is the not-running case, not an error.
 		return false
 	}
-	// tasklist prints "INFO: No tasks are running ..." (non-zero exit) when
-	// nothing matches; otherwise CSV rows. Any line containing ssh-manager.exe
-	// with a PID counts.
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(strings.ToLower(line), "ssh-manager.exe") {
-			return true
+		// CSV rows look like: "ssh-manager.exe","1234","Console","1","12,345 K"
+		// The first field is the image name; match it EXACTLY (case-insensitive).
+		fields := strings.Split(line, ",")
+		if len(fields) >= 1 {
+			name := strings.Trim(strings.TrimSpace(fields[0]), `"`)
+			if strings.EqualFold(name, "ssh-manager.exe") {
+				return true
+			}
 		}
 	}
 	return false
@@ -649,14 +697,42 @@ func addrFromRunningOrDefault() string { return "127.0.0.1:7878" }
 //
 // Absent or unreadable log → (true, " (no log yet)") — a not-yet-started task
 // should not be reported as LOCKED.
+//
+// === Stale-log degradation hint (consensus E; heartbeat lands in T7) ===
+//
+// If serve.log's mtime is older than 5 minutes, the log's "no marker" answer
+// is no longer trustworthy: a serve that stalled (deadlocked, OOM-quiet, or
+// crashed after the last heartbeat write) would leave a marker-free stale log
+// that we'd incorrectly report as vault-ok. The 5-minute threshold gives 4x
+// margin over the T7 heartbeat cadence (~1min), so this only fires when serve
+// is ACTUALLY stalled, not merely idle between heartbeats.
+//
+// Stale → return (false, " (log stale >5min; current state unknown)") as a
+// DEGRADATION HINT, NOT a hard negation: the task/process/http three other
+// signals can still drive overall to HEALTHY (a fresh serve that is busy and
+// hasn't written the heartbeat in the last 5min should not be marked LOCKED).
+// The overall-HEALTHY check in runServeStatus treats this (false) as
+// vault-not-ok, which is the intended conservative behavior for a STALLED
+// serve. (Re-evaluate if T7 heartbeat proves the 5min threshold too tight.)
 func vaultUnlockedFromLog() (bool, string) {
 	logPath := serveLogPath()
 	if logPath == "" || logPath == string(filepath.Separator) {
 		return true, " (no %LocalAppData%; cannot read log)"
 	}
-	data, err := os.ReadFile(logPath)
+	info, err := os.Stat(logPath)
 	if err != nil {
 		return true, " (no log yet)"
+	}
+	// Stale check (consensus E): log mtime > 5min → serve heartbeat (T7)
+	// should write every ~1min, so 5min is 4x margin. Stale is a degradation
+	// HINT, not a hard negation (task/process/http three-way can still be
+	// HEALTHY if serve is merely between heartbeats).
+	if time.Since(info.ModTime()) > 5*time.Minute {
+		return false, " (log stale >5min; current state unknown)"
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return true, " (log unreadable)"
 	}
 	tail := tailString(string(data), 8192)
 	// Markers from the two hard-fail sites: resolveMasterKey (vault.go) emits

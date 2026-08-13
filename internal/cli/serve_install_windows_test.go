@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -356,19 +357,118 @@ func TestServeSubcommands_Registered(t *testing.T) {
 	}
 }
 
-// TestServeStatus_OnMissingTask reports "NOT REGISTERED" and returns nil
-// (status is a read command — missing task is a normal state, not an error).
-// We force the not-found path by querying a throwaway task name.
+// TestServeStatus_OnMissingTask pins that taskStateViaPowerShell's error path
+// is classified NOT-FOUND when PowerShell reports the task does not exist
+// (status is a read command — a missing task is a normal state, not an error).
+// The previous version of this test called the real schtasks /Query against a
+// bogus task name; after FINDING E the query path is PowerShell-backed, so we
+// inject a failingPs whose message mirrors Get-ScheduledTask's "cannot find"
+// error text. isTaskNotFound must classify it so runServeStatus prints
+// "NOT REGISTERED" instead of erroring.
 func TestServeStatus_OnMissingTask(t *testing.T) {
-	// Use the underlying schtasks query helper directly against a name that
-	// is vanishingly unlikely to be registered.
-	_, _, err := schtasksQuery("ssh-manager-serve-definitely-not-registered-xyz")
+	r := failingPs{msg: "Get-ScheduledTask: cannot find the scheduled task 'ssh-manager-serve-definitely-not-registered-xyz'"}
+	_, _, err := taskStateViaPowerShell(r, "ssh-manager-serve-definitely-not-registered-xyz")
 	if err == nil {
-		t.Skip("schtasks returned no error for a bogus task name (locale/format quirk); skipping not-found branch assertion")
+		t.Fatal("taskStateViaPowerShell must surface a runner error for a missing task")
 	}
-	if !isSchtasksNotFound(err) {
-		t.Logf("note: schtasks error for missing task was not classified not-found (locale-dependent): %v", err)
+	if !isTaskNotFound(err) {
+		t.Fatalf("isTaskNotFound must classify Get-ScheduledTask's missing-task error as not-found (so status prints NOT REGISTERED, not an error); got: %v", err)
 	}
+}
+
+// --- T6: taskStateViaPowerShell (FINDING E — Get-ScheduledTask enum, not localized text) ---
+
+// fakePs is a value-based psRunner that returns a fixed stdout and no error.
+// Unlike fakePsRunner (pointer-based, captures script+stdin for registerTask
+// wiring assertions), fakePs is for taskStateViaPowerShell tests where we only
+// care about how the function PARSES a given PowerShell stdout (the State enum
+// line + LastTaskResult int line). it ignores script/stdin.
+type fakePs struct {
+	out string
+}
+
+func (f fakePs) Run(script, stdin string) (string, error) {
+	return f.out, nil
+}
+
+// TestTaskStateViaPowerShell_ParsesEnumState 验 status 不依赖本地化文本
+// (FINDING E):用 Get-ScheduledTask.State(英文枚举 Ready/Running/Disabled)
+// + Get-ScheduledTaskInfo.LastTaskResult(整数),不扫 schtasks /Query 的本地化串。
+//
+// Pins:
+//   - FINDING E: the parser must read the State enum (line 1) + LastTaskResult
+//     int (line 2) from Get-ScheduledTask / Get-ScheduledTaskInfo output. The
+//     State enum is English ("Ready"/"Running"/"Disabled") regardless of host
+//     locale (PowerShell enum values are NOT localized the way schtasks /Query
+//     "Status:"/"任务状态:" text is).
+//   - Testability: taskStateViaPowerShell takes a psRunner so a fake can stand
+//     in for powershell.exe (no real Task Scheduler needed in CI).
+func TestTaskStateViaPowerShell_ParsesEnumState(t *testing.T) {
+	// fake psRunner returns "Ready\n0" (State=Ready, LastTaskResult=0).
+	st, lr, err := taskStateViaPowerShell(fakePs{out: "Ready\n0"}, serveTaskName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st != "Ready" {
+		t.Errorf("state: got %q want Ready", st)
+	}
+	if lr != "0" {
+		t.Errorf("lastResult: got %q want 0", lr)
+	}
+}
+
+// TestTaskStateViaPowerShell_RunningState pins that the parser handles the
+// "Running" enum (a serve task that is currently executing) — regression guard
+// against the parser only matching "Ready".
+func TestTaskStateViaPowerShell_RunningState(t *testing.T) {
+	st, lr, err := taskStateViaPowerShell(fakePs{out: "Running\n267011"}, serveTaskName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st != "Running" {
+		t.Errorf("state: got %q want Running", st)
+	}
+	// 267011 = 0x41301 (Task Scheduler "task is currently running" HRESULT);
+	// the parser passes the integer through verbatim (no interpretation).
+	if lr != "267011" {
+		t.Errorf("lastResult: got %q want 267011", lr)
+	}
+}
+
+// TestTaskStateViaPowerShell_EmptyOutput pins the degenerate case: empty
+// PowerShell output (shouldn't happen in production, but the parser must not
+// panic). Returns empty strings, no error.
+func TestTaskStateViaPowerShell_EmptyOutput(t *testing.T) {
+	st, lr, err := taskStateViaPowerShell(fakePs{out: ""}, serveTaskName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st != "" || lr != "" {
+		t.Errorf("empty output: got state=%q lastResult=%q, want both empty", st, lr)
+	}
+}
+
+// TestTaskStateViaPowerShell_PropagatesError pins that a PowerShell runner
+// error (e.g. Get-ScheduledTask -ErrorAction Stop throwing because the task
+// does not exist) is wrapped + returned, AND the combined output is included
+// so isSchtasksNotFound can still classify it downstream.
+func TestTaskStateViaPowerShell_PropagatesError(t *testing.T) {
+	r := failingPs{msg: "cannot find the scheduled task"}
+	_, _, err := taskStateViaPowerShell(r, serveTaskName)
+	if err == nil {
+		t.Fatal("taskStateViaPowerShell must surface a runner error")
+	}
+	if !strings.Contains(err.Error(), "cannot find") {
+		t.Errorf("error must include the runner output for downstream not-found classification; got: %v", err)
+	}
+}
+
+// failingPs is a psRunner that always errors with a fixed message (used to
+// exercise taskStateViaPowerShell's error-wrapping path).
+type failingPs struct{ msg string }
+
+func (f failingPs) Run(script, stdin string) (string, error) {
+	return f.msg, errors.New("powershell exit non-zero")
 }
 
 // --- GATED integration test (manual / real-machine) ---------------------
@@ -410,16 +510,17 @@ func TestServeInstall_Gated(t *testing.T) {
 		t.Fatalf("registerTask: %v", err)
 	}
 
-	// 3. schtasks /Query shows the task exists.
-	if _, _, err := schtasksQuery(serveTaskName); err != nil {
-		t.Fatalf("schtasks /Query after install: %v", err)
+	// 3. Get-ScheduledTask confirms the task exists (FINDING E: query path is
+	//    now PowerShell-backed, not schtasks /Query).
+	if _, _, err := taskStateViaPowerShell(defaultPsRunner{}, serveTaskName); err != nil {
+		t.Fatalf("taskStateViaPowerShell after install: %v", err)
 	}
 
 	// 4. uninstall cleans it up.
 	if err := schtasksDelete(serveTaskName); err != nil {
 		t.Fatalf("schtasks /Delete after install: %v", err)
 	}
-	if _, _, err := schtasksQuery(serveTaskName); err == nil || !isSchtasksNotFound(err) {
+	if _, _, err := taskStateViaPowerShell(defaultPsRunner{}, serveTaskName); err == nil || !isTaskNotFound(err) {
 		t.Fatalf("task still queryable after uninstall (err=%v)", err)
 	}
 }
