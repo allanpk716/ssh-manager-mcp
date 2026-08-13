@@ -155,13 +155,35 @@ jobs:
           }
           # Create the user. /add creates; /passwordreq:no avoids a forced change.
           net user sshmgrci $pw /add /passwordreq:no /expires:never /y
-          # Grant SeBatchLogonRight via secedit (pi #1). Export current policy,
-          # replace the SeBatchLogonRight line so sshmgrci owns it, re-import.
+          Write-Output "net user exit=$LASTEXITCODE"
+
+          # Grant SeBatchLogonRight via secedit (pi #1). DIAGNOSTIC version: the
+          # earlier CI run aborted somewhere in this block under ErrorActionPreference=
+          # Stop without telling us which step. Capture each native exe's exit code +
+          # verify the exported cfg actually has the SeBatchLogonRight line, so the log
+          # shows the real root cause. Native exes' non-zero doesn't trip Stop by
+          # default; we check $LASTEXITCODE explicitly and continue to gather all
+          # diagnostics, then decide.
           $cfg = Join-Path $env:RUNNER_TEMP 'secpol.cfg'
           $db  = Join-Path $env:RUNNER_TEMP 'secpol.sdb'
+          Write-Output "--- secedit /export ---"
           secedit /export /cfg $cfg /quiet
-          (Get-Content $cfg) -replace '^SeBatchLogonRight = .*', "SeBatchLogonRight = *sshmgrci" | Set-Content $cfg
-          secedit /configure /db $db /cfg $cfg /quiet
+          Write-Output "export exit=$LASTEXITCODE; cfg exists=$(Test-Path $cfg)"
+          if (Test-Path $cfg) {
+            $cfgSize = (Get-Item $cfg).Length
+            Write-Output "cfg size=$cfgSize"
+            $sebLine = Select-String -Path $cfg -Pattern '^SeBatchLogonRight' -SimpleMatch
+            Write-Output "SeBatchLogonRight line in export: $(if ($sebLine) { $sebLine.Line } else { '<ABSENT>' })"
+          }
+          if (Test-Path $cfg) {
+            (Get-Content $cfg) -replace '^SeBatchLogonRight = .*', "SeBatchLogonRight = *sshmgrci" | Set-Content $cfg
+            Write-Output "replace+Set-Content exit=$LASTEXITCODE"
+            Write-Output "--- secedit /configure ---"
+            secedit /configure /db $db /cfg $cfg /quiet
+            Write-Output "configure exit=$LASTEXITCODE"
+          } else {
+            Write-Output "::warning::secedit /export produced no cfg file on this runner image; skipping SeBatchLogonRight grant (Register-ScheduledTask may or may not need it)."
+          }
           Write-Output "secret_present=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       # Run the gated integration test. SSHMGR_SERVE_INSTALL=1 OPENS the gate
