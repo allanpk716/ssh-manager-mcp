@@ -51,8 +51,8 @@ func seedFileVault(t *testing.T, storePath, mkPath string, n int) []byte {
 			t.Fatalf("SetCredential %d: %v", i, err)
 		}
 		if _, err := st.AddServer(&models.Server{
-			Name:         "srv-" + string(rune('A'+i)),
-			Host:         "h", Port: 22, User: "u",
+			Name: "srv-" + string(rune('A'+i)),
+			Host: "h", Port: 22, User: "u",
 			AuthMethod:   models.AuthPassword,
 			CredentialID: cid,
 		}); err != nil {
@@ -146,7 +146,7 @@ func TestMigratePath_UnreadableBackend_Errors(t *testing.T) {
 	// seed store.db (so the vault IS detectable) but make master.key a directory
 	// — simulating a non-file backend (DPAPI blob / keyring entry) that migrate-path
 	// cannot and must not try to read.
-	seedFileVault(t, oldStore, oldMK+"-real", 3) // key written to a DIFFERENT name
+	seedFileVault(t, oldStore, oldMK+"-real", 3)   // key written to a DIFFERENT name
 	if err := os.Mkdir(oldMK, 0o700); err != nil { // oldMK is a directory → unreadable
 		t.Fatalf("mkdir fake mk: %v", err)
 	}

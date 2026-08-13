@@ -55,10 +55,10 @@ func storePath() (string, error) {
 //
 //  1. Injected kp (non-nil): kp.Get() decides.
 //     - Success → returned verbatim (priority 1). This is the production path:
-//       OpenStore's caller passes store.FileKeyProvider{}, which reads the
-//       fixed-path master.key.
+//     OpenStore's caller passes store.FileKeyProvider{}, which reads the
+//     fixed-path master.key.
 //     - ErrNotFound → fall through to tier 2 (legitimate: no key yet, or the
-//       injected provider is a test fake that wants the env/file tier).
+//     injected provider is a test fake that wants the env/file tier).
 //     - ANY OTHER error (e.g. DPAPI decrypt failure on a corrupt blob, FS
 //     permission error) → HARD FAIL. Never silent-fall-through to env or
 //     plaintext FileKeyProvider — that would let a corrupted master.key go
