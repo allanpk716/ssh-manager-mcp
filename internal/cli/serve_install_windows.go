@@ -399,6 +399,7 @@ func registerTask(r psRunner, in taskInputs, password string) error {
 $lines = [string]::Join("` + "\n" + `", $input)
 $p = $lines -split "` + "`n" + `"
 $exe=$p[0]; $addr=$p[1]; $user=$p[2]; $logPath=$p[3]; $logDir=$p[4]; $tlsCert=$p[5]; $tlsKey=$p[6]; $password=$p[7]
+Write-Output "DEBUG input-count=$($input.Count) p-count=$($p.Count) user=[$user] addr=[$addr]"
 $tlsArg = ''
 if ($tlsCert -ne '' -and $tlsKey -ne '') { $tlsArg = ' --tls-cert "' + $tlsCert + '" --tls-key "' + $tlsKey + '"' }
 $actionArg = '/C if not exist "' + $logDir + '" mkdir "' + $logDir + '" & "' + $exe + '" serve --addr "' + $addr + '"' + $tlsArg + ' >> "' + $logPath + '" 2>&1'
