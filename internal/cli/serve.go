@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -71,9 +70,12 @@ directly in the foreground.`,
 			}
 			defer st.Close()
 
-			if tlsCert == "" && !isLoopback(addr) {
-				fmt.Fprintln(os.Stderr, "WARNING: serving plaintext HTTP on a non-loopback address — the bearer token is sniffable. Use --tls-cert/--tls-key.")
-			}
+			// Post-auto-TLS: RunServe ALWAYS serves TLS. With no --tls-cert it
+			// generates a self-signed cert on first start; with --tls-cert it
+			// uses the operator's cert. Either way the bearer token is on TLS,
+			// so the old "plaintext on non-loopback" warning no longer applies.
+			// (The only plaintext surface left is if a client explicitly omits
+			// the server pin — that is a cache-pull client concern, warned there.)
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
@@ -83,8 +85,8 @@ directly in the foreground.`,
 		},
 	}
 	c.Flags().StringVar(&addr, "addr", "127.0.0.1:7878", "listen address (use 0.0.0.0:port or a VLAN IP for remote agents)")
-	c.Flags().StringVar(&tlsCert, "tls-cert", "", "path to TLS cert (enables HTTPS)")
-	c.Flags().StringVar(&tlsKey, "tls-key", "", "path to TLS key")
+	c.Flags().StringVar(&tlsCert, "tls-cert", "", "path to a TLS cert (optional; if omitted, a self-signed cert is auto-generated on first start)")
+	c.Flags().StringVar(&tlsKey, "tls-key", "", "path to a TLS key (required only when --tls-cert is set)")
 
 	// Subcommands (install/uninstall/status) wrap the foreground RunE above as
 	// a managed background service via github.com/kardianos/service (Windows
@@ -154,14 +156,4 @@ func runServeAsService(addr, tlsCert, tlsKey string) error {
 	// svc.Run blocks until Stop. The returned error (if any) is the start/stop
 	// error surfaced by the program's Start/Stop callbacks.
 	return s.Run()
-}
-
-// isLoopback reports whether addr's host part is loopback (best-effort parse).
-// Used to suppress the cleartext warning when serving on loopback only.
-func isLoopback(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	return host == "127.0.0.1" || host == "localhost" || host == "::1"
 }

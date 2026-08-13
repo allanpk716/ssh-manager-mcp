@@ -134,9 +134,8 @@ func (p *program) run(ctx context.Context) {
 		return
 	}
 	defer st.Close()
-	if p.tlsCert == "" && !isLoopback(p.addr) {
-		fmt.Fprintln(os.Stderr, "WARNING: serving plaintext HTTP on a non-loopback address — the bearer token is sniffable. Use --tls-cert/--tls-key.")
-	}
+	// Post-auto-TLS: RunServe always serves TLS (self-signed when p.tlsCert is
+	// empty), so the old "plaintext on non-loopback" warning no longer applies.
 	if err := mcpserver.RunServe(ctx, st, p.addr, p.tlsCert, p.tlsKey); err != nil {
 		fmt.Fprintf(os.Stderr, "ssh-manager serve (service): %v\n", err)
 	}
