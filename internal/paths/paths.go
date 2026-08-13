@@ -17,6 +17,13 @@ const StoreFilename = "store.db"
 // ServeLogFilename is the serve process log.
 const ServeLogFilename = "serve.log"
 
+// ServeCertFilename / ServeKeyFilename are the self-signed serve TLS cert + key
+// (auto-generated on first `serve` start when no --tls-cert is given).
+const (
+	ServeCertFilename = "serve-cert.pem"
+	ServeKeyFilename  = "serve-key.pem"
+)
+
 // VaultDir returns the program-fixed vault directory (env override via
 // SSHMGR_STORE / SSHMGR_FILEKEY_PATH is handled per-file, not here).
 // See spec §3.1. Platform root from vaultRoot() (paths_windows.go / paths_unix.go).
@@ -68,4 +75,28 @@ func ServeLogPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, ServeLogFilename), nil
+}
+
+// ServeCertPath returns the auto-generated serve TLS cert path. SSHMGR_SERVE_CERT overrides (test).
+func ServeCertPath() (string, error) {
+	if v := os.Getenv("SSHMGR_SERVE_CERT"); v != "" {
+		return v, nil
+	}
+	dir, err := VaultDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, ServeCertFilename), nil
+}
+
+// ServeKeyPath returns the auto-generated serve TLS private key path. SSHMGR_SERVE_KEY overrides (test).
+func ServeKeyPath() (string, error) {
+	if v := os.Getenv("SSHMGR_SERVE_KEY"); v != "" {
+		return v, nil
+	}
+	dir, err := VaultDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, ServeKeyFilename), nil
 }
