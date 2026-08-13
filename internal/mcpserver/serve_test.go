@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -219,4 +221,51 @@ func TestRunServe_ShutdownOnCancel(t *testing.T) {
 // test without starting a full serve process).
 func TestRunServe_HeartbeatWritesLog(t *testing.T) {
 	t.Skip("heartbeat verification in T8 CI integration test (unit test cannot drive a real serve's stderr)")
+}
+
+// TestRunServe_AutoTLSCreatesCert proves RunServe forces TLS even when no
+// explicit cert/key are supplied: with tlsCert="" + tlsKey="", RunServe must
+// auto-generate a self-signed cert at SSHMGR_SERVE_CERT/SSHMGR_SERVE_KEY (via
+// LoadOrCreateServeCert) and ServeTLS with it. The cert+key files must appear
+// on disk. It must NEVER silently downgrade to plaintext.
+//
+// The fingerprint returned by LoadOrCreateServeCert is covered by cert_test.go
+// (TestLoadOrCreateServeCert); here we assert only the serve-integration
+// contract: RunServe with empty tlsCert materializes cert files.
+func TestRunServe_AutoTLSCreatesCert(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "serve-cert.pem")
+	keyPath := filepath.Join(dir, "serve-key.pem")
+	t.Setenv("SSHMGR_SERVE_CERT", certPath)
+	t.Setenv("SSHMGR_SERVE_KEY", keyPath)
+
+	st := newTestStore(t)
+	defer st.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Run in goroutine; cancel after a moment to let bind + cert-gen run.
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- RunServe(ctx, st, "127.0.0.1:0", "", "") // empty cert/key → auto-TLS path
+	}()
+
+	// Give it a moment to bind + generate, then cancel.
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunServe did not return after cancel")
+	}
+
+	// Cert files MUST exist — this is the load-bearing assertion: RunServe
+	// generated them via LoadOrCreateServeCert instead of falling back to plaintext.
+	if _, err := os.Stat(certPath); err != nil {
+		t.Fatalf("cert not auto-generated at %s: %v", certPath, err)
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Fatalf("key not auto-generated at %s: %v", keyPath, err)
+	}
 }
