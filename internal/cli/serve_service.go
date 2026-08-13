@@ -249,14 +249,23 @@ only when all four pass.`,
 func runServeInstall(cmd *cobra.Command, addr, tlsCert, tlsKey string) error {
 	out := cmd.OutOrStdout()
 
-	// 1. Precheck: master.key must exist + decrypt. The service host (often
-	//    LocalSystem / root) needs to read it; if it's missing or corrupt the
-	//    service will crash-loop at boot.
-	if _, err := (store.FileKeyProvider{}).Get(); err != nil {
+	// 1. Precheck: master.key must exist + be structurally usable. The service
+	//    host (often LocalSystem / root) needs to read it; if it's missing or
+	//    corrupt the service will crash-loop at boot — the worst time to find
+	//    out. Get() alone returns nil error for ANY readable file (including
+	//    zero-byte / truncated / wrong-length), so we additionally validate the
+	//    length via store.ValidMasterKeyLen — exactly the failure mode
+	//    vaultStatusString (below) catches on the same key. A bad key here =
+	//    a crash-looping service at next boot.
+	mk, err := (store.FileKeyProvider{}).Get()
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return fmt.Errorf("master key not found: run 'ssh-manager unlock' in an interactive session first (see docs/backup-restore.md)")
 		}
 		return fmt.Errorf("master key present but undecryptable: %w (if admin-reset password, restore from backup or re-init vault)", err)
+	}
+	if !store.ValidMasterKeyLen(mk) {
+		return fmt.Errorf("master key is %d bytes, expected 32 — corrupt or wrong file; run `ssh-manager unlock` to regenerate, or restore from backup", len(mk))
 	}
 
 	// 2. Resolve the binary the service will run. os.Executable returns the

@@ -83,6 +83,25 @@ func Open(path string, masterKey []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// HardenACL on the store.db FILE (Plan 16 final review, spec §5.2 xcheck
+	// codex P6): master.key + cache-dek.key are ACL-locked by their providers,
+	// but store.db was created here with the creating token's default DACL —
+	// on Windows that means Users / Authenticated Users have read access to a
+	// file containing plaintext server metadata (host/user/name/tags/description)
+	// + audit logs, which spec §6.1 claims is prevented. HardenACL uses
+	// NO_INHERITANCE so the fresh file does NOT pick up the hardened parent
+	// dir's restrictive DACL — we must explicitly re-ACL it here. Hard-fail on
+	// error: the ACL is the only protection layer for this plaintext metadata
+	// (same rationale as master.key); silent failure leaves it world-readable.
+	// NOTE: the *sql.DB handle above was opened BEFORE this ACL change — on
+	// Windows changing a file's DACL does NOT invalidate an existing open
+	// handle (the handle's access was granted at open time; DACL gates only
+	// future opens), so the just-opened handle remains usable. HardenACL is a
+	// no-op on non-Windows (file mode bits are the protection there).
+	if err := HardenACL(path); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("harden ACL on store %q: %w", path, err)
+	}
 	mk := make([]byte, len(masterKey))
 	copy(mk, masterKey)
 	return &Store{db: db, masterKey: mk}, nil

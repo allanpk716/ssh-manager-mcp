@@ -134,6 +134,75 @@ func TestFileKeyProvider_SetHardensACLOnWindows(t *testing.T) {
 	t.Logf("post-Set SDDL: %s", sd.String())
 }
 
+// TestOpen_HardensStoreDBACL is the integration guard that store.Open ACL-
+// hardens the store.db FILE it creates (spec §5.2 xcheck codex P6: "master.key
+// + store.db + cache-dek.key 同 ACL"). store.db holds plaintext server metadata
+// (host/user/name/tags/description) + audit logs; without HardenACL the fresh
+// file inherits the creating token's default DACL (Users / Authenticated Users
+// read on Windows), contradicting spec §6.1's "same-machine non-privileged
+// processes cannot read". A future refactor that drops the HardenACL call
+// from Open fails here, not in production.
+//
+// The test reads back the REAL on-disk DACL of the store.db that Open created
+// (NOT a mock) and asserts the same shape HardenACL produces elsewhere:
+// inheritance disabled + broad groups absent.
+func TestOpen_HardensStoreDBACL(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "store.db")
+	mk := make([]byte, 32)
+	for i := range mk {
+		mk[i] = byte(i)
+	}
+	st, err := Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	// store.db (and its -wal/-shm sidecars) must exist on disk by now.
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("store.db not created: %v", err)
+	}
+
+	dacl, sd, err := getDACLForTest(dbPath)
+	if err != nil {
+		t.Fatalf("read DACL on store.db: %v", err)
+	}
+
+	// 1. Inheritance MUST be disabled — else the inherited Authenticated
+	//    Users:read ACE from the temp/vault dir still applies.
+	if !isDaclProtected(sd) {
+		t.Error("store.db DACL not protected (inheritance enabled) — plaintext metadata world-readable to same-machine users")
+	}
+
+	// 2. No broad groups (spec §5.2 names exactly these principals).
+	authUsersSID := mustWellKnownSID(t, windows.WinAuthenticatedUserSid, "Authenticated Users")
+	builtinUsersSID := mustWellKnownSID(t, windows.WinBuiltinUsersSid, "BUILTIN\\Users")
+	worldSID := mustWellKnownSID(t, windows.WinWorldSid, "Everyone")
+	for _, banned := range []*windows.SID{authUsersSID, builtinUsersSID, worldSID} {
+		if trusteeInACL(dacl, banned) {
+			t.Errorf("store.db DACL still contains banned trustee — ACL not hardened by Open")
+		}
+	}
+
+	// 3. The *sql.DB handle must still be usable AFTER the ACL change (Open
+	//    opened the handle before HardenACL ran; on Windows a DACL change does
+	//    not invalidate an existing handle — prove it by running a DML round-
+	//    trip against audit_log, a table with no FK so a bare INSERT succeeds).
+	if _, err := st.db.Exec(`INSERT INTO audit_log(ts,action) VALUES(0,'acl-probe')`); err != nil {
+		t.Fatalf("write after HardenACL failed (handle invalidated?): %v", err)
+	}
+	var n int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM audit_log`).Scan(&n); err != nil {
+		t.Fatalf("read after HardenACL failed (handle invalidated?): %v", err)
+	}
+	if n < 1 {
+		t.Fatalf("read after HardenACL returned %d rows, expected >=1", n)
+	}
+
+	t.Logf("post-Open store.db SDDL: %s", sd.String())
+}
+
 // mustWellKnownSID builds a well-known SID, fataling on error (these are
 // constant enums — failure means the x/sys/windows version doesn't know that
 // SID type, which is a compile-time/version problem, not a runtime condition).

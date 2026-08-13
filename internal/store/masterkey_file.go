@@ -10,13 +10,24 @@ import (
 	"ssh-manager-mcp/internal/paths"
 )
 
-// FileKeyProvider stores the master key as a plaintext file (0600 on Unix;
-// on Windows the FILE itself is ACL-locked by HardenACL after every Set —
-// SYSTEM+Admins+current user, inheritance disabled, broad groups removed;
-// see HardenACL / spec §5.2). Weaker than DPAPI/keychain; intended ONLY for
-// environments with neither (CI / containers / headless Linux without
-// secret-service). Windows production uses DpapiKeyProvider; this is the
-// last-resort fallback in resolveMasterKey.
+// FileKeyProvider stores the master key as a plaintext file (master.key.plain).
+// It is the SOLE production master-key backend on ALL platforms under Plan 16
+// (L1+ threat model — single-user / trusted-machine premise; see
+// docs/threat-model.md §1-2). DPAPI / keyring were deleted in Plan 16; there
+// is no longer a DpapiKeyProvider or a fallback chain in resolveMasterKey.
+//
+// Protection is by OS file permissions only:
+//   - Unix: 0600 on the file, 0700 on the parent dir (set by Set).
+//   - Windows: after every Set the FILE is re-ACL'd by HardenACL (SYSTEM +
+//     Administrators + current user; inheritance DISABLED so the broad ACEs
+//     inherited from C:\ProgramData\ do not carry; BUILTIN\Users /
+//     Authenticated Users / Everyone removed — see HardenACL / spec §5.2).
+//
+// Under L1+ this file is plaintext, so the ACL / mode bits are the ONLY
+// protection layer against same-machine non-privileged processes. It does NOT
+// protect against admin/root or offline-disk access (R1/R2 in the threat
+// model) — that is the accepted Plan 16 trade for boot-startable,
+// cross-platform-identical serve.
 type FileKeyProvider struct {
 	Path string // empty → program-fixed paths.MasterKeyPath() (spec §3.1)
 }
