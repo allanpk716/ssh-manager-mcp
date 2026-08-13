@@ -556,6 +556,31 @@ func TestCachePull_PinMismatch_Fails(t *testing.T) {
 	}
 }
 
+// TestPinningTransport_NoPeerCert_HardFails verifies the F12 branch: when
+// the server presents no peer certificates (anonymous TLS or no-cert
+// handshake), the VerifyConnection callback must hard-fail with a
+// "no certificate" error. This is a unit test that directly invokes
+// the callback with an empty ConnectionState.
+func TestPinningTransport_NoPeerCert_HardFails(t *testing.T) {
+	fp := "sha256:" + strings.Repeat("a", 64)
+	tr, err := pinningTransport(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb := tr.TLSClientConfig.VerifyConnection
+	if cb == nil {
+		t.Fatal("no VerifyConnection callback")
+	}
+	// Empty peer certs (anonymous / no-cert server).
+	err = cb(tls.ConnectionState{PeerCertificates: nil})
+	if err == nil {
+		t.Fatal("expected error when server presents no certificate")
+	}
+	if !strings.Contains(err.Error(), "no certificate") {
+		t.Fatalf("error should mention no certificate, got: %v", err)
+	}
+}
+
 // standUpServeTLS spins a TLS httptest.Server with a fresh self-signed
 // ed25519 cert (same shape as TestCachePull_PinnedTLS_Succeeds's server) and
 // returns its URL. Used by the pin-mismatch test, which only needs the server
