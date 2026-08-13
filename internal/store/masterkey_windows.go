@@ -112,12 +112,18 @@ func (p DpapiKeyProvider) Set(mk []byte) error {
 	}
 	// Plan 15 T4: stamp the machine-scope sentinel sidecar. spike 2 proved DPAPI
 	// blobs are cross-scope decryptable, so the only sound signal that this blob
-	// was protected with the machine flag is a sidecar file. serve install's
-	// precheck (verifyMachineScopeForBoot) reads this sentinel to refuse boot-
-	// task installation against a legacy user-scope blob (which would crash-loop
-	// at boot = FINDING B). Written AFTER the atomic rename so a crash mid-Set
-	// leaves no sentinel pointing at a missing/old blob; a Set that fails before
-	// rename leaves neither blob nor sentinel.
+	// was protected with the machine flag is a sidecar file. The serve-install
+	// precheck (Plan 15's verifyMachineScopeForBoot) read this sentinel to refuse
+	// boot-task installation against a legacy user-scope blob (which would crash-
+	// loop at boot = FINDING B). Plan 16 T7 dropped that precheck when serve-
+	// install moved to kardianos (the service runs as LocalSystem; the master.key
+	// is now a plaintext FileKeyProvider file, so there's no user-vs-machine DPAPI
+	// scope question). DpapiKeyProvider itself is also dead in the Plan 16
+	// production path (vault.OpenStore passes FileKeyProvider{}); the sentinel
+	// write is retained only so existing DpapiKeyProvider users (tests) don't
+	// regress. Written AFTER the atomic rename so a crash mid-Set leaves no
+	// sentinel pointing at a missing/old blob; a Set that fails before rename
+	// leaves neither blob nor sentinel.
 	return writeMachineScopeSentinel(path)
 }
 

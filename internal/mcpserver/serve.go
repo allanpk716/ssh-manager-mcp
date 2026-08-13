@@ -224,9 +224,12 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	// (the early return above) never prints a misleading "listening" line.
 	fmt.Fprintf(os.Stderr, "ssh-manager serve: listening on %s (tls=%v)\n", addr, tlsCert != "")
 
-	// Start heartbeat goroutine to keep serve.log fresh so vaultUnlockedFromLog's
-	// staleness check (5min) doesn't false-flag a healthy-but-idle serve as "unknown".
-	// Writes to stderr, which the Task Schedule redirects to serve.log on Windows.
+	// Start heartbeat goroutine to keep the serve log fresh. Plan 16 T7 dropped
+	// the old serve.log marker-scan (vaultUnlockedFromLog was Windows-specific
+	// and does not generalize across kardianos's per-platform log sinks). The
+	// heartbeat remains useful: it gives any platform's log sink (Windows EventLog,
+	// systemd journald, launchd syslog) a periodic liveness marker so an operator
+	// inspecting logs can distinguish a hung serve from a merely idle one.
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()

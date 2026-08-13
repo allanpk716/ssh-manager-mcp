@@ -4,10 +4,12 @@ go 1.24.11
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/kardianos/service v1.3.0
 	github.com/modelcontextprotocol/go-sdk v1.2.0
 	github.com/pkg/sftp v1.13.10
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.41.0
+	golang.org/x/sys v0.35.0
 	golang.org/x/term v0.34.0
 	modernc.org/sqlite v1.33.1
 )
@@ -26,7 +28,6 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.15.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
 	modernc.org/libc v1.55.3 // indirect
 	modernc.org/mathutil v1.6.0 // indirect

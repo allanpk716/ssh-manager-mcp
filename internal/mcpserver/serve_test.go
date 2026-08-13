@@ -209,11 +209,14 @@ func TestRunServe_ShutdownOnCancel(t *testing.T) {
 	}
 }
 
-// TestRunServe_HeartbeatWritesLog verifies that serve periodically writes a heartbeat
-// to serve.log so vaultUnlockedFromLog's staleness check (5min) doesn't false-flag a
-// healthy-but-idle serve as "unknown". Heartbeat is a runtime behavior; this test is
-// skipped in favor of T8 CI integration verification (hard to test a real serve's log
-// writes in a unit test without starting a full serve process).
+// TestRunServe_HeartbeatWritesLog verifies that serve periodically writes a
+// heartbeat to its log sink (stderr, captured by each platform's service
+// manager — Windows EventLog / systemd journald / launchd syslog). Plan 16 T7
+// dropped the serve.log marker-scan (vaultUnlockedFromLog was Windows-only);
+// the heartbeat is now a liveness marker for operators inspecting logs.
+// Heartbeat is a runtime behavior; this test is skipped in favor of CI
+// integration verification (hard to test a real serve's log writes in a unit
+// test without starting a full serve process).
 func TestRunServe_HeartbeatWritesLog(t *testing.T) {
 	t.Skip("heartbeat verification in T8 CI integration test (unit test cannot drive a real serve's stderr)")
 }
