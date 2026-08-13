@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,10 +10,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
 )
@@ -206,4 +210,67 @@ func cacheStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// resolvePin resolves the server SPKI fingerprint by priority:
+// env (SSHMGR_SERVE_PIN) > --pin flag > token-embedded "<code>:<pin>".
+// Returns plain=true when no pin is available (caller falls back to plaintext
+// HTTP, matching pre-auto-TLS behavior — never hard-fail a configured client).
+//
+// The embedded-pin split uses the FIRST colon, not the last: the pin itself is
+// "sha256:<hex>" and contains a colon, so LastIndex would split inside the pin
+// and yield a bare "<hex>" that ParsePin rejects. The device code is specified
+// to contain no colon, so first-colon split is unambiguous.
+func resolvePin(envVal, flagVal, token string) (fp string, plain bool) {
+	if v, ok := mcpserver.ParsePin(strings.TrimSpace(envVal)); ok {
+		return v, false
+	}
+	if v, ok := mcpserver.ParsePin(strings.TrimSpace(flagVal)); ok {
+		return v, false
+	}
+	// token-embedded: "<code>:sha256:..."
+	if i := strings.Index(token, ":"); i >= 0 {
+		if v, ok := mcpserver.ParsePin(token[i+1:]); ok {
+			return v, false
+		}
+	}
+	return "", true
+}
+
+// pinningTransport builds an http.Transport whose TLS handshake is pinned to fp:
+// the server leaf cert's SPKI fingerprint MUST equal fp or the handshake fails.
+// Uses VerifyConnection (NOT InsecureSkipVerify) so the standard library's
+// name-check + chain validation stays intact — only the SPKI pin is added.
+func pinningTransport(fp string) (*http.Transport, error) {
+	want, ok := mcpserver.ParsePin(fp)
+	if !ok {
+		return nil, fmt.Errorf("invalid server pin format %q (want sha256:<64hex>)", fp)
+	}
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("server presented no certificate")
+			}
+			got := mcpserver.SPKIFingerprint(cs.PeerCertificates[0])
+			if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+				return fmt.Errorf("server fingerprint mismatch (expected %s, got %s)", want, got)
+			}
+			return nil
+		},
+	}
+	return &http.Transport{TLSClientConfig: tlsCfg}, nil
+}
+
+// stripEmbeddedPin splits "<code>:<pin>" into (code, pin, ok). When the token
+// has no valid embedded pin, returns the token unchanged with ok=false so the
+// full token goes to the Authorization header as the device code. Uses the
+// FIRST colon for the split (the pin "sha256:<hex>" contains its own colon).
+func stripEmbeddedPin(token string) (code string, pin string, ok bool) {
+	if i := strings.Index(token, ":"); i >= 0 {
+		if v, parsed := mcpserver.ParsePin(token[i+1:]); parsed {
+			return token[:i], v, true
+		}
+	}
+	return token, "", false
 }

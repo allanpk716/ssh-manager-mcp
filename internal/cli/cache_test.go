@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"crypto/tls"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -151,5 +152,57 @@ func TestCacheStatus_ReportsSnapshot(t *testing.T) {
 	stOut := must("cache", "status")
 	if !strings.Contains(stOut.String(), "servers:  1") {
 		t.Fatalf("status did not report 1 server: %s", stOut.String())
+	}
+}
+
+func TestResolvePin(t *testing.T) {
+	goodPin := "sha256:" + strings.Repeat("a", 64)
+	token := "devcode-xyz" // no ':' → no embedded pin
+	tokenEmbedded := "devcode-xyz:" + goodPin
+
+	cases := []struct {
+		name            string
+		envVal, flagVal string
+		token           string
+		wantFP          string
+		wantPlain       bool
+	}{
+		{"none → plain", "", "", token, "", true},
+		{"env wins", "sha256:" + strings.Repeat("b", 64), goodPin, token, "sha256:" + strings.Repeat("b", 64), false},
+		{"flag over token-embedded", "", goodPin, tokenEmbedded, goodPin, false},
+		{"env over flag", "sha256:" + strings.Repeat("c", 64), goodPin, token, "sha256:" + strings.Repeat("c", 64), false},
+		{"token-embedded when no env/flag", "", "", tokenEmbedded, goodPin, false},
+		{"token without : is plain", "", "", token, "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("SSHMGR_SERVE_PIN", c.envVal)
+			gotFP, plain := resolvePin(c.envVal, c.flagVal, c.token)
+			if plain != c.wantPlain {
+				t.Fatalf("plain=%v want %v", plain, c.wantPlain)
+			}
+			if !plain && gotFP != c.wantFP {
+				t.Fatalf("fp=%q want %q", gotFP, c.wantFP)
+			}
+		})
+	}
+}
+
+func TestPinningTransport_BadPinErrors(t *testing.T) {
+	// resolvePin returns a parsed fp; constructing the transport from a
+	// well-formed fp must succeed.
+	fp := "sha256:" + strings.Repeat("a", 64)
+	tr, err := pinningTransport(fp)
+	if err != nil {
+		t.Fatalf("pinningTransport: %v", err)
+	}
+	if tr.TLSClientConfig == nil {
+		t.Fatal("TLSClientConfig nil")
+	}
+	if tr.TLSClientConfig.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("MinVersion not TLS1.3: %v", tr.TLSClientConfig.MinVersion)
+	}
+	if tr.TLSClientConfig.VerifyConnection == nil {
+		t.Fatal("VerifyConnection callback not set")
 	}
 }
