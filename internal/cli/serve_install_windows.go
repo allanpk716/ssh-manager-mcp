@@ -79,7 +79,7 @@ func serveLogPath() string {
 
 // newServeInstallCmd builds `serve install` (Windows: Task Scheduler).
 func newServeInstallCmd() *cobra.Command {
-	var addr, tlsCert, tlsKey string
+	var addr, tlsCert, tlsKey, taskUser string
 	c := &cobra.Command{
 		Use:   "install",
 		Short: "Register serve as a boot-started, auto-restarting background task (Windows Task Scheduler)",
@@ -106,12 +106,13 @@ master.key to machine-scope so the Password-logon task host at boot can read
 it). Linux/macOS report 'not yet supported'.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServeInstall(cmd, addr, tlsCert, tlsKey)
+			return runServeInstall(cmd, addr, tlsCert, tlsKey, taskUser)
 		},
 	}
 	c.Flags().StringVar(&addr, "addr", "127.0.0.1:7878", "listen address the registered task will bind (use 0.0.0.0:port or a VLAN IP for remote agents)")
 	c.Flags().StringVar(&tlsCert, "tls-cert", "", "path to TLS cert the registered task will use (enables HTTPS)")
 	c.Flags().StringVar(&tlsKey, "tls-key", "", "path to TLS key the registered task will use")
+	c.Flags().StringVar(&taskUser, "task-user", "", "Windows account the registered task runs as (default: current user; accept 'user' or 'DOMAIN\\user'). The password (env SSHMGR_SERVE_INSTALL_PASSWORD or TTY) must be for THIS account.")
 	return c
 }
 
@@ -145,7 +146,7 @@ func newServeStatusCmd() *cobra.Command {
 // (FINDING C). The password is read on the Go side (consensus A) and the
 // machine-scope precheck (codex #2) refuses to install when master.key is a
 // legacy user-scope blob (which would crash-loop at boot — FINDING B).
-func runServeInstall(cmd *cobra.Command, addr, tlsCert, tlsKey string) error {
+func runServeInstall(cmd *cobra.Command, addr, tlsCert, tlsKey, taskUser string) error {
 	// 1. Precheck: master.key must exist, be decryptable, AND be machine-scope
 	//    (codex #2). The boot task host runs under a Password-logon session
 	//    that cannot read a user-scope DPAPI blob — installing a task against
@@ -195,10 +196,22 @@ func runServeInstall(cmd *cobra.Command, addr, tlsCert, tlsKey string) error {
 	//    are preserved in the action argument (codex #5). MultipleInstances=
 	//    IgnoreNew is set explicitly (pi #2 / spike-4 defense against the boot
 	//    + logon dual trigger spawning two serves).
+	// Resolve the Windows account the task runs as. --task-user flag wins
+	// (lets CI register under a dedicated test account + lets an owner pin a
+	// specific account); else default to the current user (NUC10 single-user:
+	// allan716 installs + allan716 runs the task).
+	user := taskUser
+	if user == "" {
+		user = currentUserForTask()
+	}
+	if user == "" {
+		return fmt.Errorf("could not resolve task user: --task-user is empty and USERNAME env is unset")
+	}
+
 	in := taskInputs{
 		ExePath: exePath,
 		Addr:    addr,
-		User:    currentUserForTask(),
+		User:    user,
 		LogPath: logPath,
 		TLSCert: tlsCert,
 		TLSKey:  tlsKey,

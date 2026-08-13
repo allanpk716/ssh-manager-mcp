@@ -209,10 +209,17 @@ func TestServeInstallIntegration(t *testing.T) {
 	// Object-API registration (FINDING C fix). Password from env (consensus A,
 	// readServeInstallPassword env-first). --addr 127.0.0.1:7878 keeps the
 	// probe loopback-only (the test does NOT expose serve on the runner NIC).
-	if _, err := runBin([]string{
-		"serve", "install",
-		"--addr", "127.0.0.1:7878",
-	}, true); err != nil {
+	// --task-user sshmgrci: register the task under the dedicated CI test
+	// account (created by the workflow) whose password is the env secret. On
+	// a hosted runner the default (current user = runneradmin) can't work —
+	// runneradmin's password is unknown, so Register-ScheduledTask -User
+	// -Password must target the account whose password we actually hold.
+	taskUser := os.Getenv("SSHMGR_CI_TASK_USER")
+	if taskUser == "" {
+		taskUser = "sshmgrci"
+	}
+	args := []string{"serve", "install", "--addr", "127.0.0.1:7878", "--task-user", taskUser}
+	if _, err := runBin(args, true); err != nil {
 		t.Fatalf("step 1 serve install: %v", err)
 	}
 	t.Log("step 1: serve install registered the Task Scheduler task")
