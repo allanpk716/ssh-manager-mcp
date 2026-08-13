@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -213,6 +214,15 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	}
 	if err := os.Chmod(tmpPath, mode); err != nil {
 		return err
+	}
+	// fsync the parent dir on non-Windows so the rename itself survives a crash
+	// (parity with internal/cli/backup.go). On Windows there is no fsync on a
+	// directory handle; os.Rename is already crash-consistent there.
+	if runtime.GOOS != "windows" {
+		if d, err := os.Open(dir); err == nil {
+			_ = d.Sync()
+			_ = d.Close()
+		}
 	}
 	return os.Rename(tmpPath, path)
 }
