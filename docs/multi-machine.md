@@ -528,6 +528,8 @@ ssh-manager cache-tokens revoke laptop
 
 **迁移窗口不断链保证**：新 `cache pull` 没拿到指纹时**退回明文 + STDERR 警告**（不硬断），所以"serve 已切 TLS、某工作机还没配指纹"的窗口里，那台机不会硬失败，只是继续明文拉直到指纹配上。**指纹配上后才真正加密**——所以迁移要尽快把指纹分发到所有工作机。
 
+> ⚠️ **唯一硬失败组合：旧二进制 client（完全没有 pin 逻辑）对新版 serve（强制 TLS）。** 这种 client 用明文 `http.DefaultClient` 打一个现已 TLS-only 的 serve，握手必败——这不是 bug，是"明文 client 没法跟 TLS server 说话"。**对策就是第 4 步本身：把那台机的二进制升级到新版**（升级后它就有 pin 逻辑 + 明文回退能力）。所以迁移别只升 server 就放着——务必把每台工作机的二进制也升上来，第 4 步是 load-bearing 的。
+
 ---
 
 ## 相关文档
