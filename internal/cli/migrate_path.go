@@ -37,16 +37,23 @@ const guidanceUnreadableBackend = `old vault master key at %q is not a readable 
 It may be a legacy DPAPI blob or keychain entry that this process cannot resolve
 (sshd / service sessions often can't). migrate-path only relocates FILE-type vaults.
 
-To migrate, run BOTH commands in an interactive / RDP session where the old
+To migrate, run these steps in an interactive / RDP session where the old
 backend IS readable (export also goes through the old backend — it can't run
-headlessly either):
+headlessly either). ` + "`import <file>`" + ` writes into the vault at SSHMGR_STORE
+(or the program-fixed path if SSHMGR_STORE is unset), and requires an EMPTY,
+UNLOCKED target — so set the path and create the new master key first:
 
+    # 1. export the old vault to a portable passphrase-encrypted file
     ssh-manager export --out vault.sme --passphrase-file pass.txt
+
+    # 2. point at the NEW fixed path and create its master key + empty store
+    #    (on Windows the default is C:\ProgramData\ssh-manager\ — leave SSHMGR_STORE unset)
+    ssh-manager unlock
+
+    # 3. import the portable file into the new vault (re-seals under the new key)
     ssh-manager import --passphrase-file pass.txt vault.sme
 
-export writes a passphrase-encrypted portable file (independent of this vault's
-master key); import re-seals it into the new fixed-path vault. Then delete the
-old store.db + master.key.* by hand. See docs/backup-restore.md.`
+Then delete the old store.db + master.key.* by hand. See docs/backup-restore.md.`
 
 func newMigratePathCmd() *cobra.Command {
 	var (
@@ -175,6 +182,10 @@ func runMigratePath(w io.Writer, opts migratePathOpts) error {
 	}
 
 	// --- N before: count servers in the old store. ---
+	// storeServerCount also Checkpoints the WAL into the main file (so the
+	// byte-copy below is self-contained); a Checkpoint failure is surfaced
+	// rather than swallowed because an un-checkpointed WAL could hold UPDATE-only
+	// changes the byte-copy would miss while still passing the decrypt self-check.
 	oldCount, err := storeServerCount(oldStore, mk)
 	if err != nil {
 		// store.db exists but won't open under the file key — same shape as the
@@ -291,8 +302,11 @@ func storeHasServers(storePath string, mk []byte) (bool, error) {
 
 // storeServerCount opens the store at path and returns the server count.
 // Used both for the destination guard and for the N/N self-check (N before).
-// The source store is Checkpoint'd before close so the on-disk store.db file
-// contains every committed row (the caller will byte-copy that file).
+// The source store is Checkpoint'd (TRUNCATE) before close so the on-disk
+// store.db file contains every committed row (the caller will byte-copy that
+// file). Checkpoint failure is returned, not swallowed: an un-checkpointed WAL
+// could hold UPDATE-only changes that the byte-copy would miss while the
+// decrypt self-check still passes on the stale snapshot.
 func storeServerCount(storePath string, mk []byte) (int, error) {
 	st, err := store.Open(storePath, mk)
 	if err != nil {
@@ -303,10 +317,9 @@ func storeServerCount(storePath string, mk []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	// Force the WAL into the main file so the subsequent byte-copy of store.db
-	// is self-contained (no -wal/-shm dependency). Best-effort: if checkpoint
-	// fails we still return the count and let the self-check catch any issue.
-	_ = st.Checkpoint()
+	if err := st.Checkpoint(); err != nil {
+		return 0, fmt.Errorf("checkpoint source store before copy: %w", err)
+	}
 	return len(servers), nil
 }
 

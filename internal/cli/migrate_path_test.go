@@ -377,6 +377,50 @@ func TestMigratePath_SelfCheckActuallyDecrypts(t *testing.T) {
 	}
 }
 
+// TestMigratePath_UnreadableBackend_WrongKeyLength is the spec §5.3 case the
+// other unreadable tests don't cover: master.key.plain EXISTS, is a FILE, and
+// has the VALID length (32 bytes) — but is NOT the key the store was sealed
+// under. migrate-path must refuse (the self-check fails on decrypt) and roll
+// back the new vault, leaving the old untouched. Proves the wrong-key shape
+// doesn't silently corrupt data.
+func TestMigratePath_UnreadableBackend_WrongKeyLength(t *testing.T) {
+	oldDir := t.TempDir()
+	oldStore := filepath.Join(oldDir, paths.StoreFilename)
+	oldMK := filepath.Join(oldDir, paths.MasterKeyFilename)
+	seedFileVault(t, oldStore, oldMK, 3)
+	// Overwrite the real master key with a DIFFERENT valid-length (32-byte) key.
+	// store.Open won't reject it (it doesn't validate the key); the failure
+	// surfaces when the N/N self-check tries to decrypt credentials under it.
+	wrongMK := make([]byte, 32)
+	for i := range wrongMK {
+		wrongMK[i] = 0xEE
+	}
+	if err := os.WriteFile(oldMK, wrongMK, 0o600); err != nil {
+		t.Fatalf("write wrong mk: %v", err)
+	}
+
+	newDir := t.TempDir()
+	newStore := filepath.Join(newDir, paths.StoreFilename)
+	newMK := filepath.Join(newDir, paths.MasterKeyFilename)
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":        newStore,
+		"SSHMGR_FILEKEY_PATH": newMK,
+	})
+
+	err := runMigratePathWithFlags(t, oldDir, false)
+	if err == nil {
+		t.Fatal("expected error for valid-length wrong key, got nil")
+	}
+	// new vault MUST be rolled back
+	if _, statErr := os.Stat(newStore); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("new store.db left behind after self-check failure (err=%v); must be rolled back", statErr)
+	}
+	// old store.db MUST still exist (migrate-path must not delete on failure)
+	if _, statErr := os.Stat(oldStore); errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("old store.db deleted on wrong-key failure; must be preserved")
+	}
+}
+
 // TestMigratePath_NoOldVault_NoOp covers the idempotent re-run case directly:
 // with no source vault at the --from dir, migrate-path is a clean no-op.
 func TestMigratePath_NoOldVault_NoOp(t *testing.T) {
