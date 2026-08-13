@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"ssh-manager-mcp/internal/paths"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -52,13 +54,11 @@ func (s *Store) SetReadOnly(auditSidecar *os.File) {
 	s.auditSidecar = auditSidecar
 }
 
-// DefaultStorePath returns the on-disk vault location.
+// DefaultStorePath returns the on-disk vault location (program-fixed, spec §3.1/§5.1).
+// SSHMGR_STORE overrides (test/migrate). Falls back to paths pkg (Win
+// C:\ProgramData\ssh-manager\store.db; Unix /var/lib/ssh-manager/store.db).
 func DefaultStorePath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "ssh-manager", "store.db"), nil
+	return paths.StorePath()
 }
 
 // Open opens (or creates) the vault at path and ensures the schema. The master key decrypts credentials.

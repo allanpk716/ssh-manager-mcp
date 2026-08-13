@@ -5,6 +5,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"ssh-manager-mcp/internal/paths"
 )
 
 // FileKeyProvider stores the master key as a plaintext file (0600 on Unix;
@@ -13,18 +15,19 @@ import (
 // headless Linux without secret-service). Windows production uses
 // DpapiKeyProvider; this is the last-resort fallback in resolveMasterKey.
 type FileKeyProvider struct {
-	Path string // empty → UserConfigDir/ssh-manager/master.key.plain
+	Path string // empty → program-fixed paths.MasterKeyPath() (spec §3.1)
 }
 
 func (p FileKeyProvider) path() string {
 	if p.Path != "" {
 		return p.Path
 	}
-	// default: next to the store (best-effort; UserConfigDir may be unset in tests)
-	if cfg, err := os.UserConfigDir(); err == nil && cfg != "" {
-		return filepath.Join(cfg, "ssh-manager", "master.key.plain")
+	// default: program-fixed path (spec §3.1). SSHMGR_FILEKEY_PATH read inside paths.
+	pth, err := paths.MasterKeyPath()
+	if err != nil || pth == "" {
+		return "master.key.plain" // last-resort (test env with no fixed path)
 	}
-	return "master.key.plain"
+	return pth
 }
 
 func (p FileKeyProvider) Get() ([]byte, error) {
