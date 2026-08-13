@@ -24,6 +24,13 @@ const (
 	ServeKeyFilename  = "serve-key.pem"
 )
 
+// ServeCertMarkerFilename is the "cert already initialized once" sentinel that
+// lives ALONGSIDE the serve cert (same dir). Its presence with an ABSENT cert
+// file means the cert was deleted out-of-band; LoadOrCreateServeCert refuses to
+// silently regenerate in that case (a regen would invalidate every client's
+// pin and look like a MITM). (xcheck F10)
+const ServeCertMarkerFilename = ".serve-cert-initialized"
+
 // VaultDir returns the program-fixed vault directory (env override via
 // SSHMGR_STORE / SSHMGR_FILEKEY_PATH is handled per-file, not here).
 // See spec §3.1. Platform root from vaultRoot() (paths_windows.go / paths_unix.go).
@@ -99,4 +106,24 @@ func ServeKeyPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, ServeKeyFilename), nil
+}
+
+// ServeCertMarkerPath returns the "cert already initialized once" sentinel path.
+// It lives ALONGSIDE the serve cert (same dir), so it automatically follows the
+// cert wherever it lands — including temp dirs in tests when SSHMGR_SERVE_CERT
+// is overridden. SSHMGR_SERVE_MARKER overrides the location entirely (test).
+//
+// Presence of this marker with an ABSENT cert file means the cert was deleted
+// out-of-band; LoadOrCreateServeCert refuses to silently regenerate in that
+// case, because a regen would mint a new key → new fingerprint → invalidate
+// every client's pin (looks like a MITM). (xcheck F10)
+func ServeCertMarkerPath() (string, error) {
+	if v := os.Getenv("SSHMGR_SERVE_MARKER"); v != "" {
+		return v, nil
+	}
+	certPath, err := ServeCertPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(certPath), ServeCertMarkerFilename), nil
 }

@@ -53,13 +53,21 @@ func ParsePin(s string) (string, bool) {
 	return prefix + strings.ToLower(hexPart), true
 }
 
-// LoadOrCreateServeCert is idempotent: if the cert+key files at the fixed
-// paths parse as a valid keypair, they are loaded (fingerprint returned); if
-// they are absent, a fresh ed25519 self-signed cert is generated, written with
-// HardenACL, and its fingerprint returned. If the files exist but are corrupt
-// or mismatched, an error is returned — the caller MUST refuse to start, never
-// silently regenerate. A regenerated cert silently invalidates every client's
-// pin, which would look like a MITM attack to every cache.
+// LoadOrCreateServeCert is a three-state idempotent initializer:
+//  1. cert present + parses as a valid keypair → load (return fingerprint).
+//  2. cert absent + init marker ABSENT → first-time init: generate a fresh
+//     ed25519 self-signed cert+key, write with HardenACL, AND write the init
+//     marker, then return the fingerprint.
+//  3. cert absent + init marker PRESENT → the cert was generated once (so
+//     clients are pinned to its fingerprint) and has since been deleted
+//     out-of-band. Return an error; refuse to silently regenerate, because a
+//     new key → new fingerprint → every client's pin mismatches = looks like a
+//     MITM. The operator must deliberately delete BOTH cert+marker, then
+//     re-enroll clients.
+//
+// If the files exist but are corrupt or mismatched (state 1's parse fails), an
+// error is returned — the caller MUST refuse to start, never silently
+// regenerate. (xcheck F10)
 func LoadOrCreateServeCert() (certPath, keyPath, fingerprint string, err error) {
 	certPath, err = paths.ServeCertPath()
 	if err != nil {
@@ -75,16 +83,44 @@ func LoadOrCreateServeCert() (certPath, keyPath, fingerprint string, err error) 
 		fp, loadErr := loadServeCertFingerprint(certPath, keyPath)
 		if loadErr != nil {
 			return "", "", "", fmt.Errorf("serve cert at %s is corrupt or mismatches its key: %w "+
-				"(refusing to start; delete the file to regenerate, then re-enroll clients)", certPath, loadErr)
+				"(refusing to start; to regenerate, delete BOTH the cert and the init marker, then re-enroll clients)",
+				certPath, loadErr)
 		}
 		return certPath, keyPath, fp, nil
 	} else if !os.IsNotExist(statErr) {
 		return "", "", "", statErr
 	}
 
-	// Absent → generate a fresh self-signed cert + key, harden, re-load for fingerprint.
+	// F10: cert absent. Before silently regenerating, check the init marker.
+	// If the marker exists, the cert was generated once (so clients are pinned
+	// to its fingerprint) and has since been deleted out-of-band. Regenerating
+	// would mint a new key → new fingerprint → invalidate every client's pin,
+	// which would look like a MITM attack to every cache. Refuse; the operator
+	// must deliberately delete BOTH the marker and the cert to acknowledge the
+	// re-enroll cost.
+	markerPath, err := paths.ServeCertMarkerPath()
+	if err != nil {
+		return "", "", "", err
+	}
+	if _, statErr := os.Stat(markerPath); statErr == nil {
+		return "", "", "", fmt.Errorf("serve cert %s is missing but the initialization marker %s exists "+
+			"(cert appears deleted out-of-band; refusing to silently regenerate — that would invalidate all client pins). "+
+			"To regenerate deliberately, delete BOTH the marker and the cert, then re-enroll all clients", certPath, markerPath)
+	} else if !os.IsNotExist(statErr) {
+		return "", "", "", statErr
+	}
+
+	// Absent + marker absent → first-time init: generate a fresh self-signed cert + key, harden, re-load for fingerprint.
 	if err := generateServeCert(certPath, keyPath); err != nil {
 		return "", "", "", err
+	}
+	// Write the init marker so a future out-of-band cert deletion is detectable.
+	// Atomic + HardenACL, same discipline as the cert/key files.
+	if err := atomicWriteFile(markerPath, []byte("initialized\n"), 0o600); err != nil {
+		return "", "", "", fmt.Errorf("write cert-init marker: %w", err)
+	}
+	if err := store.HardenACL(markerPath); err != nil {
+		return "", "", "", fmt.Errorf("harden cert-init marker ACL: %w", err)
 	}
 	fp, err := loadServeCertFingerprint(certPath, keyPath)
 	if err != nil {
