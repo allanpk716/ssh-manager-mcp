@@ -10,8 +10,31 @@ import (
 
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
 )
+
+// TestDefaultDekProvider_IsFileKeyAtFixedPath pins the Plan 16 T4 contract:
+// the default cache-DEK provider (no test injection) is a FileKeyProvider whose
+// Path is exactly paths.CacheDekPath() (<vaultDir>/cache-dek.key). Was
+// DpapiKeyProvider on Windows / KeyringKeyProvider on Unix before Plan 16.
+// SSHMGR_FILEKEY_PATH must NOT redirect the cache DEK — cache-dek.key uses its
+// own fixed path (paths.CacheDekPath() does not consult that env var).
+func TestDefaultDekProvider_IsFileKeyAtFixedPath(t *testing.T) {
+	t.Setenv("SSHMGR_FILEKEY_PATH", "") // must not influence cache-dek
+	dp := dekProvider()
+	fp, ok := dp.(*store.FileKeyProvider)
+	if !ok {
+		t.Fatalf("default dek not *FileKeyProvider: %T", dp)
+	}
+	want, err := paths.CacheDekPath()
+	if err != nil {
+		t.Fatalf("CacheDekPath: %v", err)
+	}
+	if fp.Path != want {
+		t.Errorf("dek path = %q, want %q", fp.Path, want)
+	}
+}
 
 // withDEK swaps the dekProvider seam to a fresh in-memory provider for the test, returning it
 // so the test can assert the DEK persisted there (not the real keychain).

@@ -3,54 +3,41 @@
 // Package cli: cache-DEK key provider seam (Windows).
 //
 // dekProvider returns the KeyProvider holding the cache DEK (the symmetric key
-// guarding cache.bin). On Windows the cache DEK lives in a DPAPI-encrypted file
-// at dpapiCacheDekPath() — the SAME path the v0.2.0 → DPAPI migration writes
-// (migrate_windows.go, spec §5.7). This closes the Plan 14 T5 review F1 gap:
-// before this file existed the migration wrote cache-dek.key but the reader
-// (loadOrCreateDEK) still consulted the OS keychain slot, so the migrated DEK
-// was orphaned and a subsequent `cache pull` generated a fresh DEK.
+// guarding cache.bin, the offline read-only snapshot from Plan 12). On Windows
+// the cache DEK is a plaintext file at the program-fixed paths.CacheDekPath()
+// (<vaultDir>/cache-dek.key), spec §3.1 / §4.2 (xcheck consensus A).
 //
-// Keeping the read path and write path pinned to dpapiCacheDekPath() (single
-// helper) guarantees they cannot drift — a reader/writer path mismatch is now
-// impossible by construction.
+// Plan 16 T4 replaced the previous DpapiKeyProvider. The pre-T4 reader relied
+// on the same DPAPI custody model as the master key, and cache_dek_windows.go
+// self-described cross-session reads by a served MCP broker / Task Scheduler
+// job — the SAME unreliable custody the master-key DPAPI path was retired for
+// in Plan 15. Plaintext-at-fixed-path puts the cache DEK on the same footing
+// as master.key: L1+ threat model, single trust root (the vault dir).
 //
-// DpapiKeyProvider works across RDP / sshd / Task-Scheduler sessions (spec 12
-// spike FINDING 9), so `cache pull` invoked by a served MCP broker / Task
-// Scheduler job reads the DEK the same as an interactive `cache pull`.
+// A package seam so tests inject a fake (MemKeyProvider) without touching the
+// real file. Tests swap this var directly (see cache_test.go withDEK).
 //
-// Unix builds see cache_dek_unix.go instead (env-aware keychain slot, unchanged
-// from before — Plan 14 does not move the cache DEK medium on Unix).
+// Unix builds see cache_dek_unix.go instead (same FileKeyProvider medium,
+// build-tag split kept only so the seam stays a single var per build).
 package cli
 
 import (
-	"os"
-	"path/filepath"
-
+	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
 )
 
-// dpapiBaseDir resolves the directory holding cache-dek.key (and master.key
-// before Plan 16). Was in migrate_windows.go before Plan 16 T3 deleted that
-// file; moved here (the only remaining caller) so cache_dek_windows.go stays
-// self-contained. T4 will rewire dekProvider to paths.CacheDekPath() and this
-// helper goes away then.
-func dpapiBaseDir() string {
-	appData := os.Getenv("AppData")
-	if appData == "" {
-		return filepath.Join("ssh-manager")
-	}
-	return filepath.Join(appData, "ssh-manager")
-}
-
-// dpapiCacheDekPath is the cache-DEK DPAPI file path (was in migrate_windows.go).
-func dpapiCacheDekPath() string {
-	return filepath.Join(dpapiBaseDir(), "cache-dek.key")
-}
-
-// dekProvider returns the cache-DEK KeyProvider (Windows: DpapiKeyProvider at
-// the migration's cache-dek.key path). A package seam so tests inject a fake
-// (MemKeyProvider) without touching the real DPAPI file. Tests swap this var
+// dekProvider returns the cache-DEK KeyProvider (Windows: FileKeyProvider at
+// the program-fixed cache-dek.key path). A package seam so tests inject a fake
+// (MemKeyProvider) without touching the real file. Tests swap this var
 // directly (see cache_test.go withDEK).
+//
+// cache-dek.key uses paths.CacheDekPath() directly — it does NOT consult
+// SSHMGR_FILEKEY_PATH (that env var redirects ONLY master.key). This keeps the
+// cache DEK pinned to the vault dir, decoupled from master-key test overrides.
 var dekProvider = func() store.KeyProvider {
-	return &store.DpapiKeyProvider{Path: dpapiCacheDekPath()}
+	pth, err := paths.CacheDekPath()
+	if err != nil || pth == "" {
+		return &store.FileKeyProvider{} // last-resort default (test env with no fixed path)
+	}
+	return &store.FileKeyProvider{Path: pth}
 }
