@@ -1,0 +1,218 @@
+package mcpserver
+
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"ssh-manager-mcp/internal/paths"
+	"ssh-manager-mcp/internal/store"
+)
+
+const serveCertSubject = "ssh-manager serve"
+
+// SPKIFingerprint returns the canonical pinned fingerprint of a server cert's
+// public key: "sha256:" + hex(sha256(SubjectPublicKeyInfo DER)). Pinning the
+// SPKI (not the whole DER cert) means re-signing the SAME key keeps the pin
+// valid, while swapping the key (a MITM) changes the fingerprint. This is the
+// HPKP / Tailscale / step convention.
+func SPKIFingerprint(cert *x509.Certificate) string {
+	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// ParsePin validates that s is a "sha256:<64-hex>" fingerprint. Hex may be
+// upper or lower case; on success it returns the lowercased normalized form
+// and ok=true. Any other shape returns ("", false).
+func ParsePin(s string) (string, bool) {
+	const prefix = "sha256:"
+	const hexLen = 64
+	if len(s) != len(prefix)+hexLen || s[:len(prefix)] != prefix {
+		return "", false
+	}
+	hexPart := s[len(prefix):]
+	for _, c := range []byte(hexPart) {
+		ok := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+		if !ok {
+			return "", false
+		}
+	}
+	return prefix + strings.ToLower(hexPart), true
+}
+
+// LoadOrCreateServeCert is idempotent: if the cert+key files at the fixed
+// paths parse as a valid keypair, they are loaded (fingerprint returned); if
+// they are absent, a fresh ed25519 self-signed cert is generated, written with
+// HardenACL, and its fingerprint returned. If the files exist but are corrupt
+// or mismatched, an error is returned — the caller MUST refuse to start, never
+// silently regenerate. A regenerated cert silently invalidates every client's
+// pin, which would look like a MITM attack to every cache.
+func LoadOrCreateServeCert() (certPath, keyPath, fingerprint string, err error) {
+	certPath, err = paths.ServeCertPath()
+	if err != nil {
+		return "", "", "", err
+	}
+	keyPath, err = paths.ServeKeyPath()
+	if err != nil {
+		return "", "", "", err
+	}
+
+	// Cert present? Try to load.
+	if _, statErr := os.Stat(certPath); statErr == nil {
+		fp, loadErr := loadServeCertFingerprint(certPath, keyPath)
+		if loadErr != nil {
+			return "", "", "", fmt.Errorf("serve cert at %s is corrupt or mismatches its key: %w "+
+				"(refusing to start; delete the file to regenerate, then re-enroll clients)", certPath, loadErr)
+		}
+		return certPath, keyPath, fp, nil
+	} else if !os.IsNotExist(statErr) {
+		return "", "", "", statErr
+	}
+
+	// Absent → generate a fresh self-signed cert + key, harden, re-load for fingerprint.
+	if err := generateServeCert(certPath, keyPath); err != nil {
+		return "", "", "", err
+	}
+	fp, err := loadServeCertFingerprint(certPath, keyPath)
+	if err != nil {
+		return "", "", "", err
+	}
+	return certPath, keyPath, fp, nil
+}
+
+// loadServeCertFingerprint parses the cert+keypair from disk, validates the
+// keypair matches (via tls.LoadX509KeyPair), and returns the SPKI fingerprint.
+func loadServeCertFingerprint(certPath, keyPath string) (string, error) {
+	if _, err := tls.LoadX509KeyPair(certPath, keyPath); err != nil {
+		return "", err
+	}
+	der, err := os.ReadFile(certPath)
+	if err != nil {
+		return "", err
+	}
+	block, _ := pem.Decode(der)
+	if block == nil {
+		return "", fmt.Errorf("no PEM block in %s", certPath)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", err
+	}
+	return SPKIFingerprint(cert), nil
+}
+
+// generateServeCert creates a fresh ed25519 self-signed cert and key at the
+// given paths via temp+rename atomic writes, then calls store.HardenACL on
+// each (Windows ACL hardening; no-op on Unix where 0600 is enforced).
+func generateServeCert(certPath, keyPath string) error {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate ed25519 key: %w", err)
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return fmt.Errorf("generate serial: %w", err)
+	}
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "localhost"
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: serveCertSubject},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(100 * 365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{host},
+		IPAddresses:  localNonLoopbackIPs(),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		return fmt.Errorf("create certificate: %w", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return fmt.Errorf("marshal PKCS8 key: %w", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes})
+
+	if err := atomicWriteFile(certPath, certPEM, 0o600); err != nil {
+		return fmt.Errorf("write cert: %w", err)
+	}
+	if err := atomicWriteFile(keyPath, keyPEM, 0o600); err != nil {
+		return fmt.Errorf("write key: %w", err)
+	}
+	// HardenACL = master.key.plain-level protection on Windows; no-op on Unix.
+	if err := store.HardenACL(keyPath); err != nil {
+		return fmt.Errorf("harden serve key ACL: %w", err)
+	}
+	if err := store.HardenACL(certPath); err != nil {
+		return fmt.Errorf("harden serve cert ACL: %w", err)
+	}
+	return nil
+}
+
+// localNonLoopbackIPs returns this host's non-loopback unicast IPs for the cert
+// SAN. Core trust is the SPKI pin (not the hostname), but listing IPs avoids
+// spurious name-check failures when a client connects by IP. Best-effort.
+func localNonLoopbackIPs() []net.IP {
+	var out []net.IP
+	ifaces, err := net.InterfaceAddrs()
+	if err != nil {
+		return out
+	}
+	for _, a := range ifaces {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() {
+			continue
+		}
+		out = append(out, ipNet.IP)
+	}
+	return out
+}
+
+// atomicWriteFile writes data to path via temp + fsync + chmod + rename, so a
+// crash never leaves a half-written cert or key. Local duplicate of
+// internal/cli/backup.go's atomicWriteFile; not refactored across packages to
+// avoid scope creep (see plan NOTE).
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op after successful rename
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil { // fsync — durability before rename
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
