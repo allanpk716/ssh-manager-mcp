@@ -1,5 +1,7 @@
 # Plan 15 — machine-scope DPAPI + serve install 修复 — Design Spec (v2)
 
+> **⚠ Superseded by Plan 16**（`2026-08-13-plan-16-fixed-path-filekey-design.md`，2026-08-13）：machine-scope DPAPI 路线未验过即作废。根因是用户态密钥模型与"单用户可信机器 + 服务自起"部署形态不匹配，不是 scope 选错。见 Plan 16 §1。
+
 > **修订**：Plan 14（`docs/superpowers/specs/2026-08-12-plan-14-windows-prod-deploy-design.md`）的 §3.2（user-scope→machine-scope）、§5.3（DPAPI flag）、§5.8（serve install 对象 API）、§6（威胁模型）、§7.2（真机集成测试）。Plan 14 正文**不改写**（保留审计轨迹），仅在其顶部加"Superseded by Plan 15"横幅。
 > **依据**：`docs/superpowers/specs/2026-08-12-plan-14-nuc10-e2e-findings.md`（Plan 14 §7.3 NUC10 真机验收暴露的 FINDING B/C/D/E/F）。
 > **v2 依据**：4 家异构 xcheck（codex/opencode/pi/kimi，全部 SUGGEST_CHANGES）+ 主会话核实（读代码 + spike）。`.xcheck/20260812-210000/SUMMARY.md` §5（读代码）/ §6（spike）。v2 采纳**全部经核实成立**的主张；2 条高危误报被 spike 推翻（pi #2 双 trigger、pi #3 ACL 继承——见 §5.4 多实例契约 / §5.2 ACL 契约）。

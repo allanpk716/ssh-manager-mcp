@@ -68,7 +68,7 @@
 在 VLAN 那台将常驻 broker 的机器上，像单机一样把服务器/profile/project 建好（命令和 stdio 完全一样，详见 [getting-started.md](./getting-started.md)）：
 
 ```bash
-ssh-manager unlock                                  # master key → keychain
+ssh-manager unlock                                  # master key → 固定路径裸文件 (master.key.plain)
 ssh-manager servers add --name gpu --host 192.0.2.10 --user deploy --password '...'
 ssh-manager profiles add team-a && ssh-manager profiles grant team-a gpu
 ssh-manager projects add my-agent --profile team-a  # 打印一次性 token（工作机要用，记下来）
@@ -90,68 +90,64 @@ ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
 
 **让它常驻 + 开机自启**（serve 是个长驻进程，别在前台手跑就完事）：
 
-- **Windows**（推荐）：跑 `ssh-manager serve install`——程序自己注册 Task Scheduler 任务（at-boot + at-logon + 崩溃自重启），不用你手写 schtasks XML 或 NSSM 包装。详见下面"Windows：`serve install` 一条龙"小节。
-- **Linux**：自己写 systemd unit（示例见下）。`ssh-manager serve install` 在 Linux 上**尚未实现**（会报 `not yet supported on linux`，见 [T6 限制](#linuxmacos-尚未支持)）。
-- **macOS**：自己写 launchd LaunchAgent。`serve install` 同样**尚未实现**。
+- **Windows / Linux / macOS**：跑 `ssh-manager serve install`——程序用 [`github.com/kardianos/service`](https://github.com/kardianos/service) 自己注册系统服务（Win=Windows Service、Linux=systemd unit、macOS=launchd plist），三平台一条命令，无需手写 XML / unit / plist。详见下面「`serve install` 三平台一条龙」小节。进阶用户若偏好第三方包（NSSM / 手写 systemd / 手写 launchd），见 [getting-started 的第三方服务包小节](./getting-started.md#第三方服务包可选给不想用内置-install-的进阶用户)。
 
-#### Windows：`serve install` 一条龙（Plan 14，Plan 15 修正为 machine-scope DPAPI）
+#### `serve install` 三平台一条龙（Plan 16，kardianos）
 
-```powershell
-# 在交互式 session（本地终端 / RDP，不是 ssh）里跑：
+```bash
+# 在已经跑过 unlock（master.key.plain 已生成）的机器上（Windows 需 admin / Linux·macOS 需 sudo）：
 ssh-manager serve install --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
 ```
 
 程序会：
 
-1. **先检查 `master.key` 存在且是 machine-scope**（Plan 15 修正：检查 DPAPI scope，避免 user-scope 的跨 session 失败）——没有就报错让你先 `unlock`（Plan 15 会触发 user→machine 迁移）。
-2. 生成 Task Scheduler XML（boot + logon 触发，崩溃自重启 PT1M × 3，stdout/stderr 重定向到 `%LocalAppData%\ssh-manager\serve.log`），通过 PowerShell `Register-ScheduledTask` 注册成任务 `ssh-manager-serve`。
-3. **用 PowerShell `secureString` 读 Windows 密码**（Plan 15 修正：不再用 `Get-Credential` 对话框，避免密码进 4688 审计日志；用 `Read-Host -AsSecureString` 转 plain text 再传给 `Register-ScheduledTask`）——任务要 `LogonType=Password` 才能 boot 时就起（无需等人登录）。**密码只活在 PowerShell 进程内存里，不进 ssh-manager.exe argv，不进 4688 审计日志**。
-4. 立即 `schtasks /Run` 跑一次验证 + 生成 serve.log。
+1. **precheck master.key**：`master.key.plain` 存在且可读。不存在就报错让你先 `unlock`（Plan 16：master.key 是裸文件 + ACL，service 账户需能读——Windows 默认 `LocalSystem` / Linux·macOS 默认 root，目录 ACL 已含这两个）。
+2. **解析二进制**：`os.Executable` 取当前 ssh-manager 路径 → service 配置里写"跑这个二进制 + `serve --addr ...` 参数"。**service 用的是同一份代码同一个二进制**。
+3. **加固 vault 目录 ACL**（Windows，best-effort）：`master.key.plain` 的文件 ACL 已由 `unlock` 设好（`SYSTEM` + `Administrators` + 当前用户，移除 `Users`/`Authenticated Users`/`Everyone`，禁用继承）；这一步对**目录**再做一遍 defense-in-depth。
+4. **注册 + 立即启动**：kardianos 调用各平台原生 service manager（Windows SCM / systemd / launchd），`RestartOnFailure` 用各平台原生概念表达（Win `OnFailure=restart`、Linux `Restart=on-failure`、macOS `KeepAlive=true`）。重装是**幂等**的（先 best-effort 注销旧的，再装新的——支持"升级二进制后重装"的常见流程）。
 
 配套命令：
 
-```powershell
-ssh-manager serve status      # 查任务状态 + 进程在不在 + HTTP 活着没 + vault 解锁没
-ssh-manager serve uninstall   # 删任务 + 停 serve 进程
+```bash
+ssh-manager serve status      # 四信号：service / process / http / vault
+ssh-manager serve uninstall   # 停 service + 注销（不删 vault 数据）
 ```
 
-`serve status` 四路独立检查：任务注册 / 进程在跑 / HTTP 响应（401 或 200 都算活）/ vault 解锁（扫 `serve.log` 里有没有"master key present but unreadable"硬失败标记——进程活着但 master key 解不开时这路会报 `LOCKED`，区分"进程在跑"和"真正可用"）。
+`serve status` 四路独立检查：
 
-⚠️ **账户密码过期会让任务起不来**：Task Scheduler 存的是你**当时的** Windows 密码，密码过期后任务会因凭据失效而起不来。单用户本地账户建议直接禁用密码过期：
-
-```powershell
-# 以管理员身份跑（NUC10 这种单 owner 机适用）：
-wmic UserAccount where Name='allan716' set PasswordExpires=False
+```
+service:   Running (kardianos svc.Status() —— byte 枚举，非本地化文本)
+process:   running
+http:      responding (401/200 = auth working)
+vault:     ok
+overall:   HEALTHY
 ```
 
-> Win11 22H2+ 不装 `wmic`，改用 `Set-LocalUser -Name 'allan716' -PasswordNeverExpires $true`。
+- **service**：kardianos `svc.Status()`（Running / Stopped / Unknown / NOT INSTALLED）。**locale-independent**（Plan 15 FINDING E 的修复沿用：旧的 PowerShell `Get-ScheduledTask.State` 文本解析在 zh-CN 下挂掉，byte 枚举无此问题）。
+- **process**：是否有 ssh-manager 进程在跑（Win `tasklist` / POSIX 扫 `/proc/comm`）。
+- **http**：bound addr 是否响应（401/200 都算活——auth 闸在工作）。
+- **vault**：`master.key.plain` 是否**存在 + 可读 + 是合法的 32 字节 key**（直接文件 probe，不扫日志——catch 到缺 key / 损坏 / 长度错的 key，那种"进程在跑但 boot 时会 crash-loop"的失败模式）。
 
-> **新机器升级注意（Plan 15 修正为 machine-scope）**：已有 v0.2.0 vault 的机器升级到新版后，`master.key` 还没生成（旧 master key 在 keychain 里，新版从非交互 session 读不出）——必须**先在交互式 session 跑一次 `ssh-manager unlock` 触发迁移**（v0.2.0 → DPAPI + user→machine），再 `serve install`，否则 serve 读不到 master key 会启动失败。完整流程见 [backup-restore.md 的 Plan 14 升级 Runbook](./backup-restore.md#升级-runbookv020--新版windows) 和 [Plan 15 修正：user-scope → machine-scope 迁移](./backup-restore.md#升级-runbookplan-15-修正user-scope--machine-scope-迁移)。
+`overall` 仅在四路全过时 `HEALTHY`——任一退化都有具体哪一路的提示。
 
-#### Linux：systemd（自建，`serve install` 尚未实现）
+#### service 账户 + 威胁模型（重要）
 
-`ssh-manager serve install` 在 Linux 上会报 `not yet supported on linux; see docs/multi-machine.md`（计划在后续 plan 实现，spec §3.4 / §9）。在那之前自己写 unit：
+service 默认账户：
 
-```ini
-# /etc/systemd/system/ssh-manager-serve.service
-[Unit]
-Description=ssh-manager MCP server (serve mode)
-After=network.target
+| 平台 | 默认账户 | 含义 |
+|---|---|---|
+| Windows | `LocalSystem` | 最高权限，能读 `master.key.plain` |
+| Linux | root | 同上 |
+| macOS | root（sudo 跑时） | 同上 |
 
-[Service]
-ExecStart=/usr/local/bin/ssh-manager serve --addr 0.0.0.0:7878 \
-          --tls-cert /etc/ssh-manager/cert.pem --tls-key /etc/ssh-manager/key.pem
-Environment=SSHMGR_MASTERKEY_HEX=<unlock 打印的 hex>   # 服务器若无 keychain 必填；有 keychain 可省
-Restart=on-failure
-User=ssh-manager
+> ⚠️ **R3 风险**：service 账户能读 master.key = service 账户 compromise 等同于 admin compromise（R1）。这是 L1+ 模型接受的代价。完整威胁模型（R1/R2/R3 + 适用前提 + 升级路径 U1/U2/U3）见 [threat-model.md](./threat-model.md)。
 
-[Install]
-WantedBy=multi-user.target
-```
+#### upgrade（从 Plan 14/15 升级到 Plan 16）
 
-> **master key**：服务器若是 headless（无 OS keychain），master key 靠 `SSHMGR_MASTERKEY_HEX` 环境变量（同 [getting-started 的无 keychain 小节](./getting-started.md#无-keychain-环境headless-linux-等)）；写在 unit 的 `Environment=` 里。有 keychain 的桌面服务器则让该用户 keychain 持有 master key。
->
-> **注意 Linux 路径上的坑**：systemd unit 以 `User=ssh-manager` 跑时，`os.UserConfigDir()` 解析的是那个用户的家目录，不是 owner 的——别把 vault 装在 owner 家又指望 `User=ssh-manager` 的服务能读到。
+已有 Plan 14（user-scope DPAPI）或 Plan 15（machine-scope DPAPI）vault 的机器升级到 Plan 16（FileKeyProvider）——**旧 master.key 是 DPAPI blob，新版本读不了**。流程见 [backup-restore.md 的 Plan 16 迁移 Runbook](./backup-restore.md)。核心是两条路二选一：
+
+- **migrate-path**（若旧 master.key 在当前 session 可解）：`ssh-manager migrate-path --from <旧路径>`，自动搬 `store.db` + `master.key.plain` 到新固定路径 + N/N 自检 + 删旧。
+- **export + import**（若旧 master.key 在当前 session 读不出——NUC10 的 sshd 现状）：在 RDP / 交互 session 跑 `export` 到 `.sme` → 新版本 `unlock` 建 new key → `import --passphrase-file` 导入新固定路径。
 
 ### Step 3（每台工作机）：Claude Code 连远程
 
@@ -222,20 +218,10 @@ serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问
 | Plan 11 · export/import | 整个 vault 口令加密便携文件：备份 / 迁移 / 灾难恢复 | ✅ 已做（[backup-restore.md](./backup-restore.md)） |
 | Plan 12 · 离线只读缓存 | 工作机本地缓存加密 vault，断网时只读用、自动刷新 | ✅ 已做（本节[「离线只读缓存」](#离线只读缓存plan-12)） |
 | Plan 13 · 群晖自动备份 | 服务器定时出明文快照到 NAS，灾难恢复 | ✅ 已做（[backup-restore.md Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)） |
-| Plan 14 · Windows 生产部署 | DPAPI master key（替代 keychain）+ `serve install` Task Scheduler 常驻（**Plan 15 修正为 machine-scope DPAPI + serve install fix**） | ✅ 已做（[backup-restore.md Plan 14](./backup-restore.md#plan-14--windows-生产部署dpapi-master-key--serve-常驻)） |
+| Plan 14/15 · Windows 生产部署 | DPAPI master key + `serve install` Task Scheduler | ⚠️ 已 Superseded by Plan 16 |
+| Plan 16 · 固定路径 + FileKeyProvider | 三平台固定路径 + 裸文件 master key（L1+）+ kardianos 跨平台 `serve install` + `migrate-path` | ✅ 已做（本篇 + [threat-model.md](./threat-model.md) + [getting-started 第三方服务包](./getting-started.md#第三方服务包可选给不想用内置-install-的进阶用户)） |
 
-**现在：serve = 在线 live（Windows 一条龙 `serve install`，Linux/macOS 自建 systemd/launchd）；备份 / 迁移已可（export/import + Plan 13 NAS）；离线只读缓存已落地（Plan 12）。** Linux/macOS 的 `serve install` 还没实现（[见下](#linuxmacos-尚未支持)）。
-
-#### Linux/macOS 尚未支持
-
-Plan 14 只实现了 **Windows Task Scheduler** 的 `serve install`（spec §3.4 scope 收窄）。Linux systemd --user / macOS launchd 各有平台陷阱（linger 权限、D-Bus session、LaunchAgent 仅 GUI login 后启动），**`ssh-manager serve install` 在这两个平台会报**：
-
-```
-serve install/uninstall/status is not yet supported on linux; see docs/multi-machine.md
-(tracked for a follow-up plan — Windows Task Scheduler is the only implemented path)
-```
-
-在那之前，Linux/macOS 用户按上面"Step 2"里的 systemd unit / launchd 模板自己注册开机自启。
+**现在：serve = 在线 live（**三平台一条龙 `serve install`**，kardianos 收敛 Windows Service / systemd / launchd）；备份 / 迁移已可（export/import + Plan 13 NAS + Plan 16 `migrate-path`）；离线只读缓存已落地（Plan 12，cache DEK = 固定路径裸文件）。**
 
 ---
 
@@ -262,7 +248,7 @@ serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带�
  ┌──工作机（laptop）───────────────────▼────────┐
  │  cache pull                            ──────►  DEK 加密落盘
  │   ↓                                            cache.bin (0600)
- │   OS keychain slot "cache-dek"          ──────►  cache.meta.json
+ │   cache-dek.key 裸文件（固定路径）       ──────►  cache.meta.json
  │                                                (url + pulled_at)
  │  系统调度器（systemd timer / 任务计划 / launchd）
  │   ↓ 每 ~30 min                                 ③ 自动保鲜
@@ -329,7 +315,9 @@ ssh-manager cache status
 | `--token` / `SSHMGR_CACHE_TOKEN` | 设备授权码（`cache-tokens add` 发的那个）。必填 |
 | `SSHMGR_CACHE_DIR` | 缓存目录覆盖（默认 `UserConfigDir/ssh-manager`） |
 
-> **缓存目录**：默认在 `os.UserConfigDir()/ssh-manager/`，即 Linux `~/.config/ssh-manager/`、macOS `~/Library/Application Support/ssh-manager/`、Windows `%AppData%\ssh-manager\`。三个文件：`cache.bin`（DEK 加密的 vault 快照，0600）、`cache.meta.json`（URL + 拉取时间）、`cache-audit.log`（离线审计，见下）。DEK 存在本机 OS keychain 的 `cache-dek` 槽——**和 master key 是两把不同的钥匙**。
+> **缓存目录**：`cache.bin` / `cache.meta.json` / `cache-audit.log` 进 `SSHMGR_CACHE_DIR`（默认 `os.UserConfigDir()/ssh-manager/`，即 Linux `~/.config/ssh-manager/`、macOS `~/Library/Application Support/ssh-manager/`、Windows `%AppData%\ssh-manager\`）。**DEK** 存在 vault 固定路径下的 `cache-dek.key` 裸文件（Win `C:\ProgramData\ssh-manager\cache-dek.key` / Unix `/var/lib/ssh-manager/cache-dek.key`，Plan 16 T4 从 OS keychain/DPAPI 迁来）。
+>
+> ⚠️ **已知不一致**（Plan 16 T4 只迁了 DEK，未迁 `cache.bin` 路径）：`cache.bin` 在 `UserConfigDir`、`cache-dek.key` 在 vault 固定路径——两份不在同一目录。功能正常（DEK 文件能读、cache 能解），但离线拷盘需同时拿到两处。后续清理工作会收敛到同一目录。**威胁模型**：cache.bin + cache-dek.key 同机不同目录 → 同盘 → 离线拷盘可解 cache；cache 是只读快照非完整凭据，与 master.key 同等级（L1+，见 [threat-model.md](./threat-model.md)）。
 
 `.mcp.json` 怎么配？**取决于这台机在线为主还是离线为主**——同一个 project token（和 serve 用的是**同一个**）：
 
@@ -469,7 +457,7 @@ launchctl load -w ~/Library/LaunchAgents/com.ssh-manager.cache-refresh.plist
 
 离线模式下，broker 的每次调用（exec / download / upload / forward / 被拒的写）都写进本机的 `cache-audit.log`（JSONL，每行一条）。**单向、零合并**——这份日志**不会**回传 serve 服务器，**不会**并进服务器的审计表，永远只在本机。
 
-- 路径：`<UserConfigDir>/ssh-manager/cache-audit.log`（和 `cache.bin` 同目录）。
+- 路径：`<UserConfigDir>/ssh-manager/cache-audit.log`（和 `cache.bin` 同目录；`cache-dek.key` 在 vault 固定路径——见上"已知不一致"）。
 - 用途：操作者本机自查（谁在什么时候、用哪个 project / server、干了什么、成功没）。
 - 如需集中审计：手工把各机的 `cache-audit.log` 收拢到你的日志系统（程序不代劳）。
 
@@ -484,7 +472,7 @@ ssh-manager cache-tokens revoke laptop
 
 **Lazy 生效**：该码**下次 `cache pull`** 直接被拒（`status != active`），那台机再也拉不到新缓存。已经在跑的 `mcp --cache` 会继续到本次 spawn 结束（下次重启 Claude Code 拉新缓存失败 → 该机离线路径断了）。
 
-> ⚠️ **已拉下的 `cache.bin` 仍能被那台机的 DEK 解密**——吊销**只断"拉新"**，不擦"已拉"。这和失窃的 `store.db` 一样处置：**吊销 + 视敏感度轮换相关凭据**（`servers edit --password` / `--key` 换那台机接触过的服务器凭据，`projects rotate` 换 project token）。物理拿到机器的人 + 本机 DEK（keychain）= 能离线爆破那份当时的 vault 快照——这等同于"物理拿到一台配了 stdio vault 的机器"，不在本方案的威胁模型内（host-compromise = out of scope）。
+> ⚠️ **已拉下的 `cache.bin` 仍能被那台机的 DEK（`cache-dek.key`）解密**——吊销**只断"拉新"**，不擦"已拉"。这和失窃的 `store.db` 一样处置：**吊销 + 视敏感度轮换相关凭据**（`servers edit --password` / `--key` 换那台机接触过的服务器凭据，`projects rotate` 换 project token）。物理拿到机器的人 + 本机 `cache-dek.key` = 能离线爆破那份当时的 vault 快照——这等同于"物理拿到一台配了 stdio vault 的机器"，不在本方案的威胁模型内（host-compromise = out of scope，见 [threat-model.md](./threat-model.md)）。
 
 ### 与 export/import 的关系
 
@@ -498,7 +486,7 @@ ssh-manager cache-tokens revoke laptop
 | 怎么触发 | 手动 `export` / `import` | 设备码 + OS 调度器自动 `cache pull` |
 | 格式 | `SSHMGRV1` 信封（Argon2id + AES-GCM）封 `Snapshot` JSON | 原始 key AES-GCM 封**同一份** `Snapshot` JSON |
 
-两者**复用同一份 `store.Snapshot`**（Plan 11 打的地基）——序列化格式一致，加密信封不同（export 用口令派生 key，cache 用本机 keychain 的 DEK）。
+两者**复用同一份 `store.Snapshot`**（Plan 11 打的地基）——序列化格式一致，加密信封不同（export 用口令派生 key，cache 用本机固定路径 `cache-dek.key` 裸文件的 DEK）。
 
 ### 限制（如实）
 
