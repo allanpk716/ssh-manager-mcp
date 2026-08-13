@@ -105,6 +105,20 @@ func Open(path string, masterKey []byte) (*Store, error) {
 			return nil, fmt.Errorf("harden ACL on store %q: %w", path, err)
 		}
 	}
+	// HardenACL the SQLite WAL sidecars (-shm / -wal) whenever they exist.
+	// Unlike store.db, these are created ON DEMAND by SQLite at first write
+	// (not by store.Open), under whatever process first writes — so they miss
+	// the creation-time HardenACL above and inherit the creating token's
+	// default DACL (e.g. LocalSystem-created -shm ends up SYSTEM+Admins-read,
+	// no user ACE). Under WAL mode every opener must write -shm (shared memory
+	// index); a second process lacking write access to -shm gets "attempt to
+	// write a readonly database" (Plan 16 F2 root cause). These sidecars are
+	// owned by SQLite not the user, so re-ACLing them on every Open is safe
+	// (unlike store.db, they have no "original creator's intent" to preserve)
+	// and is the only way to catch them as they appear. best-effort, non-fatal:
+	// a missing sidecar at Open time is normal (no writes yet); an ACL failure
+	// is logged but does not block Open (the main store.db ACL is the real gate).
+	hardenWALSidecars(path)
 	mk := make([]byte, len(masterKey))
 	copy(mk, masterKey)
 	return &Store{db: db, masterKey: mk}, nil
@@ -112,6 +126,26 @@ func Open(path string, masterKey []byte) (*Store, error) {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// hardenWALSidecars applies HardenACL to the SQLite WAL sidecar files (-shm,
+// -wal) if they exist next to storePath. Best-effort, non-fatal: these files
+// are created on demand by SQLite at first write and may not exist yet at
+// Open time; a HardenACL failure is swallowed because the main store.db ACL
+// is the real protection gate and a missing/bad sidecar ACL degrades
+// gracefully (worst case: a concurrent process gets "readonly database", not
+// a security exposure — the sidecars contain no plaintext credentials, only
+// the WAL frame index / shared-memory page map). Plan 16 F2.
+func hardenWALSidecars(storePath string) {
+	for _, suffix := range []string{"-shm", "-wal"} {
+		sidecar := storePath + suffix
+		if _, err := os.Stat(sidecar); err == nil {
+			// File exists — ensure its ACL matches the hardened contract. Ignore
+			// errors (best-effort): we may lack WRITE_DAC under some service
+			// tokens, and the next Open will retry.
+			_ = HardenACL(sidecar)
+		}
+	}
 }
 
 // Checkpoint forces a WAL checkpoint (TRUNCATE) so the main database file

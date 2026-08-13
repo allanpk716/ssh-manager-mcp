@@ -305,3 +305,82 @@ func getDACLForTestOrFatal(t *testing.T, path string) *windows.SECURITY_DESCRIPT
 	}
 	return sd
 }
+
+// TestHardenWALSidecars verifies the F2 fix: when -shm/-wal sidecars exist next
+// to storePath, hardenWALSidecars applies HardenACL to them (disabling the broad
+// inherited ACEs SQLite's creator-token would otherwise leave). These sidecars
+// are created on demand by SQLite at first write under whatever process first
+// writes — they inherit a too-broad / Admins-read-only DACL and block concurrent
+// openers under WAL mode ("attempt to write a readonly database").
+func TestHardenWALSidecars(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store.db")
+
+	// Create fake sidecar files with a deliberately-broad inherited ACL that
+	// mimics what SQLite (LocalSystem) would leave: Everyone FullControl. If
+	// hardenWALSidecars works, these get hardened (broad ACE gone, inheritance
+	// disabled). Use icacls-equivalent via SetNamedSecurityInfo directly.
+	everyoneSID := mustWellKnownSID(t, windows.WinWorldSid, "Everyone")
+	for _, suffix := range []string{"-shm", "-wal"} {
+		p := storePath + suffix
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatalf("create %s: %v", suffix, err)
+		}
+		// Plant a broad DACL (Everyone FullControl, inheritance enabled) —
+		// exactly the kind of thing SQLite's default-token creation leaves.
+		broadDACL, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{
+			buildExplicitAccess(everyoneSID, windows.GENERIC_ALL, windows.SET_ACCESS, windows.TRUSTEE_IS_WELL_KNOWN_GROUP),
+		}, nil)
+		if err != nil {
+			t.Fatalf("build broad DACL: %v", err)
+		}
+		if err := windows.SetNamedSecurityInfo(p, windows.SE_FILE_OBJECT,
+			windows.UNPROTECTED_DACL_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
+			nil, nil, broadDACL, nil); err != nil {
+			t.Fatalf("plant broad DACL on %s: %v", suffix, err)
+		}
+	}
+
+	// Run the fix.
+	hardenWALSidecars(storePath)
+
+	// Both sidecars must now be hardened: inheritance disabled, no Everyone.
+	for _, suffix := range []string{"-shm", "-wal"} {
+		p := storePath + suffix
+		dacl, sd, err := getDACLForTest(p)
+		if err != nil {
+			t.Fatalf("read DACL on %s: %v", suffix, err)
+		}
+		if !isDaclProtected(sd) {
+			t.Errorf("%s DACL not protected after hardenWALSidecars", suffix)
+		}
+		if trusteeInACL(dacl, everyoneSID) {
+			t.Errorf("%s still has Everyone ACE after hardenWALSidecars", suffix)
+		}
+	}
+
+	// A missing storePath (no sidecars at all) must not error — normal for a
+	// fresh vault with no writes yet.
+	hardenWALSidecars(filepath.Join(dir, "nonexistent.db"))
+}
+
+// TestHardenWALSidecars_NoOpOnFreshStore confirms that on a freshly-created
+// store.db (no -shm/-wal yet, because no writes), hardenWALSidecars does
+// nothing and Open succeeds — the common path until the first write.
+func TestHardenWALSidecars_NoOpOnFreshStore(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store.db")
+	mk := make([]byte, 32)
+	st, err := Open(storePath, mk)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	st.Close()
+	// No -shm/-wal should exist (Open + schema does not create them; only
+	// writes do). hardenWALSidecars must be a silent no-op here.
+	for _, suffix := range []string{"-shm", "-wal"} {
+		if _, err := os.Stat(storePath + suffix); err == nil {
+			t.Errorf("unexpected %s on fresh store (Open should not create WAL sidecars)", suffix)
+		}
+	}
+}
