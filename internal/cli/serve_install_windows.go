@@ -396,10 +396,10 @@ func registerTask(r psRunner, in taskInputs, password string) error {
 	// split on [char]10 (LF) via the regex '\n' which PS interprets as a
 	// newline under -split, sidestepping the backtick entirely.
 	const ps = `$ErrorActionPreference='Stop'
-$lines = [string]::Join("` + "\n" + `", $input)
-$p = $lines -split "` + "`n" + `"
+$raw = [Console]::In.ReadToEnd()
+$p = $raw -split "\r?\n"
 $exe=$p[0]; $addr=$p[1]; $user=$p[2]; $logPath=$p[3]; $logDir=$p[4]; $tlsCert=$p[5]; $tlsKey=$p[6]; $password=$p[7]
-Write-Output "DEBUG input-count=$($input.Count) p-count=$($p.Count) user=[$user] addr=[$addr]"
+if (-not $user) { Write-Error "registerTask: user is empty (stdin parse failed; raw len=$($raw.Length))"; exit 3 }
 $tlsArg = ''
 if ($tlsCert -ne '' -and $tlsKey -ne '') { $tlsArg = ' --tls-cert "' + $tlsCert + '" --tls-key "' + $tlsKey + '"' }
 $actionArg = '/C if not exist "' + $logDir + '" mkdir "' + $logDir + '" & "' + $exe + '" serve --addr "' + $addr + '"' + $tlsArg + ' >> "' + $logPath + '" 2>&1'
