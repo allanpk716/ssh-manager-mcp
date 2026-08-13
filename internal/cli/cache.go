@@ -120,6 +120,27 @@ func cachePullCmd() *cobra.Command {
 			if url == "" || token == "" {
 				return fmt.Errorf("--url and --token are required (or SSHMGR_CACHE_URL / SSHMGR_CACHE_TOKEN)")
 			}
+			// Pin resolution priority: env SSHMGR_SERVE_PIN > --pin flag > token-embedded "<code>:<pin>".
+			// plain=true means no pin anywhere → plaintext HTTP fallback (pre-auto-TLS behavior).
+			pinFlag, _ := cmd.Flags().GetString("pin")
+			fp, plain := resolvePin(os.Getenv("SSHMGR_SERVE_PIN"), pinFlag, token)
+			code := token
+			var client *http.Client
+			if plain {
+				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: no server pin — falling back to plaintext HTTP (set --pin or SSHMGR_SERVE_PIN for TLS).\n")
+				client = http.DefaultClient
+			} else {
+				// The device code goes to the Authorization header; the pin is for TLS only.
+				// If the token is "<code>:<pin>", strip the pin so the header carries just the code.
+				if c, _, ok := stripEmbeddedPin(token); ok {
+					code = c
+				}
+				tr, err := pinningTransport(fp)
+				if err != nil {
+					return err
+				}
+				client = &http.Client{Transport: tr}
+			}
 			dek, err := loadOrCreateDEK()
 			if err != nil {
 				return err
@@ -128,14 +149,14 @@ func cachePullCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			req.Header.Set("Authorization", "Bearer "+token)
-			res, err := http.DefaultClient.Do(req)
+			req.Header.Set("Authorization", "Bearer "+code)
+			res, err := client.Do(req)
 			if err != nil {
 				return fmt.Errorf("pull: %w", err)
 			}
 			defer res.Body.Close()
 			if res.StatusCode != 200 {
-				// Drain + close so http.DefaultClient can reuse the TCP connection
+				// Drain + close so the client can reuse the TCP connection
 				// (a non-read response body keeps the keep-alive socket half-read).
 				io.Copy(io.Discard, res.Body)
 				return fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
@@ -177,6 +198,7 @@ func cachePullCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&url, "url", "", "serve broker URL (https://host:7878)")
 	c.Flags().StringVar(&token, "token", "", "device authorization code (from `cache-tokens add`)")
+	c.Flags().String("pin", "", "server SPKI fingerprint sha256:... (or set SSHMGR_SERVE_PIN); omit for plaintext fallback")
 	return c
 }
 
@@ -239,15 +261,26 @@ func resolvePin(envVal, flagVal, token string) (fp string, plain bool) {
 
 // pinningTransport builds an http.Transport whose TLS handshake is pinned to fp:
 // the server leaf cert's SPKI fingerprint MUST equal fp or the handshake fails.
-// Uses VerifyConnection (NOT InsecureSkipVerify) so the standard library's
-// name-check + chain validation stays intact — only the SPKI pin is added.
+//
+// Trust model: the serve cert is SELF-SIGNED (see generateServeCert) — there is
+// no external CA to chain to, and on Windows the system verifier additionally
+// chokes on ed25519 ("Invalid algorithm specified"). So we cannot rely on the
+// default certificate verification (it would always fail before our pin check
+// ran). Instead we set BOTH InsecureSkipVerify=true (skip CA/chain/name
+// verification — which is impossible for a self-signed cert anyway) AND
+// VerifyConnection (enforce the SPKI pin). Per Go's crypto/tls docs,
+// InsecureSkipVerify skips the default verifier but does NOT disable
+// VerifyConnection, which becomes the sole trust anchor. This is the standard
+// HPKP / Tailscale pinning pattern: trust comes from the pin, not from a CA.
+// The pin is compared in constant time to avoid an oracle.
 func pinningTransport(fp string) (*http.Transport, error) {
 	want, ok := mcpserver.ParsePin(fp)
 	if !ok {
 		return nil, fmt.Errorf("invalid server pin format %q (want sha256:<64hex>)", fp)
 	}
 	tlsCfg := &tls.Config{
-		MinVersion: tls.VersionTLS13,
+		MinVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: true, // skip CA verification (self-signed serve cert); pin below is the trust anchor
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 {
 				return fmt.Errorf("server presented no certificate")

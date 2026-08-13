@@ -2,12 +2,22 @@ package cli
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
@@ -205,4 +215,191 @@ func TestPinningTransport_BadPinErrors(t *testing.T) {
 	if tr.TLSClientConfig.VerifyConnection == nil {
 		t.Fatal("VerifyConnection callback not set")
 	}
+}
+
+// TestCachePull_PinnedTLS_Succeeds is the end-to-end exercise of the pinning
+// transport at runtime: it spins up an httptest TLS server with a freshly
+// generated ed25519 self-signed cert, pins the client to that cert's SPKI
+// fingerprint via SSHMGR_SERVE_PIN, and asserts `cache pull` succeeds against
+// it. This closes the Task-4 review's "Minor" gap by driving the real
+// VerifyConnection callback (constant-time compare + leaf-cert path + success
+// path) through the real cachePullCmd wiring (env > flag > embedded resolution,
+// Authorization header carries the device code, not the pin).
+func TestCachePull_PinnedTLS_Succeeds(t *testing.T) {
+	// Build a self-signed TLS test server serving /snapshot with a fixed body.
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := mcpserver.SPKIFingerprint(cert)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes})
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer code-123" {
+			http.Error(w, "no auth", http.StatusUnauthorized)
+			return
+		}
+		fmt.Fprint(w, `{"servers":[],"credentials":[]}`)
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{tlsCert}}
+	srv.StartTLS()
+	defer srv.Close()
+
+	// Point cache pull at it. DEK is injected in-memory (withDEK) so the test
+	// never touches the real keychain; SSHMGR_FILEKEY_PATH is intentionally NOT
+	// set because the cache DEK lives at a fixed path (paths.CacheDekPath()).
+	withDEK(t)
+	cacheDir := t.TempDir()
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_URL":   srv.URL,
+		"SSHMGR_CACHE_TOKEN": "code-123",
+		"SSHMGR_SERVE_PIN":   fp,
+		"SSHMGR_CACHE_DIR":   cacheDir,
+		"SSHMGR_STORE":       filepath.Join(t.TempDir(), "store.db"),
+	})
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"cache", "pull"})
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("pinned pull failed: %v", err)
+	}
+	bin := filepath.Join(cacheDir, "cache.bin")
+	blob, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatalf("cache.bin not written: %v", err)
+	}
+	if len(blob) == 0 || string(blob[:8]) != "SSHMGRV1" {
+		t.Fatalf("cache.bin not an SSHMGRV1 envelope: %x", blob[:min(8, len(blob))])
+	}
+}
+
+// TestCachePull_PlaintextFallback_Warns verifies the no-pin branch: when no
+// pin is resolvable (no env / flag / embedded), cache pull falls back to
+// plaintext HTTP and prints a STDERR warning, preserving pre-auto-TLS behavior.
+func TestCachePull_PlaintextFallback_Warns(t *testing.T) {
+	url, code := standUpServe(t) // plaintext httptest.Server
+	withDEK(t)
+	cacheDir := t.TempDir()
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_DIR": cacheDir,
+		"SSHMGR_SERVE_PIN": "", // explicitly unset → plaintext fallback
+	})
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"cache", "pull", "--url", url, "--token", code})
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("plaintext pull failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "WARNING") || !strings.Contains(out.String(), "plaintext") {
+		t.Fatalf("plaintext fallback did not warn: %s", out.String())
+	}
+}
+
+// TestCachePull_PinMismatch_Fails verifies the negative path: a pin that does
+// NOT match the server cert's SPKI must fail the TLS handshake (the
+// VerifyConnection callback rejects the mismatched leaf cert).
+func TestCachePull_PinMismatch_Fails(t *testing.T) {
+	url := standUpServeTLS(t) // TLS server with cert A
+	withDEK(t)
+	cacheDir := t.TempDir()
+	// pin B: well-formed sha256:<64hex> but does NOT match cert A's SPKI.
+	// (Must be valid hex so resolvePin accepts it; 'z' would be rejected and
+	// silently fall through to plaintext fallback.)
+	otherPin := "sha256:" + strings.Repeat("0", 64)
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_URL":   url,
+		"SSHMGR_CACHE_TOKEN": "code-123",
+		"SSHMGR_SERVE_PIN":   otherPin,
+		"SSHMGR_CACHE_DIR":   cacheDir,
+		"SSHMGR_STORE":       filepath.Join(t.TempDir(), "store.db"),
+	})
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"cache", "pull"})
+	errBuf := &bytes.Buffer{}
+	root.SetOut(errBuf)
+	root.SetErr(errBuf)
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("pull with mismatched pin must fail")
+	}
+	// The error MUST come from our VerifyConnection callback (fingerprint
+	// mismatch), not from an unrelated schannel/CryptoAPI rejection — that
+	// assertion is what proves the callback actually ran at runtime.
+	if !strings.Contains(err.Error(), "mismatch") && !strings.Contains(errBuf.String(), "mismatch") {
+		t.Fatalf("pull error did not come from the pin check (no 'mismatch' in %q / %q)", err.Error(), errBuf.String())
+	}
+}
+
+// standUpServeTLS spins a TLS httptest.Server with a fresh self-signed
+// ed25519 cert (same shape as TestCachePull_PinnedTLS_Succeeds's server) and
+// returns its URL. Used by the pin-mismatch test, which only needs the server
+// to present SOME cert the pin will not match.
+func standUpServeTLS(t *testing.T) (url string) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes})
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"servers":[],"credentials":[]}`)
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{tlsCert}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv.URL
 }
