@@ -11,10 +11,11 @@ import (
 	"path/filepath"
 )
 
-// DpapiKeyProvider stores the master key in a file encrypted with user-scope
-// DPAPI. Windows-only replacement for the keychain path: Credential Manager
-// (wincred) fails in sshd/Service sessions (ERROR_NO_SUCH_LOGON_SESSION 1312),
-// but DPAPI works across RDP/sshd/TaskScheduler sessions (spec 12 spike).
+// DpapiKeyProvider stores the master key in a file encrypted with machine-scope
+// DPAPI (Plan 15; user-scope failed cross-logon-session, spec §3.2). Windows-only
+// replacement for the keychain path: Credential Manager (wincred) fails in
+// sshd/Service sessions (ERROR_NO_SUCH_LOGON_SESSION 1312), but DPAPI works
+// across RDP/sshd/TaskScheduler sessions (spec 12 spike).
 //
 // Path is the master.key file (empty → default %AppData%\ssh-manager\master.key).
 // DirUser is the username for the folder ACL (empty → current user). cache DEK
@@ -54,14 +55,23 @@ func (p DpapiKeyProvider) Get() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	mk, err := dpapiUnprotect(blob, false)
-	if err != nil {
-		// Decryption failure (corrupt file / admin-reset password / session
-		// anomaly): return the error AS-IS (not ErrNotFound) so resolveMasterKey
-		// hard-fails instead of falling through to plaintext FileProvider.
-		return nil, err
+	// machine-scope 主路径(Plan 15:跨 logon session 可解)
+	if mk, err := dpapiUnprotect(blob, true); err == nil {
+		return mk, nil
 	}
-	return mk, nil
+	// user-scope fallback(迁移窗口期:旧 master.key 是 user-scope)。
+	// spike 2:flag 不强制隔离,但双 scope 尝试保证"无论旧 blob 哪个 scope 都能读出"。
+	// 两个 scope 都失败则返回 machine-scope 的错误(下面再调一次取 err)。
+	mk, err := dpapiUnprotect(blob, false)
+	if err == nil {
+		return mk, nil
+	}
+	// 都失败:重试 machine-scope 拿它的错误信息(machine-scope 是主路径,错误更相关)
+	if mk2, err2 := dpapiUnprotect(blob, true); err2 == nil {
+		return mk2, nil
+	} else {
+		return nil, err // 返回 user-scope 的 err(最后一个)
+	}
 }
 
 func (p DpapiKeyProvider) Set(mk []byte) error {
@@ -73,18 +83,17 @@ func (p DpapiKeyProvider) Set(mk []byte) error {
 	if err := ensureDirACL(dir, p.dirUser()); err != nil {
 		return fmt.Errorf("dpapi: ensureDirACL: %w", err)
 	}
-	blob, err := dpapiProtect(mk, false)
+	blob, err := dpapiProtect(mk, true) // machine-scope(Plan 15)
 	if err != nil {
 		return err
 	}
-	// Atomic write: temp + os.Rename. Half-write crash leaves no corrupt
-	// master.key (the trust root — losing it = full vault loss). spec 5.2.
+	// ACL 契约(pi #3):temp 必须在 protectedDir(dir)内,继承 allan716-only ACL。
+	// 严禁 os.TempDir()(那里继承宽 ACL,rename 后保留 → machine-scope 下全库失守)。
 	tmp, err := os.CreateTemp(dir, ".master.key.tmp-*")
 	if err != nil {
 		return err
 	}
 	tmpPath := tmp.Name()
-	// Best-effort cleanup if any step below fails; no-op after successful rename.
 	defer os.Remove(tmpPath)
 	if _, err := tmp.Write(blob); err != nil {
 		tmp.Close()
