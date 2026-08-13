@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -66,6 +67,17 @@ func Open(path string, masterKey []byte) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
+	// Detect first-creation BEFORE sql.Open (modernc creates the file lazily on
+	// first query, so we snapshot existence up front). HardenACL must run only
+	// when THIS Open creates store.db — not on every open. Re-running HardenACL
+	// on an existing store.db from a different account (e.g. serve runs as
+	// LocalSystem but the file was created by the interactive user) would
+	// rewrite the DACL under the service account's token: currentUserSID()
+	// returns LocalSystem, which collides with the SYSTEM ACE (dedup'd by
+	// SET_ACCESS), silently dropping the original user's ACE. That broke
+	// §5.2's "store.db shares the master.key ACL" contract on NUC10 (F1).
+	_, statErr := os.Stat(path)
+	isNew := errors.Is(statErr, fs.ErrNotExist)
 	// Enable foreign_keys (OFF by default in SQLite — otherwise ON DELETE CASCADE
 	// and FK constraints are dead code) and a 5s busy_timeout to wait on locks.
 	// WAL mode improves concurrency; MaxOpenConns(1) serializes access so the
@@ -83,24 +95,15 @@ func Open(path string, masterKey []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	// HardenACL on the store.db FILE (Plan 16 final review, spec §5.2 xcheck
-	// codex P6): master.key + cache-dek.key are ACL-locked by their providers,
-	// but store.db was created here with the creating token's default DACL —
-	// on Windows that means Users / Authenticated Users have read access to a
-	// file containing plaintext server metadata (host/user/name/tags/description)
-	// + audit logs, which spec §6.1 claims is prevented. HardenACL uses
-	// NO_INHERITANCE so the fresh file does NOT pick up the hardened parent
-	// dir's restrictive DACL — we must explicitly re-ACL it here. Hard-fail on
-	// error: the ACL is the only protection layer for this plaintext metadata
-	// (same rationale as master.key); silent failure leaves it world-readable.
-	// NOTE: the *sql.DB handle above was opened BEFORE this ACL change — on
-	// Windows changing a file's DACL does NOT invalidate an existing open
-	// handle (the handle's access was granted at open time; DACL gates only
-	// future opens), so the just-opened handle remains usable. HardenACL is a
-	// no-op on non-Windows (file mode bits are the protection there).
-	if err := HardenACL(path); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("harden ACL on store %q: %w", path, err)
+	// HardenACL ONLY on first creation (Plan 16 F1 fix, spec §5.2 xcheck codex
+	// P6). On an existing store.db the ACL was set at creation time by whoever
+	// first created it (interactive user or service account); re-running it
+	// here under a different token would corrupt the DACL (see isNew note above).
+	if isNew {
+		if err := HardenACL(path); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("harden ACL on store %q: %w", path, err)
+		}
 	}
 	mk := make([]byte, len(masterKey))
 	copy(mk, masterKey)

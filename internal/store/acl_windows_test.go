@@ -226,3 +226,82 @@ func currentUserSIDForTest(t *testing.T) *windows.SID {
 	}
 	return sid
 }
+
+// TestOpen_DoesNotRewriteExistingStoreDBACL is the NUC10 F1 regression test.
+// HardenACL must run ONLY on first creation, not on every Open. The bug: serve
+// (LocalSystem) re-opens a store.db created by the interactive user, and
+// HardenACL re-ran under the service token — currentUserSID() returned
+// LocalSystem, which collided with the SYSTEM ACE (SET_ACCESS dedup), silently
+// dropping the user's ACE. Fix: Open snapshots existence before sql.Open and
+// skips HardenACL when the file already exists.
+//
+// This test proves the contract: after Open #1 sets the ACL, manually corrupt
+// it to a DIFFERENT SDDL. Open #2 must NOT restore it (no HardenACL re-run).
+// If Open #2 rewrote the ACL, the corrupted SDDL would be overwritten.
+func TestOpen_DoesNotRewriteExistingStoreDBACL(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "store.db")
+	mk := make([]byte, 32)
+
+	// Open #1 — creates store.db + HardenACL (3-ACE: SYSTEM+Admins+user).
+	st1, err := Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("Open #1: %v", err)
+	}
+	st1.Close()
+	originalSDDL := getDACLForTestOrFatal(t, dbPath).String()
+	t.Logf("post-Open#1 SDDL: %s", originalSDDL)
+
+	// Manually replace the DACL with a deliberately-different one: grant
+	// Everyone FullControl (a clearly-wrong, broad ACE). If Open #2 re-runs
+	// HardenACL, it would overwrite this; if it correctly skips (file exists),
+	// this broad ACE survives Open #2.
+	everyoneSID := mustWellKnownSID(t, windows.WinWorldSid, "Everyone")
+	broadEntries := []windows.EXPLICIT_ACCESS{
+		buildExplicitAccess(everyoneSID, windows.GENERIC_ALL, windows.SET_ACCESS, windows.TRUSTEE_IS_WELL_KNOWN_GROUP),
+	}
+	broadDACL, err := windows.ACLFromEntries(broadEntries, nil)
+	if err != nil {
+		t.Fatalf("build broad DACL: %v", err)
+	}
+	const si = windows.PROTECTED_DACL_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION
+	if err := windows.SetNamedSecurityInfo(dbPath, windows.SE_FILE_OBJECT, si, nil, nil, broadDACL, nil); err != nil {
+		t.Fatalf("manually corrupt ACL: %v", err)
+	}
+	corruptSDDL := getDACLForTestOrFatal(t, dbPath).String()
+	t.Logf("post-corrupt SDDL: %s", corruptSDDL)
+
+	// Open #2 — file exists, HardenACL must NOT run.
+	st2, err := Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("Open #2: %v", err)
+	}
+	st2.Close()
+	afterSecondSDDL := getDACLForTestOrFatal(t, dbPath).String()
+	t.Logf("post-Open#2 SDDL: %s", afterSecondSDDL)
+
+	// The ACL after Open #2 must equal the corrupt one (untouched), NOT the
+	// original hardened one. If they're equal to original, HardenACL re-ran
+	// (the bug).
+	if afterSecondSDDL == originalSDDL {
+		t.Fatalf("Open #2 rewrote the ACL (HardenACL re-ran on existing file) — F1 regression. got original SDDL back: %s", afterSecondSDDL)
+	}
+	if afterSecondSDDL != corruptSDDL {
+		t.Fatalf("Open #2 changed the ACL to something unexpected (neither corrupt nor original): %s", afterSecondSDDL)
+	}
+	// Sanity: the Everyone ACE (our corruption marker) must still be present.
+	dacl2, _, _ := getDACLForTest(dbPath)
+	if !trusteeInACL(dacl2, everyoneSID) {
+		t.Fatalf("Everyone ACE (corruption marker) missing after Open #2 — ACL was rewritten")
+	}
+}
+
+// getDACLForTestOrFatal reads the DACL+SD for path, fataling on error.
+func getDACLForTestOrFatal(t *testing.T, path string) *windows.SECURITY_DESCRIPTOR {
+	t.Helper()
+	_, sd, err := getDACLForTest(path)
+	if err != nil {
+		t.Fatalf("getDACLForTest(%s): %v", path, err)
+	}
+	return sd
+}
