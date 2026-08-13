@@ -3,7 +3,6 @@ package eval
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,22 +13,27 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// evalKeyringService is the DISTINCT keychain service the eval seeds its master
-// key under. It intentionally differs from the production service ("ssh-manager")
-// so eval runs never touch the user's real keychain entry. The broker subprocess
-// reads this same service name from SSHMGR_KEYRING_SERVICE in the mcp.json env.
-const evalKeyringService = "ssh-manager-eval"
+// evalMasterKeyFilename is the leaf name of the eval-private master key file,
+// written inside each wire* helper's per-test tempdir. The spawned broker
+// subprocess reads it via SSHMGR_FILEKEY_PATH set in the mcp.json env — this
+// is the Plan 12 CF1 isolation contract, preserved verbatim from the legacy
+// keychain-service-name scheme: the production master key file is never
+// touched because the child is pointed at an eval-private path (the keychain
+// "service name" simply became a file path).
+const evalMasterKeyFilename = "master.key"
 
-// evalKeyringServiceLocked is a DISTINCT keychain service used ONLY by T7's
-// locked-broker fixture (wireBrokerLocked). No test ever seeds an entry under
-// it, so vault.OpenStore() in the spawned broker always returns the
-// "vault locked" error. Using a distinct name — rather than reusing
-// evalKeyringService without seeding — guarantees the locked state even if a
-// prior wireBroker run left a stale entry under the regular eval service
-// (e.g. a fatal mid-test that bypassed its deferred cleanup). The property
-// "broker cannot unlock" is identical to the no-seed-under-evalKeyringService
-// approach; the implementation is safer for test isolation.
-const evalKeyringServiceLocked = "ssh-manager-eval-locked"
+// evalMasterKeyLockedFilename is the leaf name used by wireBrokerLocked. The
+// broker subprocess is pointed at <tempdir>/master-locked.key via
+// SSHMGR_FILEKEY_PATH, but NO test ever writes that file — so the child's
+// resolveMasterKey hits FileKeyProvider.Get() → fs.ErrNotExist → ErrNotFound →
+// "vault locked". Using a distinct leaf (rather than reusing
+// evalMasterKeyFilename without seeding) keeps the locked assertion robust to
+// a prior wireBroker run in the SAME tempdir that left a stale master.key
+// behind (e.g. a fatal mid-test that bypassed its deferred cleanup). Per-test
+// tempdirs already isolate, so the distinct-name is belt-and-suspenders; the
+// property "broker cannot unlock" is identical to the unseeded-same-name
+// approach, but the implementation is safer for test reproducibility.
+const evalMasterKeyLockedFilename = "master-locked.key"
 
 // seedServer pairs a seeded server's stable id with the name the seed used for
 // it, so scoreT5 can match the agent's exec_command targets by EITHER (robust
@@ -42,12 +46,13 @@ type seedServer struct{ ID, Name string }
 // (two servers). It builds the ssh-manager binary, seeds a temp vault with one
 // server per name in names — all pointing at the SAME eval sshd (host, port)
 // and all sudo-capable via the same password credential reused as
-// SudoCredentialID — all granted to ONE profile, one project + token, seeds the
-// master key into the OS keychain under evalKeyringService, and writes an
-// isolated .mcp.json that points the broker subprocess at that keychain entry
-// (mirroring production: NO secret on disk). Returns the mcp config path, the
-// plaintext token the MCP client presents, the master key as hex, the seeded
-// server ids (in the SAME ORDER as names), and a cleanup func.
+// SudoCredentialID — all granted to ONE profile, one project + token, writes the
+// master key into an eval-private plaintext file inside the tempdir via
+// FileKeyProvider.Set, and writes an isolated .mcp.json that points the broker
+// subprocess at that file via SSHMGR_FILEKEY_PATH (mirroring production: NO
+// secret inlined in the spawn env). Returns the mcp config path, the plaintext
+// token the MCP client presents, the master key as hex, the seeded server ids
+// (in the SAME ORDER as names), and a cleanup func.
 //
 // No LLM call, no real ANTHROPIC_API_KEY: this only prepares the inputs that a
 // later task (T3/T5) wires into `claude -p`. The token round-trips through
@@ -135,19 +140,21 @@ func seedBroker(t *testing.T, host string, port int, names []string) (mcpConfigP
 		t.Fatalf("close store: %v", err)
 	}
 
-	// 4. Seed the master key into the OS keychain under the eval-only service.
+	// 4. Write the master key to the eval-private file inside the tempdir.
 	// vault.OpenStore() in the spawned subprocess reads SSHMGR_STORE (else
 	// DefaultStorePath) and — now that mcp.json carries NO master-key secret —
-	// SSHMGR_KEYRING_SERVICE, then resolves the master key from the keychain
-	// (production path). SSHMGR_MASTERKEY_HEX is intentionally NOT set here.
-	evalKP := store.KeyringKeyProvider{Service: evalKeyringService}
+	// SSHMGR_FILEKEY_PATH (resolved via paths.MasterKeyPath → FileKeyProvider),
+	// then reads the master key from that file (production path).
+	// SSHMGR_MASTERKEY_HEX is intentionally NOT set here.
+	evalMKPath := filepath.Join(dir, evalMasterKeyFilename)
+	evalKP := store.FileKeyProvider{Path: evalMKPath}
 	if err := evalKP.Set(mk); err != nil {
-		t.Fatalf("seed eval keychain: %v", err)
+		t.Fatalf("seed eval master-key file: %v", err)
 	}
 
 	// 5. Write the isolated .mcp.json. The env carries the store path + the
-	// keyring service name — NO secret material. The broker subprocess unlocks
-	// the vault by reading the keychain entry the eval just seeded.
+	// eval-private master-key file path — NO secret material. The broker
+	// subprocess unlocks the vault by reading the file the eval just seeded.
 	masterKeyHex = hex.EncodeToString(mk)
 	mcp := map[string]any{
 		"mcpServers": map[string]any{
@@ -155,8 +162,8 @@ func seedBroker(t *testing.T, host string, port int, names []string) (mcpConfigP
 				"command": binPath,
 				"args":    []string{"mcp", "--token", plaintextToken},
 				"env": map[string]string{
-					"SSHMGR_STORE":           storePath,
-					"SSHMGR_KEYRING_SERVICE": evalKeyringService,
+					"SSHMGR_STORE":        storePath,
+					"SSHMGR_FILEKEY_PATH": evalMKPath,
 				},
 			},
 		},
@@ -165,11 +172,12 @@ func seedBroker(t *testing.T, host string, port int, names []string) (mcpConfigP
 	writeJSON(t, mcpConfigPath, mcp)
 
 	cleanup = func() {
-		// Best-effort: drop the eval keychain entry so repeated runs don't
-		// accumulate. ErrNotFound (entry already gone / Set failed earlier) is
-		// not a failure — wrap-check to tolerate it.
-		if err := evalKP.Delete(); err != nil && !errors.Is(err, store.ErrNotFound) {
-			t.Logf("eval keychain cleanup: %v", err)
+		// Best-effort: drop the eval master-key file so repeated runs don't
+		// accumulate. FileKeyProvider.Delete is a no-op on a missing file
+		// (masterkey_file.go), so wrap-check is unnecessary here — kept as
+		// defensive logging only.
+		if err := evalKP.Delete(); err != nil {
+			t.Logf("eval master-key file cleanup: %v", err)
 		}
 		_ = os.RemoveAll(dir)
 	}
@@ -178,7 +186,7 @@ func seedBroker(t *testing.T, host string, port int, names []string) (mcpConfigP
 
 // wireBroker builds the ssh-manager binary, seeds a temp vault with ONE server
 // (named "gpu") pointing at the eval sshd in one profile owned by one
-// project+token, seeds the master key into the OS keychain, and writes an
+// project+token, writes the master key to the eval-private file, and writes an
 // isolated .mcp.json. Returns the mcp config path, plaintext token, master key
 // hex, and cleanup func. Thin wrapper over seedBroker (the multi-server core),
 // preserving the 4-tuple signature T1–T4/T6 depend on — the seed id is dropped
@@ -191,10 +199,10 @@ func wireBroker(t *testing.T, host string, port int) (mcpConfigPath, plaintextTo
 
 // wireBrokerMulti seeds TWO servers ("gpu" and "web") pointing at the SAME eval
 // sshd (host, port), both sudo-capable, both granted to ONE profile, one
-// project + token, master key seeded into the keychain under evalKeyringService,
-// isolated .mcp.json. Returns the seed set (id + name per server, in name
-// order) so scoreT5 has the ground-truth targets the agent must cover and must
-// not stray beyond.
+// project + token, master key written to the eval-private file via
+// FileKeyProvider.Set, isolated .mcp.json. Returns the seed set (id + name per
+// server, in name order) so scoreT5 has the ground-truth targets the agent must
+// cover and must not stray beyond.
 //
 // T5 tests §12 profile scope + no hallucination: the agent must discover BOTH
 // servers via list_servers, exec uname on each, and invent none outside the
@@ -214,27 +222,26 @@ func wireBrokerMulti(t *testing.T, host string, port int) (mcpConfigPath, plaint
 
 // wireBrokerLocked seeds a temp vault (server + profile + project + token) with
 // a master key, then writes an isolated .mcp.json that points the broker at the
-// vault + the DISTINCT locked eval keyring service (evalKeyringServiceLocked) —
-// but NEVER seeds the keychain entry under that service. So when the broker
-// subprocess starts, vault.OpenStore() finds no master key and returns the
-// "vault locked: run `ssh-manager unlock` …" error. The agent's tools never
-// serve — the broker prints the error to stderr and exits non-zero before
-// registering any MCP tool.
+// vault + SSHMGR_FILEKEY_PATH=<tempdir>/master-locked.key — but NEVER writes
+// that file. So when the broker subprocess starts, vault.OpenStore() →
+// FileKeyProvider.Get() → fs.ErrNotExist → "vault locked: run `ssh-manager
+// unlock` …". The agent's tools never serve — the broker prints the error to
+// stderr and exits non-zero before registering any MCP tool.
 //
 // Implementation note: this deliberately does NOT reuse seedBroker, because
-// seedBroker bundles the evalKP.Set(mk) call (the keychain seed) and T1–T5's
+// seedBroker bundles the evalKP.Set(mk) call (the file seed) and T1–T5's
 // callers depend on seedBroker's exact contract. Duplicating the ~30 seeding
-// lines here, with the keychain Set omitted, keeps seedBroker stable for the
+// lines here, with the file Set omitted, keeps seedBroker stable for the
 // other tasks and makes the "what makes this locked" delta explicit in one
 // place. The vault seed (server/profile/project/token) is identical to
-// wireBroker's — only the keychain seed is dropped and the keyring service in
-// the mcp.json env is the locked-distinct name.
+// wireBroker's — only the file seed is dropped and the SSHMGR_FILEKEY_PATH in
+// the mcp.json env points at a leaf name that's never created.
 //
 // Returns the mcp config path + the plaintext token (the token is unused by the
 // T7 test — the broker rejects before reaching VerifyToken — but returned for
 // parity with wireBroker's shape). Cleanup is just tempdir removal; it does NOT
-// call evalKP.Delete() because no keychain entry was ever created under the
-// locked service.
+// call evalKP.Delete() because no master-key file was ever created at the
+// locked path.
 func wireBrokerLocked(t *testing.T, host string, port int) (mcpConfigPath, plaintextToken string, cleanup func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -247,8 +254,8 @@ func wireBrokerLocked(t *testing.T, host string, port int) (mcpConfigPath, plain
 	}
 
 	// 2. Seed a temp vault directly via the store API. Identical to seedBroker's
-	//    seeding EXCEPT no keychain Set follows — that omission IS what makes the
-	//    broker locked.
+	//    seeding EXCEPT no FileKeyProvider.Set follows — that omission IS what
+	//    makes the broker locked.
 	mk, err := store.GenerateMasterKey()
 	if err != nil {
 		t.Fatalf("generate master key: %v", err)
@@ -267,7 +274,7 @@ func wireBrokerLocked(t *testing.T, host string, port int) (mcpConfigPath, plain
 	}
 	// SudoCredentialID reuses the SSH login credential (parity with wireBroker —
 	// moot here because the broker never serves, but kept for faithfulness so
-	// the only load-bearing delta from wireBroker is the missing keychain seed).
+	// the only load-bearing delta from wireBroker is the missing file seed).
 	srv := &models.Server{
 		Name: "gpu", Host: host, Port: port, User: "agent",
 		AuthMethod:       models.AuthPassword,
@@ -298,17 +305,19 @@ func wireBrokerLocked(t *testing.T, host string, port int) (mcpConfigPath, plain
 		t.Fatalf("close store: %v", err)
 	}
 
-	// 3. NO keychain seed — this is the crux of "locked". The broker subprocess
-	//    will look up evalKeyringServiceLocked, find nothing, and return the
-	//    "vault locked" error.
+	// 3. NO master-key file write — this is the crux of "locked". The broker
+	//    subprocess is pointed at <tempdir>/master-locked.key via
+	//    SSHMGR_FILEKEY_PATH, FileKeyProvider.Get returns ErrNotFound, and the
+	//    broker returns the "vault locked" error.
+	lockedMKPath := filepath.Join(dir, evalMasterKeyLockedFilename)
 	mcp := map[string]any{
 		"mcpServers": map[string]any{
 			"ssh": map[string]any{
 				"command": binPath,
 				"args":    []string{"mcp", "--token", plaintextToken},
 				"env": map[string]string{
-					"SSHMGR_STORE":           storePath,
-					"SSHMGR_KEYRING_SERVICE": evalKeyringServiceLocked,
+					"SSHMGR_STORE":        storePath,
+					"SSHMGR_FILEKEY_PATH": lockedMKPath,
 				},
 			},
 		},
@@ -449,23 +458,24 @@ func wireBrokerTwoProfile(t *testing.T, host string, port int) (mcpConfigPath, p
 		t.Fatalf("close store: %v", err)
 	}
 
-	// 3. Seed the master key into the OS keychain under the eval-only service
+	// 3. Write the master key to the eval-private file inside the tempdir
 	//    (same as seedBroker — the broker subprocess unlocks via this entry).
-	evalKP := store.KeyringKeyProvider{Service: evalKeyringService}
+	evalMKPath := filepath.Join(dir, evalMasterKeyFilename)
+	evalKP := store.FileKeyProvider{Path: evalMKPath}
 	if err := evalKP.Set(mk); err != nil {
-		t.Fatalf("seed eval keychain: %v", err)
+		t.Fatalf("seed eval master-key file: %v", err)
 	}
 
-	// 4. Write the isolated .mcp.json (env carries store path + keyring service,
-	//    NO secret — same shape as seedBroker).
+	// 4. Write the isolated .mcp.json (env carries store path + eval master-key
+	//    file path, NO secret — same shape as seedBroker).
 	mcp := map[string]any{
 		"mcpServers": map[string]any{
 			"ssh": map[string]any{
 				"command": binPath,
 				"args":    []string{"mcp", "--token", plaintextToken},
 				"env": map[string]string{
-					"SSHMGR_STORE":           storePath,
-					"SSHMGR_KEYRING_SERVICE": evalKeyringService,
+					"SSHMGR_STORE":        storePath,
+					"SSHMGR_FILEKEY_PATH": evalMKPath,
 				},
 			},
 		},
@@ -477,10 +487,10 @@ func wireBrokerTwoProfile(t *testing.T, host string, port int) (mcpConfigPath, p
 	serverB = seedServer{ID: srvBID, Name: "web"}
 
 	cleanup = func() {
-		// Best-effort: drop the eval keychain entry so repeated runs don't
+		// Best-effort: drop the eval master-key file so repeated runs don't
 		// accumulate (same as seedBroker).
-		if err := evalKP.Delete(); err != nil && !errors.Is(err, store.ErrNotFound) {
-			t.Logf("eval keychain cleanup: %v", err)
+		if err := evalKP.Delete(); err != nil {
+			t.Logf("eval master-key file cleanup: %v", err)
 		}
 		_ = os.RemoveAll(dir)
 	}

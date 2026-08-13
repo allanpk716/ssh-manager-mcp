@@ -2,20 +2,13 @@ package store
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 
-	"github.com/zalando/go-keyring"
 	"golang.org/x/crypto/argon2"
-)
-
-const (
-	keyringService = "ssh-manager"
-	keyringUser    = "master-key"
 )
 
 // ErrNotFound is returned when a master key is not present in a provider.
@@ -25,60 +18,6 @@ var ErrNotFound = errors.New("master key not found")
 type KeyProvider interface {
 	Get() ([]byte, error) // returns ErrNotFound if absent
 	Set(key []byte) error
-}
-
-// KeyringKeyProvider stores the master key in the OS keychain.
-//
-// Service selects the keychain service name. An empty Service falls back to the
-// production default (keyringService="ssh-manager"). The eval sets a distinct
-// service ("ssh-manager-eval") so it never touches the user's real entry.
-// User selects the keychain user slot (empty → default "master-key"). The offline cache
-// (Plan 12) uses User:"cache-dek" so its DEK is disjoint from the vault master key.
-type KeyringKeyProvider struct {
-	Service string
-	User    string
-}
-
-// service returns the effective keychain service name (configured or default).
-func (k KeyringKeyProvider) service() string {
-	if k.Service != "" {
-		return k.Service
-	}
-	return keyringService
-}
-
-// user returns the effective keychain user slot (configured or default "master-key").
-func (k KeyringKeyProvider) user() string {
-	if k.User != "" {
-		return k.User
-	}
-	return keyringUser
-}
-
-func (k KeyringKeyProvider) Get() ([]byte, error) {
-	s, err := keyring.Get(k.service(), k.user())
-	if err != nil {
-		if errors.Is(err, keyring.ErrNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	return base64.StdEncoding.DecodeString(s)
-}
-
-func (k KeyringKeyProvider) Set(key []byte) error {
-	return keyring.Set(k.service(), k.user(), base64.StdEncoding.EncodeToString(key))
-}
-
-// Delete removes the master key from the keychain. Returns keyring.ErrNotFound
-// (wrapped as store.ErrNotFound) if the entry is absent — callers tolerating a
-// missing entry should ignore that error.
-func (k KeyringKeyProvider) Delete() error {
-	err := keyring.Delete(k.service(), k.user())
-	if err != nil && errors.Is(err, keyring.ErrNotFound) {
-		return ErrNotFound
-	}
-	return err
 }
 
 // MemKeyProvider is an in-memory provider for tests.

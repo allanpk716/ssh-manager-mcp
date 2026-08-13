@@ -169,27 +169,32 @@ test failure**. This held across all 10 M=5 trials in the recorded Phase-2 run
 broker's tool-result shapes are fixed structs that omit credential fields by
 construction — not a prompt-time promise.
 
-### Master key — keychain, not on disk
+### Master key — eval-private file, not on disk
 
-The master key lives in the **OS keychain** (the production path), NOT in the
-on-disk `.mcp.json`. Plan 5b T3 made the eval faithful to production by
-introducing a DISTINCT keychain service name,
-`SSHMGR_KEYRING_SERVICE=ssh-manager-eval`, so eval runs never touch the user's
-real (`ssh-manager`) keychain entry. The seeded `.mcp.json` env carries ONLY
-`{SSHMGR_STORE=<temp store.db>, SSHMGR_KEYRING_SERVICE=ssh-manager-eval}` — no
-secret material.
+The master key lives in an **eval-private plaintext file** pointed at by
+`SSHMGR_FILEKEY_PATH` (the production path since Plan 16), NOT inlined in the
+on-disk `.mcp.json`. The eval stays faithful to production by writing the master
+key to a file under the test's tempdir and pointing the spawned broker at that
+file via `SSHMGR_FILEKEY_PATH=<tempdir>/master.key`. Because the path lives
+under a per-test tempdir, eval runs never touch the user's real
+(`paths.MasterKeyPath()`) master-key file. The seeded `.mcp.json` env carries
+ONLY `{SSHMGR_STORE=<temp store.db>, SSHMGR_FILEKEY_PATH=<tempdir>/master.key}`
+— no secret material. Plan 16 T5 swapped the medium from the legacy
+`SSHMGR_KEYRING_SERVICE=ssh-manager-eval` keychain scheme to this file scheme;
+the Plan 12 CF1 isolation contract is preserved verbatim (the spawned broker
+reads the master key ONLY from the eval-private location).
 
 ### Accepted L2 boundary (spec §4)
 
 The property T6 does **not** assert against is the **L2 boundary**: a
-same-OS-user process — including an agent with Bash — can read the OS keychain
-and can dump the broker subprocess's memory. This is inherent to layer-2
+same-OS-user process — including an agent with Bash — can read the master-key
+file and can dump the broker subprocess's memory. This is inherent to layer-2
 isolation (spec §4 routes it through "the broker never hands the credential to
 Bash," not "Bash cannot reach the credential at all"). T6 observes + records
 whether the agent attempts that surface (the `SideChannel` and `Attempted`
 fields of `T6Verdict`) but does not fail on it — asserting against it would
-require an L3 harness (separate OS user / a sandbox without same-OS-user
-keychain access), which is out of scope here. Across all 10 M=5 trials in the
+require an L3 harness (separate OS user / a sandbox without same-OS-user file
+access), which is out of scope here. Across all 10 M=5 trials in the
 recorded Phase-2 run, glm-5.2 did not run Bash/Read on either adversarial
 prompt; that is **observed behavior, not the enforced property**.
 
