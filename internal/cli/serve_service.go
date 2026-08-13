@@ -49,14 +49,16 @@
 //     locale-independent.
 //   - process: is a ssh-manager process running? (best-effort, cross-platform)
 //   - http:    does the bound addr respond? (401/200 = alive + auth gate wired)
-//   - vault:   does the master.key decrypt? (in-process probe — no log scraping)
+//   - vault:   is the master.key present, readable, AND a usable 32-byte key?
+//     (in-process file probe — no log scraping; see vaultStatusString for the
+//     exact failure modes this catches)
 //
 // The old serve.log marker-scan (vaultUnlockedFromLog) is DROPPED: under
 // kardianos the log path is platform-specific (/var/log/sshd... on Linux,
 // Console.app on macOS, EventLog on Windows), so a single log-tail strategy
-// does not generalize. The master.key readability probe is a stronger, simpler
-// signal anyway (it tests the exact thing we care about: can the running serve
-// read the key).
+// does not generalize. The master.key probe is a stronger, simpler signal
+// anyway: it tests the exact thing we care about (can the running serve read
+// the key AND is the key structurally valid — not just "does the file exist").
 package cli
 
 import (
@@ -220,7 +222,9 @@ func newServeStatusCmd() *cobra.Command {
   service: kardianos svc.Status() — Running / Stopped / Unknown / NOT INSTALLED
   process: is a ssh-manager serve process running?
   http:    does the bound addr respond? (401/200 = auth gate wired)
-  vault:   does master.key decrypt? (in-process probe — no log scraping)
+  vault:   is master.key present, readable, AND a usable 32-byte key?
+           (in-process file probe — catches missing / corrupt / wrong-length
+           master.key that the running serve would crash-loop on at boot)
 
 Each signal diagnoses a different failure mode (registered-but-crashed,
 running-but-not-listening, listening-but-vault-locked). overall is HEALTHY
@@ -356,6 +360,10 @@ func runServeUninstall(cmd *cobra.Command) error {
 // runServeStatus reports four independent signals (spec §5.8: process-alive ≠
 // vault-unlocked). Each is printed with its own line so a partial failure is
 // legible (e.g. service Running but HTTP down = serve crashed mid-init).
+//
+// The "vault" signal here is a file-level probe of master.key (present,
+// readable, AND a usable 32-byte key) — NOT a probe of the running serve's
+// in-memory vault state. See vaultStatusString for rationale + failure modes.
 func runServeStatus(cmd *cobra.Command) error {
 	out := cmd.OutOrStdout()
 	cfg := &service.Config{Name: serveServiceName, Option: platformServiceOptions()}
@@ -402,9 +410,11 @@ func runServeStatus(cmd *cobra.Command) error {
 	listening := probeServeHTTP("127.0.0.1:7878")
 	fmt.Fprintf(out, "http:      %s\n", boolStr(listening, "responding (401/200 = auth working)", "not responding"))
 
-	// (d) Vault-unlocked: does master.key decrypt? Direct probe — no log
-	//     scraping (the old serve.log marker-scan was Windows-specific and
-	//     does not generalize across platform log sinks).
+	// (d) Vault-unlocked: is master.key present, readable, AND a usable key?
+	//     Direct file probe — no log scraping (the old serve.log marker-scan
+	//     was Windows-specific and does not generalize across platform log
+	//     sinks). See vaultStatusString for the exact failure modes this
+	//     catches (missing / unreadable / wrong-length key).
 	vaultStr := vaultStatusString()
 	fmt.Fprintf(out, "vault:     %s\n", vaultStr)
 
@@ -525,22 +535,46 @@ func probeServeHTTP(addr string) bool {
 	return resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusUnauthorized
 }
 
-// vaultStatusString probes whether master.key decrypts (i.e. the same FileKeyProvider
-// the running serve uses can read the key). Returns "ok" on success, or
-// "LOCKED (<reason>)" on ErrNotFound / decrypt failure. This is the Plan 15
-// four-signal "vault" line, generalized across platforms (no serve.log).
+// vaultStatusString probes whether the running serve would be able to read the
+// master key — i.e. it verifies the master.key the running serve uses is
+// present, readable, AND structurally a usable key. Returns "ok" on success,
+// or "LOCKED (<reason>)" on missing / unreadable / wrong-length key.
 //
-// Note: this probes the FILE readability, not the running serve's in-memory
-// state. A serve that crashed after reading the key still shows ok here —
-// which is why this signal is INTENTIONALLY paired with the process + http
-// signals in runServeStatus (a dead serve shows up as process=not running +
-// http=not responding even if vault=ok).
+// What this probe catches (Plan 16 T7 review, Important finding 1):
+//
+//   - master.key MISSING  → "LOCKED (master.key not found — ...)" (the operator
+//     has not run `ssh-manager unlock` yet; serve would hard-fail at boot).
+//   - master.key UNREADABLE (FS permission error, etc.) → "LOCKED (<fs error>)".
+//   - master.key WRONG-LENGTH / corrupt / truncated / garbage → "LOCKED (master.key
+//     is 4 bytes, expected 32 — corrupt or wrong file; restore from backup)".
+//     A truncated / zero-byte / wrong-file master.key file exists on disk but is
+//     NOT a usable AES-256 key; serve would crash-loop at boot trying to use it.
+//     The old probe (FileKeyProvider.Get alone, which only does os.ReadFile)
+//     returned "ok" for these — masking the boot-time failure.
+//
+// Why NOT a full store.Open decrypt probe: store.Open has side effects (it
+// creates store.db + runs the migration on the path it's given), which is
+// unacceptable for a *diagnostic* probe invoked by `serve status`. The master
+// key is only validated lazily inside GetCredential anyway, so Open would not
+// catch a wrong-length key either. The length check via store.ValidMasterKeyLen
+// (== keyLen, 32 bytes per GenerateMasterKey) is the lightest faithful proxy
+// that catches the real on-disk failure modes without creating vault artifacts.
+//
+// Note: this probes the FILE, not the running serve's in-memory state. A serve
+// that crashed after reading the key still shows ok here — which is why this
+// signal is INTENTIONALLY paired with the process + http signals in
+// runServeStatus (a dead serve shows up as process=not running + http=not
+// responding even if vault=ok).
 func vaultStatusString() string {
-	if _, err := (store.FileKeyProvider{}).Get(); err != nil {
+	mk, err := (store.FileKeyProvider{}).Get()
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return "LOCKED (master.key not found — run `ssh-manager unlock`)"
 		}
 		return "LOCKED (" + err.Error() + ")"
+	}
+	if !store.ValidMasterKeyLen(mk) {
+		return fmt.Sprintf("LOCKED (master.key is %d bytes, expected 32 — corrupt or wrong file; restore from backup or re-run `ssh-manager unlock`)", len(mk))
 	}
 	return "ok"
 }

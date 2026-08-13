@@ -25,8 +25,10 @@
 //   - step 3: HTTP GET http://127.0.0.1:<port>/ returns 401 or 200 (Plan 10
 //     bearer-token gate; 401 = auth is wired, the right answer for an
 //     unauthenticated probe).
-//   - step 4: vault decryptable in the service-host session — the serve process
-//     started by the service manager read master.key + decrypted store.db.
+//   - step 4: master.key is present, readable, AND a usable 32-byte key in the
+//     service-host session — the status probe (vaultStatusString) verifies the
+//     file the running serve reads is structurally valid, catching missing /
+//     unreadable / wrong-length / corrupt master.key that would crash-loop serve.
 //   - step 5: `serve status` four signals (service/process/http/vault) come back
 //     with the expected labels. Then `serve uninstall` removes the service.
 //
@@ -214,16 +216,24 @@ func TestServeInstallIntegration(t *testing.T) {
 	// === step 4: vault decryptable in the service-host session ============
 	//
 	// A 401 proves serve is listening AND the auth gate ran. It does NOT prove
-	// the vault decrypted. The decisive signal is serve status's `vault:`
-	// line (which probes master.key readability directly). Give serve a moment
-	// to settle past any transient init error, then assert the vault signal
-	// is not explicitly LOCKED.
+	// the vault decrypted. The decisive signal is serve status's `vault:` line.
+	// Give serve a moment to settle past any transient init error, then assert
+	// the vault signal is not explicitly LOCKED.
+	//
+	// What "not LOCKED" actually proves (Plan 16 T7 review, Important finding 1):
+	// the status probe reads master.key via FileKeyProvider and verifies it is a
+	// usable 32-byte key (store.ValidMasterKeyLen). So this assertion catches
+	// missing / unreadable / wrong-length / corrupt master.key in the
+	// service-host session — the exact on-disk failure modes that would make
+	// serve crash-loop at boot. It does NOT prove the store.db itself decrypts
+	// (that is exercised by the authenticated MCP call path in the smoke test,
+	// not by the status probe).
 	time.Sleep(2 * time.Second)
 	statusOut2, _ := runBin([]string{"serve", "status"}, false)
 	if lines := statusLines(statusOut2); strings.Contains(lines["vault"], "LOCKED") {
-		t.Fatalf("step 4: serve status reports vault LOCKED — serve could not decrypt master.key in the service-host session\nstatus:\n%s", statusOut2)
+		t.Fatalf("step 4: serve status reports vault LOCKED — master.key is missing, unreadable, or wrong-length in the service-host session\nstatus:\n%s", statusOut2)
 	}
-	t.Log("step 4: vault decryptable in service-host session (status vault line is not LOCKED)")
+	t.Log("step 4: master.key readable + usable in service-host session (status vault line is not LOCKED)")
 
 	// === step 5: four-signal status + uninstall ===========================
 	//

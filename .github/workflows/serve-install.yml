@@ -29,14 +29,11 @@
 #     artifact of the Task Scheduler path; Windows Service registration does
 #     not need a Password logon.
 #
-#   - ubuntu-latest: containerized GitHub Actions runners typically have NO
-#     systemd (no PID 1 systemd, /run/systemd/system absent). kardianos
-#     detects this at service.New() time and returns ErrNoServiceSystemDetected;
-#     the test Skips with a clear reason. A self-hosted Linux runner WITH
-#     systemd would run it for real. We also run the test inside a privileged
-#     container step that brings up a minimal systemd (see below) to give it
-#     the best shot at succeeding on hosted runners — if systemd is still
-#     unavailable, the test skips.
+#   - ubuntu-latest: github-hosted ubuntu-latest is a full VM with systemd
+#     available (PID 1 is systemd). kardianos installs a systemd unit
+#     directly. If a future runner image (or a self-hosted Linux box) lacks
+#     systemd, kardianos detects this at service.New() time and returns
+#     ErrNoServiceSystemDetected; the test Skips with a clear reason.
 #
 #   - macos-latest: launchd PLIST install needs root for a LaunchDaemon
 #     (/Library/LaunchDaemons). The macOS lane runs the test under `sudo -E`
@@ -124,23 +121,16 @@ jobs:
           GOOS=darwin go build ./...
           GOOS=windows go build ./...
 
-      # === Linux: bring up a minimal systemd inside the containerized job ===
+      # === Linux lane note ============================================
       #
-      # ubuntu-latest runs jobs inside a container; PID 1 is NOT systemd and
-      # /run/systemd/system is absent → kardianos detects "no service system"
-      # and the test Skips. To give the test a real shot at running (vs.
-      # always skipping on hosted Linux), we configure the runner to use a
-      # systemd-capable container image. The setup is best-effort: if it fails
-      # OR if the runtime still has no systemd, the test's own
-      # ErrNoServiceSystemDetected → t.Skipf path covers it.
-      #
-      # The ubuntu-latest lane is excluded from the container setup below —
-      # the github-hosted ubuntu-latest DOES have systemd available (it's a
-      # full VM, not a container). The systemd detection is left to kardianos
-      # at test runtime; if for any reason it's missing (image change, etc.),
-      # the test self-skips with a clear reason. (This is intentionally a
-      # no-op pre-step that documents the rationale rather than a real
-      # systemd bring-up — github-hosted ubuntu runners already provide it.)
+      # github-hosted ubuntu-latest is a full VM with systemd available (PID 1
+      # is systemd, /run/systemd/system is present). There is NO container step
+      # because one is not needed on the hosted runner — the gated test runs
+      # systemd-install directly under `sudo -E env ...` below. If for any
+      # reason systemd is unavailable on a future runner image (or a self-hosted
+      # Linux box without systemd), kardianos returns ErrNoServiceSystemDetected
+      # at service.New() time and the test self-skips with a clear reason —
+      # which is the designed graceful-degradation path, NOT a failure.
 
       # Run the gated integration test. SSHMGR_SERVE_INSTALL=1 OPENS the gate
       # (local `go test ./...` skips it). The test self-Skips if the host

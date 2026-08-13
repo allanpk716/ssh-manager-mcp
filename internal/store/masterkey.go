@@ -49,6 +49,20 @@ func GenerateMasterKey() ([]byte, error) {
 	return k, nil
 }
 
+// ValidMasterKeyLen reports whether b has the length GenerateMasterKey
+// produces (== keyLen, 32 bytes). It does NOT verify entropy or that b is the
+// key the vault was created with — it is a structural sanity check for probes
+// that want to reject obviously-truncated / wrong-length / garbage master-key
+// files WITHOUT opening the store (store.Open has side effects: it creates
+// store.db + runs migration). The full decrypt-validity check happens lazily
+// inside GetCredential; this length check is the lightest faithful proxy that
+// still catches the common on-disk failure modes (truncated write, wrong file,
+// zero-byte file).
+//
+// The canonical length lives in crypto.go (keyLen, used by seal/open); this
+// helper is the only exported name for it so callers don't hardcode 32.
+func ValidMasterKeyLen(b []byte) bool { return len(b) == keyLen }
+
 // DeriveFromPassphrase derives a 32-byte master key from a passphrase (Argon2id).
 func DeriveFromPassphrase(passphrase, salt []byte) []byte {
 	return argon2.IDKey(passphrase, salt, 1, 64*1024, 4, 32)
