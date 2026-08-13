@@ -184,6 +184,24 @@ func TestRegisterTask_RejectsNonREGISTERED(t *testing.T) {
 	}
 }
 
+// TestRegisterTask_RestartOnFailurePersisted 钉死 FINDING D 修复:对象 API
+// -RestartCount 不持久化(spike 3),registerTask 必须额外用 CIM 设
+// RestartOnFailure Interval=PT1M Count=3(R1)。CI 断言(目标非硬契约)。
+func TestRegisterTask_RestartOnFailurePersisted(t *testing.T) {
+	in := taskInputs{ExePath: `C:\ssh-manager.exe`, Addr: "0.0.0.0:7878", User: "u", LogPath: `C:\serve.log`}
+	captured, err := captureRegisterTask(in, "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// R1 路径:CIM 直接设 RestartOnFailure
+	if !strings.Contains(captured.script, "RestartOnFailure") {
+		t.Errorf("脚本缺 RestartOnFailure CIM 设值(R1)\n%s", captured.script)
+	}
+	if !strings.Contains(captured.script, "PT1M") || !strings.Contains(captured.script, "3") {
+		t.Errorf("脚本缺 Interval=PT1M / Count=3\n%s", captured.script)
+	}
+}
+
 // TestServeInstall_PrecheckRejectsUserScopeMasterKey pins codex #2: serve
 // install MUST refuse to register a task when master.key is a legacy user-scope
 // blob. Without this gate, the registered task would start at boot (Password-

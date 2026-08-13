@@ -3,9 +3,10 @@
 // Package cli: serve install/uninstall/status — Windows Task Scheduler.
 //
 // Registers `serve` as a per-user Task Scheduler task that starts at boot and
-// at logon, and self-recovers from crashes (RestartOnFailure is T5; here we
-// set MultipleInstances=IgnoreNew and omit -RestartCount/-RestartInterval
-// because spike-3 showed the object API does not persist them). The task runs
+// at logon, and self-recovers from crashes (RestartOnFailure via CIM Set after
+// Register — T5 R1; here we set MultipleInstances=IgnoreNew and omit
+// -RestartCount/-RestartInterval because spike-3 showed the object API does not
+// persist them). The task runs
 // the SAME ssh-manager.exe binary (resolved at install time via os.Executable)
 // under the current user account at filtered token level (RunLevel Limited —
 // NOT Highest; spec 5.8: serve only reads the user profile + listens on a port;
@@ -364,11 +365,18 @@ func readServeInstallPassword(cmd *cobra.Command) (string, error) {
 //   - codex #5: TLS flags preserved in the action argument when both set.
 //   - spec 5.8 / opencode #6: -RunLevel Limited (filtered token).
 //
-// RestartOnFailure is NOT set here: spike 3 proved the object API silently drops
-// -RestartCount / -RestartInterval (Count persists as 0). T5 adds a CIM Set
-// after Register to persist it (or falls back to R2 best-effort). The settings
-// here omit those flags so the T4 baseline is honest about what the object API
-// actually persists.
+// RestartOnFailure persistence (Plan 15 T5, R1): spike 3 proved the object API
+// silently drops -RestartCount / -RestartInterval (Count persists as 0). The
+// New-ScheduledTaskSettingsSet call here therefore OMITS those flags, and AFTER
+// Register-ScheduledTask we set RestartOnFailure via CIM (Get-ScheduledTask →
+// mutate $t.Settings.RestartOnFailure → Set-ScheduledTask -InputObject $t).
+// Real-machine persistence of the CIM Set on PS 5.1 is UNVERIFIED in the
+// worktree (no Task Scheduler available) — deferred to T8 (CI windows-latest)
+// and T9 (NUC10 §7.3). Fallback if R1 silently no-ops on PS 5.1: R2
+// (schtasks /Change /XML <RestartOnFailure-only fragment>) or best-effort
+// degrade (document that RestartOnFailure is unreliable on PS 5.1; rely on the
+// boot trigger for crash recovery). This is a target contract, not a hard
+// one (consensus C).
 func registerTask(r psRunner, in taskInputs, password string) error {
 	// PowerShell script. The password + every parameter is read from $input
 	// (stdin) — NOTHING is interpolated into this template except the static
@@ -395,6 +403,10 @@ $trigBoot = New-ScheduledTaskTrigger -AtStartup
 $trigLogon = New-ScheduledTaskTrigger -AtLogOn -User $user
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
 Register-ScheduledTask -TaskName '` + serveTaskName + `' -Action $action -Trigger @($trigBoot,$trigLogon) -Settings $settings -RunLevel Limited -User $user -Password $password -Force | Out-Null
+$t = Get-ScheduledTask -TaskName '` + serveTaskName + `'
+$t.Settings.RestartOnFailure.Interval = 'PT1M'
+$t.Settings.RestartOnFailure.Count = 3
+Set-ScheduledTask -InputObject $t | Out-Null
 Write-Output "REGISTERED"
 `
 	logDir := filepath.Dir(in.LogPath)
