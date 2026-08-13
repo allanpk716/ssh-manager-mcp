@@ -3,32 +3,44 @@
 // Package cli: serve install/uninstall/status — Windows Task Scheduler.
 //
 // Registers `serve` as a per-user Task Scheduler task that starts at boot and
-// self-recovers from crashes. The task runs the SAME ssh-manager.exe binary
-// (resolved at install time via os.Executable) under the current user account
-// (filtered token, NOT RunLevel Highest — spec 5.8: serve only reads the user
-// profile + listens on a port; elevation is unnecessary and widens blast
-// radius).
+// at logon, and self-recovers from crashes (RestartOnFailure is T5; here we
+// set MultipleInstances=IgnoreNew and omit -RestartCount/-RestartInterval
+// because spike-3 showed the object API does not persist them). The task runs
+// the SAME ssh-manager.exe binary (resolved at install time via os.Executable)
+// under the current user account at filtered token level (RunLevel Limited —
+// NOT Highest; spec 5.8: serve only reads the user profile + listens on a port;
+// elevation is unnecessary and widens blast radius).
 //
-// Password handling (spec 5.8; review codex#3 / pi#10 / opencode#9):
+// === Plan 15 T4 rewrite (object API + Go password read + machine-scope precheck) ===
 //
-//	`schtasks /Create /RU <user> /RP <password>` puts the password on the
-//	process command line (visible in Process Explorer / Task Manager /
-//	Windows 4688 process-creation audit logs). We avoid that path entirely.
-//	Instead we shell into PowerShell's Register-ScheduledTask cmdlet, which
-//	reads the password interactively via Get-Credential. Get-Credential
-//	prompts through the Windows credential dialog (or the host console) and
-//	returns a PSCredential whose password lives ONLY in PowerShell process
-//	memory — it never crosses the ssh-manager.exe argv, never touches the
-//	4688 log. Register-ScheduledTask stores it in the Task Scheduler LSA
-//	secret store (the standard, hardened path). schtasks /Create /RP is the
-//	documented fallback only (not used here).
+// Plan 14's `serve install` shipped three stacked bugs in the XML chain
+// (FINDING C: stdin/$input loses multi-line XML on PS 5.1; UTF-16 prolog vs
+// UTF-8 bytes; Register-ScheduledTask -Xml serialization failure) and was
+// never usable on a real machine. Plan 15 T4 replaces the XML chain with
+// PowerShell's object API (New-ScheduledTaskAction / -Trigger / -SettingsSet /
+// Register-ScheduledTask), reads the Windows account password on the Go side
+// (consensus A: bypasses Get-Credential / ConvertTo-SecureString headless
+// fragility — spike 1), and adds a machine-scope precheck (codex #2) that
+// refuses to install when master.key is a legacy user-scope blob (which would
+// crash-loop at boot under FINDING B).
+//
+// Password handling (consensus A; supersedes Plan 14's Get-Credential path):
+//
+//	`Get-Credential` and `ConvertTo-SecureString` are unreliable in headless /
+//	non-interactive PowerShell sessions (spike 1: the Microsoft.PowerShell.Security
+//	module + TypeData load is flaky under -NonInteractive). We instead read the
+//	password from the Go side — env SSHMGR_SERVE_INSTALL_PASSWORD first (CI /
+//	scripts), else TTY no-echo via golang.org/x/term (reused from unlock.go's
+//	readPassphrase) — and feed it to Register-ScheduledTask via stdin (PowerShell
+//	$input → $password). The password therefore NEVER enters the powershell.exe
+//	argv (no Windows 4688 audit-log exposure), and Get-Credential's fragility is
+//	bypassed entirely.
 //
 // The build-tag (windows) keeps this file off Linux/macOS builds; those
 // platforms see serve_install_other.go (not-yet-supported stub, spec 5.8 v2).
 package cli
 
 import (
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"net/http"
@@ -72,19 +84,25 @@ func newServeInstallCmd() *cobra.Command {
 		Short: "Register serve as a boot-started, auto-restarting background task (Windows Task Scheduler)",
 		Long: `Register the foreground 'serve' command as a Windows Task Scheduler task that:
 
-  - starts at user logon / boot (LogonType=Password, runs whether or not anyone
-    is interactively logged in),
-  - restarts on crash (RestartOnFailure: 3 attempts, 1 minute apart),
+  - starts at boot AND at user logon (LogonType=Password via Register-
+    ScheduledTask -User/-Password, so it runs whether or not anyone is
+    interactively logged in),
+  - collapses concurrent starts via MultipleInstances=IgnoreNew (the boot +
+    logon triggers can both fire; IgnoreNew prevents two serve instances),
   - redirects stdout+stderr to %LocalAppData%\ssh-manager\serve.log so a
     headless startup failure is diagnosable,
-  - runs as the CURRENT user with a filtered token (no RunLevel Highest).
+  - runs as the CURRENT user with a filtered token (RunLevel Limited).
 
-The password is read INTERACTIVELY by PowerShell Get-Credential and never
-appears on any process command line or in the Windows 4688 audit log. The task
-runs the SAME ssh-manager.exe binary that you used to run 'serve install'.
+The Windows account password is read by ssh-manager (env
+SSHMGR_SERVE_INSTALL_PASSWORD for CI / non-interactive; else a no-echo TTY
+prompt) and passed to PowerShell via stdin — it never appears on any process
+command line or in the Windows 4688 audit log. The task runs the SAME
+ssh-manager.exe binary that you used to run 'serve install'.
 
-master.key must already exist (run 'ssh-manager unlock' in an interactive
-session first). Linux/macOS report 'not yet supported'.`,
+master.key must already exist AND be machine-scope DPAPI (run 'ssh-manager
+unlock' in an interactive session first — it migrates a legacy user-scope
+master.key to machine-scope so the Password-logon task host at boot can read
+it). Linux/macOS report 'not yet supported'.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runServeInstall(cmd, addr, tlsCert, tlsKey)
@@ -121,17 +139,28 @@ func newServeStatusCmd() *cobra.Command {
 }
 
 // runServeInstall registers the Task Scheduler task.
+//
+// Plan 15 T4: object-API registration replaces Plan 14's broken XML chain
+// (FINDING C). The password is read on the Go side (consensus A) and the
+// machine-scope precheck (codex #2) refuses to install when master.key is a
+// legacy user-scope blob (which would crash-loop at boot — FINDING B).
 func runServeInstall(cmd *cobra.Command, addr, tlsCert, tlsKey string) error {
-	// 1. Pre-check: master.key must exist. Without it the task would start,
-	//    fail to resolve the master key, and loop-restart. Spec 5.8: confirm
-	//    keychain.Get does NOT return ErrNotFound; a decryption error also
-	//    blocks install (corrupt master.key is a security event, not a
-	//    "please unlock" condition — do NOT route the user through unlock).
+	// 1. Precheck: master.key must exist, be decryptable, AND be machine-scope
+	//    (codex #2). The boot task host runs under a Password-logon session
+	//    that cannot read a user-scope DPAPI blob — installing a task against
+	//    such a key would boot-loop the serve (FINDING B). The decryptable +
+	//    exists half is covered by keychain.Get (dual-scope under spike-2);
+	//    the machine-scope half is verified by a sentinel sidecar file written
+	//    by DpapiKeyProvider.Set (see verifyMachineScopeForBoot's doc comment
+	//    for why blob inspection alone is unsound under spike-2).
 	if _, err := keychain.Get(); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return fmt.Errorf("master key not found: run 'ssh-manager unlock' in an interactive session first (see docs/backup-restore.md)")
 		}
 		return fmt.Errorf("master key present but undecryptable: %w (if admin-reset password, restore from backup or re-init vault)", err)
+	}
+	if err := verifyMachineScopeForBoot(); err != nil {
+		return err
 	}
 
 	// 2. Resolve the binary that will run as the task action. os.Executable
@@ -153,35 +182,35 @@ func runServeInstall(cmd *cobra.Command, addr, tlsCert, tlsKey string) error {
 	}
 	logPath := serveLogPath()
 
-	// 4. Build the schtasks XML definition (at-startup trigger + restart +
-	//    log redirect, NO RunLevel Highest). buildServeTaskXML is pure and
-	//    unit-tested without registration.
-	xmlDef := buildServeTaskXML(serveTaskInputs{
-		ExePath: exePath,
-		Addr:    addr,
-		TLSCert: tlsCert,
-		TLSKey:  tlsKey,
-		LogPath: logPath,
-		User:    currentUserForTask(),
-	})
-
-	// 5. Register via PowerShell. Register-ScheduledTask is passed the XML
-	//    (via -InputObject from New-ScheduledTask from the inline XML) and
-	//    -User <user>; the password is read interactively by Get-Credential
-	//    INSIDE PowerShell. Neither the password nor a /RP-style argv is ever
-	//    constructed by Go. TaskPassword (PSCredential) lives only in the
-	//    PowerShell process.
-	if err := registerTaskViaPowerShell(xmlDef); err != nil {
-		return fmt.Errorf("register scheduled task: %w", err)
+	// 4. Read the Windows account password (consensus A). Env first (CI /
+	//    scripts), else TTY no-echo. The password NEVER enters argv.
+	password, err := readServeInstallPassword(cmd)
+	if err != nil {
+		return err
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "registered task %q (at-startup, RestartOnFailure PT1M x3, log -> %s)\n", serveTaskName, logPath)
-	fmt.Fprintln(cmd.OutOrStdout(), "starting task once now to verify (schtasks /Run)…")
+	// 5. Register via the PowerShell object API (FINDING C fix). Password +
+	//    parameters go through stdin (not argv, not Get-Credential). TLS flags
+	//    are preserved in the action argument (codex #5). MultipleInstances=
+	//    IgnoreNew is set explicitly (pi #2 / spike-4 defense against the boot
+	//    + logon dual trigger spawning two serves).
+	in := taskInputs{
+		ExePath: exePath,
+		Addr:    addr,
+		User:    currentUserForTask(),
+		LogPath: logPath,
+		TLSCert: tlsCert,
+		TLSKey:  tlsKey,
+	}
+	if err := registerTask(defaultPsRunnerFactory(), in, password); err != nil {
+		return fmt.Errorf("register scheduled task: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "registered task %q (boot+logon trigger, MultipleInstances=IgnoreNew, log -> %s)\n", serveTaskName, logPath)
 
 	// 6. Immediately /Run once so the task is started now (not only at next
-	//    boot) and so serve.log is generated. Best-effort: if /Run fails we
-	//    do NOT roll back — the task is registered and will start at boot;
-	//    the user can diagnose via serve.log + 'serve status'.
+	//    boot) and so serve.log is generated. Best-effort: if /Run fails we do
+	//    NOT roll back — the task is registered and will start at boot; the
+	//    user can diagnose via serve.log + 'serve status'.
 	if err := schtasksRun(serveTaskName); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: schtasks /Run failed: %v (task is registered; check 'ssh-manager serve status' and %s)\n", err, logPath)
 	} else {
@@ -249,204 +278,225 @@ func runServeStatus(cmd *cobra.Command) error {
 	return nil
 }
 
-// --- XML generation (pure, unit-tested) ---------------------------------
-
-// serveTaskInputs carries the resolved inputs to buildServeTaskXML. Splitting
-// it into a struct keeps the generator signature stable as fields grow and
-// makes the unit test declarative.
-type serveTaskInputs struct {
-	ExePath string // absolute path to ssh-manager.exe
-	Addr    string
-	TLSCert string
-	TLSKey  string
-	LogPath string // %LocalAppData%\ssh-manager\serve.log
-	User    string // USERNAME; used only for the XML <UserId> comment field
-}
-
-// taskXML mirrors the subset of the Task Scheduler schema we emit. Field
-// names are upper-cased to match the schema exactly (xml marshalling uses
-// the struct field name unless `xml:` is given).
-type taskXML struct {
-	XMLName        xml.Name           `xml:"Task"`
-	Version        string             `xml:"RegistrationInfo>Version"`
-	URI            string             `xml:"RegistrationInfo>URI"`
-	Settings       taskSettings       `xml:"Settings"`
-	Principals     taskPrincipals     `xml:"Principals"`
-	Triggers       taskTriggers       `xml:"Triggers"`
-	ActionsContext taskActionsContext `xml:"Actions"`
-}
-
-type taskSettings struct {
-	// RunOnlyIfNetworkAvailable + the restart policy + execution limits.
-	// RunLevel is intentionally OMITTED (defaults to LeastPrivilege / filtered
-	// token) — spec 5.8 review opencode#6: serve needs no elevation.
-	DisallowStartIfOnBatteries bool              `xml:"DisallowStartIfOnBatteries"`
-	StopIfGoingOnBatteries     bool              `xml:"StopIfGoingOnBatteries"`
-	ExecutionTimeLimit         string            `xml:"ExecutionTimeLimit"`
-	RestartOnFailure           taskRestartPolicy `xml:"RestartOnFailure"`
-}
-
-type taskRestartPolicy struct {
-	Interval string `xml:"Interval,attr"`
-	Count    string `xml:"Count,attr"`
-}
-
-type taskPrincipals struct {
-	Principal taskPrincipal `xml:"Principal"`
-}
-
-// taskPrincipal: run as the current user, with a stored password (so the task
-// runs at boot before interactive logon), at filtered token level.
-type taskPrincipal struct {
-	UserId    string `xml:"UserId"`
-	LogonType string `xml:"LogonType"`
-	RunLevel  string `xml:"RunLevel"`
-}
-
-type taskTriggers struct {
-	BootTrigger struct {
-		Enabled string `xml:"Enabled"`
-	} `xml:"BootTrigger"`
-	LogonTrigger struct {
-		Enabled string `xml:"Enabled"`
-	} `xml:"LogonTrigger"`
-}
-
-// taskActionsContext exists only so we can emit the schema-required Exec
-// inside <Actions Context="Author">. The wrapper struct pattern lets us
-// attach the attribute to <Actions>.
-type taskActionsContext struct {
-	Context string   `xml:"Context,attr"`
-	Exec    taskExec `xml:"Exec"`
-}
-
-type taskExec struct {
-	Command   string `xml:"Command"`
-	Arguments string `xml:"Arguments"`
-}
-
-// buildServeTaskXML returns the Task Scheduler 1.3+ XML for the serve task.
+// --- Object-API registration (Plan 15 T4) --------------------------------
 //
-// Properties pinned by spec 5.8 + reviews:
-//   - RestartOnFailure Interval=PT1M Count=3 (review codex#4 — crash recovery).
-//   - LogonType=Password (task runs at boot, before interactive logon).
-//   - RunLevel=LeastPrivilege (NOT Highest — review opencode#6 — filtered token
-//     is enough to read the user profile + bind a port).
-//   - Exec wraps cmd.exe with a /C line that mkdirs the log dir, appends
-//     stdout+stderr to serve.log, then runs ssh-manager.exe serve (review
-//     opencode#5 — headless failure must be diagnosable). The 2>&1 redirect
-//     is what makes a boot-time DPAPI failure visible in the log.
-//
-// Pure: no env, no fs, no process. Unit-tested by TestBuildServeTaskXML.
-func buildServeTaskXML(in serveTaskInputs) string {
-	// Build the serve argv. The wrapper runs in cmd.exe context, so we
-	// quote each token defensively (paths may contain spaces).
-	serveArgv := []string{quoteCmd(in.ExePath), "serve", "--addr", quoteCmd(in.Addr)}
-	if in.TLSCert != "" {
-		serveArgv = append(serveArgv, "--tls-cert", quoteCmd(in.TLSCert))
-	}
-	if in.TLSKey != "" {
-		serveArgv = append(serveArgv, "--tls-key", quoteCmd(in.TLSKey))
-	}
-	// cmd.exe /C pipeline: (mkdir log dir) && (append serve's combined output
-	// to serve.log). mkdir is idempotent. `>>` appends across restarts so the
-	// log accumulates boot-loop evidence. `2>&1` folds stderr in.
-	logDir := filepath.Dir(in.LogPath)
-	cmdLine := fmt.Sprintf(
-		`if not exist %s mkdir %s & %s >> %s 2>&1`,
-		quoteCmd(logDir), quoteCmd(logDir),
-		strings.Join(serveArgv, " "),
-		quoteCmd(in.LogPath),
-	)
+// Plan 14's XML chain (buildServeTaskXML + registerTaskViaPowerShell -Xml) had
+// three stacked bugs (FINDING C): PS 5.1's $input drops multi-line stdin, the
+// UTF-16 prolog collided with UTF-8 bytes, and Register-ScheduledTask -Xml
+// serialization failed. The object API (New-ScheduledTask* + Register-
+// ScheduledTask) sidesteps all three — no XML document crosses the Go/PS
+// boundary, only a small newline-delimited parameter bundle on stdin.
 
-	task := taskXML{
-		Version: "1.0",
-		URI:     "\\ssh-manager-serve",
-		Settings: taskSettings{
-			DisallowStartIfOnBatteries: false,
-			StopIfGoingOnBatteries:     false,
-			ExecutionTimeLimit:         "PT0S", // no limit (serve is long-running)
-			RestartOnFailure: taskRestartPolicy{
-				Interval: "PT1M",
-				Count:    "3",
-			},
-		},
-		Principals: taskPrincipals{
-			Principal: taskPrincipal{
-				UserId:    in.User,
-				LogonType: "Password",
-				RunLevel:  "LeastPrivilege",
-			},
-		},
-		ActionsContext: taskActionsContext{
-			Context: "Author",
-			Exec: taskExec{
-				Command:   "cmd.exe",
-				Arguments: "/C " + cmdLine,
-			},
-		},
-	}
-	// Boot trigger starts at system boot (needs Password logon type, which we
-	// set). Logon trigger additionally catches interactive logon for the
-	// common case "I just rebooted and want serve up before opening a shell".
-	task.Triggers.BootTrigger.Enabled = "true"
-	task.Triggers.LogonTrigger.Enabled = "true"
-
-	b, err := xml.MarshalIndent(task, "", "  ")
-	if err != nil {
-		// Struct is fixed-shape; marshalling cannot fail in practice. If it
-		// ever does, surface it loudly instead of emitting a half document.
-		return fmt.Sprintf("<!-- xml marshal error: %v -->", err)
-	}
-	return `<?xml version="1.0" encoding="UTF-16"?>` + "\n" + string(b) + "\n"
+// taskInputs is the data passed to the PowerShell object-API registration.
+type taskInputs struct {
+	ExePath string // absolute path to ssh-manager.exe (task action)
+	Addr    string // --addr the registered task will bind
+	User    string // Windows account the task runs as (LogonType=Password)
+	LogPath string // %LocalAppData%\ssh-manager\serve.log (stdout+stderr redirect)
+	TLSCert string // optional --tls-cert path (preserved verbatim; codex #5)
+	TLSKey  string // optional --tls-key path (preserved verbatim; codex #5)
 }
 
-// quoteCmd wraps s in double quotes for cmd.exe consumption. Embedded quotes
-// are not expected (paths/tokens we emit don't contain them) but are escaped
-// with the cmd.exe caret idiom for safety.
-func quoteCmd(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `^"`) + `"`
+// psRunner runs a PowerShell command with a captured stdin + script, returning
+// combined stdout+stderr. It is the testable seam for registerTask: tests
+// inject a fake psRunner to capture (script, stdin) without launching
+// powershell.exe. The production impl is defaultPsRunner.
+type psRunner interface {
+	Run(script string, stdin string) (stdout string, err error)
 }
 
-// --- PowerShell registration (password stays out of argv) ----------------
+// defaultPsRunnerFactory is the production psRunner factory. It is a package-
+// level var (not a const) so tests can swap it for a fake that captures the
+// script + stdin, exercising runServeInstall's wiring (precheck → password read
+// → registerTask) end-to-end without launching powershell.exe.
+var defaultPsRunnerFactory = func() psRunner { return defaultPsRunner{} }
 
-// registerTaskViaPowerShell runs a single `powershell -NoProfile -Command`
-// invocation that:
-//  1. writes the XML to an in-memory XmlDocument (no temp file on disk),
-//  2. prompts for the password via Get-Credential (GUI dialog or host prompt;
-//     the password lives only inside the PSCredential object),
-//  3. calls Register-ScheduledTask with the XML + the credential.
-//
-// The password NEVER enters the Go process, the powershell.exe argv, or the
-// Windows 4688 audit log. This is the spec 5.8 primary path.
-func registerTaskViaPowerShell(xmlDef string) error {
-	// We pipe the XML to PowerShell via stdin (encoded) and read it via
-	// $input. This avoids both a disk temp file and any argv length ceiling.
-	// The here-string terminator "END_OF_TASK_XML" is chosen to be unlikely
-	// in real XML.
-	const ps = `$ErrorActionPreference='Stop';
-$xml = [string]::Join("` + "\n" + `", $input);
-$doc = New-Object System.Xml.XmlDocument;
-$doc.LoadXml($xml);
-$user = $env:USERNAME;
-$domain = $env:USERDOMAIN;
-$cred = Get-Credential -UserName "$domain\$user" -Message "ssh-manager serve install: enter your Windows password (stored by Task Scheduler so the task can start at boot). The password is NOT echoed to any process command line or audit log.";
-if ($null -eq $cred) { Write-Error "no credential entered; aborting install"; exit 2 };
-Register-ScheduledTask -TaskName '` + serveTaskName + `' -Xml $doc -User $cred.UserName -Password $cred.GetNetworkCredential().Password -Force | Out-Null;
-Write-Output "REGISTERED";
-`
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps)
-	// stdin gets the XML; PowerShell reads it via $input.
-	cmd.Stdin = strings.NewReader(xmlDef)
-	// surface PowerShell's own streams for diagnostics.
+// defaultPsRunner is the production psRunner: powershell.exe -NoProfile -Command
+// <script>, stdin piped in, combined output returned. -NonInteractive is
+// intentionally NOT set: PS reads the password from $input (stdin), which
+// requires the interactive input stream; -NonInteractive would close it.
+type defaultPsRunner struct{}
+
+func (defaultPsRunner) Run(script string, stdin string) (string, error) {
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", script)
+	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// readServeInstallPassword reads the Windows account password the task host
+// needs to start the serve task at boot (Password logon type). Env
+// SSHMGR_SERVE_INSTALL_PASSWORD wins (CI / scripts / non-interactive); otherwise
+// the password is read from the TTY with echo off via unlock.go's readPassphrase
+// (golang.org/x/term). This is consensus A: Get-Credential + ConvertTo-
+// SecureString are unreliable in headless / -NonInteractive PowerShell sessions
+// (spike 1), so the password is read on the Go side and handed to PowerShell
+// via stdin ($input → $password). It never enters the powershell.exe argv.
+func readServeInstallPassword(cmd *cobra.Command) (string, error) {
+	if p := os.Getenv("SSHMGR_SERVE_INSTALL_PASSWORD"); p != "" {
+		return p, nil
+	}
+	fmt.Fprint(cmd.ErrOrStderr(), "Enter Windows password for the serve task (stored by Task Scheduler so it can start at boot; not echoed): ")
+	b, err := readPassphrase("")
+	if err != nil {
+		return "", fmt.Errorf("read password: %w", err)
+	}
+	return string(b), nil
+}
+
+// registerTask builds the object-API PowerShell script and runs it via r.
+//
+// The script reads 8 newline-delimited fields from $input (stdin): exe, addr,
+// user, logPath, logDir, tlsCert, tlsKey, password. It then constructs the
+// task via New-ScheduledTaskAction / New-ScheduledTaskTrigger (boot + logon) /
+// New-ScheduledTaskSettingsSet, and Register-ScheduledTask with -RunLevel
+// Limited, -MultipleInstances IgnoreNew, -User, -Password, -Force. The
+// REGISTERED sentinel on stdout is the success signal (absent ⇒ the
+// Register-ScheduledTask call failed and we surface the runner's combined
+// output).
+//
+// Contracts pinned by tests (see serve_install_windows_test.go):
+//   - FINDING C: object API (no XML).
+//   - pi #2 / spike 4: -MultipleInstances IgnoreNew explicit (boot+logon race).
+//   - opencode #9 / codex #3 / pi #10: password via stdin ONLY, never in argv,
+//     never interpolated into the script template (the $password variable is
+//     read from $input at runtime).
+//   - codex #5: TLS flags preserved in the action argument when both set.
+//   - spec 5.8 / opencode #6: -RunLevel Limited (filtered token).
+//
+// RestartOnFailure is NOT set here: spike 3 proved the object API silently drops
+// -RestartCount / -RestartInterval (Count persists as 0). T5 adds a CIM Set
+// after Register to persist it (or falls back to R2 best-effort). The settings
+// here omit those flags so the T4 baseline is honest about what the object API
+// actually persists.
+func registerTask(r psRunner, in taskInputs, password string) error {
+	// PowerShell script. The password + every parameter is read from $input
+	// (stdin) — NOTHING is interpolated into this template except the static
+	// task name. In particular the password is $p[7], read at runtime, so a
+	// grep of the script body cannot find it.
+	//
+	// NOTE on the string assembly: Go raw strings are delimited by backticks,
+	// so a literal PS backtick (the PowerShell line-continuation / escape
+	// char, e.g. inside "`n" for newline) cannot appear inside one. We split
+	// the script at those points and concatenate via Go double-quoted strings
+	// ("`" + "n"). The PS -split operator takes a regex; for a literal newline
+	// we pass [Environment]::NewLine-free `n via "`n" OR just "`r`n" — here we
+	// split on [char]10 (LF) via the regex '\n' which PS interprets as a
+	// newline under -split, sidestepping the backtick entirely.
+	const ps = `$ErrorActionPreference='Stop'
+$lines = [string]::Join("` + "\n" + `", $input)
+$p = $lines -split "` + "`n" + `"
+$exe=$p[0]; $addr=$p[1]; $user=$p[2]; $logPath=$p[3]; $logDir=$p[4]; $tlsCert=$p[5]; $tlsKey=$p[6]; $password=$p[7]
+$tlsArg = ''
+if ($tlsCert -ne '' -and $tlsKey -ne '') { $tlsArg = ' --tls-cert "' + $tlsCert + '" --tls-key "' + $tlsKey + '"' }
+$actionArg = '/C if not exist "' + $logDir + '" mkdir "' + $logDir + '" & "' + $exe + '" serve --addr "' + $addr + '"' + $tlsArg + ' >> "' + $logPath + '" 2>&1'
+$action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument $actionArg
+$trigBoot = New-ScheduledTaskTrigger -AtStartup
+$trigLogon = New-ScheduledTaskTrigger -AtLogOn -User $user
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
+Register-ScheduledTask -TaskName '` + serveTaskName + `' -Action $action -Trigger @($trigBoot,$trigLogon) -Settings $settings -RunLevel Limited -User $user -Password $password -Force | Out-Null
+Write-Output "REGISTERED"
+`
+	logDir := filepath.Dir(in.LogPath)
+	stdin := strings.Join([]string{in.ExePath, in.Addr, in.User, in.LogPath, logDir, in.TLSCert, in.TLSKey, password}, "\n")
+	out, err := r.Run(ps, stdin)
 	if err != nil {
 		return fmt.Errorf("powershell: %w: %s", err, out)
 	}
-	if !strings.Contains(string(out), "REGISTERED") {
-		return fmt.Errorf("powershell did not confirm registration: %s", out)
+	if !strings.Contains(out, "REGISTERED") {
+		return fmt.Errorf("powershell did not confirm registration (no REGISTERED sentinel): %s", out)
 	}
 	return nil
+}
+
+// --- machine-scope precheck (codex #2, FINDING B prevention) -------------
+//
+// verifyMachineScopeForBoot refuses to install a boot task if master.key is not
+// provably machine-scope DPAPI. Without this gate, a legacy user-scope blob
+// (readable in an interactive / RDP session but NOT in the Password-logon
+// session the task host uses at boot) would let the task start at boot, fail to
+// read the master key, and crash-loop — exactly the FINDING B regression Plan
+// 15 exists to fix.
+//
+// === SOUNDNESS (spike-2 caveat, load-bearing — read before changing) ===
+// Plan 15 spike 2 (TestDpapi_CrossScopeInteroperable) proved DPAPI's scope flag
+// is a HINT, not a hard gate: a blob self-describes its scope and BOTH flags
+// decrypt it. So store.DpapiKeyProvider.MachineUnprotectForMigrate(userBlob)
+// SUCCEEDS — the brief's literal precheck (reject when MachineUnprotectForMigrate
+// errors) would NEVER error and silently accept user-scope blobs, recreating
+// FINDING B. The brief's precheck is unsound; T3 confirmed this empirically
+// (task-3-report.md CONCERN 1).
+//
+// Sound mechanism implemented here (matches T3 CONCERN 1's suggested follow-up):
+// a sentinel sidecar file machineScopeSentinelPath(masterKeyPath) — written by
+// DpapiKeyProvider.Set (the machine-scope protect path) — is the ONLY reliable
+// signal that the blob was protected with the machine flag. A legacy user-scope
+// blob written directly (UserProtectForMigrate + os.WriteFile, never through
+// Set) has NO sentinel → precheck rejects. A freshly Set or migrated blob
+// carries the sentinel → precheck accepts. Blob inspection alone cannot
+// distinguish scope under spike-2; the sentinel is the sound signal.
+func verifyMachineScopeForBoot() error {
+	masterPath, ok, err := currentMasterKeyPath()
+	if err != nil {
+		// Could not resolve the path (e.g. %AppData% unset). The keychain.Get
+		// sanity already succeeded above, so a failure here is unusual; surface
+		// it rather than silently passing the precheck on a config anomaly.
+		return fmt.Errorf("locate master.key for machine-scope precheck: %w", err)
+	}
+	if !ok || masterPath == "" {
+		// Non-DpapiKeyProvider keychain (Unix builds don't compile this file,
+		// but a future Windows provider might). No machine-scope concept →
+		// nothing to verify. Do NOT block install on a non-DPAPI keychain.
+		return nil
+	}
+	blob, rErr := os.ReadFile(masterPath)
+	if rErr != nil {
+		// keychain.Get already succeeded, so a read failure here is a race or
+		// ACL anomaly. Surface it; do NOT silently pass.
+		return fmt.Errorf("read master.key for machine-scope precheck: %w (if admin-reset password, restore from backup or re-init vault)", rErr)
+	}
+	// Sanity: the blob must be decryptable (at least one scope). Under spike-2
+	// this nearly always succeeds; it only fails on a genuinely corrupt blob.
+	// We do NOT use this for scope detection (spike-2 makes it non-discriminating);
+	// it is a defense-in-depth corruption check.
+	//
+	// Parenthesize the DpapiKeyProvider{} composite literals — Go's parser
+	// mis-parses an unparenthesized composite literal at the start of an if
+	// condition's init statement (it reads the {} as a statement block).
+	dpapi := store.DpapiKeyProvider{}
+	if _, mErr := dpapi.MachineUnprotectForMigrate(blob); mErr != nil {
+		if _, uErr := dpapi.UserUnprotectForMigrate(blob); uErr != nil {
+			return fmt.Errorf("master.key is not decryptable under either DPAPI scope (corrupt or admin-reset): machine=%v user=%v. Restore from backup (docs/backup-restore.md) or re-init vault", mErr, uErr)
+		}
+	}
+	// THE SOUND SCOPE CHECK: sentinel sidecar. Written by DpapiKeyProvider.Set
+	// (T4 wiring in masterkey_windows.go). Absent ⇒ legacy user-scope blob ⇒
+	// reject with the migration runbook pointer.
+	if _, sErr := os.Stat(machineScopeSentinelPath(masterPath)); sErr != nil {
+		return fmt.Errorf("master.key is not machine-scope DPAPI (no machine-scope sentinel: %v). boot auto-start needs machine-scope so the Password-logon task host can read it. Run 'ssh-manager unlock' in an interactive session (it migrates a legacy user-scope master.key to machine-scope), then re-run 'serve install'", sErr)
+	}
+	return nil
+}
+
+// machineScopeSentinelPath returns the path to the machine-scope sentinel
+// sidecar for a given master.key path (e.g. .../master.key -> .../master.key.machinescope).
+// The sentinel is written by DpapiKeyProvider.Set and removed by Delete; it is
+// the ONLY sound signal of machine-scope protection under spike-2.
+func machineScopeSentinelPath(masterKeyPath string) string {
+	return masterKeyPath + ".machinescope"
+}
+
+// currentMasterKeyPath resolves the master.key path from the active keychain
+// seam. Returns (path, isDpapiProvider, err). Non-DPAPI providers (e.g. Unix
+// keyring) return ("", false, nil) — callers treat that as "no machine-scope
+// concept, skip the precheck".
+func currentMasterKeyPath() (string, bool, error) {
+	dkp, ok := keychain.(store.DpapiKeyProvider)
+	if !ok {
+		return "", false, nil
+	}
+	pp, err := dkp.PathOrEmpty()
+	return pp, true, err
 }
 
 // --- schtasks subprocess helpers (status / run / delete) -----------------

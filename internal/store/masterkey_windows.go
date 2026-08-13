@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 // DpapiKeyProvider stores the master key in a file encrypted with machine-scope
@@ -106,7 +107,41 @@ func (p DpapiKeyProvider) Set(mk []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	// Plan 15 T4: stamp the machine-scope sentinel sidecar. spike 2 proved DPAPI
+	// blobs are cross-scope decryptable, so the only sound signal that this blob
+	// was protected with the machine flag is a sidecar file. serve install's
+	// precheck (verifyMachineScopeForBoot) reads this sentinel to refuse boot-
+	// task installation against a legacy user-scope blob (which would crash-loop
+	// at boot = FINDING B). Written AFTER the atomic rename so a crash mid-Set
+	// leaves no sentinel pointing at a missing/old blob; a Set that fails before
+	// rename leaves neither blob nor sentinel.
+	return writeMachineScopeSentinel(path)
+}
+
+// writeMachineScopeSentinel writes the machine-scope sentinel sidecar next to
+// the master.key file (Path + ".machinescope"). The sentinel is the ONLY sound
+// signal of machine-scope DPAPI protection under spike 2 (Plan 15 T4). The
+// content is a timestamp for debuggability; the presence of the file is what
+// callers check.
+func writeMachineScopeSentinel(masterKeyPath string) error {
+	sentinelPath := masterKeyPath + ".machinescope"
+	content := []byte("machine-scope DPAPI sentinel\nwritten-by: ssh-manager DpapiKeyProvider.Set\ntimestamp: " + time.Now().UTC().Format(time.RFC3339) + "\n")
+	// Write with 0o600; the parent dir ACL (ensureDirACL, allan716-only) is the
+	// real protection. Atomicity is best-effort (sentinel is a debug hint, not
+	// a correctness-critical blob); a torn write would at worst make the precheck
+	// reject, which is the safe direction.
+	return os.WriteFile(sentinelPath, content, 0o600)
+}
+
+// removeMachineScopeSentinel removes the sentinel sidecar (best-effort; absent
+// is a no-op). Called by Delete so a deleted master.key does not leave a stale
+// sentinel that would mislead a future precheck into accepting a re-created
+// user-scope blob at the same path.
+func removeMachineScopeSentinel(masterKeyPath string) {
+	_ = os.Remove(masterKeyPath + ".machinescope")
 }
 
 func (p DpapiKeyProvider) Delete() error {
@@ -118,6 +153,10 @@ func (p DpapiKeyProvider) Delete() error {
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
+	// Plan 15 T4: also drop the machine-scope sentinel sidecar so a future
+	// re-created user-scope blob at the same path can't ride on a stale
+	// sentinel. Best-effort (absent is the desired end state).
+	removeMachineScopeSentinel(path)
 	return err
 }
 
