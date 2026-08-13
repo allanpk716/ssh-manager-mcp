@@ -414,7 +414,11 @@ Set-ScheduledTask -InputObject $t | Out-Null
 Write-Output "REGISTERED"
 `
 	logDir := filepath.Dir(in.LogPath)
-	stdin := strings.Join([]string{in.ExePath, in.Addr, in.User, in.LogPath, logDir, in.TLSCert, in.TLSKey, password}, "\n")
+	// stdin fields joined by CRLF: PowerShell 5.1 reads stdin line-by-line and
+	// treats CRLF as the line separator (LF-only makes the whole stdin ONE line
+	// → $input has 1 element → $p[2]/$p[7] are null → "User argument is null"
+	// + password lost). CRLF makes each field a distinct $input element.
+	stdin := strings.Join([]string{in.ExePath, in.Addr, in.User, in.LogPath, logDir, in.TLSCert, in.TLSKey, password}, "\r\n")
 	out, err := r.Run(ps, stdin)
 	if err != nil {
 		return fmt.Errorf("powershell: %w: %s", err, out)
