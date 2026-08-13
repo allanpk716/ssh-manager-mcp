@@ -74,6 +74,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ssh-manager-mcp/internal/store"
 )
 
 // testMasterKeyHex is a fixed 32-byte test master key (hex-encoded). It is
@@ -348,28 +350,32 @@ func TestServeInstallIntegration(t *testing.T) {
 	t.Log("step 6b: uninstall removed the task cleanly")
 }
 
-// seedVaultStep0 writes master.key + sentinel + store.db for the throwaway
-// per-test vault. We use DpapiKeyProvider.Set (the machine-scope protect path)
-// so the sentinel sidecar is written — the serve-install precheck (codex #2)
-// rejects a blob without the sentinel. The on-disk key value EQUALS the
-// SSHMGR_MASTERKEY_HEX env value so resolveMasterKey (env first) and
-// keychain.Get (disk) agree.
+// seedVaultStep0 writes master.key for the throwaway per-test vault. Plan 16 T3:
+// the build-tag `keychain` seam is gone; master.key is a plaintext FileKeyProvider
+// file at SSHMGR_FILEKEY_PATH (pinned to the test's appData dir by the caller).
+// The on-disk key value EQUALS the SSHMGR_MASTERKEY_HEX env value so
+// resolveMasterKey (env tier) and FileKeyProvider.Get (file tier) agree.
+//
+// NOTE (T7 follow-up): the serve-install precheck (verifyMachineScopeForBoot)
+// still looks for a DpapiKeyProvider machine-scope sentinel sidecar — which
+// FileKeyProvider.Set does NOT write. This step writes the plaintext master.key
+// only. T7 (kardianos rewrite) replaces the entire serve-install + its
+// machine-scope precheck, at which point the sentinel concept is dropped or
+// reworked. Until then this test compiles + the gating (SSHMGR_SERVE_INSTALL=1)
+// keeps it off local `go test ./...` runs.
 //
 // This mirrors what production `unlock`'s first-run branch does (generate +
-// keychain.Set), short-circuited because the env pins the key value.
+// FileKeyProvider.Set), short-circuited because the env pins the key value.
 func seedVaultStep0(t *testing.T, hexKey string) {
 	t.Helper()
 	mk, err := hexDecodeStatic(hexKey)
 	if err != nil {
 		t.Fatalf("seedVaultStep0: decode hex key: %v", err)
 	}
-	// keychain is the package seam (store.KeyProvider, Windows impl =
-	// DpapiKeyProvider). Set writes master.key (machine-scope DPAPI) + the
-	// sentinel sidecar — the same path production unlock's first-run branch
-	// takes. Set is part of the KeyProvider interface (masterkey.go:27), so no
-	// type assertion is needed.
-	if err := keychain.Set(mk); err != nil {
-		t.Fatalf("seedVaultStep0: keychain.Set (DpapiKeyProvider machine-scope protect): %v", err)
+	// FileKeyProvider at the test-pinned SSHMGR_FILEKEY_PATH. Set writes
+	// master.key as plaintext (0600 / Windows ACL inherited from the folder).
+	if err := (store.FileKeyProvider{}).Set(mk); err != nil {
+		t.Fatalf("seedVaultStep0: FileKeyProvider.Set (master.key plaintext): %v", err)
 	}
 }
 

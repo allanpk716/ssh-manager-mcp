@@ -22,7 +22,30 @@
 // from before — Plan 14 does not move the cache DEK medium on Unix).
 package cli
 
-import "ssh-manager-mcp/internal/store"
+import (
+	"os"
+	"path/filepath"
+
+	"ssh-manager-mcp/internal/store"
+)
+
+// dpapiBaseDir resolves the directory holding cache-dek.key (and master.key
+// before Plan 16). Was in migrate_windows.go before Plan 16 T3 deleted that
+// file; moved here (the only remaining caller) so cache_dek_windows.go stays
+// self-contained. T4 will rewire dekProvider to paths.CacheDekPath() and this
+// helper goes away then.
+func dpapiBaseDir() string {
+	appData := os.Getenv("AppData")
+	if appData == "" {
+		return filepath.Join("ssh-manager")
+	}
+	return filepath.Join(appData, "ssh-manager")
+}
+
+// dpapiCacheDekPath is the cache-DEK DPAPI file path (was in migrate_windows.go).
+func dpapiCacheDekPath() string {
+	return filepath.Join(dpapiBaseDir(), "cache-dek.key")
+}
 
 // dekProvider returns the cache-DEK KeyProvider (Windows: DpapiKeyProvider at
 // the migration's cache-dek.key path). A package seam so tests inject a fake

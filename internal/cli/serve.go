@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"ssh-manager-mcp/internal/mcpserver"
+	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 )
 
@@ -29,7 +30,7 @@ Default bind is loopback (127.0.0.1:7878) — safe. For multi-machine use, set
 --addr to 0.0.0.0:7878 or a VLAN IP, and prefer --tls-cert/--tls-key: without
 TLS the bearer token travels in cleartext on the network.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := vault.OpenStore(keychain)
+			st, err := vault.OpenStore(store.FileKeyProvider{})
 			if err != nil {
 				return err
 			}

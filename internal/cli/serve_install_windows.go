@@ -55,6 +55,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -155,7 +156,7 @@ func runServeInstall(cmd *cobra.Command, addr, tlsCert, tlsKey, taskUser string)
 	//    the machine-scope half is verified by a sentinel sidecar file written
 	//    by DpapiKeyProvider.Set (see verifyMachineScopeForBoot's doc comment
 	//    for why blob inspection alone is unsound under spike-2).
-	if _, err := keychain.Get(); err != nil {
+	if _, err := (store.FileKeyProvider{}).Get(); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return fmt.Errorf("master key not found: run 'ssh-manager unlock' in an interactive session first (see docs/backup-restore.md)")
 		}
@@ -529,17 +530,17 @@ func machineScopeSentinelPath(masterKeyPath string) string {
 	return masterKeyPath + ".machinescope"
 }
 
-// currentMasterKeyPath resolves the master.key path from the active keychain
-// seam. Returns (path, isDpapiProvider, err). Non-DPAPI providers (e.g. Unix
-// keyring) return ("", false, nil) — callers treat that as "no machine-scope
-// concept, skip the precheck".
+// currentMasterKeyPath resolves the master.key path. Plan 16: the `keychain`
+// seam (DpapiKeyProvider type-assert) is gone — always returns the FileKeyProvider
+// path (paths.MasterKeyPath, env-overridable) + true. This file is scheduled for
+// deletion in T7 (kardianos replaces serve-install); the body is kept minimal
+// so it compiles until then.
 func currentMasterKeyPath() (string, bool, error) {
-	dkp, ok := keychain.(store.DpapiKeyProvider)
-	if !ok {
+	p, err := paths.MasterKeyPath()
+	if err != nil || p == "" {
 		return "", false, nil
 	}
-	pp, err := dkp.PathOrEmpty()
-	return pp, true, err
+	return p, true, nil
 }
 
 // --- schtasks subprocess helpers (status / run / delete) -----------------

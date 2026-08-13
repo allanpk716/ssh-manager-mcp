@@ -113,42 +113,78 @@ func resolveTestSetup(t *testing.T, masterKeyHex string) {
 	})
 }
 
-// TestResolveMasterKey_EnvWins: SSHMGR_MASTERKEY_HEX set → returned verbatim
-// (priority 1). The KeyProvider must NOT be consulted.
-func TestResolveMasterKey_EnvWins(t *testing.T) {
-	want := make([]byte, 32)
-	copy(want, []byte("env-wins"))
-	resolveTestSetup(t, hex.EncodeToString(want))
-	kp := &fakeKeyProvider{key: func() []byte {
-		k := make([]byte, 32)
-		copy(k, []byte("platform-should-not-be-used"))
-		return k
-	}()}
-	got, err := resolveMasterKey(kp)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("env did not win: got %x want %x", got, want)
-	}
-	if kp.called {
-		t.Fatal("KeyProvider.Get must NOT be called when env key is set")
-	}
+// TestResolveMasterKey_TwoTier (Plan 16: keychain tier deleted, spec §4.2).
+// resolveMasterKey is now 2 tiers when kp is nil (the production OpenStore
+// call site passes store.FileKeyProvider{}; tests pass nil to exercise the
+// env + file tiers directly):
+//  1. SSHMGR_MASTERKEY_HEX env (hex) — tests / explicit config.
+//  2. FileKeyProvider at SSHMGR_FILEKEY_PATH (or default fixed path).
+//
+// Pass nil so the kp-injection tier is skipped — the documented two-tier
+// resolution path. The injected-kp tier is covered by the _KeyProviderParam
+// tests below.
+func TestResolveMasterKey_TwoTier(t *testing.T) {
+	bytes32 := make([]byte, 32)
+	copy(bytes32, []byte("two-tier-fixtures"))
+
+	// tier 1: env wins when no file present.
+	t.Run("env", func(t *testing.T) {
+		resolveTestSetup(t, hex.EncodeToString(bytes32))
+		// SSHMGR_FILEKEY_PATH from resolveTestSetup points at a non-existent
+		// file → file tier is absent, only env can satisfy.
+		mk, err := resolveMasterKey(nil)
+		if err != nil {
+			t.Fatalf("env tier: %v", err)
+		}
+		if !bytes.Equal(mk, bytes32) {
+			t.Errorf("env tier mismatch: got %x want %x", mk, bytes32)
+		}
+	})
+
+	// tier 2: FileKeyProvider when env unset.
+	t.Run("file", func(t *testing.T) {
+		resolveTestSetup(t, "") // no env
+		fp := store.FileKeyProvider{Path: os.Getenv("SSHMGR_FILEKEY_PATH")}
+		if err := fp.Set(bytes32); err != nil {
+			t.Fatalf("seed FileProvider: %v", err)
+		}
+		mk, err := resolveMasterKey(nil)
+		if err != nil {
+			t.Fatalf("file tier: %v", err)
+		}
+		if !bytes.Equal(mk, bytes32) {
+			t.Errorf("file tier mismatch: got %x want %x", mk, bytes32)
+		}
+	})
+
+	// locked: env unset + no file.
+	t.Run("locked", func(t *testing.T) {
+		resolveTestSetup(t, "") // SSHMGR_FILEKEY_PATH → non-existent path
+		_, err := resolveMasterKey(nil)
+		if err == nil {
+			t.Fatal("expected locked error, got nil")
+		}
+		if !strings.Contains(err.Error(), "vault locked") {
+			t.Fatalf("err = %q, want it to contain \"vault locked\"", err.Error())
+		}
+	})
 }
 
-// TestResolveMasterKey_PlatformKey: env unset + platform KeyProvider returns a
-// key → that key is returned (priority 2).
-func TestResolveMasterKey_PlatformKey(t *testing.T) {
+// TestResolveMasterKey_KeyProviderParamWins: when a non-nil kp is injected and
+// its Get() succeeds, that key is returned (priority 1 over env / file). This
+// is the seam the production OpenStore call site uses (passing
+// store.FileKeyProvider{}) and tests use to inject a fake.
+func TestResolveMasterKey_KeyProviderParamWins(t *testing.T) {
 	resolveTestSetup(t, "") // no env
 	want := make([]byte, 32)
-	copy(want, []byte("platform"))
+	copy(want, []byte("kp-param"))
 	kp := &fakeKeyProvider{key: want}
 	got, err := resolveMasterKey(kp)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatalf("platform key mismatch: got %x want %x", got, want)
+		t.Fatalf("kp-param key mismatch: got %x want %x", got, want)
 	}
 }
 
