@@ -26,8 +26,10 @@ func TestAtomicWriteUnique_ConcurrentWritersNeverTear(t *testing.T) {
 	}
 
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	var readErr error
 	go func() {
+		defer close(done)
 		for {
 			select {
 			case <-stop:
@@ -65,6 +67,7 @@ func TestAtomicWriteUnique_ConcurrentWritersNeverTear(t *testing.T) {
 	}
 	wg.Wait()
 	close(stop)
+	<-done
 
 	if readErr != nil {
 		t.Fatalf("torn read detected (fixed-name tmp bug): %v", readErr)

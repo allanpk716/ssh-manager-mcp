@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -67,7 +68,7 @@ func atomicWriteUnique(path string, blob []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	// Retry rename on Windows to handle "Access is denied" from concurrent readers
+	// Retry rename on Windows to handle ERROR_ACCESS_DENIED / fs.ErrPermission from concurrent readers
 	var lastErr error
 	for i := 0; i < 50; i++ {
 		err := os.Rename(tmpPath, path)
@@ -75,9 +76,9 @@ func atomicWriteUnique(path string, blob []byte) error {
 			return nil // success
 		}
 		lastErr = err
-		// On Windows, "Access is denied" from concurrent readers is transient
+		// On Windows, ERROR_ACCESS_DENIED / fs.ErrPermission from concurrent readers is transient
 		// Other errors are not retryable
-		if !strings.Contains(err.Error(), "Access is denied") {
+		if !errors.Is(err, fs.ErrPermission) {
 			return err
 		}
 		time.Sleep(time.Duration(10+(i*2)) * time.Millisecond) // 10-110ms backoff
