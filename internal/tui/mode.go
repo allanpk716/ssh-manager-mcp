@@ -18,10 +18,40 @@ const (
 	ModeClient
 )
 
-// vaultPresent reports whether an UNLOCKED vault is reachable on this machine.
-// A locked vault is deliberately NOT treated as client-mode (spec §2): probing a
-// locked store returns an error we distinguish from "absent".
-func vaultPresent() bool {
+// vaultStorePath mirrors cli's storePath (env override > default) WITHOUT importing cli.
+// Returns "" only when the default path itself is unresolvable (no vault could
+// exist there anyway).
+func vaultStorePath() string {
+	if p := os.Getenv("SSHMGR_STORE"); p != "" {
+		return p
+	}
+	p, err := store.DefaultStorePath()
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+// vaultExists reports whether a store.db file exists at the vault location.
+// Stat-first so probing a machine with NO vault never triggers OpenStore's
+// create-on-open side effect (a fresh empty store.db).
+func vaultExists() bool {
+	p := vaultStorePath()
+	if p == "" {
+		return false
+	}
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+// vaultUnlocked reports whether an UNLOCKED vault is reachable. A vault that
+// EXISTS but cannot be opened (locked / key unreadable) is distinguished by the
+// caller via vaultExists so detection never silently degrades a locked broker
+// machine into client mode (spec §6).
+func vaultUnlocked() bool {
+	if !vaultExists() {
+		return false
+	}
 	st, err := vault.OpenStore(store.FileKeyProvider{})
 	if err != nil {
 		return false
@@ -58,7 +88,15 @@ func DetectModeWith(force string, hasVault, hasCache func() bool) (Mode, error) 
 }
 
 func DetectMode(force string) (Mode, error) {
-	return DetectModeWith(force, vaultPresent, cachePresent)
+	switch force {
+	case "broker", "client", "":
+	default:
+		return 0, fmt.Errorf("invalid --mode %q (want broker|client)", force)
+	}
+	if vaultExists() && !vaultUnlocked() {
+		return 0, errors.New("本机 vault 存在但锁定或不可读：先运行 `ssh-manager unlock`（不会降级为 client 模式）")
+	}
+	return DetectModeWith(force, vaultUnlocked, cachePresent)
 }
 
 // Run starts the console for mode (placeholder view until Task 3).
