@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
 	"ssh-manager-mcp/internal/store"
@@ -109,6 +110,41 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case k.Text == "q":
 			return a, tea.Quit
+		case k.Text == "a", k.Text == "e", k.Text == "d":
+			if a.mode == ModeBroker && a.page == pageServers {
+				sp, _ := a.pages[pageServers].(*serversPage)
+				switch k.Text {
+				case "a":
+					draft := &serverDraft{}
+					a.overlay = newFormOverlay("新增服务器", newServerForm(draft, false), func() tea.Cmd {
+						return submitServer(a.st, nil, draft)
+					})
+				case "e":
+					if cur := sp.current(); cur != nil {
+						draft := prefill(cur)
+						a.overlay = newFormOverlay("编辑服务器", newServerForm(draft, true), func() tea.Cmd {
+							return submitServer(a.st, cur, draft)
+						})
+					}
+				case "d":
+					if cur := sp.current(); cur != nil {
+						confirm := false
+						form := huh.NewForm(huh.NewGroup(huh.NewConfirm().
+							Title(fmt.Sprintf("删除服务器 %q？（profile 授权一并失效）", cur.Name)).Value(&confirm)))
+						a.overlay = newFormOverlay("删除服务器", form, func() tea.Cmd {
+							if !confirm {
+								return nil
+							}
+							return doAction(a.st, func() (string, error) {
+								return "已删除 " + cur.Name, a.st.DeleteServer(cur.ID)
+							})
+						})
+					}
+				}
+				if a.overlay != nil {
+					return a, a.overlay.Init()
+				}
+			}
 		}
 	case errMsg:
 		a.err = m.err
