@@ -106,22 +106,25 @@ echo "===vault 现有 DocuFiller-UpdateHub vs config update-hub(坐实同一性)
 需核对:`id_ed25519`(默认键)归属——grep ~/.ssh/config 无指向则疑废弃;`id_4090x2.deprecated` 已标废弃。
 **输出一张核对表给用户**,用户确认后再 1.2。
 
-- [ ] **1.2 选择私钥跨机传输路径(三选一,优先 a)**
+- [ ] **1.2 私钥跨机传输路径(用户拍板:路径 a — RDP 手粘)**
 
-- 路径 a(优先):RDP 上 NUC10,在 NUC10 上跑 `ssh-manager servers add` 交互,**手动粘贴**私钥内容(私钥不落 NUC10 临时文件)。
-- 路径 b:等阶段4 升级到 v0.4.0 TLS 后,用在线模式远程 add(私钥走 TLS+pinning)。
-- 路径 c:`scp` 私钥到 NUC10 临时文件 → add → 立即 shred。
+✅ **已定路径 a**:用户 RDP 上 NUC10,在 NUC10 上跑 `ssh-manager servers add` 交互,**手动粘贴**私钥内容(私钥不落 NUC10 临时文件,最安全)。
+> 192.18.8.121(spec §2.1)用户定**删除不入 vault**,本阶段跳过它。
+> `id_ed25519`(阶段1.1 核对 = NUC10 账号默认 fallback key,vault 已有专用 id_nuc10)——**用户拍板:定删,不入 vault**。
 
-> 192.168.8.121(spec §2.1)用户定**删除不入 vault**,本阶段跳过它。
+- [ ] **1.3 在 NUC10 上 add ml_hub / ai_runner(路径 a)**
 
-- [ ] **1.3 在 NUC10 上 add ml_hub / ai_runner(按 1.2 选的路径)**
-
-RDP 上 NUC10 后(路径 a),用 NUC10 上的 ssh-manager:
+RDP 上 NUC10。先看现有 7 台 + 核对 add 的 flag:
 ```
-ssh-manager servers add --name ml_hub --host 172.18.200.47 --user allan --port 40101 --key "<粘贴 id_ml_hub 内容>"
-ssh-manager servers add --name ai_runner --host 192.168.100.201 --user urit_ai --port 22 --key "<粘贴 id_ai_runner_201 内容>"
+ssh-manager servers ls                       # 看现有 7 台名(确认 1660Super01/02,3090x2,4090x2,DocuFiller-UpdateHub,NUC10,procurement-recog)
+ssh-manager servers add --help               # 核对 flag 名(--name/--host/--user/--port/--key 或 --password)
 ```
-> 确切的 flag 名以 `ssh-manager servers add --help` 为准(`--name/--host/--user/--port/--key` 或 `--password`)。执行前先 `--help` 核对。
+然后 add 两台(flag 名以 --help 为准,下面是预期形):
+```
+ssh-manager servers add --name ml_hub --host 172.18.200.47 --user allan --port 40101 --key "<粘贴 ~/.ssh/id_ml_hub 内容>"
+ssh-manager servers add --name ai_runner --host 192.168.100.201 --user urit_ai --port 22 --key "<粘贴 ~/.ssh/id_ai_runner_201 内容>"
+```
+> 私钥内容从笔记本 `~/.ssh/id_ml_hub` / `~/.ssh/id_ai_runner_201` 取(已备份)。粘贴完整含 BEGIN/END 行。**不落 NUC10 临时文件。**
 
 - [ ] **1.4 grant 到现有 e2e-profile**
 
@@ -254,11 +257,11 @@ ssh-manager cache-tokens add --name laptop
 ```
 (用 staging v0.4.0 或旧 v0.3.1,cache-tokens add 在两者都可用。)
 Expected: 输出 `<设备码>:<指纹>`(形态 A)或 `<设备码>` + 单独指纹行。**记下新设备码+指纹组合。**
-然后吊销旧明文码:
+然后吊销旧明文码(阶段1.1 核对:当前活跃旧码 = `REDACTED-REVOKED-cache-token`,嵌在 cache-pull.cmd 里):
 ```
 ssh-manager cache-tokens revoke laptop
 ```
-> revoke 后旧码 30min 定时任务(4a.2 已禁)即便跑也是 401。
+> revoke 后旧码 `5vYN79Ly…` 即失效;30min 定时任务(4a.2 已禁)即便跑也是 401。新带 pin 码在 5.1/5.2 注入。
 
 ### 阶段 4c:最后才重启 NUC10 serve 变 TLS
 
@@ -308,29 +311,30 @@ Expected: `pulled N servers / M credentials into cache.bin`(N=9)。验证 TLS+�
 
 - [ ] **5.2 重发 cache-refresh 定时任务(wrapper 嵌新带 pin 设备码)**
 
-编辑 `%LOCALAPPDATA%\ssh-manager\cache-pull.cmd`,把设备码换成 `<4b.3 新设备码>:<4b.2 指纹>`,URL 换 https。然后:
+阶段1.1 核对现状:`%LOCALAPPDATA%\ssh-manager\cache-pull.cmd`(419B)当前嵌旧明文码 `5vYN79Ly…`(无 pin)+ `http://`。本步改它:
+把 cache-pull.cmd 里 `SSHMGR_CACHE_URL` 改 `https://192.168.100.235:7878`,`SSHMGR_CACHE_TOKEN` 改成 `<4b.3 新设备码>:<4b.2 指纹>`(形态 A)。然后:
 ```powershell
 Enable-ScheduledTask -TaskName ssh-manager-cache-refresh
 # 手动跑一次验证
 schtasks //Run //TN ssh-manager-cache-refresh
+tail "%LOCALAPPDATA%\ssh-manager\cache-pull-task.log"
 ```
-Expected: 任务跑 exit 0;cache-pull.cmd 内嵌带 pin 码。
+Expected: 任务跑 exit=0;cache-pull.cmd 内嵌带 pin 码 + https URL。
 
-- [ ] **5.3 改顶层 .mcp.json 的 ssh 条目为离线主路径**
+- [ ] **5.3 改 `~/.claude.json` 的 ssh MCP 条目为离线主路径(阶段1.1 核对修正:实际配置在 claude.json 非 .mcp.json)**
 
-备份后改 `.mcp.json`:
+⚠️ 核对发现:笔记本的 ssh MCP 配置在 **`~/.claude.json`**(不是 `.mcp.json`),当前指向 `http://192.168.100.235:7878/`(明文 serve)。本步改它。
+
+备份后改 `~/.claude.json` 里的 `mcpServers.ssh` 条目为:
 ```json
-{
-  "mcpServers": {
-    "ssh": {
-      "command": "ssh-manager",
-      "args": ["mcp", "--cache", "--token", "<e2e-agent project token>"]
-    }
-  }
+"ssh": {
+  "command": "C:\\Users\\allan716\\bin\\ssh-manager.exe",
+  "args": ["mcp", "--cache", "--token", "<e2e-agent project token>"]
 }
 ```
-(原在线 HTTP `{type:http,url:...}` 配置退役;备份到 `.claude.json.ssh-http-backup.json`。)
-Expected: `.mcp.json` 含上面 ssh 条目。
+(claude.json 是大 JSON,用脚本/jq 精确改这一条,不要手改整个文件。原在线 HTTP 配置备份到 `~/.claude.json.ssh-http-backup-2026-08-14.json`。)
+Expected: `~/.claude.json` 的 ssh 条目是 stdio `mcp --cache`,非 http。
+> 重启 Claude Code 生效。command 用绝对路径避免 PATH 问题。
 
 - [ ] **5.4 cache status 验证全量**
 
@@ -362,7 +366,7 @@ Expected: 9/9 exit 0。
 
 - [ ] **6.3 重启 Claude Code 确认走离线 MCP**
 
-重启 Claude Code → agent 用顶层 `.mcp.json` 的 ssh(现在是 `mcp --cache`)。
+重启 Claude Code → agent 用 `~/.claude.json` 的 ssh(现在是 `mcp --cache`)。
 Expected: agent 能 list_servers + exec_command,不碰 NUC10 serve(离线)。
 
 > ✅ 阶段 6 checkpoint:离线全量可连,agent 重启即用离线 MCP。**此时可进删除阶段。**
@@ -383,7 +387,7 @@ Expected: agent 能 list_servers + exec_command,不碰 NUC10 serve(离线)。
 | `~/.ssh/id_1660super02_236`(+.pub) | 1660super02 | 已入 vault | ✅ |
 | `~/.ssh/id_4090x2.deprecated` | 旧 4090x2 键 | vault 有更新凭据 | ✅ |
 | `~/.ssh/id_ai_runner_201`(+.pub) | ai_runner | 已入 vault(阶段1) | ✅ |
-| `~/.ssh/id_ed25519` | 默认键 | 归属核对结果(1.1)定 | ✅ |
+| `~/.ssh/id_ed25519`(+.pub) | NUC10 账号默认 fallback key | 阶段1.1 核对 = `allan716@Nuc10`,vault 已有专用 id_nuc10;**用户拍板定删** | ✅ |
 | `~/.ssh/id_ed25519_4090srv` | 4090x2 | 已入 vault | ✅ |
 | `~/.ssh/id_ml_hub` | ml_hub | 已入 vault(阶段1) | ✅ |
 | `~/.ssh/id_nuc10` | nuc10 | 已入 vault | ✅ |
