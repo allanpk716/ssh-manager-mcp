@@ -7,17 +7,17 @@ import (
 	"strconv"
 	"strings"
 
-	"charm.land/huh/v2"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
 type serverDraft struct {
-	Name, Host, User   string
-	Port               int
-	Password, KeyPath, KeyPass, SudoPassword string
+	Name, Host, User                                         string
+	Port                                                     int
+	Password, KeyPath, KeyPass, SudoPassword                 string
 	Description, Location, Hardware, Services, Role, Caveats string
 }
 
@@ -105,6 +105,32 @@ func newGrantForm(servers []*models.Server, chosen *[]string) *huh.Form {
 	return huh.NewForm(huh.NewGroup(
 		huh.NewMultiSelect[string]().Title("授权服务器（空格勾选，回车提交）").
 			Options(grantOptions(servers)...).Value(chosen),
+	))
+}
+
+// projectDraft is the create-project form state: a name plus the bound
+// profile id (the Select's VALUE — AddProject wants the id, not the name).
+type projectDraft struct {
+	Name      string
+	ProfileID string
+}
+
+// projectProfileOptions builds Select options: label = profile name (display),
+// value = profile id (same label/value discipline as grantOptions).
+func projectProfileOptions(profiles []*models.Profile) []huh.Option[string] {
+	opts := make([]huh.Option[string], len(profiles))
+	for i, p := range profiles {
+		opts[i] = huh.NewOption(p.Name, p.ID)
+	}
+	return opts
+}
+
+// newProjectForm: name + profile select for creating an agent project.
+func newProjectForm(d *projectDraft, profiles []*models.Profile) *huh.Form {
+	return huh.NewForm(huh.NewGroup(
+		huh.NewInput().Title("项目名称").Value(&d.Name).Validate(nonEmpty),
+		huh.NewSelect[string]().Title("绑定 Profile").
+			Options(projectProfileOptions(profiles)...).Value(&d.ProfileID),
 	))
 }
 

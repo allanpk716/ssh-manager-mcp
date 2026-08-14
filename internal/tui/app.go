@@ -8,6 +8,7 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -77,7 +78,7 @@ func FetchAll(st *store.Store) ([pageCount]listPage, error) {
 	}
 	pages[pageServers] = &serversPage{items: servers}
 	pages[pageProfiles] = &profilesPage{items: profiles, st: st}
-	pages[pageProjects] = &projectsPage{items: projects}
+	pages[pageProjects] = &projectsPage{items: projects, st: st}
 	pages[pageTokens] = &cacheTokensPage{items: tokens}
 	return pages, nil
 }
@@ -110,7 +111,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case k.Text == "q":
 			return a, tea.Quit
-		case k.Text == "a", k.Text == "e", k.Text == "d":
+		case k.Text == "a", k.Text == "e", k.Text == "d", k.Text == "g":
+			// One case for all action keys: overlapping letters across pages
+			// (a/e/d on servers AND projects, a on profiles) make separate
+			// cases order-dependent — an earlier case would swallow a later
+			// page's key. Dispatch by page instead.
 			if a.mode == ModeBroker && a.page == pageServers {
 				sp, _ := a.pages[pageServers].(*serversPage)
 				switch k.Text {
@@ -141,11 +146,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						})
 					}
 				}
-				if a.overlay != nil {
-					return a, a.overlay.Init()
-				}
 			}
-		case k.Text == "a", k.Text == "g": // profiles page: create + grant
 			if a.mode == ModeBroker && a.page == pageProfiles {
 				pp, _ := a.pages[pageProfiles].(*profilesPage)
 				switch k.Text {
@@ -175,9 +176,70 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						})
 					}
 				}
-				if a.overlay != nil {
-					return a, a.overlay.Init()
+			}
+			if a.mode == ModeBroker && a.page == pageProjects {
+				pj, _ := a.pages[pageProjects].(*projectsPage)
+				switch k.Text {
+				case "a":
+					profiles, err := a.st.ListProfiles()
+					if err != nil {
+						a.err = err
+						a.status = ""
+						return a, nil
+					}
+					if len(profiles) == 0 {
+						a.status = "无 Profile 可绑定：请先在 Profiles 页创建"
+						return a, nil
+					}
+					d := &projectDraft{}
+					a.overlay = newFormOverlay("新增项目", newProjectForm(d, profiles), func() tea.Cmd {
+						// The mutation runs AFTER the form closes; its token
+						// rides tokenIssuedMsg straight into the secretView
+						// overlay — one msg, then only the overlay holds it.
+						return func() tea.Msg {
+							_, token, err := a.st.AddProject(d.Name, d.ProfileID)
+							if err != nil {
+								return errMsg{err}
+							}
+							return tokenIssuedMsg{title: "项目 token", token: token}
+						}
+					})
+				case "e": // rotate: old token dies, new one shown once
+					if cur := pj.current(); cur != nil {
+						confirm := false
+						form := huh.NewForm(huh.NewGroup(huh.NewConfirm().
+							Title(fmt.Sprintf("轮换 %q 的 token？（旧 token 立即失效）", cur.Name)).Value(&confirm)))
+						a.overlay = newFormOverlay("轮换 token — "+cur.Name, form, func() tea.Cmd {
+							if !confirm {
+								return nil
+							}
+							return func() tea.Msg {
+								token, err := a.st.RotateProject(cur.ID)
+								if err != nil {
+									return errMsg{err}
+								}
+								return tokenIssuedMsg{title: "项目 token（已轮换）", token: token}
+							}
+						})
+					}
+				case "d": // revoke: permanent, hidden from the list going forward
+					if cur := pj.current(); cur != nil {
+						confirm := false
+						form := huh.NewForm(huh.NewGroup(huh.NewConfirm().
+							Title(fmt.Sprintf("吊销项目 %q？（永久生效，不可恢复）", cur.Name)).Value(&confirm)))
+						a.overlay = newFormOverlay("吊销项目", form, func() tea.Cmd {
+							if !confirm {
+								return nil
+							}
+							return doAction(a.st, func() (string, error) {
+								return "已吊销 " + cur.Name, a.st.SetProjectStatus(cur.ID, models.ProjectRevoked)
+							})
+						})
+					}
 				}
+			}
+			if a.overlay != nil {
+				return a, a.overlay.Init()
 			}
 		}
 	case errMsg:
@@ -195,6 +257,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case formDoneMsg:
 		a.overlay = nil
 		return a, m.after // run the deferred action (e.g. re-fetch)
+	case tokenIssuedMsg:
+		// Mutation succeeded and minted a token: take over the screen with the
+		// one-time secret view. Pages are re-fetched now so the list is fresh
+		// when the user dismisses (dismiss is a plain formDoneMsg{}).
+		a.err = nil
+		a.status = ""
+		a.overlay = &secretView{title: m.title, body: m.token}
+		if pages, err := FetchAll(a.st); err == nil {
+			a.pages = pages
+		}
+		return a, nil
 	}
 	return a, nil
 }
@@ -235,7 +308,7 @@ func (a App) View() tea.View {
 			t = a.pages[i].Title()
 		}
 		if i == a.page {
-			t = selStyle.Render("["+t+"]")
+			t = selStyle.Render("[" + t + "]")
 		} else {
 			t = "[" + t + "]"
 		}
@@ -286,6 +359,8 @@ func (a App) footer() string {
 		keys = "[a]新增 [e]编辑 [d]删除"
 	case pageProfiles:
 		keys = "[a]新增 [g]授权"
+	case pageProjects:
+		keys = "[a]新增 [e]轮换 [d]吊销"
 	}
 	if keys != "" {
 		return keys + "  Tab 切页  q 退出"
