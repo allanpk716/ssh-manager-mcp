@@ -115,6 +115,14 @@ func (h *cacheStoreHolder) Current() *store.Store {
 	if h.reload == nil {
 		return h.cur.Load()
 	}
+	// Consult + memoize + hydrate must all happen under h.mu: consulting the
+	// reloader outside the lock allows a goroutine holding a stale snapshot
+	// pointer to be preempted, another goroutine to hydrate a NEWER change,
+	// and the stale one to then re-hydrate over it — silently serving an
+	// older snapshot until the next disk change. Serializing the whole
+	// sequence prevents out-of-order stale serving.
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	snap, changed, err := h.reload()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ssh-manager: cache reload check failed (keeping current snapshot): %v\n", err)
@@ -123,8 +131,12 @@ func (h *cacheStoreHolder) Current() *store.Store {
 	if !changed {
 		return h.cur.Load()
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	if snap == nil {
+		// changed=true with a nil snapshot is a broken reloader; hydrateCacheStore
+		// would nil-deref in ImportSnapshot. Log + keep serving the old store.
+		fmt.Fprintf(os.Stderr, "ssh-manager: cache reload reported a change with a nil snapshot (keeping current snapshot)\n")
+		return h.cur.Load()
+	}
 	// A concurrent rebuild may have consumed this exact snapshot already (the
 	// reloader advances its baseline on a successful load, but a one-shot
 	// change report must not be dropped by a recheck, and must not trigger a
@@ -157,6 +169,10 @@ func (h *cacheStoreHolder) Current() *store.Store {
 
 // cleanup closes every hydrated store and removes every temp db. Called once,
 // deferred from RunStdioCache.
+//
+// Reading stores/tmpPaths without the mutex is safe: cleanup is invoked exactly
+// once via defer after srv.Run returns, at which point no in-flight tool calls
+// remain to race a rebuild.
 func (h *cacheStoreHolder) cleanup() {
 	for _, s := range h.stores {
 		s.Close()
@@ -177,9 +193,11 @@ func (h *cacheStoreHolder) cleanup() {
 //
 // reload != nil enables hot-reload: before every tool call the callback is consulted
 // ((snap,true,nil) = rebuild; (nil,false,nil) = unchanged; error = keep serving the old
-// store). reload == nil disables it. Swapped-out stores stay open until process exit
-// (in-flight SDK tool calls may hold the old pointer); cacheStoreHolder.cleanup tears
-// every hydrated store down once.
+// store). Each genuine change MUST be reported with a FRESH *Snapshot pointer (pointer
+// identity is what dedupes concurrent rebuilds); re-reporting the same pointer with
+// changed=true is skipped. reload == nil disables it. Swapped-out stores stay open until
+// process exit (in-flight SDK tool calls may hold the old pointer); cacheStoreHolder.cleanup
+// tears every hydrated store down once.
 //
 // Agent-surface invariant: the broker reads the cache via the exact same
 // list_servers / exec_command / download_file / upload_file / forward_port / close_port
