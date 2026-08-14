@@ -10,14 +10,21 @@ Single Go binary. Cross-platform (Windows / Linux / macOS). No daemon — the br
 
 ## Documentation (中文使用文档)
 
-A full operator-facing guide in Chinese — from zero to running, server CRUD, authorizing agents, token lifecycle (rotate / disable / revoke), and worked scenarios. Index: [`docs/README.md`](docs/README.md).
+**最快的入口** — 两篇精简入门（每篇 5 分钟，只讲最少步骤）：
+
+| 我是…… | 看这篇 |
+|---|---|
+| **单机**用（一台操作机 + 一台目标服务器） | [`docs/quickstart-single-machine.md`](docs/quickstart-single-machine.md) |
+| **多机**用（多台机器共用一份 vault） | [`docs/quickstart-multi-machine.md`](docs/quickstart-multi-machine.md) |
+
+**详尽操作指南**（从零到跑通 / 全部可选项 / 排错 / 场景）：
 
 | 我想要…… | 看这篇 |
 |---|---|
 | 从零到跑通（安装 / 解锁 / 第一台服务器 / 授权 Claude Code） | [`docs/getting-started.md`](docs/getting-started.md) |
 | 新增 / 编辑 / 维护 / 删除服务器 | [`docs/managing-servers.md`](docs/managing-servers.md) |
 | 授权 Claude Code / Cursor / 其他 agent；token 轮换与吊销 | [`docs/agent-access.md`](docs/agent-access.md) |
-| 多台机器共用一份 vault（serve 模式）/ 离线只读缓存兜底 | [`docs/multi-machine.md`](docs/multi-machine.md) |
+| 多台机器共用一份 vault（serve 模式）/ 自动 TLS / 离线只读缓存兜底 | [`docs/multi-machine.md`](docs/multi-machine.md) |
 | 应用场景与示例（GPU 巡检、读 root 日志、部署、端口转发……） | [`docs/scenarios.md`](docs/scenarios.md) |
 | 备份 / 迁移整个 vault（export / import） | [`docs/backup-restore.md`](docs/backup-restore.md) |
 
@@ -50,6 +57,8 @@ Every tool is **profile-gated** (the agent only reaches servers you granted its 
 ---
 
 ## Quickstart
+
+> Fastest path: the two quickstart docs — **[single-machine](docs/quickstart-single-machine.md)** / **[multi-machine](docs/quickstart-multi-machine.md)**. The inline steps below are the single-machine stdio path.
 
 Build + configure once; then point your AI agent at it.
 
@@ -117,26 +126,28 @@ ssh-manager projects ls [--all]           # status column; --all includes revoke
 
 ## Multi-machine: `serve` mode (remote agents on a VLAN)
 
-> Full operator guide (中文): [`docs/multi-machine.md`](docs/multi-machine.md) — architecture / config / scenarios / limitations.
+> **Quickstart:** [`docs/quickstart-multi-machine.md`](docs/quickstart-multi-machine.md) · **Full guide (中文):** [`docs/multi-machine.md`](docs/multi-machine.md)
 
 By default the broker runs **in-process** inside the MCP server the agent spawns (no daemon). For **several machines sharing one authoritative vault** — e.g. you work across multiple boxes on a home/VLAN network — run the broker as a small HTTP server on one trusted host and point the other machines' agents at it.
 
 ```bash
 # On the trusted VLAN host (the authoritative broker):
-ssh-manager serve --addr 0.0.0.0:7878 --tls-cert cert.pem --tls-key key.pem
-# → ssh-manager serve: listening on 0.0.0.0:7878 (tls=true)
+ssh-manager serve --addr 0.0.0.0:7878
+# → ssh-manager serve: listening on 0.0.0.0:7878 (tls=auto)
+# → auto-TLS cert (self-signed). client pin: sha256:...
 ```
 
-- **Auth — same gate as stdio.** Every request carries `Authorization: Bearer <project-token>` (the same token `projects add` prints). The server resolves it per request with `VerifyToken` (`active` projects only); missing / invalid / revoked → `401`. The iron rule (per-call `serverID ∈ profileID`) applies identically — each token maps to its own project/profile scope, and one `serve` process serves many tokens concurrently.
-- **Bind.** Default `127.0.0.1:7878` (loopback — nothing leaves the host). For remote agents pass `--addr 0.0.0.0:7878` or a VLAN IP. ⚠️ **A non-loopback bind without TLS is sniffable** — the bearer token would cross the network in cleartext. Prefer `--tls-cert` / `--tls-key` (a self-signed cert is fine inside a trusted VLAN).
-- **Point the remote agent at it** — streamable-HTTP endpoint `http(s)://<host>:7878/` with the bearer header. Claude Code `.mcp.json`:
+- **Auto-TLS + fingerprint pinning (no cert hassle).** On first start `serve` **auto-generates a self-signed ed25519 cert** and forces TLS from then on — no openssl, no CA distribution. `cache-tokens add` prints the cert's **SPKI fingerprint** alongside the device code; `cache pull` **pins** it (first-connect verification, zero MITM window — the HPKP/Tailscale model). This is the default; pass `--tls-cert`/`--tls-key` only if you want your own cert.
+- **No-pin clients refuse by default.** A `cache pull` without a pin **hard-fails** (was: silent plaintext fallback — a fail-open risk, now closed). Opt into plaintext explicitly with `--allow-plaintext` (debugging / talking to an old plaintext serve only). A pin set with a non-`https://` URL also hard-fails.
+- **Auth — same gate as stdio.** Every request carries `Authorization: Bearer <project-token>`. The server resolves it per request with `VerifyToken` (`active` projects only); the iron rule (per-call `serverID ∈ profileID`) applies identically.
+- **Point the remote agent at it** — streamable-HTTP endpoint `https://<host>:7878/` with the bearer header. Claude Code `.mcp.json` (online live mode):
   ```json
-  {"mcpServers":{"ssh":{"type":"http","url":"http://192.0.2.5:7878/","headers":{"Authorization":"Bearer <TOKEN>"}}}}
+  {"mcpServers":{"ssh":{"type":"http","url":"https://192.0.2.5:7878/","headers":{"Authorization":"Bearer <TOKEN>"}}}}
   ```
-  Cursor / other streamable-HTTP MCP clients: same URL + header, per their remote-server setup.
-- **Shutdown.** `Ctrl+C` (`SIGINT`) / `SIGTERM` → graceful drain and every open `forward_port` tunnel torn down (no leaked SSH connections).
+  Or run the broker from a local **read-only cache** (`mcp --cache`) so the agent keeps working offline — see the quickstart.
+- **Shutdown.** `Ctrl+C` (`SIGINT`) / `SIGTERM` → graceful drain and every open `forward_port` tunnel torn down.
 
-> **Phase 1 of multi-machine support.** `serve` makes the broker **reachable over the network** — a remote agent works while it can reach the server. Client-side **offline read-only cache** (Plan 12, shipped) lets each work machine keep a local encrypted read-only snapshot so the agent stays useful when the server can't be reached (operator guide: [`docs/multi-machine.md`](docs/multi-machine.md#离线只读缓存plan-12)). Vault replication and Synology backup arrive in later phases.
+> **⚠️ Breaking change / migration order.** New `serve` is TLS-only. When upgrading an already-deployed plaintext setup: **upgrade all work-machine binaries + configure their pin FIRST, restart `serve` LAST** — the moment `serve` upgrades it rejects old plaintext clients. Full migration + key-rotation runbooks in [`docs/multi-machine.md`](docs/multi-machine.md).
 
 ---
 
