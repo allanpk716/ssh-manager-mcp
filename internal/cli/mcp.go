@@ -42,7 +42,7 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return mcpserver.RunStdioCache(token, snap, auditPath)
+				return mcpserver.RunStdioCache(token, snap, auditPath, nil)
 			}
 			// Residual-key guardrail: warn to STDERR only (stdout is the MCP channel).
 			if st, err := vault.OpenStore(store.FileKeyProvider{}); err == nil {
