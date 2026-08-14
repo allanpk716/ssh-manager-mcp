@@ -207,6 +207,100 @@ func loadCacheSnapshot() (*store.Snapshot, error) {
 	return &snap, nil
 }
 
+// pullOpts tunes doPull for its caller.
+type pullOpts struct {
+	allowPlain bool          // plaintext opt-in — manual CLI only; the lazy path NEVER sets this
+	timeout    time.Duration // >0 → overall http.Client timeout (lazy: spawn/tool-call path must be bounded)
+	statusOut  io.Writer     // status/warning sink (nil → silent); CLI passes cmd.ErrOrStderr()
+}
+
+// doPull fetches /snapshot from url with the device code and atomically writes
+// cache.bin + cache.meta.json. pin=="" means no pin: allowPlain must be true or
+// the pull refuses (F4 hard-fail contract). pin!="" pins TLS to that SPKI
+// fingerprint and requires an https:// URL (F8). Extracted from cachePullCmd so
+// the spawn-lazy pull (mcp --cache) shares ONE implementation.
+func doPull(url, token, pin string, o pullOpts) error {
+	code := token
+	var client *http.Client
+	if pin == "" {
+		if !o.allowPlain {
+			return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
+				"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
+		}
+		if o.statusOut != nil {
+			fmt.Fprintf(o.statusOut, "WARNING: --allow-plaintext set: pulling over unverified HTTP (no TLS pin). /snapshot credentials travel in cleartext.\n")
+		}
+		client = &http.Client{}
+	} else {
+		// The device code goes to the Authorization header; the pin is for TLS only.
+		// If the token is "<code>:<pin>", strip so the header carries just the code.
+		if c, _, ok := stripEmbeddedPin(token); ok {
+			code = c
+		}
+		if u, err := neturl.Parse(url); err != nil || u.Scheme != "https" {
+			return fmt.Errorf("--url must be https:// when a server pin is set (got %q); "+
+				"to pull plaintext instead, clear the pin (--pin/SSHMGR_SERVE_PIN) and pass --allow-plaintext", url)
+		}
+		tr, err := pinningTransport(pin)
+		if err != nil {
+			return err
+		}
+		client = &http.Client{Transport: tr}
+	}
+	if o.timeout > 0 {
+		client.Timeout = o.timeout
+	}
+
+	dek, err := loadOrCreateDEK()
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodGet, url+"/snapshot", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+code)
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("pull: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		io.Copy(io.Discard, res.Body) // keep the keep-alive socket reusable
+		return fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+	blob, err := vaultio.EncryptWithKey(dek, body)
+	if err != nil {
+		return err
+	}
+	_, bin, metaPath, _, err := cachePaths()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(bin), 0o700); err != nil {
+		return err
+	}
+	if err := atomicWriteUnique(bin, blob); err != nil {
+		return err
+	}
+	// meta via the same unique-temp atomic write (was a bare os.WriteFile — torn-meta
+	// risk under concurrent pulls, xcheck codex#1).
+	mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: time.Now().Unix()})
+	if err := atomicWriteUnique(metaPath, mb); err != nil {
+		return err
+	}
+	var snap store.Snapshot
+	_ = json.Unmarshal(body, &snap) // for the status line only
+	if o.statusOut != nil {
+		fmt.Fprintf(o.statusOut, "pulled %d servers / %d credentials into %s\n", len(snap.Servers), len(snap.Credentials), bin)
+	}
+	return nil
+}
+
 func newCacheCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "cache", Short: "Offline read-only cache (pull from a serve broker)"}
 	cmd.AddCommand(cachePullCmd(), cacheStatusCmd())
@@ -246,88 +340,30 @@ func cachePullCmd() *cobra.Command {
 				}
 			}
 			fp, plain := resolvePin(os.Getenv("SSHMGR_SERVE_PIN"), pinFlag, token)
-			code := token
-			var client *http.Client
 			if plain {
 				allowPlain, _ := cmd.Flags().GetBool("allow-plaintext")
 				if !allowPlain {
 					return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
 						"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: --allow-plaintext set: pulling over unverified HTTP (no TLS pin). /snapshot credentials travel in cleartext.\n")
-				client = http.DefaultClient
-			} else {
-				// The device code goes to the Authorization header; the pin is for TLS only.
-				// If the token is "<code>:<pin>", strip the pin so the header carries just the code.
-				if c, _, ok := stripEmbeddedPin(token); ok {
-					code = c
-				}
-				// pin is set (TLS path): the URL MUST be https://, else the TLSClientConfig
-				// (with the pin) is silently never used — http:// doesn't negotiate TLS, so
-				// the pin would be dead and the request would go in cleartext with no warning.
-				// Hard-fail instead of silently downgrading. (xcheck F8)
-				if u, perr := neturl.Parse(url); perr != nil || u.Scheme != "https" {
-					return fmt.Errorf("--url must be https:// when a server pin is set (got %q); "+
-						"to pull plaintext instead, clear the pin (--pin/SSHMGR_SERVE_PIN) and pass --allow-plaintext", url)
-				}
-				tr, err := pinningTransport(fp)
-				if err != nil {
+				if err := doPull(url, token, "", pullOpts{allowPlain: true, statusOut: cmd.ErrOrStderr()}); err != nil {
 					return err
 				}
-				client = &http.Client{Transport: tr}
+				return nil // plaintext pulls NEVER persist a credential (no auto-plaintext path)
 			}
-			dek, err := loadOrCreateDEK()
-			if err != nil {
+			if err := doPull(url, token, fp, pullOpts{statusOut: cmd.ErrOrStderr()}); err != nil {
 				return err
 			}
-			req, err := http.NewRequest(http.MethodGet, url+"/snapshot", nil)
-			if err != nil {
-				return err
+			// Persist the credential for the lazy pull. Write failure is a WARNING,
+			// not an error: the pull itself succeeded, but auto-refresh won't work
+			// until a later successful pull — the user must hear about that.
+			code := token
+			if c, _, ok := stripEmbeddedPin(token); ok {
+				code = c
 			}
-			req.Header.Set("Authorization", "Bearer "+code)
-			res, err := client.Do(req)
-			if err != nil {
-				return fmt.Errorf("pull: %w", err)
+			if err := writeCacheCred(&cacheCred{URL: url, Token: code, Pin: fp}); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: could not persist cache.auth.json (automatic refresh disabled until a successful pull): %v\n", err)
 			}
-			defer res.Body.Close()
-			if res.StatusCode != 200 {
-				// Drain + close so the client can reuse the TCP connection
-				// (a non-read response body keeps the keep-alive socket half-read).
-				io.Copy(io.Discard, res.Body)
-				return fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
-			}
-			body, err := io.ReadAll(res.Body)
-			if err != nil {
-				return err
-			}
-			blob, err := vaultio.EncryptWithKey(dek, body)
-			if err != nil {
-				return err
-			}
-			_, bin, metaPath, _, err := cachePaths()
-			if err != nil {
-				return err
-			}
-			if err := os.MkdirAll(filepath.Dir(bin), 0o700); err != nil {
-				return err
-			}
-			// Atomic write: temp + rename. A failed/interrupted pull never corrupts the prior cache.
-			tmp := bin + ".tmp"
-			if err := os.WriteFile(tmp, blob, 0o600); err != nil {
-				os.Remove(tmp)
-				return err
-			}
-			if err := os.Rename(tmp, bin); err != nil {
-				os.Remove(tmp)
-				return err
-			}
-			// Best-effort meta (url + pulled_at). A failure here leaves the cache valid.
-			mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: time.Now().Unix()})
-			_ = os.WriteFile(metaPath, mb, 0o600)
-
-			var snap store.Snapshot
-			_ = json.Unmarshal(body, &snap) // for the status line only
-			fmt.Fprintf(cmd.ErrOrStderr(), "pulled %d servers / %d credentials into %s\n", len(snap.Servers), len(snap.Credentials), bin)
 			return nil
 		},
 	}
