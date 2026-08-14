@@ -54,4 +54,35 @@ func winOrUnix(win, unix string) string {
 	return unix
 }
 
+func TestServeCertPaths(t *testing.T) {
+	// Default: under VaultDir.
+	t.Setenv("SSHMGR_STORE", "")
+	t.Setenv("SSHMGR_SERVE_CERT", "")
+	t.Setenv("SSHMGR_SERVE_KEY", "")
+	cert, err := ServeCertPath()
+	if err != nil {
+		t.Fatalf("ServeCertPath: %v", err)
+	}
+	key, err := ServeKeyPath()
+	if err != nil {
+		t.Fatalf("ServeKeyPath: %v", err)
+	}
+	if filepath.Base(cert) != "serve-cert.pem" || filepath.Base(key) != "serve-key.pem" {
+		t.Fatalf("unexpected paths: %s / %s", cert, key)
+	}
+	if dir, _ := VaultDir(); filepath.Dir(cert) != dir || filepath.Dir(key) != dir {
+		t.Fatalf("cert/key not under VaultDir: %s / %s (want dir %s)", cert, key, dir)
+	}
+
+	// Env override.
+	t.Setenv("SSHMGR_SERVE_CERT", "/tmp/custom-cert.pem")
+	t.Setenv("SSHMGR_SERVE_KEY", "/tmp/custom-key.pem")
+	if c, _ := ServeCertPath(); c != "/tmp/custom-cert.pem" {
+		t.Fatalf("SSHMGR_SERVE_CERT override ignored: %s", c)
+	}
+	if k, _ := ServeKeyPath(); k != "/tmp/custom-key.pem" {
+		t.Fatalf("SSHMGR_SERVE_KEY override ignored: %s", k)
+	}
+}
+
 var _ = os.Getenv // keep import if unused after edits

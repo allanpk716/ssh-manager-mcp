@@ -1,17 +1,22 @@
 package cli
 
 import (
+	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
 )
@@ -116,6 +121,54 @@ func cachePullCmd() *cobra.Command {
 			if url == "" || token == "" {
 				return fmt.Errorf("--url and --token are required (or SSHMGR_CACHE_URL / SSHMGR_CACHE_TOKEN)")
 			}
+			// Pin resolution priority: env SSHMGR_SERVE_PIN > --pin flag > token-embedded "<code>:<pin>".
+			// plain=true means no pin anywhere. Per xcheck F4 the no-pin path hard-fails by
+			// default (no silent plaintext); --allow-plaintext opts back into the legacy path.
+			pinFlag, _ := cmd.Flags().GetString("pin")
+			// F7: a pin-shaped but INVALID env/flag value is a hard error. We must NOT let it
+			// silently fall through to plaintext (a typo in SSHMGR_SERVE_PIN must not remove
+			// TLS protection). Only a fully-ABSENT pin is allowed to enter the plain branch.
+			if raw := strings.TrimSpace(os.Getenv("SSHMGR_SERVE_PIN")); raw != "" {
+				if _, ok := mcpserver.ParsePin(raw); !ok {
+					return fmt.Errorf("SSHMGR_SERVE_PIN is set but not a valid sha256:<64hex> fingerprint: %q", raw)
+				}
+			}
+			if raw := strings.TrimSpace(pinFlag); raw != "" {
+				if _, ok := mcpserver.ParsePin(raw); !ok {
+					return fmt.Errorf("--pin is not a valid sha256:<64hex> fingerprint: %q", raw)
+				}
+			}
+			fp, plain := resolvePin(os.Getenv("SSHMGR_SERVE_PIN"), pinFlag, token)
+			code := token
+			var client *http.Client
+			if plain {
+				allowPlain, _ := cmd.Flags().GetBool("allow-plaintext")
+				if !allowPlain {
+					return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
+						"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: --allow-plaintext set: pulling over unverified HTTP (no TLS pin). /snapshot credentials travel in cleartext.\n")
+				client = http.DefaultClient
+			} else {
+				// The device code goes to the Authorization header; the pin is for TLS only.
+				// If the token is "<code>:<pin>", strip the pin so the header carries just the code.
+				if c, _, ok := stripEmbeddedPin(token); ok {
+					code = c
+				}
+				// pin is set (TLS path): the URL MUST be https://, else the TLSClientConfig
+				// (with the pin) is silently never used — http:// doesn't negotiate TLS, so
+				// the pin would be dead and the request would go in cleartext with no warning.
+				// Hard-fail instead of silently downgrading. (xcheck F8)
+				if u, perr := neturl.Parse(url); perr != nil || u.Scheme != "https" {
+					return fmt.Errorf("--url must be https:// when a server pin is set (got %q); "+
+						"to pull plaintext instead, clear the pin (--pin/SSHMGR_SERVE_PIN) and pass --allow-plaintext", url)
+				}
+				tr, err := pinningTransport(fp)
+				if err != nil {
+					return err
+				}
+				client = &http.Client{Transport: tr}
+			}
 			dek, err := loadOrCreateDEK()
 			if err != nil {
 				return err
@@ -124,14 +177,14 @@ func cachePullCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			req.Header.Set("Authorization", "Bearer "+token)
-			res, err := http.DefaultClient.Do(req)
+			req.Header.Set("Authorization", "Bearer "+code)
+			res, err := client.Do(req)
 			if err != nil {
 				return fmt.Errorf("pull: %w", err)
 			}
 			defer res.Body.Close()
 			if res.StatusCode != 200 {
-				// Drain + close so http.DefaultClient can reuse the TCP connection
+				// Drain + close so the client can reuse the TCP connection
 				// (a non-read response body keeps the keep-alive socket half-read).
 				io.Copy(io.Discard, res.Body)
 				return fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
@@ -173,6 +226,8 @@ func cachePullCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&url, "url", "", "serve broker URL (https://host:7878)")
 	c.Flags().StringVar(&token, "token", "", "device authorization code (from `cache-tokens add`)")
+	c.Flags().String("pin", "", "server SPKI fingerprint sha256:... (or set SSHMGR_SERVE_PIN); hard-fails without it unless --allow-plaintext")
+	c.Flags().Bool("allow-plaintext", false, "opt into plaintext HTTP pull when no server pin is set (insecure; default is to refuse)")
 	return c
 }
 
@@ -206,4 +261,83 @@ func cacheStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// resolvePin resolves the server SPKI fingerprint by priority:
+// env (SSHMGR_SERVE_PIN) > --pin flag > token-embedded "<code>:<pin>".
+// Returns plain=true when no pin is available anywhere. Per xcheck F4 the
+// caller now hard-fails on plain=true by default (no silent plaintext); the
+// caller gates the plaintext fallback behind --allow-plaintext. Malformed
+// env/flag pins are rejected earlier by cachePullCmd (F7), so by the time
+// resolvePin runs an env/flag value is either empty or well-formed. A
+// malformed token-embedded pin still falls through to plain here (fail-safe
+// against a hand-typed token), which then hits the --allow-plaintext gate.
+//
+// The embedded-pin split uses the FIRST colon, not the last: the pin itself is
+// "sha256:<hex>" and contains a colon, so LastIndex would split inside the pin
+// and yield a bare "<hex>" that ParsePin rejects. The device code is specified
+// to contain no colon, so first-colon split is unambiguous.
+func resolvePin(envVal, flagVal, token string) (fp string, plain bool) {
+	if v, ok := mcpserver.ParsePin(strings.TrimSpace(envVal)); ok {
+		return v, false
+	}
+	if v, ok := mcpserver.ParsePin(strings.TrimSpace(flagVal)); ok {
+		return v, false
+	}
+	// token-embedded: "<code>:sha256:..."
+	if i := strings.Index(token, ":"); i >= 0 {
+		if v, ok := mcpserver.ParsePin(token[i+1:]); ok {
+			return v, false
+		}
+	}
+	return "", true
+}
+
+// pinningTransport builds an http.Transport whose TLS handshake is pinned to fp:
+// the server leaf cert's SPKI fingerprint MUST equal fp or the handshake fails.
+//
+// Trust model: the serve cert is SELF-SIGNED (see generateServeCert) — there is
+// no external CA to chain to, and on Windows the system verifier additionally
+// chokes on ed25519 ("Invalid algorithm specified"). So we cannot rely on the
+// default certificate verification (it would always fail before our pin check
+// ran). Instead we set BOTH InsecureSkipVerify=true (skip CA/chain/name
+// verification — which is impossible for a self-signed cert anyway) AND
+// VerifyConnection (enforce the SPKI pin). Per Go's crypto/tls docs,
+// InsecureSkipVerify skips the default verifier but does NOT disable
+// VerifyConnection, which becomes the sole trust anchor. This is the standard
+// HPKP / Tailscale pinning pattern: trust comes from the pin, not from a CA.
+// The pin is compared in constant time to avoid an oracle.
+func pinningTransport(fp string) (*http.Transport, error) {
+	want, ok := mcpserver.ParsePin(fp)
+	if !ok {
+		return nil, fmt.Errorf("invalid server pin format %q (want sha256:<64hex>)", fp)
+	}
+	tlsCfg := &tls.Config{
+		MinVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: true, // skip CA verification (self-signed serve cert); pin below is the trust anchor
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("server presented no certificate")
+			}
+			got := mcpserver.SPKIFingerprint(cs.PeerCertificates[0])
+			if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+				return fmt.Errorf("server fingerprint mismatch (expected %s, got %s)", want, got)
+			}
+			return nil
+		},
+	}
+	return &http.Transport{TLSClientConfig: tlsCfg}, nil
+}
+
+// stripEmbeddedPin splits "<code>:<pin>" into (code, pin, ok). When the token
+// has no valid embedded pin, returns the token unchanged with ok=false so the
+// full token goes to the Authorization header as the device code. Uses the
+// FIRST colon for the split (the pin "sha256:<hex>" contains its own colon).
+func stripEmbeddedPin(token string) (code string, pin string, ok bool) {
+	if i := strings.Index(token, ":"); i >= 0 {
+		if v, parsed := mcpserver.ParsePin(token[i+1:]); parsed {
+			return token[:i], v, true
+		}
+	}
+	return token, "", false
 }

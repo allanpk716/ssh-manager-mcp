@@ -210,11 +210,30 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 
 // RunServe runs the authenticated streamable-HTTP MCP server until ctx is
 // cancelled (SIGINT/SIGTERM, wired by the caller). The listener is created
-// synchronously so bind errors surface before serving. TLS is used when
-// tlsCert != "". Returns nil on clean ctx-cancelled shutdown.
+// synchronously so bind errors surface before serving. TLS is ALWAYS used:
+// if tlsCert is the operator's explicit --tls-cert, that cert is served
+// (backward compat); if tlsCert is empty, RunServe auto-generates + loads a
+// self-signed cert (LoadOrCreateServeCert) and serves that, logging its
+// fingerprint so the operator can distribute the pin to clients. A
+// LoadOrCreateServeCert failure is returned (serve refuses to start — never
+// silently downgrades to plaintext). Returns nil on clean ctx-cancelled shutdown.
 func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string) error {
 	runner := NewServeRunner(st)
 	defer runner.Close()
+
+	// Cert resolution: if the operator did not pass an explicit --tls-cert,
+	// auto-generate + load a self-signed cert. After this block tlsCert is
+	// guaranteed non-empty (the auto-TLS error path returns). This means serve
+	// ALWAYS serves TLS — there is no plaintext path.
+	autoTLSFingerprint := ""
+	if tlsCert == "" {
+		certPath, keyPath, fp, err := LoadOrCreateServeCert()
+		if err != nil {
+			return fmt.Errorf("serve auto-TLS: %w", err)
+		}
+		tlsCert, tlsKey = certPath, keyPath
+		autoTLSFingerprint = fp
+	}
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -222,7 +241,15 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	}
 	// Emit the "listening" line only AFTER a successful bind so a bind failure
 	// (the early return above) never prints a misleading "listening" line.
-	fmt.Fprintf(os.Stderr, "ssh-manager serve: listening on %s (tls=%v)\n", addr, tlsCert != "")
+	// TLS is always on post-auto-TLS; "auto" denotes the self-signed case.
+	tlsLabel := "true"
+	if autoTLSFingerprint != "" {
+		tlsLabel = "auto"
+	}
+	fmt.Fprintf(os.Stderr, "ssh-manager serve: listening on %s (tls=%s)\n", addr, tlsLabel)
+	if autoTLSFingerprint != "" {
+		fmt.Fprintf(os.Stderr, "auto-TLS cert (self-signed). client pin: %s\n", autoTLSFingerprint)
+	}
 
 	// Start heartbeat goroutine to keep the serve log fresh. Plan 16 T7 dropped
 	// the old serve.log marker-scan (vaultUnlockedFromLog was Windows-specific
@@ -250,6 +277,11 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 		if tlsCert != "" {
 			errCh <- srv.ServeTLS(ln, tlsCert, tlsKey)
 		} else {
+			// Defensive only — unreachable post-auto-TLS: the cert-resolution
+			// block above guarantees tlsCert is non-empty. Kept so a future
+			// refactor that drops auto-TLS has a single, obvious seam to
+			// audit; if reached today it would serve plaintext (NOT safe),
+			// which is why the auto-TLS block above is load-bearing.
 			errCh <- srv.Serve(ln)
 		}
 	}()
