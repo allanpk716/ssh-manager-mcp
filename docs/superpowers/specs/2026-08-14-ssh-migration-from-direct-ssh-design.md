@@ -40,11 +40,11 @@ ssh-manager-mcp 项目已开发到 v0.3.1,多机 serve 架构(路线乙)于 2026
 | ai_runner | 192.168.100.201 | urit_ai | 22 | ~/.ssh/id_ai_runner_201 | 服务器 |
 | procurement-recog | 172.18.200.46 | Administrator | 22 | ~/.ssh/id_procurement_recog_46 | 服务器 |
 | update-hub | 172.18.200.47 | Administrator | 30000 | **SynologyDrive/...** | 服务器 |
-| **192.168.8.121** | 192.168.8.121 | rag | — | **(无 IdentityFile,缩进写法,疑密码认证)** | **服务器(xcheck 补,待用户定归属)** |
+| **192.168.8.121** | 192.168.8.121 | rag | — | **(无 IdentityFile,缩进写法,疑密码认证)** | **服务器(§2.1 拍板:删除,不入 vault)** |
 | github.com | github.com | git | — | SynologyDrive/... | **git(留)** |
 | 192.168.200.46 | — | git | 53802 | SynologyDrive/... | **git(GitLab,留)** |
 
-> **待用户决策的归属项**:① `192.168.8.121`(rag,known_hosts 有 3 条=真在用,无私钥):纳入 vault / 删除 / 保留?② `3090x2` 与 `192.168.8.121` 均无私钥文件,若纳入 vault 需用密码认证,且**无 `~/.ssh` 私钥可作验证失败兜底**(见 §3.2 L5 特例)。
+> **待用户决策的归属项**:① `192.168.8.121`(rag,known_hosts 有 3 条=真在用,无私钥)——**§2.1 已拍板:删除,不入 vault**。② `3090x2` 无私钥文件,若纳入 vault 需用密码认证,且**无 `~/.ssh` 私钥可作验证失败兜底**(见 §3.2 L5 特例)。
 
 **B. `~/.ssh/` 私钥文件(10 个,均明文):**
 `id_1660super01_146`(+.pub)、`id_1660super02_236`(+.pub)、`id_4090x2.deprecated`、`id_ai_runner_201`(+.pub)、`id_ed25519`(默认,归属待核对)、`id_ed25519_4090srv`、`id_ml_hub`、`id_nuc10`、`id_procurement_recog_46`(+.pub)。
@@ -66,7 +66,7 @@ GitLab(`ssh://git@192.168.200.46:53802/...`)的依赖**远超原 spec 误写的�
 
 1. **彻底清空 `~/.ssh`**,全走 MCP(iron rule 最纯粹形态)。
 2. **唯一例外**:GitLab 私钥(`192.168.200.46` / GitLab over ssh)保留——清空后 `C:/WorkSpace/` 下 **20 个** GitLab repo 的 push/pull 会断(实测依赖面),用户选择保留这一个。
-3. **`~/.ssh/config` 精确边界**:删 **9 个**服务器 Host(xcheck L1 修正:11 − 2 git = 9,原写"8 个"是误数),留 `github.com` + `192.168.200.46`(GitLab)两个 git Host。⚠️ `192.168.8.121`(rag,缩进 Host)是否删除**待用户定**(见 §1.3 待决项),定删后则删 10 个。
+3. **`~/.ssh/config` 精确边界**:删 **10 个**服务器 Host(§2.1 拍板含 192.168.8.121;config 共 12 个 Host − 2 git = 10),留 `github.com` + `192.168.200.46`(GitLab)两个 git Host。
 4. **目标机全量纳入**:现有 vault 7 台 + `ml_hub` + `ai_runner` + 可能的 `192.168.8.121` + 查漏补缺。
 5. **版本基线 v0.4.0(auto-TLS)**:GoReleaser 发版后两端升级。
 6. **现有 NUC10 vault 7 台保留**,只补加新机(不抹重建,不碰真数据)。
@@ -74,13 +74,19 @@ GitLab(`ssh://git@192.168.200.46:53802/...`)的依赖**远超原 spec 误写的�
 8. **`SynologyDrive\ServerKey\` 完全不碰**(用户冷备份,不读/不删/不纳入流程)。
 9. **备份先于删除**:`~/.ssh/` 要删内容先镜像备份到 `SynologyDrive\ServerKey\ssh-dot-ssh-backup-2026-08-14\`(明文,与 ServerKey 现有习惯一致,符合用户接受的 L1+ 威胁模型)。⚠️ xcheck S6:备份前须检查 SynologyDrive Cloud Sync 状态(备份会把当前**只在本地**的 9+ 服务器私钥一并推上云,暴露面**净增大**而非等同级),若同步开启则暂停或换不同步路径。
 
-### 2.1 待用户拍板项(xcheck 后新增的决策点)
+### 2.1 待决项(已拍板,2026-08-14)
 
-| 项 | 说明 | 影响 |
+| 项 | 决策 | 影响 |
 |---|---|---|
-| `192.168.8.121`(rag)归属 | 缩进 Host,known_hosts 3 条=真在用,无私钥(疑密码) | 纳入 vault / 删除 / 显式保留 三选一 |
-| NUC10 vault 灾备源确认 | 删光本地私钥前,NUC10 vault 是唯一权威源 | 需确认 NUC10 有 Plan-13 NAS 备份或显式把 ~/.ssh 明文备份当 DR 源(S4) |
-| SynologyDrive 云同步开关 | 明文备份是否会被云同步 | 备份前检查,决定是否暂停同步(S6) |
+| `192.168.8.121`(rag)归属 | **删除** | 删除清单含它(共 **10 个**服务器 Host) |
+| NUC10 vault 灾备源 | **用户有其他备份**(非本方案管理) | ⚠️ 用户硬约束:**删除任意东西前,必须先列清单给用户过目确认**(见 §2.2 删除审批铁律) |
+| SynologyDrive 云同步 | **同步到用户自己的服务器,判定安全** | S6 风险降级:明文备份**不必暂停同步**(用户接受同步到自己服务器) |
+
+### 2.2 删除审批铁律(用户硬约束)
+
+**任何删除操作(私钥文件、config Host 段、config.bak、known_hosts 行)执行前,必须先输出完整删除清单,经用户确认后才动手。** 即使铁律 §3.2 的"全量验证通过"已满足,仍要先列清单。清单格式:逐条列 `路径 + 说明 + 为何删 + 是否已备份/已入 vault`。用户未确认前,删除步骤(§4.6 阶段 7-8)不得执行。
+
+> 这一约束固化进执行计划:每个删除动作前插入一个"出清单 → 等用户确认"的 checkpoint。
 
 ---
 
@@ -88,10 +94,9 @@ GitLab(`ssh://git@192.168.200.46:53802/...`)的依赖**远超原 spec 误写的�
 
 ### 3.1 要删除的内容
 
-**A. `~/.ssh/config` 删 9 个服务器 Host 段(xcheck L1 修正,实际 9 个非 8):**
-`1660super01`、`1660super02`、`3090x2`、`4090x2`、`nuc10`、`ml_hub`、`ai_runner`、`procurement-recog`、`update-hub`。
+**A. `~/.ssh/config` 删 10 个服务器 Host 段(§2.1 拍板含 192.168.8.121):**
+`1660super01`、`1660super02`、`3090x2`、`4090x2`、`nuc10`、`ml_hub`、`ai_runner`、`procurement-recog`、`update-hub`、`192.168.8.121`。
 > `update-hub` 的 IdentityFile 指向 SynologyDrive —— **只删 config 这段文字引用**,SynologyDrive 文件不动。
-> 若 §2.1 用户决定 `192.168.8.121` 也删,则此处为 10 个。
 
 **B. `~/.ssh/` 私钥文件(迁进 vault + 验证可连后删):**
 全部 10 个 `id_*` 私钥(+.pub)。归属待核对的(`id_ed25519` 默认键 / `id_4090x2.deprecated` 旧键)在补加阶段核对清楚再决定入 vault 还是直接弃。
@@ -110,27 +115,28 @@ GitLab(`ssh://git@192.168.200.46:53802/...`)的依赖**远超原 spec 误写的�
 
 ```
 [0] 备份:~/.ssh/ 全量镜像 → SynologyDrive\ServerKey\ssh-dot-ssh-backup-2026-08-14\
-    (备份前先检查 SynologyDrive 云同步状态,见 §3.3)
-[1] 补加 ml_hub/ai_runner/(192.168.8.121 若定纳入)私钥或密码+主机信息灌进 NUC10 vault(servers add + grant)
+    (§2.1 拍板:群晖同步到自己服务器=安全,不必暂停同步)
+[1] 补加 ml_hub/ai_runner(192.168.8.121 用户定删除,不入 vault)私钥或密码+主机信息灌进 NUC10 vault(servers add + grant)
     ⚠️ 私钥跨机传输路径见 §5.2(xcheck S2)
 [2] 每台目标机用 MCP exec_command 验证可连成功 ✅(全量通过才继续)
-    ⚠️ L5 特例:3090x2 / 192.168.8.121 无本地私钥,验证失败时无 ~/.ssh key 兜底,只能靠密码重试或 SynologyDrive 备份还原
+    ⚠️ L5 特例:3090x2 无本地私钥,验证失败时无 ~/.ssh key 兜底,只能靠密码重试或 SynologyDrive 备份还原
 [3] 笔记本 cache pull 拉到全量 cache.bin,离线 mcp --cache 也验过
-[4] 此时本地私钥已有 vault 替代,才开始删 ~/.ssh 私钥文件
-[5] 删 config 服务器 Host 段(9 个,或 10 个含 192.168.8.121)
-[6] 删 config.bak;known_hosts 按§3.1C 三选一处理(保留 GitLab 那两行)
-[7] 验证 iron rule:agent 直连 ssh <server> 必须失败
+[4] ⚠️ 删除审批 checkpoint(§2.2 铁律):输出完整删除清单(私钥文件 + config Host 段 + config.bak + known_hosts 处理),等用户确认
+[5] 用户确认后,才开始删 ~/.ssh 私钥文件(此时本地私钥已有 vault 替代)
+[6] 删 config 服务器 Host 段(10 个)
+[7] 删 config.bak;known_hosts 按§3.1C 三选一处理(保留 GitLab 那两行)
+[8] 验证 iron rule:agent 直连 ssh <server> 必须失败
 ```
 
-**关键安全点:第 [2] 步全量验证通过前,绝不动 `~/.ssh`。** 万一某台机器私钥有问题,本地仍在,可回退。
+**关键安全点:第 [2] 步全量验证通过、且第 [4] 步用户确认删除清单后,才进入 [5] 删除。** 万一某台机器私钥有问题,本地仍在,可回退。
 
 ### 3.3 备份细节
 
 - 目标目录:`C:\Users\allan716\SynologyDrive\ServerKey\ssh-dot-ssh-backup-2026-08-14\`(新建子文件夹,**不触碰 ServerKey 现有任何文件**)。
 - 备份内容:`~/.ssh/` 的完整镜像(config + config.bak + 全部 id_* + .pub + known_hosts + known_hosts.old)。
 - 格式:明文(用户选择,与 ServerKey 现有 github/gitlab 明文私钥习惯一致;威胁模型 L1+ 已接受同机/离线拷盘风险)。
-- 备份在 step [0] 完成、并确认备份可读后,才进入 step [4] 删除。
-- **⚠️ 备份前必做(xcheck S6):检查 SynologyDrive Cloud Sync 进程状态**。当前 9+ 服务器私钥**只在笔记本本地**;备份把它们复制进云同步目录后,暴露面**净增大**(严格大于,非等同级 ServerKey 现状)。若同步开启:暂停同步、或把备份放同步范围外。此风险单列在 §9。
+- 备份在 step [0] 完成、并确认备份可读后,才进入 step [5] 删除。
+- **云同步(§2.1 拍板)**:群晖同步到用户自己的服务器,用户判定安全 → 备份**不必暂停同步**。S6 风险降级为"已知接受"。
 
 ---
 
@@ -208,20 +214,21 @@ GitLab(`ssh://git@192.168.200.46:53802/...`)的依赖**远超原 spec 误写的�
 
 两条主线有交叉依赖,必须钉死成单一可执行时序(不靠推断):
 ```
-阶段 0  备份:~/.ssh/ 全量镜像(先查 SynologyDrive 云同步,§3.3)
-阶段 1  补加新机:ml_hub/ai_runner/(192.168.8.121 若定)私钥或密码灌进 NUC10 vault(§5.2 跨机传输)
+阶段 0  备份:~/.ssh/ 全量镜像(§2.1 拍板:群晖同步到自己服务器=安全,不必暂停)
+阶段 1  补加新机:ml_hub/ai_runner 私钥灌进 NUC10 vault(§5.2 跨机传输;192.168.8.121 用户定删除,不入 vault)
 阶段 2  全量验证:每台目标机 MCP exec_command 可连 ✅(全过才继续)
         ┄┄ 此时笔记本仍是 v0.3.1 + 明文 serve,~/.ssh 私钥仍在,有回退 ┄┄
 阶段 3  发版 v0.4.0 + 下载(§4.1)
 阶段 4  升级顺序(铁律 §4.2):先笔记本二进制+pin → NUC10 cert-info(§4.3 重排)→ 重发带 pin 设备码+吊销旧码 → 最后重启 serve 强制 TLS
 阶段 5  笔记本 cache pull 走 TLS+pin 成功;切 .mcp.json 离线主路径;cache status N/N
 阶段 6  离线验证:mcp --cache list_servers = 全量;离线 exec 可连
-阶段 7  删 ~/.ssh 私钥文件(此时 vault 已是权威源,本地有备份)
-阶段 8  删 config 服务器 Host 段;删 config.bak;known_hosts 按 §3.1C 处理(留 GitLab 两行)
+阶段 6.5 ★ 删除审批 checkpoint(§2.2 铁律):输出完整删除清单 → 等用户确认(用户硬约束:删任何东西前先列清单)
+阶段 7  用户确认后,删 ~/.ssh 私钥文件(此时 vault 已是权威源,本地有备份)
+阶段 8  删 config 服务器 Host 段(10 个);删 config.bak;known_hosts 按 §3.1C 处理(留 GitLab 两行)
 阶段 9  iron rule 验证:agent 直连 ssh <server> 必须失败;GitLab push/pull 仍正常
 ```
-> **关键**:清理(删 ~/.ssh)放在升级 + 离线验证**之后**(阶段 7-9),确保删之前 vault 已就位且 TLS 已通。回滚点:每个阶段独立(见 §8)。
-> **S4 提醒**:阶段 7 删光本地副本前,先确认 NUC10 vault 有灾备(Plan-13 NAS 或显式把 ~/.ssh 明文备份当 DR 源),否则 NUC10 盘损 = 全凭据失联。
+> **关键**:清理(删 ~/.ssh)放在升级 + 离线验证**之后**(阶段 7-9),确保删之前 vault 已就位且 TLS 已通。**阶段 6.5 删除审批 checkpoint 是用户硬约束,不得跳过**。回滚点:每个阶段独立(见 §8)。
+> **S4 提醒**:阶段 7 删光本地副本前,NUC10 vault 是唯一权威源(用户另有自己的备份,非本方案管理);NUC10 盘损需靠用户自有备份恢复。
 
 ---
 
@@ -231,7 +238,7 @@ GitLab(`ssh://git@192.168.200.46:53802/...`)的依赖**远超原 spec 误写的�
 
 vault 已有 7 台(memory):`1660Super01`、`1660Super02`、`3090x2`、`4090x2`、`DocuFiller-UpdateHub`(≈ update-hub)、`NUC10`、`procurement-recog`。
 
-`~/.ssh/config` 有但 vault 可能缺的:**`ml_hub`(172.18.200.47:40101, allan)**、**`ai_runner`(192.168.100.201:22, urit_ai)**、可能的 **`192.168.8.121`(rag,待用户定)**。
+`~/.ssh/config` 有但 vault 可能缺的:**`ml_hub`(172.18.200.47:40101, allan)**、**`ai_runner`(192.168.100.201:22, urit_ai)**。(192.168.8.121 §2.1 拍板删除,不入 vault。)
 
 > 台数说明:现有 7 台 + 待补 ml_hub/ai_runner ≈ 9 台,但 `DocuFiller-UpdateHub` 是否等于 config 的 `update-hub`、有无重复/已废弃,以实现阶段实际核对为准(本 spec 不写死最终台数)。
 > **核对项(xcheck L6/L7)**:① `172.18.200.47` 双机——ml_hub(40101/allan)与 update-hub/DocuFiller-UpdateHub(30000/Administrator)同 IP 不同端口,核对是否同一物理机(避免重复计数/凭据重叠)。② 坐实 `DocuFiller-UpdateHub == update-hub`(host:port:user 一致),否则删 config 的 update-hub 引用后会失联。
@@ -275,7 +282,7 @@ vault 已有 7 台(memory):`1660Super01`、`1660Super02`、`3090x2`、`4090x2`�
 7. ✅ **GitLab 仍可用**(xcheck M2 修正):对**真实存在的** `C:/WorkSpace/ca_things/` 下某 repo(如 `SW_System_BioChem_Develop`)跑 `git fetch/pull`(ssh://192.168.200.46:53802)成功。⚠️ 不再用不存在的 sw_dst。
 8. ✅ **github 仍可用**:常规 git push/pull 走 https 正常。
 9. ✅ **GitLab host-key TOFU 已处理**(xcheck M5):首次 GitLab push 不撞未知主机提示(known_hosts 保留 GitLab 两行 / 或 accept-new / 或 ssh-keyscan 预置)。
-10. ✅ **vault 灾备就绪**(xcheck S4):NUC10 vault 有 Plan-13 NAS 备份,或显式确认 ~/.ssh 明文备份为 DR 源。
+10. ✅ **删除已用户审批**(§2.2 铁律):所有删除(私钥/config/config.bak/known_hosts)执行前已列清单经用户确认。vault 灾备由用户自有备份管理(非本方案验证项)。
 
 ---
 
@@ -309,14 +316,14 @@ vault 已有 7 台(memory):`1660Super01`、`1660Super02`、`3090x2`、`4090x2`�
 | 风险 | 严重度 | 缓解 |
 |---|---|---|
 | **iron rule 物理层未达成**(xcheck S1,kimi/opencode) | 高(认知) | 明文备份在 `SynologyDrive\ServerKey\`(agent 同账户可读),agent 命令路径断了但物理可读。**这是用户知情接受的 L1+ 残留**,非 bug。§1.2 已收敛措辞为"命令路径不碰凭据";真正的 L2 物理不可见需移盘/加密,属未来加固。 |
-| **明文备份使云同步暴露面净增大**(xcheck S6) | 高 | 备份把当前只在本地的 9+ 服务器私钥推上云。§3.3 备份前必查 SynologyDrive Cloud Sync 状态,开启则暂停/换路径。 |
+| **明文备份被云同步到群晖**(xcheck S6,§2.1 已降级) | 低(已接受) | 备份把当前只在本地的服务器私钥同步到群晖。**用户拍板:群晖同步到自己的服务器,判定安全** → 接受,不必暂停同步。 |
 | 删私钥后发现某台 vault 凭据不对,连不上 | 中 | §3.2 铁律:全量 exec_command 验证通过才删;备份兜底 |
 | auto-TLS 升级顺序错(先升 serve 致 client 断) | 中 | §4.2 铁律:先工作机+pin,最后 serve |
 | **cert-info 在 v0.3.1 不存在**(xcheck M1) | 高(已修) | §4.3 已重排:用 staging v0.4.0 跑 cert-info,不靠运行中的 v0.3.1 |
 | **私钥跨机明文传输**(xcheck S2) | 中 | §5.2 路径 a 优先(RDP 手粘,不落临时文件);禁止 v0.3.1 明文 serve 远程 add |
-| **3090x2/192.168.8.121 无本地 key 兜底**(xcheck L5) | 中 | §5.3 标注特例,验证失败靠密码重试或备份还原 |
+| **3090x2 无本地 key 兜底**(xcheck L5) | 中 | §5.3 标注特例,验证失败靠密码重试或 SynologyDrive 备份还原(192.168.8.121 用户定删,不入 vault) |
 | GitLab push 断(私钥误删) | 中 | §2 边界 2 保留 GitLab 私钥;§6-7 对真实 ca_things repo 验证 |
-| **NUC10 broker 单点,盘损=全凭据失联**(xcheck S4) | 中 | §6-10 验证 vault 有 Plan-13 NAS 备份;删光本地前确认 DR 源 |
+| **NUC10 broker 单点**(xcheck S4) | 中 | 用户另有自己的 vault 备份(非本方案管理);阶段 6.5 删除前用户确认 |
 | **break-glass 路径依赖 NUC10 可达**(xcheck S7) | 中 | §8 执行前确认 SynologyDrive 备份盘不依赖 NUC10 |
 | 旧明文设备码未吊销 | 中 | §4.3[4] 重发后 revoke 旧码 |
 | 归属不明的私钥(id_ed25519 等)误删 | 低 | §5.3 归属核对先于删除,不明则暂留 |
