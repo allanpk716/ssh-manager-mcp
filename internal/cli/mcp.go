@@ -24,16 +24,12 @@ func newMCPCmd() *cobra.Command {
 				return fmt.Errorf("--token is required")
 			}
 			if useCache {
-				// Spawn-time freshness. Failure degrades to the existing cache —
-				// this must never block or fail MCP startup (spec §A2).
+				// ① spawn-time freshness (failure degrades to the existing cache)
 				if err := maybeLazyPull(cacheMaxAge); err != nil {
 					fmt.Fprintf(os.Stderr, "lazy cache pull failed (serving stale cache): %v\n", err)
 				}
-				// Offline read-only path: hydrate the pulled snapshot into a temp store, verify
-				// the SAME project token against the cached projects, and run the broker
-				// unchanged. Mutations are refused (ErrReadOnly); unknown host keys fail closed;
-				// offline audit lands in the cache-audit.log sidecar. The residual-key guardrail
-				// is irrelevant in cache mode (the agent already holds the cache.bin + DEK).
+				// ② hot-reload baseline BEFORE the initial load (see cacheReloader)
+				rel := newCacheReloader(cacheMaxAge)
 				snap, err := loadCacheSnapshot()
 				if err != nil {
 					return err
@@ -42,7 +38,7 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return mcpserver.RunStdioCache(token, snap, auditPath, nil)
+				return mcpserver.RunStdioCache(token, snap, auditPath, rel.check)
 			}
 			// Residual-key guardrail: warn to STDERR only (stdout is the MCP channel).
 			if st, err := vault.OpenStore(store.FileKeyProvider{}); err == nil {

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
@@ -542,4 +544,69 @@ func stripEmbeddedPin(token string) (code string, pin string, ok bool) {
 		}
 	}
 	return token, "", false
+}
+
+// cacheReloader detects cache.bin changes for hot-reload and kicks in-session
+// lazy pulls. Change detection hashes the whole (encrypted) file — a vault
+// snapshot is KBs, so this is ~µs per tool call — and is immune to the
+// same-tick / same-size mtime blind spot (xcheck codex#4/kimi#4). The baseline
+// is captured at construction, which mcp.go does BEFORE the initial
+// loadCacheSnapshot: a baseline taken after the load could swallow an external
+// pull that landed mid-startup (the harmless residue — a pull racing the
+// baseline — costs one redundant rebuild, never a missed one).
+type cacheReloader struct {
+	bin    string
+	maxAge time.Duration
+	sum    []byte // SHA-256 of the served cache.bin (nil until first successful load)
+}
+
+func newCacheReloader(maxAge time.Duration) *cacheReloader {
+	_, bin, _, _, err := cachePaths()
+	if err != nil {
+		return &cacheReloader{maxAge: maxAge} // check() surfaces the error
+	}
+	return &cacheReloader{bin: bin, maxAge: maxAge, sum: fileSumOf(bin)}
+}
+
+func fileSumOf(path string) []byte {
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	s := sha256.Sum256(blob)
+	return s[:]
+}
+
+// check implements the reload callback for mcpserver.RunStdioCache. The changed
+// path mints a FRESH *store.Snapshot each time (loadCacheSnapshot naturally
+// allocates one — never cache or reuse a pointer across calls; the holder
+// dedupes by pointer identity), and r.sum advances ONLY after this function's
+// own successful decrypt+unmarshal. If the holder then fails to hydrate the new
+// snapshot (e.g. the token was revoked in it), the change is intentionally
+// dropped — that is the spec's Lazy revocation semantics.
+func (r *cacheReloader) check() (*store.Snapshot, bool, error) {
+	if r.bin == "" {
+		return nil, false, fmt.Errorf("cache paths unavailable")
+	}
+	blob, err := os.ReadFile(r.bin)
+	if err != nil {
+		return nil, false, err // gone/unreadable → keep serving the current store
+	}
+	s := sha256.Sum256(blob)
+	if bytes.Equal(s[:], r.sum) {
+		// Unchanged. In-session freshness: maybeLazyPull no-ops while fresh and
+		// backs off on failure; a successful pull changes the file, so the NEXT
+		// call swaps the store in — this call deliberately finishes on the old
+		// one (never half-old half-new within a single tool call).
+		if err := maybeLazyPull(r.maxAge); err != nil {
+			fmt.Fprintf(os.Stderr, "ssh-manager: in-session cache refresh failed: %v\n", err)
+		}
+		return nil, false, nil
+	}
+	snap, err := loadCacheSnapshot()
+	if err != nil {
+		return nil, false, err // corrupt/undecryptable → keep the old store, baseline NOT advanced
+	}
+	r.sum = s[:] // advance only on a successful load
+	return snap, true, nil
 }
