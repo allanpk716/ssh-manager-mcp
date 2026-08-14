@@ -100,13 +100,13 @@ func DetectMode(force string) (Mode, error) {
 }
 
 // Run starts the console for mode. Broker opens the vault and runs the tabbed
-// app; client keeps a placeholder until Task 8.
+// App; client runs the standalone clientModel (single screen, no tabs).
 func Run(mode Mode) error {
 	if !isTTY() {
 		return errors.New("tui requires a terminal (in mintty run via `winpty ssh-manager tui`, or use Windows Terminal)")
 	}
 	if mode == ModeClient {
-		p := tea.NewProgram(clientPlaceholder{})
+		p := tea.NewProgram(newClientModel())
 		_, err := p.Run()
 		return err
 	}

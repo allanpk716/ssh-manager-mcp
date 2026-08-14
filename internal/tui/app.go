@@ -40,8 +40,7 @@ type overlay interface {
 }
 
 type App struct {
-	mode    Mode
-	st      *store.Store // client 模式为 nil
+	st      *store.Store
 	page    page
 	pages   [pageCount]listPage
 	overlay overlay // nil = 无
@@ -55,7 +54,7 @@ func NewBrokerApp(st *store.Store) (App, error) {
 	if err != nil {
 		return App{}, err
 	}
-	return App{mode: ModeBroker, st: st, pages: pages, status: "就绪"}, nil
+	return App{st: st, pages: pages, status: "就绪"}, nil
 }
 
 // FetchAll loads the four entity pages in one shot.
@@ -117,7 +116,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// (a/e/d on servers AND projects, a on profiles) make separate
 			// cases order-dependent — an earlier case would swallow a later
 			// page's key. Dispatch by page instead.
-			if a.mode == ModeBroker && a.page == pageServers {
+			if a.page == pageServers {
 				sp, _ := a.pages[pageServers].(*serversPage)
 				switch k.Text {
 				case "a":
@@ -148,7 +147,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			if a.mode == ModeBroker && a.page == pageProfiles {
+			if a.page == pageProfiles {
 				pp, _ := a.pages[pageProfiles].(*profilesPage)
 				switch k.Text {
 				case "a":
@@ -178,7 +177,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			if a.mode == ModeBroker && a.page == pageProjects {
+			if a.page == pageProjects {
 				pj, _ := a.pages[pageProjects].(*projectsPage)
 				switch k.Text {
 				case "a":
@@ -239,7 +238,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			if a.mode == ModeBroker && a.page == pageTokens {
+			if a.page == pageTokens {
 				cp, _ := a.pages[pageTokens].(*cacheTokensPage)
 				switch k.Text {
 				case "a": // issue: form (name + serve addr hint) → tokenIssuedMsg
@@ -339,7 +338,7 @@ func (a App) View() tea.View {
 		return a.overlay.View()
 	}
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf(" ssh-manager%s ", modeTag(a.mode))) + "\n")
+	b.WriteString(titleStyle.Render(" ssh-manager ") + "\n")
 	tabs := make([]string, pageCount)
 	for i := page(0); i < pageCount; i++ {
 		t := "(?)"
@@ -380,17 +379,7 @@ func (a App) View() tea.View {
 	return tea.NewView(b.String())
 }
 
-func modeTag(m Mode) string {
-	if m == ModeClient {
-		return " (client)"
-	}
-	return ""
-}
-
 func (a App) footer() string {
-	if a.mode == ModeClient {
-		return "[s]同步 [c]编辑连接 [t]TTL  q 退出"
-	}
 	// Per-page key hints: keys that don't apply on a page aren't advertised.
 	keys := ""
 	switch a.page {
@@ -412,18 +401,4 @@ func (a App) footer() string {
 // lipColumns renders two columns side by side (width-aware lipgloss join).
 func lipColumns(left, right string) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-}
-
-// clientPlaceholder is the Task-8 stand-in: client mode is not implemented yet.
-type clientPlaceholder struct{}
-
-func (clientPlaceholder) Init() tea.Cmd { return nil }
-func (c clientPlaceholder) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if _, ok := msg.(tea.KeyPressMsg); ok {
-		return c, tea.Quit
-	}
-	return c, nil
-}
-func (clientPlaceholder) View() tea.View {
-	return tea.NewView("client 模式将在后续版本提供（按任意键退出）")
 }
