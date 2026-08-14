@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -42,8 +41,6 @@ func TestCacheCred_RoundTripAndMissing(t *testing.T) {
 	if *got != *in {
 		t.Fatalf("round trip mismatch: %+v want %+v", *got, *in)
 	}
-	// Round-trip success is primary assertion; perm assertion dropped per brief note
-	_ = filepath.Join(cacheDir, "cache.auth.json") // keep path reference for audit
 }
 
 func TestCacheCred_CorruptFileErrors(t *testing.T) {
@@ -64,8 +61,6 @@ func TestCacheCred_CorruptFileErrors(t *testing.T) {
 		t.Fatal("cred missing url/token must error")
 	}
 }
-
-var _ = json.Marshal // keep import if assertions above change
 
 type tlsSnapshotServer struct{ url, fp string }
 

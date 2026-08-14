@@ -533,7 +533,7 @@ ssh-manager cache-tokens revoke laptop
    - 重新 `cache-tokens add`（默认把指纹打进设备码输出，形态 `<码>:<指纹>`）；或
    - 在调度器配置（systemd unit / 任务计划 / launchd plist）的 `Environment` / `EnvironmentVariables` 里加 `SSHMGR_SERVE_PIN=sha256:<指纹>`。
 4. **【最后】重启 serve** → 从此强制 TLS，启动日志打印 `client pin: <指纹>`。
-5. **下一次自动拉取（或手动 `cache pull` 带新 `--pin`，会同时更新 `cache.auth.json` 里的 pin）** → 走 TLS + 指纹钉死成功，迁移完成。
+5. **各工作机手动 `cache pull` 带新 `--pin`**（成功后会写入/更新 `cache.auth.json`，含解析后的新 pin）→ 走 TLS + 指纹钉死成功；之后的自动拉取恢复正常，迁移完成。⚠️ 从明文/无凭据旧部署迁移的机器此前**没有** `cache.auth.json`，`mcp --cache` 进程内的自动拉取不会触发（自动拉取依赖已持久化的凭据）——这次收尾拉取必须手动执行（或走调度器：env 配好 `SSHMGR_SERVE_PIN` 后的定时 `cache pull`），成功后自动拉取才被启用。
 
 > ⚠️ **新策略（默认安全）**：新 client **无 pin 默认 hard-fail**（拒连），不再静默明文回退。明文拉取需显式 `--allow-plaintext` opt-in（仅调试/连旧明文 serve 用）。所以迁移必须先把 pin 分发到所有工作机（第 3 步），不能依赖"自动回退"。
 

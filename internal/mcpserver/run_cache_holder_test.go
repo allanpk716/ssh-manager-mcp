@@ -62,6 +62,23 @@ func newHolder(t *testing.T, snap *store.Snapshot, token, profileID string,
 	return h
 }
 
+// graftExtraServer builds a copy of snap1 carrying one extra server (grafted from
+// snap2) granted to the same profile — a genuine SAME-profile change for the
+// holder to hot-reload onto. snap2 must come from seedSnap with a LARGER n.
+func graftExtraServer(snap1, snap2 *store.Snapshot, pid string) *store.Snapshot {
+	grafted := *snap1
+	// graft snap2's credential too: the appended server's credential_id FKs to it
+	grafted.Credentials = append(append([]store.SnapshotCredential{}, snap1.Credentials...), snap2.Credentials...)
+	// servers.name is globally UNIQUE and ExportSnapshot orders by random id, so
+	// snap2's last row may be named "srv0" and collide with snap1's — take any
+	// snap2 server and give it a deterministic fresh name.
+	extra := snap2.Servers[len(snap2.Servers)-1]
+	extra.Name = "srv-extra"
+	grafted.Servers = append(append([]store.SnapshotServer{}, snap1.Servers...), extra)
+	grafted.Grants = append(append([]store.SnapshotGrant{}, snap1.Grants...), store.SnapshotGrant{ProfileID: pid, ServerID: extra.ID})
+	return &grafted
+}
+
 func serverCount(t *testing.T, st *store.Store, pid string) int {
 	t.Helper()
 	out, err := ListServersForProfile(st, pid)
@@ -80,23 +97,66 @@ func TestHolder_NoChange_SameStorePointer(t *testing.T) {
 	}
 }
 
+// TestHolder_ProductionConstruction_SetsProfileIDAndSwaps pins the CONSTRUCTION
+// SEAM: the holder is built through newCacheStoreHolderFromSnapshot — the exact
+// helper RunStdioCache uses — NOT through this file's hand-built newHolder.
+// Every other holder test passes profileID manually, so a regression that drops
+// the assignment in the production path would sail through them; here the
+// assignment is part of the shared constructor and a genuine same-profile change
+// MUST swap the store. This is the test that would have caught hot reload being
+// silently disabled in production (profileID == "" makes Current()'s drift guard
+// reject every change).
+func TestHolder_ProductionConstruction_SetsProfileIDAndSwaps(t *testing.T) {
+	snap1, token, pid := seedSnap(t, 1)
+	snap2, _, _ := seedSnap(t, 2)
+	grafted := graftExtraServer(snap1, snap2, pid)
+
+	af, err := os.OpenFile(filepath.Join(t.TempDir(), "audit.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { af.Close() })
+
+	// fire the change on the SECOND reload consult: first Current() is the
+	// baseline, the second one must swap.
+	calls := 0
+	h, project, err := newCacheStoreHolderFromSnapshot(token, snap1, af, func() (*store.Snapshot, bool, error) {
+		calls++
+		if calls == 2 {
+			return grafted, true, nil
+		}
+		return nil, false, nil
+	})
+	if err != nil {
+		t.Fatalf("newCacheStoreHolderFromSnapshot: %v", err)
+	}
+	t.Cleanup(h.cleanup)
+
+	// (a) the drift-guard baseline must be pinned to the verified project's profile
+	if h.profileID != project.ProfileID {
+		t.Fatalf("h.profileID = %q, want verified project's %q", h.profileID, project.ProfileID)
+	}
+	if h.profileID != pid {
+		t.Fatalf("h.profileID = %q, want seed profile %q", h.profileID, pid)
+	}
+	// (b) a genuine same-profile change must swap the store (drift guard accepts)
+	old := h.Current()
+	if got := serverCount(t, old, pid); got != 1 {
+		t.Fatalf("initial: %d servers, want 1", got)
+	}
+	cur := h.Current()
+	if cur == old {
+		t.Fatal("production-constructed holder must hot-reload a same-profile change (profileID unset would silently disable it)")
+	}
+	if got := serverCount(t, cur, pid); got != 2 {
+		t.Fatalf("after swap: %d servers, want 2", got)
+	}
+}
+
 func TestHolder_Changed_SwapsAndOldStaysUsable(t *testing.T) {
 	snap1, token, pid := seedSnap(t, 1)
 	snap2, _, _ := seedSnap(t, 2) // same shape, 2 servers — token/project ids differ, see below
-	// seedSnap mints fresh ids each call; rebuild snap2 over snap1's project:
-	// hydrate requires the SAME token to verify, so graft: re-export snap2's
-	// servers into snap1's project. Simplest: hydrate snap1 first, then mutate
-	// a COPY of snap1 with snap2's extra server row appended.
-	grafted := *snap1
-	// graft snap2's credential too: the appended server's credential_id FKs to it
-	grafted.Credentials = append(append([]store.SnapshotCredential{}, snap1.Credentials...), snap2.Credentials...)
-	// servers.name is globally UNIQUE and ExportSnapshot orders by random id, so
-	// snap2's last row may be named "srv0" and collide with snap1's — take any
-	// snap2 server and give it a deterministic fresh name.
-	extra := snap2.Servers[len(snap2.Servers)-1]
-	extra.Name = "srv-extra"
-	grafted.Servers = append(append([]store.SnapshotServer{}, snap1.Servers...), extra)
-	grafted.Grants = append(append([]store.SnapshotGrant{}, snap1.Grants...), store.SnapshotGrant{ProfileID: pid, ServerID: extra.ID})
+	grafted := graftExtraServer(snap1, snap2, pid)
 
 	// fire the change on the SECOND reload consult: the first Current() call
 	// (old := h.Current()) is the pre-change baseline, the second one swaps.
@@ -104,7 +164,7 @@ func TestHolder_Changed_SwapsAndOldStaysUsable(t *testing.T) {
 	h := newHolder(t, snap1, token, pid, func() (*store.Snapshot, bool, error) {
 		calls++
 		if calls == 2 {
-			return &grafted, true, nil
+			return grafted, true, nil
 		}
 		return nil, false, nil
 	})
@@ -165,16 +225,7 @@ func TestHolder_ProfileDrift_KeepsOld(t *testing.T) {
 func TestHolder_ConcurrentCurrent_RebuildsOnce(t *testing.T) {
 	snap1, token, pid := seedSnap(t, 1)
 	snap2, _, _ := seedSnap(t, 2)
-	grafted := *snap1
-	// graft snap2's credential too: the appended server's credential_id FKs to it
-	grafted.Credentials = append(append([]store.SnapshotCredential{}, snap1.Credentials...), snap2.Credentials...)
-	// servers.name is globally UNIQUE and ExportSnapshot orders by random id, so
-	// snap2's last row may be named "srv0" and collide with snap1's — take any
-	// snap2 server and give it a deterministic fresh name.
-	extra := snap2.Servers[len(snap2.Servers)-1]
-	extra.Name = "srv-extra"
-	grafted.Servers = append(append([]store.SnapshotServer{}, snap1.Servers...), extra)
-	grafted.Grants = append(append([]store.SnapshotGrant{}, snap1.Grants...), store.SnapshotGrant{ProfileID: pid, ServerID: extra.ID})
+	grafted := graftExtraServer(snap1, snap2, pid)
 
 	var mu sync.Mutex
 	pending := true
@@ -182,7 +233,7 @@ func TestHolder_ConcurrentCurrent_RebuildsOnce(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		if pending {
-			return &grafted, true, nil
+			return grafted, true, nil
 		}
 		return nil, false, nil
 	})

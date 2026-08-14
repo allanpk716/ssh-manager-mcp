@@ -26,7 +26,14 @@ func newMCPCmd() *cobra.Command {
 			if useCache {
 				// ① spawn-time freshness (failure degrades to the existing cache)
 				if err := maybeLazyPull(cacheMaxAge); err != nil {
-					fmt.Fprintf(os.Stderr, "lazy cache pull failed (serving stale cache): %v\n", err)
+					// "serving stale cache" is only true when a cache EXISTS — with no
+					// cache.bin the upcoming loadCacheSnapshot hard-fails instead, so
+					// don't promise a degradation that isn't happening.
+					if cachePresent() {
+						fmt.Fprintf(os.Stderr, "lazy cache pull failed (serving stale cache): %v\n", err)
+					} else {
+						fmt.Fprintf(os.Stderr, "lazy cache pull failed: %v\n", err)
+					}
 				}
 				// ② hot-reload baseline BEFORE the initial load (see cacheReloader)
 				rel := newCacheReloader(cacheMaxAge)

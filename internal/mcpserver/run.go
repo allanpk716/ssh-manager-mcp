@@ -184,6 +184,27 @@ func (h *cacheStoreHolder) cleanup() {
 	h.tmpPaths = nil
 }
 
+// newCacheStoreHolderFromSnapshot constructs the holder EXACTLY as RunStdioCache
+// needs it: hydrates the initial snapshot, verifies the token, and pins the
+// holder's profileID to the VERIFIED project's profile. That pin is load-bearing:
+// Current()'s drift guard compares every hot-reload candidate's ProfileID against
+// it, so a holder built with profileID unset rejects EVERY genuine change — hot
+// reload silently disabled (the production-path bug this constructor exists to
+// make impossible). Shared with the seam test so the production construction and
+// the tested construction can never drift apart.
+func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error)) (*cacheStoreHolder, *models.Project, error) {
+	h := &cacheStoreHolder{reload: reload, token: token, auditFile: af}
+	st, project, tmpPath, err := hydrateCacheStore(token, snap, af)
+	if err != nil {
+		return nil, nil, err
+	}
+	h.profileID = project.ProfileID // set BEFORE the holder is served: Current()'s drift guard depends on it
+	h.cur.Store(st)
+	h.stores = append(h.stores, st)
+	h.tmpPaths = append(h.tmpPaths, tmpPath)
+	return h, project, nil
+}
+
 // RunStdioCache hydrates a Snapshot into a temporary read-only store, verifies the SAME
 // project token against the cached projects (iron rule + profile scoping intact offline), and
 // runs the broker over stdio — identical agent surface to RunStdio. Offline audit lands in
@@ -211,14 +232,10 @@ func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload 
 	}
 	defer af.Close()
 
-	h := &cacheStoreHolder{reload: reload, token: token, auditFile: af}
-	st, project, tmpPath, err := hydrateCacheStore(token, snap, af)
+	h, project, err := newCacheStoreHolderFromSnapshot(token, snap, af, reload)
 	if err != nil {
 		return err
 	}
-	h.cur.Store(st)
-	h.stores = append(h.stores, st)
-	h.tmpPaths = append(h.tmpPaths, tmpPath)
 	defer h.cleanup()
 
 	srv, tunnels, err := NewServerFromSource(h.Current, project.ProfileID, project.ID)

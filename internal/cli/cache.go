@@ -104,6 +104,17 @@ func cachePaths() (dir, bin, meta, audit string, err error) {
 	return dir, filepath.Join(dir, "cache.bin"), filepath.Join(dir, "cache.meta.json"), filepath.Join(dir, "cache-audit.log"), nil
 }
 
+// cachePresent reports whether cache.bin currently exists (used by mcp --cache
+// spawn logging to say "serving stale cache" only when there IS a cache).
+func cachePresent() bool {
+	_, bin, _, _, err := cachePaths()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(bin)
+	return err == nil
+}
+
 // atomicWriteUnique atomically replaces path with blob via a UNIQUE temp file +
 // rename. Unlike a fixed ".tmp" name, concurrent writers (multiple `mcp --cache`
 // spawns lazy-pulling at once, or a lazy pull racing a manual one) never
@@ -349,10 +360,13 @@ func doPull(url, token, pin string, o pullOpts) error {
 		return err
 	}
 	// meta via the same unique-temp atomic write (was a bare os.WriteFile — torn-meta
-	// risk under concurrent pulls, xcheck codex#1).
+	// risk under concurrent pulls, xcheck codex#1). A meta-write failure is a
+	// WARNING, not an error: cache.bin is already atomically replaced at this
+	// point, so the pull itself SUCCEEDED — returning an error would mislabel a
+	// good pull as failed (only the status line's source URL is lost).
 	mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: time.Now().Unix()})
-	if err := atomicWriteUnique(metaPath, mb); err != nil {
-		return err
+	if err := atomicWriteUnique(metaPath, mb); err != nil && o.statusOut != nil {
+		fmt.Fprintf(o.statusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): %v\n", err)
 	}
 	var snap store.Snapshot
 	_ = json.Unmarshal(body, &snap) // for the status line only
@@ -584,6 +598,11 @@ func fileSumOf(path string) []byte {
 // own successful decrypt+unmarshal. If the holder then fails to hydrate the new
 // snapshot (e.g. the token was revoked in it), the change is intentionally
 // dropped — that is the spec's Lazy revocation semantics.
+//
+// Concurrency contract: check must be invoked SERIALIZED — mcpserver's
+// cacheStoreHolder calls it under its mutex. It is NOT safe for concurrent use:
+// r.sum carries no lock of its own, so racing calls could advance the baseline
+// out of order.
 func (r *cacheReloader) check() (*store.Snapshot, bool, error) {
 	if r.bin == "" {
 		return nil, false, fmt.Errorf("cache paths unavailable")
