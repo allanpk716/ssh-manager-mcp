@@ -42,6 +42,49 @@ func cachePaths() (dir, bin, meta, audit string, err error) {
 	return dir, filepath.Join(dir, "cache.bin"), filepath.Join(dir, "cache.meta.json"), filepath.Join(dir, "cache-audit.log"), nil
 }
 
+// atomicWriteUnique atomically replaces path with blob via a UNIQUE temp file +
+// rename. Unlike a fixed ".tmp" name, concurrent writers (multiple `mcp --cache`
+// spawns lazy-pulling at once, or a lazy pull racing a manual one) never
+// interleave on the same temp file, so a torn blob can never be renamed into
+// place (xcheck 2026-08-14, three-reviewer consensus). os.CreateTemp creates the
+// temp 0600, which matches every current use (cache.bin/meta/auth are all 0600).
+//
+// On Windows, concurrent readers can hold the target file open, causing
+// os.Rename to fail with "Access is denied". We retry briefly to handle these
+// transient conflicts — the unique temp name ensures writers never conflict
+// with each other, only with concurrent readers (which is expected and safe).
+func atomicWriteUnique(path string, blob []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op after a successful rename
+	if _, err := tmp.Write(blob); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// Retry rename on Windows to handle "Access is denied" from concurrent readers
+	var lastErr error
+	for i := 0; i < 50; i++ {
+		err := os.Rename(tmpPath, path)
+		if err == nil {
+			return nil // success
+		}
+		lastErr = err
+		// On Windows, "Access is denied" from concurrent readers is transient
+		// Other errors are not retryable
+		if !strings.Contains(err.Error(), "Access is denied") {
+			return err
+		}
+		time.Sleep(time.Duration(10+(i*2)) * time.Millisecond) // 10-110ms backoff
+	}
+	return lastErr
+}
+
 type cacheMeta struct {
 	URL      string `json:"url"`
 	PulledAt int64  `json:"pulled_at"` // unix seconds of the local pull
