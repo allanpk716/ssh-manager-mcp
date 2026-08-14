@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -14,6 +15,7 @@ import (
 func newMCPCmd() *cobra.Command {
 	var token string
 	var useCache bool
+	var cacheMaxAge time.Duration
 	c := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run the SSH MCP server (stdio) for an AI agent",
@@ -22,6 +24,11 @@ func newMCPCmd() *cobra.Command {
 				return fmt.Errorf("--token is required")
 			}
 			if useCache {
+				// Spawn-time freshness. Failure degrades to the existing cache —
+				// this must never block or fail MCP startup (spec §A2).
+				if err := maybeLazyPull(cacheMaxAge); err != nil {
+					fmt.Fprintf(os.Stderr, "lazy cache pull failed (serving stale cache): %v\n", err)
+				}
 				// Offline read-only path: hydrate the pulled snapshot into a temp store, verify
 				// the SAME project token against the cached projects, and run the broker
 				// unchanged. Mutations are refused (ErrReadOnly); unknown host keys fail closed;
@@ -53,6 +60,8 @@ func newMCPCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&token, "token", "", "project token (from `projects add`)")
 	c.Flags().BoolVar(&useCache, "cache", false, "serve from the local offline cache (read-only; pulled via `cache pull`)")
+	c.Flags().DurationVar(&cacheMaxAge, "cache-max-age", 30*time.Minute,
+		"auto-pull the offline cache when older than this (0 disables automatic pulls entirely)")
 	_ = c.MarkFlagRequired("token")
 	return c
 }

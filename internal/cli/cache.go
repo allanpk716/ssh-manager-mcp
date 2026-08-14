@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -28,6 +29,64 @@ import (
 // platforms bind a FileKeyProvider at paths.CacheDekPath() (Plan 16 T4; spec
 // §3.1 / §4.2). Was DpapiKeyProvider on Windows / KeyringKeyProvider on Unix
 // before Plan 16 — same plaintext-at-fixed-path trust model as master.key.
+
+// lazyPullTimeout bounds every automatic (lazy) pull: it runs on the spawn /
+// tool-call critical path, so an unreachable broker must degrade within seconds,
+// not hang MCP startup (xcheck pi#2/codex#3). Manual `cache pull` stays
+// unbounded — the interactive user can Ctrl-C.
+const lazyPullTimeout = 10 * time.Second
+
+// lazyPullBackoff rate-limits automatic pulls to at most one attempt per TTL
+// window (success or failure), so an offline machine doesn't retry — and block a
+// tool call for up to lazyPullTimeout — on every call. The cache.bin mtime only
+// advances on SUCCESS, so without this backoff a failed pull would re-fire per call.
+var lazyPullBackoff struct {
+	mu          sync.Mutex
+	lastAttempt time.Time
+}
+
+// maybeLazyPull runs ONE automatic pull when cache.bin is missing / older than
+// maxAge and a persisted cache.auth.json exists. maxAge<=0 disables entirely —
+// INCLUDING the missing-cache case (the first pull stays a deliberate manual
+// step). Errors are returned for the caller to log; never fatal.
+func maybeLazyPull(maxAge time.Duration) error {
+	if maxAge <= 0 {
+		return nil
+	}
+	cred, err := readCacheCred()
+	if err != nil {
+		return err
+	}
+	if cred == nil {
+		return nil
+	}
+	_, bin, _, _, err := cachePaths()
+	if err != nil {
+		return err
+	}
+	if info, statErr := os.Stat(bin); statErr == nil && time.Since(info.ModTime()) < maxAge {
+		return nil // fresh enough
+	}
+	lazyPullBackoff.mu.Lock()
+	if time.Since(lazyPullBackoff.lastAttempt) < maxAge {
+		lazyPullBackoff.mu.Unlock()
+		return nil
+	}
+	lazyPullBackoff.lastAttempt = time.Now()
+	lazyPullBackoff.mu.Unlock()
+
+	pin := cred.Pin // resolved pin wins over any embedded stale pin (cert rotation)
+	code := cred.Token
+	if pin == "" {
+		if c, p, ok := stripEmbeddedPin(cred.Token); ok {
+			code, pin = c, p
+		}
+	}
+	if pin == "" {
+		return fmt.Errorf("cache.auth.json has no pin; refusing plaintext auto-pull")
+	}
+	return doPull(cred.URL, code, pin, pullOpts{timeout: lazyPullTimeout, statusOut: os.Stderr})
+}
 
 // cachePaths resolves the cache directory (SSHMGR_CACHE_DIR override, else UserConfigDir/
 // ssh-manager) and the three files within it: the encrypted snapshot, the meta sidecar, and
