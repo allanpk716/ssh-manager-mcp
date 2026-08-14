@@ -126,8 +126,8 @@ serve:
 钉 **SPKI 指纹**(非整证 DER、非主机名):
 
 - 公钥 `SPKI = SubjectPublicKeyInfo`(ASN.1 DER),`fp = sha256:hex(sha256(SPKI))`。
-- 校验用 `tls.Config{MinVersion: tls.VersionTLS13, VerifyConnection: func(cs tls.ConnectionState) error {...}}`,**不用** `InsecureSkipVerify`。
-- 回调取对端叶子证书,算 SPKI sha256,`subtle.ConstantTimeCompare` 与钉死 fp 比对;不等返回 error 让握手失败。
+- 校验用 `tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {...}}`。**必须同时设 `InsecureSkipVerify: true`** —— serve 证书是自签(不在系统根池),默认 PKIX 链验证必然失败,Go `crypto/tls` 会在 `VerifyConnection` 回调**跑之前**就中止握手 → pin 校验成死代码。`InsecureSkipVerify:true` 跳过不可能成功的链验证,信任锚完全转移到 `VerifyConnection` 里的 SPKI pin(Go 官方 `VerifyConnection` 示例即此组合)。这是 HPKP / Tailscale 模式,pin 是唯一信任锚。
+- 回调取对端叶子证书,算 SPKI sha256,`subtle.ConstantTimeCompare` 与钉死 fp 比对;不等返回 error 让握手失败。`len(PeerCertificates)==0`(对端匿名)也返回 error。
 
 **为何钉 SPKI 而非整证 DER:** 自生证书长生(不靠过期驱动轮换),真正要防的是"公钥被换"(= MITM)。钉 SPKI 在安全等价(换密钥即失配)的同时,避免"同密钥重签"这种无害操作触发误报。SPKI 指纹是 HPKP / Tailscale / `step` 等事实标准。
 
@@ -137,18 +137,21 @@ serve:
 
 ### 4.1 NUC10 serve + 笔记本 client 平滑切换序列
 
+> ⚠️ **迁移顺序铁律(修订,xcheck 共识 B)**:**先升全部工作机二进制并配 pin → 后升 serve**。升 serve 瞬间其变 TLS-only,旧明文 client(`http://`)直连 TLS 端口会失败(`malformed HTTP response`/`unknown authority`)。"不中断"**仅在此协调前提下**成立 —— 是计划内操作,不是自动的。
+
 ```
-① 升级 NUC10 二进制到含本设计的版本(serve 继续跑,先不重启)
-② NUC10 跑一次性命令生成/确认证书 + 打印指纹:
+① 升级【所有工作机】二进制到含本设计的版本,并先把 pin 备好(从 serve cert-info 拿)
+   ⚠️ 必须先做这步 —— 升 serve 前客户端就要准备好 pin
+② 在 NUC10 跑一次性命令生成/确认证书 + 打印指纹:
      ssh-manager serve cert-info   → fp=sha256:abcd...
    (幂等:证书已存在则只读不写;明文部署此刻生成自签证书文件)
-③ 重启 NUC10 serve → 监听强制 TLS(用②的证书)
-④ 升级笔记本二进制 → 注入 SSHMGR_SERVE_PIN=sha256:abcd...(从②拿到)
-   或重新发一个带指纹的设备码(形态 A)
-⑤ 笔记本下次 30min 定时 cache pull → 走 TLS+pinning 成功 → 迁移完成
+③ 各工作机注入 SSHMGR_SERVE_PIN=sha256:abcd...(从②拿到)
+   或重新发一个带指纹的设备码(形态 A: <设备码>:<指纹>)
+④ 【最后】重启 NUC10 serve → 监听强制 TLS(用②的证书)
+⑤ 工作机下次 30min 定时 cache pull → 走 TLS+pinning 成功 → 迁移完成
 ```
 
-**不断链保证:** 新 client 看到 pin(任一来源)才走 TLS+pin;**无 pin 时行为 = 今天的明文 HTTP + STDERR 警告**(兼容回退)。故"NUC10 已切 TLS、笔记本还没传指纹"的窗口,笔记本不硬失败,继续明文拉直到 pin 配上。
+**新策略(xcheck 共识 C,用户拍板):** 新 client **无 pin 默认 hard-fail**(拒连),不再明文回退。明文拉取需显式 `--allow-plaintext` opt-in(仅用于旧明文 serve 的过渡/调试)。这消解了"无 pin 静默明文"的 fail-open 隐患。
 
 ### 4.2 错误处理矩阵
 
@@ -156,12 +159,14 @@ serve:
 |---|---|---|
 | client 有 pin,指纹匹配 | n/a | ✅ 正常 |
 | client 有 pin,指纹**不匹配** | n/a | ❌ 拒握手,清晰报错 `server fingerprint mismatch (expected sha256:.., got sha256:..)` + 退出非 0 |
-| client **无 pin** | 明文 + STDERR 警告 | **同现状**(兼容回退,不硬断) |
+| client 有 pin 但 URL 非 https | n/a | ❌ hard-fail(xcheck F8:pin 已设却走 http 会静默明文) |
+| client **无 pin** | 明文 + STDERR 警告 | ❌ **hard-fail**(拒连);明文需显式 `--allow-plaintext`(xcheck F4) |
+| client pin 格式非法(env/flag 给了但非 sha256:<64hex>) | n/a | ❌ hard-fail(xcheck F7:打错别字不能静默降级) |
 | serve 证书文件损坏 / 读不了 | n/a | ❌ serve 拒启动(不降级明文) |
+| serve 证书文件被误删(marker 仍在) | n/a | ❌ serve 拒启动(xcheck F10:不静默重生新 key 致全客户端硬失败) |
 | serve 证书文件存在但私钥与 cert 不配 | n/a | ❌ serve 拒启动 |
-| `--pin` 格式非法 | n/a | ❌ client 拒连 `invalid pin format` |
 
-**两个不可降级硬失败:** (a) 有 pin 但失配 → 拒;(b) serve 证书损坏 → 拒启动(**绝不**静默降级明文 —— 防"证书坏了就裸奔")。
+**不可降级硬失败:** (a) 有 pin 但失配 → 拒;(b) serve 证书损坏/误删 → 拒启动(**绝不**静默降级明文/重生 —— 防"证书坏了就裸奔"或"误删致全员 bricked")。
 
 ---
 

@@ -1,5 +1,8 @@
 # serve 同步链路自动加密 (自签 TLS + 指纹 TOFU) Implementation Plan
 
+> ⚠️ **修订记录(2026-08-14,xcheck 异构评审后):** 本计划正文若干处仍写"用 `VerifyConnection`,**不用** `InsecureSkipVerify`"(Task 4 / §3.5)。**该指引已被推翻**:自签证书不在系统根池,Go `crypto/tls` 链验证必失败、握手在 `VerifyConnection` 前中止,只设 `VerifyConnection` 不设 `InsecureSkipVerify` 会让 pin 成死代码。正确实现是 **`InsecureSkipVerify: true` + `VerifyConnection`**(Task 5 F1 落地纠正,4 家评审共识)。详见 spec §3.5(已修订)与 `2026-08-14-autotls-xcheck-fixes.md`。正文保留原文作历史,以本注为准。
+> ⚠️ 同期修订:**无 pin 默认 hard-fail + `--allow-plaintext` opt-in**(原计划是"明文回退");**pin+http:// URL → hard-fail**;**cert 误删 → serve 拒启动**(init-marker)。均见 spec §4 + xcheck-fixes plan。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在 `serve` ↔ `cache pull` 同步链路上实现自动 TLS:serve 首次启动自生 ed25519 自签证书,`cache-tokens add` 把证书 SPKI 指纹随设备码交给工作机,`cache pull` 钉死该指纹。零证书分发、零 openssl、首次连接即校验(零 MITM 窗口)。

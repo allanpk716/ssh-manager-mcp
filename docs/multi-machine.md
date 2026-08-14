@@ -91,7 +91,7 @@ ssh-manager serve --addr 0.0.0.0:7878
 
 **指纹怎么交给工作机**：`cache-tokens add` 签发设备码时，会把当前 serve 指纹**一并打印**（默认编进 `cache pull` 示例命令，形态 `<设备码>:<指纹>`）。详见下面「离线只读缓存」Step 1。也可用 `ssh-manager serve cert-info` 随时查当前指纹。
 
-> ⚠️ **客户端不带指纹 = 明文回退**：`cache pull` 在没拿到指纹（env / `--pin` / token 内嵌三处都没有）时，会退回明文 HTTP 并打一行 STDERR 警告 —— 这是为了让**旧客户端平滑升级**（不会硬断），但意味着升级窗口里客户端可能还在明文拉。迁移时请尽快把指纹配上（`SSHMGR_SERVE_PIN=...`）。
+> ⚠️ **客户端不带指纹 = 默认拒连（hard-fail）**：`cache pull` 在没拿到指纹（env / `--pin` / token 内嵌三处都没有）时，**默认拒绝拉取**（不再静默明文）——明文是 fail-open 隐患，已改为默认安全。若确需明文（连旧明文 serve 调试），显式加 `--allow-plaintext` opt-in。详见下「离线只读缓存」Step。
 
 **让它常驻 + 开机自启**（serve 是个长驻进程，别在前台手跑就完事）：
 
@@ -294,7 +294,7 @@ ssh-manager cache-tokens add --name laptop
 
 - `--name` **必填**且唯一（比如 `laptop` / `desktop-2`），后续吊销靠它。
 - 设备码**只显示一次**——当场拉、或记进密码管理器。
-- **指纹是自动加密的关键**：设备码旁那行 `Server fingerprint` 是 serve 自签证书的 SPKI 指纹。`cache pull` 拿到它（任一形式：token 内嵌 `<码>:<指纹>`、`--pin`、或 `SSHMGR_SERVE_PIN`）就用 TLS + 指纹钉死连 serve；拿不到就退回明文（仅升级窗口用）。指纹可随时用 `ssh-manager serve cert-info` 重查。
+- **指纹是自动加密的关键**：设备码旁那行 `Server fingerprint` 是 serve 自签证书的 SPKI 指纹。`cache pull` 拿到它（任一形式：token 内嵌 `<码>:<指纹>`、`--pin`、或 `SSHMGR_SERVE_PIN`）就用 TLS + 指纹钉死连 serve；**拿不到则默认拒连**（hard-fail，需显式 `--allow-plaintext` 才明文）。指纹可随时用 `ssh-manager serve cert-info` 重查。另：有 pin 时 URL 必须是 `https://`（否则 hard-fail —— http 不协商 TLS 会让 pin 静默失效）。
 - 其他管理命令：
   ```bash
   ssh-manager cache-tokens ls          # name / id / prefix / status / last_pull（不显示码）
@@ -323,7 +323,8 @@ ssh-manager cache status
 |---|---|
 | `--url` / `SSHMGR_CACHE_URL` | serve broker 的 URL（`https://host:7878`）。必填 |
 | `--token` / `SSHMGR_CACHE_TOKEN` | 设备授权码（`cache-tokens add` 发的那个）。可写成 `<设备码>:<指纹>` 把指纹一起带上。必填 |
-| `--pin` / `SSHMGR_SERVE_PIN` | serve 证书 SPKI 指纹（`sha256:...`）。**任一处给了就走 TLS + 指纹钉死**；优先级 `SSHMGR_SERVE_PIN` > `--pin` > token 内嵌；三者都无 → 明文回退（打 STDERR 警告）。`cache-tokens add` 默认把指纹打进输出。 |
+| `--pin` / `SSHMGR_SERVE_PIN` | serve 证书 SPKI 指纹（`sha256:...`）。**任一处给了就走 TLS + 指纹钉死**；优先级 `SSHMGR_SERVE_PIN` > `--pin` > token 内嵌；三者都无 → **默认 hard-fail**（需 `--allow-plaintext` 才明文）。格式非法（给了但非 `sha256:<64hex>`）→ hard-fail（防打错别字静默降级）。`cache-tokens add` 默认把指纹打进输出。 |
+| `--allow-plaintext` | 显式 opt-in 明文拉取（无 pin 时）。**不安全**，仅用于连旧明文 serve 调试/过渡。默认关。 |
 | `SSHMGR_CACHE_DIR` | 缓存目录覆盖（默认 `UserConfigDir/ssh-manager`） |
 
 > **缓存目录**：`cache.bin` / `cache.meta.json` / `cache-audit.log` 进 `SSHMGR_CACHE_DIR`（默认 `os.UserConfigDir()/ssh-manager/`，即 Linux `~/.config/ssh-manager/`、macOS `~/Library/Application Support/ssh-manager/`、Windows `%AppData%\ssh-manager\`）。**DEK** 存在 vault 固定路径下的 `cache-dek.key` 裸文件（Win `C:\ProgramData\ssh-manager\cache-dek.key` / Unix `/var/lib/ssh-manager/cache-dek.key`，Plan 16 T4 从 OS keychain/DPAPI 迁来）。
@@ -516,19 +517,33 @@ ssh-manager cache-tokens revoke laptop
 
 ### 自动 TLS 迁移 Runbook（从旧版明文 / 外部证书升级）
 
-新版 serve **默认强制 TLS**（无 `--tls-cert` 时自签）。已部署的明文或外部证书部署**无需停服、无需清数据**即可平滑切到指纹钉死：
+新版 serve **默认强制 TLS**（无 `--tls-cert` 时自签）。已部署的明文或外部证书部署切到指纹钉死。⚠️ **顺序铁律：先升全部工作机并配 pin，最后才升 serve**（升 serve 瞬间其变 TLS-only，旧明文 client 直连会断）：
 
-1. **升级服务器二进制**到含自动 TLS 的新版（serve 暂不重启）。
-2. **拿指纹**：`ssh-manager serve cert-info` —— 打印当前（或首次生成）的 SPKI 指纹 `sha256:...`。幂等，不会破坏现有 flag。
-3. **重启 serve** → 从此强制 TLS，启动日志打印 `client pin: <指纹>`。
-4. **升级各工作机二进制**，把指纹配上（任一形式）：
-   - 重新 `cache-tokens add`（默认把指纹打进设备码输出）；或
+1. **先升级【所有工作机】二进制**到含自动 TLS 的新版（serve 暂不动）。
+2. **拿指纹**：在 serve 机跑 `ssh-manager serve cert-info` —— 打印当前（或首次生成）的 SPKI 指纹 `sha256:...`。幂等。
+3. **各工作机把指纹配上**（任一形式）：
+   - 重新 `cache-tokens add`（默认把指纹打进设备码输出，形态 `<码>:<指纹>`）；或
    - 在调度器配置（systemd unit / 任务计划 / launchd plist）的 `Environment` / `EnvironmentVariables` 里加 `SSHMGR_SERVE_PIN=sha256:<指纹>`。
+4. **【最后】重启 serve** → 从此强制 TLS，启动日志打印 `client pin: <指纹>`。
 5. **下一次定时 `cache pull`** → 走 TLS + 指纹钉死成功，迁移完成。
 
-**迁移窗口不断链保证**：新 `cache pull` 没拿到指纹时**退回明文 + STDERR 警告**（不硬断），所以"serve 已切 TLS、某工作机还没配指纹"的窗口里，那台机不会硬失败，只是继续明文拉直到指纹配上。**指纹配上后才真正加密**——所以迁移要尽快把指纹分发到所有工作机。
+> ⚠️ **新策略（默认安全）**：新 client **无 pin 默认 hard-fail**（拒连），不再静默明文回退。明文拉取需显式 `--allow-plaintext` opt-in（仅调试/连旧明文 serve 用）。所以迁移必须先把 pin 分发到所有工作机（第 3 步），不能依赖"自动回退"。
 
-> ⚠️ **唯一硬失败组合：旧二进制 client（完全没有 pin 逻辑）对新版 serve（强制 TLS）。** 这种 client 用明文 `http.DefaultClient` 打一个现已 TLS-only 的 serve，握手必败——这不是 bug，是"明文 client 没法跟 TLS server 说话"。**对策就是第 4 步本身：把那台机的二进制升级到新版**（升级后它就有 pin 逻辑 + 明文回退能力）。所以迁移别只升 server 就放着——务必把每台工作机的二进制也升上来，第 4 步是 load-bearing 的。
+> ⚠️ **旧二进制 client（完全没有 pin 逻辑）对新版 serve（强制 TLS）**：旧 client 用明文 `http.DefaultClient` 打 TLS-only 的 serve，握手必败。**对策就是第 1 步：把每台工作机的二进制先升上来**。所以顺序铁律是 load-bearing 的 —— 别先升 serve。
+
+### serve 证书密钥轮换 Runbook（私钥疑似泄露 / 迁移到新机）
+
+serve 自签证书长生（不靠过期驱动轮换），但若私钥疑似泄露或迁移到新机，需重签 + 全量重新交接指纹：
+
+1. 在 serve 机**同时删** cert + key + init-marker：
+   `rm "<VaultDir>/serve-cert.pem" "<VaultDir>/serve-key.pem" "<VaultDir>/.serve-cert-initialized"`
+   （⚠️ 必须三个一起删。只删 cert/key 而 marker 还在 → serve 拒启动，防误删静默重生。）
+2. 重启 serve → 生成全新 ed25519 key + 新自签证书 + 新 marker。
+3. `ssh-manager serve cert-info` → 拿**新** SPKI 指纹。
+4. **全量重新 enroll** 所有工作机：重新 `cache-tokens add` 发带新指纹的设备码，或更新各机 `SSHMGR_SERVE_PIN=<新指纹>`。旧 pin 全部失配（看起来像 MITM，属预期）。
+5. 各工作机下次 `cache pull` → 走新指纹成功。
+
+> 注：重签 = 所有客户端 pin 失效（硬失败，不是静默泄露）。这是指纹钉死的预期代价：信任根是公钥，换 key 必须重新交接。
 
 ---
 
