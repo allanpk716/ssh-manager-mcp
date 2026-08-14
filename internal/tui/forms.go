@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -76,6 +77,45 @@ func portField(p *int) *huh.Input {
 		}
 		*p = n
 		return nil
+	})
+}
+
+// newProfileForm: single-field add-profile form (name, non-empty).
+func newProfileForm(name *string) *huh.Form {
+	return huh.NewForm(huh.NewGroup(
+		huh.NewInput().Title("Profile 名称").Value(name).Validate(nonEmpty),
+	))
+}
+
+// grantOptions builds MultiSelect options for the grant form: label = server
+// name (display), value = server id (GrantServers wants ids; names are not
+// unique so they must not be used as values).
+func grantOptions(servers []*models.Server) []huh.Option[string] {
+	opts := make([]huh.Option[string], len(servers))
+	for i, s := range servers {
+		opts[i] = huh.NewOption(s.Name, s.ID)
+	}
+	return opts
+}
+
+// newGrantForm builds the grant multi-select; chosen receives the selected
+// server ids on submit. v1: selection starts EMPTY — grant is additive and
+// INSERT OR IGNORE makes re-grants harmless, so pre-selection adds no safety.
+func newGrantForm(servers []*models.Server, chosen *[]string) *huh.Form {
+	return huh.NewForm(huh.NewGroup(
+		huh.NewMultiSelect[string]().Title("授权服务器（空格勾选，回车提交）").
+			Options(grantOptions(servers)...).Value(chosen),
+	))
+}
+
+// submitGrant grants the chosen server ids to profileID.
+func submitGrant(st *store.Store, profileID, profileName string, ids []string) tea.Cmd {
+	return doAction(st, func() (string, error) {
+		if len(ids) == 0 {
+			return "未选择任何服务器", nil
+		}
+		desc := fmt.Sprintf("已授权 %d 台服务器到 %s", len(ids), profileName)
+		return desc, st.GrantServers(profileID, ids)
 	})
 }
 

@@ -145,6 +145,40 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return a, a.overlay.Init()
 				}
 			}
+		case k.Text == "a", k.Text == "g": // profiles page: create + grant
+			if a.mode == ModeBroker && a.page == pageProfiles {
+				pp, _ := a.pages[pageProfiles].(*profilesPage)
+				switch k.Text {
+				case "a":
+					name := ""
+					a.overlay = newFormOverlay("新增 Profile", newProfileForm(&name), func() tea.Cmd {
+						return doAction(a.st, func() (string, error) {
+							_, err := a.st.AddProfile(name)
+							return "已新增 Profile " + name, err
+						})
+					})
+				case "g": // grant servers to the current profile (multi-select by id)
+					if cur := pp.current(); cur != nil {
+						servers, err := a.st.ListServers()
+						if err != nil {
+							a.err = err
+							a.status = ""
+							return a, nil
+						}
+						if len(servers) == 0 {
+							a.status = "无服务器可授权"
+							return a, nil
+						}
+						chosen := []string{}
+						a.overlay = newFormOverlay("授权服务器 → "+cur.Name, newGrantForm(servers, &chosen), func() tea.Cmd {
+							return submitGrant(a.st, cur.ID, cur.Name, chosen)
+						})
+					}
+				}
+				if a.overlay != nil {
+					return a, a.overlay.Init()
+				}
+			}
 		}
 	case errMsg:
 		a.err = m.err
@@ -245,7 +279,18 @@ func (a App) footer() string {
 	if a.mode == ModeClient {
 		return "[s]同步 [c]编辑连接 [t]TTL  q 退出"
 	}
-	return "[a]新增 [e]编辑 [d]删除 [g]授权  Tab 切页  q 退出"
+	// Per-page key hints: keys that don't apply on a page aren't advertised.
+	keys := ""
+	switch a.page {
+	case pageServers:
+		keys = "[a]新增 [e]编辑 [d]删除"
+	case pageProfiles:
+		keys = "[a]新增 [g]授权"
+	}
+	if keys != "" {
+		return keys + "  Tab 切页  q 退出"
+	}
+	return "Tab 切页  q 退出"
 }
 
 // lipColumns renders two columns side by side (width-aware lipgloss join).
