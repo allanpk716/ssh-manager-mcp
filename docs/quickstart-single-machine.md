@@ -41,6 +41,8 @@ ssh-manager unlock
 
 ## Step 3 — 录入一台服务器
 
+> 💡 Step 3-4 也可在 TUI 主控台里点点点完成：`ssh-manager tui`（见 [README「TUI 主控台」](../README.md#tui-主控台ssh-manager-tui)）。
+
 ```bash
 ssh-manager servers add --name gpu \
     --host 192.0.2.10 --user deploy \
@@ -93,6 +95,8 @@ ssh-manager ssh gpu                    # 进交互（broker 提供 creds，用�
 ---
 
 ## 常用维护命令
+
+日常管理推荐直接开 TUI 主控台 `ssh-manager tui`（增删改查/授权/发码全键盘完成）；命令行 equivalents：
 
 ```bash
 ssh-manager servers edit gpu --hardware "8x A100"   # 改服务器信息（id/profile 绑定不变）

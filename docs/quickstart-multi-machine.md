@@ -63,7 +63,7 @@ ssh-manager serve --addr 0.0.0.0:7878
 
 ## Step 2 — 工作机：拉缓存 + 配 agent
 
-每台工作机装好 `ssh-manager` 后：
+每台工作机装好 `ssh-manager` 后（连接配置/手动同步也可开可视化面板 `ssh-manager tui --mode client`）：
 
 ```bash
 # 第一次拉缓存（之后 mcp --cache 会自动保鲜，见 Step 3）

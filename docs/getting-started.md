@@ -79,6 +79,8 @@ ssh-manager unlock
 
 ## Step 2：加第一台服务器
 
+> 💡 不想背命令行？**Step 2-4（加服务器/建 profile/发 token）都可以在 TUI 主控台里完成**：`ssh-manager tui`（全屏界面，凭据掩码录入、token 一次性展示——见 [README「TUI 主控台」](../README.md#tui-主控台ssh-manager-tui)）。
+
 ```bash
 ssh-manager servers add \
   --name gpu \
