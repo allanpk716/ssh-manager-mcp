@@ -102,9 +102,9 @@ type cacheStoreHolder struct {
 
 	mu       sync.Mutex // serializes rebuilds
 	cur      atomic.Pointer[store.Store]
-	lastSnap *store.Snapshot  // guarded by mu — last snapshot successfully hydrated
-	stores   []*store.Store // every hydrated store, closed once in cleanup
-	tmpPaths []string       // every temp db, removed once in cleanup
+	lastSnap *store.Snapshot // guarded by mu — last snapshot successfully hydrated
+	stores   []*store.Store  // every hydrated store, closed once in cleanup
+	tmpPaths []string        // every temp db, removed once in cleanup
 }
 
 // Current returns the store to serve THIS tool call from, rebuilding first if

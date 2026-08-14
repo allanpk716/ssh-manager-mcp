@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"charm.land/huh/v2"
 
 	"ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -161,6 +163,30 @@ func (m *clientModel) move(d int) {
 	m.cursor = c
 }
 
+// validServeURL gates the form's URL field: parseable and https-only, so a
+// plaintext http:// serve addr can never be persisted to cache.auth.json.
+func validServeURL(v string) error {
+	u, err := url.Parse(strings.TrimSpace(v))
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return errors.New("必须是 https:// 开头的合法地址")
+	}
+	return nil
+}
+
+// validPin gates the form's pin field with the same check clientops uses at
+// pull time (mcpserver.ParsePin), so a malformed fingerprint is rejected
+// BEFORE WriteCacheCred persists it — DoPull then never sees a bad pin.
+func validPin(v string) error {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return errors.New("pin 不能为空（本界面永不走明文拉取）")
+	}
+	if _, ok := mcpserver.ParsePin(v); !ok {
+		return errors.New("pin 须为 sha256:<64 位十六进制> 的 SPKI 指纹")
+	}
+	return nil
+}
+
 // connDraft backs the connection-edit form. Code (设备码) is the ONLY secret:
 // masked and NOT prefilled — empty keeps the existing token. Pin is a public
 // SPKI fingerprint, so it is shown plainly and prefilled.
@@ -172,9 +198,9 @@ func (m clientModel) editConnForm() overlay {
 	old := m.cred
 	d := &connDraft{URL: old.URL, Pin: old.Pin}
 	form := huh.NewForm(huh.NewGroup(
-		huh.NewInput().Title("serve 地址").Value(&d.URL).Validate(nonEmpty),
+		huh.NewInput().Title("serve 地址").Value(&d.URL).Validate(validServeURL),
 		huh.NewInput().Title("设备码（留空=保持不变）").Value(&d.Code).EchoMode(huh.EchoModePassword),
-		huh.NewInput().Title("pin（SPKI 指纹，公开信息）").Value(&d.Pin),
+		huh.NewInput().Title("pin（SPKI 指纹，公开信息）").Value(&d.Pin).Validate(validPin),
 	))
 	return newFormOverlay("编辑连接", form, func() tea.Cmd {
 		return func() tea.Msg {

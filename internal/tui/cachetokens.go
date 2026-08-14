@@ -55,8 +55,3 @@ func deviceCodeBody(serveURL, code, fingerprint string) string {
 	return fmt.Sprintf("设备码  %s\n\n指纹    %s\n\n在工作机上执行：\nssh-manager cache pull --url %s --token '%s:%s'",
 		code, fingerprint, serveURL, code, fingerprint)
 }
-
-// deviceCodeView wraps deviceCodeBody in the standard one-time secret view.
-func deviceCodeView(serveURL, code, fingerprint string) *secretView {
-	return &secretView{title: "设备码", body: deviceCodeBody(serveURL, code, fingerprint)}
-}

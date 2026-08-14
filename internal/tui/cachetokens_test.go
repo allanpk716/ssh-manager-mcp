@@ -16,10 +16,9 @@ func TestCacheTokenIssueFlow(t *testing.T) {
 	}
 }
 
-func TestDeviceCodeSecretView_Body(t *testing.T) {
+func TestDeviceCodeBody(t *testing.T) {
 	fp := "sha256:" + strings.Repeat("a", 64)
-	sv := deviceCodeView("https://192.0.2.5:7878", "CODE123", fp)
-	v := sv.View().Content // bubbletea v2: View() returns tea.View; content is .Content
+	v := deviceCodeBody("https://192.0.2.5:7878", "CODE123", fp)
 	for _, want := range []string{
 		"CODE123",
 		fp,

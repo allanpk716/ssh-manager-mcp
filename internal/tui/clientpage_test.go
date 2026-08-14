@@ -25,3 +25,22 @@ func TestClientServerList(t *testing.T) {
 		t.Fatalf("rows: %v", rows)
 	}
 }
+
+// TestSyncCmdRefusesEmptyPin pins the TUI's own no-plaintext invariant: with a
+// stored cred lacking a pin, sync must fail fast instead of ever attempting a
+// plaintext (AllowPlain=false would only fail later, after a network round
+// trip) pull.
+func TestSyncCmdRefusesEmptyPin(t *testing.T) {
+	cred := &clientops.CacheCred{URL: "https://x", Token: "t", Pin: ""}
+	msg := syncCmd(cred)()
+	done, ok := msg.(syncDoneMsg)
+	if !ok {
+		t.Fatalf("want syncDoneMsg, got %T", msg)
+	}
+	if done.err == nil {
+		t.Fatal("want non-nil err for empty pin")
+	}
+	if !strings.Contains(done.err.Error(), "明文") && !strings.Contains(done.err.Error(), "pin") {
+		t.Fatalf("err should mention pin/明文: %v", done.err)
+	}
+}
