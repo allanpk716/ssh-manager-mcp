@@ -99,13 +99,28 @@ func DetectMode(force string) (Mode, error) {
 	return DetectModeWith(force, vaultUnlocked, cachePresent)
 }
 
-// Run starts the console for mode (placeholder view until Task 3).
+// Run starts the console for mode. Broker opens the vault and runs the tabbed
+// app; client keeps a placeholder until Task 8.
 func Run(mode Mode) error {
 	if !isTTY() {
 		return errors.New("tui requires a terminal (in mintty run via `winpty ssh-manager tui`, or use Windows Terminal)")
 	}
-	p := tea.NewProgram(newApp(mode))
-	_, err := p.Run()
+	if mode == ModeClient {
+		p := tea.NewProgram(clientPlaceholder{})
+		_, err := p.Run()
+		return err
+	}
+	st, err := vault.OpenStore(store.FileKeyProvider{})
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	app, err := NewBrokerApp(st)
+	if err != nil {
+		return err
+	}
+	p := tea.NewProgram(app)
+	_, err = p.Run()
 	return err
 }
 
