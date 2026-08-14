@@ -49,7 +49,7 @@
 **Files:** 无(纯文件操作)
 **目标:** 在动任何东西前,先全量备份 `~/.ssh/` 到 SynologyDrive。
 
-- [ ] **0.1 创建备份目录**
+- [x] **0.1 创建备份目录**
 
 ```bash
 mkdir -p "/c/Users/allan716/SynologyDrive/ServerKey/ssh-dot-ssh-backup-2026-08-14"
@@ -57,14 +57,14 @@ ls -d "/c/Users/allan716/SynologyDrive/ServerKey/ssh-dot-ssh-backup-2026-08-14"
 ```
 Expected: 目录路径回显,无报错。
 
-- [ ] **0.2 镜像 ~/.ssh 全部内容到备份目录**
+- [x] **0.2 镜像 ~/.ssh 全部内容到备份目录**
 
 ```bash
 cp -av ~/.ssh/. "/c/Users/allan716/SynologyDrive/ServerKey/ssh-dot-ssh-backup-2026-08-14/"
 ```
 Expected: 列出复制的文件(config、config.bak、id_*(含.pub)、known_hosts、known_hosts.old),无报错。
 
-- [ ] **0.3 验证备份完整且可读**
+- [x] **0.3 验证备份完整且可读**
 
 ```bash
 echo "===源===" && ls ~/.ssh/ | wc -l
@@ -73,7 +73,7 @@ echo "===抽检一个私钥能读===" && head -1 "/c/Users/allan716/SynologyDriv
 ```
 Expected: 源/备份文件数一致(约 21);私钥首行是 `-----BEGIN OPENSSH PRIVATE KEY-----`。
 
-- [ ] **0.4 确认未触碰 ServerKey 现有文件**
+- [x] **0.4 确认未触碰 ServerKey 现有文件**
 
 ```bash
 ls "/c/Users/allan716/SynologyDrive/ServerKey/" | head -20
@@ -91,7 +91,7 @@ Expected: 只有新增的 `ssh-dot-ssh-backup-2026-08-14/` 子目录,github/gitl
 **Interfaces:** 产出入 vault 的 server 名(ml_hub/ai_runner),阶段 2/5 依赖。
 **⚠️ 私钥跨机传输(spec §5.2)**:NUC10 还是 v0.3.1 明文 serve,禁止 HTTP 远程 add。优先路径 a(RDP 上 NUC10 手粘)。
 
-- [ ] **1.1 先做实地核对(spec §5.1/5.3,执行前查清,不能凭空)**
+- [x] **1.1 先做实地核对(spec §5.1/5.3,执行前查清,不能凭空)**
 
 在笔记本上查(只读,不删):
 ```bash
@@ -106,13 +106,13 @@ echo "===vault 现有 DocuFiller-UpdateHub vs config update-hub(坐实同一性)
 需核对:`id_ed25519`(默认键)归属——grep ~/.ssh/config 无指向则疑废弃;`id_4090x2.deprecated` 已标废弃。
 **输出一张核对表给用户**,用户确认后再 1.2。
 
-- [ ] **1.2 私钥跨机传输路径(用户拍板:路径 a — RDP 手粘)**
+- [x] **1.2 私钥跨机传输路径(用户拍板:路径 a — RDP 手粘)**
 
 ✅ **已定路径 a**:用户 RDP 上 NUC10,在 NUC10 上跑 `ssh-manager servers add` 交互,**手动粘贴**私钥内容(私钥不落 NUC10 临时文件,最安全)。
 > 192.18.8.121(spec §2.1)用户定**删除不入 vault**,本阶段跳过它。
 > `id_ed25519`(阶段1.1 核对 = NUC10 账号默认 fallback key,vault 已有专用 id_nuc10)——**用户拍板:定删,不入 vault**。
 
-- [ ] **1.3 在 NUC10 上 add ml_hub / ai_runner(路径 a)**
+- [x] **1.3 在 NUC10 上 add ml_hub / ai_runner(路径 a)**
 
 RDP 上 NUC10。先看现有 7 台 + 核对 add 的 flag:
 ```
@@ -126,7 +126,7 @@ ssh-manager servers add --name ai_runner --host 192.168.100.201 --user urit_ai -
 ```
 > 私钥内容从笔记本 `~/.ssh/id_ml_hub` / `~/.ssh/id_ai_runner_201` 取(已备份)。粘贴完整含 BEGIN/END 行。**不落 NUC10 临时文件。**
 
-- [ ] **1.4 grant 到现有 e2e-profile**
+- [x] **1.4 grant 到现有 e2e-profile**
 
 ```
 ssh-manager profiles grant e2e-profile ml_hub
@@ -135,7 +135,7 @@ ssh-manager servers ls
 ```
 Expected: `servers ls` 列出 9 台(原 7 + ml_hub + ai_runner);顺带核对 172.18.200.47 两台 hostname 是否同机。
 
-- [ ] **1.5 验证 ml_hub / ai_runner 可连(via MCP)**
+- [x] **1.5 验证 ml_hub / ai_runner 可连(via MCP)**
 
 用现有 project token 跑在线 MCP(NUC10 v0.3.1 明文,本机直连):
 ```
@@ -154,12 +154,12 @@ Expected: 两台都返回真实 hostname,exit 0。
 **目标:** 删本地私钥前,确认 vault 全量 9 台都能通过 MCP 连上(铁律:全过才继续)。
 **L5 特例(spec §5.3):** 3090x2 无本地私钥,验证失败无 ~/.ssh 兜底,靠密码重试或备份还原。
 
-- [ ] **2.1 逐台 MCP exec_command 验证**
+- [x] **2.1 逐台 MCP exec_command 验证**
 
 对 vault 全量 9 台各跑一个无害命令(`hostname` 或 `whoami`):1660super01/02、3090x2、4090x2、DocuFiller-UpdateHub、NUC10、procurement-recog、ml_hub、ai_runner。
 Expected: 9/9 exit 0,返回真实 hostname/用户。
 
-- [ ] **2.2 记录验证结果矩阵**
+- [x] **2.2 记录验证结果矩阵**
 
 输出一张表(机器 | 命令 | 返回 | exit码),给用户看。
 Expected: 9 行全 ✅。**有任何一台 ✗,停在阶段 2,不进阶段 3。** 修复后重验。
@@ -173,26 +173,26 @@ Expected: 9 行全 ✅。**有任何一台 ✗,停在阶段 2,不进阶段 3。*
 **Files:** GitHub Release(tag 触发 GoReleaser,Plan 9 既定流程)
 **目标:** 把 master 上的 auto-TLS 发成可下载的 v0.4.0。
 
-- [ ] **3.1 确认 master HEAD 含完整 auto-TLS**
+- [x] **3.1 确认 master HEAD 含完整 auto-TLS**
 
 ```bash
 git log --oneline -1 && git log v0.3.1..master --oneline | wc -l
 ```
 Expected: HEAD `7de4fb1`;master 比 v0.3.1 多 ~25 个提交(含 auto-TLS)。
 
-- [ ] **3.2 打 tag 并推送(触发 release.yml)**
+- [x] **3.2 打 tag 并推送(触发 release.yml)**
 
 ```bash
 git tag v0.4.0 && git push origin v0.4.0
 ```
 Expected: tag 推送成功;GitHub Actions release.yml 开始跑(~2min)。
 
-- [ ] **3.3 等 Release 构建完成并下载 windows-amd64**
+- [x] **3.3 等 Release 构建完成并下载 windows-amd64**
 
 浏览器/gh 看 Release v0.4.0 构建绿,下载 `ssh-manager_0.4.0_windows_amd64.zip` 到笔记本,解压出 `ssh-manager.exe`。
 Expected: 拿到 v0.4.0 的 windows exe。
 
-- [ ] **3.4 Release notes 写破坏性变更**
+- [x] **3.4 Release notes 写破坏性变更**
 
 在 GitHub Release v0.4.0 描述里写明:无 pin 的 `cache pull` 现 hard-fail,需配 pin(`serve cert-info` 取指纹)或 `--allow-plaintext`。
 Expected: Release 描述含此警告。
@@ -205,7 +205,7 @@ Expected: Release 描述含此警告。
 
 ### 阶段 4a:先升笔记本二进制
 
-- [ ] **4a.1 备份笔记本旧 v0.3.1 exe(spec S5)**
+- [x] **4a.1 备份笔记本旧 v0.3.1 exe(spec S5)**
 
 ```bash
 cp -av ~/bin/ssh-manager.exe ~/bin/ssh-manager-v0.3.1-backup.exe
@@ -213,7 +213,7 @@ ls -la ~/bin/ssh-manager*.exe
 ```
 Expected: 两个 exe(v0.4.0 新下载的 + v0.3.1-backup)。
 
-- [ ] **4a.2 停旧 cache-refresh 定时任务(它跑无 pin 旧码,升级后 hard-fail)**
+- [x] **4a.2 停旧 cache-refresh 定时任务(它跑无 pin 旧码,升级后 hard-fail)**
 
 ```bash
 schtasks //Query //TN ssh-manager-cache-refresh 2>/dev/null || echo "(查任务名;可能需 PowerShell)"
@@ -221,7 +221,7 @@ schtasks //Query //TN ssh-manager-cache-refresh 2>/dev/null || echo "(查任务�
 用 PowerShell 禁用任务:`Disable-ScheduledTask -TaskName ssh-manager-cache-refresh`(确切的 task 名以 3.2 查到为准)。
 Expected: 任务已禁用。
 
-- [ ] **4a.3 替换笔记本 exe 为 v0.4.0**
+- [x] **4a.3 替换笔记本 exe 为 v0.4.0**
 
 ```bash
 cp ssh-manager.exe ~/bin/ssh-manager.exe   # v0.4.0 覆盖
@@ -233,14 +233,14 @@ Expected: 版本输出 v0.4.0。
 
 > ⚠️ **cert-info 排序铁律(spec §4.3/M1)**:NUC10 当前 v0.3.1 无 `cert-info` 子命令。把 v0.4.0 exe 放 staging 路径跑,运行中的 v0.3.1 serve 进程不受影响。
 
-- [ ] **4b.1 把 v0.4.0 exe 上传到 NUC10 staging 路径**
+- [x] **4b.1 把 v0.4.0 exe 上传到 NUC10 staging 路径**
 
 ```bash
 scp ssh-manager.exe allan716@192.168.100.235:"C:/ProgramData/ssh-manager/ssh-manager-v0.4.0.exe"
 ```
 (或 RDP 上去 copy。)Expected: 文件在 NUC10 staging 路径。
 
-- [ ] **4b.2 用 staging v0.4.0 跑 cert-info,生成证书 + 打印指纹**
+- [x] **4b.2 用 staging v0.4.0 跑 cert-info,生成证书 + 打印指纹**
 
 NUC10 上:
 ```powershell
@@ -249,7 +249,7 @@ NUC10 上:
 Expected: 打印 `fp=sha256:abcd1234...`(或 `Server fingerprint (serve cert SPKI): sha256:...`)。**记下这个指纹,4c/5 要用。**
 > 幂等:证书已存在只读不写;此刻明文 serve 仍在内存跑(旧 v0.3.1 进程不受影响)。
 
-- [ ] **4b.3 重发带指纹的设备码(spec §4.3[4] + S3 吊销旧码)**
+- [x] **4b.3 重发带指纹的设备码(spec §4.3[4] + S3 吊销旧码)**
 
 NUC10 上:
 ```
@@ -257,7 +257,7 @@ ssh-manager cache-tokens add --name laptop
 ```
 (用 staging v0.4.0 或旧 v0.3.1,cache-tokens add 在两者都可用。)
 Expected: 输出 `<设备码>:<指纹>`(形态 A)或 `<设备码>` + 单独指纹行。**记下新设备码+指纹组合。**
-然后吊销旧明文码(阶段1.1 核对:当前活跃旧码 = `REDACTED-REVOKED-cache-token`,嵌在 cache-pull.cmd 里):
+然后吊销旧明文码(阶段1.1 核对:当前活跃旧码 = `5vYN79Ly…`(完整值见笔记本 cache-pull.cmd,已脱敏),嵌在 cache-pull.cmd 里):
 ```
 ssh-manager cache-tokens revoke laptop
 ```
@@ -265,7 +265,7 @@ ssh-manager cache-tokens revoke laptop
 
 ### 阶段 4c:最后才重启 NUC10 serve 变 TLS
 
-- [ ] **4c.1 备份 NUC10 旧 v0.3.1 exe(spec S5)**
+- [x] **4c.1 备份 NUC10 旧 v0.3.1 exe(spec S5)**
 
 NUC10 上:
 ```powershell
@@ -273,7 +273,7 @@ Copy-Item C:\ProgramData\ssh-manager\ssh-manager.exe C:\ProgramData\ssh-manager\
 ```
 Expected: 旧 exe 已备份。
 
-- [ ] **4c.2 替换正式 exe + 重启 serve(强制 TLS)**
+- [x] **4c.2 替换正式 exe + 重启 serve(强制 TLS)**
 
 ```powershell
 Stop-Service ssh-manager-serve
@@ -283,7 +283,7 @@ Get-Service ssh-manager-serve
 ```
 Expected: 服务 Running;`serve cert-info` 仍是 4b.2 那个指纹。
 
-- [ ] **4c.3 验证 serve 强制 TLS(明文 http 现在应失败)**
+- [x] **4c.3 验证 serve 强制 TLS(明文 http 现在应失败)**
 
 笔记本:
 ```bash
@@ -300,7 +300,7 @@ Expected: https 返 401(鉴权层,说明 TLS 通);http 失败(serve 已 TLS-only
 
 **目标:** 笔记本用新设备码+pin 走 TLS 拉全量 cache;`.mcp.json` 切离线 `mcp --cache`。
 
-- [ ] **5.1 cache pull 走 TLS+pinning**
+- [x] **5.1 cache pull 走 TLS+pinning**
 
 ```bash
 ~/bin/ssh-manager.exe cache pull \
@@ -309,7 +309,7 @@ Expected: https 返 401(鉴权层,说明 TLS 通);http 失败(serve 已 TLS-only
 ```
 Expected: `pulled N servers / M credentials into cache.bin`(N=9)。验证 TLS+指纹钉死生效(无 pin 会 hard-fail,有错指纹会 mismatch 报错)。
 
-- [ ] **5.2 重发 cache-refresh 定时任务(wrapper 嵌新带 pin 设备码)**
+- [x] **5.2 重发 cache-refresh 定时任务(wrapper 嵌新带 pin 设备码)**
 
 阶段1.1 核对现状:`%LOCALAPPDATA%\ssh-manager\cache-pull.cmd`(419B)当前嵌旧明文码 `5vYN79Ly…`(无 pin)+ `http://`。本步改它:
 把 cache-pull.cmd 里 `SSHMGR_CACHE_URL` 改 `https://192.168.100.235:7878`,`SSHMGR_CACHE_TOKEN` 改成 `<4b.3 新设备码>:<4b.2 指纹>`(形态 A)。然后:
@@ -321,7 +321,7 @@ tail "%LOCALAPPDATA%\ssh-manager\cache-pull-task.log"
 ```
 Expected: 任务跑 exit=0;cache-pull.cmd 内嵌带 pin 码 + https URL。
 
-- [ ] **5.3 改 `~/.claude.json` 的 ssh MCP 条目为离线主路径(阶段1.1 核对修正:实际配置在 claude.json 非 .mcp.json)**
+- [x] **5.3 改 `~/.claude.json` 的 ssh MCP 条目为离线主路径(阶段1.1 核对修正:实际配置在 claude.json 非 .mcp.json)**
 
 ⚠️ 核对发现:笔记本的 ssh MCP 配置在 **`~/.claude.json`**(不是 `.mcp.json`),当前指向 `http://192.168.100.235:7878/`(明文 serve)。本步改它。
 
@@ -336,7 +336,7 @@ Expected: 任务跑 exit=0;cache-pull.cmd 内嵌带 pin 码 + https URL。
 Expected: `~/.claude.json` 的 ssh 条目是 stdio `mcp --cache`,非 http。
 > 重启 Claude Code 生效。command 用绝对路径避免 PATH 问题。
 
-- [ ] **5.4 cache status 验证全量**
+- [x] **5.4 cache status 验证全量**
 
 ```bash
 ~/bin/ssh-manager.exe cache status
@@ -351,7 +351,7 @@ Expected: 9 servers / 对应 credentials,`N/N`(spec L2:不再写 N/7)。
 
 **目标:** 删本地私钥前,确认离线只读缓存也能驱动 MCP 连全部目标机(iron rule:在线/离线 agent 表面一致)。
 
-- [ ] **6.1 离线 mcp --cache list_servers**
+- [x] **6.1 离线 mcp --cache list_servers**
 
 ```bash
 ~/bin/ssh-manager.exe mcp --cache --token <e2e-agent project token>
@@ -359,12 +359,12 @@ Expected: 9 servers / 对应 credentials,`N/N`(spec L2:不再写 N/7)。
 在 MCP 里 `list_servers`。
 Expected: 列出全量 9 台。
 
-- [ ] **6.2 离线 exec 逐台验证**
+- [x] **6.2 离线 exec 逐台验证**
 
 对 9 台各 `exec_command hostname`(走本地 cache.bin + 笔记本侧 SSH 直拨目标机)。
 Expected: 9/9 exit 0。
 
-- [ ] **6.3 重启 Claude Code 确认走离线 MCP**
+- [x] **6.3 重启 Claude Code 确认走离线 MCP**
 
 重启 Claude Code → agent 用 `~/.claude.json` 的 ssh(现在是 `mcp --cache`)。
 Expected: agent 能 list_servers + exec_command,不碰 NUC10 serve(离线)。
@@ -377,7 +377,7 @@ Expected: agent 能 list_servers + exec_command,不碰 NUC10 serve(离线)。
 
 **目标:** 删任何东西前,输出完整删除清单给用户确认。**用户未确认前,阶段 7-8 不得执行。**
 
-- [ ] **6.5.1 生成并输出完整删除清单**
+- [x] **6.5.1 生成并输出完整删除清单**
 
 输出一张表,每条:`路径 + 说明 + 为何删 + 是否已备份/入 vault`:
 
@@ -396,7 +396,7 @@ Expected: agent 能 list_servers + exec_command,不碰 NUC10 serve(离线)。
 | `~/.ssh/config.bak` | 旧 config | 含 SynologyDrive 私钥路径引用 | ✅ |
 | `~/.ssh/known_hosts` 的非 GitLab 行 | 目标机指纹 | broker 用自己 host_keys 表 | ✅(GitLab 两行保留) |
 
-- [ ] **6.5.2 等用户明确确认("可以删"等)**
+- [x] **6.5.2 等用户明确确认("可以删"等)**
 
 **用户未确认 → 停在这里,不进阶段 7。** 这是用户硬约束(spec §2.2)。
 
@@ -409,7 +409,7 @@ Expected: agent 能 list_servers + exec_command,不碰 NUC10 serve(离线)。
 **目标:** 用户确认后,删 10 个私钥(+.pub)。
 **前置:** 阶段 6.5 用户已确认。
 
-- [ ] **7.1 删 10 个私钥(+.pub)**
+- [x] **7.1 删 10 个私钥(+.pub)**
 
 ```bash
 cd ~/.ssh
@@ -426,14 +426,14 @@ rm -v id_1660super01_146 id_1660super01_146.pub \
 > `id_ed25519` 删不删取决于阶段 1.1 归属核对结论:若确认废弃则删;若归属某台且需留作他用,从清单移除。执行者据 6.5.1 清单实际勾选项删。
 Expected: rm -v 逐个回显已删;`ls id_*` 应为空(或只剩核对后保留的)。
 
-- [ ] **7.2 验证 ~/.ssh 私钥已清**
+- [x] **7.2 验证 ~/.ssh 私钥已清**
 
 ```bash
 ls ~/.ssh/id_* 2>/dev/null || echo "✅ 无 id_* 私钥"
 ```
 Expected: `✅ 无 id_* 私钥`(或只剩 6.5.1 明确保留的)。
 
-- [ ] **7.3 验证 vault 仍全量可连(删后回归)**
+- [x] **7.3 验证 vault 仍全量可连(删后回归)**
 
 笔记本 MCP(在线或离线)`list_servers` + 对 2 台抽 `exec_command`。
 Expected: 仍 9 台,可连。**确认删私钥没影响 MCP 路径。**
@@ -446,14 +446,14 @@ Expected: 仍 9 台,可连。**确认删私钥没影响 MCP 路径。**
 
 **目标:** 清 config 的 10 个服务器 Host 段 + 删 config.bak + known_hosts 留 GitLab 两行。
 
-- [ ] **8.1 备份 config 当前状态(再保一层)**
+- [x] **8.1 备份 config 当前状态(再保一层)**
 
 ```bash
 cp -av ~/.ssh/config ~/.ssh/config.pre-cleanup.bak
 ```
 Expected: 备份生成(此备份阶段 8.3 一并删,或留作短期回退)。
 
-- [ ] **8.2 删 config 的 10 个服务器 Host 段**
+- [x] **8.2 删 config 的 10 个服务器 Host 段**
 
 用编辑器或 sed 精确删除这 10 段:`1660super01`、`1660super02`、`3090x2`、`4090x2`、`nuc10`、`ml_hub`、`ai_runner`、`procurement-recog`、`update-hub`、`192.168.8.121`(含缩进那段)。
 保留:`github.com` + `192.168.200.46` 两段。
@@ -463,14 +463,14 @@ grep -iE "^\s*Host " ~/.ssh/config
 ```
 Expected: 只剩 `Host github.com` 和 `Host 192.168.200.46` 两行。
 
-- [ ] **8.3 删 config.bak / config.pre-cleanup.bak**
+- [x] **8.3 删 config.bak / config.pre-cleanup.bak**
 
 ```bash
 rm -v ~/.ssh/config.bak ~/.ssh/config.pre-cleanup.bak
 ```
 Expected: 两个 .bak 已删(含 SynologyDrive 私钥路径引用的泄露面清除)。
 
-- [ ] **8.4 known_hosts 处理(留 GitLab 两行,spec §3.1C/M5)**
+- [x] **8.4 known_hosts 处理(留 GitLab 两行,spec §3.1C/M5)**
 
 三选一(阶段 6.5.1 清单里定):
 - 方案①:删 known_hosts 除 `192.168.200.46` 外所有行:
@@ -491,7 +491,7 @@ Expected(方案①): `grep -c . ~/.ssh/known_hosts` = 2(只剩 GitLab 两行)。
 
 **目标:** 证明迁移达成——agent 直连 ssh 失败,MCP 可用,GitLab 仍可用。
 
-- [ ] **9.1 iron rule:agent 直连 ssh <server> 必须失败**
+- [x] **9.1 iron rule:agent 直连 ssh <server> 必须失败**
 
 ```bash
 ssh nuc10 hostname 2>&1 | head -3        # 应失败(无 config 别名 / 无私钥)
@@ -500,12 +500,12 @@ ssh -i ~/.ssh/id_nuc10 allan716@192.168.100.235 hostname 2>&1 | head -3  # 应�
 ```
 Expected: 都失败(如 `Could not resolve hostname` / `no such identity` / `Permission denied (publickey)`)。
 
-- [ ] **9.2 MCP 路径仍可用(对照)**
+- [x] **9.2 MCP 路径仍可用(对照)**
 
 笔记本 MCP(离线)`exec_command nuc10 hostname`。
 Expected: 返回真实 hostname(如 `DESKTOP-...`/NUC10 名),exit 0。**证明命令路径已强制走 MCP。**
 
-- [ ] **9.3 GitLab over ssh 仍可用(spec §6-7,真实 ca_things repo)**
+- [x] **9.3 GitLab over ssh 仍可用(spec §6-7,真实 ca_things repo)**
 
 ```bash
 cd /c/WorkSpace/ca_things/SW_System_BioChem_Develop
@@ -514,14 +514,14 @@ git fetch 2>&1 | head -5
 Expected: fetch 成功(GitLab 私钥保留 + known_hosts 有 GitLab 两行,无未知主机提示)。
 > 不再用不存在的 sw_dst(spec M2 修正)。
 
-- [ ] **9.4 github 仍可用**
+- [x] **9.4 github 仍可用**
 
 ```bash
 cd /c/WorkSpace/agent/ssh-manager-mcp && git fetch 2>&1 | head -3
 ```
 Expected: fetch 成功(走 https,不依赖 ssh)。
 
-- [ ] **9.5 全量目标机 MCP 可连(最终回归)**
+- [x] **9.5 全量目标机 MCP 可连(最终回归)**
 
 对 vault 全量 9 台各 `exec_command hostname`(在线或离线)。
 Expected: 9/9 exit 0。
@@ -532,7 +532,7 @@ Expected: 9/9 exit 0。
 
 ## 阶段 10:收尾
 
-- [ ] **10.1 更新项目 memory**
+- [x] **10.1 更新项目 memory**
 
 把本次迁移结果写进 `~/.claude/projects/.../memory/ssh-manager-mcp-project.md`:
 - 两端升级到 v0.4.0(auto-TLS 强制 TLS + pin)。
@@ -540,11 +540,11 @@ Expected: 9/9 exit 0。
 - GitLab 私钥保留例外(ca_things 20 repo 依赖)。
 - 旧明文设备码已吊销,新带 pin 设备码 `laptop` 在用。
 
-- [ ] **10.2 push secret scan(本次接触的活 secret)**
+- [x] **10.2 push secret scan(本次接触的活 secret)**
 
 按 [[ssh-manager-mcp-push-secret-scan]]:扫描本次会话接触的活 secret(新 v0.4.0 设备码、project token),确保零明文进 git。memory 里**不写活设备码明文**(只写"已发新码,旧码已吊销")。
 
-- [ ] **10.3 提交计划执行记录(可选)**
+- [x] **10.3 提交计划执行记录(可选)**
 
 把执行过程中发现的事实(如 172.18.200.47 同机结论、id_ed25519 归属)补进 spec 或 plan 的核对表。
 
@@ -566,3 +566,14 @@ Expected: 9/9 exit 0。
 - **spec 覆盖**:§1.3 散落地图→阶段0备份+阶段7-8清理;§2 边界→Global Constraints;§2.2 删除铁律→阶段6.5;§3 清理→阶段7-8;§4 升级→阶段3-4;§4.6 全局时序→10 阶段一一对应;§5 补机→阶段1;§6 验证→阶段9;§7 memory→阶段10.1;§8 回滚→回滚表。**全覆盖。**
 - **无占位符**:所有命令含实际路径/flag;设备码/指纹/project token 标 `<...>` 因它们是执行时才生成的活 secret(不能写死),执行时从 4b.2/4b.3 取。
 - **类型/命名一致**:`cache pull --token --pin`、`serve cert-info`、`cache-tokens add/revoke`、`servers add/grant/ls` 全部对照源码确认(serve.go:95/106, cache_tokens.go:22/80, cache.go:228-229)。
+
+---
+
+## 执行记录(2026-08-14,阶段 6.5 起)
+
+- **6.5 删除审批**:12 条清单已输出,用户确认「可以删」;known_hosts 选**方案①**(删到只剩 GitLab 2 行)。
+- **阶段 7**:13 个文件删除(9 私钥 + 4 .pub);`ls ~/.ssh/id_*` 为空;MCP 回归 NUC10=`Nuc10`、ml_hub=`mlhub` 均 exit 0。
+- **阶段 8**:config 重写只留 `github.com` + `192.168.200.46` 两段;config.bak / config.pre-cleanup.bak 已删;known_hosts 38→2 行(`[192.168.200.46]:53802` ×2),known_hosts.old 已删。
+- **阶段 9**:iron rule ✅(直连 `ssh nuc10` rc=255 Host key verification failed;`ssh 1660super01` 失败;`-i ~/.ssh/id_nuc10` 私钥不存在);MCP 9/9 全 exit 0(1660Super01=DESKTOP-UP1MHGT, 1660Super02=DESKTOP-ALS7070, 3090x2=3090-ubuntu, 4090x2=urit, DocuFiller-UpdateHub=WIN-C64OC0D3RJA, NUC10=Nuc10, procurement-recog=fpsb, ml_hub=mlhub, ai_runner=uritai3060);GitLab fetch 成功(拉到新分支,无 host key 提示);github fetch rc=0。**迁移完成。**
+- **阶段 10**:memory 已更新;secret scan 通过(本会话零活 secret 明文;plan 文档中旧设备码全文已脱敏——该码 4b.3 已 revoke,且历史提交中仍残留死码全文,因已失效判定可接受)。
+- 遗留事实:阶段 0 备份 `SynologyDrive\ServerKey\ssh-dot-ssh-backup-2026-08-14\`(18 文件)保留作回退点,未随清理删除。
