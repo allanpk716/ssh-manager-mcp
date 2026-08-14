@@ -8,6 +8,7 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
@@ -238,6 +239,44 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+			if a.mode == ModeBroker && a.page == pageTokens {
+				cp, _ := a.pages[pageTokens].(*cacheTokensPage)
+				switch k.Text {
+				case "a": // issue: form (name + serve addr hint) → tokenIssuedMsg
+					d := &deviceDraft{}
+					a.overlay = newFormOverlay("签发设备码", newCacheTokenForm(d), func() tea.Cmd {
+						// Mutation + fingerprint load run AFTER the form closes;
+						// the code rides tokenIssuedMsg straight into the
+						// secretView overlay — one msg, then only the overlay
+						// holds it. ServeURL is display-only and never stored.
+						return func() tea.Msg {
+							_, code, err := a.st.AddCacheToken(strings.TrimSpace(d.Name))
+							if err != nil {
+								return errMsg{err}
+							}
+							_, _, fp, err := mcpserver.LoadOrCreateServeCert()
+							if err != nil {
+								return errMsg{fmt.Errorf("load serve cert for fingerprint: %w (run `serve cert-info` to diagnose; 该码已签发但未显示，请吊销后重发)", err)}
+							}
+							return tokenIssuedMsg{title: "设备码 — " + d.Name, token: deviceCodeBody(d.ServeURL, code, fp)}
+						}
+					})
+				case "d": // revoke (Lazy): the device's next pull is rejected
+					if cur := cp.current(); cur != nil {
+						confirm := false
+						form := huh.NewForm(huh.NewGroup(huh.NewConfirm().
+							Title(fmt.Sprintf("吊销设备码 %q？（该设备下次拉取将被拒绝）", cur.Name)).Value(&confirm)))
+						a.overlay = newFormOverlay("吊销设备码", form, func() tea.Cmd {
+							if !confirm {
+								return nil
+							}
+							return doAction(a.st, func() (string, error) {
+								return "已吊销 " + cur.Name, a.st.RevokeCacheToken(cur.Name)
+							})
+						})
+					}
+				}
+			}
 			if a.overlay != nil {
 				return a, a.overlay.Init()
 			}
@@ -361,6 +400,8 @@ func (a App) footer() string {
 		keys = "[a]新增 [g]授权"
 	case pageProjects:
 		keys = "[a]新增 [e]轮换 [d]吊销"
+	case pageTokens:
+		keys = "[a]签发 [d]吊销"
 	}
 	if keys != "" {
 		return keys + "  Tab 切页  q 退出"

@@ -134,6 +134,24 @@ func newProjectForm(d *projectDraft, profiles []*models.Profile) *huh.Form {
 	))
 }
 
+// deviceDraft is the issue-device-code form state. Name is persisted as the
+// token's name; ServeURL is used ONLY to compose the usage hint in the
+// one-time view — the broker cannot learn its own reachable address from
+// cacheMeta/cred, so the operator supplies it. Never stored anywhere.
+type deviceDraft struct {
+	Name     string
+	ServeURL string
+}
+
+// newCacheTokenForm: device name + serve address (usage-hint-only field).
+func newCacheTokenForm(d *deviceDraft) *huh.Form {
+	return huh.NewForm(huh.NewGroup(
+		huh.NewInput().Title("设备名称（如 laptop，吊销后可重发）").Value(&d.Name).Validate(nonEmpty),
+		huh.NewInput().Title("serve 地址（仅用于生成使用提示，不保存）").
+			Placeholder("https://192.0.2.5:7878").Value(&d.ServeURL).Validate(nonEmpty),
+	))
+}
+
 // submitGrant grants the chosen server ids to profileID.
 func submitGrant(st *store.Store, profileID, profileName string, ids []string) tea.Cmd {
 	return doAction(st, func() (string, error) {

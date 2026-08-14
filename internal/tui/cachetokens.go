@@ -45,3 +45,18 @@ func (p *cacheTokensPage) current() *models.CacheToken {
 	}
 	return p.items[p.cursor]
 }
+
+// deviceCodeBody composes the one-time 设备码 view body: the code itself, the
+// serve cert's SPKI fingerprint, and the ready-to-paste cache pull invocation
+// with the pin embedded as "<code>:<fingerprint>" (spec §3.3 形态 A — the form
+// stripEmbeddedPin consumes). serveURL comes from the issue form's hint field;
+// it is display-only and never persisted.
+func deviceCodeBody(serveURL, code, fingerprint string) string {
+	return fmt.Sprintf("设备码  %s\n\n指纹    %s\n\n在工作机上执行：\nssh-manager cache pull --url %s --token '%s:%s'",
+		code, fingerprint, serveURL, code, fingerprint)
+}
+
+// deviceCodeView wraps deviceCodeBody in the standard one-time secret view.
+func deviceCodeView(serveURL, code, fingerprint string) *secretView {
+	return &secretView{title: "设备码", body: deviceCodeBody(serveURL, code, fingerprint)}
+}
