@@ -209,7 +209,7 @@ service 默认账户：
 ## 限制（如实，必读）
 
 1. **在线 only（serve 本身）**：serve 的远程 MCP 走在线——工作机连不上服务器（服务器挂了 / VLAN 断了 / 笔记本带出门）= 该机的 agent **走不了远程 MCP**。但本地若有缓存（见下条），agent 可以切到只读的 `mcp --cache` 兜底。
-2. **离线缓存：✅ 已实现（Plan 12）**：工作机本地持有一份**加密的只读** vault 快照，连不上服务器时 agent 照常 exec / download / upload / 转发（只读，不能改）。**见本篇[「离线只读缓存（Plan 12）」](#离线只读缓存plan-12)节**——它不是 serve 的"离线模式"，而是一份独立拉取、独立加密、自动刷新的本地缓存。在一台机器上**同时**配 serve（在线）+ cache（离线兜底）也行——两套互不冲突。
+2. **离线缓存：✅ 已实现（Plan 12）**：工作机本地持有一份**加密的只读** vault 快照，连不上服务器时 agent 照常 exec / download / upload / 转发（只读，不能改）。**见本篇[「离线只读缓存（Plan 12）」](#离线只读缓存plan-12)节**——它不是 serve 的"离线模式"，而是一份独立拉取、独立加密、自动保鲜（spawn 惰性拉取 + 会话内热加载）的本地缓存。在一台机器上**同时**配 serve（在线）+ cache（离线兜底）也行——两套互不冲突。
 3. **服务器是单点**：服务器挂了 = 所有人暂停，直到它恢复。**自动备份 / 灾难恢复已落地**——[Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)（NAS 定时明文备份）+ [export/import](./backup-restore.md)（Plan 11，便携加密备份）。恢复手段：从 NAS 拷最新快照或 export 文件，在新机 `ssh-manager import`（[见 backup-restore 的灾难恢复](./backup-restore.md#场景-③-灾难恢复)）。
 4. **单 owner 设计**：多个人共用同一个 vault、按人隔离访问——**不在范围**。本方案是"一个人、多台机"。多人场景需要 per-user ACL + 审计隔离，是另一个量级的功能。
 5. **bearer token = 钥匙**：谁拿到某项目的 token + 能连到服务器 = 拿到那个项目 profile 里的**所有服务器**。所以：serve 默认**自签 TLS + 指纹钉死**防嗅探/防 MITM；用 [`projects rotate`](./agent-access.md)（换发）/ [`revoke`](./agent-access.md)（吊销）管 token 生命周期；token 进密码管理器、别进 git。
@@ -223,7 +223,7 @@ serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问
 | 计划 | 解决什么 | 状态 |
 |---|---|---|
 | Plan 11 · export/import | 整个 vault 口令加密便携文件：备份 / 迁移 / 灾难恢复 | ✅ 已做（[backup-restore.md](./backup-restore.md)） |
-| Plan 12 · 离线只读缓存 | 工作机本地缓存加密 vault，断网时只读用、自动刷新 | ✅ 已做（本节[「离线只读缓存」](#离线只读缓存plan-12)） |
+| Plan 12 · 离线只读缓存 | 工作机本地缓存加密 vault，断网时只读用、自动保鲜（内置，无需 OS 调度器） | ✅ 已做（本节[「离线只读缓存」](#离线只读缓存plan-12)） |
 | Plan 13 · 群晖自动备份 | 服务器定时出明文快照到 NAS，灾难恢复 | ✅ 已做（[backup-restore.md Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)） |
 | Plan 14/15 · Windows 生产部署 | DPAPI master key + `serve install` Task Scheduler | ⚠️ 已 Superseded by Plan 16 |
 | Plan 16 · 固定路径 + FileKeyProvider | 三平台固定路径 + 裸文件 master key（L1+）+ kardianos 跨平台 `serve install` + `migrate-path` | ✅ 已做（本篇 + [threat-model.md](./threat-model.md) + [getting-started 第三方服务包](./getting-started.md#第三方服务包可选给不想用内置-install-的进阶用户)） |
@@ -257,9 +257,8 @@ serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带�
  │   ↓                                            cache.bin (0600)
  │   cache-dek.key 裸文件（固定路径）       ──────►  cache.meta.json
  │                                                (url + pulled_at)
- │  系统调度器（systemd timer / 任务计划 / launchd）
- │   ↓ 每 ~30 min                                 ③ 自动保鲜
- │   cache pull                                   （进程外，非常驻）
+ │  mcp --cache 进程内（spawn 惰性拉取 + 每 30min    ③ 自动保鲜
+ │   会话内拉取 + 热加载，无需 OS 调度器）          （进程内）
  │
  │  .mcp.json（离线时）→ mcp --cache --token <同一个 project token>
  │   ↓                                            ④ 断网兜底
@@ -306,7 +305,7 @@ ssh-manager cache-tokens add --name laptop
 在工作机装好 `ssh-manager` 后：
 
 ```bash
-# 第一次拉（设备码 + 指纹一起给；之后会被调度器自动重拉）
+# 第一次拉（设备码 + 指纹一起给；之后由 `mcp --cache` 自动保鲜）
 ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1234...'
 # → pulled N servers / M credentials into <UserConfigDir>/ssh-manager/cache.bin
 
@@ -360,9 +359,18 @@ ssh-manager cache status
 
 > 切两种模式只是改 `.mcp.json` + 重启 Claude Code——vault 内容、project token、profile scoping **完全一样**。在线走远程 MCP（可写），离线走本地缓存（只读）。
 
-#### Step 3（工作机）：设系统定时器自动保鲜
+#### Step 3（工作机）：缓存自动保鲜（内置，默认无需 OS 调度器）
 
-缓存不会自己刷新——**进程外的 OS 调度器**定时跑 `cache pull`。建议 **30 min**（按你 vault 的变动频率调）。环境变量走 unit 的 `Environment=` 或独立配置文件（**0600 权限**，里面有设备码）。
+缓存现在**自己保鲜**——`mcp --cache` **进程内置**了整套拉取逻辑，默认无需配任何系统定时器：
+
+- **spawn 惰性拉取**：Claude Code 启动 `mcp --cache` 时，若缓存超过 **30 分钟**（`--cache-max-age` 可调，`0` 关闭）且本机存过拉取凭据，会自动拉一次新缓存；失败静默用旧缓存。
+- **会话内定时拉取 + 热加载**：运行中的会话每 30 分钟也会自动拉新（失败自动退避重试），新快照落盘后**下一次工具调用即生效**（hash 变化即换，未变不动）——无需重启 Claude Code。
+- **凭据持久化**：首次 `cache pull` 成功后，拉取凭据（url + 设备码 + 归一后 pin）自动写入本机 `cache.auth.json`（0600，Windows 另加 ACL）；之后的自动拉取全靠它。
+- 首次 `cache pull` 仍需手动（在线）执行一次。
+
+##### 可选：系统定时器（给非 Claude 的消费方）
+
+若这台机上还有**别的程序直接读 `cache.bin`**（不经 `mcp --cache`，比如脚本自己解快照），它们享受不到上述进程内自动保鲜——可照旧配 OS 定时器跑 `cache pull`。建议 **30 min**（按你 vault 的变动频率调）。环境变量走 unit 的 `Environment=` 或独立配置文件（**0600 权限**，里面有设备码）。
 
 **Linux（systemd timer）**：
 
@@ -454,7 +462,7 @@ Register-ScheduledTask -TaskName "ssh-manager-cache-refresh" `
 launchctl load -w ~/Library/LaunchAgents/com.ssh-manager.cache-refresh.plist
 ```
 
-⚠️ **设备码 = 钥匙**：任何机器拿到 `<设备码>` + 能连 serve = 能拉整份 vault 快照。所以：serve 默认**自签 TLS + 指纹钉死**（指纹 = serve 证书公钥，`cache pull` 钉死它防 MITM）；设备码进 0600 配置文件 / 密码管理器，**别进 git**；机器失窃 → 立刻 `cache-tokens revoke`（见下）。
+⚠️ **设备码 = 钥匙**：任何机器拿到 `<设备码>` + 能连 serve = 能拉整份 vault 快照。所以：serve 默认**自签 TLS + 指纹钉死**（指纹 = serve 证书公钥，`cache pull` 钉死它防 MITM）；设备码进 0600 配置文件 / 密码管理器，**别进 git**；机器失窃 → 立刻 `cache-tokens revoke`（见下）。设备码持久化在 `cache.auth.json`（0600，Windows 另加 ACL）；证书轮换后手动带新 `--pin` 重拉一次即可覆盖。
 
 > **指纹失配 ≠ 设备码泄露**。指纹失配意味着你连到的服务器公钥变了（可能是 serve 重装重生证书 = 正常；也可能是中间人 = 异常）。serve 重生证书（如重装、迁移到新机）后，用 `ssh-manager serve cert-info` 拿新指纹，更新各客户端的 `SSHMGR_SERVE_PIN`。这是**指纹钉死**的预期代价：换 key 必须重新交接信任。
 
@@ -488,7 +496,7 @@ ssh-manager cache-tokens revoke laptop
 # → revoked cache token laptop (status=revoked)
 ```
 
-**Lazy 生效**：该码**下次 `cache pull`** 直接被拒（`status != active`），那台机再也拉不到新缓存。已经在跑的 `mcp --cache` 会继续到本次 spawn 结束（下次重启 Claude Code 拉新缓存失败 → 该机离线路径断了）。
+**Lazy 生效**：该码**下次 `cache pull`** 直接被拒（`status != active`），那台机再也拉不到新缓存。运行中的 `mcp --cache` 会**热加载**新缓存；若吊销使 token 在新快照中失效，运行中的会话保留旧快照到本次 spawn 结束（之后该机离线路径断了）。
 
 > ⚠️ **已拉下的 `cache.bin` 仍能被那台机的 DEK（`cache-dek.key`）解密**——吊销**只断"拉新"**，不擦"已拉"。这和失窃的 `store.db` 一样处置：**吊销 + 视敏感度轮换相关凭据**（`servers edit --password` / `--key` 换那台机接触过的服务器凭据，`projects rotate` 换 project token）。物理拿到机器的人 + 本机 `cache-dek.key` = 能离线爆破那份当时的 vault 快照——这等同于"物理拿到一台配了 stdio vault 的机器"，不在本方案的威胁模型内（host-compromise = out of scope，见 [threat-model.md](./threat-model.md)）。
 
@@ -501,7 +509,7 @@ ssh-manager cache-tokens revoke laptop
 | 目的 | 便携**口令加密**备份 / 迁移 / 灾难恢复 | 工作机**只读缓存**，断网兜底 |
 | 鉴权 | 你的**口令**（KeePass 式） | 设备授权码（owner 发、可吊销） |
 | 落地的 vault 可写吗 | ✅ import 进一个**可写** vault | ❌ 只读（`ErrReadOnly`） |
-| 怎么触发 | 手动 `export` / `import` | 设备码 + OS 调度器自动 `cache pull` |
+| 怎么触发 | 手动 `export` / `import` | 设备码 + `mcp --cache` 内置自动拉取（spawn + 每 TTL） |
 | 格式 | `SSHMGRV1` 信封（Argon2id + AES-GCM）封 `Snapshot` JSON | 原始 key AES-GCM 封**同一份** `Snapshot` JSON |
 
 两者**复用同一份 `store.Snapshot`**（Plan 11 打的地基）——序列化格式一致，加密信封不同（export 用口令派生 key，cache 用本机固定路径 `cache-dek.key` 裸文件的 DEK）。
@@ -509,10 +517,10 @@ ssh-manager cache-tokens revoke laptop
 ### 限制（如实）
 
 - **缓存只读**：离线能 exec / 传输 / 转发，但**任何写都被拒**（`ErrReadOnly`）。要加改删得连上 serve。
-- **自动刷新靠 OS 调度器**（systemd timer / 任务计划 / launchd），**不是**进程常驻的 daemon——`ssh-manager` 本身没有内置调度器。
-- **运行中的 `mcp --cache` 不会热加载新缓存**——下次 spawn（Claude Code 重启 MCP 子进程）才看到新快照。在线的 serve 是每请求实时鉴权，没有这个问题。
+- **自动保鲜是 `mcp --cache` 进程内置的**（spawn 惰性拉取 + 会话内定时拉取 + 热加载）——不是常驻 daemon，也无需 OS 调度器。
+- **运行中的 `mcp --cache` 会热加载新缓存**（hash 变化即换）——拉取成功后下一次工具调用即生效，无需重启 Claude Code。在线的 serve 是每请求实时鉴权，没有这个问题。
 - **离线审计分散在各机本地**：`cache-audit.log` 不回传、不合并——要集中视图得自己收。
-- **首次 `cache pull` 必须在线**——缓存还没拉下来之前，`mcp --cache` 跑不起来（会报 `cache DEK not found` / `no such file`）。
+- **首次 `cache pull` 必须在线**——缓存还没拉下来之前，`mcp --cache` 跑不起来（会报 `cache DEK not found` / `no such file`）（凭据文件 `cache.auth.json` 由首次成功 pull 自动写入）。
 - **物理失窃 ≠ 远程吊销能解决**：见上"吊销"——已拉下的缓存被本机 DEK 守着，吊销只断"拉新"。
 
 ### 自动 TLS 迁移 Runbook（从旧版明文 / 外部证书升级）
@@ -525,7 +533,7 @@ ssh-manager cache-tokens revoke laptop
    - 重新 `cache-tokens add`（默认把指纹打进设备码输出，形态 `<码>:<指纹>`）；或
    - 在调度器配置（systemd unit / 任务计划 / launchd plist）的 `Environment` / `EnvironmentVariables` 里加 `SSHMGR_SERVE_PIN=sha256:<指纹>`。
 4. **【最后】重启 serve** → 从此强制 TLS，启动日志打印 `client pin: <指纹>`。
-5. **下一次定时 `cache pull`** → 走 TLS + 指纹钉死成功，迁移完成。
+5. **下一次自动拉取（或手动 `cache pull` 带新 `--pin`，会同时更新 `cache.auth.json` 里的 pin）** → 走 TLS + 指纹钉死成功，迁移完成。
 
 > ⚠️ **新策略（默认安全）**：新 client **无 pin 默认 hard-fail**（拒连），不再静默明文回退。明文拉取需显式 `--allow-plaintext` opt-in（仅调试/连旧明文 serve 用）。所以迁移必须先把 pin 分发到所有工作机（第 3 步），不能依赖"自动回退"。
 
@@ -541,7 +549,7 @@ serve 自签证书长生（不靠过期驱动轮换），但若私钥疑似泄�
 2. 重启 serve → 生成全新 ed25519 key + 新自签证书 + 新 marker。
 3. `ssh-manager serve cert-info` → 拿**新** SPKI 指纹。
 4. **全量重新 enroll** 所有工作机：重新 `cache-tokens add` 发带新指纹的设备码，或更新各机 `SSHMGR_SERVE_PIN=<新指纹>`。旧 pin 全部失配（看起来像 MITM，属预期）。
-5. 各工作机下次 `cache pull` → 走新指纹成功。
+5. 各工作机手动 `cache pull` 带新 `--pin`（会同时更新 `cache.auth.json` 里的 pin）→ 走新指纹成功；之后的自动拉取恢复正常。
 
 > 注：重签 = 所有客户端 pin 失效（硬失败，不是静默泄露）。这是指纹钉死的预期代价：信任根是公钥，换 key 必须重新交接。
 

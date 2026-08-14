@@ -34,6 +34,7 @@
 - **指纹钉死（SPKI TOFU）**：客户端（`cache pull`）钉死 serve 证书公钥的 SPKI 指纹（`sha256:...`）——`InsecureSkipVerify: true` 跳过对自签证书不可能的 CA 链验证 + `VerifyConnection` 回调做**常量时间** SPKI 比对作为唯一信任锚（HPKP/Tailscale 模式）。**首次连接即校验，零 MITM 窗口**（指纹在 enroll 时随设备码交付，非首次盲连）。
 - **信任根**：信任来自"enroll 时人工/流程交接的指纹"，不来自任何 CA。serve 重生 key（重装/迁移）→ 用 `serve cert-info` 拿新指纹重新交接。
 - **⚠️ 前提：enroll 渠道本身必须可信**。"零 MITM 窗口"是对**首次连接之后的每次握手**而言——指纹一旦正确到达工作机，后续 MITM 都被挡。但指纹和设备码是 `cache-tokens add` **一起打印到 stdout** 的，所以两者同等依赖操作者把这条输出传到工作机的那条渠道（本地 console / 你信任的 SSH 会话 / 带外通道）。**若该渠道本身正被 MITM，指纹和设备码同时被换，pin 形同虚设**。这是任何"交付即信任"(TOFU-by-delivery) 方案的固有约束：首次 enroll 不要在被 MITM 的渠道上做。
+- **`cache.auth.json`（新增 artifact）**：工作机持久化的拉取凭据（url + 设备码 + 归一后 pin；0600，Windows 加 DACL）。设备码授予**拉取未来快照**的权力——比本机已有的 cache.bin（过去快照 + cache-dek.key）多出的正是这个增量。处置：机器失窃 → 立即 `cache-tokens revoke`（断"拉新"）；serve 证书轮换 → 手动带新 `--pin` 重拉一次覆盖旧 pin。自动路径永不 `--allow-plaintext`。
 
 详见 [multi-machine.md 的自动 TLS 迁移 Runbook](./multi-machine.md#自动-tls-迁移-runbook从旧版明文--外部证书升级) 与设计 spec `docs/superpowers/specs/2026-08-13-serve-auto-tls-fingerprint-design.md`。
 
