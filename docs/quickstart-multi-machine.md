@@ -66,7 +66,7 @@ ssh-manager serve --addr 0.0.0.0:7878
 每台工作机装好 `ssh-manager` 后：
 
 ```bash
-# 第一次拉缓存（设备码 + 指纹一起给；之后由系统定时器自动重拉）
+# 第一次拉缓存（之后 mcp --cache 会自动保鲜，见 Step 3）
 ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1234...'
 # → pulled N servers / M credentials into cache.bin
 
@@ -90,21 +90,15 @@ ssh-manager cache status                 # 看缓存状态
 
 ---
 
-## Step 3 — 设系统定时器自动刷新缓存（30 min）
+## Step 3 —（可选）缓存自动保鲜说明
 
-缓存不会自己刷新，要靠系统调度器定时跑 `cache pull`（**带指纹**，否则默认拒连）：
+缓存现在自己保鲜，**默认无需任何系统定时器**：
 
-```ini
-# Linux systemd user unit (~/.config/systemd/user/ssh-manager-cache.service)
-[Service]
-Type=oneshot
-Environment=SSHMGR_CACHE_URL=https://192.0.2.5:7878
-Environment=SSHMGR_CACHE_TOKEN=<设备码>
-Environment=SSHMGR_SERVE_PIN=sha256:abcd1234...
-ExecStart=/usr/local/bin/ssh-manager cache pull
-```
+- **spawn 自动拉**：Claude Code 启动 `mcp --cache` 时，若缓存超过 30 分钟（`--cache-max-age` 可调，`0` 关闭）且本机存过拉取凭据，会自动拉一次新缓存；失败静默用旧缓存。
+- **会话内自动拉 + 热加载**：运行中的会话每 30 分钟也会自动拉新，下一次工具调用即生效——无需重启 Claude Code。
+- 首次 `cache pull` 仍需手动（在线）执行一次；成功后凭据自动存入本机 `cache.auth.json`（0600），之后的自动拉取都靠它。
 
-配一个 `.timer`（`OnUnitActiveSec=30min`）enable 即可。Windows 任务计划 / macOS launchd 同理（模板见详尽版）。
+仍想配**可选的**系统定时器（比如给非 Claude 的消费方保鲜）？照旧跑 `cache pull`（**带指纹**，否则默认拒连）即可，模板见详尽版。
 
 ---
 
