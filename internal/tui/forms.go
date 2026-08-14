@@ -188,6 +188,10 @@ func submitServer(st *store.Store, cur *models.Server, d *serverDraft) tea.Cmd {
 			return "", err
 		}
 		if cur == nil {
+			// Add mode: require exactly one credential (CLI serversAddCmd parity)
+			if d.Password == "" && d.KeyPath == "" {
+				return "", errors.New("凭据必填：密码或私钥路径二选一（与 CLI servers add 一致）")
+			}
 			_, err := st.AddServer(srv)
 			return "已新增 " + srv.Name, err
 		}
@@ -198,6 +202,7 @@ func submitServer(st *store.Store, cur *models.Server, d *serverDraft) tea.Cmd {
 			srv.SudoCredentialID = cur.SudoCredentialID
 		}
 		srv.ID = cur.ID
+		srv.Tags = cur.Tags // the form has no tags field — keep existing (CLI serversEditCmd parity)
 		return "已更新 " + srv.Name, st.UpdateServer(srv)
 	})
 }

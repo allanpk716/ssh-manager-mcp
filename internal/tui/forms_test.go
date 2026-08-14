@@ -43,3 +43,29 @@ func TestDraftToServer_PasswordKeyMutex(t *testing.T) {
 		t.Fatal("password+key must be rejected (CLI parity)")
 	}
 }
+
+func TestSubmitServer_AddWithoutCredentialRejected(t *testing.T) {
+	st := newStore(t)
+	d := &serverDraft{Name: "x", Host: "h", User: "u", Port: 22} // no password, no key
+	cmd := submitServer(st, nil, d)
+	msg := cmd()
+	if e, ok := msg.(errMsg); !ok || e.err == nil {
+		t.Fatalf("add without credential must error, got %T %+v", msg, msg)
+	}
+}
+
+func TestSubmitServer_EditPreservesTags(t *testing.T) {
+	st := newStore(t)
+	cid, _ := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("p")})
+	_, _ = st.AddServer(&models.Server{Name: "t", Host: "h", User: "u", AuthMethod: models.AuthPassword, CredentialID: cid, Tags: []string{"gpu"}})
+	cur, _ := st.GetServerByName("t")
+	d := &serverDraft{Name: "t", Host: "h2", User: "u", Port: 22} // edit host, no secrets
+	cmd := submitServer(st, cur, d)
+	if _, ok := cmd().(actionDoneMsg); !ok {
+		t.Fatalf("edit must succeed")
+	}
+	got, _ := st.GetServerByName("t")
+	if len(got.Tags) != 1 || got.Tags[0] != "gpu" || got.Host != "h2" {
+		t.Fatalf("tags lost or host not updated: %+v", got)
+	}
+}
