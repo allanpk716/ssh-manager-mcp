@@ -575,5 +575,5 @@ Expected: 9/9 exit 0。
 - **阶段 7**:13 个文件删除(9 私钥 + 4 .pub);`ls ~/.ssh/id_*` 为空;MCP 回归 NUC10=`Nuc10`、ml_hub=`mlhub` 均 exit 0。
 - **阶段 8**:config 重写只留 `github.com` + `192.168.200.46` 两段;config.bak / config.pre-cleanup.bak 已删;known_hosts 38→2 行(`[192.168.200.46]:53802` ×2),known_hosts.old 已删。
 - **阶段 9**:iron rule ✅(直连 `ssh nuc10` rc=255 Host key verification failed;`ssh 1660super01` 失败;`-i ~/.ssh/id_nuc10` 私钥不存在);MCP 9/9 全 exit 0(1660Super01=DESKTOP-UP1MHGT, 1660Super02=DESKTOP-ALS7070, 3090x2=3090-ubuntu, 4090x2=urit, DocuFiller-UpdateHub=WIN-C64OC0D3RJA, NUC10=Nuc10, procurement-recog=fpsb, ml_hub=mlhub, ai_runner=uritai3060);GitLab fetch 成功(拉到新分支,无 host key 提示);github fetch rc=0。**迁移完成。**
-- **阶段 10**:memory 已更新;secret scan 通过(本会话零活 secret 明文;plan 文档中旧设备码全文已脱敏——该码 4b.3 已 revoke,且历史提交中仍残留死码全文,因已失效判定可接受)。
+- **阶段 10**:memory 已更新;secret scan 通过(本会话零活 secret 明文);旧明文设备码除脱敏外已**外科手术式历史抹除**(2026-08-14:仅重写含码的 2 个 commit `6c2f6c6`/`2f9e060` → `eac0f37`/`e0b8769`,祖先链含 GitHub 网页合并的 GPG 签名 commit 逐字节未动,v0.1.0–v0.3.1 tag SHA 不变;避开 filter-repo 全量改写会剥签名/级联 ~200 SHA 的副作用)。GitHub 侧 unreachable 旧对象待其 GC(死码,残余无害)。
 - 遗留事实:阶段 0 备份 `SynologyDrive\ServerKey\ssh-dot-ssh-backup-2026-08-14\`(18 文件)保留作回退点,未随清理删除。
