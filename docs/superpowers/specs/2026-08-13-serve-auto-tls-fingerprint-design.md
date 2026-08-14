@@ -102,7 +102,7 @@ serve 启动
 1. `SSHMGR_SERVE_PIN` env —— 运维在 unit/任务计划里统一注入,优先级最高。
 2. `--pin sha256:...` flag —— 显式覆盖。
 3. **token 内嵌**(`cache-tokens add` 默认输出 `<设备码>:<指纹>`,client 自动拆)—— 懒得分开传的默认路径。
-4. 都没有 → 明文回退(兼容,见 §4)。
+4. 都没有 → **默认 hard-fail**(拒连);明文需显式 `--allow-plaintext` opt-in(见 §4.2)。
 
 默认零新增步骤(本来就要抄设备码),但 `--pin`/env 留口子供手动核验/换证书。
 
@@ -183,8 +183,8 @@ serve:
 
 - 内存 serve + 自签证书 → client 正确指纹拉 `/snapshot` 成功。
 - 同 client 错误指纹 → 被拒(握手失败)。
-- 无 pin client → 明文回退 + 警告(兼容路径)。
-- **迁移回归**:旧明文 serve + 新 client、新 TLS serve + 无 pin client 两个过渡窗口,都不断。
+- 无 pin client → **默认 hard-fail**(需 `--allow-plaintext` opt-in 才明文回退 + 警告)。
+- **迁移回归**:新 TLS serve + 旧明文 client → 旧 client 握手失败(预期,需先升 client);新 TLS serve + 新无 pin client → hard-fail(需 opt-in)。
 
 ### 5.3 不在范围
 
