@@ -91,6 +91,69 @@ type cacheMeta struct {
 	PulledAt int64  `json:"pulled_at"` // unix seconds of the local pull
 }
 
+// cacheCred persists the pull credential (cache.auth.json) so `mcp --cache` can
+// lazy-pull without env/flags. Pin is the RESOLVED effective pin from the last
+// successful pull (env > flag > token-embedded) stored bare; the lazy path
+// prefers it over any pin still embedded in Token (cert rotation: a manual
+// --pin re-pull must override a stale embedded pin). The device code grants
+// FUTURE snapshot pulls — cache.bin alone only holds the past — so this file is
+// bearer-token-grade: 0600 + HardenACL on Windows, revoke on theft (threat-model §1.1).
+type cacheCred struct {
+	URL   string `json:"url"`
+	Token string `json:"token"`         // bare device code
+	Pin   string `json:"pin,omitempty"` // resolved effective pin at last successful pull
+}
+
+func cacheCredPath() (string, error) {
+	dir, _, _, _, err := cachePaths()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "cache.auth.json"), nil
+}
+
+// readCacheCred returns nil, nil when the file is absent (never enrolled / not
+// yet pulled). A present-but-corrupt file is an error: silently ignoring it
+// would disable auto-refresh invisibly.
+func readCacheCred() (*cacheCred, error) {
+	p, err := cacheCredPath()
+	if err != nil {
+		return nil, err
+	}
+	blob, err := os.ReadFile(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var c cacheCred
+	if err := json.Unmarshal(blob, &c); err != nil {
+		return nil, fmt.Errorf("cache.auth.json corrupt: %w", err)
+	}
+	if c.URL == "" || c.Token == "" {
+		return nil, fmt.Errorf("cache.auth.json incomplete (missing url/token)")
+	}
+	return &c, nil
+}
+
+// writeCacheCred persists the credential atomically (unique temp + rename) and
+// hardens the ACL on Windows (no-op on Unix where 0600 is the protection).
+func writeCacheCred(cred *cacheCred) error {
+	p, err := cacheCredPath()
+	if err != nil {
+		return err
+	}
+	blob, err := json.Marshal(cred)
+	if err != nil {
+		return err
+	}
+	if err := atomicWriteUnique(p, blob); err != nil {
+		return err
+	}
+	return store.HardenACL(p)
+}
+
 // loadOrCreateDEK returns the cache DEK from the keychain, generating + storing it on first pull.
 // On subsequent pulls the existing DEK is reused, so cache.bin stays decryptable across pulls.
 func loadOrCreateDEK() ([]byte, error) {
