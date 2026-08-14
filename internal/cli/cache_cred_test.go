@@ -19,54 +19,19 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
 )
 
-func TestCacheCred_RoundTripAndMissing(t *testing.T) {
-	cacheDir := t.TempDir()
-	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": cacheDir})
-
-	if cred, err := readCacheCred(); err != nil || cred != nil {
-		t.Fatalf("missing cred file: got (%v, %v), want (nil, nil)", cred, err)
-	}
-
-	in := &cacheCred{URL: "https://192.0.2.5:7878", Token: "devcode-abc", Pin: "sha256:" + strings.Repeat("a", 64)}
-	if err := writeCacheCred(in); err != nil {
-		t.Fatalf("writeCacheCred: %v", err)
-	}
-	got, err := readCacheCred()
-	if err != nil {
-		t.Fatalf("readCacheCred: %v", err)
-	}
-	if *got != *in {
-		t.Fatalf("round trip mismatch: %+v want %+v", *got, *in)
-	}
-}
-
-func TestCacheCred_CorruptFileErrors(t *testing.T) {
-	cacheDir := t.TempDir()
-	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": cacheDir})
-	if err := os.WriteFile(filepath.Join(cacheDir, "cache.auth.json"), []byte("{not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readCacheCred(); err == nil {
-		t.Fatal("corrupt cred must error")
-	}
-	// Empty fields must also error
-	if err := os.WriteFile(filepath.Join(cacheDir, "cache.auth.json"),
-		[]byte(`{"url":"","token":"","pin":""}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readCacheCred(); err == nil {
-		t.Fatal("cred missing url/token must error")
-	}
-}
+// TestCacheCred_RoundTripAndMissing and TestCacheCred_CorruptFileErrors moved
+// to internal/clientops/cache_cred_test.go with the credential implementation.
 
 type tlsSnapshotServer struct{ url, fp string }
 
 // newTLSSnapshotServer spins a TLS httptest server serving /snapshot (any bearer
-// accepted) and returns its URL + SPKI pin. Mirrors standUpServeTLS in
-// cache_test.go but also returns the fingerprint.
+// accepted) and returns its URL + SPKI pin. Mirrors standUpServeTLS below but
+// also returns the fingerprint. (clientops holds its own copy for the moved
+// lazy/reload tests.)
 func newTLSSnapshotServer(t *testing.T) *tlsSnapshotServer {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -124,7 +89,7 @@ func TestCachePull_PersistsCred_PinPathOnly(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("pinned pull: %v", err)
 	}
-	cred, err := readCacheCred()
+	cred, err := clientops.ReadCacheCred()
 	if err != nil || cred == nil {
 		t.Fatalf("cred not persisted after pinned pull: %v %v", cred, err)
 	}

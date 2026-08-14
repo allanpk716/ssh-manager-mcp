@@ -1,8 +1,8 @@
 //go:build !windows
 
-// Package cli: cache-DEK key provider seam (Unix).
+// Package clientops: cache-DEK key provider seam (Unix).
 //
-// dekProvider returns the KeyProvider holding the cache DEK (the symmetric key
+// DekProvider returns the KeyProvider holding the cache DEK (the symmetric key
 // guarding cache.bin, the offline read-only snapshot from Plan 12). On Unix
 // the cache DEK is a plaintext file at the program-fixed paths.CacheDekPath()
 // (<vaultDir>/cache-dek.key), spec §3.1 / §4.2 (xcheck consensus A).
@@ -17,26 +17,27 @@
 // root (the vault dir), and SSHMGR_KEYRING_SERVICE is no longer consulted.
 //
 // A package seam so tests inject a fake (MemKeyProvider) without touching the
-// real file. Tests swap this var directly (see cache_test.go withDEK).
+// real file. Tests swap this var directly (see withDEK in the clientops and
+// cli test suites).
 //
-// Windows builds see cache_dek_windows.go instead (same FileKeyProvider medium,
+// Windows builds see dek_windows.go instead (same FileKeyProvider medium,
 // build-tag split kept only so the seam stays a single var per build).
-package cli
+package clientops
 
 import (
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
 )
 
-// dekProvider returns the cache-DEK KeyProvider (Unix: FileKeyProvider at the
+// DekProvider returns the cache-DEK KeyProvider (Unix: FileKeyProvider at the
 // program-fixed cache-dek.key path). A package seam so tests inject a fake
 // (MemKeyProvider) instead of touching the real file. Tests swap this var
-// directly (see cache_test.go withDEK).
+// directly (see withDEK).
 //
 // cache-dek.key uses paths.CacheDekPath() directly — it does NOT consult
 // SSHMGR_FILEKEY_PATH (that env var redirects ONLY master.key). This keeps the
 // cache DEK pinned to the vault dir, decoupled from master-key test overrides.
-var dekProvider = func() store.KeyProvider {
+var DekProvider = func() store.KeyProvider {
 	pth, err := paths.CacheDekPath()
 	if err != nil || pth == "" {
 		return &store.FileKeyProvider{} // last-resort default (test env with no fixed path)

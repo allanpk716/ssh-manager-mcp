@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -53,14 +54,14 @@ func TestHydrateReadOnlyStore_TokenValidatesAndReadsWork(t *testing.T) {
 	// --- inject the DEK into the keychain seam so hydration finds it ---
 	mem := &store.MemKeyProvider{}
 	_ = mem.Set(dek)
-	prev := dekProvider
-	dekProvider = func() store.KeyProvider { return mem }
-	t.Cleanup(func() { dekProvider = prev })
+	prev := clientops.DekProvider
+	clientops.DekProvider = func() store.KeyProvider { return mem }
+	t.Cleanup(func() { clientops.DekProvider = prev })
 
 	// --- exercise the hydration path directly (the guts of RunStdioCache, without srv.Run) ---
-	loaded, err := loadCacheSnapshot()
+	loaded, err := clientops.LoadCacheSnapshot()
 	if err != nil {
-		t.Fatalf("loadCacheSnapshot: %v", err)
+		t.Fatalf("LoadCacheSnapshot: %v", err)
 	}
 	tmp, _ := os.CreateTemp("", "hyd-*.db")
 	tmpPath := tmp.Name()

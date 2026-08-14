@@ -1,113 +1,26 @@
 package cli
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"crypto/subtle"
-	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
-	"net/http"
-	neturl "net/url"
 	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
-	"ssh-manager-mcp/internal/store"
-	"ssh-manager-mcp/internal/vaultio"
 )
 
-// dekProvider returns the KeyProvider holding the cache DEK. It is a package
-// seam (defined in cache_dek_windows.go / cache_dek_unix.go, build-tag selected)
-// so tests inject MemKeyProvider instead of touching the real DEK file. Both
-// platforms bind a FileKeyProvider at paths.CacheDekPath() (Plan 16 T4; spec
-// §3.1 / §4.2). Was DpapiKeyProvider on Windows / KeyringKeyProvider on Unix
-// before Plan 16 — same plaintext-at-fixed-path trust model as master.key.
-
-// lazyPullTimeout bounds every automatic (lazy) pull: it runs on the spawn /
-// tool-call critical path, so an unreachable broker must degrade within seconds,
-// not hang MCP startup (xcheck pi#2/codex#3). Manual `cache pull` stays
-// unbounded — the interactive user can Ctrl-C.
-const lazyPullTimeout = 10 * time.Second
-
-// lazyPullBackoff rate-limits automatic pulls to at most one attempt per TTL
-// window (success or failure), so an offline machine doesn't retry — and block a
-// tool call for up to lazyPullTimeout — on every call. The cache.bin mtime only
-// advances on SUCCESS, so without this backoff a failed pull would re-fire per call.
-var lazyPullBackoff struct {
-	mu          sync.Mutex
-	lastAttempt time.Time
-}
-
-// maybeLazyPull runs ONE automatic pull when cache.bin is missing / older than
-// maxAge and a persisted cache.auth.json exists. maxAge<=0 disables entirely —
-// INCLUDING the missing-cache case (the first pull stays a deliberate manual
-// step). Errors are returned for the caller to log; never fatal.
-func maybeLazyPull(maxAge time.Duration) error {
-	if maxAge <= 0 {
-		return nil
-	}
-	cred, err := readCacheCred()
-	if err != nil {
-		return err
-	}
-	if cred == nil {
-		return nil
-	}
-	_, bin, _, _, err := cachePaths()
-	if err != nil {
-		return err
-	}
-	if info, statErr := os.Stat(bin); statErr == nil && time.Since(info.ModTime()) < maxAge {
-		return nil // fresh enough
-	}
-	lazyPullBackoff.mu.Lock()
-	if time.Since(lazyPullBackoff.lastAttempt) < maxAge {
-		lazyPullBackoff.mu.Unlock()
-		return nil
-	}
-	lazyPullBackoff.lastAttempt = time.Now()
-	lazyPullBackoff.mu.Unlock()
-
-	pin := cred.Pin // resolved pin wins over any embedded stale pin (cert rotation)
-	code := cred.Token
-	if pin == "" {
-		if c, p, ok := stripEmbeddedPin(cred.Token); ok {
-			code, pin = c, p
-		}
-	}
-	if pin == "" {
-		return fmt.Errorf("cache.auth.json has no pin; refusing plaintext auto-pull")
-	}
-	return doPull(cred.URL, code, pin, pullOpts{timeout: lazyPullTimeout, statusOut: os.Stderr})
-}
-
-// cachePaths resolves the cache directory (SSHMGR_CACHE_DIR override, else UserConfigDir/
-// ssh-manager) and the three files within it: the encrypted snapshot, the meta sidecar, and
-// the offline-audit sidecar (the audit sidecar is owned by T8; T7 only resolves the path).
-func cachePaths() (dir, bin, meta, audit string, err error) {
-	if dir = os.Getenv("SSHMGR_CACHE_DIR"); dir == "" {
-		base, derr := os.UserConfigDir()
-		if derr != nil {
-			return "", "", "", "", derr
-		}
-		dir = filepath.Join(base, "ssh-manager")
-	}
-	return dir, filepath.Join(dir, "cache.bin"), filepath.Join(dir, "cache.meta.json"), filepath.Join(dir, "cache-audit.log"), nil
-}
+// The pull/pin/cred/lazy/reload implementation moved to internal/clientops
+// (zero-behavior extraction, Stream B Task 1) so the upcoming TUI can reuse it
+// without importing internal/cli. This file keeps only the cobra wrappers.
 
 // cachePresent reports whether cache.bin currently exists (used by mcp --cache
 // spawn logging to say "serving stale cache" only when there IS a cache).
 func cachePresent() bool {
-	_, bin, _, _, err := cachePaths()
+	_, bin, _, _, err := clientops.CachePaths()
 	if err != nil {
 		return false
 	}
@@ -115,265 +28,23 @@ func cachePresent() bool {
 	return err == nil
 }
 
-// atomicWriteUnique atomically replaces path with blob via a UNIQUE temp file +
-// rename. Unlike a fixed ".tmp" name, concurrent writers (multiple `mcp --cache`
-// spawns lazy-pulling at once, or a lazy pull racing a manual one) never
-// interleave on the same temp file, so a torn blob can never be renamed into
-// place (xcheck 2026-08-14, three-reviewer consensus). os.CreateTemp creates the
-// temp 0600, which matches every current use (cache.bin/meta/auth are all 0600).
+// stripEmbeddedPin splits "<code>:<pin>" into (code, pin, ok). When the token
+// has no valid embedded pin, returns the token unchanged with ok=false so the
+// full token goes to the Authorization header as the device code. Uses the
+// FIRST colon for the split (the pin "sha256:<hex>" contains its own colon).
 //
-// On Windows, concurrent readers can hold the target file open, causing
-// os.Rename to fail with "Access is denied". We retry briefly to handle these
-// transient conflicts — the unique temp name ensures writers never conflict
-// with each other, only with concurrent readers (which is expected and safe).
-func atomicWriteUnique(path string, blob []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath) // no-op after a successful rename
-	if _, err := tmp.Write(blob); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	// Retry rename on Windows to handle ERROR_ACCESS_DENIED / fs.ErrPermission from concurrent readers
-	var lastErr error
-	for i := 0; i < 50; i++ {
-		err := os.Rename(tmpPath, path)
-		if err == nil {
-			return nil // success
+// Local twin of clientops' private stripEmbeddedPin: the pinning/DoPull side
+// lives in clientops (used internally by DoPull/MaybeLazyPull), while the CLI
+// needs the split once more to persist the bare device code in cache.auth.json.
+// Both copies are pinned end-to-end by TestCachePull_TokenEmbeddedPin_Succeeds
+// and TestCachePull_PersistsCred_PinPathOnly.
+func stripEmbeddedPin(token string) (code string, pin string, ok bool) {
+	if i := strings.Index(token, ":"); i >= 0 {
+		if v, parsed := mcpserver.ParsePin(token[i+1:]); parsed {
+			return token[:i], v, true
 		}
-		lastErr = err
-		// On Windows, ERROR_ACCESS_DENIED / fs.ErrPermission from concurrent readers is transient
-		// Other errors are not retryable
-		if !errors.Is(err, fs.ErrPermission) {
-			return err
-		}
-		time.Sleep(time.Duration(10+(i*2)) * time.Millisecond) // 10-110ms backoff
 	}
-	return lastErr
-}
-
-type cacheMeta struct {
-	URL      string `json:"url"`
-	PulledAt int64  `json:"pulled_at"` // unix seconds of the local pull
-}
-
-// cacheCred persists the pull credential (cache.auth.json) so `mcp --cache` can
-// lazy-pull without env/flags. Pin is the RESOLVED effective pin from the last
-// successful pull (env > flag > token-embedded) stored bare; the lazy path
-// prefers it over any pin still embedded in Token (cert rotation: a manual
-// --pin re-pull must override a stale embedded pin). The device code grants
-// FUTURE snapshot pulls — cache.bin alone only holds the past — so this file is
-// bearer-token-grade: 0600 + HardenACL on Windows, revoke on theft (threat-model §1.1).
-type cacheCred struct {
-	URL   string `json:"url"`
-	Token string `json:"token"`         // bare device code
-	Pin   string `json:"pin,omitempty"` // resolved effective pin at last successful pull
-}
-
-func cacheCredPath() (string, error) {
-	dir, _, _, _, err := cachePaths()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "cache.auth.json"), nil
-}
-
-// readCacheCred returns nil, nil when the file is absent (never enrolled / not
-// yet pulled). A present-but-corrupt file is an error: silently ignoring it
-// would disable auto-refresh invisibly.
-func readCacheCred() (*cacheCred, error) {
-	p, err := cacheCredPath()
-	if err != nil {
-		return nil, err
-	}
-	blob, err := os.ReadFile(p)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var c cacheCred
-	if err := json.Unmarshal(blob, &c); err != nil {
-		return nil, fmt.Errorf("cache.auth.json corrupt: %w", err)
-	}
-	if c.URL == "" || c.Token == "" {
-		return nil, fmt.Errorf("cache.auth.json incomplete (missing url/token)")
-	}
-	return &c, nil
-}
-
-// writeCacheCred persists the credential atomically (unique temp + rename) and
-// hardens the ACL on Windows (no-op on Unix where 0600 is the protection).
-func writeCacheCred(cred *cacheCred) error {
-	p, err := cacheCredPath()
-	if err != nil {
-		return err
-	}
-	blob, err := json.Marshal(cred)
-	if err != nil {
-		return err
-	}
-	if err := atomicWriteUnique(p, blob); err != nil {
-		return err
-	}
-	return store.HardenACL(p)
-}
-
-// loadOrCreateDEK returns the cache DEK from the keychain, generating + storing it on first pull.
-// On subsequent pulls the existing DEK is reused, so cache.bin stays decryptable across pulls.
-func loadOrCreateDEK() ([]byte, error) {
-	kp := dekProvider()
-	dek, err := kp.Get()
-	if err == nil {
-		return dek, nil
-	}
-	if !errors.Is(err, store.ErrNotFound) {
-		return nil, err
-	}
-	dek, err = store.GenerateMasterKey()
-	if err != nil {
-		return nil, err
-	}
-	if err := kp.Set(dek); err != nil {
-		return nil, err
-	}
-	return dek, nil
-}
-
-// loadDEK returns the cache DEK without creating it (status / mcp --cache). A missing DEK
-// surfaces as store.ErrNotFound — the caller reports "run cache pull first".
-func loadDEK() ([]byte, error) {
-	return dekProvider().Get()
-}
-
-// loadCacheSnapshot reads + DEK-decrypts + unmarshals the cache. Shared by `cache status` and
-// `mcp --cache`. Returns an error if the cache is absent / corrupt / the DEK is missing.
-func loadCacheSnapshot() (*store.Snapshot, error) {
-	_, bin, _, _, err := cachePaths()
-	if err != nil {
-		return nil, err
-	}
-	dek, err := loadDEK()
-	if err != nil {
-		return nil, fmt.Errorf("cache DEK not found in keychain (run `cache pull` first): %w", err)
-	}
-	blob, err := os.ReadFile(bin)
-	if err != nil {
-		return nil, err
-	}
-	plaintext, err := vaultio.DecryptWithKey(dek, blob)
-	if err != nil {
-		return nil, fmt.Errorf("cache decrypt failed (the DEK and cache.bin may be from different installs): %w", err)
-	}
-	var snap store.Snapshot
-	if err := json.Unmarshal(plaintext, &snap); err != nil {
-		return nil, err
-	}
-	return &snap, nil
-}
-
-// pullOpts tunes doPull for its caller.
-type pullOpts struct {
-	allowPlain bool          // plaintext opt-in — manual CLI only; the lazy path NEVER sets this
-	timeout    time.Duration // >0 → overall http.Client timeout (lazy: spawn/tool-call path must be bounded)
-	statusOut  io.Writer     // status/warning sink (nil → silent); CLI passes cmd.ErrOrStderr()
-}
-
-// doPull fetches /snapshot from url with the device code and atomically writes
-// cache.bin + cache.meta.json. pin=="" means no pin: allowPlain must be true or
-// the pull refuses (F4 hard-fail contract). pin!="" pins TLS to that SPKI
-// fingerprint and requires an https:// URL (F8). Extracted from cachePullCmd so
-// the spawn-lazy pull (mcp --cache) shares ONE implementation.
-func doPull(url, token, pin string, o pullOpts) error {
-	code := token
-	var client *http.Client
-	if pin == "" {
-		if !o.allowPlain {
-			return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
-				"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
-		}
-		if o.statusOut != nil {
-			fmt.Fprintf(o.statusOut, "WARNING: --allow-plaintext set: pulling over unverified HTTP (no TLS pin). /snapshot credentials travel in cleartext.\n")
-		}
-		client = &http.Client{}
-	} else {
-		// The device code goes to the Authorization header; the pin is for TLS only.
-		// If the token is "<code>:<pin>", strip so the header carries just the code.
-		if c, _, ok := stripEmbeddedPin(token); ok {
-			code = c
-		}
-		if u, err := neturl.Parse(url); err != nil || u.Scheme != "https" {
-			return fmt.Errorf("--url must be https:// when a server pin is set (got %q); "+
-				"to pull plaintext instead, clear the pin (--pin/SSHMGR_SERVE_PIN) and pass --allow-plaintext", url)
-		}
-		tr, err := pinningTransport(pin)
-		if err != nil {
-			return err
-		}
-		client = &http.Client{Transport: tr}
-	}
-	if o.timeout > 0 {
-		client.Timeout = o.timeout
-	}
-
-	dek, err := loadOrCreateDEK()
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest(http.MethodGet, url+"/snapshot", nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+code)
-	res, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("pull: %w", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		io.Copy(io.Discard, res.Body) // keep the keep-alive socket reusable
-		return fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
-	}
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return err
-	}
-	blob, err := vaultio.EncryptWithKey(dek, body)
-	if err != nil {
-		return err
-	}
-	_, bin, metaPath, _, err := cachePaths()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(bin), 0o700); err != nil {
-		return err
-	}
-	if err := atomicWriteUnique(bin, blob); err != nil {
-		return err
-	}
-	// meta via the same unique-temp atomic write (was a bare os.WriteFile — torn-meta
-	// risk under concurrent pulls, xcheck codex#1). A meta-write failure is a
-	// WARNING, not an error: cache.bin is already atomically replaced at this
-	// point, so the pull itself SUCCEEDED — returning an error would mislabel a
-	// good pull as failed (only the status line's source URL is lost).
-	mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: time.Now().Unix()})
-	if err := atomicWriteUnique(metaPath, mb); err != nil && o.statusOut != nil {
-		fmt.Fprintf(o.statusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): %v\n", err)
-	}
-	var snap store.Snapshot
-	_ = json.Unmarshal(body, &snap) // for the status line only
-	if o.statusOut != nil {
-		fmt.Fprintf(o.statusOut, "pulled %d servers / %d credentials into %s\n", len(snap.Servers), len(snap.Credentials), bin)
-	}
-	return nil
+	return token, "", false
 }
 
 func newCacheCmd() *cobra.Command {
@@ -414,19 +85,19 @@ func cachePullCmd() *cobra.Command {
 					return fmt.Errorf("--pin is not a valid sha256:<64hex> fingerprint: %q", raw)
 				}
 			}
-			fp, plain := resolvePin(os.Getenv("SSHMGR_SERVE_PIN"), pinFlag, token)
+			fp, plain := clientops.ResolvePin(os.Getenv("SSHMGR_SERVE_PIN"), pinFlag, token)
 			if plain {
 				allowPlain, _ := cmd.Flags().GetBool("allow-plaintext")
 				if !allowPlain {
 					return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
 						"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
 				}
-				if err := doPull(url, token, "", pullOpts{allowPlain: true, statusOut: cmd.ErrOrStderr()}); err != nil {
+				if err := clientops.DoPull(url, token, "", clientops.PullOpts{AllowPlain: true, StatusOut: cmd.ErrOrStderr()}); err != nil {
 					return err
 				}
 				return nil // plaintext pulls NEVER persist a credential (no auto-plaintext path)
 			}
-			if err := doPull(url, token, fp, pullOpts{statusOut: cmd.ErrOrStderr()}); err != nil {
+			if err := clientops.DoPull(url, token, fp, clientops.PullOpts{StatusOut: cmd.ErrOrStderr()}); err != nil {
 				return err
 			}
 			// Persist the credential for the lazy pull. Write failure is a WARNING,
@@ -436,7 +107,7 @@ func cachePullCmd() *cobra.Command {
 			if c, _, ok := stripEmbeddedPin(token); ok {
 				code = c
 			}
-			if err := writeCacheCred(&cacheCred{URL: url, Token: code, Pin: fp}); err != nil {
+			if err := clientops.WriteCacheCred(&clientops.CacheCred{URL: url, Token: code, Pin: fp}); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: could not persist cache.auth.json (automatic refresh disabled until a successful pull): %v\n", err)
 			}
 			return nil
@@ -454,11 +125,11 @@ func cacheStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show cache presence, freshness, and counts",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, bin, metaPath, _, err := cachePaths()
+			_, bin, metaPath, _, err := clientops.CachePaths()
 			if err != nil {
 				return err
 			}
-			snap, err := loadCacheSnapshot()
+			snap, err := clientops.LoadCacheSnapshot()
 			if err != nil {
 				return err
 			}
@@ -469,7 +140,10 @@ func cacheStatusCmd() *cobra.Command {
 			}
 			url := "(unknown)"
 			if mb, err := os.ReadFile(metaPath); err == nil {
-				var m cacheMeta
+				// anonymous twin of clientops' private cacheMeta: status only reads url
+				var m struct {
+					URL string `json:"url"`
+				}
 				if json.Unmarshal(mb, &m) == nil && m.URL != "" {
 					url = m.URL
 				}
@@ -479,153 +153,4 @@ func cacheStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
-}
-
-// resolvePin resolves the server SPKI fingerprint by priority:
-// env (SSHMGR_SERVE_PIN) > --pin flag > token-embedded "<code>:<pin>".
-// Returns plain=true when no pin is available anywhere. Per xcheck F4 the
-// caller now hard-fails on plain=true by default (no silent plaintext); the
-// caller gates the plaintext fallback behind --allow-plaintext. Malformed
-// env/flag pins are rejected earlier by cachePullCmd (F7), so by the time
-// resolvePin runs an env/flag value is either empty or well-formed. A
-// malformed token-embedded pin still falls through to plain here (fail-safe
-// against a hand-typed token), which then hits the --allow-plaintext gate.
-//
-// The embedded-pin split uses the FIRST colon, not the last: the pin itself is
-// "sha256:<hex>" and contains a colon, so LastIndex would split inside the pin
-// and yield a bare "<hex>" that ParsePin rejects. The device code is specified
-// to contain no colon, so first-colon split is unambiguous.
-func resolvePin(envVal, flagVal, token string) (fp string, plain bool) {
-	if v, ok := mcpserver.ParsePin(strings.TrimSpace(envVal)); ok {
-		return v, false
-	}
-	if v, ok := mcpserver.ParsePin(strings.TrimSpace(flagVal)); ok {
-		return v, false
-	}
-	// token-embedded: "<code>:sha256:..."
-	if i := strings.Index(token, ":"); i >= 0 {
-		if v, ok := mcpserver.ParsePin(token[i+1:]); ok {
-			return v, false
-		}
-	}
-	return "", true
-}
-
-// pinningTransport builds an http.Transport whose TLS handshake is pinned to fp:
-// the server leaf cert's SPKI fingerprint MUST equal fp or the handshake fails.
-//
-// Trust model: the serve cert is SELF-SIGNED (see generateServeCert) — there is
-// no external CA to chain to, and on Windows the system verifier additionally
-// chokes on ed25519 ("Invalid algorithm specified"). So we cannot rely on the
-// default certificate verification (it would always fail before our pin check
-// ran). Instead we set BOTH InsecureSkipVerify=true (skip CA/chain/name
-// verification — which is impossible for a self-signed cert anyway) AND
-// VerifyConnection (enforce the SPKI pin). Per Go's crypto/tls docs,
-// InsecureSkipVerify skips the default verifier but does NOT disable
-// VerifyConnection, which becomes the sole trust anchor. This is the standard
-// HPKP / Tailscale pinning pattern: trust comes from the pin, not from a CA.
-// The pin is compared in constant time to avoid an oracle.
-func pinningTransport(fp string) (*http.Transport, error) {
-	want, ok := mcpserver.ParsePin(fp)
-	if !ok {
-		return nil, fmt.Errorf("invalid server pin format %q (want sha256:<64hex>)", fp)
-	}
-	tlsCfg := &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: true, // skip CA verification (self-signed serve cert); pin below is the trust anchor
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return fmt.Errorf("server presented no certificate")
-			}
-			got := mcpserver.SPKIFingerprint(cs.PeerCertificates[0])
-			if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
-				return fmt.Errorf("server fingerprint mismatch (expected %s, got %s)", want, got)
-			}
-			return nil
-		},
-	}
-	return &http.Transport{TLSClientConfig: tlsCfg}, nil
-}
-
-// stripEmbeddedPin splits "<code>:<pin>" into (code, pin, ok). When the token
-// has no valid embedded pin, returns the token unchanged with ok=false so the
-// full token goes to the Authorization header as the device code. Uses the
-// FIRST colon for the split (the pin "sha256:<hex>" contains its own colon).
-func stripEmbeddedPin(token string) (code string, pin string, ok bool) {
-	if i := strings.Index(token, ":"); i >= 0 {
-		if v, parsed := mcpserver.ParsePin(token[i+1:]); parsed {
-			return token[:i], v, true
-		}
-	}
-	return token, "", false
-}
-
-// cacheReloader detects cache.bin changes for hot-reload and kicks in-session
-// lazy pulls. Change detection hashes the whole (encrypted) file — a vault
-// snapshot is KBs, so this is ~µs per tool call — and is immune to the
-// same-tick / same-size mtime blind spot (xcheck codex#4/kimi#4). The baseline
-// is captured at construction, which mcp.go does BEFORE the initial
-// loadCacheSnapshot: a baseline taken after the load could swallow an external
-// pull that landed mid-startup (the harmless residue — a pull racing the
-// baseline — costs one redundant rebuild, never a missed one).
-type cacheReloader struct {
-	bin    string
-	maxAge time.Duration
-	sum    []byte // SHA-256 of the served cache.bin (nil until first successful load)
-}
-
-func newCacheReloader(maxAge time.Duration) *cacheReloader {
-	_, bin, _, _, err := cachePaths()
-	if err != nil {
-		return &cacheReloader{maxAge: maxAge} // check() surfaces the error
-	}
-	return &cacheReloader{bin: bin, maxAge: maxAge, sum: fileSumOf(bin)}
-}
-
-func fileSumOf(path string) []byte {
-	blob, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	s := sha256.Sum256(blob)
-	return s[:]
-}
-
-// check implements the reload callback for mcpserver.RunStdioCache. The changed
-// path mints a FRESH *store.Snapshot each time (loadCacheSnapshot naturally
-// allocates one — never cache or reuse a pointer across calls; the holder
-// dedupes by pointer identity), and r.sum advances ONLY after this function's
-// own successful decrypt+unmarshal. If the holder then fails to hydrate the new
-// snapshot (e.g. the token was revoked in it), the change is intentionally
-// dropped — that is the spec's Lazy revocation semantics.
-//
-// Concurrency contract: check must be invoked SERIALIZED — mcpserver's
-// cacheStoreHolder calls it under its mutex. It is NOT safe for concurrent use:
-// r.sum carries no lock of its own, so racing calls could advance the baseline
-// out of order.
-func (r *cacheReloader) check() (*store.Snapshot, bool, error) {
-	if r.bin == "" {
-		return nil, false, fmt.Errorf("cache paths unavailable")
-	}
-	blob, err := os.ReadFile(r.bin)
-	if err != nil {
-		return nil, false, err // gone/unreadable → keep serving the current store
-	}
-	s := sha256.Sum256(blob)
-	if bytes.Equal(s[:], r.sum) {
-		// Unchanged. In-session freshness: maybeLazyPull no-ops while fresh and
-		// backs off on failure; a successful pull changes the file, so the NEXT
-		// call swaps the store in — this call deliberately finishes on the old
-		// one (never half-old half-new within a single tool call).
-		if err := maybeLazyPull(r.maxAge); err != nil {
-			fmt.Fprintf(os.Stderr, "ssh-manager: in-session cache refresh failed: %v\n", err)
-		}
-		return nil, false, nil
-	}
-	snap, err := loadCacheSnapshot()
-	if err != nil {
-		return nil, false, err // corrupt/undecryptable → keep the old store, baseline NOT advanced
-	}
-	r.sum = s[:] // advance only on a successful load
-	return snap, true, nil
 }

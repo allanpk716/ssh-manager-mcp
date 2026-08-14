@@ -124,6 +124,61 @@ ssh-manager projects ls [--all]           # status column; --all includes revoke
 
 ---
 
+## TUI 主控台（`ssh-manager tui`）
+
+一条命令的可视化管理台：在 **broker 机器**上管服务器 / profiles / projects / 设备码（替代手敲 CLI），在 **client 工作机**上可视化配置连接 + 手动同步缓存。同一个二进制，按本机状态自动选边。
+
+### 启动与模式判定
+
+```bash
+ssh-manager tui                # 自动判定
+ssh-manager tui --mode broker  # 强制 broker 主控台
+ssh-manager tui --mode client  # 强制 client 面板
+```
+
+自动判定规则：
+
+- 本机有**已解锁的 vault** → broker 主控台；
+- 本机有**缓存**（`cache.bin`）→ client 面板；
+- vault 存在但锁着 / 两者都没有 → **引导性报错**（告诉你该 `unlock` 还是 `--mode client`）——**绝不静默降级到 client**。
+
+### Broker 主控台（4 个页签）
+
+`Tab` / `Shift+Tab` 循环切换页签；`↑` / `↓` 或 `j` / `k` 移动光标；`q` / `Ctrl+C` 退出；表单内 `Esc` 取消。
+
+| 页签 | 键 | 动作 |
+|---|---|---|
+| 服务器 | `a` / `e` / `d` | 新增（必须给 password 或 key 之一）/ 编辑（tags 等既有字段保留）/ 删除 |
+| Profiles | `a` / `g` | 新增 profile / 授权（按服务器名多选；**增量**——不动已有授权） |
+| Projects | `a` / `e` / `d` | 新建（填 name + 选 profile）→ token **一次性全屏显示**；`e` 轮换 token（新 token 一次性显示）；`d` 吊销 |
+| 设备码 | `a` / `d` | 签发（填 serve 地址用于拼提示；设备码 + 证书指纹 + `cache pull` 示例命令一次性全屏显示）；`d` 吊销 |
+
+操作语义与 owner CLI 完全一致——TUI 只是同一套 vault 操作的另一个入口，做完的事在 `ls` / 审计里看到的一样。
+
+### Client 面板（工作机）
+
+页头常显 broker URL / pin 状态 / 缓存新鲜度；服务器列表**只读**。
+
+| 键 | 动作 |
+|---|---|
+| `s` | 立即同步（10 秒超时；失败显示错误并**保留旧缓存**） |
+| `c` | 编辑连接（url / pin 预填；设备码掩码、**不预填，留空 = 不变**） |
+| `t` | TTL 说明（`--cache-max-age` 配在 `.mcp.json` 的 mcp args 里，默认 30 分钟，`0` = 禁自动拉取） |
+
+**零远程写**：client 面板只做读缓存 + 拉快照，不会改服务器上的任何 vault 内容。
+
+### 终端要求（mintty 注意）
+
+Windows Terminal / cmd 原生可用。**mintty**（Git Bash 默认终端）不是 Windows 控制台，需 `winpty ssh-manager tui`；在非 TTY 下启动时程序会**直接报错提示**，不会挂死或乱码。
+
+### 安全面
+
+- **凭据永不回显**：密码 / key / sudo 密码的输入框全程掩码；已设凭据只显示「已设置」，输入新值即更换，不为确认而回显旧值。
+- **token / 设备码一次性展示**：全屏显示一次，关闭后不可再查（与 CLI 的 shown-once 语义一致）。
+- **client 零远程写**：client 模式的任何按键都不会写 broker。
+
+---
+
 ## Multi-machine: `serve` mode (remote agents on a VLAN)
 
 > **Quickstart:** [`docs/quickstart-multi-machine.md`](docs/quickstart-multi-machine.md) · **Full guide (中文):** [`docs/multi-machine.md`](docs/multi-machine.md)

@@ -1,4 +1,4 @@
-package cli
+package clientops
 
 import (
 	"encoding/json"
@@ -87,13 +87,13 @@ func TestCacheReloader_HashChangeDetection(t *testing.T) {
 	mem := withDEK(t)
 	cacheDir := t.TempDir()
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": cacheDir})
-	resetBackoff()
+	ResetLazyPullBackoffForTest()
 
 	writeCacheBin(t, mem, seedSnapCLI(t, 1))
-	rel := newCacheReloader(time.Hour)
+	rel := NewCacheReloader(time.Hour)
 
 	// unchanged → (nil, false, nil)
-	snap, changed, err := rel.check()
+	snap, changed, err := rel.Check()
 	if snap != nil || changed || err != nil {
 		t.Fatalf("unchanged: got (%v,%v,%v)", snap, changed, err)
 	}
@@ -102,7 +102,7 @@ func TestCacheReloader_HashChangeDetection(t *testing.T) {
 	future := time.Now().Add(2 * time.Hour)
 	bin := filepath.Join(cacheDir, "cache.bin")
 	os.Chtimes(bin, future, future)
-	snap, changed, err = rel.check()
+	snap, changed, err = rel.Check()
 	if snap != nil || changed || err != nil {
 		t.Fatalf("same-content rewrite must NOT trigger reload: got (%v,%v,%v)", snap, changed, err)
 	}
@@ -111,7 +111,7 @@ func TestCacheReloader_HashChangeDetection(t *testing.T) {
 	// → hash catches it even though size may match and mtime is identical.
 	writeCacheBin(t, mem, seedSnapCLI(t, 2))
 	os.Chtimes(bin, future, future)
-	snap, changed, err = rel.check()
+	snap, changed, err = rel.Check()
 	if err != nil || !changed || snap == nil {
 		t.Fatalf("changed content must reload: got (%v,%v,%v)", snap, changed, err)
 	}
@@ -120,7 +120,7 @@ func TestCacheReloader_HashChangeDetection(t *testing.T) {
 	}
 
 	// baseline advanced: immediate recheck → unchanged
-	snap, changed, err = rel.check()
+	snap, changed, err = rel.Check()
 	if snap != nil || changed || err != nil {
 		t.Fatalf("post-reload recheck: got (%v,%v,%v)", snap, changed, err)
 	}
@@ -131,19 +131,19 @@ func TestCacheReloader_CorruptFileKeepsOldBaseline(t *testing.T) {
 	cacheDir := t.TempDir()
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": cacheDir})
 	writeCacheBin(t, mem, seedSnapCLI(t, 1))
-	rel := newCacheReloader(time.Hour)
-	if _, changed, err := rel.check(); changed || err != nil {
+	rel := NewCacheReloader(time.Hour)
+	if _, changed, err := rel.Check(); changed || err != nil {
 		t.Fatalf("baseline check: (%v,%v)", changed, err)
 	}
 	// garbage bytes (a torn write that somehow landed)
 	os.WriteFile(filepath.Join(cacheDir, "cache.bin"), []byte("garbage-not-sshmgrv1"), 0o600)
-	snap, changed, err := rel.check()
+	snap, changed, err := rel.Check()
 	if snap != nil || changed || err == nil {
 		t.Fatalf("corrupt file must be (nil,false,err): got (%v,%v,%v)", snap, changed, err)
 	}
 	// baseline NOT advanced: a later good file still reloads
 	writeCacheBin(t, mem, seedSnapCLI(t, 2))
-	snap, changed, err = rel.check()
+	snap, changed, err = rel.Check()
 	if err != nil || !changed || snap == nil || len(snap.Servers) != 2 {
 		t.Fatalf("recovery after corrupt: got (%v,%v,%v) servers=%d", snap, changed, err, len(snap.Servers))
 	}
@@ -154,8 +154,8 @@ func TestCacheReloader_Unchanged_TriggersInSessionLazyPull(t *testing.T) {
 	mem := withDEK(t)
 	cacheDir := t.TempDir()
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": cacheDir})
-	resetBackoff()
-	if err := writeCacheCred(&cacheCred{URL: srv.url, Token: "code-123", Pin: srv.fp}); err != nil {
+	ResetLazyPullBackoffForTest()
+	if err := WriteCacheCred(&CacheCred{URL: srv.url, Token: "code-123", Pin: srv.fp}); err != nil {
 		t.Fatal(err)
 	}
 	writeCacheBin(t, mem, seedSnapCLI(t, 1))
@@ -163,8 +163,8 @@ func TestCacheReloader_Unchanged_TriggersInSessionLazyPull(t *testing.T) {
 	past := time.Now().Add(-2 * time.Hour)
 	os.Chtimes(filepath.Join(cacheDir, "cache.bin"), past, past)
 
-	rel := newCacheReloader(time.Hour)
-	_, changed, err := rel.check()
+	rel := NewCacheReloader(time.Hour)
+	_, changed, err := rel.Check()
 	if changed || err != nil {
 		t.Fatalf("first check should be unchanged: (%v,%v)", changed, err)
 	}
@@ -173,7 +173,7 @@ func TestCacheReloader_Unchanged_TriggersInSessionLazyPull(t *testing.T) {
 		t.Fatal(err)
 	}
 	// next check sees the NEW file → reload (servers now 0, from the TLS stub)
-	snap, changed, err := rel.check()
+	snap, changed, err := rel.Check()
 	if err != nil || !changed {
 		t.Fatalf("second check should reload after in-session pull: (%v,%v,%v)", snap, changed, err)
 	}
