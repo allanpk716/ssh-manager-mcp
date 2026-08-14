@@ -11,7 +11,10 @@ import (
 
 // vaultProbe and cacheProbe are injectable for tests (production: real paths).
 func TestDetectMode_ForceWins(t *testing.T) {
-	for _, c := range []struct{ force string; want Mode }{
+	for _, c := range []struct {
+		force string
+		want  Mode
+	}{
 		{"broker", ModeBroker}, {"client", ModeClient},
 	} {
 		got, err := DetectModeWith(c.force, func() bool { return false }, func() bool { return false })
