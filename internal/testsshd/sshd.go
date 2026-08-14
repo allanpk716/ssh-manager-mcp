@@ -3,9 +3,9 @@ package testsshd
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -226,7 +226,7 @@ func handleDirectTCP(newChan ssh.NewChannel) {
 	}
 	defer ch.Close()
 	go ssh.DiscardRequests(reqs)
-	dest := fmt.Sprintf("%s:%d", p.Addr, p.Port)
+	dest := net.JoinHostPort(p.Addr, strconv.Itoa(int(p.Port)))
 	remote, err := net.Dial("tcp", dest)
 	if err != nil {
 		return // reject-by-close: the channel Accept already succeeded; Close signals failure to the client

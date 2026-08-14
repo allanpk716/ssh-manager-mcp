@@ -93,7 +93,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
           cache: true
 
       # Build the ssh-manager binary the integration test will install as the
