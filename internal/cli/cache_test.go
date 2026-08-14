@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/paths"
@@ -33,7 +34,7 @@ import (
 // own fixed path (paths.CacheDekPath() does not consult that env var).
 func TestDefaultDekProvider_IsFileKeyAtFixedPath(t *testing.T) {
 	t.Setenv("SSHMGR_FILEKEY_PATH", "") // must not influence cache-dek
-	dp := dekProvider()
+	dp := clientops.DekProvider()
 	fp, ok := dp.(*store.FileKeyProvider)
 	if !ok {
 		t.Fatalf("default dek not *FileKeyProvider: %T", dp)
@@ -47,14 +48,14 @@ func TestDefaultDekProvider_IsFileKeyAtFixedPath(t *testing.T) {
 	}
 }
 
-// withDEK swaps the dekProvider seam to a fresh in-memory provider for the test, returning it
+// withDEK swaps the clientops.DekProvider seam to a fresh in-memory provider for the test, returning it
 // so the test can assert the DEK persisted there (not the real keychain).
 func withDEK(t *testing.T) *store.MemKeyProvider {
 	t.Helper()
 	mem := &store.MemKeyProvider{}
-	prev := dekProvider
-	dekProvider = func() store.KeyProvider { return mem }
-	t.Cleanup(func() { dekProvider = prev })
+	prev := clientops.DekProvider
+	clientops.DekProvider = func() store.KeyProvider { return mem }
+	t.Cleanup(func() { clientops.DekProvider = prev })
 	return mem
 }
 
@@ -169,57 +170,9 @@ func TestCacheStatus_ReportsSnapshot(t *testing.T) {
 	}
 }
 
-func TestResolvePin(t *testing.T) {
-	goodPin := "sha256:" + strings.Repeat("a", 64)
-	token := "devcode-xyz" // no ':' → no embedded pin
-	tokenEmbedded := "devcode-xyz:" + goodPin
-
-	cases := []struct {
-		name            string
-		envVal, flagVal string
-		token           string
-		wantFP          string
-		wantPlain       bool
-	}{
-		{"none → plain", "", "", token, "", true},
-		{"env wins", "sha256:" + strings.Repeat("b", 64), goodPin, token, "sha256:" + strings.Repeat("b", 64), false},
-		{"flag over token-embedded", "", goodPin, tokenEmbedded, goodPin, false},
-		{"env over flag", "sha256:" + strings.Repeat("c", 64), goodPin, token, "sha256:" + strings.Repeat("c", 64), false},
-		{"token-embedded when no env/flag", "", "", tokenEmbedded, goodPin, false},
-		{"token without : is plain", "", "", token, "", true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Setenv("SSHMGR_SERVE_PIN", c.envVal)
-			gotFP, plain := resolvePin(c.envVal, c.flagVal, c.token)
-			if plain != c.wantPlain {
-				t.Fatalf("plain=%v want %v", plain, c.wantPlain)
-			}
-			if !plain && gotFP != c.wantFP {
-				t.Fatalf("fp=%q want %q", gotFP, c.wantFP)
-			}
-		})
-	}
-}
-
-func TestPinningTransport_BadPinErrors(t *testing.T) {
-	// resolvePin returns a parsed fp; constructing the transport from a
-	// well-formed fp must succeed.
-	fp := "sha256:" + strings.Repeat("a", 64)
-	tr, err := pinningTransport(fp)
-	if err != nil {
-		t.Fatalf("pinningTransport: %v", err)
-	}
-	if tr.TLSClientConfig == nil {
-		t.Fatal("TLSClientConfig nil")
-	}
-	if tr.TLSClientConfig.MinVersion != tls.VersionTLS13 {
-		t.Fatalf("MinVersion not TLS1.3: %v", tr.TLSClientConfig.MinVersion)
-	}
-	if tr.TLSClientConfig.VerifyConnection == nil {
-		t.Fatal("VerifyConnection callback not set")
-	}
-}
+// TestResolvePin, TestPinningTransport_BadPinErrors, and
+// TestPinningTransport_NoPeerCert_HardFails moved to
+// internal/clientops/pin_test.go with the pinning implementation.
 
 // TestCachePull_PinnedTLS_Succeeds is the end-to-end exercise of the pinning
 // transport at runtime: it spins up an httptest TLS server with a freshly
@@ -553,31 +506,6 @@ func TestCachePull_PinMismatch_Fails(t *testing.T) {
 	// assertion is what proves the callback actually ran at runtime.
 	if !strings.Contains(err.Error(), "mismatch") && !strings.Contains(errBuf.String(), "mismatch") {
 		t.Fatalf("pull error did not come from the pin check (no 'mismatch' in %q / %q)", err.Error(), errBuf.String())
-	}
-}
-
-// TestPinningTransport_NoPeerCert_HardFails verifies the F12 branch: when
-// the server presents no peer certificates (anonymous TLS or no-cert
-// handshake), the VerifyConnection callback must hard-fail with a
-// "no certificate" error. This is a unit test that directly invokes
-// the callback with an empty ConnectionState.
-func TestPinningTransport_NoPeerCert_HardFails(t *testing.T) {
-	fp := "sha256:" + strings.Repeat("a", 64)
-	tr, err := pinningTransport(fp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cb := tr.TLSClientConfig.VerifyConnection
-	if cb == nil {
-		t.Fatal("no VerifyConnection callback")
-	}
-	// Empty peer certs (anonymous / no-cert server).
-	err = cb(tls.ConnectionState{PeerCertificates: nil})
-	if err == nil {
-		t.Fatal("expected error when server presents no certificate")
-	}
-	if !strings.Contains(err.Error(), "no certificate") {
-		t.Fatalf("error should mention no certificate, got: %v", err)
 	}
 }
 

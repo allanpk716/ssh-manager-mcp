@@ -1,4 +1,4 @@
-package cli
+package clientops
 
 import (
 	"bytes"

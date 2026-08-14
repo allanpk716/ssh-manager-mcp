@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -25,9 +26,9 @@ func newMCPCmd() *cobra.Command {
 			}
 			if useCache {
 				// ① spawn-time freshness (failure degrades to the existing cache)
-				if err := maybeLazyPull(cacheMaxAge); err != nil {
+				if err := clientops.MaybeLazyPull(cacheMaxAge); err != nil {
 					// "serving stale cache" is only true when a cache EXISTS — with no
-					// cache.bin the upcoming loadCacheSnapshot hard-fails instead, so
+					// cache.bin the upcoming LoadCacheSnapshot hard-fails instead, so
 					// don't promise a degradation that isn't happening.
 					if cachePresent() {
 						fmt.Fprintf(os.Stderr, "lazy cache pull failed (serving stale cache): %v\n", err)
@@ -35,17 +36,17 @@ func newMCPCmd() *cobra.Command {
 						fmt.Fprintf(os.Stderr, "lazy cache pull failed: %v\n", err)
 					}
 				}
-				// ② hot-reload baseline BEFORE the initial load (see cacheReloader)
-				rel := newCacheReloader(cacheMaxAge)
-				snap, err := loadCacheSnapshot()
+				// ② hot-reload baseline BEFORE the initial load (see clientops.CacheReloader)
+				rel := clientops.NewCacheReloader(cacheMaxAge)
+				snap, err := clientops.LoadCacheSnapshot()
 				if err != nil {
 					return err
 				}
-				_, _, _, auditPath, err := cachePaths()
+				_, _, _, auditPath, err := clientops.CachePaths()
 				if err != nil {
 					return err
 				}
-				return mcpserver.RunStdioCache(token, snap, auditPath, rel.check)
+				return mcpserver.RunStdioCache(token, snap, auditPath, rel.Check)
 			}
 			// Residual-key guardrail: warn to STDERR only (stdout is the MCP channel).
 			if st, err := vault.OpenStore(store.FileKeyProvider{}); err == nil {
