@@ -107,8 +107,10 @@ func Run(modeFlag string) error {
 }
 
 func isTTY() bool {
-	fi, err := os.Stdin.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	// GetConsoleMode on Windows — NUL is a character device and must NOT
+	// pass (Plan 20 A4: `tui < NUL` used to slip past a stat-based check and
+	// then hang); char-device stat elsewhere. See istty_windows.go/istty_other.go.
+	return IsTerminal(os.Stdin.Fd())
 }
 
 // closeStore closes the wizard's vault store — the ONE cleanup path Run uses

@@ -33,13 +33,14 @@ func cacheTokensAddCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			_, code, err := s.AddCacheToken(name)
-			if err != nil {
-				return err
-			}
+			// cert first: a failing cert load must not mint an orphan device code (Plan 20 A4)
 			_, _, fp, err := mcpserver.LoadOrCreateServeCert()
 			if err != nil {
 				return fmt.Errorf("load serve cert for fingerprint: %w (run `serve cert-info` to diagnose)", err)
+			}
+			_, code, err := s.AddCacheToken(name)
+			if err != nil {
+				return err
 			}
 			printCacheToken(cmd.OutOrStdout(), name, code, fp)
 			return nil

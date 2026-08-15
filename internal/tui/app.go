@@ -267,13 +267,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						// secretView overlay — one msg, then only the overlay
 						// holds it. ServeURL is display-only and never stored.
 						return func() tea.Msg {
+							// cert first: a failing cert load must not mint an orphan device code (Plan 20 A4)
+							_, _, fp, err := mcpserver.LoadOrCreateServeCert()
+							if err != nil {
+								return errMsg{fmt.Errorf("load serve cert for fingerprint: %w (run `serve cert-info` to diagnose)", err)}
+							}
 							_, code, err := a.st.AddCacheToken(strings.TrimSpace(d.Name))
 							if err != nil {
 								return errMsg{err}
-							}
-							_, _, fp, err := mcpserver.LoadOrCreateServeCert()
-							if err != nil {
-								return errMsg{fmt.Errorf("load serve cert for fingerprint: %w (run `serve cert-info` to diagnose; 该码已签发但未显示，请吊销后重发)", err)}
 							}
 							return tokenIssuedMsg{title: "设备码 — " + d.Name, token: deviceCodeBody(d.ServeURL, code, fp)}
 						}

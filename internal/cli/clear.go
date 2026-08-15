@@ -31,6 +31,7 @@ import (
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/tui"
 	"ssh-manager-mcp/internal/vaultio"
 )
 
@@ -40,13 +41,13 @@ import (
 // process: the TTY, the SCM, schtasks, or the user's home dir).
 // ---------------------------------------------------------------------------
 
-// clearStdinIsTTY mirrors tui.isTTY: stdin is a char device. Known weakness
-// (shared with tui, accepted for consistency): the Windows NUL device also
-// reports as a char device, so `clear < NUL` passes the check. The typed
-// DELETE + y ceremony is the real guard; this is script-proofing only.
+// clearStdinIsTTY gates clear on an interactive stdin via the shared
+// tui.IsTerminal console check (GetConsoleMode on Windows, char-device stat
+// elsewhere). This closed the NUL hole the old inline stat check had
+// (Plan 20 A4: `clear < NUL` used to pass as a char device). The typed
+// DELETE + y ceremony remains the real guard; this is script-proofing only.
 var clearStdinIsTTY = func() bool {
-	fi, err := os.Stdin.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return tui.IsTerminal(os.Stdin.Fd())
 }
 
 // serveInstalledFn drives the ENUMERATION marker only. Execution ALWAYS
