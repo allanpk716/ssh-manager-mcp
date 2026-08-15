@@ -114,6 +114,21 @@ func TestResolve_FullMatrix(t *testing.T) {
 	}
 }
 
+func TestResolve_IncompleteVaultRole_Resumes(t *testing.T) {
+	vd, _ := withDirs(t)
+	// setup_complete=false without vault → resume wizard
+	os.WriteFile(filepath.Join(vd, "role.json"), []byte(`{"role":"standalone","setup_complete":false}`), 0o600)
+	l, err := ResolveMode("")
+	if err != nil || l.Kind != LaunchWizard || !l.ResumeSetup || l.Role != RoleStandalone {
+		t.Fatalf("want wizard resume, got %+v %v", l, err)
+	}
+	// setup_complete=true without vault → anomaly
+	os.WriteFile(filepath.Join(vd, "role.json"), []byte(`{"role":"standalone","setup_complete":true}`), 0o600)
+	if _, err := ResolveMode(""); err == nil || !strings.Contains(err.Error(), "clear") {
+		t.Fatalf("complete+missing vault must stay anomaly: %v", err)
+	}
+}
+
 func TestResolve_RoleFileAnomalies(t *testing.T) {
 	// invalid value
 	vd, _ := withDirs(t)
@@ -121,15 +136,20 @@ func TestResolve_RoleFileAnomalies(t *testing.T) {
 	if _, err := ResolveMode(""); err == nil || !strings.Contains(err.Error(), "clear") {
 		t.Fatalf("invalid role: %v", err)
 	}
-	// role=server but vault missing
-	os.WriteFile(filepath.Join(vd, "role.json"), []byte(`{"role":"server"}`), 0o600)
-	if _, err := ResolveMode(""); err == nil || !strings.Contains(err.Error(), "clear") {
-		t.Fatalf("server role without vault: %v", err)
+	// setup_complete=false without vault → resume wizard (not an error)
+	os.WriteFile(filepath.Join(vd, "role.json"), []byte(`{"role":"standalone","setup_complete":false}`), 0o600)
+	if l, err := ResolveMode(""); err != nil || l.Kind != LaunchWizard || !l.ResumeSetup || l.Role != RoleStandalone {
+		t.Fatalf("incomplete vault-role should resume wizard: got %+v %v", l, err)
 	}
-	// setup_complete false → resume flag
+	// setup_complete=true without vault → genuine anomaly (error)
+	os.WriteFile(filepath.Join(vd, "role.json"), []byte(`{"role":"standalone","setup_complete":true}`), 0o600)
+	if _, err := ResolveMode(""); err == nil || !strings.Contains(err.Error(), "clear") {
+		t.Fatalf("complete+missing vault must be anomaly: %v", err)
+	}
+	// setup_complete=false with vault → resume broker setup (flag set)
 	seedVault(t, vd)
 	os.WriteFile(filepath.Join(vd, "role.json"), []byte(`{"role":"standalone","setup_complete":false}`), 0o600)
 	if l, err := ResolveMode(""); err != nil || l.Kind != LaunchBroker || !l.ResumeSetup {
-		t.Fatalf("resume: %+v %v", l, err)
+		t.Fatalf("resume broker setup: %+v %v", l, err)
 	}
 }

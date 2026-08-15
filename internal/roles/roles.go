@@ -349,6 +349,10 @@ func resolveFromState(st *State) (Launch, error) {
 	switch st.Role {
 	case RoleStandalone, RoleServer:
 		if !VaultExists() {
+			if !st.SetupComplete {
+				// User picked a role but hasn't built the vault yet — wizard resumes
+				return Launch{Kind: LaunchWizard, Role: st.Role, ResumeSetup: true}, nil
+			}
 			return Launch{}, fmt.Errorf("role.json 声明本机为 %s，但 vault 不存在：运行 `ssh-manager clear` 清除残留状态后重新运行向导", st.Role)
 		}
 		return Launch{Kind: LaunchBroker, Role: st.Role, ResumeSetup: !st.SetupComplete}, nil
