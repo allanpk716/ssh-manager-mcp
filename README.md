@@ -134,9 +134,10 @@ ssh-manager projects ls [--all]           # status column; --all includes revoke
 
 ```bash
 ssh-manager tui                # 自动判定
-ssh-manager tui --mode broker  # 强制 broker 主控台
 ssh-manager tui --mode client  # 强制 client 面板
 ```
+
+> v0.7.0 起 `tui --mode broker` 移除（自动判定覆盖该场景；`--mode client` 保留）。
 
 自动判定规则：
 

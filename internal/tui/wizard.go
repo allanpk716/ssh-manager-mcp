@@ -792,6 +792,13 @@ func (w wizardModel) View() tea.View {
 		if w.step == stepProfileGrant && len(w.data.servers) == 0 {
 			b.WriteString(footerStyle.Render("（未录入任何服务器 = profile 暂无成员，agent 将看不到任何服务器）") + "\n")
 		}
+		if w.saveErr != nil {
+			// First-screen roles.Save failure must stay visible through the
+			// role flows too, not only on the defensive placeholder page —
+			// a silently-unwritten role.json turns "safe pause" into "start
+			// over" for the user who quits here.
+			b.WriteString(errStyle.Render(fmt.Sprintf("⚠ role.json 写入失败：%v", w.saveErr)) + "\n")
+		}
 		if w.err != nil {
 			b.WriteString(errStyle.Render("✗ "+w.err.Error()) + "\n")
 		} else if w.status != "" {

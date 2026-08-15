@@ -363,8 +363,12 @@ func runClear(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	// Vault roles: verified safety net + one-time passphrase + y confirm.
-	if role == roles.RoleStandalone || role == roles.RoleServer {
+	// Vault present → verified safety net + one-time passphrase + y confirm.
+	// Gated on the FILESYSTEM (store.db actually exists among the enumerated
+	// targets), not the resolved role: a tampered/hand-edited role.json=client
+	// on a machine that still holds a real vault must not dodge the export
+	// safety net (role only drives the display label above).
+	if roles.VaultExists() {
 		backupPath, passphrase, err := makeSafetyNet()
 		if err != nil {
 			return err // zero mutation by contract

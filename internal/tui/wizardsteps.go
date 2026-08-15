@@ -152,14 +152,25 @@ func wizTokenScreen(title, token, usage, recovery string) overlay {
 }
 
 // wizStaticView is a passive full-screen wizard step (text walkthrough): any
-// key emits formDoneMsg{}; the owning wizard decides what follows.
+// key emits formDoneMsg{}; the owning wizard decides what follows. q/Ctrl+C
+// are carved out as a program QUIT — nothing is pending on these screens (the
+// wizard's data is already persisted), so quit is always safe.
 type wizStaticView struct{ title, body string }
 
 func (s *wizStaticView) Title() string { return s.title }
 func (s *wizStaticView) Init() tea.Cmd { return nil }
 
 func (s *wizStaticView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if _, ok := msg.(tea.KeyPressMsg); ok {
+	if k, ok := msg.(tea.KeyPressMsg); ok {
+		// q/Ctrl+C = quit. Deliberate contrast with the one-time secret
+		// screens (wizSecretView below), which keep any-key-advance: their
+		// data is also already persisted, but the secret must be explicitly
+		// acknowledged rather than accidentally dismissed by a quit reflex.
+		// Esc on static screens keeps advancing — only q/Ctrl+C quit.
+		kk := k.Key()
+		if kk.Text == "q" || (kk.Code == 'c' && kk.Mod == tea.ModCtrl) {
+			return s, tea.Quit
+		}
 		return s, func() tea.Msg { return formDoneMsg{} }
 	}
 	return s, nil
