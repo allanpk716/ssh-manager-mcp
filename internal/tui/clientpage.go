@@ -13,6 +13,7 @@ import (
 
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -21,6 +22,12 @@ import (
 // snapshot, manual sync, and a connection-edit form. It deliberately shares
 // NOTHING mutable with the broker App: client mode writes no vault, only
 // cache.auth.json via clientops.WriteCacheCred.
+//
+// WIZARD FORM (Plan 19 T5): the same model with wizard=true IS the client
+// role's first-run wizard — the connection form opens immediately with a
+// source hint, a failed first pull reopens it with the previous input under a
+// classified banner (classifyPullError), and a successful pull leads to the
+// .mcp.json finish screen (clientFinishScreen) → wizFinishTo(client).
 type clientModel struct {
 	cred     *clientops.CacheCred
 	snap     *store.Snapshot
@@ -29,12 +36,24 @@ type clientModel struct {
 	status   string
 	err      error
 	busy     bool
-	overlay  overlay // connection-edit form
+	overlay  overlay // connection-edit form / wizard finish screen
+
+	wizard bool       // first-run flow active (source hint + pull-driven transitions)
+	draft  *connDraft // last submitted connection draft (input preservation on failed pull)
+	finish bool       // the overlay is the wizard's finish screen (any key completes)
 }
 
 func newClientModel() clientModel { return clientModel{} }
 
-func (m clientModel) Init() tea.Cmd { return refreshDataCmd }
+func (m clientModel) Init() tea.Cmd {
+	if m.wizard && m.overlay != nil {
+		// Fresh wizard: the form owns the screen. refreshDataCmd would only
+		// produce "cache.auth.json 不存在" noise under the form on a fresh
+		// machine — the cred arrives via connSavedMsg instead.
+		return m.overlay.Init()
+	}
+	return refreshDataCmd
+}
 
 type dataReadyMsg struct {
 	cred *clientops.CacheCred
@@ -43,6 +62,20 @@ type dataReadyMsg struct {
 }
 
 type syncDoneMsg struct{ err error }
+
+// pullSucceededMsg is the WIZARD-only success signal of the first pull: panel
+// mode reports success as syncDoneMsg{nil} ("同步完成"); the wizard instead
+// routes to the .mcp.json finish screen. See syncCmdMode.
+type pullSucceededMsg struct{}
+
+// connSavedMsg carries the just-written cred (+ the draft it came from) back
+// from the connection form. Wizard mode uses it to start the first pull and to
+// retain the user's input for the failed-pull retry path; panel mode treats it
+// as the success line.
+type connSavedMsg struct {
+	cred  *clientops.CacheCred
+	draft *connDraft
+}
 
 // clientStatusMsg reports a user-visible success line (e.g. cred saved).
 type clientStatusMsg string
@@ -74,9 +107,16 @@ func refreshDataCmd() tea.Msg {
 	return dataReadyMsg{cred: cred, snap: snap, age: age}
 }
 
-// syncCmd pulls a fresh snapshot off the UI loop. The pin from the stored cred
-// is mandatory — the TUI NEVER offers plaintext pulls (AllowPlain stays false).
-func syncCmd(cred *clientops.CacheCred) tea.Cmd {
+// syncCmd pulls a fresh snapshot off the UI loop (panel mode). The pin from
+// the stored cred is mandatory — the TUI NEVER offers plaintext pulls
+// (AllowPlain stays false).
+func syncCmd(cred *clientops.CacheCred) tea.Cmd { return syncCmdMode(cred, false) }
+
+// syncCmdMode is the shared pull command. In WIZARD mode a successful pull
+// returns pullSucceededMsg (→ the .mcp.json finish screen) instead of the
+// panel's syncDoneMsg{nil}; every failure rides syncDoneMsg so the wizard can
+// reopen the form under a classified banner (classifyPullError).
+func syncCmdMode(cred *clientops.CacheCred, wizard bool) tea.Cmd {
 	return func() tea.Msg {
 		if cred == nil {
 			return syncDoneMsg{fmt.Errorf("连接配置未加载，无法同步")}
@@ -85,7 +125,13 @@ func syncCmd(cred *clientops.CacheCred) tea.Cmd {
 			return syncDoneMsg{fmt.Errorf("连接配置缺 pin（本界面永不走明文拉取）——请 [c] 编辑连接补上")}
 		}
 		err := clientops.DoPull(cred.URL, cred.Token, cred.Pin, clientops.PullOpts{Timeout: clientops.LazyPullTimeout})
-		return syncDoneMsg{err}
+		if err != nil {
+			return syncDoneMsg{err}
+		}
+		if wizard {
+			return pullSucceededMsg{}
+		}
+		return syncDoneMsg{nil}
 	}
 }
 
@@ -100,10 +146,36 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case syncDoneMsg:
 		m.busy = false
 		if kp.err != nil {
+			if m.wizard {
+				// Failed FIRST pull: reopen the form WITH the previous input
+				// (editConnForm prefills from the retained draft; the masked
+				// code stays empty) under the classified banner.
+				m.err, m.status = errors.New(classifyPullError(kp.err)), ""
+				m.overlay = m.editConnForm()
+				return m, m.overlay.Init()
+			}
 			m.err, m.status = kp.err, ""
 		} else {
 			m.err, m.status = nil, "同步完成"
 		}
+		return m, refreshDataCmd
+	case pullSucceededMsg:
+		// Wizard only (syncCmdMode): the first pull worked — cache is live,
+		// show the .mcp.json finish screen. refreshDataCmd loads the fresh
+		// snapshot so the panel behind the overlay is current.
+		m.busy = false
+		m.err, m.status = nil, "首次同步完成"
+		m.finish = true
+		m.overlay = clientFinishScreen()
+		return m, tea.Batch(m.overlay.Init(), refreshDataCmd)
+	case connSavedMsg:
+		m.err, m.status = nil, ""
+		m.cred, m.draft = kp.cred, kp.draft
+		if m.wizard {
+			m.busy = true // first pull in flight
+			return m, syncCmdMode(kp.cred, true)
+		}
+		m.status = "连接配置已保存"
 		return m, refreshDataCmd
 	case clientStatusMsg:
 		m.err, m.status = nil, string(kp)
@@ -112,6 +184,12 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err, m.status = kp.err, ""
 		return m, nil
 	case formDoneMsg:
+		if m.finish {
+			// Finish screen dismissed: keep the overlay up until the
+			// completion Save succeeds — a failure arrives as errMsg
+			// (rendered below the overlay) and the next key retries.
+			return m, wizFinishTo(roles.RoleClient, "client")
+		}
 		m.overlay = nil
 		return m, tea.Batch(kp.after, refreshDataCmd)
 	case tea.KeyPressMsg:
@@ -126,9 +204,12 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case k.Text == "s" && !m.busy:
 			m.busy, m.err, m.status = true, nil, ""
-			return m, syncCmd(m.cred)
+			return m, syncCmdMode(m.cred, m.wizard)
 		case k.Text == "c":
-			if m.cred == nil {
+			// Wizard mode may edit on a fresh machine (no stored cred yet) —
+			// the form IS the flow's entry; panel mode still requires a cred
+			// to keep (the code field's 留空=保持不变 needs something to keep).
+			if !m.wizard && m.cred == nil {
 				m.err, m.status = fmt.Errorf("连接配置未加载，无法编辑"), ""
 				return m, nil
 			}
@@ -194,9 +275,22 @@ type connDraft struct {
 	URL, Code, Pin string
 }
 
+// editConnForm builds the connection form. Prefill order: the LAST SUBMITTED
+// draft first (a failed wizard pull reopens with the user's url/pin intact —
+// input preservation, T5), else the stored cred, else blank (fresh machine).
+// The code field is NEVER prefilled — a masked secret is not re-echoed; empty
+// keeps the existing token, and when NO token exists at all (fresh wizard
+// machine) an empty code is rejected at submit.
 func (m clientModel) editConnForm() overlay {
-	old := m.cred
-	d := &connDraft{URL: old.URL, Pin: old.Pin}
+	urlVal, pinVal, token0 := "", "", ""
+	if m.cred != nil {
+		urlVal, pinVal, token0 = m.cred.URL, m.cred.Pin, m.cred.Token
+	}
+	if m.draft != nil { // input preservation: the last submitted draft wins
+		urlVal, pinVal = m.draft.URL, m.draft.Pin
+	}
+	wizard := m.wizard
+	d := &connDraft{URL: urlVal, Pin: pinVal}
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewInput().Title("serve 地址").Value(&d.URL).Validate(validServeURL),
 		huh.NewInput().Title("设备码（留空=保持不变）").Value(&d.Code).EchoMode(huh.EchoModePassword),
@@ -204,20 +298,73 @@ func (m clientModel) editConnForm() overlay {
 	))
 	return newFormOverlay("编辑连接", form, func() tea.Cmd {
 		return func() tea.Msg {
-			token := old.Token
+			token := token0
 			if code := strings.TrimSpace(d.Code); code != "" {
 				token = code
 			}
-			if err := clientops.WriteCacheCred(&clientops.CacheCred{
+			if token == "" {
+				return errMsg{errors.New("设备码不能为空（本机没有已保存的设备码可保持）")}
+			}
+			cred := &clientops.CacheCred{
 				URL:   strings.TrimSpace(d.URL),
 				Token: token,
 				Pin:   strings.TrimSpace(d.Pin),
-			}); err != nil {
+			}
+			if err := clientops.WriteCacheCred(cred); err != nil {
 				return errMsg{err}
+			}
+			if wizard {
+				// Carry the draft + fresh cred back so the model can start the
+				// first pull AND retain the input for the failed-pull retry.
+				return connSavedMsg{cred: cred, draft: d}
 			}
 			return clientStatusMsg("连接配置已保存")
 		}
 	})
+}
+
+// classifyPullError turns a raw pull error into the client wizard's four-state
+// diagnosis (T5 brief): dial / no such host → 地址不通; 401 / authorization →
+// 设备码无效; mismatch / fingerprint → 指纹失配; Timeout → 超时. The matched
+// category's guidance is prefixed to the RAW error text — the classification
+// tells the user what to fix, the original tells them what happened.
+func classifyPullError(err error) string {
+	if err == nil {
+		return "同步失败：<nil>"
+	}
+	s := strings.ToLower(err.Error())
+	var kind string
+	switch {
+	case strings.Contains(s, "dial"), strings.Contains(s, "no such host"):
+		kind = "地址不通：检查 serve 地址拼写与网络/防火墙"
+	case strings.Contains(s, "401"), strings.Contains(s, "authorization"):
+		kind = "设备码无效：核对 server 机签发的设备码（丢失可在其主控台重发）"
+	case strings.Contains(s, "mismatch"), strings.Contains(s, "fingerprint"):
+		kind = "指纹失配：核对 server 机接入卡上的 pin 指纹"
+	case strings.Contains(s, "timeout"), strings.Contains(s, "client.timeout"):
+		kind = "超时：server 可能未启动或网络不通，稍后重试"
+	default:
+		return "同步失败：" + err.Error()
+	}
+	return kind + "（" + err.Error() + "）"
+}
+
+// clientFinishScreen is the CLIENT role's .mcp.json finish screen (T5): the
+// --cache variant of mcpConfigScreen. The --token here is the SERVER machine's
+// project token — NOT the device code just used for the pull (a cache token
+// authorizes pulls only; the agent's MCP auth is the project token). The
+// client machine never sees that token during enrollment, so the snippet shows
+// a placeholder pointing at where it comes from.
+func clientFinishScreen() overlay {
+	body := strings.Join(append(mcpConfigLines(
+		`"args": ["mcp", "--cache", "--token", "<project token>"]`,
+		[]string{
+			"client 角色用 --cache 离线缓存模式启动；--token 填 server 机 Projects 页签发的 project token（不是设备码——设备码只用于拉取缓存，刚才已保存）。",
+			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
+			".mcp.json 含 token，不要提交进 git。",
+		},
+	), "", "按任意键进入 client 面板", ""), "\n")
+	return &wizStaticView{title: "配置 agent 的 .mcp.json（client 模式）", body: body}
 }
 
 // clientHeader renders the one-line connection summary: broker host, pin
@@ -262,12 +409,28 @@ func clientServerDetail(snap *store.Snapshot, cursor int) string {
 		orDash(s.Hardware), orDash(s.Location), orDash(s.Role), orDash(s.Services), orDash(s.Caveats), orDash(s.Description))
 }
 
+// clientWizardHint is the wizard form's source-hint line (T5 brief): where
+// the two hard-to-guess inputs come from.
+const clientWizardHint = "设备码与服务器指纹在 server 机 TUI『设备码』页签发"
+
 func (m clientModel) View() tea.View {
+	hint := ""
+	if m.wizard {
+		hint = warnStyle.Render("ℹ "+clientWizardHint) + "\n"
+	}
 	if m.overlay != nil {
-		return m.overlay.View()
+		v := hint + m.overlay.View().Content
+		// M1 parity with the wizard: an error set while the overlay is up
+		// (classified pull failure / finish-Save failure) renders BELOW it or
+		// it is invisible.
+		if m.err != nil {
+			v += "\n" + errStyle.Render("✗ "+m.err.Error())
+		}
+		return tea.NewView(v)
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(" ssh-manager (client)") + "\n")
+	b.WriteString(hint)
 	n := 0
 	if m.snap != nil {
 		n = len(m.snap.Servers)

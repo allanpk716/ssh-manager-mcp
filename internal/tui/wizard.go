@@ -10,8 +10,9 @@
 // .mcp.json finish → wizFinish hands off to the broker console. Task 4 adds
 // the SERVER flow (spec §2.4) on the shared steps ②③④ plus the dual-secret
 // screens, the serve segment (addr picker → admin notice → install → probe →
-// result banners) and the client access card. The client (Task 5) flow stays
-// on the stepRoleDone placeholder.
+// result banners) and the client access card. Task 5 makes the CLIENT flow
+// real: the wizard WRAPS clientModel in its wizard form (source hint,
+// classified failure path preserving input, .mcp.json finish → client panel).
 package tui
 
 import (
@@ -21,6 +22,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
@@ -33,7 +35,7 @@ type wizStep int
 
 const (
 	stepPick     wizStep = iota
-	stepRoleDone         // placeholder: client (T5) flow lands here
+	stepRoleDone         // defensive placeholder (all three roles have real flows now)
 	// standalone flow (T3)
 	stepVaultErr      // wizEnsureVault / store open failed → r 重试
 	stepServerAsk     // 「现在录入第一台服务器？」(skip = zero servers allowed)
@@ -53,6 +55,9 @@ const (
 	stepServeProbe   // post-install probe in flight (waiting)
 	stepServeResult  // install + probe banners (overlay, non-blocking)
 	stepAccessCard   // 客户端接入卡 (overlay)
+	// client flow (T5) — the step IS a clientModel in wizard form; every
+	// message delegates to it (see Update).
+	stepClient
 )
 
 // wizardData holds the standalone flow's answers. Heap-allocated ONCE in
@@ -95,6 +100,8 @@ type wizardModel struct {
 	form     *huh.Form
 	ov       overlay // token / mcp-config screens; owns keys until formDoneMsg
 	st       *store.Store
+
+	client *clientModel // client-role wizard (T5): clientModel in wizard form
 
 	residualClient bool  // stale client role.json detected → hint `clear`
 	saveErr        error // role.json write failure (first screen)
@@ -153,16 +160,37 @@ func (w *wizardModel) chooseRole(r roles.Role) {
 }
 
 // startRoleFlow dispatches into the per-role flow after the role is fixed.
-// The client (T5) flow stays on the placeholder page for now.
+// stepRoleDone is now only a defensive fallback — all three roles have real
+// flows.
 func (w *wizardModel) startRoleFlow() {
 	switch w.role {
 	case roles.RoleStandalone:
 		w.enterStandalone()
 	case roles.RoleServer:
 		w.enterServer()
+	case roles.RoleClient:
+		w.enterClient()
 	default:
 		w.step = stepRoleDone
 	}
+}
+
+// enterClient boots the CLIENT flow (T5): the flow IS clientModel in wizard
+// form. A fresh machine opens the connection form immediately (with the
+// source hint above it); a resume whose cache.auth.json already holds a
+// complete cred skips the form — the panel's [s]/[c] keys drive the retry and
+// re-opening the form would demand retyping a masked code for no reason.
+func (w *wizardModel) enterClient() {
+	cm := newClientModel()
+	cm.wizard = true
+	if cred, err := clientops.ReadCacheCred(); err == nil && cred != nil &&
+		cred.URL != "" && cred.Token != "" && cred.Pin != "" {
+		cm.cred = cred
+	} else {
+		cm.overlay = cm.editConnForm()
+	}
+	w.client = &cm
+	w.step = stepClient
 }
 
 // openVaultOrErr is the shared boot of BOTH vault-role flows (standalone T3 /
@@ -349,6 +377,9 @@ func (w *wizardModel) askFirstServer() {
 }
 
 func (w wizardModel) Init() tea.Cmd {
+	if w.step == stepClient && w.client != nil {
+		return w.client.Init()
+	}
 	if w.form == nil {
 		return nil
 	}
@@ -356,6 +387,18 @@ func (w wizardModel) Init() tea.Cmd {
 }
 
 func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Client-role wizard (T5): the flow IS the clientModel in wizard form —
+	// every message delegates to it. wizardDoneMsg is the one exception: it
+	// is the wizard's own exit sentinel and is handled by the switch below.
+	if w.step == stepClient && w.client != nil {
+		if _, ok := msg.(wizardDoneMsg); !ok {
+			cm, cmd := w.client.Update(msg)
+			if ncm, ok := cm.(clientModel); ok {
+				w.client = &ncm
+			}
+			return w, cmd
+		}
+	}
 	switch m := msg.(type) {
 	case tea.KeyPressMsg:
 		if w.ov != nil { // overlay owns keys until formDoneMsg.
@@ -524,7 +567,10 @@ func (w wizardModel) stepFormDone() (tea.Model, tea.Cmd) {
 		if !w.askShare {
 			if w.ans.keep == "no" {
 				w.chooseRole(roles.RoleClient)
-				return w, nil
+				if w.client == nil {
+					return w, nil // defensive: enterClient always sets it
+				}
+				return w, w.client.Init()
 			}
 			w.askShare = true
 			w.form = w.shareForm()
@@ -535,7 +581,7 @@ func (w wizardModel) stepFormDone() (tea.Model, tea.Cmd) {
 		} else {
 			w.chooseRole(roles.RoleStandalone)
 		}
-		if w.step == stepRoleDone || w.form == nil { // placeholder (T4/T5), or standalone landed on stepVaultErr (form cleared)
+		if w.step == stepRoleDone || w.form == nil { // defensive placeholder, or standalone landed on stepVaultErr (form cleared)
 			return w, nil
 		}
 		return w, w.form.Init() // standalone entered a flow step with a form
@@ -679,6 +725,9 @@ var wizStepTitles = map[wizStep]string{
 }
 
 func (w wizardModel) View() tea.View {
+	if w.step == stepClient && w.client != nil {
+		return w.client.View()
+	}
 	if w.ov != nil {
 		v := w.ov.View().Content
 		// M1: a Save failure in wizFinish surfaces as errMsg while the overlay

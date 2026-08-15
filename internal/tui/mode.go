@@ -72,11 +72,11 @@ func DetectMode(force string) (Mode, error) {
 }
 
 // launchTarget is the pure dispatch table behind Run (Plan 19 T2): first run →
-// wizard; completed setups → broker/client; an INCOMPLETE standalone/server
-// setup (ResumeSetup) re-enters the wizard. A resuming client stays on the
-// client panel in this task — Task 5 gives the client wizard its entry form.
+// wizard; completed setups → broker/client; an INCOMPLETE setup
+// (ResumeSetup) of ANY role re-enters the wizard — since T5 that includes the
+// client (its wizard resumes at the connection form / saved-cred panel).
 func launchTarget(l roles.Launch) string {
-	if l.ResumeSetup && l.Kind != roles.LaunchClient {
+	if l.ResumeSetup {
 		return "wizard"
 	}
 	switch l.Kind {
@@ -92,8 +92,8 @@ func launchTarget(l roles.Launch) string {
 // Run starts the console. modeFlag (from `tui --mode`) passes straight into
 // roles.ResolveMode — the single launch-decision authority (spec §1.2) — and
 // the resulting Launch dispatches to the wizard, the broker App, or the client
-// panel. ResumeSetup routes standalone/server back into the wizard with the
-// role preselected; when the wizard finishes/quits, the next launch resumes
+// panel. ResumeSetup routes ANY role back into the wizard with the role
+// preselected; when the wizard finishes/quits, the next launch resumes
 // normally (Tasks 3-5 chain wizard completion straight into the consoles).
 func Run(modeFlag string) error {
 	if !isTTY() {
@@ -106,16 +106,17 @@ func Run(modeFlag string) error {
 	switch launchTarget(l) {
 	case "wizard":
 		m := newWizard(l)
-		if l.ResumeSetup && (l.Role == roles.RoleStandalone || l.Role == roles.RoleServer) {
+		if l.ResumeSetup {
 			m = newWizardForRole(l)
 		}
 		fm, werr := tea.NewProgram(m).Run()
 		if werr != nil {
 			return werr
 		}
-		// Handoff sentinel (T3): a COMPLETED wizard exits with done=true and
-		// the wizard's store still open — chain straight into the target
-		// console instead of dropping the user back to the shell.
+		// Handoff sentinel (T3/T5): a COMPLETED wizard exits with done=true
+		// and chains straight into the target console instead of dropping the
+		// user back to the shell — the broker App reusing the wizard's still-
+		// open store, or the (fresh, stateless) client panel.
 		if wm, ok := fm.(wizardModel); ok {
 			if wm.done && wm.next == "broker" && wm.st != nil {
 				app, aerr := NewBrokerApp(wm.st)
@@ -124,6 +125,9 @@ func Run(modeFlag string) error {
 					return aerr
 				}
 				_, werr = tea.NewProgram(app).Run()
+			}
+			if wm.done && wm.next == "client" {
+				_, werr = tea.NewProgram(newClientModel()).Run()
 			}
 			wm.closeStore()
 		}

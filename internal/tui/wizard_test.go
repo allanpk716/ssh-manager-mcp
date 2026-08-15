@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
@@ -243,10 +244,90 @@ func TestWizard_ResumeReusesExistingProfile(t *testing.T) {
 	w.closeStore() // Run's cleanup — also releases the db file for TempDir removal
 }
 
+// TestWizard_ClientFlow pins the client-role wizard (T5): choosing client on
+// the first screen writes role.json (client location, setup_complete:false)
+// and enters the clientModel-in-wizard-form with the connection form up and
+// the source hint visible; a successful first pull leads through the finish
+// screen to the client-panel handoff sentinel.
+func TestWizard_ClientFlow(t *testing.T) {
+	withRoleDirs(t)
+	w := newWizardForTest()
+	w.chooseRole(roles.RoleClient)
+	if w.step != stepClient || w.client == nil {
+		t.Fatalf("client role must enter the client wizard: step=%d client=%v", w.step, w.client)
+	}
+	// role.json lands at the CLIENT location, incomplete (safe-pause invariant).
+	p, err := roles.RolePath(roles.RoleClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("role.json not written on choose: %v", err)
+	}
+	if !strings.Contains(string(b), `"role":"client"`) || !strings.Contains(string(b), `"setup_complete":false`) {
+		t.Fatalf("role.json must record incomplete client setup: %s", b)
+	}
+	// The wizard view is the client form with the source hint on top. (The
+	// field labels themselves render only after the form initializes; the
+	// overlay title + hint pin the screen identity.)
+	v := w.View().Content
+	for _, want := range []string{"server 机", "编辑连接"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("client wizard view missing %q:\n%s", want, v)
+		}
+	}
+	// Successful first pull → finish screen (--cache variant) → done+client.
+	m, _ := w.Update(pullSucceededMsg{})
+	if v := m.View().Content; !strings.Contains(v, "--cache") {
+		t.Fatalf("post-pull screen must be the --cache finish screen:\n%s", v)
+	}
+	m2, cmd := m.Update(formDoneMsg{})
+	if cmd == nil {
+		t.Fatal("finish screen dismissal must run the completion cmd")
+	}
+	final, _ := m2.Update(cmd()) // wizFinishTo → wizardDoneMsg{next:"client"}
+	if wm, ok := final.(wizardModel); !ok || !wm.done || wm.next != "client" {
+		t.Fatalf("client finish must set done+client handoff, got %+v", final)
+	}
+	// Completed: role.json now setup_complete:true at the client location.
+	b2, err := os.ReadFile(p)
+	if err != nil || !strings.Contains(string(b2), `"setup_complete":true`) {
+		t.Fatalf("role.json must record completed setup: %s (%v)", b2, err)
+	}
+}
+
+// TestWizard_ClientResumeWithSavedCred: a resumed client wizard whose
+// cache.auth.json already holds a complete cred skips the form (the panel's
+// [s]/[c] keys drive the retry) instead of demanding a retyped masked code.
+func TestWizard_ClientResumeWithSavedCred(t *testing.T) {
+	withRoleDirs(t)
+	// Pin the cache dir to an EXISTING temp dir — WriteCacheCred does not
+	// MkdirAll (withRoleDirs only pins the cred dir's PARENT via APPDATA).
+	t.Setenv("SSHMGR_CACHE_DIR", t.TempDir())
+	cred := &clientops.CacheCred{
+		URL:   "https://192.0.2.7:7878",
+		Token: "code-1",
+		Pin:   "sha256:" + strings.Repeat("c", 64),
+	}
+	if err := clientops.WriteCacheCred(cred); err != nil {
+		t.Fatal(err)
+	}
+	w := newWizardForRole(roles.Launch{Kind: roles.LaunchClient, Role: roles.RoleClient, ResumeSetup: true})
+	if w.step != stepClient || w.client == nil {
+		t.Fatalf("resume must enter the client wizard: step=%d", w.step)
+	}
+	if w.client.overlay != nil {
+		t.Fatal("resume with a complete cred must NOT reopen the form")
+	}
+	if w.client.cred == nil || w.client.cred.URL != cred.URL {
+		t.Fatalf("resumed model must preload the stored cred: %+v", w.client.cred)
+	}
+}
+
 // TestLaunchTarget pins the dispatch table: wizard on first run, broker/client
-// on completed setups, and wizard again when a standalone/server setup is
-// incomplete. Client resume stays on the client panel in THIS task (Task 5
-// gives the client wizard its form).
+// on completed setups, and wizard again when ANY role's setup is incomplete
+// (since T5 the resuming client re-enters the client wizard too).
 func TestLaunchTarget(t *testing.T) {
 	for _, c := range []struct {
 		l    roles.Launch
@@ -258,7 +339,7 @@ func TestLaunchTarget(t *testing.T) {
 		{roles.Launch{Kind: roles.LaunchClient, Role: roles.RoleClient}, "client"},
 		{roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleStandalone, ResumeSetup: true}, "wizard"},
 		{roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleServer, ResumeSetup: true}, "wizard"},
-		{roles.Launch{Kind: roles.LaunchClient, Role: roles.RoleClient, ResumeSetup: true}, "client"},
+		{roles.Launch{Kind: roles.LaunchClient, Role: roles.RoleClient, ResumeSetup: true}, "wizard"},
 	} {
 		if got := launchTarget(c.l); got != c.want {
 			t.Fatalf("launchTarget(%+v) = %q, want %q", c.l, got, c.want)

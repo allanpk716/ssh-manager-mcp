@@ -169,32 +169,44 @@ func (s *wizStaticView) View() tea.View {
 	return tea.NewView(titleStyle.Render(" "+s.title+" ") + "\n\n" + s.body)
 }
 
-// mcpConfigScreen is the finish screen: the full .mcp.json snippet in the
-// real documented shape (docs/agent-access.md). tokenRef is what stands in
-// for the token in the snippet (the plaintext was on the previous screen and
-// is gone for good). Standalone runs plain `mcp` — NOT the client role's
-// `--cache` offline mode.
-func mcpConfigScreen(tokenRef string) overlay {
-	body := strings.Join([]string{
+// mcpConfigLines renders the .mcp.json snippet shared by every role's finish
+// screen — only the args line and the notes differ per role (standalone/server
+// run plain `mcp`, the client role runs `mcp --cache`).
+func mcpConfigLines(argsLine string, notes []string) []string {
+	lines := []string{
 		"把下面的片段写进 agent 项目的 .mcp.json：",
 		"",
 		"{",
 		`  "mcpServers": {`,
 		`    "ssh": {`,
 		`      "command": "ssh-manager",`,
-		`      "args": ["mcp", "--token", "` + tokenRef + `"]`,
+		"      " + argsLine,
 		"    }",
 		"  }",
 		"}",
 		"",
 		"说明：",
-		"- 单机角色用普通 mcp 启动（不要用 --cache —— 那是 client 角色的离线缓存模式）。",
-		`- Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
-		"- .mcp.json 含 token，不要提交进 git。",
-		"",
-		"按任意键进入主控台",
-		"",
-	}, "\n")
+	}
+	for _, n := range notes {
+		lines = append(lines, "- "+n)
+	}
+	return lines
+}
+
+// mcpConfigScreen is the finish screen: the full .mcp.json snippet in the
+// real documented shape (docs/agent-access.md). tokenRef is what stands in
+// for the token in the snippet (the plaintext was on the previous screen and
+// is gone for good). Standalone runs plain `mcp` — NOT the client role's
+// `--cache` offline mode.
+func mcpConfigScreen(tokenRef string) overlay {
+	body := strings.Join(append(mcpConfigLines(
+		`"args": ["mcp", "--token", "`+tokenRef+`"]`,
+		[]string{
+			"单机角色用普通 mcp 启动（不要用 --cache —— 那是 client 角色的离线缓存模式）。",
+			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
+			".mcp.json 含 token，不要提交进 git。",
+		},
+	), "", "按任意键进入主控台", ""), "\n")
 	return &wizStaticView{title: "配置 agent 的 .mcp.json", body: body}
 }
 
@@ -212,11 +224,15 @@ type wizardDoneMsg struct{ next string }
 // handoff sentinel. Runs as a tea.Cmd AFTER the last screen is dismissed; a
 // Save failure comes back as errMsg (the wizard stays on the finish screen
 // and any key retries).
-func wizFinish(r roles.Role) tea.Cmd {
+func wizFinish(r roles.Role) tea.Cmd { return wizFinishTo(r, "broker") }
+
+// wizFinishTo is wizFinish with an explicit handoff target: the client-role
+// wizard (T5) chains into the CLIENT panel, not the broker console.
+func wizFinishTo(r roles.Role, next string) tea.Cmd {
 	return func() tea.Msg {
 		if err := roles.Save(roles.State{Role: r, SetupComplete: true}); err != nil {
 			return errMsg{err}
 		}
-		return wizardDoneMsg{next: "broker"}
+		return wizardDoneMsg{next: next}
 	}
 }
