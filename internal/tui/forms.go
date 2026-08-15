@@ -232,7 +232,13 @@ func (o *formOverlay) Init() tea.Cmd { return o.form.Init() }
 
 func (o *formOverlay) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if kp, ok := msg.(tea.KeyPressMsg); ok && kp.Code == tea.KeyEsc {
-		return o, func() tea.Msg { return formDoneMsg{} } // Esc cancels the form (abort semantics)
+		// Esc cancels the form (abort semantics). aborted distinguishes a
+		// real back-out from a bare dismiss: consumers that gate on the
+		// answers (e.g. the upgrade segment) must NOT trust the bound
+		// values — huh may already have committed a preset default into
+		// them (selects pre-commit their default, prefilled inputs keep
+		// their prefill).
+		return o, func() tea.Msg { return formDoneMsg{aborted: true} }
 	}
 	f, cmd := o.form.Update(msg)
 	if nf, ok := f.(*huh.Form); ok {
@@ -242,7 +248,7 @@ func (o *formOverlay) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return o, func() tea.Msg { return formDoneMsg{after: o.action()} }
 	}
 	if o.form.State == huh.StateAborted {
-		return o, func() tea.Msg { return formDoneMsg{} }
+		return o, func() tea.Msg { return formDoneMsg{aborted: true} }
 	}
 	return o, cmd
 }

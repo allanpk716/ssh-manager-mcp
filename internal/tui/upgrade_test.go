@@ -213,3 +213,96 @@ func vaultCounts(t *testing.T, st *store.Store) (srv, prof, proj int) {
 	}
 	return len(servers), len(profiles), len(projects)
 }
+
+// TestUpgrade_EscCancelsSegment (fix round F1): Esc on a FORM step must cancel
+// the whole segment. The addr select pre-commits its default and the name form
+// prefills the hostname, so the old empty-answer detection could never fire and
+// a bare formDoneMsg ADVANCED the machine (first screen → admin notice →
+// install; name form → a real device code minted). Drives the REAL path: the
+// Esc KeyPressMsg goes through App.Update → formOverlay, whose cmd carries
+// formDoneMsg{aborted:true} back into App.Update.
+func TestUpgrade_EscCancelsSegment(t *testing.T) {
+	withServeCertDirs(t)
+	orig := serveInstall
+	defer func() { serveInstall = orig }()
+	called := false
+	serveInstall = func(addr, tlsCert, tlsKey string, out io.Writer) error {
+		called = true // must stay false in both scenarios below
+		return nil
+	}
+	if err := roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	esc := tea.KeyPressMsg{Code: tea.KeyEsc}
+
+	// Scenario 1: Esc on the addr form (first screen) → segment cancelled,
+	// install never attempted.
+	a := newTestApp(t)
+	if a.role != roles.RoleStandalone {
+		t.Fatalf("test premise: standalone role, got %q", a.role)
+	}
+	m, _ := a.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
+	m2, cmd := m.Update(esc)
+	msg, ok := cmd().(formDoneMsg)
+	if !ok || !msg.aborted {
+		t.Fatalf("formOverlay must convert Esc into formDoneMsg{aborted:true}, got %#v", msg)
+	}
+	m3, _ := m2.Update(msg)
+	s1 := m3.(App)
+	if s1.upg != nil || s1.overlay != nil {
+		t.Fatalf("Esc on the addr form must cancel the segment, got upg=%v overlay=%v", s1.upg, s1.overlay)
+	}
+	if !strings.Contains(s1.status, "已取消升级") {
+		t.Fatalf("cancel status expected, got %q", s1.status)
+	}
+	if called {
+		t.Fatal("install must never be attempted after an Esc cancel")
+	}
+
+	// Scenario 2: Esc on the client-name form (post-install screens) → no
+	// device code minted.
+	b := newTestApp(t)
+	mb, _ := b.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
+	mb.(App).upg.serveAddr = "https://192.168.100.235:7878" // answer the addr form
+	n1, _ := mb.Update(formDoneMsg{})                       // addr → admin notice
+	n2, cmd2 := n1.Update(formDoneMsg{})                    // admin ack → install cmd
+	n3, _ := n2.Update(cmd2())                              // serveInstalledMsg{nil} → probe
+	n4, _ := n3.Update(serveProbeMsg{ok: true, detail: "401 Unauthorized"})
+	n5, _ := n4.Update(formDoneMsg{}) // result dismissed → client-name form
+	if s := n5.(App).upg.step; s != upgClientName {
+		t.Fatalf("test premise: segment at the client-name form, got step=%d", s)
+	}
+	n6, cmd3 := n5.Update(esc)
+	msg3, ok := cmd3().(formDoneMsg)
+	if !ok || !msg3.aborted {
+		t.Fatalf("Esc on the name form must emit formDoneMsg{aborted:true}, got %#v", msg3)
+	}
+	n7, _ := n6.Update(msg3)
+	s2 := n7.(App)
+	if s2.upg != nil || s2.overlay != nil {
+		t.Fatalf("Esc on the client-name form must cancel the segment, got upg=%v overlay=%v", s2.upg, s2.overlay)
+	}
+	toks, err := s2.st.ListCacheTokens()
+	if err != nil || len(toks) != 0 {
+		t.Fatalf("Esc on the name form must mint NO device code, got %+v (%v)", toks, err)
+	}
+}
+
+// TestUpgrade_PageKeysSuppressedInFlight (fix round F2): while a segment step
+// is in flight (install/probe/deviceIssue — overlay==nil windows), page action
+// keys must not open forms: the segment's next msg would clobber them.
+func TestUpgrade_PageKeysSuppressedInFlight(t *testing.T) {
+	withServeCertDirs(t)
+	a := newTestApp(t)
+	a.role = roles.RoleStandalone
+	a.startUpgrade()
+	a.upg.step, a.overlay = upgInstall, nil // simulate the in-flight install window
+	m, _ := a.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	am := m.(App)
+	if am.overlay != nil {
+		t.Fatal("page action keys must be suppressed while the upgrade segment is in flight")
+	}
+	if am.upg == nil || am.upg.step != upgInstall {
+		t.Fatalf("the in-flight segment must be untouched, got upg=%v", am.upg)
+	}
+}

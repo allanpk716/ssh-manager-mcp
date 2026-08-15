@@ -57,23 +57,35 @@ func NewBrokerApp(st *store.Store) (App, error) {
 	if err != nil {
 		return App{}, err
 	}
-	return App{st: st, pages: pages, status: "就绪", role: detectBrokerRole()}, nil
+	role, err := detectBrokerRole()
+	if err != nil {
+		return App{}, err // fail closed: a corrupt role.json surfaces to the CLI
+	}
+	return App{st: st, pages: pages, status: "就绪", role: role}, nil
 }
 
 // detectBrokerRole resolves the App's role: role.json first (authoritative
-// since T1). A nil state (pre-Plan-19 machine with a vault but no role.json)
-// falls back to the probe inference in roles.ResolveMode — accepting only its
-// standalone/server answers, since a broker App can never be the client role;
-// when even that cannot decide, RoleStandalone is the safe default: it only
-// ADDS the [u] upgrade affordance and never removes any capability.
-func detectBrokerRole() roles.Role {
-	if s, err := roles.Load(); err == nil && s != nil {
-		return s.Role
+// since T1) — an unreadable/corrupt file is an ERROR (roles' fail-closed
+// design: a broken state must guide `clear`, never silently degrade; in
+// practice ResolveMode gates this earlier on the launch path, this is the
+// second line). A nil state (pre-Plan-19 machine with a vault but no
+// role.json) falls back to the probe inference in roles.ResolveMode —
+// accepting only its standalone/server answers, since a broker App can never
+// be the client role; when even that cannot decide, RoleStandalone is the
+// safe default: it only ADDS the [u] upgrade affordance and never removes any
+// capability.
+func detectBrokerRole() (roles.Role, error) {
+	s, err := roles.Load()
+	if err != nil {
+		return "", err
+	}
+	if s != nil {
+		return s.Role, nil
 	}
 	if l, err := roles.ResolveMode(""); err == nil && l.Role == roles.RoleServer {
-		return roles.RoleServer
+		return roles.RoleServer, nil
 	}
-	return roles.RoleStandalone
+	return roles.RoleStandalone, nil
 }
 
 // FetchAll loads the four entity pages in one shot.
@@ -137,6 +149,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.startUpgrade()
 			return a, a.overlay.Init()
 		case k.Text == "a", k.Text == "e", k.Text == "d", k.Text == "g":
+			// F2 (fix round): while an upgrade segment is in flight (install/
+			// probe/deviceIssue — overlay==nil windows), page action keys are
+			// suppressed: opening a form overlay here would be clobbered by the
+			// segment's next msg (serveInstalledMsg etc.) and leak a stray form.
+			if a.upg != nil {
+				return a, nil
+			}
 			// One case for all action keys: overlapping letters across pages
 			// (a/e/d on servers AND projects, a on profiles) make separate
 			// cases order-dependent — an earlier case would swallow a later
@@ -326,7 +345,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case formDoneMsg:
 		if a.upg != nil { // upgrade segment owns its formDoneMsg progression (T6)
-			return a.upgradeFormDone(m.after)
+			return a.upgradeFormDone(m)
 		}
 		a.overlay = nil
 		return a, m.after // run the deferred action (e.g. re-fetch)
@@ -401,7 +420,16 @@ func (a *App) move(d int) {
 
 type errMsg struct{ err error }
 type actionDoneMsg struct{ desc string }
-type formDoneMsg struct{ after tea.Cmd }
+
+// formDoneMsg closes a form overlay. aborted is set ONLY by formOverlay's
+// Esc/huh-abort path: the user backed out and the huh-bound answer values are
+// untrustworthy (a select may have already committed its preset default into
+// them). Consumers that advance on the answers (the upgrade segment) treat it
+// as a cancel; bare dismissals (static screens, secretView) leave it false.
+type formDoneMsg struct {
+	after   tea.Cmd
+	aborted bool
+}
 
 func (a App) View() tea.View {
 	if a.overlay != nil {

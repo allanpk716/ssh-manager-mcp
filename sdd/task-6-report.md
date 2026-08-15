@@ -40,3 +40,20 @@ The segment's only possible writes: serve service registration, serve cert (idem
 ## Notes / residual edges
 - Retry after a failed install re-mints a device code under the (possibly same) client name; if the earlier code survives with the same name, `AddCacheToken` surfaces the active-name collision as an errMsg → segment aborts with the error. Operator can revoke the stale code on the 设备码 page or pick a new name. Same behavior as the wizard path.
 - Pressing `q` mid-segment quits (role.json untouched, at most one minted code remains — revocable from the 设备码 page).
+
+## Fix round: Esc-cancel
+
+Reviewer F1/F2/F3, one commit on this branch.
+
+**F1 (Important) — Esc-cancel on the upgrade segment's form steps was broken.** The old detection (empty answers) could never fire: `wizAddrForm`'s select pre-commits its default (`*chosen = def`), the client-name form prefills the hostname, and `formOverlay` converted Esc to a bare `formDoneMsg{}` — so Esc ADVANCED the machine (first screen → admin notice → privileged install; name form → a real device code minted). Fix: `formDoneMsg` gains `aborted bool`, set true in `formOverlay.Update`'s Esc-intercept AND huh `StateAborted` branch; `upgradeFormDone(m formDoneMsg)` cancels the whole segment on `m.aborted` before any step dispatch. The wrong code comment (claiming huh aborts "before any preset default is committed") is replaced with the aborted-flag description. Audit of other `formDoneMsg` consumers: wizard never uses `formOverlay` (static screens / huh directly, Esc intercepted pre-form at wizard.go:417 → Quit) — no change; clientpage's `editConnForm` dismissal closes the form and runs `after` (nil on abort) — already correct; `secretView` emits bare `formDoneMsg{}` — untouched.
+
+**F2 (Minor) — page action keys suppressed in-flight.** `a/e/d/g` dispatch in `App.Update` now returns early when `a.upg != nil`, so the overlay-less install/probe/deviceIssue windows can't have a form clobbered by segment msgs. (`u` already carried the same guard.)
+
+**F3 (Minor) — broker role load fails closed.** `detectBrokerRole` now returns `(roles.Role, error)`; `roles.Load()` errors propagate out of `NewBrokerApp` instead of silently defaulting to standalone — matching roles' fail-closed design (unreachable in practice: `ResolveMode` gates the launch path earlier).
+
+**Tests added:**
+- `TestUpgrade_EscCancelsSegment` (upgrade_test.go) — drives the real path (Esc KeyPressMsg → `formOverlay` → `formDoneMsg{aborted}` → `App.Update`): scenario 1 Esc on the addr form → segment cancelled, status 「已取消升级」, fake `SetServeInstaller` hook never called; scenario 2 Esc on the client-name form → no device code (`ListCacheTokens` count 0).
+- `TestUpgrade_PageKeysSuppressedInFlight` (upgrade_test.go) — segment at `upgInstall` with overlay nil, 'a' press → no overlay opened, segment untouched.
+- `TestBrokerApp_RoleLoadFailsClosed` (app_test.go) — corrupt role.json + `NewBrokerApp` → non-nil error.
+
+**Verification:** `go build ./... && go vet ./... && go test ./... -count=1` all green; gofmt clean; the three new tests pass individually (verified with `-run ... -v`).

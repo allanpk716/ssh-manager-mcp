@@ -70,9 +70,17 @@ func (a App) cancelUpgrade() (tea.Model, tea.Cmd) {
 }
 
 // upgradeFormDone advances the machine when the current overlay emitted
-// formDoneMsg. A form answered with an empty string (Esc aborts huh forms
-// before any preset default is committed) means the user backed out: cancel.
-func (a App) upgradeFormDone(after tea.Cmd) (tea.Model, tea.Cmd) {
+// formDoneMsg. m.aborted (formOverlay's Esc path) means the user backed out of
+// a FORM step: cancel the whole segment. This is the ONLY reliable cancel
+// signal — the old empty-answer heuristic could never fire, because the addr
+// select pre-commits its default (wizAddrForm sets *chosen = def) and the
+// client-name form prefills the hostname, so Esc with a bare formDoneMsg used
+// to ADVANCE the machine instead (admin notice → privileged install; name
+// form → a real device code minted).
+func (a App) upgradeFormDone(m formDoneMsg) (tea.Model, tea.Cmd) {
+	if m.aborted {
+		return a.cancelUpgrade()
+	}
 	switch a.upg.step {
 	case upgAddr:
 		a.upg.serveAddr = strings.TrimSpace(a.upg.serveAddr)
@@ -113,7 +121,7 @@ func (a App) upgradeFormDone(after tea.Cmd) (tea.Model, tea.Cmd) {
 	default:
 		// In-flight steps have no overlay; a stray formDoneMsg just clears it.
 		a.overlay = nil
-		return a, after
+		return a, m.after
 	}
 }
 
