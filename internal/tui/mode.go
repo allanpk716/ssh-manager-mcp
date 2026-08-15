@@ -120,12 +120,12 @@ func Run(modeFlag string) error {
 			if wm.done && wm.next == "broker" && wm.st != nil {
 				app, aerr := NewBrokerApp(wm.st)
 				if aerr != nil {
-					wm.st.Close()
+					wm.closeStore()
 					return aerr
 				}
 				_, werr = tea.NewProgram(app).Run()
 			}
-			wm.st.Close()
+			wm.closeStore()
 		}
 		return werr
 	case "client":
@@ -151,4 +151,14 @@ func Run(modeFlag string) error {
 func isTTY() bool {
 	fi, err := os.Stdin.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// closeStore closes the wizard's vault store — the ONE cleanup path Run uses
+// after the wizard program exits. st is nil on every early exit (first-screen
+// q before choosing a role, the T4/T5 placeholder pages, stepVaultErr), so the
+// nil guard is what makes quit-from-anywhere safe.
+func (wm *wizardModel) closeStore() {
+	if wm.st != nil {
+		wm.st.Close()
+	}
 }

@@ -147,6 +147,23 @@ func (w *wizardModel) startRoleFlow() {
 // (kept open for the flow's mutations and the later broker handoff), then ask
 // about the first server. Failure lands on stepVaultErr (banner + r 重试) —
 // role.json is already saved, so quitting here is a safe pause.
+//
+// RESUME IDEMPOTENCY (review I1): quitting mid-flow and re-running tui must
+// not re-run entity creation — a naive re-entry would askFirstServer again and
+// mint a SECOND profile (hostname-2) + project. Heuristic (documented, simple):
+// after the store opens, count existing profiles/projects —
+//
+//	≥1 profile AND ≥1 project → server/profile/project steps all done → jump
+//	  straight to the .mcp.json finish screen (the one-time token was shown on
+//	  the earlier run and is unrecoverable; the finish screen's tokenRef points
+//	  at the Projects-page reissue instead of pretending it is on screen);
+//	≥1 profile, 0 projects → server loop + profile creation done → reuse the
+//	  EXISTING profile (id loaded into w.data) and resume at the project step;
+//	0 profiles → fresh flow, askFirstServer as before.
+//
+// Server-entry is treated as done whenever a profile exists — a profile with
+// zero granted servers is a valid earlier outcome (the skip gate), and extra
+// servers can always be added from the broker console later.
 func (w *wizardModel) enterStandalone() {
 	if err := wizEnsureVault(); err != nil {
 		w.step, w.err, w.form = stepVaultErr, err, nil
@@ -159,6 +176,25 @@ func (w *wizardModel) enterStandalone() {
 	}
 	w.st = st
 	w.err, w.status = nil, "vault 已就绪"
+	profiles, perr := st.ListProfiles()
+	projects, jerr := st.ListProjects()
+	if perr == nil && jerr == nil && len(profiles) > 0 {
+		// Reuse the first (alphabetically) existing profile — its grants are
+		// already in the vault; GrantServers again would be a redundant no-op
+		// at best and a confusing re-ask at worst.
+		w.data.profileName, w.data.profileID = profiles[0].Name, profiles[0].ID
+		if len(projects) > 0 {
+			w.step = stepMcpConfig
+			w.ov = mcpConfigScreen("既有 project 的 token（丢失可在主控台 Projects 页 [a] 重发）")
+			w.status = "检测到已完成的 profile 与 project，直接进入收尾"
+			return
+		}
+		w.data.projName = defaultHostName()
+		w.step = stepProject
+		w.form = w.projectForm()
+		w.status = fmt.Sprintf("检测到既有 profile %s，跳过服务器录入与 profile 创建", profiles[0].Name)
+		return
+	}
 	w.askFirstServer()
 }
 
@@ -183,7 +219,11 @@ func (w wizardModel) Init() tea.Cmd {
 func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
 	case tea.KeyPressMsg:
-		if w.ov != nil { // overlay owns keys until formDoneMsg
+		if w.ov != nil { // overlay owns keys until formDoneMsg.
+			// Deliberate: the one-time secret screens (token / .mcp.json) swallow
+			// q/Esc — their data is ALREADY persisted (profile/project/token
+			// hash are in the vault), so there is nothing to "pause" back to;
+			// any key advances the flow.
 			ov, cmd := w.ov.Update(msg)
 			w.ov, _ = ov.(overlay)
 			return w, cmd
@@ -292,7 +332,7 @@ func (w wizardModel) stepFormDone() (tea.Model, tea.Cmd) {
 		} else {
 			w.chooseRole(roles.RoleStandalone)
 		}
-		if w.step == stepRoleDone { // server/client placeholder (T4/T5)
+		if w.step == stepRoleDone || w.form == nil { // placeholder (T4/T5), or standalone landed on stepVaultErr (form cleared)
 			return w, nil
 		}
 		return w, w.form.Init() // standalone entered a flow step with a form
@@ -415,7 +455,13 @@ var wizStepTitles = map[wizStep]string{
 
 func (w wizardModel) View() tea.View {
 	if w.ov != nil {
-		return w.ov.View()
+		v := w.ov.View().Content
+		// M1: a Save failure in wizFinish surfaces as errMsg while the overlay
+		// is still up — render it BELOW the overlay or the error is invisible.
+		if w.err != nil {
+			v += "\n" + errStyle.Render("✗ "+w.err.Error()) + "\n（任意键重试）"
+		}
+		return tea.NewView(v)
 	}
 	var b strings.Builder
 	switch w.step {

@@ -94,6 +94,148 @@ func TestWizard_ResumeSkipsFirstScreen(t *testing.T) {
 	}
 }
 
+// TestWizard_CloseStoreNilSafe pins the Run cleanup path (review C1): st is
+// nil on every early exit (first-screen q, T4/T5 placeholder, stepVaultErr),
+// so closeStore must be a no-op there — not a nil-deref panic.
+func TestWizard_CloseStoreNilSafe(t *testing.T) {
+	withRoleDirs(t)
+	w := newWizardForTest() // first screen: st guaranteed nil
+	if w.st != nil {
+		t.Fatal("precondition: fresh wizard must have nil st")
+	}
+	w.closeStore() // the exact call Run makes after the program exits
+	// and the vault-error shape explicitly called out by the review
+	wv := newWizardForTest()
+	wv.step, wv.form = stepVaultErr, nil
+	wv.closeStore()
+}
+
+// TestStepFormDone_StandaloneVaultErrNoPanic pins review C2: a fresh
+// chooseRole(standalone) whose enterStandalone fails leaves step=stepVaultErr
+// and form=nil; stepFormDone must return (w, nil) instead of Init-ing the nil
+// form, and Update(formDoneMsg) on that model must not panic either.
+func TestStepFormDone_StandaloneVaultErrNoPanic(t *testing.T) {
+	vd, _ := withRoleDirs(t)
+	seedWizardVault(t, vd)
+	// Make the vault EXIST but LOCKED: remove the master key so
+	// wizEnsureVault fails without touching anything else.
+	if err := os.Remove(filepath.Join(vd, "master.key.plain")); err != nil {
+		t.Fatal(err)
+	}
+	w := newWizardForTest()
+	w.askShare = true // simulate q2 answered; next stepFormDone picks the role
+	w.ans.share = "self"
+	m, _ := w.stepFormDone() // ← used to panic on w.form.Init() with nil form
+	wm, ok := m.(wizardModel)
+	if !ok {
+		t.Fatalf("want wizardModel, got %T", m)
+	}
+	if wm.step != stepVaultErr {
+		t.Fatalf("want stepVaultErr, got %d", wm.step)
+	}
+	if wm.form != nil {
+		t.Fatal("vault-error step must carry a nil form")
+	}
+	// Update through formDoneMsg on the broken-state model: must be a no-op.
+	if _, cmd := wm.Update(formDoneMsg{}); cmd != nil {
+		t.Fatalf("formDoneMsg on stepVaultErr must not produce a cmd, got %v", cmd)
+	}
+}
+
+// TestWizard_ResumeSkipsCompletedEntities pins resume idempotency (review I1):
+// quitting mid-flow and re-running must never mint a SECOND profile
+// (hostname-2) or project. Full case (profile + project both exist) resumes
+// straight at the .mcp.json finish screen and finishing creates nothing.
+func TestWizard_ResumeSkipsCompletedEntities(t *testing.T) {
+	vd, _ := withRoleDirs(t)
+	seedWizardVault(t, vd)
+	st := openVault(t)
+	pid, err := st.AddProfile("host-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddProject("proj-x", pid); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	w := newWizardForRole(roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleStandalone, ResumeSetup: true})
+	if w.step != stepMcpConfig {
+		t.Fatalf("resume with profile+project must land on mcpConfig, got step=%d", w.step)
+	}
+	if w.ov == nil {
+		t.Fatal("resume must show the finish overlay")
+	}
+	// Any key on the finish screen completes setup — and must not create any
+	// new entity.
+	m, cmd := w.Update(formDoneMsg{})
+	if cmd == nil {
+		t.Fatal("finish screen key must trigger wizFinish")
+	}
+	final, _ := m.Update(cmd()) // wizFinish → wizardDoneMsg → done/next
+	if wm, ok := final.(wizardModel); !ok || !wm.done || wm.next != "broker" {
+		t.Fatalf("finish must set done+broker handoff, got %+v", final)
+	}
+	// The invariant under test: counts unchanged after the resumed run.
+	st2 := openVault(t)
+	defer st2.Close()
+	profiles, err := st2.ListProfiles()
+	if err != nil || len(profiles) != 1 || profiles[0].Name != "host-x" {
+		t.Fatalf("resume must not create profiles: %+v %v", profiles, err)
+	}
+	projects, err := st2.ListProjects()
+	if err != nil || len(projects) != 1 || projects[0].Name != "proj-x" {
+		t.Fatalf("resume must not create projects: %+v %v", projects, err)
+	}
+	w.closeStore() // Run's cleanup — also releases the db file for TempDir removal
+}
+
+// TestWizard_ResumeReusesExistingProfile pins the half-done case (review I1):
+// profile exists but no project → resume skips the server loop AND profile
+// creation, reuses the EXISTING profile id, and only runs project+finish.
+func TestWizard_ResumeReusesExistingProfile(t *testing.T) {
+	vd, _ := withRoleDirs(t)
+	seedWizardVault(t, vd)
+	st := openVault(t)
+	pid, err := st.AddProfile("host-y")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	w := newWizardForRole(roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleStandalone, ResumeSetup: true})
+	if w.step != stepProject {
+		t.Fatalf("resume with profile but no project must land on stepProject, got step=%d", w.step)
+	}
+	if w.form == nil {
+		t.Fatal("project step must have a form")
+	}
+	if w.data.profileID != pid {
+		t.Fatalf("must reuse existing profile id %q, got %q", pid, w.data.profileID)
+	}
+	// The resumed flow's only mutation: mint the project bound to the
+	// EXISTING profile.
+	w.data.projName = "proj-y"
+	msg := w.submitProject()()
+	if _, ok := msg.(tokenIssuedMsg); !ok {
+		t.Fatalf("want tokenIssuedMsg, got %#v", msg)
+	}
+	st2 := openVault(t)
+	defer st2.Close()
+	profiles, err := st2.ListProfiles()
+	if err != nil || len(profiles) != 1 {
+		t.Fatalf("resume must not create profiles: %+v %v", profiles, err)
+	}
+	projects, err := st2.ListProjects()
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("want exactly one new project: %+v %v", projects, err)
+	}
+	if projects[0].ProfileID != pid {
+		t.Fatalf("new project must bind the existing profile %q, got %q", pid, projects[0].ProfileID)
+	}
+	w.closeStore() // Run's cleanup — also releases the db file for TempDir removal
+}
+
 // TestLaunchTarget pins the dispatch table: wizard on first run, broker/client
 // on completed setups, and wizard again when a standalone/server setup is
 // incomplete. Client resume stays on the client panel in THIS task (Task 5
