@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -302,5 +303,36 @@ func TestResolveMasterKey_FileProviderIOErrorPropagates(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "vault locked") {
 		t.Fatalf("IO error must propagate, not be masked as 'vault locked': %v", err)
+	}
+}
+
+// TestAuthForServer_NoCredential (Plan 20 C0): a credential-less server yields
+// the typed ErrNoCredential sentinel — callers map it to a "configure a
+// credential first" hint, never an attempted connect (or a GetCredential("")
+// lookup). The store is opened directly at a temp path (env-seam discipline:
+// SSHMGR_STORE is NOT set, so no production path is touched).
+func TestAuthForServer_NoCredential(t *testing.T) {
+	mk, _ := store.GenerateMasterKey()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"), mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.AddServer(&models.Server{Name: "bare", Host: "192.0.2.7", Port: 22, User: "u"}); err != nil {
+		t.Fatalf("credential-less AddServer: %v", err)
+	}
+	srv, err := st.GetServerByName("bare")
+	if err != nil || srv == nil {
+		t.Fatalf("GetServerByName: %v %v", srv, err)
+	}
+	auth, err := AuthForServer(st, srv)
+	if !errors.Is(err, ErrNoCredential) {
+		t.Fatalf("want ErrNoCredential, got %v", err)
+	}
+	if auth != nil {
+		t.Fatalf("auth must be nil on ErrNoCredential, got %T", auth)
+	}
+	if !strings.Contains(err.Error(), "no credential") {
+		t.Fatalf("err = %q, want it to mention \"no credential\"", err.Error())
 	}
 }

@@ -22,11 +22,12 @@ type serverDraft struct {
 }
 
 // newServerForm builds the add/edit form bound to d by pointer. Secret fields
-// are masked and OPTIONAL in edit mode (empty = keep existing credential).
+// are masked; in add mode BOTH may stay empty (credential-less server, Plan 20
+// C0), in edit mode empty = keep existing credential.
 func newServerForm(d *serverDraft, editing bool) *huh.Form {
 	credTitle := "密码（留空=保持不变）"
 	if !editing {
-		credTitle = "密码（与密钥二选一）"
+		credTitle = "密码（可选，与密钥二选一）"
 	}
 	return huh.NewForm(
 		huh.NewGroup(
@@ -37,7 +38,7 @@ func newServerForm(d *serverDraft, editing bool) *huh.Form {
 		),
 		huh.NewGroup(
 			huh.NewInput().Title(credTitle).Value(&d.Password).EchoMode(huh.EchoModePassword),
-			huh.NewInput().Title("私钥路径（与密码二选一；编辑时留空=不变）").Value(&d.KeyPath),
+			huh.NewInput().Title("私钥路径（可选，与密码互斥；编辑时留空=不变）").Value(&d.KeyPath),
 			huh.NewInput().Title("密钥口令（可选）").Value(&d.KeyPass).EchoMode(huh.EchoModePassword),
 			huh.NewInput().Title("sudo 密码（可选）").Value(&d.SudoPassword).EchoMode(huh.EchoModePassword),
 		),
@@ -278,10 +279,9 @@ func submitServer(st *store.Store, cur *models.Server, d *serverDraft) tea.Cmd {
 			return "", err
 		}
 		if cur == nil {
-			// Add mode: require exactly one credential (CLI serversAddCmd parity)
-			if d.Password == "" && d.KeyPath == "" {
-				return "", errors.New("凭据必填：密码或私钥路径二选一（与 CLI servers add 一致）")
-			}
+			// Add mode: credential is optional (Plan 20 C0) — a draft with
+			// neither password nor key persists a credential-less server
+			// (toServer mints nothing when both are empty).
 			_, err := st.AddServer(srv)
 			return "已新增 " + srv.Name, err
 		}

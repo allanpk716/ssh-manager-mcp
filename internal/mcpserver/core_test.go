@@ -16,6 +16,7 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/testsshd"
+	"ssh-manager-mcp/internal/vault"
 )
 
 func newStore(t *testing.T) *store.Store {
@@ -104,6 +105,45 @@ func TestExecCommandRejectsOutOfProfile(t *testing.T) {
 	}
 	if denied.Command != "echo hi" {
 		t.Fatalf("denied audit command = %q, want %q", denied.Command, "echo hi")
+	}
+}
+
+// TestExecCommandNoCredential (Plan 20 C0): exec against a credential-less
+// server is refused with the typed sentinel and audited as status
+// "no_credential" (not auth_error) — the agent gets the configure-a-credential
+// hint, and no connect is attempted.
+func TestExecCommandNoCredential(t *testing.T) {
+	st := newStore(t)
+	srvID, err := st.AddServer(&models.Server{Name: "bare", Host: "192.0.2.7", Port: 22, User: "u"})
+	if err != nil {
+		t.Fatalf("credential-less AddServer: %v", err)
+	}
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	const projectID = "proj-test"
+	_, err = ExecCommandForProfile(context.Background(), st, projectID, pid, srvID, "echo hi", false, time.Second)
+	if !errors.Is(err, vault.ErrNoCredential) {
+		t.Fatalf("want vault.ErrNoCredential, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "no credential") {
+		t.Fatalf("err = %q, want it to mention \"no credential\"", err.Error())
+	}
+
+	// audited with the dedicated status (mirrors the no_sudo pattern)
+	rows, err := st.AuditRows(5)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	found := false
+	for _, r := range rows {
+		if r.Action == "exec" && r.ServerID == srvID && r.ProjectID == projectID && r.Status == "no_credential" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no no_credential audit row for server=%s; rows=%+v", srvID, rows)
 	}
 }
 

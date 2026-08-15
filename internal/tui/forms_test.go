@@ -44,13 +44,20 @@ func TestDraftToServer_PasswordKeyMutex(t *testing.T) {
 	}
 }
 
-func TestSubmitServer_AddWithoutCredentialRejected(t *testing.T) {
+// TestSubmitServer_AddCredentialLess (Plan 20 C0): add mode no longer requires
+// a credential — a draft with neither password nor key persists a credential-less
+// server (empty CredentialID/AuthMethod; exec on it returns "no_credential"
+// until one is attached).
+func TestSubmitServer_AddCredentialLess(t *testing.T) {
 	st := newStore(t)
 	d := &serverDraft{Name: "x", Host: "h", User: "u", Port: 22} // no password, no key
 	cmd := submitServer(st, nil, d)
-	msg := cmd()
-	if e, ok := msg.(errMsg); !ok || e.err == nil {
-		t.Fatalf("add without credential must error, got %T %+v", msg, msg)
+	if _, ok := cmd().(actionDoneMsg); !ok {
+		t.Fatalf("add without credential must succeed (credential-less), got non-actionDoneMsg")
+	}
+	got, _ := st.GetServerByName("x")
+	if got == nil || got.CredentialID != "" || got.AuthMethod != "" {
+		t.Fatalf("credential-less server not persisted as such: %+v", got)
 	}
 }
 

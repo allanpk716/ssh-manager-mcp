@@ -69,9 +69,10 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 // ExecCommandForProfile runs command on serverID iff serverID is in profileID (iron rule).
 // sudo=true uses sudo -S with the server's stored sudo password.
 //
-// Every branch is audited via the deferred WriteAudit: denial (out-of-profile), auth
-// failure, host-key mismatch, connect failure, missing sudo, timeout, exec error, and
-// success. projectID attributes the call to the agent's project (empty for any future
+// Every branch is audited via the deferred WriteAudit: denial (out-of-profile),
+// auth failure, missing credential (no_credential, Plan 20 C0), host-key
+// mismatch, connect failure, missing sudo, timeout, exec error, and success.
+// projectID attributes the call to the agent's project (empty for any future
 // owner-facing caller — currently the owner path is internal/cli/ssh.go).
 func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeout time.Duration) (out ExecOutput, err error) {
 	var status string
@@ -108,6 +109,13 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
+		if errors.Is(aerr, vault.ErrNoCredential) {
+			// Credential-less server (Plan 20 C0): refused BEFORE any connect —
+			// the error carries the configure-a-credential hint for the agent.
+			status = "no_credential"
+			err = aerr
+			return
+		}
 		status = "auth_error"
 		err = aerr
 		return

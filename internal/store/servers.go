@@ -22,10 +22,13 @@ func (s *Store) AddServer(srv *models.Server) (string, error) {
 	ts := now()
 	tagsJSON, _ := json.Marshal(srv.Tags)
 	sudo := nullableString(srv.SudoCredentialID)
+	// Credential-less servers (Plan 20 C0): "" must land as NULL — the FK on
+	// credential_id has no '' row to reference, so a literal '' would violate it.
+	cred := nullableString(srv.CredentialID)
 	_, err := s.db.Exec(
 		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description,
+		id, srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), cred, sudo, string(tagsJSON), srv.Description,
 		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, ts, ts,
 	)
 	if err != nil {
@@ -53,9 +56,11 @@ func (s *Store) UpdateServer(srv *models.Server) error {
 	}
 	tagsJSON, _ := json.Marshal(srv.Tags)
 	sudo := nullableString(srv.SudoCredentialID)
+	// Same NULL-for-"" mapping as AddServer (Plan 20 C0 credential-less form).
+	cred := nullableString(srv.CredentialID)
 	res, err := s.db.Exec(
 		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,tags=?,description=?,location=?,hardware=?,services=?,role=?,caveats=?,updated_at=? WHERE id=?`,
-		srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description,
+		srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), cred, sudo, string(tagsJSON), srv.Description,
 		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, now(), srv.ID,
 	)
 	if err != nil {
@@ -119,15 +124,17 @@ func scanServer(sc scanner) (*models.Server, error) {
 	var (
 		srv              models.Server
 		authMethod       string
+		credentialID     sql.NullString // nullable since Plan 20 C0 (credential-less servers)
 		tagsJSON         string
 		sudoCredentialID sql.NullString
 		createdAt        int64
 		updatedAt        int64
 	)
-	if err := sc.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.User, &authMethod, &srv.CredentialID, &sudoCredentialID, &tagsJSON, &srv.Description, &srv.Location, &srv.Hardware, &srv.Services, &srv.Role, &srv.Caveats, &createdAt, &updatedAt); err != nil {
+	if err := sc.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.User, &authMethod, &credentialID, &sudoCredentialID, &tagsJSON, &srv.Description, &srv.Location, &srv.Hardware, &srv.Services, &srv.Role, &srv.Caveats, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	srv.AuthMethod = models.AuthMethod(authMethod)
+	srv.CredentialID = credentialID.String
 	srv.SudoCredentialID = sudoCredentialID.String
 	srv.CreatedAt = time.Unix(createdAt, 0)
 	srv.UpdatedAt = time.Unix(updatedAt, 0)

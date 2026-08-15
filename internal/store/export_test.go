@@ -133,10 +133,71 @@ func TestImportSnapshot_RoundTrip_CrossMasterKey(t *testing.T) {
 	}
 }
 
-// TestImportSnapshot_RefusesNonEmpty guards against silent clobber. servers.credential_id
-// is NOT NULL + FK on credentials(id), so the empty-cred seed from the brief's sketch would
-// fail the FK; we seed a real credential on both A and B (the intent — "B has >=1 server" —
-// is unchanged).
+// TestSnapshotRoundTripCredentialLess (Plan 20 C0): a credential-less server
+// survives export → import losslessly — empty-string CredentialID/AuthMethod in
+// the snapshot both ways, NULL (not '') on disk in the target (the FK on
+// credential_id would reject ''), while its credential-backed neighbor keeps
+// its binding.
+func TestSnapshotRoundTripCredentialLess(t *testing.T) {
+	a := newTestStore(t)
+	credID, err := a.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.AddServer(&models.Server{Name: "withcred", Host: "192.0.2.1", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: credID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.AddServer(&models.Server{Name: "bare", Host: "192.0.2.2", Port: 22, User: "u", Tags: []string{"imported"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := a.ExportSnapshot()
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	var sawBare bool
+	for _, sv := range snap.Servers {
+		if sv.Name == "bare" {
+			sawBare = true
+			if sv.CredentialID != "" || sv.AuthMethod != "" {
+				t.Fatalf("bare server not credential-less in snapshot: %+v", sv)
+			}
+		}
+	}
+	if !sawBare {
+		t.Fatalf("bare server not captured in snapshot: %+v", snap.Servers)
+	}
+
+	b := newTestStore(t)
+	if err := b.ImportSnapshot(snap); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	got, err := b.GetServerByName("bare")
+	if err != nil || got == nil {
+		t.Fatalf("GetServerByName(bare) on B: %v %v", got, err)
+	}
+	if got.CredentialID != "" || got.AuthMethod != "" {
+		t.Fatalf("bare server lost credential-less form on B: %+v", got)
+	}
+	// SQL-layer proof: the imported row carries NULL — '' would violate the FK.
+	var nullCred int
+	if err := b.db.QueryRow(`SELECT COUNT(*) FROM servers WHERE name='bare' AND credential_id IS NULL`).Scan(&nullCred); err != nil {
+		t.Fatal(err)
+	}
+	if nullCred != 1 {
+		t.Fatal("imported credential-less server must store NULL credential_id")
+	}
+	wc, _ := b.GetServerByName("withcred")
+	if wc == nil || wc.CredentialID != credID || wc.AuthMethod != models.AuthPassword {
+		t.Fatalf("credential-backed server corrupted across roundtrip: %+v", wc)
+	}
+}
+
+// TestImportSnapshot_RefusesNonEmpty guards against silent clobber. We seed a
+// real credential-backed server on both A and B — the intent ("B has >=1
+// server") is unchanged; the refusal gate counts servers regardless of
+// credentials.
 func TestImportSnapshot_RefusesNonEmpty(t *testing.T) {
 	a := newTestStore(t)
 	aCredID, _ := a.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("x")})

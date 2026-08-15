@@ -109,8 +109,17 @@ func fileKeyProvider() store.FileKeyProvider {
 	return store.FileKeyProvider{Path: os.Getenv("SSHMGR_FILEKEY_PATH")}
 }
 
+// ErrNoCredential is returned by AuthForServer for a server that has no
+// credential attached yet (credential-less model, Plan 20 C0 — e.g. a server
+// imported from ssh_config without an IdentityFile). Callers map it to a
+// "configure a credential first" action hint — never attempt a connect.
+var ErrNoCredential = errors.New("server has no credential configured (set one with: ssh-manager servers edit <name> --password ... / --key ...)")
+
 // AuthForServer resolves a server's stored credential into an SSH auth method.
 func AuthForServer(st *store.Store, srv *models.Server) (ssh.AuthMethod, error) {
+	if srv.CredentialID == "" {
+		return nil, ErrNoCredential
+	}
 	cred, err := st.GetCredential(srv.CredentialID)
 	if err != nil {
 		return nil, err

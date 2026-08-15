@@ -598,7 +598,7 @@ func (w wizardModel) stepFormDone() (tea.Model, tea.Cmd) {
 		}
 		return w.enterProfileGrant()
 	case stepServerForm:
-		return w, submitServer(w.st, nil, w.data.srvDraft) // add-mode: password-or-key enforced
+		return w, submitServer(w.st, nil, w.data.srvDraft) // add-mode: credential optional (Plan 20 C0)
 	case stepProfileGrant:
 		return w, w.submitProfileGrant()
 	case stepProject:

@@ -114,8 +114,9 @@ func (s *Store) ListHostKeys() ([]SnapshotHostKey, error) {
 func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	snap := &Snapshot{Version: 1}
 
-	// servers (COALESCE the two nullable text cols to '')
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,credential_id,COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,created_at,updated_at FROM servers ORDER BY id`)
+	// servers (COALESCE the nullable text cols to '' — credential_id is nullable
+	// since Plan 20 C0: a credential-less server carries "" in the snapshot)
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,created_at,updated_at FROM servers ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -297,14 +298,16 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		}
 	}
 
-	// 2. servers (sudo_credential_id "" -> NULL to mirror the original NULL semantics for empty)
+	// 2. servers (sudo_credential_id "" -> NULL to mirror the original NULL semantics for empty;
+	//    credential_id same since Plan 20 C0 — "" must be NULL or the FK on credentials(id) rejects it)
 	for _, sv := range snap.Servers {
 		var sudoArg any
 		if sv.SudoCredentialID != "" {
 			sudoArg = sv.SudoCredentialID
 		}
+		credArg := nullIfEmpty(sv.CredentialID)
 		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, sv.CredentialID, sudoArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.CreatedAt, sv.UpdatedAt); err != nil {
+			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.CreatedAt, sv.UpdatedAt); err != nil {
 			return fmt.Errorf("insert server %s: %w", sv.ID, err)
 		}
 	}
