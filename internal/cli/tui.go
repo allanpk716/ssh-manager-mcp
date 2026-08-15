@@ -12,6 +12,10 @@ func newTUICmd() *cobra.Command {
 		Use:   "tui",
 		Short: "Interactive console (first run: role wizard; then broker or client per role.json)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Wire the install core into the role wizard's serve step. tui
+			// cannot import cli (cli imports tui for this very command —
+			// import cycle), so the hook is injected here instead (Plan 19 T4).
+			tui.SetServeInstaller(installServeService)
 			return tui.Run(mode)
 		},
 	}

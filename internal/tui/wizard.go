@@ -7,8 +7,11 @@
 //
 // Task 3 wires the STANDALONE flow end to end (spec §2.2): vault init →
 // server-entry loop (skippable) → profile+grant → project → one-time token →
-// .mcp.json finish → wizFinish hands off to the broker console. The server
-// (Task 4) and client (Task 5) flows stay on the stepRoleDone placeholder.
+// .mcp.json finish → wizFinish hands off to the broker console. Task 4 adds
+// the SERVER flow (spec §2.4) on the shared steps ②③④ plus the dual-secret
+// screens, the serve segment (addr picker → admin notice → install → probe →
+// result banners) and the client access card. The client (Task 5) flow stays
+// on the stepRoleDone placeholder.
 package tui
 
 import (
@@ -18,6 +21,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
@@ -29,7 +33,7 @@ type wizStep int
 
 const (
 	stepPick     wizStep = iota
-	stepRoleDone         // placeholder: server (T4) / client (T5) flows land here
+	stepRoleDone         // placeholder: client (T5) flow lands here
 	// standalone flow (T3)
 	stepVaultErr      // wizEnsureVault / store open failed → r 重试
 	stepServerAsk     // 「现在录入第一台服务器？」(skip = zero servers allowed)
@@ -39,6 +43,16 @@ const (
 	stepProject       // project name (default hostname)
 	stepToken         // one-time token screen (overlay)
 	stepMcpConfig     // .mcp.json finish screen (overlay)
+	// server flow (T4) — ①-④ reuse the standalone steps above
+	stepClientName   // 客户端机器名（server 角色：profile 默认名）
+	stepDeviceIssue  // device-code issuance in flight (waiting; r retry on err)
+	stepDeviceToken  // 设备码 one-time screen (overlay, 密钥 2/2)
+	stepAddr         // LAN address select (spec §2.4 ⑥ 地址捕获)
+	stepServeAdmin   // admin 前置提示 (overlay)
+	stepServeInstall // service registration in flight (waiting)
+	stepServeProbe   // post-install probe in flight (waiting)
+	stepServeResult  // install + probe banners (overlay, non-blocking)
+	stepAccessCard   // 客户端接入卡 (overlay)
 )
 
 // wizardData holds the standalone flow's answers. Heap-allocated ONCE in
@@ -54,6 +68,12 @@ type wizardData struct {
 	chosen      []string // granted server ids (value=id discipline)
 	projName    string
 	servers     []*models.Server
+
+	// server-role flow (T4)
+	clientName string // 客户端机器名 — profile 默认名 + 设备码名
+	serveAddr  string // 选定的 LAN 地址实值（https://<ip>:7878），进接入卡
+	deviceFp   string // serve cert SPKI fingerprint（接入卡 + 设备码 usage）
+	installErr error  // serve 服务安装结果（非阻断，进结果横幅）
 }
 
 // wizAnswers holds the first-screen huh bindings. Heap-allocated ONCE in
@@ -133,14 +153,35 @@ func (w *wizardModel) chooseRole(r roles.Role) {
 }
 
 // startRoleFlow dispatches into the per-role flow after the role is fixed.
-// Server (T4) and client (T5) stay on the placeholder page for now.
+// The client (T5) flow stays on the placeholder page for now.
 func (w *wizardModel) startRoleFlow() {
 	switch w.role {
 	case roles.RoleStandalone:
 		w.enterStandalone()
+	case roles.RoleServer:
+		w.enterServer()
 	default:
 		w.step = stepRoleDone
 	}
+}
+
+// openVaultOrErr is the shared boot of BOTH vault-role flows (standalone T3 /
+// server T4): ensure a vault, open the store. Failure lands on stepVaultErr
+// (banner + r 重试) — role.json is already saved, so quitting here is a safe
+// pause. Returns false when the caller must stop.
+func (w *wizardModel) openVaultOrErr() bool {
+	if err := wizEnsureVault(); err != nil {
+		w.step, w.err, w.form = stepVaultErr, err, nil
+		return false
+	}
+	st, err := vault.OpenStore(store.FileKeyProvider{})
+	if err != nil {
+		w.step, w.err, w.form = stepVaultErr, fmt.Errorf("打开 vault：%w", err), nil
+		return false
+	}
+	w.st = st
+	w.err, w.status = nil, "vault 已就绪"
+	return true
 }
 
 // enterStandalone boots the standalone flow: ensure a vault, open the store
@@ -165,19 +206,11 @@ func (w *wizardModel) startRoleFlow() {
 // zero granted servers is a valid earlier outcome (the skip gate), and extra
 // servers can always be added from the broker console later.
 func (w *wizardModel) enterStandalone() {
-	if err := wizEnsureVault(); err != nil {
-		w.step, w.err, w.form = stepVaultErr, err, nil
+	if !w.openVaultOrErr() {
 		return
 	}
-	st, err := vault.OpenStore(store.FileKeyProvider{})
-	if err != nil {
-		w.step, w.err, w.form = stepVaultErr, fmt.Errorf("打开 vault：%w", err), nil
-		return
-	}
-	w.st = st
-	w.err, w.status = nil, "vault 已就绪"
-	profiles, perr := st.ListProfiles()
-	projects, jerr := st.ListProjects()
+	profiles, perr := w.st.ListProfiles()
+	projects, jerr := w.st.ListProjects()
 	if perr == nil && jerr == nil && len(profiles) > 0 {
 		// Reuse the first (alphabetically) existing profile — its grants are
 		// already in the vault; GrantServers again would be a redundant no-op
@@ -196,6 +229,111 @@ func (w *wizardModel) enterStandalone() {
 		return
 	}
 	w.askFirstServer()
+}
+
+// enterServer boots the SERVER flow (spec §2.4): shared vault boot, then a
+// resume heuristic that MIRRORS standalone's (T3 I1) but extended one state
+// deeper, because the server flow mints one more entity (the device code):
+//
+//	0 profiles → fresh flow: ask the client machine name first (its answer is
+//	  the profile default, spec §2.4 ④) → shared steps ③④⑤ → dual secrets…;
+//	≥1 profile, 0 projects → same as standalone: reuse the EXISTING profile
+//	  and resume at the project step (its token will be minted fresh);
+//	≥1 profile, ≥1 project, ≥1 cache token → everything minted → jump
+//	  straight to the serve segment (addr picker). Both one-time secrets were
+//	  shown on earlier runs and are unrecoverable — the access card points at
+//	  the reissue pages instead of pretending they are on screen. The cert
+//	  fingerprint is recovered via the idempotent LoadOrCreateServeCert;
+//	≥1 profile, ≥1 project, 0 cache tokens → only the device code remains:
+//	  re-ask the client name (it names the code) and issue it — the project
+//	  token screen is skipped (already minted; reissue via Projects page).
+func (w *wizardModel) enterServer() {
+	if !w.openVaultOrErr() {
+		return
+	}
+	profiles, perr := w.st.ListProfiles()
+	projects, jerr := w.st.ListProjects()
+	tokens, terr := w.st.ListCacheTokens()
+	if perr != nil || jerr != nil || terr != nil {
+		// Cannot scan → treat as fresh; the underlying store error resurfaces
+		// at the first mutating submit (same policy as dedupeProfileName).
+		w.startClientName()
+		return
+	}
+	switch {
+	case len(profiles) == 0:
+		w.startClientName()
+	case len(projects) == 0:
+		w.data.profileName, w.data.profileID = profiles[0].Name, profiles[0].ID
+		w.data.projName = defaultHostName()
+		w.step = stepProject
+		w.form = w.projectForm()
+		w.status = fmt.Sprintf("检测到既有 profile %s，跳过服务器录入与 profile 创建", profiles[0].Name)
+	case len(tokens) > 0:
+		// Everything minted → serve segment. Recover the cert fingerprint
+		// (display-only input to the access card) via the idempotent
+		// LoadOrCreateServeCert — normally the cert already exists (the
+		// device-code step created it); on a pre-cert machine this creates
+		// it, which is exactly what the fresh flow would have done anyway.
+		// An unreadable cert must not trap the resume: fall back to a hint.
+		if _, _, fp, err := mcpserver.LoadOrCreateServeCert(); err == nil {
+			w.data.deviceFp = fp
+		} else {
+			w.data.deviceFp = "（指纹不可读：" + err.Error() + "）"
+		}
+		w.enterAddrForm()
+		w.status = "检测到已完成的 profile/project/设备码，直接进入 serve 安装段（两把密钥此前已展示，丢失可在主控台重发）"
+	default:
+		// profile+project done, device code missing. Load the profileID so the
+		// client-name submit knows entity creation is complete and routes
+		// straight to the code issuance (see stepFormDone@stepClientName).
+		w.data.profileID = profiles[0].ID
+		w.startClientName()
+		w.status = "profile/project 已完成（project token 已在此前展示，丢失可在主控台 Projects 页 [a] 重发），继续签发设备码"
+	}
+}
+
+// startClientName opens the 客户端机器名 step — the server flow's first
+// question, whose answer becomes the profile default name AND the device-code
+// name (one name, two uses: the card's 去向表 stays self-consistent).
+func (w *wizardModel) startClientName() {
+	w.data.clientName = defaultHostName()
+	w.step = stepClientName
+	w.form = w.clientNameForm()
+}
+
+func (w wizardModel) clientNameForm() *huh.Form {
+	return huh.NewForm(huh.NewGroup(
+		huh.NewInput().Title("客户端机器名（将命名 profile 与设备码；填对方电脑的名字）").
+			Value(&w.data.clientName).Validate(nonEmpty),
+	))
+}
+
+// issueDeviceCode mints the device code named after the client and returns the
+// cmd whose message (deviceCodeIssuedMsg) carries BOTH the one-time code and
+// the cert fingerprint. ORDER MATTERS: cert FIRST, code second — if the cert
+// init failed after AddCacheToken succeeded, a retry would hit the active-name
+// collision on the already-minted code; this order keeps the retry idempotent.
+// The fingerprint is also stashed into w.data.deviceFp for the access card.
+func (w wizardModel) issueDeviceCode() tea.Cmd {
+	return func() tea.Msg {
+		_, _, fp, err := mcpserver.LoadOrCreateServeCert()
+		if err != nil {
+			return errMsg{err}
+		}
+		_, code, err := w.st.AddCacheToken(strings.TrimSpace(w.data.clientName))
+		if err != nil {
+			return errMsg{err}
+		}
+		w.data.deviceFp = fp
+		return deviceCodeIssuedMsg{code: code, fingerprint: fp}
+	}
+}
+
+// enterAddrForm opens the serve-segment address picker (spec §2.4 ⑥ 地址捕获).
+func (w *wizardModel) enterAddrForm() {
+	w.step = stepAddr
+	w.form = wizAddrForm(mcpserver.LocalNonLoopbackIPs(), &w.data.serveAddr)
 }
 
 // askFirstServer: the skip gate. Skipping is ALLOWED (zero servers) but the
@@ -240,7 +378,21 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if w.step == stepVaultErr {
 			if k.Text == "r" {
-				w.enterStandalone() // retry (idempotent — existing vault is skipped)
+				if w.role == roles.RoleServer {
+					w.enterServer() // retry (idempotent — existing vault is skipped)
+				} else {
+					w.enterStandalone()
+				}
+			}
+			return w, nil
+		}
+		if w.step == stepDeviceIssue {
+			// The issue failed (err set via errMsg): r retries the SAME action —
+			// issueDeviceCode is ordered cert-first so a retry after a
+			// half-failure stays idempotent (see its comment).
+			if k.Text == "r" && w.err != nil {
+				w.err, w.status = nil, ""
+				return w, w.issueDeviceCode()
 			}
 			return w, nil
 		}
@@ -292,18 +444,68 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The plaintext transits this one message and then lives only inside
 		// the overlay (same discipline as App's token flow).
 		w.step, w.err, w.status = stepToken, nil, ""
+		if w.role == roles.RoleServer {
+			// Server flow (spec §2.4 ⑤): this token goes to the CLIENT
+			// machine's .mcp.json — the usage label must say so, and the
+			// screen is numbered 1/2 (the device code screen follows).
+			w.ov = wizTokenScreen("密钥 1/2：project token", m.token,
+				"贴到 client 机 .mcp.json 的 --token 参数",
+				"主控台 Projects 页 [a] 重发")
+			return w, nil
+		}
 		w.ov = wizTokenScreen(m.title, m.token,
 			"贴到本机 .mcp.json 的 --token 参数",
 			"主控台 Projects 页 [a] 重发")
 		return w, nil
+	case deviceCodeIssuedMsg:
+		// Server flow's second secret (spec §2.4 ⑤ 密钥 2/2). The usage line
+		// embeds the ready-to-paste merged token "<码>:<指纹>" (spec §3.3 形态 A
+		// — the exact string cache pull's stripEmbeddedPin consumes).
+		w.step, w.err, w.status = stepDeviceToken, nil, ""
+		w.data.deviceFp = m.fingerprint
+		w.ov = wizTokenScreen("密钥 2/2：设备码", m.code,
+			fmt.Sprintf("填到 client 机向导；或拼 cache pull --token '%s:%s'", m.code, m.fingerprint),
+			"主控台 设备码页 [a] 重发")
+		return w, nil
+	case serveInstalledMsg:
+		// Install outcome — either way the flow CONTINUES to the probe
+		// (spec §2.4 ⑥: install failure 不阻断; the result screen renders the
+		// manual elevated command next to the probe verdict).
+		w.data.installErr = m.err
+		w.step = stepServeProbe
+		return w, probeServe(w.data.serveAddr)
+	case serveProbeMsg:
+		w.step = stepServeResult
+		w.ov = serveResultScreen(w.data.installErr, m)
+		return w, nil
 	case formDoneMsg:
 		switch w.step {
 		case stepToken:
+			if w.role == roles.RoleServer {
+				// Server flow: the project token screen is 1/2 — the device
+				// code comes next, not the .mcp.json finisher.
+				w.step = stepDeviceIssue
+				return w, w.issueDeviceCode()
+			}
 			w.step = stepMcpConfig
 			w.ov = mcpConfigScreen("上方已展示的 project token")
 			return w, m.after
 		case stepMcpConfig:
 			return w, wizFinish(w.role) // any key on the finish screen completes setup
+		case stepDeviceToken:
+			// 设备码 dismissed → the serve segment begins (address capture).
+			w.enterAddrForm()
+			return w, w.form.Init()
+		case stepServeAdmin:
+			// Admin notice acknowledged → run the registration.
+			w.step = stepServeInstall
+			return w, installServeStep(w.data.serveAddr)
+		case stepServeResult:
+			w.step = stepAccessCard
+			w.ov = accessCard(w.data.serveAddr, w.data.deviceFp)
+			return w, nil
+		case stepAccessCard:
+			return w, wizFinish(w.role) // any key completes the server setup
 		}
 		return w, m.after
 	case wizardDoneMsg:
@@ -354,6 +556,22 @@ func (w wizardModel) stepFormDone() (tea.Model, tea.Cmd) {
 		return w, w.submitProfileGrant()
 	case stepProject:
 		return w, w.submitProject()
+	case stepClientName:
+		// Fresh flow → shared server-entry loop. On a resume where profile +
+		// project already exist (profileID preloaded), the client name's only
+		// remaining job is naming the missing device code → issue it directly.
+		w.data.clientName = strings.TrimSpace(w.data.clientName)
+		if w.data.profileID != "" {
+			w.step = stepDeviceIssue
+			return w, w.issueDeviceCode()
+		}
+		w.askFirstServer()
+		return w, w.form.Init()
+	case stepAddr:
+		w.data.serveAddr = strings.TrimSpace(w.data.serveAddr)
+		w.step = stepServeAdmin
+		w.ov = serveAdminNotice()
+		return w, nil
 	}
 	return w, nil
 }
@@ -367,8 +585,9 @@ func (w wizardModel) openServerForm() (tea.Model, tea.Cmd) {
 }
 
 // enterProfileGrant loads the (possibly empty) server list and asks for the
-// profile name (default = hostname, conflicts auto-suffixed at submit) plus
-// the grant multi-select.
+// profile name (default = hostname for standalone; the CLIENT name for the
+// server role — spec §2.4 ④ — conflicts auto-suffixed at submit) plus the
+// grant multi-select.
 func (w wizardModel) enterProfileGrant() (tea.Model, tea.Cmd) {
 	servers, err := w.st.ListServers()
 	if err != nil {
@@ -377,6 +596,9 @@ func (w wizardModel) enterProfileGrant() (tea.Model, tea.Cmd) {
 	}
 	w.data.servers = servers
 	w.data.profileName = defaultHostName()
+	if w.role == roles.RoleServer && strings.TrimSpace(w.data.clientName) != "" {
+		w.data.profileName = w.data.clientName
+	}
 	w.data.chosen = nil
 	w.step = stepProfileGrant
 	w.form = wizProfileGrantForm(&w.data.profileName, servers, &w.data.chosen)
@@ -451,6 +673,8 @@ var wizStepTitles = map[wizStep]string{
 	stepServerConfirm: " 服务器录入 ",
 	stepProfileGrant:  " Profile + 授权 ",
 	stepProject:       " 创建项目 ",
+	stepClientName:    " 客户端命名 ",
+	stepAddr:          " serve 地址 ",
 }
 
 func (w wizardModel) View() tea.View {
@@ -487,6 +711,31 @@ func (w wizardModel) View() tea.View {
 		b.WriteString(titleStyle.Render(" 初始化 vault 失败 ") + "\n\n")
 		b.WriteString(errStyle.Render("✗ "+w.err.Error()) + "\n\n")
 		b.WriteString(footerStyle.Render("r 重试 / q 退出（角色已保存，重开 tui 会继续）") + "\n")
+	case stepDeviceIssue, stepServeInstall, stepServeProbe:
+		// In-flight steps: no form, no overlay — just what is running (and the
+		// error + retry affordance if the action failed).
+		titles := map[wizStep]string{
+			stepDeviceIssue:  " 签发设备码 ",
+			stepServeInstall: " 安装 serve 服务 ",
+			stepServeProbe:   " serve 探活 ",
+		}
+		b.WriteString(titleStyle.Render(titles[w.step]) + "\n\n")
+		switch w.step {
+		case stepDeviceIssue:
+			if w.err != nil {
+				b.WriteString(errStyle.Render("✗ "+w.err.Error()) + "\n")
+				b.WriteString(footerStyle.Render("r 重试 / q 暂停退出（角色已保存，重开 tui 会从设备码继续）") + "\n")
+			} else {
+				b.WriteString("正在签发设备码…\n")
+				b.WriteString(footerStyle.Render("q 暂停退出（进度已保存）") + "\n")
+			}
+		case stepServeInstall:
+			b.WriteString("正在注册系统服务（绑定 0.0.0.0:7878，可能需要数秒）…\n")
+			b.WriteString(footerStyle.Render("q 暂停退出（安装失败不会阻断向导）") + "\n")
+		case stepServeProbe:
+			b.WriteString("正在探活 " + w.data.serveAddr + " …\n")
+			b.WriteString(footerStyle.Render("q 暂停退出（进度已保存）") + "\n")
+		}
 	default: // standalone form steps
 		b.WriteString(titleStyle.Render(wizStepTitles[w.step]) + "\n\n")
 		b.WriteString(w.form.View() + "\n\n")

@@ -9,4 +9,5 @@ var (
 	footerStyle = lipgloss.NewStyle().Faint(true)
 	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	secretStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	warnStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
 )

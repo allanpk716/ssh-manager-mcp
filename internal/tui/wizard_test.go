@@ -64,6 +64,7 @@ func TestWizard_FirstScreenSavesRole(t *testing.T) {
 	seedWizardVault(t, vd) // server role.json without a vault is an anomaly, not a resume
 	w := newWizardForTest()
 	w.chooseRole(roles.RoleServer)
+	w.closeStore() // T4: the server flow opens the store — release it for TempDir
 	b, err := os.ReadFile(filepath.Join(vd, "role.json"))
 	if err != nil {
 		t.Fatalf("role.json not written on choose: %v", err)
@@ -82,16 +83,22 @@ func TestWizard_FirstScreenSavesRole(t *testing.T) {
 }
 
 // TestWizard_ResumeSkipsFirstScreen: a resumed launch (role already on disk)
-// starts at the role flow, not the first-screen picker.
+// starts at the role flow, not the first-screen picker. Since T4 the SERVER
+// flow is real: on a fresh vault its resume enters the flow at the
+// client-name step (the placeholder page is gone; only client/T5 remains).
 func TestWizard_ResumeSkipsFirstScreen(t *testing.T) {
 	withRoleDirs(t)
 	w := newWizardForRole(roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleServer, ResumeSetup: true})
-	if w.step != stepRoleDone || w.role != roles.RoleServer {
-		t.Fatalf("resume wizard must skip picker: step=%d role=%q", w.step, w.role)
+	if w.step != stepClientName || w.role != roles.RoleServer {
+		t.Fatalf("resume wizard must skip picker into the server flow: step=%d role=%q", w.step, w.role)
 	}
-	if !strings.Contains(w.View().Content, "server") {
-		t.Fatalf("placeholder view must name the role:\n%s", w.View().Content)
+	if w.form == nil {
+		t.Fatal("client-name step must carry a form")
 	}
+	if v := w.View().Content; !strings.Contains(v, "客户端") {
+		t.Fatalf("resume view must show the server flow's first step:\n%s", v)
+	}
+	w.closeStore()
 }
 
 // TestWizard_CloseStoreNilSafe pins the Run cleanup path (review C1): st is
