@@ -260,7 +260,7 @@ serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带�
  │  mcp --cache 进程内（spawn 惰性拉取 + 每 30min    ③ 自动保鲜
  │   会话内拉取 + 热加载，无需 OS 调度器）          （进程内）
  │
- │  .mcp.json（离线时）→ mcp --cache --token <同一个 project token>
+ │  .mcp.json（离线时）→ mcp --cache + env SSHMGR_TOKEN（同一个 project token）
  │   ↓                                            ④ 断网兜底
  │   读 cache.bin → 验 project token（铁律不变）→ broker 只读跑
  └────────────────────────────────────────────────┘
@@ -357,7 +357,8 @@ ssh-manager cache status
   "mcpServers": {
     "ssh": {
       "command": "ssh-manager",
-      "args": ["mcp", "--cache", "--token", "<项目token>"]
+      "args": ["mcp", "--cache"],
+      "env": { "SSHMGR_TOKEN": "<项目token>" }
     }
   }
 }

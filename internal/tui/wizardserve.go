@@ -226,7 +226,7 @@ func accessCard(addr, fp string) overlay {
 		"指纹    " + fp,
 		"",
 		"两个密钥的去向（密钥本身不再重显，各自只在第 5 步展示过一次）：",
-		"  1. project token → 贴到 client 机 .mcp.json 的 --token 参数",
+		"  1. project token → 贴到 client 机 .mcp.json 的 SSHMGR_TOKEN 字段",
 		"  2. 设备码        → 填到 client 机向导",
 		"",
 		"命令式备选（client 机离线缓存模式，指纹已拼进 token）：",

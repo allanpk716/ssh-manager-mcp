@@ -85,7 +85,7 @@ func TestWizProfileName_SuffixOnConflict(t *testing.T) {
 // copy elements — the token itself, the 用途 line, and the 「仅此一次…丢失→」
 // recovery line.
 func TestWizTokenScreen_Copy(t *testing.T) {
-	ov := wizTokenScreen("project token", "eyJtok", "贴到 .mcp.json 的 --token", "主控台 Projects 页 [a] 重发")
+	ov := wizTokenScreen("project token", "eyJtok", "贴到 .mcp.json 的 SSHMGR_TOKEN 字段", "主控台 Projects 页 [a] 重发")
 	v := viewString(ov)
 	for _, want := range []string{"project token", "eyJtok", "贴到", "仅此一次", "丢失", "重发"} {
 		if !strings.Contains(v, want) {
@@ -95,13 +95,22 @@ func TestWizTokenScreen_Copy(t *testing.T) {
 }
 
 // TestMcpConfigScreen_Copy: the finish screen shows the real .mcp.json shape
-// — plain `mcp` for the standalone role (NOT the client-role --cache mode).
+// — plain `mcp` for the standalone role (NOT the client-role --cache mode),
+// with the token in the SSHMGR_TOKEN env field, never in argv (Plan 20 B2).
 func TestMcpConfigScreen_Copy(t *testing.T) {
 	v := viewString(mcpConfigScreen("上方已展示的 project token"))
-	for _, want := range []string{"mcpServers", `"args": ["mcp", "--token", "上方已展示的 project token"]`, ".mcp.json"} {
+	for _, want := range []string{
+		"mcpServers",
+		`"args": ["mcp"],`,
+		`"SSHMGR_TOKEN": "上方已展示的 project token"`,
+		".mcp.json",
+	} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("missing %q in:\n%s", want, v)
 		}
+	}
+	if strings.Contains(v, "--token") {
+		t.Fatalf("token must ride env, not argv:\n%s", v)
 	}
 }
 

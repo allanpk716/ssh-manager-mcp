@@ -13,6 +13,16 @@ import (
 	"ssh-manager-mcp/internal/vault"
 )
 
+// resolveToken: flag wins, SSHMGR_TOKEN env is the fallback (identical
+// semantics & downstream parsing — same name, same meaning; Plan 20 B2).
+// Removes the token from process argv (ps/proc visibility) when env is used.
+func resolveToken(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	return os.Getenv("SSHMGR_TOKEN")
+}
+
 func newMCPCmd() *cobra.Command {
 	var token string
 	var useCache bool
@@ -21,8 +31,9 @@ func newMCPCmd() *cobra.Command {
 		Use:   "mcp",
 		Short: "Run the SSH MCP server (stdio) for an AI agent",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			token = resolveToken(token)
 			if token == "" {
-				return fmt.Errorf("--token is required")
+				return fmt.Errorf("--token or SSHMGR_TOKEN is required")
 			}
 			if useCache {
 				// ① spawn-time freshness (failure degrades to the existing cache)
@@ -62,10 +73,9 @@ func newMCPCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&token, "token", "", "project token (from `projects add`)")
+	c.Flags().StringVar(&token, "token", "", "project token from `projects add` (or env SSHMGR_TOKEN)")
 	c.Flags().BoolVar(&useCache, "cache", false, "serve from the local offline cache (read-only; pulled via `cache pull`)")
 	c.Flags().DurationVar(&cacheMaxAge, "cache-max-age", 30*time.Minute,
 		"auto-pull the offline cache when older than this (0 disables automatic pulls entirely)")
-	_ = c.MarkFlagRequired("token")
 	return c
 }

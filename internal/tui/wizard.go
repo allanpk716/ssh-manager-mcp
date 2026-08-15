@@ -493,12 +493,12 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// machine's .mcp.json — the usage label must say so, and the
 			// screen is numbered 1/2 (the device code screen follows).
 			w.ov = wizTokenScreen("密钥 1/2：project token", m.token,
-				"贴到 client 机 .mcp.json 的 --token 参数",
+				"贴到 client 机 .mcp.json 的 SSHMGR_TOKEN 字段",
 				"主控台 Projects 页 [a] 重发")
 			return w, nil
 		}
 		w.ov = wizTokenScreen(m.title, m.token,
-			"贴到本机 .mcp.json 的 --token 参数",
+			"贴到本机 .mcp.json 的 SSHMGR_TOKEN 字段",
 			"主控台 Projects 页 [a] 重发")
 		return w, nil
 	case deviceCodeIssuedMsg:

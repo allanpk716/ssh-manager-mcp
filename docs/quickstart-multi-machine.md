@@ -80,7 +80,8 @@ ssh-manager cache status                 # 看缓存状态
   "mcpServers": {
     "ssh": {
       "command": "ssh-manager",
-      "args": ["mcp", "--cache", "--token", "<项目token>"]
+      "args": ["mcp", "--cache"],
+      "env": { "SSHMGR_TOKEN": "<项目token>" }
     }
   }
 }

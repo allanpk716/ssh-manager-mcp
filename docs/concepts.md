@@ -30,7 +30,7 @@
             ▼          ▼          ▼                             ▼
 ┌──client 机（工作机，零 vault）─────────────────────────────────────┐
 │  cache pull → cache.bin（加密的整仓只读快照）                      │
-│  .mcp.json: mcp --cache --token <project token>（离线兜底，        │
+│  .mcp.json: mcp --cache（token 走 env SSHMGR_TOKEN，离线兜底，     │
 │        token 只在本机对着 cache.bin 验证，不打网络）                │
 │        或  指向 serve URL（在线，走 MCP 端点——不是 /snapshot）      │
 │                                                                    │
@@ -73,7 +73,7 @@
    ```bash
    ssh-manager cache pull --url https://<server>:7878 --token '<码>:sha256:<指纹>'
    ```
-4. client 机 `.mcp.json` 配 `mcp --cache --token <project token>`（离线兜底）或指向 serve URL（在线）。
+4. client 机 `.mcp.json` 配 `mcp --cache` + env `SSHMGR_TOKEN=<project token>`（离线兜底）或指向 serve URL（在线）。
 
 project/token 按 agent 项目粒度自由建（每台机每项目一个都行）；设备码按**机器**粒度发。
 

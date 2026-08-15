@@ -142,15 +142,15 @@ func TestEditConnFormRequiresCodeWhenNoToken(t *testing.T) {
 // TestClientFinishScreen: the client wizard's finish screen must show the
 // --cache variant of the .mcp.json snippet — never the standalone plain-mcp
 // shape (the two modes are mutually exclusive and a wrong snippet breaks the
-// agent silently).
+// agent silently) — with the token in the SSHMGR_TOKEN env field, not argv.
 func TestClientFinishScreen(t *testing.T) {
 	v := clientFinishScreen().View().Content
-	for _, want := range []string{`"mcp", "--cache", "--token"`, "project token"} {
+	for _, want := range []string{`"args": ["mcp", "--cache"],`, `"SSHMGR_TOKEN": "<project token>"`} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("finish screen missing %q:\n%s", want, v)
 		}
 	}
-	if strings.Contains(v, `["mcp", "--token"`) {
-		t.Fatalf("client finish must not show the plain (non-cache) args:\n%s", v)
+	if strings.Contains(v, "--token") {
+		t.Fatalf("token must ride env, not argv:\n%s", v)
 	}
 }

@@ -231,5 +231,5 @@ func profileNameMap(s *store.Store) (map[string]string, error) {
 func printToken(out interface{ Write([]byte) (int, error) }, token string) {
 	fmt.Fprintf(out, "Token (shown once): %s\n\n", token)
 	fmt.Fprintln(out, ".mcp.json snippet:")
-	fmt.Fprintf(out, `{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp","--token","%s"]}}}`+"\n", token)
+	fmt.Fprintf(out, `{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"%s"}}}}`+"\n", token)
 }

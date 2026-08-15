@@ -347,16 +347,20 @@ func classifyPullError(err error) string {
 }
 
 // clientFinishScreen is the CLIENT role's .mcp.json finish screen (T5): the
-// --cache variant of mcpConfigScreen. The --token here is the SERVER machine's
+// --cache variant of mcpConfigScreen. The SSHMGR_TOKEN here is the SERVER machine's
 // project token — NOT the device code just used for the pull (a cache token
 // authorizes pulls only; the agent's MCP auth is the project token). The
 // client machine never sees that token during enrollment, so the snippet shows
-// a placeholder pointing at where it comes from.
+// a placeholder pointing at where it comes from. Token rides env, not argv
+// (ps/proc visibility — Plan 20 B2).
 func clientFinishScreen() overlay {
 	body := strings.Join(append(mcpConfigLines(
-		`"args": ["mcp", "--cache", "--token", "<project token>"]`,
 		[]string{
-			"client 角色用 --cache 离线缓存模式启动；--token 填 server 机 Projects 页签发的 project token（不是设备码——设备码只用于拉取缓存，刚才已保存）。",
+			`"args": ["mcp", "--cache"]`,
+			`"env": { "SSHMGR_TOKEN": "<project token>" }`,
+		},
+		[]string{
+			"client 角色用 --cache 离线缓存模式启动；SSHMGR_TOKEN 填 server 机 Projects 页签发的 project token（不是设备码——设备码只用于拉取缓存，刚才已保存）。",
 			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
 			".mcp.json 含 token，不要提交进 git。",
 		},
