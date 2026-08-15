@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 )
@@ -18,47 +19,18 @@ const (
 	ModeClient
 )
 
-// vaultStorePath mirrors cli's storePath (env override > default) WITHOUT importing cli.
-// Returns "" only when the default path itself is unresolvable (no vault could
-// exist there anyway).
-func vaultStorePath() string {
-	if p := os.Getenv("SSHMGR_STORE"); p != "" {
-		return p
-	}
-	p, err := store.DefaultStorePath()
-	if err != nil {
-		return ""
-	}
-	return p
-}
+// The vault-probe helpers (vaultStorePath / vaultExists / vaultUnlocked) MOVED
+// to internal/roles (roles.VaultExists / roles.VaultUnlocked + private
+// vaultStorePath) — Plan 19 T1 makes roles the single launch-resolution
+// authority. The unexported wrappers below keep tui's own call sites and
+// mode_test.go's probe tests working unchanged; behavior is identical
+// (stat-first probe, no OpenStore create-on-open side effect).
 
 // vaultExists reports whether a store.db file exists at the vault location.
-// Stat-first so probing a machine with NO vault never triggers OpenStore's
-// create-on-open side effect (a fresh empty store.db).
-func vaultExists() bool {
-	p := vaultStorePath()
-	if p == "" {
-		return false
-	}
-	_, err := os.Stat(p)
-	return err == nil
-}
+func vaultExists() bool { return roles.VaultExists() }
 
-// vaultUnlocked reports whether an UNLOCKED vault is reachable. A vault that
-// EXISTS but cannot be opened (locked / key unreadable) is distinguished by the
-// caller via vaultExists so detection never silently degrades a locked broker
-// machine into client mode (spec §6).
-func vaultUnlocked() bool {
-	if !vaultExists() {
-		return false
-	}
-	st, err := vault.OpenStore(store.FileKeyProvider{})
-	if err != nil {
-		return false
-	}
-	st.Close()
-	return true
-}
+// vaultUnlocked reports whether an UNLOCKED vault is reachable.
+func vaultUnlocked() bool { return roles.VaultUnlocked() }
 
 // cachePresent reports whether this machine is an enrolled client.
 func cachePresent() bool {
