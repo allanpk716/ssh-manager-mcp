@@ -406,7 +406,9 @@ func (a *App) serversKey(k tea.Key) tea.Cmd {
 					return nil
 				}
 				return doAction(a.st, func() (string, error) {
-					return "已删除 " + cur.Name, a.st.DeleteServer(cur.ID)
+					// Cascading: also drops credentials this server
+					// exclusively owned (shared ones survive).
+					return "已删除 " + cur.Name, a.st.DeleteServerCascading(cur.ID)
 				})
 			})
 		}

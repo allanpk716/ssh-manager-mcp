@@ -20,26 +20,27 @@ func newStore(t *testing.T) *store.Store {
 	return st
 }
 
-func TestDraftToServer_Add(t *testing.T) {
+// Adapted with the Plan 20 B1 switchover: toServer (which minted credentials
+// via st directly) is gone; the draft now decomposes into server + credential
+// pointers (toParts) and submitServer persists through the transactional APIs.
+func TestSubmitServer_Add(t *testing.T) {
 	st := newStore(t)
 	d := &serverDraft{Name: "gpu", Host: "192.0.2.10", User: "u", Port: 22, Password: "pw", Hardware: "2x3090"}
-	srv, err := d.toServer(st)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.AddServer(srv); err != nil {
-		t.Fatal(err)
+	if _, ok := submitServer(st, nil, d)().(actionDoneMsg); !ok {
+		t.Fatal("add must succeed")
 	}
 	got, _ := st.GetServerByName("gpu")
-	if got == nil || got.Host != "192.0.2.10" || got.AuthMethod != models.AuthPassword {
+	if got == nil || got.Host != "192.0.2.10" || got.AuthMethod != models.AuthPassword || got.Hardware != "2x3090" {
 		t.Fatalf("roundtrip: %+v", got)
+	}
+	if got.CredentialID == "" {
+		t.Fatalf("password draft must mint a credential: %+v", got)
 	}
 }
 
-func TestDraftToServer_PasswordKeyMutex(t *testing.T) {
-	st := newStore(t)
+func TestDraftToParts_PasswordKeyMutex(t *testing.T) {
 	d := &serverDraft{Name: "x", Host: "h", User: "u", Password: "p", KeyPath: "k"}
-	if _, err := d.toServer(st); err == nil {
+	if _, _, _, err := d.toParts(); err == nil {
 		t.Fatal("password+key must be rejected (CLI parity)")
 	}
 }
@@ -74,5 +75,30 @@ func TestSubmitServer_EditPreservesTags(t *testing.T) {
 	got, _ := st.GetServerByName("t")
 	if len(got.Tags) != 1 || got.Tags[0] != "gpu" || got.Host != "h2" {
 		t.Fatalf("tags lost or host not updated: %+v", got)
+	}
+}
+
+// TestSubmitServer_EditRecredentialSwaps: edit mode with a filled password
+// swaps the credential via UpdateServerWithCredentials — new row in effect,
+// unreferenced old row dropped in the same tx (empty-secret-keeps-existing is
+// the complement, pinned by TestSubmitServer_EditPreservesTags).
+func TestSubmitServer_EditRecredentialSwaps(t *testing.T) {
+	st := newStore(t)
+	cid, _ := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("old")})
+	_, _ = st.AddServer(&models.Server{Name: "t", Host: "h", User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	cur, _ := st.GetServerByName("t")
+	d := &serverDraft{Name: "t", Host: "h", User: "u", Port: 22, Password: "new"}
+	if _, ok := submitServer(st, cur, d)().(actionDoneMsg); !ok {
+		t.Fatal("edit with new password must succeed")
+	}
+	got, _ := st.GetServerByName("t")
+	if got.CredentialID == cid || got.CredentialID == "" {
+		t.Fatalf("credential not swapped: %+v", got)
+	}
+	if c, _ := st.GetCredential(cid); c != nil {
+		t.Fatal("old credential row must be dropped when unreferenced")
+	}
+	if c, _ := st.GetCredential(got.CredentialID); c == nil || string(c.Secret) != "new" {
+		t.Fatal("new credential must decrypt to the new secret")
 	}
 }

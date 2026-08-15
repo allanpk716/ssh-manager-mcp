@@ -174,12 +174,14 @@ func prefill(cur *models.Server) *serverDraft {
 	}
 }
 
-// toServer assembles a models.Server from the draft, minting credentials via
-// st when secret fields are filled. Password/key are mutually exclusive (CLI
-// parity with serversAddCmd).
-func (d *serverDraft) toServer(st *store.Store) (*models.Server, error) {
+// toParts assembles the non-secret server fields plus credential pointers
+// from the draft — no store access (minting happens inside the transactional
+// APIs submitServer calls). Password/key are mutually exclusive (CLI parity
+// with serversAddCmd). A nil pointer = no credential of that kind (add mode)
+// / keep the existing one (edit mode).
+func (d *serverDraft) toParts() (*models.Server, *models.Credential, *models.Credential, error) {
 	if d.Password != "" && d.KeyPath != "" {
-		return nil, errors.New("密码与私钥互斥：二选一")
+		return nil, nil, nil, errors.New("密码与私钥互斥：二选一")
 	}
 	srv := &models.Server{
 		Name: strings.TrimSpace(d.Name), Host: strings.TrimSpace(d.Host),
@@ -188,32 +190,21 @@ func (d *serverDraft) toServer(st *store.Store) (*models.Server, error) {
 		Hardware: strings.TrimSpace(d.Hardware), Services: strings.TrimSpace(d.Services),
 		Role: strings.TrimSpace(d.Role), Caveats: strings.TrimSpace(d.Caveats),
 	}
+	var cred, sudo *models.Credential
 	switch {
 	case d.Password != "":
-		cid, err := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(d.Password)})
-		if err != nil {
-			return nil, err
-		}
-		srv.CredentialID, srv.AuthMethod = cid, models.AuthPassword
+		cred = &models.Credential{Type: models.CredPassword, Secret: []byte(d.Password)}
 	case d.KeyPath != "":
 		keyBytes, err := os.ReadFile(d.KeyPath)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
-		cid, err := st.SetCredential(&models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(d.KeyPass)})
-		if err != nil {
-			return nil, err
-		}
-		srv.CredentialID, srv.AuthMethod = cid, models.AuthPrivateKey
+		cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(d.KeyPass)}
 	}
 	if d.SudoPassword != "" {
-		sid, err := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(d.SudoPassword)})
-		if err != nil {
-			return nil, err
-		}
-		srv.SudoCredentialID = sid
+		sudo = &models.Credential{Type: models.CredPassword, Secret: []byte(d.SudoPassword)}
 	}
-	return srv, nil
+	return srv, cred, sudo, nil
 }
 
 // formOverlay wraps a huh form as an App overlay; on completion it emits
@@ -269,30 +260,26 @@ func doAction(st *store.Store, fn func() (string, error)) tea.Cmd {
 	}
 }
 
-// submitServer assembles + persists the draft. cur == nil means add; otherwise
-// edit: id is preserved and empty secret fields keep the existing credentials
-// (full-row UpdateServer, same semantics as the CLI serversEditCmd).
+// submitServer assembles + persists the draft in ONE transaction. cur == nil
+// means add; otherwise edit: id is preserved and empty secret fields keep the
+// existing credentials (nil cred/sudo → the WithCredentials APIs keep the old
+// rows — same semantics as the CLI serversEditCmd). A replaced credential row
+// is dropped inside the same tx when nothing else references it.
 func submitServer(st *store.Store, cur *models.Server, d *serverDraft) tea.Cmd {
 	return doAction(st, func() (string, error) {
-		srv, err := d.toServer(st)
+		srv, cred, sudo, err := d.toParts()
 		if err != nil {
 			return "", err
 		}
 		if cur == nil {
 			// Add mode: credential is optional (Plan 20 C0) — a draft with
 			// neither password nor key persists a credential-less server
-			// (toServer mints nothing when both are empty).
-			_, err := st.AddServer(srv)
+			// (toParts returns nil pointers when both are empty).
+			_, err := st.AddServerWithCredentials(srv, cred, sudo)
 			return "已新增 " + srv.Name, err
-		}
-		if d.Password == "" && d.KeyPath == "" { // keep existing credential
-			srv.CredentialID, srv.AuthMethod = cur.CredentialID, cur.AuthMethod
-		}
-		if d.SudoPassword == "" {
-			srv.SudoCredentialID = cur.SudoCredentialID
 		}
 		srv.ID = cur.ID
 		srv.Tags = cur.Tags // the form has no tags field — keep existing (CLI serversEditCmd parity)
-		return "已更新 " + srv.Name, st.UpdateServer(srv)
+		return "已更新 " + srv.Name, st.UpdateServerWithCredentials(srv, cred, sudo)
 	})
 }

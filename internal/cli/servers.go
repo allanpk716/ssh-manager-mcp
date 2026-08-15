@@ -48,32 +48,24 @@ func serversAddCmd() *cobra.Command {
 				Role:        strings.TrimSpace(role),
 				Caveats:     strings.TrimSpace(caveats),
 			}
+			// Credentials are minted (or reused, when .ID is set) INSIDE the
+			// same transaction as the server insert — a mid-way failure leaves
+			// zero orphan credential rows (Plan 20 B1/G6).
+			var cred, sudoCred *models.Credential
 			switch {
 			case password != "":
-				cid, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(password)})
-				if err != nil {
-					return err
-				}
-				srv.CredentialID, srv.AuthMethod = cid, models.AuthPassword
+				cred = &models.Credential{Type: models.CredPassword, Secret: []byte(password)}
 			case keyPath != "":
 				keyBytes, err := readKeyFile(keyPath)
 				if err != nil {
 					return err
 				}
-				cid, err := s.SetCredential(&models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)})
-				if err != nil {
-					return err
-				}
-				srv.CredentialID, srv.AuthMethod = cid, models.AuthPrivateKey
+				cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)}
 			}
 			if sudoPassword != "" {
-				sid, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)})
-				if err != nil {
-					return err
-				}
-				srv.SudoCredentialID = sid
+				sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)}
 			}
-			id, err := s.AddServer(srv)
+			id, err := s.AddServerWithCredentials(srv, cred, sudoCred)
 			if err != nil {
 				return err
 			}
@@ -160,7 +152,9 @@ func serversRmCmd() *cobra.Command {
 			if srv != nil {
 				id = srv.ID
 			}
-			return s.DeleteServer(id)
+			// Cascading: also drops credentials this server EXCLUSIVELY owned
+			// (shared credentials survive — two-column reference check).
+			return s.DeleteServerCascading(id)
 		},
 	}
 }
@@ -223,38 +217,30 @@ func serversEditCmd() *cobra.Command {
 			if cmd.Flags().Changed("special-handling") {
 				srv.Caveats = strings.TrimSpace(caveats)
 			}
-			// Re-credential (optional; mutually exclusive).
+			// Re-credential (optional; mutually exclusive). nil cred/sudo keeps
+			// the existing rows; a swap runs in ONE transaction with the row
+			// update, dropping the replaced row when nothing else references
+			// it (two-column check) — no orphan rows, no stranded servers.
 			pwSet := cmd.Flags().Changed("password")
 			keySet := cmd.Flags().Changed("key")
 			if pwSet && keySet {
 				return fmt.Errorf("--password and --key are mutually exclusive; provide exactly one")
 			}
+			var cred, sudoCred *models.Credential
 			switch {
 			case pwSet:
-				cid, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(password)})
-				if err != nil {
-					return err
-				}
-				srv.CredentialID, srv.AuthMethod = cid, models.AuthPassword
+				cred = &models.Credential{Type: models.CredPassword, Secret: []byte(password)}
 			case keySet:
 				keyBytes, err := readKeyFile(keyPath)
 				if err != nil {
 					return err
 				}
-				cid, err := s.SetCredential(&models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)})
-				if err != nil {
-					return err
-				}
-				srv.CredentialID, srv.AuthMethod = cid, models.AuthPrivateKey
+				cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)}
 			}
 			if cmd.Flags().Changed("sudo-password") {
-				sid, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)})
-				if err != nil {
-					return err
-				}
-				srv.SudoCredentialID = sid
+				sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)}
 			}
-			if err := s.UpdateServer(srv); err != nil {
+			if err := s.UpdateServerWithCredentials(srv, cred, sudoCred); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "updated server %s\n", srv.Name)
