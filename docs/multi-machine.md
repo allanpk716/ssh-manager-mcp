@@ -277,6 +277,8 @@ serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带�
 
 ### enroll 一台新机（3 步）
 
+> 🧭 各页签 / 设备码 / token / 指纹谁是谁，一页图解见 [concepts.md](./concepts.md)（概念模型：仓库 · 货架 · 装箱单 · 钥匙 · 水管 · 防伪封条）。也可不读文档，直接在空机器上跑 `ssh-manager tui` 走角色向导。
+
 #### Step 1（服务器侧，一次性）：发一个设备授权码
 
 在 serve 服务器上（同一台常驻 broker 的机器）：
@@ -372,7 +374,9 @@ ssh-manager cache status
 - **凭据持久化**：首次 `cache pull` 成功后，拉取凭据（url + 设备码 + 归一后 pin）自动写入本机 `cache.auth.json`（0600，Windows 另加 ACL）；之后的自动拉取全靠它。
 - 首次 `cache pull` 仍需手动（在线）执行一次。
 
-##### 可选：系统定时器（给非 Claude 的消费方）
+##### 可选：系统定时器（给非 Claude 的消费方）—— legacy
+
+> ⚠️ **legacy（v0.5.0+ 起基本用不上）**：`mcp --cache` 已**进程内自动保鲜**（spawn 惰性拉取 + 会话内定时拉取 + 热加载，见上一节），Claude Code 一类经 MCP 的消费方**无需任何 OS 定时器**。下面三份模板只服务"别的程序直接读 `cache.bin`"的非 MCP 消费方。另外：Windows 下若你早年按本节配过计划任务 `ssh-manager-cache-refresh`，`ssh-manager clear`（client 角色）会**顺带删除**它；Unix 的自建 unit 不由程序删，需自行清理。
 
 若这台机上还有**别的程序直接读 `cache.bin`**（不经 `mcp --cache`，比如脚本自己解快照），它们享受不到上述进程内自动保鲜——可照旧配 OS 定时器跑 `cache pull`。建议 **30 min**（按你 vault 的变动频率调）。环境变量走 unit 的 `Environment=` 或独立配置文件（**0600 权限**，里面有设备码）。
 

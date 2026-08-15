@@ -88,7 +88,7 @@ ssh-manager projects add my-agent --profile team-a
 
 Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the six SSH tools, scoped to the `team-a` profile's servers.
 
-**Other commands:** `servers ls` / `servers rm`, `profiles ls`, `projects ls`, `lock`, `version`.
+**Other commands:** `servers ls` / `servers rm`, `profiles ls`, `projects ls`, `lock`, `clear` (role teardown — wipes the machine back to first-run), `version`.
 
 **Owner access** (you, not the agent) — full access to every server using the stored creds directly:
 ```bash
@@ -126,7 +126,9 @@ ssh-manager projects ls [--all]           # status column; --all includes revoke
 
 ## TUI 主控台（`ssh-manager tui`）
 
-一条命令的可视化管理台：在 **broker 机器**上管服务器 / profiles / projects / 设备码（替代手敲 CLI），在 **client 工作机**上可视化配置连接 + 手动同步缓存。同一个二进制，按本机状态自动选边。
+一条命令的可视化管理台：在 **broker 机器**上管服务器 / profiles / projects / 设备码（替代手敲 CLI），在 **client 工作机**上可视化配置连接 + 手动同步缓存。同一个二进制，按本机状态自动选边。各页签 / 设备码 / token 谁是谁的**概念模型图解**（仓库隐喻，中文）：[`docs/concepts.md`](docs/concepts.md)。
+
+空机器第一次运行 `tui` 会进入**角色向导**（单机 / server / client 三选，可中断续配）；`ssh-manager clear` 角色清理——按角色枚举删除本机 vault / serve / 缓存残留（vault 角色先自动 export 备份 + 输入 `DELETE` 确认），机器回到首次向导状态。
 
 ### 启动与模式判定
 
