@@ -135,6 +135,11 @@ func scanClearTargets(_ roles.Role) []clearTarget {
 		add("vault", filepath.Join(vd, "store.db"))
 		add("vault", filepath.Join(vd, "store.db-wal"))
 		add("vault", filepath.Join(vd, "store.db-shm"))
+		// store.db.meta.json: passphrase salt sidecar written by unlock.
+		// If leftover from an old vault and reused with the same passphrase,
+		// the same salt would derive the same master key — cross-generation
+		// key reuse. clear removes it to prevent this.
+		add("vault", filepath.Join(vd, "store.db.meta.json"))
 		// client cache DEK: paths.CacheDekPath pins it to the PROGRAM-FIXED
 		// vault dir (no SSHMGR_STORE coupling), so it may differ from vd on a
 		// migrated machine — enumerate BOTH resolutions, deduped.

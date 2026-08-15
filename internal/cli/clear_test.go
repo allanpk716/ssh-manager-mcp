@@ -131,7 +131,7 @@ func backupFilesIn(t *testing.T, dir string) []string {
 func TestEnumClearTargets_ServerMachine(t *testing.T) {
 	vd, ud := withClearDirs(t)
 	seedClearVault(t, vd)
-	for _, f := range []string{"store.db-wal", "master.key.plain", "serve-cert.pem", ".serve-cert-initialized"} {
+	for _, f := range []string{"store.db-wal", "store.db.meta.json", "master.key.plain", "serve-cert.pem", ".serve-cert-initialized"} {
 		os.WriteFile(filepath.Join(vd, f), []byte("x"), 0o600)
 	}
 	// 同机 client 残留
@@ -146,7 +146,7 @@ func TestEnumClearTargets_ServerMachine(t *testing.T) {
 	joined := strings.Join(got, "\n")
 	for _, want := range []string{
 		"vault:", "serve:", "client:", "role:",
-		"store.db", "store.db-wal", "master.key.plain",
+		"store.db", "store.db-wal", "store.db.meta.json", "master.key.plain",
 		"serve-cert.pem", ".serve-cert-initialized",
 		"cache.meta.json", "role.json",
 	} {
