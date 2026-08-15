@@ -135,8 +135,8 @@ func TestImportSnapshot_RoundTrip_CrossMasterKey(t *testing.T) {
 
 // TestSnapshotRoundTripCredentialLess (Plan 20 C0): a credential-less server
 // survives export → import losslessly — empty-string CredentialID/AuthMethod in
-// the snapshot both ways, NULL (not '') on disk in the target (the FK on
-// credential_id would reject ''), while its credential-backed neighbor keeps
+// the snapshot both ways, NULL (not ”) on disk in the target (the FK on
+// credential_id would reject ”), while its credential-backed neighbor keeps
 // its binding.
 func TestSnapshotRoundTripCredentialLess(t *testing.T) {
 	a := newTestStore(t)

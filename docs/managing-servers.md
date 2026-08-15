@@ -10,7 +10,7 @@
 
 | 概念 | 是什么 | 关键字段 |
 |---|---|---|
-| **Server** | 一台目标机器 + 它的凭据 | name（唯一）、host、port、user、auth_method（password/privatekey）、credential_id、可选 sudo_credential_id、tags、description |
+| **Server** | 一台目标机器 + 它的凭据 | name（唯一）、host、port、user、auth_method（password/privatekey）、credential_id（**可空** = 无凭据服务器，见下文专节）、可选 sudo_credential_id、tags、description |
 | **Profile** | server 的分组（多对多） | name；通过 `profiles grant` 把 server 加进来 |
 | **Project** | 绑定到一个 profile 的 token（给某个 agent） | name、status、绑定的 profile_id |
 
@@ -46,7 +46,7 @@ ssh-manager servers add \
   --host <hostname 或 IP> \
   --user <ssh 用户> \
   [--port 22]                       # 默认 22
-  --password '<密码>' \              # 二选一，必须恰好一个
+  [--password '<密码>'] \             # 与 --key 互斥；两个都不给 = 无凭据服务器
   # 或者：
   # --key <私钥文件路径> [--key-passphrase '<私钥口令>']
   [--sudo-password '<sudo 密码>']    # 给了才支持 sudo=true
@@ -62,9 +62,11 @@ ssh-manager servers add \
 
 ### 必填 vs 选填
 
-- **必填**：`--name`、`--host`、`--user`，以及 `--password` 或 `--key` 恰好一个。
-- `--password` 和 `--key` **互斥**；两个都给或都不给都会报错。
+- **必填**：`--name`、`--host`、`--user`。
+- `--password` 和 `--key` **互斥**（最多给一个）；也可以**都不给**——先录机器后补凭据（[无凭据服务器](#无凭据服务器)，exec 时 agent 会收到明确的补凭据提示）。
 - `--key` 读的是私钥**文件**的路径（不是把私钥内容贴进来）。加密私钥用 `--key-passphrase` 解密。
+
+> 💡 **手里已经有一份 `~/.ssh/config`？** 别逐台抄——[`servers import`](#批量导入servers-import) 一条命令批量导入（dry-run 预览、冲突自动跳过、同密钥自动去重）。
 
 ### Structured server metadata
 
@@ -92,6 +94,70 @@ pass an empty value (`--special-handling ""`) to clear.
 ### sudo 的真相
 
 `--sudo-password` 只是存了一个"额外的密码"，专门用于 broker 内部执行 `sudo -S`（从 stdin 喂密码）。它**不**改变 agent 登录用的账号密码。给了它 → agent 在 `list_servers` 看到 `has_sudo=true` → 它可以在 `exec_command` 里传 `sudo=true`，broker 自动用 `sudo -S` 跑这条命令。**agent 不应该自己把 `sudo` 拼到命令前面**（否则会出现 `sudo sudo ...`）。
+
+---
+
+## 批量导入：`servers import`
+
+已经有一份 OpenSSH 客户端配置（`~/.ssh/config`）的话，不用逐台 `servers add`：
+
+```bash
+ssh-manager servers import --dry-run            # 默认读 ~/.ssh/config，先预览
+ssh-manager servers import --profile team-a     # 真导入，并把导入的机器全部 grant 进 team-a
+ssh-manager servers import --file /path/to/config   # 指定别的配置文件
+```
+
+### Flags
+
+| Flag | 语义 |
+|---|---|
+| `--file <路径>` | 要读的 ssh config 文件；默认 `~/.ssh/config`。相对 IdentityFile 以**这个文件所在目录**解析（见下文「相对路径规则」） |
+| `--dry-run` | 只打印将要发生什么，**一个字节都不写库**（含 `--profile` 时也只打印 grant 行）。建议每次先跑一遍 |
+| `--profile <名字>` | 导入完成后把所有新导入的机器 grant 进这个 profile。**profile 必须已存在**——不存在则整批 fail-fast（dry-run 也一样报错），不会先导入一半 |
+
+### 导入什么、跳过什么
+
+每个 Host 块取 `HostName`（缺省用别名本身）、`Port`（缺省 22）、`User`（缺省用当前 OS 账户名）、`IdentityFile`（可多条，取**第一个能读到的**）。跳过规则分两层：
+
+- **解析期**：通配 / 取反模式（`Host *`、`!alias`）跳过；Port 非法跳过；同一批里后面又指向已见 host:port:user 的别名跳过。
+- **对库冲突**（让命令**幂等**——反复跑不会重复导入）：别名与库中已有 server 同名 → `skip-existing (name)`；host:port:user 三元组已存在 → `skip-existing (host:port:user)`。
+
+### 密钥与凭据的四种结果
+
+| 每台机器的报告行 | 含义 | 后续动作 |
+|---|---|---|
+| `imported key` | 找到可读私钥，已入 vault | 无 |
+| `imported needs-passphrase ⚠（连接会失败；TUI 补全或 servers edit --key-passphrase）` | 私钥**有口令加密**，按原样导入（口令没有进 vault） | 补口令（见下） |
+| `imported needs-credential` | 没有任何可读的 IdentityFile → 导入成**无凭据服务器** | 补凭据（见「无凭据服务器」） |
+| `skip-existing ...` / `skip: ...` | 冲突或解析期跳过 | 无 |
+
+- **批内密钥去重**：同一批里多台机器引用**同一个私钥文件**（内容相同），vault 只存**一份**凭据行——不会因为 20 台机器共用一个 key 就存 20 份。
+- **needs-passphrase 的补法**（连接会一直失败，直到补上）：
+  - **TUI**：主控台服务器页 `i` 导入流程的补全表单里有「密钥口令（补全加密私钥）」一栏，当场补（不重读盘上文件）；事后也可以 `!` 过滤出 ⚠ 机器，`e` 编辑补。
+  - **CLI**：`ssh-manager servers edit <名字> --key <私钥路径> --key-passphrase '<口令>'`（重发凭据，换掉那份没口令的）。
+- **原私钥文件不动**：import 只是把内容**复制**进 vault 加密存储，`~/.ssh` 下的原文件原样保留。
+
+### Match 警示
+
+config 里含 `Match` 块时，命令开头会打一条 ⚠：库按 `Host` 模式近似求值继承值（first-obtained-wins，含 `Host *`），**Match 条件**（`exec` / `host` 判定等）不参与——相关机器的 Port / User / IdentityFile 可能与真 `ssh` 实际用的不一致。导入后照 `servers ls` / `servers edit` 核对一遍即可。
+
+### 相对路径规则（有意偏离 OpenSSH）
+
+IdentityFile 写**相对路径**时，本工具按 **config 文件所在目录**解析；真 OpenSSH 是按 `ssh` 进程的工作目录（CWD）解析的。**这是有意的偏离**——CWD 在"哪条命令、哪个目录跑的"下漂移不定，config 目录才是这份文件自带的稳定基准（`~` / `~/...` 照常展开成家目录；`~user/...` 不展开，读不到就落到 needs-credential）。不想踩差异就把 config 里的路径写成绝对路径或 `~/` 开头。
+
+### TUI 等价流程（服务器页 `i`）
+
+主控台「服务器」页按 `i` 是同一套语义的可视化版：路径表单（预填 `~/.ssh/config`）→ 候选多选（vault 冲突已自动排除，全选预勾）→ 静默批量导入 → **逐台补全表单**（结构化字段 + sudo + 按需出现的密码 / 密钥口令栏；`Esc` 跳过这台保留 ⚠，`q` 结束补全循环）→ 结果页（导入 N / 跳过 N / 待补 N）。带口令的机器导入时会被打上 `needs-passphrase` 标签，补全表单里填了口令就自动摘掉。
+
+---
+
+## 无凭据服务器
+
+「先录机器、凭据后补」是合法状态：`servers add`（或 import 的 `no-key` 结果）可以**不带任何凭据**。要点：
+
+- **agent 一侧的语义**：对无凭据机器调 `exec_command`，会在**发起连接之前**被拒，错误信息自带补法——`server has no credential configured (set one with: ssh-manager servers edit <name> --password ... / --key ...)`（审计里记 `no_credential`，不是 auth_error，agent 不会误判成密码错了）。下载 / 上传 / 转发同样在连接前被拒、返回同一条错误信息（审计里这类记 `auth_error`）。
+- **TUI 一侧**：无凭据（以及未填 role、带 needs-passphrase 标签）的机器在列表里以 ⚠ 前缀**置顶**；按 `!` 只看这些待处理机器。
+- **补凭据**：`servers edit <名字> --password '<密码>'` 或 `--key <私钥路径> [--key-passphrase '<口令>']`（TUI 里 `e` 编辑，密码栏填新值）。补上即正常连接，server 的 id / name / profile 绑定全程不变。
 
 ---
 
@@ -224,12 +290,29 @@ export SSHMGR_SSH_HOST_KEY_ALGORITHMS="ssh-rsa,rsa-sha2-512"   # 逗号分隔
 
 ---
 
+## 清理孤儿凭据：`gc`
+
+历史操作可能在 `credentials` 表里留下**没有任何 server 引用**（既不是 `credential_id` 也不是 `sudo_credential_id`）的孤儿行——它们仍是加密的、无害，只是占地方。`gc` 专门清这个：
+
+```bash
+ssh-manager gc           # 默认 dry-run：只数一遍、打印数量，不动任何东西
+ssh-manager gc --apply   # 真删：删掉的恰好是上面数出来的那批孤儿行
+```
+
+- **永不碰**：`servers`、`host_keys`（TOFU 记录）、cache tokens——`--apply` 的 WHERE 条件就是上面那个两列引用检查，删的只可能是无引用凭据行。
+- 什么时候会有孤儿：老版本 `edit` 换凭据换出来的旧行之类。Plan 20 起 add / edit / import 的 server+凭据写入都是单事务的，正常操作不再产生新孤儿——`gc` 更像一次性打扫，不是日常命令。
+- 只读模式（`mcp --cache`）下 `--apply` 会被拒绝（store 只读）。
+
+---
+
 ## 一句话总结
 
-- **加**：`servers add`（密码或密钥二选一；可选 sudo / tags / description）。
-- **改**：`servers edit`（只传要改的字段；id 和 profile 绑定保留）。
+- **加**：`servers add`（凭据可选——密码或密钥最多一个；可选 sudo / tags / description）。
+- **批量加**：`servers import`（ssh config → vault；dry-run 预览、冲突跳过、同密钥去重、`--profile` 顺手授权）。
+- **改**：`servers edit`（只传要改的字段；id 和 profile 绑定保留；也是补凭据 / 补私钥口令的路）。
 - **查**：`servers ls` / `profiles ls`。
 - **删**：`servers rm`（自动从所有 profile 摘除）。
+- **扫**：`gc`（孤儿凭据；dry-run 默认，`--apply` 才删）。
 - **分组**：`profiles add` + `profiles grant`。
 - **给 agent 用**：去 [agent-access.md](./agent-access.md) 建 project 拿 token。
 - **真实怎么用**：去 [scenarios.md](./scenarios.md) 看场景。

@@ -70,7 +70,8 @@ go build -o ssh-manager ./cmd/ssh-manager        # or: go install ./cmd/ssh-mana
 # 2. Unlock the vault (writes master key → fixed-path file `master.key.plain`; admin/root needed first time to create the vault dir + set ACL — see `unlock --help`)
 ssh-manager unlock
 
-# 3. Add a server + its credential (exactly one of --password / --key; optional sudo)
+# 3. Add a server + its credential (one of --password / --key, mutually exclusive —
+#    or neither for a credential-less server; optional sudo)
 ssh-manager servers add --name gpu --host 192.0.2.10 --user deploy \
     --password '...'                 # OR: --key ~/.ssh/id_ed25519 [--key-passphrase '...]
     --sudo-password '...'            # optional: enables sudo=true on exec_command
@@ -88,7 +89,7 @@ ssh-manager projects add my-agent --profile team-a
 
 Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the six SSH tools, scoped to the `team-a` profile's servers.
 
-**Other commands:** `servers ls` / `servers rm`, `profiles ls`, `projects ls`, `lock`, `clear` (role teardown — wipes the machine back to first-run), `version`.
+**Other commands:** `servers ls` / `servers rm`, `profiles ls`, `projects ls`, `gc` (find/delete orphan credential rows — dry-run by default), `lock`, `clear` (role teardown — wipes the machine back to first-run), `version`.
 
 **Owner access** (you, not the agent) — full access to every server using the stored creds directly:
 ```bash
@@ -108,6 +109,10 @@ ssh-manager servers edit gpu --hardware "8x A100 80GB, CUDA 12"     # structured
 ssh-manager servers edit gpu --host 192.0.2.20 --port 2222            # re-point host/port
 ssh-manager servers edit gpu --password '...'                        # re-credential (or --key)
 ssh-manager servers ls                                                # lists name + role + caveats
+
+# Bulk-import your existing ~/.ssh/config instead of typing servers one by one
+ssh-manager servers import --dry-run            # preview: what would be imported / skipped
+ssh-manager servers import --profile team-a     # import + grant every imported server in one go
 
 # See what an agent can reach, and manage its lifecycle.
 ssh-manager projects show my-agent        # agent → profile → granted servers (no secrets)
@@ -151,7 +156,7 @@ ssh-manager tui --mode client  # 强制 client 面板
 
 | 页签 | 键 | 动作 |
 |---|---|---|
-| 服务器 | `a` / `e` / `d` | 新增（必须给 password 或 key 之一）/ 编辑（tags 等既有字段保留）/ 删除 |
+| 服务器 | `a` / `e` / `d` / `i` / `!` | 新增（凭据**可选**，都不填 = 无凭据服务器）/ 编辑（tags 等既有字段保留）/ 删除 / **导入 ssh config**（候选多选 → 批量导入 → 逐台补全，`Esc` 跳过保留 ⚠）/ 只看 ⚠ 待处理机器（无凭据 / 未填 role / 缺私钥口令） |
 | Profiles | `a` / `g` | 新增 profile / 授权（按服务器名多选；**增量**——不动已有授权） |
 | Projects | `a` / `e` / `d` | 新建（填 name + 选 profile）→ token **一次性全屏显示**；`e` 轮换 token（新 token 一次性显示）；`d` 吊销 |
 | 设备码 | `a` / `d` | 签发（填 serve 地址用于拼提示；设备码 + 证书指纹 + `cache pull` 示例命令一次性全屏显示）；`d` 吊销 |
@@ -237,5 +242,15 @@ Plans 1–6 delivered: encrypted vault → in-process SSH broker → MCP server 
 Carry-forwards (deferred, non-blocking): `context.Context` cancellation threaded through the broker; a server-side exec-timeout cap.
 
 **Plan 10 — `serve` mode:** run the broker as an authenticated HTTP MCP server so agents on other VLAN machines share one authoritative vault. Phase 1 of multi-machine support (remote live access). **Plan 12 — offline read-only cache:** each work machine pulls an encrypted read-only snapshot of the vault (`cache pull`) and can run the broker from it (`mcp --cache`) when the server is unreachable. Vault replication and Synology backup are later phases. See "Multi-machine: `serve` mode" above and [`docs/multi-machine.md`](docs/multi-machine.md#离线只读缓存plan-12).
+
+**v0.7.0 (Plan 20) — ssh-config import & hygiene hardening:**
+
+- **`servers import`** — bulk-import `~/.ssh/config` hosts (CLI `--file` / `--dry-run` / `--profile`; TUI server page `i`): vault-conflict skips make it idempotent, identical key files within one batch mint **one** credential row, encrypted keys import as-is with a needs-passphrase ⚠, and the TUI walks a per-server supplement loop after import. See [`docs/managing-servers.md`](docs/managing-servers.md#批量导入servers-import).
+- **Credential-less server model** — `servers add` / import may record a server with **no** credential (`--password` / `--key` optional, still mutually exclusive); `exec_command` on such a server fails **before** connecting with an error carrying the `servers edit` fix hint (audit `no_credential`); TUI flags them ⚠ (filter with `!`).
+- **`SSHMGR_TOKEN` env channel** — the project token can now ride the environment instead of argv (flag parity: `--token` still works); every `.mcp.json` generator (`projects add` / `rotate`, TUI, wizard) now emits the `env` form. **Snippet shape changed**: previously copied `--token`-in-`args` snippets keep working, but regenerate when you next rotate.
+- **`gc`** — find (and with `--apply`, delete) credential rows no server references via either column; dry-run by default; servers, host keys, and cache tokens are never touched.
+- **Tunnel half-close** — `forward_port` tunnels propagate a directional EOF (`CloseWrite`) instead of tearing down both directions, so half-closing protocols (e.g. `shutdown(SHUT_WR)`) no longer kill the peer's reply.
+- **`SSHMGR_SSH_HOST_KEY_ALGORITHMS` knob** — opt into legacy host-key algorithms (`ssh-rsa`, …) for old boxes; typo = fail-closed before any connect. See [`docs/managing-servers.md`](docs/managing-servers.md#连老机器需要-ssh-rsa).
+- **Single build-version source** — CLI `version` and the MCP `serverInfo` now report the same ldflags-injected version.
 
 Design spec: [`docs/superpowers/specs/2026-08-08-ssh-key-manager-mcp-design.md`](docs/superpowers/specs/2026-08-08-ssh-key-manager-mcp-design.md).

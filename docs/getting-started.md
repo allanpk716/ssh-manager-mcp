@@ -95,7 +95,7 @@ ssh-manager servers add \
 
 规则（很重要）：
 
-- `--password` 和 `--key` **二选一**，必须恰好给一个。
+- `--password` 和 `--key` **互斥**（最多给一个）。也可以**都不给**——先录机器、凭据后补（「无凭据服务器」，见 [managing-servers.md](./managing-servers.md#无凭据服务器)）。
 - `--name` 全局唯一，后续命令都用这个名字（或它的 id）引用这台机器。
 - `--hardware` / `--role` / `--services` / `--location` / `--special-handling`（Caveats）是结构化字段，`--description` / `--tags` 是补充——**全部会通过 `list_servers` 给 agent 看到**（agent 需要机器全貌才能安全操作）。⚠️ **别在这些字段里放任何敏感信息**（密钥 / token / PII）：它们每次都进入 agent 上下文并上行到 LLM 提供方；机密只走凭据保险柜（`--password` / `--key`）。完整字段表见 [managing-servers.md](./managing-servers.md#structured-server-metadata)。
 - `--sudo-password` 只是个“额外的密码”，专门喂给 `sudo -S`；它决定了 agent 看到的 `has_sudo=true/false`。
@@ -103,6 +103,15 @@ ssh-manager servers add \
 预期输出：`added server gpu id=<uuid>`
 
 验证：`ssh-manager servers ls` 应能看到 `gpu`。
+
+> 💡 **手上已有一份 `~/.ssh/config`？不用逐台敲。** 一条命令批量导入（TUI 主控台服务器页按 `i` 也一样）：
+>
+> ```bash
+> ssh-manager servers import --dry-run          # 先看会发生什么（什么都不写）
+> ssh-manager servers import --profile team-a   # 确认无误再真导入，顺手 grant 进 profile
+> ```
+>
+> `--profile` 要求 profile 已存在（fail-fast）——刚走到这步还没建的话，先不带它导入，下一步建好 profile 再 `profiles grant`。同名 / 同 host:port:user 的机器自动跳过（可反复跑），缺凭据或缺私钥口令的机器以 ⚠ 标出、事后逐台补。完整语义（密钥去重、Match 警示、相对路径规则）见 [managing-servers.md 的「批量导入」](./managing-servers.md#批量导入servers-import)。
 
 ---
 
