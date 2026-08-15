@@ -237,6 +237,15 @@ func serversEditCmd() *cobra.Command {
 				}
 				cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)}
 			}
+			if pwSet || keySet {
+				// ANY successful re-credential resolves needs-passphrase (the
+				// tag the import flows write means "current credential lacks
+				// its passphrase"). Applied AFTER the --tags replacement above
+				// and strips from whatever srv.Tags holds then — an explicit
+				// --tags list passed alongside --key/--password loses the tag
+				// too: after re-credential the marker would be false.
+				srv.Tags = stripTag(srv.Tags, "needs-passphrase")
+			}
 			if cmd.Flags().Changed("sudo-password") {
 				sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)}
 			}
@@ -268,4 +277,16 @@ func serversEditCmd() *cobra.Command {
 // readKeyFile reads a private key from disk.
 func readKeyFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// stripTag returns tags minus every occurrence of tag (the CLI-side twin of
+// the TUI's dropTag; an all-matches list yields a valid empty slice).
+func stripTag(tags []string, tag string) []string {
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t != tag {
+			out = append(out, t)
+		}
+	}
+	return out
 }

@@ -15,7 +15,8 @@ import (
 
 // resolveToken: flag wins, SSHMGR_TOKEN env is the fallback (identical
 // semantics & downstream parsing — same name, same meaning; Plan 20 B2).
-// Removes the token from process argv (ps/proc visibility) when env is used.
+// env keeps the token OUT of the process argv (ps visibility); the flag
+// path still shows it in argv.
 func resolveToken(flagVal string) string {
 	if flagVal != "" {
 		return flagVal

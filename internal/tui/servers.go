@@ -25,9 +25,10 @@ func (p *serversPage) Cursor() int   { return p.cursor }
 func (p *serversPage) Select(i int)  { p.cursor = i }
 
 // serverNeedsAttention is the ⚠ rule: no credential attached (Plan 20 C0
-// credential-less), no role yet, or carrying the needs-passphrase tag the
-// encrypted-key import left behind (the import flow writes it; the supplement
-// loop's passphrase step removes it).
+// credential-less), no role yet, or carrying the needs-passphrase tag an
+// encrypted-key import left behind (both import flows write it; every
+// re-credential path — the supplement loop's passphrase step, TUI edit, CLI
+// edit — removes it).
 func serverNeedsAttention(s *models.Server) bool {
 	return s.CredentialID == "" || s.Role == "" || hasTag(s, "needs-passphrase")
 }

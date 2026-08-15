@@ -184,8 +184,9 @@ func (f *importFlow) pickForm() *huh.Form {
 // recorded, never abort the batch): PickKey for the credential (first
 // readable key, sha256 batch dedup, needs-passphrase detection — the shared
 // seam), one AddServerWithCredentials transaction per server, the
-// needs-passphrase TAG (TUI-only; the CLI warns in text instead) on encrypted
-// keys. The picked subset keeps config order, not multiselect toggle order.
+// needs-passphrase TAG on encrypted keys (the CLI import writes the same
+// literal — the ⚠ sort + `!` filter key on it). The picked subset keeps
+// config order, not multiselect toggle order.
 func (f *importFlow) startBatch() tea.Cmd {
 	f.state = stateImporting
 	picked := make(map[string]bool, len(f.pick))

@@ -8,6 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/google/uuid v1.6.0
 	github.com/kardianos/service v1.3.0
+	github.com/kevinburke/ssh_config v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.2.0
 	github.com/pkg/sftp v1.13.10
 	github.com/spf13/cobra v1.10.2
@@ -35,7 +36,6 @@ require (
 	github.com/google/jsonschema-go v0.3.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/kevinburke/ssh_config v1.6.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

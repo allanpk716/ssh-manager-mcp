@@ -106,6 +106,57 @@ func TestSubmitServer_EditRecredentialSwaps(t *testing.T) {
 	}
 }
 
+// TestSubmitServer_EditRecredentialDropsNeedsPassphrase (final review I-2):
+// the needs-passphrase tag means "current credential lacks its passphrase" —
+// a TUI edit that mints a new credential resolves it (tag dropped, other tags
+// kept, empty stored as empty); an edit with NO credential change must keep
+// the tag (the ⚠ stays until a real re-credential).
+func TestSubmitServer_EditRecredentialDropsNeedsPassphrase(t *testing.T) {
+	st := newStore(t)
+	cid, _ := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("p")})
+	_, _ = st.AddServer(&models.Server{
+		Name: "enc", Host: "h", User: "u", AuthMethod: models.AuthPassword,
+		CredentialID: cid, Tags: []string{"needs-passphrase", "gpu"},
+	})
+	_, _ = st.AddServer(&models.Server{
+		Name: "solo", Host: "h", User: "u", AuthMethod: models.AuthPassword,
+		CredentialID: cid, Tags: []string{"needs-passphrase"},
+	})
+
+	// edit without credential change: the tag survives
+	cur, _ := st.GetServerByName("enc")
+	d := &serverDraft{Name: "enc", Host: "h2", User: "u", Port: 22} // no secrets
+	if _, ok := submitServer(st, cur, d)().(actionDoneMsg); !ok {
+		t.Fatal("edit without credential change must succeed")
+	}
+	got, _ := st.GetServerByName("enc")
+	if !hasTag(got, "needs-passphrase") || !hasTag(got, "gpu") {
+		t.Fatalf("edit without re-credential must keep the tag: %+v", got.Tags)
+	}
+
+	// re-credential via new password: tag dropped, other tag kept
+	cur, _ = st.GetServerByName("enc")
+	d = &serverDraft{Name: "enc", Host: "h2", User: "u", Port: 22, Password: "new"}
+	if _, ok := submitServer(st, cur, d)().(actionDoneMsg); !ok {
+		t.Fatal("edit with new password must succeed")
+	}
+	got, _ = st.GetServerByName("enc")
+	if hasTag(got, "needs-passphrase") || len(got.Tags) != 1 || got.Tags[0] != "gpu" {
+		t.Fatalf("re-credential must drop needs-passphrase and keep other tags: %+v", got.Tags)
+	}
+
+	// tag-only list: drops to a valid empty slice
+	cur, _ = st.GetServerByName("solo")
+	d = &serverDraft{Name: "solo", Host: "h", User: "u", Port: 22, Password: "new"}
+	if _, ok := submitServer(st, cur, d)().(actionDoneMsg); !ok {
+		t.Fatal("edit with new password must succeed")
+	}
+	got, _ = st.GetServerByName("solo")
+	if hasTag(got, "needs-passphrase") || len(got.Tags) != 0 {
+		t.Fatalf("tag-only list must store empty: %+v", got.Tags)
+	}
+}
+
 // inputTitle reads a *huh.Input's title via reflection — huh exposes no
 // public getter, but Title(s) stores into Input.title (an Eval[string])
 // whose val field holds the literal. String() is safe on unexported

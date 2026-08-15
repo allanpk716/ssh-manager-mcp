@@ -292,6 +292,14 @@ func submitServer(st *store.Store, cur *models.Server, d *serverDraft) tea.Cmd {
 		}
 		srv.ID = cur.ID
 		srv.Tags = cur.Tags // the form has no tags field — keep existing (CLI serversEditCmd parity)
+		if cred != nil {
+			// A minted credential (password or key — the same condition that
+			// triggers re-credential) resolves needs-passphrase: the tag means
+			// "current credential lacks its passphrase". Drop it, keep every
+			// other tag (dropTag stores a valid empty slice when it was the
+			// only one).
+			srv.Tags = dropTag(srv.Tags, "needs-passphrase")
+		}
 		return "已更新 " + srv.Name, st.UpdateServerWithCredentials(srv, cred, sudo)
 	})
 }

@@ -358,6 +358,12 @@ func TestServersImportFlow(t *testing.T) {
 		if enc == nil || enc.CredentialID == "" || enc.AuthMethod != models.AuthPrivateKey {
 			t.Fatalf("enc not imported with its key: %+v", enc)
 		}
+		// Final review I-1: the CLI import must persist the needs-passphrase
+		// TAG (same literal the TUI writes) — serverNeedsAttention's ⚠ sort
+		// and `!` filter key on it.
+		if len(enc.Tags) != 1 || enc.Tags[0] != "needs-passphrase" {
+			t.Fatalf("encrypted-key import must tag needs-passphrase: %+v", enc.Tags)
+		}
 		cred, err := st.GetCredential(enc.CredentialID)
 		if err != nil || cred == nil {
 			t.Fatalf("GetCredential: %v %v", cred, err)

@@ -21,7 +21,9 @@ import (
 // TUI import flow reuses); each server insert is one transaction
 // (AddServerWithCredentials); identical key files within one batch mint ONE
 // credential row (sha256 dedup); an encrypted key imports as-is with a
-// needs-passphrase warning (fix later via TUI or servers edit).
+// needs-passphrase warning AND tag (the same literal the TUI writes — the ⚠
+// sort + `!` filter key on it; fix later via TUI or servers edit, both of
+// which drop the tag on re-credential).
 func serversImportCmd() *cobra.Command {
 	var file, profile string
 	var dryRun bool
@@ -136,9 +138,16 @@ func runImport(out io.Writer, s *store.Store, res *importer.Result, configDir st
 			wouldGrant++
 			continue
 		}
-		id, err := s.AddServerWithCredentials(&models.Server{
+		srv := &models.Server{
 			Name: cand.Name, Host: cand.Host, Port: cand.Port, User: cand.User,
-		}, cred, nil)
+		}
+		if pick.NeedsPass {
+			// Same tag the TUI import flow writes: serverNeedsAttention (⚠
+			// sort, `!` filter) keys on it, and every re-credential path
+			// (TUI edit, servers edit) drops it once the passphrase lands.
+			srv.Tags = []string{"needs-passphrase"}
+		}
+		id, err := s.AddServerWithCredentials(srv, cred, nil)
 		if err != nil {
 			report = append(report, importReport{cand.Name, "FAILED: " + err.Error()})
 			continue

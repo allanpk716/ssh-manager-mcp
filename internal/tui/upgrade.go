@@ -155,9 +155,10 @@ func (a App) issueDeviceCode() tea.Cmd {
 func (a App) upgradeComplete() (tea.Model, tea.Cmd) {
 	installErr := a.upg.installErr
 	a.upg, a.overlay = nil, nil
-	if pages, err := FetchAll(a.st); err == nil { // fold in the minted device code
-		a.pages = pages
-	}
+	// refetchPages (not raw FetchAll) so the minted device code lands AND the
+	// servers page's `!` filter + ⚠ sort survive the segment end — same
+	// contract as actionDoneMsg / tokenIssuedMsg.
+	a.refetchPages()
 	if installErr != nil {
 		a.err = nil
 		a.status = "serve 安装失败 —— 按结果屏的手动命令安装后，再次按 u 完成升级（角色保持单机）"
