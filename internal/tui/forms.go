@@ -34,7 +34,7 @@ func newServerForm(d *serverDraft, editing bool) *huh.Form {
 		),
 		huh.NewGroup([]huh.Field{
 			passwordField(d, editing),
-			huh.NewInput().Title("私钥路径（与密码二选一；编辑时留空=不变）").Value(&d.KeyPath),
+			huh.NewInput().Title("私钥路径（可选，与密码互斥；编辑时留空=不变）").Value(&d.KeyPath),
 			huh.NewInput().Title("密钥口令（可选）").Value(&d.KeyPass).EchoMode(huh.EchoModePassword),
 			sudoPasswordField(d),
 		}...),
@@ -43,7 +43,7 @@ func newServerForm(d *serverDraft, editing bool) *huh.Form {
 }
 
 func passwordField(d *serverDraft, editing bool) *huh.Input {
-	title := "密码（与密钥二选一）"
+	title := "密码（可选，与密钥二选一）"
 	if editing {
 		title = "密码（留空=保持不变）"
 	}

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"testing"
 
 	"charm.land/huh/v2"
@@ -105,39 +106,46 @@ func TestSubmitServer_EditRecredentialSwaps(t *testing.T) {
 	}
 }
 
-// TestNewServerFormFieldConstructors (Plan 20 C3a regression): verifies the
-// extracted constructors produce valid, non-nil fields.
-func TestNewServerFormFieldConstructors(t *testing.T) {
+// inputTitle reads a *huh.Input's title via reflection — huh exposes no
+// public getter, but Title(s) stores into Input.title (an Eval[string])
+// whose val field holds the literal. String() is safe on unexported
+// (read-only) reflect values; only Set*/Interface() would panic.
+func inputTitle(f *huh.Input) string {
+	return reflect.ValueOf(f).Elem().FieldByName("title").FieldByName("val").String()
+}
+
+// TestNewServerFormFieldTitles (Plan 20 C3a regression, hardened in the fix
+// round): locks the EXACT titles and order of the extracted constructors.
+// Task 5 made credentials optional — the add-mode password title must keep
+// saying 可选 (the extraction once regressed it to a stale pre-T5 sample
+// string because the plan sketch was written from pre-T5 source). This test
+// fails if any title or the structuredFields order changes.
+func TestNewServerFormFieldTitles(t *testing.T) {
 	d := &serverDraft{}
 
-	// passwordField returns non-nil *huh.Input for both editing modes
-	if passwordField(d, false) == nil {
-		t.Error("passwordField(d, false) returned nil")
-	}
-	if passwordField(d, true) == nil {
-		t.Error("passwordField(d, true) returned nil")
-	}
-
-	// sudoPasswordField returns non-nil *huh.Input
-	if sudoPasswordField(d) == nil {
-		t.Error("sudoPasswordField(d) returned nil")
-	}
-
-	// structuredFields returns exactly 6 fields, all non-nil
+	want := []string{"硬件", "位置", "角色", "服务", "Caveats（agent 行动前必读）", "备注"}
 	fields := structuredFields(d)
-	if len(fields) != 6 {
-		t.Fatalf("structuredFields(d) returned %d fields, want 6", len(fields))
+	if len(fields) != len(want) {
+		t.Fatalf("structuredFields(d) returned %d fields, want %d", len(fields), len(want))
 	}
 	for i, f := range fields {
-		if f == nil {
-			t.Errorf("structuredFields(d)[%d] is nil", i)
+		in, ok := f.(*huh.Input)
+		if !ok {
+			t.Fatalf("structuredFields(d)[%d] is %T, want *huh.Input", i, f)
+		}
+		if got := inputTitle(in); got != want[i] {
+			t.Errorf("structuredFields(d)[%d] title = %q, want %q", i, got, want[i])
 		}
 	}
 
-	// All fields implement the huh.Field interface (basic type check)
-	for i, f := range fields {
-		var _ huh.Field = f // Interface assignment compile-time check
-		_ = i
+	if got := inputTitle(passwordField(d, false)); got != "密码（可选，与密钥二选一）" {
+		t.Errorf("passwordField(d, false) title = %q, want %q", got, "密码（可选，与密钥二选一）")
+	}
+	if got := inputTitle(passwordField(d, true)); got != "密码（留空=保持不变）" {
+		t.Errorf("passwordField(d, true) title = %q, want %q", got, "密码（留空=保持不变）")
+	}
+	if got := inputTitle(sudoPasswordField(d)); got != "sudo 密码（可选）" {
+		t.Errorf("sudoPasswordField(d) title = %q, want %q", got, "sudo 密码（可选）")
 	}
 }
 
