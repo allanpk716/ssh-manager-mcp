@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -42,5 +43,87 @@ func TestSyncCmdRefusesEmptyPin(t *testing.T) {
 	}
 	if !strings.Contains(done.err.Error(), "明文") && !strings.Contains(done.err.Error(), "pin") {
 		t.Fatalf("err should mention pin/明文: %v", done.err)
+	}
+}
+
+// TestClassifyPullError pins the wizard's four-state pull diagnosis (task-5
+// brief, verbatim): dial/no-such-host → 地址不通, 401/authorization → 设备码无效,
+// mismatch/fingerprint → 指纹失配, Timeout → 超时 — each category name must
+// appear in the classified banner. The unknown-error default is checked too.
+func TestClassifyPullError(t *testing.T) {
+	cases := map[string]string{
+		`Get "https://x": dial tcp: no route`:                                  "地址不通",
+		`pull: server returned 401`:                                            "设备码无效",
+		`server fingerprint mismatch (expected a, got b)`:                      "指纹失配",
+		`Get "https://x": context deadline exceeded (Client.Timeout exceeded)`: "超时",
+	}
+	for raw, want := range cases {
+		if got := classifyPullError(errors.New(raw)); !strings.Contains(got, want) {
+			t.Fatalf("classify(%q) = %q, want contains %q", raw, got, want)
+		}
+	}
+	if got := classifyPullError(errors.New("boom")); !strings.Contains(got, "boom") {
+		t.Fatalf("default must keep the raw error text: %q", got)
+	}
+}
+
+// TestClientWizard_PullFailureReopensFormWithDraft pins the input-preservation
+// invariant (task-5 brief): a failed first pull reopens the connection form
+// with the previously submitted url/pin still in it (code stays empty — a
+// masked secret is never re-echoed), under a classified error banner.
+func TestClientWizard_PullFailureReopensFormWithDraft(t *testing.T) {
+	m := newClientModel()
+	m.wizard = true
+	m.draft = &connDraft{URL: "https://192.0.2.9:7878", Pin: "sha256:" + strings.Repeat("b", 64)}
+
+	nm, _ := m.Update(syncDoneMsg{err: errors.New("pull: server returned 401")})
+	m2, ok := nm.(clientModel)
+	if !ok {
+		t.Fatalf("want clientModel, got %T", nm)
+	}
+	if m2.draft == nil || m2.draft.URL != "https://192.0.2.9:7878" || m2.draft.Pin != m.draft.Pin {
+		t.Fatalf("draft must survive the failed pull: %+v", m2.draft)
+	}
+	if m2.overlay == nil {
+		t.Fatal("failed wizard pull must reopen the connection form")
+	}
+	v := m2.View().Content
+	if !strings.Contains(v, "设备码无效") {
+		t.Fatalf("view must show the classified banner:\n%s", v)
+	}
+	if !strings.Contains(v, "192.0.2.9") {
+		t.Fatalf("reopened form must prefill the previous url:\n%s", v)
+	}
+}
+
+// TestEditConnFormRequiresCodeWhenNoToken: on a fresh machine (no stored cred)
+// the connection form must refuse an empty 设备码 at submit — "留空=保持不变"
+// has nothing to keep, and a token-less cred could never authorize a pull.
+func TestEditConnFormRequiresCodeWhenNoToken(t *testing.T) {
+	m := newClientModel()
+	m.wizard = true
+	fo, ok := m.editConnForm().(*formOverlay)
+	if !ok {
+		t.Fatal("editConnForm must return a formOverlay")
+	}
+	msg := fo.action()()
+	if _, ok := msg.(errMsg); !ok {
+		t.Fatalf("want errMsg for empty code with no stored token, got %T", msg)
+	}
+}
+
+// TestClientFinishScreen: the client wizard's finish screen must show the
+// --cache variant of the .mcp.json snippet — never the standalone plain-mcp
+// shape (the two modes are mutually exclusive and a wrong snippet breaks the
+// agent silently).
+func TestClientFinishScreen(t *testing.T) {
+	v := clientFinishScreen().View().Content
+	for _, want := range []string{`"mcp", "--cache", "--token"`, "project token"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("finish screen missing %q:\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, `["mcp", "--token"`) {
+		t.Fatalf("client finish must not show the plain (non-cache) args:\n%s", v)
 	}
 }

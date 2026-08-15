@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 )
@@ -18,47 +19,18 @@ const (
 	ModeClient
 )
 
-// vaultStorePath mirrors cli's storePath (env override > default) WITHOUT importing cli.
-// Returns "" only when the default path itself is unresolvable (no vault could
-// exist there anyway).
-func vaultStorePath() string {
-	if p := os.Getenv("SSHMGR_STORE"); p != "" {
-		return p
-	}
-	p, err := store.DefaultStorePath()
-	if err != nil {
-		return ""
-	}
-	return p
-}
+// The vault-probe helpers (vaultStorePath / vaultExists / vaultUnlocked) MOVED
+// to internal/roles (roles.VaultExists / roles.VaultUnlocked + private
+// vaultStorePath) — Plan 19 T1 makes roles the single launch-resolution
+// authority. The unexported wrappers below keep tui's own call sites and
+// mode_test.go's probe tests working unchanged; behavior is identical
+// (stat-first probe, no OpenStore create-on-open side effect).
 
 // vaultExists reports whether a store.db file exists at the vault location.
-// Stat-first so probing a machine with NO vault never triggers OpenStore's
-// create-on-open side effect (a fresh empty store.db).
-func vaultExists() bool {
-	p := vaultStorePath()
-	if p == "" {
-		return false
-	}
-	_, err := os.Stat(p)
-	return err == nil
-}
+func vaultExists() bool { return roles.VaultExists() }
 
-// vaultUnlocked reports whether an UNLOCKED vault is reachable. A vault that
-// EXISTS but cannot be opened (locked / key unreadable) is distinguished by the
-// caller via vaultExists so detection never silently degrades a locked broker
-// machine into client mode (spec §6).
-func vaultUnlocked() bool {
-	if !vaultExists() {
-		return false
-	}
-	st, err := vault.OpenStore(store.FileKeyProvider{})
-	if err != nil {
-		return false
-	}
-	st.Close()
-	return true
-}
+// vaultUnlocked reports whether an UNLOCKED vault is reachable.
+func vaultUnlocked() bool { return roles.VaultUnlocked() }
 
 // cachePresent reports whether this machine is an enrolled client.
 func cachePresent() bool {
@@ -99,32 +71,98 @@ func DetectMode(force string) (Mode, error) {
 	return DetectModeWith(force, vaultUnlocked, cachePresent)
 }
 
-// Run starts the console for mode. Broker opens the vault and runs the tabbed
-// App; client runs the standalone clientModel (single screen, no tabs).
-func Run(mode Mode) error {
+// launchTarget is the pure dispatch table behind Run (Plan 19 T2): first run →
+// wizard; completed setups → broker/client; an INCOMPLETE setup
+// (ResumeSetup) of ANY role re-enters the wizard — since T5 that includes the
+// client (its wizard resumes at the connection form / saved-cred panel).
+func launchTarget(l roles.Launch) string {
+	if l.ResumeSetup {
+		return "wizard"
+	}
+	switch l.Kind {
+	case roles.LaunchWizard:
+		return "wizard"
+	case roles.LaunchBroker:
+		return "broker"
+	default:
+		return "client"
+	}
+}
+
+// Run starts the console. modeFlag (from `tui --mode`) passes straight into
+// roles.ResolveMode — the single launch-decision authority (spec §1.2) — and
+// the resulting Launch dispatches to the wizard, the broker App, or the client
+// panel. ResumeSetup routes ANY role back into the wizard with the role
+// preselected; when the wizard finishes/quits, the next launch resumes
+// normally (Tasks 3-5 chain wizard completion straight into the consoles).
+func Run(modeFlag string) error {
 	if !isTTY() {
 		return errors.New("tui requires a terminal (in mintty run via `winpty ssh-manager tui`, or use Windows Terminal)")
 	}
-	if mode == ModeClient {
+	l, err := roles.ResolveMode(modeFlag)
+	if err != nil {
+		return err
+	}
+	switch launchTarget(l) {
+	case "wizard":
+		m := newWizard(l)
+		if l.ResumeSetup {
+			m = newWizardForRole(l)
+		}
+		fm, werr := tea.NewProgram(m).Run()
+		if werr != nil {
+			return werr
+		}
+		// Handoff sentinel (T3/T5): a COMPLETED wizard exits with done=true
+		// and chains straight into the target console instead of dropping the
+		// user back to the shell — the broker App reusing the wizard's still-
+		// open store, or the (fresh, stateless) client panel.
+		if wm, ok := fm.(wizardModel); ok {
+			if wm.done && wm.next == "broker" && wm.st != nil {
+				app, aerr := NewBrokerApp(wm.st)
+				if aerr != nil {
+					wm.closeStore()
+					return aerr
+				}
+				_, werr = tea.NewProgram(app).Run()
+			}
+			if wm.done && wm.next == "client" {
+				_, werr = tea.NewProgram(newClientModel()).Run()
+			}
+			wm.closeStore()
+		}
+		return werr
+	case "client":
 		p := tea.NewProgram(newClientModel())
-		_, err := p.Run()
+		_, err = p.Run()
+		return err
+	default: // broker
+		st, err := vault.OpenStore(store.FileKeyProvider{})
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		app, err := NewBrokerApp(st)
+		if err != nil {
+			return err
+		}
+		p := tea.NewProgram(app)
+		_, err = p.Run()
 		return err
 	}
-	st, err := vault.OpenStore(store.FileKeyProvider{})
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-	app, err := NewBrokerApp(st)
-	if err != nil {
-		return err
-	}
-	p := tea.NewProgram(app)
-	_, err = p.Run()
-	return err
 }
 
 func isTTY() bool {
 	fi, err := os.Stdin.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// closeStore closes the wizard's vault store — the ONE cleanup path Run uses
+// after the wizard program exits. st is nil on every early exit (first-screen
+// q before choosing a role, the T4/T5 placeholder pages, stepVaultErr), so the
+// nil guard is what makes quit-from-anywhere safe.
+func (wm *wizardModel) closeStore() {
+	if wm.st != nil {
+		wm.st.Close()
+	}
 }

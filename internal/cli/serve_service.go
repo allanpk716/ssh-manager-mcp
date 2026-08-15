@@ -65,6 +65,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -236,18 +237,28 @@ only when all four pass.`,
 	return c
 }
 
-// runServeInstall registers the kardianos service.
+// runServeInstall registers the kardianos service — a thin cobra shell over
+// installServeService (the programmatic core the Plan 19 role wizard calls via
+// tui.SetServeInstaller; tui cannot import cli — cli imports tui).
 //
-// Precheck (codex #2, FINDING B defense — retained in spirit): master.key
-// must exist and decrypt. The old Windows path additionally required a
-// machine-scope DPAPI sentinel because the boot Password-logon session could
+// Precheck rationale (codex #2, FINDING B defense — retained in spirit):
+// master.key must exist and decrypt. The old Windows path additionally required
+// a machine-scope DPAPI sentinel because the boot Password-logon session could
 // not read a user-scope blob; under kardianos the service runs as LocalSystem
 // (or root on POSIX), and the master.key is a plaintext FileKeyProvider file
 // (Plan 16), so the sentinel concept is gone — the readability check below
 // is the simpler, equivalent gate.
 func runServeInstall(cmd *cobra.Command, addr, tlsCert, tlsKey string) error {
-	out := cmd.OutOrStdout()
+	return installServeService(addr, tlsCert, tlsKey, cmd.OutOrStdout())
+}
 
+// installServeService is the programmatic install core (Plan 19 T4 抽核):
+// precheck master.key → resolve own executable → build the service Config →
+// best-effort vault-dir ACL harden → idempotent Uninstall+Install+Start.
+// All output (including best-effort WARNINGS) goes to out — the CLI passes
+// stdout, the wizard passes io.Discard and renders only the error + the manual
+// elevated command.
+func installServeService(addr, tlsCert, tlsKey string, out io.Writer) error {
 	// 1. Precheck: master.key must exist + be structurally usable. The service
 	//    host (often LocalSystem / root) needs to read it; if it's missing or
 	//    corrupt the service will crash-loop at boot — the worst time to find
@@ -302,7 +313,7 @@ func runServeInstall(cmd *cobra.Command, addr, tlsCert, tlsKey string) error {
 	//    inherits a potentially-broad DACL on Windows (T6 report concern #1).
 	//    Best-effort: a failure here does NOT block install (the file ACL is
 	//    the load-bearing protection; the dir ACL is defense-in-depth).
-	hardenVaultDirACLBestEffort(cmd)
+	hardenVaultDirACLBestEffort(out)
 
 	// 5. Create + Install + Start. kardianos returns "service already exists"
 	//    on a double-install; we make install idempotent by Uninstall-ing any
@@ -319,7 +330,7 @@ func runServeInstall(cmd *cobra.Command, addr, tlsCert, tlsKey string) error {
 	// then Install. A "not installed" error from Uninstall is the normal
 	// first-install case (silently ignored).
 	if uerr := s.Uninstall(); uerr != nil && !isServiceNotInstalled(uerr) {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not remove prior registration before re-install: %v (continuing)\n", uerr)
+		fmt.Fprintf(out, "warning: could not remove prior registration before re-install: %v (continuing)\n", uerr)
 	}
 	if err := s.Install(); err != nil {
 		return fmt.Errorf("install service: %w", err)
@@ -330,16 +341,23 @@ func runServeInstall(cmd *cobra.Command, addr, tlsCert, tlsKey string) error {
 	// registered and will start at boot; the user can diagnose via
 	// 'serve status'.
 	if err := s.Start(); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: service installed but Start failed: %v (registered; will start at boot — check 'ssh-manager serve status')\n", err)
+		fmt.Fprintf(out, "warning: service installed but Start failed: %v (registered; will start at boot — check 'ssh-manager serve status')\n", err)
 	} else {
 		fmt.Fprintln(out, "service started. Use 'ssh-manager serve status' to verify it is listening.")
 	}
 	return nil
 }
 
-// runServeUninstall stops + removes the service. Vault data is NOT deleted.
+// runServeUninstall stops + removes the service — thin shell over
+// uninstallServeService (the programmatic core Task 7's `clear` reuses).
+// Vault data is NOT deleted.
 func runServeUninstall(cmd *cobra.Command) error {
-	out := cmd.OutOrStdout()
+	return uninstallServeService(cmd.OutOrStdout())
+}
+
+// uninstallServeService stops + removes the service registration. Vault data
+// is NOT deleted. Idempotent: "not installed" is reported to out, not an error.
+func uninstallServeService(out io.Writer) error {
 	cfg := &service.Config{Name: serveServiceName, Option: platformServiceOptions()}
 	s, err := service.New(&program{}, cfg)
 	if err != nil {
@@ -352,7 +370,7 @@ func runServeUninstall(cmd *cobra.Command) error {
 	// Best-effort Stop before Uninstall so the running serve releases the
 	// port. A "not installed" error from Stop is ignored.
 	if serr := s.Stop(); serr != nil && !isServiceNotInstalled(serr) {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: service Stop before uninstall: %v (continuing)\n", serr)
+		fmt.Fprintf(out, "warning: service Stop before uninstall: %v (continuing)\n", serr)
 	}
 	if err := s.Uninstall(); err != nil {
 		if isServiceNotInstalled(err) {
@@ -473,8 +491,8 @@ func platformServiceOptions() service.KeyValue {
 // moment to lock the dir ACL (the master.key file is already ACL-locked by
 // FileKeyProvider.Set, but the parent dir inherits a broad DACL on Windows —
 // T6 report concern #1). On non-Windows, HardenACL is a no-op (file mode
-// bits are the protection). Best-effort: failures are warned, not fatal.
-func hardenVaultDirACLBestEffort(cmd *cobra.Command) {
+// bits are the protection). Best-effort: warnings go to out, never fatal.
+func hardenVaultDirACLBestEffort(out io.Writer) {
 	// Resolve the vault dir via paths.MasterKeyPath (SSHMGR_FILEKEY_PATH
 	// override-aware) so we ACL the EXACT dir the vault lives in.
 	mkPath, err := paths.MasterKeyPath()
@@ -489,7 +507,7 @@ func hardenVaultDirACLBestEffort(cmd *cobra.Command) {
 		return
 	}
 	if err := store.HardenACL(dir); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: HardenACL on vault dir %q: %v (file ACL is the load-bearing protection; dir ACL is defense-in-depth)\n", dir, err)
+		fmt.Fprintf(out, "warning: HardenACL on vault dir %q: %v (file ACL is the load-bearing protection; dir ACL is defense-in-depth)\n", dir, err)
 	}
 }
 

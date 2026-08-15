@@ -10,6 +10,7 @@ import (
 
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -43,7 +44,9 @@ type App struct {
 	st      *store.Store
 	page    page
 	pages   [pageCount]listPage
-	overlay overlay // nil = 无
+	overlay overlay         // nil = 无
+	role    roles.Role      // this machine's deployment role (T6: gates the [u] upgrade)
+	upg     *upgradeSegment // nil = upgrade segment not running (T6)
 	status  string
 	err     error
 }
@@ -54,7 +57,35 @@ func NewBrokerApp(st *store.Store) (App, error) {
 	if err != nil {
 		return App{}, err
 	}
-	return App{st: st, pages: pages, status: "就绪"}, nil
+	role, err := detectBrokerRole()
+	if err != nil {
+		return App{}, err // fail closed: a corrupt role.json surfaces to the CLI
+	}
+	return App{st: st, pages: pages, status: "就绪", role: role}, nil
+}
+
+// detectBrokerRole resolves the App's role: role.json first (authoritative
+// since T1) — an unreadable/corrupt file is an ERROR (roles' fail-closed
+// design: a broken state must guide `clear`, never silently degrade; in
+// practice ResolveMode gates this earlier on the launch path, this is the
+// second line). A nil state (pre-Plan-19 machine with a vault but no
+// role.json) falls back to the probe inference in roles.ResolveMode —
+// accepting only its standalone/server answers, since a broker App can never
+// be the client role; when even that cannot decide, RoleStandalone is the
+// safe default: it only ADDS the [u] upgrade affordance and never removes any
+// capability.
+func detectBrokerRole() (roles.Role, error) {
+	s, err := roles.Load()
+	if err != nil {
+		return "", err
+	}
+	if s != nil {
+		return s.Role, nil
+	}
+	if l, err := roles.ResolveMode(""); err == nil && l.Role == roles.RoleServer {
+		return roles.RoleServer, nil
+	}
+	return roles.RoleStandalone, nil
 }
 
 // FetchAll loads the four entity pages in one shot.
@@ -111,7 +142,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case k.Text == "q":
 			return a, tea.Quit
+		case k.Text == "u" && a.role == roles.RoleStandalone && a.upg == nil:
+			// T6: non-destructive standalone→server upgrade. Only offered (and
+			// only dispatched) on a standalone machine with no segment running;
+			// a mid-flight press is swallowed by the upg guard.
+			a.startUpgrade()
+			return a, a.overlay.Init()
 		case k.Text == "a", k.Text == "e", k.Text == "d", k.Text == "g":
+			// F2 (fix round): while an upgrade segment is in flight (install/
+			// probe/deviceIssue — overlay==nil windows), page action keys are
+			// suppressed: opening a form overlay here would be clobbered by the
+			// segment's next msg (serveInstalledMsg etc.) and leak a stray form.
+			if a.upg != nil {
+				return a, nil
+			}
 			// One case for all action keys: overlapping letters across pages
 			// (a/e/d on servers AND projects, a on profiles) make separate
 			// cases order-dependent — an earlier case would swallow a later
@@ -283,6 +327,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		a.err = m.err
 		a.status = ""
+		if a.upg != nil {
+			// A segment action failed (e.g. device-code mint). Abort the
+			// segment cleanly: back on the standalone console with the error
+			// visible, [u] restarts it. Vault data is untouched — the mint is
+			// cert-first/code-second, so a retry stays idempotent.
+			a.upg, a.overlay = nil, nil
+		}
 		return a, nil
 	case actionDoneMsg:
 		a.err = nil
@@ -293,8 +344,46 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case formDoneMsg:
+		if a.upg != nil { // upgrade segment owns its formDoneMsg progression (T6)
+			return a.upgradeFormDone(m)
+		}
 		a.overlay = nil
 		return a, m.after // run the deferred action (e.g. re-fetch)
+	case serveInstalledMsg:
+		if a.upg == nil {
+			return a, nil // defensive: only the upgrade segment produces this in the App
+		}
+		// Install outcome — either way the segment CONTINUES to the probe
+		// (T4 discipline: install failure 不阻断; the result screen shows the
+		// manual command, and upgradeComplete decides the role flip).
+		a.upg.installErr = m.err
+		a.upg.step = upgProbe
+		a.overlay = nil
+		return a, probeServe(a.upg.serveAddr)
+	case serveProbeMsg:
+		if a.upg == nil {
+			return a, nil
+		}
+		a.upg.step = upgResult
+		a.overlay = serveResultScreen(a.upg.installErr, m)
+		return a, nil
+	case deviceCodeIssuedMsg:
+		if a.upg == nil {
+			return a, nil
+		}
+		// The code transits this one message and then lives only inside the
+		// overlay (same discipline as tokenIssuedMsg). Pages re-fetch so the
+		// 设备码 tab lists the new code behind the one-time screen.
+		a.upg.step = upgDeviceCode
+		a.upg.deviceFp = m.fingerprint
+		a.err, a.status = nil, ""
+		a.overlay = wizTokenScreen("设备码 — "+a.upg.clientName, m.code,
+			fmt.Sprintf("填到 client 机向导；或拼 cache pull --token '%s:%s'", m.code, m.fingerprint),
+			"主控台 设备码页 [a] 重发")
+		if pages, err := FetchAll(a.st); err == nil {
+			a.pages = pages
+		}
+		return a, nil
 	case tokenIssuedMsg:
 		// Mutation succeeded and minted a token: take over the screen with the
 		// one-time secret view. Pages are re-fetched now so the list is fresh
@@ -331,7 +420,16 @@ func (a *App) move(d int) {
 
 type errMsg struct{ err error }
 type actionDoneMsg struct{ desc string }
-type formDoneMsg struct{ after tea.Cmd }
+
+// formDoneMsg closes a form overlay. aborted is set ONLY by formOverlay's
+// Esc/huh-abort path: the user backed out and the huh-bound answer values are
+// untrustworthy (a select may have already committed its preset default into
+// them). Consumers that advance on the answers (the upgrade segment) treat it
+// as a cancel; bare dismissals (static screens, secretView) leave it false.
+type formDoneMsg struct {
+	after   tea.Cmd
+	aborted bool
+}
 
 func (a App) View() tea.View {
 	if a.overlay != nil {
@@ -392,10 +490,16 @@ func (a App) footer() string {
 	case pageTokens:
 		keys = "[a]签发 [d]吊销"
 	}
+	tail := "Tab 切页  q 退出"
 	if keys != "" {
-		return keys + "  Tab 切页  q 退出"
+		tail = keys + "  " + tail
 	}
-	return "Tab 切页  q 退出"
+	if a.role == roles.RoleStandalone {
+		// T6: only a standalone machine can upgrade; the footer hint disappears
+		// the moment the role flips (upgradeComplete sets a.role).
+		tail = "[u]升级为 server  " + tail
+	}
+	return tail
 }
 
 // lipColumns renders two columns side by side (width-aware lipgloss join).

@@ -174,7 +174,7 @@ func generateServeCert(certPath, keyPath string) error {
 		KeyUsage:     x509.KeyUsageDigitalSignature, // ed25519 is a pure-signature algorithm; KeyEncipherment is meaningless for it (xcheck F9)
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     []string{host},
-		IPAddresses:  localNonLoopbackIPs(),
+		IPAddresses:  LocalNonLoopbackIPs(),
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
 	if err != nil {
@@ -203,10 +203,13 @@ func generateServeCert(certPath, keyPath string) error {
 	return nil
 }
 
-// localNonLoopbackIPs returns this host's non-loopback unicast IPs for the cert
-// SAN. Core trust is the SPKI pin (not the hostname), but listing IPs avoids
+// LocalNonLoopbackIPs returns this host's non-loopback unicast IPs for the
+// cert SAN. Core trust is the SPKI pin (not the hostname), but listing IPs avoids
 // spurious name-check failures when a client connects by IP. Best-effort.
-func localNonLoopbackIPs() []net.IP {
+// Exported since Plan 19 T4: the role wizard's LAN-address picker reuses the
+// exact same enumeration (the picked IP should be a cert SAN — that is what
+// makes the address clients will use actually covered by the self-signed cert).
+func LocalNonLoopbackIPs() []net.IP {
 	var out []net.IP
 	ifaces, err := net.InterfaceAddrs()
 	if err != nil {
