@@ -30,10 +30,11 @@ func TestClientServerList(t *testing.T) {
 // TestSyncCmdRefusesEmptyPin pins the TUI's own no-plaintext invariant: with a
 // stored cred lacking a pin, sync must fail fast instead of ever attempting a
 // plaintext (AllowPlain=false would only fail later, after a network round
-// trip) pull.
+// trip) pull. (The syncCmd wrapper was deleted in Plan 20 T1; the panel pull
+// is syncCmdMode(cred, false).)
 func TestSyncCmdRefusesEmptyPin(t *testing.T) {
 	cred := &clientops.CacheCred{URL: "https://x", Token: "t", Pin: ""}
-	msg := syncCmd(cred)()
+	msg := syncCmdMode(cred, false)()
 	done, ok := msg.(syncDoneMsg)
 	if !ok {
 		t.Fatalf("want syncDoneMsg, got %T", msg)

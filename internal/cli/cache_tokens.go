@@ -100,7 +100,7 @@ func cacheTokensRevokeCmd() *cobra.Command {
 // printCacheToken emits the one-time device code + the server's SPKI fingerprint
 // + the cache-pull invocation. Shown once. The PRIMARY recommended invocation
 // embeds the pin inside the token as "<code>:<pin>" (spec §3.3 形态 A) — that is
-// the form cachePullCmd's stripEmbeddedPin consumes, so producing it here gives
+// the form cachePullCmd's SplitTokenPin consumes, so producing it here gives
 // the embedded-pin path a real producer and keeps the enrollment story
 // single-string. A blank fingerprint (only possible if LoadOrCreateServeCert
 // failed and the caller chose to print anyway) degrades to the token-only form.

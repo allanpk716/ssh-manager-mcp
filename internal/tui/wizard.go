@@ -504,7 +504,7 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case deviceCodeIssuedMsg:
 		// Server flow's second secret (spec §2.4 ⑤ 密钥 2/2). The usage line
 		// embeds the ready-to-paste merged token "<码>:<指纹>" (spec §3.3 形态 A
-		// — the exact string cache pull's stripEmbeddedPin consumes).
+		// — the exact string cache pull's SplitTokenPin consumes).
 		w.step, w.err, w.status = stepDeviceToken, nil, ""
 		w.data.deviceFp = m.fingerprint
 		w.ov = wizTokenScreen("密钥 2/2：设备码", m.code,

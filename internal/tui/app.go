@@ -161,34 +161,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// cases order-dependent — an earlier case would swallow a later
 			// page's key. Dispatch by page instead.
 			if a.page == pageServers {
-				sp, _ := a.pages[pageServers].(*serversPage)
-				switch k.Text {
-				case "a":
-					draft := &serverDraft{}
-					a.overlay = newFormOverlay("新增服务器", newServerForm(draft, false), func() tea.Cmd {
-						return submitServer(a.st, nil, draft)
-					})
-				case "e":
-					if cur := sp.current(); cur != nil {
-						draft := prefill(cur)
-						a.overlay = newFormOverlay("编辑服务器", newServerForm(draft, true), func() tea.Cmd {
-							return submitServer(a.st, cur, draft)
-						})
-					}
-				case "d":
-					if cur := sp.current(); cur != nil {
-						confirm := false
-						form := huh.NewForm(huh.NewGroup(huh.NewConfirm().
-							Title(fmt.Sprintf("删除服务器 %q？（profile 授权一并失效）", cur.Name)).Value(&confirm)))
-						a.overlay = newFormOverlay("删除服务器", form, func() tea.Cmd {
-							if !confirm {
-								return nil
-							}
-							return doAction(a.st, func() (string, error) {
-								return "已删除 " + cur.Name, a.st.DeleteServer(cur.ID)
-							})
-						})
-					}
+				if cmd := a.serversKey(k); cmd != nil {
+					return a, cmd
 				}
 			}
 			if a.page == pageProfiles {
@@ -397,6 +371,49 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 	return a, nil
+}
+
+// serversKey dispatches the servers page's action keys: a=新增, e=编辑,
+// d=删除 — each opens its form overlay (setting a.overlay) and returns the
+// overlay's Init cmd. Any other key is a no-op returning nil (notably g: the
+// profiles page's grant key must do nothing here — per-page dispatch is what
+// keeps the overlapping letters across pages from swallowing each other).
+// Extracted from Update in Plan 20 T1 so the key→page→action mapping is
+// table-testable (TestServersPageDispatch).
+func (a *App) serversKey(k tea.Key) tea.Cmd {
+	sp, _ := a.pages[pageServers].(*serversPage)
+	switch k.Text {
+	case "a":
+		draft := &serverDraft{}
+		a.overlay = newFormOverlay("新增服务器", newServerForm(draft, false), func() tea.Cmd {
+			return submitServer(a.st, nil, draft)
+		})
+	case "e":
+		if cur := sp.current(); cur != nil {
+			draft := prefill(cur)
+			a.overlay = newFormOverlay("编辑服务器", newServerForm(draft, true), func() tea.Cmd {
+				return submitServer(a.st, cur, draft)
+			})
+		}
+	case "d":
+		if cur := sp.current(); cur != nil {
+			confirm := false
+			form := huh.NewForm(huh.NewGroup(huh.NewConfirm().
+				Title(fmt.Sprintf("删除服务器 %q？（profile 授权一并失效）", cur.Name)).Value(&confirm)))
+			a.overlay = newFormOverlay("删除服务器", form, func() tea.Cmd {
+				if !confirm {
+					return nil
+				}
+				return doAction(a.st, func() (string, error) {
+					return "已删除 " + cur.Name, a.st.DeleteServer(cur.ID)
+				})
+			})
+		}
+	}
+	if a.overlay == nil {
+		return nil
+	}
+	return a.overlay.Init()
 }
 
 func (a *App) move(d int) {

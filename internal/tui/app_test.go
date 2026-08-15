@@ -65,6 +65,45 @@ func TestApp_QuitOnQ(t *testing.T) {
 	}
 }
 
+// TestServersPageDispatch (Plan 20 T1, paying the Plan 18 T6 dispatch-table
+// debt): the key→page→action mapping on the servers page, driven through the
+// real Update path. a/e/d must open their form overlay (right title + the
+// overlay's Init cmd comes back); g must be a NO-OP here — it is the profiles
+// page's grant key, and per-page dispatch is what keeps the overlapping
+// letters (a/e/d on servers AND projects) from swallowing each other.
+// "i" (ssh-config import) lands in Task 10 and is deliberately absent.
+func TestServersPageDispatch(t *testing.T) {
+	cases := []struct {
+		key         string
+		wantOverlay string // "" = the key must be a no-op on this page
+	}{
+		{"a", "新增服务器"},
+		{"e", "编辑服务器"},
+		{"d", "删除服务器"},
+		{"g", ""},
+	}
+	for _, c := range cases {
+		a := newTestApp(t) // fresh app per key: one seeded server at cursor 0
+		m, cmd := a.Update(tea.KeyPressMsg{Code: rune(c.key[0]), Text: c.key})
+		got := m.(App)
+		if c.wantOverlay == "" {
+			if got.overlay != nil || cmd != nil {
+				t.Fatalf("key %q on servers page must be a no-op: overlay=%v cmd=%v", c.key, got.overlay, cmd)
+			}
+			continue
+		}
+		if got.overlay == nil {
+			t.Fatalf("key %q must open the %q overlay, got none", c.key, c.wantOverlay)
+		}
+		if title := got.overlay.Title(); title != c.wantOverlay {
+			t.Fatalf("key %q opened %q, want %q", c.key, title, c.wantOverlay)
+		}
+		if cmd == nil {
+			t.Fatalf("key %q must return the opened overlay's Init cmd", c.key)
+		}
+	}
+}
+
 // TestBrokerApp_RoleLoadFailsClosed (fix round F3): a corrupt role.json must
 // surface as an error from NewBrokerApp, not silently default the App to
 // standalone — matching roles' fail-closed design (a broken state guides

@@ -107,15 +107,12 @@ func refreshDataCmd() tea.Msg {
 	return dataReadyMsg{cred: cred, snap: snap, age: age}
 }
 
-// syncCmd pulls a fresh snapshot off the UI loop (panel mode). The pin from
-// the stored cred is mandatory — the TUI NEVER offers plaintext pulls
-// (AllowPlain stays false).
-func syncCmd(cred *clientops.CacheCred) tea.Cmd { return syncCmdMode(cred, false) }
-
-// syncCmdMode is the shared pull command. In WIZARD mode a successful pull
-// returns pullSucceededMsg (→ the .mcp.json finish screen) instead of the
-// panel's syncDoneMsg{nil}; every failure rides syncDoneMsg so the wizard can
-// reopen the form under a classified banner (classifyPullError).
+// syncCmdMode is the pull command (panel and wizard share it). In WIZARD mode
+// a successful pull returns pullSucceededMsg (→ the .mcp.json finish screen)
+// instead of the panel's syncDoneMsg{nil}; every failure rides syncDoneMsg so
+// the wizard can reopen the form under a classified banner
+// (classifyPullError). The pin from the stored cred is mandatory — the TUI
+// NEVER offers plaintext pulls (AllowPlain stays false).
 func syncCmdMode(cred *clientops.CacheCred, wizard bool) tea.Cmd {
 	return func() tea.Msg {
 		if cred == nil {

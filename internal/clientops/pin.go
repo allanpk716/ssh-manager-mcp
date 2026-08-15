@@ -76,11 +76,12 @@ func pinningTransport(fp string) (*http.Transport, error) {
 	return &http.Transport{TLSClientConfig: tlsCfg}, nil
 }
 
-// stripEmbeddedPin splits "<code>:<pin>" into (code, pin, ok). When the token
+// SplitTokenPin splits "<code>:<pin>" into (code, pin, ok). When the token
 // has no valid embedded pin, returns the token unchanged with ok=false so the
 // full token goes to the Authorization header as the device code. Uses the
 // FIRST colon for the split (the pin "sha256:<hex>" contains its own colon).
-func stripEmbeddedPin(token string) (code string, pin string, ok bool) {
+// Plan 20: exported as the single split point (cli/cache.go twin deleted).
+func SplitTokenPin(token string) (code string, pin string, ok bool) {
 	if i := strings.Index(token, ":"); i >= 0 {
 		if v, parsed := mcpserver.ParsePin(token[i+1:]); parsed {
 			return token[:i], v, true
