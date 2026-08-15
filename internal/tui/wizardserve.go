@@ -160,7 +160,7 @@ func probeServe(addr string) tea.Cmd {
 // in-wizard install fails (spec §2.4 ⑥: 失败给出可执行的原文命令，含提权方式).
 func manualInstallCmd() string {
 	if runtime.GOOS == "windows" {
-		return "ssh-manager serve install --addr 0.0.0.0:7878   （在管理员终端中执行）"
+		return "ssh-manager serve install --addr 0.0.0.0:7878\n（在管理员终端中执行）"
 	}
 	return "sudo ssh-manager serve install --addr 0.0.0.0:7878"
 }

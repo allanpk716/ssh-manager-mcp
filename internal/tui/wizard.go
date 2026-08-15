@@ -265,6 +265,7 @@ func (w *wizardModel) enterServer() {
 		w.startClientName()
 	case len(projects) == 0:
 		w.data.profileName, w.data.profileID = profiles[0].Name, profiles[0].ID
+		w.data.clientName = profiles[0].Name // prefill for issueDeviceCode
 		w.data.projName = defaultHostName()
 		w.step = stepProject
 		w.form = w.projectForm()

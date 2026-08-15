@@ -58,3 +58,12 @@
 1. **⚠ spec 内在矛盾（上报，未擅改）**：向导在选定角色的瞬间写 role.json，而 standalone/server 的 vault 在角色流程步骤②才创建——若用户在这两步之间退出，下次启动 `ResolveMode` 会按「vault 角色缺 vault」硬错误引导 `clear`，与 spec §2.2「无死态/可重入」相抵触。本任务测试用 seed vault 规避（证明 vault 建立后的 resume 正确）。建议 Task 3 二选一：(a) `resolveFromState` 对 `SetupComplete=false` 的 vault 角色缺 vault 改为 LaunchWizard 续配而非报错（更符合向导语义）；(b) chooseRole 对 standalone/server 同步预建 vault。**倾向 (a)**——那是「向导进行中」而非「数据被外部破坏」。
 2. `DetectMode`/`DetectModeWith`/`Mode` 现仅剩测试引用（生产路径已全走 `roles.ResolveMode`）。可在 Task 5/9 收尾时删除并迁移 mode_test 的护栏断言到 roles 包，避免长期双轨。
 3. 向导完成后的「进主控台」链路（brief Step 4 括号语义）要等 Task 3-5 各角色流程落地 setup_complete:true 后才真正闭环；本任务 quit 后重开即 resume，行为正确但尚无「完成」出口。
+
+## Fix: resume-vs-anomaly
+
+**Fixed in commit `29412d9`** — internal/roles/roles.go `resolveFromState` 现在区分「向导进行中」与「数据被外部破坏」两种 vault 角色缺 vault 场景：
+
+- `SetupComplete==false` + vault missing → **resume wizard** (LaunchWizard, ResumeSetup=true, Role 保留) — 用户选定角色但尚未建 vault，向导继续，非死态。
+- `SetupComplete==true` + vault missing → **guided error** (引导 `ssh-manager clear`) — 真正的数据异常。
+
+更新/扩展 `TestResolve_RoleFileAnomalies` + 新增 `TestResolve_IncompleteVaultRole_Resumes` 覆盖两子场景。`go build ./... && go vet ./... && go test ./internal/roles/ ./internal/tui/ -count=1` 绿。

@@ -312,6 +312,29 @@ func TestServerWizard_ResumeHeuristics(t *testing.T) {
 	wm.closeStore()
 }
 
+// TestServerWizard_ResumePrefillsClientName: middle-tier resume (1 profile,
+// 0 projects) must prefill w.data.clientName so that issueDeviceCode receives
+// a non-empty name. This is the "Fix 1" test for the empty-name device code bug.
+func TestServerWizard_ResumePrefillsClientName(t *testing.T) {
+	vd := withServeCertDirs(t)
+	seedWizardVault(t, vd)
+	st := openVault(t)
+	_, err := st.AddProfile("my-client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	w := newWizardForRole(roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleServer, ResumeSetup: true})
+	if w.step != stepProject {
+		t.Fatalf("profile-only resume must land on stepProject, got step=%d", w.step)
+	}
+	if w.data.clientName != "my-client" {
+		t.Fatalf("resume must prefill clientName from profile, got %q", w.data.clientName)
+	}
+	w.closeStore()
+}
+
 // TestServerWizard_ServeSegmentNonBlocking: install failure does NOT block —
 // the flow still probes and shows the result screen with the manual command;
 // dismissing reaches the access card with the REAL chosen address + fp, and
