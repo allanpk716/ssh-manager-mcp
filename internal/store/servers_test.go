@@ -188,6 +188,21 @@ func TestServerStructuredFieldsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestAddServerDuplicateName: a second AddServer under a live name must fail
+// with the LOCALIZED duplicate-name error ("already exists"), not raw SQLite
+// UNIQUE-constraint text.
+func TestAddServerDuplicateName(t *testing.T) {
+	s := newTestStore(t)
+	cid := mustCred(t, s, models.CredPassword, "pw")
+	if _, err := s.AddServer(&models.Server{Name: "gpu", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.AddServer(&models.Server{Name: "gpu", Host: "h2", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("want localized duplicate-name error, got %v", err)
+	}
+}
+
 func TestUpdateServer(t *testing.T) {
 	s := newTestStore(t)
 	cid := mustCred(t, s, models.CredPassword, "pw")

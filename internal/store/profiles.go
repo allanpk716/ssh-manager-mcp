@@ -2,6 +2,8 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
+	"strings"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -17,6 +19,11 @@ func (s *Store) AddProfile(name string) (string, error) {
 		id, name, ts, ts,
 	)
 	if err != nil {
+		// Localize the name-collision error — the raw driver text leaks SQLite
+		// jargon into TUI/CLI surfaces (same wrap as AddServer).
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: profiles.name") {
+			return "", fmt.Errorf("profile name %q already exists", name)
+		}
 		return "", err
 	}
 	return id, nil

@@ -1,10 +1,25 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
 )
+
+// TestAddProfileDuplicateName: a second AddProfile under a live name must fail
+// with the LOCALIZED duplicate-name error ("already exists"), not raw SQLite
+// UNIQUE-constraint text.
+func TestAddProfileDuplicateName(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.AddProfile("dev"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.AddProfile("dev")
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("want localized duplicate-name error, got %v", err)
+	}
+}
 
 func TestProfileGrantAndList(t *testing.T) {
 	s := newTestStore(t)

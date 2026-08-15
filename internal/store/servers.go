@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"ssh-manager-mcp/internal/models"
@@ -28,6 +29,12 @@ func (s *Store) AddServer(srv *models.Server) (string, error) {
 		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, ts, ts,
 	)
 	if err != nil {
+		// Localize the name-collision error — the raw driver text
+		// ("constraint failed: UNIQUE constraint failed: servers.name (2067)")
+		// leaks SQLite jargon into TUI/CLI surfaces.
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: servers.name") {
+			return "", fmt.Errorf("server name %q already exists", srv.Name)
+		}
 		return "", err
 	}
 	return id, nil

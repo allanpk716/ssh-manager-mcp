@@ -334,7 +334,7 @@ func classifyPullError(err error) string {
 	switch {
 	case strings.Contains(s, "dial"), strings.Contains(s, "no such host"):
 		kind = "地址不通：检查 serve 地址拼写与网络/防火墙"
-	case strings.Contains(s, "401"), strings.Contains(s, "authorization"):
+	case strings.Contains(s, "server returned 401"), strings.Contains(s, "authorization"):
 		kind = "设备码无效：核对 server 机签发的设备码（丢失可在其主控台重发）"
 	case strings.Contains(s, "mismatch"), strings.Contains(s, "fingerprint"):
 		kind = "指纹失配：核对 server 机接入卡上的 pin 指纹"

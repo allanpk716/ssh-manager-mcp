@@ -16,6 +16,18 @@ func TestCacheTokenIssueFlow(t *testing.T) {
 	}
 }
 
+// TestDeviceCodeBodyTrimsServeURL: the issue form's serve-addr hint field only
+// validates nonEmpty (no URL validation), so whitespace can ride in; the
+// composition point must TrimSpace so the ready-to-paste pull command stays
+// copy-pasteable.
+func TestDeviceCodeBodyTrimsServeURL(t *testing.T) {
+	fp := "sha256:" + strings.Repeat("a", 64)
+	v := deviceCodeBody("  https://192.0.2.5:7878\t", "CODE123", fp)
+	if !strings.Contains(v, "--url https://192.0.2.5:7878 --token") {
+		t.Fatalf("serve URL must be trimmed at composition:\n%s", v)
+	}
+}
+
 func TestDeviceCodeBody(t *testing.T) {
 	fp := "sha256:" + strings.Repeat("a", 64)
 	v := deviceCodeBody("https://192.0.2.5:7878", "CODE123", fp)

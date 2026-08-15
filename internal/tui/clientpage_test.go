@@ -68,6 +68,32 @@ func TestClassifyPullError(t *testing.T) {
 	}
 }
 
+// TestClassifyPullError401 pins the 401 branch's PRECISION: only a genuine
+// "server returned 401" (or an "authorization" error) classifies as 设备码无效.
+// A bare "401" substring match false-triggers on fingerprint hex digits
+// (aa4011…) or port numbers (1401) — those must land in a different class.
+func TestClassifyPullError401(t *testing.T) {
+	// 正例：真 401 — both the brief's generic shape and the real emitter's
+	// shape (clientops: "pull: server returned %d (is the authorization code valid/active?)").
+	for _, raw := range []string{
+		`Get "https://x/snapshot": server returned 401 Unauthorized`,
+		`pull: server returned 401 (is the authorization code valid/active?)`,
+	} {
+		if got := classifyPullError(errors.New(raw)); !strings.Contains(got, "设备码无效") {
+			t.Fatalf("真 401 未分类: %q → %q", raw, got)
+		}
+	}
+	// 负例：指纹 hex 含 "401" 子串 / 端口 1401 — must NOT classify as 设备码无效.
+	for _, s := range []string{
+		"dial tcp: 1401 connection refused",
+		"pin sha256:aa4011... mismatch",
+	} {
+		if got := classifyPullError(errors.New(s)); strings.Contains(got, "设备码无效") {
+			t.Fatalf("非 401 误分类: %q → %q", s, got)
+		}
+	}
+}
+
 // TestClientWizard_PullFailureReopensFormWithDraft pins the input-preservation
 // invariant (task-5 brief): a failed first pull reopens the connection form
 // with the previously submitted url/pin still in it (code stays empty — a
