@@ -95,18 +95,28 @@ func (t *Tunnel) serve(remoteHost string, remotePort int) {
 	}
 }
 
+// closeWriter is implemented by *net.TCPConn (local side) and gossh's channel
+// net.Conn (remote side) — CloseWrite sends EOF without tearing down the read
+// half. Used by handle for directional half-close propagation.
+type closeWriter interface{ CloseWrite() error }
+
 // handle pipes one local connection to its remote counterpart over the SSH
 // connection. Both conns are defer-closed; the two io.Copy goroutines run in
-// parallel and the handle goroutine exits as soon as EITHER direction completes
-// (the defers then close both conns, which unblocks the other io.Copy via a
-// closed-conn error — the buffered `done` channel lets it send-and-exit without
-// blocking, so no goroutine leaks).
+// parallel, each propagating a directional EOF (CloseWrite) toward the peer it
+// was writing to when its copy finishes, and the handle goroutine waits for
+// BOTH directions to complete before the defers fire (the buffered `done`
+// channel lets each copy send-and-exit without blocking, so no goroutine
+// leaks).
 //
-// Half-close note (limitation, acceptable for v1): on one direction's EOF we
-// fully close both conns rather than half-closing the write side, which can
-// truncate in-flight response bytes if the peer still has data to send after we
-// finish writing. The echo test (write then read then close) does not exercise
-// this; a future hardened variant would use net.TCPConn.CloseWrite to drain.
+// Half-close semantics (matches real `ssh -L`): when the local peer
+// half-closes (TCPConn.CloseWrite — done writing, still reading), the
+// local→remote copy sees EOF and forwards it as SSH_MSG_CHANNEL_EOF on the
+// ssh channel (rem.CloseWrite), which the sshd turns into a TCP FIN toward
+// the forwarded service — so a server that answers AFTER seeing end-of-request
+// (HTTP/1.0 request-then-response, `cmd | ssh host filter` style pipes) still
+// gets its in-flight response bytes back. The symmetric path applies for
+// remote→local EOF (CloseWrite on the local conn). Only when BOTH directions
+// finish do the defers fully close both conns.
 func (t *Tunnel) handle(local net.Conn, remote string) {
 	defer local.Close()
 	rem, err := t.client.Dial("tcp", remote)
@@ -115,7 +125,20 @@ func (t *Tunnel) handle(local net.Conn, remote string) {
 	}
 	defer rem.Close()
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(rem, local); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(local, rem); done <- struct{}{} }()
+	go func() {
+		_, _ = io.Copy(rem, local)
+		if cw, ok := rem.(closeWriter); ok {
+			_ = cw.CloseWrite() // propagate local EOF toward the remote peer
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(local, rem)
+		if cw, ok := local.(closeWriter); ok {
+			_ = cw.CloseWrite() // propagate remote EOF toward the local peer
+		}
+		done <- struct{}{}
+	}()
+	<-done // wait for BOTH directions: half-close on one side must not kill the other
 	<-done
 }

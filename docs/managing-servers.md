@@ -205,6 +205,25 @@ broker 连一台新机器时采用 **TOFU（trust on first use）**：第一次�
 
 ---
 
+## 连老机器（需要 ssh-rsa）
+
+很老的 SSH 服务器（CentOS 7 时代的机器、老交换机 / 嵌入式设备）可能只支持 `ssh-rsa`（SHA-1 签名）或需要显式点名 RSA 签名算法，新客户端默认不提供 → 握手直接失败。broker 端给了一个环境变量旋钮：
+
+```bash
+export SSHMGR_SSH_HOST_KEY_ALGORITHMS="ssh-rsa,rsa-sha2-512"   # 逗号分隔
+```
+
+- **允许值（白名单）**：`ssh-ed25519`、`ecdsa-sha2-nistp256`、`ecdsa-sha2-nistp384`、`ecdsa-sha2-nistp521`、`rsa-sha2-256`、`rsa-sha2-512`、`ssh-rsa`。
+- **写错 = fail-closed**：值不在白名单里，连接在**发起之前**就报错（错误信息会点名这个环境变量和允许列表），绝不会静默回退到默认值去连。
+- 不设 / 留空 = 用默认算法集。
+- 这是给 **broker 进程**（`serve` 端）设的环境变量，改完要重启 broker 才生效。
+
+> ⚠️ **开旋钮后注意 TOFU**：如果这台服务器有多个 host key（比如同时有 ed25519 和 RSA），默认连接时记录下的可能是 ed25519 那把；开了旋钮后对方可能改呈 RSA host key——与已记录的对不上，会被 host key mismatch 拒掉。这时需要清掉这台机器的 host key 记录（见上文「Host key 与 TOFU」），重走一次 TOFU。
+>
+> 另外提醒：`ssh-rsa` 依赖 SHA-1，属于弱签名算法。只在确实连不上老机器时临时开，用完关掉。
+
+---
+
 ## 一句话总结
 
 - **加**：`servers add`（密码或密钥二选一；可选 sudo / tags / description）。
