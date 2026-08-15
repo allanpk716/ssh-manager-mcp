@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	"charm.land/huh/v2"
+
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
@@ -101,4 +103,61 @@ func TestSubmitServer_EditRecredentialSwaps(t *testing.T) {
 	if c, _ := st.GetCredential(got.CredentialID); c == nil || string(c.Secret) != "new" {
 		t.Fatal("new credential must decrypt to the new secret")
 	}
+}
+
+// TestNewServerFormFieldConstructors (Plan 20 C3a regression): verifies the
+// extracted constructors produce valid, non-nil fields.
+func TestNewServerFormFieldConstructors(t *testing.T) {
+	d := &serverDraft{}
+
+	// passwordField returns non-nil *huh.Input for both editing modes
+	if passwordField(d, false) == nil {
+		t.Error("passwordField(d, false) returned nil")
+	}
+	if passwordField(d, true) == nil {
+		t.Error("passwordField(d, true) returned nil")
+	}
+
+	// sudoPasswordField returns non-nil *huh.Input
+	if sudoPasswordField(d) == nil {
+		t.Error("sudoPasswordField(d) returned nil")
+	}
+
+	// structuredFields returns exactly 6 fields, all non-nil
+	fields := structuredFields(d)
+	if len(fields) != 6 {
+		t.Fatalf("structuredFields(d) returned %d fields, want 6", len(fields))
+	}
+	for i, f := range fields {
+		if f == nil {
+			t.Errorf("structuredFields(d)[%d] is nil", i)
+		}
+	}
+
+	// All fields implement the huh.Field interface (basic type check)
+	for i, f := range fields {
+		var _ huh.Field = f // Interface assignment compile-time check
+		_ = i
+	}
+}
+
+// TestNewServerFormComposesConstructors (Plan 20 C3a): verifies that
+// newServerForm successfully composes the extracted constructors.
+func TestNewServerFormComposesConstructors(t *testing.T) {
+	d := &serverDraft{}
+
+	// Test add mode form
+	f := newServerForm(d, false)
+	if f == nil {
+		t.Fatal("newServerForm(d, false) returned nil")
+	}
+
+	// Test edit mode form
+	fEdit := newServerForm(d, true)
+	if fEdit == nil {
+		t.Fatal("newServerForm(d, true) returned nil")
+	}
+
+	// Basic smoke test: both forms should be constructable
+	// (huh API limitations prevent deeper inspection)
 }
