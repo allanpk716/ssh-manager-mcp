@@ -17,7 +17,7 @@ builds:
     ldflags:
       # -s -w: drop symbol/DWARF tables (smaller binary)
       # -X:   inject release version (tag v1.0.0 -> Version=1.0.0)
-      - -s -w -X ssh-manager-mcp/internal/cli.Version={{.Version}}
+      - -s -w -X ssh-manager-mcp/internal/buildinfo.Version={{.Version}}
     goos: [windows, linux, darwin]
     goarch: [amd64, arm64]
 
