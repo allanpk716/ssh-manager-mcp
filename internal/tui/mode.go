@@ -109,9 +109,25 @@ func Run(modeFlag string) error {
 		if l.ResumeSetup && (l.Role == roles.RoleStandalone || l.Role == roles.RoleServer) {
 			m = newWizardForRole(l)
 		}
-		p := tea.NewProgram(m)
-		_, err = p.Run()
-		return err
+		fm, werr := tea.NewProgram(m).Run()
+		if werr != nil {
+			return werr
+		}
+		// Handoff sentinel (T3): a COMPLETED wizard exits with done=true and
+		// the wizard's store still open — chain straight into the target
+		// console instead of dropping the user back to the shell.
+		if wm, ok := fm.(wizardModel); ok {
+			if wm.done && wm.next == "broker" && wm.st != nil {
+				app, aerr := NewBrokerApp(wm.st)
+				if aerr != nil {
+					wm.st.Close()
+					return aerr
+				}
+				_, werr = tea.NewProgram(app).Run()
+			}
+			wm.st.Close()
+		}
+		return werr
 	case "client":
 		p := tea.NewProgram(newClientModel())
 		_, err = p.Run()

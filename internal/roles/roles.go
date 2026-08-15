@@ -313,7 +313,7 @@ func ResolveMode(force string) (Launch, error) {
 	switch force {
 	case "", "client":
 	default:
-		return Launch{}, fmt.Errorf("invalid --force %q (want client)", force)
+		return Launch{}, fmt.Errorf("invalid --mode %q (want client)", force)
 	}
 	if force == "client" {
 		if VaultExists() {
