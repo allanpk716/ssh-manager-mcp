@@ -66,8 +66,14 @@ func MasterKeyPath() (string, error) {
 	return filepath.Join(dir, MasterKeyFilename), nil
 }
 
-// CacheDekPath returns the offline-cache DEK path.
+// CacheDekPath returns the offline-cache DEK path. SSHMGR_CACHE_DEK overrides
+// (test/relocate seam — same pattern as SSHMGR_FILEKEY_PATH; Plan 19 T7: `clear`
+// and its tests enumerate this path, and an un-overridable program-fixed path
+// let a test's teardown reach the operator's REAL DEK on the dev machine).
 func CacheDekPath() (string, error) {
+	if v := os.Getenv("SSHMGR_CACHE_DEK"); v != "" {
+		return v, nil
+	}
 	dir, err := VaultDir()
 	if err != nil {
 		return "", err
