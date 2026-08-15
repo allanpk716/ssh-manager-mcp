@@ -148,7 +148,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// a mid-flight press is swallowed by the upg guard.
 			a.startUpgrade()
 			return a, a.overlay.Init()
-		case k.Text == "a", k.Text == "e", k.Text == "d", k.Text == "g":
+		case k.Text == "a", k.Text == "e", k.Text == "d", k.Text == "g",
+			k.Text == "i", k.Text == "!":
 			// F2 (fix round): while an upgrade segment is in flight (install/
 			// probe/deviceIssue — overlay==nil windows), page action keys are
 			// suppressed: opening a form overlay here would be clobbered by the
@@ -313,10 +314,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionDoneMsg:
 		a.err = nil
 		a.status = m.desc
-		pages, err := FetchAll(a.st)
-		if err == nil {
-			a.pages = pages
-		}
+		a.refetchPages()
 		return a, nil
 	case formDoneMsg:
 		if a.upg != nil { // upgrade segment owns its formDoneMsg progression (T6)
@@ -355,9 +353,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.overlay = wizTokenScreen("设备码 — "+a.upg.clientName, m.code,
 			fmt.Sprintf("填到 client 机向导；或拼 cache pull --token '%s:%s'", m.code, m.fingerprint),
 			"主控台 设备码页 [a] 重发")
-		if pages, err := FetchAll(a.st); err == nil {
-			a.pages = pages
-		}
+		a.refetchPages()
 		return a, nil
 	case tokenIssuedMsg:
 		// Mutation succeeded and minted a token: take over the screen with the
@@ -366,21 +362,41 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.err = nil
 		a.status = ""
 		a.overlay = &secretView{title: m.title, body: m.token}
-		if pages, err := FetchAll(a.st); err == nil {
-			a.pages = pages
-		}
+		a.refetchPages()
 		return a, nil
 	}
 	return a, nil
 }
 
+// refetchPages reloads the four pages, then re-applies the servers page's ⚠
+// view (warnOnly filter + ⚠-first order + cursor clamp). Without this every
+// data refresh (actionDoneMsg / token issuance) would silently drop the `!`
+// filter and unsort the ⚠ block (T10).
+func (a *App) refetchPages() {
+	warn := false
+	if sp, ok := a.pages[pageServers].(*serversPage); ok {
+		warn = sp.warnOnly
+	}
+	pages, err := FetchAll(a.st)
+	if err != nil {
+		return
+	}
+	a.pages = pages
+	if sp, ok := a.pages[pageServers].(*serversPage); ok {
+		sp.warnOnly = warn
+		sp.rebuild()
+	}
+}
+
 // serversKey dispatches the servers page's action keys: a=新增, e=编辑,
-// d=删除 — each opens its form overlay (setting a.overlay) and returns the
-// overlay's Init cmd. Any other key is a no-op returning nil (notably g: the
-// profiles page's grant key must do nothing here — per-page dispatch is what
-// keeps the overlapping letters across pages from swallowing each other).
-// Extracted from Update in Plan 20 T1 so the key→page→action mapping is
-// table-testable (TestServersPageDispatch).
+// d=删除, i=导入 ssh config (Plan 20 T10 — broker App only; client mode runs
+// clientModel and never builds this page), !=toggle the ⚠ filter. Form keys
+// open their overlay (setting a.overlay) and return the overlay's Init cmd;
+// `!` is a pure list-state toggle returning nil. Any other key is a no-op
+// returning nil (notably g: the profiles page's grant key must do nothing
+// here — per-page dispatch is what keeps the overlapping letters across pages
+// from swallowing each other). Extracted from Update in Plan 20 T1 so the
+// key→page→action mapping is table-testable (TestServersPageDispatch).
 func (a *App) serversKey(k tea.Key) tea.Cmd {
 	sp, _ := a.pages[pageServers].(*serversPage)
 	switch k.Text {
@@ -389,6 +405,14 @@ func (a *App) serversKey(k tea.Key) tea.Cmd {
 		a.overlay = newFormOverlay("新增服务器", newServerForm(draft, false), func() tea.Cmd {
 			return submitServer(a.st, nil, draft)
 		})
+	case "i":
+		a.overlay = newImportFlow(a.st)
+	case "!":
+		if sp != nil {
+			sp.warnOnly = !sp.warnOnly
+			sp.rebuild()
+		}
+		return nil
 	case "e":
 		if cur := sp.current(); cur != nil {
 			draft := prefill(cur)
@@ -502,7 +526,13 @@ func (a App) footer() string {
 	keys := ""
 	switch a.page {
 	case pageServers:
-		keys = "[a]新增 [e]编辑 [d]删除"
+		// `!` label reflects the toggle state: off → enter the ⚠ filter, on →
+		// leave it (show all).
+		bang := "[!]⚠过滤"
+		if sp, ok := a.pages[pageServers].(*serversPage); ok && sp.warnOnly {
+			bang = "[!]显示全部"
+		}
+		keys = "[a]新增 [e]编辑 [d]删除 [i]导入 " + bang
 	case pageProfiles:
 		keys = "[a]新增 [g]授权"
 	case pageProjects:

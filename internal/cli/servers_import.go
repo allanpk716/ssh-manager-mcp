@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/importer"
 	"ssh-manager-mcp/internal/models"
@@ -120,29 +118,18 @@ func runImport(out io.Writer, s *store.Store, res *importer.Result, configDir st
 			report = append(report, importReport{cand.Name, renderVaultSkip(reason)})
 			continue
 		}
-		var cred *models.Credential
-		note := "needs-credential" // no IdentityFile resolved to a readable key
-		var keySum [32]byte
-		minted := false
-		for _, kp := range importer.ResolveKeyPaths(cand.KeyPaths, configDir) {
-			keyBytes, err := os.ReadFile(kp)
-			if err != nil {
-				continue // try the next IdentityFile
-			}
-			sum := sha256.Sum256(keyBytes)
-			if id, ok := keyIDs[sum]; ok && id != "" {
-				cred = &models.Credential{ID: id, Type: models.CredPrivateKey} // reuse, no mint
-			} else {
-				cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes}
-				keySum, minted = sum, true
-			}
-			note = ""
-			if _, err := ssh.ParsePrivateKey(keyBytes); err != nil {
-				if _, missing := err.(*ssh.PassphraseMissingError); missing {
-					note = "needs-passphrase ⚠（连接会失败；TUI 补全或 servers edit --key-passphrase）"
-				}
-			}
-			break // first readable key wins
+		// First-readable-key resolution, batch dedup and needs-passphrase
+		// detection live in importer.PickKey — the seam shared with the TUI
+		// import flow (T10). The reuse path (cred.ID set) still reports
+		// NeedsPass: a second host sharing an encrypted key lacks the
+		// passphrase just as much as the first.
+		pick := importer.PickKey(cand, configDir, keyIDs)
+		cred := pick.Cred
+		note := "" // plain key: nothing to annotate
+		if cred == nil {
+			note = "needs-credential" // no IdentityFile resolved to a readable key
+		} else if pick.NeedsPass {
+			note = "needs-passphrase ⚠（连接会失败；TUI 补全或 servers edit --key-passphrase）"
 		}
 		if dryRun {
 			report = append(report, importReport{cand.Name, "will-import (" + noteOrCred(note, cred) + ")"})
@@ -156,10 +143,10 @@ func runImport(out io.Writer, s *store.Store, res *importer.Result, configDir st
 			report = append(report, importReport{cand.Name, "FAILED: " + err.Error()})
 			continue
 		}
-		if minted && cred.ID != "" {
+		if pick.Minted && cred.ID != "" {
 			// insertCredentialTx backfilled cred.ID — later candidates whose
-			// key file hashes to keySum reuse this row instead of minting.
-			keyIDs[keySum] = cred.ID
+			// key file hashes to pick.Sum reuse this row instead of minting.
+			keyIDs[pick.Sum] = cred.ID
 		}
 		importedIDs = append(importedIDs, id)
 		report = append(report, importReport{cand.Name, "imported " + noteOrCred(note, cred)})
