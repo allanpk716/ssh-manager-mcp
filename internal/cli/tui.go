@@ -10,15 +10,11 @@ func newTUICmd() *cobra.Command {
 	var mode string
 	c := &cobra.Command{
 		Use:   "tui",
-		Short: "Interactive console (broker: full vault management; client: connection + sync)",
+		Short: "Interactive console (first run: role wizard; then broker or client per role.json)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			m, err := tui.DetectMode(mode)
-			if err != nil {
-				return err
-			}
-			return tui.Run(m)
+			return tui.Run(mode)
 		},
 	}
-	c.Flags().StringVar(&mode, "mode", "", "force mode: broker|client (default: auto-detect)")
+	c.Flags().StringVar(&mode, "mode", "", "force mode: client (default: resolve via role.json + machine probes)")
 	return c
 }

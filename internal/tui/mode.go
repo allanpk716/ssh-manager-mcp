@@ -71,29 +71,65 @@ func DetectMode(force string) (Mode, error) {
 	return DetectModeWith(force, vaultUnlocked, cachePresent)
 }
 
-// Run starts the console for mode. Broker opens the vault and runs the tabbed
-// App; client runs the standalone clientModel (single screen, no tabs).
-func Run(mode Mode) error {
+// launchTarget is the pure dispatch table behind Run (Plan 19 T2): first run →
+// wizard; completed setups → broker/client; an INCOMPLETE standalone/server
+// setup (ResumeSetup) re-enters the wizard. A resuming client stays on the
+// client panel in this task — Task 5 gives the client wizard its entry form.
+func launchTarget(l roles.Launch) string {
+	if l.ResumeSetup && l.Kind != roles.LaunchClient {
+		return "wizard"
+	}
+	switch l.Kind {
+	case roles.LaunchWizard:
+		return "wizard"
+	case roles.LaunchBroker:
+		return "broker"
+	default:
+		return "client"
+	}
+}
+
+// Run starts the console. modeFlag (from `tui --mode`) passes straight into
+// roles.ResolveMode — the single launch-decision authority (spec §1.2) — and
+// the resulting Launch dispatches to the wizard, the broker App, or the client
+// panel. ResumeSetup routes standalone/server back into the wizard with the
+// role preselected; when the wizard finishes/quits, the next launch resumes
+// normally (Tasks 3-5 chain wizard completion straight into the consoles).
+func Run(modeFlag string) error {
 	if !isTTY() {
 		return errors.New("tui requires a terminal (in mintty run via `winpty ssh-manager tui`, or use Windows Terminal)")
 	}
-	if mode == ModeClient {
+	l, err := roles.ResolveMode(modeFlag)
+	if err != nil {
+		return err
+	}
+	switch launchTarget(l) {
+	case "wizard":
+		m := newWizard(l)
+		if l.ResumeSetup && (l.Role == roles.RoleStandalone || l.Role == roles.RoleServer) {
+			m = newWizardForRole(l)
+		}
+		p := tea.NewProgram(m)
+		_, err = p.Run()
+		return err
+	case "client":
 		p := tea.NewProgram(newClientModel())
-		_, err := p.Run()
+		_, err = p.Run()
+		return err
+	default: // broker
+		st, err := vault.OpenStore(store.FileKeyProvider{})
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		app, err := NewBrokerApp(st)
+		if err != nil {
+			return err
+		}
+		p := tea.NewProgram(app)
+		_, err = p.Run()
 		return err
 	}
-	st, err := vault.OpenStore(store.FileKeyProvider{})
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-	app, err := NewBrokerApp(st)
-	if err != nil {
-		return err
-	}
-	p := tea.NewProgram(app)
-	_, err = p.Run()
-	return err
 }
 
 func isTTY() bool {
