@@ -74,6 +74,34 @@ func TestSaveLoad_ClientRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRolePathPrecedenceVaultOverUserDir locks the two-location coexistence
+// rule: when role.json exists in BOTH the vault dir (SSHMGR_STORE side) and
+// the user config dir, Load/ResolveMode must resolve to the VAULT side — the
+// production vaultRolePath derives from the store-path directory (see
+// vaultRolePath), and the vault machine's role must never be shadowed by a
+// stale client-side leftover file.
+func TestRolePathPrecedenceVaultOverUserDir(t *testing.T) {
+	vd, ud := withDirs(t)
+	seedVault(t, vd) // a vault-side server/standalone role only resolves with a live vault
+	if err := os.WriteFile(filepath.Join(vd, "role.json"), []byte(`{"role":"server","setup_complete":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ud, "ssh-manager"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ud, "ssh-manager", "role.json"), []byte(`{"role":"client","setup_complete":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load()
+	if err != nil || s == nil || s.Role != RoleServer {
+		t.Fatalf("Load must resolve to the vault-side role.json: %+v %v", s, err)
+	}
+	l, err := ResolveMode("")
+	if err != nil || l.Role != RoleServer || l.Kind != LaunchBroker || l.ResumeSetup {
+		t.Fatalf("ResolveMode must resolve to the vault side: %+v %v", l, err)
+	}
+}
+
 func TestResolve_FullMatrix(t *testing.T) {
 	// wizard on empty
 	withDirs(t)

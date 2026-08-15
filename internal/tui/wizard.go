@@ -760,6 +760,12 @@ func (w wizardModel) View() tea.View {
 	case stepVaultErr:
 		b.WriteString(titleStyle.Render(" 初始化 vault 失败 ") + "\n\n")
 		b.WriteString(errStyle.Render("✗ "+w.err.Error()) + "\n\n")
+		if w.saveErr != nil {
+			// Parity with stepRoleDone and the form steps: this screen's footer
+			// promises 「角色已保存」 — with a failed role.json write that is
+			// false and must not pass silently.
+			b.WriteString(errStyle.Render(fmt.Sprintf("⚠ role.json 写入失败：%v", w.saveErr)) + "\n")
+		}
 		b.WriteString(footerStyle.Render("r 重试 / q 退出（角色已保存，重开 tui 会继续）") + "\n")
 	case stepDeviceIssue, stepServeInstall, stepServeProbe:
 		// In-flight steps: no form, no overlay — just what is running (and the
