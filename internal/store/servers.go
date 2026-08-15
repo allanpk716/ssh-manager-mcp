@@ -17,25 +17,16 @@ func (s *Store) AddServer(srv *models.Server) (string, error) {
 	if err := validateServerText(srv); err != nil {
 		return "", err
 	}
-	id := newID()
-	ts := now()
-	tagsJSON, _ := json.Marshal(srv.Tags)
-	sudo := nullableString(srv.SudoCredentialID)
-	_, err := s.db.Exec(
-		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description,
-		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, ts, ts,
-	)
-	if err != nil {
-		return "", err
-	}
-	return id, nil
+	// Row SQL lives in insertServerTx (tx.go), shared with the transactional
+	// AddServerWithCredentials — one copy of the NULL-for-"" mapping etc.
+	return insertServerTx(s.db, srv)
 }
 
 // UpdateServer writes the full row (id-preserving). The caller loads the server, applies only
 // the fields being edited, and writes it back — so re-credential is just setting a new
 // CredentialID + AuthMethod. name is mutable (rename). Returns an error if the id is absent.
+// Production re-credential paths use UpdateServerWithCredentials (tx.go): the swap and the
+// unreferenced-old-row cleanup run atomically; this tx-less form remains for tests/compat.
 func (s *Store) UpdateServer(srv *models.Server) error {
 	if s.readOnly {
 		return ErrReadOnly
@@ -44,27 +35,11 @@ func (s *Store) UpdateServer(srv *models.Server) error {
 	if err := validateServerText(srv); err != nil {
 		return err
 	}
-	tagsJSON, _ := json.Marshal(srv.Tags)
-	sudo := nullableString(srv.SudoCredentialID)
-	res, err := s.db.Exec(
-		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,tags=?,description=?,location=?,hardware=?,services=?,role=?,caveats=?,updated_at=? WHERE id=?`,
-		srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), srv.CredentialID, sudo, string(tagsJSON), srv.Description,
-		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, now(), srv.ID,
-	)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("server id %q not found", srv.ID)
-	}
-	return nil
+	return updateServerTx(s.db, srv)
 }
 
 func (s *Store) GetServer(id string) (*models.Server, error) {
-	row := s.db.QueryRow(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at FROM servers WHERE id=?`, id,
-	)
-	return scanServer(row)
+	return getServerTx(s.db, id)
 }
 
 func (s *Store) GetServerByName(name string) (*models.Server, error) {
@@ -96,6 +71,11 @@ func (s *Store) ListServers() ([]*models.Server, error) {
 	return out, rows.Err()
 }
 
+// DeleteServer removes ONLY the server row — any credentials it pointed at are
+// left in place (potential orphans; `gc` cleans those). Production callers
+// (CLI `servers rm`, TUI delete) now use DeleteServerCascading (tx.go), which
+// also drops exclusively-owned credentials; this tx-less form remains for
+// tests/compat.
 func (s *Store) DeleteServer(id string) error {
 	if s.readOnly {
 		return ErrReadOnly
@@ -112,15 +92,17 @@ func scanServer(sc scanner) (*models.Server, error) {
 	var (
 		srv              models.Server
 		authMethod       string
+		credentialID     sql.NullString // nullable since Plan 20 C0 (credential-less servers)
 		tagsJSON         string
 		sudoCredentialID sql.NullString
 		createdAt        int64
 		updatedAt        int64
 	)
-	if err := sc.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.User, &authMethod, &srv.CredentialID, &sudoCredentialID, &tagsJSON, &srv.Description, &srv.Location, &srv.Hardware, &srv.Services, &srv.Role, &srv.Caveats, &createdAt, &updatedAt); err != nil {
+	if err := sc.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.User, &authMethod, &credentialID, &sudoCredentialID, &tagsJSON, &srv.Description, &srv.Location, &srv.Hardware, &srv.Services, &srv.Role, &srv.Caveats, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	srv.AuthMethod = models.AuthMethod(authMethod)
+	srv.CredentialID = credentialID.String
 	srv.SudoCredentialID = sudoCredentialID.String
 	srv.CreatedAt = time.Unix(createdAt, 0)
 	srv.UpdatedAt = time.Unix(updatedAt, 0)

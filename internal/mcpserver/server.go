@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -49,7 +50,7 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *Tunn
 // without rebuilding the MCP server or tearing down tunnels. storeFn must be
 // safe for concurrent use and must never return nil.
 func NewServerFromSource(storeFn func() *store.Store, profileID, projectID string) (*mcp.Server, *TunnelManager, error) {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "ssh-manager", Version: "v0.1.0"}, nil)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "ssh-manager", Version: buildinfo.Version}, nil)
 	tunnels := NewTunnelManager()
 	tunnels.StartSweeper() // background idle-reaper (closes tunnels idle > forwardIdleTimeout)
 

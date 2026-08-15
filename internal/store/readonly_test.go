@@ -33,6 +33,20 @@ func TestReadOnly_MutationsRefused(t *testing.T) {
 	if err := s.DeleteServer("x"); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("DeleteServer: err=%v want ErrReadOnly", err)
 	}
+	// Plan 20 B1 transactional API is guarded like its tx-less ancestors.
+	if _, err := s.AddServerWithCredentials(&models.Server{Name: "n", Host: "h", Port: 22, User: "u"},
+		&models.Credential{Type: models.CredPassword, Secret: []byte("x")}, nil); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("AddServerWithCredentials: err=%v want ErrReadOnly", err)
+	}
+	if err := s.UpdateServerWithCredentials(&models.Server{ID: "x", Name: "n"}, nil, nil); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("UpdateServerWithCredentials: err=%v want ErrReadOnly", err)
+	}
+	if err := s.DeleteServerCascading("x"); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("DeleteServerCascading: err=%v want ErrReadOnly", err)
+	}
+	if _, err := s.DeleteOrphanCredentials(); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("DeleteOrphanCredentials: err=%v want ErrReadOnly", err)
+	}
 	if err := s.GrantServers("p", []string{"s"}); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("GrantServers: err=%v want ErrReadOnly", err)
 	}

@@ -3,45 +3,16 @@ package tui
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/store"
 )
 
-// vaultProbe and cacheProbe are injectable for tests (production: real paths).
-func TestDetectMode_ForceWins(t *testing.T) {
-	for _, c := range []struct {
-		force string
-		want  Mode
-	}{
-		{"broker", ModeBroker}, {"client", ModeClient},
-	} {
-		got, err := DetectModeWith(c.force, func() bool { return false }, func() bool { return false })
-		if err != nil || got != c.want {
-			t.Fatalf("force=%q: got (%v,%v)", c.force, got, err)
-		}
-	}
-}
-
-func TestDetectMode_Auto(t *testing.T) {
-	// vault present → broker
-	if m, err := DetectModeWith("", func() bool { return true }, func() bool { return false }); err != nil || m != ModeBroker {
-		t.Fatalf("vault: (%v,%v)", m, err)
-	}
-	// no vault + cache → client
-	if m, err := DetectModeWith("", func() bool { return false }, func() bool { return true }); err != nil || m != ModeClient {
-		t.Fatalf("cache: (%v,%v)", m, err)
-	}
-	// neither → guided error
-	if _, err := DetectModeWith("", func() bool { return false }, func() bool { return false }); err == nil {
-		t.Fatal("neither vault nor cache must error with guidance")
-	}
-}
-
 // Tri-state probe tests (real filesystem): absent / locked / unlocked vault.
 // SSHMGR_FILEKEY_PATH is also pinned per-test so a real master.key.plain on
 // the dev machine (C:\ProgramData\ssh-manager) can never leak into the probe.
+// (DetectMode itself was deleted in Plan 20 T1 — roles.ResolveMode owns mode
+// resolution; these tests pin the probe helpers the tests still use.)
 
 func TestVaultProbe_NoStoreFile(t *testing.T) {
 	dir := t.TempDir()
@@ -59,7 +30,7 @@ func TestVaultProbe_NoStoreFile(t *testing.T) {
 	}
 }
 
-func TestVaultProbe_LockedStore_NeverClientMode(t *testing.T) {
+func TestVaultProbe_LockedStore(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SSHMGR_STORE", filepath.Join(dir, "store.db"))
 	// No master.key.plain at the pinned path → FileKeyProvider.Get fails → locked.
@@ -72,19 +43,6 @@ func TestVaultProbe_LockedStore_NeverClientMode(t *testing.T) {
 	}
 	if vaultUnlocked() {
 		t.Fatal("vaultUnlocked must be false for a store with no readable master key")
-	}
-	// A stale cache.auth.json must NOT degrade a locked broker into client mode.
-	cacheDir := t.TempDir()
-	t.Setenv("SSHMGR_CACHE_DIR", cacheDir)
-	if err := os.WriteFile(filepath.Join(cacheDir, "cache.auth.json"), []byte(`{"url":"https://x","token":"t"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	mode, err := DetectMode("")
-	if err == nil || !strings.Contains(err.Error(), "unlock") {
-		t.Fatalf("DetectMode on locked vault: err = %v, want error mentioning unlock", err)
-	}
-	if mode == ModeClient {
-		t.Fatal("locked vault must never degrade to ModeClient")
 	}
 }
 
@@ -111,8 +69,5 @@ func TestVaultProbe_UnlockedStore(t *testing.T) {
 
 	if !vaultExists() || !vaultUnlocked() {
 		t.Fatalf("unlocked vault: exists=%v unlocked=%v, want true/true", vaultExists(), vaultUnlocked())
-	}
-	if m, err := DetectMode(""); err != nil || m != ModeBroker {
-		t.Fatalf("DetectMode on unlocked vault: (%v,%v), want ModeBroker", m, err)
 	}
 }

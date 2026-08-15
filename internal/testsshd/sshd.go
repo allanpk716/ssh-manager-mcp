@@ -210,10 +210,21 @@ type directTCPPayload struct {
 	OrigPort uint32 // originator port (informational)
 }
 
+// closeWriter is implemented by *net.TCPConn (dialed side) and ssh.Channel
+// (client side) — CloseWrite sends EOF without tearing down the read half.
+// Mirror of sshbroker's closeWriter (test infra; the broker cannot export it
+// without widening its API, so the trivial interface is duplicated here).
+type closeWriter interface{ CloseWrite() error }
+
 // handleDirectTCP accepts a "direct-tcpip" channel, dials the requested
 // host:port from the sshd's perspective (the host's loopback for the in-process
-// testsshd), and pipes both ways until either side closes. Mirrors the broker's
-// Tunnel.handle (symmetric io.Copy pipe with defer-close on both conns).
+// testsshd), and pipes both ways until BOTH directions complete. Mirrors the
+// broker's Tunnel.handle symmetrically, including directional half-close: when
+// one copy direction sees EOF, it CloseWrites the conn it was writing to (the
+// dialed TCP conn gets a FIN; the channel sends SSH_MSG_CHANNEL_EOF) instead of
+// closing everything — so half-close propagates through the test link the same
+// way it does through the broker tunnel (see TestTunnelHalfClosePropagates).
+// ssh.Channel itself implements CloseWrite; the dialed conn is *net.TCPConn.
 func handleDirectTCP(newChan ssh.NewChannel) {
 	var p directTCPPayload
 	if err := ssh.Unmarshal(newChan.ExtraData(), &p); err != nil {
@@ -233,7 +244,20 @@ func handleDirectTCP(newChan ssh.NewChannel) {
 	}
 	defer remote.Close()
 	done := make(chan struct{}, 2)
-	go func() { io.Copy(ch, remote); done <- struct{}{} }()
-	go func() { io.Copy(remote, ch); done <- struct{}{} }()
+	go func() {
+		_, _ = io.Copy(remote, ch)
+		if cw, ok := remote.(closeWriter); ok {
+			_ = cw.CloseWrite() // channel EOF from the client → FIN toward the service
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(ch, remote)
+		if cw, ok := ch.(closeWriter); ok {
+			_ = cw.CloseWrite() // service FIN → channel EOF toward the client
+		}
+		done <- struct{}{}
+	}()
+	<-done // wait for BOTH directions (mirror of Tunnel.handle)
 	<-done
 }

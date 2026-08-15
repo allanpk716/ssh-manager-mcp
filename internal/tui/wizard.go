@@ -493,18 +493,18 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// machine's .mcp.json — the usage label must say so, and the
 			// screen is numbered 1/2 (the device code screen follows).
 			w.ov = wizTokenScreen("密钥 1/2：project token", m.token,
-				"贴到 client 机 .mcp.json 的 --token 参数",
+				"贴到 client 机 .mcp.json 的 SSHMGR_TOKEN 字段",
 				"主控台 Projects 页 [a] 重发")
 			return w, nil
 		}
 		w.ov = wizTokenScreen(m.title, m.token,
-			"贴到本机 .mcp.json 的 --token 参数",
+			"贴到本机 .mcp.json 的 SSHMGR_TOKEN 字段",
 			"主控台 Projects 页 [a] 重发")
 		return w, nil
 	case deviceCodeIssuedMsg:
 		// Server flow's second secret (spec §2.4 ⑤ 密钥 2/2). The usage line
 		// embeds the ready-to-paste merged token "<码>:<指纹>" (spec §3.3 形态 A
-		// — the exact string cache pull's stripEmbeddedPin consumes).
+		// — the exact string cache pull's SplitTokenPin consumes).
 		w.step, w.err, w.status = stepDeviceToken, nil, ""
 		w.data.deviceFp = m.fingerprint
 		w.ov = wizTokenScreen("密钥 2/2：设备码", m.code,
@@ -598,7 +598,7 @@ func (w wizardModel) stepFormDone() (tea.Model, tea.Cmd) {
 		}
 		return w.enterProfileGrant()
 	case stepServerForm:
-		return w, submitServer(w.st, nil, w.data.srvDraft) // add-mode: password-or-key enforced
+		return w, submitServer(w.st, nil, w.data.srvDraft) // add-mode: credential optional (Plan 20 C0)
 	case stepProfileGrant:
 		return w, w.submitProfileGrant()
 	case stepProject:
@@ -760,6 +760,12 @@ func (w wizardModel) View() tea.View {
 	case stepVaultErr:
 		b.WriteString(titleStyle.Render(" 初始化 vault 失败 ") + "\n\n")
 		b.WriteString(errStyle.Render("✗ "+w.err.Error()) + "\n\n")
+		if w.saveErr != nil {
+			// Parity with stepRoleDone and the form steps: this screen's footer
+			// promises 「角色已保存」 — with a failed role.json write that is
+			// false and must not pass silently.
+			b.WriteString(errStyle.Render(fmt.Sprintf("⚠ role.json 写入失败：%v", w.saveErr)) + "\n")
+		}
 		b.WriteString(footerStyle.Render("r 重试 / q 退出（角色已保存，重开 tui 会继续）") + "\n")
 	case stepDeviceIssue, stepServeInstall, stepServeProbe:
 		// In-flight steps: no form, no overlay — just what is running (and the

@@ -95,7 +95,7 @@ ssh-manager servers add \
 
 规则（很重要）：
 
-- `--password` 和 `--key` **二选一**，必须恰好给一个。
+- `--password` 和 `--key` **互斥**（最多给一个）。也可以**都不给**——先录机器、凭据后补（「无凭据服务器」，见 [managing-servers.md](./managing-servers.md#无凭据服务器)）。
 - `--name` 全局唯一，后续命令都用这个名字（或它的 id）引用这台机器。
 - `--hardware` / `--role` / `--services` / `--location` / `--special-handling`（Caveats）是结构化字段，`--description` / `--tags` 是补充——**全部会通过 `list_servers` 给 agent 看到**（agent 需要机器全貌才能安全操作）。⚠️ **别在这些字段里放任何敏感信息**（密钥 / token / PII）：它们每次都进入 agent 上下文并上行到 LLM 提供方；机密只走凭据保险柜（`--password` / `--key`）。完整字段表见 [managing-servers.md](./managing-servers.md#structured-server-metadata)。
 - `--sudo-password` 只是个“额外的密码”，专门喂给 `sudo -S`；它决定了 agent 看到的 `has_sudo=true/false`。
@@ -103,6 +103,15 @@ ssh-manager servers add \
 预期输出：`added server gpu id=<uuid>`
 
 验证：`ssh-manager servers ls` 应能看到 `gpu`。
+
+> 💡 **手上已有一份 `~/.ssh/config`？不用逐台敲。** 一条命令批量导入（TUI 主控台服务器页按 `i` 也一样）：
+>
+> ```bash
+> ssh-manager servers import --dry-run          # 先看会发生什么（什么都不写）
+> ssh-manager servers import --profile team-a   # 确认无误再真导入，顺手 grant 进 profile
+> ```
+>
+> `--profile` 要求 profile 已存在（fail-fast）——刚走到这步还没建的话，先不带它导入，下一步建好 profile 再 `profiles grant`。同名 / 同 host:port:user 的机器自动跳过（可反复跑），缺凭据或缺私钥口令的机器以 ⚠ 标出、事后逐台补。完整语义（密钥去重、Match 警示、相对路径规则）见 [managing-servers.md 的「批量导入」](./managing-servers.md#批量导入servers-import)。
 
 ---
 
@@ -133,7 +142,7 @@ ssh-manager projects add my-agent --profile team-a
 Token (shown once): eyJ...（一长串）
 
 .mcp.json snippet:
-{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp","--token","eyJ..."]}}}
+{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"eyJ..."}}}
 ```
 
 - **马上把这段记下来**（密码管理器里）。token 之后再也查不到明文（库里只存它的 hash）。
@@ -150,19 +159,22 @@ Claude Code 读项目根目录的 `.mcp.json`。在你的工作目录里建一�
   "mcpServers": {
     "ssh": {
       "command": "ssh-manager",
-      "args": ["mcp", "--token", "把上一步的 token 粘到这里"]
+      "args": ["mcp"],
+      "env": { "SSHMGR_TOKEN": "把上一步的 token 粘到这里" }
     }
   }
 }
 ```
 
+token 走 `env` 字段（`SSHMGR_TOKEN`）而不是 `args` 里的 `--token`：**消除的是 argv/ps 暴露面**——token 不再出现在子进程命令行里（`ps` / 任务管理器 / `/proc/<pid>/cmdline` 看不到）；env 仍可被同用户/root 经 `/proc/<pid>/environ`（Linux）读到，**不是全部可见性**。（`--token` 仍支持，语义相同。）
+
 注意事项：
 
 - **Windows**：`ssh-manager` 必须能被 Claude Code 解析到。最稳妥是写**绝对路径**，例如 `"command": "C:\\path\\to\\ssh-manager.exe"`（JSON 里反斜杠要转义成 `\\`）。
-- **token 是敏感信息**：`.mcp.json` 别提交进 git（项目 `.gitignore` 通常应忽略它；Claude Code 首次加载项目级 MCP 会弹确认）。
+- **别提交 git（公开仓库尤其致命）**：`.mcp.json` 含**活 token**，必须加进 `.gitignore`，绝不能提交进 git 仓库。（Claude Code 首次加载项目级 MCP 会弹确认。）
 - 也可以用命令行注册到**用户级**（所有项目可见）：
   ```bash
-  claude mcp add ssh ssh-manager -- --token <TOKEN>
+  claude mcp add ssh ssh-manager -e SSHMGR_TOKEN=<TOKEN> -- mcp
   ```
 - 其它 MCP 客户端（Cursor 等）：把同样的 JSON 按各自的方式填进去即可，格式是 MCP 标准。
 
@@ -205,7 +217,7 @@ agent 会自己：
 ```
 开机 → 启动 Claude Code（它读 .mcp.json）
      → 你让它用 ssh 工具
-     → Claude Code spawn 子进程: ssh-manager mcp --token <TOKEN>
+     → Claude Code spawn 子进程: ssh-manager mcp（token 经 env SSHMGR_TOKEN）
      → broker 在子进程里跑，stdio 通信
      → 关掉 Claude Code → 子进程随之退出
 ```
@@ -233,7 +245,7 @@ agent 会自己：
 ```bash
 ssh-manager servers ls          # 能列出 = store.db + master key 都健康（数据不依赖任何在跑的进程）
 ssh-manager projects ls         # status=active
-ssh-manager mcp --token <你的token>   # 手动跑客户端会跑的那条命令；不报 vault locked、停在等 stdin = 子进程能独立起来（Ctrl+C 退出）
+SSHMGR_TOKEN=<你的token> ssh-manager mcp   # 手动跑客户端会跑的那条命令；不报 vault locked、停在等 stdin = 子进程能独立起来（Ctrl+C 退出）
 ```
 
 两步都过 = 重启后 Claude Code 拉它起来时也会一样过——因为**子进程跑的就是同一条命令，读的是同一份磁盘文件**。
@@ -256,8 +268,8 @@ Plan 16 起，master key **不再依赖 OS keychain**——固定路径裸文件
 ```json
 { "mcpServers": { "ssh": {
     "command": "ssh-manager",
-    "args": ["mcp", "--token", "<TOKEN>"],
-    "env": { "SSHMGR_MASTERKEY_HEX": "<unlock 时输出的 hex>" }
+    "args": ["mcp"],
+    "env": { "SSHMGR_TOKEN": "<TOKEN>", "SSHMGR_MASTERKEY_HEX": "<unlock 时输出的 hex>" }
 } } }
 ```
 （把 hex 当秘密，别提交——但**不推荐**生产用，原因见上。）

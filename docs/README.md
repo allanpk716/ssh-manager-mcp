@@ -24,7 +24,7 @@
 | 文档 | 解决什么 |
 |---|---|
 | [getting-started.md](./getting-started.md) | **从零到跑通**：装好 → 解锁 → 加第一台服务器 → 建 profile + project → 配进 Claude Code → 让 agent 跑第一个任务。第一次用先看这篇。 |
-| [managing-servers.md](./managing-servers.md) | **新增 / 编辑 / 维护 / 删除服务器**：`servers add` / `edit` / `ls` / `rm` 的全部用法，含换密钥、sudo、tags、备注（description）。 |
+| [managing-servers.md](./managing-servers.md) | **新增 / 编辑 / 维护 / 删除服务器**：`servers add` / `edit` / `ls` / `rm`、`import` 批量导入、`gc` 的全部用法，含换密钥、sudo、tags、备注（description）。 |
 | [agent-access.md](./agent-access.md) | **授权 AI agent**：project token 怎么生成、`.mcp.json` 怎么配进 Claude Code / Cursor、token 轮换 / 暂停 / 吊销的 Lazy 语义、多 agent 隔离、紧急处置。 |
 | [scenarios.md](./scenarios.md) | **应用场景与示例**：GPU 巡检装包、读 root-only 日志、上传部署、端口转发连数据库、拉日志排查、多环境隔离、token 泄露处置、owner 自己直连。 |
 | [multi-machine.md](./multi-machine.md) | **多机共享（serve 模式 · 可选）+ 离线只读缓存（Plan 12）**：多台机器共用一份服务器清单——一台 VLAN 服务器常驻 broker、其他机器的 agent 连远程；或每台工作机持本地加密只读缓存，断网时兜底。架构 / 配置 / 场景 / 限制（含后续路线）。 |

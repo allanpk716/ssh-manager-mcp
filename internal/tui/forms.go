@@ -22,12 +22,9 @@ type serverDraft struct {
 }
 
 // newServerForm builds the add/edit form bound to d by pointer. Secret fields
-// are masked and OPTIONAL in edit mode (empty = keep existing credential).
+// are masked; in add mode BOTH may stay empty (credential-less server, Plan 20
+// C0), in edit mode empty = keep existing credential.
 func newServerForm(d *serverDraft, editing bool) *huh.Form {
-	credTitle := "密码（留空=保持不变）"
-	if !editing {
-		credTitle = "密码（与密钥二选一）"
-	}
 	return huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Title("名称（唯一）").Value(&d.Name).Validate(nonEmpty),
@@ -35,21 +32,37 @@ func newServerForm(d *serverDraft, editing bool) *huh.Form {
 			huh.NewInput().Title("SSH 用户").Value(&d.User).Validate(nonEmpty),
 			portField(&d.Port),
 		),
-		huh.NewGroup(
-			huh.NewInput().Title(credTitle).Value(&d.Password).EchoMode(huh.EchoModePassword),
-			huh.NewInput().Title("私钥路径（与密码二选一；编辑时留空=不变）").Value(&d.KeyPath),
+		huh.NewGroup([]huh.Field{
+			passwordField(d, editing),
+			huh.NewInput().Title("私钥路径（可选，与密码互斥；编辑时留空=不变）").Value(&d.KeyPath),
 			huh.NewInput().Title("密钥口令（可选）").Value(&d.KeyPass).EchoMode(huh.EchoModePassword),
-			huh.NewInput().Title("sudo 密码（可选）").Value(&d.SudoPassword).EchoMode(huh.EchoModePassword),
-		),
-		huh.NewGroup(
-			huh.NewInput().Title("硬件").Value(&d.Hardware),
-			huh.NewInput().Title("位置").Value(&d.Location),
-			huh.NewInput().Title("角色").Value(&d.Role),
-			huh.NewInput().Title("服务").Value(&d.Services),
-			huh.NewInput().Title("Caveats（agent 行动前必读）").Value(&d.Caveats),
-			huh.NewInput().Title("备注").Value(&d.Description),
-		),
+			sudoPasswordField(d),
+		}...),
+		huh.NewGroup(structuredFields(d)...),
 	)
+}
+
+func passwordField(d *serverDraft, editing bool) *huh.Input {
+	title := "密码（可选，与密钥二选一）"
+	if editing {
+		title = "密码（留空=保持不变）"
+	}
+	return huh.NewInput().Title(title).Value(&d.Password).EchoMode(huh.EchoModePassword)
+}
+
+func sudoPasswordField(d *serverDraft) *huh.Input {
+	return huh.NewInput().Title("sudo 密码（可选）").Value(&d.SudoPassword).EchoMode(huh.EchoModePassword)
+}
+
+func structuredFields(d *serverDraft) []huh.Field {
+	return []huh.Field{
+		huh.NewInput().Title("硬件").Value(&d.Hardware),
+		huh.NewInput().Title("位置").Value(&d.Location),
+		huh.NewInput().Title("角色").Value(&d.Role),
+		huh.NewInput().Title("服务").Value(&d.Services),
+		huh.NewInput().Title("Caveats（agent 行动前必读）").Value(&d.Caveats),
+		huh.NewInput().Title("备注").Value(&d.Description),
+	}
 }
 
 func nonEmpty(s string) error {
@@ -173,12 +186,14 @@ func prefill(cur *models.Server) *serverDraft {
 	}
 }
 
-// toServer assembles a models.Server from the draft, minting credentials via
-// st when secret fields are filled. Password/key are mutually exclusive (CLI
-// parity with serversAddCmd).
-func (d *serverDraft) toServer(st *store.Store) (*models.Server, error) {
+// toParts assembles the non-secret server fields plus credential pointers
+// from the draft — no store access (minting happens inside the transactional
+// APIs submitServer calls). Password/key are mutually exclusive (CLI parity
+// with serversAddCmd). A nil pointer = no credential of that kind (add mode)
+// / keep the existing one (edit mode).
+func (d *serverDraft) toParts() (*models.Server, *models.Credential, *models.Credential, error) {
 	if d.Password != "" && d.KeyPath != "" {
-		return nil, errors.New("密码与私钥互斥：二选一")
+		return nil, nil, nil, errors.New("密码与私钥互斥：二选一")
 	}
 	srv := &models.Server{
 		Name: strings.TrimSpace(d.Name), Host: strings.TrimSpace(d.Host),
@@ -187,32 +202,21 @@ func (d *serverDraft) toServer(st *store.Store) (*models.Server, error) {
 		Hardware: strings.TrimSpace(d.Hardware), Services: strings.TrimSpace(d.Services),
 		Role: strings.TrimSpace(d.Role), Caveats: strings.TrimSpace(d.Caveats),
 	}
+	var cred, sudo *models.Credential
 	switch {
 	case d.Password != "":
-		cid, err := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(d.Password)})
-		if err != nil {
-			return nil, err
-		}
-		srv.CredentialID, srv.AuthMethod = cid, models.AuthPassword
+		cred = &models.Credential{Type: models.CredPassword, Secret: []byte(d.Password)}
 	case d.KeyPath != "":
 		keyBytes, err := os.ReadFile(d.KeyPath)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
-		cid, err := st.SetCredential(&models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(d.KeyPass)})
-		if err != nil {
-			return nil, err
-		}
-		srv.CredentialID, srv.AuthMethod = cid, models.AuthPrivateKey
+		cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(d.KeyPass)}
 	}
 	if d.SudoPassword != "" {
-		sid, err := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(d.SudoPassword)})
-		if err != nil {
-			return nil, err
-		}
-		srv.SudoCredentialID = sid
+		sudo = &models.Credential{Type: models.CredPassword, Secret: []byte(d.SudoPassword)}
 	}
-	return srv, nil
+	return srv, cred, sudo, nil
 }
 
 // formOverlay wraps a huh form as an App overlay; on completion it emits
@@ -268,31 +272,34 @@ func doAction(st *store.Store, fn func() (string, error)) tea.Cmd {
 	}
 }
 
-// submitServer assembles + persists the draft. cur == nil means add; otherwise
-// edit: id is preserved and empty secret fields keep the existing credentials
-// (full-row UpdateServer, same semantics as the CLI serversEditCmd).
+// submitServer assembles + persists the draft in ONE transaction. cur == nil
+// means add; otherwise edit: id is preserved and empty secret fields keep the
+// existing credentials (nil cred/sudo → the WithCredentials APIs keep the old
+// rows — same semantics as the CLI serversEditCmd). A replaced credential row
+// is dropped inside the same tx when nothing else references it.
 func submitServer(st *store.Store, cur *models.Server, d *serverDraft) tea.Cmd {
 	return doAction(st, func() (string, error) {
-		srv, err := d.toServer(st)
+		srv, cred, sudo, err := d.toParts()
 		if err != nil {
 			return "", err
 		}
 		if cur == nil {
-			// Add mode: require exactly one credential (CLI serversAddCmd parity)
-			if d.Password == "" && d.KeyPath == "" {
-				return "", errors.New("凭据必填：密码或私钥路径二选一（与 CLI servers add 一致）")
-			}
-			_, err := st.AddServer(srv)
+			// Add mode: credential is optional (Plan 20 C0) — a draft with
+			// neither password nor key persists a credential-less server
+			// (toParts returns nil pointers when both are empty).
+			_, err := st.AddServerWithCredentials(srv, cred, sudo)
 			return "已新增 " + srv.Name, err
-		}
-		if d.Password == "" && d.KeyPath == "" { // keep existing credential
-			srv.CredentialID, srv.AuthMethod = cur.CredentialID, cur.AuthMethod
-		}
-		if d.SudoPassword == "" {
-			srv.SudoCredentialID = cur.SudoCredentialID
 		}
 		srv.ID = cur.ID
 		srv.Tags = cur.Tags // the form has no tags field — keep existing (CLI serversEditCmd parity)
-		return "已更新 " + srv.Name, st.UpdateServer(srv)
+		if cred != nil {
+			// A minted credential (password or key — the same condition that
+			// triggers re-credential) resolves needs-passphrase: the tag means
+			// "current credential lacks its passphrase". Drop it, keep every
+			// other tag (dropTag stores a valid empty slice when it was the
+			// only one).
+			srv.Tags = dropTag(srv.Tags, "needs-passphrase")
+		}
+		return "已更新 " + srv.Name, st.UpdateServerWithCredentials(srv, cred, sudo)
 	})
 }

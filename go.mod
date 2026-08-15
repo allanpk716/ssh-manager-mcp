@@ -8,6 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/google/uuid v1.6.0
 	github.com/kardianos/service v1.3.0
+	github.com/kevinburke/ssh_config v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.2.0
 	github.com/pkg/sftp v1.13.10
 	github.com/spf13/cobra v1.10.2

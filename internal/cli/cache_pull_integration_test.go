@@ -35,7 +35,7 @@ import (
 //   - the PIN half drives the pinning TLS transport (handshake succeeds), AND
 //   - the CODE half goes alone to the Authorization header (handshake auth OK).
 //
-// `stripEmbeddedPin` (cache.go) does this split; it had ONLY logic-level
+// `clientops.SplitTokenPin` does this split; it had ONLY logic-level
 // coverage (TestResolvePin). If it regressed, the default enroll path would
 // 401 silently and no existing test would catch it. This test closes that gap
 // end-to-end against a real httptest TLS server with a self-signed cert.
@@ -82,7 +82,7 @@ func TestCachePull_TokenEmbeddedPin_Succeeds(t *testing.T) {
 	// The server asserts BOTH load-bearing invariants:
 	//   - TLS handshake reached us (a plaintext client would never get here)
 	//   - Authorization header carries ONLY the bare device code "code-xyz",
-	//     never "<code>:<pin>" (stripEmbeddedPin must have split the token).
+	//     never "<code>:<pin>" (SplitTokenPin must have split the token).
 	// If the split regressed (whole token sent as Bearer), this 401s and the
 	// test fails loudly — exactly the silent-failure mode we're guarding.
 	const deviceCode = "code-xyz"
@@ -134,14 +134,14 @@ func TestCachePull_TokenEmbeddedPin_Succeeds(t *testing.T) {
 	}
 
 	// Belt-and-suspenders: assert the server actually saw the BARE device code,
-	// not the whole "<code>:<pin>" token. This is the stripEmbeddedPin
+	// not the whole "<code>:<pin>" token. This is the SplitTokenPin
 	// contract — if it ever sends the pin up as part of the Bearer header the
 	// server's auth check 401s and the pull fails above; asserting here too
 	// makes the failure mode legible in test output.
 	select {
 	case a := <-gotAuth:
 		if a != "Bearer "+deviceCode {
-			t.Fatalf("Authorization header = %q, want %q (stripEmbeddedPin leak?)", a, "Bearer "+deviceCode)
+			t.Fatalf("Authorization header = %q, want %q (SplitTokenPin leak?)", a, "Bearer "+deviceCode)
 		}
 		if strings.Contains(a, fp) {
 			t.Fatalf("Authorization header leaked the fingerprint: %q", a)

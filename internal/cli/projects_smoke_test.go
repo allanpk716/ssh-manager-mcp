@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -21,6 +22,21 @@ func extractToken(t *testing.T, out *bytes.Buffer) string {
 	}
 	t.Fatalf("no token in output: %s", out.String())
 	return ""
+}
+
+// TestMcpJSONSnippetUsesEnv: the .mcp.json snippet emitted by `projects
+// add` / `rotate` must carry the token in the env field (SSHMGR_TOKEN), never
+// in argv — token-in-argv is visible to `ps` / /proc for the process lifetime.
+func TestMcpJSONSnippetUsesEnv(t *testing.T) {
+	var b bytes.Buffer
+	printToken(&b, "tok123")
+	out := b.String()
+	if strings.Contains(out, `"--token"`) || strings.Contains(out, "tok123\",") {
+		t.Fatal("token 不得在 argv")
+	}
+	if !strings.Contains(out, `"SSHMGR_TOKEN":"tok123"`) {
+		t.Fatal("须走 env 字段")
+	}
 }
 
 func TestProjectsLifecycleAndAudit(t *testing.T) {

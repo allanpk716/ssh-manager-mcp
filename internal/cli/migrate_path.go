@@ -332,6 +332,7 @@ func storeServerCount(storePath string, mk []byte) (int, error) {
 // AuthForServer uses) rather than building an ssh.AuthMethod — building the auth
 // method would parse the private key bytes, which can spuriously fail on a valid
 // password credential. Decrypt-or-fail is the real integrity signal.
+// Credential-less servers (Plan 20 C0) carry no secret to verify and are skipped.
 func selfCheckDecryptAll(storePath, mkPath string, expected int) error {
 	mk, err := os.ReadFile(mkPath)
 	if err != nil {
@@ -350,6 +351,11 @@ func selfCheckDecryptAll(storePath, mkPath string, expected int) error {
 		return fmt.Errorf("server count %d != expected %d", len(servers), expected)
 	}
 	for _, srv := range servers {
+		// Credential-less servers (Plan 20 C0) have nothing to decrypt — skip
+		// them, same as an absent sudo credential below.
+		if srv.CredentialID == "" {
+			continue
+		}
 		cred, err := st.GetCredential(srv.CredentialID)
 		if err != nil {
 			return fmt.Errorf("decrypt credential for server %q (%s): %w", srv.Name, srv.CredentialID, err)

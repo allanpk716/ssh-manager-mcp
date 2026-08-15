@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
@@ -304,5 +305,57 @@ func TestUpgrade_PageKeysSuppressedInFlight(t *testing.T) {
 	}
 	if am.upg == nil || am.upg.step != upgInstall {
 		t.Fatalf("the in-flight segment must be untouched, got upg=%v", am.upg)
+	}
+}
+
+// TestUpgrade_CompleteKeepsWarnView (final review M-C): upgradeComplete must
+// refresh pages through refetchPages, not raw FetchAll — the servers page's
+// `!` filter and ⚠-first sort survive the segment end (same contract as
+// actionDoneMsg / tokenIssuedMsg), while the minted device code is still
+// folded into the 设备码 page. Uses the install-failure completion (no
+// roles.Save) so the test stays a pure page-refresh assertion.
+func TestUpgrade_CompleteKeepsWarnView(t *testing.T) {
+	withServeCertDirs(t)
+	a := newTestApp(t)
+	a.role = roles.RoleStandalone
+	// a COMPLETE server so the filter has something to hide (servers carry an
+	// FK to credentials — mint the row first)
+	cid, err := a.st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("p")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.st.AddServer(&models.Server{
+		Name: "done", Host: "192.0.2.99", User: "u", Port: 22,
+		CredentialID: cid, Role: "app", AuthMethod: models.AuthPassword,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sp, _ := a.pages[pageServers].(*serversPage)
+	sp.warnOnly = true
+	sp.rebuild()
+	// the minted device code exists in the store but NOT in the page snapshot
+	if _, _, err := a.st.AddCacheToken("laptop"); err != nil {
+		t.Fatal(err)
+	}
+	a.upg = &upgradeSegment{installErr: ioErr("denied")} // failure path: completes without roles.Save
+
+	m, _ := a.upgradeComplete()
+	am := m.(App)
+	sp2, _ := am.pages[pageServers].(*serversPage)
+	if !sp2.warnOnly {
+		t.Fatal("upgradeComplete must keep the ! filter (refetchPages, not raw FetchAll)")
+	}
+	if rows := sp2.Rows(); len(rows) != 1 || rows[0] != "⚠ gpu" {
+		t.Fatalf("filter+sort must survive the segment end: %v", rows)
+	}
+	cp, _ := am.pages[pageTokens].(*cacheTokensPage)
+	found := false
+	for _, r := range cp.Rows() {
+		if strings.Contains(r, "laptop") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the minted device code must still be folded into the 设备码 page: %v", cp.Rows())
 	}
 }

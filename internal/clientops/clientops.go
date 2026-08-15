@@ -79,7 +79,7 @@ func MaybeLazyPull(maxAge time.Duration) error {
 	pin := cred.Pin // resolved pin wins over any embedded stale pin (cert rotation)
 	code := cred.Token
 	if pin == "" {
-		if c, p, ok := stripEmbeddedPin(cred.Token); ok {
+		if c, p, ok := SplitTokenPin(cred.Token); ok {
 			code, pin = c, p
 		}
 	}
@@ -268,7 +268,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	} else {
 		// The device code goes to the Authorization header; the pin is for TLS only.
 		// If the token is "<code>:<pin>", strip so the header carries just the code.
-		if c, _, ok := stripEmbeddedPin(token); ok {
+		if c, _, ok := SplitTokenPin(token); ok {
 			code = c
 		}
 		if u, err := neturl.Parse(url); err != nil || u.Scheme != "https" {

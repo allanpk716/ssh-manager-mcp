@@ -1,10 +1,25 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
 )
+
+// TestAddProfileDuplicateName: a second AddProfile under a live name must fail
+// with the LOCALIZED duplicate-name error ("already exists"), not raw SQLite
+// UNIQUE-constraint text.
+func TestAddProfileDuplicateName(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.AddProfile("dev"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.AddProfile("dev")
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("want localized duplicate-name error, got %v", err)
+	}
+}
 
 func TestProfileGrantAndList(t *testing.T) {
 	s := newTestStore(t)
@@ -38,6 +53,39 @@ func TestProfileGrantIsIdempotentAndAdditive(t *testing.T) {
 	servers, _ := s.ServersForProfile(pid)
 	if len(servers) != 1 {
 		t.Fatalf("duplicate grant must stay 1, got %d", len(servers))
+	}
+}
+
+// TestGrantServersUnknownIDFailsFast pins the in-transaction precheck: an
+// unknown server id aborts the grant BEFORE any INSERT runs. The error names
+// the offending id, a mid-batch bad id grants nothing (not even the valid ids
+// listed before it), and the profile itself survives — the aborted grant must
+// never leave a half-granted profile that a caller retry would orphan. The FK
+// constraint remains as the fail-closed backstop behind the precheck.
+func TestGrantServersUnknownIDFailsFast(t *testing.T) {
+	s := newTestStore(t)
+	cid := mustCred(t, s, models.CredPassword, "pw")
+	real, err := s.AddServer(&models.Server{Name: "a", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := s.AddProfile("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.GrantServers(pid, []string{real, "no-such-server"})
+	if err == nil || !strings.Contains(err.Error(), "no-such-server") {
+		t.Fatalf("want fail-fast unknown server error, got %v", err)
+	}
+	// Nothing changed — not even the valid id listed before the bad one.
+	ids, err := s.ServersForProfile(pid)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("aborted grant must grant nothing: %v %v", ids, err)
+	}
+	// and the profile still exists
+	p, err := s.GetProfile(pid)
+	if err != nil || p == nil || p.Name != "p" {
+		t.Fatalf("profile must survive the aborted grant: %+v %v", p, err)
 	}
 }
 

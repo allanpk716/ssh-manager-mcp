@@ -30,10 +30,11 @@ func TestClientServerList(t *testing.T) {
 // TestSyncCmdRefusesEmptyPin pins the TUI's own no-plaintext invariant: with a
 // stored cred lacking a pin, sync must fail fast instead of ever attempting a
 // plaintext (AllowPlain=false would only fail later, after a network round
-// trip) pull.
+// trip) pull. (The syncCmd wrapper was deleted in Plan 20 T1; the panel pull
+// is syncCmdMode(cred, false).)
 func TestSyncCmdRefusesEmptyPin(t *testing.T) {
 	cred := &clientops.CacheCred{URL: "https://x", Token: "t", Pin: ""}
-	msg := syncCmd(cred)()
+	msg := syncCmdMode(cred, false)()
 	done, ok := msg.(syncDoneMsg)
 	if !ok {
 		t.Fatalf("want syncDoneMsg, got %T", msg)
@@ -64,6 +65,32 @@ func TestClassifyPullError(t *testing.T) {
 	}
 	if got := classifyPullError(errors.New("boom")); !strings.Contains(got, "boom") {
 		t.Fatalf("default must keep the raw error text: %q", got)
+	}
+}
+
+// TestClassifyPullError401 pins the 401 branch's PRECISION: only a genuine
+// "server returned 401" (or an "authorization" error) classifies as 设备码无效.
+// A bare "401" substring match false-triggers on fingerprint hex digits
+// (aa4011…) or port numbers (1401) — those must land in a different class.
+func TestClassifyPullError401(t *testing.T) {
+	// 正例：真 401 — both the brief's generic shape and the real emitter's
+	// shape (clientops: "pull: server returned %d (is the authorization code valid/active?)").
+	for _, raw := range []string{
+		`Get "https://x/snapshot": server returned 401 Unauthorized`,
+		`pull: server returned 401 (is the authorization code valid/active?)`,
+	} {
+		if got := classifyPullError(errors.New(raw)); !strings.Contains(got, "设备码无效") {
+			t.Fatalf("真 401 未分类: %q → %q", raw, got)
+		}
+	}
+	// 负例：指纹 hex 含 "401" 子串 / 端口 1401 — must NOT classify as 设备码无效.
+	for _, s := range []string{
+		"dial tcp: 1401 connection refused",
+		"pin sha256:aa4011... mismatch",
+	} {
+		if got := classifyPullError(errors.New(s)); strings.Contains(got, "设备码无效") {
+			t.Fatalf("非 401 误分类: %q → %q", s, got)
+		}
 	}
 }
 
@@ -115,15 +142,15 @@ func TestEditConnFormRequiresCodeWhenNoToken(t *testing.T) {
 // TestClientFinishScreen: the client wizard's finish screen must show the
 // --cache variant of the .mcp.json snippet — never the standalone plain-mcp
 // shape (the two modes are mutually exclusive and a wrong snippet breaks the
-// agent silently).
+// agent silently) — with the token in the SSHMGR_TOKEN env field, not argv.
 func TestClientFinishScreen(t *testing.T) {
 	v := clientFinishScreen().View().Content
-	for _, want := range []string{`"mcp", "--cache", "--token"`, "project token"} {
+	for _, want := range []string{`"args": ["mcp", "--cache"],`, `"SSHMGR_TOKEN": "<project token>"`} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("finish screen missing %q:\n%s", want, v)
 		}
 	}
-	if strings.Contains(v, `["mcp", "--token"`) {
-		t.Fatalf("client finish must not show the plain (non-cache) args:\n%s", v)
+	if strings.Contains(v, "--token") {
+		t.Fatalf("token must ride env, not argv:\n%s", v)
 	}
 }

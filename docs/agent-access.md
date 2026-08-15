@@ -16,7 +16,7 @@ Server（机器+凭据）  ──grant──▶  Profile（分组）  ◀──b
 2. **建 project，绑定到那个 profile** → 得到一次性 **token**。
 3. **把 token 写进 agent 的 MCP 配置**（`.mcp.json`）。
 
-agent 拿着 token 启动 `ssh-manager mcp --token <TOKEN>`，broker 校验 token → 只放行它绑定的 profile 里的 server。**跨 profile 访问一律拒绝。**
+agent 拿着 token 启动 `ssh-manager mcp`（token 经 `--token` 或 env `SSHMGR_TOKEN` 传入，`.mcp.json` 推荐 env 形态），broker 校验 token → 只放行它绑定的 profile 里的 server。**跨 profile 访问一律拒绝。**
 
 ---
 
@@ -32,7 +32,7 @@ ssh-manager projects add <project名> --profile <profile名>
 Token (shown once): eyJ...（一长串）
 
 .mcp.json snippet:
-{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp","--token","eyJ..."]}}}
+{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"eyJ..."}}}
 ```
 
 库里只存 token 的 **hash + salt**（像密码哈希），所以：
@@ -54,28 +54,31 @@ Claude Code 读 `.mcp.json`。两种范围：
   "mcpServers": {
     "ssh": {
       "command": "ssh-manager",
-      "args": ["mcp", "--token", "eyJ...你的token..."]
+      "args": ["mcp"],
+      "env": { "SSHMGR_TOKEN": "eyJ...你的token..." }
     }
   }
 }
 ```
 
+token 走 `env` 字段（`SSHMGR_TOKEN`）而不是 `args` 里的 `--token`：**消除的是 argv/ps 暴露面**——token 不再出现在子进程命令行里（`ps` / 任务管理器 / `/proc/<pid>/cmdline` 看不到）；env 仍可被同用户/root 经 `/proc/<pid>/environ`（Linux）读到，**不是全部可见性**。（`--token` 仍支持，语义相同。）
+
 - Claude Code 首次加载会**弹确认**让你批准这个项目级 MCP server——批准后该项目的会话就有这 6 个 SSH 工具。
-- **别提交 git**：`.mcp.json` 含 token，加进 `.gitignore`。
+- **别提交 git（公开仓库尤其致命）**：`.mcp.json` 含**活 token**，必须加进 `.gitignore`，绝不能提交进 git 仓库。
 - **Windows**：写绝对路径最稳，例如 `"command": "C:\\Tools\\ssh-manager.exe"`（JSON 里 `\` 要写成 `\\`）。
-- **headless / 无 keychain**：master key 不在 keychain，需要给子进程传环境变量，加 `env` 字段（见 [getting-started.md](./getting-started.md#无-keychain-环境headless-linux-等)）：
+- **headless / 无 keychain**：master key 不在 keychain，需要给子进程传环境变量，加进同一个 `env` 字段即可（见 [getting-started.md](./getting-started.md#无-keychain-环境headless-linux-等)）：
   ```json
   { "mcpServers": { "ssh": {
       "command": "ssh-manager",
-      "args": ["mcp", "--token", "eyJ..."],
-      "env": { "SSHMGR_MASTERKEY_HEX": "<unlock 打印的 hex>" }
+      "args": ["mcp"],
+      "env": { "SSHMGR_TOKEN": "eyJ...", "SSHMGR_MASTERKEY_HEX": "<unlock 打印的 hex>" }
   } } }
   ```
 
 ### B. 用户级（所有项目共享）
 
 ```bash
-claude mcp add ssh ssh-manager -- --token <TOKEN>
+claude mcp add ssh ssh-manager -e SSHMGR_TOKEN=<TOKEN> -- mcp
 ```
 
 （适合你只自己用、不想每个项目都配一遍的情况。）

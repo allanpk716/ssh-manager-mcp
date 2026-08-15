@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
@@ -238,7 +239,112 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "projects", "status", "TEXT NOT NULL DEFAULT 'active'"); err != nil {
 		return err
 	}
+	// Plan 20 C0: servers.credential_id becomes nullable (credential-less
+	// servers — e.g. ssh-config imports of hosts without IdentityFile).
+	// SQLite can't relax NOT NULL in place, so this is a guarded table rebuild.
+	// serversExists was computed above: on a fresh DB migrate() runs BEFORE
+	// initSchema, so the servers table may not exist yet — initSchema creates
+	// it already nullable, nothing to rebuild.
+	if serversExists {
+		nullable, err := columnNullable(db, "servers", "credential_id")
+		if err != nil {
+			return err
+		}
+		if !nullable {
+			if err := rebuildServersNullable(db); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
+}
+
+// columnNullable reports whether table.column exists and lacks the NOT NULL flag.
+func columnNullable(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return notnull == 0, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// rebuildServersNullable recreates servers with a nullable credential_id inside
+// one transaction (SQLite ALTER-rename dance: create new → copy → drop old →
+// rename). The new table is the CURRENT schemaSQL servers definition verbatim
+// with the single difference that credential_id loses NOT NULL.
+//
+// FK enforcement is disabled for the dance: with foreign_keys ON, DROP TABLE
+// servers performs an implicit DELETE FROM servers that would cascade-delete
+// profile_servers grant rows (ON DELETE CASCADE). PRAGMA foreign_keys is
+// PER-CONNECTION and database/sql pools connections, so the OFF/ON pair and
+// the transaction MUST run pinned to ONE connection — otherwise the PRAGMA
+// lands on one pooled conn while the tx runs on another and the dance dies on
+// (or is cascade-damaged by) FK enforcement. The DSN pragma
+// (store.go Open: _pragma=foreign_keys(1)) sets the flag for every NEW
+// connection, so only this pinned conn needs the OFF/ON restore.
+func rebuildServersNullable(db *sql.DB) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx) // pin ONE pooled conn for the whole dance
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	// Restore enforcement on the pinned conn no matter how the dance ends
+	// (deferred runs after tx.Rollback/commit handling, before conn.Close).
+	defer func() { _, _ = conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`) }()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // no-op after Commit
+	stmts := []string{
+		`CREATE TABLE servers_new (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  user TEXT NOT NULL,
+  auth_method TEXT NOT NULL,
+  credential_id TEXT REFERENCES credentials(id),
+  sudo_credential_id TEXT,
+  tags TEXT,
+  description TEXT DEFAULT '',
+  location TEXT DEFAULT '',
+  hardware TEXT DEFAULT '',
+  services TEXT DEFAULT '',
+  role TEXT DEFAULT '',
+  caveats TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)`,
+		`INSERT INTO servers_new (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at)
+SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at FROM servers`,
+		`DROP TABLE servers`,
+		`ALTER TABLE servers_new RENAME TO servers`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("rebuild servers: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // addColumnIfMissing adds a column to a table iff the table exists and lacks the column
@@ -306,7 +412,7 @@ CREATE TABLE IF NOT EXISTS servers (
   port INTEGER NOT NULL,
   user TEXT NOT NULL,
   auth_method TEXT NOT NULL,
-  credential_id TEXT NOT NULL REFERENCES credentials(id),
+  credential_id TEXT REFERENCES credentials(id),
   sudo_credential_id TEXT,
   tags TEXT,
   description TEXT DEFAULT '',

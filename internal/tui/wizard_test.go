@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,6 +117,29 @@ func TestWizard_CloseStoreNilSafe(t *testing.T) {
 	wv := newWizardForTest()
 	wv.step, wv.form = stepVaultErr, nil
 	wv.closeStore()
+}
+
+// TestWizard_VaultErrViewShowsSaveErr pins parity with stepRoleDone and the
+// form steps: the stepVaultErr screen must render the saveErr banner too. Its
+// footer promises 「角色已保存，重开 tui 会继续」 — with a failed role.json
+// write that promise is false, and without the banner the user can never see
+// why a re-run landed back on the first screen.
+func TestWizard_VaultErrViewShowsSaveErr(t *testing.T) {
+	withRoleDirs(t)
+	w := newWizardForTest()
+	w.step, w.form = stepVaultErr, nil
+	w.err = errors.New("vault 初始化失败（测试）")
+	w.saveErr = errors.New("写入被拒绝")
+	v := w.View().Content
+	if !strings.Contains(v, "初始化 vault 失败") {
+		t.Fatalf("precondition: view must be the vaultErr screen:\n%s", v)
+	}
+	if !strings.Contains(v, "role.json 写入失败") {
+		t.Fatalf("vaultErr view must surface the saveErr banner:\n%s", v)
+	}
+	if !strings.Contains(v, "写入被拒绝") {
+		t.Fatalf("vaultErr view must include the saveErr detail:\n%s", v)
+	}
 }
 
 // TestStepFormDone_StandaloneVaultErrNoPanic pins review C2: a fresh

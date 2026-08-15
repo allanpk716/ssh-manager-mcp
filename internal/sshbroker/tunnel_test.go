@@ -41,6 +41,91 @@ func startEchoService(t *testing.T) (ln net.Listener, port int) {
 	return ln, portOf(ln.Addr().String())
 }
 
+// startHalfCloseEchoService opens a loopback TCP listener on a random port
+// whose echo handler reads the request side to EOF, THEN writes "FIN" and
+// half-closes its own write side. This is the half-close core assertion: the
+// service must still be able to send bytes AFTER seeing the client's EOF —
+// which only reaches it if every hop in the chain (tunnel handle → ssh channel
+// → sshd direct-tcpip handler) propagates a directional EOF instead of a full
+// close. Returned port is the port the broker asks the sshd to dial.
+func startHalfCloseEchoService(t *testing.T) (ln net.Listener, port int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("half-close echo listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return // listener closed (test cleanup)
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _ = io.Copy(io.Discard, c) // drain the request side until EOF
+				_, _ = c.Write([]byte("FIN")) // writable after client EOF — the assertion
+				if tc, ok := c.(*net.TCPConn); ok {
+					_ = tc.CloseWrite()
+				}
+			}(c)
+		}
+	}()
+	return ln, portOf(ln.Addr().String())
+}
+
+// TestTunnelHalfClosePropagates proves the tunnel forwards a TCP half-close
+// end-to-end: the client writes a request, CloseWrite()s (FIN, still reading),
+// and MUST receive the server's response bytes that are produced AFTER the
+// server saw the EOF. The pre-fix handle closed both conns when the FIRST
+// io.Copy direction finished — the client's CloseWrite finished the
+// local→remote copy, the defers tore down both conns, and the in-flight "FIN"
+// response was truncated/errored. Lifecycle under test:
+//
+//   - client → tunnel: Write("hello"), TCPConn.CloseWrite(), io.ReadAll.
+//   - tunnel handle: local→remote copy EOF → CloseWrite on the ssh channel
+//     (SSH_MSG_CHANNEL_EOF, not a channel close).
+//   - sshd handleDirectTCP: channel EOF → CloseWrite on the echo-service TCP
+//     conn (FIN, symmetric half-close on the test-infra side).
+//   - echo service: sees EOF, writes "FIN", CloseWrite → propagates back the
+//     same way; the client's ReadAll gets "FIN" then a clean EOF.
+func TestTunnelHalfClosePropagates(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	_, echoPort := startHalfCloseEchoService(t)
+
+	tun, err := c.ForwardLocal(0, "127.0.0.1", echoPort)
+	if err != nil {
+		t.Fatalf("ForwardLocal: %v", err)
+	}
+	defer tun.Close()
+
+	conn, err := net.DialTimeout("tcp", tun.LocalAddr(), 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial tunnel: %v", err)
+	}
+	defer conn.Close()
+	// Deadline keeps a broken pipe failing fast instead of hanging the test.
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	if _, err := conn.Write([]byte("hello")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	tc := conn.(*net.TCPConn)
+	if err := tc.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+	got, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("ReadAll after CloseWrite: %v", err)
+	}
+	if string(got) != "FIN" {
+		t.Fatalf("read = %q, want %q (response produced after server EOF must arrive)", got, "FIN")
+	}
+}
+
 // TestForwardLocal opens an ssh -L tunnel through the in-process testsshd to a
 // loopback echo service, then verifies bytes round-trip through it and that
 // Close shuts the local listener down. Lifecycle under test:

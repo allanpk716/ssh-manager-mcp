@@ -107,15 +107,12 @@ func refreshDataCmd() tea.Msg {
 	return dataReadyMsg{cred: cred, snap: snap, age: age}
 }
 
-// syncCmd pulls a fresh snapshot off the UI loop (panel mode). The pin from
-// the stored cred is mandatory — the TUI NEVER offers plaintext pulls
-// (AllowPlain stays false).
-func syncCmd(cred *clientops.CacheCred) tea.Cmd { return syncCmdMode(cred, false) }
-
-// syncCmdMode is the shared pull command. In WIZARD mode a successful pull
-// returns pullSucceededMsg (→ the .mcp.json finish screen) instead of the
-// panel's syncDoneMsg{nil}; every failure rides syncDoneMsg so the wizard can
-// reopen the form under a classified banner (classifyPullError).
+// syncCmdMode is the pull command (panel and wizard share it). In WIZARD mode
+// a successful pull returns pullSucceededMsg (→ the .mcp.json finish screen)
+// instead of the panel's syncDoneMsg{nil}; every failure rides syncDoneMsg so
+// the wizard can reopen the form under a classified banner
+// (classifyPullError). The pin from the stored cred is mandatory — the TUI
+// NEVER offers plaintext pulls (AllowPlain stays false).
 func syncCmdMode(cred *clientops.CacheCred, wizard bool) tea.Cmd {
 	return func() tea.Msg {
 		if cred == nil {
@@ -337,7 +334,7 @@ func classifyPullError(err error) string {
 	switch {
 	case strings.Contains(s, "dial"), strings.Contains(s, "no such host"):
 		kind = "地址不通：检查 serve 地址拼写与网络/防火墙"
-	case strings.Contains(s, "401"), strings.Contains(s, "authorization"):
+	case strings.Contains(s, "server returned 401"), strings.Contains(s, "authorization"):
 		kind = "设备码无效：核对 server 机签发的设备码（丢失可在其主控台重发）"
 	case strings.Contains(s, "mismatch"), strings.Contains(s, "fingerprint"):
 		kind = "指纹失配：核对 server 机接入卡上的 pin 指纹"
@@ -350,16 +347,20 @@ func classifyPullError(err error) string {
 }
 
 // clientFinishScreen is the CLIENT role's .mcp.json finish screen (T5): the
-// --cache variant of mcpConfigScreen. The --token here is the SERVER machine's
+// --cache variant of mcpConfigScreen. The SSHMGR_TOKEN here is the SERVER machine's
 // project token — NOT the device code just used for the pull (a cache token
 // authorizes pulls only; the agent's MCP auth is the project token). The
 // client machine never sees that token during enrollment, so the snippet shows
-// a placeholder pointing at where it comes from.
+// a placeholder pointing at where it comes from. Token rides env, not argv
+// (ps/proc visibility — Plan 20 B2).
 func clientFinishScreen() overlay {
 	body := strings.Join(append(mcpConfigLines(
-		`"args": ["mcp", "--cache", "--token", "<project token>"]`,
 		[]string{
-			"client 角色用 --cache 离线缓存模式启动；--token 填 server 机 Projects 页签发的 project token（不是设备码——设备码只用于拉取缓存，刚才已保存）。",
+			`"args": ["mcp", "--cache"]`,
+			`"env": { "SSHMGR_TOKEN": "<project token>" }`,
+		},
+		[]string{
+			"client 角色用 --cache 离线缓存模式启动；SSHMGR_TOKEN 填 server 机 Projects 页签发的 project token（不是设备码——设备码只用于拉取缓存，刚才已保存）。",
 			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
 			".mcp.json 含 token，不要提交进 git。",
 		},

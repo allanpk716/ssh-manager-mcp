@@ -12,7 +12,7 @@ import (
 
 func newServersCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "servers", Short: "Manage SSH target servers"}
-	cmd.AddCommand(serversAddCmd(), serversListCmd(), serversRmCmd(), serversEditCmd())
+	cmd.AddCommand(serversAddCmd(), serversListCmd(), serversRmCmd(), serversEditCmd(), serversImportCmd())
 	return cmd
 }
 
@@ -25,36 +25,22 @@ func serversAddCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "add",
-		Short: "Add a server (with its credential)",
+		Short: "Add a server (credential optional)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
+			// Credential is OPTIONAL (Plan 20 C0): --password/--key are mutually
+			// exclusive, but a server may carry NEITHER (credential-less — e.g.
+			// an ssh_config host without IdentityFile). exec on such a server
+			// returns "no_credential" until one is attached via `servers edit`.
 			if password != "" && keyPath != "" {
-				return fmt.Errorf("--password and --key are mutually exclusive; provide exactly one")
-			}
-			if password == "" && keyPath == "" {
-				return fmt.Errorf("required: exactly one of --password or --key")
-			}
-			var cred models.Credential
-			if password != "" {
-				cred = models.Credential{Type: models.CredPassword, Secret: []byte(password)}
-			} else {
-				keyBytes, err := readKeyFile(keyPath)
-				if err != nil {
-					return err
-				}
-				cred = models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)}
-			}
-			cid, err := s.SetCredential(&cred)
-			if err != nil {
-				return err
+				return fmt.Errorf("--password and --key are mutually exclusive; provide one or neither")
 			}
 			srv := &models.Server{
-				Name: name, Host: host, Port: port, User: user,
-				AuthMethod: cred.Type.AuthMethodForServer(), CredentialID: cid, Tags: tags,
+				Name: name, Host: host, Port: port, User: user, Tags: tags,
 				Description: strings.TrimSpace(description),
 				Location:    strings.TrimSpace(location),
 				Hardware:    strings.TrimSpace(hardware),
@@ -62,14 +48,24 @@ func serversAddCmd() *cobra.Command {
 				Role:        strings.TrimSpace(role),
 				Caveats:     strings.TrimSpace(caveats),
 			}
-			if sudoPassword != "" {
-				sid, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)})
+			// Credentials are minted (or reused, when .ID is set) INSIDE the
+			// same transaction as the server insert — a mid-way failure leaves
+			// zero orphan credential rows (Plan 20 B1/G6).
+			var cred, sudoCred *models.Credential
+			switch {
+			case password != "":
+				cred = &models.Credential{Type: models.CredPassword, Secret: []byte(password)}
+			case keyPath != "":
+				keyBytes, err := readKeyFile(keyPath)
 				if err != nil {
 					return err
 				}
-				srv.SudoCredentialID = sid
+				cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)}
 			}
-			id, err := s.AddServer(srv)
+			if sudoPassword != "" {
+				sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)}
+			}
+			id, err := s.AddServerWithCredentials(srv, cred, sudoCred)
 			if err != nil {
 				return err
 			}
@@ -81,8 +77,8 @@ func serversAddCmd() *cobra.Command {
 	c.Flags().StringVar(&host, "host", "", "hostname or IP")
 	c.Flags().IntVar(&port, "port", 22, "port")
 	c.Flags().StringVar(&user, "user", "", "ssh user")
-	c.Flags().StringVar(&password, "password", "", "password auth (mutually exclusive with --key)")
-	c.Flags().StringVar(&keyPath, "key", "", "path to private key file")
+	c.Flags().StringVar(&password, "password", "", "password auth (mutually exclusive with --key; omit both for a credential-less server)")
+	c.Flags().StringVar(&keyPath, "key", "", "path to private key file (mutually exclusive with --password; omit both for a credential-less server)")
 	c.Flags().StringVar(&keyPass, "key-passphrase", "", "passphrase for encrypted private key")
 	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "sudo password (enables sudo -S)")
 	c.Flags().StringSliceVar(&tags, "tags", nil, "tags")
@@ -156,7 +152,9 @@ func serversRmCmd() *cobra.Command {
 			if srv != nil {
 				id = srv.ID
 			}
-			return s.DeleteServer(id)
+			// Cascading: also drops credentials this server EXCLUSIVELY owned
+			// (shared credentials survive — two-column reference check).
+			return s.DeleteServerCascading(id)
 		},
 	}
 }
@@ -219,38 +217,39 @@ func serversEditCmd() *cobra.Command {
 			if cmd.Flags().Changed("special-handling") {
 				srv.Caveats = strings.TrimSpace(caveats)
 			}
-			// Re-credential (optional; mutually exclusive).
+			// Re-credential (optional; mutually exclusive). nil cred/sudo keeps
+			// the existing rows; a swap runs in ONE transaction with the row
+			// update, dropping the replaced row when nothing else references
+			// it (two-column check) — no orphan rows, no stranded servers.
 			pwSet := cmd.Flags().Changed("password")
 			keySet := cmd.Flags().Changed("key")
 			if pwSet && keySet {
 				return fmt.Errorf("--password and --key are mutually exclusive; provide exactly one")
 			}
+			var cred, sudoCred *models.Credential
 			switch {
 			case pwSet:
-				cid, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(password)})
-				if err != nil {
-					return err
-				}
-				srv.CredentialID, srv.AuthMethod = cid, models.AuthPassword
+				cred = &models.Credential{Type: models.CredPassword, Secret: []byte(password)}
 			case keySet:
 				keyBytes, err := readKeyFile(keyPath)
 				if err != nil {
 					return err
 				}
-				cid, err := s.SetCredential(&models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)})
-				if err != nil {
-					return err
-				}
-				srv.CredentialID, srv.AuthMethod = cid, models.AuthPrivateKey
+				cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)}
+			}
+			if pwSet || keySet {
+				// ANY successful re-credential resolves needs-passphrase (the
+				// tag the import flows write means "current credential lacks
+				// its passphrase"). Applied AFTER the --tags replacement above
+				// and strips from whatever srv.Tags holds then — an explicit
+				// --tags list passed alongside --key/--password loses the tag
+				// too: after re-credential the marker would be false.
+				srv.Tags = stripTag(srv.Tags, "needs-passphrase")
 			}
 			if cmd.Flags().Changed("sudo-password") {
-				sid, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)})
-				if err != nil {
-					return err
-				}
-				srv.SudoCredentialID = sid
+				sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)}
 			}
-			if err := s.UpdateServer(srv); err != nil {
+			if err := s.UpdateServerWithCredentials(srv, cred, sudoCred); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "updated server %s\n", srv.Name)
@@ -278,4 +277,16 @@ func serversEditCmd() *cobra.Command {
 // readKeyFile reads a private key from disk.
 func readKeyFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// stripTag returns tags minus every occurrence of tag (the CLI-side twin of
+// the TUI's dropTag; an all-matches list yields a valid empty slice).
+func stripTag(tags []string, tag string) []string {
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t != tag {
+			out = append(out, t)
+		}
+	}
+	return out
 }

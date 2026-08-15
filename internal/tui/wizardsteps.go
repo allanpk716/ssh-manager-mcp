@@ -181,9 +181,9 @@ func (s *wizStaticView) View() tea.View {
 }
 
 // mcpConfigLines renders the .mcp.json snippet shared by every role's finish
-// screen — only the args line and the notes differ per role (standalone/server
-// run plain `mcp`, the client role runs `mcp --cache`).
-func mcpConfigLines(argsLine string, notes []string) []string {
+// screen — only the field lines (args / env) and the notes differ per role
+// (standalone/server run plain `mcp`, the client role runs `mcp --cache`).
+func mcpConfigLines(fieldLines []string, notes []string) []string {
 	lines := []string{
 		"把下面的片段写进 agent 项目的 .mcp.json：",
 		"",
@@ -191,13 +191,14 @@ func mcpConfigLines(argsLine string, notes []string) []string {
 		`  "mcpServers": {`,
 		`    "ssh": {`,
 		`      "command": "ssh-manager",`,
-		"      " + argsLine,
-		"    }",
-		"  }",
-		"}",
-		"",
-		"说明：",
 	}
+	for i, fl := range fieldLines {
+		if i < len(fieldLines)-1 {
+			fl += ","
+		}
+		lines = append(lines, "      "+fl)
+	}
+	lines = append(lines, `    }`, `  }`, "}", "", "说明：")
 	for _, n := range notes {
 		lines = append(lines, "- "+n)
 	}
@@ -208,10 +209,14 @@ func mcpConfigLines(argsLine string, notes []string) []string {
 // real documented shape (docs/agent-access.md). tokenRef is what stands in
 // for the token in the snippet (the plaintext was on the previous screen and
 // is gone for good). Standalone runs plain `mcp` — NOT the client role's
-// `--cache` offline mode.
+// `--cache` offline mode. The token rides the SSHMGR_TOKEN env field, not
+// argv (ps/proc visibility — Plan 20 B2).
 func mcpConfigScreen(tokenRef string) overlay {
 	body := strings.Join(append(mcpConfigLines(
-		`"args": ["mcp", "--token", "`+tokenRef+`"]`,
+		[]string{
+			`"args": ["mcp"]`,
+			`"env": { "SSHMGR_TOKEN": "` + tokenRef + `" }`,
+		},
 		[]string{
 			"单机角色用普通 mcp 启动（不要用 --cache —— 那是 client 角色的离线缓存模式）。",
 			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,

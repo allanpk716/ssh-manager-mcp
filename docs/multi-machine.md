@@ -260,7 +260,7 @@ serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带�
  │  mcp --cache 进程内（spawn 惰性拉取 + 每 30min    ③ 自动保鲜
  │   会话内拉取 + 热加载，无需 OS 调度器）          （进程内）
  │
- │  .mcp.json（离线时）→ mcp --cache --token <同一个 project token>
+ │  .mcp.json（离线时）→ mcp --cache + env SSHMGR_TOKEN（同一个 project token）
  │   ↓                                            ④ 断网兜底
  │   读 cache.bin → 验 project token（铁律不变）→ broker 只读跑
  └────────────────────────────────────────────────┘
@@ -357,7 +357,8 @@ ssh-manager cache status
   "mcpServers": {
     "ssh": {
       "command": "ssh-manager",
-      "args": ["mcp", "--cache", "--token", "<项目token>"]
+      "args": ["mcp", "--cache"],
+      "env": { "SSHMGR_TOKEN": "<项目token>" }
     }
   }
 }
@@ -370,13 +371,13 @@ ssh-manager cache status
 缓存现在**自己保鲜**——`mcp --cache` **进程内置**了整套拉取逻辑，默认无需配任何系统定时器：
 
 - **spawn 惰性拉取**：Claude Code 启动 `mcp --cache` 时，若缓存超过 **30 分钟**（`--cache-max-age` 可调，`0` 关闭）且本机存过拉取凭据，会自动拉一次新缓存；失败静默用旧缓存。
-- **会话内定时拉取 + 热加载**：运行中的会话每 30 分钟也会自动拉新（失败自动退避重试），新快照落盘后**下一次工具调用即生效**（hash 变化即换，未变不动）——无需重启 Claude Code。
+- **会话内懒检查 + 热加载**：运行中的会话在**每次工具调用前**懒检查缓存是否超过 TTL（默认 30 分钟），过期才自动拉一次（空闲会话不刷新；同一 TTL 窗口内失败只试一次，退避到下个窗口）；新快照落盘后**下一次工具调用即生效**（hash 变化即换，未变不动）——无需重启 Claude Code。
 - **凭据持久化**：首次 `cache pull` 成功后，拉取凭据（url + 设备码 + 归一后 pin）自动写入本机 `cache.auth.json`（0600，Windows 另加 ACL）；之后的自动拉取全靠它。
 - 首次 `cache pull` 仍需手动（在线）执行一次。
 
 ##### 可选：系统定时器（给非 Claude 的消费方）—— legacy
 
-> ⚠️ **legacy（v0.5.0+ 起基本用不上）**：`mcp --cache` 已**进程内自动保鲜**（spawn 惰性拉取 + 会话内定时拉取 + 热加载，见上一节），Claude Code 一类经 MCP 的消费方**无需任何 OS 定时器**。下面三份模板只服务"别的程序直接读 `cache.bin`"的非 MCP 消费方。另外：Windows 下若你早年按本节配过计划任务 `ssh-manager-cache-refresh`，`ssh-manager clear`（client 角色）会**顺带删除**它；Unix 的自建 unit 不由程序删，需自行清理。
+> ⚠️ **legacy（v0.5.0+ 起基本用不上）**：`mcp --cache` 已**进程内自动保鲜**（spawn 惰性拉取 + 会话内按 TTL 懒检查 + 热加载，见上一节），Claude Code 一类经 MCP 的消费方**无需任何 OS 定时器**。下面三份模板只服务"别的程序直接读 `cache.bin`"的非 MCP 消费方。另外：Windows 下若你早年按本节配过计划任务 `ssh-manager-cache-refresh`，`ssh-manager clear`（client 角色）会**顺带删除**它；Unix 的自建 unit 不由程序删，需自行清理。
 
 若这台机上还有**别的程序直接读 `cache.bin`**（不经 `mcp --cache`，比如脚本自己解快照），它们享受不到上述进程内自动保鲜——可照旧配 OS 定时器跑 `cache pull`。建议 **30 min**（按你 vault 的变动频率调）。环境变量走 unit 的 `Environment=` 或独立配置文件（**0600 权限**，里面有设备码）。
 
@@ -517,7 +518,7 @@ ssh-manager cache-tokens revoke laptop
 | 目的 | 便携**口令加密**备份 / 迁移 / 灾难恢复 | 工作机**只读缓存**，断网兜底 |
 | 鉴权 | 你的**口令**（KeePass 式） | 设备授权码（owner 发、可吊销） |
 | 落地的 vault 可写吗 | ✅ import 进一个**可写** vault | ❌ 只读（`ErrReadOnly`） |
-| 怎么触发 | 手动 `export` / `import` | 设备码 + `mcp --cache` 内置自动拉取（spawn + 每 TTL） |
+| 怎么触发 | 手动 `export` / `import` | 设备码 + `mcp --cache` 内置自动拉取（spawn 惰性 + 会话内按 TTL 懒检查） |
 | 格式 | `SSHMGRV1` 信封（Argon2id + AES-GCM）封 `Snapshot` JSON | 原始 key AES-GCM 封**同一份** `Snapshot` JSON |
 
 两者**复用同一份 `store.Snapshot`**（Plan 11 打的地基）——序列化格式一致，加密信封不同（export 用口令派生 key，cache 用本机固定路径 `cache-dek.key` 裸文件的 DEK）。
@@ -525,7 +526,7 @@ ssh-manager cache-tokens revoke laptop
 ### 限制（如实）
 
 - **缓存只读**：离线能 exec / 传输 / 转发，但**任何写都被拒**（`ErrReadOnly`）。要加改删得连上 serve。
-- **自动保鲜是 `mcp --cache` 进程内置的**（spawn 惰性拉取 + 会话内定时拉取 + 热加载）——不是常驻 daemon，也无需 OS 调度器。
+- **自动保鲜是 `mcp --cache` 进程内置的**（spawn 惰性拉取 + 会话内按 TTL 懒检查 + 热加载）——不是常驻 daemon，也无需 OS 调度器。
 - **运行中的 `mcp --cache` 会热加载新缓存**（hash 变化即换）——拉取成功后下一次工具调用即生效，无需重启 Claude Code。在线的 serve 是每请求实时鉴权，没有这个问题。
 - **离线审计分散在各机本地**：`cache-audit.log` 不回传、不合并——要集中视图得自己收。
 - **首次 `cache pull` 必须在线**——缓存还没拉下来之前，`mcp --cache` 跑不起来（会报 `cache DEK not found` / `no such file`）（凭据文件 `cache.auth.json` 由首次成功 pull 自动写入）。
@@ -541,7 +542,7 @@ ssh-manager cache-tokens revoke laptop
    - 重新 `cache-tokens add`（默认把指纹打进设备码输出，形态 `<码>:<指纹>`）；或
    - 在调度器配置（systemd unit / 任务计划 / launchd plist）的 `Environment` / `EnvironmentVariables` 里加 `SSHMGR_SERVE_PIN=sha256:<指纹>`。
 4. **【最后】重启 serve** → 从此强制 TLS，启动日志打印 `client pin: <指纹>`。
-5. **各工作机手动 `cache pull` 带新 `--pin`**（成功后会写入/更新 `cache.auth.json`，含解析后的新 pin）→ 走 TLS + 指纹钉死成功；之后的自动拉取恢复正常，迁移完成。⚠️ 从明文/无凭据旧部署迁移的机器此前**没有** `cache.auth.json`，`mcp --cache` 进程内的自动拉取不会触发（自动拉取依赖已持久化的凭据）——这次收尾拉取必须手动执行（或走调度器：env 配好 `SSHMGR_SERVE_PIN` 后的定时 `cache pull`），成功后自动拉取才被启用。
+5. **各工作机手动 `cache pull` 带新 `--pin` 重拉一次**：迁移机**缺 cred（还没有 `cache.auth.json`）或仍持旧 pin** 的，都需要这一次手动重拉——自动拉取依赖已持久化的凭据（缺 cred 不会触发；持旧 pin 会因指纹失配而失败），替代不了这步收尾（也可走调度器：env 配好 `SSHMGR_SERVE_PIN` 后定时 `cache pull`）。成功后写入/更新 `cache.auth.json`（含新 pin）→ 走 TLS + 指纹钉死成功，自动拉取自此恢复正常。
 
 > ⚠️ **新策略（默认安全）**：新 client **无 pin 默认 hard-fail**（拒连），不再静默明文回退。明文拉取需显式 `--allow-plaintext` opt-in（仅调试/连旧明文 serve 用）。所以迁移必须先把 pin 分发到所有工作机（第 3 步），不能依赖"自动回退"。
 

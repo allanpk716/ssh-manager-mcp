@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -49,9 +50,12 @@ func (p *cacheTokensPage) current() *models.CacheToken {
 // deviceCodeBody composes the one-time 设备码 view body: the code itself, the
 // serve cert's SPKI fingerprint, and the ready-to-paste cache pull invocation
 // with the pin embedded as "<code>:<fingerprint>" (spec §3.3 形态 A — the form
-// stripEmbeddedPin consumes). serveURL comes from the issue form's hint field;
-// it is display-only and never persisted.
+// clientops.SplitTokenPin consumes). serveURL comes from the issue form's hint field;
+// it is display-only and never persisted. It is TrimSpace'd HERE (the single
+// composition point) — the form only validates nonEmpty, so whitespace can
+// ride in and would break the pasted command.
 func deviceCodeBody(serveURL, code, fingerprint string) string {
+	serveURL = strings.TrimSpace(serveURL)
 	return fmt.Sprintf("设备码  %s\n\n指纹    %s\n\n在工作机上执行：\nssh-manager cache pull --url %s --token '%s:%s'",
 		code, fingerprint, serveURL, code, fingerprint)
 }

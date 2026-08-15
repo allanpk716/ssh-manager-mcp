@@ -28,25 +28,6 @@ func cachePresent() bool {
 	return err == nil
 }
 
-// stripEmbeddedPin splits "<code>:<pin>" into (code, pin, ok). When the token
-// has no valid embedded pin, returns the token unchanged with ok=false so the
-// full token goes to the Authorization header as the device code. Uses the
-// FIRST colon for the split (the pin "sha256:<hex>" contains its own colon).
-//
-// Local twin of clientops' private stripEmbeddedPin: the pinning/DoPull side
-// lives in clientops (used internally by DoPull/MaybeLazyPull), while the CLI
-// needs the split once more to persist the bare device code in cache.auth.json.
-// Both copies are pinned end-to-end by TestCachePull_TokenEmbeddedPin_Succeeds
-// and TestCachePull_PersistsCred_PinPathOnly.
-func stripEmbeddedPin(token string) (code string, pin string, ok bool) {
-	if i := strings.Index(token, ":"); i >= 0 {
-		if v, parsed := mcpserver.ParsePin(token[i+1:]); parsed {
-			return token[:i], v, true
-		}
-	}
-	return token, "", false
-}
-
 func newCacheCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "cache", Short: "Offline read-only cache (pull from a serve broker)"}
 	cmd.AddCommand(cachePullCmd(), cacheStatusCmd())
@@ -104,7 +85,7 @@ func cachePullCmd() *cobra.Command {
 			// not an error: the pull itself succeeded, but auto-refresh won't work
 			// until a later successful pull — the user must hear about that.
 			code := token
-			if c, _, ok := stripEmbeddedPin(token); ok {
+			if c, _, ok := clientops.SplitTokenPin(token); ok {
 				code = c
 			}
 			if err := clientops.WriteCacheCred(&clientops.CacheCred{URL: url, Token: code, Pin: fp}); err != nil {
