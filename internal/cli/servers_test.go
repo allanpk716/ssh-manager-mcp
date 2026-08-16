@@ -94,6 +94,104 @@ func contains(list []string, s string) bool {
 	return false
 }
 
+// TestServersEditRejectsEmptyCredentialValues (Plan 22 T2): an explicitly
+// passed empty/whitespace credential flag is a quoting artifact, not a
+// "clear my credential" request — minting an empty-secret row would brick
+// exec with a confusing auth failure. Changed() + TrimSpace(value)=="" must
+// error (password/key point at --clear-credential, the only clear path) and
+// leave the vault's credential rows and the server's bindings untouched.
+func TestServersEditRejectsEmptyCredentialValues(t *testing.T) {
+	dir := t.TempDir()
+	mk, _ := store.GenerateMasterKey()
+	dbPath := filepath.Join(dir, "test.db")
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         dbPath,
+		"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mk),
+		// never the developer machine's real master.key (newVaultEnv pattern)
+		"SSHMGR_FILEKEY_PATH": filepath.Join(dir, "no-such-master.key"),
+	})
+
+	run := func(args ...string) error {
+		root := NewRootCmd()
+		out := &bytes.Buffer{}
+		root.SetOut(out)
+		root.SetErr(out)
+		root.SetArgs(args)
+		return root.Execute()
+	}
+	credCount := func(t testing.TB) int {
+		st, err := store.Open(dbPath, mk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		snap, err := st.ExportSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(snap.Credentials)
+	}
+	inspect := func(t testing.TB) *models.Server {
+		st, err := store.Open(dbPath, mk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		srv, _ := st.GetServerByName("enc")
+		if srv == nil {
+			t.Fatal("server \"enc\" not found")
+		}
+		return srv
+	}
+
+	// one password+sudo server → exactly 2 credential rows to keep
+	if err := run("servers", "add", "--name", "enc", "--host", "h", "--user", "u",
+		"--password", "pw", "--sudo-password", "spw"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	before := inspect(t)
+	oldCred, oldSudo := before.CredentialID, before.SudoCredentialID
+	if oldCred == "" || oldSudo == "" {
+		t.Fatalf("baseline server must carry both credentials: %+v", before)
+	}
+	if n := credCount(t); n != 2 {
+		t.Fatalf("baseline credential rows = %d, want 2", n)
+	}
+
+	cases := []struct {
+		name    string
+		args    []string
+		wantSub []string
+	}{
+		{"password empty", []string{"--password", ""}, []string{"--password 不能为空", "清除凭据请用 --clear-credential"}},
+		{"key empty", []string{"--key", ""}, []string{"--key 不能为空", "清除凭据请用 --clear-credential"}},
+		{"sudo-password empty", []string{"--sudo-password", ""}, []string{"--sudo-password 不能为空"}},
+		{"password whitespace", []string{"--password", "   "}, []string{"--password 不能为空", "清除凭据请用 --clear-credential"}},
+		{"key whitespace", []string{"--key", " \t "}, []string{"--key 不能为空", "清除凭据请用 --clear-credential"}},
+		{"sudo-password whitespace", []string{"--sudo-password", "  "}, []string{"--sudo-password 不能为空"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := run(append([]string{"servers", "edit", "enc"}, tc.args...)...)
+			if err == nil {
+				t.Fatalf("edit %v must fail, got success", tc.args)
+			}
+			for _, sub := range tc.wantSub {
+				if !strings.Contains(err.Error(), sub) {
+					t.Fatalf("error must mention %q, got: %v", sub, err)
+				}
+			}
+			if n := credCount(t); n != 2 {
+				t.Fatalf("credential rows must stay 2 after rejection, got %d", n)
+			}
+			after := inspect(t)
+			if after.CredentialID != oldCred || after.SudoCredentialID != oldSudo || after.AuthMethod != before.AuthMethod {
+				t.Fatalf("rejected edit must leave the server's credential bindings unchanged:\nbefore %+v\nafter  %+v", before, after)
+			}
+		})
+	}
+}
+
 // TestServersEditClearCredential (Plan 21 A2): --clear-credential is the
 // reverse operation of re-credential — an EXCLUSIVE action that resets the
 // server to the credential-less form (store ClearServerCredential). Mutually

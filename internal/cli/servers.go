@@ -242,6 +242,19 @@ func serversEditCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "cleared credentials for %s\n", srv.Name)
 				return nil
 			}
+			// An explicitly-passed empty/whitespace value is a quoting or
+			// typo artifact, NOT a "clear my credential" request: minting an
+			// empty-secret row would brick exec with a confusing auth failure
+			// (Plan 22 T2). Clearing is --clear-credential's exclusive job.
+			if pwSet && strings.TrimSpace(password) == "" {
+				return fmt.Errorf("--password 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）")
+			}
+			if keySet && strings.TrimSpace(keyPath) == "" {
+				return fmt.Errorf("--key 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）")
+			}
+			if cmd.Flags().Changed("sudo-password") && strings.TrimSpace(sudoPassword) == "" {
+				return fmt.Errorf("--sudo-password 不能为空（更换凭据请给新值）")
+			}
 			var cred, sudoCred *models.Credential
 			switch {
 			case pwSet:
