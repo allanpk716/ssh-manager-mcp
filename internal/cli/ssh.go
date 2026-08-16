@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"ssh-manager-mcp/internal/sshbroker"
-	sshmanstore "ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 )
 
@@ -60,7 +60,7 @@ func newSSHCmd() *cobra.Command {
 			cli, err := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
 			if err != nil {
 				status = "error"
-				_ = st.WriteAudit(sshmanstore.AuditRow{TS: start, ServerID: srv.ID, Action: "exec", Command: commandStr, Status: status, DurationMS: time.Since(start).Milliseconds()})
+				_ = st.WriteAudit(store.AuditRow{TS: start, ServerID: srv.ID, Action: "exec", Command: commandStr, Status: status, DurationMS: time.Since(start).Milliseconds()})
 				return err
 			}
 			defer cli.Close()
@@ -71,7 +71,7 @@ func newSSHCmd() *cobra.Command {
 			if res.TimedOut {
 				status = "timeout"
 			}
-			_ = st.WriteAudit(sshmanstore.AuditRow{
+			_ = st.WriteAudit(store.AuditRow{
 				TS: start, ServerID: srv.ID, Action: "exec", Command: commandStr,
 				Status: status, ExitCode: res.ExitCode, DurationMS: time.Since(start).Milliseconds(),
 			})
