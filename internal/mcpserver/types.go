@@ -49,7 +49,7 @@ type DownloadOutput struct {
 // (= the agent's) filesystem; RemotePath is the destination on the server.
 type UploadInput struct {
 	ServerID   string `json:"server_id" jsonschema:"server id from list_servers"`
-	LocalPath  string `json:"local_path" jsonschema:"absolute local path (on your machine) of the file or directory to push to the server; a directory is uploaded recursively, preserving relative paths"`
+	LocalPath  string `json:"local_path" jsonschema:"absolute local path (on the machine the broker runs on) of the file or directory to push to the server; a directory is uploaded recursively, preserving relative paths"`
 	RemotePath string `json:"remote_path" jsonschema:"absolute destination path on the server; its parent directory is created if it does not exist"`
 }
 
