@@ -161,7 +161,17 @@ func scanClearTargets(_ roles.Role) []clearTarget {
 				add("serve", filepath.Join(vd, c.file))
 			}
 		}
+		// serve log + its rotated generation (Plan 22 T4: a >5MiB serve.log is
+		// rotated to serve.log.1, one generation kept). Like the cache DEK,
+		// paths.ServeLogPath pins to the PROGRAM-FIXED vault dir unless
+		// SSHMGR_SERVE_LOG is set, so it may differ from vd on a relocated
+		// machine — enumerate BOTH resolutions, deduped.
 		add("serve", filepath.Join(vd, paths.ServeLogFilename))
+		add("serve", filepath.Join(vd, paths.ServeLogFilename+".1"))
+		if lp, err := paths.ServeLogPath(); err == nil {
+			add("serve", lp)
+			add("serve", lp+".1")
+		}
 	}
 	// master.key: env-aware (SSHMGR_FILEKEY_PATH), may live outside the vault dir.
 	if mk, err := paths.MasterKeyPath(); err == nil {

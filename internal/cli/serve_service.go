@@ -124,23 +124,72 @@ func (p *program) Start(s service.Service) error {
 	return nil
 }
 
-// run opens the vault and calls mcpserver.RunServe. Errors are written to
-// stderr (the service manager captures stderr per-platform: EventLog on
-// Windows, journald on systemd, syslog on macOS — kardianos wires this via
-// the Logger interface when callers use it; we use stderr directly which the
-// service manager also captures). The ctx is cancelled by Stop.
+// serveLogRotateBytes is the serve.log rotation threshold: an existing log
+// larger than this is rotated (renamed to serve.log.1) when the sink opens.
+const serveLogRotateBytes = 5 << 20 // 5 MiB
+
+// openServeLog returns the serve.log file sink for the SERVICE path, rotating
+// first: a >5MiB serve.log is renamed to serve.log.1 (ONE generation kept —
+// the previous .1 is overwritten; os.Rename replaces an existing destination
+// on every platform), then the fresh serve.log is opened O_APPEND 0o600.
+//
+// ANY failure returns nil — serve must never fail because logging failed. The
+// caller (program.run) falls back to stderr-only, which the platform service
+// manager still captures (EventLog / journald / syslog).
+//
+// Why a file sink at all (Plan 22 T4): stderr under a service manager goes to
+// Windows EventLog, which is painful to inspect on a headless production box
+// and records NOTHING on normal operation — a plain, greppable serve.log next
+// to the vault makes the NUC10 broker debuggable.
+func openServeLog() *os.File {
+	p, err := paths.ServeLogPath()
+	if err != nil {
+		return nil
+	}
+	if fi, err := os.Stat(p); err == nil && fi.Size() > serveLogRotateBytes {
+		_ = os.Rename(p, p+".1") // best-effort; a failed rename still appends below
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil
+	}
+	return f
+}
+
+// run opens the vault and calls mcpserver.RunServe. Output goes to stderr
+// (the service manager captures stderr per-platform: EventLog on Windows,
+// journald on systemd, syslog on macOS) AND, when the rotating file sink
+// opens, to serve.log (Plan 22 T4 — see openServeLog). The ctx is cancelled
+// by Stop.
 func (p *program) run(ctx context.Context) {
 	defer close(p.doneCh)
+	var w io.Writer = os.Stderr
+	if f := openServeLog(); f != nil {
+		w = io.MultiWriter(os.Stderr, f)
+		defer f.Close()
+	}
 	st, err := vault.OpenStore(store.FileKeyProvider{})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager serve (service): open vault: %v\n", err)
+		fmt.Fprintf(w, "ssh-manager serve (service): open vault: %v\n", err)
 		return
 	}
 	defer st.Close()
 	// Post-auto-TLS: RunServe always serves TLS (self-signed when p.tlsCert is
 	// empty), so the old "plaintext on non-loopback" warning no longer applies.
+	//
+	// Startup line for serve.log: RunServe prints its own post-bind
+	// "listening on" line to stderr, but offers no injectable writer (its
+	// internals are out of scope for this task), so we emit an honest
+	// PRE-bind line through w — the file sink records every serve start with
+	// the addr + TLS mode. tlsLabel mirrors RunServe's computation: "auto" =
+	// self-signed auto-TLS (tlsCert empty), "true" = explicit --tls-cert.
+	tlsLabel := "true"
+	if p.tlsCert == "" {
+		tlsLabel = "auto"
+	}
+	fmt.Fprintf(w, "ssh-manager serve (service): starting serve on %s (tls=%s)\n", p.addr, tlsLabel)
 	if err := mcpserver.RunServe(ctx, st, p.addr, p.tlsCert, p.tlsKey); err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager serve (service): %v\n", err)
+		fmt.Fprintf(w, "ssh-manager serve (service): %v\n", err)
 	}
 }
 

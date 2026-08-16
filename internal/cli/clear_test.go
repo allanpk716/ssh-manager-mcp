@@ -27,6 +27,7 @@ func withClearDirs(t *testing.T) (vaultDir, userDir string) {
 	t.Setenv("SSHMGR_MASTERKEY_HEX", "")
 	t.Setenv("SSHMGR_CACHE_DIR", "")
 	t.Setenv("SSHMGR_CACHE_DEK", filepath.Join(vaultDir, "cache-dek.key"))
+	t.Setenv("SSHMGR_SERVE_LOG", filepath.Join(vaultDir, "serve.log")) // Plan 19 T7 lesson: pin the seam or clear's enumeration Stats the real vault dir
 	t.Setenv("SSHMGR_SERVE_CERT", "")
 	t.Setenv("SSHMGR_SERVE_KEY", "")
 	t.Setenv("SSHMGR_SERVE_MARKER", "")

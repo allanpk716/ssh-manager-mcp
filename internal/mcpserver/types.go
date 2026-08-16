@@ -57,7 +57,7 @@ type UploadInput struct {
 type UploadOutput struct {
 	Files     int   `json:"files" jsonschema:"number of files uploaded (>=1; >1 if local_path was a directory)"`
 	Bytes     int64 `json:"bytes" jsonschema:"total bytes uploaded (may be less than the source size when truncated=true)"`
-	Truncated bool  `json:"truncated,omitempty" jsonschema:"true if the 1 MiB total cap was hit mid-upload (only a partial tree landed — retry with a smaller payload)"`
+	Truncated bool  `json:"truncated,omitempty" jsonschema:"true if the 1 MiB total cap was hit mid-upload (the file in flight still lands complete — a single over-cap file lands whole; in a directory upload the files after it are not uploaded)"`
 }
 
 // ForwardInput is the forward_port tool input. forward_port opens a local TCP

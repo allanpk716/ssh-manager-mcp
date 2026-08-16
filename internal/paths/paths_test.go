@@ -47,6 +47,24 @@ func TestCacheDekPath(t *testing.T) {
 	}
 }
 
+func TestServeLogPath(t *testing.T) {
+	// Default: serve.log under VaultDir.
+	t.Setenv("SSHMGR_SERVE_LOG", "")
+	got, err := ServeLogPath()
+	if err != nil {
+		t.Fatalf("ServeLogPath: %v", err)
+	}
+	if dir, _ := VaultDir(); filepath.Dir(got) != dir || filepath.Base(got) != "serve.log" {
+		t.Fatalf("ServeLogPath = %s, want serve.log under VaultDir %s", got, dir)
+	}
+
+	// Env override (test/relocate seam — same pattern as SSHMGR_CACHE_DEK).
+	t.Setenv("SSHMGR_SERVE_LOG", "/tmp/custom-serve.log")
+	if p, _ := ServeLogPath(); p != "/tmp/custom-serve.log" {
+		t.Fatalf("SSHMGR_SERVE_LOG override ignored: %s", p)
+	}
+}
+
 func winOrUnix(win, unix string) string {
 	if runtime.GOOS == "windows" {
 		return win
