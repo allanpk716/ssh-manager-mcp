@@ -31,7 +31,9 @@ type UploadResult struct {
 //   - per-file pre-flight: any single file whose size is STRICTLY greater than
 //     maxBytes is refused BEFORE transfer (zero bytes of it move, no remote file
 //     is created) with capRefusedError naming file/size/cap; files completed
-//     before the refusal remain. Exactly == cap is allowed.
+//     before the refusal remain. Exactly == cap is allowed. In dir walks a
+//     symlink is measured by its TARGET (os.Stat follow, Plan 24) so the gate
+//     matches the follow-the-link transfer, and a broken link is a walk error.
 //   - cumulative walk-halt: when every file is within the cap but the running
 //     total crosses it, Truncated=true and the walk halts BETWEEN files — the
 //     in-flight file lands complete (see uploadFile's per-file-atomic note).
@@ -125,7 +127,10 @@ func uploadFile(sc *sftp.Client, localPath, remotePath string, ctr *countingWrit
 // the walk's own FileInfo BEFORE uploadFile — zero bytes of it transfer, no
 // remote file is created, the walk stops there, and the refusal error propagates
 // to the caller (unlike errCapStop, which is swallowed); files completed before
-// the refusal remain. Separately, the walk halts (errCapStop) the moment the
+// the refusal remain. EXCEPTION (Plan 24): under an armed cap a symlink entry
+// is re-stat'ed with follow so the gate sees the TARGET's size — the transfer
+// follows the link, so the check must too; a broken link (stat failure)
+// propagates as a walk error. Separately, the walk halts (errCapStop) the moment the
 // counter flags truncation, so no new file is started once the CUMULATIVE total
 // crosses the cap — that layer only ever sees files within the per-file bound.
 // The root dir itself is the first entry visited, so remoteRoot is always
@@ -146,8 +151,24 @@ func uploadDir(sc *sftp.Client, localRoot, remoteRoot string, ctr *countingWrite
 		if info.IsDir() {
 			return sc.Mkdir(target)
 		}
-		if ctr.cap > 0 && info.Size() > ctr.cap {
-			return capRefusedError(walkPath, info.Size(), ctr.cap)
+		// Symlink gate alignment (Plan 24): Walk's FileInfo is lstat-based — a
+		// symlink reports its OWN (tiny) size, which would slip under the cap
+		// gate below, while uploadFile follows the link and transfers the
+		// TARGET's bytes (check and behavior disagreed; the gate was
+		// bypassable). When the gate is armed, re-stat with follow so it sees
+		// the real size; a broken link fails here and propagates as a walk
+		// error naming the path instead of erroring mid-transfer. Non-symlink
+		// entries keep Walk's FileInfo — no extra syscall on the common path.
+		size := info.Size()
+		if ctr.cap > 0 && info.Mode()&os.ModeSymlink != 0 {
+			st, err := os.Stat(walkPath)
+			if err != nil {
+				return err
+			}
+			size = st.Size()
+		}
+		if ctr.cap > 0 && size > ctr.cap {
+			return capRefusedError(walkPath, size, ctr.cap)
 		}
 		return uploadFile(sc, walkPath, target, ctr, res)
 	})
