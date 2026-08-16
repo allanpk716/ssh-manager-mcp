@@ -134,8 +134,49 @@ func uploadFile(sc *sftp.Client, localPath, remotePath string, ctr *countingWrit
 // counter flags truncation, so no new file is started once the CUMULATIVE total
 // crosses the cap — that layer only ever sees files within the per-file bound.
 // The root dir itself is the first entry visited, so remoteRoot is always
-// created before any child lands in it.
+// created before any child lands in it. Plan 26: the root is first resolved
+// via filepath.EvalSymlinks (plus an explicit junction follow-through on
+// Windows, whose reparse points EvalSymlinks skips) so a symlink/junction
+// root (which Upload's entry Stat already followed) is walked as the real
+// directory rather than misclassified by Walk's lstat as a file.
 func uploadDir(sc *sftp.Client, localRoot, remoteRoot string, ctr *countingWriter, res *UploadResult) error {
+	// Root resolution (Plan 26): Upload's entry os.Stat FOLLOWS links (so a
+	// linked dir root reaches here), but filepath.Walk lstats the root and
+	// would misclassify it as a file. Resolve once up front so the walk starts
+	// at the real directory; nested entries keep lstat semantics (Task 2 adds
+	// an explicit refusal for symlinked sub-directories).
+	resolved, rerr := filepath.EvalSymlinks(localRoot)
+	if rerr != nil {
+		return rerr
+	}
+	// Windows junctions Lstat as ModeIrregular ("?"), which EvalSymlinks
+	// skips (it follows only ModeSymlink), so a junction root would slip
+	// through unresolved — the walk would still misclassify it as a file.
+	// Keep following any reparse point Readlink accepts (symlink or
+	// junction) to a fixpoint; the iteration cap mirrors the kernel's
+	// ELOOP bound (symlink cycles must terminate, not hang).
+	links := 0
+	for {
+		fi, ferr := os.Lstat(resolved)
+		if ferr != nil {
+			return ferr
+		}
+		if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) == 0 {
+			break
+		}
+		if links++; links > 64 {
+			return fmt.Errorf("root %s: too many levels of symbolic links", localRoot)
+		}
+		target, terr := os.Readlink(resolved)
+		if terr != nil {
+			return terr
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(resolved), target)
+		}
+		resolved = target
+	}
+	localRoot = resolved
 	walkErr := filepath.Walk(localRoot, func(walkPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err

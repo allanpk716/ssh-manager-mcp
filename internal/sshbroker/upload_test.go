@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -475,4 +477,53 @@ func TestUploadCancelContext(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Fatalf("Upload took %v on pre-cancelled ctx, want < 2s", elapsed)
 	}
+}
+
+// TestUploadDirSymlinkRootResolved (Plan 26): a symlink/junction used AS the
+// upload root is resolved to its target — Upload's os.Stat already follows the
+// link (says "dir"), but filepath.Walk lstats the root and would misclassify
+// it as a file. EvalSymlinks at uploadDir entry makes root handling follow the
+// operator's intent. Windows lane exercises this via a junction (mklink /J,
+// no privilege needed); unix via os.Symlink (skip when unprivileged).
+func TestUploadDirSymlinkRootResolved(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	real := t.TempDir()
+	if err := os.WriteFile(filepath.Join(real, "a.txt"), []byte("root-link\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link-root")
+	if err := makeDirLink(t, link, real); err != nil {
+		t.Skipf("dir link creation failed on this host (%v); skipping", err)
+	}
+
+	remoteDir := filepath.Join(t.TempDir(), "up-link-root")
+	res, err := c.Upload(context.Background(), link, remoteDir, 0)
+	if err != nil {
+		t.Fatalf("symlink-root Upload: %v", err)
+	}
+	if res.Files != 1 || res.Bytes != int64(len("root-link\n")) {
+		t.Fatalf("result = %+v, want {Files:1 Bytes:%d}", res, len("root-link\n"))
+	}
+	g, err := c.Download(context.Background(), filepath.Join(remoteDir, "a.txt"), 0)
+	if err != nil || g.Content != "root-link\n" {
+		t.Fatalf("round-trip: err=%v content=%q", err, g.Content)
+	}
+}
+
+// makeDirLink creates link pointing at dir target: junction on Windows
+// (privilege-free), symlink elsewhere.
+func makeDirLink(t *testing.T, link, dir string) error {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		out, err := exec.Command("cmd", "/c", "mklink", "/J", link, dir).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("mklink /J: %v: %s", err, out)
+		}
+		return nil
+	}
+	return os.Symlink(dir, link)
 }
