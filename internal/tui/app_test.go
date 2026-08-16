@@ -72,20 +72,31 @@ func TestApp_QuitOnQ(t *testing.T) {
 // overlay's Init cmd comes back); g must be a NO-OP here — it is the profiles
 // page's grant key, and per-page dispatch is what keeps the overlapping
 // letters (a/e/d on servers AND projects) from swallowing each other. `i`
-// (ssh-config import) landed in Task 10.
+// (ssh-config import) landed in Task 10. The emptyList cases (Plan 21 T3) pin
+// the no-current-target guard: with ZERO servers, e/d must be silent no-ops
+// (overlay stays nil, nil cmd, no panic) — `a`/`i` still work on an empty
+// list, but the selection-dependent keys must not invent a target.
 func TestServersPageDispatch(t *testing.T) {
 	cases := []struct {
 		key         string
 		wantOverlay string // "" = the key must be a no-op on this page
+		emptyList   bool   // drive against an EMPTY servers list
 	}{
-		{"a", "新增服务器"},
-		{"e", "编辑服务器"},
-		{"d", "删除服务器"},
-		{"i", "导入 ssh config"},
-		{"g", ""},
+		{"a", "新增服务器", false},
+		{"e", "编辑服务器", false},
+		{"d", "删除服务器", false},
+		{"i", "导入 ssh config", false},
+		{"g", "", false},
+		{"e", "", true},
+		{"d", "", true},
 	}
 	for _, c := range cases {
 		a := newTestApp(t) // fresh app per key: one seeded server at cursor 0
+		if c.emptyList {
+			sp, _ := a.pages[pageServers].(*serversPage)
+			sp.items = nil
+			sp.rebuild()
+		}
 		m, cmd := a.Update(tea.KeyPressMsg{Code: rune(c.key[0]), Text: c.key})
 		got := m.(App)
 		if c.wantOverlay == "" {

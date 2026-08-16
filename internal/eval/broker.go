@@ -49,8 +49,9 @@ type seedServer struct{ ID, Name string }
 // SudoCredentialID — all granted to ONE profile, one project + token, writes the
 // master key into an eval-private plaintext file inside the tempdir via
 // FileKeyProvider.Set, and writes an isolated .mcp.json that points the broker
-// subprocess at that file via SSHMGR_FILEKEY_PATH (mirroring production: NO
-// secret inlined in the spawn env). Returns the mcp config path, the plaintext
+// subprocess at that file via SSHMGR_FILEKEY_PATH, with the project token in
+// the env field (SSHMGR_TOKEN — the production generators' form; the master
+// key is never inlined in the spawn env). Returns the mcp config path, the plaintext
 // token the MCP client presents, the master key as hex, the seeded server ids
 // (in the SAME ORDER as names), and a cleanup func.
 //
@@ -129,8 +130,9 @@ func seedBroker(t *testing.T, host string, port int, names []string) (mcpConfigP
 
 	// 3. Project + token. AddProject generates the plaintext token internally and
 	// stores hash/salt/prefix, returning the plaintext exactly once. The plaintext
-	// goes into mcp.json args; VerifyToken(plaintext) accepts it because the hash
-	// was derived from the same plaintext via the store's own HashToken.
+	// rides the mcp.json env (SSHMGR_TOKEN — the Plan 20 B2 production form, off
+	// argv); VerifyToken(plaintext) accepts it because the hash was derived from
+	// the same plaintext via the store's own HashToken.
 	_, plaintextToken, err = st.AddProject("eval", pid)
 	if err != nil {
 		st.Close()
@@ -153,17 +155,21 @@ func seedBroker(t *testing.T, host string, port int, names []string) (mcpConfigP
 	}
 
 	// 5. Write the isolated .mcp.json. The env carries the store path + the
-	// eval-private master-key file path — NO secret material. The broker
-	// subprocess unlocks the vault by reading the file the eval just seeded.
+	// eval-private master-key file path + the project token via SSHMGR_TOKEN
+	// (the Plan 20 B2 generator form: token off argv, argv carries just "mcp")
+	// — the only secret in the spawn env is the token, which production's own
+	// `.mcp.json` generators put there too. The broker subprocess unlocks the
+	// vault by reading the file the eval just seeded.
 	masterKeyHex = hex.EncodeToString(mk)
 	mcp := map[string]any{
 		"mcpServers": map[string]any{
 			"ssh": map[string]any{
 				"command": binPath,
-				"args":    []string{"mcp", "--token", plaintextToken},
+				"args":    []string{"mcp"},
 				"env": map[string]string{
 					"SSHMGR_STORE":        storePath,
 					"SSHMGR_FILEKEY_PATH": evalMKPath,
+					"SSHMGR_TOKEN":        plaintextToken,
 				},
 			},
 		},
@@ -314,10 +320,11 @@ func wireBrokerLocked(t *testing.T, host string, port int) (mcpConfigPath, plain
 		"mcpServers": map[string]any{
 			"ssh": map[string]any{
 				"command": binPath,
-				"args":    []string{"mcp", "--token", plaintextToken},
+				"args":    []string{"mcp"},
 				"env": map[string]string{
 					"SSHMGR_STORE":        storePath,
 					"SSHMGR_FILEKEY_PATH": lockedMKPath,
+					"SSHMGR_TOKEN":        plaintextToken,
 				},
 			},
 		},
@@ -467,15 +474,17 @@ func wireBrokerTwoProfile(t *testing.T, host string, port int) (mcpConfigPath, p
 	}
 
 	// 4. Write the isolated .mcp.json (env carries store path + eval master-key
-	//    file path, NO secret — same shape as seedBroker).
+	//    file path + the project token via SSHMGR_TOKEN — same env-token shape
+	//    as seedBroker; master-key material stays out of the spawn env).
 	mcp := map[string]any{
 		"mcpServers": map[string]any{
 			"ssh": map[string]any{
 				"command": binPath,
-				"args":    []string{"mcp", "--token", plaintextToken},
+				"args":    []string{"mcp"},
 				"env": map[string]string{
 					"SSHMGR_STORE":        storePath,
 					"SSHMGR_FILEKEY_PATH": evalMKPath,
+					"SSHMGR_TOKEN":        plaintextToken,
 				},
 			},
 		},

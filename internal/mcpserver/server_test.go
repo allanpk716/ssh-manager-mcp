@@ -10,9 +10,55 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/testsshd"
 )
+
+// TestServerInfoCarriesBuildinfoVersion pins the initialize handshake's
+// serverInfo to buildinfo.Version — the same ldflags-injected source the CLI
+// `version` command reads, so a release build's MCP handshake can never drift
+// from its binary version (a "dev" serverInfo on a tagged release is the
+// regression this pins). Path note (the brief's either/or): the go-sdk v1.2.0
+// exposes (*ClientSession).InitializeResult() — "only set synchronously during
+// Client.Connect" per client.go — so the accessor path was chosen over
+// extracting a serverImplementation() helper: the assertion runs through the
+// REAL in-memory client handshake (the server_test.go:30 pattern), pinning the
+// wiring end-to-end rather than a helper's return value.
+func TestServerInfoCarriesBuildinfoVersion(t *testing.T) {
+	buildinfo.Version = "test-9.9.9"
+	defer func() { buildinfo.Version = "dev" }()
+
+	st := newStore(t)
+	server, mgr, _ := NewServer(st, "p", "proj-test")
+	defer mgr.CloseAll()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
+	t1, t2 := mcp.NewInMemoryTransports()
+	srvSession, err := server.Connect(context.Background(), t1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srvSession.Close()
+	cliSession, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cliSession.Close()
+
+	res := cliSession.InitializeResult()
+	if res == nil {
+		t.Fatal("InitializeResult() = nil after Connect — handshake did not complete")
+	}
+	if res.ServerInfo == nil {
+		t.Fatalf("InitializeResult.ServerInfo = nil: %+v", res)
+	}
+	if res.ServerInfo.Name != "ssh-manager" {
+		t.Fatalf("serverInfo.name = %q, want %q", res.ServerInfo.Name, "ssh-manager")
+	}
+	if res.ServerInfo.Version != "test-9.9.9" {
+		t.Fatalf("serverInfo.version = %q, want %q (buildinfo.Version at handshake time)", res.ServerInfo.Version, "test-9.9.9")
+	}
+}
 
 func TestNewServerToolsScopedViaInMemoryClient(t *testing.T) {
 	st := newStore(t)
