@@ -101,11 +101,14 @@ claude mcp add ssh ssh-manager -e SSHMGR_TOKEN=<TOKEN> -- mcp
 
 ## Project 生命周期：轮换 / 暂停 / 恢复 / 吊销
 
-⚠️ **关键机制——Lazy 生效：** `rotate` / `disable` / `enable` / `revoke` **不是立刻断正在运行的 agent**，而是在 agent **下一次启动 `mcp` 子进程时**生效（token 校验只放行 `status=active` 的 project）。
+⚠️ **关键机制——断连语义按部署模式分四层**（`rotate` / `disable` / `enable` / `revoke` 的生效范围）：
 
-为什么这样设计？**你的机器你做主**：你重启 Claude Code / 它重启 MCP 子进程时，新策略才接管；当前正在跑的会话保留它的访问直到那一步。这意味着：
-- 想立刻掐断某个 agent → 除了 `revoke`/`disable`，还要让客户端重连（重启 Claude Code，或它的 MCP 子进程）。
-- `rotate` 保持 project id 和 profile 不变，**只换 token**。
+1. **stdio（本机 MCP 子进程）——Lazy 生效**：token 校验只在 `mcp` 子进程**下次启动**时跑（只放行 `status=active`）。正在跑的会话保留访问直到你重启 Claude Code（或它的 MCP 子进程）。**你的机器你做主**：这是有意的设计。
+2. **serve（远程 broker）——逐请求即拒**：broker 对**每一个** HTTP 请求都重新验 token，`revoke`/`disable` 后该 project 的**下一个请求立即 401**——不需要等任何重启。
+3. **已建立的 `forward_port` 隧道——不受 revoke 影响，且无 owner 急停**：隧道由 broker 进程持有；被吊销的 project 自己调 `close_port` 会先被第 2 层的 401 挡住；其他人的隧道管理器也够不到它——stdio 会话跑在**独立进程**里，同一 serve broker 上的其他 project 则各有**各自独立的隧道管理器实例**（互不相通）。真实选项只有：**重启 broker**（`serve uninstall`→`install` 或重启机器）/ **等隧道创建后 ~10 分钟自动回收**。（owner 侧急停命令已列 backlog。）
+4. **离线 cache——旧快照不随 revoke 擦除**：`cache-tokens revoke` 只断"拉新"（下次 `cache pull` 被拒）；已落盘的 `cache.bin` 里凭据仍在。**失窃/泄露场景下让已缓存凭据失效的唯一手段是轮换服务器凭据**（`servers edit <name> --password/--key`）。
+
+`rotate` 保持 project id 和 profile 不变，**只换 token**（serve 模式下旧 token 同样逐请求即拒）。
 
 | 命令 | 作用 | token 结果 | `ls` 里是否可见 |
 |---|---|---|---|
@@ -172,7 +175,7 @@ ssh-manager projects add intern   --profile dev
 | 怀疑 token 泄露（`.mcp.json` 被偷看 / 提交到公开仓库了） | `projects rotate <name>` 立刻作废旧 token，换发新的；去客户端更新 `.mcp.json`。 |
 | 某个 agent 要临时停（放假 / 审查中） | `projects disable <name>`，事后 `projects enable <name>` 恢复。 |
 | 某个 agent 彻底不用了 / 离职 | `projects revoke <name>`；审计记录保留。 |
-| 要立刻断正在跑的会话 | revoke/disable 后，**重启那个客户端**（让它重连 MCP）。 |
+| 要立刻断正在跑的会话 | 看模式：serve 远程 agent 下一个请求即拒（无需动作）；stdio 本机会话须重启客户端；既有隧道见「断连语义（四层）」第 3 层（只能重启 broker 或等回收）。 |
 
 ---
 
@@ -194,7 +197,7 @@ ssh-manager projects add intern   --profile dev
 | agent 报 `server is not in your profile` | 你给错了 server（用了名字而非 id，或那台不在它 profile 里）。让它先 `list_servers` 拿 id；或用 `projects show <name>` 核对它到底能碰哪些。 |
 | agent 调工具直接报 token 无效 | token 输错了 / 已 rotate / project 被 disable/revoke。`projects ls` 看 status；必要时 `rotate` 换发并更新 `.mcp.json`。 |
 | `mcp` 启动时 stderr 有 `WARNING: ssh credential files detected` | 你本机有散落的 SSH 私钥/密码文件，agent 可能绕过 broker 直接读它们。按提示删掉，以保持“强制走 broker”的隔离。 |
-| 暂停了 agent 还在跑 | Lazy 机制：disable/revoke 在**下次重连**才接管。重启那个客户端。 |
+| 暂停了 agent 还在跑 | stdio：Lazy，下次重连才接管，重启那个客户端；serve：下一请求即拒，无需动作。详见「断连语义（四层）」。 |
 | Windows 下 agent 说找不到 `ssh-manager` | `.mcp.json` 的 `command` 写绝对路径（`C:\\...\\ssh-manager.exe`）。 |
 
 下一步：去 [scenarios.md](./scenarios.md) 看这些授权在真实任务里长什么样。

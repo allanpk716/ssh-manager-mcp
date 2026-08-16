@@ -567,7 +567,8 @@ serve 自签证书长生（不靠过期驱动轮换），但若私钥疑似泄�
 ## 相关文档
 
 - [getting-started.md](./getting-started.md)——单机 stdio 从零到跑通（**默认模式**，第一次用先看这篇）。
-- [agent-access.md](./agent-access.md)——project token 生命周期（`rotate` / `disable` / `revoke` 的 Lazy 语义）；**serve 模式完全适用**，token 管理在同一台服务器上做。
+- [agent-access.md](./agent-access.md)——project token 生命周期；**断连语义分四层**：serve 模式下吊销**逐请求即拒**（远程 agent 无需重启）；stdio/隧道/离线缓存各有不同（见「断连语义（四层）」一节）。token 管理在同一台服务器上做。
 - [managing-servers.md](./managing-servers.md)——服务器增删改查（在 serve 那台**服务器**上操作）。
 - [scenarios.md](./scenarios.md)——应用场景示例（GPU 巡检、部署、端口转发……，两种模式都适用）。
 - 仓库根 [README 的 "Multi-machine: serve mode"](../README.md#multi-machine-serve-mode-remote-agents-on-a-vlan) 节（英文概览）。
+- [compat-matrix.md](./compat-matrix.md)——client↔serve 版本兼容矩阵（升级任何一端之前先看）。

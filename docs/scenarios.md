@@ -93,7 +93,7 @@ psql -h 127.0.0.1 -p <local_port> -U myuser mydb
 **要点**：
 - `remote_host` 是**从服务器视角看**的目标——通常就是 `127.0.0.1`（服务器自己的回环上的服务）。也能转发到服务器**能访问到的**内网其它机器（`remote_host` 填那台的内网 IP）。
 - `forward_port` = `ssh -L`（本地转发）。**不支持** `-R`（远程）/ `-D`（动态 SOCKS）。
-- 隧道会占住一条 SSH 连接，**约 10 分钟无活动会被后台自动回收**；你或 agent 也可以随时 `close_port` 主动关。
+- 隧道会占住一条 SSH 连接，**创建约 10 分钟后被后台自动回收**（按创建时间计，**不看活动量**——持续有流量也会回收）；你或 agent 也可以随时 `close_port` 主动关。
 - 隧道状态在 broker 进程内——agent / Claude Code 重启后隧道就没了，需要重开。
 
 ---
@@ -155,7 +155,7 @@ ssh-manager projects rotate dev-agent      # 旧 token 立刻失效，打印新 
 ```bash
 ssh-manager projects revoke intern-agent   # token 永久失效；默认从 ls 隐藏
 # 审计记录保留（软删除）。
-# 想立刻断正在跑的会话：重启那个客户端，让它重连 MCP。
+# serve 模式下一请求即拒；stdio 会话重启客户端；隧道见 agent-access「断连语义（四层）」。
 ```
 
 **情况 C：临时暂停（放假 / 审查）。**
@@ -166,7 +166,7 @@ ssh-manager projects disable contractor-agent   # token 被拒
 ssh-manager projects enable  contractor-agent   # 恢复，同一张 token 重新有效
 ```
 
-> Lazy 机制：disable / enable / revoke / rotate 都在 agent **下次重连 MCP** 时接管，详见 [agent-access.md](./agent-access.md) 的“Project 生命周期”一节。
+> 断连语义分四层（stdio=下次重连；serve=逐请求即拒；既有隧道不受 revoke 影响且只能重启 broker/等创建后 ~10 分钟回收；离线 cache 须轮换凭据），详见 [agent-access.md](./agent-access.md) 的「断连语义（四层）」一节。
 
 ---
 
@@ -175,13 +175,13 @@ ssh-manager projects enable  contractor-agent   # 恢复，同一张 token 重�
 有时候你不想经过 agent，想直接在服务器上跑命令。owner CLI 提供了**不受 profile 限制、输出不封顶**的直达通道：
 
 ```bash
-ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑 nvidia-smi，输出原样回来
-ssh-manager ssh gpu                      # （仅传名字 = 想进交互？）不——见下
+ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原样回来
 ```
 
 **要点**：
-- `ssh-manager ssh <name> <command...>` = 用库里存的凭据，直接在命名机器上跑命令，**不受任何 profile 限制**（你是 owner，全权）。输出不封顶（和 agent 路径的 1 MiB 封顶不同）。单命令超时 120s。
-- 这条命令**也不是交互式 shell**：后面的 `<command...>` 是要跑的命令（空格分隔会被拼成一行）。它解决的是“owner 用 broker 里存的凭据直接跑一条命令”，不是给你开个 `ssh -t` 终端。要交互式终端，用你自己的 ssh 客户端（凭据你本来就有）。
+- `ssh-manager ssh <name> <command...>` = 用库里存的凭据，直接在命名机器上跑命令，**不受任何 profile 限制**（你是 owner，全权）。输出不封顶（和 agent 路径的 1 MiB 封顶不同）。单命令（连接+执行共享 120s 超时）。
+- 这条命令**也不是交互式 shell**：后面的 `<command...>` 是要跑的命令（空格分隔会被拼成一行；**不带命令 / 空命令会显式报错**）。它解决的是“owner 用 broker 里存的凭据直接跑一条命令”，不是给你开个 `ssh -t` 终端。要交互式终端，用你自己的 ssh 客户端（凭据需自行已有或另行配置——它们可能只存在本 vault 里）。
+- 连接+执行**共享 120 秒超时**；输出不封顶；**远端非零退出会让本命令以非零码退出**（码值不透传，见 stderr 错误消息；脚本里判断非零即可）。
 - 这条路同样写审计（`action=exec`）。
 
 ---
@@ -205,7 +205,7 @@ ssh-manager ssh gpu                      # （仅传名字 = 想进交互？）�
 - **推文件** → `upload_file`（目录递归；写 root 路径先传 `/tmp` 再 sudo 移）。
 - **连内网服务** → `forward_port` 拿本地端口，用完 `close_port`。
 - **隔离多 agent** → 不同 profile + 不同 project。
-- **出事了** → `rotate`（换卡）/ `disable`（暂停）/ `revoke`（吊销），重启客户端让它立刻接管。
+- **出事了** → rotate（换卡）/ disable（暂停）/ revoke（吊销）——serve 模式下一请求即拒；stdio 会话重启客户端接管；离线缓存场景须轮换服务器凭据（见 agent-access「断连语义（四层）」）。
 - **你自己用** → `ssh-manager ssh <name> <cmd>`，全权直达。
 
 需要更细的命令参数？看 [managing-servers.md](./managing-servers.md)。授权细节？看 [agent-access.md](./agent-access.md)。

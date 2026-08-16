@@ -7,10 +7,12 @@ import (
 	"ssh-manager-mcp/internal/sshbroker"
 )
 
-// forwardIdleTimeout is how long a tunnel may live with no re-asserted activity
-// before the idle sweeper reaps it. The MVP activity signal is the open time
-// (lastActivity = time.Now() in Open); Touch(id) refreshes it for callers that
-// want to keep a long-lived tunnel alive. Default 10 min per Plan 6 §T4.
+// forwardIdleTimeout is how long a tunnel lives before the sweeper reaps it.
+// NOTE: the signal is CREATION time (lastActivity = time.Now() in Open) —
+// Touch(id) exists to refresh it but has NO production caller today, so a
+// tunnel dies ~10 min after creation even under continuous traffic. Making
+// this activity-aware (wiring Touch) is a tracked backlog item. Default 10
+// min per Plan 6 §T4.
 const forwardIdleTimeout = 10 * time.Minute
 
 // forwardSweepInterval is the ticker period for the idle sweeper goroutine.

@@ -49,7 +49,7 @@ type DownloadOutput struct {
 // (= the agent's) filesystem; RemotePath is the destination on the server.
 type UploadInput struct {
 	ServerID   string `json:"server_id" jsonschema:"server id from list_servers"`
-	LocalPath  string `json:"local_path" jsonschema:"absolute local path (on your machine) of the file or directory to push to the server; a directory is uploaded recursively, preserving relative paths"`
+	LocalPath  string `json:"local_path" jsonschema:"absolute local path (on the machine the broker runs on) of the file or directory to push to the server; a directory is uploaded recursively, preserving relative paths"`
 	RemotePath string `json:"remote_path" jsonschema:"absolute destination path on the server; its parent directory is created if it does not exist"`
 }
 
@@ -73,12 +73,14 @@ type ForwardInput struct {
 }
 
 // ForwardOutput is the forward_port tool output. The agent reaches the remote
-// service at 127.0.0.1:local_port on ITS OWN machine (the broker host's
-// loopback) — e.g. curl http://127.0.0.1:<local_port>. Pass tunnel_id to
-// close_port when done (tunnels also auto-close after ~10 min idle).
+// service at 127.0.0.1:local_port on the machine the broker runs on (stdio:
+// the agent's own machine; remote serve: the serve host) — e.g. curl
+// http://127.0.0.1:<local_port> or point your client at it, from that host.
+// Pass tunnel_id to close_port when done (tunnels auto-close ~10 min after
+// creation — creation-based, not activity-based).
 type ForwardOutput struct {
 	TunnelID  string `json:"tunnel_id" jsonschema:"opaque id; pass to close_port when done with the forward"`
-	LocalPort int    `json:"local_port" jsonschema:"the local port now forwarding to remote_host:remote_port — reach it via 127.0.0.1:local_port on your machine"`
+	LocalPort int    `json:"local_port" jsonschema:"the local port now forwarding to remote_host:remote_port — reach it via 127.0.0.1:local_port on the machine the broker runs on"`
 }
 
 // CloseForwardInput is the close_port tool input. The tunnel_id is the opaque

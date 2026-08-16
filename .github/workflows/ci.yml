@@ -1,0 +1,50 @@
+# Test baseline — every push/PR, both lanes. Also the reusable gate the
+# release pipeline calls (release.yml `needs` this workflow's test job), so a
+# v* tag is published only after the SAME matrix passes on the tag commit.
+# Windows lane is load-bearing: 4 `//go:build windows` test files
+# (store/acl, store/dpapi, store/masterkey, tui/istty) never run on ubuntu.
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Gofmt (fail on output)
+        shell: bash
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "gofmt needed on:"; echo "$out"; exit 1
+          fi
+
+      - name: Test
+        run: go test ./... -count=1

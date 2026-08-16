@@ -1,55 +1,114 @@
-# Task 7 Report — `ssh-manager clear`
+# Task 7 Report: Revoke 语义回归测试
 
-**Status: COMPLETE**（含一次测试事故 + 修复，见「事故」节 — 必读）。
+**Status:** ✅ COMPLETE
+**Commit:** `ad451cc`
+**Date:** 2026-08-16
 
-## What was built
+## 任务概述
 
-### `internal/cli/clear.go` (new)
-- `enumClearTargets(role) []string` / 内部 `scanClearTargets` — 按实存枚举（每个候选 os.Stat），类别前缀 `vault:/serve:/client:/task:/role:`：
-  - vault 目录（`storePath()` 的 dir，SSHMGR_STORE-aware，与 roles.vaultRolePath 同一解析）：store.db / -wal / -shm / serve.log / cache-dek.key（vault-dir 版 + `paths.CacheDekPath()` 版，去重）；master.key.plain 走 `paths.MasterKeyPath()`（SSHMGR_FILEKEY_PATH-aware）；serve-cert/key/marker 先 env（SSHMGR_SERVE_CERT/KEY/MARKER）再 vault-dir 相对。
-  - client 目录（`clientops.CachePaths()` dir）：cache.bin / cache.auth.json / cache.meta.json / cache-audit.log。
-  - role.json 两个位置（`roles.RolePath(server)` + `(client)`）。
-  - 非文件标记行：serve 服务安装态（`serveInstalledFn`）、遗留计划任务（`legacyTimerPresentFn`）。
-  - role 参数按契约保留但**不**门控扫描（server 机可能有 client 残留、反之亦然——clear 要抓所有残留）；role 由调用方用于头行与安全网决策。
-- `makeSafetyNet() (path, passphrase, err)` — `openUnlockedStore`（失败→「请先 ssh-manager unlock（clear 不提供无备份删除）」）→ `ExportSnapshot` → json → `store.GenerateToken()` 口令 → `vaultio.Encrypt` → `~/ssh-manager-backup-<UTC时间戳>.sme`（unique-temp+rename、Sync）→ **回读校验**（ReadFile → Decrypt → json.Unmarshal `store.Snapshot`）。store 在返回前 Close（Windows 文件锁会让后续 os.Remove 失败）。任何失败 = 零改动错误。
-- `clearResolveRole()` — `roles.ResolveMode("")` 优先；**出错时回退文件系统探测**（vault 存在→server、否则 client）。原因：role.json 损坏/非法正是 clear 存在的意义，clear 不能被它要修的坏状态 dead-end。
-- `newClearCmd()` 交互时序（spec §3 v2 逐字对齐）：非 TTY 拒绝（「clear 需要交互式终端」）→ 角色头行 + 实存清单 → 「输入 DELETE 确认：」（非 DELETE → 已取消，exit 0，零改动）→ vault 角色：makeSafetyNet（失败中止零改动）→ 打印口令 + 「⚠ 此口令仅显示一次」→「按 y 确认已抄录口令」（非 y → 已取消，exit 0，零改动）→ 幂等执行：`serveUninstallFn`（失败→提权重跑指引中止）→ 逐文件 os.Remove（ENOENT 容忍，其它错误中止+重跑指引）→ `deleteLegacyTimerFn`（失败=warning 不中止）→ `roles.Delete` → 「已清理。下次 ssh-manager tui 将重新进入首次向导。」
-- 服务「已装？」探测选型：`svc.Status()` err==nil（ErrNotInstalled/无服务管理器/探测错误→false）。**探测只驱动清单标记行；执行阶段无条件调用幂等的 `uninstallServeService`**——探测假阴性绝不能留下一个指向已删文件的开机自启服务（crash-loop）。「not installed」结果是打印 no-op，无害。已选型并注释在 `serveServiceInstalled`。
-- 测试注入 seam（均包级 var，生产默认=真实实现）：`clearStdinIsTTY`（含 NUL-device 误报 caveat 注释，与 tui.isTTY 同弱點、行为一致）、`serveInstalledFn`、`serveUninstallFn`、`deleteLegacyTimerFn`、`legacyTimerPresentFn`、`safetyNetHomeDir`。
+本任务是 tests-only 任务，将 Plan 25 Task 6 文档中验证过的两个断连语义事实钉成永久回归测试：
 
-### `internal/cli/clear_timer_windows.go` / `clear_timer_other.go` (new)
-Windows：`schtasks /End`（忽略错误）→ `/Delete /F`；「任务不存在」= 成功（en「cannot find」+ zh「找不到」双 locale 匹配，其它 locale 降级为 warning，非致命）。`legacyTimerPresent` = `/Query` 成功与否。Unix：双 no-op（遗留刷新是 Windows schtask；用户自建 unit 永不触碰，spec §4.2）。
+1. **Layer 1+3**: revoke 后 token 门立即拒绝（VerifyToken 返回 nil），但已建立的隧道继续转发
+2. **Layer 2**: serve HTTP 层对 revoke 后的请求（close_port 和 initialize）返回 401，请求未到达工具层
 
-### `internal/paths/paths.go` (modified — 事故修复)
-`CacheDekPath()` 增加 `SSHMGR_CACHE_DEK` env 覆盖（与 SSHMGR_FILEKEY_PATH 同款 seam）。原因见下节事故。
+## 实施过程
 
-### `internal/cli/root.go` (modified)
-注册 `newClearCmd()`。
+### Step 1: 创建测试文件
 
-## ⚠ 事故：一次测试运行删除了开发机真实的 cache-dek.key（已修复 + 可恢复）
+文件：`internal/mcpserver/revoke_semantics_test.go`
+- 测试 1: `TestRevokedProjectKeepsOpenTunnelForwarding` — 验证 revoke 后已建立的隧道仍能转发
+- 测试 2: `TestServeHTTPRejectsRevokedTokenPerRequest` — 验证 serve HTTP 层对 revoke token 的 401 拒绝
 
-**事实**：初版 `scanClearTargets` 除 vault-dir 相对路径外还枚举 `paths.CacheDekPath()`（belt-and-braces 覆盖 SSHMGR_STORE 迁移机），但该路径当时**无 env 覆盖**、恒指向 `C:\ProgramData\ssh-manager\cache-dek.key`。`TestClear_ServerFullFlow` 的 teardown 循环删除所有枚举文件 → 真实 DEK 被删（目录 mtime 佐证；文件确认消失）。**没有任何测试触碰真实 vault/store.db/凭据**——serve-cert/key 走了 env 分支，AppData 被 t.Setenv 隔离。
+**Brief 代码修正：**
+- 移除了未使用的导入：`io`、`strconv`
+- 移除了未使用的变量：`host`、`port`、`portStr`
+- 这些是 brief 代码的笔误，不影响测试逻辑和语义
 
-**修复**：`CacheDekPath` 增加 `SSHMGR_CACHE_DEK` seam；`withClearDirs` 钉死之。`TestEnumClearTargets_EmptyMachine` 正是抓住泄漏的测试（它 FAIL 在真实文件被枚举）。
+### Step 2: 运行两个测试（预期 PASS）
 
-**恢复**：本机（client 角色）运行 `ssh-manager cache pull` 即可——`loadOrCreateDEK` 会在 DEK 缺失时重新生成并落盘，cache.bin 随之用新 DEK 重写；cache.auth.json（设备码+pin）未被触碰，在线重拉一步完成。**运维需执行这一步。**
+```bash
+go test ./internal/mcpserver/ -run 'TestRevokedProjectKeepsOpenTunnelForwarding|TestServeHTTPRejectsRevokedTokenPerRequest' -v
+```
 
-## Tests (`internal/cli/clear_test.go`) — TDD red→green
-1. `TestEnumClearTargets_ServerMachine` — brief 原文场景：wal/cert/marker/master.key + 同机 client 残留 + 双 role.json 全枚举、前缀齐、未实存（shm/serve-key/cache.bin/…）绝不出现。
-2. `TestEnumClearTargets_EmptyMachine` — 空机零行（即抓住事故泄漏的测试）。
-3. `TestMakeSafetyNet` — 路径名形状 + 口令非空 + Decrypt+Unmarshal 回读通过。
-4. `TestClear_CancelZeroMutation` — 输入 "nope" → 已取消 exit 0，全部 seed 文件（含 role.json、client 残留）仍在，且无安全网文件写出。
-5. `TestClear_YConfirmAbortsAfterSafetyNet` — 钉死 v2 时序：口令展示先于 y 确认；n → 零改动但安全网已存在。
-6. `TestClear_ServerFullFlow` — DELETE+y：安全网恰好 1 份且可用输出中解析出的口令解开；服务卸载+timer 均被调用；8 个文件全删；⚠/已清理/首次向导文案齐。
-7. `TestClear_IdempotentRerun` — client 角色全流程（无安全网），预删 cache.meta.json 后仍全绿，其余（含 vault-dir 的 cache-dek.key、client role.json）全删，timer fn 被调。
-8. `TestClear_NonTTYRefused` — 拒绝文案 + 文件仍在。
-9. `TestClear_LockedVaultRefuses` — 锁定 vault → unlock 指引中止、零改动、无备份。
-10. `TestClear_CorruptRoleJSONStillClears` — role.json 损坏（clear 的存在意义）仍走通：回退探测→安全网→全清。
+**输出：**
 
-## Verification
-`go build ./... && go vet ./... && go test ./... -count=1` 全绿；gofmt 无输出；`GOOS=linux`/`GOOS=darwin` 交叉编译通过（build-tag 文件两面都编）。
+```
+=== RUN   TestRevokedProjectKeepsOpenTunnelForwarding
+    revoke_semantics_test.go:70: before-revoke: tunnel forwarded "ping-before-revoke\n"
+    revoke_semantics_test.go:85: after-revoke: tunnel forwarded "ping-after-revoke\n"
+--- PASS: TestRevokedProjectKeepsOpenTunnelForwarding (0.11s)
+=== RUN   TestServeHTTPRejectsRevokedTokenPerRequest
+--- PASS: TestServeHTTPRejectsRevokedTokenPerRequest (0.05s)
+PASS
+ok  	ssh-manager-mcp/internal/mcpserver	0.947s
+```
 
-## Notes / deviations
-- cache-dek.key 位置：任务指令把它列在 user dir，实际它按 `paths.CacheDekPath()` 活在 vault dir（ProgramData）。枚举按**真实路径**处理，前缀用语义类别 `client:`。
-- spec 示例里的「（N 台服务器的全部凭据）」计数行未实现——计数需开库（锁定时拿不到），清单+安全网已承载该信息。
-- timer 删除失败=warning 不中止（brief 未定失败语义；遗留清理不应卡住主 teardown，且失败信息带手动 schtasks 指引）。
+**结果：** ✅ 两个测试均 PASS，符合预期（行为已存在，测试仅钉住语义）
+
+### Step 3: 全包回归测试
+
+```bash
+go test ./internal/mcpserver/ -count=1
+```
+
+**输出：**
+
+```
+ok  	ssh-manager-mcp/internal/mcpserver	3.503s
+```
+
+**结果：** ✅ 全包回归通过，无回归
+
+### Step 4: Commit
+
+```bash
+git add internal/mcpserver/revoke_semantics_test.go
+git commit -m "test: pin disconnect semantics — token gate rejects immediately, open tunnels survive revocation, serve HTTP 401s pre-tool"
+```
+
+**Commit Hash:** `ad451cc`
+
+## 代码质量检查
+
+### gofmt 检查
+```bash
+gofmt -l internal/mcpserver/revoke_semantics_test.go
+```
+**结果：** ✅ 无输出（格式正确）
+
+## 测试验证的语义事实
+
+### TestRevokedProjectKeepsOpenTunnelForwarding 验证：
+
+1. **Revoke 前**：隧道正常转发（`before-revoke` 探针成功）
+2. **Token 验证**：revoke 前 `VerifyToken` 返回有效 project，revoke 后返回 `nil`（Layer 1 验证）
+3. **Revoke 后**：已建立的隧道继续转发（`after-revoke` 探针成功）（Layer 3 验证）
+
+### TestServeHTTPRejectsRevokedTokenPerRequest 验证：
+
+1. **Revoke 前**：`initialize` 请求返回 200
+2. **Revoke 后**：
+   - `close_port` 请求返回 401（在到达工具层前被拒绝）
+   - `initialize` 请求返回 401（在到达工具层前被拒绝）
+
+## 包依赖使用的 Helper
+
+本测试使用了包内现有的 helper 函数：
+
+- `newStore(t)` — core_test.go:23
+- `seedRealServer(t, st, name, addr, hk, sudoPw)` — core_test.go:248
+- `startEchoListener(t)` — core_test.go:687
+- `NewServer(st, profileID, projectID)` — server.go
+- `ForwardForProfile(ctx, st, projectID, profileID, serverID, remoteHost, remotePort, localPort, mgr)` — core.go:427
+- `NewServeRunner(st)` / `r.HTTPHandler()` — serve.go
+
+## 结论
+
+Task 7 完成度 100%：
+- ✅ 两个语义事实已钉成回归测试
+- ✅ 测试通过（行为符合文档）
+- ✅ 全包回归无问题
+- ✅ 代码格式正确
+- ✅ 已提交到 worktree 分支
+
+这两个测试将成为 CI 基线的一部分，永久监控断连语义的正确性。

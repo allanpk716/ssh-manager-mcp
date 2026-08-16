@@ -41,7 +41,7 @@ The MCP server exposes these tools — **ssh-functional-equivalent for operating
 | `download_file` | `scp host:path .` | Download a remote file (size-capped; truncated output is flagged). |
 | `upload_file` | `scp -r . host:path` | Upload a local file **or directory** (recursive) to the server. |
 | `forward_port` | `ssh -L` | Open a local port forwarding to a remote service — returns `127.0.0.1:<port>` for the agent to use (e.g. `curl`). |
-| `close_port` | — | Close a forward when done (tunnels also auto-close after idle / on exit). |
+| `close_port` | — | Close a forward when done (tunnels auto-close ~10 min after creation). |
 
 Every tool is **profile-gated** (the agent only reaches servers you granted its project) and **audited** (each call logged with project, server, action, status). Credential bytes never appear in any tool result.
 
@@ -93,9 +93,9 @@ Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor
 
 **Owner access** (you, not the agent) — full access to every server using the stored creds directly:
 ```bash
-ssh-manager ssh gpu nvidia-smi          # run a command
-ssh-manager ssh gpu                     # (your own ssh client; the broker provides creds)
+ssh-manager ssh gpu nvidia-smi          # run ONE command (single, non-interactive)
 ```
+The owner path runs a **single non-interactive command** (connect + exec share one 120-second deadline; output is uncapped; a non-zero remote exit makes the CLI exit non-zero (the code value appears in the error message)). No command → explicit error. Interactive shells are intentionally not provided — for a terminal, use your own SSH client with credentials you already hold or provision separately (they may live only in this vault).
 
 ---
 
@@ -124,7 +124,7 @@ ssh-manager projects revoke  my-agent     # permanent (token rejected; hidden fr
 ssh-manager projects ls [--all]           # status column; --all includes revoked
 ```
 
-**Lifecycle is Lazy:** `rotate` / `disable` / `enable` / `revoke` take effect at the agent's **next `mcp` spawn** (`VerifyToken` admits only `active` projects). A currently-running agent session keeps its access until Claude Code restarts its MCP child — by design (your box, your call). `rotate` keeps the same project id + profile; only the token changes. `revoke` is a soft delete — the token is dead and the project is hidden from `ls`, but the audit row is kept. Every lifecycle action is written to the audit log.
+**Lifecycle:** `rotate` / `disable` / `enable` / `revoke` take effect **per request on a remote serve broker** (the next request is 401-rejected immediately), and **at the agent's next `mcp` spawn in stdio mode** (`VerifyToken` admits only `active` projects — a currently-running local session keeps access until Claude Code restarts its MCP child, by design). Already-open `forward_port` tunnels survive revocation (no owner emergency-stop; broker restart or the ~10-minutes-after-creation reclaim). Offline caches keep working from their last snapshot — rotate server credentials to invalidate them. Full breakdown: `docs/agent-access.md` 「断连语义（四层）」. `rotate` keeps the same project id + profile; only the token changes. `revoke` is a soft delete — the token is dead and the project is hidden from `ls`, but the audit row is kept. Every lifecycle action is written to the audit log.
 
 **Back up / migrate the whole vault:** `ssh-manager export` / `import` — a portable, passphrase-encrypted file (backup / migration / disaster recovery). Full guide (中文): [`docs/backup-restore.md`](docs/backup-restore.md).
 
