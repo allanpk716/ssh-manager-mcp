@@ -267,6 +267,133 @@ func TestUploadCapBoundarySingleFile(t *testing.T) {
 	}
 }
 
+// TestUploadCapRefusesSymlinkToOverCapFileInDir (Plan 24): uploadDir's pre-flight
+// used Walk's lstat FileInfo — a symlink reports its OWN tiny size, slipping
+// under the per-file cap, while uploadFile FOLLOWS the link and transfers the
+// TARGET's bytes (check and behavior disagreed; the gate was bypassable). With
+// the fix a symlink entry under an armed cap is re-stat'ed with follow, so the
+// gate sees the target's real size: a symlink to a cap+1 file (target OUTSIDE
+// the tree, so only the link is walked) is refused pre-transfer — the error
+// names the symlink path + the TARGET's size + cap, zero bytes of the target
+// move, no remote file for the link, and the small file that sorted first
+// remains complete. Windows note: os.Symlink for a FILE link works without
+// admin when Developer Mode is on; otherwise this test skips with a message.
+func TestUploadCapRefusesSymlinkToOverCapFileInDir(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	// a-small.txt (1 KiB, sorts FIRST) uploads complete; z-link.bin → big.bin
+	// (cap+1 bytes, outside src) is visited second and refused on the target's
+	// real size.
+	src := t.TempDir()
+	small := bytes.Repeat([]byte("s"), 1<<10)
+	if err := os.WriteFile(filepath.Join(src, "a-small.txt"), small, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bigPath := filepath.Join(t.TempDir(), "big-target.bin")
+	if err := os.WriteFile(bigPath, bytes.Repeat([]byte("x"), int(mcpUploadCap)+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(src, "z-link.bin")
+	if err := os.Symlink(bigPath, linkPath); err != nil {
+		t.Skipf("os.Symlink failed on this host (%v) — Windows needs Developer Mode/admin for symlink creation; skipping symlink cap-gate test", err)
+	}
+
+	remoteDir := filepath.Join(t.TempDir(), "up-symlink-refuse")
+	res, err := c.Upload(context.Background(), src, remoteDir, mcpUploadCap)
+	if err == nil {
+		t.Fatalf("symlink-to-over-cap dir Upload: want refusal error, got nil (res=%+v)", res)
+	}
+	if !strings.Contains(err.Error(), "exceeds upload cap") {
+		t.Fatalf("error must say \"exceeds upload cap\", got %q", err.Error())
+	}
+	if want := fmt.Sprintf("(%d bytes) exceeds upload cap %d", mcpUploadCap+1, mcpUploadCap); !strings.Contains(err.Error(), want) {
+		t.Fatalf("error must carry the TARGET's size+cap evidence %q, got %q", want, err.Error())
+	}
+	if !strings.Contains(err.Error(), "z-link.bin") {
+		t.Fatalf("error must name the symlink path, got %q", err.Error())
+	}
+	// Honest partial accounting: only the small file moved; the target's bytes
+	// contributed nothing.
+	if res.Files != 1 || res.Bytes != int64(len(small)) || res.Truncated {
+		t.Fatalf("result = %+v, want {Files:1 Bytes:%d Truncated:false} (small complete, target zero)", res, len(small))
+	}
+	// The small file REMAINS complete remotely.
+	if fi, err := os.Stat(filepath.Join(remoteDir, "a-small.txt")); err != nil || fi.Size() != int64(len(small)) {
+		t.Fatalf("small file must remain complete remotely (%d bytes): fi=%v err=%v", len(small), fi, err)
+	}
+	// No remote file for the link — refused before transfer, so not even a
+	// zero-byte remote file was created.
+	if _, err := os.Stat(filepath.Join(remoteDir, "z-link.bin")); !os.IsNotExist(err) {
+		t.Fatalf("symlink's remote file must be absent (refused pre-transfer), stat err=%v", err)
+	}
+}
+
+// TestUploadBrokenSymlinkInDirErrors (Plan 24): a dangling symlink under an
+// armed cap fails the follow-stat in the walk callback and the error propagates
+// naming the symlink path (pre-fix it slipped past the lstat-size gate and died
+// later inside uploadFile's open — the names-the-path contract is pinned either
+// way). Skips when the host cannot create symlinks.
+func TestUploadBrokenSymlinkInDirErrors(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	src := t.TempDir()
+	linkPath := filepath.Join(src, "dangling.lnk")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "never-created.bin"), linkPath); err != nil {
+		t.Skipf("os.Symlink failed on this host (%v) — Windows needs Developer Mode/admin for symlink creation; skipping broken-symlink test", err)
+	}
+
+	remoteDir := filepath.Join(t.TempDir(), "up-dangling")
+	res, err := c.Upload(context.Background(), src, remoteDir, mcpUploadCap)
+	if err == nil {
+		t.Fatalf("broken-symlink dir Upload: want error, got nil (res=%+v)", res)
+	}
+	if !strings.Contains(err.Error(), "dangling.lnk") {
+		t.Fatalf("error must name the broken symlink path, got %q", err.Error())
+	}
+}
+
+// TestUploadSymlinkToSmallFileFollowsTarget (Plan 24): the follow semantics the
+// gate now aligns with must be preserved — a symlink to a file WITHIN the cap
+// (gate armed) uploads the TARGET's content under the link's remote name,
+// exactly as scp -r does. Skips when the host cannot create symlinks.
+func TestUploadSymlinkToSmallFileFollowsTarget(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	// Target lives OUTSIDE src so only the link is walked — the one uploaded
+	// file proves its content came from following the link.
+	content := "symlink-target-content\n"
+	target := filepath.Join(t.TempDir(), "target.txt")
+	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(src, "link.txt")); err != nil {
+		t.Skipf("os.Symlink failed on this host (%v) — Windows needs Developer Mode/admin for symlink creation; skipping symlink-follow test", err)
+	}
+
+	remoteDir := filepath.Join(t.TempDir(), "up-symlink-follow")
+	res, err := c.Upload(context.Background(), src, remoteDir, mcpUploadCap)
+	if err != nil {
+		t.Fatalf("symlink-to-small dir Upload: %v", err)
+	}
+	if res.Files != 1 || res.Bytes != int64(len(content)) || res.Truncated {
+		t.Fatalf("result = %+v, want {Files:1 Bytes:%d Truncated:false}", res, len(content))
+	}
+	g, err := c.Download(context.Background(), filepath.Join(remoteDir, "link.txt"), 0)
+	if err != nil || g.Content != content {
+		t.Fatalf("link round-trip: err=%v content=%q, want %q", err, g.Content, content)
+	}
+}
+
 // TestClientMkdirAll verifies the broker MkdirAll helper creates nested parents
 // over SFTP. It is the primitive UploadForProfile uses to ensure remotePath's
 // parent exists before a transfer (T1 carry: Client.Upload uses sftp.Mkdir +
