@@ -48,7 +48,8 @@
 //     broke on zh-CN /Query text; svc.Status() returns a Go byte that is
 //     locale-independent.
 //   - process: is a ssh-manager process running? (best-effort, cross-platform)
-//   - http:    does the bound addr respond? (401/200 = alive + auth gate wired)
+//   - http:    does the probed addr respond over https? (401/200 = alive +
+//     auth gate wired; TLS because serve is TLS-only since auto-TLS — Plan 22 T1)
 //   - vault:   is the master.key present, readable, AND a usable 32-byte key?
 //     (in-process file probe — no log scraping; see vaultStatusString for the
 //     exact failure modes this catches)
@@ -63,6 +64,7 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -214,6 +216,7 @@ service registration is removed. Re-running install later re-registers.`,
 }
 
 func newServeStatusCmd() *cobra.Command {
+	var addr string
 	c := &cobra.Command{
 		Use:   "status",
 		Short: "Report whether the serve service is registered, running, listening, and vault-unlocked",
@@ -221,7 +224,7 @@ func newServeStatusCmd() *cobra.Command {
 
   service: kardianos svc.Status() — Running / Stopped / Unknown / NOT INSTALLED
   process: is a ssh-manager serve process running?
-  http:    does the bound addr respond? (401/200 = auth gate wired)
+  http:    does the bound addr respond over https (TLS)? (401/200 = auth gate wired)
   vault:   is master.key present, readable, AND a usable 32-byte key?
            (in-process file probe — catches missing / corrupt / wrong-length
            master.key that the running serve would crash-loop on at boot)
@@ -231,9 +234,10 @@ running-but-not-listening, listening-but-vault-locked). overall is HEALTHY
 only when all four pass.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServeStatus(cmd)
+			return runServeStatus(cmd, addr)
 		},
 	}
+	c.Flags().StringVar(&addr, "addr", "127.0.0.1:7878", "serve address to probe (if serve was installed/started with a non-default --addr, pass the same value here)")
 	return c
 }
 
@@ -387,10 +391,16 @@ func uninstallServeService(out io.Writer) error {
 // vault-unlocked). Each is printed with its own line so a partial failure is
 // legible (e.g. service Running but HTTP down = serve crashed mid-init).
 //
+// addr is the address the http signal probes (--addr flag, default
+// 127.0.0.1:7878). The registered service's ACTUAL bind addr lives in
+// Config.Arguments; reading it back per-platform is brittle, so the flag is
+// the explicit, minimal seam: an operator who installed with a non-default
+// --addr passes the same value here.
+//
 // The "vault" signal here is a file-level probe of master.key (present,
 // readable, AND a usable 32-byte key) — NOT a probe of the running serve's
 // in-memory vault state. See vaultStatusString for rationale + failure modes.
-func runServeStatus(cmd *cobra.Command) error {
+func runServeStatus(cmd *cobra.Command, addr string) error {
 	out := cmd.OutOrStdout()
 	cfg := &service.Config{Name: serveServiceName, Option: platformServiceOptions()}
 	s, err := service.New(&program{}, cfg)
@@ -398,7 +408,7 @@ func runServeStatus(cmd *cobra.Command) error {
 		if errors.Is(err, service.ErrNoServiceSystemDetected) {
 			fmt.Fprintf(out, "service:   NOT INSTALLED (no service manager detected on this host)\n")
 			fmt.Fprintf(out, "process:   %s\n", boolStr(serveProcessRunning(), "running", "not running"))
-			fmt.Fprintf(out, "http:      %s\n", boolStr(probeServeHTTP("127.0.0.1:7878"), "responding", "not responding"))
+			fmt.Fprintf(out, "http:      %s\n", boolStr(probeServeHTTP(addr), "responding", "not responding"))
 			fmt.Fprintf(out, "vault:     %s\n", vaultStatusString())
 			fmt.Fprintln(out, "overall:   DEGRADED (no service manager)")
 			return nil
@@ -429,11 +439,13 @@ func runServeStatus(cmd *cobra.Command) error {
 	alive := serveProcessRunning()
 	fmt.Fprintf(out, "process:   %s\n", boolStr(alive, "running", "not running"))
 
-	// (c) HTTP-alive: does localhost:7878 respond (401/200 = alive + auth
-	//     works)? Probe the default addr — the registered service's actual
-	//     addr is in Config.Arguments, but reading it back per-platform is
-	//     brittle; the HTTP probe is best-effort anyway.
-	listening := probeServeHTTP("127.0.0.1:7878")
+	// (c) HTTP-alive: does the probed addr respond over https (401/200 =
+	//     alive + auth works)? Probe the --addr flag value (default
+	//     127.0.0.1:7878) — the registered service's actual addr is in
+	//     Config.Arguments, but reading it back per-platform is brittle; the
+	//     HTTP probe is best-effort anyway. An operator who installed with a
+	//     non-default --addr passes the same value to status.
+	listening := probeServeHTTP(addr)
 	fmt.Fprintf(out, "http:      %s\n", boolStr(listening, "responding (401/200 = auth working)", "not responding"))
 
 	// (d) Vault-unlocked: is master.key present, readable, AND a usable key?
@@ -548,12 +560,33 @@ func serveProcessRunning() bool {
 	}
 }
 
-// probeServeHTTP does a 1-second GET to the serve address; a 401 or 200 means
-// serve is up and the auth gate is wired. Any other response or timeout =
-// not-responding. We deliberately accept 401 (Plan 10 bearer-token gate).
+// probeServeHTTP does a 1-second GET to the serve address over TLS; a 401 or
+// 200 means serve is up and the auth gate is wired. Any other response or
+// timeout = not-responding. We deliberately accept 401 (Plan 10 bearer-token
+// gate — it is the CORRECT answer for an unauthenticated probe).
+//
+// https, not http (Plan 22 T1): since auto-TLS, serve is TLS-ONLY (a self-
+// signed cert is generated on first start when no --tls-cert is given), so a
+// plaintext probe could never complete a TLS handshake — `serve status`
+// reported http "not responding" forever on a healthy production serve.
+//
+// InsecureSkipVerify is deliberate: this is a LIVENESS probe against the
+// configured addr, and auto-TLS certs are self-signed (untrusted by the local
+// trust store by construction). Skipping verification here is safe because
+// nothing is transferred — no credentials are sent over the connection, and
+// identity is NOT what this signal asserts (identity is pinned separately via
+// the cert fingerprint, `serve cert-info`). A mis-pointed probe that reaches
+// the wrong HTTPS host still only learns "something answered"; the 401/200
+// status filter does the rest.
 func probeServeHTTP(addr string) bool {
-	client := &http.Client{Timeout: time.Second}
-	resp, err := client.Get("http://" + addr + "/")
+	client := &http.Client{
+		Timeout: time.Second,
+		Transport: &http.Transport{
+			// localhost liveness: self-signed cert — see the rationale above.
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	resp, err := client.Get("https://" + addr + "/")
 	if err != nil {
 		return false
 	}
