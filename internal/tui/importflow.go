@@ -56,7 +56,8 @@ type importFlow struct {
 	suppKeys map[string][]byte // candidate name → in-memory key bytes (condKey re-mint input)
 
 	importedN int
-	report    []string
+	failN     int      // batch insert failures (the result screen's 失败 count)
+	report    []string // per-candidate rows: 已导入… / FAILED: … (unchanged shape)
 	err       error
 }
 
@@ -72,6 +73,7 @@ type importOutcome struct {
 type importDoneMsg struct {
 	outcomes []importOutcome
 	report   []string
+	failed   int // insert failures — surfaced as the result screen's 失败 count
 }
 
 // newImportFlow starts at the path form, prefilled with ~/.ssh/config.
@@ -205,6 +207,7 @@ func (f *importFlow) startBatch() tea.Cmd {
 		keyIDs := map[[32]byte]string{} // sha256(key) -> minted credential id
 		var outcomes []importOutcome
 		var report []string
+		failed := 0
 		for _, cand := range cands {
 			pick := importer.PickKey(cand, configDir, keyIDs)
 			srv := &models.Server{
@@ -216,6 +219,7 @@ func (f *importFlow) startBatch() tea.Cmd {
 			id, err := st.AddServerWithCredentials(srv, pick.Cred, nil)
 			if err != nil {
 				report = append(report, fmt.Sprintf("%-20s FAILED: %v", cand.Name, err))
+				failed++
 				continue // single-candidate failure does not abort the batch
 			}
 			if pick.Minted && pick.Cred != nil && pick.Cred.ID != "" {
@@ -235,7 +239,7 @@ func (f *importFlow) startBatch() tea.Cmd {
 			}
 			outcomes = append(outcomes, importOutcome{srv: srv, key: key})
 		}
-		return importDoneMsg{outcomes: outcomes, report: report}
+		return importDoneMsg{outcomes: outcomes, report: report, failed: failed}
 	}
 }
 
@@ -245,6 +249,7 @@ func (f *importFlow) startBatch() tea.Cmd {
 func (f *importFlow) afterImport(m importDoneMsg) (tea.Model, tea.Cmd) {
 	f.report = append(f.report, m.report...)
 	f.importedN = len(m.outcomes)
+	f.failN = m.failed
 	f.supp = nil
 	for _, o := range m.outcomes {
 		f.supp = append(f.supp, o.srv)
@@ -485,7 +490,7 @@ func (f *importFlow) View() tea.View {
 		b.WriteString(footerStyle.Render("Esc 跳过（保留 ⚠）/ q 结束补全 / 回车提交") + "\n")
 	case stateResult:
 		b.WriteString(titleStyle.Render(" 导入结果 ") + "\n\n")
-		b.WriteString(fmt.Sprintf("导入 %d / 跳过 %d / 待补 %d\n\n", f.importedN, f.skipN, f.pendingCount()))
+		b.WriteString(fmt.Sprintf("导入 %d / 跳过 %d / 失败 %d / 待补 %d\n\n", f.importedN, f.skipN, f.failN, f.pendingCount()))
 		for _, line := range f.report {
 			b.WriteString(line + "\n")
 		}

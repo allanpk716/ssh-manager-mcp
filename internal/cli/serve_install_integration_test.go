@@ -22,9 +22,9 @@
 //     kardianos (Windows Service / systemd / launchd depending on OS).
 //   - step 2: kardianos svc.Status() returns StatusRunning (service actually
 //     started, not just installed — install calls svc.Start()).
-//   - step 3: HTTP GET http://127.0.0.1:<port>/ returns 401 or 200 (Plan 10
-//     bearer-token gate; 401 = auth is wired, the right answer for an
-//     unauthenticated probe).
+//   - step 3: HTTPS GET https://127.0.0.1:<port>/ (auto-TLS self-signed cert,
+//     skip-verify probe) returns 401 or 200 (Plan 10 bearer-token gate; 401 =
+//     auth is wired, the right answer for an unauthenticated probe).
 //   - step 4: master.key is present, readable, AND a usable 32-byte key in the
 //     service-host session — the status probe (vaultStatusString) verifies the
 //     file the running serve reads is structurally valid, catching missing /
@@ -53,6 +53,7 @@ package cli
 
 import (
 	"bytes"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -201,7 +202,7 @@ func TestServeInstallIntegration(t *testing.T) {
 	}
 	t.Logf("step 2: post-install status\n%s", indentBlock(statusOut))
 
-	// === step 3: HTTP 401/200 =============================================
+	// === step 3: HTTPS 401/200 ============================================
 	//
 	// Wait up to 15s for serve to bind the addr (service managers start the
 	// binary asynchronously; serve boots fast but not instantly).
@@ -209,9 +210,9 @@ func TestServeInstallIntegration(t *testing.T) {
 		// Before declaring failure, give the operator the status snapshot so
 		// the diagnostic is in the test log.
 		_, _ = runBin([]string{"serve", "status"}, false)
-		t.Fatalf("step 3: serve did not come up at %s (no HTTP 401/200 within 15s)", addr)
+		t.Fatalf("step 3: serve did not come up at %s (no HTTPS 401/200 within 15s)", addr)
 	}
-	t.Logf("step 3: HTTP probe at %s returned 401/200 (serve up + auth gate wired)", addr)
+	t.Logf("step 3: HTTPS probe at %s returned 401/200 (serve up + auth gate wired)", addr)
 
 	// === step 4: vault decryptable in the service-host session ============
 	//
@@ -305,15 +306,27 @@ func kardianosPlatform() string {
 	return servicePlatform()
 }
 
-// waitForHTTP401 polls http://addr/ until it returns 401 (or 200), up to the
+// waitForHTTP401 polls https://addr/ until it returns 401 (or 200), up to the
 // timeout. Returns true if serve came up within the budget. 401 = auth gate
 // wired (Plan 10 bearer token); 200 = also acceptable (auth passed). Any other
 // status, connection refused, or timeout = false.
+//
+// https, not http (Plan 22 T3, same fix as probeServeHTTP): since auto-TLS,
+// serve is TLS-ONLY (self-signed cert on first start), so a plaintext probe
+// can never complete the handshake — it would report "serve did not come up"
+// forever on a healthy service. InsecureSkipVerify is deliberate: liveness
+// probe, self-signed cert by construction, no credentials transferred (the
+// identity signal is the cert fingerprint elsewhere).
 func waitForHTTP401(t *testing.T, addr string, timeout time.Duration) bool {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
-	client := &http.Client{Timeout: time.Second}
-	url := "http://" + addr + "/"
+	client := &http.Client{
+		Timeout: time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // self-signed liveness probe — see above
+		},
+	}
+	url := "https://" + addr + "/"
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(url)
 		if err == nil {

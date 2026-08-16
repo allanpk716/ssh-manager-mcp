@@ -192,6 +192,65 @@ func TestServersEditRejectsEmptyCredentialValues(t *testing.T) {
 	}
 }
 
+// TestServersEditClearCredentialPrintsPersistedName (Plan 22 T3 hygiene):
+// --clear-credential is an EXCLUSIVE action — field flags passed in the same
+// invocation are NOT applied (early return before the row update), so a --name
+// passed alongside must neither rename the row nor leak into the confirmation
+// line: the print names the server as it is PERSISTED at invocation time, or
+// an operator could walk away believing a rename also happened.
+func TestServersEditClearCredentialPrintsPersistedName(t *testing.T) {
+	dir := t.TempDir()
+	mk, _ := store.GenerateMasterKey()
+	dbPath := filepath.Join(dir, "test.db")
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         dbPath,
+		"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mk),
+		// never the developer machine's real master.key (newVaultEnv pattern)
+		"SSHMGR_FILEKEY_PATH": filepath.Join(dir, "no-such-master.key"),
+	})
+
+	run := func(args ...string) string {
+		root := NewRootCmd()
+		out := &bytes.Buffer{}
+		root.SetOut(out)
+		root.SetErr(out)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("cli %v: %v\n%s", args, err, out.String())
+		}
+		return out.String()
+	}
+
+	run("servers", "add", "--name", "enc", "--host", "h", "--user", "u", "--password", "pw")
+
+	out := run("servers", "edit", "enc", "--name", "renamed", "--clear-credential")
+	if !strings.Contains(out, "cleared credentials for enc") {
+		t.Fatalf("clear must print the PERSISTED name (pre-field-edit), got: %s", out)
+	}
+	if strings.Contains(out, "renamed") {
+		t.Fatalf("clear output must not leak the unapplied --name value: %s", out)
+	}
+
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	enc, _ := st.GetServerByName("enc")
+	if enc == nil {
+		t.Fatal("exclusive clear must not apply the accompanying --name: server \"enc\" vanished")
+	}
+	if enc.Name != "enc" {
+		t.Fatalf("rename must not persist through clear: name=%q", enc.Name)
+	}
+	if renamed, _ := st.GetServerByName("renamed"); renamed != nil {
+		t.Fatal("exclusive clear must not create a renamed row")
+	}
+	if enc.CredentialID != "" || enc.AuthMethod != "" {
+		t.Fatalf("the clear itself must have happened: %+v", enc)
+	}
+}
+
 // TestServersEditClearCredential (Plan 21 A2): --clear-credential is the
 // reverse operation of re-credential — an EXCLUSIVE action that resets the
 // server to the credential-less form (store ClearServerCredential). Mutually

@@ -1,6 +1,7 @@
 package sshbroker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -98,6 +99,57 @@ func TestUpload(t *testing.T) {
 	}
 	if res.Files == 0 {
 		t.Fatalf("capped: Files=0, want at least the file that tripped the cap (res=%+v)", res)
+	}
+}
+
+// mcpUploadCap mirrors mcpserver.MaxOutputBytes (1 MiB — the §6 cap the MCP
+// boundary passes Upload; see UploadForProfile). A local constant, not an
+// import: package sshbroker's tests cannot import mcpserver (mcpserver →
+// sshbroker is an import cycle). The conformance boundary-cap subtest tracks
+// the real constant; this unit test pins the walk-halt semantics at the
+// documented cap size.
+const mcpUploadCap = int64(1 << 20)
+
+// TestUploadCapWalkHaltTwoFiles (Plan 22 T3 hygiene): the §6 cap halts the
+// walk BETWEEN files. A dir whose FIRST file (lexical walk order) already
+// exceeds the cap lands that file COMPLETE (per-file atomic — res.Files counts
+// it), and the second file is never started: absent remotely, not counted.
+// The in-process testsshd serves the host FS, so "remote" stat = os.Stat.
+func TestUploadCapWalkHaltTwoFiles(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	// a-over.bin sorts FIRST in filepath.Walk's lexical order → trips the cap;
+	// z-small.txt (1 KiB) is visited next and must never start.
+	src := t.TempDir()
+	over := bytes.Repeat([]byte("x"), int(mcpUploadCap)+1) // exactly cap+1 bytes
+	if err := os.WriteFile(filepath.Join(src, "a-over.bin"), over, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "z-small.txt"), bytes.Repeat([]byte("s"), 1<<10), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	remoteDir := filepath.Join(t.TempDir(), "up-halt")
+	res, err := c.Upload(context.Background(), src, remoteDir, mcpUploadCap)
+	if err != nil {
+		t.Fatalf("capped dir Upload: %v", err)
+	}
+	if res.Files != 1 || !res.Truncated {
+		t.Fatalf("result = %+v, want {Files:1 Truncated:true} (the over-cap file landed + counted, the walk halted)", res)
+	}
+	if res.Bytes != mcpUploadCap+1 {
+		t.Fatalf("Bytes = %d, want %d (honest total: the over-cap file landed complete, nothing else ran)", res.Bytes, mcpUploadCap+1)
+	}
+	// Second file ABSENT remotely (walk-halt — no new file started post-cap).
+	if _, err := os.Stat(filepath.Join(remoteDir, "z-small.txt")); !os.IsNotExist(err) {
+		t.Fatalf("second file must be absent remotely (walk halted between files), stat err=%v", err)
+	}
+	// The cap tripper landed COMPLETE (the cap never truncates a stream mid-file).
+	if fi, err := os.Stat(filepath.Join(remoteDir, "a-over.bin")); err != nil || fi.Size() != int64(len(over)) {
+		t.Fatalf("over-cap file must land complete (%d bytes): fi=%v err=%v", len(over), fi, err)
 	}
 }
 

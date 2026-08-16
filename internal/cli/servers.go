@@ -185,6 +185,12 @@ func serversEditCmd() *cobra.Command {
 			if srv == nil {
 				return fmt.Errorf("server %q not found", args[0])
 			}
+			// The PERSISTED name, captured before any field edit below applies.
+			// --clear-credential is exclusive (early return, fields not saved),
+			// so its confirmation line must name the server as it lives in the
+			// store — printing the in-memory (possibly --name-edited) value
+			// would suggest a rename that never happened.
+			origName := srv.Name
 			if cmd.Flags().Changed("name") {
 				srv.Name = newName
 			}
@@ -239,7 +245,7 @@ func serversEditCmd() *cobra.Command {
 				if err := s.ClearServerCredential(srv.ID); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "cleared credentials for %s\n", srv.Name)
+				fmt.Fprintf(cmd.OutOrStdout(), "cleared credentials for %s\n", origName)
 				return nil
 			}
 			// An explicitly-passed empty/whitespace value is a quoting or
