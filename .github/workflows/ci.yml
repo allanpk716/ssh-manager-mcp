@@ -7,6 +7,12 @@ name: ci
 
 on:
   push:
+    # branches-only filter: tag pushes do NOT trigger a standalone ci run —
+    # they reach this workflow via release.yml's workflow_call, and both runs
+    # would share the ci-${{ github.ref }} concurrency group (one would
+    # cancel-in-progress the release's own gate). PRs + master pushes run
+    # standalone; v* tags run only as the release gate.
+    branches: [master]
   pull_request:
   workflow_call:
 
