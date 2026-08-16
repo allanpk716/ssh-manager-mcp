@@ -79,7 +79,7 @@ the Fable-5 local-`nvidia-smi` fabrication mode head-on.
 
 The first attempt was `driveAgentT7Restricted` — a clone of `driveAgentLenient`
 that appends `--disallowed-tools Bash Read Write Edit` to the `claude -p` argv,
-closing the residual at the SOURCE. **It was REVERTED** (`8526ad9`): with Bash
+closing the residual at the SOURCE. **It was REVERTED** (`c188b0d`): with Bash
 disallowed AND the broker locked (MCP tools failed to init), Fable 5 had ZERO
 usable tools → it produced only a one-line intent and stopped (T7=0/5,
 unmeasurable — the agent needs Bash to probe/discover the lock). T7 therefore

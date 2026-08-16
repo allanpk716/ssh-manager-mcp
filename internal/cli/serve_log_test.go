@@ -59,7 +59,7 @@ func TestProgramRun_WritesServeLogFile(t *testing.T) {
 	vaultDir, logPath := withServeLogDirs(t)
 	seedServeVault(t, vaultDir)
 
-	p := &program{addr: "127.0.0.1:0"} // ephemeral port: no conflict with a real serve
+	p := &program{addr: "127.0.0.1:0"}   // ephemeral port: no conflict with a real serve
 	if err := p.Start(nil); err != nil { // Start ignores its service.Service arg
 		t.Fatalf("Start: %v", err)
 	}

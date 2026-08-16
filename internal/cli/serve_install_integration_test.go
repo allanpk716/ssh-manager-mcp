@@ -196,7 +196,7 @@ func TestServeInstallIntegration(t *testing.T) {
 	// (NOT localized text — the Status enum is locale-independent, which is
 	// why we moved off PowerShell Get-ScheduledTask.State schtasks /Query).
 	// Poll briefly: service managers don't all flip to Running synchronously.
-	statusOut, err := runBin([]string{"serve", "status"}, false)
+	statusOut, err := runBin([]string{"serve", "status", "--addr", addr}, false)
 	if err != nil {
 		t.Fatalf("step 2: serve status failed: %v\noutput:\n%s", err, statusOut)
 	}
@@ -209,7 +209,7 @@ func TestServeInstallIntegration(t *testing.T) {
 	if !waitForHTTP401(t, addr, 15*time.Second) {
 		// Before declaring failure, give the operator the status snapshot so
 		// the diagnostic is in the test log.
-		_, _ = runBin([]string{"serve", "status"}, false)
+		_, _ = runBin([]string{"serve", "status", "--addr", addr}, false)
 		t.Fatalf("step 3: serve did not come up at %s (no HTTPS 401/200 within 15s)", addr)
 	}
 	t.Logf("step 3: HTTPS probe at %s returned 401/200 (serve up + auth gate wired)", addr)
@@ -230,7 +230,7 @@ func TestServeInstallIntegration(t *testing.T) {
 	// (that is exercised by the authenticated MCP call path in the smoke test,
 	// not by the status probe).
 	time.Sleep(2 * time.Second)
-	statusOut2, _ := runBin([]string{"serve", "status"}, false)
+	statusOut2, _ := runBin([]string{"serve", "status", "--addr", addr}, false)
 	if lines := statusLines(statusOut2); strings.Contains(lines["vault"], "LOCKED") {
 		t.Fatalf("step 4: serve status reports vault LOCKED — master.key is missing, unreadable, or wrong-length in the service-host session\nstatus:\n%s", statusOut2)
 	}
@@ -255,7 +255,7 @@ func TestServeInstallIntegration(t *testing.T) {
 	// report NOT INSTALLED (the kardianos svc.Status() returns StatusUnknown +
 	// ErrNotInstalled when the service is absent; runServeStatus maps that to
 	// the "NOT INSTALLED" service line + a nil error so the command exits 0).
-	postUninstallOut, _ := runBin([]string{"serve", "status"}, false)
+	postUninstallOut, _ := runBin([]string{"serve", "status", "--addr", addr}, false)
 	if !strings.Contains(postUninstallOut, "NOT INSTALLED") && !strings.Contains(postUninstallOut, "not installed") {
 		t.Fatalf("step 5b: post-uninstall status did not report NOT INSTALLED\nstatus:\n%s", postUninstallOut)
 	}
