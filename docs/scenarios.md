@@ -155,7 +155,7 @@ ssh-manager projects rotate dev-agent      # 旧 token 立刻失效，打印新 
 ```bash
 ssh-manager projects revoke intern-agent   # token 永久失效；默认从 ls 隐藏
 # 审计记录保留（软删除）。
-# 想立刻断正在跑的会话：重启那个客户端，让它重连 MCP。
+# serve 模式下一请求即拒；stdio 会话重启客户端；隧道见 agent-access「断连语义（四层）」。
 ```
 
 **情况 C：临时暂停（放假 / 审查）。**
@@ -166,7 +166,7 @@ ssh-manager projects disable contractor-agent   # token 被拒
 ssh-manager projects enable  contractor-agent   # 恢复，同一张 token 重新有效
 ```
 
-> Lazy 机制：disable / enable / revoke / rotate 都在 agent **下次重连 MCP** 时接管，详见 [agent-access.md](./agent-access.md) 的“Project 生命周期”一节。
+> 断连语义分四层（stdio=下次重连；serve=逐请求即拒；既有隧道不受 revoke 影响且只能重启 broker/等创建后 ~10 分钟回收；离线 cache 须轮换凭据），详见 [agent-access.md](./agent-access.md) 的「断连语义（四层）」一节。
 
 ---
 
@@ -205,7 +205,7 @@ ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原
 - **推文件** → `upload_file`（目录递归；写 root 路径先传 `/tmp` 再 sudo 移）。
 - **连内网服务** → `forward_port` 拿本地端口，用完 `close_port`。
 - **隔离多 agent** → 不同 profile + 不同 project。
-- **出事了** → `rotate`（换卡）/ `disable`（暂停）/ `revoke`（吊销），重启客户端让它立刻接管。
+- **出事了** → rotate（换卡）/ disable（暂停）/ revoke（吊销）——serve 模式下一请求即拒；stdio 会话重启客户端接管；离线缓存场景须轮换服务器凭据（见 agent-access「断连语义（四层）」）。
 - **你自己用** → `ssh-manager ssh <name> <cmd>`，全权直达。
 
 需要更细的命令参数？看 [managing-servers.md](./managing-servers.md)。授权细节？看 [agent-access.md](./agent-access.md)。
