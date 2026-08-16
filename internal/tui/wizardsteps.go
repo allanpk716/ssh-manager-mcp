@@ -183,20 +183,25 @@ func (s *wizStaticView) View() tea.View {
 // mcpConfigLines renders the .mcp.json snippet shared by every role's finish
 // screen — only the field lines (args / env) and the notes differ per role
 // (standalone/server run plain `mcp`, the client role runs `mcp --cache`).
+// The "ssh" object's members (command + fieldLines) are collected first and
+// comma-joined as a whole, so the LAST member never carries a trailing comma —
+// an empty fieldLines list yields valid JSON too.
 func mcpConfigLines(fieldLines []string, notes []string) []string {
+	members := make([]string, 0, len(fieldLines)+1)
+	members = append(members, `"command": "ssh-manager"`)
+	members = append(members, fieldLines...)
 	lines := []string{
 		"把下面的片段写进 agent 项目的 .mcp.json：",
 		"",
 		"{",
 		`  "mcpServers": {`,
 		`    "ssh": {`,
-		`      "command": "ssh-manager",`,
 	}
-	for i, fl := range fieldLines {
-		if i < len(fieldLines)-1 {
-			fl += ","
+	for i, m := range members {
+		if i < len(members)-1 {
+			m += ","
 		}
-		lines = append(lines, "      "+fl)
+		lines = append(lines, "      "+m)
 	}
 	lines = append(lines, `    }`, `  }`, "}", "", "说明：")
 	for _, n := range notes {

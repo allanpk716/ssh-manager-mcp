@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/sshbroker"
 
 	"golang.org/x/crypto/ssh"
@@ -32,9 +34,12 @@ const inContainerEchoPort = 9123
 // recursive dir); the reference path uses the real `scp` binary (os/exec). The
 // two remote trees are compared remotely via `ssh diff -r` (busybox diff on the
 // alpine conformance container). Zero differential = the broker's upload
-// matches the industry-standard client. Covers: single-file upload, recursive
-// dir upload with nested subdirs + edge content (empty file, all-256-bytes
-// binary) — enough to exercise directory recursion + non-UTF8 content.
+// matches the industry-standard client. Covers: single-file upload; the §13
+// suite tree (3-level nesting, empty dir, 0-byte file, unicode + space
+// filenames, all-256-bytes binary); and the §6 byte-cap boundary — the one
+// place the broker deliberately diverges from scp (the cap is a security
+// feature; the boundary subtest locks boundary-exactness + honest reporting,
+// NOT scp parity).
 func TestUploadDifferential(t *testing.T) {
 	requireConformance(t)
 	if _, err := exec.LookPath("scp"); err != nil {
@@ -55,41 +60,6 @@ func TestUploadDifferential(t *testing.T) {
 	}
 	defer cli.Close()
 
-	// remoteDiff runs `ssh ... 'diff [-r] A B && echo DIFF-OK'` against the
-	// conformance sshd and fails the test unless the two remote paths are
-	// byte-identical (diff exits 0 → DIFF-OK printed).
-	remoteDiff := func(t *testing.T, recursive bool, a, b string) {
-		t.Helper()
-		flag := "diff"
-		if recursive {
-			flag = "diff -r"
-		}
-		cmd := fmt.Sprintf("%s '%s' '%s' && echo DIFF-OK", flag, a, b)
-		out, _, code := runSSHBinary(t, append(append([]string{}, sshArgs...), cmd)...)
-		if code != 0 || !strings.Contains(out, "DIFF-OK") {
-			t.Fatalf("remote diff (code=%d):\n%s", code, out)
-		}
-	}
-
-	// scpSingle + scpDir run the real scp binary (os/exec) with the local path
-	// normalized to forward slashes — Windows-broker → Linux-server is the primary
-	// deployment, and MSYS scp on the broker host accepts forward-slash local
-	// paths unambiguously (a leading-drive `C:/...` form is never re-interpreted).
-	scpSingle := func(t *testing.T, localFile, remoteFile string) {
-		t.Helper()
-		args := append(append([]string{}, scpArgs...), filepath.ToSlash(localFile), scpDst+remoteFile)
-		if out, err := exec.Command("scp", args...).CombinedOutput(); err != nil {
-			t.Fatalf("scp single: %v\n%s", err, out)
-		}
-	}
-	scpDir := func(t *testing.T, localDir, remoteDir string) {
-		t.Helper()
-		args := append(append([]string{}, scpArgs...), "-r", filepath.ToSlash(localDir), scpDst+remoteDir)
-		if out, err := exec.Command("scp", args...).CombinedOutput(); err != nil {
-			t.Fatalf("scp -r: %v\n%s", err, out)
-		}
-	}
-
 	t.Run("single-file", func(t *testing.T) {
 		localFile := filepath.Join(t.TempDir(), "single.dat")
 		content := []byte("single-file-differential-payload\n")
@@ -106,53 +76,226 @@ func TestUploadDifferential(t *testing.T) {
 		if res.Files != 1 || res.Bytes != int64(len(content)) || res.Truncated {
 			t.Fatalf("single Upload result = %+v, want {Files:1 Bytes:%d}", res, len(content))
 		}
-		scpSingle(t, localFile, scpRemote)
-		remoteDiff(t, false, brokerRemote, scpRemote)
+		scpPutFile(t, scpArgs, localFile, scpDst+scpRemote)
+		remoteDiff(t, sshArgs, false, brokerRemote, scpRemote)
 	})
 
-	t.Run("recursive-dir", func(t *testing.T) {
+	t.Run("suite-tree", func(t *testing.T) {
+		// §13 suite tree: 3-level nesting + empty dir + 0-byte file + unicode +
+		// space filenames + all-256-bytes binary. scp -r and broker Upload must
+		// produce identical remote trees. The EMPTY DIR is the sharpest edge:
+		// filepath.Walk visits it with no children, and uploadDir must Mkdir it
+		// remotely exactly like scp -r does — a differential failure there is a
+		// real broker bug (empty dirs silently dropped), not a test artifact.
 		localRoot := t.TempDir()
-		// Tree: a.txt + sub/b.txt + sub/deep/c.txt + empty.dat + sub/bin.bin
-		// — 5 files total, 3 levels deep, exercising recursion + edge content.
-		if err := os.WriteFile(filepath.Join(localRoot, "a.txt"), []byte("alpha-content\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Join(localRoot, "sub", "deep"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(localRoot, "sub", "b.txt"), []byte("beta-content\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(localRoot, "sub", "deep", "c.txt"), []byte("charlie-deep\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(localRoot, "empty.dat"), []byte(""), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		bin := make([]byte, 256)
-		for i := range bin { // 0..255 — exercises null bytes + non-UTF8 (binary parity)
-			bin[i] = byte(i)
-		}
-		if err := os.WriteFile(filepath.Join(localRoot, "sub", "bin.bin"), bin, 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeDifferentialSuite(t, localRoot)
 
-		brokerRemote := "/home/sshuser/up-broker-dir"
-		scpRemote := "/home/sshuser/up-scp-dir"
+		brokerRemote := "/home/sshuser/up-broker-suite"
+		scpRemote := "/home/sshuser/up-scp-suite"
 
 		res, err := cli.Upload(context.Background(), localRoot, brokerRemote, 0)
 		if err != nil {
-			t.Fatalf("broker Upload dir: %v", err)
+			t.Fatalf("broker Upload suite: %v", err)
 		}
-		if res.Files != 5 {
-			t.Fatalf("dir Upload Files = %d, want 5 (a.txt + sub/b.txt + sub/deep/c.txt + empty.dat + sub/bin.bin)", res.Files)
+		if res.Files != 8 {
+			t.Fatalf("suite Upload Files = %d, want 8 (root.txt + a/one.txt + a/b/two.txt + a/b/c/three.txt + zero-byte.txt + 中文名-测试.txt + with space.txt + bin.bin)", res.Files)
+		}
+		if res.Bytes != 480 { // 64+48+32+16+0+40+24+256 — exact per-file sums
+			t.Fatalf("suite Upload Bytes = %d, want 480 (res=%+v)", res.Bytes, res)
 		}
 		if res.Truncated {
-			t.Fatalf("dir Upload Truncated = true, want false")
+			t.Fatalf("suite Upload Truncated = true, want false")
 		}
-		scpDir(t, localRoot, scpRemote)
-		remoteDiff(t, true, brokerRemote, scpRemote)
+		scpPutDir(t, scpArgs, localRoot, scpDst+scpRemote)
+		remoteDiff(t, sshArgs, true, brokerRemote, scpRemote)
+		// Pin the empty-dir edge explicitly: a zero diff -r would ALSO pass if
+		// both paths silently dropped the empty dir — this probe rules that out
+		// for the broker side (TestDownloadDifferential's ssh find pins the scp
+		// side), so the empty-dir coverage is self-contained per test.
+		out, _, code := runSSHBinary(t, append(append([]string{}, sshArgs...), "test -d '"+brokerRemote+"/empty-dir' && echo EMPTY-DIR-OK")...)
+		if code != 0 || !strings.Contains(out, "EMPTY-DIR-OK") {
+			t.Fatalf("broker remote tree lacks empty-dir — Upload dropped an empty directory (code=%d):\n%s", code, out)
+		}
 	})
+
+	t.Run("boundary-cap", func(t *testing.T) {
+		// §6 cap boundary — the DELIBERATE divergence from scp. The upload byte
+		// cap (mcpserver.MaxOutputBytes at the MCP boundary) is a security
+		// feature of the broker; scp has no cap, so the two paths intentionally
+		// differ here and this subtest does NOT lock scp parity. It locks:
+		//
+		//   (a) honest reporting — UploadResult.Truncated=true AND Bytes reports
+		//       the TRUE total (cap+1, not the cap) AND Files=1;
+		//   (b) boundary exactness — the flag flips exactly at total>cap: the
+		//       same upload at exactly cap bytes stays Truncated=false. The
+		//       in-flight file lands COMPLETE (per-file atomic contract in
+		//       uploadFile: the cap halts the walk BETWEEN files, it never
+		//       aborts the stream), so the over-cap remote file is cap+1 bytes —
+		//       the cap truncates the TREE (walk halt, unit-pinned in
+		//       upload_test.go), not the file at an arbitrary offset;
+		//   (c) scp control — the identical file via scp lands complete (cap+1),
+		//       showing what the uncapped reference transfer does.
+		capBytes := mcpserver.MaxOutputBytes
+		boundary := detBytes(7, int(capBytes)+1) // exactly cap+1 bytes — one over
+
+		localBoundary := filepath.Join(t.TempDir(), "boundary.bin")
+		if err := os.WriteFile(localBoundary, boundary, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		localAtCap := filepath.Join(t.TempDir(), "atcap.bin")
+		if err := os.WriteFile(localAtCap, boundary[:capBytes], 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// (a) over-cap upload reports truncation honestly.
+		brokerRemote := "/home/sshuser/up-broker-boundary.bin"
+		res, err := cli.Upload(context.Background(), localBoundary, brokerRemote, capBytes)
+		if err != nil {
+			t.Fatalf("broker Upload boundary: %v", err)
+		}
+		if !res.Truncated {
+			t.Fatalf("boundary Upload Truncated=false, want true (res=%+v)", res)
+		}
+		if res.Bytes != capBytes+1 {
+			t.Fatalf("boundary Upload Bytes=%d, want %d (honest total, not the cap)", res.Bytes, capBytes+1)
+		}
+		if res.Files != 1 {
+			t.Fatalf("boundary Upload Files=%d, want 1 (res=%+v)", res.Files, res)
+		}
+		// (b) the file lands complete; the flag flips exactly at the cap boundary.
+		if got := remoteFileSize(t, sshArgs, brokerRemote); got != capBytes+1 {
+			t.Fatalf("remote boundary size = %d, want %d (cap+1: the cap halts the walk, not the in-flight stream)", got, capBytes+1)
+		}
+		atCapRemote := "/home/sshuser/up-broker-atcap.bin"
+		resAtCap, err := cli.Upload(context.Background(), localAtCap, atCapRemote, capBytes)
+		if err != nil {
+			t.Fatalf("broker Upload at-cap: %v", err)
+		}
+		if resAtCap.Truncated {
+			t.Fatalf("at-cap Upload Truncated=true, want false — the flag must flip exactly at total>cap, not at total==cap (res=%+v)", resAtCap)
+		}
+		if got := remoteFileSize(t, sshArgs, atCapRemote); got != capBytes {
+			t.Fatalf("remote at-cap size = %d, want %d", got, capBytes)
+		}
+		// (c) scp control: the uncapped reference lands all cap+1 bytes.
+		scpRemote := "/home/sshuser/up-scp-boundary.bin"
+		scpPutFile(t, scpArgs, localBoundary, scpDst+scpRemote)
+		if got := remoteFileSize(t, sshArgs, scpRemote); got != capBytes+1 {
+			t.Fatalf("scp control size = %d, want %d (scp is uncapped)", got, capBytes+1)
+		}
+	})
+}
+
+// remoteDiff runs `ssh ... 'diff [-r] A B && echo DIFF-OK'` against the
+// conformance sshd and fails the test unless the two remote paths are
+// byte-identical (diff exits 0 → DIFF-OK printed). Package-level (not a test
+// closure) so the upload AND download differentials share one definition.
+func remoteDiff(t *testing.T, sshArgs []string, recursive bool, a, b string) {
+	t.Helper()
+	flag := "diff"
+	if recursive {
+		flag = "diff -r"
+	}
+	cmd := fmt.Sprintf("%s '%s' '%s' && echo DIFF-OK", flag, a, b)
+	out, _, code := runSSHBinary(t, append(append([]string{}, sshArgs...), cmd)...)
+	if code != 0 || !strings.Contains(out, "DIFF-OK") {
+		t.Fatalf("remote diff (code=%d):\n%s", code, out)
+	}
+}
+
+// scpPutFile + scpPutDir run the real scp binary (os/exec) with the local path
+// normalized to forward slashes — Windows-broker → Linux-server is the primary
+// deployment, and MSYS scp on the broker host accepts forward-slash local paths
+// unambiguously (a leading-drive `C:/...` form is never re-interpreted).
+// remoteTarget is the full scp destination (`user@host:path`). Package-level so
+// the upload AND download differentials share them.
+func scpPutFile(t *testing.T, scpArgs []string, localFile, remoteTarget string) {
+	t.Helper()
+	args := append(append([]string{}, scpArgs...), filepath.ToSlash(localFile), remoteTarget)
+	if out, err := exec.Command("scp", args...).CombinedOutput(); err != nil {
+		t.Fatalf("scp single: %v\n%s", err, out)
+	}
+}
+
+func scpPutDir(t *testing.T, scpArgs []string, localDir, remoteTarget string) {
+	t.Helper()
+	args := append(append([]string{}, scpArgs...), "-r", filepath.ToSlash(localDir), remoteTarget)
+	if out, err := exec.Command("scp", args...).CombinedOutput(); err != nil {
+		t.Fatalf("scp -r: %v\n%s", err, out)
+	}
+}
+
+// remoteFileSize stats a remote file's exact size via real ssh (busybox
+// `stat -c %s` on the alpine conformance container). The boundary-cap subtest
+// asserts exact remote sizes, so the size probe rides the same reference ssh
+// path as the differentials themselves.
+func remoteFileSize(t *testing.T, sshArgs []string, path string) int64 {
+	t.Helper()
+	cmd := fmt.Sprintf("stat -c %%s '%s'", path)
+	out, _, code := runSSHBinary(t, append(append([]string{}, sshArgs...), cmd)...)
+	if code != 0 {
+		t.Fatalf("stat %s (code=%d):\n%s", path, code, out)
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+	if err != nil {
+		t.Fatalf("stat %s: parse %q: %v", path, out, err)
+	}
+	return n
+}
+
+// writeDifferentialSuite builds the §13 differential suite tree under dir:
+//
+//	root.txt         — regular file (deterministic pseudo-random bytes)
+//	a/one.txt        ┐
+//	a/b/two.txt      ├ 3-level nesting (recursion)
+//	a/b/c/three.txt  ┘
+//	empty-dir/       — empty directory (scp -r preserves it; broker must too)
+//	zero-byte.txt    — 0-byte file
+//	中文名-测试.txt   — unicode filename
+//	with space.txt   — space in filename
+//	bin.bin          — all-256-bytes binary (null bytes + non-UTF8 parity)
+//
+// 8 files + 4 subdirs. Shared by the upload and download differentials.
+// Content is deterministic per file (detBytes) — synthetic, reproducible, and
+// byte-verifiable (public repo: no real hosts or data ever appear).
+func writeDifferentialSuite(t *testing.T, dir string) {
+	t.Helper()
+	mk := func(rel string, b []byte) {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("root.txt", detBytes(1, 64))
+	mk("a/one.txt", detBytes(2, 48))
+	mk("a/b/two.txt", detBytes(3, 32))
+	mk("a/b/c/three.txt", detBytes(4, 16))
+	mk("zero-byte.txt", nil)
+	mk("中文名-测试.txt", detBytes(5, 40))
+	mk("with space.txt", detBytes(6, 24))
+	bin := make([]byte, 256)
+	for i := range bin { // 0..255 — exercises null bytes + non-UTF8 (binary parity)
+		bin[i] = byte(i)
+	}
+	mk("bin.bin", bin)
+	if err := os.MkdirAll(filepath.Join(dir, "empty-dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// detBytes returns n deterministic pseudo-random bytes from a tiny LCG —
+// synthetic, reproducible fixture content (public repo: no real data).
+func detBytes(seed, n int) []byte {
+	b := make([]byte, n)
+	x := uint32(seed)<<13 | 1 // | 1: never zero (LCG would stick at 0)
+	for i := range b {
+		x = x*1664525 + 1013904223
+		b[i] = byte(x >> 23)
+	}
+	return b
 }
 
 // TestForwardDifferential proves the broker's ForwardLocal (-L tunnel) delivers

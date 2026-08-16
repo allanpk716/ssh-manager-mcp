@@ -19,7 +19,9 @@ import (
 // + SSHMGR_FILEKEY_PATH pointing at that eval file (and NOT the master key
 // inline) — with no LLM call. The plaintext token is asserted to round-trip
 // through store.VerifyToken, which is the exact path the broker's MCP server
-// uses to authenticate `--token` at startup. The subprocess round-trip (servers
+// uses to authenticate the token at startup (env SSHMGR_TOKEN form since the
+// harness switch — same shape the production .mcp.json generators emit). The
+// subprocess round-trip (servers
 // ls) proves the built binary unlocks the vault via the file — the production
 // path, now exercised by the eval. End-to-end serving (binary actually answers
 // list_servers over MCP) is T4 territory.
@@ -55,8 +57,8 @@ func TestWireBroker(t *testing.T) {
 	if _, leaked := env["SSHMGR_MASTERKEY_HEX"]; leaked {
 		t.Fatal("mcp.json env STILL carries SSHMGR_MASTERKEY_HEX — eval-fidelity gap not closed")
 	}
-	if cfg["args"].([]any)[2] != token {
-		t.Fatalf("mcp.json args token = %q, want %q", cfg["args"].([]any)[2], token)
+	if envTok, _ := env["SSHMGR_TOKEN"].(string); envTok != token {
+		t.Fatalf("mcp.json env SSHMGR_TOKEN = %q, want %q", envTok, token)
 	}
 	if _, err := os.Stat(binPath); err != nil {
 		t.Fatalf("built binary missing at %s: %v", binPath, err)
@@ -164,12 +166,15 @@ func parseMCPConfig(t *testing.T, mcpPath string) (ssh map[string]any, storePath
 		t.Fatal("mcp.json missing mcpServers.ssh.command")
 	}
 	args, ok := ssh["args"].([]any)
-	if !ok || len(args) != 3 || args[0] != "mcp" || args[1] != "--token" {
-		t.Fatalf("mcp.json args malformed: %v", ssh["args"])
+	if !ok || len(args) != 1 || args[0] != "mcp" {
+		t.Fatalf("mcp.json args malformed: %v (want just [\"mcp\"] — token rides env)", ssh["args"])
 	}
 	env, ok := ssh["env"].(map[string]any)
 	if !ok {
 		t.Fatal("mcp.json missing mcpServers.ssh.env")
+	}
+	if _, ok := env["SSHMGR_TOKEN"].(string); !ok {
+		t.Fatal("mcp.json env missing SSHMGR_TOKEN (env-form token, Plan 20 B2 shape)")
 	}
 	storePath, ok = env["SSHMGR_STORE"].(string)
 	if !ok || storePath == "" {

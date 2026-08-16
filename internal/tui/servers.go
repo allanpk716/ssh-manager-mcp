@@ -42,7 +42,7 @@ func hasTag(s *models.Server, tag string) bool {
 	return false
 }
 
-// dropTag returns tags minus one occurrence of tag (the needs-passphrase
+// dropTag removes all occurrences of tag from tags (the needs-passphrase
 // removal path; returns a fresh slice, never nils the input).
 func dropTag(tags []string, tag string) []string {
 	out := make([]string, 0, len(tags))

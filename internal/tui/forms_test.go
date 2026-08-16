@@ -157,6 +157,51 @@ func TestSubmitServer_EditRecredentialDropsNeedsPassphrase(t *testing.T) {
 	}
 }
 
+// TestSubmitServer_EditClearCredential (Plan 21 A2): the edit form's 清除凭据
+// toggle routes submitServer through ClearServerCredential — and it takes
+// priority over the password field (tick + filled password = clear wins; the
+// secret fields are ignored on the clear path).
+func TestSubmitServer_EditClearCredential(t *testing.T) {
+	st := newStore(t)
+	cid, _ := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("p")})
+	_, _ = st.AddServer(&models.Server{
+		Name: "t", Host: "h", User: "u", AuthMethod: models.AuthPassword,
+		CredentialID: cid, Tags: []string{"needs-passphrase", "gpu"},
+	})
+	cur, _ := st.GetServerByName("t")
+
+	d := &serverDraft{Name: "t", Host: "h", User: "u", Port: 22, ClearCredential: true}
+	if _, ok := submitServer(st, cur, d)().(actionDoneMsg); !ok {
+		t.Fatal("clear-credential submit must succeed")
+	}
+	got, _ := st.GetServerByName("t")
+	if got.CredentialID != "" || got.AuthMethod != "" || got.SudoCredentialID != "" {
+		t.Fatalf("server must be credential-less: %+v", got)
+	}
+	if hasTag(got, "needs-passphrase") || len(got.Tags) != 1 || got.Tags[0] != "gpu" {
+		t.Fatalf("needs-passphrase must be stripped, gpu kept: %v", got.Tags)
+	}
+	if c, _ := st.GetCredential(cid); c != nil {
+		t.Fatal("exclusively-owned credential row must be dropped")
+	}
+
+	// clear ticked + password filled: the clear path runs FIRST — password ignored
+	cid2, _ := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("p2")})
+	_, _ = st.AddServer(&models.Server{Name: "t2", Host: "h", User: "u", AuthMethod: models.AuthPassword, CredentialID: cid2})
+	cur2, _ := st.GetServerByName("t2")
+	d2 := &serverDraft{Name: "t2", Host: "h", User: "u", Port: 22, ClearCredential: true, Password: "ignored"}
+	if _, ok := submitServer(st, cur2, d2)().(actionDoneMsg); !ok {
+		t.Fatal("clear+password submit must succeed via the clear path")
+	}
+	got2, _ := st.GetServerByName("t2")
+	if got2.CredentialID != "" || got2.AuthMethod != "" {
+		t.Fatalf("clear must take priority over the password field: %+v", got2)
+	}
+	if c, _ := st.GetCredential(cid2); c != nil {
+		t.Fatal("clear path must drop the old credential row")
+	}
+}
+
 // inputTitle reads a *huh.Input's title via reflection — huh exposes no
 // public getter, but Title(s) stores into Input.title (an Eval[string])
 // whose val field holds the literal. String() is safe on unexported
@@ -197,6 +242,9 @@ func TestNewServerFormFieldTitles(t *testing.T) {
 	}
 	if got := inputTitle(sudoPasswordField(d)); got != "sudo 密码（可选）" {
 		t.Errorf("sudoPasswordField(d) title = %q, want %q", got, "sudo 密码（可选）")
+	}
+	if got := inputTitle(keyPathField(d)); got != "私钥路径（可选，与密码互斥；编辑时留空=不变）" {
+		t.Errorf("keyPathField(d) title = %q, want %q", got, "私钥路径（可选，与密码互斥；编辑时留空=不变）")
 	}
 }
 

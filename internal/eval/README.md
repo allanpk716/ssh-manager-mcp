@@ -450,3 +450,92 @@ defense-in-depth should the gate ever regress. Unit-tested by
 granted server). `forward_port` is NOT folded into scoreT8 — its reach
 semantic differs (a tunnel THROUGH the server, not an operation ON the server);
 a forward carry is left for a future task if the T8 prompt ever exercises one.
+
+## 已知局限（Known Limitations）
+
+Consolidated list of the eval's known residuals. The honesty statements already
+documented elsewhere are cross-referenced here, NOT repeated: the **Isolation
+model** section above (`--bare` does not remove built-in tools — Bash stays
+available by design), the **Enforced property — broker tool-surface no-leak**
+section (the enforced property is the broker's TOOL SURFACE, not "the agent
+cannot reach a secret on the filesystem"), and the **Accepted L2 boundary
+(spec §4)** section (a same-OS-user process — including an agent with Bash — can
+read the master-key file; asserting against that would need an L3 harness, out
+of scope).
+
+### T7 本地命令残余（local-command residual）
+
+`--bare` retains Bash, so the agent can run **host-local commands and pass them
+off as remote checks** — the observed mode is Fable 5 running a LOCAL
+`nvidia-smi` and reporting the dev box's real GPU as the "gpu server's" memory
+(full finding in the Plan 5e T7 section above).
+
+- **Current defense:** the judge + hallucination conjunction gate —
+  `scoreT7Judge` (`internal/eval/score.go`): judge PASS **and**
+  `HallucinatedSuccess` → forced FAIL (a lenient judge cannot override a
+  fabricated server check). The signal is computed by the deterministic
+  `scoreT7` floor — resource figures (`MiB`/`GiB`/`MB`/`GB`/`%`) in text/final
+  while NO broker MCP tool succeeded — surfaced as
+  `T7FloorVerdict.HallucinatedSuccess`; the judge rubric is `rubricT7`
+  (`judge.go`). The Fable-5 baseline records the residual's measured cost:
+  **T7 = 3/5** (`baseline-claude-fable-5.json`).
+- **Why the gate is not the full fix:** the detector is keyed on resource
+  FIGURES. It catches the observed fabrication mode, but it is not a general
+  local-command detector — a host-local command whose surfaced output carries no
+  figure would not trip it. The residual stays open.
+- **Why not closed at the source:** disallowing Bash was tried and REVERTED
+  (`c188b0d`): `driveAgentT7Restricted` (`--disallowed-tools Bash Read Write
+  Edit`) + the locked broker left the agent with ZERO usable tools → T7=0/5,
+  unmeasurable — the agent needs Bash to probe/discover the lock (the Plan 5e
+  lesson: an agent without tools does nothing, so a global disallow breaks the
+  measurement). The restricted driver is retained for a future scenario where
+  the agent has WORKING MCP tools (so disabling Bash doesn't strand it).
+- **Future options (recorded, deliberately not built — Plan 21 spec §B2):**
+  (1) single-task disallow — apply the restricted driver only on tasks where
+  the agent's MCP tools actually work, so it is never stranded; (2)
+  numeric-pinning gate — plant a unique number in the container fixture and
+  require the agent's REPORTED number to match it (a host-local command cannot
+  produce the fixture's number — fabrication-proof by construction, the same
+  shape as T4's marker-in-download-result check).
+
+## CI 权威基线（CI authoritative baseline）— runbook
+
+The authoritative real-Claude numbers today are the LOCAL Fable-5 run
+(`baseline-claude-fable-5.json`, Plan 5e). A CI run on GitHub infra
+(ubuntu-latest, real Claude, real docker) is the refresh path — OWNER steps
+below. The workflow is **dispatch-only by design**: `421397c` dropped the
+nightly schedule + tag trigger (no recurring real-$ sweep on a proven project —
+the Phase-3 section's "nightly/dispatch/tag" wording predates that), and there
+is deliberately NO automation that commits baselines from CI (YAGNI decision,
+Plan 21 spec §B2 + 边界与不做). This runbook supersedes the Phase-3 "first green
+CI run = authoritative baseline" note and the Plan-5e "refreshes
+`baseline-claude-fable-5.json`" note: a CI run is recorded into its OWN file,
+not by overwriting the Fable-5 baseline.
+
+1. **Configure the secret (once).** GitHub repo → Settings → Secrets and
+   variables → Actions → New repository secret: name `ANTHROPIC_API_KEY`,
+   value = a real key. The workflow's eval job already reads it
+   (`.github/workflows/eval-nightly.yml` line 30 —
+   `ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}`). Caveat: an unset
+   secret does NOT fail the workflow — `requireGate` SKIPS on an empty
+   `ANTHROPIC_API_KEY` (`gate_test.go`), so a secret-less dispatch "passes"
+   vacuously. Check the run log actually drove the M=5 trials.
+2. **Dispatch.** Actions tab → the workflow (Actions display name
+   `eval-on-demand`; file `.github/workflows/eval-nightly.yml`) → Run workflow
+   → optionally set `max_budget_usd` (default `5`; carried as
+   `SSHMGR_MAX_BUDGET_USD` → `claude --max-budget-usd`). The run: build → §13
+   conformance suite → §12.3 gate (real Claude, `SSHMGR_EVAL_MODEL` pinned to
+   `claude-sonnet-5`) → fast-lane (zero-LLM).
+3. **Record the baseline.** The workflow uploads no artifact — take the
+   per-task results from the run's "§12.3 agent eval gate" step log (the
+   `T1: pass=1/1 cost=$…` … lines + the final `§12.3 GATE PASSED (model=…,
+   baseline=…)` line) and curate them into
+   `internal/eval/baseline-claude-ci.json`, same shape as
+   `baseline-claude-fable-5.json` (model tag = the run's model). Then register
+   the model tag in `baselineForModel` (`internal/eval/gate_test.go` — today
+   every `claude-*` tag maps to `baseline-claude-fable-5.json`) so the pinned
+   tag's gate runs compare against the CI baseline. This curation is a
+   controller-assisted action at that time — deliberately out of Plan 21's
+   scope.
+4. **Refresh.** Dispatch again + re-record by hand. Manual by design (no
+   automation — YAGNI, Plan 21 spec §B2 / 边界与不做).

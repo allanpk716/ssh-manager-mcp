@@ -169,6 +169,7 @@ func serversEditCmd() *cobra.Command {
 		location, hardware, services, role, caveats                                string
 		port                                                                       int
 		tags                                                                       []string
+		clearCred                                                                  bool
 	)
 	c := &cobra.Command{
 		Use:   "edit [name]",
@@ -226,6 +227,21 @@ func serversEditCmd() *cobra.Command {
 			if pwSet && keySet {
 				return fmt.Errorf("--password and --key are mutually exclusive; provide exactly one")
 			}
+			// --clear-credential is the reverse operation: reset the server to
+			// the credential-less form (Plan 21 A2). It is an EXCLUSIVE action —
+			// mutex with re-credential, and the early return means sudo is
+			// cleared along with the login credential rather than set, and any
+			// field flags passed in the same invocation are not applied.
+			if clearCred && (pwSet || keySet) {
+				return fmt.Errorf("--clear-credential is mutually exclusive with --password/--key")
+			}
+			if clearCred {
+				if err := s.ClearServerCredential(srv.ID); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "cleared credentials for %s\n", srv.Name)
+				return nil
+			}
 			var cred, sudoCred *models.Credential
 			switch {
 			case pwSet:
@@ -271,6 +287,7 @@ func serversEditCmd() *cobra.Command {
 	c.Flags().StringVar(&keyPath, "key", "", "switch to / replace key auth (path to private key)")
 	c.Flags().StringVar(&keyPass, "key-passphrase", "", "passphrase for encrypted private key (use with --key)")
 	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "set / replace sudo password")
+	c.Flags().BoolVar(&clearCred, "clear-credential", false, "remove the server's credentials (back to credential-less)")
 	return c
 }
 

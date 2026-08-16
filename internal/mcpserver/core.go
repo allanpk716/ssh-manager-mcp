@@ -197,7 +197,8 @@ func contains(haystack []string, needle string) bool {
 // prefix and Bytes as the true total. Every branch is audited with
 // Action="download" (the path is recorded in the audit Command field).
 //
-// Statuses: denied (out-of-profile), auth_error, hostkey_mismatch,
+// Statuses: denied (out-of-profile), auth_error, no_credential (credential-
+// less server, Plan 20 C0 — Plan 21 A1 unified with exec), hostkey_mismatch,
 // connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
 // download has neither sudo nor a command deadline.
 func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, path string) (out DownloadOutput, err error) {
@@ -234,6 +235,13 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
+		if errors.Is(aerr, vault.ErrNoCredential) {
+			// Credential-less server (Plan 20 C0): refused BEFORE any connect —
+			// the error carries the configure-a-credential hint for the agent.
+			status = "no_credential"
+			err = aerr
+			return
+		}
 		status = "auth_error"
 		err = aerr
 		return
@@ -294,7 +302,8 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 // filepath.Dir) computes the parent so the gate stays correct on a Windows broker
 // host too (the remote's path convention is always POSIX).
 //
-// Statuses: denied (out-of-profile), auth_error, hostkey_mismatch,
+// Statuses: denied (out-of-profile), auth_error, no_credential (credential-
+// less server, Plan 20 C0 — Plan 21 A1 unified with exec), hostkey_mismatch,
 // connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
 // upload has neither sudo nor a command deadline.
 func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, localPath, remotePath string) (out UploadOutput, err error) {
@@ -331,6 +340,13 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
+		if errors.Is(aerr, vault.ErrNoCredential) {
+			// Credential-less server (Plan 20 C0): refused BEFORE any connect —
+			// the error carries the configure-a-credential hint for the agent.
+			status = "no_credential"
+			err = aerr
+			return
+		}
 		status = "auth_error"
 		err = aerr
 		return
@@ -400,9 +416,10 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 //
 // Every branch is audited with Action="forward"; the audit Command field
 // records the forward target as "remoteHost:remotePort". Statuses: denied
-// (out-of-profile), auth_error, hostkey_mismatch, connect_error, ok, error.
-// There is no no_sudo / timeout branch — a forward is a listener + pipe with no
-// command deadline.
+// (out-of-profile), auth_error, no_credential (credential-less server, Plan
+// 20 C0 — Plan 21 A1 unified with exec), hostkey_mismatch, connect_error,
+// ok, error. There is no no_sudo / timeout branch — a forward is a listener +
+// pipe with no command deadline.
 func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, remoteHost string, remotePort, localPort int, mgr *TunnelManager) (out ForwardOutput, err error) {
 	var status string
 	var cli *sshbroker.Client
@@ -446,6 +463,13 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
+		if errors.Is(aerr, vault.ErrNoCredential) {
+			// Credential-less server (Plan 20 C0): refused BEFORE any connect —
+			// the error carries the configure-a-credential hint for the agent.
+			status = "no_credential"
+			err = aerr
+			return
+		}
 		status = "auth_error"
 		err = aerr
 		return

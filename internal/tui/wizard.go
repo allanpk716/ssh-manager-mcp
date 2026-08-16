@@ -756,7 +756,11 @@ func (w wizardModel) View() tea.View {
 		if w.saveErr != nil {
 			b.WriteString("\n" + errStyle.Render(fmt.Sprintf("⚠ role.json 写入失败：%v", w.saveErr)) + "\n")
 		}
-		b.WriteString("\n" + footerStyle.Render("q 退出（进度已保存，重开 tui 会继续）") + "\n")
+		quitHint := "q 退出（进度已保存，重开 tui 会继续）"
+		if w.saveErr != nil {
+			quitHint = "q 退出（role.json 写入失败，进度未保存）"
+		}
+		b.WriteString("\n" + footerStyle.Render(quitHint) + "\n")
 	case stepVaultErr:
 		b.WriteString(titleStyle.Render(" 初始化 vault 失败 ") + "\n\n")
 		b.WriteString(errStyle.Render("✗ "+w.err.Error()) + "\n\n")
@@ -766,7 +770,11 @@ func (w wizardModel) View() tea.View {
 			// false and must not pass silently.
 			b.WriteString(errStyle.Render(fmt.Sprintf("⚠ role.json 写入失败：%v", w.saveErr)) + "\n")
 		}
-		b.WriteString(footerStyle.Render("r 重试 / q 退出（角色已保存，重开 tui 会继续）") + "\n")
+		quitHint := "r 重试 / q 退出（角色已保存，重开 tui 会继续）"
+		if w.saveErr != nil {
+			quitHint = "r 重试 / q 退出（角色未保存，重开 tui 从头开始）"
+		}
+		b.WriteString(footerStyle.Render(quitHint) + "\n")
 	case stepDeviceIssue, stepServeInstall, stepServeProbe:
 		// In-flight steps: no form, no overlay — just what is running (and the
 		// error + retry affordance if the action failed).
@@ -780,17 +788,29 @@ func (w wizardModel) View() tea.View {
 		case stepDeviceIssue:
 			if w.err != nil {
 				b.WriteString(errStyle.Render("✗ "+w.err.Error()) + "\n")
-				b.WriteString(footerStyle.Render("r 重试 / q 暂停退出（角色已保存，重开 tui 会从设备码继续）") + "\n")
+				quitHint := "r 重试 / q 暂停退出（角色已保存，重开 tui 会从设备码继续）"
+				if w.saveErr != nil {
+					quitHint = "r 重试 / q 暂停退出（角色未保存，重开 tui 从头开始）"
+				}
+				b.WriteString(footerStyle.Render(quitHint) + "\n")
 			} else {
 				b.WriteString("正在签发设备码…\n")
-				b.WriteString(footerStyle.Render("q 暂停退出（进度已保存）") + "\n")
+				quitHint := "q 暂停退出（进度已保存）"
+				if w.saveErr != nil {
+					quitHint = "q 暂停退出（role.json 写入失败，进度未保存）"
+				}
+				b.WriteString(footerStyle.Render(quitHint) + "\n")
 			}
 		case stepServeInstall:
 			b.WriteString("正在注册系统服务（绑定 0.0.0.0:7878，可能需要数秒）…\n")
 			b.WriteString(footerStyle.Render("q 暂停退出（安装失败不会阻断向导）") + "\n")
 		case stepServeProbe:
 			b.WriteString("正在探活 " + w.data.serveAddr + " …\n")
-			b.WriteString(footerStyle.Render("q 暂停退出（进度已保存）") + "\n")
+			quitHint := "q 暂停退出（进度已保存）"
+			if w.saveErr != nil {
+				quitHint = "q 暂停退出（role.json 写入失败，进度未保存）"
+			}
+			b.WriteString(footerStyle.Render(quitHint) + "\n")
 		}
 	default: // standalone form steps
 		b.WriteString(titleStyle.Render(wizStepTitles[w.step]) + "\n\n")
@@ -810,7 +830,11 @@ func (w wizardModel) View() tea.View {
 		} else if w.status != "" {
 			b.WriteString(footerStyle.Render("✓ "+w.status) + "\n")
 		}
-		b.WriteString(footerStyle.Render("q 暂停退出（进度已保存，重开 tui 会继续）") + "\n")
+		quitHint := "q 暂停退出（进度已保存，重开 tui 会继续）"
+		if w.saveErr != nil {
+			quitHint = "q 暂停退出（role.json 写入失败，进度未保存）"
+		}
+		b.WriteString(footerStyle.Render(quitHint) + "\n")
 	}
 	return tea.NewView(b.String())
 }

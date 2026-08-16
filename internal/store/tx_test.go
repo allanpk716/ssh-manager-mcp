@@ -257,3 +257,69 @@ func TestUpdateServerWithCredentialsReplacesOld(t *testing.T) {
 		t.Fatalf("orphan count after swaps = %d (err %v), want 0", n, err)
 	}
 }
+
+// TestClearServerCredential (Plan 21 A2): ClearServerCredential resets a
+// server to the credential-less form in ONE tx — credential/sudo references
+// cleared, auth_method blanked, the needs-passphrase tag stripped (meaningless
+// without a credential), exclusively-owned credential rows cascade-deleted
+// (two-column guard — shared rows survive). Absent id = idempotent no-op.
+func TestClearServerCredential(t *testing.T) {
+	st := newTestStore(t)
+
+	// a: shared login credential + EXCLUSIVE sudo credential + the tag.
+	// b: shares a's login credential via the reuse-.ID contract.
+	cred := &models.Credential{Type: models.CredPassword, Secret: []byte("shared")}
+	idA, err := st.AddServerWithCredentials(
+		&models.Server{Name: "a", Host: "h", Port: 22, User: "u", Tags: []string{"needs-passphrase", "gpu"}},
+		cred, &models.Credential{Type: models.CredPassword, Secret: []byte("sudo")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServerWithCredentials(&models.Server{Name: "b", Host: "h", Port: 22, User: "u"},
+		&models.Credential{ID: cred.ID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := st.GetServer(idA)
+	sudoID := a.SudoCredentialID
+	before := countRows(t, st, "credentials")
+
+	if err := st.ClearServerCredential(idA); err != nil {
+		t.Fatalf("ClearServerCredential: %v", err)
+	}
+
+	// 1) a is credential-less: no login cred, no sudo cred, no auth method.
+	got, err := st.GetServer(idA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CredentialID != "" || got.AuthMethod != "" || got.SudoCredentialID != "" {
+		t.Fatalf("server must be fully de-referenced: %+v", got)
+	}
+	for _, tg := range got.Tags {
+		if tg == "needs-passphrase" {
+			t.Fatalf("needs-passphrase must be stripped, got %v", got.Tags)
+		}
+	}
+	if len(got.Tags) != 1 || got.Tags[0] != "gpu" {
+		t.Fatalf("other tags must survive: %v", got.Tags)
+	}
+
+	// 2) two-column guard: b still references the login credential → row
+	// survives; a's sudo credential was exclusively owned → row dropped.
+	mustGetCred(t, st, cred.ID)
+	if c, _ := st.GetCredential(sudoID); c != nil {
+		t.Fatal("exclusively-owned sudo credential must be cascade-deleted")
+	}
+	if n := countRows(t, st, "credentials"); n != before-1 {
+		t.Fatalf("credentials rows = %d, want %d (shared kept, exclusive dropped)", n, before-1)
+	}
+	if n, err := st.CountOrphanCredentials(); err != nil || n != 0 {
+		t.Fatalf("orphan count after clear = %d (err %v), want 0", n, err)
+	}
+
+	// 3) absent id: idempotent no-op (DeleteServerCascading semantics).
+	if err := st.ClearServerCredential("no-such-id"); err != nil {
+		t.Fatalf("absent id must be a no-op, got %v", err)
+	}
+}

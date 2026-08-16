@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,6 +112,39 @@ func TestMcpConfigScreen_Copy(t *testing.T) {
 	}
 	if strings.Contains(v, "--token") {
 		t.Fatalf("token must ride env, not argv:\n%s", v)
+	}
+}
+
+// TestMcpConfigLinesJSONValid (Plan 21 A2): the emitted snippet must parse as
+// JSON with AND without field lines — the command line used to hardcode a
+// trailing comma, which an empty fieldLines list turned into invalid JSON.
+// The JSON object is lifted out of the rendered lines (first "{" to last "}")
+// and unmarshal-checked whole.
+func TestMcpConfigLinesJSONValid(t *testing.T) {
+	extractJSON := func(lines []string) string {
+		start, end := -1, -1
+		for i, l := range lines {
+			if l == "{" && start < 0 {
+				start = i
+			}
+			if l == "}" {
+				end = i
+			}
+		}
+		if start < 0 || end < start {
+			t.Fatalf("no JSON object found in %q", lines)
+		}
+		return strings.Join(lines[start:end+1], "\n")
+	}
+	for _, fieldLines := range [][]string{
+		{`"args": ["mcp"]`, `"env": { "SSHMGR_TOKEN": "tok" }`},
+		{}, // empty: no args/env lines — command becomes the last member
+		nil,
+	} {
+		var v any
+		if err := json.Unmarshal([]byte(extractJSON(mcpConfigLines(fieldLines, nil))), &v); err != nil {
+			t.Fatalf("fieldLines %q: snippet not valid JSON: %v", fieldLines, err)
+		}
 	}
 }
 

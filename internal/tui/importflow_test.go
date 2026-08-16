@@ -359,6 +359,50 @@ func TestImportFlowSupplementSubmitPassphrase(t *testing.T) {
 	}
 }
 
+// TestSupplementCondKeyEmptyPassphraseKeepsTag: a condKey target submitted
+// with an EMPTY passphrase takes the nil-cred path — UpdateServerWithCredentials
+// keeps the existing key credential row, and the needs-passphrase tag STAYS
+// (the missing-passphrase fact is unchanged, so the ⚠ must not silently
+// disappear; the tag drops only when a passphrase is actually supplied — the
+// sibling test above). Mirrors the supplement tests' direct-call shape.
+func TestSupplementCondKeyEmptyPassphraseKeepsTag(t *testing.T) {
+	dir := t.TempDir()
+	genKeyPEM(t, filepath.Join(dir, "enc"), "secret-pass")
+	cfg := writeImportConfig(t, filepath.Join(dir, "enc"))
+	st := newStore(t)
+	f := flowAtPick(t, st, cfg)
+	f.pick = []string{"gpu", "bare"}
+	runBatch(t, f)
+	supplementTarget(t, f, "gpu")
+	if !f.condKey || f.condPass {
+		t.Fatalf("gpu must be a condKey target: pass=%v key=%v", f.condPass, f.condKey)
+	}
+
+	before, _ := st.GetServerByName("gpu")
+	if before.CredentialID == "" {
+		t.Fatal("precondition: encrypted-key import must carry a credential row")
+	}
+	f.d.Role = "prod gpu box"
+	f.d.KeyPass = "" // left empty — "later"
+	f.submitSupplement()
+
+	gpu, _ := st.GetServerByName("gpu")
+	if gpu.CredentialID != before.CredentialID {
+		t.Fatalf("empty passphrase must keep the existing credential (nil-cred path): old=%s new=%s", before.CredentialID, gpu.CredentialID)
+	}
+	if !hasTag(gpu, "needs-passphrase") {
+		t.Fatalf("needs-passphrase tag must stay — the missing-passphrase fact is unchanged: %+v", gpu)
+	}
+	if gpu.Role != "prod gpu box" {
+		t.Fatalf("structured fields must still persist on the nil-cred path: %+v", gpu)
+	}
+	// both targets remain ⚠ (gpu: tag kept; bare: credential-less) — the
+	// result-screen 待补 count reflects it.
+	if f.pendingCount() != 2 {
+		t.Fatalf("pending = %d, want 2 (empty passphrase must NOT clear the ⚠)", f.pendingCount())
+	}
+}
+
 // TestImportFlowSupplementSubmitPassword: the condPass target mints a
 // password credential; an EMPTY password keeps it credential-less (⚠ stays).
 func TestImportFlowSupplementSubmitPassword(t *testing.T) {
