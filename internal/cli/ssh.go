@@ -19,6 +19,12 @@ func newSSHCmd() *cobra.Command {
 		Short: "Owner full-access SSH exec (no profile limit). Runs the command on the named server.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// The owner ssh path is a SINGLE non-interactive command (no PTY).
+			// Empty/whitespace joins would otherwise run an empty command on
+			// the remote host — fail fast instead (Plan 25 / xcheck A4).
+			if len(args) == 1 || strings.TrimSpace(strings.Join(args[1:], " ")) == "" {
+				return fmt.Errorf("no command given: usage ssh-manager ssh <server> <command...> (single non-interactive command; for an interactive terminal use your own ssh client)")
+			}
 			st, err := openUnlockedStore()
 			if err != nil {
 				return err
