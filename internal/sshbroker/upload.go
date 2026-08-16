@@ -24,9 +24,17 @@ type UploadResult struct {
 // cancellation the watchdog closes the sftp client so the in-flight sftp op errors
 // and the walk propagates; Upload returns ctx.Err() with the partial Files/Bytes
 // counted before the cancel. The half-written remote file is left as-is (mirrors
-// scp -r interrupted — cleanup is the caller's job). maxBytes caps TOTAL bytes (§6);
-// on cap, Truncated=true and the walk halts. maxBytes == 0 = unlimited. See the
-// "per-file atomic + walk-halt" note on uploadDir for cap semantics within a file.
+// scp -r interrupted — cleanup is the caller's job). maxBytes == 0 = unlimited.
+//
+// maxBytes (§6) is enforced as TWO orthogonal layers (Plan 23):
+//
+//   - per-file pre-flight: any single file whose size is STRICTLY greater than
+//     maxBytes is refused BEFORE transfer (zero bytes of it move, no remote file
+//     is created) with capRefusedError naming file/size/cap; files completed
+//     before the refusal remain. Exactly == cap is allowed.
+//   - cumulative walk-halt: when every file is within the cap but the running
+//     total crosses it, Truncated=true and the walk halts BETWEEN files — the
+//     in-flight file lands complete (see uploadFile's per-file-atomic note).
 func (c *Client) Upload(ctx context.Context, localPath, remotePath string, maxBytes int64) (UploadResult, error) {
 	sc, err := sftp.NewClient(c.c)
 	if err != nil {
@@ -53,6 +61,12 @@ func (c *Client) Upload(ctx context.Context, localPath, remotePath string, maxBy
 	if info.IsDir() {
 		err = uploadDir(sc, localPath, remotePath, ctr, &res)
 	} else {
+		// Per-file pre-flight (Plan 23): a lone over-cap file is refused on the
+		// os.Stat above — zero bytes transfer and NO remote file is created (the
+		// error is the signal; UploadResult stays zero). cap==0 skips the gate.
+		if maxBytes > 0 && info.Size() > maxBytes {
+			return UploadResult{}, capRefusedError(localPath, info.Size(), maxBytes)
+		}
 		err = uploadFile(sc, localPath, remotePath, ctr, &res)
 	}
 	res.Bytes = ctr.total
@@ -69,11 +83,24 @@ func (c *Client) Upload(ctx context.Context, localPath, remotePath string, maxBy
 // not as an error to the caller.
 var errCapStop = errors.New("upload stopped: byte cap reached")
 
+// capRefusedError builds the per-file pre-flight refusal (Plan 23): a file whose
+// size is STRICTLY greater than the cap transfers zero bytes. The error is
+// self-contained evidence — file path, actual size, cap — so the caller (agent
+// at the MCP boundary) can shrink or split the payload without a second probe.
+// cap arrives as a parameter from the caller (mcpserver passes MaxOutputBytes);
+// sshbroker deliberately does not import mcpserver.
+func capRefusedError(file string, size, cap int64) error {
+	return fmt.Errorf("file %s (%d bytes) exceeds upload cap %d — refused before transfer (already-completed files remain)", file, size, cap)
+}
+
 // uploadFile puts a single file atomically: open local, create remote, io.Copy
 // from local through a TeeReader that counts bytes into ctr. The copy runs to
 // completion (or to the underlying io error); ctr flags truncation if cap was
 // exceeded mid-copy but never aborts the stream — aborting would leave a
 // half-written remote file. res.Files is bumped only on a fully-copied file.
+// Callers enforce the per-file pre-flight BEFORE calling (Upload's single-file
+// branch + uploadDir's walk callback), so an over-cap file never reaches this
+// io.Copy on either path.
 func uploadFile(sc *sftp.Client, localPath, remotePath string, ctr *countingWriter, res *UploadResult) error {
 	in, err := os.Open(localPath)
 	if err != nil {
@@ -94,9 +121,15 @@ func uploadFile(sc *sftp.Client, localPath, remotePath string, ctr *countingWrit
 
 // uploadDir walks localRoot recursively; for each entry it preserves the relative
 // path under remoteRoot — dirs are mkdir'd, files are uploaded via uploadFile.
-// The walk halts (errCapStop) the moment the counter flags truncation, so no new
-// file is started once the cap is exceeded. The root dir itself is the first
-// entry visited, so remoteRoot is always created before any child lands in it.
+// Per-file pre-flight (Plan 23): a file individually over the cap is refused on
+// the walk's own FileInfo BEFORE uploadFile — zero bytes of it transfer, no
+// remote file is created, the walk stops there, and the refusal error propagates
+// to the caller (unlike errCapStop, which is swallowed); files completed before
+// the refusal remain. Separately, the walk halts (errCapStop) the moment the
+// counter flags truncation, so no new file is started once the CUMULATIVE total
+// crosses the cap — that layer only ever sees files within the per-file bound.
+// The root dir itself is the first entry visited, so remoteRoot is always
+// created before any child lands in it.
 func uploadDir(sc *sftp.Client, localRoot, remoteRoot string, ctr *countingWriter, res *UploadResult) error {
 	walkErr := filepath.Walk(localRoot, func(walkPath string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -112,6 +145,9 @@ func uploadDir(sc *sftp.Client, localRoot, remoteRoot string, ctr *countingWrite
 		target := path.Join(remoteRoot, filepath.ToSlash(rel)) // POSIX remote path — correct for a Linux server on any broker host (Windows-broker→Linux-server is the primary deployment)
 		if info.IsDir() {
 			return sc.Mkdir(target)
+		}
+		if ctr.cap > 0 && info.Size() > ctr.cap {
+			return capRefusedError(walkPath, info.Size(), ctr.cap)
 		}
 		return uploadFile(sc, walkPath, target, ctr, res)
 	})
@@ -149,8 +185,9 @@ func (c *Client) MkdirAll(remotePath string) error {
 // cap WITHOUT retaining content (upload streams to the remote; nothing to keep,
 // unlike cappedBuffer which retains the prefix). The cap is advisory within a
 // single file — Write always accepts all bytes so io.Copy completes and the
-// remote file is not left half-written; the walk-halt in uploadDir is what
-// enforces the cap between files.
+// remote file is not left half-written. With the Plan 23 per-file pre-flight in
+// place, this advisory path only ever sees files within the cap; the flag it
+// raises is the CUMULATIVE-layer signal that halts the walk in uploadDir.
 type countingWriter struct {
 	cap       int64 // 0 = unlimited
 	total     int64

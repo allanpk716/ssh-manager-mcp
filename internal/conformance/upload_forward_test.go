@@ -119,20 +119,21 @@ func TestUploadDifferential(t *testing.T) {
 	})
 
 	t.Run("boundary-cap", func(t *testing.T) {
-		// §6 cap boundary — the DELIBERATE divergence from scp. The upload byte
-		// cap (mcpserver.MaxOutputBytes at the MCP boundary) is a security
-		// feature of the broker; scp has no cap, so the two paths intentionally
-		// differ here and this subtest does NOT lock scp parity. It locks:
+		// §6 cap boundary — the DELIBERATE divergence from scp, as of Plan 23 a
+		// hard PER-FILE bound. The upload byte cap (mcpserver.MaxOutputBytes at
+		// the MCP boundary) is a security feature of the broker; scp has no cap,
+		// so the two paths intentionally differ here and this subtest does NOT
+		// lock scp parity. It locks:
 		//
-		//   (a) honest reporting — UploadResult.Truncated=true AND Bytes reports
-		//       the TRUE total (cap+1, not the cap) AND Files=1;
-		//   (b) boundary exactness — the flag flips exactly at total>cap: the
-		//       same upload at exactly cap bytes stays Truncated=false. The
-		//       in-flight file lands COMPLETE (per-file atomic contract in
-		//       uploadFile: the cap halts the walk BETWEEN files, it never
-		//       aborts the stream), so the over-cap remote file is cap+1 bytes —
-		//       the cap truncates the TREE (walk halt, unit-pinned in
-		//       upload_test.go), not the file at an arbitrary offset;
+		//   (a) pre-flight refusal — a lone cap+1 file is REFUSED before
+		//       transfer: error naming file/size/cap, zero-value UploadResult,
+		//       and the remote file ABSENT (not even a 0-byte placeholder —
+		//       the refusal happens before sftp.Create);
+		//   (b) boundary exactness — the refusal flips exactly at size>cap: the
+		//       same upload at exactly cap bytes SUCCEEDS with Truncated=false
+		//       and lands complete (the cumulative walk-halt layer — all files
+		//       ≤ cap, total crossing cap → Truncated=true, in-flight file
+		//       lands complete — is unit-pinned in upload_test.go);
 		//   (c) scp control — the identical file via scp lands complete (cap+1),
 		//       showing what the uncapped reference transfer does.
 		capBytes := mcpserver.MaxOutputBytes
@@ -147,32 +148,33 @@ func TestUploadDifferential(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// (a) over-cap upload reports truncation honestly.
+		// (a) the lone cap+1 file is refused before transfer.
 		brokerRemote := "/home/sshuser/up-broker-boundary.bin"
 		res, err := cli.Upload(context.Background(), localBoundary, brokerRemote, capBytes)
-		if err != nil {
-			t.Fatalf("broker Upload boundary: %v", err)
+		if err == nil {
+			t.Fatalf("boundary Upload: want pre-flight refusal error, got nil (res=%+v)", res)
 		}
-		if !res.Truncated {
-			t.Fatalf("boundary Upload Truncated=false, want true (res=%+v)", res)
+		if !strings.Contains(err.Error(), "exceeds upload cap") || !strings.Contains(err.Error(), "boundary.bin") {
+			t.Fatalf("refusal error must name file + cap, got %q", err.Error())
 		}
-		if res.Bytes != capBytes+1 {
-			t.Fatalf("boundary Upload Bytes=%d, want %d (honest total, not the cap)", res.Bytes, capBytes+1)
+		if want := fmt.Sprintf("(%d bytes) exceeds upload cap %d", capBytes+1, capBytes); !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal error must carry size+cap evidence %q, got %q", want, err.Error())
 		}
-		if res.Files != 1 {
-			t.Fatalf("boundary Upload Files=%d, want 1 (res=%+v)", res.Files, res)
+		if res.Files != 0 || res.Bytes != 0 || res.Truncated {
+			t.Fatalf("refused result = %+v, want zero-value (zero bytes transferred)", res)
 		}
-		// (b) the file lands complete; the flag flips exactly at the cap boundary.
-		if got := remoteFileSize(t, sshArgs, brokerRemote); got != capBytes+1 {
-			t.Fatalf("remote boundary size = %d, want %d (cap+1: the cap halts the walk, not the in-flight stream)", got, capBytes+1)
+		if !remotePathAbsent(t, sshArgs, brokerRemote) {
+			t.Fatalf("refused file must be ABSENT remotely (refused before sftp.Create — not a 0-byte file): %s", brokerRemote)
 		}
+		// (b) the at-cap companion SUCCEEDS — the refusal flips exactly at the
+		// cap boundary (size>cap), and ==cap is allowed.
 		atCapRemote := "/home/sshuser/up-broker-atcap.bin"
 		resAtCap, err := cli.Upload(context.Background(), localAtCap, atCapRemote, capBytes)
 		if err != nil {
 			t.Fatalf("broker Upload at-cap: %v", err)
 		}
-		if resAtCap.Truncated {
-			t.Fatalf("at-cap Upload Truncated=true, want false — the flag must flip exactly at total>cap, not at total==cap (res=%+v)", resAtCap)
+		if resAtCap.Truncated || resAtCap.Files != 1 || resAtCap.Bytes != capBytes {
+			t.Fatalf("at-cap result = %+v, want {Files:1 Bytes:%d Truncated:false} — ==cap is allowed", resAtCap, capBytes)
 		}
 		if got := remoteFileSize(t, sshArgs, atCapRemote); got != capBytes {
 			t.Fatalf("remote at-cap size = %d, want %d", got, capBytes)
@@ -241,6 +243,20 @@ func remoteFileSize(t *testing.T, sshArgs []string, path string) int64 {
 		t.Fatalf("stat %s: parse %q: %v", path, out, err)
 	}
 	return n
+}
+
+// remotePathAbsent probes a remote path via real ssh (`test -e`) and reports
+// whether it does NOT exist. The Plan 23 boundary-cap subtest asserts a refused
+// upload leaves the remote ABSENT (the pre-flight refusal happens before
+// sftp.Create, so not even a 0-byte placeholder may exist) — a failing
+// remoteFileSize probe cannot distinguish "absent" from "stat error", so this
+// companion makes absence a first-class assertion on the same reference ssh
+// path as the differentials themselves.
+func remotePathAbsent(t *testing.T, sshArgs []string, path string) bool {
+	t.Helper()
+	cmd := fmt.Sprintf("test -e '%s' && echo PRESENT || echo ABSENT", path)
+	out, _, _ := runSSHBinary(t, append(append([]string{}, sshArgs...), cmd)...)
+	return strings.Contains(out, "ABSENT") && !strings.Contains(out, "PRESENT")
 }
 
 // writeDifferentialSuite builds the §13 differential suite tree under dir:

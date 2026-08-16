@@ -159,9 +159,11 @@ correctness proof for the new tools.
 
 Fourth broker MCP tool. SFTPs a LOCAL file or directory to a remote server
 (`scp -r` put semantic); a directory is uploaded recursively (relative paths
-preserved); destination parent created if missing. **§6-capped at 1 MiB total**
-(`truncated=true` → the in-flight file still lands complete; in a dir upload
-the files after it are not uploaded — retry smaller). **Profile-gated** (same
+preserved); destination parent created if missing. **§6 cap: 1 MiB is a hard
+per-file bound** — a single larger file is REFUSED before transfer (zero bytes
+sent, error names file/size/cap); multi-file uploads crossing 1 MiB cumulatively
+(each file within the cap) keep already-completed files and set `truncated=true`,
+later files not uploaded — retry smaller). **Profile-gated** (same
 `ErrNotInProfile` gate as exec/download). SFTP, so sudo not applicable.
 
 §13 differential conformance (T5): drove `upload_file` and `scp -r` against the

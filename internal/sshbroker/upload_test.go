@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -87,18 +88,21 @@ func TestUpload(t *testing.T) {
 		t.Fatalf("POSIX-path regression-guard sub/b.txt (%q): err=%v content=%q", posixB, err, g.Content)
 	}
 
-	// Cap: maxBytes=3 < total=14 → Truncated=true, no error returned (the flag is
-	// the signal). The walk halts after the first file exceeds the cap, so Files
-	// is bounded (1 here: a.txt is uploaded fully, then the walk stops).
-	res, err = c.Upload(context.Background(), tmp, filepath.Join(t.TempDir(), "up-cap"), 3)
+	// Cap, cumulative layer: maxBytes=10, files 7+7=14 — EVERY file is within the
+	// per-file bound (7 ≤ 10) but the total crosses the cap → Truncated=true, no
+	// error (the flag is the signal). The trip happens during sub/b.txt's io.Copy
+	// (7→14 > 10), which completes per-file-atomic; both files land. (Plan 23
+	// changed the cap from 3 to 10: with cap=3 the first 7-byte file is now
+	// REFUSED pre-flight — that layer has its own tests below.)
+	res, err = c.Upload(context.Background(), tmp, filepath.Join(t.TempDir(), "up-cap"), 10)
 	if err != nil {
 		t.Fatalf("capped Upload: %v", err)
 	}
 	if !res.Truncated {
 		t.Fatalf("capped: Truncated=false, want true (res=%+v)", res)
 	}
-	if res.Files == 0 {
-		t.Fatalf("capped: Files=0, want at least the file that tripped the cap (res=%+v)", res)
+	if res.Files != 2 {
+		t.Fatalf("capped: Files=%d, want 2 (both files within the per-file cap landed; res=%+v)", res.Files, res)
 	}
 }
 
@@ -110,46 +114,156 @@ func TestUpload(t *testing.T) {
 // documented cap size.
 const mcpUploadCap = int64(1 << 20)
 
-// TestUploadCapWalkHaltTwoFiles (Plan 22 T3 hygiene): the §6 cap halts the
-// walk BETWEEN files. A dir whose FIRST file (lexical walk order) already
-// exceeds the cap lands that file COMPLETE (per-file atomic — res.Files counts
-// it), and the second file is never started: absent remotely, not counted.
-// The in-process testsshd serves the host FS, so "remote" stat = os.Stat.
-func TestUploadCapWalkHaltTwoFiles(t *testing.T) {
+// TestUploadCapRefusesOverCapFileInDir (Plan 23 flip of Plan 22 T3's
+// walk-halt case): a dir upload containing a file individually over the cap is
+// REFUSED pre-flight — zero bytes of the over-cap file transfer, no remote file
+// is created for it, and the refusal error (naming file/size/cap) propagates.
+// The small file that sorted FIRST is complete before the refusal and REMAINS
+// remotely (the "already-completed files remain" half of the error text). The
+// cumulative walk-halt layer this test used to pin moved to
+// TestUploadCapWalkHaltBetweenFiles (with all-files-≤cap fixtures, which the
+// old a-over-first fixture can no longer exercise). The in-process testsshd
+// serves the host FS, so "remote" stat = os.Stat.
+func TestUploadCapRefusesOverCapFileInDir(t *testing.T) {
 	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
 	defer cleanup()
 	c := connectTest(t, addr, hk)
 	defer c.Close()
 
-	// a-over.bin sorts FIRST in filepath.Walk's lexical order → trips the cap;
-	// z-small.txt (1 KiB) is visited next and must never start.
+	// a-small.txt (1 KiB, sorts FIRST) uploads complete; z-over.bin (cap+1,
+	// visited second) hits the per-file pre-flight and is refused.
 	src := t.TempDir()
-	over := bytes.Repeat([]byte("x"), int(mcpUploadCap)+1) // exactly cap+1 bytes
-	if err := os.WriteFile(filepath.Join(src, "a-over.bin"), over, 0o644); err != nil {
+	small := bytes.Repeat([]byte("s"), 1<<10)
+	if err := os.WriteFile(filepath.Join(src, "a-small.txt"), small, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(src, "z-small.txt"), bytes.Repeat([]byte("s"), 1<<10), 0o644); err != nil {
+	over := bytes.Repeat([]byte("x"), int(mcpUploadCap)+1) // exactly cap+1 bytes
+	if err := os.WriteFile(filepath.Join(src, "z-over.bin"), over, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	remoteDir := filepath.Join(t.TempDir(), "up-halt")
+	remoteDir := filepath.Join(t.TempDir(), "up-refuse")
 	res, err := c.Upload(context.Background(), src, remoteDir, mcpUploadCap)
+	if err == nil {
+		t.Fatalf("capped dir Upload: want refusal error, got nil (res=%+v)", res)
+	}
+	if !strings.Contains(err.Error(), "exceeds upload cap") {
+		t.Fatalf("error must say \"exceeds upload cap\", got %q", err.Error())
+	}
+	if want := fmt.Sprintf("(%d bytes) exceeds upload cap %d", mcpUploadCap+1, mcpUploadCap); !strings.Contains(err.Error(), want) {
+		t.Fatalf("error must carry size+cap evidence %q, got %q", want, err.Error())
+	}
+	if !strings.Contains(err.Error(), "z-over.bin") {
+		t.Fatalf("error must name the refused file, got %q", err.Error())
+	}
+	// Honest partial accounting: the small file landed and counted; the refused
+	// file contributed nothing. Truncated stays false — the cumulative layer
+	// never tripped (total never crossed the cap mid-copy).
+	if res.Files != 1 || res.Bytes != int64(len(small)) || res.Truncated {
+		t.Fatalf("result = %+v, want {Files:1 Bytes:%d Truncated:false} (small file complete, refused file zero)", res, len(small))
+	}
+	// The small file REMAINS remotely at full size.
+	if fi, err := os.Stat(filepath.Join(remoteDir, "a-small.txt")); err != nil || fi.Size() != int64(len(small)) {
+		t.Fatalf("small file must remain complete remotely (%d bytes): fi=%v err=%v", len(small), fi, err)
+	}
+	// The over-cap file is ABSENT remotely — refused before transfer, so not
+	// even a zero-byte remote file was created.
+	if _, err := os.Stat(filepath.Join(remoteDir, "z-over.bin")); !os.IsNotExist(err) {
+		t.Fatalf("over-cap file must be absent remotely (refused pre-transfer), stat err=%v", err)
+	}
+}
+
+// TestUploadCapWalkHaltBetweenFiles preserves the CUMULATIVE layer of the §6 cap
+// (Plan 23: this layer is unchanged, but the old fixture — a first file already
+// over the cap — now belongs to the refusal layer, so this test re-pins the
+// walk-halt with every file within the per-file bound). Three 4 KiB files,
+// cap=6000: file1 lands (total 4096); file2's pre-flight passes (4096 ≤ 6000)
+// and its copy trips the cumulative cap mid-stream (total 8192 > 6000) yet
+// lands COMPLETE (per-file atomic); the walk halts — file3 never starts.
+func TestUploadCapWalkHaltBetweenFiles(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	src := t.TempDir()
+	for _, n := range []string{"f1.bin", "f2.bin", "f3.bin"} {
+		if err := os.WriteFile(filepath.Join(src, n), bytes.Repeat([]byte("y"), 4096), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	remoteDir := filepath.Join(t.TempDir(), "up-halt")
+	res, err := c.Upload(context.Background(), src, remoteDir, 6000)
 	if err != nil {
-		t.Fatalf("capped dir Upload: %v", err)
+		t.Fatalf("cumulative-cap dir Upload: %v (truncation is the flag, not an error)", err)
 	}
-	if res.Files != 1 || !res.Truncated {
-		t.Fatalf("result = %+v, want {Files:1 Truncated:true} (the over-cap file landed + counted, the walk halted)", res)
+	if !res.Truncated {
+		t.Fatalf("Truncated=false, want true (res=%+v)", res)
 	}
-	if res.Bytes != mcpUploadCap+1 {
-		t.Fatalf("Bytes = %d, want %d (honest total: the over-cap file landed complete, nothing else ran)", res.Bytes, mcpUploadCap+1)
+	if res.Files != 2 {
+		t.Fatalf("Files=%d, want 2 (walk halted before f3.bin; res=%+v)", res.Files, res)
 	}
-	// Second file ABSENT remotely (walk-halt — no new file started post-cap).
-	if _, err := os.Stat(filepath.Join(remoteDir, "z-small.txt")); !os.IsNotExist(err) {
-		t.Fatalf("second file must be absent remotely (walk halted between files), stat err=%v", err)
+	if res.Bytes != 2*4096 {
+		t.Fatalf("Bytes=%d, want %d (honest total: two complete files)", res.Bytes, 2*4096)
 	}
-	// The cap tripper landed COMPLETE (the cap never truncates a stream mid-file).
-	if fi, err := os.Stat(filepath.Join(remoteDir, "a-over.bin")); err != nil || fi.Size() != int64(len(over)) {
-		t.Fatalf("over-cap file must land complete (%d bytes): fi=%v err=%v", len(over), fi, err)
+	// f3 never started → absent remotely.
+	if _, err := os.Stat(filepath.Join(remoteDir, "f3.bin")); !os.IsNotExist(err) {
+		t.Fatalf("f3.bin must be absent remotely (walk halted between files), stat err=%v", err)
+	}
+	// f2 (the cumulative tripwire) landed COMPLETE — per-file atomic survives.
+	if fi, err := os.Stat(filepath.Join(remoteDir, "f2.bin")); err != nil || fi.Size() != 4096 {
+		t.Fatalf("f2.bin must land complete (4096 bytes): fi=%v err=%v", fi, err)
+	}
+}
+
+// TestUploadCapBoundarySingleFile pins the per-file boundary on the single-file
+// Upload path: STRICTLY greater than the cap → refused pre-transfer (error names
+// file/size/cap; zero remote bytes — not even a created empty file; zero-value
+// UploadResult). Exactly == cap → allowed, lands complete, Truncated=false.
+func TestUploadCapBoundarySingleFile(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	src := t.TempDir()
+	overPath := filepath.Join(src, "over.bin")
+	if err := os.WriteFile(overPath, bytes.Repeat([]byte("x"), int(mcpUploadCap)+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// cap+1 → refused, zero bytes transferred.
+	remoteOver := filepath.Join(t.TempDir(), "up-over.bin")
+	res, err := c.Upload(context.Background(), overPath, remoteOver, mcpUploadCap)
+	if err == nil {
+		t.Fatalf("over-cap single Upload: want refusal error, got nil (res=%+v)", res)
+	}
+	if !strings.Contains(err.Error(), "exceeds upload cap") || !strings.Contains(err.Error(), "over.bin") {
+		t.Fatalf("refusal error must name file + cap, got %q", err.Error())
+	}
+	if res.Files != 0 || res.Bytes != 0 || res.Truncated {
+		t.Fatalf("refused result = %+v, want zero-value (nothing transferred)", res)
+	}
+	if _, serr := os.Stat(remoteOver); !os.IsNotExist(serr) {
+		t.Fatalf("refused file must not exist remotely (zero bytes, not a 0-byte file), stat err=%v", serr)
+	}
+
+	// Exactly == cap → allowed, complete, honest accounting.
+	atCapPath := filepath.Join(src, "atcap.bin")
+	if err := os.WriteFile(atCapPath, bytes.Repeat([]byte("x"), int(mcpUploadCap)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	remoteAtCap := filepath.Join(t.TempDir(), "up-atcap.bin")
+	res, err = c.Upload(context.Background(), atCapPath, remoteAtCap, mcpUploadCap)
+	if err != nil {
+		t.Fatalf("at-cap single Upload: %v", err)
+	}
+	if res.Files != 1 || res.Bytes != mcpUploadCap || res.Truncated {
+		t.Fatalf("at-cap result = %+v, want {Files:1 Bytes:%d Truncated:false}", res, mcpUploadCap)
+	}
+	if fi, serr := os.Stat(remoteAtCap); serr != nil || fi.Size() != mcpUploadCap {
+		t.Fatalf("at-cap remote size: fi=%v err=%v, want %d", fi, serr, mcpUploadCap)
 	}
 }
 

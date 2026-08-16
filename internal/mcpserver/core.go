@@ -288,12 +288,13 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 // profileID (iron rule — same gate as ExecCommandForProfile / DownloadForProfile).
 // localPath is read from the broker's (= the agent's) filesystem; remotePath is
 // the destination on the server (a file or a directory, uploaded recursively,
-// mirroring `scp -r localPath server:remotePath`). The upload is §6-capped
-// (MaxOutputBytes on TOTAL bytes): a larger payload yields Truncated=true with
-// Bytes as the true total; the file in flight still lands COMPLETE (the cap
-// halts the walk between files, never a stream mid-file) — a single over-cap
-// file lands whole, and in a directory upload the files after it are not
-// uploaded. Every branch is
+// mirroring `scp -r localPath server:remotePath`). The §6 cap (MaxOutputBytes)
+// is a hard PER-FILE bound: a single file strictly larger than the cap is
+// refused BEFORE transfer (zero bytes move, no remote file is created — the
+// error names file/size/cap; files completed before the refusal remain). When
+// every file is within the cap but the cumulative total crosses it,
+// Truncated=true with Bytes as the true total and the walk halts between files
+// (the in-flight file lands complete — files after it are not uploaded). Every branch is
 // audited with Action="upload"; the audit Command field records "localPath -> remotePath".
 //
 // T1 carry — remote parent creation: sshbroker.Client.Upload puts files via

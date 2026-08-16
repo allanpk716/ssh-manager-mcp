@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -574,10 +575,15 @@ func TestUploadForProfileNoCredential(t *testing.T) {
 	}
 }
 
-// TestUploadForProfileTruncatesLargeUpload verifies the §6 cap: a payload larger
-// than MaxOutputBytes yields Truncated=true with Bytes reporting the true total
-// transferred before the cap halted the walk.
-func TestUploadForProfileTruncatesLargeUpload(t *testing.T) {
+// TestUploadForProfileRefusesOverCapFile (Plan 23 flip of the Plan 6 per-file-
+// atomic case, which asserted an over-cap file uploads COMPLETE with
+// Bytes > MaxOutputBytes): the §6 cap is now a hard per-file bound — a file
+// STRICTLY larger than MaxOutputBytes is refused BEFORE transfer. The error
+// names file/size/cap; files completed before the refusal REMAIN remotely
+// (verified on the host FS — the in-process testsshd serves it); the refused
+// file is absent remotely (zero bytes, not a 0-byte file); UploadOutput comes
+// back zero; the audit row records status "error".
+func TestUploadForProfileRefusesOverCapFile(t *testing.T) {
 	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
 	defer cleanup()
 	st := newStore(t)
@@ -585,30 +591,90 @@ func TestUploadForProfileTruncatesLargeUpload(t *testing.T) {
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{srvID})
 
-	// Build a local dir tree well over the cap: two files, each 2 MiB. The
-	// countingWriter trips the cap during the first file's io.Copy and uploadDir
-	// halts the walk before the second file starts.
-	big := strings.Repeat("x", int(MaxOutputBytes)*2) // 2 MiB each
+	// Small file sorts first (uploads complete); over-cap file sorts second
+	// (refused pre-flight). 2 MiB > 1 MiB cap by a clear margin.
+	small := strings.Repeat("s", int(MaxOutputBytes)/2) // 512 KiB
+	big := strings.Repeat("x", int(MaxOutputBytes)*2)   // 2 MiB
 	localDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(localDir, "a.bin"), []byte(big), 0644); err != nil {
-		t.Fatalf("setup a.bin: %v", err)
+	if err := os.WriteFile(filepath.Join(localDir, "a-small.bin"), []byte(small), 0644); err != nil {
+		t.Fatalf("setup a-small.bin: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(localDir, "b.bin"), []byte(big), 0644); err != nil {
-		t.Fatalf("setup b.bin: %v", err)
+	if err := os.WriteFile(filepath.Join(localDir, "z-over.bin"), []byte(big), 0644); err != nil {
+		t.Fatalf("setup z-over.bin: %v", err)
 	}
-	remoteDir := toSlash(filepath.Join(t.TempDir(), "up-cap"))
+	remoteDir := toSlash(filepath.Join(t.TempDir(), "up-refuse"))
+	out, err := UploadForProfile(context.Background(), st, "proj-test", pid, srvID, localDir, remoteDir)
+	if err == nil {
+		t.Fatalf("upload: want over-cap refusal error, got nil (out=%+v)", out)
+	}
+	if !strings.Contains(err.Error(), "exceeds upload cap") || !strings.Contains(err.Error(), "z-over.bin") {
+		t.Fatalf("refusal error must name file + cap, got %q", err.Error())
+	}
+	if want := fmt.Sprintf("(%d bytes) exceeds upload cap %d", int64(len(big)), MaxOutputBytes); !strings.Contains(err.Error(), want) {
+		t.Fatalf("refusal error must carry size+cap evidence %q, got %q", want, err.Error())
+	}
+	if out.Files != 0 || out.Bytes != 0 || out.Truncated {
+		t.Fatalf("out = %+v, want zero-value on refusal (the retained small file is on the remote, not in the output)", out)
+	}
+	// Retention: the small file completed before the refusal and REMAINS.
+	if fi, serr := os.Stat(filepath.Join(remoteDir, "a-small.bin")); serr != nil || fi.Size() != int64(len(small)) {
+		t.Fatalf("small file must remain remotely (%d bytes): fi=%v err=%v", len(small), fi, serr)
+	}
+	// The refused file never landed — absent, not zero-byte.
+	if _, serr := os.Stat(filepath.Join(remoteDir, "z-over.bin")); !os.IsNotExist(serr) {
+		t.Fatalf("over-cap file must be absent remotely, stat err=%v", serr)
+	}
+	// The refusal path is audited as status "error".
+	rows, rerr := st.AuditRows(5)
+	if rerr != nil {
+		t.Fatalf("read audit: %v", rerr)
+	}
+	found := false
+	for _, r := range rows {
+		if r.Action == "upload" && r.ServerID == srvID && r.Status == "error" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no error upload audit row for server=%s; rows=%+v", srvID, rows)
+	}
+}
+
+// TestUploadForProfileTruncatesCumulativeOverCap keeps the OTHER §6 layer at
+// the MCP boundary (unchanged by Plan 23): every file within the per-file cap,
+// but the cumulative total crosses it → Truncated=true, NO error, Bytes reports
+// the honest total. Replaces the old two-2MiB-files fixture (whose first file
+// is now refused pre-flight) with three 512 KiB files (each ≤ cap, 1.5 MiB
+// total > 1 MiB cap).
+func TestUploadForProfileTruncatesCumulativeOverCap(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	st := newStore(t)
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	part := strings.Repeat("x", int(MaxOutputBytes)/2) // 512 KiB each
+	localDir := t.TempDir()
+	for _, n := range []string{"a.bin", "b.bin", "c.bin"} {
+		if err := os.WriteFile(filepath.Join(localDir, n), []byte(part), 0644); err != nil {
+			t.Fatalf("setup %s: %v", n, err)
+		}
+	}
+	remoteDir := toSlash(filepath.Join(t.TempDir(), "up-cum"))
 	out, err := UploadForProfile(context.Background(), st, "proj-test", pid, srvID, localDir, remoteDir)
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
 	if !out.Truncated {
-		t.Fatal("want UploadOutput.Truncated=true (payload exceeded the cap)")
+		t.Fatal("want UploadOutput.Truncated=true (cumulative total exceeded the cap)")
 	}
-	if out.Bytes <= MaxOutputBytes {
-		t.Fatalf("Bytes=%d, want > %d (the cap was exceeded)", out.Bytes, MaxOutputBytes)
+	if out.Bytes != int64(3*len(part)) {
+		t.Fatalf("Bytes=%d, want %d (honest total: all three files within the per-file cap landed)", out.Bytes, 3*len(part))
 	}
-	if out.Files == 0 {
-		t.Fatal("Files=0, want at least the file that tripped the cap")
+	if out.Files != 3 {
+		t.Fatalf("Files=%d, want 3 (each file ≤ cap; the tripwire file lands complete per-file-atomic)", out.Files)
 	}
 }
 
