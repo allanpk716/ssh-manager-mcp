@@ -108,6 +108,7 @@ The owner CLI is how you record servers, group them, and grant an agent access. 
 ssh-manager servers edit gpu --hardware "8x A100 80GB, CUDA 12"     # structured field (agent-visible)
 ssh-manager servers edit gpu --host 192.0.2.20 --port 2222            # re-point host/port
 ssh-manager servers edit gpu --password '...'                        # re-credential (or --key)
+ssh-manager servers edit gpu --clear-credential                     # strip credentials → credential-less (exclusive action)
 ssh-manager servers ls                                                # lists name + role + caveats
 
 # Bulk-import your existing ~/.ssh/config instead of typing servers one by one
@@ -156,7 +157,7 @@ ssh-manager tui --mode client  # 强制 client 面板
 
 | 页签 | 键 | 动作 |
 |---|---|---|
-| 服务器 | `a` / `e` / `d` / `i` / `!` | 新增（凭据**可选**，都不填 = 无凭据服务器）/ 编辑（tags 等既有字段保留）/ 删除 / **导入 ssh config**（候选多选 → 批量导入 → 逐台补全，`Esc` 跳过保留 ⚠）/ 只看 ⚠ 待处理机器（无凭据 / 未填 role / 缺私钥口令） |
+| 服务器 | `a` / `e` / `d` / `i` / `!` | 新增（凭据**可选**，都不填 = 无凭据服务器）/ 编辑（tags 等既有字段保留；「清除凭据」勾选退回无凭据态，同 `servers edit --clear-credential`）/ 删除 / **导入 ssh config**（候选多选 → 批量导入 → 逐台补全，`Esc` 跳过保留 ⚠）/ 只看 ⚠ 待处理机器（无凭据 / 未填 role / 缺私钥口令） |
 | Profiles | `a` / `g` | 新增 profile / 授权（按服务器名多选；**增量**——不动已有授权） |
 | Projects | `a` / `e` / `d` | 新建（填 name + 选 profile）→ token **一次性全屏显示**；`e` 轮换 token（新 token 一次性显示）；`d` 吊销 |
 | 设备码 | `a` / `d` | 签发（填 serve 地址用于拼提示；设备码 + 证书指纹 + `cache pull` 示例命令一次性全屏显示）；`d` 吊销 |
