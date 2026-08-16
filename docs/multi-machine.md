@@ -571,3 +571,4 @@ serve 自签证书长生（不靠过期驱动轮换），但若私钥疑似泄�
 - [managing-servers.md](./managing-servers.md)——服务器增删改查（在 serve 那台**服务器**上操作）。
 - [scenarios.md](./scenarios.md)——应用场景示例（GPU 巡检、部署、端口转发……，两种模式都适用）。
 - 仓库根 [README 的 "Multi-machine: serve mode"](../README.md#multi-machine-serve-mode-remote-agents-on-a-vlan) 节（英文概览）。
+- [compat-matrix.md](./compat-matrix.md)——client↔serve 版本兼容矩阵（升级任何一端之前先看）。
