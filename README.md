@@ -41,7 +41,7 @@ The MCP server exposes these tools — **ssh-functional-equivalent for operating
 | `download_file` | `scp host:path .` | Download a remote file (size-capped; truncated output is flagged). |
 | `upload_file` | `scp -r . host:path` | Upload a local file **or directory** (recursive) to the server. |
 | `forward_port` | `ssh -L` | Open a local port forwarding to a remote service — returns `127.0.0.1:<port>` for the agent to use (e.g. `curl`). |
-| `close_port` | — | Close a forward when done (tunnels also auto-close after idle / on exit). |
+| `close_port` | — | Close a forward when done (tunnels auto-close ~10 min after creation). |
 
 Every tool is **profile-gated** (the agent only reaches servers you granted its project) and **audited** (each call logged with project, server, action, status). Credential bytes never appear in any tool result.
 

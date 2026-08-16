@@ -75,7 +75,7 @@ type ForwardInput struct {
 // ForwardOutput is the forward_port tool output. The agent reaches the remote
 // service at 127.0.0.1:local_port on ITS OWN machine (the broker host's
 // loopback) — e.g. curl http://127.0.0.1:<local_port>. Pass tunnel_id to
-// close_port when done (tunnels also auto-close after ~10 min idle).
+// close_port when done (tunnels auto-close ~10 min after creation — creation-based, not activity-based).
 type ForwardOutput struct {
 	TunnelID  string `json:"tunnel_id" jsonschema:"opaque id; pass to close_port when done with the forward"`
 	LocalPort int    `json:"local_port" jsonschema:"the local port now forwarding to remote_host:remote_port — reach it via 127.0.0.1:local_port on your machine"`
