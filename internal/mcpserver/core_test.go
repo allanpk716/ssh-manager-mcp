@@ -334,6 +334,46 @@ func TestDownloadForProfileRejectsOutOfProfile(t *testing.T) {
 	}
 }
 
+// TestDownloadForProfileNoCredential (Plan 21 A1): download against a
+// credential-less server is refused with the typed sentinel AND audited as
+// status "no_credential" (not auth_error) — the same unification exec got in
+// Plan 20 C0, so the agent never misreads a missing credential as a wrong
+// password. No connect is attempted.
+func TestDownloadForProfileNoCredential(t *testing.T) {
+	st := newStore(t)
+	srvID, err := st.AddServer(&models.Server{Name: "bare", Host: "192.0.2.7", Port: 22, User: "u"})
+	if err != nil {
+		t.Fatalf("credential-less AddServer: %v", err)
+	}
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	const projectID = "proj-test"
+	_, err = DownloadForProfile(context.Background(), st, projectID, pid, srvID, "/tmp/x")
+	if !errors.Is(err, vault.ErrNoCredential) {
+		t.Fatalf("want vault.ErrNoCredential, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "no credential") {
+		t.Fatalf("err = %q, want it to mention \"no credential\"", err.Error())
+	}
+
+	// audited with the dedicated status (mirrors the exec no_credential test)
+	rows, err := st.AuditRows(5)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	found := false
+	for _, r := range rows {
+		if r.Action == "download" && r.ServerID == srvID && r.ProjectID == projectID && r.Status == "no_credential" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no no_credential download audit row for server=%s; rows=%+v", srvID, rows)
+	}
+}
+
 // TestDownloadForProfileTruncatesLargeFile verifies the §6 cap: a file larger
 // than MaxOutputBytes yields Truncated=true, Content is the prefix (exactly the
 // cap), and Bytes reports the true total size.
@@ -494,6 +534,43 @@ func TestUploadForProfileRejectsOutOfProfile(t *testing.T) {
 	wantCmd := localPath + " -> " + remotePath
 	if denied.Command != wantCmd {
 		t.Fatalf("denied audit command = %q, want %q", denied.Command, wantCmd)
+	}
+}
+
+// TestUploadForProfileNoCredential (Plan 21 A1): upload against a
+// credential-less server is refused with the typed sentinel AND audited as
+// status "no_credential" (not auth_error) — same unification as exec/download.
+func TestUploadForProfileNoCredential(t *testing.T) {
+	st := newStore(t)
+	srvID, err := st.AddServer(&models.Server{Name: "bare", Host: "192.0.2.7", Port: 22, User: "u"})
+	if err != nil {
+		t.Fatalf("credential-less AddServer: %v", err)
+	}
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	const projectID = "proj-test"
+	_, err = UploadForProfile(context.Background(), st, projectID, pid, srvID, "/tmp/local.txt", "/tmp/remote.txt")
+	if !errors.Is(err, vault.ErrNoCredential) {
+		t.Fatalf("want vault.ErrNoCredential, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "no credential") {
+		t.Fatalf("err = %q, want it to mention \"no credential\"", err.Error())
+	}
+
+	rows, err := st.AuditRows(5)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	found := false
+	for _, r := range rows {
+		if r.Action == "upload" && r.ServerID == srvID && r.ProjectID == projectID && r.Status == "no_credential" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no no_credential upload audit row for server=%s; rows=%+v", srvID, rows)
 	}
 }
 
@@ -677,6 +754,47 @@ func TestForwardForProfileRejectsOutOfProfile(t *testing.T) {
 	}
 	if denied.Command != "127.0.0.1:8080" {
 		t.Fatalf("denied audit command = %q, want %q", denied.Command, "127.0.0.1:8080")
+	}
+}
+
+// TestForwardForProfileNoCredential (Plan 21 A1): forward against a
+// credential-less server is refused with the typed sentinel AND audited as
+// status "no_credential" (not auth_error) — same unification as exec/download/
+// upload. The manager never receives a client (refusal precedes any connect).
+func TestForwardForProfileNoCredential(t *testing.T) {
+	st := newStore(t)
+	srvID, err := st.AddServer(&models.Server{Name: "bare", Host: "192.0.2.7", Port: 22, User: "u"})
+	if err != nil {
+		t.Fatalf("credential-less AddServer: %v", err)
+	}
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	mgr := NewTunnelManager()
+	defer mgr.CloseAll()
+
+	const projectID = "proj-test"
+	_, err = ForwardForProfile(context.Background(), st, projectID, pid, srvID, "127.0.0.1", 8080, 0, mgr)
+	if !errors.Is(err, vault.ErrNoCredential) {
+		t.Fatalf("want vault.ErrNoCredential, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "no credential") {
+		t.Fatalf("err = %q, want it to mention \"no credential\"", err.Error())
+	}
+
+	rows, err := st.AuditRows(5)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	found := false
+	for _, r := range rows {
+		if r.Action == "forward" && r.ServerID == srvID && r.ProjectID == projectID && r.Status == "no_credential" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no no_credential forward audit row for server=%s; rows=%+v", srvID, rows)
 	}
 }
 

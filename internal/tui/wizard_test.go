@@ -142,6 +142,105 @@ func TestWizard_VaultErrViewShowsSaveErr(t *testing.T) {
 	}
 }
 
+// TestWizard_FooterHidesSavedWhenSaveErr (Plan 21 A1) pins every footer site
+// that promises 「已保存」: with a failed role.json write (saveErr != nil) the
+// promise is false, so the footer must swap to a failure variant that does NOT
+// claim saved state — while keeping the site's q/r key prefix. Each site is
+// constructed by direct step-field state (same-package pattern as
+// TestWizard_VaultErrViewShowsSaveErr); the saveErr==nil build is the control
+// case that must still show the original 「已保存」 footer.
+func TestWizard_FooterHidesSavedWhenSaveErr(t *testing.T) {
+	newBare := func() wizardModel { // fresh model, fields set per-site below
+		return newWizardForTest()
+	}
+	sites := []struct {
+		name     string                          // render site
+		build    func(w wizardModel) wizardModel // land the model on that step
+		failWant string                          // saveErr != nil: failure variant text that MUST appear
+		okWant   string                          // saveErr == nil: original footer text that MUST appear
+	}{
+		{
+			name: "stepRoleDone",
+			build: func(w wizardModel) wizardModel {
+				w.step = stepRoleDone // placeholder page (no form rendered)
+				return w
+			},
+			failWant: "q 退出（role.json 写入失败，进度未保存）",
+			okWant:   "q 退出（进度已保存，重开 tui 会继续）",
+		},
+		{
+			name: "stepVaultErr",
+			build: func(w wizardModel) wizardModel {
+				w.step, w.form = stepVaultErr, nil
+				w.err = errors.New("vault 初始化失败（测试）")
+				return w
+			},
+			failWant: "r 重试 / q 退出（角色未保存，重开 tui 从头开始）",
+			okWant:   "r 重试 / q 退出（角色已保存，重开 tui 会继续）",
+		},
+		{
+			name: "stepDeviceIssue 失败态",
+			build: func(w wizardModel) wizardModel {
+				w.step, w.form = stepDeviceIssue, nil
+				w.err = errors.New("签发设备码失败（测试）") // err branch carries the r 重试 footer
+				return w
+			},
+			failWant: "r 重试 / q 暂停退出（角色未保存，重开 tui 从头开始）",
+			okWant:   "r 重试 / q 暂停退出（角色已保存，重开 tui 会从设备码继续）",
+		},
+		{
+			name: "stepDeviceIssue 等待态",
+			build: func(w wizardModel) wizardModel {
+				w.step, w.form = stepDeviceIssue, nil
+				return w
+			},
+			failWant: "q 暂停退出（role.json 写入失败，进度未保存）",
+			okWant:   "q 暂停退出（进度已保存）",
+		},
+		{
+			name: "stepServeProbe",
+			build: func(w wizardModel) wizardModel {
+				w.step, w.form = stepServeProbe, nil
+				return w
+			},
+			failWant: "q 暂停退出（role.json 写入失败，进度未保存）",
+			okWant:   "q 暂停退出（进度已保存）",
+		},
+		{
+			name: "表单步骤（default 渲染）",
+			build: func(w wizardModel) wizardModel {
+				w.askFirstServer() // stepServerAsk + its confirm form → the default form branch
+				return w
+			},
+			failWant: "q 暂停退出（role.json 写入失败，进度未保存）",
+			okWant:   "q 暂停退出（进度已保存，重开 tui 会继续）",
+		},
+	}
+	for _, s := range sites {
+		t.Run(s.name, func(t *testing.T) {
+			withRoleDirs(t) // isolate role.json lookup (newWizard → roles.Load)
+
+			// saveErr != nil: no 「已保存」 claim anywhere, failure variant present.
+			w := s.build(newBare())
+			w.saveErr = errors.New("写入被拒绝")
+			v := w.View().Content
+			if strings.Contains(v, "已保存") {
+				t.Fatalf("saveErr footer must not claim 「已保存」:\n%s", v)
+			}
+			if !strings.Contains(v, s.failWant) {
+				t.Fatalf("saveErr footer must show the failure variant %q:\n%s", s.failWant, v)
+			}
+
+			// Control — saveErr == nil: the original 「已保存」 footer is intact.
+			w2 := s.build(newBare())
+			v2 := w2.View().Content
+			if !strings.Contains(v2, s.okWant) {
+				t.Fatalf("nil saveErr footer must keep the original %q:\n%s", s.okWant, v2)
+			}
+		})
+	}
+}
+
 // TestStepFormDone_StandaloneVaultErrNoPanic pins review C2: a fresh
 // chooseRole(standalone) whose enterStandalone fails leaves step=stepVaultErr
 // and form=nil; stepFormDone must return (w, nil) instead of Init-ing the nil

@@ -155,7 +155,7 @@ IdentityFile 写**相对路径**时，本工具按 **config 文件所在目录**
 
 「先录机器、凭据后补」是合法状态：`servers add`（或 import 的 `needs-credential` 结果）可以**不带任何凭据**。要点：
 
-- **agent 一侧的语义**：对无凭据机器调 `exec_command`，会在**发起连接之前**被拒，错误信息自带补法——`server has no credential configured (set one with: ssh-manager servers edit <name> --password ... / --key ...)`（审计里记 `no_credential`，不是 auth_error，agent 不会误判成密码错了）。下载 / 上传 / 转发同样在连接前被拒、返回同一条错误信息（审计里这类记 `auth_error`）。
+- **agent 一侧的语义**：对无凭据机器调 `exec_command` / 下载 / 上传 / 转发，会在**发起连接之前**被拒，错误信息自带补法——`server has no credential configured (set one with: ssh-manager servers edit <name> --password ... / --key ...)`（审计里统一记 `no_credential`，不是 auth_error，agent 不会误判成密码错了）。
 - **TUI 一侧**：无凭据（以及未填 role、带 needs-passphrase 标签）的机器在列表里以 ⚠ 前缀**置顶**；按 `!` 只看这些待处理机器。
 - **补凭据**：`servers edit <名字> --password '<密码>'` 或 `--key <私钥路径> [--key-passphrase '<口令>']`（TUI 里 `e` 编辑，密码栏填新值）。补上即正常连接，server 的 id / name / profile 绑定全程不变。
 
