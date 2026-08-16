@@ -270,6 +270,62 @@ func (s *Store) DeleteServerCascading(id string) error {
 	return tx.Commit()
 }
 
+// dropTagFrom returns tags minus every occurrence of tag (fresh slice, valid
+// empty when the list empties). The store-package twin of the TUI dropTag /
+// CLI stripTag helpers — kept unexported and local to the one call site.
+func dropTagFrom(tags []string, tag string) []string {
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t != tag {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// ClearServerCredential resets the server to the credential-less form in one
+// transaction: credential/sudo references cleared, the needs-passphrase tag
+// stripped (meaningless without a credential), and exclusively-owned credential
+// rows deleted (two-column guard — shared rows survive). Absent id = no-op.
+func (s *Store) ClearServerCredential(id string) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	srv, err := getServerTx(tx, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // idempotent no-op (DeleteServerCascading semantics)
+		}
+		return err
+	}
+	oldCred, oldSudo := srv.CredentialID, srv.SudoCredentialID
+	srv.CredentialID, srv.AuthMethod, srv.SudoCredentialID = "", "", ""
+	srv.Tags = dropTagFrom(srv.Tags, "needs-passphrase")
+	if err := updateServerTx(tx, srv); err != nil {
+		return err
+	}
+	for _, cid := range []string{oldCred, oldSudo} {
+		if cid == "" {
+			continue
+		}
+		n, err := credentialReferencedElseBy(tx, cid, id)
+		if err != nil {
+			return err // fail-closed
+		}
+		if n == 0 {
+			if _, err := tx.Exec(`DELETE FROM credentials WHERE id=?`, cid); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
 // CountOrphanCredentials counts credential rows referenced by NEITHER column.
 // Read-only-safe (pure SELECT) — gc can dry-run against an offline cache.
 func (s *Store) CountOrphanCredentials() (int, error) {

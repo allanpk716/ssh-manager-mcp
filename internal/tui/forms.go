@@ -19,12 +19,28 @@ type serverDraft struct {
 	Port                                                     int
 	Password, KeyPath, KeyPass, SudoPassword                 string
 	Description, Location, Hardware, Services, Role, Caveats string
+	// ClearCredential is the edit form's 清除凭据 toggle (rendered only in
+	// editing mode): ticked = submitServer routes through ClearServerCredential
+	// instead of a normal update — the reverse operation of re-credential.
+	ClearCredential bool
 }
 
 // newServerForm builds the add/edit form bound to d by pointer. Secret fields
 // are masked; in add mode BOTH may stay empty (credential-less server, Plan 20
-// C0), in edit mode empty = keep existing credential.
+// C0), in edit mode empty = keep existing credential. The 清除凭据 confirm is
+// edit-only (add mode has no credential to clear).
 func newServerForm(d *serverDraft, editing bool) *huh.Form {
+	credFields := []huh.Field{
+		passwordField(d, editing),
+		keyPathField(d),
+		huh.NewInput().Title("密钥口令（可选）").Value(&d.KeyPass).EchoMode(huh.EchoModePassword),
+		sudoPasswordField(d),
+	}
+	if editing {
+		credFields = append(credFields, huh.NewConfirm().
+			Title("清除凭据（回到无凭据态）").Value(&d.ClearCredential).
+			Affirmative("清除").Negative("保留"))
+	}
 	return huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Title("名称（唯一）").Value(&d.Name).Validate(nonEmpty),
@@ -32,12 +48,7 @@ func newServerForm(d *serverDraft, editing bool) *huh.Form {
 			huh.NewInput().Title("SSH 用户").Value(&d.User).Validate(nonEmpty),
 			portField(&d.Port),
 		),
-		huh.NewGroup([]huh.Field{
-			passwordField(d, editing),
-			huh.NewInput().Title("私钥路径（可选，与密码互斥；编辑时留空=不变）").Value(&d.KeyPath),
-			huh.NewInput().Title("密钥口令（可选）").Value(&d.KeyPass).EchoMode(huh.EchoModePassword),
-			sudoPasswordField(d),
-		}...),
+		huh.NewGroup(credFields...),
 		huh.NewGroup(structuredFields(d)...),
 	)
 }
@@ -52,6 +63,12 @@ func passwordField(d *serverDraft, editing bool) *huh.Input {
 
 func sudoPasswordField(d *serverDraft) *huh.Input {
 	return huh.NewInput().Title("sudo 密码（可选）").Value(&d.SudoPassword).EchoMode(huh.EchoModePassword)
+}
+
+// keyPathField is the private-key path input, byte-for-byte the title the
+// inline form used before the extraction (Plan 21 A2 title-lock).
+func keyPathField(d *serverDraft) *huh.Input {
+	return huh.NewInput().Title("私钥路径（可选，与密码互斥；编辑时留空=不变）").Value(&d.KeyPath)
 }
 
 func structuredFields(d *serverDraft) []huh.Field {
@@ -276,8 +293,19 @@ func doAction(st *store.Store, fn func() (string, error)) tea.Cmd {
 // means add; otherwise edit: id is preserved and empty secret fields keep the
 // existing credentials (nil cred/sudo → the WithCredentials APIs keep the old
 // rows — same semantics as the CLI serversEditCmd). A replaced credential row
-// is dropped inside the same tx when nothing else references it.
+// is dropped inside the same tx when nothing else references it. A ticked
+// 清除凭据 toggle (edit mode only) routes through ClearServerCredential FIRST —
+// the secret fields are ignored on that path (clear wins over a filled
+// password field, the same exclusivity the CLI enforces via its mutex).
 func submitServer(st *store.Store, cur *models.Server, d *serverDraft) tea.Cmd {
+	if cur != nil && d.ClearCredential {
+		return doAction(st, func() (string, error) {
+			if err := st.ClearServerCredential(cur.ID); err != nil {
+				return "", err
+			}
+			return "已清除凭据 " + cur.Name, nil
+		})
+	}
 	return doAction(st, func() (string, error) {
 		srv, cred, sudo, err := d.toParts()
 		if err != nil {
