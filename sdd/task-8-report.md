@@ -1,52 +1,90 @@
-# Task 8 报告 — 概念模型文档（docs/concepts.md）+ 交叉链接
+# Task 8 报告：client↔serve 版本兼容矩阵
 
-**状态**：✅ 完成　|　**Commit**：`ecdd607`（feat/plan19-role-wizard）　|　**构建**：`go build ./...` BUILD_OK（仅文档文本改动，未触碰代码）
+**状态：完成** | commit `128576f56d1a8e8b078f5bbfb9b6525adaf51aa0`（分支 worktree-plan-25-ci-gate）
+3 files changed, 30 insertions(+), 1 deletion(-)
 
-## 交付物
+## Step 1: git 取证输出
 
-### 1. `docs/concepts.md`（新建，79 行 — 符合 ~100 行以内的要求）
+### tag 列表（`git tag -l | sort -V`）
 
-按 spec §5 与任务 ground truth 逐项落实：
+```
+v0.1.0 v0.2.0 v0.3.0 v0.3.1 v0.4.0 v0.5.0 v0.6.0 v0.7.0 v0.7.1 v0.7.2 v0.7.3
+```
 
-- **数据流图（ASCII）**：server 机四页签（服务器=货架 / Profiles=装箱单 / Projects=钥匙 / 设备码=水管）↔ project token（阀门，在线远程 MCP 路径）+ 设备码（水管钥匙，GET /snapshot 整仓快照路径）↔ client 机 `cache.bin`（加密整仓只读快照）→ `.mcp.json --token` → agent 只见自己 project 绑定 profile 内的服务器（一把钥匙只开一个箱子）。
-- **类比表**：仓库 / 货架 / 装箱单 / 钥匙 / **设备码=水管钥匙** / **token=阀门** / **服务器指纹（pin）=防伪封条（首次连接必须核对）** / cache.bin=加密整箱货物。含 pin、水管钥匙两个必补行。
-- **两种输入形态**：分开填（裸码 + 指纹栏 / `--pin` / `SSHMGR_SERVE_PIN`）vs `<码>:<指纹>` 合并串，等价；三处皆无 pin → 默认 hard-fail 不明文（与 shipped 行为一致）。
-- **第二台 client 完整接入链**（4 步）：设备码页 [a] 签发（一台一枚、吊销粒度=单机、**不推荐复用**——失窃只能全吊）→ Projects 页 [a] 新建 project 绑 profile → token 一次性展示（可重发）→ client 机向导 或 `cache pull --token '<码>:sha256:<指纹>'` → `.mcp.json --cache --token`。project/token 按项目粒度自由建、设备码按机器粒度发。
-- **角色与向导一段话**：role.json 三角色（standalone/server/client）、后果导向首屏、选定瞬间落盘 role.json（Esc=安全暂停、可续配）、standalone→server 经 `[u]` 无损升级、vault→client 必经 clear。
-- **clear 一段话**：按实存枚举清单（vault/serve/缓存残留/Windows 遗留计划任务 `ssh-manager-cache-refresh`/role.json）→ 输入 `DELETE`（输错零改动）→ vault 角色先 export 安全绳（回读校验+抄录口令确认）→ 幂等执行 → exe 保留。
+### `git log --oneline v0.3.1..v0.4.0 -- internal/mcpserver/serve.go internal/cli/cache.go`
 
-### 2. README.md（2 处）
+```
+73d80b2 fix(cli): scheme-error hint says clear-pin + --allow-plaintext (xT2 review Minor)
+7fcae77 feat(cli): no-pin pull hard-fails unless --allow-plaintext; embed pin as single token (xcheck F4/F7/F11)
+8f95d17 fix(cli): hard-fail when pin set but URL is not https (xcheck F8)
+5b14546 docs(mcpserver): correct defensive else-branch comment in RunServe
+d48523a feat(mcpserver): RunServe auto-generates cert + forces TLS when none given
+0d56bb0 feat(cli): cache pull uses pinned TLS, plaintext fallback when no pin
+7ad1b0d feat(cli): pinning TLS transport + pin resolution for cache pull
+```
 
-- TUI 章节开头加一行指向 `docs/concepts.md`（「概念模型图解」），并加首跑角色向导 + `ssh-manager clear` 一句说明。
-- 命令清单（"Other commands"）补 `clear`（role teardown — wipes the machine back to first-run）。
+### TLS-only 版本结论
 
-### 3. docs/multi-machine.md（2 处）
+**实证版本 = v0.4.0，占位符正确，无需改版本号。**
 
-- 「enroll 一台新机（3 步）」标题下加 🧭 指针行 → concepts.md（并提示空机直接跑 `tui` 走向导）。
-- 「##### 可选：系统定时器（给非 Claude 的消费方）」标题加 **—— legacy** 后缀 + 醒目 banner：v0.5.0+ 进程内自动保鲜取代（MCP 消费方无需 OS 定时器）；模板仅服务直接读 cache.bin 的非 MCP 消费方；Windows 遗留计划任务 `ssh-manager-cache-refresh` 由 `ssh-manager clear`（client 角色）顺带删除，Unix 自建 unit 需自行清理（与 `internal/cli/clear_timer_*.go` 的 `legacyTimerName` 实现一致）。
+- 证据 commit：`d48523a`（全 hash `d48523aae2cfa104a9adc471bd8e265f1f3f3742`，2026-08-13，"feat(mcpserver): RunServe auto-generates cert + forces TLS when none given"）
+- `git tag --contains d48523a | sort -V | head -3` → `v0.4.0 v0.5.0 v0.6.0`（最早含此 commit 的 tag 是 **v0.4.0**）
+- `git describe --tags d48523a` → `v0.3.0-9-gd48523a`（位于 v0.3.0 之后、v0.4.0 打 tag 之前，与 tag --contains 一致）
+- 表格处理：把占位「（以 git log 实证为准）」替换为实证标注「（实证：commit `d48523a`，2026-08-13「RunServe auto-generates cert + forces TLS when none given」）」——满足 brief Step 1 Expected 的"写入矩阵时标注证据 commit"。
 
-### 4. internal/tui/wizard.go 首屏提示（核对，无需改动）
+### 附带核实
 
-wizard.go:745 现文 `概念图解：docs/concepts.md（或 --help）` —— 与实际文件名 `docs/concepts.md` 一致，零改动（本次 commit 因此不含 wizard.go）。
+- v0.7.0 `tui --mode broker` 移除：`068edef`（"--mode broker release note"）落在 v0.6.0..v0.7.0 范围内，且 `9491e50`（v0.7.0 release notes）同范围——表行成立。
+- 矩阵引用的 README「migration order」锚点真实存在：根 README.md:214「**⚠️ Breaking change / migration order.** New `serve` is TLS-only. ...」（含先升 client 后重启 serve 的同一铁律表述）。
 
-## 验证
+## Step 2: 新建 docs/compat-matrix.md
 
-- `go build ./...` → BUILD_OK。
-- `git show --stat ecdd607`：3 files changed（concepts.md 新建 79 行 + README.md + multi-machine.md），无代码文件混入。
-- 交叉引用核对：concepts.md 中 `getting-started.md` / `quickstart-multi-machine.md` 链接的文件均存在；曾写的「护栏矩阵见 multi-machine.md」在核对后发现该内容实际在 spec 而非 multi-machine.md，已删（避免死链/错链）。
+照 brief 模板全文写入，唯一改动 = 上述 TLS-only 行的实证标注替换。结构：维护规则引言 / 已验证组合（v0.7.3×v0.7.3，2026-08-16，在线 NUC10+笔记本、离线 9/9）/ 已知破坏性变更（v0.4.0 TLS-only + v0.7.0 mode-broker 移除）/ 升级顺序铁律 / 相关文档（multi-machine.md + agent-access.md 四层断连）。
 
-## 备注 / 边界
+关键行（破坏性变更表 TLS-only 行）：
 
-- spec §5 提到「三份上手文档前置引用此节」；任务 Do 清单明确圈定为 README（TUI 章）+ multi-machine.md + 向导首屏三处交叉链接，未包含 quickstart×2 / getting-started——按任务范围执行，未扩大。
-- sdd/task-4-report.md、task-7-report.md 的工作区改动与 task-5-report.md（未跟踪）是前序任务的遗留，未纳入本次 commit。
+```
+| v0.4.0（实证：commit `d48523a`，2026-08-13「RunServe auto-generates cert + forces TLS when none given」） | serve 默认 TLS-only + 自签证书 + SPKI pin；无 pin 客户端默认拒连 | 旧明文 client 无法拉快照/连 MCP | 先升全部工作机 binary + 配 pin，**最后**重启 serve（README「migration order」） |
+```
 
-## Pre-merge cleanup
+## Step 3: 挂链（2 处）+ 控制器追加项（1 处）
 
-Final review pickups applied in one commit (branch `feat/plan19-role-wizard`):
+### docs/README.md（2 处改动）
 
-1. **clear 安全网改判 VaultExists（加固）** — `internal/cli/clear.go` `runClear`：安全网判定从「resolved role 是 vault 角色」改为 `roles.VaultExists()`（store.db 实际存在于枚举目标中）。被篡改/手改的 role.json=client + 真实 vault 共存时，导出安全网不再被绕过。`本机角色：%s` 显示行保持 role 驱动。
-2. **q/Ctrl+C = 退出（非密钥静态屏）** — `internal/tui/wizardsteps.go` `wizStaticView.Update`：q/Ctrl+C 现返回 `tea.Quit`（经 wizard.go / app.go / clientpage.go 三处 overlay 委托路径的 cmd 传播，覆盖 serveAdminNotice / serveResult / accessCard / mcpConfigScreen 及 upgrade 流复用与 client 缓存变体）。一次性密钥屏（`wizSecretView`，wizTokenScreen）刻意保留任意键推进——数据已持久化，密钥必须显式确认而非被退出反射误关。Esc 在静态屏仍前进（按要求只做 q/Ctrl+C carve-out）。
-3. **saveErr 可见性** — `internal/tui/wizard.go` `View()` default 分支（角色流程表单步）现也渲染 `saveErr`（首屏 roles.Save 失败），不再只在防御性占位页可见。
-4. **`--mode broker` 下线公告** — README TUI 启动代码块移除 `--mode broker` 行，补一行：v0.7.0 起 `tui --mode broker` 移除（自动判定覆盖该场景；`--mode client` 保留）。与 `roles.ResolveMode` 现状一致（force 仅接受 ""/"client"）。
+(a) 目录表末尾（backup-restore.md 行后）加：
 
-验证：`gofmt -l` 无输出；`go build ./...`、`go vet ./...`、`go test ./... -count=1` 全绿（15 包 ok / 2 无测试文件）。
+```
+| [compat-matrix.md](./compat-matrix.md) | **client↔serve 版本兼容矩阵**：已验证组合 / 破坏性变更 / 升级顺序铁律。升级任何一端之前先看这篇。 |
+```
+
+(b) 控制器追加（T6 评审遗留，:28 agent-access.md 行）：
+
+```diff
+-| [agent-access.md](./agent-access.md) | **授权 AI agent**：project token 怎么生成、`.mcp.json` 怎么配进 Claude Code / Cursor、token 轮换 / 暂停 / 吊销的 Lazy 语义、多 agent 隔离、紧急处置。 |
++| [agent-access.md](./agent-access.md) | **授权 AI agent**：project token 怎么生成、`.mcp.json` 怎么配进 Claude Code / Cursor、token 轮换 / 暂停 / 吊销的断连语义（四层）、多 agent 隔离、紧急处置。 |
+```
+
+### docs/multi-machine.md（1 处改动）
+
+「相关文档」列表末尾（仓库根 README 行后）加：
+
+```diff
++- [compat-matrix.md](./compat-matrix.md)——client↔serve 版本兼容矩阵（升级任何一端之前先看）。
+```
+
+## 操作纪律自查
+
+- 中文弯引号逐字节检查（python 计数）：compat-matrix.md 全文 U+201C=0、U+201D=0（模板用「」直角引号，无弯引号，天然无配对问题）；README.md / multi-machine.md 的 diff 行均不含新增弯引号。
+- 只动了 3 个目标文件（git show --stat 核实：compat-matrix.md 新建 28 行、README.md +2/-1、multi-machine.md +1）。
+- `git diff` 已核对，与 brief Step 3 逐字一致（README 表行、multi-machine 列表行均照抄 brief 文本）。
+
+## Step 4: Commit
+
+```
+128576f56d1a8e8b078f5bbfb9b6525adaf51aa0
+docs: client-serve compatibility matrix (verified pairs / breaking changes / upgrade-order rule) + index wording
+```
+
+## Concerns
+
+无。TLS-only 版本实证为 v0.4.0（占位符即正确），证据 commit d48523a 已按 brief 要求写进矩阵表。
