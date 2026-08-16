@@ -93,9 +93,9 @@ Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor
 
 **Owner access** (you, not the agent) — full access to every server using the stored creds directly:
 ```bash
-ssh-manager ssh gpu nvidia-smi          # run a command
-ssh-manager ssh gpu                     # (your own ssh client; the broker provides creds)
+ssh-manager ssh gpu nvidia-smi          # run ONE command (single, non-interactive)
 ```
+The owner path runs a **single non-interactive command** (connect + exec share one 120-second deadline; output is uncapped; the remote exit code becomes the CLI's exit code). No command → explicit error. Interactive shells are intentionally not provided — for a terminal, use your own SSH client with credentials you already hold or provision separately (they may live only in this vault).
 
 ---
 

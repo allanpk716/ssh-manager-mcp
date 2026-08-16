@@ -85,12 +85,13 @@ ssh-manager projects add my-agent --profile team-a
 
 ## 你（owner）自己也能用
 
-agent 之外，你本人可以用存储的凭据直接操作任何服务器：
+agent 之外，你本人可以用存储的凭据直接在服务器上跑**单条命令**（非交互；连接+执行共享 120 秒超时，输出不封顶，远端退出码会传成本地退出码）：
 
 ```bash
-ssh-manager ssh gpu nvidia-smi         # 直接跑一条命令
-ssh-manager ssh gpu                    # 进交互（broker 提供 creds，用你自己的 ssh）
+ssh-manager ssh gpu nvidia-smi         # 直接跑一条命令（不带命令会显式报错）
 ```
+
+> 这条路**不是交互式终端**。要开终端，用你自己的 ssh 客户端（凭据需自行已有或另行配置——它们可能只存在本 vault 里）。
 
 ---
 

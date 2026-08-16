@@ -175,13 +175,13 @@ ssh-manager projects enable  contractor-agent   # 恢复，同一张 token 重�
 有时候你不想经过 agent，想直接在服务器上跑命令。owner CLI 提供了**不受 profile 限制、输出不封顶**的直达通道：
 
 ```bash
-ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑 nvidia-smi，输出原样回来
-ssh-manager ssh gpu                      # （仅传名字 = 想进交互？）不——见下
+ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原样回来
 ```
 
 **要点**：
 - `ssh-manager ssh <name> <command...>` = 用库里存的凭据，直接在命名机器上跑命令，**不受任何 profile 限制**（你是 owner，全权）。输出不封顶（和 agent 路径的 1 MiB 封顶不同）。单命令超时 120s。
-- 这条命令**也不是交互式 shell**：后面的 `<command...>` 是要跑的命令（空格分隔会被拼成一行）。它解决的是“owner 用 broker 里存的凭据直接跑一条命令”，不是给你开个 `ssh -t` 终端。要交互式终端，用你自己的 ssh 客户端（凭据你本来就有）。
+- 这条命令**也不是交互式 shell**：后面的 `<command...>` 是要跑的命令（空格分隔会被拼成一行；**不带命令 / 空命令会显式报错**）。它解决的是”owner 用 broker 里存的凭据直接跑一条命令”，不是给你开个 `ssh -t` 终端。要交互式终端，用你自己的 ssh 客户端（凭据需自行已有或另行配置——它们可能只存在本 vault 里）。
+- 连接+执行**共享 120 秒超时**；输出不封顶；**远端退出码会传播为本地退出码**（脚本里可用 `$?` 判断）。
 - 这条路同样写审计（`action=exec`）。
 
 ---
