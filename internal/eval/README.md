@@ -275,7 +275,7 @@ GPU as the "gpu server's" memory.
 
 The `--disallowed-tools Bash Read Write Edit` drive (`driveAgentT7Restricted`)
 was the first attempt to close that residual at the source. **It was REVERTED**
-(`8526ad9`): with Bash disallowed AND the broker locked, the agent had ZERO
+(`c188b0d`): with Bash disallowed AND the broker locked, the agent had ZERO
 usable tools → it produced only a one-line intent and stopped (T7=0/5,
 unmeasurable — the agent needs Bash to probe/discover the lock). T7 therefore
 uses `driveAgentLenient` + the score-side hallucination gate.
@@ -386,7 +386,10 @@ The broker now exposes a fourth MCP tool — **`upload_file`** — the mirror of
 to a remote server (`scp -r` put semantic). A directory is uploaded
 recursively, preserving relative paths; the destination's parent directory is
 created if missing. **§6-capped at 1 MiB total** (if `truncated=true`, the cap
-hit mid-upload and only a PARTIAL tree landed — retry smaller). **Profile-gated**
+hit mid-upload — the file in flight still lands COMPLETE: the cap halts the
+walk between files and never truncates a stream mid-file, so a single
+over-cap file lands whole with `truncated=true`; in a directory upload the
+files after it are not uploaded — retry smaller). **Profile-gated**
 (same `ErrNotInProfile` gate as exec/download — `UploadForProfile` in
 `internal/mcpserver/core.go`). SFTP is used, so sudo is not applicable.
 

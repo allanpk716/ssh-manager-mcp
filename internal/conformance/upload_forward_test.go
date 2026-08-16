@@ -97,11 +97,11 @@ func TestUploadDifferential(t *testing.T) {
 		if err != nil {
 			t.Fatalf("broker Upload suite: %v", err)
 		}
-		if res.Files != 8 {
-			t.Fatalf("suite Upload Files = %d, want 8 (root.txt + a/one.txt + a/b/two.txt + a/b/c/three.txt + zero-byte.txt + 中文名-测试.txt + with space.txt + bin.bin)", res.Files)
+		if res.Files != 9 {
+			t.Fatalf("suite Upload Files = %d, want 9 (root.txt + a/one.txt + a/b/two.txt + a/b/c/three.txt + zero-byte.txt + 中文名-测试.txt + with space.txt + pkg/🚀rocket.txt + bin.bin)", res.Files)
 		}
-		if res.Bytes != 480 { // 64+48+32+16+0+40+24+256 — exact per-file sums
-			t.Fatalf("suite Upload Bytes = %d, want 480 (res=%+v)", res.Bytes, res)
+		if res.Bytes != 496 { // 64+48+32+16+0+40+24+16+256 — exact per-file sums
+			t.Fatalf("suite Upload Bytes = %d, want 496 (res=%+v)", res.Bytes, res)
 		}
 		if res.Truncated {
 			t.Fatalf("suite Upload Truncated = true, want false")
@@ -253,9 +253,10 @@ func remoteFileSize(t *testing.T, sshArgs []string, path string) int64 {
 //	zero-byte.txt    — 0-byte file
 //	中文名-测试.txt   — unicode filename
 //	with space.txt   — space in filename
+//	pkg/🚀rocket.txt — emoji filename (4-byte UTF-8 — must round-trip byte-faithfully)
 //	bin.bin          — all-256-bytes binary (null bytes + non-UTF8 parity)
 //
-// 8 files + 4 subdirs. Shared by the upload and download differentials.
+// 9 files + 5 subdirs. Shared by the upload and download differentials.
 // Content is deterministic per file (detBytes) — synthetic, reproducible, and
 // byte-verifiable (public repo: no real hosts or data ever appear).
 func writeDifferentialSuite(t *testing.T, dir string) {
@@ -276,6 +277,7 @@ func writeDifferentialSuite(t *testing.T, dir string) {
 	mk("zero-byte.txt", nil)
 	mk("中文名-测试.txt", detBytes(5, 40))
 	mk("with space.txt", detBytes(6, 24))
+	mk("pkg/🚀rocket.txt", detBytes(8, 16)) // emoji filename — 4-byte UTF-8 edge
 	bin := make([]byte, 256)
 	for i := range bin { // 0..255 — exercises null bytes + non-UTF8 (binary parity)
 		bin[i] = byte(i)

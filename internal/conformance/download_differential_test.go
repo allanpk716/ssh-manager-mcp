@@ -65,11 +65,11 @@ func TestDownloadDifferential(t *testing.T) {
 	// Broker path: discover the remote structure via real ssh, then pull every
 	// file via broker Download (unlimited — content fidelity, not the cap).
 	dirs, files := sshFindTree(t, sshArgs, remoteSrc)
-	if len(dirs) != 4 {
-		t.Fatalf("remote suite has %d subdirs, want 4 (a, a/b, a/b/c, empty-dir) — did scp -r drop the empty dir? got %v", len(dirs), dirs)
+	if len(dirs) != 5 {
+		t.Fatalf("remote suite has %d subdirs, want 5 (a, a/b, a/b/c, empty-dir, pkg) — did scp -r drop the empty dir? got %v", len(dirs), dirs)
 	}
-	if len(files) != 8 {
-		t.Fatalf("remote suite has %d files, want 8 (got %v)", len(files), files)
+	if len(files) != 9 {
+		t.Fatalf("remote suite has %d files, want 9 (got %v)", len(files), files)
 	}
 	mirror := t.TempDir()
 	for _, d := range dirs {

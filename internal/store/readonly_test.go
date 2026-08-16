@@ -44,6 +44,11 @@ func TestReadOnly_MutationsRefused(t *testing.T) {
 	if err := s.DeleteServerCascading("x"); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("DeleteServerCascading: err=%v want ErrReadOnly", err)
 	}
+	// Plan 21 A2 clear-credential is a mutation too — the read-only cache must
+	// refuse it like every other write.
+	if err := s.ClearServerCredential("x"); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("ClearServerCredential: err=%v want ErrReadOnly", err)
+	}
 	if _, err := s.DeleteOrphanCredentials(); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("DeleteOrphanCredentials: err=%v want ErrReadOnly", err)
 	}

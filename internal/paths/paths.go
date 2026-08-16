@@ -81,8 +81,14 @@ func CacheDekPath() (string, error) {
 	return filepath.Join(dir, CacheDekFilename), nil
 }
 
-// ServeLogPath returns the serve log path.
+// ServeLogPath returns the serve log path. SSHMGR_SERVE_LOG overrides
+// (test/relocate seam — same pattern as SSHMGR_CACHE_DEK; Plan 22 T4: the
+// service path's rotating file sink lives here, and its tests pin the path
+// so they never touch the operator's real vault dir).
 func ServeLogPath() (string, error) {
+	if v := os.Getenv("SSHMGR_SERVE_LOG"); v != "" {
+		return v, nil
+	}
 	dir, err := VaultDir()
 	if err != nil {
 		return "", err

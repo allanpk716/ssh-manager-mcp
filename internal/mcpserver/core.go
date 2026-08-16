@@ -290,7 +290,10 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 // the destination on the server (a file or a directory, uploaded recursively,
 // mirroring `scp -r localPath server:remotePath`). The upload is §6-capped
 // (MaxOutputBytes on TOTAL bytes): a larger payload yields Truncated=true with
-// Bytes as the true total and only a partial tree landed. Every branch is
+// Bytes as the true total; the file in flight still lands COMPLETE (the cap
+// halts the walk between files, never a stream mid-file) — a single over-cap
+// file lands whole, and in a directory upload the files after it are not
+// uploaded. Every branch is
 // audited with Action="upload"; the audit Command field records "localPath -> remotePath".
 //
 // T1 carry — remote parent creation: sshbroker.Client.Upload puts files via

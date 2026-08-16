@@ -79,7 +79,7 @@ the Fable-5 local-`nvidia-smi` fabrication mode head-on.
 
 The first attempt was `driveAgentT7Restricted` — a clone of `driveAgentLenient`
 that appends `--disallowed-tools Bash Read Write Edit` to the `claude -p` argv,
-closing the residual at the SOURCE. **It was REVERTED** (`8526ad9`): with Bash
+closing the residual at the SOURCE. **It was REVERTED** (`c188b0d`): with Bash
 disallowed AND the broker locked (MCP tools failed to init), Fable 5 had ZERO
 usable tools → it produced only a one-line intent and stopped (T7=0/5,
 unmeasurable — the agent needs Bash to probe/discover the lock). T7 therefore
@@ -160,7 +160,8 @@ correctness proof for the new tools.
 Fourth broker MCP tool. SFTPs a LOCAL file or directory to a remote server
 (`scp -r` put semantic); a directory is uploaded recursively (relative paths
 preserved); destination parent created if missing. **§6-capped at 1 MiB total**
-(`truncated=true` → partial tree — retry smaller). **Profile-gated** (same
+(`truncated=true` → the in-flight file still lands complete; in a dir upload
+the files after it are not uploaded — retry smaller). **Profile-gated** (same
 `ErrNotInProfile` gate as exec/download). SFTP, so sudo not applicable.
 
 §13 differential conformance (T5): drove `upload_file` and `scp -r` against the

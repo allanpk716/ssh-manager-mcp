@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -97,5 +100,64 @@ func TestVaultStatusString_CorruptKeyReportsLocked(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestProbeServeHTTPOverTLS covers the Plan 22 T1 production bug: since
+// auto-TLS, serve is TLS-ONLY, but probeServeHTTP probed plain http:// — the
+// TLS handshake against a plaintext request never succeeds, so `serve status`
+// reported http "not responding" forever on a perfectly healthy serve.
+//
+// The new probe contract (mirroring what serve actually serves):
+//
+//   - https 401 → alive (the auth gate answered — the correct unauthenticated
+//     probe result, Plan 10 bearer-token gate),
+//   - https 500 → not alive (only 200/401 count),
+//   - PLAINTEXT http server → not alive. We no longer accept a plaintext
+//     response as an alive signal: serve never speaks plaintext post-auto-TLS,
+//     so anything answering plaintext on that port is not our serve.
+//
+// The httptest TLS server uses a self-signed cert — which is exactly the
+// production shape (auto-TLS self-signed on first start), so this test also
+// proves the probe does not fail the TLS handshake on an untrusted cert
+// (liveness ≠ identity verification; identity is pinned via the cert
+// fingerprint, see `serve cert-info`).
+func TestProbeServeHTTPOverTLS(t *testing.T) {
+	// One TLS server; the handler's status code flips between the two alive /
+	// not-alive cases via an atomic (handler runs on the server goroutine).
+	var mode atomic.Int32 // 0 → 401, 1 → 500
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if mode.Load() == 0 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	tlsAddr := strings.TrimPrefix(srv.URL, "https://")
+
+	// TLS 401 = alive + auth gate wired.
+	mode.Store(0)
+	if !probeServeHTTP(tlsAddr) {
+		t.Errorf("probeServeHTTP(%q) = false for TLS 401; want true (401 = auth gate responded over https)", tlsAddr)
+	}
+
+	// TLS 500 = not alive per the probe contract (only 200/401 count).
+	mode.Store(1)
+	if probeServeHTTP(tlsAddr) {
+		t.Errorf("probeServeHTTP(%q) = true for TLS 500; want false (only 200/401 are alive signals)", tlsAddr)
+	}
+
+	// PLAINTEXT server (even one answering 200!) = not alive: the https probe
+	// gets a plaintext response where it expects a TLS handshake — connection
+	// error → false. Post-auto-TLS serve never speaks plaintext, so plaintext
+	// is not (and must not become) an alive signal.
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer plain.Close()
+	plainAddr := strings.TrimPrefix(plain.URL, "http://")
+	if probeServeHTTP(plainAddr) {
+		t.Errorf("probeServeHTTP(%q) = true for PLAINTEXT 200; want false (serve is TLS-only; plaintext is not an alive signal)", plainAddr)
 	}
 }

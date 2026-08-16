@@ -158,6 +158,7 @@ IdentityFile 写**相对路径**时，本工具按 **config 文件所在目录**
 - **agent 一侧的语义**：对无凭据机器调 `exec_command` / 下载 / 上传 / 转发，会在**发起连接之前**被拒，错误信息自带补法——`server has no credential configured (set one with: ssh-manager servers edit <name> --password ... / --key ...)`（审计里统一记 `no_credential`，不是 auth_error，agent 不会误判成密码错了）。
 - **TUI 一侧**：无凭据（以及未填 role、带 needs-passphrase 标签）的机器在列表里以 ⚠ 前缀**置顶**；按 `!` 只看这些待处理机器。
 - **补凭据**：`servers edit <名字> --password '<密码>'` 或 `--key <私钥路径> [--key-passphrase '<口令>']`（TUI 里 `e` 编辑，密码栏填新值）。补上即正常连接，server 的 id / name / profile 绑定全程不变。
+- **反向操作（退回无凭据态）**：`servers edit <名字> --clear-credential`——清除这台机器的登录 + sudo 凭据引用（独占动作、与 `--password` / `--key` 互斥，详见[编辑服务器](#编辑服务器servers-edit只改你传的字段)一节）；TUI 里是 `e` 编辑表单的「清除凭据」开关。
 
 ---
 
@@ -187,8 +188,25 @@ ssh-manager servers edit <name> [flags...]
 | `--password '<新密码>'` | 切换到 / 替换密码认证（会发新凭据） |
 | `--key <私钥路径> [--key-passphrase '<口令>']` | 切换到 / 替换密钥认证 |
 | `--sudo-password '<新sudo密码>'` | 设 / 换 sudo 密码 |
+| `--clear-credential` | **清除**这台服务器的全部凭据引用，退回[无凭据态](#无凭据服务器)（独占动作，见下节） |
 
 > `--password` 和 `--key` 在 `edit` 里同样**互斥**。可以一次同时改多个无关字段（如 `--host` + `--description`）。
+
+### 清除凭据：`--clear-credential`（独占动作）
+
+「换密码 / 换密钥」的反向操作——把一台已有凭据的机器**退回无凭据态**，一个事务完成：
+
+```bash
+ssh-manager servers edit gpu --clear-credential
+```
+
+- **独占动作**：`--clear-credential` 不是字段编辑。传了它，这条命令就**只做清除这一件事**——同一条命令里传的其他字段 flag（如 `--host`、`--name`）**不会生效**（想改字段请清除后另跑一条 `edit`）。确认输出打印的是**当前库名**。
+- **互斥**：与 `--password` / `--key` 互斥，同传直接报错——「清除」和「换发凭据」是两个方向的操作，混在同一条命令里语义不清。
+- **清除的范围**：登录凭据 + sudo 凭据的引用一并解除、`auth_method` 清空、`needs-passphrase` 标签摘除（无凭据时这个标签没有意义）；只有这台机器**独占**的凭据行会被级联删除，被其他 server 共用的不动。
+- **TUI 对应**：服务器页 `e` 编辑表单里的「清除凭据（回到无凭据态）」确认开关，勾选提交即走同一条清除路径（也是同样的独占语义）。
+- 清除后机器进入[无凭据服务器](#无凭据服务器)状态（列表 ⚠ 置顶、`!` 可过滤，agent 调用会收到带补法的 `no_credential` 提示）；server 的 id / name / profile 绑定**全程不变**，之后 `--password` / `--key` 随时可以补回。
+
+> 💡 传错了想清除却给了空值？`edit --password ""` 这类**显式空值会被拒绝**（报错文案会指回 `--clear-credential`）——空串是引号 / 笔误的常见形态，静默铸一条空凭据会让 agent 之后连接时莫名失败。清除只有 `--clear-credential` 这一条路，意图明确才动手。
 
 ### 常见维护操作（直接抄）
 
@@ -210,6 +228,9 @@ ssh-manager servers edit gpu --description '8x A100 80GB, CUDA 12, 已扩容到 
 
 # 重命名
 ssh-manager servers edit gpu --name gpu-a100
+
+# 退回无凭据态（清除登录 + sudo 凭据引用；独占动作，别和其他字段混传）
+ssh-manager servers edit gpu --clear-credential
 ```
 
 注意：
@@ -309,7 +330,7 @@ ssh-manager gc --apply   # 真删：删掉的恰好是上面数出来的那批�
 
 - **加**：`servers add`（凭据可选——密码或密钥最多一个；可选 sudo / tags / description）。
 - **批量加**：`servers import`（ssh config → vault；dry-run 预览、冲突跳过、同密钥去重、`--profile` 顺手授权）。
-- **改**：`servers edit`（只传要改的字段；id 和 profile 绑定保留；也是补凭据 / 补私钥口令的路）。
+- **改**：`servers edit`（只传要改的字段；id 和 profile 绑定保留；也是补凭据 / 补私钥口令 / 清除凭据（`--clear-credential`）的路）。
 - **查**：`servers ls` / `profiles ls`。
 - **删**：`servers rm`（自动从所有 profile 摘除）。
 - **扫**：`gc`（孤儿凭据；dry-run 默认，`--apply` 才删）。

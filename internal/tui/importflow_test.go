@@ -457,7 +457,7 @@ func TestImportFlowResultScreen(t *testing.T) {
 		t.Fatal("precondition: result screen")
 	}
 	v := f.View().Content
-	for _, want := range []string{"导入 2 / 跳过 0 / 待补 2", "! 过滤", "任意键关闭"} {
+	for _, want := range []string{"导入 2 / 跳过 0 / 失败 0 / 待补 2", "! 过滤", "任意键关闭"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("result view missing %q:\n%s", want, v)
 		}
@@ -469,6 +469,36 @@ func TestImportFlowResultScreen(t *testing.T) {
 	}
 	if done, ok := cmd().(formDoneMsg); !ok || done.after == nil {
 		t.Fatalf("result dismiss must be formDoneMsg with a refetch action: %#v", done)
+	}
+}
+
+// TestImportFlowResultFailureCount (Plan 22 T3 hygiene): a mid-batch insert
+// failure surfaces as a FOURTH result count — 失败 N — beside the FAILED
+// report row (which stays as-is; only the count is added). The plant: a
+// same-name server lands in the vault AFTER the pick screen computed
+// conflicts (the race the count exists to surface), so gpu's batch insert
+// fails while bare's succeeds.
+func TestImportFlowResultFailureCount(t *testing.T) {
+	st := newStore(t)
+	f := flowAtPick(t, st, writeImportConfig(t, ""))
+	if _, err := st.AddServer(&models.Server{Name: "gpu", Host: "late", Port: 22, User: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	f.pick = []string{"gpu", "bare"}
+	runBatch(t, f)
+	if f.importedN != 1 || f.failN != 1 {
+		t.Fatalf("importedN=%d failN=%d, want 1 imported / 1 failed", f.importedN, f.failN)
+	}
+	f.Update(tea.KeyPressMsg{Code: 'q', Text: "q"}) // skip supplementing bare → result
+	if f.state != stateResult {
+		t.Fatal("precondition: result screen")
+	}
+	v := f.View().Content
+	if !strings.Contains(v, "失败 1") {
+		t.Fatalf("result view must carry the 失败 count:\n%s", v)
+	}
+	if !strings.Contains(v, "FAILED") {
+		t.Fatalf("the per-server FAILED report row must stay unchanged:\n%s", v)
 	}
 }
 
