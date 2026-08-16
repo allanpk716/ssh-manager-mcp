@@ -16,7 +16,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate: the SAME dual-lane test matrix ci.yml runs on every push/PR must
+  # pass on the tag commit BEFORE anything is published. go-version-file
+  # keeps the release toolchain identical to the test toolchain.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +32,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
           cache: true
 
       - name: Run GoReleaser
