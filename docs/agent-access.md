@@ -105,7 +105,7 @@ claude mcp add ssh ssh-manager -e SSHMGR_TOKEN=<TOKEN> -- mcp
 
 1. **stdio（本机 MCP 子进程）——Lazy 生效**：token 校验只在 `mcp` 子进程**下次启动**时跑（只放行 `status=active`）。正在跑的会话保留访问直到你重启 Claude Code（或它的 MCP 子进程）。**你的机器你做主**：这是有意的设计。
 2. **serve（远程 broker）——逐请求即拒**：broker 对**每一个** HTTP 请求都重新验 token，`revoke`/`disable` 后该 project 的**下一个请求立即 401**——不需要等任何重启。
-3. **已建立的 `forward_port` 隧道——不受 revoke 影响，且无 owner 急停**：隧道由 broker 进程持有；被吊销的 project 自己调 `close_port` 会先被第 2 层的 401 挡住；任何 stdio 会话或其他 project 的隧道管理器是**独立进程实例**，够不到它。真实选项只有：**重启 broker**（`serve uninstall`→`install` 或重启机器）/ **等隧道创建后 ~10 分钟自动回收**。（owner 侧急停命令已列 backlog。）
+3. **已建立的 `forward_port` 隧道——不受 revoke 影响，且无 owner 急停**：隧道由 broker 进程持有；被吊销的 project 自己调 `close_port` 会先被第 2 层的 401 挡住；其他人的隧道管理器也够不到它——stdio 会话跑在**独立进程**里，同一 serve broker 上的其他 project 则各有**各自独立的隧道管理器实例**（互不相通）。真实选项只有：**重启 broker**（`serve uninstall`→`install` 或重启机器）/ **等隧道创建后 ~10 分钟自动回收**。（owner 侧急停命令已列 backlog。）
 4. **离线 cache——旧快照不随 revoke 擦除**：`cache-tokens revoke` 只断"拉新"（下次 `cache pull` 被拒）；已落盘的 `cache.bin` 里凭据仍在。**失窃/泄露场景下让已缓存凭据失效的唯一手段是轮换服务器凭据**（`servers edit <name> --password/--key`）。
 
 `rotate` 保持 project id 和 profile 不变，**只换 token**（serve 模式下旧 token 同样逐请求即拒）。
