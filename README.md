@@ -95,7 +95,7 @@ Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor
 ```bash
 ssh-manager ssh gpu nvidia-smi          # run ONE command (single, non-interactive)
 ```
-The owner path runs a **single non-interactive command** (connect + exec share one 120-second deadline; output is uncapped; the remote exit code becomes the CLI's exit code). No command → explicit error. Interactive shells are intentionally not provided — for a terminal, use your own SSH client with credentials you already hold or provision separately (they may live only in this vault).
+The owner path runs a **single non-interactive command** (connect + exec share one 120-second deadline; output is uncapped; a non-zero remote exit makes the CLI exit non-zero (the code value appears in the error message)). No command → explicit error. Interactive shells are intentionally not provided — for a terminal, use your own SSH client with credentials you already hold or provision separately (they may live only in this vault).
 
 ---
 
