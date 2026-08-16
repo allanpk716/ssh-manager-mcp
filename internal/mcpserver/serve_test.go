@@ -193,6 +193,16 @@ func TestHTTPHandler_SessionBinding_RejectsCrossProjectReplay(t *testing.T) {
 }
 
 func TestRunServe_ShutdownOnCancel(t *testing.T) {
+	// Hermetic auto-TLS: empty cert/key forces the auto-TLS path, which
+	// resolves paths.ServeCertPath → the program-fixed vault dir (/var/lib/...)
+	// when SSHMGR_SERVE_CERT is unset — a non-root linux runner cannot mkdir
+	// there (CI first-run red, run 31978817807). Same seam as
+	// TestRunServe_AutoTLSCreatesCert; the init marker follows the cert dir
+	// automatically (paths.ServeCertMarkerPath).
+	dir := t.TempDir()
+	t.Setenv("SSHMGR_SERVE_CERT", filepath.Join(dir, "serve-cert.pem"))
+	t.Setenv("SSHMGR_SERVE_KEY", filepath.Join(dir, "serve-key.pem"))
+
 	st := newTestStore(t)
 	defer st.Close()
 
