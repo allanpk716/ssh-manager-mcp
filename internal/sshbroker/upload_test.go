@@ -595,3 +595,41 @@ func TestUploadJunctionNestedRefused_windows(t *testing.T) {
 		t.Fatalf("junction must be refused like a dir symlink, got: %v", err)
 	}
 }
+
+// TestUploadDirUnderJunctionAncestor (Plan 26 fix): a real directory root
+// whose path merely TRAVERSES a junction/symlink ancestor must upload fine —
+// EvalSymlinks errors on such paths on Windows (go1.25.8), and the old
+// unconditional return regressed these previously-working uploads. Walk and
+// the follow-stat both handle a traversed junction transparently.
+func TestUploadDirUnderJunctionAncestor(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	real := t.TempDir()
+	sub := filepath.Join(real, "app")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "a.txt"), []byte("under-ancestor\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "anc-link")
+	if err := makeDirLink(t, link, real); err != nil {
+		t.Skipf("dir link creation failed on this host (%v); skipping", err)
+	}
+
+	remoteDir := filepath.Join(t.TempDir(), "up-under-anc")
+	res, err := c.Upload(context.Background(), filepath.Join(link, "app"), remoteDir, 0)
+	if err != nil {
+		t.Fatalf("upload under link ancestor: %v", err)
+	}
+	if res.Files != 1 || res.Bytes != int64(len("under-ancestor\n")) {
+		t.Fatalf("result = %+v, want {Files:1 Bytes:%d}", res, len("under-ancestor\n"))
+	}
+	g, err := c.Download(context.Background(), filepath.Join(remoteDir, "a.txt"), 0)
+	if err != nil || g.Content != "under-ancestor\n" {
+		t.Fatalf("round-trip: err=%v content=%q", err, g.Content)
+	}
+}

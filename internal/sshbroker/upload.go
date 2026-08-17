@@ -148,10 +148,13 @@ func uploadDir(sc *sftp.Client, localRoot, remoteRoot string, ctr *countingWrite
 	// linked dir root reaches here), but filepath.Walk lstats the root and
 	// would misclassify it as a file. Resolve once up front so the walk starts
 	// at the real directory; nested entries keep lstat semantics (Task 2 adds
-	// an explicit refusal for symlinked sub-directories).
-	resolved, rerr := filepath.EvalSymlinks(localRoot)
-	if rerr != nil {
-		return rerr
+	// an explicit refusal for symlinked sub-directories). Resolution is
+	// BEST-EFFORT: on Windows EvalSymlinks can fail on a path that merely
+	// TRAVERSES a junction ancestor (go1.25.8: "system cannot find the path
+	// specified") even though the root itself is fine — on failure keep the
+	// original localRoot; a genuinely bad root surfaces from Walk itself.
+	if resolved, rerr := filepath.EvalSymlinks(localRoot); rerr == nil {
+		localRoot = resolved
 	}
 	// Windows junctions Lstat as ModeIrregular ("?"), which EvalSymlinks
 	// skips (it follows only ModeSymlink), so a junction root would slip
@@ -161,7 +164,7 @@ func uploadDir(sc *sftp.Client, localRoot, remoteRoot string, ctr *countingWrite
 	// ELOOP bound (symlink cycles must terminate, not hang).
 	links := 0
 	for {
-		fi, ferr := os.Lstat(resolved)
+		fi, ferr := os.Lstat(localRoot)
 		if ferr != nil {
 			return ferr
 		}
@@ -171,16 +174,15 @@ func uploadDir(sc *sftp.Client, localRoot, remoteRoot string, ctr *countingWrite
 		if links++; links > 64 {
 			return fmt.Errorf("root %s: too many levels of symbolic links", localRoot)
 		}
-		target, terr := os.Readlink(resolved)
+		target, terr := os.Readlink(localRoot)
 		if terr != nil {
 			return terr
 		}
 		if !filepath.IsAbs(target) {
-			target = filepath.Join(filepath.Dir(resolved), target)
+			target = filepath.Join(filepath.Dir(localRoot), target)
 		}
-		resolved = target
+		localRoot = target
 	}
-	localRoot = resolved
 	walkErr := filepath.Walk(localRoot, func(walkPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
