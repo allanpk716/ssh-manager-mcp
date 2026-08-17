@@ -218,7 +218,7 @@ func checkVaultStore() []doctorCheck {
 			c.Detail = "store.db absent on a client machine — cache-only is normal"
 		default:
 			c.Status = statusInfo
-			c.Detail = "store.db absent — no role.json on this machine (see the role check)"
+			c.Detail = "store.db absent — no usable role on this machine (see the role check)"
 		}
 	default:
 		c.Status = statusFail
@@ -267,7 +267,7 @@ func checkVaultKey() []doctorCheck {
 			c.Detail = "master.key absent on a client machine — no local vault to unlock"
 		default:
 			c.Status = statusInfo
-			c.Detail = "master.key absent — no role.json on this machine (see the role check)"
+			c.Detail = "master.key absent — no usable role on this machine (see the role check)"
 		}
 	case err != nil:
 		c.Status = statusFail
