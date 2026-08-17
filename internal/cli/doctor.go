@@ -110,7 +110,7 @@ func checkEnv() []doctorCheck {
 		rows = append(rows, doctorCheck{
 			Name:   "env",
 			Status: statusInfo,
-			Detail: "SSHMgr env overrides in effect: " + strings.Join(overridden, ", ") + " (values not shown)",
+			Detail: "SSHMGR_* env overrides in effect: " + strings.Join(overridden, ", ") + " (values not shown)",
 		})
 	case len(rows) == 0:
 		rows = append(rows, doctorCheck{
