@@ -370,6 +370,12 @@ ssh-manager serve uninstall     # 停 service + 注销（不删 vault 数据）
 
 ---
 
+## 自检：`doctor`（无副作用）
+
+本机状态可疑时先跑 `ssh-manager doctor`：8 项只读检查——`SSHMGR_*` 环境覆盖（只报名字不报值）、role.json 状态、store.db / master.key（长度 + Unix 权限位）、**vault-open 解密探针**（把库拷进临时目录真解密一遍，原件零写入）、serve 证书指纹（只读孪生 API，绝不生成）、serve 服务状态、离线缓存 cache.bin / DEK——各出一行 PASS / WARN / FAIL + 修复提示。退出码（脚本可依赖）：`0` = 无 FAIL（允许 WARN），`1` = 至少一个 FAIL。全程零写入、零网络调用、不打印任何秘密值；serve 的 HTTP 存活探测（绿/黄/红）是二期项，当前只做本机自检。
+
+---
+
 ## 常见坑（首跑高频）
 
 | 现象 | 原因 / 处理 |

@@ -208,7 +208,7 @@ func checkVaultStore() []doctorCheck {
 	if err != nil {
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("vault store path unresolvable: %v", err)
-		c.Fix = "check the vault directory (platform root could not be resolved — see spec §3.1)"
+		c.Fix = "check the vault directory (platform vault root could not be resolved)"
 		return []doctorCheck{c}
 	}
 	info, err := os.Stat(p)
@@ -251,7 +251,7 @@ func checkVaultKey() []doctorCheck {
 	if err != nil {
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("master key path unresolvable: %v", err)
-		c.Fix = "check the vault directory (platform root could not be resolved — see spec §3.1)"
+		c.Fix = "check the vault directory (platform vault root could not be resolved)"
 		return []doctorCheck{c}
 	}
 	b, err := os.ReadFile(p)
@@ -316,9 +316,11 @@ func checkVaultKey() []doctorCheck {
 //
 // The copy is store.db alone, WITHOUT the WAL sidecars (-wal/-shm): a
 // concurrent writer's un-checkpointed frames are simply absent, which reads
-// as an older consistent snapshot — worst case an undercounted PASS, never a
-// false FAIL. (Copying -wal mid-write would risk a torn copy, i.e. exactly
-// the false FAIL this diagnostic cannot afford.)
+// as an older consistent snapshot — in realistic write patterns an
+// undercount, not a false verdict; a full re-seal through a long-lived
+// un-checkpointed broker connection could transiently mis-verdict. (Copying
+// -wal mid-write would risk a torn copy, i.e. exactly the false verdict this
+// diagnostic cannot afford.)
 func probeVaultDecrypt(storePath, keyPath string) (servers, creds int, err error) {
 	key, err := os.ReadFile(keyPath)
 	if err != nil {
@@ -423,14 +425,14 @@ func checkServeCert() []doctorCheck {
 	if err != nil {
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("serve cert path unresolvable: %v", err)
-		c.Fix = "check the vault directory (platform root could not be resolved — see spec §3.1)"
+		c.Fix = "check the vault directory (platform vault root could not be resolved)"
 		return []doctorCheck{c}
 	}
 	markerP, merr := paths.ServeCertMarkerPath()
 	if merr != nil {
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("serve cert marker path unresolvable: %v", merr)
-		c.Fix = "check the vault directory (platform root could not be resolved — see spec §3.1)"
+		c.Fix = "check the vault directory (platform vault root could not be resolved)"
 		return []doctorCheck{c}
 	}
 	certOK, cerr := fileExists(certP)
@@ -560,7 +562,7 @@ func checkClientCache() []doctorCheck {
 	if derr != nil {
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("cache DEK path unresolvable: %v", derr)
-		c.Fix = "check the vault directory (platform root could not be resolved — see spec §3.1)"
+		c.Fix = "check the vault directory (platform vault root could not be resolved)"
 		return []doctorCheck{c}
 	}
 	dekOK, dok := fileExists(dekP)
@@ -632,8 +634,8 @@ hints. Checks are read-only: doctor never writes the vault, certificates, or
 client cache, makes no network calls, and never prints secret values —
 environment overrides are reported by name only.
 
-Exit codes (stable, for scripts): 0 = no FAIL (WARN does not change it),
-1 = at least one FAIL, 2 = doctor internal error.`,
+Exit codes (stable, for scripts): 0 = no FAIL findings (warnings allowed),
+1 = at least one FAIL finding.`,
 		Args: cobra.NoArgs,
 		RunE: runDoctor,
 	}
