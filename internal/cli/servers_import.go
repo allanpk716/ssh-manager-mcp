@@ -12,6 +12,7 @@ import (
 
 	"ssh-manager-mcp/internal/importer"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/secrethint"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -57,7 +58,7 @@ func serversImportCmd() *cobra.Command {
 				}
 				profID = p.ID
 			}
-			return runImport(cmd.OutOrStdout(), s, res, filepath.Dir(file), dryRun, profID, profile)
+			return runImport(cmd.OutOrStdout(), cmd.ErrOrStderr(), s, res, filepath.Dir(file), dryRun, profID, profile)
 		},
 	}
 	c.Flags().StringVar(&file, "file", "", "config file (default ~/.ssh/config)")
@@ -84,12 +85,53 @@ func profileByName(s *store.Store, name string) (*models.Profile, error) {
 // importReport is one output line: the alias plus what happened to it.
 type importReport struct{ name, note string }
 
+// importHint pairs one imported server's scan findings with its alias — the
+// findings alone don't say WHICH server, and an import is a batch.
+type importHint struct {
+	name     string
+	findings []secrethint.Finding
+}
+
+// scanImportServer is the aggregate suspected-secret scan the import runs on
+// each server right before the insert (Plan 28 T3): the same
+// secrethint.ScanServer the T2 add path uses, over the metadata in the exact
+// form this import persists. Today the CLI import path carries ZERO
+// user-controlled metadata — importer.Candidate comes from ssh_config, which
+// supplies only HostName/Port/User/IdentityFile (internal/importer/importer.go),
+// and runImport fills Name/Host/Port/User plus at most the fixed
+// "needs-passphrase" tag literal; Description/Location/Hardware/Services/
+// Role/Caveats are always "". This scan is therefore DEFENSIVE: it can only
+// fire once the importer starts populating free-text fields. The real
+// metadata-carrying import leg is the TUI supplement form
+// (internal/tui/importflow.go submitSupplement), which runs its own scan at
+// its save point. The key file CONTENT importer.PickKey reads is a
+// credential, never metadata — deliberately not scanned.
+func scanImportServer(srv *models.Server) []secrethint.Finding {
+	return secrethint.ScanServer(
+		tagsRawForScan(srv.Tags),
+		srv.Description, srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats,
+	)
+}
+
+// printImportHints writes the aggregated per-server advisory warnings to the
+// warning stream (stderr). Advisory only: the import loop never branches on
+// it, and the warning never echoes field content.
+func printImportHints(w io.Writer, hints []importHint) {
+	for _, h := range hints {
+		for _, f := range h.findings {
+			fmt.Fprintf(w, "⚠ %s: %s\n", h.name, secrethint.FormatWarning(f))
+		}
+	}
+}
+
 // runImport walks the parsed candidates: vault-conflict filtering
 // (importer.PlanImport), first-readable-key resolution with batch-level
 // credential dedup and needs-passphrase detection, one transactional insert
 // per server, then the optional profile grant. dry-run computes and prints
-// everything but writes nothing.
-func runImport(out io.Writer, s *store.Store, res *importer.Result, configDir string, dryRun bool, profID, profName string) error {
+// everything but writes nothing. warn receives the aggregated Plan 28 T3
+// suspected-secret warnings (stderr in production); out stays the report
+// table.
+func runImport(out, warn io.Writer, s *store.Store, res *importer.Result, configDir string, dryRun bool, profID, profName string) error {
 	if res.MatchWarning {
 		fmt.Fprintln(out, "⚠ config 含 Match 块：相关继承值由库按 Host 模式近似求值，可能与真 ssh 不一致")
 	}
@@ -114,7 +156,8 @@ func runImport(out io.Writer, s *store.Store, res *importer.Result, configDir st
 	keyIDs := map[[32]byte]string{} // sha256(key content) -> credential id (batch dedup)
 	var report []importReport
 	var importedIDs []string
-	wouldGrant := 0 // dry-run inserts nothing; the grant line still reports the would-grant count
+	var hints []importHint // Plan 28 T3 suspected-secret findings, dumped after the report
+	wouldGrant := 0        // dry-run inserts nothing; the grant line still reports the would-grant count
 	for _, cand := range res.Candidates {
 		if reason, skip := skipReason[cand.Name]; skip {
 			report = append(report, importReport{cand.Name, renderVaultSkip(reason)})
@@ -147,6 +190,13 @@ func runImport(out io.Writer, s *store.Store, res *importer.Result, configDir st
 			// (TUI edit, servers edit) drops it once the passphrase lands.
 			srv.Tags = []string{"needs-passphrase"}
 		}
+		// Plan 28 T3: advisory scan of the metadata this insert is about to
+		// persist — see scanImportServer for why it cannot fire today (the
+		// import carries no user free-text). Collected and printed after the
+		// report; the insert ALWAYS proceeds.
+		if fs := scanImportServer(srv); len(fs) > 0 {
+			hints = append(hints, importHint{name: cand.Name, findings: fs})
+		}
 		id, err := s.AddServerWithCredentials(srv, cred, nil)
 		if err != nil {
 			report = append(report, importReport{cand.Name, "FAILED: " + err.Error()})
@@ -167,6 +217,10 @@ func runImport(out io.Writer, s *store.Store, res *importer.Result, configDir st
 	for _, r := range report {
 		fmt.Fprintf(out, "%-20s %s\n", r.name, r.note)
 	}
+	// Aggregated advisory block (Plan 28 T3): suspected-secret metadata
+	// warnings go to the WARNING stream; the stdout report table and every
+	// exit path below are untouched.
+	printImportHints(warn, hints)
 	// --profile grant (dry-run only prints)
 	if profID != "" {
 		if dryRun || len(importedIDs) == 0 {

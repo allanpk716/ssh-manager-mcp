@@ -188,7 +188,10 @@ func (f *importFlow) pickForm() *huh.Form {
 // seam), one AddServerWithCredentials transaction per server, the
 // needs-passphrase TAG on encrypted keys (the CLI import writes the same
 // literal — the ⚠ sort + `!` filter key on it). The picked subset keeps
-// config order, not multiselect toggle order.
+// config order, not multiselect toggle order. No suspected-secret scan here:
+// this insert persists no user free-text (name/host/port/user plus the fixed
+// tag literal) — the supplement submit below is the flow's metadata-carrying
+// save point and scans there.
 func (f *importFlow) startBatch() tea.Cmd {
 	f.state = stateImporting
 	picked := make(map[string]bool, len(f.pick))
@@ -354,6 +357,13 @@ func (f *importFlow) submitSupplement() tea.Cmd {
 	}
 	f.err = nil
 	f.supp[f.suppIdx] = srv // keep the queue snapshot accurate for result counts
+	// Plan 28 T3: advisory suspected-secret hints for the metadata THIS
+	// supplement just persisted — appended to the result-screen report (the
+	// flow's existing feedback surface; no blocking, no new screen) and
+	// prefixed with the server name. The warning never echoes field content.
+	for _, l := range serverHintLines(srv) {
+		f.report = append(f.report, srv.Name+" "+l)
+	}
 	f.nextSupplement()
 	return f.currentCmd()
 }

@@ -3,10 +3,12 @@ package cli
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -177,5 +179,74 @@ func TestServersAddWarnsOnSuspectedSecretTag(t *testing.T) {
 	}
 	if strings.Contains(stdout, sentinel) || strings.Contains(stderr, sentinel) {
 		t.Fatalf("suspected-secret content must not echo to any stream:\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Plan 28 T3: `servers import` — the same advisory scan at the import save
+// point.
+//
+// Field-flow fact the test shape depends on: the CLI import path carries ZERO
+// user free-text metadata. importer.Candidate (internal/importer/importer.go)
+// holds only Name/Host/Port/User/KeyPaths — ssh_config supplies HostName/
+// Port/User/IdentityFile and nothing else — and runImport (servers_import.go)
+// persists exactly those four fields plus at most the FIXED
+// "needs-passphrase" tag literal; Description/Location/Hardware/Services/
+// Role/Caveats are always "". A config file can therefore never exercise a
+// hit, and the test pins the two halves of the wiring runImport performs per
+// server right before each insert instead: scanImportServer (the aggregate
+// scan over the exact persisted form) and printImportHints (the aggregated
+// stderr block). The metadata-carrying import leg is the TUI supplement form,
+// covered in internal/tui.
+
+// TestImportWarnsOnSuspectedSecret: a server in the exact shape the import
+// persists but carrying a secret-shaped tag (simulating the day the importer
+// starts populating free-text fields) is flagged by the aggregate scan, and
+// the warning names server+field+rule on the warning stream without echoing
+// the suspected value.
+func TestImportWarnsOnSuspectedSecret(t *testing.T) {
+	const sentinel = "SENTINEL-IMPORT-SK-5VQ"
+	srv := &models.Server{
+		Name: "leaky", Host: "192.0.2.7", Port: 22, User: "u",
+		Tags: []string{"gpu", "sk-ant-api03-" + sentinel + "-fake"},
+	}
+
+	findings := scanImportServer(srv)
+	if len(findings) != 1 || findings[0].Field != "tags" || findings[0].Rule != "prefix:sk-" {
+		t.Fatalf("scanImportServer must flag the secret-shaped tag in the persisted form, got %+v", findings)
+	}
+
+	warn := &bytes.Buffer{}
+	printImportHints(warn, []importHint{{name: "leaky", findings: findings}})
+	got := warn.String()
+	for _, want := range []string{"leaky", "field 'tags'", "prefix:sk-"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("warning stream must carry %q, got: %s", want, got)
+		}
+	}
+	if strings.Contains(got, sentinel) {
+		t.Fatalf("suspected-secret content must not echo: %s", got)
+	}
+}
+
+// TestImportNoFalsePositiveOnImportedTags: the ONLY tag the real import path
+// ever writes is the fixed needs-passphrase literal — a real encrypted-key
+// import must leave the warning stream CLEAN (the defensive scan must not
+// fire on legal imported state) and still succeed end to end.
+func TestImportNoFalsePositiveOnImportedTags(t *testing.T) {
+	dir := t.TempDir()
+	newHintEnv(t)
+	genKeyFile(t, filepath.Join(dir, "enc_key"), "secret-pass")
+	cfg := filepath.Join(dir, "config")
+	writeConfig(t, cfg, fmt.Sprintf(
+		"Host enc\n  HostName 192.0.2.50\n  User u\n  IdentityFile %q\n",
+		filepath.ToSlash(filepath.Join(dir, "enc_key"))))
+
+	stdout, stderr := runCaptured(t, "servers", "import", "--file", cfg)
+	if !strings.Contains(stdout, "imported needs-passphrase") {
+		t.Fatalf("import must succeed with the needs-passphrase note, stdout: %s", stdout)
+	}
+	if strings.Contains(stderr, "warning:") {
+		t.Fatalf("legal imported state (fixed needs-passphrase tag) must not warn, stderr: %s", stderr)
 	}
 }
