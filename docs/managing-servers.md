@@ -96,7 +96,7 @@ shown to the agent.
 > `-----BEGIN` **and** `PRIVATE KEY` co-occurring (public certificates don't match);
 > high-entropy scoring was deliberately left out (measured 2.9% false positives on
 > legal metadata; the 9 rules pass a 0-false-positive corpus regression). A hit
-> prints one advisory line to stderr, e.g. `warning: server metadata may contain a
+> prints one advisory line to stderr (CLI) / appended to the status or report line (TUI), e.g. `warning: server metadata may contain a
 > secret — field 'description' matched rule 'prefix:sk-' (content not shown; this
 > text would be sent to LLM providers on every list_servers — edit the server to
 > fix, or ignore if intentional)` — and nothing else changes: the write always
