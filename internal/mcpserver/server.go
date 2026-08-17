@@ -52,7 +52,7 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *Tunn
 func NewServerFromSource(storeFn func() *store.Store, profileID, projectID string) (*mcp.Server, *TunnelManager, error) {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "ssh-manager", Version: buildinfo.Version}, nil)
 	tunnels := NewTunnelManager()
-	tunnels.StartSweeper() // background idle-reaper (closes tunnels idle > forwardIdleTimeout)
+	tunnels.StartSweeper() // background tunnel sweeper (creation-based reclaim, see forwardIdleTimeout)
 
 	// The tool names below reference BrokerTools by index so the slice above IS
 	// the source of truth — adding a broker tool means editing BrokerTools, not

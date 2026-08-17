@@ -958,7 +958,7 @@ func TestCloseForwardNotFound(t *testing.T) {
 	}
 }
 
-// TestTunnelManagerSweepIdleReapsStaleTunnels verifies the idle-sweeper's
+// TestTunnelManagerSweepIdleReapsStaleTunnels verifies the tunnel sweeper's
 // resource cleanup directly: a managed tunnel whose lastActivity is older than
 // forwardIdleTimeout is reaped by SweepIdle (tunnel + client closed + removed
 // from the registry). This is the background safety-net for tunnels the agent

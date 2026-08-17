@@ -78,7 +78,7 @@ func (m *TunnelManager) StartSweeper() {
 	})
 }
 
-// sweepLoop is the idle-reaper: every forwardSweepInterval it calls SweepIdle.
+// sweepLoop is the tunnel sweeper: every forwardSweepInterval it calls SweepIdle.
 // Exits when quit is closed (CloseAll). Holds one wg ticket for its lifetime so
 // CloseAll can Wait for a clean shutdown.
 func (m *TunnelManager) sweepLoop() {
