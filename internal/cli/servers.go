@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/secrethint"
 )
 
 func newServersCmd() *cobra.Command {
@@ -48,6 +50,15 @@ func serversAddCmd() *cobra.Command {
 				Role:        strings.TrimSpace(role),
 				Caveats:     strings.TrimSpace(caveats),
 			}
+			// Suspected-secret hint (Plan 28 T2): advisory, non-blocking scan
+			// of the free-text metadata this add is about to persist, in its
+			// final (trimmed / JSON-raw tags) form. A hit never fails the add
+			// and the warning never echoes field content (no-echo by
+			// construction). Credential fields are deliberately NOT scanned.
+			printSecretHints(cmd, secrethint.ScanServer(
+				tagsRawForScan(srv.Tags),
+				srv.Description, srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats,
+			))
 			// Credentials are minted (or reused, when .ID is set) INSIDE the
 			// same transaction as the server insert — a mid-way failure leaves
 			// zero orphan credential rows (Plan 20 B1/G6).
@@ -284,6 +295,14 @@ func serversEditCmd() *cobra.Command {
 			if cmd.Flags().Changed("sudo-password") {
 				sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)}
 			}
+			// Suspected-secret hint (Plan 28 T2): partial-update semantics —
+			// scan ONLY the metadata fields this invocation actually passed
+			// (Changed()), in the final form this edit persists (post-TrimSpace
+			// / post-stripTag). Placed after the --clear-credential early
+			// return (that path applies no field flags) and right before the
+			// row update. Advisory and non-blocking: a hit never fails the
+			// edit and the warning never echoes field content.
+			printSecretHints(cmd, scanEditMetadata(cmd, srv))
 			if err := s.UpdateServerWithCredentials(srv, cred, sudoCred); err != nil {
 				return err
 			}
@@ -325,4 +344,52 @@ func stripTag(tags []string, tag string) []string {
 		}
 	}
 	return out
+}
+
+// printSecretHints writes one advisory warning line per finding to the
+// command's stderr. Non-blocking by contract: callers' success path, return
+// values, and exit codes are untouched.
+func printSecretHints(cmd *cobra.Command, findings []secrethint.Finding) {
+	for _, f := range findings {
+		fmt.Fprintln(cmd.ErrOrStderr(), secrethint.FormatWarning(f))
+	}
+}
+
+// tagsRawForScan renders tags exactly as the store persists them —
+// json.Marshal of the slice, the DB's tags TEXT (a JSON array string) — so
+// the scan sees the same bytes list_servers later hands to LLM providers.
+func tagsRawForScan(tags []string) string {
+	b, _ := json.Marshal(tags)
+	return string(b)
+}
+
+// scanEditMetadata returns suspected-secret findings for the metadata flags
+// this edit invocation actually passed (cobra Changed()), each scanned in the
+// final persisted form held by srv at call time. Flag names here are the CLI
+// spellings; Finding field names are the persisted/model names.
+func scanEditMetadata(cmd *cobra.Command, srv *models.Server) []secrethint.Finding {
+	fl := cmd.Flags()
+	var findings []secrethint.Finding
+	if fl.Changed("tags") {
+		findings = append(findings, secrethint.ScanValue("tags", tagsRawForScan(srv.Tags))...)
+	}
+	if fl.Changed("description") {
+		findings = append(findings, secrethint.ScanValue("description", srv.Description)...)
+	}
+	if fl.Changed("location") {
+		findings = append(findings, secrethint.ScanValue("location", srv.Location)...)
+	}
+	if fl.Changed("hardware") {
+		findings = append(findings, secrethint.ScanValue("hardware", srv.Hardware)...)
+	}
+	if fl.Changed("services") {
+		findings = append(findings, secrethint.ScanValue("services", srv.Services)...)
+	}
+	if fl.Changed("role") {
+		findings = append(findings, secrethint.ScanValue("role", srv.Role)...)
+	}
+	if fl.Changed("special-handling") {
+		findings = append(findings, secrethint.ScanValue("caveats", srv.Caveats)...)
+	}
+	return findings
 }

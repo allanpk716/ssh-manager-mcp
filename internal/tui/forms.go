@@ -316,7 +316,7 @@ func submitServer(st *store.Store, cur *models.Server, d *serverDraft) tea.Cmd {
 			// neither password nor key persists a credential-less server
 			// (toParts returns nil pointers when both are empty).
 			_, err := st.AddServerWithCredentials(srv, cred, sudo)
-			return "已新增 " + srv.Name, err
+			return appendHintLines("已新增 "+srv.Name, serverHintLines(srv)), err
 		}
 		srv.ID = cur.ID
 		srv.Tags = cur.Tags // the form has no tags field — keep existing (CLI serversEditCmd parity)
@@ -328,6 +328,9 @@ func submitServer(st *store.Store, cur *models.Server, d *serverDraft) tea.Cmd {
 			// only one).
 			srv.Tags = dropTag(srv.Tags, "needs-passphrase")
 		}
-		return "已更新 " + srv.Name, st.UpdateServerWithCredentials(srv, cred, sudo)
+		// Plan 28 T3: advisory suspected-secret hints for the metadata this
+		// save persists, appended to the ✓ status line (non-blocking; never
+		// echoes field content). srv is final here in both legs.
+		return appendHintLines("已更新 "+srv.Name, serverHintLines(srv)), st.UpdateServerWithCredentials(srv, cred, sudo)
 	})
 }
