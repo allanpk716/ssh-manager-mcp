@@ -169,6 +169,48 @@ func TestEditPageFieldEditMarksDirty(t *testing.T) {
 	}
 }
 
+// ②b Confirm 单键完成（终审修复）：huh Confirm 的 Accept/Reject（y/Y/n/N）
+// 既设值又自带 NextField——门必须泵这些键，否则按 y 只翻值不完成。负例：
+// Input 字段的 y 只是普通字符——不完成、不进 530ms 泵（blink 重臂陷阱）。
+func TestEditPageConfirmSingleKeyCommits(t *testing.T) {
+	// y (Accept): completes the form and marks the row dirty
+	p, _, _ := newEditPageAt(t, 80)
+	openField(t, p, 8) // 清除凭据 — the table's only Confirm field
+	press(p, 'y')
+	if p.state != editStateList {
+		t.Fatalf("y on the Confirm must complete the form, got state=%v", p.state)
+	}
+	if !p.d.ClearCredential {
+		t.Fatal("y (Accept) must set ClearCredential")
+	}
+	v := p.View().Content
+	if !strings.Contains(v, "● 清除凭据") || !strings.Contains(v, "已勾选") {
+		t.Fatalf("dirty Confirm row missing after y-commit:\n%s", v)
+	}
+
+	// n (Reject): completes with the clean value
+	p2, _, _ := newEditPageAt(t, 80)
+	openField(t, p2, 8)
+	press(p2, 'n')
+	if p2.state != editStateList {
+		t.Fatalf("n on the Confirm must complete the form, got state=%v", p2.state)
+	}
+	if p2.d.ClearCredential {
+		t.Fatal("n (Reject) must leave ClearCredential unset")
+	}
+
+	// negative: y on an Input field is a typed character — no completion
+	p3, _, _ := newEditPageAt(t, 80)
+	openField(t, p3, 14) // 备注 — prefill is ""
+	press(p3, 'y')
+	if p3.state != editStateField {
+		t.Fatalf("y on an Input field must stay in field state, got %v", p3.state)
+	}
+	if p3.d.Description != "y" {
+		t.Fatalf("y on an Input must be typed as a character, got %q", p3.d.Description)
+	}
+}
+
 // ③ field 态 Esc → 恢复进入该字段前的值 + 该字段脏标记消失。二次进入时
 // 快照基准是“已提交值”，不是最初原值。
 func TestEditPageFieldEscRestores(t *testing.T) {

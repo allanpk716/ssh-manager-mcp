@@ -11,12 +11,13 @@ import (
 // 同时充当脏快照键（snapshotDraft 的 map 键）。Secret 字段的 Get 返回状态串
 // （"已设…"/"（未设）"类）而非内容——值预览链路永不携带明文。
 type editField struct {
-	Key    string                         // 稳定标识（测试/脏快照键）
-	Label  string                         // 列表显示名
-	Secret bool                           // true=值预览掩码
-	Get    func(d *serverDraft) string    // 当前值（Secret 字段返回状态而非内容）
-	Set    func(d *serverDraft, v string) // 写回（端口在此做 Atoi+范围验证）
-	Build  func(d *serverDraft) *huh.Form // 单字段编辑表单（复用 forms.go 构造器）
+	Key     string                         // 稳定标识（测试/脏快照键）
+	Label   string                         // 列表显示名
+	Secret  bool                           // true=值预览掩码
+	Confirm bool                           // true=表单是 huh Confirm（y/Y/n/N 单键设值并前进——泵门依赖）
+	Get     func(d *serverDraft) string    // 当前值（Secret 字段返回状态而非内容）
+	Set     func(d *serverDraft, v string) // 写回（端口在此做 Atoi+范围验证）
+	Build   func(d *serverDraft) *huh.Form // 单字段编辑表单（复用 forms.go 构造器）
 }
 
 // editFields 按固定顺序返回字段表（设计决策）：名称/Host/端口/SSH 用户/密码/
@@ -143,8 +144,9 @@ func portEditField() editField {
 // newServerForm 编辑分支的同一个 Confirm 构造。
 func clearCredentialEditField() editField {
 	return editField{
-		Key:   "clearcredential",
-		Label: "清除凭据",
+		Key:     "clearcredential",
+		Label:   "清除凭据",
+		Confirm: true,
 		Get: func(d *serverDraft) string {
 			if d.ClearCredential {
 				return "已勾选"

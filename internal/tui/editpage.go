@@ -201,20 +201,25 @@ func (p *serverEditPage) restoreField() (tea.Model, tea.Cmd) {
 }
 
 // feedForm forwards one message to the embedded form and, for the keys that
-// can advance a huh form (Enter/Tab — the only NextField/Submit bindings
-// across every field kind in the table), pumps the form's returned cmds back
-// into it: the async hops a real runtime would deliver, and that the App's
-// overlay routing does NOT deliver (only KeyPressMsg is forwarded; huh's
-// nextFieldMsg/nextGroupMsg would die in App.Update). Other keys are never
-// pumped — their cmds are cosmetic blink re-arms whose execution BLOCKS
-// ~530ms each (cursor blink waits on a context timeout). On completion the
-// page returns to the list and refreshes the dirty marks.
+// can advance a huh form, pumps the form's returned cmds back into it: the
+// async hops a real runtime would deliver, and that the App's overlay
+// routing does NOT deliver (only KeyPressMsg is forwarded; huh's
+// nextFieldMsg/nextGroupMsg would die in App.Update). Verified inventory
+// (huh v2.0.3 default keymaps): Enter/Tab (Next/Submit — Input and Confirm
+// both bind them), plus y/Y/n/N on a Confirm field — its Accept/Reject
+// bindings set the value AND return a NextField cmd, so without the pump a
+// single y would flip the value yet leave the form open. The y/Y/n/N arm is
+// gated on the field kind (editField.Confirm): on an Input those are
+// ordinary characters whose cmds are cursor-blink re-arms, and executing
+// one synchronously BLOCKS ~530ms each (the blink context timeout). On
+// completion the page returns to the list and refreshes the dirty marks.
 func (p *serverEditPage) feedForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	fm, cmd := p.form.Update(msg)
 	if nf, ok := fm.(*huh.Form); ok {
 		p.form = nf
 	}
-	if kp, ok := msg.(tea.KeyPressMsg); ok && (kp.Code == tea.KeyEnter || kp.Code == tea.KeyTab) {
+	if kp, ok := msg.(tea.KeyPressMsg); ok && (kp.Code == tea.KeyEnter || kp.Code == tea.KeyTab ||
+		(p.field.Confirm && confirmAnswer(kp))) {
 		p.pumpForm(cmd)
 	}
 	if p.form.State == huh.StateAborted { // ctrl+c inside huh: field-level undo, like Esc
@@ -227,6 +232,18 @@ func (p *serverEditPage) feedForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return p, nil
 	}
 	return p, nil
+}
+
+// confirmAnswer reports whether kp is one of huh Confirm's single-press
+// answer keys (the default ConfirmKeyMap: Accept y/Y, Reject n/N). Matched
+// on the key's String form — the same representation huh's key.Matches
+// compares — so modifier combos like ctrl+y do not count.
+func confirmAnswer(kp tea.KeyPressMsg) bool {
+	switch kp.String() {
+	case "y", "Y", "n", "N":
+		return true
+	}
+	return false
 }
 
 // pumpForm executes a form-returned cmd and feeds its msg back into the
