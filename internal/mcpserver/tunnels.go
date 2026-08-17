@@ -11,8 +11,8 @@ import (
 // NOTE: the signal is CREATION time (lastActivity = time.Now() in Open) —
 // Touch(id) exists to refresh it but has NO production caller today, so a
 // tunnel dies ~10 min after creation even under continuous traffic. Making
-// this activity-aware (wiring Touch) is a tracked backlog item. Default 10
-// min per Plan 6 §T4.
+// this activity-aware (wiring Touch) is a tracked backlog item (see
+// docs/backlog.md). Default 10 min per Plan 6 §T4.
 const forwardIdleTimeout = 10 * time.Minute
 
 // forwardSweepInterval is the ticker period for the idle sweeper goroutine.
