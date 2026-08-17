@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/store"
 )
@@ -152,5 +155,68 @@ func TestClientFinishScreen(t *testing.T) {
 	}
 	if strings.Contains(v, "--token") {
 		t.Fatalf("token must ride env, not argv:\n%s", v)
+	}
+}
+
+// TestClientViewUsesAltScreen pins the 2026-08-17 feedback fix: inline mode
+// (AltScreen unset) paints each frame below the previous one instead of
+// refreshing in place. bubbletea v2 made altscreen a View field.
+func TestClientViewUsesAltScreen(t *testing.T) {
+	m := newClientModel()
+	if v := m.View(); !v.AltScreen {
+		t.Fatal("clientModel.View must set AltScreen (inline mode smears frames)")
+	}
+}
+
+// TestClient_ColumnsFitTerminalWidth pins the 2026-08-17 feedback fix for the
+// client panel: with a WindowSizeMsg known, every display line must fit the
+// terminal width (the detail box wraps instead of pushing the frame past the
+// edge), and the widest row keeps its gutter before the border.
+func TestClient_ColumnsFitTerminalWidth(t *testing.T) {
+	m := newClientModel()
+	m.snap = &store.Snapshot{Servers: []store.SnapshotServer{{
+		Name: "NUC10-authoritative-broker", User: "allan", Host: "192.0.2.5", Port: 22,
+		AuthMethod:  "password",
+		Hardware:    "NUC10 i7-10710U / 32G",
+		Location:    "客厅电视柜第三层",
+		Role:        "权威 broker",
+		Services:    "ssh-manager-serve:7878, docker, nginx, node-exporter",
+		Description: "凭据 vault 权威端，跑 serve 服务，兼做内网跳板机和定时备份任务",
+	}}}
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 60})
+	m = m2.(clientModel)
+	content := m.View().Content
+	for i, line := range strings.Split(content, "\n") {
+		if w := lipgloss.Width(line); w > 60 {
+			t.Fatalf("line %d width %d exceeds terminal width 60:\n%s", i, w, line)
+		}
+	}
+	if strings.Contains(content, "broker╭") {
+		t.Fatalf("widest row must not touch the detail border:\n%s", content)
+	}
+}
+
+// TestClient_FilterLocksActions (2026-08-17 桌面化): while the `/` filter
+// input is taking keys, action letters must stay in the filter — [s] must
+// NOT start a sync (busy stays false).
+func TestClient_FilterLocksActions(t *testing.T) {
+	m := newClientModel()
+	m.snap = &store.Snapshot{Servers: []store.SnapshotServer{
+		{Name: "gpu", User: "u", Host: "192.0.2.10"},
+		{Name: "nuc10", User: "allan", Host: "192.0.2.5"},
+	}}
+	m.syncList()
+	nm, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	nm2, _ := nm.(clientModel).Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	nm3, _ := nm2.(clientModel).Update(tea.KeyPressMsg{Code: 's', Text: "s"})
+	got := nm3.(clientModel)
+	if got.busy {
+		t.Fatal("[s] typed into the filter must not start a sync")
+	}
+	if !got.filtering() {
+		t.Fatal("filter input must still own the keys")
+	}
+	if got.list.FilterInput.Value() != "s" {
+		t.Fatalf("the keypress must land in the filter input: %q", got.list.FilterInput.Value())
 	}
 }

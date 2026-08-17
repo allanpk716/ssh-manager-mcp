@@ -726,7 +726,7 @@ var wizStepTitles = map[wizStep]string{
 
 func (w wizardModel) View() tea.View {
 	if w.step == stepClient && w.client != nil {
-		return w.client.View()
+		return altScreen(w.client.View())
 	}
 	if w.ov != nil {
 		v := w.ov.View().Content
@@ -735,7 +735,7 @@ func (w wizardModel) View() tea.View {
 		if w.err != nil {
 			v += "\n" + errStyle.Render("✗ "+w.err.Error()) + "\n（任意键重试）"
 		}
-		return tea.NewView(v)
+		return altScreen(tea.NewView(v))
 	}
 	var b strings.Builder
 	switch w.step {
@@ -836,7 +836,7 @@ func (w wizardModel) View() tea.View {
 		}
 		b.WriteString(footerStyle.Render(quitHint) + "\n")
 	}
-	return tea.NewView(b.String())
+	return altScreen(tea.NewView(b.String()))
 }
 
 var roleLabels = map[roles.Role]string{

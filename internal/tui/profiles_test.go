@@ -81,7 +81,7 @@ func TestProfilesPage_DetailMemberNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &profilesPage{items: profiles, st: st}
+	p := newProfilesPage(profiles, st)
 	d := p.Detail()
 	for _, want := range []string{"team", "2", "gpu", "web"} {
 		if !strings.Contains(d, want) {

@@ -3,20 +3,45 @@ package tui
 import (
 	"fmt"
 
+	"charm.land/bubbles/v2/list"
+
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
 // profilesPage lists credential profiles. Action keys arrive in Task 5.
 type profilesPage struct {
-	items  []*models.Profile
-	st     *store.Store
-	cursor int
+	items []*models.Profile
+	st    *store.Store
+	panelList
 }
 
 func (p *profilesPage) Title() string { return "Profiles" }
-func (p *profilesPage) Cursor() int   { return p.cursor }
-func (p *profilesPage) Select(i int)  { p.cursor = i }
+
+func newProfilesPage(items []*models.Profile, st *store.Store) *profilesPage {
+	p := &profilesPage{items: items, st: st}
+	p.panelList = newPanelList("Profiles")
+	p.syncList()
+	return p
+}
+
+// profileItem adapts a profile to the list panel: name, then member count +
+// creation date.
+type profileItem struct{ pr *models.Profile }
+
+func (i profileItem) FilterValue() string { return i.pr.Name }
+func (i profileItem) Title() string       { return i.pr.Name }
+func (i profileItem) Description() string {
+	return fmt.Sprintf("%d 台服务器 · 创建 %s", len(i.pr.ServerIDs), i.pr.CreatedAt.Format("2006-01-02"))
+}
+
+func (p *profilesPage) syncList() {
+	items := make([]list.Item, len(p.items))
+	for i, pr := range p.items {
+		items[i] = profileItem{pr: pr}
+	}
+	p.setListItems(items, len(p.items))
+}
 
 func (p *profilesPage) Rows() []string {
 	out := make([]string, len(p.items))
@@ -27,10 +52,10 @@ func (p *profilesPage) Rows() []string {
 }
 
 func (p *profilesPage) Detail() string {
-	if p.cursor < 0 || p.cursor >= len(p.items) {
+	pr := p.current()
+	if pr == nil {
 		return "(空)"
 	}
-	pr := p.items[p.cursor]
 	count, members := len(pr.ServerIDs), joinIDs(pr.ServerIDs)
 	if p.st != nil { // live view: resolve member ids to names
 		if names, err := memberNames(p.st, pr.ID); err == nil {
@@ -81,8 +106,20 @@ func joinIDs(ids []string) string {
 }
 
 func (p *profilesPage) current() *models.Profile {
-	if p.cursor < 0 || p.cursor >= len(p.items) {
+	vis := p.list.VisibleItems()
+	i := p.list.Index()
+	if i < 0 || i >= len(vis) {
 		return nil
 	}
-	return p.items[p.cursor]
+	it, ok := vis[i].(profileItem)
+	if !ok {
+		return nil
+	}
+	return it.pr
+}
+
+// Render draws the desktop-style body fitted to the terminal (shared panel
+// machinery — see panels.go).
+func (p *profilesPage) Render(width, height int) string {
+	return renderPanel(&p.list, p.Detail(), width, height)
 }

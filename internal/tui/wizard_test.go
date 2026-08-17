@@ -469,3 +469,17 @@ func TestLaunchTarget(t *testing.T) {
 		}
 	}
 }
+
+// TestWizardViewUsesAltScreen pins the 2026-08-17 feedback fix: inline mode
+// (AltScreen unset) paints each frame below the previous one instead of
+// refreshing in place. bubbletea v2 made altscreen a View field — the wizard's
+// own return AND the client-delegated return must both set it.
+func TestWizardViewUsesAltScreen(t *testing.T) {
+	vd, _ := withRoleDirs(t)
+	seedWizardVault(t, vd)
+	w := newWizardForTest()
+	defer w.closeStore()
+	if v := w.View(); !v.AltScreen {
+		t.Fatal("wizardModel.View must set AltScreen (inline mode smears frames)")
+	}
+}
