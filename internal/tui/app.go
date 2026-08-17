@@ -455,10 +455,12 @@ func (a *App) serversKey(k tea.Key) tea.Cmd {
 		return nil
 	case "e":
 		if cur := sp.current(); cur != nil {
-			draft := prefill(cur)
-			a.overlay = newFormOverlay("编辑服务器", newServerForm(draft, true), func() tea.Cmd {
-				return submitServer(a.st, cur, draft)
-			})
+			// Plan 29 T3: the field-picker edit page replaces the three-group
+			// long form — same overlay lifecycle (closes on formDoneMsg, runs
+			// submitServer via its after) and same whole-draft semantics, but
+			// entry is a paginated field list. Width comes from the App's
+			// WindowSizeMsg state (0 pre-report; the page floors itself).
+			a.overlay = newServerEditPage(a.st, cur, prefill(cur), a.width)
 		}
 	case "d":
 		if cur := sp.current(); cur != nil {
