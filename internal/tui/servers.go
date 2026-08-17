@@ -5,24 +5,54 @@ import (
 	"sort"
 	"strings"
 
+	"charm.land/bubbles/v2/list"
+
 	"ssh-manager-mcp/internal/models"
 )
 
 // serversPage lists SSH targets with the ⚠ attention view (Plan 20 T10):
-// servers needing attention sort FIRST (stable) and render with a "⚠ " row
+// servers needing attention sort FIRST (stably) and render with a "⚠ " row
 // prefix; the `!` key (warnOnly) filters the list down to exactly those. view
 // maps Rows()/Detail()/current() row positions to items indices, so the
-// cursor, the rows and the detail pane always agree under sort+filter.
+// cursor, the rows and the detail pane always agree under sort+filter. The
+// cursor itself lives in the embedded panelList (desktop panel, 2026-08-17):
+// view order is mirrored into the list so the panel and Rows() never
+// disagree.
 type serversPage struct {
-	items    []*models.Server
-	cursor   int
+	items []*models.Server
+	panelList
 	warnOnly bool  // `!` toggle: list only ⚠ servers
 	view     []int // items indices currently listed; nil = stale (rebuild lazily)
 }
 
 func (p *serversPage) Title() string { return "服务器" }
-func (p *serversPage) Cursor() int   { return p.cursor }
-func (p *serversPage) Select(i int)  { p.cursor = i }
+
+func newServersPage(items []*models.Server) *serversPage {
+	p := &serversPage{items: items}
+	p.panelList = newPanelList("服务器")
+	p.rebuild()
+	return p
+}
+
+// serverItem adapts a server to the list: two-line rows — the ⚠-aware name,
+// then user@host — with the name as filter value.
+type serverItem struct{ srv *models.Server }
+
+func (i serverItem) FilterValue() string { return i.Title() }
+func (i serverItem) Title() string {
+	name := i.srv.Name
+	if serverNeedsAttention(i.srv) {
+		name = "⚠ " + name
+	}
+	return name
+}
+func (i serverItem) Description() string {
+	host := i.srv.Host
+	if i.srv.Port != 0 && i.srv.Port != 22 {
+		host = fmt.Sprintf("%s:%d", host, i.srv.Port)
+	}
+	return i.srv.User + "@" + host
+}
 
 // serverNeedsAttention is the ⚠ rule: no credential attached (Plan 20 C0
 // credential-less), no role yet, or carrying the needs-passphrase tag an
@@ -64,7 +94,8 @@ func (p *serversPage) sortWarnFirst() {
 }
 
 // rebuild recomputes view (items are ⚠-sorted first, then the optional
-// warnOnly filter) and clamps the cursor into the visible range.
+// warnOnly filter), mirrors it into the list panel, and clamps the cursor
+// into the visible range.
 func (p *serversPage) rebuild() {
 	p.sortWarnFirst()
 	p.view = make([]int, 0, len(p.items))
@@ -74,12 +105,17 @@ func (p *serversPage) rebuild() {
 		}
 		p.view = append(p.view, i)
 	}
-	if p.cursor >= len(p.view) {
-		p.cursor = len(p.view) - 1
+	p.syncList()
+}
+
+// syncList mirrors p.view into the list panel (order preserved, so the
+// panel, Rows() and the detail pane always agree).
+func (p *serversPage) syncList() {
+	items := make([]list.Item, len(p.view))
+	for vi, idx := range p.view {
+		items[vi] = serverItem{srv: p.items[idx]}
 	}
-	if p.cursor < 0 {
-		p.cursor = 0
-	}
+	p.setListItems(items, len(p.view))
 }
 
 // ensureView lazily rebuilds a stale view (a fresh page after FetchAll,
@@ -91,8 +127,8 @@ func (p *serversPage) ensureView() {
 }
 
 // Rows returns display names — ⚠ servers carry a "⚠ " prefix — filtered to
-// the warnOnly view when set. The App view highlights the cursor row; tests
-// and the detail pane align on the same view (see current).
+// the warnOnly view when set. Tests and the fallback (unsized) layout align
+// on the same view (see current).
 func (p *serversPage) Rows() []string {
 	p.ensureView()
 	out := make([]string, len(p.view))
@@ -124,13 +160,26 @@ func (p *serversPage) Detail() string {
 }
 
 // current resolves the cursor to the server it points at IN THE VIEW — under
-// warnOnly the cursor indexes the filtered list, not items.
+// warnOnly (and under the list's own `/` text filter) the cursor indexes the
+// visible subset, not items.
 func (p *serversPage) current() *models.Server {
 	p.ensureView()
-	if p.cursor < 0 || p.cursor >= len(p.view) {
+	vis := p.list.VisibleItems()
+	i := p.list.Index()
+	if i < 0 || i >= len(vis) {
 		return nil
 	}
-	return p.items[p.view[p.cursor]]
+	it, ok := vis[i].(serverItem)
+	if !ok {
+		return nil
+	}
+	return it.srv
+}
+
+// Render draws the desktop-style body fitted to the terminal (shared panel
+// machinery — see panels.go).
+func (p *serversPage) Render(width, height int) string {
+	return renderPanel(&p.list, p.Detail(), width, height)
 }
 
 func orDash(s string) string {

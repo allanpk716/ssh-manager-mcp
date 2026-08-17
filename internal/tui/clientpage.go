@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
@@ -29,21 +30,27 @@ import (
 // classified banner (classifyPullError), and a successful pull leads to the
 // .mcp.json finish screen (clientFinishScreen) → wizFinishTo(client).
 type clientModel struct {
-	cred     *clientops.CacheCred
-	snap     *store.Snapshot
-	cacheAge time.Duration
-	cursor   int
-	status   string
-	err      error
-	busy     bool
-	overlay  overlay // connection-edit form / wizard finish screen
+	cred      *clientops.CacheCred
+	snap      *store.Snapshot
+	cacheAge  time.Duration
+	panelList     // servers list panel: cursor/pagination//`/` filter (2026-08-17 桌面化)
+	width     int // terminal width from WindowSizeMsg (0 = not yet reported)
+	height    int // terminal height from WindowSizeMsg (0 = not yet reported)
+	status    string
+	err       error
+	busy      bool
+	overlay   overlay // connection-edit form / wizard finish screen
 
 	wizard bool       // first-run flow active (source hint + pull-driven transitions)
 	draft  *connDraft // last submitted connection draft (input preservation on failed pull)
 	finish bool       // the overlay is the wizard's finish screen (any key completes)
 }
 
-func newClientModel() clientModel { return clientModel{} }
+func newClientModel() clientModel {
+	m := clientModel{}
+	m.panelList = newPanelList("服务器")
+	return m
+}
 
 func (m clientModel) Init() tea.Cmd {
 	if m.wizard && m.overlay != nil {
@@ -136,9 +143,7 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch kp := msg.(type) {
 	case dataReadyMsg:
 		m.cred, m.snap, m.cacheAge = kp.cred, kp.snap, kp.age
-		if m.cursor >= len(clientServerRows(m.snap)) {
-			m.cursor = 0
-		}
+		m.syncList()
 		return m, nil
 	case syncDoneMsg:
 		m.busy = false
@@ -195,6 +200,15 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.overlay, _ = ov.(overlay)
 			return m, cmd
 		}
+		// List panel event stream (see listMsg): while the `/` filter input is
+		// active it owns EVERY keypress; browsing keypresses fall through to
+		// the s/c/t/q actions below (the list only consumes bound keys).
+		if listMsg(msg) {
+			cmd := m.listUpdate(msg)
+			if _, press := msg.(tea.KeyPressMsg); !press || m.filtering() {
+				return m, cmd
+			}
+		}
 		k := kp.Key()
 		switch {
 		case k.Text == "q" || (k.Code == 'c' && k.Mod == tea.ModCtrl):
@@ -215,30 +229,55 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case k.Text == "t":
 			m.status = "TTL 由 .mcp.json 的 --cache-max-age 控制（默认 30m；0=关闭自动拉取）"
 			return m, nil
-		case k.Code == tea.KeyUp && k.Mod == 0, k.Text == "k":
-			m.move(-1)
-		case k.Code == tea.KeyDown && k.Mod == 0, k.Text == "j":
-			m.move(1)
+		case k.Code == tea.KeyUp && k.Mod == 0, k.Text == "k",
+			k.Code == tea.KeyDown && k.Mod == 0, k.Text == "j":
+			// consumed by the list panel in the routing block above
+			return m, nil
 		}
 	case tea.WindowSizeMsg:
+		m.width, m.height = kp.Width, kp.Height
 		return m, nil
 	}
 	return m, nil
 }
 
-func (m *clientModel) move(d int) {
-	n := len(clientServerRows(m.snap))
-	if n == 0 {
-		return
+// syncList mirrors the snapshot's servers into the list panel.
+func (m *clientModel) syncList() {
+	items := make([]list.Item, 0)
+	if m.snap != nil {
+		for i := range m.snap.Servers {
+			items = append(items, clientItem{srv: &m.snap.Servers[i]})
+		}
 	}
-	c := m.cursor + d
-	if c < 0 {
-		c = 0
+	m.setListItems(items, len(items))
+}
+
+// clientItem adapts a snapshot server to the list panel: name, then user@host.
+type clientItem struct{ srv *store.SnapshotServer }
+
+func (i clientItem) FilterValue() string { return i.srv.Name }
+func (i clientItem) Title() string       { return i.srv.Name }
+func (i clientItem) Description() string {
+	host := i.srv.Host
+	if i.srv.Port != 0 && i.srv.Port != 22 {
+		host = fmt.Sprintf("%s:%d", host, i.srv.Port)
 	}
-	if c >= n {
-		c = n - 1
+	return i.srv.User + "@" + host
+}
+
+// current resolves the cursor to the snapshot server it points at in the
+// (possibly `/`-filtered) visible subset.
+func (m clientModel) current() *store.SnapshotServer {
+	vis := m.list.VisibleItems()
+	i := m.list.Index()
+	if i < 0 || i >= len(vis) {
+		return nil
 	}
-	m.cursor = c
+	it, ok := vis[i].(clientItem)
+	if !ok {
+		return nil
+	}
+	return it.srv
 }
 
 // validServeURL gates the form's URL field: parseable and https-only, so a
@@ -396,11 +435,10 @@ func clientServerRows(snap *store.Snapshot) []string {
 }
 
 // clientServerDetail renders the detail pane for the cursor row (orDash-style).
-func clientServerDetail(snap *store.Snapshot, cursor int) string {
-	if snap == nil || cursor < 0 || cursor >= len(snap.Servers) {
+func clientServerDetail(s *store.SnapshotServer) string {
+	if s == nil {
 		return "(空)"
 	}
-	s := snap.Servers[cursor]
 	port := 0
 	if s.Port != 0 {
 		port = s.Port
@@ -427,7 +465,7 @@ func (m clientModel) View() tea.View {
 		if m.err != nil {
 			v += "\n" + errStyle.Render("✗ "+m.err.Error())
 		}
-		return tea.NewView(v)
+		return altScreen(tea.NewView(v))
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(" ssh-manager (client)") + "\n")
@@ -437,14 +475,19 @@ func (m clientModel) View() tea.View {
 		n = len(m.snap.Servers)
 	}
 	b.WriteString(clientHeader(m.cred, n, m.cacheAge) + "\n")
-	rows := clientServerRows(m.snap)
-	if len(rows) > 0 {
-		for i := range rows {
-			if i == m.cursor {
-				rows[i] = selStyle.Render(rows[i])
-			}
+	if m.width > 0 {
+		// desktop panels (2026-08-17): list + detail fitted to the terminal;
+		// body height = frame minus header/hint/status/footer rows.
+		chrome := 4
+		if m.wizard {
+			chrome++ // the hint line
 		}
-		b.WriteString(lipColumns(strings.Join(rows, "\n"), detailStyle.Render(clientServerDetail(m.snap, m.cursor))))
+		if m.busy {
+			chrome++ // the 同步中… line
+		}
+		b.WriteString(renderPanel(&m.list, clientServerDetail(m.current()), m.width, max(m.height-chrome, 6)))
+	} else if rows := clientServerRows(m.snap); len(rows) > 0 {
+		b.WriteString(columns(m.width, strings.Join(rows, "\n"), clientServerDetail(m.current())))
 	} else {
 		b.WriteString("（缓存快照中无服务器）")
 	}
@@ -457,6 +500,6 @@ func (m clientModel) View() tea.View {
 	} else if m.status != "" {
 		b.WriteString(footerStyle.Render("✓ "+m.status) + "\n")
 	}
-	b.WriteString(footerStyle.Render("[s]同步 [c]编辑连接 [t]TTL  q 退出"))
-	return tea.NewView(b.String())
+	b.WriteString(clip(m.width, footerStyle.Render("[s]同步 [c]编辑连接 [t]TTL  q 退出")))
+	return altScreen(tea.NewView(b.String()))
 }

@@ -1,12 +1,17 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/cursor"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -198,5 +203,224 @@ func TestBrokerApp_RoleLoadFailsClosed(t *testing.T) {
 	defer st.Close()
 	if _, err := NewBrokerApp(st); err == nil {
 		t.Fatal("a corrupt role.json must fail NewBrokerApp (fail closed), got nil error")
+	}
+}
+
+// TestApp_ViewUsesAltScreen pins the 2026-08-17 feedback fix: the console used
+// to run inline (AltScreen unset), so each tab switch painted its frame BELOW
+// the previous one and left residue in the scrollback. bubbletea v2 moved
+// altscreen from a program option to a View field, so every top-level View
+// must set it — including the overlay-delegated return, or opening a form
+// would drop the session out of full-screen mid-flight.
+func TestApp_ViewUsesAltScreen(t *testing.T) {
+	a := newTestApp(t)
+	if v := a.View(); !v.AltScreen {
+		t.Fatal("App.View must set AltScreen (inline mode smears frames on tab switch)")
+	}
+	a.overlay = &secretView{title: "t", body: "b"}
+	if v := a.View(); !v.AltScreen {
+		t.Fatal("App.View must keep AltScreen on the overlay-delegated view")
+	}
+}
+
+// TestApp_ColumnsFitTerminalWidth pins the 2026-08-17 feedback fix (内容串位):
+// the list/detail join used to have zero gutter — the widest row kissed the
+// detail border — and no width awareness, so long field values pushed the
+// frame past the terminal edge (renderer hard-clips mid-border). With a
+// WindowSizeMsg known: every display line must fit the width, and the widest
+// list row must keep a 2-column gutter before the border.
+func TestApp_ColumnsFitTerminalWidth(t *testing.T) {
+	a := newTestApp(t)
+	credID, err := a.st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("p")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.st.AddServer(&models.Server{
+		Name: "NUC10-authoritative-broker", Host: "192.0.2.5", User: "allan", Port: 22,
+		AuthMethod: models.AuthPassword, CredentialID: credID,
+		Hardware: "NUC10 i7-10710U / 32G", Location: "客厅电视柜第三层", Role: "权威 broker",
+		Services: "ssh-manager-serve:7878, docker, nginx, node-exporter",
+		Caveats:  "BIOS 限功率 65%", Tags: []string{"broker", "core"},
+		Description: "凭据 vault 权威端，跑 serve 服务，兼做内网跳板机和定时备份任务",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.refetchPages()
+	m2, _ := a.Update(tea.WindowSizeMsg{Width: 60})
+	if m2.(App).width != 60 {
+		t.Fatalf("WindowSizeMsg must be captured, width = %d", m2.(App).width)
+	}
+	content := m2.(App).View().Content
+	for i, line := range strings.Split(content, "\n") {
+		if w := lipgloss.Width(line); w > 60 {
+			t.Fatalf("line %d width %d exceeds terminal width 60:\n%s", i, w, line)
+		}
+	}
+	// bordered panels keep list and detail structurally apart — no row text
+	// may touch a border wall directly
+	for _, kiss := range []string{"broker╭", "broker│", "broker╰"} {
+		if strings.Contains(content, kiss) {
+			t.Fatalf("list row must not touch the detail border (%q):\n%s", kiss, content)
+		}
+	}
+}
+
+// TestServersPage_DesktopRender (2026-08-17 feedback round 3, 样张): the
+// servers page renders as bordered panels sized to the terminal — the list
+// PAGINATES instead of growing unbounded rows (footer can never fall off
+// screen), with the built-in filter + help affordances.
+func TestServersPage_DesktopRender(t *testing.T) {
+	a := newTestApp(t)
+	cid, err := a.st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("p")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 30; i++ {
+		if _, err := a.st.AddServer(&models.Server{
+			Name: fmt.Sprintf("srv%02d", i), Host: "192.0.2.10", User: "u", Port: 22,
+			AuthMethod: models.AuthPassword, CredentialID: cid, Role: "r",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.refetchPages()
+	m, _ := a.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	v := m.(App).View().Content
+	for i, line := range strings.Split(v, "\n") {
+		if w := lipgloss.Width(line); w > 60 {
+			t.Fatalf("line %d width %d exceeds 60:\n%s", i, w, line)
+		}
+	}
+	if h := strings.Count(v, "\n") + 1; h > 20 {
+		t.Fatalf("frame height %d exceeds terminal height 20 — pagination must bound it:\n%s", h, v)
+	}
+	if !strings.Contains(v, "服务器") {
+		t.Fatalf("panel title missing:\n%s", v)
+	}
+	if !strings.Contains(v, "│") {
+		t.Fatalf("panel borders missing:\n%s", v)
+	}
+}
+
+// TestServersPage_ListFilterFlow: `/` opens the built-in filter, typing
+// filters the visible rows, action letters typed while filtering must be
+// consumed by the filter input (no overlay fires), Esc clears.
+func TestServersPage_ListFilterFlow(t *testing.T) {
+	a := newTestApp(t)
+	cid, _ := a.st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("p")})
+	if _, err := a.st.AddServer(&models.Server{
+		Name: "nuc10", Host: "192.0.2.5", User: "allan", Port: 22,
+		AuthMethod: models.AuthPassword, CredentialID: cid, Role: "broker",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.refetchPages()
+	// the desktop panel path needs the terminal size; without it the App
+	// falls back to the plain columns layout where the list filter is moot.
+	// App.Update has a VALUE receiver — keep the returned model.
+	m0, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = m0.(App)
+	if a.width != 80 {
+		t.Fatalf("width not captured: %d", a.width)
+	}
+	// both servers visible before filtering
+	if v := a.View().Content; !strings.Contains(v, "gpu") || !strings.Contains(v, "nuc10") {
+		t.Fatalf("pre-filter view must show both:\n%s", v)
+	}
+	m, _ := a.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	// typing 'g' (a filter letter, NOT an action here) — the filter runs
+	// ASYNC in bubbles: the matches arrive as FilterMatchesMsg via the
+	// returned cmd, so pump it like a real runtime would.
+	m1, cmd := m.(App).Update(tea.KeyPressMsg{Code: 'g', Text: "g"})
+	if m1.(App).overlay != nil {
+		t.Fatalf("key typed while filtering must not fire page actions")
+	}
+	m2 := pumpCmds(t, m1.(App), cmd)
+	v := m2.View().Content
+	if !strings.Contains(v, "gpu") {
+		t.Fatalf("filter 'g' must keep gpu visible:\n%s", v)
+	}
+	if strings.Contains(v, "nuc10") {
+		t.Fatalf("filter 'g' must hide nuc10:\n%s", v)
+	}
+	// Esc clears the filter
+	m3, _ := m2.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if v := m3.(App).View().Content; !strings.Contains(v, "nuc10") {
+		t.Fatalf("Esc must clear the filter:\n%s", v)
+	}
+}
+
+// pumpCmds executes the cmds a real bubbletea runtime would and feeds every
+// produced msg back through Update (bubbles list filtering is async: the
+// matches ride a cmd → FilterMatchesMsg). Timer/cosmetic ticks (cursor blink,
+// spinner) self-perpetuate in a synchronous test — drop them instead of
+// chasing the schedule.
+func pumpCmds(t *testing.T, a App, c tea.Cmd) App {
+	t.Helper()
+	if c == nil {
+		return a
+	}
+	switch msg := c().(type) {
+	case nil, cursor.BlinkMsg, spinner.TickMsg, list.FilterMatchesMsg:
+		_ = msg // FilterMatchesMsg is routed by App.Update itself below
+		nm, _ := a.Update(msg)
+		return nm.(App)
+	case tea.BatchMsg:
+		for _, sub := range msg {
+			a = pumpCmds(t, a, sub)
+		}
+		return a
+	default:
+		nm, cmd := a.Update(msg)
+		return pumpCmds(t, nm.(App), cmd)
+	}
+}
+
+// TestAllPages_PanelFit (2026-08-17 全页铺开): every broker page renders as
+// bordered panels fitted to the terminal — no line wider than the terminal,
+// frame never taller than the terminal (pagination bounds it), borders
+// present.
+func TestAllPages_PanelFit(t *testing.T) {
+	a := newTestApp(t)
+	cid, err := a.st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("p")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		if _, err := a.st.AddServer(&models.Server{
+			Name: fmt.Sprintf("srv%02d", i), Host: "192.0.2.10", User: "u", Port: 22,
+			AuthMethod: models.AuthPassword, CredentialID: cid, Role: "r",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pid, err := a.st.AddProfile("home-lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.st.AddProject("proj-x", pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.st.AddCacheToken("laptop"); err != nil {
+		t.Fatal(err)
+	}
+	a.refetchPages()
+	m, _ := a.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	app := m.(App)
+	for pi := 0; pi < int(pageCount); pi++ {
+		v := app.View().Content
+		if !strings.Contains(v, "│") {
+			t.Fatalf("page %d: panel borders missing:\n%s", pi, v)
+		}
+		for i, line := range strings.Split(v, "\n") {
+			if w := lipgloss.Width(line); w > 60 {
+				t.Fatalf("page %d line %d width %d exceeds 60:\n%s", pi, i, w, line)
+			}
+		}
+		if h := strings.Count(v, "\n") + 1; h > 20 {
+			t.Fatalf("page %d frame height %d exceeds 20:\n%s", pi, h, v)
+		}
+		nm, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		app = nm.(App)
 	}
 }

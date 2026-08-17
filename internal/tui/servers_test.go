@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/key"
+
 	"ssh-manager-mcp/internal/models"
 )
 
@@ -11,10 +13,10 @@ func TestServersPage_RowsAndDetail(t *testing.T) {
 	// Complete server (credential + role): its row is the BARE name — the ⚠
 	// prefix (T10) belongs to attention servers only (see
 	// TestServersPageWarnSortFilter).
-	sp := &serversPage{items: []*models.Server{{
+	sp := newServersPage([]*models.Server{{
 		Name: "gpu", Host: "192.0.2.10", User: "u", Port: 22,
 		CredentialID: "c", Role: "r", Hardware: "2x3090", Tags: []string{"gpu"},
-	}}}
+	}})
 	if rows := sp.Rows(); len(rows) != 1 || rows[0] != "gpu" {
 		t.Fatalf("rows: %v", rows)
 	}
@@ -48,11 +50,11 @@ func TestServerNeedsAttention(t *testing.T) {
 // "⚠ " row prefix; warnOnly filters the rows down to exactly them; the cursor
 // and the detail pane follow the FILTERED view, not raw items.
 func TestServersPageWarnSortFilter(t *testing.T) {
-	p := &serversPage{items: []*models.Server{
+	p := newServersPage([]*models.Server{
 		{Name: "ok", CredentialID: "c", Role: "r"},
 		{Name: "bare"},
 		{Name: "ok2", CredentialID: "c", Role: "r"},
-	}}
+	})
 	rows := p.Rows()
 	if len(rows) != 3 || rows[0] != "⚠ bare" || rows[1] != "ok" || rows[2] != "ok2" {
 		t.Fatalf("⚠ 置顶 + 前缀: %v", rows)
@@ -67,20 +69,20 @@ func TestServersPageWarnSortFilter(t *testing.T) {
 	if cur := p.current(); cur == nil || cur.Name != "bare" {
 		t.Fatalf("current must track the filtered view: %+v", cur)
 	}
-	if p.cursor != 0 {
-		t.Fatalf("cursor clamped into filtered range: %d", p.cursor)
+	if p.Cursor() != 0 {
+		t.Fatalf("cursor clamped into filtered range: %d", p.Cursor())
 	}
 }
 
 // TestServersPageWarnStableOrder: the ⚠ block keeps its incoming relative
 // order across repeated sorts (refresh churn must not reshuffle).
 func TestServersPageWarnStableOrder(t *testing.T) {
-	p := &serversPage{items: []*models.Server{
+	p := newServersPage([]*models.Server{
 		{Name: "ok", CredentialID: "c", Role: "r"},
 		{Name: "w1"},
 		{Name: "w2", CredentialID: "c"}, // endpoint present but role missing
 		{Name: "w3", Tags: []string{"needs-passphrase"}, CredentialID: "c", Role: "r"},
-	}}
+	})
 	want := []string{"⚠ w1", "⚠ w2", "⚠ w3", "ok"}
 	if got := p.Rows(); !equalRows(got, want) {
 		t.Fatalf("stable ⚠ order: got %v want %v", got, want)
@@ -101,4 +103,24 @@ func equalRows(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+// TestServersPage_ListKeymapRebind: the bubbles list DEFAULT keymap binds
+// single letters that collide with this console's actions (d=下一页 vs d=删除,
+// u=上一页 vs u=升级, g=跳转 vs g=授权) — the page must rebind list paging and
+// jump keys to non-letter keys only (arrows/pgup/pgdn/home/end).
+func TestServersPage_ListKeymapRebind(t *testing.T) {
+	sp := newServersPage(nil)
+	for name, b := range map[string]key.Binding{
+		"PrevPage":  sp.list.KeyMap.PrevPage,
+		"NextPage":  sp.list.KeyMap.NextPage,
+		"GoToStart": sp.list.KeyMap.GoToStart,
+		"GoToEnd":   sp.list.KeyMap.GoToEnd,
+	} {
+		for _, k := range b.Keys() {
+			if len(k) == 1 {
+				t.Fatalf("list keymap %s keeps single-letter binding %q — it steals a page action key", name, k)
+			}
+		}
+	}
 }

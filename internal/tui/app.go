@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
@@ -40,6 +41,26 @@ type overlay interface {
 	Title() string
 }
 
+// sizedPage is a page that renders itself into a fitted terminal box
+// (bordered panels, pagination) instead of the plain two-column layout —
+// the desktop-panel pages (2026-08-17 样张 → 全页铺开).
+type sizedPage interface {
+	listPage
+	Render(width, height int) string
+}
+
+// panelPage is a page whose list panel owns an event stream (see listMsg):
+// the App routes those messages to it before anything else.
+type panelPage interface {
+	listPage
+	filtering() bool
+	listUpdate(msg tea.Msg) tea.Cmd
+}
+
+// chromeLines is the App frame's own row budget above and below the body:
+// title, tab line, status line, footer.
+const chromeLines = 4
+
 type App struct {
 	st      *store.Store
 	page    page
@@ -47,6 +68,8 @@ type App struct {
 	overlay overlay         // nil = 无
 	role    roles.Role      // this machine's deployment role (T6: gates the [u] upgrade)
 	upg     *upgradeSegment // nil = upgrade segment not running (T6)
+	width   int             // terminal width from WindowSizeMsg (0 = not yet reported)
+	height  int             // terminal height from WindowSizeMsg (0 = not yet reported)
 	status  string
 	err     error
 }
@@ -107,16 +130,31 @@ func FetchAll(st *store.Store) ([pageCount]listPage, error) {
 	if err != nil {
 		return pages, err
 	}
-	pages[pageServers] = &serversPage{items: servers}
-	pages[pageProfiles] = &profilesPage{items: profiles, st: st}
-	pages[pageProjects] = &projectsPage{items: projects, st: st}
-	pages[pageTokens] = &cacheTokensPage{items: tokens}
+	pages[pageServers] = newServersPage(servers)
+	pages[pageProfiles] = newProfilesPage(profiles, st)
+	pages[pageProjects] = newProjectsPage(projects, st)
+	pages[pageTokens] = newCacheTokensPage(tokens)
 	return pages, nil
 }
 
 func (a App) Init() tea.Cmd { return nil }
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// List panels (2026-08-17 样张 → 全页): each page's bubbles list owns an
+	// event stream beyond keypresses — its async filter delivers
+	// FilterMatchesMsg, and its sub-components tick (cursor blink, spinner).
+	// Route those first; while a `/` filter input is active it owns EVERY
+	// keypress (letters are filter text, not page actions). Browsing
+	// keypresses fall through so the page actions below still fire (the lists
+	// only consume bound keys — rebindListKeys kept our letters unbound).
+	if a.overlay == nil {
+		if pp, ok := a.pages[a.page].(panelPage); ok && listMsg(msg) {
+			cmd := pp.listUpdate(msg)
+			if _, press := msg.(tea.KeyPressMsg); !press || pp.filtering() {
+				return a, cmd
+			}
+		}
+	}
 	switch m := msg.(type) {
 	case tea.KeyPressMsg: // bubbletea v2: KeyMsg is an interface; presses are KeyPressMsg
 		if a.overlay != nil { // overlay owns keys until done (form overlays send formDoneMsg)
@@ -134,11 +172,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case k.Code == tea.KeyTab && k.Mod == 0:
 			a.page = (a.page + 1) % pageCount
 			return a, nil
-		case k.Code == tea.KeyUp && k.Mod == 0, k.Text == "k":
-			a.move(-1)
-			return a, nil
-		case k.Code == tea.KeyDown && k.Mod == 0, k.Text == "j":
-			a.move(1)
+		// up/down/j/k: consumed by the page's list panel in the routing block
+		// above — nothing left to do here.
+		case k.Code == tea.KeyUp && k.Mod == 0, k.Text == "k",
+			k.Code == tea.KeyDown && k.Mod == 0, k.Text == "j":
 			return a, nil
 		case k.Text == "q":
 			return a, tea.Quit
@@ -300,6 +337,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, a.overlay.Init()
 			}
 		}
+	case tea.WindowSizeMsg:
+		a.width, a.height = m.Width, m.Height
+		return a, nil
 	case errMsg:
 		a.err = m.err
 		a.status = ""
@@ -443,25 +483,6 @@ func (a *App) serversKey(k tea.Key) tea.Cmd {
 	return a.overlay.Init()
 }
 
-func (a *App) move(d int) {
-	p := a.pages[a.page]
-	if p == nil {
-		return
-	}
-	rows := p.Rows()
-	if len(rows) == 0 {
-		return
-	}
-	c := p.Cursor() + d
-	if c < 0 {
-		c = 0
-	}
-	if c >= len(rows) {
-		c = len(rows) - 1
-	}
-	p.Select(c)
-}
-
 type errMsg struct{ err error }
 type actionDoneMsg struct{ desc string }
 
@@ -477,7 +498,7 @@ type formDoneMsg struct {
 
 func (a App) View() tea.View {
 	if a.overlay != nil {
-		return a.overlay.View()
+		return altScreen(a.overlay.View())
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(" ssh-manager ") + "\n")
@@ -494,31 +515,60 @@ func (a App) View() tea.View {
 		}
 		tabs[i] = t
 	}
-	b.WriteString(strings.Join(tabs, " ") + footerStyle.Render("  Tab 切页") + "\n")
+	b.WriteString(clip(a.width, strings.Join(tabs, " ")+footerStyle.Render("  Tab 切页")) + "\n")
 	p := a.pages[a.page]
-	left, right := "（空）", ""
-	if p != nil {
-		rows := p.Rows()
-		if len(rows) > 0 {
-			// re-render with the selected row highlighted
-			for i, r := range rows {
-				if i == p.Cursor() {
-					rows[i] = selStyle.Render(r)
+	// sizedPage (servers 样张): a page that renders itself into a fitted
+	// terminal box — bordered panels with pagination, no unbounded rows.
+	if sp, ok := p.(sizedPage); ok && a.width > 0 {
+		b.WriteString(sp.Render(a.width, max(a.height-chromeLines, 6)))
+		b.WriteString("\n")
+	} else {
+		left, detail := "（空）", "(空)"
+		if p != nil {
+			rows := p.Rows()
+			if len(rows) > 0 {
+				// re-render with the selected row highlighted
+				for i, r := range rows {
+					if i == p.Cursor() {
+						rows[i] = selStyle.Render(r)
+					}
 				}
+				left = strings.Join(rows, "\n")
 			}
-			left = strings.Join(rows, "\n")
+			detail = p.Detail()
 		}
-		right = detailStyle.Render(p.Detail())
+		b.WriteString(columns(a.width, left, detail))
+		b.WriteString("\n")
 	}
-	b.WriteString(lipColumns(left, right))
-	b.WriteString("\n")
 	if a.err != nil {
 		b.WriteString(errStyle.Render("✗ "+a.err.Error()) + "\n")
 	} else if a.status != "" {
 		b.WriteString(footerStyle.Render("✓ "+a.status) + "\n")
 	}
-	b.WriteString(footerStyle.Render(a.footer()))
-	return tea.NewView(b.String())
+	b.WriteString(clip(a.width, footerStyle.Render(a.footer())))
+	return altScreen(tea.NewView(b.String()))
+}
+
+// clip truncates a one-line hint (tabs, footer) to the terminal width when
+// known — a narrow terminal loses the hint's tail gracefully instead of the
+// renderer hard-clipping it mid-glyph.
+func clip(termWidth int, s string) string {
+	if termWidth > 0 && lipgloss.Width(s) > termWidth {
+		return ansi.Truncate(s, termWidth, "…")
+	}
+	return s
+}
+
+// altScreen marks a top-level view full-screen. Without it bubbletea v2 runs
+// inline: the frame height is content-driven, and once it exceeds the
+// terminal height the terminal scrolls — every tab switch paints its frame
+// BELOW the previous one and leaves residue in the scrollback (2026-08-17
+// feedback). Every return path of the three top-level Views (App, wizardModel,
+// clientModel — overlay delegation included) must go through here, or opening
+// an overlay mid-session would flip the program out of full-screen.
+func altScreen(v tea.View) tea.View {
+	v.AltScreen = true
+	return v
 }
 
 func (a App) footer() string {
@@ -552,7 +602,27 @@ func (a App) footer() string {
 	return tail
 }
 
-// lipColumns renders two columns side by side (width-aware lipgloss join).
-func lipColumns(left, right string) string {
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+// colGutter is the blank margin kept between the list column and the detail
+// box; detailChrome is the detail box's own horizontal footprint (rounded
+// border 1+1, padding 1+1).
+const (
+	colGutter    = 2
+	detailChrome = 4
+)
+
+// columns joins the list column and its detail box side by side,
+// terminal-width-aware (2026-08-17 feedback: the join had zero gutter — the
+// widest list row kissed the detail border, reading as content bleeding into
+// the box — and no width cap, so long field values pushed the frame past the
+// terminal edge and the renderer hard-clipped it mid-border). With termWidth
+// 0 (size not yet reported) the detail renders unwrapped, matching the old
+// layout plus the gutter.
+func columns(termWidth int, list, detail string) string {
+	list = lipgloss.NewStyle().PaddingRight(colGutter).Render(list)
+	if termWidth > 0 {
+		if avail := termWidth - lipgloss.Width(list) - detailChrome; avail > 0 {
+			detail = ansi.Wrap(detail, avail, "-")
+		}
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, list, detailStyle.Render(detail))
 }
