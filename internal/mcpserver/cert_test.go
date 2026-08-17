@@ -226,6 +226,113 @@ func TestLoadOrCreateServeCert_DeletedCertRefusesRegen(t *testing.T) {
 	}
 }
 
+// statOrFatal is the t.Fatal-on-error Stat wrapper for the read-only twin's
+// zero-write assertions.
+func statOrFatal(t *testing.T, p string) os.FileInfo {
+	t.Helper()
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info
+}
+
+// dirEntryCount counts a directory's entries — the zero-write proof for the
+// read-only twin: not only must existing files be untouched, NO new file
+// (cert, key, or marker) may appear.
+func dirEntryCount(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
+}
+
+// TestReadServeCertFingerprintReadOnly pins the read-only twin's three states
+// MINUS all generation: ① cert+key present → same pin as Load, with the
+// directory bit-identical afterwards (mtime/size of both files + file COUNT
+// unchanged — zero-write proof); ② cert, key, AND marker all absent → a
+// "not initialized" error with the directory still EMPTY (no generation, no
+// marker written); ③ marker present + cert absent → the F10 out-of-band
+// refusal, without re-creating anything.
+func TestReadServeCertFingerprintReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "serve-cert.pem")
+	keyPath := filepath.Join(dir, "serve-key.pem")
+	t.Setenv("SSHMGR_SERVE_CERT", certPath)
+	t.Setenv("SSHMGR_SERVE_KEY", keyPath)
+	t.Setenv("SSHMGR_SERVE_MARKER", filepath.Join(dir, paths.ServeCertMarkerFilename))
+
+	// Seed a real cert via the GENERATING path — creating in TESTS is legal;
+	// the read-only twin under test never generates.
+	_, _, wantFP, err := LoadOrCreateServeCert()
+	if err != nil {
+		t.Fatalf("seed LoadOrCreateServeCert: %v", err)
+	}
+
+	// ① Present → pin + zero writes.
+	beforeCert, beforeKey := statOrFatal(t, certPath), statOrFatal(t, keyPath)
+	beforeCount := dirEntryCount(t, dir) // cert + key + marker = 3
+	gotCert, gotKey, fp, err := ReadServeCertFingerprint()
+	if err != nil {
+		t.Fatalf("ReadServeCertFingerprint on a present cert: %v", err)
+	}
+	if gotCert != certPath || gotKey != keyPath {
+		t.Fatalf("paths = (%q,%q), want (%q,%q)", gotCert, gotKey, certPath, keyPath)
+	}
+	if fp != wantFP {
+		t.Fatalf("fingerprint %q != seeded %q (must match LoadOrCreateServeCert)", fp, wantFP)
+	}
+	if _, ok := ParsePin(fp); !ok {
+		t.Fatalf("returned fingerprint not a valid pin: %q", fp)
+	}
+	for _, pair := range []struct {
+		name          string
+		before, after os.FileInfo
+	}{{"cert", beforeCert, statOrFatal(t, certPath)}, {"key", beforeKey, statOrFatal(t, keyPath)}} {
+		if pair.after.Size() != pair.before.Size() || !pair.after.ModTime().Equal(pair.before.ModTime()) {
+			t.Fatalf("%s changed by the read: size %d→%d mtime %v→%v",
+				pair.name, pair.before.Size(), pair.after.Size(), pair.before.ModTime(), pair.after.ModTime())
+		}
+	}
+	if got := dirEntryCount(t, dir); got != beforeCount {
+		t.Fatalf("file count changed %d→%d — the read-only twin must not write anything", beforeCount, got)
+	}
+
+	// ② Cert, key, AND marker all absent (fresh dir) → "not initialized" and
+	// the directory stays EMPTY — no generation, no marker.
+	fresh := t.TempDir()
+	t.Setenv("SSHMGR_SERVE_CERT", filepath.Join(fresh, "serve-cert.pem"))
+	t.Setenv("SSHMGR_SERVE_KEY", filepath.Join(fresh, "serve-key.pem"))
+	t.Setenv("SSHMGR_SERVE_MARKER", "")
+	_, _, _, err = ReadServeCertFingerprint()
+	if err == nil || !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("both absent must error with not-initialized, got: %v", err)
+	}
+	if got := dirEntryCount(t, fresh); got != 0 {
+		t.Fatalf("fresh dir must stay EMPTY (no generation by the read-only twin), has %d entries", got)
+	}
+
+	// ③ Marker present + cert absent → the F10 refusal (out-of-band deletion
+	// wording), and nothing gets re-created.
+	f10 := t.TempDir()
+	f10Cert := filepath.Join(f10, "serve-cert.pem")
+	t.Setenv("SSHMGR_SERVE_CERT", f10Cert)
+	t.Setenv("SSHMGR_SERVE_KEY", filepath.Join(f10, "serve-key.pem"))
+	t.Setenv("SSHMGR_SERVE_MARKER", filepath.Join(f10, paths.ServeCertMarkerFilename))
+	if err := os.WriteFile(filepath.Join(f10, paths.ServeCertMarkerFilename), []byte("initialized\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = ReadServeCertFingerprint()
+	if err == nil || !strings.Contains(err.Error(), "out-of-band") {
+		t.Fatalf("marker-without-cert must error with the F10 out-of-band wording, got: %v", err)
+	}
+	if _, statErr := os.Stat(f10Cert); statErr == nil {
+		t.Fatal("the F10 refusal path must not re-create the cert")
+	}
+}
+
 func TestGenerateServeCert_KeyUsage_NoKeyEncipherment(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "serve-cert.pem")
