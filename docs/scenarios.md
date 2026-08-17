@@ -186,6 +186,8 @@ ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原
 - 这条路同样写审计（`action=exec`）。
 
 > **权威机实测记录**（2026-08-17，NUC10 @ v0.7.3，目标 `ai_runner`）：`ssh ai_runner echo owner-smoke-ok-20260817` → exit 0、stdout 正确——单命令路径端到端可用。同日负例：远端 `false`（退出码 1）与**无命令**形态在该版本下均 exit 0 静默通过（退出码被吞 / 空命令照跑——两者均已在 master 修复、待发布；升级后按上文要点复测）。
+>
+> **复测记录**（2026-08-17，NUC10 升级 v0.8.0 后，目标同）：echo → exit 0 ✓；远端 `false` → **CLI exit 1 + stderr `remote command exited with code 1`** ✓；无命令 → **exit 1 + `no command given` 显式报错** ✓——v0.7.3 记录的两个缺陷在 v0.8.0 上全部兑现修复。
 
 ---
 
