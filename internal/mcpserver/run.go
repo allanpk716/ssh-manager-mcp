@@ -40,7 +40,7 @@ func RunStdio(token string, kp store.KeyProvider) error {
 	// MCP-shutdown teardown: when the agent disconnects (stdin closes) srv.Run
 	// returns and the deferred CloseAll tears down every open forward_port
 	// tunnel — listener + owning ssh.Client — so the process exits with no
-	// leaked SSH connections. The idle sweeper goroutine is also stopped. (The
+	// leaked SSH connections. The tunnel sweeper goroutine is also stopped. (The
 	// go-sdk MCP server has no per-server shutdown hook on the Run path — its
 	// session onClose fires per-session; we teardown at Run-return instead,
 	// which is the single-session stdio case.)

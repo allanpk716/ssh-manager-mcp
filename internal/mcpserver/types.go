@@ -46,7 +46,7 @@ type DownloadOutput struct {
 }
 
 // UploadInput is the upload_file tool input. LocalPath is read from the broker's
-// (= the agent's) filesystem; RemotePath is the destination on the server.
+// filesystem; RemotePath is the destination on the server.
 type UploadInput struct {
 	ServerID   string `json:"server_id" jsonschema:"server id from list_servers"`
 	LocalPath  string `json:"local_path" jsonschema:"absolute local path (on the machine the broker runs on) of the file or directory to push to the server; a directory is uploaded recursively, preserving relative paths"`
