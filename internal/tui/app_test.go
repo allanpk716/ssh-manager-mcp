@@ -73,27 +73,31 @@ func TestApp_QuitOnQ(t *testing.T) {
 
 // TestServersPageDispatch (Plan 20 T1, paying the Plan 18 T6 dispatch-table
 // debt): the key→page→action mapping on the servers page, driven through the
-// real Update path. a/e/d/i must open their form overlay (right title + the
-// overlay's Init cmd comes back); g must be a NO-OP here — it is the profiles
-// page's grant key, and per-page dispatch is what keeps the overlapping
-// letters (a/e/d on servers AND projects) from swallowing each other. `i`
-// (ssh-config import) landed in Task 10. The emptyList cases (Plan 21 T3) pin
-// the no-current-target guard: with ZERO servers, e/d must be silent no-ops
+// real Update path. a/e/d/i must open their overlay (right title); g must be a
+// NO-OP here — it is the profiles page's grant key, and per-page dispatch is
+// what keeps the overlapping letters (a/e/d on servers AND projects) from
+// swallowing each other. `i` (ssh-config import) landed in Task 10. Plan 29
+// T3: `e` opens the field-picker edit page whose Title carries the edit
+// target's name, and whose Init is a no-op by design (the huh formOverlay
+// returns a focus cmd; serverEditPage synchronously focuses its list) — hence
+// the wantInitCmd column. The emptyList cases (Plan 21 T3) pin the
+// no-current-target guard: with ZERO servers, e/d must be silent no-ops
 // (overlay stays nil, nil cmd, no panic) — `a`/`i` still work on an empty
 // list, but the selection-dependent keys must not invent a target.
 func TestServersPageDispatch(t *testing.T) {
 	cases := []struct {
 		key         string
 		wantOverlay string // "" = the key must be a no-op on this page
+		wantInitCmd bool   // the opened overlay's Init cmd comes back non-nil
 		emptyList   bool   // drive against an EMPTY servers list
 	}{
-		{"a", "新增服务器", false},
-		{"e", "编辑服务器", false},
-		{"d", "删除服务器", false},
-		{"i", "导入 ssh config", false},
-		{"g", "", false},
-		{"e", "", true},
-		{"d", "", true},
+		{"a", "新增服务器", true, false},
+		{"e", "编辑服务器: gpu", false, false},
+		{"d", "删除服务器", true, false},
+		{"i", "导入 ssh config", true, false},
+		{"g", "", false, false},
+		{"e", "", false, true},
+		{"d", "", false, true},
 	}
 	for _, c := range cases {
 		a := newTestApp(t) // fresh app per key: one seeded server at cursor 0
@@ -116,8 +120,59 @@ func TestServersPageDispatch(t *testing.T) {
 		if title := got.overlay.Title(); title != c.wantOverlay {
 			t.Fatalf("key %q opened %q, want %q", c.key, title, c.wantOverlay)
 		}
-		if cmd == nil {
+		if c.wantInitCmd && cmd == nil {
 			t.Fatalf("key %q must return the opened overlay's Init cmd", c.key)
+		}
+	}
+}
+
+// TestServersEditKeyOpensFieldPicker (Plan 29 T3): the `e` key now opens the
+// field-picker edit page — not the old three-group huh long form. Driven
+// through the real Update path with a terminal size known (the page is built
+// from the App's width state). ↓ is forwarded to the overlay like the App
+// forwards every KeyPressMsg, so the walk crosses every picker page: the
+// early field labels AND the trailing save sentinel must surface, while the
+// old long-form prompts (single-field-form-only wording since T1/T2) stay
+// absent from the picker. Regression for a/d/i rides on
+// TestServersPageDispatch above.
+func TestServersEditKeyOpensFieldPicker(t *testing.T) {
+	a := newTestApp(t)
+	m0, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = m0.(App)
+	m, _ := a.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	got := m.(App)
+	if got.overlay == nil {
+		t.Fatal("e must open the edit overlay")
+	}
+	p, ok := got.overlay.(*serverEditPage)
+	if !ok {
+		t.Fatalf("e must open the field-picker page (serverEditPage), got %T", got.overlay)
+	}
+	if p.width != 80 {
+		t.Fatalf("page must be built from the App's width state: want 80, got %d", p.width)
+	}
+	seen := got.View().Content
+	// one ↓ past every item: the walk visits the last page too (16 rows
+	// paginate at the page's fixed height)
+	for i := 0; i <= len(p.fields); i++ {
+		nm, _ := got.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		got = nm.(App)
+		seen += "\n" + got.View().Content
+	}
+	for _, want := range []string{
+		"编辑服务器: gpu",                 // header names the edit target
+		"名称", "Host", "端口", "SSH 用户", // field labels (≥3)
+		"✓ 保存并退出", // save sentinel on the last page
+	} {
+		if !strings.Contains(seen, want) {
+			t.Fatalf("edit picker walk missing %q:\n%s", want, seen)
+		}
+	}
+	// old long-form markers: those wordings now live only inside the
+	// single-field forms (field state), never in the picker list
+	for _, old := range []string{"名称（唯一）", "Host / IP"} {
+		if strings.Contains(seen, old) {
+			t.Fatalf("old long-form marker %q must be absent from the picker:\n%s", old, seen)
 		}
 	}
 }
