@@ -8,12 +8,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 
+	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 )
 
@@ -71,6 +75,9 @@ var doctorCheckFuncs = []func() []doctorCheck{
 	checkVaultStore,
 	checkVaultKey,
 	checkVaultOpen,
+	checkServeCert,
+	checkServeSvc,
+	checkClientCache,
 }
 
 // doctorEnvSeams is every SSHMGR_* env the CLI honors. Doctor reports which
@@ -399,6 +406,192 @@ func checkVaultOpen() []doctorCheck {
 			c.Detail = fmt.Sprintf("copy-probe decrypted %d servers / %d credentials", servers, creds)
 		}
 	}
+	return []doctorCheck{c}
+}
+
+// checkServeCert reports the serve TLS cert via mcpserver.ReadServeCertFingerprint
+// — the READ-ONLY twin of LoadOrCreateServeCert, so the doctor path itself can
+// never generate. Both cert and marker absent → INFO "serve not in use" (a
+// machine that never ran serve is healthy, not broken); otherwise the twin
+// resolves the fingerprint: PASS carries it (public info — every client
+// receives it on connect anyway), an error FAILs with the twin's text as
+// Detail (covers the corrupt-keypair refusal AND the F10 out-of-band refusal,
+// both of which already embed their recovery steps).
+func checkServeCert() []doctorCheck {
+	c := doctorCheck{Name: "serve-cert"}
+	certP, err := paths.ServeCertPath()
+	if err != nil {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("serve cert path unresolvable: %v", err)
+		c.Fix = "check the vault directory (platform root could not be resolved — see spec §3.1)"
+		return []doctorCheck{c}
+	}
+	markerP, merr := paths.ServeCertMarkerPath()
+	if merr != nil {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("serve cert marker path unresolvable: %v", merr)
+		c.Fix = "check the vault directory (platform root could not be resolved — see spec §3.1)"
+		return []doctorCheck{c}
+	}
+	certOK, cerr := fileExists(certP)
+	markerOK, merr2 := fileExists(markerP)
+	if cerr != nil || merr2 != nil {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("serve cert stat failed: cert=%v marker=%v", cerr, merr2)
+		c.Fix = "check the serve cert directory permissions"
+		return []doctorCheck{c}
+	}
+	if !certOK && !markerOK {
+		c.Status = statusInfo
+		c.Detail = "serve not in use (no serve cert and no init marker)"
+		return []doctorCheck{c}
+	}
+	_, _, fp, rerr := mcpserver.ReadServeCertFingerprint()
+	if rerr != nil {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("serve cert problem: %v", rerr)
+		c.Fix = "follow the recovery steps in the detail above, then verify with `ssh-manager serve cert-info`"
+		return []doctorCheck{c}
+	}
+	c.Status = statusPass
+	c.Detail = fmt.Sprintf("serve cert present (fingerprint %s)", fp)
+	return []doctorCheck{c}
+}
+
+// serveServiceState is the seam over the kardianos service-manager query:
+// runServeStatus's svc.Status() five-state mapping reduced to one string
+// ("Running" / "Stopped" / "NOT INSTALLED" / "Unknown (...)" / "Unknown").
+// ErrNoServiceSystemDetected maps to NOT INSTALLED too — simpler for doctor,
+// which only distinguishes installed-vs-not, and the status command keeps the
+// finer no-service-manager wording. A var so tests stub the SCM (a diagnostic
+// test must not touch the host's real service manager).
+var serveServiceState = func() string {
+	cfg := &service.Config{Name: serveServiceName, Option: platformServiceOptions()}
+	s, err := service.New(&program{}, cfg)
+	if err != nil {
+		if errors.Is(err, service.ErrNoServiceSystemDetected) {
+			return "NOT INSTALLED"
+		}
+		return "Unknown (" + err.Error() + ")"
+	}
+	status, serr := s.Status()
+	switch {
+	case serr != nil && errors.Is(serr, service.ErrNotInstalled):
+		return "NOT INSTALLED"
+	case serr != nil:
+		return "Unknown (" + serr.Error() + ")"
+	case status == service.StatusRunning:
+		return "Running"
+	case status == service.StatusStopped:
+		return "Stopped"
+	default:
+		return "Unknown"
+	}
+}
+
+// checkServeSvc reports the registered serve service's state. Running → PASS;
+// Stopped → WARN (the broker machine's MCP endpoint is down); NOT INSTALLED
+// splits by role — INFO off-server (standalone/client machines never promised
+// a serve service) but WARN on a server-role machine, whose whole purpose is
+// the broker; anything indeterminate → WARN rather than a guess.
+func checkServeSvc() []doctorCheck {
+	c := doctorCheck{Name: "serve-svc"}
+	switch state := serveServiceState(); {
+	case state == "Running":
+		c.Status = statusPass
+		c.Detail = "serve service running"
+	case state == "Stopped":
+		c.Status = statusWarn
+		c.Detail = "serve service installed but stopped"
+		c.Fix = "re-run `ssh-manager serve install` (idempotent install + start), or start it via the OS service manager"
+	case state == "NOT INSTALLED":
+		if st := doctorRole(); st != nil && st.Role == roles.RoleServer {
+			c.Status = statusWarn
+			c.Detail = "serve service not installed on a server-role machine"
+			c.Fix = "run `ssh-manager serve install`"
+		} else {
+			c.Status = statusInfo
+			c.Detail = "serve service not installed (serve not in use)"
+		}
+	default:
+		c.Status = statusWarn
+		c.Detail = fmt.Sprintf("serve service state indeterminate: %s", state)
+		c.Fix = "inspect with `ssh-manager serve status` and the service manager's own tooling"
+	}
+	return []doctorCheck{c}
+}
+
+// checkClientCache reports the offline client cache. cache.bin present → the
+// sidecar matrix: DEK missing → FAIL (the cache cannot be decrypted — the
+// client-side FINDING A class), cache.auth.json missing → WARN (cache works
+// offline but never auto-refreshes), else PASS with the snapshot's age.
+// cache.bin missing splits by role: FAIL on a client machine (the cache IS
+// its vault), INFO elsewhere.
+func checkClientCache() []doctorCheck {
+	c := doctorCheck{Name: "client-cache"}
+	dir, bin, _, _, err := clientops.CachePaths()
+	if err != nil {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("cache dir unresolvable: %v", err)
+		c.Fix = "check the user config dir (os.UserConfigDir could not be resolved)"
+		return []doctorCheck{c}
+	}
+	info, serr := os.Stat(bin)
+	switch {
+	case errors.Is(serr, fs.ErrNotExist):
+		if st := doctorRole(); st != nil && st.Role == roles.RoleClient {
+			c.Status = statusFail
+			c.Detail = "cache.bin missing on a client machine — no offline vault"
+			c.Fix = "run `ssh-manager cache pull`"
+		} else {
+			c.Status = statusInfo
+			c.Detail = "cache.bin absent (no offline cache on this machine)"
+		}
+		return []doctorCheck{c}
+	case serr != nil:
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("cache.bin stat failed: %v", serr)
+		c.Fix = "check the cache directory permissions"
+		return []doctorCheck{c}
+	}
+	age := time.Since(info.ModTime()).Round(time.Minute)
+
+	dekP, derr := paths.CacheDekPath()
+	if derr != nil {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("cache DEK path unresolvable: %v", derr)
+		c.Fix = "check the vault directory (platform root could not be resolved — see spec §3.1)"
+		return []doctorCheck{c}
+	}
+	dekOK, dok := fileExists(dekP)
+	if dok != nil {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("cache DEK stat failed: %v", dok)
+		c.Fix = "check the cache DEK file permissions"
+		return []doctorCheck{c}
+	}
+	if !dekOK {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("cache.bin present (age %s) but its cache DEK is missing — cache undecryptable", age)
+		c.Fix = "re-run the client wizard (`ssh-manager tui`) and `cache pull` again to re-establish a decryptable cache"
+		return []doctorCheck{c}
+	}
+
+	authOK, aok := fileExists(filepath.Join(dir, "cache.auth.json"))
+	if aok != nil {
+		c.Status = statusWarn
+		c.Detail = fmt.Sprintf("cache.bin present (age %s) but cache.auth.json unstatable: %v", age, aok)
+		c.Fix = "check the cache directory permissions"
+		return []doctorCheck{c}
+	}
+	if !authOK {
+		c.Status = statusWarn
+		c.Detail = fmt.Sprintf("cache.bin present (age %s) but no auto-refresh credential (manual `cache pull` only)", age)
+		c.Fix = "run `ssh-manager cache pull` to persist cache.auth.json (enables auto-refresh)"
+		return []doctorCheck{c}
+	}
+	c.Status = statusPass
+	c.Detail = fmt.Sprintf("cache.bin present (age %s)", age)
 	return []doctorCheck{c}
 }
 

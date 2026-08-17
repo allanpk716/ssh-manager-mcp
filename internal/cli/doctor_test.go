@@ -9,7 +9,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
@@ -19,7 +21,10 @@ import (
 // withClearDirs discipline (the dev machine REALLY runs ssh-manager, so an
 // unpinned check would inspect the operator's live vault). It adds the two
 // cache-credential seams (SSHMGR_CACHE_URL / SSHMGR_CACHE_TOKEN) that clear
-// never touched but doctor's env check enumerates.
+// never touched but doctor's env check enumerates, and — since T4 — pins the
+// three serve-cert seams INTO the temp vault dir (not ""): "" falls back to
+// the REAL vault dir, and the dev machine may genuinely have a serve cert
+// there; the serve-cert check would read it.
 func withDoctorDirs(t *testing.T) (vaultDir, userDir string) {
 	t.Helper()
 	vaultDir = t.TempDir()
@@ -30,9 +35,9 @@ func withDoctorDirs(t *testing.T) (vaultDir, userDir string) {
 	t.Setenv("SSHMGR_CACHE_DIR", "")
 	t.Setenv("SSHMGR_CACHE_DEK", filepath.Join(vaultDir, "cache-dek.key"))
 	t.Setenv("SSHMGR_SERVE_LOG", filepath.Join(vaultDir, "serve.log"))
-	t.Setenv("SSHMGR_SERVE_CERT", "")
-	t.Setenv("SSHMGR_SERVE_KEY", "")
-	t.Setenv("SSHMGR_SERVE_MARKER", "")
+	t.Setenv("SSHMGR_SERVE_CERT", filepath.Join(vaultDir, "serve-cert.pem"))
+	t.Setenv("SSHMGR_SERVE_KEY", filepath.Join(vaultDir, "serve-key.pem"))
+	t.Setenv("SSHMGR_SERVE_MARKER", filepath.Join(vaultDir, ".serve-cert-initialized"))
 	t.Setenv("SSHMGR_CACHE_URL", "")
 	t.Setenv("SSHMGR_CACHE_TOKEN", "")
 	t.Setenv("APPDATA", userDir) // os.UserConfigDir on Windows
@@ -57,6 +62,9 @@ func driveDoctor(t *testing.T) (string, error) {
 // nil → 0 (no FAIL; WARN never changes the code), errDoctorFindings → 1
 // (≥1 FAIL), anything else → 2 (doctor internal error).
 func TestDoctorExitCodes(t *testing.T) {
+	// Pin the SCM seam for every leg: serve-svc must not query the host's
+	// real service manager (T4). "Running" → a clean PASS row.
+	stubServeServiceState(t, "Running")
 	// State 1 — fresh machine: role.json missing is INFO (points at the
 	// wizard), NOT a FAIL; no FAIL anywhere → runDoctor returns nil.
 	withDoctorDirs(t)
@@ -117,6 +125,7 @@ func TestDoctorExitCodes(t *testing.T) {
 // seams are reported BY NAME ONLY (values may be keys/tokens), and the dev
 // affordance SSHMGR_MASTERKEY_HEX is a WARN with remediation — never a FAIL.
 func TestDoctorEnvSeamsReported(t *testing.T) {
+	stubServeServiceState(t, "Running") // T4: serve-svc must not query the host SCM
 	vd, _ := withDoctorDirs(t)
 	t.Setenv("SSHMGR_MASTERKEY_HEX", strings.Repeat("41", 32))
 	out, err := driveDoctor(t)
@@ -155,6 +164,7 @@ func TestDoctorEnvSeamsReported(t *testing.T) {
 // server-role machine without store.db is a T2 FAIL by design, tested in
 // TestDoctorVaultStructural).
 func TestDoctorRoleStates(t *testing.T) {
+	stubServeServiceState(t, "Running") // T4: serve-svc must not query the host SCM
 	// Incomplete wizard: role.json saved with setup_complete=false.
 	vd, _ := withDoctorDirs(t)
 	seedDoctorVault(t, vd)
@@ -231,6 +241,7 @@ func seedDoctorVault(t *testing.T, vaultDir string) {
 // only, guarded by runtime.GOOS (mode bits are not a protection layer on
 // Windows) — the group/world-readable permission WARN.
 func TestDoctorVaultStructural(t *testing.T) {
+	stubServeServiceState(t, "Running") // T4: serve-svc must not query the host SCM (a NOT INSTALLED would WARN on the server-role legs)
 	// Case 1 — healthy vault: real store.db + valid 32-byte master.key +
 	// complete server role → both structural rows PASS with sizes in Detail.
 	vd, _ := withDoctorDirs(t)
@@ -335,6 +346,10 @@ func TestDoctorVaultStructural(t *testing.T) {
 	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
 		t.Fatal(err)
 	}
+	// A real client machine has its offline cache — T4's client-cache row FAILs
+	// a client without one, so seed a healthy one to keep this leg about the
+	// store/masterkey rows.
+	seedDoctorCache(t, t.TempDir(), time.Hour, false, false)
 	out, err = driveDoctor(t)
 	if err != nil {
 		t.Fatalf("client without a local vault must stay exit 0: %v\n%s", err, out)
@@ -514,6 +529,306 @@ func mustStat(t *testing.T, p string) os.FileInfo {
 	return info
 }
 
+// stubServeServiceState replaces the kardianos SCM-query seam with a constant
+// (stubClearExternals precedent: direct package-internal assignment +
+// t.Cleanup restore). Doctor tests must not touch the host's real service
+// manager.
+func stubServeServiceState(t *testing.T, state string) {
+	t.Helper()
+	prev := serveServiceState
+	serveServiceState = func() string { return state }
+	t.Cleanup(func() { serveServiceState = prev })
+}
+
+// seedDoctorServeCert generates a REAL serve cert into the pinned temp vault
+// dir via mcpserver.LoadOrCreateServeCert — creating in TESTS is legal; the
+// doctor code path under test only ever reads. Returns the fingerprint.
+func seedDoctorServeCert(t *testing.T, vaultDir string) string {
+	t.Helper()
+	t.Setenv("SSHMGR_SERVE_CERT", filepath.Join(vaultDir, "serve-cert.pem"))
+	t.Setenv("SSHMGR_SERVE_KEY", filepath.Join(vaultDir, "serve-key.pem"))
+	t.Setenv("SSHMGR_SERVE_MARKER", filepath.Join(vaultDir, ".serve-cert-initialized"))
+	_, _, fp, err := mcpserver.LoadOrCreateServeCert()
+	if err != nil {
+		t.Fatalf("seed serve cert: %v", err)
+	}
+	return fp
+}
+
+// seedDoctorCache writes a minimal client cache into cacheDir: cache.bin
+// (mtime set back by age via os.Chtimes — the doctor row reports this age),
+// the auto-refresh credential cache.auth.json, and the cache DEK at the
+// SSHMGR_CACHE_DEK-pinned path. skipDEK/skipAuth let matrix legs delete one
+// sidecar to pin its FAIL/WARN branch.
+func seedDoctorCache(t *testing.T, cacheDir string, age time.Duration, skipDEK, skipAuth bool) {
+	t.Helper()
+	t.Setenv("SSHMGR_CACHE_DIR", cacheDir)
+	bin := filepath.Join(cacheDir, "cache.bin")
+	if err := os.WriteFile(bin, []byte("encrypted-snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-age)
+	if err := os.Chtimes(bin, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if !skipAuth {
+		if err := os.WriteFile(filepath.Join(cacheDir, "cache.auth.json"),
+			[]byte(`{"url":"https://192.0.2.1:7878","token":"dev-token"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !skipDEK {
+		dek := os.Getenv("SSHMGR_CACHE_DEK") // pinned by withDoctorDirs to the temp vault dir
+		if dek == "" {
+			t.Fatal("SSHMGR_CACHE_DEK not pinned by withDoctorDirs")
+		}
+		if err := os.WriteFile(dek, make([]byte, 32), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestDoctorServeAndCache pins the T4 rows: serve-cert (read-only fingerprint
+// PASS / F10 out-of-band FAIL / not-in-use INFO), serve-svc (the
+// serveServiceState matrix, incl. NOT INSTALLED gated by role), and
+// client-cache (PASS with age / client-missing FAIL / DEK-missing FAIL /
+// auth-missing WARN / non-client INFO).
+func TestDoctorServeAndCache(t *testing.T) {
+	// Leg 1 — healthy serve on a server machine: REAL cert seeded (tests may
+	// generate), service Running → serve-cert PASS with the fingerprint in
+	// Detail (public info — every client receives it on connect), serve-svc
+	// PASS, client-cache INFO (server role, no offline cache).
+	vd, _ := withDoctorDirs(t)
+	seedDoctorVault(t, vd)
+	fp := seedDoctorServeCert(t, vd)
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	stubServeServiceState(t, "Running")
+	out, err := driveDoctor(t)
+	if err != nil {
+		t.Fatalf("healthy serve must not FAIL: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"serve-cert:  PASS",
+		fp, // fingerprint is public
+		"serve-svc:  PASS",
+		"serve service running",
+		"client-cache:  INFO",
+		"overall: 0 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Leg 2 — F10: marker present, cert deleted out-of-band → serve-cert FAIL
+	// carrying the refusal text; exit 1 via errDoctorFindings.
+	vd, _ = withDoctorDirs(t)
+	seedDoctorVault(t, vd)
+	seedDoctorServeCert(t, vd) // cert + key + marker...
+	if err := os.Remove(filepath.Join(vd, "serve-cert.pem")); err != nil {
+		t.Fatal(err)
+	} // ...then the operator rm'd the cert, not the marker
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	stubServeServiceState(t, "Running")
+	out, err = driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("F10 must FAIL (exit 1), got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"serve-cert:  FAIL",
+		"out-of-band",
+		"overall: 0 WARN, 1 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Legs 3a-3d — the serveServiceState matrix (no serve cert anywhere:
+	// serve-cert is INFO, isolating the serve-svc row). Server-role legs seed
+	// the vault so the T2 rows stay quiet.
+	vd, _ = withDoctorDirs(t)
+	seedDoctorVault(t, vd)
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	stubServeServiceState(t, "Stopped")
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("a Stopped WARN must not change the exit code: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"serve-svc:  WARN",
+		"stopped",
+		"serve-cert:  INFO",
+		"serve not in use",
+		"overall: 1 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	stubServeServiceState(t, "NOT INSTALLED")
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("NOT INSTALLED on a server is a WARN, not a FAIL: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"serve-svc:  WARN",
+		"not installed",
+		"serve install",
+		"overall: 1 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// NOT INSTALLED on a non-server machine (standalone) → INFO, exit 0.
+	vd, _ = withDoctorDirs(t)
+	seedDoctorVault(t, vd)
+	if err := roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	stubServeServiceState(t, "NOT INSTALLED")
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("NOT INSTALLED off-server must stay exit 0: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "serve-svc:  INFO") || !strings.Contains(out, "overall: 0 WARN, 0 FAIL") {
+		t.Fatalf("NOT INSTALLED on a standalone machine must be INFO:\n%s", out)
+	}
+
+	// Indeterminate service state → WARN with the raw state string.
+	vd, _ = withDoctorDirs(t)
+	seedDoctorVault(t, vd)
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	stubServeServiceState(t, "Unknown (scm query failed: boom)")
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("an Unknown WARN must not change the exit code: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"serve-svc:  WARN",
+		"indeterminate",
+		"overall: 1 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Legs 4a-4e — the client-cache matrix on a client machine (no local
+	// vault: store/masterkey/vault-open are all INFO by design).
+	withDoctorDirs(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+	seedDoctorCache(t, cacheDir, 2*time.Hour+13*time.Minute, false, false)
+	stubServeServiceState(t, "NOT INSTALLED") // client machine → serve-svc INFO
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("healthy cache must not FAIL: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache:  PASS",
+		"cache.bin present (age 2h13m", // Duration.String() appends 0s — prefix match
+		"overall: 0 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Client machine, cache.bin missing → FAIL with the `cache pull` fix.
+	withDoctorDirs(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	stubServeServiceState(t, "NOT INSTALLED")
+	out, err = driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("missing cache.bin on a client must FAIL (exit 1), got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache:  FAIL",
+		"cache pull",
+		"overall: 0 WARN, 1 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// cache.bin present but the cache DEK missing → FAIL: the cache is
+	// undecryptable (the client-side FINDING A class).
+	withDoctorDirs(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	seedDoctorCache(t, t.TempDir(), time.Hour, true, false) // skipDEK
+	stubServeServiceState(t, "NOT INSTALLED")
+	out, err = driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("undecryptable cache must FAIL (exit 1), got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache:  FAIL",
+		"undecryptable",
+		"overall: 0 WARN, 1 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// cache.bin + DEK present but cache.auth.json missing → WARN: the cache
+	// works offline but never auto-refreshes (manual `cache pull` only).
+	withDoctorDirs(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	seedDoctorCache(t, t.TempDir(), time.Hour, false, true) // skipAuth
+	stubServeServiceState(t, "NOT INSTALLED")
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("a no-auto-refresh WARN must not change the exit code: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache:  WARN",
+		"no auto-refresh credential (manual `cache pull` only)",
+		"overall: 1 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Non-client machine (standalone) with no cache.bin → INFO: no offline
+	// cache is expected there.
+	vd, _ = withDoctorDirs(t)
+	seedDoctorVault(t, vd)
+	if err := roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	stubServeServiceState(t, "NOT INSTALLED")
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("no cache on a standalone machine must stay exit 0: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "client-cache:  INFO") || !strings.Contains(out, "overall: 0 WARN, 0 FAIL") {
+		t.Fatalf("missing cache.bin off-client must be INFO:\n%s", out)
+	}
+}
+
 // TestDoctorVaultOpen pins the vault-open doctor row end to end — the NUC10
 // FINDING A detector (incident 2026-08-12: vault sealed under key B while the
 // machine held key A; every structural check was green but the vault was
@@ -522,6 +837,7 @@ func mustStat(t *testing.T, p string) os.FileInfo {
 // backup-restore remediation while store/masterkey stay PASS; missing inputs →
 // INFO skip (the T2 rows own reporting absence).
 func TestDoctorVaultOpen(t *testing.T) {
+	stubServeServiceState(t, "Running") // T4: serve-svc must not query the host SCM
 	// Healthy vault: the probe decrypts the seeded server + credential.
 	vd, _ := withDoctorDirs(t)
 	_, key, _ := seedDoctorVaultWithData(t, vd)
