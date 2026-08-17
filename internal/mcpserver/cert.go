@@ -129,6 +129,63 @@ func LoadOrCreateServeCert() (certPath, keyPath, fingerprint string, err error) 
 	return certPath, keyPath, fp, nil
 }
 
+// ReadServeCertFingerprint is the READ-ONLY twin of LoadOrCreateServeCert: the
+// same three-state semantics MINUS all generation. It NEVER writes — no
+// atomicWriteFile, no HardenACL, no marker — which is exactly what a
+// diagnostic (doctor) needs: running a self-check must never mint a cert
+// whose fingerprint clients would then pin. States:
+//  1. cert present + parses as a valid keypair → return paths + fingerprint
+//     (same loadServeCertFingerprint call LoadOrCreateServeCert uses).
+//  2. cert present but corrupt / mismatches its key → the same
+//     refuse-to-start error LoadOrCreateServeCert returns.
+//  3. cert absent + init marker PRESENT → the F10 refusal, same wording
+//     family (deleted out-of-band; delete BOTH marker and cert, re-enroll).
+//  4. both absent → error pointing at the initializing commands — generation
+//     is LoadOrCreateServeCert's job (`serve cert-info`, first serve start),
+//     never a read's.
+func ReadServeCertFingerprint() (certPath, keyPath, fingerprint string, err error) {
+	certPath, err = paths.ServeCertPath()
+	if err != nil {
+		return "", "", "", err
+	}
+	keyPath, err = paths.ServeKeyPath()
+	if err != nil {
+		return "", "", "", err
+	}
+
+	// Cert present? Read-only load — no generation fallback on any path below.
+	if _, statErr := os.Stat(certPath); statErr == nil {
+		fp, loadErr := loadServeCertFingerprint(certPath, keyPath)
+		if loadErr != nil {
+			return "", "", "", fmt.Errorf("serve cert at %s is corrupt or mismatches its key: %w "+
+				"(refusing to start; to regenerate, delete BOTH the cert and the init marker, then re-enroll clients)",
+				certPath, loadErr)
+		}
+		return certPath, keyPath, fp, nil
+	} else if !os.IsNotExist(statErr) {
+		return "", "", "", statErr
+	}
+
+	// F10: cert absent + marker present → same refusal as LoadOrCreateServeCert
+	// (minus the regen branch this twin does not have anyway).
+	markerPath, err := paths.ServeCertMarkerPath()
+	if err != nil {
+		return "", "", "", err
+	}
+	if _, statErr := os.Stat(markerPath); statErr == nil {
+		return "", "", "", fmt.Errorf("serve cert %s is missing but the initialization marker %s exists "+
+			"(cert appears deleted out-of-band; refusing to silently regenerate — that would invalidate all client pins). "+
+			"To regenerate deliberately, delete BOTH the marker and the cert, then re-enroll all clients", certPath, markerPath)
+	} else if !os.IsNotExist(statErr) {
+		return "", "", "", statErr
+	}
+
+	// Both absent: not initialized. Deliberately an error, not a generation —
+	// the caller (doctor) must be able to distinguish "serve not in use" from
+	// "cert healthy" without side effects.
+	return "", "", "", fmt.Errorf("serve cert not initialized (run `serve cert-info` once, or start serve)")
+}
+
 // loadServeCertFingerprint parses the cert+keypair from disk, validates the
 // keypair matches (via tls.LoadX509KeyPair), and returns the SPKI fingerprint.
 func loadServeCertFingerprint(certPath, keyPath string) (string, error) {
