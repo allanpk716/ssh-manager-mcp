@@ -11,20 +11,20 @@ import (
 // NOTE: the signal is CREATION time (lastActivity = time.Now() in Open) —
 // Touch(id) exists to refresh it but has NO production caller today, so a
 // tunnel dies ~10 min after creation even under continuous traffic. Making
-// this activity-aware (wiring Touch) is a tracked backlog item. Default 10
-// min per Plan 6 §T4.
+// this activity-aware (wiring Touch) is a tracked backlog item (see
+// docs/backlog.md). Default 10 min per Plan 6 §T4.
 const forwardIdleTimeout = 10 * time.Minute
 
-// forwardSweepInterval is the ticker period for the idle sweeper goroutine.
-// One minute is fine-grained enough that a 10-min idle tunnel is reaped within
-// ~10–11 min, and coarse enough that the sweeper is idle work in steady state.
+// forwardSweepInterval is the ticker period for the tunnel sweeper goroutine.
+// One minute is fine-grained enough that a tunnel is reaped within ~10–11 min
+// of creation, and coarse enough that the sweeper is idle work in steady state.
 const forwardSweepInterval = 1 * time.Minute
 
 // managedTunnel is a forward held by the TunnelManager. The client is the
 // long-lived SSH connection the tunnel dials through; it is closed when the
 // tunnel is unregistered (Close/SweepIdle/CloseAll). This is the first
 // stateful broker resource — it persists across MCP tool calls, held in-process
-// until close_port, the idle sweeper, or MCP shutdown tears it down.
+// until close_port, the tunnel sweeper, or MCP shutdown tears it down.
 type managedTunnel struct {
 	tunnel       *sshbroker.Tunnel
 	client       *sshbroker.Client
@@ -33,7 +33,7 @@ type managedTunnel struct {
 
 // TunnelManager holds the open forwards for the MCP server process, keyed by
 // tunnel id (the sshbroker.Tunnel.ID UUID). forward_port opens; close_port
-// closes; the idle sweeper (SweepIdle) closes tunnels whose lastActivity is
+// closes; the tunnel sweeper (SweepIdle) closes tunnels whose lastActivity is
 // older than forwardIdleTimeout. All state is in-process and dies with the MCP
 // server process — CloseAll (wired to MCP shutdown in RunStdio) is the clean
 // teardown path; process exit reclaims any residual fds as a backstop.
@@ -44,7 +44,7 @@ type managedTunnel struct {
 // (client.Close), then delete the entry from the registry. Tests verify no leak
 // by capturing the client ref before Close and asserting a follow-up op errors.
 //
-// The struct is safe for concurrent use (every method takes mu). The idle
+// The struct is safe for concurrent use (every method takes mu). The tunnel
 // sweeper goroutine (started via StartSweeper, stopped via CloseAll) is the
 // only background user; Open/Close/SweepIdle are driven by the MCP tool
 // handlers on the tool-call goroutine.
@@ -57,7 +57,7 @@ type TunnelManager struct {
 	wg        sync.WaitGroup
 }
 
-// NewTunnelManager returns an empty TunnelManager. The idle-sweeper goroutine
+// NewTunnelManager returns an empty TunnelManager. The tunnel-sweeper goroutine
 // is NOT started here — call StartSweeper (NewServer does this in production)
 // to launch it. Tests that want hermetic Open/Close/SweepIdle timing may omit
 // StartSweeper and drive SweepIdle directly.
@@ -68,7 +68,7 @@ func NewTunnelManager() *TunnelManager {
 	}
 }
 
-// StartSweeper launches the idle-sweeper goroutine at most once. It is a no-op
+// StartSweeper launches the tunnel-sweeper goroutine at most once. It is a no-op
 // after CloseAll. NewServer calls this; tests usually don't (they call
 // SweepIdle directly for deterministic timing).
 func (m *TunnelManager) StartSweeper() {
@@ -78,7 +78,7 @@ func (m *TunnelManager) StartSweeper() {
 	})
 }
 
-// sweepLoop is the idle-reaper: every forwardSweepInterval it calls SweepIdle.
+// sweepLoop is the tunnel sweeper: every forwardSweepInterval it calls SweepIdle.
 // Exits when quit is closed (CloseAll). Holds one wg ticket for its lifetime so
 // CloseAll can Wait for a clean shutdown.
 func (m *TunnelManager) sweepLoop() {
@@ -107,7 +107,7 @@ func (m *TunnelManager) Open(t *sshbroker.Tunnel, c *sshbroker.Client) string {
 	return t.ID
 }
 
-// Touch refreshes a tunnel's lastActivity to now, deferring idle-sweeper
+// Touch refreshes a tunnel's lastActivity to now, deferring tunnel-sweeper
 // reaping. MVP callers don't need it (idle = open-duration); it's exposed so a
 // future forward_port refresh or per-byte activity hook can keep a long-lived
 // tunnel alive without re-opening. Returns true if the tunnel was present.
@@ -161,7 +161,7 @@ func (m *TunnelManager) SweepIdle() []string {
 }
 
 // CloseAll tears down every live tunnel (listener + owning client) and stops
-// the idle-sweeper goroutine if it was started. This is the MCP-shutdown path:
+// the tunnel-sweeper goroutine if it was started. This is the MCP-shutdown path:
 // RunStdio defers it so that when the agent disconnects / stdin closes, every
 // open forward is reaped cleanly (no leaked ssh.Clients or listeners stranding
 // the process). Safe to call on a manager with no tunnels (no-op) and

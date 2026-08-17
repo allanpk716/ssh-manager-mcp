@@ -30,6 +30,7 @@
 | [multi-machine.md](./multi-machine.md) | **多机共享（serve 模式 · 可选）+ 离线只读缓存（Plan 12）**：多台机器共用一份服务器清单——一台 VLAN 服务器常驻 broker、其他机器的 agent 连远程；或每台工作机持本地加密只读缓存，断网时兜底。架构 / 配置 / 场景 / 限制（含后续路线）。 |
 | [backup-restore.md](./backup-restore.md) | **备份与迁移（export / import）**：把整个 vault 导出成口令加密的便携文件（跨机、可恢复）——备份 / 迁移 / 灾难恢复；安全模型（KeePass 式）、限制、与复制 store.db 的对比。 |
 | [compat-matrix.md](./compat-matrix.md) | **client↔serve 版本兼容矩阵**：已验证组合 / 破坏性变更 / 升级顺序铁律。升级任何一端之前先看这篇。 |
+| [backlog.md](./backlog.md) | **已裁决、未排期的欠账清单（面向后续 plan）**：owner 拍板暂不改行为的 5 项——serve 隧道 owner 急停、隧道回收活动感知、离线 cache 快照失效、受控监听地址、doctor serve 探活二期——每项现状与来源计划，后续 plan 的取货架。 |
 
 ---
 

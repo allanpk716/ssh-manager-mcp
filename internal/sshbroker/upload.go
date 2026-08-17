@@ -32,8 +32,9 @@ type UploadResult struct {
 //     maxBytes is refused BEFORE transfer (zero bytes of it move, no remote file
 //     is created) with capRefusedError naming file/size/cap; files completed
 //     before the refusal remain. Exactly == cap is allowed. In dir walks a
-//     symlink is measured by its TARGET (os.Stat follow, Plan 24) so the gate
-//     matches the follow-the-link transfer, and a broken link is a walk error.
+//     symlink→file is measured by its TARGET (os.Stat follow, Plan 24) so the
+//     gate matches the follow-the-link transfer, and a broken link is a walk
+//     error; a symlink→directory is refused outright (Plan 26 — see uploadDir).
 //   - cumulative walk-halt: when every file is within the cap but the running
 //     total crosses it, Truncated=true and the walk halts BETWEEN files — the
 //     in-flight file lands complete (see uploadFile's per-file-atomic note).
@@ -127,15 +128,61 @@ func uploadFile(sc *sftp.Client, localPath, remotePath string, ctr *countingWrit
 // the walk's own FileInfo BEFORE uploadFile — zero bytes of it transfer, no
 // remote file is created, the walk stops there, and the refusal error propagates
 // to the caller (unlike errCapStop, which is swallowed); files completed before
-// the refusal remain. EXCEPTION (Plan 24): under an armed cap a symlink entry
-// is re-stat'ed with follow so the gate sees the TARGET's size — the transfer
-// follows the link, so the check must too; a broken link (stat failure)
-// propagates as a walk error. Separately, the walk halts (errCapStop) the moment the
+// the refusal remain. Symlink entries in the walk (Plan 24 gate alignment +
+// Plan 26 dir semantics, cap-independent): a link is re-stat'ed with follow
+// so the gate sees the TARGET's size — the transfer follows the link, so the
+// check must too; a broken link (stat failure) propagates as a walk error.
+// A link whose target is a DIRECTORY is refused by name (upload the target
+// directory directly) — recursively following directory links is not
+// supported (loop/double-visit risk). Separately, the walk halts (errCapStop) the moment the
 // counter flags truncation, so no new file is started once the CUMULATIVE total
 // crosses the cap — that layer only ever sees files within the per-file bound.
 // The root dir itself is the first entry visited, so remoteRoot is always
-// created before any child lands in it.
+// created before any child lands in it. Plan 26: the root is first resolved
+// via filepath.EvalSymlinks (plus an explicit junction follow-through on
+// Windows, whose reparse points EvalSymlinks skips) so a symlink/junction
+// root (which Upload's entry Stat already followed) is walked as the real
+// directory rather than misclassified by Walk's lstat as a file.
 func uploadDir(sc *sftp.Client, localRoot, remoteRoot string, ctr *countingWriter, res *UploadResult) error {
+	// Root resolution (Plan 26): Upload's entry os.Stat FOLLOWS links (so a
+	// linked dir root reaches here), but filepath.Walk lstats the root and
+	// would misclassify it as a file. Resolve once up front so the walk starts
+	// at the real directory; nested entries keep lstat semantics (Task 2 adds
+	// an explicit refusal for symlinked sub-directories). Resolution is
+	// BEST-EFFORT: on Windows EvalSymlinks can fail on a path that merely
+	// TRAVERSES a junction ancestor (go1.25.8: "system cannot find the path
+	// specified") even though the root itself is fine — on failure keep the
+	// original localRoot; a genuinely bad root surfaces from Walk itself.
+	if resolved, rerr := filepath.EvalSymlinks(localRoot); rerr == nil {
+		localRoot = resolved
+	}
+	// Windows junctions Lstat as ModeIrregular ("?"), which EvalSymlinks
+	// skips (it follows only ModeSymlink), so a junction root would slip
+	// through unresolved — the walk would still misclassify it as a file.
+	// Keep following any reparse point Readlink accepts (symlink or
+	// junction) to a fixpoint; the iteration cap mirrors the kernel's
+	// ELOOP bound (symlink cycles must terminate, not hang).
+	links := 0
+	for {
+		fi, ferr := os.Lstat(localRoot)
+		if ferr != nil {
+			return ferr
+		}
+		if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) == 0 {
+			break
+		}
+		if links++; links > 64 {
+			return fmt.Errorf("root %s: too many levels of symbolic links", localRoot)
+		}
+		target, terr := os.Readlink(localRoot)
+		if terr != nil {
+			return terr
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(localRoot), target)
+		}
+		localRoot = target
+	}
 	walkErr := filepath.Walk(localRoot, func(walkPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -151,19 +198,30 @@ func uploadDir(sc *sftp.Client, localRoot, remoteRoot string, ctr *countingWrite
 		if info.IsDir() {
 			return sc.Mkdir(target)
 		}
-		// Symlink gate alignment (Plan 24): Walk's FileInfo is lstat-based — a
-		// symlink reports its OWN (tiny) size, which would slip under the cap
-		// gate below, while uploadFile follows the link and transfers the
-		// TARGET's bytes (check and behavior disagreed; the gate was
-		// bypassable). When the gate is armed, re-stat with follow so it sees
-		// the real size; a broken link fails here and propagates as a walk
-		// error naming the path instead of erroring mid-transfer. Non-symlink
-		// entries keep Walk's FileInfo — no extra syscall on the common path.
+		// Symlink handling (Plan 24 cap alignment, Plan 26 dir semantics):
+		// Walk's FileInfo is lstat-based. For ANY link entry — os.ModeSymlink
+		// (unix dir symlinks; Windows symlinks), plus os.ModeIrregular for a
+		// Windows junction, which lstats as Irregular on Go ≥1.23 (mount
+		// points are reparse points but not tagged SYMLINK — same bit pair
+		// the root loop above follows) — re-stat with follow. Target is a
+		// DIRECTORY → refuse with a named error (following directory links
+		// recursively is not supported — loop/double-visit risk; upload the
+		// target directory directly). Target is a file → the followed size
+		// participates in the per-file cap gate when armed (the transfer
+		// follows the link, so the check must too — Plan 24). A broken link
+		// fails the re-stat and propagates as a walk error naming the path.
+		// The dir-refusal is deliberately cap-INDEPENDENT (cap==0 still
+		// refuses), and at cap==0 a link→file entry now re-stats too —
+		// semantic consistency, not a regression; non-link entries keep
+		// Walk's FileInfo (no extra syscall on the common path).
 		size := info.Size()
-		if ctr.cap > 0 && info.Mode()&os.ModeSymlink != 0 {
+		if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
 			st, err := os.Stat(walkPath)
 			if err != nil {
 				return err
+			}
+			if st.IsDir() {
+				return fmt.Errorf("symlinked directory not uploaded: %s — upload the target directory directly (following directory links recursively is not supported)", walkPath)
 			}
 			size = st.Size()
 		}

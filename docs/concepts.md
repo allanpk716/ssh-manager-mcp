@@ -84,3 +84,5 @@ project/token 按 agent 项目粒度自由建（每台机每项目一个都行�
 ## `ssh-manager clear`（角色清理，一段话版）
 
 把本机**按实际存在枚举**的 vault / serve 证书服务 / client 缓存残留 / 遗留定时器（Windows 计划任务 `ssh-manager-cache-refresh`）/ role.json 全部删除，回到首次向导状态。流程：列出清单 → 输入 `DELETE` 确认（输错即取消，零改动）；vault 角色先自动 export 一份口令加密备份（回读校验 + 抄录口令确认）才开始删——vault 锁定时拒绝无安全绳删除。全程**幂等**：中断后重跑，已完成的步骤跳过。exe 永远保留。
+
+`clear` 的扫描**与 role.json 声明的角色无关**（server 机可能残留 client 文件，反之亦然）：两处 role.json 位置、vault 目录与程序固定目录（cache DEK / serve log）双解析、env 覆盖（SSHMGR_SERVE_CERT 等）优先——全部 Stat-gated 枚举。role 只影响表头标签与安全网决策，不影响扫描范围。

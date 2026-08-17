@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -474,5 +476,160 @@ func TestUploadCancelContext(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("Upload took %v on pre-cancelled ctx, want < 2s", elapsed)
+	}
+}
+
+// TestUploadDirSymlinkRootResolved (Plan 26): a symlink/junction used AS the
+// upload root is resolved to its target — Upload's os.Stat already follows the
+// link (says "dir"), but filepath.Walk lstats the root and would misclassify
+// it as a file. EvalSymlinks at uploadDir entry makes root handling follow the
+// operator's intent. Windows lane exercises this via a junction (mklink /J,
+// no privilege needed); unix via os.Symlink (skip when unprivileged).
+func TestUploadDirSymlinkRootResolved(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	real := t.TempDir()
+	if err := os.WriteFile(filepath.Join(real, "a.txt"), []byte("root-link\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link-root")
+	if err := makeDirLink(t, link, real); err != nil {
+		t.Skipf("dir link creation failed on this host (%v); skipping", err)
+	}
+
+	remoteDir := filepath.Join(t.TempDir(), "up-link-root")
+	res, err := c.Upload(context.Background(), link, remoteDir, 0)
+	if err != nil {
+		t.Fatalf("symlink-root Upload: %v", err)
+	}
+	if res.Files != 1 || res.Bytes != int64(len("root-link\n")) {
+		t.Fatalf("result = %+v, want {Files:1 Bytes:%d}", res, len("root-link\n"))
+	}
+	g, err := c.Download(context.Background(), filepath.Join(remoteDir, "a.txt"), 0)
+	if err != nil || g.Content != "root-link\n" {
+		t.Fatalf("round-trip: err=%v content=%q", err, g.Content)
+	}
+}
+
+// makeDirLink creates link pointing at dir target: junction on Windows
+// (privilege-free), symlink elsewhere.
+func makeDirLink(t *testing.T, link, dir string) error {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		out, err := exec.Command("cmd", "/c", "mklink", "/J", link, dir).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("mklink /J: %v: %s", err, out)
+		}
+		return nil
+	}
+	return os.Symlink(dir, link)
+}
+
+// TestUploadDirNestedSymlinkedDirRefused (Plan 26): a symlink→directory
+// nested inside the upload root is REFUSED with a named error — pre-fix it
+// fell into the file branch and died inside uploadFile's open/read with a
+// misleading platform-dependent error. Refusal is cap-INDEPENDENT (armed here).
+func TestUploadDirNestedSymlinkedDirRefused(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := makeDirLink(t, filepath.Join(src, "z-link"), t.TempDir()); err != nil {
+		t.Skipf("dir link creation failed on this host (%v); skipping", err)
+	}
+
+	remoteDir := filepath.Join(t.TempDir(), "up-nested-link")
+	_, err := c.Upload(context.Background(), src, remoteDir, mcpUploadCap)
+	if err == nil || !strings.Contains(err.Error(), "symlinked directory not uploaded") || !strings.Contains(err.Error(), "z-link") {
+		t.Fatalf("want named refusal naming z-link, got: %v", err)
+	}
+	// Walk order is lexical: a.txt (< z-link) is uploaded BEFORE the refusal —
+	// already-completed files remain (same contract as cap refusal, Plan 23).
+	if g, derr := c.Download(context.Background(), filepath.Join(remoteDir, "a.txt"), 0); derr != nil || g.Content != "first\n" {
+		t.Fatalf("a.txt must remain uploaded (derr=%v content=%q)", derr, g.Content)
+	}
+}
+
+// TestUploadDirNestedSymlinkedDirRefusedNoCap: same refusal with cap==0 —
+// the dir-symlink check must not live under the cap-armed branch.
+func TestUploadDirNestedSymlinkedDirRefusedNoCap(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	src := t.TempDir()
+	if err := makeDirLink(t, filepath.Join(src, "z-link"), t.TempDir()); err != nil {
+		t.Skipf("dir link creation failed on this host (%v); skipping", err)
+	}
+	if _, err := c.Upload(context.Background(), src, filepath.Join(t.TempDir(), "up"), 0); err == nil || !strings.Contains(err.Error(), "symlinked directory not uploaded") {
+		t.Fatalf("cap==0 must still refuse, got: %v", err)
+	}
+}
+
+// TestUploadJunctionNestedRefused_windows: the real-world Windows case —
+// a junction inside the upload tree (OneDrive / dev-drive junctions).
+// Windows-only (build-tag free: skips elsewhere).
+func TestUploadJunctionNestedRefused_windows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows junction test")
+	}
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	src := t.TempDir()
+	if err := makeDirLink(t, filepath.Join(src, "z-junc"), t.TempDir()); err != nil {
+		t.Skipf("junction creation failed (%v); skipping", err)
+	}
+	if _, err := c.Upload(context.Background(), src, filepath.Join(t.TempDir(), "up"), 0); err == nil || !strings.Contains(err.Error(), "symlinked directory not uploaded") {
+		t.Fatalf("junction must be refused like a dir symlink, got: %v", err)
+	}
+}
+
+// TestUploadDirUnderJunctionAncestor (Plan 26 fix): a real directory root
+// whose path merely TRAVERSES a junction/symlink ancestor must upload fine —
+// EvalSymlinks errors on such paths on Windows (go1.25.8), and the old
+// unconditional return regressed these previously-working uploads. Walk and
+// the follow-stat both handle a traversed junction transparently.
+func TestUploadDirUnderJunctionAncestor(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	real := t.TempDir()
+	sub := filepath.Join(real, "app")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "a.txt"), []byte("under-ancestor\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "anc-link")
+	if err := makeDirLink(t, link, real); err != nil {
+		t.Skipf("dir link creation failed on this host (%v); skipping", err)
+	}
+
+	remoteDir := filepath.Join(t.TempDir(), "up-under-anc")
+	res, err := c.Upload(context.Background(), filepath.Join(link, "app"), remoteDir, 0)
+	if err != nil {
+		t.Fatalf("upload under link ancestor: %v", err)
+	}
+	if res.Files != 1 || res.Bytes != int64(len("under-ancestor\n")) {
+		t.Fatalf("result = %+v, want {Files:1 Bytes:%d}", res, len("under-ancestor\n"))
+	}
+	g, err := c.Download(context.Background(), filepath.Join(remoteDir, "a.txt"), 0)
+	if err != nil || g.Content != "under-ancestor\n" {
+		t.Fatalf("round-trip: err=%v content=%q", err, g.Content)
 	}
 }

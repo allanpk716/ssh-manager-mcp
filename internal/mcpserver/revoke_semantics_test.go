@@ -25,7 +25,8 @@ import (
 
 // TestRevokedProjectKeepsOpenTunnelForwarding pins layers 1+3: revocation
 // kills the token gate immediately, but the broker-held tunnel keeps
-// forwarding (no cascade teardown — owner decision, kill CLI is backlog).
+// forwarding (no cascade teardown — owner decision, kill CLI is backlog
+// (see docs/backlog.md)).
 func TestRevokedProjectKeepsOpenTunnelForwarding(t *testing.T) {
 	st := newStore(t)
 	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})

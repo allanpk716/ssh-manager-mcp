@@ -286,7 +286,7 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 
 // UploadForProfile uploads localPath to remotePath on serverID iff serverID is in
 // profileID (iron rule — same gate as ExecCommandForProfile / DownloadForProfile).
-// localPath is read from the broker's (= the agent's) filesystem; remotePath is
+// localPath is read from the broker's filesystem; remotePath is
 // the destination on the server (a file or a directory, uploaded recursively,
 // mirroring `scp -r localPath server:remotePath`). The §6 cap (MaxOutputBytes)
 // is a hard PER-FILE bound: a single file strictly larger than the cap is
@@ -409,7 +409,7 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 // opened here is NOT defer-closed — on success the TunnelManager owns it for the
 // tunnel's life (the connection stays open across this call's return so the
 // local listener can keep piping bytes through it). The tunnel + client are
-// reclaimed by close_port (CloseForwardForProfile), the idle sweeper
+// reclaimed by close_port (CloseForwardForProfile), the tunnel sweeper
 // (forwardIdleTimeout), or MCP shutdown (TunnelManager.CloseAll).
 //
 // Resource-cleanup discipline (the load-bearing concern): every error branch
