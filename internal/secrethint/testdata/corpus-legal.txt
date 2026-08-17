@@ -1,0 +1,35 @@
+8x A100 80GB, 1TB RAM
+8x A100 80GB, CUDA 12
+8x A100 80GB, CUDA 12, 
+Caveats:  "do not reboot 02-03:00
+Caveats: "in-caveat
+Caveats: "out-caveat
+Description: "box
+Description: "Close a tunnel opened by forward_port. Pass the tunnel_id forward_port returned. Tears down the local listener AND the SSH connection that backed it (frees the resource — the broker was holding it open). Returns ok on success; an error if the tunnel_id is unknown (already closed, or never opened). No server_id / profile needed: the tunnel_id is an opaque handle bound to the broker process that opened it. You SHOULD call this when you are done with a forward rather than waiting for the ~10 min idle timeout.
+Description: "Download a file from a server to read its contents. Pass the server's id (from list_servers) + the absolute remote path. Returns the file content (capped at 1 MiB; if truncated=true you got the PREFIX — read 'bytes' for the true size, then refine: re-download a slice via exec_command head/tail if you need a specific part). Out-of-profile server ids are rejected. Use this for file retrieval; do NOT fabricate file contents.
+Description: "List the SSH servers you may use. ALWAYS call this first to discover server ids and capabilities before exec_command. Returns id/name/host/user/has_sudo, plus owner-provided context: role, services (what's deployed), location, hardware, caveats (special handling — read before acting), tags, description. Never includes credentials.
+Description: "old
+Description: "Open a local port that forwards to a remote service through a server (the `ssh -L` semantic). Use this to reach a service running ON the server (or reachable from it) from your own machine — e.g. a database, web UI, or metrics endpoint. Pass the server's id (from list_servers), remote_host + remote_port (the host:port to forward to FROM THE SERVER'S PERSPECTIVE — usually 127.0.0.1 + the service's port on the server's own loopback), and an optional local_port (omit / 0 = the broker picks a free port). Returns tunnel_id + local_port: reach the remote service at 127.0.0.1:<local_port> on YOUR machine (e.g. `curl http://127.0.0.1:<local_port>` or pointing your client at it). Out-of-profile server ids are rejected. This holds an SSH connection open in the broker for the tunnel's life — call close_port with tunnel_id when done (tunnels also auto-close after ~10 min idle).
+Description: "owner notes
+Description: "Push a LOCAL file or directory from YOUR machine to a server (the mirror of download_file — direction matters: LocalPath is on your machine, RemotePath is the destination on the server). Pass the server's id (from list_servers), LocalPath (absolute path on your machine of the file or directory to push — a directory is uploaded recursively, preserving relative paths), and RemotePath (absolute destination on the server; its parent directory is created if missing). Returns the file count + total bytes. The 1 MiB cap is a hard per-file bound: a single file larger than 1 MiB is REFUSED before transfer — an error names the file, its size, and the cap, and ZERO bytes of it are sent (in a directory upload, files already completed before the refusal remain); multiple files whose cumulative total crosses 1 MiB (each file within the cap) keep the already-completed files and honestly report truncated=true, with later files not uploaded — retry with smaller payloads. Out-of-profile server ids are rejected. SFTP is used, so sudo is not applicable. Use this to push configs/scripts/artifacts to a server; the broker holds the credentials.
+Description: "Run a shell command on a server. Pass the server's id (from list_servers), not its name. If sudo=true the broker runs `sudo -S` for you — do NOT prepend 'sudo' to the command yourself. sudo=true only works on servers where has_sudo=true. Out-of-profile server ids are rejected. Output is capped at 1 MiB per channel: if truncated=true you received only the PREFIX — read stdout_bytes/stderr_bytes for the true size, then refine your command (tail -n / head -n / grep) and re-run to get the part you need, rather than asking for the whole huge output again.
+Hardware: "2x3090
+Hardware: "8x A100
+Location: "dc2 rack14
+prod
+prod 
+prod    
+prod ml
+prod pg primary
+prod prod
+prod train
+Role: "app
+Role: "hidden
+Role: "prod ml
+Role: "r
+Role: "visible
+Services: "jupyter, trainer
+sha256:4DWyXkGY7GpVn/18m8/2n2J1k8WZe6VYv0yVqN0vX7Y
+web dev-db
+web prod-db
+web stg-db
