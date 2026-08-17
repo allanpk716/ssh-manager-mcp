@@ -10,3 +10,4 @@
 6. **Windows DACL readback 检查**——现状：doctor v1 在 Windows 上对 master.key 的硬化校验只有 32 字节长度（Unix 上是权限位），没有真正的 DACL 读回校验；`internal/store/acl_windows.go` 的 `getDACLForTest` 是 test 名构件，产品化需要生产命名的包装 API 才能进 doctor。
 7. **doctor 退出码 2 的接线**——现状：`doctorExitCode` 的 2（内部错误）分支保留且被测试钉住，但 main.go 把所有 cobra 错误映射为 exit 1，用户可见契约是 0/1；doctor 将来长出会内部出错的检查（如二期 HTTP 探活）前，必须先把 2 接进真实退出路径，避免保留码静默烂掉。
 8. **TestConnectCancelContext Windows wsarecv 间歇 flake**——现状：`internal/sshbroker` 该测试在 Windows 偶发 wsarecv 竞态（2026-08-17 本地全量首跑中 1 次，重跑即绿；CI windows lane 连续绿），修法大概是 retry 式稳定化，与本 repo 任何在飞分支无关。
+9. **App overlay 消息路由只转发 KeyPressMsg**——现状：`App.Update` 给 overlay 只送 `tea.KeyPressMsg`，huh 的 `nextFieldMsg`/`nextGroupMsg`（及其他命令消息）在路由层被丢弃 → 嵌入表单（新增 / 向导 / importflow 补全）在真终端无法前进字段/组；编辑页（Plan 29）靠内部泵 `pumpForm` 规避，其余 overlay 未规避。修法=App.Update 把 overlay 返回的 cmd 正确交还 tea 运行时（可能需过滤 blink/tick 类），影响面=formOverlay/importflow/wizard。来源：Plan 29 T2 实证（`internal/tui/app.go:150-163`）。
