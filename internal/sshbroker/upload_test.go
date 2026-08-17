@@ -527,3 +527,71 @@ func makeDirLink(t *testing.T, link, dir string) error {
 	}
 	return os.Symlink(dir, link)
 }
+
+// TestUploadDirNestedSymlinkedDirRefused (Plan 26): a symlink→directory
+// nested inside the upload root is REFUSED with a named error — pre-fix it
+// fell into the file branch and died inside uploadFile's open/read with a
+// misleading platform-dependent error. Refusal is cap-INDEPENDENT (armed here).
+func TestUploadDirNestedSymlinkedDirRefused(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := makeDirLink(t, filepath.Join(src, "z-link"), t.TempDir()); err != nil {
+		t.Skipf("dir link creation failed on this host (%v); skipping", err)
+	}
+
+	remoteDir := filepath.Join(t.TempDir(), "up-nested-link")
+	_, err := c.Upload(context.Background(), src, remoteDir, mcpUploadCap)
+	if err == nil || !strings.Contains(err.Error(), "symlinked directory not uploaded") || !strings.Contains(err.Error(), "z-link") {
+		t.Fatalf("want named refusal naming z-link, got: %v", err)
+	}
+	// Walk order is lexical: a.txt (< z-link) is uploaded BEFORE the refusal —
+	// already-completed files remain (same contract as cap refusal, Plan 23).
+	if g, derr := c.Download(context.Background(), filepath.Join(remoteDir, "a.txt"), 0); derr != nil || g.Content != "first\n" {
+		t.Fatalf("a.txt must remain uploaded (derr=%v content=%q)", derr, g.Content)
+	}
+}
+
+// TestUploadDirNestedSymlinkedDirRefusedNoCap: same refusal with cap==0 —
+// the dir-symlink check must not live under the cap-armed branch.
+func TestUploadDirNestedSymlinkedDirRefusedNoCap(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	src := t.TempDir()
+	if err := makeDirLink(t, filepath.Join(src, "z-link"), t.TempDir()); err != nil {
+		t.Skipf("dir link creation failed on this host (%v); skipping", err)
+	}
+	if _, err := c.Upload(context.Background(), src, filepath.Join(t.TempDir(), "up"), 0); err == nil || !strings.Contains(err.Error(), "symlinked directory not uploaded") {
+		t.Fatalf("cap==0 must still refuse, got: %v", err)
+	}
+}
+
+// TestUploadJunctionNestedRefused_windows: the real-world Windows case —
+// a junction inside the upload tree (OneDrive / dev-drive junctions).
+// Windows-only (build-tag free: skips elsewhere).
+func TestUploadJunctionNestedRefused_windows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows junction test")
+	}
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+
+	src := t.TempDir()
+	if err := makeDirLink(t, filepath.Join(src, "z-junc"), t.TempDir()); err != nil {
+		t.Skipf("junction creation failed (%v); skipping", err)
+	}
+	if _, err := c.Upload(context.Background(), src, filepath.Join(t.TempDir(), "up"), 0); err == nil || !strings.Contains(err.Error(), "symlinked directory not uploaded") {
+		t.Fatalf("junction must be refused like a dir symlink, got: %v", err)
+	}
+}

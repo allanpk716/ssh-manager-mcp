@@ -65,6 +65,7 @@
 - `upload_file` 的方向：**LocalPath 在你机器上，RemotePath 在服务器上**——别反了。
 - 上传是 SFTP，**不走 sudo**（SFTP 协议层没有 sudo 概念）。要写到 root 才能写的路径，先上传到一个可写目录（如 `/tmp/myapp-deploy/`），再用 `exec_command` + `sudo=true` 把它 `mv` / `install` 到目标位置。
 - 上传 cap：**单个文件超过 1 MiB 会在传输前被直接拒绝**（错误里带文件名/实际大小/上限，零字节传输；目录上传时此前已完成的文件照常保留）；多个文件累计超过 1 MiB 时已完成的保留并如实标 `truncated=true`（其后的文件不再上传）→ 拆小批次重传。
+- 符号链接三态（传目录时）：**根**是符号链接/junction → 跟链解析成目标目录再传；**嵌套的 symlink→目录**（含 Windows junction）→ **显式拒绝**，错误形如 `symlinked directory not uploaded: <路径> — upload the target directory directly (following directory links recursively is not supported)`（要传就直接传目标目录，不递归跟链——环/重复访问风险）；**嵌套的 symlink→文件** → 跟链上传目标内容（cap 按目标大小判，Plan 24）。
 - 上传的是你本机（broker 所在机器）上的文件——agent 在你机器上读文件再推过去。
 
 ---
