@@ -163,6 +163,30 @@ func TestEnumClearTargets_ServerMachine(t *testing.T) {
 	}
 }
 
+// TestEnumClearTargets_DualRoleMachine: a machine holding BOTH role.json
+// locations (e.g. mid-migration) enumerates BOTH — the scan is deliberately
+// role-blind (clear.go's scanClearTargets contract: catch every leftover
+// regardless of what role.json claims).
+func TestEnumClearTargets_DualRoleMachine(t *testing.T) {
+	vd, _ := withClearDirs(t)
+	seedClearVault(t, vd)
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Second role.json at the CLIENT location (roles.Save writes per-role
+	// paths; write the client one by hand via a second Save + move, or call
+	// roles.Save(RoleClient) if RolePath differs — see roles.RolePath).
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	stubClearExternals(t, nil, nil)
+
+	got := enumClearTargets(roles.RoleServer)
+	if n := strings.Count(strings.Join(got, "\n"), "role.json"); n != 2 {
+		t.Fatalf("dual-role machine must enumerate BOTH role.json locations, got %d:\n%s", n, strings.Join(got, "\n"))
+	}
+}
+
 // TestEnumClearTargets_EmptyMachine: nothing on disk → nothing enumerated
 // (clear on a fresh machine is a no-op list, never a fabricated one).
 func TestEnumClearTargets_EmptyMachine(t *testing.T) {
