@@ -3,11 +3,15 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"runtime"
 	"strings"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
+	"ssh-manager-mcp/internal/store"
 
 	"github.com/spf13/cobra"
 )
@@ -57,13 +61,14 @@ func doctorExitCode(err error) int {
 	}
 }
 
-// doctorCheckFuncs is the checks table — T2 (vault structure), T3 (copy
-// decrypt probe), T4 (serve cert/service, client cache) append entries here.
-// Every check is self-contained and side-effect-free; order only affects
-// display.
+// doctorCheckFuncs is the checks table — T3 (copy decrypt probe), T4 (serve
+// cert/service, client cache) append entries here. Every check is
+// self-contained and side-effect-free; order only affects display.
 var doctorCheckFuncs = []func() []doctorCheck{
 	checkEnv,
 	checkRole,
+	checkVaultStore,
+	checkVaultKey,
 }
 
 // doctorEnvSeams is every SSHMGR_* env the CLI honors. Doctor reports which
@@ -163,6 +168,127 @@ func checkRole() []doctorCheck {
 func roleFilePresent(p string) bool {
 	ok, err := fileExists(p)
 	return err == nil && ok
+}
+
+// vaultHoldingRole reports whether r is a role whose machine owns a local
+// vault (store.db + master.key): standalone and server do. Client machines
+// may legitimately be cache-only.
+func vaultHoldingRole(r roles.Role) bool {
+	return r == roles.RoleServer || r == roles.RoleStandalone
+}
+
+// doctorRole loads the role for the structural checks. A Load error (corrupt
+// role.json) deliberately maps to "no usable role" here — the role check owns
+// reporting that failure; the structural checks just fall back to their
+// no-role branches.
+func doctorRole() *roles.State {
+	st, err := roles.Load()
+	if err != nil {
+		return nil
+	}
+	return st
+}
+
+// checkVaultStore Stats the vault database via the env-aware path. Doctor
+// NEVER opens the store — store.Open creates store.db + runs the migration on
+// the path it is given, which is exactly the side effect a diagnostic must
+// not have; presence + size is the structural signal.
+func checkVaultStore() []doctorCheck {
+	c := doctorCheck{Name: "store"}
+	p, err := paths.StorePath()
+	if err != nil {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("vault store path unresolvable: %v", err)
+		c.Fix = "check the vault directory (platform root could not be resolved — see spec §3.1)"
+		return []doctorCheck{c}
+	}
+	info, err := os.Stat(p)
+	switch {
+	case err == nil:
+		c.Status = statusPass
+		c.Detail = fmt.Sprintf("store.db present (%d bytes)", info.Size())
+	case errors.Is(err, fs.ErrNotExist):
+		switch st := doctorRole(); {
+		case st != nil && vaultHoldingRole(st.Role):
+			c.Status = statusFail
+			c.Detail = fmt.Sprintf("store.db missing on a vault-holding machine (role=%s)", st.Role)
+			c.Fix = "run `ssh-manager unlock` or the setup wizard"
+		case st != nil: // client
+			c.Status = statusInfo
+			c.Detail = "store.db absent on a client machine — cache-only is normal"
+		default:
+			c.Status = statusInfo
+			c.Detail = "store.db absent — no role.json on this machine (see the role check)"
+		}
+	default:
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("store.db stat failed: %v", err)
+		c.Fix = "check the vault directory permissions"
+	}
+	return []doctorCheck{c}
+}
+
+// checkVaultKey reads the master key file (env-aware path) and validates it
+// STRUCTURALLY — same rationale as vaultStatusString (serve_service.go):
+// store.Open is side-effecting, so ValidMasterKeyLen is the lightest faithful
+// proxy for "the file is a usable AES-256 key". Unlike serve's LOCKED wording,
+// doctor phrases its own remediation. On Unix the plaintext key's protection
+// is mode bits alone (L1+ threat model), so loose group/world bits downgrade
+// an otherwise-valid key to WARN; on Windows protection is ACLs, not mode
+// bits, and the branch is skipped (runtime guard keeps one test file).
+func checkVaultKey() []doctorCheck {
+	c := doctorCheck{Name: "masterkey"}
+	p, err := paths.MasterKeyPath()
+	if err != nil {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("master key path unresolvable: %v", err)
+		c.Fix = "check the vault directory (platform root could not be resolved — see spec §3.1)"
+		return []doctorCheck{c}
+	}
+	b, err := os.ReadFile(p)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		storePresent := false
+		if sp, serr := paths.StorePath(); serr == nil {
+			_, serr2 := os.Stat(sp)
+			storePresent = serr2 == nil
+		}
+		switch st := doctorRole(); {
+		case st != nil && vaultHoldingRole(st.Role):
+			c.Status = statusFail
+			c.Detail = fmt.Sprintf("master.key missing on a vault-holding machine (role=%s)", st.Role)
+			c.Fix = "run `ssh-manager unlock` or the setup wizard"
+		case storePresent:
+			c.Status = statusFail
+			c.Detail = "master.key missing but store.db exists — the vault cannot be decrypted"
+			c.Fix = "run `ssh-manager unlock` (or restore master.key from backup)"
+		case st != nil: // client
+			c.Status = statusInfo
+			c.Detail = "master.key absent on a client machine — no local vault to unlock"
+		default:
+			c.Status = statusInfo
+			c.Detail = "master.key absent — no role.json on this machine (see the role check)"
+		}
+	case err != nil:
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("master.key unreadable: %v", err)
+		c.Fix = "check the master.key file permissions"
+	case !store.ValidMasterKeyLen(b):
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("master.key is %d bytes, expected 32 — corrupt or wrong file", len(b))
+		c.Fix = "restore master.key from backup or re-run `ssh-manager unlock`"
+	default:
+		c.Status = statusPass
+		c.Detail = fmt.Sprintf("master.key present (%d bytes)", len(b))
+		if runtime.GOOS != "windows" {
+			if info, serr := os.Stat(p); serr == nil && info.Mode().Perm()&0o077 != 0 {
+				c.Status = statusWarn
+				c.Detail = fmt.Sprintf("master.key present (%d bytes) but group/world readable (mode %o) — the plaintext key is protected by mode bits alone", len(b), info.Mode().Perm())
+				c.Fix = "chmod 600 the master.key file (and 0700 its parent directory)"
+			}
+		}
+	}
+	return []doctorCheck{c}
 }
 
 // runDoctor executes every check, renders the report, and returns the error

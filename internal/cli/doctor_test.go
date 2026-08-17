@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/roles"
+	"ssh-manager-mcp/internal/store"
 )
 
 // withDoctorDirs isolates every filesystem/env location doctor READS —
@@ -147,10 +149,14 @@ func TestDoctorEnvSeamsReported(t *testing.T) {
 
 // TestDoctorRoleStates pins the role check's remaining states: incomplete
 // wizard → WARN, completed role → PASS with the role value in Detail, and
-// dual-location role.json residue → WARN.
+// dual-location role.json residue → WARN. The vault is seeded up front so the
+// T2 structural checks stay quiet — this test isolates the ROLE row (a
+// server-role machine without store.db is a T2 FAIL by design, tested in
+// TestDoctorVaultStructural).
 func TestDoctorRoleStates(t *testing.T) {
 	// Incomplete wizard: role.json saved with setup_complete=false.
-	withDoctorDirs(t)
+	vd, _ := withDoctorDirs(t)
+	seedDoctorVault(t, vd)
 	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: false}); err != nil {
 		t.Fatal(err)
 	}
@@ -196,5 +202,149 @@ func TestDoctorRoleStates(t *testing.T) {
 	}
 	if !strings.Contains(out, "overall: 1 WARN, 0 FAIL") {
 		t.Fatalf("expected exactly the dual-role WARN:\n%s", out)
+	}
+}
+
+// seedDoctorVault builds a REAL vault in the test's temp dir — seedClearVault
+// precedent (clear_test.go): store.Open to create store.db (side effects are
+// legal in TESTS; doctor itself only Stats/ReadFiles) + the 32-byte
+// master.key.plain next to it.
+func seedDoctorVault(t *testing.T, vaultDir string) {
+	t.Helper()
+	mk, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(vaultDir, "store.db"), mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	if err := os.WriteFile(filepath.Join(vaultDir, "master.key.plain"), mk, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDoctorVaultStructural pins the T2 vault structural checks: store.db /
+// master.key presence per role, the 32-byte key-length contract, and — Unix
+// only, guarded by runtime.GOOS (mode bits are not a protection layer on
+// Windows) — the group/world-readable permission WARN.
+func TestDoctorVaultStructural(t *testing.T) {
+	// Case 1 — healthy vault: real store.db + valid 32-byte master.key +
+	// complete server role → both structural rows PASS with sizes in Detail.
+	vd, _ := withDoctorDirs(t)
+	seedDoctorVault(t, vd)
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := driveDoctor(t)
+	if err != nil {
+		t.Fatalf("healthy vault must not FAIL: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"store:  PASS",
+		"store.db present (", // size in Detail
+		"masterkey:  PASS",
+		"master.key present (32 bytes)",
+		"overall: 0 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Case 2 — wrong-length master.key (17 bytes, truncated/garbage) → FAIL
+	// with the expected-32 contract in Detail; store.db itself stays PASS.
+	vd, _ = withDoctorDirs(t)
+	seedDoctorVault(t, vd)
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vd, "master.key.plain"), make([]byte, 17), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err = driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("wrong-length master.key must FAIL (exit 1), got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"store:  PASS",
+		"masterkey:  FAIL",
+		"master.key is 17 bytes, expected 32",
+		"fix:",
+		"overall: 0 WARN, 1 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Case 3 — Unix only: a valid key with loose mode bits (0644) → WARN with
+	// "group/world readable" in Detail, still exit 0. On Windows the plaintext
+	// key is protected by ACLs, not mode bits — the branch is skipped there.
+	if runtime.GOOS == "windows" {
+		t.Log("skipping permission-bit WARN on Windows (ACLs, not mode bits, are the protection layer)")
+	} else {
+		vd, _ = withDoctorDirs(t)
+		seedDoctorVault(t, vd)
+		if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(vd, "master.key.plain"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, err = driveDoctor(t)
+		if err != nil {
+			t.Fatalf("a permission WARN must not change the exit code: %v\n%s", err, out)
+		}
+		for _, want := range []string{
+			"masterkey:  WARN",
+			"group/world readable",
+			"overall: 1 WARN, 0 FAIL",
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("missing %q in:\n%s", want, out)
+			}
+		}
+	}
+
+	// Case 4 — the missing-vault matrix: a vault-holding role (server) with NO
+	// vault on disk → both rows FAIL with unlock/wizard remediation; a client
+	// role with no vault → both INFO (cache-only is legitimate), exit 0.
+	withDoctorDirs(t)
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	out, err = driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("missing vault on a server must FAIL (exit 1), got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"store:  FAIL",
+		"masterkey:  FAIL",
+		"unlock",
+		"overall: 0 WARN, 2 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	withDoctorDirs(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("client without a local vault must stay exit 0: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"store:  INFO",
+		"masterkey:  INFO",
+		"overall: 0 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
 	}
 }
