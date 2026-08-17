@@ -101,7 +101,7 @@ The owner path runs a **single non-interactive command** (connect + exec share o
 
 ## Managing servers & projects (owner CLI)
 
-The owner CLI is how you record servers, group them, and grant an agent access. Each server carries structured metadata (`--role` / `--services` / `--location` / `--hardware` / `--special-handling`) plus free-text `--description` and `--tags` — **all shown to the agent** via `list_servers` so it can act on each box safely. ⚠️ Never put secrets in these fields: they enter the agent's context (and the upstream LLM provider) on every call. See [`docs/managing-servers.md`](docs/managing-servers.md).
+The owner CLI is how you record servers, group them, and grant an agent access. Each server carries structured metadata (`--role` / `--services` / `--location` / `--hardware` / `--special-handling`) plus free-text `--description` and `--tags` — **all shown to the agent** via `list_servers` so it can act on each box safely. ⚠️ Never put secrets in these fields: they enter the agent's context (and the upstream LLM provider) on every call. As a backstop, every metadata write path (add / edit / import / TUI) prints a **non-blocking advisory warning** when a field matches one of 9 known token shapes (8 prefixes like `sk-` / `ghp_` / `AKIA` + a tightened PEM rule) — a hint, not a verdict, and it never echoes the content. See [`docs/managing-servers.md`](docs/managing-servers.md).
 
 ```bash
 # Edit a server in place: pass any subset of fields — the server id + profile bindings are preserved.

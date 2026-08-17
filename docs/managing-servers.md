@@ -88,6 +88,24 @@ shown to the agent.
 > travel into the agent's context and the upstream LLM provider on every `list_servers`
 > call. Use the credential vault (`--password` / `--key`) for secrets, never these fields.
 
+> 🔎 **Suspected-secret warnings (non-blocking).** All four metadata write paths —
+> `servers add`, `servers edit`, `servers import` (per-machine supplement), and the
+> TUI add/edit + import-supplement save points — scan the free-text fields against
+> 9 high-confidence rules: 8 token prefixes (`sk-`, `ghp_`, `gho_`, `github_pat_`,
+> `AKIA`, `xoxb-`, `xoxp-`, `eyJ`) plus a PEM rule tightened to require
+> `-----BEGIN` **and** `PRIVATE KEY` co-occurring (public certificates don't match);
+> high-entropy scoring was deliberately left out (measured 2.9% false positives on
+> legal metadata; the 9 rules pass a 0-false-positive corpus regression). A hit
+> prints one advisory line to stderr, e.g. `warning: server metadata may contain a
+> secret — field 'description' matched rule 'prefix:sk-' (content not shown; this
+> text would be sent to LLM providers on every list_servers — edit the server to
+> fix, or ignore if intentional)` — and nothing else changes: the write always
+> succeeds, the exit code is untouched, and the flagged content is never echoed.
+> Hints are not verdicts — occasional false positives on ordinary words are
+> expected (English "task-force" contains `sk-`). To resolve one: edit the field
+> to drop the secret, or ignore it if the value is intentionally a public
+> fingerprint.
+
 Each field is capped at 4 KB. Edit any field with `ssh-manager servers edit <name> --<flag> ...`;
 pass an empty value (`--special-handling ""`) to clear.
 
