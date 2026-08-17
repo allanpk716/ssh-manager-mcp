@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
@@ -342,6 +343,252 @@ func TestDoctorVaultStructural(t *testing.T) {
 		"store:  INFO",
 		"masterkey:  INFO",
 		"overall: 0 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+// probeTestSecret is a sentinel plaintext unique to the probe tests. Doctor's
+// iron rule — output carries counts, sizes, and record IDs, NEVER secret
+// values — is pinned by asserting every error and every report line fails to
+// contain it.
+const probeTestSecret = "PROBE-PLAINTEXT-NEVER-IN-OUTPUT"
+
+// seedDoctorVaultWithData builds a REAL vault with one password server + its
+// credential — export_import_smoke_test.go's minimal seeding (SetCredential →
+// AddServer, pointing CredentialID at it) — so the decrypt probe has
+// ciphertext to actually open. Side effects are legal in TESTS; the probe
+// under test never touches these files beyond ReadFile. Returns
+// (storePath, keyPath, masterKey).
+func seedDoctorVaultWithData(t *testing.T, vaultDir string) (string, string, []byte) {
+	t.Helper()
+	mk, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(vaultDir, "store.db")
+	st, err := store.Open(db, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid, err := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(probeTestSecret)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServer(&models.Server{
+		Name:         "gpu",
+		Host:         "192.0.2.10",
+		User:         "deploy",
+		AuthMethod:   models.AuthPassword,
+		CredentialID: cid,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(vaultDir, "master.key.plain")
+	if err := os.WriteFile(key, mk, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return db, key, mk
+}
+
+// doctorScratchCount counts sshmgr-doctor-* dirs under root. The probe tests
+// pin TMP/TEMP (Windows) and TMPDIR (Unix) at a private empty t.TempDir, so
+// the cleanup assertion is a listing of a tiny directory: unrelated processes
+// cannot perturb it (deterministic without t.Parallel concerns) and it costs
+// microseconds — a raw glob of the machine's real %TEMP% measured ~1s here
+// and spiked far higher under antivirus. Chosen over returning the scratch
+// path from the probe (signature is pinned by the task) and over Stat-ing a
+// known name (MkdirTemp names are randomized).
+func doctorScratchCount(t *testing.T, root string) int {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(root, "sshmgr-doctor-*"))
+	if err != nil {
+		t.Fatalf("glob scratch dirs: %v", err)
+	}
+	return len(matches)
+}
+
+// pinScratchTemp points the OS temp resolution at a private empty dir so the
+// probe's scratch copies land somewhere enumerable.
+func pinScratchTemp(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("TMP", root)
+	t.Setenv("TEMP", root)
+	t.Setenv("TMPDIR", root)
+	return root
+}
+
+// TestProbeVaultDecrypt pins the copy-to-scratch decrypt probe directly:
+// ① correct key → counts match the seed, err nil, BOTH originals untouched
+// (size+mtime identical), scratch dir removed; ② wrong (but structurally
+// valid) key → err carries the decrypt failure class and never the plaintext;
+// ③ missing store.db → err with explicit "not found" wording (os.ReadFile's
+// raw message is platform-dependent, so the probe names the class itself).
+func TestProbeVaultDecrypt(t *testing.T) {
+	dir := t.TempDir()
+	db, key, _ := seedDoctorVaultWithData(t, dir)
+	scratchRoot := pinScratchTemp(t)
+
+	// ① Correct key.
+	beforeStore, err := os.Stat(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeKey, err := os.Stat(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, creds, perr := probeVaultDecrypt(db, key)
+	if perr != nil {
+		t.Fatalf("correct key must probe clean: %v", perr)
+	}
+	if servers != 1 || creds != 1 {
+		t.Fatalf("counts must match the 1-server/1-credential seed, got %d/%d", servers, creds)
+	}
+	// Side-effect assertion: the probe only ReadFile'd the originals.
+	for _, pair := range []struct {
+		name          string
+		before, after os.FileInfo
+	}{{"store.db", beforeStore, mustStat(t, db)}, {"master.key.plain", beforeKey, mustStat(t, key)}} {
+		if pair.after.Size() != pair.before.Size() || !pair.after.ModTime().Equal(pair.before.ModTime()) {
+			t.Fatalf("%s changed by the probe: size %d→%d mtime %v→%v",
+				pair.name, pair.before.Size(), pair.after.Size(), pair.before.ModTime(), pair.after.ModTime())
+		}
+	}
+	if got := doctorScratchCount(t, scratchRoot); got != 0 {
+		t.Fatalf("probe leaked %d scratch dir(s) under the pinned temp root", got)
+	}
+
+	// ② Same vault, WRONG key — the NUC10 FINDING A condition: HKDF derives a
+	// different DEK, GCM authentication fails on the first credential.
+	wrong := filepath.Join(dir, "wrong.key")
+	mk2, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wrong, mk2, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	servers, creds, perr = probeVaultDecrypt(db, wrong)
+	if perr == nil {
+		t.Fatalf("wrong key must fail the probe, got counts %d/%d", servers, creds)
+	}
+	if !strings.Contains(perr.Error(), "decrypt") {
+		t.Fatalf("error must carry the decrypt failure class: %v", perr)
+	}
+	if strings.Contains(perr.Error(), probeTestSecret) {
+		t.Fatalf("PLAINTEXT LEAKED through the probe error: %v", perr)
+	}
+	if got := doctorScratchCount(t, scratchRoot); got != 0 {
+		t.Fatalf("failed probe leaked %d scratch dir(s) under the pinned temp root", got)
+	}
+
+	// ③ Missing store.db (fails before any scratch is created — still
+	// asserted, the early-error path must not leak either).
+	_, _, perr = probeVaultDecrypt(filepath.Join(dir, "missing.db"), key)
+	if perr == nil || !strings.Contains(perr.Error(), "not found") {
+		t.Fatalf("missing store.db must surface a not-found error, got: %v", perr)
+	}
+	if strings.Contains(perr.Error(), probeTestSecret) {
+		t.Fatalf("PLAINTEXT LEAKED through the probe error: %v", perr)
+	}
+	if got := doctorScratchCount(t, scratchRoot); got != 0 {
+		t.Fatalf("early-error probe leaked %d scratch dir(s) under the pinned temp root", got)
+	}
+}
+
+// mustStat is the Stat twin of the t.Fatal-on-error seeding helpers, for the
+// probe's side-effect (mtime/size) assertions.
+func mustStat(t *testing.T, p string) os.FileInfo {
+	t.Helper()
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info
+}
+
+// TestDoctorVaultOpen pins the vault-open doctor row end to end — the NUC10
+// FINDING A detector (incident 2026-08-12: vault sealed under key B while the
+// machine held key A; every structural check was green but the vault was
+// undecryptable). Healthy vault → PASS with probe counts in Detail; FINDING A
+// (both files present, right sizes, DIFFERENT key) → vault-open FAIL with
+// backup-restore remediation while store/masterkey stay PASS; missing inputs →
+// INFO skip (the T2 rows own reporting absence).
+func TestDoctorVaultOpen(t *testing.T) {
+	// Healthy vault: the probe decrypts the seeded server + credential.
+	vd, _ := withDoctorDirs(t)
+	_, key, _ := seedDoctorVaultWithData(t, vd)
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := driveDoctor(t)
+	if err != nil {
+		t.Fatalf("healthy vault must not FAIL: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"vault-open:  PASS",
+		"copy-probe decrypted 1 servers / 1 credentials",
+		"overall: 0 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, probeTestSecret) {
+		t.Fatalf("PLAINTEXT LEAKED into the doctor report:\n%s", out)
+	}
+
+	// FINDING A: replace master.key with a DIFFERENT valid 32-byte key. The
+	// structural rows (store, masterkey) still PASS — only the decrypt probe
+	// can see the mismatch. This is the exact incident signature.
+	mk2, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(key, mk2, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err = driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("FINDING A must FAIL (exit 1), got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"store:  PASS", // structure intact — that is the point
+		"masterkey:  PASS",
+		"vault-open:  FAIL",
+		"key/ciphertext mismatch",
+		"docs/backup-restore.md",
+		"overall: 0 WARN, 1 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, probeTestSecret) {
+		t.Fatalf("PLAINTEXT LEAKED into the doctor report:\n%s", out)
+	}
+
+	// Missing inputs: INFO skip, one Detail for the whole row (the store and
+	// masterkey T2 rows carry the actual FAIL verdicts).
+	withDoctorDirs(t)
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	out, err = driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("server without a vault must still FAIL via the T2 rows, got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"vault-open:  INFO",
+		"skipped — store.db/master.key not both present",
+		"overall: 0 WARN, 2 FAIL",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)

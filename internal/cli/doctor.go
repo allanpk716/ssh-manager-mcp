@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -61,14 +62,15 @@ func doctorExitCode(err error) int {
 	}
 }
 
-// doctorCheckFuncs is the checks table — T3 (copy decrypt probe), T4 (serve
-// cert/service, client cache) append entries here. Every check is
-// self-contained and side-effect-free; order only affects display.
+// doctorCheckFuncs is the checks table — T4 (serve cert/service, client
+// cache) appends entries here. Every check is self-contained and
+// side-effect-free; order only affects display.
 var doctorCheckFuncs = []func() []doctorCheck{
 	checkEnv,
 	checkRole,
 	checkVaultStore,
 	checkVaultKey,
+	checkVaultOpen,
 }
 
 // doctorEnvSeams is every SSHMGR_* env the CLI honors. Doctor reports which
@@ -286,6 +288,115 @@ func checkVaultKey() []doctorCheck {
 				c.Detail = fmt.Sprintf("master.key present (%d bytes) but group/world readable (mode %o) — the plaintext key is protected by mode bits alone", len(b), info.Mode().Perm())
 				c.Fix = "chmod 600 the master.key file (and 0700 its parent directory)"
 			}
+		}
+	}
+	return []doctorCheck{c}
+}
+
+// probeVaultDecrypt copy-to-scratch-decrypts the vault: reads storePath+keyPath,
+// copies both into a fresh scratch dir, store.Open's the COPY, ExportSnapshot()
+// (decrypts EVERY credential — any key/ciphertext mismatch surfaces here), and
+// removes the scratch. Never touches the originals beyond ReadFile.
+// Returns server/credential counts. Error must not leak plaintext.
+//
+// Why a copy at all (NUC10 FINDING A, incident 2026-08-12): the vault's
+// credentials were encrypted under key B while the machine held key A — every
+// structural signal (files present, right sizes) was green, but the vault was
+// undecryptable. A structural check cannot catch that; only a real decrypt
+// can. But store.Open side effects (it CREATES store.db + runs the migration
+// on the path it is given) mean the real decrypt must never run against the
+// production files — hence the scratch copy.
+//
+// The copy is store.db alone, WITHOUT the WAL sidecars (-wal/-shm): a
+// concurrent writer's un-checkpointed frames are simply absent, which reads
+// as an older consistent snapshot — worst case an undercounted PASS, never a
+// false FAIL. (Copying -wal mid-write would risk a torn copy, i.e. exactly
+// the false FAIL this diagnostic cannot afford.)
+func probeVaultDecrypt(storePath, keyPath string) (servers, creds int, err error) {
+	key, err := os.ReadFile(keyPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// Name the class ourselves: os.ReadFile's raw message is
+			// platform-dependent ("no such file or directory" vs "cannot find
+			// the file specified").
+			return 0, 0, fmt.Errorf("vault decrypt probe: master.key not found: %w", err)
+		}
+		return 0, 0, fmt.Errorf("vault decrypt probe: read master.key: %w", err)
+	}
+	blob, err := os.ReadFile(storePath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, 0, fmt.Errorf("vault decrypt probe: store.db not found: %w", err)
+		}
+		return 0, 0, fmt.Errorf("vault decrypt probe: read store.db: %w", err)
+	}
+	scratch, err := os.MkdirTemp("", "sshmgr-doctor-*")
+	if err != nil {
+		return 0, 0, fmt.Errorf("vault decrypt probe: scratch dir: %w", err)
+	}
+	defer os.RemoveAll(scratch)
+	copyPath := filepath.Join(scratch, "store.db")
+	if err := os.WriteFile(copyPath, blob, 0o600); err != nil {
+		return 0, 0, fmt.Errorf("vault decrypt probe: write scratch copy: %w", err)
+	}
+	st, err := store.Open(copyPath, key)
+	if err != nil {
+		return 0, 0, fmt.Errorf("vault decrypt probe: %w", err)
+	}
+	defer st.Close()
+	snap, err := st.ExportSnapshot()
+	if err != nil {
+		// ExportSnapshot wraps per-credential failures as
+		// "decrypt credential <id>: <GCM error class>" (store/export.go) —
+		// record IDs and cipher error classes only, never decrypted bytes.
+		return 0, 0, fmt.Errorf("vault decrypt probe: %w", err)
+	}
+	return len(snap.Servers), len(snap.Credentials), nil
+}
+
+// checkVaultOpen is the FINDING A detector: the one doctor row that PROVES
+// the vault decrypts, not merely that it structurally exists. Skips (INFO)
+// when either input is absent or the key fails the structural length check —
+// the T2 store/masterkey rows own reporting those — because a probe on an
+// empty vault under a wrong-length key derives a different DEK via HKDF but
+// has nothing to decrypt, i.e. it would report a misleading PASS.
+func checkVaultOpen() []doctorCheck {
+	c := doctorCheck{Name: "vault-open"}
+	storeP, serr := paths.StorePath()
+	keyP, kerr := paths.MasterKeyPath()
+	if serr != nil || kerr != nil {
+		c.Status = statusInfo
+		c.Detail = "skipped — vault paths unresolvable (see the store/masterkey rows)"
+		return []doctorCheck{c}
+	}
+	storePresent, serr2 := fileExists(storeP)
+	keyBytes, rerr := os.ReadFile(keyP)
+	switch {
+	case serr2 != nil:
+		// Exists-but-unstatable: T2's store row FAILs the real problem; do not
+		// claim "not present" for a file that may well be there.
+		c.Status = statusInfo
+		c.Detail = "skipped — store.db not statable (see the store row)"
+	case !storePresent || errors.Is(rerr, fs.ErrNotExist):
+		c.Status = statusInfo
+		c.Detail = "skipped — store.db/master.key not both present"
+	case rerr != nil:
+		// Present but unreadable: T2's masterkey row FAILs the real problem;
+		// do not claim "not present" for a file that is there.
+		c.Status = statusInfo
+		c.Detail = "skipped — master.key unreadable (see the masterkey row)"
+	case !store.ValidMasterKeyLen(keyBytes):
+		c.Status = statusInfo
+		c.Detail = "skipped — master.key not a valid 32-byte key (see the masterkey row)"
+	default:
+		servers, creds, perr := probeVaultDecrypt(storeP, keyP)
+		if perr != nil {
+			c.Status = statusFail
+			c.Detail = fmt.Sprintf("vault fails to decrypt under the current master key: %v", perr)
+			c.Fix = "key/ciphertext mismatch — restore from backup (.sme) or re-unlock + import; see docs/backup-restore.md"
+		} else {
+			c.Status = statusPass
+			c.Detail = fmt.Sprintf("copy-probe decrypted %d servers / %d credentials", servers, creds)
 		}
 	}
 	return []doctorCheck{c}
