@@ -387,9 +387,14 @@ func (w wizardModel) Init() tea.Cmd {
 }
 
 func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// Client-role wizard (T5): the flow IS the clientModel in wizard form —
-	// every message delegates to it. wizardDoneMsg is the one exception: it
-	// is the wizard's own exit sentinel and is handled by the switch below.
+	// 1. stepClient delegation is OUTERMOST (Plan 30 注记 1): the flow IS the
+	// clientModel in wizard form; only wizardDoneMsg escapes (it is the
+	// wizard's own exit sentinel, handled by the switch below). This MUST
+	// precede everything — formDoneMsg/errMsg are live during delegation
+	// (editConnForm completion emits formDoneMsg) and belong to the inner
+	// model, whose own gate routes them. wizard-owned mint/install/probe msgs
+	// are UNREACHABLE in the client branch (those steps don't run), so nothing
+	// of the wizard's is lost.
 	if w.step == stepClient && w.client != nil {
 		if _, ok := msg.(wizardDoneMsg); !ok {
 			cm, cmd := w.client.Update(msg)
@@ -443,17 +448,7 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if w.form == nil {
 			return w, nil
 		}
-		f, cmd := w.form.Update(msg)
-		if nf, ok := f.(*huh.Form); ok {
-			w.form = nf
-		}
-		if w.form.State == huh.StateAborted {
-			return w, tea.Quit
-		}
-		if w.form.State != huh.StateCompleted {
-			return w, cmd
-		}
-		return w.stepFormDone()
+		return w.feedFormMsg(m)
 	case errMsg:
 		w.err, w.status = m.err, ""
 		// A failed mutation reopens the SAME form bound to the SAME state, so
@@ -556,8 +551,48 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Setup persisted complete: exit; Run chains into the broker console.
 		w.done, w.next = true, m.next
 		return w, tea.Quit
+	default:
+		// Plan 30 gate (注记 1 的解法): delegation is the outermost layer
+		// (the head above — formDoneMsg/errMsg are LIVE during stepClient and
+		// belong to the inner model); owned cases are the main switch itself
+		// (they run before any overlay target); THIS branch is the target
+		// selection for everything else — huh's unexported protocol msgs
+		// (nextFieldMsg / nextGroupMsg — without this route every wizard form
+		// is stuck on its first field in a real terminal), blink, paste,
+		// resize. Static screen first (swallows q/Esc by Deliberate design —
+		// the w.ov branch of the KeyPressMsg case above), else the form via
+		// the shared tail. q/Esc/Ctrl+C interception stays KeyPressMsg-only
+		// and AFTER the w.ov check — current semantics (向导输入框打不进 q 是
+		// 既有取舍, the same trade-off importflow.go documents on its
+		// supplement inputs).
+		if w.ov != nil {
+			ov, cmd := w.ov.Update(msg)
+			w.ov, _ = ov.(overlay)
+			return w, cmd
+		}
+		return w.feedFormMsg(msg)
 	}
-	return w, nil
+}
+
+// feedFormMsg is the SHARED form tail used by BOTH the KeyPressMsg case and
+// Update's default branch (Plan 30 注记 2): feed the form, then the
+// abort/complete checks — identical on both paths. formDoneMsg-equivalent
+// progression (stepFormDone) happens HERE on completion.
+func (w wizardModel) feedFormMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if w.form == nil {
+		return w, nil
+	}
+	f, cmd := w.form.Update(msg)
+	if nf, ok := f.(*huh.Form); ok {
+		w.form = nf
+	}
+	if w.form.State == huh.StateAborted {
+		return w, tea.Quit
+	}
+	if w.form.State != huh.StateCompleted {
+		return w, cmd
+	}
+	return w.stepFormDone()
 }
 
 // stepFormDone routes a completed form to the next step. First-screen logic

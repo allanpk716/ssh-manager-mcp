@@ -140,6 +140,29 @@ func syncCmdMode(cred *clientops.CacheCred, wizard bool) tea.Cmd {
 }
 
 func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Plan 30 gate (same shape as the App's). owned ⇔ the switch below has a
+	// case (注记 4: the old KeyPressMsg overlay branch sat BEFORE the quit
+	// case, so overlay-open Ctrl+C/q already went to the overlay today —
+	// absorbing KeyPressMsg here changes nothing). huh advances fields/groups
+	// via unexported msgs (nextFieldMsg/nextGroupMsg) — they can only be
+	// routed by "owned allowlist + forward everything else". NEW
+	// client-owned message types MUST be registered here (checklist item).
+	if m.overlay != nil {
+		switch msg := msg.(type) {
+		case dataReadyMsg, syncDoneMsg, pullSucceededMsg, connSavedMsg,
+			clientStatusMsg, errMsg, formDoneMsg:
+			// owned: fall through to the switch below
+		case tea.WindowSizeMsg:
+			m.width, m.height = msg.Width, msg.Height
+			ov, cmd := m.overlay.Update(msg)
+			m.overlay, _ = ov.(overlay) // comma-ok failure = unreachable defense (spy tests lock the type)
+			return m, cmd
+		default:
+			ov, cmd := m.overlay.Update(msg)
+			m.overlay, _ = ov.(overlay)
+			return m, cmd
+		}
+	}
 	switch kp := msg.(type) {
 	case dataReadyMsg:
 		m.cred, m.snap, m.cacheAge = kp.cred, kp.snap, kp.age
@@ -195,11 +218,8 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = nil
 		return m, tea.Batch(kp.after, refreshDataCmd)
 	case tea.KeyPressMsg:
-		if m.overlay != nil { // overlay owns keys until done
-			ov, cmd := m.overlay.Update(msg)
-			m.overlay, _ = ov.(overlay)
-			return m, cmd
-		}
+		// (the pre-gate overlay branch lived here; keys now route through the
+		// gate above — absorbing KeyPressMsg changed no behavior, see 注记 4)
 		// List panel event stream (see listMsg): while the `/` filter input is
 		// active it owns EVERY keypress; browsing keypresses fall through to
 		// the s/c/t/q actions below (the list only consumes bound keys).
@@ -235,6 +255,9 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case tea.WindowSizeMsg:
+		// the Plan 30 gate above records the same fields while an overlay is
+		// open (resize reaches the model even when the overlay eats the msg) —
+		// two writes, one semantic; keep them in sync (anti-drift).
 		m.width, m.height = kp.Width, kp.Height
 		return m, nil
 	}

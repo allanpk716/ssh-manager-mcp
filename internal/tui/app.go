@@ -147,6 +147,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// keypress (letters are filter text, not page actions). Browsing
 	// keypresses fall through so the page actions below still fire (the lists
 	// only consume bound keys — rebindListKeys kept our letters unbound).
+	// When an overlay is open, the gate below takes over all non-owned messages (Plan 30).
 	if a.overlay == nil {
 		if pp, ok := a.pages[a.page].(panelPage); ok && listMsg(msg) {
 			cmd := pp.listUpdate(msg)
@@ -155,13 +156,30 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	switch m := msg.(type) {
-	case tea.KeyPressMsg: // bubbletea v2: KeyMsg is an interface; presses are KeyPressMsg
-		if a.overlay != nil { // overlay owns keys until done (form overlays send formDoneMsg)
+	// Plan 30 gate: while an overlay is open it owns EVERYTHING except the
+	// App's own messages. huh advances fields/groups via unexported msgs
+	// (nextFieldMsg/nextGroupMsg) — they can only be routed by "owned
+	// allowlist + forward everything else". owned ⇔ the main switch below
+	// has a case for the type (the listMsg predicate path is NOT a case).
+	// NEW App-owned message types MUST be registered here (checklist item).
+	if a.overlay != nil {
+		switch msg := msg.(type) {
+		case errMsg, actionDoneMsg, formDoneMsg, serveInstalledMsg,
+			serveProbeMsg, deviceCodeIssuedMsg, tokenIssuedMsg:
+			// owned: empty body — fall out of the gate into the switch below
+		case tea.WindowSizeMsg:
+			a.resize(msg.Width, msg.Height)
+			ov, cmd := a.overlay.Update(msg)
+			a.overlay, _ = ov.(overlay) // comma-ok failure = unreachable defense (spy tests lock the type)
+			return a, cmd
+		default:
 			ov, cmd := a.overlay.Update(msg)
 			a.overlay, _ = ov.(overlay)
 			return a, cmd
 		}
+	}
+	switch m := msg.(type) {
+	case tea.KeyPressMsg: // bubbletea v2: KeyMsg is an interface; presses are KeyPressMsg
 		k := m.Key()
 		switch {
 		case k.Code == 'c' && k.Mod == tea.ModCtrl:
@@ -338,7 +356,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.WindowSizeMsg:
-		a.width, a.height = m.Width, m.Height
+		a.resize(m.Width, m.Height) // see gate's WindowSizeMsg branch (sync: both call a.resize)
 		return a, nil
 	case errMsg:
 		a.err = m.err
@@ -407,6 +425,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return a, nil
 }
+
+// resize records the terminal size. Called from BOTH the overlay gate's
+// WindowSizeMsg branch and the no-overlay main-switch case — keep them in
+// sync through this one method (anti-drift, Plan 30 注记 6).
+func (a *App) resize(w, h int) { a.width, a.height = w, h }
 
 // refetchPages reloads the four pages, then re-applies the servers page's ⚠
 // view (warnOnly filter + ⚠-first order + cursor clamp). Without this every

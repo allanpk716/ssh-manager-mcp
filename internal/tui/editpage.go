@@ -10,9 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/cursor"
 	"charm.land/bubbles/v2/list"
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
@@ -33,10 +31,10 @@ const (
 const saveItemTitle = "✓ 保存并退出"
 
 // editPageHeight is the list state's fixed row budget (the page is an
-// overlay; the App does not forward WindowSizeMsg, so the height is fixed
-// at construction and the paginator bounds the rows). 20 rows → ~6 items
-// per page → 3 pages for the 16 edit rows: pagination stays visible (the
-// user's original pain point) without excessive paging.
+// overlay; the App gate forwards WindowSizeMsg and the width follows it, but
+// the height stays this fixed budget and the paginator bounds the rows).
+// 20 rows → ~6 items per page → 3 pages for the 16 edit rows: pagination
+// stays visible (the user's original pain point) without excessive paging.
 const editPageHeight = 20
 
 // serverEditPage is the two-state edit overlay. Pointer semantics (the
@@ -80,10 +78,11 @@ func newServerEditPage(st *store.Store, orig *models.Server, d *serverDraft, wid
 	p.list = list.New(nil, list.NewDefaultDelegate(), max(width-2, 20), editPageHeight)
 	p.list.Title = "编辑服务器: " + name
 	rebindListKeys(&p.list.KeyMap)
-	// The page owns Enter/Esc; the list must not turn a stray q into tea.Quit,
-	// and the built-in filter's async results (FilterMatchesMsg) are dropped
-	// by the App's overlay routing (only KeyPressMsg is forwarded) — so the
-	// filter is off rather than half-broken.
+	// The page owns Enter/Esc; the list must not turn a stray q into tea.Quit.
+	// The built-in filter stays off: its async FilterMatchesMsg now reaches
+	// the page through the App gate, but the page's default branch only feeds
+	// the FIELD-state form — the list state never consumes them, so enabling
+	// the filter would still leave it half-broken.
 	p.list.DisableQuitKeybindings()
 	p.list.SetFilteringEnabled(false)
 	p.list.SetShowStatusBar(false)
@@ -122,13 +121,14 @@ func (p *serverEditPage) refreshItems() {
 func (p *serverEditPage) Title() string { return p.list.Title }
 func (p *serverEditPage) Init() tea.Cmd { return nil }
 
-// Update routes one message. The App forwards ONLY KeyPressMsg to overlays,
-// so the page is fully driven by keys: list state owns Enter (open field /
-// save) and Esc (abort); every other key goes to the list (↑↓ paging).
-// field state forwards to the embedded form and pumps the form's own cmd
-// msgs internally — huh advances fields via nextFieldMsg/nextGroupMsg cmds
-// whose messages the App's routing would drop (the root cause of the old
-// long form's dead in-group navigation).
+// Update routes one message. The App gate forwards every non-owned msg to
+// the overlay (keys, WindowSizeMsg, huh's unexported protocol msgs) and
+// hands the returned cmds back to the runtime: list state owns Enter (open
+// field / save) and Esc (abort), every other key goes to the list (↑↓
+// paging); field state forwards to the embedded form and RETURNS the form's
+// cmds — huh advances fields via nextFieldMsg/nextGroupMsg whose messages
+// now route back through the gate (Plan 30; the synchronous pump that
+// worked around their being dropped is gone).
 func (p *serverEditPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
 	case tea.KeyPressMsg:
@@ -159,8 +159,14 @@ func (p *serverEditPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			p.list.SetSize(max(p.width-2, 20), editPageHeight)
 		}
 		return p, nil
+	default:
+		// Plan 30 layer-2: huh's unexported protocol msgs land here via the
+		// App gate. Field state only — the list state has no form.
+		if p.state == editStateField && p.form != nil {
+			return p.feedForm(msg)
+		}
+		return p, nil
 	}
-	return p, nil
 }
 
 // openCurrent handles Enter on the list state's cursor row: the save
@@ -184,8 +190,7 @@ func (p *serverEditPage) openCurrent() (tea.Model, tea.Cmd) {
 	p.form = p.field.Build(p.d)
 	p.form.WithWidth(formWidth(p.width))
 	p.state = editStateField
-	p.form.Init() // synchronous focus; the cmd's msgs are all droppable here
-	return p, nil
+	return p, p.form.Init() // async: the cmd's msgs (blink/focus) now route back (Plan 30)
 }
 
 // restoreField is field-state Esc: undo this field's edits and return to
@@ -200,27 +205,15 @@ func (p *serverEditPage) restoreField() (tea.Model, tea.Cmd) {
 	return p, nil
 }
 
-// feedForm forwards one message to the embedded form and, for the keys that
-// can advance a huh form, pumps the form's returned cmds back into it: the
-// async hops a real runtime would deliver, and that the App's overlay
-// routing does NOT deliver (only KeyPressMsg is forwarded; huh's
-// nextFieldMsg/nextGroupMsg would die in App.Update). Verified inventory
-// (huh v2.0.3 default keymaps): Enter/Tab (Next/Submit — Input and Confirm
-// both bind them), plus y/Y/n/N on a Confirm field — its Accept/Reject
-// bindings set the value AND return a NextField cmd, so without the pump a
-// single y would flip the value yet leave the form open. The y/Y/n/N arm is
-// gated on the field kind (editField.Confirm): on an Input those are
-// ordinary characters whose cmds are cursor-blink re-arms, and executing
-// one synchronously BLOCKS ~530ms each (the blink context timeout). On
-// completion the page returns to the list and refreshes the dirty marks.
+// feedForm forwards one message to the embedded form and runs the post-update
+// tail (field-level undo on abort; commit + dirty refresh on complete). The
+// returned cmd goes back to the App's routing — the ASYNC round trip replaces
+// the old synchronous pump (Plan 30 T5; the pump's 530ms blink-block hazard
+// class is gone with it).
 func (p *serverEditPage) feedForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	fm, cmd := p.form.Update(msg)
 	if nf, ok := fm.(*huh.Form); ok {
 		p.form = nf
-	}
-	if kp, ok := msg.(tea.KeyPressMsg); ok && (kp.Code == tea.KeyEnter || kp.Code == tea.KeyTab ||
-		(p.field.Confirm && confirmAnswer(kp))) {
-		p.pumpForm(cmd)
 	}
 	if p.form.State == huh.StateAborted { // ctrl+c inside huh: field-level undo, like Esc
 		return p.restoreField()
@@ -231,42 +224,7 @@ func (p *serverEditPage) feedForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p.refreshItems()
 		return p, nil
 	}
-	return p, nil
-}
-
-// confirmAnswer reports whether kp is one of huh Confirm's single-press
-// answer keys (the default ConfirmKeyMap: Accept y/Y, Reject n/N). Matched
-// on the key's String form — the same representation huh's key.Matches
-// compares — so modifier combos like ctrl+y do not count.
-func confirmAnswer(kp tea.KeyPressMsg) bool {
-	switch kp.String() {
-	case "y", "Y", "n", "N":
-		return true
-	}
-	return false
-}
-
-// pumpForm executes a form-returned cmd and feeds its msg back into the
-// form, recursively (tea.BatchMsg unfolds; huh's field/group transitions
-// chain). Cosmetic self-perpetuating ticks (cursor blink) are dropped —
-// chasing them synchronously loops forever and the App drops them anyway.
-func (p *serverEditPage) pumpForm(cmd tea.Cmd) {
-	if cmd == nil {
-		return
-	}
-	switch msg := cmd().(type) {
-	case nil, cursor.BlinkMsg, spinner.TickMsg:
-	case tea.BatchMsg:
-		for _, sub := range msg {
-			p.pumpForm(sub)
-		}
-	default:
-		fm, next := p.form.Update(msg)
-		if nf, ok := fm.(*huh.Form); ok {
-			p.form = nf
-		}
-		p.pumpForm(next)
-	}
+	return p, cmd
 }
 
 // formWidth sizes the embedded single-field form to the terminal: the huh
