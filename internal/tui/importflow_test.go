@@ -546,7 +546,9 @@ func TestImportFlowPathFormLoopAdvances(t *testing.T) {
 	_, cmd := f.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	drain(t, f, cmd) // f implements tea.Model (pointer receiver)
 	if f.state != statePick {
-		t.Fatalf("path form must complete into statePick via the loop, got %d", f.state)
+		srvs, _ := st.ListServers()
+		t.Fatalf("DIAG path form must complete into statePick via the loop, got %d (err=%v formState=%v cands=%d skipN=%d report=%v servers=%d TERM=%q pathVal=%q)",
+			f.state, f.err, f.form.State, len(f.cands), f.skipN, f.report, len(srvs), os.Getenv("TERM"), f.pathVal)
 	}
 }
 
