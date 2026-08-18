@@ -45,7 +45,8 @@ func TestGateOwnedFallsThrough(t *testing.T) {
 	// every owned type must NOT reach the overlay and must run App logic
 	for _, owned := range []tea.Msg{
 		errMsg{}, actionDoneMsg{}, formDoneMsg{},
-		serveInstalledMsg{}, serveProbeMsg{}, tokenIssuedMsg{},
+		serveInstalledMsg{}, serveProbeMsg{}, deviceCodeIssuedMsg{},
+		tokenIssuedMsg{},
 	} {
 		a.overlay = spy
 		m, _ := a.Update(owned)
