@@ -407,6 +407,49 @@ func (f *importFlow) dismissCmd() tea.Cmd {
 	}
 }
 
+// formStepActive is the layer-2 state predicate: only form steps feed the
+// embedded form. The pointer alone is NOT the signal — startBatch switches
+// to stateImporting WITHOUT clearing f.form (stale form, Plan 30 注记 9).
+func formStepActive(s importState) bool {
+	switch s {
+	case statePathForm, statePick, stateSupplement:
+		return true
+	}
+	return false
+}
+
+// feedFormMsg forwards one message to the embedded form and runs the SHARED
+// post-update tail (abort/complete handling). Used by BOTH the KeyPressMsg
+// case and Update's default branch — the two paths must stay identical
+// (Plan 30 注记 2). formDoneMsg production happens HERE on completion.
+func (f *importFlow) feedFormMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+	fm, cmd := f.form.Update(msg)
+	if nf, ok := fm.(*huh.Form); ok {
+		f.form = nf
+	}
+	if f.form.State == huh.StateAborted { // ctrl+c inside huh: same as Esc per state
+		switch f.state {
+		case stateSupplement:
+			f.nextSupplement()
+			return f, f.currentCmd()
+		default:
+			return f, func() tea.Msg { return formDoneMsg{aborted: true} }
+		}
+	}
+	if f.form.State != huh.StateCompleted {
+		return f, cmd
+	}
+	switch f.state {
+	case statePathForm:
+		return f.afterPathForm()
+	case statePick:
+		return f, f.startBatch()
+	case stateSupplement:
+		return f, f.submitSupplement()
+	}
+	return f, cmd
+}
+
 func (f *importFlow) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
 	case tea.KeyPressMsg:
@@ -442,35 +485,19 @@ func (f *importFlow) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if f.form == nil {
 			return f, nil
 		}
-		fm, cmd := f.form.Update(msg)
-		if nf, ok := fm.(*huh.Form); ok {
-			f.form = nf
-		}
-		if f.form.State == huh.StateAborted { // Ctrl+C inside huh: same as Esc per state
-			switch f.state {
-			case stateSupplement:
-				f.nextSupplement()
-				return f, f.currentCmd()
-			default:
-				return f, func() tea.Msg { return formDoneMsg{aborted: true} }
-			}
-		}
-		if f.form.State != huh.StateCompleted {
-			return f, cmd
-		}
-		switch f.state {
-		case statePathForm:
-			return f.afterPathForm()
-		case statePick:
-			return f, f.startBatch()
-		case stateSupplement:
-			return f, f.submitSupplement()
-		}
-		return f, cmd
+		return f.feedFormMsg(m)
 	case importDoneMsg:
 		return f.afterImport(m)
+	default:
+		// Plan 30 layer-2: huh's unexported protocol msgs (nextFieldMsg /
+		// nextGroupMsg — forwarded here by the App gate) reach the form ONLY
+		// in form steps (state predicate — the form pointer stays stale in
+		// stateImporting/stateResult). Non-form steps keep today's drop.
+		if f.form != nil && formStepActive(f.state) {
+			return f.feedFormMsg(msg)
+		}
+		return f, nil
 	}
-	return f, nil
 }
 
 func (f *importFlow) View() tea.View {

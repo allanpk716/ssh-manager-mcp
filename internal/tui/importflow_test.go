@@ -519,3 +519,50 @@ func TestImportFlowNoCandidatesLandsResult(t *testing.T) {
 		t.Fatalf("all-conflict config: state=%v imported=%d skip=%d", f.state, f.importedN, f.skipN)
 	}
 }
+
+// formStepActive is the state predicate for layer-2 forwarding: ONLY form
+// steps feed the embedded form. The form POINTER is not enough — startBatch
+// switches to stateImporting without clearing f.form (stale form, Plan 30 注记 9).
+func TestFormStepActive(t *testing.T) {
+	for s, want := range map[importState]bool{
+		statePathForm: true, statePick: true, stateSupplement: true,
+		stateImporting: false, stateResult: false,
+	} {
+		if got := formStepActive(s); got != want {
+			t.Fatalf("formStepActive(%d) = %v, want %v", s, got, want)
+		}
+	}
+}
+
+// The path form must complete THROUGH Update's default branch: Enter returns
+// a cmd whose produced msgs (nextFieldMsg/nextGroupMsg — unexported, typeless
+// to us) come back via drain and flip the flow to statePick. The prefilled
+// path is overwritten with a temp config — the test must not depend on the
+// host's ~/.ssh/config existing.
+func TestImportFlowPathFormLoopAdvances(t *testing.T) {
+	st := newStore(t)
+	f := newImportFlow(st)
+	f.pathVal = writeImportConfig(t, "")
+	_, cmd := f.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	drain(t, f, cmd) // f implements tea.Model (pointer receiver)
+	if f.state != statePick {
+		t.Fatalf("path form must complete into statePick via the loop, got %d", f.state)
+	}
+}
+
+// stateImporting keeps a stale f.form (startBatch doesn't clear it) — unknown
+// msgs must NOT be fed to it (state predicate, Plan 30 注记 9).
+func TestImportFlowImportingSwallowsUnknown(t *testing.T) {
+	st := newStore(t)
+	f := newImportFlow(st)
+	f.state = stateImporting // simulate mid-batch; f.form still set
+	before := f.form
+	m, cmd := f.Update(probeMsg{})
+	_ = m
+	if cmd != nil {
+		t.Fatal("unknown msg in stateImporting must be a no-op")
+	}
+	if f.form != before {
+		t.Fatal("stale form must not be touched in non-form steps")
+	}
+}
