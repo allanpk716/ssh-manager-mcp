@@ -543,10 +543,19 @@ func TestImportFlowPathFormLoopAdvances(t *testing.T) {
 	st := newStore(t)
 	f := newImportFlow(st)
 	f.pathVal = writeImportConfig(t, "")
+	// huh snapshots the bound pointer's value INTO the input at construction
+	// (the accessor only writes back on Update). Overriding f.pathVal after
+	// newImportFlow alone is invisible to the form — and Enter would write the
+	// DEFAULT path back. Rebuild the form so the input holds the temp path
+	// (this is also why the test must not depend on ~/.ssh/config existing:
+	// CI runners have none — the pre-fix version was a false-green locally).
+	f.form = f.pathForm()
 	_, cmd := f.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	drain(t, f, cmd) // f implements tea.Model (pointer receiver)
 	if f.state != statePick {
-		t.Fatalf("path form must complete into statePick via the loop, got %d", f.state)
+		srvs, _ := st.ListServers()
+		t.Fatalf("path form must complete into statePick via the loop, got %d (err=%v formState=%v cands=%d servers=%d)",
+			f.state, f.err, f.form.State, len(f.cands), len(srvs))
 	}
 }
 
