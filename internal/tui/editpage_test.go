@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/cursor"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -39,22 +41,41 @@ func newEditPageAt(t *testing.T, width int) (*serverEditPage, *store.Store, *mod
 	return newServerEditPage(st, orig, prefill(orig), width), st, orig
 }
 
-// press types one rune into the page (the huh input / list both consume it).
-func press(p *serverEditPage, r rune) tea.Cmd {
-	_, cmd := p.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-	return cmd
+// press types one rune into the page (the huh input / list both consume it)
+// and drains the returned cmd loop the way the runtime would — the async
+// replacement for the old synchronous pump (Plan 30 T5).
+func press(t *testing.T, p *serverEditPage, r rune) *serverEditPage {
+	t.Helper()
+	m, cmd := p.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	pp, ok := m.(*serverEditPage)
+	if !ok {
+		t.Fatalf("press: update returned %T", m)
+	}
+	return drain(t, pp, cmd).(*serverEditPage)
 }
 
-// tap sends a non-printable key (Enter/Esc/arrows) to the page.
-func tap(p *serverEditPage, code rune) tea.Cmd {
-	_, cmd := p.Update(tea.KeyPressMsg{Code: code})
-	return cmd
+// tap sends a non-printable key (Enter/Esc/arrows) and drains the returned
+// cmd loop the way the runtime would (blink/tick dropped) — the async
+// replacement for the old synchronous pump (Plan 30 T5).
+func tap(t *testing.T, p *serverEditPage, code rune) *serverEditPage {
+	t.Helper()
+	m, cmd := p.Update(tea.KeyPressMsg{Code: code})
+	pp, ok := m.(*serverEditPage)
+	if !ok {
+		t.Fatalf("tap: update returned %T", m)
+	}
+	return drain(t, pp, cmd).(*serverEditPage)
 }
 
-// ctrl sends ctrl+<r>.
-func ctrl(p *serverEditPage, r rune) tea.Cmd {
-	_, cmd := p.Update(tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl})
-	return cmd
+// ctrl sends ctrl+<r> and drains the returned cmd loop (Plan 30 T5).
+func ctrl(t *testing.T, p *serverEditPage, r rune) *serverEditPage {
+	t.Helper()
+	m, cmd := p.Update(tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl})
+	pp, ok := m.(*serverEditPage)
+	if !ok {
+		t.Fatalf("ctrl: update returned %T", m)
+	}
+	return drain(t, pp, cmd).(*serverEditPage)
 }
 
 // openField drives the cursor FORWARD to field index i and presses Enter —
@@ -66,9 +87,9 @@ func openField(t *testing.T, p *serverEditPage, i int) {
 		if n > 40 {
 			t.Fatalf("field %d unreachable, cursor stuck at %d", i, p.list.Index())
 		}
-		tap(p, tea.KeyDown)
+		p = tap(t, p, tea.KeyDown)
 	}
-	tap(p, tea.KeyEnter)
+	p = tap(t, p, tea.KeyEnter)
 	if p.state != editStateField || p.field.Key != p.fields[i].Key {
 		t.Fatalf("Enter on field %d must open its form, got state=%v field=%q", i, p.state, p.field.Key)
 	}
@@ -106,7 +127,7 @@ func TestEditPageInitialView(t *testing.T) {
 	// and a prefilled value preview (hw) surface somewhere along the walk.
 	seen := v
 	for i := 0; i < len(p.fields); i++ {
-		tap(p, tea.KeyDown)
+		p = tap(t, p, tea.KeyDown)
 		seen += "\n" + p.View().Content
 	}
 	for _, want := range []string{
@@ -123,7 +144,7 @@ func TestEditPageInitialView(t *testing.T) {
 func TestEditPagePagingAdvances(t *testing.T) {
 	p, _, _ := newEditPageAt(t, 80)
 	for i := 0; i < p.list.Paginator.PerPage; i++ {
-		tap(p, tea.KeyDown)
+		p = tap(t, p, tea.KeyDown)
 	}
 	if p.list.Paginator.Page != 1 {
 		t.Fatalf("cursor past page 1 must advance the page, got %d", p.list.Paginator.Page)
@@ -146,14 +167,14 @@ func TestEditPageFieldEditMarksDirty(t *testing.T) {
 		t.Fatalf("field-state help missing:\n%s", v)
 	}
 	// clear the prefill (cursor sits at its end) and type a new name
-	ctrl(p, 'u')
+	ctrl(t, p, 'u')
 	for _, r := range "renamed" {
-		press(p, r)
+		p = press(t, p, r)
 	}
 	if p.d.Name != "renamed" {
 		t.Fatalf("huh binds &d.Name — typing must mutate the draft live, got %q", p.d.Name)
 	}
-	tap(p, tea.KeyEnter)
+	p = tap(t, p, tea.KeyEnter)
 	if p.state != editStateList {
 		t.Fatalf("completed field form must return to list state, got %v", p.state)
 	}
@@ -176,7 +197,7 @@ func TestEditPageConfirmSingleKeyCommits(t *testing.T) {
 	// y (Accept): completes the form and marks the row dirty
 	p, _, _ := newEditPageAt(t, 80)
 	openField(t, p, 8) // 清除凭据 — the table's only Confirm field
-	press(p, 'y')
+	p = press(t, p, 'y')
 	if p.state != editStateList {
 		t.Fatalf("y on the Confirm must complete the form, got state=%v", p.state)
 	}
@@ -191,7 +212,7 @@ func TestEditPageConfirmSingleKeyCommits(t *testing.T) {
 	// n (Reject): completes with the clean value
 	p2, _, _ := newEditPageAt(t, 80)
 	openField(t, p2, 8)
-	press(p2, 'n')
+	p2 = press(t, p2, 'n')
 	if p2.state != editStateList {
 		t.Fatalf("n on the Confirm must complete the form, got state=%v", p2.state)
 	}
@@ -202,7 +223,7 @@ func TestEditPageConfirmSingleKeyCommits(t *testing.T) {
 	// negative: y on an Input field is a typed character — no completion
 	p3, _, _ := newEditPageAt(t, 80)
 	openField(t, p3, 14) // 备注 — prefill is ""
-	press(p3, 'y')
+	p3 = press(t, p3, 'y')
 	if p3.state != editStateField {
 		t.Fatalf("y on an Input field must stay in field state, got %v", p3.state)
 	}
@@ -218,14 +239,14 @@ func TestEditPageFieldEscRestores(t *testing.T) {
 	snap := snapshotDraft(p.d)
 
 	openField(t, p, 9) // 硬件
-	ctrl(p, 'u')
+	ctrl(t, p, 'u')
 	for _, r := range "JUNK-VALUE" {
-		press(p, r)
+		p = press(t, p, r)
 	}
 	if p.d.Hardware != "JUNK-VALUE" {
 		t.Fatalf("precondition: draft mutated, got %q", p.d.Hardware)
 	}
-	tap(p, tea.KeyEsc)
+	p = tap(t, p, tea.KeyEsc)
 	if p.state != editStateList {
 		t.Fatalf("field Esc must return to list state, got %v", p.state)
 	}
@@ -242,17 +263,17 @@ func TestEditPageFieldEscRestores(t *testing.T) {
 
 	// committed-then-reenter: Esc restores the COMMITTED value, not orig.
 	openField(t, p, 9)
-	ctrl(p, 'u')
+	ctrl(t, p, 'u')
 	for _, r := range "committed" {
-		press(p, r)
+		p = press(t, p, r)
 	}
-	tap(p, tea.KeyEnter)
+	p = tap(t, p, tea.KeyEnter)
 	openField(t, p, 9)
-	ctrl(p, 'u')
+	ctrl(t, p, 'u')
 	for _, r := range "X" {
-		press(p, r)
+		p = press(t, p, r)
 	}
-	tap(p, tea.KeyEsc)
+	p = tap(t, p, tea.KeyEsc)
 	if p.d.Hardware != "committed" {
 		t.Fatalf("second Esc must restore the post-commit value, got %q", p.d.Hardware)
 	}
@@ -266,12 +287,12 @@ func TestEditPageSecretFieldEscRestores(t *testing.T) {
 	p, _, _ := newEditPageAt(t, 80)
 	openField(t, p, 4) // 密码 — edit-mode prefill is "" (keep existing)
 	for _, r := range "PW-ENTRY-SENTINEL" {
-		press(p, r)
+		p = press(t, p, r)
 	}
 	if p.d.Password == "" {
 		t.Fatal("precondition: password typed")
 	}
-	tap(p, tea.KeyEsc)
+	p = tap(t, p, tea.KeyEsc)
 	if p.d.Password != "" {
 		t.Fatalf("secret field Esc must restore the entry snapshot (empty), got %q", p.d.Password)
 	}
@@ -287,17 +308,18 @@ func TestEditPageSaveItemFiresSubmit(t *testing.T) {
 	p.submit = func() tea.Cmd { captured = true; return nil }
 
 	openField(t, p, 9) // dirty one field first — a real save scenario
-	ctrl(p, 'u')
+	ctrl(t, p, 'u')
 	for _, r := range "2x4090" {
-		press(p, r)
+		p = press(t, p, r)
 	}
-	tap(p, tea.KeyEnter)
+	p = tap(t, p, tea.KeyEnter)
 
-	// walk to the sentinel (last item) and Enter
+	// walk to the sentinel (last item) and Enter. Sent by hand — the cmd is
+	// the assertion target (tap would drain it away).
 	for p.list.Index() != len(p.fields) {
-		tap(p, tea.KeyDown)
+		p = tap(t, p, tea.KeyDown)
 	}
-	cmd := tap(p, tea.KeyEnter)
+	_, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("sentinel Enter must produce a formDoneMsg cmd")
 	}
@@ -314,15 +336,15 @@ func TestEditPageSaveItemFiresSubmit(t *testing.T) {
 func TestEditPageSaveEndToEnd(t *testing.T) {
 	p, st, _ := newEditPageAt(t, 80)
 	openField(t, p, 9)
-	ctrl(p, 'u')
+	ctrl(t, p, 'u')
 	for _, r := range "2x4090" {
-		press(p, r)
+		p = press(t, p, r)
 	}
-	tap(p, tea.KeyEnter)
+	p = tap(t, p, tea.KeyEnter)
 	for p.list.Index() != len(p.fields) {
-		tap(p, tea.KeyDown)
+		p = tap(t, p, tea.KeyDown)
 	}
-	cmd := tap(p, tea.KeyEnter)
+	_, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // by hand: the cmd is the assertion target
 	done, ok := cmd().(formDoneMsg)
 	if !ok || done.aborted || done.after == nil {
 		t.Fatalf("end-to-end save must chain submitServer via after, got %#v", done)
@@ -340,12 +362,12 @@ func TestEditPageSaveEndToEnd(t *testing.T) {
 func TestEditPageListEscAbortsNoWrite(t *testing.T) {
 	p, st, _ := newEditPageAt(t, 80)
 	openField(t, p, 9)
-	ctrl(p, 'u')
+	ctrl(t, p, 'u')
 	for _, r := range "SHOULD-NOT-PERSIST" {
-		press(p, r)
+		p = press(t, p, r)
 	}
-	tap(p, tea.KeyEnter) // committed to draft — dirty
-	cmd := tap(p, tea.KeyEsc)
+	p = tap(t, p, tea.KeyEnter)                           // committed to draft — dirty
+	_, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEsc}) // by hand: the cmd is the assertion target
 	if cmd == nil {
 		t.Fatal("list Esc must produce a formDoneMsg cmd")
 	}
@@ -364,10 +386,10 @@ func TestEditPageSecretMaskingSentinel(t *testing.T) {
 	p, _, _ := newEditPageAt(t, 80)
 	openField(t, p, 4) // 密码
 	for _, r := range "PW-FIELD-SENTINEL" {
-		press(p, r)
+		p = press(t, p, r)
 	}
-	tap(p, tea.KeyEnter)  // commit → back to list, dirty + masked preview
-	v := p.View().Content // cursor at 4 → its page shows the 密码 row
+	p = tap(t, p, tea.KeyEnter) // commit → back to list, dirty + masked preview
+	v := p.View().Content       // cursor at 4 → its page shows the 密码 row
 	if strings.Contains(v, "SENTINEL") {
 		t.Fatalf("secret plaintext leaked into the list view:\n%s", v)
 	}
@@ -377,9 +399,9 @@ func TestEditPageSecretMaskingSentinel(t *testing.T) {
 	// same for 密钥口令 — then its page also shows the clean sudo status
 	openField(t, p, 6)
 	for _, r := range "KP-FIELD-SENTINEL" {
-		press(p, r)
+		p = press(t, p, r)
 	}
-	tap(p, tea.KeyEnter)
+	p = tap(t, p, tea.KeyEnter)
 	v = p.View().Content
 	if strings.Contains(v, "SENTINEL") {
 		t.Fatalf("secret plaintext leaked into the list view:\n%s", v)
@@ -397,7 +419,7 @@ func TestEditPageSecretFieldStateMasked(t *testing.T) {
 	p, _, _ := newEditPageAt(t, 80)
 	openField(t, p, 6) // 密钥口令 — EchoModePassword
 	for _, r := range "KP-FIELD-SENTINEL" {
-		press(p, r)
+		p = press(t, p, r)
 	}
 	if v := p.View().Content; strings.Contains(v, "SENTINEL") {
 		t.Fatalf("EchoModePassword field view leaked the plaintext:\n%s", v)
@@ -433,5 +455,66 @@ func TestEditPageWidthFollowsResize(t *testing.T) {
 		if lw := lipgloss.Width(line); lw > 60 {
 			t.Fatalf("post-resize line %d is %d cols (> 60):\n%s", i, lw, p.View().Content)
 		}
+	}
+}
+
+// ⑧ blink 链路存活（Plan 30 T5）：进字段态的 Enter 发生在 list 态（field 0 是
+// 初始光标,无需走 ↓;field 态的 Enter 是提交不是打开）——openCurrent 必须
+// 返回 form 的 Init cmd;展开 Batch 找到 cursor.BlinkMsg,喂回 page 必须
+// 返回新的 cmd（自续,否则光标冻结）——"cursor blinks" 免费修复的锁定。
+func TestEditPageFieldBlinkChainAlive(t *testing.T) {
+	p, _, _ := newEditPageAt(t, 80)
+	m2, cmd2 := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	pp, ok := m2.(*serverEditPage)
+	if !ok {
+		t.Fatalf("update returned %T", m2)
+	}
+	p = pp
+	if p.state != editStateField {
+		t.Fatalf("Enter on field 0 must enter field state, got %v", p.state)
+	}
+	if cmd2 == nil {
+		t.Fatal("opening a field must return the form's Init cmd")
+	}
+	// unfold batch/sequence, find a BlinkMsg, feed it, expect another cmd
+	queue := []tea.Cmd{cmd2}
+	var fed bool
+	for steps := 0; len(queue) > 0 && steps < 50; steps++ {
+		c := queue[0]
+		queue = queue[1:]
+		if c == nil {
+			continue
+		}
+		msg := c()
+		switch msg := msg.(type) {
+		case tea.BatchMsg:
+			queue = append(queue, msg...)
+		case cursor.BlinkMsg:
+			m, next := p.Update(msg)
+			pp2, ok2 := m.(*serverEditPage)
+			if !ok2 {
+				t.Fatalf("update returned %T", m)
+			}
+			p = pp2
+			fed = true
+			if next == nil {
+				t.Fatal("blink must re-arm (self-perpetuating) — cursor would freeze")
+			}
+		default:
+			// huh's Form.Init returns tea.Sequence(...), whose execution
+			// surfaces as the runtime-internal UNEXPORTED tea.sequenceMsg
+			// ([]tea.Cmd) — unfold by reflection, the same flattening the
+			// runtime's execSequenceMsg does natively.
+			if rv := reflect.ValueOf(msg); rv.Kind() == reflect.Slice {
+				for i := 0; i < rv.Len(); i++ {
+					if sub, ok := rv.Index(i).Interface().(tea.Cmd); ok {
+						queue = append(queue, sub)
+					}
+				}
+			}
+		}
+	}
+	if !fed {
+		t.Fatal("field-state Init cmd chain must produce a cursor.BlinkMsg")
 	}
 }
