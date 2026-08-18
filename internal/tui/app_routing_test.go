@@ -102,3 +102,49 @@ func TestAppLoopProfileFormCompletes(t *testing.T) {
 		t.Fatalf("profile gp must be persisted, got %+v", profiles)
 	}
 }
+
+// The 3-group server form must complete through the routed loop. Field order
+// (forms.go newServerForm): 名称/Host/SSH用户/端口 | 密码/私钥路径/密钥口令/
+// sudo密码 | 硬件/位置/… (structuredFields) — all optional after the first 3.
+// 端口 field pre-或空值: type "22" (valid in both cases).
+func TestAppLoopServerFormCompletes(t *testing.T) {
+	a, st := seedStoreApp(t)
+	m, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m, cmd := m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}) // servers 新增
+	if cmd == nil {
+		t.Fatal("'a' must open the server form")
+	}
+	m = drain(t, m, cmd)
+	typeWord := func(word string) {
+		for _, r := range word {
+			m, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+		var c tea.Cmd
+		m, c = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m = drain(t, m, c)
+	}
+	typeWord("web")      // 名称
+	typeWord("10.0.0.9") // Host
+	typeWord("ops")      // SSH 用户
+	typeWord("22")       // 端口(pre-fill "22" 或空,两种输入皆合法)
+	// 其余字段全可选:Enter-only 推进直至表单完成(有界)
+	for i := 0; i < 30 && m.(App).overlay != nil; i++ {
+		var c tea.Cmd
+		m, c = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m = drain(t, m, c)
+	}
+	if m.(App).overlay != nil {
+		if ov, ok := m.(App).overlay.(*formOverlay); ok {
+			t.Fatalf("3-group form must complete within the Enter bound\nform state: %+v\nview:\n%s",
+				ov.form.State, ov.View().Content)
+		}
+		t.Fatalf("3-group form must complete within the Enter bound, overlay still %T", m.(App).overlay)
+	}
+	servers, err := st.ListServers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 2 {
+		t.Fatalf("seeded gpu + new web expected, got %d", len(servers))
+	}
+}
