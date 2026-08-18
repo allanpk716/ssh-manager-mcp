@@ -24,9 +24,9 @@ type spyOverlay struct {
 	swap *spyOverlay
 }
 
-func (s *spyOverlay) Title() string             { return "spy" }
-func (s *spyOverlay) Init() tea.Cmd             { return nil }
-func (s *spyOverlay) View() tea.View            { return tea.NewView("spy") }
+func (s *spyOverlay) Title() string  { return "spy" }
+func (s *spyOverlay) Init() tea.Cmd  { return nil }
+func (s *spyOverlay) View() tea.View { return tea.NewView("spy") }
 func (s *spyOverlay) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	s.got = append(s.got, msg)
 	if s.swap != nil {
