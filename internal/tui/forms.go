@@ -130,15 +130,14 @@ func grantOptions(servers []*models.Server) []huh.Option[string] {
 }
 
 // newGrantForm builds the grant multi-select; chosen receives the selected
-// server ids on submit. v0.8.3 #3A: the caller PRE-FILLS chosen with the
-// profile's existing grants — huh's Accessor() marks matching options checked
-// at construction (options must be set before .Value, which our chain order
-// satisfies). Submit stays ADDITIVE: unchecking an existing grant does NOT
-// remove it (GrantServers is INSERT OR IGNORE; removal = backlog #13).
+// server ids on submit. v0.8.4: FULL-SYNC semantics — the caller pre-fills
+// chosen with the profile's existing grants (huh's Accessor() marks matching
+// options checked at construction), and submit REPLACES the grant set:
+// unchecking removes the grant, checking adds it (store SyncServers).
 func newGrantForm(servers []*models.Server, chosen *[]string) *huh.Form {
 	return huh.NewForm(huh.NewGroup(
 		huh.NewMultiSelect[string]().
-			Title(fmt.Sprintf("授权服务器 · 共 %d 台（空格勾选，回车提交；取消勾选不移除已有授权）", len(servers))).
+			Title(fmt.Sprintf("授权服务器 · 共 %d 台（勾选=授权集；空格勾选，回车提交——取消勾选并提交将移除）", len(servers))).
 			Options(grantOptions(servers)...).Value(chosen),
 	))
 }
@@ -187,14 +186,15 @@ func newCacheTokenForm(d *deviceDraft) *huh.Form {
 	))
 }
 
-// submitGrant grants the chosen server ids to profileID.
+// submitGrant REPLACES the profile's grant set with the chosen server ids
+// (v0.8.4 full-sync: unchecked = removed; store SyncServers is transactional).
 func submitGrant(st *store.Store, profileID, profileName string, ids []string) tea.Cmd {
 	return doAction(st, func() (string, error) {
-		if len(ids) == 0 {
-			return "未选择任何服务器", nil
+		added, removed, err := st.SyncServers(profileID, ids)
+		if err != nil {
+			return "", err
 		}
-		desc := fmt.Sprintf("已授权 %d 台服务器到 %s", len(ids), profileName)
-		return desc, st.GrantServers(profileID, ids)
+		return fmt.Sprintf("授权已同步 → %s:共 %d 台(新增 %d,移除 %d)", profileName, len(ids), added, removed), nil
 	})
 }
 

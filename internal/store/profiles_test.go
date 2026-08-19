@@ -144,3 +144,97 @@ func TestListProfiles(t *testing.T) {
 		t.Fatalf("wanted profiles 'a' and 'b', got names %v", names)
 	}
 }
+
+// v0.8.4: SyncServers is the full-sync grant API — unchecked rows removed,
+// missing added, all-or-nothing on unknown ids; empty set clears.
+func TestSyncServersReplacesGrantSet(t *testing.T) {
+	s := newTestStore(t)
+	cid := mustCred(t, s, models.CredPassword, "pw")
+	a, _ := s.AddServer(&models.Server{Name: "a", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	b, _ := s.AddServer(&models.Server{Name: "b", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	c, _ := s.AddServer(&models.Server{Name: "c", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	pid, _ := s.AddProfile("dev")
+	if err := s.GrantServers(pid, []string{a, b}); err != nil {
+		t.Fatal(err)
+	}
+
+	added, removed, err := s.SyncServers(pid, []string{a, c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added != 1 || removed != 1 {
+		t.Fatalf("added=%d removed=%d, want 1/1", added, removed)
+	}
+	got, _ := s.ServersForProfile(pid)
+	set := map[string]bool{}
+	for _, id := range got {
+		set[id] = true
+	}
+	if len(got) != 2 || !set[a] || !set[c] {
+		t.Fatalf("grants = %v, want {a c}", got)
+	}
+
+	// empty set = deliberate revoke-all
+	added, removed, err = s.SyncServers(pid, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added != 0 || removed != 2 {
+		t.Fatalf("clear: added=%d removed=%d, want 0/2", added, removed)
+	}
+	got, _ = s.ServersForProfile(pid)
+	if len(got) != 0 {
+		t.Fatalf("grants after clear = %v", got)
+	}
+}
+
+func TestSyncServersUnknownIDFailsFast(t *testing.T) {
+	s := newTestStore(t)
+	cid := mustCred(t, s, models.CredPassword, "pw")
+	a, _ := s.AddServer(&models.Server{Name: "a", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	pid, _ := s.AddProfile("dev")
+	if err := s.GrantServers(pid, []string{a}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.SyncServers(pid, []string{a, "bogus"}); err == nil {
+		t.Fatal("unknown server id must fail the sync")
+	}
+	got, _ := s.ServersForProfile(pid)
+	if len(got) != 1 || got[0] != a {
+		t.Fatalf("failed sync must change nothing, got %v", got)
+	}
+}
+
+func TestDeleteProfile(t *testing.T) {
+	s := newTestStore(t)
+	cid := mustCred(t, s, models.CredPassword, "pw")
+	a, _ := s.AddServer(&models.Server{Name: "a", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	pid, _ := s.AddProfile("dev")
+	if err := s.GrantServers(pid, []string{a}); err != nil {
+		t.Fatal(err)
+	}
+
+	// referenced by a project → refused, project named in the error
+	if _, _, err := s.AddProject("agent-x", pid); err != nil {
+		t.Fatal(err)
+	}
+	err := s.DeleteProfile(pid)
+	if err == nil || !strings.Contains(err.Error(), "agent-x") {
+		t.Fatalf("referenced profile must be refused with the project named, got %v", err)
+	}
+
+	// unreferenced profile → deleted, grant rows gone with it
+	pid2, _ := s.AddProfile("free")
+	if err := s.GrantServers(pid2, []string{a}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteProfile(pid2); err != nil {
+		t.Fatal(err)
+	}
+	if ps, _ := s.ListProfiles(); len(ps) != 1 {
+		t.Fatalf("profiles after delete = %v", ps)
+	}
+	if got, _ := s.ServersForProfile(pid2); len(got) != 0 {
+		t.Fatalf("grant rows must be deleted with the profile, got %v", got)
+	}
+}
