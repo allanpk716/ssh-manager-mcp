@@ -3,6 +3,7 @@ package store
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -236,5 +237,30 @@ func TestDeleteProfile(t *testing.T) {
 	}
 	if got, _ := s.ServersForProfile(pid2); len(got) != 0 {
 		t.Fatalf("grant rows must be deleted with the profile, got %v", got)
+	}
+}
+
+// v0.8.5: List/Get must fill the timestamps — they were never selected, so
+// the TUI rendered Go zero time (0001-01-01) for every profile.
+func TestProfileTimestampsFilled(t *testing.T) {
+	s := newTestStore(t)
+	before := time.Now().Add(-time.Minute)
+	pid, err := s.AddProfile("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := s.ListProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 1 || ps[0].CreatedAt.Before(before) || ps[0].UpdatedAt.Before(before) {
+		t.Fatalf("List timestamps must be ~now, got %+v", ps)
+	}
+	gp, err := s.GetProfile(pid)
+	if err != nil || gp == nil {
+		t.Fatal(err)
+	}
+	if gp.CreatedAt.Before(before) {
+		t.Fatalf("GetProfile CreatedAt = %v, want ~now", gp.CreatedAt)
 	}
 }
