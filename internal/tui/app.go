@@ -204,7 +204,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.startUpgrade()
 			return a, a.overlay.Init()
 		case k.Text == "a", k.Text == "e", k.Text == "d", k.Text == "g",
-			k.Text == "i", k.Text == "!":
+			k.Text == "i", k.Text == "!", k.Text == "x":
 			// F2 (fix round): while an upgrade segment is in flight (install/
 			// probe/deviceIssue — overlay==nil windows), page action keys are
 			// suppressed: opening a form overlay here would be clobbered by the
@@ -328,6 +328,27 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 							return doAction(a.st, func() (string, error) {
 								return "已吊销 " + cur.Name, a.st.SetProjectStatus(cur.ID, models.ProjectRevoked)
+							})
+						})
+					}
+				case "x": // hard-delete a REVOKED row (v0.8.7: revoke first,
+					// then delete — two deliberate steps). Active rows are
+					// refused with a hint instead of a form. History stays in
+					// the audit sidecar; only the row disappears.
+					if cur := pj.current(); cur != nil {
+						if cur.Status != models.ProjectRevoked {
+							a.status = "仅已吊销的 project 可删除:先按 d 吊销"
+							return a, nil
+						}
+						confirm := false
+						form := huh.NewForm(huh.NewGroup(huh.NewConfirm().
+							Title(fmt.Sprintf("彻底删除已吊销的 %q？（移除记录；历史审计保留）", cur.Name)).Value(&confirm)))
+						a.overlay = newFormOverlay("删除 project", form, func() tea.Cmd {
+							if !confirm {
+								return nil
+							}
+							return doAction(a.st, func() (string, error) {
+								return "已删除 " + cur.Name, a.st.DeleteProject(cur.ID)
 							})
 						})
 					}
@@ -632,7 +653,7 @@ func (a App) footer() string {
 	case pageProfiles:
 		keys = "[a]新增 [g]授权 [d]删除"
 	case pageProjects:
-		keys = "[a]新增 [e]轮换 [d]吊销"
+		keys = "[a]新增 [e]轮换 [d]吊销 [x]删除已吊销"
 	case pageTokens:
 		keys = "[a]签发 [d]吊销"
 	}
