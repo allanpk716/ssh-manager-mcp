@@ -264,3 +264,45 @@ func TestProfileTimestampsFilled(t *testing.T) {
 		t.Fatalf("GetProfile CreatedAt = %v, want ~now", gp.CreatedAt)
 	}
 }
+
+// v0.8.6: a REAL grant-set change must bump profiles.updated_at (same tx);
+// a no-op must not. The TUI's 更新 column reads exactly this column.
+// Timestamps are Unix-SECOND granularity — the sleeps step across second
+// boundaries so strictly-After assertions are sound.
+func TestGrantChangesBumpUpdatedAt(t *testing.T) {
+	s := newTestStore(t)
+	cid := mustCred(t, s, models.CredPassword, "pw")
+	a, _ := s.AddServer(&models.Server{Name: "a", Host: "h", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	pid, _ := s.AddProfile("dev")
+	before, _ := s.GetProfile(pid)
+
+	time.Sleep(1100 * time.Millisecond)
+	if err := s.GrantServers(pid, []string{a}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.GetProfile(pid)
+	if !after.UpdatedAt.After(before.UpdatedAt) {
+		t.Fatalf("GrantServers must bump updated_at: %v -> %v", before.UpdatedAt, after.UpdatedAt)
+	}
+
+	// no-op sync (same set) keeps the timestamp
+	_, _, err := s.SyncServers(pid, []string{a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noop, _ := s.GetProfile(pid)
+	if !noop.UpdatedAt.Equal(after.UpdatedAt) {
+		t.Fatalf("no-op sync must NOT bump updated_at: %v -> %v", after.UpdatedAt, noop.UpdatedAt)
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+	// removal bumps it again
+	_, _, err = s.SyncServers(pid, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared, _ := s.GetProfile(pid)
+	if !cleared.UpdatedAt.After(noop.UpdatedAt) {
+		t.Fatalf("removal must bump updated_at: %v -> %v", noop.UpdatedAt, cleared.UpdatedAt)
+	}
+}

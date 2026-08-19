@@ -85,6 +85,9 @@ func (s *Store) ListProfiles() ([]*models.Profile, error) {
 // INSERT runs — fail-fast with the offending id named, so nothing is granted
 // and no half-granted profile is left for a caller retry to orphan. The FK
 // constraint stays as the fail-closed backstop behind the precheck.
+// v0.8.6: an ACTUAL insert (not an ignored duplicate) bumps
+// profiles.updated_at in the same tx — the grant set IS profile state, and
+// the TUI's 更新 column must reflect grant changes.
 func (s *Store) GrantServers(profileID string, serverIDs []string) error {
 	if s.readOnly {
 		return ErrReadOnly
@@ -102,11 +105,21 @@ func (s *Store) GrantServers(profileID string, serverIDs []string) error {
 			return err
 		}
 	}
+	added := 0
 	for _, sid := range serverIDs {
-		if _, err := tx.Exec(
+		res, err := tx.Exec(
 			`INSERT OR IGNORE INTO profile_servers (profile_id, server_id) VALUES (?,?)`,
 			profileID, sid,
-		); err != nil {
+		)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			added++
+		}
+	}
+	if added > 0 {
+		if _, err := tx.Exec(`UPDATE profiles SET updated_at=? WHERE id=?`, now(), profileID); err != nil {
 			return err
 		}
 	}
@@ -198,6 +211,14 @@ func (s *Store) SyncServers(profileID string, ids []string) (int, int, error) {
 			return 0, 0, err
 		}
 		removed++
+	}
+	// v0.8.6: the grant set IS profile state — a real change (either
+	// direction) bumps updated_at in the same tx; a no-op sync keeps the old
+	// timestamp (nothing changed, nothing to advertise).
+	if added+removed > 0 {
+		if _, err := tx.Exec(`UPDATE profiles SET updated_at=? WHERE id=?`, now(), profileID); err != nil {
+			return 0, 0, err
+		}
 	}
 	return added, removed, tx.Commit()
 }
