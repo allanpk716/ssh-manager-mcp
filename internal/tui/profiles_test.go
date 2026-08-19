@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
 	"ssh-manager-mcp/internal/models"
@@ -52,7 +53,7 @@ func TestGrantOptions(t *testing.T) {
 	if len(opts) != 2 {
 		t.Fatalf("opts: %d", len(opts))
 	}
-	for i, want := range []struct{ key, value string }{{"gpu", "id-a"}, {"web", "id-b"}} {
+	for i, want := range []struct{ key, value string }{{"1. gpu", "id-a"}, {"2. web", "id-b"}} {
 		if opts[i].Key != want.key || opts[i].Value != want.value {
 			t.Fatalf("opt[%d] = (%s, %s), want (%s, %s)", i, opts[i].Key, opts[i].Value, want.key, want.value)
 		}
@@ -64,6 +65,35 @@ func TestNewGrantForm(t *testing.T) {
 	f := newGrantForm([]*models.Server{{ID: "id-a", Name: "gpu"}}, &chosen)
 	if f == nil {
 		t.Fatal("nil form")
+	}
+}
+
+// v0.8.3 #3A: a chosen pre-filled with existing grants must arrive CHECKED —
+// huh's Accessor() marks matching options selected at construction. Prove it
+// behaviorally: submit untouched (Enter) through the routed loop; a working
+// preselection writes the same ids back, an empty start would write [].
+// The loop stops at formDoneMsg — in production the APP consumes it to close
+// the overlay (driving formOverlay as the top model would loop on it).
+// (formOverlay adapts *huh.Form — whose Update returns huh.Model — to tea.Model,
+// same cast feedForm does.)
+func TestNewGrantFormPreselectsExisting(t *testing.T) {
+	chosen := []string{"id-a"}
+	f := newGrantForm([]*models.Server{{ID: "id-a", Name: "gpu"}, {ID: "id-b", Name: "web"}}, &chosen)
+	o := newFormOverlay("授权", f, func() tea.Cmd { return nil })
+	_, cmd := o.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	for steps := 0; cmd != nil && steps < 50; steps++ {
+		msg := cmd()
+		if _, done := msg.(formDoneMsg); done {
+			break // the App's close-the-overlay handoff — end of the loop here
+		}
+		_, next := o.Update(msg)
+		cmd = next
+	}
+	if o.form.State != huh.StateCompleted {
+		t.Fatalf("form state = %v, want completed", o.form.State)
+	}
+	if len(chosen) != 1 || chosen[0] != "id-a" {
+		t.Fatalf("preselected grant must survive an untouched submit, got %v", chosen)
 	}
 }
 
@@ -87,6 +117,15 @@ func TestProfilesPage_DetailMemberNames(t *testing.T) {
 		if !strings.Contains(d, want) {
 			t.Fatalf("detail missing %q:\n%s", want, d)
 		}
+	}
+	// v0.8.3 #2: the ROW description must show the member count too —
+	// ListProfiles never fills ServerIDs, so newProfilesPage resolves them
+	// (pre-fix this read "0 台服务器" no matter the grants).
+	if got := (profileItem{pr: p.items[0]}).Description(); !strings.Contains(got, "2 台服务器") {
+		t.Fatalf("row description must show the member count, got %q", got)
+	}
+	if len(p.items[0].ServerIDs) != 2 {
+		t.Fatalf("ServerIDs = %d, want 2 (resolved at page construction)", len(p.items[0].ServerIDs))
 	}
 }
 

@@ -117,23 +117,28 @@ func newProfileForm(name *string) *huh.Form {
 	))
 }
 
-// grantOptions builds MultiSelect options for the grant form: label = server
-// name (display), value = server id (GrantServers wants ids; names are not
-// unique so they must not be used as values).
+// grantOptions builds MultiSelect options for the grant form: label = "N. name"
+// (1-based position — the owner's 第几个/共几个 ask, v0.8.3 #1), value =
+// server id (GrantServers wants ids; names are not unique so they must not be
+// used as values).
 func grantOptions(servers []*models.Server) []huh.Option[string] {
 	opts := make([]huh.Option[string], len(servers))
 	for i, s := range servers {
-		opts[i] = huh.NewOption(s.Name, s.ID)
+		opts[i] = huh.NewOption(fmt.Sprintf("%d. %s", i+1, s.Name), s.ID)
 	}
 	return opts
 }
 
 // newGrantForm builds the grant multi-select; chosen receives the selected
-// server ids on submit. v1: selection starts EMPTY — grant is additive and
-// INSERT OR IGNORE makes re-grants harmless, so pre-selection adds no safety.
+// server ids on submit. v0.8.3 #3A: the caller PRE-FILLS chosen with the
+// profile's existing grants — huh's Accessor() marks matching options checked
+// at construction (options must be set before .Value, which our chain order
+// satisfies). Submit stays ADDITIVE: unchecking an existing grant does NOT
+// remove it (GrantServers is INSERT OR IGNORE; removal = backlog #13).
 func newGrantForm(servers []*models.Server, chosen *[]string) *huh.Form {
 	return huh.NewForm(huh.NewGroup(
-		huh.NewMultiSelect[string]().Title("授权服务器（空格勾选，回车提交）").
+		huh.NewMultiSelect[string]().
+			Title(fmt.Sprintf("授权服务器 · 共 %d 台（空格勾选，回车提交；取消勾选不移除已有授权）", len(servers))).
 			Options(grantOptions(servers)...).Value(chosen),
 	))
 }

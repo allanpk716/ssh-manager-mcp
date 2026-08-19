@@ -244,7 +244,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							a.status = "无服务器可授权"
 							return a, nil
 						}
+						// v0.8.3 #3A: pre-fill with the profile's EXISTING grants —
+						// huh's Accessor() marks matching options checked at
+						// construction, so re-entering `g` shows what's already
+						// granted. Submit stays additive (no removal path).
 						chosen := []string{}
+						if ids, gerr := a.st.ServersForProfile(cur.ID); gerr == nil {
+							chosen = ids
+						}
 						a.overlay = newFormOverlay("授权服务器 → "+cur.Name, newGrantForm(servers, &chosen), func() tea.Cmd {
 							return submitGrant(a.st, cur.ID, cur.Name, chosen)
 						})
