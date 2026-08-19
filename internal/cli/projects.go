@@ -20,8 +20,42 @@ func newProjectsCmd() *cobra.Command {
 		projectsStatusCmd("disable", "Disable a project's token (reversible via enable; Lazy — next mcp spawn rejects it)", models.ProjectDisabled, "project.disable"),
 		projectsStatusCmd("enable", "Re-enable a disabled project", models.ProjectActive, "project.enable"),
 		projectsStatusCmd("revoke", "Permanently revoke a project (token rejected; hidden from default ls)", models.ProjectRevoked, "project.revoke"),
+		projectsRemoveCmd(),
 	)
 	return cmd
+}
+
+// projectsRemoveCmd hard-deletes a REVOKED project row (owner's v0.8.7
+// ruling: revoke first, then delete). Audited like the status commands —
+// the audit sidecar keeps the history the row deletion drops.
+func projectsRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove [name]",
+		Args:  cobra.ExactArgs(1),
+		Short: "Hard-delete a REVOKED project row (audit history stays)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := openUnlockedStore()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			proj, err := s.GetProjectByName(args[0])
+			if err != nil {
+				return err
+			}
+			if proj == nil {
+				return fmt.Errorf("project %q not found", args[0])
+			}
+			if err := s.DeleteProject(proj.ID); err != nil {
+				return err
+			}
+			if err := s.WriteAudit(store.AuditRow{TS: time.Now(), ProjectID: proj.ID, Action: "project.delete", Status: "ok"}); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "deleted project %s\n", proj.Name)
+			return nil
+		},
+	}
 }
 
 func projectsAddCmd() *cobra.Command {

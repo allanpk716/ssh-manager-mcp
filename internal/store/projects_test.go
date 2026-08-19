@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -144,5 +145,41 @@ func TestProjectTimestampsFilled(t *testing.T) {
 	}
 	if len(ps) != 1 || ps[0].CreatedAt.IsZero() || ps[0].UpdatedAt.IsZero() {
 		t.Fatalf("ListProjects timestamps must be filled, got %+v", ps)
+	}
+}
+
+// v0.8.7: DeleteProject is the two-step cleanup — active rows are refused
+// (revoke first), revoked rows are hard-deleted (name becomes reusable,
+// nothing references the row).
+func TestDeleteProjectRevokedOnly(t *testing.T) {
+	s := newTestStore(t)
+	pid, _ := s.AddProfile("dev")
+	projID, _, err := s.AddProject("agent", pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// active → refused with a pointer to the revoke step
+	if err := s.DeleteProject(projID); err == nil || !strings.Contains(err.Error(), "吊销") {
+		t.Fatalf("active project must be refused with a revoke hint, got %v", err)
+	}
+
+	// revoke → delete → row gone, name reusable
+	if err := s.SetProjectStatus(projID, models.ProjectRevoked); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteProject(projID); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s.GetProjectByName("agent"); p != nil {
+		t.Fatalf("row must be gone, got %+v", p)
+	}
+	if _, _, err := s.AddProject("agent", pid); err != nil {
+		t.Fatalf("name must be reusable after delete: %v", err)
+	}
+
+	// unknown id → named error
+	if err := s.DeleteProject("nope"); err == nil {
+		t.Fatal("unknown id must error")
 	}
 }

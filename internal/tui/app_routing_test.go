@@ -6,9 +6,12 @@ package tui
 // green, real terminal dead".
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 func TestGateForwardsUnknownAndHandsCmdBack(t *testing.T) {
@@ -147,5 +150,54 @@ func TestAppLoopServerFormCompletes(t *testing.T) {
 	}
 	if len(servers) != 2 {
 		t.Fatalf("seeded gpu + new web expected, got %d", len(servers))
+	}
+}
+
+// v0.8.7: Projects 页 `x` 只删已吊销的行——active 行拒绝(状态行提示,
+// 不开表单);revoked 行走 Confirm(y)→ 落库删除。
+func TestAppProjectsXDeletesRevokedOnly(t *testing.T) {
+	st := newStore(t)
+	pid, _ := st.AddProfile("dev")
+	projID, _, err := st.AddProject("agent", pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := NewBrokerApp(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // → profiles
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // → projects
+
+	// active 行:x → 不开表单,状态行提示先吊销
+	// (the status hint — not just any non-empty status — proves the projects
+	// 'x' branch actually ran; the outer key gate must list "x")
+	m, cmd := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if cmd != nil || m.(App).overlay != nil {
+		t.Fatal("'x' on an ACTIVE project must not open a form")
+	}
+	if !strings.Contains(m.(App).status, "吊销") {
+		t.Fatalf("active 'x' must leave the revoke-first hint in the status line, got %q", m.(App).status)
+	}
+
+	// revoke it, refetch (actionDoneMsg), then x → Confirm(y) → deleted
+	if err := st.SetProjectStatus(projID, models.ProjectRevoked); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = m.Update(actionDoneMsg{desc: "refetch"}) // refetchPages keeps the page list current
+	m, cmd = m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if cmd == nil {
+		t.Fatalf("'x' on a REVOKED project must open the confirm overlay, status=%q", m.(App).status)
+	}
+	m = drain(t, m, cmd)
+	var c tea.Cmd
+	m, c = m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"}) // Confirm 肯定单键
+	m = drain(t, m, c)
+	if p, _ := st.GetProjectByName("agent"); p != nil {
+		t.Fatalf("revoked project must be deleted, got %+v", p)
+	}
+	if m.(App).overlay != nil {
+		t.Fatal("overlay must close after the delete")
 	}
 }

@@ -180,3 +180,34 @@ func tokenPrefix(token string) string {
 	}
 	return token
 }
+
+// DeleteProject hard-deletes a project ROW — allowed ONLY on revoked rows
+// (owner's v0.8.7 ruling: revoke first, then delete; two deliberate steps).
+// Deleting an active row would silently equal a revoke, so it is refused
+// with a pointer to the revoke step. Nothing references project rows; the
+// audit sidecar keeps its history (older audit lines may resolve the id to
+// no name afterwards — accepted).
+func (s *Store) DeleteProject(id string) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	var status string
+	err := s.db.QueryRow(`SELECT status FROM projects WHERE id=?`, id).Scan(&status)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("project id %q not found", id)
+	}
+	if err != nil {
+		return err
+	}
+	if status != string(models.ProjectRevoked) {
+		return fmt.Errorf("project 仍为 %s:先吊销(TUI d / CLI projects revoke)再删除", status)
+	}
+	res, err := s.db.Exec(`DELETE FROM projects WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("project id %q not found", id)
+	}
+	return nil
+}
