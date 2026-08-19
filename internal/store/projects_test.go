@@ -129,3 +129,20 @@ func TestGetProjectByName(t *testing.T) {
 		t.Fatal("missing name should return nil")
 	}
 }
+
+// v0.8.5: ListProjects must fill the timestamps (were never selected — the
+// projects page rendered 0001-01-01).
+func TestProjectTimestampsFilled(t *testing.T) {
+	s := newTestStore(t)
+	pid, _ := s.AddProfile("dev")
+	if _, _, err := s.AddProject("agent", pid); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := s.ListProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 1 || ps[0].CreatedAt.IsZero() || ps[0].UpdatedAt.IsZero() {
+		t.Fatalf("ListProjects timestamps must be filled, got %+v", ps)
+	}
+}

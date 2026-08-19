@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -30,14 +31,24 @@ func (s *Store) AddProfile(name string) (string, error) {
 }
 
 func (s *Store) GetProfile(id string) (*models.Profile, error) {
-	var p models.Profile
-	err := s.db.QueryRow(`SELECT id,name FROM profiles WHERE id=?`, id).Scan(&p.ID, &p.Name)
+	var (
+		p       models.Profile
+		created int64
+		updated int64
+	)
+	// v0.8.5: created_at/updated_at WERE never selected — every profile
+	// rendered 0001-01-01 (Go zero time) in the TUI. Unix-epoch int64 scan,
+	// the same pattern ListCacheTokens uses.
+	err := s.db.QueryRow(
+		`SELECT id,name,created_at,updated_at FROM profiles WHERE id=?`, id,
+	).Scan(&p.ID, &p.Name, &created, &updated)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	p.CreatedAt, p.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
 	ids, err := s.ServersForProfile(id)
 	if err != nil {
 		return nil, err
@@ -47,17 +58,22 @@ func (s *Store) GetProfile(id string) (*models.Profile, error) {
 }
 
 func (s *Store) ListProfiles() ([]*models.Profile, error) {
-	rows, err := s.db.Query(`SELECT id,name FROM profiles ORDER BY name`)
+	rows, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []*models.Profile
 	for rows.Next() {
-		var p models.Profile
-		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+		var (
+			p       models.Profile
+			created int64
+			updated int64
+		)
+		if err := rows.Scan(&p.ID, &p.Name, &created, &updated); err != nil {
 			return nil, err
 		}
+		p.CreatedAt, p.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
 		out = append(out, &p)
 	}
 	return out, rows.Err()

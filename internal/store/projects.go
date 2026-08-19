@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -64,7 +65,10 @@ func (s *Store) VerifyToken(token string) (*models.Project, error) {
 }
 
 func (s *Store) ListProjects() ([]*models.Project, error) {
-	rows, err := s.db.Query(`SELECT id,name,token_prefix,profile_id,status FROM projects ORDER BY name`)
+	// v0.8.5: created_at/updated_at join the select (were never read — the
+	// projects page rendered Go zero times). Same int64→time.Unix pattern as
+	// ListCacheTokens.
+	rows, err := s.db.Query(`SELECT id,name,token_prefix,profile_id,status,created_at,updated_at FROM projects ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -72,13 +76,16 @@ func (s *Store) ListProjects() ([]*models.Project, error) {
 	var out []*models.Project
 	for rows.Next() {
 		var (
-			p      models.Project
-			status string
+			p       models.Project
+			status  string
+			created int64
+			updated int64
 		)
-		if err := rows.Scan(&p.ID, &p.Name, &p.TokenPrefix, &p.ProfileID, &status); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.TokenPrefix, &p.ProfileID, &status, &created, &updated); err != nil {
 			return nil, err
 		}
 		p.Status = models.ProjectStatus(status)
+		p.CreatedAt, p.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
 		out = append(out, &p)
 	}
 	return out, rows.Err()
