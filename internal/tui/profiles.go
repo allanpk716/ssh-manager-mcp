@@ -20,6 +20,17 @@ func (p *profilesPage) Title() string { return "Profiles" }
 
 func newProfilesPage(items []*models.Profile, st *store.Store) *profilesPage {
 	p := &profilesPage{items: items, st: st}
+	// v0.8.3 #2: ListProfiles never fills ServerIDs (its query selects id+name
+	// only), so the row's "N 台服务器" read 0 even with members — only the
+	// Detail pane was right (it resolves live via memberNames). Resolve the
+	// ids once at page construction instead.
+	if st != nil {
+		for _, pr := range items {
+			if ids, err := st.ServersForProfile(pr.ID); err == nil {
+				pr.ServerIDs = ids
+			}
+		}
+	}
 	p.panelList = newPanelList("Profiles")
 	p.syncList()
 	return p
