@@ -8,8 +8,44 @@ import (
 
 func newProfilesCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "profiles", Short: "Manage server profiles (groups)"}
-	cmd.AddCommand(profilesAddCmd(), profilesLsCmd(), profilesGrantCmd())
+	cmd.AddCommand(profilesAddCmd(), profilesLsCmd(), profilesGrantCmd(), profilesRemoveCmd())
 	return cmd
+}
+
+// profilesRemoveCmd deletes a profile by name. The store REFUSES while any
+// project still references it (error names the projects) — silently unbinding
+// would brick those projects' agents. Grant rows are removed with it.
+func profilesRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove [name]",
+		Args:  cobra.ExactArgs(1),
+		Short: "Delete a profile (refuses while projects reference it)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := openUnlockedStore()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			profs, err := s.ListProfiles()
+			if err != nil {
+				return err
+			}
+			var profileID string
+			for _, p := range profs {
+				if p.Name == args[0] {
+					profileID = p.ID
+				}
+			}
+			if profileID == "" {
+				return fmt.Errorf("profile %q not found", args[0])
+			}
+			if err := s.DeleteProfile(profileID); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "deleted profile %s\n", args[0])
+			return nil
+		},
+	}
 }
 
 func profilesAddCmd() *cobra.Command {

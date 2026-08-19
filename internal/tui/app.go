@@ -244,16 +244,30 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							a.status = "无服务器可授权"
 							return a, nil
 						}
-						// v0.8.3 #3A: pre-fill with the profile's EXISTING grants —
-						// huh's Accessor() marks matching options checked at
-						// construction, so re-entering `g` shows what's already
-						// granted. Submit stays additive (no removal path).
+						// v0.8.4: pre-fill with the profile's existing grants
+						// (marked checked at construction); submit is a FULL
+						// SYNC — unchecking removes (store SyncServers).
 						chosen := []string{}
 						if ids, gerr := a.st.ServersForProfile(cur.ID); gerr == nil {
 							chosen = ids
 						}
 						a.overlay = newFormOverlay("授权服务器 → "+cur.Name, newGrantForm(servers, &chosen), func() tea.Cmd {
 							return submitGrant(a.st, cur.ID, cur.Name, chosen)
+						})
+					}
+				case "d": // delete the profile (v0.8.4): refused while projects
+					// still reference it — the store error names them.
+					if cur := pp.current(); cur != nil {
+						confirm := false
+						form := huh.NewForm(huh.NewGroup(huh.NewConfirm().
+							Title(fmt.Sprintf("删除 Profile %q？（其授权关系一并移除；被项目引用时将拒绝）", cur.Name)).Value(&confirm)))
+						a.overlay = newFormOverlay("删除 Profile", form, func() tea.Cmd {
+							if !confirm {
+								return nil
+							}
+							return doAction(a.st, func() (string, error) {
+								return "已删除 Profile " + cur.Name, a.st.DeleteProfile(cur.ID)
+							})
 						})
 					}
 				}
@@ -616,7 +630,7 @@ func (a App) footer() string {
 		}
 		keys = "[a]新增 [e]编辑 [d]删除 [i]导入 " + bang
 	case pageProfiles:
-		keys = "[a]新增 [g]授权"
+		keys = "[a]新增 [g]授权 [d]删除"
 	case pageProjects:
 		keys = "[a]新增 [e]轮换 [d]吊销"
 	case pageTokens:

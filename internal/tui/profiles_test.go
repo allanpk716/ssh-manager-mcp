@@ -97,6 +97,64 @@ func TestNewGrantFormPreselectsExisting(t *testing.T) {
 	}
 }
 
+// v0.8.4 full-sync: unchecking a preselected option and submitting must DROP
+// it from the result — driven through the real multiselect keys (Down to the
+// option, Space to uncheck, Enter to submit). Down/Space state changes apply
+// synchronously on the keypress (their cmd chains are cosmetic); only Enter's
+// chain (nextField/nextGroup round trip) must be fed back. Store semantics
+// are pinned by TestSyncServersReplacesGrantSet; this pins the FORM side.
+func TestGrantFormUncheckRemoves(t *testing.T) {
+	chosen := []string{"id-a", "id-b"}
+	f := newGrantForm([]*models.Server{{ID: "id-a", Name: "gpu"}, {ID: "id-b", Name: "web"}}, &chosen)
+	o := newFormOverlay("授权", f, func() tea.Cmd { return nil })
+	_, _ = o.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // option 0 (gpu) → 1 (web)
+	_, _ = o.Update(tea.KeyPressMsg{Code: tea.KeySpace}) // uncheck web
+	_, cmd := o.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	for steps := 0; cmd != nil && steps < 50; steps++ {
+		msg := cmd()
+		if _, done := msg.(formDoneMsg); done {
+			break // the App's close-the-overlay handoff — end of the loop here
+		}
+		_, next := o.Update(msg)
+		cmd = next
+	}
+	if len(chosen) != 1 || chosen[0] != "id-a" {
+		t.Fatalf("uncheck must remove id-b on submit, got %v", chosen)
+	}
+}
+
+// v0.8.4: Profiles 页 `d` → Confirm → 删除落库(App 级,经路由门走完回环)。
+func TestAppProfilesDeleteKey(t *testing.T) {
+	st := newStore(t)
+	if _, err := st.AddProfile("team"); err != nil {
+		t.Fatal(err)
+	}
+	a, err := NewBrokerApp(st) // profile exists BEFORE the app fetches pages
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})        // servers → profiles
+	m, cmd := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"}) // delete confirm
+	if cmd == nil {
+		t.Fatal("'d' must open the confirm overlay")
+	}
+	m = drain(t, m, cmd)
+	var c tea.Cmd
+	m, c = m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"}) // Confirm 肯定单键(Enter 落否定项)
+	m = drain(t, m, c)                                     // formDoneMsg → after → actionDoneMsg
+	ps, err := st.ListProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 0 {
+		t.Fatalf("profile must be deleted, got %v", ps)
+	}
+	if m.(App).overlay != nil {
+		t.Fatal("overlay must close after the delete")
+	}
+}
+
 // TestProfilesPage_DetailMemberNames: Detail must show server NAMES, not ids.
 func TestProfilesPage_DetailMemberNames(t *testing.T) {
 	st := newStore(t)
