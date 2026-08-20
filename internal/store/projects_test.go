@@ -183,3 +183,42 @@ func TestDeleteProjectRevokedOnly(t *testing.T) {
 		t.Fatal("unknown id must error")
 	}
 }
+
+// v0.8.8: revoked is terminal — SetProjectStatus refuses every exit from a
+// revoked row. The CLI status commands had no guard: `projects enable`
+// resurrected a revoked (treated-as-leaked) token directly, and
+// `disable` → `enable` was a second, two-step bypass. The reversible pair
+// (active ↔ disabled) and revoke-on-revoked (idempotent; TUI `d`) keep working.
+func TestSetProjectStatusRevokedTerminal(t *testing.T) {
+	s := newTestStore(t)
+	pid, _ := s.AddProfile("dev")
+	projID, _, err := s.AddProject("agent", pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the reversible pair still works: active → disabled → active
+	if err := s.SetProjectStatus(projID, models.ProjectDisabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStatus(projID, models.ProjectActive); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetProjectStatus(projID, models.ProjectRevoked); err != nil {
+		t.Fatal(err)
+	}
+	// revoked → active refused with a hint (the original gap)
+	if err := s.SetProjectStatus(projID, models.ProjectActive); err == nil || !strings.Contains(err.Error(), "不可逆") {
+		t.Fatalf("revoked → active must be refused with a hint, got %v", err)
+	}
+	// revoked → disabled refused too (the two-step resurrect bypass)
+	if err := s.SetProjectStatus(projID, models.ProjectDisabled); err == nil {
+		t.Fatal("revoked → disabled must be refused (two-step resurrect bypass)")
+	}
+
+	// revoke-on-revoked stays allowed: idempotent (TUI `d` on a revoked row)
+	if err := s.SetProjectStatus(projID, models.ProjectRevoked); err != nil {
+		t.Fatal(err)
+	}
+}
