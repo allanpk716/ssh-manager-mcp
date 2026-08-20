@@ -132,10 +132,24 @@ func (s *Store) GetProject(id string) (*models.Project, error) {
 }
 
 // SetProjectStatus sets the lifecycle status (active/disabled/revoked). VerifyToken reads
-// this on the next mcp spawn. Errors if the id is absent.
+// this on the next mcp spawn. Errors if the id is absent. v0.8.8: revoked is
+// terminal — every exit from a revoked row is refused (the CLI status commands
+// had no guard: `enable` resurrected a revoked token, and `disable` → `enable`
+// was a two-step bypass). Revoke-on-revoked stays allowed (idempotent).
 func (s *Store) SetProjectStatus(id string, status models.ProjectStatus) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	var cur string
+	err := s.db.QueryRow(`SELECT status FROM projects WHERE id=?`, id).Scan(&cur)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("project id %q not found", id)
+	}
+	if err != nil {
+		return err
+	}
+	if cur == string(models.ProjectRevoked) && status != models.ProjectRevoked {
+		return fmt.Errorf("project 已吊销:吊销不可逆,无法 enable/disable;需要时新建 project(TUI a / CLI projects add)")
 	}
 	res, err := s.db.Exec(`UPDATE projects SET status=?, updated_at=? WHERE id=?`, string(status), now(), id)
 	if err != nil {
