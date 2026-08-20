@@ -114,7 +114,7 @@ claude mcp add ssh ssh-manager -e SSHMGR_TOKEN=<TOKEN> -- mcp
 
 | 命令 | 作用 | token 结果 | `ls` 里是否可见 |
 |---|---|---|---|
-| `projects rotate <name>` | 原地换发 token | 旧 token 立刻失效，打印新 token + 新 `.mcp.json` | 可见（仍 active） |
+| `projects rotate <name>` | 原地换发 token（active/disabled 行；revoked 行硬拒，v0.8.9 起——死 token 不再以"成功"面目发出） | 旧 token 立刻失效，打印新 token + 新 `.mcp.json` | 可见（仍 active） |
 | `projects disable <name>` | 暂停（可逆） | token 被拒，直到 enable | 可见（status=disabled） |
 | `projects enable <name>` | 恢复（仅 disabled 行；revoked 不可复活，v0.8.8 起硬拒） | token 重新有效 | 可见（status=active） |
 | `projects revoke <name>` | 永久吊销（软删除，单向门——enable/disable 均无法恢复，需要时新建 project） | token 永久失效 | **默认隐藏**（`--all` 才看得到） |

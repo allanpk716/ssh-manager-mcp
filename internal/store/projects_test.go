@@ -222,3 +222,29 @@ func TestSetProjectStatusRevokedTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// v0.8.9: RotateProject refuses a revoked row. The rotation itself could not
+// resurrect the token (status stays revoked, VerifyToken only admits active),
+// but the old behavior PRINTED a fresh token + .mcp.json and audited ok — a
+// misleading success for a credential that is dead on arrival. Same absorbing
+// state as SetProjectStatus (v0.8.8); active/disabled rows still rotate.
+func TestRotateProjectRevokedRefused(t *testing.T) {
+	s := newTestStore(t)
+	pid, _ := s.AddProfile("dev")
+	projID, _, err := s.AddProject("agent", pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// active still rotates (the happy path)
+	if _, err := s.RotateProject(projID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetProjectStatus(projID, models.ProjectRevoked); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RotateProject(projID); err == nil || !strings.Contains(err.Error(), "不可逆") {
+		t.Fatalf("rotate on revoked must be refused with a hint, got %v", err)
+	}
+}

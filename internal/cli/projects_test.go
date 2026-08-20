@@ -81,3 +81,18 @@ func TestProjectsStatusRevokedTerminal(t *testing.T) {
 		t.Fatalf("enable on disabled (happy path) failed: %v", err)
 	}
 }
+
+// v0.8.9: `projects rotate` on a revoked row must surface the store's refusal
+// — the success path prints a one-time token, so the guard is what keeps a
+// dead credential from being handed out looking fresh.
+func TestProjectsRotateRevokedRefused(t *testing.T) {
+	vd, _ := withClearDirs(t)
+	seedProjectsVault(t, vd)
+
+	if err := driveProjects("projects", "revoke", "agent"); err != nil {
+		t.Fatalf("revoke (happy path) failed: %v", err)
+	}
+	if err := driveProjects("projects", "rotate", "agent"); err == nil || !strings.Contains(err.Error(), "不可逆") {
+		t.Fatalf("rotate on revoked must be refused with a hint, got %v", err)
+	}
+}

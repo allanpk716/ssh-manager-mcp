@@ -163,10 +163,24 @@ func (s *Store) SetProjectStatus(id string, status models.ProjectStatus) error {
 
 // RotateProject replaces the token IN PLACE (same id, profile_id, status) and returns the new
 // plaintext token. The old token stops verifying immediately — its hash is overwritten, so
-// VerifyToken no longer matches it.
+// VerifyToken no longer matches it. v0.8.9: refuses a revoked row — a rotation could not
+// resurrect the token (status gate), but printing a fresh token + audit ok for a credential
+// that is dead on arrival is a misleading success; same absorbing state as SetProjectStatus
+// (v0.8.8).
 func (s *Store) RotateProject(id string) (string, error) {
 	if s.readOnly {
 		return "", ErrReadOnly
+	}
+	var cur string
+	err := s.db.QueryRow(`SELECT status FROM projects WHERE id=?`, id).Scan(&cur)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("project id %q not found", id)
+	}
+	if err != nil {
+		return "", err
+	}
+	if cur == string(models.ProjectRevoked) {
+		return "", fmt.Errorf("project 已吊销:吊销不可逆,无法 rotate;需要时新建 project(TUI a / CLI projects add)")
 	}
 	token, err := GenerateToken()
 	if err != nil {
