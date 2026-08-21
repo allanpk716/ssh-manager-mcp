@@ -285,3 +285,60 @@ func mustExport(t *testing.T, s *Store) *Snapshot {
 	}
 	return snap
 }
+
+// TestSnapshotExposeHostRoundTrip: export→import preserves ExposeHost in both
+// states. Guards the SQL column lists AND the JSON field against silent
+// regression — a lost bit silently degrades an owner opt-in back to masked
+// (fail-safe direction, but still an owner-preference loss; spec §2/§6).
+func TestSnapshotExposeHostRoundTrip(t *testing.T) {
+	st := openTestStore(t) // helper landed in Task 1 (servers_test.go)
+	if _, err := st.AddServer(&models.Server{
+		Name: "exposed", Host: "h1", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, ExposeHost: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServer(&models.Server{
+		Name: "masked", Host: "h2", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := st.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Field must exist on the wire (missing json field would decode as false).
+	var sawExposed, sawMasked bool
+	for _, sv := range snap.Servers {
+		if sv.Name == "exposed" && sv.ExposeHost {
+			sawExposed = true
+		}
+		if sv.Name == "masked" && !sv.ExposeHost {
+			sawMasked = true
+		}
+	}
+	if !sawExposed || !sawMasked {
+		t.Fatalf("snapshot ExposeHost states wrong: exposed=%v masked=%v", sawExposed, sawMasked)
+	}
+
+	// Import into a fresh store and verify both states survive.
+	mk2, _ := GenerateMasterKey()
+	st2, err := Open(t.TempDir()+"/t2.db", mk2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	if err := st2.ImportSnapshot(snap); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{"exposed": true, "masked": false} {
+		got, err := st2.GetServerByName(name)
+		if err != nil || got == nil {
+			t.Fatalf("imported %s: %v", name, err)
+		}
+		if got.ExposeHost != want {
+			t.Fatalf("imported %s ExposeHost = %v, want %v", name, got.ExposeHost, want)
+		}
+	}
+}
