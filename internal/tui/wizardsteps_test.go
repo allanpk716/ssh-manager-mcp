@@ -166,3 +166,100 @@ func TestWizFinish_SavesSetupComplete(t *testing.T) {
 		t.Fatalf("role.json must record complete setup: %s", b)
 	}
 }
+
+// jsonBlockOf lifts the pretty JSON object out of a builder's rendered lines
+// (first standalone "{" line to last "}" line) — the docsync/golden tests
+// compare THIS block byte-for-byte (spec §5.5: 比对对象 = 仅 JSON 块).
+func jsonBlockOf(lines []string) string {
+	start, end := -1, -1
+	for i, l := range lines {
+		if l == "{" && start < 0 {
+			start = i
+		}
+		if l == "}" {
+			end = i
+		}
+	}
+	if start < 0 || end < start {
+		panic("no JSON object in lines")
+	}
+	return strings.Join(lines[start:end+1], "\n")
+}
+
+// goldenStdioBlock / goldenHttpBlock are the SPEC-PINNED placeholder goldens
+// (spec §5.5): every doc snippet must normalize to one of these (Task 9).
+const goldenStdioBlock = `{
+  "mcpServers": {
+    "ssh": {
+      "command": "ssh-manager",
+      "args": ["mcp"],
+      "env": { "SSHMGR_TOKEN": "<TOKEN>" }
+    }
+  }
+}`
+
+const goldenHttpBlock = `{
+  "mcpServers": {
+    "ssh": {
+      "type": "http",
+      "url": "https://192.0.2.5:7878/",
+      "headers": { "Authorization": "Bearer <TOKEN>" }
+    }
+  }
+}`
+
+// TestGoldenStdioBlock: mcpConfigLines at the pinned placeholder token must
+// render the golden JSON block byte-for-byte.
+func TestGoldenStdioBlock(t *testing.T) {
+	got := jsonBlockOf(mcpConfigLines(
+		[]string{`"args": ["mcp"]`, stdioEnvLine("<TOKEN>")}, nil))
+	if got != goldenStdioBlock {
+		t.Fatalf("stdio golden drift:\n--- got ---\n%s\n--- want ---\n%s", got, goldenStdioBlock)
+	}
+}
+
+// TestGoldenHttpBlock: mcpHttpConfigLines at the pinned placeholder URL+token.
+func TestGoldenHttpBlock(t *testing.T) {
+	got := jsonBlockOf(mcpHttpConfigLines("https://192.0.2.5:7878/", "<TOKEN>", nil))
+	if got != goldenHttpBlock {
+		t.Fatalf("http golden drift:\n--- got ---\n%s\n--- want ---\n%s", got, goldenHttpBlock)
+	}
+}
+
+// TestHttpConfigLinesJSONValid: empty-notes and populated-notes both render
+// valid JSON with a comma-free last member (same discipline as the stdio
+// builder's TestMcpConfigLinesJSONValid).
+func TestHttpConfigLinesJSONValid(t *testing.T) {
+	for _, notes := range [][]string{nil, {`"type": "http" 必填——漏了会被当 stdio 拒绝。`}} {
+		var v any
+		if err := json.Unmarshal([]byte(jsonBlockOf(mcpHttpConfigLines("https://h:1/", "tok", notes))), &v); err != nil {
+			t.Fatalf("notes=%q: invalid JSON: %v", notes, err)
+		}
+	}
+}
+
+// TestValueEncodingAnchor: EVERY interpolation point (stdio env token, http
+// url, http Bearer) survives the nasty-value gauntlet — `"`, `\`, control
+// chars (\x07, \v), `&`, `<` — as (a) parseable JSON and (b) WITHOUT the
+// default-HTML-escape sequences (SetEscapeHTML(false) anchor) and (c) with
+// the angle brackets still literally present (copy-paste readability).
+func TestValueEncodingAnchor(t *testing.T) {
+	nasty := "x\"y\\z\x07\v&<>"
+	blocks := []string{
+		jsonBlockOf(mcpConfigLines([]string{`"args": ["mcp"]`, stdioEnvLine(nasty)}, nil)),
+		jsonBlockOf(mcpHttpConfigLines(nasty, "tok", nil)),
+		jsonBlockOf(mcpHttpConfigLines("https://h", nasty, nil)),
+	}
+	for i, b := range blocks {
+		var v any
+		if err := json.Unmarshal([]byte(b), &v); err != nil {
+			t.Fatalf("block %d not valid JSON: %v\n%s", i, err, b)
+		}
+		if strings.Contains(b, "\\u003c") || strings.Contains(b, "\\u0026") {
+			t.Fatalf("block %d leaked HTML escapes:\n%s", i, b)
+		}
+		if !strings.Contains(b, "&<>") || !strings.Contains(b, "x\\\"y") {
+			t.Fatalf("block %d must keep the literal nasty chars readable:\n%s", i, b)
+		}
+	}
+}

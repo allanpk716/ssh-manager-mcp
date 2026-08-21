@@ -6,6 +6,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -180,16 +181,31 @@ func (s *wizStaticView) View() tea.View {
 	return tea.NewView(titleStyle.Render(" "+s.title+" ") + "\n\n" + s.body)
 }
 
-// mcpConfigLines renders the .mcp.json snippet shared by every role's finish
-// screen — only the field lines (args / env) and the notes differ per role
-// (standalone/server run plain `mcp`, the client role runs `mcp --cache`).
-// The "ssh" object's members (command + fieldLines) are collected first and
-// comma-joined as a whole, so the LAST member never carries a trailing comma —
-// an empty fieldLines list yields valid JSON too.
-func mcpConfigLines(fieldLines []string, notes []string) []string {
-	members := make([]string, 0, len(fieldLines)+1)
-	members = append(members, `"command": "ssh-manager"`)
-	members = append(members, fieldLines...)
+// jsonValue encodes s as a complete JSON string VALUE (quotes included) with
+// HTML escaping DISABLED — the pinned value-encoding discipline (spec §4.2):
+// strconv.Quote-family is forbidden (Go-only \a \v escapes are illegal JSON)
+// and json.Marshal's default HTML escaping would turn < > & into 6-char
+// escape sequences, wrecking every angle-bracket placeholder.
+func jsonValue(s string) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s) // string encode never fails
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// stdioEnvLine builds the stdio member line carrying the token — the ONLY
+// sanctioned way to interpolate SSHMGR_TOKEN (symmetric encoding discipline
+// with the http builder's url/Bearer values).
+func stdioEnvLine(token string) string {
+	return `"env": { "SSHMGR_TOKEN": ` + jsonValue(token) + ` }`
+}
+
+// mcpSnippetLines renders the shared snippet skeleton — intro line, the
+// pretty-printed mcpServers object with comma-joined members, and the notes
+// block. Both builders (stdio mcpConfigLines / http mcpHttpConfigLines) call
+// it, so the trailing-comma discipline exists in ONE place.
+func mcpSnippetLines(members []string, notes []string) []string {
 	lines := []string{
 		"把下面的片段写进 agent 项目的 .mcp.json：",
 		"",
@@ -208,6 +224,33 @@ func mcpConfigLines(fieldLines []string, notes []string) []string {
 		lines = append(lines, "- "+n)
 	}
 	return lines
+}
+
+// mcpConfigLines renders the .mcp.json snippet shared by every role's finish
+// screen — only the field lines (args / env) and the notes differ per role
+// (standalone/server run plain `mcp`, the client role runs `mcp --cache`).
+// The "ssh" object's members (command + fieldLines) are collected first and
+// comma-joined as a whole, so the LAST member never carries a trailing comma —
+// an empty fieldLines list yields valid JSON too.
+func mcpConfigLines(fieldLines []string, notes []string) []string {
+	members := make([]string, 0, len(fieldLines)+1)
+	members = append(members, `"command": "ssh-manager"`)
+	members = append(members, fieldLines...)
+	return mcpSnippetLines(members, notes)
+}
+
+// mcpHttpConfigLines renders the ONLINE (serve/http) .mcp.json snippet —
+// sibling of mcpConfigLines (stdio shape), sharing the mcpSnippetLines
+// skeleton. VALUE ENCODING (hard requirement, pinned): urlRef and the
+// Authorization header are encoded via jsonValue on the COMPLETE value
+// string (e.g. "Bearer "+tokenRef) — never per-fragment concatenation.
+func mcpHttpConfigLines(urlRef, tokenRef string, notes []string) []string {
+	members := []string{
+		`"type": "http"`,
+		`"url": ` + jsonValue(urlRef),
+		`"headers": { "Authorization": ` + jsonValue("Bearer "+tokenRef) + ` }`,
+	}
+	return mcpSnippetLines(members, notes)
 }
 
 // mcpConfigScreen is the finish screen: the full .mcp.json snippet in the
