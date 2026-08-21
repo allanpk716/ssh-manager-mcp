@@ -14,7 +14,7 @@
 
 - 文档全部中文；agent-tools.md 直接称 agent「你」。
 - **渲染器零改动约束**：`mcpConfigLines` 的**签名**（`func mcpConfigLines(fieldLines []string, notes []string) []string`）与向导既有调用点行为不变——`wizard_test.go` / `wizardserve_test.go` / `wizardsteps_test.go` 既有用例**零改动**全绿是每任务的回归门。
-- **值编码（硬要求）**：所有插值（stdio env token、http url、http Bearer）一律经 `jsonValue`（`json.Encoder` + `SetEscapeHTML(false)` 编码完整值串后剥外层引号）；**禁止** `strconv.Quote` 系（产出 `\a` `\v` 等 Go 专用非法 JSON 转义）、**禁止** `json.Marshal` 默认 HTML 转义（会把 `<` `>` `&` 变成 6 字符转义串，摧毁占位符可读性）。
+- **值编码（硬要求）**：所有插值（stdio env token、http url、http Bearer）一律经 `jsonValue`（`json.Encoder` + `SetEscapeHTML(false)` 编码完整值串，**返回值含两侧引号**，只去掉 Encoder 尾随换行）；**禁止** `strconv.Quote` 系（产出 `\a` `\v` 等 Go 专用非法 JSON 转义）、**禁止** `json.Marshal` 默认 HTML 转义（会把 `<` `>` `&` 变成 6 字符转义串，摧毁占位符可读性）。
 - token 走 env 不走 argv（任何片段里不得出现 `--token`）。
 - 不给 secretView/finish 屏加滚动；内容排序保证截断安全（token 首位、JSON 块紧随小节引导行、关键 note 前置）。
 - commit 规范：Conventional Commits（`feat(tui):` / `docs:` / `test(tui):`）+ 尾行 `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`；每任务一 commit。
