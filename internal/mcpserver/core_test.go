@@ -1028,3 +1028,28 @@ func TestTunnelManagerSweepIdleReapsStaleTunnels(t *testing.T) {
 		t.Fatal("ssh.Client still usable after SweepIdle (resource leak)")
 	}
 }
+
+// TestForwardRejectsMaskedLiteral: remoteHost == "hidden" (any case) is the
+// one channel where the masked literal could be "used" — a malicious
+// server-side resolver record for "hidden" would capture mistyped traffic.
+// DNS is case-insensitive, so the guard must be too (spec §3).
+func TestForwardRejectsMaskedLiteral(t *testing.T) {
+	st := newStore(t)
+	a, _ := st.AddServer(&models.Server{Name: "s", Host: "10.0.0.1", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{a})
+	mgr := NewTunnelManager()
+
+	for _, rh := range []string{"hidden", "Hidden", "HIDDEN"} {
+		_, err := ForwardForProfile(context.Background(), st, "proj", pid, a, rh, 8080, 0, mgr)
+		if err == nil {
+			t.Fatalf("remoteHost %q must be rejected", rh)
+		}
+		if !strings.Contains(err.Error(), "hidden") {
+			t.Fatalf("error should name the masked literal: %v", err)
+		}
+	}
+	if len(mgr.tunnels) != 0 {
+		t.Fatal("no tunnel should be registered for a rejected forward")
+	}
+}

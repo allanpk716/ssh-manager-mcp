@@ -7,6 +7,7 @@ import (
 	"net"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"ssh-manager-mcp/internal/sshbroker"
@@ -462,6 +463,16 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 	if !contains(allowed, serverID) {
 		status = "denied"
 		err = ErrNotInProfile
+		return
+	}
+
+	// Plan 31: the masked-host literal must never be dialed. It is the one
+	// channel where the agent could "use" the list_servers mask value — a
+	// malicious resolver record for "hidden" server-side would capture the
+	// mistyped traffic. DNS is case-insensitive, so is the comparison.
+	if strings.EqualFold(remoteHost, "hidden") {
+		status = "error"
+		err = errors.New("remote_host \"hidden\" is the list_servers masked-host literal, not a real host — pass the actual host:port to forward to")
 		return
 	}
 
