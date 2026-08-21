@@ -97,7 +97,7 @@ ssh-manager tui
 
 这块屏是双形态引导（Task 1-4 后的新样式）——同一把 token 给了两种接法，各抄所需：
 
-```json
+```
 —— 本机/单机 agent（stdio）——
 {
   "mcpServers": {

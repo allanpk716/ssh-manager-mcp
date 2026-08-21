@@ -110,7 +110,7 @@ project token 的入口（见「典型任务」）。
 3. **finish 屏双形态**——「配置 agent 的 .mcp.json（client 模式）」，同一屏给两种
    接法（**同一个 project token**，按机器的在线习惯选一个）：
 
-   ```json
+   ```
    —— 离线为主（默认推荐）——
    {
      "mcpServers": {
