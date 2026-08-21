@@ -54,6 +54,10 @@
 | **服务器指纹（pin）** | **防伪封条** | server 自签证书的 SPKI 指纹；client 首次连接必须核对（钉死），不符即拒——防冒充的 server / 中间人 |
 | cache.bin | 水管放出来的**加密整箱货物** | 只读快照，断网兜底；解它需要本机 cache-dek.key |
 
+## agent 看得见什么（可见性边界）
+
+project token 背后的 agent 通过 `list_servers` 看到：服务器元数据（name/role/services/caveats/location/hardware/tags/description/user/has_sudo）+ **可选的 host**——默认是字面量 `"hidden"`，owner 逐台用 `expose_host` 放开才有明文；**永远看不到**凭据与端口。工具错误文本同样不含主机地址（连接失败时给分类原因，不给 host:port）。这是「接口级不暴露」承诺的全部边界：agent 在服务器上跑 `ip addr` 探出的地址不算违约，本机 owner CLI / cache.bin 的明文也不在本承诺防护范围（见 threat-model.md §3.5）。
+
 ## 设备码的两种输入形态（等价，仅 `cache pull` 命令行）
 
 `cache pull` 的命令行侧两种填法完全等价，任选其一：
