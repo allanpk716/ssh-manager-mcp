@@ -325,7 +325,8 @@ func (f *importFlow) submitSupplement() tea.Cmd {
 		Description: strings.TrimSpace(f.d.Description), Location: strings.TrimSpace(f.d.Location),
 		Hardware: strings.TrimSpace(f.d.Hardware), Services: strings.TrimSpace(f.d.Services),
 		Role: strings.TrimSpace(f.d.Role), Caveats: strings.TrimSpace(f.d.Caveats),
-		Tags: tags,
+		Tags:       tags,
+		ExposeHost: f.srv.ExposeHost,
 	}
 	var cred, sudo *models.Credential
 	switch {

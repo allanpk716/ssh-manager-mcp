@@ -8,6 +8,8 @@ package tui
 // servers.go) — the ORDER it mirrors into the list is its ⚠-sorted view.
 
 import (
+	"strings"
+
 	"charm.land/bubbles/v2/cursor"
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -95,7 +97,10 @@ var panelStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0,
 // renderPanel draws the desktop-style body fitted to the terminal: the
 // bordered list panel (pagination, `/` filter and help bar come from the
 // list) beside the bordered detail box. The list paginates to the height it
-// is given, so a long list never grows the frame past the screen.
+// is given, so a long list never grows the frame past the screen; the
+// wrapped detail is CLIPPED to the same budget (lipgloss Height pads short
+// content but does not truncate long content — an over-tall detail would
+// grow the frame, e.g. many wrapped lines on a short terminal).
 func renderPanel(l *list.Model, detail string, width, height int) string {
 	width, height = max(width, 24), max(height, 6)
 	listW := min(max(width*2/5, 18), width-14)
@@ -105,6 +110,11 @@ func renderPanel(l *list.Model, detail string, width, height int) string {
 	avail := width - listW - colGutter - detailChrome
 	if avail > 0 {
 		detail = ansi.Wrap(detail, avail, "-")
+	}
+	if content := height - 2; content > 0 {
+		if lines := strings.Split(detail, "\n"); len(lines) > content {
+			detail = strings.Join(lines[:content], "\n")
+		}
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		panelStyle.Height(height-2).Width(listW-2).Render(l.View()),

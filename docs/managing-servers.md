@@ -16,6 +16,8 @@
 
 凭据本身（密码字节 / 私钥字节）单独存在 `credentials` 表，server 只持有它的 id。所以“换密码”=“发一张新凭据，把 server 指过去”，server 的 id、name、profile 绑定都不变。
 
+> ⚠️ **避免把真实主机的 `--host` 值起成 `hidden`**——该字面量是 `list_servers` 的掩码哨兵（v0.9 起未放开的 host 一律投影为 `"hidden"`），撞名后投影不可区分，且 `forward_port` 会拒绝它。
+
 ---
 
 ## 列出所有服务器：`servers ls`
@@ -58,6 +60,7 @@ ssh-manager servers add \
   [--services '<跑了什么>']           # e.g. postgres primary, prometheus
   [--role '<这台机器的用途>']          # e.g. prod pg primary
   [--special-handling '<注意事项>']    # agent 行动前必读（Caveats 字段）
+  [--expose-host]                   # bool，默认 false：list_servers 回显该机 host 明文（默认掩码 "hidden"）
 ```
 
 ### 必填 vs 选填
@@ -203,6 +206,7 @@ ssh-manager servers edit <name> [flags...]
 | `--services '<跑了什么>'` | 改 / 加 services |
 | `--role '<用途>'` | 改 / 加 role |
 | `--special-handling '<注意事项>'` | 改 / 加 Caveats；传 `--special-handling ""` 清空 |
+| `--expose-host` | 开「agent 可见 host」：`list_servers` 的 host 默认掩码为 `"hidden"`，本 flag 裸用 = 开（回明文），`--expose-host=false` = 关（bool，默认 false；`servers add` 同名 flag 同语义） |
 | `--password '<新密码>'` | 切换到 / 替换密码认证（会发新凭据） |
 | `--key <私钥路径> [--key-passphrase '<口令>']` | 切换到 / 替换密钥认证 |
 | `--sudo-password '<新sudo密码>'` | 设 / 换 sudo 密码 |

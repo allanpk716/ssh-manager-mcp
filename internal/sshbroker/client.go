@@ -2,7 +2,8 @@ package sshbroker
 
 import (
 	"context"
-	"fmt"
+	"net"
+	"strconv"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -33,7 +34,7 @@ func Connect(ctx context.Context, host string, port int, user string, auth ssh.A
 	if algos != nil {
 		cfg.HostKeyAlgorithms = algos
 	}
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	type result struct {
 		c   *ssh.Client
 		err error
@@ -46,7 +47,15 @@ func Connect(ctx context.Context, host string, port int, user string, auth ssh.A
 	select {
 	case r := <-ch:
 		if r.err != nil {
-			return nil, fmt.Errorf("ssh dial %s: %w", addr, r.err)
+			// Plan 31: scrub the dialed address (and any resolved-IP / DNS
+			// residue) from the error text AT THE SOURCE, so every consumer —
+			// MCP tool errors included — is safe by construction. redactAddr's
+			// rendered text is itself prefixed with "ssh dial: " (and its frozen
+			// degraded phrases carry the same prefix), so Connect returns it
+			// AS-IS — no outer wrap, or the prefix would double end-to-end
+			// (owner ruling). The chain survives via Unwrap (errors.Is
+			// classification) and net.Error is delegated; see redact.go.
+			return nil, redactAddr(r.err, host, port)
 		}
 		return &Client{c: r.c}, nil
 	case <-ctx.Done():

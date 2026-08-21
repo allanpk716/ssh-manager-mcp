@@ -153,10 +153,19 @@ func (p *serversPage) Detail() string {
 	if s.CredentialID == "" {
 		cred = "未设置"
 	}
-	return fmt.Sprintf("名称   %s\nHost   %s\n端口   %d\n用户   %s\n凭据   %s（%s）\n硬件   %s\n位置   %s\n角色   %s\n服务   %s\nCaveats %s\n标签   %s\n备注   %s",
+	return fmt.Sprintf("名称   %s\nHost   %s\n端口   %d\n用户   %s\n凭据   %s（%s）\n硬件   %s\n位置   %s\n角色   %s\n服务   %s\nCaveats %s\n暴露Host %s\n标签   %s\n备注   %s",
 		s.Name, s.Host, s.Port, s.User, cred, s.AuthMethod,
 		orDash(s.Hardware), orDash(s.Location), orDash(s.Role), orDash(s.Services), orDash(s.Caveats),
+		exposeLabel(s.ExposeHost),
 		orDash(strings.Join(s.Tags, ",")), orDash(s.Description))
+}
+
+// exposeLabel renders the owner-facing host-exposure state line.
+func exposeLabel(on bool) string {
+	if on {
+		return "已暴露（agent 可见明文）"
+	}
+	return "隐藏（agent 看到 \"hidden\"）"
 }
 
 // current resolves the cursor to the server it points at IN THE VIEW — under

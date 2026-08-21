@@ -45,7 +45,7 @@
 |---|---|
 | `id` | 稳定 server id——**跨工具引用一律用它**，不是 name |
 | `name` | 人类可读名字（仅供你识别） |
-| `host` / `user` | 主机 / SSH 用户 |
+| `host` / `user` | SSH 用户；host 默认是 `"hidden"`（owner 未披露，用 id 寻址；owner 逐台放开后才是明文） |
 | `has_sudo` | `true` 才支持 `sudo=true`（= owner 给这台机配了 sudo 凭据） |
 | `role` | 这台机器的用途（如 "prod pg primary"） |
 | `services` | 上面部署/运行着什么 |
@@ -150,6 +150,7 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
 | 结果里 `timed_out: true`（不是报错） | 命令超过 timeout（默认 120s）被杀 | **拆小命令**：分页/分文件；真要长跑就 `nohup ... &` 后台化 + 短命令轮询 |
 | 结果里 `truncated: true`（不是报错） | 输出超每通道 1 MiB（download 是文件超 1 MiB），你只有前缀 | **refine**：`tail -n` / `head -n` / `grep` 取目标段重跑；看 `*_bytes` 判断真实体量；别硬拉全量 |
 | `host key mismatch: possible MITM, connection rejected` | 服务器 host key 和首次记录的不一致——可能是中间人（TOFU fail-closed） | **报告 owner 核实**，**绝对别**尝试绕过（没有任何"跳过检查"参数） |
+| `ssh dial: connect failed: connection refused`（等分类短语） | 连不上目标机（地址细节已按可见性边界清洗） | 核对 server_id 是否正确；网络问题报告 owner |
 | `sudo not configured for server <name> (call list_servers: has_sudo tells you)` | `sudo=true` 但该机 `has_sudo=false` | 回 `list_servers` 核对；确实需要提权就报告 owner 配 sudo 凭据 |
 | `no open tunnel with id <id>` | 隧道已关/已被 ~10 分钟自动回收/从未开过 | 正常现象；需要转发就重开 `forward_port` |
 | `file <path> (<N> bytes) exceeds upload cap <cap> — refused before transfer` | 单文件严格大于 1 MiB，传输前被拒（零字节移动） | 按错误里的 size/cap **拆分或压缩**后重传 |
@@ -204,7 +205,7 @@ HEAD，后续重构以符号名为准）：
 | `sudo=true` → broker 跑 `sudo -S -p '' -- <cmd>`、密码写 stdin；**不要自己拼 sudo 前缀** | `internal/sshbroker/sudo.go:25-30,46`；`internal/mcpserver/server.go:179`；`internal/mcpserver/core.go:70` |
 | `has_sudo` = owner 配了 sudo 凭据（`SudoCredentialID != ""`）；false 时 sudo=true 报 `sudo not configured for server ...` | `internal/mcpserver/core.go:56,150-153`；`internal/mcpserver/types.go:14` |
 | name ≠ id：工具描述 "Pass the server's id (from list_servers), not its name" | `internal/mcpserver/server.go:78,177` |
-| list_servers 字段清单（id/name/host/user/has_sudo/role/services/caveats/location/hardware/tags/description）永不含凭据；caveats "READ BEFORE acting" | `internal/mcpserver/types.go:5-22`；`internal/mcpserver/server.go:63` |
+| list_servers 字段清单（id/name/host（默认 `"hidden"`，owner 逐台 opt-in）/user/has_sudo/role/services/caveats/location/hardware/tags/description）永不含凭据；caveats "READ BEFORE acting" | `internal/mcpserver/types.go:5-22`；`internal/mcpserver/server.go:63` |
 | 空字段=无；tags 空数组非 null（schema 一致性） | `internal/mcpserver/core.go:41-50` |
 | out-of-profile 拒绝文案 + 四工具同一道门（连接前先 gate） | `internal/mcpserver/types.go:95`；`internal/mcpserver/core.go:97-101,223-227,332-335,455-458` |
 | `no_credential`：连接前拒绝，错误自带配置提示（`vault.ErrNoCredential`） | `internal/vault/vault.go:112-121`；`internal/mcpserver/core.go:112-117` |

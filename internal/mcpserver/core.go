@@ -7,6 +7,7 @@ import (
 	"net"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"ssh-manager-mcp/internal/sshbroker"
@@ -48,10 +49,17 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 		if tags == nil {
 			tags = []string{}
 		}
+		// Plan 31 host masking: default "hidden"; plaintext only when the
+		// owner opted in per-server (spec §3). Port is never exposed
+		// (ServerInfo has no Port field by design).
+		host := "hidden"
+		if srv.ExposeHost {
+			host = srv.Host
+		}
 		out = append(out, ServerInfo{
 			ID:          srv.ID,
 			Name:        srv.Name,
-			Host:        srv.Host,
+			Host:        host,
 			User:        srv.User,
 			HasSudo:     srv.SudoCredentialID != "",
 			Role:        srv.Role,
@@ -455,6 +463,18 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 	if !contains(allowed, serverID) {
 		status = "denied"
 		err = ErrNotInProfile
+		return
+	}
+
+	// Plan 31: the masked-host literal must never be dialed. It is the one
+	// channel where the agent could "use" the list_servers mask value — a
+	// malicious resolver record for "hidden" server-side would capture the
+	// mistyped traffic. DNS is case-insensitive, and "hidden." (FQDN trailing
+	// dot) resolves to the same name — so the comparison is case-insensitive
+	// AND strips one trailing dot plus surrounding whitespace.
+	if strings.EqualFold(strings.TrimSpace(strings.TrimSuffix(remoteHost, ".")), "hidden") {
+		status = "error"
+		err = errors.New("remote_host \"hidden\" is the list_servers masked-host literal, not a real host — pass the actual host:port to forward to")
 		return
 	}
 

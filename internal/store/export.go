@@ -44,6 +44,7 @@ type SnapshotServer struct {
 	Services         string `json:"services"`
 	Role             string `json:"role"`
 	Caveats          string `json:"caveats"`
+	ExposeHost       bool   `json:"expose_host"`
 	CreatedAt        int64  `json:"created_at"`
 	UpdatedAt        int64  `json:"updated_at"`
 }
@@ -116,7 +117,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 
 	// servers (COALESCE the nullable text cols to '' — credential_id is nullable
 	// since Plan 20 C0: a credential-less server carries "" in the snapshot)
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,created_at,updated_at FROM servers ORDER BY id`)
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at FROM servers ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +125,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 		var sv SnapshotServer
 		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
 			&sv.CredentialID, &sv.SudoCredentialID, &sv.TagsRaw, &sv.Description, &sv.Location,
-			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.CreatedAt, &sv.UpdatedAt); err != nil {
+			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.CreatedAt, &sv.UpdatedAt); err != nil {
 			rs.Close()
 			return nil, err
 		}
@@ -306,8 +307,8 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 			sudoArg = sv.SudoCredentialID
 		}
 		credArg := nullIfEmpty(sv.CredentialID)
-		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.CreatedAt, sv.UpdatedAt); err != nil {
+		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, sv.CreatedAt, sv.UpdatedAt); err != nil {
 			return fmt.Errorf("insert server %s: %w", sv.ID, err)
 		}
 	}

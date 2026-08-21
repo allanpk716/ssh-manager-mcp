@@ -24,6 +24,7 @@ func serversAddCmd() *cobra.Command {
 		location, hardware, services, role, caveats                             string
 		port                                                                    int
 		tags                                                                    []string
+		exposeHost                                                              bool
 	)
 	c := &cobra.Command{
 		Use:   "add",
@@ -49,6 +50,7 @@ func serversAddCmd() *cobra.Command {
 				Services:    strings.TrimSpace(services),
 				Role:        strings.TrimSpace(role),
 				Caveats:     strings.TrimSpace(caveats),
+				ExposeHost:  exposeHost,
 			}
 			// Suspected-secret hint (Plan 28 T2): advisory, non-blocking scan
 			// of the free-text metadata this add is about to persist, in its
@@ -99,6 +101,7 @@ func serversAddCmd() *cobra.Command {
 	c.Flags().StringVar(&services, "services", "", "what is deployed/running here — shown to the agent")
 	c.Flags().StringVar(&role, "role", "", "this server's purpose (e.g. 'prod pg primary') — shown to the agent")
 	c.Flags().StringVar(&caveats, "special-handling", "", "operational gotchas / special handling rules — the agent reads this BEFORE acting")
+	c.Flags().BoolVar(&exposeHost, "expose-host", false, "return the plaintext host in list_servers (default: masked as \"hidden\")")
 	_ = c.MarkFlagRequired("name")
 	_ = c.MarkFlagRequired("host")
 	_ = c.MarkFlagRequired("user")
@@ -181,6 +184,7 @@ func serversEditCmd() *cobra.Command {
 		port                                                                       int
 		tags                                                                       []string
 		clearCred                                                                  bool
+		exposeHost                                                                 bool
 	)
 	c := &cobra.Command{
 		Use:   "edit [name]",
@@ -234,6 +238,9 @@ func serversEditCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("special-handling") {
 				srv.Caveats = strings.TrimSpace(caveats)
+			}
+			if cmd.Flags().Changed("expose-host") {
+				srv.ExposeHost = exposeHost
 			}
 			// Re-credential (optional; mutually exclusive). nil cred/sudo keeps
 			// the existing rows; a swap runs in ONE transaction with the row
@@ -326,6 +333,7 @@ func serversEditCmd() *cobra.Command {
 	c.Flags().StringVar(&keyPass, "key-passphrase", "", "passphrase for encrypted private key (use with --key)")
 	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "set / replace sudo password")
 	c.Flags().BoolVar(&clearCred, "clear-credential", false, "remove the server's credentials (back to credential-less)")
+	c.Flags().BoolVar(&exposeHost, "expose-host", false, "return the plaintext host in list_servers (default: masked as \"hidden\")")
 	return c
 }
 

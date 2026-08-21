@@ -39,7 +39,7 @@ The MCP server exposes these tools — **ssh-functional-equivalent for operating
 
 | Tool | Like | What it does |
 |---|---|---|
-| `list_servers` | — | List the servers the agent may use (`id` / `name` / `host` / `user` / `has_sudo`, plus owner-provided context: role, services, location, hardware, caveats, tags, description). Always call first — the agent learns real server ids here. Never includes credentials. |
+| `list_servers` | — | List the servers the agent may use (`id` / `name` / `host` (`"hidden"` by default; owner opts in per server) / `user` / `has_sudo`, plus owner-provided context: role, services, location, hardware, caveats, tags, description). Always call first — the agent learns real server ids here. Never includes credentials. |
 | `exec_command` | `ssh host cmd` | Run a shell command on a server. `sudo=true` runs `sudo -S` for you (do **not** prepend `sudo` yourself). |
 | `download_file` | `scp host:path .` | Download a remote file (size-capped; truncated output is flagged). |
 | `upload_file` | `scp -r . host:path` | Upload a local file **or directory** (recursive) to the server. |
@@ -47,6 +47,8 @@ The MCP server exposes these tools — **ssh-functional-equivalent for operating
 | `close_port` | — | Close a forward when done (tunnels auto-close ~10 min after creation). |
 
 Every tool is **profile-gated** (the agent only reaches servers you granted its project) and **audited** (each call logged with project, server, action, status). Credential bytes never appear in any tool result.
+
+> **v0.9.0 破坏性变更**：`list_servers` 的 host 默认掩码为 `"hidden"`（`servers edit <name> --expose-host` 逐台放开）；错误文本不再包含主机地址。详见 [docs/compat-matrix.md](docs/compat-matrix.md)。
 
 ---
 

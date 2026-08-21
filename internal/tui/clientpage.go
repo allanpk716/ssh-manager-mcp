@@ -489,9 +489,9 @@ func clientServerDetail(s *store.SnapshotServer) string {
 	if s.Port != 0 {
 		port = s.Port
 	}
-	return fmt.Sprintf("名称   %s\nHost   %s\n端口   %d\n用户   %s\n认证   %s\n硬件   %s\n位置   %s\n角色   %s\n服务   %s\nCaveats %s\n备注   %s",
+	return fmt.Sprintf("名称   %s\nHost   %s\n端口   %d\n用户   %s\n认证   %s\n硬件   %s\n位置   %s\n角色   %s\n服务   %s\nCaveats %s\n暴露Host %s\n备注   %s",
 		orDash(s.Name), orDash(s.Host), port, orDash(s.User), orDash(s.AuthMethod),
-		orDash(s.Hardware), orDash(s.Location), orDash(s.Role), orDash(s.Services), orDash(s.Caveats), orDash(s.Description))
+		orDash(s.Hardware), orDash(s.Location), orDash(s.Role), orDash(s.Services), orDash(s.Caveats), exposeLabel(s.ExposeHost), orDash(s.Description))
 }
 
 // clientWizardHint is the wizard form's source-hint line (T5 brief): where

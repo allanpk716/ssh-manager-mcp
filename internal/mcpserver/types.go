@@ -6,10 +6,17 @@ import "time"
 // Structured metadata fields (Role/Services/Caveats/Location/Hardware) plus Tags and
 // Description are surfaced so the agent grasps each server's full picture. Caveats is
 // placed before Location/Hardware so it reads prominently; empty strings mean "none".
+// Plan 31: Host="hidden" is the ONE deliberate exception to the
+// "empty string means explicitly none" invariant — host is never empty, and
+// the literal lets the agent distinguish "owner withheld it" from "absent".
+// Pathological collision is acknowledged: a real host literally named
+// "hidden" with expose_host=true is indistinguishable from masked, and the
+// forward_port guard rejects it — owners should avoid the name
+// (managing-servers.md); structural elimination is out of scope (spec §3).
 type ServerInfo struct {
 	ID          string   `json:"id" jsonschema:"stable server id (use this in exec_command)"`
 	Name        string   `json:"name" jsonschema:"human-friendly server name"`
-	Host        string   `json:"host" jsonschema:"server host"`
+	Host        string   `json:"host" jsonschema:"server host; 'hidden' = owner has not exposed it (default) — address the server via its id"`
 	User        string   `json:"user" jsonschema:"ssh user"`
 	HasSudo     bool     `json:"has_sudo" jsonschema:"true if sudo=true is supported on this server"`
 	Role        string   `json:"role" jsonschema:"this server's purpose/role (e.g. 'prod pg primary')"`
