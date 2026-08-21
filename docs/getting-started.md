@@ -142,7 +142,7 @@ ssh-manager projects add my-agent --profile team-a
 Token (shown once): eyJ...（一长串）
 
 .mcp.json snippet:
-{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"eyJ..."}}}
+{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"eyJ..."}}}}
 ```
 
 - **马上把这段记下来**（密码管理器里）。token 之后再也查不到明文（库里只存它的 hash）。

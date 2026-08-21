@@ -89,6 +89,9 @@ ssh-manager cache status                 # 看缓存状态
 
 重启 Claude Code → agent 用本地缓存跑命令（只读 + 已授权的 exec/传输/转发）。要在线写（加改删服务器），用在线模式指向 serve（见详尽版）。
 
+> TUI 联机全程点选教程（server 侧 + 工作机 client 面板）→ [tui-multi-machine.md](./tui-multi-machine.md)
+> 把 [agent-tools.md](./agent-tools.md) 的规则模板贴进 CLAUDE.md，agent 会更守规矩
+
 ---
 
 ## Step 3 —（可选）缓存自动保鲜说明

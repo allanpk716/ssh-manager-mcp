@@ -142,19 +142,55 @@ func TestEditConnFormRequiresCodeWhenNoToken(t *testing.T) {
 	}
 }
 
-// TestClientFinishScreen: the client wizard's finish screen must show the
-// --cache variant of the .mcp.json snippet — never the standalone plain-mcp
-// shape (the two modes are mutually exclusive and a wrong snippet breaks the
-// agent silently) — with the token in the SSHMGR_TOKEN env field, not argv.
-func TestClientFinishScreen(t *testing.T) {
-	v := clientFinishScreen().View().Content
-	for _, want := range []string{`"args": ["mcp", "--cache"],`, `"SSHMGR_TOKEN": "<project token>"`} {
+// TestClientFinishScreen_DualForms: 离线 --cache 为主 + 在线 http 为辅；
+// http 块 Bearer 是固定占位（client 机从不持有 project token——两道闸门
+// 模型），token 走 env 不走 argv。
+func TestClientFinishScreen_DualForms(t *testing.T) {
+	v := clientFinishScreen("https://192.0.2.5:7878").View().Content
+	for _, want := range []string{
+		`"args": ["mcp", "--cache"],`,
+		`"SSHMGR_TOKEN": "<project token>"`,
+		`"type": "http",`,
+		`"url": "https://192.0.2.5:7878"`,
+		`"Authorization": "Bearer <server 机 Projects 页签发的 token>"`,
+		"必填",
+	} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("finish screen missing %q:\n%s", want, v)
 		}
 	}
 	if strings.Contains(v, "--token") {
 		t.Fatalf("token must ride env, not argv:\n%s", v)
+	}
+}
+
+// TestClientFinishScreen_EmptyURL: 空 serveURL 渲染 <serve URL> 占位不 panic。
+func TestClientFinishScreen_EmptyURL(t *testing.T) {
+	v := clientFinishScreen("").View().Content
+	if !strings.Contains(v, "<serve URL>") {
+		t.Fatalf("empty URL must render the placeholder:\n%s", v)
+	}
+}
+
+// TestClientWizard_FinishScreenUsesCredURL — 流程级（spec §4.3 调用点锚）：
+// pull 成功链路把 m.cred.URL 传进 finish 屏；m.cred == nil 时守卫传空串，
+// 渲染占位且不 panic（nil 防御职责在调用点，此处钉死调用点真的判了空）。
+func TestClientWizard_FinishScreenUsesCredURL(t *testing.T) {
+	m := newClientModel()
+	m.wizard = true
+	m.cred = &clientops.CacheCred{URL: "https://192.0.2.5:7878"}
+	nm, _ := m.Update(pullSucceededMsg{})
+	v := nm.(clientModel).overlay.View().Content
+	if !strings.Contains(v, `"url": "https://192.0.2.5:7878"`) {
+		t.Fatalf("finish screen must carry the connected serve URL:\n%s", v)
+	}
+
+	mNil := newClientModel()
+	mNil.wizard = true // cred == nil
+	nm2, _ := mNil.Update(pullSucceededMsg{})
+	v2 := nm2.(clientModel).overlay.View().Content
+	if !strings.Contains(v2, "<serve URL>") {
+		t.Fatalf("nil cred must fall back to the placeholder (no panic):\n%s", v2)
 	}
 }
 

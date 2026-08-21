@@ -365,6 +365,8 @@ ssh-manager cache status
 ```
 
 > 切两种模式只是改 `.mcp.json` + 重启 Claude Code——vault 内容、project token、profile scoping **完全一样**。在线走远程 MCP（可写），离线走本地缓存（只读）。
+>
+> 片段权威源 = 代码渲染器 + golden 测试（internal/tui/wizardsteps*.go）；文档片段如与之不符以代码为准。TUI 操作教程见 [tui-multi-machine.md](./tui-multi-machine.md)。
 
 #### Step 3（工作机）：缓存自动保鲜（内置，默认无需 OS 调度器）
 

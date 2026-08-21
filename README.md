@@ -27,6 +27,9 @@ Single Go binary. Cross-platform (Windows / Linux / macOS). No daemon — the br
 | 多台机器共用一份 vault（serve 模式）/ 自动 TLS / 离线只读缓存兜底 | [`docs/multi-machine.md`](docs/multi-machine.md) |
 | 应用场景与示例（GPU 巡检、读 root 日志、部署、端口转发……） | [`docs/scenarios.md`](docs/scenarios.md) |
 | 备份 / 迁移整个 vault（export / import） | [`docs/backup-restore.md`](docs/backup-restore.md) |
+| **单机 TUI 教程**（全键盘点选，不想记命令） | [`docs/tui-single-machine.md`](docs/tui-single-machine.md) |
+| **联机 TUI 教程**（server 侧 + 工作机 client 面板） | [`docs/tui-multi-machine.md`](docs/tui-multi-machine.md) |
+| **给 AI agent 的工具手册**（可贴进 CLAUDE.md 的规则模板在内） | [`docs/agent-tools.md`](docs/agent-tools.md) |
 
 ---
 
@@ -84,7 +87,7 @@ ssh-manager profiles grant team-a gpu
 ssh-manager projects add my-agent --profile team-a
 #   Token (shown once): <TOKEN>
 #   .mcp.json snippet:
-#   {"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}
+#   {"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
 ```
 
 Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the six SSH tools, scoped to the `team-a` profile's servers.
@@ -151,30 +154,7 @@ ssh-manager tui --mode client  # 强制 client 面板
 - 本机有**缓存**（`cache.bin`）→ client 面板；
 - vault 存在但锁着 / 两者都没有 → **引导性报错**（告诉你该 `unlock` 还是 `--mode client`）——**绝不静默降级到 client**。
 
-### Broker 主控台（4 个页签）
-
-`Tab` / `Shift+Tab` 循环切换页签；`↑` / `↓` 或 `j` / `k` 移动光标；`q` / `Ctrl+C` 退出；表单内 `Esc` 取消。
-
-| 页签 | 键 | 动作 |
-|---|---|---|
-| 服务器 | `a` / `e` / `d` / `i` / `!` | 新增（凭据**可选**，都不填 = 无凭据服务器）/ 编辑（tags 等既有字段保留；「清除凭据」勾选退回无凭据态，同 `servers edit --clear-credential`）/ 删除 / **导入 ssh config**（候选多选 → 批量导入 → 逐台补全，`Esc` 跳过保留 ⚠）/ 只看 ⚠ 待处理机器（无凭据 / 未填 role / 缺私钥口令） |
-| Profiles | `a` / `g` | 新增 profile / 授权（按服务器名多选；**增量**——不动已有授权） |
-| Projects | `a` / `e` / `d` | 新建（填 name + 选 profile）→ token **一次性全屏显示**；`e` 轮换 token（新 token 一次性显示）；`d` 吊销 |
-| 设备码 | `a` / `d` | 签发（填 serve 地址用于拼提示；设备码 + 证书指纹 + `cache pull` 示例命令一次性全屏显示）；`d` 吊销 |
-
-操作语义与 owner CLI 完全一致——TUI 只是同一套 vault 操作的另一个入口，做完的事在 `ls` / 审计里看到的一样。
-
-### Client 面板（工作机）
-
-页头常显 broker URL / pin 状态 / 缓存新鲜度；服务器列表**只读**。
-
-| 键 | 动作 |
-|---|---|
-| `s` | 立即同步（10 秒超时；失败显示错误并**保留旧缓存**） |
-| `c` | 编辑连接（url / pin 预填；设备码掩码、**不预填，留空 = 不变**） |
-| `t` | TTL 说明（`--cache-max-age` 配在 `.mcp.json` 的 mcp args 里，默认 30 分钟，`0` = 禁自动拉取） |
-
-**零远程写**：client 面板只做读缓存 + 拉快照，不会改服务器上的任何 vault 内容。
+Broker 主控台（服务器 / Profiles / Projects / 设备码 4 个页签）与 client 面板（服务器列表只读、零远程写）的操作语义与 owner CLI 完全一致——TUI 只是同一套 vault 操作的另一个入口，做完的事在 `ls` / 审计里看到的一样。各页签键位与典型任务走查见 [docs/tui-single-machine.md](docs/tui-single-machine.md) / [docs/tui-multi-machine.md](docs/tui-multi-machine.md)。
 
 ### 终端要求（mintty 注意）
 
@@ -209,6 +189,7 @@ ssh-manager serve --addr 0.0.0.0:7878
   {"mcpServers":{"ssh":{"type":"http","url":"https://192.0.2.5:7878/","headers":{"Authorization":"Bearer <TOKEN>"}}}}
   ```
   Or run the broker from a local **read-only cache** (`mcp --cache`) so the agent keeps working offline — see the quickstart.
+  > client 角色向导的 finish 屏现在会同时展示离线 --cache 与在线 http 两种形态。
 - **Shutdown.** `Ctrl+C` (`SIGINT`) / `SIGTERM` → graceful drain and every open `forward_port` tunnel torn down.
 
 > **⚠️ Breaking change / migration order.** New `serve` is TLS-only. When upgrading an already-deployed plaintext setup: **upgrade all work-machine binaries + configure their pin FIRST, restart `serve` LAST** — the moment `serve` upgrades it rejects old plaintext clients. Full migration + key-rotation runbooks in [`docs/multi-machine.md`](docs/multi-machine.md).

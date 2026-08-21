@@ -41,7 +41,7 @@ ssh-manager unlock
 
 ## Step 3 — 录入一台服务器
 
-> 💡 Step 3-4 也可在 TUI 主控台里点点点完成：`ssh-manager tui`（见 [README「TUI 主控台」](../README.md#tui-主控台ssh-manager-tui)）。
+> 💡 Step 3-4 也可在 TUI 主控台里点点点完成：`ssh-manager tui`（全键盘点选教程见 [tui-single-machine.md](./tui-single-machine.md)）。
 
 ```bash
 ssh-manager servers add --name gpu \
@@ -70,7 +70,7 @@ ssh-manager projects add my-agent --profile team-a
 `projects add` 会**打印一个一次性 token** + 一段 `.mcp.json` 片段，**当场记下来**（token 只显示一次）：
 
 ```json
-{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}
+{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
 ```
 
 ---
@@ -115,4 +115,5 @@ ssh-manager lock                                    # 锁回（删内存里的 k
 - 服务器增删改查 → [`managing-servers.md`](./managing-servers.md)
 - token 生命周期（轮换 / 吊销）→ [`agent-access.md`](./agent-access.md)
 - 应用场景示例 → [`scenarios.md`](./scenarios.md)
+- TUI 全程点选教程 → [`tui-single-machine.md`](./tui-single-machine.md)；把 [agent-tools.md](./agent-tools.md) 的规则模板贴进 CLAUDE.md，agent 会更守规矩
 - **多台机器共用一份 vault** → [`quickstart-multi-machine.md`](./quickstart-multi-machine.md)

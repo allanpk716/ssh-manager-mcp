@@ -11,7 +11,7 @@
 | 角色 | 是谁 | 用什么 | 能看到凭据吗 |
 |---|---|---|---|
 | **Owner（你）** | 人类操作者 | `ssh-manager` 命令行（owner CLI） | 能（持有 master key，可解锁保险柜） |
-| **Agent（AI）** | Claude Code / Cursor 等 | MCP 工具（`list_servers` / `exec_command` / …） | **永远不能**（只拿到命令输出 / 文件字节 / 转发端口） |
+| **Agent（AI）** | Claude Code / Cursor 等 | MCP 工具（`list_servers` / `exec_command` / …）；手册：[agent-tools.md](./agent-tools.md) | **永远不能**（只拿到命令输出 / 文件字节 / 转发端口） |
 
 核心安全模型（**铁律**）：凭据（密码 / 私钥）只存在加密保险柜里；agent 用一个 **project token** 认证到 MCP server（即 broker），broker 自己开 SSH 连接，只把**结果**返回给 agent——**凭据字节永远不会出现在任何工具返回里**。Agent 自己的 `ssh`（就算它有 shell）也登不进去，因为 `~/.ssh` 和 `ssh-agent` 里根本没有它能用的凭据。
 
@@ -29,6 +29,9 @@
 | [scenarios.md](./scenarios.md) | **应用场景与示例**：GPU 巡检装包、读 root-only 日志、上传部署、端口转发连数据库、拉日志排查、多环境隔离、token 泄露处置、owner 自己直连。 |
 | [multi-machine.md](./multi-machine.md) | **多机共享（serve 模式 · 可选）+ 离线只读缓存（Plan 12）**：多台机器共用一份服务器清单——一台 VLAN 服务器常驻 broker、其他机器的 agent 连远程；或每台工作机持本地加密只读缓存，断网时兜底。架构 / 配置 / 场景 / 限制（含后续路线）。 |
 | [backup-restore.md](./backup-restore.md) | **备份与迁移（export / import）**：把整个 vault 导出成口令加密的便携文件（跨机、可恢复）——备份 / 迁移 / 灾难恢复；安全模型（KeePass 式）、限制、与复制 store.db 的对比。 |
+| [tui-single-machine.md](./tui-single-machine.md) | **单机 TUI 教程**（全键盘点选，不想记命令）：首跑向导走查、四页签参考、典型任务与排错。 |
+| [tui-multi-machine.md](./tui-multi-machine.md) | **联机 TUI 教程**（server 侧 + 工作机 client 面板）：server 侧双密钥屏、client 双形态 finish 屏、典型任务。 |
+| [agent-tools.md](./agent-tools.md) | **给 AI agent 的工具手册**（可贴进 CLAUDE.md 的规则模板在内）：铁律、逐工具语义、错误对照、三态环境与行为依据表。 |
 | [compat-matrix.md](./compat-matrix.md) | **client↔serve 版本兼容矩阵**：已验证组合 / 破坏性变更 / 升级顺序铁律。升级任何一端之前先看这篇。 |
 | [backlog.md](./backlog.md) | **已裁决、未排期的欠账清单（面向后续 plan）**：owner 拍板暂不改行为的 5 项——serve 隧道 owner 急停、隧道回收活动感知、离线 cache 快照失效、受控监听地址、doctor serve 探活二期——每项现状与来源计划，后续 plan 的取货架。 |
 
