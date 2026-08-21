@@ -137,6 +137,38 @@ func FetchAll(st *store.Store) ([pageCount]listPage, error) {
 	return pages, nil
 }
 
+// projectTokenMsg builds the guidance-complete tokenIssuedMsg for the
+// Projects page add/rotate: the REAL token embedded in BOTH snippet forms —
+// a single one-time screen, CLI printToken parity (the wizard's placeholder
+// approach belongs to its two-screen flow and does not apply here). The http
+// block's URL is the neutral "<serve URL>" placeholder on purpose: the serve
+// address/port varies with --addr and plaintext deployments exist, so this
+// machine cannot know its own outward URL; the token is the copy-paste-
+// critical value and must be real.
+func projectTokenMsg(title, token string) tokenIssuedMsg {
+	stdio := mcpConfigLines(
+		[]string{`"args": ["mcp"]`, stdioEnvLine(token)},
+		[]string{
+			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
+			".mcp.json 含 token，不要提交进 git。",
+		})
+	httpBlock := mcpHttpConfigLines("<serve URL>", token, []string{
+		`"type": "http" 必填——漏了会被当 stdio 拒绝。`,
+		"<serve URL> 按 serve 实际启动地址填（默认形态 https://<主机>:7878/；端口随 --addr 变，明文部署见 docs/multi-machine.md）。",
+		".mcp.json 含 token，不要提交进 git。",
+	})
+	snippet := append([]string{"—— 本机/单机 agent（stdio）——"}, stdio...)
+	snippet = append(snippet, "", "—— 联机在线 agent（直连 serve，http；未部署 serve 可忽略本块）——")
+	snippet = append(snippet, httpBlock...)
+	return tokenIssuedMsg{
+		title:    title,
+		token:    token,
+		usage:    "填进 agent 的 .mcp.json（下方片段已代入此 token，抄完即用）",
+		recovery: "Projects 页 [e] 轮换换发（旧 token 立即失效）",
+		snippet:  snippet,
+	}
+}
+
 func (a App) Init() tea.Cmd { return nil }
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -296,7 +328,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							if err != nil {
 								return errMsg{err}
 							}
-							return tokenIssuedMsg{title: "项目 token", token: token}
+							return projectTokenMsg("项目 token", token)
 						}
 					})
 				case "e": // rotate: old token dies, new one shown once
@@ -313,7 +345,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								if err != nil {
 									return errMsg{err}
 								}
-								return tokenIssuedMsg{title: "项目 token（已轮换）", token: token}
+								return projectTokenMsg("项目 token（已轮换）", token)
 							}
 						})
 					}
@@ -461,7 +493,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// when the user dismisses (dismiss is a plain formDoneMsg{}).
 		a.err = nil
 		a.status = ""
-		a.overlay = &secretView{title: m.title, body: m.token}
+		a.overlay = &secretView{title: m.title, body: m.body()}
 		a.refetchPages()
 		return a, nil
 	}

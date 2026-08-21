@@ -263,7 +263,7 @@ func mcpConfigScreen(tokenRef string) overlay {
 	body := strings.Join(append(mcpConfigLines(
 		[]string{
 			`"args": ["mcp"]`,
-			`"env": { "SSHMGR_TOKEN": "` + tokenRef + `" }`,
+			stdioEnvLine(tokenRef),
 		},
 		[]string{
 			"单机角色用普通 mcp 启动（不要用 --cache —— 那是 client 角色的离线缓存模式）。",
