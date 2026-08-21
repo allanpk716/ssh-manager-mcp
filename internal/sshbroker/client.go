@@ -2,7 +2,6 @@ package sshbroker
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"strconv"
 
@@ -50,10 +49,13 @@ func Connect(ctx context.Context, host string, port int, user string, auth ssh.A
 		if r.err != nil {
 			// Plan 31: scrub the dialed address (and any resolved-IP / DNS
 			// residue) from the error text AT THE SOURCE, so every consumer —
-			// MCP tool errors included — is safe by construction. The chain
-			// survives via Unwrap (errors.Is classification) and net.Error is
-			// delegated; see redact.go for the invariants.
-			return nil, fmt.Errorf("ssh dial: %w", redactAddr(r.err, host, port))
+			// MCP tool errors included — is safe by construction. redactAddr's
+			// rendered text is itself prefixed with "ssh dial: " (and its frozen
+			// degraded phrases carry the same prefix), so Connect returns it
+			// AS-IS — no outer wrap, or the prefix would double end-to-end
+			// (owner ruling). The chain survives via Unwrap (errors.Is
+			// classification) and net.Error is delegated; see redact.go.
+			return nil, redactAddr(r.err, host, port)
 		}
 		return &Client{c: r.c}, nil
 	case <-ctx.Done():

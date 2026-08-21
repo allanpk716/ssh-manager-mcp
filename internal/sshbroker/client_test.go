@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"runtime"
 	"testing"
 	"time"
 
@@ -119,5 +120,41 @@ func TestConnectCancelContext(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("Connect took %v on cancel, want < 2s (dial should have been abandoned)", elapsed)
+	}
+}
+
+// TestConnectErrorSinglePrefix structurally locks the owner ruling that Connect
+// returns redactAddr's error AS-IS (no outer wrap): the rendered text carries
+// exactly ONE "ssh dial: " prefix end-to-end — a re-introduced
+// fmt.Errorf("ssh dial: %w", …) wrap would double it and fail this test.
+//
+// End-to-end through a REAL refused dial (port 1, no auth needed — the TCP
+// dial fails before any SSH handshake). Two empirical facts pin the inputs
+// (probed on this codebase's CI matrix, ubuntu + windows):
+//   - host must be "localhost", NOT "127.0.0.1": a host-name dial puts the
+//     RESOLVED IP in the error text, which survives step-1 scrubbing and
+//     forces the degradation path → one of the FROZEN phrases. With host
+//     "127.0.0.1" the host string equals the dialed address, scrubbing
+//     succeeds, and the raw OS text (worded differently per platform) passes
+//     through — never a frozen phrase.
+//   - the frozen phrase differs per OS: linux's syscall.ECONNREFUSED is the
+//     real errno 111 in the dial chain, so the ECONNREFUSED phrase fires;
+//     windows's syscall.ECONNREFUSED is an invented APPLICATION_ERROR errno
+//     (0x20000016) that a real connectex/WSAECONNREFUSED(10061) chain never
+//     errors.Is-matches, so classification falls to the default phrase.
+//
+// Both phrases are frozen literals of degradedText (redact.go), so this pins
+// redactAddr's output shape on both CI lanes.
+func TestConnectErrorSinglePrefix(t *testing.T) {
+	want := "ssh dial: connect failed: connection refused"
+	if runtime.GOOS == "windows" {
+		want = "ssh dial: connect failed"
+	}
+	_, err := Connect(context.Background(), "localhost", 1, "u", nil, nil)
+	if err == nil {
+		t.Fatal("dial localhost:1 must fail")
+	}
+	if got := err.Error(); got != want {
+		t.Fatalf("Connect error text:\n got %q\nwant %q (single \"ssh dial: \" prefix, frozen phrase)", got, want)
 	}
 }
