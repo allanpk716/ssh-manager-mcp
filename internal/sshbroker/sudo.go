@@ -11,10 +11,11 @@ import (
 
 // ctxErrOr reports a ctx cancellation as itself, so a caller sees context.Canceled
 // (or DeadlineExceeded) rather than the lower-level error it surfaced as. Used in
-// runSudoSession: a cancel arriving in the narrow sess.Start → stdin.Write window closes the session (via the watchdog) before the password
-// write completes, surfacing as a generic Start/Write error that would otherwise
-// reach the caller as-is instead of as the cancellation it is — and at the MCP
-// layer would map to status="error" rather than status="cancelled".
+// runSudoSession: a cancel arriving in the narrow sess.Start → stdin.Write window
+// closes the session (via the watchdog) before the password write completes,
+// surfacing as a generic Start/Write error that would otherwise reach the caller
+// as-is instead of as the cancellation it is — and at the MCP layer would map to
+// status="error" rather than status="cancelled".
 func ctxErrOr(ctx context.Context, err error) error {
 	if ce := ctx.Err(); ce != nil {
 		return ce
@@ -26,9 +27,8 @@ func ctxErrOr(ctx context.Context, err error) error {
 // engine's privileged variant): like runSession but running cmd through sudo -S
 // with an empty prompt (the wrapped command below) and feeding pass to sudo's
 // stdin (password line, then close) before waiting. Callers supply the
-// stdout/stderr writers directly; ctx,
-// timeout, and the (exitCode, timedOut, err) classification are identical to
-// runSession.
+// stdout/stderr writers directly; ctx, timeout, and the (exitCode, timedOut, err)
+// classification are identical to runSession.
 func (c *Client) runSudoSession(ctx context.Context, cmd, pass string, timeout time.Duration, stdout, stderr io.Writer) (exitCode int, timedOut bool, err error) {
 	sess, err := c.c.NewSession()
 	if err != nil {
