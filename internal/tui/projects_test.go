@@ -106,9 +106,9 @@ func TestProjectsKeyE_EmitsGuidedTokenMsg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, _ := a.Update(tea.KeyPressMsg{Code: tea.KeyTab})        // servers → profiles
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})         // profiles → projects
-	m, cmd := m.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})  // rotate confirm
+	m, _ := a.Update(tea.KeyPressMsg{Code: tea.KeyTab})       // servers → profiles
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})        // profiles → projects
+	m, cmd := m.Update(tea.KeyPressMsg{Code: 'e', Text: "e"}) // rotate confirm
 	if cmd == nil {
 		t.Fatal("[e] must open the rotate confirm form")
 	}
