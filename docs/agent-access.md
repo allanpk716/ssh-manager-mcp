@@ -33,7 +33,7 @@ ssh-manager projects add <project名> --profile <profile名>
 Token (shown once): eyJ...（一长串）
 
 .mcp.json snippet:
-{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"eyJ..."}}}
+{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"eyJ..."}}}}
 ```
 
 库里只存 token 的 **hash + salt**（像密码哈希），所以：

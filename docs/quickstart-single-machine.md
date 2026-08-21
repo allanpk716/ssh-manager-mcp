@@ -70,7 +70,7 @@ ssh-manager projects add my-agent --profile team-a
 `projects add` 会**打印一个一次性 token** + 一段 `.mcp.json` 片段，**当场记下来**（token 只显示一次）：
 
 ```json
-{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}
+{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
 ```
 
 ---

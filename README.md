@@ -87,7 +87,7 @@ ssh-manager profiles grant team-a gpu
 ssh-manager projects add my-agent --profile team-a
 #   Token (shown once): <TOKEN>
 #   .mcp.json snippet:
-#   {"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}
+#   {"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
 ```
 
 Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the six SSH tools, scoped to the `team-a` profile's servers.
