@@ -55,8 +55,13 @@ type Server struct {
 	Services         string // what is deployed/running here
 	Role             string // this server's purpose (e.g. "prod pg primary")
 	Caveats          string // operational gotchas; agent reads before acting
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// ExposeHost (Plan 31): owner opt-in to return the plaintext host in
+	// list_servers. Default false = the projection masks it as "hidden".
+	// Never affects the broker's own dialing — the vault always stores the
+	// real host.
+	ExposeHost bool
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // Credential stores an encrypted secret. Secret and Passphrase are decrypted only in memory by the store.

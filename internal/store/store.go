@@ -219,6 +219,14 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "servers", "caveats", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
+	// Plan 31: servers.expose_host (host masking opt-in). Must run BEFORE the
+	// rebuildServersNullable check below — the rebuild's INSERT..SELECT
+	// references this column, so on a legacy DB that triggers the rebuild the
+	// source table must already have it (spec §2; mechanism proven by the
+	// same-shaped SQL experiment).
+	if err := addColumnIfMissing(db, "servers", "expose_host", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	// Repair any rows that already carry NULL in these columns. Pre-DEFAULT migrations
 	// (the buggy release) left existing rows with SQL NULL here, and rows inserted after
 	// a downgrade would too. Idempotent: UPDATE ... WHERE IS NULL is a no-op once clean.
@@ -331,11 +339,12 @@ func rebuildServersNullable(db *sql.DB) error {
   services TEXT DEFAULT '',
   role TEXT DEFAULT '',
   caveats TEXT DEFAULT '',
+  expose_host INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 )`,
-		`INSERT INTO servers_new (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at)
-SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at FROM servers`,
+		`INSERT INTO servers_new (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at)
+SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at FROM servers`,
 		`DROP TABLE servers`,
 		`ALTER TABLE servers_new RENAME TO servers`,
 	}
@@ -421,6 +430,7 @@ CREATE TABLE IF NOT EXISTS servers (
   services TEXT DEFAULT '',
   role TEXT DEFAULT '',
   caveats TEXT DEFAULT '',
+  expose_host INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );

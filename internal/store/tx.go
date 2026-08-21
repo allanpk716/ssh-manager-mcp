@@ -32,10 +32,10 @@ func insertServerTx(db dbtx, srv *models.Server) (string, error) {
 	// credential_id has no '' row to reference, so a literal '' would violate it.
 	cred := nullableString(srv.CredentialID)
 	_, err := db.Exec(
-		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), cred, sudo, string(tagsJSON), srv.Description,
-		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, ts, ts,
+		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, srv.ExposeHost, ts, ts,
 	)
 	if err != nil {
 		// Localize the name-collision error — the raw driver text
@@ -57,9 +57,9 @@ func updateServerTx(db dbtx, srv *models.Server) error {
 	// Same NULL-for-"" mapping as insertServerTx (Plan 20 C0 credential-less form).
 	cred := nullableString(srv.CredentialID)
 	res, err := db.Exec(
-		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,tags=?,description=?,location=?,hardware=?,services=?,role=?,caveats=?,updated_at=? WHERE id=?`,
+		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,tags=?,description=?,location=?,hardware=?,services=?,role=?,caveats=?,expose_host=?,updated_at=? WHERE id=?`,
 		srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), cred, sudo, string(tagsJSON), srv.Description,
-		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, now(), srv.ID,
+		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, srv.ExposeHost, now(), srv.ID,
 	)
 	if err != nil {
 		return err
@@ -73,7 +73,7 @@ func updateServerTx(db dbtx, srv *models.Server) error {
 // getServerTx loads one server row by id on db.
 func getServerTx(db dbtx, id string) (*models.Server, error) {
 	return scanServer(db.QueryRow(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,created_at,updated_at FROM servers WHERE id=?`, id,
+		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at FROM servers WHERE id=?`, id,
 	))
 }
 

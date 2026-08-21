@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -309,5 +310,115 @@ func TestServerFieldSizeCap(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "tag") {
 		t.Fatalf("over-limit tag should be rejected with a tag-named error, got: %v", err)
+	}
+}
+
+// openTestStore opens a fresh store in t.TempDir() (store-package test helper
+// for Plan 31; mirrors the mcpserver newStore pattern).
+func openTestStore(t *testing.T) *Store {
+	t.Helper()
+	mk, _ := GenerateMasterKey()
+	st, err := Open(t.TempDir()+"/t.db", mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
+// TestExposeHostRoundTripRow: AddServer persists ExposeHost and every read
+// path (by id / by name / list) returns it. Default (zero value) is false.
+func TestExposeHostRoundTripRow(t *testing.T) {
+	st := openTestStore(t)
+	id, err := st.AddServer(&models.Server{
+		Name: "bexposed", Host: "h1", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, ExposeHost: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServer(&models.Server{
+		Name: "amasked", Host: "h2", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, // ExposeHost zero value = false
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.GetServer(id)
+	if err != nil || got == nil {
+		t.Fatalf("GetServer: %v %v", got, err)
+	}
+	if !got.ExposeHost {
+		t.Fatal("GetServer: ExposeHost = false, want true")
+	}
+	byName, _ := st.GetServerByName("amasked")
+	if byName == nil || byName.ExposeHost {
+		t.Fatal("GetServerByName: want ExposeHost=false (default)")
+	}
+	all, err := st.ListServers()
+	if err != nil || len(all) != 2 {
+		t.Fatalf("ListServers: %d %v", len(all), err)
+	}
+	// ListServers ORDER BY name → amasked < bexposed
+	if all[0].ExposeHost || !all[1].ExposeHost {
+		t.Fatalf("ListServers ExposeHost = [%v %v], want [false true]", all[0].ExposeHost, all[1].ExposeHost)
+	}
+	// Full-row update must preserve the bit (updateServerTx writes the whole row).
+	got.Name = "exposed2"
+	if err := st.UpdateServer(got); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := st.GetServer(id)
+	if again == nil || !again.ExposeHost {
+		t.Fatal("UpdateServer dropped ExposeHost")
+	}
+}
+
+// TestMigrateAddsExposeHostToLegacyDB locks the migrate() ordering claim
+// (addColumnIfMissing BEFORE the rebuildServersNullable check — spec §2) and
+// the rebuild's two column lists carrying expose_host. A pre-Plan-8-shaped DB
+// (no metadata columns, credential_id NOT NULL) goes through BOTH the
+// addColumn block and the rebuild inside one Open.
+func TestMigrateAddsExposeHostToLegacyDB(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/legacy.db"
+	// Craft the legacy shape directly (pre-initSchema), like the DB a
+	// pre-Plan-8 binary would have left on disk.
+	ldb, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ldb.Exec(`CREATE TABLE servers(
+		id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, host TEXT NOT NULL,
+		port INTEGER NOT NULL, user TEXT NOT NULL, auth_method TEXT NOT NULL,
+		credential_id TEXT NOT NULL, sudo_credential_id TEXT, tags TEXT,
+		created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ldb.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,tags,created_at,updated_at)
+		VALUES('srv-legacy','old-nuc','10.0.0.9',22,'ops','password','cred-x','[]',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ldb.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mk, _ := GenerateMasterKey()
+	st, err := Open(dbPath, mk) // runs migrate() then initSchema
+	if err != nil {
+		t.Fatalf("Open on legacy DB: %v", err)
+	}
+	defer st.Close()
+
+	got, err := st.GetServerByName("old-nuc")
+	if err != nil || got == nil {
+		t.Fatalf("GetServerByName after migration: %v %v", got, err)
+	}
+	if got.ExposeHost {
+		t.Fatal("legacy row must migrate to ExposeHost=false (v0.9 breaking default)")
+	}
+	// The row itself must survive the rebuild dance.
+	if got.ID != "srv-legacy" || got.Host != "10.0.0.9" || got.User != "ops" {
+		t.Fatalf("legacy row data lost: %+v", got)
 	}
 }
