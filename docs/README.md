@@ -33,7 +33,7 @@
 | [tui-multi-machine.md](./tui-multi-machine.md) | **联机 TUI 教程**（server 侧 + 工作机 client 面板）：server 侧双密钥屏、client 双形态 finish 屏、典型任务。 |
 | [agent-tools.md](./agent-tools.md) | **给 AI agent 的工具手册**（可贴进 CLAUDE.md 的规则模板在内）：铁律、逐工具语义、错误对照、三态环境与行为依据表。 |
 | [compat-matrix.md](./compat-matrix.md) | **client↔serve 版本兼容矩阵**：已验证组合 / 破坏性变更 / 升级顺序铁律。升级任何一端之前先看这篇。 |
-| [backlog.md](./backlog.md) | **已裁决、未排期的欠账清单（面向后续 plan）**：owner 拍板暂不改行为的 5 项——serve 隧道 owner 急停、隧道回收活动感知、离线 cache 快照失效、受控监听地址、doctor serve 探活二期——每项现状与来源计划，后续 plan 的取货架。 |
+| [backlog.md](./backlog.md) | **欠账清单（P0/P1 已裁决待开工 + P2 已裁决未排期 + 不做留痕）**：2026-08-21 grilling 缺口分析排期——P0 三项（host 掩码 / 后台任务三件套 / upload_content）、P1 三项（离线快照失效 / tunnels 硬化（吸收原 #1/#2/#4）/ audit CLI），P2 六项工程债（doctor / DACL / flake / TUI）保持未排期，文末附明确不做清单。后续 plan 的取货架。 |
 
 ---
 
