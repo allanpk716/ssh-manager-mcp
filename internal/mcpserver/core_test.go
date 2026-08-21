@@ -220,6 +220,32 @@ func TestExecCommandTruncatesLargeOutput(t *testing.T) {
 	}
 }
 
+// TestListServersHostMasking: ExposeHost=false (default) projects Host as the
+// literal "hidden"; ExposeHost=true projects the plaintext host. This is the
+// v0.9 breaking change itself — v0.8 always returned plaintext (spec §3).
+func TestListServersHostMasking(t *testing.T) {
+	st := newStore(t)
+	a, _ := st.AddServer(&models.Server{Name: "masked", Host: "10.0.0.1", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	b, _ := st.AddServer(&models.Server{Name: "exposed", Host: "10.0.0.2", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st), ExposeHost: true})
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{a, b})
+
+	got, err := ListServersForProfile(st, pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts := map[string]string{}
+	for _, s := range got {
+		hosts[s.Name] = s.Host
+	}
+	if hosts["masked"] != "hidden" {
+		t.Fatalf("masked server Host = %q, want \"hidden\"", hosts["masked"])
+	}
+	if hosts["exposed"] != "10.0.0.2" {
+		t.Fatalf("exposed server Host = %q, want plaintext", hosts["exposed"])
+	}
+}
+
 // helpers
 func mustCred(t *testing.T, st *store.Store) string {
 	t.Helper()
