@@ -23,6 +23,11 @@ type serverDraft struct {
 	// editing mode): ticked = submitServer routes through ClearServerCredential
 	// instead of a normal update — the reverse operation of re-credential.
 	ClearCredential bool
+	// ExposeHost (Plan 31): owner opt-in for plaintext host in list_servers.
+	// Carried through prefill/toParts — dropping it here silently resets the
+	// bit on every TUI edit (spec §4's #1 failure mode; guarded by
+	// TestPrefillToPartsPreserveExposeHost).
+	ExposeHost bool
 }
 
 // newServerForm builds the add/edit form bound to d by pointer. Secret fields
@@ -205,6 +210,7 @@ func prefill(cur *models.Server) *serverDraft {
 		Name: cur.Name, Host: cur.Host, User: cur.User, Port: cur.Port,
 		Description: cur.Description, Location: cur.Location, Hardware: cur.Hardware,
 		Services: cur.Services, Role: cur.Role, Caveats: cur.Caveats,
+		ExposeHost: cur.ExposeHost,
 	}
 }
 
@@ -223,6 +229,7 @@ func (d *serverDraft) toParts() (*models.Server, *models.Credential, *models.Cre
 		Description: strings.TrimSpace(d.Description), Location: strings.TrimSpace(d.Location),
 		Hardware: strings.TrimSpace(d.Hardware), Services: strings.TrimSpace(d.Services),
 		Role: strings.TrimSpace(d.Role), Caveats: strings.TrimSpace(d.Caveats),
+		ExposeHost: d.ExposeHost,
 	}
 	var cred, sudo *models.Credential
 	switch {

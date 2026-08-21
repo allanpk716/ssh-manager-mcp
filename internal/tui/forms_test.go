@@ -268,3 +268,36 @@ func TestNewServerFormComposesConstructors(t *testing.T) {
 	// Basic smoke test: both forms should be constructable
 	// (huh API limitations prevent deeper inspection)
 }
+
+// TestPrefillToPartsPreserveExposeHost: THE silent-reset guard (spec §4 —
+// "头号失败模式"). updateServerTx writes the FULL row and toParts builds a
+// FRESH models.Server, so both copy points must carry the bit or editing ANY
+// other field silently flips an owner opt-in back to false.
+func TestPrefillToPartsPreserveExposeHost(t *testing.T) {
+	cur := &models.Server{
+		Name: "n", Host: "h", Port: 22, User: "u",
+		Description: "d", ExposeHost: true,
+	}
+	d := prefill(cur)
+	if !d.ExposeHost {
+		t.Fatal("prefill dropped ExposeHost")
+	}
+	srv, _, _, err := d.toParts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !srv.ExposeHost {
+		t.Fatal("toParts dropped ExposeHost")
+	}
+	// Round-trip through the edit-field Set (the picker persists via the
+	// same draft): untoggle then retoggle.
+	f := exposeHostEditField()
+	f.Set(d, "false")
+	if d.ExposeHost {
+		t.Fatal("Set(\"false\") must clear")
+	}
+	f.Set(d, "true")
+	if !d.ExposeHost {
+		t.Fatal("Set(\"true\") must set")
+	}
+}

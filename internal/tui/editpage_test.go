@@ -115,7 +115,7 @@ func TestEditPageInitialView(t *testing.T) {
 		t.Fatalf("initial view missing page indicator %q:\n%s", got, v)
 	}
 	if p.list.Paginator.TotalPages < 2 {
-		t.Fatalf("16 items must paginate at this height, TotalPages=%d", p.list.Paginator.TotalPages)
+		t.Fatalf("17 items must paginate at this height, TotalPages=%d", p.list.Paginator.TotalPages)
 	}
 	if strings.Contains(v, "●") {
 		t.Fatalf("fresh page must show no dirty marks:\n%s", v)
@@ -132,7 +132,7 @@ func TestEditPageInitialView(t *testing.T) {
 	}
 	for _, want := range []string{
 		"SSH 用户", "密码", "私钥路径", "密钥口令", "sudo 密码", "清除凭据",
-		"硬件", "位置", "角色", "服务", "Caveats", "备注", "✓ 保存并退出", "hw",
+		"暴露 Host", "硬件", "位置", "角色", "服务", "Caveats", "备注", "✓ 保存并退出", "hw",
 	} {
 		if !strings.Contains(seen, want) {
 			t.Fatalf("↓-walk never surfaced %q:\n%s", want, seen)
@@ -196,7 +196,7 @@ func TestEditPageFieldEditMarksDirty(t *testing.T) {
 func TestEditPageConfirmSingleKeyCommits(t *testing.T) {
 	// y (Accept): completes the form and marks the row dirty
 	p, _, _ := newEditPageAt(t, 80)
-	openField(t, p, 8) // 清除凭据 — the table's only Confirm field
+	openField(t, p, 8) // 清除凭据 — first of the table's Confirm fields (y/n single-key)
 	p = press(t, p, 'y')
 	if p.state != editStateList {
 		t.Fatalf("y on the Confirm must complete the form, got state=%v", p.state)
@@ -222,7 +222,7 @@ func TestEditPageConfirmSingleKeyCommits(t *testing.T) {
 
 	// negative: y on an Input field is a typed character — no completion
 	p3, _, _ := newEditPageAt(t, 80)
-	openField(t, p3, 14) // 备注 — prefill is ""
+	openField(t, p3, 15) // 备注 — prefill is ""
 	p3 = press(t, p3, 'y')
 	if p3.state != editStateField {
 		t.Fatalf("y on an Input field must stay in field state, got %v", p3.state)
@@ -238,7 +238,7 @@ func TestEditPageFieldEscRestores(t *testing.T) {
 	p, _, _ := newEditPageAt(t, 80)
 	snap := snapshotDraft(p.d)
 
-	openField(t, p, 9) // 硬件
+	openField(t, p, 10) // 硬件
 	ctrl(t, p, 'u')
 	for _, r := range "JUNK-VALUE" {
 		p = press(t, p, r)
@@ -262,13 +262,13 @@ func TestEditPageFieldEscRestores(t *testing.T) {
 	}
 
 	// committed-then-reenter: Esc restores the COMMITTED value, not orig.
-	openField(t, p, 9)
+	openField(t, p, 10)
 	ctrl(t, p, 'u')
 	for _, r := range "committed" {
 		p = press(t, p, r)
 	}
 	p = tap(t, p, tea.KeyEnter)
-	openField(t, p, 9)
+	openField(t, p, 10)
 	ctrl(t, p, 'u')
 	for _, r := range "X" {
 		p = press(t, p, r)
@@ -307,7 +307,7 @@ func TestEditPageSaveItemFiresSubmit(t *testing.T) {
 	captured := false
 	p.submit = func() tea.Cmd { captured = true; return nil }
 
-	openField(t, p, 9) // dirty one field first — a real save scenario
+	openField(t, p, 10) // dirty one field first — a real save scenario
 	ctrl(t, p, 'u')
 	for _, r := range "2x4090" {
 		p = press(t, p, r)
@@ -335,7 +335,7 @@ func TestEditPageSaveItemFiresSubmit(t *testing.T) {
 // ④b 端到端：默认 submit（submitServer）真落库。
 func TestEditPageSaveEndToEnd(t *testing.T) {
 	p, st, _ := newEditPageAt(t, 80)
-	openField(t, p, 9)
+	openField(t, p, 10)
 	ctrl(t, p, 'u')
 	for _, r := range "2x4090" {
 		p = press(t, p, r)
@@ -361,7 +361,7 @@ func TestEditPageSaveEndToEnd(t *testing.T) {
 // ⑤ list 态 Esc → formDoneMsg{aborted:true} 且 store 无写入（即使 draft 已脏）。
 func TestEditPageListEscAbortsNoWrite(t *testing.T) {
 	p, st, _ := newEditPageAt(t, 80)
-	openField(t, p, 9)
+	openField(t, p, 10)
 	ctrl(t, p, 'u')
 	for _, r := range "SHOULD-NOT-PERSIST" {
 		p = press(t, p, r)
@@ -439,7 +439,7 @@ func TestEditPageWidthFit(t *testing.T) {
 			}
 		}
 		checkWidth(p.View().Content, "list state")
-		openField(t, p, 13) // Caveats — the longest field title
+		openField(t, p, 14) // Caveats — the longest field title
 		checkWidth(p.View().Content, "field state")
 	}
 }

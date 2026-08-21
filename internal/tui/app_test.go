@@ -152,7 +152,7 @@ func TestServersEditKeyOpensFieldPicker(t *testing.T) {
 		t.Fatalf("page must be built from the App's width state: want 80, got %d", p.width)
 	}
 	seen := got.View().Content
-	// one ↓ past every item: the walk visits the last page too (16 rows
+	// one ↓ past every item: the walk visits the last page too (17 rows
 	// paginate at the page's fixed height)
 	for i := 0; i <= len(p.fields); i++ {
 		nm, _ := got.Update(tea.KeyPressMsg{Code: tea.KeyDown})

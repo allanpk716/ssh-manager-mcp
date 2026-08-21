@@ -21,12 +21,13 @@ type editField struct {
 }
 
 // editFields 按固定顺序返回字段表（设计决策）：名称/Host/端口/SSH 用户/密码/
-// 私钥路径/密钥口令/sudo 密码/清除凭据(编辑态)/硬件/位置/角色/服务/Caveats/
-// 备注——编辑态 15 项，新增态 14 项（没有可清除的凭据）。保存项不在表内：
+// 私钥路径/密钥口令/sudo 密码/清除凭据(编辑态)/暴露 Host(编辑态)/硬件/位置/
+// 角色/服务/Caveats/备注——编辑态 16 项，新增态 14 项（新增态没有可清除的
+// 凭据；暴露 Host 默认隐藏，建后在编辑页开启）。保存项不在表内：
 // 它是编辑页（T2）在列表末尾追加的哨兵项。editing 同时被各闭包捕获，
 // 决定秘密字段的状态文案与表单标题（编辑态的"留空=不变"语义）。
 func editFields(editing bool) []editField {
-	fields := make([]editField, 0, 15)
+	fields := make([]editField, 0, 16)
 	fields = append(fields,
 		strField("name", "名称", func(d *serverDraft) *string { return &d.Name }, "名称（唯一）", nonEmpty),
 		strField("host", "Host", func(d *serverDraft) *string { return &d.Host }, "Host / IP", nonEmpty),
@@ -54,7 +55,7 @@ func editFields(editing bool) []editField {
 			func(d *serverDraft) huh.Field { return sudoPasswordField(d) }),
 	)
 	if editing {
-		fields = append(fields, clearCredentialEditField())
+		fields = append(fields, clearCredentialEditField(), exposeHostEditField())
 	}
 	fields = append(fields,
 		strField("hardware", "硬件", func(d *serverDraft) *string { return &d.Hardware }, "硬件", nil),
@@ -162,7 +163,30 @@ func clearCredentialEditField() editField {
 	}
 }
 
-// snapshotDraft 捕获全部 15 个可编辑字段的原值（含秘密明文）——仅用于脏比较，
+// exposeHostEditField: edit-mode-only bool (add mode defaults to false; flip
+// it here after creation). Same Confirm pattern as clearCredentialEditField —
+// Set accepts the canonical "true"/"已勾选" forms so snapshotDraft round-trips.
+func exposeHostEditField() editField {
+	return editField{
+		Key:     "exposehost",
+		Label:   "暴露 Host",
+		Confirm: true,
+		Get: func(d *serverDraft) string {
+			if d.ExposeHost {
+				return "已勾选"
+			}
+			return "未勾选"
+		},
+		Set: func(d *serverDraft, v string) { d.ExposeHost = v == "true" || v == "已勾选" },
+		Build: func(d *serverDraft) *huh.Form {
+			return huh.NewForm(huh.NewGroup(huh.NewConfirm().
+				Title("暴露 Host 给 agent（list_servers 返回明文；默认隐藏为 \"hidden\"）").Value(&d.ExposeHost).
+				Affirmative("暴露").Negative("隐藏")))
+		},
+	}
+}
+
+// snapshotDraft 捕获全部 16 个可编辑字段的原值（含秘密明文）——仅用于脏比较，
 // 永不渲染。键即 editField.Key（TestEditFieldsKeysMatchSnapshot 锁定对应关系）。
 func snapshotDraft(d *serverDraft) map[string]string {
 	return map[string]string{
@@ -175,6 +199,7 @@ func snapshotDraft(d *serverDraft) map[string]string {
 		"keypass":         d.KeyPass,
 		"sudopassword":    d.SudoPassword,
 		"clearcredential": strconv.FormatBool(d.ClearCredential),
+		"exposehost":      strconv.FormatBool(d.ExposeHost),
 		"hardware":        d.Hardware,
 		"location":        d.Location,
 		"role":            d.Role,
