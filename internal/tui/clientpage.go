@@ -191,7 +191,13 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.err, m.status = nil, "首次同步完成"
 		m.finish = true
-		m.overlay = clientFinishScreen()
+		// nil/空防御职责在调用点（spec rev3 §4.2）：判空后传 ""，杜绝在
+		// 传参处解引用 nil cred；函数内只对空串渲染占位。
+		serveURL := ""
+		if m.cred != nil {
+			serveURL = m.cred.URL
+		}
+		m.overlay = clientFinishScreen(serveURL)
 		return m, tea.Batch(m.overlay.Init(), refreshDataCmd)
 	case connSavedMsg:
 		m.err, m.status = nil, ""
@@ -409,24 +415,41 @@ func classifyPullError(err error) string {
 }
 
 // clientFinishScreen is the CLIENT role's .mcp.json finish screen (T5): the
-// --cache variant of mcpConfigScreen. The SSHMGR_TOKEN here is the SERVER machine's
-// project token — NOT the device code just used for the pull (a cache token
-// authorizes pulls only; the agent's MCP auth is the project token). The
-// client machine never sees that token during enrollment, so the snippet shows
-// a placeholder pointing at where it comes from. Token rides env, not argv
-// (ps/proc visibility — Plan 20 B2).
-func clientFinishScreen() overlay {
-	body := strings.Join(append(mcpConfigLines(
+// offline --cache form FIRST (the recommended default for the machine that
+// just pulled a cache), plus the ONLINE http form for always-on setups — the
+// same project token works for both. serveURL is passed AS-IS from the stored
+// cred (trailing-slash invariance verified experimentally: the serve handler
+// is root-mounted and path-agnostic); an empty value renders "<serve URL>".
+// The http block's Bearer is a FIXED placeholder — the client machine never
+// holds the project token (the device code in cache.auth.json authorizes
+// pulls only; the agent's MCP auth is the project token minted on the server
+// machine's Projects page). Token rides env, not argv (ps/proc visibility —
+// Plan 20 B2).
+func clientFinishScreen(serveURL string) overlay {
+	if serveURL == "" {
+		serveURL = "<serve URL>"
+	}
+	offline := mcpConfigLines(
 		[]string{
 			`"args": ["mcp", "--cache"]`,
-			`"env": { "SSHMGR_TOKEN": "<project token>" }`,
+			stdioEnvLine("<project token>"),
 		},
 		[]string{
 			"client 角色用 --cache 离线缓存模式启动；SSHMGR_TOKEN 填 server 机 Projects 页签发的 project token（不是设备码——设备码只用于拉取缓存，刚才已保存）。",
 			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
 			".mcp.json 含 token，不要提交进 git。",
-		},
-	), "", "按任意键进入 client 面板", ""), "\n")
+		})
+	online := mcpHttpConfigLines(serveURL, "<server 机 Projects 页签发的 token>", []string{
+		`"type": "http" 必填——漏了会被当 stdio 处理并拒绝该条目。`,
+		"两种形态用的是同一个 project token（server 机 Projects 页 [a] 新增 / [e] 轮换签发）。",
+		".mcp.json 含 token，不要提交进 git。",
+	})
+	lines := []string{"—— 离线为主（默认推荐）——"}
+	lines = append(lines, offline...)
+	lines = append(lines, "", "—— 在线为主 ——")
+	lines = append(lines, online...)
+	lines = append(lines, "", "按任意键进入 client 面板", "")
+	body := strings.Join(lines, "\n")
 	return &wizStaticView{title: "配置 agent 的 .mcp.json（client 模式）", body: body}
 }
 
