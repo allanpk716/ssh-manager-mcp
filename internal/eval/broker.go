@@ -110,6 +110,7 @@ func seedBroker(t *testing.T, host string, port int, names []string) (mcpConfigP
 			AuthMethod:       models.AuthPassword,
 			CredentialID:     cid,
 			SudoCredentialID: cid,
+			ExposeHost:       true, // e2e coverage of the exposed state (spec §6)
 		}
 		srvID, err := st.AddServer(srv)
 		if err != nil {
