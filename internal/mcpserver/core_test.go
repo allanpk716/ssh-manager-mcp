@@ -1049,7 +1049,7 @@ func TestForwardRejectsMaskedLiteral(t *testing.T) {
 	_ = st.GrantServers(pid, []string{a})
 	mgr := NewTunnelManager()
 
-	for _, rh := range []string{"hidden", "Hidden", "HIDDEN"} {
+	for _, rh := range []string{"hidden", "Hidden", "HIDDEN", "hidden.", " Hidden"} {
 		_, err := ForwardForProfile(context.Background(), st, "proj", pid, a, rh, 8080, 0, mgr)
 		if err == nil {
 			t.Fatalf("remoteHost %q must be rejected", rh)

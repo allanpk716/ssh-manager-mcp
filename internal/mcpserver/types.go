@@ -16,7 +16,7 @@ import "time"
 type ServerInfo struct {
 	ID          string   `json:"id" jsonschema:"stable server id (use this in exec_command)"`
 	Name        string   `json:"name" jsonschema:"human-friendly server name"`
-	Host        string   `json:"host" jsonschema:"server host; \"hidden\" = owner has not exposed it (default) — address the server via its id"`
+	Host        string   `json:"host" jsonschema:"server host; 'hidden' = owner has not exposed it (default) — address the server via its id"`
 	User        string   `json:"user" jsonschema:"ssh user"`
 	HasSudo     bool     `json:"has_sudo" jsonschema:"true if sudo=true is supported on this server"`
 	Role        string   `json:"role" jsonschema:"this server's purpose/role (e.g. 'prod pg primary')"`
