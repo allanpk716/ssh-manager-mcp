@@ -2,12 +2,14 @@ package mcpserver
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -22,8 +24,15 @@ import (
 
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
+	return newStoreAt(t, t.TempDir()+"/t.db")
+}
+
+// newStoreAt is newStore at an explicit db path — needed by tests that open a
+// second raw connection to the same file (deleteServerRowRaw).
+func newStoreAt(t *testing.T, path string) *store.Store {
+	t.Helper()
 	mk, _ := store.GenerateMasterKey()
-	st, err := store.Open(t.TempDir()+"/t.db", mk)
+	st, err := store.Open(path, mk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1052,4 +1061,173 @@ func TestForwardRejectsMaskedLiteral(t *testing.T) {
 	if len(mgr.tunnels) != 0 {
 		t.Fatal("no tunnel should be registered for a rejected forward")
 	}
+}
+
+// ---- Plan 31 Task 6: MCP error-branch regression net (spec §6) ----
+
+// leakAddrRe is the address-shape half of the regression net. The host
+// substring alone is blind for hostname servers (the leak would be the
+// RESOLVED ip); the regex alone would circularly share the detector with the
+// redaction code under test. Both, independently. (No "lookup" term here on
+// purpose: the DEGRADED DNS phrase legitimately contains the word "lookup" —
+// raw lookup forms are pinned by Task 5's sshbroker goldens.)
+var leakAddrRe = regexp.MustCompile(`(\b\d{1,3}(?:\.\d{1,3}){3}\b|\[[0-9a-fA-F:.]+\]|::)`)
+
+// assertNoLeak is the regression net's shared check — the error text must
+// contain neither the vault host substring NOR any address-shape literal.
+func assertNoLeak(t *testing.T, err error, host string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if strings.Contains(err.Error(), host) {
+		t.Fatalf("error text leaks host %q: %q", host, err.Error())
+	}
+	if leakAddrRe.MatchString(err.Error()) {
+		t.Fatalf("error text leaks an address shape: %q", err.Error())
+	}
+}
+
+// assertBranch pins WHICH branch fired before the no-leak check. A fixture
+// that silently degrades onto an earlier branch (e.g. denied — its text is
+// clean too) would otherwise pass assertNoLeak vacuously, so each call site
+// names the branch-signature substring its error must carry.
+func assertBranch(t *testing.T, err error, wantSub string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if !strings.Contains(err.Error(), wantSub) {
+		t.Fatalf("error %q does not reach its intended branch (want substring %q)", err.Error(), wantSub)
+	}
+}
+
+// deleteServerRowRaw removes ONLY the servers row through a second raw
+// connection. The schema's ON DELETE CASCADE on profile_servers does NOT fire
+// here: foreign_keys is a per-connection pragma and this handle leaves it at
+// the SQLite default (OFF). The id stays granted with no server row — the
+// real-world race the "server %s not found" branch defends against (the row
+// vanishing between the profile gate and GetServer). DeleteServer /
+// DeleteServerCascading cannot build this fixture: both DELETE FROM servers
+// under FK enforcement, which cascades the grant away and degrades the case
+// onto the denied branch.
+func deleteServerRowRaw(t *testing.T, dbPath, id string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`DELETE FROM servers WHERE id=?`, id); err != nil {
+		t.Fatalf("raw servers-row delete: %v", err)
+	}
+}
+
+// TestErrorBranchesNeverLeakHost: every reachable error branch of the four
+// *ForProfile operations must return text free of the vault host / address
+// shapes (spec §6 — the structural form of the "connect_error etc." promise).
+// Branches covered: denied (all four ops), server-not-found, no_credential,
+// no_sudo, connect_error (real dial, exec + forward), the forward hidden
+// guard (Task 4), and close-forward not-found.
+func TestErrorBranchesNeverLeakHost(t *testing.T) {
+	const vh = "vault.example.internal"
+	dir := t.TempDir()
+	st := newStoreAt(t, dir+"/t.db") // explicit path: the not-found fixture raw-deletes a row in-place
+	granted, _ := st.AddServer(&models.Server{Name: "g", Host: vh, Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	nocred, _ := st.AddServer(&models.Server{Name: "n", Host: vh, Port: 22, User: "u", AuthMethod: models.AuthPassword}) // credential-less
+	unreach, _ := st.AddServer(&models.Server{Name: "u", Host: "127.0.0.1", Port: 1, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{granted, nocred, unreach})
+	mgr := NewTunnelManager()
+
+	// denied (all four ops, out-of-profile id) — the gate fires before any
+	// server lookup, so the vault host is never even read.
+	_, err := ExecCommandForProfile(context.Background(), st, "proj", pid, "bogus-id", "true", false, time.Second)
+	assertBranch(t, err, "not in your profile")
+	assertNoLeak(t, err, vh)
+	_, err = DownloadForProfile(context.Background(), st, "proj", pid, "bogus-id", "/x")
+	assertBranch(t, err, "not in your profile")
+	assertNoLeak(t, err, vh)
+	_, err = UploadForProfile(context.Background(), st, "proj", pid, "bogus-id", "/x", "/y")
+	assertBranch(t, err, "not in your profile")
+	assertNoLeak(t, err, vh)
+	_, err = ForwardForProfile(context.Background(), st, "proj", pid, "bogus-id", "127.0.0.1", 80, 0, mgr)
+	assertBranch(t, err, "not in your profile")
+	assertNoLeak(t, err, vh)
+
+	// not found (granted id whose server row vanished — see deleteServerRowRaw
+	// for why the public delete APIs cannot build this fixture)
+	gone, _ := st.AddServer(&models.Server{Name: "gone", Host: vh, Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	_ = st.GrantServers(pid, []string{gone})
+	deleteServerRowRaw(t, dir+"/t.db", gone)
+	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, gone, "true", false, time.Second)
+	assertBranch(t, err, "not found")
+	assertNoLeak(t, err, vh)
+
+	// no_credential (refused pre-connect, so vh is never dialed)
+	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, nocred, "true", false, time.Second)
+	assertBranch(t, err, "no credential")
+	assertNoLeak(t, err, vh)
+
+	// no_sudo (exec only). The branch fires AFTER a successful connect (the
+	// sudo lookup is post-connect in core.go), so the fixture must be a real
+	// reachable testsshd without a sudo credential — pointing it at vh would
+	// degrade onto connect_error and never reach the branch under test.
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	nosudo := seedRealServer(t, st, "nosudo", addr, hk, "") // no sudo credential attached
+	_ = st.GrantServers(pid, []string{nosudo})
+	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, nosudo, "true", true, 5*time.Second)
+	assertBranch(t, err, "sudo not configured")
+	assertNoLeak(t, err, "127.0.0.1")
+
+	// connect_error — real dial to a refused port; the host is an IP here so
+	// BOTH checks bite (substring + shape). Task 5 washes the text at the
+	// source (Connect returns redactAddr's output), so exec and forward both
+	// surface one of the frozen "ssh dial: ..." phrases.
+	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, unreach, "true", false, 2*time.Second)
+	assertBranch(t, err, "ssh dial:")
+	assertNoLeak(t, err, "127.0.0.1")
+	_, err = ForwardForProfile(context.Background(), st, "proj", pid, unreach, "10.255.255.1", 65001, 0, mgr)
+	assertBranch(t, err, "ssh dial:")
+	assertNoLeak(t, err, "127.0.0.1")
+
+	// forward hidden guard (Task 4) — fires pre-connect; the guard text names
+	// the masked literal, never the vault host.
+	_, err = ForwardForProfile(context.Background(), st, "proj", pid, granted, "hidden", 80, 0, mgr)
+	assertBranch(t, err, "masked-host literal")
+	assertNoLeak(t, err, vh)
+
+	// close-forward not-found
+	err = CloseForwardForProfile(context.Background(), st, "proj", "no-such-tunnel", mgr)
+	assertBranch(t, err, "no open tunnel")
+	assertNoLeak(t, err, vh)
+}
+
+// TestConnectErrorHostKeyMismatchNoLeak: the hostkey-mismatch branch surfaces
+// THROUGH the connect error path (HostKeyTOFU's constructor never errors —
+// core.go's standalone herr branch is dead code), so its text must be washed
+// the same way. Pre-trust garbage bytes: TOFU compares marshaled key bytes,
+// so any non-matching blob triggers the mismatch branch. The mismatch is
+// genuinely triggered — testsshd performs a real handshake, and its real key
+// differs from the garbage we stored.
+func TestConnectErrorHostKeyMismatchNoLeak(t *testing.T) {
+	addr, _, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	st := newStore(t)
+	srv := &models.Server{
+		Name: "mismatch", Host: addr[:indexByte(addr, ':')], Port: portOfAddr(addr),
+		User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st),
+	}
+	id, _ := st.AddServer(srv)
+	_ = st.SaveHostKey(srv.Host, srv.Port, []byte("not-the-real-host-key"))
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{id})
+
+	_, err := ExecCommandForProfile(context.Background(), st, "proj", pid, id, "true", false, 5*time.Second)
+	if err == nil {
+		t.Fatal("want hostkey mismatch error")
+	}
+	assertBranch(t, err, "host key mismatch")
+	assertNoLeak(t, err, srv.Host)
 }
