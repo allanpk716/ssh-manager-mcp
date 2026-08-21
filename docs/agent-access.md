@@ -3,6 +3,7 @@
 这篇讲：怎么给一个 AI agent（Claude Code / Cursor / 任何 MCP 客户端）发“门禁卡”，让它能、且仅能操作你指定的一组服务器；以及怎么轮换、暂停、吊销这张卡。
 
 > 还没建好服务器和 profile？先看 [getting-started.md](./getting-started.md) 和 [managing-servers.md](./managing-servers.md)。
+> 发完卡，把 [agent-tools.md](./agent-tools.md)（或其附录规则模板）给 agent 一份——它会更守规矩。
 
 ---
 

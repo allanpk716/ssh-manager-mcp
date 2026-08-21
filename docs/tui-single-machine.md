@@ -170,4 +170,6 @@ ssh-manager tui
 - token 生命周期（轮换 / 吊销 / 设备码）：[agent-access.md](./agent-access.md)
 - 服务器增删改查与批量导入：[managing-servers.md](./managing-servers.md)
 - 概念模型图解（vault / profile / project / 设备码谁是谁的）：[concepts.md](./concepts.md)
+- 联机版 TUI 教程（server 侧 + 工作机 client 面板）：[tui-multi-machine.md](./tui-multi-machine.md)
+- 给 AI agent 的工具手册（可贴进 CLAUDE.md 的规则模板）：[agent-tools.md](./agent-tools.md)
 - 多机部署（serve + 设备码的用武之地）：[quickstart-multi-machine.md](./quickstart-multi-machine.md)、[multi-machine.md](./multi-machine.md)
