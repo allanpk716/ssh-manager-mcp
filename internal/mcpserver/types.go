@@ -28,7 +28,10 @@ type ServerInfo struct {
 	Description string   `json:"description" jsonschema:"owner's free-text notes (supplementary; prefer structured fields above)"`
 }
 
-// ExecOutput is the result of exec_command.
+// ExecOutput is the result of exec_command. EffectiveTimeoutSeconds (Plan 32
+// T7, spec §6) is ALWAYS present — the timeout actually in effect after the
+// clamp (input <= 0 → 120 default, anything over 300 → 300 cap): silent
+// clamping became an echo.
 type ExecOutput struct {
 	Stdout      string `json:"stdout" jsonschema:"combined/normal command stdout"`
 	Stderr      string `json:"stderr,omitempty" jsonschema:"command stderr"`
@@ -37,6 +40,8 @@ type ExecOutput struct {
 	Truncated   bool   `json:"truncated,omitempty" jsonschema:"true if stdout or stderr exceeded the 1 MiB cap — you only received the PREFIX. Check stdout_bytes/stderr_bytes for the true size; if you need more, refine and re-run (e.g. tail -n, head -n, grep) instead of asking for the whole thing"`
 	StdoutBytes int64  `json:"stdout_bytes" jsonschema:"total stdout bytes produced by the command (may exceed len(stdout) when truncated)"`
 	StderrBytes int64  `json:"stderr_bytes" jsonschema:"total stderr bytes produced by the command (may exceed len(stderr) when truncated)"`
+	// EffectiveTimeoutSeconds 恒存在 (no omitempty): clamp 后实际生效秒数。
+	EffectiveTimeoutSeconds int `json:"effective_timeout_seconds" jsonschema:"the timeout actually in effect, in seconds: timeout_seconds <= 0 means the 120s default and anything over 300 is capped at 300 — echoed instead of silently clamped; anything longer belongs in exec_background"`
 }
 
 // DownloadInput is the download_file tool input.
@@ -114,6 +119,47 @@ type BgStartOutput struct {
 	TaskID                  string `json:"task_id" jsonschema:"opaque task id; poll its output with exec_output, stop it with exec_stop"`
 	EffectiveTimeoutSeconds int    `json:"effective_timeout_seconds" jsonschema:"the clamped timeout actually in effect, in seconds (default and cap: 86400 = 24h)"`
 	Status                  string `json:"status" jsonschema:"task status right after start; running"`
+}
+
+// ExecOutputInput is the exec_output tool input (Plan 32 T7). The numeric
+// params (wait_seconds / stdout_offset / stderr_offset) cannot express
+// minimum:0 via the SDK's reflection-generated jsonschema and encoding cannot
+// express an enum — ExecOutputForProfile validates them at handler level and
+// rejects negatives / unknown encodings with explicit errors (T6 handoff).
+type ExecOutputInput struct {
+	TaskID       string `json:"task_id" jsonschema:"the task_id exec_background returned"`
+	WaitSeconds  int    `json:"wait_seconds,omitempty" jsonschema:"optional long-poll budget in seconds: the call returns once either stream has new bytes past your offsets, the task leaves running, or the budget expires (0/omit = return the current snapshot immediately; capped at 60; keep it under ~30 to stay below your own client timeout)"`
+	StdoutOffset int64  `json:"stdout_offset,omitempty" jsonschema:"absolute byte offset within the task's stdout stream to read from (0/omit = stream start); pass back the next_stdout_offset you received to continue"`
+	StderrOffset int64  `json:"stderr_offset,omitempty" jsonschema:"absolute byte offset within the task's stderr stream to read from (0/omit = stream start); pass back the next_stderr_offset you received to continue"`
+	Encoding     string `json:"encoding,omitempty" jsonschema:"how the stdout/stderr chunks are encoded: 'text' (default — raw bytes as UTF-8, invalid sequences become U+FFFD, a multi-byte character may be split at a read boundary) or 'base64' (exact bytes — decode it yourself; use it for binary or non-UTF-8 e.g. GBK output). Offsets are byte-based in both modes"`
+}
+
+// BgReadOutput is the exec_output tool output (Plan 32 T7): the increment
+// after each offset plus running/terminal status and honest-degradation
+// bookkeeping. House style: constant fields, empty values explicit.
+type BgReadOutput struct {
+	Status           string `json:"status" jsonschema:"task status: running|done|stopped|timeout|failed"`
+	ExitCode         int    `json:"exit_code" jsonschema:"process exit code (meaningful when status=done; 0 otherwise)"`
+	Error            string `json:"error" jsonschema:"error text when status=failed (address shapes cleaned); empty otherwise"`
+	Stdout           string `json:"stdout" jsonschema:"stdout bytes after stdout_offset, encoded per encoding (empty = nothing new)"`
+	Stderr           string `json:"stderr" jsonschema:"stderr bytes after stderr_offset, encoded per encoding (empty = nothing new)"`
+	NextStdoutOffset int64  `json:"next_stdout_offset" jsonschema:"the stdout byte offset right after this chunk — pass it as stdout_offset on your next call"`
+	NextStderrOffset int64  `json:"next_stderr_offset" jsonschema:"the stderr byte offset right after this chunk — pass it as stderr_offset on your next call"`
+	StdoutBytesTotal int64  `json:"stdout_bytes_total" jsonschema:"total stdout bytes the task has produced so far (the whole stream, not just the retained window)"`
+	StderrBytesTotal int64  `json:"stderr_bytes_total" jsonschema:"total stderr bytes the task has produced so far (the whole stream, not just the retained window)"`
+	Truncated        bool   `json:"truncated" jsonschema:"true if an offset fell behind the retained 1 MiB tail window — the skipped bytes are gone; read lost_stdout_bytes/lost_stderr_bytes and continue from next_*_offset instead of retrying the old offset"`
+	LostStdoutBytes  int64  `json:"lost_stdout_bytes" jsonschema:"stdout bytes skipped because stdout_offset fell behind the retained window (0 unless truncated=true)"`
+	LostStderrBytes  int64  `json:"lost_stderr_bytes" jsonschema:"stderr bytes skipped because stderr_offset fell behind the retained window (0 unless truncated=true)"`
+}
+
+// ExecStopInput is the exec_stop tool input (Plan 32 T7).
+type ExecStopInput struct {
+	TaskID string `json:"task_id" jsonschema:"the task_id exec_background returned"`
+}
+
+// BgStopOutput is the exec_stop tool output (Plan 32 T7).
+type BgStopOutput struct {
+	Status string `json:"status" jsonschema:"the task's status at trigger time: 'running' for a running task (the stop was set in motion; watch for the terminal 'stopped' state via exec_output — this call never blocks), or the task's terminal status if it had already finished (idempotent)"`
 }
 
 // ErrNotInProfile is returned when an agent requests a server outside its Profile (iron rule).

@@ -76,6 +76,9 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 
 // ExecCommandForProfile runs command on serverID iff serverID is in profileID (iron rule).
 // sudo=true uses sudo -S with the server's stored sudo password.
+// Plan 32 T7 (spec §6): the clamped timeout is echoed as
+// ExecOutput.EffectiveTimeoutSeconds — behavior otherwise unchanged (120s
+// default, 5min hard cap).
 //
 // Every branch is audited via the deferred WriteAudit: denial (out-of-profile),
 // auth failure, missing credential (no_credential, Plan 20 C0), host-key
@@ -186,6 +189,9 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	out = ExecOutput{
 		Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, TimedOut: res.TimedOut,
 		Truncated: res.Truncated, StdoutBytes: res.StdoutBytes, StderrBytes: res.StderrBytes,
+		// 钳制改响 (Plan 32 T7 / spec §6): 回显 clamp 后实际生效秒数——
+		// timeout 已在上方钳定 (<=0 → defaultTimeout; cap MaxExecTimeout)。
+		EffectiveTimeoutSeconds: int(timeout.Seconds()),
 	}
 	return
 }

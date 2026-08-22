@@ -3,11 +3,16 @@ package mcpserver
 // Plan 32 T6: ExecBackgroundForProfile 全错误分支 + no-leak 网 + 成功路径。
 // 断言形态照 Plan 31 core_test.go 的 assertBranch/assertNoLeak (同包复用);
 // 审计行断言 Action=exec-bg-start 的分支词汇表 (spec §5)。
+// Plan 32 T7 (追加于本文件尾部): exec_output / exec_stop 的 encoding 两态、
+// 诚实降级、超前立即返回、unknown 三因、输入拒绝、stop 语义与零审计行。
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -356,3 +361,501 @@ var (
 	_ = BgStartOutput{TaskID: "", EffectiveTimeoutSeconds: 0, Status: ""}
 	_ = ExecBackgroundInput{ServerID: "", Command: "", Sudo: false, TimeoutSeconds: 0}
 )
+
+// ---------- Plan 32 T7: exec_output / exec_stop ----------
+
+// TestClampWaitSeconds: wait 预算钳制纯函数全分支 (spec §3): 0→0 (不等待
+// 立即返回)、中值直通、边界 60 直通、>60→60; 负值防御性 0 (handler 层已拒)。
+func TestClampWaitSeconds(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int
+		want int
+	}{
+		{"zero stays zero (no wait)", 0, 0},
+		{"mid passthrough", 30, 30},
+		{"at cap unchanged (boundary)", 60, 60},
+		{"over cap clamped", 61, 60},
+		{"far over cap clamped", 9999, 60},
+		{"negative defused to zero (handler rejects)", -1, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := clampWaitSeconds(c.in); got != c.want {
+				t.Fatalf("clampWaitSeconds(%d) = %d, want %d", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestExecOutputEncodingTextInvalidUTF8: text 模式 = 与前台 exec_command 同
+// 语义——原始字节按 UTF-8 直入 JSON 字符串, 非法 UTF-8 在 JSON 序列化时被
+// 替换为 U+FFFD (有损, spec §4 编码语义)。断言走真实序列化边界 (json.Marshal
+// 往返): ForProfile 返回的 Go string 保真原始字节, 损失发生在 agent 可见的
+// JSON 文本上。
+func TestExecOutputEncodingTextInvalidUTF8(t *testing.T) {
+	m := newTestTM(t, 4)
+	defer m.CloseAll()
+	id, err := m.Insert(runningSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk, _ := m.lookup(id)
+	tk.stdout.Write([]byte("A\xFFB")) // 0xFF 恒非法 (UTF-8 任一位置的无效字节)
+
+	out, err := ExecOutputForProfile(context.Background(), newStore(t), "proj-bg", id, 0, 0, 0, "text", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Stdout != "A\xFFB" {
+		t.Fatalf("pre-marshal stdout = %q, want raw bytes A\\xFFB (Go string 层保真)", out.Stdout)
+	}
+	b, jerr := json.Marshal(out)
+	if jerr != nil {
+		t.Fatal(jerr)
+	}
+	var back BgReadOutput
+	if uerr := json.Unmarshal(b, &back); uerr != nil {
+		t.Fatal(uerr)
+	}
+	if back.Stdout != "A�B" {
+		t.Fatalf("JSON round-trip stdout = %q, want A\\uFFFDB (U+FFFD 替换)", back.Stdout)
+	}
+}
+
+// TestExecOutputEncodingBase64CrossWindowReassembly: 编码回归锚 (spec §7)——
+// 3 字节多字节字符 (中 = E4 B8 AD) 被读取窗边界切断 (首窗尾 2 字节 + 次窗头
+// 1 字节), base64 两窗独立解码后拼接 == 原始字节 (跨窗口重组无损, 二进制
+// 安全; text 模式此处必损——U+FFFD 各损半)。offset 两窗恒为字节口径。
+func TestExecOutputEncodingBase64CrossWindowReassembly(t *testing.T) {
+	m := newTestTM(t, 4)
+	defer m.CloseAll()
+	id, err := m.Insert(runningSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk, _ := m.lookup(id)
+	orig := "AAA中BBB" // 中 = 3 字节多字节字符
+	bOrig := []byte(orig)
+	cut := len("AAA中") - 1 // 首窗尾 = 中 的前 2 字节 (切断点)
+	st := newStore(t)
+
+	tk.stdout.Write(bOrig[:cut])
+	out1, err := ExecOutputForProfile(context.Background(), st, "proj-bg", id, 0, 0, 0, "base64", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk.stdout.Write(bOrig[cut:])
+	out2, err := ExecOutputForProfile(context.Background(), st, "proj-bg", id, 0, out1.NextStdoutOffset, 0, "base64", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d1, derr := base64.StdEncoding.DecodeString(out1.Stdout)
+	if derr != nil {
+		t.Fatalf("window1 base64 decode: %v", derr)
+	}
+	d2, derr2 := base64.StdEncoding.DecodeString(out2.Stdout)
+	if derr2 != nil {
+		t.Fatalf("window2 base64 decode: %v", derr2)
+	}
+	reassembled := append(d1, d2...)
+	if string(reassembled) != orig {
+		t.Fatalf("cross-window reassembly = %q, want original %q (多字节字符切断后无损重组)", reassembled, orig)
+	}
+	// 游标恒为字节口径: 首窗恰 cut 字节, 次窗推到流尾。
+	if out1.NextStdoutOffset != int64(cut) {
+		t.Fatalf("window1 next_stdout_offset = %d, want %d (字节口径)", out1.NextStdoutOffset, cut)
+	}
+	if out2.NextStdoutOffset != int64(len(bOrig)) || out2.StdoutBytesTotal != int64(len(bOrig)) {
+		t.Fatalf("window2 next=%d total=%d, want %d/%d", out2.NextStdoutOffset, out2.StdoutBytesTotal, len(bOrig), len(bOrig))
+	}
+}
+
+// TestExecOutputHonestDegradationGap: 游标落后保留窗首 (gap) → truncated +
+// lost_* 丢弃量 + 从缓冲首给可用字节 + next=total (spec §4 诚实降级, 经
+// ForProfile 全链而非 view 白盒)。
+func TestExecOutputHonestDegradationGap(t *testing.T) {
+	m := newTestTM(t, 4)
+	defer m.CloseAll()
+	id, err := m.Insert(runningSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk, _ := m.lookup(id)
+	// 一次写超整窗 (1 MiB+10): 只留尾 1 MiB, total=1 MiB+10, start=10。
+	tk.stdout.Write(make([]byte, int(MaxOutputBytes)+10))
+
+	out, err := ExecOutputForProfile(context.Background(), newStore(t), "proj-bg", id, 0, 1, 0, "text", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Truncated {
+		t.Fatal("gap offset must set Truncated=true")
+	}
+	if out.LostStdoutBytes != 9 {
+		t.Fatalf("LostStdoutBytes = %d, want 9 (start-since = 10-1)", out.LostStdoutBytes)
+	}
+	if int64(len(out.Stdout)) != MaxOutputBytes {
+		t.Fatalf("gap chunk len = %d, want whole retained window %d", len(out.Stdout), MaxOutputBytes)
+	}
+	if out.NextStdoutOffset != MaxOutputBytes+10 || out.StdoutBytesTotal != MaxOutputBytes+10 {
+		t.Fatalf("gap cursors: next=%d total=%d, want %d/%d",
+			out.NextStdoutOffset, out.StdoutBytesTotal, MaxOutputBytes+10, MaxOutputBytes+10)
+	}
+	if out.LostStderrBytes != 0 { // stderr 未写未落后: 无第二因降级
+		t.Fatalf("stderr untouched: LostStderrBytes = %d, want 0", out.LostStderrBytes)
+	}
+}
+
+// TestExecOutputAheadOffsetReturnsImmediately: 超前 offset (≥ 通道 total) 不
+// 空等——wait=5s 但瞬时返回, 空 chunk、next 回拉到 total (自恢复, spec §4)。
+func TestExecOutputAheadOffsetReturnsImmediately(t *testing.T) {
+	m := newTestTM(t, 4)
+	defer m.CloseAll()
+	id, err := m.Insert(runningSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk, _ := m.lookup(id)
+	tk.stdout.Write([]byte("0123456789"))
+
+	start := time.Now()
+	out, err := ExecOutputForProfile(context.Background(), newStore(t), "proj-bg", id, 5, 999, 0, "text", m)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("ahead offset must return immediately, took %v", elapsed)
+	}
+	if out.Stdout != "" {
+		t.Fatalf("ahead offset stdout = %q, want empty", out.Stdout)
+	}
+	if out.NextStdoutOffset != 10 || out.StdoutBytesTotal != 10 {
+		t.Fatalf("cursor pull-back: next=%d total=%d, want 10/10", out.NextStdoutOffset, out.StdoutBytesTotal)
+	}
+}
+
+// TestExecOutputUnknownThreeCauses: unknown task_id → 三因文案 (spec §4 原文
+// verbatim, expired/evicted/restarted 字样齐——泛化文案防误导排障)。
+// CloseAll 摘表后同文案 (manager 关闭同为 unknown)。
+func TestExecOutputUnknownThreeCauses(t *testing.T) {
+	m := newTestTM(t, 4)
+	st := newStore(t)
+
+	_, err := ExecOutputForProfile(context.Background(), st, "proj-bg", "no-such-task", 0, 0, 0, "", m)
+	if !errors.Is(err, ErrBgUnknownTask) {
+		t.Fatalf("want ErrBgUnknownTask, got %v", err)
+	}
+	for _, want := range []string{"never have existed", "expired", "evicted", "restarted", "in-process only"} {
+		assertBranch(t, err, want)
+	}
+
+	id2, _ := m.Insert(runningSpec())
+	m.CloseAll()
+	_, err = ExecOutputForProfile(context.Background(), st, "proj-bg", id2, 0, 0, 0, "text", m)
+	if !errors.Is(err, ErrBgUnknownTask) {
+		t.Fatalf("after CloseAll: want ErrBgUnknownTask, got %v", err)
+	}
+}
+
+// TestExecOutputRejectsBadInputs: handler 级输入校验 (SDK 反射式 jsonschema
+// 表达不了 minimum/enum——T6 handoff): 负 wait/offset、非法 encoding (含大写
+// 变体, 无归一化) 全拒, 且先于 unknown 判定 (unknown id 也先报参数错)。
+func TestExecOutputRejectsBadInputs(t *testing.T) {
+	m := newTestTM(t, 4)
+	defer m.CloseAll()
+	st := newStore(t)
+	cases := []struct {
+		name    string
+		wait    int
+		so, eo  int64
+		enc     string
+		wantSub string
+	}{
+		{"negative wait", -1, 0, 0, "", "wait_seconds must be >= 0"},
+		{"negative stdout offset", 0, -1, 0, "", "stdout_offset must be >= 0"},
+		{"negative stderr offset", 0, 0, -1, "", "stderr_offset must be >= 0"},
+		{"bad encoding", 0, 0, 0, "gbk", `encoding must be "text" or "base64"`},
+		{"encoding case variant not normalized", 0, 0, 0, "TEXT", `encoding must be "text" or "base64"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := ExecOutputForProfile(context.Background(), st, "proj-bg", "any-unknown-id", c.wait, c.so, c.eo, c.enc, m)
+			assertBranch(t, err, c.wantSub)
+		})
+	}
+}
+
+// TestExecStopForProfile: 立即返回语义 + 幂等 + unknown。运行中 (门控真任务)
+// → 返回触发时刻 "running" (不阻塞等终态); 终态后幂等回 stopped; unknown →
+// 三因文案。审计: stop 调用零行——start+end 恰两行, 幂等重复 stop 不新增。
+func TestExecStopForProfile(t *testing.T) {
+	st := newStore(t)
+	m := newTestTM(t, 4)
+	defer m.CloseAll()
+	gate := newGatedExec()
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Exec: gate.handler("gated")})
+	defer cleanup()
+	defer gate.open()
+
+	id, _ := startBg(t, m, st, addr, hk, "gated", 60)
+	gate.waitEntered(t, "gated")
+
+	out, err := ExecStopForProfile(context.Background(), st, "proj-bg", id, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != bgStatusRunning {
+		t.Fatalf("stop on running task = %q, want running (触发时刻 status, 立即返回)", out.Status)
+	}
+	s := waitTerminal(t, m, id, 5*time.Second)
+	if s.status != bgStatusStopped {
+		t.Fatalf("terminal after stop = %q, want stopped", s.status)
+	}
+
+	// 幂等: 已终态再 stop → 回其终态, 零新审计行。
+	out2, err := ExecStopForProfile(context.Background(), st, "proj-bg", id, m)
+	if err != nil || out2.Status != bgStatusStopped {
+		t.Fatalf("idempotent stop = (%q, %v), want stopped/nil", out2.Status, err)
+	}
+
+	// unknown → 三因文案。
+	_, err = ExecStopForProfile(context.Background(), st, "proj-bg", "no-such", m)
+	if !errors.Is(err, ErrBgUnknownTask) {
+		t.Fatalf("stop unknown = %v, want ErrBgUnknownTask", err)
+	}
+
+	// 审计恰两行 (AuditRows 倒序——end 在前): stop 调用本身零行 (end 行由任务
+	// goroutine 落笔, spec §5), 幂等重停不加行。
+	rows, rerr := st.AuditRows(10)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("audit rows = %d, want exactly 2 (start+end; stop 本身零行): %+v", len(rows), rows)
+	}
+	if rows[0].Action != "exec-bg-end" || rows[0].Status != bgStatusStopped || rows[0].Command != id {
+		t.Fatalf("end row = %+v, want exec-bg-end/stopped/Command=taskID", rows[0])
+	}
+	if rows[1].Action != "exec-bg-start" || rows[1].Status != "ok" {
+		t.Fatalf("start row = %+v, want exec-bg-start/ok", rows[1])
+	}
+}
+
+// TestExecStopNaturalExitRace: stop 与自然退出并发触发 (spec §3 竞态边界)——
+// 终态唯一 (stopped/done 二选一, 决胜于持锁先后) + end 审计行恰一行。
+func TestExecStopNaturalExitRace(t *testing.T) {
+	st := newStore(t)
+	m := newTestTM(t, 4)
+	defer m.CloseAll()
+	gate := newGatedExec()
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Exec: gate.handler("gated")})
+	defer cleanup()
+	defer gate.open()
+
+	id, _ := startBg(t, m, st, addr, hk, "gated", 60)
+	gate.waitEntered(t, "gated")
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { // 并发: 一侧放行自然退出, 一侧 exec_stop 触发
+		defer wg.Done()
+		gate.open()
+	}()
+	out, err := ExecStopForProfile(context.Background(), st, "proj-bg", id, m)
+	wg.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// stop 返回值: 落在退出前 → running; 落在退出后 → 幂等回 done。
+	if out.Status != bgStatusRunning && out.Status != bgStatusDone {
+		t.Fatalf("race stop return = %q, want running or done", out.Status)
+	}
+	s := waitTerminal(t, m, id, 5*time.Second)
+	if s.status != bgStatusStopped && s.status != bgStatusDone {
+		t.Fatalf("terminal after race = %q, want stopped or done (终态唯一)", s.status)
+	}
+
+	var endCount, startCount int
+	rows, rerr := st.AuditRows(10)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	for _, r := range rows {
+		if r.Action == "exec-bg-end" && r.Command == id {
+			endCount++
+		}
+		if r.Action == "exec-bg-start" {
+			startCount++
+		}
+	}
+	if startCount != 1 || endCount != 1 {
+		t.Fatalf("audit: start=%d end=%d, want 1/1 (终态唯一, 恰一行 end)", startCount, endCount)
+	}
+}
+
+// TestExecOutputZeroAuditRows: exec_output 纯进程内读零审计行 (spec §4/§5)
+// ——真任务 (start/end 行已由 Start/引擎落笔) 反复轮询后审计行数不变。
+func TestExecOutputZeroAuditRows(t *testing.T) {
+	st := newStore(t)
+	m := newTestTM(t, 4)
+	defer m.CloseAll()
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		Exec:     func(cmd string, _ io.Reader) (string, string, int) { return "out:" + cmd + "\n", "", 0 },
+	})
+	defer cleanup()
+
+	id, _ := startBg(t, m, st, addr, hk, "poll", 60)
+	waitTerminal(t, m, id, 5*time.Second)
+
+	for i := 0; i < 3; i++ {
+		if _, err := ExecOutputForProfile(context.Background(), st, "proj-bg", id, 0, 0, 0, "text", m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, rerr := st.AuditRows(10)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("audit rows = %d, want 2 (start+end only; 三次 exec_output 零审计行): %+v", len(rows), rows)
+	}
+}
+
+// TestExecOutputStopToolRegistered: MCP 层接线——exec_output/exec_stop 已注册
+// (BrokerTools[7]/[8]); 输出过 SDK jsonschema 校验 (恒定字段全序列化); 负值/
+// 非法 encoding 经 handler 校验以 IsError 工具错误回 (schema 层表达不了);
+// unknown task_id 同为 IsError 三因文案。
+func TestExecOutputStopToolRegistered(t *testing.T) {
+	st := newStore(t)
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		Exec:     func(cmd string, _ io.Reader) (string, string, int) { return "out:" + cmd + "\n", "", 0 },
+	})
+	defer cleanup()
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	server, mgr, tasks, err := NewServer(st, pid, "proj-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.CloseAll()
+	defer tasks.CloseAll()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
+	t1, t2 := mcp.NewInMemoryTransports()
+	srvSess, err := server.Connect(context.Background(), t1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srvSess.Close()
+	cliSess, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cliSess.Close()
+	ctx := context.Background()
+
+	// 起任务, 轮询 exec_output 至终态 (wait=2 长轮询真实走一轮)。
+	res, err := cliSess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "exec_background",
+		Arguments: map[string]any{"server_id": srvID, "command": "smoke"},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("exec_background: err=%v res=%+v", err, res.Content)
+	}
+	// 精确 task_id: 经 JSON 反序列化 (MCP 输出文本即结构化 JSON)。
+	var startOut struct {
+		TaskID string `json:"task_id"`
+	}
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			_ = json.Unmarshal([]byte(tc.Text), &startOut)
+		}
+	}
+	if startOut.TaskID == "" {
+		t.Fatalf("cannot parse task_id from %+v", res.Content)
+	}
+
+	done := false
+	for i := 0; i < 5 && !done; i++ {
+		res2, cerr := cliSess.CallTool(ctx, &mcp.CallToolParams{
+			Name: "exec_output",
+			Arguments: map[string]any{
+				"task_id":      startOut.TaskID,
+				"wait_seconds": 2,
+			},
+		})
+		if cerr != nil {
+			t.Fatal(cerr)
+		}
+		if res2.IsError {
+			t.Fatalf("exec_output should succeed: %+v", res2.Content)
+		}
+		done = textContains(res2, `"status":"done"`)
+	}
+	if !done {
+		t.Fatal("task did not reach done within 5 polls")
+	}
+
+	// base64 续读: offset 0 全量 = base64("out:smoke\n"), 游标字节口径。
+	wantB64 := base64.StdEncoding.EncodeToString([]byte("out:smoke\n"))
+	res3, cerr := cliSess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "exec_output",
+		Arguments: map[string]any{
+			"task_id": startOut.TaskID, "encoding": "base64",
+		},
+	})
+	if cerr != nil || res3.IsError {
+		t.Fatalf("exec_output base64: err=%v res=%+v", cerr, res3.Content)
+	}
+	if !textContains(res3, `"stdout":"`+wantB64+`"`) {
+		t.Fatalf("base64 stdout mismatch: %+v", res3.Content)
+	}
+	if !textContains(res3, `"next_stdout_offset":10`) || !textContains(res3, `"lost_stderr_bytes":0`) {
+		t.Fatalf("constant-field schema check failed: %+v", res3.Content)
+	}
+
+	// handler 级拒绝以 IsError 工具错误回 (schema 层表达不了 minimum/enum)。
+	res4, _ := cliSess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "exec_output",
+		Arguments: map[string]any{"task_id": startOut.TaskID, "wait_seconds": -1},
+	})
+	if !res4.IsError || !textContains(res4, "wait_seconds must be >= 0") {
+		t.Fatalf("negative wait must be IsError: %+v", res4.Content)
+	}
+	res5, _ := cliSess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "exec_output",
+		Arguments: map[string]any{"task_id": startOut.TaskID, "encoding": "gbk"},
+	})
+	if !res5.IsError || !textContains(res5, `encoding must be "text" or "base64"`) {
+		t.Fatalf("bad encoding must be IsError: %+v", res5.Content)
+	}
+
+	// exec_stop: 已终态幂等回 done; unknown → IsError 三因文案。
+	res6, serr := cliSess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "exec_stop",
+		Arguments: map[string]any{"task_id": startOut.TaskID},
+	})
+	if serr != nil || res6.IsError || !textContains(res6, `"status":"done"`) {
+		t.Fatalf("exec_stop idempotent on terminal: err=%v res=%+v", serr, res6.Content)
+	}
+	res7, _ := cliSess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "exec_stop",
+		Arguments: map[string]any{"task_id": "bogus"},
+	})
+	if !res7.IsError || !textContains(res7, "unknown task_id") {
+		t.Fatalf("exec_stop unknown must be IsError with three-cause text: %+v", res7.Content)
+	}
+	res8, _ := cliSess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "exec_output",
+		Arguments: map[string]any{"task_id": "bogus"},
+	})
+	if !res8.IsError || !textContains(res8, "unknown task_id") {
+		t.Fatalf("exec_output unknown must be IsError with three-cause text: %+v", res8.Content)
+	}
+}

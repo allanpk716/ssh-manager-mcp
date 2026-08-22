@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1230,4 +1231,49 @@ func TestConnectErrorHostKeyMismatchNoLeak(t *testing.T) {
 	}
 	assertBranch(t, err, "host key mismatch")
 	assertNoLeak(t, err, srv.Host)
+}
+
+// TestExecCommandEffectiveTimeoutEcho (Plan 32 T7 / spec §6 前台钳制改响):
+// effective_timeout_seconds 恒存在 (无 omitempty) 且等于 clamp 后生效秒数
+// ——0/缺省 → 120 (defaultTimeout)、400 → 300 (MaxExecTimeout 硬顶)、
+// 90 → 90 (中值直通)。前台行为零变化, 唯一增量是响式回显。
+func TestExecCommandEffectiveTimeoutEcho(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		Exec:     func(cmd string, _ io.Reader) (string, string, int) { return "ok\n", "", 0 },
+	})
+	defer cleanup()
+	st := newStore(t)
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	cases := []struct {
+		name string
+		in   time.Duration
+		want int
+	}{
+		{"zero defaults to 120", 0, 120},
+		{"over cap clamped to 300", 400 * time.Second, 300},
+		{"mid passthrough 90", 90 * time.Second, 90},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "hi", false, c.in)
+			if err != nil {
+				t.Fatalf("exec: %v", err)
+			}
+			if out.EffectiveTimeoutSeconds != c.want {
+				t.Fatalf("effective_timeout_seconds = %d, want %d", out.EffectiveTimeoutSeconds, c.want)
+			}
+			// 恒存在锚: 序列化文本必含该字段 (no omitempty 的回归钉)。
+			b, jerr := json.Marshal(out)
+			if jerr != nil {
+				t.Fatal(jerr)
+			}
+			if !strings.Contains(string(b), `"effective_timeout_seconds":`) {
+				t.Fatalf("serialized output missing constant field: %s", b)
+			}
+		})
+	}
 }
