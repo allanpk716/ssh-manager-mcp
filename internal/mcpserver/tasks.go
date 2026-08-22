@@ -246,6 +246,7 @@ func (m *TaskManager) Insert(spec *BgTaskSpec) (string, error) {
 		status:    bgStatusRunning,
 		startedAt: now,
 		deadline:  now.Add(spec.Timeout),
+		waitCh:    make(chan struct{}), // T5: 代际广播初代通道 (notify 的 close+换新对象)
 	}
 	if spec.PreFinished {
 		t.status = bgStatusDone
@@ -333,7 +334,7 @@ func (m *TaskManager) CloseAll() {
 		if t.client != nil {
 			_ = t.client.Close() // T4: client 槽接入——引擎可能尚未挂槽/尚未自关, 幂等双保险
 		}
-		// TODO(T5): 逐任务 notify 一次 (waitCh 代际广播) — 本文件唯一允许的 TODO, Task 5 接线时消除。
+		m.notify(t) // T5 触发点③: 摘表广播——唤醒在途 Output 等待者 (零等待者短路)
 	}
 	m.tasks = map[string]*bgTask{}
 	m.mu.Unlock()
@@ -389,6 +390,132 @@ func (w *notifyWriter) Write(p []byte) (int, error) {
 	n, err := w.buf.Write(p)
 	w.after()
 	return n, err
+}
+
+// ---------- Task 5: 代际广播消费 + Output 等待回路 (spec §2.3) ----------
+
+// BgView 是 Output 返回的观察快照, Task 7 的 exec_output ForProfile 消费。
+// 字段与 spec §4 出参一一对应: 游标 (Next*) / 全流字节计数 (Total*) / 保留窗
+// 首偏移 (Start*)。Truncated/Lost* 是诚实降级契约 (spec §4: offset 落后保留窗
+// 首 → truncated + lost 丢弃量)——brief 原型的结构遗漏, 已按 spec 补齐并记录。
+type BgView struct {
+	Status   string
+	ExitCode int
+	ErrText  string
+	Stdout   []byte
+	Stderr   []byte
+	// NextStdout/NextStderr: 下轮应传的游标 (三分支恒指向快照时流尾或回拉点)。
+	NextStdout int64
+	NextStderr int64
+	// StdoutTotal/StderrTotal: 通道全流字节计数 (快照后取, 单调 → 恒 ≥ Next*)。
+	StdoutTotal int64
+	StderrTotal int64
+	// StartStdout/StartStderr: 保留窗首字节的流内偏移 (gap 判据的锚)。
+	StartStdout int64
+	StartStderr int64
+	// Truncated: 任一通道发生 gap (offset < 保留窗首) 即置位; Lost* = 各通道
+	// 被滚动丢弃的字节数 (start-since)。
+	Truncated  bool
+	LostStdout int64
+	LostStderr int64
+}
+
+// Output 是 exec_output 的长轮询等待回路 (=WaitFor, spec §2.3 结构钉死): 等到
+// 「任一通道相对所传 offset 有新字节 / 超前游标 / 任务离开 running / 表项已失
+// 或 manager 关闭 (→ unknown) / 绝对 deadline / ctx 取消」才返回。deadline 在
+// 入口一次定死 (进入时 now + wait), 不随唤醒重置; timer 全程复用 (每轮
+// Reset 剩余)。代捕获与条件检查在同一把 TM.mu 内 (无丢唤醒窗口); 条件只读
+// totals/status (TM.mu→buffer.mu 唯一合法嵌套方向, 廉价), Snapshot 深拷贝由
+// view 在 TM.mu 外做。wait 由调用方钳定 (T7 clampWaitSeconds), 此处原样生效;
+// 负值等价于零 (deadline 已过 → 立即快照返回)。表项已失/manager 关闭 →
+// (零值, false, nil)——三因文案由调用方 (T7) 拼装, 本层不猜原因。
+func (m *TaskManager) Output(id string, so, eo int64, wait time.Duration, ctx context.Context) (BgView, bool, error) {
+	deadline := m.now().Add(wait)
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	for {
+		m.mu.Lock()
+		t, ok := m.tasks[id]
+		if !ok || m.closed {
+			m.mu.Unlock()
+			return BgView{}, false, nil // 表项已失/manager 关闭 → unknown 三因 (调用方拼文案)
+		}
+		ch := t.waitCh // 代捕获 (与条件检查同一把锁——无丢唤醒窗口)
+		st, ot := t.stdout.Total(), t.stderr.Total()
+		cond := so < st || eo < ot || // 任一通道有新字节 (相对所传 offset)
+			(so > 0 && so >= st) || (eo > 0 && eo >= ot) || // 超前游标立即返回 (0 = 等首字节, 不算超前)
+			t.status != bgStatusRunning
+		// 条件只读 totals/status (廉价)——绝不在此做 Snapshot 深拷贝 (阻塞全局锁)
+		if cond {
+			m.mu.Unlock()
+			return m.view(t, so, eo), true, nil // 深拷贝在锁外 (view 内 Snapshot 各自持 buffer.mu, 方向合法)
+		}
+		m.mu.Unlock()
+		remain := deadline.Sub(m.now())
+		if remain <= 0 || ctx.Err() != nil {
+			t2, _ := m.lookup(id)
+			if t2 == nil {
+				return BgView{}, false, nil
+			}
+			return m.view(t2, so, eo), true, nil
+		}
+		t.waiters.Add(1)
+		if timer == nil {
+			timer = time.NewTimer(remain) // timer 全程复用 (每轮 Reset 剩余, 不攒 timer)
+		} else {
+			timer.Reset(remain)
+		}
+		select {
+		case <-ch:
+			t.waiters.Add(-1)
+			continue // 唤醒后重查——虚假/陈旧唤醒不满足则续等
+		case <-timer.C:
+			t.waiters.Add(-1)
+			t3, _ := m.lookup(id)
+			if t3 == nil {
+				return BgView{}, false, nil
+			}
+			return m.view(t3, so, eo), true, nil
+		case <-ctx.Done():
+			t.waiters.Add(-1)
+			t4, _ := m.lookup(id)
+			if t4 == nil {
+				return BgView{}, false, nil
+			}
+			return m.view(t4, so, eo), true, nil
+		}
+	}
+}
+
+// view 组装 BgView: 标量 (status/exitCode/errText) 在 TM.mu 内拷贝——任务字段
+// 只在持锁下变异, 不持锁读即数据竞争; 随后两通道 Snapshot 深拷贝在 TM.mu 外
+// (各自持 buffer.mu, 串行无嵌套, 与 TM.mu→buffer.mu 唯一合法嵌套方向自洽)。
+// gap 分支 (offset < 保留窗首) 的诚实降级由 Snapshot 三分支语义 + 此处置位:
+// truncated + lost = start-since, chunk 为整个保留窗 (spec §4)。
+func (m *TaskManager) view(t *bgTask, so, eo int64) BgView {
+	m.mu.Lock()
+	v := BgView{Status: t.status, ExitCode: t.exitCode, ErrText: t.errText}
+	m.mu.Unlock()
+
+	oChunk, oNext, oStart := t.stdout.Snapshot(so)
+	eChunk, eNext, eStart := t.stderr.Snapshot(eo)
+	if so < oStart { // gap: 游标落后保留窗首 → 诚实降级
+		v.Truncated = true
+		v.LostStdout = oStart - so
+	}
+	if eo < eStart {
+		v.Truncated = true
+		v.LostStderr = eStart - eo
+	}
+	v.Stdout, v.NextStdout, v.StartStdout = oChunk, oNext, oStart
+	v.Stderr, v.NextStderr, v.StartStderr = eChunk, eNext, eStart
+	v.StdoutTotal = t.stdout.Total() // Snapshot 后取 total (单调): 恒 ≥ Next*, 游标不倒退
+	v.StderrTotal = t.stderr.Total()
+	return v
 }
 
 // Stop 请求停止运行中任务 (spec §3): 持锁置 stopReq + cancel, 立即返回触发
