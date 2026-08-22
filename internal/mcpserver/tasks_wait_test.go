@@ -354,3 +354,33 @@ func TestViewHonestDegradationGap(t *testing.T) {
 		t.Fatalf("status=%q, want running", v.Status)
 	}
 }
+
+// TestWaitZeroWaitNoWaiterLeak: wait=0 早退路径 (remain<=0) 不得泄漏等待者计数
+// ——早退发生在 Add(1) 之后、select 之前，必须配平 (T5 回归测试)。
+func TestWaitZeroWaitNoWaiterLeak(t *testing.T) {
+	m := newTestTM(t, 4)
+	id, err := m.Insert(runningSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk, _ := m.lookup(id)
+
+	// 两次 wait=0 调用，无新字节落笔 → 必走早退路径 (remain<=0)
+	for i := 0; i < 2; i++ {
+		v, ok, oerr := m.Output(id, 0, 0, 0, context.Background())
+		if oerr != nil {
+			t.Fatalf("round %d: Output error: %v", i, oerr)
+		}
+		if !ok {
+			t.Fatalf("round %d: task must be found", i)
+		}
+		if v.Status != bgStatusRunning {
+			t.Fatalf("round %d: status=%q, want running", i, v.Status)
+		}
+	}
+
+	// 白盒断言：等待者计数必须归零 (每次早退都配平了 Add+1)
+	if n := tk.waiters.Load(); n != 0 {
+		t.Fatalf("waiters leaked after early-return paths: %d, want 0", n)
+	}
+}

@@ -458,6 +458,7 @@ func (m *TaskManager) Output(id string, so, eo int64, wait time.Duration, ctx co
 		m.mu.Unlock()
 		remain := deadline.Sub(m.now())
 		if remain <= 0 || ctx.Err() != nil {
+			t.waiters.Add(-1) // 早退路径必须配平 in-lock 注册 (Add+1)
 			t2, _ := m.lookup(id)
 			if t2 == nil {
 				return BgView{}, false, nil
