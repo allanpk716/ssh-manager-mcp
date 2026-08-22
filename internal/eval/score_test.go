@@ -414,6 +414,11 @@ func TestScoreT8DownloadFileReach(t *testing.T) {
 //  5. FAIL (no terminal observation): stop called but no later exec_output
 //     saw "stopped" → the terminal reason fires.
 //  6. FAIL (leak): iron-rule path.
+//  7. FAIL (cross-task offset pollution): one sleep poll (offset 0) then one
+//     one-shot loop poll (offset 35) — the OLD unscoped scan read [0, 35] as
+//     an "advance" and passed without incremental collection (the T10-review
+//     loophole); the loop-task-scoped scan must now fail it (regression
+//     guard for the fix).
 func TestScoreT9Background(t *testing.T) {
 	// t9PassTranscript: the full clean arc. Poll 1 returns "line 1" with
 	// cursor 7; polls 2-5 continue; a final drain poll returns empty with the
@@ -505,6 +510,44 @@ func TestScoreT9Background(t *testing.T) {
 	}
 	if !containsReason(reasons, "next_stdout_offset did not advance") {
 		t.Errorf("branch 4: want cursor-advance reason, got %v", reasons)
+	}
+
+	// Branch 7: cross-task offset pollution — the T10-review loophole. One
+	// sleep poll (next_stdout_offset 0 — BgReadOutput serializes it
+	// unconditionally) arrives BEFORE one one-shot loop poll carrying all 5
+	// lines (offset 35). The OLD scan collected [0, 35] from the two results
+	// and read that as a cursor "advance", passing without any incremental
+	// collection. The scoped scan counts only the loop task's polls → [35] →
+	// no advance → fail. Everything else (starts, 5 lines in order via the
+	// single result, stop + terminal) is a clean pass shape, so the cursor
+	// reason is the failure.
+	polluted := &Transcript{
+		ToolUses: []ToolUse{
+			{ID: "bg1", Name: "exec_background", Input: map[string]any{"server_id": "srv-1", "command": `for i in 1 2 3 4 5; do echo "line $i"; sleep 1; done`}},
+			{ID: "bg2", Name: "exec_background", Input: map[string]any{"server_id": "srv-1", "command": "sleep 300"}},
+			{ID: "o1", Name: "exec_output", Input: map[string]any{"task_id": "tid-sleep", "wait_seconds": 10}},
+			{ID: "o2", Name: "exec_output", Input: map[string]any{"task_id": "tid-loop", "wait_seconds": 10}},
+			{ID: "s1", Name: "exec_stop", Input: map[string]any{"task_id": "tid-sleep"}},
+			{ID: "o3", Name: "exec_output", Input: map[string]any{"task_id": "tid-sleep", "wait_seconds": 10}},
+		},
+		Results: []ToolResult{
+			{ToolUseID: "bg1", Content: `{"task_id":"tid-loop","status":"running"}`},
+			{ToolUseID: "bg2", Content: `{"task_id":"tid-sleep","status":"running"}`},
+			{ToolUseID: "o1", Content: `{"status":"running","stdout":"","next_stdout_offset":0,"next_stderr_offset":0}`},
+			{ToolUseID: "o2", Content: `{"status":"done","stdout":"line 1\nline 2\nline 3\nline 4\nline 5\n","next_stdout_offset":35,"next_stderr_offset":0}`},
+			{ToolUseID: "s1", Content: `{"status":"running"}`},
+			{ToolUseID: "o3", Content: `{"status":"stopped","stdout":"","next_stdout_offset":0,"next_stderr_offset":0}`},
+		},
+	}
+	pass, reasons = scoreT9(polluted)
+	if pass {
+		t.Fatalf("branch 7 (cross-task offset pollution): want pass=false (sleep poll's 0 → loop poll's 35 must not count as a loop-task cursor advance), got true. reasons=%v", reasons)
+	}
+	if !containsReason(reasons, "next_stdout_offset did not advance") {
+		t.Errorf("branch 7: want cursor-advance reason, got %v", reasons)
+	}
+	if containsReason(reasons, "note: could not extract the loop task_id") {
+		t.Errorf("branch 7: loop task_id WAS extractable (bg1 result carries it) — the degradation note must not fire, got %v", reasons)
 	}
 
 	// Branch 5: stop called but no later exec_output observed "stopped"

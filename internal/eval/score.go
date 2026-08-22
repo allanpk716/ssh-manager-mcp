@@ -710,10 +710,12 @@ func isT9LoopCommand(cmd string) bool {
 //     count — only exec_output results are scanned, so an agent that skipped
 //     the polling loop cannot pass);
 //  3. the stdout cursor advanced: at least one strictly-later
-//     next_stdout_offset over an earlier one across the exec_output polls
-//     (the incremental-collection signal — a single one-shot poll after the
-//     script finished would collect all 5 lines but never see the cursor
-//     move, and fails this assertion by design);
+//     next_stdout_offset over an earlier one across the LOOP task's
+//     exec_output polls (the incremental-collection signal — a single
+//     one-shot poll after the script finished would collect all 5 lines but
+//     never see the cursor move, and fails this assertion by design; only
+//     loop-task polls count, so a sleep poll's always-0 offset cannot fake
+//     an advance cross-task);
 //  4. exec_stop targeted the sleep-300 task and a LATER exec_output observed
 //     the terminal "stopped" state (the brief's stop→终态 arc; the
 //     trigger-time "running" answer is expected from BgStopOutput semantics
@@ -777,13 +779,49 @@ func scoreT9(tr *Transcript) (pass bool, reasons []string) {
 		pos += idx + len(line)
 	}
 
-	// (3) cursor advance across polls: some later next_stdout_offset is
-	// strictly greater than an earlier one. (Any strictly-increasing pair
-	// implies an adjacent increase, so the adjacent scan is complete.)
+	// (3) cursor advance across polls OF THE LOOP TASK: some later
+	// next_stdout_offset is strictly greater than an earlier one, counted only
+	// over exec_output polls attributable to the loop task. The loop task's id
+	// is recovered from its exec_background result JSON exactly like
+	// sleepTaskID in (4) (command matched by isT9LoopCommand — the same
+	// predicate as (1)'s startedLoop — id via bgTaskIDRe). Scoping is
+	// load-bearing: BgReadOutput always serializes next_stdout_offset (0 for a
+	// sleep poll that produced no output), so an unscoped scan let a sleep
+	// poll (0) followed by a one-shot loop poll (35) fake an "advance"
+	// cross-task — the T10-review loophole. If extraction failed (rendering
+	// drift / missing result), fall back to scanning ALL exec_output results
+	// AND surface the degradation in reasons — the scorer degrades loudly, not
+	// silently (mirroring (4)'s sleepTaskID fallback, but noted because here
+	// the fallback re-opens the loophole instead of just loosening the match).
+	loopTaskID := ""
+	for _, tu := range tr.ToolUses {
+		if tu.Name != "exec_background" {
+			continue
+		}
+		cmd, _ := tu.Input["command"].(string)
+		if !isT9LoopCommand(cmd) {
+			continue
+		}
+		if r, ok := resByID[tu.ID]; ok {
+			if m := bgTaskIDRe.FindStringSubmatch(r.Content); m != nil {
+				loopTaskID = m[1]
+				break
+			}
+		}
+	}
+	if startedLoop && loopTaskID == "" {
+		reasons = append(reasons, "note: could not extract the loop task_id from its exec_background result — cursor-advance scan degraded to ALL exec_output polls (sleep-task offsets may pollute the signal)")
+	}
 	var offsets []int64
 	for _, tu := range tr.ToolUses {
 		if tu.Name != "exec_output" {
 			continue
+		}
+		if loopTaskID != "" {
+			tid, _ := tu.Input["task_id"].(string)
+			if tid != loopTaskID {
+				continue
+			}
 		}
 		r, ok := resByID[tu.ID]
 		if !ok {
@@ -804,7 +842,7 @@ func scoreT9(tr *Transcript) (pass bool, reasons []string) {
 	}
 	if !advanced {
 		pass = false
-		reasons = append(reasons, fmt.Sprintf("next_stdout_offset did not advance across exec_output polls (extracted %v) — output was not collected incrementally", offsets))
+		reasons = append(reasons, fmt.Sprintf("next_stdout_offset did not advance across the loop task's exec_output polls (extracted %v) — output was not collected incrementally", offsets))
 	}
 
 	// (4) exec_stop targeted the sleep-300 task, and a LATER exec_output on
