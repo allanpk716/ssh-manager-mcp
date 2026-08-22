@@ -129,3 +129,81 @@ func TestServeHTTPRejectsRevokedTokenPerRequest(t *testing.T) {
 		t.Fatalf("post-revoke initialize = %d, want 401", code)
 	}
 }
+
+// TestRevokedProjectKeepsBackgroundTaskRunning 钉住上面 tunnel 先例的后台
+// 任务版: revoke 立即杀死 token 门 (serve 层 401), 但一个 RUNNING 中的后台
+// 任务继续跑——任务由 broker 的 TaskManager 持有, revoke 路径没有任何
+// CloseAll 连带 (owner 决策, 与 open tunnel 同契约)。反向钉住意图: 若未来
+// revoke 实现加了 TaskManager.CloseAll 连带 (或任何 revoke 时点的任务拆除),
+// 本测试必须红——契约变更须经由改测试显式声明, 不得静默发生。
+func TestRevokedProjectKeepsBackgroundTaskRunning(t *testing.T) {
+	st := newStore(t)
+	gate := newGatedExec()
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Exec: gate.handler("longrun")})
+	defer cleanup()
+	defer gate.open()
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+	projID, token, err := st.AddProject("proj", pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, mgr, tasks, err := NewServer(st, pid, projID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.CloseAll()
+	defer tasks.CloseAll()
+
+	// 长跑任务: 门控滞留 handler → 恒 running (waitEntered = 会话确在途的确定性锚)。
+	startOut, err := ExecBackgroundForProfile(context.Background(), st, projID, pid, srvID, "longrun", false, 60, tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate.waitEntered(t, "longrun")
+
+	// sanity: revoke 前 Output 可读且 running。
+	before, err := ExecOutputForProfile(context.Background(), st, projID, startOut.TaskID, 0, 0, 0, "text", tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Status != bgStatusRunning {
+		t.Fatalf("sanity: status before revoke = %q, want running", before.Status)
+	}
+	if p, _ := st.VerifyToken(token); p == nil {
+		t.Fatal("sanity: token must verify before revoke")
+	}
+
+	if err := st.SetProjectStatus(projID, models.ProjectRevoked); err != nil {
+		t.Fatal(err)
+	}
+	// Layer 1 (与 tunnel 先例同一断言): token 门立即拒绝。
+	if p, _ := st.VerifyToken(token); p != nil {
+		t.Fatal("VerifyToken must reject a revoked token immediately")
+	}
+
+	// 反向钉住主体: revoke 无 CloseAll 连带——任务仍 running 且 Output 可读
+	// (ExecOutputForProfile 不触 store, 任务记录仍在 TaskManager)。
+	after, err := ExecOutputForProfile(context.Background(), st, projID, startOut.TaskID, 0, 0, 0, "text", tasks)
+	if err != nil {
+		t.Fatalf("post-revoke Output: %v (task record must survive revoke)", err)
+	}
+	if after.Status != bgStatusRunning {
+		t.Fatalf("post-revoke status = %q, want still running — revoke must not cascade a TaskManager teardown", after.Status)
+	}
+
+	// 放行 → 引擎照常落终态 done 且全量可读 (任务生命周期独立于 token 状态)。
+	gate.open()
+	if s := waitTerminal(t, tasks, startOut.TaskID, 5*time.Second); s.status != bgStatusDone {
+		t.Fatalf("after release: status = %q, want done", s.status)
+	}
+	final, err := ExecOutputForProfile(context.Background(), st, projID, startOut.TaskID, 0, 0, 0, "text", tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != bgStatusDone || final.Stdout != gatedOut {
+		t.Fatalf("final Output = {status:%q stdout:%q}, want done + %q", final.Status, final.Stdout, gatedOut)
+	}
+}
