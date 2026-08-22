@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/testsshd"
@@ -290,6 +292,63 @@ func TestExecBackgroundManagerClosedAuditedAsError(t *testing.T) {
 	}
 	assertNoLeak(t, err, vh)
 	wantSoleStartRow(t, st, "error", "echo hi", false, srvID, "proj-bg")
+}
+
+// TestExecBackgroundToolRegistered: MCP 层接线冒烟——exec_background 已注册
+// (BrokerTools[6])、成功路径的 BgStartOutput 过 SDK 输出 jsonschema 校验
+// (task_id + effective 回显 86400 = 生产 runCap 24h)、profile 外 id 是
+// IsError 工具错误。分支语义断言在 ForProfile 层, 此处只钉注册与序列化。
+func TestExecBackgroundToolRegistered(t *testing.T) {
+	st := newStore(t)
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		Exec:     func(cmd string, _ io.Reader) (string, string, int) { return "out:" + cmd + "\n", "", 0 },
+	})
+	defer cleanup()
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	server, mgr, tasks, err := NewServer(st, pid, "proj-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.CloseAll()
+	defer tasks.CloseAll()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
+	t1, t2 := mcp.NewInMemoryTransports()
+	srvSess, err := server.Connect(context.Background(), t1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srvSess.Close()
+	cliSess, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cliSess.Close()
+
+	res, err := cliSess.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_background",
+		Arguments: map[string]any{"server_id": srvID, "command": "smoke"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("exec_background should succeed: %+v", res.Content)
+	}
+	if !textContains(res, `"task_id":"`) || !textContains(res, `"effective_timeout_seconds":86400`) {
+		t.Fatalf("output missing task_id / effective echo (runCap 默认 24h=86400): %+v", res.Content)
+	}
+
+	res2, _ := cliSess.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_background",
+		Arguments: map[string]any{"server_id": "bogus", "command": "x"},
+	})
+	if !res2.IsError || !textContains(res2, "not in your profile") {
+		t.Fatalf("out-of-profile must be an IsError tool error with iron-rule text: %+v", res2.Content)
+	}
 }
 
 // 静态引用锚: BgStartOutput/ExecBackgroundInput 与 ForProfile 签名 (编译期)。
