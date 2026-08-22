@@ -287,7 +287,7 @@ HEAD，后续重构以符号名为准）：
 | wait_seconds 钳制（0/缺省→0 不等待、>60→60）；wait≤30 建议；编码两态（text 有损 U+FFFD/切半、base64 字节精确、GBK 建议） | `internal/mcpserver/bgtools.go:156-170,203-227`；`internal/mcpserver/server.go:201` |
 | unknown task_id 文案（从未存在 + 过期/驱逐/重启三因，`ErrBgUnknownTask` 逐字） | `internal/mcpserver/bgtools.go:175` |
 | exec_stop 立即返回触发时刻 status（running）；已终态幂等；kill = 关会话 → 远端 SIGHUP、无信号楼梯、nohup/setsid 进程存活 | `internal/mcpserver/tasks.go:533-547`；`internal/mcpserver/server.go:220` |
-| exec_output / exec_stop 零审计行（纯进程内读，与 list_servers 同级不审计） | `internal/mcpserver/bgtools.go:177-250`；`internal/mcpserver/core.go:31-75`（list_servers 同无审计） |
+| exec_output / exec_stop 零审计行（纯进程内读，与 list_servers 同级不审计；stop 触发的终态仍由任务侧落 exec-bg-end 生命周期行） | `internal/mcpserver/bgtools.go:177-250`；`internal/mcpserver/core.go:31-75`（list_servers 同无审计） |
 | serve 模式 revoke **不杀**运行中后台任务（活到自然结束或 24h 钳定上限；revoke 后 exec_output/exec_stop 逐请求 401） | `internal/mcpserver/revoke_semantics_test.go:139`；`internal/mcpserver/serve.go:74-81`（Close 只在进程关闭时清） |
 | serve 模式 401 = token 失效（rotate/disable/revoke），HTTP 中间件在工具层之前拒；**已开隧道吊销后继续转发**（不级联拆） | `internal/mcpserver/serve.go:83-96`；`internal/mcpserver/revoke_semantics_test.go:88-130,26-87` |
 | stdio 模式 token 无效 → broker 进程起不来（stderr `invalid or unknown token` 后退出） | `internal/mcpserver/run.go:29-35`；`internal/cli/mcp.go:70-73` |

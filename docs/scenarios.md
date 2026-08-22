@@ -198,7 +198,7 @@ ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原
 | 交互式 shell（`ssh -t`） | ❌ 不支持 | 用你自己的 ssh 客户端；agent 这边用 `&&` / `;` 串命令 |
 | 递归下载整个目录 | ❌ `download_file` 只单文件 | 远端 `tar` 后下载 tar |
 | 远程转发 `-R` / 动态 `-D` | ❌ 只支持本地 `-L` | — |
-| 跑超 5 分钟的长命令 | ❌ agent 路径硬上限 5 分钟 | owner 用 `ssh-manager ssh`（120s）；更长用 `nohup` + 后台 + 轮询输出 |
+| 跑超 5 分钟的长命令 | ✅ 前台 `exec_command` 5min 硬顶；长活走 `exec_background`（24h 上限）+ `exec_output` 增量轮询 + `exec_stop` | 仍可用 `ssh-manager ssh`（120s）+ `nohup` |
 | 单次输出 > 1 MiB | ⚠️ 截断（标 `truncated`） | 切片（`head/tail/grep`）分多次 |
 
 ---
