@@ -444,7 +444,7 @@ func (m *TaskManager) Output(id string, so, eo int64, wait time.Duration, ctx co
 			m.mu.Unlock()
 			return BgView{}, false, nil // 表项已失/manager 关闭 → unknown 三因 (调用方拼文案)
 		}
-		ch := t.waitCh // 代捕获 (与条件检查同一把锁——无丢唤醒窗口)
+		ch := t.waitCh // 代捕获+等待者计数 (与条件检查同一把锁——无丢唤醒窗口)
 		st, ot := t.stdout.Total(), t.stderr.Total()
 		cond := so < st || eo < ot || // 任一通道有新字节 (相对所传 offset)
 			(so > 0 && so >= st) || (eo > 0 && eo >= ot) || // 超前游标立即返回 (0 = 等首字节, 不算超前)
@@ -454,6 +454,7 @@ func (m *TaskManager) Output(id string, so, eo int64, wait time.Duration, ctx co
 			m.mu.Unlock()
 			return m.view(t, so, eo), true, nil // 深拷贝在锁外 (view 内 Snapshot 各自持 buffer.mu, 方向合法)
 		}
+		t.waiters.Add(1)
 		m.mu.Unlock()
 		remain := deadline.Sub(m.now())
 		if remain <= 0 || ctx.Err() != nil {
@@ -463,7 +464,6 @@ func (m *TaskManager) Output(id string, so, eo int64, wait time.Duration, ctx co
 			}
 			return m.view(t2, so, eo), true, nil
 		}
-		t.waiters.Add(1)
 		if timer == nil {
 			timer = time.NewTimer(remain) // timer 全程复用 (每轮 Reset 剩余, 不攒 timer)
 		} else {
