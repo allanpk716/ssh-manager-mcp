@@ -31,7 +31,8 @@
 3. **核对 `has_sudo` 再提权。** `has_sudo=false` 的机器别尝试提权——
    `sudo=true` 会直接报 `sudo not configured for server ...`。空字段 = 无。
 4. **用完有状态的资源要还。** `forward_port` 开的隧道用完 `close_port`；
-   长任务别霸占连接（见 exec_command 的超时与截断）。
+   `exec_background` 的后台任务用完 `exec_stop`（每 project 只有 32 个槽位）；
+   长活命令走后台三件套（见 exec_background），别硬塞前台。
 
 ## 逐工具语义
 
@@ -65,9 +66,11 @@
   远端 sudo 的 stdin，你**别自己在 command 里拼 `sudo` 前缀**（会变成
   `sudo -S -p '' -- sudo ...`，密码喂不进去）。前提 `has_sudo=true`。
 - **超时只作用于命令执行阶段**：`timeout_seconds` 缺省 = **120 秒**；硬上限
-  **5 分钟**（超限值被**静默钳到 5 分钟**，不报错）。连接建立不受这个参数
-  约束（由 MCP 工具调用本身的上下文管理）。**长任务拆步**（分页/分文件），
-  或一条 `nohup ... &` 后台化后用短命令轮询结果。
+  **5 分钟**（超限值被钳到 5 分钟，**生效值以 `effective_timeout_seconds`
+  字段回显**——恒存在，读它别猜）。连接建立不受这个参数约束（由 MCP 工具
+  调用本身的上下文管理）。**长活别塞前台**：会超 5 分钟的活（编译 / 训练 /
+  日志跟踪）用 `exec_background` 后台跑 + `exec_output` 轮询增量；前台留给
+  短命令，要缩量时分页/分文件拆步。
 - **超时不是错误**：到点后命令被杀，你收到正常结果对象，`timed_out=true` +
   已产生的部分输出——据此判断是拆步还是后台化。非零退出码同理（`exit_code`
   承载它，不是工具报错）。
@@ -140,6 +143,63 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
   **别**重试开新隧道。注意：**已经开着的隧道在 token 吊销后仍会继续转发**
   （broker 不会级联拆它），但你已经管不了它了。
 
+### exec_background
+
+在服务器上**后台**跑一条长活命令（编译 / 训练 / `tail -f` 日志跟踪 / watch），
+立刻拿 `task_id` 返回——不等它结束。与 `exec_command` 同一道 profile 门和
+同一套 sudo 规则（`sudo=true` 由 broker 代跑 `sudo -S`，**别自己拼 `sudo`
+前缀**，前提 `has_sudo=true`）。
+
+- `timeout_seconds` 缺省 = **24 小时**，这也是硬上限（超限值被钳到 24h）；
+  生效值回显 `effective_timeout_seconds`。
+- **无 stdin / env / workdir 参数**——自己组命令行：`cd /var/log &&
+  tail -f app.log`、`VAR=x make build`。
+- **每 project 上限 32 个任务**（运行中 + 完成后保留的都算，含并发启动的
+  预约）。满了还有已完成任务 → 最旧的完成记录被驱逐（其 task_id 随即失效）；
+  全是运行中 → 拒绝并提示「wait for a running task to finish or call
+  exec_stop」。
+- **任务表纯进程内：broker 重启 = 任务全部死亡**（无持久化、无恢复）——
+  重启后所有 task_id 一并失效，把在跑的活当作全死了重新安排。
+- 选型：短命令（≤5 分钟、马上要全量输出）→ `exec_command`；长活 / 要增量
+  输出 → `exec_background` + `exec_output` 轮询。
+
+### exec_output
+
+按 `task_id` 拉后台任务的**增量输出**与运行/终态。反复调用 = `tail -f`。
+
+- `stdout_offset` / `stderr_offset` 是**各通道流内的绝对字节游标**（`0` /
+  缺省 = 流首）。把上次返回的 `next_stdout_offset` / `next_stderr_offset`
+  原样回传即续读；两通道各一条游标、推进速率不同，别互相混用。
+- **轮询惯用法（tail -f / journalctl -f）**：把跟踪类命令起成后台任务后，
+  循环调 `exec_output` + `wait_seconds`（0–60，缺省 0 = 立即返回当前快照）
+  长轮询——任一通道有新字节 / 任务离开 running / 预算耗尽即返回。
+  **wait 建议 ≤30**：给你自己客户端的超时留余量。
+- **编码两态**：`encoding="text"`（默认）原始字节按 UTF-8 直入 JSON——非法
+  序列被替换为 U+FFFD（**有损**），多字节字符可能被读取边界切成两半；
+  `encoding="base64"` 字节精确——你侧解码，跨读取窗重组无损、二进制安全。
+  **GBK 等非 UTF-8 日志一律用 base64**。两模式 offset 恒为字节口径，切换
+  编码不用改游标。
+- **诚实降级**：每通道只保留**尾部 1 MiB** 滚动窗。offset 落后窗口首
+  （产出快于轮询）→ `truncated=true` + `lost_stdout_bytes` /
+  `lost_stderr_bytes` 告诉你丢了多少——丢的追不回来，**从 `next_*_offset`
+  续读**，别用旧 offset 重试。offset 超前（越过当前流尾）会被拉回流尾。
+- **终态与取尾**：`status` ∈ running / done / stopped / timeout / failed；
+  `exit_code` 在 done 时有意义，`error` 在 failed 时是清洗过的文本。任务
+  结束后输出仍可读 **~1 小时**（取尾、拿退出码），之后表项过期（见错误
+  对照表的 task_id 失效三因）。
+- 纯进程内读，不碰服务器/凭据——**零审计行**（与 `list_servers` 同级）。
+
+### exec_stop
+
+按 `task_id` 停一个后台任务。**立即返回触发时刻的 `status`**——运行中任务
+返回 `"running"`（停止已被启动，终态 `stopped` 由下一次 `exec_output` 观察，
+本调用不阻塞等任务死）。对已终态任务幂等：直接回其终态。
+
+- **kill 语义（诚实版）**：没有信号楼梯——停止 = 关闭该任务的 SSH 会话 →
+  远端进程收到 **SIGHUP**，与杀掉一个真 `ssh` 会话同语义；命令里用
+  `nohup` / `setsid` 起的远端进程**会活下来**。
+- 未知 `task_id` → 报错（三因见错误对照表）。
+
 ## 错误对照表（每条给"你该做什么"）
 
 | 报错 | 含义 | 你该做 |
@@ -147,18 +207,20 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
 | `invalid or unknown token`（stdio：broker 起不来）；serve：任意调用 HTTP 401 | token 错了 / 被 owner `rotate` 换发 / project 被 disable/revoke | **报告 owner**；别反复重试。owner 会核 status、必要时换发并更新 `.mcp.json`（见 [agent-access.md](./agent-access.md)「Project 生命周期」） |
 | `server is not in your profile — call list_servers ...` | id 不在授权清单（用错 id、拿 name 当 id、或它不在你 profile） | **重新 `list_servers` 核对 id**；还不在就是 owner 没授权，报告 owner，别试别的 id |
 | `server has no credential configured (set one with: ...)`（`no_credential`） | owner 建了服务器但没配登录凭据——连接前就被拒 | **报告 owner** 按错误里的提示配凭据；重试无意义 |
-| 结果里 `timed_out: true`（不是报错） | 命令超过 timeout（默认 120s）被杀 | **拆小命令**：分页/分文件；真要长跑就 `nohup ... &` 后台化 + 短命令轮询 |
+| 结果里 `timed_out: true`（不是报错） | 前台命令超过 timeout（默认 120s、硬顶 5 分钟）被杀 | **拆小命令**：分页/分文件；长活改走 `exec_background` + `exec_output` 轮询（前台永远只有 5 分钟） |
 | 结果里 `truncated: true`（不是报错） | 输出超每通道 1 MiB（download 是文件超 1 MiB），你只有前缀 | **refine**：`tail -n` / `head -n` / `grep` 取目标段重跑；看 `*_bytes` 判断真实体量；别硬拉全量 |
 | `host key mismatch: possible MITM, connection rejected` | 服务器 host key 和首次记录的不一致——可能是中间人（TOFU fail-closed） | **报告 owner 核实**，**绝对别**尝试绕过（没有任何"跳过检查"参数） |
 | `ssh dial: connect failed: connection refused`（等分类短语） | 连不上目标机（地址细节已按可见性边界清洗） | 核对 server_id 是否正确；网络问题报告 owner |
 | `sudo not configured for server <name> (call list_servers: has_sudo tells you)` | `sudo=true` 但该机 `has_sudo=false` | 回 `list_servers` 核对；确实需要提权就报告 owner 配 sudo 凭据 |
 | `no open tunnel with id <id>` | 隧道已关/已被 ~10 分钟自动回收/从未开过 | 正常现象；需要转发就重开 `forward_port` |
+| `background task limit (32) reached — wait for a running task to finish or call exec_stop` | 后台任务满员：该 project 已有 32 个任务且全在运行（完成态会被驱逐腾位，全运行态才拒绝） | 等一个运行中任务自然结束，或对不要的任务调 `exec_stop`，再重试 `exec_background` |
+| `unknown task_id — it may never have existed, expired after the retention window (1h), been evicted for capacity (32-task limit), or the broker restarted; task records are in-process only` | task_id 失效（三因 + 从未存在）：完成超 ~1h 保留期过期 / 32 满员时被驱逐 / **broker 重启**（任务表纯进程内，重启即全失） | broker 重启 = 在跑任务全死，重新安排活；过期/驱逐的按需重跑命令；失效 id 别反复重试 |
 | `file <path> (<N> bytes) exceeds upload cap <cap> — refused before transfer` | 单文件严格大于 1 MiB，传输前被拒（零字节移动） | 按错误里的 size/cap **拆分或压缩**后重传 |
 | `store is read-only (offline cache); connect to the server to mutate`（ErrReadOnly） | broker 跑在离线缓存模式（见三态环境） | **报告 owner** 切回在线/本机模式；**别**重试写操作（见下） |
 
 ## 三态环境（你通常无需分辨）
 
-broker 有三种部署形态，**工具面完全一致**（同 6 个工具、同 profile 隔离、同审计），
+broker 有三种部署形态，**工具面完全一致**（同 9 个工具、同 profile 隔离、同审计），
 差别只在可写性：
 
 | 形态 | 什么样 | 可写性 |
@@ -197,7 +259,7 @@ HEAD，后续重构以符号名为准）：
 | 断言 | 锚点 |
 |---|---|
 | exec 默认超时 120s（`defaultTimeout = 120 * time.Second`；schema 提示 "defaults to 120"） | `internal/mcpserver/types.go:103`；`internal/mcpserver/server.go:180` |
-| 超时硬上限 5 分钟、超限**静默钳制**不报错（`clampExecTimeout`） | `internal/mcpserver/types.go:113-118`；`internal/mcpserver/core.go:19-27` |
+| 超时硬上限 5 分钟、超限值钳到上限并**回显生效值**（`clampExecTimeout` → `ExecOutput.EffectiveTimeoutSeconds` 恒存在，spec §6 钳制改响） | `internal/mcpserver/core.go:18-27,157,194`；`internal/mcpserver/types.go:31-45` |
 | 超时只作用于**执行**：Connect 用工具调用 ctx（dial 不可中断，取消即弃）；clamp 在 Connect 之后、只传给 Exec/ExecSudo | `internal/mcpserver/core.go:131,146,161,163`；`internal/sshbroker/client.go:15-22` |
 | 超时是 result 不是 error（`timed_out=true` + 部分输出）；非零退出码同理 | `internal/sshbroker/exec.go:74-77,81-84` |
 | 输出每通道 1 MiB 封顶（`MaxOutputBytes = 1 << 20`）、前缀 + truncated + 真实总字节 | `internal/mcpserver/types.go:105-111,30-32`；`internal/sshbroker/exec.go:26-28` |
@@ -218,11 +280,20 @@ HEAD，后续重构以符号名为准）：
 | local_port 省略/0 = broker 挑空闲端口 | `internal/mcpserver/types.go:72` |
 | 隧道 ~10 分钟自动回收、**按创建时间非流量**（持续在用也收）；扫描周期 1 分钟（实际 10–11 分钟内） | `internal/mcpserver/tunnels.go:10-21`；`internal/mcpserver/types.go:79-80` |
 | close_port 拆监听 + 背后 SSH 连接（broker 全程持有）；id 未知报 `no open tunnel with id ...` | `internal/mcpserver/tunnels.go:125-142`；`internal/mcpserver/core.go:537-540`；`internal/mcpserver/server.go:151` |
+| 后台缺省/上限 24h + 回显（`clampBgTimeout` → `BgStartOutput.EffectiveTimeoutSeconds`）；无 env/workdir/stdin 参数（自组 `cd /dir && VAR=x cmd`） | `internal/mcpserver/tasks.go:618-627`；`internal/mcpserver/bgtools.go:146-150`；`internal/mcpserver/types.go:106-122` |
+| 32/project 上限（表项 + in-flight 预约都计数）；满员驱逐最旧终态（零审计行）；全 running 拒绝 + 引导文案 | `internal/mcpserver/tasks.go:193-217` |
+| 终态保留 ~1h 过期；sweeper 不删 running；任务表纯进程内——broker 重启任务全失 | `internal/mcpserver/tasks.go:25,305-323`；`internal/mcpserver/run.go:48-49`（stdio 收口） |
+| exec_output：offset = 通道流内绝对字节游标、超前回拉流尾、落后保留窗诚实降级（truncated + lost_*_bytes）；每通道 1 MiB 尾部滚动窗 | `internal/mcpserver/tasks.go:438-499,506-526`；`internal/sshbroker/rolling.go:54`（Snapshot 三分支） |
+| wait_seconds 钳制（0/缺省→0 不等待、>60→60）；wait≤30 建议；编码两态（text 有损 U+FFFD/切半、base64 字节精确、GBK 建议） | `internal/mcpserver/bgtools.go:156-170,203-227`；`internal/mcpserver/server.go:201` |
+| unknown task_id 文案（从未存在 + 过期/驱逐/重启三因，`ErrBgUnknownTask` 逐字） | `internal/mcpserver/bgtools.go:175` |
+| exec_stop 立即返回触发时刻 status（running）；已终态幂等；kill = 关会话 → 远端 SIGHUP、无信号楼梯、nohup/setsid 进程存活 | `internal/mcpserver/tasks.go:533-547`；`internal/mcpserver/server.go:220` |
+| exec_output / exec_stop 零审计行（纯进程内读，与 list_servers 同级不审计） | `internal/mcpserver/bgtools.go:177-250`；`internal/mcpserver/core.go:31-75`（list_servers 同无审计） |
+| serve 模式 revoke **不杀**运行中后台任务（活到自然结束或 24h 钳定上限；revoke 后 exec_output/exec_stop 逐请求 401） | `internal/mcpserver/revoke_semantics_test.go:139`；`internal/mcpserver/serve.go:74-81`（Close 只在进程关闭时清） |
 | serve 模式 401 = token 失效（rotate/disable/revoke），HTTP 中间件在工具层之前拒；**已开隧道吊销后继续转发**（不级联拆） | `internal/mcpserver/serve.go:83-96`；`internal/mcpserver/revoke_semantics_test.go:88-130,26-87` |
 | stdio 模式 token 无效 → broker 进程起不来（stderr `invalid or unknown token` 后退出） | `internal/mcpserver/run.go:29-35`；`internal/cli/mcp.go:70-73` |
 | 工具报错形态 = IsError=true + 错误文本（非传输层错误） | `internal/mcpserver/server.go:83-89` |
 | broker 启动检测散落 SSH 凭据 → stderr `WARNING: ssh credential files detected`（仅本机 stdio 模式） | `internal/cli/mcp.go:63-67`；另见 docs/agent-access.md「隔离与排错」 |
-| 三态工具面一致（cache 与在线同 6 工具、同 profile 隔离、同审计；仅写操作被拒 + 审计走 sidecar） | `internal/mcpserver/run.go:223-227,208-213` |
+| 三态工具面一致（cache 与在线同 9 工具、同 profile 隔离、同审计；仅写操作被拒 + 审计走 sidecar） | `internal/mcpserver/run.go:230-249`；`internal/mcpserver/server.go:27-59` |
 | ErrReadOnly 文案 + SetReadOnly 语义（cache hydrate 后置只读） | `internal/store/store.go:46-54`；`internal/mcpserver/run.go:76` |
 | 离线 cache 模式：未知 host key 被拒（TOFU 无法记录，包 ErrReadOnly；已知 key 正常匹配） | `internal/sshbroker/hostkey.go:33-34`；`internal/sshbroker/hostkey_readonly_test.go:33-58`；`internal/mcpserver/run.go:211-213` |
 | 凭据字节永不出现在任何工具结果（owner 侧模型） | `internal/mcpserver/types.go:5`；docs/agent-access.md「安全模型回顾（铁律）」；../README.md "The security model" |

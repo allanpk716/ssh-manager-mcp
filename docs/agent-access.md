@@ -65,7 +65,7 @@ Claude Code 读 `.mcp.json`。两种范围：
 
 token 走 `env` 字段（`SSHMGR_TOKEN`）而不是 `args` 里的 `--token`：**消除的是 argv/ps 暴露面**——token 不再出现在子进程命令行里（`ps` / 任务管理器 / `/proc/<pid>/cmdline` 看不到）；env 仍可被同用户/root 经 `/proc/<pid>/environ`（Linux）读到，**不是全部可见性**。（`--token` 仍支持，语义相同。）
 
-- Claude Code 首次加载会**弹确认**让你批准这个项目级 MCP server——批准后该项目的会话就有这 6 个 SSH 工具。
+- Claude Code 首次加载会**弹确认**让你批准这个项目级 MCP server——批准后该项目的会话就有这 9 个 SSH 工具。
 - **别提交 git（公开仓库尤其致命）**：`.mcp.json` 含**活 token**，必须加进 `.gitignore`，绝不能提交进 git 仓库。
 - **Windows**：写绝对路径最稳，例如 `"command": "C:\\Tools\\ssh-manager.exe"`（JSON 里 `\` 要写成 `\\`）。
 - **headless / 无 keychain**：master key 不在 keychain，需要给子进程传环境变量，加进同一个 `env` 字段即可（见 [getting-started.md](./getting-started.md#无-keychain-环境headless-linux-等)）：
@@ -105,10 +105,10 @@ claude mcp add ssh ssh-manager -e SSHMGR_TOKEN=<TOKEN> -- mcp
 
 ⚠️ **关键机制——断连语义按部署模式分四层**（`rotate` / `disable` / `enable` / `revoke` 的生效范围）：
 
-1. **stdio（本机 MCP 子进程）——Lazy 生效**：token 校验只在 `mcp` 子进程**下次启动**时跑（只放行 `status=active`）。正在跑的会话保留访问直到你重启 Claude Code（或它的 MCP 子进程）。**你的机器你做主**：这是有意的设计。
-2. **serve（远程 broker）——逐请求即拒**：broker 对**每一个** HTTP 请求都重新验 token，`revoke`/`disable` 后该 project 的**下一个请求立即 401**——不需要等任何重启。
+1. **stdio（本机 MCP 子进程）——Lazy 生效**：token 校验只在 `mcp` 子进程**下次启动**时跑（只放行 `status=active`）。正在跑的会话保留访问直到你重启 Claude Code（或它的 MCP 子进程）。**你的机器你做主**：这是有意的设计。`exec_background` 后台任务的任务表就在这个子进程内存里——**会话/MCP 子进程重启，任务即全部死亡**（无持久化，agent 侧把在跑的活当作全死重新安排）。
+2. **serve（远程 broker）——逐请求即拒**：broker 对**每一个** HTTP 请求都重新验 token，`revoke`/`disable` 后该 project 的**下一个请求立即 401**——不需要等任何重启。`exec_background` 后台任务同受此管（revoke 后它的下一次 `exec_output` / `exec_stop` 逐请求 401），但**运行中的任务不会被杀**——活到自然结束或 24h 钳定上限（被吊销方已无停它的手段；测试钉住，与第 3 层隧道同口径）。
 3. **已建立的 `forward_port` 隧道——不受 revoke 影响，且无 owner 急停**：隧道由 broker 进程持有；被吊销的 project 自己调 `close_port` 会先被第 2 层的 401 挡住；其他人的隧道管理器也够不到它——stdio 会话跑在**独立进程**里，同一 serve broker 上的其他 project 则各有**各自独立的隧道管理器实例**（互不相通）。真实选项只有：**重启 broker**（`serve uninstall`→`install` 或重启机器）/ **等隧道创建后 ~10 分钟自动回收**。（owner 侧急停命令已列 backlog，见 docs/backlog.md。）
-4. **离线 cache——旧快照不随 revoke 擦除**：`cache-tokens revoke` 只断"拉新"（下次 `cache pull` 被拒）；已落盘的 `cache.bin` 里凭据仍在。**失窃/泄露场景下让已缓存凭据失效的唯一手段是轮换服务器凭据**（`servers edit <name> --password/--key`）。
+4. **离线 cache——旧快照不随 revoke 擦除**：`cache-tokens revoke` 只断"拉新"（下次 `cache pull` 被拒）；已落盘的 `cache.bin` 里凭据仍在。**失窃/泄露场景下让已缓存凭据失效的唯一手段是轮换服务器凭据**（`servers edit <name> --password/--key`）。后台任务与 cache 无涉——任务表在 broker 进程内、不进快照，离线 `mcp --cache` 模式各自起各自的独立任务表。
 
 未实现的拆除手段见 docs/backlog.md。
 
@@ -179,7 +179,7 @@ ssh-manager projects add intern   --profile dev
 | 怀疑 token 泄露（`.mcp.json` 被偷看 / 提交到公开仓库了） | `projects rotate <name>` 立刻作废旧 token，换发新的；去客户端更新 `.mcp.json`。 |
 | 某个 agent 要临时停（放假 / 审查中） | `projects disable <name>`，事后 `projects enable <name>` 恢复。 |
 | 某个 agent 彻底不用了 / 离职 | `projects revoke <name>`；审计记录保留。 |
-| 要立刻断正在跑的会话 | 看模式：serve 远程 agent 下一个请求即拒（无需动作）；stdio 本机会话须重启客户端；既有隧道见「断连语义（四层）」第 3 层（只能重启 broker 或等回收）。 |
+| 要立刻断正在跑的会话 | 看模式：serve 远程 agent 下一个请求即拒（无需动作）；stdio 本机会话须重启客户端；既有隧道见「断连语义（四层）」第 3 层（只能重启 broker 或等回收）；其 `exec_background` 后台任务同杀不掉——见第 2 层（活到自然结束或 24h 上限，重启 broker 即失）。 |
 
 ---
 

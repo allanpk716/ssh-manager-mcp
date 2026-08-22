@@ -8,7 +8,7 @@
 
 ## 怎么读这些示例
 
-- agent 拿到的 6 个工具是：`list_servers` / `exec_command` / `download_file` / `upload_file` / `forward_port` / `close_port`（详见根 [README](../README.md#what-the-agent-gets-the-mcp-tools)）。
+- agent 拿到的 9 个工具是：`list_servers` / `exec_command` / `download_file` / `upload_file` / `forward_port` / `close_port` / `exec_background` / `exec_output` / `exec_stop`（长活命令走后台三件套；详见根 [README](../README.md#what-the-agent-gets-the-mcp-tools)）。
 - **你不需要记工具名**。你用自然语言说目标，agent 自己会先 `list_servers` 拿到真实的 server `id`，再用 `id` 调后续工具。下面“agent 会怎么用”只是让你知道它背后在干嘛。
 - 所有示例都假设 agent 绑定的 profile 里有名为 `gpu` / `db` / `web` 等的服务器——把名字换成你自己的。
 

@@ -45,10 +45,15 @@ The MCP server exposes these tools — **ssh-functional-equivalent for operating
 | `upload_file` | `scp -r . host:path` | Upload a local file **or directory** (recursive) to the server. |
 | `forward_port` | `ssh -L` | Open a local port forwarding to a remote service — returns `127.0.0.1:<port>` for the agent to use (e.g. `curl`). |
 | `close_port` | — | Close a forward when done (tunnels auto-close ~10 min after creation). |
+| `exec_background` | — | Start a long-running command (builds, training, log tails) in the background and get a `task_id` immediately — 24h run cap, 32 tasks per project, records live only in the broker process (a broker restart loses them all). |
+| `exec_output` | — | Poll a background task's incremental output (absolute byte-offset cursors per channel, long-poll `wait_seconds`, text/base64 encoding — use base64 for GBK/non-UTF-8 logs). |
+| `exec_stop` | — | Stop a background task (returns immediately; kill = session close → remote SIGHUP, so `nohup`'d remote processes survive). |
 
-Every tool is **profile-gated** (the agent only reaches servers you granted its project) and **audited** (each call logged with project, server, action, status). Credential bytes never appear in any tool result.
+Every server-touching tool is **profile-gated** (the agent only reaches servers you granted its project) and **audited** (each call logged with project, server, action, status); `exec_output` / `exec_stop` are in-process task operations (no server access, no audit row). Credential bytes never appear in any tool result.
 
 > **v0.9.0 破坏性变更**：`list_servers` 的 host 默认掩码为 `"hidden"`（`servers edit <name> --expose-host` 逐台放开）；错误文本不再包含主机地址。详见 [docs/compat-matrix.md](docs/compat-matrix.md)。
+
+> **v0.10.0 纯增量**：新增后台任务三件套 `exec_background` / `exec_output` / `exec_stop`（长活命令后台跑、按 offset 轮询增量、停止；任务表在 broker 进程内，重启即失）；前台 `exec_command` 新增 `effective_timeout_seconds` 回显字段（超时钳制从静默改为响式回显）。无破坏性变更——详见 [docs/compat-matrix.md](docs/compat-matrix.md)。
 
 ---
 
@@ -92,7 +97,7 @@ ssh-manager projects add my-agent --profile team-a
 #   {"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
 ```
 
-Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the six SSH tools, scoped to the `team-a` profile's servers.
+Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the nine SSH tools, scoped to the `team-a` profile's servers.
 
 **Other commands:** `servers ls` / `servers rm`, `profiles ls`, `projects ls`, `gc` (find/delete orphan credential rows — dry-run by default), `lock`, `clear` (role teardown — wipes the machine back to first-run), `doctor` (side-effect-free local self-check — prints a PASS/WARN/FAIL report; exit `0` = no FAIL findings, `1` = at least one FAIL), `version`.
 
