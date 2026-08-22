@@ -72,9 +72,11 @@ algorithms. The exhaustive KEX×cipher×MAC matrix is deliberately out of scope
 
 These differences are bounded in this document. The broker deliberately does
 **not** claim "ssh-consistent" anywhere in its agent-facing tool descriptions —
-agents see only the `list_servers` / `exec_command` surface with no SSH-conformance
-nuance, so there is no boundary to state to them (surfacing it would be scope
-creep). "Consistent with ssh" is a developer-facing claim, bounded here.
+agents see only the broker's nine-tool surface — `list_servers` / `exec_command` /
+`download_file` / `upload_file` / `forward_port` / `close_port` plus the
+background trio (`exec_background` / `exec_output` / `exec_stop`) — with no
+SSH-conformance nuance, so there is no boundary to state to them (surfacing it
+would be scope creep). "Consistent with ssh" is a developer-facing claim, bounded here.
 
 ### Note on the T2 harness pin (load-bearing)
 

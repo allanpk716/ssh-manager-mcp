@@ -4,6 +4,7 @@ package mcpserver
 // 「单测：testsshd 生命周期 e2e」: 增量/排空、stop、timeout、failed(RST fixture)、
 // 审计 end 四态、终态即关 client、CloseAll 抑制补写。
 // 等待手段是测试侧轮询 (生产等待回路是 T5 的代际广播, 不在本任务)。
+// 终审修复波补: Sudo:true 生命周期 (Start 的 ExecSudoWriters 分支)。
 
 import (
 	"context"
@@ -522,4 +523,68 @@ func TestBackgroundCloseAllSuppressesEndRows(t *testing.T) {
 	if rows[0].Action != "exec-bg-start" || rows[0].Status != "ok" {
 		t.Fatalf("sole row = %+v, want exec-bg-start/ok", rows[0])
 	}
+}
+
+// TestBackgroundSudoLifecycle (终审修复波): Sudo:true 经 m.Start 走
+// ExecSudoWriters 分支 (tasks.go Start 的 spec.Sudo 选择)。testsshd 的
+// SudoPassword 模拟 sudo -S——服务端吃掉密码行后, Exec handler 收到内层命令
+// (见 internal/sshbroker/sudo_test.go 同一惯用法)。断言: 终态 done、退出码
+// 传递、handler 输出经 Output 轮询 (生产观察路径, 区别于白盒 Snapshot) 可见。
+func TestBackgroundSudoLifecycle(t *testing.T) {
+	st := newStore(t)
+	m := newTestTM(t, 4)
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password:     "pw",
+		SudoPassword: "sp",
+		Exec: func(cmd string, _ io.Reader) (string, string, int) {
+			if cmd == "whoami" {
+				return "root\n", "", 0
+			}
+			return "", "unknown: " + cmd + "\n", 1
+		},
+	})
+	defer cleanup()
+
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(portStr)
+	id, _, serr := m.Start(context.Background(), st, BgStartSpec{
+		ProjectID: "proj", ServerID: "srv", Command: "whoami",
+		Sudo: true, SudoPass: "sp", TimeoutSec: 60,
+		Server:    &models.Server{Host: host, Port: port, User: "u"},
+		Auth:      sshbroker.PasswordAuth("pw"),
+		HostKeyCb: ssh.FixedHostKey(hk),
+	})
+	if serr != nil {
+		t.Fatalf("start sudo task: %v", serr)
+	}
+
+	// 生产观察路径: Output 轮询至终态 (每轮 1s 预算), 断言输出与退出码。
+	var v BgView
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var ok bool
+		v, ok, err = m.Output(id, 0, 0, time.Second, context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Fatal("task must be found by Output")
+		}
+		if v.Status != bgStatusRunning {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task never left running in views: %+v", v)
+		}
+	}
+	if v.Status != bgStatusDone || v.ExitCode != 0 {
+		t.Fatalf("view = status %q exit %d, want done/0", v.Status, v.ExitCode)
+	}
+	if string(v.Stdout) != "root\n" {
+		t.Fatalf("stdout=%q via Output polling, want inner command output", v.Stdout)
+	}
+	waitClientClosed(t, mustSnap(t, m, id).client)
 }

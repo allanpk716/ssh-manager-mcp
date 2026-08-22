@@ -338,6 +338,10 @@ func (m *TaskManager) CloseAll() {
 			t.cancel()
 		}
 		if t.client != nil {
+			// 锁内关连接安全论证: Client.Close 只取叶子锁 (client closeOnce/kaStop
+			// + net conn 锁), 绝不回调取 TM.mu/RollingBuffer.mu, 且不 join 会话与
+			// keepalive goroutine (x/crypto Close 语义)——持 m.mu 关连接无死锁面;
+			// golang.org/x/crypto 升级时需重验此论证。
 			_ = t.client.Close() // T4: client 槽接入——引擎可能尚未挂槽/尚未自关, 幂等双保险
 		}
 		m.notify(t) // T5 触发点③: 摘表广播——唤醒在途 Output 等待者 (零等待者短路)

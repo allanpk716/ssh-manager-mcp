@@ -56,24 +56,34 @@ func runningSpec() *BgTaskSpec {
 
 func TestAdmissionCapAndEviction(t *testing.T) {
 	m := newTestTM(t, 3)
-	// 三个终态任务占满
-	var firstID string
+	// 三个终态任务占满; finishedAt 显式错峰 (i=0 最旧)——驱逐受害者确定性,
+	// 不赌 uuid 平局的 smallest-id tie-break (helper 插入时三任务同 now)。
+	ids := make([]string, 3)
+	base := time.Now()
 	for i := 0; i < 3; i++ {
 		id, err := m.Insert(finishedSpec(i)) // helper: 直接以终态插入(白盒置 status/finishedAt)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if i == 0 {
-			firstID = id
-		}
+		ids[i] = id
+		m.mu.Lock()
+		m.tasks[id].finishedAt = base.Add(time.Duration(i) * time.Minute)
+		m.mu.Unlock()
 	}
 	// lookup 是本任务产出 seam (T5/6/7 内部消费), 白盒即刻验证
-	if _, ok := m.lookup(firstID); !ok {
+	if _, ok := m.lookup(ids[0]); !ok {
 		t.Fatal("lookup must find inserted task")
 	}
 	// 满员驱逐: Reserve 成功(驱逐最旧终态) → Insert 成功
 	if err := m.Reserve(); err != nil {
 		t.Fatalf("reserve with evictable: %v", err)
+	}
+	// 受害者身份: 最旧终态 (ids[0]) 已逐出表, 最新终态 (ids[2]) 幸存。
+	if _, ok := m.lookup(ids[0]); ok {
+		t.Fatal("oldest terminal task must be the eviction victim")
+	}
+	if _, ok := m.lookup(ids[2]); !ok {
+		t.Fatal("newest terminal task must survive eviction")
 	}
 	if _, err := m.Insert(runningSpec()); err != nil {
 		t.Fatal(err)
@@ -137,15 +147,51 @@ func TestSweeperDeletesExpiredNotRunning(t *testing.T) {
 	_ = rid
 }
 
+// TestEnvSeamValidation: env seam 三态全表 (spec §7): (a) 非法值拒绝启动
+// (fail-closed); (b) 合法覆写真实生效 (NewTaskManager 返回的 manager 字段
+// 白盒校验); (c) 全未设回落包级默认 (32 / 24h / 1h)。每行显式写全三键
+// ("" = 未设)——t.Setenv 只在测试结束还原, 跨行残留会串扰, 全量覆写保证
+// 每行从同一状态出发。
 func TestEnvSeamValidation(t *testing.T) {
-	for _, v := range []string{"0", "-5s", "abc"} {
-		t.Setenv("SSHMGR_BG_RUN_CAP", v)
-		if _, err := NewTaskManager(); err == nil {
-			t.Fatalf("run cap %q must be refused", v)
-		}
+	cases := []struct {
+		name                     string
+		maxTasks, runCap, retain string
+		wantErr                  bool
+		wantMax                  int
+		wantRunCap, wantRetain   time.Duration
+	}{
+		{name: "run cap abc", runCap: "abc", wantErr: true},
+		{name: "run cap 0", runCap: "0", wantErr: true},
+		{name: "run cap -5s", runCap: "-5s", wantErr: true},
+		{name: "max tasks 0", maxTasks: "0", wantErr: true},
+		{name: "retain abc", retain: "abc", wantErr: true},
+		{name: "retain 0", retain: "0", wantErr: true},
+		{name: "retain -5s", retain: "-5s", wantErr: true},
+		{name: "max tasks override", maxTasks: "2", wantMax: 2, wantRunCap: bgRunCapDefault, wantRetain: bgRetainDefault},
+		{name: "run cap override", runCap: "48h", wantMax: bgMaxTasksDefault, wantRunCap: 48 * time.Hour, wantRetain: bgRetainDefault},
+		{name: "retain override", retain: "30m", wantMax: bgMaxTasksDefault, wantRunCap: bgRunCapDefault, wantRetain: 30 * time.Minute},
+		{name: "defaults", wantMax: bgMaxTasksDefault, wantRunCap: bgRunCapDefault, wantRetain: bgRetainDefault},
 	}
-	t.Setenv("SSHMGR_BG_MAX_TASKS", "0")
-	if _, err := NewTaskManager(); err == nil {
-		t.Fatal("max tasks 0 must be refused")
+	for _, tc := range cases {
+		t.Setenv("SSHMGR_BG_MAX_TASKS", tc.maxTasks)
+		t.Setenv("SSHMGR_BG_RUN_CAP", tc.runCap)
+		t.Setenv("SSHMGR_BG_RETAIN", tc.retain)
+		m, err := NewTaskManager()
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("%s: env (%q,%q,%q) must be refused", tc.name, tc.maxTasks, tc.runCap, tc.retain)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: env (%q,%q,%q): %v", tc.name, tc.maxTasks, tc.runCap, tc.retain, err)
+		}
+		m.mu.Lock()
+		gotMax, gotCap, gotRet := m.maxTasks, m.runCap, m.retain
+		m.mu.Unlock()
+		if gotMax != tc.wantMax || gotCap != tc.wantRunCap || gotRet != tc.wantRetain {
+			t.Fatalf("%s: fields=(%d,%v,%v), want (%d,%v,%v)", tc.name,
+				gotMax, gotCap, gotRet, tc.wantMax, tc.wantRunCap, tc.wantRetain)
+		}
 	}
 }
