@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -94,6 +95,33 @@ func TestRedactAddrTargeted(t *testing.T) {
 	got = redactAddr(errors.New("dial tcp: lookup foo.corp.internal: no such host"), "foo", 22)
 	if want := "ssh dial: connect failed: DNS lookup failed"; got.Error() != want {
 		t.Fatalf("search-domain: got %q want %q", got.Error(), want)
+	}
+}
+
+// RedactAddr (无 host 知识的防御性包装, 后台引擎 failed 态文本清洗入口,
+// Plan 32 T4) 行为钉死: 无地址文本恒等直通; 带地址文本降级为分类短语
+// (零地址残留); Unwrap 链保留; nil 直通。
+func TestRedactAddrRuntimeWrapper(t *testing.T) {
+	// ExitMissingError 形态 (实验 20260821-223410 实测: 三种运行期连接死亡
+	// 的 session 层错误文本, 零地址): 恒等直通。
+	exitMissing := errors.New("wait: remote command exited without exit status or exit signal")
+	if got := RedactAddr(exitMissing); got.Error() != exitMissing.Error() {
+		t.Fatalf("verbatim passthrough: got %q", got.Error())
+	}
+	// 带地址形态 (防御路径——库升级/未测路径可能引入): 降级, 零地址残留。
+	rst := fmt.Errorf("read tcp 10.0.0.5:53210->203.0.113.7:22: connection reset by peer")
+	got := RedactAddr(rst).Error()
+	for _, leak := range []string{"10.0.0.5", "203.0.113.7", "53210"} {
+		if strings.Contains(got, leak) {
+			t.Fatalf("address %q leaked: %q", leak, got)
+		}
+	}
+	// 链保留 (errors.Is 经 Unwrap 到原错误)。
+	if !errors.Is(RedactAddr(fmt.Errorf("wrap: %w", ErrHostKeyMismatch)), ErrHostKeyMismatch) {
+		t.Fatal("errors.Is must traverse Unwrap to ErrHostKeyMismatch")
+	}
+	if RedactAddr(nil) != nil {
+		t.Fatal("nil must pass through as nil")
 	}
 }
 

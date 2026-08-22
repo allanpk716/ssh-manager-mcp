@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"sync"
@@ -11,8 +12,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sshbroker"
+	"ssh-manager-mcp/internal/store"
 )
 
 // 常量 seam（spec §3）: 包级 var + env 覆盖, 生产默认钉死, 非法/非正拒绝启动。
@@ -55,6 +59,12 @@ type bgTask struct {
 	startedAt      time.Time
 	finishedAt     time.Time
 	deadline       time.Time
+	// client 槽 (T4): 引擎入场即挂 (持锁), 终态即关; CloseAll 可达即关。
+	// 终态保留期记录不持有活连接 (spec §1: session 返回即关 Client)。
+	client *sshbroker.Client
+	// auditEnd 由 Insert 从 spec.AuditEnd 绑定 (终态行构造在闭包内); 引擎
+	// 终态置位后锁外调用。
+	auditEnd func(now time.Time) error
 	// 代际广播（Task 5 用; 本任务先占位字段）
 	gen     uint64
 	waitCh  chan struct{}
@@ -74,6 +84,10 @@ type BgTaskSpec struct {
 	// 只做 DB 写、无锁交互)。Insert 在持锁段内、goroutine 启动前调用——start 行
 	// 必须先于任何可能的 end 行 (spec §3/§5 顺序钉死)。
 	AuditStart func()
+	// AuditEnd 回写 exec-bg-end 终态审计行 (T4: Start 传 st.WriteAudit 闭包;
+	// nil 时零终态审计)。Insert 绑定为 t.auditEnd——行由闭包调用方从 task 字段
+	// 组装 (Command=taskID, Status, ExitCode, DurationMS), 引擎终态后锁外落笔。
+	AuditEnd func(row store.AuditRow) error
 }
 
 // TaskManager 是后台任务注册表: 槽位预约 admission (Reserve)、满员驱逐最旧终态、
@@ -160,6 +174,11 @@ func (m *TaskManager) sweepLoop() {
 	}
 }
 
+// ErrBgTaskLimit 是 Reserve 拒绝 (满员且全 running) 的底层哨兵——Start 原样
+// 上抛, Task 6 的 ForProfile 以 errors.Is 识别该分支落 start(超限) 审计行
+// (spec §5 start 全分支)。包裹后的完整文本与 spec §3 引导文案逐字一致。
+var ErrBgTaskLimit = errors.New("background task limit")
+
 // Reserve 预约一个任务槽位 (admission, 持锁)。closed → error;
 // len(tasks)+reserved >= maxTasks → 驱逐最旧终态 (非 running 中 finishedAt 最小,
 // 平局按 id 字典序取小保确定性; 仅 delete from map, 零审计行); 无终态可逐 →
@@ -183,7 +202,7 @@ func (m *TaskManager) Reserve() error {
 			}
 		}
 		if victim == nil {
-			return fmt.Errorf("background task limit (%d) reached — wait for a running task to finish or call exec_stop", m.maxTasks)
+			return fmt.Errorf("%w (%d) reached — wait for a running task to finish or call exec_stop", ErrBgTaskLimit, m.maxTasks)
 		}
 		delete(m.tasks, victim.id)
 	}
@@ -231,6 +250,26 @@ func (m *TaskManager) Insert(spec *BgTaskSpec) (string, error) {
 	if spec.PreFinished {
 		t.status = bgStatusDone
 		t.finishedAt = now
+	}
+	// 每通道 1 MiB 固定容量环形缓冲 (spec §2.2: 滚动容量 = MaxOutputBytes,
+	// 64 MiB/project 为真实分配上界)。T5 的观察路径对 PreFinished 任务读到
+	// 恒空缓冲。
+	t.stdout = sshbroker.NewRollingBuffer(MaxOutputBytes)
+	t.stderr = sshbroker.NewRollingBuffer(MaxOutputBytes)
+	if spec.AuditEnd != nil {
+		endFn := spec.AuditEnd
+		t.auditEnd = func(finish time.Time) error {
+			status := t.status
+			if status == bgStatusDone {
+				status = "ok" // spec §5: 自然退出的终态行审计词是 ok (码值看 ExitCode)
+			}
+			return endFn(store.AuditRow{
+				TS: finish, ProjectID: t.projectID, ServerID: t.serverID,
+				Action: "exec-bg-end", Command: t.id, Sudo: t.sudo,
+				Status: status, ExitCode: t.exitCode,
+				DurationMS: finish.Sub(t.startedAt).Milliseconds(),
+			})
+		}
 	}
 	m.tasks[t.id] = t
 	if spec.AuditStart != nil {
@@ -291,7 +330,9 @@ func (m *TaskManager) CloseAll() {
 		if t.cancel != nil {
 			t.cancel()
 		}
-		// T4: task 的 client 关闭回调在此接入 (T3 阶段 bgTask 尚无 client 字段, 跳过)。
+		if t.client != nil {
+			_ = t.client.Close() // T4: client 槽接入——引擎可能尚未挂槽/尚未自关, 幂等双保险
+		}
 		// TODO(T5): 逐任务 notify 一次 (waitCh 代际广播) — 本文件唯一允许的 TODO, Task 5 接线时消除。
 	}
 	m.tasks = map[string]*bgTask{}
@@ -315,4 +356,196 @@ func (m *TaskManager) lookup(id string) (*bgTask, bool) {
 	defer m.mu.Unlock()
 	t, ok := m.tasks[id]
 	return t, ok
+}
+
+// ---------- Task 4: 执行引擎 (代际广播原语 + runTask + Start 编排) ----------
+
+// notify 唤醒全部持有旧代通道引用的等待者（代际广播, spec §2.3）。
+// 调用方必须已持有 m.mu; 零等待者短路（高频输出在无人轮询时零锁开销）。
+func (m *TaskManager) notify(t *bgTask) {
+	if t.waiters.Load() == 0 {
+		return
+	}
+	close(t.waitCh)
+	t.waitCh = make(chan struct{})
+	t.gen++
+}
+
+// notifyWrite 是写侧入口: RollingBuffer.Write 返回时其内部锁已释放,
+// 此处才取 m.mu——锁序铁则（spec §2.3: 绝不持 buffer.mu 取 TM.mu）。
+func (m *TaskManager) notifyWrite(t *bgTask) {
+	m.mu.Lock()
+	m.notify(t)
+	m.mu.Unlock()
+}
+
+// notifyWriter: 落笔后先释 buffer.mu 再广播（Write 内部锁已释放, after 才取 m.mu）
+type notifyWriter struct {
+	buf   *sshbroker.RollingBuffer
+	after func()
+}
+
+func (w *notifyWriter) Write(p []byte) (int, error) {
+	n, err := w.buf.Write(p)
+	w.after()
+	return n, err
+}
+
+// Stop 请求停止运行中任务 (spec §3): 持锁置 stopReq + cancel, 立即返回触发
+// 时刻的 status（运行中任务即 running——status 枚举无 stopping, 终态经观察
+// 路径获取, exec_stop 不阻塞）。对已终态任务幂等: 回其终态、不动 stopReq/
+// cancel、零审计行。未知 id → (ok=false)。引擎侧的终态判定见 runTask 的
+// stopReq 分支 (置位先于 cancel, 同在 m.mu 内——与自然退出的竞态无窗口)。
+func (m *TaskManager) Stop(id string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.tasks[id]
+	if !ok {
+		return "", false
+	}
+	if t.status == bgStatusRunning {
+		t.stopReq = true
+		if t.cancel != nil {
+			t.cancel()
+		}
+	}
+	return t.status, true
+}
+
+// redactRuntimeErr 清洗运行期错误的渲染文本 (spec §4 failed 态防御性清洗)。
+// 实测 (实验 2026-08-21-223410): 三种连接死亡形态的 session 层错误均为
+// ExitMissingError 文本、零地址——清洗是防御性的 (库升级/未测路径可能引入
+// 带地址文本), no-leak 断言网用 RST fixture 钉住。
+func redactRuntimeErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return sshbroker.RedactAddr(err).Error()
+}
+
+// runTask 是后台执行引擎真身 (BgTaskSpec.Run 的生产实现, 由 Start 装配)。
+// wg 票由 Insert 的 Add-before-go 持有 (每 goroutine 恰一张, 本函数不再
+// Done——brief 原文的 defer m.wg.Done() 与 T3 Insert 组合会双重 Done, 已按
+// "恰一张" 口径修正)。终态映射: stopReq→stopped (置位先于 cancel, 同锁无
+// 窗口)、timedOut→timeout、err→failed (文本过清洗)、否则 done+exitCode。
+// closed 抑制 (spec §3): manager 已关则跳过终态写入与 end 审计行 (表项已被
+// CloseAll 摘除), 但 client 仍由本 goroutine 自关 (幂等)。终态即关 Client:
+// 锁外关、幂等; 保留期只保 task 记录 + rollingBuffer (spec §1)。
+func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Client, exec func(ctx context.Context, stdout, stderr io.Writer) (int, bool, error)) {
+	// 引擎入场即挂 client 槽 (持锁): CloseAll 可达即关, 观察路径可捕获引用。
+	m.mu.Lock()
+	t.client = cli
+	m.mu.Unlock()
+
+	after := func() { m.notifyWrite(t) } // 锁序: buffer.mu 已释, 才进 notifyWrite 取 m.mu
+	code, timedOut, rerr := exec(ctx,
+		&notifyWriter{buf: t.stdout, after: after},
+		&notifyWriter{buf: t.stderr, after: after})
+
+	m.mu.Lock()
+	switch {
+	case m.closed: // 终态补写抑制 (spec §3 CloseAll): 状态保持 running, 表项已被摘
+	case t.stopReq:
+		t.status, t.finishedAt = bgStatusStopped, m.now()
+	case timedOut:
+		t.status, t.finishedAt = bgStatusTimeout, m.now()
+	case rerr != nil:
+		t.status, t.errText, t.finishedAt = bgStatusFailed, redactRuntimeErr(rerr), m.now()
+	default:
+		t.status, t.exitCode, t.finishedAt = bgStatusDone, code, m.now()
+	}
+	writeEnd := t.status != bgStatusRunning && !m.closed // 终态行由本 goroutine 落笔 (同点同锁)
+	nowFn := m.now                                       // 锁内捕获时钟, 锁外调用免字段竞争
+	m.notify(t)                                          // 终态广播 (spec §2.3 触发点②; 零等待者短路)
+	t.cancel()                                           // 释放 WithTimeout 资源
+	m.mu.Unlock()
+	_ = cli.Close() // 终态即关 Client (锁外关, 幂等)
+	if writeEnd && t.auditEnd != nil {
+		_ = t.auditEnd(nowFn()) // exec-bg-end 行: Command=taskID, Status, ExitCode, DurationMS
+	}
+}
+
+// BgStartSpec 是 Start 的入参 (Task 6 的 ForProfile 构造): profile 门/凭据/
+// 主机键链已过, 这里只剩启动链。SudoPass 瞬时传递——用完即弃, 不入 task
+// 记录 (spec §1: task 记录不持有任何秘密)。
+type BgStartSpec struct {
+	ProjectID, ServerID, Command string
+	Sudo                         bool
+	SudoPass                     string /*瞬时传递,用完即弃,不入 task 记录*/
+	TimeoutSec                   int
+	Server                       *models.Server
+	Auth                         ssh.AuthMethod
+	HostKeyCb                    ssh.HostKeyCallback
+}
+
+// clampBgTimeout 钳定后台生效超时 (spec §3): 0/缺省 → cap (生产即 24h
+// runCap); > cap → cap; 中值直通。负值本应 schema 层拒 (spec §4)——此处
+// 防御性按缺省处理。
+func clampBgTimeout(sec int, cap time.Duration) time.Duration {
+	d := time.Duration(sec) * time.Second
+	if d <= 0 {
+		d = cap
+	}
+	if d > cap {
+		d = cap
+	}
+	return d
+}
+
+// Start 编排 profile 门外的全部启动链 (Task 6 只调本入口, spec §1 钉死顺序):
+// Reserve（closed/超限原样上抛——该分支的 start 审计行归 ForProfile 词汇表,
+// 哨兵 ErrBgTaskLimit 供 errors.Is 识别）→ ConnectKeepAlive（锁外慢连接;
+// 连接失败: start 行 (connect_error/cancelled/hostkey_mismatch) 先落笔再
+// ReleaseReservation, 此路径无 client 可关）→ Insert（持锁写 start(ok) 行、
+// goroutine 启动前——end 行必晚于 start 行）→ runTask goroutine（Insert 的
+// wg 票）。Insert 失败 (manager 已关): 锁外关 client + 归还预约, 零泄漏。
+// 成功返回 taskID 与钳定后的生效超时。
+func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSpec) (taskID string, effectiveTimeout time.Duration, err error) {
+	t0 := time.Now()
+	effective := clampBgTimeout(spec.TimeoutSec, m.runCap)
+	auditStart := func(status string) {
+		_ = st.WriteAudit(store.AuditRow{
+			TS: t0, ProjectID: spec.ProjectID, ServerID: spec.ServerID,
+			Action: "exec-bg-start", Command: spec.Command, Sudo: spec.Sudo,
+			Status: status, DurationMS: time.Since(t0).Milliseconds(),
+		})
+	}
+	if err := m.Reserve(); err != nil {
+		return "", 0, err
+	}
+	cli, cerr := sshbroker.ConnectKeepAlive(ctx, spec.Server.Host, spec.Server.Port, spec.Server.User, spec.Auth, spec.HostKeyCb)
+	if cerr != nil {
+		status := "connect_error"
+		switch {
+		case errors.Is(cerr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(cerr, sshbroker.ErrHostKeyMismatch):
+			status = "hostkey_mismatch"
+		}
+		auditStart(status)
+		m.ReleaseReservation()
+		return "", 0, cerr
+	}
+	exec := func(ctx context.Context, stdout, stderr io.Writer) (int, bool, error) {
+		if spec.Sudo {
+			return cli.ExecSudoWriters(ctx, spec.Command, spec.SudoPass, 0, stdout, stderr)
+		}
+		return cli.ExecWriters(ctx, spec.Command, 0, stdout, stderr)
+	}
+	tid, ierr := m.Insert(&BgTaskSpec{
+		ProjectID:  spec.ProjectID,
+		ServerID:   spec.ServerID,
+		Command:    spec.Command,
+		Sudo:       spec.Sudo,
+		Timeout:    effective,
+		AuditStart: func() { auditStart("ok") }, // Insert 持锁段内、goroutine 前调用
+		AuditEnd:   func(row store.AuditRow) error { return st.WriteAudit(row) },
+		Run:        func(ctx context.Context, t *bgTask) { m.runTask(ctx, t, cli, exec) },
+	})
+	if ierr != nil {
+		_ = cli.Close() // Insert 拒绝 (manager 已关): 锁外关, 零泄漏
+		m.ReleaseReservation()
+		return "", 0, ierr
+	}
+	return tid, effective, nil
 }

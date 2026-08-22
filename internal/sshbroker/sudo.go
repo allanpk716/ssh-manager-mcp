@@ -85,6 +85,13 @@ func (c *Client) runSudoSession(ctx context.Context, cmd, pass string, timeout t
 	return 0, false, err
 }
 
+// ExecSudoWriters 是 runSudoSession 内核的导出 writer-seam (Plan 32 T4: 后台
+// 引擎的特权变体——调用方自带 io.Writer, pass 喂入后即弃, 不落任何记录)。
+// 分类三元组与 runSudoSession 恒同; timeout 语义照旧 (引擎传 0)。
+func (c *Client) ExecSudoWriters(ctx context.Context, cmd, pass string, timeout time.Duration, stdout, stderr io.Writer) (exitCode int, timedOut bool, err error) {
+	return c.runSudoSession(ctx, cmd, pass, timeout, stdout, stderr)
+}
+
 // ExecSudo runs cmd with privilege escalation via `sudo -S`, feeding sudoPassword
 // to sudo's stdin. ctx is honored exactly as in Exec (cancel → ctx.Err(),
 // TimedOut stays false). Use this when the remote user needs a password for sudo;

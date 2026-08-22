@@ -73,6 +73,14 @@ func (c *Client) runSession(ctx context.Context, cmd string, timeout time.Durati
 	return 0, false, err
 }
 
+// ExecWriters 是 runSession 内核的导出 writer-seam (Plan 32 T4: 后台引擎
+// mcpserver.TaskManager 消费——调用方自带 io.Writer 收原始流)。分类三元组与
+// runSession 恒同。timeout 语义照旧 (>0 时叠加一层 deadline); 后台引擎传 0
+// (任务的 WithTimeout 已在 ctx 上)。
+func (c *Client) ExecWriters(ctx context.Context, cmd string, timeout time.Duration, stdout, stderr io.Writer) (exitCode int, timedOut bool, err error) {
+	return c.runSession(ctx, cmd, timeout, stdout, stderr)
+}
+
 // Exec runs cmd on the remote host. ctx is honored: if the caller cancels ctx —
 // directly or via the MCP tool-call ctx it flows from — the session is signaled
 // and closed and Exec returns ctx.Err() with TimedOut left false (cancellation is

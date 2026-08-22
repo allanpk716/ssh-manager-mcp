@@ -119,3 +119,26 @@ func redactAddr(err error, host string, port int) error {
 	}
 	return &addrRedactedError{msg: msg, err: err}
 }
+
+// RedactAddr 是无 host 知识的防御性清洗入口 (Plan 32 T4: 后台引擎 failed 态
+// 文本清洗, spec §4)。与 redactAddr 同源机制但无定向 host 替换 (调用点拿不到
+// host/port——task 记录刻意不持有 host): 仅跑形态探测——文本无任何地址/DNS
+// 形态时恒等直通 (实测 ExitMissingError 类运行期死亡文本即此形态, 恒等是
+// no-leak 断言网锚点); 有形态则整段降级为分类短语 (degradedText 原文复用,
+// 其 "ssh dial: " 前缀属既有冻结词表——防御路径罕见, 不另造新词)。链
+// (Unwrap/net.Error 委托) 与 addrRedactedError 契约一致。redactAddr 自身
+// 行为零变化。
+func RedactAddr(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	var dnsErr *net.DNSError
+	addressSurvives := ipv4Re.MatchString(msg) || brackV6Re.MatchString(msg) ||
+		zoneV6Re.MatchString(msg) || dblColonRe.MatchString(msg) ||
+		hostPortRe.MatchString(msg) || lookupRe.MatchString(msg)
+	if addressSurvives || errors.As(err, &dnsErr) {
+		return &addrRedactedError{msg: degradedText(err), err: err}
+	}
+	return &addrRedactedError{msg: msg, err: err}
+}
