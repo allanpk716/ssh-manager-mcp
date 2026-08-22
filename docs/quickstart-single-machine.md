@@ -77,7 +77,7 @@ ssh-manager projects add my-agent --profile team-a
 
 ## Step 5 — 配进 Claude Code
 
-把上面的片段写进 `~/.mcp.json`（或项目级 `.mcp.json`），重启 Claude Code。现在 agent 有了 6 个 SSH 工具（`list_servers` / `exec_command` / `download_file` / `upload_file` / `forward_port` / `close_port`），范围仅限 `team-a` profile 里你授权的服务器。
+把上面的片段写进 `~/.mcp.json`（或项目级 `.mcp.json`），重启 Claude Code。现在 agent 有了 9 个 SSH 工具（`list_servers` / `exec_command` / `download_file` / `upload_file` / `forward_port` / `close_port` / 后台三件套 `exec_background` / `exec_output` / `exec_stop`），范围仅限 `team-a` profile 里你授权的服务器。
 
 对 agent 说「列出可用服务器」→ 它先调 `list_servers` 拿到真实 id → 就能跑命令了。
 

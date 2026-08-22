@@ -67,12 +67,16 @@ algorithms. The exhaustive KEX×cipher×MAC matrix is deliberately out of scope
 | Exhaustive KEX×cipher×MAC matrix | default negotiation only (`ssh.ClientConfig` sets no `Config.Ciphers`/`KeyExchanges`/`MACs`) | full algorithm menu | **Out of scope** — flake risk and version drift; default negotiation is what both sides converge on in practice. |
 | Multi-algorithm host-key negotiation | broker exposes no `HostKeyAlgorithms` knob on `Connect`; the client accepts whichever host key the server offers first (pinned via `FixedHostKey` or `HostKeyTOFU` after the fact) | client can request a preferred host-key algorithm (`HostKeyAlgorithms`, `HostbasedAcceptedAlgorithms`) | **Out of the conformance claim.** The conformance sshd (`internal/conformance/Dockerfile`) pins `HostKey` to ed25519-only so the negotiated host key is deterministic; this is a test-harness pin, not a broker capability. Multi-algorithm host-key negotiation is not tested and not claimed. |
 | host-key storage keying | runtime store keys host keys by `host:port` unconditionally (even `:22`), so same-host-different-port servers never collide | known_hosts uses bare `host` for `:22` and `[host]:port` otherwise | **Documented micro-difference** — semantic parity (per-port isolation) holds; only the `:22` rendering differs from OpenSSH's bare-host convention. The `knownhosts.go` serializer renders `[host]:port` for the known_hosts *file format*; the runtime store uses `host:port` internally. |
+| Background task trio (`exec_background` / `exec_output` / `exec_stop`) | broker feature: per-project in-process task table (32-task cap incl. in-flight reservations, 24h run cap, ~1h post-exit retention, 1 MiB rolling tail per channel, byte-offset incremental polling) | no `ssh`-binary counterpart — backgrounding is a remote-side idiom (`nohup` / `tmux`), not a client capability | **Broker-specific** — deliberately **excluded from the §13.2 differential** (no `ssh`-binary counterpart for an apples-to-apples comparison). |
+| `exec_stop` kill semantics | stop closes the task's SSH session → the remote process receives SIGHUP; processes started with `nohup`/`setsid` survive; no signal ladder is attempted (OpenSSH's sshd ignores `signal` requests) | killing the `ssh` client delivers SIGHUP the same way; graceful per-signal kills need a PTY (not provided) | **Documented parity** — same kill-the-session semantics as the real `ssh` client; no differential (the trio has no counterpart, row above). |
 
 These differences are bounded in this document. The broker deliberately does
 **not** claim "ssh-consistent" anywhere in its agent-facing tool descriptions —
-agents see only the `list_servers` / `exec_command` surface with no SSH-conformance
-nuance, so there is no boundary to state to them (surfacing it would be scope
-creep). "Consistent with ssh" is a developer-facing claim, bounded here.
+agents see only the broker's nine-tool surface — `list_servers` / `exec_command` /
+`download_file` / `upload_file` / `forward_port` / `close_port` plus the
+background trio (`exec_background` / `exec_output` / `exec_stop`) — with no
+SSH-conformance nuance, so there is no boundary to state to them (surfacing it
+would be scope creep). "Consistent with ssh" is a developer-facing claim, bounded here.
 
 ### Note on the T2 harness pin (load-bearing)
 

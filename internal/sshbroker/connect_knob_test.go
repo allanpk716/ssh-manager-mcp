@@ -2,6 +2,7 @@ package sshbroker
 
 import (
 	"context"
+	"io"
 	"net"
 	"reflect"
 	"strings"
@@ -66,6 +67,34 @@ func TestHostKeyAlgoKnobRSAEndToEnd(t *testing.T) {
 		t.Fatalf("connect with rsa-sha2-512 against RSA-host-key sshd: %v", err)
 	}
 	cli.Close()
+}
+
+// TestConnectKeepAliveExecRoundTrip proves the keepalive connect variant
+// handshakes against testsshd and round-trips an Exec (Plan 32 T4)。判死行为
+// (3 次无响应关连接) 属真连接行为, 归 conformance 层, 不在此测——本用例只钉
+// 「keepalive 客户端不破坏正常会话」。
+//
+// 注: x/crypto (go.mod v0.41.0 起至最新版) 无 KeepAliveConfig——spec §1 该名
+// 已被证伪。ConnectKeepAlive 按 OpenSSH 同型机制实现: 周期发
+// keepalive@openssh.com 全局请求 (wantReply), 连续 3 次无响应判死关连接。
+func TestConnectKeepAliveExecRoundTrip(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		Exec:     func(cmd string, _ io.Reader) (string, string, int) { return "ka:" + cmd + "\n", "", 0 },
+	})
+	defer cleanup()
+	cli, err := ConnectKeepAlive(context.Background(), hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), ssh.FixedHostKey(hk))
+	if err != nil {
+		t.Fatalf("ConnectKeepAlive: %v", err)
+	}
+	defer cli.Close()
+	res, err := cli.Exec(context.Background(), "ping", 0, 0)
+	if err != nil {
+		t.Fatalf("exec over keepalive client: %v", err)
+	}
+	if res.Stdout != "ka:ping\n" {
+		t.Fatalf("stdout=%q, want %q", res.Stdout, "ka:ping\n")
+	}
 }
 
 // TestHostKeyAlgoKnobTypoFailsBeforeDial proves a typo'd knob fails-closed

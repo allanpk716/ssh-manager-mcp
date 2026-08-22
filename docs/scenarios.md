@@ -8,7 +8,7 @@
 
 ## 怎么读这些示例
 
-- agent 拿到的 6 个工具是：`list_servers` / `exec_command` / `download_file` / `upload_file` / `forward_port` / `close_port`（详见根 [README](../README.md#what-the-agent-gets-the-mcp-tools)）。
+- agent 拿到的 9 个工具是：`list_servers` / `exec_command` / `download_file` / `upload_file` / `forward_port` / `close_port` / `exec_background` / `exec_output` / `exec_stop`（长活命令走后台三件套；详见根 [README](../README.md#what-the-agent-gets-the-mcp-tools)）。
 - **你不需要记工具名**。你用自然语言说目标，agent 自己会先 `list_servers` 拿到真实的 server `id`，再用 `id` 调后续工具。下面“agent 会怎么用”只是让你知道它背后在干嘛。
 - 所有示例都假设 agent 绑定的 profile 里有名为 `gpu` / `db` / `web` 等的服务器——把名字换成你自己的。
 
@@ -198,7 +198,7 @@ ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原
 | 交互式 shell（`ssh -t`） | ❌ 不支持 | 用你自己的 ssh 客户端；agent 这边用 `&&` / `;` 串命令 |
 | 递归下载整个目录 | ❌ `download_file` 只单文件 | 远端 `tar` 后下载 tar |
 | 远程转发 `-R` / 动态 `-D` | ❌ 只支持本地 `-L` | — |
-| 跑超 5 分钟的长命令 | ❌ agent 路径硬上限 5 分钟 | owner 用 `ssh-manager ssh`（120s）；更长用 `nohup` + 后台 + 轮询输出 |
+| 跑超 5 分钟的长命令 | ✅ 前台 `exec_command` 5min 硬顶；长活走 `exec_background`（24h 上限）+ `exec_output` 增量轮询 + `exec_stop` | 仍可用 `ssh-manager ssh`（120s）+ `nohup` |
 | 单次输出 > 1 MiB | ⚠️ 截断（标 `truncated`） | 切片（`head/tail/grep`）分多次 |
 
 ---
