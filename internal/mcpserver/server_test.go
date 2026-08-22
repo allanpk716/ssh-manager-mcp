@@ -30,8 +30,9 @@ func TestServerInfoCarriesBuildinfoVersion(t *testing.T) {
 	defer func() { buildinfo.Version = "dev" }()
 
 	st := newStore(t)
-	server, mgr, _ := NewServer(st, "p", "proj-test")
+	server, mgr, tasks, _ := NewServer(st, "p", "proj-test")
 	defer mgr.CloseAll()
+	defer tasks.CloseAll()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
 	srvSession, err := server.Connect(context.Background(), t1, nil)
@@ -71,8 +72,9 @@ func TestNewServerToolsScopedViaInMemoryClient(t *testing.T) {
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{srvID})
 
-	server, mgr, _ := NewServer(st, pid, "proj-test")
+	server, mgr, tasks, _ := NewServer(st, pid, "proj-test")
 	defer mgr.CloseAll()
+	defer tasks.CloseAll()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
 	srvSession, err := server.Connect(context.Background(), t1, nil)
@@ -134,8 +136,9 @@ func TestDownloadFile(t *testing.T) {
 		t.Fatalf("setup write: %v", err)
 	}
 
-	server, mgr, _ := NewServer(st, pid, "proj-test")
+	server, mgr, tasks, _ := NewServer(st, pid, "proj-test")
 	defer mgr.CloseAll()
+	defer tasks.CloseAll()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
 	srvSession, err := server.Connect(context.Background(), t1, nil)
@@ -191,8 +194,9 @@ func TestUploadFile(t *testing.T) {
 	// accepts both separators; a real remote is POSIX).
 	remote := filepath.ToSlash(filepath.Join(t.TempDir(), "wire_up.bin"))
 
-	server, mgr, _ := NewServer(st, pid, "proj-test")
+	server, mgr, tasks, _ := NewServer(st, pid, "proj-test")
 	defer mgr.CloseAll()
+	defer tasks.CloseAll()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
 	srvSession, err := server.Connect(context.Background(), t1, nil)
@@ -263,8 +267,9 @@ func TestForwardPortClosePort(t *testing.T) {
 
 	echoPort := startEchoListener(t)
 
-	server, mgr, _ := NewServer(st, pid, "proj-test")
+	server, mgr, tasks, _ := NewServer(st, pid, "proj-test")
 	defer mgr.CloseAll()
+	defer tasks.CloseAll()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
 	srvSession, err := server.Connect(context.Background(), t1, nil)

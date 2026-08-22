@@ -45,7 +45,7 @@ func TestNewServerFromSource_ResolvesStorePerCall(t *testing.T) {
 
 	var calls int32
 	cur := stA
-	server, mgr, err := NewServerFromSource(func() *store.Store {
+	server, mgr, tasks, err := NewServerFromSource(func() *store.Store {
 		atomic.AddInt32(&calls, 1)
 		return cur
 	}, pid, "proj-src")
@@ -53,6 +53,7 @@ func TestNewServerFromSource_ResolvesStorePerCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mgr.CloseAll()
+	defer tasks.CloseAll()
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
 	t1, t2 := mcp.NewInMemoryTransports()

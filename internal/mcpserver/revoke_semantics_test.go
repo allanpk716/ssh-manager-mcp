@@ -41,11 +41,12 @@ func TestRevokedProjectKeepsOpenTunnelForwarding(t *testing.T) {
 
 	echoPort := startEchoListener(t)
 
-	_, mgr, err := NewServer(st, pid, projID)
+	_, mgr, tasks, err := NewServer(st, pid, projID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer mgr.CloseAll()
+	defer tasks.CloseAll()
 	out, err := ForwardForProfile(context.Background(), st, projID, pid, srvID, "127.0.0.1", echoPort, 0, mgr)
 	if err != nil {
 		t.Fatal(err)

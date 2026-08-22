@@ -106,7 +106,8 @@ type TaskManager struct {
 	wg                  sync.WaitGroup
 }
 
-// NewTaskManager 解析 env seam 并构造 TaskManager, 随后启动 sweeper (生产入口)。
+// NewTaskManager 解析 env seam 并构造 TaskManager, 不启动 sweeper (照
+// NewTunnelManager 先例——生产接线点 NewServerFromSource 调 StartSweeper)。
 // SSHMGR_BG_MAX_TASKS (strconv.Atoi) / SSHMGR_BG_RUN_CAP / SSHMGR_BG_RETAIN
 // (time.ParseDuration): 缺省用包级默认; 解析错或值 ≤0 → error (fail-closed——
 // 非法配置拒绝启动, 不静默回落默认)。maxTasks 先于 runCap 解析, 使并发非法时
@@ -136,21 +137,20 @@ func NewTaskManager() (*TaskManager, error) {
 		}
 		retain = d
 	}
-	m := &TaskManager{
+	return &TaskManager{
 		tasks:    map[string]*bgTask{},
 		runCap:   runCap,
 		retain:   retain,
 		maxTasks: maxTasks,
 		now:      time.Now,
 		quit:     make(chan struct{}),
-	}
-	m.StartSweeper()
-	return m, nil
+	}, nil
 }
 
-// StartSweeper 至多启动一次清扫 goroutine; CloseAll 后为 no-op。NewTaskManager
-// (生产) 调用; 白盒测试不启——直接驱动 SweepExpired, 免真实 ticker 与可覆写
-// 时钟 m.now 的数据竞争。
+// StartSweeper 至多启动一次清扫 goroutine; CloseAll 后为 no-op。生产入口
+// NewServerFromSource 调用 (紧邻 tunnels.StartSweeper, 照 tunnels.go 先例);
+// 白盒测试不启——直接驱动 SweepExpired, 免真实 ticker 与可覆写时钟 m.now
+// 的数据竞争。
 func (m *TaskManager) StartSweeper() {
 	m.startOnce.Do(func() {
 		m.wg.Add(1)
@@ -179,6 +179,12 @@ func (m *TaskManager) sweepLoop() {
 // (spec §5 start 全分支)。包裹后的完整文本与 spec §3 引导文案逐字一致。
 var ErrBgTaskLimit = errors.New("background task limit")
 
+// ErrBgManagerClosed 是 Reserve/Insert 在与 CloseAll 竞态下的拒绝哨兵
+// (T6: ForProfile 以 errors.Is 识别, 把该分支与本层词汇表的 error 行对齐——
+// 否则它无法与 Start 已自审计的 connect 分支区分, 会漏行或双写)。
+// 文本即原先两处的字面错误, 零行为变化。
+var ErrBgManagerClosed = errors.New("task manager closed")
+
 // Reserve 预约一个任务槽位 (admission, 持锁)。closed → error;
 // len(tasks)+reserved >= maxTasks → 驱逐最旧终态 (非 running 中 finishedAt 最小,
 // 平局按 id 字典序取小保确定性; 仅 delete from map, 零审计行); 无终态可逐 →
@@ -188,7 +194,7 @@ func (m *TaskManager) Reserve() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return errors.New("task manager closed")
+		return ErrBgManagerClosed
 	}
 	if len(m.tasks)+m.reserved >= m.maxTasks {
 		var victim *bgTask
@@ -231,7 +237,7 @@ func (m *TaskManager) Insert(spec *BgTaskSpec) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return "", errors.New("task manager closed")
+		return "", ErrBgManagerClosed
 	}
 	if m.reserved > 0 {
 		m.reserved--

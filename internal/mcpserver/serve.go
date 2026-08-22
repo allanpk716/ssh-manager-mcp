@@ -28,11 +28,14 @@ type serverKey struct{}
 // lifecycle is governed by VerifyToken (status='active': rotate/disable/revoke).
 const projectTokenNominalTTL = 100 * 365 * 24 * time.Hour
 
-// scopedServer is a project-scoped MCP server + its tunnel manager, cached per
-// project so concurrent sessions of the same project share one instance.
+// scopedServer is a project-scoped MCP server + its tunnel manager + its
+// background-task manager, cached per project so concurrent sessions of the
+// same project share one instance (per-Server TaskManager = cross-project
+// background-task isolation, structural like tunnels — Plan 32 spec §1).
 type scopedServer struct {
 	srv     *mcp.Server
 	tunnels *TunnelManager
+	tasks   *TaskManager
 }
 
 // ServeRunner is the stateful core of `ssh-manager serve`: it holds the shared
@@ -50,27 +53,30 @@ func NewServeRunner(st *store.Store) *ServeRunner {
 }
 
 // ServerForProject returns the cached scoped server for project, building it on first use.
-// NewServer is the existing project-scoped constructor (unchanged) — same one RunStdio uses.
+// NewServer is the existing project-scoped constructor — same one RunStdio uses
+// (Plan 32: it now also returns the project's TaskManager, held here + closed in Close).
 func (r *ServeRunner) ServerForProject(project *models.Project) (*mcp.Server, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if s, ok := r.cache[project.ID]; ok {
 		return s.srv, nil
 	}
-	srv, tunnels, err := NewServer(r.st, project.ProfileID, project.ID)
+	srv, tunnels, tasks, err := NewServer(r.st, project.ProfileID, project.ID)
 	if err != nil {
 		return nil, err
 	}
-	r.cache[project.ID] = &scopedServer{srv: srv, tunnels: tunnels}
+	r.cache[project.ID] = &scopedServer{srv: srv, tunnels: tunnels, tasks: tasks}
 	return srv, nil
 }
 
-// Close tears down every cached server's tunnel manager (SIGINT/server-shutdown).
+// Close tears down every cached server's tunnel manager and background-task
+// manager (SIGINT/server-shutdown).
 func (r *ServeRunner) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, s := range r.cache {
 		s.tunnels.CloseAll()
+		s.tasks.CloseAll()
 	}
 }
 

@@ -98,6 +98,24 @@ type CloseForwardInput struct {
 	TunnelID string `json:"tunnel_id" jsonschema:"the tunnel_id forward_port returned"`
 }
 
+// ExecBackgroundInput is the exec_background tool input (Plan 32 T6; the
+// foreground analog is ExecCommandInput). No env/workdir/stdin parameters —
+// the agent composes the command line itself (`cd /dir && VAR=x cmd`).
+type ExecBackgroundInput struct {
+	ServerID       string `json:"server_id" jsonschema:"server id from list_servers"`
+	Command        string `json:"command" jsonschema:"shell command to run in the background on the server"`
+	Sudo           bool   `json:"sudo,omitempty" jsonschema:"true to run with sudo (broker handles sudo -S; do not prepend sudo). Requires has_sudo=true."`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"optional max seconds; defaults to 86400 (24h) and is capped there; the effective value is echoed back as effective_timeout_seconds"`
+}
+
+// BgStartOutput is the exec_background tool output (Plan 32 T6; T7's
+// BgReadOutput/BgStopOutput are the same naming family).
+type BgStartOutput struct {
+	TaskID                  string `json:"task_id" jsonschema:"opaque task id; poll its output with exec_output, stop it with exec_stop"`
+	EffectiveTimeoutSeconds int    `json:"effective_timeout_seconds" jsonschema:"the clamped timeout actually in effect, in seconds (default and cap: 86400 = 24h)"`
+	Status                  string `json:"status" jsonschema:"task status right after start; running"`
+}
+
 // ErrNotInProfile is returned when an agent requests a server outside its Profile (iron rule).
 var ErrNotInProfile = errWithString("server is not in your profile — call list_servers to see the servers you may use")
 

@@ -33,18 +33,20 @@ func RunStdio(token string, kp store.KeyProvider) error {
 	if project == nil {
 		return fmt.Errorf("invalid or unknown token")
 	}
-	srv, tunnels, err := NewServer(st, project.ProfileID, project.ID)
+	srv, tunnels, tasks, err := NewServer(st, project.ProfileID, project.ID)
 	if err != nil {
 		return err
 	}
 	// MCP-shutdown teardown: when the agent disconnects (stdin closes) srv.Run
-	// returns and the deferred CloseAll tears down every open forward_port
-	// tunnel — listener + owning ssh.Client — so the process exits with no
-	// leaked SSH connections. The tunnel sweeper goroutine is also stopped. (The
-	// go-sdk MCP server has no per-server shutdown hook on the Run path — its
-	// session onClose fires per-session; we teardown at Run-return instead,
+	// returns and the deferred CloseAlls tear down every open forward_port
+	// tunnel — listener + owning ssh.Client — and every background task
+	// (running task goroutines + their owning ssh.Clients) so the process exits
+	// with no leaked SSH connections. Both sweeper goroutines are also stopped.
+	// (The go-sdk MCP server has no per-server shutdown hook on the Run path —
+	// its session onClose fires per-session; we teardown at Run-return instead,
 	// which is the single-session stdio case.)
 	defer tunnels.CloseAll()
+	defer tasks.CloseAll()
 	return srv.Run(context.Background(), &mcp.StdioTransport{})
 }
 
@@ -238,10 +240,11 @@ func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload 
 	}
 	defer h.cleanup()
 
-	srv, tunnels, err := NewServerFromSource(h.Current, project.ProfileID, project.ID)
+	srv, tunnels, tasks, err := NewServerFromSource(h.Current, project.ProfileID, project.ID)
 	if err != nil {
 		return err
 	}
 	defer tunnels.CloseAll()
+	defer tasks.CloseAll()
 	return srv.Run(context.Background(), &mcp.StdioTransport{})
 }
