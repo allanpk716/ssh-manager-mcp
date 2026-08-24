@@ -633,3 +633,103 @@ func TestUploadDirUnderJunctionAncestor(t *testing.T) {
 		t.Fatalf("round-trip: err=%v content=%q", err, g.Content)
 	}
 }
+
+// gateReader blocks its first Read until ch is closed, then yields one byte
+// and EOF — a deterministic cancellation fixture: io.Copy stalls on Read while
+// the watchdog (armed by cancel) closes the sftp client, so the first WRITE
+// after release must fail.
+type gateReader struct {
+	ch       chan struct{}
+	released bool
+}
+
+func (g *gateReader) Read(p []byte) (int, error) {
+	if !g.released {
+		<-g.ch
+		g.released = true
+	}
+	if len(p) > 0 {
+		p[0] = 'x'
+		return 1, nil
+	}
+	return 0, nil
+}
+
+// TestWriteFile covers the Plan-33 WriteFile primitive (spec rev3 §2.2): deep
+// parent creation, byte-exact content, overwrite truncation, backslash-named
+// POSIX parent (no ToSlash rewriting — linux lane only, a Windows host FS
+// treats "\" as its own separator and the case is unobservable there), and
+// cancellation erroring with a partial file left (scp parity). The in-process
+// testsshd serves the host FS, so os.ReadFile verifies what actually landed.
+func TestWriteFile(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+	defer c.Close()
+	ctx := context.Background()
+
+	// 1. byte-exact write + deep parent creation. remotePath is slash-form even
+	//    on a Windows host: WriteFile's contract (spec rev3 §2.2) takes a POSIX
+	//    path — pure path.Dir cannot see a backslash parent — and Windows host
+	//    APIs accept forward slashes natively, so os.ReadFile still verifies
+	//    what landed (Upload-test precedent: uploadDir builds remote targets
+	//    path.Join(remoteRoot, ToSlash(rel)); ToSlash is identity on linux, so
+	//    the CI lane is unchanged).
+	root := filepath.ToSlash(filepath.Join(t.TempDir(), "wf-root"))
+	deep := path.Join(root, "a", "b", "c", "file.txt")
+	payload := []byte("hello plan-33\nsecond line \x00\xff")
+	if err := c.WriteFile(ctx, deep, bytes.NewReader(payload)); err != nil {
+		t.Fatalf("WriteFile deep: %v", err)
+	}
+	if got, err := os.ReadFile(deep); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("deep readback: err=%v equal=%v", err, bytes.Equal(got, payload))
+	}
+
+	// 2. overwrite truncates: pre-create LONGER content, write shorter.
+	ov := path.Join(root, "over.txt")
+	if err := os.WriteFile(ov, []byte(strings.Repeat("L", 100)), 0644); err != nil {
+		t.Fatalf("pre-create over.txt: %v", err)
+	}
+	if err := c.WriteFile(ctx, ov, strings.NewReader("short")); err != nil {
+		t.Fatalf("WriteFile overwrite: %v", err)
+	}
+	if got, err := os.ReadFile(ov); err != nil || string(got) != "short" {
+		t.Fatalf("overwrite readback: err=%v content=%q, want %q", err, got, "short")
+	}
+
+	// 3. backslash is a legal POSIX filename char — parent must be created
+	//    VERBATIM (spec rev3: never filepath.ToSlash). Only observable where
+	//    the host FS treats "\" as a normal char (linux CI lane); skip on
+	//    Windows where it IS the separator.
+	if runtime.GOOS != "windows" {
+		slashRoot := filepath.ToSlash(root)
+		bs := slashRoot + `/dir\name/file.txt`
+		if err := c.WriteFile(ctx, bs, strings.NewReader("bs")); err != nil {
+			t.Fatalf("WriteFile backslash path: %v", err)
+		}
+		if _, err := os.Stat(slashRoot + `/dir\name`); err != nil {
+			t.Fatalf("backslash parent not created verbatim: %v", err)
+		}
+		if got, err := os.ReadFile(bs); err != nil || string(got) != "bs" {
+			t.Fatalf("backslash readback: err=%v content=%q", err, got)
+		}
+	} else {
+		t.Log("backslash-filename case skipped on windows host FS (\"\\\" is the separator there); linux CI lane carries it")
+	}
+
+	// 4. cancellation errors and leaves a partial file (scp parity).
+	cancelPath := path.Join(root, "cancel", "part.txt")
+	ctx2, cancel := context.WithCancel(ctx)
+	g := &gateReader{ch: make(chan struct{})}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()    // arm the watchdog FIRST (it closes the sftp client)
+		close(g.ch) // THEN release the stalled reader
+	}()
+	if err := c.WriteFile(ctx2, cancelPath, g); err == nil {
+		t.Fatal("cancelled WriteFile: want error, got nil")
+	}
+	if _, err := os.Stat(filepath.Dir(cancelPath)); err != nil {
+		t.Fatalf("created parent must remain (scp parity): %v", err)
+	}
+}

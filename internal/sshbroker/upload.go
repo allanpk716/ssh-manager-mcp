@@ -280,3 +280,55 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	}
 	return len(p), nil // always accept — cap is advisory within a file (see above)
 }
+
+// WriteFile writes r to remotePath over SFTP, creating the PARENT directory
+// first (scp --parents UX) — both under ONE watchdog: ctx cancellation closes
+// the sftp client, unblocking an in-flight op (Upload's watchdog pattern).
+// Plan 33 spec rev3 §2.2, three load-bearing pins:
+//   - parent via PURE POSIX path.Dir — never filepath.ToSlash (a backslash is
+//     a legal POSIX filename char; on a Windows broker ToSlash would rewrite
+//     /tmp/a\b into /tmp/a/b and create the WRONG parent, and the behavior
+//     would drift with the broker's OS. Upload's existing Client.MkdirAll
+//     carries that debt — registered in spec §8, not fixed here);
+//   - sc.Create truncates an existing file (overwrite semantics, upload_file
+//     parity);
+//   - out.Close is EXPLICIT and CHECKED: SFTP write failures can surface only
+//     at Close (flush/final packet), so success = io.Copy OK AND Close OK; a
+//     Close error IS a write failure. (Upload's uploadFile uses a bare
+//     `defer out.Close()` — registered debt, not fixed here.)
+//
+// On any failure the remote may hold a partially-written file and/or the
+// created parent dir — cleanup is the caller's job (scp parity).
+func (c *Client) WriteFile(ctx context.Context, remotePath string, r io.Reader) error {
+	sc, err := sftp.NewClient(c.c)
+	if err != nil {
+		return fmt.Errorf("sftp client: %w", err)
+	}
+	defer sc.Close()
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = sc.Close() // unblock in-flight sftp op → WriteFile errors (Upload watchdog pattern)
+		case <-done:
+		}
+	}()
+
+	if err := sc.MkdirAll(path.Dir(remotePath)); err != nil {
+		return fmt.Errorf("mkdir parent: %w", err)
+	}
+	out, err := sc.Create(remotePath)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, r); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil { // checked Close — spec rev3 §2.2
+		return fmt.Errorf("close: %w", err)
+	}
+	return nil
+}
