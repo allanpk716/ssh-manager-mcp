@@ -69,12 +69,14 @@ algorithms. The exhaustive KEX×cipher×MAC matrix is deliberately out of scope
 | host-key storage keying | runtime store keys host keys by `host:port` unconditionally (even `:22`), so same-host-different-port servers never collide | known_hosts uses bare `host` for `:22` and `[host]:port` otherwise | **Documented micro-difference** — semantic parity (per-port isolation) holds; only the `:22` rendering differs from OpenSSH's bare-host convention. The `knownhosts.go` serializer renders `[host]:port` for the known_hosts *file format*; the runtime store uses `host:port` internally. |
 | Background task trio (`exec_background` / `exec_output` / `exec_stop`) | broker feature: per-project in-process task table (32-task cap incl. in-flight reservations, 24h run cap, ~1h post-exit retention, 1 MiB rolling tail per channel, byte-offset incremental polling) | no `ssh`-binary counterpart — backgrounding is a remote-side idiom (`nohup` / `tmux`), not a client capability | **Broker-specific** — deliberately **excluded from the §13.2 differential** (no `ssh`-binary counterpart for an apples-to-apples comparison). |
 | `exec_stop` kill semantics | stop closes the task's SSH session → the remote process receives SIGHUP; processes started with `nohup`/`setsid` survive; no signal ladder is attempted (OpenSSH's sshd ignores `signal` requests) | killing the `ssh` client delivers SIGHUP the same way; graceful per-signal kills need a PTY (not provided) | **Documented parity** — same kill-the-session semantics as the real `ssh` client; no differential (the trio has no counterpart, row above). |
+| `upload_content` (inline content upload) | broker feature: writes inline JSON-parameter content to a remote file over SFTP (text / single-line base64 encodings, 8 MiB decoded cap with env seam, parent dirs auto-created, overwrite semantics; on failure a partial file may remain) | no direct counterpart — piping stdin into `cat > file` over ssh approximates but is **not** equivalent (a stream is not a parameter: no cap, no encoding contract, no parent creation, different failure semantics) | **Broker-specific** — deliberately **excluded from the §13.2 differential** (no `ssh`-binary counterpart for an apples-to-apples comparison). Real-wire evidence instead: `TestUploadContentRealSSH` (binary byte-exactness via the server's own `sha256sum` readback, deep parent creation, overwrite truncation). |
 
 These differences are bounded in this document. The broker deliberately does
 **not** claim "ssh-consistent" anywhere in its agent-facing tool descriptions —
-agents see only the broker's nine-tool surface — `list_servers` / `exec_command` /
-`download_file` / `upload_file` / `forward_port` / `close_port` plus the
-background trio (`exec_background` / `exec_output` / `exec_stop`) — with no
+agents see only the broker's ten-tool surface — `list_servers` / `exec_command` /
+`download_file` / `upload_file` / `upload_content` / `forward_port` /
+`close_port` plus the background trio (`exec_background` / `exec_output` /
+`exec_stop`) — with no
 SSH-conformance nuance, so there is no boundary to state to them (surfacing it
 would be scope creep). "Consistent with ssh" is a developer-facing claim, bounded here.
 

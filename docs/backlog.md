@@ -12,7 +12,7 @@
 
 13. ~~**后台任务三件套**（exec_background / exec_output / exec_stop）~~ **已落地（Plan 32, 2026-08-22 并 master; v0.10.0 发版+双端部署待 owner; spec/plan 见 docs/superpowers/{specs,plans}/2026-08-21-plan-32-background-tasks*）**。原文：`exec_background(server_id, command, sudo, timeout_seconds)` → task_id；`exec_output(task_id, wait_seconds?, since_offset?)` → 增量输出 + 运行/结束状态；`exec_stop(task_id)`。对齐 Claude Code Bash 工具体验，agent 零学习成本。任务表：broker 进程内存（TunnelManager 同款模式），进程重启即失，文档明示。生命周期：运行上限 24h；完成后保留 1h 供取尾输出；每通道滚动保留最后 1 MiB；增量用字节 offset 游标（tail -f / journalctl -f 场景 = 反复 exec_output 拉增量，不做流式推送）。前台 exec_command 保持 5 min 硬顶（现状 `MaxExecTimeout`，长活全走后台），但静默钳制改"响"：返回体加 `effective_timeout_seconds`。文档：agent-tools.md 补 `cd /dir && VAR=x cmd` 惯用法（exec 不加 env/workdir 参数，agent 可自行组合）。验收：后台生命周期（启动/增量/取消/超时/收割）conformance/eval 覆盖 + effective_timeout 钳制响应断言。
 
-14. **upload_content 跨机小文件上传**——新工具：内容内联（≤8 MiB）写入远程路径。现状缺口：`upload_file` 的 local_path 是 broker 本机路径，笔记本 agent → NUC10 serve 拓扑下无法上传本机文件（download 是内容回传、跨机可用，上/下载不对称，S1 配置下发场景残缺）。download 维持 1 MiB 前缀截断（大文件全文进 agent 上下文是反模式，不鼓励）；agent-tools.md 教 exec head/tail/grep 切片读法。验收：跨机拓扑端到端（笔记本→NUC10→目标机）+ 超限拒绝分支。
+14. ~~**upload_content 跨机小文件上传**——新工具：内容内联（≤8 MiB）写入远程路径。~~ **已落地（Plan 33, 2026-08-24 并 master; v0.10.0 未发版——并入 v0.10.0 行还是开 v0.11.0 留 owner 发版拍板（compat-matrix 占位注释回写时删）; spec 三轮 xcheck 收敛 rev3 定稿 + 8 任务 SDD + 整分支终审 Ready; 跨机端到端（笔记本→NUC10→目标机）owner 手工验收 + eval T10/conformance 门内实跑留 owner/CI 门）**。原文：现状缺口：`upload_file` 的 local_path 是 broker 本机路径，笔记本 agent → NUC10 serve 拓扑下无法上传本机文件（download 是内容回传、跨机可用，上/下载不对称，S1 配置下发场景残缺）。download 维持 1 MiB 前缀截断（大文件全文进 agent 上下文是反模式，不鼓励）；agent-tools.md 教 exec head/tail/grep 切片读法。验收：跨机拓扑端到端（笔记本→NUC10→目标机）+ 超限拒绝分支。
 
 ## P1 — 安全债 + 第二梯队（2026-08-21 排期）
 

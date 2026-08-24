@@ -99,7 +99,10 @@ func TestServeHTTPRejectsRevokedTokenPerRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewServeRunner(st)
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
 	defer r.Close()
 	h := r.HTTPHandler()
 

@@ -4,6 +4,7 @@
 
 ## 已验证组合
 
+<!-- v0.10.0/0.11.0（Plan 33 upload_content）：工具面纯增量——1 新工具（upload_content：内联内容上传，text/base64，解码后 ≤8 MiB，`SSHMGR_UPLOAD_CONTENT_MAX` env seam）+ serve HTTP 请求体上限（MaxBytesReader，cap+cap/3+64 KiB 同源联动），无破坏性变更。v0.10.0 未发版——并入 v0.10.0 行还是开 v0.11.0 行留 owner 发版时拍板。占位:发版后回写,记得删除本注释 -->
 <!-- v0.10.0（Plan 32 后台任务三件套）：纯增量——3 新工具（exec_background / exec_output / exec_stop）+ ExecOutput 新字段 effective_timeout_seconds，无破坏性变更；发版后双端实测回写本表。 -->
 
 | client 版本 | serve 版本 | 在线（HTTP MCP） | 离线（cache pull / mcp --cache） | 验证日期 |

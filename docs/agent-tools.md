@@ -112,6 +112,61 @@
     用更小的载荷分批重试。
 - SFTP 通道，**sudo 不适用**。
 
+### upload_content
+
+把**你（agent）自己持有的内容**内联写成一个远程文件——`content` 直接进 JSON
+入参，不要求 broker 机器上先有文件。参数：`server_id` + `content` +
+`remote_path`（绝对路径：`/` 开头，或 Windows 盘符形 `X:/`）+ 可选
+`encoding`（text / base64，缺省 text）。
+
+- **跨机路径（方向 matters）**：`upload_file` 的 `local_path` 是 **broker
+  所在机器**上的路径——远程 serve 拓扑（你的笔记本跑 agent → serve 主机跑
+  broker → 目标机）下 broker 够不到你机器上的文件。**你自己生成/持有的内容**
+  （配置、脚本、小产物）走本工具直推目标机；broker 机器可达的文件/目录仍走
+  `upload_file`。
+- **`encoding` 两态**（与 exec_output 同构，零新概念）：
+  - `text`（默认）：写入的是 **JSON 解码后的字符串**，按 UTF-8 落盘——
+    **非字节精确**：客户端送来的非法 UTF-8 字节在 JSON 解码层就被替换为
+    U+FFFD（Go encoding/json 公开行为）。普通文本用它。
+  - `base64`：解码后落盘，**字节精确**——二进制 / GBK / 任意字节串一律
+    走它。**只收单行**、standard 字母表、带 padding：content 含 `\r` 或
+    `\n` 直接拒绝（把折行拼成单行再发；MIME 折行不容忍）。
+- **上限 = 解码后 8 MiB**（默认值；owner 可用 env `SSHMGR_UPLOAD_CONTENT_MAX`
+  调整，fail-closed——env 非法/非正/**>1 GiB** 时 broker 直接拒绝启动；工具
+  描述里的 cap 数字随实际生效值如实变化）。超限 = **传输前拒绝**（零字节
+  移动、零远程文件创建），错误自带 size/cap 证据；**恰好等于 cap 放行**。
+  大文件别硬塞：先放到 broker 可达的位置再 `upload_file`，或让服务器侧
+  自己拉取。
+- `remote_path` 的**父目录不存在会自动创建**（深层新路径直接写）；目标
+  已存在 = **覆盖写**（截断重写，upload_file 同语义）。空内容合法（写出
+  0 字节文件）。
+- **无 sudo**：SFTP 通道，root 属主路径不可写——写 root 路径先传到可写
+  目录再 `exec_command` + `sudo=true` 移过去（upload_file 同套路）。
+- **同路径并发写不保证原子性/最终一致性**：两个并发写同一 `remote_path`
+  会交错截断/写入（SFTP 无锁语义）——**避免对同路径并发上传**；怕误覆盖
+  可先 `exec test -e` 自查。
+- **失败留半写**：失败（含取消/超时）时远端可能留下**半写文件/已建的父
+  目录**，清理归你自己——失败后自查目标路径，再决定重传或清掉。
+
+#### serve 请求体上限（在线 serve 模式）
+
+HTTP 请求体有中间件收口：上限 = **`cap + cap/3 + 64 KiB`**（覆盖 base64
+展开 + JSON 包装 + 头部余量），与内容上限**同源联动**——owner 调大
+`SSHMGR_UPLOAD_CONTENT_MAX` 时两个上限一起动，没有独立旋钮（该联动已在
+[threat-model.md](./threat-model.md) §6 登记）。两级行为：Content-Length
+诚实超限 → 中间件直接 **413**；谎报/无 Content-Length（chunked）→
+`http.MaxBytesReader` 兜底，读到一半报错、返回错误响应（攻击者拿不到
+工具执行）。stdio 模式无此 cap（对端是本机 agent 进程，非网络面）。
+
+**已知边界（413 早拒）**：text 模式下 JSON 字符串转义使内容在线上膨胀
+（`"`/`\` 2×、控制字符 `\uXXXX` 最高 6×/字节）——**线上平均膨胀超过 4/3
+的贴上限内容就可能被 413 早拒**，不是只有极端形态才中：以 8 MiB cap 为例，
+全 2× 转义内容 >~5.6 MiB、控制字符 6× 内容 >~1.8 MiB 即触发（~48 MiB 只是
+6× 全覆盖的形态上界）；被 413 的内容解码后其实可能 ≤ cap。真实配置/脚本的
+转义膨胀通常 <1.1，几乎不会命中。**极端转义/二进制/控制字符内容一律走
+base64**——base64 字母表无需 JSON 转义，贴 cap 的合法 base64 线上体恒在
+限内，不存在该边界。
+
 ### forward_port
 
 开一条本地端口转发（**只支持 `ssh -L` 语义**——本地监听、经服务器转发；没有
@@ -220,7 +275,7 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
 
 ## 三态环境（你通常无需分辨）
 
-broker 有三种部署形态，**工具面完全一致**（同 9 个工具、同 profile 隔离、同审计），
+broker 有三种部署形态，**工具面完全一致**（同 10 个工具、同 profile 隔离、同审计），
 差别只在可写性：
 
 | 形态 | 什么样 | 可写性 |
@@ -293,7 +348,7 @@ HEAD，后续重构以符号名为准）：
 | stdio 模式 token 无效 → broker 进程起不来（stderr `invalid or unknown token` 后退出） | `internal/mcpserver/run.go:29-35`；`internal/cli/mcp.go:70-73` |
 | 工具报错形态 = IsError=true + 错误文本（非传输层错误） | `internal/mcpserver/server.go:83-89` |
 | broker 启动检测散落 SSH 凭据 → stderr `WARNING: ssh credential files detected`（仅本机 stdio 模式） | `internal/cli/mcp.go:63-67`；另见 docs/agent-access.md「隔离与排错」 |
-| 三态工具面一致（cache 与在线同 9 工具、同 profile 隔离、同审计；仅写操作被拒 + 审计走 sidecar） | `internal/mcpserver/run.go:230-249`；`internal/mcpserver/server.go:27-59` |
+| 三态工具面一致（cache 与在线同 10 工具、同 profile 隔离、同审计；仅写操作被拒 + 审计走 sidecar） | `internal/mcpserver/run.go:230-249`；`internal/mcpserver/server.go:29-40` |
 | ErrReadOnly 文案 + SetReadOnly 语义（cache hydrate 后置只读） | `internal/store/store.go:46-54`；`internal/mcpserver/run.go:76` |
 | 离线 cache 模式：未知 host key 被拒（TOFU 无法记录，包 ErrReadOnly；已知 key 正常匹配） | `internal/sshbroker/hostkey.go:33-34`；`internal/sshbroker/hostkey_readonly_test.go:33-58`；`internal/mcpserver/run.go:211-213` |
 | 凭据字节永不出现在任何工具结果（owner 侧模型） | `internal/mcpserver/types.go:5`；docs/agent-access.md「安全模型回顾（铁律）」；../README.md "The security model" |

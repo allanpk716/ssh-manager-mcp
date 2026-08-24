@@ -42,14 +42,27 @@ type scopedServer struct {
 // store and one cached scoped server per project. Each verified token maps to a
 // stable server instance across that token's HTTP requests.
 type ServeRunner struct {
-	st    *store.Store
-	mu    sync.Mutex
-	cache map[string]*scopedServer // keyed by project ID
+	st        *store.Store
+	bodyLimit int64 // Plan 33 §3.2: cap+cap/3+64KiB, resolved ONCE at construction
+	mu        sync.Mutex
+	cache     map[string]*scopedServer // keyed by project ID
 }
 
 // NewServeRunner constructs a runner over an already-open store. The caller owns st.Close().
-func NewServeRunner(st *store.Store) *ServeRunner {
-	return &ServeRunner{st: st, cache: make(map[string]*scopedServer)}
+// Plan 33 spec rev3 §3.1: the upload-content env seam resolves HERE (fail-closed,
+// before RunServe binds — never a "listening but first request 503s" half-dead state).
+func NewServeRunner(st *store.Store) (*ServeRunner, error) {
+	cap, err := resolveUploadContentCap()
+	if err != nil {
+		return nil, err
+	}
+	// checked arithmetic (§3.2): under the 1 GiB ceiling this cannot overflow;
+	// the belt-and-suspenders form still guards a future ceiling raise.
+	limit := cap + cap/3 + 64*1024
+	if limit < cap { // overflow sentinel — refuse absurd states loudly
+		return nil, fmt.Errorf("serve body limit overflow: cap=%d", cap)
+	}
+	return &ServeRunner{st: st, bodyLimit: limit, cache: make(map[string]*scopedServer)}, nil
 }
 
 // ServerForProject returns the cached scoped server for project, building it on first use.
@@ -146,10 +159,29 @@ func (r *ServeRunner) resolveServer(next http.Handler) http.Handler {
 	})
 }
 
+// bodyLimitMiddleware caps a single request body at r.bodyLimit (Plan 33 spec
+// rev3 §3.2): the SDK v1.2.0 streamable handler reads bodies with an UNBOUNDED
+// io.ReadAll, and upload_content legitimizes MiB-scale bodies — this closes
+// the resulting DoS face. Two tiers, honestly pinned: an honest Content-Length
+// over the limit answers 413 directly (the real-client path); a lying/absent
+// Content-Length falls through to http.MaxBytesReader, whose mid-read error
+// surfaces as an SDK error response (not 413 — acceptable: the oversized call
+// never executes). /snapshot is a GET and is NOT wrapped.
+func (r *ServeRunner) bodyLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.ContentLength > r.bodyLimit {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		req.Body = http.MaxBytesReader(w, req.Body, r.bodyLimit)
+		next.ServeHTTP(w, req)
+	})
+}
+
 // HTTPHandler returns the request mux for `ssh-manager serve`. Composition:
 //
 //	GET /snapshot  → cache-token RequireBearerToken → handleSnapshot (read-only vault dump)
-//	everything else → project-token RequireBearerToken → resolveServer → SDK streamable MCP handler
+//	everything else → body-limit → project-token RequireBearerToken → resolveServer → SDK streamable MCP handler
 //
 // The two RequireBearerToken chains use DISJOINT verifiers (verifyCacheToken vs verifyToken).
 // A project token presented at /snapshot fails verifyCacheToken (it is not a device code) and is
@@ -168,7 +200,7 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 	}
 	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, nil)
 	projectAuth := auth.RequireBearerToken(r.verifyToken, &auth.RequireBearerTokenOptions{}) // no scopes
-	mcpChain := projectAuth(r.resolveServer(mcpHandler))
+	mcpChain := r.bodyLimitMiddleware(projectAuth(r.resolveServer(mcpHandler)))
 
 	cacheAuth := auth.RequireBearerToken(r.verifyCacheToken, &auth.RequireBearerTokenOptions{})
 	snapshotHandler := cacheAuth(http.HandlerFunc(r.handleSnapshot))
@@ -224,7 +256,10 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 // LoadOrCreateServeCert failure is returned (serve refuses to start — never
 // silently downgrades to plaintext). Returns nil on clean ctx-cancelled shutdown.
 func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string) error {
-	runner := NewServeRunner(st)
+	runner, err := NewServeRunner(st)
+	if err != nil {
+		return err
+	}
 	defer runner.Close()
 
 	// Cert resolution: if the operator did not pass an explicit --tls-cert,

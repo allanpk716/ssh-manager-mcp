@@ -1,8 +1,10 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +24,10 @@ import (
 	"ssh-manager-mcp/internal/testsshd"
 	"ssh-manager-mcp/internal/vault"
 )
+
+// hostPortRe matches an addr host:port form (digit-dotted v4 or bracketed v6
+// + port) — the no-leak assertion net's detector (Plan 31 pattern).
+var hostPortRe = regexp.MustCompile(`[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]+|\[[0-9a-fA-F:]+\]:[0-9]+`)
 
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
@@ -1124,12 +1130,12 @@ func deleteServerRowRaw(t *testing.T, dbPath, id string) {
 	}
 }
 
-// TestErrorBranchesNeverLeakHost: every reachable error branch of the four
+// TestErrorBranchesNeverLeakHost: every reachable error branch of the five
 // *ForProfile operations must return text free of the vault host / address
 // shapes (spec §6 — the structural form of the "connect_error etc." promise).
-// Branches covered: denied (all four ops), server-not-found, no_credential,
-// no_sudo, connect_error (real dial, exec + forward), the forward hidden
-// guard (Task 4), and close-forward not-found.
+// Branches covered: denied (all five ops, incl. upload_content — Plan 33),
+// server-not-found, no_credential, no_sudo, connect_error (real dial, exec +
+// forward), the forward hidden guard (Task 4), and close-forward not-found.
 func TestErrorBranchesNeverLeakHost(t *testing.T) {
 	const vh = "vault.example.internal"
 	dir := t.TempDir()
@@ -1141,7 +1147,7 @@ func TestErrorBranchesNeverLeakHost(t *testing.T) {
 	_ = st.GrantServers(pid, []string{granted, nocred, unreach})
 	mgr := NewTunnelManager()
 
-	// denied (all four ops, out-of-profile id) — the gate fires before any
+	// denied (all five ops, out-of-profile id) — the gate fires before any
 	// server lookup, so the vault host is never even read.
 	_, err := ExecCommandForProfile(context.Background(), st, "proj", pid, "bogus-id", "true", false, time.Second)
 	assertBranch(t, err, "not in your profile")
@@ -1150,6 +1156,9 @@ func TestErrorBranchesNeverLeakHost(t *testing.T) {
 	assertBranch(t, err, "not in your profile")
 	assertNoLeak(t, err, vh)
 	_, err = UploadForProfile(context.Background(), st, "proj", pid, "bogus-id", "/x", "/y")
+	assertBranch(t, err, "not in your profile")
+	assertNoLeak(t, err, vh)
+	_, err = UploadContentForProfile(context.Background(), st, "proj", pid, "bogus-id", "data", "/x", "", 1<<20)
 	assertBranch(t, err, "not in your profile")
 	assertNoLeak(t, err, vh)
 	_, err = ForwardForProfile(context.Background(), st, "proj", pid, "bogus-id", "127.0.0.1", 80, 0, mgr)
@@ -1275,5 +1284,326 @@ func TestExecCommandEffectiveTimeoutEcho(t *testing.T) {
 				t.Fatalf("serialized output missing constant field: %s", b)
 			}
 		})
+	}
+}
+
+// TestResolveUploadContentCap pins the env seam's fail-closed contract (spec
+// rev3 §3.1): unset → 8 MiB default; legal value passes verbatim; unparsable /
+// non-positive / over the 1 GiB ceiling → error (a startup refusal, never a
+// silent clamp).
+func TestResolveUploadContentCap(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     string
+		want    int64
+		wantErr bool
+	}{
+		{"unset → 8 MiB default", "", 8 << 20, false},
+		{"explicit legal value", "1048576", 1048576, false},
+		{"exactly 1 GiB ceiling", "1073741824", 1073741824, false},
+		{"one over the ceiling", "1073741825", 0, true},
+		{"non-numeric", "8MiB", 0, true},
+		{"zero", "0", 0, true},
+		{"negative", "-5", 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("SSHMGR_UPLOAD_CONTENT_MAX", c.env)
+			got, err := resolveUploadContentCap()
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("env=%q: want error, got cap=%d", c.env, got)
+				}
+				return
+			}
+			if err != nil || got != c.want {
+				t.Fatalf("env=%q: got cap=%d err=%v, want %d nil", c.env, got, err, c.want)
+			}
+		})
+	}
+}
+
+// ---- Plan 33: UploadContentForProfile unit battery (spec rev3 §1/§2/§5) ----
+
+// ucSeed spins up testsshd + a profile-granted server, returning (st, pid, srvID, rootSlash).
+// rootSlash is a slash-form temp root for remote targets (testsshd serves the host FS).
+func ucSeed(t *testing.T) (*store.Store, string, string, string) {
+	t.Helper()
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	t.Cleanup(cleanup)
+	st := newStore(t)
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+	return st, pid, srvID, toSlash(t.TempDir())
+}
+
+func TestUploadContentForProfileHappyPaths(t *testing.T) {
+	st, pid, srvID, root := ucSeed(t)
+	ctx := context.Background()
+
+	// text: byte-exact UTF-8 landing + Bytes echo + audit ok row format.
+	p1 := root + "/txt/conf.yaml"
+	out, err := UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "key: value\n", p1, "", 1<<20)
+	if err != nil {
+		t.Fatalf("text: %v", err)
+	}
+	if out.Bytes != int64(len("key: value\n")) {
+		t.Fatalf("text Bytes = %d, want %d", out.Bytes, len("key: value\n"))
+	}
+	if got, _ := os.ReadFile(filepath.FromSlash(p1)); string(got) != "key: value\n" {
+		t.Fatalf("text content = %q", got)
+	}
+
+	// base64: binary fixture (0x00/0xFF/GBK) lands byte-exact.
+	bin := []byte{0x00, 0x01, 0xFF, 0xFE, 0xD6, 0xD0, 0x41, 0x7F} // D6 D0 = GBK "中"
+	p2 := root + "/bin/blob.bin"
+	out, err = UploadContentForProfile(ctx, st, "proj-test", pid, srvID, base64.StdEncoding.EncodeToString(bin), p2, "base64", 1<<20)
+	if err != nil || out.Bytes != int64(len(bin)) {
+		t.Fatalf("base64: err=%v out=%+v", err, out)
+	}
+	if got, _ := os.ReadFile(filepath.FromSlash(p2)); !bytes.Equal(got, bin) {
+		t.Fatalf("base64 bytes = %x, want %x", got, bin)
+	}
+
+	// empty content (both encodings) → 0-byte file.
+	p3 := root + "/empty.txt"
+	if out, err = UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "", p3, "", 16); err != nil || out.Bytes != 0 {
+		t.Fatalf("empty text: err=%v out=%+v", err, out)
+	}
+	if fi, serr := os.Stat(filepath.FromSlash(p3)); serr != nil || fi.Size() != 0 {
+		t.Fatalf("empty file: fi=%v err=%v", fi, serr)
+	}
+	if out, err = UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "", p3, "base64", 16); err != nil || out.Bytes != 0 {
+		t.Fatalf("empty base64: err=%v out=%+v", err, out)
+	}
+
+	// deep parent creation.
+	p4 := root + "/a/b/c/d/e.txt"
+	if _, err = UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "deep", p4, "", 16); err != nil {
+		t.Fatalf("deep: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.FromSlash(p4)); string(got) != "deep" {
+		t.Fatalf("deep content = %q", got)
+	}
+
+	// decoded == cap boundary (spec rev3 §7): text and base64 must SUCCEED at
+	// exactly cap. The base64 case is the padding anchor: 8 bytes → 12 chars
+	// "AAAAAAAAAAA=", naive len/4*3 = 9 > 8 (would falsely refuse), est = 8.
+	t8 := strings.Repeat("t", 8)
+	if _, err = UploadContentForProfile(ctx, st, "proj-test", pid, srvID, t8, root+"/eq/text8.txt", "", 8); err != nil {
+		t.Fatalf("text ==cap: %v", err)
+	}
+	b8 := base64.StdEncoding.EncodeToString(make([]byte, 8)) // "AAAAAAAAAAA="
+	if _, err = UploadContentForProfile(ctx, st, "proj-test", pid, srvID, b8, root+"/eq/bin8.bin", "base64", 8); err != nil {
+		t.Fatalf("base64 ==cap (padding anchor): %v", err)
+	}
+
+	// audit ok row: action + Command template with the decoded byte count.
+	rows, _ := st.AuditRows(10)
+	foundOK := false
+	for _, r := range rows {
+		if r.Action == "upload-content" && r.Status == "ok" && r.ProjectID == "proj-test" {
+			if r.Command == "inline 11 bytes -> "+p1 { // "key: value\n" = 11 bytes
+				foundOK = true
+			}
+		}
+	}
+	if !foundOK {
+		t.Fatalf("no ok audit row with Command \"inline 11 bytes -> %s\"; rows=%+v", p1, rows)
+	}
+}
+
+func TestUploadContentForProfileRefusals(t *testing.T) {
+	st, pid, srvID, root := ucSeed(t)
+	ctx := context.Background()
+
+	// text over cap → refusal with size+cap evidence, ZERO remote file.
+	p1 := root + "/ref/text.txt"
+	_, err := UploadContentForProfile(ctx, st, "proj-test", pid, srvID, strings.Repeat("x", 9), p1, "", 8)
+	if err == nil || !strings.Contains(err.Error(), "content (9 bytes) exceeds upload-content cap 8") {
+		t.Fatalf("text over: err=%v", err)
+	}
+	if _, serr := os.Stat(filepath.FromSlash(p1)); !os.IsNotExist(serr) {
+		t.Fatalf("text over: remote file must be absent, stat err=%v", serr)
+	}
+
+	// base64 over cap (coarse est) → "(9 bytes decoded)" + zero remote file.
+	nine := base64.StdEncoding.EncodeToString(make([]byte, 9)) // 12 chars, est = 9
+	p2 := root + "/ref/bin.bin"
+	_, err = UploadContentForProfile(ctx, st, "proj-test", pid, srvID, nine, p2, "base64", 8)
+	if err == nil || !strings.Contains(err.Error(), "content (9 bytes decoded) exceeds upload-content cap 8") {
+		t.Fatalf("base64 over: err=%v", err)
+	}
+	if _, serr := os.Stat(filepath.FromSlash(p2)); !os.IsNotExist(serr) {
+		t.Fatalf("base64 over: remote file must be absent, stat err=%v", serr)
+	}
+
+	// audit %d value table (spec rev3 §5): text-refusal row carries len(content),
+	// base64 coarse-refusal row carries est.
+	rows, _ := st.AuditRows(10)
+	wantRows := map[string]bool{"inline 9 bytes -> " + p1: false, "inline 9 bytes -> " + p2: false}
+	for _, r := range rows {
+		if r.Action == "upload-content" && r.Status == "error" {
+			if _, ok := wantRows[r.Command]; ok {
+				wantRows[r.Command] = true
+			}
+		}
+	}
+	for cmd, seen := range wantRows {
+		if !seen {
+			t.Fatalf("missing error audit row %q; rows=%+v", cmd, rows)
+		}
+	}
+}
+
+func TestUploadContentForProfileParamValidation(t *testing.T) {
+	st, pid, srvID, root := ucSeed(t)
+	ctx := context.Background()
+
+	// invalid encoding enum.
+	if _, err := UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "x", root+"/p/f", "hex", 8); err == nil || !strings.Contains(err.Error(), `encoding must be "text" or "base64"`) {
+		t.Fatalf("encoding enum: err=%v", err)
+	}
+	// empty + relative remote_path.
+	if _, err := UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "x", "", "", 8); err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Fatalf("empty path: err=%v", err)
+	}
+	if _, err := UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "x", "tmp/rel.txt", "", 8); err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Fatalf("relative path: err=%v", err)
+	}
+	// multiline base64 → single-line rejection.
+	if _, err := UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "QUJD\r\nREVG", root+"/p/ml", "base64", 8); err == nil || !strings.Contains(err.Error(), "single-line standard base64") {
+		t.Fatalf("multiline: err=%v", err)
+	}
+	// invalid base64 (decoder error only — NEVER a content fragment).
+	if _, err := UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "QU!J", root+"/p/bad", "base64", 8); err == nil || !strings.Contains(err.Error(), "invalid base64 content") {
+		t.Fatalf("invalid base64: err=%v", err)
+	} else if strings.Contains(err.Error(), "QU!J") {
+		t.Fatalf("invalid base64 error leaks content fragment: %q", err.Error())
+	}
+	// param error PRECEDES the gate: out-of-profile server + bad path → param
+	// error, not denied (spec rev3 §2 ①).
+	if _, err := UploadContentForProfile(ctx, st, "proj-test", pid, "not-granted", "x", "rel.txt", "", 8); err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Fatalf("param-before-gate: err=%v", err)
+	}
+
+	// audit rows for param failures carry %d = 0.
+	rows, _ := st.AuditRows(10)
+	for _, r := range rows {
+		// Suffix is " -> rel.txt" (with the separator) so the relative-path case
+		// ("tmp/rel.txt", also a 0-byte param-failure row) is not netted here.
+		if r.Action == "upload-content" && r.Status == "error" && strings.HasSuffix(r.Command, " -> rel.txt") {
+			if r.Command != "inline 0 bytes -> rel.txt" {
+				t.Fatalf("param-failure audit Command = %q, want \"inline 0 bytes -> rel.txt\"", r.Command)
+			}
+		}
+	}
+}
+
+func TestUploadContentForProfileDeniedAndAuditExclusion(t *testing.T) {
+	st, pid, _, _ := ucSeed(t)
+	ctx := context.Background()
+
+	// denied: out-of-profile server id → ErrNotInProfile + denied audit row.
+	_, err := UploadContentForProfile(ctx, st, "proj-test", pid, "not-granted", "data", "/tmp/x.txt", "", 8)
+	if !errors.Is(err, ErrNotInProfile) {
+		t.Fatalf("denied: err=%v", err)
+	}
+	rows, _ := st.AuditRows(5)
+	found := false
+	for _, r := range rows {
+		if r.Action == "upload-content" && r.Status == "denied" && r.Command == "inline 0 bytes -> /tmp/x.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no denied row; rows=%+v", rows)
+	}
+
+	// CONTENT NEVER ENTERS THE AUDIT (secret-shaped payload, reverse assertion).
+	st2, pid2, srv2, root2 := ucSeed(t)
+	secret := "SUPERSECRETTOKEN-a1b2c3d4e5"
+	if _, err := UploadContentForProfile(ctx, st2, "proj2", pid2, srv2, secret, root2+"/sec/token", "", 1<<20); err != nil {
+		t.Fatalf("secret upload: %v", err)
+	}
+	rows2, _ := st2.AuditRows(5)
+	for _, r := range rows2 {
+		if strings.Contains(r.Command, secret) || strings.Contains(fmt.Sprint(r), secret) {
+			t.Fatalf("audit leak: row=%+v", r)
+		}
+	}
+}
+
+func TestUploadContentForProfileNoLeakConnectError(t *testing.T) {
+	// unreachable server → connect_error; the error text must carry no host:port
+	// (Plan 31 no-leak net extension to this tool's branches, spec §5).
+	// The dead server is seeded CREDENTIALED (a real testsshd host key, but
+	// pointed at 127.0.0.1:1 — TCP-unreachable): a bare AddServer with no
+	// credential would die at no_credential before any dial and never reach
+	// connect_error.
+	_, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	t.Cleanup(cleanup)
+	st := newStore(t)
+	srvID := seedRealServer(t, st, "dead", "127.0.0.1:1", hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	_, err := UploadContentForProfile(context.Background(), st, "proj-test", pid, srvID, "data", "/tmp/x", "", 8)
+	if err == nil {
+		t.Fatal("dead server: want error")
+	}
+	if hostPortRe.MatchString(err.Error()) {
+		t.Fatalf("connect error leaks host:port: %q", err.Error())
+	}
+	rows, _ := st.AuditRows(5)
+	found := false
+	for _, r := range rows {
+		if r.Action == "upload-content" && r.Status == "connect_error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no connect_error row; rows=%+v", rows)
+	}
+}
+
+// TestUploadContentForProfileNoLeakSFTPMidFailure (Plan 33 终审 fix wave, spec
+// §5): the no-leak net must also cover the SFTP-layer MID-FAILURE path — a
+// WriteFile failure AFTER a successful connect, not a connect error.
+// Deterministic construction on both Windows and Linux (testsshd serves the
+// host FS): plant a normal FILE `blocker` under the test root, then target
+// <root>/blocker/sub/f.txt — the parent chain crosses that file, so the
+// sc.MkdirAll inside WriteFile fails (not-a-directory class), a genuine
+// SFTP-runtime failure on a live connection. The error text must carry no
+// host:port shape and the audit must hold one error-status row.
+func TestUploadContentForProfileNoLeakSFTPMidFailure(t *testing.T) {
+	st, pid, srvID, root := ucSeed(t)
+
+	blocker := root + "/blocker"
+	if err := os.WriteFile(filepath.FromSlash(blocker), []byte("i am a regular file"), 0o600); err != nil {
+		t.Fatalf("plant blocker file: %v", err)
+	}
+
+	_, err := UploadContentForProfile(context.Background(), st, "proj-test", pid, srvID, "data", blocker+"/sub/f.txt", "", 1<<20)
+	if err == nil {
+		t.Fatal("regular file in parent chain: want SFTP mkdir failure")
+	}
+	// Pin WHICH branch fired (anti-vacuous, assertBranch's philosophy): the
+	// mkdir-parent failure inside WriteFile — not an earlier connect-free branch
+	// whose text would be clean too.
+	assertBranch(t, err, "mkdir parent")
+	if hostPortRe.MatchString(err.Error()) {
+		t.Fatalf("SFTP mid-failure error leaks host:port: %q", err.Error())
+	}
+	rows, _ := st.AuditRows(5)
+	found := false
+	for _, r := range rows {
+		if r.Action == "upload-content" && r.Status == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no error-status row; rows=%+v", rows)
 	}
 }
