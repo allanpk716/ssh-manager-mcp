@@ -34,7 +34,7 @@
 - **指纹钉死（SPKI TOFU）**：客户端（`cache pull`）钉死 serve 证书公钥的 SPKI 指纹（`sha256:...`）——`InsecureSkipVerify: true` 跳过对自签证书不可能的 CA 链验证 + `VerifyConnection` 回调做**常量时间** SPKI 比对作为唯一信任锚（HPKP/Tailscale 模式）。**首次连接即校验，零 MITM 窗口**（指纹在 enroll 时随设备码交付，非首次盲连）。
 - **信任根**：信任来自"enroll 时人工/流程交接的指纹"，不来自任何 CA。serve 重生 key（重装/迁移）→ 用 `serve cert-info` 拿新指纹重新交接。
 - **⚠️ 前提：enroll 渠道本身必须可信**。"零 MITM 窗口"是对**首次连接之后的每次握手**而言——指纹一旦正确到达工作机，后续 MITM 都被挡。但指纹和设备码是 `cache-tokens add` **一起打印到 stdout** 的，所以两者同等依赖操作者把这条输出传到工作机的那条渠道（本地 console / 你信任的 SSH 会话 / 带外通道）。**若该渠道本身正被 MITM，指纹和设备码同时被换，pin 形同虚设**。这是任何"交付即信任"(TOFU-by-delivery) 方案的固有约束：首次 enroll 不要在被 MITM 的渠道上做。
-- **`cache.auth.json`（新增 artifact）**：工作机持久化的拉取凭据（url + 设备码 + 归一后 pin；0600，Windows 加 DACL）。设备码授予**拉取未来快照**的权力——比本机已有的 cache.bin（过去快照 + cache-dek.key）多出的正是这个增量。处置：机器失窃 → 立即 `cache-tokens revoke`（断"拉新"）；serve 证书轮换 → 手动带新 `--pin` 重拉一次覆盖旧 pin。自动路径永不 `--allow-plaintext`。
+- **`cache.auth.json`（新增 artifact）**：工作机持久化的拉取凭据（url + 设备码 + 归一后 pin；0600，Windows 加 DACL）。设备码授予**拉取未来快照**的权力——比本机已有的 cache.bin（过去快照 + cache-dek.key）多出的正是这个增量。处置：机器失窃 → 立即 `cache-tokens revoke`（断"拉新" + 该机**回连即销毁**本地 cache，见 §3.6）；serve 证书轮换 → 手动带新 `--pin` 重拉一次覆盖旧 pin。自动路径永不 `--allow-plaintext`。
 
 详见 [multi-machine.md 的自动 TLS 迁移 Runbook](./multi-machine.md#自动-tls-迁移-runbook从旧版明文--外部证书升级) 与设计 spec `docs/superpowers/specs/2026-08-13-serve-auto-tls-fingerprint-design.md`。
 
@@ -78,6 +78,17 @@ L1+ 模型下**未消除**的威胁：
 - **不算违约**：agent 在服务器上主动执行 `ip addr` / `hostname` 等命令探出的地址。
 - **明确不防的运行时逃逸**：agent 调用本机 ssh-manager owner CLI（`projects show` / `servers ls` 明文打印 `user@host:port`）；agent 读到离线 client 上的 cache.bin（整仓快照，设计上含全部 host 明文）——这两类属「agent 宿主已被完全信任」范畴，见 [backlog.md](./backlog.md) 的 (d) 类定级。
 - **明确不做**：运行时级隐藏（命令过滤 / 输出脱敏 / 网络盲化）与服务器出网管控（backlog 不做清单）。
+
+---
+
+## 3.6 cache 吊销的切断语义（Plan 34）
+
+威胁 (b) 类（设备失窃/被控 + 设备码已 revoke）下"切断失效"的兑现路径（[Plan 34](./superpowers/specs/2026-08-24-plan-34-cache-invalidation-design.md.rev4.md) 起；此前 revoke 只断"拉新"、对已落盘快照零作用）：
+
+- **revoke + 回连即销毁**：`cache-tokens revoke` 后，该设备下一次自动（≤30min lazy cadence）或手动 `cache pull` 收到 **pinned 401** → 本地 cache 侧**四件销毁**（DEK / `cache.auth.json` / `cache.bin`→隔离 / `cache.meta.json`）→ 此后 spawn 报明确归因错误、无凭据不再自动拉取。信任锚：pinningTransport 上的 401 = 通过 SPKI 指纹验证后的**权威服务器明确拒绝**；明文 pull 的 401（HTTP 劫持可伪造）、网络错误 / TLS 失败 / 非 401 状态码**永不触发**销毁。
+- **永离线残余 = 轮换服务器凭据（唯一根治）**：失窃机持有"密文 + 解密钥 + 二进制"三件，**永不离线**的机器上没有任何服务端机制能远程废掉本地解密能力——销毁要"回连"才兑现。根治只有轮换该机接触过的服务器凭据（`servers edit --password/--key`）。
+- **fail-closed 代价（接受）**：pinned 401 **不区分** revoked / unknown（401 reason 字段 revoked/unknown 纯可观测性，供 owner 日志排查，客户端判定不依赖），也**不区分新码打错**——非攻击场景（服务端数据丢失/重建、换码手滑/用过期码）同样触发销毁。恢复 = 用正确码重新 `cache pull`（全量重建）。安全优先的取舍。
+- **失窃响应口径**：cache token 与该设备上的 project token **都要 revoke**（`cache-tokens revoke` 的 CLI 输出附此提示）。销毁清单**不含** project token——`.claude.json` 是用户自己的 agent 配置，客户端程序不改写；revoke cache token ≠ 切断该机的 project token。
 
 ---
 

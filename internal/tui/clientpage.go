@@ -100,6 +100,7 @@ func refreshDataCmd() tea.Msg {
 		return errMsg{err}
 	}
 	snap, err := clientops.LoadCacheSnapshot()
+	// Plan 34: 报文归因面钉在 mcp --cache 与 cache status 两处（spec §4）；TUI 保持原始错误文本——pull 路径已有哨兵信息。
 	if err != nil {
 		return errMsg{err}
 	}

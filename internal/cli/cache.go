@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -79,6 +80,12 @@ func cachePullCmd() *cobra.Command {
 				return nil // plaintext pulls NEVER persist a credential (no auto-plaintext path)
 			}
 			if err := clientops.DoPull(url, token, fp, clientops.PullOpts{StatusOut: cmd.ErrOrStderr()}); err != nil {
+				if errors.Is(err, clientops.ErrCacheQuarantined) {
+					// Plan 34 rev4 §3 — pinned 401: the local cache was destroyed.
+					// SilenceUsage: this is a server-side rejection, not a flag typo.
+					cmd.SilenceUsage = true
+					return fmt.Errorf("cache was QUARANTINED: the server rejected this device code (revoked?).\nRe-enroll: obtain a fresh device code and run cache pull again.\n(detail: %v)", err)
+				}
 				return err
 			}
 			// Persist the credential for the lazy pull. Write failure is a WARNING,
@@ -112,6 +119,11 @@ func cacheStatusCmd() *cobra.Command {
 			}
 			snap, err := clientops.LoadCacheSnapshot()
 			if err != nil {
+				// Plan 34 rev4 §4: attribute a server-rejection quarantine when
+				// the on-disk manifest says so; otherwise the original error.
+				if msg, ok := clientops.QuarantineReport(err); ok {
+					return errors.New(msg)
+				}
 				return err
 			}
 			info, _ := os.Stat(bin)

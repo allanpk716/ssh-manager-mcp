@@ -512,6 +512,88 @@ func TestCachePull_PinMismatch_Fails(t *testing.T) {
 	}
 }
 
+// TestCachePullDoesNotPersistCredOn401 pins the rev4 §3 CLI ordering: a failed
+// (401) pull must NOT overwrite the persisted credential — the old code stays
+// (cachePullCmd persists cache.auth.json only AFTER DoPull returns nil, so a
+// mistyped/revoked new code never lands on disk; the next lazy pull keeps using
+// the old one). Driven through the full cobra command so the RunE ordering
+// itself is under test; the stub is plaintext (the non-trigger face — this test
+// is purely about the write-after-success timing, not the quarantine trigger,
+// which is covered clientops-side in TestDoPullPinned401Quarantines).
+func TestCachePullDoesNotPersistCredOn401(t *testing.T) {
+	dir := t.TempDir()
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_DIR": dir,
+		"SSHMGR_SERVE_PIN": "", // plaintext stub: no pin anywhere
+	})
+	withDEK(t)
+	if err := clientops.WriteCacheCred(&clientops.CacheCred{URL: "https://old", Token: "old-code", Pin: "sha256:" + strings.Repeat("1", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	// A 401 stub: any bearer is rejected server-side.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, "invalid cache token")
+	}))
+	t.Cleanup(srv.Close)
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"cache", "pull", "--url", srv.URL, "--token", "bad-new-code", "--allow-plaintext"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("want 401 error")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Fatalf("error must come from the 401 path, got: %v", err)
+	}
+	// cachePullCmd writes cache.auth.json only after a SUCCESSFUL pull — the
+	// persisted cred must still be the untouched old one.
+	cred, rerr := clientops.ReadCacheCred()
+	if rerr != nil || cred == nil || cred.Token != "old-code" {
+		t.Fatalf("cred = %+v err=%v — must be untouched old-code", cred, rerr)
+	}
+}
+
+// TestCacheStatus_AttributesQuarantine is the Plan 34 final-review regression
+// pin (Minor 1): in the isolated post-quarantine state (cache.bin gone, a done
+// quarantine/manifest.json on disk, no meta on record), `cache status` must
+// surface the server-rejection attribution — not a generic missing-cache
+// error. This drives the REAL cobra command, so cache.go's QuarantineReport
+// wiring (and, since both call sites share the same helper, mcp.go's) can't be
+// silently dropped by a future refactor without failing this test.
+func TestCacheStatus_AttributesQuarantine(t *testing.T) {
+	withDEK(t) // in-memory DEK: LoadCacheSnapshot fails here regardless of machine state
+	cacheDir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DIR", cacheDir)
+
+	// Isolation: no cache.bin (quarantined away), no cache.meta.json (deleted
+	// by the quarantine itself — meta-absent is the primary post-quarantine
+	// shape), and a done manifest → QuarantineReport tier 1 attributes.
+	qdir := filepath.Join(cacheDir, "quarantine")
+	if err := os.MkdirAll(qdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mfest := fmt.Sprintf(`{"state":"done","reason":"server rejected device code","ts":%d,"steps":{"dek":"ok","auth":"ok","bin":"ok","meta":"ok"}}`, time.Now().Unix())
+	if err := os.WriteFile(filepath.Join(qdir, "manifest.json"), []byte(mfest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"cache", "status"})
+	root.SetOut(&bytes.Buffer{})
+	errBuf := &bytes.Buffer{}
+	root.SetErr(errBuf)
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("cache status must fail when cache.bin is gone")
+	}
+	if !strings.Contains(err.Error(), "quarantined by server rejection") && !strings.Contains(errBuf.String(), "quarantined by server rejection") {
+		t.Fatalf("status must attribute the quarantine (server rejection), got err=%v stderr=%q", err, errBuf.String())
+	}
+}
+
 // standUpServeTLS spins a TLS httptest.Server with a fresh self-signed
 // ed25519 cert (same shape as TestCachePull_PinnedTLS_Succeeds's server) and
 // returns its URL. Used by the pin-mismatch test, which only needs the server

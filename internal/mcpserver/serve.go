@@ -123,7 +123,26 @@ func (r *ServeRunner) verifyToken(ctx context.Context, token string, req *http.R
 func (r *ServeRunner) verifyCacheToken(ctx context.Context, token string, req *http.Request) (*auth.TokenInfo, error) {
 	ct, err := r.st.VerifyCacheToken(token)
 	if err != nil || ct == nil {
-		return nil, fmt.Errorf("%w: invalid or unknown cache token", auth.ErrInvalidToken)
+		// Plan 34 rev4 §1: the 401 reason is observability-only (revoked vs
+		// unknown via an 8-char-prefix lookup; collisions can mislabel —
+		// accepted). The client NEVER branches on this text.
+		reason := "unknown"
+		prefix := token
+		if len(prefix) > 8 {
+			prefix = prefix[:8]
+		}
+		if name, ok, nerr := r.st.RevokedCacheTokenNameByPrefix(prefix); nerr == nil && ok {
+			reason = "revoked"
+			fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token rejected: revoked (device %s, prefix %.8s)\n", name, token)
+		} else {
+			if nerr != nil {
+				// Plan 34 T6: a failed lookup archives as unknown (the reason is
+				// observability-only) but is never silent — the owner's log keeps it.
+				fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token revoked-prefix lookup failed: %v (archived as unknown)\n", nerr)
+			}
+			fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token rejected: unknown (prefix %.8s)\n", token)
+		}
+		return nil, fmt.Errorf("%w: invalid cache token: %s", auth.ErrInvalidToken, reason)
 	}
 	// SDK's verify() requires a non-zero, non-expired Expiration (auth.go:120-126). Same
 	// nominal-TTL trick as verifyToken: the real lifecycle is VerifyCacheToken's

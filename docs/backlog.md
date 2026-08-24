@@ -16,7 +16,9 @@
 
 ## P1 — 安全债 + 第二梯队（2026-08-21 排期）
 
-3. **离线 cache 快照失效机制**（snapshot epoch/serial）——现状：revoke/rotate 不擦已落盘快照，唯一失效手段是轮换服务器凭据；`cache-tokens revoke` 只断"拉新"。排期注记（2026-08-21）：威胁模型 (b)（prompt injection）下的**切断失效**缺口——revoke 后笔记本盘上快照仍可用；安全债排在便利性前、P0 之后（兑现需"笔记本失窃/被控 + 已 revoke"复合前提，而 P0 是日常持续疼）。
+3. ~~**离线 cache 快照失效机制**（snapshot epoch/serial）~~ **已落地（Plan 34, 2026-08-24 并 master; spec 四轮 xcheck 收敛含 owner scope 降级——A 切断失效落地（pinned-401 回连销毁四件/manifest/DEGRADED/三级降级报文链），**B 时限机器砍出回 backlog 见下方「B 时限快照」条**； spec/plan 见 docs/superpowers/{specs,plans}/2026-08-24-plan-34-cache-invalidation*；owner 真机手工复验（NUC10 revoke→笔记本销毁→重新 enroll）待发版前做）**。原文：现状：revoke/rotate 不擦已落盘快照，唯一失效手段是轮换服务器凭据；`cache-tokens revoke` 只断"拉新"。排期注记（2026-08-21）：威胁模型 (b)（prompt injection）下的**切断失效**缺口——revoke 后笔记本盘上快照仍可用；安全债排在便利性前、P0 之后（兑现需"笔记本失窃/被控 + 已 revoke"复合前提，而 P0 是日常持续疼）。
+
+3b. **B 时限快照（Plan 34 砍出项）**——离线到龄自废（SSHMGR_CACHE_MAX_OFFLINE 形态）。Plan 34 四轮评审实证完整正确性需三件配套：服务器时间锚信任边界（仅 pinned 采信 + skew 校验 + 缺头 fail-closed）+ 跨进程写串行化 + 前向毒化自愈；修复面连续膨胀且为默认关可选件，owner 2026-08-24 拍板砍出。未来要做按 Plan 34 二/三轮评审结论起手（.xcheck/ 评审留底 2026-08-24）。
 
 15. **tunnels 硬化**（吸收原 #1/#2/#4，一个 plan 落地）——急停：revoke 级联拆隧道 + owner CLI（`tunnels kill <id>`）。活动感知回收：持续流量延长回收（落实 Touch，现状回收按创建时间计）。listen_host：serve 配置 owner 预批 bind host 白名单（如 NUC10 VLAN IP），per-tunnel 参数限白名单内，禁 0.0.0.0——绑定非环回 = 攻击面扩张（威胁模型 (b) 被劫持 agent 开隧道打内网），必须与急停同 plan 落地。不做：持久化、自动重连、命名隧道。验收：白名单外 bind 拒绝；急停后端口不可达；持续流量下不回收。
 

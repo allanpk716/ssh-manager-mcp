@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -39,19 +40,29 @@ func newMCPCmd() *cobra.Command {
 			if useCache {
 				// ① spawn-time freshness (failure degrades to the existing cache)
 				if err := clientops.MaybeLazyPull(cacheMaxAge); err != nil {
-					// "serving stale cache" is only true when a cache EXISTS — with no
-					// cache.bin the upcoming LoadCacheSnapshot hard-fails instead, so
-					// don't promise a degradation that isn't happening.
-					if cachePresent() {
-						fmt.Fprintf(os.Stderr, "lazy cache pull failed (serving stale cache): %v\n", err)
-					} else {
-						fmt.Fprintf(os.Stderr, "lazy cache pull failed: %v\n", err)
+					// Plan 34 final review (Minor 3): a quarantine already logged
+					// two lines (QuarantineCache's step verdict + MaybeLazyPull's
+					// session-disable notice) — skip a redundant third here.
+					if !errors.Is(err, clientops.ErrCacheQuarantined) {
+						// "serving stale cache" is only true when a cache EXISTS — with no
+						// cache.bin the upcoming LoadCacheSnapshot hard-fails instead, so
+						// don't promise a degradation that isn't happening.
+						if cachePresent() {
+							fmt.Fprintf(os.Stderr, "lazy cache pull failed (serving stale cache): %v\n", err)
+						} else {
+							fmt.Fprintf(os.Stderr, "lazy cache pull failed: %v\n", err)
+						}
 					}
 				}
 				// ② hot-reload baseline BEFORE the initial load (see clientops.CacheReloader)
 				rel := clientops.NewCacheReloader(cacheMaxAge)
 				snap, err := clientops.LoadCacheSnapshot()
 				if err != nil {
+					// Plan 34 rev4 §4: attribute a server-rejection quarantine when
+					// the on-disk manifest says so; otherwise the original error.
+					if msg, ok := clientops.QuarantineReport(err); ok {
+						return errors.New(msg)
+					}
 					return err
 				}
 				_, _, _, auditPath, err := clientops.CachePaths()

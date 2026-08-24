@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -151,4 +152,23 @@ func (s *Store) TouchCacheToken(id string) error {
 		return fmt.Errorf("cache token id %q not found", id)
 	}
 	return nil
+}
+
+// RevokedCacheTokenNameByPrefix reports the name of the most-recently-updated
+// REVOKED cache token whose token_prefix matches (Plan 34 rev4 §1: the /snapshot
+// 401 reason is observability-only — prefix collisions can mislabel unknown as
+// revoked, which is accepted; the client never branches on the reason).
+func (s *Store) RevokedCacheTokenNameByPrefix(prefix string) (string, bool, error) {
+	var name string
+	err := s.db.QueryRow(
+		`SELECT name FROM cache_tokens WHERE token_prefix=? AND status=? ORDER BY updated_at DESC LIMIT 1`,
+		prefix, string(models.CacheTokenRevoked),
+	).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return name, true, nil
 }

@@ -301,7 +301,7 @@ ssh-manager cache-tokens add --name laptop
 - 其他管理命令：
   ```bash
   ssh-manager cache-tokens ls          # name / id / prefix / status / last_pull（不显示码）
-  ssh-manager cache-tokens revoke laptop   # 位置参数，吊销（Lazy，下次 pull 被拒）
+  ssh-manager cache-tokens revoke laptop   # 位置参数，吊销（断拉新 + 回连销毁，见下「吊销」节）
   ```
 
 #### Step 2（工作机）：第一次拉缓存 + 配 `.mcp.json`
@@ -505,11 +505,31 @@ launchctl load -w ~/Library/LaunchAgents/com.ssh-manager.cache-refresh.plist
 ```bash
 ssh-manager cache-tokens revoke laptop
 # → revoked cache token laptop (status=revoked)
+# → reminder: also revoke project tokens issued to that device if it may be compromised
 ```
 
-**Lazy 生效**：该码**下次 `cache pull`** 直接被拒（`status != active`），那台机再也拉不到新缓存。运行中的 `mcp --cache` 会**热加载**新缓存；若吊销使 token 在新快照中失效，运行中的会话保留旧快照到本次 spawn 结束（之后该机离线路径断了）。
+**语义 = 断拉新 + 回连销毁**（Plan 34 起；此前只断"拉新"）。该码**下次 `cache pull`**（手动，或 `mcp --cache` 的自动保鲜——spawn 惰性 + 会话内懒检查，**≤30min** 内撞上）直接被拒（`status != active`）；且这次拒绝不再只是拉新失败——**pinned 401 = 通过指纹验证的权威服务器明确拒绝**，客户端随之把本地 cache 侧**四件销毁**：
 
-> ⚠️ **已拉下的 `cache.bin` 仍能被那台机的 DEK（`cache-dek.key`）解密**——吊销**只断"拉新"**，不擦"已拉"。这和失窃的 `store.db` 一样处置：**吊销 + 视敏感度轮换相关凭据**（`servers edit --password` / `--key` 换那台机接触过的服务器凭据，`projects rotate` 换 project token）。物理拿到机器的人 + 本机 `cache-dek.key` = 能离线爆破那份当时的 vault 快照——这等同于"物理拿到一台配了 stdio vault 的机器"，不在本方案的威胁模型内（host-compromise = out of scope，见 [threat-model.md](./threat-model.md)）。
+1. **DEK**（`cache-dek.key`；`SSHMGR_CACHE_DEK` seam 路径优先）**物理删除**——钥匙先死：任何一步后崩溃，最坏状态 = 密文留在原地但 DEK 已亡（不可解），crash-safe；
+2. `cache.auth.json`（设备码明文）**物理删除**；
+3. `cache.bin` → `quarantine/cache.bin.quarantined-<unix秒>`（rename 隔离，单份保留）；
+4. `cache.meta.json` **物理删除**。
+
+销毁后该机 spawn `mcp --cache` / `cache status` 报**明确的 quarantined 归因报文**（不再静默失败），无凭据不再自动拉取；恢复 = 重新发码（`cache-tokens add`）+ `cache pull` 重新 enroll（全量重建）。**明文 pull 的 401、网络错误 / TLS 失败、非 401 状态码永不触发销毁**——只有 pinned 连接上的 401 才是权威判定（明文 HTTP 劫持可伪造 401，不采信）。
+
+**DEGRADED / manifest 语义**：DEK / auth / bin 三步是关键步——任一出错（目标**已不存在**除外，那算幂等成功）→ 返回值、stderr 与 manifest 如实记 **`DEGRADED + 失败步骤清单`**（单步失败不阻断其余步骤，尽力而为但如实汇报；meta 删除为非关键步，失败仅日志）。`quarantine/manifest.json` 本身是 **best-effort 记录**（quarantine 目录建不了/磁盘满/权限 → 只记日志并继续，**绝不构成销毁的前置条件**）。spawn/status 的归因报文按**三级降级链**判定：manifest 可读且新鲜（时间戳晚于 `cache.meta.json` 的 pulled_at）→ 完整归因（`done` / `done+DEGRADED` / 中断态 `started`）；manifest 不可读但 `quarantine/` 目录存在 → 无细节归因；目录也不存在 → 维持通用 missing/decrypt 错误（不做 quarantine 归因，防误报）。时间约束同时是归因重置的崩溃安全：重新 enroll 成功 pull 后，旧 manifest 即使残留（重置失败）也因时间戳早于新 meta 而**永不误报**。
+
+**quarantine 痕迹口径**：隔离目录里的 `cache.bin` 密文**不可解密**（DEK 已删）——保留价值是**痕迹/审计，不是数据恢复路径**；误隔离的恢复 = 设备码仍活则重新 `cache pull` 即全量重建。
+
+> **双失败窗口（登记，保守残余）**：manifest 写失败与 `cache.meta.json` 删除失败**叠加**时，真实发生的隔离可能因 meta 仍在记录而被归因链保守判为通用错误（漏归因方向——只会少说、不会误报）。处置指引不变：尝试重新 pull，或直接查看 `quarantine/` 目录。
+
+**换码打错的预期形态（fail-closed 代价）**：pinned 401 **不区分**"已 revoke"与"码本身不对"（服务端 401 的 reason 字段 revoked/unknown 纯供 owner 日志排查，客户端判定不依赖）——换新码时打错/用过期码 = 现有 cache 被销毁 + 用正确码重新 pull 恢复；非攻击场景（服务端数据丢失/重建）同样触发。安全优先的取舍。
+
+**失窃处置 = 两个 token 都 revoke**：cache token（本条命令）+ 该设备上的 project token（`projects revoke` / `rotate`）。销毁清单**不含** project token——`.claude.json` 是用户自己的 agent 配置，客户端程序不改写它；`cache-tokens revoke` 的输出会附一行 reminder 提示。
+
+> ⚠️ **永离线的失窃机，唯一根治仍是轮换服务器凭据**：销毁要"回连"才兑现——永不离线的机器持有"密文 + DEK + 二进制"三件套，没有任何服务端机制能远程废掉其本地解密能力。**视敏感度轮换该机接触过的服务器凭据**（`servers edit <name> --password/--key`），必要时 `projects rotate` 换 project token。详见 [threat-model.md §3.6](./threat-model.md)。
+
+**Lazy 生效，运行中会话不断**：已水合的 store 在内存继续服务至进程退出；隔离在 **spawn 边界**生效（与 revoke 懒语义一致）。
 
 ### 与 export/import 的关系
 
@@ -532,7 +552,7 @@ ssh-manager cache-tokens revoke laptop
 - **运行中的 `mcp --cache` 会热加载新缓存**（hash 变化即换）——拉取成功后下一次工具调用即生效，无需重启 Claude Code。在线的 serve 是每请求实时鉴权，没有这个问题。
 - **离线审计分散在各机本地**：`cache-audit.log` 不回传、不合并——要集中视图得自己收。
 - **首次 `cache pull` 必须在线**——缓存还没拉下来之前，`mcp --cache` 跑不起来（会报 `cache DEK not found` / `no such file`）（凭据文件 `cache.auth.json` 由首次成功 pull 自动写入）。
-- **物理失窃 ≠ 远程吊销能解决**：见上"吊销"——已拉下的缓存被本机 DEK 守着，吊销只断"拉新"。
+- **永离线的物理失窃 = 远程吊销解决不了**：见上"吊销"——revoke 的销毁要**回连**才兑现（≤30min lazy cadence，默认 `--cache-max-age`；`0` 关闭自动拉取，销毁则只发生在手动 pull）；永不离线的失窃机上"密文 + DEK + 二进制"三件仍在手，唯一根治 = 轮换服务器凭据。
 
 ### 自动 TLS 迁移 Runbook（从旧版明文 / 外部证书升级）
 

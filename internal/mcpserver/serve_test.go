@@ -455,3 +455,93 @@ func TestServeUploadContentUFFFDFullChain(t *testing.T) {
 		t.Fatalf("U+FFFD full chain: file=%q want %q", got, want)
 	}
 }
+
+// ---- Plan 34 T2: /snapshot 401 reason (spec rev4 §1) ----
+
+// TestSnapshot401Reason pins the Plan 34 rev4 §1 observability contract: a
+// revoked device code 401s with "invalid cache token: revoked" (serve stderr
+// logs the device name), an unknown code with "invalid cache token: unknown".
+// The client NEVER branches on the reason — this test exists so the
+// owner-facing signal cannot silently regress.
+//
+// Step-1实测 (SDK v1.2.0 auth.go:99-107): RequireBearerToken maps an
+// ErrInvalidToken-wrapped verifier error to http.Error(w, err.Error(), 401) —
+// the 401 body DOES carry the verifier's error text, so the reason is asserted
+// at the HTTP layer (no degradation to unit-layer-only text checks needed).
+// The stderr log lines are verified by code review, not captured here
+// (swapping os.Stderr in an integration test is racy for marginal value).
+func TestSnapshot401Reason(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+	// NB: AddCacheToken returns (id, plaintextToken, err) — bind the SECOND
+	// value (the brief's snippet bound the first, sending the ID as the bearer
+	// code, which misclassifies as "unknown"; caught in Step-2 red analysis).
+	_, tok, err := st.AddCacheToken("laptop")
+	if err != nil {
+		t.Fatalf("AddCacheToken: %v", err)
+	}
+	if err := st.RevokeCacheToken("laptop"); err != nil {
+		t.Fatalf("RevokeCacheToken: %v", err)
+	}
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
+	defer r.Close()
+	ts := httptest.NewServer(r.HTTPHandler())
+	defer ts.Close()
+
+	get := func(auth string) (int, string) {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/snapshot", nil)
+		if auth != "" {
+			req.Header.Set("Authorization", "Bearer "+auth)
+		}
+		resp, derr := http.DefaultClient.Do(req)
+		if derr != nil {
+			t.Fatalf("Do: %v", derr)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := get(tok); code != http.StatusUnauthorized || !strings.Contains(body, "invalid cache token: revoked") {
+		t.Fatalf("revoked token: status=%d body=%q, want 401 with %q", code, body, "invalid cache token: revoked")
+	}
+	if code, body := get("definitely-not-a-real-code-123456"); code != http.StatusUnauthorized || !strings.Contains(body, "invalid cache token: unknown") {
+		t.Fatalf("unknown token: status=%d body=%q, want 401 with %q", code, body, "invalid cache token: unknown")
+	}
+}
+
+// TestVerifyCacheTokenReason (Plan 34 T5 watch item ①): unit-layer pin of the
+// reason classification branch. The stderr line and the error text are minted
+// in the SAME branch of verifyCacheToken, so asserting the error text pins the
+// stderr reason too — no need to capture os.Stderr (same rationale as the
+// comment above TestSnapshot401Reason). Direct call, no HTTP stack.
+func TestVerifyCacheTokenReason(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+	// AddCacheToken returns (id, plaintextToken, err) — bind the SECOND value.
+	_, tok, err := st.AddCacheToken("laptop")
+	if err != nil {
+		t.Fatalf("AddCacheToken: %v", err)
+	}
+	if err := st.RevokeCacheToken("laptop"); err != nil {
+		t.Fatalf("RevokeCacheToken: %v", err)
+	}
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
+	defer r.Close()
+
+	// Revoked: the 8-char prefix lookup hits the revoked cache-token row.
+	if _, err := r.verifyCacheToken(context.Background(), tok, nil); err == nil ||
+		!strings.Contains(err.Error(), "invalid cache token: revoked") {
+		t.Fatalf("revoked: err = %v, want %q", err, "invalid cache token: revoked")
+	}
+	// Unknown: no revoked-row prefix hit.
+	if _, err := r.verifyCacheToken(context.Background(), "definitely-not-a-real-code-123456", nil); err == nil ||
+		!strings.Contains(err.Error(), "invalid cache token: unknown") {
+		t.Fatalf("unknown: err = %v, want %q", err, "invalid cache token: unknown")
+	}
+}

@@ -118,7 +118,8 @@ Persistent=true
 1. 从 NAS 拷最新的 `vault-*.json`（和它的 `.sha256`）到本机。
 2. （可选）`ssh-manager backup verify <file>` 确认没坏。
 3. `ssh-manager import <file>` —— 嗅探自动识别明文，**不弹口令**；导入到**空的** vault（`store.db` 不存在或空）。
-4. **cache_tokens 不在备份里**（设备身份，非 vault 内容）：恢复后需 `ssh-manager cache-tokens add` 重发各工作机授权码，各工作机 `ssh-manager cache pull` 重拉。agent 的 `.mcp.json` 不用动（project token 在备份里）。
+4. **cache_tokens 不在备份里**（设备身份，非 vault 内容——`ExportSnapshot` 零处读该表，export/import 与 NAS 两路恢复同理）：恢复后该表**为空** → 所有工作机下次回连拿到 **unknown 401** → 按 Plan 34 语义**批量切断**（各机本地 cache 四件销毁 + `quarantine/` 痕迹 + 明确归因报文）——这是**预期行为、非事故**（设备码历史本就不随 vault 走）。恢复流程 = **逐设备重新发码 + enroll**：每台 `ssh-manager cache-tokens add --name <device>` 重发授权码，工作机用新码 `cache pull` 重新拉取（全量重建）。agent 的 `.mcp.json` 不用动（project token 在备份里）。
+   > ⚠️ **带外警示——raw-DB 直拷不走这条**：直接拷贝 `store.db` 文件恢复会使 cache_tokens 连**历史状态一起回滚**——**已 revoke 的码可能复活**（被吊销设备重新拉到新快照）。此类恢复后必须**逐行审计**（`cache-tokens ls` 核对每行 status），把该死的行重新 revoke、该换的码逐台重发。
 
 ### skip 语义（诚实）
 
