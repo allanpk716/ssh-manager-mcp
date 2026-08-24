@@ -223,6 +223,7 @@ prompt; that is **observed behavior, not the enforced property**.
 | `TestEvalT9Background` | gated | **yes** (M=5) | the Plan-32 background-trio lifecycle, scored by `scoreT9` (NOT in the §12.3 gate — see the T9 note above) |
 | `TestScoreT9Background` | always-on | no | `scoreT9`'s six branches (pure synthetic transcripts) |
 | `TestBrokerToolsBackgroundTrio` | always-on | no | the trio's names are in `mcpserver.BrokerTools` — pins scoreT6/scoreT8's auto-extended zero-tolerance surface (anti-slice-drift) |
+| `TestEvalT10UploadContent` | double-gated (`requireEval`) | **yes** (M=5) | the Plan-33 upload-content capability task — marker-content write via `upload_content` + read-back + container end-state, scored by `scoreT10` (deterministic; NOT in the §12.3 gate — T9 precedent) |
 
 ## Phase 3 (Plan 5d) — judge + §12.3 gate + CI + eval-safety
 
