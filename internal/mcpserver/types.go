@@ -79,7 +79,7 @@ type UploadOutput struct {
 type UploadContentInput struct {
 	ServerID   string `json:"server_id" jsonschema:"server id from list_servers"`
 	Content    string `json:"content" jsonschema:"the file content to write (valid UTF-8 text; invalid UTF-8 bytes are replaced with U+FFFD — pass base64 here with encoding=base64 for exact bytes)"`
-	RemotePath string `json:"remote_path" jsonschema:"absolute destination path on the server (must start with /); its parent directory is created if missing; an existing file is overwritten"`
+	RemotePath string `json:"remote_path" jsonschema:"absolute destination path on the server (must start with / or a Windows drive root X:/); its parent directory is created if missing; an existing file is overwritten"`
 	Encoding   string `json:"encoding,omitempty" jsonschema:"how content is encoded: 'text' (default — the JSON-decoded string, written as UTF-8; NOT byte-exact: invalid sequences are already replaced with U+FFFD by JSON decoding) or 'base64' (decode first — exact bytes; SINGLE-LINE standard base64 with padding — CR/LF inside content is rejected). The cap applies to the DECODED byte count"`
 }
 

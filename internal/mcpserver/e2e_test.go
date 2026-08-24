@@ -1,9 +1,15 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -133,7 +139,7 @@ func unmarshalToolJSON(t *testing.T, res *mcp.CallToolResult, v any) {
 
 // TestE2EBackgroundTrioFullFlow 是后台三件套 (Plan 32 T8) 的全流 capstone:
 // 同一条 in-memory MCP 会话跑完整 agent 工作流——
-//   - initialize (client.Connect 内完成握手) → tools/list 断言恰 9 工具 (6+3)
+//   - initialize (client.Connect 内完成握手) → tools/list 断言恰 10 工具 (6+3+1)
 //     且名称与 BrokerTools 单源核对 (集合相等——SDK featureSet 无序, 协议对
 //     tools/list 无序保证)——切片即注册面唯一事实源;
 //   - exec_background 起多行输出任务 → exec_output wait 轮询携 next offset
@@ -173,15 +179,15 @@ func TestE2EBackgroundTrioFullFlow(t *testing.T) {
 	defer cliSess.Close()
 	ctx := context.Background()
 
-	// 0. tools/list: 恰 9 工具 (6+3), 名称与 BrokerTools 单源核对——集合相等
+	// 0. tools/list: 恰 10 工具 (6+3+1), 名称与 BrokerTools 单源核对——集合相等
 	//    (SDK featureSet 是 map + 按名排序输出, 协议对 tools/list 无序保证,
 	//    故断言集合而非注册序)。
 	lt, err := cliSess.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lt.Tools) != 9 || len(BrokerTools) != 9 {
-		t.Fatalf("tools/list = %d tools (BrokerTools has %d), want exactly 9", len(lt.Tools), len(BrokerTools))
+	if len(lt.Tools) != 10 || len(BrokerTools) != 10 {
+		t.Fatalf("tools/list = %d tools (BrokerTools has %d), want exactly 10", len(lt.Tools), len(BrokerTools))
 	}
 	listed := map[string]bool{}
 	for _, tl := range lt.Tools {
@@ -319,5 +325,69 @@ func TestE2EBackgroundTrioFullFlow(t *testing.T) {
 	}
 	if stopStatus != bgStatusStopped {
 		t.Fatalf("sleepy task terminal = %q, want stopped", stopStatus)
+	}
+}
+
+// TestE2EUploadContentFullFlow drives upload_content end-to-end over the SDK
+// in-memory transport (Plan 33 T4): base64 binary lands byte-exact with the
+// parent created, and the tool DESCRIPTION embeds the resolved cap (the env
+// seam's dynamic-description pin, spec rev3 §1.2).
+func TestE2EUploadContentFullFlow(t *testing.T) {
+	st := newStore(t)
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("agent-profile")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	server, mgr, tasks, _ := NewServer(st, pid, "proj-test")
+	defer mgr.CloseAll()
+	defer tasks.CloseAll()
+	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "v0"}, nil)
+	t1, t2 := mcp.NewInMemoryTransports()
+	srvSess, _ := server.Connect(context.Background(), t1, nil)
+	defer srvSess.Close()
+	cliSess, _ := client.Connect(context.Background(), t2, nil)
+	defer cliSess.Close()
+	ctx := context.Background()
+
+	// description embeds the resolved cap (default 8 MiB in this test env).
+	lt, err := cliSess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capStr := fmt.Sprint(8 << 20)
+	descOK := false
+	for _, tl := range lt.Tools {
+		if tl.Name == "upload_content" && strings.Contains(tl.Description, "Capped at "+capStr+" bytes decoded") {
+			descOK = true
+		}
+	}
+	if !descOK {
+		t.Fatalf("upload_content description does not embed the resolved cap %q", capStr)
+	}
+
+	// base64 binary upload → byte-exact landing with parent creation.
+	bin := []byte{0x00, 0xFF, 0x7F, 0xD6, 0xD0, 0x0A}
+	target := toSlash(filepath.Join(t.TempDir(), "e2e-uc", "sub", "blob.bin"))
+	res, err := cliSess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "upload_content",
+		Arguments: map[string]any{
+			"server_id":   srvID,
+			"content":     base64.StdEncoding.EncodeToString(bin),
+			"remote_path": target,
+			"encoding":    "base64",
+		},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("upload_content: err=%v res=%+v", err, res.Content)
+	}
+	var out UploadContentOutput
+	unmarshalToolJSON(t, res, &out)
+	if out.Bytes != int64(len(bin)) {
+		t.Fatalf("Bytes = %d, want %d", out.Bytes, len(bin))
+	}
+	if got, _ := os.ReadFile(filepath.FromSlash(target)); !bytes.Equal(got, bin) {
+		t.Fatalf("e2e bytes = %x, want %x", got, bin)
 	}
 }

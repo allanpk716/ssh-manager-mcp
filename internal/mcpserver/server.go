@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -15,7 +16,8 @@ import (
 // by indexing into this slice (BrokerTools[0] = list_servers, [1] = exec_command,
 // [2] = download_file, [3] = upload_file, [4] = forward_port, [5] = close_port;
 // Plan 32 appends the background trio: [6] = exec_background, [7] = exec_output,
-// [8] = exec_stop). Safety scorers in internal/eval (scoreT6 / scoreT8) treat any
+// [8] = exec_stop; Plan 33 appends: [9] = upload_content). Safety scorers in
+// internal/eval (scoreT6 / scoreT8) treat any
 // tool in this set as a broker-tool surface — zero-tolerance for credential leaks
 // through them.
 //
@@ -34,6 +36,7 @@ var BrokerTools = []string{
 	"exec_background", // [6] — start a long-running command in the background (profile-gated, STATEFUL — held by TaskManager; Plan 32 T6)
 	"exec_output",     // [7] — poll incremental output of a background task (Plan 32 T7)
 	"exec_stop",       // [8] — stop a background task by id (Plan 32 T7)
+	"upload_content",  // [9] — write INLINE content (text/base64, decoded ≤ cap) to a remote path over SFTP (profile-gated; Plan 33 T4) — the cross-machine upload path upload_file cannot serve
 }
 
 // NewServer builds an MCP server whose tools are scoped to profileID and
@@ -65,6 +68,11 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		return nil, nil, nil, err
 	}
 	tasks.StartSweeper() // 照 tunnels 先例: 构造器不启, 生产接线点在此 (1min tick, spec §3)
+
+	uploadCap, err := resolveUploadContentCap() // env seam (SSHMGR_UPLOAD_CONTENT_MAX): invalid/非正/>1 GiB → construction fails (fail-closed, spec rev3 §3.1)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
 	// The tool names below reference BrokerTools by index so the slice above IS
 	// the source of truth — adding a broker tool means editing BrokerTools, not
@@ -228,6 +236,21 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 					IsError: true,
 					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
 				}, BgStopOutput{}, nil
+			}
+			return nil, out, nil
+		},
+	)
+
+	mcp.AddTool(srv,
+		&mcp.Tool{
+			Name:        BrokerTools[9], // "upload_content"
+			Description: fmt.Sprintf("Upload inline content as a file on a server — the cross-machine path (upload_file reads from the broker's own filesystem; use upload_content to push content YOU hold). Pass the server's id (from list_servers) + the content + the absolute destination path (must start with /; parent directories are created; an existing file is overwritten). encoding: 'text' (default, UTF-8 — invalid sequences are replaced with U+FFFD, not byte-exact) or 'base64' (exact bytes — SINGLE-LINE standard base64 with padding; use it for binary, non-UTF-8 or byte-exact content). Capped at %d bytes decoded — larger payloads are refused before transfer; for bigger files place them where the broker can reach and use upload_file. No sudo: root-owned paths are not writable. Concurrent writes to the same path are not atomic — avoid racing another upload. On failure the remote file may be left partially written — verify and clean up yourself.", uploadCap),
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in UploadContentInput) (*mcp.CallToolResult, UploadContentOutput, error) {
+			st := storeFn()
+			out, err := UploadContentForProfile(ctx, st, projectID, profileID, in.ServerID, in.Content, in.RemotePath, in.Encoding, uploadCap)
+			if err != nil {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, UploadContentOutput{}, nil
 			}
 			return nil, out, nil
 		},
