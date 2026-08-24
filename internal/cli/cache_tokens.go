@@ -93,6 +93,10 @@ func cacheTokensRevokeCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "revoked cache token %s (status=%s)\n", args[0], models.CacheTokenRevoked)
+			// Plan 34 §3: revoking the device code does NOT touch the project
+			// token this device also holds (.claude.json is the user's config —
+			// the client never rewrites it). A compromised device needs both revoked.
+			fmt.Fprintln(cmd.OutOrStdout(), "reminder: also revoke project tokens issued to that device if it may be compromised")
 			return nil
 		},
 	}

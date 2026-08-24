@@ -5,6 +5,7 @@
 ## 已验证组合
 
 <!-- v0.10.0/0.11.0（Plan 33 upload_content）：工具面纯增量——1 新工具（upload_content：内联内容上传，text/base64，解码后 ≤8 MiB，`SSHMGR_UPLOAD_CONTENT_MAX` env seam）+ serve HTTP 请求体上限（MaxBytesReader，cap+cap/3+64 KiB 同源联动），无破坏性变更。v0.10.0 未发版——并入 v0.10.0 行还是开 v0.11.0 行留 owner 发版时拍板。占位:发版后回写,记得删除本注释 -->
+<!-- v0.10.0/0.11.0（Plan 34 离线 cache 切断失效）：纯增量，无新 env、无新响应头——`cache-tokens revoke` 语义增强（断拉新 + 该机回连即销毁本地 cache 四件：DEK/auth/bin→quarantine/meta；触发条件 = pinned-401）；服务端 401 附 reason（revoked/unknown，纯可观测性，客户端判定不依赖）；`cache-tokens revoke` CLI 输出附两 token 提示行。跨版本口径：销毁在 client 侧执行——**旧 client 对新 serve 维持旧语义**（只断拉新、不销毁本地 cache，401 静默失败），新 client 对旧 serve 销毁语义即生效（不依赖任何新响应头）。与上条 Plan 33 同批发版回写，占位注释届时删除。 -->
 <!-- v0.10.0（Plan 32 后台任务三件套）：纯增量——3 新工具（exec_background / exec_output / exec_stop）+ ExecOutput 新字段 effective_timeout_seconds，无破坏性变更；发版后双端实测回写本表。 -->
 
 | client 版本 | serve 版本 | 在线（HTTP MCP） | 离线（cache pull / mcp --cache） | 验证日期 |

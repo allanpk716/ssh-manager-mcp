@@ -135,6 +135,11 @@ func (r *ServeRunner) verifyCacheToken(ctx context.Context, token string, req *h
 			reason = "revoked"
 			fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token rejected: revoked (device %s, prefix %.8s)\n", name, token)
 		} else {
+			if nerr != nil {
+				// Plan 34 T6: a failed lookup archives as unknown (the reason is
+				// observability-only) but is never silent — the owner's log keeps it.
+				fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token revoked-prefix lookup failed: %v (archived as unknown)\n", nerr)
+			}
 			fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token rejected: unknown (prefix %.8s)\n", token)
 		}
 		return nil, fmt.Errorf("%w: invalid cache token: %s", auth.ErrInvalidToken, reason)
