@@ -119,8 +119,8 @@ L1+ 模型下**未消除**的威胁：
 
 agent 工具面的资源封顶是防 DoS / 防上下文膨胀的基线：`exec_command` 输出
 **每通道 1 MiB**（前缀截断 + truncated）、`download_file` 内容 **1 MiB**、
-`upload_file` **单文件 1 MiB**（传输前拒绝）。**`upload_content`（v0.10，
-Plan 33）采用独立的 8 MiB（解码后字节）上限**，理由：上传的是**已在 agent
+`upload_file` **单文件 1 MiB**（传输前拒绝）。**`upload_content`（Plan 33；
+版本行待发版回写）采用独立的 8 MiB（解码后字节）上限**，理由：上传的是**已在 agent
 上下文里的内容**（内联 JSON 入参）——不新增读取面、不再膨胀上下文，与
 download 方向相反（download 封顶防的是大文件全文灌进上下文），1 MiB 那套
 理由不适用于上行。

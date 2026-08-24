@@ -1130,12 +1130,12 @@ func deleteServerRowRaw(t *testing.T, dbPath, id string) {
 	}
 }
 
-// TestErrorBranchesNeverLeakHost: every reachable error branch of the four
+// TestErrorBranchesNeverLeakHost: every reachable error branch of the five
 // *ForProfile operations must return text free of the vault host / address
 // shapes (spec §6 — the structural form of the "connect_error etc." promise).
-// Branches covered: denied (all four ops), server-not-found, no_credential,
-// no_sudo, connect_error (real dial, exec + forward), the forward hidden
-// guard (Task 4), and close-forward not-found.
+// Branches covered: denied (all five ops, incl. upload_content — Plan 33),
+// server-not-found, no_credential, no_sudo, connect_error (real dial, exec +
+// forward), the forward hidden guard (Task 4), and close-forward not-found.
 func TestErrorBranchesNeverLeakHost(t *testing.T) {
 	const vh = "vault.example.internal"
 	dir := t.TempDir()
@@ -1147,7 +1147,7 @@ func TestErrorBranchesNeverLeakHost(t *testing.T) {
 	_ = st.GrantServers(pid, []string{granted, nocred, unreach})
 	mgr := NewTunnelManager()
 
-	// denied (all four ops, out-of-profile id) — the gate fires before any
+	// denied (all five ops, out-of-profile id) — the gate fires before any
 	// server lookup, so the vault host is never even read.
 	_, err := ExecCommandForProfile(context.Background(), st, "proj", pid, "bogus-id", "true", false, time.Second)
 	assertBranch(t, err, "not in your profile")
@@ -1156,6 +1156,9 @@ func TestErrorBranchesNeverLeakHost(t *testing.T) {
 	assertBranch(t, err, "not in your profile")
 	assertNoLeak(t, err, vh)
 	_, err = UploadForProfile(context.Background(), st, "proj", pid, "bogus-id", "/x", "/y")
+	assertBranch(t, err, "not in your profile")
+	assertNoLeak(t, err, vh)
+	_, err = UploadContentForProfile(context.Background(), st, "proj", pid, "bogus-id", "data", "/x", "", 1<<20)
 	assertBranch(t, err, "not in your profile")
 	assertNoLeak(t, err, vh)
 	_, err = ForwardForProfile(context.Background(), st, "proj", pid, "bogus-id", "127.0.0.1", 80, 0, mgr)
@@ -1562,5 +1565,45 @@ func TestUploadContentForProfileNoLeakConnectError(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no connect_error row; rows=%+v", rows)
+	}
+}
+
+// TestUploadContentForProfileNoLeakSFTPMidFailure (Plan 33 终审 fix wave, spec
+// §5): the no-leak net must also cover the SFTP-layer MID-FAILURE path — a
+// WriteFile failure AFTER a successful connect, not a connect error.
+// Deterministic construction on both Windows and Linux (testsshd serves the
+// host FS): plant a normal FILE `blocker` under the test root, then target
+// <root>/blocker/sub/f.txt — the parent chain crosses that file, so the
+// sc.MkdirAll inside WriteFile fails (not-a-directory class), a genuine
+// SFTP-runtime failure on a live connection. The error text must carry no
+// host:port shape and the audit must hold one error-status row.
+func TestUploadContentForProfileNoLeakSFTPMidFailure(t *testing.T) {
+	st, pid, srvID, root := ucSeed(t)
+
+	blocker := root + "/blocker"
+	if err := os.WriteFile(filepath.FromSlash(blocker), []byte("i am a regular file"), 0o600); err != nil {
+		t.Fatalf("plant blocker file: %v", err)
+	}
+
+	_, err := UploadContentForProfile(context.Background(), st, "proj-test", pid, srvID, "data", blocker+"/sub/f.txt", "", 1<<20)
+	if err == nil {
+		t.Fatal("regular file in parent chain: want SFTP mkdir failure")
+	}
+	// Pin WHICH branch fired (anti-vacuous, assertBranch's philosophy): the
+	// mkdir-parent failure inside WriteFile — not an earlier connect-free branch
+	// whose text would be clean too.
+	assertBranch(t, err, "mkdir parent")
+	if hostPortRe.MatchString(err.Error()) {
+		t.Fatalf("SFTP mid-failure error leaks host:port: %q", err.Error())
+	}
+	rows, _ := st.AuditRows(5)
+	found := false
+	for _, r := range rows {
+		if r.Action == "upload-content" && r.Status == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no error-status row; rows=%+v", rows)
 	}
 }
