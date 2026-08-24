@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -579,4 +580,32 @@ func localPortOfAddr(addr string) int {
 	}
 	p, _ := strconv.Atoi(portStr)
 	return p
+}
+
+// ---- Plan 33: upload_content env seam (spec rev3 §3.1) ----
+
+// uploadContentCapDefault / uploadContentCapMax bound SSHMGR_UPLOAD_CONTENT_MAX:
+// the seam is fail-closed — unset → 8 MiB; unparsable / non-positive / over
+// 1 GiB → error (the process refuses to start; never a silent clamp). The 1
+// GiB ceiling keeps §3.2's cap+cap/3+64KiB body limit far from int64 overflow
+// and stops an accidental huge value from ballooning the serve body limit
+// (that scaling is registered in threat-model per spec §6).
+const (
+	uploadContentCapDefault int64 = 8 << 20 // 8 MiB
+	uploadContentCapMax     int64 = 1 << 30 // 1 GiB
+)
+
+func resolveUploadContentCap() (int64, error) {
+	v := os.Getenv("SSHMGR_UPLOAD_CONTENT_MAX")
+	if v == "" {
+		return uploadContentCapDefault, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("SSHMGR_UPLOAD_CONTENT_MAX: invalid value %q (want positive integer)", v)
+	}
+	if n > uploadContentCapMax {
+		return 0, fmt.Errorf("SSHMGR_UPLOAD_CONTENT_MAX: %d exceeds the 1 GiB ceiling (1073741824)", n)
+	}
+	return n, nil
 }

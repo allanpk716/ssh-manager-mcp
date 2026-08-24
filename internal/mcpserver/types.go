@@ -72,6 +72,23 @@ type UploadOutput struct {
 	Truncated bool  `json:"truncated,omitempty" jsonschema:"true if the cumulative 1 MiB cap was crossed mid-upload by files each within the single-file cap — already-completed files are kept, the file in flight lands complete, and later files are not uploaded (a single file larger than the cap is refused before transfer with an error instead, zero bytes sent)"`
 }
 
+// UploadContentInput is the upload_content tool input (Plan 33; the cross-
+// machine counterpart of UploadInput — content is INLINE, not a broker-local
+// path). Encoding is validated in UploadContentForProfile (enum via handler,
+// Plan 32 precedent). base64 must be SINGLE-LINE padded standard base64.
+type UploadContentInput struct {
+	ServerID   string `json:"server_id" jsonschema:"server id from list_servers"`
+	Content    string `json:"content" jsonschema:"the file content to write (valid UTF-8 text; invalid UTF-8 bytes are replaced with U+FFFD — pass base64 here with encoding=base64 for exact bytes)"`
+	RemotePath string `json:"remote_path" jsonschema:"absolute destination path on the server (must start with /); its parent directory is created if missing; an existing file is overwritten"`
+	Encoding   string `json:"encoding,omitempty" jsonschema:"how content is encoded: 'text' (default — the JSON-decoded string, written as UTF-8; NOT byte-exact: invalid sequences are already replaced with U+FFFD by JSON decoding) or 'base64' (decode first — exact bytes; SINGLE-LINE standard base64 with padding — CR/LF inside content is rejected). The cap applies to the DECODED byte count"`
+}
+
+// UploadContentOutput is the upload_content tool output. No truncated field:
+// over-cap is a refusal ERROR before transfer, never a partial success.
+type UploadContentOutput struct {
+	Bytes int64 `json:"bytes" jsonschema:"bytes written to the remote file (the decoded byte count)"`
+}
+
 // ForwardInput is the forward_port tool input. forward_port opens a local TCP
 // listener that forwards each connection to remote_host:remote_port over an SSH
 // connection to server_id (the `ssh -L` semantic). It is the first STATEFUL

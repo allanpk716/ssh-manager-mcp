@@ -1277,3 +1277,39 @@ func TestExecCommandEffectiveTimeoutEcho(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveUploadContentCap pins the env seam's fail-closed contract (spec
+// rev3 §3.1): unset → 8 MiB default; legal value passes verbatim; unparsable /
+// non-positive / over the 1 GiB ceiling → error (a startup refusal, never a
+// silent clamp).
+func TestResolveUploadContentCap(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     string
+		want    int64
+		wantErr bool
+	}{
+		{"unset → 8 MiB default", "", 8 << 20, false},
+		{"explicit legal value", "1048576", 1048576, false},
+		{"exactly 1 GiB ceiling", "1073741824", 1073741824, false},
+		{"one over the ceiling", "1073741825", 0, true},
+		{"non-numeric", "8MiB", 0, true},
+		{"zero", "0", 0, true},
+		{"negative", "-5", 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("SSHMGR_UPLOAD_CONTENT_MAX", c.env)
+			got, err := resolveUploadContentCap()
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("env=%q: want error, got cap=%d", c.env, got)
+				}
+				return
+			}
+			if err != nil || got != c.want {
+				t.Fatalf("env=%q: got cap=%d err=%v, want %d nil", c.env, got, err, c.want)
+			}
+		})
+	}
+}
