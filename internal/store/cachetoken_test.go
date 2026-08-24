@@ -192,3 +192,34 @@ func TestAddCacheToken_ReclaimsWithoutAccumulating(t *testing.T) {
 		t.Fatalf("expected exactly 1 active + 0 revoked laptop rows, got active=%d revoked=%d", active, revoked)
 	}
 }
+
+// TestRevokedCacheTokenNameByPrefix pins the rev4 §1 reason lookup: a revoked
+// row matching the 8-char plaintext prefix resolves its name (most recent
+// updated_at wins on collisions); no revoked match returns ok=false; active
+// rows NEVER match.
+func TestRevokedCacheTokenNameByPrefix(t *testing.T) {
+	s := newTestStore(t)
+	_, tok1, err := s.AddCacheToken("laptop")
+	if err != nil {
+		t.Fatalf("add laptop: %v", err)
+	}
+	if err := s.RevokeCacheToken("laptop"); err != nil {
+		t.Fatalf("revoke laptop: %v", err)
+	}
+	name, ok, err := s.RevokedCacheTokenNameByPrefix(tok1[:8])
+	if err != nil || !ok || name != "laptop" {
+		t.Fatalf("revoked lookup: name=%q ok=%v err=%v, want laptop/true/nil", name, ok, err)
+	}
+	// Unknown prefix → ok=false, no error.
+	if _, ok, err := s.RevokedCacheTokenNameByPrefix("ZZZZZZZZ"); err != nil || ok {
+		t.Fatalf("unknown prefix: ok=%v err=%v, want false/nil", ok, err)
+	}
+	// An ACTIVE token's prefix must NOT match (only revoked rows).
+	_, tok2, err := s.AddCacheToken("desk")
+	if err != nil {
+		t.Fatalf("add desk: %v", err)
+	}
+	if _, ok, _ := s.RevokedCacheTokenNameByPrefix(tok2[:8]); ok {
+		t.Fatal("active row matched the revoked-prefix lookup")
+	}
+}
