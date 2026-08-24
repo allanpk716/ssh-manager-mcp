@@ -455,3 +455,59 @@ func TestServeUploadContentUFFFDFullChain(t *testing.T) {
 		t.Fatalf("U+FFFD full chain: file=%q want %q", got, want)
 	}
 }
+
+// ---- Plan 34 T2: /snapshot 401 reason (spec rev4 §1) ----
+
+// TestSnapshot401Reason pins the Plan 34 rev4 §1 observability contract: a
+// revoked device code 401s with "invalid cache token: revoked" (serve stderr
+// logs the device name), an unknown code with "invalid cache token: unknown".
+// The client NEVER branches on the reason — this test exists so the
+// owner-facing signal cannot silently regress.
+//
+// Step-1实测 (SDK v1.2.0 auth.go:99-107): RequireBearerToken maps an
+// ErrInvalidToken-wrapped verifier error to http.Error(w, err.Error(), 401) —
+// the 401 body DOES carry the verifier's error text, so the reason is asserted
+// at the HTTP layer (no degradation to unit-layer-only text checks needed).
+// The stderr log lines are verified by code review, not captured here
+// (swapping os.Stderr in an integration test is racy for marginal value).
+func TestSnapshot401Reason(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+	// NB: AddCacheToken returns (id, plaintextToken, err) — bind the SECOND
+	// value (the brief's snippet bound the first, sending the ID as the bearer
+	// code, which misclassifies as "unknown"; caught in Step-2 red analysis).
+	_, tok, err := st.AddCacheToken("laptop")
+	if err != nil {
+		t.Fatalf("AddCacheToken: %v", err)
+	}
+	if err := st.RevokeCacheToken("laptop"); err != nil {
+		t.Fatalf("RevokeCacheToken: %v", err)
+	}
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
+	defer r.Close()
+	ts := httptest.NewServer(r.HTTPHandler())
+	defer ts.Close()
+
+	get := func(auth string) (int, string) {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/snapshot", nil)
+		if auth != "" {
+			req.Header.Set("Authorization", "Bearer "+auth)
+		}
+		resp, derr := http.DefaultClient.Do(req)
+		if derr != nil {
+			t.Fatalf("Do: %v", derr)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := get(tok); code != http.StatusUnauthorized || !strings.Contains(body, "invalid cache token: revoked") {
+		t.Fatalf("revoked token: status=%d body=%q, want 401 with %q", code, body, "invalid cache token: revoked")
+	}
+	if code, body := get("definitely-not-a-real-code-123456"); code != http.StatusUnauthorized || !strings.Contains(body, "invalid cache token: unknown") {
+		t.Fatalf("unknown token: status=%d body=%q, want 401 with %q", code, body, "invalid cache token: unknown")
+	}
+}
