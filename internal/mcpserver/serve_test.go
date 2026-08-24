@@ -511,3 +511,37 @@ func TestSnapshot401Reason(t *testing.T) {
 		t.Fatalf("unknown token: status=%d body=%q, want 401 with %q", code, body, "invalid cache token: unknown")
 	}
 }
+
+// TestVerifyCacheTokenReason (Plan 34 T5 watch item ①): unit-layer pin of the
+// reason classification branch. The stderr line and the error text are minted
+// in the SAME branch of verifyCacheToken, so asserting the error text pins the
+// stderr reason too — no need to capture os.Stderr (same rationale as the
+// comment above TestSnapshot401Reason). Direct call, no HTTP stack.
+func TestVerifyCacheTokenReason(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+	// AddCacheToken returns (id, plaintextToken, err) — bind the SECOND value.
+	_, tok, err := st.AddCacheToken("laptop")
+	if err != nil {
+		t.Fatalf("AddCacheToken: %v", err)
+	}
+	if err := st.RevokeCacheToken("laptop"); err != nil {
+		t.Fatalf("RevokeCacheToken: %v", err)
+	}
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
+	defer r.Close()
+
+	// Revoked: the 8-char prefix lookup hits the revoked cache-token row.
+	if _, err := r.verifyCacheToken(context.Background(), tok, nil); err == nil ||
+		!strings.Contains(err.Error(), "invalid cache token: revoked") {
+		t.Fatalf("revoked: err = %v, want %q", err, "invalid cache token: revoked")
+	}
+	// Unknown: no revoked-row prefix hit.
+	if _, err := r.verifyCacheToken(context.Background(), "definitely-not-a-real-code-123456", nil); err == nil ||
+		!strings.Contains(err.Error(), "invalid cache token: unknown") {
+		t.Fatalf("unknown: err = %v, want %q", err, "invalid cache token: unknown")
+	}
+}

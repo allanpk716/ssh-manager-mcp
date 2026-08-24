@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -52,6 +53,11 @@ func newMCPCmd() *cobra.Command {
 				rel := clientops.NewCacheReloader(cacheMaxAge)
 				snap, err := clientops.LoadCacheSnapshot()
 				if err != nil {
+					// Plan 34 rev4 §4: attribute a server-rejection quarantine when
+					// the on-disk manifest says so; otherwise the original error.
+					if msg, ok := clientops.QuarantineReport(err); ok {
+						return errors.New(msg)
+					}
 					return err
 				}
 				_, _, _, auditPath, err := clientops.CachePaths()

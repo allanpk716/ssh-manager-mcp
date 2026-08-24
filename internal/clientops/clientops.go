@@ -376,6 +376,11 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	if err := atomicWriteUnique(metaPath, mb); err != nil && o.StatusOut != nil {
 		fmt.Fprintf(o.StatusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): %v\n", err)
 	}
+	// Plan 34 rev4 §4: a successful pull supersedes any quarantine attribution —
+	// drop the stale manifest. Best-effort: if this removal fails, the §4 time
+	// guard (manifest.ts > meta.pulled_at, and this pull just wrote a fresh
+	// meta) still auto-invalidates it (crash-safe backstop).
+	_ = os.Remove(filepath.Join(filepath.Dir(bin), "quarantine", "manifest.json"))
 	var snap store.Snapshot
 	_ = json.Unmarshal(body, &snap) // for the status line only
 	if o.StatusOut != nil {

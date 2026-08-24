@@ -412,3 +412,50 @@ func TestMaybeLazyPullNoRetryAfterQuarantine(t *testing.T) {
 		t.Fatalf("post-quarantine lazy pull must be a silent no-op, got %v", err)
 	}
 }
+
+// --- Plan 34 T5: the spawn-surface report chain (rev4 §4 + §8 e2e) ----------
+
+// TestE2EQuarantineFullChain: pull ok → server flips to 401 → pull quarantines
+// → spawn-time LoadCacheSnapshot error maps to the tier-1 report → re-pull with
+// a good code restores (manifest attribution reset).
+func TestE2EQuarantineFullChain(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DIR", dir)
+	withDEKFake(t)
+	revoked := false
+	srv := newPinnedSnapshotServer(t, func(*http.Request) (int, string) {
+		if revoked {
+			return 401, `invalid cache token: revoked`
+		}
+		return 200, `{"version":1,"servers":[],"credentials":[]}`
+	})
+	if err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); err != nil {
+		t.Fatalf("seed pull: %v", err)
+	}
+	revoked = true
+	if err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); !errors.Is(err, ErrCacheQuarantined) {
+		t.Fatalf("revoked pull: %v", err)
+	}
+	// Spawn-time surface: load fails, report attributes. NB the quarantine
+	// itself deleted cache.meta.json (§2 step 5), so this asserts the
+	// meta-absent tier-1 attribution — the PRIMARY post-quarantine shape (see
+	// quarantine_report.go for the guard semantics).
+	_, lerr := LoadCacheSnapshot()
+	if lerr == nil {
+		t.Fatal("load must fail post-quarantine")
+	}
+	if msg, ok := QuarantineReport(lerr); !ok {
+		t.Fatalf("report missing: %v", lerr)
+	} else if !strings.Contains(msg, "quarantined by server rejection") {
+		t.Fatalf("msg = %q", msg)
+	}
+	// Re-enroll: server accepts again; pull succeeds; attribution resets.
+	revoked = false
+	if err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); err != nil {
+		t.Fatalf("re-enroll pull: %v", err)
+	}
+	os.Remove(filepath.Join(dir, "cache.bin")) // simulate an unrelated later loss
+	if _, ok := QuarantineReport(errors.New("cache.bin missing")); ok {
+		t.Fatal("post-re-pull bin loss must NOT attribute to quarantine (reset held)")
+	}
+}

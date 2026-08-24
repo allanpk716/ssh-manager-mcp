@@ -119,6 +119,11 @@ func cacheStatusCmd() *cobra.Command {
 			}
 			snap, err := clientops.LoadCacheSnapshot()
 			if err != nil {
+				// Plan 34 rev4 §4: attribute a server-rejection quarantine when
+				// the on-disk manifest says so; otherwise the original error.
+				if msg, ok := clientops.QuarantineReport(err); ok {
+					return errors.New(msg)
+				}
 				return err
 			}
 			info, _ := os.Stat(bin)
