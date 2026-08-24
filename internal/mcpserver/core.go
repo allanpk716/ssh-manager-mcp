@@ -1,9 +1,12 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path"
@@ -416,6 +419,183 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 	status = "ok"
 	out = UploadOutput{Files: res.Files, Bytes: res.Bytes, Truncated: res.Truncated}
 	return
+}
+
+// UploadContentForProfile (Plan 33, spec rev3 §2) writes INLINE content to
+// remotePath on serverID iff serverID is in profileID (iron rule). The
+// execution order is pinned: ① param-level validation (encoding enum,
+// remote_path absolute, base64 single-line — these reflect only the CALLER'S
+// OWN input, leak nothing about any server, and hence run BEFORE the gate;
+// the denied-first principle constrains CONTENT-level errors: cap/base64) →
+// ② profile gate → ③ cap pre-check (two-stage for base64; connect-free, zero
+// bytes move, no remote file) → ④ GetServer → AuthForServer (no_credential)
+// → HostKeyTOFU → Connect (Plan 31 redaction at the source) → ⑤ WriteFile
+// (parent creation INSIDE, one watchdog, checked Close) → ⑥ audit + {bytes}.
+//
+// cap arrives from the NewServerFromSource-resolved env seam
+// (SSHMGR_UPLOAD_CONTENT_MAX); tests pass small caps directly.
+//
+// Statuses mirror upload: denied / auth_error / no_credential /
+// hostkey_mismatch / connect_error / cancelled / ok / error (param
+// validation, cap refusal, base64 errors, WriteFile failures → error).
+//
+// Audit %d branch value table (spec rev3 §5): ok + text refusal =
+// len(content); base64 coarse refusal = est (exact for every
+// decoder-accepted input); unreachable defensive fine-check = len(decoded);
+// decode failure + single-line rejection + param errors = 0.
+func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64) (out UploadContentOutput, err error) {
+	if encoding == "" {
+		encoding = "text"
+	}
+	byteCount := int64(0) // feeds the refusal error AND the audit Command (see table above)
+	var status string
+	start := time.Now()
+	defer func() {
+		if status == "" {
+			status = "error"
+		}
+		_ = st.WriteAudit(store.AuditRow{
+			TS: start, ProjectID: projectID, ServerID: serverID, Action: "upload-content",
+			Command: fmt.Sprintf("inline %d bytes -> %s", byteCount, remotePath),
+			Status:  status, DurationMS: time.Since(start).Milliseconds(),
+		})
+	}()
+
+	// ① param-level validation (before the gate — caller's own input only).
+	if encoding != "text" && encoding != "base64" {
+		return UploadContentOutput{}, fmt.Errorf("encoding must be \"text\" or \"base64\", got %q", encoding)
+	}
+	if remotePath == "" || !isAbsRemotePath(remotePath) {
+		return UploadContentOutput{}, fmt.Errorf("remote_path must be an absolute path starting with /")
+	}
+	if encoding == "base64" && strings.ContainsAny(content, "\r\n") {
+		return UploadContentOutput{}, fmt.Errorf("base64 content must be single-line standard base64 with padding — join lines and resend")
+	}
+
+	// ② iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
+	allowed, ferr := st.ServersForProfile(profileID)
+	if ferr != nil {
+		return UploadContentOutput{}, ferr
+	}
+	if !contains(allowed, serverID) {
+		status = "denied"
+		return UploadContentOutput{}, ErrNotInProfile
+	}
+
+	// ③ cap pre-check + decode (connect-free). base64's est is EXACT for every
+	// decoder-accepted input (single line is pinned by ①), so the fine check
+	// below is defensive-only — unreachable from public input, kept per spec
+	// rev3 §2.1.
+	var r io.Reader
+	switch encoding {
+	case "text":
+		byteCount = int64(len(content))
+		if byteCount > cap {
+			status = "error"
+			return UploadContentOutput{}, fmt.Errorf("content (%d bytes) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
+		}
+		r = strings.NewReader(content)
+	default: // base64
+		padCount := int64(0)
+		for i := len(content) - 1; i >= 0 && content[i] == '=' && padCount < 2; i-- {
+			padCount++
+		}
+		est := int64(len(content))/4*3 - padCount
+		if est > cap {
+			byteCount = est
+			status = "error"
+			return UploadContentOutput{}, fmt.Errorf("content (%d bytes decoded) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
+		}
+		decoded, derr := base64.StdEncoding.DecodeString(content)
+		if derr != nil {
+			byteCount = 0
+			return UploadContentOutput{}, fmt.Errorf("invalid base64 content: %v", derr)
+		}
+		byteCount = int64(len(decoded))
+		if byteCount > cap { // defensive fine check — see comment above
+			status = "error"
+			return UploadContentOutput{}, fmt.Errorf("content (%d bytes decoded) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
+		}
+		r = bytes.NewReader(decoded)
+	}
+
+	// ④ server + credential + host key + connect — the same chain every broker
+	// tool walks (DownloadForProfile verbatim; Plan 31 redaction lives in
+	// sshbroker.Connect at the source).
+	srv, serr := st.GetServer(serverID)
+	if serr != nil || srv == nil {
+		status = "error"
+		err = fmt.Errorf("server %s not found", serverID)
+		return
+	}
+
+	auth, aerr := vault.AuthForServer(st, srv)
+	if aerr != nil {
+		if errors.Is(aerr, vault.ErrNoCredential) {
+			// Credential-less server (Plan 20 C0): refused BEFORE any connect —
+			// the error carries the configure-a-credential hint for the agent.
+			status = "no_credential"
+			err = aerr
+			return
+		}
+		status = "auth_error"
+		err = aerr
+		return
+	}
+
+	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	if herr != nil {
+		status = "error"
+		err = herr
+		return
+	}
+
+	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	if cerr != nil {
+		switch {
+		case errors.Is(cerr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(cerr, sshbroker.ErrHostKeyMismatch):
+			status = "hostkey_mismatch"
+		default:
+			status = "connect_error"
+		}
+		err = cerr
+		return
+	}
+	defer cli.Close()
+
+	// ⑤ write (parent creation + checked Close live inside WriteFile).
+	if werr := cli.WriteFile(ctx, remotePath, r); werr != nil {
+		if errors.Is(werr, context.Canceled) {
+			status = "cancelled"
+		} else {
+			status = "error"
+		}
+		err = werr
+		return
+	}
+	status = "ok"
+	out = UploadContentOutput{Bytes: byteCount}
+	return
+}
+
+// isAbsRemotePath reports whether remotePath is absolute in the TARGET's path
+// namespace: POSIX-rooted ("/...") is the documented contract (schema text),
+// plus the Windows drive form ("X:/..." — slash after the colon only; a
+// backslash stays a legal POSIX filename char). The invariant this check
+// protects is "not relative": a relative path would resolve against the sftp
+// server's start dir, surprising the caller. The drive form exists so the
+// tool (and its tests, plus the Plan 33 e2e lane) work against a
+// Windows-host-FS sftp — testsshd serves the host FS and the dev lane is a
+// Windows broker host; the linux CI lane only ever sees "/...".
+func isAbsRemotePath(p string) bool {
+	if strings.HasPrefix(p, "/") {
+		return true
+	}
+	return len(p) >= 3 &&
+		((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) &&
+		p[1] == ':' && p[2] == '/'
 }
 
 // ForwardForProfile opens a `ssh -L` tunnel through serverID iff serverID is in
