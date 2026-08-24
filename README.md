@@ -43,6 +43,7 @@ The MCP server exposes these tools — **ssh-functional-equivalent for operating
 | `exec_command` | `ssh host cmd` | Run a shell command on a server. `sudo=true` runs `sudo -S` for you (do **not** prepend `sudo` yourself). |
 | `download_file` | `scp host:path .` | Download a remote file (size-capped; truncated output is flagged). |
 | `upload_file` | `scp -r . host:path` | Upload a local file **or directory** (recursive) to the server. |
+| `upload_content` | — | Write inline content (a string the agent holds) to a remote file — the **cross-machine** upload path (`upload_file` reads the broker's own filesystem; a remote-serve agent pushes its own configs/scripts here). `text` / `base64` (byte-exact) encodings, 8 MiB decoded cap, parent dirs auto-created, existing file overwritten. |
 | `forward_port` | `ssh -L` | Open a local port forwarding to a remote service — returns `127.0.0.1:<port>` for the agent to use (e.g. `curl`). |
 | `close_port` | — | Close a forward when done (tunnels auto-close ~10 min after creation). |
 | `exec_background` | — | Start a long-running command (builds, training, log tails) in the background and get a `task_id` immediately — 24h run cap, 32 tasks per project, records live only in the broker process (a broker restart loses them all). |
@@ -97,7 +98,7 @@ ssh-manager projects add my-agent --profile team-a
 #   {"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
 ```
 
-Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the nine SSH tools, scoped to the `team-a` profile's servers.
+Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the ten SSH tools, scoped to the `team-a` profile's servers.
 
 **Other commands:** `servers ls` / `servers rm`, `profiles ls`, `projects ls`, `gc` (find/delete orphan credential rows — dry-run by default), `lock`, `clear` (role teardown — wipes the machine back to first-run), `doctor` (side-effect-free local self-check — prints a PASS/WARN/FAIL report; exit `0` = no FAIL findings, `1` = at least one FAIL), `version`.
 

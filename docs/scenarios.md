@@ -8,7 +8,7 @@
 
 ## 怎么读这些示例
 
-- agent 拿到的 9 个工具是：`list_servers` / `exec_command` / `download_file` / `upload_file` / `forward_port` / `close_port` / `exec_background` / `exec_output` / `exec_stop`（长活命令走后台三件套；详见根 [README](../README.md#what-the-agent-gets-the-mcp-tools)）。
+- agent 拿到的 10 个工具是：`list_servers` / `exec_command` / `download_file` / `upload_file` / `upload_content` / `forward_port` / `close_port` / `exec_background` / `exec_output` / `exec_stop`（长活命令走后台三件套；详见根 [README](../README.md#what-the-agent-gets-the-mcp-tools)）。
 - **你不需要记工具名**。你用自然语言说目标，agent 自己会先 `list_servers` 拿到真实的 server `id`，再用 `id` 调后续工具。下面“agent 会怎么用”只是让你知道它背后在干嘛。
 - 所有示例都假设 agent 绑定的 profile 里有名为 `gpu` / `db` / `web` 等的服务器——把名字换成你自己的。
 
@@ -67,6 +67,7 @@
 - 上传 cap：**单个文件超过 1 MiB 会在传输前被直接拒绝**（错误里带文件名/实际大小/上限，零字节传输；目录上传时此前已完成的文件照常保留）；多个文件累计超过 1 MiB 时已完成的保留并如实标 `truncated=true`（其后的文件不再上传）→ 拆小批次重传。
 - 符号链接三态（传目录时）：**根**是符号链接/junction → 跟链解析成目标目录再传；**嵌套的 symlink→目录**（含 Windows junction）→ **显式拒绝**，错误形如 `symlinked directory not uploaded: <路径> — upload the target directory directly (following directory links recursively is not supported)`（要传就直接传目标目录，不递归跟链——环/重复访问风险）；**嵌套的 symlink→文件** → 跟链上传目标内容（cap 按目标大小判，Plan 24）。
 - 上传的是你本机（broker 所在机器）上的文件——agent 在你机器上读文件再推过去。
+- **内容在 agent 手里、不在任何机器磁盘上？用 `upload_content`**：内容直接内联进工具参数（JSON 入参）写成远程单文件（≤8 MiB，父目录自动建、已存在即覆盖；二进制走 base64）。这是**跨机形态的关键路径**：远程 serve 拓扑（笔记本 agent → serve 主机 broker → 目标机）下，`upload_file` 读的是 **serve 主机**的文件系统，笔记本上的文件它够不到——agent 自己生成的配置/脚本/小产物直接 `upload_content` 推过去（agent 侧详见 [agent-tools.md](./agent-tools.md) upload_content 节）。单文件小配置首选它；整目录、大文件仍走 `upload_file`。
 
 ---
 
