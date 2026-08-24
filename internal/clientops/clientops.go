@@ -46,6 +46,18 @@ var lazyPullBackoff struct {
 // exercise the pull attempt path without waiting out a previous attempt.
 func ResetLazyPullBackoffForTest() { lazyPullBackoff.lastAttempt = time.Time{} }
 
+// cacheQuarantinedFlag is the Plan 34 rev4 §3 process-level "already
+// quarantined" mark: once a pinned-401 rejection destroyed the cache in THIS
+// process, MaybeLazyPull never auto-attempts again (a lingering cache.auth.json
+// from a failed deletion retries only on the NEXT spawn — at most one
+// destruction attempt per spawn).
+var cacheQuarantinedFlag bool
+
+// ResetCacheQuarantineForTest clears the process-level quarantine flag so tests
+// can exercise the auto-pull path independently of an earlier quarantine (the
+// flag intentionally lasts the process lifetime in production).
+func ResetCacheQuarantineForTest() { cacheQuarantinedFlag = false }
+
 // MaybeLazyPull runs ONE automatic pull when cache.bin is missing / older than
 // maxAge and a persisted cache.auth.json exists. maxAge<=0 disables entirely —
 // INCLUDING the missing-cache case (the first pull stays a deliberate manual
@@ -53,6 +65,9 @@ func ResetLazyPullBackoffForTest() { lazyPullBackoff.lastAttempt = time.Time{} }
 func MaybeLazyPull(maxAge time.Duration) error {
 	if maxAge <= 0 {
 		return nil
+	}
+	if cacheQuarantinedFlag {
+		return nil // Plan 34: quarantined this process — no further auto-pulls
 	}
 	cred, err := ReadCacheCred()
 	if err != nil {
@@ -86,7 +101,25 @@ func MaybeLazyPull(maxAge time.Duration) error {
 	if pin == "" {
 		return fmt.Errorf("cache.auth.json has no pin; refusing plaintext auto-pull")
 	}
-	return DoPull(cred.URL, code, pin, PullOpts{Timeout: LazyPullTimeout, StatusOut: os.Stderr})
+	err = DoPull(cred.URL, code, pin, PullOpts{Timeout: LazyPullTimeout, StatusOut: os.Stderr})
+	if errors.Is(err, ErrCacheQuarantined) {
+		// Plan 34 rev4 §3 — the pinned server rejected the device code and the
+		// cache is destroyed. Terminal for this process: the flag stops every
+		// later boundary (even with a lingering cache.auth.json from a failed
+		// deletion — that retries only on the NEXT spawn, ≤1 destruction
+		// attempt per spawn), and the backoff window is reverted so the
+		// attempt is NOT counted as a transient failure (rev4: 不进 backoff —
+		// the flag, not the backoff, is the suppressor).
+		cacheQuarantinedFlag = true
+		lazyPullBackoff.mu.Lock()
+		lazyPullBackoff.lastAttempt = time.Time{}
+		lazyPullBackoff.mu.Unlock()
+		fmt.Fprintf(os.Stderr, "cache QUARANTINED by server rejection: automatic pulls disabled for this session — re-enroll with a fresh device code\n")
+		// Propagate the sentinel (rev4 §5 "lazy 哨兵传播"): callers only log
+		// it, never act fatally — and mcp.go's "serving stale cache" wording
+		// is guarded by cachePresent(), which is false post-quarantine.
+	}
+	return err
 }
 
 // CachePaths resolves the cache directory (SSHMGR_CACHE_DIR override, else UserConfigDir/
@@ -301,6 +334,19 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		io.Copy(io.Discard, res.Body) // keep the keep-alive socket reusable
+		if pin != "" && res.StatusCode == 401 {
+			// Plan 34 rev4 §3 — the ONLY quarantine trigger: a PINNED server
+			// rejected the device code (revoked server-side). Plaintext 401s,
+			// network/TLS failures, and non-401 statuses never reach here.
+			// QuarantineCache returns nil on a clean/idempotent destruction —
+			// the trigger itself raises the sentinel then; its DEGRADED error
+			// already wraps ErrCacheQuarantined.
+			_, qerr := QuarantineCache("server rejected device code")
+			if qerr == nil {
+				qerr = ErrCacheQuarantined
+			}
+			return fmt.Errorf("pull: %w — re-enroll with a fresh device code", qerr)
+		}
 		return fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
 	}
 	body, err := io.ReadAll(res.Body)

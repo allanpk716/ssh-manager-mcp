@@ -1,13 +1,26 @@
 package clientops
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"fmt"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -228,5 +241,174 @@ func TestFileKeyProviderDeleteIsIdempotent(t *testing.T) {
 	f := &store.FileKeyProvider{Path: filepath.Join(t.TempDir(), "gone.key")}
 	if err := f.Delete(); err != nil {
 		t.Fatalf("Delete on absent: %v, want nil", err)
+	}
+}
+
+// --- Plan 34 T4: the DoPull trigger wiring + its harnesses ------------------
+
+// pinnedSnapshotServer is an httptest TLS server whose self-signed cert's SPKI
+// fingerprint is the pin a pinned DoPull must verify.
+type pinnedSnapshotServer struct {
+	URL string
+	Pin string
+}
+
+// newPinnedSnapshotServer spins an httptest TLS server with a fresh self-signed
+// ed25519 cert (same shape as newTLSSnapshotServer in cache_cred_test.go) and
+// returns its URL + SPKI pin. The per-request handler decides status + body, so
+// ONE server can accept the first pull and 401 the second (revoked) one.
+func newPinnedSnapshotServer(t *testing.T, handler func(*http.Request) (int, string)) *pinnedSnapshotServer {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := mcpserver.SPKIFingerprint(cert)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes})
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status, body := handler(r)
+		w.WriteHeader(status)
+		fmt.Fprint(w, body)
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{tlsCert}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return &pinnedSnapshotServer{URL: srv.URL, Pin: pin}
+}
+
+// newPlainSnapshotServer spins a plaintext httptest server answering every
+// request with a fixed status — the non-trigger face (no pin can be set against
+// it, so a 401 from here must NEVER quarantine).
+func newPlainSnapshotServer(t *testing.T, status int) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		fmt.Fprint(w, "stub")
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestDoPullPinned401Quarantines: pinned TLS + 401 → the artifacts are
+// destroyed and the sentinel is returned (T3 review watch item: this asserts
+// errors.Is on DoPull's REAL return value — the end-to-end trigger chain, not a
+// unit-level fake). The server here is a stub whose TLS cert we pin; the FIRST
+// pull succeeds, the SECOND (revoked server-side) 401s.
+func TestDoPullPinned401Quarantines(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DIR", dir)
+	withDEKFake(t)
+	seedCache(t, dir)
+
+	srv := newPinnedSnapshotServer(t, func(r *http.Request) (int, string) {
+		if r.Header.Get("Authorization") == "Bearer good-code" {
+			return 200, `{"version":1,"servers":[]}`
+		}
+		return 401, `invalid cache token: revoked`
+	})
+	// First pull OK (re-writes cache.bin as a real envelope; proves the pin path).
+	if err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); err != nil {
+		t.Fatalf("first pull: %v", err)
+	}
+	// Revoked second pull → sentinel + destruction.
+	err := DoPull(srv.URL, "revoked-code", srv.Pin, PullOpts{})
+	if !errors.Is(err, ErrCacheQuarantined) {
+		t.Fatalf("err = %v, want ErrCacheQuarantined", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "cache.auth.json")); !os.IsNotExist(serr) {
+		t.Fatal("auth.json destroyed")
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "cache.bin")); !os.IsNotExist(serr) {
+		t.Fatal("cache.bin quarantined away")
+	}
+}
+
+// TestDoPullNonTriggerFaces: plaintext 401, network error, and non-401 NEVER
+// quarantine (rev4 §3 不触发面).
+func TestDoPullNonTriggerFaces(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DIR", dir)
+	withDEKFake(t)
+	bin, _, _ := seedCache(t, dir)
+
+	// Plaintext 401: no pin → no destruction.
+	srv401 := newPlainSnapshotServer(t, 401)
+	if err := DoPull(srv401.URL, "x", "", PullOpts{AllowPlain: true}); err == nil {
+		t.Fatal("want error")
+	}
+	if _, serr := os.Stat(bin); serr != nil {
+		t.Fatal("plaintext 401 must NOT quarantine")
+	}
+	// Network error against a pinned-but-dead address.
+	if err := DoPull("https://127.0.0.1:1/", "x", "sha256:"+strings.Repeat("0", 64), PullOpts{}); err == nil {
+		t.Fatal("want error")
+	}
+	if _, serr := os.Stat(bin); serr != nil {
+		t.Fatal("network error must NOT quarantine")
+	}
+	// Non-401 status.
+	srv500 := newPlainSnapshotServer(t, 500)
+	if err := DoPull(srv500.URL, "x", "", PullOpts{AllowPlain: true}); err == nil {
+		t.Fatal("want error")
+	}
+	if _, serr := os.Stat(bin); serr != nil {
+		t.Fatal("non-401 must NOT quarantine")
+	}
+}
+
+// TestMaybeLazyPullNoRetryAfterQuarantine: after a sentinel, the in-process
+// flag stops further automatic attempts even though cache.auth.json deletion
+// "failed" (simulated by re-seeding it). Also pins rev4 §5's "lazy 哨兵传播":
+// the sentinel is PROPAGATED to the caller on the trigger pull itself.
+func TestMaybeLazyPullNoRetryAfterQuarantine(t *testing.T) {
+	ResetCacheQuarantineForTest()
+	t.Cleanup(ResetCacheQuarantineForTest) // the flag is process-lifetime by design — never leak it into other tests
+
+	dir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DIR", dir)
+	withDEKFake(t)
+	seedCache(t, dir)
+	srv := newPinnedSnapshotServer(t, func(*http.Request) (int, string) { return 401, "revoked" })
+	if err := WriteCacheCred(&CacheCred{URL: srv.URL, Token: "x", Pin: srv.Pin}); err != nil {
+		t.Fatal(err)
+	}
+	ResetLazyPullBackoffForTest()
+	if err := MaybeLazyPull(time.Nanosecond); !errors.Is(err, ErrCacheQuarantined) {
+		t.Fatalf("lazy: err = %v, want sentinel", err)
+	}
+	// Simulate a FAILED auth.json deletion (cred survived) — the flag must still
+	// prevent a second automatic attempt in THIS process.
+	if err := WriteCacheCred(&CacheCred{URL: srv.URL, Token: "x", Pin: srv.Pin}); err != nil {
+		t.Fatal(err)
+	}
+	ResetLazyPullBackoffForTest()
+	if err := MaybeLazyPull(time.Nanosecond); err != nil {
+		t.Fatalf("post-quarantine lazy pull must be a silent no-op, got %v", err)
 	}
 }

@@ -512,6 +512,50 @@ func TestCachePull_PinMismatch_Fails(t *testing.T) {
 	}
 }
 
+// TestCachePullDoesNotPersistCredOn401 pins the rev4 §3 CLI ordering: a failed
+// (401) pull must NOT overwrite the persisted credential — the old code stays
+// (cachePullCmd persists cache.auth.json only AFTER DoPull returns nil, so a
+// mistyped/revoked new code never lands on disk; the next lazy pull keeps using
+// the old one). Driven through the full cobra command so the RunE ordering
+// itself is under test; the stub is plaintext (the non-trigger face — this test
+// is purely about the write-after-success timing, not the quarantine trigger,
+// which is covered clientops-side in TestDoPullPinned401Quarantines).
+func TestCachePullDoesNotPersistCredOn401(t *testing.T) {
+	dir := t.TempDir()
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_DIR": dir,
+		"SSHMGR_SERVE_PIN": "", // plaintext stub: no pin anywhere
+	})
+	withDEK(t)
+	if err := clientops.WriteCacheCred(&clientops.CacheCred{URL: "https://old", Token: "old-code", Pin: "sha256:" + strings.Repeat("1", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	// A 401 stub: any bearer is rejected server-side.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, "invalid cache token")
+	}))
+	t.Cleanup(srv.Close)
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"cache", "pull", "--url", srv.URL, "--token", "bad-new-code", "--allow-plaintext"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("want 401 error")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Fatalf("error must come from the 401 path, got: %v", err)
+	}
+	// cachePullCmd writes cache.auth.json only after a SUCCESSFUL pull — the
+	// persisted cred must still be the untouched old one.
+	cred, rerr := clientops.ReadCacheCred()
+	if rerr != nil || cred == nil || cred.Token != "old-code" {
+		t.Fatalf("cred = %+v err=%v — must be untouched old-code", cred, rerr)
+	}
+}
+
 // standUpServeTLS spins a TLS httptest.Server with a fresh self-signed
 // ed25519 cert (same shape as TestCachePull_PinnedTLS_Succeeds's server) and
 // returns its URL. Used by the pin-mismatch test, which only needs the server
