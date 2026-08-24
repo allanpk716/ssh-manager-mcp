@@ -74,7 +74,10 @@ func standUpServe(t *testing.T) (url, cacheToken string) {
 	if _, err := st.AddServer(&models.Server{Name: "gpu", Host: "192.0.2.10", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid}); err != nil {
 		t.Fatal(err)
 	}
-	r := mcpserver.NewServeRunner(st)
+	r, err := mcpserver.NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
 	t.Cleanup(r.Close)
 	srv := httptest.NewServer(r.HTTPHandler())
 	t.Cleanup(srv.Close)

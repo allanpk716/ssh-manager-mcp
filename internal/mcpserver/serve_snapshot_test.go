@@ -34,7 +34,10 @@ func newSnapshotRunner(t *testing.T) (*httptest.Server, string, string, *store.S
 	}); err != nil {
 		t.Fatal(err)
 	}
-	r := NewServeRunner(st)
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
 	t.Cleanup(r.Close)
 	srv := httptest.NewServer(r.HTTPHandler())
 	t.Cleanup(srv.Close)

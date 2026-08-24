@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testsshd"
 )
 
 // newTestStore + seedActiveProjectToken follow the existing pattern in
@@ -32,7 +35,10 @@ func TestServeRunner_CachesByProject(t *testing.T) {
 		t.Fatalf("resolved project mismatch: got id=%s profile=%s", project.ID, project.ProfileID)
 	}
 
-	r := NewServeRunner(st)
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
 	defer r.Close()
 
 	s1, err := r.ServerForProject(project)
@@ -81,7 +87,10 @@ func TestHTTPHandler_AuthGate(t *testing.T) {
 	defer st.Close()
 	token, _, _ := seedActiveProjectToken(t, st, "project-A")
 
-	r := NewServeRunner(st)
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
 	defer r.Close()
 	h := r.HTTPHandler()
 
@@ -133,7 +142,10 @@ func TestHTTPHandler_SessionBinding_RejectsCrossProjectReplay(t *testing.T) {
 	tokenA, _, _ := seedActiveProjectToken(t, st, "project-A")
 	tokenB, _, _ := seedActiveProjectToken(t, st, "project-B")
 
-	r := NewServeRunner(st)
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
 	defer r.Close()
 	ts := httptest.NewServer(r.HTTPHandler())
 	defer ts.Close()
@@ -277,5 +289,169 @@ func TestRunServe_AutoTLSCreatesCert(t *testing.T) {
 	}
 	if _, err := os.Stat(keyPath); err != nil {
 		t.Fatalf("key not auto-generated at %s: %v", keyPath, err)
+	}
+}
+
+// ---- Plan 33 T5: serve body-limit middleware (spec rev3 §3.2) ----
+
+// ucServeSetup: testsshd + store + profile + a seeded REAL server usable by the
+// upload_content tool over serve; returns (st, token, srvID, remoteRootSlash).
+// The runner is built AFTER any t.Setenv so the env seam resolves per-test.
+// seedActiveProjectToken creates its OWN profile — the grant must go to THAT
+// profile (the token's project resolves to it at serve time), or the iron-rule
+// gate rejects the call ("server is not in your profile").
+func ucServeSetup(t *testing.T) (*store.Store, string, string, string) {
+	t.Helper()
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	t.Cleanup(cleanup)
+	st := newTestStore(t)
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	token, _, profID := seedActiveProjectToken(t, st, "project-uc")
+	_ = st.GrantServers(profID, []string{srvID})
+	return st, token, srvID, toSlash(t.TempDir())
+}
+
+func TestNewServeRunnerFailClosedOnBadEnv(t *testing.T) {
+	t.Setenv("SSHMGR_UPLOAD_CONTENT_MAX", "not-a-number")
+	if _, err := NewServeRunner(newTestStore(t)); err == nil {
+		t.Fatal("NewServeRunner must refuse to start on an invalid SSHMGR_UPLOAD_CONTENT_MAX (fail-closed, spec rev3 §3.1)")
+	}
+}
+
+func TestServeBodyLimit(t *testing.T) {
+	// Small seam → small body limit: cap 4096 → limit = 4096 + 1365 + 65536.
+	t.Setenv("SSHMGR_UPLOAD_CONTENT_MAX", "4096")
+	st, token, srvID, root := ucServeSetup(t)
+	defer st.Close()
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
+	defer r.Close()
+	ts := httptest.NewServer(r.HTTPHandler())
+	defer ts.Close()
+
+	post := func(body string, cl bool) int {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Authorization", "Bearer "+token)
+		if !cl {
+			req.ContentLength = -1 // strip Content-Length → chunked path (fallback tier)
+		}
+		resp, derr := http.DefaultClient.Do(req)
+		if derr != nil {
+			t.Fatalf("Do: %v", derr)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
+	if got := post(initBody, true); got != http.StatusOK {
+		t.Fatalf("small initialize must pass: %d", got)
+	}
+
+	// honest Content-Length over the limit → 413 (the real-client path).
+	big := initBody + strings.Repeat(" ", 80*1024)
+	if got := post(big, true); got != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-limit with Content-Length: %d, want 413", got)
+	}
+
+	// chunked over the limit → the MaxBytesReader fallback: an ERROR response,
+	// not 413 (the SDK owns the response) — asserted as non-OK per spec §3.2.
+	if got := post(big, false); got == http.StatusOK {
+		t.Fatalf("over-limit chunked: 200, want an error status (fallback tier)")
+	}
+
+	// at-cap base64 tool call passes the limit end-to-end: cap=4096 decoded
+	// bytes → 5464 encoded chars — under cap+cap/3+64KiB, over a naive cap.
+	payload := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xA5}, 4096))
+	callBody := fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"upload_content","arguments":{"server_id":%q,"content":%q,"remote_path":%q,"encoding":"base64"}}}`, srvID, payload, root+"/atcap.bin")
+	req, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(callBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+token)
+	// session dance: initialize first to obtain Mcp-Session-Id.
+	ireq, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(initBody))
+	ireq.Header.Set("Content-Type", "application/json")
+	ireq.Header.Set("Accept", "application/json, text/event-stream")
+	ireq.Header.Set("Authorization", "Bearer "+token)
+	iresp, derr := http.DefaultClient.Do(ireq)
+	if derr != nil || iresp.StatusCode != http.StatusOK {
+		t.Fatalf("initialize: err=%v status=%d", derr, iresp.StatusCode)
+	}
+	sid := iresp.Header.Get("Mcp-Session-Id")
+	iresp.Body.Close()
+	req.Header.Set("Mcp-Session-Id", sid)
+	resp, derr := http.DefaultClient.Do(req)
+	if derr != nil {
+		t.Fatalf("tools/call at-cap: %v", derr)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	// Success is pinned by the structured "bytes":4096 output; a tool error
+	// (IsError) carries only text, so the substring can never appear in it.
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"bytes":4096`)) {
+		t.Fatalf("at-cap tool call: status=%d body=%q", resp.StatusCode, body)
+	}
+	if got, _ := os.ReadFile(filepath.FromSlash(root + "/atcap.bin")); len(got) != 4096 {
+		t.Fatalf("at-cap file = %d bytes, want 4096", len(got))
+	}
+}
+
+// TestServeUploadContentUFFFDFullChain pins the text-mode contract at the
+// TRANSPORT layer (spec rev3 §1.1/§7): raw invalid-UTF-8 bytes inside a JSON
+// string are replaced with U+FFFD by JSON DECODING (Go encoding/json public
+// behavior) before the tool sees them — an SDK-client test can never exercise
+// this (client-side Marshal replaces first), so this drives raw HTTP bytes.
+func TestServeUploadContentUFFFDFullChain(t *testing.T) {
+	st, token, srvID, root := ucServeSetup(t)
+	defer st.Close()
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
+	defer r.Close()
+	ts := httptest.NewServer(r.HTTPHandler())
+	defer ts.Close()
+
+	doPost := func(body string, sid string) (int, string, string) {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Authorization", "Bearer "+token)
+		if sid != "" {
+			req.Header.Set("Mcp-Session-Id", sid)
+		}
+		resp, derr := http.DefaultClient.Do(req)
+		if derr != nil {
+			t.Fatalf("Do: %v", derr)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode, resp.Header.Get("Mcp-Session-Id"), string(b)
+	}
+
+	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
+	code, sid, _ := doPost(initBody, "")
+	if code != http.StatusOK || sid == "" {
+		t.Fatalf("initialize: code=%d sid=%q", code, sid)
+	}
+	notif := `{"jsonrpc":"2.0","method":"notifications/initialized"}`
+	doPost(notif, sid)
+
+	// RAW invalid UTF-8 byte 0xFF inside the content string: JSON decoding
+	// replaces it with U+FFFD (EF BF BD) before the tool runs.
+	target := root + "/ufffd.txt"
+	call := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"upload_content","arguments":{"server_id":"` + srvID + `","content":"pre-` + "\xFF" + `-post","remote_path":"` + target + `","encoding":"text"}}}`
+	code, _, body := doPost(call, sid)
+	if code != http.StatusOK {
+		t.Fatalf("tools/call raw-UTF8: code=%d body=%q", code, body)
+	}
+	got, _ := os.ReadFile(filepath.FromSlash(target))
+	want := "pre-\xEF\xBF\xBD-post"
+	if string(got) != want {
+		t.Fatalf("U+FFFD full chain: file=%q want %q", got, want)
 	}
 }
