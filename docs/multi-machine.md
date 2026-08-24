@@ -552,7 +552,7 @@ ssh-manager cache-tokens revoke laptop
 - **运行中的 `mcp --cache` 会热加载新缓存**（hash 变化即换）——拉取成功后下一次工具调用即生效，无需重启 Claude Code。在线的 serve 是每请求实时鉴权，没有这个问题。
 - **离线审计分散在各机本地**：`cache-audit.log` 不回传、不合并——要集中视图得自己收。
 - **首次 `cache pull` 必须在线**——缓存还没拉下来之前，`mcp --cache` 跑不起来（会报 `cache DEK not found` / `no such file`）（凭据文件 `cache.auth.json` 由首次成功 pull 自动写入）。
-- **永离线的物理失窃 = 远程吊销解决不了**：见上"吊销"——revoke 的销毁要**回连**才兑现（≤30min lazy cadence）；永不离线的失窃机上"密文 + DEK + 二进制"三件仍在手，唯一根治 = 轮换服务器凭据。
+- **永离线的物理失窃 = 远程吊销解决不了**：见上"吊销"——revoke 的销毁要**回连**才兑现（≤30min lazy cadence，默认 `--cache-max-age`；`0` 关闭自动拉取，销毁则只发生在手动 pull）；永不离线的失窃机上"密文 + DEK + 二进制"三件仍在手，唯一根治 = 轮换服务器凭据。
 
 ### 自动 TLS 迁移 Runbook（从旧版明文 / 外部证书升级）
 

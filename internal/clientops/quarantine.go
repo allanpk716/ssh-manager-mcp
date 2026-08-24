@@ -68,7 +68,11 @@ func QuarantineCache(reason string) (QuarantineResult, error) {
 	res := QuarantineResult{Steps: map[string]string{}}
 	dir, bin, meta, _, err := CachePaths()
 	if err != nil {
-		return res, fmt.Errorf("quarantine: %w", err)
+		// Sentinel-wrapped (Plan 34 final review, Minor 2): DoPull's 401 branch
+		// passes a non-nil qerr through untouched, so this — the one
+		// QuarantineCache error raised BEFORE any step ran — must stay
+		// errors.Is-matchable against ErrCacheQuarantined like every other.
+		return res, fmt.Errorf("%w: cache paths unavailable: %v", ErrCacheQuarantined, err)
 	}
 	qdir := filepath.Join(dir, "quarantine")
 
