@@ -75,6 +75,7 @@ L1+ 模型下**未消除**的威胁：
 
 - **承诺**：ssh-manager 的 MCP 接口默认不披露 vault 内 host:port 与凭据——`list_servers` 默认回 `"hidden"`（owner 可按服务器 `expose_host=true` 显式放开，host:port 组合口径——孤立端口号不构成披露）；工具错误文本不含 host / IP 字面量 / host:port 组合。
 - **后台任务三件套（v0.10，Plan 32）不新增披露面**：任务表是 broker 进程内状态（与隧道同类），无任何持久化；`sudo` 密码仅在启动时瞬时传递给会话内核、不进任务记录；failed 态回给 agent 的错误文本过与连接错误同一条地址清洗链。
+- **`forward_port` 的 `listen_host` 越权拒绝文本不披露白名单内容**（Plan 35）：`listen_host` 是 agent 自己提供的输入（host 不由 broker 回填）；拒绝只说「不在 owner 预批白名单」，不枚举表内条目——不构成新披露面。
 - **不算违约**：agent 在服务器上主动执行 `ip addr` / `hostname` 等命令探出的地址。
 - **明确不防的运行时逃逸**：agent 调用本机 ssh-manager owner CLI（`projects show` / `servers ls` 明文打印 `user@host:port`）；agent 读到离线 client 上的 cache.bin（整仓快照，设计上含全部 host 明文）——这两类属「agent 宿主已被完全信任」范畴，见 [backlog.md](./backlog.md) 的 (d) 类定级。
 - **明确不做**：运行时级隐藏（命令过滤 / 输出脱敏 / 网络盲化）与服务器出网管控（backlog 不做清单）。
@@ -89,6 +90,16 @@ L1+ 模型下**未消除**的威胁：
 - **永离线残余 = 轮换服务器凭据（唯一根治）**：失窃机持有"密文 + 解密钥 + 二进制"三件，**永不离线**的机器上没有任何服务端机制能远程废掉本地解密能力——销毁要"回连"才兑现。根治只有轮换该机接触过的服务器凭据（`servers edit --password/--key`）。
 - **fail-closed 代价（接受）**：pinned 401 **不区分** revoked / unknown（401 reason 字段 revoked/unknown 纯可观测性，供 owner 日志排查，客户端判定不依赖），也**不区分新码打错**——非攻击场景（服务端数据丢失/重建、换码手滑/用过期码）同样触发销毁。恢复 = 用正确码重新 `cache pull`（全量重建）。安全优先的取舍。
 - **失窃响应口径**：cache token 与该设备上的 project token **都要 revoke**（`cache-tokens revoke` 的 CLI 输出附此提示）。销毁清单**不含** project token——`.claude.json` 是用户自己的 agent 配置，客户端程序不改写；revoke cache token ≠ 切断该机的 project token。
+
+---
+
+## 3.7 隧道面的 (b) 类约束现状（Plan 35）
+
+威胁 (b) 类（agent 被劫持后开隧道打内网）在隧道面上现在有三道约束（[Plan 35](./superpowers/specs/2026-08-25-plan-35-tunnels-hardening-design.md.rev4.md) 起；此前 revoke 后已建立的隧道继续转发、且无 owner 急停——本节即该缺口的闭合记录）：
+
+- **急停已存在**：revoke/disable 级联 ≤~15s（一个控制 tick）拆隧道；owner `tunnels kill <id>` / `tunnels kill --project` 随时拆；store 持续故障时降级为 ≤~2min **有界关闭**（不存在「无限期暴露」）；进程级 hang 不在 DB kill 保障域——应急 = 重启/杀进程（隧道随进程死）。
+- **非环回 bind 必须白名单预批**：`forward_port` 的 `listen_host` 缺省环回；非环回 IP 需 owner `serve bind add` 预批（IP 字面量 only——hostname / 网段 / 通配一律拒，gate 读失败 fail-closed 拒）；撤回后存量 ≤~15s 收缩——被劫持 agent 无法自行把隧道 bind 到 VLAN 面扩大攻击面。
+- **离线 cache 客户端的隧道不在 kill/ls 域**：白名单表不进离线快照（离线恒 loopback-only，机制性 fail-closed）、隧道不进 `tunnel_registry`——其拆法 = §3.6 的回连销毁 + 本机杀进程。
 
 ---
 

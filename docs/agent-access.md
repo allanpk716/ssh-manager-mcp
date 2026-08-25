@@ -106,8 +106,8 @@ claude mcp add ssh ssh-manager -e SSHMGR_TOKEN=<TOKEN> -- mcp
 ⚠️ **关键机制——断连语义按部署模式分四层**（`rotate` / `disable` / `enable` / `revoke` 的生效范围）：
 
 1. **stdio（本机 MCP 子进程）——Lazy 生效**：token 校验只在 `mcp` 子进程**下次启动**时跑（只放行 `status=active`）。正在跑的会话保留访问直到你重启 Claude Code（或它的 MCP 子进程）。**你的机器你做主**：这是有意的设计。`exec_background` 后台任务的任务表就在这个子进程内存里——**会话/MCP 子进程重启，任务即全部死亡**（无持久化，agent 侧把在跑的活当作全死重新安排）。
-2. **serve（远程 broker）——逐请求即拒**：broker 对**每一个** HTTP 请求都重新验 token，`revoke`/`disable` 后该 project 的**下一个请求立即 401**——不需要等任何重启。`exec_background` 后台任务同受此管（revoke 后它的下一次 `exec_output` / `exec_stop` 逐请求 401），但**运行中的任务不会被杀**——活到自然结束或 24h 钳定上限（被吊销方已无停它的手段；测试钉住，与第 3 层隧道同口径）。
-3. **已建立的 `forward_port` 隧道——不受 revoke 影响，且无 owner 急停**：隧道由 broker 进程持有；被吊销的 project 自己调 `close_port` 会先被第 2 层的 401 挡住；其他人的隧道管理器也够不到它——stdio 会话跑在**独立进程**里，同一 serve broker 上的其他 project 则各有**各自独立的隧道管理器实例**（互不相通）。真实选项只有：**重启 broker**（`serve uninstall`→`install` 或重启机器）/ **等隧道创建后 ~10 分钟自动回收**。（owner 侧急停命令已列 backlog，见 docs/backlog.md。）
+2. **serve（远程 broker）——逐请求即拒**：broker 对**每一个** HTTP 请求都重新验 token，`revoke`/`disable` 后该 project 的**下一个请求立即 401**——不需要等任何重启。`exec_background` 后台任务同受此管（revoke 后它的下一次 `exec_output` / `exec_stop` 逐请求 401），但**运行中的任务不会被杀**——活到自然结束或 24h 钳定上限（被吊销方已无停它的手段；测试钉住。注意与第 3 层不同：后台任务**不在** revoke 级联域——Plan 32 契约，级联只拆隧道）。
+3. **已建立的 `forward_port` 隧道——revoke/disable 后 ≤ 控制轮询间隔（~15s）内拆除；owner 随时可急停**：`projects disable` / `revoke` 级联拆隧道（disable 语义含「审查中」，威胁面同 revoke；project 行被删按非 active 处理、拆；`rotate` 不拆）；owner 在权威 vault 所在机器上 `ssh-manager tunnels kill <tunnel_id>`（单条，CLI 轮询 ≤45s 至 applied）/ `tunnels kill --project <name>`（拆该项目全部存量）；owner 撤回 bind 白名单条目（`serve bind rm`）后 ≤ 控制轮询间隔内，绑定该地址的存量隧道关闭（环回不受影响）。被吊销的 project 自己调 `close_port` 仍会先被第 2 层的 401 挡住。**时效口径（诚实化）**：以上 ≤15s 以 **store 健康 + 控制循环存活**为前提——store 持续读写故障时，lease/执法纪律降级为**有界关闭**（≤ ~2min，不存在「无限期暴露」）；**进程级 hang（控制 goroutine 死锁）不在 DB kill 保障域内**——数据面可能继续转发且 DB 侧机制全部失效，应急 = 重启 broker 进程 / 杀进程（其全部隧道随进程死，这本身就是急停手段）。
 4. **离线 cache——回连即销毁；永离线失窃的根治仍 = 轮换服务器凭据**（Plan 34 起）：`cache-tokens revoke` 不只断"拉新"——该机**回连即销毁**本地 cache（下次自动保鲜 ≤30min lazy cadence，或手动 `cache pull`，收到 pinned 401 → DEK / `cache.auth.json` / `cache.bin` / `cache.meta.json` 四件销毁 + `quarantine/` 痕迹；此后 spawn 报明确归因错误、无凭据不再自动拉取；恢复 = 重新发码 + `cache pull`）。**永不离线的失窃机**则没有任何服务端机制能远程废掉"密文 + DEK + 二进制"三件套的本地解密能力——唯一根治仍是轮换服务器凭据（`servers edit <name> --password/--key`）。project token **不在**销毁清单（`.claude.json` 是用户自己的 agent 配置）——失窃处置 = cache token 与该机 project token **都 revoke**。后台任务与 cache 无涉——任务表在 broker 进程内、不进快照，离线 `mcp --cache` 模式各自起各自的独立任务表。详见 [multi-machine.md 吊销节](./multi-machine.md#吊销机器失窃--设备码泄露)。
 
 未实现的拆除手段见 docs/backlog.md。
@@ -179,7 +179,7 @@ ssh-manager projects add intern   --profile dev
 | 怀疑 token 泄露（`.mcp.json` 被偷看 / 提交到公开仓库了） | `projects rotate <name>` 立刻作废旧 token，换发新的；去客户端更新 `.mcp.json`。 |
 | 某个 agent 要临时停（放假 / 审查中） | `projects disable <name>`，事后 `projects enable <name>` 恢复。 |
 | 某个 agent 彻底不用了 / 离职 | `projects revoke <name>`；审计记录保留。 |
-| 要立刻断正在跑的会话 | 看模式：serve 远程 agent 下一个请求即拒（无需动作）；stdio 本机会话须重启客户端；既有隧道见「断连语义（四层）」第 3 层（只能重启 broker 或等回收）；其 `exec_background` 后台任务同杀不掉——见第 2 层（活到自然结束或 24h 上限，重启 broker 即失）。 |
+| 要立刻断正在跑的会话 | 看模式：serve 远程 agent 下一个请求即拒（无需动作）；stdio 本机会话须重启客户端；既有隧道 `tunnels kill <tunnel_id>` / `tunnels kill --project <name>`（≤~15s 拆，见「断连语义（四层）」第 3 层；project kill 是弱语义——只拆下单时的存量、不防重开，防重开用 `projects disable/revoke`）；其 `exec_background` 后台任务杀不掉——见第 2 层（活到自然结束或 24h 上限，重启 broker 即失）。 |
 
 ---
 
@@ -201,7 +201,8 @@ ssh-manager projects add intern   --profile dev
 | agent 报 `server is not in your profile` | 你给错了 server（用了名字而非 id，或那台不在它 profile 里）。让它先 `list_servers` 拿 id；或用 `projects show <name>` 核对它到底能碰哪些。 |
 | agent 调工具直接报 token 无效 | token 输错了 / 已 rotate / project 被 disable/revoke。`projects ls` 看 status；必要时 `rotate` 换发并更新 `.mcp.json`。 |
 | `mcp` 启动时 stderr 有 `WARNING: ssh credential files detected` | 你本机有散落的 SSH 私钥/密码文件，agent 可能绕过 broker 直接读它们。按提示删掉，以保持“强制走 broker”的隔离。 |
-| 暂停了 agent 还在跑 | stdio：Lazy，下次重连才接管，重启那个客户端；serve：下一请求即拒，无需动作。详见「断连语义（四层）」。 |
+| 暂停了 agent 还在跑 | stdio：Lazy，下次重连才接管，重启那个客户端；serve：下一请求即拒，无需动作。它已开的隧道另有 ≤~15s 的级联/急停路径（`tunnels kill`，见「断连语义（四层）」第 3 层）。详见「断连语义（四层）」。 |
+| 隧道约 2 分钟后批量关闭（`tunnels ls` 变空、agent 端口突然不可达） | vault DB 持续读写故障触发**有界关闭**（≤~2min，防「无限期暴露」的纪律降级）——看 serve.log / stderr 的 `lease renewal failed N ticks` / `enforcement degraded: ...` 日志行定位 store 故障；DB 恢复后 agent 重开 `forward_port` 即恢复。 |
 | Windows 下 agent 说找不到 `ssh-manager` | `.mcp.json` 的 `command` 写绝对路径（`C:\\...\\ssh-manager.exe`）。 |
 
 下一步：去 [scenarios.md](./scenarios.md) 看这些授权在真实任务里长什么样。

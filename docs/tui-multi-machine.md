@@ -208,7 +208,7 @@ http 三件套（`"type": "http"` + `"url": "https://192.0.2.5:7878/"` +
 | 同步失败但面板还有数据 | 失败保留旧缓存——这是特性不是 bug。按横幅的四类分类修（地址/设备码/指纹/超时），修好 `[s]` 重拉 |
 | 缓存多久算旧 / 怎么自动保鲜 | `[t]` 那行：TTL 由 `.mcp.json` 的 `--cache-max-age` 控制（默认 30m；0=关闭自动拉取）。`mcp --cache` 进程内 spawn 惰性拉取 + 会话内懒检查 + 热加载，无需 OS 定时器；细节见 [multi-machine.md](./multi-machine.md#离线只读缓存plan-12) |
 | server 机 serve 探活失败 | 安装结果屏的排查行：7878 端口防火墙是否放行；`ssh-manager serve status` 查四项信号（service/process/http/vault）；服务可能仍在启动，稍候重试 |
-| 吊销了 token/设备码，agent 还在跑 | 断连语义按部署模式分四层：serve 远程逐请求即拒；stdio/离线缓存 Lazy（重启客户端接管）；已建立的隧道不受 revoke 影响——完整语义见 [agent-access.md](./agent-access.md#project-生命周期轮换--暂停--恢复--吊销) |
+| 吊销了 token/设备码，agent 还在跑 | 断连语义按部署模式分四层：serve 远程逐请求即拒；stdio/离线缓存 Lazy（重启客户端接管）；已建立的隧道 revoke/disable 后 ~15s 内级联拆除（`tunnels kill` 可急停）——完整语义见 [agent-access.md](./agent-access.md#project-生命周期轮换--暂停--恢复--吊销) |
 | 向导中途退出了 | 两边都一样：什么都不用做，重跑 `ssh-manager tui` 从断点续配（server 侧会盘点已建的 profile/project/设备码，跳过已完成步骤） |
 | client 机想改连别的 server | `[c]` 编辑连接（地址/设备码/pin 全换），`[s]` 重拉即可；不需要重跑向导 |
 

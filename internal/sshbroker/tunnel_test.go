@@ -3,6 +3,8 @@ package sshbroker
 import (
 	"io"
 	"net"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,7 +98,7 @@ func TestTunnelHalfClosePropagates(t *testing.T) {
 
 	_, echoPort := startHalfCloseEchoService(t)
 
-	tun, err := c.ForwardLocal(0, "127.0.0.1", echoPort)
+	tun, err := c.ForwardLocal(0, "127.0.0.1", "127.0.0.1", echoPort, nil)
 	if err != nil {
 		t.Fatalf("ForwardLocal: %v", err)
 	}
@@ -129,7 +131,8 @@ func TestTunnelHalfClosePropagates(t *testing.T) {
 // TestForwardLocal opens an ssh -L tunnel through the in-process testsshd to a
 // loopback echo service, then verifies bytes round-trip through it and that
 // Close shuts the local listener down. Lifecycle under test:
-//   - ForwardLocal(0, "127.0.0.1", echoPort) → Tunnel with a real local addr.
+//   - ForwardLocal(0, "127.0.0.1", "127.0.0.1", echoPort, nil) → Tunnel with a
+//     real local addr.
 //   - A client Dial to the tunnel's LocalAddr is accepted + piped to the echo
 //     service via (*ssh.Client).Dial over the SSH connection (direct-tcpip).
 //   - Write "hi"; read the echo → "hi" (end-to-end byte path: client → local
@@ -148,7 +151,7 @@ func TestForwardLocal(t *testing.T) {
 
 	_, echoPort := startEchoService(t)
 
-	tun, err := c.ForwardLocal(0, "127.0.0.1", echoPort)
+	tun, err := c.ForwardLocal(0, "127.0.0.1", "127.0.0.1", echoPort, nil)
 	if err != nil {
 		t.Fatalf("ForwardLocal: %v", err)
 	}
@@ -207,5 +210,137 @@ func TestForwardLocal(t *testing.T) {
 	}
 	if lastDialErr == nil {
 		t.Fatal("post-Close Dial to LocalAddr succeeded, want refused (listener not closed)")
+	}
+}
+
+// pickLocalNonLoopbackIP returns this host's first non-loopback IPv4 address,
+// skipping the test when none exists (bare CI containers often have only
+// 127.0.0.1).
+func pickLocalNonLoopbackIP(t *testing.T) net.IP {
+	t.Helper()
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
+			return ipn.IP
+		}
+	}
+	t.Skip("no non-loopback IPv4 on this host")
+	return nil
+}
+
+// TestForwardLocalListenHostBindsNonLoopback proves the listenHost parameter
+// actually drives the bind address: forwarding with the host's non-loopback
+// IPv4 must yield a Tunnel whose LocalAddr is that IP (not 127.0.0.1), and a
+// client dialing that address round-trips bytes through the tunnel (real TCP
+// path, not just the addr string). Bind/dial failure against an address the
+// host owns but the environment restricts (firewall, address dropped) is a
+// skip — the environment cannot exercise this case, the code path is the same
+// as the loopback one.
+func TestForwardLocalListenHostBindsNonLoopback(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	_, echoPort := startEchoService(t)
+
+	ip := pickLocalNonLoopbackIP(t)
+	tun, err := c.ForwardLocal(0, ip.String(), "127.0.0.1", echoPort, nil)
+	if err != nil {
+		t.Skipf("bind %s unavailable on this host: %v", ip, err)
+	}
+	defer tun.Close()
+	if got := tun.LocalAddr(); !strings.HasPrefix(got, "["+ip.String()+"]") && !strings.HasPrefix(got, ip.String()+":") {
+		t.Fatalf("LocalAddr = %q, want bind on %s", got, ip)
+	}
+
+	// Real byte path through the non-loopback bind: dial LocalAddr, echo.
+	conn, err := net.DialTimeout("tcp", tun.LocalAddr(), 3*time.Second)
+	if err != nil {
+		t.Skipf("dial own non-loopback bind %s blocked on this host: %v", tun.LocalAddr(), err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write([]byte("hi")); err != nil {
+		t.Fatalf("write via %s: %v", tun.LocalAddr(), err)
+	}
+	buf := make([]byte, 4)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("read echo via %s: %v", tun.LocalAddr(), err)
+	}
+	if string(buf[:n]) != "hi" {
+		t.Fatalf("echo via %s = %q, want %q", tun.LocalAddr(), buf[:n], "hi")
+	}
+}
+
+// TestForwardLocalActivityHookThrottled proves the onActivity callback is
+// throttled to one real call per activityThrottle window: five sequential
+// connections (each an Accept + reads in BOTH pipe directions = many activity
+// events) within the 30s window must produce exactly ONE callback. The count
+// is deterministic, not race-dependent: the FIRST event (conn1's Accept) runs
+// in the serve goroutine and stores the window timestamp before any handle
+// goroutine exists, so every later event lands inside the window.
+func TestForwardLocalActivityHookThrottled(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	_, echoPort := startEchoService(t)
+
+	var calls atomic.Int32
+	tun, err := c.ForwardLocal(0, "127.0.0.1", "127.0.0.1", echoPort, func() { calls.Add(1) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tun.Close()
+	// 连打 5 条连接(每条 Accept 触发一次活动上报,但 30s 节流内只该有 1 次回调)
+	for i := 0; i < 5; i++ {
+		conn, err := net.DialTimeout("tcp", tun.LocalAddr(), 2*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = conn.Write([]byte("ping\n"))
+		buf := make([]byte, 16)
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, _ = conn.Read(buf)
+		_ = conn.Close()
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("throttle failed: %d callbacks in one 30s window, want 1", n)
+	}
+}
+
+// TestTunnelSetOnActivity proves the post-open setter route (the Plan 35 T5
+// manager-wiring path): a Tunnel opened with nil onActivity gets its callback
+// attached via SetOnActivity after ForwardLocal returns, and a connection
+// round-trip fires exactly one throttled callback through it.
+func TestTunnelSetOnActivity(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	_, echoPort := startEchoService(t)
+
+	tun, err := c.ForwardLocal(0, "127.0.0.1", "127.0.0.1", echoPort, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tun.Close()
+
+	var calls atomic.Int32
+	tun.SetOnActivity(func() { calls.Add(1) })
+
+	conn, err := net.DialTimeout("tcp", tun.LocalAddr(), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = conn.Write([]byte("hi"))
+	buf := make([]byte, 4)
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _ = conn.Read(buf)
+	_ = conn.Close()
+
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("SetOnActivity callback: %d calls in one 30s window, want 1", n)
 	}
 }

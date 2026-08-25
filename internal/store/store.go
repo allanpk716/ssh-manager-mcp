@@ -56,6 +56,10 @@ func (s *Store) SetReadOnly(auditSidecar *os.File) {
 	s.auditSidecar = auditSidecar
 }
 
+// IsReadOnly reports whether this store rejects mutations (offline hydrated
+// cache store). Tunnel control-loop duties 3/4/5 and mirror writes key off it.
+func (s *Store) IsReadOnly() bool { return s.readOnly }
+
 // DefaultStorePath returns the on-disk vault location (program-fixed, spec §3.1/§5.1).
 // SSHMGR_STORE overrides (test/migrate). Falls back to paths pkg (Win
 // C:\ProgramData\ssh-manager\store.db; Unix /var/lib/ssh-manager/store.db).
@@ -483,5 +487,29 @@ CREATE TABLE IF NOT EXISTS host_keys (
   host_port TEXT PRIMARY KEY,
   key_blob BLOB NOT NULL,
   created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS forward_bind_hosts (
+  ip         TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tunnel_orders (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  tunnel_id  TEXT,
+  project_id TEXT,
+  created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  applied_at INTEGER,
+  outcome    TEXT,
+  CHECK ((tunnel_id IS NULL) <> (project_id IS NULL))
+);
+CREATE TABLE IF NOT EXISTS tunnel_registry (
+  tunnel_id    TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL,
+  server_id    TEXT NOT NULL,
+  remote       TEXT NOT NULL,
+  local_addr   TEXT NOT NULL,
+  listen_host  TEXT NOT NULL,
+  opened_at    INTEGER NOT NULL,
+  last_renewed INTEGER NOT NULL
 );
 `

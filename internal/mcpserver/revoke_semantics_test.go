@@ -1,13 +1,17 @@
 package mcpserver
 
-// Disconnect-semantics regression pins (Plan 25). These four facts are
-// documented in docs/agent-access.md 「断连语义（四层）」 and were verified
-// empirically (xcheck 2026-08-16): (1) VerifyToken rejects a revoked token
-// immediately (the serve per-request gate); (2) an ALREADY-OPEN forward tunnel
-// keeps forwarding after revocation — the tunnel is held by the broker's
-// TunnelManager and nothing tears it down on revoke; (3) via the serve HTTP
-// handler, a revoked project's close_port (and any other request) is rejected
-// with 401 BEFORE reaching the tool layer.
+// Disconnect-semantics regression pins (Plan 35 contract). The three facts
+// documented in docs/agent-access.md 「断连语义（四层）」: (1) VerifyToken
+// rejects a revoked token immediately (the serve per-request gate); (2) via
+// the serve HTTP handler, a revoked project's close_port (and any other
+// request) is rejected with 401 BEFORE reaching the tool layer; (3) an
+// ALREADY-OPEN forward is torn down within one control tick (~15s; tests
+// drive runControlTick directly for determinism) — this flips the Plan-25
+// "keeps forwarding" pin (owner decision then, `tunnels kill` CLI was
+// backlog); the owner now has the emergency stop: revoke/disable cascade,
+// `tunnels kill <id>` / `--project`, and bind-whitelist shrink all close
+// tunnels within a tick (Plan 35 spec §1). Background tasks survive
+// revocation unchanged (Plan 32 pin, TestRevokedProjectKeepsBackgroundTaskRunning).
 
 import (
 	"context"
@@ -20,14 +24,18 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/testsshd"
 )
 
-// TestRevokedProjectKeepsOpenTunnelForwarding pins layers 1+3: revocation
-// kills the token gate immediately, but the broker-held tunnel keeps
-// forwarding (no cascade teardown — owner decision, kill CLI is backlog
-// (see docs/backlog.md)).
-func TestRevokedProjectKeepsOpenTunnelForwarding(t *testing.T) {
+// TestRevokedProjectTunnelsTornByControlTick flips the OLD Plan-25 pin
+// ("revoked project's tunnel keeps forwarding — owner decision, kill CLI was
+// backlog"). Plan 35 contract (spec §1): revoke cascades into tunnel teardown
+// within one control tick (~15s; tests drive runControlTick directly for
+// determinism). The HTTP per-request 401 layer above is unchanged (see
+// TestServeHTTPRejectsRevokedTokenPerRequest); background-task survival is
+// unchanged (TestRevokedProjectKeepsBackgroundTaskRunning, Plan 32 pin).
+func TestRevokedProjectTunnelsTornByControlTick(t *testing.T) {
 	st := newStore(t)
 	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
 	defer cleanup()
@@ -38,53 +46,32 @@ func TestRevokedProjectKeepsOpenTunnelForwarding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	echoPort := startEchoListener(t)
-
-	_, mgr, tasks, err := NewServer(st, pid, projID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mgr := NewTunnelManager()
+	mgr.AttachStore(func() *store.Store { return st }, projID)
 	defer mgr.CloseAll()
-	defer tasks.CloseAll()
-	out, err := ForwardForProfile(context.Background(), st, projID, pid, srvID, "127.0.0.1", echoPort, 0, mgr)
+
+	out, err := ForwardForProfile(context.Background(), st, projID, pid, srvID, "127.0.0.1", echoPort, 0, "", mgr)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	probe := func(label string) {
-		t.Helper()
-		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", out.LocalPort), 3*time.Second)
-		if err != nil {
-			t.Fatalf("%s: dial: %v", label, err)
-		}
-		defer c.Close()
-		_ = c.SetDeadline(time.Now().Add(3 * time.Second))
-		_, _ = c.Write([]byte("ping-" + label + "\n"))
-		buf := make([]byte, 128)
-		n, err := c.Read(buf)
-		if err != nil {
-			t.Fatalf("%s: read through tunnel: %v", label, err)
-		}
-		t.Logf("%s: tunnel forwarded %q", label, string(buf[:n]))
-	}
-
-	probe("before-revoke")
 	if p, _ := st.VerifyToken(token); p == nil {
 		t.Fatal("sanity: token must verify before revoke")
 	}
-
 	if err := st.SetProjectStatus(projID, models.ProjectRevoked); err != nil {
 		t.Fatal(err)
 	}
-
-	// Layer 1: the token gate rejects immediately (this is what serve's
-	// per-request verifyToken consults).
 	if p, _ := st.VerifyToken(token); p != nil {
-		t.Fatal("VerifyToken must reject a revoked token immediately")
+		t.Fatal("layer 1: VerifyToken must reject a revoked token immediately")
 	}
-	// Layer 3: the already-open tunnel KEEPS forwarding — pin it.
-	probe("after-revoke")
+	mgr.runControlTick() // deterministic stand-in for the ≤15s tick
+	// layer 3 (flipped): the tunnel is TORN DOWN — port unreachable + mirror row gone
+	if _, derr := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", out.LocalPort), 500*time.Millisecond); derr == nil {
+		t.Fatal("port must be unreachable after revoke+tick")
+	}
+	if has, _ := st.HasTunnelRegistryRow(out.TunnelID); has {
+		t.Fatal("mirror row must be gone after cascade teardown")
+	}
 }
 
 // TestServeHTTPRejectsRevokedTokenPerRequest pins layer 2 end-to-end at the

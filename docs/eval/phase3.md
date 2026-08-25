@@ -186,9 +186,10 @@ tears down the listener AND the backing SSH connection.
 **First stateful broker operation.** A forward holds a long-lived `ssh.Client`
 + local listener, keyed by `tunnel_id` in a `TunnelManager`
 (`internal/mcpserver/tunnels.go`). Lifecycle: `close_port` frees both; a
-background sweeper auto-closes tunnels **~10 min after creation** —
-creation-based, not activity-based (`forwardIdleTimeout`; `Touch` exists but
-has no production caller) — `TunnelManager.CloseAll` on MCP-server shutdown
+background sweeper auto-closes tunnels after **~10 min of inactivity** —
+activity-based (`forwardIdleTimeout`; real traffic advances `lastActivity`
+via the activity hook wired into `Touch` — a busy tunnel survives
+indefinitely) — `TunnelManager.CloseAll` on MCP-server shutdown
 (agent disconnect) reaps every open tunnel so none outlive the broker.
 
 §13 differential conformance (T5): drove `forward_port` + `curl

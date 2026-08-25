@@ -439,9 +439,10 @@ long-lived `ssh.Client` + local listener in the broker process, keyed by
 
 - `close_port(tunnel_id)` tears down BOTH the listener AND the backing SSH
   connection (frees the resource — the broker was holding it open).
-- A background sweeper auto-closes tunnels **~10 min after creation**
-  (`forwardIdleTimeout`; creation-based — `Touch` exists but has no
-  production caller) — defense-in-depth so a forgetful agent can't leak
+- A background sweeper auto-closes tunnels after **~10 min of inactivity**
+  (`forwardIdleTimeout`; activity-based — real traffic advances
+  `lastActivity` via the activity hook wired into `Touch`, so a busy tunnel
+  survives indefinitely) — defense-in-depth so a forgetful agent can't leak
   tunnels indefinitely.
 - On MCP-server shutdown (agent disconnects), `TunnelManager.CloseAll` reaps
   every open tunnel (listener + SSH client) so no resources outlive the broker

@@ -4,11 +4,19 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 )
+
+// activityThrottle bounds how often the onActivity callback actually fires
+// (spec §3): the read path stays lock- and allocation-free — one atomic
+// compare per event, a real callback at most once per window.
+const activityThrottle = 30 * time.Second
 
 // Tunnel is a local TCP listener that forwards each accepted connection to a
 // remote endpoint over an ssh.Client (the `ssh -L` forward). The Tunnel owns
@@ -29,9 +37,38 @@ type Tunnel struct {
 	listener  net.Listener
 	client    *ssh.Client // the long-lived SSH connection the tunnel dials through
 
+	onActivity func()       // nil = no hook; throttled activity signal for the manager's sweeper (spec §3)
+	touchNano  atomic.Int64 // unix-nano of the last REAL callback (0 = never) — the throttle window start
+
 	closeOnce sync.Once
 	closeErr  error
 }
+
+// activity reports tunnel activity, throttled to one real callback per
+// activityThrottle window (spec §3). Races between concurrent pipes can
+// occasionally fire two callbacks at a window edge — harmless, the manager's
+// Touch is idempotent. Hot path is lock- and allocation-free: one atomic
+// load/compare per event, a store + call only when the window opens.
+func (t *Tunnel) activity() {
+	if t.onActivity == nil {
+		return
+	}
+	now := time.Now().UnixNano()
+	if now-t.touchNano.Load() < int64(activityThrottle) {
+		return
+	}
+	t.touchNano.Store(now)
+	t.onActivity()
+}
+
+// SetOnActivity attaches (or, with nil, clears) the activity callback after
+// the tunnel is open. The TunnelManager wiring (Plan 35 T5) uses it to attach
+// its Touch after mgr.Open; the ForwardLocal constructor param route stays
+// for direct callers and tests. Plain assignment, no synchronization: it is
+// meant to run before or between connections — the worst case of a racing
+// swap is one extra or one missed throttled ping, which the idempotent
+// manager Touch absorbs.
+func (t *Tunnel) SetOnActivity(fn func()) { t.onActivity = fn }
 
 // LocalAddr returns the tunnel's local listen address (e.g. "127.0.0.1:54321").
 // Callers (the MCP forward_port tool reports it to the agent; the test dials it
@@ -53,28 +90,36 @@ func (t *Tunnel) Close() error {
 	return t.closeErr
 }
 
-// ForwardLocal opens a local TCP listener on localPort (0 = a free port chosen
-// by the kernel) and forwards each accepted connection to remoteHost:remotePort
-// over the client's SSH connection — the `ssh -L 127.0.0.1:<localPort> →
-// remoteHost:remotePort` semantic. Returns the Tunnel (whose LocalAddr carries
-// the actual bound port; the caller needs it to dial in). The caller keeps the
-// Tunnel alive and closes it when done.
+// ForwardLocal opens a local TCP listener on listenHost:localPort (0 = a free
+// port chosen by the kernel) and forwards each accepted connection to
+// remoteHost:remotePort over the client's SSH connection — the `ssh -L
+// listenHost:<localPort> → remoteHost:remotePort` semantic. Returns the Tunnel
+// (whose LocalAddr carries the actual bound address:port; the caller needs it
+// to dial in). The caller keeps the Tunnel alive and closes it when done.
 //
 // remoteHost:remotePort is resolved FROM THE SSH SERVER'S PERSPECTIVE (so
 // "127.0.0.1" means the server's loopback, the typical case for reaching a
-// service on the remote host). ForwardLocal itself binds the local listener on
-// the broker host's loopback only (the agent reaches it via 127.0.0.1).
-func (c *Client) ForwardLocal(localPort int, remoteHost string, remotePort int) (*Tunnel, error) {
-	addr := fmt.Sprintf("127.0.0.1:%d", localPort)
+// service on the remote host). ForwardLocal binds the local listener on the
+// given listenHost (validated by the caller's gate; loopback by default) —
+// listenHost must be an already-VALIDATED IP literal, the mcpserver gate owns
+// the policy (spec §2); IPv6 bracketing is handled by net.JoinHostPort.
+//
+// onActivity (optional, may be nil) receives throttled activity pings: on each
+// accepted connection and on every read of both pipe directions, at most one
+// REAL callback per activityThrottle window (spec §3). SetOnActivity attaches
+// it post-open instead.
+func (c *Client) ForwardLocal(localPort int, listenHost, remoteHost string, remotePort int, onActivity func()) (*Tunnel, error) {
+	addr := net.JoinHostPort(listenHost, strconv.Itoa(localPort))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("local listen %s: %w", addr, err)
 	}
 	t := &Tunnel{
-		ID:        uuid.NewString(),
-		localAddr: ln.Addr().String(),
-		listener:  ln,
-		client:    c.c,
+		ID:         uuid.NewString(),
+		localAddr:  ln.Addr().String(),
+		listener:   ln,
+		client:     c.c,
+		onActivity: onActivity,
 	}
 	go t.serve(remoteHost, remotePort)
 	return t, nil
@@ -91,6 +136,7 @@ func (t *Tunnel) serve(remoteHost string, remotePort int) {
 		if err != nil {
 			return // listener closed (Close) — exit serve goroutine
 		}
+		t.activity() // new connection = activity (spec §3)
 		go t.handle(local, remote)
 	}
 }
@@ -99,6 +145,22 @@ func (t *Tunnel) serve(remoteHost string, remotePort int) {
 // net.Conn (remote side) — CloseWrite sends EOF without tearing down the read
 // half. Used by handle for directional half-close propagation.
 type closeWriter interface{ CloseWrite() error }
+
+// countingReader wraps one pipe direction's reader so every read that carries
+// bytes reports tunnel activity (spec §3). Only reads with n>0 count — EOF and
+// errors carry no data and are not activity.
+type countingReader struct {
+	r io.Reader
+	t *Tunnel
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	n, err := cr.r.Read(p)
+	if n > 0 {
+		cr.t.activity()
+	}
+	return n, err
+}
 
 // handle pipes one local connection to its remote counterpart over the SSH
 // connection. Both conns are defer-closed; the two io.Copy goroutines run in
@@ -126,14 +188,14 @@ func (t *Tunnel) handle(local net.Conn, remote string) {
 	defer rem.Close()
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(rem, local)
+		_, _ = io.Copy(rem, &countingReader{r: local, t: t}) // local→remote bytes = activity
 		if cw, ok := rem.(closeWriter); ok {
 			_ = cw.CloseWrite() // propagate local EOF toward the remote peer
 		}
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(local, rem)
+		_, _ = io.Copy(local, &countingReader{r: rem, t: t}) // remote→local bytes = activity
 		if cw, ok := local.(closeWriter); ok {
 			_ = cw.CloseWrite() // propagate remote EOF toward the local peer
 		}

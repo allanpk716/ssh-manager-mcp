@@ -206,6 +206,26 @@ service 默认账户：
 
 ---
 
+## 隧道 bind 白名单与 owner 急停（Plan 35）
+
+serve 拓扑下 `forward_port` 的监听缺省绑 **serve 主机的 `127.0.0.1`**——只有 serve 主机自己够得到。NUC10 惯用法：想让 **VLAN 内其他机器**（比如笔记本直接 `curl` serve 主机上开的隧道）使用一条隧道，owner 在 serve 主机预批白名单，agent 开隧道时显式传该地址：
+
+```bash
+# owner（serve 主机 = 权威 vault 所在机器上，一次性）：
+ssh-manager serve bind add 192.0.2.5        # serve 主机的 VLAN IP（IP 字面量 only；
+                                            # hostname / 网段 / 0.0.0.0 一律拒）
+ssh-manager serve bind ls                   # 查看当前白名单
+
+# agent 侧 forward_port 传 listen_host="192.0.2.5" → 隧道监听该地址，
+# VLAN 内机器 curl http://192.0.2.5:<port> 即用。
+```
+
+- **撤回收缩**：`serve bind rm <ip>` 后，绑定该地址的存量隧道 ≤~15s（一个控制 tick）内关闭；环回隧道不受影响。白名单是 per-call 现读的——add 后下一个 `forward_port` 即可用，无需重启 serve。
+- **笔记本恒 loopback**：什么都不用配。serve 主机上的环回隧道笔记本本来就够不到，要跨机用就走上面的白名单路径；笔记本自己以 stdio / 离线 cache 模式开的隧道，绑的是**笔记本自己的**环回地址（离线模式机制性恒 loopback——白名单表不进快照）。
+- **owner 急停**：在权威 vault 所在机器（NUC10）上 `ssh-manager tunnels ls` 看全部在线隧道（serve + 在线 stdio broker 的 registry 镜像，≤45s 新鲜度），`tunnels kill <tunnel_id>` / `tunnels kill --project <name>` 拆（≤~15s 生效）。**离线 cache 客户端的隧道不在此域**——不进 registry、不受 kill 单/级联管辖；那台机离线时要拆隧道，去那台机上杀进程（或等它回连触发 cache 销毁，见「吊销」节）。
+
+---
+
 ## 限制（如实，必读）
 
 1. **在线 only（serve 本身）**：serve 的远程 MCP 走在线——工作机连不上服务器（服务器挂了 / VLAN 断了 / 笔记本带出门）= 该机的 agent **走不了远程 MCP**。但本地若有缓存（见下条），agent 可以切到只读的 `mcp --cache` 兜底。

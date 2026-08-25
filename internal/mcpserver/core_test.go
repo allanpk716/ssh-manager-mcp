@@ -767,7 +767,7 @@ func TestForwardForProfileOpensInProfileServer(t *testing.T) {
 	mgr := NewTunnelManager()
 	defer mgr.CloseAll()
 
-	out, err := ForwardForProfile(context.Background(), st, "proj-test", pid, srvID, "127.0.0.1", echoPort, 0, mgr)
+	out, err := ForwardForProfile(context.Background(), st, "proj-test", pid, srvID, "127.0.0.1", echoPort, 0, "", mgr)
 	if err != nil {
 		t.Fatalf("forward: %v", err)
 	}
@@ -839,7 +839,7 @@ func TestForwardForProfileRejectsOutOfProfile(t *testing.T) {
 	defer mgr.CloseAll()
 
 	const projectID = "proj-test"
-	_, err := ForwardForProfile(context.Background(), st, projectID, pid, b, "127.0.0.1", 8080, 0, mgr)
+	_, err := ForwardForProfile(context.Background(), st, projectID, pid, b, "127.0.0.1", 8080, 0, "", mgr)
 	if !errors.Is(err, ErrNotInProfile) {
 		t.Fatalf("want ErrNotInProfile, got %v", err)
 	}
@@ -882,7 +882,7 @@ func TestForwardForProfileNoCredential(t *testing.T) {
 	defer mgr.CloseAll()
 
 	const projectID = "proj-test"
-	_, err = ForwardForProfile(context.Background(), st, projectID, pid, srvID, "127.0.0.1", 8080, 0, mgr)
+	_, err = ForwardForProfile(context.Background(), st, projectID, pid, srvID, "127.0.0.1", 8080, 0, "", mgr)
 	if !errors.Is(err, vault.ErrNoCredential) {
 		t.Fatalf("want vault.ErrNoCredential, got %v", err)
 	}
@@ -924,7 +924,7 @@ func TestCloseForwardTearsDown(t *testing.T) {
 	mgr := NewTunnelManager()
 	defer mgr.CloseAll()
 
-	out, err := ForwardForProfile(context.Background(), st, "proj-test", pid, srvID, "127.0.0.1", echoPort, 0, mgr)
+	out, err := ForwardForProfile(context.Background(), st, "proj-test", pid, srvID, "127.0.0.1", echoPort, 0, "", mgr)
 	if err != nil {
 		t.Fatalf("forward: %v", err)
 	}
@@ -1017,7 +1017,7 @@ func TestTunnelManagerSweepIdleReapsStaleTunnels(t *testing.T) {
 	mgr := NewTunnelManager()
 	defer mgr.CloseAll()
 
-	out, err := ForwardForProfile(context.Background(), st, "proj-test", pid, srvID, "127.0.0.1", echoPort, 0, mgr)
+	out, err := ForwardForProfile(context.Background(), st, "proj-test", pid, srvID, "127.0.0.1", echoPort, 0, "", mgr)
 	if err != nil {
 		t.Fatalf("forward: %v", err)
 	}
@@ -1057,7 +1057,7 @@ func TestForwardRejectsMaskedLiteral(t *testing.T) {
 	mgr := NewTunnelManager()
 
 	for _, rh := range []string{"hidden", "Hidden", "HIDDEN", "hidden.", " Hidden"} {
-		_, err := ForwardForProfile(context.Background(), st, "proj", pid, a, rh, 8080, 0, mgr)
+		_, err := ForwardForProfile(context.Background(), st, "proj", pid, a, rh, 8080, 0, "", mgr)
 		if err == nil {
 			t.Fatalf("remoteHost %q must be rejected", rh)
 		}
@@ -1161,7 +1161,7 @@ func TestErrorBranchesNeverLeakHost(t *testing.T) {
 	_, err = UploadContentForProfile(context.Background(), st, "proj", pid, "bogus-id", "data", "/x", "", 1<<20)
 	assertBranch(t, err, "not in your profile")
 	assertNoLeak(t, err, vh)
-	_, err = ForwardForProfile(context.Background(), st, "proj", pid, "bogus-id", "127.0.0.1", 80, 0, mgr)
+	_, err = ForwardForProfile(context.Background(), st, "proj", pid, "bogus-id", "127.0.0.1", 80, 0, "", mgr)
 	assertBranch(t, err, "not in your profile")
 	assertNoLeak(t, err, vh)
 
@@ -1198,13 +1198,13 @@ func TestErrorBranchesNeverLeakHost(t *testing.T) {
 	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, unreach, "true", false, 2*time.Second)
 	assertBranch(t, err, "ssh dial:")
 	assertNoLeak(t, err, "127.0.0.1")
-	_, err = ForwardForProfile(context.Background(), st, "proj", pid, unreach, "10.255.255.1", 65001, 0, mgr)
+	_, err = ForwardForProfile(context.Background(), st, "proj", pid, unreach, "10.255.255.1", 65001, 0, "", mgr)
 	assertBranch(t, err, "ssh dial:")
 	assertNoLeak(t, err, "127.0.0.1")
 
 	// forward hidden guard (Task 4) — fires pre-connect; the guard text names
 	// the masked literal, never the vault host.
-	_, err = ForwardForProfile(context.Background(), st, "proj", pid, granted, "hidden", 80, 0, mgr)
+	_, err = ForwardForProfile(context.Background(), st, "proj", pid, granted, "hidden", 80, 0, "", mgr)
 	assertBranch(t, err, "masked-host literal")
 	assertNoLeak(t, err, vh)
 
@@ -1605,5 +1605,295 @@ func TestUploadContentForProfileNoLeakSFTPMidFailure(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no error-status row; rows=%+v", rows)
+	}
+}
+
+// ---- Plan 35 Task 5: listen_host gate (spec §2) ----
+
+// forwardAuditRows reads the audit tail and keeps only Action="forward" rows
+// (newest first — the store's AuditRows order). File-local helper for the gate
+// tests; the repo's existing audit reads inline this loop, but the gate test
+// asserts over a dozen rows and needs the filtered slice.
+func forwardAuditRows(t *testing.T, st *store.Store) []store.AuditRow {
+	t.Helper()
+	rows, err := st.AuditRows(50)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	var out []store.AuditRow
+	for _, r := range rows {
+		if r.Action == "forward" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestForwardListenHostGate pins the listen_host gate's every decision path
+// (spec §2): default = loopback; explicit loopback passes; non-IP literals /
+// wildcards → bind_denied with the agent's input quoted (never whitelist
+// contents); non-loopback not whitelisted → bind_denied with the spec-frozen
+// sentence; canonical-equivalent whitelist hit passes the gate (proven by the
+// failure mode moving from bind_denied to the OS-level bind error); a
+// whitelist read failure on a non-loopback request → status=error, fail
+// closed. Audit: pre-Open failures record plain "host:port", successes record
+// "host:port id=<tunnelID>" (spec §7), with bind_denied as a first-class
+// status.
+func TestForwardListenHostGate(t *testing.T) {
+	st := newStore(t)
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+	projID, _, err0 := st.AddProject("proj", pid)
+	if err0 != nil {
+		t.Fatal(err0)
+	}
+	mgr := NewTunnelManager()
+	mgr.AttachStore(func() *store.Store { return st }, projID) // full production path: Open mirrors into tunnel_registry
+	defer mgr.CloseAll()
+	echo := startEchoListener(t)
+	ctx := context.Background()
+
+	// Whitelisted IPv6 real-bind probe (best-effort half, spec §8 line 4): run
+	// UP FRONT so an unbindable doc-prefix address disables only that half —
+	// t.Skip here would abandon every other assertion below (brief-vs-test
+	// adjustment: flag, not skip).
+	if err := st.AddForwardBindHost("2001:0db8::0001"); err != nil { // stored canonical: 2001:db8::1
+		t.Fatalf("seed whitelist (ipv6): %v", err)
+	}
+	probe, perr := net.Listen("tcp", net.JoinHostPort("2001:db8::1", "0"))
+	canBindV6 := perr == nil
+	if canBindV6 {
+		_ = probe.Close()
+	} else {
+		t.Logf("cannot bind 2001:db8::1 here — the real-bind echo half is disabled (spec §8): %v", perr)
+	}
+
+	// 1. Empty listenHost → loopback default, passes; ListenHost reports the
+	// actual bound host.
+	out1, err := ForwardForProfile(ctx, st, projID, pid, srvID, "127.0.0.1", echo, 0, "", mgr)
+	if err != nil {
+		t.Fatalf("default loopback must pass: %v", err)
+	}
+	if out1.ListenHost != "127.0.0.1" {
+		t.Fatalf("default ListenHost = %q, want 127.0.0.1", out1.ListenHost)
+	}
+	// 2. Explicit loopback → passes.
+	if _, err := ForwardForProfile(ctx, st, projID, pid, srvID, "127.0.0.1", echo, 0, "127.0.0.1", mgr); err != nil {
+		t.Fatalf("explicit loopback must pass: %v", err)
+	}
+
+	// 3. Non-IP / wildcard / zoned values → bind_denied. The error quotes the
+	// agent's own input only — it must never echo whitelist contents.
+	for _, bad := range []string{"example.com", "0.0.0.0", "::", "fe80::1%eth0"} {
+		_, err := ForwardForProfile(ctx, st, projID, pid, srvID, "127.0.0.1", echo, 0, bad, mgr)
+		if err == nil {
+			t.Fatalf("%q must be rejected", bad)
+		}
+		if !strings.Contains(err.Error(), bad) || strings.Contains(err.Error(), "whitelist {") {
+			t.Fatalf("error must quote agent input only: %v", err)
+		}
+	}
+	// ...and which sub-branch each landed on (verbatim spec texts).
+	_, err = ForwardForProfile(ctx, st, projID, pid, srvID, "127.0.0.1", echo, 0, "example.com", mgr)
+	if err == nil || !strings.Contains(err.Error(), "must be a specific IP literal") {
+		t.Fatalf("hostname error: %v", err)
+	}
+	_, err = ForwardForProfile(ctx, st, projID, pid, srvID, "127.0.0.1", echo, 0, "0.0.0.0", mgr)
+	if err == nil || !strings.Contains(err.Error(), "is a wildcard address") {
+		t.Fatalf("wildcard error: %v", err)
+	}
+
+	// 4. Non-loopback, not whitelisted → bind_denied with the spec-frozen sentence.
+	_, err = ForwardForProfile(ctx, st, projID, pid, srvID, "127.0.0.1", echo, 0, "192.0.2.99", mgr)
+	if err == nil || !strings.Contains(err.Error(), "not in the owner-approved bind host whitelist") {
+		t.Fatalf("not-in-whitelist error: %v", err)
+	}
+
+	// 5a. Canonical-equivalent whitelist hit — deterministic half: seed the
+	// whitelist with the v4-mapped spelling (::ffff:192.0.2.99 canonicalizes to
+	// 192.0.2.99) and request the plain dotted form. The gate must PASS (the
+	// OS-level bind of an unassigned TEST-NET address then fails — the changed
+	// failure mode is the proof the gate let it through).
+	if err := st.AddForwardBindHost("::ffff:192.0.2.99"); err != nil {
+		t.Fatalf("seed whitelist: %v", err)
+	}
+	_, err = ForwardForProfile(ctx, st, projID, pid, srvID, "127.0.0.1", echo, 0, "192.0.2.99", mgr)
+	if err == nil {
+		t.Fatal("bind of unassigned 192.0.2.99 must fail at the OS level")
+	}
+	if strings.Contains(err.Error(), "bind host whitelist") {
+		t.Fatalf("whitelisted (canonical-equivalent) request must pass the gate: %v", err)
+	}
+	if !strings.Contains(err.Error(), "local listen 192.0.2.99") {
+		t.Fatalf("want the OS bind failure naming the requested host: %v", err)
+	}
+
+	// 5b. Whitelisted IPv6 real-bind echo (the flag-gated half): where the host
+	// can actually bind the address, ForwardOutput.ListenHost reports the bound
+	// host back.
+	if canBindV6 {
+		out5, err := ForwardForProfile(ctx, st, projID, pid, srvID, "127.0.0.1", echo, 0, "2001:db8::1", mgr)
+		if err != nil {
+			t.Fatalf("whitelisted IPv6 forward: %v", err)
+		}
+		if out5.ListenHost != "2001:db8::1" {
+			t.Fatalf("ListenHost = %q, want 2001:db8::1", out5.ListenHost)
+		}
+		mgr.Close(out5.TunnelID)
+	}
+
+	// 6. Whitelist read failure on a non-loopback request → status=error, fail
+	// closed (spec §2): a DB read failure must not open a non-loopback bind.
+	if err := st.ExecForTest(`DROP TABLE forward_bind_hosts`); err != nil {
+		t.Fatalf("drop forward_bind_hosts: %v", err)
+	}
+	_, err = ForwardForProfile(ctx, st, projID, pid, srvID, "127.0.0.1", echo, 0, "192.0.2.99", mgr)
+	if err == nil || !strings.Contains(err.Error(), "cannot read bind host whitelist, refusing non-loopback listen_host") {
+		t.Fatalf("read-failure error: %v", err)
+	}
+
+	// 7. Audit assertions (spec §7): exact status tallies; pre-Open failure
+	// rows carry plain "host:port", the ok rows carry " id=<tunnelID>".
+	rows := forwardAuditRows(t, st)
+	var bindDenied, errRows, okRows int
+	var okCmd string
+	plainCmd := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", echo))
+	for _, r := range rows {
+		switch r.Status {
+		case "bind_denied":
+			bindDenied++
+			if r.Command != plainCmd {
+				t.Fatalf("bind_denied row Command = %q, want plain %q (no id before Open)", r.Command, plainCmd)
+			}
+		case "error":
+			errRows++
+			if strings.Contains(r.Command, " id=") {
+				t.Fatalf("pre-Open error row must not carry an id: %+v", r)
+			}
+		case "ok":
+			okRows++
+			if !strings.Contains(r.Command, " id=") {
+				t.Fatalf("ok row Command must carry id=: %+v", r)
+			}
+			okCmd = r.Command
+		}
+	}
+	if bindDenied != 7 { // 4 bad values + 1 not-in-whitelist + 2 branch re-probes
+		t.Fatalf("bind_denied rows = %d, want 7", bindDenied)
+	}
+	if errRows != 2 { // 5a OS bind failure + 6 read failure
+		t.Fatalf("error rows = %d, want 2", errRows)
+	}
+	wantOK := 2 // steps 1 + 2
+	if canBindV6 {
+		wantOK = 3 // + the 5b whitelisted IPv6 open
+	}
+	if okRows != wantOK {
+		t.Fatalf("ok rows = %d, want %d", okRows, wantOK)
+	}
+	if !strings.Contains(okCmd, " id=") {
+		t.Fatalf("ok row Command = %q, want it to carry a tunnel id", okCmd)
+	}
+	var sawID bool
+	for _, r := range rows {
+		if r.Status == "ok" && strings.Contains(r.Command, " id="+out1.TunnelID) {
+			sawID = true
+		}
+	}
+	if !sawID {
+		t.Fatalf("no ok row carries id=%s (the step-1 tunnel); rows=%+v", out1.TunnelID, rows)
+	}
+}
+
+// TestForwardGateOrdering pins WHERE the listen_host gate sits in the guard
+// chain (spec §2): after the profile gate and the masked-host guard, before
+// GetServer. Pure gate paths — no sshd, no connect, no credential needed
+// (every asserted branch returns before any of those run).
+func TestForwardGateOrdering(t *testing.T) {
+	dir := t.TempDir()
+	st := newStoreAt(t, dir+"/t.db") // explicit path: the not-found fixture raw-deletes a row in-place
+	granted, _ := st.AddServer(&models.Server{Name: "g", Host: "vault.example.internal", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	gone, _ := st.AddServer(&models.Server{Name: "gone", Host: "vault.example.internal", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{granted, gone})
+	mgr := NewTunnelManager()
+	defer mgr.CloseAll()
+
+	// Profile gate fires BEFORE the listen_host gate (bogus id + bad host →
+	// "not in your profile", not a listen_host error).
+	_, err := ForwardForProfile(context.Background(), st, "proj", pid, "bogus-id", "127.0.0.1", 80, 0, "0.0.0.0", mgr)
+	if !errors.Is(err, ErrNotInProfile) {
+		t.Fatalf("want ErrNotInProfile before any listen_host policy, got %v", err)
+	}
+
+	// Masked-host guard fires BEFORE the listen_host gate (hidden + wildcard →
+	// the masked-literal text, never a listen_host text).
+	_, err = ForwardForProfile(context.Background(), st, "proj", pid, granted, "hidden", 80, 0, "0.0.0.0", mgr)
+	if err == nil || !strings.Contains(err.Error(), "masked-host literal") || strings.Contains(err.Error(), "listen_host") {
+		t.Fatalf("hidden guard must precede the listen_host gate: %v", err)
+	}
+
+	// The listen_host gate fires BEFORE GetServer (granted id whose server row
+	// vanished + non-IP host → the IP-literal text, not "not found").
+	deleteServerRowRaw(t, dir+"/t.db", gone)
+	_, err = ForwardForProfile(context.Background(), st, "proj", pid, gone, "127.0.0.1", 80, 0, "example.com", mgr)
+	if err == nil || !strings.Contains(err.Error(), "must be a specific IP literal") || strings.Contains(err.Error(), "not found") {
+		t.Fatalf("listen_host gate must precede GetServer: %v", err)
+	}
+}
+
+// TestForwardActivityWiring pins the Touch wiring (spec §3): after Open, the
+// tunnel's onActivity hook refreshes the manager's lastActivity for the
+// REGISTERED id (the closure captures the post-Open id, not a stale one). A
+// lastActivity forced into the past must be refreshed by real traffic through
+// the tunnel — the accept-side activity (first event after a zeroed throttle)
+// fires synchronously in serve, so the echo round-trip makes the refresh
+// deterministic.
+func TestForwardActivityWiring(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	st := newStore(t)
+	srvID := seedRealServer(t, st, "real", addr, hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+	echoPort := startEchoListener(t)
+	mgr := NewTunnelManager()
+	defer mgr.CloseAll()
+
+	out, err := ForwardForProfile(context.Background(), st, "proj-test", pid, srvID, "127.0.0.1", echoPort, 0, "", mgr)
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+
+	// Force the tunnel's lastActivity deep into the past, then push real
+	// traffic through it.
+	mgr.mu.Lock()
+	mgr.tunnels[out.TunnelID].lastActivity = time.Now().Add(-(forwardIdleTimeout + time.Minute))
+	mgr.mu.Unlock()
+
+	conn, err := net.DialTimeout("tcp", mgr.tunnels[out.TunnelID].tunnel.LocalAddr(), 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial tunnel: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+
+	// The accept activity must have run Touch(registered id): lastActivity is
+	// fresh again (and the tunnel therefore no longer sweepable).
+	mgr.mu.Lock()
+	fresh := time.Since(mgr.tunnels[out.TunnelID].lastActivity) < 5*time.Second
+	mgr.mu.Unlock()
+	if !fresh {
+		t.Fatal("traffic through the tunnel did not refresh lastActivity — SetOnActivity/Touch wiring broken (spec §3)")
 	}
 }

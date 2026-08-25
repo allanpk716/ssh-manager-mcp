@@ -95,7 +95,7 @@ psql -h 127.0.0.1 -p <local_port> -U myuser mydb
 **要点**：
 - `remote_host` 是**从服务器视角看**的目标——通常就是 `127.0.0.1`（服务器自己的回环上的服务）。也能转发到服务器**能访问到的**内网其它机器（`remote_host` 填那台的内网 IP）。
 - `forward_port` = `ssh -L`（本地转发）。**不支持** `-R`（远程）/ `-D`（动态 SOCKS）。
-- 隧道会占住一条 SSH 连接，**创建约 10 分钟后被后台自动回收**（按创建时间计，**不看活动量**——持续有流量也会回收）；你或 agent 也可以随时 `close_port` 主动关。
+- 隧道会占住一条 SSH 连接，**空闲约 10 分钟后被后台自动回收**（按活动量计——持续有流量的隧道不会被回收）；你或 agent 也可以随时 `close_port` 主动关。
 - 隧道状态在 broker 进程内——agent / Claude Code 重启后隧道就没了，需要重开。
 
 ---
@@ -168,7 +168,7 @@ ssh-manager projects disable contractor-agent   # token 被拒
 ssh-manager projects enable  contractor-agent   # 恢复，同一张 token 重新有效
 ```
 
-> 断连语义分四层（stdio=下次重连；serve=逐请求即拒；既有隧道不受 revoke 影响且只能重启 broker/等创建后 ~10 分钟回收；离线 cache 须轮换凭据），详见 [agent-access.md](./agent-access.md) 的「断连语义（四层）」一节。
+> 断连语义分四层（stdio=下次重连；serve=逐请求即拒；既有隧道 revoke/disable 后 ~15s 内级联拆除，owner 也可 `tunnels kill` 急停；离线 cache 须轮换凭据），详见 [agent-access.md](./agent-access.md) 的「断连语义（四层）」一节。
 
 ---
 
