@@ -125,6 +125,10 @@ func TestAudit_FiltersAndDefaults(t *testing.T) {
 	if err != nil || len(auditLines(t, out)) != 1 {
 		t.Fatalf("--server raw id (zero existence check): %v %q", err, out.String())
 	}
+	out, err = runAudit(t, "--server", "gpu,srv-gone") // n>1: 逗号拆分(cobra StringSlice CSV)→ 多值 SQL IN
+	if err != nil || len(auditLines(t, out)) != 5 {    // gpu 4 + srv-gone 1
+		t.Fatalf("--server comma-split multi-value IN: %v %q", err, out.String())
+	}
 	out, err = runAudit(t, "--owner")
 	if err != nil || len(auditLines(t, out)) != 1 || !strings.Contains(out.String(), "(owner)") || !strings.Contains(out.String(), "(none)") {
 		t.Fatalf("--owner render: %v %q", err, out.String())

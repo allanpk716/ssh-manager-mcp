@@ -46,6 +46,10 @@ func TestQueryAudit_FiltersAndOrder(t *testing.T) {
 	if rows, err = s.QueryAudit(AuditFilter{ServerIDs: []string{"srvA"}}); err != nil || len(rows) != 2 {
 		t.Fatalf("server filter: %v n=%d", err, len(rows))
 	}
+	// 多值 IN:n>1 占位符形态(strings.Repeat("?,",n) 去尾逗号)——CLI 逗号拆分的下游。
+	if rows, err = s.QueryAudit(AuditFilter{ServerIDs: []string{"srvA", "srvB"}}); err != nil || len(rows) != 3 {
+		t.Fatalf("server multi-value IN: %v n=%d", err, len(rows))
+	}
 	// 已删 server 的历史行:原串直配命中,零存在性校验。
 	if rows, err = s.QueryAudit(AuditFilter{ServerIDs: []string{"srv-deleted-long-ago"}}); err != nil || len(rows) != 0 {
 		t.Fatalf("deleted-entity raw-id filter must be empty-not-error: %v n=%d", err, len(rows))
