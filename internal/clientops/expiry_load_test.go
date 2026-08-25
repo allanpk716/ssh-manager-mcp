@@ -16,10 +16,15 @@ import (
 )
 
 // writeCacheFixture seeds a cache dir with a decryptable cache.bin (encrypted
-// under the in-memory DEK) plus a meta carrying the given anchor state.
-// Carrying-level fix vs the brief: the repo's withDEK returns an EMPTY
-// MemKeyProvider, so the key must be generated + Set here before Get.
-func writeCacheFixture(t *testing.T, dir string, pulledAt int64, anchored bool) {
+// under the in-memory DEK) plus a meta carrying the given anchor state. It
+// RETURNS the provider it installed so tests can hold the ACTIVE seam
+// instance — the DEK-deletion assertion in TestLoad_AgedDestroys must observe
+// the provider QuarantineCache actually deletes through (T2 review
+// Important-1: an outer withDEK before the fixture gets silently overwritten,
+// making the assertion vacuous). Carrying-level fix vs the brief: the repo's
+// withDEK returns an EMPTY MemKeyProvider, so the key must be generated + Set
+// here before Get.
+func writeCacheFixture(t *testing.T, dir string, pulledAt int64, anchored bool) *store.MemKeyProvider {
 	t.Helper()
 	mem := withDEK(t)
 	dek, err := store.GenerateMasterKey()
@@ -39,6 +44,7 @@ func writeCacheFixture(t *testing.T, dir string, pulledAt int64, anchored bool) 
 	if err := writeMetaFile(t, dir, pulledAt, anchored); err != nil {
 		t.Fatal(err)
 	}
+	return mem
 }
 
 func writeMetaFile(t *testing.T, dir string, pulledAt int64, anchored bool) error {
@@ -152,8 +158,7 @@ func TestLoad_AgedDestroys(t *testing.T) {
 	t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "1h")
 	dir := t.TempDir()
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
-	mem := withDEK(t)
-	writeCacheFixture(t, dir, time.Now().Add(-2*time.Hour).Unix(), true)
+	mem := writeCacheFixture(t, dir, time.Now().Add(-2*time.Hour).Unix(), true)
 
 	_, err := LoadCacheSnapshot()
 	if err == nil {
