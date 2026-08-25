@@ -224,6 +224,8 @@ ssh-manager serve bind ls                   # 查看当前白名单
 - **笔记本恒 loopback**：什么都不用配。serve 主机上的环回隧道笔记本本来就够不到，要跨机用就走上面的白名单路径；笔记本自己以 stdio / 离线 cache 模式开的隧道，绑的是**笔记本自己的**环回地址（离线模式机制性恒 loopback——白名单表不进快照）。
 - **owner 急停**：在权威 vault 所在机器（NUC10）上 `ssh-manager tunnels ls` 看全部在线隧道（serve + 在线 stdio broker 的 registry 镜像，≤45s 新鲜度），`tunnels kill <tunnel_id>` / `tunnels kill --project <name>` 拆（≤~15s 生效）。**离线 cache 客户端的隧道不在此域**——不进 registry、不受 kill 单/级联管辖；那台机离线时要拆隧道，去那台机上杀进程（或等它回连触发 cache 销毁，见「吊销」节）。
 
+**审计取证去哪台机跑（Plan 36）**：`ssh-manager audit` 读的是**本机** vault——serve 拓扑下 agent 的动作审计行落在**权威 broker 的 vault** 里；要看全量 agent 历史，在 broker 机器（如 NUC10）上跑 `ssh-manager audit`。
+
 ---
 
 ## 限制（如实，必读）

@@ -100,13 +100,23 @@ ssh-manager projects add my-agent --profile team-a
 
 Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the ten SSH tools, scoped to the `team-a` profile's servers.
 
-**Other commands:** `servers ls` / `servers rm`, `profiles ls`, `projects ls`, `gc` (find/delete orphan credential rows — dry-run by default), `lock`, `clear` (role teardown — wipes the machine back to first-run), `doctor` (side-effect-free local self-check — prints a PASS/WARN/FAIL report; exit `0` = no FAIL findings, `1` = at least one FAIL), `version`. Tunnel governance (owner, on the machine holding the vault): `serve bind add/rm/ls <ip>` (pre-approve non-loopback `forward_port` listen hosts — IP literals only; removal shrinks existing tunnels within ~15s) and `tunnels ls` / `tunnels kill <tunnel_id>` / `tunnels kill --project <name>` (emergency stop for live tunnels — teardown within one ~15s control tick; `kill` is surgical and does not revoke the token, `--project` only tears down what exists now — use `projects disable/revoke` to stop re-opening).
+**Other commands:** `servers ls` / `servers rm`, `profiles ls`, `projects ls`, `gc` (find/delete orphan credential rows — dry-run by default), `lock`, `clear` (role teardown — wipes the machine back to first-run), `doctor` (side-effect-free local self-check — prints a PASS/WARN/FAIL report; exit `0` = no FAIL findings, `1` = at least one FAIL), `version`. Tunnel governance (owner, on the machine holding the vault): `serve bind add/rm/ls <ip>` (pre-approve non-loopback `forward_port` listen hosts — IP literals only; removal shrinks existing tunnels within ~15s) and `tunnels ls` / `tunnels kill <tunnel_id>` / `tunnels kill --project <name>` (emergency stop for live tunnels — teardown within one ~15s control tick; `kill` is surgical and does not revoke the token, `--project` only tears down what exists now — use `projects disable/revoke` to stop re-opening). Audit forensics (owner, on the machine holding the vault): `audit` reads the vault audit log, newest first (owner-only) — `--since 30m|7d|RFC3339|date`, `--server/--project <name|id>`, `--owner`, `--action/--status`, `--limit` (0 = all), `--json` for JSONL.
 
 **Owner access** (you, not the agent) — full access to every server using the stored creds directly:
 ```bash
 ssh-manager ssh gpu nvidia-smi          # run ONE command (single, non-interactive)
 ```
 The owner path runs a **single non-interactive command** (connect + exec share one 120-second deadline; output is uncapped; a non-zero remote exit makes the CLI exit non-zero (the code value appears in the error message)). No command → explicit error. Interactive shells are intentionally not provided — for a terminal, use your own SSH client with credentials you already hold or provision separately (they may live only in this vault).
+
+```bash
+# Audit forensics — what every agent (and owner) did, newest first
+ssh-manager audit --since 24h --project my-agent --status error
+ssh-manager audit --json --limit 0 > audit.jsonl   # nine fields, sidecar-compatible
+```
+
+Known filter values: `action` = `exec` / `download` / `upload` / `upload-content` / `forward` / `close-forward` / `exec-bg-start` / `exec-bg-end` + owner-side `project.rotate` / `project.disable` / `project.enable` / `project.revoke` / `project.delete`; `status` = `ok` / `error` / `timeout` / `cancelled` / `denied` / `auth_error` / `hostkey_mismatch` / `connect_error` / `no_credential` / `no_sudo` / `bind_denied`. The sets evolve across versions; unknown filter values silently match nothing (empty result, never an error).
+
+Human-mode output notes: the server / project columns render four ways — the entity's name, `(none)` (no server context, e.g. project-level owner actions), `(owner)` (no project = an owner action), or `id…(deleted)` for a row that has outlived its entity. Dynamic text (commands, entity names) is escape-notated for the terminal: control / invisible characters render as `\n`, `\x1b`, `\u202e`-style sequences, and a literal backslash becomes `\\` (the notation is reversible); seeing a bidi escape such as `\u202e` means the original command carried a direction override — don't trust the visual order of that line. `exit=0` is ambiguous by design: a failure that never produced an exit code (connect-time) and a command that ran and exited 0 both display `exit=0` — read the `status` column to tell them apart. `--limit 0` prints a stderr warning that `audit_log` has no auto-cleanup and the output may be large; when rows are truncated, stderr gets `showing first N rows (more exist) — use --limit 0 for full output` (JSON mode emits rows only, no stderr chatter).
 
 ---
 

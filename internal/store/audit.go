@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -26,17 +28,7 @@ func (s *Store) WriteAudit(r AuditRow) error {
 		}
 		// Append a JSONL line to the sidecar; never touch s.db. Offline audit is per-machine
 		// and is NOT auto-merged back (single-direction, zero-merge — a grilled-in constraint).
-		rec := map[string]any{
-			"ts":          r.TS.Unix(),
-			"project_id":  r.ProjectID,
-			"server_id":   r.ServerID,
-			"action":      r.Action,
-			"command":     r.Command,
-			"sudo":        r.Sudo,
-			"status":      r.Status,
-			"exit_code":   r.ExitCode,
-			"duration_ms": r.DurationMS,
-		}
+		rec := r.JSONMap()
 		b, err := json.Marshal(rec)
 		if err != nil {
 			return err
@@ -71,6 +63,75 @@ func (s *Store) AuditRows(limit int) ([]AuditRow, error) {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanAuditRows(rows)
+}
+
+// AuditFilter narrows QueryAudit. Zero value = all rows, newest first.
+type AuditFilter struct {
+	Since      int64 // unix seconds; 0 = no lower bound
+	ServerIDs  []string
+	ProjectIDs []string
+	OwnerOnly  bool // only rows with an empty project_id (owner actions)
+	Actions    []string
+	Statuses   []string
+	Limit      int // rows to return; 0 = unlimited; negative = error
+}
+
+// QueryAudit returns audit rows newest-first (ORDER BY id DESC — the
+// AUTOINCREMENT pk IS the insertion order). Values go through placeholders
+// exclusively; only the placeholder count is ever concatenated into SQL.
+// Filter semantics are zero-existence-check by design: a value that matches
+// nothing yields an empty result, never an error, so history rows of deleted
+// entities stay reachable by their old ids (spec §1).
+func (s *Store) QueryAudit(f AuditFilter) ([]AuditRow, error) {
+	if f.Limit < 0 {
+		// SQLite treats LIMIT -1 as UNLIMITED — never let a negative value
+		// silently become a full scan (spec §2 second gate).
+		return nil, fmt.Errorf("limit must be >= 0")
+	}
+	var conds []string
+	var args []any
+	if f.Since != 0 {
+		conds = append(conds, "ts >= ?")
+		args = append(args, f.Since)
+	}
+	in := func(col string, vals []string) {
+		if len(vals) == 0 {
+			return
+		}
+		ph := strings.Repeat("?,", len(vals))
+		conds = append(conds, col+" IN ("+ph[:len(ph)-1]+")")
+		for _, v := range vals {
+			args = append(args, v)
+		}
+	}
+	in("server_id", f.ServerIDs)
+	in("project_id", f.ProjectIDs)
+	in("action", f.Actions)
+	in("status", f.Statuses)
+	if f.OwnerOnly {
+		conds = append(conds, "(project_id IS NULL OR project_id = '')")
+	}
+	q := "SELECT ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms FROM audit_log"
+	if len(conds) > 0 {
+		q += " WHERE " + strings.Join(conds, " AND ")
+	}
+	q += " ORDER BY id DESC"
+	if f.Limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, f.Limit)
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAuditRows(rows)
+}
+
+// scanAuditRows is the shared row→AuditRow scan (extracted from AuditRows so
+// both read paths stay byte-identical in interpretation).
+func scanAuditRows(rows *sql.Rows) ([]AuditRow, error) {
 	var out []AuditRow
 	for rows.Next() {
 		var r AuditRow
@@ -93,4 +154,23 @@ func (s *Store) AuditRows(limit int) ([]AuditRow, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// JSONMap is the single nine-field map construction shared by the offline
+// sidecar (WriteAudit read-only branch) and the owner-facing `audit --json`
+// output — one construction, byte-identical encoding in both consumers
+// (json.Marshal key order for maps is lexicographic). Zero values are written
+// as-is: no null, no omitempty (spec §3).
+func (r AuditRow) JSONMap() map[string]any {
+	return map[string]any{
+		"ts":          r.TS.Unix(),
+		"project_id":  r.ProjectID,
+		"server_id":   r.ServerID,
+		"action":      r.Action,
+		"command":     r.Command,
+		"sudo":        r.Sudo,
+		"status":      r.Status,
+		"exit_code":   r.ExitCode,
+		"duration_ms": r.DurationMS,
+	}
 }
