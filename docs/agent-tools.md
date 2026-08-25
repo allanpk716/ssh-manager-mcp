@@ -175,15 +175,23 @@ web UI、metrics 端口。
 
 - 参数：`server_id`（SSH 入口机）+ `remote_host` / `remote_port`——
   **从服务器视角**写转发目标（够服务器自己的回环服务就填 `127.0.0.1` + 该
-  服务端口）；`local_port` 可省（broker 挑空闲口）。
+  服务端口）；`local_port` 可省（broker 挑空闲口）；`listen_host` 可省
+  （缺省 `127.0.0.1`）。
+- **`listen_host`（可选）**：转发监听绑定的地址。缺省/环回 = 永远允许；要绑
+  **非环回**地址（如让 VLAN 内其他机器用这条隧道）必须 owner 预批白名单
+  （`ssh-manager serve bind add <ip>`，owner 侧操作）——传白名单外的地址
+  **直接拒**（错误不会告诉你白名单里有什么，读失败也拒）。返回的
+  `listen_host` 字段回显实际绑定地址。
 - 返回 `tunnel_id` + `local_port`：转发**监听在 broker 所在机器的
-  `127.0.0.1:<local_port>`**——stdio 本机部署就是你脚下的机器，直接
-  `curl http://127.0.0.1:<local_port>`；远程 serve 部署则是 **serve 主机**上
-  的 127.0.0.1，你从别的机器够不到它。
+  `<listen_host>:<local_port>`**（缺省 `127.0.0.1`）——stdio 本机部署就是你
+  脚下的机器，直接 `curl http://127.0.0.1:<local_port>`；远程 serve 部署则是
+  **serve 主机**上的监听，你从别的机器够不到它（除非 owner 白名单放行了
+  serve 主机的 VLAN 地址、且你传了该地址作 `listen_host`）。
 - 这是唯一**有状态**的工具：broker 会为隧道**全程持有一条 SSH 连接**。
-  创建后 **~10 分钟自动回收**（按创建时间算、**不看流量**——持续在用的隧道
-  到点也收；扫描周期 1 分钟，实际 10–11 分钟内收）。**用完主动 `close_port`**，
-  别等回收。
+  **真空闲 ~10 分钟自动回收**（按**活动**算——隧道上有真实流量就续命，
+  扫描周期 1 分钟，实际 10–11 分钟内收）；owner 侧也可随时 `tunnels kill`
+  拆它（revoke/disable 后 ~15s 内级联拆除，属预期——端口随即不可达）。
+  **用完主动 `close_port`**，别等回收。
 
 ### close_port
 
@@ -191,12 +199,14 @@ web UI、metrics 端口。
 连接（broker 一直替你持有，这是释放资源的唯一途径）。不需要 server_id：
 tunnel_id 是绑定在 broker 进程上的不透明句柄。
 
-- 成功返回 `closed`；id 未知（已关过/已被 ~10 分钟回收器收走/从未开过）报
+- 成功返回 `closed`；id 未知（已关过/已被 ~10 分钟空闲回收器收走/被 owner
+  `tunnels kill` 拆过/从未开过）报
   `no open tunnel with id <id>`——**正常现象**，需要就重开 forward_port。
 - **serve 模式下 401 = token 已失效**（被 owner 轮换/禁用/吊销）：HTTP 中间件
   在请求到达工具层之前就拒了，**任何**后续工具调用都会 401——报告 owner，
-  **别**重试开新隧道。注意：**已经开着的隧道在 token 吊销后仍会继续转发**
-  （broker 不会级联拆它），但你已经管不了它了。
+  **别**重试开新隧道。注意：**已经开着的隧道会在 token 吊销/禁用后 ~15s 内
+  被级联拆除**（owner 侧也有 `tunnels kill` 急停）——端口随后不可达属预期，
+  不是你这边出了问题。
 
 ### exec_background
 
@@ -267,7 +277,7 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
 | `host key mismatch: possible MITM, connection rejected` | 服务器 host key 和首次记录的不一致——可能是中间人（TOFU fail-closed） | **报告 owner 核实**，**绝对别**尝试绕过（没有任何"跳过检查"参数） |
 | `ssh dial: connect failed: connection refused`（等分类短语） | 连不上目标机（地址细节已按可见性边界清洗） | 核对 server_id 是否正确；网络问题报告 owner |
 | `sudo not configured for server <name> (call list_servers: has_sudo tells you)` | `sudo=true` 但该机 `has_sudo=false` | 回 `list_servers` 核对；确实需要提权就报告 owner 配 sudo 凭据 |
-| `no open tunnel with id <id>` | 隧道已关/已被 ~10 分钟自动回收/从未开过 | 正常现象；需要转发就重开 `forward_port` |
+| `no open tunnel with id <id>` | 隧道已关/已被 ~10 分钟**空闲**回收/被 owner `tunnels kill` 拆除/revoke-disable 级联拆除/从未开过 | 正常现象；需要转发就重开 `forward_port` |
 | `background task limit (32) reached — wait for a running task to finish or call exec_stop` | 后台任务满员：该 project 已有 32 个任务且全在运行（完成态会被驱逐腾位，全运行态才拒绝） | 等一个运行中任务自然结束，或对不要的任务调 `exec_stop`，再重试 `exec_background` |
 | `unknown task_id — it may never have existed, expired after the retention window (1h), been evicted for capacity (32-task limit), or the broker restarted; task records are in-process only` | task_id 失效（三因 + 从未存在）：完成超 ~1h 保留期过期 / 32 满员时被驱逐 / **broker 重启**（任务表纯进程内，重启即全失） | broker 重启 = 在跑任务全死，重新安排活；过期/驱逐的按需重跑命令；失效 id 别反复重试 |
 | `file <path> (<N> bytes) exceeds upload cap <cap> — refused before transfer` | 单文件严格大于 1 MiB，传输前被拒（零字节移动） | 按错误里的 size/cap **拆分或压缩**后重传 |
@@ -333,7 +343,9 @@ HEAD，后续重构以符号名为准）：
 | upload 目录递归 + 远端父目录自动创建（MkdirAll parent） | `internal/mcpserver/types.go:52-53`；`internal/mcpserver/core.go:381-389` |
 | forward 只支持本地 -L 语义；监听 broker 所在机器的 127.0.0.1:local_port；remote_host 从服务器视角 | `internal/mcpserver/types.go:63-84`；`internal/mcpserver/server.go:133` |
 | local_port 省略/0 = broker 挑空闲端口 | `internal/mcpserver/types.go:72` |
-| 隧道 ~10 分钟自动回收、**按创建时间非流量**（持续在用也收）；扫描周期 1 分钟（实际 10–11 分钟内） | `internal/mcpserver/tunnels.go:10-21`；`internal/mcpserver/types.go:79-80` |
+| 隧道 **真空闲** ~10 分钟自动回收（按活动算：真实流量经 onActivity 钩子推进 lastActivity，持续在用不收）；扫描周期 1 分钟（实际 10–11 分钟内） | `internal/mcpserver/tunnels.go`（forwardIdleTimeout + Touch）；`internal/sshbroker/tunnel.go`（onActivity 30s 节流钩子） |
+| forward_port `listen_host`：缺省/环回恒允许；非环回需 owner `serve bind add` 白名单（IP 字面量 only、规范形比对、读失败 fail-closed 拒）；拒绝文本不披露白名单内容；audit `bind_denied` | `internal/mcpserver/core.go`（ForwardForProfile gate 链）；`internal/cli/serve_bind.go` |
+| revoke/disable → 已开隧道 **≤15s（一个控制 tick）级联拆除**（端口不可达 + 镜像行删）；owner `tunnels kill` / `kill --project` 同域；store 持续故障 ≤~2min 有界关闭 | `internal/mcpserver/tunnels_control.go`（runControlTick / cascadeCheck）；`internal/cli/tunnels.go` |
 | close_port 拆监听 + 背后 SSH 连接（broker 全程持有）；id 未知报 `no open tunnel with id ...` | `internal/mcpserver/tunnels.go:125-142`；`internal/mcpserver/core.go:537-540`；`internal/mcpserver/server.go:151` |
 | 后台缺省/上限 24h + 回显（`clampBgTimeout` → `BgStartOutput.EffectiveTimeoutSeconds`）；无 env/workdir/stdin 参数（自组 `cd /dir && VAR=x cmd`） | `internal/mcpserver/tasks.go:618-627`；`internal/mcpserver/bgtools.go:146-150`；`internal/mcpserver/types.go:106-122` |
 | 32/project 上限（表项 + in-flight 预约都计数）；满员驱逐最旧终态（零审计行）；全 running 拒绝 + 引导文案 | `internal/mcpserver/tasks.go:193-217` |
@@ -343,8 +355,8 @@ HEAD，后续重构以符号名为准）：
 | unknown task_id 文案（从未存在 + 过期/驱逐/重启三因，`ErrBgUnknownTask` 逐字） | `internal/mcpserver/bgtools.go:175` |
 | exec_stop 立即返回触发时刻 status（running）；已终态幂等；kill = 关会话 → 远端 SIGHUP、无信号楼梯、nohup/setsid 进程存活 | `internal/mcpserver/tasks.go:533-547`；`internal/mcpserver/server.go:220` |
 | exec_output / exec_stop 零审计行（纯进程内读，与 list_servers 同级不审计；stop 触发的终态仍由任务侧落 exec-bg-end 生命周期行） | `internal/mcpserver/bgtools.go:177-250`；`internal/mcpserver/core.go:31-75`（list_servers 同无审计） |
-| serve 模式 revoke **不杀**运行中后台任务（活到自然结束或 24h 钳定上限；revoke 后 exec_output/exec_stop 逐请求 401） | `internal/mcpserver/revoke_semantics_test.go:139`；`internal/mcpserver/serve.go:74-81`（Close 只在进程关闭时清） |
-| serve 模式 401 = token 失效（rotate/disable/revoke），HTTP 中间件在工具层之前拒；**已开隧道吊销后继续转发**（不级联拆） | `internal/mcpserver/serve.go:83-96`；`internal/mcpserver/revoke_semantics_test.go:88-130,26-87` |
+| serve 模式 revoke **不杀**运行中后台任务（活到自然结束或 24h 钳定上限；revoke 后 exec_output/exec_stop 逐请求 401；后台任务不在级联域——Plan 32 契约） | `internal/mcpserver/revoke_semantics_test.go`（TestRevokedProjectKeepsBackgroundTaskRunning）；`internal/mcpserver/serve.go`（Close 只在进程关闭时清） |
+| serve 模式 401 = token 失效（rotate/disable/revoke），HTTP 中间件在工具层之前拒；**已开隧道 revoke/disable 后 ≤15s 级联拆除**（Plan 35 翻转；owner `tunnels kill`/白名单收缩同域） | `internal/mcpserver/serve.go:83-96`；`internal/mcpserver/revoke_semantics_test.go`（TestRevokedProjectTunnelsTornByControlTick）；`internal/mcpserver/tunnels_control.go` |
 | stdio 模式 token 无效 → broker 进程起不来（stderr `invalid or unknown token` 后退出） | `internal/mcpserver/run.go:29-35`；`internal/cli/mcp.go:70-73` |
 | 工具报错形态 = IsError=true + 错误文本（非传输层错误） | `internal/mcpserver/server.go:83-89` |
 | broker 启动检测散落 SSH 凭据 → stderr `WARNING: ssh credential files detected`（仅本机 stdio 模式） | `internal/cli/mcp.go:63-67`；另见 docs/agent-access.md「隔离与排错」 |
