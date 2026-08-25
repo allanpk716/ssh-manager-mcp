@@ -181,7 +181,12 @@ func atomicWriteUnique(path string, blob []byte) error {
 
 type cacheMeta struct {
 	URL      string `json:"url"`
-	PulledAt int64  `json:"pulled_at"` // unix seconds of the local pull
+	PulledAt int64  `json:"pulled_at"` // pull time: server-clock anchored (ServerAnchored=true) or local clock (false)
+	// ServerAnchored records whether PulledAt came from a pinned server Date
+	// that passed the skew gate (Plan 37 §2.4). No omitempty: B-off pulls
+	// serialize an explicit false; a legacy meta without the field reads as
+	// the zero value false — which is exactly the provenance semantics.
+	ServerAnchored bool `json:"server_anchored"`
 }
 
 // CacheCred persists the pull credential (cache.auth.json) so `mcp --cache` can
@@ -250,10 +255,64 @@ func WriteCacheCred(cred *CacheCred) error {
 
 // LoadCacheSnapshot reads + DEK-decrypts + unmarshals the cache. Shared by `cache status` and
 // `mcp --cache`. Returns an error if the cache is absent / corrupt / the DEK is missing.
+//
+// Plan 37 §3: with SSHMGR_CACHE_MAX_OFFLINE set, three gates run BEFORE the
+// DEK is even touched (meta is plaintext): usable-anchor, provenance, and
+// expiry/rollback. Destruction happens only on the expiry gate, only after a
+// re-check confirms the anchor did not just advance (destructive-race guard).
 func LoadCacheSnapshot() (*store.Snapshot, error) {
-	_, bin, _, _, err := CachePaths()
+	_, bin, metaPath, _, err := CachePaths()
 	if err != nil {
 		return nil, err
+	}
+	maxOffline, err := cacheMaxOffline()
+	if err != nil {
+		return nil, err
+	}
+	if maxOffline > 0 {
+		meta, merr := readCacheMeta(metaPath)
+		if merr != nil {
+			// §3.2: no usable anchor — refuse, never destroy (includes the
+			// never-pulled first run; a fresh machine has no meta by design).
+			return nil, fmt.Errorf("SSHMGR_CACHE_MAX_OFFLINE is set but cache.meta.json is missing or corrupt (or this machine never pulled) — refusing cache (no time anchor); run cache pull")
+		}
+		if !meta.ServerAnchored {
+			// §3.3 provenance gate: a local-clock anchor never passed any gate.
+			return nil, fmt.Errorf("cache.meta.json has no server-anchored time (pulled while SSHMGR_CACHE_MAX_OFFLINE was unset or by an older client) — refusing cache; run cache pull to establish a server time anchor")
+		}
+		anchorT := time.Unix(meta.PulledAt, 0)
+		now := time.Now()
+		if now.Sub(anchorT) > maxOffline {
+			if expiryTestHooks.afterAgeCheck != nil {
+				expiryTestHooks.afterAgeCheck()
+			}
+			// §3.4 re-check: destruction requires positive expiry evidence AND
+			// confirmation. Re-read the anchor right before destroying.
+			meta2, rerr := readCacheMeta(metaPath)
+			if rerr != nil {
+				return nil, fmt.Errorf("cache expiry re-check failed (%v) — refusing cache; run cache pull", rerr)
+			}
+			if expiryTestHooks.afterRecheck != nil {
+				expiryTestHooks.afterRecheck()
+			}
+			if meta2.PulledAt > meta.PulledAt && meta2.ServerAnchored {
+				// A concurrent trusted pull just re-anchored: abort destruction
+				// and judge again from the fresh anchor.
+				return LoadCacheSnapshot()
+			}
+			_, qerr := QuarantineCache(expiryReason)
+			if qerr == nil {
+				qerr = ErrCacheQuarantined
+			}
+			return nil, fmt.Errorf("%w — cache snapshot expired (offline %s > cap %s) — snapshot destroyed; run cache pull to re-enroll",
+				qerr, now.Sub(anchorT).Round(time.Second), maxOffline)
+		}
+		if now.Before(anchorT.Add(-cacheSkewTolerance)) {
+			// §3.5 rollback gate: refuse (never destroy) — a clock fault and a
+			// clock attack look identical; the next trusted pull re-anchors.
+			return nil, fmt.Errorf("system clock is behind the snapshot's server time anchor (local %s, anchor %s, tolerance 1h) — refusing cache (clock fault or tampering); fix system time, then run cache pull",
+				now.Format(time.RFC3339), anchorT.Format(time.RFC3339))
+		}
 	}
 	dek, err := loadDEK()
 	if err != nil {
@@ -288,8 +347,19 @@ type PullOpts struct {
 // the spawn-lazy pull (mcp --cache) shares ONE implementation.
 func DoPull(url, token, pin string, o PullOpts) error {
 	code := token
+	// Plan 37 §1/§2: fail-closed env precheck — an invalid cap refuses the
+	// pull before any HTTP (no half-open "pulls but won't load" state).
+	maxOffline, err := cacheMaxOffline()
+	if err != nil {
+		return err
+	}
 	var client *http.Client
 	if pin == "" {
+		if maxOffline > 0 {
+			// Plan 37 §2.1: the time anchor requires a pinned TLS server;
+			// a plaintext response's Date is injectable and cannot anchor.
+			return fmt.Errorf("SSHMGR_CACHE_MAX_OFFLINE is set: refusing plaintext pull — the time anchor requires a pinned TLS server (unset the cap or remove --allow-plaintext)")
+		}
 		if !o.AllowPlain {
 			return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
 				"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
@@ -297,7 +367,10 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		if o.StatusOut != nil {
 			fmt.Fprintf(o.StatusOut, "WARNING: --allow-plaintext set: pulling over unverified HTTP (no TLS pin). /snapshot credentials travel in cleartext.\n")
 		}
-		client = &http.Client{}
+		// Plan 37 §2.0: redirects are never followed, on the plain client too —
+		// a followed 30x would take the response (body AND headers) off the
+		// transport the caller chose (xcheck experiment, 2026-08-25).
+		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	} else {
 		// The device code goes to the Authorization header; the pin is for TLS only.
 		// If the token is "<code>:<pin>", strip so the header carries just the code.
@@ -312,7 +385,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		if err != nil {
 			return err
 		}
-		client = &http.Client{Transport: tr}
+		client = &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	if o.Timeout > 0 {
 		client.Timeout = o.Timeout
@@ -334,6 +407,11 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		io.Copy(io.Discard, res.Body) // keep the keep-alive socket reusable
+		if res.StatusCode >= 300 && res.StatusCode < 400 {
+			// Plan 37 §2.0: CheckRedirect returned ErrUseLastResponse, so a 3xx
+			// surfaces here — never followed, on any client.
+			return fmt.Errorf("pull: server returned %d (redirects are not followed)", res.StatusCode)
+		}
 		if pin != "" && res.StatusCode == 401 {
 			// Plan 34 rev4 §3 — the ONLY quarantine trigger: a PINNED server
 			// rejected the device code (revoked server-side). Plaintext 401s,
@@ -341,7 +419,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 			// QuarantineCache returns nil on a clean/idempotent destruction —
 			// the trigger itself raises the sentinel then; its DEGRADED error
 			// already wraps ErrCacheQuarantined.
-			_, qerr := QuarantineCache("server rejected device code")
+			_, qerr := QuarantineCache(serverRejectedReason)
 			if qerr == nil {
 				qerr = ErrCacheQuarantined
 			}
@@ -352,6 +430,24 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		return err
+	}
+	// Plan 37 §2.2-2.4: B on → the Date header of THIS pinned 200 response is
+	// the time anchor. Missing/malformed Date or |server − local| > 1h refuses
+	// the pull (fail-closed); a passing Date is written into meta.PulledAt with
+	// ServerAnchored=true. B off keeps the legacy local clock + explicit false.
+	pulledAt := time.Now().Unix()
+	anchored := false
+	if maxOffline > 0 {
+		serverTime, perr := http.ParseTime(res.Header.Get("Date"))
+		if perr != nil {
+			return fmt.Errorf("pull succeeded but the response has no valid Date header — refusing to anchor cache time (SSHMGR_CACHE_MAX_OFFLINE requires a trusted server clock)")
+		}
+		if skew := time.Since(serverTime); skew > cacheSkewTolerance || skew < -cacheSkewTolerance {
+			return fmt.Errorf("server clock skew too large (server %s vs local %s, cap 1h) — refusing pull: SSHMGR_CACHE_MAX_OFFLINE depends on an accurate clock; fix system time sync",
+				serverTime.Format(time.RFC3339), time.Now().Format(time.RFC3339))
+		}
+		pulledAt = serverTime.Unix()
+		anchored = true
 	}
 	blob, err := vaultio.EncryptWithKey(dek, body)
 	if err != nil {
@@ -364,17 +460,22 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	if err := os.MkdirAll(filepath.Dir(bin), 0o700); err != nil {
 		return err
 	}
+	// Plan 37 §2.4 commit order, pinned: bin first, meta LAST — a crash can
+	// leave (new bin + old anchor) whose age error is bounded <= 2K, never
+	// (new anchor + old bin). Meta-write failure stays the legacy WARNING.
 	if err := atomicWriteUnique(bin, blob); err != nil {
 		return err
 	}
-	// meta via the same unique-temp atomic write (was a bare os.WriteFile — torn-meta
-	// risk under concurrent pulls, xcheck codex#1). A meta-write failure is a
-	// WARNING, not an error: cache.bin is already atomically replaced at this
-	// point, so the pull itself SUCCEEDED — returning an error would mislabel a
-	// good pull as failed (only the status line's source URL is lost).
-	mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: time.Now().Unix()})
-	if err := atomicWriteUnique(metaPath, mb); err != nil && o.StatusOut != nil {
-		fmt.Fprintf(o.StatusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): %v\n", err)
+	if failNextMetaWriteForTest {
+		failNextMetaWriteForTest = false
+		if o.StatusOut != nil {
+			fmt.Fprintf(o.StatusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): test-injected failure\n")
+		}
+	} else {
+		mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: pulledAt, ServerAnchored: anchored})
+		if werr := atomicWriteUnique(metaPath, mb); werr != nil && o.StatusOut != nil {
+			fmt.Fprintf(o.StatusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): %v\n", werr)
+		}
 	}
 	// Plan 34 rev4 §4: a successful pull supersedes any quarantine attribution —
 	// drop the stale manifest. Best-effort: if this removal fails, the §4 time

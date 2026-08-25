@@ -49,7 +49,17 @@ func QuarantineReport(loadErr error) (string, bool) {
 				// backstop for a failed manifest reset on re-pull (rev4 §4).
 				return "", false
 			}
+			// Plan 37 §4: dispatch on exact reason equality. The expiry
+			// reason gets its own texts; every other reason — the Plan 34
+			// server-rejection one — keeps the legacy texts verbatim.
+			expired := m.Reason == expiryReason
 			switch {
+			case m.State == "done" && len(m.Degraded) > 0 && expired:
+				return fmt.Sprintf("cache expired: offline beyond SSHMGR_CACHE_MAX_OFFLINE [DEGRADED: %v] — snapshot destroyed; run cache pull (the device code is still valid unless revoked)", m.Degraded), true
+			case m.State == "done" && expired:
+				return "cache expired: offline beyond SSHMGR_CACHE_MAX_OFFLINE — snapshot destroyed; run cache pull (the device code is still valid unless revoked)", true
+			case m.State == "started" && expired:
+				return "cache expiry destruction was interrupted — the snapshot may still exist; re-enroll via cache pull, or inspect quarantine/manifest.json", true
 			case m.State == "done" && len(m.Degraded) > 0:
 				return fmt.Sprintf("cache quarantined by server rejection (token revoked?) [DEGRADED: %v] — re-enroll via cache pull with a fresh device code; manual cleanup may be needed", m.Degraded), true
 			case m.State == "done":

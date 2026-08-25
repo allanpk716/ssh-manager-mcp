@@ -553,6 +553,18 @@ ssh-manager cache-tokens revoke laptop
 
 **Lazy 生效，运行中会话不断**：已水合的 store 在内存继续服务至进程退出；隔离在 **spawn 边界**生效（与 revoke 懒语义一致）。
 
+### 离线缓存到龄自废（SSHMGR_CACHE_MAX_OFFLINE）
+
+笔记本侧设 `SSHMGR_CACHE_MAX_OFFLINE=168h`（Go duration 文法，**下限 1h**；unset/`0` = 关）即启用：
+超龄缓存在**下次 load/spawn 边界**销毁（DEK/设备码删除、密文进 `quarantine/`），重新 `cache pull` 即恢复（设备码未被 revoke 就仍有效）。
+
+运维前提与语义边界：
+
+- **首次启用需联网**：provenance 闸会拒绝一切非服务器锚的旧缓存（含本特性之前拉的）——开 B 后第一次使用前先 `cache pull` 建立服务器锚。
+- **两端时钟需基本同步（NTP）**：pull 时 `|server Date − 本地钟| > 1h` 拒拉（skew 闸）；错钟**前跳**超过上限则触发销毁，恢复 = 联网 re-pull。
+- **生产建议 ≥24h**：1h 是测试下限；server 钟落后接近 1h 时小上限的缓存可用期趋零（fail-closed 方向，宁可早废重拉）。
+- **销毁只在下次运行本客户端时发生**：关机失窃的机器不会自动擦盘——盘上材料保留至下次运行（threat-model 残余清单）。
+
 ### 与 export/import 的关系
 
 两套不同的工具，**别混**：

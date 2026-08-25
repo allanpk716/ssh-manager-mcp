@@ -91,6 +91,7 @@ L1+ 模型下**未消除**的威胁：
 - **永离线残余 = 轮换服务器凭据（唯一根治）**：失窃机持有"密文 + 解密钥 + 二进制"三件，**永不离线**的机器上没有任何服务端机制能远程废掉本地解密能力——销毁要"回连"才兑现。根治只有轮换该机接触过的服务器凭据（`servers edit --password/--key`）。
 - **fail-closed 代价（接受）**：pinned 401 **不区分** revoked / unknown（401 reason 字段 revoked/unknown 纯可观测性，供 owner 日志排查，客户端判定不依赖），也**不区分新码打错**——非攻击场景（服务端数据丢失/重建、换码手滑/用过期码）同样触发销毁。恢复 = 用正确码重新 `cache pull`（全量重建）。安全优先的取舍。
 - **失窃响应口径**：cache token 与该设备上的 project token **都要 revoke**（`cache-tokens revoke` 的 CLI 输出附此提示）。销毁清单**不含** project token——`.claude.json` 是用户自己的 agent 配置，客户端程序不改写；revoke cache token ≠ 切断该机的 project token。
+- **B 时限快照（SSHMGR_CACHE_MAX_OFFLINE，默认关）**：到龄缓存在下次 load/spawn 边界自废（DEK/设备码物理删除）。语义边界如实登记：①无定时执行器——关机失窃的机器不运行客户端，盘上材料保留至下次运行；②运行中会话服务至进程退出；③回拨闸只捕获 >1h 的回拨，容差内单次回拨可延长 ≤1h，反复回拨/冻结时钟可任意续命——属控钟对手，与 FS 控制同级，出范围；④FS 对手可还原旧 bin+DEK+meta 组合绕过（含 backup-restore 恢复路径）。根治仍只有轮换服务器凭据。另：pinned pull 自 Plan 37 起不再跟随重定向（修复响应体可被导出 pin 信任域的传输级缺口）。
 
 ---
 

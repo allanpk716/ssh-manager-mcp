@@ -214,6 +214,16 @@ ssh-manager serve --addr 0.0.0.0:7878
 
 ---
 
+## Environment variables
+
+目前定义的用户可配环境变量：
+
+| 变量 | 默认 / 语法 | 说明 |
+|---|---|---|
+| `SSHMGR_CACHE_MAX_OFFLINE` | `168h`（Go duration，≥1h；unset/`0` 关） | 开启离线缓存到龄自废：超龄的下次 load/spawn 销毁本地 cache（服务器 Date 锚 + 1h 时钟容差）。详见 docs/multi-machine.md |
+
+---
+
 ## Do I need an LLM API key?
 
 **No.** ssh-manager-mcp is a **credential broker**, not an LLM client — it never calls any LLM API. It only needs the master key (to unlock the vault) + a project token (so the agent authenticates). The LLM key is the **agent's** business (your Claude Code / Cursor already has its own) and is entirely unrelated to this project.
