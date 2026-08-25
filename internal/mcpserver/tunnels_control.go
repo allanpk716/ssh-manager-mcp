@@ -63,11 +63,14 @@ func (m *TunnelManager) runControlTick() {
 			// tunnel order: the owner executes (Close → mirror delete →
 			// mark, 标记后置); anyone marks when the target is globally
 			// absent from the registry (absent ⇒ achieved).
-			if m.closeTunnelIfOwned(o.TunnelID, "kill order applied") {
+			if m.closeTunnelIfOwned(o.TunnelID, "kill order "+strconv.FormatInt(o.ID, 10)+" applied") {
 				m.markApplied(o.ID)
 				continue
 			}
-			if has, herr := st.HasTunnelRegistryRow(o.TunnelID); herr == nil && !has {
+			has, herr := st.HasTunnelRegistryRow(o.TunnelID)
+			if herr != nil {
+				log.Printf("tunnel control: order %d absence-check read failed, retry next tick: %v", o.ID, herr)
+			} else if !has {
 				m.markApplied(o.ID)
 			}
 			continue
@@ -85,7 +88,10 @@ func (m *TunnelManager) runControlTick() {
 		if o.ProjectID == "" {
 			continue
 		}
-		if n, cerr := st.CountTunnelRegistryProject(o.ProjectID); cerr == nil && n == 0 {
+		n, cerr := st.CountTunnelRegistryProject(o.ProjectID)
+		if cerr != nil {
+			log.Printf("tunnel control: order %d absence-check read failed, retry next tick: %v", o.ID, cerr)
+		} else if n == 0 {
 			m.markApplied(o.ID)
 		}
 	}
@@ -110,7 +116,8 @@ func (m *TunnelManager) runControlTick() {
 }
 
 // markApplied flips a pending order to applied. The UPDATE itself carries
-// the outcome-IS-NULL guard, so concurrent markers are safe.
+// the outcome-IS-NULL guard, so concurrent markers are safe. Best-effort: a
+// write failure is logged and left to the next tick's idempotent re-mark.
 func (m *TunnelManager) markApplied(orderID int64) {
 	m.mu.Lock()
 	storeFn := m.storeFn
@@ -119,7 +126,9 @@ func (m *TunnelManager) markApplied(orderID int64) {
 		return
 	}
 	if st := storeFn(); st != nil && !st.IsReadOnly() {
-		_, _ = st.MarkTunnelOrderApplied(orderID)
+		if _, err := st.MarkTunnelOrderApplied(orderID); err != nil {
+			log.Printf("tunnel control: mark order %d applied failed, retry next tick: %v", orderID, err)
+		}
 	}
 }
 

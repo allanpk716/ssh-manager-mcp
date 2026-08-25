@@ -102,8 +102,9 @@ func TestMirrorInsertOnOpenAndDeleteOnClose(t *testing.T) {
 }
 
 // TestMirrorFailTheOpen pins fail-the-Open (spec §6): a writable-store INSERT
-// failure surfaces as an Open error (no tunnel id), and the half-registered
-// tunnel leaves NOTHING behind — memory registry empty, tunnel + client closed.
+// failure surfaces as an Open error (no tunnel id), and the failed tunnel
+// leaves NOTHING behind — the insert-before-register order means it was never
+// in the memory registry, and the raw tunnel + client are closed.
 func TestMirrorFailTheOpen(t *testing.T) {
 	mgr, st, pid, srvID, cleanup := mirrorMgr(t)
 	defer cleanup()

@@ -108,7 +108,11 @@ func tunnelsKillCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if n, _ := s.CountTunnelRegistryProject(p.ID); n == 0 {
+				n, cerr := s.CountTunnelRegistryProject(p.ID)
+				if cerr != nil {
+					return fmt.Errorf("count tunnels for project %s: %w", project, cerr)
+				}
+				if n == 0 {
 					return fmt.Errorf("no open tunnels for project %s", project)
 				}
 				oid, err = s.CreateTunnelOrder("", p.ID, osUser())
@@ -124,15 +128,25 @@ func tunnelsKillCmd() *cobra.Command {
 }
 
 // resolveProject resolves a --project value by name first, then by id
-// (GetProjectByName / GetProject both return (nil, nil) on a miss).
+// (GetProjectByName / GetProject both return (nil, nil) on a miss). Read
+// errors are PROPAGATED, not folded into "not found" — the owner CLI must
+// say the store read failed instead of misreporting absence.
 func resolveProject(s *store.Store, nameOrID string) (*models.Project, error) {
-	if p, err := s.GetProjectByName(nameOrID); err == nil && p != nil {
+	p, err := s.GetProjectByName(nameOrID)
+	if err != nil {
+		return nil, fmt.Errorf("lookup project %q by name: %w", nameOrID, err)
+	}
+	if p != nil {
 		return p, nil
 	}
-	if p, err := s.GetProject(nameOrID); err == nil && p != nil {
-		return p, nil
+	p, err = s.GetProject(nameOrID)
+	if err != nil {
+		return nil, fmt.Errorf("lookup project %q by id: %w", nameOrID, err)
 	}
-	return nil, fmt.Errorf("project %q not found", nameOrID)
+	if p == nil {
+		return nil, fmt.Errorf("project %q not found", nameOrID)
+	}
+	return p, nil
 }
 
 // waitForOrder polls the order once per second for a broker to apply it

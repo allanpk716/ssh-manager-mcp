@@ -141,14 +141,24 @@ func (m *TunnelManager) sweepLoop() {
 	}
 }
 
-// Open registers a tunnel + its owning client and mirrors it into
-// tunnel_registry. lastActivity seeds to now; the activity hook keeps it
-// fresh. fail-the-Open (spec §6): when a writable store is attached and the
-// registry INSERT fails, the tunnel is closed immediately and the error is
-// returned — a tunnel that cannot be killed is not allowed to exist.
+// Open mirrors a tunnel into tunnel_registry FIRST, then registers it (with
+// its owning client) in the in-memory map. lastActivity seeds to now; the
+// activity hook keeps it fresh. Insert-before-register is load-bearing: the
+// kill-domain membership (the registry row) must exist before the tunnel
+// becomes reachable/reported — registering first opens a window where a
+// concurrent control-tick heartbeat snapshots the in-memory id with no DB row
+// (zero-row renew ⇒ self-close kills the brand-new tunnel) and then the
+// INSERT lands, leaving Open "successful" over a dead tunnel + a ghost row
+// lingering ≤30min in `tunnels ls`. The reverse window is benign: the
+// heartbeat only iterates in-memory ids (nothing to renew for a row whose
+// owner hasn't registered yet); a kill order seeing the fresh row just stays
+// pending and catches the tunnel on the next tick.
+// fail-the-Open (spec §6): when a writable store is attached and the registry
+// INSERT fails, the tunnel is closed immediately and the error is returned —
+// a tunnel that cannot be killed is not allowed to exist. Nothing was
+// registered yet, so there is nothing to unregister.
 func (m *TunnelManager) Open(t *sshbroker.Tunnel, c *sshbroker.Client, meta TunnelMeta) (string, error) {
 	m.mu.Lock()
-	m.tunnels[t.ID] = &managedTunnel{tunnel: t, client: c, lastActivity: time.Now(), meta: meta}
 	storeFn := m.storeFn
 	m.mu.Unlock()
 	if storeFn != nil {
@@ -161,16 +171,17 @@ func (m *TunnelManager) Open(t *sshbroker.Tunnel, c *sshbroker.Client, meta Tunn
 				OpenedAt: now, LastRenewed: now,
 			})
 			if err != nil {
-				// fail-the-Open: tear down what we just registered
-				m.mu.Lock()
-				delete(m.tunnels, t.ID)
-				m.mu.Unlock()
+				// fail-the-Open: the tunnel was never registered — close the
+				// raw tunnel + client, nothing to unregister.
 				_ = t.Close()
 				_ = c.Close()
 				return "", fmt.Errorf("tunnel registry mirror failed, tunnel closed (fail-the-Open): %w", err)
 			}
 		}
 	}
+	m.mu.Lock()
+	m.tunnels[t.ID] = &managedTunnel{tunnel: t, client: c, lastActivity: time.Now(), meta: meta}
+	m.mu.Unlock()
 	return t.ID, nil
 }
 
