@@ -76,6 +76,13 @@ type TunnelManager struct {
 	storeFn        func() *store.Store // nil = bare manager (tests): control loop no-ops
 	projectID      string
 	pendingDeletes map[string]struct{} // mirror DELETEs that failed; retried each control tick (spec §6)
+
+	// Control-loop discipline counters (spec §4): consecutive failed ticks,
+	// process-local memory (a restart zeroes them). Only the control
+	// goroutine (sweepLoop) touches them — no lock needed.
+	renewalFail   int // lease renewal incomplete (fail-the-renewal, >8 ⇒ close all)
+	cascadeFail   int // cascade GetProject read failures (>8 ⇒ close all)
+	whitelistFail int // whitelist read failures (>8 ⇒ close non-loopback only)
 }
 
 // NewTunnelManager returns an empty TunnelManager. The tunnel-sweeper goroutine
@@ -110,17 +117,24 @@ func (m *TunnelManager) StartSweeper() {
 	})
 }
 
-// sweepLoop is the tunnel sweeper: every forwardSweepInterval it calls SweepIdle.
-// Exits when quit is closed (CloseAll). Holds one wg ticket for its lifetime so
-// CloseAll can Wait for a clean shutdown.
+// sweepLoop is the tunnel sweeper AND the control loop: every
+// forwardSweepInterval it calls SweepIdle, and every controlInterval it runs
+// one control tick (Plan 35 spec §4 — the tick is test-driven via
+// runControlTick, this is only the production heartbeat). Exits when quit is
+// closed (CloseAll). Holds one wg ticket for its lifetime so CloseAll can
+// Wait for a clean shutdown.
 func (m *TunnelManager) sweepLoop() {
 	defer m.wg.Done()
-	ticker := time.NewTicker(forwardSweepInterval)
-	defer ticker.Stop()
+	idle := time.NewTicker(forwardSweepInterval)
+	defer idle.Stop()
+	ctrl := time.NewTicker(controlInterval)
+	defer ctrl.Stop()
 	for {
 		select {
-		case <-ticker.C:
+		case <-idle.C:
 			m.SweepIdle()
+		case <-ctrl.C:
+			m.runControlTick()
 		case <-m.quit:
 			return
 		}
