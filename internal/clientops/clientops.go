@@ -274,7 +274,7 @@ func LoadCacheSnapshot() (*store.Snapshot, error) {
 		if merr != nil {
 			// §3.2: no usable anchor — refuse, never destroy (includes the
 			// never-pulled first run; a fresh machine has no meta by design).
-			return nil, fmt.Errorf("SSHMGR_CACHE_MAX_OFFLINE is set but cache.meta.json is missing or corrupt (or this machine never pulled) — refusing cache (no time anchor); run cache pull: %v", merr)
+			return nil, fmt.Errorf("SSHMGR_CACHE_MAX_OFFLINE is set but cache.meta.json is missing or corrupt (or this machine never pulled) — refusing cache (no time anchor); run cache pull")
 		}
 		if !meta.ServerAnchored {
 			// §3.3 provenance gate: a local-clock anchor never passed any gate.
@@ -304,7 +304,7 @@ func LoadCacheSnapshot() (*store.Snapshot, error) {
 			if qerr == nil {
 				qerr = ErrCacheQuarantined
 			}
-			return nil, fmt.Errorf("%w — cache snapshot expired (offline %s > cap %s): snapshot destroyed; run cache pull to re-enroll",
+			return nil, fmt.Errorf("%w — cache snapshot expired (offline %s > cap %s) — snapshot destroyed; run cache pull to re-enroll",
 				qerr, now.Sub(anchorT).Round(time.Second), maxOffline)
 		}
 		if now.Before(anchorT.Add(-cacheSkewTolerance)) {

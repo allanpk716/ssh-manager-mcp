@@ -1,7 +1,10 @@
 // Package clientops: Plan 34 rev4 §2 — the client-side cache destruction
-// routine. Triggered (by DoPull, T4) ONLY on a pinned-401 server rejection;
-// every other failure class (network, TLS, non-401, plaintext pull) never
-// reaches this file.
+// routine. Called from exactly two authoritative trigger points: DoPull's
+// pinned-401 server rejection (Plan 34, T4) and LoadCacheSnapshot's
+// positive-age-expiry destruction (Plan 37 §3.4, gated on server-anchored
+// expiry evidence plus a re-check confirmation). Every other failure class
+// (network, TLS, non-401, plaintext pull, clock rollback, missing/corrupt
+// meta) never reaches this file.
 package clientops
 
 import (
