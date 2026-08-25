@@ -114,7 +114,9 @@ ssh-manager audit --since 24h --project my-agent --status error
 ssh-manager audit --json --limit 0 > audit.jsonl   # nine fields, sidecar-compatible
 ```
 
-Known filter values: `action` = `exec` / `download` / `upload` / `upload-content` / `forward` / `close-forward` / `exec-bg-start` / `exec-bg-end` + owner-side `project.rotate` / `project.disable` / `project.enable` / `project.revoke` / `project.delete`; `status` = `ok` / `error` / `timeout` / `no_credential` / `bind_denied`. The sets evolve across versions; unknown filter values silently match nothing (empty result, never an error).
+Known filter values: `action` = `exec` / `download` / `upload` / `upload-content` / `forward` / `close-forward` / `exec-bg-start` / `exec-bg-end` + owner-side `project.rotate` / `project.disable` / `project.enable` / `project.revoke` / `project.delete`; `status` = `ok` / `error` / `timeout` / `cancelled` / `denied` / `auth_error` / `hostkey_mismatch` / `connect_error` / `no_credential` / `no_sudo` / `bind_denied`. The sets evolve across versions; unknown filter values silently match nothing (empty result, never an error).
+
+Human-mode output notes: the server / project columns render four ways — the entity's name, `(none)` (no server context, e.g. project-level owner actions), `(owner)` (no project = an owner action), or `id…(deleted)` for a row that has outlived its entity. `exit=0` is ambiguous by design: a failure that never produced an exit code (connect-time) and a command that ran and exited 0 both display `exit=0` — read the `status` column to tell them apart. `--limit 0` prints a stderr warning that `audit_log` has no auto-cleanup and the output may be large; when rows are truncated, stderr gets `showing first N rows (more exist) — use --limit 0 for full output` (JSON mode emits rows only, no stderr chatter).
 
 ---
 
