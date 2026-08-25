@@ -33,13 +33,12 @@ func mirrorMgr(t *testing.T) (*TunnelManager, *store.Store, string, string, func
 }
 
 // openTestTunnel opens a REAL tunnel through ForwardForProfile (full connect +
-// ForwardLocal + mgr.Open path) targeting the echo listener. Brief-vs-codebase
-// note: ForwardForProfile does not take a listenHost param yet (Task 5's gate
-// adds it); core.go hardcodes the 127.0.0.1 placeholder, so this call uses the
-// current 9-arg signature.
+// ForwardLocal + mgr.Open path) targeting the echo listener. The 10-arg
+// signature's listenHost defaults to "" (loopback) — the mirror pipeline does
+// not care about the bind host.
 func openTestTunnel(t *testing.T, mgr *TunnelManager, st *store.Store, projID, pid, srvID string) (string, error) {
 	t.Helper()
-	out, err := ForwardForProfile(context.Background(), st, projID, pid, srvID, "127.0.0.1", echoPortForMirror(t), 0, mgr)
+	out, err := ForwardForProfile(context.Background(), st, projID, pid, srvID, "127.0.0.1", echoPortForMirror(t), 0, "", mgr)
 	return out.TunnelID, err
 }
 

@@ -607,6 +607,14 @@ func isAbsRemotePath(p string) bool {
 // reclaimed by close_port (CloseForwardForProfile), the tunnel sweeper
 // (forwardIdleTimeout), or MCP shutdown (TunnelManager.CloseAll).
 //
+// listenHost (Plan 35, spec §2) picks the local bind address: empty →
+// "127.0.0.1"; loopback always allowed; any other IP literal must be on the
+// owner-approved bind-host whitelist (canonical compare, per-call read — a
+// whitelist edit takes effect on the NEXT call). The gate runs after the
+// masked-host guard and before GetServer (fail fast before any credential
+// lookup or connect). After Open, the tunnel's onActivity hook is wired to
+// mgr.Touch so carrying traffic keeps the tunnel alive (spec §3).
+//
 // Resource-cleanup discipline (the load-bearing concern): every error branch
 // that connected a client WITHOUT handing it to the TunnelManager closes it in
 // the deferred cleanup (err != nil && cli != nil) so no ssh.Client leaks on a
@@ -614,14 +622,19 @@ func isAbsRemotePath(p string) bool {
 // the manager owns the client and the deferred cleanup skips the close.
 //
 // Every branch is audited with Action="forward"; the audit Command field
-// records the forward target as "remoteHost:remotePort". Statuses: denied
-// (out-of-profile), auth_error, no_credential (credential-less server, Plan
-// 20 C0 — Plan 21 A1 unified with exec), hostkey_mismatch, connect_error,
-// ok, error. There is no no_sudo / timeout branch — a forward is a listener +
-// pipe with no command deadline.
-func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, remoteHost string, remotePort, localPort int, mgr *TunnelManager) (out ForwardOutput, err error) {
+// records the forward target as "remoteHost:remotePort" until the tunnel id is
+// known, "remoteHost:remotePort id=<tunnelID>" once Open returned one (the
+// correlation key tying forward rows to later close/sweep events — spec §7).
+// Statuses: denied (out-of-profile), bind_denied (listen_host rejected —
+// non-IP-literal, wildcard, or non-loopback off the whitelist), auth_error,
+// no_credential (credential-less server, Plan 20 C0 — Plan 21 A1 unified with
+// exec), hostkey_mismatch, connect_error, ok, error (incl. the fail-closed
+// whitelist read failure). There is no no_sudo / timeout branch — a forward is
+// a listener + pipe with no command deadline.
+func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, remoteHost string, remotePort, localPort int, listenHost string, mgr *TunnelManager) (out ForwardOutput, err error) {
 	var status string
 	var cli *sshbroker.Client
+	var tunID string // "" until Open succeeded — drives the audit Command form (spec §7)
 	start := time.Now()
 	defer func() {
 		if status == "" {
@@ -635,7 +648,7 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		}
 		_ = st.WriteAudit(store.AuditRow{
 			TS: start, ProjectID: projectID, ServerID: serverID, Action: "forward",
-			Command:    net.JoinHostPort(remoteHost, strconv.Itoa(remotePort)),
+			Command:    joinAuditCommand(remoteHost, remotePort, tunID),
 			Status:     status,
 			DurationMS: time.Since(start).Milliseconds(),
 		})
@@ -663,6 +676,39 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		status = "error"
 		err = errors.New("remote_host \"hidden\" is the list_servers masked-host literal, not a real host — pass the actual host:port to forward to")
 		return
+	}
+
+	// listen_host gate (spec §2): default loopback; loopback always allowed;
+	// non-loopback must be owner-whitelisted (canonical compare, per-call read
+	// so a whitelist edit bites on the NEXT call). Read failure on a
+	// non-loopback request fails CLOSED. Errors quote the agent's own input
+	// only — whitelist contents are never echoed.
+	bindHost := "127.0.0.1"
+	if strings.TrimSpace(listenHost) != "" {
+		canonical, cerr := store.CanonicalBindIP(listenHost)
+		if cerr != nil {
+			status = "bind_denied"
+			err = fmt.Errorf("listen_host %q must be a specific IP literal (not a hostname, wildcard 0.0.0.0/::, or zoned address)", listenHost)
+			return
+		}
+		if ip := net.ParseIP(canonical); ip.IsUnspecified() {
+			status = "bind_denied"
+			err = fmt.Errorf("listen_host %q is a wildcard address — binding 0.0.0.0/:: is forbidden", listenHost)
+			return
+		} else if !ip.IsLoopback() {
+			hosts, lerr := st.ListForwardBindHosts()
+			if lerr != nil {
+				status = "error" // fail-closed (spec §2): DB read failure must not open a non-loopback bind
+				err = fmt.Errorf("cannot read bind host whitelist, refusing non-loopback listen_host: %w", lerr)
+				return
+			}
+			if !contains(hosts, canonical) {
+				status = "bind_denied"
+				err = fmt.Errorf("listen_host %q is not in the owner-approved bind host whitelist", listenHost)
+				return
+			}
+		}
+		bindHost = canonical
 	}
 
 	srv, serr := st.GetServer(serverID)
@@ -708,9 +754,7 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 	}
 	// NO defer cli.Close() here — on success the TunnelManager owns cli (stateful).
 
-	// listenHost "127.0.0.1" + onActivity nil are Plan 35 placeholders — the
-	// validated gate values land in T5.
-	tun, ferr2 := cli.ForwardLocal(localPort, "127.0.0.1", remoteHost, remotePort, nil)
+	tun, ferr2 := cli.ForwardLocal(localPort, bindHost, remoteHost, remotePort, nil)
 	if ferr2 != nil {
 		status = "error"
 		err = ferr2
@@ -718,13 +762,12 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 	}
 
 	// Plan 35 T3: Open mirrors the tunnel into tunnel_registry (fail-the-Open).
-	// ListenHost "127.0.0.1" is a placeholder — the gate-produced canonical
-	// form lands in T5.
+	// ListenHost carries the gate-produced canonical form.
 	id, oerr := mgr.Open(tun, cli, TunnelMeta{
 		ProjectID:  projectID,
 		ServerID:   serverID,
 		Remote:     net.JoinHostPort(remoteHost, strconv.Itoa(remotePort)),
-		ListenHost: "127.0.0.1",
+		ListenHost: bindHost,
 	})
 	if oerr != nil {
 		status = "error"
@@ -733,8 +776,14 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		// re-closes cli (idempotent) — nothing registered, nothing leaked.
 		return
 	}
+	tunID = id // audit rows from here on correlate via " id=<tunnelID>" (spec §7)
+	// Activity-aware reclaim wiring (spec §3): every throttled activity ping
+	// refreshes the manager's lastActivity for the REGISTERED id, so a tunnel
+	// carrying traffic survives the idle sweeper. Attached AFTER Open returns
+	// the id (the closure must capture the registered id, not a stale one).
+	tun.SetOnActivity(func() { mgr.Touch(id) })
 	status = "ok"
-	out = ForwardOutput{TunnelID: id, LocalPort: localPortOfAddr(tun.LocalAddr())}
+	out = ForwardOutput{TunnelID: id, LocalPort: localPortOfAddr(tun.LocalAddr()), ListenHost: hostOfAddr(tun.LocalAddr())}
 	return
 }
 
@@ -777,6 +826,30 @@ func localPortOfAddr(addr string) int {
 	}
 	p, _ := strconv.Atoi(portStr)
 	return p
+}
+
+// hostOfAddr extracts the host from a "host:port" listen address (the tunnel's
+// LocalAddr — e.g. "[2001:db8::1]:54321" → "2001:db8::1"). Returns the input
+// unchanged on any parse failure. ForwardOutput.ListenHost reports this so the
+// agent learns the ACTUAL bound address (the canonical form the kernel bound).
+func hostOfAddr(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
+
+// joinAuditCommand renders the forward audit correlation key (spec §7):
+// "host:port" until the tunnel id is known (every pre-Open failure), and
+// "host:port id=<tunnelID>" once Open returned one — tying the forward row to
+// the later close-forward row (whose Command is the bare tunnel id).
+func joinAuditCommand(remoteHost string, remotePort int, tunID string) string {
+	base := net.JoinHostPort(remoteHost, strconv.Itoa(remotePort))
+	if tunID == "" {
+		return base
+	}
+	return base + " id=" + tunID
 }
 
 // ---- Plan 33: upload_content env seam (spec rev3 §3.1) ----

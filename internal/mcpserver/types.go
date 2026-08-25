@@ -99,17 +99,19 @@ type ForwardInput struct {
 	RemoteHost string `json:"remote_host" jsonschema:"the host TO forward to, FROM THE SERVER'S PERSPECTIVE (usually '127.0.0.1' to reach a service on the server's own loopback)"`
 	RemotePort int    `json:"remote_port" jsonschema:"the port on remote_host to reach"`
 	LocalPort  int    `json:"local_port,omitempty" jsonschema:"optional local listen port (omit / 0 = let the broker pick a free port)"`
+	ListenHost string `json:"listen_host,omitempty" jsonschema:"optional local address to bind (IP literal only; default 127.0.0.1; loopback always allowed — a non-loopback address must be owner-approved via the bind host whitelist)"`
 }
 
 // ForwardOutput is the forward_port tool output. The agent reaches the remote
-// service at 127.0.0.1:local_port on the machine the broker runs on (stdio:
+// service at listen_host:local_port on the machine the broker runs on (stdio:
 // the agent's own machine; remote serve: the serve host) — e.g. curl
 // http://127.0.0.1:<local_port> or point your client at it, from that host.
-// Pass tunnel_id to close_port when done (tunnels auto-close ~10 min after
-// creation — creation-based, not activity-based).
+// Pass tunnel_id to close_port when done (tunnels auto-close after ~10 minutes
+// of inactivity — a tunnel carrying traffic stays alive).
 type ForwardOutput struct {
-	TunnelID  string `json:"tunnel_id" jsonschema:"opaque id; pass to close_port when done with the forward"`
-	LocalPort int    `json:"local_port" jsonschema:"the local port now forwarding to remote_host:remote_port — reach it via 127.0.0.1:local_port on the machine the broker runs on"`
+	TunnelID   string `json:"tunnel_id" jsonschema:"opaque id; pass to close_port when done with the forward"`
+	LocalPort  int    `json:"local_port" jsonschema:"the local port now forwarding to remote_host:remote_port"`
+	ListenHost string `json:"listen_host" jsonschema:"the local address the forward is bound to (127.0.0.1 unless you passed a whitelisted listen_host)"`
 }
 
 // CloseForwardInput is the close_port tool input. The tunnel_id is the opaque

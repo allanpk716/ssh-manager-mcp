@@ -62,8 +62,9 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *Tunn
 func NewServerFromSource(storeFn func() *store.Store, profileID, projectID string) (*mcp.Server, *TunnelManager, *TaskManager, error) {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "ssh-manager", Version: buildinfo.Version}, nil)
 	tunnels := NewTunnelManager()
-	tunnels.StartSweeper()         // background tunnel sweeper (creation-based reclaim, see forwardIdleTimeout)
-	tasks, err := NewTaskManager() // env seam (SSHMGR_BG_*): 非法值/非正数 → 构造失败拒绝启动 (fail-closed)
+	tunnels.AttachStore(storeFn, projectID) // mirror pipeline + control-loop store seam (Plan 35 spec §4) — attached BEFORE StartSweeper so the first tick already sees the live store
+	tunnels.StartSweeper()                  // background tunnel sweeper (activity-based reclaim, see forwardIdleTimeout)
+	tasks, err := NewTaskManager()          // env seam (SSHMGR_BG_*): 非法值/非正数 → 构造失败拒绝启动 (fail-closed)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -150,11 +151,11 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 	mcp.AddTool(srv,
 		&mcp.Tool{
 			Name:        BrokerTools[4], // "forward_port"
-			Description: "Open a local port that forwards to a remote service through a server (the `ssh -L` semantic). Use this to reach a service running ON the server (or reachable from it) from the machine the broker runs on — e.g. a database, web UI, or metrics endpoint. Pass the server's id (from list_servers), remote_host + remote_port (the host:port to forward to FROM THE SERVER'S PERSPECTIVE — usually 127.0.0.1 + the service's port on the server's own loopback), and an optional local_port (omit / 0 = the broker picks a free port). Returns tunnel_id + local_port: the forward listens on 127.0.0.1:<local_port> ON THE MACHINE THE BROKER RUNS ON — with a stdio MCP that is your machine; with a remote serve broker it is the serve host, so reach it from there (e.g. curl on that host) — it is NOT reachable from a different machine. Out-of-profile server ids are rejected. This holds an SSH connection open in the broker for the tunnel's life — call close_port with tunnel_id when done (tunnels auto-close ~10 minutes after creation, not based on activity).",
+			Description: "Open a local port that forwards to a remote service through a server (the `ssh -L` semantic). Use this to reach a service running ON the server (or reachable from it) from the machine the broker runs on — e.g. a database, web UI, or metrics endpoint. Pass the server's id (from list_servers), remote_host + remote_port (the host:port to forward to FROM THE SERVER'S PERSPECTIVE — usually 127.0.0.1 + the service's port on the server's own loopback), an optional local_port (omit / 0 = the broker picks a free port), and an optional listen_host (IP literal only — the local address to bind; default 127.0.0.1; loopback is always allowed, a non-loopback address must be owner-approved). Returns tunnel_id + local_port + listen_host: the forward listens on listen_host:<local_port> ON THE MACHINE THE BROKER RUNS ON — with a stdio MCP that is your machine; with a remote serve broker it is the serve host, so reach it from there (e.g. curl on that host) — it is NOT reachable from a different machine. Out-of-profile server ids are rejected. This holds an SSH connection open in the broker for the tunnel's life — call close_port with tunnel_id when done (tunnels auto-close after ~10 minutes of INACTIVITY — a tunnel carrying traffic stays alive).",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in ForwardInput) (*mcp.CallToolResult, ForwardOutput, error) {
 			st := storeFn()
-			out, err := ForwardForProfile(ctx, st, projectID, profileID, in.ServerID, in.RemoteHost, in.RemotePort, in.LocalPort, tunnels)
+			out, err := ForwardForProfile(ctx, st, projectID, profileID, in.ServerID, in.RemoteHost, in.RemotePort, in.LocalPort, in.ListenHost, tunnels)
 			if err != nil {
 				return &mcp.CallToolResult{
 					IsError: true,
@@ -168,7 +169,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 	mcp.AddTool(srv,
 		&mcp.Tool{
 			Name:        BrokerTools[5], // "close_port"
-			Description: "Close a tunnel opened by forward_port. Pass the tunnel_id forward_port returned. Tears down the local listener AND the SSH connection that backed it (frees the resource — the broker was holding it open). Returns ok on success; an error if the tunnel_id is unknown (already closed, or never opened). No server_id / profile needed: the tunnel_id is an opaque handle bound to the broker process that opened it. You SHOULD call this when you are done with a forward rather than waiting for the ~10-minutes-after-creation auto-close.",
+			Description: "Close a tunnel opened by forward_port. Pass the tunnel_id forward_port returned. Tears down the local listener AND the SSH connection that backed it (frees the resource — the broker was holding it open). Returns ok on success; an error if the tunnel_id is unknown (already closed, or never opened). No server_id / profile needed: the tunnel_id is an opaque handle bound to the broker process that opened it. You SHOULD call this when you are done with a forward rather than waiting for the ~10-minutes-of-inactivity auto-close.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in CloseForwardInput) (*mcp.CallToolResult, any, error) {
 			st := storeFn()

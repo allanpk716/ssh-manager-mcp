@@ -47,7 +47,7 @@ func TestRevokedProjectKeepsOpenTunnelForwarding(t *testing.T) {
 	}
 	defer mgr.CloseAll()
 	defer tasks.CloseAll()
-	out, err := ForwardForProfile(context.Background(), st, projID, pid, srvID, "127.0.0.1", echoPort, 0, mgr)
+	out, err := ForwardForProfile(context.Background(), st, projID, pid, srvID, "127.0.0.1", echoPort, 0, "", mgr)
 	if err != nil {
 		t.Fatal(err)
 	}
