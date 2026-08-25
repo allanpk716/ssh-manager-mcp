@@ -8,6 +8,7 @@
 <!-- v0.10.0/0.11.0（Plan 34 离线 cache 切断失效）：纯增量，无新 env、无新响应头——`cache-tokens revoke` 语义增强（断拉新 + 该机回连即销毁本地 cache 四件：DEK/auth/bin→quarantine/meta；触发条件 = pinned-401）；服务端 401 附 reason（revoked/unknown，纯可观测性，客户端判定不依赖）；`cache-tokens revoke` CLI 输出附两 token 提示行。跨版本口径：销毁在 client 侧执行——**旧 client 对新 serve 维持旧语义**（只断拉新、不销毁本地 cache，401 静默失败），新 client 对旧 serve 销毁语义即生效（不依赖任何新响应头）。与上条 Plan 33 同批发版回写，占位注释届时删除。 -->
 <!-- v0.10.0/0.11.0（Plan 32 后台任务三件套）：纯增量——3 新工具（exec_background / exec_output / exec_stop）+ ExecOutput 新字段 effective_timeout_seconds，无破坏性变更；发版后双端实测回写本表。 -->
 <!-- v0.10.0/0.11.0（Plan 35 tunnels 硬化）：契约变更——revoke/disable → 已建立隧道 **≤15s 拆除**（一个控制 tick；前提 = store 健康 + 控制循环存活，store 持续故障降级为 ≤~2min 有界关闭；进程 hang 不在 DB kill 域，应急 = 重启/杀进程；此前契约 = 隧道不受 revoke 影响、无急停）；`forward_port` 新参数 `listen_host`（非环回需 owner `serve bind` 白名单预批，`bind rm` 后存量 ≤15s 收缩）；vault 新表 ×3（forward_bind_hosts / tunnel_orders / tunnel_registry）；新 CLI `serve bind add/rm/ls` + `tunnels ls` / `kill <id>` / `kill --project`；`forward` audit 行 Command 追加 ` id=<tunnelID>` 单列（格式变更，消费方注意）。**kill/ls 域完整性要求全部可写 broker（serve + 在线 stdio）都升级**——混合部署期旧版进程的隧道不进 registry、不受 kill 单/级联管辖，`tunnels ls` 覆盖不完整。与 Plan 32/33/34 同批发版回写，占位注释届时删除；版本行归属 owner 发版拍板。 -->
+<!-- v0.10 系（Plan 32-37）同批量发版：以下行并入 v0.10.0 还是开 v0.11.0 由 owner 发版拍板，回写时删本注释 -->
 
 | client 版本 | serve 版本 | 在线（HTTP MCP） | 离线（cache pull / mcp --cache） | 验证日期 |
 |---|---|---|---|---|
@@ -18,6 +19,7 @@
 | v0.8.1 | v0.8.1 | ✅（NUC10 权威 broker + 笔记本；发版后按铁律 client 先 serve 后） | ✅（cache 健康；doctor 双端 0 WARN 0 FAIL 含解密探针 9/10；owner ssh echo 冒烟过） | 2026-08-17 |
 | v0.8.0 | v0.8.0 | ✅（NUC10 权威 broker + 笔记本；发版后按铁律 client 先 serve 后） | ✅（cache 9 servers/10 creds；owner ssh 三连 smoke：echo=exit 0 / 远端非零=CLI 非零+stderr 报码 / 无命令=显式报错） | 2026-08-17 |
 | v0.7.3 | v0.7.3 | ✅（NUC10 权威 broker + 笔记本） | ✅（9/9 服务器） | 2026-08-16 |
+| Plan 37 | `SSHMGR_CACHE_MAX_OFFLINE`（默认关）：离线缓存到龄自废——服务器 Date 锚 + provenance + 销毁前复查；meta 新增 `server_anchored` 字段（恒序列化，旧客户端忽略未知字段/新客户端读旧 meta 视为 false，双向兼容）；pinned pull 不再跟随重定向（行为修复） |
 
 （v0.8.10 为当前生产双端；v0.8.2–v0.8.8 曾部署双端但未逐版登记本表（v0.8.8 行除外）；更早历史组合未逐一回归，旧版本请先看下方破坏性变更。）
 
