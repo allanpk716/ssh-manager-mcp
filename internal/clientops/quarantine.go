@@ -45,14 +45,14 @@ type quarantineManifest struct {
 // no auto-resume — residue surfaces via the manifest at the next spawn and
 // self-heals on re-enroll):
 //
-//	0. MkdirAll(<cacheDir>/quarantine/) + best-effort manifest {started} — NEVER a precondition;
-//	1. DEK delete via the DekProvider seam (production: FileKeyProvider.Delete
-//	   on paths.CacheDekPath(), so SSHMGR_CACHE_DEK is honored; absent = idempotent success);
-//	2. cache.auth.json delete (device code plaintext, zero tolerance);
-//	3. cache.bin → quarantine/cache.bin.quarantined-<unix秒> rename (same-dir
-//	   subdir keeps it same-volume; single retained copy — a new isolation drops the old);
-//	4. cache.meta.json delete (non-critical: failure never degrades);
-//	5. best-effort manifest {done, steps, degraded}.
+//  0. MkdirAll(<cacheDir>/quarantine/) + best-effort manifest {started} — NEVER a precondition;
+//  1. DEK delete via the DekProvider seam (production: FileKeyProvider.Delete
+//     on paths.CacheDekPath(), so SSHMGR_CACHE_DEK is honored; absent = idempotent success);
+//  2. cache.auth.json delete (device code plaintext, zero tolerance);
+//  3. cache.bin → quarantine/cache.bin.quarantined-<unix秒> rename (same-dir
+//     subdir keeps it same-volume; single retained copy — a new isolation drops the old);
+//  4. cache.meta.json delete (non-critical: failure never degrades);
+//  5. best-effort manifest {done, steps, degraded}.
 //
 // Critical steps are dek/auth/bin; ANY error on them records DEGRADED —
 // honestly, never silently. The rev4 idempotent exception: a destruction
