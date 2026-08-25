@@ -92,7 +92,7 @@ directly in the foreground.`,
 	// a managed background service via github.com/kardianos/service (Windows
 	// Service / systemd / launchd). See serve_service.go. Cobra allows a
 	// parent command with its own RunE to also have subcommands.
-	c.AddCommand(newServeInstallCmd(), newServeUninstallCmd(), newServeStatusCmd(), newServeCertInfoCmd())
+	c.AddCommand(newServeInstallCmd(), newServeUninstallCmd(), newServeStatusCmd(), newServeCertInfoCmd(), newServeBindCmd())
 	return c
 }
 
