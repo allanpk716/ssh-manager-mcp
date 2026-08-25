@@ -255,10 +255,64 @@ func WriteCacheCred(cred *CacheCred) error {
 
 // LoadCacheSnapshot reads + DEK-decrypts + unmarshals the cache. Shared by `cache status` and
 // `mcp --cache`. Returns an error if the cache is absent / corrupt / the DEK is missing.
+//
+// Plan 37 §3: with SSHMGR_CACHE_MAX_OFFLINE set, three gates run BEFORE the
+// DEK is even touched (meta is plaintext): usable-anchor, provenance, and
+// expiry/rollback. Destruction happens only on the expiry gate, only after a
+// re-check confirms the anchor did not just advance (destructive-race guard).
 func LoadCacheSnapshot() (*store.Snapshot, error) {
-	_, bin, _, _, err := CachePaths()
+	_, bin, metaPath, _, err := CachePaths()
 	if err != nil {
 		return nil, err
+	}
+	maxOffline, err := cacheMaxOffline()
+	if err != nil {
+		return nil, err
+	}
+	if maxOffline > 0 {
+		meta, merr := readCacheMeta(metaPath)
+		if merr != nil {
+			// §3.2: no usable anchor — refuse, never destroy (includes the
+			// never-pulled first run; a fresh machine has no meta by design).
+			return nil, fmt.Errorf("SSHMGR_CACHE_MAX_OFFLINE is set but cache.meta.json is missing or corrupt (or this machine never pulled) — refusing cache (no time anchor); run cache pull: %v", merr)
+		}
+		if !meta.ServerAnchored {
+			// §3.3 provenance gate: a local-clock anchor never passed any gate.
+			return nil, fmt.Errorf("cache.meta.json has no server-anchored time (pulled while SSHMGR_CACHE_MAX_OFFLINE was unset or by an older client) — refusing cache; run cache pull to establish a server time anchor")
+		}
+		anchorT := time.Unix(meta.PulledAt, 0)
+		now := time.Now()
+		if now.Sub(anchorT) > maxOffline {
+			if expiryTestHooks.afterAgeCheck != nil {
+				expiryTestHooks.afterAgeCheck()
+			}
+			// §3.4 re-check: destruction requires positive expiry evidence AND
+			// confirmation. Re-read the anchor right before destroying.
+			meta2, rerr := readCacheMeta(metaPath)
+			if rerr != nil {
+				return nil, fmt.Errorf("cache expiry re-check failed (%v) — refusing cache; run cache pull", rerr)
+			}
+			if expiryTestHooks.afterRecheck != nil {
+				expiryTestHooks.afterRecheck()
+			}
+			if meta2.PulledAt > meta.PulledAt && meta2.ServerAnchored {
+				// A concurrent trusted pull just re-anchored: abort destruction
+				// and judge again from the fresh anchor.
+				return LoadCacheSnapshot()
+			}
+			_, qerr := QuarantineCache(expiryReason)
+			if qerr == nil {
+				qerr = ErrCacheQuarantined
+			}
+			return nil, fmt.Errorf("%w — cache snapshot expired (offline %s > cap %s): snapshot destroyed; run cache pull to re-enroll",
+				qerr, now.Sub(anchorT).Round(time.Second), maxOffline)
+		}
+		if now.Before(anchorT.Add(-cacheSkewTolerance)) {
+			// §3.5 rollback gate: refuse (never destroy) — a clock fault and a
+			// clock attack look identical; the next trusted pull re-anchors.
+			return nil, fmt.Errorf("system clock is behind the snapshot's server time anchor (local %s, anchor %s, tolerance 1h) — refusing cache (clock fault or tampering); fix system time, then run cache pull",
+				now.Format(time.RFC3339), anchorT.Format(time.RFC3339))
+		}
 	}
 	dek, err := loadDEK()
 	if err != nil {

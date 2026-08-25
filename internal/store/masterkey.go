@@ -40,6 +40,15 @@ func (m *MemKeyProvider) Set(key []byte) error {
 	return nil
 }
 
+// Delete clears the in-memory key, satisfying the optional Delete capability
+// QuarantineCache consumes via its interface{ Delete() error } assertion (same
+// shape as FileKeyProvider/DpapiKeyProvider). Get after Delete returns
+// ErrNotFound; deleting an already-empty provider is a nil-error no-op.
+func (m *MemKeyProvider) Delete() error {
+	m.key = nil
+	return nil
+}
+
 // GenerateMasterKey returns 32 random bytes.
 func GenerateMasterKey() ([]byte, error) {
 	k := make([]byte, 32)

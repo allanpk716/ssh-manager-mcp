@@ -70,3 +70,18 @@ var failNextMetaWriteForTest bool
 
 // FailNextMetaWriteForTest arms the one-shot meta write failure.
 func FailNextMetaWriteForTest() { failNextMetaWriteForTest = true }
+
+// expiryTestHooks lets tests orchestrate the destructive-race matrix (spec
+// §8.16) at the three load-side points: after the age verdict (before the
+// re-read) and after the re-check verdict (before destruction). Nil in
+// production; ResetExpiryHooksForTest clears them between tests.
+var expiryTestHooks struct {
+	afterAgeCheck func()
+	afterRecheck  func()
+}
+
+// ResetExpiryHooksForTest clears the load-side expiry hooks.
+func ResetExpiryHooksForTest() {
+	expiryTestHooks.afterAgeCheck = nil
+	expiryTestHooks.afterRecheck = nil
+}
