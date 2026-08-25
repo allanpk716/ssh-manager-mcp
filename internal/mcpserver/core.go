@@ -708,7 +708,9 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 	}
 	// NO defer cli.Close() here — on success the TunnelManager owns cli (stateful).
 
-	tun, ferr2 := cli.ForwardLocal(localPort, remoteHost, remotePort)
+	// listenHost "127.0.0.1" + onActivity nil are Plan 35 placeholders — the
+	// validated gate values land in T5.
+	tun, ferr2 := cli.ForwardLocal(localPort, "127.0.0.1", remoteHost, remotePort, nil)
 	if ferr2 != nil {
 		status = "error"
 		err = ferr2

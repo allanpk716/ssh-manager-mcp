@@ -355,7 +355,7 @@ func TestForwardDifferential(t *testing.T) {
 		t.Fatalf("broker connect: %v", err)
 	}
 	defer cli.Close()
-	tun, err := cli.ForwardLocal(0, "127.0.0.1", inContainerEchoPort)
+	tun, err := cli.ForwardLocal(0, "127.0.0.1", "127.0.0.1", inContainerEchoPort, nil)
 	if err != nil {
 		t.Fatalf("broker ForwardLocal: %v", err)
 	}
