@@ -717,7 +717,22 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		return // deferred cleanup sees err != nil && cli != nil → closes cli (no leak)
 	}
 
-	id := mgr.Open(tun, cli) // manager owns both tunnel + client from here
+	// Plan 35 T3: Open mirrors the tunnel into tunnel_registry (fail-the-Open).
+	// ListenHost "127.0.0.1" is a placeholder — the gate-produced canonical
+	// form lands in T5.
+	id, oerr := mgr.Open(tun, cli, TunnelMeta{
+		ProjectID:  projectID,
+		ServerID:   serverID,
+		Remote:     net.JoinHostPort(remoteHost, strconv.Itoa(remotePort)),
+		ListenHost: "127.0.0.1",
+	})
+	if oerr != nil {
+		status = "error"
+		err = oerr
+		// fail-the-Open already closed tunnel + client; the deferred cleanup
+		// re-closes cli (idempotent) — nothing registered, nothing leaked.
+		return
+	}
 	status = "ok"
 	out = ForwardOutput{TunnelID: id, LocalPort: localPortOfAddr(tun.LocalAddr())}
 	return

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"testing"
 )
 
 // TunnelRegistryRow mirrors a live broker-held tunnel (spec §6). last_renewed
@@ -123,5 +124,20 @@ func (s *Store) GCTunnelRegistry(cutoff int64) error {
 		return ErrReadOnly
 	}
 	_, err := s.db.Exec(`DELETE FROM tunnel_registry WHERE last_renewed < ?`, cutoff)
+	return err
+}
+
+// ExecForTest runs one raw SQL statement against the store's database. It is a
+// TEST-ONLY injection seam: mcpserver's white-box mirror tests deliberately
+// DROP/re-CREATE tunnel_registry to pin the manager's fail-the-Open and
+// mirror-DELETE-retry failure paths — the store package deliberately exposes
+// no production raw-Exec surface. The testing.Testing() gate makes the seam
+// inert outside test binaries so production code cannot reach raw SQL through
+// it (naming house precedent: getDACLForTest, clientops Reset*ForTest).
+func (s *Store) ExecForTest(q string) error {
+	if !testing.Testing() {
+		return errors.New("store.ExecForTest: test-only seam, refused outside a test binary")
+	}
+	_, err := s.db.Exec(q)
 	return err
 }
