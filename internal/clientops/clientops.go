@@ -254,6 +254,12 @@ type cacheMeta struct {
 	// the only honest discriminator. No omitempty, same zero-value semantics
 	// as ServerAnchored (code-review #3).
 	Scoped bool `json:"scoped"`
+	// DeviceName records the pulling device code's name as asserted by the
+	// pinned serve (X-Sshmgr-Device-Name). Empty on legacy metas (the zero
+	// value — the §2.4 adopt-and-record branch) and on plaintext pulls (an
+	// injectable header must never gate). No omitempty, same zero-value
+	// semantics as ServerAnchored/Scoped.
+	DeviceName string `json:"device_name"`
 }
 
 // CacheCred persists the pull credential (cache.auth.json) so `mcp --cache` can
@@ -570,6 +576,19 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	if err != nil {
 		return err
 	}
+	// Plan 40 §2.4: the device identity comes from the pinned response ONLY
+	// (plaintext headers are injectable). The default-instance identity gate
+	// runs BEFORE any write (bin included) — a refusal leaves the old cache
+	// byte-identical.
+	deviceName := ""
+	if pin != "" {
+		deviceName = res.Header.Get("X-Sshmgr-Device-Name")
+	}
+	if o.Instance == "" {
+		if err := gateDefaultInstance(bin, metaPath, deviceName, o); err != nil {
+			return err
+		}
+	}
 	blob, err := vaultio.EncryptWithKey(dek, body)
 	if err != nil {
 		return err
@@ -590,7 +609,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		}
 	} else {
 		scoped := res.Header.Get("X-Sshmgr-Snapshot-Scope") == "profile"
-		mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: pulledAt, ServerAnchored: anchored, Scoped: scoped})
+		mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: pulledAt, ServerAnchored: anchored, Scoped: scoped, DeviceName: deviceName})
 		if werr := atomicWriteUnique(metaPath, mb); werr != nil && o.StatusOut != nil {
 			fmt.Fprintf(o.StatusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): %v\n", werr)
 		}
@@ -606,6 +625,46 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		fmt.Fprintf(o.StatusOut, "pulled %d servers / %d credentials into %s\n", len(snap.Servers), len(snap.Credentials), bin)
 	}
 	return nil
+}
+
+// gateDefaultInstance enforces the §2.4 three-branch identity gate on the
+// DEFAULT slot. Active only when the default cache.bin exists (auth.json alone
+// is pull credentials, not material — §9.10). deviceName=="" means "no
+// trustworthy name" (old serve, or plaintext): the gate is skipped with an
+// upgrade hint (pre-existing exposure on old-serve topologies, not a new one).
+func gateDefaultInstance(bin, metaPath, deviceName string, o PullOpts) error {
+	if deviceName != "" {
+		if verr := instname.Valid(deviceName); verr != nil {
+			return fmt.Errorf("pull refused: %w — owner: revoke and re-add the device code with a valid name", verr)
+		}
+	}
+	if _, serr := os.Stat(bin); serr != nil {
+		if os.IsNotExist(serr) {
+			return nil // vacuum / auth-only: no material to protect; the pull records identity
+		}
+		return serr
+	}
+	if deviceName == "" {
+		if o.StatusOut != nil {
+			fmt.Fprintf(o.StatusOut, "WARNING: serve did not send X-Sshmgr-Device-Name (pre-Plan-40 serve) — the default-cache identity gate is inactive until the serve is upgraded\n")
+		}
+		return nil
+	}
+	m, merr := readCacheMeta(metaPath)
+	switch {
+	case merr == nil && m.DeviceName != "":
+		if m.DeviceName == deviceName {
+			return nil // same device re-pulling its own cache
+		}
+		return fmt.Errorf("refusing pull: this cache belongs to device %q but the presented device code is %q — pick one:\n"+
+			"  1. this is a SECOND device on this machine: re-run the pull with --instance %q\n"+
+			"  2. replace the default instance's device code: delete cache.auth.json + cache.bin + cache.meta.json + the quarantine/ dir in this cache directory and re-enroll\n"+
+			"  3. owner: verify which device this code was issued for (`cache-tokens ls` on the server)", m.DeviceName, deviceName, deviceName)
+	case merr == nil:
+		return nil // legacy unregistered meta: adopt — the write below backfills device_name (§5 zero-migration)
+	default:
+		return fmt.Errorf("refusing pull: cache.bin exists but cache.meta.json is missing or unreadable (%v) — inconsistent/interrupted cache; delete cache.bin + cache.meta.json + cache.auth.json + the quarantine/ dir in this cache directory and re-enroll", merr)
+	}
 }
 
 // CacheScopeVerified reports whether the on-disk cache was pulled from a
