@@ -196,6 +196,16 @@ ssh-manager projects add intern   --profile dev
 
 ---
 
+## sudo 提权语义（v0.10.1 起）
+
+`exec_command` / `exec_background` 的 `sudo=true` 走 `sudo -S` **整体提权**：整条命令——含每个 `;` / `&&` / `|` 段——**全部以 root 执行**。v0.10.1 之前只有第一个简单命令在 sudo 域内，后续段以登录用户静默执行（正确性缺陷，已修复；历史细节见 compat-matrix）。调用方注意：
+
+- **变量 / tilde 由 root bash 扩展**：`$USER` 变为 root（实测通用）；`$HOME` / `$PATH` 视目标 sudoers 配置而定（部署依赖）；`$0` 为 `bash`；内层 bash 经 sudo 启动，**不再读 `~/.bashrc`**（依赖其中 PATH 增补 / export 的命令需自查）。
+- **sudo 诊断恒英文（C locale）**；内层命令的 locale 在 env_keep 保留 locale 变量的部署（本部署）下也为 C——依赖 locale 输出格式（日期 / 排序等）的命令输出形态会变。
+- **前提**：目标机 sudo 授权须为**通用命令形态**；command-specific sudoers / NOEXEC 部署不兼容（失败不静默：前者整条被策略拒绝，后者外部命令部分被拦——均显式可见，详见 compat-matrix 的 v0.10.1 行）。
+
+---
+
 ## 隔离与排错
 
 | 现象 | 处理 |

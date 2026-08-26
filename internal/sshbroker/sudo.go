@@ -2,12 +2,37 @@ package sshbroker
 
 import (
 	"context"
-	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 )
+
+// shellQuote wraps s in POSIX single quotes for embedding in a remote shell
+// command line. Everything between single quotes is literal (no
+// metacharacters), and each embedded quote is re-spliced with '\” — the
+// close-quote/escaped-quote/reopen sequence — so any POSIX shell parses the
+// result back to exactly s. That completeness is the security boundary of the
+// batch-1 wrapper (Plan 41 rev3 §1.1/§4.1); keep it a single point of
+// implementation — never hand-splice quoted command lines elsewhere.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// buildSudoWrapper renders the elevated wrapper for cmd (Plan 41 rev3 §1.1):
+// the WHOLE command — every `;` / `&&` / `|` segment — must execute inside the
+// sudo domain. `--` alone cannot span shell separators, so cmd travels as one
+// bash -c argument instead. BASH_ENV= (empty) stops non-interactive bash from
+// sourcing a startup script (marker-forgery injection surface); LC_ALL=C pins
+// sudo's own diagnostics to English — the batch-2a failure-signature layer
+// depends on it. Whether LC_ALL reaches the inner command is sudoers-dependent
+// (env_keep; compat-matrix row). Env-passing discipline: assignments live in
+// the login-shell prefix — `sudo --` rejects VAR=val and `exec VAR=val` is a
+// syntax error (both verified against a live target).
+func buildSudoWrapper(cmd string) string {
+	return "BASH_ENV= LC_ALL=C sudo -S -p '' -- bash -c " + shellQuote(cmd)
+}
 
 // ctxErrOr reports a ctx cancellation as itself, so a caller sees context.Canceled
 // (or DeadlineExceeded) rather than the lower-level error it surfaced as. Used in
@@ -43,7 +68,7 @@ func (c *Client) runSudoSession(ctx context.Context, cmd, pass string, timeout t
 	sess.Stdout = stdout
 	sess.Stderr = stderr
 
-	wrapped := fmt.Sprintf("sudo -S -p '' -- %s", cmd)
+	wrapped := buildSudoWrapper(cmd)
 
 	if timeout > 0 {
 		var cancel context.CancelFunc

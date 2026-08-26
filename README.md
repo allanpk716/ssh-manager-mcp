@@ -40,7 +40,7 @@ The MCP server exposes these tools — **ssh-functional-equivalent for operating
 | Tool | Like | What it does |
 |---|---|---|
 | `list_servers` | — | List the servers the agent may use (`id` / `name` / `host` (`"hidden"` by default; owner opts in per server) / `user` / `has_sudo`, plus owner-provided context: role, services, location, hardware, caveats, tags, description). Always call first — the agent learns real server ids here. Never includes credentials. |
-| `exec_command` | `ssh host cmd` | Run a shell command on a server. `sudo=true` runs `sudo -S` for you (do **not** prepend `sudo` yourself). |
+| `exec_command` | `ssh host cmd` | Run a shell command on a server. `sudo=true` runs `sudo -S` for you (do **not** prepend `sudo` yourself) — the **whole** line, every `;`/`&&`/`\|` segment, executes elevated (v0.10.1+; before that only the first segment did — see compat-matrix). |
 | `download_file` | `scp host:path .` | Download a remote file (size-capped; truncated output is flagged). |
 | `upload_file` | `scp -r . host:path` | Upload a local file **or directory** (recursive) to the server. |
 | `upload_content` | — | Write inline content (a string the agent holds) to a remote file — the **cross-machine** upload path (`upload_file` reads the broker's own filesystem; a remote-serve agent pushes its own configs/scripts here). `text` / `base64` (byte-exact) encodings, 8 MiB decoded cap, parent dirs auto-created, existing file overwritten. |

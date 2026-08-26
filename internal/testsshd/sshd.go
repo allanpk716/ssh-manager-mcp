@@ -141,9 +141,15 @@ func handleSession(newChan ssh.NewChannel, sudoPw string, execFn func(string, io
 			req.Reply(true, nil)
 			cmd := payload.Command
 			stdin := io.Reader(ch)
-			// If this is a sudo -S invocation and the server is simulating sudo,
-			// read the password line from stdin first, then run the inner command.
-			if strings.HasPrefix(cmd, "sudo -S") && sudoPw != "" {
+			// If this is the broker's sudo -S invocation and the server simulates
+			// sudo, read the password line from stdin first; a mismatching line
+			// fails like real sudo (exit 1 + the incorrect-password signature the
+			// batch-2a failure classifier keys on). On success, run the inner
+			// command: simulate BOTH shell layers of the batch-1 wrapper (Plan 41
+			// rev3) — the login shell consuming the outer single quotes, and
+			// bash -c receiving the decoded command — so Exec handlers see the
+			// caller's original string (decoding reverses shellQuote's '\'' splice).
+			if strings.HasPrefix(cmd, "BASH_ENV= LC_ALL=C sudo -S") && sudoPw != "" {
 				buf := make([]byte, 0, 256)
 				one := make([]byte, 1)
 				for {
@@ -155,7 +161,17 @@ func handleSession(newChan ssh.NewChannel, sudoPw string, execFn func(string, io
 					}
 					buf = append(buf, one[0])
 				}
-				cmd = strings.TrimSpace(strings.TrimPrefix(cmd, "sudo -S -p '' --"))
+				if string(buf) != sudoPw {
+					ch.Stderr().Write([]byte("sudo: 1 incorrect password attempt\n"))
+					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{1}))
+					return
+				}
+				inner := strings.TrimSpace(strings.TrimPrefix(cmd, "BASH_ENV= LC_ALL=C sudo -S -p '' --"))
+				if strings.HasPrefix(inner, "bash -c '") && strings.HasSuffix(inner, "'") {
+					quoted := strings.TrimSuffix(strings.TrimPrefix(inner, "bash -c '"), "'")
+					inner = strings.ReplaceAll(quoted, `'\''`, `'`)
+				}
+				cmd = inner
 			}
 			stdout, stderr, exit := execFn(cmd, stdin)
 			if stdout != "" {
