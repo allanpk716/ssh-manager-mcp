@@ -46,7 +46,7 @@ func TestRunSudoSessionWritersReceiveDirect(t *testing.T) {
 
 	var mu sync.Mutex
 	var out, errb strings.Builder
-	code, timedOut, err := c.runSudoSession(context.Background(), "x", "sudopw", 0, writerFunc(func(p []byte) { mu.Lock(); out.Write(p); mu.Unlock() }), writerFunc(func(p []byte) { mu.Lock(); errb.Write(p); mu.Unlock() }))
+	code, timedOut, err, _ := c.runSudoSession(context.Background(), "x", "sudopw", 0, writerFunc(func(p []byte) { mu.Lock(); out.Write(p); mu.Unlock() }), writerFunc(func(p []byte) { mu.Lock(); errb.Write(p); mu.Unlock() }))
 	if err != nil || timedOut || code != 3 || out.String() != "OUT" || errb.String() != "ERR" {
 		t.Fatalf("code=%d timedOut=%v err=%v out=%q err=%q", code, timedOut, err, out.String(), errb.String())
 	}

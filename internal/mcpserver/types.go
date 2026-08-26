@@ -40,8 +40,47 @@ type ExecOutput struct {
 	Truncated   bool   `json:"truncated,omitempty" jsonschema:"true if stdout or stderr exceeded the 1 MiB cap — you only received the PREFIX. Check stdout_bytes/stderr_bytes for the true size; if you need more, refine and re-run (e.g. tail -n, head -n, grep) instead of asking for the whole thing"`
 	StdoutBytes int64  `json:"stdout_bytes" jsonschema:"total stdout bytes produced by the command (may exceed len(stdout) when truncated)"`
 	StderrBytes int64  `json:"stderr_bytes" jsonschema:"total stderr bytes produced by the command (may exceed len(stderr) when truncated)"`
+	// Sudo (Plan 41 §2): present iff sudo=true and the call got past the
+	// no_sudo gates — the elevation is OBSERVABLE, not assumed.
+	Sudo *SudoInfo `json:"sudo,omitempty" jsonschema:"present iff sudo=true: privilege-elevation metadata. outcome: elevated = marker-attested (uid carries the attested uid; 0 = root, a REAL attestation); auth-failed / sudo-start-failed / wrap-failed = the command did NOT run (bad credential / sudo could not start it e.g. sudoers policy / the wrapped shell rejected it e.g. syntax error) and the call is an error; unverified = no marker — treat the identity as unproven"`
 	// EffectiveTimeoutSeconds 恒存在 (no omitempty): clamp 后实际生效秒数。
 	EffectiveTimeoutSeconds int `json:"effective_timeout_seconds" jsonschema:"the timeout actually in effect, in seconds: timeout_seconds <= 0 means the 120s default and anything over 300 is capped at 300 — echoed instead of silently clamped; anything longer belongs in exec_background"`
+}
+
+// SudoInfo is the privilege-elevation metadata of one sudo exec (Plan 41 §2).
+// UID uses a pointer so uid=0 (root) survives JSON — a nil field means
+// "unattested", 0 means "root, marker-attested".
+type SudoInfo struct {
+	Outcome string `json:"outcome" jsonschema:"elevated | auth-failed | sudo-start-failed | wrap-failed | unverified"`
+	UID     *int   `json:"uid" jsonschema:"the marker-attested uid; absent = unattested, 0 = root (a real attestation, not an omission)"`
+}
+
+// ExecContextInput is the exec_context tool input (Plan 41 §3).
+type ExecContextInput struct {
+	ServerID string `json:"server_id" jsonschema:"server id from list_servers"`
+	Sudo     bool   `json:"sudo,omitempty" jsonschema:"true to capture the context of the PRIVILEGED exec channel (uid should be 0); false = the plain login-user channel. Requires has_sudo=true."`
+}
+
+// ExecContextOutput is the exec_context tool output (Plan 41 §3): the true
+// execution context of the exec channel, captured in ONE round — the manual
+// alternative (hand-assembling `id; cat /proc/self/uid_map; …`) rides the
+// composite-command semantics and invites exactly the misdiagnosis this tool
+// exists to end. SSHClient/SSHConnection are captured in the login-shell
+// layer BEFORE elevation (sudo's env_reset empties them in the privileged
+// layer — the tool shows the channel's true provenance, not empty strings).
+type ExecContextOutput struct {
+	UID           int    `json:"uid" jsonschema:"real uid the channel runs as (0 on the sudo=true path if elevation succeeded)"`
+	GID           int    `json:"gid" jsonschema:"real gid"`
+	Groups        string `json:"groups" jsonschema:"supplementary groups (raw id(1) groups= segment)"`
+	TTY           string `json:"tty" jsonschema:"\"tty\" | \"no-tty\" (exec channels have no PTY — \"no-tty\" on the MCP path is expected, not an anomaly)"`
+	UIDMap        string `json:"uid_map" jsonschema:"user-namespace mapping (/proc/self/uid_map); \"0 0 4294967295\" = initial namespace (real root, not userns fakeroot)"`
+	LSMLabel      string `json:"lsm_label" jsonschema:"LSM confinement label (/proc/self/attr/current); \"unconfined\" under AppArmor; \"none\" when unreadable"`
+	SSHClient     string `json:"ssh_client" jsonschema:"client ip port serverport of the SSH connection (captured pre-elevation)"`
+	SSHConnection string `json:"ssh_connection" jsonschema:"client ip port serverip serverport (captured pre-elevation)"`
+	PID           int    `json:"pid" jsonschema:"shell pid on the remote side"`
+	PPID          int    `json:"ppid" jsonschema:"parent pid (the sshd-side process)"`
+	Comm          string `json:"comm" jsonschema:"shell executable name (bash on the sudo path)"`
+	Elevated      bool   `json:"elevated" jsonschema:"true iff captured via the sudo=true path"`
 }
 
 // DownloadInput is the download_file tool input.
@@ -157,18 +196,19 @@ type ExecOutputInput struct {
 // after each offset plus running/terminal status and honest-degradation
 // bookkeeping. House style: constant fields, empty values explicit.
 type BgReadOutput struct {
-	Status           string `json:"status" jsonschema:"task status: running|done|stopped|timeout|failed"`
-	ExitCode         int    `json:"exit_code" jsonschema:"process exit code (meaningful when status=done; 0 otherwise)"`
-	Error            string `json:"error" jsonschema:"error text when status=failed (address shapes cleaned); empty otherwise"`
-	Stdout           string `json:"stdout" jsonschema:"stdout bytes after stdout_offset, encoded per encoding (empty = nothing new)"`
-	Stderr           string `json:"stderr" jsonschema:"stderr bytes after stderr_offset, encoded per encoding (empty = nothing new)"`
-	NextStdoutOffset int64  `json:"next_stdout_offset" jsonschema:"the stdout byte offset right after this chunk — pass it as stdout_offset on your next call"`
-	NextStderrOffset int64  `json:"next_stderr_offset" jsonschema:"the stderr byte offset right after this chunk — pass it as stderr_offset on your next call"`
-	StdoutBytesTotal int64  `json:"stdout_bytes_total" jsonschema:"total stdout bytes the task has produced so far (the whole stream, not just the retained window)"`
-	StderrBytesTotal int64  `json:"stderr_bytes_total" jsonschema:"total stderr bytes the task has produced so far (the whole stream, not just the retained window)"`
-	Truncated        bool   `json:"truncated" jsonschema:"true if an offset fell behind the retained 1 MiB tail window — the skipped bytes are gone; read lost_stdout_bytes/lost_stderr_bytes and continue from next_*_offset instead of retrying the old offset"`
-	LostStdoutBytes  int64  `json:"lost_stdout_bytes" jsonschema:"stdout bytes skipped because stdout_offset fell behind the retained window (0 unless truncated=true)"`
-	LostStderrBytes  int64  `json:"lost_stderr_bytes" jsonschema:"stderr bytes skipped because stderr_offset fell behind the retained window (0 unless truncated=true)"`
+	Status           string    `json:"status" jsonschema:"task status: running|done|stopped|timeout|failed"`
+	ExitCode         int       `json:"exit_code" jsonschema:"process exit code (meaningful when status=done; 0 otherwise)"`
+	Error            string    `json:"error" jsonschema:"error text when status=failed (address shapes cleaned); empty otherwise"`
+	Stdout           string    `json:"stdout" jsonschema:"stdout bytes after stdout_offset, encoded per encoding (empty = nothing new)"`
+	Stderr           string    `json:"stderr" jsonschema:"stderr bytes after stderr_offset, encoded per encoding (sudo prompt and the elevation marker are already stripped when the task runs with sudo)"`
+	Sudo             *SudoInfo `json:"sudo,omitempty" jsonschema:"present iff the task runs with sudo: same privilege-elevation metadata as exec_command's sudo field (nil while the task has not finished classifying)"`
+	NextStdoutOffset int64     `json:"next_stdout_offset" jsonschema:"the stdout byte offset right after this chunk — pass it as stdout_offset on your next call"`
+	NextStderrOffset int64     `json:"next_stderr_offset" jsonschema:"the stderr byte offset right after this chunk — pass it as stderr_offset on your next call"`
+	StdoutBytesTotal int64     `json:"stdout_bytes_total" jsonschema:"total stdout bytes the task has produced so far (the whole stream, not just the retained window)"`
+	StderrBytesTotal int64     `json:"stderr_bytes_total" jsonschema:"total stderr bytes the task has produced so far (the whole stream, not just the retained window)"`
+	Truncated        bool      `json:"truncated" jsonschema:"true if an offset fell behind the retained 1 MiB tail window — the skipped bytes are gone; read lost_stdout_bytes/lost_stderr_bytes and continue from next_*_offset instead of retrying the old offset"`
+	LostStdoutBytes  int64     `json:"lost_stdout_bytes" jsonschema:"stdout bytes skipped because stdout_offset fell behind the retained window (0 unless truncated=true)"`
+	LostStderrBytes  int64     `json:"lost_stderr_bytes" jsonschema:"stderr bytes skipped because stderr_offset fell behind the retained window (0 unless truncated=true)"`
 }
 
 // ExecStopInput is the exec_stop tool input (Plan 32 T7).
