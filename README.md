@@ -25,6 +25,7 @@ Single Go binary. Cross-platform (Windows / Linux / macOS). No daemon — the br
 | 新增 / 编辑 / 维护 / 删除服务器 | [`docs/managing-servers.md`](docs/managing-servers.md) |
 | 授权 Claude Code / Cursor / 其他 agent；token 轮换与吊销 | [`docs/agent-access.md`](docs/agent-access.md) |
 | 多台机器共用一份 vault（serve 模式）/ 自动 TLS / 离线只读缓存兜底 | [`docs/multi-machine.md`](docs/multi-machine.md) |
+| **在 broker（serve）主机上也跑 agent**（本机接入 SSH MCP 的三种姿势） | [`docs/broker-host-agent.md`](docs/broker-host-agent.md) |
 | 应用场景与示例（GPU 巡检、读 root 日志、部署、端口转发……） | [`docs/scenarios.md`](docs/scenarios.md) |
 | 备份 / 迁移整个 vault（export / import） | [`docs/backup-restore.md`](docs/backup-restore.md) |
 | **单机 TUI 教程**（全键盘点选，不想记命令） | [`docs/tui-single-machine.md`](docs/tui-single-machine.md) |
