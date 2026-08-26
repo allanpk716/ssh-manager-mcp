@@ -309,6 +309,11 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 	// one (identical snapshot SHAPE when the vault has one profile — the
 	// header is the only discriminator). Old clients ignore it.
 	w.Header().Set("X-Sshmgr-Snapshot-Scope", "profile")
+	// Plan 40 §2.3: the device code's NAME rides the same trusted channel — the
+	// client uses it to route/verify instance identity (instances/<name>/). Not a
+	// security boundary (the name is not a secret; pinned TLS blocks tampering);
+	// old clients ignore it.
+	w.Header().Set("X-Sshmgr-Device-Name", ct.Name)
 	// The snapshot body is the decrypted credential dump — never let an
 	// intermediary (CDN/proxy/HTTP cache) store it. no-store + no-cache (the
 	// latter also forbids reading a cached copy without revalidation).

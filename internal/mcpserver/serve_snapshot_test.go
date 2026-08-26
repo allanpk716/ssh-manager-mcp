@@ -288,3 +288,22 @@ func TestFormatNameAnomalies_LeaksNothingSaysEverything(t *testing.T) {
 	// NewServeRunner 的接线由"干净库启动成功"既有用例守半边;
 	// 拒绝半边 = NewServeRunner 内直接调 formatNameAnomalies 的三行,代码评审覆盖。
 }
+
+// TestSnapshot_DeviceNameHeader (Plan 40 T8): /snapshot responses emit the device
+// code's NAME as X-Sshmgr-Device-Name so the client can route/verify instance
+// identity (instances/<name>/). The name is already in hand after VerifyCacheToken
+// (no extra query). This is NOT a security boundary (the name is not a secret; pinned
+// TLS blocks tampering); old clients simply ignore the header.
+func TestSnapshot_DeviceNameHeader(t *testing.T) {
+	srv, cacheToken, _, _ := newSnapshotRunner(t)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/snapshot", nil)
+	req.Header.Set("Authorization", "Bearer "+cacheToken)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if got := res.Header.Get("X-Sshmgr-Device-Name"); got != "laptop" {
+		t.Fatalf("X-Sshmgr-Device-Name = %q, want laptop", got)
+	}
+}
