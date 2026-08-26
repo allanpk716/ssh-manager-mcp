@@ -308,6 +308,177 @@ func TestExecSudoWrongPasswordFailsLoud(t *testing.T) {
 	}
 }
 
+// --- Plan 41 rev3 §6 batch-2a matrix ---
+
+// §6-9/10/13/14: the stderr processor's unit matrix — every strip/skip/keep
+// rule and all five outcomes, driven directly (streaming Write calls; chunk
+// boundaries deliberately split one line across two Writes to pin the line
+// assembly).
+func TestSudoStderrProcessorMatrix(t *testing.T) {
+	nonce := "abcd1234abcd1234"
+	marker := func(uid string) string { return "__SSHMGR_SUDO_" + nonce + ":uid=" + uid }
+	var b strings.Builder
+
+	// Fused prompt+marker on ONE line (the no-blank-echo legacy shape the
+	// tolerant regex must still match) — split across two Writes.
+	p := newSudoStderrProcessor(&b, nonce)
+	p.Write([]byte("[sudo] password for x: __SSHMGR_SUD"))
+	p.Write([]byte("O_" + nonce + ":uid=0\n"))
+	p.Write([]byte("cmd stderr keeps [sudo] password for y: literals\n"))
+	p.flush()
+	meta := p.classify()
+	if meta.Outcome != SudoElevated || meta.UID == nil || *meta.UID != 0 {
+		t.Fatalf("meta = %+v, want elevated/uid=0 (fused single line)", meta)
+	}
+	if got := b.String(); got != "cmd stderr keeps [sudo] password for y: literals\n" {
+		t.Fatalf("cleaned = %q, want post-marker verbatim (grep-log literals preserved)", got)
+	}
+
+	// Double marker (forged second line via /proc/$PPID/cmdline): first wins,
+	// the forged line is stripped, the command's own marker-shaped noise is not
+	// mistaken for anything.
+	b.Reset()
+	p = newSudoStderrProcessor(&b, nonce)
+	p.Write([]byte(marker("0") + "\ncmd out\n" + marker("1000") + "\nmore out\n"))
+	p.flush()
+	meta = p.classify()
+	if meta.Outcome != SudoElevated || meta.UID == nil || *meta.UID != 0 {
+		t.Fatalf("meta = %+v, want elevated/uid=0 (first marker only, forged uid=1000 ignored)", meta)
+	}
+	if got := b.String(); got != "cmd out\nmore out\n" {
+		t.Fatalf("cleaned = %q, want forged marker line stripped", got)
+	}
+
+	// Injected blank echo (standalone blank directly before the marker — the
+	// passwordless/cached-credential shape) is dropped; a blank NOT followed by
+	// the marker (sudo lecture) is kept.
+	b.Reset()
+	p = newSudoStderrProcessor(&b, nonce)
+	p.Write([]byte("\n" + marker("0") + "\n"))
+	p.flush()
+	if got := b.String(); got != "" {
+		t.Fatalf("cleaned = %q, want injected blank dropped", got)
+	}
+	b.Reset()
+	p = newSudoStderrProcessor(&b, nonce)
+	p.Write([]byte("lecture line\n\nmore lecture\n"))
+	p.Write([]byte(marker("0") + "\nreal out\n"))
+	p.flush()
+	if got := b.String(); got != "lecture line\n\nmore lecture\nreal out\n" {
+		t.Fatalf("cleaned = %q, want lecture blanks kept", got)
+	}
+
+	// Prompt-only line dropped; unterminated trailing prompt stripped at flush.
+	b.Reset()
+	p = newSudoStderrProcessor(&b, nonce)
+	p.Write([]byte("[sudo] password for x: \n"))
+	p.Write([]byte(marker("0") + "\nout\n"))
+	p.flush()
+	if got := b.String(); got != "out\n" {
+		t.Fatalf("cleaned = %q, want prompt-only line dropped", got)
+	}
+
+	// Failure classification, no marker (command never ran):
+	cases := []struct {
+		name, stderr, want string
+	}{
+		{"auth-failed fused", "[sudo] password for x: sudo: 1 incorrect password attempt\n", SudoAuthFailed},
+		{"auth-failed plural", "sudo: 3 incorrect password attempts\n", SudoAuthFailed},
+		{"start not-in-sudoers", "x is not in the sudoers file.  This incident will be reported.\n", SudoStartFailed},
+		{"start sorry-user", "Sorry, user x is not allowed to execute /usr/bin/bash as root on host.\n", SudoStartFailed},
+		{"wrap syntax error", "bash: -c: line 1: syntax error near unexpected token `)'\n", SudoWrapFailed},
+		{"unknown", "something else entirely\n", SudoUnverified},
+	}
+	for _, tc := range cases {
+		b.Reset()
+		p = newSudoStderrProcessor(&b, nonce)
+		p.Write([]byte(tc.stderr))
+		p.flush()
+		if got := p.classify().Outcome; got != tc.want {
+			t.Fatalf("%s: outcome = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// Timing anomaly: marker present AND a failure signature BEFORE it — the
+	// command DID run, so did-NOT-run outcomes contradict; pin to unverified.
+	b.Reset()
+	p = newSudoStderrProcessor(&b, nonce)
+	p.Write([]byte("sudo: 1 incorrect password attempt\n" + marker("0") + "\nout\n"))
+	p.flush()
+	if got := p.classify().Outcome; got != SudoUnverified {
+		t.Fatalf("timing anomaly: outcome = %q, want unverified", got)
+	}
+}
+
+// §6-8: elevated ExecResult carries the meta with the marker-attested uid.
+func TestExecSudoElevatedMeta(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw", SudoPassword: "sudopw",
+		Exec: func(cmd string, _ io.Reader) (string, string, int) { return "ok\n", "", 0 },
+	})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	res, err := c.ExecSudo(context.Background(), "true", []byte("sudopw"), 0, 0)
+	if err != nil {
+		t.Fatalf("execSudo: %v", err)
+	}
+	if res.Sudo == nil || res.Sudo.Outcome != SudoElevated || res.Sudo.UID == nil || *res.Sudo.UID != 0 {
+		t.Fatalf("Sudo = %+v, want elevated/uid=0", res.Sudo)
+	}
+	// The fake server emits the prompt + marker on stderr; the cleaned stream
+	// the caller sees must contain neither.
+	if strings.Contains(res.Stderr, "[sudo] password for") || strings.Contains(res.Stderr, "__SSHMGR_SUDO_") {
+		t.Fatalf("Stderr = %q, want prompt and marker stripped", res.Stderr)
+	}
+}
+
+// §6-11: wrong password → auth-failed meta + signature in the raw stream.
+func TestExecSudoAuthFailedMeta(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw", SudoPassword: "sudopw",
+		Exec: func(cmd string, _ io.Reader) (string, string, int) { return "RAN\n", "", 0 },
+	})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	res, err := c.ExecSudo(context.Background(), "true", []byte("WRONG"), 0, 0)
+	if err != nil {
+		t.Fatalf("execSudo: %v", err)
+	}
+	if res.Sudo == nil || res.Sudo.Outcome != SudoAuthFailed {
+		t.Fatalf("Sudo = %+v, want auth-failed", res.Sudo)
+	}
+	if strings.Contains(res.Stdout, "RAN") {
+		t.Fatal("the command must NOT run on auth failure")
+	}
+	if !strings.Contains(res.Sudo.Diagnostic, "incorrect password attempt") {
+		t.Fatalf("Diagnostic = %q, want the signature", res.Sudo.Diagnostic)
+	}
+}
+
+// §6-11: sudoers-style start refusal (SudoStartFailure hook) → sudo-start-failed.
+func TestExecSudoStartFailedMeta(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw", SudoPassword: "sudopw",
+		SudoStartFailure: "Sorry, user u is not allowed to execute /usr/bin/bash as root on h.",
+		Exec:             func(cmd string, _ io.Reader) (string, string, int) { return "RAN\n", "", 0 },
+	})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	res, err := c.ExecSudo(context.Background(), "true", []byte("sudopw"), 0, 0)
+	if err != nil {
+		t.Fatalf("execSudo: %v", err)
+	}
+	if res.Sudo == nil || res.Sudo.Outcome != SudoStartFailed {
+		t.Fatalf("Sudo = %+v, want sudo-start-failed", res.Sudo)
+	}
+	if strings.Contains(res.Stdout, "RAN") {
+		t.Fatal("the command must NOT run on start failure")
+	}
+}
+
 // §1.3-6: the background engine's privileged variant rides the same kernel —
 // the composite round-trip must hold there too.
 func TestExecSudoWritersCompositeRoundTrip(t *testing.T) {
@@ -324,7 +495,7 @@ func TestExecSudoWritersCompositeRoundTrip(t *testing.T) {
 	c := connectTest(t, addr, hk)
 
 	var out, errBuf strings.Builder
-	code, timedOut, err := c.ExecSudoWriters(context.Background(), composite, "sudopw", 0, &out, &errBuf)
+	code, timedOut, err, meta := c.ExecSudoWriters(context.Background(), composite, "sudopw", 0, &out, &errBuf)
 	if err != nil {
 		t.Fatalf("ExecSudoWriters: %v", err)
 	}
@@ -336,5 +507,8 @@ func TestExecSudoWritersCompositeRoundTrip(t *testing.T) {
 	}
 	if out.String() != "uid=0(root) uid=0(root)\n" {
 		t.Fatalf("stdout = %q", out.String())
+	}
+	if meta.Outcome != SudoElevated || meta.UID == nil || *meta.UID != 0 {
+		t.Fatalf("meta = %+v, want elevated/uid=0 (background rides the same marker kernel)", meta)
 	}
 }

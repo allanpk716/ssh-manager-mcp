@@ -186,8 +186,8 @@ func TestE2EBackgroundTrioFullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lt.Tools) != 10 || len(BrokerTools) != 10 {
-		t.Fatalf("tools/list = %d tools (BrokerTools has %d), want exactly 10", len(lt.Tools), len(BrokerTools))
+	if len(lt.Tools) != len(BrokerTools) {
+		t.Fatalf("tools/list = %d tools (BrokerTools has %d), want exactly %d", len(lt.Tools), len(BrokerTools), len(BrokerTools))
 	}
 	listed := map[string]bool{}
 	for _, tl := range lt.Tools {

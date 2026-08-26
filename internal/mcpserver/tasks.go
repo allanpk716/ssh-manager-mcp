@@ -65,6 +65,10 @@ type bgTask struct {
 	// auditEnd 由 Insert 从 spec.AuditEnd 绑定 (终态行构造在闭包内); 引擎
 	// 终态置位后锁外调用。
 	auditEnd func(now time.Time) error
+	// sudoMeta (Plan 41 §2): sudo 任务的提权元数据——引擎终态段从 Start 栈上的
+	// metaBox 挂入 (exec 返回后已定值, 终态后只读; running 期间为 nil)。无秘密,
+	// 仅 outcome/attested uid/诊断摘录。
+	sudoMeta *sshbroker.SudoMeta
 	// 代际广播（Task 5 用; 本任务先占位字段）
 	gen     uint64
 	waitCh  chan struct{}
@@ -428,6 +432,8 @@ type BgView struct {
 	Truncated  bool
 	LostStdout int64
 	LostStderr int64
+	// Sudo (Plan 41 §2): sudo 任务的提权元数据 (终态后非 nil)。
+	Sudo *sshbroker.SudoMeta
 }
 
 // Output 是 exec_output 的长轮询等待回路 (=WaitFor, spec §2.3 结构钉死): 等到
@@ -509,7 +515,7 @@ func (m *TaskManager) Output(id string, so, eo int64, wait time.Duration, ctx co
 // truncated + lost = start-since, chunk 为整个保留窗 (spec §4)。
 func (m *TaskManager) view(t *bgTask, so, eo int64) BgView {
 	m.mu.Lock()
-	v := BgView{Status: t.status, ExitCode: t.exitCode, ErrText: t.errText}
+	v := BgView{Status: t.status, ExitCode: t.exitCode, ErrText: t.errText, Sudo: t.sudoMeta}
 	m.mu.Unlock()
 
 	oChunk, oNext, oStart := t.stdout.Snapshot(so)
@@ -569,7 +575,7 @@ func redactRuntimeErr(err error) string {
 // closed 抑制 (spec §3): manager 已关则跳过终态写入与 end 审计行 (表项已被
 // CloseAll 摘除), 但 client 仍由本 goroutine 自关 (幂等)。终态即关 Client:
 // 锁外关、幂等; 保留期只保 task 记录 + rollingBuffer (spec §1)。
-func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Client, exec func(ctx context.Context, stdout, stderr io.Writer) (int, bool, error)) {
+func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Client, exec func(ctx context.Context, stdout, stderr io.Writer) (int, bool, error), sudoMetaBox *sshbroker.SudoMeta) {
 	// 引擎入场即挂 client 槽 (持锁): CloseAll 可达即关, 观察路径可捕获引用。
 	m.mu.Lock()
 	t.client = cli
@@ -591,6 +597,9 @@ func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Cli
 		t.status, t.errText, t.finishedAt = bgStatusFailed, redactRuntimeErr(rerr), m.now()
 	default:
 		t.status, t.exitCode, t.finishedAt = bgStatusDone, code, m.now()
+	}
+	if sudoMetaBox != nil {
+		t.sudoMeta = sudoMetaBox // Plan 41 §2: 终态挂载 (exec 返回后值已定, 之后只读)
 	}
 	writeEnd := t.status != bgStatusRunning && !m.closed // 终态行由本 goroutine 落笔 (同点同锁)
 	nowFn := m.now                                       // 锁内捕获时钟, 锁外调用免字段竞争
@@ -664,9 +673,18 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 		m.ReleaseReservation()
 		return "", 0, cerr
 	}
+	// sudoMetaBox (Plan 41 §2): exec 闭包的第四返回值落点。闭包在 runTask 内
+	// 执行, 返回后值已定; runTask 终态段持锁把它挂上 bgTask——happens-before
+	// 由 exec 调用返回保证。
+	var sudoMetaBox sshbroker.SudoMeta
 	exec := func(ctx context.Context, stdout, stderr io.Writer) (int, bool, error) {
 		if spec.Sudo {
-			return cli.ExecSudoWriters(ctx, spec.Command, spec.SudoPass, 0, stdout, stderr)
+			// The fourth value must land in the OUTER sudoMetaBox (`=` on a
+			// fresh local would shadow it and the meta would never reach the
+			// task record).
+			code, timedOut, rerr, sm := cli.ExecSudoWriters(ctx, spec.Command, spec.SudoPass, 0, stdout, stderr)
+			sudoMetaBox = sm
+			return code, timedOut, rerr
 		}
 		return cli.ExecWriters(ctx, spec.Command, 0, stdout, stderr)
 	}
@@ -678,7 +696,7 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 		Timeout:    effective,
 		AuditStart: func() { auditStart("ok") }, // Insert 持锁段内、goroutine 前调用
 		AuditEnd:   func(row store.AuditRow) error { return st.WriteAudit(row) },
-		Run:        func(ctx context.Context, t *bgTask) { m.runTask(ctx, t, cli, exec) },
+		Run:        func(ctx context.Context, t *bgTask) { m.runTask(ctx, t, cli, exec, &sudoMetaBox) },
 	})
 	if ierr != nil {
 		_ = cli.Close() // Insert 拒绝 (manager 已关): 锁外关, 零泄漏

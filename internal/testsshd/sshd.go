@@ -19,7 +19,12 @@ type Options struct {
 	Password      string        // accept this password (empty = no password auth)
 	AuthorizedKey ssh.PublicKey // accept this client public key (nil = no key auth)
 	SudoPassword  string        // if set, Exec handler simulates sudo -S (reads pw from stdin)
-	Exec          func(cmd string, stdin io.Reader) (stdout, stderr string, exitCode int)
+	// SudoStartFailure, when non-empty, makes the simulated sudo fail AFTER a
+	// correct password with this diagnostic (exit 1) — for exercising the
+	// sudo-start-failed classification (command-specific sudoers / NOEXEC-ish
+	// refusals). The inner command never runs.
+	SudoStartFailure string
+	Exec             func(cmd string, stdin io.Reader) (stdout, stderr string, exitCode int)
 }
 
 // Start launches an in-process SSH server on a random local port.
@@ -73,7 +78,7 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 				close(stop)
 				return
 			}
-			go serve(conn, cfg, opts.SudoPassword, execFn)
+			go serve(conn, cfg, opts.SudoPassword, opts.SudoStartFailure, execFn)
 		}
 	}()
 	cleanup := func() {
@@ -97,7 +102,7 @@ func bytesEqual(a, b []byte) bool {
 	return d == 0
 }
 
-func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, execFn func(string, io.Reader) (string, string, int)) {
+func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int)) {
 	defer c.Close()
 	sc, chans, reqs, err := ssh.NewServerConn(c, cfg)
 	if err != nil {
@@ -108,7 +113,7 @@ func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, execFn func(string,
 	for newChan := range chans {
 		switch newChan.ChannelType() {
 		case "session":
-			go handleSession(newChan, sudoPw, execFn)
+			go handleSession(newChan, sudoPw, sudoStartFailure, execFn)
 		case "direct-tcpip":
 			// Direct TCP/IP forwarding (RFC 4254 §7.2) — the server-side of `ssh -L`.
 			// The broker's ForwardLocal opens this channel via (*ssh.Client).Dial; the
@@ -124,7 +129,7 @@ func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, execFn func(string,
 	}
 }
 
-func handleSession(newChan ssh.NewChannel, sudoPw string, execFn func(string, io.Reader) (string, string, int)) {
+func handleSession(newChan ssh.NewChannel, sudoPw, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int)) {
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		return
@@ -141,15 +146,26 @@ func handleSession(newChan ssh.NewChannel, sudoPw string, execFn func(string, io
 			req.Reply(true, nil)
 			cmd := payload.Command
 			stdin := io.Reader(ch)
-			// If this is the broker's sudo -S invocation and the server simulates
-			// sudo, read the password line from stdin first; a mismatching line
-			// fails like real sudo (exit 1 + the incorrect-password signature the
-			// batch-2a failure classifier keys on). On success, run the inner
-			// command: simulate BOTH shell layers of the batch-1 wrapper (Plan 41
-			// rev3) — the login shell consuming the outer single quotes, and
-			// bash -c receiving the decoded command — so Exec handlers see the
-			// caller's original string (decoding reverses shellQuote's '\'' splice).
-			if strings.HasPrefix(cmd, "BASH_ENV= LC_ALL=C sudo -S") && sudoPw != "" {
+			// exec_context's sudo shape (Plan 41 §3) runs an sshenv echo in the
+			// login-shell layer BEFORE `exec env LC_ALL=C sudo …`: simulate that
+			// layer by evaluating the variables and emitting the section line.
+			if i := strings.Index(cmd, "; exec env LC_ALL=C sudo"); i >= 0 && sudoPw != "" {
+				pre := strings.TrimPrefix(cmd[:i], "echo ")
+				pre = strings.ReplaceAll(pre, "$SSH_CLIENT", "fakeclient 1111 22")
+				pre = strings.ReplaceAll(pre, "$SSH_CONNECTION", "fakeclient 1111 fakeserver 22")
+				ch.Write([]byte(pre + "\n"))
+			}
+			// If this is a sudo -S invocation and the server simulates sudo,
+			// read the password line from stdin first; a mismatching line fails
+			// like real sudo (prompt fused onto the diagnostic line, no newline
+			// in between — pipe mode; exit 1 + the incorrect-password signature
+			// the batch-2a classifier keys on). On success, simulate ALL shell
+			// layers of the batch-2a wrapper (Plan 41 rev3 §2.2) for the
+			// generic shape, or plain decoding for caller-prebuilt shapes
+			// (exec_context): locate `sudo -S -p '' --`, take what follows,
+			// consume the `bash -c '<quoted>'` wrapper, run the marker prologue
+			// the inner bash would run first (generic shape only).
+			if sudoIdx := strings.Index(cmd, "sudo -S -p '' --"); sudoIdx >= 0 && sudoPw != "" {
 				buf := make([]byte, 0, 256)
 				one := make([]byte, 1)
 				for {
@@ -162,14 +178,30 @@ func handleSession(newChan ssh.NewChannel, sudoPw string, execFn func(string, io
 					buf = append(buf, one[0])
 				}
 				if string(buf) != sudoPw {
-					ch.Stderr().Write([]byte("sudo: 1 incorrect password attempt\n"))
+					ch.Stderr().Write([]byte("[sudo] password for test: sudo: 1 incorrect password attempt\n"))
 					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{1}))
 					return
 				}
-				inner := strings.TrimSpace(strings.TrimPrefix(cmd, "BASH_ENV= LC_ALL=C sudo -S -p '' --"))
+				if sudoStartFailure != "" {
+					ch.Stderr().Write([]byte("[sudo] password for test: " + sudoStartFailure + "\n"))
+					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{1}))
+					return
+				}
+				inner := strings.TrimSpace(cmd[sudoIdx+len("sudo -S -p '' --"):])
 				if strings.HasPrefix(inner, "bash -c '") && strings.HasSuffix(inner, "'") {
 					quoted := strings.TrimSuffix(strings.TrimPrefix(inner, "bash -c '"), "'")
 					inner = strings.ReplaceAll(quoted, `'\''`, `'`)
+				}
+				// Execute the marker prologue the inner bash would run first
+				// (generic wrapper shape only; exec_context has none).
+				const prologue = "echo >&2; echo __SSHMGR_SUDO_"
+				if strings.HasPrefix(inner, prologue) {
+					rest0 := inner[len(prologue):] // search for the separator AFTER the marker, not after the blank echo
+					if j := strings.Index(rest0, " >&2; "); j >= 0 {
+						nonce := strings.TrimSuffix(rest0[:j], ":uid=$EUID")
+						ch.Stderr().Write([]byte("[sudo] password for test: \n__SSHMGR_SUDO_" + nonce + ":uid=0\n"))
+						inner = rest0[j+len(" >&2; "):]
+					}
 				}
 				cmd = inner
 			}
