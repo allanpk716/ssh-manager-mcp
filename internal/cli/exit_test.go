@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -66,6 +67,8 @@ func TestExitCodeForCrossesCobra(t *testing.T) {
 			return NewExitCodeError(2, fmt.Errorf("internal"))
 		},
 	})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
 	root.SetArgs([]string{"boom"})
 	err := root.Execute()
 	if err == nil {
