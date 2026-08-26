@@ -348,11 +348,11 @@ func WriteCacheCred(cred *CacheCred) error { return WriteCacheCredFor("", cred) 
 // expiry/rollback. Destruction happens only on the expiry gate, only after a
 // re-check confirms the anchor did not just advance (destructive-race guard).
 func LoadCacheSnapshotFor(instance string) (*store.Snapshot, error) {
-	_, bin, metaPath, _, err := CachePathsFor(instance)
+	dir, bin, metaPath, _, err := CachePathsFor(instance)
 	if err != nil {
 		return nil, err
 	}
-	maxOffline, err := cacheMaxOffline()
+	maxOffline, err := resolveMaxOffline(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -361,11 +361,11 @@ func LoadCacheSnapshotFor(instance string) (*store.Snapshot, error) {
 		if merr != nil {
 			// §3.2: no usable anchor — refuse, never destroy (includes the
 			// never-pulled first run; a fresh machine has no meta by design).
-			return nil, fmt.Errorf("SSHMGR_CACHE_MAX_OFFLINE is set but cache.meta.json is missing or corrupt (or this machine never pulled) — refusing cache (no time anchor); run cache pull")
+			return nil, fmt.Errorf("the offline cap is set (SSHMGR_CACHE_MAX_OFFLINE or cache.config.json) but cache.meta.json is missing or corrupt (or this machine never pulled) — refusing cache (no time anchor); run cache pull")
 		}
 		if !meta.ServerAnchored {
 			// §3.3 provenance gate: a local-clock anchor never passed any gate.
-			return nil, fmt.Errorf("cache.meta.json has no server-anchored time (pulled while SSHMGR_CACHE_MAX_OFFLINE was unset or by an older client) — refusing cache; run cache pull to establish a server time anchor")
+			return nil, fmt.Errorf("the offline cap is set (SSHMGR_CACHE_MAX_OFFLINE or cache.config.json) but cache.meta.json has no server-anchored time (pulled by an older client or without a pinned TLS server) — refusing cache; run cache pull to establish a server time anchor")
 		}
 		anchorT := time.Unix(meta.PulledAt, 0)
 		now := time.Now()
@@ -441,9 +441,20 @@ type PullOpts struct {
 // the spawn-lazy pull (mcp --cache) shares ONE implementation.
 func DoPull(url, token, pin string, o PullOpts) error {
 	code := token
-	// Plan 37 §1/§2: fail-closed env precheck — an invalid cap refuses the
-	// pull before any HTTP (no half-open "pulls but won't load" state).
-	maxOffline, err := cacheMaxOffline()
+	// Plan 40 T5/T13: resolve the cache paths for THIS instance before anything
+	// else disk-touching — the cap resolution below must read the instance's
+	// own cache.config.json, and the later pre-write gates read the existing
+	// meta before any bytes land on disk. Pure path computation: no HTTP, no
+	// writes, so the fail-closed precheck below still precedes every request.
+	dir, bin, metaPath, _, err := CachePathsFor(o.Instance)
+	if err != nil {
+		return err
+	}
+	// Plan 37 §1/§2 + Plan 40 T13: fail-closed cap precheck (env > file) — an
+	// invalid cap from EITHER source refuses the pull before any HTTP (no
+	// half-open "pulls but won't load" state; the env's error is never masked
+	// by the file).
+	maxOffline, err := resolveMaxOffline(dir)
 	if err != nil {
 		return err
 	}
@@ -452,7 +463,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		if maxOffline > 0 {
 			// Plan 37 §2.1: the time anchor requires a pinned TLS server;
 			// a plaintext response's Date is injectable and cannot anchor.
-			return fmt.Errorf("SSHMGR_CACHE_MAX_OFFLINE is set: refusing plaintext pull — the time anchor requires a pinned TLS server (unset the cap or remove --allow-plaintext)")
+			return fmt.Errorf("the offline cap is set (SSHMGR_CACHE_MAX_OFFLINE or cache.config.json): refusing plaintext pull — the time anchor requires a pinned TLS server (unset the cap or remove --allow-plaintext)")
 		}
 		if !o.AllowPlain {
 			return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
@@ -569,13 +580,9 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		pulledAt = serverTime.Unix()
 		anchored = true
 	}
-	// Plan 40 T5: resolve the cache paths for THIS instance before the first
-	// write-side effect — later tasks put a pre-write gate here that must read
-	// the existing meta before any bytes land on disk.
-	_, bin, metaPath, _, err := CachePathsFor(o.Instance)
-	if err != nil {
-		return err
-	}
+	// Plan 40 T5: the paths were resolved at the TOP of DoPull (before the
+	// cap precheck); the identity gates below consume them — a refusal leaves
+	// the old cache byte-identical.
 	// Plan 40 §2.4: the device identity comes from the pinned response ONLY
 	// (plaintext headers are injectable). The default-instance identity gate
 	// runs BEFORE any write (bin included) — a refusal leaves the old cache

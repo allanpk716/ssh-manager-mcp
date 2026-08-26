@@ -38,12 +38,22 @@ func newCacheCmd() *cobra.Command {
 
 func cachePullCmd() *cobra.Command {
 	var url, token, instance string
+	var maxOfflineFlag string
 	c := &cobra.Command{
 		Use:   "pull",
 		Short: "Pull the whole vault from a serve broker into the local encrypted cache",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := checkInstanceFlag(instance); err != nil {
 				return err
+			}
+			maxOff := ""
+			if maxOfflineFlag != "" {
+				d, verr := clientops.ValidateMaxOffline(maxOfflineFlag) // exported parseMaxOffline shell, source="max_offline"
+				if verr != nil {
+					return verr
+				}
+				_ = d
+				maxOff = maxOfflineFlag
 			}
 			if url == "" {
 				url = os.Getenv("SSHMGR_CACHE_URL")
@@ -102,6 +112,21 @@ func cachePullCmd() *cobra.Command {
 			if err := clientops.WriteCacheCredFor(instance, &clientops.CacheCred{URL: url, Token: code, Pin: fp}); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: could not persist cache.auth.json (automatic refresh disabled until a successful pull): %v\n", err)
 			}
+			// Plan 40 T13: persist the instance's offline cap AFTER a successful
+			// pull — a failed pull never rewrites policy. Write failure is a
+			// WARNING (the pull itself succeeded); and when the env is also set
+			// it still overrides the file, so say so or the user thinks the
+			// flag took effect when it provably did not.
+			if maxOff != "" {
+				dir, _, _, _, derr := clientops.CachePathsFor(instance)
+				if derr == nil {
+					if werr := clientops.WriteCacheConfig(dir, maxOff); werr != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: could not persist cache.config.json (the cap applies only while the env/file stays set): %v\n", werr)
+					} else if os.Getenv("SSHMGR_CACHE_MAX_OFFLINE") != "" {
+						fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: SSHMGR_CACHE_MAX_OFFLINE is set — the config just written takes effect only after the env is cleared\n")
+					}
+				}
+			}
 			return nil
 		},
 	}
@@ -110,6 +135,7 @@ func cachePullCmd() *cobra.Command {
 	c.Flags().StringVar(&instance, "instance", "", "route this pull to instances/<name> (default slot when omitted; mutually exclusive with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK)")
 	c.Flags().String("pin", "", "server SPKI fingerprint sha256:... (or set SSHMGR_SERVE_PIN); hard-fails without it unless --allow-plaintext")
 	c.Flags().Bool("allow-plaintext", false, "opt into plaintext HTTP pull when no server pin is set (insecure; default is to refuse)")
+	c.Flags().StringVar(&maxOfflineFlag, "max-offline", "", "persist this Go duration (e.g. 24h) as the instance's offline cap in cache.config.json (survives all processes; env SSHMGR_CACHE_MAX_OFFLINE still overrides while set)")
 	return c
 }
 
