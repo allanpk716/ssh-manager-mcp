@@ -175,6 +175,7 @@ const accessAllowedCallbackAceType = 0x9
 //     two GUIDs between Mask and SidStart, so the cast would read garbage;
 //   - the obsolete ACCESS_ALLOWED_COMPOUND_ACE_TYPE (0x4) likewise offsets
 //     the SID past a compound-ace field.
+//
 // The object/compound forms are a known not-walked granting exposure,
 // registered as a spec §7 residual.
 func isWalkedAllowAceType(aceType uint8) bool {
