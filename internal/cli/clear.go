@@ -187,8 +187,12 @@ func scanClearTargets(_ roles.Role) []clearTarget {
 	// Plan 40 §2.7: named-instance trees + per-instance DEKs — a residual
 	// instance dir IS residual credentials, which is exactly what clear exists
 	// to remove. The whole instances/ tree enumerates as ONE target; DEK
-	// variants glob from BOTH the vault dir and the SSHMGR_CACHE_DEK_DIR seam
-	// (the pattern cannot match the default cache-dek.key — it requires the
+	// variants glob from BOTH the DEK-path resolution base — Dir(CacheDekPath()),
+	// which follows SSHMGR_CACHE_DEK → SSHMGR_CACHE_DEK_DIR → VaultDir, never a
+	// raw VaultDir read (Plan 19 T7: confirmed-clear tests run the real deletion
+	// loop, so the glob base must honor the same seams that pin them off the
+	// operator's live vault) — and the raw SSHMGR_CACHE_DEK_DIR seam (the
+	// pattern cannot match the default cache-dek.key — it requires the
 	// "-<name>" infix).
 	if root, rerr := clientops.InstancesRoot(); rerr == nil {
 		if entries, derr := os.ReadDir(root); derr == nil && len(entries) > 0 {
@@ -196,8 +200,8 @@ func scanClearTargets(_ roles.Role) []clearTarget {
 		}
 	}
 	dekBases := []string{}
-	if vd2, verr := paths.VaultDir(); verr == nil {
-		dekBases = append(dekBases, vd2)
+	if dk, derr := paths.CacheDekPath(); derr == nil {
+		dekBases = append(dekBases, filepath.Dir(dk))
 	}
 	if d := os.Getenv(paths.CacheDekDirEnv); d != "" {
 		dekBases = append(dekBases, d)

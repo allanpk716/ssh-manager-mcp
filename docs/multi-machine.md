@@ -634,7 +634,7 @@ serve 自签证书长生（不靠过期驱动轮换），但若私钥疑似泄�
 
 ---
 
-## 多实例（同机多 agent，Plan 40 第一批）
+## 多实例（同机多 agent Plan 40 第一批）
 
 > **一句话**：同一台工作机上 N 个 agent（各持不同 project token / 设备码 / profile）各自拥有**独立的离线 cache 实例**——独立目录、独立 DEK、独立审计、独立 MAX_OFFLINE 时效，互不串扰、泄露不连坐。
 >
@@ -712,7 +712,7 @@ ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指�
 - **env × flag 互斥**：`SSHMGR_CACHE_DIR` 或 `SSHMGR_CACHE_DEK` 显式设置**且**带 `--instance` → CLI 层报错（这两个 env 是单槽完全覆盖，混用会静默路由错实例 / 令多实例共享同一 DEK）。`SSHMGR_CACHE_DEK_DIR`（目录级 DEK seam）与 `--instance` **可共存**。
 - **`mcp --cache` 无 flag 且默认目录无 cache 而 `instances/` 下有实例 → 报错列出实例清单**并指引 `--instance <name>`——读到哪个实例必须显式，不自动猜。`cache status` 不受限（列表命令，恒列全部）。
 - **`--instance` 强一致校验**：serve 在 `/snapshot` 响应下发设备码 name（`X-Sshmgr-Device-Name` 头，pinned TLS 防篡改）；pull 时头 name ≠ flag name → **写盘前拒**（防 owner 发码张冠李戴——实例目录与授权错位）。**`--instance` 需要 serve ≥v0.11.0**：老 serve 无此头 → 拒 + 提示升级（"upgrade the serve, or drop --instance"）。
-- **默认实例身份门禁**（无 flag 的 pull，写盘前生效）：默认目录已有 `cache.bin` 时，serve 下发的 name 与 meta 记录的 `device_name` 比对——**异码 → 拒**（三选一指引：这是第二台设备的码就改用 `--instance`；要换默认实例的码就走下方换码 runbook；owner 用 `cache-tokens ls` 核对发码）；**存量机器 meta 无 `device_name`**（字段随本设计新增）→ 放行 + 本次 pull 补记（零迁移零感知）；**meta 缺失/损坏但 bin 在 → 拒**（真异常态）。这关掉的是"异码静默覆盖"的**现状敞口**（该覆盖行为在旧版本即存在）。老 serve 拓扑（无头）下门禁跳过 + WARNING 提示升级。
+- **默认实例身份门禁**（无 flag 的 pull，写盘前生效）：默认目录已有 `cache.bin` 时，serve 下发的 name 与 meta 记录的 `device_name` 比对——**异码 → 拒**（三选一指引：这是第二台设备的码就改用 `--instance`；要换默认实例的码就走下方换码 runbook；owner 用 `cache-tokens ls` 核对发码）；**存量机器 meta 无 `device_name`**（字段随本设计新增）→ 放行 + 本次 pull 补记（零迁移零感知）；**meta 缺失/损坏但 bin 在 → 拒**（真异常态）。这关掉的是"异码静默覆盖"的**现状敞口**（该覆盖行为在旧版本即存在）。老 serve 拓扑（无头）下门禁跳过 + WARNING 提示升级。**残余（规格登记）**：降级拉取（明文 `--allow-plaintext`，或 Plan 40 前的老 serve 无 `X-Sshmgr-Device-Name` 头）不携带可信身份——门禁跳过、照常落盘，且本次写盘会把 `cache.meta.json` 的 `device_name` 重写为**空**，已登记身份即被抹除、跨码窗口重新打开，直到下一次 pinned pull 重新补记为止（前置条件是拿到本机 CLI 控制权，属同机威胁，见 [threat-model.md §1.1](./threat-model.md)）。
 
 ### 第一批边界（如实）
 
