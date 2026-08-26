@@ -460,19 +460,23 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	if err != nil {
 		return err
 	}
-	// Plan 37 §2.2-2.4: B on → the Date header of THIS pinned 200 response is
-	// the time anchor. Missing/malformed Date or |server − local| > 1h refuses
-	// the pull (fail-closed); a passing Date is written into meta.PulledAt with
-	// ServerAnchored=true. B off keeps the legacy local clock + explicit false.
+	// Plan 40 §1 (P0): the anchor is a FACT — "the pinned server said THIS at
+	// this pull" — so recording it is gated on the SAFETY precondition
+	// (pin != "" — a pinned TLS response's Date is uninjectable), NOT on the
+	// pulling process's policy env. Production incident this closes: the env-less
+	// TUI sync pull overwrote server_anchored=false, and every env-carrying
+	// mcp --cache then refused to load (a self-inflicted loop — the third
+	// "env must be on both sides" trap). Post-P0 the never-anchors form is
+	// plaintext ONLY; the B-on plaintext refusal above stays policy-driven.
 	pulledAt := time.Now().Unix()
 	anchored := false
-	if maxOffline > 0 {
+	if pin != "" {
 		serverTime, perr := http.ParseTime(res.Header.Get("Date"))
 		if perr != nil {
-			return fmt.Errorf("pull succeeded but the response has no valid Date header — refusing to anchor cache time (SSHMGR_CACHE_MAX_OFFLINE requires a trusted server clock)")
+			return fmt.Errorf("pull succeeded but the response has no valid Date header — refusing to anchor cache time (a pinned pull requires a trusted server clock)")
 		}
 		if skew := time.Since(serverTime); skew > cacheSkewTolerance || skew < -cacheSkewTolerance {
-			return fmt.Errorf("server clock skew too large (server %s vs local %s, cap 1h) — refusing pull: SSHMGR_CACHE_MAX_OFFLINE depends on an accurate clock; fix system time sync",
+			return fmt.Errorf("server clock skew too large (server %s vs local %s, cap 1h) — refusing pull: the cache time anchor depends on an accurate clock; fix system time sync",
 				serverTime.Format(time.RFC3339), time.Now().Format(time.RFC3339))
 		}
 		pulledAt = serverTime.Unix()
