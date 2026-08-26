@@ -220,7 +220,14 @@ func TestServerWizard_DeviceIssueAndScreens(t *testing.T) {
 	w := newWizardForTest()
 	w.role = roles.RoleServer
 	w.st = openVault(t)
+	// Plan 39: the real flow creates the profile (named after the client) BEFORE
+	// stepDeviceIssue; this test jumps straight there, so seed both halves.
+	profID, err := w.st.AddProfile("laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
 	w.data.clientName = "laptop"
+	w.data.profileID = profID
 	w.step = stepDeviceIssue
 	msg := w.issueDeviceCode()()
 	dc, ok := msg.(deviceCodeIssuedMsg)
@@ -272,7 +279,7 @@ func TestServerWizard_ResumeHeuristics(t *testing.T) {
 	if _, _, err := st.AddProject("j1", pid); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.AddCacheToken("laptop"); err != nil {
+	if _, _, err := st.AddCacheToken("laptop", pid); err != nil {
 		t.Fatal(err)
 	}
 	st.Close()
@@ -396,3 +403,80 @@ func ioErr(s string) error { return &strErr{s} }
 type strErr struct{ s string }
 
 func (e *strErr) Error() string { return e.s }
+
+// TestServerWizard_ResumeMultiProfileOpensPicker (Plan 39, code-review #2):
+// with SEVERAL existing profiles the resume paths must NOT silently bind the
+// alphabetically-first — a binding picker opens, and the chosen profile is
+// what the resumed flow (here: profile+project done, device code missing)
+// binds the mint to. Both resume branches route through the same guard.
+func TestServerWizard_ResumeMultiProfileOpensPicker(t *testing.T) {
+	vd := withServeCertDirs(t)
+	seedWizardVault(t, vd)
+	st := openVault(t)
+	defer st.Close()
+	aID, err := st.AddProfile("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bID, err := st.AddProfile("beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddProject("proj-x", aID); err != nil { // profile+project done, code missing → default branch
+		t.Fatal(err)
+	}
+	st.Close()
+
+	w := newWizardForTest()
+	w.role = roles.RoleServer
+	w.st = openVault(t)
+	defer w.st.Close()
+	w.resumeServerFlow()
+	if w.step != stepBindProfile || w.form == nil {
+		t.Fatalf("multi-profile resume must open the binding picker, got step=%v form=%v", w.step, w.form)
+	}
+	// (huh's Select pre-commits the first option into the bound value at
+	// construction — same behavior as the addr picker. That is a VISIBLE
+	// pre-selection the owner confirms/changes, not the silent-routing bug
+	// this fix targets: the form being on screen IS the fix.)
+	// The owner picks beta (NOT the alphabetical-first alpha)…
+	w.data.profileID = bID
+	// …and completing the picker re-routes to the original target: the
+	// client-name step (device code missing).
+	m, _ := w.stepFormDone()
+	wm, ok := m.(wizardModel)
+	if !ok || wm.step != stepClientName || wm.form == nil {
+		t.Fatalf("picker completion must resume at stepClientName, got step=%v", wm.step)
+	}
+	if wm.data.profileID != bID {
+		t.Fatalf("chosen binding must survive the re-route, got %q", wm.data.profileID)
+	}
+}
+
+// TestServerWizard_ResumeSoleProfileStillAutoBinds: exactly one profile keeps
+// the silent auto-bind (no picker) — the common single-profile fleet shape.
+func TestServerWizard_ResumeSoleProfileStillAutoBinds(t *testing.T) {
+	vd := withServeCertDirs(t)
+	seedWizardVault(t, vd)
+	st := openVault(t)
+	aID, err := st.AddProfile("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddProject("proj-x", aID); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	w := newWizardForTest()
+	w.role = roles.RoleServer
+	w.st = openVault(t)
+	defer w.st.Close()
+	w.resumeServerFlow()
+	if w.step != stepClientName {
+		t.Fatalf("sole-profile resume must go straight to stepClientName, got step=%v", w.step)
+	}
+	if w.data.profileID != aID {
+		t.Fatalf("sole-profile resume must auto-bind that profile, got %q", w.data.profileID)
+	}
+}

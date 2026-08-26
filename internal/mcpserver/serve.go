@@ -233,10 +233,18 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 	})
 }
 
-// handleSnapshot writes the full vault Snapshot (Plan-11 ExportSnapshot, reused verbatim) as
-// JSON. Cache tokens are NEVER in the Snapshot (server-side only — ExportSnapshot does not
-// read the cache_tokens table). Best-effort TouchCacheToken AFTER the body is written — a touch
-// failure is logged, not fatal (the pull already succeeded).
+// handleSnapshot writes the authorization-scoped vault Snapshot for the device
+// code's BOUND profile (Plan 39, via store.ExportSnapshotForProfile): exactly
+// the granted servers + their referenced credentials, the profile/grants, the
+// same-profile projects, and those servers' host keys — NO audit rows. Cache
+// tokens are NEVER in the Snapshot (server-side only — ExportSnapshot does not
+// read the cache_tokens table). Best-effort TouchCacheToken AFTER the body is
+// written — a touch failure is logged, not fatal (the pull already succeeded).
+//
+// An UNBOUND device code (pre-Plan-39 legacy migration state) is refused with
+// 403 — deliberately NOT 401: a pinned 401 is the Plan-34 quarantine trigger
+// (the client destroys its local cache on it). 403 keeps the client's cache
+// intact and names the owner-side repair (`cache-tokens bind`).
 func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -247,13 +255,38 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no authenticated cache token", http.StatusForbidden) // fail closed
 		return
 	}
-	snap, err := r.st.ExportSnapshot()
+	ct, err := r.st.GetCacheToken(ti.UserID)
+	if err != nil {
+		// A store fault is NOT an authorization verdict — 403 here would send
+		// the owner chasing a pointless `cache-tokens bind` while the real DB
+		// error stays buried (code-review #5). 500 + stderr, like the export
+		// branch below.
+		fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token lookup %s: %v\n", ti.UserID, err)
+		http.Error(w, "cache token lookup failed", http.StatusInternalServerError)
+		return
+	}
+	if ct == nil {
+		http.Error(w, "no authenticated cache token", http.StatusForbidden) // fail closed
+		return
+	}
+	if ct.ProfileID == "" {
+		fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token %s unbound (device %s) — refusing snapshot; owner: cache-tokens bind\n", ct.ID, ct.Name)
+		http.Error(w, "device code not bound to a profile — owner: run `ssh-manager cache-tokens bind "+ct.Name+" <profile>` on the server", http.StatusForbidden)
+		return
+	}
+	snap, err := r.st.ExportSnapshotForProfile(ct.ProfileID)
 	if err != nil {
 		http.Error(w, "snapshot unavailable", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	// The snapshot body is the full decrypted credential dump — never let an
+	// Plan 39 provenance: this response IS the bound-profile-cropped snapshot.
+	// DoPull records it in cache.meta (scoped=true) so `cache status` / the
+	// client header can tell a cropped cache from a pre-Plan-39 whole-vault
+	// one (identical snapshot SHAPE when the vault has one profile — the
+	// header is the only discriminator). Old clients ignore it.
+	w.Header().Set("X-Sshmgr-Snapshot-Scope", "profile")
+	// The snapshot body is the decrypted credential dump — never let an
 	// intermediary (CDN/proxy/HTTP cache) store it. no-store + no-cache (the
 	// latter also forbids reading a cached copy without revalidation).
 	w.Header().Set("Cache-Control", "no-store, no-cache")

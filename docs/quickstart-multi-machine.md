@@ -43,7 +43,7 @@ ssh-manager servers add --name gpu --host 192.0.2.10 --user deploy --password '.
 ssh-manager profiles add team-a && ssh-manager profiles grant team-a gpu
 
 # 发一张设备授权码给每台工作机（用于拉只读缓存）：
-ssh-manager cache-tokens add --name laptop
+ssh-manager cache-tokens add --name laptop --profile team-a   # 绑定该设备的授权集（Plan 39）
 # Authorization code for "laptop" (shown once): <设备码>
 # Server fingerprint (serve cert SPKI): sha256:abcd1234...
 # On the work machine:

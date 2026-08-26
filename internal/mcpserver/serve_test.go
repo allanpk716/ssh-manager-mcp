@@ -473,10 +473,14 @@ func TestServeUploadContentUFFFDFullChain(t *testing.T) {
 func TestSnapshot401Reason(t *testing.T) {
 	st := newTestStore(t)
 	defer st.Close()
+	profID, err := st.AddProfile("p")
+	if err != nil {
+		t.Fatal(err)
+	}
 	// NB: AddCacheToken returns (id, plaintextToken, err) — bind the SECOND
 	// value (the brief's snippet bound the first, sending the ID as the bearer
 	// code, which misclassifies as "unknown"; caught in Step-2 red analysis).
-	_, tok, err := st.AddCacheToken("laptop")
+	_, tok, err := st.AddCacheToken("laptop", profID)
 	if err != nil {
 		t.Fatalf("AddCacheToken: %v", err)
 	}
@@ -520,8 +524,12 @@ func TestSnapshot401Reason(t *testing.T) {
 func TestVerifyCacheTokenReason(t *testing.T) {
 	st := newTestStore(t)
 	defer st.Close()
+	profID, err := st.AddProfile("p")
+	if err != nil {
+		t.Fatal(err)
+	}
 	// AddCacheToken returns (id, plaintextToken, err) — bind the SECOND value.
-	_, tok, err := st.AddCacheToken("laptop")
+	_, tok, err := st.AddCacheToken("laptop", profID)
 	if err != nil {
 		t.Fatalf("AddCacheToken: %v", err)
 	}

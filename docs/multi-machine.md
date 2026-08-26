@@ -260,18 +260,20 @@ serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问
 
 ### 它解决什么
 
-serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带出门，该机 agent 就断了 SSH 工具。Plan 12 给工作机一份**本地兜底**：把整个 vault 加密拉到本机，断网时 agent 切到这份缓存继续干活（只读）。**不是双写、不是同步**——缓存是单向、只读、零合并的快照。
+serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带出门，该机 agent 就断了 SSH 工具。Plan 12 给工作机一份**本地兜底**：把**该设备绑定 profile 的授权集**加密拉到本机（Plan 39 起按授权裁剪），断网时 agent 切到这份缓存继续干活（只读）。**不是双写、不是同步**——缓存是单向、只读、零合并的快照。
 
 ### 模型（两道独立的闸门）
 
 ```
  ┌──serve 服务器（owner 在这）─────────────────┐
  │  vault + master key                         │
- │  cache-tokens add --name laptop   ──┐       │   ① 发码：每台机一个、可吊销
+ │  cache-tokens add --name laptop \           │       ① 发码：每台机一个、可吊销、
+ │            --profile team-a      ──┐        │          绑定一个 profile（Plan 39）
  │                                     │       │
  │  GET /snapshot                      │       │   ② 拉取：设备授权码鉴权
  │   Authorization: Bearer <设备码> ◀──┼─拉─────┤   （和 project token 是
- │   → 整个 vault 的 Snapshot JSON      │       │    两套不同的 verifier）
+ │   → 该 profile 授权集的 Snapshot     │       │    两套不同的 verifier）
+ │     JSON（授权服务器+其凭据）        │       │
  └─────────────────────────────────────┼───────┘
                                        │
  ┌──工作机（laptop）───────────────────▼────────┐
@@ -288,25 +290,26 @@ serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带�
  └────────────────────────────────────────────────┘
 ```
 
-关键：**两道闸门，永不桥接**。
+关键：**两道闸门，永不桥接**；拉取范围 = 设备码绑定的 profile 的授权集（Plan 39 起）——未授权的服务器及其凭据不出服务器。
 
 | 闸门 | 鉴什么 | 进哪 |
 |---|---|---|
 | project token（`projects add` 发的） | MCP 工具调用（exec / download / upload / forward） | 在线走 serve 的 MCP 路由；离线走 `mcp --cache` |
-| 设备授权码（`cache-tokens add` 发的） | 拉整个 vault 的 `/snapshot` | 只进 `/snapshot` |
+| 设备授权码（`cache-tokens add` 发的，**绑定一个 profile**） | 拉取该 profile 授权集的 `/snapshot` | 只进 `/snapshot` |
 
-一个 project token **不能** dump 整个 vault（被 `/snapshot` 的 verifier 拒）；一个设备码**不能**驱动 MCP 工具。两套独立、从不互通——这是整个设计的**基石**（已被 T5 的 cross-auth 隔离测试证明：project token 打 `/snapshot` 必拒，设备码打 MCP 必拒）。
+一个 project token **不能** 拉 `/snapshot`（被 verifier 拒）；一个设备码**不能**驱动 MCP 工具；设备码拉到的也**只有它绑定 profile 的授权集**（Plan 39）。三套边界独立、从不互通——这是整个设计的**基石**（已被测试钉住：project token 打 `/snapshot` 必拒，设备码打 MCP 必拒，裁剪快照不含授权外服务器/凭据/audit）。
 
 ### enroll 一台新机（3 步）
 
 > 🧭 各页签 / 设备码 / token / 指纹谁是谁，一页图解见 [concepts.md](./concepts.md)（概念模型：仓库 · 货架 · 装箱单 · 钥匙 · 水管 · 防伪封条）。也可不读文档，直接在空机器上跑 `ssh-manager tui` 走角色向导。
 
-#### Step 1（服务器侧，一次性）：发一个设备授权码
+#### Step 1（服务器侧，一次性）：发一个绑定 profile 的设备授权码
 
 在 serve 服务器上（同一台常驻 broker 的机器）：
 
 ```bash
-ssh-manager cache-tokens add --name laptop
+ssh-manager profiles grant team-a gpu          # 先配好该设备的授权集（装箱单）
+ssh-manager cache-tokens add --name laptop --profile team-a
 # Authorization code for "laptop" (shown once): <一长串设备码>
 # Server fingerprint (serve cert SPKI): sha256:abcd1234...
 #
@@ -315,14 +318,17 @@ ssh-manager cache-tokens add --name laptop
 #   # (or) set SSHMGR_SERVE_PIN=sha256:abcd1234... and pass --token <设备码>
 ```
 
-> 也可在 broker 上用 `ssh-manager tui` 的「设备码」页签发——同样把设备码 + 指纹 + `cache pull` 示例命令一次性全屏显示（见 [README 的 TUI 主控台](../README.md#tui-主控台ssh-manager-tui)）。
+> 也可在 broker 上用 `ssh-manager tui` 的「设备码」页签发——表单里选绑定 profile，设备码 + 指纹 + `cache pull` 示例命令一次性全屏显示（见 [README 的 TUI 主控台](../README.md#tui-主控台ssh-manager-tui)）。
 
+- **`--profile` 必填（Plan 39）**：设备码绑定一个 profile，**该设备拉到的就是、且只是这个 profile 授权的服务器（含凭据）**——未授权服务器及其凭据不出服务器。一台机 = 一个码 = 一个 profile；要让某台机只看部分服务器，建一个专用 profile 授权那几台再绑它。
+- **存量未绑码**（Plan 39 之前签发的）：拉取被拒（**403，不毁本地缓存**），owner 跑 `ssh-manager cache-tokens bind <name> <profile>` 原地补绑（保留名字/状态/拉取历史）即可恢复。
 - `--name` **必填**且在 **active** 码中唯一（比如 `laptop` / `desktop-2`）；**revoke 后可重发同名**（旧的 revoked 行会被自动清理），后续吊销靠它。
 - 设备码**只显示一次**——当场拉、或记进密码管理器。
 - **指纹是自动加密的关键**：设备码旁那行 `Server fingerprint` 是 serve 自签证书的 SPKI 指纹。`cache pull` 拿到它（任一形式：token 内嵌 `<码>:<指纹>`、`--pin`、或 `SSHMGR_SERVE_PIN`）就用 TLS + 指纹钉死连 serve；**拿不到则默认拒连**（hard-fail，需显式 `--allow-plaintext` 才明文）。指纹可随时用 `ssh-manager serve cert-info` 重查。另：有 pin 时 URL 必须是 `https://`（否则 hard-fail —— http 不协商 TLS 会让 pin 静默失效）。
 - 其他管理命令：
   ```bash
-  ssh-manager cache-tokens ls          # name / id / prefix / status / last_pull（不显示码）
+  ssh-manager cache-tokens ls          # name / id / prefix / status / profile / last_pull（不显示码）
+  ssh-manager cache-tokens bind laptop team-a   # 未绑码补绑（Plan 39 存量修复）
   ssh-manager cache-tokens revoke laptop   # 位置参数，吊销（断拉新 + 回连销毁，见下「吊销」节）
   ```
 
@@ -341,6 +347,7 @@ ssh-manager cache status
 # age:      12m3s
 # servers:  N
 # creds:    M
+# scope:    team-a        ← Plan 39 拉取的裁剪快照;未 re-pull 的旧快照显示 unverified
 # source:   https://192.0.2.5:7878
 ```
 
@@ -582,9 +589,13 @@ ssh-manager cache-tokens revoke laptop
 ### 限制（如实）
 
 - **缓存只读**：离线能 exec / 传输 / 转发，但**任何写都被拒**（`ErrReadOnly`）。要加改删得连上 serve。
+- **快照范围 = 绑定 profile 的授权集**（Plan 39）：client 机的 `cache.bin` 只含该设备绑定 profile 授权的服务器与凭据；owner 改动授权（增删 grant）后，**下次拉取生效**（TTL ≤30min 或手动 `[s]`）。一台机绑定多个 profile（多个不同装箱单共用一份缓存）不支持——一个设备码一个 profile，要不同范围就发不同码在不同机器。
+- **授权边界是"服务器行"粒度，不是"凭据行"粒度**（如实）：若一台**未授权**服务器与已授权服务器**共用同一凭据**（如共享的 bastion/sudo 密码——`servers.go` 一等支持的概念），裁剪快照仍会携带该凭据（已授权服务器登录需要它），而它能登那台未授权服务器。要在凭据层面隔离授权，就别跨授权边界共享凭据——这是 owner 侧的建模决定，机制无法代劳。
+- **bind 错配 footgun**：把设备码 bind 到一个**不含该机 project** 的 profile（`cache-tokens bind` 支持 rebind）→ pull 照常 200、在线照常，但离线栈搁浅：运行中的 `mcp --cache` 热加载验证 token 失败后**静默保留旧快照**，新 spawn 直接报 token 无效——错误不会指向错配本身。处置：把设备码 bind 回该机 project 所在的 profile，或在该 profile 下建 project 并换发 token。bind 前核对 `profiles ls`（授权集）与该机 `.mcp.json` 用的 project。
+- **未绑码（Plan 39 前签发）拉取被拒 403**：本地缓存不毁，owner 跑 `cache-tokens bind` 补绑后即恢复。
 - **自动保鲜是 `mcp --cache` 进程内置的**（spawn 惰性拉取 + 会话内按 TTL 懒检查 + 热加载）——不是常驻 daemon，也无需 OS 调度器。
 - **运行中的 `mcp --cache` 会热加载新缓存**（hash 变化即换）——拉取成功后下一次工具调用即生效，无需重启 Claude Code。在线的 serve 是每请求实时鉴权，没有这个问题。
-- **离线审计分散在各机本地**：`cache-audit.log` 不回传、不合并——要集中视图得自己收。
+- **离线审计分散在各机本地**：`cache-audit.log` 不回传、不合并——要集中视图得自己收。服务器的 `audit_log`（命令历史）**不进快照**，永远只在 server 侧。
 - **首次 `cache pull` 必须在线**——缓存还没拉下来之前，`mcp --cache` 跑不起来（会报 `cache DEK not found` / `no such file`）（凭据文件 `cache.auth.json` 由首次成功 pull 自动写入）。
 - **永离线的物理失窃 = 远程吊销解决不了**：见上"吊销"——revoke 的销毁要**回连**才兑现（≤30min lazy cadence，默认 `--cache-max-age`；`0` 关闭自动拉取，销毁则只发生在手动 pull）；永不离线的失窃机上"密文 + DEK + 二进制"三件仍在手，唯一根治 = 轮换服务器凭据。
 

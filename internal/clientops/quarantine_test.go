@@ -493,3 +493,75 @@ func TestE2EQuarantineFullChain(t *testing.T) {
 		t.Fatal("post-re-pull bin loss must NOT attribute to quarantine (reset held)")
 	}
 }
+
+// TestDoPullPinned403UnboundDoesNotQuarantine (Plan 39): the unbound-device-code
+// refusal arrives as 403 — deliberately NOT the pinned-401 quarantine trigger
+// (rev4 §3's trigger face stays exactly "pinned 401"). The client's cache
+// survives; the error names the owner-side repair.
+func TestDoPullPinned403UnboundDoesNotQuarantine(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DIR", dir)
+	withDEKFake(t)
+	bin, _, cred := seedCache(t, dir)
+
+	srv := newPinnedSnapshotServer(t, func(r *http.Request) (int, string) {
+		return 403, "device code not bound to a profile — owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server"
+	})
+	err := DoPull(srv.URL, "unbound-code", srv.Pin, PullOpts{})
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if errors.Is(err, ErrCacheQuarantined) {
+		t.Fatalf("pinned 403 must NOT quarantine (Plan 39: the trigger face stays pinned-401-only): %v", err)
+	}
+	if !strings.Contains(err.Error(), "not bound") {
+		t.Fatalf("error must name the unbound-profile cause, got: %v", err)
+	}
+	for _, f := range []string{bin, cred} {
+		if _, serr := os.Stat(f); serr != nil {
+			t.Fatalf("%s must survive a 403 refusal: %v", filepath.Base(f), serr)
+		}
+	}
+}
+
+// TestDoPull403DiscriminatesByBody (code-review #6): the unbound advice fires
+// ONLY on the serve's own "not bound to a profile" body; any other 403
+// (proxy/WAF/fail-closed) reports generically with the body excerpt and never
+// sends the owner chasing a pointless bind. Neither face quarantines.
+func TestDoPull403DiscriminatesByBody(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DIR", dir)
+	withDEKFake(t)
+	bin, _, cred := seedCache(t, dir)
+
+	srv := newPinnedSnapshotServer(t, func(r *http.Request) (int, string) {
+		if r.Header.Get("Authorization") == "Bearer unbound-code" {
+			return 403, "device code not bound to a profile — owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server"
+		}
+		return 403, "403 Forbidden: client IP not in allowlist"
+	})
+	// The serve's own refusal → unbound advice.
+	err := DoPull(srv.URL, "unbound-code", srv.Pin, PullOpts{})
+	if err == nil || !strings.Contains(err.Error(), "not bound to a profile") {
+		t.Fatalf("unbound 403 must name the cause, got: %v", err)
+	}
+	if errors.Is(err, ErrCacheQuarantined) {
+		t.Fatalf("no 403 face may quarantine: %v", err)
+	}
+	// A proxy-shaped 403 → generic, body excerpted, NO bind advice.
+	err = DoPull(srv.URL, "proxy-blocked", srv.Pin, PullOpts{})
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if strings.Contains(err.Error(), "not bound") || strings.Contains(err.Error(), "cache-tokens bind") {
+		t.Fatalf("proxy 403 must NOT carry the bind advice, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "allowlist") {
+		t.Fatalf("generic 403 must carry status + body excerpt, got: %v", err)
+	}
+	for _, f := range []string{bin, cred} {
+		if _, serr := os.Stat(f); serr != nil {
+			t.Fatalf("%s must survive both 403 faces: %v", filepath.Base(f), serr)
+		}
+	}
+}

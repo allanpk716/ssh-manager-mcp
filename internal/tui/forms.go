@@ -174,18 +174,24 @@ func newProjectForm(d *projectDraft, profiles []*models.Profile) *huh.Form {
 }
 
 // deviceDraft is the issue-device-code form state. Name is persisted as the
-// token's name; ServeURL is used ONLY to compose the usage hint in the
-// one-time view — the broker cannot learn its own reachable address from
+// token's name; ProfileID is the Plan-39 binding (the Select's VALUE — the
+// device's /snapshot scope); ServeURL is used ONLY to compose the usage hint in
+// the one-time view — the broker cannot learn its own reachable address from
 // cacheMeta/cred, so the operator supplies it. Never stored anywhere.
 type deviceDraft struct {
-	Name     string
-	ServeURL string
+	Name      string
+	ProfileID string
+	ServeURL  string
 }
 
-// newCacheTokenForm: device name + serve address (usage-hint-only field).
-func newCacheTokenForm(d *deviceDraft) *huh.Form {
+// newCacheTokenForm: device name + profile binding (Plan 39 — the select decides
+// what that device may pull) + serve address (usage-hint-only field). Reuses
+// projectProfileOptions (label = profile name, value = profile id).
+func newCacheTokenForm(d *deviceDraft, profiles []*models.Profile) *huh.Form {
 	return huh.NewForm(huh.NewGroup(
 		huh.NewInput().Title("设备名称（如 laptop，吊销后可重发）").Value(&d.Name).Validate(nonEmpty),
+		huh.NewSelect[string]().Title("绑定 profile（决定该设备能拉到的服务器范围）").
+			Options(projectProfileOptions(profiles)...).Value(&d.ProfileID),
 		huh.NewInput().Title("serve 地址（仅用于生成使用提示，不保存）").
 			Placeholder("https://192.0.2.5:7878").Value(&d.ServeURL).Validate(nonEmpty),
 	))

@@ -132,17 +132,37 @@ func cacheStatusCmd() *cobra.Command {
 				age = time.Since(info.ModTime()).Round(time.Second).String()
 			}
 			url := "(unknown)"
+			scoped := false
 			if mb, err := os.ReadFile(metaPath); err == nil {
-				// anonymous twin of clientops' private cacheMeta: status only reads url
+				// anonymous twin of clientops' private cacheMeta: status reads
+				// url + the Plan-39 scope provenance
 				var m struct {
-					URL string `json:"url"`
+					URL    string `json:"url"`
+					Scoped bool   `json:"scoped"`
 				}
 				if json.Unmarshal(mb, &m) == nil && m.URL != "" {
 					url = m.URL
 				}
+				scoped = m.Scoped
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "cache:    %s\nage:      %s\nservers:  %d\ncreds:    %d\nsource:   %s\n",
-				bin, age, len(snap.Servers), len(snap.Credentials), url)
+			// Plan 39 provenance display (code-review #3): a single-profile
+			// WHOLE-VAULT cache is shape-identical to a cropped one, so the
+			// profile line is only honest when the pull itself recorded the
+			// serve's scope header. Otherwise say "unverified" — never let a
+			// legacy cache pass as cropped.
+			profile := "unverified — re-pull to crop (pre-Plan-39 snapshot or old serve)"
+			if scoped {
+				switch len(snap.Profiles) {
+				case 1:
+					profile = snap.Profiles[0].Name
+				case 0:
+					profile = "(none)"
+				default:
+					profile = "(multiple — pre-Plan-39 whole-vault snapshot)"
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "cache:    %s\nage:      %s\nservers:  %d\ncreds:    %d\nscope:    %s\nsource:   %s\n",
+				bin, age, len(snap.Servers), len(snap.Credentials), profile, url)
 			return nil
 		},
 	}

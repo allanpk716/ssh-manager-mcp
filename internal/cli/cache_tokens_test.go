@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -33,8 +34,9 @@ func TestCacheTokens_AddLsRevoke(t *testing.T) {
 		return out
 	}
 
-	// add prints the one-time code
-	addOut := mustCli("cache-tokens", "add", "--name", "laptop")
+	// Plan 39: the code binds to a profile — create one first, then add.
+	mustCli("profiles", "add", "team-a")
+	addOut := mustCli("cache-tokens", "add", "--name", "laptop", "--profile", "team-a")
 	if !strings.Contains(addOut.String(), "Authorization code") || !strings.Contains(addOut.String(), "laptop") {
 		t.Fatalf("add output missing code/name: %s", addOut.String())
 	}
@@ -93,7 +95,8 @@ func TestCacheTokensAdd_EmitsFingerprint(t *testing.T) {
 		return out
 	}
 
-	out := mustCli("cache-tokens", "add", "--name", "laptop")
+	mustCli("profiles", "add", "team-a")
+	out := mustCli("cache-tokens", "add", "--name", "laptop", "--profile", "team-a")
 	s := out.String()
 	if !strings.Contains(s, "Authorization code") {
 		t.Fatalf("missing code line: %s", s)
@@ -137,9 +140,19 @@ func TestCacheTokensAddCertFailZeroOrphans(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Plan 39: a profile must exist for the add to reach the cert step.
+	if err := func() error {
+		r := NewRootCmd()
+		r.SetOut(&bytes.Buffer{})
+		r.SetArgs([]string{"profiles", "add", "team-a"})
+		return r.Execute()
+	}(); err != nil {
+		t.Fatal(err)
+	}
+
 	root := NewRootCmd()
 	root.SetOut(&bytes.Buffer{})
-	root.SetArgs([]string{"cache-tokens", "add", "--name", "laptop"})
+	root.SetArgs([]string{"cache-tokens", "add", "--name", "laptop", "--profile", "team-a"})
 	err := root.Execute()
 	if err == nil {
 		t.Fatal("cache-tokens add must error when the serve cert is corrupt")
@@ -163,5 +176,100 @@ func TestCacheTokensAddCertFailZeroOrphans(t *testing.T) {
 	}
 	if len(tokens) != 0 {
 		t.Fatalf("cache_tokens must hold ZERO rows after a failed add (no orphan device codes), got %d: %+v", len(tokens), tokens)
+	}
+}
+
+// TestCacheTokensAdd_ProfileRequired (Plan 39): add without --profile is
+// rejected up front — an unbound code would be refused at its first pull (403),
+// so minting one is always a misstep the CLI should block.
+func TestCacheTokensAdd_ProfileRequired(t *testing.T) {
+	dir := t.TempDir()
+	mk, _ := store.GenerateMasterKey()
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         filepath.Join(dir, "test.db"),
+		"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mk),
+		"SSHMGR_SERVE_CERT":    filepath.Join(dir, "serve-cert.pem"),
+		"SSHMGR_SERVE_KEY":     filepath.Join(dir, "serve-key.pem"),
+	})
+	root := NewRootCmd()
+	root.SetOut(&bytes.Buffer{})
+	root.SetArgs([]string{"cache-tokens", "add", "--name", "laptop"})
+	if err := root.Execute(); err == nil {
+		t.Fatal("add without --profile must error")
+	}
+	// Unknown profile is equally loud.
+	root2 := NewRootCmd()
+	root2.SetOut(&bytes.Buffer{})
+	root2.SetArgs([]string{"cache-tokens", "add", "--name", "laptop", "--profile", "ghost"})
+	if err := root2.Execute(); err == nil || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("add with unknown profile must error naming it: %v", err)
+	}
+}
+
+// TestCacheTokensBind (Plan 39): the legacy repair path — an unbound row (the
+// pre-Plan-39 migration state) is bound in place; ls then shows the profile;
+// unknown names/profiles error.
+func TestCacheTokensBind(t *testing.T) {
+	dir := t.TempDir()
+	mk, _ := store.GenerateMasterKey()
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         filepath.Join(dir, "test.db"),
+		"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mk),
+		"SSHMGR_SERVE_CERT":    filepath.Join(dir, "serve-cert.pem"),
+		"SSHMGR_SERVE_KEY":     filepath.Join(dir, "serve-key.pem"),
+	})
+	mustCli := func(args ...string) *bytes.Buffer {
+		root := NewRootCmd()
+		out := &bytes.Buffer{}
+		root.SetOut(out)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("cli %v: %v", args, err)
+		}
+		return out
+	}
+	// Pre-create the store in its PRE-Plan-39 shape: one profile + one
+	// UNBOUND cache_tokens row (exactly what a legacy fleet migrates into —
+	// the state this command exists to repair).
+	db, err := sql.Open("sqlite", filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ddl := range []string{
+		`CREATE TABLE profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+		`CREATE TABLE cache_tokens (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, token_hash BLOB NOT NULL, token_salt BLOB NOT NULL, token_prefix TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', last_pull_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+		`INSERT INTO profiles VALUES ('p1','team-a',1,1)`,
+		`INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,last_pull_at,created_at,updated_at) VALUES ('ct1','laptop-legacy',x'00',x'00','legacyXXX','active',NULL,1,1)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	// ls renders unbound as profile=-
+	lsOut := mustCli("cache-tokens", "ls")
+	if !strings.Contains(lsOut.String(), "profile=-") {
+		t.Fatalf("unbound code must render profile=-, got: %s", lsOut.String())
+	}
+	// bind repairs it in place.
+	out := mustCli("cache-tokens", "bind", "laptop-legacy", "team-a")
+	if !strings.Contains(out.String(), "laptop-legacy") || !strings.Contains(out.String(), "team-a") {
+		t.Fatalf("bind output must name device + profile: %s", out.String())
+	}
+	lsOut2 := mustCli("cache-tokens", "ls")
+	if !strings.Contains(lsOut2.String(), "profile=team-a") {
+		t.Fatalf("bound code must render its profile, got: %s", lsOut2.String())
+	}
+	// unknown device / unknown profile both error
+	for _, args := range [][]string{
+		{"cache-tokens", "bind", "ghost", "team-a"},
+		{"cache-tokens", "bind", "laptop-legacy", "ghost"},
+	} {
+		root := NewRootCmd()
+		root.SetOut(&bytes.Buffer{})
+		root.SetArgs(args)
+		if err := root.Execute(); err == nil {
+			t.Fatalf("bind %v must error", args)
+		}
 	}
 }

@@ -251,6 +251,14 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "projects", "status", "TEXT NOT NULL DEFAULT 'active'"); err != nil {
 		return err
 	}
+	// Plan 39: device codes bind to a profile (scopes /snapshot to the bound
+	// profile's authorization set). Nullable — pre-Plan-39 rows migrate to NULL
+	// (= unbound; serve refuses their pulls with 403 until `cache-tokens bind`).
+	// ALTER ADD COLUMN with REFERENCES is legal here precisely because the
+	// default is NULL (SQLite restriction), which is also the semantic we want.
+	if err := addColumnIfMissing(db, "cache_tokens", "profile_id", "TEXT REFERENCES profiles(id)"); err != nil {
+		return err
+	}
 	// Plan 20 C0: servers.credential_id becomes nullable (credential-less
 	// servers — e.g. ssh-config imports of hosts without IdentityFile).
 	// SQLite can't relax NOT NULL in place, so this is a guarded table rebuild.
@@ -467,6 +475,7 @@ CREATE TABLE IF NOT EXISTS cache_tokens (
   token_salt BLOB NOT NULL,
   token_prefix TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
+  profile_id TEXT REFERENCES profiles(id),
   last_pull_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL

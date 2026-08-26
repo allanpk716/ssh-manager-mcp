@@ -71,9 +71,13 @@ func TestReadOnly_MutationsRefused(t *testing.T) {
 		t.Fatalf("ImportSnapshot: err=%v want ErrReadOnly", err)
 	}
 
-	// Plan 12 T1 cache_tokens mutations are also guarded.
-	if _, _, err := s.AddCacheToken("dev"); !errors.Is(err, ErrReadOnly) {
+	// Plan 12 T1 cache_tokens mutations are also guarded. Plan 39: the read-only
+	// gate fires BEFORE the profile-existence check (any profileID arg proves it).
+	if _, _, err := s.AddCacheToken("dev", "any-profile"); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("AddCacheToken: err=%v want ErrReadOnly", err)
+	}
+	if err := s.BindCacheToken("dev", "any-profile"); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("BindCacheToken: err=%v want ErrReadOnly", err)
 	}
 	if err := s.RevokeCacheToken("dev"); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("RevokeCacheToken: err=%v want ErrReadOnly", err)

@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Snapshot is a portable, master-key-independent capture of the entire vault.
@@ -247,6 +248,194 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 		return nil, err
 	}
 
+	return snap, nil
+}
+
+// ExportSnapshotForProfile returns the authorization-scoped Snapshot served to a
+// profile-BOUND device code at /snapshot (Plan 39): exactly the servers granted
+// to profileID, ONLY the credentials those servers reference (credential_id ∪
+// sudo_credential_id), the profile row + its grants, the projects bound to it,
+// and the host_keys of those servers. Audit rows are NEVER carried — the offline
+// audit trail is the client's local cache-audit.log sidecar, so command history
+// stays server-side. The JSON shape is the SAME Snapshot envelope (a strict
+// subset of ExportSnapshot's rows), so every existing client hydrates it
+// unchanged. Unknown profileID is an explicit error (owner misconfiguration must
+// be loud, not an empty-but-200 snapshot).
+//
+// Deliberately does NOT share queries with ExportSnapshot: the owner-side
+// export/import backup path stays whole-vault by design and must not drift.
+func (s *Store) ExportSnapshotForProfile(profileID string) (*Snapshot, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM profiles WHERE id=?`, profileID).Scan(&n); err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("profile %q not found", profileID)
+	}
+
+	snap := &Snapshot{Version: 1}
+
+	// profile row
+	rp, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles WHERE id=?`, profileID)
+	if err != nil {
+		return nil, err
+	}
+	for rp.Next() {
+		var p SnapshotProfile
+		if err := rp.Scan(&p.ID, &p.Name, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			rp.Close()
+			return nil, err
+		}
+		snap.Profiles = append(snap.Profiles, p)
+	}
+	rp.Close()
+	if err := rp.Err(); err != nil {
+		return nil, err
+	}
+
+	// grants of THIS profile only
+	rg, err := s.db.Query(`SELECT profile_id, server_id FROM profile_servers WHERE profile_id=? ORDER BY server_id`, profileID)
+	if err != nil {
+		return nil, err
+	}
+	for rg.Next() {
+		var g SnapshotGrant
+		if err := rg.Scan(&g.ProfileID, &g.ServerID); err != nil {
+			rg.Close()
+			return nil, err
+		}
+		snap.Grants = append(snap.Grants, g)
+	}
+	rg.Close()
+	if err := rg.Err(); err != nil {
+		return nil, err
+	}
+
+	// servers granted to the profile (same column shape as ExportSnapshot)
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at
+		FROM servers WHERE id IN (SELECT server_id FROM profile_servers WHERE profile_id=?) ORDER BY id`, profileID)
+	if err != nil {
+		return nil, err
+	}
+	// referenced credential ids + host:port keys, collected while scanning servers
+	credIDs := make(map[string]bool)
+	hostPorts := make(map[string]bool)
+	for rs.Next() {
+		var sv SnapshotServer
+		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
+			&sv.CredentialID, &sv.SudoCredentialID, &sv.TagsRaw, &sv.Description, &sv.Location,
+			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.CreatedAt, &sv.UpdatedAt); err != nil {
+			rs.Close()
+			return nil, err
+		}
+		if sv.CredentialID != "" {
+			credIDs[sv.CredentialID] = true
+		}
+		if sv.SudoCredentialID != "" {
+			credIDs[sv.SudoCredentialID] = true
+		}
+		hostPorts[fmt.Sprintf("%s:%d", sv.Host, sv.Port)] = true
+		snap.Servers = append(snap.Servers, sv)
+	}
+	rs.Close()
+	if err := rs.Err(); err != nil {
+		return nil, err
+	}
+
+	// ONLY the referenced credentials (decrypted under s.masterKey). The IN
+	// clause is built from collected ids — a granted set is small (tens), and
+	// placeholders keep it parameterized.
+	if len(credIDs) > 0 {
+		args := make([]any, 0, len(credIDs))
+		ph := make([]string, 0, len(credIDs))
+		for id := range credIDs {
+			ph = append(ph, "?")
+			args = append(args, id)
+		}
+		rc, err := s.db.Query(
+			`SELECT id,type,secret_blob,COALESCE(passphrase_blob,''),created_at,updated_at FROM credentials WHERE id IN (`+
+				strings.Join(ph, ",")+`) ORDER BY id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rc.Next() {
+			var c SnapshotCredential
+			var secretBlob, passBlob []byte
+			if err := rc.Scan(&c.ID, &c.Type, &secretBlob, &passBlob, &c.CreatedAt, &c.UpdatedAt); err != nil {
+				rc.Close()
+				return nil, err
+			}
+			pt, err := open(s.masterKey, secretBlob)
+			if err != nil {
+				rc.Close()
+				return nil, fmt.Errorf("decrypt credential %s: %w", c.ID, err)
+			}
+			c.Secret = pt
+			if len(passBlob) > 0 {
+				pp, err := open(s.masterKey, passBlob)
+				if err != nil {
+					rc.Close()
+					return nil, fmt.Errorf("decrypt passphrase %s: %w", c.ID, err)
+				}
+				c.Passphrase = pp
+			}
+			snap.Credentials = append(snap.Credentials, c)
+		}
+		rc.Close()
+		if err := rc.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	// projects bound to THIS profile (raw SQL keeps token_hash/salt verbatim so
+	// the machine's own project tokens keep validating offline; other profiles'
+	// projects are correctly absent — their tokens fail offline verification)
+	rj, err := s.db.Query(`SELECT id,name,token_hash,token_salt,token_prefix,profile_id,status,created_at,updated_at FROM projects WHERE profile_id=? ORDER BY id`, profileID)
+	if err != nil {
+		return nil, err
+	}
+	for rj.Next() {
+		var p SnapshotProject
+		if err := rj.Scan(&p.ID, &p.Name, &p.TokenHash, &p.TokenSalt, &p.TokenPrefix, &p.ProfileID, &p.Status, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			rj.Close()
+			return nil, err
+		}
+		snap.Projects = append(snap.Projects, p)
+	}
+	rj.Close()
+	if err := rj.Err(); err != nil {
+		return nil, err
+	}
+
+	// host_keys of the granted servers only
+	if len(hostPorts) > 0 {
+		args := make([]any, 0, len(hostPorts))
+		ph := make([]string, 0, len(hostPorts))
+		for hp := range hostPorts {
+			ph = append(ph, "?")
+			args = append(args, hp)
+		}
+		rh, err := s.db.Query(
+			`SELECT host_port, key_blob, created_at FROM host_keys WHERE host_port IN (`+
+				strings.Join(ph, ",")+`) ORDER BY host_port`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rh.Next() {
+			var h SnapshotHostKey
+			if err := rh.Scan(&h.HostPort, &h.KeyBlob, &h.CreatedAt); err != nil {
+				rh.Close()
+				return nil, err
+			}
+			snap.HostKeys = append(snap.HostKeys, h)
+		}
+		rh.Close()
+		if err := rh.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	// audit: intentionally empty (see doc comment)
 	return snap, nil
 }
 

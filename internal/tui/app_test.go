@@ -456,7 +456,7 @@ func TestAllPages_PanelFit(t *testing.T) {
 	if _, _, err := a.st.AddProject("proj-x", pid); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := a.st.AddCacheToken("laptop"); err != nil {
+	if _, _, err := a.st.AddCacheToken("laptop", pid); err != nil {
 		t.Fatal(err)
 	}
 	a.refetchPages()
@@ -477,5 +477,44 @@ func TestAllPages_PanelFit(t *testing.T) {
 		}
 		nm, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 		app = nm.(App)
+	}
+}
+
+// TestApp_TabSwitchRefetchesPages (Plan 39, Bug-2 root fix): the serve process
+// writes cache_tokens.last_pull_at from OUTSIDE this App (every client pull).
+// Switching pages must re-read the DB so the 设备码 tab reflects the pull
+// without an app restart — the reported bug was "synced on the laptop, but the
+// server TUI never shows the new pull time".
+func TestApp_TabSwitchRefetchesPages(t *testing.T) {
+	withServeCertDirs(t)
+	a := newTestApp(t)
+	pid, err := a.st.AddProfile("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := a.st.AddCacheToken("laptop", pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rebuild pages so the App's snapshot CONTAINS the token but with zero
+	// last_pull — then perform the external write (what serve does on a pull).
+	a.refetchPages()
+	cp0, _ := a.pages[pageTokens].(*cacheTokensPage)
+	if len(cp0.items) != 1 || !cp0.items[0].LastPullAt.IsZero() {
+		t.Fatalf("premise: page snapshot must predate the pull, got %+v", cp0.items)
+	}
+	if err := a.st.TouchCacheToken(id); err != nil {
+		t.Fatal(err)
+	}
+	// Tab onto the 设备码 page → the externally-written pull time is visible.
+	a.page = pageProjects // one Tab away from pageTokens
+	m, _ := a.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	am := m.(App)
+	if am.page != pageTokens {
+		t.Fatalf("Tab must land on the tokens page, got %v", am.page)
+	}
+	cp, _ := am.pages[pageTokens].(*cacheTokensPage)
+	if len(cp.items) != 1 || cp.items[0].LastPullAt.IsZero() {
+		t.Fatalf("Tab switch must re-read pages (external last_pull must be visible), got %+v", cp.items)
 	}
 }

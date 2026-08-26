@@ -45,3 +45,21 @@
 - **隧道持久化 / 自动重连 / 命名**：见 #15 不做项。
 - **运行时级 IP 隐藏**（命令过滤/输出脱敏/网络盲化）与**服务器出网管控**：不可行且杀死可用性；"不暴露"承诺边界 = 接口级（vault/工具层不主动披露）。
 - **(d) 类加固**（agent 宿主机整体沦陷，anti-debug/内存加密等）：现有 broker 架构（本机零明文凭据、凭据只在权威端 vault）即该层最优解，不再追加投入。
+
+## Plan 39 残余登记（2026-08-26）
+
+- **一机多 profile 不支持**：设备码一对一绑定 profile（一机一码一 cache.bin）；要不同授权范围的 agent 需在不同机器或共用同一 profile。多 profile 快照合并会引入合并语义，违背"零合并"基线——暂缓，等真实需求。
+- **server TUI 停留页上时的外部写入不自动刷新**：Tab 切页重读已落地（Plan 39）；定时 tick（停留即实时）收益边际，暂缓。
+- **永离线机器的旧整库 cache.bin 不受 Plan 39 追溯**：re-pull 才被裁剪快照原子覆盖；必要时吊销旧码强制重 enroll（revoke → 回连销毁 → 新码重拉）。
+
+## Plan 39 code-review 残余（2026-08-26，用户裁决：进 backlog）
+
+- **Tab 切页重读为同步 FetchAll**（app.go Tab 分支）：在 bubbletea 事件循环内同步跑 4+ 查询（MaxOpenConns(1) + busy_timeout 5s），serve 进程并发写时按键最坏卡 ~5s；且每次切页清掉各页 `/` 过滤与光标（仅 servers.warnOnly 保留——actionDoneMsg 既有语义的延续）。跟进：异步化（tea.Cmd）+ 按页保留过滤/光标。
+- **refetchPages 吞 FetchAll 错误**（失败时静默显示旧页当新的）：应置 a.err/status 提示重读失败。
+- **resolveProfileID/profileNameByID 与 projects.go 的 profileIDByName/profileNameMap 重复实现**（cli/cache_tokens.go）：同一包内两套解析器会漂移；且 `cache-tokens ls` 对 T 个码做 T+1 次全表 ListProfiles（N+1）。
+- **profile 存在性预检三处粘贴**（AddCacheToken / BindCacheToken / ExportSnapshotForProfile 各一份 `SELECT COUNT(*) FROM profiles`）：GetProfile(nil,nil) 已有；语义变化时三处易漏一。
+- **profileLabel 双实现**（cachetokens.go 页方法 + 条目方法，逐字节相同）+ 条目冗余携带 names map：应合并单 helper。
+- **0-profile 守卫双写**（app.go 设备码页 [a] vs upgrade.go 升级段），文案尾部已漂移：应抽共享。
+- **clientHeader 的 nServers 参数与 snap 冗余**（恒等于 len(snap.Servers)）：删参改内部计算（nil-safe）。
+- **pre-Plan-39 cache_tokens DDL 在两个测试文件裸抄**（cli/cache_tokens_test.go + mcpserver/serve_snapshot_test.go）：store 侧已有具名 oldShapeCacheTokens；跨包共享 fixture（testsshd 先例）防下次迁移漏改。
+- **e2e 测试忽略 CreateTemp/GenerateMasterKey 错误**（mcp_cache_test.go，沿用既有测试风格）：环境故障时 nil 解引用掩盖根因。

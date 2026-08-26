@@ -226,7 +226,11 @@ func (s *Store) SyncServers(profileID string, ids []string) (int, int, error) {
 // DeleteProfile removes the profile and its grant rows in one transaction.
 // It REFUSES while any project still references the profile (projects named
 // in the error): silently unbinding would leave those projects' agents with
-// no visible servers. Delete or re-bind the projects first.
+// no visible servers. Delete or re-bind the projects first. It likewise
+// REFUSES while any ACTIVE device code is bound to the profile (Plan 39):
+// a bound code's /snapshot authorization set IS this profile — deleting it
+// underneath would strand the device. Bindings on revoked codes are inert
+// and are simply cleared (SET NULL) inside the same tx.
 func (s *Store) DeleteProfile(profileID string) error {
 	if s.readOnly {
 		return ErrReadOnly
@@ -257,6 +261,33 @@ func (s *Store) DeleteProfile(profileID string) error {
 	if len(names) > 0 {
 		return fmt.Errorf("profile 仍被 %d 个项目引用(%s):先删除或换绑这些项目,再删除 profile",
 			len(names), strings.Join(names, ", "))
+	}
+	// Plan 39: same refusal for ACTIVE device bindings, by device name.
+	rows, err = tx.Query(`SELECT name FROM cache_tokens WHERE profile_id=? AND status='active'`, profileID)
+	if err != nil {
+		return err
+	}
+	var devices []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return err
+		}
+		devices = append(devices, n)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(devices) > 0 {
+		return fmt.Errorf("profile 仍被 %d 个设备码绑定(%s):先吊销或换绑(cache-tokens bind)这些设备码,再删除 profile",
+			len(devices), strings.Join(devices, ", "))
+	}
+	// Inert bindings (revoked codes) would trip the FK on DELETE; clear them.
+	if _, err := tx.Exec(`UPDATE cache_tokens SET profile_id=NULL WHERE profile_id=?`, profileID); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM profile_servers WHERE profile_id=?`, profileID); err != nil {
 		return err
