@@ -178,14 +178,20 @@ func TestCacheStatus_ReportsSnapshot(t *testing.T) {
 	}
 	// standUpServe is plaintext (no pin) → F4 requires --allow-plaintext to pull.
 	must("cache", "pull", "--url", url, "--token", code, "--allow-plaintext")
+	// Plan 40 T12: bare `cache status` is the multi-instance LIST view — the
+	// default slot renders as its row (device stays blank: a plaintext pull
+	// records no device_name by design, injectable headers are not identity).
 	stOut := must("cache", "status")
-	if !strings.Contains(stOut.String(), "servers:  1") {
+	if !strings.Contains(stOut.String(), "instance: default") {
+		t.Fatalf("list view must lead with the default slot: %s", stOut.String())
+	}
+	if !strings.Contains(stOut.String(), "servers: 1") {
 		t.Fatalf("status did not report 1 server: %s", stOut.String())
 	}
 	// Plan 39 provenance: the pull came from a real (scoped) ServeRunner →
 	// the meta carries scoped=true → the bound profile is shown.
-	if !strings.Contains(stOut.String(), "scope:    team-a") {
-		t.Fatalf("scoped pull must report the bound profile in scope:, got: %s", stOut.String())
+	if !strings.Contains(stOut.String(), "profile: team-a") {
+		t.Fatalf("scoped pull must report the bound profile in its row, got: %s", stOut.String())
 	}
 }
 
@@ -229,11 +235,11 @@ func TestCacheStatus_UnverifiedScope(t *testing.T) {
 	if err := root2.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(st.String(), "scope:    team-a") {
-		t.Fatalf("legacy (unscoped) meta must NOT show the profile name: %s", st.String())
-	}
-	if !strings.Contains(st.String(), "unverified") {
-		t.Fatalf("legacy meta must show the unverified scope line: %s", st.String())
+	// Plan 40 T12: the list view renders NO profile line at all for an
+	// unscoped slot — the Plan-39 discipline holds (a legacy cache must
+	// never pass as cropped); "unverified" was the single-view marker.
+	if strings.Contains(st.String(), "profile:") {
+		t.Fatalf("legacy (unscoped) meta must NOT show a profile line: %s", st.String())
 	}
 }
 
@@ -627,6 +633,9 @@ func TestCachePullDoesNotPersistCredOn401(t *testing.T) {
 // error. This drives the REAL cobra command, so cache.go's QuarantineReport
 // wiring (and, since both call sites share the same helper, mcp.go's) can't be
 // silently dropped by a future refactor without failing this test.
+// Plan 40 T12: bare status is the LIST view — attribution renders as the
+// default slot's quarantine summary line (spec §2.6 field list), and the list
+// itself never fails overall.
 func TestCacheStatus_AttributesQuarantine(t *testing.T) {
 	withDEK(t) // in-memory DEK: LoadCacheSnapshot fails here regardless of machine state
 	cacheDir := t.TempDir()
@@ -646,15 +655,15 @@ func TestCacheStatus_AttributesQuarantine(t *testing.T) {
 
 	root := NewRootCmd()
 	root.SetArgs([]string{"cache", "status"})
-	root.SetOut(&bytes.Buffer{})
-	errBuf := &bytes.Buffer{}
-	root.SetErr(errBuf)
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(&bytes.Buffer{})
 	err := root.Execute()
-	if err == nil {
-		t.Fatal("cache status must fail when cache.bin is gone")
+	if err != nil {
+		t.Fatalf("list mode must not fail overall: %v", err)
 	}
-	if !strings.Contains(err.Error(), "quarantined by server rejection") && !strings.Contains(errBuf.String(), "quarantined by server rejection") {
-		t.Fatalf("status must attribute the quarantine (server rejection), got err=%v stderr=%q", err, errBuf.String())
+	if !strings.Contains(out.String(), "quarantined by server rejection") {
+		t.Fatalf("status must attribute the quarantine (server rejection), got: %q", out.String())
 	}
 }
 

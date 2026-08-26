@@ -122,59 +122,152 @@ func cacheStatusCmd() *cobra.Command {
 			if err := checkInstanceFlag(instance); err != nil {
 				return err
 			}
-			_, bin, metaPath, _, err := clientops.CachePathsFor(instance)
-			if err != nil {
-				return err
+			if instance != "" {
+				return cacheStatusSingle(cmd, instance)
 			}
-			snap, err := clientops.LoadCacheSnapshotFor(instance)
-			if err != nil {
-				// Plan 34 rev4 §4: attribute a server-rejection quarantine when
-				// the on-disk manifest says so; otherwise the original error.
-				if msg, ok := clientops.QuarantineReport(err); ok {
-					return errors.New(msg)
+			return cacheStatusList(cmd)
+		},
+	}
+	c.Flags().StringVar(&instance, "instance", "", "show this named instance's detail; without it, list every instance slot (default + named; mutually exclusive with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK)")
+	return c
+}
+
+// cacheStatusSingle renders one instance's detail view — the pre-Plan-40
+// `cache status` format, For-ified, plus the Plan-40 device identity line.
+func cacheStatusSingle(cmd *cobra.Command, instance string) error {
+	_, bin, metaPath, _, err := clientops.CachePathsFor(instance)
+	if err != nil {
+		return err
+	}
+	snap, err := clientops.LoadCacheSnapshotFor(instance)
+	if err != nil {
+		// Plan 34 rev4 §4: attribute a server-rejection quarantine when
+		// the on-disk manifest says so; otherwise the original error.
+		if msg, ok := clientops.QuarantineReport(err); ok {
+			return errors.New(msg)
+		}
+		return err
+	}
+	info, _ := os.Stat(bin)
+	var age string
+	if info != nil {
+		age = time.Since(info.ModTime()).Round(time.Second).String()
+	}
+	url := "(unknown)"
+	scoped := false
+	device := "(unknown)"
+	if mb, err := os.ReadFile(metaPath); err == nil {
+		// anonymous twin of clientops' private cacheMeta: status reads
+		// url + the Plan-39 scope provenance + the Plan-40 device identity
+		var m struct {
+			URL        string `json:"url"`
+			Scoped     bool   `json:"scoped"`
+			DeviceName string `json:"device_name"`
+		}
+		if json.Unmarshal(mb, &m) == nil && m.URL != "" {
+			url = m.URL
+		}
+		scoped = m.Scoped
+		if m.DeviceName != "" {
+			device = m.DeviceName
+		}
+	}
+	// Plan 39 provenance display (code-review #3): a single-profile
+	// WHOLE-VAULT cache is shape-identical to a cropped one, so the
+	// profile line is only honest when the pull itself recorded the
+	// serve's scope header. Otherwise say "unverified" — never let a
+	// legacy cache pass as cropped.
+	profile := "unverified — re-pull to crop (pre-Plan-39 snapshot or old serve)"
+	if scoped {
+		switch len(snap.Profiles) {
+		case 1:
+			profile = snap.Profiles[0].Name
+		case 0:
+			profile = "(none)"
+		default:
+			profile = "(multiple — pre-Plan-39 whole-vault snapshot)"
+		}
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "cache:    %s\nage:      %s\nservers:  %d\ncreds:    %d\nscope:    %s\ndevice:    %s\nsource:   %s\n",
+		bin, age, len(snap.Servers), len(snap.Credentials), profile, device, url)
+	return nil
+}
+
+// cacheStatusList renders one line-group per instance slot: the default slot
+// first (even when empty — said honestly), then every named instance. A slot
+// that cannot LOAD (missing DEK, undecryptable bin) renders its error inline —
+// listing is discovery, one broken slot must not hide the others (spec §2.6).
+func cacheStatusList(cmd *cobra.Command) error {
+	out := cmd.OutOrStdout()
+	dir, bin, metaPath, _, err := clientops.CachePaths()
+	if err != nil {
+		return err
+	}
+	printSlot := func(instance, d, binPath, mp string) {
+		fmt.Fprintf(out, "instance: %s (%s)\n", map[bool]string{true: instance, false: "default"}[instance != ""], d)
+		if _, serr := os.Stat(binPath); serr != nil {
+			fmt.Fprintf(out, "  cache:   (no cache.bin)\n")
+			// spec §2.6's field list includes a quarantine summary: post-quarantine
+			// the manifest is the only trace, and a bare "(no cache.bin)" would hide
+			// WHY. QuarantineReport consults the DEFAULT slot only, so this line is
+			// default-slot-only for now (per-instance report = registered residual).
+			if instance == "" {
+				if msg, ok := clientops.QuarantineReport(serr); ok {
+					fmt.Fprintf(out, "  quarantine: %s\n", msg)
 				}
-				return err
 			}
-			info, _ := os.Stat(bin)
-			var age string
-			if info != nil {
-				age = time.Since(info.ModTime()).Round(time.Second).String()
+			fmt.Fprintf(out, "\n")
+			return
+		}
+		var (
+			device, url, profileLine = "(unknown)", "(unknown)", ""
+			anchored                 = "-"
+			scoped                   bool
+		)
+		if mb, merr := os.ReadFile(mp); merr == nil {
+			var m struct {
+				DeviceName     string `json:"device_name"`
+				URL            string `json:"url"`
+				ServerAnchored bool   `json:"server_anchored"`
+				Scoped         bool   `json:"scoped"`
 			}
-			url := "(unknown)"
-			scoped := false
-			if mb, err := os.ReadFile(metaPath); err == nil {
-				// anonymous twin of clientops' private cacheMeta: status reads
-				// url + the Plan-39 scope provenance
-				var m struct {
-					URL    string `json:"url"`
-					Scoped bool   `json:"scoped"`
-				}
-				if json.Unmarshal(mb, &m) == nil && m.URL != "" {
-					url = m.URL
-				}
-				scoped = m.Scoped
+			if json.Unmarshal(mb, &m) == nil {
+				device, anchored = m.DeviceName, map[bool]string{true: "server", false: "local"}[m.ServerAnchored]
+				url, scoped = m.URL, m.Scoped
 			}
-			// Plan 39 provenance display (code-review #3): a single-profile
-			// WHOLE-VAULT cache is shape-identical to a cropped one, so the
-			// profile line is only honest when the pull itself recorded the
-			// serve's scope header. Otherwise say "unverified" — never let a
-			// legacy cache pass as cropped.
-			profile := "unverified — re-pull to crop (pre-Plan-39 snapshot or old serve)"
+		}
+		servers, creds := "-", "-"
+		if snap, lerr := clientops.LoadCacheSnapshotFor(instance); lerr == nil && snap != nil {
+			servers, creds = fmt.Sprint(len(snap.Servers)), fmt.Sprint(len(snap.Credentials))
+			// profile 行仅 scoped 时显示（Plan 39 溯源纪律——与 single 视图同规则）
 			if scoped {
 				switch len(snap.Profiles) {
 				case 1:
-					profile = snap.Profiles[0].Name
+					profileLine = "  profile: " + snap.Profiles[0].Name + "\n"
 				case 0:
-					profile = "(none)"
+					profileLine = "  profile: (none)\n"
 				default:
-					profile = "(multiple — pre-Plan-39 whole-vault snapshot)"
+					profileLine = "  profile: (multiple — pre-Plan-39 whole-vault snapshot)\n"
 				}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "cache:    %s\nage:      %s\nservers:  %d\ncreds:    %d\nscope:    %s\nsource:   %s\n",
-				bin, age, len(snap.Servers), len(snap.Credentials), profile, url)
-			return nil
-		},
+		} else {
+			fmt.Fprintf(out, "  load:    ERROR %v\n", lerr) // 行级错误,不中断列表
+		}
+		fmt.Fprintf(out, "  device:  %s\n%s  anchor:  %s\n  servers: %s\n  creds:   %s\n  source:  %s\n\n",
+			device, profileLine, anchored, servers, creds, url)
 	}
-	c.Flags().StringVar(&instance, "instance", "", "show this named instance's detail (default slot when omitted; mutually exclusive with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK)")
-	return c
+	printSlot("", dir, bin, metaPath) // "" = 默认槽
+	names, err := clientops.ListInstances()
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		id, ib, im, _, ierr := clientops.CachePathsFor(n)
+		if ierr != nil {
+			fmt.Fprintf(out, "instance: %s (path error: %v)\n\n", n, ierr)
+			continue
+		}
+		printSlot(n, id, ib, im)
+	}
+	return nil
 }
