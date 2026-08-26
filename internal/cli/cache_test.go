@@ -35,7 +35,7 @@ import (
 // own fixed path (paths.CacheDekPath() does not consult that env var).
 func TestDefaultDekProvider_IsFileKeyAtFixedPath(t *testing.T) {
 	t.Setenv("SSHMGR_FILEKEY_PATH", "") // must not influence cache-dek
-	dp := clientops.DekProvider()
+	dp := clientops.DekProvider("")
 	fp, ok := dp.(*store.FileKeyProvider)
 	if !ok {
 		t.Fatalf("default dek not *FileKeyProvider: %T", dp)
@@ -55,7 +55,7 @@ func withDEK(t *testing.T) *store.MemKeyProvider {
 	t.Helper()
 	mem := &store.MemKeyProvider{}
 	prev := clientops.DekProvider
-	clientops.DekProvider = func() store.KeyProvider { return mem }
+	clientops.DekProvider = func(string) store.KeyProvider { return mem }
 	t.Cleanup(func() { clientops.DekProvider = prev })
 	return mem
 }

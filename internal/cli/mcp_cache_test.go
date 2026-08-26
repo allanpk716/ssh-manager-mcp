@@ -57,7 +57,7 @@ func TestHydrateReadOnlyStore_TokenValidatesAndReadsWork(t *testing.T) {
 	mem := &store.MemKeyProvider{}
 	_ = mem.Set(dek)
 	prev := clientops.DekProvider
-	clientops.DekProvider = func() store.KeyProvider { return mem }
+	clientops.DekProvider = func(string) store.KeyProvider { return mem }
 	t.Cleanup(func() { clientops.DekProvider = prev })
 
 	// --- exercise the hydration path directly (the guts of RunStdioCache, without srv.Run) ---
@@ -168,7 +168,7 @@ func TestScopedPull_HydratesAndIronRuleHolds(t *testing.T) {
 	mem := &store.MemKeyProvider{}
 	_ = mem.Set(dek)
 	prev := clientops.DekProvider
-	clientops.DekProvider = func() store.KeyProvider { return mem }
+	clientops.DekProvider = func(string) store.KeyProvider { return mem }
 	t.Cleanup(func() { clientops.DekProvider = prev })
 
 	if err := clientops.DoPull(srv.URL, code, "", clientops.PullOpts{AllowPlain: true}); err != nil {

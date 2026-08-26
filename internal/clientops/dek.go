@@ -8,8 +8,9 @@ import (
 
 // loadOrCreateDEK returns the cache DEK from the keychain, generating + storing it on first pull.
 // On subsequent pulls the existing DEK is reused, so cache.bin stays decryptable across pulls.
-func loadOrCreateDEK() ([]byte, error) {
-	kp := DekProvider()
+// Takes an instance name ("" = default instance).
+func loadOrCreateDEK(instance string) ([]byte, error) {
+	kp := DekProvider(instance)
 	dek, err := kp.Get()
 	if err == nil {
 		return dek, nil
@@ -29,6 +30,7 @@ func loadOrCreateDEK() ([]byte, error) {
 
 // loadDEK returns the cache DEK without creating it (status / mcp --cache). A missing DEK
 // surfaces as store.ErrNotFound — the caller reports "run cache pull first".
-func loadDEK() ([]byte, error) {
-	return DekProvider().Get()
+// Takes an instance name ("" = default instance).
+func loadDEK(instance string) ([]byte, error) {
+	return DekProvider(instance).Get()
 }

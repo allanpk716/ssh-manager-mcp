@@ -377,7 +377,7 @@ func LoadCacheSnapshot() (*store.Snapshot, error) {
 				now.Format(time.RFC3339), anchorT.Format(time.RFC3339))
 		}
 	}
-	dek, err := loadDEK()
+	dek, err := loadDEK("")
 	if err != nil {
 		return nil, fmt.Errorf("cache DEK not found in keychain (run `cache pull` first): %w", err)
 	}
@@ -454,7 +454,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		client.Timeout = o.Timeout
 	}
 
-	dek, err := loadOrCreateDEK()
+	dek, err := loadOrCreateDEK("")
 	if err != nil {
 		return err
 	}

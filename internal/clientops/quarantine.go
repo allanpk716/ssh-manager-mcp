@@ -90,7 +90,7 @@ func QuarantineCache(reason string) (QuarantineResult, error) {
 	// declared type is KeyProvider (Get/Set only); Delete is the optional
 	// capability this routine consumes — an in-process provider without it has
 	// nothing on disk, which counts as success.
-	if d, ok := DekProvider().(interface{ Delete() error }); ok {
+	if d, ok := DekProvider("").(interface{ Delete() error }); ok {
 		if dErr := d.Delete(); dErr != nil {
 			res.Steps["dek"] = dErr.Error()
 			res.Degraded = append(res.Degraded, "dek")

@@ -23,7 +23,7 @@ func withDEK(t *testing.T) *store.MemKeyProvider {
 	t.Helper()
 	mem := &store.MemKeyProvider{}
 	prev := DekProvider
-	DekProvider = func() store.KeyProvider { return mem }
+	DekProvider = func(string) store.KeyProvider { return mem }
 	t.Cleanup(func() { DekProvider = prev })
 	return mem
 }
