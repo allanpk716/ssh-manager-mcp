@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -51,20 +50,6 @@ type doctorCheck struct {
 // errDoctorFindings is returned (wrapped) when at least one check FAILed.
 // WARN alone never changes the exit code.
 var errDoctorFindings = errors.New("doctor: FAIL findings detected")
-
-// doctorExitCode is the stable exit-code convention (scripts rely on it):
-// 0 = no FAIL, 1 = ≥1 FAIL (errDoctorFindings, wrapped included),
-// 2 = doctor internal error.
-func doctorExitCode(err error) int {
-	switch {
-	case err == nil:
-		return 0
-	case errors.Is(err, errDoctorFindings):
-		return 1
-	default:
-		return 2
-	}
-}
 
 // doctorCheckFuncs is the checks table — T4 (serve cert/service, client
 // cache) appends entries here. Every check is self-contained and
@@ -237,14 +222,21 @@ func checkVaultStore() []doctorCheck {
 	return []doctorCheck{c}
 }
 
+// inspectFileACL is the seam over store.InspectFileACL (serveServiceState
+// precedent): tests stub it to drive the error branch, which cannot be seeded
+// for real — a hardened user mask carries READ_CONTROL, so SD reads succeed.
+var inspectFileACL = store.InspectFileACL
+
 // checkVaultKey reads the master key file (env-aware path) and validates it
 // STRUCTURALLY — same rationale as vaultStatusString (serve_service.go):
 // store.Open is side-effecting, so ValidMasterKeyLen is the lightest faithful
 // proxy for "the file is a usable AES-256 key". Unlike serve's LOCKED wording,
-// doctor phrases its own remediation. On Unix the plaintext key's protection
-// is mode bits alone (L1+ threat model), so loose group/world bits downgrade
-// an otherwise-valid key to WARN; on Windows protection is ACLs, not mode
-// bits, and the branch is skipped (runtime guard keeps one test file).
+// doctor phrases its own remediation. The protection layer then splits by the
+// InspectFileACL report, not by runtime.GOOS: on Windows the plaintext key's
+// ACL is the layer (L1+ threat model), so the hardened shape is read back —
+// an unreadable SD FAILs, a DACL/owner looser than the hardened shape WARNs;
+// on other platforms mode bits are the layer, so loose group/world bits
+// downgrade an otherwise-valid key to WARN.
 func checkVaultKey() []doctorCheck {
 	c := doctorCheck{Name: "masterkey"}
 	p, err := paths.MasterKeyPath()
@@ -289,12 +281,25 @@ func checkVaultKey() []doctorCheck {
 	default:
 		c.Status = statusPass
 		c.Detail = fmt.Sprintf("master.key present (%d bytes)", len(b))
-		if runtime.GOOS != "windows" {
+		rep, aerr := inspectFileACL(p)
+		switch {
+		case aerr != nil:
+			// Deep anomaly: hardened users hold READ_CONTROL, so an SD read
+			// failure means the ACL was rewritten past legibility.
+			c.Status = statusFail
+			c.Detail = fmt.Sprintf("master.key ACL unreadable: %v", aerr)
+			c.Fix = "inspect the file's security descriptor as admin (icacls <master.key>); restore the key from backup if the SD is corrupt"
+		case !rep.Supported:
+			// Non-Windows: mode bits are the layer — existing check, moved in.
 			if info, serr := os.Stat(p); serr == nil && info.Mode().Perm()&0o077 != 0 {
 				c.Status = statusWarn
 				c.Detail = fmt.Sprintf("master.key present (%d bytes) but group/world readable (mode %o) — the plaintext key is protected by mode bits alone", len(b), info.Mode().Perm())
 				c.Fix = "chmod 600 the master.key file (and 0700 its parent directory)"
 			}
+		case rep.TooLoose():
+			c.Status = statusWarn
+			c.Detail = aclLooseDetail(len(b), rep)
+			c.Fix = aclLooseFix(rep)
 		}
 	}
 	return []doctorCheck{c}
@@ -597,9 +602,8 @@ func checkClientCache() []doctorCheck {
 	return []doctorCheck{c}
 }
 
-// runDoctor executes every check, renders the report, and returns the error
-// the exit-code convention is read from: nil = 0 (no FAIL),
-// errDoctorFindings = 1 (≥1 FAIL), any other error = 2 (internal error).
+// runDoctor executes every check, renders the report, and returns an error
+// when FAIL findings are detected (wrapped errDoctorFindings).
 func runDoctor(cmd *cobra.Command, _ []string) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "ssh-manager doctor (%s)\n", buildinfo.Version)
@@ -620,9 +624,57 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintf(out, "overall: %d WARN, %d FAIL\n", warn, fail)
 	if fail > 0 {
-		return fmt.Errorf("%w (%d) — see the report above", errDoctorFindings, fail)
+		return NewExitCodeError(1, fmt.Errorf("%w (%d) — see the report above", errDoctorFindings, fail))
 	}
 	return nil
+}
+
+// aclLooseDetail renders the WARN Detail per the frozen clause table (spec
+// rev3 §2.1): one clause per triggered signal, semicolon-joined, common tail,
+// advisory parenthetical when inheritance is live.
+func aclLooseDetail(keyBytes int, rep store.FileACLReport) string {
+	var parts []string
+	if rep.DaclNull {
+		parts = append(parts, fmt.Sprintf(
+			"master.key present (%d bytes) but it has no DACL — every principal is allowed", keyBytes))
+	}
+	if len(rep.UnexpectedReadGrantors) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"master.key present (%d bytes) but its DACL grants access to unexpected principals: %s",
+			keyBytes, strings.Join(rep.UnexpectedReadGrantors, ", ")))
+	}
+	if rep.OwnerUnexpected {
+		parts = append(parts, fmt.Sprintf(
+			"master.key present (%d bytes) but the file owner is %s — the owner can typically rewrite the DACL",
+			keyBytes, rep.OwnerSID))
+	}
+	detail := strings.Join(parts, "; ") + " — the plaintext key is protected by this ACL alone"
+	// Invariant: Protected is never populated on DaclNull reports
+	// (InspectFileACL early-returns before reaching the Protected read), so
+	// this parenthetical only ever renders on grantor/owner WARNs — a null
+	// DACL has no parent-ACE inheritance question. Intentional; do not "fix".
+	if !rep.Protected {
+		detail += " (inheritance also enabled)"
+	}
+	return detail
+}
+
+// aclLooseFix renders the WARN Fix per the frozen clause table (spec rev3
+// §2.1): icacls segments joined in owner→inheritance/grants order, all
+// asterisk-SID form (account names localize on non-English Windows).
+func aclLooseFix(rep store.FileACLReport) string {
+	var segs []string
+	if rep.OwnerUnexpected {
+		segs = append(segs, "/setowner *S-1-5-32-544")
+	}
+	if len(rep.UnexpectedReadGrantors) > 0 {
+		segs = append(segs, "/inheritance:r", "/remove:g <SIDs...>")
+	}
+	if rep.DaclNull || len(rep.UnexpectedReadGrantors) > 0 {
+		segs = append(segs, "/grant:r *S-1-5-18:(F) *S-1-5-32-544:(F) *<you-SID>:(RC,R,W,D)")
+	}
+	return "icacls <master.key> " + strings.Join(segs, " ") +
+		" — replace <SIDs...> with the principals listed above (asterisk-prefixed SID form, e.g. *S-1-1-0) and <you-SID> with your own SID (`whoami /user`)"
 }
 
 func newDoctorCmd() *cobra.Command {

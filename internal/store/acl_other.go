@@ -9,3 +9,10 @@ package store
 // would break cross-compilation — HardenACL is only defined under the
 // windows build tag).
 func HardenACL(path string) error { return nil }
+
+// InspectFileACL reports Supported=false on non-Windows: mode bits are that
+// platform's protection layer (see HardenACL's note). Callers branch on
+// Supported instead of runtime.GOOS (spec §1.5).
+func InspectFileACL(path string) (FileACLReport, error) {
+	return FileACLReport{Supported: false}, nil
+}

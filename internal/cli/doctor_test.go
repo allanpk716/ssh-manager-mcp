@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -105,19 +104,16 @@ func TestDoctorExitCodes(t *testing.T) {
 		}
 	}
 
-	// State 3 — the mapping itself: nil → 0, findings (wrapped included) → 1,
-	// any other error → 2.
-	if got := doctorExitCode(nil); got != 0 {
-		t.Fatalf("nil must map to 0, got %d", got)
+	// State 3 — the wiring: findings (wrapped included) keep errors.Is AND
+	// pin exit 1 via ExitCodeFor; a plain error maps to the generic 1.
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("corrupt role leg must still return findings, got: %v", err)
 	}
-	if got := doctorExitCode(errDoctorFindings); got != 1 {
-		t.Fatalf("errDoctorFindings must map to 1, got %d", got)
+	if got := ExitCodeFor(err); got != 1 {
+		t.Fatalf("findings must map to exit 1, got %d", got)
 	}
-	if got := doctorExitCode(fmt.Errorf("%w (1) — see report", errDoctorFindings)); got != 1 {
-		t.Fatalf("wrapped findings must still map to 1, got %d", got)
-	}
-	if got := doctorExitCode(errors.New("boom")); got != 2 {
-		t.Fatalf("internal error must map to 2, got %d", got)
+	if got := ExitCodeFor(errors.New("boom")); got != 1 {
+		t.Fatalf("plain error must map to generic 1, got %d", got)
 	}
 }
 
@@ -219,7 +215,10 @@ func TestDoctorRoleStates(t *testing.T) {
 // seedDoctorVault builds a REAL vault in the test's temp dir — seedClearVault
 // precedent (clear_test.go): store.Open to create store.db (side effects are
 // legal in TESTS; doctor itself only Stats/ReadFiles) + the 32-byte
-// master.key.plain next to it.
+// master.key.plain next to it, written via FileKeyProvider.Set so Windows
+// ACL hardening actually runs (a raw os.WriteFile leaves the inherited broad
+// DACL and would trip the new loose-ACL WARN on the windows lane; Unix stays
+// 0600 — Set is CreateTemp+rename+MkdirAll 0700).
 func seedDoctorVault(t *testing.T, vaultDir string) {
 	t.Helper()
 	mk, err := store.GenerateMasterKey()
@@ -231,7 +230,8 @@ func seedDoctorVault(t *testing.T, vaultDir string) {
 		t.Fatal(err)
 	}
 	st.Close()
-	if err := os.WriteFile(filepath.Join(vaultDir, "master.key.plain"), mk, 0o600); err != nil {
+	fp := store.FileKeyProvider{Path: filepath.Join(vaultDir, "master.key.plain")}
+	if err := fp.Set(mk); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -292,8 +292,11 @@ func TestDoctorVaultStructural(t *testing.T) {
 	}
 
 	// Case 3 — Unix only: a valid key with loose mode bits (0644) → WARN with
-	// "group/world readable" in Detail, still exit 0. On Windows the plaintext
-	// key is protected by ACLs, not mode bits — the branch is skipped there.
+	// "group/world readable" in Detail, still exit 0. On Windows InspectFileACL
+	// always reports Supported=true, so this mode-bit branch is unreachable
+	// there — its cross-platform coverage lives in TestDoctorVaultKeyACLBranches
+	// via the Supported=false stub (where Windows' synthesized 0666 perm drives
+	// the WARN and Unix' real 0600 stays PASS).
 	if runtime.GOOS == "windows" {
 		t.Log("skipping permission-bit WARN on Windows (ACLs, not mode bits, are the protection layer)")
 	} else {
@@ -405,7 +408,11 @@ func seedDoctorVaultWithData(t *testing.T, vaultDir string) (string, string, []b
 		t.Fatal(err)
 	}
 	key := filepath.Join(vaultDir, "master.key.plain")
-	if err := os.WriteFile(key, mk, 0o600); err != nil {
+	// Set, not a raw os.WriteFile, for the same reason as seedDoctorVault:
+	// doctor's new Windows loose-ACL WARN would otherwise trip on the temp
+	// dir's inherited broad DACL (this machine's TEMP carries non-whitelisted
+	// inheritable read ACEs) and skew these tests' overall-count assertions.
+	if err := (store.FileKeyProvider{Path: key}).Set(mk); err != nil {
 		t.Fatal(err)
 	}
 	return db, key, mk
@@ -826,6 +833,177 @@ func TestDoctorServeAndCache(t *testing.T) {
 	}
 	if !strings.Contains(out, "client-cache:  INFO") || !strings.Contains(out, "overall: 0 WARN, 0 FAIL") {
 		t.Fatalf("missing cache.bin off-client must be INFO:\n%s", out)
+	}
+}
+
+// stubInspectFileACL replaces the store seam (serveServiceState precedent):
+// drives the err→FAIL branch, which cannot be seeded for real (a hardened
+// user mask carries READ_CONTROL, so SD reads succeed).
+func stubInspectFileACL(t *testing.T, rep store.FileACLReport, err error) {
+	t.Helper()
+	prev := inspectFileACL
+	inspectFileACL = func(p string) (store.FileACLReport, error) { return rep, err }
+	t.Cleanup(func() { inspectFileACL = prev })
+}
+
+// TestDoctorVaultKeyACLBranches drives checkVaultKey's Windows-side branches
+// through the seam (cross-platform — the seam, not the OS, decides).
+func TestDoctorVaultKeyACLBranches(t *testing.T) {
+	stubServeServiceState(t, "Running")
+	vd, _ := withDoctorDirs(t)
+	seedDoctorVault(t, vd)
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// err → FAIL
+	stubInspectFileACL(t, store.FileACLReport{}, errors.New("sd read denied"))
+	out, err := driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("ACL unreadable must FAIL, got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"masterkey:  FAIL",
+		"master.key ACL unreadable",
+		"overall: 0 WARN, 1 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Supported=false → the Unix mode-bit path (file is 0600 → stays PASS).
+	// On Windows Go synthesizes perm 0666 for every writable file, so the
+	// same branch necessarily takes the mode-bit WARN there — pin both
+	// outcomes; the seam, not the OS, decides which path runs.
+	stubInspectFileACL(t, store.FileACLReport{Supported: false}, nil)
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("unsupported stub must not FAIL (mode bits WARN at most): %v\n%s", err, out)
+	}
+	if runtime.GOOS == "windows" {
+		if !strings.Contains(out, "masterkey:  WARN") || !strings.Contains(out, "group/world readable (mode 666)") {
+			t.Fatalf("synthesized 0666 must take the mode-bit WARN on Windows:\n%s", out)
+		}
+	} else if !strings.Contains(out, "masterkey:  PASS") {
+		t.Fatalf("0600 key under stub must PASS:\n%s", out)
+	}
+
+	// TooLoose → WARN with the frozen §2.1 signal-3 clause.
+	stubInspectFileACL(t, store.FileACLReport{
+		Supported:              true,
+		Protected:              true,
+		UnexpectedReadGrantors: []string{"S-1-1-0"},
+	}, nil)
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("a loose-ACL WARN must not change the exit code: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"masterkey:  WARN",
+		"grants access to unexpected principals: S-1-1-0",
+		"— the plaintext key is protected by this ACL alone",
+		"/inheritance:r /remove:g",
+		"*S-1-5-18:(F)",
+		"overall: 1 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// DaclNull-only → the §2.1 signal-1 clause (no empty-SIDs rendering).
+	stubInspectFileACL(t, store.FileACLReport{Supported: true, DaclNull: true}, nil)
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("WARN must not FAIL: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "it has no DACL — every principal is allowed") {
+		t.Fatalf("signal-1 clause must render:\n%s", out)
+	}
+	if strings.Contains(out, "unexpected principals: ") {
+		t.Fatalf("signal-1 must not render an empty principals list:\n%s", out)
+	}
+	// No grantor/owner signals → the Fix must stay rebuild-only: neither the
+	// /remove segment (grantor remediation) nor /setowner (owner remediation)
+	// may render on a DaclNull-only report.
+	if strings.Contains(out, "/remove") {
+		t.Fatalf("DaclNull-only Fix must not contain /remove (no grantor signal):\n%s", out)
+	}
+	if strings.Contains(out, "/setowner") {
+		t.Fatalf("DaclNull-only Fix must not contain /setowner (no owner signal):\n%s", out)
+	}
+
+	// Owner-only → the §2.1 signal-4 clause + /setowner fix.
+	stubInspectFileACL(t, store.FileACLReport{
+		Supported:       true,
+		Protected:       true,
+		OwnerSID:        "S-1-1-0",
+		OwnerUnexpected: true,
+	}, nil)
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("WARN must not FAIL: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"the file owner is S-1-1-0 — the owner can typically rewrite the DACL",
+		"/setowner *S-1-5-32-544",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Loose + inheritance alive → the advisory parenthetical.
+	stubInspectFileACL(t, store.FileACLReport{
+		Supported:              true,
+		UnexpectedReadGrantors: []string{"S-1-1-0"},
+	}, nil)
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("WARN must not FAIL: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "(inheritance also enabled)") {
+		t.Fatalf("advisory parenthetical must render when !Protected:\n%s", out)
+	}
+
+	// Multi-signal combo: grantors + owner in ONE report → BOTH clauses render
+	// and are joined by "; " (the exact junction substring is asserted), exit
+	// code stays 0, and the Fix carries BOTH remediation halves in the frozen
+	// order: /setowner BEFORE /inheritance:r, /remove:g BEFORE /grant:r.
+	stubInspectFileACL(t, store.FileACLReport{
+		Supported:              true,
+		Protected:              true,
+		UnexpectedReadGrantors: []string{"S-1-1-0"},
+		OwnerSID:               "S-1-1-0",
+		OwnerUnexpected:        true,
+	}, nil)
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("a multi-signal WARN must not change the exit code: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"masterkey:  WARN",
+		"grants access to unexpected principals: S-1-1-0",
+		"the file owner is S-1-1-0 — the owner can typically rewrite the DACL",
+		// The exact "; "-joined clause pair (keyBytes = 32 from the seeded vault):
+		"master.key present (32 bytes) but its DACL grants access to unexpected principals: S-1-1-0; " +
+			"master.key present (32 bytes) but the file owner is S-1-1-0 — the owner can typically rewrite the DACL",
+		"/setowner *S-1-5-32-544",
+		"/inheritance:r",
+		"/remove:g <SIDs...>",
+		"/grant:r",
+		"overall: 1 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	if iSet, iInh := strings.Index(out, "/setowner *S-1-5-32-544"), strings.Index(out, "/inheritance:r"); iSet > iInh {
+		t.Fatalf("Fix must place /setowner BEFORE /inheritance:r:\n%s", out)
+	}
+	if iRem, iGrant := strings.Index(out, "/remove:g <SIDs...>"), strings.Index(out, "/grant:r"); iRem > iGrant {
+		t.Fatalf("Fix must place /remove:g BEFORE /grant:r:\n%s", out)
 	}
 }
 
