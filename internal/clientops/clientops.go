@@ -20,10 +20,12 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
 )
@@ -123,18 +125,71 @@ func MaybeLazyPull(maxAge time.Duration) error {
 	return err
 }
 
-// CachePaths resolves the cache directory (SSHMGR_CACHE_DIR override, else UserConfigDir/
-// ssh-manager) and the three files within it: the encrypted snapshot, the meta sidecar, and
-// the offline-audit sidecar (the audit sidecar is owned by T8; T7 only resolves the path).
-func CachePaths() (dir, bin, meta, audit string, err error) {
+// CachePathsFor resolves the cache directory for ONE instance ("" = the
+// default instance — legacy single-instance machines keep byte-identical
+// behavior). Priority: SSHMGR_CACHE_DIR (explicit full override — the
+// CLI layer rejects combining it with --instance) > instances/<name> > the
+// default dir. A named instance must pass the whitelist before Join.
+func CachePathsFor(instance string) (dir, bin, meta, audit string, err error) {
+	if instance != "" {
+		if verr := instname.Valid(instance); verr != nil {
+			return "", "", "", "", verr
+		}
+	}
 	if dir = os.Getenv("SSHMGR_CACHE_DIR"); dir == "" {
 		base, derr := os.UserConfigDir()
 		if derr != nil {
 			return "", "", "", "", derr
 		}
 		dir = filepath.Join(base, "ssh-manager")
+		if instance != "" {
+			dir = filepath.Join(dir, "instances", instance)
+		}
 	}
 	return dir, filepath.Join(dir, "cache.bin"), filepath.Join(dir, "cache.meta.json"), filepath.Join(dir, "cache-audit.log"), nil
+}
+
+// CachePaths resolves the DEFAULT instance's paths (zero-change wrapper; every
+// pre-Plan-40 caller — TUI client page, doctor, clear — keeps this view).
+func CachePaths() (dir, bin, meta, audit string, err error) {
+	return CachePathsFor("")
+}
+
+// InstancesRoot is where named instances live: "instances/" under the
+// UserConfigDir base — deliberately NOT env-redirected: SSHMGR_CACHE_DIR is a
+// single-slot full override (CachePathsFor ignores the instance when it is
+// set), so following it here would create two competing instances/ roots.
+func InstancesRoot() (string, error) {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "ssh-manager", "instances"), nil
+}
+
+// ListInstances returns the sorted directory names under InstancesRoot()
+// (nil, nil when the root does not exist — an empty machine). A directory is
+// an instance SLOT; presence of material inside is the caller's concern.
+func ListInstances() ([]string, error) {
+	root, err := InstancesRoot()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // atomicWriteUnique atomically replaces path with blob via a UNIQUE temp file +
