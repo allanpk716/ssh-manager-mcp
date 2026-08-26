@@ -91,6 +91,13 @@ func cachePullCmd() *cobra.Command {
 				if err := clientops.DoPull(url, token, "", clientops.PullOpts{AllowPlain: true, StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
 					return err
 				}
+				// Fix round 1 [Important]: not persisting --max-offline here is
+				// correct (a plaintext pull records no server-anchored time, so
+				// the cap would make THIS cache unloadable), but the operator
+				// must hear the flag was dropped — never silently.
+				if maxOfflineFlag != "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: --max-offline not persisted — a plaintext pull cannot anchor time (the cap would make this cache unloadable); persist via a pinned pull\n")
+				}
 				return nil // plaintext pulls NEVER persist a credential (no auto-plaintext path)
 			}
 			if err := clientops.DoPull(url, token, fp, clientops.PullOpts{StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
@@ -122,7 +129,7 @@ func cachePullCmd() *cobra.Command {
 				if derr == nil {
 					if werr := clientops.WriteCacheConfig(dir, maxOff); werr != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: could not persist cache.config.json (the cap applies only while the env/file stays set): %v\n", werr)
-					} else if os.Getenv("SSHMGR_CACHE_MAX_OFFLINE") != "" {
+					} else if strings.TrimSpace(os.Getenv("SSHMGR_CACHE_MAX_OFFLINE")) != "" {
 						fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: SSHMGR_CACHE_MAX_OFFLINE is set — the config just written takes effect only after the env is cleared\n")
 					}
 				}
