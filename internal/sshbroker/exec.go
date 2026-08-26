@@ -17,6 +17,10 @@ type ExecResult struct {
 	StdoutBytes int64 // total stdout bytes seen (may exceed len(Stdout) when capped)
 	StderrBytes int64 // total stderr bytes seen (may exceed len(Stderr) when capped)
 	Truncated   bool  // true if stdout or stderr exceeded maxBytes and was capped to the prefix
+	// Sudo is non-nil iff the exec went through the sudo wrapper (Plan 41 §2):
+	// five-state outcome with the marker-attested uid. Stderr above is the
+	// CLEANED stream (marker line and sudo prompt already stripped).
+	Sudo *SudoMeta
 }
 
 // runSession is the writer-seam kernel behind Exec (and the background engine):

@@ -180,6 +180,9 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	exitCode = res.ExitCode
 	// sshbroker returns nil err for non-zero exits (*ssh.ExitError) and for timeouts;
 	// both are results, not errors. A non-nil err here is a genuine exec failure.
+	// Plan 41 §2.3 fail-loud: the three known "command did NOT run" sudo outcomes
+	// are errors, not normal exit-1 results — a caller told sudo=true must never
+	// have to guess whether the elevation happened.
 	switch {
 	case res.TimedOut:
 		status = "timeout"
@@ -187,6 +190,9 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		status = "cancelled"
 	case err != nil:
 		status = "error"
+	case res.Sudo != nil && sudoFailedOutcome(res.Sudo.Outcome):
+		status = "error"
+		err = fmt.Errorf("sudo %s — the command did NOT run: %s", res.Sudo.Outcome, res.Sudo.Diagnostic)
 	default:
 		status = "ok"
 	}
@@ -197,7 +203,22 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		// timeout 已在上方钳定 (<=0 → defaultTimeout; cap MaxExecTimeout)。
 		EffectiveTimeoutSeconds: int(timeout.Seconds()),
 	}
+	if res.Sudo != nil {
+		out.Sudo = &SudoInfo{Outcome: res.Sudo.Outcome, UID: res.Sudo.UID}
+	}
 	return
+}
+
+// sudoFailedOutcome reports whether a sudo outcome means "the command did NOT
+// run" (Plan 41 §2.3) — the fail-loud set. `unverified` deliberately stays a
+// normal (though flagged) result: an unknown form must not be mistaken for a
+// known failure on signature evidence alone.
+func sudoFailedOutcome(outcome string) bool {
+	switch outcome {
+	case sshbroker.SudoAuthFailed, sshbroker.SudoStartFailed, sshbroker.SudoWrapFailed:
+		return true
+	}
+	return false
 }
 
 func contains(haystack []string, needle string) bool {

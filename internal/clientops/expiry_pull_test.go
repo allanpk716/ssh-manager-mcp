@@ -200,14 +200,21 @@ func TestDoPull_DateTwoBadShapes_Refused(t *testing.T) {
 			}
 		})
 	}
-	// B off: both shapes still pull fine (no anchor machinery).
-	t.Run("B-off-tolerates", func(t *testing.T) {
+	// Plan 40 §1 (P0): post fact/policy split, a PINNED pull is Date-gated
+	// with OR without the env — the anchor exists on every pinned pull, so it
+	// must be a valid one. (B-off tolerance was the old policy-gated behavior.)
+	t.Run("B-off-pinned-refuses-too", func(t *testing.T) {
 		t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "")
 		url, pin := newPinnedTLSServer(t, snapshotHandler(nil, nil))
+		dir := t.TempDir()
 		withDEK(t)
-		withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": t.TempDir()})
-		if err := DoPull(url, "code", pin, PullOpts{}); err != nil {
-			t.Fatalf("B-off pull must ignore Date: %v", err)
+		withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+		err := DoPull(url, "code", pin, PullOpts{})
+		if err == nil || !strings.Contains(err.Error(), "no valid Date header") {
+			t.Fatalf("want Date refusal without env (P0), got %v", err)
+		}
+		if _, serr := os.Stat(filepath.Join(dir, "cache.bin")); !os.IsNotExist(serr) {
+			t.Fatal("cache.bin must not be written without an anchor")
 		}
 	})
 }
@@ -252,24 +259,19 @@ func TestDoPull_AnchorWritten_BothStates(t *testing.T) {
 		t.Fatal("B-on must set ServerAnchored")
 	}
 
-	// B off: PulledAt = client clock, ServerAnchored explicitly serialized false.
+	// B off, PINNED (Plan 40 §1 P0): the anchor no longer depends on the
+	// pulling process's policy env — same server-clock anchor as B-on.
 	t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "")
-	before := time.Now().Unix()
 	url2, pin2 := newPinnedTLSServer(t, snapshotHandler(ptr(date), nil))
 	if err := DoPull(url2, "code", pin2, PullOpts{}); err != nil {
-		t.Fatalf("B-off pull: %v", err)
+		t.Fatalf("B-off pinned pull: %v", err)
 	}
-	after := time.Now().Unix()
 	m = readMetaForTest(t, dir)
-	if m.PulledAt < before || m.PulledAt > after {
-		t.Fatalf("B-off PulledAt %d outside [%d,%d]", m.PulledAt, before, after)
+	if m.PulledAt != serverNow.Unix() {
+		t.Fatalf("B-off pinned PulledAt = %d, want server Date %d", m.PulledAt, serverNow.Unix())
 	}
-	if m.ServerAnchored {
-		t.Fatal("B-off must not set ServerAnchored")
-	}
-	blob, _ := os.ReadFile(filepath.Join(dir, "cache.meta.json"))
-	if !strings.Contains(string(blob), `"server_anchored":false`) {
-		t.Fatalf("B-off meta must serialize explicit false, got %s", blob)
+	if !m.ServerAnchored {
+		t.Fatal("B-off pinned must set ServerAnchored (P0: fact, not policy)")
 	}
 }
 
