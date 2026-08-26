@@ -225,13 +225,17 @@ func ExecOutputForProfile(ctx context.Context, st *store.Store, projectID, taskI
 	} else {
 		so, se = string(v.Stdout), string(v.Stderr)
 	}
-	return BgReadOutput{
+	out = BgReadOutput{
 		Status: v.Status, ExitCode: v.ExitCode, Error: v.ErrText,
 		Stdout: so, Stderr: se,
 		NextStdoutOffset: v.NextStdout, NextStderrOffset: v.NextStderr,
 		StdoutBytesTotal: v.StdoutTotal, StderrBytesTotal: v.StderrTotal,
 		Truncated: v.Truncated, LostStdoutBytes: v.LostStdout, LostStderrBytes: v.LostStderr,
-	}, nil
+	}
+	if v.Sudo != nil { // Plan 41 §2: 后台 sudo 任务的提权元数据 (终态后非 nil)
+		out.Sudo = &SudoInfo{Outcome: v.Sudo.Outcome, UID: v.Sudo.UID}
+	}
+	return out, nil
 }
 
 // ExecStopForProfile 停止 taskID (exec_stop, spec §4): mgr.Stop 持锁置

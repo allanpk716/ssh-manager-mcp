@@ -198,6 +198,18 @@ ssh-manager projects add intern   --profile dev
 
 ---
 
+## sudo 提权语义（v0.10.1 起）
+
+`exec_command` / `exec_background` 的 `sudo=true` 走 `sudo -S` **整体提权**：整条命令——含每个 `;` / `&&` / `|` 段——**全部以 root 执行**。v0.10.1 之前只有第一个简单命令在 sudo 域内，后续段以登录用户静默执行（正确性缺陷，已修复；历史细节见 compat-matrix）。调用方注意：
+
+- **变量 / tilde 由 root bash 扩展**：`$USER` 变为 root（实测通用）；`$HOME` / `$PATH` 视目标 sudoers 配置而定（部署依赖）；`$0` 为 `bash`；内层 bash 经 sudo 启动，**不再读 `~/.bashrc`**（依赖其中 PATH 增补 / export 的命令需自查）。
+- **sudo 诊断恒英文（C locale）**；内层命令的 locale 在 env_keep 保留 locale 变量的部署（本部署）下也为 C——依赖 locale 输出格式（日期 / 排序等）的命令输出形态会变。
+- **提权可观测（envelope）**：`sudo=true` 的结果带 `sudo: {outcome, uid}`——`elevated`（marker 实证的 uid，`0` = root 真实证）；`auth-failed` / `sudo-start-failed` / `wrap-failed`（凭据被拒 / sudo 无法启动提权命令（如 sudoers 策略）/ 包装 shell 拒绝命令（如语法错误）——三种形态命令都**未执行**，调用直接报错 fail-loud）；`unverified`（无 marker，身份未实证，防御性呈现）。stderr 已剥净 sudo 提示串与内部标记。
+- **`exec_context` 诊断工具**：一轮拿全执行通道真实上下文（uid / uid_map / tty / LSM 标签 / SSH 来源 / 进程树；`sudo=true` 探特权通道，SSH 来源在提权前捕获）——排查"身份/权限"类异常先调它，不要手工拼 `id; cat /proc/self/uid_map; …`。
+- **前提**：目标机 sudo 授权须为**通用命令形态**；command-specific sudoers / NOEXEC 部署不兼容（失败不静默：前者整条被策略拒绝，后者外部命令部分被拦——均显式可见，详见 compat-matrix 的 v0.10.1 行）。
+
+---
+
 ## 隔离与排错
 
 | 现象 | 处理 |

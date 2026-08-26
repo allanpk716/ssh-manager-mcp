@@ -37,6 +37,7 @@ var BrokerTools = []string{
 	"exec_output",     // [7] — poll incremental output of a background task (Plan 32 T7)
 	"exec_stop",       // [8] — stop a background task by id (Plan 32 T7)
 	"upload_content",  // [9] — write INLINE content (text/base64, decoded ≤ cap) to a remote path over SFTP (profile-gated; Plan 33 T4) — the cross-machine upload path upload_file cannot serve
+	"exec_context",    // [10] — capture the exec channel's TRUE context in one round: uid/gid/groups, tty, uid_map, LSM label, SSH provenance, process tree (profile-gated; Plan 41 §3)
 }
 
 // NewServer builds an MCP server whose tools are scoped to profileID and
@@ -252,6 +253,25 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 			out, err := UploadContentForProfile(ctx, st, projectID, profileID, in.ServerID, in.Content, in.RemotePath, in.Encoding, uploadCap)
 			if err != nil {
 				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, UploadContentOutput{}, nil
+			}
+			return nil, out, nil
+		},
+	)
+
+	mcp.AddTool(srv,
+		&mcp.Tool{
+			Name:        BrokerTools[10], // "exec_context" (Plan 41 §3)
+			Description: "Capture the exec channel's TRUE execution context in one round: uid/gid/groups, tty (exec channels have no PTY — 'no-tty' is expected, not an anomaly), user-namespace mapping ('0 0 4294967295' = initial namespace, real root — not userns fakeroot), LSM label, SSH provenance (client/connection — captured BEFORE elevation: sudo's env_reset empties them in the privileged layer), and the process tree position. Use this BEFORE hypothesizing about identities, interception layers, or 'mystery permission denied' — e.g. when exec_command(sudo=true) returns uid=0 yet a path stays EACCES, one call tells you whether the channel, the namespace, or the LSM label explains it. Pass sudo=true to probe the privileged channel (uid should be 0; requires has_sudo=true).",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in ExecContextInput) (*mcp.CallToolResult, ExecContextOutput, error) {
+			st := storeFn()
+			out, err := ExecContextForProfile(ctx, st, projectID, profileID, in.ServerID, in.Sudo)
+			if err != nil {
+				// Surface the error to the agent as a tool error (IsError), not a transport error.
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, ExecContextOutput{}, nil
 			}
 			return nil, out, nil
 		},
