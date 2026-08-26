@@ -47,7 +47,7 @@ func withDEKFake(t *testing.T) *fakeDEK {
 	t.Helper()
 	f := &fakeDEK{}
 	prev := DekProvider
-	DekProvider = func() store.KeyProvider { return f }
+	DekProvider = func(string) store.KeyProvider { return f }
 	t.Cleanup(func() { DekProvider = prev })
 	return f
 }

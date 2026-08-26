@@ -449,3 +449,92 @@ func TestRevokedCacheTokenNameByPrefix(t *testing.T) {
 		t.Fatal("active row matched the revoked-prefix lookup")
 	}
 }
+
+// --- Plan 40: device-name discipline at add/bind ------------------------------
+
+// newTokenStore opens a temp store with one profile and returns both (Plan 40
+// T6 name-discipline helper — composed from the existing newTestStore/seedProfile
+// rather than re-opening a store by hand; reused by the T7 startup-scan tests).
+func newTokenStore(t *testing.T) (*Store, string) {
+	t.Helper()
+	st := newTestStore(t)
+	return st, seedProfile(t, st, "p1")
+}
+
+// TestAddCacheToken_NameDiscipline pins the Plan 40 §2.1 source gate: illegal
+// names (charset / first-segment DOS reserved / path traversal) are refused at
+// add, and casefold VARIANTS are reserved for a name's lifetime (revoked rows
+// included) while the exact same name stays re-issuable after revoke.
+func TestAddCacheToken_NameDiscipline(t *testing.T) {
+	st, prof := newTokenStore(t)
+
+	// 非法名：字符集 / 首段保留名 / 路径穿越
+	for _, bad := range []string{"a b", "con.foo", "COM1.x", "../x", "foo.", "", "nul.tar.gz"} {
+		if _, _, err := st.AddCacheToken(bad, prof); err == nil {
+			t.Errorf("AddCacheToken(%q) must be refused", bad)
+		}
+	}
+	// 合法名通过
+	if _, _, err := st.AddCacheToken("laptop-agentA", prof); err != nil {
+		t.Fatalf("legal name refused: %v", err)
+	}
+	// 大小写变体 active 冲突
+	if _, _, err := st.AddCacheToken("LAPTOP-AGENTA", prof); err == nil || !strings.Contains(err.Error(), "case") {
+		t.Fatalf("active casefold variant must be refused: %v", err)
+	}
+	// revoke 后：精确同名可重发（reclaim 语义保留）……
+	if err := st.RevokeCacheToken("laptop-agentA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddCacheToken("laptop-agentA", prof); err != nil {
+		t.Fatalf("exact re-issue after revoke must work: %v", err)
+	}
+	// ……但变体终身占用
+	if err := st.RevokeCacheToken("laptop-agentA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddCacheToken("laptop-agenta", prof); err == nil || !strings.Contains(err.Error(), "case") {
+		t.Fatalf("revoked casefold variant must stay refused: %v", err)
+	}
+}
+
+// TestBindCacheToken_NameDiscipline: bind re-validates the name too (defense
+// in depth — bind is a legacy-repair entry point the add gate never saw).
+func TestBindCacheToken_NameDiscipline(t *testing.T) {
+	st, prof := newTokenStore(t)
+	_, _, _ = st.AddCacheToken("agentA", prof)
+	if err := st.BindCacheToken("bad name", prof); err == nil {
+		t.Fatal("bind must validate the name too (defense)")
+	}
+}
+
+// TestScanCacheTokenNameAnomalies pins the Plan 40 §2.1 startup scan: ACTIVE
+// rows with whitelist-invalid names or casefold collisions are anomalies;
+// revoked rows never participate (revoke is the repair path); a clean store
+// scans to an empty slice.
+func TestScanCacheTokenNameAnomalies(t *testing.T) {
+	st, prof := newTokenStore(t)
+	// 直接 SQL 插非法/碰撞行（绕过 add 的新闸——模拟自由文本时代存量；store 测试同包,st.db 可直达）
+	ins := `INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,profile_id,created_at,updated_at)
+		VALUES (?,?,x'00',x'00',?,?,?,1,1)`
+	exec := func(id, name, prefix, status string) {
+		t.Helper()
+		if _, err := st.db.Exec(ins, id, name, prefix, status, prof); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec("a1", "agentA", "p1", "active")
+	exec("a2", "AGENTA", "p2", "active")   // casefold 碰撞
+	exec("a3", "bad name", "p3", "active") // 白名单不合规
+	exec("a4", "ok-name", "p4", "active")
+	exec("a5", "legacy-bad", "p5", "revoked") // revoked 不参与
+	got, err := st.ScanCacheTokenNameAnomalies()
+	if err != nil || len(got) != 2 {
+		t.Fatalf("anomalies = %v, %v (want 2: collision + illegal)", got, err)
+	}
+	// 干净库 → 空
+	st2, _ := newTokenStore(t)
+	if got, _ := st2.ScanCacheTokenNameAnomalies(); len(got) != 0 {
+		t.Fatalf("clean = %v", got)
+	}
+}

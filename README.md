@@ -204,12 +204,13 @@ ssh-manager serve --addr 0.0.0.0:7878
 - **Auto-TLS + fingerprint pinning (no cert hassle).** On first start `serve` **auto-generates a self-signed ed25519 cert** and forces TLS from then on — no openssl, no CA distribution. `cache-tokens add` prints the cert's **SPKI fingerprint** alongside the device code; `cache pull` **pins** it (first-connect verification, zero MITM window — the HPKP/Tailscale model). This is the default; pass `--tls-cert`/`--tls-key` only if you want your own cert.
 - **No-pin clients refuse by default.** A `cache pull` without a pin **hard-fails** (was: silent plaintext fallback — a fail-open risk, now closed). Opt into plaintext explicitly with `--allow-plaintext` (debugging / talking to an old plaintext serve only). A pin set with a non-`https://` URL also hard-fails.
 - **Auth — same gate as stdio.** Every request carries `Authorization: Bearer <project-token>`. The server resolves it per request with `VerifyToken` (`active` projects only); the iron rule (per-call `serverID ∈ profileID`) applies identically.
-- **Point the remote agent at it** — streamable-HTTP endpoint `https://<host>:7878/` with the bearer header. Claude Code `.mcp.json` (online live mode):
+- **Point the agent at it — cache-first is the standard posture** (Plan 40 定案): the recommended client entry runs the broker from a local **read-only cache** — `.mcp.json` spawns `ssh-manager mcp --cache` (in-process broker, auto-refreshed, keeps working offline):
   ```json
-  {"mcpServers":{"ssh":{"type":"http","url":"https://192.0.2.5:7878/","headers":{"Authorization":"Bearer <TOKEN>"}}}}
+  {"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp","--cache"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
   ```
-  Or run the broker from a local **read-only cache** (`mcp --cache`) so the agent keeps working offline — see the quickstart.
+  The direct HTTP connection (`type:"http"` + bearer header against `https://<host>:7878/`) is now the **auxiliary** form — online-only; use it on the serve host itself, or when you want every request validated live against the serve (per-request revocation). Either way the same project token applies.
   > client 角色向导的 finish 屏现在会同时展示离线 --cache 与在线 http 两种形态。
+- **Several agents on ONE machine — named cache instances (Plan 40, v0.11).** Each agent gets its own offline cache: enroll with `ssh-manager cache pull --url … --token … --instance <name>` (one device code per agent — `cache-tokens add --name <machine>-<agent> --profile <p>`), inspect with `ssh-manager cache status` (no flag lists every slot), and run the agent against it with `ssh-manager mcp --cache --instance <name>` in `.mcp.json`. Instances live under `instances/<name>/` with a **per-instance DEK** — one instance's leaked material does not decrypt another's cache. `cache pull --max-offline 24h` persists the instance's offline cap to `cache.config.json` (priority env > file > off). Full guide (中文): [`docs/multi-machine.md`](docs/multi-machine.md) 「多实例（同机多 agent）」.
 - **Shutdown.** `Ctrl+C` (`SIGINT`) / `SIGTERM` → graceful drain and every open `forward_port` tunnel torn down.
 
 > **⚠️ Breaking change / migration order.** New `serve` is TLS-only. When upgrading an already-deployed plaintext setup: **upgrade all work-machine binaries + configure their pin FIRST, restart `serve` LAST** — the moment `serve` upgrades it rejects old plaintext clients. Full migration + key-rotation runbooks in [`docs/multi-machine.md`](docs/multi-machine.md).
@@ -222,7 +223,7 @@ ssh-manager serve --addr 0.0.0.0:7878
 
 | 变量 | 默认 / 语法 | 说明 |
 |---|---|---|
-| `SSHMGR_CACHE_MAX_OFFLINE` | `168h`（Go duration，≥1h；unset/`0` 关） | 开启离线缓存到龄自废：超龄的下次 load/spawn 销毁本地 cache（服务器 Date 锚 + 1h 时钟容差）。详见 docs/multi-machine.md |
+| `SSHMGR_CACHE_MAX_OFFLINE` | Go duration（≥1h；unset/`0` 关，**默认关**） | 离线缓存到龄自废：超龄的下次 load/spawn 销毁本地 cache（服务器 Date 锚 + 1h 时钟容差）。优先级 env > `cache.config.json` > 关——v0.11 起可 `cache pull --max-offline 24h` 把上限持久化进每实例的 `cache.config.json`。详见 docs/multi-machine.md |
 
 ---
 

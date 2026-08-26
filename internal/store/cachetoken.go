@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/models"
 )
 
@@ -35,6 +36,9 @@ func (s *Store) AddCacheToken(name, profileID string) (string, string, error) {
 	if n == 0 {
 		return "", "", fmt.Errorf("profile %q not found", profileID)
 	}
+	if verr := instname.Valid(name); verr != nil {
+		return "", "", verr
+	}
 	token, err := GenerateToken()
 	if err != nil {
 		return "", "", err
@@ -55,6 +59,19 @@ func (s *Store) AddCacheToken(name, profileID string) (string, string, error) {
 		name, string(models.CacheTokenRevoked),
 	); err != nil {
 		return "", "", err
+	}
+	// Plan 40 §2.1: casefold variants of a device name are reserved for the
+	// name's LIFETIME (revoked rows included) — a re-issued variant would collide
+	// with the residual instance dir / per-instance DEK on the client. The exact
+	// same-name revoked rows were just reclaimed above, so any remaining
+	// lower(name) match is a true variant. In-tx = the cross-process double-open
+	// backstop (MaxOpenConns(1) already serializes in-process).
+	var variants int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM cache_tokens WHERE lower(name)=lower(?) AND name<>?`, name, name).Scan(&variants); err != nil {
+		return "", "", err
+	}
+	if variants > 0 {
+		return "", "", fmt.Errorf("device name %q collides case-insensitively with an existing or revoked device name — variants of a name are reserved for its lifetime; pick a different name", name)
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,profile_id,created_at,updated_at)
@@ -82,6 +99,16 @@ func (s *Store) BindCacheToken(name, profileID string) error {
 	}
 	if n == 0 {
 		return fmt.Errorf("profile %q not found", profileID)
+	}
+	if verr := instname.Valid(name); verr != nil {
+		return verr
+	}
+	var variants int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM cache_tokens WHERE lower(name)=lower(?) AND name<>?`, name, name).Scan(&variants); err != nil {
+		return err
+	}
+	if variants > 0 {
+		return fmt.Errorf("device name %q collides case-insensitively with another device name", name)
 	}
 	res, err := s.db.Exec(
 		`UPDATE cache_tokens SET profile_id=?, updated_at=? WHERE name=? AND status=?`,
@@ -241,4 +268,35 @@ func (s *Store) RevokedCacheTokenNameByPrefix(prefix string) (string, bool, erro
 		return "", false, err
 	}
 	return name, true, nil
+}
+
+// ScanCacheTokenNameAnomalies checks every ACTIVE device-code row for Plan-40
+// name discipline violations: whitelist-invalid names (free-text era legacy)
+// and casefold collisions between two active rows. Revoked rows are excluded —
+// revoke is the repair path. Empty slice = clean.
+func (s *Store) ScanCacheTokenNameAnomalies() ([]string, error) {
+	rows, err := s.db.Query(`SELECT name FROM cache_tokens WHERE status='active' ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var anomalies []string
+	seen := map[string]string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		if verr := instname.Valid(name); verr != nil {
+			anomalies = append(anomalies, fmt.Sprintf("invalid device name %q (%v) — revoke and re-add with a valid name", name, verr))
+			continue
+		}
+		f := instname.Fold(name)
+		if prev, ok := seen[f]; ok {
+			anomalies = append(anomalies, fmt.Sprintf("case-insensitive collision %q vs %q — revoke one and re-add under a distinct name", prev, name))
+			continue
+		}
+		seen[f] = name
+	}
+	return anomalies, rows.Err()
 }

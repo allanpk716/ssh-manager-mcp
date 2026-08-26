@@ -63,3 +63,11 @@
 - **clientHeader 的 nServers 参数与 snap 冗余**（恒等于 len(snap.Servers)）：删参改内部计算（nil-safe）。
 - **pre-Plan-39 cache_tokens DDL 在两个测试文件裸抄**（cli/cache_tokens_test.go + mcpserver/serve_snapshot_test.go）：store 侧已有具名 oldShapeCacheTokens；跨包共享 fixture（testsshd 先例）防下次迁移漏改。
 - **e2e 测试忽略 CreateTemp/GenerateMasterKey 错误**（mcp_cache_test.go，沿用既有测试风格）：环境故障时 nil 解引用掩盖根因。
+
+## Plan 40 多实例：第一批销项与登记（2026-08-26）
+
+- ~~**多实例离线缓存（第一批 · CLI 闭环）**~~ **已落地（Plan 40 batch 1, 2026-08-26 实现完毕；v0.11.0 未发版——与先行合并的 P0 锚修复（§1，merge 8643858）同船发版；spec = `docs/superpowers/specs/2026-08-26-plan-40-multi-instance-cache-design.md.rev3.md`，plan 见 `docs/superpowers/plans/2026-08-26-plan-40-multi-instance-batch1.md`）**。原文（2026-08-26 grilling Q3-Q11 定案）：同机多 agent 各授权各 profile 的多 cache 实例一等公民（owner 明确否掉"仅文档化 workaround"）——实例 = 设备码 name = profile 三位一体；命名实例落 `UserConfigDir/ssh-manager/instances/<name>/`，per-instance DEK `VaultDir/cache-dek-<name>.key`（新 seam `SSHMGR_CACHE_DEK_DIR`）；`--instance` flag（pull/status/mcp）+ env×flag 互斥；serve 下发 `X-Sshmgr-Device-Name` 头；默认实例身份门禁三分支（异码写盘前拒 / 存量空 `device_name` 补记 / meta 损坏拒）；MAX_OFFLINE 持久化 `cache.config.json`（env > file > off）；`clear` 清实例树 + DEK 变体、`roles` 认命名实例机；双实例 e2e 钉 DEK 隔离 / 交叉 fail-closed / 吊销只毁本实例。
+- **第二批（已裁决待开工）**：① TUI client 页实例列表 + 切换；② 角色向导 `--instance` 接入卡（生成带 `--instance` 的 `.mcp.json`）；③ **首次 enroll 自动归位**（落 `instances/<响应头name>/`）——与向导卡同批，消除"归位先行则新机开箱即起不来"的中间窗口；④ TUI 连接编辑表单换码**预防性警告**（第一批该路径由门禁拒绝文案兜底——非静默但体验欠佳）；⑤ 独立 `cache config [--instance] --max-offline` 子命令（现只有 `pull --max-offline` 顺带写）。
+- **doctor 二批（跟随 Plan 38-doctor 体系）**：doctor 感知命名实例（枚举全部实例诊断）——第一批不感知：仅命名实例的机器 doctor 的 client-cache 检查会报"cache 缺失"（roles 已修为 client；不静默但属误报）。
+- **明确不做（YAGNI，Q11 拍板）**：`--cache-max-age`（cacheMaxAge）**不进 `cache.config.json`**——持久化只搬 MAX_OFFLINE。理由：cacheMaxAge 是进程内 lazy-pull 节流参数，无"跨进程策略一致性"病灶（MAX_OFFLINE 的 env 铺不满所有进程问题与它不同构）。
+- **残余登记（如实）**：① 存量机器**永不自动迁移**实例目录——自动归位仅第二批起、且只作用于首次 enroll；要进实例形态需显式 `--instance` 重新 enroll（零迁移承诺的有意代价）；② 同机恶意进程可读全部实例材料——与单实例现状同级（L1+ 文件 ACL 不挡同机），非新增；③ 跨进程 casefold 双插窗口——查重已入事务 + 进程内 `MaxOpenConns(1)` 串行，两个独立进程恰好同时 add 互为大小写变体的理论窗口仍在（owner 单人操作面接受；发生时 client 物理碰撞检测兜底拦截）。

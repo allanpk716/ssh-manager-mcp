@@ -20,10 +20,12 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
 )
@@ -59,25 +61,26 @@ var cacheQuarantinedFlag bool
 // flag intentionally lasts the process lifetime in production).
 func ResetCacheQuarantineForTest() { cacheQuarantinedFlag = false }
 
-// MaybeLazyPull runs ONE automatic pull when cache.bin is missing / older than
-// maxAge and a persisted cache.auth.json exists. maxAge<=0 disables entirely —
-// INCLUDING the missing-cache case (the first pull stays a deliberate manual
-// step). Errors are returned for the caller to log; never fatal.
-func MaybeLazyPull(maxAge time.Duration) error {
+// MaybeLazyPullFor runs ONE automatic pull for the given instance ("" = the
+// default instance) when cache.bin is missing / older than maxAge and a
+// persisted cache.auth.json exists. maxAge<=0 disables entirely — INCLUDING the
+// missing-cache case (the first pull stays a deliberate manual step). Errors
+// are returned for the caller to log; never fatal.
+func MaybeLazyPullFor(instance string, maxAge time.Duration) error {
 	if maxAge <= 0 {
 		return nil
 	}
 	if cacheQuarantinedFlag {
 		return nil // Plan 34: quarantined this process — no further auto-pulls
 	}
-	cred, err := ReadCacheCred()
+	cred, err := ReadCacheCredFor(instance)
 	if err != nil {
 		return err
 	}
 	if cred == nil {
 		return nil
 	}
-	_, bin, _, _, err := CachePaths()
+	_, bin, _, _, err := CachePathsFor(instance)
 	if err != nil {
 		return err
 	}
@@ -102,7 +105,7 @@ func MaybeLazyPull(maxAge time.Duration) error {
 	if pin == "" {
 		return fmt.Errorf("cache.auth.json has no pin; refusing plaintext auto-pull")
 	}
-	err = DoPull(cred.URL, code, pin, PullOpts{Timeout: LazyPullTimeout, StatusOut: os.Stderr})
+	err = DoPull(cred.URL, code, pin, PullOpts{Timeout: LazyPullTimeout, StatusOut: os.Stderr, Instance: instance})
 	if errors.Is(err, ErrCacheQuarantined) {
 		// Plan 34 rev4 §3 — the pinned server rejected the device code and the
 		// cache is destroyed. Terminal for this process: the flag stops every
@@ -123,18 +126,74 @@ func MaybeLazyPull(maxAge time.Duration) error {
 	return err
 }
 
-// CachePaths resolves the cache directory (SSHMGR_CACHE_DIR override, else UserConfigDir/
-// ssh-manager) and the three files within it: the encrypted snapshot, the meta sidecar, and
-// the offline-audit sidecar (the audit sidecar is owned by T8; T7 only resolves the path).
-func CachePaths() (dir, bin, meta, audit string, err error) {
+// MaybeLazyPull runs the DEFAULT instance's lazy pull (zero-change wrapper).
+func MaybeLazyPull(maxAge time.Duration) error { return MaybeLazyPullFor("", maxAge) }
+
+// CachePathsFor resolves the cache directory for ONE instance ("" = the
+// default instance — legacy single-instance machines keep byte-identical
+// behavior). Priority: SSHMGR_CACHE_DIR (explicit full override — the
+// CLI layer rejects combining it with --instance) > instances/<name> > the
+// default dir. A named instance must pass the whitelist before Join.
+func CachePathsFor(instance string) (dir, bin, meta, audit string, err error) {
+	if instance != "" {
+		if verr := instname.Valid(instance); verr != nil {
+			return "", "", "", "", verr
+		}
+	}
 	if dir = os.Getenv("SSHMGR_CACHE_DIR"); dir == "" {
 		base, derr := os.UserConfigDir()
 		if derr != nil {
 			return "", "", "", "", derr
 		}
 		dir = filepath.Join(base, "ssh-manager")
+		if instance != "" {
+			dir = filepath.Join(dir, "instances", instance)
+		}
 	}
 	return dir, filepath.Join(dir, "cache.bin"), filepath.Join(dir, "cache.meta.json"), filepath.Join(dir, "cache-audit.log"), nil
+}
+
+// CachePaths resolves the DEFAULT instance's paths (zero-change wrapper; every
+// pre-Plan-40 caller — TUI client page, doctor, clear — keeps this view).
+func CachePaths() (dir, bin, meta, audit string, err error) {
+	return CachePathsFor("")
+}
+
+// InstancesRoot is where named instances live: "instances/" under the
+// UserConfigDir base — deliberately NOT env-redirected: SSHMGR_CACHE_DIR is a
+// single-slot full override (CachePathsFor ignores the instance when it is
+// set), so following it here would create two competing instances/ roots.
+func InstancesRoot() (string, error) {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "ssh-manager", "instances"), nil
+}
+
+// ListInstances returns the sorted directory names under InstancesRoot()
+// (nil, nil when the root does not exist — an empty machine). A directory is
+// an instance SLOT; presence of material inside is the caller's concern.
+func ListInstances() ([]string, error) {
+	root, err := InstancesRoot()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // atomicWriteUnique atomically replaces path with blob via a UNIQUE temp file +
@@ -195,6 +254,12 @@ type cacheMeta struct {
 	// the only honest discriminator. No omitempty, same zero-value semantics
 	// as ServerAnchored (code-review #3).
 	Scoped bool `json:"scoped"`
+	// DeviceName records the pulling device code's name as asserted by the
+	// pinned serve (X-Sshmgr-Device-Name). Empty on legacy metas (the zero
+	// value — the §2.4 adopt-and-record branch) and on plaintext pulls (an
+	// injectable header must never gate). No omitempty, same zero-value
+	// semantics as ServerAnchored/Scoped.
+	DeviceName string `json:"device_name"`
 }
 
 // CacheCred persists the pull credential (cache.auth.json) so `mcp --cache` can
@@ -210,20 +275,25 @@ type CacheCred struct {
 	Pin   string `json:"pin,omitempty"` // resolved effective pin at last successful pull
 }
 
-// CacheCredPath returns the path of cache.auth.json inside the cache dir.
-func CacheCredPath() (string, error) {
-	dir, _, _, _, err := CachePaths()
+// CacheCredPathFor returns the path of cache.auth.json inside the given
+// instance's cache dir ("" = the default instance).
+func CacheCredPathFor(instance string) (string, error) {
+	dir, _, _, _, err := CachePathsFor(instance)
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "cache.auth.json"), nil
 }
 
-// ReadCacheCred returns nil, nil when the file is absent (never enrolled / not
-// yet pulled). A present-but-corrupt file is an error: silently ignoring it
-// would disable auto-refresh invisibly.
-func ReadCacheCred() (*CacheCred, error) {
-	p, err := CacheCredPath()
+// CacheCredPath returns the DEFAULT instance's cache.auth.json path
+// (zero-change wrapper).
+func CacheCredPath() (string, error) { return CacheCredPathFor("") }
+
+// ReadCacheCredFor returns the given instance's pull credential; nil, nil when
+// the file is absent (never enrolled / not yet pulled). A present-but-corrupt
+// file is an error: silently ignoring it would disable auto-refresh invisibly.
+func ReadCacheCredFor(instance string) (*CacheCred, error) {
+	p, err := CacheCredPathFor(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -244,10 +314,14 @@ func ReadCacheCred() (*CacheCred, error) {
 	return &c, nil
 }
 
-// WriteCacheCred persists the credential atomically (unique temp + rename) and
-// hardens the ACL on Windows (no-op on Unix where 0600 is the protection).
-func WriteCacheCred(cred *CacheCred) error {
-	p, err := CacheCredPath()
+// ReadCacheCred reads the DEFAULT instance's credential (zero-change wrapper).
+func ReadCacheCred() (*CacheCred, error) { return ReadCacheCredFor("") }
+
+// WriteCacheCredFor persists the given instance's credential atomically
+// (unique temp + rename) and hardens the ACL on Windows (no-op on Unix where
+// 0600 is the protection).
+func WriteCacheCredFor(instance string, cred *CacheCred) error {
+	p, err := CacheCredPathFor(instance)
 	if err != nil {
 		return err
 	}
@@ -261,19 +335,24 @@ func WriteCacheCred(cred *CacheCred) error {
 	return store.HardenACL(p)
 }
 
-// LoadCacheSnapshot reads + DEK-decrypts + unmarshals the cache. Shared by `cache status` and
-// `mcp --cache`. Returns an error if the cache is absent / corrupt / the DEK is missing.
+// WriteCacheCred persists the DEFAULT instance's credential (zero-change
+// wrapper).
+func WriteCacheCred(cred *CacheCred) error { return WriteCacheCredFor("", cred) }
+
+// LoadCacheSnapshotFor reads + DEK-decrypts + unmarshals the given instance's
+// cache ("" = the default instance). Shared by `cache status` and `mcp --cache`.
+// Returns an error if the cache is absent / corrupt / the DEK is missing.
 //
 // Plan 37 §3: with SSHMGR_CACHE_MAX_OFFLINE set, three gates run BEFORE the
 // DEK is even touched (meta is plaintext): usable-anchor, provenance, and
 // expiry/rollback. Destruction happens only on the expiry gate, only after a
 // re-check confirms the anchor did not just advance (destructive-race guard).
-func LoadCacheSnapshot() (*store.Snapshot, error) {
-	_, bin, metaPath, _, err := CachePaths()
+func LoadCacheSnapshotFor(instance string) (*store.Snapshot, error) {
+	dir, bin, metaPath, _, err := CachePathsFor(instance)
 	if err != nil {
 		return nil, err
 	}
-	maxOffline, err := cacheMaxOffline()
+	maxOffline, err := resolveMaxOffline(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -282,11 +361,11 @@ func LoadCacheSnapshot() (*store.Snapshot, error) {
 		if merr != nil {
 			// §3.2: no usable anchor — refuse, never destroy (includes the
 			// never-pulled first run; a fresh machine has no meta by design).
-			return nil, fmt.Errorf("SSHMGR_CACHE_MAX_OFFLINE is set but cache.meta.json is missing or corrupt (or this machine never pulled) — refusing cache (no time anchor); run cache pull")
+			return nil, fmt.Errorf("the offline cap is set (SSHMGR_CACHE_MAX_OFFLINE or cache.config.json) but cache.meta.json is missing or corrupt (or this machine never pulled) — refusing cache (no time anchor); run cache pull")
 		}
 		if !meta.ServerAnchored {
 			// §3.3 provenance gate: a local-clock anchor never passed any gate.
-			return nil, fmt.Errorf("cache.meta.json has no server-anchored time (pulled while SSHMGR_CACHE_MAX_OFFLINE was unset or by an older client) — refusing cache; run cache pull to establish a server time anchor")
+			return nil, fmt.Errorf("the offline cap is set (SSHMGR_CACHE_MAX_OFFLINE or cache.config.json) but cache.meta.json has no server-anchored time (pulled by an older client or without a pinned TLS server) — refusing cache; run cache pull to establish a server time anchor")
 		}
 		anchorT := time.Unix(meta.PulledAt, 0)
 		now := time.Now()
@@ -306,9 +385,9 @@ func LoadCacheSnapshot() (*store.Snapshot, error) {
 			if meta2.PulledAt > meta.PulledAt && meta2.ServerAnchored {
 				// A concurrent trusted pull just re-anchored: abort destruction
 				// and judge again from the fresh anchor.
-				return LoadCacheSnapshot()
+				return LoadCacheSnapshotFor(instance)
 			}
-			_, qerr := QuarantineCache(expiryReason)
+			_, qerr := QuarantineCacheFor(instance, expiryReason)
 			if qerr == nil {
 				qerr = ErrCacheQuarantined
 			}
@@ -322,7 +401,7 @@ func LoadCacheSnapshot() (*store.Snapshot, error) {
 				now.Format(time.RFC3339), anchorT.Format(time.RFC3339))
 		}
 	}
-	dek, err := loadDEK()
+	dek, err := loadDEK(instance)
 	if err != nil {
 		return nil, fmt.Errorf("cache DEK not found in keychain (run `cache pull` first): %w", err)
 	}
@@ -341,11 +420,18 @@ func LoadCacheSnapshot() (*store.Snapshot, error) {
 	return &snap, nil
 }
 
+// LoadCacheSnapshot loads the DEFAULT instance's cache (zero-change wrapper).
+func LoadCacheSnapshot() (*store.Snapshot, error) { return LoadCacheSnapshotFor("") }
+
 // PullOpts tunes DoPull for its caller.
 type PullOpts struct {
 	AllowPlain bool          // plaintext opt-in — manual CLI only; the lazy path NEVER sets this
 	Timeout    time.Duration // >0 → overall http.Client timeout (lazy: spawn/tool-call path must be bounded)
 	StatusOut  io.Writer     // status/warning sink (nil → silent); CLI passes cmd.ErrOrStderr()
+	// Instance routes this pull to instances/<name>/ ("" = the default slot).
+	// Validated by CachePathsFor; combined with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK
+	// it is rejected at the CLI layer (mutex, spec §2.2).
+	Instance string
 }
 
 // DoPull fetches /snapshot from url with the device code and atomically writes
@@ -355,9 +441,20 @@ type PullOpts struct {
 // the spawn-lazy pull (mcp --cache) shares ONE implementation.
 func DoPull(url, token, pin string, o PullOpts) error {
 	code := token
-	// Plan 37 §1/§2: fail-closed env precheck — an invalid cap refuses the
-	// pull before any HTTP (no half-open "pulls but won't load" state).
-	maxOffline, err := cacheMaxOffline()
+	// Plan 40 T5/T13: resolve the cache paths for THIS instance before anything
+	// else disk-touching — the cap resolution below must read the instance's
+	// own cache.config.json, and the later pre-write gates read the existing
+	// meta before any bytes land on disk. Pure path computation: no HTTP, no
+	// writes, so the fail-closed precheck below still precedes every request.
+	dir, bin, metaPath, _, err := CachePathsFor(o.Instance)
+	if err != nil {
+		return err
+	}
+	// Plan 37 §1/§2 + Plan 40 T13: fail-closed cap precheck (env > file) — an
+	// invalid cap from EITHER source refuses the pull before any HTTP (no
+	// half-open "pulls but won't load" state; the env's error is never masked
+	// by the file).
+	maxOffline, err := resolveMaxOffline(dir)
 	if err != nil {
 		return err
 	}
@@ -366,7 +463,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		if maxOffline > 0 {
 			// Plan 37 §2.1: the time anchor requires a pinned TLS server;
 			// a plaintext response's Date is injectable and cannot anchor.
-			return fmt.Errorf("SSHMGR_CACHE_MAX_OFFLINE is set: refusing plaintext pull — the time anchor requires a pinned TLS server (unset the cap or remove --allow-plaintext)")
+			return fmt.Errorf("the offline cap is set (SSHMGR_CACHE_MAX_OFFLINE or cache.config.json): refusing plaintext pull — the time anchor requires a pinned TLS server (unset the cap or remove --allow-plaintext)")
 		}
 		if !o.AllowPlain {
 			return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
@@ -399,7 +496,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		client.Timeout = o.Timeout
 	}
 
-	dek, err := loadOrCreateDEK()
+	dek, err := loadOrCreateDEK(o.Instance)
 	if err != nil {
 		return err
 	}
@@ -429,10 +526,11 @@ func DoPull(url, token, pin string, o PullOpts) error {
 			// Plan 34 rev4 §3 — the ONLY quarantine trigger: a PINNED server
 			// rejected the device code (revoked server-side). Plaintext 401s,
 			// network/TLS failures, and non-401 statuses never reach here.
-			// QuarantineCache returns nil on a clean/idempotent destruction —
+			// QuarantineCacheFor returns nil on a clean/idempotent destruction —
 			// the trigger itself raises the sentinel then; its DEGRADED error
-			// already wraps ErrCacheQuarantined.
-			_, qerr := QuarantineCache(serverRejectedReason)
+			// already wraps ErrCacheQuarantined. Plan 40 T5: the destruction
+			// targets THIS pull's instance slot, never the default one.
+			_, qerr := QuarantineCacheFor(o.Instance, serverRejectedReason)
 			if qerr == nil {
 				qerr = ErrCacheQuarantined
 			}
@@ -482,11 +580,25 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		pulledAt = serverTime.Unix()
 		anchored = true
 	}
-	blob, err := vaultio.EncryptWithKey(dek, body)
-	if err != nil {
+	// Plan 40 T5: the paths were resolved at the TOP of DoPull (before the
+	// cap precheck); the identity gates below consume them — a refusal leaves
+	// the old cache byte-identical.
+	// Plan 40 §2.4: the device identity comes from the pinned response ONLY
+	// (plaintext headers are injectable). The default-instance identity gate
+	// runs BEFORE any write (bin included) — a refusal leaves the old cache
+	// byte-identical.
+	deviceName := ""
+	if pin != "" {
+		deviceName = res.Header.Get("X-Sshmgr-Device-Name")
+	}
+	if o.Instance != "" {
+		if err := gateNamedInstance(bin, metaPath, deviceName, o.Instance); err != nil {
+			return err
+		}
+	} else if err := gateDefaultInstance(bin, metaPath, deviceName, o); err != nil {
 		return err
 	}
-	_, bin, metaPath, _, err := CachePaths()
+	blob, err := vaultio.EncryptWithKey(dek, body)
 	if err != nil {
 		return err
 	}
@@ -506,7 +618,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		}
 	} else {
 		scoped := res.Header.Get("X-Sshmgr-Snapshot-Scope") == "profile"
-		mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: pulledAt, ServerAnchored: anchored, Scoped: scoped})
+		mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: pulledAt, ServerAnchored: anchored, Scoped: scoped, DeviceName: deviceName})
 		if werr := atomicWriteUnique(metaPath, mb); werr != nil && o.StatusOut != nil {
 			fmt.Fprintf(o.StatusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): %v\n", werr)
 		}
@@ -520,6 +632,78 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	_ = json.Unmarshal(body, &snap) // for the status line only
 	if o.StatusOut != nil {
 		fmt.Fprintf(o.StatusOut, "pulled %d servers / %d credentials into %s\n", len(snap.Servers), len(snap.Credentials), bin)
+	}
+	return nil
+}
+
+// gateDefaultInstance enforces the §2.4 three-branch identity gate on the
+// DEFAULT slot. Active only when the default cache.bin exists (auth.json alone
+// is pull credentials, not material — §9.10). deviceName=="" means "no
+// trustworthy name" (old serve, or plaintext): the gate is skipped with an
+// upgrade hint (pre-existing exposure on old-serve topologies, not a new one).
+func gateDefaultInstance(bin, metaPath, deviceName string, o PullOpts) error {
+	if deviceName != "" {
+		if verr := instname.Valid(deviceName); verr != nil {
+			return fmt.Errorf("pull refused: %w — owner: revoke and re-add the device code with a valid name", verr)
+		}
+	}
+	if _, serr := os.Stat(bin); serr != nil {
+		if os.IsNotExist(serr) {
+			return nil // vacuum / auth-only: no material to protect; the pull records identity
+		}
+		return serr
+	}
+	if deviceName == "" {
+		if o.StatusOut != nil {
+			fmt.Fprintf(o.StatusOut, "WARNING: serve did not send X-Sshmgr-Device-Name (pre-Plan-40 serve) — the default-cache identity gate is inactive until the serve is upgraded\n")
+		}
+		return nil
+	}
+	m, merr := readCacheMeta(metaPath)
+	switch {
+	case merr == nil && m.DeviceName != "":
+		if m.DeviceName == deviceName {
+			return nil // same device re-pulling its own cache
+		}
+		return fmt.Errorf("refusing pull: this cache belongs to device %q but the presented device code is %q — pick one:\n"+
+			"  1. this is a SECOND device on this machine: re-run the pull with --instance %q\n"+
+			"  2. replace the default instance's device code: delete cache.auth.json + cache.bin + cache.meta.json + the quarantine/ dir in this cache directory and re-enroll\n"+
+			"  3. owner: verify which device this code was issued for (`cache-tokens ls` on the server)", m.DeviceName, deviceName, deviceName)
+	case merr == nil:
+		return nil // legacy unregistered meta: adopt — the write below backfills device_name (§5 zero-migration)
+	default:
+		return fmt.Errorf("refusing pull: cache.bin exists but cache.meta.json is missing or unreadable (%v) — inconsistent/interrupted cache; delete cache.bin + cache.meta.json + cache.auth.json + the quarantine/ dir in this cache directory and re-enroll", merr)
+	}
+}
+
+// gateNamedInstance enforces §2.4 row 1 + §2.1 for an explicit --instance pull:
+// the instance route REQUIRES a Plan-40 serve (header present), the header
+// must name exactly the flagged instance (a mismatched code/flag pair would
+// write one device's authorization into another's slot), and the physical slot
+// must not hold a different identity or a half-written state.
+func gateNamedInstance(bin, metaPath, deviceName, instance string) error {
+	if deviceName == "" {
+		return fmt.Errorf("refusing pull: --instance requires a Plan-40 serve (the response carries no X-Sshmgr-Device-Name) — upgrade the serve, or drop --instance to use the default cache slot")
+	}
+	if verr := instname.Valid(deviceName); verr != nil {
+		return fmt.Errorf("pull refused: %w — owner: revoke and re-add the device code with a valid name", verr)
+	}
+	if deviceName != instance {
+		return fmt.Errorf("refusing pull: --instance %q does not match the serve's device name %q — each device code pulls into its own instance; use --instance %q on the machine that code was issued for", instance, deviceName, deviceName)
+	}
+	if _, serr := os.Stat(bin); serr != nil {
+		if !os.IsNotExist(serr) {
+			return serr
+		}
+		return nil // fresh slot
+	}
+	// slot has a bin: its recorded identity must be this instance's (or blank).
+	m, merr := readCacheMeta(metaPath)
+	if merr != nil {
+		return fmt.Errorf("refusing pull: instance directory %s holds cache.bin but no readable cache.meta.json (interrupted write?) — delete the instance directory and re-enroll", filepath.Dir(bin))
+	}
+	if m.DeviceName != "" && m.DeviceName != deviceName {
+		return fmt.Errorf("refusing pull: instance directory %s already holds a different device identity (%q vs %q) — delete the instance directory and re-enroll", filepath.Dir(bin), m.DeviceName, deviceName)
 	}
 	return nil
 }
@@ -551,21 +735,26 @@ func CacheScopeVerified() bool {
 // pull that landed mid-startup (the harmless residue — a pull racing the
 // baseline — costs one redundant rebuild, never a missed one).
 type CacheReloader struct {
-	bin    string
-	maxAge time.Duration
-	sum    []byte // SHA-256 of the served cache.bin (nil until first successful load)
+	bin      string
+	instance string
+	maxAge   time.Duration
+	sum      []byte // SHA-256 of the served cache.bin (nil until first successful load)
 }
 
-// NewCacheReloader captures the current cache.bin hash as the reload baseline.
-// When paths are unavailable the reloader is returned empty and Check surfaces
-// the error.
-func NewCacheReloader(maxAge time.Duration) *CacheReloader {
-	_, bin, _, _, err := CachePaths()
+// NewCacheReloaderFor captures the given instance's current cache.bin hash as
+// the reload baseline ("" = the default instance). When paths are unavailable
+// the reloader is returned empty and Check surfaces the error.
+func NewCacheReloaderFor(instance string, maxAge time.Duration) *CacheReloader {
+	_, bin, _, _, err := CachePathsFor(instance)
 	if err != nil {
-		return &CacheReloader{maxAge: maxAge} // Check() surfaces the error
+		return &CacheReloader{instance: instance, maxAge: maxAge} // Check() surfaces the error
 	}
-	return &CacheReloader{bin: bin, maxAge: maxAge, sum: fileSumOf(bin)}
+	return &CacheReloader{bin: bin, instance: instance, maxAge: maxAge, sum: fileSumOf(bin)}
 }
+
+// NewCacheReloader captures the DEFAULT instance's baseline (zero-change
+// wrapper).
+func NewCacheReloader(maxAge time.Duration) *CacheReloader { return NewCacheReloaderFor("", maxAge) }
 
 func fileSumOf(path string) []byte {
 	blob, err := os.ReadFile(path)
@@ -602,12 +791,12 @@ func (r *CacheReloader) Check() (*store.Snapshot, bool, error) {
 		// backs off on failure; a successful pull changes the file, so the NEXT
 		// call swaps the store in — this call deliberately finishes on the old
 		// one (never half-old half-new within a single tool call).
-		if err := MaybeLazyPull(r.maxAge); err != nil {
+		if err := MaybeLazyPullFor(r.instance, r.maxAge); err != nil {
 			fmt.Fprintf(os.Stderr, "ssh-manager: in-session cache refresh failed: %v\n", err)
 		}
 		return nil, false, nil
 	}
-	snap, err := LoadCacheSnapshot()
+	snap, err := LoadCacheSnapshotFor(r.instance)
 	if err != nil {
 		return nil, false, err // corrupt/undecryptable → keep the old store, baseline NOT advanced
 	}

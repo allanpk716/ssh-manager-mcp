@@ -111,6 +111,8 @@ claude mcp add ssh ssh-manager -e SSHMGR_TOKEN=<TOKEN> -- mcp
 4. **离线 cache——回连即销毁；永离线失窃的根治仍 = 轮换服务器凭据**（Plan 34 起）：`cache-tokens revoke` 不只断"拉新"——该机**回连即销毁**本地 cache（下次自动保鲜 ≤30min lazy cadence，或手动 `cache pull`，收到 pinned 401 → DEK / `cache.auth.json` / `cache.bin` / `cache.meta.json` 四件销毁 + `quarantine/` 痕迹；此后 spawn 报明确归因错误、无凭据不再自动拉取；恢复 = 重新发码 + `cache pull`）。**永不离线的失窃机**则没有任何服务端机制能远程废掉"密文 + DEK + 二进制"三件套的本地解密能力——唯一根治仍是轮换服务器凭据（`servers edit <name> --password/--key`）。project token **不在**销毁清单（`.claude.json` 是用户自己的 agent 配置）——失窃处置 = cache token 与该机 project token **都 revoke**。后台任务与 cache 无涉——任务表在 broker 进程内、不进快照，离线 `mcp --cache` 模式各自起各自的独立任务表。详见 [multi-machine.md 吊销节](./multi-machine.md#吊销机器失窃--设备码泄露)。
 
 > **设备码绑定 profile（Plan 39）**：`cache-tokens add --name <机> --profile <装箱单>`——该设备拉到的 `/snapshot` 就是、且只是这个 profile 授权的服务器（含凭据）；未授权服务器不出服务器。Plan 39 之前签发的存量码拉取被拒（**403**，本地缓存不毁），`cache-tokens bind <name> <profile>` 原地补绑即恢复。一台机 = 一枚码 = 一个 profile。
+>
+> **同机多 agent 的离线形态（Plan 40）**：一台工作机 N 个 agent 各持不同 profile 时，可各建一个命名 cache 实例（`--instance <设备码name>`——独立目录 / DEK / 时效策略）——见 [multi-machine.md「多实例（同机多 agent）」](./multi-machine.md#多实例同机多-agent-plan-40-第一批)。
 
 未实现的拆除手段见 docs/backlog.md。
 

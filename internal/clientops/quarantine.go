@@ -43,14 +43,15 @@ type quarantineManifest struct {
 	Degraded []string          `json:"degraded,omitempty"`
 }
 
-// QuarantineCache destroys the local cache per Plan 34 rev4 §2, DEK-first so a
-// crash at ANY point leaves the ciphertext undecryptable at worst (crash-safe;
-// no auto-resume — residue surfaces via the manifest at the next spawn and
-// self-heals on re-enroll):
+// QuarantineCacheFor destroys the given instance's local cache ("" = the
+// default instance) per Plan 34 rev4 §2, DEK-first so a crash at ANY point
+// leaves the ciphertext undecryptable at worst (crash-safe; no auto-resume —
+// residue surfaces via the manifest at the next spawn and self-heals on
+// re-enroll):
 //
 //  0. MkdirAll(<cacheDir>/quarantine/) + best-effort manifest {started} — NEVER a precondition;
 //  1. DEK delete via the DekProvider seam (production: FileKeyProvider.Delete
-//     on paths.CacheDekPath(), so SSHMGR_CACHE_DEK is honored; absent = idempotent success);
+//     on paths.CacheDekPathFor(instance), so SSHMGR_CACHE_DEK is honored; absent = idempotent success);
 //  2. cache.auth.json delete (device code plaintext, zero tolerance);
 //  3. cache.bin → quarantine/cache.bin.quarantined-<unix秒> rename (same-dir
 //     subdir keeps it same-volume; single retained copy — a new isolation drops the old);
@@ -67,9 +68,9 @@ type quarantineManifest struct {
 // The returned error is non-nil ONLY in the DEGRADED case (always wrapping
 // ErrCacheQuarantined); a clean or idempotent completion returns nil — DoPull
 // (T4) raises the sentinel for the trigger itself.
-func QuarantineCache(reason string) (QuarantineResult, error) {
+func QuarantineCacheFor(instance string, reason string) (QuarantineResult, error) {
 	res := QuarantineResult{Steps: map[string]string{}}
-	dir, bin, meta, _, err := CachePaths()
+	dir, bin, meta, _, err := CachePathsFor(instance)
 	if err != nil {
 		// Sentinel-wrapped (Plan 34 final review, Minor 2): DoPull's 401 branch
 		// passes a non-nil qerr through untouched, so this — the one
@@ -90,7 +91,7 @@ func QuarantineCache(reason string) (QuarantineResult, error) {
 	// declared type is KeyProvider (Get/Set only); Delete is the optional
 	// capability this routine consumes — an in-process provider without it has
 	// nothing on disk, which counts as success.
-	if d, ok := DekProvider().(interface{ Delete() error }); ok {
+	if d, ok := DekProvider(instance).(interface{ Delete() error }); ok {
 		if dErr := d.Delete(); dErr != nil {
 			res.Steps["dek"] = dErr.Error()
 			res.Degraded = append(res.Degraded, "dek")
@@ -102,7 +103,7 @@ func QuarantineCache(reason string) (QuarantineResult, error) {
 	}
 
 	// Steps 2-4: auth, bin rename, meta — absent targets are idempotent success.
-	credPath, _ := CacheCredPath()
+	credPath, _ := CacheCredPathFor(instance)
 	res.Steps["auth"] = removeOrRecord(credPath, "auth", true, &res.Degraded)
 	res.Steps["bin"] = renameIntoQuarantine(bin, qdir, &res.Degraded)
 	res.Steps["meta"] = removeOrRecord(meta, "meta", false, &res.Degraded)
@@ -119,6 +120,9 @@ func QuarantineCache(reason string) (QuarantineResult, error) {
 	fmt.Fprintf(os.Stderr, "cache QUARANTINED by server rejection (%s): snapshot isolated to quarantine/, device code + DEK deleted — re-enroll with a fresh device code\n", reason)
 	return res, nil
 }
+
+// QuarantineCache destroys the DEFAULT instance's cache (zero-change wrapper).
+func QuarantineCache(reason string) (QuarantineResult, error) { return QuarantineCacheFor("", reason) }
 
 // removeOrRecord deletes path. An absent target is the rev4 idempotent
 // exception ("ok(absent)"). Any other error is recorded into degraded when the

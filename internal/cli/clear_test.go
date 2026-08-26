@@ -485,3 +485,29 @@ func TestClear_CorruptRoleJSONStillClears(t *testing.T) {
 	assertGone(t, filepath.Join(vd, "store.db"))
 	assertGone(t, filepath.Join(vd, "role.json"))
 }
+
+// TestClear_EnumeratesInstancesAndDekVariants (Plan 40 §2.7): the whole
+// instances/ tree and every per-instance DEK variant are enumerated — a
+// residual instance dir IS residual credentials.
+func TestClear_EnumeratesInstancesAndDekVariants(t *testing.T) {
+	// 自包含重定向（clear_test.go 顶部已有同款 APPDATA/XDG 手法,形式一致）
+	userDir, vault := t.TempDir(), t.TempDir()
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_DIR":     "",
+		"SSHMGR_CACHE_DEK":     "",
+		"SSHMGR_STORE":         filepath.Join(vault, "store.db"), // clearVaultDir 从 store 路径派生
+		"SSHMGR_CACHE_DEK_DIR": vault,                            // DEK 变体 glob 的 seam 基目录
+	})
+	instRoot := filepath.Join(userDir, "ssh-manager", "instances")
+	os.MkdirAll(filepath.Join(instRoot, "agentA"), 0o700)
+	os.WriteFile(filepath.Join(instRoot, "agentA", "cache.bin"), []byte("x"), 0o600)
+	os.WriteFile(filepath.Join(vault, "cache-dek-agentA.key"), []byte("k"), 0o600)
+	os.WriteFile(filepath.Join(vault, "cache-dek.key"), []byte("k"), 0o600)
+	lines := enumClearTargets(roles.RoleClient)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, filepath.Join("instances")) || !strings.Contains(joined, "cache-dek-agentA.key") {
+		t.Fatalf("enumeration missing instance artifacts:\n%s", joined)
+	}
+}

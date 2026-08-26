@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,15 @@ func NewServeRunner(st *store.Store) (*ServeRunner, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Plan 40 §2.1 legacy detection: active device-code names are about to be
+	// emitted as X-Sshmgr-Device-Name and used as client directory names — a
+	// casefold collision or an illegal legacy name must stop the serve BEFORE it
+	// serves, not mid-flight. Repair = revoke + re-add (never auto-rename).
+	if anomalies, aerr := st.ScanCacheTokenNameAnomalies(); aerr != nil {
+		return nil, fmt.Errorf("serve startup: device-code name scan failed: %w", aerr)
+	} else if len(anomalies) > 0 {
+		return nil, formatNameAnomalies(anomalies)
+	}
 	// checked arithmetic (§3.2): under the 1 GiB ceiling this cannot overflow;
 	// the belt-and-suspenders form still guards a future ceiling raise.
 	limit := cap + cap/3 + 64*1024
@@ -63,6 +73,19 @@ func NewServeRunner(st *store.Store) (*ServeRunner, error) {
 		return nil, fmt.Errorf("serve body limit overflow: cap=%d", cap)
 	}
 	return &ServeRunner{st: st, bodyLimit: limit, cache: make(map[string]*scopedServer)}, nil
+}
+
+// formatNameAnomalies builds the fail-closed startup refusal for Plan 40 §2.1
+// legacy detection. Pure so the wording is unit-testable without a dirty DB
+// (which cannot be built through the public API — the add gate refuses every
+// illegal/colliding name).
+func formatNameAnomalies(anomalies []string) error {
+	plural := "ies"
+	if len(anomalies) == 1 {
+		plural = "y"
+	}
+	return fmt.Errorf("serve refusing to start: %d device-code name anomal%s:\n  - %s\nrepair on this machine: `ssh-manager cache-tokens revoke <name>` then `cache-tokens add --name <new-name> --profile <profile>`",
+		len(anomalies), plural, strings.Join(anomalies, "\n  - "))
 }
 
 // ServerForProject returns the cached scoped server for project, building it on first use.
@@ -286,6 +309,11 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 	// one (identical snapshot SHAPE when the vault has one profile — the
 	// header is the only discriminator). Old clients ignore it.
 	w.Header().Set("X-Sshmgr-Snapshot-Scope", "profile")
+	// Plan 40 §2.3: the device code's NAME rides the same trusted channel — the
+	// client uses it to route/verify instance identity (instances/<name>/). Not a
+	// security boundary (the name is not a secret; pinned TLS blocks tampering);
+	// old clients ignore it.
+	w.Header().Set("X-Sshmgr-Device-Name", ct.Name)
 	// The snapshot body is the decrypted credential dump — never let an
 	// intermediary (CDN/proxy/HTTP cache) store it. no-store + no-cache (the
 	// latter also forbids reading a cached copy without revalidation).

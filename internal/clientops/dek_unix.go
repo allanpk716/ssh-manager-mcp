@@ -32,13 +32,13 @@ import (
 // DekProvider returns the cache-DEK KeyProvider (Unix: FileKeyProvider at the
 // program-fixed cache-dek.key path). A package seam so tests inject a fake
 // (MemKeyProvider) instead of touching the real file. Tests swap this var
-// directly (see withDEK).
+// directly (see withDEK). Takes an instance name ("" = default instance).
 //
-// cache-dek.key uses paths.CacheDekPath() directly — it does NOT consult
+// cache-dek.key uses paths.CacheDekPathFor() directly — it does NOT consult
 // SSHMGR_FILEKEY_PATH (that env var redirects ONLY master.key). This keeps the
 // cache DEK pinned to the vault dir, decoupled from master-key test overrides.
-var DekProvider = func() store.KeyProvider {
-	pth, err := paths.CacheDekPath()
+var DekProvider = func(instance string) store.KeyProvider {
+	pth, err := paths.CacheDekPathFor(instance)
 	if err != nil || pth == "" {
 		return &store.FileKeyProvider{} // last-resort default (test env with no fixed path)
 	}

@@ -181,3 +181,17 @@ func TestResolve_RoleFileAnomalies(t *testing.T) {
 		t.Fatalf("resume broker setup: %+v %v", l, err)
 	}
 }
+
+// TestResolveMode_OnlyNamedInstances_IsClient (Plan 40 §2.7): a machine whose
+// ONLY cache material is named-instance slots is still an enrolled client —
+// never misrouted to the wizard.
+func TestResolveMode_OnlyNamedInstances_IsClient(t *testing.T) {
+	userDir := t.TempDir()
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CACHE_DIR", "") // 默认槽 auth 也不在
+	os.MkdirAll(filepath.Join(userDir, "ssh-manager", "instances", "agentA"), 0o700)
+	if l, err := ResolveMode(""); err != nil || l.Kind != LaunchClient {
+		t.Fatalf("named-instance-only machine must be a client: %+v %v", l, err)
+	}
+}

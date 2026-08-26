@@ -123,3 +123,39 @@ func TestCachePull_PersistsCred_PinPathOnly(t *testing.T) {
 		t.Fatal("plaintext pull must not persist a credential")
 	}
 }
+
+// TestCachePull_PlaintextMaxOfflineNotPersisted (fix round 1 [Important]):
+// `cache pull --allow-plaintext --max-offline 24h` — the pull succeeds, the
+// flag was validated, but the cap is NOT persisted (a plaintext pull records
+// no server-anchored time; with the cap on, this cache would be unloadable).
+// The drop must be AUDIBLE: a WARNING on stderr, and no cache.config.json.
+func TestCachePull_PlaintextMaxOfflineNotPersisted(t *testing.T) {
+	withDEK(t)
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"servers":[],"credentials":[]}`)
+	}))
+	defer plain.Close()
+	cacheDir := t.TempDir()
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_URL":         plain.URL,
+		"SSHMGR_CACHE_TOKEN":       "code-123",
+		"SSHMGR_SERVE_PIN":         "",
+		"SSHMGR_CACHE_DIR":         cacheDir,
+		"SSHMGR_STORE":             filepath.Join(t.TempDir(), "store.db"),
+		"SSHMGR_CACHE_MAX_OFFLINE": "",
+	})
+	var errBuf bytes.Buffer
+	root := NewRootCmd()
+	root.SetArgs([]string{"cache", "pull", "--allow-plaintext", "--max-offline", "24h"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&errBuf)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("plaintext pull: %v", err)
+	}
+	if !strings.Contains(errBuf.String(), "--max-offline not persisted") {
+		t.Fatalf("want the not-persisted WARNING on stderr, got %q", errBuf.String())
+	}
+	if _, err := os.Stat(filepath.Join(cacheDir, "cache.config.json")); err == nil {
+		t.Fatal("plaintext pull must not persist cache.config.json")
+	}
+}

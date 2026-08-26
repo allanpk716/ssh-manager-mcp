@@ -31,20 +31,24 @@ const (
 // (0, nil); a valid duration >= 1h = on; anything else — unparseable, negative,
 // or a positive sub-hour value — is a fail-closed error carrying the raw value
 // (both LoadCacheSnapshot and DoPull refuse on it; there is no half-open state).
+// Plan 40 T13: the rule body moved to parseMaxOffline so the per-instance
+// cache.config.json path shares the exact same grammar; this stays the env seam.
 func cacheMaxOffline() (time.Duration, error) {
 	v := strings.TrimSpace(os.Getenv("SSHMGR_CACHE_MAX_OFFLINE"))
+	return parseMaxOffline(v, "SSHMGR_CACHE_MAX_OFFLINE")
+}
+
+// parseMaxOffline is the shared cap grammar (env and cache.config.json alike):
+// ""/0 → off; a valid duration >= 1h → on; anything else fail-closes with the
+// source-labeled error. The env path's text is byte-identical to the pre-T13
+// two-segment construction (TestCacheMaxOffline_Parsing pins it exactly).
+func parseMaxOffline(v, source string) (time.Duration, error) {
 	if v == "" {
 		return 0, nil
 	}
 	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, fmt.Errorf("invalid SSHMGR_CACHE_MAX_OFFLINE %q: must be a Go duration >= 1h (e.g. 168h; unset/0 disables expiry)", v)
-	}
-	if d == 0 {
-		return 0, nil
-	}
-	if d < cacheSkewTolerance {
-		return 0, fmt.Errorf("invalid SSHMGR_CACHE_MAX_OFFLINE %q: must be a Go duration >= 1h (e.g. 168h; unset/0 disables expiry)", v)
+	if err != nil || (d != 0 && d < cacheSkewTolerance) {
+		return 0, fmt.Errorf("invalid %s %q: must be a Go duration >= 1h (e.g. 168h; unset/0 disables expiry)", source, v)
 	}
 	return d, nil
 }
