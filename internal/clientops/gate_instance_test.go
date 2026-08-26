@@ -101,4 +101,22 @@ func TestGateNamedInstance(t *testing.T) {
 			t.Fatalf("half-written state must refuse with cleanup path: %v", err)
 		}
 	})
+
+	// 规则④（T10 复审补遗）：bin + 空白 device_name 的 meta = Plan-40 前半期残留，
+	// 同名拉取放行且 meta 回填身份——与默认槽 adopt-and-backfill 同一零迁移语义。
+	t.Run("blank meta identity: pre-Plan-40-half residue adopted + backfilled", func(t *testing.T) {
+		userDir := redirectUserConfigDir(t)
+		t.Setenv("SSHMGR_CACHE_DEK_DIR", t.TempDir())
+		dir := instDir(t, userDir, nA)
+		os.MkdirAll(dir, 0o700)
+		os.WriteFile(filepath.Join(dir, "cache.bin"), []byte("residue"), 0o600)
+		os.WriteFile(filepath.Join(dir, "cache.meta.json"),
+			[]byte(`{"url":"https://old","pulled_at":1,"server_anchored":true,"scoped":false,"device_name":""}`), 0o600)
+		if err := pullInstance(t, nA, &nA); err != nil {
+			t.Fatalf("blank-meta residue must be adopted by the matching instance pull: %v", err)
+		}
+		if m := readMetaForTest(t, dir); m.DeviceName != nA {
+			t.Fatalf("adoption must backfill device_name, got %q", m.DeviceName)
+		}
+	})
 }
