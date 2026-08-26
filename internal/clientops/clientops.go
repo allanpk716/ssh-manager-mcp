@@ -61,25 +61,26 @@ var cacheQuarantinedFlag bool
 // flag intentionally lasts the process lifetime in production).
 func ResetCacheQuarantineForTest() { cacheQuarantinedFlag = false }
 
-// MaybeLazyPull runs ONE automatic pull when cache.bin is missing / older than
-// maxAge and a persisted cache.auth.json exists. maxAge<=0 disables entirely —
-// INCLUDING the missing-cache case (the first pull stays a deliberate manual
-// step). Errors are returned for the caller to log; never fatal.
-func MaybeLazyPull(maxAge time.Duration) error {
+// MaybeLazyPullFor runs ONE automatic pull for the given instance ("" = the
+// default instance) when cache.bin is missing / older than maxAge and a
+// persisted cache.auth.json exists. maxAge<=0 disables entirely — INCLUDING the
+// missing-cache case (the first pull stays a deliberate manual step). Errors
+// are returned for the caller to log; never fatal.
+func MaybeLazyPullFor(instance string, maxAge time.Duration) error {
 	if maxAge <= 0 {
 		return nil
 	}
 	if cacheQuarantinedFlag {
 		return nil // Plan 34: quarantined this process — no further auto-pulls
 	}
-	cred, err := ReadCacheCred()
+	cred, err := ReadCacheCredFor(instance)
 	if err != nil {
 		return err
 	}
 	if cred == nil {
 		return nil
 	}
-	_, bin, _, _, err := CachePaths()
+	_, bin, _, _, err := CachePathsFor(instance)
 	if err != nil {
 		return err
 	}
@@ -104,7 +105,7 @@ func MaybeLazyPull(maxAge time.Duration) error {
 	if pin == "" {
 		return fmt.Errorf("cache.auth.json has no pin; refusing plaintext auto-pull")
 	}
-	err = DoPull(cred.URL, code, pin, PullOpts{Timeout: LazyPullTimeout, StatusOut: os.Stderr})
+	err = DoPull(cred.URL, code, pin, PullOpts{Timeout: LazyPullTimeout, StatusOut: os.Stderr, Instance: instance})
 	if errors.Is(err, ErrCacheQuarantined) {
 		// Plan 34 rev4 §3 — the pinned server rejected the device code and the
 		// cache is destroyed. Terminal for this process: the flag stops every
@@ -124,6 +125,9 @@ func MaybeLazyPull(maxAge time.Duration) error {
 	}
 	return err
 }
+
+// MaybeLazyPull runs the DEFAULT instance's lazy pull (zero-change wrapper).
+func MaybeLazyPull(maxAge time.Duration) error { return MaybeLazyPullFor("", maxAge) }
 
 // CachePathsFor resolves the cache directory for ONE instance ("" = the
 // default instance — legacy single-instance machines keep byte-identical
@@ -265,20 +269,25 @@ type CacheCred struct {
 	Pin   string `json:"pin,omitempty"` // resolved effective pin at last successful pull
 }
 
-// CacheCredPath returns the path of cache.auth.json inside the cache dir.
-func CacheCredPath() (string, error) {
-	dir, _, _, _, err := CachePaths()
+// CacheCredPathFor returns the path of cache.auth.json inside the given
+// instance's cache dir ("" = the default instance).
+func CacheCredPathFor(instance string) (string, error) {
+	dir, _, _, _, err := CachePathsFor(instance)
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "cache.auth.json"), nil
 }
 
-// ReadCacheCred returns nil, nil when the file is absent (never enrolled / not
-// yet pulled). A present-but-corrupt file is an error: silently ignoring it
-// would disable auto-refresh invisibly.
-func ReadCacheCred() (*CacheCred, error) {
-	p, err := CacheCredPath()
+// CacheCredPath returns the DEFAULT instance's cache.auth.json path
+// (zero-change wrapper).
+func CacheCredPath() (string, error) { return CacheCredPathFor("") }
+
+// ReadCacheCredFor returns the given instance's pull credential; nil, nil when
+// the file is absent (never enrolled / not yet pulled). A present-but-corrupt
+// file is an error: silently ignoring it would disable auto-refresh invisibly.
+func ReadCacheCredFor(instance string) (*CacheCred, error) {
+	p, err := CacheCredPathFor(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -299,10 +308,14 @@ func ReadCacheCred() (*CacheCred, error) {
 	return &c, nil
 }
 
-// WriteCacheCred persists the credential atomically (unique temp + rename) and
-// hardens the ACL on Windows (no-op on Unix where 0600 is the protection).
-func WriteCacheCred(cred *CacheCred) error {
-	p, err := CacheCredPath()
+// ReadCacheCred reads the DEFAULT instance's credential (zero-change wrapper).
+func ReadCacheCred() (*CacheCred, error) { return ReadCacheCredFor("") }
+
+// WriteCacheCredFor persists the given instance's credential atomically
+// (unique temp + rename) and hardens the ACL on Windows (no-op on Unix where
+// 0600 is the protection).
+func WriteCacheCredFor(instance string, cred *CacheCred) error {
+	p, err := CacheCredPathFor(instance)
 	if err != nil {
 		return err
 	}
@@ -316,15 +329,20 @@ func WriteCacheCred(cred *CacheCred) error {
 	return store.HardenACL(p)
 }
 
-// LoadCacheSnapshot reads + DEK-decrypts + unmarshals the cache. Shared by `cache status` and
-// `mcp --cache`. Returns an error if the cache is absent / corrupt / the DEK is missing.
+// WriteCacheCred persists the DEFAULT instance's credential (zero-change
+// wrapper).
+func WriteCacheCred(cred *CacheCred) error { return WriteCacheCredFor("", cred) }
+
+// LoadCacheSnapshotFor reads + DEK-decrypts + unmarshals the given instance's
+// cache ("" = the default instance). Shared by `cache status` and `mcp --cache`.
+// Returns an error if the cache is absent / corrupt / the DEK is missing.
 //
 // Plan 37 §3: with SSHMGR_CACHE_MAX_OFFLINE set, three gates run BEFORE the
 // DEK is even touched (meta is plaintext): usable-anchor, provenance, and
 // expiry/rollback. Destruction happens only on the expiry gate, only after a
 // re-check confirms the anchor did not just advance (destructive-race guard).
-func LoadCacheSnapshot() (*store.Snapshot, error) {
-	_, bin, metaPath, _, err := CachePaths()
+func LoadCacheSnapshotFor(instance string) (*store.Snapshot, error) {
+	_, bin, metaPath, _, err := CachePathsFor(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -361,9 +379,9 @@ func LoadCacheSnapshot() (*store.Snapshot, error) {
 			if meta2.PulledAt > meta.PulledAt && meta2.ServerAnchored {
 				// A concurrent trusted pull just re-anchored: abort destruction
 				// and judge again from the fresh anchor.
-				return LoadCacheSnapshot()
+				return LoadCacheSnapshotFor(instance)
 			}
-			_, qerr := QuarantineCache(expiryReason)
+			_, qerr := QuarantineCacheFor(instance, expiryReason)
 			if qerr == nil {
 				qerr = ErrCacheQuarantined
 			}
@@ -377,7 +395,7 @@ func LoadCacheSnapshot() (*store.Snapshot, error) {
 				now.Format(time.RFC3339), anchorT.Format(time.RFC3339))
 		}
 	}
-	dek, err := loadDEK("")
+	dek, err := loadDEK(instance)
 	if err != nil {
 		return nil, fmt.Errorf("cache DEK not found in keychain (run `cache pull` first): %w", err)
 	}
@@ -396,11 +414,18 @@ func LoadCacheSnapshot() (*store.Snapshot, error) {
 	return &snap, nil
 }
 
+// LoadCacheSnapshot loads the DEFAULT instance's cache (zero-change wrapper).
+func LoadCacheSnapshot() (*store.Snapshot, error) { return LoadCacheSnapshotFor("") }
+
 // PullOpts tunes DoPull for its caller.
 type PullOpts struct {
 	AllowPlain bool          // plaintext opt-in — manual CLI only; the lazy path NEVER sets this
 	Timeout    time.Duration // >0 → overall http.Client timeout (lazy: spawn/tool-call path must be bounded)
 	StatusOut  io.Writer     // status/warning sink (nil → silent); CLI passes cmd.ErrOrStderr()
+	// Instance routes this pull to instances/<name>/ ("" = the default slot).
+	// Validated by CachePathsFor; combined with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK
+	// it is rejected at the CLI layer (mutex, spec §2.2).
+	Instance string
 }
 
 // DoPull fetches /snapshot from url with the device code and atomically writes
@@ -454,7 +479,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		client.Timeout = o.Timeout
 	}
 
-	dek, err := loadOrCreateDEK("")
+	dek, err := loadOrCreateDEK(o.Instance)
 	if err != nil {
 		return err
 	}
@@ -537,11 +562,14 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		pulledAt = serverTime.Unix()
 		anchored = true
 	}
-	blob, err := vaultio.EncryptWithKey(dek, body)
+	// Plan 40 T5: resolve the cache paths for THIS instance before the first
+	// write-side effect — later tasks put a pre-write gate here that must read
+	// the existing meta before any bytes land on disk.
+	_, bin, metaPath, _, err := CachePathsFor(o.Instance)
 	if err != nil {
 		return err
 	}
-	_, bin, metaPath, _, err := CachePaths()
+	blob, err := vaultio.EncryptWithKey(dek, body)
 	if err != nil {
 		return err
 	}
@@ -606,21 +634,26 @@ func CacheScopeVerified() bool {
 // pull that landed mid-startup (the harmless residue — a pull racing the
 // baseline — costs one redundant rebuild, never a missed one).
 type CacheReloader struct {
-	bin    string
-	maxAge time.Duration
-	sum    []byte // SHA-256 of the served cache.bin (nil until first successful load)
+	bin      string
+	instance string
+	maxAge   time.Duration
+	sum      []byte // SHA-256 of the served cache.bin (nil until first successful load)
 }
 
-// NewCacheReloader captures the current cache.bin hash as the reload baseline.
-// When paths are unavailable the reloader is returned empty and Check surfaces
-// the error.
-func NewCacheReloader(maxAge time.Duration) *CacheReloader {
-	_, bin, _, _, err := CachePaths()
+// NewCacheReloaderFor captures the given instance's current cache.bin hash as
+// the reload baseline ("" = the default instance). When paths are unavailable
+// the reloader is returned empty and Check surfaces the error.
+func NewCacheReloaderFor(instance string, maxAge time.Duration) *CacheReloader {
+	_, bin, _, _, err := CachePathsFor(instance)
 	if err != nil {
-		return &CacheReloader{maxAge: maxAge} // Check() surfaces the error
+		return &CacheReloader{instance: instance, maxAge: maxAge} // Check() surfaces the error
 	}
-	return &CacheReloader{bin: bin, maxAge: maxAge, sum: fileSumOf(bin)}
+	return &CacheReloader{bin: bin, instance: instance, maxAge: maxAge, sum: fileSumOf(bin)}
 }
+
+// NewCacheReloader captures the DEFAULT instance's baseline (zero-change
+// wrapper).
+func NewCacheReloader(maxAge time.Duration) *CacheReloader { return NewCacheReloaderFor("", maxAge) }
 
 func fileSumOf(path string) []byte {
 	blob, err := os.ReadFile(path)
@@ -657,12 +690,12 @@ func (r *CacheReloader) Check() (*store.Snapshot, bool, error) {
 		// backs off on failure; a successful pull changes the file, so the NEXT
 		// call swaps the store in — this call deliberately finishes on the old
 		// one (never half-old half-new within a single tool call).
-		if err := MaybeLazyPull(r.maxAge); err != nil {
+		if err := MaybeLazyPullFor(r.instance, r.maxAge); err != nil {
 			fmt.Fprintf(os.Stderr, "ssh-manager: in-session cache refresh failed: %v\n", err)
 		}
 		return nil, false, nil
 	}
-	snap, err := LoadCacheSnapshot()
+	snap, err := LoadCacheSnapshotFor(r.instance)
 	if err != nil {
 		return nil, false, err // corrupt/undecryptable → keep the old store, baseline NOT advanced
 	}
