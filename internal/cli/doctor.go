@@ -649,6 +649,10 @@ func aclLooseDetail(keyBytes int, rep store.FileACLReport) string {
 			keyBytes, rep.OwnerSID))
 	}
 	detail := strings.Join(parts, "; ") + " — the plaintext key is protected by this ACL alone"
+	// Invariant: Protected is never populated on DaclNull reports
+	// (InspectFileACL early-returns before reaching the Protected read), so
+	// this parenthetical only ever renders on grantor/owner WARNs — a null
+	// DACL has no parent-ACE inheritance question. Intentional; do not "fix".
 	if !rep.Protected {
 		detail += " (inheritance also enabled)"
 	}

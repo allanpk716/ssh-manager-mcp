@@ -703,6 +703,37 @@ func TestInspectFileACL_MissingPath(t *testing.T) {
 	}
 }
 
+// TestIsWalkedAllowAceType pins the ACE-type filter of InspectFileACL's
+// grantor walk: plain and conditional (callback) allow ACEs are walked;
+// everything else is skipped — deny/audit/alarm (tightening) and the
+// object/compound allow forms whose SID offset differs from
+// ACCESS_ALLOWED_ACE. Conditional ACEs cannot be planted via
+// SetEntriesInAcl/ACLFromEntries (EXPLICIT_ACCESS only produces plain
+// allow/deny), so the walk has no end-to-end leg for them — this table plus
+// code review pin the filter (spec rev3 §7 residual, Plan 38 final review).
+func TestIsWalkedAllowAceType(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		aceType uint8
+		want    bool
+	}{
+		{"ACCESS_ALLOWED_ACE_TYPE", windows.ACCESS_ALLOWED_ACE_TYPE, true},
+		{"ACCESS_ALLOWED_CALLBACK_ACE_TYPE (conditional allow, 0x9)", accessAllowedCallbackAceType, true},
+		{"ACCESS_DENIED_ACE_TYPE", windows.ACCESS_DENIED_ACE_TYPE, false},
+		{"SYSTEM_AUDIT_ACE_TYPE (0x2)", 0x2, false},
+		{"SYSTEM_ALARM_ACE_TYPE (0x3)", 0x3, false},
+		{"ACCESS_ALLOWED_COMPOUND_ACE_TYPE (0x4, SID offset differs)", 0x4, false},
+		{"ACCESS_ALLOWED_OBJECT_ACE_TYPE (0x5, SID offset differs)", 0x5, false},
+		{"ACCESS_DENIED_OBJECT_ACE_TYPE (0x6)", 0x6, false},
+		{"ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE (0xB, SID offset differs)", 0xB, false},
+		{"ACCESS_DENIED_CALLBACK_ACE_TYPE (0xA)", 0xA, false},
+	} {
+		if got := isWalkedAllowAceType(tc.aceType); got != tc.want {
+			t.Errorf("%s: isWalkedAllowAceType = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func containsSID(sids []string, sid string) bool {
 	for _, s := range sids {
 		if s == sid {

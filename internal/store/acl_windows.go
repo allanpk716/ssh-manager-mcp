@@ -67,6 +67,9 @@ func HardenACL(path string) error {
 	// current user gets read+write+delete+read-control (WRITE_DAC/WRITE_OWNER
 	// deliberately withheld so a later compromise of the user process can't
 	// relax the ACL — only an admin can take ownership and re-ACL).
+	//
+	// This grant set is mirrored by aclWhitelist() for InspectFileACL's
+	// read-back comparison — change both together.
 	const userMask = windows.READ_CONTROL | windows.DELETE |
 		windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE
 	entries := []windows.EXPLICIT_ACCESS{
@@ -130,8 +133,9 @@ func currentUserSID() (*windows.SID, error) {
 }
 
 // readDACL reads the security descriptor for path and returns the DACL plus
-// the SECURITY_DESCRIPTOR. Promoted from test helper for InspectFileACL
-// (Plan 38); behavior unchanged.
+// the SECURITY_DESCRIPTOR. Renamed for production residency (Plan 38);
+// behavior unchanged — its callers remain the tests (InspectFileACL performs
+// its own GetNamedSecurityInfo including OWNER_SECURITY_INFORMATION).
 func readDACL(path string) (dacl *windows.ACL, sd *windows.SECURITY_DESCRIPTOR, err error) {
 	sd, err = windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
@@ -149,6 +153,33 @@ func readDACL(path string) (dacl *windows.ACL, sd *windows.SECURITY_DESCRIPTOR, 
 // Read-back masks always carry expanded specific rights (measured 2026-08-26:
 // a stored GENERIC_ALL comes back as 0x00120089), so GENERIC bits never appear.
 const aclDangerousBits = windows.FILE_READ_DATA | windows.WRITE_DAC | windows.WRITE_OWNER
+
+// accessAllowedCallbackAceType is ACCESS_ALLOWED_CALLBACK_ACE_TYPE (winnt.h;
+// not exported by x/sys/windows v0.47.0) — a conditional-allow ACE that grants
+// its Mask only when the embedded application data (an SDDL conditional
+// expression, e.g. via the Authz API) evaluates true. It shares the exact
+// ACCESS_ALLOWED_ACE prefix layout Header|Mask|SidStart — the condition blob
+// sits AFTER the complete SID (MS-DTYP §2.4.4.6), so a *ACCESS_ALLOWED_ACE
+// cast reads its Mask and SID correctly (Plan 38 final review, 2026-08-26).
+const accessAllowedCallbackAceType = 0x9
+
+// isWalkedAllowAceType reports whether aceType is a granting ACE type that
+// InspectFileACL's grantor walk can soundly read through an
+// ACCESS_ALLOWED_ACE cast — i.e. it grants access AND its SID starts
+// immediately after Header|Mask.
+//
+// NOT walked, deliberately:
+//   - deny/audit/alarm types tighten rather than expose (spec fact #9);
+//   - object-form GRANTING types — ACCESS_ALLOWED_OBJECT_ACE_TYPE (0x5),
+//     ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE (0xB) — insert Flags and up to
+//     two GUIDs between Mask and SidStart, so the cast would read garbage;
+//   - the obsolete ACCESS_ALLOWED_COMPOUND_ACE_TYPE (0x4) likewise offsets
+//     the SID past a compound-ace field.
+// The object/compound forms are a known not-walked granting exposure,
+// registered as a spec §7 residual.
+func isWalkedAllowAceType(aceType uint8) bool {
+	return aceType == windows.ACCESS_ALLOWED_ACE_TYPE || aceType == accessAllowedCallbackAceType
+}
 
 // InspectFileACL reads the file's security descriptor back and reports whether
 // its protection matches the hardened shape: whitelist = SYSTEM,
@@ -214,8 +245,10 @@ func InspectFileACL(path string) (FileACLReport, error) {
 		if err := windows.GetAce(dacl, uint32(i), &ace); err != nil {
 			continue // unreadable ACE: skip, the structural signals above stand
 		}
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
-			continue // deny/audit ACEs are tightening, not exposure (spec fact #9)
+		if !isWalkedAllowAceType(ace.Header.AceType) {
+			continue // deny/audit/alarm ACEs are tightening, not exposure (spec
+			// fact #9); object-form allow ACEs are granting but not walked
+			// here — different SID offset, see isWalkedAllowAceType + §7.
 		}
 		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
 			continue // applies to children only, not to this file (spec §1.2)
@@ -242,7 +275,8 @@ func InspectFileACL(path string) (FileACLReport, error) {
 }
 
 // aclWhitelist builds the trusted-principal set: the exact three HardenACL
-// grants (well-known SIDs + the current process token user).
+// grants (well-known SIDs + the current process token user). It mirrors
+// HardenACL's entries build — change both together.
 func aclWhitelist() ([]*windows.SID, error) {
 	systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
 	if err != nil {
