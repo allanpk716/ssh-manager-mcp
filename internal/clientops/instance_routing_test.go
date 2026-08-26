@@ -1,9 +1,11 @@
 package clientops
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,5 +82,67 @@ func TestInstanceRouting_PullCredLoadQuarantine(t *testing.T) {
 	}
 	if _, err := LoadCacheSnapshotFor("agentB"); err != nil {
 		t.Fatalf("agentB must stay loadable: %v", err)
+	}
+}
+
+// TestInstanceRouting_Pinned401QuarantinesOwnInstance: a revoked device code
+// (pinned 401) on one instance's pull must quarantine THAT instance's slot —
+// bin isolated under instances/<name>/quarantine/, per-instance DEK deleted —
+// while a sibling instance keeps its cache and stays loadable.
+func TestInstanceRouting_Pinned401QuarantinesOwnInstance(t *testing.T) {
+	userDir := redirectUserConfigDir(t)
+	dekDir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DEK_DIR", dekDir) // real per-instance FileKeyProvider
+	t.Setenv("SSHMGR_CACHE_DEK", "")
+
+	revoked := false
+	srv := newPinnedSnapshotServer(t, func(*http.Request) (int, string) {
+		if revoked {
+			return 401, `invalid cache token: revoked`
+		}
+		return 200, `{"servers":[],"credentials":[]}`
+	})
+
+	// (a) seed two instances with a good code
+	for _, name := range []string{"agentA", "agentB"} {
+		if err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{Instance: name}); err != nil {
+			t.Fatalf("%s seed pull: %v", name, err)
+		}
+	}
+
+	// (b)+(c) flip to 401: agentA's next pull must quarantine ONLY agentA
+	revoked = true
+	err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{Instance: "agentA"})
+	if !errors.Is(err, ErrCacheQuarantined) {
+		t.Fatalf("revoked instance pull must wrap ErrCacheQuarantined, got %v", err)
+	}
+	idir := filepath.Join(userDir, "ssh-manager", "instances", "agentA")
+	if _, serr := os.Stat(filepath.Join(idir, "cache.bin")); !os.IsNotExist(serr) {
+		t.Fatal("agentA cache.bin must be gone (isolated to instances/agentA/quarantine/)")
+	}
+	qentries, _ := os.ReadDir(filepath.Join(idir, "quarantine"))
+	isolated := false
+	for _, e := range qentries {
+		if strings.HasPrefix(e.Name(), "cache.bin.quarantined-") {
+			isolated = true
+		}
+	}
+	if !isolated {
+		t.Fatal("agentA bin must be isolated under instances/agentA/quarantine/")
+	}
+	if _, serr := os.Stat(filepath.Join(dekDir, "cache-dek-agentA.key")); !os.IsNotExist(serr) {
+		t.Fatal("agentA per-instance DEK must be deleted by the 401 quarantine")
+	}
+
+	// (d) the sibling survives untouched and stays loadable; the default slot
+	// was never created.
+	if _, serr := os.Stat(filepath.Join(userDir, "ssh-manager", "instances", "agentB", "cache.bin")); serr != nil {
+		t.Fatalf("agentB cache.bin must survive agentA's quarantine: %v", serr)
+	}
+	if _, lerr := LoadCacheSnapshotFor("agentB"); lerr != nil {
+		t.Fatalf("agentB must stay loadable: %v", lerr)
+	}
+	if _, serr := os.Stat(filepath.Join(userDir, "ssh-manager", "cache.bin")); !os.IsNotExist(serr) {
+		t.Fatal("default slot must stay empty")
 	}
 }

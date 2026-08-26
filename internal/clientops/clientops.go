@@ -509,10 +509,11 @@ func DoPull(url, token, pin string, o PullOpts) error {
 			// Plan 34 rev4 §3 — the ONLY quarantine trigger: a PINNED server
 			// rejected the device code (revoked server-side). Plaintext 401s,
 			// network/TLS failures, and non-401 statuses never reach here.
-			// QuarantineCache returns nil on a clean/idempotent destruction —
+			// QuarantineCacheFor returns nil on a clean/idempotent destruction —
 			// the trigger itself raises the sentinel then; its DEGRADED error
-			// already wraps ErrCacheQuarantined.
-			_, qerr := QuarantineCache(serverRejectedReason)
+			// already wraps ErrCacheQuarantined. Plan 40 T5: the destruction
+			// targets THIS pull's instance slot, never the default one.
+			_, qerr := QuarantineCacheFor(o.Instance, serverRejectedReason)
 			if qerr == nil {
 				qerr = ErrCacheQuarantined
 			}
