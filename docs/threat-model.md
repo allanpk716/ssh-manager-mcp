@@ -35,6 +35,7 @@
 - **信任根**：信任来自"enroll 时人工/流程交接的指纹"，不来自任何 CA。serve 重生 key（重装/迁移）→ 用 `serve cert-info` 拿新指纹重新交接。
 - **⚠️ 前提：enroll 渠道本身必须可信**。"零 MITM 窗口"是对**首次连接之后的每次握手**而言——指纹一旦正确到达工作机，后续 MITM 都被挡。但指纹和设备码是 `cache-tokens add` **一起打印到 stdout** 的，所以两者同等依赖操作者把这条输出传到工作机的那条渠道（本地 console / 你信任的 SSH 会话 / 带外通道）。**若该渠道本身正被 MITM，指纹和设备码同时被换，pin 形同虚设**。这是任何"交付即信任"(TOFU-by-delivery) 方案的固有约束：首次 enroll 不要在被 MITM 的渠道上做。
 - **`cache.auth.json`（新增 artifact）**：工作机持久化的拉取凭据（url + 设备码 + 归一后 pin；0600，Windows 加 DACL）。设备码授予**拉取未来快照**的权力——比本机已有的 cache.bin（过去快照 + cache-dek.key）多出的正是这个增量。处置：机器失窃 → 立即 `cache-tokens revoke`（断"拉新" + 该机**回连即销毁**本地 cache，见 §3.6）；serve 证书轮换 → 手动带新 `--pin` 重拉一次覆盖旧 pin。自动路径永不 `--allow-plaintext`。
+- **多实例多凭据集落盘（Plan 40，v0.11 起登记）**：同一台工作机 N 个 cache 实例 = **N 份（各自 profile 的）凭据集**同时落盘（`instances/<name>/` 各一套 cache.bin + per-instance DEK，布局见 [multi-machine.md「多实例」](./multi-machine.md#多实例同机多-agent-plan-40-第一批)）。缓解与边界如实：**ACL 硬化（0700/HardenACL）降低材料被获取的概率，不消除获取**；**`MAX_OFFLINE` 约束的是正常 loader 的离线加载窗口，不是密码学时效**——cache.bin（AES-256-GCM）的密钥 DEK 同机保存且无轮换，同时获得 bin 与 DEK 的攻击者可**无限期解密任何时点的快照**，多实例使该物理暴露面 ×N。**每实例独立 DEK** = 单实例材料（目录 + DEK）泄露不连坐他实例的解密。失窃的实际响应 = 吊销设备码（切断增量 + 回连销毁本机副本）+ **轮换受影响 profile 的全部服务器凭据**——吊销不消除已发生的外泄（§3.6）。
 
 详见 [multi-machine.md 的自动 TLS 迁移 Runbook](./multi-machine.md#自动-tls-迁移-runbook从旧版明文--外部证书升级) 与设计 spec `docs/superpowers/specs/2026-08-13-serve-auto-tls-fingerprint-design.md`。
 

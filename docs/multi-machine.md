@@ -249,6 +249,7 @@ serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问
 | Plan 13 · 群晖自动备份 | 服务器定时出明文快照到 NAS，灾难恢复 | ✅ 已做（[backup-restore.md Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)） |
 | Plan 14/15 · Windows 生产部署 | DPAPI master key + `serve install` Task Scheduler | ⚠️ 已 Superseded by Plan 16 |
 | Plan 16 · 固定路径 + FileKeyProvider | 三平台固定路径 + 裸文件 master key（L1+）+ kardianos 跨平台 `serve install` + `migrate-path` | ✅ 已做（本篇 + [threat-model.md](./threat-model.md) + [getting-started 第三方服务包](./getting-started.md#第三方服务包可选给不想用内置-install-的进阶用户)） |
+| Plan 40 · 多实例（第一批） | 同机 N agent 各授权各 profile 的独立 cache 实例（目录 + per-instance DEK + `--instance` + MAX_OFFLINE 持久化） | ✅ 已做（本篇[「多实例（同机多 agent）」](#多实例同机多-agent-plan-40-第一批)节；TUI/向导/doctor 第二批） |
 
 **现在：serve = 在线 live（**三平台一条龙 `serve install`**，kardianos 收敛 Windows Service / systemd / launchd）；备份 / 迁移已可（export/import + Plan 13 NAS + Plan 16 `migrate-path`）；离线只读缓存已落地（Plan 12，cache DEK = 固定路径裸文件）。**
 
@@ -565,6 +566,8 @@ ssh-manager cache-tokens revoke laptop
 笔记本侧设 `SSHMGR_CACHE_MAX_OFFLINE=168h`（Go duration 文法，**下限 1h**；unset/`0` = 关）即启用：
 超龄缓存在**下次 load/spawn 边界**销毁（DEK/设备码删除、密文进 `quarantine/`），重新 `cache pull` 即恢复（设备码未被 revoke 就仍有效）。
 
+> **持久化（v0.11 / Plan 40 起）**：该上限可持久化进实例目录的 `cache.config.json`（`cache pull --max-offline 24h`），优先级 env > config > 关——env 铺不满所有进程正是锚抹除 bug 的根因，config 是机器/实例属性。详见下「多实例（同机多 agent）」节的「MAX_OFFLINE 持久化」。
+
 运维前提与语义边界：
 
 - **首次启用需联网**：provenance 闸会拒绝一切非服务器锚的旧缓存（含本特性之前拉的）——开 B 后第一次使用前先 `cache pull` 建立服务器锚。
@@ -589,7 +592,7 @@ ssh-manager cache-tokens revoke laptop
 ### 限制（如实）
 
 - **缓存只读**：离线能 exec / 传输 / 转发，但**任何写都被拒**（`ErrReadOnly`）。要加改删得连上 serve。
-- **快照范围 = 绑定 profile 的授权集**（Plan 39）：client 机的 `cache.bin` 只含该设备绑定 profile 授权的服务器与凭据；owner 改动授权（增删 grant）后，**下次拉取生效**（TTL ≤30min 或手动 `[s]`）。一台机绑定多个 profile（多个不同装箱单共用一份缓存）不支持——一个设备码一个 profile，要不同范围就发不同码在不同机器。
+- **快照范围 = 绑定 profile 的授权集**（Plan 39）：client 机的 `cache.bin` 只含该设备绑定 profile 授权的服务器与凭据；owner 改动授权（增删 grant）后，**下次拉取生效**（TTL ≤30min 或手动 `[s]`）。一台机**一份缓存**绑定多个 profile 不支持——一个设备码一个 profile，要不同范围就发不同码：不同机器，或**同机多实例**（Plan 40，见下「多实例（同机多 agent）」节——每实例一个码一个 profile，目录/DEK/时效各自独立）。
 - **授权边界是"服务器行"粒度，不是"凭据行"粒度**（如实）：若一台**未授权**服务器与已授权服务器**共用同一凭据**（如共享的 bastion/sudo 密码——`servers.go` 一等支持的概念），裁剪快照仍会携带该凭据（已授权服务器登录需要它），而它能登那台未授权服务器。要在凭据层面隔离授权，就别跨授权边界共享凭据——这是 owner 侧的建模决定，机制无法代劳。
 - **bind 错配 footgun**：把设备码 bind 到一个**不含该机 project** 的 profile（`cache-tokens bind` 支持 rebind）→ pull 照常 200、在线照常，但离线栈搁浅：运行中的 `mcp --cache` 热加载验证 token 失败后**静默保留旧快照**，新 spawn 直接报 token 无效——错误不会指向错配本身。处置：把设备码 bind 回该机 project 所在的 profile，或在该 profile 下建 project 并换发 token。bind 前核对 `profiles ls`（授权集）与该机 `.mcp.json` 用的 project。
 - **未绑码（Plan 39 前签发）拉取被拒 403**：本地缓存不毁，owner 跑 `cache-tokens bind` 补绑后即恢复。
@@ -628,6 +631,137 @@ serve 自签证书长生（不靠过期驱动轮换），但若私钥疑似泄�
 5. 各工作机手动 `cache pull` 带新 `--pin`（会同时更新 `cache.auth.json` 里的 pin）→ 走新指纹成功；之后的自动拉取恢复正常。
 
 > 注：重签 = 所有客户端 pin 失效（硬失败，不是静默泄露）。这是指纹钉死的预期代价：信任根是公钥，换 key 必须重新交接。
+
+---
+
+## 多实例（同机多 agent，Plan 40 第一批）
+
+> **一句话**：同一台工作机上 N 个 agent（各持不同 project token / 设备码 / profile）各自拥有**独立的离线 cache 实例**——独立目录、独立 DEK、独立审计、独立 MAX_OFFLINE 时效，互不串扰、泄露不连坐。
+>
+> 实例 = 设备码 name = profile 授权单元（**三位一体**）：`cache-tokens add --name laptop-agentA` 发的名字就是实例名，该实例的拉取范围就是这个码绑定的 profile。命名纪律建议 `机器-实例`（如 `laptop-agentA`），与运维台账一一对应（不强制）。
+
+### 它解决什么
+
+上面的单实例形态（Plan 12）一台工作机只有一份 cache——同机第二个 agent（不同 profile 的 project token）在 `mcp --cache` 的 token 验证处 spawn 即失败：fail-closed 不越权，但第二个 agent **没有离线能力**。Plan 40 把多实例做成一等公民：N 个 agent = N 个实例 = N 份独立 cache/DEK/设备码/审计/时效策略，谁的授权进谁的目录。
+
+### 目录布局
+
+```
+<UserConfigDir>/ssh-manager/                    ← 默认实例（存量零变化）
+├── cache.bin / cache.meta.json / cache.auth.json
+├── cache-audit.log / cache.config.json / quarantine/
+└── instances/<name>/                           ← 命名实例（每实例同构一套）
+    ├── cache.bin / cache.meta.json / cache.auth.json
+    ├── cache-audit.log / cache.config.json / quarantine/
+
+<VaultDir>/                                     ← DEK 布局（保持与 cache 目录分离）
+├── cache-dek.key                               ← 默认实例 DEK（现状）
+└── cache-dek-<name>.key                        ← 命名实例 DEK（每实例一份）
+```
+
+- 实例目录：`UserConfigDir()/ssh-manager/instances/<name>/`（Windows `%AppData%\ssh-manager\instances\<name>\`）。
+- **每实例独立 DEK**：`<VaultDir>/cache-dek-<name>.key`——A 实例的目录连同其 DEK 单独泄露，**解不开 B 实例的 cache.bin**（泄露不连坐）。`SSHMGR_CACHE_DEK_DIR` env 可整体重定位 DEK 目录（测试/迁移 seam，与 `--instance` 可共存）。
+- **name 纪律**（owner 起名时即生效，双端校验）：`^[A-Za-z0-9]([A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$`（1-64 字符，首尾必须字母数字）+ 首个 `.` 前的首段不得为 DOS 保留名（`CON`/`PRN`/`AUX`/`NUL`/`COM1-9`/`LPT1-9`，casefold 比对）+ **大小写变体终身唯一**（NTFS 目录名大小写不敏感，`agentA` 与 `AGENTA` 视为同名；revoke 后重发变体同样拒）。存量库若已有碰撞/非法 name，serve 升级后**拒绝启动**（见 [compat-matrix.md](./compat-matrix.md)）。
+
+### enroll 双 agent 流程（例：agentA / agentB 同机）
+
+**Step 1（服务器侧）**：发两个设备码，各绑各 profile——
+
+```bash
+ssh-manager cache-tokens add --name laptop-agentA --profile team-a
+# Authorization code for "laptop-agentA" (shown once): <设备码A>
+# On the work machine:
+#   ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码A>:<指纹>' --instance laptop-agentA
+
+ssh-manager cache-tokens add --name laptop-agentB --profile team-b   # 同上，得 <设备码B>
+```
+
+**Step 2（工作机）**：两次拉取，各进各实例——
+
+```bash
+ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码A>:<指纹>' --instance laptop-agentA
+# → pulled N servers / M credentials into .../instances/laptop-agentA/cache.bin
+ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指纹>' --instance laptop-agentB
+```
+
+**Step 3（工作机）**：两个 agent 各配各的 `.mcp.json` 条目（stdio 形态）——每条 = 上面 Plan 12 的离线 `mcp --cache` 形态，`args` 里多一个 `--instance <name>`：
+
+```json
+"ssh-agentA": {
+  "command": "ssh-manager",
+  "args": ["mcp", "--cache", "--instance", "laptop-agentA"],
+  "env": { "SSHMGR_TOKEN": "<agentA 的项目token>" }
+},
+"ssh-agentB": {
+  "command": "ssh-manager",
+  "args": ["mcp", "--cache", "--instance", "laptop-agentB"],
+  "env": { "SSHMGR_TOKEN": "<agentB 的项目token>" }
+}
+```
+
+（两条放同一份 `.mcp.json` 的 `mcpServers` 对象下、键名不同即可；单 agent 机器就一条。命令行直接跑 = `ssh-manager mcp --cache --instance laptop-agentA`；token 也可 `--token` 传，`.mcp.json` 推荐 env 形态，理由同 [agent-access.md](./agent-access.md)——消除 argv/ps 暴露面。）
+
+### `--instance` 用法一览
+
+| 命令 | 形态 |
+|---|---|
+| 拉取 | `ssh-manager cache pull --url ... --token ... [--pin ...] --instance <name>` |
+| 状态 | `ssh-manager cache status --instance <name>`（单实例详情）；**无 flag = 列全部**（默认槽一行 + 每实例一行；单实例加载失败渲染为该行错误，不中断列表） |
+| MCP | `ssh-manager mcp --cache --instance <name>`（`.mcp.json` stdio 形态见上） |
+
+- **env × flag 互斥**：`SSHMGR_CACHE_DIR` 或 `SSHMGR_CACHE_DEK` 显式设置**且**带 `--instance` → CLI 层报错（这两个 env 是单槽完全覆盖，混用会静默路由错实例 / 令多实例共享同一 DEK）。`SSHMGR_CACHE_DEK_DIR`（目录级 DEK seam）与 `--instance` **可共存**。
+- **`mcp --cache` 无 flag 且默认目录无 cache 而 `instances/` 下有实例 → 报错列出实例清单**并指引 `--instance <name>`——读到哪个实例必须显式，不自动猜。`cache status` 不受限（列表命令，恒列全部）。
+- **`--instance` 强一致校验**：serve 在 `/snapshot` 响应下发设备码 name（`X-Sshmgr-Device-Name` 头，pinned TLS 防篡改）；pull 时头 name ≠ flag name → **写盘前拒**（防 owner 发码张冠李戴——实例目录与授权错位）。**`--instance` 需要 serve ≥v0.11.0**：老 serve 无此头 → 拒 + 提示升级（"upgrade the serve, or drop --instance"）。
+- **默认实例身份门禁**（无 flag 的 pull，写盘前生效）：默认目录已有 `cache.bin` 时，serve 下发的 name 与 meta 记录的 `device_name` 比对——**异码 → 拒**（三选一指引：这是第二台设备的码就改用 `--instance`；要换默认实例的码就走下方换码 runbook；owner 用 `cache-tokens ls` 核对发码）；**存量机器 meta 无 `device_name`**（字段随本设计新增）→ 放行 + 本次 pull 补记（零迁移零感知）；**meta 缺失/损坏但 bin 在 → 拒**（真异常态）。这关掉的是"异码静默覆盖"的**现状敞口**（该覆盖行为在旧版本即存在）。老 serve 拓扑（无头）下门禁跳过 + WARNING 提示升级。
+
+### 第一批边界（如实）
+
+- **TUI client 页只管默认实例**（读默认目录、`[s]` 同步默认实例）——命名实例的同步走 CLI 或计划任务：Windows `schtasks` wrapper 的参数里加 `--instance <name>` 即可（Linux systemd unit / macOS launchd plist 的 ExecStart 同理；**每个实例一条任务 + 各自的 env 文件**——设备码是 per-instance 的）。TUI 实例列表 / 向导 `--instance` 接入卡属第二批（[backlog.md](./backlog.md)）。
+- **首次 enroll 无 flag 仍落默认目录**（自动归位 = 第二批；本批新 enroll 想进实例形态，直接带 `--instance`）。
+- **doctor 暂不感知命名实例**：只有命名实例的机器，doctor 的 client-cache 检查会报"cache 缺失"（roles 判定已修为 client；doctor 第二批跟进，不静默）。
+- 存量单实例机器**零迁移**：无 flag 的 pull/mcp/status 行为与旧版一致（门禁对存量空 `device_name` 走补记分支）。
+
+### 失窃响应（多实例口径）
+
+- **吊销设备码**（`cache-tokens revoke laptop-agentA`）= 切断未来 pull + **销毁本机该实例材料**：该实例下次 pull（手动或自动保鲜 ≤30min）收到 pinned 401 → 四件销毁（DEK / `cache.auth.json` / `cache.bin`→隔离 / `cache.meta.json`）——**只毁这一个实例**，同机其他实例不受影响（销毁粒度 = 实例，见上「吊销」节的销毁语义）。
+- **已可能外泄的凭据必须轮换**（server 端 re-credential，受影响 profile 的**全部**凭据）——吊销销毁的是"本机这份副本 + 未来的拉取权"，**不消除已发生的外泄**；永不离线的机器持有"密文 + DEK + 二进制"三件套，唯一根治仍是轮换服务器凭据（见上「吊销」节与 [threat-model.md §3.6](./threat-model.md)）。
+- **吊销纪律（快速断 agent 的顺序）**：先吊 **device code**（该实例下次 pull 即销毁 cache，切断离线能力），再吊 **project token**（在线面 serve 逐请求即拒；离线面要等下次 pull 刷新快照或 cache 到龄销毁才失效）。两个都吊 = 在线 + 离线全断。
+
+### 默认实例换码 runbook
+
+更换默认实例的设备码 = 清除默认目录 cache 材料**四件套**后重新 enroll：
+
+```bash
+# 在默认 cache 目录（<UserConfigDir>/ssh-manager/）删除四件：
+#   cache.auth.json + cache.bin + cache.meta.json + quarantine/（整目录）
+ssh-manager cache pull --url https://192.0.2.5:7878 --token '<新码>:<指纹>'
+```
+
+- **`cache.config.json` 保留继承**（有意拍板）：MAX_OFFLINE 是**目录/槽位策略**，不是设备码属性——目录的离线时效不随换码变化，换码不清它。
+- 清四件套的语义 = 按目录/槽位：旧身份的隔离材料（`quarantine/`）一并清除，不留。
+- 命名实例换码 = revoke 旧码 + `cache-tokens add` 同名（或新名）新码 + 该实例重新 `cache pull --instance <name>`（`--instance` 门禁保证同目录同身份；要彻底重来，删该实例目录再 enroll 亦可）。
+
+### MAX_OFFLINE 持久化（cache.config.json）
+
+MAX_OFFLINE（到龄自废上限，见上「离线缓存到龄自废」节）从**进程 env** 升级为可持久化的 **per-instance 配置文件**——env 是进程属性（"把 env 铺满所有进程"正是历史锚抹除 bug 的根因），config 是机器/实例属性：
+
+```bash
+ssh-manager cache pull --url ... --token ... --max-offline 24h
+# pinned pull 成功后写入该实例目录的 cache.config.json：{"max_offline":"24h"}
+```
+
+- **优先级：env `SSHMGR_CACHE_MAX_OFFLINE` > `cache.config.json` > 关**（env 保留为应急/测试 override）；env 在场时跑 `pull --max-offline` → 输出 WARNING（config 在 env 清除前不生效，防止误以为持久化已生效）。
+- 校验与 env 完全同构（Go duration 文法，≥1h，非法 fail-closed）；明文存储（是策略不是凭据）；原子写。**明文 pull 不持久化该 flag**（明文拉不出时间锚，带了上限反而载不动）——给 WARNING 不静默。
+- 不传 `--max-offline` 的 pull **不动**现有 config。config 进**每个实例自己的目录**（默认实例在默认目录、命名实例在 `instances/<name>/`）——时效 per-instance。独立 `cache config` 子命令属第二批。
+
+### 过渡期纪律（直到双端都 ≥v0.11.0）
+
+本批同船的 P0 锚修复（pinned pull 恒记服务器锚——无 env 的 pull 进程不再抹掉 `server_anchored`，TUI `[s]` 同步致 `mcp --cache` 瘫痪的 bug 根治）**部署完之前**（两端任一还是 v0.10.0 时）：
+
+- 恢复只跑**带 env 的** pull 通道（计划任务 wrapper / 显式设了 `SSHMGR_CACHE_MAX_OFFLINE` 的 shell）；
+- **禁用 TUI `[s]` 同步与裸 CLI pull**（无 env 的 pull 会再抹一次锚 → `mcp --cache` 的 provenance 闸拒载 → 该机 agent 的 SSH 工具全消失）。
+
+双端都升到 ≥v0.11.0 后此纪律作废（任何 pinned pull 都记锚）。
 
 ---
 

@@ -4,8 +4,12 @@
 
 ## 已验证组合
 
+<!-- v0.11.0（Plan 40 多实例第一批 + P0 锚修复）：下两行为发版前预填的行为矩阵（spec §5）——v0.11.0 发版双端验证后回写验证日期与实测细节，删除本注释。 -->
+
 | client 版本 | serve 版本 | 在线（HTTP MCP） | 离线（cache pull / mcp --cache） | 验证日期 |
 |---|---|---|---|---|
+| v0.11.0 | v0.11.0 | ✅（在线面不变；`/snapshot` 新增响应头 `X-Sshmgr-Device-Name`——老 client 忽略，新 client 用于实例路由与 `--instance` 强一致校验） | ✅ 全功能（Plan 40 第一批：多实例 CLI 闭环——`cache pull/status --instance`、`mcp --cache --instance`、`instances/<name>/` 目录 + per-instance DEK `cache-dek-<name>.key`、`cache.config.json` MAX_OFFLINE 持久化 + `pull --max-offline`、默认实例身份门禁三分支（存量空 `device_name` 补记——零迁移）、`clear` 清实例树 + DEK 变体、roles 认命名实例机；**P0 锚修复**：pinned pull 恒记服务器锚——无 env 的 pull / TUI `[s]` 同步不再抹 `server_anchored`（v0.10 部署实测的"同步致 mcp --cache 瘫痪"bug 根治）。**边界如实**：首次 enroll 无 flag 仍落默认目录（自动归位第二批）、TUI client 页仅默认实例、doctor 不感知命名实例） | 待发版回写 |
+| v0.11.0 | v0.10.0 | ✅（MCP 工具面无变化；老 serve 不下发 `X-Sshmgr-Device-Name` 头，在线行为同 v0.10.0×v0.10.0） | ⚠️ 受限（多实例不可用，均带提示文案——**`--instance` 拒**：报错 "`--instance requires a Plan-40 serve`"（提示升级 serve 或去掉 flag 用默认槽）；**默认实例身份门禁不生效**：响应头缺失 → 门禁跳过 + WARNING 提示升级后生效（老 serve 拓扑异码覆盖敞口维持现状级，非新增敞口）；**无自动归位**：首次 enroll 无 flag 仍落默认目录（与 v0.11×v0.11 同——自动归位本批即未实现，第二批）；无 flag 的 pull/mcp/status 走默认目录，行为与 v0.10.0 一致（零迁移） | 待发版回写 |
 | v0.10.0 | v0.10.0 | ✅（NUC10 权威 broker + 笔记本；client 先 serve 后，schtasks 独立任务重启 serve；NUC10 exe 改经 GitHub release 直连下载——`upload_file` 自硬 per-file cap（1 MiB）后 17 MB exe 已传不动，本版起部署通道改道；zip/exe sha256 双核对 `e54a8b11…`/`aca1f4c9…`；升级按 Plan 39 runbook：换二进制 → `cache-tokens bind laptop-v040 e2e-profile` → 重启 serve；**Plan 39 裁剪实测：re-pull 后 cache 11→10 srv / 12→10 creds，`cache status` scope=e2e-profile，gitlab-urit 离线零出现（探针 grep=0）**；离线探针 serverInfo 0.10.0 + 10 工具，exec_background/exec_output/exec_stop/upload_content 新面全在） | ✅（doctor 双端 0 WARN 0 FAIL；NUC10 解密探针 11 srv/12 creds 整库（服务端不裁）、serve cert 指纹 `c69b2560…` 未变零重 pin、serve HEALTHY；**Plan 37 到龄自废已在笔记本启用 `SSHMGR_CACHE_MAX_OFFLINE=24h`**——pull 侧 wrapper 与 load 侧 MCP env 双路径，服务器 Date 锚已建立（anchored pull exit=0），离线加载实测不破） | 2026-08-26 |
 | v0.9.0 | v0.9.0 | ✅（NUC10 权威 broker + 笔记本；client 先 serve 后，schtasks 独立任务重启 serve；exe 两端 sha256 `c1cec2ab…b8fb` 核对；**v0.9 掩码实测：在线 list_servers 9/9 `"hidden"`；connect_error 文本 `ssh dial: dial tcp [REDACTED]: connectex: …` 无 host/IP 单前缀；expose 两态翻转恰 1 台明文**） | ✅（doctor 双端 0 WARN 0 FAIL，NUC10 解密探针 10/11、cert 指纹未变；serve HEALTHY @0.9.0（serverInfo.version 确认）；**cache pull 后离线两态一致（快照携带 expose_host 实证：开启台离线亦明文，全关后 9/9 `"hidden"`）**；验证后 port/expose 复位=全默认掩码稳态） | 2026-08-21 |
 | v0.8.10 | v0.8.10 | ✅（NUC10 权威 broker + 笔记本；client 先 serve 后，schtasks 独立任务重启 serve；exe 两端 sha256 `9e32f67b…f91d` 核对） | ✅（doctor 双端 0 WARN 0 FAIL，NUC10 解密探针 10/11、serve cert 指纹未变；serve HEALTHY @0.8.10；v0.8.8/0.8.9 守卫生产回归：`projects enable/rotate` 对 revoked 行 `phase5-e2e` 双双拒绝） | 2026-08-21 |
@@ -15,7 +19,7 @@
 | v0.8.0 | v0.8.0 | ✅（NUC10 权威 broker + 笔记本；发版后按铁律 client 先 serve 后） | ✅（cache 9 servers/10 creds；owner ssh 三连 smoke：echo=exit 0 / 远端非零=CLI 非零+stderr 报码 / 无命令=显式报错） | 2026-08-17 |
 | v0.7.3 | v0.7.3 | ✅（NUC10 权威 broker + 笔记本） | ✅（9/9 服务器） | 2026-08-16 |
 
-（v0.10.0 为当前生产双端；v0.8.2–v0.8.8 曾部署双端但未逐版登记本表（v0.8.8 行除外）；更早历史组合未逐一回归，旧版本请先看下方破坏性变更。）
+（v0.10.0 为当前生产双端；v0.11.0 两行为发版前预填（未实测），发版后回写；v0.8.2–v0.8.8 曾部署双端但未逐版登记本表（v0.8.8 行除外）；更早历史组合未逐一回归，旧版本请先看下方破坏性变更。）
 
 ## 已知破坏性变更
 
@@ -25,6 +29,7 @@
 | v0.7.0 | `tui --mode broker` 移除（自动判定覆盖） | 脚本里写死 `--mode broker` 的调用报错 | 改 `ssh-manager tui` |
 | v0.9.0 | `list_servers` host 默认掩码为 `"hidden"`（per-server `expose_host` opt-in）；工具错误文本清洗（不含 host/IP/host:port） | 依赖 host 明文的 agent 流程当场断；v0.9 serve + 未升级 client 的离线模式仍回明文；旧 binary 导入新快照丢 `expose_host=true` 偏好（fail-safe：折回掩码） | 顺序按铁律 client 先、serve 后（技术上无硬约束；该顺序服务于「掩码尽快全生效」——在线随 serve 升级即刻生效、离线需 client 升级）。**依赖 host 明文的流程唯一补救 = 升级前 `ssh-manager servers edit <name> --expose-host`** |
 | v0.10.0 | **Plan 39 授权收紧**：`/snapshot` 从整库 dump 改为按设备码绑定 profile 裁剪；`cache-tokens add` 必填 `--profile`；存量未绑码拉取被拒 **403**（非 401，不触发本地销毁，cache 不毁但不拉新）。同批：Plan 35 隧道契约变更（revoke/disable → ≤15s 拆除，`forward_port.listen_host` 白名单）；`upload_file` 超 1 MiB 硬拒（此前超限截断/误报） | 未绑存量码的定时拉取开始失败（403 文案给 bind 指引）；旧整库 cache.bin 在 re-pull 前保留原样（不受影响但也不再刷新授权边界）；混合部署期 `tunnels ls/kill` 覆盖不完整 | 升级顺序：**先 bind 后重启 serve**（见下方铁律），重启后各工作机 re-pull 一次即原子覆盖旧整库 cache.bin；`upload_file` 大文件改走目标机直连 release 下载或分块 |
+| v0.11.0 | **Plan 40 多实例第一批 + P0 锚修复**：① serve 启动对存量 **active** 设备码 name 做 fail-closed 检测——**casefold 碰撞**（如 `agentA` vs `AGENTA`）或**白名单外非法 name**（自由文本时代遗留：空格/路径形态/超长/首段 DOS 保留名）任一 → **serve 拒绝启动**（错误逐行列出 anomaly + 修复指引；revoked 行不参与检测——revoke 即修复通道）；② 新发码 name 走白名单 + casefold **全历史（含 revoked）唯一**；③ `--instance` 与 `SSHMGR_CACHE_DIR`/`SSHMGR_CACHE_DEK` env **互斥报错**；④ `DoPull` 记锚条件从 `maxOffline>0` 改为 `pin!=""`（P0——无 env 的 pull/TUI 同步不再抹 `server_anchored`）；⑤ MAX_OFFLINE 新增 `cache.config.json` 读取源（env > file > 关）；⑥ `/snapshot` 新增响应头 `X-Sshmgr-Device-Name`（老 client 忽略） | 库中存在 active name 碰撞/非法的 serve **升级后起不来**（fail-closed 非静默——这是有意拦截：碰撞/非法 name 即将成为客户端目录名）；其余变更面向新功能面，无 flag 的存量用法零迁移不受影响 | 存量 name 异常的修复 = `cache-tokens revoke <异常名>` 后 `cache-tokens add --name <合法新名> --profile <profile>` 重发（客户端该实例需重新 enroll；revoke 是修复通道、永不校验 name）；升级顺序铁律不变（client 先 serve 后）；双端 ≥v0.11.0 后 spec §1.3 过渡期纪律（恢复只跑带 env 的 pull、禁 TUI `[s]`/裸 pull）作废 |
 
 ## 升级顺序铁律
 
