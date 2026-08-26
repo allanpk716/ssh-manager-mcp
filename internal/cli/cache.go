@@ -18,10 +18,11 @@ import (
 // (zero-behavior extraction, Stream B Task 1) so the upcoming TUI can reuse it
 // without importing internal/cli. This file keeps only the cobra wrappers.
 
-// cachePresent reports whether cache.bin currently exists (used by mcp --cache
-// spawn logging to say "serving stale cache" only when there IS a cache).
-func cachePresent() bool {
-	_, bin, _, _, err := clientops.CachePaths()
+// cachePresentFor reports whether the given instance's cache.bin currently
+// exists (used by mcp --cache spawn logging to say "serving stale cache" only
+// when there IS a cache). "" = the default instance.
+func cachePresentFor(instance string) bool {
+	_, bin, _, _, err := clientops.CachePathsFor(instance)
 	if err != nil {
 		return false
 	}
@@ -36,11 +37,14 @@ func newCacheCmd() *cobra.Command {
 }
 
 func cachePullCmd() *cobra.Command {
-	var url, token string
+	var url, token, instance string
 	c := &cobra.Command{
 		Use:   "pull",
 		Short: "Pull the whole vault from a serve broker into the local encrypted cache",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkInstanceFlag(instance); err != nil {
+				return err
+			}
 			if url == "" {
 				url = os.Getenv("SSHMGR_CACHE_URL")
 			}
@@ -74,12 +78,12 @@ func cachePullCmd() *cobra.Command {
 					return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
 						"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
 				}
-				if err := clientops.DoPull(url, token, "", clientops.PullOpts{AllowPlain: true, StatusOut: cmd.ErrOrStderr()}); err != nil {
+				if err := clientops.DoPull(url, token, "", clientops.PullOpts{AllowPlain: true, StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
 					return err
 				}
 				return nil // plaintext pulls NEVER persist a credential (no auto-plaintext path)
 			}
-			if err := clientops.DoPull(url, token, fp, clientops.PullOpts{StatusOut: cmd.ErrOrStderr()}); err != nil {
+			if err := clientops.DoPull(url, token, fp, clientops.PullOpts{StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
 				if errors.Is(err, clientops.ErrCacheQuarantined) {
 					// Plan 34 rev4 §3 — pinned 401: the local cache was destroyed.
 					// SilenceUsage: this is a server-side rejection, not a flag typo.
@@ -95,7 +99,7 @@ func cachePullCmd() *cobra.Command {
 			if c, _, ok := clientops.SplitTokenPin(token); ok {
 				code = c
 			}
-			if err := clientops.WriteCacheCred(&clientops.CacheCred{URL: url, Token: code, Pin: fp}); err != nil {
+			if err := clientops.WriteCacheCredFor(instance, &clientops.CacheCred{URL: url, Token: code, Pin: fp}); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: could not persist cache.auth.json (automatic refresh disabled until a successful pull): %v\n", err)
 			}
 			return nil
@@ -103,21 +107,26 @@ func cachePullCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&url, "url", "", "serve broker URL (https://host:7878)")
 	c.Flags().StringVar(&token, "token", "", "device authorization code (from `cache-tokens add`)")
+	c.Flags().StringVar(&instance, "instance", "", "route this pull to instances/<name> (default slot when omitted; mutually exclusive with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK)")
 	c.Flags().String("pin", "", "server SPKI fingerprint sha256:... (or set SSHMGR_SERVE_PIN); hard-fails without it unless --allow-plaintext")
 	c.Flags().Bool("allow-plaintext", false, "opt into plaintext HTTP pull when no server pin is set (insecure; default is to refuse)")
 	return c
 }
 
 func cacheStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	var instance string
+	c := &cobra.Command{
 		Use:   "status",
 		Short: "Show cache presence, freshness, and counts",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, bin, metaPath, _, err := clientops.CachePaths()
+			if err := checkInstanceFlag(instance); err != nil {
+				return err
+			}
+			_, bin, metaPath, _, err := clientops.CachePathsFor(instance)
 			if err != nil {
 				return err
 			}
-			snap, err := clientops.LoadCacheSnapshot()
+			snap, err := clientops.LoadCacheSnapshotFor(instance)
 			if err != nil {
 				// Plan 34 rev4 §4: attribute a server-rejection quarantine when
 				// the on-disk manifest says so; otherwise the original error.
@@ -166,4 +175,6 @@ func cacheStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&instance, "instance", "", "show this named instance's detail (default slot when omitted; mutually exclusive with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK)")
+	return c
 }
