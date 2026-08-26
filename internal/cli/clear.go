@@ -184,6 +184,31 @@ func scanClearTargets(_ roles.Role) []clearTarget {
 		add("client", filepath.Join(dir, "cache.meta.json"))
 		add("client", filepath.Join(dir, "cache-audit.log"))
 	}
+	// Plan 40 §2.7: named-instance trees + per-instance DEKs — a residual
+	// instance dir IS residual credentials, which is exactly what clear exists
+	// to remove. The whole instances/ tree enumerates as ONE target; DEK
+	// variants glob from BOTH the vault dir and the SSHMGR_CACHE_DEK_DIR seam
+	// (the pattern cannot match the default cache-dek.key — it requires the
+	// "-<name>" infix).
+	if root, rerr := clientops.InstancesRoot(); rerr == nil {
+		if entries, derr := os.ReadDir(root); derr == nil && len(entries) > 0 {
+			add("client", root)
+		}
+	}
+	dekBases := []string{}
+	if vd2, verr := paths.VaultDir(); verr == nil {
+		dekBases = append(dekBases, vd2)
+	}
+	if d := os.Getenv(paths.CacheDekDirEnv); d != "" {
+		dekBases = append(dekBases, d)
+	}
+	for _, base := range dekBases {
+		if ms, gerr := filepath.Glob(filepath.Join(base, "cache-dek-*.key")); gerr == nil {
+			for _, m := range ms {
+				add("client", m)
+			}
+		}
+	}
 	// role.json — BOTH locations (a machine can hold residue in each).
 	if p, err := roles.RolePath(roles.RoleServer); err == nil {
 		add("role", p)
@@ -408,7 +433,13 @@ func runClear(cmd *cobra.Command, _ []string) error {
 		if t.path == "" {
 			continue // service / timer markers are handled above / below
 		}
-		if err := os.Remove(t.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		var err error
+		if info, serr := os.Stat(t.path); serr == nil && info.IsDir() {
+			err = os.RemoveAll(t.path) // instance trees (Plan 40 §2.7)
+		} else {
+			err = os.Remove(t.path)
+		}
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("删除 %s 失败: %w（重跑 clear 将跳过已完成步骤）", t.path, err)
 		}
 	}

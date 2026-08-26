@@ -264,11 +264,16 @@ func VaultUnlocked() bool {
 	return true
 }
 
-// cachePresent reports whether this machine is an enrolled client
-// (cache.auth.json readable; nil,nil = never enrolled).
+// cachePresent reports whether this machine is an enrolled client: a readable
+// default-slot cache.auth.json (nil,nil = never enrolled) OR any named
+// instance slot (Plan 40 §2.7 — a named-instance-only machine is still a
+// client, not a wizard candidate).
 func cachePresent() bool {
-	cred, err := clientops.ReadCacheCred()
-	return err == nil && cred != nil
+	if cred, err := clientops.ReadCacheCred(); err == nil && cred != nil {
+		return true
+	}
+	names, err := clientops.ListInstances()
+	return err == nil && len(names) > 0
 }
 
 // serveCertPresent is the server-vs-standalone heuristic when no role.json
