@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/models"
 )
 
@@ -35,6 +36,9 @@ func (s *Store) AddCacheToken(name, profileID string) (string, string, error) {
 	if n == 0 {
 		return "", "", fmt.Errorf("profile %q not found", profileID)
 	}
+	if verr := instname.Valid(name); verr != nil {
+		return "", "", verr
+	}
 	token, err := GenerateToken()
 	if err != nil {
 		return "", "", err
@@ -55,6 +59,19 @@ func (s *Store) AddCacheToken(name, profileID string) (string, string, error) {
 		name, string(models.CacheTokenRevoked),
 	); err != nil {
 		return "", "", err
+	}
+	// Plan 40 §2.1: casefold variants of a device name are reserved for the
+	// name's LIFETIME (revoked rows included) — a re-issued variant would collide
+	// with the residual instance dir / per-instance DEK on the client. The exact
+	// same-name revoked rows were just reclaimed above, so any remaining
+	// lower(name) match is a true variant. In-tx = the cross-process double-open
+	// backstop (MaxOpenConns(1) already serializes in-process).
+	var variants int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM cache_tokens WHERE lower(name)=lower(?) AND name<>?`, name, name).Scan(&variants); err != nil {
+		return "", "", err
+	}
+	if variants > 0 {
+		return "", "", fmt.Errorf("device name %q collides case-insensitively with an existing or revoked device name — variants of a name are reserved for its lifetime; pick a different name", name)
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,profile_id,created_at,updated_at)
@@ -82,6 +99,16 @@ func (s *Store) BindCacheToken(name, profileID string) error {
 	}
 	if n == 0 {
 		return fmt.Errorf("profile %q not found", profileID)
+	}
+	if verr := instname.Valid(name); verr != nil {
+		return verr
+	}
+	var variants int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM cache_tokens WHERE lower(name)=lower(?) AND name<>?`, name, name).Scan(&variants); err != nil {
+		return err
+	}
+	if variants > 0 {
+		return fmt.Errorf("device name %q collides case-insensitively with another device name", name)
 	}
 	res, err := s.db.Exec(
 		`UPDATE cache_tokens SET profile_id=?, updated_at=? WHERE name=? AND status=?`,
