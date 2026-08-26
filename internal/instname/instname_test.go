@@ -33,7 +33,7 @@ func TestFoldASCIIONLY(t *testing.T) {
 		t.Fatalf("Fold = %q", Fold("AgentA"))
 	}
 	// 非 ASCII 不折叠（与 SQLite lower() 同语义；Kelvin sign 不得折叠成 k）
-	if Fold("K\xE2\x84\xAA") != "k\xE2\x84\xAA" && Fold("K") != "k" {
-		t.Fatal("Fold must be ASCII-only")
+	if Fold("K\xE2\x84\xAA") != "k\xE2\x84\xAA" {
+		t.Fatal("Fold must be ASCII-only: U+212A KELVIN SIGN must not fold to k")
 	}
 }
