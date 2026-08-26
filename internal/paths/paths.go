@@ -3,6 +3,8 @@ package paths
 import (
 	"os"
 	"path/filepath"
+
+	"ssh-manager-mcp/internal/instname"
 )
 
 // MasterKeyFilename is the on-disk master key file (plaintext under L1+ threat model).
@@ -10,6 +12,13 @@ const MasterKeyFilename = "master.key.plain"
 
 // CacheDekFilename is the offline-cache DEK file.
 const CacheDekFilename = "cache-dek.key"
+
+// CacheDekDirEnv relocates the WHOLE cache-DEK directory (default + every
+// per-instance variant). The single-file SSHMGR_CACHE_DEK override still wins
+// over it. Added with Plan 40: per-instance DEK paths are new production paths
+// and must keep an env seam (the SSHMGR_CACHE_DEK lesson) — tests and
+// migrations point this at a temp dir instead of the real vault dir.
+const CacheDekDirEnv = "SSHMGR_CACHE_DEK_DIR"
 
 // StoreFilename is the encrypted vault database.
 const StoreFilename = "store.db"
@@ -66,20 +75,34 @@ func MasterKeyPath() (string, error) {
 	return filepath.Join(dir, MasterKeyFilename), nil
 }
 
-// CacheDekPath returns the offline-cache DEK path. SSHMGR_CACHE_DEK overrides
-// (test/relocate seam — same pattern as SSHMGR_FILEKEY_PATH; Plan 19 T7: `clear`
-// and its tests enumerate this path, and an un-overridable program-fixed path
-// let a test's teardown reach the operator's REAL DEK on the dev machine).
-func CacheDekPath() (string, error) {
+// CacheDekPathFor returns the cache-DEK path for one cache instance
+// ("" = default instance). Priority: SSHMGR_CACHE_DEK (single-file full
+// override — mutually exclusive with --instance at the CLI layer) >
+// SSHMGR_CACHE_DEK_DIR > VaultDir(). A named instance must pass the device-name
+// whitelist before it reaches filepath.Join (path-traversal backstop, spec §4).
+func CacheDekPathFor(instance string) (string, error) {
 	if v := os.Getenv("SSHMGR_CACHE_DEK"); v != "" {
 		return v, nil
 	}
-	dir, err := VaultDir()
-	if err != nil {
-		return "", err
+	root := os.Getenv(CacheDekDirEnv)
+	if root == "" {
+		vd, err := VaultDir()
+		if err != nil {
+			return "", err
+		}
+		root = vd
 	}
-	return filepath.Join(dir, CacheDekFilename), nil
+	if instance == "" {
+		return filepath.Join(root, CacheDekFilename), nil
+	}
+	if verr := instname.Valid(instance); verr != nil {
+		return "", verr
+	}
+	return filepath.Join(root, "cache-dek-"+instance+".key"), nil
 }
+
+// CacheDekPath returns the DEFAULT instance's cache-DEK path (existing callers unchanged).
+func CacheDekPath() (string, error) { return CacheDekPathFor("") }
 
 // ServeLogPath returns the serve log path. SSHMGR_SERVE_LOG overrides
 // (test/relocate seam — same pattern as SSHMGR_CACHE_DEK; Plan 22 T4: the

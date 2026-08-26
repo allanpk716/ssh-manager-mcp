@@ -103,4 +103,31 @@ func TestServeCertPaths(t *testing.T) {
 	}
 }
 
+func TestCacheDekPathFor(t *testing.T) {
+	vd := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DEK", "")
+	t.Setenv("SSHMGR_CACHE_DEK_DIR", vd)
+	// default instance: legacy filename, unchanged
+	p, err := CacheDekPathFor("")
+	if err != nil || filepath.Base(p) != "cache-dek.key" || filepath.Dir(p) != vd {
+		t.Fatalf("default = %q, %v", p, err)
+	}
+	// named instance: per-instance variant
+	p, err = CacheDekPathFor("agentA")
+	if err != nil || filepath.Base(p) != "cache-dek-agentA.key" || filepath.Dir(p) != vd {
+		t.Fatalf("agentA = %q, %v", p, err)
+	}
+	// single-file env wins over everything (existing escape hatch)
+	t.Setenv("SSHMGR_CACHE_DEK", filepath.Join(vd, "x.key"))
+	p, err = CacheDekPathFor("agentA")
+	if err != nil || p != filepath.Join(vd, "x.key") {
+		t.Fatalf("env override = %q, %v", p, err)
+	}
+	// illegal instance name: fail-closed (path-traversal backstop)
+	t.Setenv("SSHMGR_CACHE_DEK", "")
+	if _, err := CacheDekPathFor("../evil"); err == nil {
+		t.Fatal("illegal instance must be refused")
+	}
+}
+
 var _ = os.Getenv // keep import if unused after edits
