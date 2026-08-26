@@ -4,16 +4,9 @@
 
 ## 已验证组合
 
-<!-- v0.10.0/0.11.0（Plan 33 upload_content）：工具面纯增量——1 新工具（upload_content：内联内容上传，text/base64，解码后 ≤8 MiB，`SSHMGR_UPLOAD_CONTENT_MAX` env seam）+ serve HTTP 请求体上限（MaxBytesReader，cap+cap/3+64 KiB 同源联动），无破坏性变更。v0.10.0 未发版——并入 v0.10.0 行还是开 v0.11.0 行留 owner 发版时拍板。占位:发版后回写,记得删除本注释 -->
-<!-- v0.10.0/0.11.0（Plan 34 离线 cache 切断失效）：纯增量，无新 env、无新响应头——`cache-tokens revoke` 语义增强（断拉新 + 该机回连即销毁本地 cache 四件：DEK/auth/bin→quarantine/meta；触发条件 = pinned-401）；服务端 401 附 reason（revoked/unknown，纯可观测性，客户端判定不依赖）；`cache-tokens revoke` CLI 输出附两 token 提示行。跨版本口径：销毁在 client 侧执行——**旧 client 对新 serve 维持旧语义**（只断拉新、不销毁本地 cache，401 静默失败），新 client 对旧 serve 销毁语义即生效（不依赖任何新响应头）。与上条 Plan 33 同批发版回写，占位注释届时删除。 -->
-<!-- v0.10.0/0.11.0（Plan 32 后台任务三件套）：纯增量——3 新工具（exec_background / exec_output / exec_stop）+ ExecOutput 新字段 effective_timeout_seconds，无破坏性变更；发版后双端实测回写本表。 -->
-<!-- v0.10.0/0.11.0（Plan 35 tunnels 硬化）：契约变更——revoke/disable → 已建立隧道 **≤15s 拆除**（一个控制 tick；前提 = store 健康 + 控制循环存活，store 持续故障降级为 ≤~2min 有界关闭；进程 hang 不在 DB kill 域，应急 = 重启/杀进程；此前契约 = 隧道不受 revoke 影响、无急停）；`forward_port` 新参数 `listen_host`（非环回需 owner `serve bind` 白名单预批，`bind rm` 后存量 ≤15s 收缩）；vault 新表 ×3（forward_bind_hosts / tunnel_orders / tunnel_registry）；新 CLI `serve bind add/rm/ls` + `tunnels ls` / `kill <id>` / `kill --project`；`forward` audit 行 Command 追加 ` id=<tunnelID>` 单列（格式变更，消费方注意）。**kill/ls 域完整性要求全部可写 broker（serve + 在线 stdio）都升级**——混合部署期旧版进程的隧道不进 registry、不受 kill 单/级联管辖，`tunnels ls` 覆盖不完整。与 Plan 32/33/34 同批发版回写，占位注释届时删除；版本行归属 owner 发版拍板。 -->
-<!-- v0.10 系（Plan 32-37）同批量发版：以下行并入 v0.10.0 还是开 v0.11.0 由 owner 发版拍板，回写时删本注释 -->
-<!-- v0.10.0/0.11.0（Plan 38 doctor 硬化接线）：CLI-only 增量——doctor exit 2 管道已接线、契约已在代码/测试层定义（0/1 不变，无破坏），生产 2 源与帮助文本行随 #5 二期同步；Windows master.key 新增 DACL-loose WARN 行（owner 异常 / 非白名单读授权 / null DACL，WARN 不改退出码）。与 Plan 32-37 同批发版回写，占位注释届时删除。 -->
-<!-- v0.10.0/0.11.0（Plan 39 设备码绑 profile）：**行为变更（授权收紧）**——`/snapshot` 从整库 dump 改为按设备码绑定 profile 裁剪（未授权服务器+凭据不出服务器；audit 行恒不出）；`cache-tokens add` 新增必填 `--profile`，新增 `cache-tokens bind <name> <profile>`（存量码补绑）；snapshot JSON 结构不变（纯子集，旧 client 兼容）；vault schema 增量迁移 `cache_tokens.profile_id`（NULL=未绑）。**存量未绑码拉取被拒 403（非 401，不触发 Plan 34 本地销毁）**——升级 runbook：替换 serve 机二进制后、重启 serve 前，先 `cache-tokens bind` 全部存量码，再重启 serve，最后各工作机 re-pull（旧整库 cache.bin 被原子覆盖）。与 Plan 32-38 同批发版回写，占位注释届时删除。 -->
-
 | client 版本 | serve 版本 | 在线（HTTP MCP） | 离线（cache pull / mcp --cache） | 验证日期 |
 |---|---|---|---|---|
+| v0.10.0 | v0.10.0 | ✅（NUC10 权威 broker + 笔记本；client 先 serve 后，schtasks 独立任务重启 serve；NUC10 exe 改经 GitHub release 直连下载——`upload_file` 自硬 per-file cap（1 MiB）后 17 MB exe 已传不动，本版起部署通道改道；zip/exe sha256 双核对 `e54a8b11…`/`aca1f4c9…`；升级按 Plan 39 runbook：换二进制 → `cache-tokens bind laptop-v040 e2e-profile` → 重启 serve；**Plan 39 裁剪实测：re-pull 后 cache 11→10 srv / 12→10 creds，`cache status` scope=e2e-profile，gitlab-urit 离线零出现（探针 grep=0）**；离线探针 serverInfo 0.10.0 + 10 工具，exec_background/exec_output/exec_stop/upload_content 新面全在） | ✅（doctor 双端 0 WARN 0 FAIL；NUC10 解密探针 11 srv/12 creds 整库（服务端不裁）、serve cert 指纹 `c69b2560…` 未变零重 pin、serve HEALTHY；**Plan 37 到龄自废已在笔记本启用 `SSHMGR_CACHE_MAX_OFFLINE=24h`**——pull 侧 wrapper 与 load 侧 MCP env 双路径，服务器 Date 锚已建立（anchored pull exit=0），离线加载实测不破） | 2026-08-26 |
 | v0.9.0 | v0.9.0 | ✅（NUC10 权威 broker + 笔记本；client 先 serve 后，schtasks 独立任务重启 serve；exe 两端 sha256 `c1cec2ab…b8fb` 核对；**v0.9 掩码实测：在线 list_servers 9/9 `"hidden"`；connect_error 文本 `ssh dial: dial tcp [REDACTED]: connectex: …` 无 host/IP 单前缀；expose 两态翻转恰 1 台明文**） | ✅（doctor 双端 0 WARN 0 FAIL，NUC10 解密探针 10/11、cert 指纹未变；serve HEALTHY @0.9.0（serverInfo.version 确认）；**cache pull 后离线两态一致（快照携带 expose_host 实证：开启台离线亦明文，全关后 9/9 `"hidden"`）**；验证后 port/expose 复位=全默认掩码稳态） | 2026-08-21 |
 | v0.8.10 | v0.8.10 | ✅（NUC10 权威 broker + 笔记本；client 先 serve 后，schtasks 独立任务重启 serve；exe 两端 sha256 `9e32f67b…f91d` 核对） | ✅（doctor 双端 0 WARN 0 FAIL，NUC10 解密探针 10/11、serve cert 指纹未变；serve HEALTHY @0.8.10；v0.8.8/0.8.9 守卫生产回归：`projects enable/rotate` 对 revoked 行 `phase5-e2e` 双双拒绝） | 2026-08-21 |
 | v0.8.9 | v0.8.9 | ✅（NUC10 权威 broker + 笔记本；client 先 serve 后，schtasks 独立任务重启 serve） | ✅（doctor 双端 0 WARN 0 FAIL，NUC10 解密探针 10/11；serve HEALTHY @0.8.9；v0.8.9 修复生产实测：`projects rotate` 对 revoked 行 `phase5-e2e` 拒绝且零 token 输出） | 2026-08-20 |
@@ -21,9 +14,8 @@
 | v0.8.1 | v0.8.1 | ✅（NUC10 权威 broker + 笔记本；发版后按铁律 client 先 serve 后） | ✅（cache 健康；doctor 双端 0 WARN 0 FAIL 含解密探针 9/10；owner ssh echo 冒烟过） | 2026-08-17 |
 | v0.8.0 | v0.8.0 | ✅（NUC10 权威 broker + 笔记本；发版后按铁律 client 先 serve 后） | ✅（cache 9 servers/10 creds；owner ssh 三连 smoke：echo=exit 0 / 远端非零=CLI 非零+stderr 报码 / 无命令=显式报错） | 2026-08-17 |
 | v0.7.3 | v0.7.3 | ✅（NUC10 权威 broker + 笔记本） | ✅（9/9 服务器） | 2026-08-16 |
-| Plan 37 | `SSHMGR_CACHE_MAX_OFFLINE`（默认关）：离线缓存到龄自废——服务器 Date 锚 + provenance + 销毁前复查；meta 新增 `server_anchored` 字段（恒序列化，旧客户端忽略未知字段/新客户端读旧 meta 视为 false，双向兼容）；pinned pull 不再跟随重定向（行为修复） |
 
-（v0.8.10 为当前生产双端；v0.8.2–v0.8.8 曾部署双端但未逐版登记本表（v0.8.8 行除外）；更早历史组合未逐一回归，旧版本请先看下方破坏性变更。）
+（v0.10.0 为当前生产双端；v0.8.2–v0.8.8 曾部署双端但未逐版登记本表（v0.8.8 行除外）；更早历史组合未逐一回归，旧版本请先看下方破坏性变更。）
 
 ## 已知破坏性变更
 
@@ -32,12 +24,15 @@
 | v0.4.0（实证：commit `d48523a`，2026-08-13「RunServe auto-generates cert + forces TLS when none given」） | serve 默认 TLS-only + 自签证书 + SPKI pin；无 pin 客户端默认拒连 | 旧明文 client 无法拉快照/连 MCP | 先升全部工作机 binary + 配 pin，**最后**重启 serve（README「migration order」） |
 | v0.7.0 | `tui --mode broker` 移除（自动判定覆盖） | 脚本里写死 `--mode broker` 的调用报错 | 改 `ssh-manager tui` |
 | v0.9.0 | `list_servers` host 默认掩码为 `"hidden"`（per-server `expose_host` opt-in）；工具错误文本清洗（不含 host/IP/host:port） | 依赖 host 明文的 agent 流程当场断；v0.9 serve + 未升级 client 的离线模式仍回明文；旧 binary 导入新快照丢 `expose_host=true` 偏好（fail-safe：折回掩码） | 顺序按铁律 client 先、serve 后（技术上无硬约束；该顺序服务于「掩码尽快全生效」——在线随 serve 升级即刻生效、离线需 client 升级）。**依赖 host 明文的流程唯一补救 = 升级前 `ssh-manager servers edit <name> --expose-host`** |
+| v0.10.0 | **Plan 39 授权收紧**：`/snapshot` 从整库 dump 改为按设备码绑定 profile 裁剪；`cache-tokens add` 必填 `--profile`；存量未绑码拉取被拒 **403**（非 401，不触发本地销毁，cache 不毁但不拉新）。同批：Plan 35 隧道契约变更（revoke/disable → ≤15s 拆除，`forward_port.listen_host` 白名单）；`upload_file` 超 1 MiB 硬拒（此前超限截断/误报） | 未绑存量码的定时拉取开始失败（403 文案给 bind 指引）；旧整库 cache.bin 在 re-pull 前保留原样（不受影响但也不再刷新授权边界）；混合部署期 `tunnels ls/kill` 覆盖不完整 | 升级顺序：**先 bind 后重启 serve**（见下方铁律），重启后各工作机 re-pull 一次即原子覆盖旧整库 cache.bin；`upload_file` 大文件改走目标机直连 release 下载或分块 |
 
 ## 升级顺序铁律
 
 **先升所有 client（工作机 binary + cache pin），最后重启 serve。** serve 一旦升级到 TLS-only 版本即刻拒绝旧明文 client——顺序反了会把整条缓存链打断。token / snapshot 格式 / tool schema 目前无跨版本不兼容记录；出现时在此登记。
 
 **Plan 39 追加（设备码绑 profile）**：升 serve 机时，替换二进制后**先 `cache-tokens bind` 全部存量未绑码，再重启 serve**——未绑码在 Plan 39 serve 上拉取被拒（403，本地缓存不毁但不拉新）；重启后各工作机 re-pull 一次，旧整库 cache.bin 即被裁剪快照原子覆盖。
+
+**Plan 37 追加（到龄自废启用）**：`SSHMGR_CACHE_MAX_OFFLINE` 必须同时设在**拉取路径**（定时刷新 wrapper、`mcp --cache` 会话内 lazy pull）与**加载路径**（`mcp --cache` 进程 env）——服务器 Date 锚只在带该 env 的拉取进程里记录（`clientops.go` §2.2-2.4）。只设加载侧时，每次无 env 的定时拉取会把 `server_anchored` 重写为 false，加载侧随即可拒载（fail-closed）。
 
 ## 相关文档
 
