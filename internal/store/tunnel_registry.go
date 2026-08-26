@@ -133,7 +133,8 @@ func (s *Store) GCTunnelRegistry(cutoff int64) error {
 // mirror-DELETE-retry failure paths — the store package deliberately exposes
 // no production raw-Exec surface. The testing.Testing() gate makes the seam
 // inert outside test binaries so production code cannot reach raw SQL through
-// it (naming house precedent: getDACLForTest, clientops Reset*ForTest).
+// it (naming house precedent: clientops Reset*ForTest; the former
+// getDACLForTest precedent was promoted to production as readDACL, Plan 38).
 func (s *Store) ExecForTest(q string) error {
 	if !testing.Testing() {
 		return errors.New("store.ExecForTest: test-only seam, refused outside a test binary")
