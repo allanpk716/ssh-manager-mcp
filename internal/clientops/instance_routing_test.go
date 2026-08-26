@@ -2,6 +2,7 @@ package clientops
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +10,20 @@ import (
 	"testing"
 	"time"
 )
+
+// plan40Serve shapes a test serve into its Plan-40 form: /snapshot responses
+// carry X-Sshmgr-Device-Name derived from the bearer code (code
+// "<prefix><name>" → name). The Task 10 --instance gate refuses a named pull
+// without the header, and one code = one device identity — so a fixture that
+// pulls TWO instances needs TWO codes, exactly like the real serve.
+func plan40Serve(prefix string, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if name := strings.TrimPrefix(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), prefix); name != "" {
+			w.Header().Set("X-Sshmgr-Device-Name", name)
+		}
+		h(w, r)
+	}
+}
 
 // TestInstanceRouting_PullCredLoadQuarantine: one pinned pull with
 // Instance="agentA" must land every artifact in instances/agentA/ (bin, meta,
@@ -20,8 +35,8 @@ func TestInstanceRouting_PullCredLoadQuarantine(t *testing.T) {
 	t.Setenv("SSHMGR_CACHE_DEK_DIR", dekDir) // real per-instance FileKeyProvider
 	t.Setenv("SSHMGR_CACHE_DEK", "")
 
-	url, pin := newPinnedTLSServer(t, snapshotHandler(ptr(time.Now().UTC().Format(http.TimeFormat)), nil))
-	if err := DoPull(url, "code", pin, PullOpts{Instance: "agentA"}); err != nil {
+	url, pin := newPinnedTLSServer(t, plan40Serve("code-", snapshotHandler(ptr(time.Now().UTC().Format(http.TimeFormat)), nil)))
+	if err := DoPull(url, "code-agentA", pin, PullOpts{Instance: "agentA"}); err != nil {
 		t.Fatalf("instance pull: %v", err)
 	}
 	idir := filepath.Join(userDir, "ssh-manager", "instances", "agentA")
@@ -74,7 +89,7 @@ func TestInstanceRouting_PullCredLoadQuarantine(t *testing.T) {
 	}
 
 	// a second instance survives untouched
-	if err := DoPull(url, "code", pin, PullOpts{Instance: "agentB"}); err != nil {
+	if err := DoPull(url, "code-agentB", pin, PullOpts{Instance: "agentB"}); err != nil {
 		t.Fatalf("agentB pull: %v", err)
 	}
 	if _, err := QuarantineCacheFor("agentA", serverRejectedReason); err != nil {
@@ -96,23 +111,25 @@ func TestInstanceRouting_Pinned401QuarantinesOwnInstance(t *testing.T) {
 	t.Setenv("SSHMGR_CACHE_DEK", "")
 
 	revoked := false
-	srv := newPinnedSnapshotServer(t, func(*http.Request) (int, string) {
+	url, pin := newPinnedTLSServer(t, plan40Serve("good-code-", func(w http.ResponseWriter, r *http.Request) {
 		if revoked {
-			return 401, `invalid cache token: revoked`
+			w.WriteHeader(401)
+			fmt.Fprint(w, `invalid cache token: revoked`)
+			return
 		}
-		return 200, `{"servers":[],"credentials":[]}`
-	})
+		fmt.Fprint(w, `{"servers":[],"credentials":[]}`)
+	}))
 
 	// (a) seed two instances with a good code
 	for _, name := range []string{"agentA", "agentB"} {
-		if err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{Instance: name}); err != nil {
+		if err := DoPull(url, "good-code-"+name, pin, PullOpts{Instance: name}); err != nil {
 			t.Fatalf("%s seed pull: %v", name, err)
 		}
 	}
 
 	// (b)+(c) flip to 401: agentA's next pull must quarantine ONLY agentA
 	revoked = true
-	err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{Instance: "agentA"})
+	err := DoPull(url, "good-code-agentA", pin, PullOpts{Instance: "agentA"})
 	if !errors.Is(err, ErrCacheQuarantined) {
 		t.Fatalf("revoked instance pull must wrap ErrCacheQuarantined, got %v", err)
 	}

@@ -584,10 +584,12 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	if pin != "" {
 		deviceName = res.Header.Get("X-Sshmgr-Device-Name")
 	}
-	if o.Instance == "" {
-		if err := gateDefaultInstance(bin, metaPath, deviceName, o); err != nil {
+	if o.Instance != "" {
+		if err := gateNamedInstance(bin, metaPath, deviceName, o.Instance); err != nil {
 			return err
 		}
+	} else if err := gateDefaultInstance(bin, metaPath, deviceName, o); err != nil {
+		return err
 	}
 	blob, err := vaultio.EncryptWithKey(dek, body)
 	if err != nil {
@@ -665,6 +667,38 @@ func gateDefaultInstance(bin, metaPath, deviceName string, o PullOpts) error {
 	default:
 		return fmt.Errorf("refusing pull: cache.bin exists but cache.meta.json is missing or unreadable (%v) — inconsistent/interrupted cache; delete cache.bin + cache.meta.json + cache.auth.json + the quarantine/ dir in this cache directory and re-enroll", merr)
 	}
+}
+
+// gateNamedInstance enforces §2.4 row 1 + §2.1 for an explicit --instance pull:
+// the instance route REQUIRES a Plan-40 serve (header present), the header
+// must name exactly the flagged instance (a mismatched code/flag pair would
+// write one device's authorization into another's slot), and the physical slot
+// must not hold a different identity or a half-written state.
+func gateNamedInstance(bin, metaPath, deviceName, instance string) error {
+	if deviceName == "" {
+		return fmt.Errorf("refusing pull: --instance requires a Plan-40 serve (the response carries no X-Sshmgr-Device-Name) — upgrade the serve, or drop --instance to use the default cache slot")
+	}
+	if verr := instname.Valid(deviceName); verr != nil {
+		return fmt.Errorf("pull refused: %w — owner: revoke and re-add the device code with a valid name", verr)
+	}
+	if deviceName != instance {
+		return fmt.Errorf("refusing pull: --instance %q does not match the serve's device name %q — each device code pulls into its own instance; use --instance %q on the machine that code was issued for", instance, deviceName, deviceName)
+	}
+	if _, serr := os.Stat(bin); serr != nil {
+		if !os.IsNotExist(serr) {
+			return serr
+		}
+		return nil // fresh slot
+	}
+	// slot has a bin: its recorded identity must be this instance's (or blank).
+	m, merr := readCacheMeta(metaPath)
+	if merr != nil {
+		return fmt.Errorf("refusing pull: instance directory %s holds cache.bin but no readable cache.meta.json (interrupted write?) — delete the instance directory and re-enroll", filepath.Dir(bin))
+	}
+	if m.DeviceName != "" && m.DeviceName != deviceName {
+		return fmt.Errorf("refusing pull: instance directory %s already holds a different device identity (%q vs %q) — delete the instance directory and re-enroll", filepath.Dir(bin), m.DeviceName, deviceName)
+	}
+	return nil
 }
 
 // CacheScopeVerified reports whether the on-disk cache was pulled from a
