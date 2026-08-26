@@ -103,16 +103,23 @@ const (
 	CacheTokenRevoked CacheTokenStatus = "revoked" // permanent; token rejected (device lost/rotated)
 )
 
-// CacheToken is a per-device authorization code for offline-cache pulls. It is OWNER-level
-// (not scoped to a profile), disjoint from project tokens, and NEVER carried in a Snapshot
-// (server-side only). TokenHash/Salt verify the presented code; the plaintext is shown once
-// at AddCacheToken and never stored. LastPullAt is zero until the device's first successful pull.
+// CacheToken is a per-device authorization code for offline-cache pulls, BOUND to
+// exactly one profile (Plan 39): /snapshot serves only that profile's authorized
+// servers + their credentials. Disjoint from project tokens, and NEVER carried in
+// a Snapshot (server-side only). TokenHash/Salt verify the presented code; the
+// plaintext is shown once at AddCacheToken and never stored. LastPullAt is zero
+// until the device's first successful pull.
 type CacheToken struct {
 	ID          string
 	Name        string
 	TokenPrefix string
 	Status      CacheTokenStatus
-	LastPullAt  time.Time // zero value if last_pull_at was NULL (never pulled)
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// ProfileID is the binding that scopes /snapshot for this device. Empty
+	// ("unbound") exists ONLY as the pre-Plan-39 legacy-DB migration state —
+	// serve refuses unbound pulls with 403 (not 401: a pinned 401 destroys the
+	// client cache under Plan 34) until `cache-tokens bind` repairs it.
+	ProfileID  string
+	LastPullAt time.Time // zero value if last_pull_at was NULL (never pulled)
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }

@@ -29,7 +29,7 @@
 
 `serve`↔`cache pull` 同步链路的传输加密**与 L1+ at-rest 模型是两套独立的密码学**：
 
-- **默认强制 TLS**：`serve` 无 `--tls-cert` 时首次启动**自签**一张 ed25519 证书（落 `serve-cert.pem`/`serve-key.pem`，ACL 与 `master.key.plain` 同级），从此监听 TLS。`/snapshot`（整库凭据 dump）与 MCP JSON-RPC 全程密文 + 前向保密。
+- **默认强制 TLS**：`serve` 无 `--tls-cert` 时首次启动**自签**一张 ed25519 证书（落 `serve-cert.pem`/`serve-key.pem`，ACL 与 `master.key.plain` 同级），从此监听 TLS。`/snapshot`（按设备绑定 profile 裁剪的凭据快照——Plan 39 前为整库 dump）与 MCP JSON-RPC 全程密文 + 前向保密。快照裁剪的服务器行边界不含**共享凭据**语义：未授权服务器与已授权服务器共用同一凭据时该凭据仍随快照下发（已授权服务器需要它）——凭据级隔离是 owner 侧不跨边界共享凭据的建模责任（multi-machine.md 限制节）。
 - **无 pin 默认 hard-fail（修订，xcheck 共识 C）**：客户端没拿到指纹（env/`--pin`/token 内嵌三处都无）→ **默认拒连**（不再静默明文回退 —— 那是 fail-open 隐患）。明文拉取需显式 `--allow-plaintext` opt-in（仅调试/连旧明文 serve）。有 pin 但 URL 非 https / pin 格式非法 也 hard-fail（防 pin 静默失效 / 防打错别字降级）。serve 证书误删（marker 仍在）→ serve 拒启动（防静默重生新 key 致全客户端 bricked）。
 - **指纹钉死（SPKI TOFU）**：客户端（`cache pull`）钉死 serve 证书公钥的 SPKI 指纹（`sha256:...`）——`InsecureSkipVerify: true` 跳过对自签证书不可能的 CA 链验证 + `VerifyConnection` 回调做**常量时间** SPKI 比对作为唯一信任锚（HPKP/Tailscale 模式）。**首次连接即校验，零 MITM 窗口**（指纹在 enroll 时随设备码交付，非首次盲连）。
 - **信任根**：信任来自"enroll 时人工/流程交接的指纹"，不来自任何 CA。serve 重生 key（重装/迁移）→ 用 `serve cert-info` 拿新指纹重新交接。

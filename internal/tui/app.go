@@ -130,10 +130,16 @@ func FetchAll(st *store.Store) ([pageCount]listPage, error) {
 	if err != nil {
 		return pages, err
 	}
+	// profiles (already loaded above) also feed the device-code page's binding
+	// display (profileID → name; Plan 39).
+	profileNames := make(map[string]string, len(profiles))
+	for _, pr := range profiles {
+		profileNames[pr.ID] = pr.Name
+	}
 	pages[pageServers] = newServersPage(servers)
 	pages[pageProfiles] = newProfilesPage(profiles, st)
 	pages[pageProjects] = newProjectsPage(projects, st)
-	pages[pageTokens] = newCacheTokensPage(tokens)
+	pages[pageTokens] = newCacheTokensPage(tokens, profileNames)
 	return pages, nil
 }
 
@@ -218,9 +224,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Quit
 		case k.Code == tea.KeyTab && k.Mod == tea.ModShift:
 			a.page = (a.page + pageCount - 1) % pageCount
+			// Plan 39 (Bug-2 root fix): pages can be mutated OUTSIDE this
+			// process (the serve process writes last_pull_at on every client
+			// pull; other TUI/CLI sessions edit entities). Re-reading on page
+			// entry makes what you see = what's in the DB when you look at it.
+			// Same semantics as the post-action refetch (filters drop; the
+			// servers page's ⚠ view survives via refetchPages itself).
+			a.refetchPages()
 			return a, nil
 		case k.Code == tea.KeyTab && k.Mod == 0:
 			a.page = (a.page + 1) % pageCount
+			a.refetchPages() // see Shift-Tab note
 			return a, nil
 		// up/down/j/k: consumed by the page's list panel in the routing block
 		// above — nothing left to do here.
@@ -389,9 +403,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.page == pageTokens {
 				cp, _ := a.pages[pageTokens].(*cacheTokensPage)
 				switch k.Text {
-				case "a": // issue: form (name + serve addr hint) → tokenIssuedMsg
+				case "a": // issue: form (name + profile binding + serve addr hint) → tokenIssuedMsg
+					// Plan 39: the code must bind a profile (its pull scope). Zero
+					// profiles = nothing to bind — loud guidance instead of a form
+					// whose code would be refused at first pull.
+					profiles, err := a.st.ListProfiles()
+					if err != nil {
+						a.err, a.status = err, ""
+						return a, nil
+					}
+					if len(profiles) == 0 {
+						a.err, a.status = fmt.Errorf("无 profile 可绑定——先在 Profiles 页创建 profile 并授权服务器，再来签发设备码"), ""
+						return a, nil
+					}
 					d := &deviceDraft{}
-					a.overlay = newFormOverlay("签发设备码", newCacheTokenForm(d), func() tea.Cmd {
+					a.overlay = newFormOverlay("签发设备码", newCacheTokenForm(d, profiles), func() tea.Cmd {
 						// Mutation + fingerprint load run AFTER the form closes;
 						// the code rides tokenIssuedMsg straight into the
 						// secretView overlay — one msg, then only the overlay
@@ -402,7 +428,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							if err != nil {
 								return errMsg{fmt.Errorf("load serve cert for fingerprint: %w (run `serve cert-info` to diagnose)", err)}
 							}
-							_, code, err := a.st.AddCacheToken(strings.TrimSpace(d.Name))
+							_, code, err := a.st.AddCacheToken(strings.TrimSpace(d.Name), d.ProfileID)
 							if err != nil {
 								return errMsg{err}
 							}

@@ -82,6 +82,11 @@ func TestUpgrade_FullFlowPersistsRoleKeepsVault(t *testing.T) {
 	if a.role != roles.RoleStandalone {
 		t.Fatalf("App must pick up standalone from role.json, got %q", a.role)
 	}
+	// Plan 39: the upgrade segment binds its device code to a profile — seed
+	// exactly one so the auto-bind path runs (counted in profBefore below).
+	if _, err := a.st.AddProfile("upg-bind"); err != nil {
+		t.Fatal(err)
+	}
 	srvBefore, profBefore, projBefore := vaultCounts(t, a.st)
 
 	m, _ := a.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
@@ -151,6 +156,11 @@ func TestUpgrade_InstallFailureKeepsStandalone(t *testing.T) {
 	}
 
 	a := newTestApp(t)
+	// Plan 39: the device-code mint binds to a profile — seed exactly one
+	// (auto-bind path; no extra form step in this flow).
+	if _, err := a.st.AddProfile("upg-bind"); err != nil {
+		t.Fatal(err)
+	}
 	a.startUpgrade()
 	a.upg.serveAddr = "https://192.168.100.235:7878"
 	m, _ := a.Update(formDoneMsg{})    // addr → admin notice
@@ -263,6 +273,11 @@ func TestUpgrade_EscCancelsSegment(t *testing.T) {
 	// Scenario 2: Esc on the client-name form (post-install screens) → no
 	// device code minted.
 	b := newTestApp(t)
+	// Plan 39: a profile must exist for the segment to reach the client-name
+	// form (the mint binds to it).
+	if _, err := b.st.AddProfile("upg-bind"); err != nil {
+		t.Fatal(err)
+	}
 	mb, _ := b.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
 	mb.(App).upg.serveAddr = "https://192.168.100.235:7878" // answer the addr form
 	n1, _ := mb.Update(formDoneMsg{})                       // addr → admin notice
@@ -334,7 +349,11 @@ func TestUpgrade_CompleteKeepsWarnView(t *testing.T) {
 	sp.warnOnly = true
 	sp.rebuild()
 	// the minted device code exists in the store but NOT in the page snapshot
-	if _, _, err := a.st.AddCacheToken("laptop"); err != nil {
+	up, err := a.st.AddProfile("upg-p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.st.AddCacheToken("laptop", up); err != nil {
 		t.Fatal(err)
 	}
 	a.upg = &upgradeSegment{installErr: ioErr("denied")} // failure path: completes without roles.Save

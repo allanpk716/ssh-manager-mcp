@@ -32,6 +32,7 @@ import (
 type clientModel struct {
 	cred      *clientops.CacheCred
 	snap      *store.Snapshot
+	scoped    bool // cache pulled from a Plan-39 serve (X-Sshmgr-Snapshot-Scope) — the profile header is only honest when true
 	cacheAge  time.Duration
 	panelList     // servers list panel: cursor/pagination//`/` filter (2026-08-17 桌面化)
 	width     int // terminal width from WindowSizeMsg (0 = not yet reported)
@@ -63,9 +64,10 @@ func (m clientModel) Init() tea.Cmd {
 }
 
 type dataReadyMsg struct {
-	cred *clientops.CacheCred
-	snap *store.Snapshot
-	age  time.Duration
+	cred   *clientops.CacheCred
+	snap   *store.Snapshot
+	scoped bool
+	age    time.Duration
 }
 
 type syncDoneMsg struct{ err error }
@@ -112,7 +114,7 @@ func refreshDataCmd() tea.Msg {
 	if fi, err := os.Stat(bin); err == nil {
 		age = time.Since(fi.ModTime())
 	}
-	return dataReadyMsg{cred: cred, snap: snap, age: age}
+	return dataReadyMsg{cred: cred, snap: snap, scoped: clientops.CacheScopeVerified(), age: age}
 }
 
 // syncCmdMode is the pull command (panel and wizard share it). In WIZARD mode
@@ -166,7 +168,7 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch kp := msg.(type) {
 	case dataReadyMsg:
-		m.cred, m.snap, m.cacheAge = kp.cred, kp.snap, kp.age
+		m.cred, m.snap, m.scoped, m.cacheAge = kp.cred, kp.snap, kp.scoped, kp.age
 		m.syncList()
 		return m, nil
 	case syncDoneMsg:
@@ -403,6 +405,14 @@ func classifyPullError(err error) string {
 	switch {
 	case strings.Contains(s, "dial"), strings.Contains(s, "no such host"):
 		kind = "地址不通：检查 serve 地址拼写与网络/防火墙"
+	case strings.Contains(s, "not bound to a profile"):
+		// Plan 39: the device code migrated unbound (or was never bound) — the
+		// owner repairs it server-side with cache-tokens bind; nothing to fix
+		// on this machine. NOT 设备码无效: the code itself is valid+active.
+		// Discriminator is the serve's own body text surfaced by DoPull — a
+		// bare "server returned 403" (proxy/WAF/fail-closed) must NOT land
+		// here (code-review #6).
+		kind = "设备码未绑定 profile：请 owner 在 server 机执行 cache-tokens bind 后重试（本机缓存未受影响）"
 	case strings.Contains(s, "server returned 401"), strings.Contains(s, "authorization"):
 		kind = "设备码无效：核对 server 机签发的设备码（丢失可在其主控台重发）"
 	case strings.Contains(s, "mismatch"), strings.Contains(s, "fingerprint"):
@@ -455,8 +465,10 @@ func clientFinishScreen(serveURL string) overlay {
 }
 
 // clientHeader renders the one-line connection summary: broker host, pin
-// fingerprint prefix, cache age, snapshot server count.
-func clientHeader(cred *clientops.CacheCred, nServers int, age time.Duration) string {
+// fingerprint prefix, bound profile (ONLY when the pull recorded the Plan-39
+// scope header — a legacy single-profile whole-vault snapshot is
+// shape-identical, code-review #3), snapshot server count, cache age.
+func clientHeader(cred *clientops.CacheCred, snap *store.Snapshot, scoped bool, nServers int, age time.Duration) string {
 	host, pin := "-", "-"
 	if cred != nil {
 		if u, err := url.Parse(cred.URL); err == nil && u.Host != "" {
@@ -466,7 +478,11 @@ func clientHeader(cred *clientops.CacheCred, nServers int, age time.Duration) st
 			pin = cred.Pin
 		}
 	}
-	return fmt.Sprintf("连接 %s · pin %s · %d 服务器 · 缓存于 %s 前", host, pin, nServers, age.Round(time.Minute))
+	profile := ""
+	if scoped && snap != nil && len(snap.Profiles) == 1 {
+		profile = " · profile " + snap.Profiles[0].Name
+	}
+	return fmt.Sprintf("连接 %s · pin %s%s · %d 服务器 · 缓存于 %s 前", host, pin, profile, nServers, age.Round(time.Minute))
 }
 
 // clientServerRows renders the read-only server list (one row per snapshot server).
@@ -521,7 +537,7 @@ func (m clientModel) View() tea.View {
 	if m.snap != nil {
 		n = len(m.snap.Servers)
 	}
-	b.WriteString(clientHeader(m.cred, n, m.cacheAge) + "\n")
+	b.WriteString(clientHeader(m.cred, m.snap, m.scoped, n, m.cacheAge) + "\n")
 	if m.width > 0 {
 		// desktop panels (2026-08-17): list + detail fitted to the terminal;
 		// body height = frame minus header/hint/status/footer rows.

@@ -251,7 +251,7 @@ Plans 1–6 delivered: encrypted vault → in-process SSH broker → MCP server 
 
 Carry-forwards (deferred, non-blocking): `context.Context` cancellation threaded through the broker; a server-side exec-timeout cap.
 
-**Plan 10 — `serve` mode:** run the broker as an authenticated HTTP MCP server so agents on other VLAN machines share one authoritative vault. Phase 1 of multi-machine support (remote live access). **Plan 12 — offline read-only cache:** each work machine pulls an encrypted read-only snapshot of the vault (`cache pull`) and can run the broker from it (`mcp --cache`) when the server is unreachable. Vault replication and Synology backup are later phases. See "Multi-machine: `serve` mode" above and [`docs/multi-machine.md`](docs/multi-machine.md#离线只读缓存plan-12).
+**Plan 10 — `serve` mode:** run the broker as an authenticated HTTP MCP server so agents on other VLAN machines share one authoritative vault. Phase 1 of multi-machine support (remote live access). **Plan 12 — offline read-only cache:** each work machine pulls an encrypted read-only snapshot of its bound profile's authorized servers (`cache pull`, scoped per device code since Plan 39) and can run the broker from it (`mcp --cache`) when the server is unreachable. Vault replication and Synology backup are later phases. See "Multi-machine: `serve` mode" above and [`docs/multi-machine.md`](docs/multi-machine.md#离线只读缓存plan-12).
 
 **v0.7.0 (Plan 20) — ssh-config import & hygiene hardening:**
 

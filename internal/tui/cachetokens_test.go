@@ -7,7 +7,11 @@ import (
 
 func TestCacheTokenIssueFlow(t *testing.T) {
 	st := newStore(t)
-	id, code, err := st.AddCacheToken("laptop")
+	pid, err := st.AddProfile("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, code, err := st.AddCacheToken("laptop", pid)
 	if err != nil || code == "" || id == "" {
 		t.Fatalf("(%q,%q,%v)", id, code, err)
 	}

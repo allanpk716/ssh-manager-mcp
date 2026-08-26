@@ -20,6 +20,7 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -187,6 +188,13 @@ type cacheMeta struct {
 	// serialize an explicit false; a legacy meta without the field reads as
 	// the zero value false — which is exactly the provenance semantics.
 	ServerAnchored bool `json:"server_anchored"`
+	// Scoped records whether this cache was pulled from a Plan-39 serve
+	// (X-Sshmgr-Snapshot-Scope: profile) — i.e. cropped to the device's bound
+	// profile. A pre-Plan-39 whole-vault cache has the IDENTICAL snapshot
+	// shape when the vault holds one profile, so the header at pull time is
+	// the only honest discriminator. No omitempty, same zero-value semantics
+	// as ServerAnchored (code-review #3).
+	Scoped bool `json:"scoped"`
 }
 
 // CacheCred persists the pull credential (cache.auth.json) so `mcp --cache` can
@@ -406,7 +414,12 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		io.Copy(io.Discard, res.Body) // keep the keep-alive socket reusable
+		// Read the (bounded) error body FIRST: the 403 branch discriminates the
+		// serve's unbound-device-code refusal BY ITS BODY TEXT — a proxy/WAF 403
+		// must not be misreported as "not bound" (code-review #6). Error bodies
+		// are tiny; the 8 KiB cap only guards a pathological responder, and the
+		// abandoned tail at worst drops one keep-alive socket.
+		errBody, _ := io.ReadAll(io.LimitReader(res.Body, 8<<10))
 		if res.StatusCode >= 300 && res.StatusCode < 400 {
 			// Plan 37 §2.0: CheckRedirect returned ErrUseLastResponse, so a 3xx
 			// surfaces here — never followed, on any client.
@@ -424,6 +437,22 @@ func DoPull(url, token, pin string, o PullOpts) error {
 				qerr = ErrCacheQuarantined
 			}
 			return fmt.Errorf("pull: %w — re-enroll with a fresh device code", qerr)
+		}
+		if res.StatusCode == 403 {
+			// Plan 39: the serve refused an UNBOUND device code (legacy
+			// pre-Plan-39 code, not yet `cache-tokens bind`-ed). Deliberately
+			// NOT a quarantine face — the cache stays; the owner repairs the
+			// binding server-side and the next pull succeeds. The discriminator
+			// is the serve's own body text; anything else 403 (fail-closed
+			// gate, proxy, WAF) gets the generic treatment with the body
+			// excerpt, never the bind advice.
+			if bytes.Contains(errBody, []byte("not bound to a profile")) {
+				return fmt.Errorf("pull: server returned 403 — device code not bound to a profile (owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server)")
+			}
+			if detail := strings.TrimSpace(string(errBody)); detail != "" {
+				return fmt.Errorf("pull: server returned 403 — %.200s", detail)
+			}
+			return fmt.Errorf("pull: server returned 403 (forbidden)")
 		}
 		return fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
 	}
@@ -472,7 +501,8 @@ func DoPull(url, token, pin string, o PullOpts) error {
 			fmt.Fprintf(o.StatusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): test-injected failure\n")
 		}
 	} else {
-		mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: pulledAt, ServerAnchored: anchored})
+		scoped := res.Header.Get("X-Sshmgr-Snapshot-Scope") == "profile"
+		mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: pulledAt, ServerAnchored: anchored, Scoped: scoped})
 		if werr := atomicWriteUnique(metaPath, mb); werr != nil && o.StatusOut != nil {
 			fmt.Fprintf(o.StatusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): %v\n", werr)
 		}
@@ -488,6 +518,24 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		fmt.Fprintf(o.StatusOut, "pulled %d servers / %d credentials into %s\n", len(snap.Servers), len(snap.Credentials), bin)
 	}
 	return nil
+}
+
+// CacheScopeVerified reports whether the on-disk cache was pulled from a
+// Plan-39 serve (X-Sshmgr-Snapshot-Scope: profile) — i.e. cropped to the
+// device's bound profile. False for pre-Plan-39 whole-vault caches AND on any
+// meta read failure: the honest "unverified" answer, never a guess from
+// snapshot shape (a single-profile whole-vault snapshot is shape-identical to
+// a cropped one — code-review #3).
+func CacheScopeVerified() bool {
+	_, _, metaPath, _, err := CachePaths()
+	if err != nil {
+		return false
+	}
+	m, err := readCacheMeta(metaPath)
+	if err != nil {
+		return false
+	}
+	return m.Scoped
 }
 
 // CacheReloader detects cache.bin changes for hot-reload and kicks in-session

@@ -46,7 +46,11 @@ func seedGCStore(t *testing.T) []byte {
 	if err := st.SaveHostKey("192.0.2.10", 22, []byte("hostkey-blob")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.AddCacheToken("laptop"); err != nil {
+	gcProf, err := st.AddProfile("gc-p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddCacheToken("laptop", gcProf); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {

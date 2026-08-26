@@ -9,6 +9,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -45,6 +46,7 @@ type upgradeSegment struct {
 	deviceFp   string // serve cert SPKI fingerprint (device-code usage + access card)
 	installErr error  // serve install outcome — non-nil blocks the role flip (see upgradeComplete)
 	clientName string // names the minted device code
+	profileID  string // Plan 39: the device code's binding (auto = the sole profile; Select when several)
 }
 
 // nilCmd is the no-op action passed to formOverlay when the segment — not the
@@ -96,13 +98,33 @@ func (a App) upgradeFormDone(m formDoneMsg) (tea.Model, tea.Cmd) {
 		return a, installServeStep(a.upg.serveAddr)
 	case upgResult:
 		// Banners dismissed → name the client this enrollment is for. The
-		// answer names the device code (one field; default = hostname).
+		// answer names the device code (one field; default = hostname). Plan 39:
+		// the code must also bind a profile — the sole profile auto-binds (no
+		// question asked), several get a Select appended to this form, and zero
+		// aborts with guidance (create one on the Profiles page first).
 		a.upg.step = upgClientName
 		a.upg.clientName = defaultHostName()
-		a.overlay = newFormOverlay("升级为 server — 客户端机器名", huh.NewForm(huh.NewGroup(
-			huh.NewInput().Title("客户端机器名（将命名签发给它的设备码；填对方电脑的名字）").
-				Value(&a.upg.clientName).Validate(nonEmpty),
-		)), nilCmd)
+		profiles, perr := a.st.ListProfiles()
+		if perr != nil {
+			a.err = perr
+			return a.cancelUpgrade()
+		}
+		if len(profiles) == 0 {
+			a.err = fmt.Errorf("无 profile 可绑定设备码：先在 Profiles 页创建 profile 并授权服务器，再按 [u] 重试升级")
+			return a.cancelUpgrade()
+		}
+		nameField := huh.NewInput().Title("客户端机器名（将命名签发给它的设备码；填对方电脑的名字）").
+			Value(&a.upg.clientName).Validate(nonEmpty)
+		var form *huh.Form
+		if len(profiles) == 1 {
+			a.upg.profileID = profiles[0].ID // auto-bind; the access card's scope is the whole (sole) profile
+			form = huh.NewForm(huh.NewGroup(nameField))
+		} else {
+			form = huh.NewForm(huh.NewGroup(nameField,
+				huh.NewSelect[string]().Title("绑定 profile（该设备能拉到的服务器范围）").
+					Options(projectProfileOptions(profiles)...).Value(&a.upg.profileID)))
+		}
+		a.overlay = newFormOverlay("升级为 server — 客户端机器名", form, nilCmd)
 		return a, a.overlay.Init()
 	case upgClientName:
 		a.upg.clientName = strings.TrimSpace(a.upg.clientName)
@@ -129,7 +151,10 @@ func (a App) upgradeFormDone(m formDoneMsg) (tea.Model, tea.Cmd) {
 // counterpart of the wizard's step ⑤b). Same ordering discipline as the
 // wizard's issueDeviceCode: cert FIRST, code second — if the cert init failed
 // after AddCacheToken succeeded, a retry would hit the active-name collision
-// on the already-minted code; this order keeps the retry idempotent.
+// on the already-minted code; this order keeps the retry idempotent. Plan 39:
+// the mint is BOUND to seg.profileID (resolved at the client-name form); a
+// missing binding errors loudly rather than minting an unbound (pull-refused)
+// code.
 func (a App) issueDeviceCode() tea.Cmd {
 	seg, st := a.upg, a.st
 	return func() tea.Msg {
@@ -137,7 +162,10 @@ func (a App) issueDeviceCode() tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		_, code, err := st.AddCacheToken(seg.clientName)
+		if seg.profileID == "" {
+			return errMsg{fmt.Errorf("device-code profile binding missing — abort the upgrade ([u] to retry); issue manually from the 设备码 tab")}
+		}
+		_, code, err := st.AddCacheToken(seg.clientName, seg.profileID)
 		if err != nil {
 			return errMsg{err}
 		}

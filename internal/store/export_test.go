@@ -342,3 +342,214 @@ func TestSnapshotExposeHostRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// --- Plan 39: ExportSnapshotForProfile (authorization-scoped /snapshot) -------
+
+// seedScopedVault builds a two-profile vault for the scoping matrix:
+//
+//	profileA: granted srvA (cred cA + sudo cred cS) and srvNoCred (no credential)
+//	profileB: granted srvB (cred cB)
+//	projects: projA→profileA, projB→profileB
+//	host keys for srvA and srvB
+//	one audit row (on srvB, so any leak would be from the OTHER profile)
+//
+// Returns profileA's id.
+func seedScopedVault(t *testing.T, s *Store) string {
+	t.Helper()
+	cA, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("secA")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cS, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("secSudo")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cB, err := s.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("secB")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srvA := &models.Server{Name: "srvA", Host: "10.0.0.1", Port: 22, User: "u", AuthMethod: models.AuthPassword,
+		CredentialID: cA, SudoCredentialID: cS}
+	srvNoCred := &models.Server{Name: "srvNoCred", Host: "10.0.0.3", Port: 2222, User: "u", AuthMethod: models.AuthPassword}
+	srvB := &models.Server{Name: "srvB", Host: "10.0.0.2", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cB}
+	aID, err := s.AddServer(srvA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ncID, err := s.AddServer(srvNoCred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bID, err := s.AddServer(srvB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profA, err := s.AddProfile("profileA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profB, err := s.AddProfile("profileB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantServers(profA, []string{aID, ncID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantServers(profB, []string{bID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.AddProject("projA", profA); err != nil {
+		t.Fatal(err)
+	}
+	if _, pb, err := s.AddProject("projB", profB); err != nil {
+		t.Fatal(err)
+	} else {
+		_ = pb
+	}
+	if err := s.SaveHostKey("10.0.0.1", 22, []byte("hkA")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveHostKey("10.0.0.2", 22, []byte("hkB")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteAudit(AuditRow{Action: "exec", ServerID: bID, Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	return profA
+}
+
+func hasServer(snap *Snapshot, name string) bool {
+	for i := range snap.Servers {
+		if snap.Servers[i].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCred(snap *Snapshot, secret string) bool {
+	for _, c := range snap.Credentials {
+		if string(c.Secret) == secret {
+			return true
+		}
+	}
+	return false
+}
+
+func hasProject(snap *Snapshot, name string) bool {
+	for _, p := range snap.Projects {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHostKey(snap *Snapshot, hostPort string) bool {
+	for _, h := range snap.HostKeys {
+		if h.HostPort == hostPort {
+			return true
+		}
+	}
+	return false
+}
+
+// TestExportSnapshotForProfile_ScopesEveryTable is the Plan-39 core matrix: a
+// profile-A snapshot contains exactly A's servers, ONLY the credentials those
+// servers reference, A's profile+grants, A's projects, A's host keys — and NO
+// audit rows ever.
+func TestExportSnapshotForProfile_ScopesEveryTable(t *testing.T) {
+	s := newTestStore(t)
+	profA := seedScopedVault(t, s)
+
+	snap, err := s.ExportSnapshotForProfile(profA)
+	if err != nil {
+		t.Fatalf("ExportSnapshotForProfile: %v", err)
+	}
+	if snap.Version != 1 {
+		t.Fatalf("Version = %d, want 1 (same envelope, subset rows)", snap.Version)
+	}
+	// Servers: exactly srvA + srvNoCred; srvB (granted to the OTHER profile) absent.
+	if !hasServer(snap, "srvA") || !hasServer(snap, "srvNoCred") {
+		t.Fatalf("granted servers missing: %+v", snap.Servers)
+	}
+	if hasServer(snap, "srvB") {
+		t.Fatal("out-of-profile server srvB leaked into the scoped snapshot")
+	}
+	// Credentials: cA + sudo cS referenced by srvA; cB (srvB's) must NOT leave.
+	if !hasCred(snap, "secA") || !hasCred(snap, "secSudo") {
+		t.Fatalf("referenced credentials missing: %+v", snap.Credentials)
+	}
+	if hasCred(snap, "secB") {
+		t.Fatal("out-of-profile credential secB leaked into the scoped snapshot")
+	}
+	// Profiles + grants: exactly profileA and its two grants.
+	if len(snap.Profiles) != 1 || snap.Profiles[0].Name != "profileA" {
+		t.Fatalf("profiles must be exactly [profileA]: %+v", snap.Profiles)
+	}
+	if len(snap.Grants) != 2 {
+		t.Fatalf("profileA grants must number 2 (srvA+srvNoCred), got %+v", snap.Grants)
+	}
+	// Projects: only projA (projB belongs to profileB; its token must not verify offline).
+	if !hasProject(snap, "projA") || hasProject(snap, "projB") {
+		t.Fatalf("projects must be exactly [projA]: %+v", snap.Projects)
+	}
+	// Host keys: only srvA's; srvB's stays server-side.
+	if !hasHostKey(snap, "10.0.0.1:22") || hasHostKey(snap, "10.0.0.2:22") {
+		t.Fatalf("host_keys must be exactly srvA's: %+v", snap.HostKeys)
+	}
+	// Audit: NEVER carried (offline audit is the local sidecar; command history stays server-side).
+	if len(snap.Audit) != 0 {
+		t.Fatalf("scoped snapshot must carry no audit rows, got %d", len(snap.Audit))
+	}
+}
+
+// TestExportSnapshotForProfile_UnknownProfileErrors: a loud owner error, not an
+// empty-but-200 snapshot.
+func TestExportSnapshotForProfile_UnknownProfileErrors(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.ExportSnapshotForProfile("no-such-profile"); err == nil {
+		t.Fatal("unknown profile must error")
+	}
+}
+
+// TestExportSnapshotForProfile_ZeroGrants: a bound-but-empty profile exports a
+// structurally valid, empty-servers snapshot (client pulls it fine; TUI shows
+// 「无服务器」) — with the profile row and zero grants intact for hydration.
+func TestExportSnapshotForProfile_ZeroGrants(t *testing.T) {
+	s := newTestStore(t)
+	pid := seedProfile(t, s, "empty")
+	snap, err := s.ExportSnapshotForProfile(pid)
+	if err != nil {
+		t.Fatalf("ExportSnapshotForProfile(empty): %v", err)
+	}
+	if len(snap.Servers) != 0 || len(snap.Grants) != 0 || len(snap.Audit) != 0 {
+		t.Fatalf("empty profile must export zero rows: %+v", snap)
+	}
+	if len(snap.Profiles) != 1 || snap.Profiles[0].Name != "empty" {
+		t.Fatalf("the bound profile row must still be present for hydration: %+v", snap.Profiles)
+	}
+}
+
+// TestExportSnapshotForProfile_StillHydrates round-trips the scoped snapshot
+// through ImportSnapshot into a fresh store (the offline mcp --cache path):
+// hydration must succeed and re-grant exactly the scoped set.
+func TestExportSnapshotForProfile_StillHydrates(t *testing.T) {
+	s := newTestStore(t)
+	profA := seedScopedVault(t, s)
+	snap, err := s.ExportSnapshotForProfile(profA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newTestStore(t)
+	if err := b.ImportSnapshot(snap); err != nil {
+		t.Fatalf("ImportSnapshot(scoped): %v", err)
+	}
+	ids, err := b.ServersForProfile(profA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("hydrated profile must resolve 2 servers, got %v", ids)
+	}
+}

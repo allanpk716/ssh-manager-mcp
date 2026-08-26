@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -71,7 +72,17 @@ func standUpServe(t *testing.T) (url, cacheToken string) {
 	}
 	t.Cleanup(func() { st.Close() })
 	cid, _ := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
-	if _, err := st.AddServer(&models.Server{Name: "gpu", Host: "192.0.2.10", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid}); err != nil {
+	srvID, err := st.AddServer(&models.Server{Name: "gpu", Host: "192.0.2.10", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Plan 39: the device code is bound to a profile whose grant set is the
+	// pull's scope — grant gpu so the scoped snapshot still carries 1 server.
+	profID, err := st.AddProfile("team-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profID, []string{srvID}); err != nil {
 		t.Fatal(err)
 	}
 	r, err := mcpserver.NewServeRunner(st)
@@ -81,7 +92,7 @@ func standUpServe(t *testing.T) (url, cacheToken string) {
 	t.Cleanup(r.Close)
 	srv := httptest.NewServer(r.HTTPHandler())
 	t.Cleanup(srv.Close)
-	_, code, err := st.AddCacheToken("laptop")
+	_, code, err := st.AddCacheToken("laptop", profID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,6 +181,59 @@ func TestCacheStatus_ReportsSnapshot(t *testing.T) {
 	stOut := must("cache", "status")
 	if !strings.Contains(stOut.String(), "servers:  1") {
 		t.Fatalf("status did not report 1 server: %s", stOut.String())
+	}
+	// Plan 39 provenance: the pull came from a real (scoped) ServeRunner →
+	// the meta carries scoped=true → the bound profile is shown.
+	if !strings.Contains(stOut.String(), "scope:    team-a") {
+		t.Fatalf("scoped pull must report the bound profile in scope:, got: %s", stOut.String())
+	}
+}
+
+// TestCacheStatus_UnverifiedScope (Plan 39, code-review #3): a cache pulled
+// BEFORE Plan 39 (meta without `scoped`) must NEVER show a profile name — a
+// single-profile whole-vault snapshot is shape-identical to a cropped one, and
+// naming the profile would pass the legacy cache off as cropped.
+func TestCacheStatus_UnverifiedScope(t *testing.T) {
+	url, code := standUpServe(t)
+	withDEK(t)
+	cacheDir := t.TempDir()
+	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": cacheDir})
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"cache", "pull", "--url", url, "--token", code, "--allow-plaintext"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	// Downgrade the meta to its pre-Plan-39 shape: no `scoped` field.
+	metaPath := filepath.Join(cacheDir, "cache.meta.json")
+	mb, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(mb, &raw); err != nil {
+		t.Fatal(err)
+	}
+	delete(raw, "scoped")
+	lb, _ := json.Marshal(raw)
+	if err := os.WriteFile(metaPath, lb, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st := &bytes.Buffer{}
+	root2 := NewRootCmd()
+	root2.SetArgs([]string{"cache", "status"})
+	root2.SetOut(st)
+	if err := root2.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(st.String(), "scope:    team-a") {
+		t.Fatalf("legacy (unscoped) meta must NOT show the profile name: %s", st.String())
+	}
+	if !strings.Contains(st.String(), "unverified") {
+		t.Fatalf("legacy meta must show the unverified scope line: %s", st.String())
 	}
 }
 

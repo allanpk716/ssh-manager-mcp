@@ -110,6 +110,8 @@ claude mcp add ssh ssh-manager -e SSHMGR_TOKEN=<TOKEN> -- mcp
 3. **已建立的 `forward_port` 隧道——revoke/disable 后 ≤ 控制轮询间隔（~15s）内拆除；owner 随时可急停**：`projects disable` / `revoke` 级联拆隧道（disable 语义含「审查中」，威胁面同 revoke；project 行被删按非 active 处理、拆；`rotate` 不拆）；owner 在权威 vault 所在机器上 `ssh-manager tunnels kill <tunnel_id>`（单条，CLI 轮询 ≤45s 至 applied）/ `tunnels kill --project <name>`（拆该项目全部存量）；owner 撤回 bind 白名单条目（`serve bind rm`）后 ≤ 控制轮询间隔内，绑定该地址的存量隧道关闭（环回不受影响）。被吊销的 project 自己调 `close_port` 仍会先被第 2 层的 401 挡住。**时效口径（诚实化）**：以上 ≤15s 以 **store 健康 + 控制循环存活**为前提——store 持续读写故障时，lease/执法纪律降级为**有界关闭**（≤ ~2min，不存在「无限期暴露」）；**进程级 hang（控制 goroutine 死锁）不在 DB kill 保障域内**——数据面可能继续转发且 DB 侧机制全部失效，应急 = 重启 broker 进程 / 杀进程（其全部隧道随进程死，这本身就是急停手段）。
 4. **离线 cache——回连即销毁；永离线失窃的根治仍 = 轮换服务器凭据**（Plan 34 起）：`cache-tokens revoke` 不只断"拉新"——该机**回连即销毁**本地 cache（下次自动保鲜 ≤30min lazy cadence，或手动 `cache pull`，收到 pinned 401 → DEK / `cache.auth.json` / `cache.bin` / `cache.meta.json` 四件销毁 + `quarantine/` 痕迹；此后 spawn 报明确归因错误、无凭据不再自动拉取；恢复 = 重新发码 + `cache pull`）。**永不离线的失窃机**则没有任何服务端机制能远程废掉"密文 + DEK + 二进制"三件套的本地解密能力——唯一根治仍是轮换服务器凭据（`servers edit <name> --password/--key`）。project token **不在**销毁清单（`.claude.json` 是用户自己的 agent 配置）——失窃处置 = cache token 与该机 project token **都 revoke**。后台任务与 cache 无涉——任务表在 broker 进程内、不进快照，离线 `mcp --cache` 模式各自起各自的独立任务表。详见 [multi-machine.md 吊销节](./multi-machine.md#吊销机器失窃--设备码泄露)。
 
+> **设备码绑定 profile（Plan 39）**：`cache-tokens add --name <机> --profile <装箱单>`——该设备拉到的 `/snapshot` 就是、且只是这个 profile 授权的服务器（含凭据）；未授权服务器不出服务器。Plan 39 之前签发的存量码拉取被拒（**403**，本地缓存不毁），`cache-tokens bind <name> <profile>` 原地补绑即恢复。一台机 = 一枚码 = 一个 profile。
+
 未实现的拆除手段见 docs/backlog.md。
 
 `rotate` 保持 project id 和 profile 不变，**只换 token**（serve 模式下旧 token 同样逐请求即拒）。

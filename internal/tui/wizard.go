@@ -47,6 +47,7 @@ const (
 	stepMcpConfig     // .mcp.json finish screen (overlay)
 	// server flow (T4) — ①-④ reuse the standalone steps above
 	stepClientName   // 客户端机器名（server 角色：profile 默认名）
+	stepBindProfile  // 多 profile resume 的绑定选择（Plan 39——绝不静默绑字母序第一个）
 	stepDeviceIssue  // device-code issuance in flight (waiting; r retry on err)
 	stepDeviceToken  // 设备码 one-time screen (overlay, 密钥 2/2)
 	stepAddr         // LAN address select (spec §2.4 ⑥ 地址捕获)
@@ -279,6 +280,15 @@ func (w *wizardModel) enterServer() {
 	if !w.openVaultOrErr() {
 		return
 	}
+	w.resumeServerFlow()
+}
+
+// resumeServerFlow runs the server-flow resume heuristic (enterServer's doc
+// above). Split out of enterServer so the stepBindProfile picker (Plan 39)
+// can re-enter it after the owner picks a binding — with several existing
+// profiles the resume paths must NEVER silently bind the alphabetically-first
+// one (the same 0/1/N discipline as the standalone→server upgrade segment).
+func (w *wizardModel) resumeServerFlow() {
 	profiles, perr := w.st.ListProfiles()
 	projects, jerr := w.st.ListProjects()
 	tokens, terr := w.st.ListCacheTokens()
@@ -292,12 +302,26 @@ func (w *wizardModel) enterServer() {
 	case len(profiles) == 0:
 		w.startClientName()
 	case len(projects) == 0:
-		w.data.profileName, w.data.profileID = profiles[0].Name, profiles[0].ID
-		w.data.clientName = profiles[0].Name // prefill for issueDeviceCode
+		if w.data.profileID == "" && len(profiles) > 1 {
+			w.openBindProfilePicker()
+			return
+		}
+		p := profiles[0]
+		if w.data.profileID != "" {
+			for _, cand := range profiles {
+				if cand.ID == w.data.profileID {
+					p = cand
+				}
+			}
+		} else {
+			w.data.profileID = p.ID
+		}
+		w.data.profileName = p.Name
+		w.data.clientName = p.Name // prefill for issueDeviceCode
 		w.data.projName = defaultHostName()
 		w.step = stepProject
 		w.form = w.projectForm()
-		w.status = fmt.Sprintf("检测到既有 profile %s，跳过服务器录入与 profile 创建", profiles[0].Name)
+		w.status = fmt.Sprintf("检测到既有 profile %s，跳过服务器录入与 profile 创建", p.Name)
 	case len(tokens) > 0:
 		// Everything minted → serve segment. Recover the cert fingerprint
 		// (display-only input to the access card) via the idempotent
@@ -316,10 +340,38 @@ func (w *wizardModel) enterServer() {
 		// profile+project done, device code missing. Load the profileID so the
 		// client-name submit knows entity creation is complete and routes
 		// straight to the code issuance (see stepFormDone@stepClientName).
-		w.data.profileID = profiles[0].ID
+		if w.data.profileID == "" && len(profiles) > 1 {
+			w.openBindProfilePicker()
+			return
+		}
+		if w.data.profileID == "" {
+			w.data.profileID = profiles[0].ID
+		}
 		w.startClientName()
 		w.status = "profile/project 已完成（project token 已在此前展示，丢失可在主控台 Projects 页 [a] 重发），继续签发设备码"
 	}
+}
+
+// openBindProfilePicker opens the multi-profile resume binding picker (Plan 39):
+// when a resume path needs a binding and several profiles exist, the owner
+// picks — re-running resumeServerFlow afterwards routes to the original target
+// with the chosen id already set. projectProfileOptions is shared with the
+// issue-device-code / project forms (label = name, value = id).
+func (w *wizardModel) openBindProfilePicker() {
+	profiles, err := w.st.ListProfiles()
+	if err != nil || len(profiles) < 2 {
+		// Unreachable in practice (the caller just listed ≥2); fall through to
+		// the sole/zero-profile routing rather than trapping the resume.
+		w.resumeServerFlow()
+		return
+	}
+	w.step = stepBindProfile
+	w.form = huh.NewForm(huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("绑定哪个 profile？（决定本次向导补建的 project 与设备码的授权范围）").
+			Options(projectProfileOptions(profiles)...).Value(&w.data.profileID),
+	))
+	w.status = "检测到多个 profile——本次向导补发的 project/设备码绑定到哪个 profile，请选择"
 }
 
 // startClientName opens the 客户端机器名 step — the server flow's first
@@ -350,7 +402,7 @@ func (w wizardModel) issueDeviceCode() tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		_, code, err := w.st.AddCacheToken(strings.TrimSpace(w.data.clientName))
+		_, code, err := w.st.AddCacheToken(strings.TrimSpace(w.data.clientName), w.data.profileID)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -649,6 +701,16 @@ func (w wizardModel) stepFormDone() (tea.Model, tea.Cmd) {
 		}
 		w.askFirstServer()
 		return w, w.form.Init()
+	case stepBindProfile:
+		// The picker set data.profileID (a huh Select always commits one
+		// option); re-run the resume heuristic — it now routes past the
+		// picker with the chosen binding. An (unreachable) empty selection
+		// simply reopens the picker.
+		w.resumeServerFlow()
+		if w.form != nil {
+			return w, w.form.Init()
+		}
+		return w, nil
 	case stepAddr:
 		w.data.serveAddr = strings.TrimSpace(w.data.serveAddr)
 		w.step = stepServeAdmin
