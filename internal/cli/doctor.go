@@ -52,20 +52,6 @@ type doctorCheck struct {
 // WARN alone never changes the exit code.
 var errDoctorFindings = errors.New("doctor: FAIL findings detected")
 
-// doctorExitCode is the stable exit-code convention (scripts rely on it):
-// 0 = no FAIL, 1 = ≥1 FAIL (errDoctorFindings, wrapped included),
-// 2 = doctor internal error.
-func doctorExitCode(err error) int {
-	switch {
-	case err == nil:
-		return 0
-	case errors.Is(err, errDoctorFindings):
-		return 1
-	default:
-		return 2
-	}
-}
-
 // doctorCheckFuncs is the checks table — T4 (serve cert/service, client
 // cache) appends entries here. Every check is self-contained and
 // side-effect-free; order only affects display.
@@ -597,9 +583,8 @@ func checkClientCache() []doctorCheck {
 	return []doctorCheck{c}
 }
 
-// runDoctor executes every check, renders the report, and returns the error
-// the exit-code convention is read from: nil = 0 (no FAIL),
-// errDoctorFindings = 1 (≥1 FAIL), any other error = 2 (internal error).
+// runDoctor executes every check, renders the report, and returns an error
+// when FAIL findings are detected (wrapped errDoctorFindings).
 func runDoctor(cmd *cobra.Command, _ []string) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "ssh-manager doctor (%s)\n", buildinfo.Version)
@@ -620,7 +605,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintf(out, "overall: %d WARN, %d FAIL\n", warn, fail)
 	if fail > 0 {
-		return fmt.Errorf("%w (%d) — see the report above", errDoctorFindings, fail)
+		return NewExitCodeError(1, fmt.Errorf("%w (%d) — see the report above", errDoctorFindings, fail))
 	}
 	return nil
 }

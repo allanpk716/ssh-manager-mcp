@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -105,19 +104,16 @@ func TestDoctorExitCodes(t *testing.T) {
 		}
 	}
 
-	// State 3 — the mapping itself: nil → 0, findings (wrapped included) → 1,
-	// any other error → 2.
-	if got := doctorExitCode(nil); got != 0 {
-		t.Fatalf("nil must map to 0, got %d", got)
+	// State 3 — the wiring: findings (wrapped included) keep errors.Is AND
+	// pin exit 1 via ExitCodeFor; a plain error maps to the generic 1.
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("corrupt role leg must still return findings, got: %v", err)
 	}
-	if got := doctorExitCode(errDoctorFindings); got != 1 {
-		t.Fatalf("errDoctorFindings must map to 1, got %d", got)
+	if got := ExitCodeFor(err); got != 1 {
+		t.Fatalf("findings must map to exit 1, got %d", got)
 	}
-	if got := doctorExitCode(fmt.Errorf("%w (1) — see report", errDoctorFindings)); got != 1 {
-		t.Fatalf("wrapped findings must still map to 1, got %d", got)
-	}
-	if got := doctorExitCode(errors.New("boom")); got != 2 {
-		t.Fatalf("internal error must map to 2, got %d", got)
+	if got := ExitCodeFor(errors.New("boom")); got != 1 {
+		t.Fatalf("plain error must map to generic 1, got %d", got)
 	}
 }
 
