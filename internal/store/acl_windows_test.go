@@ -3,6 +3,7 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,7 +31,7 @@ func TestHardenACL_RemovesBroadGroups(t *testing.T) {
 		t.Fatalf("HardenACL: %v", err)
 	}
 
-	dacl, sd, err := getDACLForTest(f)
+	dacl, sd, err := readDACL(f)
 	if err != nil {
 		t.Fatalf("read DACL: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestHardenACL_OnDir(t *testing.T) {
 	if err := HardenACL(dir); err != nil {
 		t.Fatalf("HardenACL on dir: %v", err)
 	}
-	dacl, sd, err := getDACLForTest(dir)
+	dacl, sd, err := readDACL(dir)
 	if err != nil {
 		t.Fatalf("read DACL: %v", err)
 	}
@@ -120,7 +121,7 @@ func TestFileKeyProvider_SetHardensACLOnWindows(t *testing.T) {
 	if err := p.Set(mk); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	dacl, sd, err := getDACLForTest(p.Path)
+	dacl, sd, err := readDACL(p.Path)
 	if err != nil {
 		t.Fatalf("read DACL: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestOpen_HardensStoreDBACL(t *testing.T) {
 		t.Fatalf("store.db not created: %v", err)
 	}
 
-	dacl, sd, err := getDACLForTest(dbPath)
+	dacl, sd, err := readDACL(dbPath)
 	if err != nil {
 		t.Fatalf("read DACL on store.db: %v", err)
 	}
@@ -290,7 +291,7 @@ func TestOpen_DoesNotRewriteExistingStoreDBACL(t *testing.T) {
 		t.Fatalf("Open #2 changed the ACL to something unexpected (neither corrupt nor original): %s", afterSecondSDDL)
 	}
 	// Sanity: the Everyone ACE (our corruption marker) must still be present.
-	dacl2, _, _ := getDACLForTest(dbPath)
+	dacl2, _, _ := readDACL(dbPath)
 	if !trusteeInACL(dacl2, everyoneSID) {
 		t.Fatalf("Everyone ACE (corruption marker) missing after Open #2 — ACL was rewritten")
 	}
@@ -299,9 +300,9 @@ func TestOpen_DoesNotRewriteExistingStoreDBACL(t *testing.T) {
 // getDACLForTestOrFatal reads the DACL+SD for path, fataling on error.
 func getDACLForTestOrFatal(t *testing.T, path string) *windows.SECURITY_DESCRIPTOR {
 	t.Helper()
-	_, sd, err := getDACLForTest(path)
+	_, sd, err := readDACL(path)
 	if err != nil {
-		t.Fatalf("getDACLForTest(%s): %v", path, err)
+		t.Fatalf("readDACL(%s): %v", path, err)
 	}
 	return sd
 }
@@ -347,7 +348,7 @@ func TestHardenWALSidecars(t *testing.T) {
 	// Both sidecars must now be hardened: inheritance disabled, no Everyone.
 	for _, suffix := range []string{"-shm", "-wal"} {
 		p := storePath + suffix
-		dacl, sd, err := getDACLForTest(p)
+		dacl, sd, err := readDACL(p)
 		if err != nil {
 			t.Fatalf("read DACL on %s: %v", suffix, err)
 		}
@@ -383,4 +384,339 @@ func TestHardenWALSidecars_NoOpOnFreshStore(t *testing.T) {
 			t.Errorf("unexpected %s on fresh store (Open should not create WAL sidecars)", suffix)
 		}
 	}
+}
+
+// seedLooseACE plants a single explicit allow ACE for sid with the given mask
+// (PROTECTED — no inheritance), replacing the file's DACL. Test-only seeding,
+// SetNamedSecurityInfo direct (TestOpen_DoesNotRewriteExistingStoreDBACL
+// precedent).
+func seedLooseACE(t *testing.T, path string, sid *windows.SID, mask uint32) {
+	t.Helper()
+	dacl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+		AccessPermissions: windows.ACCESS_MASK(mask),
+		AccessMode:        windows.GRANT_ACCESS,
+		Inheritance:       windows.NO_INHERITANCE,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeValue: windows.TrusteeValueFromSID(sid),
+		},
+	}}, nil)
+	if err != nil {
+		t.Fatalf("build seed DACL: %v", err)
+	}
+	si := windows.SECURITY_INFORMATION(windows.PROTECTED_DACL_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION)
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, si, nil, nil, dacl, nil); err != nil {
+		t.Fatalf("seed DACL: %v", err)
+	}
+}
+
+// seedLooseOwner plants a non-whitelisted owner (Everyone). It reports the
+// error instead of fataling: the assignment needs WRITE_OWNER on the object,
+// which the hardened DACL deliberately withholds from the current user, and
+// under a non-elevated (UAC-filtered) token even a fresh file rejects the
+// assignment (Everyone/BUILTIN\Users → ERROR_INVALID_OWNER; Administrators is
+// deny-only; probed 2026-08-26, Plan 38 T1). The caller decides between
+// running the leg where the token permits it and skipping with the reason.
+func seedLooseOwner(t *testing.T, path string) error {
+	t.Helper()
+	everyone, err := windows.CreateWellKnownSid(windows.WinWorldSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	si := windows.SECURITY_INFORMATION(windows.OWNER_SECURITY_INFORMATION)
+	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, si, everyone, nil, nil, nil)
+}
+
+func mustEveryoneSID(t *testing.T) *windows.SID {
+	t.Helper()
+	sid, err := windows.CreateWellKnownSid(windows.WinWorldSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sid
+}
+
+func TestInspectFileACL_Hardened(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "master.key.plain")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := HardenACL(f); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("InspectFileACL: %v", err)
+	}
+	if !rep.Supported || rep.TooLoose() {
+		t.Fatalf("hardened file must not be loose: %+v", rep)
+	}
+	if !rep.Protected {
+		t.Error("hardened file must report Protected")
+	}
+	if len(rep.UnexpectedReadGrantors) != 0 {
+		t.Errorf("hardened file must have no unexpected grantors: %v", rep.UnexpectedReadGrantors)
+	}
+	if rep.OwnerUnexpected {
+		t.Error("hardened file owner (creator) must be whitelisted")
+	}
+}
+
+func TestInspectFileACL_TooLoose_Matrix(t *testing.T) {
+	dir := t.TempDir()
+	newFile := func() string {
+		f := filepath.Join(dir, fmt.Sprintf("m%d.key", len(dirEntries(t, dir))))
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	everyone := mustEveryoneSID(t)
+	users, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ① null DACL — per the Step-1 probe outcome, ONE of the two legs:
+	//   (probe said plantable) assert DaclNull && TooLoose
+	//   (probe said NOT plantable) assert the fallback: explicit Everyone-allow
+	//   + UNPROTECTED covers signal 3 only — and DELETE the DaclNull assertion,
+	//   leaving the §7 residual as registered.
+	// Probe outcome (2026-08-26): plantable — readback = SE_DACL_PRESENT=1 +
+	// nil DACL pointer (the null-DACL form), so the mandatory leg runs.
+	f := newFile()
+	si := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION)
+	if err := windows.SetNamedSecurityInfo(f, windows.SE_FILE_OBJECT, si, nil, nil, nil, nil); err != nil {
+		t.Skipf("null-DACL not plantable via x/sys (probe branch): %v", err)
+	}
+	rep, err := InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("①: %v", err)
+	}
+	if !rep.DaclNull || !rep.TooLoose() {
+		t.Errorf("① null DACL must be DaclNull && TooLoose: %+v", rep)
+	}
+
+	// ② broad inheritable parent → child inherits the Everyone ACE.
+	pdir := filepath.Join(dir, "broad-parent")
+	if err := os.Mkdir(pdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pdacl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+		AccessPermissions: windows.GENERIC_ALL,
+		AccessMode:        windows.GRANT_ACCESS,
+		Inheritance:       windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeValue: windows.TrusteeValueFromSID(everyone),
+		},
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	psi := windows.SECURITY_INFORMATION(windows.UNPROTECTED_DACL_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION)
+	if err := windows.SetNamedSecurityInfo(pdir, windows.SE_FILE_OBJECT, psi, nil, nil, pdacl, nil); err != nil {
+		t.Fatalf("seed broad parent: %v", err)
+	}
+	child := filepath.Join(pdir, "child.key")
+	if err := os.WriteFile(child, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = InspectFileACL(child)
+	if err != nil {
+		t.Fatalf("②: %v", err)
+	}
+	if rep.TooLoose() != true || !containsSID(rep.UnexpectedReadGrantors, everyone.String()) {
+		t.Errorf("② inherited broad ACE must be caught: %+v", rep)
+	}
+
+	// ③ explicit Everyone-allow read ACE.
+	f = newFile()
+	seedLooseACE(t, f, everyone, uint32(windows.FILE_GENERIC_READ))
+	rep, err = InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("③: %v", err)
+	}
+	if !rep.TooLoose() || !containsSID(rep.UnexpectedReadGrantors, everyone.String()) {
+		t.Errorf("③ explicit Everyone read must be caught: %+v", rep)
+	}
+
+	// ④ BUILTIN\Users read ACE (any non-whitelisted SID representative).
+	f = newFile()
+	seedLooseACE(t, f, users, uint32(windows.FILE_GENERIC_READ))
+	rep, err = InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("④: %v", err)
+	}
+	if !rep.TooLoose() || !containsSID(rep.UnexpectedReadGrantors, users.String()) {
+		t.Errorf("④ BUILTIN\\Users read must be caught: %+v", rep)
+	}
+
+	// ⑤ write-only mask → NOT dangerous (mask filter pin).
+	f = newFile()
+	seedLooseACE(t, f, everyone, uint32(windows.FILE_WRITE_DATA))
+	rep, err = InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("⑤: %v", err)
+	}
+	if rep.TooLoose() {
+		t.Errorf("⑤ write-only Everyone must NOT be flagged: %+v", rep)
+	}
+
+	// ⑥ deny ACE → NOT flagged (allow-only pin).
+	f = newFile()
+	denyDACL, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+		AccessPermissions: windows.GENERIC_ALL,
+		AccessMode:        windows.DENY_ACCESS,
+		Inheritance:       windows.NO_INHERITANCE,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeValue: windows.TrusteeValueFromSID(everyone),
+		},
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dsi := windows.SECURITY_INFORMATION(windows.PROTECTED_DACL_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION)
+	if err := windows.SetNamedSecurityInfo(f, windows.SE_FILE_OBJECT, dsi, nil, nil, denyDACL, nil); err != nil {
+		t.Fatalf("seed deny: %v", err)
+	}
+	rep, err = InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("⑥: %v", err)
+	}
+	if rep.TooLoose() {
+		t.Errorf("⑥ Everyone-deny must NOT be flagged: %+v", rep)
+	}
+
+	// ⑦ WRITE_DAC-only → caught (elevation-bit positive).
+	f = newFile()
+	seedLooseACE(t, f, everyone, uint32(windows.WRITE_DAC))
+	rep, err = InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("⑦: %v", err)
+	}
+	if !rep.TooLoose() {
+		t.Errorf("⑦ WRITE_DAC-only must be caught: %+v", rep)
+	}
+
+	// ⑧ WRITE_OWNER-only → caught.
+	f = newFile()
+	seedLooseACE(t, f, everyone, uint32(windows.WRITE_OWNER))
+	rep, err = InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("⑧: %v", err)
+	}
+	if !rep.TooLoose() {
+		t.Errorf("⑧ WRITE_OWNER-only must be caught: %+v", rep)
+	}
+
+	// ⑨ raw GENERIC_ALL stored → read back expanded (fact #15 regression pin).
+	f = newFile()
+	seedLooseACE(t, f, everyone, 0x80000000)
+	rep, err = InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("⑨: %v", err)
+	}
+	if !rep.TooLoose() {
+		t.Errorf("⑨ GENERIC_ALL must expand to dangerous specific rights and be caught: %+v", rep)
+	}
+
+	// ⑩ INHERIT_ONLY allow ACE → NOT flagged (no effect on the file itself).
+	f = newFile()
+	ioDACL, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+		AccessPermissions: windows.GENERIC_ALL,
+		AccessMode:        windows.GRANT_ACCESS,
+		Inheritance:       windows.INHERIT_ONLY,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeValue: windows.TrusteeValueFromSID(everyone),
+		},
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(f, windows.SE_FILE_OBJECT, dsi, nil, nil, ioDACL, nil); err != nil {
+		t.Fatalf("seed inherit-only: %v", err)
+	}
+	rep, err = InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("⑩: %v", err)
+	}
+	if rep.TooLoose() {
+		t.Errorf("⑩ INHERIT_ONLY ACE must NOT be flagged: %+v", rep)
+	}
+}
+
+func TestInspectFileACL_Owner(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "owner.key")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := HardenACL(f); err != nil {
+		t.Fatal(err)
+	}
+	// Planting a non-whitelisted owner requires a token that may assign this
+	// owner: the hardened DACL withholds WRITE_OWNER from the current user by
+	// design (only admins can re-owner), and a non-elevated token rejects
+	// every candidate owner outright (probed 2026-08-26, Plan 38 T1 — see the
+	// spec §7 residual). Same degrade pattern as the null-DACL leg ①: run
+	// where seedable, skip with the reason elsewhere (whitelisted-owner
+	// coverage stays via TestInspectFileACL_Hardened's creator-owner
+	// assertion).
+	if err := seedLooseOwner(t, f); err != nil {
+		t.Skipf("non-whitelisted owner not seedable under this token (owner re-assignment needs an owner-capable token, probed 2026-08-26 — see spec §7 residual): %v", err)
+	}
+	rep, err := InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("InspectFileACL: %v", err)
+	}
+	if !rep.OwnerUnexpected || !rep.TooLoose() {
+		t.Fatalf("non-whitelisted owner must trigger: %+v", rep)
+	}
+	if rep.OwnerSID != mustEveryoneSID(t).String() {
+		t.Errorf("OwnerSID must render the planted SID: %s", rep.OwnerSID)
+	}
+	// restore owner to Administrators → not triggered
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	si := windows.SECURITY_INFORMATION(windows.OWNER_SECURITY_INFORMATION)
+	if err := windows.SetNamedSecurityInfo(f, windows.SE_FILE_OBJECT, si, admins, nil, nil, nil); err != nil {
+		t.Fatalf("restore owner: %v", err)
+	}
+	rep, err = InspectFileACL(f)
+	if err != nil {
+		t.Fatalf("InspectFileACL: %v", err)
+	}
+	if rep.OwnerUnexpected {
+		t.Errorf("Administrators owner must be whitelisted: %+v", rep)
+	}
+}
+
+func TestInspectFileACL_MissingPath(t *testing.T) {
+	if _, err := InspectFileACL(filepath.Join(t.TempDir(), "nope.key")); err == nil {
+		t.Fatal("missing path must return an error")
+	}
+}
+
+func containsSID(sids []string, sid string) bool {
+	for _, s := range sids {
+		if s == sid {
+			return true
+		}
+	}
+	return false
+}
+
+func dirEntries(t *testing.T, dir string) []os.DirEntry {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ents
 }

@@ -4,6 +4,7 @@ package store
 
 import (
 	"fmt"
+	"sort"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -128,15 +129,10 @@ func currentUserSID() (*windows.SID, error) {
 	return tu.User.Sid, nil
 }
 
-// ----------------------------------------------------------------------------
-// Test helpers (only compiled under the windows build tag, same as the impl).
-// These read the REAL on-disk DACL back via GetNamedSecurityInfo so tests
-// assert against the live state, not a mock.
-// ----------------------------------------------------------------------------
-
-// getDACLForTest reads the security descriptor for path and returns the DACL
-// plus the SECURITY_DESCRIPTOR (so the caller can also check control bits).
-func getDACLForTest(path string) (dacl *windows.ACL, sd *windows.SECURITY_DESCRIPTOR, err error) {
+// readDACL reads the security descriptor for path and returns the DACL plus
+// the SECURITY_DESCRIPTOR. Promoted from test helper for InspectFileACL
+// (Plan 38); behavior unchanged.
+func readDACL(path string) (dacl *windows.ACL, sd *windows.SECURITY_DESCRIPTOR, err error) {
 	sd, err = windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return nil, nil, fmt.Errorf("GetNamedSecurityInfo: %w", err)
@@ -148,8 +144,124 @@ func getDACLForTest(path string) (dacl *windows.ACL, sd *windows.SECURITY_DESCRI
 	return dacl, sd, nil
 }
 
+// aclDangerousBits is the signal-3 dangerous mask (spec §1.2): read data, or
+// the ability to rewrite the DACL / take ownership (self-elevation then read).
+// Read-back masks always carry expanded specific rights (measured 2026-08-26:
+// a stored GENERIC_ALL comes back as 0x00120089), so GENERIC bits never appear.
+const aclDangerousBits = windows.FILE_READ_DATA | windows.WRITE_DAC | windows.WRITE_OWNER
+
+// InspectFileACL reads the file's security descriptor back and reports whether
+// its protection matches the hardened shape: whitelist = SYSTEM,
+// BUILTIN\Administrators, and the current process user (exactly the three
+// HardenACL grants). Only "looser than hardened" is reported — deny ACEs,
+// INHERIT_ONLY ACEs, absent whitelist principals (over-tight) and whitelist
+// principals holding extra rights are deliberately NOT flagged (spec §1.2
+// asymmetry). Read-only: no SD is written.
+func InspectFileACL(path string) (FileACLReport, error) {
+	rep := FileACLReport{Supported: true}
+
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return FileACLReport{}, fmt.Errorf("inspect ACL: %w", err)
+	}
+
+	whitelist, err := aclWhitelist()
+	if err != nil {
+		return FileACLReport{}, fmt.Errorf("inspect ACL: %w", err)
+	}
+
+	// Signal 4 — owner (conservative: OWNER_RIGHTS ACEs could limit the
+	// owner's implicit WRITE_DAC, but we do not model that; anomaly advice).
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return FileACLReport{}, fmt.Errorf("inspect ACL: owner: %w", err)
+	}
+	rep.OwnerSID = owner.String()
+	rep.OwnerUnexpected = true
+	for _, w := range whitelist {
+		if w.Equals(owner) {
+			rep.OwnerUnexpected = false
+			break
+		}
+	}
+
+	// Signal 1 — DACL presence. The present bit is read from Control()
+	// (SECURITY_DESCRIPTOR.DACL()'s second return measured ambiguous on
+	// 2026-08-26; Control is authoritative).
+	ctrl, _, err := sd.Control()
+	if err != nil {
+		return FileACLReport{}, fmt.Errorf("inspect ACL: control: %w", err)
+	}
+	if ctrl&windows.SE_DACL_PRESENT == 0 {
+		rep.DaclNull = true
+		return rep, nil
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return FileACLReport{}, fmt.Errorf("inspect ACL: dacl: %w", err)
+	}
+	if dacl == nil {
+		rep.DaclNull = true
+		return rep, nil
+	}
+	rep.Protected = ctrl&windows.SE_DACL_PROTECTED != 0
+
+	// Signal 3 — grantor walk.
+	seen := map[string]bool{}
+	for i := uint16(0); i < dacl.AceCount; i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, uint32(i), &ace); err != nil {
+			continue // unreadable ACE: skip, the structural signals above stand
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			continue // deny/audit ACEs are tightening, not exposure (spec fact #9)
+		}
+		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
+			continue // applies to children only, not to this file (spec §1.2)
+		}
+		aceSID := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		whitelisted := false
+		for _, w := range whitelist {
+			if w.Equals(aceSID) {
+				whitelisted = true
+				break
+			}
+		}
+		if whitelisted || ace.Mask&aclDangerousBits == 0 {
+			continue
+		}
+		s := aceSID.String()
+		if !seen[s] {
+			seen[s] = true
+			rep.UnexpectedReadGrantors = append(rep.UnexpectedReadGrantors, s)
+		}
+	}
+	sort.Strings(rep.UnexpectedReadGrantors) // deterministic rendering
+	return rep, nil
+}
+
+// aclWhitelist builds the trusted-principal set: the exact three HardenACL
+// grants (well-known SIDs + the current process token user).
+func aclWhitelist() ([]*windows.SID, error) {
+	systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return nil, fmt.Errorf("build SYSTEM sid: %w", err)
+	}
+	adminsSID, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return nil, fmt.Errorf("build Administrators sid: %w", err)
+	}
+	userSID, err := currentUserSID()
+	if err != nil {
+		return nil, fmt.Errorf("resolve current user sid: %w", err)
+	}
+	return []*windows.SID{systemSID, adminsSID, userSID}, nil
+}
+
 // isDaclProtected reports whether the security descriptor has SE_DACL_PROTECTED
-// set (inheritance from parent disabled).
+// set (inheritance from parent disabled). Production reader since Plan 38 —
+// promoted out of the former test-helper block, behavior unchanged.
 func isDaclProtected(sd *windows.SECURITY_DESCRIPTOR) bool {
 	ctrl, _, err := sd.Control()
 	if err != nil {
@@ -161,6 +273,8 @@ func isDaclProtected(sd *windows.SECURITY_DESCRIPTOR) bool {
 // trusteeInACL reports whether any ACE in dacl applies to sid. It walks the
 // ACL via GetAce (advapi32) and compares each ACE's SID with SID.Equals —
 // locale-independent and exact (LookupAccountName would localize names).
+// Production reader since Plan 38 — promoted out of the former test-helper
+// block, behavior unchanged.
 func trusteeInACL(dacl *windows.ACL, sid *windows.SID) bool {
 	if dacl == nil || sid == nil {
 		return false
