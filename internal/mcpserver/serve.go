@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,15 @@ func NewServeRunner(st *store.Store) (*ServeRunner, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Plan 40 §2.1 legacy detection: active device-code names are about to be
+	// emitted as X-Sshmgr-Device-Name and used as client directory names — a
+	// casefold collision or an illegal legacy name must stop the serve BEFORE it
+	// serves, not mid-flight. Repair = revoke + re-add (never auto-rename).
+	if anomalies, aerr := st.ScanCacheTokenNameAnomalies(); aerr != nil {
+		return nil, fmt.Errorf("serve startup: device-code name scan failed: %w", aerr)
+	} else if len(anomalies) > 0 {
+		return nil, formatNameAnomalies(anomalies)
+	}
 	// checked arithmetic (§3.2): under the 1 GiB ceiling this cannot overflow;
 	// the belt-and-suspenders form still guards a future ceiling raise.
 	limit := cap + cap/3 + 64*1024
@@ -63,6 +73,19 @@ func NewServeRunner(st *store.Store) (*ServeRunner, error) {
 		return nil, fmt.Errorf("serve body limit overflow: cap=%d", cap)
 	}
 	return &ServeRunner{st: st, bodyLimit: limit, cache: make(map[string]*scopedServer)}, nil
+}
+
+// formatNameAnomalies builds the fail-closed startup refusal for Plan 40 §2.1
+// legacy detection. Pure so the wording is unit-testable without a dirty DB
+// (which cannot be built through the public API — the add gate refuses every
+// illegal/colliding name).
+func formatNameAnomalies(anomalies []string) error {
+	plural := "ies"
+	if len(anomalies) == 1 {
+		plural = "y"
+	}
+	return fmt.Errorf("serve refusing to start: %d device-code name anomal%s:\n  - %s\nrepair on this machine: `ssh-manager cache-tokens revoke <name>` then `cache-tokens add --name <new-name> --profile <profile>`",
+		len(anomalies), plural, strings.Join(anomalies, "\n  - "))
 }
 
 // ServerForProject returns the cached scoped server for project, building it on first use.

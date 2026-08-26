@@ -269,3 +269,34 @@ func (s *Store) RevokedCacheTokenNameByPrefix(prefix string) (string, bool, erro
 	}
 	return name, true, nil
 }
+
+// ScanCacheTokenNameAnomalies checks every ACTIVE device-code row for Plan-40
+// name discipline violations: whitelist-invalid names (free-text era legacy)
+// and casefold collisions between two active rows. Revoked rows are excluded —
+// revoke is the repair path. Empty slice = clean.
+func (s *Store) ScanCacheTokenNameAnomalies() ([]string, error) {
+	rows, err := s.db.Query(`SELECT name FROM cache_tokens WHERE status='active' ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var anomalies []string
+	seen := map[string]string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		if verr := instname.Valid(name); verr != nil {
+			anomalies = append(anomalies, fmt.Sprintf("invalid device name %q (%v) — revoke and re-add with a valid name", name, verr))
+			continue
+		}
+		f := instname.Fold(name)
+		if prev, ok := seen[f]; ok {
+			anomalies = append(anomalies, fmt.Sprintf("case-insensitive collision %q vs %q — revoke one and re-add under a distinct name", prev, name))
+			continue
+		}
+		seen[f] = name
+	}
+	return anomalies, rows.Err()
+}

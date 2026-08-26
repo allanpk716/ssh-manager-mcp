@@ -507,3 +507,34 @@ func TestBindCacheToken_NameDiscipline(t *testing.T) {
 		t.Fatal("bind must validate the name too (defense)")
 	}
 }
+
+// TestScanCacheTokenNameAnomalies pins the Plan 40 §2.1 startup scan: ACTIVE
+// rows with whitelist-invalid names or casefold collisions are anomalies;
+// revoked rows never participate (revoke is the repair path); a clean store
+// scans to an empty slice.
+func TestScanCacheTokenNameAnomalies(t *testing.T) {
+	st, prof := newTokenStore(t)
+	// 直接 SQL 插非法/碰撞行（绕过 add 的新闸——模拟自由文本时代存量；store 测试同包,st.db 可直达）
+	ins := `INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,profile_id,created_at,updated_at)
+		VALUES (?,?,x'00',x'00',?,?,?,1,1)`
+	exec := func(id, name, prefix, status string) {
+		t.Helper()
+		if _, err := st.db.Exec(ins, id, name, prefix, status, prof); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec("a1", "agentA", "p1", "active")
+	exec("a2", "AGENTA", "p2", "active")   // casefold 碰撞
+	exec("a3", "bad name", "p3", "active") // 白名单不合规
+	exec("a4", "ok-name", "p4", "active")
+	exec("a5", "legacy-bad", "p5", "revoked") // revoked 不参与
+	got, err := st.ScanCacheTokenNameAnomalies()
+	if err != nil || len(got) != 2 {
+		t.Fatalf("anomalies = %v, %v (want 2: collision + illegal)", got, err)
+	}
+	// 干净库 → 空
+	st2, _ := newTokenStore(t)
+	if got, _ := st2.ScanCacheTokenNameAnomalies(); len(got) != 0 {
+		t.Fatalf("clean = %v", got)
+	}
+}
