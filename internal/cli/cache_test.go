@@ -200,6 +200,13 @@ func TestCacheStatus_ReportsSnapshot(t *testing.T) {
 // single-profile whole-vault snapshot is shape-identical to a cropped one, and
 // naming the profile would pass the legacy cache off as cropped.
 func TestCacheStatus_UnverifiedScope(t *testing.T) {
+	// Fix round 1: the negative assertion below scans the whole LIST output,
+	// and ListInstances() reads the REAL user-config root (only the cache dir
+	// is env-redirected). Isolate APPDATA/XDG_CONFIG_HOME like the T11/T12
+	// tests so a real scoped instance on this machine can't fail us on an
+	// unrelated row.
+	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	url, code := standUpServe(t)
 	withDEK(t)
 	cacheDir := t.TempDir()

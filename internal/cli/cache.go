@@ -164,11 +164,15 @@ func cacheStatusSingle(cmd *cobra.Command, instance string) error {
 			Scoped     bool   `json:"scoped"`
 			DeviceName string `json:"device_name"`
 		}
-		if json.Unmarshal(mb, &m) == nil && m.URL != "" {
-			url = m.URL
-		}
-		scoped = m.Scoped
-		if m.DeviceName != "" {
+		if uerr := json.Unmarshal(mb, &m); uerr == nil {
+			if m.URL != "" {
+				url = m.URL
+			}
+			scoped = m.Scoped
+			// Render rule unified with the list view (fix round 1): a PARSED
+			// meta with a blank device_name renders blank — a plaintext or
+			// legacy pull records no identity BY DESIGN; "(unknown)" is
+			// reserved for an unreadable/unparseable meta.
 			device = m.DeviceName
 		}
 	}
