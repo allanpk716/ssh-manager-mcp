@@ -770,7 +770,7 @@ ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指�
 
 - **TUI 多实例已落地（批2）**：`[i]` 实例 picker 会话内切换、连接表单「实例名」字段 + 前置校验三连、换码预防性警告、向导接入卡 `--instance`、override env 单槽模式互斥（禁用而非适配）——逐键细节见 [tui-multi-machine.md](./tui-multi-machine.md)。无人值守的批量刷新仍推荐计划任务 wrapper：每实例一条任务 + 各自的 env 文件（设备码是 per-instance 的；TUI 面板 `[s]` 只管当前选中槽）。
 - **自动归位只作用于真空机首次 enroll**：存量默认槽机器**永不自动迁移**（意图标记 meta/config 在场即不归位）——要进实例形态显式 `--instance` 重新 enroll，或按下方 runbook v2 清三件套后裸拉归位。
-- **doctor 暂不感知命名实例**（批2 后维持）：只有命名实例的机器，doctor 的 client-cache 检查会报"cache 缺失"（roles 判定已修为 client；不静默但属误报）——doctor 感知命名实例跟随 Plan 38 体系解决。
+- **doctor 已感知命名实例**（2026-08-27 落地）：`doctor` 枚举 `instances/<name>/` 逐实例诊断（行名 `client-cache[<name>]`，sidecar 矩阵与默认行同源：DEK 缺 → FAIL / auth 缺 → WARN / 超离线 cap → WARN「下次使用即自毁」/ 空 slot → INFO）。只有命名实例的机器，默认 `client-cache` 行不再误报"cache 缺失"——降级为 INFO 并指向下方实例行（全空机器仍 FAIL）。`SSHMGR_CACHE_DIR` / `SSHMGR_CACHE_DEK` 单槽覆盖生效时整组跳过（一行 INFO 可闻）。
 - 存量单实例机器**零迁移**：无 flag 的 pull/mcp/status 行为与旧版一致（门禁对存量空 `device_name` 走补记分支）。
 
 ### 失窃响应（多实例口径）

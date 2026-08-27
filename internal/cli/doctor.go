@@ -63,6 +63,7 @@ var doctorCheckFuncs = []func() []doctorCheck{
 	checkServeCert,
 	checkServeSvc,
 	checkClientCache,
+	checkClientCacheInstances,
 }
 
 // doctorEnvSeams is every SSHMGR_* env the CLI honors. Doctor reports which
@@ -73,6 +74,8 @@ var doctorEnvSeams = []string{
 	"SSHMGR_FILEKEY_PATH",
 	"SSHMGR_CACHE_DIR",
 	"SSHMGR_CACHE_DEK",
+	"SSHMGR_CACHE_DEK_DIR",
+	"SSHMGR_CACHE_MAX_OFFLINE",
 	"SSHMGR_SERVE_CERT",
 	"SSHMGR_SERVE_KEY",
 	"SSHMGR_SERVE_MARKER",
@@ -528,12 +531,12 @@ func checkServeSvc() []doctorCheck {
 	return []doctorCheck{c}
 }
 
-// checkClientCache reports the offline client cache. cache.bin present → the
-// sidecar matrix: DEK missing → FAIL (the cache cannot be decrypted — the
-// client-side FINDING A class), cache.auth.json missing → WARN (cache works
-// offline but never auto-refreshes), else PASS with the snapshot's age.
-// cache.bin missing splits by role: FAIL on a client machine (the cache IS
-// its vault), INFO elsewhere.
+// checkClientCache reports the offline client cache (the DEFAULT instance).
+// cache.bin present → cacheSidecarMatrix (DEK/auth/offline-cap sidecar
+// matrix). cache.bin missing splits by role: FAIL on a client machine —
+// UNLESS a named instance holds the offline cache (Plan 40: a machine whose
+// only cache lives in instances/<name>/ must not FAIL "cache missing"; the
+// instance rows below carry the diagnosis) — INFO elsewhere.
 func checkClientCache() []doctorCheck {
 	c := doctorCheck{Name: "client-cache"}
 	dir, bin, _, _, err := clientops.CachePaths()
@@ -547,9 +550,14 @@ func checkClientCache() []doctorCheck {
 	switch {
 	case errors.Is(serr, fs.ErrNotExist):
 		if st := doctorRole(); st != nil && st.Role == roles.RoleClient {
-			c.Status = statusFail
-			c.Detail = "cache.bin missing on a client machine — no offline vault"
-			c.Fix = "run `ssh-manager cache pull`"
+			if n := namedInstancesWithCache(); n > 0 {
+				c.Status = statusInfo
+				c.Detail = fmt.Sprintf("no default-instance cache.bin — %d named instance(s) hold the offline cache (diagnosed below)", n)
+			} else {
+				c.Status = statusFail
+				c.Detail = "cache.bin missing on a client machine — no offline vault"
+				c.Fix = "run `ssh-manager cache pull`"
+			}
 		} else {
 			c.Status = statusInfo
 			c.Detail = "cache.bin absent (no offline cache on this machine)"
@@ -570,36 +578,180 @@ func checkClientCache() []doctorCheck {
 		c.Fix = "check the vault directory (platform vault root could not be resolved)"
 		return []doctorCheck{c}
 	}
+	cacheSidecarMatrix(&c, dir, dekP, "", age)
+	return []doctorCheck{c}
+}
+
+// cacheSidecarMatrix completes a cache row whose cache.bin exists and statted
+// (age known): DEK presence (missing → FAIL, the cache cannot be decrypted —
+// the client-side FINDING A class) → auto-refresh credential presence
+// (missing → WARN, offline works but never refreshes) → the Plan-37 offline
+// cap overlay (a snapshot past its effective cap self-destructs on next use;
+// doctor is the only place the state is visible BEFORE it bites). instance is
+// "" for the default instance — Detail strings stay byte-identical to the
+// pre-Plan-40 wording — or a named instance's device name (label prefix on
+// Detail, --instance flags in Fix).
+func cacheSidecarMatrix(c *doctorCheck, dir, dekP, instance string, age time.Duration) {
+	label, pullFlag := "", ""
+	if instance != "" {
+		label, pullFlag = "instance "+instance+": ", " --instance "+instance
+	}
 	dekOK, dok := fileExists(dekP)
 	if dok != nil {
 		c.Status = statusFail
-		c.Detail = fmt.Sprintf("cache DEK stat failed: %v", dok)
+		c.Detail = fmt.Sprintf("%scache DEK stat failed: %v", label, dok)
 		c.Fix = "check the cache DEK file permissions"
-		return []doctorCheck{c}
+		return
 	}
 	if !dekOK {
 		c.Status = statusFail
-		c.Detail = fmt.Sprintf("cache.bin present (age %s) but its cache DEK is missing — cache undecryptable", age)
-		c.Fix = "re-run the client wizard (`ssh-manager tui`) and `cache pull` again to re-establish a decryptable cache"
-		return []doctorCheck{c}
+		c.Detail = fmt.Sprintf("%scache.bin present (age %s) but its cache DEK is missing — cache undecryptable", label, age)
+		c.Fix = fmt.Sprintf("re-run the client wizard (`ssh-manager tui`) and `cache pull%s` again to re-establish a decryptable cache", pullFlag)
+		return
 	}
-
 	authOK, aok := fileExists(filepath.Join(dir, "cache.auth.json"))
 	if aok != nil {
 		c.Status = statusWarn
-		c.Detail = fmt.Sprintf("cache.bin present (age %s) but cache.auth.json unstatable: %v", age, aok)
+		c.Detail = fmt.Sprintf("%scache.bin present (age %s) but cache.auth.json unstatable: %v", label, age, aok)
 		c.Fix = "check the cache directory permissions"
-		return []doctorCheck{c}
+		return
 	}
 	if !authOK {
 		c.Status = statusWarn
-		c.Detail = fmt.Sprintf("cache.bin present (age %s) but no auto-refresh credential (manual `cache pull` only)", age)
-		c.Fix = "run `ssh-manager cache pull` to persist cache.auth.json (enables auto-refresh)"
-		return []doctorCheck{c}
+		c.Detail = fmt.Sprintf("%scache.bin present (age %s) but no auto-refresh credential (manual `cache pull` only)", label, age)
+		c.Fix = fmt.Sprintf("run `ssh-manager cache pull%s` to persist cache.auth.json (enables auto-refresh)", pullFlag)
+		return
 	}
-	c.Status = statusPass
-	c.Detail = fmt.Sprintf("cache.bin present (age %s)", age)
-	return []doctorCheck{c}
+	maxOff, src, merr := clientops.EffectiveMaxOffline(dir)
+	switch {
+	case merr != nil:
+		c.Status = statusWarn
+		c.Detail = fmt.Sprintf("%scache.bin present (age %s) but the offline cap is unusable: %v", label, age, merr)
+		c.Fix = fmt.Sprintf("rewrite it with `ssh-manager cache config --max-offline <dur>%s` (or clear the broken file/env)", pullFlag)
+	case maxOff > 0 && age > maxOff:
+		c.Status = statusWarn
+		c.Detail = fmt.Sprintf("%scache.bin present (age %s) but past its offline cap (max-offline %s from %s) — it will be destroyed on next use", label, age, maxOff, src)
+		c.Fix = fmt.Sprintf("re-pull while online (`ssh-manager cache pull%s`) to refresh the snapshot", pullFlag)
+	default:
+		c.Status = statusPass
+		c.Detail = fmt.Sprintf("%scache.bin present (age %s)", label, age)
+	}
+}
+
+// namedInstancesWithCache counts named instances whose slot holds a cache.bin.
+// Zero under a single-slot override (named instances are not diagnosed there,
+// so the default row must not downgrade on material it cannot see). Read
+// errors count as zero — the instance rows report the failure itself.
+func namedInstancesWithCache() int {
+	if os.Getenv("SSHMGR_CACHE_DIR") != "" || os.Getenv("SSHMGR_CACHE_DEK") != "" {
+		return 0
+	}
+	names, err := clientops.ListInstances()
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, name := range names {
+		if _, bin, _, _, perr := clientops.CachePathsFor(name); perr == nil {
+			if ok, ferr := fileExists(bin); ferr == nil && ok {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// checkClientCacheInstances diagnoses every NAMED cache instance (Plan 40:
+// instances/<name>/) with the same sidecar matrix as the default row. Under a
+// single-slot override (SSHMGR_CACHE_DIR redirects the default slot;
+// SSHMGR_CACHE_DEK swallows the per-instance DEK suffix) named-instance paths
+// no longer resolve to the operator's real material — the whole group is
+// skipped with one audible INFO row instead of silently mis-diagnosing. No
+// named instances → no rows (single-instance machines keep byte-identical
+// output).
+func checkClientCacheInstances() []doctorCheck {
+	if os.Getenv("SSHMGR_CACHE_DIR") != "" || os.Getenv("SSHMGR_CACHE_DEK") != "" {
+		return []doctorCheck{{
+			Name:   "client-cache-instances",
+			Status: statusInfo,
+			Detail: "skipped — single-slot cache override in effect (SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK); named instances not diagnosed",
+		}}
+	}
+	names, err := clientops.ListInstances()
+	if err != nil {
+		return []doctorCheck{{
+			Name:   "client-cache-instances",
+			Status: statusWarn,
+			Detail: fmt.Sprintf("instances dir unreadable: %v", err),
+			Fix:    "check the instances directory permissions",
+		}}
+	}
+	var rows []doctorCheck
+	for _, name := range names {
+		rows = append(rows, namedInstanceCacheRow(name))
+	}
+	return rows
+}
+
+// namedInstanceCacheRow is one named instance's row. cache.bin missing splits
+// three ways: empty slot → INFO debris; client machine → WARN with the
+// --instance pull fix (the machine-level "no cache anywhere" FAIL stays with
+// the default row, which only downgrades when some instance HOLDS a bin);
+// non-client → INFO. The bin-present matrix is role-independent — broken
+// cache material is broken wherever it sits.
+func namedInstanceCacheRow(name string) doctorCheck {
+	c := doctorCheck{Name: "client-cache[" + name + "]"}
+	dir, bin, _, _, err := clientops.CachePathsFor(name)
+	if err != nil {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("instance %s: cache paths unresolvable: %v", name, err)
+		c.Fix = "check the instance name and the user config dir"
+		return c
+	}
+	info, serr := os.Stat(bin)
+	role := doctorRole()
+	switch {
+	case errors.Is(serr, fs.ErrNotExist):
+		switch {
+		case emptyInstanceSlot(dir):
+			c.Status = statusInfo
+			c.Detail = fmt.Sprintf("instance %s: empty slot (no cache material)", name)
+		case role != nil && role.Role == roles.RoleClient:
+			c.Status = statusWarn
+			c.Detail = fmt.Sprintf("instance %s has no cache.bin", name)
+			c.Fix = fmt.Sprintf("run `ssh-manager cache pull --instance %s`", name)
+		default:
+			c.Status = statusInfo
+			c.Detail = fmt.Sprintf("instance %s has no cache.bin (no offline cache expected on this machine)", name)
+		}
+	case serr != nil:
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("instance %s: cache.bin stat failed: %v", name, serr)
+		c.Fix = "check the cache directory permissions"
+	default:
+		dekP, derr := paths.CacheDekPathFor(name)
+		if derr != nil {
+			c.Status = statusFail
+			c.Detail = fmt.Sprintf("instance %s: cache DEK path unresolvable: %v", name, derr)
+			c.Fix = "check the vault directory (platform vault root could not be resolved)"
+			return c
+		}
+		cacheSidecarMatrix(&c, dir, dekP, name, time.Since(info.ModTime()).Round(time.Minute))
+	}
+	return c
+}
+
+// emptyInstanceSlot reports whether an instance directory carries no cache
+// material at all. Any of the five known files present means NOT empty — a
+// destroyed/quarantined cache keeps meta/audit residue and must not read as
+// clean debris.
+func emptyInstanceSlot(dir string) bool {
+	for _, f := range []string{"cache.bin", "cache.meta.json", "cache.auth.json", "cache.config.json", "cache-audit.log"} {
+		if ok, err := fileExists(filepath.Join(dir, f)); err == nil && ok {
+			return false
+		}
+	}
+	return true
 }
 
 // runDoctor executes every check, renders the report, and returns an error

@@ -8,6 +8,8 @@
 
 <!-- v0.10.1 + v0.11.0 已发版(2026-08-27, release CI 双 tag 全绿)+双端部署验证——回写完成。注: v0.10.1 tag(09a8865)实际包含 Plan 40 P0 锚修复(祖先链: v0.10.0→P0→plan 文档→Plan41 spec→批1),下表 v0.10.1 行已补记。 -->
 
+<!-- 下一版（doctor 多实例感知，branch `doctor-multi-instance`）：CLI-only 增量——doctor 枚举 `instances/<name>/` 逐实例诊断（`client-cache[<name>]` 行，sidecar 矩阵与默认行同源：DEK 缺 FAIL / auth 缺 WARN / MAX_OFFLINE 到龄 WARN「下次使用即自毁」/ 空 slot INFO）+ 仅命名实例机器默认行误报修正（降级 INFO 指向实例行，全空机器仍 FAIL）+ 单槽覆盖（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK）下整组跳过（一行 INFO）+ doctorEnvSeams 补 SSHMGR_CACHE_DEK_DIR/SSHMGR_CACHE_MAX_OFFLINE 两漏登记 seam；单实例机器输出零变化（无命名实例零行）。发版双端验证后回写销项。 -->
+
 | client 版本 | serve 版本 | 在线（HTTP MCP） | 离线（cache pull / mcp --cache） | 验证日期 |
 |---|---|---|---|---|
 | v0.12.0 | v0.12.0 | ✅（在线面不变——批2 为 client 纯增量（TUI/CLI/归位），serve 侧无变更；与 v0.11.0×v0.11.0 在线行为一致） | ✅ 全功能+批2（Plan 40 第二批：**首次 enroll 自动归位**——裸 pull/wizard 首拉在真空 v4（默认槽 bin/auth/meta/config 四文件全缺）下 retarget 到 `instances/<头name>/`（归位幂等、拒绝分支零写盘/零目录/零 DEK）；**TUI 多实例**——client 页 `[i]` 实例 picker（会话内切换、单槽 override env 横幅禁用）、连接表单"实例名"字段+规范名前置校验三连（跨槽码必填/casefold 碰撞拒/同槽换码允）、换码预防性警告（runbook v2：清三件套保留 meta/config 意图标记）、向导 finish 屏 `.mcp.json` 带 `--instance`、首拉自动选中；**写序三分**——wizard auth 后移（失败零写入）/面板 MkdirAll+失败清理+切槽/CLI 按返回槽写；**`cache config [--instance] --max-offline`**（三源显示/仅已存在实例/无 off 开关）；cap 文件校验独立于 env（pull 写入面）；`gateNamedInstance` 收紧（bin 缺席也读 meta 拒异身份）。**边界如实**：doctor 仍不感知命名实例（Plan 38 体系）；换码清理保留的 meta 携带旧身份（无害痕迹，下次 pull 覆写）） | ✅ 2026-08-27：双端部署 v0.12.0（NUC10 serve HEALTHY/doctor 0/0；笔记本 doctor 0/0 + `cache status` 列表视图/`cache config` 显示冒烟 + 存储 cred 实拉成功）；空 device_name 补记实锤（v0.10.0 旧进程 lazy pull 产物 → v0.12.0 拉取补记 `laptop-v040`） |
