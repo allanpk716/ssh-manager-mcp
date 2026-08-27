@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"charm.land/huh/v2"
 
 	"ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
@@ -399,9 +401,13 @@ func validPin(v string) error {
 
 // connDraft backs the connection-edit form. Code (设备码) is the ONLY secret:
 // masked and NOT prefilled — empty keeps the existing token. Pin is a public
-// SPKI fingerprint, so it is shown plainly and prefilled.
+// SPKI fingerprint, so it is shown plainly and prefilled. Instance (Plan 40
+// 批2 §4) is the optional cross-slot routing: prefilled with the SELECTED
+// slot, empty means the default instance; absent from the form entirely under
+// a single-slot override env (spec §3.5).
 type connDraft struct {
 	URL, Code, Pin string
+	Instance       string // Plan 40 批2 §4: the form's target slot ("" = default)
 }
 
 // editConnForm builds the connection form. Prefill order: the LAST SUBMITTED
@@ -419,16 +425,84 @@ func (m clientModel) editConnForm() overlay {
 		urlVal, pinVal = m.draft.URL, m.draft.Pin
 	}
 	wizard := m.wizard
-	d := &connDraft{URL: urlVal, Pin: pinVal}
-	form := huh.NewForm(huh.NewGroup(
+
+	// Plan 40 批2 §4: optional instance field. Absent entirely under a single-slot
+	// override env (spec §3.5 — disabled, and the field is omitted rather than
+	// rendered inert).
+	singleSlot := clientops.SingleSlotOverrideEnvSet()
+	instances, _ := clientops.ListInstances()
+	selected := m.instance // already canonical (it names an on-disk dir or "")
+
+	// canonicalInstance casefold-matches the typed value against existing instance
+	// dirs and returns the CANONICAL dir name (spec §4 rev5: fold is for
+	// normalizing to the on-disk slot; pull-side comparisons stay exact).
+	canonicalInstance := func(v string) string {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return ""
+		}
+		for _, n := range instances {
+			if strings.EqualFold(n, v) {
+				return n
+			}
+		}
+		return v
+	}
+
+	d := &connDraft{URL: urlVal, Pin: pinVal, Instance: selected}
+
+	inputFields := []huh.Field{
 		huh.NewInput().Title("serve 地址").Value(&d.URL).Validate(validServeURL),
+	}
+	if !singleSlot {
+		inputFields = append(inputFields,
+			huh.NewInput().Title("实例名（可选——默认实例留空）").Value(&d.Instance).Validate(func(v string) error {
+				v = strings.TrimSpace(v)
+				if v == "" {
+					return nil
+				}
+				return instname.Valid(v)
+			}))
+	}
+	inputFields = append(inputFields,
 		huh.NewInput().Title("设备码（留空=保持不变）").Value(&d.Code).EchoMode(huh.EchoModePassword),
 		huh.NewInput().Title("pin（SPKI 指纹，公开信息）").Value(&d.Pin).Validate(validPin),
-	))
+	)
+	form := huh.NewForm(huh.NewGroup(inputFields...).Description(swapWarning(selected, singleSlot)))
+
 	return newFormOverlay("编辑连接", form, func() tea.Cmd {
 		return func() tea.Msg {
+			target := canonicalInstance(d.Instance)
+			sameSlot := strings.EqualFold(target, selected)
+			// rule 2: fold-hit on an EXISTING instance that is NOT the selected slot
+			// → hard refuse (NTFS collision / cross-slot re-route; to re-code an
+			// existing instance, [i]-switch to it first — spec §4 rev5).
+			if target != "" && !sameSlot {
+				for _, n := range instances {
+					if strings.EqualFold(n, target) {
+						return errMsg{fmt.Errorf("实例名与已存在实例 %s 冲突——对其换码请先 [i] 切换到该实例（跨槽路由被拒绝）", n)}
+					}
+				}
+			}
+			code := strings.TrimSpace(d.Code)
+			// rule 1: cross-slot, or a selected slot with no stored auth → code REQUIRED
+			if (!sameSlot || token0 == "") && code == "" {
+				return errMsg{errors.New("设备码不能为空——跨实例路由或本槽无已保存设备码时不存在\"保持不变\"")}
+			}
+			// panel-mode vacuum guard (spec §4): empty field on a vacuum default
+			// would silently become an auto-relocation trigger surface — refuse with
+			// mode-dependent guidance.
+			if !wizard && target == "" && !singleSlot {
+				if vac, verr := clientops.DefaultSlotVacuum(); verr == nil && vac {
+					return errMsg{errors.New("默认实例无材料——首次 enroll 请走向导流程（自动归位），或填实例名显式路由")}
+				}
+			}
+			if singleSlot && target != "" {
+				return errMsg{fmt.Errorf("--instance and %s are mutually exclusive — unset the env or clear the 实例名 field", overrideEnvName())}
+			}
+
 			token := token0
-			if code := strings.TrimSpace(d.Code); code != "" {
+			if code != "" {
 				token = code
 			}
 			if token == "" {
@@ -450,6 +524,42 @@ func (m clientModel) editConnForm() overlay {
 			return clientStatusMsg("连接配置已保存")
 		}
 	})
+}
+
+// overrideEnvName names the single-slot override env that is present (spec
+// §3.5: at most one of the two full overrides is honored by CachePathsFor —
+// checked in this order). Defensive-guard copy only: under a real single-slot
+// session the instance field is not rendered and the target stays empty.
+func overrideEnvName() string {
+	if os.Getenv("SSHMGR_CACHE_DIR") != "" {
+		return "SSHMGR_CACHE_DIR"
+	}
+	return "SSHMGR_CACHE_DEK"
+}
+
+// swapWarning renders the build-time-static 换码 warning for the SELECTED slot
+// (spec §6 — never reacts to field input; the gate stays the only enforcer).
+func swapWarning(selected string, singleSlot bool) string {
+	_, bin, metaPath, _, err := clientops.CachePathsFor(selected)
+	if err != nil {
+		return ""
+	}
+	if _, serr := os.Stat(bin); serr != nil {
+		return "" // no bin: vacuum/new slot — no warning
+	}
+	device := "(旧 cache 未登记)"
+	if b, rerr := os.ReadFile(metaPath); rerr == nil {
+		var m struct {
+			Device string `json:"device_name"`
+		}
+		if json.Unmarshal(b, &m) == nil && m.Device != "" {
+			device = m.Device
+		}
+	}
+	if selected == "" {
+		return fmt.Sprintf("⚠ 默认实例已绑定设备 %s——更换设备码前须清三件套（cache.auth.json + cache.bin + quarantine/，保留 cache.meta.json 与 cache.config.json——它们是默认槽意图标记，删了重 enroll 会被归位到实例槽）重 enroll，否则下次同步将被门禁拒绝；若是本机第二个 agent，请在\"实例名\"字段填新实例名。", device)
+	}
+	return fmt.Sprintf("⚠ 实例 %s 已绑定设备 %s——换码须删除该实例目录重 enroll，否则同步将被拒。", selected, device)
 }
 
 // classifyPullError turns a raw pull error into the client wizard's four-state
