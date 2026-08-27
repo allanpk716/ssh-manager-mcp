@@ -416,10 +416,6 @@ func TestBackgroundAuditEndRows(t *testing.T) {
 		waitTerminal(t, m, id, 5*time.Second)
 	}
 
-	rows, err := st.AuditRows(50)
-	if err != nil {
-		t.Fatal(err)
-	}
 	want := map[string]struct {
 		cmd      string // start 行 Command (命令原文)
 		endStat  string // end 行 Status
@@ -429,6 +425,21 @@ func TestBackgroundAuditEndRows(t *testing.T) {
 		idStop: {"a-stop", "stopped", 0},
 		idTO:   {"a-to", "timeout", 900}, // 1s 生效超时 → 运行时长 ≥ ~1s
 		idFail: {"a-fail", "failed", 0},
+	}
+	// #8 第二例: 终态置位 ≠ end 行已落笔——reaper 在终态后异步写审计, 慢机上
+	// 单发读竞态。deadline 重试至行数齐 (start 行 startBg 同步落笔、本 store 无
+	// 其他写者, 2×len(want) 即 start+end 全齐; 多余行由下方 ==8 断言钉住)。
+	auditDeadline := time.Now().Add(10 * time.Second)
+	rows, err := st.AuditRows(50)
+	for err == nil && len(rows) < 2*len(want) && time.Now().Before(auditDeadline) {
+		time.Sleep(20 * time.Millisecond)
+		rows, err = st.AuditRows(50)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) < 2*len(want) {
+		t.Fatalf("audit rows = %d after 10s deadline, want %d (async end rows not all written): %+v", len(rows), 2*len(want), rows)
 	}
 	startIdx := map[string]int{}
 	endIdx := map[string]int{}

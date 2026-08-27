@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/crypto/ssh"
@@ -228,8 +229,11 @@ func TestE2EBackgroundTrioFullFlow(t *testing.T) {
 	const multiOut = "L1\nL2\nL3\n"
 	collected := ""
 	var off, errOff int64
-	status := ""
-	for i := 0; i < 5; i++ {
+	// #8: 固定 5 轮在慢 CI 上预算不足 (5×2s wait)——deadline 轮询, 每轮仍
+	// wait=2 长轮询携游标收集 (偏移推进保证多轮不重复收); 终态即断。
+	status := bgStatusRunning
+	deadline := time.Now().Add(30 * time.Second)
+	for i := 0; status == bgStatusRunning && time.Now().Before(deadline); i++ {
 		res2, cerr := cliSess.CallTool(ctx, &mcp.CallToolParams{
 			Name: "exec_output",
 			Arguments: map[string]any{
@@ -245,12 +249,9 @@ func TestE2EBackgroundTrioFullFlow(t *testing.T) {
 		collected += read.Stdout
 		off, errOff = read.NextStdoutOffset, read.NextStderrOffset
 		status = read.Status
-		if status != bgStatusRunning {
-			break
-		}
 	}
 	if status != bgStatusDone {
-		t.Fatalf("task did not reach done within 5 polls (last status=%q)", status)
+		t.Fatalf("task did not reach done within 30s deadline (last status=%q)", status)
 	}
 	if collected != multiOut {
 		t.Fatalf("collected stdout = %q, want %q", collected, multiOut)
@@ -307,8 +308,10 @@ func TestE2EBackgroundTrioFullFlow(t *testing.T) {
 	}
 
 	// 6. exec_output 观察 sleepy 终态 stopped (wait 长轮询真实走一轮)。
-	stopStatus := ""
-	for i := 0; i < 5; i++ {
+	// #8 同款: deadline 轮询至 sleepy 离开 running (每轮 wait=2 长轮询)。
+	stopStatus := bgStatusRunning
+	stopDeadline := time.Now().Add(30 * time.Second)
+	for i := 0; stopStatus == bgStatusRunning && time.Now().Before(stopDeadline); i++ {
 		res6, perr := cliSess.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "exec_output",
 			Arguments: map[string]any{"task_id": start2.TaskID, "wait_seconds": 2},
@@ -319,12 +322,9 @@ func TestE2EBackgroundTrioFullFlow(t *testing.T) {
 		var read BgReadOutput
 		unmarshalToolJSON(t, res6, &read)
 		stopStatus = read.Status
-		if stopStatus != bgStatusRunning {
-			break
-		}
 	}
 	if stopStatus != bgStatusStopped {
-		t.Fatalf("sleepy task terminal = %q, want stopped", stopStatus)
+		t.Fatalf("sleepy task terminal = %q, want stopped (30s deadline)", stopStatus)
 	}
 }
 
