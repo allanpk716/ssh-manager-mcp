@@ -59,10 +59,10 @@ func TestClientServerList(t *testing.T) {
 // stored cred lacking a pin, sync must fail fast instead of ever attempting a
 // plaintext (AllowPlain=false would only fail later, after a network round
 // trip) pull. (The syncCmd wrapper was deleted in Plan 20 T1; the panel pull
-// is syncCmdMode(cred, false).)
+// is syncCmdMode(cred, "", false).)
 func TestSyncCmdRefusesEmptyPin(t *testing.T) {
 	cred := &clientops.CacheCred{URL: "https://x", Token: "t", Pin: ""}
-	msg := syncCmdMode(cred, false)()
+	msg := syncCmdMode(cred, "", false)()
 	done, ok := msg.(syncDoneMsg)
 	if !ok {
 		t.Fatalf("want syncDoneMsg, got %T", msg)
@@ -171,7 +171,7 @@ func TestEditConnFormRequiresCodeWhenNoToken(t *testing.T) {
 // http 块 Bearer 是固定占位（client 机从不持有 project token——两道闸门
 // 模型），token 走 env 不走 argv。
 func TestClientFinishScreen_DualForms(t *testing.T) {
-	v := clientFinishScreen("https://192.0.2.5:7878").View().Content
+	v := clientFinishScreen("https://192.0.2.5:7878", "").View().Content
 	for _, want := range []string{
 		`"args": ["mcp", "--cache"],`,
 		`"SSHMGR_TOKEN": "<project token>"`,
@@ -191,7 +191,7 @@ func TestClientFinishScreen_DualForms(t *testing.T) {
 
 // TestClientFinishScreen_EmptyURL: 空 serveURL 渲染 <serve URL> 占位不 panic。
 func TestClientFinishScreen_EmptyURL(t *testing.T) {
-	v := clientFinishScreen("").View().Content
+	v := clientFinishScreen("", "").View().Content
 	if !strings.Contains(v, "<serve URL>") {
 		t.Fatalf("empty URL must render the placeholder:\n%s", v)
 	}

@@ -30,7 +30,8 @@ func deviceSnapshotHandler(name *string) http.HandlerFunc {
 func pullWith(t *testing.T, srvName *string) error {
 	t.Helper()
 	url, pin := newPinnedTLSServer(t, deviceSnapshotHandler(srvName))
-	return DoPull(url, "code", pin, PullOpts{})
+	_, err := DoPull(url, "code", pin, PullOpts{})
+	return err
 }
 
 func mustCacheDir(t *testing.T) string {
@@ -89,6 +90,14 @@ func TestGate_DefaultInstance_ThreeBranches(t *testing.T) {
 	if !strings.Contains(err.Error(), "device code") && !strings.Contains(err.Error(), "cache-tokens") {
 		t.Fatalf("refusal must guide owner verification: %v", err)
 	}
+	// runbook v2 (T10): option 2 keeps meta/config as DEFAULT-slot intent markers
+	// and explains that deleting them re-routes re-enroll into instances/.
+	if !strings.Contains(err.Error(), "KEEP cache.meta.json and cache.config.json") || !strings.Contains(err.Error(), "instances/") {
+		t.Fatalf("option 2 must carry the runbook v2 text: %v", err)
+	}
+	if strings.Contains(err.Error(), "cache.meta.json + the quarantine") { // legacy four-piece list
+		t.Fatalf("runbook v2 must not advise deleting cache.meta.json: %v", err)
+	}
 	assertDirSumsUnchanged(t, mustCacheDir(t), before) // existing bin/meta/auth sha256 unchanged
 
 	// ② legacy unregistered (device_name empty) → allowed + backfilled (zero-migration lifeline)
@@ -140,7 +149,7 @@ func TestGate_OldServe_SkipAndHint(t *testing.T) {
 	// old serve + bin present → gate skipped + WARNING
 	var buf bytes.Buffer
 	url, pin := newPinnedTLSServer(t, deviceSnapshotHandler(nil))
-	err := DoPull(url, "code", pin, PullOpts{StatusOut: &buf})
+	_, err := DoPull(url, "code", pin, PullOpts{StatusOut: &buf})
 	if err != nil {
 		t.Fatalf("old-serve re-pull must succeed (gate skipped): %v", err)
 	}
@@ -161,7 +170,7 @@ func TestGate_PlaintextNeverRecordsDeviceName(t *testing.T) {
 		fmt.Fprint(w, `{"servers":[],"credentials":[]}`)
 	}))
 	defer plain.Close()
-	if err := DoPull(plain.URL, "code", "", PullOpts{AllowPlain: true}); err != nil {
+	if _, err := DoPull(plain.URL, "code", "", PullOpts{AllowPlain: true}); err != nil {
 		t.Fatal(err)
 	}
 	if m := readMetaForTest(t, mustCacheDir(t)); m.DeviceName != "" {

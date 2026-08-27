@@ -19,7 +19,7 @@ func TestDoPullRecordsScopeProvenance(t *testing.T) {
 	plain := newPinnedSnapshotServer(t, func(r *http.Request) (int, string) {
 		return 200, `{"version":1,"servers":[]}`
 	})
-	if err := DoPull(plain.URL, "c", plain.Pin, PullOpts{}); err != nil {
+	if _, err := DoPull(plain.URL, "c", plain.Pin, PullOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if CacheScopeVerified() {
@@ -31,7 +31,7 @@ func TestDoPullRecordsScopeProvenance(t *testing.T) {
 		w.Header().Set("X-Sshmgr-Snapshot-Scope", "profile")
 		w.Write([]byte(`{"version":1,"servers":[]}`))
 	})
-	if err := DoPull(scopedURL, "c", scopedPin, PullOpts{}); err != nil {
+	if _, err := DoPull(scopedURL, "c", scopedPin, PullOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if !CacheScopeVerified() {

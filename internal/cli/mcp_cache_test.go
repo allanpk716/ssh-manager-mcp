@@ -171,7 +171,7 @@ func TestScopedPull_HydratesAndIronRuleHolds(t *testing.T) {
 	clientops.DekProvider = func(string) store.KeyProvider { return mem }
 	t.Cleanup(func() { clientops.DekProvider = prev })
 
-	if err := clientops.DoPull(srv.URL, code, "", clientops.PullOpts{AllowPlain: true}); err != nil {
+	if _, err := clientops.DoPull(srv.URL, code, "", clientops.PullOpts{AllowPlain: true}); err != nil {
 		t.Fatalf("scoped pull: %v", err)
 	}
 

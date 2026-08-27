@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -32,7 +33,7 @@ func cachePresentFor(instance string) bool {
 
 func newCacheCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "cache", Short: "Offline read-only cache (pull from a serve broker)"}
-	cmd.AddCommand(cachePullCmd(), cacheStatusCmd())
+	cmd.AddCommand(cachePullCmd(), cacheStatusCmd(), cacheConfigCmd())
 	return cmd
 }
 
@@ -88,7 +89,7 @@ func cachePullCmd() *cobra.Command {
 					return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
 						"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
 				}
-				if err := clientops.DoPull(url, token, "", clientops.PullOpts{AllowPlain: true, StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
+				if _, err := clientops.DoPull(url, token, "", clientops.PullOpts{AllowPlain: true, StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
 					return err
 				}
 				// Fix round 1 [Important]: not persisting --max-offline here is
@@ -100,7 +101,13 @@ func cachePullCmd() *cobra.Command {
 				}
 				return nil // plaintext pulls NEVER persist a credential (no auto-plaintext path)
 			}
-			if err := clientops.DoPull(url, token, fp, clientops.PullOpts{StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
+			// Plan 40 批2 §5: res carries the slot the pull ACTUALLY landed in —
+			// "" = default, a name = explicit --instance OR the §1.2 first-enroll
+			// auto-relocation. Every pull-side persistence below MUST follow it,
+			// or the refresh chain breaks (auth/config in the default slot while
+			// the material lives under instances/<name>/ — the §0.6 disease).
+			res, err := clientops.DoPull(url, token, fp, clientops.PullOpts{StatusOut: cmd.ErrOrStderr(), Instance: instance})
+			if err != nil {
 				if errors.Is(err, clientops.ErrCacheQuarantined) {
 					// Plan 34 rev4 §3 — pinned 401: the local cache was destroyed.
 					// SilenceUsage: this is a server-side rejection, not a flag typo.
@@ -116,7 +123,7 @@ func cachePullCmd() *cobra.Command {
 			if c, _, ok := clientops.SplitTokenPin(token); ok {
 				code = c
 			}
-			if err := clientops.WriteCacheCredFor(instance, &clientops.CacheCred{URL: url, Token: code, Pin: fp}); err != nil {
+			if err := clientops.WriteCacheCredFor(res.Instance, &clientops.CacheCred{URL: url, Token: code, Pin: fp}); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: could not persist cache.auth.json (automatic refresh disabled until a successful pull): %v\n", err)
 			}
 			// Plan 40 T13: persist the instance's offline cap AFTER a successful
@@ -125,7 +132,7 @@ func cachePullCmd() *cobra.Command {
 			// it still overrides the file, so say so or the user thinks the
 			// flag took effect when it provably did not.
 			if maxOff != "" {
-				dir, _, _, _, derr := clientops.CachePathsFor(instance)
+				dir, _, _, _, derr := clientops.CachePathsFor(res.Instance) // 归位后跟 res.Instance（§5）
 				if derr == nil {
 					if werr := clientops.WriteCacheConfig(dir, maxOff); werr != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: could not persist cache.config.json (the cap applies only while the env/file stays set): %v\n", werr)
@@ -307,4 +314,63 @@ func cacheStatusList(cmd *cobra.Command) error {
 		printSlot(n, id, ib, im)
 	}
 	return nil
+}
+
+func cacheConfigCmd() *cobra.Command {
+	var instance, maxOffline string
+	c := &cobra.Command{
+		Use:   "config",
+		Short: "Show or set the per-instance offline cap (cache.config.json)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkInstanceFlag(instance); err != nil {
+				return err
+			}
+			dir, _, _, _, err := clientops.CachePathsFor(instance)
+			if err != nil {
+				return err
+			}
+			if _, serr := os.Stat(dir); serr != nil {
+				name := instance
+				if name == "" {
+					name = "default"
+				}
+				return fmt.Errorf("instance %q not found (directory %s does not exist) — enroll first (cache pull --instance %q)", name, dir, name)
+			}
+			out := cmd.OutOrStdout()
+			label := instance
+			if label == "" {
+				label = "default"
+			}
+			if maxOffline == "" {
+				cap, src, rerr := clientops.EffectiveMaxOffline(dir)
+				if rerr != nil {
+					return rerr
+				}
+				if src == "off" {
+					fmt.Fprintf(out, "instance: %s (%s)\ncap:      off (no offline limit)\n", label, dir)
+				} else {
+					fmt.Fprintf(out, "instance: %s (%s)\ncap:      %s (source: %s)\n", label, dir, cap, src)
+				}
+				return nil
+			}
+			if _, verr := clientops.ValidateMaxOffline(maxOffline); verr != nil {
+				return verr
+			}
+			if werr := clientops.WriteCacheConfig(dir, maxOffline); werr != nil {
+				return werr
+			}
+			fmt.Fprintf(out, "wrote %s (instance %s)\n", filepath.Join(dir, "cache.config.json"), label)
+			if strings.TrimSpace(os.Getenv("SSHMGR_CACHE_MAX_OFFLINE")) != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: SSHMGR_CACHE_MAX_OFFLINE is set — the persisted config takes effect only after the env is cleared")
+			}
+			// 默认槽警示（rev5 §8）：删默认槽 config 或 meta 都会削弱意图标记。
+			if instance == "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), "note: keep cache.meta.json/cache.config.json in this directory — they mark the DEFAULT slot; deleting them re-routes the next first-enroll into instances/")
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&instance, "instance", "", "target this named instance (directory must exist; mutually exclusive with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK)")
+	c.Flags().StringVar(&maxOffline, "max-offline", "", "persist this Go duration (e.g. 24h) as the instance's offline cap; omit to display the current effective cap")
+	return c
 }

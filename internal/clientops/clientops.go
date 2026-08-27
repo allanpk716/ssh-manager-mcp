@@ -105,7 +105,7 @@ func MaybeLazyPullFor(instance string, maxAge time.Duration) error {
 	if pin == "" {
 		return fmt.Errorf("cache.auth.json has no pin; refusing plaintext auto-pull")
 	}
-	err = DoPull(cred.URL, code, pin, PullOpts{Timeout: LazyPullTimeout, StatusOut: os.Stderr, Instance: instance})
+	_, err = DoPull(cred.URL, code, pin, PullOpts{Timeout: LazyPullTimeout, StatusOut: os.Stderr, Instance: instance})
 	if errors.Is(err, ErrCacheQuarantined) {
 		// Plan 34 rev4 §3 — the pinned server rejected the device code and the
 		// cache is destroyed. Terminal for this process: the flag stops every
@@ -434,12 +434,21 @@ type PullOpts struct {
 	Instance string
 }
 
+// PullResult reports where a pull's materials actually landed (Plan 40 batch 2
+// §2): "" = the default slot; a name = instances/<name>/ (explicit --instance,
+// or the §1.2 first-enroll auto-relocation). Callers that persist pull-side
+// state (auth, config) MUST follow this slot — compiler-enforced completeness
+// was the reason a return value beat an optional callback (spec §2).
+type PullResult struct {
+	Instance string
+}
+
 // DoPull fetches /snapshot from url with the device code and atomically writes
 // cache.bin + cache.meta.json. pin=="" means no pin: AllowPlain must be true or
 // the pull refuses (F4 hard-fail contract). pin!="" pins TLS to that SPKI
 // fingerprint and requires an https:// URL (F8). Extracted from cachePullCmd so
 // the spawn-lazy pull (mcp --cache) shares ONE implementation.
-func DoPull(url, token, pin string, o PullOpts) error {
+func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 	code := token
 	// Plan 40 T5/T13: resolve the cache paths for THIS instance before anything
 	// else disk-touching — the cap resolution below must read the instance's
@@ -448,7 +457,13 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	// writes, so the fail-closed precheck below still precedes every request.
 	dir, bin, metaPath, _, err := CachePathsFor(o.Instance)
 	if err != nil {
-		return err
+		return PullResult{}, err
+	}
+	// rev5 §1.2-5: pull-side file validation is INDEPENDENT of env — applies to
+	// the initially-resolved slot here, and to the relocation target after
+	// retarget (T2).
+	if verr := validateCapFileIndependent(dir); verr != nil {
+		return PullResult{}, verr
 	}
 	// Plan 37 §1/§2 + Plan 40 T13: fail-closed cap precheck (env > file) — an
 	// invalid cap from EITHER source refuses the pull before any HTTP (no
@@ -456,17 +471,17 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	// by the file).
 	maxOffline, err := resolveMaxOffline(dir)
 	if err != nil {
-		return err
+		return PullResult{}, err
 	}
 	var client *http.Client
 	if pin == "" {
 		if maxOffline > 0 {
 			// Plan 37 §2.1: the time anchor requires a pinned TLS server;
 			// a plaintext response's Date is injectable and cannot anchor.
-			return fmt.Errorf("the offline cap is set (SSHMGR_CACHE_MAX_OFFLINE or cache.config.json): refusing plaintext pull — the time anchor requires a pinned TLS server (unset the cap or remove --allow-plaintext)")
+			return PullResult{}, fmt.Errorf("the offline cap is set (SSHMGR_CACHE_MAX_OFFLINE or cache.config.json): refusing plaintext pull — the time anchor requires a pinned TLS server (unset the cap or remove --allow-plaintext)")
 		}
 		if !o.AllowPlain {
-			return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
+			return PullResult{}, fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
 				"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
 		}
 		if o.StatusOut != nil {
@@ -483,12 +498,12 @@ func DoPull(url, token, pin string, o PullOpts) error {
 			code = c
 		}
 		if u, err := neturl.Parse(url); err != nil || u.Scheme != "https" {
-			return fmt.Errorf("--url must be https:// when a server pin is set (got %q); "+
+			return PullResult{}, fmt.Errorf("--url must be https:// when a server pin is set (got %q); "+
 				"to pull plaintext instead, clear the pin (--pin/SSHMGR_SERVE_PIN) and pass --allow-plaintext", url)
 		}
 		tr, err := pinningTransport(pin)
 		if err != nil {
-			return err
+			return PullResult{}, err
 		}
 		client = &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
@@ -496,18 +511,25 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		client.Timeout = o.Timeout
 	}
 
-	dek, err := loadOrCreateDEK(o.Instance)
-	if err != nil {
-		return err
+	// Plan 40 批2 §1.2-6: vacuum-candidate paths DEFER DEK creation to after
+	// every gate — a refused relocation must leave zero writes, including no
+	// freshly-created default DEK. Non-vacuum paths keep the batch-1 timing.
+	vacuumCandidate := o.Instance == "" && !singleSlotOverrideEnvSet() && defaultSlotVacuum(dir)
+	var dek []byte
+	if !vacuumCandidate {
+		dek, err = loadOrCreateDEK(o.Instance)
+		if err != nil {
+			return PullResult{}, err
+		}
 	}
 	req, err := http.NewRequest(http.MethodGet, url+"/snapshot", nil)
 	if err != nil {
-		return err
+		return PullResult{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+code)
 	res, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("pull: %w", err)
+		return PullResult{}, fmt.Errorf("pull: %w", err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
@@ -520,7 +542,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		if res.StatusCode >= 300 && res.StatusCode < 400 {
 			// Plan 37 §2.0: CheckRedirect returned ErrUseLastResponse, so a 3xx
 			// surfaces here — never followed, on any client.
-			return fmt.Errorf("pull: server returned %d (redirects are not followed)", res.StatusCode)
+			return PullResult{}, fmt.Errorf("pull: server returned %d (redirects are not followed)", res.StatusCode)
 		}
 		if pin != "" && res.StatusCode == 401 {
 			// Plan 34 rev4 §3 — the ONLY quarantine trigger: a PINNED server
@@ -534,7 +556,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 			if qerr == nil {
 				qerr = ErrCacheQuarantined
 			}
-			return fmt.Errorf("pull: %w — re-enroll with a fresh device code", qerr)
+			return PullResult{}, fmt.Errorf("pull: %w — re-enroll with a fresh device code", qerr)
 		}
 		if res.StatusCode == 403 {
 			// Plan 39: the serve refused an UNBOUND device code (legacy
@@ -545,18 +567,18 @@ func DoPull(url, token, pin string, o PullOpts) error {
 			// gate, proxy, WAF) gets the generic treatment with the body
 			// excerpt, never the bind advice.
 			if bytes.Contains(errBody, []byte("not bound to a profile")) {
-				return fmt.Errorf("pull: server returned 403 — device code not bound to a profile (owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server)")
+				return PullResult{}, fmt.Errorf("pull: server returned 403 — device code not bound to a profile (owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server)")
 			}
 			if detail := strings.TrimSpace(string(errBody)); detail != "" {
-				return fmt.Errorf("pull: server returned 403 — %.200s", detail)
+				return PullResult{}, fmt.Errorf("pull: server returned 403 — %.200s", detail)
 			}
-			return fmt.Errorf("pull: server returned 403 (forbidden)")
+			return PullResult{}, fmt.Errorf("pull: server returned 403 (forbidden)")
 		}
-		return fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
+		return PullResult{}, fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
 	}
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return err
+		return PullResult{}, err
 	}
 	// Plan 40 §1 (P0): the anchor is a FACT — "the pinned server said THIS at
 	// this pull" — so recording it is gated on the SAFETY precondition
@@ -571,10 +593,10 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	if pin != "" {
 		serverTime, perr := http.ParseTime(res.Header.Get("Date"))
 		if perr != nil {
-			return fmt.Errorf("pull succeeded but the response has no valid Date header — refusing to anchor cache time (a pinned pull requires a trusted server clock)")
+			return PullResult{}, fmt.Errorf("pull succeeded but the response has no valid Date header — refusing to anchor cache time (a pinned pull requires a trusted server clock)")
 		}
 		if skew := time.Since(serverTime); skew > cacheSkewTolerance || skew < -cacheSkewTolerance {
-			return fmt.Errorf("server clock skew too large (server %s vs local %s, cap 1h) — refusing pull: the cache time anchor depends on an accurate clock; fix system time sync",
+			return PullResult{}, fmt.Errorf("server clock skew too large (server %s vs local %s, cap 1h) — refusing pull: the cache time anchor depends on an accurate clock; fix system time sync",
 				serverTime.Format(time.RFC3339), time.Now().Format(time.RFC3339))
 		}
 		pulledAt = serverTime.Unix()
@@ -593,23 +615,60 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	}
 	if o.Instance != "" {
 		if err := gateNamedInstance(bin, metaPath, deviceName, o.Instance); err != nil {
-			return err
+			return PullResult{}, err
+		}
+	} else if pin != "" && deviceName != "" && instname.Valid(deviceName) == nil && vacuumCandidate {
+		// Plan 40 批2 §1.2-3: first-enroll auto-relocation. Retarget by re-running
+		// the WHOLE CachePathsFor resolution under the header name — the audit
+		// sidecar & quarantine subtree follow the same resolution, no path
+		// stragglers (spec §1.2-3, rev3 §2.2 全消费面纪律).
+		ndir, nbin, nmeta, _, rerr := CachePathsFor(deviceName)
+		if rerr != nil {
+			return PullResult{}, rerr
+		}
+		dir, bin, metaPath = ndir, nbin, nmeta
+		// §1.2-4: target-slot gate, EXACT identity (header==name trivially holds;
+		// physical collision & half-write checks still run — relocation is not a
+		// bypass. meta identity match = idempotent re-relocation, allowed).
+		if gerr := gateNamedInstance(nbin, nmeta, deviceName, deviceName); gerr != nil {
+			return PullResult{}, gerr
+		}
+		// §1.2-5: target-slot cap check — file validity INDEPENDENT of env (T3's
+		// validateCapFileIndependent), then re-resolve the effective value for
+		// the target slot.
+		if verr := validateCapFileIndependent(ndir); verr != nil {
+			return PullResult{}, verr
+		}
+		if maxOffline, err = resolveMaxOffline(ndir); err != nil {
+			return PullResult{}, err
+		}
+		o.Instance = deviceName
+		if o.StatusOut != nil {
+			fmt.Fprintf(o.StatusOut, "first enroll located to instance %s — mcp --cache needs --instance %s in .mcp.json (bare cache pull re-locates idempotently; only the agent's cache-mode launch is affected)\n", deviceName, deviceName)
 		}
 	} else if err := gateDefaultInstance(bin, metaPath, deviceName, o); err != nil {
-		return err
+		return PullResult{}, err
+	}
+	if dek == nil {
+		// Deferred load (vacuum-candidate path): post-gates per §1.2-6 — a
+		// refused pull never created any DEK file.
+		dek, err = loadOrCreateDEK(o.Instance)
+		if err != nil {
+			return PullResult{}, err
+		}
 	}
 	blob, err := vaultio.EncryptWithKey(dek, body)
 	if err != nil {
-		return err
+		return PullResult{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(bin), 0o700); err != nil {
-		return err
+		return PullResult{}, err
 	}
 	// Plan 37 §2.4 commit order, pinned: bin first, meta LAST — a crash can
 	// leave (new bin + old anchor) whose age error is bounded <= 2K, never
 	// (new anchor + old bin). Meta-write failure stays the legacy WARNING.
 	if err := atomicWriteUnique(bin, blob); err != nil {
-		return err
+		return PullResult{}, err
 	}
 	if failNextMetaWriteForTest {
 		failNextMetaWriteForTest = false
@@ -633,7 +692,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	if o.StatusOut != nil {
 		fmt.Fprintf(o.StatusOut, "pulled %d servers / %d credentials into %s\n", len(snap.Servers), len(snap.Credentials), bin)
 	}
-	return nil
+	return PullResult{Instance: o.Instance}, nil
 }
 
 // gateDefaultInstance enforces the §2.4 three-branch identity gate on the
@@ -667,7 +726,7 @@ func gateDefaultInstance(bin, metaPath, deviceName string, o PullOpts) error {
 		}
 		return fmt.Errorf("refusing pull: this cache belongs to device %q but the presented device code is %q — pick one:\n"+
 			"  1. this is a SECOND device on this machine: re-run the pull with --instance %q\n"+
-			"  2. replace the default instance's device code: delete cache.auth.json + cache.bin + cache.meta.json + the quarantine/ dir in this cache directory and re-enroll\n"+
+			"  2. replace the default instance's device code: delete cache.auth.json + cache.bin + the quarantine/ dir in this cache directory (KEEP cache.meta.json and cache.config.json — they mark this as the DEFAULT slot; deleting them re-routes the re-enroll into instances/) and re-enroll\n"+
 			"  3. owner: verify which device this code was issued for (`cache-tokens ls` on the server)", m.DeviceName, deviceName, deviceName)
 	case merr == nil:
 		return nil // legacy unregistered meta: adopt — the write below backfills device_name (§5 zero-migration)
@@ -691,21 +750,34 @@ func gateNamedInstance(bin, metaPath, deviceName, instance string) error {
 	if deviceName != instance {
 		return fmt.Errorf("refusing pull: --instance %q does not match the serve's device name %q — each device code pulls into its own instance; use --instance %q on the machine that code was issued for", instance, deviceName, deviceName)
 	}
+	// Physical slot state decides. Meta is consulted BEFORE the bin check so an
+	// exactly-different recorded identity refuses EVEN WITHOUT cache.bin (rev5
+	// §1.2-4 branch 1): the relocation retarget aliases onto the physical
+	// directory regardless of letter case on NTFS, so without this order a bare
+	// pull headed by a case variant of the resident name (agenta vs AGENTA)
+	// sailed through "fresh slot" and silently flipped that slot's identity
+	// (spec §11.4 exact-compare nail). A readable blank identity stays
+	// adoptable/backfillable; only the half-write refusal keeps requiring the
+	// bin — meta readability alone never blocks a vacuum-target pull.
+	binAbsent := false
 	if _, serr := os.Stat(bin); serr != nil {
 		if !os.IsNotExist(serr) {
 			return serr
 		}
-		return nil // fresh slot
+		binAbsent = true
 	}
-	// slot has a bin: its recorded identity must be this instance's (or blank).
 	m, merr := readCacheMeta(metaPath)
-	if merr != nil {
+	switch {
+	case merr == nil:
+		if m.DeviceName != "" && m.DeviceName != deviceName {
+			return fmt.Errorf("refusing pull: instance directory %s already holds a different device identity (%q vs %q) — delete the instance directory and re-enroll", filepath.Dir(bin), m.DeviceName, deviceName)
+		}
+		return nil // same or adoptable-blank identity — idempotent re-pull / backfill (bin may be absent: auth-only/fresh slot)
+	case binAbsent:
+		return nil // fresh or auth-only slot with no readable meta: no material to protect
+	default:
 		return fmt.Errorf("refusing pull: instance directory %s holds cache.bin but no readable cache.meta.json (interrupted write?) — delete the instance directory and re-enroll", filepath.Dir(bin))
 	}
-	if m.DeviceName != "" && m.DeviceName != deviceName {
-		return fmt.Errorf("refusing pull: instance directory %s already holds a different device identity (%q vs %q) — delete the instance directory and re-enroll", filepath.Dir(bin), m.DeviceName, deviceName)
-	}
-	return nil
 }
 
 // CacheScopeVerified reports whether the on-disk cache was pulled from a
@@ -716,6 +788,21 @@ func gateNamedInstance(bin, metaPath, deviceName, instance string) error {
 // a cropped one — code-review #3).
 func CacheScopeVerified() bool {
 	_, _, metaPath, _, err := CachePaths()
+	if err != nil {
+		return false
+	}
+	m, err := readCacheMeta(metaPath)
+	if err != nil {
+		return false
+	}
+	return m.Scoped
+}
+
+// CacheScopeVerifiedFor is the per-instance form of CacheScopeVerified (Plan 40
+// 批2 T5): same fail-closed rule — a bad instance name or an unreadable meta is
+// "unverified", never a guess.
+func CacheScopeVerifiedFor(instance string) bool {
+	_, _, metaPath, _, err := CachePathsFor(instance)
 	if err != nil {
 		return false
 	}

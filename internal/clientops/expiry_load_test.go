@@ -213,7 +213,7 @@ func TestLoad_RecheckAborts(t *testing.T) {
 	url, pin := newPinnedTLSServer(t, snapshotHandler(ptr(date), nil))
 	ResetExpiryHooksForTest()
 	expiryTestHooks.afterAgeCheck = func() {
-		if err := DoPull(url, "code", pin, PullOpts{}); err != nil {
+		if _, err := DoPull(url, "code", pin, PullOpts{}); err != nil {
 			t.Errorf("hook pull: %v", err)
 		}
 	}
@@ -262,7 +262,7 @@ func TestLoad_DestroyRacingPull_Residual(t *testing.T) {
 	url, pin := newPinnedTLSServer(t, snapshotHandler(ptr(date), nil))
 	ResetExpiryHooksForTest()
 	expiryTestHooks.afterRecheck = func() {
-		if err := DoPull(url, "code", pin, PullOpts{}); err != nil {
+		if _, err := DoPull(url, "code", pin, PullOpts{}); err != nil {
 			t.Errorf("hook pull: %v", err)
 		}
 	}
@@ -272,7 +272,7 @@ func TestLoad_DestroyRacingPull_Residual(t *testing.T) {
 		t.Fatalf("residual window must still report expiry: %v", err)
 	}
 	// Self-heal: one re-pull restores a loadable cache.
-	if err := DoPull(url, "code", pin, PullOpts{}); err != nil {
+	if _, err := DoPull(url, "code", pin, PullOpts{}); err != nil {
 		t.Fatalf("self-heal pull: %v", err)
 	}
 	if _, err := LoadCacheSnapshot(); err != nil {
@@ -316,7 +316,7 @@ func TestLoad_AgeFromOldAnchor(t *testing.T) {
 	date := time.Now().UTC().Format(http.TimeFormat)
 	url, pin := newPinnedTLSServer(t, snapshotHandler(ptr(date), nil))
 	FailNextMetaWriteForTest() // pull succeeds, meta write fails, old anchor stays
-	if err := DoPull(url, "code", pin, PullOpts{}); err != nil {
+	if _, err := DoPull(url, "code", pin, PullOpts{}); err != nil {
 		t.Fatalf("pull must survive meta-write failure (WARNING): %v", err)
 	}
 	m := readMetaForTest(t, dir)
@@ -330,7 +330,7 @@ func TestLoad_AgeFromOldAnchor(t *testing.T) {
 	// The in-window direction: a 30m-old retained anchor loads fine.
 	writeCacheFixture(t, dir, time.Now().Add(-30*time.Minute).Unix(), true)
 	FailNextMetaWriteForTest()
-	if err := DoPull(url, "code", pin, PullOpts{}); err != nil {
+	if _, err := DoPull(url, "code", pin, PullOpts{}); err != nil {
 		t.Fatalf("second pull: %v", err)
 	}
 	if _, err := LoadCacheSnapshot(); err != nil {

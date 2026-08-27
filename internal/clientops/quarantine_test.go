@@ -367,11 +367,11 @@ func TestDoPullPinned401Quarantines(t *testing.T) {
 		return 401, `invalid cache token: revoked`
 	})
 	// First pull OK (re-writes cache.bin as a real envelope; proves the pin path).
-	if err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); err != nil {
+	if _, err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); err != nil {
 		t.Fatalf("first pull: %v", err)
 	}
 	// Revoked second pull → sentinel + destruction.
-	err := DoPull(srv.URL, "revoked-code", srv.Pin, PullOpts{})
+	_, err := DoPull(srv.URL, "revoked-code", srv.Pin, PullOpts{})
 	if !errors.Is(err, ErrCacheQuarantined) {
 		t.Fatalf("err = %v, want ErrCacheQuarantined", err)
 	}
@@ -393,14 +393,14 @@ func TestDoPullNonTriggerFaces(t *testing.T) {
 
 	// Plaintext 401: no pin → no destruction.
 	srv401 := newPlainSnapshotServer(t, 401)
-	if err := DoPull(srv401.URL, "x", "", PullOpts{AllowPlain: true}); err == nil {
+	if _, err := DoPull(srv401.URL, "x", "", PullOpts{AllowPlain: true}); err == nil {
 		t.Fatal("want error")
 	}
 	if _, serr := os.Stat(bin); serr != nil {
 		t.Fatal("plaintext 401 must NOT quarantine")
 	}
 	// Network error against a pinned-but-dead address.
-	if err := DoPull("https://127.0.0.1:1/", "x", "sha256:"+strings.Repeat("0", 64), PullOpts{}); err == nil {
+	if _, err := DoPull("https://127.0.0.1:1/", "x", "sha256:"+strings.Repeat("0", 64), PullOpts{}); err == nil {
 		t.Fatal("want error")
 	}
 	if _, serr := os.Stat(bin); serr != nil {
@@ -408,7 +408,7 @@ func TestDoPullNonTriggerFaces(t *testing.T) {
 	}
 	// Non-401 status.
 	srv500 := newPlainSnapshotServer(t, 500)
-	if err := DoPull(srv500.URL, "x", "", PullOpts{AllowPlain: true}); err == nil {
+	if _, err := DoPull(srv500.URL, "x", "", PullOpts{AllowPlain: true}); err == nil {
 		t.Fatal("want error")
 	}
 	if _, serr := os.Stat(bin); serr != nil {
@@ -463,11 +463,11 @@ func TestE2EQuarantineFullChain(t *testing.T) {
 		}
 		return 200, `{"version":1,"servers":[],"credentials":[]}`
 	})
-	if err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); err != nil {
+	if _, err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); err != nil {
 		t.Fatalf("seed pull: %v", err)
 	}
 	revoked = true
-	if err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); !errors.Is(err, ErrCacheQuarantined) {
+	if _, err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); !errors.Is(err, ErrCacheQuarantined) {
 		t.Fatalf("revoked pull: %v", err)
 	}
 	// Spawn-time surface: load fails, report attributes. NB the quarantine
@@ -485,7 +485,7 @@ func TestE2EQuarantineFullChain(t *testing.T) {
 	}
 	// Re-enroll: server accepts again; pull succeeds; attribution resets.
 	revoked = false
-	if err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); err != nil {
+	if _, err := DoPull(srv.URL, "good-code", srv.Pin, PullOpts{}); err != nil {
 		t.Fatalf("re-enroll pull: %v", err)
 	}
 	os.Remove(filepath.Join(dir, "cache.bin")) // simulate an unrelated later loss
@@ -507,7 +507,7 @@ func TestDoPullPinned403UnboundDoesNotQuarantine(t *testing.T) {
 	srv := newPinnedSnapshotServer(t, func(r *http.Request) (int, string) {
 		return 403, "device code not bound to a profile — owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server"
 	})
-	err := DoPull(srv.URL, "unbound-code", srv.Pin, PullOpts{})
+	_, err := DoPull(srv.URL, "unbound-code", srv.Pin, PullOpts{})
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -541,7 +541,7 @@ func TestDoPull403DiscriminatesByBody(t *testing.T) {
 		return 403, "403 Forbidden: client IP not in allowlist"
 	})
 	// The serve's own refusal → unbound advice.
-	err := DoPull(srv.URL, "unbound-code", srv.Pin, PullOpts{})
+	_, err := DoPull(srv.URL, "unbound-code", srv.Pin, PullOpts{})
 	if err == nil || !strings.Contains(err.Error(), "not bound to a profile") {
 		t.Fatalf("unbound 403 must name the cause, got: %v", err)
 	}
@@ -549,7 +549,7 @@ func TestDoPull403DiscriminatesByBody(t *testing.T) {
 		t.Fatalf("no 403 face may quarantine: %v", err)
 	}
 	// A proxy-shaped 403 → generic, body excerpted, NO bind advice.
-	err = DoPull(srv.URL, "proxy-blocked", srv.Pin, PullOpts{})
+	_, err = DoPull(srv.URL, "proxy-blocked", srv.Pin, PullOpts{})
 	if err == nil {
 		t.Fatal("want error")
 	}

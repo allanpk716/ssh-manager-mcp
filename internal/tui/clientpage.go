@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"charm.land/huh/v2"
 
 	"ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
@@ -30,17 +32,19 @@ import (
 // classified banner (classifyPullError), and a successful pull leads to the
 // .mcp.json finish screen (clientFinishScreen) → wizFinishTo(client).
 type clientModel struct {
-	cred      *clientops.CacheCred
-	snap      *store.Snapshot
-	scoped    bool // cache pulled from a Plan-39 serve (X-Sshmgr-Snapshot-Scope) — the profile header is only honest when true
-	cacheAge  time.Duration
-	panelList     // servers list panel: cursor/pagination//`/` filter (2026-08-17 桌面化)
-	width     int // terminal width from WindowSizeMsg (0 = not yet reported)
-	height    int // terminal height from WindowSizeMsg (0 = not yet reported)
-	status    string
-	err       error
-	busy      bool
-	overlay   overlay // connection-edit form / wizard finish screen
+	cred          *clientops.CacheCred
+	snap          *store.Snapshot
+	scoped        bool // cache pulled from a Plan-39 serve (X-Sshmgr-Snapshot-Scope) — the profile header is only honest when true
+	cacheAge      time.Duration
+	instance      string // Plan 40 批2 §3.1: selected slot ("" = default), session-only
+	pickerChecked bool   // Plan 40 批2 §3.2: auto-picker one-shot latch
+	panelList            // servers list panel: cursor/pagination//`/` filter (2026-08-17 桌面化)
+	width         int    // terminal width from WindowSizeMsg (0 = not yet reported)
+	height        int    // terminal height from WindowSizeMsg (0 = not yet reported)
+	status        string
+	err           error
+	busy          bool
+	overlay       overlay // connection-edit form / wizard finish screen
 
 	wizard bool       // first-run flow active (source hint + pull-driven transitions)
 	draft  *connDraft // last submitted connection draft (input preservation on failed pull)
@@ -64,10 +68,11 @@ func (m clientModel) Init() tea.Cmd {
 }
 
 type dataReadyMsg struct {
-	cred   *clientops.CacheCred
-	snap   *store.Snapshot
-	scoped bool
-	age    time.Duration
+	instance string // which slot this reply belongs to (stale replies are dropped)
+	cred     *clientops.CacheCred
+	snap     *store.Snapshot
+	scoped   bool
+	age      time.Duration
 }
 
 type syncDoneMsg struct{ err error }
@@ -75,47 +80,54 @@ type syncDoneMsg struct{ err error }
 // pullSucceededMsg is the WIZARD-only success signal of the first pull: panel
 // mode reports success as syncDoneMsg{nil} ("同步完成"); the wizard instead
 // routes to the .mcp.json finish screen. See syncCmdMode.
-type pullSucceededMsg struct{}
+type pullSucceededMsg struct {
+	instance string // effective slot the pull landed in (syncCmdMode echoes PullResult.Instance); the Update case re-seats the session on it and feeds the finish screen
+}
 
 // connSavedMsg carries the just-written cred (+ the draft it came from) back
 // from the connection form. Wizard mode uses it to start the first pull and to
 // retain the user's input for the failed-pull retry path; panel mode treats it
 // as the success line.
 type connSavedMsg struct {
-	cred  *clientops.CacheCred
-	draft *connDraft
+	cred     *clientops.CacheCred
+	draft    *connDraft
+	instance string // the form's canonical target slot; both Update branches consume it — wizard routes the first pull through it, panel mode re-seats the session on it
 }
 
 // clientStatusMsg reports a user-visible success line (e.g. cred saved).
 type clientStatusMsg string
 
-// refreshDataCmd re-reads cred + snapshot + cache.bin mtime. Any failure rides
-// errMsg so the banner explains why the panel is empty.
-func refreshDataCmd() tea.Msg {
-	cred, err := clientops.ReadCacheCred()
-	if err != nil || cred == nil {
-		if err == nil {
-			err = fmt.Errorf("读取连接配置失败: cache.auth.json 不存在")
-		} else {
-			err = fmt.Errorf("读取连接配置失败: %w", err)
+// refreshDataCmdFor re-reads ONE slot's cred + snapshot + cache.bin mtime.
+// Any failure rides errMsg so the banner explains why the panel is empty.
+func refreshDataCmdFor(instance string) tea.Cmd {
+	return func() tea.Msg {
+		cred, err := clientops.ReadCacheCredFor(instance)
+		if err != nil || cred == nil {
+			if err == nil {
+				err = fmt.Errorf("读取连接配置失败: cache.auth.json 不存在")
+			} else {
+				err = fmt.Errorf("读取连接配置失败: %w", err)
+			}
+			return errMsg{err}
 		}
-		return errMsg{err}
+		snap, err := clientops.LoadCacheSnapshotFor(instance)
+		// Plan 34: 报文归因面钉在 mcp --cache 与 cache status 两处（spec §4）；TUI 保持原始错误文本——pull 路径已有哨兵信息。
+		if err != nil {
+			return errMsg{err}
+		}
+		_, bin, _, _, err := clientops.CachePathsFor(instance)
+		if err != nil {
+			return errMsg{err}
+		}
+		var age time.Duration
+		if fi, serr := os.Stat(bin); serr == nil {
+			age = time.Since(fi.ModTime())
+		}
+		return dataReadyMsg{instance: instance, cred: cred, snap: snap, scoped: clientops.CacheScopeVerifiedFor(instance), age: age}
 	}
-	snap, err := clientops.LoadCacheSnapshot()
-	// Plan 34: 报文归因面钉在 mcp --cache 与 cache status 两处（spec §4）；TUI 保持原始错误文本——pull 路径已有哨兵信息。
-	if err != nil {
-		return errMsg{err}
-	}
-	_, bin, _, _, err := clientops.CachePaths()
-	if err != nil {
-		return errMsg{err}
-	}
-	var age time.Duration
-	if fi, err := os.Stat(bin); err == nil {
-		age = time.Since(fi.ModTime())
-	}
-	return dataReadyMsg{cred: cred, snap: snap, scoped: clientops.CacheScopeVerified(), age: age}
 }
+
+var refreshDataCmd = refreshDataCmdFor("") // zero-change wrapper for existing callers
 
 // syncCmdMode is the pull command (panel and wizard share it). In WIZARD mode
 // a successful pull returns pullSucceededMsg (→ the .mcp.json finish screen)
@@ -123,7 +135,7 @@ func refreshDataCmd() tea.Msg {
 // the wizard can reopen the form under a classified banner
 // (classifyPullError). The pin from the stored cred is mandatory — the TUI
 // NEVER offers plaintext pulls (AllowPlain stays false).
-func syncCmdMode(cred *clientops.CacheCred, wizard bool) tea.Cmd {
+func syncCmdMode(cred *clientops.CacheCred, instance string, wizard bool) tea.Cmd {
 	return func() tea.Msg {
 		if cred == nil {
 			return syncDoneMsg{fmt.Errorf("连接配置未加载，无法同步")}
@@ -131,12 +143,18 @@ func syncCmdMode(cred *clientops.CacheCred, wizard bool) tea.Cmd {
 		if cred.Pin == "" {
 			return syncDoneMsg{fmt.Errorf("连接配置缺 pin（本界面永不走明文拉取）——请 [c] 编辑连接补上")}
 		}
-		err := clientops.DoPull(cred.URL, cred.Token, cred.Pin, clientops.PullOpts{Timeout: clientops.LazyPullTimeout})
+		res, err := clientops.DoPull(cred.URL, cred.Token, cred.Pin, clientops.PullOpts{Timeout: clientops.LazyPullTimeout, Instance: instance})
 		if err != nil {
 			return syncDoneMsg{err}
 		}
 		if wizard {
-			return pullSucceededMsg{}
+			// §5: auth lands on the EFFECTIVE slot after a successful pull. A
+			// write failure is a WARNING (pull succeeded; refresh chain down
+			// until the next successful pull) with the TUI-honest recovery path.
+			if werr := clientops.WriteCacheCredFor(res.Instance, cred); werr != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: auth 未落盘——本 TUI 的 [s] 同步不可用；恢复 = CLI cache pull 或重跑向导表单（输入已保留）: %v\n", werr)
+			}
+			return pullSucceededMsg{instance: res.Instance}
 		}
 		return syncDoneMsg{nil}
 	}
@@ -153,7 +171,8 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.overlay != nil {
 		switch msg := msg.(type) {
 		case dataReadyMsg, syncDoneMsg, pullSucceededMsg, connSavedMsg,
-			clientStatusMsg, errMsg, formDoneMsg:
+			clientStatusMsg, errMsg, formDoneMsg,
+			instancePickedMsg, instancePickerClosedMsg: // Plan 40 批2 T6
 			// owned: fall through to the switch below
 		case tea.WindowSizeMsg:
 			m.width, m.height = msg.Width, msg.Height
@@ -168,6 +187,12 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch kp := msg.(type) {
 	case dataReadyMsg:
+		if kp.instance != m.instance {
+			return m, nil // stale slot reply (user switched mid-flight)
+		}
+		if !m.pickerChecked && m.autoPickerIfVacuum() {
+			return m, m.overlay.Init()
+		}
 		m.cred, m.snap, m.scoped, m.cacheAge = kp.cred, kp.snap, kp.scoped, kp.age
 		m.syncList()
 		return m, nil
@@ -175,9 +200,6 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		if kp.err != nil {
 			if m.wizard {
-				// Failed FIRST pull: reopen the form WITH the previous input
-				// (editConnForm prefills from the retained draft; the masked
-				// code stays empty) under the classified banner.
 				m.err, m.status = errors.New(classifyPullError(kp.err)), ""
 				m.overlay = m.editConnForm()
 				return m, m.overlay.Init()
@@ -186,35 +208,38 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.err, m.status = nil, "同步完成"
 		}
-		return m, refreshDataCmd
+		return m, refreshDataCmdFor(m.instance)
+
 	case pullSucceededMsg:
-		// Wizard only (syncCmdMode): the first pull worked — cache is live,
-		// show the .mcp.json finish screen. refreshDataCmd loads the fresh
-		// snapshot so the panel behind the overlay is current.
 		m.busy = false
 		m.err, m.status = nil, "首次同步完成"
 		m.finish = true
-		// nil/空防御职责在调用点（spec rev3 §4.2）：判空后传 ""，杜绝在
-		// 传参处解引用 nil cred；函数内只对空串渲染占位。
+		m.instance = kp.instance // R2-Q2a: land on the effective slot
 		serveURL := ""
 		if m.cred != nil {
 			serveURL = m.cred.URL
 		}
-		m.overlay = clientFinishScreen(serveURL)
-		return m, tea.Batch(m.overlay.Init(), refreshDataCmd)
+		m.overlay = clientFinishScreen(serveURL, kp.instance)
+		return m, tea.Batch(m.overlay.Init(), refreshDataCmdFor(kp.instance))
+
 	case connSavedMsg:
 		m.err, m.status = nil, ""
 		m.cred, m.draft = kp.cred, kp.draft
 		if m.wizard {
-			m.busy = true // first pull in flight
-			return m, syncCmdMode(kp.cred, true)
+			m.busy = true
+			return m, syncCmdMode(kp.cred, kp.instance, true)
 		}
+		m.instance = kp.instance // §3.3: UI/auth/[s] follow the form-routed slot
 		m.status = "连接配置已保存"
-		return m, refreshDataCmd
+		return m, refreshDataCmdFor(kp.instance)
+
 	case clientStatusMsg:
 		m.err, m.status = nil, string(kp)
-		return m, refreshDataCmd
+		return m, refreshDataCmdFor(m.instance)
 	case errMsg:
+		if !m.pickerChecked && m.autoPickerIfVacuum() {
+			return m, m.overlay.Init()
+		}
 		m.err, m.status = kp.err, ""
 		return m, nil
 	case formDoneMsg:
@@ -225,7 +250,15 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, wizFinishTo(roles.RoleClient, "client")
 		}
 		m.overlay = nil
-		return m, tea.Batch(kp.after, refreshDataCmd)
+		return m, tea.Batch(kp.after, refreshDataCmdFor(m.instance))
+	case instancePickedMsg:
+		// §3.1 in-session slot switch: drop the picker, retarget the session,
+		// and re-read THAT slot — its reply carries the matching instance.
+		m.instance, m.overlay, m.err = kp.instance, nil, nil
+		return m, refreshDataCmdFor(kp.instance)
+	case instancePickerClosedMsg:
+		m.overlay = nil
+		return m, nil
 	case tea.KeyPressMsg:
 		// (the pre-gate overlay branch lived here; keys now route through the
 		// gate above — absorbing KeyPressMsg changed no behavior, see 注记 4)
@@ -244,7 +277,16 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case k.Text == "s" && !m.busy:
 			m.busy, m.err, m.status = true, nil, ""
-			return m, syncCmdMode(m.cred, m.wizard)
+			return m, syncCmdMode(m.cred, m.instance, m.wizard)
+		case k.Text == "i" && !m.busy:
+			// §3.5: single-slot override envs keep this UI off (T7 refines the
+			// banner); busy swallows the key above via the guard.
+			if clientops.SingleSlotOverrideEnvSet() {
+				m.status = "单槽模式（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK 覆盖中）——多实例 UI 已禁用"
+				return m, nil
+			}
+			m.overlay = newInstancePicker()
+			return m, m.overlay.Init()
 		case k.Text == "c":
 			// Wizard mode may edit on a fresh machine (no stored cred yet) —
 			// the form IS the flow's entry; panel mode still requires a cred
@@ -271,6 +313,27 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// autoPickerIfVacuum is the §3.2 one-shot probe, latched by pickerChecked: the
+// FIRST errMsg/dataReadyMsg after startup (stale replies don't count — they
+// return before reaching it) consults it. The default slot must be a TRUE
+// four-file vacuum (the same judgment as first-enroll relocation), single-slot
+// overrides must be off, no overlay may be up, and at least one named instance
+// must exist — only then does the picker open INSTEAD of this message being
+// processed.
+func (m *clientModel) autoPickerIfVacuum() bool {
+	m.pickerChecked = true // latch regardless of outcome
+	vac, verr := clientops.DefaultSlotVacuum()
+	if verr != nil || !vac || clientops.SingleSlotOverrideEnvSet() || m.overlay != nil {
+		return false
+	}
+	names, lerr := clientops.ListInstances()
+	if lerr != nil || len(names) == 0 {
+		return false
+	}
+	m.overlay = newInstancePicker()
+	return true
 }
 
 // syncList mirrors the snapshot's servers into the list panel.
@@ -338,9 +401,13 @@ func validPin(v string) error {
 
 // connDraft backs the connection-edit form. Code (设备码) is the ONLY secret:
 // masked and NOT prefilled — empty keeps the existing token. Pin is a public
-// SPKI fingerprint, so it is shown plainly and prefilled.
+// SPKI fingerprint, so it is shown plainly and prefilled. Instance (Plan 40
+// 批2 §4) is the optional cross-slot routing: prefilled with the SELECTED
+// slot, empty means the default instance; absent from the form entirely under
+// a single-slot override env (spec §3.5).
 type connDraft struct {
 	URL, Code, Pin string
+	Instance       string // Plan 40 批2 §4: the form's target slot ("" = default)
 }
 
 // editConnForm builds the connection form. Prefill order: the LAST SUBMITTED
@@ -358,37 +425,170 @@ func (m clientModel) editConnForm() overlay {
 		urlVal, pinVal = m.draft.URL, m.draft.Pin
 	}
 	wizard := m.wizard
-	d := &connDraft{URL: urlVal, Pin: pinVal}
-	form := huh.NewForm(huh.NewGroup(
+
+	// Plan 40 批2 §4: optional instance field. Absent entirely under a single-slot
+	// override env (spec §3.5 — disabled, and the field is omitted rather than
+	// rendered inert).
+	singleSlot := clientops.SingleSlotOverrideEnvSet()
+	instances, _ := clientops.ListInstances()
+	selected := m.instance // already canonical (it names an on-disk dir or "")
+
+	// canonicalInstance casefold-matches the typed value against existing instance
+	// dirs and returns the CANONICAL dir name (spec §4 rev5: fold is for
+	// normalizing to the on-disk slot; pull-side comparisons stay exact).
+	canonicalInstance := func(v string) string {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return ""
+		}
+		for _, n := range instances {
+			if strings.EqualFold(n, v) {
+				return n
+			}
+		}
+		return v
+	}
+
+	d := &connDraft{URL: urlVal, Pin: pinVal, Instance: selected}
+
+	inputFields := []huh.Field{
 		huh.NewInput().Title("serve 地址").Value(&d.URL).Validate(validServeURL),
+	}
+	if !singleSlot {
+		inputFields = append(inputFields,
+			huh.NewInput().Title("实例名（可选——默认实例留空）").Value(&d.Instance).Validate(func(v string) error {
+				v = strings.TrimSpace(v)
+				if v == "" {
+					return nil
+				}
+				return instname.Valid(v)
+			}))
+	}
+	inputFields = append(inputFields,
 		huh.NewInput().Title("设备码（留空=保持不变）").Value(&d.Code).EchoMode(huh.EchoModePassword),
 		huh.NewInput().Title("pin（SPKI 指纹，公开信息）").Value(&d.Pin).Validate(validPin),
-	))
+	)
+	form := huh.NewForm(huh.NewGroup(inputFields...).Description(swapWarning(selected, singleSlot)))
+
 	return newFormOverlay("编辑连接", form, func() tea.Cmd {
 		return func() tea.Msg {
+			target := canonicalInstance(d.Instance)
+			sameSlot := strings.EqualFold(target, selected)
+			// rule 2: fold-hit on an EXISTING instance that is NOT the selected slot
+			// → hard refuse (NTFS collision / cross-slot re-route; to re-code an
+			// existing instance, [i]-switch to it first — spec §4 rev5).
+			if target != "" && !sameSlot {
+				for _, n := range instances {
+					if strings.EqualFold(n, target) {
+						return errMsg{fmt.Errorf("实例名与已存在实例 %s 冲突——对其换码请先 [i] 切换到该实例（跨槽路由被拒绝）", n)}
+					}
+				}
+			}
+			code := strings.TrimSpace(d.Code)
+			// rule 1: cross-slot, or a selected slot with no stored auth → code REQUIRED
+			if (!sameSlot || token0 == "") && code == "" {
+				return errMsg{errors.New("设备码不能为空——跨实例路由或本槽无已保存设备码时不存在\"保持不变\"")}
+			}
+			// panel-mode vacuum guard (spec §4): empty field on a vacuum default
+			// would silently become an auto-relocation trigger surface — refuse with
+			// mode-dependent guidance.
+			if !wizard && target == "" && !singleSlot {
+				if vac, verr := clientops.DefaultSlotVacuum(); verr == nil && vac {
+					return errMsg{errors.New("默认实例无材料——首次 enroll 请走向导流程（自动归位），或填实例名显式路由")}
+				}
+			}
+			// spec rev5 §4 (review F1): the MIRROR of that gate under a
+			// single-slot override env. There the instance field is omitted, so
+			// target is always "" — without this branch the "model cred in hand,
+			// resolved slot a four-file vacuum" half-dead state would pass every
+			// earlier gate and SILENTLY rewrite cache.auth.json. Vacuum-probe
+			// errors refuse too (fail-closed); wizard flow keeps its exemption.
+			if !wizard && singleSlot && target == "" {
+				if vac, verr := clientops.DefaultSlotVacuum(); verr != nil || vac {
+					return errMsg{errors.New("override env（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK）覆盖中：单槽语义下无多实例路由，请清除 env 或按单槽使用")}
+				}
+			}
+			if singleSlot && target != "" {
+				return errMsg{fmt.Errorf("--instance and %s are mutually exclusive — unset the env or clear the 实例名 field", overrideEnvName())}
+			}
+
 			token := token0
-			if code := strings.TrimSpace(d.Code); code != "" {
+			if code != "" {
 				token = code
 			}
 			if token == "" {
 				return errMsg{errors.New("设备码不能为空（本机没有已保存的设备码可保持）")}
 			}
-			cred := &clientops.CacheCred{
-				URL:   strings.TrimSpace(d.URL),
-				Token: token,
-				Pin:   strings.TrimSpace(d.Pin),
-			}
-			if err := clientops.WriteCacheCred(cred); err != nil {
-				return errMsg{err}
-			}
+			cred := &clientops.CacheCred{URL: strings.TrimSpace(d.URL), Token: token, Pin: strings.TrimSpace(d.Pin)}
 			if wizard {
-				// Carry the draft + fresh cred back so the model can start the
-				// first pull AND retain the input for the failed-pull retry.
-				return connSavedMsg{cred: cred, draft: d}
+				// §5 wizard row: NOTHING is persisted at save time — the pull reveals
+				// the effective slot (auto-relocation), auth lands after success.
+				return connSavedMsg{cred: cred, draft: d, instance: target}
 			}
-			return clientStatusMsg("连接配置已保存")
+			// §5 panel row: write NOW to the form-routed slot. A NEW instance slot
+			// needs its directory first (WriteCacheCredFor never creates parents —
+			// §0.13); on write failure clean up the dir we just created IF empty
+			// (os.Remove fails on non-empty = exactly the guard we want).
+			created := false
+			if target != "" {
+				tdir, _, _, _, derr := clientops.CachePathsFor(target)
+				if derr != nil {
+					return errMsg{derr}
+				}
+				if _, serr := os.Stat(tdir); os.IsNotExist(serr) {
+					if mkerr := os.MkdirAll(tdir, 0o700); mkerr != nil {
+						return errMsg{mkerr}
+					}
+					created = true
+				}
+				if werr := clientops.WriteCacheCredFor(target, cred); werr != nil {
+					if created {
+						os.Remove(tdir) // best-effort; only removes when empty
+					}
+					return errMsg{werr}
+				}
+			} else if werr := clientops.WriteCacheCredFor("", cred); werr != nil {
+				return errMsg{werr}
+			}
+			return connSavedMsg{cred: cred, draft: d, instance: target}
 		}
 	})
+}
+
+// overrideEnvName names the single-slot override env that is present (spec
+// §3.5: at most one of the two full overrides is honored by CachePathsFor —
+// checked in this order). Defensive-guard copy only: under a real single-slot
+// session the instance field is not rendered and the target stays empty.
+func overrideEnvName() string {
+	if os.Getenv("SSHMGR_CACHE_DIR") != "" {
+		return "SSHMGR_CACHE_DIR"
+	}
+	return "SSHMGR_CACHE_DEK"
+}
+
+// swapWarning renders the build-time-static 换码 warning for the SELECTED slot
+// (spec §6 — never reacts to field input; the gate stays the only enforcer).
+func swapWarning(selected string, singleSlot bool) string {
+	_, bin, metaPath, _, err := clientops.CachePathsFor(selected)
+	if err != nil {
+		return ""
+	}
+	if _, serr := os.Stat(bin); serr != nil {
+		return "" // no bin: vacuum/new slot — no warning
+	}
+	device := "(旧 cache 未登记)"
+	if b, rerr := os.ReadFile(metaPath); rerr == nil {
+		var m struct {
+			Device string `json:"device_name"`
+		}
+		if json.Unmarshal(b, &m) == nil && m.Device != "" {
+			device = m.Device
+		}
+	}
+	if selected == "" {
+		return fmt.Sprintf("⚠ 默认实例已绑定设备 %s——更换设备码前须清三件套（cache.auth.json + cache.bin + quarantine/，保留 cache.meta.json 与 cache.config.json——它们是默认槽意图标记，删了重 enroll 会被归位到实例槽）重 enroll，否则下次同步将被门禁拒绝；若是本机第二个 agent，请在\"实例名\"字段填新实例名。", device)
+	}
+	return fmt.Sprintf("⚠ 实例 %s 已绑定设备 %s——换码须删除该实例目录重 enroll，否则同步将被拒。", selected, device)
 }
 
 // classifyPullError turns a raw pull error into the client wizard's four-state
@@ -431,25 +631,31 @@ func classifyPullError(err error) string {
 // same project token works for both. serveURL is passed AS-IS from the stored
 // cred (trailing-slash invariance verified experimentally: the serve handler
 // is root-mounted and path-agnostic); an empty value renders "<serve URL>".
-// The http block's Bearer is a FIXED placeholder — the client machine never
-// holds the project token (the device code in cache.auth.json authorizes
-// pulls only; the agent's MCP auth is the project token minted on the server
-// machine's Projects page). Token rides env, not argv (ps/proc visibility —
-// Plan 20 B2).
-func clientFinishScreen(serveURL string) overlay {
+// A non-empty instance (Plan 40 批2 §7) pins the offline snippet to that slot:
+// args gain --instance and a note tells the user where the cache landed; ""
+// keeps the legacy dual forms untouched. The http block's Bearer is a FIXED
+// placeholder — the client machine never holds the project token (the device
+// code in cache.auth.json authorizes pulls only; the agent's MCP auth is the
+// project token minted on the server machine's Projects page). Token rides
+// env, not argv (ps/proc visibility — Plan 20 B2).
+func clientFinishScreen(serveURL, instance string) overlay {
 	if serveURL == "" {
 		serveURL = "<serve URL>"
 	}
-	offline := mcpConfigLines(
-		[]string{
-			`"args": ["mcp", "--cache"]`,
-			stdioEnvLine("<project token>"),
-		},
-		[]string{
-			"client 角色用 --cache 离线缓存模式启动；SSHMGR_TOKEN 填 server 机 Projects 页签发的 project token（不是设备码——设备码只用于拉取缓存，刚才已保存）。",
-			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
-			".mcp.json 含 token，不要提交进 git。",
-		})
+	args := []string{`"args": ["mcp", "--cache"]`}
+	notes := []string{
+		"client 角色用 --cache 离线缓存模式启动；SSHMGR_TOKEN 填 server 机 Projects 页签发的 project token（不是设备码——设备码只用于拉取缓存，刚才已保存）。",
+		`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
+		".mcp.json 含 token，不要提交进 git。",
+	}
+	if instance != "" {
+		// Plan 40 批2 §7: the cache landed in instances/<name>/ — the config must
+		// route the agent there or mcp --cache reports "default cache missing".
+		args = []string{fmt.Sprintf(`"args": ["mcp", "--cache", "--instance", %q]`, instance)}
+		notes = append([]string{fmt.Sprintf("本机 cache 位于实例槽 instances/%s/——args 必须带 --instance %s。", instance, instance)}, notes...)
+	}
+	offline := mcpConfigLines(append(args,
+		stdioEnvLine("<project token>")), notes)
 	online := mcpHttpConfigLines(serveURL, "<server 机 Projects 页签发的 token>", []string{
 		`"type": "http" 必填——漏了会被当 stdio 处理并拒绝该条目。`,
 		"两种形态用的是同一个 project token（server 机 Projects 页 [a] 新增 / [e] 轮换签发）。",
@@ -532,6 +738,17 @@ func (m clientModel) View() tea.View {
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(" ssh-manager (client)") + "\n")
+	singleSlot := clientops.SingleSlotOverrideEnvSet()
+	if singleSlot {
+		// §3.5: the two override envs pin this process to ONE cache slot —
+		// say so where a user would otherwise wonder why [i] is gone.
+		b.WriteString(warnStyle.Render("⚠ 单槽模式（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK 覆盖中）——多实例 UI 已禁用") + "\n")
+	}
+	if m.instance != "" {
+		// §3.4: a named slot is always visible in the chrome — there is no way
+		// to forget which instance this panel is showing.
+		b.WriteString(warnStyle.Render("· 实例 "+m.instance) + "\n")
+	}
 	b.WriteString(hint)
 	n := 0
 	if m.snap != nil {
@@ -542,8 +759,14 @@ func (m clientModel) View() tea.View {
 		// desktop panels (2026-08-17): list + detail fitted to the terminal;
 		// body height = frame minus header/hint/status/footer rows.
 		chrome := 4
+		if singleSlot {
+			chrome++ // the §3.5 banner line (conditional like every other row)
+		}
 		if m.wizard {
 			chrome++ // the hint line
+		}
+		if m.instance != "" {
+			chrome++ // the named-instance line (Plan 40 批2 T6)
 		}
 		if m.busy {
 			chrome++ // the 同步中… line
@@ -563,6 +786,12 @@ func (m clientModel) View() tea.View {
 	} else if m.status != "" {
 		b.WriteString(footerStyle.Render("✓ "+m.status) + "\n")
 	}
-	b.WriteString(clip(m.width, footerStyle.Render("[s]同步 [c]编辑连接 [t]TTL  q 退出")))
+	// §3.5 footer variant: the [i] key would bounce off the single-slot guard
+	// in Update — don't advertise it while that mode is on.
+	clientFooter := "[s]同步 [i]实例 [c]编辑连接 [t]TTL  q 退出"
+	if singleSlot {
+		clientFooter = "[s]同步 [c]编辑连接 [t]TTL  q 退出"
+	}
+	b.WriteString(clip(m.width, footerStyle.Render(clientFooter)))
 	return altScreen(tea.NewView(b.String()))
 }

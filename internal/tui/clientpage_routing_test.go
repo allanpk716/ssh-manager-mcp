@@ -100,8 +100,8 @@ func TestClientGateWindowSizeRecordsAndForwards(t *testing.T) {
 //     (input preservation, TestClientWizard_PullFailureReopensFormWithDraft)
 //     — the overlay would never be nil at the end. Panel mode + a seeded
 //     Token-only cred opens the SAME form with the SAME completion
-//     assertions and stays offline: the post-save path is clientStatusMsg →
-//     refreshDataCmd → errMsg (no cache DEK in SSHMGR_CACHE_DIR), so no pull
+//     assertions and stays offline: the post-save path is connSavedMsg →
+//     refreshDataCmdFor(m.instance) → errMsg (no cache DEK), so no pull
 //     is ever attempted. The empty URL/Pin also mean no prefill — typed chars
 //     land where intended.
 //   - mechanics: fields advance via Enter + drain (T3's
@@ -112,6 +112,14 @@ func TestClientGateWindowSizeRecordsAndForwards(t *testing.T) {
 func TestClientLoopEditConnFormCompletes(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SSHMGR_CACHE_DIR", dir)
+	// Spec rev5 §4 (review F1): an empty-field submit on a four-file VACUUM
+	// resolved slot now refuses instead of silently rewriting cache.auth.json.
+	// This happy-path driver only needs a non-vacuum slot — one bare bin
+	// marker defeats the vacuum judgment and keeps the test's original intent
+	// (full keystroke round → overlay closes → auth written).
+	if err := os.WriteFile(filepath.Join(dir, "cache.bin"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	m := newClientModelForGate(t)
 	m.cred = &clientops.CacheCred{Token: "existing-token"} // panel 'c' guard; empty URL/Pin = no prefill
 	m2, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})

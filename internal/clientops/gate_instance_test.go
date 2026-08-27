@@ -17,7 +17,8 @@ import (
 func pullInstance(t *testing.T, instance string, srvName *string) error {
 	t.Helper()
 	url, pin := newPinnedTLSServer(t, deviceSnapshotHandler(srvName))
-	return DoPull(url, "code", pin, PullOpts{Instance: instance})
+	_, err := DoPull(url, "code", pin, PullOpts{Instance: instance})
+	return err
 }
 
 func instDir(t *testing.T, userDir, name string) string {
