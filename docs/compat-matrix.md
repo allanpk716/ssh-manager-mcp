@@ -4,12 +4,13 @@
 
 ## 已验证组合
 
-<!-- v0.12.0（Plan 40 批2：首次 enroll 自动归位 + TUI 多实例（client 页 [i] 实例 picker / 连接表单"实例名"字段前置校验三连 / 换码预防性警告 / 向导 finish 屏 .mcp.json 带 --instance）+ `cache config [--instance] --max-offline` 子命令）：未发版占位——客户端纯增量、无破坏性变更（DoPull 改返回 PullResult{Instance} 属 internal 包签名变更，不涉协议面）；发版双端验证后再追加「已验证组合」行并回写验证日期，届时删除本注释。 -->
+<!-- v0.12.0 已发版(2026-08-27, release CI 绿——首跑 windows lane TestExecOutputAheadOffsetReturnsImmediately #8 flake 族第三例,重跑绿)+双端部署验证(笔记本 v0.11.0→v0.12.0 换装 doctor 0/0; NUC10 服务重启 HEALTHY+doctor 0/0; 生产实证=空 device_name(v0.10.0 旧进程 lazy pull 抹除)经三分支"未登记→放行补记"分支由 v0.12.0 拉取自动补记 laptop-v040——门禁即刻武装)。 -->
 
 <!-- v0.10.1 + v0.11.0 已发版(2026-08-27, release CI 双 tag 全绿)+双端部署验证——回写完成。注: v0.10.1 tag(09a8865)实际包含 Plan 40 P0 锚修复(祖先链: v0.10.0→P0→plan 文档→Plan41 spec→批1),下表 v0.10.1 行已补记。 -->
 
 | client 版本 | serve 版本 | 在线（HTTP MCP） | 离线（cache pull / mcp --cache） | 验证日期 |
 |---|---|---|---|---|
+| v0.12.0 | v0.12.0 | ✅（在线面不变——批2 为 client 纯增量（TUI/CLI/归位），serve 侧无变更；与 v0.11.0×v0.11.0 在线行为一致） | ✅ 全功能+批2（Plan 40 第二批：**首次 enroll 自动归位**——裸 pull/wizard 首拉在真空 v4（默认槽 bin/auth/meta/config 四文件全缺）下 retarget 到 `instances/<头name>/`（归位幂等、拒绝分支零写盘/零目录/零 DEK）；**TUI 多实例**——client 页 `[i]` 实例 picker（会话内切换、单槽 override env 横幅禁用）、连接表单"实例名"字段+规范名前置校验三连（跨槽码必填/casefold 碰撞拒/同槽换码允）、换码预防性警告（runbook v2：清三件套保留 meta/config 意图标记）、向导 finish 屏 `.mcp.json` 带 `--instance`、首拉自动选中；**写序三分**——wizard auth 后移（失败零写入）/面板 MkdirAll+失败清理+切槽/CLI 按返回槽写；**`cache config [--instance] --max-offline`**（三源显示/仅已存在实例/无 off 开关）；cap 文件校验独立于 env（pull 写入面）；`gateNamedInstance` 收紧（bin 缺席也读 meta 拒异身份）。**边界如实**：doctor 仍不感知命名实例（Plan 38 体系）；换码清理保留的 meta 携带旧身份（无害痕迹，下次 pull 覆写）） | ✅ 2026-08-27：双端部署 v0.12.0（NUC10 serve HEALTHY/doctor 0/0；笔记本 doctor 0/0 + `cache status` 列表视图/`cache config` 显示冒烟 + 存储 cred 实拉成功）；空 device_name 补记实锤（v0.10.0 旧进程 lazy pull 产物 → v0.12.0 拉取补记 `laptop-v040`） |
 | v0.11.0 | v0.11.0 | ✅（在线面不变；`/snapshot` 新增响应头 `X-Sshmgr-Device-Name`——老 client 忽略，新 client 用于实例路由与 `--instance` 强一致校验。2026-08-27 双端部署验证） | ✅ 全功能（Plan 40 第一批：多实例 CLI 闭环——`cache pull/status --instance`、`mcp --cache --instance`、`instances/<name>/` 目录 + per-instance DEK `cache-dek-<name>.key`、`cache.config.json` MAX_OFFLINE 持久化 + `pull --max-offline`、默认实例身份门禁三分支（存量空 `device_name` 补记——零迁移）、`clear` 清实例树 + DEK 变体、roles 认命名实例机；**P0 锚修复**：pinned pull 恒记服务器锚——无 env 的 pull / TUI `[s]` 同步不再抹 `server_anchored`（v0.10 部署实测的"同步致 mcp --cache 瘫痪"bug 根治）。**边界如实**：首次 enroll 无 flag 仍落默认目录（自动归位第二批）、TUI client 页仅默认实例、doctor 不感知命名实例） | ✅ 2026-08-27：serve 启动 name 扫描过（NUC10 active 码仅 `laptop-v040`，白名单合法）；笔记本 re-pull 后 meta `device_name` 补记生效、TUI 同步限制解除 |
 | v0.11.0 | v0.10.0 | ✅（MCP 工具面无变化；老 serve 不下发 `X-Sshmgr-Device-Name` 头，在线行为同 v0.10.0×v0.10.0） | ⚠️ 受限（多实例不可用，前两项均带提示文案——**`--instance` 拒**：报错 "`--instance requires a Plan-40 serve`"（提示升级 serve 或去掉 flag 用默认槽）；**默认实例身份门禁不生效**：响应头缺失 → 门禁跳过 + WARNING 提示升级后生效（老 serve 拓扑异码覆盖敞口维持现状级，非新增敞口）；**无自动归位**：首次 enroll 无 flag 仍落默认目录（与 v0.11×v0.11 同——自动归位本批即未实现，第二批）；无 flag 的 pull/mcp/status 走默认目录，行为与 v0.10.0 一致（零迁移）——除 `cache status` 无 `--instance` 时输出为列表视图（默认槽一行 + 每实例一行，rev3 §2.6；对老 serve 拓扑通常只有默认槽一行） | 未逐项实测（v0.10.0 serve 已于 2026-08-27 同批升级 v0.11.0，该组合仅存在于升级窗口——行为由单元矩阵钉住） |
 | v0.10.0 | v0.10.0 | ✅（NUC10 权威 broker + 笔记本；client 先 serve 后，schtasks 独立任务重启 serve；NUC10 exe 改经 GitHub release 直连下载——`upload_file` 自硬 per-file cap（1 MiB）后 17 MB exe 已传不动，本版起部署通道改道；zip/exe sha256 双核对 `e54a8b11…`/`aca1f4c9…`；升级按 Plan 39 runbook：换二进制 → `cache-tokens bind laptop-v040 e2e-profile` → 重启 serve；**Plan 39 裁剪实测：re-pull 后 cache 11→10 srv / 12→10 creds，`cache status` scope=e2e-profile，gitlab-urit 离线零出现（探针 grep=0）**；离线探针 serverInfo 0.10.0 + 10 工具，exec_background/exec_output/exec_stop/upload_content 新面全在） | ✅（doctor 双端 0 WARN 0 FAIL；NUC10 解密探针 11 srv/12 creds 整库（服务端不裁）、serve cert 指纹 `c69b2560…` 未变零重 pin、serve HEALTHY；**Plan 37 到龄自废已在笔记本启用 `SSHMGR_CACHE_MAX_OFFLINE=24h`**——pull 侧 wrapper 与 load 侧 MCP env 双路径，服务器 Date 锚已建立（anchored pull exit=0），离线加载实测不破） | 2026-08-26 |
@@ -21,7 +22,7 @@
 | v0.8.0 | v0.8.0 | ✅（NUC10 权威 broker + 笔记本；发版后按铁律 client 先 serve 后） | ✅（cache 9 servers/10 creds；owner ssh 三连 smoke：echo=exit 0 / 远端非零=CLI 非零+stderr 报码 / 无命令=显式报错） | 2026-08-17 |
 | v0.7.3 | v0.7.3 | ✅（NUC10 权威 broker + 笔记本） | ✅（9/9 服务器） | 2026-08-16 |
 
-（v0.10.1/v0.11.0 已发版（2026-08-27）且双端部署于 v0.11.0；v0.8.2–v0.8.8 曾部署双端但未逐版登记本表（v0.8.8 行除外）；更早历史组合未逐一回归，旧版本请先看下方破坏性变更。）
+（v0.10.1/v0.11.0/v0.12.0 已发版（2026-08-27）；v0.12.0 双端部署验证；v0.8.2–v0.8.8 曾部署双端但未逐版登记本表（v0.8.8 行除外）；更早历史组合未逐一回归，旧版本请先看下方破坏性变更。）
 
 ## 已知破坏性变更
 
