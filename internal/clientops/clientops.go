@@ -726,7 +726,7 @@ func gateDefaultInstance(bin, metaPath, deviceName string, o PullOpts) error {
 		}
 		return fmt.Errorf("refusing pull: this cache belongs to device %q but the presented device code is %q — pick one:\n"+
 			"  1. this is a SECOND device on this machine: re-run the pull with --instance %q\n"+
-			"  2. replace the default instance's device code: delete cache.auth.json + cache.bin + cache.meta.json + the quarantine/ dir in this cache directory and re-enroll\n"+
+			"  2. replace the default instance's device code: delete cache.auth.json + cache.bin + the quarantine/ dir in this cache directory (KEEP cache.meta.json and cache.config.json — they mark this as the DEFAULT slot; deleting them re-routes the re-enroll into instances/) and re-enroll\n"+
 			"  3. owner: verify which device this code was issued for (`cache-tokens ls` on the server)", m.DeviceName, deviceName, deviceName)
 	case merr == nil:
 		return nil // legacy unregistered meta: adopt — the write below backfills device_name (§5 zero-migration)

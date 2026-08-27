@@ -90,6 +90,14 @@ func TestGate_DefaultInstance_ThreeBranches(t *testing.T) {
 	if !strings.Contains(err.Error(), "device code") && !strings.Contains(err.Error(), "cache-tokens") {
 		t.Fatalf("refusal must guide owner verification: %v", err)
 	}
+	// runbook v2 (T10): option 2 keeps meta/config as DEFAULT-slot intent markers
+	// and explains that deleting them re-routes re-enroll into instances/.
+	if !strings.Contains(err.Error(), "KEEP cache.meta.json and cache.config.json") || !strings.Contains(err.Error(), "instances/") {
+		t.Fatalf("option 2 must carry the runbook v2 text: %v", err)
+	}
+	if strings.Contains(err.Error(), "cache.meta.json + the quarantine") { // legacy four-piece list
+		t.Fatalf("runbook v2 must not advise deleting cache.meta.json: %v", err)
+	}
 	assertDirSumsUnchanged(t, mustCacheDir(t), before) // existing bin/meta/auth sha256 unchanged
 
 	// ② legacy unregistered (device_name empty) → allowed + backfilled (zero-migration lifeline)
