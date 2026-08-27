@@ -459,6 +459,12 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 	if err != nil {
 		return PullResult{}, err
 	}
+	// rev5 §1.2-5: pull-side file validation is INDEPENDENT of env — applies to
+	// the initially-resolved slot here, and to the relocation target after
+	// retarget (T2).
+	if verr := validateCapFileIndependent(dir); verr != nil {
+		return PullResult{}, verr
+	}
 	// Plan 37 §1/§2 + Plan 40 T13: fail-closed cap precheck (env > file) — an
 	// invalid cap from EITHER source refuses the pull before any HTTP (no
 	// half-open "pulls but won't load" state; the env's error is never masked

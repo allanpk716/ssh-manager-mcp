@@ -56,3 +56,51 @@ func WriteCacheConfig(dir, v string) error {
 func ValidateMaxOffline(v string) (time.Duration, error) {
 	return parseMaxOffline(strings.TrimSpace(v), "max_offline")
 }
+
+// validateCapFileIndependent checks the slot's cache.config.json VALIDITY
+// regardless of SSHMGR_CACHE_MAX_OFFLINE (rev5 §1.2-5): on the PULL side an
+// invalid file must refuse the WRITE even under a valid env — otherwise this
+// pull writes what an env-less loader will later refuse ("pulls but won't
+// load"). The LOAD side keeps env-wins (batch-1 semantics, §13.14).
+func validateCapFileIndependent(dir string) error {
+	blob, err := os.ReadFile(filepath.Join(dir, "cache.config.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cache.config.json unreadable: %w", err)
+	}
+	var c struct {
+		MaxOffline string `json:"max_offline"`
+	}
+	if err := json.Unmarshal(blob, &c); err != nil {
+		return fmt.Errorf("corrupt cache.config.json: %w", err)
+	}
+	_, perr := parseMaxOffline(strings.TrimSpace(c.MaxOffline), `max_offline in cache.config.json`)
+	return perr
+}
+
+// EffectiveMaxOffline resolves a slot's effective cap with its SOURCE label
+// ("env" / "file" / "off") for `cache config` display. Mirrors resolveMaxOffline
+// exactly (env wins including its error — display is not a write gate).
+func EffectiveMaxOffline(dir string) (time.Duration, string, error) {
+	if strings.TrimSpace(os.Getenv("SSHMGR_CACHE_MAX_OFFLINE")) != "" {
+		d, err := cacheMaxOffline()
+		return d, "env", err
+	}
+	blob, err := os.ReadFile(filepath.Join(dir, "cache.config.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, "off", nil
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("cache.config.json unreadable: %w", err)
+	}
+	var c struct {
+		MaxOffline string `json:"max_offline"`
+	}
+	if err := json.Unmarshal(blob, &c); err != nil {
+		return 0, "", fmt.Errorf("corrupt cache.config.json: %w", err)
+	}
+	d, perr := parseMaxOffline(strings.TrimSpace(c.MaxOffline), `max_offline in cache.config.json`)
+	return d, "file", perr
+}
