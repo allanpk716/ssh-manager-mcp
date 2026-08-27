@@ -593,6 +593,12 @@ func (m clientModel) View() tea.View {
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(" ssh-manager (client)") + "\n")
+	singleSlot := clientops.SingleSlotOverrideEnvSet()
+	if singleSlot {
+		// §3.5: the two override envs pin this process to ONE cache slot —
+		// say so where a user would otherwise wonder why [i] is gone.
+		b.WriteString(warnStyle.Render("⚠ 单槽模式（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK 覆盖中）——多实例 UI 已禁用") + "\n")
+	}
 	if m.instance != "" {
 		// §3.4: a named slot is always visible in the chrome — there is no way
 		// to forget which instance this panel is showing.
@@ -608,6 +614,9 @@ func (m clientModel) View() tea.View {
 		// desktop panels (2026-08-17): list + detail fitted to the terminal;
 		// body height = frame minus header/hint/status/footer rows.
 		chrome := 4
+		if singleSlot {
+			chrome++ // the §3.5 banner line (conditional like every other row)
+		}
 		if m.wizard {
 			chrome++ // the hint line
 		}
@@ -632,6 +641,12 @@ func (m clientModel) View() tea.View {
 	} else if m.status != "" {
 		b.WriteString(footerStyle.Render("✓ "+m.status) + "\n")
 	}
-	b.WriteString(clip(m.width, footerStyle.Render("[s]同步 [i]实例 [c]编辑连接 [t]TTL  q 退出")))
+	// §3.5 footer variant: the [i] key would bounce off the single-slot guard
+	// in Update — don't advertise it while that mode is on.
+	clientFooter := "[s]同步 [i]实例 [c]编辑连接 [t]TTL  q 退出"
+	if singleSlot {
+		clientFooter = "[s]同步 [c]编辑连接 [t]TTL  q 退出"
+	}
+	b.WriteString(clip(m.width, footerStyle.Render(clientFooter)))
 	return altScreen(tea.NewView(b.String()))
 }

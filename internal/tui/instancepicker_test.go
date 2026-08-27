@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -230,5 +231,69 @@ func TestClientGate_RegistersPickerMsgs(t *testing.T) {
 		if spy.spySaw(owned) {
 			t.Fatalf("owned %T must fall through to clientModel's own case", owned)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Plan 40 批2 T7 §3.5: single-slot override env → panel banner + footer
+// variant + auto-picker stays off. The probe is the SAME predicate as §1.1
+// cond 5 (clientops.SingleSlotOverrideEnvSet): SSHMGR_CACHE_DIR /
+// SSHMGR_CACHE_DEK count; SSHMGR_CACHE_DEK_DIR (coherent directory-level
+// seam) does not.
+// ---------------------------------------------------------------------------
+
+// TestClientView_SingleSlotBanner: with a full-override env present the panel
+// renders the §3.5 warning banner under the title AND drops the [i] hint from
+// the footer (the key would bounce off the Update guard) — the footer reverts
+// to the pre-T6 copy.
+func TestClientView_SingleSlotBanner(t *testing.T) {
+	mkInstanceDir(t, "agentA")                // isolation + both override envs cleared
+	t.Setenv("SSHMGR_CACHE_DIR", t.TempDir()) // AFTER the helper's clear: full single-slot override
+
+	v := newClientModelForGate(t).View().Content
+	if !strings.Contains(v, "单槽模式（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK 覆盖中）——多实例 UI 已禁用") {
+		t.Fatalf("single-slot env must render the banner under the title, got:\n%s", v)
+	}
+	if strings.Contains(v, "[i]实例") {
+		t.Fatalf("footer must not advertise [i] while the multi-instance UI is disabled, got:\n%s", v)
+	}
+}
+
+// TestClientSingleSlot_NoAutoPicker pins the probe exemption through the
+// dataReadyMsg arm (T6's table covers errMsg): even on a TRUE default-slot
+// vacuum with named instances present, a single-slot override keeps the picker
+// closed and processes the reply normally.
+func TestClientSingleSlot_NoAutoPicker(t *testing.T) {
+	mkInstanceDir(t, "agentA") // true four-file vacuum + one named instance
+	t.Setenv("SSHMGR_CACHE_DIR", t.TempDir())
+
+	m := newClientModelForGate(t)
+	nm, _ := m.Update(dataReadyMsg{
+		instance: "",
+		cred:     &clientops.CacheCred{URL: "https://x", Token: "t"},
+		snap:     &store.Snapshot{Servers: []store.SnapshotServer{{ID: "s", Name: "whatever"}}},
+	})
+	cm := nm.(clientModel)
+	if cm.overlay != nil {
+		t.Fatalf("single-slot override must keep the auto-picker closed, got overlay %T", cm.overlay)
+	}
+	if cm.snap == nil || len(cm.snap.Servers) != 1 {
+		t.Fatalf("with the probe exempted the reply must be processed normally, got snap=%v", cm.snap)
+	}
+}
+
+// TestClientSingleSlot_DEKDirExempt: SSHMGR_CACHE_DEK_DIR moves the whole DEK
+// tree coherently and does NOT trip single-slot mode — no banner, and the
+// multi-instance footer copy stays advertised.
+func TestClientSingleSlot_DEKDirExempt(t *testing.T) {
+	mkInstanceDir(t, "agentA")
+	t.Setenv("SSHMGR_CACHE_DEK_DIR", t.TempDir()) // the ONLY override-shaped env set
+
+	v := newClientModelForGate(t).View().Content
+	if strings.Contains(v, "单槽模式") {
+		t.Fatalf("SSHMGR_CACHE_DEK_DIR must not render the single-slot banner, got:\n%s", v)
+	}
+	if !strings.Contains(v, "[s]同步 [i]实例 [c]编辑连接 [t]TTL  q 退出") {
+		t.Fatalf("multi-instance footer must stay advertised, got:\n%s", v)
 	}
 }
