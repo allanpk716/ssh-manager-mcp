@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -306,6 +307,135 @@ func TestRelocate_ExportedJudgments(t *testing.T) {
 	t.Setenv("SSHMGR_CACHE_DEK_DIR", "z") // coherent directory-level seam — does NOT count
 	if SingleSlotOverrideEnvSet() {
 		t.Fatal("SSHMGR_CACHE_DEK_DIR must NOT count as a single-slot override")
+	}
+}
+
+// dirNames lists a directory's entry names (missing dir ⇒ nil). Used for
+// before/after inventories where a Stat cannot distinguish NTFS case aliases
+// (instances/agenta Stat-succeeds onto physical AGENTA).
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatal(err)
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
+}
+
+func TestRelocate_CasefoldExactGateRefusesZeroWrite(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the §11.4 nail needs NTFS case-insensitive aliasing — on a case-sensitive FS the retarget never resolves onto the resident directory")
+	}
+	userDir, dekDir := newRelocateEnv(t)
+	date := ptr(time.Now().UTC().Format(http.TimeFormat))
+	url, pin := newPinnedTLSServer(t, plan40Serve("code-", snapshotHandler(date, nil)))
+
+	defDir := filepath.Join(userDir, "ssh-manager")
+	instRoot := filepath.Join(defDir, "instances")
+	agDir := filepath.Join(instRoot, "AGENTA")
+
+	// 真空默认槽 + 预置 instances/AGENTA/ 只放 meta（device_name=AGENTA）——
+	// auth-only 残留形态：故意不放 cache.bin（bin 在场的碰撞已由
+	// gate_instance_test 覆盖），钉的是 bin-first 短路曾放过的大小写变体。
+	metaBefore := []byte(`{"url":"https://old.example","pulled_at":1,"server_anchored":true,"scoped":false,"device_name":"AGENTA"}`)
+	if err := os.MkdirAll(agDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agDir, "cache.meta.json"), metaBefore, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dekBefore := dirNames(t, dekDir)
+
+	// 裸 pull 头名 agenta（bearer 前缀的小写变体）：retarget 别名解析到物理
+	// AGENTA 目录，目标槽门禁必须按 EXACT 身份比对拒绝，且在任何写盘前。
+	var buf bytes.Buffer
+	res, err := DoPull(url, "code-agenta", pin, PullOpts{StatusOut: &buf})
+	if err == nil || !strings.Contains(err.Error(), "different device identity") {
+		t.Fatalf("case-variant identity must refuse: res=%+v err=%v out=%q", res, err, buf.String())
+	}
+	if strings.Contains(buf.String(), "first enroll located") {
+		t.Fatalf("no relocation hint may precede a refused write: %q", buf.String())
+	}
+
+	// 零写盘盘点：默认槽四文件仍全无；instances/ 树无新增（ReadDir——Stat 对
+	// 大小写不敏感）；AGENTA 内容原样；DEK 目录无新 key。
+	for _, f := range []string{"cache.bin", "cache.auth.json", "cache.meta.json", "cache.config.json"} {
+		if _, serr := os.Stat(filepath.Join(defDir, f)); !os.IsNotExist(serr) {
+			t.Fatalf("default slot must stay vacuum after refusal, found %s (stat err=%v)", f, serr)
+		}
+	}
+	rootAfter := dirNames(t, instRoot)
+	if len(rootAfter) != 1 || rootAfter[0] != "AGENTA" {
+		t.Fatalf("instances/ tree must gain no entry after refusal, got %v", rootAfter)
+	}
+	if got := dirNames(t, agDir); len(got) != 1 || got[0] != "cache.meta.json" {
+		t.Fatalf("AGENTA must stay meta-only after refusal, got %v", got)
+	}
+	if b, rerr := os.ReadFile(filepath.Join(agDir, "cache.meta.json")); rerr != nil || !bytes.Equal(b, metaBefore) {
+		t.Fatalf("AGENTA meta must stay byte-identical after refusal: %v %s", rerr, b)
+	}
+	dekAfter := dirNames(t, dekDir)
+	if strings.Join(dekBefore, "|") != strings.Join(dekAfter, "|") {
+		t.Fatalf("DEK dir inventory must be unchanged after refusal: %v -> %v", dekBefore, dekAfter)
+	}
+}
+
+func TestRelocate_TargetCapInvalidRefusesZeroWrite(t *testing.T) {
+	userDir, dekDir := newRelocateEnv(t)
+	date := ptr(time.Now().UTC().Format(http.TimeFormat))
+	url, pin := newPinnedTLSServer(t, plan40Serve("code-", snapshotHandler(date, nil)))
+
+	defDir := filepath.Join(userDir, "ssh-manager")
+	instRoot := filepath.Join(defDir, "instances")
+	aDir := filepath.Join(instRoot, "agentA")
+
+	// 真空默认槽 + 预置 instances/agentA/cache.config.json 非法值（无 bin/meta）：
+	// 归位 retarget 后的目标槽校验——fresh-slot 门禁放行（非法文件在目标槽而非
+	// 初始解析的默认槽），必须死在 HTTP 后、写盘前的 validateCapFileIndependent。
+	configBefore := []byte(`{"max_offline":"bogus"}`)
+	if err := os.MkdirAll(aDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(aDir, "cache.config.json"), configBefore, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dekBefore := dirNames(t, dekDir)
+
+	var buf bytes.Buffer
+	res, err := DoPull(url, "code-agentA", pin, PullOpts{StatusOut: &buf})
+	if err == nil || !strings.Contains(err.Error(), "max_offline in cache.config.json") {
+		t.Fatalf("invalid target cap must refuse: res=%+v err=%v out=%q", res, err, buf.String())
+	}
+	if strings.Contains(buf.String(), "first enroll located") || strings.Contains(buf.String(), "pulled ") {
+		t.Fatalf("refused pull must print neither relocation hint nor success line: %q", buf.String())
+	}
+
+	// 同款零写盘盘点。
+	for _, f := range []string{"cache.bin", "cache.auth.json", "cache.meta.json", "cache.config.json"} {
+		if _, serr := os.Stat(filepath.Join(defDir, f)); !os.IsNotExist(serr) {
+			t.Fatalf("default slot must stay vacuum after refusal, found %s (stat err=%v)", f, serr)
+		}
+	}
+	rootAfter := dirNames(t, instRoot)
+	if len(rootAfter) != 1 || rootAfter[0] != "agentA" {
+		t.Fatalf("instances/ tree must gain no entry after refusal, got %v", rootAfter)
+	}
+	if got := dirNames(t, aDir); len(got) != 1 || got[0] != "cache.config.json" {
+		t.Fatalf("agentA must stay config-only after refusal, got %v", got)
+	}
+	if b, rerr := os.ReadFile(filepath.Join(aDir, "cache.config.json")); rerr != nil || !bytes.Equal(b, configBefore) {
+		t.Fatalf("agentA config must stay byte-identical after refusal: %v %s", rerr, b)
+	}
+	dekAfter := dirNames(t, dekDir)
+	if strings.Join(dekBefore, "|") != strings.Join(dekAfter, "|") {
+		t.Fatalf("DEK dir inventory must be unchanged after refusal: %v -> %v", dekBefore, dekAfter)
 	}
 }
 

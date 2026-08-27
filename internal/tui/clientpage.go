@@ -81,7 +81,7 @@ type syncDoneMsg struct{ err error }
 // mode reports success as syncDoneMsg{nil} ("同步完成"); the wizard instead
 // routes to the .mcp.json finish screen. See syncCmdMode.
 type pullSucceededMsg struct {
-	instance string // Plan 40 批2 T9 fills this (which slot the pull landed in); zero consumers yet
+	instance string // effective slot the pull landed in (syncCmdMode echoes PullResult.Instance); the Update case re-seats the session on it and feeds the finish screen
 }
 
 // connSavedMsg carries the just-written cred (+ the draft it came from) back
@@ -91,7 +91,7 @@ type pullSucceededMsg struct {
 type connSavedMsg struct {
 	cred     *clientops.CacheCred
 	draft    *connDraft
-	instance string // Plan 40 批2 T9 fills this (the form's target slot); zero consumers yet
+	instance string // the form's canonical target slot; both Update branches consume it — wizard routes the first pull through it, panel mode re-seats the session on it
 }
 
 // clientStatusMsg reports a user-visible success line (e.g. cred saved).

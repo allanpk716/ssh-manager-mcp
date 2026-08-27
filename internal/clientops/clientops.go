@@ -750,21 +750,34 @@ func gateNamedInstance(bin, metaPath, deviceName, instance string) error {
 	if deviceName != instance {
 		return fmt.Errorf("refusing pull: --instance %q does not match the serve's device name %q — each device code pulls into its own instance; use --instance %q on the machine that code was issued for", instance, deviceName, deviceName)
 	}
+	// Physical slot state decides. Meta is consulted BEFORE the bin check so an
+	// exactly-different recorded identity refuses EVEN WITHOUT cache.bin (rev5
+	// §1.2-4 branch 1): the relocation retarget aliases onto the physical
+	// directory regardless of letter case on NTFS, so without this order a bare
+	// pull headed by a case variant of the resident name (agenta vs AGENTA)
+	// sailed through "fresh slot" and silently flipped that slot's identity
+	// (spec §11.4 exact-compare nail). A readable blank identity stays
+	// adoptable/backfillable; only the half-write refusal keeps requiring the
+	// bin — meta readability alone never blocks a vacuum-target pull.
+	binAbsent := false
 	if _, serr := os.Stat(bin); serr != nil {
 		if !os.IsNotExist(serr) {
 			return serr
 		}
-		return nil // fresh slot
+		binAbsent = true
 	}
-	// slot has a bin: its recorded identity must be this instance's (or blank).
 	m, merr := readCacheMeta(metaPath)
-	if merr != nil {
+	switch {
+	case merr == nil:
+		if m.DeviceName != "" && m.DeviceName != deviceName {
+			return fmt.Errorf("refusing pull: instance directory %s already holds a different device identity (%q vs %q) — delete the instance directory and re-enroll", filepath.Dir(bin), m.DeviceName, deviceName)
+		}
+		return nil // same or adoptable-blank identity — idempotent re-pull / backfill (bin may be absent: auth-only/fresh slot)
+	case binAbsent:
+		return nil // fresh or auth-only slot with no readable meta: no material to protect
+	default:
 		return fmt.Errorf("refusing pull: instance directory %s holds cache.bin but no readable cache.meta.json (interrupted write?) — delete the instance directory and re-enroll", filepath.Dir(bin))
 	}
-	if m.DeviceName != "" && m.DeviceName != deviceName {
-		return fmt.Errorf("refusing pull: instance directory %s already holds a different device identity (%q vs %q) — delete the instance directory and re-enroll", filepath.Dir(bin), m.DeviceName, deviceName)
-	}
-	return nil
 }
 
 // CacheScopeVerified reports whether the on-disk cache was pulled from a
