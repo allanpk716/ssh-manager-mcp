@@ -140,6 +140,11 @@ func TestSyncCmdMode_PassesInstance(t *testing.T) {
 // mid-flight must never paint the new header/list with the old slot's reply.
 // The matching-slot counterpart must still apply (two-sided lock).
 func TestDataReady_StaleSlotDropped(t *testing.T) {
+	// Plan 40 批2 T6: the matching-slot branch now reaches the auto-picker
+	// probe — isolate the config dir so a real machine's cache/instances state
+	// can never decide the outcome (the dropped-branch half runs before any
+	// message reaches the model's switch).
+	isolatedConfigDir(t)
 	m := newClientModel()
 	m.instance = "agentA"
 

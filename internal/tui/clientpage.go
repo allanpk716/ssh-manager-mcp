@@ -30,18 +30,19 @@ import (
 // classified banner (classifyPullError), and a successful pull leads to the
 // .mcp.json finish screen (clientFinishScreen) → wizFinishTo(client).
 type clientModel struct {
-	cred      *clientops.CacheCred
-	snap      *store.Snapshot
-	scoped    bool // cache pulled from a Plan-39 serve (X-Sshmgr-Snapshot-Scope) — the profile header is only honest when true
-	cacheAge  time.Duration
-	instance  string // Plan 40 批2 §3.1: selected slot ("" = default), session-only
-	panelList        // servers list panel: cursor/pagination//`/` filter (2026-08-17 桌面化)
-	width     int    // terminal width from WindowSizeMsg (0 = not yet reported)
-	height    int    // terminal height from WindowSizeMsg (0 = not yet reported)
-	status    string
-	err       error
-	busy      bool
-	overlay   overlay // connection-edit form / wizard finish screen
+	cred          *clientops.CacheCred
+	snap          *store.Snapshot
+	scoped        bool // cache pulled from a Plan-39 serve (X-Sshmgr-Snapshot-Scope) — the profile header is only honest when true
+	cacheAge      time.Duration
+	instance      string // Plan 40 批2 §3.1: selected slot ("" = default), session-only
+	pickerChecked bool   // Plan 40 批2 §3.2: auto-picker one-shot latch
+	panelList            // servers list panel: cursor/pagination//`/` filter (2026-08-17 桌面化)
+	width         int    // terminal width from WindowSizeMsg (0 = not yet reported)
+	height        int    // terminal height from WindowSizeMsg (0 = not yet reported)
+	status        string
+	err           error
+	busy          bool
+	overlay       overlay // connection-edit form / wizard finish screen
 
 	wizard bool       // first-run flow active (source hint + pull-driven transitions)
 	draft  *connDraft // last submitted connection draft (input preservation on failed pull)
@@ -162,7 +163,8 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.overlay != nil {
 		switch msg := msg.(type) {
 		case dataReadyMsg, syncDoneMsg, pullSucceededMsg, connSavedMsg,
-			clientStatusMsg, errMsg, formDoneMsg:
+			clientStatusMsg, errMsg, formDoneMsg,
+			instancePickedMsg, instancePickerClosedMsg: // Plan 40 批2 T6
 			// owned: fall through to the switch below
 		case tea.WindowSizeMsg:
 			m.width, m.height = msg.Width, msg.Height
@@ -179,6 +181,9 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dataReadyMsg:
 		if kp.instance != m.instance {
 			return m, nil // stale slot reply (user switched mid-flight)
+		}
+		if !m.pickerChecked && m.autoPickerIfVacuum() {
+			return m, m.overlay.Init()
 		}
 		m.cred, m.snap, m.scoped, m.cacheAge = kp.cred, kp.snap, kp.scoped, kp.age
 		m.syncList()
@@ -230,6 +235,9 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err, m.status = nil, string(kp)
 		return m, refreshDataCmd
 	case errMsg:
+		if !m.pickerChecked && m.autoPickerIfVacuum() {
+			return m, m.overlay.Init()
+		}
 		m.err, m.status = kp.err, ""
 		return m, nil
 	case formDoneMsg:
@@ -241,6 +249,14 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.overlay = nil
 		return m, tea.Batch(kp.after, refreshDataCmd)
+	case instancePickedMsg:
+		// §3.1 in-session slot switch: drop the picker, retarget the session,
+		// and re-read THAT slot — its reply carries the matching instance.
+		m.instance, m.overlay, m.err = kp.instance, nil, nil
+		return m, refreshDataCmdFor(kp.instance)
+	case instancePickerClosedMsg:
+		m.overlay = nil
+		return m, nil
 	case tea.KeyPressMsg:
 		// (the pre-gate overlay branch lived here; keys now route through the
 		// gate above — absorbing KeyPressMsg changed no behavior, see 注记 4)
@@ -260,6 +276,15 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case k.Text == "s" && !m.busy:
 			m.busy, m.err, m.status = true, nil, ""
 			return m, syncCmdMode(m.cred, m.instance, m.wizard)
+		case k.Text == "i" && !m.busy:
+			// §3.5: single-slot override envs keep this UI off (T7 refines the
+			// banner); busy swallows the key above via the guard.
+			if clientops.SingleSlotOverrideEnvSet() {
+				m.status = "单槽模式（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK 覆盖中）——多实例 UI 已禁用"
+				return m, nil
+			}
+			m.overlay = newInstancePicker()
+			return m, m.overlay.Init()
 		case k.Text == "c":
 			// Wizard mode may edit on a fresh machine (no stored cred yet) —
 			// the form IS the flow's entry; panel mode still requires a cred
@@ -286,6 +311,27 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// autoPickerIfVacuum is the §3.2 one-shot probe, latched by pickerChecked: the
+// FIRST errMsg/dataReadyMsg after startup (stale replies don't count — they
+// return before reaching it) consults it. The default slot must be a TRUE
+// four-file vacuum (the same judgment as first-enroll relocation), single-slot
+// overrides must be off, no overlay may be up, and at least one named instance
+// must exist — only then does the picker open INSTEAD of this message being
+// processed.
+func (m *clientModel) autoPickerIfVacuum() bool {
+	m.pickerChecked = true // latch regardless of outcome
+	vac, verr := clientops.DefaultSlotVacuum()
+	if verr != nil || !vac || clientops.SingleSlotOverrideEnvSet() || m.overlay != nil {
+		return false
+	}
+	names, lerr := clientops.ListInstances()
+	if lerr != nil || len(names) == 0 {
+		return false
+	}
+	m.overlay = newInstancePicker()
+	return true
 }
 
 // syncList mirrors the snapshot's servers into the list panel.
@@ -547,6 +593,11 @@ func (m clientModel) View() tea.View {
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(" ssh-manager (client)") + "\n")
+	if m.instance != "" {
+		// §3.4: a named slot is always visible in the chrome — there is no way
+		// to forget which instance this panel is showing.
+		b.WriteString(warnStyle.Render("· 实例 "+m.instance) + "\n")
+	}
 	b.WriteString(hint)
 	n := 0
 	if m.snap != nil {
@@ -559,6 +610,9 @@ func (m clientModel) View() tea.View {
 		chrome := 4
 		if m.wizard {
 			chrome++ // the hint line
+		}
+		if m.instance != "" {
+			chrome++ // the named-instance line (Plan 40 批2 T6)
 		}
 		if m.busy {
 			chrome++ // the 同步中… line
@@ -578,6 +632,6 @@ func (m clientModel) View() tea.View {
 	} else if m.status != "" {
 		b.WriteString(footerStyle.Render("✓ "+m.status) + "\n")
 	}
-	b.WriteString(clip(m.width, footerStyle.Render("[s]同步 [c]编辑连接 [t]TTL  q 退出")))
+	b.WriteString(clip(m.width, footerStyle.Render("[s]同步 [i]实例 [c]编辑连接 [t]TTL  q 退出")))
 	return altScreen(tea.NewView(b.String()))
 }
