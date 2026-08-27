@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -32,7 +33,7 @@ func cachePresentFor(instance string) bool {
 
 func newCacheCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "cache", Short: "Offline read-only cache (pull from a serve broker)"}
-	cmd.AddCommand(cachePullCmd(), cacheStatusCmd())
+	cmd.AddCommand(cachePullCmd(), cacheStatusCmd(), cacheConfigCmd())
 	return cmd
 }
 
@@ -313,4 +314,63 @@ func cacheStatusList(cmd *cobra.Command) error {
 		printSlot(n, id, ib, im)
 	}
 	return nil
+}
+
+func cacheConfigCmd() *cobra.Command {
+	var instance, maxOffline string
+	c := &cobra.Command{
+		Use:   "config",
+		Short: "Show or set the per-instance offline cap (cache.config.json)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkInstanceFlag(instance); err != nil {
+				return err
+			}
+			dir, _, _, _, err := clientops.CachePathsFor(instance)
+			if err != nil {
+				return err
+			}
+			if _, serr := os.Stat(dir); serr != nil {
+				name := instance
+				if name == "" {
+					name = "default"
+				}
+				return fmt.Errorf("instance %q not found (directory %s does not exist) — enroll first (cache pull --instance %q)", name, dir, name)
+			}
+			out := cmd.OutOrStdout()
+			label := instance
+			if label == "" {
+				label = "default"
+			}
+			if maxOffline == "" {
+				cap, src, rerr := clientops.EffectiveMaxOffline(dir)
+				if rerr != nil {
+					return rerr
+				}
+				if src == "off" {
+					fmt.Fprintf(out, "instance: %s (%s)\ncap:      off (no offline limit)\n", label, dir)
+				} else {
+					fmt.Fprintf(out, "instance: %s (%s)\ncap:      %s (source: %s)\n", label, dir, cap, src)
+				}
+				return nil
+			}
+			if _, verr := clientops.ValidateMaxOffline(maxOffline); verr != nil {
+				return verr
+			}
+			if werr := clientops.WriteCacheConfig(dir, maxOffline); werr != nil {
+				return werr
+			}
+			fmt.Fprintf(out, "wrote %s (instance %s)\n", filepath.Join(dir, "cache.config.json"), label)
+			if strings.TrimSpace(os.Getenv("SSHMGR_CACHE_MAX_OFFLINE")) != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: SSHMGR_CACHE_MAX_OFFLINE is set — the persisted config takes effect only after the env is cleared")
+			}
+			// 默认槽警示（rev5 §8）：删默认槽 config 或 meta 都会削弱意图标记。
+			if instance == "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), "note: keep cache.meta.json/cache.config.json in this directory — they mark the DEFAULT slot; deleting them re-routes the next first-enroll into instances/")
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&instance, "instance", "", "target this named instance (directory must exist; mutually exclusive with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK)")
+	c.Flags().StringVar(&maxOffline, "max-offline", "", "persist this Go duration (e.g. 24h) as the instance's offline cap; omit to display the current effective cap")
+	return c
 }
