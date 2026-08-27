@@ -131,7 +131,7 @@ func syncCmdMode(cred *clientops.CacheCred, wizard bool) tea.Cmd {
 		if cred.Pin == "" {
 			return syncDoneMsg{fmt.Errorf("连接配置缺 pin（本界面永不走明文拉取）——请 [c] 编辑连接补上")}
 		}
-		err := clientops.DoPull(cred.URL, cred.Token, cred.Pin, clientops.PullOpts{Timeout: clientops.LazyPullTimeout})
+		_, err := clientops.DoPull(cred.URL, cred.Token, cred.Pin, clientops.PullOpts{Timeout: clientops.LazyPullTimeout})
 		if err != nil {
 			return syncDoneMsg{err}
 		}

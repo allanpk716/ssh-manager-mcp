@@ -32,7 +32,7 @@ func TestDoPull_P0_PinnedWithoutEnv_Anchors(t *testing.T) {
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
 	url, pin := newPinnedTLSServer(t, snapshotHandler(ptr(date), nil))
-	if err := DoPull(url, "code", pin, PullOpts{}); err != nil {
+	if _, err := DoPull(url, "code", pin, PullOpts{}); err != nil {
 		t.Fatalf("pinned pull without env: %v", err)
 	}
 	m := readMetaForTest(t, dir)
@@ -68,7 +68,7 @@ func TestDoPull_P0_PinnedWithoutEnv_BadDate_Refused(t *testing.T) {
 			dir := t.TempDir()
 			withDEK(t)
 			withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
-			err := DoPull(url, "code", pin, PullOpts{})
+			_, err := DoPull(url, "code", pin, PullOpts{})
 			if err == nil || !strings.Contains(err.Error(), "no valid Date header") {
 				t.Fatalf("want Date refusal without env, got %v", err)
 			}
@@ -89,7 +89,7 @@ func TestDoPull_P0_PinnedWithoutEnv_Skew_Refused(t *testing.T) {
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
-	err := DoPull(url, "code", pin, PullOpts{})
+	_, err := DoPull(url, "code", pin, PullOpts{})
 	if err == nil || !strings.Contains(err.Error(), "server clock skew too large") {
 		t.Fatalf("want skew refusal without env, got %v", err)
 	}
@@ -110,7 +110,7 @@ func TestDoPull_P0_PlaintextWithoutEnv_NotAnchored(t *testing.T) {
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
-	if err := DoPull(plain.URL, "code", "", PullOpts{AllowPlain: true}); err != nil {
+	if _, err := DoPull(plain.URL, "code", "", PullOpts{AllowPlain: true}); err != nil {
 		t.Fatalf("plaintext B-off pull: %v", err)
 	}
 	m := readMetaForTest(t, dir)
@@ -135,7 +135,7 @@ func TestDoPull_P0_RejectPathLeavesOldCacheIntact(t *testing.T) {
 		fmt.Fprint(w, `{"servers":[],"credentials":[]}`)
 	})
 	t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "")
-	if err := DoPull(url, "code", pin, PullOpts{}); err != nil {
+	if _, err := DoPull(url, "code", pin, PullOpts{}); err != nil {
 		t.Fatalf("healthy pull: %v", err)
 	}
 	sumBin := fileSum(t, filepath.Join(dir, "cache.bin"))
@@ -143,7 +143,7 @@ func TestDoPull_P0_RejectPathLeavesOldCacheIntact(t *testing.T) {
 
 	// 2. flip the Date 3h back — skew gate must refuse.
 	*flipped = time.Now().Add(-3 * time.Hour).UTC().Format(http.TimeFormat)
-	err := DoPull(url, "code", pin, PullOpts{})
+	_, err := DoPull(url, "code", pin, PullOpts{})
 	if err == nil || !strings.Contains(err.Error(), "server clock skew too large") {
 		t.Fatalf("want skew refusal, got %v", err)
 	}

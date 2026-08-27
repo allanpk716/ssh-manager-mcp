@@ -88,7 +88,7 @@ func cachePullCmd() *cobra.Command {
 					return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
 						"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
 				}
-				if err := clientops.DoPull(url, token, "", clientops.PullOpts{AllowPlain: true, StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
+				if _, err := clientops.DoPull(url, token, "", clientops.PullOpts{AllowPlain: true, StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
 					return err
 				}
 				// Fix round 1 [Important]: not persisting --max-offline here is
@@ -100,7 +100,7 @@ func cachePullCmd() *cobra.Command {
 				}
 				return nil // plaintext pulls NEVER persist a credential (no auto-plaintext path)
 			}
-			if err := clientops.DoPull(url, token, fp, clientops.PullOpts{StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
+			if _, err := clientops.DoPull(url, token, fp, clientops.PullOpts{StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
 				if errors.Is(err, clientops.ErrCacheQuarantined) {
 					// Plan 34 rev4 §3 — pinned 401: the local cache was destroyed.
 					// SilenceUsage: this is a server-side rejection, not a flag typo.

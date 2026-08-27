@@ -118,7 +118,7 @@ func TestConfig_SurvivesCodeSwapRunbook(t *testing.T) {
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
 	t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "")
 	url, pin := newPinnedTLSServer(t, snapshotHandler(ptr(time.Now().UTC().Format(http.TimeFormat)), nil))
-	if err := DoPull(url, "code1", pin, PullOpts{}); err != nil {
+	if _, err := DoPull(url, "code1", pin, PullOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := WriteCacheConfig(dir, "24h"); err != nil {

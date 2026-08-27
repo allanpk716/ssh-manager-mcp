@@ -105,7 +105,7 @@ func MaybeLazyPullFor(instance string, maxAge time.Duration) error {
 	if pin == "" {
 		return fmt.Errorf("cache.auth.json has no pin; refusing plaintext auto-pull")
 	}
-	err = DoPull(cred.URL, code, pin, PullOpts{Timeout: LazyPullTimeout, StatusOut: os.Stderr, Instance: instance})
+	_, err = DoPull(cred.URL, code, pin, PullOpts{Timeout: LazyPullTimeout, StatusOut: os.Stderr, Instance: instance})
 	if errors.Is(err, ErrCacheQuarantined) {
 		// Plan 34 rev4 §3 — the pinned server rejected the device code and the
 		// cache is destroyed. Terminal for this process: the flag stops every
@@ -434,12 +434,21 @@ type PullOpts struct {
 	Instance string
 }
 
+// PullResult reports where a pull's materials actually landed (Plan 40 batch 2
+// §2): "" = the default slot; a name = instances/<name>/ (explicit --instance,
+// or the §1.2 first-enroll auto-relocation). Callers that persist pull-side
+// state (auth, config) MUST follow this slot — compiler-enforced completeness
+// was the reason a return value beat an optional callback (spec §2).
+type PullResult struct {
+	Instance string
+}
+
 // DoPull fetches /snapshot from url with the device code and atomically writes
 // cache.bin + cache.meta.json. pin=="" means no pin: AllowPlain must be true or
 // the pull refuses (F4 hard-fail contract). pin!="" pins TLS to that SPKI
 // fingerprint and requires an https:// URL (F8). Extracted from cachePullCmd so
 // the spawn-lazy pull (mcp --cache) shares ONE implementation.
-func DoPull(url, token, pin string, o PullOpts) error {
+func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 	code := token
 	// Plan 40 T5/T13: resolve the cache paths for THIS instance before anything
 	// else disk-touching — the cap resolution below must read the instance's
@@ -448,7 +457,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	// writes, so the fail-closed precheck below still precedes every request.
 	dir, bin, metaPath, _, err := CachePathsFor(o.Instance)
 	if err != nil {
-		return err
+		return PullResult{}, err
 	}
 	// Plan 37 §1/§2 + Plan 40 T13: fail-closed cap precheck (env > file) — an
 	// invalid cap from EITHER source refuses the pull before any HTTP (no
@@ -456,17 +465,17 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	// by the file).
 	maxOffline, err := resolveMaxOffline(dir)
 	if err != nil {
-		return err
+		return PullResult{}, err
 	}
 	var client *http.Client
 	if pin == "" {
 		if maxOffline > 0 {
 			// Plan 37 §2.1: the time anchor requires a pinned TLS server;
 			// a plaintext response's Date is injectable and cannot anchor.
-			return fmt.Errorf("the offline cap is set (SSHMGR_CACHE_MAX_OFFLINE or cache.config.json): refusing plaintext pull — the time anchor requires a pinned TLS server (unset the cap or remove --allow-plaintext)")
+			return PullResult{}, fmt.Errorf("the offline cap is set (SSHMGR_CACHE_MAX_OFFLINE or cache.config.json): refusing plaintext pull — the time anchor requires a pinned TLS server (unset the cap or remove --allow-plaintext)")
 		}
 		if !o.AllowPlain {
-			return fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
+			return PullResult{}, fmt.Errorf("no server pin provided: refusing to pull without TLS pin. " +
 				"Set --pin/SSHMGR_SERVE_PIN (from `serve cert-info`), or pass --allow-plaintext for an insecure plaintext pull")
 		}
 		if o.StatusOut != nil {
@@ -483,12 +492,12 @@ func DoPull(url, token, pin string, o PullOpts) error {
 			code = c
 		}
 		if u, err := neturl.Parse(url); err != nil || u.Scheme != "https" {
-			return fmt.Errorf("--url must be https:// when a server pin is set (got %q); "+
+			return PullResult{}, fmt.Errorf("--url must be https:// when a server pin is set (got %q); "+
 				"to pull plaintext instead, clear the pin (--pin/SSHMGR_SERVE_PIN) and pass --allow-plaintext", url)
 		}
 		tr, err := pinningTransport(pin)
 		if err != nil {
-			return err
+			return PullResult{}, err
 		}
 		client = &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
@@ -498,16 +507,16 @@ func DoPull(url, token, pin string, o PullOpts) error {
 
 	dek, err := loadOrCreateDEK(o.Instance)
 	if err != nil {
-		return err
+		return PullResult{}, err
 	}
 	req, err := http.NewRequest(http.MethodGet, url+"/snapshot", nil)
 	if err != nil {
-		return err
+		return PullResult{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+code)
 	res, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("pull: %w", err)
+		return PullResult{}, fmt.Errorf("pull: %w", err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
@@ -520,7 +529,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 		if res.StatusCode >= 300 && res.StatusCode < 400 {
 			// Plan 37 §2.0: CheckRedirect returned ErrUseLastResponse, so a 3xx
 			// surfaces here — never followed, on any client.
-			return fmt.Errorf("pull: server returned %d (redirects are not followed)", res.StatusCode)
+			return PullResult{}, fmt.Errorf("pull: server returned %d (redirects are not followed)", res.StatusCode)
 		}
 		if pin != "" && res.StatusCode == 401 {
 			// Plan 34 rev4 §3 — the ONLY quarantine trigger: a PINNED server
@@ -534,7 +543,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 			if qerr == nil {
 				qerr = ErrCacheQuarantined
 			}
-			return fmt.Errorf("pull: %w — re-enroll with a fresh device code", qerr)
+			return PullResult{}, fmt.Errorf("pull: %w — re-enroll with a fresh device code", qerr)
 		}
 		if res.StatusCode == 403 {
 			// Plan 39: the serve refused an UNBOUND device code (legacy
@@ -545,18 +554,18 @@ func DoPull(url, token, pin string, o PullOpts) error {
 			// gate, proxy, WAF) gets the generic treatment with the body
 			// excerpt, never the bind advice.
 			if bytes.Contains(errBody, []byte("not bound to a profile")) {
-				return fmt.Errorf("pull: server returned 403 — device code not bound to a profile (owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server)")
+				return PullResult{}, fmt.Errorf("pull: server returned 403 — device code not bound to a profile (owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server)")
 			}
 			if detail := strings.TrimSpace(string(errBody)); detail != "" {
-				return fmt.Errorf("pull: server returned 403 — %.200s", detail)
+				return PullResult{}, fmt.Errorf("pull: server returned 403 — %.200s", detail)
 			}
-			return fmt.Errorf("pull: server returned 403 (forbidden)")
+			return PullResult{}, fmt.Errorf("pull: server returned 403 (forbidden)")
 		}
-		return fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
+		return PullResult{}, fmt.Errorf("pull: server returned %d (is the authorization code valid/active?)", res.StatusCode)
 	}
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return err
+		return PullResult{}, err
 	}
 	// Plan 40 §1 (P0): the anchor is a FACT — "the pinned server said THIS at
 	// this pull" — so recording it is gated on the SAFETY precondition
@@ -571,10 +580,10 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	if pin != "" {
 		serverTime, perr := http.ParseTime(res.Header.Get("Date"))
 		if perr != nil {
-			return fmt.Errorf("pull succeeded but the response has no valid Date header — refusing to anchor cache time (a pinned pull requires a trusted server clock)")
+			return PullResult{}, fmt.Errorf("pull succeeded but the response has no valid Date header — refusing to anchor cache time (a pinned pull requires a trusted server clock)")
 		}
 		if skew := time.Since(serverTime); skew > cacheSkewTolerance || skew < -cacheSkewTolerance {
-			return fmt.Errorf("server clock skew too large (server %s vs local %s, cap 1h) — refusing pull: the cache time anchor depends on an accurate clock; fix system time sync",
+			return PullResult{}, fmt.Errorf("server clock skew too large (server %s vs local %s, cap 1h) — refusing pull: the cache time anchor depends on an accurate clock; fix system time sync",
 				serverTime.Format(time.RFC3339), time.Now().Format(time.RFC3339))
 		}
 		pulledAt = serverTime.Unix()
@@ -593,23 +602,23 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	}
 	if o.Instance != "" {
 		if err := gateNamedInstance(bin, metaPath, deviceName, o.Instance); err != nil {
-			return err
+			return PullResult{}, err
 		}
 	} else if err := gateDefaultInstance(bin, metaPath, deviceName, o); err != nil {
-		return err
+		return PullResult{}, err
 	}
 	blob, err := vaultio.EncryptWithKey(dek, body)
 	if err != nil {
-		return err
+		return PullResult{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(bin), 0o700); err != nil {
-		return err
+		return PullResult{}, err
 	}
 	// Plan 37 §2.4 commit order, pinned: bin first, meta LAST — a crash can
 	// leave (new bin + old anchor) whose age error is bounded <= 2K, never
 	// (new anchor + old bin). Meta-write failure stays the legacy WARNING.
 	if err := atomicWriteUnique(bin, blob); err != nil {
-		return err
+		return PullResult{}, err
 	}
 	if failNextMetaWriteForTest {
 		failNextMetaWriteForTest = false
@@ -633,7 +642,7 @@ func DoPull(url, token, pin string, o PullOpts) error {
 	if o.StatusOut != nil {
 		fmt.Fprintf(o.StatusOut, "pulled %d servers / %d credentials into %s\n", len(snap.Servers), len(snap.Credentials), bin)
 	}
-	return nil
+	return PullResult{Instance: o.Instance}, nil
 }
 
 // gateDefaultInstance enforces the §2.4 three-branch identity gate on the

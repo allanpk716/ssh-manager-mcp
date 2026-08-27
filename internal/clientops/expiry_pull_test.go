@@ -123,7 +123,7 @@ func TestDoPull_InvalidEnv_RefusedBeforeHTTP(t *testing.T) {
 	hits := &atomic.Int32{}
 	url, pin := newPinnedTLSServer(t, snapshotHandler(nil, hits))
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": t.TempDir()})
-	err := DoPull(url, "code", pin, PullOpts{})
+	_, err := DoPull(url, "code", pin, PullOpts{})
 	if err == nil || !strings.Contains(err.Error(), "invalid SSHMGR_CACHE_MAX_OFFLINE") {
 		t.Fatalf("want invalid-env refusal, got %v", err)
 	}
@@ -137,7 +137,7 @@ func TestDoPull_PlaintextRefusedWhenMaxOffline(t *testing.T) {
 	hits := &atomic.Int32{}
 	url, _ := newPinnedTLSServer(t, snapshotHandler(nil, hits))
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": t.TempDir()})
-	err := DoPull(url, "code", "", PullOpts{AllowPlain: true})
+	_, err := DoPull(url, "code", "", PullOpts{AllowPlain: true})
 	if err == nil || !strings.Contains(err.Error(), "refusing plaintext pull") {
 		t.Fatalf("want plaintext refusal, got %v", err)
 	}
@@ -162,7 +162,7 @@ func TestDoPull_NoRedirect_Global(t *testing.T) {
 			dir := t.TempDir()
 			withDEK(t)
 			withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
-			err := DoPull(url, "code", pin, PullOpts{})
+			_, err := DoPull(url, "code", pin, PullOpts{})
 			if err == nil || !strings.Contains(err.Error(), "redirects are not followed") {
 				t.Fatalf("want redirect refusal, got %v", err)
 			}
@@ -191,7 +191,7 @@ func TestDoPull_DateTwoBadShapes_Refused(t *testing.T) {
 			dir := t.TempDir()
 			withDEK(t)
 			withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
-			err := DoPull(url, "code", pin, PullOpts{})
+			_, err := DoPull(url, "code", pin, PullOpts{})
 			if err == nil || !strings.Contains(err.Error(), "no valid Date header") {
 				t.Fatalf("want Date refusal, got %v", err)
 			}
@@ -209,7 +209,7 @@ func TestDoPull_DateTwoBadShapes_Refused(t *testing.T) {
 		dir := t.TempDir()
 		withDEK(t)
 		withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
-		err := DoPull(url, "code", pin, PullOpts{})
+		_, err := DoPull(url, "code", pin, PullOpts{})
 		if err == nil || !strings.Contains(err.Error(), "no valid Date header") {
 			t.Fatalf("want Date refusal without env (P0), got %v", err)
 		}
@@ -226,7 +226,7 @@ func TestDoPull_Skew_Refused(t *testing.T) {
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
-	err := DoPull(url, "code", pin, PullOpts{})
+	_, err := DoPull(url, "code", pin, PullOpts{})
 	if err == nil || !strings.Contains(err.Error(), "server clock skew too large") {
 		t.Fatalf("want skew refusal, got %v", err)
 	}
@@ -248,7 +248,7 @@ func TestDoPull_AnchorWritten_BothStates(t *testing.T) {
 	// B on: PulledAt = server Date, ServerAnchored=true.
 	t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "24h")
 	url, pin := newPinnedTLSServer(t, snapshotHandler(ptr(date), nil))
-	if err := DoPull(url, "code", pin, PullOpts{}); err != nil {
+	if _, err := DoPull(url, "code", pin, PullOpts{}); err != nil {
 		t.Fatalf("anchored pull: %v", err)
 	}
 	m := readMetaForTest(t, dir)
@@ -263,7 +263,7 @@ func TestDoPull_AnchorWritten_BothStates(t *testing.T) {
 	// pulling process's policy env — same server-clock anchor as B-on.
 	t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "")
 	url2, pin2 := newPinnedTLSServer(t, snapshotHandler(ptr(date), nil))
-	if err := DoPull(url2, "code", pin2, PullOpts{}); err != nil {
+	if _, err := DoPull(url2, "code", pin2, PullOpts{}); err != nil {
 		t.Fatalf("B-off pinned pull: %v", err)
 	}
 	m = readMetaForTest(t, dir)

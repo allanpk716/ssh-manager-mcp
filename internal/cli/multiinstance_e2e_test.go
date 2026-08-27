@@ -85,7 +85,7 @@ func TestDualInstance_E2E(t *testing.T) {
 	for _, tc := range []struct{ instance, code string }{
 		{"laptop-agentA", codeA}, {"laptop-agentB", codeB},
 	} {
-		if err := clientops.DoPull(srv.URL, tc.code, pin, clientops.PullOpts{Instance: tc.instance}); err != nil {
+		if _, err := clientops.DoPull(srv.URL, tc.code, pin, clientops.PullOpts{Instance: tc.instance}); err != nil {
 			t.Fatalf("pull %s: %v", tc.instance, err)
 		}
 	}
@@ -141,7 +141,7 @@ func TestDualInstance_E2E(t *testing.T) {
 	if err := src.RevokeCacheToken("laptop-agentA"); err != nil {
 		t.Fatal(err)
 	}
-	err = clientops.DoPull(srv.URL, codeA, pin, clientops.PullOpts{Instance: "laptop-agentA"})
+	_, err = clientops.DoPull(srv.URL, codeA, pin, clientops.PullOpts{Instance: "laptop-agentA"})
 	if !errors.Is(err, clientops.ErrCacheQuarantined) {
 		t.Fatalf("revoked A pull must quarantine: %v", err)
 	}
