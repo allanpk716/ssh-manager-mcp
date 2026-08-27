@@ -511,9 +511,16 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 		client.Timeout = o.Timeout
 	}
 
-	dek, err := loadOrCreateDEK(o.Instance)
-	if err != nil {
-		return PullResult{}, err
+	// Plan 40 批2 §1.2-6: vacuum-candidate paths DEFER DEK creation to after
+	// every gate — a refused relocation must leave zero writes, including no
+	// freshly-created default DEK. Non-vacuum paths keep the batch-1 timing.
+	vacuumCandidate := o.Instance == "" && !singleSlotOverrideEnvSet() && defaultSlotVacuum(dir)
+	var dek []byte
+	if !vacuumCandidate {
+		dek, err = loadOrCreateDEK(o.Instance)
+		if err != nil {
+			return PullResult{}, err
+		}
 	}
 	req, err := http.NewRequest(http.MethodGet, url+"/snapshot", nil)
 	if err != nil {
@@ -610,8 +617,45 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 		if err := gateNamedInstance(bin, metaPath, deviceName, o.Instance); err != nil {
 			return PullResult{}, err
 		}
+	} else if pin != "" && deviceName != "" && instname.Valid(deviceName) == nil && vacuumCandidate {
+		// Plan 40 批2 §1.2-3: first-enroll auto-relocation. Retarget by re-running
+		// the WHOLE CachePathsFor resolution under the header name — the audit
+		// sidecar & quarantine subtree follow the same resolution, no path
+		// stragglers (spec §1.2-3, rev3 §2.2 全消费面纪律).
+		ndir, nbin, nmeta, _, rerr := CachePathsFor(deviceName)
+		if rerr != nil {
+			return PullResult{}, rerr
+		}
+		dir, bin, metaPath = ndir, nbin, nmeta
+		// §1.2-4: target-slot gate, EXACT identity (header==name trivially holds;
+		// physical collision & half-write checks still run — relocation is not a
+		// bypass. meta identity match = idempotent re-relocation, allowed).
+		if gerr := gateNamedInstance(nbin, nmeta, deviceName, deviceName); gerr != nil {
+			return PullResult{}, gerr
+		}
+		// §1.2-5: target-slot cap check — file validity INDEPENDENT of env (T3's
+		// validateCapFileIndependent), then re-resolve the effective value for
+		// the target slot.
+		if verr := validateCapFileIndependent(ndir); verr != nil {
+			return PullResult{}, verr
+		}
+		if maxOffline, err = resolveMaxOffline(ndir); err != nil {
+			return PullResult{}, err
+		}
+		o.Instance = deviceName
+		if o.StatusOut != nil {
+			fmt.Fprintf(o.StatusOut, "first enroll located to instance %s — mcp --cache needs --instance %s in .mcp.json (bare cache pull re-locates idempotently; only the agent's cache-mode launch is affected)\n", deviceName, deviceName)
+		}
 	} else if err := gateDefaultInstance(bin, metaPath, deviceName, o); err != nil {
 		return PullResult{}, err
+	}
+	if dek == nil {
+		// Deferred load (vacuum-candidate path): post-gates per §1.2-6 — a
+		// refused pull never created any DEK file.
+		dek, err = loadOrCreateDEK(o.Instance)
+		if err != nil {
+			return PullResult{}, err
+		}
 	}
 	blob, err := vaultio.EncryptWithKey(dek, body)
 	if err != nil {

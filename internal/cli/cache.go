@@ -100,7 +100,13 @@ func cachePullCmd() *cobra.Command {
 				}
 				return nil // plaintext pulls NEVER persist a credential (no auto-plaintext path)
 			}
-			if _, err := clientops.DoPull(url, token, fp, clientops.PullOpts{StatusOut: cmd.ErrOrStderr(), Instance: instance}); err != nil {
+			// Plan 40 批2 §5: res carries the slot the pull ACTUALLY landed in —
+			// "" = default, a name = explicit --instance OR the §1.2 first-enroll
+			// auto-relocation. Every pull-side persistence below MUST follow it,
+			// or the refresh chain breaks (auth/config in the default slot while
+			// the material lives under instances/<name>/ — the §0.6 disease).
+			res, err := clientops.DoPull(url, token, fp, clientops.PullOpts{StatusOut: cmd.ErrOrStderr(), Instance: instance})
+			if err != nil {
 				if errors.Is(err, clientops.ErrCacheQuarantined) {
 					// Plan 34 rev4 §3 — pinned 401: the local cache was destroyed.
 					// SilenceUsage: this is a server-side rejection, not a flag typo.
@@ -116,7 +122,7 @@ func cachePullCmd() *cobra.Command {
 			if c, _, ok := clientops.SplitTokenPin(token); ok {
 				code = c
 			}
-			if err := clientops.WriteCacheCredFor(instance, &clientops.CacheCred{URL: url, Token: code, Pin: fp}); err != nil {
+			if err := clientops.WriteCacheCredFor(res.Instance, &clientops.CacheCred{URL: url, Token: code, Pin: fp}); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: could not persist cache.auth.json (automatic refresh disabled until a successful pull): %v\n", err)
 			}
 			// Plan 40 T13: persist the instance's offline cap AFTER a successful
@@ -125,7 +131,7 @@ func cachePullCmd() *cobra.Command {
 			// it still overrides the file, so say so or the user thinks the
 			// flag took effect when it provably did not.
 			if maxOff != "" {
-				dir, _, _, _, derr := clientops.CachePathsFor(instance)
+				dir, _, _, _, derr := clientops.CachePathsFor(res.Instance) // 归位后跟 res.Instance（§5）
 				if derr == nil {
 					if werr := clientops.WriteCacheConfig(dir, maxOff); werr != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "WARNING: could not persist cache.config.json (the cap applies only while the env/file stays set): %v\n", werr)
