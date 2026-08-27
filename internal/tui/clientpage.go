@@ -34,9 +34,10 @@ type clientModel struct {
 	snap      *store.Snapshot
 	scoped    bool // cache pulled from a Plan-39 serve (X-Sshmgr-Snapshot-Scope) — the profile header is only honest when true
 	cacheAge  time.Duration
-	panelList     // servers list panel: cursor/pagination//`/` filter (2026-08-17 桌面化)
-	width     int // terminal width from WindowSizeMsg (0 = not yet reported)
-	height    int // terminal height from WindowSizeMsg (0 = not yet reported)
+	instance  string // Plan 40 批2 §3.1: selected slot ("" = default), session-only
+	panelList        // servers list panel: cursor/pagination//`/` filter (2026-08-17 桌面化)
+	width     int    // terminal width from WindowSizeMsg (0 = not yet reported)
+	height    int    // terminal height from WindowSizeMsg (0 = not yet reported)
 	status    string
 	err       error
 	busy      bool
@@ -64,10 +65,11 @@ func (m clientModel) Init() tea.Cmd {
 }
 
 type dataReadyMsg struct {
-	cred   *clientops.CacheCred
-	snap   *store.Snapshot
-	scoped bool
-	age    time.Duration
+	instance string // which slot this reply belongs to (stale replies are dropped)
+	cred     *clientops.CacheCred
+	snap     *store.Snapshot
+	scoped   bool
+	age      time.Duration
 }
 
 type syncDoneMsg struct{ err error }
@@ -75,47 +77,54 @@ type syncDoneMsg struct{ err error }
 // pullSucceededMsg is the WIZARD-only success signal of the first pull: panel
 // mode reports success as syncDoneMsg{nil} ("同步完成"); the wizard instead
 // routes to the .mcp.json finish screen. See syncCmdMode.
-type pullSucceededMsg struct{}
+type pullSucceededMsg struct {
+	instance string // Plan 40 批2 T9 fills this (which slot the pull landed in); zero consumers yet
+}
 
 // connSavedMsg carries the just-written cred (+ the draft it came from) back
 // from the connection form. Wizard mode uses it to start the first pull and to
 // retain the user's input for the failed-pull retry path; panel mode treats it
 // as the success line.
 type connSavedMsg struct {
-	cred  *clientops.CacheCred
-	draft *connDraft
+	cred     *clientops.CacheCred
+	draft    *connDraft
+	instance string // Plan 40 批2 T9 fills this (the form's target slot); zero consumers yet
 }
 
 // clientStatusMsg reports a user-visible success line (e.g. cred saved).
 type clientStatusMsg string
 
-// refreshDataCmd re-reads cred + snapshot + cache.bin mtime. Any failure rides
-// errMsg so the banner explains why the panel is empty.
-func refreshDataCmd() tea.Msg {
-	cred, err := clientops.ReadCacheCred()
-	if err != nil || cred == nil {
-		if err == nil {
-			err = fmt.Errorf("读取连接配置失败: cache.auth.json 不存在")
-		} else {
-			err = fmt.Errorf("读取连接配置失败: %w", err)
+// refreshDataCmdFor re-reads ONE slot's cred + snapshot + cache.bin mtime.
+// Any failure rides errMsg so the banner explains why the panel is empty.
+func refreshDataCmdFor(instance string) tea.Cmd {
+	return func() tea.Msg {
+		cred, err := clientops.ReadCacheCredFor(instance)
+		if err != nil || cred == nil {
+			if err == nil {
+				err = fmt.Errorf("读取连接配置失败: cache.auth.json 不存在")
+			} else {
+				err = fmt.Errorf("读取连接配置失败: %w", err)
+			}
+			return errMsg{err}
 		}
-		return errMsg{err}
+		snap, err := clientops.LoadCacheSnapshotFor(instance)
+		// Plan 34: 报文归因面钉在 mcp --cache 与 cache status 两处（spec §4）；TUI 保持原始错误文本——pull 路径已有哨兵信息。
+		if err != nil {
+			return errMsg{err}
+		}
+		_, bin, _, _, err := clientops.CachePathsFor(instance)
+		if err != nil {
+			return errMsg{err}
+		}
+		var age time.Duration
+		if fi, serr := os.Stat(bin); serr == nil {
+			age = time.Since(fi.ModTime())
+		}
+		return dataReadyMsg{instance: instance, cred: cred, snap: snap, scoped: clientops.CacheScopeVerifiedFor(instance), age: age}
 	}
-	snap, err := clientops.LoadCacheSnapshot()
-	// Plan 34: 报文归因面钉在 mcp --cache 与 cache status 两处（spec §4）；TUI 保持原始错误文本——pull 路径已有哨兵信息。
-	if err != nil {
-		return errMsg{err}
-	}
-	_, bin, _, _, err := clientops.CachePaths()
-	if err != nil {
-		return errMsg{err}
-	}
-	var age time.Duration
-	if fi, err := os.Stat(bin); err == nil {
-		age = time.Since(fi.ModTime())
-	}
-	return dataReadyMsg{cred: cred, snap: snap, scoped: clientops.CacheScopeVerified(), age: age}
 }
+
+var refreshDataCmd = refreshDataCmdFor("") // zero-change wrapper for existing callers
 
 // syncCmdMode is the pull command (panel and wizard share it). In WIZARD mode
 // a successful pull returns pullSucceededMsg (→ the .mcp.json finish screen)
@@ -123,7 +132,7 @@ func refreshDataCmd() tea.Msg {
 // the wizard can reopen the form under a classified banner
 // (classifyPullError). The pin from the stored cred is mandatory — the TUI
 // NEVER offers plaintext pulls (AllowPlain stays false).
-func syncCmdMode(cred *clientops.CacheCred, wizard bool) tea.Cmd {
+func syncCmdMode(cred *clientops.CacheCred, instance string, wizard bool) tea.Cmd {
 	return func() tea.Msg {
 		if cred == nil {
 			return syncDoneMsg{fmt.Errorf("连接配置未加载，无法同步")}
@@ -131,7 +140,7 @@ func syncCmdMode(cred *clientops.CacheCred, wizard bool) tea.Cmd {
 		if cred.Pin == "" {
 			return syncDoneMsg{fmt.Errorf("连接配置缺 pin（本界面永不走明文拉取）——请 [c] 编辑连接补上")}
 		}
-		_, err := clientops.DoPull(cred.URL, cred.Token, cred.Pin, clientops.PullOpts{Timeout: clientops.LazyPullTimeout})
+		_, err := clientops.DoPull(cred.URL, cred.Token, cred.Pin, clientops.PullOpts{Timeout: clientops.LazyPullTimeout, Instance: instance})
 		if err != nil {
 			return syncDoneMsg{err}
 		}
@@ -168,6 +177,9 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch kp := msg.(type) {
 	case dataReadyMsg:
+		if kp.instance != m.instance {
+			return m, nil // stale slot reply (user switched mid-flight)
+		}
 		m.cred, m.snap, m.scoped, m.cacheAge = kp.cred, kp.snap, kp.scoped, kp.age
 		m.syncList()
 		return m, nil
@@ -207,7 +219,10 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cred, m.draft = kp.cred, kp.draft
 		if m.wizard {
 			m.busy = true // first pull in flight
-			return m, syncCmdMode(kp.cred, true)
+			// Plan 40 批2 T5: wizard stays on the DEFAULT slot for now — T8/T9
+			// introduce the form's target slot and fill connSavedMsg.instance;
+			// passing "" keeps this task behavior-identical.
+			return m, syncCmdMode(kp.cred, "", true)
 		}
 		m.status = "连接配置已保存"
 		return m, refreshDataCmd
@@ -244,7 +259,7 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case k.Text == "s" && !m.busy:
 			m.busy, m.err, m.status = true, nil, ""
-			return m, syncCmdMode(m.cred, m.wizard)
+			return m, syncCmdMode(m.cred, m.instance, m.wizard)
 		case k.Text == "c":
 			// Wizard mode may edit on a fresh machine (no stored cred yet) —
 			// the form IS the flow's entry; panel mode still requires a cred

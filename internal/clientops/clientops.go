@@ -785,6 +785,21 @@ func CacheScopeVerified() bool {
 	return m.Scoped
 }
 
+// CacheScopeVerifiedFor is the per-instance form of CacheScopeVerified (Plan 40
+// 批2 T5): same fail-closed rule — a bad instance name or an unreadable meta is
+// "unverified", never a guess.
+func CacheScopeVerifiedFor(instance string) bool {
+	_, _, metaPath, _, err := CachePathsFor(instance)
+	if err != nil {
+		return false
+	}
+	m, err := readCacheMeta(metaPath)
+	if err != nil {
+		return false
+	}
+	return m.Scoped
+}
+
 // CacheReloader detects cache.bin changes for hot-reload and kicks in-session
 // lazy pulls. Change detection hashes the whole (encrypted) file — a vault
 // snapshot is KBs, so this is ~µs per tool call — and is immune to the
