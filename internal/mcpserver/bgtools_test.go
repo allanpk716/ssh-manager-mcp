@@ -526,8 +526,11 @@ func TestExecOutputAheadOffsetReturnsImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if elapsed > time.Second {
-		t.Fatalf("ahead offset must return immediately, took %v", elapsed)
+	// #8 第三例: 1s 墙钟预算在负载 CI 上被纯调度开销吃穿 (假红)。判别对象是
+	// "早退 vs 吃满 wait=5s"——预算放宽到 3s: 早退路径 (契约级瞬时) 有充足调度
+	// 余量, 破损路径 (~5s wait 全额) 仍清晰落在预算外。
+	if elapsed > 3*time.Second {
+		t.Fatalf("ahead offset must return without waiting out the 5s wait, took %v", elapsed)
 	}
 	if out.Stdout != "" {
 		t.Fatalf("ahead offset stdout = %q, want empty", out.Stdout)
@@ -781,8 +784,10 @@ func TestExecOutputStopToolRegistered(t *testing.T) {
 		t.Fatalf("cannot parse task_id from %+v", res.Content)
 	}
 
+	// #8: 固定 5 轮在慢 CI 上预算不足 (5×2s wait)——deadline 轮询, 每轮仍
+	// wait=2 长轮询; done 即断, 真不到终态才在 deadline 报错 (判别力不降)。
 	done := false
-	for i := 0; i < 5 && !done; i++ {
+	for deadline := time.Now().Add(30 * time.Second); !done && time.Now().Before(deadline); {
 		res2, cerr := cliSess.CallTool(ctx, &mcp.CallToolParams{
 			Name: "exec_output",
 			Arguments: map[string]any{
@@ -799,7 +804,7 @@ func TestExecOutputStopToolRegistered(t *testing.T) {
 		done = textContains(res2, `"status":"done"`)
 	}
 	if !done {
-		t.Fatal("task did not reach done within 5 polls")
+		t.Fatal("task did not reach done within 30s deadline")
 	}
 
 	// base64 续读: offset 0 全量 = base64("out:smoke\n"), 游标字节口径。
