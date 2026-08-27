@@ -142,8 +142,8 @@ func TestEditConnForm_InstanceFieldValidation(t *testing.T) {
 	if !completed2 {
 		t.Fatal("sanity driver run: valid values must complete the form (driver regression)")
 	}
-	if sm, ok := res2.(clientStatusMsg); !ok || string(sm) != "连接配置已保存" {
-		t.Fatalf("valid routing must fall through to the panel save message, got %T (%v)", res2, res2)
+	if sm, ok := res2.(connSavedMsg); !ok || sm.instance != "agentZ" {
+		t.Fatalf("valid routing must fall through to the panel save msg carrying the routed slot, got %T (%v)", res2, res2)
 	}
 }
 
@@ -370,9 +370,9 @@ func TestFormRules_PanelVacuumEmptyField(t *testing.T) {
 		if _, isErr := res.(errMsg); isErr {
 			t.Fatalf("non-vacuum resolved slot must NOT hit the vacuum guard, got errMsg: %v", res.(errMsg).err)
 		}
-		sm, ok := res.(clientStatusMsg)
-		if !ok || string(sm) != "连接配置已保存" {
-			t.Fatalf("expected the pre-existing save path to run silently, got %T (%v)", res, res)
+		sm, ok := res.(connSavedMsg)
+		if !ok || sm.instance != "" {
+			t.Fatalf("expected the pre-existing save path to run silently (default slot), got %T (%v)", res, res)
 		}
 	})
 }

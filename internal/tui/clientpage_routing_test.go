@@ -100,8 +100,8 @@ func TestClientGateWindowSizeRecordsAndForwards(t *testing.T) {
 //     (input preservation, TestClientWizard_PullFailureReopensFormWithDraft)
 //     — the overlay would never be nil at the end. Panel mode + a seeded
 //     Token-only cred opens the SAME form with the SAME completion
-//     assertions and stays offline: the post-save path is clientStatusMsg →
-//     refreshDataCmd → errMsg (no cache DEK in SSHMGR_CACHE_DIR), so no pull
+//     assertions and stays offline: the post-save path is connSavedMsg →
+//     refreshDataCmdFor(m.instance) → errMsg (no cache DEK), so no pull
 //     is ever attempted. The empty URL/Pin also mean no prefill — typed chars
 //     land where intended.
 //   - mechanics: fields advance via Enter + drain (T3's

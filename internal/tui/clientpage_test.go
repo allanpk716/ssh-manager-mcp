@@ -171,7 +171,7 @@ func TestEditConnFormRequiresCodeWhenNoToken(t *testing.T) {
 // http 块 Bearer 是固定占位（client 机从不持有 project token——两道闸门
 // 模型），token 走 env 不走 argv。
 func TestClientFinishScreen_DualForms(t *testing.T) {
-	v := clientFinishScreen("https://192.0.2.5:7878").View().Content
+	v := clientFinishScreen("https://192.0.2.5:7878", "").View().Content
 	for _, want := range []string{
 		`"args": ["mcp", "--cache"],`,
 		`"SSHMGR_TOKEN": "<project token>"`,
@@ -191,7 +191,7 @@ func TestClientFinishScreen_DualForms(t *testing.T) {
 
 // TestClientFinishScreen_EmptyURL: 空 serveURL 渲染 <serve URL> 占位不 panic。
 func TestClientFinishScreen_EmptyURL(t *testing.T) {
-	v := clientFinishScreen("").View().Content
+	v := clientFinishScreen("", "").View().Content
 	if !strings.Contains(v, "<serve URL>") {
 		t.Fatalf("empty URL must render the placeholder:\n%s", v)
 	}

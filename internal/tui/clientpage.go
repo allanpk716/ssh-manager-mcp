@@ -143,12 +143,18 @@ func syncCmdMode(cred *clientops.CacheCred, instance string, wizard bool) tea.Cm
 		if cred.Pin == "" {
 			return syncDoneMsg{fmt.Errorf("连接配置缺 pin（本界面永不走明文拉取）——请 [c] 编辑连接补上")}
 		}
-		_, err := clientops.DoPull(cred.URL, cred.Token, cred.Pin, clientops.PullOpts{Timeout: clientops.LazyPullTimeout, Instance: instance})
+		res, err := clientops.DoPull(cred.URL, cred.Token, cred.Pin, clientops.PullOpts{Timeout: clientops.LazyPullTimeout, Instance: instance})
 		if err != nil {
 			return syncDoneMsg{err}
 		}
 		if wizard {
-			return pullSucceededMsg{}
+			// §5: auth lands on the EFFECTIVE slot after a successful pull. A
+			// write failure is a WARNING (pull succeeded; refresh chain down
+			// until the next successful pull) with the TUI-honest recovery path.
+			if werr := clientops.WriteCacheCredFor(res.Instance, cred); werr != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: auth 未落盘——本 TUI 的 [s] 同步不可用；恢复 = CLI cache pull 或重跑向导表单（输入已保留）: %v\n", werr)
+			}
+			return pullSucceededMsg{instance: res.Instance}
 		}
 		return syncDoneMsg{nil}
 	}
@@ -194,9 +200,6 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		if kp.err != nil {
 			if m.wizard {
-				// Failed FIRST pull: reopen the form WITH the previous input
-				// (editConnForm prefills from the retained draft; the masked
-				// code stays empty) under the classified banner.
 				m.err, m.status = errors.New(classifyPullError(kp.err)), ""
 				m.overlay = m.editConnForm()
 				return m, m.overlay.Init()
@@ -205,37 +208,34 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.err, m.status = nil, "同步完成"
 		}
-		return m, refreshDataCmd
+		return m, refreshDataCmdFor(m.instance)
+
 	case pullSucceededMsg:
-		// Wizard only (syncCmdMode): the first pull worked — cache is live,
-		// show the .mcp.json finish screen. refreshDataCmd loads the fresh
-		// snapshot so the panel behind the overlay is current.
 		m.busy = false
 		m.err, m.status = nil, "首次同步完成"
 		m.finish = true
-		// nil/空防御职责在调用点（spec rev3 §4.2）：判空后传 ""，杜绝在
-		// 传参处解引用 nil cred；函数内只对空串渲染占位。
+		m.instance = kp.instance // R2-Q2a: land on the effective slot
 		serveURL := ""
 		if m.cred != nil {
 			serveURL = m.cred.URL
 		}
-		m.overlay = clientFinishScreen(serveURL)
-		return m, tea.Batch(m.overlay.Init(), refreshDataCmd)
+		m.overlay = clientFinishScreen(serveURL, kp.instance)
+		return m, tea.Batch(m.overlay.Init(), refreshDataCmdFor(kp.instance))
+
 	case connSavedMsg:
 		m.err, m.status = nil, ""
 		m.cred, m.draft = kp.cred, kp.draft
 		if m.wizard {
-			m.busy = true // first pull in flight
-			// Plan 40 批2 T5: wizard stays on the DEFAULT slot for now — T8/T9
-			// introduce the form's target slot and fill connSavedMsg.instance;
-			// passing "" keeps this task behavior-identical.
-			return m, syncCmdMode(kp.cred, "", true)
+			m.busy = true
+			return m, syncCmdMode(kp.cred, kp.instance, true)
 		}
+		m.instance = kp.instance // §3.3: UI/auth/[s] follow the form-routed slot
 		m.status = "连接配置已保存"
-		return m, refreshDataCmd
+		return m, refreshDataCmdFor(kp.instance)
+
 	case clientStatusMsg:
 		m.err, m.status = nil, string(kp)
-		return m, refreshDataCmd
+		return m, refreshDataCmdFor(m.instance)
 	case errMsg:
 		if !m.pickerChecked && m.autoPickerIfVacuum() {
 			return m, m.overlay.Init()
@@ -250,7 +250,7 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, wizFinishTo(roles.RoleClient, "client")
 		}
 		m.overlay = nil
-		return m, tea.Batch(kp.after, refreshDataCmd)
+		return m, tea.Batch(kp.after, refreshDataCmdFor(m.instance))
 	case instancePickedMsg:
 		// §3.1 in-session slot switch: drop the picker, retarget the session,
 		// and re-read THAT slot — its reply carries the matching instance.
@@ -519,20 +519,38 @@ func (m clientModel) editConnForm() overlay {
 			if token == "" {
 				return errMsg{errors.New("设备码不能为空（本机没有已保存的设备码可保持）")}
 			}
-			cred := &clientops.CacheCred{
-				URL:   strings.TrimSpace(d.URL),
-				Token: token,
-				Pin:   strings.TrimSpace(d.Pin),
-			}
-			if err := clientops.WriteCacheCred(cred); err != nil {
-				return errMsg{err}
-			}
+			cred := &clientops.CacheCred{URL: strings.TrimSpace(d.URL), Token: token, Pin: strings.TrimSpace(d.Pin)}
 			if wizard {
-				// Carry the draft + fresh cred back so the model can start the
-				// first pull AND retain the input for the failed-pull retry.
-				return connSavedMsg{cred: cred, draft: d}
+				// §5 wizard row: NOTHING is persisted at save time — the pull reveals
+				// the effective slot (auto-relocation), auth lands after success.
+				return connSavedMsg{cred: cred, draft: d, instance: target}
 			}
-			return clientStatusMsg("连接配置已保存")
+			// §5 panel row: write NOW to the form-routed slot. A NEW instance slot
+			// needs its directory first (WriteCacheCredFor never creates parents —
+			// §0.13); on write failure clean up the dir we just created IF empty
+			// (os.Remove fails on non-empty = exactly the guard we want).
+			created := false
+			if target != "" {
+				tdir, _, _, _, derr := clientops.CachePathsFor(target)
+				if derr != nil {
+					return errMsg{derr}
+				}
+				if _, serr := os.Stat(tdir); os.IsNotExist(serr) {
+					if mkerr := os.MkdirAll(tdir, 0o700); mkerr != nil {
+						return errMsg{mkerr}
+					}
+					created = true
+				}
+				if werr := clientops.WriteCacheCredFor(target, cred); werr != nil {
+					if created {
+						os.Remove(tdir) // best-effort; only removes when empty
+					}
+					return errMsg{werr}
+				}
+			} else if werr := clientops.WriteCacheCredFor("", cred); werr != nil {
+				return errMsg{werr}
+			}
+			return connSavedMsg{cred: cred, draft: d, instance: target}
 		}
 	})
 }
@@ -613,25 +631,31 @@ func classifyPullError(err error) string {
 // same project token works for both. serveURL is passed AS-IS from the stored
 // cred (trailing-slash invariance verified experimentally: the serve handler
 // is root-mounted and path-agnostic); an empty value renders "<serve URL>".
-// The http block's Bearer is a FIXED placeholder — the client machine never
-// holds the project token (the device code in cache.auth.json authorizes
-// pulls only; the agent's MCP auth is the project token minted on the server
-// machine's Projects page). Token rides env, not argv (ps/proc visibility —
-// Plan 20 B2).
-func clientFinishScreen(serveURL string) overlay {
+// A non-empty instance (Plan 40 批2 §7) pins the offline snippet to that slot:
+// args gain --instance and a note tells the user where the cache landed; ""
+// keeps the legacy dual forms untouched. The http block's Bearer is a FIXED
+// placeholder — the client machine never holds the project token (the device
+// code in cache.auth.json authorizes pulls only; the agent's MCP auth is the
+// project token minted on the server machine's Projects page). Token rides
+// env, not argv (ps/proc visibility — Plan 20 B2).
+func clientFinishScreen(serveURL, instance string) overlay {
 	if serveURL == "" {
 		serveURL = "<serve URL>"
 	}
-	offline := mcpConfigLines(
-		[]string{
-			`"args": ["mcp", "--cache"]`,
-			stdioEnvLine("<project token>"),
-		},
-		[]string{
-			"client 角色用 --cache 离线缓存模式启动；SSHMGR_TOKEN 填 server 机 Projects 页签发的 project token（不是设备码——设备码只用于拉取缓存，刚才已保存）。",
-			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
-			".mcp.json 含 token，不要提交进 git。",
-		})
+	args := []string{`"args": ["mcp", "--cache"]`}
+	notes := []string{
+		"client 角色用 --cache 离线缓存模式启动；SSHMGR_TOKEN 填 server 机 Projects 页签发的 project token（不是设备码——设备码只用于拉取缓存，刚才已保存）。",
+		`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
+		".mcp.json 含 token，不要提交进 git。",
+	}
+	if instance != "" {
+		// Plan 40 批2 §7: the cache landed in instances/<name>/ — the config must
+		// route the agent there or mcp --cache reports "default cache missing".
+		args = []string{fmt.Sprintf(`"args": ["mcp", "--cache", "--instance", %q]`, instance)}
+		notes = append([]string{fmt.Sprintf("本机 cache 位于实例槽 instances/%s/——args 必须带 --instance %s。", instance, instance)}, notes...)
+	}
+	offline := mcpConfigLines(append(args,
+		stdioEnvLine("<project token>")), notes)
 	online := mcpHttpConfigLines(serveURL, "<server 机 Projects 页签发的 token>", []string{
 		`"type": "http" 必填——漏了会被当 stdio 处理并拒绝该条目。`,
 		"两种形态用的是同一个 project token（server 机 Projects 页 [a] 新增 / [e] 轮换签发）。",
