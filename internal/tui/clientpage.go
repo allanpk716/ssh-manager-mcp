@@ -497,6 +497,17 @@ func (m clientModel) editConnForm() overlay {
 					return errMsg{errors.New("默认实例无材料——首次 enroll 请走向导流程（自动归位），或填实例名显式路由")}
 				}
 			}
+			// spec rev5 §4 (review F1): the MIRROR of that gate under a
+			// single-slot override env. There the instance field is omitted, so
+			// target is always "" — without this branch the "model cred in hand,
+			// resolved slot a four-file vacuum" half-dead state would pass every
+			// earlier gate and SILENTLY rewrite cache.auth.json. Vacuum-probe
+			// errors refuse too (fail-closed); wizard flow keeps its exemption.
+			if !wizard && singleSlot && target == "" {
+				if vac, verr := clientops.DefaultSlotVacuum(); verr != nil || vac {
+					return errMsg{errors.New("override env（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK）覆盖中：单槽语义下无多实例路由，请清除 env 或按单槽使用")}
+				}
+			}
 			if singleSlot && target != "" {
 				return errMsg{fmt.Errorf("--instance and %s are mutually exclusive — unset the env or clear the 实例名 field", overrideEnvName())}
 			}

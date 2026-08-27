@@ -328,6 +328,53 @@ func TestFormRules_PanelVacuumEmptyField(t *testing.T) {
 			t.Fatalf("single-slot copy mismatch:\nwant %q\ngot  %q", want, em.err.Error())
 		}
 	})
+
+	t.Run("review F1: env single-slot + true default-slot vacuum refuses with the override copy", func(t *testing.T) {
+		isolatedConfigDir(t) // default slot (routing unchanged by a DEK env) is a four-file vacuum
+		t.Setenv("SSHMGR_CACHE_DEK", t.TempDir())
+		m := newClientModelForGate(t)
+		// model cred on a DISK-side vacuum: without this guard the submit
+		// would silently rewrite cache.auth.json under single-slot semantics
+		m.cred = &clientops.CacheCred{URL: "https://s.example", Token: "stale", Pin: formGoodPin}
+		fo := openEditConnForm(t, m) // single-slot: only url/code/pin fields exist
+		res, completed := submitForm(fo)
+		if !completed {
+			t.Fatal("values pass every field Validate, so the form must complete (driver broke?)")
+		}
+		want := "override env（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK）覆盖中：单槽语义下无多实例路由，请清除 env 或按单槽使用"
+		em, ok := res.(errMsg)
+		if !ok {
+			t.Fatalf("want single-slot vacuum errMsg, got %T (%v)", res, res)
+		}
+		if em.err.Error() != want {
+			t.Fatalf("single-slot vacuum copy mismatch:\nwant %q\ngot  %q", want, em.err.Error())
+		}
+	})
+
+	t.Run("review F1: env single-slot with material present does NOT trigger", func(t *testing.T) {
+		base := isolatedConfigDir(t)
+		if err := os.MkdirAll(base, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(base, "cache.bin"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("SSHMGR_CACHE_DEK", t.TempDir()) // routing unchanged → resolved slot holds material
+		m := newClientModelForGate(t)
+		m.cred = &clientops.CacheCred{URL: "https://s.example", Token: "keep-me", Pin: formGoodPin}
+		fo := openEditConnForm(t, m)
+		res, completed := submitForm(fo)
+		if !completed {
+			t.Fatal("values pass every field Validate, so the form must complete (driver broke?)")
+		}
+		if _, isErr := res.(errMsg); isErr {
+			t.Fatalf("non-vacuum resolved slot must NOT hit the vacuum guard, got errMsg: %v", res.(errMsg).err)
+		}
+		sm, ok := res.(clientStatusMsg)
+		if !ok || string(sm) != "连接配置已保存" {
+			t.Fatalf("expected the pre-existing save path to run silently, got %T (%v)", res, res)
+		}
+	})
 }
 
 // warningViewOf renders the edit-conn form view and strips line breaks. Note:
