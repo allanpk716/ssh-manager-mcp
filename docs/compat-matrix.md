@@ -4,6 +4,8 @@
 
 ## 已验证组合
 
+<!-- v0.12.0（Plan 40 批2：首次 enroll 自动归位 + TUI 多实例（client 页 [i] 实例 picker / 连接表单"实例名"字段前置校验三连 / 换码预防性警告 / 向导 finish 屏 .mcp.json 带 --instance）+ `cache config [--instance] --max-offline` 子命令）：未发版占位——客户端纯增量、无破坏性变更（DoPull 改返回 PullResult{Instance} 属 internal 包签名变更，不涉协议面）；发版双端验证后再追加「已验证组合」行并回写验证日期，届时删除本注释。 -->
+
 <!-- v0.10.1 + v0.11.0 已发版(2026-08-27, release CI 双 tag 全绿)+双端部署验证——回写完成。注: v0.10.1 tag(09a8865)实际包含 Plan 40 P0 锚修复(祖先链: v0.10.0→P0→plan 文档→Plan41 spec→批1),下表 v0.10.1 行已补记。 -->
 
 | client 版本 | serve 版本 | 在线（HTTP MCP） | 离线（cache pull / mcp --cache） | 验证日期 |

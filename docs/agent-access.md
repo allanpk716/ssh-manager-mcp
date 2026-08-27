@@ -112,7 +112,7 @@ claude mcp add ssh ssh-manager -e SSHMGR_TOKEN=<TOKEN> -- mcp
 
 > **设备码绑定 profile（Plan 39）**：`cache-tokens add --name <机> --profile <装箱单>`——该设备拉到的 `/snapshot` 就是、且只是这个 profile 授权的服务器（含凭据）；未授权服务器不出服务器。Plan 39 之前签发的存量码拉取被拒（**403**，本地缓存不毁），`cache-tokens bind <name> <profile>` 原地补绑即恢复。一台机 = 一枚码 = 一个 profile。
 >
-> **同机多 agent 的离线形态（Plan 40）**：一台工作机 N 个 agent 各持不同 profile 时，可各建一个命名 cache 实例（`--instance <设备码name>`——独立目录 / DEK / 时效策略）——见 [multi-machine.md「多实例（同机多 agent）」](./multi-machine.md#多实例同机多-agent-plan-40-第一批)。
+> **同机多 agent 的离线形态（Plan 40）**：一台工作机 N 个 agent 各持不同 profile 时，可各建一个命名 cache 实例（`--instance <设备码name>`——独立目录 / DEK / 时效策略）；空机器裸 `cache pull` 会**自动归位**成同名实例（收尾记得给 `.mcp.json` 补 `--instance`）、TUI 用 `[i]` 会话内切换实例、时效上限用 `cache config` 独立查看/持久化——见 [multi-machine.md「多实例（同机多 agent）」](./multi-machine.md#多实例同机多-agent-plan-40-第一批)。
 
 未实现的拆除手段见 docs/backlog.md。
 
