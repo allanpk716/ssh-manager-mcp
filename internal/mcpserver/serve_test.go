@@ -1,10 +1,7 @@
 package mcpserver
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +12,6 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/store"
-	"ssh-manager-mcp/internal/testsshd"
 )
 
 // newTestStore + seedActiveProjectToken follow the existing pattern in
@@ -80,128 +76,6 @@ func seedActiveProjectToken(t *testing.T, st *store.Store, name string) (token, 
 		t.Fatalf("AddProject returned empty id or token: projID=%q token=%q", projID, tok)
 	}
 	return tok, projID, pid
-}
-
-func TestHTTPHandler_AuthGate(t *testing.T) {
-	st := newTestStore(t)
-	defer st.Close()
-	token, _, _ := seedActiveProjectToken(t, st, "project-A")
-
-	r, err := NewServeRunner(st)
-	if err != nil {
-		t.Fatalf("NewServeRunner: %v", err)
-	}
-	defer r.Close()
-	h := r.HTTPHandler()
-
-	// Minimal JSON-RPC initialize body the streamable handler accepts.
-	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`
-
-	cases := []struct {
-		name string
-		auth string
-		want int
-	}{
-		{"no token", "", http.StatusUnauthorized},
-		{"bad token", "Bearer not-a-real-token", http.StatusUnauthorized},
-		{"malformed header", "Token " + token, http.StatusUnauthorized},
-		{"valid token", "Bearer " + token, http.StatusOK},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(initBody))
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Accept", "application/json, text/event-stream")
-			if c.auth != "" {
-				req.Header.Set("Authorization", c.auth)
-			}
-			rr := httptest.NewRecorder()
-			h.ServeHTTP(rr, req)
-			if rr.Code != c.want {
-				t.Fatalf("%s: status = %d, want %d (body=%q)", c.name, rr.Code, c.want, rr.Body.String())
-			}
-		})
-	}
-}
-
-// TestHTTPHandler_SessionBinding_RejectsCrossProjectReplay is the load-bearing
-// proof that the SDK's session-hijack defense is engaged: a token from project A
-// that initialized a session must NOT be replayable onto that session by a
-// different project B's token. The SDK captures UserID at session creation
-// (streamable.go:425-435) and re-checks it per request (streamable.go:250-258);
-// our auth.TokenVerifier (verifyToken) sets UserID = project ID, so a mismatched
-// project → HTTP 403 "session user mismatch".
-//
-// Uses httptest.NewServer (not NewRecorder) so the SDK's session map persists
-// across the two requests against one handler instance.
-func TestHTTPHandler_SessionBinding_RejectsCrossProjectReplay(t *testing.T) {
-	st := newTestStore(t)
-	defer st.Close()
-
-	// Two active projects, each with its own profile + token.
-	tokenA, _, _ := seedActiveProjectToken(t, st, "project-A")
-	tokenB, _, _ := seedActiveProjectToken(t, st, "project-B")
-
-	r, err := NewServeRunner(st)
-	if err != nil {
-		t.Fatalf("NewServeRunner: %v", err)
-	}
-	defer r.Close()
-	ts := httptest.NewServer(r.HTTPHandler())
-	defer ts.Close()
-
-	doPost := func(t *testing.T, body, token, sessionID string) *http.Response {
-		t.Helper()
-		req, err := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(body))
-		if err != nil {
-			t.Fatalf("NewRequest: %v", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		req.Header.Set("Authorization", "Bearer "+token)
-		if sessionID != "" {
-			req.Header.Set("Mcp-Session-Id", sessionID)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("Do: %v", err)
-		}
-		return resp
-	}
-
-	// 1) Initialize a session as project A. SDK captures userID = A.
-	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
-	resp := doPost(t, initBody, tokenA, "")
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("initialize: status=%d want 200 (body=%q)", resp.StatusCode, b)
-	}
-	mcpSessionID := resp.Header.Get("Mcp-Session-Id")
-	if mcpSessionID == "" {
-		t.Fatal("initialize did not return Mcp-Session-Id — session was not created; SDK defense cannot be exercised")
-	}
-
-	// 2) Cross-project replay: project B's token + A's session → MUST be 403.
-	//    The SDK check fires at streamable.go:250-258 BEFORE method dispatch.
-	pingBody := `{"jsonrpc":"2.0","id":2,"method":"ping","params":{}}`
-	resp2 := doPost(t, pingBody, tokenB, mcpSessionID)
-	defer resp2.Body.Close()
-	b2, _ := io.ReadAll(resp2.Body)
-	if resp2.StatusCode != http.StatusForbidden {
-		t.Fatalf("cross-project replay: status=%d want 403 (body=%q) — SDK session-binding defense is NOT engaged", resp2.StatusCode, b2)
-	}
-	if !bytes.Contains(b2, []byte("session user mismatch")) {
-		t.Fatalf("cross-project replay: body=%q want substring \"session user mismatch\"", b2)
-	}
-
-	// 3) Sanity: same project (A) on A's session → 200 (allowed).
-	resp3 := doPost(t, pingBody, tokenA, mcpSessionID)
-	defer resp3.Body.Close()
-	if resp3.StatusCode != http.StatusOK {
-		b3, _ := io.ReadAll(resp3.Body)
-		t.Fatalf("same-project ping: status=%d want 200 (body=%q)", resp3.StatusCode, b3)
-	}
 }
 
 func TestRunServe_ShutdownOnCancel(t *testing.T) {
@@ -289,170 +163,6 @@ func TestRunServe_AutoTLSCreatesCert(t *testing.T) {
 	}
 	if _, err := os.Stat(keyPath); err != nil {
 		t.Fatalf("key not auto-generated at %s: %v", keyPath, err)
-	}
-}
-
-// ---- Plan 33 T5: serve body-limit middleware (spec rev3 §3.2) ----
-
-// ucServeSetup: testsshd + store + profile + a seeded REAL server usable by the
-// upload_content tool over serve; returns (st, token, srvID, remoteRootSlash).
-// The runner is built AFTER any t.Setenv so the env seam resolves per-test.
-// seedActiveProjectToken creates its OWN profile — the grant must go to THAT
-// profile (the token's project resolves to it at serve time), or the iron-rule
-// gate rejects the call ("server is not in your profile").
-func ucServeSetup(t *testing.T) (*store.Store, string, string, string) {
-	t.Helper()
-	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
-	t.Cleanup(cleanup)
-	st := newTestStore(t)
-	srvID := seedRealServer(t, st, "real", addr, hk, "")
-	token, _, profID := seedActiveProjectToken(t, st, "project-uc")
-	_ = st.GrantServers(profID, []string{srvID})
-	return st, token, srvID, toSlash(t.TempDir())
-}
-
-func TestNewServeRunnerFailClosedOnBadEnv(t *testing.T) {
-	t.Setenv("SSHMGR_UPLOAD_CONTENT_MAX", "not-a-number")
-	if _, err := NewServeRunner(newTestStore(t)); err == nil {
-		t.Fatal("NewServeRunner must refuse to start on an invalid SSHMGR_UPLOAD_CONTENT_MAX (fail-closed, spec rev3 §3.1)")
-	}
-}
-
-func TestServeBodyLimit(t *testing.T) {
-	// Small seam → small body limit: cap 4096 → limit = 4096 + 1365 + 65536.
-	t.Setenv("SSHMGR_UPLOAD_CONTENT_MAX", "4096")
-	st, token, srvID, root := ucServeSetup(t)
-	defer st.Close()
-	r, err := NewServeRunner(st)
-	if err != nil {
-		t.Fatalf("NewServeRunner: %v", err)
-	}
-	defer r.Close()
-	ts := httptest.NewServer(r.HTTPHandler())
-	defer ts.Close()
-
-	post := func(body string, cl bool) int {
-		req, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		req.Header.Set("Authorization", "Bearer "+token)
-		if !cl {
-			req.ContentLength = -1 // strip Content-Length → chunked path (fallback tier)
-		}
-		resp, derr := http.DefaultClient.Do(req)
-		if derr != nil {
-			t.Fatalf("Do: %v", derr)
-		}
-		resp.Body.Close()
-		return resp.StatusCode
-	}
-
-	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
-	if got := post(initBody, true); got != http.StatusOK {
-		t.Fatalf("small initialize must pass: %d", got)
-	}
-
-	// honest Content-Length over the limit → 413 (the real-client path).
-	big := initBody + strings.Repeat(" ", 80*1024)
-	if got := post(big, true); got != http.StatusRequestEntityTooLarge {
-		t.Fatalf("over-limit with Content-Length: %d, want 413", got)
-	}
-
-	// chunked over the limit → the MaxBytesReader fallback: an ERROR response,
-	// not 413 (the SDK owns the response) — asserted as non-OK per spec §3.2.
-	if got := post(big, false); got == http.StatusOK {
-		t.Fatalf("over-limit chunked: 200, want an error status (fallback tier)")
-	}
-
-	// at-cap base64 tool call passes the limit end-to-end: cap=4096 decoded
-	// bytes → 5464 encoded chars — under cap+cap/3+64KiB, over a naive cap.
-	payload := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xA5}, 4096))
-	callBody := fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"upload_content","arguments":{"server_id":%q,"content":%q,"remote_path":%q,"encoding":"base64"}}}`, srvID, payload, root+"/atcap.bin")
-	req, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(callBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+token)
-	// session dance: initialize first to obtain Mcp-Session-Id.
-	ireq, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(initBody))
-	ireq.Header.Set("Content-Type", "application/json")
-	ireq.Header.Set("Accept", "application/json, text/event-stream")
-	ireq.Header.Set("Authorization", "Bearer "+token)
-	iresp, derr := http.DefaultClient.Do(ireq)
-	if derr != nil || iresp.StatusCode != http.StatusOK {
-		t.Fatalf("initialize: err=%v status=%d", derr, iresp.StatusCode)
-	}
-	sid := iresp.Header.Get("Mcp-Session-Id")
-	iresp.Body.Close()
-	req.Header.Set("Mcp-Session-Id", sid)
-	resp, derr := http.DefaultClient.Do(req)
-	if derr != nil {
-		t.Fatalf("tools/call at-cap: %v", derr)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	// Success is pinned by the structured "bytes":4096 output; a tool error
-	// (IsError) carries only text, so the substring can never appear in it.
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"bytes":4096`)) {
-		t.Fatalf("at-cap tool call: status=%d body=%q", resp.StatusCode, body)
-	}
-	if got, _ := os.ReadFile(filepath.FromSlash(root + "/atcap.bin")); len(got) != 4096 {
-		t.Fatalf("at-cap file = %d bytes, want 4096", len(got))
-	}
-}
-
-// TestServeUploadContentUFFFDFullChain pins the text-mode contract at the
-// TRANSPORT layer (spec rev3 §1.1/§7): raw invalid-UTF-8 bytes inside a JSON
-// string are replaced with U+FFFD by JSON DECODING (Go encoding/json public
-// behavior) before the tool sees them — an SDK-client test can never exercise
-// this (client-side Marshal replaces first), so this drives raw HTTP bytes.
-func TestServeUploadContentUFFFDFullChain(t *testing.T) {
-	st, token, srvID, root := ucServeSetup(t)
-	defer st.Close()
-	r, err := NewServeRunner(st)
-	if err != nil {
-		t.Fatalf("NewServeRunner: %v", err)
-	}
-	defer r.Close()
-	ts := httptest.NewServer(r.HTTPHandler())
-	defer ts.Close()
-
-	doPost := func(body string, sid string) (int, string, string) {
-		req, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		req.Header.Set("Authorization", "Bearer "+token)
-		if sid != "" {
-			req.Header.Set("Mcp-Session-Id", sid)
-		}
-		resp, derr := http.DefaultClient.Do(req)
-		if derr != nil {
-			t.Fatalf("Do: %v", derr)
-		}
-		b, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return resp.StatusCode, resp.Header.Get("Mcp-Session-Id"), string(b)
-	}
-
-	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
-	code, sid, _ := doPost(initBody, "")
-	if code != http.StatusOK || sid == "" {
-		t.Fatalf("initialize: code=%d sid=%q", code, sid)
-	}
-	notif := `{"jsonrpc":"2.0","method":"notifications/initialized"}`
-	doPost(notif, sid)
-
-	// RAW invalid UTF-8 byte 0xFF inside the content string: JSON decoding
-	// replaces it with U+FFFD (EF BF BD) before the tool runs.
-	target := root + "/ufffd.txt"
-	call := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"upload_content","arguments":{"server_id":"` + srvID + `","content":"pre-` + "\xFF" + `-post","remote_path":"` + target + `","encoding":"text"}}}`
-	code, _, body := doPost(call, sid)
-	if code != http.StatusOK {
-		t.Fatalf("tools/call raw-UTF8: code=%d body=%q", code, body)
-	}
-	got, _ := os.ReadFile(filepath.FromSlash(target))
-	want := "pre-\xEF\xBF\xBD-post"
-	if string(got) != want {
-		t.Fatalf("U+FFFD full chain: file=%q want %q", got, want)
 	}
 }
 
@@ -551,5 +261,64 @@ func TestVerifyCacheTokenReason(t *testing.T) {
 	if _, err := r.verifyCacheToken(context.Background(), "definitely-not-a-real-code-123456", nil); err == nil ||
 		!strings.Contains(err.Error(), "invalid cache token: unknown") {
 		t.Fatalf("unknown: err = %v, want %q", err, "invalid cache token: unknown")
+	}
+}
+
+// ---- Plan 42 批1 T1: ②a 移除契约 (spec §3.1-1) ----
+
+// TestServe_MCPOverHTTPRemoved pins the ②a removal contract: the MCP-over-HTTP
+// route is GONE — every path except /snapshot answers 404, and the 404 comes
+// BEFORE any auth verdict (a valid project token included: a project token is
+// no longer a REMOTE MCP credential at all; it survives only as the client-side
+// spawn gate validated by `mcp --cache` against the snapshot's projects).
+//
+// Drives the live server (newSnapshotRunner's httptest.Server) so the real
+// mux — not just a handler value — is exercised.
+func TestServe_MCPOverHTTPRemoved(t *testing.T) {
+	srv, _, projTok, _ := newSnapshotRunner(t) // projTok 仍由 helper 铸出
+
+	do := func(method, path string) int {
+		t.Helper()
+		var body io.Reader
+		if method == http.MethodPost {
+			body = strings.NewReader(`{}`)
+		}
+		req, err := http.NewRequest(method, srv.URL+path, body)
+		if err != nil {
+			t.Fatalf("NewRequest %s %s: %v", method, path, err)
+		}
+		req.Header.Set("Authorization", "Bearer "+projTok)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("Do %s %s: %v", method, path, err)
+		}
+		defer res.Body.Close()
+		return res.StatusCode
+	}
+
+	// Root: the historical MCP streamable endpoint → 404, even WITH a valid token.
+	if code := do(http.MethodPost, "/"); code != http.StatusNotFound {
+		t.Fatalf("root = %d, want 404", code)
+	}
+	// Legacy/alternate MCP paths + an arbitrary path: all 404.
+	for _, p := range []string{"/mcp", "/messages", "/anything"} {
+		if code := do(http.MethodGet, p); code != http.StatusNotFound {
+			t.Fatalf("%s = %d, want 404", p, code)
+		}
+	}
+}
+
+// TestServe_SnapshotGateUnchanged is the existing-behavior anchor across the
+// ②a removal: an unauthenticated GET /snapshot still 401s (the device-code
+// gate is untouched).
+func TestServe_SnapshotGateUnchanged(t *testing.T) {
+	srv, _, _, _ := newSnapshotRunner(t)
+	res, err := http.Get(srv.URL + "/snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("= %d, want 401", res.StatusCode)
 	}
 }

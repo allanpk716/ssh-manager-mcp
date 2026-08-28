@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"encoding/hex"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/store"
 )
+
+// Shared CLI test helpers. Formerly serve_bind_test.go — the serve bind tests
+// retired with the command itself (Plan 42 批1 T1: the tunnel-whitelist CLI
+// only served the removed ②a MCP-over-HTTP surface); the helpers stay because
+// tunnels_test.go and the rest of the package drive the CLI through them.
 
 // withCliStoreEnv pins SSHMGR_STORE + SSHMGR_MASTERKEY_HEX at a fresh temp
 // vault — the env tier openUnlockedStore resolves through (vault.OpenStore →
@@ -24,7 +28,7 @@ func withCliStoreEnv(t *testing.T) (string, []byte) {
 	}
 	path := filepath.Join(dir, "test.db")
 	// Serve-cert seams pinned into the tempdir too (cache_tokens_test.go
-	// precedent): none of the bind/tunnels commands touch certs, but a typo'd
+	// precedent): none of these commands touch certs, but a typo'd
 	// `serve`-subcommand test falls back to serve's RunE (cobra legacy args
 	// fallback), which auto-loads/generates the serve cert — never in the
 	// developer's real vault dir.
@@ -68,54 +72,4 @@ func runCliErr(t *testing.T, args ...string) string {
 		t.Fatalf("cli %v: expected an error, got success:\n%s", args, out.String())
 	}
 	return errOut.String() + "\n" + err.Error()
-}
-
-func TestServeBindCmd(t *testing.T) {
-	withCliStoreEnv(t)
-
-	// ls on a virgin vault: the empty-whitelist note
-	ls := runCli(t, "serve", "bind", "ls")
-	if !strings.Contains(ls, "only loopback binds allowed") {
-		t.Fatalf("empty ls must carry the loopback-only note: %s", ls)
-	}
-
-	// 1. add rejects invalid values with the store's reason
-	//    (loopback / wildcard / hostname — spec §2 owner-CLI gate).
-	for _, tc := range []struct{ bad, want string }{
-		{"127.0.0.1", "loopback"},
-		{"0.0.0.0", "wildcard"},
-		{"example.com", "not an IP literal"},
-	} {
-		out := runCliErr(t, "serve", "bind", "add", tc.bad)
-		if !strings.Contains(out, tc.want) {
-			t.Fatalf("add %q must be rejected (%q), got: %s", tc.bad, tc.want, out)
-		}
-	}
-
-	// 2. add success + idempotent re-add + ls lists it
-	out := runCli(t, "serve", "bind", "add", "192.168.50.10")
-	if !strings.Contains(out, "approved 192.168.50.10") {
-		t.Fatalf("add must print approved: %s", out)
-	}
-	runCli(t, "serve", "bind", "add", "192.168.50.10") // idempotent — must NOT error
-	if ls = runCli(t, "serve", "bind", "ls"); !strings.Contains(ls, "192.168.50.10") {
-		t.Fatalf("ls must list entry: %s", ls)
-	}
-
-	// 3. rm by an equivalent (non-canonical) text form hits the canonical row
-	//    (store canonicalizes via net.IP.String(); the CLI echoes the argument
-	//    as typed) + the shrink note.
-	out = runCli(t, "serve", "bind", "rm", "::ffff:192.168.50.10")
-	if !strings.Contains(out, "revoked") || !strings.Contains(out, "~15s") {
-		t.Fatalf("rm must print the revoked + shrink note: %s", out)
-	}
-	if ls = runCli(t, "serve", "bind", "ls"); strings.Contains(ls, "192.168.50.10") {
-		t.Fatalf("entry must be gone: %s", ls)
-	}
-
-	// rm of an absent entry: soft "no whitelist entry", not an error
-	out = runCli(t, "serve", "bind", "rm", "192.168.50.10")
-	if !strings.Contains(out, "no whitelist entry for 192.168.50.10") {
-		t.Fatalf("rm absent must print no-entry note: %s", out)
-	}
 }

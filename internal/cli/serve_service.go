@@ -614,6 +614,13 @@ func serveProcessRunning() bool {
 // timeout = not-responding. We deliberately accept 401 (Plan 10 bearer-token
 // gate — it is the CORRECT answer for an unauthenticated probe).
 //
+// The probe targets /snapshot, not the root (Plan 42 批1 T1, spec F2): since
+// the ②a removal the root mux answers 404 to everything except /snapshot, so
+// a root probe would false-negative a perfectly healthy serve. An
+// unauthenticated GET /snapshot is rejected by the cache-token gate at the
+// auth layer — 401 before any snapshot serialization or touch (zero side
+// effects) — and 401 is the alive signal.
+//
 // https, not http (Plan 22 T1): since auto-TLS, serve is TLS-ONLY (a self-
 // signed cert is generated on first start when no --tls-cert is given), so a
 // plaintext probe could never complete a TLS handshake — `serve status`
@@ -635,7 +642,7 @@ func probeServeHTTP(addr string) bool {
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
-	resp, err := client.Get("https://" + addr + "/")
+	resp, err := client.Get("https://" + addr + "/snapshot")
 	if err != nil {
 		return false
 	}

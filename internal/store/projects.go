@@ -110,9 +110,10 @@ func (s *Store) GetProjectByName(name string) (*models.Project, error) {
 	return &p, nil
 }
 
-// GetProject resolves a project by id (returns nil, nil when absent). Used by
-// serve mode's resolveServer to map an authenticated TokenInfo.UserID back to
-// its project + profile scope. Not part of the agent surface.
+// GetProject resolves a project by id (returns nil, nil when absent). Not part
+// of the agent surface. (Historically used by serve mode's resolveServer to map
+// an authenticated TokenInfo.UserID back to its project + profile scope; that
+// HTTP path was removed with the ②a MCP-over-HTTP surface — Plan 42 批1.)
 func (s *Store) GetProject(id string) (*models.Project, error) {
 	var (
 		p      models.Project

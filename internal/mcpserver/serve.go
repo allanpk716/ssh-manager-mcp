@@ -18,16 +18,11 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// serverKey carries the request's resolved *mcp.Server (set by the resolveServer
-// middleware after auth + ServerForProject) so the SDK's getServer hook can
-// return it without re-resolving.
-type serverKey struct{}
-
-// projectTokenNominalTTL is a synthetic far-future expiration attached to every
+// cacheTokenNominalTTL is a synthetic far-future expiration attached to every
 // TokenInfo solely to satisfy the SDK auth verifier's non-zero-Expiration
-// requirement (auth.go:120-126). Project tokens have no real expiry — their
-// lifecycle is governed by VerifyToken (status='active': rotate/disable/revoke).
-const projectTokenNominalTTL = 100 * 365 * 24 * time.Hour
+// requirement (auth.go:120-126). Device codes have no real expiry — their
+// lifecycle is governed by VerifyCacheToken (status='active': revoke).
+const cacheTokenNominalTTL = 100 * 365 * 24 * time.Hour
 
 // scopedServer is a project-scoped MCP server + its tunnel manager + its
 // background-task manager, cached per project so concurrent sessions of the
@@ -40,23 +35,18 @@ type scopedServer struct {
 }
 
 // ServeRunner is the stateful core of `ssh-manager serve`: it holds the shared
-// store and one cached scoped server per project. Each verified token maps to a
-// stable server instance across that token's HTTP requests.
+// store. The per-project scoped-server cache (ServerForProject) is a leftover
+// of the removed ②a MCP-over-HTTP surface — since Plan 42 批1 it has no HTTP
+// caller (the only authenticated route, /snapshot, never touches it) and
+// awaits the serve-side agent-execution-surface retirement (spec §3.1-2).
 type ServeRunner struct {
-	st        *store.Store
-	bodyLimit int64 // Plan 33 §3.2: cap+cap/3+64KiB, resolved ONCE at construction
-	mu        sync.Mutex
-	cache     map[string]*scopedServer // keyed by project ID
+	st    *store.Store
+	mu    sync.Mutex
+	cache map[string]*scopedServer // keyed by project ID
 }
 
 // NewServeRunner constructs a runner over an already-open store. The caller owns st.Close().
-// Plan 33 spec rev3 §3.1: the upload-content env seam resolves HERE (fail-closed,
-// before RunServe binds — never a "listening but first request 503s" half-dead state).
 func NewServeRunner(st *store.Store) (*ServeRunner, error) {
-	cap, err := resolveUploadContentCap()
-	if err != nil {
-		return nil, err
-	}
 	// Plan 40 §2.1 legacy detection: active device-code names are about to be
 	// emitted as X-Sshmgr-Device-Name and used as client directory names — a
 	// casefold collision or an illegal legacy name must stop the serve BEFORE it
@@ -66,13 +56,7 @@ func NewServeRunner(st *store.Store) (*ServeRunner, error) {
 	} else if len(anomalies) > 0 {
 		return nil, formatNameAnomalies(anomalies)
 	}
-	// checked arithmetic (§3.2): under the 1 GiB ceiling this cannot overflow;
-	// the belt-and-suspenders form still guards a future ceiling raise.
-	limit := cap + cap/3 + 64*1024
-	if limit < cap { // overflow sentinel — refuse absurd states loudly
-		return nil, fmt.Errorf("serve body limit overflow: cap=%d", cap)
-	}
-	return &ServeRunner{st: st, bodyLimit: limit, cache: make(map[string]*scopedServer)}, nil
+	return &ServeRunner{st: st, cache: make(map[string]*scopedServer)}, nil
 }
 
 // formatNameAnomalies builds the fail-closed startup refusal for Plan 40 §2.1
@@ -116,33 +100,11 @@ func (r *ServeRunner) Close() {
 	}
 }
 
-// verifyToken is the auth.TokenVerifier for auth.RequireBearerToken: it validates
-// the project token via the SAME VerifyToken gate stdio uses, and returns a
-// TokenInfo whose UserID is the project id. The SDK captures UserID at session
-// creation (streamable.go:425-435) and re-checks it per request
-// (streamable.go:250-258) — that is what now blocks a token from one project
-// being replayed onto another project's session (403 "session user mismatch").
-func (r *ServeRunner) verifyToken(ctx context.Context, token string, req *http.Request) (*auth.TokenInfo, error) {
-	project, err := r.st.VerifyToken(token)
-	if err != nil || project == nil {
-		return nil, fmt.Errorf("%w: invalid or unknown token", auth.ErrInvalidToken)
-	}
-	// SDK's verify() requires a non-zero, non-expired Expiration (auth.go:120-126).
-	// Our project tokens are long-lived; real lifecycle is VerifyToken's
-	// status='active' filter (rotate/disable/revoke), NOT this nominal expiry.
-	// The far-future expiration solely satisfies the SDK check.
-	return &auth.TokenInfo{
-		UserID:     project.ID,
-		Expiration: time.Now().Add(projectTokenNominalTTL),
-	}, nil
-}
-
-// verifyCacheToken is the auth.TokenVerifier for the /snapshot route ONLY: it validates a
-// device-auth code via VerifyCacheToken (a disjoint gate from project tokens) and returns a
-// TokenInfo whose UserID is the cache-token id (used by handleSnapshot to TouchCacheToken).
-// It is NEVER passed to the MCP handler's RequireBearerToken; verifyToken is NEVER passed to
-// /snapshot's. Two gates, never bridged — this is what keeps a project token from dumping
-// the whole vault.
+// verifyCacheToken is the auth.TokenVerifier for the /snapshot route: it validates a
+// device-auth code via VerifyCacheToken and returns a TokenInfo whose UserID is the
+// cache-token id (used by handleSnapshot to TouchCacheToken). Post-Plan-42-批1 it
+// gates the ONLY authenticated HTTP route serve exposes (/snapshot) — the device-code
+// gate is the only remote credential, and it is never bridged to anything else.
 func (r *ServeRunner) verifyCacheToken(ctx context.Context, token string, req *http.Request) (*auth.TokenInfo, error) {
 	ct, err := r.st.VerifyCacheToken(token)
 	if err != nil || ct == nil {
@@ -167,92 +129,29 @@ func (r *ServeRunner) verifyCacheToken(ctx context.Context, token string, req *h
 		}
 		return nil, fmt.Errorf("%w: invalid cache token: %s", auth.ErrInvalidToken, reason)
 	}
-	// SDK's verify() requires a non-zero, non-expired Expiration (auth.go:120-126). Same
-	// nominal-TTL trick as verifyToken: the real lifecycle is VerifyCacheToken's
-	// status='active' filter (revoke), NOT this nominal expiry.
+	// SDK's verify() requires a non-zero, non-expired Expiration (auth.go:120-126).
+	// Our device codes are long-lived; the real lifecycle is VerifyCacheToken's
+	// status='active' filter (revoke), NOT this nominal expiry. The far-future
+	// expiration solely satisfies the SDK check.
 	return &auth.TokenInfo{
 		UserID:     ct.ID,
-		Expiration: time.Now().Add(projectTokenNominalTTL),
+		Expiration: time.Now().Add(cacheTokenNominalTTL),
 	}, nil
 }
 
-// resolveServer runs AFTER auth.RequireBearerToken has stashed the *auth.TokenInfo.
-// It resolves the token's project (by UserID) to its cached scoped server and
-// stashes that server under serverKey for the SDK's getServer hook.
-func (r *ServeRunner) resolveServer(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		ti := auth.TokenInfoFromContext(req.Context())
-		if ti == nil || ti.UserID == "" {
-			http.Error(w, "no authenticated project", http.StatusForbidden) // fail closed
-			return
-		}
-		project, err := r.st.GetProject(ti.UserID)
-		if err != nil || project == nil {
-			http.Error(w, "project not found", http.StatusServiceUnavailable)
-			return
-		}
-		srv, err := r.ServerForProject(project)
-		if err != nil {
-			http.Error(w, "server unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		ctx := context.WithValue(req.Context(), serverKey{}, srv)
-		next.ServeHTTP(w, req.WithContext(ctx))
-	})
-}
-
-// bodyLimitMiddleware caps a single request body at r.bodyLimit (Plan 33 spec
-// rev3 §3.2): the SDK v1.2.0 streamable handler reads bodies with an UNBOUNDED
-// io.ReadAll, and upload_content legitimizes MiB-scale bodies — this closes
-// the resulting DoS face. Two tiers, honestly pinned: an honest Content-Length
-// over the limit answers 413 directly (the real-client path); a lying/absent
-// Content-Length falls through to http.MaxBytesReader, whose mid-read error
-// surfaces as an SDK error response (not 413 — acceptable: the oversized call
-// never executes). /snapshot is a GET and is NOT wrapped.
-func (r *ServeRunner) bodyLimitMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.ContentLength > r.bodyLimit {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		req.Body = http.MaxBytesReader(w, req.Body, r.bodyLimit)
-		next.ServeHTTP(w, req)
-	})
-}
-
-// HTTPHandler returns the request mux for `ssh-manager serve`. Composition:
-//
-//	GET /snapshot  → cache-token RequireBearerToken → handleSnapshot (read-only vault dump)
-//	everything else → body-limit → project-token RequireBearerToken → resolveServer → SDK streamable MCP handler
-//
-// The two RequireBearerToken chains use DISJOINT verifiers (verifyCacheToken vs verifyToken).
-// A project token presented at /snapshot fails verifyCacheToken (it is not a device code) and is
-// rejected; a cache token presented at the MCP path fails verifyToken (it is not a project token)
-// and is rejected. The gates are never bridged — a project token can never dump the whole vault,
-// and a cache token can never drive an MCP tool. This is the two-disjoint-gates keystone.
+// The two-gates keystone narrows in v0.11.0: a project token is no longer a REMOTE MCP
+// credential at all (the MCP-over-HTTP route is gone) — it survives only as the
+// client-side spawn gate, validated by `mcp --cache` against the snapshot's projects.
+// The device-code gate on /snapshot is unchanged and remains the only remote credential.
 func (r *ServeRunner) HTTPHandler() http.Handler {
-	getServer := func(req *http.Request) *mcp.Server {
-		if s, ok := req.Context().Value(serverKey{}).(*mcp.Server); ok {
-			return s
-		}
-		// Unreachable in practice: resolveServer stashes a server (or 403/503's)
-		// before the SDK handler runs. If reached, the SDK returns HTTP 400
-		// "no server available" (streamable.go:328-331) — no panic.
-		return nil
-	}
-	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, nil)
-	projectAuth := auth.RequireBearerToken(r.verifyToken, &auth.RequireBearerTokenOptions{}) // no scopes
-	mcpChain := r.bodyLimitMiddleware(projectAuth(r.resolveServer(mcpHandler)))
-
 	cacheAuth := auth.RequireBearerToken(r.verifyCacheToken, &auth.RequireBearerTokenOptions{})
 	snapshotHandler := cacheAuth(http.HandlerFunc(r.handleSnapshot))
-
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/snapshot" {
 			snapshotHandler.ServeHTTP(w, req)
 			return
 		}
-		mcpChain.ServeHTTP(w, req)
+		http.NotFound(w, req) // /pair/* 在 Task 5 挂入;其余一律 404
 	})
 }
 
@@ -326,13 +225,15 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// RunServe runs the authenticated streamable-HTTP MCP server until ctx is
-// cancelled (SIGINT/SIGTERM, wired by the caller). The listener is created
-// synchronously so bind errors surface before serving. TLS is ALWAYS used:
-// if tlsCert is the operator's explicit --tls-cert, that cert is served
-// (backward compat); if tlsCert is empty, RunServe auto-generates + loads a
-// self-signed cert (LoadOrCreateServeCert) and serves that, logging its
-// fingerprint so the operator can distribute the pin to clients. A
+// RunServe runs the serve HTTP server until ctx is cancelled (SIGINT/SIGTERM,
+// wired by the caller). Post-Plan-42-批1 the served surface is the
+// authenticated /snapshot route only (the MCP-over-HTTP agent surface was
+// removed — see HTTPHandler; /pair arrives in a later batch-1 task). The
+// listener is created synchronously so bind errors surface before serving.
+// TLS is ALWAYS used: if tlsCert is the operator's explicit --tls-cert, that
+// cert is served (backward compat); if tlsCert is empty, RunServe auto-generates
+// + loads a self-signed cert (LoadOrCreateServeCert) and serves that, logging
+// its fingerprint so the operator can distribute the pin to clients. A
 // LoadOrCreateServeCert failure is returned (serve refuses to start — never
 // silently downgrades to plaintext). Returns nil on clean ctx-cancelled shutdown.
 func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string) error {
