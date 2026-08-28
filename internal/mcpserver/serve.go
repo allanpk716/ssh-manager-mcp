@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -49,6 +50,27 @@ type ServeRunner struct {
 	// pairing/discovery. Both lock-free via atomic.Pointer.
 	switchIn atomic.Pointer[switchInputs]
 	switches atomic.Pointer[switchCache]
+
+	// Pairing key state (Plan 42 批1 T5, pairserve.go): the /pair surface's
+	// ephemeral X25519 private keys live ONLY here — never on disk, never in
+	// the store. Keyed by the raw 32-byte pairing id. Entries are dropped when
+	// their row reaches a terminal state or pairKeyMaxAgeSec passes; a serve
+	// restart empties the map by construction (the pending rows become
+	// unfinishable and expire through the store's time predicates).
+	pairMu   sync.Mutex
+	pairKeys map[[32]byte]pairKeyEntry
+	// pairSigner is the serve cert's ed25519 private key (the long-term
+	// identity that signs each pairing transcript — F5); pairSPKI is the
+	// cert's SPKI fingerprint handed to the client inside the sealed
+	// envelope so it pins the same key it is paired with. Both are set once
+	// at RunServe startup (nil/"" = pairing signing unavailable).
+	pairSigner ed25519.PrivateKey
+	pairSPKI   string
+	// per-IP rate limiters + pending-queue quotas (frozen env seams, read at
+	// construction — restart-effective).
+	pairLimits        pairLimits
+	pairPendingPerIP  int
+	pairPendingGlobal int
 }
 
 // NewServeRunner constructs a runner over an already-open store. The caller owns st.Close().
@@ -62,7 +84,9 @@ func NewServeRunner(st *store.Store) (*ServeRunner, error) {
 	} else if len(anomalies) > 0 {
 		return nil, formatNameAnomalies(anomalies)
 	}
-	return &ServeRunner{st: st, cache: make(map[string]*scopedServer)}, nil
+	r := &ServeRunner{st: st, cache: make(map[string]*scopedServer), pairKeys: make(map[[32]byte]pairKeyEntry)}
+	r.pairLimits, r.pairPendingPerIP, r.pairPendingGlobal = pairLimitsFromEnv()
+	return r, nil
 }
 
 // formatNameAnomalies builds the fail-closed startup refusal for Plan 40 §2.1
@@ -157,7 +181,11 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 			snapshotHandler.ServeHTTP(w, req)
 			return
 		}
-		http.NotFound(w, req) // /pair/* 在 Task 5 挂入;其余一律 404
+		if strings.HasPrefix(req.URL.Path, "/pair/") {
+			r.handlePair(w, req) // unauthenticated SAS pairing surface (Plan 42 §3.3) — self-gated
+			return
+		}
+		http.NotFound(w, req) // 其余一律 404
 	})
 }
 
@@ -233,9 +261,10 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 
 // RunServe runs the serve HTTP server until ctx is cancelled (SIGINT/SIGTERM,
 // wired by the caller). Post-Plan-42-批1 the served surface is the
-// authenticated /snapshot route only (the MCP-over-HTTP agent surface was
-// removed — see HTTPHandler; /pair arrives in a later batch-1 task). The
-// listener is created synchronously so bind errors surface before serving.
+// authenticated /snapshot route plus the unauthenticated SAS pairing surface
+// /pair/* (Plan 42 §3.3; the MCP-over-HTTP agent surface was removed — see
+// HTTPHandler). The listener is created synchronously so bind errors surface
+// before serving.
 // TLS is ALWAYS used: if tlsCert is the operator's explicit --tls-cert, that
 // cert is served (backward compat); if tlsCert is empty, RunServe auto-generates
 // + loads a self-signed cert (LoadOrCreateServeCert) and serves that, logging
@@ -261,6 +290,18 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 		}
 		tlsCert, tlsKey = certPath, keyPath
 		autoTLSFingerprint = fp
+	}
+
+	// Pairing signature state (Plan 42 批1 T5): the serve cert's ed25519 key
+	// signs every pairing transcript and its SPKI pin rides the sealed
+	// envelope. Auto-TLS is always ed25519; an operator-supplied non-ed25519
+	// --tls-cert cannot sign — /pair enroll answers 500 and serve continues
+	// (the TLS surface itself is unaffected).
+	if signer, spki, serr := loadPairSigner(tlsCert, tlsKey); serr != nil {
+		fmt.Fprintf(os.Stderr, "ssh-manager serve: /pair disabled: serve key unusable for pairing signatures: %v\n", serr)
+	} else {
+		runner.pairSigner = signer
+		runner.pairSPKI = spki
 	}
 
 	ln, err := net.Listen("tcp", addr)
