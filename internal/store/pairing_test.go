@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -130,6 +131,62 @@ func TestPairingStateMachine(t *testing.T) {
 		t.Fatalf("after lazy cleanup the queue must be empty, got %v, %v", list, err)
 	}
 }
+
+// TestPairingEnroll_Audit pins the 终审修复 I1: pair.enroll commits IN the enroll
+// transaction (§3.3-8) — ① a successful enroll leaves exactly one pair.enroll row
+// whose Command is the sanitized whitelist JSON (name/ip only; the row's key
+// material never leaks) ② a failed INSERT (duplicate id → UNIQUE) rolls the audit
+// back with the row ③ a quota refusal (pre-INSERT) writes nothing ④ expiry (lazy
+// read-path hygiene) is not an audited event.
+func TestPairingEnroll_Audit(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().Unix()
+	p := mkPending(31, "laptop", now+600)
+	if err := s.AddPendingPairing(p, 2, 32); err != nil {
+		t.Fatalf("AddPendingPairing: %v", err)
+	}
+	if got := countAuditAction(t, s, "pair.enroll"); got != 1 {
+		t.Fatalf("pair.enroll audit rows = %d, want 1", got)
+	}
+	rows, err := s.QueryAudit(AuditFilter{Actions: []string{"pair.enroll"}})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("QueryAudit(pair.enroll) = %v, %v", rows, err)
+	}
+	// 白名单字节稳定:仅 name/ip(json.Marshal 键排序),公钥/nonce/sig 不落。
+	if want := `{"ip":"10.0.0.9","name":"laptop"}`; rows[0].Command != want {
+		t.Fatalf("pair.enroll Command = %q, want sanitized whitelist %q", rows[0].Command, want)
+	}
+	assertAuditNeverContains(t, s, []string{hexOf(p.ClientPub), hexOf(p.Sig)})
+
+	// 同 id 二次 enroll → INSERT UNIQUE 失败 → 整事务回滚:audit 零新增。
+	if err := s.AddPendingPairing(p, 2, 32); err == nil {
+		t.Fatal("duplicate-id enroll must surface the UNIQUE error")
+	}
+	if got := countAuditAction(t, s, "pair.enroll"); got != 1 {
+		t.Fatalf("failed enroll must leave audit untouched, got %d pair.enroll rows", got)
+	}
+
+	// 配额拒绝(pre-INSERT)→ 零 audit。
+	if err := s.AddPendingPairing(mkPending(32, "overflow", now+600), 1, 32); !errors.Is(err, ErrPairingQuota) {
+		t.Fatalf("quota refusal: err=%v, want ErrPairingQuota", err)
+	}
+	if got := countAuditAction(t, s, "pair.enroll"); got != 1 {
+		t.Fatalf("quota refusal must write no audit, got %d pair.enroll rows", got)
+	}
+
+	// 过期 = 懒清理(读路径),不产生任何 audit 事件。
+	s.NowFn = func() time.Time { return time.Now().Add(15 * time.Minute) }
+	if _, err := s.ListPendingPairing(); err != nil {
+		t.Fatal(err)
+	}
+	s.NowFn = nil
+	if got := countAuditAction(t, s, "pair.enroll"); got != 1 {
+		t.Fatalf("lazy expiry must not audit, got %d pair.enroll rows", got)
+	}
+}
+
+// hexOf is a test helper for the never-audited assertions on binary fields.
+func hexOf(b []byte) string { return fmt.Sprintf("%x", b) }
 
 // TestPairingRejectAndQuota pins RejectPairing's CAS/predicate and AddPendingPairing's
 // per-IP + global quotas (ErrPairingQuota) with the quota scope = live rows only

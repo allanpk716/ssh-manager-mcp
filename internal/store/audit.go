@@ -44,7 +44,8 @@ func (s *Store) WriteAudit(r AuditRow) error {
 // WriteAudit's db path, so a mutation and its history commit atomically (Plan 42
 // §3.3-8: pairing events ride the approve/finish/reject transaction; a rolled-back
 // mint leaves zero audit rows). Pairing Actions use the `pair.` prefix enum
-// (pair.approve/pair.reject/pair.finish/pair.autorevoke/pair.mint/...); Command
+// (pair.enroll/pair.approve/pair.reject/pair.finish/pair.autorevoke/pair.mint/...);
+// Command
 // carries the sanitized JSON summary {"name":...,"profile":...,"ip":...} — NEVER
 // any token/code/pin/sealed value.
 func writeAuditTx(tx *sql.Tx, r AuditRow) error {

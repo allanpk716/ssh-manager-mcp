@@ -79,6 +79,10 @@ type PendingPairing struct {
 // rows (state pending/approved) count against quota — rejected/expired/delivered
 // rows stop occupying slots. Zero side effects beyond the row itself: enroll NEVER
 // touches tokens/projects (auto-revoke is deferred to the finish transaction).
+// The pair.enroll audit row commits IN THE SAME transaction (§3.3-8) — a quota
+// refusal or a failed INSERT rolls the audit back with the row, so a successful
+// enroll and its audit line are inseparable. (Expired is NOT an audited event:
+// expiry is lazy read-path hygiene and never writes.)
 // Duplicate id surfaces as the raw UNIQUE error (the handler pre-checks for 409).
 // perIP/globalMax <= 0 disables that limit (defensive; the handler always clamps >= 1).
 func (s *Store) AddPendingPairing(p *PendingPairing, perIP, globalMax int) error {
@@ -133,6 +137,16 @@ func (s *Store) AddPendingPairing(p *PendingPairing, perIP, globalMax int) error
 		p.ProfileHint, ri, p.State, p.Profile, p.SourceIP,
 		p.EnrollDeadline, p.ApprovedDeadline, p.DeliveredSealed, p.ReplayCount,
 	); err != nil {
+		return err
+	}
+	// pair.enroll 同事务 audit(§3.3-8):白名单只落 name/ip — token/码/密文/公钥
+	// 等一律不落;INSERT 失败或配额拒绝时整事务回滚,audit 与行同生共死。
+	if err := writeAuditTx(tx, AuditRow{
+		TS:      s.nowTime(),
+		Action:  "pair.enroll",
+		Command: pairAuditJSON(map[string]string{"ip": p.SourceIP, "name": p.Name}),
+		Status:  "ok",
+	}); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -56,7 +56,7 @@ Plan 42 批1 给 serve 新增两个网络面：**UDP 7878 discovery**（默认�
 
 **吊销三路径（pair 下发凭据的失效语义）。** owner 侧吊销后 client 侧失效路径取决于吊销对象与在线状态（§3.6 与 multi-machine.md「吊销」节的展开）：① project token 吊销、设备码仍活 → 下次保鲜（≤30min）新快照已无该 project，本地 spawn 闸拒绝；② 设备码吊销 → 下次 pull pinned 401 ⇒ quarantine（§3.6 四件销毁）；③ 永离线设备 → 旧快照 + 本地 token 的窗口 = **`max_offline` 硬上限**（pair 下发默认 24h，`LoadCacheSnapshot` 到期拒载）——不是 30 分钟；窗口内失窃的最终兜底仍是轮换服务器凭据。
 
-**审计（同事务 + 脱敏白名单）。** pairing 全事件（enroll/批准/拒绝/finish/过期）与状态变更**同 SQLite 事务**落 `audit_log`——mint 中途失败整体回滚、零孤儿 audit 行。字段走**白名单**：事件类型、实例名、profile 名、target 非敏感 ID 与 action 摘要（如 `rotate`/`create`/`delete`，不含值）、来源 IP、时间戳、结果码；**永不落**：凭据值 / token / 设备码 / pin / SAS / 密文 / ack / sig（Web 访问日志同纪律，批2 生效）。
+**审计（同事务 + 脱敏白名单）。** pairing 全事件（enroll/批准/拒绝/finish；过期为懒清理卫生，不入审计）与状态变更**同 SQLite 事务**落 `audit_log`——mint 中途失败整体回滚、零孤儿 audit 行。字段走**白名单**：事件类型、实例名、profile 名、target 非敏感 ID 与 action 摘要（如 `rotate`/`create`/`delete`，不含值）、来源 IP、时间戳、结果码；**永不落**：凭据值 / token / 设备码 / pin / SAS / 密文 / ack / sig（Web 访问日志同纪律，批2 生效）。
 
 **批1 边界（如实）**：批1 无 Web 面——`/ui`、admin 认证、浏览器端证书锚定问题（R5）随批2 落地时再补 Web 节。
 
