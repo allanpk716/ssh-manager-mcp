@@ -15,8 +15,8 @@ import (
 // and the wizard emits none of these — it owns its own two-screen flow):
 //   - usage:    "token 去哪"一行（wizTokenScreen 的用途行同款纪律）
 //   - recovery: "丢失→"一行（store 只存 hash，明文不可恢复）
-//   - snippet:  mcp.json 引导块 = mcpConfigLines/mcpHttpConfigLines 完整输出
-//     按序拼接（引导语 + JSON + 说明块都在其中）；nil 时整块不渲染。
+//   - snippet:  mcp.json 引导块 = mcpConfigLines 完整输出
+//     （引导语 + JSON + 说明块都在其中）；nil 时整块不渲染。
 type tokenIssuedMsg struct {
 	title, token string
 	usage        string

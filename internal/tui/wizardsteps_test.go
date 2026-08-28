@@ -186,24 +186,15 @@ func jsonBlockOf(lines []string) string {
 	return strings.Join(lines[start:end+1], "\n")
 }
 
-// goldenStdioBlock / goldenHttpBlock are the SPEC-PINNED placeholder goldens
-// (spec §5.5): every doc snippet must normalize to one of these (Task 9).
+// goldenStdioBlock is the SPEC-PINNED placeholder golden (spec §5.5): every
+// doc snippet must normalize to one of these (Task 9). The http sibling was
+// retired with ②a in Plan 42 批1 — no http golden survives.
 const goldenStdioBlock = `{
   "mcpServers": {
     "ssh": {
       "command": "ssh-manager",
       "args": ["mcp"],
       "env": { "SSHMGR_TOKEN": "<TOKEN>" }
-    }
-  }
-}`
-
-const goldenHttpBlock = `{
-  "mcpServers": {
-    "ssh": {
-      "type": "http",
-      "url": "https://192.0.2.5:7878/",
-      "headers": { "Authorization": "Bearer <TOKEN>" }
     }
   }
 }`
@@ -218,37 +209,15 @@ func TestGoldenStdioBlock(t *testing.T) {
 	}
 }
 
-// TestGoldenHttpBlock: mcpHttpConfigLines at the pinned placeholder URL+token.
-func TestGoldenHttpBlock(t *testing.T) {
-	got := jsonBlockOf(mcpHttpConfigLines("https://192.0.2.5:7878/", "<TOKEN>", nil))
-	if got != goldenHttpBlock {
-		t.Fatalf("http golden drift:\n--- got ---\n%s\n--- want ---\n%s", got, goldenHttpBlock)
-	}
-}
-
-// TestHttpConfigLinesJSONValid: empty-notes and populated-notes both render
-// valid JSON with a comma-free last member (same discipline as the stdio
-// builder's TestMcpConfigLinesJSONValid).
-func TestHttpConfigLinesJSONValid(t *testing.T) {
-	for _, notes := range [][]string{nil, {`"type": "http" 必填——漏了会被当 stdio 拒绝。`}} {
-		var v any
-		if err := json.Unmarshal([]byte(jsonBlockOf(mcpHttpConfigLines("https://h:1/", "tok", notes))), &v); err != nil {
-			t.Fatalf("notes=%q: invalid JSON: %v", notes, err)
-		}
-	}
-}
-
-// TestValueEncodingAnchor: EVERY interpolation point (stdio env token, http
-// url, http Bearer) survives the nasty-value gauntlet — `"`, `\`, control
-// chars (\x07, \v), `&`, `<` — as (a) parseable JSON and (b) WITHOUT the
-// default-HTML-escape sequences (SetEscapeHTML(false) anchor) and (c) with
-// the angle brackets still literally present (copy-paste readability).
+// TestValueEncodingAnchor: the stdio env-token interpolation point survives
+// the nasty-value gauntlet — `"`, `\`, control chars (\x07, \v), `&`, `<` —
+// as (a) parseable JSON and (b) WITHOUT the default-HTML-escape sequences
+// (SetEscapeHTML(false) anchor) and (c) with the angle brackets still
+// literally present (copy-paste readability).
 func TestValueEncodingAnchor(t *testing.T) {
 	nasty := "x\"y\\z\x07\v&<>"
 	blocks := []string{
 		jsonBlockOf(mcpConfigLines([]string{`"args": ["mcp"]`, stdioEnvLine(nasty)}, nil)),
-		jsonBlockOf(mcpHttpConfigLines(nasty, "tok", nil)),
-		jsonBlockOf(mcpHttpConfigLines("https://h", nasty, nil)),
 	}
 	for i, b := range blocks {
 		var v any

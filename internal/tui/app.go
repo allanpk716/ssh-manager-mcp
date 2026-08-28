@@ -156,13 +156,12 @@ func FetchAll(st *store.Store) ([pageCount]listPage, error) {
 }
 
 // projectTokenMsg builds the guidance-complete tokenIssuedMsg for the
-// Projects page add/rotate: the REAL token embedded in BOTH snippet forms —
+// Projects page add/rotate: the REAL token embedded in the stdio snippet —
 // a single one-time screen, CLI printToken parity (the wizard's placeholder
-// approach belongs to its two-screen flow and does not apply here). The http
-// block's URL is the neutral "<serve URL>" placeholder on purpose: the serve
-// address/port varies with --addr and plaintext deployments exist, so this
-// machine cannot know its own outward URL; the token is the copy-paste-
-// critical value and must be real.
+// approach belongs to its two-screen flow and does not apply here). Only the
+// stdio form survives: the http form was retired with ②a (Plan 42 批1 —
+// MCP-over-HTTP answers 404, so there is nothing left to point a remote
+// agent at; multi-machine agents enroll via `ssh-manager pair`).
 func projectTokenMsg(title, token string) tokenIssuedMsg {
 	stdio := mcpConfigLines(
 		[]string{`"args": ["mcp"]`, stdioEnvLine(token)},
@@ -170,14 +169,7 @@ func projectTokenMsg(title, token string) tokenIssuedMsg {
 			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
 			".mcp.json 含 token，不要提交进 git。",
 		})
-	httpBlock := mcpHttpConfigLines("<serve URL>", token, []string{
-		`"type": "http" 必填——漏了会被当 stdio 拒绝。`,
-		"<serve URL> 按 serve 实际启动地址填（默认形态 https://<主机>:7878/；端口随 --addr 变，明文部署见 docs/multi-machine.md）。",
-		".mcp.json 含 token，不要提交进 git。",
-	})
 	snippet := append([]string{"—— 本机/单机 agent（stdio）——"}, stdio...)
-	snippet = append(snippet, "", "—— 联机在线 agent（直连 serve，http；未部署 serve 可忽略本块）——")
-	snippet = append(snippet, httpBlock...)
 	return tokenIssuedMsg{
 		title:    title,
 		token:    token,

@@ -95,7 +95,7 @@ ssh-manager tui
 
 切到 Projects 页按 `a` → 填项目名称、选要绑定的 Profile → token **一次性全屏显示**。
 
-这块屏是双形态引导（Task 1-4 后的新样式）——同一把 token 给了两种接法，各抄所需：
+屏上是完整可抄的 stdio 片段（旧的 http 双形态块已随 ②a 移除退役——serve 不再提供远程 MCP 面，多机 agent 走 `ssh-manager pair` 配对）：
 
 ```
 —— 本机/单机 agent（stdio）——
@@ -108,24 +108,12 @@ ssh-manager tui
     }
   }
 }
-
-—— 联机在线 agent（直连 serve，http；未部署 serve 可忽略本块）——
-{
-  "mcpServers": {
-    "ssh": {
-      "type": "http",
-      "url": "<serve URL>",
-      "headers": { "Authorization": "Bearer <TOKEN>" }
-    }
-  }
-}
 ```
 
-- **stdio 块是真片段**：屏上显示的 JSON 里 token 已经代入（此处用 `<TOKEN>` 示意），抄完即用；
-- **http 块是占位**：URL 处写 `<serve URL>`（serve 地址随部署而变，本机无从得知）；屏上注明**未部署 serve 可忽略本块**，真要用 http 形态需 `"type": "http"` 必填（漏了会被当 stdio 拒绝）；
+- **片段是真片段**：屏上显示的 JSON 里 token 已经代入（此处用 `<TOKEN>` 示意），抄完即用；
 - 屏底固定提示：⚠ 仅此一次显示（关闭后不可再看）；丢失 → Projects 页 `[e]` 轮换换发（旧 token 立即失效）。
 
-单机场景抄 stdio 块即可。每个项目一把独立 token，给第二个 agent 就是再按一次 `a`（可绑同一 profile——授权范围相同，身份/吊销独立）。
+每个项目一把独立 token，给第二个 agent 就是再按一次 `a`（可绑同一 profile——授权范围相同，身份/吊销独立）。
 
 ### 加服务器 / 批量导入 ssh config
 
@@ -142,7 +130,7 @@ ssh-manager tui
 
 ### 轮换 token（Projects 页 [e]）
 
-光标停在目标项目上按 `e` → 确认「轮换 "xxx" 的 token？（旧 token 立即失效）」→ 新 token 以同款双形态屏一次性展示。把新片段更新进 agent 的 `.mcp.json` 即完成换发；怀疑 token 泄露时这是标准处置。吊销不再用的项目按 `d`（永久生效，不可恢复）。
+光标停在目标项目上按 `e` → 确认「轮换 "xxx" 的 token？（旧 token 立即失效）」→ 新 token 以同款一次性片段屏展示。把新片段更新进 agent 的 `.mcp.json` 即完成换发；怀疑 token 泄露时这是标准处置。吊销不再用的项目按 `d`（永久生效，不可恢复）。
 
 ## 5. 排错
 

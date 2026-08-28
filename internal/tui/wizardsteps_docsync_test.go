@@ -65,12 +65,12 @@ func extractMcpBlocks(t *testing.T, doc string) []string {
 }
 
 // TestDocsMcpSnippetsMatchGolden: 每篇文档里的每个 mcpServers 块，规范化后
-// 必须命中四条 canonical 之一（stdio / cache / http / stdio+masterkey-hex）。
+// 必须命中 canonical 之一（stdio / cache / stdio+masterkey-hex）。http 形态
+// 的 canonical 腿已随 ②a 移除退役（Plan 42 批1）——文档里再出现 http 块即红。
 func TestDocsMcpSnippetsMatchGolden(t *testing.T) {
 	canonical := map[string]bool{
 		docNorm(jsonBlockOf(mcpConfigLines([]string{`"args": ["mcp"]`, stdioEnvLine("<TOKEN>")}, nil))):                                                      true,
 		docNorm(jsonBlockOf(mcpConfigLines([]string{`"args": ["mcp", "--cache"]`, stdioEnvLine("<TOKEN>")}, nil))):                                           true,
-		docNorm(jsonBlockOf(mcpHttpConfigLines("https://192.0.2.5:7878/", "<TOKEN>", nil))):                                                                  true,
 		docNorm(`{"mcpServers": {"ssh": {"command": "ssh-manager", "args": ["mcp"], "env": {"SSHMGR_TOKEN": "<TOKEN>", "SSHMGR_MASTERKEY_HEX": "<HEX>"}}}}`): true,
 	}
 	docs := []string{
