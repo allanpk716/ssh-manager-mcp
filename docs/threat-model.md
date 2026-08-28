@@ -178,7 +178,8 @@ download 方向相反（download 封顶防的是大文件全文灌进上下文�
   构造点 `NewServer` 取启动时快照，运行期改 env 不热生效）。
 - **serve 的 HTTP 面不含 upload_content 请求体**（Plan 42 批1 后口径）：serve
   仅承载 `/snapshot`（GET，无请求体）与 `/pair/*`（未认证配对面，请求体
-  **≤1 KiB** + 读超时 5s 的 MaxBytesReader 收口，见 §1.2）。旧 ②a 时代的
+  **≤1 KiB** 的 MaxBytesReader 收口 + per-IP 限速——spec 的 5s 读超时顾虑由
+  上限 + 限速覆盖，未设服务器级读超时，见 §1.2）。旧 ②a 时代的
   「请求体上限随 upload_content cap 同源联动 / 413 收口 / 并发聚合内存」等
   攻击与缓解陈述随 MCP-over-HTTP 面一并失效，本节不再登记。stdio 的对端是
   本机进程（非网络面），本就无请求体 cap。
