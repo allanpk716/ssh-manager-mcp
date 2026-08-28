@@ -163,39 +163,25 @@ L1+ 模型下**未消除**的威胁：
 
 ## 6. 资源封顶（1 MiB 输出/传输基线 + upload_content 8 MiB 独立口径）
 
-agent 工具面的资源封顶是防 DoS / 防上下文膨胀的基线：`exec_command` 输出
+agent 工具面的资源封顶是防 DoS / 防上下文膨胀的基线——**stdio 与多机 cache 两个
+agent 面同套上限**（Plan 42 批1 后这就是 agent 的全部面：②a 远程 MCP 面已移除，
+见 §1.2）：`exec_command` 输出
 **每通道 1 MiB**（前缀截断 + truncated）、`download_file` 内容 **1 MiB**、
-`upload_file` **单文件 1 MiB**（传输前拒绝）。**`upload_content`（Plan 33；
-版本行待发版回写）采用独立的 8 MiB（解码后字节）上限**，理由：上传的是**已在 agent
+`upload_file` **单文件 1 MiB**（传输前拒绝）。**`upload_content`（Plan 33，
+v0.10.0 起）采用独立的 8 MiB（解码后字节）上限**，理由：上传的是**已在 agent
 上下文里的内容**（内联 JSON 入参）——不新增读取面、不再膨胀上下文，与
 download 方向相反（download 封顶防的是大文件全文灌进上下文），1 MiB 那套
 理由不适用于上行。
 
 - **上限 env seam 可调且 fail-closed**：`SSHMGR_UPLOAD_CONTENT_MAX`（缺省
-  8 MiB），env 不可解析 / 非正 / **大于 1 GiB** → 进程拒绝启动（stdio 的
-  `NewServerFromSource` 与 serve 的 `NewServeRunner` 走同一解析函数、两读点
-  均取启动时快照，运行期改 env 不热生效）。
-- **body limit 随 env 同源联动放大（登记）**：serve HTTP 请求体上限 =
-  `cap + cap/3 + 64 KiB`，与内容上限**同源**——owner 调大该 env 时单请求
-  内存占用上界一起放大。1 GiB 硬上限同时是这条联动的护栏。
-- **serve 请求体收口（`http.MaxBytesReader`）= 传输层加固**：SDK 原生对
-  请求体是无上限 `io.ReadAll`（持有效 token 者 POST 巨 body 占内存的 DoS
-  面）；中间件在 token 门之外层收口——Content-Length 诚实超限直接 413，
-  谎报/无 Content-Length（chunked）由 MaxBytesReader 兜底为错误响应（攻击
-  者拿不到工具执行）。stdio 不加 cap（对端是本机进程，非网络面）。
-- **已知边界（登记，owner 2026-08-24 拍板接受）——text 转义早拒**：text
-  模式 JSON 转义的**线上平均膨胀 >4/3 即可触发 413 早拒**，不是只有极端
-  形态才中（8 MiB cap 下全 2× 转义 >~5.6 MiB、控制字符 6× >~1.8 MiB 即中；
-  ~48 MiB 只是 6× 全覆盖的形态上界），被 413 的内容解码后可能 ≤ cap。真实
-  场景（配置/脚本，膨胀通常 <1.1）几乎不命中。**不为该边界放大上限**（6× =
-  把单请求 DoS 面放大到 ~48 MiB，得不偿失）；agent 侧指引：极端转义/二进制
-  内容走 base64（[agent-tools.md](./agent-tools.md) upload_content 节）。
-- **残余风险（登记，owner 拍板接受）——并发聚合内存无全局上界**：
-  MaxBytesReader 是**单请求体**粒度；已认证客户端可并发发送多个近上限请求，
-  并发聚合内存无全局上界。接受理由：serve 对所有工具响应本就是同款无界
-  并发（既有环境属性，非本特性新增）；并发主体（token → project → agent）
-  受 owner token 生命周期管控；加全局 semaphore/内存约束是新机制，超
-  Plan 33 scope（纯增量口径）。
+  8 MiB），env 不可解析 / 非正 / **大于 1 GiB** → 进程拒绝启动（agent broker
+  构造点 `NewServer` 取启动时快照，运行期改 env 不热生效）。
+- **serve 的 HTTP 面不含 upload_content 请求体**（Plan 42 批1 后口径）：serve
+  仅承载 `/snapshot`（GET，无请求体）与 `/pair/*`（未认证配对面，请求体
+  **≤1 KiB** + 读超时 5s 的 MaxBytesReader 收口，见 §1.2）。旧 ②a 时代的
+  「请求体上限随 upload_content cap 同源联动 / 413 收口 / 并发聚合内存」等
+  攻击与缓解陈述随 MCP-over-HTTP 面一并失效，本节不再登记。stdio 的对端是
+  本机进程（非网络面），本就无请求体 cap。
 
 ---
 
