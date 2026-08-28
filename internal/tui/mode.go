@@ -27,8 +27,9 @@ func vaultUnlocked() bool { return roles.VaultUnlocked() }
 
 // launchTarget is the pure dispatch table behind Run (Plan 19 T2): first run →
 // wizard; completed setups → broker/client; an INCOMPLETE setup
-// (ResumeSetup) of ANY role re-enters the wizard — since T5 that includes the
-// client (its wizard resumes at the connection form / saved-cred panel).
+// (ResumeSetup) of ANY role re-enters the wizard — since Plan 42 批1 T8 the
+// client's wizard step is the pair-guidance page (the connection-form flow is
+// retired).
 func launchTarget(l roles.Launch) string {
 	if l.ResumeSetup {
 		return "wizard"
@@ -67,10 +68,14 @@ func Run(modeFlag string) error {
 		if werr != nil {
 			return werr
 		}
-		// Handoff sentinel (T3/T5): a COMPLETED wizard exits with done=true
-		// and chains straight into the target console instead of dropping the
-		// user back to the shell — the broker App reusing the wizard's still-
-		// open store, or the (fresh, stateless) client panel.
+		// Handoff sentinel (T3): a COMPLETED wizard exits with done=true and
+		// chains straight into the broker console instead of dropping the user
+		// back to the shell — the broker App reusing the wizard's still-open
+		// store. Plan 42 批1 T8 (dispatch 收窄): the client handoff is GONE —
+		// the client role's wizard step is now a pair-guidance page whose next
+		// action is running `ssh-manager pair` in the shell; the client panel
+		// opens on the NEXT `tui` via launchTarget (role.json is completed by
+		// the guidance page).
 		if wm, ok := fm.(wizardModel); ok {
 			if wm.done && wm.next == "broker" && wm.st != nil {
 				app, aerr := NewBrokerApp(wm.st)
@@ -79,9 +84,6 @@ func Run(modeFlag string) error {
 					return aerr
 				}
 				_, werr = tea.NewProgram(app).Run()
-			}
-			if wm.done && wm.next == "client" {
-				_, werr = tea.NewProgram(newClientModel()).Run()
 			}
 			wm.closeStore()
 		}

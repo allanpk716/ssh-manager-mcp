@@ -22,6 +22,7 @@ const (
 	pageProfiles
 	pageProjects
 	pageTokens
+	pagePairing
 	pageCount
 )
 
@@ -111,7 +112,7 @@ func detectBrokerRole() (roles.Role, error) {
 	return roles.RoleStandalone, nil
 }
 
-// FetchAll loads the four entity pages in one shot.
+// FetchAll loads the five entity pages in one shot.
 func FetchAll(st *store.Store) ([pageCount]listPage, error) {
 	var pages [pageCount]listPage
 	servers, err := st.ListServers()
@@ -130,16 +131,27 @@ func FetchAll(st *store.Store) ([pageCount]listPage, error) {
 	if err != nil {
 		return pages, err
 	}
+	pairings, err := st.ListPendingPairing()
+	if err != nil {
+		return pages, err
+	}
 	// profiles (already loaded above) also feed the device-code page's binding
-	// display (profileID → name; Plan 39).
+	// display (profileID → name; Plan 39) and the pairing page's approve form.
 	profileNames := make(map[string]string, len(profiles))
 	for _, pr := range profiles {
 		profileNames[pr.ID] = pr.Name
+	}
+	// pair.default_profile 预选值(原始设置值,name 优先、id 亦可;页面内解析,
+	// 未知/空 → 列首——spec §3.3-3)。
+	defProfile := ""
+	if v, ok, gerr := st.GetSetting("pair.default_profile"); gerr == nil && ok {
+		defProfile = v
 	}
 	pages[pageServers] = newServersPage(servers)
 	pages[pageProfiles] = newProfilesPage(profiles, st)
 	pages[pageProjects] = newProjectsPage(projects, st)
 	pages[pageTokens] = newCacheTokensPage(tokens, profileNames)
+	pages[pagePairing] = newPairingPage(pairings, profiles, defProfile)
 	return pages, nil
 }
 
@@ -250,7 +262,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.startUpgrade()
 			return a, a.overlay.Init()
 		case k.Text == "a", k.Text == "e", k.Text == "d", k.Text == "g",
-			k.Text == "i", k.Text == "!", k.Text == "x":
+			k.Text == "i", k.Text == "!", k.Text == "x", k.Text == "r":
 			// F2 (fix round): while an upgrade segment is in flight (install/
 			// probe/deviceIssue — overlay==nil windows), page action keys are
 			// suppressed: opening a form overlay here would be clobbered by the
@@ -451,6 +463,42 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+			if a.page == pagePairing {
+				pp, _ := a.pages[pagePairing].(*pairingPage)
+				switch k.Text {
+				case "r": // 刷新:重读 store(pending 队列被 serve 进程从外部写入)
+					a.refetchPages()
+					a.status = "配对队列已刷新"
+					return a, nil
+				case "a": // 批准:huh 表单选 profile;foreign 行需键入 OVERRIDE
+					if cur := pp.current(); cur != nil {
+						if len(pp.profiles) == 0 {
+							a.err, a.status = fmt.Errorf("无 profile 可绑定——先在 Profiles 页创建 profile 并授权服务器,再来批准配对"), ""
+							return a, nil
+						}
+						ap := &pairingApproval{ProfileID: pp.defaultProfileID}
+						title := "批准配对 — " + cur.Name
+						if mcpserver.ForeignTarget(cur.TargetURL) {
+							title = "⚠ 目标≠本机 — 批准配对 " + cur.Name
+						}
+						a.overlay = newFormOverlay(title, newPairingApproveForm(cur, pp.profiles, ap), func() tea.Cmd {
+							return submitPairingApproval(a.st, cur, ap)
+						})
+					}
+				case "d": // 拒绝:行入终态 rejected,该设备无法凭本次请求入网
+					if cur := pp.current(); cur != nil {
+						confirm := false
+						form := huh.NewForm(huh.NewGroup(huh.NewConfirm().
+							Title(fmt.Sprintf("拒绝 %q 的配对请求？（该设备无法凭本次请求入网）", cur.Name)).Value(&confirm)))
+						a.overlay = newFormOverlay("拒绝配对", form, func() tea.Cmd {
+							if !confirm {
+								return nil
+							}
+							return submitPairingReject(a.st, cur)
+						})
+					}
+				}
+			}
 			if a.overlay != nil {
 				return a, a.overlay.Init()
 			}
@@ -509,7 +557,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.upg.deviceFp = m.fingerprint
 		a.err, a.status = nil, ""
 		a.overlay = wizTokenScreen("设备码 — "+a.upg.clientName, m.code,
-			fmt.Sprintf("填到 client 机向导；或拼 cache pull --token '%s:%s'", m.code, m.fingerprint),
+			fmt.Sprintf("新机入网首选 ssh-manager pair;手工路径 cache pull --token '%s:%s'", m.code, m.fingerprint),
 			"主控台 设备码页 [a] 重发")
 		a.refetchPages()
 		return a, nil
@@ -714,6 +762,8 @@ func (a App) footer() string {
 		keys = "[a]新增 [e]轮换 [d]吊销 [x]删除已吊销"
 	case pageTokens:
 		keys = "[a]签发 [d]吊销"
+	case pagePairing:
+		keys = "[a]批准 [d]拒绝 [r]刷新"
 	}
 	tail := "Tab 切页  q 退出"
 	if keys != "" {

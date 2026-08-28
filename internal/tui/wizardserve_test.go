@@ -23,12 +23,16 @@ func withServeCertDirs(t *testing.T) (vaultDir string) {
 	return vd
 }
 
-// TestAccessCard_Copy (brief T4): the client access card must carry the real
-// chosen address, the server fingerprint, both secret destinations (.mcp.json /
-// cache pull), and the 去向 table framing.
-func TestAccessCard_Copy(t *testing.T) {
-	v := viewString(accessCard("https://192.168.100.235:7878", "sha256:"+strings.Repeat("a", 64)))
-	for _, want := range []string{"https://192.168.100.235:7878", "sha256:", ".mcp.json", "cache pull", "去向"} {
+// TestClientPairCard_Copy (Plan 42 批1 T8): the pair card carries the real
+// chosen address, the server fingerprint, the pair command as the唯一入网
+// path (with the SAS note), and the documented manual cache-pull fallback.
+func TestClientPairCard_Copy(t *testing.T) {
+	v := viewString(clientPairCard("https://192.168.100.235:7878", "sha256:"+strings.Repeat("a", 64)))
+	for _, want := range []string{
+		"https://192.168.100.235:7878", "sha256:",
+		"ssh-manager pair", "唯一入网", "SAS",
+		"cache pull", "设备码页 [a]",
+	} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("missing %q in:\n%s", want, v)
 		}
@@ -140,7 +144,7 @@ func TestInstallServeStep_BindsWildcard(t *testing.T) {
 // and stays non-blocking; probe pass = 已就绪, probe fail = 未验证 + 排查提示.
 func TestServeResultScreen_Banners(t *testing.T) {
 	v := viewString(serveResultScreen(ioErr("denied"), serveProbeMsg{ok: false, detail: "timeout"}))
-	for _, want := range []string{"安装失败", "denied", "serve install --addr 0.0.0.0:7878", "未验证", "排查", "接入卡"} {
+	for _, want := range []string{"安装失败", "denied", "serve install --addr 0.0.0.0:7878", "未验证", "排查", "入网卡"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("failure screen missing %q in:\n%s", want, v)
 		}
@@ -153,32 +157,33 @@ func TestServeResultScreen_Banners(t *testing.T) {
 	}
 }
 
-// TestServerWizard_FreshFlowStartsAtClientName: a fresh server wizard (empty
-// vault) asks the client machine name first — its answer becomes the profile
-// default — then routes into the shared server-entry loop.
-func TestServerWizard_FreshFlowStartsAtClientName(t *testing.T) {
+// TestServerWizard_FreshFlowStartsAtServerAsk (Plan 42 批1 T8): a fresh server
+// wizard (empty vault) goes straight to the shared server-entry loop — the
+// 客户端机器名 question is retired (pair names the device at enroll).
+func TestServerWizard_FreshFlowStartsAtServerAsk(t *testing.T) {
 	withServeCertDirs(t)
 	w := newWizardForTest()
 	w.chooseRole(roles.RoleServer)
-	if w.step != stepClientName || w.form == nil {
-		t.Fatalf("fresh server flow must start at stepClientName with a form, got step=%d", w.step)
+	if w.step != stepServerAsk || w.form == nil {
+		t.Fatalf("fresh server flow must start at stepServerAsk with a form, got step=%d", w.step)
 	}
-	// submitting the name routes into the shared server loop (skip gate)
-	w.data.clientName = "laptop"
+	// submitting the skip gate routes into the profile step
+	w.data.more = false
 	m, _ := w.stepFormDone()
-	if wm, ok := m.(wizardModel); !ok || wm.step != stepServerAsk {
-		t.Fatalf("client name submit must reach stepServerAsk, got %+v", m)
+	wm, ok := m.(wizardModel)
+	if !ok || wm.step != stepProfileGrant {
+		t.Fatalf("skip submit must reach stepProfileGrant, got %+v", m)
 	}
-	w.closeStore()
+	wm.closeStore()
 }
 
-// TestServerWizard_ProfileDefaultIsClientName: the profile-grant form's
-// prefilled default for the server role is the CLIENT name (spec §2.4 ④).
-func TestServerWizard_ProfileDefaultIsClientName(t *testing.T) {
+// TestServerWizard_ProfileDefaultIsHostname (Plan 42 批1 T8): with the client
+// name step retired, the profile-grant form's prefilled default is the machine
+// hostname (same as standalone).
+func TestServerWizard_ProfileDefaultIsHostname(t *testing.T) {
 	withServeCertDirs(t)
 	w := newWizardForTest()
 	w.chooseRole(roles.RoleServer)
-	w.data.clientName = "laptop"
 	w.askFirstServer()
 	w.data.more = false
 	m, _ := w.stepFormDone() // skip → enterProfileGrant
@@ -186,15 +191,17 @@ func TestServerWizard_ProfileDefaultIsClientName(t *testing.T) {
 	if !ok || wm.step != stepProfileGrant {
 		t.Fatalf("skip must land on stepProfileGrant, got %+v", m)
 	}
-	if wm.data.profileName != "laptop" {
-		t.Fatalf("server profile default must be client name, got %q", wm.data.profileName)
+	if want := defaultHostName(); wm.data.profileName != want {
+		t.Fatalf("server profile default must be the hostname %q, got %q", want, wm.data.profileName)
 	}
 	wm.closeStore()
 }
 
-// TestServerWizard_TokenScreenClientUsage: the server role's project-token
-// screen says the token goes to the CLIENT machine's .mcp.json (usage label).
-func TestServerWizard_TokenScreenClientUsage(t *testing.T) {
+// TestServerWizard_TokenScreenUsage: the server role's project-token screen
+// shows the token, the manual-path usage, AND the pair-era note that paired
+// devices get their own token at approval (no 密钥 1/2 numbering — the wizard
+// mints no second secret anymore).
+func TestServerWizard_TokenScreenUsage(t *testing.T) {
 	withServeCertDirs(t)
 	w := newWizardForTest()
 	w.role, w.step = roles.RoleServer, stepProject
@@ -204,73 +211,29 @@ func TestServerWizard_TokenScreenClientUsage(t *testing.T) {
 		t.Fatalf("tokenIssuedMsg must open the token overlay, got step=%d", wm.step)
 	}
 	v := viewString(wm.ov)
-	for _, want := range []string{"tok-X", "client 机 .mcp.json", "密钥 1/2"} {
+	for _, want := range []string{"tok-X", "client 机 .mcp.json", "ssh-manager pair"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("server token screen missing %q in:\n%s", want, v)
 		}
 	}
-}
-
-// TestServerWizard_DeviceIssueAndScreens: device-code issuance (cert first,
-// then AddCacheToken named after the client) lands on the one-time screen with
-// the merged cache-pull usage line; dismissing routes to the addr form.
-func TestServerWizard_DeviceIssueAndScreens(t *testing.T) {
-	vd := withServeCertDirs(t)
-	seedWizardVault(t, vd)
-	w := newWizardForTest()
-	w.role = roles.RoleServer
-	w.st = openVault(t)
-	// Plan 39: the real flow creates the profile (named after the client) BEFORE
-	// stepDeviceIssue; this test jumps straight there, so seed both halves.
-	profID, err := w.st.AddProfile("laptop")
-	if err != nil {
-		t.Fatal(err)
+	if strings.Contains(v, "密钥 1/2") || strings.Contains(v, "密钥 2/2") {
+		t.Fatalf("the two-secret numbering is retired (no device code mint):\n%s", v)
 	}
-	w.data.clientName = "laptop"
-	w.data.profileID = profID
-	w.step = stepDeviceIssue
-	msg := w.issueDeviceCode()()
-	dc, ok := msg.(deviceCodeIssuedMsg)
-	if !ok {
-		t.Fatalf("want deviceCodeIssuedMsg, got %#v", msg)
-	}
-	if !strings.HasPrefix(dc.fingerprint, "sha256:") {
-		t.Fatalf("fingerprint must be a pin, got %q", dc.fingerprint)
-	}
-	m, _ := w.Update(msg)
-	wm := m.(wizardModel)
-	if wm.step != stepDeviceToken || wm.ov == nil {
-		t.Fatalf("device code must open one-time screen, got step=%d", wm.step)
-	}
-	v := viewString(wm.ov)
-	for _, want := range []string{dc.code, "cache pull --token '" + dc.code + ":" + dc.fingerprint + "'", "设备码页 [a] 重发", "密钥 2/2"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("device code screen missing %q in:\n%s", want, v)
-		}
-	}
-	// any key → addr form (LAN select; deviceFp retained for the access card)
-	m2, _ := wm.Update(formDoneMsg{})
+	// Dismissing the token screen routes straight into the serve segment.
+	m2, cmd := wm.Update(formDoneMsg{})
 	wm2 := m2.(wizardModel)
-	if wm2.step != stepAddr || wm2.form == nil {
-		t.Fatalf("device screen dismiss must reach stepAddr with a form, got step=%d", wm2.step)
-	}
-	if wm2.data.deviceFp != dc.fingerprint {
-		t.Fatalf("fingerprint must be retained for the access card, got %q", wm2.data.deviceFp)
-	}
-	// the code was persisted under the client name
-	st2 := openVault(t)
-	defer st2.Close()
-	toks, err := st2.ListCacheTokens()
-	if err != nil || len(toks) != 1 || toks[0].Name != "laptop" {
-		t.Fatalf("device code must be persisted as client name: %+v %v", toks, err)
+	if wm2.step != stepAddr || wm2.form == nil || cmd == nil {
+		t.Fatalf("token dismiss must reach stepAddr with a form, got step=%d form=%v cmd=%v", wm2.step, wm2.form, cmd)
 	}
 	wm2.closeStore()
 }
 
-// TestServerWizard_ResumeHeuristics: mirrors T3's — profile+project+device
-// code all exist → resume straight at the serve segment (addr form, fp
-// recovered from the cert); profile+project but no device code → back at the
-// client-name step and the next submit issues the missing code only.
+// TestServerWizard_ResumeHeuristics (Plan 42 批1 T8 shape): the wizard itself
+// mints profile+project only — profile+project done ⇒ straight to the serve
+// segment (addr form, fp recovered from the cert) REGARDLESS of cache-token
+// count (the device-code tier of the old heuristic is retired). A profile-only
+// vault resumes at the project step. No resume path may create entities by
+// itself.
 func TestServerWizard_ResumeHeuristics(t *testing.T) {
 	vd := withServeCertDirs(t)
 	seedWizardVault(t, vd)
@@ -279,6 +242,8 @@ func TestServerWizard_ResumeHeuristics(t *testing.T) {
 	if _, _, err := st.AddProject("j1", pid); err != nil {
 		t.Fatal(err)
 	}
+	// The old heuristic keyed the serve-segment jump on token count — now a
+	// token makes no difference. Seed one anyway (a legacy pre-pair code).
 	if _, _, err := st.AddCacheToken("laptop", pid); err != nil {
 		t.Fatal(err)
 	}
@@ -293,53 +258,45 @@ func TestServerWizard_ResumeHeuristics(t *testing.T) {
 	}
 	w.closeStore()
 
-	// half-done: no cache token → client-name step, submit issues ONLY the code
+	// Same landing WITHOUT any cache token (the retired tier). All handles are
+	// closed BEFORE the next seedWizardVault — an open sqlite handle pins the
+	// db file and the re-seed would silently mutate the OLD database.
 	seedWizardVault(t, vd)
 	st = openVault(t)
 	pid, _ = st.AddProfile("p2")
-	st.AddProject("j2", pid)
+	if _, _, err := st.AddProject("j2", pid); err != nil {
+		t.Fatal(err)
+	}
 	st.Close()
 	w2 := newWizardForRole(roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleServer, ResumeSetup: true})
-	if w2.step != stepClientName {
-		t.Fatalf("profile+project (no code) resume must land on stepClientName, got step=%d", w2.step)
-	}
-	w2.data.clientName = "laptop"
-	m, _ := w2.stepFormDone()
-	wm := m.(wizardModel)
-	if wm.step != stepDeviceIssue {
-		t.Fatalf("client-name submit must issue the device code, got step=%d", wm.step)
+	if w2.step != stepAddr {
+		t.Fatalf("profile+project (no token) resume must land on stepAddr too, got step=%d", w2.step)
 	}
 	st2 := openVault(t)
-	defer st2.Close()
 	profiles, _ := st2.ListProfiles()
 	projects, _ := st2.ListProjects()
 	if len(profiles) != 1 || len(projects) != 1 {
 		t.Fatalf("resume must not create entities: %d profiles %d projects", len(profiles), len(projects))
 	}
-	wm.closeStore()
-}
+	st2.Close()
+	w2.closeStore()
 
-// TestServerWizard_ResumePrefillsClientName: middle-tier resume (1 profile,
-// 0 projects) must prefill w.data.clientName so that issueDeviceCode receives
-// a non-empty name. This is the "Fix 1" test for the empty-name device code bug.
-func TestServerWizard_ResumePrefillsClientName(t *testing.T) {
-	vd := withServeCertDirs(t)
+	// profile-only → the project step.
 	seedWizardVault(t, vd)
-	st := openVault(t)
-	_, err := st.AddProfile("my-client")
+	st = openVault(t)
+	pid3, err := st.AddProfile("p3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	st.Close()
-
-	w := newWizardForRole(roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleServer, ResumeSetup: true})
-	if w.step != stepProject {
-		t.Fatalf("profile-only resume must land on stepProject, got step=%d", w.step)
+	w3 := newWizardForRole(roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleServer, ResumeSetup: true})
+	if w3.step != stepProject {
+		t.Fatalf("profile-only resume must land on stepProject, got step=%d", w3.step)
 	}
-	if w.data.clientName != "my-client" {
-		t.Fatalf("resume must prefill clientName from profile, got %q", w.data.clientName)
+	if w3.data.profileID != pid3 {
+		t.Fatalf("profile-only resume must preload the existing profile id, got %q want %q", w3.data.profileID, pid3)
 	}
-	w.closeStore()
+	w3.closeStore()
 }
 
 // TestServerWizard_ServeSegmentNonBlocking: install failure does NOT block —
@@ -381,7 +338,7 @@ func TestServerWizard_ServeSegmentNonBlocking(t *testing.T) {
 	}
 	m4, _ := wm3.Update(formDoneMsg{})
 	wm4 := m4.(wizardModel)
-	if wm4.step != stepAccessCard || wm4.ov == nil {
+	if wm4.step != stepPairCard || wm4.ov == nil {
 		t.Fatalf("result dismiss must open the access card, got step=%d", wm4.step)
 	}
 	if v4 := viewString(wm4.ov); !strings.Contains(v4, "https://192.168.100.235:7878") {
@@ -405,24 +362,22 @@ type strErr struct{ s string }
 func (e *strErr) Error() string { return e.s }
 
 // TestServerWizard_ResumeMultiProfileOpensPicker (Plan 39, code-review #2):
-// with SEVERAL existing profiles the resume paths must NOT silently bind the
-// alphabetically-first — a binding picker opens, and the chosen profile is
-// what the resumed flow (here: profile+project done, device code missing)
-// binds the mint to. Both resume branches route through the same guard.
+// when a resume path needs a binding and SEVERAL profiles exist, the resume
+// must NOT silently bind the alphabetically-first — a binding picker opens,
+// and the chosen profile is what the resumed flow (the wizard's project mint)
+// binds to. Plan 42 批1 T8: the picker lives only in the 0-projects branch —
+// once the project exists, the serve segment needs no binding (pair approval
+// picks the pair project's profile at approval time).
 func TestServerWizard_ResumeMultiProfileOpensPicker(t *testing.T) {
 	vd := withServeCertDirs(t)
 	seedWizardVault(t, vd)
 	st := openVault(t)
 	defer st.Close()
-	aID, err := st.AddProfile("alpha")
-	if err != nil {
+	if _, err := st.AddProfile("alpha"); err != nil {
 		t.Fatal(err)
 	}
 	bID, err := st.AddProfile("beta")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := st.AddProject("proj-x", aID); err != nil { // profile+project done, code missing → default branch
 		t.Fatal(err)
 	}
 	st.Close()
@@ -433,7 +388,7 @@ func TestServerWizard_ResumeMultiProfileOpensPicker(t *testing.T) {
 	defer w.st.Close()
 	w.resumeServerFlow()
 	if w.step != stepBindProfile || w.form == nil {
-		t.Fatalf("multi-profile resume must open the binding picker, got step=%v form=%v", w.step, w.form)
+		t.Fatalf("multi-profile 0-project resume must open the binding picker, got step=%v form=%v", w.step, w.form)
 	}
 	// (huh's Select pre-commits the first option into the bound value at
 	// construction — same behavior as the addr picker. That is a VISIBLE
@@ -442,11 +397,11 @@ func TestServerWizard_ResumeMultiProfileOpensPicker(t *testing.T) {
 	// The owner picks beta (NOT the alphabetical-first alpha)…
 	w.data.profileID = bID
 	// …and completing the picker re-routes to the original target: the
-	// client-name step (device code missing).
+	// project step, bound to the chosen profile.
 	m, _ := w.stepFormDone()
 	wm, ok := m.(wizardModel)
-	if !ok || wm.step != stepClientName || wm.form == nil {
-		t.Fatalf("picker completion must resume at stepClientName, got step=%v", wm.step)
+	if !ok || wm.step != stepProject || wm.form == nil {
+		t.Fatalf("picker completion must resume at stepProject, got step=%v", wm.step)
 	}
 	if wm.data.profileID != bID {
 		t.Fatalf("chosen binding must survive the re-route, got %q", wm.data.profileID)
@@ -454,16 +409,16 @@ func TestServerWizard_ResumeMultiProfileOpensPicker(t *testing.T) {
 }
 
 // TestServerWizard_ResumeSoleProfileStillAutoBinds: exactly one profile keeps
-// the silent auto-bind (no picker) — the common single-profile fleet shape.
+// the silent auto-bind (no picker) — the common single-profile fleet shape;
+// the resume lands on the project step bound to that sole profile. With the
+// project already present the resume needs no binding at all → straight to
+// the serve segment.
 func TestServerWizard_ResumeSoleProfileStillAutoBinds(t *testing.T) {
 	vd := withServeCertDirs(t)
 	seedWizardVault(t, vd)
 	st := openVault(t)
 	aID, err := st.AddProfile("alpha")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := st.AddProject("proj-x", aID); err != nil {
 		t.Fatal(err)
 	}
 	st.Close()
@@ -473,10 +428,19 @@ func TestServerWizard_ResumeSoleProfileStillAutoBinds(t *testing.T) {
 	w.st = openVault(t)
 	defer w.st.Close()
 	w.resumeServerFlow()
-	if w.step != stepClientName {
-		t.Fatalf("sole-profile resume must go straight to stepClientName, got step=%v", w.step)
+	if w.step != stepProject {
+		t.Fatalf("sole-profile 0-project resume must auto-bind into stepProject, got step=%v", w.step)
 	}
 	if w.data.profileID != aID {
 		t.Fatalf("sole-profile resume must auto-bind that profile, got %q", w.data.profileID)
+	}
+
+	// project done → serve segment, no binding question.
+	if _, _, err := w.st.AddProject("proj-x", aID); err != nil {
+		t.Fatal(err)
+	}
+	w.resumeServerFlow()
+	if w.step != stepAddr {
+		t.Fatalf("all-done resume must land on stepAddr, got step=%v", w.step)
 	}
 }

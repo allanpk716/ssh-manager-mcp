@@ -10,9 +10,14 @@
 // .mcp.json finish → wizFinish hands off to the broker console. Task 4 adds
 // the SERVER flow (spec §2.4) on the shared steps ②③④ plus the dual-secret
 // screens, the serve segment (addr picker → admin notice → install → probe →
-// result banners) and the client access card. Task 5 makes the CLIENT flow
-// real: the wizard WRAPS clientModel in its wizard form (source hint,
-// classified failure path preserving input, .mcp.json finish → client panel).
+// result banners) and the client access card.
+//
+// Plan 42 批1 T8 (spec §3.1-6): the client-ROLE wizard flow is RETIRED — pair
+// (`ssh-manager pair`) is the only guided onboarding path for a new machine.
+// Choosing client lands on a static guidance page pointing at pair; the
+// server flow no longer pre-provisions a client machine (the 客户端机器名 step
+// and the device-code issuance are gone — pair mints both at approval, the
+// owner picks the profile then). The access card became the pair card.
 package tui
 
 import (
@@ -22,7 +27,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
-	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
@@ -45,20 +49,20 @@ const (
 	stepProject       // project name (default hostname)
 	stepToken         // one-time token screen (overlay)
 	stepMcpConfig     // .mcp.json finish screen (overlay)
-	// server flow (T4) — ①-④ reuse the standalone steps above
-	stepClientName   // 客户端机器名（server 角色：profile 默认名）
+	// server flow (T4) — ①-④ reuse the standalone steps above. Plan 42 批1
+	// T8: the client-provisioning steps (客户端机器名 / 设备码签发 / 密钥 2/2)
+	// are RETIRED — pair (`ssh-manager pair`) mints the device code + project
+	// at approval; the wizard only sets up the broker itself.
 	stepBindProfile  // 多 profile resume 的绑定选择（Plan 39——绝不静默绑字母序第一个）
-	stepDeviceIssue  // device-code issuance in flight (waiting; r retry on err)
-	stepDeviceToken  // 设备码 one-time screen (overlay, 密钥 2/2)
 	stepAddr         // LAN address select (spec §2.4 ⑥ 地址捕获)
 	stepServeAdmin   // admin 前置提示 (overlay)
 	stepServeInstall // service registration in flight (waiting)
 	stepServeProbe   // post-install probe in flight (waiting)
 	stepServeResult  // install + probe banners (overlay, non-blocking)
-	stepAccessCard   // 客户端接入卡 (overlay)
-	// client flow (T5) — the step IS a clientModel in wizard form; every
-	// message delegates to it (see Update).
-	stepClient
+	stepPairCard     // client 入网卡(指引 ssh-manager pair)(overlay)
+	// client flow — Plan 42 批1 T8: reduced to a static guidance page (the
+	// connection form + wizard-embedded clientModel are deleted).
+	stepClientGuide
 )
 
 // wizardData holds the standalone flow's answers. Heap-allocated ONCE in
@@ -76,9 +80,8 @@ type wizardData struct {
 	servers     []*models.Server
 
 	// server-role flow (T4)
-	clientName string // 客户端机器名 — profile 默认名 + 设备码名
-	serveAddr  string // 选定的 LAN 地址实值（https://<ip>:7878），进接入卡
-	deviceFp   string // serve cert SPKI fingerprint（接入卡 + 设备码 usage）
+	serveAddr  string // 选定的 LAN 地址实值（https://<ip>:7878），进 pair 卡
+	deviceFp   string // serve cert SPKI fingerprint（pair 卡展示用）
 	installErr error  // serve 服务安装结果（非阻断，进结果横幅）
 }
 
@@ -101,8 +104,6 @@ type wizardModel struct {
 	form     *huh.Form
 	ov       overlay // token / mcp-config screens; owns keys until formDoneMsg
 	st       *store.Store
-
-	client *clientModel // client-role wizard (T5): clientModel in wizard form
 
 	residualClient bool  // stale client role.json detected → hint `clear`
 	saveErr        error // role.json write failure (first screen)
@@ -170,28 +171,45 @@ func (w *wizardModel) startRoleFlow() {
 	case roles.RoleServer:
 		w.enterServer()
 	case roles.RoleClient:
-		w.enterClient()
+		w.enterClientGuide()
 	default:
 		w.step = stepRoleDone
 	}
 }
 
-// enterClient boots the CLIENT flow (T5): the flow IS clientModel in wizard
-// form. A fresh machine opens the connection form immediately (with the
-// source hint above it); a resume whose cache.auth.json already holds a
-// complete cred skips the form — the panel's [s]/[c] keys drive the retry and
-// re-opening the form would demand retyping a masked code for no reason.
-func (w *wizardModel) enterClient() {
-	cm := newClientModel()
-	cm.wizard = true
-	if cred, err := clientops.ReadCacheCred(); err == nil && cred != nil &&
-		cred.URL != "" && cred.Token != "" && cred.Pin != "" {
-		cm.cred = cred
-	} else {
-		cm.overlay = cm.editConnForm()
-	}
-	w.client = &cm
-	w.step = stepClient
+// enterClientGuide is the CLIENT role's whole flow since Plan 42 批1 T8
+// (spec §3.1-6): a static guidance page pointing at `ssh-manager pair` — the
+// wizard-embedded connection form/panel flow is retired. Any key completes the
+// setup (role.json → setup_complete:true) and exits; the next `tui` opens the
+// client panel (sync/status/instance), and `ssh-manager pair` itself writes
+// the cache material.
+func (w *wizardModel) enterClientGuide() {
+	w.step = stepClientGuide
+	w.ov = clientPairGuide()
+	w.err, w.status = nil, ""
+}
+
+// clientPairGuide is the guidance overlay's copy: the pair command (with and
+// without discovery), what approval does, and the documented manual fallback.
+func clientPairGuide() overlay {
+	body := strings.Join([]string{
+		"client 机的入网方式已更新——本向导不再内置连接表单。",
+		"",
+		"新机入网（pair 为新机唯一入网路径）：",
+		"  ssh-manager pair --instance <本机实例名>",
+		"      自动发现 LAN 内的 serve（udp/7878），按提示选择目标",
+		"  ssh-manager pair --instance <本机实例名> --url https://<server>:7878 --pin sha256:...",
+		"      已知地址与指纹时直连（pin 硬校验；无 pin 需 --allow-tofu，不建议）",
+		"",
+		"在 server 机批准（其 TUI Pairing 页 / serve pair approve）并对照双方屏幕的",
+		"SAS 码后，设备码、project token 与缓存自动落到本机。",
+		"",
+		"手工路径（CI/自动化，文档化保留）：",
+		"  ssh-manager cache pull --url <serve 地址> --token '<设备码>:<指纹>'",
+		"",
+		"按任意键完成设置并退出（q 退出）",
+	}, "\n")
+	return &wizStaticView{title: "client 入网：运行 ssh-manager pair", body: body}
 }
 
 // openVaultOrErr is the shared boot of BOTH vault-role flows (standalone T3 /
@@ -261,21 +279,19 @@ func (w *wizardModel) enterStandalone() {
 }
 
 // enterServer boots the SERVER flow (spec §2.4): shared vault boot, then a
-// resume heuristic that MIRRORS standalone's (T3 I1) but extended one state
-// deeper, because the server flow mints one more entity (the device code):
+// resume heuristic that MIRRORS standalone's (T3 I1):
 //
-//	0 profiles → fresh flow: ask the client machine name first (its answer is
-//	  the profile default, spec §2.4 ④) → shared steps ③④⑤ → dual secrets…;
+//	0 profiles → fresh flow: ask about the first server (the profile defaults
+//	  to this machine's hostname) → shared steps ③④⑤ → token screen → serve
+//	  segment…;
 //	≥1 profile, 0 projects → same as standalone: reuse the EXISTING profile
 //	  and resume at the project step (its token will be minted fresh);
-//	≥1 profile, ≥1 project, ≥1 cache token → everything minted → jump
-//	  straight to the serve segment (addr picker). Both one-time secrets were
-//	  shown on earlier runs and are unrecoverable — the access card points at
-//	  the reissue pages instead of pretending they are on screen. The cert
-//	  fingerprint is recovered via the idempotent LoadOrCreateServeCert;
-//	≥1 profile, ≥1 project, 0 cache tokens → only the device code remains:
-//	  re-ask the client name (it names the code) and issue it — the project
-//	  token screen is skipped (already minted; reissue via Projects page).
+//	≥1 profile, ≥1 project → everything the wizard itself mints is done →
+//	  jump straight to the serve segment (addr picker). Plan 42 批1 T8: the
+//	  device code is NOT part of this flow anymore — the client pairs with
+//	  `ssh-manager pair` and the owner approves (that mints the code + a
+//	  dedicated pair project); the cert fingerprint is recovered via the
+//	  idempotent LoadOrCreateServeCert for the pair card.
 func (w *wizardModel) enterServer() {
 	if !w.openVaultOrErr() {
 		return
@@ -288,19 +304,23 @@ func (w *wizardModel) enterServer() {
 // can re-enter it after the owner picks a binding — with several existing
 // profiles the resume paths must NEVER silently bind the alphabetically-first
 // one (the same 0/1/N discipline as the standalone→server upgrade segment).
+//
+// Plan 42 批1 T8 shape: the wizard itself mints profile + project only — the
+// old device-code tier of the heuristic is gone (pair mints codes at
+// approval), so profile+project done ⇒ straight to the serve segment
+// regardless of cache-token count.
 func (w *wizardModel) resumeServerFlow() {
 	profiles, perr := w.st.ListProfiles()
 	projects, jerr := w.st.ListProjects()
-	tokens, terr := w.st.ListCacheTokens()
-	if perr != nil || jerr != nil || terr != nil {
+	if perr != nil || jerr != nil {
 		// Cannot scan → treat as fresh; the underlying store error resurfaces
 		// at the first mutating submit (same policy as dedupeProfileName).
-		w.startClientName()
+		w.askFirstServer()
 		return
 	}
 	switch {
 	case len(profiles) == 0:
-		w.startClientName()
+		w.askFirstServer()
 	case len(projects) == 0:
 		if w.data.profileID == "" && len(profiles) > 1 {
 			w.openBindProfilePicker()
@@ -317,38 +337,24 @@ func (w *wizardModel) resumeServerFlow() {
 			w.data.profileID = p.ID
 		}
 		w.data.profileName = p.Name
-		w.data.clientName = p.Name // prefill for issueDeviceCode
 		w.data.projName = defaultHostName()
 		w.step = stepProject
 		w.form = w.projectForm()
 		w.status = fmt.Sprintf("检测到既有 profile %s，跳过服务器录入与 profile 创建", p.Name)
-	case len(tokens) > 0:
-		// Everything minted → serve segment. Recover the cert fingerprint
-		// (display-only input to the access card) via the idempotent
-		// LoadOrCreateServeCert — normally the cert already exists (the
-		// device-code step created it); on a pre-cert machine this creates
-		// it, which is exactly what the fresh flow would have done anyway.
-		// An unreadable cert must not trap the resume: fall back to a hint.
+	default:
+		// Everything the wizard itself mints exists → serve segment. Recover
+		// the cert fingerprint (display-only input to the pair card) via the
+		// idempotent LoadOrCreateServeCert — normally the cert already exists;
+		// on a pre-cert machine this creates it, which is exactly what the
+		// fresh flow would have done anyway. An unreadable cert must not trap
+		// the resume: fall back to a hint.
 		if _, _, fp, err := mcpserver.LoadOrCreateServeCert(); err == nil {
 			w.data.deviceFp = fp
 		} else {
 			w.data.deviceFp = "（指纹不可读：" + err.Error() + "）"
 		}
 		w.enterAddrForm()
-		w.status = "检测到已完成的 profile/project/设备码，直接进入 serve 安装段（两把密钥此前已展示，丢失可在主控台重发）"
-	default:
-		// profile+project done, device code missing. Load the profileID so the
-		// client-name submit knows entity creation is complete and routes
-		// straight to the code issuance (see stepFormDone@stepClientName).
-		if w.data.profileID == "" && len(profiles) > 1 {
-			w.openBindProfilePicker()
-			return
-		}
-		if w.data.profileID == "" {
-			w.data.profileID = profiles[0].ID
-		}
-		w.startClientName()
-		w.status = "profile/project 已完成（project token 已在此前展示，丢失可在主控台 Projects 页 [a] 重发），继续签发设备码"
+		w.status = "检测到已完成的 profile/project，直接进入 serve 安装段（设备码由 client 端 ssh-manager pair 配对时自动铸发）"
 	}
 }
 
@@ -374,43 +380,6 @@ func (w *wizardModel) openBindProfilePicker() {
 	w.status = "检测到多个 profile——本次向导补发的 project/设备码绑定到哪个 profile，请选择"
 }
 
-// startClientName opens the 客户端机器名 step — the server flow's first
-// question, whose answer becomes the profile default name AND the device-code
-// name (one name, two uses: the card's 去向表 stays self-consistent).
-func (w *wizardModel) startClientName() {
-	w.data.clientName = defaultHostName()
-	w.step = stepClientName
-	w.form = w.clientNameForm()
-}
-
-func (w wizardModel) clientNameForm() *huh.Form {
-	return huh.NewForm(huh.NewGroup(
-		huh.NewInput().Title("客户端机器名（将命名 profile 与设备码；填对方电脑的名字）").
-			Value(&w.data.clientName).Validate(nonEmpty),
-	))
-}
-
-// issueDeviceCode mints the device code named after the client and returns the
-// cmd whose message (deviceCodeIssuedMsg) carries BOTH the one-time code and
-// the cert fingerprint. ORDER MATTERS: cert FIRST, code second — if the cert
-// init failed after AddCacheToken succeeded, a retry would hit the active-name
-// collision on the already-minted code; this order keeps the retry idempotent.
-// The fingerprint is also stashed into w.data.deviceFp for the access card.
-func (w wizardModel) issueDeviceCode() tea.Cmd {
-	return func() tea.Msg {
-		_, _, fp, err := mcpserver.LoadOrCreateServeCert()
-		if err != nil {
-			return errMsg{err}
-		}
-		_, code, err := w.st.AddCacheToken(strings.TrimSpace(w.data.clientName), w.data.profileID)
-		if err != nil {
-			return errMsg{err}
-		}
-		w.data.deviceFp = fp
-		return deviceCodeIssuedMsg{code: code, fingerprint: fp}
-	}
-}
-
 // enterAddrForm opens the serve-segment address picker (spec §2.4 ⑥ 地址捕获).
 func (w *wizardModel) enterAddrForm() {
 	w.step = stepAddr
@@ -429,9 +398,6 @@ func (w *wizardModel) askFirstServer() {
 }
 
 func (w wizardModel) Init() tea.Cmd {
-	if w.step == stepClient && w.client != nil {
-		return w.client.Init()
-	}
 	if w.form == nil {
 		return nil
 	}
@@ -439,23 +405,6 @@ func (w wizardModel) Init() tea.Cmd {
 }
 
 func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// 1. stepClient delegation is OUTERMOST (Plan 30 注记 1): the flow IS the
-	// clientModel in wizard form; only wizardDoneMsg escapes (it is the
-	// wizard's own exit sentinel, handled by the switch below). This MUST
-	// precede everything — formDoneMsg/errMsg are live during delegation
-	// (editConnForm completion emits formDoneMsg) and belong to the inner
-	// model, whose own gate routes them. wizard-owned mint/install/probe msgs
-	// are UNREACHABLE in the client branch (those steps don't run), so nothing
-	// of the wizard's is lost.
-	if w.step == stepClient && w.client != nil {
-		if _, ok := msg.(wizardDoneMsg); !ok {
-			cm, cmd := w.client.Update(msg)
-			if ncm, ok := cm.(clientModel); ok {
-				w.client = &ncm
-			}
-			return w, cmd
-		}
-	}
 	switch m := msg.(type) {
 	case tea.KeyPressMsg:
 		if w.ov != nil { // overlay owns keys until formDoneMsg.
@@ -484,16 +433,6 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					w.enterStandalone()
 				}
-			}
-			return w, nil
-		}
-		if w.step == stepDeviceIssue {
-			// The issue failed (err set via errMsg): r retries the SAME action —
-			// issueDeviceCode is ordered cert-first so a retry after a
-			// half-failure stays idempotent (see its comment).
-			if k.Text == "r" && w.err != nil {
-				w.err, w.status = nil, ""
-				return w, w.issueDeviceCode()
 			}
 			return w, nil
 		}
@@ -537,26 +476,17 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		w.step, w.err, w.status = stepToken, nil, ""
 		if w.role == roles.RoleServer {
 			// Server flow (spec §2.4 ⑤): this token goes to the CLIENT
-			// machine's .mcp.json — the usage label must say so, and the
-			// screen is numbered 1/2 (the device code screen follows).
-			w.ov = wizTokenScreen("密钥 1/2：project token", m.token,
-				"贴到 client 机 .mcp.json 的 SSHMGR_TOKEN 字段",
+			// machine's .mcp.json on the manual path — and pair-minted devices
+			// get their own dedicated token at approval (Plan 42 批1 T8: the
+			// wizard mints no device code anymore, so there is no 2/2).
+			w.ov = wizTokenScreen("project token", m.token,
+				"手工路径:贴到 client 机 .mcp.json 的 SSHMGR_TOKEN 字段;新机亦可改走 ssh-manager pair(配对完成自动铸发专属 token)",
 				"主控台 Projects 页 [a] 重发")
 			return w, nil
 		}
 		w.ov = wizTokenScreen(m.title, m.token,
 			"贴到本机 .mcp.json 的 SSHMGR_TOKEN 字段",
 			"主控台 Projects 页 [a] 重发")
-		return w, nil
-	case deviceCodeIssuedMsg:
-		// Server flow's second secret (spec §2.4 ⑤ 密钥 2/2). The usage line
-		// embeds the ready-to-paste merged token "<码>:<指纹>" (spec §3.3 形态 A
-		// — the exact string cache pull's SplitTokenPin consumes).
-		w.step, w.err, w.status = stepDeviceToken, nil, ""
-		w.data.deviceFp = m.fingerprint
-		w.ov = wizTokenScreen("密钥 2/2：设备码", m.code,
-			fmt.Sprintf("填到 client 机向导；或拼 cache pull --token '%s:%s'", m.code, m.fingerprint),
-			"主控台 设备码页 [a] 重发")
 		return w, nil
 	case serveInstalledMsg:
 		// Install outcome — either way the flow CONTINUES to the probe
@@ -573,30 +503,33 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch w.step {
 		case stepToken:
 			if w.role == roles.RoleServer {
-				// Server flow: the project token screen is 1/2 — the device
-				// code comes next, not the .mcp.json finisher.
-				w.step = stepDeviceIssue
-				return w, w.issueDeviceCode()
+				// Server flow: the device-code step is retired (Plan 42 批1 T8)
+				// — the serve segment begins right after the token screen.
+				w.enterAddrForm()
+				return w, w.form.Init()
 			}
 			w.step = stepMcpConfig
 			w.ov = mcpConfigScreen("上方已展示的 project token")
 			return w, m.after
 		case stepMcpConfig:
 			return w, wizFinish(w.role) // any key on the finish screen completes setup
-		case stepDeviceToken:
-			// 设备码 dismissed → the serve segment begins (address capture).
-			w.enterAddrForm()
-			return w, w.form.Init()
 		case stepServeAdmin:
 			// Admin notice acknowledged → run the registration.
 			w.step = stepServeInstall
 			return w, installServeStep(w.data.serveAddr)
 		case stepServeResult:
-			w.step = stepAccessCard
-			w.ov = accessCard(w.data.serveAddr, w.data.deviceFp)
+			w.step = stepPairCard
+			w.ov = clientPairCard(w.data.serveAddr, w.data.deviceFp)
 			return w, nil
-		case stepAccessCard:
+		case stepPairCard:
 			return w, wizFinish(w.role) // any key completes the server setup
+		case stepClientGuide:
+			// Guidance acknowledged: complete the client setup (role.json →
+			// setup_complete:true) and exit. The wizard does NOT chain into a
+			// console here — the next step for the user is running
+			// `ssh-manager pair` in the shell (Run hands off to the broker
+			// console only).
+			return w, wizFinishTo(roles.RoleClient, "client")
 		}
 		return w, m.after
 	case wizardDoneMsg:
@@ -604,9 +537,7 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		w.done, w.next = true, m.next
 		return w, tea.Quit
 	default:
-		// Plan 30 gate (注记 1 的解法): delegation is the outermost layer
-		// (the head above — formDoneMsg/errMsg are LIVE during stepClient and
-		// belong to the inner model); owned cases are the main switch itself
+		// Plan 30 gate (注记 1 的解法): owned cases are the main switch itself
 		// (they run before any overlay target); THIS branch is the target
 		// selection for everything else — huh's unexported protocol msgs
 		// (nextFieldMsg / nextGroupMsg — without this route every wizard form
@@ -654,10 +585,7 @@ func (w wizardModel) stepFormDone() (tea.Model, tea.Cmd) {
 		if !w.askShare {
 			if w.ans.keep == "no" {
 				w.chooseRole(roles.RoleClient)
-				if w.client == nil {
-					return w, nil // defensive: enterClient always sets it
-				}
-				return w, w.client.Init()
+				return w, nil // 引导页(w.ov)已就位,任意键完成并退出
 			}
 			w.askShare = true
 			w.form = w.shareForm()
@@ -690,17 +618,6 @@ func (w wizardModel) stepFormDone() (tea.Model, tea.Cmd) {
 		return w, w.submitProfileGrant()
 	case stepProject:
 		return w, w.submitProject()
-	case stepClientName:
-		// Fresh flow → shared server-entry loop. On a resume where profile +
-		// project already exist (profileID preloaded), the client name's only
-		// remaining job is naming the missing device code → issue it directly.
-		w.data.clientName = strings.TrimSpace(w.data.clientName)
-		if w.data.profileID != "" {
-			w.step = stepDeviceIssue
-			return w, w.issueDeviceCode()
-		}
-		w.askFirstServer()
-		return w, w.form.Init()
 	case stepBindProfile:
 		// The picker set data.profileID (a huh Select always commits one
 		// option); re-run the resume heuristic — it now routes past the
@@ -740,9 +657,6 @@ func (w wizardModel) enterProfileGrant() (tea.Model, tea.Cmd) {
 	}
 	w.data.servers = servers
 	w.data.profileName = defaultHostName()
-	if w.role == roles.RoleServer && strings.TrimSpace(w.data.clientName) != "" {
-		w.data.profileName = w.data.clientName
-	}
 	w.data.chosen = nil
 	w.step = stepProfileGrant
 	w.form = wizProfileGrantForm(&w.data.profileName, servers, &w.data.chosen)
@@ -817,14 +731,10 @@ var wizStepTitles = map[wizStep]string{
 	stepServerConfirm: " 服务器录入 ",
 	stepProfileGrant:  " Profile + 授权 ",
 	stepProject:       " 创建项目 ",
-	stepClientName:    " 客户端命名 ",
 	stepAddr:          " serve 地址 ",
 }
 
 func (w wizardModel) View() tea.View {
-	if w.step == stepClient && w.client != nil {
-		return altScreen(w.client.View())
-	}
 	if w.ov != nil {
 		v := w.ov.View().Content
 		// M1: a Save failure in wizFinish surfaces as errMsg while the overlay
@@ -872,32 +782,15 @@ func (w wizardModel) View() tea.View {
 			quitHint = "r 重试 / q 退出（角色未保存，重开 tui 从头开始）"
 		}
 		b.WriteString(footerStyle.Render(quitHint) + "\n")
-	case stepDeviceIssue, stepServeInstall, stepServeProbe:
+	case stepServeInstall, stepServeProbe:
 		// In-flight steps: no form, no overlay — just what is running (and the
 		// error + retry affordance if the action failed).
 		titles := map[wizStep]string{
-			stepDeviceIssue:  " 签发设备码 ",
 			stepServeInstall: " 安装 serve 服务 ",
 			stepServeProbe:   " serve 探活 ",
 		}
 		b.WriteString(titleStyle.Render(titles[w.step]) + "\n\n")
 		switch w.step {
-		case stepDeviceIssue:
-			if w.err != nil {
-				b.WriteString(errStyle.Render("✗ "+w.err.Error()) + "\n")
-				quitHint := "r 重试 / q 暂停退出（角色已保存，重开 tui 会从设备码继续）"
-				if w.saveErr != nil {
-					quitHint = "r 重试 / q 暂停退出（角色未保存，重开 tui 从头开始）"
-				}
-				b.WriteString(footerStyle.Render(quitHint) + "\n")
-			} else {
-				b.WriteString("正在签发设备码…\n")
-				quitHint := "q 暂停退出（进度已保存）"
-				if w.saveErr != nil {
-					quitHint = "q 暂停退出（role.json 写入失败，进度未保存）"
-				}
-				b.WriteString(footerStyle.Render(quitHint) + "\n")
-			}
 		case stepServeInstall:
 			b.WriteString("正在注册系统服务（绑定 0.0.0.0:7878，可能需要数秒）…\n")
 			b.WriteString(footerStyle.Render("q 暂停退出（安装失败不会阻断向导）") + "\n")

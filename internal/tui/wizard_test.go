@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
@@ -85,19 +84,19 @@ func TestWizard_FirstScreenSavesRole(t *testing.T) {
 }
 
 // TestWizard_ResumeSkipsFirstScreen: a resumed launch (role already on disk)
-// starts at the role flow, not the first-screen picker. Since T4 the SERVER
-// flow is real: on a fresh vault its resume enters the flow at the
-// client-name step (the placeholder page is gone; only client/T5 remains).
+// starts at the role flow, not the first-screen picker. Plan 42 批1 T8: the
+// fresh SERVER flow enters the shared server-entry loop directly (the
+// client-name step is retired; the ask step carries the form).
 func TestWizard_ResumeSkipsFirstScreen(t *testing.T) {
 	withRoleDirs(t)
 	w := newWizardForRole(roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleServer, ResumeSetup: true})
-	if w.step != stepClientName || w.role != roles.RoleServer {
+	if w.step != stepServerAsk || w.role != roles.RoleServer {
 		t.Fatalf("resume wizard must skip picker into the server flow: step=%d role=%q", w.step, w.role)
 	}
 	if w.form == nil {
-		t.Fatal("client-name step must carry a form")
+		t.Fatal("server-ask step must carry a form")
 	}
-	if v := w.View().Content; !strings.Contains(v, "客户端") {
+	if v := w.View().Content; !strings.Contains(v, "服务器录入") {
 		t.Fatalf("resume view must show the server flow's first step:\n%s", v)
 	}
 	w.closeStore()
@@ -177,25 +176,6 @@ func TestWizard_FooterHidesSavedWhenSaveErr(t *testing.T) {
 			},
 			failWant: "r 重试 / q 退出（角色未保存，重开 tui 从头开始）",
 			okWant:   "r 重试 / q 退出（角色已保存，重开 tui 会继续）",
-		},
-		{
-			name: "stepDeviceIssue 失败态",
-			build: func(w wizardModel) wizardModel {
-				w.step, w.form = stepDeviceIssue, nil
-				w.err = errors.New("签发设备码失败（测试）") // err branch carries the r 重试 footer
-				return w
-			},
-			failWant: "r 重试 / q 暂停退出（角色未保存，重开 tui 从头开始）",
-			okWant:   "r 重试 / q 暂停退出（角色已保存，重开 tui 会从设备码继续）",
-		},
-		{
-			name: "stepDeviceIssue 等待态",
-			build: func(w wizardModel) wizardModel {
-				w.step, w.form = stepDeviceIssue, nil
-				return w
-			},
-			failWant: "q 暂停退出（role.json 写入失败，进度未保存）",
-			okWant:   "q 暂停退出（进度已保存）",
 		},
 		{
 			name: "stepServeProbe",
@@ -367,17 +347,18 @@ func TestWizard_ResumeReusesExistingProfile(t *testing.T) {
 	w.closeStore() // Run's cleanup — also releases the db file for TempDir removal
 }
 
-// TestWizard_ClientFlow pins the client-role wizard (T5): choosing client on
-// the first screen writes role.json (client location, setup_complete:false)
-// and enters the clientModel-in-wizard-form with the connection form up and
-// the source hint visible; a successful first pull leads through the finish
-// screen to the client-panel handoff sentinel.
-func TestWizard_ClientFlow(t *testing.T) {
+// TestWizard_ClientGuide pins the retired client-ROLE flow's replacement
+// (Plan 42 批1 T8, spec §3.1-6): choosing client writes role.json (client
+// location, setup_complete:false) and lands on a static guidance page pointing
+// at `ssh-manager pair`; acknowledging it completes the setup and exits the
+// wizard with the client handoff sentinel (Run does NOT chain into a console —
+// the next step for the user is running pair in the shell).
+func TestWizard_ClientGuide(t *testing.T) {
 	withRoleDirs(t)
 	w := newWizardForTest()
 	w.chooseRole(roles.RoleClient)
-	if w.step != stepClient || w.client == nil {
-		t.Fatalf("client role must enter the client wizard: step=%d client=%v", w.step, w.client)
+	if w.step != stepClientGuide || w.ov == nil {
+		t.Fatalf("client role must enter the pair-guidance page: step=%d ov=%v", w.step, w.ov)
 	}
 	// role.json lands at the CLIENT location, incomplete (safe-pause invariant).
 	p, err := roles.RolePath(roles.RoleClient)
@@ -391,60 +372,36 @@ func TestWizard_ClientFlow(t *testing.T) {
 	if !strings.Contains(string(b), `"role":"client"`) || !strings.Contains(string(b), `"setup_complete":false`) {
 		t.Fatalf("role.json must record incomplete client setup: %s", b)
 	}
-	// The wizard view is the client form with the source hint on top. (The
-	// field labels themselves render only after the form initializes; the
-	// overlay title + hint pin the screen identity.)
-	v := w.View().Content
-	for _, want := range []string{"server 机", "编辑连接"} {
+	// The guidance page names the command and its uniqueness.
+	v := viewString(w.ov)
+	for _, want := range []string{"ssh-manager pair", "唯一入网"} {
 		if !strings.Contains(v, want) {
-			t.Fatalf("client wizard view missing %q:\n%s", want, v)
+			t.Fatalf("client guidance missing %q:\n%s", want, v)
 		}
 	}
-	// Successful first pull → finish screen (--cache variant) → done+client.
-	m, _ := w.Update(pullSucceededMsg{})
-	if v := m.View().Content; !strings.Contains(v, "--cache") {
-		t.Fatalf("post-pull screen must be the --cache finish screen:\n%s", v)
-	}
-	m2, cmd := m.Update(formDoneMsg{})
+	// Acknowledging completes the setup: done+client sentinel, role.json true.
+	m, cmd := w.Update(formDoneMsg{})
 	if cmd == nil {
-		t.Fatal("finish screen dismissal must run the completion cmd")
+		t.Fatal("guidance dismissal must run the completion cmd")
 	}
-	final, _ := m2.Update(cmd()) // wizFinishTo → wizardDoneMsg{next:"client"}
+	final, _ := m.Update(cmd()) // wizFinishTo → wizardDoneMsg{next:"client"}
 	if wm, ok := final.(wizardModel); !ok || !wm.done || wm.next != "client" {
-		t.Fatalf("client finish must set done+client handoff, got %+v", final)
+		t.Fatalf("client guidance must set done+client handoff, got %+v", final)
 	}
-	// Completed: role.json now setup_complete:true at the client location.
 	b2, err := os.ReadFile(p)
 	if err != nil || !strings.Contains(string(b2), `"setup_complete":true`) {
 		t.Fatalf("role.json must record completed setup: %s (%v)", b2, err)
 	}
 }
 
-// TestWizard_ClientResumeWithSavedCred: a resumed client wizard whose
-// cache.auth.json already holds a complete cred skips the form (the panel's
-// [s]/[c] keys drive the retry) instead of demanding a retyped masked code.
-func TestWizard_ClientResumeWithSavedCred(t *testing.T) {
+// TestWizard_ClientResumeLandsOnGuide: a resumed client wizard (role.json on
+// disk, setup_complete:false) enters the SAME guidance page — there is no
+// connection form to resume anymore, and no stored-cred shortcut is needed.
+func TestWizard_ClientResumeLandsOnGuide(t *testing.T) {
 	withRoleDirs(t)
-	// Pin the cache dir to an EXISTING temp dir — WriteCacheCred does not
-	// MkdirAll (withRoleDirs only pins the cred dir's PARENT via APPDATA).
-	t.Setenv("SSHMGR_CACHE_DIR", t.TempDir())
-	cred := &clientops.CacheCred{
-		URL:   "https://192.0.2.7:7878",
-		Token: "code-1",
-		Pin:   "sha256:" + strings.Repeat("c", 64),
-	}
-	if err := clientops.WriteCacheCred(cred); err != nil {
-		t.Fatal(err)
-	}
 	w := newWizardForRole(roles.Launch{Kind: roles.LaunchClient, Role: roles.RoleClient, ResumeSetup: true})
-	if w.step != stepClient || w.client == nil {
-		t.Fatalf("resume must enter the client wizard: step=%d", w.step)
-	}
-	if w.client.overlay != nil {
-		t.Fatal("resume with a complete cred must NOT reopen the form")
-	}
-	if w.client.cred == nil || w.client.cred.URL != cred.URL {
-		t.Fatalf("resumed model must preload the stored cred: %+v", w.client.cred)
+	if w.step != stepClientGuide || w.ov == nil {
+		t.Fatalf("resume must land on the pair-guidance page: step=%d ov=%v", w.step, w.ov)
 	}
 }
 

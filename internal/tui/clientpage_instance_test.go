@@ -125,7 +125,7 @@ func TestRefreshDataCmdFor_InstanceSlot(t *testing.T) {
 // named-slot path, and every failure still rides syncDoneMsg".
 func TestSyncCmdMode_PassesInstance(t *testing.T) {
 	cred := &clientops.CacheCred{URL: "https://127.0.0.1:1", Token: "t", Pin: "sha256:" + strings.Repeat("b", 64)}
-	msg := syncCmdMode(cred, "agentA", false)()
+	msg := syncCmdMode(cred, "agentA")()
 	done, ok := msg.(syncDoneMsg)
 	if !ok {
 		t.Fatalf("want syncDoneMsg, got %T", msg)
