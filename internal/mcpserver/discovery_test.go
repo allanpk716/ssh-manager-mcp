@@ -88,17 +88,20 @@ func TestDiscovery_ProbeOfferUnicast(t *testing.T) {
 	}
 }
 
-// TestDiscovery_DisabledSilent pins the controller ruling: with enabled()
-// false at start the responder binds NO socket at all (0.0.0.0:7878 must still
-// be free for the test to take), and a probe gets no answer.
-func TestDiscovery_DisabledSilent(t *testing.T) {
+// TestDiscovery_DisabledStillBoundButSilent pins the T7 controller rework: the
+// socket is bound REGARDLESS of the switch state (so an off→on flip takes
+// effect on the next probe without a serve restart), but enabled()==false
+// keeps every probe unanswered — the per-packet gate is the authority.
+func TestDiscovery_DisabledStillBoundButSilent(t *testing.T) {
 	stop := StartDiscovery(context.Background(), "n", 7878, "sha256:ab", func() bool { return false })
 	defer stop()
+	// 绑定即发生:disabled 状态下 0.0.0.0:7878 已被 responder 占住,第二个 bind 必败。
 	own, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 7878})
-	if err != nil {
-		t.Fatalf("disabled StartDiscovery must not bind udp/7878: %v", err)
+	if err == nil {
+		own.Close()
+		t.Fatal("StartDiscovery must bind udp/7878 even when disabled (off→on needs no restart)")
 	}
-	own.Close()
+	// 逐包门:关=不答。
 	conn := openProbeConn(t)
 	if resp := probeOnce(t, conn, []byte(tValidProbe), mustResolve(t, "127.0.0.1:7878"), 400*time.Millisecond); resp != nil {
 		t.Fatalf("disabled discovery must not answer, got %s", resp)

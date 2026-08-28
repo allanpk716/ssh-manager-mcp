@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,7 +51,9 @@ func startFakeDiscovery(t *testing.T, offer []byte) *net.UDPAddr {
 
 // TestDiscover_LoopbackDirected pins the brief's directed-injection path: one
 // 127.0.0.1 target against a responder yields exactly one result whose Addr
-// is the offer's source IP.
+// is the offer's source IP — received on the UNCONNECTED client socket via
+// ReadFromUDP (T7 rework: the client never DialUDP'd to the responder, so the
+// source address is the transport's honest answer, not an echo of the dial).
 func TestDiscover_LoopbackDirected(t *testing.T) {
 	offer := []byte(`{"t":"offer","name":"nuc10","spki":"sha256:abc","tcp":7878}`)
 	raddr := startFakeDiscovery(t, offer)
@@ -63,6 +66,31 @@ func TestDiscover_LoopbackDirected(t *testing.T) {
 	}
 	if got[0].Name != "nuc10" || got[0].SPKI != "sha256:abc" || got[0].Addr != "127.0.0.1" {
 		t.Fatalf("result mismatch: %+v", got[0])
+	}
+	if got[0].TCPPort != 7878 {
+		t.Fatalf("TCPPort = %d, want the offer's tcp field 7878", got[0].TCPPort)
+	}
+}
+
+// TestDiscover_TCPPortPassthrough pins the T7 struct extension: the offer's
+// frozen `tcp` field surfaces in Discovered.TCPPort (non-default values ride
+// through untouched), and the offer's source address is the responder's real
+// address (host only, never host:port).
+func TestDiscover_TCPPortPassthrough(t *testing.T) {
+	offer := []byte(`{"t":"offer","name":"odd-port","spki":"sha256:odd","tcp":9999}`)
+	raddr := startFakeDiscovery(t, offer)
+	got, err := discoverOnPort([]string{"127.0.0.1"}, raddr.Port, 500*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d results, want 1: %+v", len(got), got)
+	}
+	if got[0].TCPPort != 9999 {
+		t.Fatalf("TCPPort = %d, want 9999 from the offer", got[0].TCPPort)
+	}
+	if got[0].Addr != "127.0.0.1" || strings.Contains(got[0].Addr, ":") {
+		t.Fatalf("Addr = %q, want the bare source host", got[0].Addr)
 	}
 }
 
@@ -111,6 +139,85 @@ func TestNonLoopbackIPv4s(t *testing.T) {
 		}
 		if ip.IsLoopback() {
 			t.Fatalf("loopback address %q leaked into NonLoopbackIPv4s", a)
+		}
+	}
+}
+
+// TestNonLoopbackIPv4Broadcasts pins the T7 production target set: one entry
+// per IPv4 broadcast-capable non-loopback interface address, each parseable,
+// IPv4, non-loopback, and equal to host | ^mask recomputed from the live
+// interface table. (No non-emptiness assertion — same CI posture as above.)
+func TestNonLoopbackIPv4Broadcasts(t *testing.T) {
+	got, err := NonLoopbackIPv4Broadcasts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	ifaces, _ := net.Interfaces()
+	for _, a := range got {
+		ip := net.ParseIP(a)
+		if ip == nil || ip.To4() == nil {
+			t.Fatalf("entry %q is not an IPv4 address", a)
+		}
+		if ip.IsLoopback() {
+			t.Fatalf("loopback address %q leaked into NonLoopbackIPv4Broadcasts", a)
+		}
+		if seen[a] {
+			t.Fatalf("duplicate broadcast address %q", a)
+		}
+		seen[a] = true
+		// 每条都必须能在现网接口表里找到 IP|^mask 的出处（对账）。
+		matched := false
+		for _, ifc := range ifaces {
+			if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagBroadcast == 0 {
+				continue
+			}
+			addrs, aerr := ifc.Addrs()
+			if aerr != nil {
+				continue
+			}
+			for _, ad := range addrs {
+				ipn, ok := ad.(*net.IPNet)
+				if !ok {
+					continue
+				}
+				if want := ipv4Broadcast(ipn.IP.To4(), ipn.Mask); want != nil && want.String() == a {
+					matched = true
+				}
+			}
+		}
+		if !matched {
+			t.Fatalf("broadcast %q has no matching interface (IP|^mask) in the live table", a)
+		}
+	}
+}
+
+// TestIPv4BroadcastPins pins the directed-broadcast arithmetic on synthetic
+// inputs: broadcast = IP | ^Mask, per-interface (the LAN-wide reach a unicast
+// probe to the interface's own address can never have — the T6 concern this
+// rework closes). A non-4-byte mask (IPv6 form) is unusable → nil.
+func TestIPv4BroadcastPins(t *testing.T) {
+	cases := []struct {
+		ip   string
+		mask net.IPMask
+		want string // "" = expect nil
+	}{
+		{"192.168.1.10", net.CIDRMask(24, 32), "192.168.1.255"},
+		{"10.1.2.3", net.CIDRMask(16, 32), "10.1.255.255"},
+		{"172.16.5.7", net.CIDRMask(8, 32), "172.255.255.255"},
+		{"192.168.9.9", net.CIDRMask(32, 32), "192.168.9.9"}, // /32: host route → 自身
+		{"192.168.1.10", net.CIDRMask(128, 128), ""},         // IPv6 掩码形态 → 不可用
+	}
+	for _, c := range cases {
+		got := ipv4Broadcast(net.ParseIP(c.ip).To4(), c.mask)
+		if c.want == "" {
+			if got != nil {
+				t.Fatalf("ipv4Broadcast(%s, mask) = %v, want nil", c.ip, got)
+			}
+			continue
+		}
+		if got == nil || got.String() != c.want {
+			t.Fatalf("ipv4Broadcast(%s, mask) = %v, want %s", c.ip, got, c.want)
 		}
 	}
 }

@@ -349,11 +349,11 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 		fmt.Fprintf(os.Stderr, "auto-TLS cert (self-signed). client pin: %s\n", autoTLSFingerprint)
 	}
 
-	// UDP discovery (Plan 42 批1 T6): the state line sits next to the
+	// UDP discovery (Plan 42 批1 T6/T7): the state line sits next to the
 	// listening line; the responder's lifecycle rides ctx (stop is deferred as
 	// well, since stop and the ctx hookup are the same idempotent Once).
-	// StartDiscovery re-evaluates the switch itself — if it is off at this
-	// instant it binds no socket and the deferred stop is a no-op.
+	// StartDiscovery binds the socket regardless of the switch state (T7) —
+	// off is answered per packet, so an off→on flip needs no restart.
 	discLabel := "off"
 	if runner.DiscoveryEnabled() {
 		discLabel = "on"

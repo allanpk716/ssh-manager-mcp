@@ -26,10 +26,11 @@ import (
 // The responder is deliberately mute and dumb: only well-formed probes get an
 // answer, everything else (wrong magic, malformed JSON, wrong type) is dropped
 // SILENTLY — no log noise from LAN background chatter, no error oracle for a
-// scanner. enabled() is evaluated once up front (false → no socket is bound at
-// all, saving the port) and once per packet (a live responder that gets
+// scanner. enabled() is evaluated PER PACKET (a live responder that gets
 // switched off goes silent without a serve restart — same ≤5s switch machinery
-// as the /pair gate, switches.go).
+// as the /pair gate, switches.go — and, post-T7 rework, an off→on flip takes
+// effect on the next probe too, because the socket is bound regardless of the
+// switch state; the cost is one idle socket).
 //
 // Discovery is an ENHANCEMENT surface: a udp/7878 bind failure (typically a
 // second serve on the host) costs one stderr line and serve continues.
@@ -134,9 +135,10 @@ func validProbe(data []byte) bool {
 // (RunServe passes the real bound port), spki = the serve cert SPKI pin the
 // client should pin, enabled = the live discovery switch (per-packet).
 //
-// Posture (all frozen by the brief):
-//   - enabled() false at entry → NO socket is bound at all (省资源 — 控制裁决);
-//     the returned stop is a no-op.
+// Posture (frozen by the briefs; the first bullet reworked by T7):
+//   - the socket is bound REGARDLESS of the switch state (T7 控制裁决:off→on
+//     无需重启,逐包门是唯一权威;代价一个 idle socket)。enabled()==false →
+//     bound but silent; the returned stop still closes the socket.
 //   - udp/7878 bind failure (typically another serve) → one stderr line, then
 //     a no-op stop — serve continues without discovery.
 //   - Only valid probes are answered, unicast to the source; the offer write
@@ -147,12 +149,9 @@ func StartDiscovery(ctx context.Context, name string, tcpPort int, spki string, 
 	if enabled == nil {
 		return noop // defensive: a nil gate can never answer
 	}
-	if !enabled() {
-		return noop // 关=干脆不监听(省端口/省资源)
-	}
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: discoveryPort})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager serve: discovery: udp/%d unavailable (disabled): %v\n", discoveryPort, err)
+		fmt.Fprintf(os.Stderr, "ssh-manager serve: discovery: udp/%d unavailable (port in use): %v\n", discoveryPort, err)
 		return noop
 	}
 
