@@ -82,16 +82,20 @@ type Profile struct {
 
 // Project is an agent identity. TokenHash/Salt verify the presented token; ProfileID scopes visible servers.
 // Status gates admission (only active admits); rotate replaces the token in place (same id/profile).
+// PairGenerated (Plan 42) marks identities minted BY the SAS pairing flow as
+// "pair-<name>" — only such rows are reused (token-rotated) at re-pair; owner-created
+// same-name projects are never hijacked by the pairing flow.
 type Project struct {
-	ID          string
-	Name        string
-	TokenHash   []byte
-	TokenSalt   []byte
-	TokenPrefix string
-	ProfileID   string
-	Status      ProjectStatus
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID            string
+	Name          string
+	TokenHash     []byte
+	TokenSalt     []byte
+	TokenPrefix   string
+	ProfileID     string
+	Status        ProjectStatus
+	PairGenerated bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // CacheTokenStatus is the lifecycle state of a device-auth-code (for offline cache pull).

@@ -22,15 +22,39 @@ import (
 // after a revoke: Lazy soft-delete otherwise keeps the row and UNIQUE(name) blocks the INSERT.
 // Active same-name rows are deliberately left untouched so a duplicate-active INSERT still fails
 // UNIQUE (guards against accidentally issuing two active codes for one device).
+//
+// The whole body runs as ONE transaction via addCacheTokenTx (Plan 42 T4 extraction):
+// the public signature is the single-tx wrapper, behavior-identical.
 func (s *Store) AddCacheToken(name, profileID string) (string, string, error) {
 	if s.readOnly {
 		return "", "", ErrReadOnly
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback() // no-op after Commit
+	id, token, err := addCacheTokenTx(tx, name, profileID)
+	if err != nil {
+		return "", "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", "", err
+	}
+	return id, token, nil
+}
+
+// addCacheTokenTx is the transaction-parameterized form of AddCacheToken: the
+// identical validation (profile binding, Plan 40 name discipline) + revoke-reclaim +
+// casefold-variant reservation + INSERT, running on the CALLER's tx so
+// MintPairingCredentials can fold code minting into the finish transaction
+// (Plan 42 §3.3-6 step ③).
+func addCacheTokenTx(tx *sql.Tx, name, profileID string) (string, string, error) {
 	if profileID == "" {
 		return "", "", errors.New("device code requires a profile binding (profileID is empty)")
 	}
 	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM profiles WHERE id=?`, profileID).Scan(&n); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM profiles WHERE id=?`, profileID).Scan(&n); err != nil {
 		return "", "", err
 	}
 	if n == 0 {
@@ -47,11 +71,6 @@ func (s *Store) AddCacheToken(name, profileID string) (string, string, error) {
 	hash := HashToken([]byte(token), salt)
 	id := newID()
 	ts := now()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return "", "", err
-	}
-	defer tx.Rollback() // no-op after Commit
 	// Reclaim any same-name revoked rows so the name is free for re-issue. Active rows are
 	// left in place — a duplicate-active INSERT must still hit UNIQUE.
 	if _, err := tx.Exec(
@@ -78,9 +97,6 @@ func (s *Store) AddCacheToken(name, profileID string) (string, string, error) {
 		 VALUES (?,?,?,?,?,?,?,?,?)`,
 		id, name, hash, salt, tokenPrefix(token), string(models.CacheTokenActive), profileID, ts, ts,
 	); err != nil {
-		return "", "", err
-	}
-	if err := tx.Commit(); err != nil {
 		return "", "", err
 	}
 	return id, token, nil
@@ -226,6 +242,20 @@ func (s *Store) RevokeCacheToken(name string) error {
 		return ErrReadOnly
 	}
 	res, err := s.db.Exec(`UPDATE cache_tokens SET status=?, updated_at=? WHERE name=?`, string(models.CacheTokenRevoked), now(), name)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("cache token %q not found", name)
+	}
+	return nil
+}
+
+// revokeCacheTokenTx is the transaction-parameterized form of RevokeCacheToken for
+// in-transaction callers (MintPairingCredentials' auto-revoke rides the finish tx —
+// Plan 42 §3.3-6): identical semantics, error when the name has no row.
+func revokeCacheTokenTx(tx *sql.Tx, name string) error {
+	res, err := tx.Exec(`UPDATE cache_tokens SET status=?, updated_at=? WHERE name=?`, string(models.CacheTokenRevoked), now(), name)
 	if err != nil {
 		return err
 	}

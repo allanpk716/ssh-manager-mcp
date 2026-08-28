@@ -37,11 +37,29 @@ func (s *Store) WriteAudit(r AuditRow) error {
 		_, err = s.auditSidecar.Write(b)
 		return err
 	}
+	return insertAuditRow(s.db, r)
+}
+
+// writeAuditTx inserts one audit row on tx — the SAME nine-field mapping as
+// WriteAudit's db path, so a mutation and its history commit atomically (Plan 42
+// §3.3-8: pairing events ride the approve/finish/reject transaction; a rolled-back
+// mint leaves zero audit rows). Pairing Actions use the `pair.` prefix enum
+// (pair.approve/pair.reject/pair.finish/pair.autorevoke/pair.mint/...); Command
+// carries the sanitized JSON summary {"name":...,"profile":...,"ip":...} — NEVER
+// any token/code/pin/sealed value.
+func writeAuditTx(tx *sql.Tx, r AuditRow) error {
+	return insertAuditRow(tx, r)
+}
+
+// insertAuditRow is the single shared INSERT (identical columns/bindings to the
+// pre-refactor WriteAudit db path — behavior zero change) over the dbtx surface
+// both *sql.DB (legacy tx-less path) and *sql.Tx satisfy.
+func insertAuditRow(db dbtx, r AuditRow) error {
 	var sudo int
 	if r.Sudo {
 		sudo = 1
 	}
-	_, err := s.db.Exec(
+	_, err := db.Exec(
 		`INSERT INTO audit_log (ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms)
 		 VALUES (?,?,?,?,?,?,?,?,?)`,
 		r.TS.Unix(), nullableString(r.ProjectID), nullableString(r.ServerID),

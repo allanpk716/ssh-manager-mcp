@@ -41,7 +41,24 @@ type Store struct {
 	masterKey    []byte
 	readOnly     bool
 	auditSidecar *os.File
+	// NowFn is the injectable clock for the pairing time predicates (CAS
+	// enroll_deadline, approved_deadline, delivered TTL — Plan 42 §3.3-2/-6).
+	// nil means time.Now; production code never sets it, tests inject a fake
+	// clock. All OTHER timestamps keep using the package now() helper, so this
+	// seam is behavior-neutral outside pairing.go.
+	NowFn func() time.Time
 }
+
+// nowTime is the Store-scoped clock read: honors the injected NowFn when set.
+func (s *Store) nowTime() time.Time {
+	if s.NowFn != nil {
+		return s.NowFn()
+	}
+	return time.Now()
+}
+
+// nowUnix is nowTime as unix seconds — the form every pairing time predicate uses.
+func (s *Store) nowUnix() int64 { return s.nowTime().Unix() }
 
 // ErrReadOnly is returned by every mutation method when the store is in read-only
 // (offline-cache) mode. The cache is a pulled snapshot — mutations belong on the server.
@@ -249,6 +266,12 @@ func migrate(db *sql.DB) error {
 		}
 	}
 	if err := addColumnIfMissing(db, "projects", "status", "TEXT NOT NULL DEFAULT 'active'"); err != nil {
+		return err
+	}
+	// Plan 42: projects.pair_generated marks agent identities minted BY the SAS
+	// pairing flow ("pair-<name>"). Only flag+profile-consistent rows are reused
+	// (rotated) at re-pair; owner-created same-name projects are never hijacked.
+	if err := addColumnIfMissing(db, "projects", "pair_generated", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	// Plan 39: device codes bind to a profile (scopes /snapshot to the bound
@@ -465,6 +488,7 @@ CREATE TABLE IF NOT EXISTS projects (
   token_prefix TEXT NOT NULL,
   profile_id TEXT NOT NULL REFERENCES profiles(id),
   status TEXT NOT NULL DEFAULT 'active',
+  pair_generated INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -525,5 +549,13 @@ CREATE TABLE IF NOT EXISTS settings (
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL,
   updated_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS pairing_pending (
+  id BLOB PRIMARY KEY, name TEXT NOT NULL, target_url TEXT NOT NULL,
+  client_pub BLOB NOT NULL, cnonce BLOB NOT NULL, server_pub BLOB, snonce BLOB, sig BLOB,
+  profile_hint TEXT NOT NULL DEFAULT '', replace_inactive INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'pending', profile TEXT NOT NULL DEFAULT '', source_ip TEXT NOT NULL DEFAULT '',
+  enroll_deadline INTEGER NOT NULL, approved_deadline INTEGER NOT NULL DEFAULT 0,
+  delivered_sealed BLOB, replay_count INTEGER NOT NULL DEFAULT 0
 );
 `

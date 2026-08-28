@@ -9,10 +9,32 @@ import (
 )
 
 // AddProject creates a project bound to profileID, returning the project id and the ONE-TIME token plaintext.
+// Wraps addProjectTx in a single transaction — behavior-identical to the legacy
+// tx-less INSERT (Plan 42 T4 extraction; MintPairingCredentials reuses the tx form).
 func (s *Store) AddProject(name, profileID string) (string, string, error) {
 	if s.readOnly {
 		return "", "", ErrReadOnly
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback() // no-op after Commit
+	id, token, err := addProjectTx(tx, name, profileID, false)
+	if err != nil {
+		return "", "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", "", err
+	}
+	return id, token, nil
+}
+
+// addProjectTx is the transaction-parameterized form of AddProject: identical
+// validation-free INSERT (token mint + hash) running on the CALLER's tx, with the
+// Plan 42 pair_generated flag column. pairGenerated=true marks SAS-pairing-minted
+// identities ("pair-<name>") eligible for token-rotation reuse at re-pair.
+func addProjectTx(tx *sql.Tx, name, profileID string, pairGenerated bool) (string, string, error) {
 	token, err := GenerateToken()
 	if err != nil {
 		return "", "", err
@@ -21,12 +43,15 @@ func (s *Store) AddProject(name, profileID string) (string, string, error) {
 	hash := HashToken([]byte(token), salt)
 	id := newID()
 	ts := now()
-	_, err = s.db.Exec(
-		`INSERT INTO projects (id,name,token_hash,token_salt,token_prefix,profile_id,status,created_at,updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
-		id, name, hash, salt, tokenPrefix(token), profileID, string(models.ProjectActive), ts, ts,
-	)
-	if err != nil {
+	pg := 0
+	if pairGenerated {
+		pg = 1
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO projects (id,name,token_hash,token_salt,token_prefix,profile_id,status,pair_generated,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		id, name, hash, salt, tokenPrefix(token), profileID, string(models.ProjectActive), pg, ts, ts,
+	); err != nil {
 		return "", "", err
 	}
 	return id, token, nil
@@ -40,7 +65,7 @@ func (s *Store) AddProject(name, profileID string) (string, string, error) {
 func (s *Store) VerifyToken(token string) (*models.Project, error) {
 	prefix := tokenPrefix(token)
 	rows, err := s.db.Query(
-		`SELECT id,name,token_hash,token_salt,token_prefix,profile_id,status FROM projects WHERE token_prefix=? AND status='active'`,
+		`SELECT id,name,token_hash,token_salt,token_prefix,profile_id,status,pair_generated FROM projects WHERE token_prefix=? AND status='active'`,
 		prefix,
 	)
 	if err != nil {
@@ -52,12 +77,14 @@ func (s *Store) VerifyToken(token string) (*models.Project, error) {
 			p          models.Project
 			hash, salt []byte
 			status     string
+			pg         int
 		)
-		if err := rows.Scan(&p.ID, &p.Name, &hash, &salt, &p.TokenPrefix, &p.ProfileID, &status); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &hash, &salt, &p.TokenPrefix, &p.ProfileID, &status, &pg); err != nil {
 			return nil, err
 		}
 		if verifyTokenHash([]byte(token), salt, hash) {
 			p.Status = models.ProjectStatus(status)
+			p.PairGenerated = pg != 0
 			return &p, nil
 		}
 	}
@@ -68,7 +95,7 @@ func (s *Store) ListProjects() ([]*models.Project, error) {
 	// v0.8.5: created_at/updated_at join the select (were never read — the
 	// projects page rendered Go zero times). Same int64→time.Unix pattern as
 	// ListCacheTokens.
-	rows, err := s.db.Query(`SELECT id,name,token_prefix,profile_id,status,created_at,updated_at FROM projects ORDER BY name`)
+	rows, err := s.db.Query(`SELECT id,name,token_prefix,profile_id,status,pair_generated,created_at,updated_at FROM projects ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -78,13 +105,15 @@ func (s *Store) ListProjects() ([]*models.Project, error) {
 		var (
 			p       models.Project
 			status  string
+			pg      int
 			created int64
 			updated int64
 		)
-		if err := rows.Scan(&p.ID, &p.Name, &p.TokenPrefix, &p.ProfileID, &status, &created, &updated); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.TokenPrefix, &p.ProfileID, &status, &pg, &created, &updated); err != nil {
 			return nil, err
 		}
 		p.Status = models.ProjectStatus(status)
+		p.PairGenerated = pg != 0
 		p.CreatedAt, p.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
 		out = append(out, &p)
 	}
@@ -93,21 +122,9 @@ func (s *Store) ListProjects() ([]*models.Project, error) {
 
 // GetProjectByName resolves a project by name (returns nil, nil when absent).
 func (s *Store) GetProjectByName(name string) (*models.Project, error) {
-	var (
-		p      models.Project
-		status string
-	)
-	err := s.db.QueryRow(
-		`SELECT id,name,token_prefix,profile_id,status FROM projects WHERE name=?`, name,
-	).Scan(&p.ID, &p.Name, &p.TokenPrefix, &p.ProfileID, &status)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	p.Status = models.ProjectStatus(status)
-	return &p, nil
+	return scanProjectRow(s.db.QueryRow(
+		`SELECT id,name,token_prefix,profile_id,status,pair_generated FROM projects WHERE name=?`, name,
+	))
 }
 
 // GetProject resolves a project by id (returns nil, nil when absent). Not part
@@ -115,13 +132,20 @@ func (s *Store) GetProjectByName(name string) (*models.Project, error) {
 // an authenticated TokenInfo.UserID back to its project + profile scope; that
 // HTTP path was removed with the ②a MCP-over-HTTP surface — Plan 42 批1.)
 func (s *Store) GetProject(id string) (*models.Project, error) {
+	return scanProjectRow(s.db.QueryRow(
+		`SELECT id,name,token_prefix,profile_id,status,pair_generated FROM projects WHERE id=?`, id,
+	))
+}
+
+// scanProjectRow is the shared owner-facing project scan (id/name/prefix/profile/
+// status/pair_generated) — one interpretation for both by-name and by-id lookups.
+func scanProjectRow(row *sql.Row) (*models.Project, error) {
 	var (
 		p      models.Project
 		status string
+		pg     int
 	)
-	err := s.db.QueryRow(
-		`SELECT id,name,token_prefix,profile_id,status FROM projects WHERE id=?`, id,
-	).Scan(&p.ID, &p.Name, &p.TokenPrefix, &p.ProfileID, &status)
+	err := row.Scan(&p.ID, &p.Name, &p.TokenPrefix, &p.ProfileID, &status, &pg)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -129,6 +153,7 @@ func (s *Store) GetProject(id string) (*models.Project, error) {
 		return nil, err
 	}
 	p.Status = models.ProjectStatus(status)
+	p.PairGenerated = pg != 0
 	return &p, nil
 }
 
@@ -172,8 +197,28 @@ func (s *Store) RotateProject(id string) (string, error) {
 	if s.readOnly {
 		return "", ErrReadOnly
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback() // no-op after Commit
+	token, err := rotateProjectTx(tx, id)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// rotateProjectTx is the transaction-parameterized form of RotateProject — identical
+// status gate (absent/revoked refused, same error texts) and in-place token swap,
+// running on the CALLER's tx so MintPairingCredentials can fold the reuse-rotate
+// into the finish transaction (Plan 42 §3.3-6 吊旧 token 路径).
+func rotateProjectTx(tx *sql.Tx, id string) (string, error) {
 	var cur string
-	err := s.db.QueryRow(`SELECT status FROM projects WHERE id=?`, id).Scan(&cur)
+	err := tx.QueryRow(`SELECT status FROM projects WHERE id=?`, id).Scan(&cur)
 	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("project id %q not found", id)
 	}
@@ -190,7 +235,7 @@ func (s *Store) RotateProject(id string) (string, error) {
 	salt := newSalt()
 	hash := HashToken([]byte(token), salt)
 	prefix := tokenPrefix(token)
-	res, err := s.db.Exec(
+	res, err := tx.Exec(
 		`UPDATE projects SET token_hash=?, token_salt=?, token_prefix=?, updated_at=? WHERE id=?`,
 		hash, salt, prefix, now(), id,
 	)
