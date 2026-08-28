@@ -108,6 +108,9 @@ type program struct {
 	addr    string
 	tlsCert string
 	tlsKey  string
+	// opts carries the explicitly-set --pairing/--discovery flag values (nil =
+	// not passed) from the parsed command line into RunServe (Plan 42 批1 T6).
+	opts mcpserver.ServeOpts
 
 	cancel context.CancelFunc
 	doneCh chan struct{} // closed when RunServe has returned
@@ -188,7 +191,7 @@ func (p *program) run(ctx context.Context) {
 		tlsLabel = "auto"
 	}
 	fmt.Fprintf(w, "ssh-manager serve (service): starting serve on %s (tls=%s)\n", p.addr, tlsLabel)
-	if err := mcpserver.RunServe(ctx, st, p.addr, p.tlsCert, p.tlsKey); err != nil {
+	if err := mcpserver.RunServe(ctx, st, p.addr, p.tlsCert, p.tlsKey, p.opts); err != nil {
 		fmt.Fprintf(w, "ssh-manager serve (service): %v\n", err)
 	}
 }

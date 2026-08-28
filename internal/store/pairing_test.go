@@ -625,6 +625,81 @@ func TestPairingMigration(t *testing.T) {
 	}
 }
 
+// TestExpireInFlightPairings pins the T5→T6 handoff fix (Plan 42 批1): a serve
+// restart loses the in-memory X25519 private keys, so every LIVE (pending/
+// approved) row is unfinishable — RunServe expires them up front so a stale
+// client's finish poll gets the frozen 410 (ErrPairingWindow) immediately.
+// Terminal rows are untouched: delivered keeps its self-contained replay cache
+// (finish replay needs no in-memory key), expired stays expired.
+func TestExpireInFlightPairings(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().Unix()
+
+	pPending := mkPending(1, "p-pending", now+600)
+	if err := s.AddPendingPairing(pPending, 0, 0); err != nil {
+		t.Fatalf("AddPendingPairing(pending): %v", err)
+	}
+	pApproved := mkPending(2, "p-approved", now+600)
+	if err := s.AddPendingPairing(pApproved, 0, 0); err != nil {
+		t.Fatalf("AddPendingPairing(approved): %v", err)
+	}
+	if ok, err := s.ApprovePairing(pApproved.ID, "prof"); !ok || err != nil {
+		t.Fatalf("approve: ok=%v err=%v", ok, err)
+	}
+	pDelivered := mkPending(3, "p-delivered", now+600)
+	if err := s.AddPendingPairing(pDelivered, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.ApprovePairing(pDelivered.ID, "prof"); !ok || err != nil {
+		t.Fatalf("approve(delivered-seed): ok=%v err=%v", ok, err)
+	}
+	if _, err := s.FinishPairing(pDelivered.ID, func() bool { return true },
+		func(tx *sql.Tx) ([]byte, error) { return []byte("sealed"), nil }); err != nil {
+		t.Fatalf("finish(delivered-seed): %v", err)
+	}
+	pExpired := mkPending(4, "p-expired", now+600)
+	pExpired.State = "expired"
+	if err := s.AddPendingPairing(pExpired, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.ExpireInFlightPairings(); err != nil {
+		t.Fatalf("ExpireInFlightPairings: %v", err)
+	}
+
+	stateOf := func(p *PendingPairing) string {
+		t.Helper()
+		var state string
+		if err := s.db.QueryRow(`SELECT state FROM pairing_pending WHERE id=?`, p.ID).Scan(&state); err != nil {
+			t.Fatalf("row lookup: %v", err)
+		}
+		return state
+	}
+	if got := stateOf(pPending); got != "expired" {
+		t.Fatalf("pending row must expire, got %q", got)
+	}
+	if got := stateOf(pApproved); got != "expired" {
+		t.Fatalf("approved row must expire, got %q", got)
+	}
+	if got := stateOf(pDelivered); got != "delivered" {
+		t.Fatalf("delivered row must keep its replay cache, got %q", got)
+	}
+	if got := stateOf(pExpired); got != "expired" {
+		t.Fatalf("already-expired row must stay expired, got %q", got)
+	}
+	// 过期后 finish 立刻 410(restart 场景的冻结语义)。
+	if _, err := s.FinishPairing(pPending.ID, func() bool { return true },
+		func(tx *sql.Tx) ([]byte, error) { return []byte("sealed"), nil }); !errors.Is(err, ErrPairingWindow) {
+		t.Fatalf("finish after expire = %v, want ErrPairingWindow", err)
+	}
+	// delivered 行重启后重放仍有效(replay 缓存自包含,不经内存密钥;不重 mint)。
+	sealed, err := s.FinishPairing(pDelivered.ID, func() bool { return false },
+		func(tx *sql.Tx) ([]byte, error) { return nil, errors.New("mint must not run on replay") })
+	if err != nil || string(sealed) != "sealed" {
+		t.Fatalf("delivered replay after restart-expire = (%q, %v), want cached replay", sealed, err)
+	}
+}
+
 // --- helpers ----------------------------------------------------------------
 
 func countAuditAction(t *testing.T, s *Store, action string) int {

@@ -259,6 +259,17 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// ServeOpts carries the explicitly-set CLI flag inputs for the serve switches
+// (Plan 42 批1 T6): a non-nil field = the flag was passed and carries that
+// value; nil = the flag is absent (defer to env → store → default). The env
+// seams are read INSIDE RunServe via envSwitch, so the foreground and the
+// service-managed paths behave identically (the service re-runs the same
+// `serve --flags...` command line, so flags ride along automatically).
+type ServeOpts struct {
+	DiscoveryFlag *bool
+	PairingFlag   *bool
+}
+
 // RunServe runs the serve HTTP server until ctx is cancelled (SIGINT/SIGTERM,
 // wired by the caller). Post-Plan-42-批1 the served surface is the
 // authenticated /snapshot route plus the unauthenticated SAS pairing surface
@@ -271,12 +282,30 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 // its fingerprint so the operator can distribute the pin to clients. A
 // LoadOrCreateServeCert failure is returned (serve refuses to start — never
 // silently downgrades to plaintext). Returns nil on clean ctx-cancelled shutdown.
-func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string) error {
+//
+// Startup side effects (Plan 42 批1): in-flight pairing rows are expired (the
+// in-memory X25519 keys died with the previous process — a stale client poll
+// must get the frozen 410), the injected switch inputs are resolved (ServeOpts
+// flags + env seams), and the UDP discovery responder is started on ctx (an
+// enhancement surface — it never fails the serve).
+func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string, opts ServeOpts) error {
 	runner, err := NewServeRunner(st)
 	if err != nil {
 		return err
 	}
 	defer runner.Close()
+
+	// T5→T6 移交:serve 重启后内存 X25519 私钥已丢,in-flight 配对行永远
+	// finish 不完 — 启动时统一过期,stale client 的 finish poll 立刻得到冻结
+	// 的 410(ErrPairingWindow)。失败只记一行(表卫生性质,不拦 serve)。
+	if err := st.ExpireInFlightPairings(); err != nil {
+		fmt.Fprintf(os.Stderr, "ssh-manager serve: expire in-flight pairings: %v\n", err)
+	}
+
+	// 开关注入(Plan 42 批1 T2/T6):显式 env 在此读取(前台/服务路径一致),
+	// 显式 flag 由 CLI 经 ServeOpts 注入;store/缺省两层由 switch 机制解析。
+	runner.RefreshSwitches(envSwitch(envServePairing), opts.PairingFlag,
+		envSwitch(envServeDiscovery), opts.DiscoveryFlag)
 
 	// Cert resolution: if the operator did not pass an explicit --tls-cert,
 	// auto-generate + load a self-signed cert. After this block tlsCert is
@@ -319,6 +348,27 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	if autoTLSFingerprint != "" {
 		fmt.Fprintf(os.Stderr, "auto-TLS cert (self-signed). client pin: %s\n", autoTLSFingerprint)
 	}
+
+	// UDP discovery (Plan 42 批1 T6): the state line sits next to the
+	// listening line; the responder's lifecycle rides ctx (stop is deferred as
+	// well, since stop and the ctx hookup are the same idempotent Once).
+	// StartDiscovery re-evaluates the switch itself — if it is off at this
+	// instant it binds no socket and the deferred stop is a no-op.
+	discLabel := "off"
+	if runner.DiscoveryEnabled() {
+		discLabel = "on"
+	}
+	fmt.Fprintf(os.Stderr, "ssh-manager serve: discovery: udp/%d (%s)\n", discoveryPort, discLabel)
+	discName := ""
+	if v, ok, gerr := st.GetSetting(settingDiscoveryName); gerr == nil && ok {
+		discName = v // 缺省(未设/读失败)由 StartDiscovery 兜底到 hostname
+	}
+	tcpPort := discoveryPort
+	if ta, ok := ln.Addr().(*net.TCPAddr); ok {
+		tcpPort = ta.Port // offer 带 TCP 真实端口(测试/非常规 --addr 端口都对)
+	}
+	stopDiscovery := StartDiscovery(ctx, discName, tcpPort, runner.pairSPKI, runner.DiscoveryEnabled)
+	defer stopDiscovery()
 
 	// Start heartbeat goroutine to keep the serve log fresh. Plan 16 T7 dropped
 	// the old serve.log marker-scan (vaultUnlockedFromLog was Windows-specific

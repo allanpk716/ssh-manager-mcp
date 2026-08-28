@@ -26,6 +26,15 @@ const (
 	settingDiscovery = "serve.discovery"
 )
 
+// Frozen env seam names (spec §3.1): read ONLY via envSwitch — the exact
+// strings "true"/"false" are explicit, anything else (unset/empty/garbage)
+// defers to the next precedence layer. RunServe reads both so the foreground
+// and service-managed paths inject identically.
+const (
+	envServePairing   = "SSHMGR_SERVE_PAIRING"
+	envServeDiscovery = "SSHMGR_SERVE_DISCOVERY"
+)
+
 // switchTTL bounds how stale a memoized switch value may be: the spec caps
 // serve-side switch re-evaluation at ≤5s (§3.1-7) — a Settings-page flip must
 // take effect without a serve restart, while per-request/per-packet gating

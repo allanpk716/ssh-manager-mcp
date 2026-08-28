@@ -385,6 +385,24 @@ func (s *Store) FinishPairing(id []byte, ackOK func() bool, mint func(tx *sql.Tx
 	}
 }
 
+// ExpireInFlightPairings marks every LIVE pairing row (state pending/approved)
+// expired in one statement. RunServe calls it at startup (Plan 42 批1 T6): the
+// serve process holds the pairing X25519 private keys in memory ONLY, so a
+// restart makes every in-flight row unfinishable — expiring them up front gives
+// a stale client's finish poll the frozen 410 (ErrPairingWindow) at once,
+// instead of leaving zombie rows aging out through the window predicates while
+// still occupying pending quotas. Delivered rows are deliberately untouched:
+// the replay cache is self-contained (FinishPairing's delivered branch returns
+// the stored ciphertext without any in-memory key), so a post-restart replay
+// stays valid for its TTL.
+func (s *Store) ExpireInFlightPairings() error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	_, err := s.db.Exec(`UPDATE pairing_pending SET state='expired' WHERE state IN ('pending','approved')`)
+	return err
+}
+
 // MintPairingCredentials mints (or reuses) the pairing credentials INSIDE the
 // caller's transaction — FinishPairing passes its tx so token minting, project
 // reuse, audit and the delivered stamp all commit or roll back as one (§3.3-6).
