@@ -2,7 +2,10 @@ package clientops
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -12,6 +15,14 @@ import (
 // Plan 42 批1 T6 — client 侧发现(internal/clientops/discover.go):对每个给定
 // 目标地址发一个 probe,统一收集窗内收单播 offer,按 SPKI 去重。生产目标由
 // NonLoopbackIPv4s() 枚举;测试注入 127.0.0.1 定向(brief 冻结)。
+
+// spkiOf mints a well-formed "sha256:<64 lowercase hex>" pin deterministically
+// from a seed — the strict rev4 §3.2 parseOffer validation drops anything else,
+// so fixtures must use real-shaped pins.
+func spkiOf(seed string) string {
+	sum := sha256.Sum256([]byte(seed))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
 
 // startFakeDiscovery binds an ephemeral loopback UDP socket and answers every
 // well-formed probe with the given offer bytes — a faithful miniature of the
@@ -55,7 +66,7 @@ func startFakeDiscovery(t *testing.T, offer []byte) *net.UDPAddr {
 // ReadFromUDP (T7 rework: the client never DialUDP'd to the responder, so the
 // source address is the transport's honest answer, not an echo of the dial).
 func TestDiscover_LoopbackDirected(t *testing.T) {
-	offer := []byte(`{"t":"offer","name":"nuc10","spki":"sha256:abc","tcp":7878}`)
+	offer := []byte(fmt.Sprintf(`{"t":"offer","name":"nuc10","spki":%q,"tcp":7878}`, spkiOf("nuc10")))
 	raddr := startFakeDiscovery(t, offer)
 	got, err := discoverOnPort([]string{"127.0.0.1"}, raddr.Port, 500*time.Millisecond)
 	if err != nil {
@@ -64,7 +75,7 @@ func TestDiscover_LoopbackDirected(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d results, want 1: %+v", len(got), got)
 	}
-	if got[0].Name != "nuc10" || got[0].SPKI != "sha256:abc" || got[0].Addr != "127.0.0.1" {
+	if got[0].Name != "nuc10" || got[0].SPKI != spkiOf("nuc10") || got[0].Addr != "127.0.0.1" {
 		t.Fatalf("result mismatch: %+v", got[0])
 	}
 	if got[0].TCPPort != 7878 {
@@ -77,7 +88,7 @@ func TestDiscover_LoopbackDirected(t *testing.T) {
 // through untouched), and the offer's source address is the responder's real
 // address (host only, never host:port).
 func TestDiscover_TCPPortPassthrough(t *testing.T) {
-	offer := []byte(`{"t":"offer","name":"odd-port","spki":"sha256:odd","tcp":9999}`)
+	offer := []byte(fmt.Sprintf(`{"t":"offer","name":"odd-port","spki":%q,"tcp":9999}`, spkiOf("odd-port")))
 	raddr := startFakeDiscovery(t, offer)
 	got, err := discoverOnPort([]string{"127.0.0.1"}, raddr.Port, 500*time.Millisecond)
 	if err != nil {
@@ -97,7 +108,7 @@ func TestDiscover_TCPPortPassthrough(t *testing.T) {
 // TestDiscover_DedupBySPKI pins the dedup contract: two probes (two targets)
 // answered by the same broker (same SPKI) collapse to one entry.
 func TestDiscover_DedupBySPKI(t *testing.T) {
-	offer := []byte(`{"t":"offer","name":"nuc10","spki":"sha256:same","tcp":7878}`)
+	offer := []byte(fmt.Sprintf(`{"t":"offer","name":"nuc10","spki":%q,"tcp":7878}`, spkiOf("same")))
 	raddr := startFakeDiscovery(t, offer)
 	got, err := discoverOnPort([]string{"127.0.0.1", "127.0.0.1"}, raddr.Port, 500*time.Millisecond)
 	if err != nil {
@@ -112,14 +123,14 @@ func TestDiscover_DedupBySPKI(t *testing.T) {
 // garbage and a target that is not a valid IP are skipped without failing the
 // sweep; the offer arriving from a responder is still collected.
 func TestDiscover_GarbageAndDeadTargets(t *testing.T) {
-	offer := []byte(`{"t":"offer","name":"n","spki":"sha256:ok","tcp":7878}`)
+	offer := []byte(fmt.Sprintf(`{"t":"offer","name":"n","spki":%q,"tcp":7878}`, spkiOf("ok")))
 	raddr := startFakeDiscovery(t, offer)
 	// "not-an-ip" 被跳过;"127.0.0.1" 探到 fake responder(它只答合法 probe)。
 	got, err := discoverOnPort([]string{"not-an-ip", "127.0.0.1"}, raddr.Port, 500*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].SPKI != "sha256:ok" {
+	if len(got) != 1 || got[0].SPKI != spkiOf("ok") {
 		t.Fatalf("want exactly the valid offer, got %+v (err=%v)", got, err)
 	}
 }
@@ -188,6 +199,81 @@ func TestNonLoopbackIPv4Broadcasts(t *testing.T) {
 		}
 		if !matched {
 			t.Fatalf("broadcast %q has no matching interface (IP|^mask) in the live table", a)
+		}
+	}
+}
+
+// TestParseOffer_FieldValidation pins the rev4 §3.2 three-field gate (终审修复
+// Important-2): name whitelist / spki shape / tcp range — any violation drops
+// the WHOLE offer, and the old 0/absent→7878 fallback is gone (a legal offer
+// must carry an in-range tcp; guessing a port is never dialable).
+func TestParseOffer_FieldValidation(t *testing.T) {
+	valid := fmt.Sprintf(`{"t":"offer","name":"nuc10","spki":%q,"tcp":7878}`, spkiOf("ok"))
+	d, ok := parseOffer([]byte(discoveryMagic + valid))
+	if !ok {
+		t.Fatalf("legal offer must pass, got dropped")
+	}
+	if d.Name != "nuc10" || d.SPKI != spkiOf("ok") || d.TCPPort != 7878 {
+		t.Fatalf("legal offer parsed wrong: %+v", d)
+	}
+
+	longName := strings.Repeat("n", 33) // 33 chars: one over the {0,31}+first shape
+	badSPKI := spkiOf("x")
+	cases := []struct{ label, offer string }{
+		{"name empty", `{"t":"offer","name":"","spki":"` + spkiOf("x") + `","tcp":7878}`},
+		{"name leading space", `{"t":"offer","name":" nuc","spki":"` + spkiOf("x") + `","tcp":7878}`},
+		{"name NUL", `{"t":"offer","name":"nu\u0000c","spki":"` + badSPKI + `","tcp":7878}`},
+		{"name escape", `{"t":"offer","name":"nu\u001bc","spki":"` + badSPKI + `","tcp":7878}`},
+		{"name punctuation", `{"t":"offer","name":"nu;c","spki":"` + spkiOf("x") + `","tcp":7878}`},
+		{"name too long", `{"t":"offer","name":"` + longName + `","spki":"` + spkiOf("x") + `","tcp":7878}`},
+		{"spki bare hex", `{"t":"offer","name":"nuc10","spki":"` + strings.Repeat("a", 64) + `","tcp":7878}`},
+		{"spki short", `{"t":"offer","name":"nuc10","spki":"sha256:abc","tcp":7878}`},
+		{"spki uppercase", `{"t":"offer","name":"nuc10","spki":"sha256:` + strings.Repeat("A", 64) + `","tcp":7878}`},
+		{"spki non-hex", `{"t":"offer","name":"nuc10","spki":"sha256:` + strings.Repeat("g", 64) + `","tcp":7878}`},
+		{"tcp zero", `{"t":"offer","name":"nuc10","spki":"` + spkiOf("x") + `","tcp":0}`},
+		{"tcp negative", `{"t":"offer","name":"nuc10","spki":"` + spkiOf("x") + `","tcp":-1}`},
+		{"tcp over range", `{"t":"offer","name":"nuc10","spki":"` + spkiOf("x") + `","tcp":65536}`},
+		{"tcp absent (no fallback)", fmt.Sprintf(`{"t":"offer","name":"nuc10","spki":%q}`, spkiOf("x"))},
+	}
+	for _, c := range cases {
+		if d, ok := parseOffer([]byte(discoveryMagic + c.offer)); ok {
+			t.Errorf("%s: malformed offer must be dropped, got %+v", c.label, d)
+		}
+	}
+}
+
+// TestDiscover_DropsMalformedOffer is the socket-level leg: a responder whose
+// offer fails the field validation contributes ZERO entries (silently skipped,
+// the sweep itself stays error-free).
+func TestDiscover_DropsMalformedOffer(t *testing.T) {
+	raddr := startFakeDiscovery(t, []byte(`{"t":"offer","name":"evil","spki":"sha256:nothex","tcp":7878}`))
+	got, err := discoverOnPort([]string{"127.0.0.1"}, raddr.Port, 400*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("malformed offer must not surface, got %+v", got)
+	}
+}
+
+// TestStripC0C1 pins the render guard (终审修复 Important-2): C0 (U+0000–U+001F,
+// incl. \n \r \t ESC) and C1+DEL (U+007F–U+009F) are removed; every other rune
+// — CJK, ⚠/·, punctuation — passes through untouched.
+func TestStripC0C1(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"plain-nuc10_01", "plain-nuc10_01"},
+		{"中文节点 · ⚠", "中文节点 · ⚠"},
+		{"\x1b[2Jcleared", "[2Jcleared"}, // ESC 清屏序列:控制字节剥、可印字保留
+		{"a\rb\nc\td", "abcd"},           // CR/LF/TAB 全剥(渲染恒单行)
+		{"x\x00y\x7fz", "xyz"},           // NUL + DEL
+		{"s\u009ft", "st"},               // C1 U+009F(UTF-8 双字节编码)
+		{"a\u0085b", "ab"},               // C1 U+0085 (NEL)
+		{"https://10.0.0.5:7878", "https://10.0.0.5:7878"},
+	}
+	for _, c := range cases {
+		if got := StripC0C1(c.in); got != c.want {
+			t.Errorf("StripC0C1(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

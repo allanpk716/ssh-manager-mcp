@@ -19,6 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/store"
 )
@@ -106,7 +107,7 @@ func servePairLsCmd() *cobra.Command {
 			for _, p := range rows {
 				fmt.Fprintf(cmd.OutOrStdout(),
 					"%-16s %s\n  source=%s hint=%s flags=%s profile=%s id=%s\n  SAS 码见 client 屏幕——对照本行名称/地址一致后再批准\n",
-					p.Name, p.TargetURL, orDashStr(p.SourceIP), orDashStr(strings.TrimSpace(p.ProfileHint)),
+					clientops.StripC0C1(p.Name), clientops.StripC0C1(p.TargetURL), orDashStr(p.SourceIP), orDashStr(clientops.StripC0C1(strings.TrimSpace(p.ProfileHint))),
 					servePairFlags(p, now), profileNameByID(s, p.Profile), hex.EncodeToString(p.ID))
 			}
 			return nil
@@ -140,7 +141,7 @@ func servePairApproveCmd() *cobra.Command {
 			}
 			// 机械地址校验(spec §3.3-3):foreign 行必须显式 --allow-foreign-url。
 			if mcpserver.ForeignTarget(row.TargetURL) && !allowForeign {
-				return fmt.Errorf("⚠ 配对声明目标 ≠ 本机地址（%s）——疑似中继/假 discovery/错误网络；确属本机地址请加 --allow-foreign-url 重新执行", row.TargetURL)
+				return fmt.Errorf("⚠ 配对声明目标 ≠ 本机地址（%s）——疑似中继/假 discovery/错误网络；确属本机地址请加 --allow-foreign-url 重新执行", clientops.StripC0C1(row.TargetURL))
 			}
 			profileID, err := resolveProfileID(s, profile)
 			if err != nil {
@@ -153,7 +154,7 @@ func servePairApproveCmd() *cobra.Command {
 			if !ok {
 				return errors.New("approve had no effect — the row expired or was already adjudicated (CAS miss); re-run `serve pair ls`")
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s @ %s (对照 client 屏 SAS 后批准)\n", row.Name, row.TargetURL)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s @ %s (对照 client 屏 SAS 后批准)\n", clientops.StripC0C1(row.Name), clientops.StripC0C1(row.TargetURL))
 			fmt.Fprintf(cmd.OutOrStdout(), "profile=%s — the client has 120s to finish (it polls; the credentials land on its disk automatically)\n", profile)
 			return nil
 		},
@@ -190,7 +191,7 @@ func servePairRejectCmd() *cobra.Command {
 			if !ok {
 				return errors.New("reject had no effect — the row expired or was already adjudicated (CAS miss); re-run `serve pair ls`")
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "rejected %s @ %s (that request can no longer enroll this device)\n", row.Name, row.TargetURL)
+			fmt.Fprintf(cmd.OutOrStdout(), "rejected %s @ %s (that request can no longer enroll this device)\n", clientops.StripC0C1(row.Name), clientops.StripC0C1(row.TargetURL))
 			return nil
 		},
 	}

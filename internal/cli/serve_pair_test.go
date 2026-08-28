@@ -111,3 +111,31 @@ func TestServePair_ResolveAndReject(t *testing.T) {
 		t.Fatalf("rejected row must leave ls:\n%s", ls)
 	}
 }
+
+// TestServePairLs_StripsControlChars (终审修复 Important-2 金样): pending 行的
+// name/target_url 是未认证输入 —— ls 与 approve 的输出行必须剥净 C0/C1,终端
+// 永远收不到 ESC/CR 字节(剥离后可印正文仍可见)。
+func TestServePairLs_StripsControlChars(t *testing.T) {
+	path, mk := withCliStoreEnv(t)
+	runCli(t, "profiles", "add", "team-a")
+	row := seedPendingPairing(t, path, mk, "evil\x1b[2Jdev", "https://127.0.0.1:7878/\x1b]0;pwn\x07")
+
+	ls := runCli(t, "serve", "pair", "ls")
+	for _, bad := range []string{"\x1b", "\x07", "\r", "\n\n"} {
+		if strings.Contains(ls, bad) {
+			t.Fatalf("serve pair ls leaked control byte %q:\n%q", bad, ls)
+		}
+	}
+	if !strings.Contains(ls, "evil[2Jdev") {
+		t.Fatalf("ls must still show the stripped name:\n%q", ls)
+	}
+
+	// approve 输出行同样剥净(name 按原样匹配不到 → 走 idHex;127.0.0.1 是
+	// foreign 行,需要 --allow-foreign-url)。
+	out := runCli(t, "serve", "pair", "approve", hex.EncodeToString(row.ID), "--profile", "team-a", "--allow-foreign-url")
+	for _, bad := range []string{"\x1b", "\x07"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("approve output leaked control byte %q:\n%q", bad, out)
+		}
+	}
+}

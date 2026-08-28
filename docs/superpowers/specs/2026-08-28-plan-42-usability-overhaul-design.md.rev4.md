@@ -66,6 +66,7 @@
 - `K_master = HKDF-SHA256(ikm = X25519(client_priv, server_pub), salt = T, info = "sshmgr-pair-v2", L = 64)`；`K_ack = K_master[0:32]`；`K_creds = K_master[32:64]`。两键物理分离。
 - **SAS 推导（rev4：绑定 DH 结果，owner 拍板全包之一）**：`R = SHA256("sshmgr-sas-v2" ‖ transcript ‖ K_master)`；32-bit 大端块自左扫描，首个 `< 4,294,000,000` 的 v → `sas = "%06d" % (v % 1_000_000)`；8 块全拒 → `R₁ = SHA256(R ‖ "again")` 递推。**注记（诚实声明）**：此绑定消除「transcript 可见即可算 SAS」的弱性，但对**双端换钥的离线研磨者**（其为两条 DH 腿的参与方，双侧 K_master 均可算）**不独立构成防护**——防研磨的实际防线 = §3.2 TOFU 收紧（默认拒绝无 pin 配对）+ §3.3-3 机械地址校验。
 - **三件套双屏显示（冻结）**：两侧各显示同一行：`<name> @ <target_url> SAS <6位>`。
+  > 勘误（2026-08-28 实施裁决）：批准界面为独立进程、无法计算 SAS（ECDH 私钥仅在 serve 进程内存）——实际形态 = client 屏显示三件套全文，批准界面显示 name@target_url 两件并提示「对照 client 屏 SAS」；批2 Web UI 同此。
 
 **流程**：
 

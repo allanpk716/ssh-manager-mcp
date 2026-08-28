@@ -215,3 +215,37 @@ func TestPairingPage_RejectAndCASMiss(t *testing.T) {
 		t.Fatalf("second reject must surface the CAS miss, got %T (%v)", msg, msg)
 	}
 }
+
+// TestPairingRender_StripsControlChars (终审修复 Important-2): pending 行的
+// name/target_url/profile_hint 是未认证输入,列表行渲染前必须剥净 C0/C1 ——
+// ESC 清屏序列、CR、LF 不得出现在任何渲染面上(剥离不吞可印正文)。
+func TestPairingRender_StripsControlChars(t *testing.T) {
+	row := store.PendingPairing{
+		ID:             bytes.Repeat([]byte{9}, 32),
+		Name:           "evil\x1b[2Jdev",
+		TargetURL:      "https://10.0.0.5:7878/\rX",
+		ProfileHint:    "hint]\x1b",
+		State:          "pending",
+		SourceIP:       "192.0.2.9",
+		EnrollDeadline: time.Now().Add(10 * time.Minute).Unix(),
+	}
+	for label, got := range map[string]string{
+		"title": pairingItem{p: row}.Title(),
+		"desc":  pairingRowDesc(row, time.Now().Unix()),
+	} {
+		for _, bad := range []string{"\x1b", "\r", "\n", "\t"} {
+			if strings.Contains(got, bad) {
+				t.Fatalf("%s rendered a raw control byte %q:\n%q", label, bad, got)
+			}
+		}
+	}
+	// 剥离不吞正文:desc 行可见剥净后的 target 与 hint;name 走 Title。
+	d := pairingRowDesc(row, time.Now().Unix())
+	if !strings.Contains(d, "https://10.0.0.5:7878/X") || !strings.Contains(d, "hint:hint]") {
+		t.Fatalf("stripped target/hint must stay visible in the row:\n%q", d)
+	}
+	title := pairingItem{p: row}.Title()
+	if title != "evil[2Jdev" {
+		t.Fatalf("title = %q, want the stripped name", title)
+	}
+}

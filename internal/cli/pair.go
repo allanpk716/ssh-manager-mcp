@@ -102,12 +102,12 @@ func pickDiscovered(cmd *cobra.Command) (clientops.Discovered, error) {
 	}
 	if len(found) == 1 {
 		d := found[0]
-		fmt.Fprintf(out, "found %s @ %s:%d\n", d.Name, d.Addr, d.TCPPort)
+		fmt.Fprintf(out, "found %s @ %s:%d\n", clientops.StripC0C1(d.Name), d.Addr, d.TCPPort)
 		return d, nil
 	}
 	fmt.Fprintf(out, "found %d brokers:\n", len(found))
 	for i, d := range found {
-		fmt.Fprintf(out, "  %d. %s @ %s:%d  spki %s…\n", i+1, d.Name, d.Addr, d.TCPPort, clipSPKI(d.SPKI))
+		fmt.Fprintf(out, "  %d. %s @ %s:%d  spki %s…\n", i+1, clientops.StripC0C1(d.Name), d.Addr, d.TCPPort, clipSPKI(d.SPKI))
 	}
 	fmt.Fprintf(out, "select [1-%d]: ", len(found))
 	line, _ := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -38,9 +39,9 @@ const (
 // Discovered is one unique serve found on the network. Addr is the offer's
 // real SOURCE IP (bare host, no port) read via ReadFromUDP on the unconnected
 // socket — the client dials <Addr>:<TCPPort>; SPKI is the pin to verify the
-// serve cert against (never connect on an empty pin); TCPPort is the serve's
-// advertised TCP port from the offer's frozen `tcp` field (0/absent → the
-// frozen 7878, mirroring the serve default).
+// serve cert against (never connect on an empty pin); TCPPort is the offer's
+// frozen `tcp` field, which parseOffer hard-validates (an offer without a
+// well-formed name/spki/tcp is DROPPED, never defaulted).
 type Discovered struct {
 	Name    string
 	Addr    string
@@ -161,7 +162,8 @@ func ipv4Broadcast(ip4 net.IP, mask net.IPMask) net.IP {
 // ReadFromUDP, which is what makes the offer's real source address (and
 // therefore cross-host discovery) observable. Unparseable targets and
 // per-target write failures are skipped, not errors; only offers whose type
-// is "offer" and that carry the frozen magic are accepted.
+// is "offer", that carry the frozen magic, AND that pass the three-field
+// validation (parseOffer) are accepted — everything else is silently dropped.
 func Discover(targets []string, timeout time.Duration) ([]Discovered, error) {
 	return discoverOnPort(targets, discoveryUDPPort, timeout)
 }
@@ -219,9 +221,23 @@ func discoverOnPort(targets []string, port int, timeout time.Duration) ([]Discov
 	return out, nil
 }
 
-// parseOffer applies the frozen acceptance rule (magic prefix + JSON whose
-// type is "offer") and surfaces the frozen `tcp` field (absent/0 → the frozen
-// default port — an old serve that predates the field is still dialable).
+// discoveryFieldRe holds the rev4 §3.2 field sanitization (frozen, codex#4): the
+// offer is UNAUTHENTICATED input that reaches the picker UI, so every field is
+// re-validated client-side and any violation drops the whole offer — no 7878
+// fallback, no best-effort repair. name reuses the serve-side display-name
+// whitelist (same regex as internal/mcpserver/discovery.go's sanitizeDiscoveryName
+// and the §3.3-1 hint pattern — a LOCAL COPY, clientops must not import mcpserver).
+var (
+	discoveryNameRe = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,31}$`)
+	discoverySPKIRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+)
+
+// parseOffer applies the frozen acceptance rule (magic prefix + JSON whose type
+// is "offer") plus the rev4 §3.2 three-field validation: name must match the
+// display-name whitelist, spki must be a full "sha256:<64 lowercase hex>" pin,
+// and tcp must be in [1,65535]. ANY violation drops the offer (ok=false) — the
+// zero/absent-tcp→7878 fallback is gone: a serve that predates the field is not
+// dialable on guesswork, it simply doesn't answer with a valid offer.
 func parseOffer(data []byte) (Discovered, bool) {
 	if !bytes.HasPrefix(data, []byte(discoveryMagic)) {
 		return Discovered{}, false
@@ -233,9 +249,10 @@ func parseOffer(data []byte) (Discovered, bool) {
 	if o.T != "offer" {
 		return Discovered{}, false
 	}
-	tcp := o.TCP
-	if tcp <= 0 {
-		tcp = discoveryUDPPort
+	if !discoveryNameRe.MatchString(o.Name) ||
+		!discoverySPKIRe.MatchString(o.SPKI) ||
+		o.TCP < 1 || o.TCP > 65535 {
+		return Discovered{}, false // 畸形字段 = 丢弃整个 offer,绝不兜底
 	}
-	return Discovered{Name: o.Name, SPKI: o.SPKI, TCPPort: tcp}, true
+	return Discovered{Name: o.Name, SPKI: o.SPKI, TCPPort: o.TCP}, true
 }

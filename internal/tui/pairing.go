@@ -22,6 +22,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -67,23 +68,25 @@ func resolvePairingDefault(profiles []*models.Profile, want string) string {
 type pairingItem struct{ p store.PendingPairing }
 
 func (i pairingItem) FilterValue() string {
-	return i.p.Name + " " + i.p.TargetURL + " " + i.p.ProfileHint
+	return stripRow(i.p.Name + " " + i.p.TargetURL + " " + i.p.ProfileHint)
 }
-func (i pairingItem) Title() string { return i.p.Name }
+func (i pairingItem) Title() string { return stripRow(i.p.Name) }
 
 // Description is the row's one-line summary — the approval surface's two of
 // the three-piece line (name is the Title) + IP + remaining window + flags.
 func (i pairingItem) Description() string { return pairingRowDesc(i.p, time.Now().Unix()) }
 
 // pairingRowDesc renders one row's flags/summary line (test-visible seam).
+// name/target_url/profile_hint are UNAUTHENTICATED enroll input — every render
+// strips C0/C1 (spec rev4 codex#4) so an ESC byte can't steer the terminal.
 func pairingRowDesc(p store.PendingPairing, now int64) string {
 	parts := []string{
-		"@ " + p.TargetURL,
+		"@ " + stripRow(p.TargetURL),
 		"来自 " + orDash(p.SourceIP),
 		pairingWindowLabel(p, now),
 	}
 	if h := strings.TrimSpace(p.ProfileHint); h != "" {
-		parts = append(parts, "hint:"+h)
+		parts = append(parts, "hint:"+stripRow(h))
 	}
 	if p.ReplaceInactive {
 		parts = append(parts, "⚠将替换未激活码")
@@ -146,16 +149,21 @@ func (p *pairingPage) Detail() string {
 		marks = "⚠目标≠本机"
 	}
 	return strings.Join([]string{
-		"名称    " + row.Name,
+		"名称    " + stripRow(row.Name),
 		"ID      " + pairingIDHex(*row),
-		"目标    " + row.TargetURL,
+		"目标    " + stripRow(row.TargetURL),
 		"来源IP  " + orDash(row.SourceIP),
-		"Hint    " + orDash(strings.TrimSpace(row.ProfileHint)),
+		"Hint    " + orDash(stripRow(strings.TrimSpace(row.ProfileHint))),
 		"窗口    " + pairingWindowLabel(*row, time.Now().Unix()),
 		"标记    " + marks,
 		"SAS     见 client 屏幕(对照本行名称/地址一致后批准)",
 	}, "\n")
 }
+
+// stripRow is the pairing surface's render guard: C0/C1 strip on every
+// unauthenticated field before it touches the screen (clientops is the shared
+// package tui may import — see internal/clientops/sanitize.go).
+func stripRow(s string) string { return clientops.StripC0C1(s) }
 
 func (p *pairingPage) current() *store.PendingPairing {
 	vis := p.list.VisibleItems()
@@ -205,7 +213,7 @@ func validatePairingOverride(override string, foreign bool) error {
 func newPairingApproveForm(p *store.PendingPairing, profiles []*models.Profile, ap *pairingApproval) *huh.Form {
 	foreign := mcpserver.ForeignTarget(p.TargetURL)
 	desc := fmt.Sprintf("%s @ %s  ·  来源 %s\nSAS 码见 client 屏幕——与本行名称/地址对照一致后再批准。",
-		p.Name, p.TargetURL, orDash(p.SourceIP))
+		stripRow(p.Name), stripRow(p.TargetURL), orDash(p.SourceIP))
 	var fields []huh.Field
 	if foreign {
 		desc = "⚠ 配对声明目标 ≠ 本机地址(疑似中继/假 discovery/错误网络)。\n\n" + desc
@@ -241,7 +249,7 @@ func submitPairingApproval(st *store.Store, p *store.PendingPairing, ap *pairing
 			return "", errors.New("批准未生效——该配对已过期或已被处理(CAS 未命中),刷新后重试")
 		}
 		return fmt.Sprintf("已批准 %s @ %s (对照 client 屏 SAS 后批准)——client 端 120 秒内完成配对",
-			p.Name, p.TargetURL), nil
+			stripRow(p.Name), stripRow(p.TargetURL)), nil
 	})
 }
 
@@ -258,6 +266,6 @@ func submitPairingReject(st *store.Store, p *store.PendingPairing) tea.Cmd {
 		if !ok {
 			return "", errors.New("拒绝未生效——该配对已过期或已被处理(CAS 未命中),刷新后重试")
 		}
-		return fmt.Sprintf("已拒绝 %s 的配对请求(该设备无法凭本次请求入网)", p.Name), nil
+		return fmt.Sprintf("已拒绝 %s 的配对请求(该设备无法凭本次请求入网)", stripRow(p.Name)), nil
 	})
 }
