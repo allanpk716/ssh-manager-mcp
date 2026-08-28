@@ -23,16 +23,18 @@
 
 | 文档 | 解决什么 |
 |---|---|
+| [deployment-modes.md](./deployment-modes.md) | **部署形态全景（选型总览）**：单机 / 多机桥姿态 + 管理面——一共几种部署方案、各自优劣、怎么选。第一次选部署方式先看这篇。 |
 | [getting-started.md](./getting-started.md) | **从零到跑通**：装好 → 解锁 → 加第一台服务器 → 建 profile + project → 配进 Claude Code → 让 agent 跑第一个任务。第一次用先看这篇。 |
 | [managing-servers.md](./managing-servers.md) | **新增 / 编辑 / 维护 / 删除服务器**：`servers add` / `edit` / `ls` / `rm`、`import` 批量导入、`gc` 的全部用法，含换密钥、sudo、tags、备注（description）。 |
-| [agent-access.md](./agent-access.md) | **授权 AI agent**：project token 怎么生成、`.mcp.json` 怎么配进 Claude Code / Cursor、token 轮换 / 暂停 / 吊销的断连语义（四层）、多 agent 隔离、紧急处置。 |
+| [agent-access.md](./agent-access.md) | **授权 AI agent**：project token 怎么生成、`.mcp.json` 怎么配进 Claude Code / Cursor、token 轮换 / 暂停 / 吊销的断连语义、多 agent 隔离、紧急处置。 |
 | [scenarios.md](./scenarios.md) | **应用场景与示例**：GPU 巡检装包、读 root-only 日志、上传部署、端口转发连数据库、拉日志排查、多环境隔离、token 泄露处置、owner 自己直连。 |
-| [multi-machine.md](./multi-machine.md) | **多机共享（serve 模式 · 可选）+ 离线只读缓存（Plan 12）**：多台机器共用一份服务器清单——一台 VLAN 服务器常驻 broker、其他机器的 agent 连远程；或每台工作机持本地加密只读缓存，断网时兜底。架构 / 配置 / 场景 / 限制（含后续路线）。 |
+| [multi-machine.md](./multi-machine.md) | **多机桥姿态 + 离线只读缓存（Plan 12）+ 配对入网（Plan 42）**：多台机器共用一份服务器清单——一台 VLAN 服务器常驻权威 vault，工作机 `ssh-manager pair` 一条龙入网（UDP 发现 → SAS 批准 → 凭据下发）、agent 用本地只读缓存干活（只读 + 执行）。架构 / 配置 / 多实例 / runbook。 |
+| [broker-host-agent.md](./broker-host-agent.md) | **在 broker（serve）主机上也跑 agent**：零距离 client 走桥（pair 入网 / 手工路径）+ 应急附录（stdio 直开 vault，不推荐）。 |
 | [backup-restore.md](./backup-restore.md) | **备份与迁移（export / import）**：把整个 vault 导出成口令加密的便携文件（跨机、可恢复）——备份 / 迁移 / 灾难恢复；安全模型（KeePass 式）、限制、与复制 store.db 的对比。 |
-| [tui-single-machine.md](./tui-single-machine.md) | **单机 TUI 教程**（全键盘点选，不想记命令）：首跑向导走查、四页签参考、典型任务与排错。 |
-| [tui-multi-machine.md](./tui-multi-machine.md) | **联机 TUI 教程**（server 侧 + 工作机 client 面板）：server 侧双密钥屏、client 双形态 finish 屏、典型任务。 |
-| [agent-tools.md](./agent-tools.md) | **给 AI agent 的工具手册**（可贴进 CLAUDE.md 的规则模板在内）：铁律、逐工具语义、错误对照、三态环境与行为依据表。 |
-| [compat-matrix.md](./compat-matrix.md) | **client↔serve 版本兼容矩阵**：已验证组合 / 破坏性变更 / 升级顺序铁律。升级任何一端之前先看这篇。 |
+| [tui-single-machine.md](./tui-single-machine.md) | **单机 TUI 教程**（全键盘点选，不想记命令）：首跑向导走查、页签参考、典型任务与排错。 |
+| [tui-multi-machine.md](./tui-multi-machine.md) | **联机 TUI 教程**（server 侧主控台 + 工作机 client 面板）：Pairing 批准页、实例切换、典型任务。 |
+| [agent-tools.md](./agent-tools.md) | **给 AI agent 的工具手册**（可贴进 CLAUDE.md 的规则模板在内）：铁律、逐工具语义、错误对照、部署形态与吊销三路径、行为依据表。 |
+| [compat-matrix.md](./compat-matrix.md) | **client↔serve 版本兼容矩阵**：已验证组合 / 破坏性变更 / 升级顺序铁律（含 Plan 42 批1 三步迁移）。升级任何一端之前先看这篇。 |
 | [backlog.md](./backlog.md) | **欠账清单（P0/P1 已裁决待开工 + P2 已裁决未排期 + 不做留痕）**：2026-08-21 grilling 缺口分析排期——P0 三项（host 掩码 / 后台任务三件套 / upload_content）、P1 三项（离线快照失效 / tunnels 硬化（吸收原 #1/#2/#4）/ audit CLI），P2 六项工程债（doctor / DACL / flake / TUI）保持未排期，文末附明确不做清单。后续 plan 的取货架。 |
 
 ---

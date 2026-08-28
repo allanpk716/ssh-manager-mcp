@@ -29,7 +29,7 @@
 
 `serve`↔`cache pull` 同步链路的传输加密**与 L1+ at-rest 模型是两套独立的密码学**：
 
-- **默认强制 TLS**：`serve` 无 `--tls-cert` 时首次启动**自签**一张 ed25519 证书（落 `serve-cert.pem`/`serve-key.pem`，ACL 与 `master.key.plain` 同级），从此监听 TLS。`/snapshot`（按设备绑定 profile 裁剪的凭据快照——Plan 39 前为整库 dump）与 MCP JSON-RPC 全程密文 + 前向保密。快照裁剪的服务器行边界不含**共享凭据**语义：未授权服务器与已授权服务器共用同一凭据时该凭据仍随快照下发（已授权服务器需要它）——凭据级隔离是 owner 侧不跨边界共享凭据的建模责任（multi-machine.md 限制节）。
+- **默认强制 TLS**：`serve` 无 `--tls-cert` 时首次启动**自签**一张 ed25519 证书（落 `serve-cert.pem`/`serve-key.pem`，ACL 与 `master.key.plain` 同级），从此监听 TLS。`/snapshot`（按设备绑定 profile 裁剪的凭据快照——Plan 39 前为整库 dump）全程密文 + 前向保密。（Plan 42 批1 起 serve 不再承载任何 MCP-over-HTTP 面——HTTP 上唯一敏感路由就是 `/snapshot`，见 §1.2 pairing 节。）快照裁剪的服务器行边界不含**共享凭据**语义：未授权服务器与已授权服务器共用同一凭据时该凭据仍随快照下发（已授权服务器需要它）——凭据级隔离是 owner 侧不跨边界共享凭据的建模责任（multi-machine.md 限制节）。
 - **无 pin 默认 hard-fail（修订，xcheck 共识 C）**：客户端没拿到指纹（env/`--pin`/token 内嵌三处都无）→ **默认拒连**（不再静默明文回退 —— 那是 fail-open 隐患）。明文拉取需显式 `--allow-plaintext` opt-in（仅调试/连旧明文 serve）。有 pin 但 URL 非 https / pin 格式非法 也 hard-fail（防 pin 静默失效 / 防打错别字降级）。serve 证书误删（marker 仍在）→ serve 拒启动（防静默重生新 key 致全客户端 bricked）。
 - **指纹钉死（SPKI TOFU）**：客户端（`cache pull`）钉死 serve 证书公钥的 SPKI 指纹（`sha256:...`）——`InsecureSkipVerify: true` 跳过对自签证书不可能的 CA 链验证 + `VerifyConnection` 回调做**常量时间** SPKI 比对作为唯一信任锚（HPKP/Tailscale 模式）。**首次连接即校验，零 MITM 窗口**（指纹在 enroll 时随设备码交付，非首次盲连）。
 - **信任根**：信任来自"enroll 时人工/流程交接的指纹"，不来自任何 CA。serve 重生 key（重装/迁移）→ 用 `serve cert-info` 拿新指纹重新交接。
@@ -38,6 +38,27 @@
 - **多实例多凭据集落盘（Plan 40，v0.11 起登记）**：同一台工作机 N 个 cache 实例 = **N 份（各自 profile 的）凭据集**同时落盘（`instances/<name>/` 各一套 cache.bin + per-instance DEK，布局见 [multi-machine.md「多实例」](./multi-machine.md#多实例同机多-agent-plan-40-第一批)）。缓解与边界如实：**ACL 硬化（0700/HardenACL）降低材料被获取的概率，不消除获取**；**`MAX_OFFLINE` 约束的是正常 loader 的离线加载窗口，不是密码学时效**——cache.bin（AES-256-GCM）的密钥 DEK 同机保存且无轮换，同时获得 bin 与 DEK 的攻击者可**无限期解密任何时点的快照**，多实例使该物理暴露面 ×N。**每实例独立 DEK** = 单实例材料（目录 + DEK）泄露不连坐他实例的解密。失窃的实际响应 = 吊销设备码（切断增量 + 回连销毁本机副本）+ **轮换受影响 profile 的全部服务器凭据**——吊销不消除已发生的外泄（§3.6）。
 
 详见 [multi-machine.md 的自动 TLS 迁移 Runbook](./multi-machine.md#自动-tls-迁移-runbook从旧版明文--外部证书升级) 与设计 spec `docs/superpowers/specs/2026-08-13-serve-auto-tls-fingerprint-design.md`。
+
+### 1.2 发现与配对面（Plan 42 批1 新增网络面）
+
+Plan 42 批1 给 serve 新增两个网络面：**UDP 7878 discovery**（默认开，可关）与 **`/pair/*` SAS 配对**（未认证 HTTP 端点，限速 + 人闸 + 开关）。②a（MCP-over-HTTP）**同批移除**——HTTP 上不再有任何持 project token 的远程面。本节登记这两个面的威胁分析（spec rev4 §3.2–§3.4 为权威出处）。
+
+**discovery：零敏感面。** serve 监听 udp/7878（listener 常开、逐包评估开关），对 probe **只单播回请求源**一条 offer `{name, spki, tcp}`——**永不主动广播**。offer 三字段全部非敏感（实例名、证书公钥指纹、TCP 端口）且经消毒白名单（name 正则、tcp ∈ [1,65535]、spki 格式；违者不发/兜底；client 侧对畸形 offer 直接丢弃，展示面剥离控制字符）。泄露面 = "VLAN 内存在一台 ssh-manager serve 及其名字"——LAN 可见性（Q1）接受。魔数/JSON 畸形静默丢弃。开关三态（显式 env > flag > store > 缺省 on），关 = 逐包不答。
+
+**配对协议与 SAS 绑定（诚实版）。** transcript 绑定双方临时 X25519 公钥、nonce、实例名与 `target_url`；SAS = 从 transcript 与密钥材料派生的 6 位数字，client 端 enroll 应答后即屏显 `<name> @ <target_url> SAS xxxxxx`。**研磨诚实声明**：SAS 绑定消除了"看到 transcript 即可算 SAS"的弱性，但对**双端换钥的离线研磨者**（其本身是两条 DH 腿的参与方、双侧密钥材料均可算，离线 ~10⁶ 哈希即可碰撞出同款 SAS）**不独立构成防护**。防研磨的实际防线是下面两条：**pin 分级 + 机械地址校验**——
+
+- **pin 已知通道（主路径：discovery offer 自带 / `--pin` 显式）**：pair 全部 HTTP 走 `pinningTransport(pin)`——TLS 层 SPKI 常时硬校验，**握手期拒断，凭据不上行**。换钥型 MITM 在发 enroll 之前就死了。
+- **TOFU 逃生门（`--url` 且无 `--pin`）**：**默认拒绝**；显式 `--allow-tofu` 才接受无锚通道——**该路径无完整 MITM 防护**（SAS 可被双端换钥者离线研磨、且无 TLS 锚），**R12 登记**为逃生门残余：默认拒绝、显式 opt-in、仅限受控环境；主路径不受影响。
+- **机械地址校验（serve 侧，自动）**：serve 核对 client 声明的 `target_url` 的 host 是否 ∈ 本机地址集合（`LocalNonLoopbackIPs()` + hostname）——不符（假 discovery、研磨型换钥 MITM、错误网络）→ 批准界面大字 ⚠「配对声明目标 ≠ 本机地址」+ **拒绝常规批准**，仅显式覆盖可用（CLI `serve pair approve --allow-foreign-url`；TUI 键入大写 `OVERRIDE`）。**不依赖 owner 记 IP**——攻击者要让 client 物理连到自己，target_url 必然暴露非本机地址。这是防 SAS 研磨/假 discovery 的**机械化杀招**。
+- **人闸**：批准动作 + client 屏 SAS 与批准行 name@url 对照（批准面不显示 SAS——它派生自 serve 进程内存密钥态，批准进程物理不可算，也不伪造）。限速（enroll 5/min、poll 30/min、finish 5/min per-IP，env 可调）+ pending 配额（per-IP 2 / 全局 32）挡穷举；双窗口（enroll→批准 10min、批准→finish 120s）以**事务内时间谓词**强制，过期未清理的行不可批准/finish；一次性设备码 + delivered 重放上限（10 次）挡重放。
+
+**透明中继与 R10（owner 拍板接受）。** 透明中继转发配对流量时 SAS 一致、双屏对照通过——防线 = target_url 双屏比对 + 机械校验（中继者地址 ≠ 本机地址 → ⚠）。**凭据不泄**的论证：pin 已知路径上 TLS 在握手期以 SPKI 硬校验拒断任何换钥者（中继者只能转发密文，读不了 TLS 内文）；finish 下发的凭据信封本身是 AES-256-GCM（键派生自 DH，中继者非参与方则不可得）。残余 = **位置攻击**（DoS、url 钉死、流量分析——知道配对在发生）——**R10 接受**。
+
+**吊销三路径（pair 下发凭据的失效语义）。** owner 侧吊销后 client 侧失效路径取决于吊销对象与在线状态（§3.6 与 multi-machine.md「吊销」节的展开）：① project token 吊销、设备码仍活 → 下次保鲜（≤30min）新快照已无该 project，本地 spawn 闸拒绝；② 设备码吊销 → 下次 pull pinned 401 ⇒ quarantine（§3.6 四件销毁）；③ 永离线设备 → 旧快照 + 本地 token 的窗口 = **`max_offline` 硬上限**（pair 下发默认 24h，`LoadCacheSnapshot` 到期拒载）——不是 30 分钟；窗口内失窃的最终兜底仍是轮换服务器凭据。
+
+**审计（同事务 + 脱敏白名单）。** pairing 全事件（enroll/批准/拒绝/finish/过期）与状态变更**同 SQLite 事务**落 `audit_log`——mint 中途失败整体回滚、零孤儿 audit 行。字段走**白名单**：事件类型、实例名、profile 名、target 非敏感 ID 与 action 摘要（如 `rotate`/`create`/`delete`，不含值）、来源 IP、时间戳、结果码；**永不落**：凭据值 / token / 设备码 / pin / SAS / 密文 / ack / sig（Web 访问日志同纪律，批2 生效）。
+
+**批1 边界（如实）**：批1 无 Web 面——`/ui`、admin 认证、浏览器端证书锚定问题（R5）随批2 落地时再补 Web 节。
 
 ---
 
@@ -101,7 +122,7 @@ L1+ 模型下**未消除**的威胁：
 威胁 (b) 类（agent 被劫持后开隧道打内网）在隧道面上现在有三道约束（[Plan 35](./superpowers/specs/2026-08-25-plan-35-tunnels-hardening-design.md.rev4.md) 起；此前 revoke 后已建立的隧道继续转发、且无 owner 急停——本节即该缺口的闭合记录）：
 
 - **急停已存在**：revoke/disable 级联 ≤~15s（一个控制 tick）拆隧道；owner `tunnels kill <id>` / `tunnels kill --project` 随时拆；store 持续故障时降级为 ≤~2min **有界关闭**（不存在「无限期暴露」）；进程级 hang 不在 DB kill 保障域——应急 = 重启/杀进程（隧道随进程死）。
-- **非环回 bind 必须白名单预批**：`forward_port` 的 `listen_host` 缺省环回；非环回 IP 需 owner `serve bind add` 预批（IP 字面量 only——hostname / 网段 / 通配一律拒，gate 读失败 fail-closed 拒）；撤回后存量 ≤~15s 收缩——被劫持 agent 无法自行把隧道 bind 到 VLAN 面扩大攻击面。
+- **非环回 bind 恒拒（Plan 42 批1 后口径）**：`forward_port` 的 `listen_host` 缺省环回；非环回 IP 一律 fail-closed 拒——②a 移除后白名单不再有管理入口（`serve bind` 子命令退役）、恒为空 = 环回 only（gate 读失败同样 fail-closed 拒）——被劫持 agent 无法把隧道 bind 到 VLAN 面扩大攻击面（比白名单预批更强的收口）。
 - **离线 cache 客户端的隧道不在 kill/ls 域**：白名单表不进离线快照（离线恒 loopback-only，机制性 fail-closed）、隧道不进 `tunnel_registry`——其拆法 = §3.6 的回连销毁 + 本机杀进程。
 
 ---

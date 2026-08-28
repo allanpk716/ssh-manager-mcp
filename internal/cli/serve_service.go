@@ -89,10 +89,13 @@ import (
 const serveServiceName = "ssh-manager-serve"
 
 // serveDisplayName / serveDescription are the human-friendly metadata written
-// into the Windows service / systemd unit / launchd plist.
+// into the Windows service / systemd unit / launchd plist. Post-Plan-42-批1 the
+// serve is NOT an MCP-over-HTTP server (that surface was removed) — the
+// description names what it actually is: the authoritative vault serving
+// /snapshot + /pair for the multi-machine bridge posture.
 const (
 	serveDisplayName = "ssh-manager serve"
-	serveDescription = "ssh-manager-mcp MCP broker — authenticated HTTP MCP server for remote (multi-machine) agents"
+	serveDescription = "ssh-manager-mcp authoritative vault — /snapshot cache pull + /pair SAS pairing for the multi-machine bridge posture (no remote MCP surface)"
 )
 
 // program implements service.Interface. Start must return quickly, so it

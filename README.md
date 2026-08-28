@@ -21,15 +21,16 @@ Single Go binary. Cross-platform (Windows / Linux / macOS). No daemon — the br
 
 | 我想要…… | 看这篇 |
 |---|---|
+| 一屏看全部署形态（单机 / 多机桥姿态 + 管理面）怎么选 | [`docs/deployment-modes.md`](docs/deployment-modes.md) |
 | 从零到跑通（安装 / 解锁 / 第一台服务器 / 授权 Claude Code） | [`docs/getting-started.md`](docs/getting-started.md) |
 | 新增 / 编辑 / 维护 / 删除服务器 | [`docs/managing-servers.md`](docs/managing-servers.md) |
 | 授权 Claude Code / Cursor / 其他 agent；token 轮换与吊销 | [`docs/agent-access.md`](docs/agent-access.md) |
-| 多台机器共用一份 vault（serve 模式）/ 自动 TLS / 离线只读缓存兜底 | [`docs/multi-machine.md`](docs/multi-machine.md) |
-| **在 broker（serve）主机上也跑 agent**（本机接入 SSH MCP 的三种姿势） | [`docs/broker-host-agent.md`](docs/broker-host-agent.md) |
+| 多台机器共用一份 vault（`pair` 一条龙入网 + 离线只读缓存） | [`docs/multi-machine.md`](docs/multi-machine.md) |
+| **在 broker（serve）主机上也跑 agent**（零距离 client 走桥 + 应急附录） | [`docs/broker-host-agent.md`](docs/broker-host-agent.md) |
 | 应用场景与示例（GPU 巡检、读 root 日志、部署、端口转发……） | [`docs/scenarios.md`](docs/scenarios.md) |
 | 备份 / 迁移整个 vault（export / import） | [`docs/backup-restore.md`](docs/backup-restore.md) |
 | **单机 TUI 教程**（全键盘点选，不想记命令） | [`docs/tui-single-machine.md`](docs/tui-single-machine.md) |
-| **联机 TUI 教程**（server 侧 + 工作机 client 面板） | [`docs/tui-multi-machine.md`](docs/tui-multi-machine.md) |
+| **联机 TUI 教程**（server 侧主控台 + client 面板 + Pairing 批准页） | [`docs/tui-multi-machine.md`](docs/tui-multi-machine.md) |
 | **给 AI agent 的工具手册**（可贴进 CLAUDE.md 的规则模板在内） | [`docs/agent-tools.md`](docs/agent-tools.md) |
 
 ---
@@ -46,7 +47,7 @@ The MCP server exposes these tools — **ssh-functional-equivalent for operating
 | `upload_file` | `scp -r . host:path` | Upload a local file **or directory** (recursive) to the server. |
 | `upload_content` | — | Write inline content (a string the agent holds) to a remote file — the **cross-machine** upload path (`upload_file` reads the broker's own filesystem; a remote-serve agent pushes its own configs/scripts here). `text` / `base64` (byte-exact) encodings, 8 MiB decoded cap, parent dirs auto-created, existing file overwritten. |
 | `exec_context` | — | Capture the exec channel's TRUE context in one round: uid/gid/groups, tty, uid_map, LSM label, SSH provenance, process tree — call it BEFORE hypothesizing about identities or "mystery permission denied" (e.g. when sudo returns uid=0 yet a path stays EACCES). |
-| `forward_port` | `ssh -L` | Open a local port forwarding to a remote service — returns `<listen_host>:<port>` (default `127.0.0.1`; a non-loopback listen host needs the owner's `serve bind` whitelist) for the agent to use (e.g. `curl`). |
+| `forward_port` | `ssh -L` | Open a local port forwarding to a remote service — returns `<listen_host>:<port>` (default `127.0.0.1`; non-loopback listen hosts are rejected fail-closed — multi-machine clients are loopback-only by design). |
 | `close_port` | — | Close a forward when done (idle tunnels auto-close after ~10 min of no traffic; the owner can emergency-kill any tunnel, and revoke/disable tears open tunnels down within ~15s). |
 | `exec_background` | — | Start a long-running command (builds, training, log tails) in the background and get a `task_id` immediately — 24h run cap, 32 tasks per project, records live only in the broker process (a broker restart loses them all). |
 | `exec_output` | — | Poll a background task's incremental output (absolute byte-offset cursors per channel, long-poll `wait_seconds`, text/base64 encoding — use base64 for GBK/non-UTF-8 logs). |
@@ -102,7 +103,7 @@ ssh-manager projects add my-agent --profile team-a
 
 Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the ten SSH tools, scoped to the `team-a` profile's servers.
 
-**Other commands:** `servers ls` / `servers rm`, `profiles ls`, `projects ls`, `gc` (find/delete orphan credential rows — dry-run by default), `lock`, `clear` (role teardown — wipes the machine back to first-run), `doctor` (side-effect-free local self-check — prints a PASS/WARN/FAIL report; exit `0` = no FAIL findings, `1` = at least one FAIL), `version`. Tunnel governance (owner, on the machine holding the vault): `serve bind add/rm/ls <ip>` (pre-approve non-loopback `forward_port` listen hosts — IP literals only; removal shrinks existing tunnels within ~15s) and `tunnels ls` / `tunnels kill <tunnel_id>` / `tunnels kill --project <name>` (emergency stop for live tunnels — teardown within one ~15s control tick; `kill` is surgical and does not revoke the token, `--project` only tears down what exists now — use `projects disable/revoke` to stop re-opening). Audit forensics (owner, on the machine holding the vault): `audit` reads the vault audit log, newest first (owner-only) — `--since 30m|7d|RFC3339|date`, `--server/--project <name|id>`, `--owner`, `--action/--status`, `--limit` (0 = all), `--json` for JSONL.
+**Other commands:** `servers ls` / `servers rm`, `profiles ls`, `projects ls`, `gc` (find/delete orphan credential rows — dry-run by default), `lock`, `clear` (role teardown — wipes the machine back to first-run), `doctor` (side-effect-free local self-check — prints a PASS/WARN/FAIL report; exit `0` = no FAIL findings, `1` = at least one FAIL), `version`, `pair` (multi-machine one-shot enrollment — LAN discovery → SAS pairing → credentials delivered; see "Multi-machine" below). Tunnel governance (owner, on the machine holding the vault): `tunnels ls` / `tunnels kill <tunnel_id>` / `tunnels kill --project <name>` (emergency stop for live tunnels — teardown within one ~15s control tick; `kill` is surgical and does not revoke the token, `--project` only tears down what exists now — use `projects disable/revoke` to stop re-opening). Audit forensics (owner, on the machine holding the vault): `audit` reads the vault audit log, newest first (owner-only) — `--since 30m|7d|RFC3339|date`, `--server/--project <name|id>`, `--owner`, `--action/--status`, `--limit` (0 = all), `--json` for JSONL.
 
 **Owner access** (you, not the agent) — full access to every server using the stored creds directly:
 ```bash
@@ -147,7 +148,7 @@ ssh-manager projects revoke  my-agent     # permanent (token rejected; hidden fr
 ssh-manager projects ls [--all]           # status column; --all includes revoked
 ```
 
-**Lifecycle:** `rotate` / `disable` / `enable` / `revoke` take effect **per request on a remote serve broker** (the next request is 401-rejected immediately), and **at the agent's next `mcp` spawn in stdio mode** (`VerifyToken` admits only `active` projects — a currently-running local session keeps access until Claude Code restarts its MCP child, by design). Already-open `forward_port` tunnels are torn down within ~15s of `disable`/`revoke` (one control tick — Plan 35; the owner also has the `tunnels kill` emergency stop and the `serve bind` listen-host whitelist). Offline caches: once a device code is revoked, the device's next pull (≤30min lazy cadence, pinned-401) **destroys its local cache in place** (Plan 34 — DEK + device code + snapshot + meta, quarantine trace left behind); a device that never comes back online can only be cut by rotating the server credentials themselves. Full breakdown: `docs/agent-access.md` 「断连语义（四层）」. `rotate` keeps the same project id + profile; only the token changes. `revoke` is a soft delete — the token is dead and the project is hidden from `ls`, but the audit row is kept. Every lifecycle action is written to the audit log.
+**Lifecycle:** `rotate` / `disable` / `enable` / `revoke` take effect **at the agent's next `mcp` spawn in stdio mode** (`VerifyToken` admits only `active` projects — a currently-running local session keeps access until Claude Code restarts its MCP child, by design); on multi-machine clients a revoked project disappears with the next snapshot refresh (≤30min) and a revoked device code triggers local cache destruction on the next pull (pinned-401 quarantine). Already-open `forward_port` tunnels are torn down within ~15s of `disable`/`revoke` (one control tick — Plan 35; the owner also has the `tunnels kill` emergency stop). Offline caches: once a device code is revoked, the device's next pull (≤30min lazy cadence, pinned-401) **destroys its local cache in place** (Plan 34 — DEK + device code + snapshot + meta, quarantine trace left behind); a device that never comes back online is cut by the `max_offline` hard cap (pair-issued default 24h) and can only be fully cut by rotating the server credentials themselves. Full breakdown: `docs/agent-access.md` 断连语义 + `docs/agent-tools.md` 吊销三路径. `rotate` keeps the same project id + profile; only the token changes. `revoke` is a soft delete — the token is dead and the project is hidden from `ls`, but the audit row is kept. Every lifecycle action is written to the audit log.
 
 **Back up / migrate the whole vault:** `ssh-manager export` / `import` — a portable, passphrase-encrypted file (backup / migration / disaster recovery). Full guide (中文): [`docs/backup-restore.md`](docs/backup-restore.md).
 
@@ -155,9 +156,9 @@ ssh-manager projects ls [--all]           # status column; --all includes revoke
 
 ## TUI 主控台（`ssh-manager tui`）
 
-一条命令的可视化管理台：在 **broker 机器**上管服务器 / profiles / projects / 设备码（替代手敲 CLI），在 **client 工作机**上可视化配置连接 + 手动同步缓存。同一个二进制，按本机状态自动选边。各页签 / 设备码 / token 谁是谁的**概念模型图解**（仓库隐喻，中文）：[`docs/concepts.md`](docs/concepts.md)。
+一条命令的可视化管理台：在 **broker 机器**上管服务器 / profiles / projects / 设备码 / **配对批准**（Pairing 页，替代手敲 CLI），在 **client 工作机**上查看缓存状态 / 切换实例 / 手动同步。同一个二进制，按本机状态自动选边。各页签 / 设备码 / token 谁是谁的**概念模型图解**（仓库隐喻，中文）：[`docs/concepts.md`](docs/concepts.md)。
 
-空机器第一次运行 `tui` 会进入**角色向导**（单机 / server / client 三选，可中断续配）；`ssh-manager clear` 角色清理——**按实际存在枚举**删除（与 role.json 声明的角色无关）本机 vault / serve / 缓存残留（vault 角色先自动 export 备份 + 输入 `DELETE` 确认），机器回到首次向导状态。
+空机器第一次运行 `tui` 会进入**角色向导**（单机 / server / client 三选，可中断续配；client 分支 = `ssh-manager pair` 入网引导页——连接表单已随 ②a 退役，多机入网一律 pair）；`ssh-manager clear` 角色清理——**按实际存在枚举**删除（与 role.json 声明的角色无关）本机 vault / serve / 缓存残留（vault 角色先自动 export 备份 + 输入 `DELETE` 确认），机器回到首次向导状态。
 
 ### 启动与模式判定
 
@@ -174,7 +175,7 @@ ssh-manager tui --mode client  # 强制 client 面板
 - 本机有**缓存**（`cache.bin`）→ client 面板；
 - vault 存在但锁着 / 两者都没有 → **引导性报错**（告诉你该 `unlock` 还是 `--mode client`）——**绝不静默降级到 client**。
 
-Broker 主控台（服务器 / Profiles / Projects / 设备码 4 个页签）与 client 面板（服务器列表只读、零远程写）的操作语义与 owner CLI 完全一致——TUI 只是同一套 vault 操作的另一个入口，做完的事在 `ls` / 审计里看到的一样。各页签键位与典型任务走查见 [docs/tui-single-machine.md](docs/tui-single-machine.md) / [docs/tui-multi-machine.md](docs/tui-multi-machine.md)。
+Broker 主控台（服务器 / Profiles / Projects / 设备码 / Pairing 5 个页签）与 client 面板（服务器列表只读、零远程写、`[s]` 同步 / `[i]` 实例切换）的操作语义与 owner CLI 完全一致——TUI 只是同一套 vault 操作的另一个入口，做完的事在 `ls` / 审计里看到的一样。各页签键位与典型任务走查见 [docs/tui-single-machine.md](docs/tui-single-machine.md) / [docs/tui-multi-machine.md](docs/tui-multi-machine.md)。
 
 ### 终端要求（mintty 注意）
 
@@ -188,32 +189,32 @@ Windows Terminal / cmd 原生可用。**mintty**（Git Bash 默认终端）不�
 
 ---
 
-## Multi-machine: `serve` mode (remote agents on a VLAN)
+## Multi-machine: bridge posture (on a VLAN)
 
-> **Quickstart:** [`docs/quickstart-multi-machine.md`](docs/quickstart-multi-machine.md) · **Full guide (中文):** [`docs/multi-machine.md`](docs/multi-machine.md)
+> **Quickstart:** [`docs/quickstart-multi-machine.md`](docs/quickstart-multi-machine.md) · **Full guide (中文):** [`docs/multi-machine.md`](docs/multi-machine.md) · **Mode overview:** [`docs/deployment-modes.md`](docs/deployment-modes.md)
 
-By default the broker runs **in-process** inside the MCP server the agent spawns (no daemon). For **several machines sharing one authoritative vault** — e.g. you work across multiple boxes on a home/VLAN network — run the broker as a small HTTP server on one trusted host and point the other machines' agents at it.
+By default the broker runs **in-process** inside the MCP server the agent spawns (no daemon). For **several machines sharing one authoritative vault** — e.g. you work across multiple boxes on a home/VLAN network — run the authoritative vault as a resident service on one trusted host and enroll each work machine with **`ssh-manager pair`** (one command: LAN discovery → SAS pairing → credentials delivered → first pull → ready-to-paste `.mcp.json` artifact).
 
 ```bash
-# On the trusted VLAN host (the authoritative broker):
+# On the trusted VLAN host (the authoritative vault):
 ssh-manager serve --addr 0.0.0.0:7878
 # → ssh-manager serve: listening on 0.0.0.0:7878 (tls=auto)
 # → auto-TLS cert (self-signed). client pin: sha256:...
+# → ssh-manager serve: discovery: udp/7878 (on)
+
+# On each work machine (after installing the binary):
+ssh-manager pair --instance laptop
+# → owner approves on the broker TUI's Pairing page (or `serve pair approve laptop --profile team-a`)
+# → done: agent runs from a local read-only cache
 ```
 
-- **Auto-TLS + fingerprint pinning (no cert hassle).** On first start `serve` **auto-generates a self-signed ed25519 cert** and forces TLS from then on — no openssl, no CA distribution. `cache-tokens add` prints the cert's **SPKI fingerprint** alongside the device code; `cache pull` **pins** it (first-connect verification, zero MITM window — the HPKP/Tailscale model). This is the default; pass `--tls-cert`/`--tls-key` only if you want your own cert.
-- **No-pin clients refuse by default.** A `cache pull` without a pin **hard-fails** (was: silent plaintext fallback — a fail-open risk, now closed). Opt into plaintext explicitly with `--allow-plaintext` (debugging / talking to an old plaintext serve only). A pin set with a non-`https://` URL also hard-fails.
-- **Auth — same gate as stdio.** Every request carries `Authorization: Bearer <project-token>`. The server resolves it per request with `VerifyToken` (`active` projects only); the iron rule (per-call `serverID ∈ profileID`) applies identically.
-- **Point the agent at it — cache-first is the standard posture** (Plan 40 定案): the recommended client entry runs the broker from a local **read-only cache** — `.mcp.json` spawns `ssh-manager mcp --cache` (in-process broker, auto-refreshed, keeps working offline):
-  ```json
-  {"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp","--cache"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
-  ```
-  The direct HTTP connection (`type:"http"` + bearer header against `https://<host>:7878/`) is now the **auxiliary** form — online-only; use it on the serve host itself, or when you want every request validated live against the serve (per-request revocation). Either way the same project token applies.
-  > client 角色向导的 finish 屏现在会同时展示离线 `--cache`（真空机首拉自动归位实例槽时 args 自动带 `--instance <name>`）与在线 http 两种形态。
-- **Several agents on ONE machine — named cache instances (Plan 40).** Each agent gets its own offline cache: enroll with `ssh-manager cache pull --url … --token … --instance <name>` (one device code per agent — `cache-tokens add --name <machine>-<agent> --profile <p>`). On an **empty** machine the flag is optional: a bare pull **auto-locates** the first enroll into `instances/<device-code-name>/` — but then your hand-written `.mcp.json` MUST add `"args": ["mcp", "--cache", "--instance", "<name>"]` (the CLI path has no wizard access card to do it for you; bare pulls keep re-locating idempotently, only the agent's cache-mode launch needs the flag). Inspect every slot with `ssh-manager cache status`, switch slots inside the TUI client page with `[i]` (per-session), and persist each instance's offline cap independently with `ssh-manager cache config [--instance <name>] --max-offline 24h` (priority env > file > off). Instances live under `instances/<name>/` with a **per-instance DEK** — one instance's leaked material does not decrypt another's cache. Full guide (中文): [`docs/multi-machine.md`](docs/multi-machine.md) 「多实例（同机多 agent）」.
-- **Shutdown.** `Ctrl+C` (`SIGINT`) / `SIGTERM` → graceful drain and every open `forward_port` tunnel torn down.
+- **The serve is narrowed to: authoritative vault + `/snapshot` + `/pair` (+ web admin UI in a later release).** There is **no remote MCP surface** (the old `"type": "http"` + bearer-header direct connection was **removed** in Plan 42 批1 — non-`/snapshot`//`/pair` paths answer 404). Work-machine agents always run **locally from a read-only cache** (`mcp --cache`) and dial target servers themselves; writes (add/edit servers, approvals) belong to the **management plane**: broker TUI / `serve pair` CLI / the future web UI.
+- **Auto-TLS + fingerprint pinning (no cert hassle).** On first start `serve` **auto-generates a self-signed ed25519 cert** and forces TLS from then on — no openssl, no CA distribution, no trust-store config. The cert's **SPKI fingerprint** rides the discovery offer and the sealed pairing envelope automatically; `cache pull` pins it too (first-connect verification, zero MITM window — the HPKP/Tailscale model). Pass `--tls-cert`/`--tls-key` only if you want your own cert.
+- **Pairing is human-gated.** The client shows `name @ url SAS <6 digits>`; the approver compares the client-screen SAS against the approval row's name@url (broker TUI Pairing page or `serve pair approve`), while the serve **mechanically verifies** that the client's declared target address is actually this machine (mismatch → ⚠ + explicit override required). A direct `--url` pairing without a pin **refuses by default** (`--allow-tofu` is the explicit, unanchored escape hatch — see threat-model R12). No-pin `cache pull` hard-fails the same way; `--allow-plaintext` is the debug-only opt-out.
+- **Several agents on ONE machine — named cache instances (Plan 40).** Each agent gets its own offline cache: enroll with `ssh-manager pair --instance <name>` (one device code per agent). Inspect every slot with `ssh-manager cache status`, switch slots inside the TUI client page with `[i]` (per-session), and persist each instance's offline cap independently with `ssh-manager cache config [--instance <name>] --max-offline 24h` (priority env > file > off). Instances live under `instances/<name>/` with a **per-instance DEK** — one instance's leaked material does not decrypt another's cache. Full guide (中文): [`docs/multi-machine.md`](docs/multi-machine.md) 「多实例（同机多 agent）」.
+- **Shutdown.** `Ctrl+C` (`SIGINT`) / `SIGTERM` → graceful drain.
 
-> **⚠️ Breaking change / migration order.** New `serve` is TLS-only. When upgrading an already-deployed plaintext setup: **upgrade all work-machine binaries + configure their pin FIRST, restart `serve` LAST** — the moment `serve` upgrades it rejects old plaintext clients. Full migration + key-rotation runbooks in [`docs/multi-machine.md`](docs/multi-machine.md).
+> **⚠️ Breaking change / migration order (Plan 42 批1).** The serve no longer accepts MCP-over-HTTP: old `"type": "http"` `.mcp.json` entries answer **404** after the upgrade. Migrate existing setups in **three steps**: ① migrate each legacy machine to the bridge posture **on the old serve** (manual path: `cache-tokens add` + `projects add` + `cache pull` + hand-written `.mcp.json` — clients ≥ v0.10.1 first); ② upgrade serve (precondition: all clients already bridged); ③ from then on every new machine uses `ssh-manager pair`. The iron rule stands: **upgrade all clients first, restart serve last.** Full runbooks in [`docs/multi-machine.md`](docs/multi-machine.md) + [`docs/compat-matrix.md`](docs/compat-matrix.md).
 
 ---
 

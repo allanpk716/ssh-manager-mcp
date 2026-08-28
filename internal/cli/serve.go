@@ -32,16 +32,24 @@ func newServeCmd() *cobra.Command {
 	var pairing, discovery bool
 	c := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the SSH MCP server over HTTP for remote (multi-machine) agents",
-		Long: `Run the broker as an authenticated HTTP MCP server so agents on other
-machines can share one authoritative vault.
+		Short: "Run the authoritative vault server (/snapshot + /pair) for the multi-machine bridge posture",
+		Long: `Run the authoritative vault as a resident server for the multi-machine
+bridge posture. It serves exactly: the authenticated /snapshot endpoint
+(device-code gated, profile-scoped cache pull), the SAS pairing surface
+/pair/* (a new machine enrolls in one shot with 'ssh-manager pair'), and —
+in a later release — the web admin UI. There is NO remote MCP surface:
+agents on work machines run locally from a read-only cache
+('ssh-manager mcp --cache'); the MCP stdio bridge posture is documented in
+docs/multi-machine.md.
 
-Each request must carry 'Authorization: Bearer <project-token>'. The token
-resolves to a project and its profile scope (same gate as 'ssh-manager mcp').
+TLS is always on — without --tls-cert a self-signed cert is auto-generated
+on first start. UDP discovery (udp/7878) answers LAN probes with a
+non-sensitive offer (name + cert fingerprint + port). Both surfaces have
+three-state switches (--pairing / --discovery; explicit env > explicit
+flag > store setting > default on).
 
-Default bind is loopback (127.0.0.1:7878) — safe. For multi-machine use, set
---addr to 0.0.0.0:7878 or a VLAN IP, and prefer --tls-cert/--tls-key: without
-TLS the bearer token travels in cleartext on the network.
+Default bind is loopback (127.0.0.1:7878) — safe. For multi-machine use,
+set --addr to 0.0.0.0:7878 or a VLAN IP.
 
 This command is ALSO the entry point used by ` + "`serve install`" + `: when
 the OS service manager (Windows Service / systemd / launchd) starts the

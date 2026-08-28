@@ -95,7 +95,8 @@
 ### upload_file
 
 把**本地**文件**或目录**推到服务器（方向 matters：`local_path` 是 **broker 所在
-机器**上的绝对路径——stdio 本机部署就是你的机器；远程 serve 部署是 serve 主机。
+机器**上的绝对路径——就是**你脚下的机器**（单机与多机皆然：多机形态的 broker
+子进程跑在本地）。
 `remote_path` 是服务器上的绝对 POSIX 路径）。
 
 - 目录递归上传，保留相对路径（`scp -r` 语义）；`remote_path` 的**父目录不存在
@@ -119,11 +120,9 @@
 `remote_path`（绝对路径：`/` 开头，或 Windows 盘符形 `X:/`）+ 可选
 `encoding`（text / base64，缺省 text）。
 
-- **跨机路径（方向 matters）**：`upload_file` 的 `local_path` 是 **broker
-  所在机器**上的路径——远程 serve 拓扑（你的笔记本跑 agent → serve 主机跑
-  broker → 目标机）下 broker 够不到你机器上的文件。**你自己生成/持有的内容**
-  （配置、脚本、小产物）走本工具直推目标机；broker 机器可达的文件/目录仍走
-  `upload_file`。
+- **你生成/持有的内容**（配置、脚本、小产物）走本工具直推目标机——没有
+  "broker 够不到你机器上的文件"的问题：多机形态下 broker 子进程就跑在**你脚下的
+  机器**上，`upload_file` 一样可用；本工具的价值是免落盘直写。
 - **`encoding` 两态**（与 exec_output 同构，零新概念）：
   - `text`（默认）：写入的是 **JSON 解码后的字符串**，按 UTF-8 落盘——
     **非字节精确**：客户端送来的非法 UTF-8 字节在 JSON 解码层就被替换为
@@ -148,24 +147,9 @@
 - **失败留半写**：失败（含取消/超时）时远端可能留下**半写文件/已建的父
   目录**，清理归你自己——失败后自查目标路径，再决定重传或清掉。
 
-#### serve 请求体上限（在线 serve 模式）
-
-HTTP 请求体有中间件收口：上限 = **`cap + cap/3 + 64 KiB`**（覆盖 base64
-展开 + JSON 包装 + 头部余量），与内容上限**同源联动**——owner 调大
-`SSHMGR_UPLOAD_CONTENT_MAX` 时两个上限一起动，没有独立旋钮（该联动已在
-[threat-model.md](./threat-model.md) §6 登记）。两级行为：Content-Length
-诚实超限 → 中间件直接 **413**；谎报/无 Content-Length（chunked）→
-`http.MaxBytesReader` 兜底，读到一半报错、返回错误响应（攻击者拿不到
-工具执行）。stdio 模式无此 cap（对端是本机 agent 进程，非网络面）。
-
-**已知边界（413 早拒）**：text 模式下 JSON 字符串转义使内容在线上膨胀
-（`"`/`\` 2×、控制字符 `\uXXXX` 最高 6×/字节）——**线上平均膨胀超过 4/3
-的贴上限内容就可能被 413 早拒**，不是只有极端形态才中：以 8 MiB cap 为例，
-全 2× 转义内容 >~5.6 MiB、控制字符 6× 内容 >~1.8 MiB 即触发（~48 MiB 只是
-6× 全覆盖的形态上界）；被 413 的内容解码后其实可能 ≤ cap。真实配置/脚本的
-转义膨胀通常 <1.1，几乎不会命中。**极端转义/二进制/控制字符内容一律走
-base64**——base64 字母表无需 JSON 转义，贴 cap 的合法 base64 线上体恒在
-限内，不存在该边界。
+> 传输上限（8 MiB 解码后）对两形态一致；stdio 的对端是本机 agent 进程、
+> 无 HTTP 请求体封顶。**二进制 / 高转义内容（大量 `"`/`\`/控制字符）一律走
+> base64**——无需 JSON 转义、字节精确（GBK 等非 UTF-8 同理）。
 
 ### forward_port
 
@@ -177,20 +161,18 @@ web UI、metrics 端口。
   **从服务器视角**写转发目标（够服务器自己的回环服务就填 `127.0.0.1` + 该
   服务端口）；`local_port` 可省（broker 挑空闲口）；`listen_host` 可省
   （缺省 `127.0.0.1`）。
-- **`listen_host`（可选）**：转发监听绑定的地址。缺省/环回 = 永远允许；要绑
-  **非环回**地址（如让 VLAN 内其他机器用这条隧道）必须 owner 预批白名单
-  （`ssh-manager serve bind add <ip>`，owner 侧操作）——传白名单外的地址
-  **直接拒**（错误不会告诉你白名单里有什么，读失败也拒）。返回的
+- **`listen_host`（可选）**：转发监听绑定的地址。**缺省/环回 = 实际上唯一的
+  可用值**——多机 client（cache 模式）恒环回，非环回地址被 fail-closed 拒绝
+  （②a 移除后白名单不再有管理入口，恒空）；传非环回地址**直接拒**。返回的
   `listen_host` 字段回显实际绑定地址。
 - 返回 `tunnel_id` + `local_port`：转发**监听在 broker 所在机器的
-  `<listen_host>:<local_port>`**（缺省 `127.0.0.1`）——stdio 本机部署就是你
-  脚下的机器，直接 `curl http://127.0.0.1:<local_port>`；远程 serve 部署则是
-  **serve 主机**上的监听，你从别的机器够不到它（除非 owner 白名单放行了
-  serve 主机的 VLAN 地址、且你传了该地址作 `listen_host`）。
+  `<listen_host>:<local_port>`**（缺省 `127.0.0.1`）——就是你脚下的机器
+  （单机与多机皆然：多机形态的 broker 子进程跑在本地），直接
+  `curl http://127.0.0.1:<local_port>`。
 - 这是唯一**有状态**的工具：broker 会为隧道**全程持有一条 SSH 连接**。
   **真空闲 ~10 分钟自动回收**（按**活动**算——隧道上有真实流量就续命，
   扫描周期 1 分钟，实际 10–11 分钟内收）；owner 侧也可随时 `tunnels kill`
-  拆它（revoke/disable 后 ~15s 内级联拆除，属预期——端口随即不可达）。
+  拆它（token 吊销/禁用后 ~15s 内级联拆除，属预期——端口随即不可达）。
   **用完主动 `close_port`**，别等回收。
 
 ### close_port
@@ -202,11 +184,10 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
 - 成功返回 `closed`；id 未知（已关过/已被 ~10 分钟空闲回收器收走/被 owner
   `tunnels kill` 拆过/从未开过）报
   `no open tunnel with id <id>`——**正常现象**，需要就重开 forward_port。
-- **serve 模式下 401 = token 已失效**（被 owner 轮换/禁用/吊销）：HTTP 中间件
-  在请求到达工具层之前就拒了，**任何**后续工具调用都会 401——报告 owner，
-  **别**重试开新隧道。注意：**已经开着的隧道会在 token 吊销/禁用后 ~15s 内
-  被级联拆除**（owner 侧也有 `tunnels kill` 急停）——端口随后不可达属预期，
-  不是你这边出了问题。
+- **token 失效**（被 owner 轮换/禁用/吊销）：stdio 下 broker 重启后起不来；
+  多机缓存模式下报告 owner。注意：**已经开着的隧道会在 token 吊销/禁用后
+  ~15s 内被级联拆除**（owner 侧也有 `tunnels kill` 急停）——端口随后不可达
+  属预期，不是你这边出了问题。
 
 ### exec_background
 
@@ -269,7 +250,7 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
 
 | 报错 | 含义 | 你该做 |
 |---|---|---|
-| `invalid or unknown token`（stdio：broker 起不来）；serve：任意调用 HTTP 401 | token 错了 / 被 owner `rotate` 换发 / project 被 disable/revoke | **报告 owner**；别反复重试。owner 会核 status、必要时换发并更新 `.mcp.json`（见 [agent-access.md](./agent-access.md)「Project 生命周期」） |
+| `invalid or unknown token`（stdio：broker 起不来；多机缓存：spawn 即拒） | token 错了 / 被 owner `rotate` 换发 / project 被 disable/revoke | **报告 owner**；别反复重试。owner 会核 status、必要时换发并更新 `.mcp.json`（见 [agent-access.md](./agent-access.md)「Project 生命周期」） |
 | `server is not in your profile — call list_servers ...` | id 不在授权清单（用错 id、拿 name 当 id、或它不在你 profile） | **重新 `list_servers` 核对 id**；还不在就是 owner 没授权，报告 owner，别试别的 id |
 | `server has no credential configured (set one with: ...)`（`no_credential`） | owner 建了服务器但没配登录凭据——连接前就被拒 | **报告 owner** 按错误里的提示配凭据；重试无意义 |
 | 结果里 `timed_out: true`（不是报错） | 前台命令超过 timeout（默认 120s、硬顶 5 分钟）被杀 | **拆小命令**：分页/分文件；长活改走 `exec_background` + `exec_output` 轮询（前台永远只有 5 分钟） |
@@ -283,22 +264,39 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
 | `file <path> (<N> bytes) exceeds upload cap <cap> — refused before transfer` | 单文件严格大于 1 MiB，传输前被拒（零字节移动） | 按错误里的 size/cap **拆分或压缩**后重传 |
 | `store is read-only (offline cache); connect to the server to mutate`（ErrReadOnly） | broker 跑在离线缓存模式（见三态环境） | **报告 owner** 切回在线/本机模式；**别**重试写操作（见下） |
 
-## 三态环境（你通常无需分辨）
+## 部署形态（你通常无需分辨）
 
-broker 有三种部署形态，**工具面完全一致**（同 10 个工具、同 profile 隔离、同审计），
+broker 有两种部署形态，**工具面完全一致**（同 10 个工具、同 profile 隔离、同审计），
 差别只在可写性：
 
 | 形态 | 什么样 | 可写性 |
 |---|---|---|
-| 单机 / stdio | broker 跑在你脚下的机器（`.mcp.json` 里 `command: ssh-manager`） | **可写** |
-| 在线 serve | broker 跑在远程 VLAN 主机（http + token，见 [multi-machine.md](./multi-machine.md)） | **可写** |
-| 离线 cache | broker 从本地快照服务（`--cache`；见 [quickstart-multi-machine.md](./quickstart-multi-machine.md)） | **只读** |
+| 单机 / stdio | broker 跑在你脚下的机器，直开本机 vault（`.mcp.json` 里 `command: ssh-manager`） | **可写** |
+| 多机 / cache | broker 从本地只读快照服务（`mcp --cache`；经 `ssh-manager pair` 或手工 `cache pull` 入网，见 [multi-machine.md](./multi-machine.md)） | **只读** |
 
-在线时你几乎感觉不到差异（forward_port 的 `127.0.0.1:<port>` 落在哪台机器除外，
-见上）。离线 cache 模式下**一切写操作被拒**（`ErrReadOnly`）；你最可能撞上的具体
-形态是**首次连接一台缓存里没有 host key 记录的服务器**——TOFU 想记录新 key 但
-store 只读，拒绝并包着 ErrReadOnly。遇到任何 `read-only` 字样的报错：
-**报告 owner 切在线/本机，别重试写操作**——重试一万次也是同样的错。
+（旧的第三形态「在线 serve」——agent 经远程 HTTP 直连 broker——已在 Plan 42 批1
+移除：serve 不再提供任何远程 MCP 面。多机 agent 一律走本地缓存。）
+
+**多机只读铁律**：多机形态下 agent **只读 + 执行**——加改删 server / profile /
+project / 凭据、发码、批准配对等一切写操作都被拒（`ErrReadOnly`），写操作只属于
+owner 的**管理面**（broker TUI / `serve pair` / 批2 Web UI）。这不是临时限制，
+是设计：工作机上的快照可被吊销、可自毁、范围仅限授权 profile，而权威 vault 只在
+一台机器上被一个写者（serve/管理面）修改。
+
+**吊销三路径（owner 侧吊销后，你的工具面何时失效）**：
+
+1. **project token 吊销、设备码仍活**：下次保鲜（在线 ≤30min）拉到的新快照已无
+   该 project → 本地 spawn 闸拒绝——之后的调用报 token 无效。
+2. **设备码吊销**：下次 pull 收到 pinned 401 → **quarantine**（本地缓存就地销毁）
+   ——工具面即刻断供，spawn 报明确的 quarantined 归因错误。
+3. **永离线设备**（一直不联网）：旧快照 + 本地 token 的可用窗口 =
+   **`max_offline` 硬上限**（pair 下发默认 24h；到期缓存自毁拒载）——**不是 30
+   分钟**；最终兜底是 owner 轮换服务器凭据。
+
+cache 模式下你最可能撞上的具体形态是**首次连接一台缓存里没有 host key 记录的
+服务器**——TOFU 想记录新 key 但 store 只读，拒绝并包着 ErrReadOnly。遇到任何
+`read-only` 字样的报错：**报告 owner 去管理面操作，别重试写操作**——重试一万次
+也是同样的错。
 
 ## 附录：贴进你项目的规则模板（CLAUDE.md / AGENTS.md）
 
@@ -311,8 +309,8 @@ store 只读，拒绝并包着 ErrReadOnly。遇到任何 `read-only` 字样的�
 禁止裸 ssh/scp/寻找私钥（本机没有可用凭据，直连必失败）。
 - 先 list_servers 拿真实 id（name ≠ id），动手前读目标机的 caveats/role。
 - 提权用 sudo=true 参数，不要自己拼 sudo 前缀。
-- 工具报错先查 docs/agent-tools.md 错误对照表；read-only 报错=离线缓存，
-  报告 owner，不要重试写操作。
+- 工具报错先查 docs/agent-tools.md 错误对照表；read-only 报错=多机缓存
+  （只读形态），报告 owner 去管理面操作，不要重试写操作。
 （按需替换工具前缀 mcp__ssh__* 为你的客户端实际命名。）
 ```
 
@@ -344,7 +342,7 @@ HEAD，后续重构以符号名为准）：
 | forward 只支持本地 -L 语义；监听 broker 所在机器的 127.0.0.1:local_port；remote_host 从服务器视角 | `internal/mcpserver/types.go:63-84`；`internal/mcpserver/server.go:133` |
 | local_port 省略/0 = broker 挑空闲端口 | `internal/mcpserver/types.go:72` |
 | 隧道 **真空闲** ~10 分钟自动回收（按活动算：真实流量经 onActivity 钩子推进 lastActivity，持续在用不收）；扫描周期 1 分钟（实际 10–11 分钟内） | `internal/mcpserver/tunnels.go`（forwardIdleTimeout + Touch）；`internal/sshbroker/tunnel.go`（onActivity 30s 节流钩子） |
-| forward_port `listen_host`：缺省/环回恒允许；非环回需 owner `serve bind add` 白名单（IP 字面量 only、规范形比对、读失败 fail-closed 拒）；拒绝文本不披露白名单内容；audit `bind_denied` | `internal/mcpserver/core.go`（ForwardForProfile gate 链）；`internal/cli/serve_bind.go` |
+| forward_port `listen_host`：缺省/环回恒允许；非环回 **fail-closed 拒**（②a 移除后白名单无管理入口、恒空 = 环回 only；拒绝文本不披露原因细节；audit `bind_denied`） | `internal/mcpserver/core.go`（ForwardForProfile gate 链） |
 | revoke/disable → 已开隧道 **≤15s（一个控制 tick）级联拆除**（端口不可达 + 镜像行删）；owner `tunnels kill` / `kill --project` 同域；store 持续故障 ≤~2min 有界关闭 | `internal/mcpserver/tunnels_control.go`（runControlTick / cascadeCheck）；`internal/cli/tunnels.go` |
 | close_port 拆监听 + 背后 SSH 连接（broker 全程持有）；id 未知报 `no open tunnel with id ...` | `internal/mcpserver/tunnels.go:125-142`；`internal/mcpserver/core.go:537-540`；`internal/mcpserver/server.go:151` |
 | 后台缺省/上限 24h + 回显（`clampBgTimeout` → `BgStartOutput.EffectiveTimeoutSeconds`）；无 env/workdir/stdin 参数（自组 `cd /dir && VAR=x cmd`） | `internal/mcpserver/tasks.go:618-627`；`internal/mcpserver/bgtools.go:146-150`；`internal/mcpserver/types.go:106-122` |
@@ -355,8 +353,8 @@ HEAD，后续重构以符号名为准）：
 | unknown task_id 文案（从未存在 + 过期/驱逐/重启三因，`ErrBgUnknownTask` 逐字） | `internal/mcpserver/bgtools.go:175` |
 | exec_stop 立即返回触发时刻 status（running）；已终态幂等；kill = 关会话 → 远端 SIGHUP、无信号楼梯、nohup/setsid 进程存活 | `internal/mcpserver/tasks.go:533-547`；`internal/mcpserver/server.go:220` |
 | exec_output / exec_stop 零审计行（纯进程内读，与 list_servers 同级不审计；stop 触发的终态仍由任务侧落 exec-bg-end 生命周期行） | `internal/mcpserver/bgtools.go:177-250`；`internal/mcpserver/core.go:31-75`（list_servers 同无审计） |
-| serve 模式 revoke **不杀**运行中后台任务（活到自然结束或 24h 钳定上限；revoke 后 exec_output/exec_stop 逐请求 401；后台任务不在级联域——Plan 32 契约） | `internal/mcpserver/revoke_semantics_test.go`（TestRevokedProjectKeepsBackgroundTaskRunning）；`internal/mcpserver/serve.go`（Close 只在进程关闭时清） |
-| serve 模式 401 = token 失效（rotate/disable/revoke），HTTP 中间件在工具层之前拒；**已开隧道 revoke/disable 后 ≤15s 级联拆除**（Plan 35 翻转；owner `tunnels kill`/白名单收缩同域） | `internal/mcpserver/serve.go:83-96`；`internal/mcpserver/revoke_semantics_test.go`（TestRevokedProjectTunnelsTornByControlTick）；`internal/mcpserver/tunnels_control.go` |
+| token 吊销/禁用**不杀**运行中后台任务（活到自然结束或 24h 钳定上限；运行中会话服务至进程退出；后台任务不在级联域——Plan 32 契约，Plan 42 后仍钉住） | `internal/mcpserver/revoke_semantics_test.go`（TestRevokedProjectKeepsBackgroundTaskRunning）；`internal/mcpserver/serve.go`（Close 只在进程关闭时清） |
+| token 吊销/禁用 → **已开隧道 ≤15s（一个控制 tick）级联拆除**（端口不可达 + 镜像行删）；owner `tunnels kill` / `kill --project` 同域；store 持续故障 ≤~2min 有界关闭（②a 的 serve 侧 401 闸随远程 MCP 面移除——远程 client 经快照刷新/隔离感知吊销，见部署形态节的吊销三路径） | `internal/mcpserver/revoke_semantics_test.go`（TestRevokedProjectTunnelsTornByControlTick）；`internal/mcpserver/tunnels_control.go` |
 | stdio 模式 token 无效 → broker 进程起不来（stderr `invalid or unknown token` 后退出） | `internal/mcpserver/run.go:29-35`；`internal/cli/mcp.go:70-73` |
 | 工具报错形态 = IsError=true + 错误文本（非传输层错误） | `internal/mcpserver/server.go:83-89` |
 | broker 启动检测散落 SSH 凭据 → stderr `WARNING: ssh credential files detected`（仅本机 stdio 模式） | `internal/cli/mcp.go:63-67`；另见 docs/agent-access.md「隔离与排错」 |
