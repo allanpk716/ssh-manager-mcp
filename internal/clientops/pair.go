@@ -177,6 +177,29 @@ func RunPair(o PairOpts) error {
 		return errors.New("refusing TOFU pairing without --pin; pass --allow-tofu to accept an unanchored channel")
 	}
 
+	// ② target_url 严格 parse + 规范化(transcript/enroll/首拉共用同一串)。
+	// 必须先于 ⑨ 的 --force 清理(fix round 1 I1):一次 typo 的 URL 绝不能
+	// 销毁在用凭据——纯字符串校验零 IO,失败即刻退出,盘上文件分毫不动。
+	targetURL, err := canonicalPairTarget(o.URL)
+	if err != nil {
+		return err
+	}
+
+	// ① transport 分级:pin → pinningTransport(TLS 层硬校验,信任锚=pin);
+	// TOFU → 自签 cert 过不了系统校验,显式跳过系统验证(加密仍成立),信任由
+	// SAS 人工比对 + 密封信封里的 SPKI 补上。与 URL 同理先于 --force 清理:
+	// pinningTransport 也是纯校验,坏 pin 不许消耗一次 force 销毁。
+	var transport *http.Transport
+	if o.Pin != "" {
+		transport, err = pinningTransport(o.Pin)
+		if err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(errw, "WARNING: pairing over an UNVERIFIED TLS channel (--allow-tofu): trust will be anchored by the SAS comparison and the sealed envelope's pin\n")
+		transport = &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}}
+	}
+
 	// ⑨ 同名已 enroll:默认拒;--force 清 enroll 态(保留 cache.config.json)。
 	authPath, err := CacheCredPathFor(o.Instance)
 	if err != nil {
@@ -191,29 +214,10 @@ func RunPair(o PairOpts) error {
 		}
 	}
 
-	// ① transport 分级:pin → pinningTransport(TLS 层硬校验,信任锚=pin);
-	// TOFU → 自签 cert 过不了系统校验,显式跳过系统验证(加密仍成立),信任由
-	// SAS 人工比对 + 密封信封里的 SPKI 补上。
-	var transport *http.Transport
-	if o.Pin != "" {
-		transport, err = pinningTransport(o.Pin)
-		if err != nil {
-			return err
-		}
-	} else {
-		fmt.Fprintf(errw, "WARNING: pairing over an UNVERIFIED TLS channel (--allow-tofu): trust will be anchored by the SAS comparison and the sealed envelope's pin\n")
-		transport = &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}}
-	}
 	client := &http.Client{
 		Transport:     transport,
 		Timeout:       pairHTTPTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-
-	// ② target_url 严格 parse + 规范化(transcript/enroll/首拉共用同一串)。
-	targetURL, err := canonicalPairTarget(o.URL)
-	if err != nil {
-		return err
 	}
 
 	// ② 一次性临时身份:X25519 密钥对 + id32B + cnonce16B。

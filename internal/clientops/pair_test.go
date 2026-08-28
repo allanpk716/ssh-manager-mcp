@@ -328,6 +328,44 @@ func TestRunPair_SameNameNeedsForce(t *testing.T) {
 	}
 }
 
+// TestRunPair_ForceBadURLKeepsCredentials pins fix round 1 I1: pure-input
+// validation (bad target URL, and the same-class malformed pin) must precede
+// the --force cleanup — a typo'd URL must error out and leave the IN-USE
+// credentials byte-identical on disk, never silently destroyed.
+func TestRunPair_ForceBadURLKeepsCredentials(t *testing.T) {
+	dir := t.TempDir()
+	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	goodPin := "sha256:" + strings.Repeat("ab", 32)
+	if err := WriteCacheCredFor("force-url", &CacheCred{URL: "https://old:7878", Token: "in-use-code", Pin: goodPin}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 拼错的 scheme + --force → 报错文案,凭据原样在盘。
+	err := RunPair(PairOpts{
+		URL: "htts://127.0.0.1:7878", Pin: goodPin, Force: true, Instance: "force-url",
+		AssumeSAS: true, Stdin: strings.NewReader("\n"), Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if err == nil || !strings.Contains(err.Error(), "must be https://") {
+		t.Fatalf("want the bad-scheme refusal, got %v", err)
+	}
+	cred, cerr := ReadCacheCredFor("force-url")
+	if cerr != nil || cred == nil || cred.URL != "https://old:7878" || cred.Token != "in-use-code" {
+		t.Fatalf("--force with a bad URL must leave credentials untouched: %+v err=%v", cred, cerr)
+	}
+
+	// 同类不变量:坏 pin(pinningTransport 拒)同样不得消耗一次 force 销毁。
+	err = RunPair(PairOpts{
+		URL: "https://127.0.0.1:7878", Pin: "not-a-pin", Force: true, Instance: "force-url",
+		AssumeSAS: true, Stdin: strings.NewReader("\n"), Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid server pin") {
+		t.Fatalf("want the malformed-pin refusal, got %v", err)
+	}
+	if cred, cerr := ReadCacheCredFor("force-url"); cerr != nil || cred == nil || cred.URL != "https://old:7878" {
+		t.Fatalf("credentials must survive a malformed-pin refusal: %+v err=%v", cred, cerr)
+	}
+}
+
 // TestForceCleanInstance_KeepsConfig pins the --force deletion set directly
 // (the e2e test above cannot observe preservation — RunPair rewrites
 // cache.config.json after the clean): enroll-state files die, the Plan-40
