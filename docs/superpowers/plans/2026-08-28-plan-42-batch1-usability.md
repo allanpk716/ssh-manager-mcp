@@ -495,6 +495,19 @@ func TestServePairApprove_ThreePieceOutputAndOverride(t *testing.T) { /* approve
 - [ ] **Step 3: 真机 gate 清单落 docs**(owner 手动,不可自动化):NUC10 升 serve(discovery+pairing 开)→ 笔记本三步迁移 → 干净目录真跑 pair → TUI 批准(三件套对照+机械校验无⚠)→ 在线/断网各验一次 → `cache-tokens ls`/audit 可见。写入 `docs/superpowers/plans/2026-08-28-plan-42-batch1-usability.md` 本节尾部勾选框。
 - [ ] **Step 4: Commit** — `git commit -m "test: Plan42批1T10——全量回归+spec §7 验收自查+真机 gate 清单"`
 
+**真机 gate 清单(spec §7 批1 第 3 项;owner 手动执行,自动化测试不可替代——逐项勾选):**
+
+前置:批1 代码已发版出 binary(版本号 owner 拍板);NUC10 = 权威 broker,笔记本 = 存量 ②a 工作机。
+
+- [ ] **G1 NUC10 升 serve**:替换 binary 重启 serve;启动日志确认 discovery(`udp/7878 (on)`)与 pairing 面开启;`probeServeHTTP` 探活 PASS(对 `/snapshot`)。
+- [ ] **G2 三步迁移笔记本**:①旧 serve 在位时按手工桥流程迁(`cache-tokens add --profile …` + `projects add` + `cache pull` + 手写 `.mcp.json`,client binary ≥ v0.10.1);②升 NUC10 serve(此刻旧 ②a `.mcp.json` 应答 404——顺手验证负面验收);③此后笔记本重配对只走 `ssh-manager pair`。
+- [ ] **G3 干净目录真跑 pair**(笔记本,非测试环境):删 `SSHMGR_CACHE_DIR` 指向的实例目录(或选新实例名)→ `ssh-manager pair --instance <name>` → 确认发现阶段收到 NUC10 的 UDP offer(URL+SPKI 与真机一致,无手填 URL)。
+- [ ] **G4 TUI 批准三件套对照**:broker TUI Pairing 页出现 pending 行(name @ target_url + ⚠标记按需);**机械校验无 ⚠**(target_url = NUC10 本机地址——G3 若走 discovery,此行不应出现「目标≠本机」);对照 client 屏 `name @ url SAS <6 位>` 的 name/url 两件与批准行一致 → 批准。
+- [ ] **G5 client 侧闭环**:pair 完成屏 SAS 三件套打印;产物 `pair.<name>.mcp.json` 在盘且含真值 token;`mcp --cache --instance <name>` 在线可用(工具列表/一次 exec)。
+- [ ] **G6 断网验证**:断 NUC10 与笔记本的连通(或停 serve)→ 同一 cache 实例仍可只读工作(max_offline 窗口内);恢复网络后随一次 pull 刷新。
+- [ ] **G7 管理面可见**:`cache-tokens ls` 见新设备码(active、绑定 profile 正确);serve audit 日志含 pairing enroll/approve/finish 行(无凭据值明文)。
+- [ ] **G8 吊销演练(§3.1-2 三路径抽「设备码吊销」验证)**:`cache-tokens revoke <G3 设备名>` → 笔记本下次 pull 得 pinned 401 ⇒ quarantine(`cache status` 见隔离态)、`mcp --cache` 工具面即刻断供;owner 可另抽验「project token 吊销在线 ≤30min 生效」与「永离线 max_offline 硬上限」两路径。
+
 ---
 
 ## Self-Review(已执行)
