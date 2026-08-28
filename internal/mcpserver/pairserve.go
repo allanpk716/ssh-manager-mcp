@@ -119,6 +119,26 @@ func loadPairSigner(certPath, keyPath string) (ed25519.PrivateKey, string, error
 	return priv, SPKIFingerprint(k.Leaf), nil
 }
 
+// LoadPairingSigner wires the pairing signer + SPKI pin from a TLS cert/key
+// pair on disk (RunServe's startup path, extracted so both callers share one
+// body): the serve cert's ed25519 key signs every pairing transcript and its
+// SPKI pin rides the sealed envelope. RunServe calls it at startup and only
+// logs a failure (the TLS surface itself is unaffected); the clientops pairing
+// e2e test calls it to stand up the REAL /pair surface over httptest TLS
+// without a full RunServe (no udp/7878 side effects, no port bookkeeping).
+// Auto-TLS is always ed25519; an operator-supplied non-ed25519 --tls-cert
+// returns an error — /pair enroll then answers 500 (a server-side
+// misconfiguration, not a client input problem).
+func (r *ServeRunner) LoadPairingSigner(certPath, keyPath string) error {
+	signer, spki, err := loadPairSigner(certPath, keyPath)
+	if err != nil {
+		return err
+	}
+	r.pairSigner = signer
+	r.pairSPKI = spki
+	return nil
+}
+
 // handlePair is the /pair/ prefix router: switch gate → method/body caps →
 // endpoint. The switch gate answers 404 (the surface does not EXIST when
 // pairing is off — never a 403 hinting at a hidden feature). Body caps are

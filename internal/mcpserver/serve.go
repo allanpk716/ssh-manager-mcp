@@ -323,14 +323,11 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 
 	// Pairing signature state (Plan 42 批1 T5): the serve cert's ed25519 key
 	// signs every pairing transcript and its SPKI pin rides the sealed
-	// envelope. Auto-TLS is always ed25519; an operator-supplied non-ed25519
-	// --tls-cert cannot sign — /pair enroll answers 500 and serve continues
-	// (the TLS surface itself is unaffected).
-	if signer, spki, serr := loadPairSigner(tlsCert, tlsKey); serr != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager serve: /pair disabled: serve key unusable for pairing signatures: %v\n", serr)
-	} else {
-		runner.pairSigner = signer
-		runner.pairSPKI = spki
+	// envelope. A load failure (operator-supplied non-ed25519 --tls-cert) is
+	// logged and serve continues — /pair enroll answers 500, the TLS surface
+	// is unaffected (LoadPairingSigner doc).
+	if err := runner.LoadPairingSigner(tlsCert, tlsKey); err != nil {
+		fmt.Fprintf(os.Stderr, "ssh-manager serve: /pair disabled: serve key unusable for pairing signatures: %v\n", err)
 	}
 
 	ln, err := net.Listen("tcp", addr)
