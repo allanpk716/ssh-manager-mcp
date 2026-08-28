@@ -521,4 +521,9 @@ CREATE TABLE IF NOT EXISTS tunnel_registry (
   opened_at    INTEGER NOT NULL,
   last_renewed INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER
+);
 `

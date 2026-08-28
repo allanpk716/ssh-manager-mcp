@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -43,6 +44,11 @@ type ServeRunner struct {
 	st    *store.Store
 	mu    sync.Mutex
 	cache map[string]*scopedServer // keyed by project ID
+	// Three-state switch machinery (Plan 42 批1 T2, switches.go): the
+	// injected explicit env/flag inputs and the ≤5s memoized resolve of
+	// pairing/discovery. Both lock-free via atomic.Pointer.
+	switchIn atomic.Pointer[switchInputs]
+	switches atomic.Pointer[switchCache]
 }
 
 // NewServeRunner constructs a runner over an already-open store. The caller owns st.Close().
