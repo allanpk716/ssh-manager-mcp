@@ -2,7 +2,10 @@ package pairing
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"testing"
 )
 
@@ -49,8 +52,43 @@ func TestSAS_RejectionSamplingAndFallback(t *testing.T) {
 			t.Fatalf("non-digit %q", s)
 		}
 	}
-	// 回退:构造前 8 块全 ≥4,294,000,000 的 R(全 0xFF),必须走到 "again" 递推且不 panic
+	// 回退分支由 sasFromR 直测覆盖(TestSASFromR_RejectAllBlocks_TakesAgainBranch);
+	// 此测试仅验常规路径形状(任意输入不 panic)
 	_ = SAS(bytes.Repeat([]byte{0xFF}, 96), [32]byte{})
+}
+
+func TestSASFromR_RejectAllBlocks_TakesAgainBranch(t *testing.T) {
+	// R 全 0xFF:8 块全为 0xFFFFFFFF ≥ 阈值 4,294,000,000,必然走 "again" 递推分支。
+	var r [32]byte
+	for i := range r {
+		r[i] = 0xFF
+	}
+	got := sasFromR(r)
+	if len(got) != 6 {
+		t.Fatalf("len=%d", len(got))
+	}
+	for _, c := range got {
+		if c < '0' || c > '9' {
+			t.Fatalf("non-digit %q", got)
+		}
+	}
+	// 交叉断言:测试内独立按递推公式算期望——
+	// R1=SHA256(R‖"again") 后取首个 <4,294,000,000 的块模 10⁶ 零填充
+	// (阈值用字面量,顺带钉死冻结常量,不依赖被测包的 sasRejectBelow)。
+	sum := sha256.Sum256(append(append([]byte{}, r[:]...), []byte("again")...))
+	want := ""
+	for i := 0; i+4 <= len(sum); i += 4 {
+		if v := binary.BigEndian.Uint32(sum[i : i+4]); v < 4_294_000_000 {
+			want = fmt.Sprintf("%06d", v%1_000_000)
+			break
+		}
+	}
+	if want == "" {
+		t.Fatal("cross-check premise failed: R1 also fully rejected")
+	}
+	if got != want {
+		t.Fatalf("again branch mismatch: got %s want %s", got, want)
+	}
 }
 
 func TestSealOpen_RoundTrip(t *testing.T) {

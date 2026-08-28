@@ -52,10 +52,16 @@ func DeriveKeys(ikm, transcript []byte) (kAck, kCreds [32]byte) {
 const sasRejectBelow = 4_294_000_000
 
 // SAS 从 transcript 与 kCreds(K_master 代表,冻结取 64B 的后 32B)
-// 派生 6 位零填充十进制短认证串;拒绝采样耗尽 8 块时以 "again" 递推重散列。
+// 派生 6 位零填充十进制短认证串。
 func SAS(transcript []byte, kCreds [32]byte) string {
 	input := append(append([]byte("sshmgr-sas-v2"), transcript...), kCreds[:]...)
-	r := sha256.Sum256(input)
+	return sasFromR(sha256.Sum256(input))
+}
+
+// sasFromR 对 32B 随机串 R(8 个 BigEndian 4 字节块)做拒绝采样:
+// 取首个 <sasRejectBelow 的块模 10⁶ 零填充;8 块全拒(概率≈6.6e-30)时
+// 以 SHA256(r‖"again") 递推重入。
+func sasFromR(r [32]byte) string {
 	for {
 		for i := 0; i+4 <= len(r); i += 4 {
 			if v := binary.BigEndian.Uint32(r[i : i+4]); v < sasRejectBelow {
