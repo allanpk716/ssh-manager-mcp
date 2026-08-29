@@ -95,6 +95,7 @@ func TestAllowedHop(t *testing.T) {
 		{"custom https other host rejected", "https://release-assets.githubusercontent.com/x", "mirror.example.com", true},
 		{"custom http base host non-loopback rejected", "http://mirror.example.com/x", "mirror.example.com", true},
 		{"custom http loopback hop still allowed", "http://127.0.0.1:8080/x", "mirror.example.com", false},
+		{"custom loopback base, http non-loopback hop rejected", "http://192.0.2.9/x", "127.0.0.1", true},
 		{"custom https loopback hop rejected", "https://127.0.0.1/x", "mirror.example.com", true},
 		{"custom invalid sentinel blocks all", "https://api.github.com/x", invalidBaseHost, true},
 	}
@@ -131,11 +132,11 @@ func fetchViaClient(rawURL string) (string, error) {
 }
 
 // TestNewHTTPClientPerHopChecks drives the real redirect machinery against an
-// httptest loopback server: every redirect target is judged per hop before a
-// connection to it is attempted (spec §4.2(4)). The initial request URL is
-// validated by the callers via checkHop (net/http never invokes
-// CheckRedirect for the first request) — covered by the discover/download
-// tests.
+// httptest loopback server: every request URL — the initial one via httpDo,
+// every redirect target via CheckRedirect — is judged per hop before a
+// connection to it is attempted (spec §4.2(4)). This run uses the DEFAULT
+// base (env empty); the loopback-base variant of the non-loopback-http hop is
+// executed for real in TestCustomBasePinsRedirectsToBaseHost.
 func TestNewHTTPClientPerHopChecks(t *testing.T) {
 	t.Setenv(updateBaseEnv, "") // default whitelist; loopback http hops allowed
 
@@ -156,7 +157,7 @@ func TestNewHTTPClientPerHopChecks(t *testing.T) {
 			http.Redirect(w, r, "http://127.1/x", http.StatusFound)
 		case "/to-trailing-dot": // loopback VARIANT — must not pass
 			http.Redirect(w, r, "http://localhost./x", http.StatusFound)
-		case "/to-nonloopback-http": // base is loopback but this hop is not — http forbidden
+		case "/to-nonloopback-http": // non-loopback http hop forbidden (this run's env is EMPTY = default base; the loopback-base variant is executed in TestCustomBasePinsRedirectsToBaseHost)
 			http.Redirect(w, r, "http://192.0.2.9/x", http.StatusFound)
 		case "/loop":
 			http.Redirect(w, r, srvURL+"/loop", http.StatusFound)
@@ -198,7 +199,10 @@ func TestNewHTTPClientPerHopChecks(t *testing.T) {
 }
 
 // TestCustomBasePinsRedirectsToBaseHost — custom base replaces the whitelist:
-// a redirect to any GitHub host must be rejected (spec §4.2(4) 白名单换为 base 宿主).
+// a redirect to any GitHub host must be rejected, and — the spec-pinned
+// combination executed for real here — a redirect from a LOOPBACK base to a
+// non-loopback host over plain http must be rejected at that hop (the
+// loopback exception never travels across hops; spec §4.2(4)/§4.6).
 func TestCustomBasePinsRedirectsToBaseHost(t *testing.T) {
 	var srvURL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -207,17 +211,19 @@ func TestCustomBasePinsRedirectsToBaseHost(t *testing.T) {
 			http.Redirect(w, r, "https://api.github.com/x", http.StatusFound)
 		case "/to-githubassets":
 			http.Redirect(w, r, "https://release-assets.githubusercontent.com/x", http.StatusFound)
+		case "/to-nonloopback-http":
+			http.Redirect(w, r, "http://192.0.2.9/x", http.StatusFound)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer srv.Close()
 	srvURL = srv.URL
-	t.Setenv(updateBaseEnv, srv.URL)
+	t.Setenv(updateBaseEnv, srv.URL) // base IS a loopback literal
 
-	for _, p := range []string{"/to-github", "/to-githubassets"} {
+	for _, p := range []string{"/to-github", "/to-githubassets", "/to-nonloopback-http"} {
 		if _, err := fetchViaClient(srvURL + p); err == nil || !strings.Contains(err.Error(), "blocked") {
-			t.Errorf("%s: want blocked (custom base replaces whitelist), got %v", p, err)
+			t.Errorf("%s: want blocked (custom base replaces whitelist; loopback exception is per-hop), got %v", p, err)
 		}
 	}
 }
@@ -233,23 +239,25 @@ func TestInvalidBaseEnvFailsClosed(t *testing.T) {
 		t.Fatalf("LatestRelease: want base-resolution error, got nil")
 	}
 	dir := t.TempDir()
-	if _, err := DownloadAsset(context.Background(), "http://127.0.0.1:1/x.zip", "", dir); err == nil {
+	// Valid-format digest so the failure is the structural initial-hop check
+	// (inside httpDo), not the empty-hash gate.
+	dummy := strings.Repeat("ab", 32)
+	if _, err := DownloadAsset(context.Background(), "http://127.0.0.1:1/x.zip", dummy, dir); err == nil {
 		t.Fatalf("DownloadAsset: want initial-hop error, got nil")
 	}
 	if entries := dirEntriesFor(t, dir); len(entries) != 0 {
 		t.Errorf("destDir not clean: %v", entries)
 	}
 
-	// Redirect layer: with the sentinel custom host, an https hop to a
-	// default-whitelist host must be blocked — proving no fallback to the
-	// default whitelist. (http loopback hops stay allowed by design: the
-	// loopback exception is judged per hop, base-independently.)
+	// Redirect layer: the initial hop check now lives inside httpDo, so the
+	// base-resolution failure fires on the first request itself — nothing
+	// reaches the wire, let alone a default-whitelist fallback.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://api.github.com/x", http.StatusFound)
 	}))
 	defer srv.Close()
-	if _, err := fetchViaClient(srv.URL + "/r"); err == nil || !strings.Contains(err.Error(), "blocked") {
-		t.Fatalf("redirect with invalid base env: want blocked error, got %v", err)
+	if _, err := fetchViaClient(srv.URL + "/r"); err == nil || !strings.Contains(err.Error(), updateBaseEnv) {
+		t.Fatalf("redirect with invalid base env: want base-resolution error, got %v", err)
 	}
 }
 

@@ -106,9 +106,10 @@ func allowedHop(u *url.URL, custom string) error {
 	return fmt.Errorf("blocked redirect/scheme (want https on the host whitelist, or http on a loopback literal): %s", u.Redacted())
 }
 
-// checkHop validates an initial request URL. CheckRedirect only sees redirect
-// targets — net/http never invokes it for the first request — so the first
-// hop is the caller's responsibility (spec §4.2(4): 初始 URL 与每一跳都要校验).
+// checkHop validates one request URL against the transport rule. It is called
+// by httpDo for every request — including the initial one, which net/http's
+// CheckRedirect never sees — so the first hop is enforced structurally, not by
+// caller convention (spec §4.2(4): 初始 URL 与每一跳都要校验).
 func checkHop(u *url.URL) error {
 	_, custom, err := baseAndHost()
 	if err != nil {
@@ -137,9 +138,15 @@ func NewHTTPClient() *http.Client {
 	}
 }
 
-// httpDo is the request seam (spec §4.6): tests override it to feed canned
-// responses for default-base paths that httptest cannot intercept.
+// httpDo is the request seam (spec §4.6). The production default enforces the
+// transport rule on req.URL before issuing anything — this is what makes the
+// INITIAL hop a structural guarantee instead of a caller convention
+// (CheckRedirect covers the later hops; tests overriding this seam choose
+// their own behavior).
 var httpDo = func(c *http.Client, req *http.Request) (*http.Response, error) {
+	if err := checkHop(req.URL); err != nil {
+		return nil, err
+	}
 	return c.Do(req)
 }
 

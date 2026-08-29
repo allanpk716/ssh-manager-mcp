@@ -8,12 +8,17 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// dummySHA is a format-valid 64-hex digest for tests where the digest value
+// itself is irrelevant (the download never completes or fails earlier).
+var dummySHA = strings.Repeat("ab", 32)
 
 func testSHA256(b []byte) string {
 	sum := sha256.Sum256(b)
@@ -61,8 +66,9 @@ func TestDownloadAssetSuccess(t *testing.T) {
 		t.Errorf("destDir entries = %d (%v), want 1", len(entries), entries)
 	}
 
-	// Bootstrap variant: empty wantSHA256 skips verification (checksums.txt
-	// itself has no outer hash).
+	// Bootstrap variant: empty wantSHA256 is structurally gated to
+	// checksums.txt downloads only (whose trust anchor is the release
+	// transport, not another hash) — this URL shape is the sanctioned path.
 	dir2 := t.TempDir()
 	final2, err := DownloadAsset(context.Background(), srv.URL+"/checksums.txt", "", dir2)
 	if err != nil {
@@ -70,6 +76,100 @@ func TestDownloadAssetSuccess(t *testing.T) {
 	}
 	if filepath.Base(final2) != "checksums.txt" {
 		t.Errorf("final name = %q, want checksums.txt", filepath.Base(final2))
+	}
+}
+
+// TestDownloadAssetEmptyHashGate — the empty-digest path only opens for
+// checksums.txt: any other URL with an empty hash is refused before any
+// request (R1 发现 2: 无校验路径不得有可误触的裸字符串入口).
+func TestDownloadAssetEmptyHashGate(t *testing.T) {
+	t.Setenv(updateBaseEnv, "")
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	_, err := DownloadAsset(context.Background(), srv.URL+"/f.zip", "", dir)
+	if err == nil || !strings.Contains(err.Error(), checksumsName) {
+		t.Fatalf("want empty-hash gate error naming %s, got %v", checksumsName, err)
+	}
+	if hits != 0 {
+		t.Errorf("server hits = %d, want 0 (gate must precede any request)", hits)
+	}
+	if entries := dirEntries(t, dir); len(entries) != 0 {
+		t.Errorf("destDir not clean: %v", entries)
+	}
+}
+
+func TestSafeURLFileName(t *testing.T) {
+	cases := []struct {
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{"https://x/y/sshmgr_0.13.0_windows_amd64.zip", "sshmgr_0.13.0_windows_amd64.zip", false},
+		{"https://x/y/checksums.txt", "checksums.txt", false},
+		{"https://x/y/", "y", false}, // trailing slash: Base drops it
+		// Traversal names must die here — even though a rename onto a
+		// directory would fail downstream, the fence is this guard.
+		{"https://x/y/f.zip/..", "", true},
+		{"https://x/y/../..", "", true},
+		{"https://x/y/..%2F..", "", true}, // decoded Path is /y/../../
+		{"https://x/y/.", "", true},
+		{"https://x", "", true}, // no path at all
+		// Windows metacharacters inside a legal URL segment.
+		{"https://x/y/a:b.zip", "", true},
+		{`https://x/y/a\b.zip`, "", true},
+		{"https://x/y/ф.zip", "", true},
+		// Windows device names pass the charset: rename-time OS refusal is a
+		// usability error, not a security one (cannot escape destDir).
+		{"https://x/y/con.zip", "con.zip", false},
+	}
+	for _, tc := range cases {
+		u, err := url.Parse(tc.raw)
+		if err != nil {
+			t.Fatalf("url.Parse(%q): %v", tc.raw, err)
+		}
+		got, err := safeURLFileName(u)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("safeURLFileName(%q) = %q, want error", tc.raw, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("safeURLFileName(%q): %v", tc.raw, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("safeURLFileName(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// TestDownloadAssetRejectsDotDotURL — the ".." rejection through the full
+// DownloadAsset path: refused before any request, zero residue.
+func TestDownloadAssetRejectsDotDotURL(t *testing.T) {
+	t.Setenv(updateBaseEnv, "")
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	dummy := strings.Repeat("ab", 32)
+	_, err := DownloadAsset(context.Background(), srv.URL+"/f.zip/..", dummy, dir)
+	if err == nil || !strings.Contains(err.Error(), "usable file name") {
+		t.Fatalf("want unusable-file-name error, got %v", err)
+	}
+	if hits != 0 {
+		t.Errorf("server hits = %d, want 0", hits)
+	}
+	if entries := dirEntries(t, dir); len(entries) != 0 {
+		t.Errorf("destDir not clean: %v", entries)
 	}
 }
 
@@ -176,7 +276,7 @@ func TestDownloadAssetIdleTimeout(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	_, err := DownloadAsset(context.Background(), srv.URL+"/f.zip", "", dir)
+	_, err := DownloadAsset(context.Background(), srv.URL+"/f.zip", dummySHA, dir)
 	if err == nil || !strings.Contains(err.Error(), "stalled") {
 		t.Fatalf("want stalled error, got %v", err)
 	}
@@ -201,7 +301,7 @@ func TestDownloadAssetTotalTimeout(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	_, err := DownloadAsset(context.Background(), srv.URL+"/f.zip", "", dir)
+	_, err := DownloadAsset(context.Background(), srv.URL+"/f.zip", dummySHA, dir)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want context.DeadlineExceeded, got %v", err)
 	}
@@ -221,7 +321,7 @@ func TestDownloadAssetRedirectToBadHost(t *testing.T) {
 	t.Setenv(updateBaseEnv, "")
 
 	dir := t.TempDir()
-	_, err := DownloadAsset(context.Background(), srv.URL+"/f.zip", "", dir)
+	_, err := DownloadAsset(context.Background(), srv.URL+"/f.zip", dummySHA, dir)
 	if err == nil || !strings.Contains(err.Error(), "blocked") {
 		t.Fatalf("want blocked error, got %v", err)
 	}

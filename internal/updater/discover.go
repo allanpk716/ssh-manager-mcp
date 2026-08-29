@@ -84,15 +84,13 @@ type releasePayload struct {
 }
 
 func fetchRelease(ctx context.Context, apiURL *url.URL) (*Release, error) {
-	if err := checkHop(apiURL); err != nil {
-		return nil, err
-	}
 	ctx, cancel := context.WithTimeout(ctx, apiTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("release lookup %s: %w", apiURL.Redacted(), err)
 	}
+	// httpDo validates req.URL (the initial hop) before issuing anything.
 	resp, err := httpDo(NewHTTPClient(), req)
 	if err != nil {
 		if resp != nil {

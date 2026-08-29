@@ -73,10 +73,12 @@ func ParseChecksums(data []byte, asset string) (string, error) {
 //     destDir without the target file: the temp file is removed and the final
 //     name is only ever created from fully verified bytes (零残留);
 //   - the initial URL and every redirect hop pass the transport rule
-//     (allowedHop);
+//     (enforced inside httpDo for the initial hop, CheckRedirect for hops);
 //   - wantSHA256, when non-empty, must be a 64-hex digest; the empty string
-//     skips verification and exists solely for bootstrapping checksums.txt
-//     itself, whose trust anchor is the release transport, not another hash.
+//     is accepted ONLY when the URL's last segment is checksums.txt (whose
+//     trust anchor is the release transport, not another hash) — every other
+//     download must carry the digest obtained via ParseChecksums, so the
+//     unverified path has no misfire-prone bare-string entry.
 //
 // Returns the final file path.
 func DownloadAsset(ctx context.Context, rawURL, wantSHA256, destDir string) (string, error) {
@@ -84,15 +86,16 @@ func DownloadAsset(ctx context.Context, rawURL, wantSHA256, destDir string) (str
 	if err != nil {
 		return "", fmt.Errorf("download %q: %w", rawURL, err)
 	}
-	if err := checkHop(u); err != nil {
+	name, err := safeURLFileName(u)
+	if err != nil {
 		return "", err
 	}
 	if wantSHA256 != "" && !sha256HexRe.MatchString(wantSHA256) {
 		return "", fmt.Errorf("download %s: wantSHA256 is not a 64-hex sha256 digest", u.Redacted())
 	}
-	name, err := safeURLFileName(u)
-	if err != nil {
-		return "", err
+	if wantSHA256 == "" && name != checksumsName {
+		return "", fmt.Errorf("download %s: empty wantSHA256 is only allowed for %s — asset downloads must carry the digest from ParseChecksums",
+			name, checksumsName)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, downloadTotal)
@@ -207,12 +210,16 @@ func (w *idleTimeoutReader) Read(p []byte) (int, error) {
 // and enforces a strict [A-Za-z0-9._-] charset: release asset names
 // (sshmgr_<ver>_<os>_<arch>.<zip|tar.gz>) and checksums.txt both fit, while
 // everything unsafe — separators (a URL segment may legally carry '\' or ':',
-// which are path/ADS metacharacters on Windows), traversal, unicode, control
-// characters — fails closed before anything is written.
+// which are path/ADS metacharacters on Windows), traversal (".." must never
+// survive as a name even though rename-to-directory would fail downstream —
+// the fence belongs here, not in OS semantics), unicode, control characters —
+// fails closed before anything is written. Windows device names (con, nul,
+// ...) do pass the charset; writing them is refused by the OS at rename time,
+// which is a usability error, not a security one (they cannot escape destDir).
 func safeURLFileName(u *url.URL) (string, error) {
 	name := path.Base(u.Path)
-	if name == "" || name == "." || name == "/" {
-		return "", fmt.Errorf("download %s: URL has no file name", u.Redacted())
+	if name == "" || name == "." || name == ".." || name == "/" {
+		return "", fmt.Errorf("download %s: URL has no usable file name", u.Redacted())
 	}
 	for i := 0; i < len(name); i++ {
 		c := name[i]
