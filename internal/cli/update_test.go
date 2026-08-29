@@ -332,6 +332,15 @@ func assertSelfFlippedTo(t *testing.T, home, self string, payload, oldBytes []by
 			oldPath = filepath.Join(home, e.Name())
 		}
 	}
+	if runtime.GOOS != "windows" {
+		// The unix branch is the atomic rename (spec §4.3): NO generational
+		// backup exists there — assert the residue stays clean instead of
+		// asserting the windows-only .old shape.
+		if oldPath != "" {
+			t.Errorf("unix replace must not leave a generational backup: %s", oldPath)
+		}
+		return
+	}
 	if oldPath == "" {
 		t.Fatal("no generational .old backup created")
 	}
@@ -1046,15 +1055,21 @@ func TestUpdateHealInteractiveYesContinuesFullChain(t *testing.T) {
 			oldPath = filepath.Join(home, e.Name())
 		}
 	}
-	if oldPath == "" {
+	if runtime.GOOS != "windows" {
+		// Unix replace is the atomic branch — no backup from the replace step.
+		if oldPath != "" {
+			t.Errorf("unix replace must not leave a generational backup: %s", oldPath)
+		}
+	} else if oldPath == "" {
 		t.Fatal("no generational .old backup from the replace step")
-	}
-	ob, err := os.ReadFile(oldPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(ob, healedImage) {
-		t.Errorf("replace backup = %q, want the healed image", ob)
+	} else {
+		ob, err := os.ReadFile(oldPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(ob, healedImage) {
+			t.Errorf("replace backup = %q, want the healed image", ob)
+		}
 	}
 }
 
