@@ -1,7 +1,7 @@
 # Plan 44 设计:sshmgr 自更新 + 改名 ssh-manager → sshmgr
 
 - 日期:2026-08-29
-- 状态:rev2(第 2 轮盲评两评审 27 条、合并同类 22 项全闭环:21 采纳 + K8 部分采纳[heal 规则采纳、sidecar 哈希驳回,理由见 §4.3];待 owner 终审定稿)
+- 状态:**定稿**(rev2;第 1 轮盲评 25 条+第 2 轮 27 条[合并 22 项]全闭环;owner 终审通过 2026-08-29)
 - 前置:Plan 42 批1 已并入本地 master(5dd51e4,未推送未发版);本 plan 与批1 **捆发 v0.13.0**(Q6 拍板)
 - 上游事实(2026-08-29 实测):NUC10 exe 在 `C:\Users\allan716\ssh-manager.exe`(用户目录);服务 `ssh-manager-serve` RUNNING(LocalSystem,BINARY_PATH_NAME 指向该 exe);NUC10 → GitHub API 可达(200);**本仓 v0.12.0 真实资产 302 的 Location 宿主 = `release-assets.githubusercontent.com`(curl 实测)**;发版管线 = goreleaser → GitHub Releases(资产 zip/tar.gz + checksums.txt)
 
