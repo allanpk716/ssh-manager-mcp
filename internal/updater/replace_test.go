@@ -234,6 +234,18 @@ func TestReplaceWindowsDoubleFaultReturnsErrRollbackFailed(t *testing.T) {
 	mustNotExist(t, self)
 }
 
+// TestRecoverCommandPOSIXForm pins the POSIX branch of recoverCommand (T9
+// nit 补测:double-fault 的 windows move /y 形态已有断言,mv 分支此前零覆盖):
+// 非 windows 渲染为可逐字执行的 `mv <backup> <self>`。
+func TestRecoverCommandPOSIXForm(t *testing.T) {
+	origGOOS := currentGOOS
+	currentGOOS = "linux"
+	defer func() { currentGOOS = origGOOS }()
+	if got, want := recoverCommand("/opt/bin/sshmgr.old.42", "/opt/bin/sshmgr"), "mv /opt/bin/sshmgr.old.42 /opt/bin/sshmgr"; got != want {
+		t.Errorf("recoverCommand = %q, want %q", got, want)
+	}
+}
+
 func TestReplaceWindowsFirstRenameFailureLeavesZeroChange(t *testing.T) {
 	dir := t.TempDir()
 	self := filepath.Join(dir, "sshmgr")
