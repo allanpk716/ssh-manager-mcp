@@ -35,9 +35,10 @@ const LegacyServiceName = "ssh-manager-serve"
 // DescNoServiceSystem is embedded in ProbeResult.Desc when probing hit
 // kardianos ErrNoServiceSystemDetected (containers/CI with no service
 // manager). The probe itself reports MechanismErr — it genuinely cannot
-// classify existence — and the CLI decides what spec §3.2 prescribes for this
-// cause: skip service probing and update anyway. Matching on this marker
-// keeps the skip decision a string check on the pinned ProbeResult shape.
+// classify existence. The marker is a production-unreachable edge (kardianos
+// falls back to sysv, so a real host always has some service system); it is
+// kept only for observability. Per the spec §3.2 勘误 the CLI fail-closes on
+// EVERY MechanismErr — there is no skip branch to decide.
 const DescNoServiceSystem = "no service system detected"
 
 // ProbeState is the trichotomy verdict of a service probe (spec §3.2):
@@ -105,8 +106,9 @@ func (nopService) Stop(service.Service) error  { return nil }
 //     failed-state error is classified Installed, never MechanismErr.
 //   - No service system at all (ErrNoServiceSystemDetected — containers/CI)
 //     → ProbeMechanismErr with DescNoServiceSystem embedded in Desc: the
-//     existence question is unanswerable here, and the CLI owns the spec's
-//     "skip probing" decision for this specific cause.
+//     existence question is unanswerable here. Production-unreachable
+//     (kardianos sysv fallback), kept for observability; per the spec §3.2
+//     勘误 the CLI fail-closes on MechanismErr — no skip branch.
 //   - Anything else → ProbeMechanismErr (fail-closed; Desc carries the error).
 func ProbeService(name string) ProbeResult {
 	svc, err := serviceNew(nopService{}, &service.Config{Name: name})

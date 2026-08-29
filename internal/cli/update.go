@@ -38,7 +38,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 
 	"github.com/kardianos/service"
@@ -55,15 +54,11 @@ import (
 // "not responding" line with a hint — the probe is evidence, not a verdict.
 const defaultProbeAddr = "127.0.0.1:7878"
 
-// defaultUpdateBase is the default value of updater.BaseURL() (updater's
-// defaultBaseURL, mirrored here only for the "non-default → prominent"
-// evidence marker; drift would at worst mislabel the marker, never change
-// behavior — the actual base always comes from updater.BaseURL()).
-const defaultUpdateBase = "https://api.github.com"
-
 // updateBaseEnv is the env seam name (spec §4.6). Referenced (not re-parsed)
 // to decide the prominence marker: a value explicitly set in the environment
-// is exactly what "非默认" means, with no second parsing of the base URL.
+// is exactly what "非默认" means, with no second parsing of the base URL —
+// the default value lives only in updater.BaseURL() (no mirrored constant
+// here to drift; see the evidence-line comment at the marker site below).
 const updateBaseEnv = "SSHMGR_UPDATE_BASE"
 
 // shaHexRe matches a user-supplied --sha256 digest (64 hex chars).
@@ -132,8 +127,8 @@ func newUpdateCmd() *cobra.Command {
 		Long: `Self-update the sshmgr binary in place, restarting the serve service if one is
 registered.
 
-  sshmgr update                          check → confirm → download → verify →
-                                         staged self-check → replace → restart
+  sshmgr update                          check → download → verify →
+                                         staged self-check → confirm → replace → restart
   sshmgr update --check                  dry run: report current/latest/asset/
                                          update base; touches nothing
   sshmgr update --yes                    skip confirmations (REQUIRED for
@@ -212,7 +207,9 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 		}
 	}
 
-	// 证据行:update base(spec §4.5;非默认时额外醒目)。
+	// 证据行:update base(spec §4.5)。「非默认→醒目」的判定 = SSHMGR_UPDATE_BASE
+	// env 在场,而非值比对——不对 base URL 做第二次解析、不镜像默认常量
+	// (默认值只活在 updater.BaseURL() 一处);env 显式设置即"非默认"。
 	if strings.TrimSpace(os.Getenv(updateBaseEnv)) == "" {
 		fmt.Fprintf(out, "update base: %s\n", updater.BaseURL())
 	} else {
@@ -557,21 +554,32 @@ func restartPending(out io.Writer, cause error) error {
 }
 
 // manualServiceCommand renders the platform-specific manual service command
-// (spec §4.4 pins Windows `sc stop X && sc start X` — sc has no restart —
-// and Linux `systemctl restart`).
+// for the running GOOS (spec §4.4 pins Windows `sc stop X && sc start X` — sc
+// has no restart — and Linux `systemctl restart`).
 func manualServiceCommand(op string) string {
+	return manualServiceCommandFor(runtime.GOOS, op)
+}
+
+// manualServiceCommandFor is the pure per-GOOS renderer, split from
+// manualServiceCommand so the darwin/linux forms are assertable on any
+// platform (the launchd/systemctl shapes otherwise hide behind runtime.GOOS
+// in tests).
+func manualServiceCommandFor(goos, op string) string {
 	name := buildinfo.ServeServiceName
-	switch runtime.GOOS {
+	switch goos {
 	case "windows":
 		if op == "restart" {
 			return "sc stop " + name + " && sc start " + name + "(管理员;或 Win11 sudo sc …)"
 		}
 		return "sc " + op + " " + name + "(管理员;或 Win11 sudo sc …)"
 	case "darwin":
+		// start 也用 kickstart:bootstrap 需要显式 plist 路径,照抄不可执行;
+		// kickstart(无 -k)对已注册未运行的服务即"启动",与 restart 的
+		// kickstart -k(杀掉重启)区分。
 		if op == "restart" {
 			return "sudo launchctl kickstart -k system/" + name
 		}
-		return "sudo launchctl bootstrap system/" + name
+		return "sudo launchctl kickstart system/" + name
 	default:
 		return "sudo systemctl " + op + " " + name
 	}
@@ -593,79 +601,32 @@ func fileSHA256(path string) (string, error) {
 
 // --- crash-window self-heal action -------------------------------------------
 
-// oldGenSep is the generational backup suffix updater's replace produces:
-// <self>.old.<unixts>. Mirrored here (the updater keeps it unexported) purely
-// so the CONFIRMED heal can act; DetectHeal remains the authoritative gate.
-const oldGenSep = ".old."
-
 // performHeal executes the confirmed recovery (spec §4.3): the running image
 // (entry: the executable itself carries the .old.<ts> suffix) or the newest
 // self+".old.<ts>" generation is renamed back onto the canonical path, and
 // the canonical path becomes the self the rest of the update flow replaces.
+// The generational naming is updater's single source of truth
+// (SplitOldGeneration / OldGenerations); DetectHeal remains the
+// authoritative gate.
 func performHeal(self string) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	if stem, _, isGen := splitOldGenerationName(filepath.Base(exe)); isGen {
+	if stem, _, isGen := updater.SplitOldGeneration(filepath.Base(exe)); isGen {
 		canonical := filepath.Join(filepath.Dir(exe), stem)
 		if merr := os.Rename(exe, canonical); merr != nil {
 			return "", fmt.Errorf("rename %s -> %s: %w", exe, canonical, merr)
 		}
 		return canonical, nil
 	}
-	backup, ok := newestOldGeneration(self)
-	if !ok {
+	gens, gerr := updater.OldGenerations(self)
+	if gerr != nil || len(gens) == 0 {
 		return "", fmt.Errorf("未找到可恢复的 %s.old.<ts> 备份", self)
 	}
+	backup := gens[len(gens)-1].Path // oldest→newest sorted; freshest image wins
 	if merr := os.Rename(backup, self); merr != nil {
 		return "", fmt.Errorf("rename %s -> %s: %w", backup, self, merr)
 	}
 	return self, nil
-}
-
-// splitOldGenerationName mirrors updater's generational naming parse:
-// "<stem>.old.<digits>" → (stem, ts, true); everything else is not a
-// generation (non-digit or overflowing suffixes included).
-func splitOldGenerationName(name string) (stem string, ts int64, ok bool) {
-	i := strings.LastIndex(name, oldGenSep)
-	if i <= 0 {
-		return "", 0, false
-	}
-	digits := name[i+len(oldGenSep):]
-	if digits == "" {
-		return "", 0, false
-	}
-	for _, c := range digits {
-		if c < '0' || c > '9' {
-			return "", 0, false
-		}
-	}
-	ts, err := strconv.ParseInt(digits, 10, 64)
-	if err != nil {
-		return "", 0, false
-	}
-	return name[:i], ts, true
-}
-
-// newestOldGeneration returns the freshest self+".old.<ts>" sibling (newest
-// timestamp wins — it holds the most recent complete image).
-func newestOldGeneration(self string) (string, bool) {
-	dir, base := filepath.Dir(self), filepath.Base(self)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", false
-	}
-	best, bestTS := "", int64(-1)
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), base) {
-			continue
-		}
-		stem, ts, ok := splitOldGenerationName(e.Name())
-		if !ok || stem != base || ts <= bestTS {
-			continue
-		}
-		best, bestTS = filepath.Join(dir, e.Name()), ts
-	}
-	return best, best != ""
 }

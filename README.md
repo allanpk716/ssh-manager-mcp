@@ -225,6 +225,7 @@ sshmgr pair --instance laptop
 | 变量 | 默认 / 语法 | 说明 |
 |---|---|---|
 | `SSHMGR_CACHE_MAX_OFFLINE` | Go duration（≥1h；unset/`0` 关，**默认关**） | 离线缓存到龄自废：超龄的下次 load/spawn 销毁本地 cache（服务器 Date 锚 + 1h 时钟容差）。优先级 env > `cache.config.json` > 关——v0.11 起可 `cache pull --max-offline 24h` 把上限持久化进每实例的 `cache.config.json`。详见 docs/multi-machine.md |
+| `SSHMGR_UPDATE_BASE` | 默认 `https://api.github.com`；自定义基址 = 换信任白名单（镜像须照搬 GitHub 的 URL 路径布局）；非环回强制 https，环回 http 仅测试假源 | 自更新基址（`sshmgr update`，Plan 44）：镜像/内网换源 seam；生效 base 恒在 update 证据行显示，非默认时醒目标记 |
 
 ---
 

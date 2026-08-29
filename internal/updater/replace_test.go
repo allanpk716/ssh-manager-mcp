@@ -100,14 +100,14 @@ func TestReplaceBinaryWindowsHappyPath(t *testing.T) {
 	}
 	mustNotExist(t, staged)
 	// 恰剩一代 = 本代 backup(持有旧字节);预置残留已被尽力清理
-	gens, err := oldGenerations(self)
+	gens, err := OldGenerations(self)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(gens) != 1 {
 		t.Fatalf("generations after replace = %d (%v), want exactly 1", len(gens), gens)
 	}
-	if got := readBin(t, gens[0].path); got != oldSelfBytes {
+	if got := readBin(t, gens[0].Path); got != oldSelfBytes {
 		t.Fatalf("backup content = %q, want old image", got)
 	}
 	if len(calls) != 2 || calls[0].from != self || calls[1].from != staged || calls[1].to != self {
@@ -189,7 +189,7 @@ func TestReplaceWindowsRollbackOnStagedRenameFailure(t *testing.T) {
 		t.Fatalf("rollback call = %v, want %s→%s (newest generation)", calls[2], calls[0].to, self)
 	}
 	// 预置残留代际被起手清理,本代 backup 被回滚消费:代际清零
-	if gens, _ := oldGenerations(self); len(gens) != 0 {
+	if gens, _ := OldGenerations(self); len(gens) != 0 {
 		t.Fatalf("generations after rollback = %v, want none", gens)
 	}
 	if got := readBin(t, staged); got != newSelfBytes {
@@ -307,7 +307,7 @@ func TestReplaceUnix(t *testing.T) {
 			t.Fatalf("self content = %q, want new image", got)
 		}
 		mustNotExist(t, staged)
-		if gens, _ := oldGenerations(self); len(gens) != 0 {
+		if gens, _ := OldGenerations(self); len(gens) != 0 {
 			t.Fatalf("unix path must not create .old generations, got %v", gens)
 		}
 	})
@@ -566,9 +566,9 @@ func TestSplitOldGeneration(t *testing.T) {
 		{"sshmgr2.old.123", "sshmgr2", 123, true},         // 通用解析;旧代际过滤靠 stem==base
 	}
 	for _, tc := range cases {
-		stem, ts, ok := splitOldGeneration(tc.in)
+		stem, ts, ok := SplitOldGeneration(tc.in)
 		if ok != tc.ok || (ok && (stem != tc.stem || ts != tc.ts)) {
-			t.Errorf("splitOldGeneration(%q) = (%q, %d, %v), want (%q, %d, %v)",
+			t.Errorf("SplitOldGeneration(%q) = (%q, %d, %v), want (%q, %d, %v)",
 				tc.in, stem, ts, ok, tc.stem, tc.ts, tc.ok)
 		}
 	}

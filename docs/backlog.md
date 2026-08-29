@@ -2,7 +2,7 @@
 
 - 2026-08-21 grilling 缺口分析会话（议题：满足项目目标——接口级不暴露 IP/端口/凭据 + 日常 agent 使用——还缺什么）产出 P0/P1 排期队列（#12-#16 + #3 提级），P2 维持"已裁决、未排期"。
 - P2 及历史决策记录在案（xcheck 收敛 2026-08-16 / Plan 25），均为 owner 拍板"暂不改行为"。
-- 编号稳定：老条目号码不变，#1/#2/#4 已并入 #15（留墓碑），#9 已随 Plan 30 移除，新条目顺延 #12-#16。
+- 编号稳定：老条目号码不变，#1/#2/#4 已并入 #15（留墓碑），#9 已随 Plan 30 移除，新条目顺延（现有 #12-#17）。
 - 排序逻辑：目标债（接口级不暴露承诺正被违反）→ 日常功能解锁 → 安全债 → 便利性。
 - 明确不做/暂缓清单见文末（scope 纪律留痕）。
 
@@ -35,6 +35,9 @@
 8. **TestConnectCancelContext Windows wsarecv 间歇 flake**——现状：`internal/sshbroker` 该测试在 Windows 偶发 wsarecv 竞态（2026-08-17 本地全量首跑中 1 次，重跑即绿；CI windows lane 连续绿），修法大概是 retry 式稳定化，与本 repo 任何在飞分支无关。**同族新例（2026-08-27）**：① `internal/mcpserver` TestExecOutputStopToolRegistered（bgtools_test.go "task did not reach done within 5 polls"）ubuntu lane CI 首跑红、`--failed` 重跑即绿（30bba37 docs-only commit——同代码树当日两轮绿，纯时序 flake）；② `internal/mcpserver` TestBackgroundAuditEndRows（1.18s）windows lane 首跑红（b153019）、重跑即绿——后台任务收尾审计行的固定轮询时序同病；③ `internal/mcpserver` TestExecOutputAheadOffsetReturnsImmediately（1.94s）windows lane **release workflow** 首跑红（v0.12.0 tag 33070292484，同树 6 分钟前 ci lane 全绿）、重跑即绿——**release lane 已三连被拦**（①在 30bba37/20682f4 两次 ci、②在 b153019、③在 v0.12.0 release），修法优先级应上调。修法同方向：固定轮询数改 deadline 轮询。**mcpserver 族已修（2026-08-27，`flake8-deadline-polling`）**：①+e2e 同型两处潜伏（`bgtools_test.go` TestExecOutputStopToolRegistered / `e2e_test.go` TestE2EBackgroundTrioFullFlow 两段——固定 5 轮 → deadline 30s 轮询，每轮仍 wait=2 长轮询，游标推进保证多轮零重复收集）；②（TestBackgroundAuditEndRows——终态置位 ≠ end 行落笔，reaper 异步写竞态：单发 `AuditRows` 读 → deadline 10s 重试至 8 行齐，多余行仍由 ==8 断言钉住）；③（TestExecOutputAheadOffsetReturnsImmediately——墙钟预算 1s → 3s；判别对象是"早退 vs 吃满 wait=5s"，破损路径 ~5s 仍清晰落预算外）。验证：四测试 `-count=10` 全绿 + 全仓 16 包 uncached 绿。**原 sshbroker wsarecv 例未修**（仅本地出现过一次、CI 连续绿），维持登记，修法仍为 retry 式稳定化。
 10. **TUI 测试套件耗时 ~89s**——现状：Plan 30 后 `internal/tui` 从 ~3s 涨到 ~89s（editpage ~71s + wizard 回环 ~7s + e2e ~7s）：drain 测试 helper 同步执行 huh Focus 的 cursor blink `tea.Tick` 闭包（530ms 包级 const），睡完才丢弃 BlinkMsg；纯测试墙钟，零生产影响（生产 cmd 在 runtime goroutine 执行）。跟进方向（Plan 30 终审裁决）：`press()` 对普通字符键免 drain（field 态字符键只产 blink 重臂 cmd）和/或睡眠主导测试加 `t.Parallel()`；**BlinkSpeed 测试 seam 已证不可行**（cursor.Model per-instance 字段，huh 构造器不暴露内部 cursor）。
 11. **TUI 表单光标常亮（闪烁宣称撤回）**——现状：Plan 30 曾宣称"表单内光标闪烁恢复"，真终端实测常亮。探针实证（2026-08-19）：blink 消息链活着（自续多轮）但表单视图从不切换——huh v2.0.3 `Group.Update` 对聚焦字段双重更新产生两条竞争 blink 血统，与 bubbles cursor 的 id/tag 防重机制相互作用，Set 相互覆盖致渲染恒定；属 huh/bubbles v2 嵌入式表单上游行为，本仓代码全程未设 cursor 模式。跟进方向：升级 huh/bubbles 后复验（复用探针：连喂 BlinkMsg 比对 form.View() 变化）。
+17. **update 健康回探地址固定 127.0.0.1:7878**（T8 评审 Ruling F1 登记）——现状：`sshmgr update` 重启 serve 后的健康回探写死默认 `--addr`（`internal/cli/update.go` 的 `defaultProbeAddr`），非默认 `--addr` 装机的回探恒报 "not responding"（证据行已如实自认可能误报并指引 `serve status` 复核，不算错误结果但属已知钝感）。跟进：`RegisteredBinaryPath` 同源拆 args 取真实 `--addr`（读回 ImagePath/ExecStart/ProgramArguments 时顺带解析服务参数，替代写死常量）。附注（同批评审登记、不随 Plan 44 修复）：
+    - `-race` 本机 DLL 入口点环境问题（T4/T6 登记）。
+    - backup-restore.md:223 serve.log 路径与 VaultDir 行为漂移（T2 前既有）。
 
 ## 明确不做 / 暂缓（2026-08-21 grilling 留痕）
 

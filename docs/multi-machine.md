@@ -387,11 +387,11 @@ sshmgr cache-tokens add --name laptop --profile team-a
 ```bash
 # 第一次拉（设备码 + 指纹一起给；之后由 `mcp --cache` 自动保鲜）
 sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1234...'
-# → pulled N servers / M credentials into <UserConfigDir>/sshmgr/cache.bin
+# → pulled N servers / M credentials into <UserConfigDir>/ssh-manager/cache.bin
 
 # 看缓存状态
 sshmgr cache status
-# cache:    <UserConfigDir>/sshmgr/cache.bin
+# cache:    <UserConfigDir>/ssh-manager/cache.bin
 # age:      12m3s
 # servers:  N
 # creds:    M
@@ -487,7 +487,7 @@ systemctl --user enable --now sshmgr-cache.timer
 SSHMGR_CACHE_URL=https://192.0.2.5:7878
 SSHMGR_CACHE_TOKEN=<设备码>
 SSHMGR_SERVE_PIN=sha256:<指纹>
-"@ | Set-Content -Path "$env:USERPROFILE\.sshmgr\cache.env" -Encoding UTF8
+"@ | Set-Content -Path "$env:USERPROFILE\.ssh-manager\cache.env" -Encoding UTF8
 
 $action  = New-ScheduledTaskAction -Execute "sshmgr.exe" `
             -Argument "cache pull"
@@ -508,7 +508,7 @@ Register-ScheduledTask -TaskName "ssh-manager-cache-refresh" `
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.sshmgr.cache-refresh</string>
+    <string>com.ssh-manager.cache-refresh</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/bin/sshmgr</string>
@@ -533,7 +533,7 @@ Register-ScheduledTask -TaskName "ssh-manager-cache-refresh" `
 ```
 
 ```bash
-launchctl load -w ~/Library/LaunchAgents/com.sshmgr.cache-refresh.plist
+launchctl load -w ~/Library/LaunchAgents/com.ssh-manager.cache-refresh.plist
 ```
 
 ⚠️ **设备码 = 钥匙**：任何机器拿到 `<设备码>` + 能连 serve = 能拉整份 vault 快照。所以：serve 默认**自签 TLS + 指纹钉死**（指纹 = serve 证书公钥，`cache pull` 钉死它防 MITM）；设备码进 0600 配置文件 / 密码管理器，**别进 git**；机器失窃 → 立刻 `cache-tokens revoke`（见下）。设备码持久化在 `cache.auth.json`（0600，Windows 另加 ACL）；证书轮换后手动带新 `--pin` 重拉一次即可覆盖。
@@ -557,7 +557,7 @@ launchctl load -w ~/Library/LaunchAgents/com.sshmgr.cache-refresh.plist
 
 离线模式下，broker 的每次调用（exec / download / upload / forward / 被拒的写）都写进本机的 `cache-audit.log`（JSONL，每行一条）。**单向、零合并**——这份日志**不会**回传 serve 服务器，**不会**并进服务器的审计表，永远只在本机。
 
-- 路径：`<UserConfigDir>/sshmgr/cache-audit.log`（和 `cache.bin` 同目录；`cache-dek.key` 在 vault 固定路径——见上"已知不一致"）。
+- 路径：`<UserConfigDir>/ssh-manager/cache-audit.log`（和 `cache.bin` 同目录；`cache-dek.key` 在 vault 固定路径——见上"已知不一致"）。
 - 用途：操作者本机自查（谁在什么时候、用哪个 project / server、干了什么、成功没）。
 - 如需集中审计：手工把各机的 `cache-audit.log` 收拢到你的日志系统（程序不代劳）。
 
@@ -690,7 +690,7 @@ serve 自签证书长生（不靠过期驱动轮换），但若私钥疑似泄�
 ### 目录布局
 
 ```
-<UserConfigDir>/sshmgr/                    ← 默认实例（存量零变化）
+<UserConfigDir>/ssh-manager/                    ← 默认实例（存量零变化）
 ├── cache.bin / cache.meta.json / cache.auth.json
 ├── cache-audit.log / cache.config.json / quarantine/
 └── instances/<name>/                           ← 命名实例（每实例同构一套）
@@ -825,7 +825,7 @@ sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指纹>' -
 更换默认实例的设备码 = 清除默认目录 cache 材料**三件套**后重新 enroll：
 
 ```bash
-# 在默认 cache 目录（<UserConfigDir>/sshmgr/）删除三件：
+# 在默认 cache 目录（<UserConfigDir>/ssh-manager/）删除三件：
 #   cache.auth.json + cache.bin + quarantine/（整目录）
 # ⚠️ cache.meta.json 与 cache.config.json 千万保留（见下）
 sshmgr cache pull --url https://192.0.2.5:7878 --token '<新码>:<指纹>'

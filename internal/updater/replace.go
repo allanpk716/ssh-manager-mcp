@@ -55,17 +55,19 @@ var (
 // replaceWindows: <self>.old.<unixts>.
 const oldGenSep = ".old."
 
-// oldBackup is one generation backup of self.
-type oldBackup struct {
-	path string
-	ts   int64
+// OldBackup is one generation backup of self.
+type OldBackup struct {
+	Path string
+	TS   int64
 }
 
-// splitOldGeneration reports whether name has the shape "<stem>.old.<digits>"
+// SplitOldGeneration reports whether name has the shape "<stem>.old.<digits>"
 // (the exact naming replaceWindows produces) and returns stem and timestamp.
 // Non-digit or int64-overflow suffixes are not generations, and a name may
 // not START with the separator (a bare ".old.123" hidden file is nothing).
-func splitOldGeneration(name string) (stem string, ts int64, ok bool) {
+// Exported for the CLI heal path (single source of truth for the generational
+// naming — the CLI no longer mirrors the parse).
+func SplitOldGeneration(name string) (stem string, ts int64, ok bool) {
 	i := strings.LastIndex(name, oldGenSep)
 	if i <= 0 {
 		return "", 0, false
@@ -86,28 +88,29 @@ func splitOldGeneration(name string) (stem string, ts int64, ok bool) {
 	return name[:i], ts, true
 }
 
-// oldGenerations lists self+".old.<ts>" siblings of self, sorted oldest →
+// OldGenerations lists self+".old.<ts>" siblings of self, sorted oldest →
 // newest by timestamp (newest = last). Entries whose stem does not equal
 // self's base name ("sshmgr2.old.123" next to self "sshmgr") are not ours.
-func oldGenerations(self string) ([]oldBackup, error) {
+// Exported for the CLI heal path (newest-generation recovery).
+func OldGenerations(self string) ([]OldBackup, error) {
 	dir := filepath.Dir(self)
 	base := filepath.Base(self)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	var out []oldBackup
+	var out []OldBackup
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasPrefix(e.Name(), base) {
 			continue
 		}
-		stem, ts, ok := splitOldGeneration(e.Name())
+		stem, ts, ok := SplitOldGeneration(e.Name())
 		if !ok || stem != base {
 			continue
 		}
-		out = append(out, oldBackup{path: filepath.Join(dir, e.Name()), ts: ts})
+		out = append(out, OldBackup{Path: filepath.Join(dir, e.Name()), TS: ts})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ts < out[j].ts })
+	sort.Slice(out, func(i, j int) bool { return out[i].TS < out[j].TS })
 	return out, nil
 }
 
@@ -240,12 +243,12 @@ func fsyncDir(dir string) error {
 // and not surfaced (they are residue hygiene, never an update outcome), and
 // this library layer has no logger to warn through.
 func CleanOldBackups(self string) error {
-	gens, err := oldGenerations(self)
+	gens, err := OldGenerations(self)
 	if err != nil {
 		return nil // cannot even list the directory: nothing best-effort to do
 	}
 	for _, g := range gens {
-		_ = osRemove(g.path) // tolerated by design
+		_ = osRemove(g.Path) // tolerated by design
 	}
 	return nil
 }
@@ -267,7 +270,7 @@ func DetectHeal() (healHint string, ok bool) {
 	}
 	// Entry 2 first: we are executing FROM a generation backup; renaming
 	// ourselves back to the canonical path is the recovery.
-	if stem, _, isGen := splitOldGeneration(filepath.Base(exe)); isGen {
+	if stem, _, isGen := SplitOldGeneration(filepath.Base(exe)); isGen {
 		canonical := filepath.Join(filepath.Dir(exe), stem)
 		if fileExists(canonical) {
 			return "", false // canonical present: mid-update normal, nothing to heal
@@ -285,13 +288,13 @@ func DetectHeal() (healHint string, ok bool) {
 	if fileExists(self) {
 		return "", false
 	}
-	gens, err := oldGenerations(self)
+	gens, err := OldGenerations(self)
 	if err != nil || len(gens) == 0 {
 		return "", false
 	}
 	newest := gens[len(gens)-1] // oldest→newest sorted; the freshest image wins
 	return fmt.Sprintf("%s missing but backup %s exists (crash between the two renames); recover with: %s",
-		self, newest.path, recoverCommand(newest.path, self)), true
+		self, newest.Path, recoverCommand(newest.Path, self)), true
 }
 
 // recoverCommand renders the manual recovery command for the current

@@ -358,9 +358,54 @@ func wantServiceCmd(op string) string {
 		if op == "restart" {
 			return "sudo launchctl kickstart -k system/" + buildinfo.ServeServiceName
 		}
-		return "sudo launchctl bootstrap system/" + buildinfo.ServeServiceName
+		return "sudo launchctl kickstart system/" + buildinfo.ServeServiceName
 	default:
 		return "sudo systemctl " + op + " " + buildinfo.ServeServiceName
+	}
+}
+
+// --- help copy pins (勘误2 confirm order; launchd start shape) ----------------
+
+// TestUpdateHelpPinsConfirmOrder locks spec §4.3 勘误2: the Long help must
+// teach the confirm point AFTER download/verify/staged self-check (confirm
+// sits between the staged check and the replace), never the pre-erratum
+// "check → confirm → download" order. The help wraps the sequence across two
+// lines, so the assertion runs on whitespace-normalized text.
+func TestUpdateHelpPinsConfirmOrder(t *testing.T) {
+	root := NewRootCmd()
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetArgs([]string{"update", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("update --help: %v", err)
+	}
+	norm := strings.Join(strings.Fields(buf.String()), " ")
+	want := "check → download → verify → staged self-check → confirm → replace → restart"
+	if !strings.Contains(norm, want) {
+		t.Fatalf("help missing the pinned post-erratum order %q:\n%s", want, buf.String())
+	}
+	if strings.Contains(norm, "check → confirm → download") {
+		t.Fatalf("help still teaches the pre-erratum order (confirm before download):\n%s", buf.String())
+	}
+}
+
+// TestManualServiceCommandDarwinStartUsesKickstart locks the final-review fix:
+// the launchd START command must be `kickstart` (executable as-is — the
+// service is already registered; kickstart without -k just starts it), not
+// `bootstrap` (needs an explicit plist path, so the printed command could
+// never run). Parameterized renderer lets this darwin shape be asserted on
+// every platform.
+func TestManualServiceCommandDarwinStartUsesKickstart(t *testing.T) {
+	start := manualServiceCommandFor("darwin", "start")
+	if want := "sudo launchctl kickstart system/" + buildinfo.ServeServiceName; start != want {
+		t.Errorf("darwin start = %q, want %q", start, want)
+	}
+	if strings.Contains(start, "bootstrap") {
+		t.Errorf("darwin start must not use bootstrap (needs a plist path): %q", start)
+	}
+	restart := manualServiceCommandFor("darwin", "restart")
+	if want := "sudo launchctl kickstart -k system/" + buildinfo.ServeServiceName; restart != want {
+		t.Errorf("darwin restart = %q, want %q", restart, want)
 	}
 }
 

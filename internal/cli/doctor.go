@@ -79,6 +79,7 @@ var doctorEnvSeams = []string{
 	"SSHMGR_SERVE_LOG",
 	"SSHMGR_CACHE_URL",
 	"SSHMGR_CACHE_TOKEN",
+	"SSHMGR_UPDATE_BASE",
 	"SSHMGR_MASTERKEY_HEX",
 }
 

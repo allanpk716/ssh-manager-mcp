@@ -39,7 +39,7 @@
 一次迁移完成后，双端升级不再手工「停服务 → 换二进制 → 重启」：
 
 ```
-sshmgr update                        # 检查→显示 当前→最新→确认→下载→校验→替换→(服务则重启)
+sshmgr update                        # 检查→显示 当前→最新→下载→校验→staged自检→确认→替换→(服务则重启)
 sshmgr update --check                # 干跑：只报 当前/最新/资产名/update base，不改任何东西
 sshmgr update --yes                  # 免确认（远程/脚本；非 TTY 必需；服务重启亦视为同意）
 sshmgr update --version v0.13.1      # 装指定版（含降级=回滚通道；降级有显式警告）
