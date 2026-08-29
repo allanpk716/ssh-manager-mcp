@@ -110,7 +110,7 @@ tmpdir = self 同目录/.sshmgr-update-tmp-XXXX(下载/解压/校验全在 tmpdi
     清残留备份 self+".old*"(尽力,失败仅警告;仍被旧进程持有的删不掉,正常)
     os.Rename(self, self+".old.<unixts>")        # 运行中 exe 可改名不可删;代际名防单槽被旧进程占死
     os.Rename(tmp/self, self) 失败 → 回滚 Rename(最新代际 .old→self)
-      回滚再失败 → 专用退出码 + 打印手工恢复命令(ren <最新代际>.old sshmgr.exe)+ 跳过重启询问
+      回滚再失败 → 普通失败退出码 + 打印手工恢复命令(platform 适用的 move /y 或 mv 形态)+ 跳过重启询问
   其余(Linux/darwin):
     os.Rename(tmp/self, self)                     # 原子,运行中进程持旧 inode
     rename 后 fsync exe 目录;失败 = committed-with-error 状态(不回滚,如实报告)
@@ -150,7 +150,7 @@ tmpdir = self 同目录/.sshmgr-update-tmp-XXXX(下载/解压/校验全在 tmpdi
 ### 4.5 命令面
 
 ```
-sshmgr update                        # 检查→显示 当前→最新→确认→下载→校验→staged自检→替换→(服务则重启)
+sshmgr update                        # 检查→显示 当前→最新→下载→校验→staged自检→确认→替换→(服务则重启)【勘误 2026-08-29:确认排在下载/校验/staged 之后、替换之前(§4.3 块序为准,rev0 初稿此处顺序有误)】
 sshmgr update --check                # 干跑:只报 当前/最新/资产名/update base,不改任何东西
 sshmgr update --yes                  # 免确认(远程/脚本;非 TTY 必需;服务重启亦视为同意)
 sshmgr update --version v0.13.0      # 装指定版(含降级=回滚;校验该版 checksums;降级有显式警告)
