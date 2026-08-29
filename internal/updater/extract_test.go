@@ -440,6 +440,34 @@ func TestExtractBinaryBadArchive(t *testing.T) {
 	})
 }
 
+func TestExtractBinaryTotalDecompressedCap(t *testing.T) {
+	// Single-member cap stays at its default (200MiB) — members below it
+	// must pass every per-member check; only the cumulative decompressed
+	// stream (tar header 512B + padded data, per member) crosses the
+	// shrunken total cap, during member 2.
+	origTotal := maxTotalDecompressed
+	maxTotalDecompressed = 1060 // member1 hdr+data=1024 ok; member2 header read trips 1536 > 1060
+	defer func() { maxTotalDecompressed = origTotal }()
+
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "many.tar.gz")
+	member := strings.Repeat("B", 20) // far below the single-member cap
+	writeTarGzFixture(t, archive, []tarEntry{
+		{name: "sshmgr", data: member},  // extracted, then cleaned up on abort
+		{name: "LICENSE", data: member}, // skipped member still counts toward the total
+	})
+	before := entryNames(t, dir)
+	_, err := ExtractBinary(archive, "linux")
+	if err == nil {
+		t.Fatal("want abort: cumulative decompressed bytes exceed the total cap")
+	}
+	if !strings.Contains(err.Error(), "cumulative decompressed") {
+		t.Errorf("err = %v, want cumulative decompressed limit abort", err)
+	}
+	// 零残留: member 1's already-landed output is removed again.
+	assertNoNewFiles(t, dir, before)
+}
+
 func TestExtractBinaryOutputCollision(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "sshmgr_0.13.1_linux_amd64.zip")

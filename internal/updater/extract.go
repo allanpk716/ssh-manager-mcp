@@ -11,10 +11,16 @@ import (
 	"strings"
 )
 
-// extractMaxBytes caps one archive member (spec §4.2(3): 单成员 200MiB 上限).
-// Package var solely so tests can shrink it; production code must never
-// mutate it.
-var extractMaxBytes = int64(200) << 20
+// extractMaxBytes caps one archive member (spec §4.2(3): 单成员 200MiB 上限);
+// maxTotalDecompressed caps the cumulative decompressed bytes flowing through
+// the tar.gz stream — skipped members included (总解压字节上限), so an
+// archive of many members each just under the single-member cap cannot drain
+// an unbounded decompression. Package vars solely so tests can shrink them;
+// production code must never mutate them.
+var (
+	extractMaxBytes      = int64(200) << 20
+	maxTotalDecompressed = int64(200) << 20
+)
 
 // Binary entry names inside release archives (.goreleaser.yml: binary:
 // sshmgr, flat archive without wrap_in_directory).
@@ -61,7 +67,9 @@ func binaryEntryName(goos string) string {
 //   - an archive without a root entry of the target name is an error;
 //   - the declared member size is checked for every member, and the actual
 //     bytes copied for the extracted one are limit-capped, so an archive
-//     lying about its sizes cannot overshoot the cap either way.
+//     lying about its sizes cannot overshoot the cap either way;
+//   - on the tar.gz path the cumulative decompressed stream (headers, data,
+//     skipped members) is bounded at maxTotalDecompressed (总解压字节上限).
 func ExtractBinary(archivePath, goos string) (string, error) {
 	target := binaryEntryName(goos)
 	outPath := filepath.Join(filepath.Dir(archivePath), target)
@@ -127,6 +135,15 @@ func extractZip(archivePath, target, outPath string) (created bool, err error) {
 		if err := checkEntryName(zf.Name); err != nil {
 			return created, err
 		}
+		// Format limitation, documented (fail-open corner): zf.Mode() decodes
+		// unix type bits only when the entry's CreatorVersion high byte marks
+		// a unix creator; archives from unknown/other creators yield mode 0
+		// and IsRegular()==true even for a symlink entry. This is not
+		// exploitable here — a misread type never turns into a filesystem
+		// operation (no os.Symlink/Chown on entry data; the only written
+		// path is the literal constant sshmgr[.exe]) — and rejecting
+		// unknown-creator archives would break legitimate heterogeneous
+		// zips, so the residual risk is accepted as-is.
 		if !zf.Mode().IsRegular() {
 			return created, fmt.Errorf("archive entry %q: mode %s is not a regular file", zf.Name, zf.Mode())
 		}
@@ -157,6 +174,27 @@ func extractZip(archivePath, target, outPath string) (created bool, err error) {
 	return created, nil
 }
 
+// countingReader bounds decompression throughput (总解压字节上限). Once the
+// cumulative count crosses maxTotalDecompressed it latches: every subsequent
+// Read fails again, so a caller that swallows a single error (io.ReadAtLeast
+// clears the error of a full read) cannot stream past the cap — the abort
+// surfaces at the next short read at the latest.
+type countingReader struct {
+	r     io.Reader
+	name  string // archive base name, for the error message
+	total int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.total += int64(n)
+	if c.total > maxTotalDecompressed {
+		return n, fmt.Errorf("extract %s: cumulative decompressed bytes exceed %d byte limit",
+			c.name, maxTotalDecompressed)
+	}
+	return n, err
+}
+
 func extractTarGz(archivePath, target, outPath string) (created bool, err error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
@@ -168,7 +206,9 @@ func extractTarGz(archivePath, target, outPath string) (created bool, err error)
 		return created, fmt.Errorf("extract %s: not a gzip stream: %w", filepath.Base(archivePath), err)
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	// Counting wrapper bounds cumulative decompressed bytes (headers, member
+	// data, skipped members' drained payloads) at maxTotalDecompressed.
+	tr := tar.NewReader(&countingReader{r: gz, name: filepath.Base(archivePath)})
 	found := false
 	for {
 		hdr, err := tr.Next()
