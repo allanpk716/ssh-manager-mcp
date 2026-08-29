@@ -13,7 +13,7 @@
 // result banners) and the client access card.
 //
 // Plan 42 批1 T8 (spec §3.1-6): the client-ROLE wizard flow is RETIRED — pair
-// (`ssh-manager pair`) is the only guided onboarding path for a new machine.
+// (`sshmgr pair`) is the only guided onboarding path for a new machine.
 // Choosing client lands on a static guidance page pointing at pair; the
 // server flow no longer pre-provisions a client machine (the 客户端机器名 step
 // and the device-code issuance are gone — pair mints both at approval, the
@@ -51,7 +51,7 @@ const (
 	stepMcpConfig     // .mcp.json finish screen (overlay)
 	// server flow (T4) — ①-④ reuse the standalone steps above. Plan 42 批1
 	// T8: the client-provisioning steps (客户端机器名 / 设备码签发 / 密钥 2/2)
-	// are RETIRED — pair (`ssh-manager pair`) mints the device code + project
+	// are RETIRED — pair (`sshmgr pair`) mints the device code + project
 	// at approval; the wizard only sets up the broker itself.
 	stepBindProfile  // 多 profile resume 的绑定选择（Plan 39——绝不静默绑字母序第一个）
 	stepAddr         // LAN address select (spec §2.4 ⑥ 地址捕获)
@@ -59,7 +59,7 @@ const (
 	stepServeInstall // service registration in flight (waiting)
 	stepServeProbe   // post-install probe in flight (waiting)
 	stepServeResult  // install + probe banners (overlay, non-blocking)
-	stepPairCard     // client 入网卡(指引 ssh-manager pair)(overlay)
+	stepPairCard     // client 入网卡(指引 sshmgr pair)(overlay)
 	// client flow — Plan 42 批1 T8: reduced to a static guidance page (the
 	// connection form + wizard-embedded clientModel are deleted).
 	stepClientGuide
@@ -178,10 +178,10 @@ func (w *wizardModel) startRoleFlow() {
 }
 
 // enterClientGuide is the CLIENT role's whole flow since Plan 42 批1 T8
-// (spec §3.1-6): a static guidance page pointing at `ssh-manager pair` — the
+// (spec §3.1-6): a static guidance page pointing at `sshmgr pair` — the
 // wizard-embedded connection form/panel flow is retired. Any key completes the
 // setup (role.json → setup_complete:true) and exits; the next `tui` opens the
-// client panel (sync/status/instance), and `ssh-manager pair` itself writes
+// client panel (sync/status/instance), and `sshmgr pair` itself writes
 // the cache material.
 func (w *wizardModel) enterClientGuide() {
 	w.step = stepClientGuide
@@ -196,20 +196,20 @@ func clientPairGuide() overlay {
 		"client 机的入网方式已更新——本向导不再内置连接表单。",
 		"",
 		"新机入网（pair 为新机唯一入网路径）：",
-		"  ssh-manager pair --instance <本机实例名>",
+		"  sshmgr pair --instance <本机实例名>",
 		"      自动发现 LAN 内的 serve（udp/7878），按提示选择目标",
-		"  ssh-manager pair --instance <本机实例名> --url https://<server>:7878 --pin sha256:...",
+		"  sshmgr pair --instance <本机实例名> --url https://<server>:7878 --pin sha256:...",
 		"      已知地址与指纹时直连（pin 硬校验；无 pin 需 --allow-tofu，不建议）",
 		"",
 		"在 server 机批准（其 TUI Pairing 页 / serve pair approve）并对照双方屏幕的",
 		"SAS 码后，设备码、project token 与缓存自动落到本机。",
 		"",
 		"手工路径（CI/自动化，文档化保留）：",
-		"  ssh-manager cache pull --url <serve 地址> --token '<设备码>:<指纹>'",
+		"  sshmgr cache pull --url <serve 地址> --token '<设备码>:<指纹>'",
 		"",
 		"按任意键完成设置并退出（q 退出）",
 	}, "\n")
-	return &wizStaticView{title: "client 入网：运行 ssh-manager pair", body: body}
+	return &wizStaticView{title: "client 入网：运行 sshmgr pair", body: body}
 }
 
 // openVaultOrErr is the shared boot of BOTH vault-role flows (standalone T3 /
@@ -289,7 +289,7 @@ func (w *wizardModel) enterStandalone() {
 //	≥1 profile, ≥1 project → everything the wizard itself mints is done →
 //	  jump straight to the serve segment (addr picker). Plan 42 批1 T8: the
 //	  device code is NOT part of this flow anymore — the client pairs with
-//	  `ssh-manager pair` and the owner approves (that mints the code + a
+//	  `sshmgr pair` and the owner approves (that mints the code + a
 //	  dedicated pair project); the cert fingerprint is recovered via the
 //	  idempotent LoadOrCreateServeCert for the pair card.
 func (w *wizardModel) enterServer() {
@@ -354,7 +354,7 @@ func (w *wizardModel) resumeServerFlow() {
 			w.data.deviceFp = "（指纹不可读：" + err.Error() + "）"
 		}
 		w.enterAddrForm()
-		w.status = "检测到已完成的 profile/project，直接进入 serve 安装段（设备码由 client 端 ssh-manager pair 配对时自动铸发）"
+		w.status = "检测到已完成的 profile/project，直接进入 serve 安装段（设备码由 client 端 sshmgr pair 配对时自动铸发）"
 	}
 }
 
@@ -480,7 +480,7 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// get their own dedicated token at approval (Plan 42 批1 T8: the
 			// wizard mints no device code anymore, so there is no 2/2).
 			w.ov = wizTokenScreen("project token", m.token,
-				"手工路径:贴到 client 机 .mcp.json 的 SSHMGR_TOKEN 字段;新机亦可改走 ssh-manager pair(配对完成自动铸发专属 token)",
+				"手工路径:贴到 client 机 .mcp.json 的 SSHMGR_TOKEN 字段;新机亦可改走 sshmgr pair(配对完成自动铸发专属 token)",
 				"主控台 Projects 页 [a] 重发")
 			return w, nil
 		}
@@ -527,7 +527,7 @@ func (w wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Guidance acknowledged: complete the client setup (role.json →
 			// setup_complete:true) and exit. The wizard does NOT chain into a
 			// console here — the next step for the user is running
-			// `ssh-manager pair` in the shell (Run hands off to the broker
+			// `sshmgr pair` in the shell (Run hands off to the broker
 			// console only).
 			return w, wizFinishTo(roles.RoleClient, "client")
 		}
@@ -747,11 +747,11 @@ func (w wizardModel) View() tea.View {
 	var b strings.Builder
 	switch w.step {
 	case stepPick:
-		b.WriteString(titleStyle.Render(" 第一次使用 ssh-manager ") + "\n\n")
+		b.WriteString(titleStyle.Render(" 第一次使用 sshmgr ") + "\n\n")
 		b.WriteString(w.form.View() + "\n\n")
 		b.WriteString(footerStyle.Render("概念图解：docs/concepts.md（或 --help）") + "\n")
 		if w.residualClient {
-			b.WriteString(footerStyle.Render("检测到本机曾有 client 配置，可运行 ssh-manager clear 清理") + "\n")
+			b.WriteString(footerStyle.Render("检测到本机曾有 client 配置，可运行 sshmgr clear 清理") + "\n")
 		}
 	case stepRoleDone:
 		role := string(w.role)

@@ -14,7 +14,7 @@ import (
 	"ssh-manager-mcp/internal/mcpserver"
 )
 
-// newPairCmd —— `ssh-manager pair` 一条龙(T7):URL 解析(--url 或 LAN 发现
+// newPairCmd —— `sshmgr pair` 一条龙(T7):URL 解析(--url 或 LAN 发现
 // 选择)后交给 clientops.RunPair(流程冻结点都在那边)。本层只做:instance 必填、
 // pin 格式前置校验、discovery 结果挑选、SSHMGR_PAIR_ASSUME_SAS env 透传。
 func newPairCmd() *cobra.Command {
@@ -98,7 +98,7 @@ func pickDiscovered(cmd *cobra.Command) (clientops.Discovered, error) {
 		return clientops.Discovered{}, fmt.Errorf("discovery: %w", err)
 	}
 	if len(found) == 0 {
-		return clientops.Discovered{}, errors.New("no broker answered the discovery sweep — is `ssh-manager serve` running with discovery on? pass --url <https://host:7878> to pair directly")
+		return clientops.Discovered{}, errors.New("no broker answered the discovery sweep — is `sshmgr serve` running with discovery on? pass --url <https://host:7878> to pair directly")
 	}
 	if len(found) == 1 {
 		d := found[0]

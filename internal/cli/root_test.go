@@ -8,7 +8,7 @@ import (
 	"ssh-manager-mcp/internal/buildinfo"
 )
 
-// TestVersionCmdPrintsVersionVariable verifies that `ssh-manager version`
+// TestVersionCmdPrintsVersionVariable verifies that `sshmgr version`
 // prints the buildinfo.Version package variable — so an ldflags -X override at
 // release time is exactly what the user sees. Uses the same SetOut capture
 // pattern as cli_smoke_test.go (which is why versionCmd must write to

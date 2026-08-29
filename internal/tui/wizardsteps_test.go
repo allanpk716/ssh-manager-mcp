@@ -192,7 +192,7 @@ func jsonBlockOf(lines []string) string {
 const goldenStdioBlock = `{
   "mcpServers": {
     "ssh": {
-      "command": "ssh-manager",
+      "command": "sshmgr",
       "args": ["mcp"],
       "env": { "SSHMGR_TOKEN": "<TOKEN>" }
     }

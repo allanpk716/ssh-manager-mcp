@@ -294,7 +294,7 @@ func TestApp_ColumnsFitTerminalWidth(t *testing.T) {
 		Name: "NUC10-authoritative-broker", Host: "192.0.2.5", User: "allan", Port: 22,
 		AuthMethod: models.AuthPassword, CredentialID: credID,
 		Hardware: "NUC10 i7-10710U / 32G", Location: "客厅电视柜第三层", Role: "权威 broker",
-		Services: "ssh-manager-serve:7878, docker, nginx, node-exporter",
+		Services: "sshmgr-serve:7878, docker, nginx, node-exporter",
 		Caveats:  "BIOS 限功率 65%", Tags: []string{"broker", "core"},
 		Description: "凭据 vault 权威端，跑 serve 服务，兼做内网跳板机和定时备份任务",
 	}); err != nil {

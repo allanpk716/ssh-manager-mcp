@@ -567,7 +567,7 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 			// gate, proxy, WAF) gets the generic treatment with the body
 			// excerpt, never the bind advice.
 			if bytes.Contains(errBody, []byte("not bound to a profile")) {
-				return PullResult{}, fmt.Errorf("pull: server returned 403 — device code not bound to a profile (owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server)")
+				return PullResult{}, fmt.Errorf("pull: server returned 403 — device code not bound to a profile (owner: run `sshmgr cache-tokens bind <name> <profile>` on the server)")
 			}
 			if detail := strings.TrimSpace(string(errBody)); detail != "" {
 				return PullResult{}, fmt.Errorf("pull: server returned 403 — %.200s", detail)
@@ -879,7 +879,7 @@ func (r *CacheReloader) Check() (*store.Snapshot, bool, error) {
 		// call swaps the store in — this call deliberately finishes on the old
 		// one (never half-old half-new within a single tool call).
 		if err := MaybeLazyPullFor(r.instance, r.maxAge); err != nil {
-			fmt.Fprintf(os.Stderr, "ssh-manager: in-session cache refresh failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "sshmgr: in-session cache refresh failed: %v\n", err)
 		}
 		return nil, false, nil
 	}

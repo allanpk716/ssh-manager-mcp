@@ -151,7 +151,7 @@ func StartDiscovery(ctx context.Context, name string, tcpPort int, spki string, 
 	}
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: discoveryPort})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager serve: discovery: udp/%d unavailable (port in use): %v\n", discoveryPort, err)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: discovery: udp/%d unavailable (port in use): %v\n", discoveryPort, err)
 		return noop
 	}
 

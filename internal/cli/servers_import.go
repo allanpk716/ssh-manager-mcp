@@ -16,7 +16,7 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// serversImportCmd: `ssh-manager servers import [--file] [--dry-run] [--profile]`.
+// serversImportCmd: `sshmgr servers import [--file] [--dry-run] [--profile]`.
 // Batch-imports literal-host aliases from an OpenSSH client config. Vault
 // conflicts are filtered by the pure importer.PlanImport (the same seam the
 // TUI import flow reuses); each server insert is one transaction

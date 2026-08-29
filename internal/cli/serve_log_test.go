@@ -13,7 +13,7 @@ import (
 
 // withServeLogDirs pins every filesystem location a service-path serve start
 // (program.run) touches via env — mirror of withClearDirs (same rationale: the
-// dev machine REALLY runs ssh-manager, so an unpinned path would read/write
+// dev machine REALLY runs sshmgr, so an unpinned path would read/write
 // the operator's live C:\ProgramData vault). SSHMGR_SERVE_LOG is the Plan 22
 // T4 seam under test.
 func withServeLogDirs(t *testing.T) (vaultDir, logPath string) {

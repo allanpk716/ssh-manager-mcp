@@ -127,7 +127,7 @@ func (h *cacheStoreHolder) Current() *store.Store {
 	defer h.mu.Unlock()
 	snap, changed, err := h.reload()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager: cache reload check failed (keeping current snapshot): %v\n", err)
+		fmt.Fprintf(os.Stderr, "sshmgr: cache reload check failed (keeping current snapshot): %v\n", err)
 		return h.cur.Load()
 	}
 	if !changed {
@@ -136,7 +136,7 @@ func (h *cacheStoreHolder) Current() *store.Store {
 	if snap == nil {
 		// changed=true with a nil snapshot is a broken reloader; hydrateCacheStore
 		// would nil-deref in ImportSnapshot. Log + keep serving the old store.
-		fmt.Fprintf(os.Stderr, "ssh-manager: cache reload reported a change with a nil snapshot (keeping current snapshot)\n")
+		fmt.Fprintf(os.Stderr, "sshmgr: cache reload reported a change with a nil snapshot (keeping current snapshot)\n")
 		return h.cur.Load()
 	}
 	// A concurrent rebuild may have consumed this exact snapshot already (the
@@ -150,14 +150,14 @@ func (h *cacheStoreHolder) Current() *store.Store {
 	}
 	st, project, tmpPath, err := hydrateCacheStore(h.token, snap, h.auditFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager: cache hot-reload failed (keeping current snapshot): %v\n", err)
+		fmt.Fprintf(os.Stderr, "sshmgr: cache hot-reload failed (keeping current snapshot): %v\n", err)
 		return h.cur.Load()
 	}
 	if project.ProfileID != h.profileID {
 		// The owner rebound the project to a different profile mid-session; the
 		// tool closures still scope by the startup profileID, so serving the new
 		// store would show the wrong set. Keep the old store + log.
-		fmt.Fprintf(os.Stderr, "ssh-manager: cache snapshot changed the project's profile (keeping current snapshot to preserve scoping)\n")
+		fmt.Fprintf(os.Stderr, "sshmgr: cache snapshot changed the project's profile (keeping current snapshot to preserve scoping)\n")
 		st.Close()
 		os.Remove(tmpPath)
 		return h.cur.Load()

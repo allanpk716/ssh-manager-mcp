@@ -9,7 +9,7 @@
 //
 // Plan 16 T4 replaced the previous KeyringKeyProvider (read on every call
 // from the SSHMGR_KEYRING_SERVICE env var). That env-aware path existed ONLY
-// so the eval harness's spawned `ssh-manager mcp` child could target an
+// so the eval harness's spawned `sshmgr mcp` child could target an
 // isolated keychain service without a recompile — but the eval broker reads
 // the master key, not the cache DEK, so the env coupling was vestigial after
 // Plan 12 wired the cache to its own DEK. Plaintext-at-fixed-path puts the

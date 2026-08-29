@@ -124,7 +124,7 @@ func installServeStep(addr string) tea.Cmd {
 	_ = addr // display-only; the registration binds 0.0.0.0:7878 (see above)
 	return func() tea.Msg {
 		if serveInstall == nil {
-			return serveInstalledMsg{err: errors.New("serve 安装核心未接线（应通过 `ssh-manager tui` 启动向导）")}
+			return serveInstalledMsg{err: errors.New("serve 安装核心未接线（应通过 `sshmgr tui` 启动向导）")}
 		}
 		return serveInstalledMsg{err: serveInstall("0.0.0.0:7878", "", "", io.Discard)}
 	}
@@ -161,9 +161,9 @@ func probeServe(addr string) tea.Cmd {
 // in-wizard install fails (spec §2.4 ⑥: 失败给出可执行的原文命令，含提权方式).
 func manualInstallCmd() string {
 	if runtime.GOOS == "windows" {
-		return "ssh-manager serve install --addr 0.0.0.0:7878\n（在管理员终端中执行）"
+		return "sshmgr serve install --addr 0.0.0.0:7878\n（在管理员终端中执行）"
 	}
-	return "sudo ssh-manager serve install --addr 0.0.0.0:7878"
+	return "sudo sshmgr serve install --addr 0.0.0.0:7878"
 }
 
 // serveAdminNotice is the pre-install screen (spec §2.4 ⑥ admin 前置提示):
@@ -203,7 +203,7 @@ func serveResultScreen(installErr error, probe serveProbeMsg) overlay {
 		b.WriteString(selStyle.Render("✓ serve 已就绪（"+probe.detail+"）") + "\n")
 	} else {
 		b.WriteString(warnStyle.Render("⚠ serve 未验证，client 可能连不上（"+probe.detail+"）") + "\n")
-		b.WriteString("排查：7878 端口防火墙是否放行；`ssh-manager serve status` 查四项信号；服务可能仍在启动，稍候重试。\n")
+		b.WriteString("排查：7878 端口防火墙是否放行；`sshmgr serve status` 查四项信号；服务可能仍在启动，稍候重试。\n")
 	}
 	b.WriteString("\n按任意键查看 client 入网卡\n")
 	return &wizStaticView{title: "serve 安装结果", body: b.String()}
@@ -216,7 +216,7 @@ func serveResultScreen(installErr error, probe serveProbeMsg) overlay {
 // clientPairCard is the flow's closing card (Plan 42 批1 T8 — the old 双密钥
 // 接入卡's replacement): the REAL chosen address + the server fingerprint
 // (pin), and the ONE guided onboarding command for a new machine —
-// `ssh-manager pair`, whose device code / project token the wizard no longer
+// `sshmgr pair`, whose device code / project token the wizard no longer
 // pre-mints (they are minted at approval, spec §3.3-6). The manual
 // cache-pull path stays documented for CI/automation; a needed device code is
 // issued from the 设备码页/CLI on demand.
@@ -228,7 +228,7 @@ func clientPairCard(addr, fp string) overlay {
 		"指纹    " + fp,
 		"",
 		"新机入网（pair 为新机唯一入网路径）：",
-		"  ssh-manager pair --instance <本机实例名> --url " + addr + " --pin " + fp,
+		"  sshmgr pair --instance <本机实例名> --url " + addr + " --pin " + fp,
 		"  （也可省略 --url/--pin，用 LAN 发现自动找到本 serve）",
 		"",
 		"在该机上批准配对（其 TUI Pairing 页 / serve pair approve）并对照双方",
@@ -236,7 +236,7 @@ func clientPairCard(addr, fp string) overlay {
 		"",
 		"手工路径（CI/自动化，文档化保留）：",
 		"  设备码 → 主控台 设备码页 [a]（或 cache-tokens add），然后",
-		fmt.Sprintf("  ssh-manager cache pull --url %s --token '<设备码>:%s'", addr, fp),
+		fmt.Sprintf("  sshmgr cache pull --url %s --token '<设备码>:%s'", addr, fp),
 		"",
 		"project token 丢失重发：主控台 Projects 页 [a]",
 		"",

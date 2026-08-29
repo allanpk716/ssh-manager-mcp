@@ -115,7 +115,7 @@ func TestTunnelKillRealSSH(t *testing.T) {
 	// same vault (same env shape the production owner uses — store path +
 	// key material, no token: owner commands are not project-scoped).
 	binPath := filepath.Join(dir, conformanceBinName())
-	build := exec.Command("go", "build", "-o", binPath, "ssh-manager-mcp/cmd/ssh-manager")
+	build := exec.Command("go", "build", "-o", binPath, "ssh-manager-mcp/cmd/sshmgr")
 	if bout, berr := build.CombinedOutput(); berr != nil {
 		t.Fatalf("go build: %v\n%s", berr, bout)
 	}
@@ -131,7 +131,7 @@ func TestTunnelKillRealSSH(t *testing.T) {
 		cmd.Env = cliEnv
 		outBytes, rerr := cmd.CombinedOutput()
 		if rerr != nil {
-			t.Fatalf("ssh-manager %s: %v\n%s", strings.Join(args, " "), rerr, outBytes)
+			t.Fatalf("sshmgr %s: %v\n%s", strings.Join(args, " "), rerr, outBytes)
 		}
 		return string(outBytes)
 	}
@@ -158,7 +158,7 @@ func TestTunnelKillRealSSH(t *testing.T) {
 // to avoid exporting a helper for a test-only concern).
 func conformanceBinName() string {
 	if runtime.GOOS == "windows" {
-		return "ssh-manager.exe"
+		return "sshmgr.exe"
 	}
-	return "ssh-manager"
+	return "sshmgr"
 }

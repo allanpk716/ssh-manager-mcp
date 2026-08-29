@@ -1,4 +1,4 @@
-// Plan 42 批1 T7 —— `ssh-manager pair` 一条龙的客户端实现(client 侧全流程,
+// Plan 42 批1 T7 —— `sshmgr pair` 一条龙的客户端实现(client 侧全流程,
 // spec §3.3):enroll → SAS 三件套 → poll → finish → 先落盘后首拉 → 产物。
 //
 // 流程冻结点(brief/task):①pin 分级——Pin 非空走 pinningTransport(TLS 层硬
@@ -136,7 +136,7 @@ type pairCredsEnvelope struct {
 }
 
 // pairMCPArtifact is the full .mcp.json handed to the agent host: command
-// ssh-manager, args [mcp --cache --instance <name>], env.SSHMGR_TOKEN = the
+// sshmgr, args [mcp --cache --instance <name>], env.SSHMGR_TOKEN = the
 // REAL project token (the printed snippet carries only the placeholder).
 type pairMCPArtifact struct {
 	MCPServers map[string]pairMCPServer `json:"mcpServers"`
@@ -324,7 +324,7 @@ func RunPair(o PairOpts) error {
 				res.Body.Close()
 			case http.StatusGone:
 				res.Body.Close()
-				return errors.New("pairing poll: request expired or rejected (410) — start over with `ssh-manager pair`")
+				return errors.New("pairing poll: request expired or rejected (410) — start over with `sshmgr pair`")
 			default:
 				res.Body.Close()
 				noteTransient(errw, &lastNote, "pairing poll: HTTP %d (retrying until the 10m deadline)", res.StatusCode)
@@ -334,7 +334,7 @@ func RunPair(o PairOpts) error {
 		}
 		if !approved {
 			if !time.Now().Add(pairPollInterval).Before(deadline) {
-				return errors.New("pairing approval timed out after 10m — start over with `ssh-manager pair`")
+				return errors.New("pairing approval timed out after 10m — start over with `sshmgr pair`")
 			}
 			time.Sleep(pairPollInterval)
 		}
@@ -372,7 +372,7 @@ func RunPair(o PairOpts) error {
 		case http.StatusConflict:
 			return errors.New("pairing finish: request not approved yet (409)")
 		case http.StatusGone:
-			return errors.New("pairing finish: approval window over (410) — start over with `ssh-manager pair`")
+			return errors.New("pairing finish: approval window over (410) — start over with `sshmgr pair`")
 		case 419:
 			return fmt.Errorf("pairing finish: device name %q is in use (419)", o.Instance)
 		default:
@@ -429,7 +429,7 @@ func RunPair(o PairOpts) error {
 	}
 	artifactPath := filepath.Join(dir, "pair."+o.Instance+".mcp.json")
 	if err := writePrivateFile(artifactPath, artifact); err != nil {
-		return fmt.Errorf("write %s: %w (credentials are already on disk; finish the first pull with `ssh-manager cache pull --instance %s`)", artifactPath, err, o.Instance)
+		return fmt.Errorf("write %s: %w (credentials are already on disk; finish the first pull with `sshmgr cache pull --instance %s`)", artifactPath, err, o.Instance)
 	}
 	if o.WriteMCPPath != "" {
 		if err := writePrivateFile(o.WriteMCPPath, artifact); err != nil {
@@ -444,7 +444,7 @@ func RunPair(o PairOpts) error {
 	// 故 ⑦ 的落盘槽与 res.Instance 恒一致)。
 	res2, err := DoPull(targetURL, env.DeviceCode, fp, PullOpts{StatusOut: errw, Instance: o.Instance})
 	if err != nil {
-		return fmt.Errorf("first pull failed: %w — the credentials and artifact ARE already on disk; finish with `ssh-manager cache pull --instance %s` (device code in cache.auth.json)", err, o.Instance)
+		return fmt.Errorf("first pull failed: %w — the credentials and artifact ARE already on disk; finish with `sshmgr cache pull --instance %s` (device code in cache.auth.json)", err, o.Instance)
 	}
 	if res2.Instance != o.Instance {
 		fmt.Fprintf(errw, "WARNING: first pull landed in instance %q (asked for %q) — the pre-pull files were written to %q\n", res2.Instance, o.Instance, o.Instance)
@@ -512,7 +512,7 @@ func pairArtifactJSON(instance, token string) ([]byte, error) {
 	blob, err := json.MarshalIndent(pairMCPArtifact{
 		MCPServers: map[string]pairMCPServer{
 			"ssh-manager": {
-				Command: "ssh-manager",
+				Command: "sshmgr",
 				Args:    []string{"mcp", "--cache", "--instance", instance},
 				Env:     map[string]string{"SSHMGR_TOKEN": token},
 			},

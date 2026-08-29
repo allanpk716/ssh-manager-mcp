@@ -43,7 +43,7 @@ const evalMasterKeyLockedFilename = "master-locked.key"
 type seedServer struct{ ID, Name string }
 
 // seedBroker is the shared core of wireBroker (one server) and wireBrokerMulti
-// (two servers). It builds the ssh-manager binary, seeds a temp vault with one
+// (two servers). It builds the sshmgr binary, seeds a temp vault with one
 // server per name in names — all pointing at the SAME eval sshd (host, port)
 // and all sudo-capable via the same password credential reused as
 // SudoCredentialID — all granted to ONE profile, one project + token, writes the
@@ -71,9 +71,9 @@ func seedBroker(t *testing.T, host string, port int, names []string) (mcpConfigP
 
 	// 1. Build the binary. Use the module-absolute package path so the build is
 	// independent of the test's CWD (go test runs with CWD = internal/eval, so
-	// "./cmd/ssh-manager" would resolve to internal/eval/cmd/ssh-manager — wrong).
+	// "./cmd/sshmgr" would resolve to internal/eval/cmd/sshmgr — wrong).
 	binPath := filepath.Join(dir, binName())
-	build := exec.Command("go", "build", "-o", binPath, "ssh-manager-mcp/cmd/ssh-manager")
+	build := exec.Command("go", "build", "-o", binPath, "ssh-manager-mcp/cmd/sshmgr")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
@@ -191,7 +191,7 @@ func seedBroker(t *testing.T, host string, port int, names []string) (mcpConfigP
 	return mcpConfigPath, plaintextToken, masterKeyHex, seedIDs, cleanup
 }
 
-// wireBroker builds the ssh-manager binary, seeds a temp vault with ONE server
+// wireBroker builds the sshmgr binary, seeds a temp vault with ONE server
 // (named "gpu") pointing at the eval sshd in one profile owned by one
 // project+token, writes the master key to the eval-private file, and writes an
 // isolated .mcp.json. Returns the mcp config path, plaintext token, master key
@@ -231,7 +231,7 @@ func wireBrokerMulti(t *testing.T, host string, port int) (mcpConfigPath, plaint
 // a master key, then writes an isolated .mcp.json that points the broker at the
 // vault + SSHMGR_FILEKEY_PATH=<tempdir>/master-locked.key — but NEVER writes
 // that file. So when the broker subprocess starts, vault.OpenStore() →
-// FileKeyProvider.Get() → fs.ErrNotExist → "vault locked: run `ssh-manager
+// FileKeyProvider.Get() → fs.ErrNotExist → "vault locked: run `sshmgr
 // unlock` …". The agent's tools never serve — the broker prints the error to
 // stderr and exits non-zero before registering any MCP tool.
 //
@@ -255,7 +255,7 @@ func wireBrokerLocked(t *testing.T, host string, port int) (mcpConfigPath, plain
 
 	// 1. Build the binary (same as seedBroker).
 	binPath := filepath.Join(dir, binName())
-	build := exec.Command("go", "build", "-o", binPath, "ssh-manager-mcp/cmd/ssh-manager")
+	build := exec.Command("go", "build", "-o", binPath, "ssh-manager-mcp/cmd/sshmgr")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
@@ -380,7 +380,7 @@ func wireBrokerTwoProfile(t *testing.T, host string, port int) (mcpConfigPath, p
 
 	// 1. Build the binary (same as seedBroker).
 	binPath := filepath.Join(dir, binName())
-	build := exec.Command("go", "build", "-o", binPath, "ssh-manager-mcp/cmd/ssh-manager")
+	build := exec.Command("go", "build", "-o", binPath, "ssh-manager-mcp/cmd/sshmgr")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
@@ -510,9 +510,9 @@ func wireBrokerTwoProfile(t *testing.T, host string, port int) (mcpConfigPath, p
 // binName returns the platform-correct binary name (Windows requires .exe).
 func binName() string {
 	if runtime.GOOS == "windows" {
-		return "ssh-manager.exe"
+		return "sshmgr.exe"
 	}
-	return "ssh-manager"
+	return "sshmgr"
 }
 
 func writeJSON(t *testing.T, path string, v any) {

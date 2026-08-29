@@ -36,7 +36,7 @@ type scopedServer struct {
 	tasks   *TaskManager
 }
 
-// ServeRunner is the stateful core of `ssh-manager serve`: it holds the shared
+// ServeRunner is the stateful core of `sshmgr serve`: it holds the shared
 // store. The per-project scoped-server cache (ServerForProject) is a leftover
 // of the removed ②a MCP-over-HTTP surface — since Plan 42 批1 it has no HTTP
 // caller (the only authenticated route, /snapshot, never touches it) and
@@ -98,7 +98,7 @@ func formatNameAnomalies(anomalies []string) error {
 	if len(anomalies) == 1 {
 		plural = "y"
 	}
-	return fmt.Errorf("serve refusing to start: %d device-code name anomal%s:\n  - %s\nrepair on this machine: `ssh-manager cache-tokens revoke <name>` then `cache-tokens add --name <new-name> --profile <profile>`",
+	return fmt.Errorf("serve refusing to start: %d device-code name anomal%s:\n  - %s\nrepair on this machine: `sshmgr cache-tokens revoke <name>` then `cache-tokens add --name <new-name> --profile <profile>`",
 		len(anomalies), plural, strings.Join(anomalies, "\n  - "))
 }
 
@@ -148,14 +148,14 @@ func (r *ServeRunner) verifyCacheToken(ctx context.Context, token string, req *h
 		}
 		if name, ok, nerr := r.st.RevokedCacheTokenNameByPrefix(prefix); nerr == nil && ok {
 			reason = "revoked"
-			fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token rejected: revoked (device %s, prefix %.8s)\n", name, token)
+			fmt.Fprintf(os.Stderr, "sshmgr serve: cache token rejected: revoked (device %s, prefix %.8s)\n", name, token)
 		} else {
 			if nerr != nil {
 				// Plan 34 T6: a failed lookup archives as unknown (the reason is
 				// observability-only) but is never silent — the owner's log keeps it.
-				fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token revoked-prefix lookup failed: %v (archived as unknown)\n", nerr)
+				fmt.Fprintf(os.Stderr, "sshmgr serve: cache token revoked-prefix lookup failed: %v (archived as unknown)\n", nerr)
 			}
-			fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token rejected: unknown (prefix %.8s)\n", token)
+			fmt.Fprintf(os.Stderr, "sshmgr serve: cache token rejected: unknown (prefix %.8s)\n", token)
 		}
 		return nil, fmt.Errorf("%w: invalid cache token: %s", auth.ErrInvalidToken, reason)
 	}
@@ -217,7 +217,7 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 		// the owner chasing a pointless `cache-tokens bind` while the real DB
 		// error stays buried (code-review #5). 500 + stderr, like the export
 		// branch below.
-		fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token lookup %s: %v\n", ti.UserID, err)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: cache token lookup %s: %v\n", ti.UserID, err)
 		http.Error(w, "cache token lookup failed", http.StatusInternalServerError)
 		return
 	}
@@ -226,8 +226,8 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if ct.ProfileID == "" {
-		fmt.Fprintf(os.Stderr, "ssh-manager serve: cache token %s unbound (device %s) — refusing snapshot; owner: cache-tokens bind\n", ct.ID, ct.Name)
-		http.Error(w, "device code not bound to a profile — owner: run `ssh-manager cache-tokens bind "+ct.Name+" <profile>` on the server", http.StatusForbidden)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: cache token %s unbound (device %s) — refusing snapshot; owner: cache-tokens bind\n", ct.ID, ct.Name)
+		http.Error(w, "device code not bound to a profile — owner: run `sshmgr cache-tokens bind "+ct.Name+" <profile>` on the server", http.StatusForbidden)
 		return
 	}
 	snap, err := r.st.ExportSnapshotForProfile(ct.ProfileID)
@@ -255,7 +255,7 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 		return // client gone; nothing more to do
 	}
 	if err := r.st.TouchCacheToken(ti.UserID); err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager serve: cache-tokens touch %s: %v\n", ti.UserID, err)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: cache-tokens touch %s: %v\n", ti.UserID, err)
 	}
 }
 
@@ -299,7 +299,7 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	// finish 不完 — 启动时统一过期,stale client 的 finish poll 立刻得到冻结
 	// 的 410(ErrPairingWindow)。失败只记一行(表卫生性质,不拦 serve)。
 	if err := st.ExpireInFlightPairings(); err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager serve: expire in-flight pairings: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: expire in-flight pairings: %v\n", err)
 	}
 
 	// 开关注入(Plan 42 批1 T2/T6):显式 env 在此读取(前台/服务路径一致),
@@ -327,7 +327,7 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	// logged and serve continues — /pair enroll answers 500, the TLS surface
 	// is unaffected (LoadPairingSigner doc).
 	if err := runner.LoadPairingSigner(tlsCert, tlsKey); err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager serve: /pair disabled: serve key unusable for pairing signatures: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: /pair disabled: serve key unusable for pairing signatures: %v\n", err)
 	}
 
 	ln, err := net.Listen("tcp", addr)
@@ -341,7 +341,7 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	if autoTLSFingerprint != "" {
 		tlsLabel = "auto"
 	}
-	fmt.Fprintf(os.Stderr, "ssh-manager serve: listening on %s (tls=%s)\n", addr, tlsLabel)
+	fmt.Fprintf(os.Stderr, "sshmgr serve: listening on %s (tls=%s)\n", addr, tlsLabel)
 	if autoTLSFingerprint != "" {
 		fmt.Fprintf(os.Stderr, "auto-TLS cert (self-signed). client pin: %s\n", autoTLSFingerprint)
 	}
@@ -355,7 +355,7 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	if runner.DiscoveryEnabled() {
 		discLabel = "on"
 	}
-	fmt.Fprintf(os.Stderr, "ssh-manager serve: discovery: udp/%d (%s)\n", discoveryPort, discLabel)
+	fmt.Fprintf(os.Stderr, "sshmgr serve: discovery: udp/%d (%s)\n", discoveryPort, discLabel)
 	discName := ""
 	if v, ok, gerr := st.GetSetting(settingDiscoveryName); gerr == nil && ok {
 		discName = v // 缺省(未设/读失败)由 StartDiscovery 兜底到 hostname

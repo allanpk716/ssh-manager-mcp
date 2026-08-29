@@ -161,12 +161,12 @@ func FetchAll(st *store.Store) ([pageCount]listPage, error) {
 // approach belongs to its two-screen flow and does not apply here). Only the
 // stdio form survives: the http form was retired with ②a (Plan 42 批1 —
 // MCP-over-HTTP answers 404, so there is nothing left to point a remote
-// agent at; multi-machine agents enroll via `ssh-manager pair`).
+// agent at; multi-machine agents enroll via `sshmgr pair`).
 func projectTokenMsg(title, token string) tokenIssuedMsg {
 	stdio := mcpConfigLines(
 		[]string{`"args": ["mcp"]`, stdioEnvLine(token)},
 		[]string{
-			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
+			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\sshmgr.exe"。`,
 			".mcp.json 含 token，不要提交进 git。",
 		})
 	snippet := append([]string{"—— 本机/单机 agent（stdio）——"}, stdio...)
@@ -549,7 +549,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.upg.deviceFp = m.fingerprint
 		a.err, a.status = nil, ""
 		a.overlay = wizTokenScreen("设备码 — "+a.upg.clientName, m.code,
-			fmt.Sprintf("新机入网首选 ssh-manager pair;手工路径 cache pull --token '%s:%s'", m.code, m.fingerprint),
+			fmt.Sprintf("新机入网首选 sshmgr pair;手工路径 cache pull --token '%s:%s'", m.code, m.fingerprint),
 			"主控台 设备码页 [a] 重发")
 		a.refetchPages()
 		return a, nil
@@ -666,7 +666,7 @@ func (a App) View() tea.View {
 		return altScreen(a.overlay.View())
 	}
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(" ssh-manager ") + "\n")
+	b.WriteString(titleStyle.Render(" sshmgr ") + "\n")
 	tabs := make([]string, pageCount)
 	for i := page(0); i < pageCount; i++ {
 		t := "(?)"

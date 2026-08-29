@@ -350,7 +350,7 @@ func TestWizard_ResumeReusesExistingProfile(t *testing.T) {
 // TestWizard_ClientGuide pins the retired client-ROLE flow's replacement
 // (Plan 42 批1 T8, spec §3.1-6): choosing client writes role.json (client
 // location, setup_complete:false) and lands on a static guidance page pointing
-// at `ssh-manager pair`; acknowledging it completes the setup and exits the
+// at `sshmgr pair`; acknowledging it completes the setup and exits the
 // wizard with the client handoff sentinel (Run does NOT chain into a console —
 // the next step for the user is running pair in the shell).
 func TestWizard_ClientGuide(t *testing.T) {
@@ -374,7 +374,7 @@ func TestWizard_ClientGuide(t *testing.T) {
 	}
 	// The guidance page names the command and its uniqueness.
 	v := viewString(w.ov)
-	for _, want := range []string{"ssh-manager pair", "唯一入网"} {
+	for _, want := range []string{"sshmgr pair", "唯一入网"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("client guidance missing %q:\n%s", want, v)
 		}

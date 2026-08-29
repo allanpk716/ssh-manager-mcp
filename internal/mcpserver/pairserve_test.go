@@ -91,7 +91,7 @@ func wantStatus(t *testing.T, res *http.Response, code int) {
 	}
 }
 
-// pairClient mimics the `ssh-manager pair` client side of the protocol: it
+// pairClient mimics the `sshmgr pair` client side of the protocol: it
 // holds its X25519 ephemeral key and the enroll fields, and can compute the
 // shared transcript/keys exactly as the frozen contract prescribes.
 type pairClient struct {

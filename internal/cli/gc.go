@@ -6,7 +6,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newGCCmd: `ssh-manager gc [--apply]`. Dry-run (default) reports how many
+// newGCCmd: `sshmgr gc [--apply]`. Dry-run (default) reports how many
 // credential rows no server references via EITHER reference column; --apply
 // deletes exactly those rows. host_keys / cache_tokens are never touched.
 func newGCCmd() *cobra.Command {

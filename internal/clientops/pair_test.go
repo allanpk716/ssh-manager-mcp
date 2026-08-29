@@ -24,7 +24,7 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// Plan 42 批1 T7 —— `ssh-manager pair` 一条龙 e2e:newPairingServer 用真 store
+// Plan 42 批1 T7 —— `sshmgr pair` 一条龙 e2e:newPairingServer 用真 store
 // + 真 ServeRunner(经 LoadPairingSigner 挂上 ed25519 配对签名者)+ httptest
 // TLS 暴露完整 HTTPHandler(/pair/* + /snapshot),后台 goroutine 轮询 store
 // 首个 pending 行 → store.ApprovePairing 直批(与 TUI/Web 审批面同一入口)。
@@ -193,7 +193,7 @@ func TestRunPair_EndToEnd(t *testing.T) {
 	if bytes.Contains(b, []byte("<project-token>")) {
 		t.Fatal("artifact must carry the REAL token, not the <project-token> placeholder")
 	}
-	for _, frag := range []string{`"ssh-manager"`, `"mcp"`, `"--cache"`, `"--instance"`, `"it-laptop"`} {
+	for _, frag := range []string{`"sshmgr"`, `"mcp"`, `"--cache"`, `"--instance"`, `"it-laptop"`} {
 		if !bytes.Contains(b, []byte(frag)) {
 			t.Fatalf("artifact missing %s: %s", frag, b)
 		}

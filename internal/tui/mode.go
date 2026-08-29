@@ -52,7 +52,7 @@ func launchTarget(l roles.Launch) string {
 // normally (Tasks 3-5 chain wizard completion straight into the consoles).
 func Run(modeFlag string) error {
 	if !isTTY() {
-		return errors.New("tui requires a terminal (in mintty run via `winpty ssh-manager tui`, or use Windows Terminal)")
+		return errors.New("tui requires a terminal (in mintty run via `winpty sshmgr tui`, or use Windows Terminal)")
 	}
 	l, err := roles.ResolveMode(modeFlag)
 	if err != nil {
@@ -73,7 +73,7 @@ func Run(modeFlag string) error {
 		// back to the shell — the broker App reusing the wizard's still-open
 		// store. Plan 42 批1 T8 (dispatch 收窄): the client handoff is GONE —
 		// the client role's wizard step is now a pair-guidance page whose next
-		// action is running `ssh-manager pair` in the shell; the client panel
+		// action is running `sshmgr pair` in the shell; the client panel
 		// opens on the NEXT `tui` via launchTarget (role.json is completed by
 		// the guidance page).
 		if wm, ok := fm.(wizardModel); ok {

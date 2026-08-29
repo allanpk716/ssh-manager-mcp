@@ -97,7 +97,7 @@ func resolveMasterKey(kp store.KeyProvider) ([]byte, error) {
 	if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
-	return nil, errors.New("vault locked: run `ssh-manager unlock` to populate the master key")
+	return nil, errors.New("vault locked: run `sshmgr unlock` to populate the master key")
 }
 
 // fileKeyProvider builds the FileKeyProvider used as the last-resort tier (and
@@ -113,7 +113,7 @@ func fileKeyProvider() store.FileKeyProvider {
 // credential attached yet (credential-less model, Plan 20 C0 — e.g. a server
 // imported from ssh_config without an IdentityFile). Callers map it to a
 // "configure a credential first" action hint — never attempt a connect.
-var ErrNoCredential = errors.New("server has no credential configured (set one with: ssh-manager servers edit <name> --password ... / --key ...)")
+var ErrNoCredential = errors.New("server has no credential configured (set one with: sshmgr servers edit <name> --password ... / --key ...)")
 
 // AuthForServer resolves a server's stored credential into an SSH auth method.
 func AuthForServer(st *store.Store, srv *models.Server) (ssh.AuthMethod, error) {

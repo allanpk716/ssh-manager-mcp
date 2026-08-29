@@ -96,7 +96,7 @@ func TestClient_ColumnsFitTerminalWidth(t *testing.T) {
 		Hardware:    "NUC10 i7-10710U / 32G",
 		Location:    "客厅电视柜第三层",
 		Role:        "权威 broker",
-		Services:    "ssh-manager-serve:7878, docker, nginx, node-exporter",
+		Services:    "sshmgr-serve:7878, docker, nginx, node-exporter",
 		Description: "凭据 vault 权威端，跑 serve 服务，兼做内网跳板机和定时备份任务",
 	}}}
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 60})

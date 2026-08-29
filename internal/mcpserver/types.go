@@ -236,7 +236,7 @@ const defaultTimeout = 120 * time.Second
 // returns to the agent (the prefix). Bytes beyond this are counted (reported as
 // stdout_bytes/stderr_bytes with truncated=true) then discarded, so a huge remote
 // output cannot blow up broker memory or flood the agent's context — the agent
-// learns the true size and can refine its command. The owner `ssh-manager ssh`
+// learns the true size and can refine its command. The owner `sshmgr ssh`
 // path is unaffected (it requests unlimited output). 1 MiB per spec §6.
 const MaxOutputBytes int64 = 1 << 20
 

@@ -33,7 +33,7 @@ func wizEnsureVault() error {
 		if roles.VaultUnlocked() {
 			return nil
 		}
-		return errors.New("本机 vault 已存在但锁定或不可读：先运行 `ssh-manager unlock`（向导不会覆盖既有 vault）")
+		return errors.New("本机 vault 已存在但锁定或不可读：先运行 `sshmgr unlock`（向导不会覆盖既有 vault）")
 	}
 	mk, err := store.GenerateMasterKey()
 	if err != nil {
@@ -235,7 +235,7 @@ func mcpSnippetLines(members []string, notes []string) []string {
 // an empty fieldLines list yields valid JSON too.
 func mcpConfigLines(fieldLines []string, notes []string) []string {
 	members := make([]string, 0, len(fieldLines)+1)
-	members = append(members, `"command": "ssh-manager"`)
+	members = append(members, `"command": "sshmgr"`)
 	members = append(members, fieldLines...)
 	return mcpSnippetLines(members, notes)
 }
@@ -254,7 +254,7 @@ func mcpConfigScreen(tokenRef string) overlay {
 		},
 		[]string{
 			"单机角色用普通 mcp 启动（不要用 --cache —— 那是 client 角色的离线缓存模式）。",
-			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
+			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\sshmgr.exe"。`,
 			".mcp.json 含 token，不要提交进 git。",
 		},
 	), "", "按任意键进入主控台", ""), "\n")

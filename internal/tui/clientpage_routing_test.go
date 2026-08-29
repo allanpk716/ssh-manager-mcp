@@ -91,7 +91,7 @@ func TestClientPanel_CKeyPointsAtPair(t *testing.T) {
 	if cm.overlay != nil {
 		t.Fatal("[c] must not open an overlay anymore")
 	}
-	if !strings.Contains(cm.status, "ssh-manager pair") {
-		t.Fatalf("[c] must point at ssh-manager pair, got %q", cm.status)
+	if !strings.Contains(cm.status, "sshmgr pair") {
+		t.Fatalf("[c] must point at sshmgr pair, got %q", cm.status)
 	}
 }

@@ -137,7 +137,7 @@ func pairingIDHex(p store.PendingPairing) string { return hex.EncodeToString(p.I
 func (p *pairingPage) Detail() string {
 	row := p.current()
 	if row == nil {
-		return "(空)——无待裁决的配对请求\n\n新机在 client 端运行 ssh-manager pair 后\n会出现在这里等待批准。"
+		return "(空)——无待裁决的配对请求\n\n新机在 client 端运行 sshmgr pair 后\n会出现在这里等待批准。"
 	}
 	marks := "无"
 	switch {

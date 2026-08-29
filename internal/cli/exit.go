@@ -18,7 +18,7 @@ func (e *ExitCodeError) Error() string {
 	if e.Err == nil {
 		// hand-rolled literal that bypassed NewExitCodeError — never
 		// nil-deref at print time; the code alone is still meaningful.
-		return fmt.Sprintf("ssh-manager: exit code %d", e.Code)
+		return fmt.Sprintf("sshmgr: exit code %d", e.Code)
 	}
 	return e.Err.Error()
 }

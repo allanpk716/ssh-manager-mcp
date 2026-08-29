@@ -30,7 +30,7 @@ func TestClientPairCard_Copy(t *testing.T) {
 	v := viewString(clientPairCard("https://192.168.100.235:7878", "sha256:"+strings.Repeat("a", 64)))
 	for _, want := range []string{
 		"https://192.168.100.235:7878", "sha256:",
-		"ssh-manager pair", "唯一入网", "SAS",
+		"sshmgr pair", "唯一入网", "SAS",
 		"cache pull", "设备码页 [a]",
 	} {
 		if !strings.Contains(v, want) {
@@ -211,7 +211,7 @@ func TestServerWizard_TokenScreenUsage(t *testing.T) {
 		t.Fatalf("tokenIssuedMsg must open the token overlay, got step=%d", wm.step)
 	}
 	v := viewString(wm.ov)
-	for _, want := range []string{"tok-X", "client 机 .mcp.json", "ssh-manager pair"} {
+	for _, want := range []string{"tok-X", "client 机 .mcp.json", "sshmgr pair"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("server token screen missing %q in:\n%s", want, v)
 		}

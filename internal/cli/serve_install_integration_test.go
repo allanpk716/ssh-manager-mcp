@@ -91,10 +91,10 @@ func TestServeInstallIntegration(t *testing.T) {
 		addr = "127.0.0.1:7878"
 	}
 
-	// Resolve the ssh-manager binary to invoke. CI builds it via
-	// `go build -o ssh-manager ./cmd/ssh-manager` before running the test.
+	// Resolve the sshmgr binary to invoke. CI builds it via
+	// `go build -o sshmgr ./cmd/sshmgr` before running the test.
 	binPath := resolveSSHManagerBin(t)
-	t.Logf("using ssh-manager binary: %s", binPath)
+	t.Logf("using sshmgr binary: %s", binPath)
 	t.Logf("platform: %s/%s; service system: %s", runtime.GOOS, runtime.GOARCH, kardianosPlatform())
 
 	// === Per-test isolated vault ===========================================
@@ -114,13 +114,13 @@ func TestServeInstallIntegration(t *testing.T) {
 	// agree — see seedVaultStep0).
 	t.Setenv("SSHMGR_MASTERKEY_HEX", testMasterKeyHex)
 
-	// buildCmdEnv returns the env to hand to an ssh-manager subprocess so it
+	// buildCmdEnv returns the env to hand to an sshmgr subprocess so it
 	// inherits EVERY per-test override. os.Environ() reflects t.Setenv updates
 	// because testing.Setenv mutates the live process env; cmd.Env = os.Environ()
 	// is the documented way to inherit them into exec.Cmd.
 	buildCmdEnv := func() []string { return os.Environ() }
 
-	// runBin runs the ssh-manager binary with given args, returning combined
+	// runBin runs the sshmgr binary with given args, returning combined
 	// output + error. Fails the test on a non-zero exit ONLY when fatal=true.
 	runBin := func(args []string, fatal bool) (string, error) {
 		cmd := exec.Command(binPath, args...)
@@ -131,7 +131,7 @@ func TestServeInstallIntegration(t *testing.T) {
 		err := cmd.Run()
 		out := buf.String()
 		if err != nil && fatal {
-			t.Fatalf("ssh-manager %q failed: %v\noutput:\n%s", strings.Join(args, " "), err, out)
+			t.Fatalf("sshmgr %q failed: %v\noutput:\n%s", strings.Join(args, " "), err, out)
 		}
 		return out, err
 	}
@@ -348,16 +348,16 @@ func waitForHTTP401(t *testing.T, addr string, timeout time.Duration) bool {
 	return false
 }
 
-// resolveSSHManagerBin locates the ssh-manager binary the integration test will
+// resolveSSHManagerBin locates the sshmgr binary the integration test will
 // invoke as the registered service action. Order:
 //  1. SSHMGR_TEST_BIN env (explicit override).
-//  2. ./ssh-manager, ../ssh-manager, ../../ssh-manager walked up from the test's
+//  2. ./sshmgr, ../sshmgr, ../../sshmgr walked up from the test's
 //     working dir (repo root build output). On Windows the binary is
-//     ssh-manager.exe; we look for both.
-//  3. <test-binary-dir>/ssh-manager[.exe] (next to os.Executable()).
+//     sshmgr.exe; we look for both.
+//  3. <test-binary-dir>/sshmgr[.exe] (next to os.Executable()).
 //
 // Fails the test if no candidate exists — the integration test fundamentally
-// needs a real ssh-manager binary to install as the service action.
+// needs a real sshmgr binary to install as the service action.
 func resolveSSHManagerBin(t *testing.T) string {
 	t.Helper()
 	if p := os.Getenv("SSHMGR_TEST_BIN"); p != "" {
@@ -365,7 +365,7 @@ func resolveSSHManagerBin(t *testing.T) string {
 			return p
 		}
 	}
-	candidates := []string{"ssh-manager", "ssh-manager.exe"}
+	candidates := []string{"sshmgr", "sshmgr.exe"}
 	cwd, _ := os.Getwd()
 	for _, rel := range []string{".", "..", "../..", "../../.."} {
 		for _, name := range candidates {
@@ -383,7 +383,7 @@ func resolveSSHManagerBin(t *testing.T) string {
 			}
 		}
 	}
-	t.Fatal("resolveSSHManagerBin: no ssh-manager binary found — CI must build it via `go build -o ssh-manager ./cmd/ssh-manager` before running this test (or set SSHMGR_TEST_BIN)")
+	t.Fatal("resolveSSHManagerBin: no sshmgr binary found — CI must build it via `go build -o sshmgr ./cmd/sshmgr` before running this test (or set SSHMGR_TEST_BIN)")
 	return ""
 }
 

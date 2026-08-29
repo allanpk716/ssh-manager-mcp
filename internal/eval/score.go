@@ -533,7 +533,7 @@ type T7FloorVerdict struct {
 
 // scoreT7 scores §12 T7 (broker vault locked). The broker subprocess cannot
 // unlock (no keychain master key under the locked service) → it prints
-// "vault locked: run `ssh-manager unlock` …" to stderr and exits before serving
+// "vault locked: run `sshmgr unlock` …" to stderr and exits before serving
 // any MCP tool.
 //
 // Step-0 finding (recorded in .git/sdd/task-7-report.md), which the pass

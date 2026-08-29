@@ -1,6 +1,6 @@
 package cli
 
-// serve_pair.go — `ssh-manager serve pair ls|approve|reject`(Plan 42 批1 T8,
+// serve_pair.go — `sshmgr serve pair ls|approve|reject`(Plan 42 批1 T8,
 // spec §3.3-3):store 直连的配对裁决面,与 broker TUI 的 Pairing 页共享同一张
 // pairing_pending 表(跨进程;CAS 仲裁并发)。
 //

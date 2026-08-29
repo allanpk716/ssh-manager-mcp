@@ -123,7 +123,7 @@ func checkEnv() []doctorCheck {
 
 // checkRole pins the machine's role.json state. Load() errors (corrupt file /
 // invalid role value) are the one FAIL branch — the state roles.Load guides
-// to `ssh-manager clear` is exactly the broken machine doctor exists to
+// to `sshmgr clear` is exactly the broken machine doctor exists to
 // catch. Fresh machine is INFO (points at the wizard), not a FAIL.
 func checkRole() []doctorCheck {
 	c := doctorCheck{Name: "role"}
@@ -137,18 +137,18 @@ func checkRole() []doctorCheck {
 	case err != nil:
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("role.json unreadable: %v", err)
-		c.Fix = "run `ssh-manager clear` (writes a vault safety-net backup first), then re-run the wizard (`ssh-manager tui`)"
+		c.Fix = "run `sshmgr clear` (writes a vault safety-net backup first), then re-run the wizard (`sshmgr tui`)"
 	case st == nil:
 		c.Status = statusInfo
 		c.Detail = "no role.json — fresh machine, run the wizard"
 	case vaultPresent && clientPresent:
 		c.Status = statusWarn
 		c.Detail = fmt.Sprintf("dual-role residue: role.json at BOTH the vault dir and the user config dir — loaded role=%s setup_complete=%t", st.Role, st.SetupComplete)
-		c.Fix = "keep the location for the current role and remove the other, or run `ssh-manager clear` and re-run the wizard"
+		c.Fix = "keep the location for the current role and remove the other, or run `sshmgr clear` and re-run the wizard"
 	case !st.SetupComplete:
 		c.Status = statusWarn
 		c.Detail = fmt.Sprintf("role=%s but wizard incomplete (setup_complete=false) — re-run to finish setup", st.Role)
-		c.Fix = "run `ssh-manager tui` to resume the wizard"
+		c.Fix = "run `sshmgr tui` to resume the wizard"
 	default:
 		c.Status = statusPass
 		c.Detail = fmt.Sprintf("role=%s setup_complete=true", st.Role)
@@ -206,7 +206,7 @@ func checkVaultStore() []doctorCheck {
 		case st != nil && vaultHoldingRole(st.Role):
 			c.Status = statusFail
 			c.Detail = fmt.Sprintf("store.db missing on a vault-holding machine (role=%s)", st.Role)
-			c.Fix = "run `ssh-manager unlock` or the setup wizard"
+			c.Fix = "run `sshmgr unlock` or the setup wizard"
 		case st != nil: // client
 			c.Status = statusInfo
 			c.Detail = "store.db absent on a client machine — cache-only is normal"
@@ -258,11 +258,11 @@ func checkVaultKey() []doctorCheck {
 		case st != nil && vaultHoldingRole(st.Role):
 			c.Status = statusFail
 			c.Detail = fmt.Sprintf("master.key missing on a vault-holding machine (role=%s)", st.Role)
-			c.Fix = "run `ssh-manager unlock` or the setup wizard"
+			c.Fix = "run `sshmgr unlock` or the setup wizard"
 		case storePresent:
 			c.Status = statusFail
 			c.Detail = "master.key missing but store.db exists — the vault cannot be decrypted"
-			c.Fix = "run `ssh-manager unlock` (or restore master.key from backup)"
+			c.Fix = "run `sshmgr unlock` (or restore master.key from backup)"
 		case st != nil: // client
 			c.Status = statusInfo
 			c.Detail = "master.key absent on a client machine — no local vault to unlock"
@@ -277,7 +277,7 @@ func checkVaultKey() []doctorCheck {
 	case !store.ValidMasterKeyLen(b):
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("master.key is %d bytes, expected 32 — corrupt or wrong file", len(b))
-		c.Fix = "restore master.key from backup or re-run `ssh-manager unlock`"
+		c.Fix = "restore master.key from backup or re-run `sshmgr unlock`"
 	default:
 		c.Status = statusPass
 		c.Detail = fmt.Sprintf("master.key present (%d bytes)", len(b))
@@ -457,7 +457,7 @@ func checkServeCert() []doctorCheck {
 	if rerr != nil {
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("serve cert problem: %v", rerr)
-		c.Fix = "follow the recovery steps in the detail above, then verify with `ssh-manager serve cert-info`"
+		c.Fix = "follow the recovery steps in the detail above, then verify with `sshmgr serve cert-info`"
 		return []doctorCheck{c}
 	}
 	c.Status = statusPass
@@ -510,12 +510,12 @@ func checkServeSvc() []doctorCheck {
 	case state == "Stopped":
 		c.Status = statusWarn
 		c.Detail = "serve service installed but stopped"
-		c.Fix = "re-run `ssh-manager serve install` (idempotent install + start), or start it via the OS service manager"
+		c.Fix = "re-run `sshmgr serve install` (idempotent install + start), or start it via the OS service manager"
 	case state == "NOT INSTALLED":
 		if st := doctorRole(); st != nil && st.Role == roles.RoleServer {
 			c.Status = statusWarn
 			c.Detail = "serve service not installed on a server-role machine"
-			c.Fix = "run `ssh-manager serve install`"
+			c.Fix = "run `sshmgr serve install`"
 		} else {
 			c.Status = statusInfo
 			c.Detail = "serve service not installed (serve not in use)"
@@ -523,7 +523,7 @@ func checkServeSvc() []doctorCheck {
 	default:
 		c.Status = statusWarn
 		c.Detail = fmt.Sprintf("serve service state indeterminate: %s", state)
-		c.Fix = "inspect with `ssh-manager serve status` and the service manager's own tooling"
+		c.Fix = "inspect with `sshmgr serve status` and the service manager's own tooling"
 	}
 	return []doctorCheck{c}
 }
@@ -549,7 +549,7 @@ func checkClientCache() []doctorCheck {
 		if st := doctorRole(); st != nil && st.Role == roles.RoleClient {
 			c.Status = statusFail
 			c.Detail = "cache.bin missing on a client machine — no offline vault"
-			c.Fix = "run `ssh-manager cache pull`"
+			c.Fix = "run `sshmgr cache pull`"
 		} else {
 			c.Status = statusInfo
 			c.Detail = "cache.bin absent (no offline cache on this machine)"
@@ -580,7 +580,7 @@ func checkClientCache() []doctorCheck {
 	if !dekOK {
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("cache.bin present (age %s) but its cache DEK is missing — cache undecryptable", age)
-		c.Fix = "re-run the client wizard (`ssh-manager tui`) and `cache pull` again to re-establish a decryptable cache"
+		c.Fix = "re-run the client wizard (`sshmgr tui`) and `cache pull` again to re-establish a decryptable cache"
 		return []doctorCheck{c}
 	}
 
@@ -594,7 +594,7 @@ func checkClientCache() []doctorCheck {
 	if !authOK {
 		c.Status = statusWarn
 		c.Detail = fmt.Sprintf("cache.bin present (age %s) but no auto-refresh credential (manual `cache pull` only)", age)
-		c.Fix = "run `ssh-manager cache pull` to persist cache.auth.json (enables auto-refresh)"
+		c.Fix = "run `sshmgr cache pull` to persist cache.auth.json (enables auto-refresh)"
 		return []doctorCheck{c}
 	}
 	c.Status = statusPass
@@ -606,7 +606,7 @@ func checkClientCache() []doctorCheck {
 // when FAIL findings are detected (wrapped errDoctorFindings).
 func runDoctor(cmd *cobra.Command, _ []string) error {
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "ssh-manager doctor (%s)\n", buildinfo.Version)
+	fmt.Fprintf(out, "sshmgr doctor (%s)\n", buildinfo.Version)
 	var warn, fail int
 	for _, check := range doctorCheckFuncs {
 		for _, c := range check() {

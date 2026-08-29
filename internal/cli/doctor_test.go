@@ -17,7 +17,7 @@ import (
 )
 
 // withDoctorDirs isolates every filesystem/env location doctor READS —
-// withClearDirs discipline (the dev machine REALLY runs ssh-manager, so an
+// withClearDirs discipline (the dev machine REALLY runs sshmgr, so an
 // unpinned check would inspect the operator's live vault). It adds the two
 // cache-credential seams (SSHMGR_CACHE_URL / SSHMGR_CACHE_TOKEN) that clear
 // never touched but doctor's env check enumerates, and — since T4 — pins the
@@ -72,7 +72,7 @@ func TestDoctorExitCodes(t *testing.T) {
 		t.Fatalf("fresh machine must have no FAIL (exit 0), got: %v\n%s", err, out)
 	}
 	for _, want := range []string{
-		"ssh-manager doctor (", // header carries buildinfo.Version
+		"sshmgr doctor (", // header carries buildinfo.Version
 		"no role.json — fresh machine, run the wizard",
 		"overall: 0 WARN, 0 FAIL",
 	} {

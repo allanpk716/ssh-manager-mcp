@@ -346,7 +346,7 @@ func (r *ServeRunner) handlePairEnroll(w http.ResponseWriter, req *http.Request)
 		case strings.Contains(err.Error(), "UNIQUE constraint"):
 			http.Error(w, "pairing id already enrolled", http.StatusConflict)
 		default:
-			fmt.Fprintf(os.Stderr, "ssh-manager serve: pairing enroll store error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "sshmgr serve: pairing enroll store error: %v\n", err)
 			http.Error(w, "enroll failed", http.StatusInternalServerError)
 		}
 		return
@@ -431,7 +431,7 @@ func (r *ServeRunner) handlePairPoll(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		// A store fault is NOT an approval verdict — 500, never a fake 410
 		// that would send the client re-enrolling over a transient fault.
-		fmt.Fprintf(os.Stderr, "ssh-manager serve: pairing queue read failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pairing queue read failed: %v\n", err)
 		http.Error(w, "pairing queue unavailable", http.StatusInternalServerError)
 		return
 	}
@@ -500,7 +500,7 @@ func (r *ServeRunner) handlePairFinish(w http.ResponseWriter, req *http.Request)
 	// the real gate).
 	row, err := r.pairFindRow(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager serve: pairing queue read failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pairing queue read failed: %v\n", err)
 		http.Error(w, "pairing queue unavailable", http.StatusInternalServerError)
 		return
 	}
@@ -524,7 +524,7 @@ func (r *ServeRunner) handlePairFinish(w http.ResponseWriter, req *http.Request)
 	// connection BEFORE FinishPairing (never inside the callbacks).
 	maxOffline := pairDefaultMaxOffline
 	if v, ok, err := r.st.GetSetting(settingPairMaxOffline); err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager serve: %s read failed: %v (defaulting %s)\n", settingPairMaxOffline, err, pairDefaultMaxOffline)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: %s read failed: %v (defaulting %s)\n", settingPairMaxOffline, err, pairDefaultMaxOffline)
 	} else if ok && strings.TrimSpace(v) != "" {
 		maxOffline = strings.TrimSpace(v)
 	}
@@ -581,7 +581,7 @@ func (r *ServeRunner) handlePairFinish(w http.ResponseWriter, req *http.Request)
 				http.Error(w, "ack mismatch", http.StatusForbidden)
 				return
 			}
-			fmt.Fprintf(os.Stderr, "ssh-manager serve: pairing finish failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "sshmgr serve: pairing finish failed: %v\n", err)
 			http.Error(w, "finish failed", http.StatusInternalServerError)
 		}
 		return

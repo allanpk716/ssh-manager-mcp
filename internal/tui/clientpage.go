@@ -21,7 +21,7 @@ import (
 // clientops.WriteCacheCred.
 //
 // Plan 42 批1 T8: the connection-edit form and the wizard-embedded first-run
-// flow are RETIRED — pair (`ssh-manager pair`) is the only guided onboarding
+// flow are RETIRED — pair (`sshmgr pair`) is the only guided onboarding
 // path for a new machine (spec §3.1-6). This panel is deliberately reduced to
 // sync/status/instance: [c] no longer opens a form, it points at pair. The
 // manual path (`cache pull` + hand-written .mcp.json) stays available for
@@ -105,7 +105,7 @@ func syncCmdMode(cred *clientops.CacheCred, instance string) tea.Cmd {
 			return syncDoneMsg{fmt.Errorf("连接配置未加载，无法同步")}
 		}
 		if cred.Pin == "" {
-			return syncDoneMsg{fmt.Errorf("连接配置缺 pin（本界面永不走明文拉取）——请运行 ssh-manager pair 重新入网")}
+			return syncDoneMsg{fmt.Errorf("连接配置缺 pin（本界面永不走明文拉取）——请运行 sshmgr pair 重新入网")}
 		}
 		_, err := clientops.DoPull(cred.URL, cred.Token, cred.Pin, clientops.PullOpts{Timeout: clientops.LazyPullTimeout, Instance: instance})
 		if err != nil {
@@ -208,7 +208,7 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Plan 42 批1 T8: the connect-form is retired — pair is the only
 			// guided onboarding path (spec §3.1-6). The key stays as the
 			// affordance slot but only points at the command.
-			m.status = "连接编辑已退役——新机入网/换码请运行 ssh-manager pair（手工路径 cache pull 保留,见 docs）"
+			m.status = "连接编辑已退役——新机入网/换码请运行 sshmgr pair（手工路径 cache pull 保留,见 docs）"
 			return m, nil
 		case k.Text == "t":
 			m.status = "TTL 由 .mcp.json 的 --cache-max-age 控制（默认 30m；0=关闭自动拉取）"
@@ -346,7 +346,7 @@ func (m clientModel) View() tea.View {
 		return altScreen(tea.NewView(v))
 	}
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(" ssh-manager (client)") + "\n")
+	b.WriteString(titleStyle.Render(" sshmgr (client)") + "\n")
 	singleSlot := clientops.SingleSlotOverrideEnvSet()
 	if singleSlot {
 		// §3.5: the two override envs pin this process to ONE cache slot —
@@ -362,7 +362,7 @@ func (m clientModel) View() tea.View {
 		// Plan 42 批1 T8 (批1 前置 #4): pair is the ONLY guided onboarding
 		// path for a new machine — say so exactly where the empty panel would
 		// otherwise leave the user guessing.
-		b.WriteString(warnStyle.Render("ℹ pair 为新机唯一入网路径:运行 ssh-manager pair") + "\n")
+		b.WriteString(warnStyle.Render("ℹ pair 为新机唯一入网路径:运行 sshmgr pair") + "\n")
 	}
 	n := 0
 	if m.snap != nil {

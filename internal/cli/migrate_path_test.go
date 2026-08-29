@@ -447,7 +447,7 @@ func TestMigratePath_NoOldVault_NoOp(t *testing.T) {
 }
 
 // TestMigratePath_CLIRegistered ensures migrate-path is wired into NewRootCmd
-// so `ssh-manager migrate-path` dispatches to runMigratePath.
+// so `sshmgr migrate-path` dispatches to runMigratePath.
 func TestMigratePath_CLIRegistered(t *testing.T) {
 	root := NewRootCmd()
 	var found *cobra.Command

@@ -18,9 +18,9 @@
 //
 // === Service-vs-foreground mode (load-bearing — read before changing) ===
 //
-// The SAME `ssh-manager serve` binary is invoked in two contexts:
+// The SAME `sshmgr serve` binary is invoked in two contexts:
 //
-//  1. Interactive: the operator types `ssh-manager serve --addr ...` at a
+//  1. Interactive: the operator types `sshmgr serve --addr ...` at a
 //     shell. The cobra RunE in serve.go runs mcpserver.RunServe directly
 //     (foreground; Ctrl-C exits).
 //  2. Service-managed: the OS service manager (SCM / systemd / launchd) starts
@@ -47,7 +47,7 @@
 //     fix carried forward: the old PowerShell Get-ScheduledTask.State parser
 //     broke on zh-CN /Query text; svc.Status() returns a Go byte that is
 //     locale-independent.
-//   - process: is a ssh-manager process running? (best-effort, cross-platform)
+//   - process: is a sshmgr process running? (best-effort, cross-platform)
 //   - http:    does the probed addr respond over https? (401/200 = alive +
 //     auth gate wired; TLS because serve is TLS-only since auto-TLS — Plan 22 T1)
 //   - vault:   is the master.key present, readable, AND a usable 32-byte key?
@@ -86,7 +86,7 @@ import (
 
 // serveServiceName is the registered service name (single service per host —
 // re-running install overwrites it via Uninstall+Install).
-const serveServiceName = "ssh-manager-serve"
+const serveServiceName = "sshmgr-serve"
 
 // serveDisplayName / serveDescription are the human-friendly metadata written
 // into the Windows service / systemd unit / launchd plist. Post-Plan-42-批1 the
@@ -94,7 +94,7 @@ const serveServiceName = "ssh-manager-serve"
 // description names what it actually is: the authoritative vault serving
 // /snapshot + /pair for the multi-machine bridge posture.
 const (
-	serveDisplayName = "ssh-manager serve"
+	serveDisplayName = "sshmgr serve"
 	serveDescription = "ssh-manager-mcp authoritative vault — /snapshot cache pull + /pair SAS pairing for the multi-machine bridge posture (no remote MCP surface)"
 )
 
@@ -176,7 +176,7 @@ func (p *program) run(ctx context.Context) {
 	}
 	st, err := vault.OpenStore(store.FileKeyProvider{})
 	if err != nil {
-		fmt.Fprintf(w, "ssh-manager serve (service): open vault: %v\n", err)
+		fmt.Fprintf(w, "sshmgr serve (service): open vault: %v\n", err)
 		return
 	}
 	defer st.Close()
@@ -193,9 +193,9 @@ func (p *program) run(ctx context.Context) {
 	if p.tlsCert == "" {
 		tlsLabel = "auto"
 	}
-	fmt.Fprintf(w, "ssh-manager serve (service): starting serve on %s (tls=%s)\n", p.addr, tlsLabel)
+	fmt.Fprintf(w, "sshmgr serve (service): starting serve on %s (tls=%s)\n", p.addr, tlsLabel)
 	if err := mcpserver.RunServe(ctx, st, p.addr, p.tlsCert, p.tlsKey, p.opts); err != nil {
-		fmt.Fprintf(w, "ssh-manager serve (service): %v\n", err)
+		fmt.Fprintf(w, "sshmgr serve (service): %v\n", err)
 	}
 }
 
@@ -233,12 +233,12 @@ func newServeInstallCmd() *cobra.Command {
   macOS:     launchd plist   (RunAtLoad + KeepAlive — LaunchDaemon under sudo,
                               LaunchAgent as the current user)
 
-The registered service runs the SAME ssh-manager binary (resolved at install
+The registered service runs the SAME sshmgr binary (resolved at install
 time via os.Executable) with ` + "`serve --addr ...`" + ` — so the service
 re-uses this exact build. RestartOnFailure is expressed as each platform's
 native concept (spec §5.4): no PowerShell, no schtasks, no hand-rolled XML.
 
-master.key must already exist (run 'ssh-manager unlock' first). On Windows the
+master.key must already exist (run 'sshmgr unlock' first). On Windows the
 service runs under the LocalSystem account by default (UserName="" →
 LocalSystem); the vault master.key must therefore be readable by that account
 (machine-scope DPAPI blob or a plaintext FileKeyProvider file under a
@@ -278,7 +278,7 @@ func newServeStatusCmd() *cobra.Command {
 		Long: `Report four INDEPENDENT signals so a partial failure is legible:
 
   service: kardianos svc.Status() — Running / Stopped / Unknown / NOT INSTALLED
-  process: is a ssh-manager serve process running?
+  process: is a sshmgr serve process running?
   http:    does the bound addr respond over https (TLS)? (401/200 = auth gate wired)
   vault:   is master.key present, readable, AND a usable 32-byte key?
            (in-process file probe — catches missing / corrupt / wrong-length
@@ -329,16 +329,16 @@ func installServeService(addr, tlsCert, tlsKey string, out io.Writer) error {
 	mk, err := (store.FileKeyProvider{}).Get()
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("master key not found: run 'ssh-manager unlock' in an interactive session first (see docs/backup-restore.md)")
+			return fmt.Errorf("master key not found: run 'sshmgr unlock' in an interactive session first (see docs/backup-restore.md)")
 		}
 		return fmt.Errorf("master key present but undecryptable: %w (if admin-reset password, restore from backup or re-init vault)", err)
 	}
 	if !store.ValidMasterKeyLen(mk) {
-		return fmt.Errorf("master key is %d bytes, expected 32 — corrupt or wrong file; run `ssh-manager unlock` to regenerate, or restore from backup", len(mk))
+		return fmt.Errorf("master key is %d bytes, expected 32 — corrupt or wrong file; run `sshmgr unlock` to regenerate, or restore from backup", len(mk))
 	}
 
 	// 2. Resolve the binary the service will run. os.Executable returns the
-	//    absolute path of THIS ssh-manager build — the service re-runs exactly
+	//    absolute path of THIS sshmgr build — the service re-runs exactly
 	//    the same binary.
 	exePath, err := os.Executable()
 	if err != nil {
@@ -400,9 +400,9 @@ func installServeService(addr, tlsCert, tlsKey string, out io.Writer) error {
 	// registered and will start at boot; the user can diagnose via
 	// 'serve status'.
 	if err := s.Start(); err != nil {
-		fmt.Fprintf(out, "warning: service installed but Start failed: %v (registered; will start at boot — check 'ssh-manager serve status')\n", err)
+		fmt.Fprintf(out, "warning: service installed but Start failed: %v (registered; will start at boot — check 'sshmgr serve status')\n", err)
 	} else {
-		fmt.Fprintln(out, "service started. Use 'ssh-manager serve status' to verify it is listening.")
+		fmt.Fprintln(out, "service started. Use 'sshmgr serve status' to verify it is listening.")
 	}
 	return nil
 }
@@ -490,7 +490,7 @@ func runServeStatus(cmd *cobra.Command, addr string) error {
 	}
 	fmt.Fprintf(out, "service:   %s\n", stateStr)
 
-	// (b) Process-alive: is a ssh-manager serve process running?
+	// (b) Process-alive: is a sshmgr serve process running?
 	alive := serveProcessRunning()
 	fmt.Fprintf(out, "process:   %s\n", boolStr(alive, "running", "not running"))
 
@@ -600,9 +600,9 @@ func isServiceNotInstalled(err error) bool {
 
 // --- cross-platform process + HTTP + vault probes (status) ------------------
 
-// serveProcessRunning reports whether a ssh-manager process is currently
+// serveProcessRunning reports whether a sshmgr process is currently
 // running. Cross-platform: on Windows it shells tasklist (existing impl);
-// on POSIX it scans /proc for a matching ssh-manager comm. Best-effort — a
+// on POSIX it scans /proc for a matching sshmgr comm. Best-effort — a
 // false negative does not change the overall DEGRADED verdict when the other
 // three signals are also off, and a false positive is bounded by the other
 // three signals.
@@ -664,7 +664,7 @@ func probeServeHTTP(addr string) bool {
 // What this probe catches (Plan 16 T7 review, Important finding 1):
 //
 //   - master.key MISSING  → "LOCKED (master.key not found — ...)" (the operator
-//     has not run `ssh-manager unlock` yet; serve would hard-fail at boot).
+//     has not run `sshmgr unlock` yet; serve would hard-fail at boot).
 //   - master.key UNREADABLE (FS permission error, etc.) → "LOCKED (<fs error>)".
 //   - master.key WRONG-LENGTH / corrupt / truncated / garbage → "LOCKED (master.key
 //     is 4 bytes, expected 32 — corrupt or wrong file; restore from backup)".
@@ -690,12 +690,12 @@ func vaultStatusString() string {
 	mk, err := (store.FileKeyProvider{}).Get()
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return "LOCKED (master.key not found — run `ssh-manager unlock`)"
+			return "LOCKED (master.key not found — run `sshmgr unlock`)"
 		}
 		return "LOCKED (" + err.Error() + ")"
 	}
 	if !store.ValidMasterKeyLen(mk) {
-		return fmt.Sprintf("LOCKED (master.key is %d bytes, expected 32 — corrupt or wrong file; restore from backup or re-run `ssh-manager unlock`)", len(mk))
+		return fmt.Sprintf("LOCKED (master.key is %d bytes, expected 32 — corrupt or wrong file; restore from backup or re-run `sshmgr unlock`)", len(mk))
 	}
 	return "ok"
 }

@@ -36,10 +36,10 @@ func newServeCmd() *cobra.Command {
 		Long: `Run the authoritative vault as a resident server for the multi-machine
 bridge posture. It serves exactly: the authenticated /snapshot endpoint
 (device-code gated, profile-scoped cache pull), the SAS pairing surface
-/pair/* (a new machine enrolls in one shot with 'ssh-manager pair'), and —
+/pair/* (a new machine enrolls in one shot with 'sshmgr pair'), and —
 in a later release — the web admin UI. There is NO remote MCP surface:
 agents on work machines run locally from a read-only cache
-('ssh-manager mcp --cache'); the MCP stdio bridge posture is documented in
+('sshmgr mcp --cache'); the MCP stdio bridge posture is documented in
 docs/multi-machine.md.
 
 TLS is always on — without --tls-cert a self-signed cert is auto-generated
@@ -55,7 +55,7 @@ This command is ALSO the entry point used by ` + "`serve install`" + `: when
 the OS service manager (Windows Service / systemd / launchd) starts the
 registered binary, kardianos hands control to svc.Run() inside this RunE,
 which invokes program.Start → mcpserver.RunServe in a goroutine. Interactive
-invocations (an operator typing ` + "`ssh-manager serve`" + `) run RunServe
+invocations (an operator typing ` + "`sshmgr serve`" + `) run RunServe
 directly in the foreground.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// === Service-vs-foreground mode (load-bearing — see serve_service.go) ===
@@ -66,7 +66,7 @@ directly in the foreground.`,
 			// our program.Start (which spawns RunServe in a goroutine), and
 			// returns after Stop fires when the manager signals stop.
 			//
-			// If Interactive() is true (operator typed `ssh-manager serve` at a
+			// If Interactive() is true (operator typed `sshmgr serve` at a
 			// shell) OR kardianos cannot decide (returns true on a null system),
 			// we run RunServe directly in the foreground — the original path.
 			if !service.Interactive() {
