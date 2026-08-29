@@ -1,6 +1,6 @@
 # 在 broker 主机上使用 AI agent
 
-这篇讲：serve 机（broker 主机，比如 VLAN 里那台常驻 `ssh-manager serve` 的服务器）**自己也想跑 agent**（Claude Code / Cursor / 任何 MCP 客户端）时，agent 怎么接入 SSH MCP——以及与工作机唯一的差异点、应急姿势。
+这篇讲：serve 机（broker 主机，比如 VLAN 里那台常驻 `sshmgr serve` 的服务器）**自己也想跑 agent**（Claude Code / Cursor / 任何 MCP 客户端）时，agent 怎么接入 SSH MCP——以及与工作机唯一的差异点、应急姿势。
 
 > 前置阅读：[multi-machine.md](./multi-machine.md)（多机桥姿态架构 + pair 一条龙）+ [agent-access.md](./agent-access.md)（project token / profile 授权模型）。
 
@@ -14,7 +14,7 @@ broker 主机上的 agent 就是**一台零距离的 client**——和任何工�
 
 | 姿势 | 接入方式 | 定位 |
 |---|---|---|
-| [走桥：pair 入网](#走桥pair-入网默认) | `ssh-manager pair` → 本地只读缓存 → `mcp --cache` | ✅ 默认，与笔记本同构 |
+| [走桥：pair 入网](#走桥pair-入网默认) | `sshmgr pair` → 本地只读缓存 → `mcp --cache` | ✅ 默认，与笔记本同构 |
 | [走桥：手工路径](#走桥手工路径迁移--ci) | `cache-tokens add` + `cache pull` + 手写 `.mcp.json` | ✅ 迁移/CI 场景 |
 | [应急附录](#应急附录不推荐stdio-直开本地-vault) | `mcp` stdio 直开本地 vault | ⚠️ 不推荐，serve 彻底没起时 |
 
@@ -24,14 +24,14 @@ broker 主机上的 agent 就是**一台零距离的 client**——和任何工�
 
 ## 走桥：pair 入网（默认）
 
-全流程与 [multi-machine.md 的 pair 节](./multi-machine.md#配对入网ssh-manager-pairplan-42)一模一样，只有两个零距离差异：
+全流程与 [multi-machine.md 的 pair 节](./multi-machine.md#配对入网sshmgr-pairplan-42)一模一样，只有两个零距离差异：
 
 1. **连接地址用本机 hostname 或 VLAN IP**（不是 `127.0.0.1`/`localhost`）——pair 的机械地址校验核对的是 `target_url` 是否属于本机**非环回**地址集合 + hostname（环回不在集合内，用 `https://127.0.0.1:7878` 配对会吃 ⚠ 并要求显式覆盖）。LAN 发现路径天然给你的是 VLAN IP，直接用即可。
 2. **批准就在本机**：broker 机自己开着 TUI（Pairing 页）或随手 `serve pair ls / approve`——对照 client 屏 SAS 与批准行 name@url 一致后批准，不用切机器。
 
 ```bash
-ssh-manager pair --instance server-local          # 发现会找到自己（VLAN IP）
-# 或显式：ssh-manager pair --instance server-local --url https://<本机VLAN IP>:7878
+sshmgr pair --instance server-local          # 发现会找到自己（VLAN IP）
+# 或显式：sshmgr pair --instance server-local --url https://<本机VLAN IP>:7878
 # → 批准（本机 TUI / serve pair）→ 首拉 → 产物 pair.server-local.mcp.json
 ```
 
@@ -41,7 +41,7 @@ ssh-manager pair --instance server-local          # 发现会找到自己（VLAN
 {
   "mcpServers": {
     "ssh": {
-      "command": "ssh-manager",
+      "command": "sshmgr",
       "args": ["mcp", "--cache"],
       "env": { "SSHMGR_TOKEN": "<项目token>" }
     }
@@ -66,11 +66,11 @@ ssh-manager pair --instance server-local          # 发现会找到自己（VLAN
 与工作机的手工路径同构（见 [multi-machine.md 手工 enroll](./multi-machine.md#手工-enroll存量迁移官方路径--ci-场景)），零距离差异同上——URL 用本机 VLAN IP：
 
 ```bash
-ssh-manager cache-tokens add --name server-local --profile <profile名>
+sshmgr cache-tokens add --name server-local --profile <profile名>
 # Authorization code (shown once): <设备码>
 # Server fingerprint (serve cert SPKI): sha256:...
 
-ssh-manager cache pull --url https://<本机VLAN IP>:7878 --token '<设备码>:sha256:...'
+sshmgr cache pull --url https://<本机VLAN IP>:7878 --token '<设备码>:sha256:...'
 # → pulled N servers / M credentials into cache.bin
 ```
 
@@ -102,7 +102,7 @@ broker 机上全**自洽**——不像远程工作机那样有"文件在笔记�
 | 现象 | 处理 |
 |---|---|
 | pair 吃 ⚠「配对声明目标 ≠ 本机地址」 | 你用了 `127.0.0.1`/`localhost` 作连接地址——机械校验只认**非环回**地址集 + hostname。换本机 hostname 或 VLAN IP 重新 pair（确属故意中继场景才用 `--allow-foreign-url` 覆盖）。 |
-| pair / `cache pull` 连不上 | serve 没起 / 防火墙挡 TCP+UDP 7878。`ssh-manager serve status` 查四项信号。 |
+| pair / `cache pull` 连不上 | serve 没起 / 防火墙挡 TCP+UDP 7878。`sshmgr serve status` 查四项信号。 |
 | 报 401 | 设备码/项目 token 错 / 已 rotate / project 被 disable/revoke。`projects ls` / `cache-tokens ls` 核对。 |
 | agent 看不到新加的 server | 缓存还没保鲜——手动 `cache pull`，或等 ≤30min 自动。 |
 | serve 重启窗口内 | 走桥的 agent **照常工作**（本地缓存，不依赖 serve 存活）；只有保鲜/新设备入网受影响。 |

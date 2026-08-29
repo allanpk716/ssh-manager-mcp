@@ -8,7 +8,7 @@
 
 ## 它是什么
 
-`ssh-manager` 把你的 SSH 凭据锁进一个**本地加密保险柜**。AI agent 不直接拿凭据，而是通过一个 broker 工具去操作服务器 —— broker 在 agent 启动的 MCP server 进程里跑，**单机模式不需要任何常驻服务、不需要网络监听**。凭据永远不进 agent 的上下文。
+`sshmgr` 把你的 SSH 凭据锁进一个**本地加密保险柜**。AI agent 不直接拿凭据，而是通过一个 broker 工具去操作服务器 —— broker 在 agent 启动的 MCP server 进程里跑，**单机模式不需要任何常驻服务、不需要网络监听**。凭据永远不进 agent 的上下文。
 
 ---
 
@@ -18,19 +18,19 @@
 # 推荐：直接下载预编译二进制
 #   https://github.com/allanpk716/ssh-manager-mcp/releases
 # 或本地编译（需要 Go）：
-go build -o ssh-manager ./cmd/ssh-manager
+go build -o sshmgr ./cmd/sshmgr
 
-ssh-manager version      # 验证：打印版本号
+sshmgr version      # 验证：打印版本号
 ```
 
-> Windows：二进制是 `ssh-manager.exe`，放进 PATH 或后续命令用绝对路径。
+> Windows：二进制是 `sshmgr.exe`，放进 PATH 或后续命令用绝对路径。
 
 ---
 
 ## Step 2 — 解锁保险柜（一次性）
 
 ```bash
-ssh-manager unlock
+sshmgr unlock
 ```
 
 生成 master key，写入固定路径裸文件（Win `C:\ProgramData\ssh-manager\master.key.plain` / Unix `/var/lib/ssh-manager/`，权限 0600 + ACL 硬化）。**跑一次即可**，之后不用再跑。
@@ -41,10 +41,10 @@ ssh-manager unlock
 
 ## Step 3 — 录入一台服务器
 
-> 💡 Step 3-4 也可在 TUI 主控台里点点点完成：`ssh-manager tui`（全键盘点选教程见 [tui-single-machine.md](./tui-single-machine.md)）。
+> 💡 Step 3-4 也可在 TUI 主控台里点点点完成：`sshmgr tui`（全键盘点选教程见 [tui-single-machine.md](./tui-single-machine.md)）。
 
 ```bash
-ssh-manager servers add --name gpu \
+sshmgr servers add --name gpu \
     --host 192.0.2.10 --user deploy \
     --password '你的SSH密码'          # 或: --key ~/.ssh/id_ed25519
 ```
@@ -52,7 +52,7 @@ ssh-manager servers add --name gpu \
 可选：加 sudo 密码让 agent 能跑 `sudo`（`--sudo-password '...'`）。还可以挂结构化备注给 agent 看（`--role` / `--hardware` / `--location` 等，**别放机密**）。
 
 ```bash
-ssh-manager servers ls                 # 看已录入的服务器
+sshmgr servers ls                 # 看已录入的服务器
 ```
 
 ---
@@ -61,16 +61,16 @@ ssh-manager servers ls                 # 看已录入的服务器
 
 ```bash
 # profile = 一组服务器；project = 一张发给 agent 的「通行证」
-ssh-manager profiles add team-a
-ssh-manager profiles grant team-a gpu
+sshmgr profiles add team-a
+sshmgr profiles grant team-a gpu
 
-ssh-manager projects add my-agent --profile team-a
+sshmgr projects add my-agent --profile team-a
 ```
 
 `projects add` 会**打印一个一次性 token** + 一段 `.mcp.json` 片段，**当场记下来**（token 只显示一次）：
 
 ```json
-{"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
+{"mcpServers":{"ssh":{"command":"sshmgr","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
 ```
 
 ---
@@ -88,7 +88,7 @@ ssh-manager projects add my-agent --profile team-a
 agent 之外，你本人可以用存储的凭据直接在服务器上跑**单条命令**（非交互；连接+执行共享 120 秒超时，输出不封顶，远端非零退出会使本命令以非零码退出（码值见 stderr 错误消息））：
 
 ```bash
-ssh-manager ssh gpu nvidia-smi         # 直接跑一条命令（不带命令会显式报错）
+sshmgr ssh gpu nvidia-smi         # 直接跑一条命令（不带命令会显式报错）
 ```
 
 > 这条路**不是交互式终端**。要开终端，用你自己的 ssh 客户端（凭据需自行已有或另行配置——它们可能只存在本 vault 里）。
@@ -97,14 +97,14 @@ ssh-manager ssh gpu nvidia-smi         # 直接跑一条命令（不带命令会
 
 ## 常用维护命令
 
-日常管理推荐直接开 TUI 主控台 `ssh-manager tui`（增删改查/授权/发码全键盘完成）；命令行 equivalents：
+日常管理推荐直接开 TUI 主控台 `sshmgr tui`（增删改查/授权/发码全键盘完成）；命令行 equivalents：
 
 ```bash
-ssh-manager servers edit gpu --hardware "8x A100"   # 改服务器信息（id/profile 绑定不变）
-ssh-manager projects rotate my-agent                # 换 token（旧的立即失效）
-ssh-manager projects revoke my-agent                # 永久吊销
-ssh-manager export                                  # 备份整个 vault（口令加密文件）
-ssh-manager lock                                    # 锁回（删内存里的 key；要再跑 unlock）
+sshmgr servers edit gpu --hardware "8x A100"   # 改服务器信息（id/profile 绑定不变）
+sshmgr projects rotate my-agent                # 换 token（旧的立即失效）
+sshmgr projects revoke my-agent                # 永久吊销
+sshmgr export                                  # 备份整个 vault（口令加密文件）
+sshmgr lock                                    # 锁回（删内存里的 key；要再跑 unlock）
 ```
 
 ---

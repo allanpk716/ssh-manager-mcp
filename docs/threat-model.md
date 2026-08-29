@@ -43,7 +43,7 @@
 
 Plan 42 批1 给 serve 新增两个网络面：**UDP 7878 discovery**（默认开，可关）与 **`/pair/*` SAS 配对**（未认证 HTTP 端点，限速 + 人闸 + 开关）。②a（MCP-over-HTTP）**同批移除**——HTTP 上不再有任何持 project token 的远程面。本节登记这两个面的威胁分析（spec rev4 §3.2–§3.4 为权威出处）。
 
-**discovery：零敏感面。** serve 监听 udp/7878（listener 常开、逐包评估开关），对 probe **只单播回请求源**一条 offer `{name, spki, tcp}`——**永不主动广播**。offer 三字段全部非敏感（实例名、证书公钥指纹、TCP 端口）且经消毒白名单（name 正则、tcp ∈ [1,65535]、spki 格式；违者不发/兜底；client 侧对畸形 offer 直接丢弃，展示面剥离控制字符）。泄露面 = "VLAN 内存在一台 ssh-manager serve 及其名字"——LAN 可见性（Q1）接受。魔数/JSON 畸形静默丢弃。开关三态（显式 env > flag > store > 缺省 on），关 = 逐包不答。
+**discovery：零敏感面。** serve 监听 udp/7878（listener 常开、逐包评估开关），对 probe **只单播回请求源**一条 offer `{name, spki, tcp}`——**永不主动广播**。offer 三字段全部非敏感（实例名、证书公钥指纹、TCP 端口）且经消毒白名单（name 正则、tcp ∈ [1,65535]、spki 格式；违者不发/兜底；client 侧对畸形 offer 直接丢弃，展示面剥离控制字符）。泄露面 = "VLAN 内存在一台 sshmgr serve 及其名字"——LAN 可见性（Q1）接受。魔数/JSON 畸形静默丢弃。开关三态（显式 env > flag > store > 缺省 on），关 = 逐包不答。
 
 **配对协议与 SAS 绑定（诚实版）。** transcript 绑定双方临时 X25519 公钥、nonce、实例名与 `target_url`；SAS = 从 transcript 与密钥材料派生的 6 位数字，client 端 enroll 应答后即屏显 `<name> @ <target_url> SAS xxxxxx`。**研磨诚实声明**：SAS 绑定消除了"看到 transcript 即可算 SAS"的弱性，但对**双端换钥的离线研磨者**（其本身是两条 DH 腿的参与方、双侧密钥材料均可算，离线 ~10⁶ 哈希即可碰撞出同款 SAS）**不独立构成防护**。防研磨的实际防线是下面两条：**pin 分级 + 机械地址校验**——
 
@@ -95,12 +95,12 @@ L1+ 模型下**未消除**的威胁：
 
 「接口级不暴露」的准确边界（Plan 31，backlog #12）：
 
-- **承诺**：ssh-manager 的 MCP 接口默认不披露 vault 内 host:port 与凭据——`list_servers` 默认回 `"hidden"`（owner 可按服务器 `expose_host=true` 显式放开，host:port 组合口径——孤立端口号不构成披露）；工具错误文本不含 host / IP 字面量 / host:port 组合。
+- **承诺**：sshmgr 的 MCP 接口默认不披露 vault 内 host:port 与凭据——`list_servers` 默认回 `"hidden"`（owner 可按服务器 `expose_host=true` 显式放开，host:port 组合口径——孤立端口号不构成披露）；工具错误文本不含 host / IP 字面量 / host:port 组合。
 - **后台任务三件套（v0.10，Plan 32）不新增披露面**：任务表是 broker 进程内状态（与隧道同类），无任何持久化；`sudo` 密码仅在启动时瞬时传递给会话内核、不进任务记录；failed 态回给 agent 的错误文本过与连接错误同一条地址清洗链。
 - **`forward_port` 的 `listen_host` 越权拒绝文本不披露白名单内容**（Plan 35）：`listen_host` 是 agent 自己提供的输入（host 不由 broker 回填）；拒绝只说「不在 owner 预批白名单」，不枚举表内条目——不构成新披露面。
-- **audit 行永不入 agent 面（Plan 36）**：`ssh-manager audit` 是 owner 侧读路径（master-key 闸的 CLI，**永不注册为 MCP 工具**）——审计行含各 agent 的完整命令文本、可能含 secret，刻意做成 agent 面不可达。
+- **audit 行永不入 agent 面（Plan 36）**：`sshmgr audit` 是 owner 侧读路径（master-key 闸的 CLI，**永不注册为 MCP 工具**）——审计行含各 agent 的完整命令文本、可能含 secret，刻意做成 agent 面不可达。
 - **不算违约**：agent 在服务器上主动执行 `ip addr` / `hostname` 等命令探出的地址。
-- **明确不防的运行时逃逸**：agent 调用本机 ssh-manager owner CLI（`projects show` / `servers ls` 明文打印 `user@host:port`）；agent 读到离线 client 上的 cache.bin（整仓快照，设计上含全部 host 明文）——这两类属「agent 宿主已被完全信任」范畴，见 [backlog.md](./backlog.md) 的 (d) 类定级。
+- **明确不防的运行时逃逸**：agent 调用本机 sshmgr owner CLI（`projects show` / `servers ls` 明文打印 `user@host:port`）；agent 读到离线 client 上的 cache.bin（整仓快照，设计上含全部 host 明文）——这两类属「agent 宿主已被完全信任」范畴，见 [backlog.md](./backlog.md) 的 (d) 类定级。
 - **明确不做**：运行时级隐藏（命令过滤 / 输出脱敏 / 网络盲化）与服务器出网管控（backlog 不做清单）。
 
 ---
@@ -124,6 +124,18 @@ L1+ 模型下**未消除**的威胁：
 - **急停已存在**：revoke/disable 级联 ≤~15s（一个控制 tick）拆隧道；owner `tunnels kill <id>` / `tunnels kill --project` 随时拆；store 持续故障时降级为 ≤~2min **有界关闭**（不存在「无限期暴露」）；进程级 hang 不在 DB kill 保障域——应急 = 重启/杀进程（隧道随进程死）。
 - **非环回 bind 恒拒（Plan 42 批1 后口径）**：`forward_port` 的 `listen_host` 缺省环回；非环回 IP 一律 fail-closed 拒——②a 移除后白名单不再有管理入口（`serve bind` 子命令退役）、恒为空 = 环回 only（gate 读失败同样 fail-closed 拒）——被劫持 agent 无法把隧道 bind 到 VLAN 面扩大攻击面（比白名单预批更强的收口）。
 - **离线 cache 客户端的隧道不在 kill/ls 域**：白名单表不进离线快照（离线恒 loopback-only，机制性 fail-closed）、隧道不进 `tunnel_registry`——其拆法 = §3.6 的回连销毁 + 本机杀进程。
+
+---
+
+## 3.8 自更新供应链（R13，Plan 44 / v0.13.0 起）
+
+`sshmgr update` 自更新 = **RCE-by-design**：信任链止于 GitHub TLS + 同 release `checksums.txt`（防传输损坏 + 绑定资产）；**不是供应链硬防**——仓库/账号被攻破则更新器同陷。不做签名（cosign/minisign）：新依赖 + 密钥管理，当前威胁模型不背书；将来要加 = 独立决策。子风险诚实列全（spec §5 定稿）：
+
+- **R13.1 仓库/账号被攻破**：update 通道即武器——被攻破的 release 可直接分发恶意二进制，checksums 反而为它背书。
+- **R13.2 本地环境注入**：`SSHMGR_UPDATE_BASE` 被继承 env 重定向 = **信任根迁移**——缓解：非环回强制 https + 白名单换为 base 宿主 + 证据行显示生效 base（真假源在输出里可辨）。
+- **R13.3 `--no-verify`**：owner 显式声明信任本地文件；打印未校验警告留档。
+- **R13.4 staged 自检执行面**：替换前以当前用户执行 staged 二进制的 `version` 自检（已过 checksum，但 checksum 信任链 = GitHub；`--file --no-verify` 下更是**零校验执行**——比「只落盘不执行」多一个执行面）；缓解 = 超时 10s + 有限输出缓冲，执行后即删。
+- **R13.5 服务 exe 在用户可写目录（NUC10 现状）= same-user→SYSTEM 提权面**：**owner 拍板维持**（v0.10.0 既有姿态；单用户威胁模型 M1 下 master.key 机器域可解，same-user 妥协 ≈ 全丢，SYSTEM 增量小；update 免提权是本 plan 核心易用性诉求）。残余在此登记；可选加固 = 迁 `C:\Program Files\sshmgr\` + ACL（加固后 update 的文件替换亦需提权）——给指引不做默认。
 
 ---
 
@@ -152,7 +164,7 @@ L1+ 模型下**未消除**的威胁：
 
 ## 5. `SSHMGR_MASTERKEY_HEX` 环境变量（⚠️ 仅供测试）
 
-`SSHMGR_MASTERKEY_HEX` 是 `resolveMasterKey` 的一个 tier（`internal/vault/vault.go`）：**测试、脚本、临时迁移**用它把 master key 注入到 ssh-manager 进程。
+`SSHMGR_MASTERKEY_HEX` 是 `resolveMasterKey` 的一个 tier（`internal/vault/vault.go`）：**测试、脚本、临时迁移**用它把 master key 注入到 sshmgr 进程。
 
 > **⚠️ 不要用于生产 boot 自起。**
 > 如果把 `SSHMGR_MASTERKEY_HEX` 写进 service 配置（Windows Service 的注册表环境 / Linux systemd 的 `EnvironmentFile` / macOS launchd 的 `EnvironmentVariables`），**明文 master key 会落进 service 配置文件**——比 0600+ACL 的 `master.key.plain` **更糟**（service 配置常进版本控制、备份、监控采集；权限模型与 vault 目录不一致）。
@@ -183,6 +195,10 @@ download 方向相反（download 封顶防的是大文件全文灌进上下文�
   「请求体上限随 upload_content cap 同源联动 / 413 收口 / 并发聚合内存」等
   攻击与缓解陈述随 MCP-over-HTTP 面一并失效，本节不再登记。stdio 的对端是
   本机进程（非网络面），本就无请求体 cap。
+
+### 更新面（`sshmgr update`）收窄声明（Plan 44）
+
+自更新是新增的网络取包 + 本地执行面，按窄口径收口：①**vault 数据零触碰**（master.key / store.db 不读不写）；②**权限面**——update 对**文件**只需 exe 目录写权，对**服务**重启需提权、失败路径只打印手工命令由 owner 执行，**update 自身永不自动提权**；③**无后台自动检查/自动更新**（升级次序铁律：先迁 client 后升 serve，时点由 owner 手动拍板——见 [deployment-modes.md](./deployment-modes.md) 置顶 v0.13.0 runbook）；④**降级无防**（有意：`--version` 即回滚通道，但有显式警告）；⑤传输面强制 https（仅环回字面量 `{127.0.0.1, ::1}` 例外）+ 每一跳宿主白名单 + 同 release checksums，自定义 `SSHMGR_UPDATE_BASE` 时证据行醒目显示。残余风险见 §3.8（R13）。
 
 ---
 

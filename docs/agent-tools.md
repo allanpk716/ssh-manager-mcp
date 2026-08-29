@@ -271,8 +271,8 @@ broker 有两种部署形态，**工具面完全一致**（同 10 个工具、�
 
 | 形态 | 什么样 | 可写性 |
 |---|---|---|
-| 单机 / stdio | broker 跑在你脚下的机器，直开本机 vault（`.mcp.json` 里 `command: ssh-manager`） | **可写** |
-| 多机 / cache | broker 从本地只读快照服务（`mcp --cache`；经 `ssh-manager pair` 或手工 `cache pull` 入网，见 [multi-machine.md](./multi-machine.md)） | **只读** |
+| 单机 / stdio | broker 跑在你脚下的机器，直开本机 vault（`.mcp.json` 里 `command: sshmgr`） | **可写** |
+| 多机 / cache | broker 从本地只读快照服务（`mcp --cache`；经 `sshmgr pair` 或手工 `cache pull` 入网，见 [multi-machine.md](./multi-machine.md)） | **只读** |
 
 （旧的第三形态「在线 serve」——agent 经远程 HTTP 直连 broker——已在 Plan 42 批1
 移除：serve 不再提供任何远程 MCP 面。多机 agent 一律走本地缓存。）

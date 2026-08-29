@@ -1,21 +1,21 @@
-# TUI 教程 · 单机版（ssh-manager tui）
+# TUI 教程 · 单机版（sshmgr tui）
 
-> **读者**：拿到 ssh-manager 单机版 exe、想全程用键盘点选（不想记 CLI 命令）的人。
+> **读者**：拿到 sshmgr 单机版 exe、想全程用键盘点选（不想记 CLI 命令）的人。
 > 与 [quickstart-single-machine.md](./quickstart-single-machine.md)（CLI 速通）殊途同归——同一套
 > vault 操作的两个入口。概念模型图解见 [concepts.md](./concepts.md)。
 
 ## 1. 启动
 
 ```bash
-ssh-manager tui
+sshmgr tui
 ```
 
 - Windows Terminal / cmd 原生可用。
-- **mintty**（Git Bash 默认终端）不是 Windows 控制台，需加 winpty：`winpty ssh-manager tui`。
+- **mintty**（Git Bash 默认终端）不是 Windows 控制台，需加 winpty：`winpty sshmgr tui`。
 - 在非 TTY 环境（重定向、CI）下启动会**直接报错**，不会挂死或乱码：
 
   ```
-  tui requires a terminal (in mintty run via `winpty ssh-manager tui`, or use Windows Terminal)
+  tui requires a terminal (in mintty run via `winpty sshmgr tui`, or use Windows Terminal)
   ```
 
 空机器第一次运行 `tui` 自动进入首跑向导；已完成的机器直接进主控台。同一套操作用 CLI 怎么做，见 [quickstart-single-machine.md](./quickstart-single-machine.md)。
@@ -40,11 +40,11 @@ ssh-manager tui
 
 选定单机后的流程：
 
-1. **自动建 vault**（等价于跑一次 `ssh-manager unlock`：生成 master key + 初始化加密库）。若本机已有**锁定**的 vault，向导不会覆盖它，而是报错引导：
+1. **自动建 vault**（等价于跑一次 `sshmgr unlock`：生成 master key + 初始化加密库）。若本机已有**锁定**的 vault，向导不会覆盖它，而是报错引导：
    ```
-   本机 vault 已存在但锁定或不可读：先运行 `ssh-manager unlock`（向导不会覆盖既有 vault）
+   本机 vault 已存在但锁定或不可读：先运行 `sshmgr unlock`（向导不会覆盖既有 vault）
    ```
-   此时按提示另开终端跑 `ssh-manager unlock`，回来按 `r` 重试即可。
+   此时按提示另开终端跑 `sshmgr unlock`，回来按 `r` 重试即可。
 2. **「现在录入第一台服务器？」**——跳过是允许的（提示原文：跳过 = profile 暂无成员，agent 将看不到任何服务器；之后可在主控台随时补录）。
 3. **服务器表单**（选「是」后）：
    - 基本信息：`名称（唯一）` / `Host / IP` / `SSH 用户` / `端口`（默认 22）；
@@ -65,7 +65,7 @@ ssh-manager tui
    {
      "mcpServers": {
        "ssh": {
-         "command": "ssh-manager",
+         "command": "sshmgr",
          "args": ["mcp"],
          "env": { "SSHMGR_TOKEN": "<TOKEN>" }
        }
@@ -95,14 +95,14 @@ ssh-manager tui
 
 切到 Projects 页按 `a` → 填项目名称、选要绑定的 Profile → token **一次性全屏显示**。
 
-屏上是完整可抄的 stdio 片段（旧的 http 双形态块已随 ②a 移除退役——serve 不再提供远程 MCP 面，多机 agent 走 `ssh-manager pair` 配对）：
+屏上是完整可抄的 stdio 片段（旧的 http 双形态块已随 ②a 移除退役——serve 不再提供远程 MCP 面，多机 agent 走 `sshmgr pair` 配对）：
 
 ```
 —— 本机/单机 agent（stdio）——
 {
   "mcpServers": {
     "ssh": {
-      "command": "ssh-manager",
+      "command": "sshmgr",
       "args": ["mcp"],
       "env": { "SSHMGR_TOKEN": "<TOKEN>" }
     }
@@ -136,12 +136,12 @@ ssh-manager tui
 
 | 症状 | 处置 |
 |---|---|
-| mintty 下启动即退出/乱码 | mintty 不是 Windows 控制台：`winpty ssh-manager tui`，或改用 Windows Terminal / cmd |
+| mintty 下启动即退出/乱码 | mintty 不是 Windows 控制台：`winpty sshmgr tui`，或改用 Windows Terminal / cmd |
 | 非 TTY 下启动直接报错 | 这是预期行为（防挂死）；换真终端再跑 |
-| 向导报「本机 vault 已存在但锁定或不可读」 | 先跑 `ssh-manager unlock`，回到向导按 `r` 重试 |
-| 向导中途退出了 | 什么都不用做：重跑 `ssh-manager tui` 自动从断点续配 |
+| 向导报「本机 vault 已存在但锁定或不可读」 | 先跑 `sshmgr unlock`，回到向导按 `r` 重试 |
+| 向导中途退出了 | 什么都不用做：重跑 `sshmgr tui` 自动从断点续配 |
 | 向导/补全的输入框打不进字母 `q` | `q` 被全局拦截为退出键（既有取舍）；需要输入含 q 的内容（如密码），先在别处写好再粘贴 |
-| 误按 `q` 退出了主控台 | 无任何丢失，重新 `ssh-manager tui` |
+| 误按 `q` 退出了主控台 | 无任何丢失，重新 `sshmgr tui` |
 | 表单填错想放弃 | 表单内 `Esc` 取消（不提交）；`q` / `Ctrl+C` 退出整个程序 |
 
 ## 6. 安全面

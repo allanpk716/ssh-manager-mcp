@@ -125,13 +125,13 @@ psql -h 127.0.0.1 -p <local_port> -U myuser mydb
 **怎么做**（编排见 [agent-access.md](./agent-access.md#典型编排)）：
 1. 建三个 profile，各自 grant 对应环境的 server：
    ```bash
-   ssh-manager profiles add dev  && ssh-manager profiles grant dev dev-web dev-db
-   ssh-manager profiles add prod && ssh-manager profiles grant prod prod-web prod-db
+   sshmgr profiles add dev  && sshmgr profiles grant dev dev-web dev-db
+   sshmgr profiles add prod && sshmgr profiles grant prod prod-web prod-db
    ```
 2. 建**两个** project，各绑一个 profile，得到**两个不同** token：
    ```bash
-   ssh-manager projects add dev-agent  --profile dev
-   ssh-manager projects add prod-agent --profile prod
+   sshmgr projects add dev-agent  --profile dev
+   sshmgr projects add prod-agent --profile prod
    ```
 3. 两份 `.mcp.json`（分别给两个 Claude Code 工作区 / 两个客户端）。
 4. prod 想“只读”？在 prod 工作区的 `CLAUDE.md` / 系统提示里写明“只允许 `exec_command` 跑只读命令（如 `cat / ls / ps / df / nvidia-smi`），禁止任何写操作”，配合**不给 sudo 密码**（`has_sudo=false`）来收敛破坏面。
@@ -145,7 +145,7 @@ psql -h 127.0.0.1 -p <local_port> -U myuser mydb
 **情况 A：你不小心把 `.mcp.json`（含 token）提交到了公开仓库。**
 
 ```bash
-ssh-manager projects rotate dev-agent      # 旧 token 立刻失效，打印新 token + 新 .mcp.json
+sshmgr projects rotate dev-agent      # 旧 token 立刻失效，打印新 token + 新 .mcp.json
 # 1. 把新 .mcp.json 配回客户端
 # 2. 从 git 历史里清掉旧 token（git filter-repo / BFG），强制推送
 # 3. （可选）审计：这段时间这台机器有没有异常操作
@@ -155,7 +155,7 @@ ssh-manager projects rotate dev-agent      # 旧 token 立刻失效，打印新 
 **情况 B：某 agent 用完了 / 实习结束了，彻底收回。**
 
 ```bash
-ssh-manager projects revoke intern-agent   # token 永久失效；默认从 ls 隐藏
+sshmgr projects revoke intern-agent   # token 永久失效；默认从 ls 隐藏
 # 审计记录保留（软删除）。
 # 多机 cache 下次保鲜新快照即拒（≤30min）；stdio 会话重启客户端；隧道见 agent-access「断连语义」。
 ```
@@ -163,9 +163,9 @@ ssh-manager projects revoke intern-agent   # token 永久失效；默认从 ls �
 **情况 C：临时暂停（放假 / 审查）。**
 
 ```bash
-ssh-manager projects disable contractor-agent   # token 被拒
+sshmgr projects disable contractor-agent   # token 被拒
 # ... 审查完毕 ...
-ssh-manager projects enable  contractor-agent   # 恢复，同一张 token 重新有效
+sshmgr projects enable  contractor-agent   # 恢复，同一张 token 重新有效
 ```
 
 > 断连语义分层（stdio=下次重连；多机 cache=下次保鲜新快照即拒 ≤30min、吊设备码回连即销毁；既有隧道 revoke/disable 后 ~15s 内级联拆除，owner 也可 `tunnels kill` 急停；永离线 cache 靠 max_offline + 轮换凭据），详见 [agent-access.md](./agent-access.md) 的「断连语义」一节。
@@ -177,11 +177,11 @@ ssh-manager projects enable  contractor-agent   # 恢复，同一张 token 重�
 有时候你不想经过 agent，想直接在服务器上跑命令。owner CLI 提供了**不受 profile 限制、输出不封顶**的直达通道：
 
 ```bash
-ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原样回来
+sshmgr ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原样回来
 ```
 
 **要点**：
-- `ssh-manager ssh <name> <command...>` = 用库里存的凭据，直接在命名机器上跑命令，**不受任何 profile 限制**（你是 owner，全权）。输出不封顶（和 agent 路径的 1 MiB 封顶不同）。单命令（连接+执行共享 120s 超时）。
+- `sshmgr ssh <name> <command...>` = 用库里存的凭据，直接在命名机器上跑命令，**不受任何 profile 限制**（你是 owner，全权）。输出不封顶（和 agent 路径的 1 MiB 封顶不同）。单命令（连接+执行共享 120s 超时）。
 - 这条命令**也不是交互式 shell**：后面的 `<command...>` 是要跑的命令（空格分隔会被拼成一行；**不带命令 / 空命令会显式报错**）。它解决的是“owner 用 broker 里存的凭据直接跑一条命令”，不是给你开个 `ssh -t` 终端。要交互式终端，用你自己的 ssh 客户端（凭据需自行已有或另行配置——它们可能只存在本 vault 里）。
 - 连接+执行**共享 120 秒超时**；输出不封顶；**远端非零退出会让本命令以非零码退出**（码值不透传，见 stderr 错误消息；脚本里判断非零即可）。
 - 这条路同样写审计（`action=exec`）。
@@ -199,7 +199,7 @@ ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原
 | 交互式 shell（`ssh -t`） | ❌ 不支持 | 用你自己的 ssh 客户端；agent 这边用 `&&` / `;` 串命令 |
 | 递归下载整个目录 | ❌ `download_file` 只单文件 | 远端 `tar` 后下载 tar |
 | 远程转发 `-R` / 动态 `-D` | ❌ 只支持本地 `-L` | — |
-| 跑超 5 分钟的长命令 | ✅ 前台 `exec_command` 5min 硬顶；长活走 `exec_background`（24h 上限）+ `exec_output` 增量轮询 + `exec_stop` | 仍可用 `ssh-manager ssh`（120s）+ `nohup` |
+| 跑超 5 分钟的长命令 | ✅ 前台 `exec_command` 5min 硬顶；长活走 `exec_background`（24h 上限）+ `exec_output` 增量轮询 + `exec_stop` | 仍可用 `sshmgr ssh`（120s）+ `nohup` |
 | 单次输出 > 1 MiB | ⚠️ 截断（标 `truncated`） | 切片（`head/tail/grep`）分多次 |
 
 ---
@@ -212,6 +212,6 @@ ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原
 - **连内网服务** → `forward_port` 拿本地端口，用完 `close_port`。
 - **隔离多 agent** → 不同 profile + 不同 project。
 - **出事了** → rotate（换卡）/ disable（暂停）/ revoke（吊销）——多机 cache 下次保鲜（≤30min）新快照即拒、吊设备码回连即销毁本地缓存；stdio 会话重启客户端接管；永离线缓存场景须轮换服务器凭据（见 agent-access「断连语义」）。
-- **你自己用** → `ssh-manager ssh <name> <cmd>`，全权直达。
+- **你自己用** → `sshmgr ssh <name> <cmd>`，全权直达。
 
 需要更细的命令参数？看 [managing-servers.md](./managing-servers.md)。授权细节？看 [agent-access.md](./agent-access.md)。

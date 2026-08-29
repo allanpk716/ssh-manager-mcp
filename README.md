@@ -79,26 +79,26 @@ Build + configure once; then point your AI agent at it.
 ```bash
 # 1. Build — or skip this: grab a prebuilt binary from Releases
 #          https://github.com/allanpk716/ssh-manager-mcp/releases
-go build -o ssh-manager ./cmd/ssh-manager        # or: go install ./cmd/ssh-manager
+go build -o sshmgr ./cmd/sshmgr        # or: go install ./cmd/sshmgr
 
 # 2. Unlock the vault (writes master key → fixed-path file `master.key.plain`; admin/root needed first time to create the vault dir + set ACL — see `unlock --help`)
-ssh-manager unlock
+sshmgr unlock
 
 # 3. Add a server + its credential (one of --password / --key, mutually exclusive —
 #    or neither for a credential-less server; optional sudo)
-ssh-manager servers add --name gpu --host 192.0.2.10 --user deploy \
+sshmgr servers add --name gpu --host 192.0.2.10 --user deploy \
     --password '...'                 # OR: --key ~/.ssh/id_ed25519 [--key-passphrase '...]
     --sudo-password '...'            # optional: enables sudo=true on exec_command
 
 # 4. Create a profile + grant the server to it
-ssh-manager profiles add team-a
-ssh-manager profiles grant team-a gpu
+sshmgr profiles add team-a
+sshmgr profiles grant team-a gpu
 
 # 5. Create a project — prints a ONE-TIME token + the .mcp.json snippet
-ssh-manager projects add my-agent --profile team-a
+sshmgr projects add my-agent --profile team-a
 #   Token (shown once): <TOKEN>
 #   .mcp.json snippet:
-#   {"mcpServers":{"ssh":{"command":"ssh-manager","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
+#   {"mcpServers":{"ssh":{"command":"sshmgr","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
 ```
 
 Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the ten SSH tools, scoped to the `team-a` profile's servers.
@@ -107,14 +107,14 @@ Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor
 
 **Owner access** (you, not the agent) — full access to every server using the stored creds directly:
 ```bash
-ssh-manager ssh gpu nvidia-smi          # run ONE command (single, non-interactive)
+sshmgr ssh gpu nvidia-smi          # run ONE command (single, non-interactive)
 ```
 The owner path runs a **single non-interactive command** (connect + exec share one 120-second deadline; output is uncapped; a non-zero remote exit makes the CLI exit non-zero (the code value appears in the error message)). No command → explicit error. Interactive shells are intentionally not provided — for a terminal, use your own SSH client with credentials you already hold or provision separately (they may live only in this vault).
 
 ```bash
 # Audit forensics — what every agent (and owner) did, newest first
-ssh-manager audit --since 24h --project my-agent --status error
-ssh-manager audit --json --limit 0 > audit.jsonl   # nine fields, sidecar-compatible
+sshmgr audit --since 24h --project my-agent --status error
+sshmgr audit --json --limit 0 > audit.jsonl   # nine fields, sidecar-compatible
 ```
 
 Known filter values: `action` = `exec` / `download` / `upload` / `upload-content` / `forward` / `close-forward` / `exec-bg-start` / `exec-bg-end` + owner-side `project.rotate` / `project.disable` / `project.enable` / `project.revoke` / `project.delete`; `status` = `ok` / `error` / `timeout` / `cancelled` / `denied` / `auth_error` / `hostkey_mismatch` / `connect_error` / `no_credential` / `no_sudo` / `bind_denied`. The sets evolve across versions; unknown filter values silently match nothing (empty result, never an error).
@@ -129,42 +129,42 @@ The owner CLI is how you record servers, group them, and grant an agent access. 
 
 ```bash
 # Edit a server in place: pass any subset of fields — the server id + profile bindings are preserved.
-ssh-manager servers edit gpu --hardware "8x A100 80GB, CUDA 12"     # structured field (agent-visible)
-ssh-manager servers edit gpu --host 192.0.2.20 --port 2222            # re-point host/port
-ssh-manager servers edit gpu --password '...'                        # re-credential (or --key)
-ssh-manager servers edit gpu --clear-credential                     # strip credentials → credential-less (exclusive action)
-ssh-manager servers ls                                                # lists name + role + caveats
+sshmgr servers edit gpu --hardware "8x A100 80GB, CUDA 12"     # structured field (agent-visible)
+sshmgr servers edit gpu --host 192.0.2.20 --port 2222            # re-point host/port
+sshmgr servers edit gpu --password '...'                        # re-credential (or --key)
+sshmgr servers edit gpu --clear-credential                     # strip credentials → credential-less (exclusive action)
+sshmgr servers ls                                                # lists name + role + caveats
 
 # Bulk-import your existing ~/.ssh/config instead of typing servers one by one
-ssh-manager servers import --dry-run            # preview: what would be imported / skipped
-ssh-manager servers import --profile team-a     # import + grant every imported server in one go
+sshmgr servers import --dry-run            # preview: what would be imported / skipped
+sshmgr servers import --profile team-a     # import + grant every imported server in one go
 
 # See what an agent can reach, and manage its lifecycle.
-ssh-manager projects show my-agent        # agent → profile → granted servers (no secrets)
-ssh-manager projects rotate my-agent      # re-key the token (old token dies; prints a new one + .mcp.json)
-ssh-manager projects disable my-agent     # suspend (token rejected until enable)
-ssh-manager projects enable  my-agent     # resume
-ssh-manager projects revoke  my-agent     # permanent (token rejected; hidden from ls)
-ssh-manager projects ls [--all]           # status column; --all includes revoked
+sshmgr projects show my-agent        # agent → profile → granted servers (no secrets)
+sshmgr projects rotate my-agent      # re-key the token (old token dies; prints a new one + .mcp.json)
+sshmgr projects disable my-agent     # suspend (token rejected until enable)
+sshmgr projects enable  my-agent     # resume
+sshmgr projects revoke  my-agent     # permanent (token rejected; hidden from ls)
+sshmgr projects ls [--all]           # status column; --all includes revoked
 ```
 
 **Lifecycle:** `rotate` / `disable` / `enable` / `revoke` take effect **at the agent's next `mcp` spawn in stdio mode** (`VerifyToken` admits only `active` projects — a currently-running local session keeps access until Claude Code restarts its MCP child, by design); on multi-machine clients a revoked project disappears with the next snapshot refresh (≤30min) and a revoked device code triggers local cache destruction on the next pull (pinned-401 quarantine). Already-open `forward_port` tunnels are torn down within ~15s of `disable`/`revoke` (one control tick — Plan 35; the owner also has the `tunnels kill` emergency stop). Offline caches: once a device code is revoked, the device's next pull (≤30min lazy cadence, pinned-401) **destroys its local cache in place** (Plan 34 — DEK + device code + snapshot + meta, quarantine trace left behind); a device that never comes back online is cut by the `max_offline` hard cap (pair-issued default 24h) and can only be fully cut by rotating the server credentials themselves. Full breakdown: `docs/agent-access.md` 断连语义 + `docs/agent-tools.md` 吊销三路径. `rotate` keeps the same project id + profile; only the token changes. `revoke` is a soft delete — the token is dead and the project is hidden from `ls`, but the audit row is kept. Every lifecycle action is written to the audit log.
 
-**Back up / migrate the whole vault:** `ssh-manager export` / `import` — a portable, passphrase-encrypted file (backup / migration / disaster recovery). Full guide (中文): [`docs/backup-restore.md`](docs/backup-restore.md).
+**Back up / migrate the whole vault:** `sshmgr export` / `import` — a portable, passphrase-encrypted file (backup / migration / disaster recovery). Full guide (中文): [`docs/backup-restore.md`](docs/backup-restore.md).
 
 ---
 
-## TUI 主控台（`ssh-manager tui`）
+## TUI 主控台（`sshmgr tui`）
 
 一条命令的可视化管理台：在 **broker 机器**上管服务器 / profiles / projects / 设备码 / **配对批准**（Pairing 页，替代手敲 CLI），在 **client 工作机**上查看缓存状态 / 切换实例 / 手动同步。同一个二进制，按本机状态自动选边。各页签 / 设备码 / token 谁是谁的**概念模型图解**（仓库隐喻，中文）：[`docs/concepts.md`](docs/concepts.md)。
 
-空机器第一次运行 `tui` 会进入**角色向导**（单机 / server / client 三选，可中断续配；client 分支 = `ssh-manager pair` 入网引导页——连接表单已随 ②a 退役，多机入网一律 pair）；`ssh-manager clear` 角色清理——**按实际存在枚举**删除（与 role.json 声明的角色无关）本机 vault / serve / 缓存残留（vault 角色先自动 export 备份 + 输入 `DELETE` 确认），机器回到首次向导状态。
+空机器第一次运行 `tui` 会进入**角色向导**（单机 / server / client 三选，可中断续配；client 分支 = `sshmgr pair` 入网引导页——连接表单已随 ②a 退役，多机入网一律 pair）；`sshmgr clear` 角色清理——**按实际存在枚举**删除（与 role.json 声明的角色无关）本机 vault / serve / 缓存残留（vault 角色先自动 export 备份 + 输入 `DELETE` 确认），机器回到首次向导状态。
 
 ### 启动与模式判定
 
 ```bash
-ssh-manager tui                # 自动判定
-ssh-manager tui --mode client  # 强制 client 面板
+sshmgr tui                # 自动判定
+sshmgr tui --mode client  # 强制 client 面板
 ```
 
 > v0.7.0 起 `tui --mode broker` 移除（自动判定覆盖该场景；`--mode client` 保留）。
@@ -179,7 +179,7 @@ Broker 主控台（服务器 / Profiles / Projects / 设备码 / Pairing 5 个�
 
 ### 终端要求（mintty 注意）
 
-Windows Terminal / cmd 原生可用。**mintty**（Git Bash 默认终端）不是 Windows 控制台，需 `winpty ssh-manager tui`；在非 TTY 下启动时程序会**直接报错提示**，不会挂死或乱码。
+Windows Terminal / cmd 原生可用。**mintty**（Git Bash 默认终端）不是 Windows 控制台，需 `winpty sshmgr tui`；在非 TTY 下启动时程序会**直接报错提示**，不会挂死或乱码。
 
 ### 安全面
 
@@ -193,17 +193,17 @@ Windows Terminal / cmd 原生可用。**mintty**（Git Bash 默认终端）不�
 
 > **Quickstart:** [`docs/quickstart-multi-machine.md`](docs/quickstart-multi-machine.md) · **Full guide (中文):** [`docs/multi-machine.md`](docs/multi-machine.md) · **Mode overview:** [`docs/deployment-modes.md`](docs/deployment-modes.md)
 
-By default the broker runs **in-process** inside the MCP server the agent spawns (no daemon). For **several machines sharing one authoritative vault** — e.g. you work across multiple boxes on a home/VLAN network — run the authoritative vault as a resident service on one trusted host and enroll each work machine with **`ssh-manager pair`** (one command: LAN discovery → SAS pairing → credentials delivered → first pull → ready-to-paste `.mcp.json` artifact).
+By default the broker runs **in-process** inside the MCP server the agent spawns (no daemon). For **several machines sharing one authoritative vault** — e.g. you work across multiple boxes on a home/VLAN network — run the authoritative vault as a resident service on one trusted host and enroll each work machine with **`sshmgr pair`** (one command: LAN discovery → SAS pairing → credentials delivered → first pull → ready-to-paste `.mcp.json` artifact).
 
 ```bash
 # On the trusted VLAN host (the authoritative vault):
-ssh-manager serve --addr 0.0.0.0:7878
-# → ssh-manager serve: listening on 0.0.0.0:7878 (tls=auto)
+sshmgr serve --addr 0.0.0.0:7878
+# → sshmgr serve: listening on 0.0.0.0:7878 (tls=auto)
 # → auto-TLS cert (self-signed). client pin: sha256:...
-# → ssh-manager serve: discovery: udp/7878 (on)
+# → sshmgr serve: discovery: udp/7878 (on)
 
 # On each work machine (after installing the binary):
-ssh-manager pair --instance laptop
+sshmgr pair --instance laptop
 # → owner approves on the broker TUI's Pairing page (or `serve pair approve laptop --profile team-a`)
 # → done: agent runs from a local read-only cache
 ```
@@ -211,10 +211,10 @@ ssh-manager pair --instance laptop
 - **The serve is narrowed to: authoritative vault + `/snapshot` + `/pair` (+ web admin UI in a later release).** There is **no remote MCP surface** (the old `"type": "http"` + bearer-header direct connection was **removed** in Plan 42 批1 — non-`/snapshot`//`/pair` paths answer 404). Work-machine agents always run **locally from a read-only cache** (`mcp --cache`) and dial target servers themselves; writes (add/edit servers, approvals) belong to the **management plane**: broker TUI / `serve pair` CLI / the future web UI.
 - **Auto-TLS + fingerprint pinning (no cert hassle).** On first start `serve` **auto-generates a self-signed ed25519 cert** and forces TLS from then on — no openssl, no CA distribution, no trust-store config. The cert's **SPKI fingerprint** rides the discovery offer and the sealed pairing envelope automatically; `cache pull` pins it too (first-connect verification, zero MITM window — the HPKP/Tailscale model). Pass `--tls-cert`/`--tls-key` only if you want your own cert.
 - **Pairing is human-gated.** The client shows `name @ url SAS <6 digits>`; the approver compares the client-screen SAS against the approval row's name@url (broker TUI Pairing page or `serve pair approve`), while the serve **mechanically verifies** that the client's declared target address is actually this machine (mismatch → ⚠ + explicit override required). A direct `--url` pairing without a pin **refuses by default** (`--allow-tofu` is the explicit, unanchored escape hatch — see threat-model R12). No-pin `cache pull` hard-fails the same way; `--allow-plaintext` is the debug-only opt-out.
-- **Several agents on ONE machine — named cache instances (Plan 40).** Each agent gets its own offline cache: enroll with `ssh-manager pair --instance <name>` (one device code per agent). Inspect every slot with `ssh-manager cache status`, switch slots inside the TUI client page with `[i]` (per-session), and persist each instance's offline cap independently with `ssh-manager cache config [--instance <name>] --max-offline 24h` (priority env > file > off). Instances live under `instances/<name>/` with a **per-instance DEK** — one instance's leaked material does not decrypt another's cache. Full guide (中文): [`docs/multi-machine.md`](docs/multi-machine.md) 「多实例（同机多 agent）」.
+- **Several agents on ONE machine — named cache instances (Plan 40).** Each agent gets its own offline cache: enroll with `sshmgr pair --instance <name>` (one device code per agent). Inspect every slot with `sshmgr cache status`, switch slots inside the TUI client page with `[i]` (per-session), and persist each instance's offline cap independently with `sshmgr cache config [--instance <name>] --max-offline 24h` (priority env > file > off). Instances live under `instances/<name>/` with a **per-instance DEK** — one instance's leaked material does not decrypt another's cache. Full guide (中文): [`docs/multi-machine.md`](docs/multi-machine.md) 「多实例（同机多 agent）」.
 - **Shutdown.** `Ctrl+C` (`SIGINT`) / `SIGTERM` → graceful drain.
 
-> **⚠️ Breaking change / migration order (Plan 42 批1).** The serve no longer accepts MCP-over-HTTP: old `"type": "http"` `.mcp.json` entries answer **404** after the upgrade. Migrate existing setups in **three steps**: ① migrate each legacy machine to the bridge posture **on the old serve** (manual path: `cache-tokens add` + `projects add` + `cache pull` + hand-written `.mcp.json` — clients ≥ v0.10.1 first); ② upgrade serve (precondition: all clients already bridged); ③ from then on every new machine uses `ssh-manager pair`. The iron rule stands: **upgrade all clients first, restart serve last.** Full runbooks in [`docs/multi-machine.md`](docs/multi-machine.md) + [`docs/compat-matrix.md`](docs/compat-matrix.md).
+> **⚠️ Breaking change / migration order (Plan 42 批1).** The serve no longer accepts MCP-over-HTTP: old `"type": "http"` `.mcp.json` entries answer **404** after the upgrade. Migrate existing setups in **three steps**: ① migrate each legacy machine to the bridge posture **on the old serve** (manual path: `cache-tokens add` + `projects add` + `cache pull` + hand-written `.mcp.json` — clients ≥ v0.10.1 first); ② upgrade serve (precondition: all clients already bridged); ③ from then on every new machine uses `sshmgr pair`. The iron rule stands: **upgrade all clients first, restart serve last.** Full runbooks in [`docs/multi-machine.md`](docs/multi-machine.md) + [`docs/compat-matrix.md`](docs/compat-matrix.md).
 
 ---
 

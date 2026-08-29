@@ -64,28 +64,16 @@ func extractMcpBlocks(t *testing.T, doc string) []string {
 	return blocks
 }
 
-// withLegacyCommand renders a canonical snippet with the PRE-rename binary
-// name (ssh-manager). TRANSITIONAL for Plan 44: T1 renamed the binary
-// (ssh-manager→sshmgr), so the code-derived canonical legs now say "sshmgr",
-// but the docs sweep is a LATER task (Plan 44 T2) — until T2 lands the docs
-// still teach "ssh-manager". PLAN-44-T2-CLEANUP: delete this helper and the
-// three legacyCommand canonical legs once the docs sweep has landed.
-func withLegacyCommand(rendered string) string {
-	return strings.Replace(rendered, `"command": "sshmgr"`, `"command": "ssh-manager"`, 1)
-}
-
 // TestDocsMcpSnippetsMatchGolden: 每篇文档里的每个 mcpServers 块，规范化后
 // 必须命中 canonical 之一（stdio / cache / stdio+masterkey-hex）。http 形态
 // 的 canonical 腿已随 ②a 移除退役（Plan 42 批1）——文档里再出现 http 块即红。
+// Plan 44 T1→T2 过渡期遗留的 pre-rename（"ssh-manager"）canonical 腿已随
+// T2 文档 sweep 落地拆除——文档里再出现 "command": "ssh-manager" 即红。
 func TestDocsMcpSnippetsMatchGolden(t *testing.T) {
 	canonical := map[string]bool{
 		docNorm(jsonBlockOf(mcpConfigLines([]string{`"args": ["mcp"]`, stdioEnvLine("<TOKEN>")}, nil))):                                                 true,
 		docNorm(jsonBlockOf(mcpConfigLines([]string{`"args": ["mcp", "--cache"]`, stdioEnvLine("<TOKEN>")}, nil))):                                      true,
 		docNorm(`{"mcpServers": {"ssh": {"command": "sshmgr", "args": ["mcp"], "env": {"SSHMGR_TOKEN": "<TOKEN>", "SSHMGR_MASTERKEY_HEX": "<HEX>"}}}}`): true,
-		// PLAN-44-T2-CLEANUP: transitional pre-rename legs (see withLegacyCommand).
-		docNorm(withLegacyCommand(jsonBlockOf(mcpConfigLines([]string{`"args": ["mcp"]`, stdioEnvLine("<TOKEN>")}, nil)))):                                                 true,
-		docNorm(withLegacyCommand(jsonBlockOf(mcpConfigLines([]string{`"args": ["mcp", "--cache"]`, stdioEnvLine("<TOKEN>")}, nil)))):                                      true,
-		docNorm(withLegacyCommand(`{"mcpServers": {"ssh": {"command": "sshmgr", "args": ["mcp"], "env": {"SSHMGR_TOKEN": "<TOKEN>", "SSHMGR_MASTERKEY_HEX": "<HEX>"}}}}`)): true,
 	}
 	docs := []string{
 		"../../README.md",

@@ -10,7 +10,7 @@
 
 | 角色 | 是谁 | 用什么 | 能看到凭据吗 |
 |---|---|---|---|
-| **Owner（你）** | 人类操作者 | `ssh-manager` 命令行（owner CLI） | 能（持有 master key，可解锁保险柜） |
+| **Owner（你）** | 人类操作者 | `sshmgr` 命令行（owner CLI） | 能（持有 master key，可解锁保险柜） |
 | **Agent（AI）** | Claude Code / Cursor 等 | MCP 工具（`list_servers` / `exec_command` / …）；手册：[agent-tools.md](./agent-tools.md) | **永远不能**（只拿到命令输出 / 文件字节 / 转发端口） |
 
 核心安全模型（**铁律**）：凭据（密码 / 私钥）只存在加密保险柜里；agent 用一个 **project token** 认证到 MCP server（即 broker），broker 自己开 SSH 连接，只把**结果**返回给 agent——**凭据字节永远不会出现在任何工具返回里**。Agent 自己的 `ssh`（就算它有 shell）也登不进去，因为 `~/.ssh` 和 `ssh-agent` 里根本没有它能用的凭据。
@@ -28,7 +28,7 @@
 | [managing-servers.md](./managing-servers.md) | **新增 / 编辑 / 维护 / 删除服务器**：`servers add` / `edit` / `ls` / `rm`、`import` 批量导入、`gc` 的全部用法，含换密钥、sudo、tags、备注（description）。 |
 | [agent-access.md](./agent-access.md) | **授权 AI agent**：project token 怎么生成、`.mcp.json` 怎么配进 Claude Code / Cursor、token 轮换 / 暂停 / 吊销的断连语义、多 agent 隔离、紧急处置。 |
 | [scenarios.md](./scenarios.md) | **应用场景与示例**：GPU 巡检装包、读 root-only 日志、上传部署、端口转发连数据库、拉日志排查、多环境隔离、token 泄露处置、owner 自己直连。 |
-| [multi-machine.md](./multi-machine.md) | **多机桥姿态 + 离线只读缓存（Plan 12）+ 配对入网（Plan 42）**：多台机器共用一份服务器清单——一台 VLAN 服务器常驻权威 vault，工作机 `ssh-manager pair` 一条龙入网（UDP 发现 → SAS 批准 → 凭据下发）、agent 用本地只读缓存干活（只读 + 执行）。架构 / 配置 / 多实例 / runbook。 |
+| [multi-machine.md](./multi-machine.md) | **多机桥姿态 + 离线只读缓存（Plan 12）+ 配对入网（Plan 42）**：多台机器共用一份服务器清单——一台 VLAN 服务器常驻权威 vault，工作机 `sshmgr pair` 一条龙入网（UDP 发现 → SAS 批准 → 凭据下发）、agent 用本地只读缓存干活（只读 + 执行）。架构 / 配置 / 多实例 / runbook。 |
 | [broker-host-agent.md](./broker-host-agent.md) | **在 broker（serve）主机上也跑 agent**：零距离 client 走桥（pair 入网 / 手工路径）+ 应急附录（stdio 直开 vault，不推荐）。 |
 | [backup-restore.md](./backup-restore.md) | **备份与迁移（export / import）**：把整个 vault 导出成口令加密的便携文件（跨机、可恢复）——备份 / 迁移 / 灾难恢复；安全模型（KeePass 式）、限制、与复制 store.db 的对比。 |
 | [tui-single-machine.md](./tui-single-machine.md) | **单机 TUI 教程**（全键盘点选，不想记命令）：首跑向导走查、页签参考、典型任务与排错。 |
@@ -53,7 +53,7 @@
 
 ## 需要帮忙？
 
-- 命令记不全：每个子命令都支持 `--help`，例如 `ssh-manager servers add --help`、`ssh-manager projects --help`。
+- 命令记不全：每个子命令都支持 `--help`，例如 `sshmgr servers add --help`、`sshmgr projects --help`。
 - 报错“vault locked”：回到 [getting-started.md](./getting-started.md) 的“Step 1：解锁保险柜”一节。
 - 机器重启后还要做什么吗？：**不用启动任何东西**——它不是 daemon，MCP 客户端（Claude Code / Cursor）会在你需要时自动 spawn 它。见 [getting-started.md](./getting-started.md) 的“重启 / 关机后”一节。
 - agent 报“server is not in your profile”：说明你让它操作的 server 不在它 project 绑定的 profile 里，见 [agent-access.md](./agent-access.md) 的“隔离与排错”。

@@ -4,17 +4,17 @@
 >
 > 全文只讲「最少要做什么」。架构 / 配对协议细节 / 多实例 / runbook 看详尽版 [`multi-machine.md`](./multi-machine.md)。
 >
-> **Plan 42 批1 起**：新机入网 = `ssh-manager pair` 一条命令（不再跨机手抄设备码/token/指纹三串字符串）；agent 一律走本地只读缓存（多机 agent 只读 + 执行，写操作在管理面）。
+> **Plan 42 批1 起**：新机入网 = `sshmgr pair` 一条命令（不再跨机手抄设备码/token/指纹三串字符串）；agent 一律走本地只读缓存（多机 agent 只读 + 执行，写操作在管理面）。
 
 ---
 
 ## 架构一句话
 
-一台 **VLAN 服务器**跑 `ssh-manager serve`（常驻，持有权威 vault；只做三件事：**权威 vault + `/snapshot` 拉取 + `/pair` 配对**，批2 再加 `/ui` 管理）；各工作机 `ssh-manager pair` 一条龙入网，之后 agent 用**本地只读缓存**干活。**命令实际从工作机直拨目标服务器**，broker 不在命令路径上。
+一台 **VLAN 服务器**跑 `sshmgr serve`（常驻，持有权威 vault；只做三件事：**权威 vault + `/snapshot` 拉取 + `/pair` 配对**，批2 再加 `/ui` 管理）；各工作机 `sshmgr pair` 一条龙入网，之后 agent 用**本地只读缓存**干活。**命令实际从工作机直拨目标服务器**，broker 不在命令路径上。
 
 ```
  ┌──工作机（笔记本/台式机）──┐  pair 入网+保鲜拉取 ┌──VLAN 服务器──┐
- │  Claude Code            │ ──TLS+指纹钉死──▶ │  ssh-manager   │
+ │  Claude Code            │ ──TLS+指纹钉死──▶ │  sshmgr   │
  │  （agent）              │                  │  serve         │ ← 权威 vault
  │  本地只读缓存 cache.bin │ ◀── 凭据自动下发 ──│  （常驻）       │   + /snapshot
  └──────────┬────────────┘   （SAS 人闸后）     └────────────────┘   + /pair
@@ -36,29 +36,29 @@
 在将常驻 broker 的那台 VLAN 服务器上，像单机一样把服务器和 profile 建好（命令同 [`quickstart-single-machine.md`](./quickstart-single-machine.md) Step 2-4；**project 不用预建**——pair 批准时自动建 `pair-<设备名>`），然后：
 
 ```bash
-ssh-manager unlock                       # 一次性（写 master.key.plain）
+sshmgr unlock                       # 一次性（写 master.key.plain）
 
 # 录入目标服务器（凭据只在这台机上）+ 分组授权：
-ssh-manager servers add --name gpu --host 192.0.2.10 --user deploy --password '...'
-ssh-manager profiles add team-a && ssh-manager profiles grant team-a gpu
+sshmgr servers add --name gpu --host 192.0.2.10 --user deploy --password '...'
+sshmgr profiles add team-a && sshmgr profiles grant team-a gpu
 
 # 启动常驻 broker（自动自签证书 + 强制 TLS + UDP 发现 + 配对面，全默认开）：
-ssh-manager serve --addr 0.0.0.0:7878
+sshmgr serve --addr 0.0.0.0:7878
 # → listening on 0.0.0.0:7878 (tls=auto)
 # → auto-TLS cert (self-signed). client pin: sha256:abcd1234...
-# → ssh-manager serve: discovery: udp/7878 (on)
+# → sshmgr serve: discovery: udp/7878 (on)
 ```
 
-想让它开机自启：`ssh-manager serve install`（kardianos 注册系统服务，三平台一条龙）。
+想让它开机自启：`sshmgr serve install`（kardianos 注册系统服务，三平台一条龙）。
 
 ---
 
-## Step 2 — 工作机：`ssh-manager pair` 一条龙
+## Step 2 — 工作机：`sshmgr pair` 一条龙
 
-每台工作机装好 `ssh-manager` 后（完整流程细节见 [`multi-machine.md`](./multi-machine.md#配对入网ssh-manager-pairplan-42)）：
+每台工作机装好 `sshmgr` 后（完整流程细节见 [`multi-machine.md`](./multi-machine.md#配对入网sshmgr-pairplan-42)）：
 
 ```bash
-ssh-manager pair --instance laptop
+sshmgr pair --instance laptop
 # → 同网段自动发现 broker（拿不到 offer 就 --url https://192.0.2.5:7878 直指，
 #   跨网段/防火墙挡 UDP 时的兜底；--url 不带 --pin 默认拒连，属预期——见下方安全策略）
 # → 屏显三件套：laptop @ https://192.0.2.5:7878 SAS 482913
@@ -73,7 +73,7 @@ ssh-manager pair --instance laptop
 {
   "mcpServers": {
     "ssh": {
-      "command": "ssh-manager",
+      "command": "sshmgr",
       "args": ["mcp", "--cache"],
       "env": { "SSHMGR_TOKEN": "<项目token>" }
     }
@@ -114,15 +114,15 @@ ssh-manager pair --instance laptop
 
 ```bash
 # 服务器侧：发一张绑定 profile 的设备授权码（TUI 设备码页签 [a] 亦可）
-ssh-manager cache-tokens add --name laptop --profile team-a
+sshmgr cache-tokens add --name laptop --profile team-a
 # Authorization code for "laptop" (shown once): <设备码>
 # Server fingerprint (serve cert SPKI): sha256:abcd1234...
 
 # 服务器侧：再发 project token（pair 会自动做这一步，手工路径要自己来）
-ssh-manager projects add laptop --profile team-a   # Token (shown once): <项目token>
+sshmgr projects add laptop --profile team-a   # Token (shown once): <项目token>
 
 # 工作机：第一次拉缓存（设备码 + 指纹一起给；之后 mcp --cache 自动保鲜）
-ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1234...'
+sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1234...'
 # → pulled N servers / M credentials into cache.bin
 ```
 
@@ -138,7 +138,7 @@ Plan 42 批1（随下个发版）起 serve **移除远程 MCP 面**——旧 ②
 
 1. **手工桥迁移**：在**旧** serve 上按上面附录的手工流程给每台工作机发码 + 拉缓存 + 配 `.mcp.json`（此时工作机二进制先升到 ≥ v0.10.1）。
 2. **升 serve**（含 ②a 移除的 Plan 42 版本，版本号发版拍板）——前置检查：全部 client 已在桥姿态；当刻起 ②a 路径 404。
-3. **pair 时代**：此后所有新机/重配对一律 `ssh-manager pair`。
+3. **pair 时代**：此后所有新机/重配对一律 `sshmgr pair`。
 
 完整迁移 runbook + 密钥轮换 runbook → [`multi-machine.md`](./multi-machine.md) / [`compat-matrix.md`](./compat-matrix.md)。
 

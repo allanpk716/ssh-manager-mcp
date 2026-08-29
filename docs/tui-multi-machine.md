@@ -10,7 +10,7 @@
 
 ```
  ┌──server 机（你在这台操作：向导 + 主控台）──────────────────┐
- │  ssh-manager tui                                      │
+ │  sshmgr tui                                      │
  │   ├─ 首跑向导（角色选 server）                          │
  │   │   vault + 服务器清单 + profile + project token     │
  │   ├─ serve 服务（安装向导代办，常驻 0.0.0.0:7878）      │
@@ -19,13 +19,13 @@
                         pair 入网 │ 批准（对照 client 屏 SAS）
                                 ▼
  ┌──工作机（你在这台操作：pair + client 面板）────────────────┐
- │  ssh-manager pair --instance <名>                       │
+ │  sshmgr pair --instance <名>                       │
  │   ├─ LAN 发现 serve（或 --url 直指）→ 屏显三件套          │
  │   │   <名> @ <url> SAS <6位>（等 owner 批准）             │
  │   ├─ 批准后自动：凭据下发 → 首拉 cache.bin（只读快照；     │
  │   │   真空机自动归位进 instances/<name>/）                │
  │   └─ 产物 pair.<名>.mcp.json 抄进 agent 配置              │
- │  ssh-manager tui → client 面板：[s]同步 [i]实例（零远程写）│
+ │  sshmgr tui → client 面板：[s]同步 [i]实例（零远程写）│
  └─────────────────────────────────────────────────────────┘
 ```
 
@@ -33,12 +33,12 @@
 驱动 agent 的 MCP 工具调用（进 `.mcp.json`）；**设备码**只授权拉取 `/snapshot`
 缓存。两者永不互通，一台设备码被吊销不影响任何 project token。
 
-> **Plan 42 批1 起**：client 向导与连接表单已退役——工作机入网 = `ssh-manager pair`
+> **Plan 42 批1 起**：client 向导与连接表单已退役——工作机入网 = `sshmgr pair`
 > 一条龙（连接配置、设备码、指纹全部由配对自动交付）；写操作只在 server 机主控台。
 
 ## server 侧走查
 
-空机第一次运行 `ssh-manager tui` 进入首跑向导（启动方式、mintty/non-TTY 注意事项
+空机第一次运行 `sshmgr tui` 进入首跑向导（启动方式、mintty/non-TTY 注意事项
 同 [tui-single-machine.md §1](./tui-single-machine.md#1-启动)）。首屏问后果：
 
 > **这台电脑要保管所有 SSH 凭据吗？**
@@ -67,14 +67,14 @@
    `0.0.0.0:7878`（不是选定的那个地址——选定的地址只写进 pair 卡，监听永远全网卡）；
    Windows → Windows 服务、Linux → systemd、macOS → launchd；**若失败向导不阻断**
    ——会显示可手动提权执行的原文命令并继续验证服务状态。安装结果**不中断流程**：
-   失败横幅给出手动命令（Windows：管理员终端跑 `ssh-manager serve install
+   失败横幅给出手动命令（Windows：管理员终端跑 `sshmgr serve install
    --addr 0.0.0.0:7878`；Linux/macOS：`sudo` 同款命令），随后照常探活。
 6. **serve 安装结果屏**——两行判定：安装（✓ 已装并启动 / ✗ 失败+手动命令）+
-   探活（✓ 已就绪 / ⚠ 未验证：「排查：7878 端口防火墙是否放行；`ssh-manager
+   探活（✓ 已就绪 / ⚠ 未验证：「排查：7878 端口防火墙是否放行；`sshmgr
    serve status` 查四项信号；服务可能仍在启动，稍候重试」）。**任一行失败都不拦路**，
    流程照走。
 7. **客户端 pair 卡**——把这张卡带到 client 机：`地址` + `指纹` 两个明文值 +
-   入网命令 `ssh-manager pair --instance <名>`（LAN 发现自动带指纹；`--url`
+   入网命令 `sshmgr pair --instance <名>`（LAN 发现自动带指纹；`--url`
    直指时配 `--pin`）。按任意键完成设置，直接进入主控台。
 
 主控台页签的完整键位见 [tui-single-machine.md §3](./tui-single-machine.md#3-主控台四页签)。
@@ -94,7 +94,7 @@ client pull 后更新设备码的「最近拉取」、其它 TUI/CLI 会话增�
 工作机上不用碰 TUI 向导——入网一条命令：
 
 ```bash
-ssh-manager pair --instance laptop
+sshmgr pair --instance laptop
 ```
 
 1. **发现/连接**——默认 LAN 广播发现 serve（同网段即中）；拿不到 offer（防火墙挡
@@ -111,8 +111,8 @@ ssh-manager pair --instance laptop
 5. **配 agent**——产物片段抄进 `.mcp.json`（`mcp --cache` + env token 形态；
    `--write-mcp <path>` 可让 pair 直落目标路径），重启 Claude Code 即用。
 
-> 想用 TUI：`ssh-manager tui` 选 client 角色后进入 **client 面板**（向导的连接
-> 表单已退役——入网/换码都是 `ssh-manager pair`，面板会显示同样的指引）。
+> 想用 TUI：`sshmgr tui` 选 client 角色后进入 **client 面板**（向导的连接
+> 表单已退役——入网/换码都是 `sshmgr pair`，面板会显示同样的指引）。
 
 ## client 面板参考
 
@@ -126,7 +126,7 @@ profile `<名称>` · `<N>` 服务器 · 缓存于 `<时长>` 前**——五个�
 |---|---|---|
 | `s` | 同步（手动 pull） | 10 秒超时；**失败保留旧缓存**（快照只在拉取成功后原子替换）。作用于**当前选中的实例槽**（默认槽起步）。本界面**永不走明文拉取**——连接配置缺 pin 会直接报错（缺 pin 时入网/换码走 `pair`） |
 | `i` | 实例切换（picker，Plan 40 批2） | 弹「选择实例」overlay：第一行恒为「**（默认实例）**」（有实例恰好合法名叫 `default` 也靠它区分），其后每个命名实例一行（名字 + 缓存年龄 + profile；**轻量行不解密**，DEK 坏了也不影响列表）。`↑`/`↓` 移动、Enter 选中 → 面板即刻切到该实例的槽位重读数据；Esc 取消不动。**会话内有效**：不落盘、重启进程回到默认实例 |
-| `c` | 入网 = pair | 连接编辑已退役——status 行指引「新机入网/换码请运行 ssh-manager pair（手工路径 cache pull 保留，见 docs）」 |
+| `c` | 入网 = pair | 连接编辑已退役——status 行指引「新机入网/换码请运行 sshmgr pair（手工路径 cache pull 保留，见 docs）」 |
 | `q` | 退出 | `Ctrl+C` 同 |
 
 页脚键位原样是 `[s]同步 [i]实例 [c]入网=pair  q 退出`；**单槽模式（override env 覆盖中）没有 `[i]`**——见下。
@@ -144,7 +144,7 @@ profile `<名称>` · `<N>` 服务器 · 缓存于 `<时长>` 前**——五个�
 **管理面**（主控台 / `serve pair`）做，client 机的 TUI 里**没有任何写入口**。
 
 **换码/新实例 = `pair --force` / 新 `pair`**（Plan 42 批1）：对既有实例换设备码 =
-`ssh-manager pair --instance <名> --force`（清 auth/bin/meta/quarantine，
+`sshmgr pair --instance <名> --force`（清 auth/bin/meta/quarantine，
 **保留 cache.config.json**——时效策略原地继承）；第二个 agent = 直接再跑一条
 `pair --instance <新名>`（自动归位新实例槽）。runbook 深水区见 [multi-machine.md](./multi-machine.md)。
 
@@ -152,7 +152,7 @@ profile `<名称>` · `<N>` 服务器 · 缓存于 `<时长>` 前**——五个�
 
 ### 新工作机接入全流程
 
-1. **工作机**：装好二进制后 `ssh-manager pair --instance laptop`（同网段自动发现
+1. **工作机**：装好二进制后 `sshmgr pair --instance laptop`（同网段自动发现
    serve；跨网段用 `--url` + `--pin`，pair 卡上有现成命令）→ 屏显三件套
    `laptop @ <url> SAS <6位>`，等待批准。
 2. **server 机**：主控台切到 **Pairing 页**按 `a` → 选 profile（授权范围）→
@@ -180,7 +180,7 @@ profile `<名称>` · `<N>` 服务器 · 缓存于 `<时长>` 前**——五个�
 
 ### 换码 / 换实例
 
-`pair` 一条命令覆盖（Plan 42 批1）：既有实例换设备码 = `ssh-manager pair
+`pair` 一条命令覆盖（Plan 42 批1）：既有实例换设备码 = `sshmgr pair
 --instance <名> --force`（清 auth/bin/meta/quarantine，保留 `cache.config.json`
 ——时效策略原地继承）；第二个 agent = `pair --instance <新名>`（自动归位新实例槽，
 产物 args 自动带 `--instance`）。runbook 深水区见 [multi-machine.md](./multi-machine.md)。
@@ -189,15 +189,15 @@ profile `<名称>` · `<N>` 服务器 · 缓存于 `<时长>` 前**——五个�
 
 | 症状 | 处置 |
 |---|---|
-| pair 报「指纹失配」/ TLS 错 | **失配 ≠ 泄露**：意味着对端证书公钥变了——可能是 server 机重装/迁移重签了证书（正常），也可能是中间人（异常）。server 机跑 `ssh-manager serve cert-info` 拿新指纹，`pair --pin <新指纹>` 重新入网。重签证书的全量交接 runbook 见 [multi-machine.md](./multi-machine.md) |
+| pair 报「指纹失配」/ TLS 错 | **失配 ≠ 泄露**：意味着对端证书公钥变了——可能是 server 机重装/迁移重签了证书（正常），也可能是中间人（异常）。server 机跑 `sshmgr serve cert-info` 拿新指纹，`pair --pin <新指纹>` 重新入网。重签证书的全量交接 runbook 见 [multi-machine.md](./multi-machine.md) |
 | pair 吃 ⚠「目标 ≠ 本机地址」 | client 声明的连接地址不属于 serve 机的非环回地址集/hostname——疑似中继/假 discovery/拿错了地址。核对 pair 卡上的地址重跑；确属故意（受控中继）才用 `serve pair approve --allow-foreign-url` 显式覆盖 |
 | `pair --url` 被拒「refusing TOFU」 | 直指又不带 `--pin` 是**默认拒绝**（默认安全）。带上 pair 卡里的 `--pin sha256:...`；`--allow-tofu` 只留给受控环境的无锚通道 |
 | client 面板 `[s]` 同步报缺 pin | 本界面永不走明文拉取（缺 pin 直接报错是**默认安全**的设计）。缺 pin 的实例用 `pair --force` 重新入网即可补全 pin |
 | 同步失败但面板还有数据 | 失败保留旧缓存——这是特性不是 bug。修好网络/serve 后 `[s]` 重拉 |
 | 缓存多久算旧 / 怎么自动保鲜 | TTL 由 `.mcp.json` 的 `--cache-max-age` 控制（默认 30m；0=关闭自动拉取）。`mcp --cache` 进程内 spawn 惰性拉取 + 会话内懒检查 + 热加载，无需 OS 定时器；细节见 [multi-machine.md](./multi-machine.md#离线只读缓存plan-12) |
-| server 机 serve 探活失败 | 安装结果屏的排查行：7878 端口防火墙是否放行（TCP + UDP 都要）；`ssh-manager serve status` 查四项信号（service/process/http/vault）；服务可能仍在启动，稍候重试 |
+| server 机 serve 探活失败 | 安装结果屏的排查行：7878 端口防火墙是否放行（TCP + UDP 都要）；`sshmgr serve status` 查四项信号（service/process/http/vault）；服务可能仍在启动，稍候重试 |
 | 吊销了 token/设备码，agent 还在跑 | 三路径：设备码吊销 → 该机下次 pull 即 quarantine（在线 ≤30min）；project token 吊销 → 下次保鲜的新快照已无该 project；永离线设备 → `max_offline` 到期拒载。已建立的隧道 revoke/disable 后 ~15s 内级联拆除（`tunnels kill` 可急停）——完整语义见 [agent-access.md](./agent-access.md#project-生命周期轮换--暂停--恢复--吊销) |
-| 向导中途退出了 | 什么都不用做，重跑 `ssh-manager tui` 从断点续配（server 侧会盘点已建的 profile/project，跳过已完成步骤） |
+| 向导中途退出了 | 什么都不用做，重跑 `sshmgr tui` 从断点续配（server 侧会盘点已建的 profile/project，跳过已完成步骤） |
 | client 机想改连别的 server | 重新 `pair`（`--force` 换码 / 换 `--instance` 换槽）——`[c]` 连接编辑已退役 |
 
 ## 相关文档

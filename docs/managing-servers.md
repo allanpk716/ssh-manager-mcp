@@ -23,7 +23,7 @@
 ## 列出所有服务器：`servers ls`
 
 ```bash
-ssh-manager servers ls
+sshmgr servers ls
 ```
 
 输出每行：`name  id  user@host:port  [sudo|-]  (role|-)  · <special-handling 前 ~40 字符>|-`。例如：
@@ -43,7 +43,7 @@ db               <uuid>              pguser@10.0.0.5:22 [-] (prod pg primary) ·
 ## 新增服务器：`servers add`
 
 ```bash
-ssh-manager servers add \
+sshmgr servers add \
   --name <唯一名字> \
   --host <hostname 或 IP> \
   --user <ssh 用户> \
@@ -109,7 +109,7 @@ shown to the agent.
 > to drop the secret, or ignore it if the value is intentionally a public
 > fingerprint.
 
-Each field is capped at 4 KB. Edit any field with `ssh-manager servers edit <name> --<flag> ...`;
+Each field is capped at 4 KB. Edit any field with `sshmgr servers edit <name> --<flag> ...`;
 pass an empty value (`--special-handling ""`) to clear.
 
 ### sudo 的真相
@@ -123,9 +123,9 @@ pass an empty value (`--special-handling ""`) to clear.
 已经有一份 OpenSSH 客户端配置（`~/.ssh/config`）的话，不用逐台 `servers add`：
 
 ```bash
-ssh-manager servers import --dry-run            # 默认读 ~/.ssh/config，先预览
-ssh-manager servers import --profile team-a     # 真导入，并把导入的机器全部 grant 进 team-a
-ssh-manager servers import --file /path/to/config   # 指定别的配置文件
+sshmgr servers import --dry-run            # 默认读 ~/.ssh/config，先预览
+sshmgr servers import --profile team-a     # 真导入，并把导入的机器全部 grant 进 team-a
+sshmgr servers import --file /path/to/config   # 指定别的配置文件
 ```
 
 ### Flags
@@ -155,7 +155,7 @@ ssh-manager servers import --file /path/to/config   # 指定别的配置文件
 - **批内密钥去重**：同一批里多台机器引用**同一个私钥文件**（内容相同），vault 只存**一份**凭据行——不会因为 20 台机器共用一个 key 就存 20 份。
 - **needs-passphrase 的补法**（连接会一直失败，直到补上）：
   - **TUI**：主控台服务器页 `i` 导入流程的补全表单里有「密钥口令（补全加密私钥）」一栏，当场补（不重读盘上文件）；事后也可以 `!` 过滤出 ⚠ 机器，`e` 编辑补。
-  - **CLI**：`ssh-manager servers edit <名字> --key <私钥路径> --key-passphrase '<口令>'`（重发凭据，换掉那份没口令的）。
+  - **CLI**：`sshmgr servers edit <名字> --key <私钥路径> --key-passphrase '<口令>'`（重发凭据，换掉那份没口令的）。
 - **原私钥文件不动**：import 只是把内容**复制**进 vault 加密存储，`~/.ssh` 下的原文件原样保留。
 
 ### Match 警示
@@ -176,7 +176,7 @@ IdentityFile 写**相对路径**时，本工具按 **config 文件所在目录**
 
 「先录机器、凭据后补」是合法状态：`servers add`（或 import 的 `needs-credential` 结果）可以**不带任何凭据**。要点：
 
-- **agent 一侧的语义**：对无凭据机器调 `exec_command` / 下载 / 上传 / 转发，会在**发起连接之前**被拒，错误信息自带补法——`server has no credential configured (set one with: ssh-manager servers edit <name> --password ... / --key ...)`（审计里统一记 `no_credential`，不是 auth_error，agent 不会误判成密码错了）。
+- **agent 一侧的语义**：对无凭据机器调 `exec_command` / 下载 / 上传 / 转发，会在**发起连接之前**被拒，错误信息自带补法——`server has no credential configured (set one with: sshmgr servers edit <name> --password ... / --key ...)`（审计里统一记 `no_credential`，不是 auth_error，agent 不会误判成密码错了）。
 - **TUI 一侧**：无凭据（以及未填 role、带 needs-passphrase 标签）的机器在列表里以 ⚠ 前缀**置顶**；按 `!` 只看这些待处理机器。
 - **补凭据**：`servers edit <名字> --password '<密码>'` 或 `--key <私钥路径> [--key-passphrase '<口令>']`（TUI 里 `e` 编辑，密码栏填新值）。补上即正常连接，server 的 id / name / profile 绑定全程不变。
 - **反向操作（退回无凭据态）**：`servers edit <名字> --clear-credential`——清除这台机器的登录 + sudo 凭据引用（独占动作、与 `--password` / `--key` 互斥，详见[编辑服务器](#编辑服务器servers-edit只改你传的字段)一节）；TUI 里是 `e` 编辑表单的「清除凭据」开关。
@@ -188,7 +188,7 @@ IdentityFile 写**相对路径**时，本工具按 **config 文件所在目录**
 `edit` 是“原地改”：**只更新你显式传了的 flag**，没传的字段（包括 id、profile 绑定）原样保留。这让“只换密码”或“只改 host”变得很安全。
 
 ```bash
-ssh-manager servers edit <name> [flags...]
+sshmgr servers edit <name> [flags...]
 ```
 
 可用 flags（全部可选，按需传）：
@@ -227,7 +227,7 @@ ssh-manager servers edit <name> [flags...]
 「换密码 / 换密钥」的反向操作——把一台已有凭据的机器**退回无凭据态**，一个事务完成：
 
 ```bash
-ssh-manager servers edit gpu --clear-credential
+sshmgr servers edit gpu --clear-credential
 ```
 
 - **独占动作**：`--clear-credential` 不是字段编辑。传了它，这条命令就**只做清除这一件事**——同一条命令里传的其他字段 flag（如 `--host`、`--name`）**不会生效**（想改字段请清除后另跑一条 `edit`）。确认输出打印的是**当前库名**。
@@ -242,25 +242,25 @@ ssh-manager servers edit gpu --clear-credential
 
 ```bash
 # 轮换密码（安全周期性操作）
-ssh-manager servers edit gpu --password '<新密码>'
+sshmgr servers edit gpu --password '<新密码>'
 
 # 从密码登录切换到密钥登录
-ssh-manager servers edit gpu --key ~/.ssh/id_ed25519
+sshmgr servers edit gpu --key ~/.ssh/id_ed25519
 
 # 机器换了 IP / 端口
-ssh-manager servers edit gpu --host 192.0.2.20 --port 2222
+sshmgr servers edit gpu --host 192.0.2.20 --port 2222
 
 # 补一个 sudo 密码（之前忘了给）
-ssh-manager servers edit gpu --sudo-password '<sudo密码>'
+sshmgr servers edit gpu --sudo-password '<sudo密码>'
 
 # 更新你的备注
-ssh-manager servers edit gpu --description '8x A100 80GB, CUDA 12, 已扩容到 2TB NVMe'
+sshmgr servers edit gpu --description '8x A100 80GB, CUDA 12, 已扩容到 2TB NVMe'
 
 # 重命名
-ssh-manager servers edit gpu --name gpu-a100
+sshmgr servers edit gpu --name gpu-a100
 
 # 退回无凭据态（清除登录 + sudo 凭据引用；独占动作，别和其他字段混传）
-ssh-manager servers edit gpu --clear-credential
+sshmgr servers edit gpu --clear-credential
 ```
 
 注意：
@@ -274,7 +274,7 @@ ssh-manager servers edit gpu --clear-credential
 ## 删除服务器：`servers rm`
 
 ```bash
-ssh-manager servers rm <name-or-id>
+sshmgr servers rm <name-or-id>
 ```
 
 - 可以传 **name 或 id**（name 会自动解析成 id）。
@@ -292,9 +292,9 @@ ssh-manager servers rm <name-or-id>
 ## Profile 的增 / 查 / 授权
 
 ```bash
-ssh-manager profiles add <名字>                      # 建一个空 profile
-ssh-manager profiles ls                              # 每个 profile 有几台 server
-ssh-manager profiles grant <profile> <server1> [server2 ...]   # 把 server 加进 profile（可多个）
+sshmgr profiles add <名字>                      # 建一个空 profile
+sshmgr profiles ls                              # 每个 profile 有几台 server
+sshmgr profiles grant <profile> <server1> [server2 ...]   # 把 server 加进 profile（可多个）
 ```
 
 - `grant` 是**追加**且**幂等**（重复 grant 同一台不会报错，忽略）。
@@ -303,9 +303,9 @@ ssh-manager profiles grant <profile> <server1> [server2 ...]   # 把 server 加�
 典型编排（dev / staging / prod 三套，给三个不同 agent）：
 
 ```bash
-ssh-manager profiles add dev     && ssh-manager profiles grant dev dev-web dev-db
-ssh-manager profiles add staging && ssh-manager profiles grant staging stg-web stg-db
-ssh-manager profiles add prod    && ssh-manager profiles grant prod prod-web prod-db
+sshmgr profiles add dev     && sshmgr profiles grant dev dev-web dev-db
+sshmgr profiles add staging && sshmgr profiles grant staging stg-web stg-db
+sshmgr profiles add prod    && sshmgr profiles grant prod prod-web prod-db
 # 然后每个 agent 建一个 project 绑对应 profile（见 agent-access.md）
 ```
 
@@ -346,8 +346,8 @@ export SSHMGR_SSH_HOST_KEY_ALGORITHMS="ssh-rsa,rsa-sha2-512"   # 逗号分隔
 历史操作可能在 `credentials` 表里留下**没有任何 server 引用**（既不是 `credential_id` 也不是 `sudo_credential_id`）的孤儿行——它们仍是加密的、无害，只是占地方。`gc` 专门清这个：
 
 ```bash
-ssh-manager gc           # 默认 dry-run：只数一遍、打印数量，不动任何东西
-ssh-manager gc --apply   # 真删：删掉的恰好是上面数出来的那批孤儿行
+sshmgr gc           # 默认 dry-run：只数一遍、打印数量，不动任何东西
+sshmgr gc --apply   # 真删：删掉的恰好是上面数出来的那批孤儿行
 ```
 
 - **永不碰**：`servers`、`host_keys`（TOFU 记录）、cache tokens——`--apply` 的 WHERE 条件就是上面那个两列引用检查，删的只可能是无引用凭据行。
