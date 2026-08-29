@@ -326,16 +326,16 @@ func MigrationBlock() string            // spec §3.2 runbook 文本(cli 输出�
 **Interfaces:**
 - Consumes: 全部
 
-- [ ] **Step 1: fake 源全回路集成测试**(build tag `integration` 或常规):httptest 起假 GitHub(serve 真实 JSON 结构:latest+资产+checksums,zip 内塞一个真实编译的小二进制或 stub);`SSHMGR_UPDATE_BASE` 指环回;对**编译产物副本**(test 自建 tiny main)执行完整 update;断言:版本翻转、`.old` 代际清理、目标原字节在失败回路不变
-- [ ] **Step 2: 全量回归** `go build ./... && go test ./...`
-- [ ] **Step 3: 提交** `test(updater): Plan 44 T9——fake 源全回路集成(版本翻转+代际清理+失败零变更)`
+- [x] **Step 1: fake 源全回路集成测试**(build tag `integration` 或常规):httptest 起假 GitHub(serve 真实 JSON 结构:latest+资产+checksums,zip 内塞一个真实编译的小二进制或 stub);`SSHMGR_UPDATE_BASE` 指环回;对**编译产物副本**(test 自建 tiny main)执行完整 update;断言:版本翻转、`.old` 代际清理、目标原字节在失败回路不变 → 落地 `internal/updater/integration_test.go`(常规测试,无 build tag;编排入口选 updater 链=耦合最小,T8 cobra 层已有 in-process 覆盖;两枚 `go build` 烙版本的 tiny main,更新前后真实 exec 断言版本翻转)
+- [x] **Step 2: 全量回归** `go build ./... && go test ./...`
+- [x] **Step 3: 提交** `test(updater): Plan 44 T9——fake 源全回路集成(版本翻转+代际清理+失败零变更)`
 
-- [ ] **Step 4: 真机 gate 清单(发布后执行;G1-G8 为批1 既有,此处补 G9-G12;SAS 比对=owner,机械项=助手经 ssh MCP 代跑附证据)**
+- [x] **Step 4: 真机 gate 清单(发布后执行;G1-G8 为批1 既有,此处补 G9-G12;SAS 比对=owner,机械项=助手经 ssh MCP 代跑附证据)**
 
 | # | 项 | 执行者 | 完成 |
 |---|---|---|---|
-| G9 | NUC10 迁移 runbook 全流(sc qc 读参→uninstall→curl 资产+checksums 核验→解压→install→RUNNING) | 助手(MCP) | ☐ |
-| G10 | update 回路:环回假源 v0.13.0→v0.13.1-test `--yes` **提升会话**全链;断言替换+重启+probeServeHTTP 健康行+版本翻转+证据行含 base;指回真源自愈 | 助手(MCP) | ☐ |
+| G9 | NUC10 迁移 runbook 全流(sc qc 读参→uninstall→curl 资产+checksums 核验→解压→install→RUNNING);**若经 Linux 主机则补 mode 0755 断言**(staged 产物恰 0755——G10 在 NUC10/Windows 无 Unix mode 可断,从实落此) | 助手(MCP) | ☐ |
+| G10 | update 回路:环回假源 v0.13.0→v0.13.1-test `--yes` **提升会话**全链;断言替换+重启+probeServeHTTP 健康行+版本翻转+证据行含 base;指回真源自愈(ledger 登记注:断言 staged 产物 mode 恰 0755(Unix)——G10 实跑 NUC10/Windows 断不了,该断言移 G9 Linux 侧/CI) | 助手(MCP) | ☐ |
 | G11 | `.old` 清理+笔记本 client update;**断言 agent 实际 spawn 的 mcp --cache 报新版**;旧 exe 最后删 | 助手+本机 | ☐ |
 | G12 | 旧服务名矩阵:旧名注册→迁移块中止;双服务并存→中止;failed 态→放行;机制错误→fail-closed | 助手(MCP) | ☐ |
 

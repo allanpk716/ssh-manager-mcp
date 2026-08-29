@@ -32,7 +32,7 @@
 - **未装**（`ErrNotInstalled`）：放行
 - **探测机制错误**（无法判定存在性）：fail-closed 中止
 
-旧名存在（任何态，无论新名状态）→ 打印迁移块并中止（不半更新，防新旧服务并存）；`ErrNoServiceSystemDetected`（容器/CI 无服务管理器）→ 跳过检测直接更新。
+旧名存在（任何态，无论新名状态）→ 打印迁移块并中止（不半更新，防新旧服务并存）。`ErrNoServiceSystemDetected`（容器/CI 无服务管理器）同属机制错误——一律 fail-closed 中止，无跳过分支（spec §3.2 勘误 2026-08-29：kardianos sysv 兜底使"无管理器"在生产不可达，保守方向）。
 
 ## v0.13.0 之后：升级 = `sshmgr update` 一条命令
 
@@ -46,12 +46,14 @@ sshmgr update --version v0.13.1      # 装指定版（含降级=回滚通道；�
 sshmgr update --file <包> [--sha256 <hex> | --no-verify]   # 本地包模式（离线/内网兜底）
 ```
 
-- **版本源**：GitHub Releases 直连（`releases/latest`，天然排除 prerelease/draft；未认证 API 限速 60/h/IP——手动更新场景足够）；`--version <tag>` 可钉版/降级。镜像/内网用 `SSHMGR_UPDATE_BASE` env seam 换源（非环回强制 https，证据行醒目显示生效 base）。
+- **版本源**：GitHub Releases 直连（`releases/latest`，天然排除 prerelease/draft；未认证 API 限速 60/h/IP——手动更新场景足够）；`--version <tag>` 可钉版/降级。镜像/内网用 `SSHMGR_UPDATE_BASE` env seam 换源（非环回强制 https，证据行醒目显示生效 base）。**降级通道下限：update 仅覆盖 v0.13.0 及以上**——更早版本（v0.12.x 旧名资产 `ssh-manager_*`）不在资产名计算内，回滚到它们走手工下载安装（二进制改名的固有代价，一次性）。
 - **信任链**：强制 https（仅环回字面量例外）+ 重定向**每一跳**宿主白名单 + 同 release `checksums.txt` SHA256 比对——校验不过即中止，目标文件零触碰；解压只落地根条目精确名 `sshmgr`（Windows `sshmgr.exe`），zip slip 不可能。
 - **事务性替换**：临时目录建在 exe 同目录（同卷原子 rename）；替换点之前的任何失败 = 零变更；Windows 走 `.old` 代际名 + 崩溃窗口启动自愈；exe 目录不可写（如 `/usr/local/bin`）→ 明确报错提示提权，**update 自身永不自动提权**。
 - **服务重启**：serve 机替换成功后询问重启（LocalSystem 服务非提升会话 `Restart()` 必 Access denied——NUC10 常态，不算更新失败；失败打印手工命令 + 专用退出码「替换成功/重启待手工」，成功后健康回探）。**重启将断开活动隧道、作废进行中的配对请求**。client 机未装服务：新版本下次 agent 会话生效，运行中的桥继续旧版。
 - **升级次序铁律不因 update 改变**：多机拓扑仍「先迁 client 后升 serve」；无后台自动检查/自动更新，升级时点由 owner 手动拍板。
 - 并发跑两个 update 无锁保护——**不要并发**。
+
+> **发版后 checklist（资产名防漂移）**：每发一版先跑 `sshmgr update --check`，确认「资产」行与 `sshmgr_{ver}_{os}_{arch}.{zip|tar.gz}` 对齐且能命中——改 `.goreleaser.yml` 的 `name_template`/`checksum` 名而不同步 update 的资产名计算，会让 update 全量 404（spec §8）。
 
 ---
 
