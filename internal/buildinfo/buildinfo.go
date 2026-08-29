@@ -19,3 +19,12 @@ const Owner = "allanpk716"
 // Repo is the GitHub repository name, mirroring the repo (which is also the
 // Go module path — the module path itself is NOT renamed by Plan 44).
 const Repo = "ssh-manager-mcp"
+
+// ServeServiceName is the registered name of the serve service on every
+// platform (Windows service / systemd unit / launchd plist). Plan 44 hoisted
+// it here from internal/cli so the self-update probe (updater.ProbeService)
+// checks the same name the cli installs under — buildinfo is a leaf package,
+// so updater → buildinfo introduces no import cycle. The pre-rename name
+// ("ssh-manager-serve") is deliberately NOT a constant here: it exists only
+// as the updater's legacy probe target (internal/updater legacyServiceName).
+const ServeServiceName = "sshmgr-serve"

@@ -78,6 +78,7 @@ import (
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
@@ -85,8 +86,11 @@ import (
 )
 
 // serveServiceName is the registered service name (single service per host —
-// re-running install overwrites it via Uninstall+Install).
-const serveServiceName = "sshmgr-serve"
+// re-running install overwrites it via Uninstall+Install). Plan 44 hoisted the
+// value to buildinfo.ServeServiceName so the self-update probe checks the same
+// name the cli installs under; this alias keeps every existing reference
+// intact (zero behavior change).
+const serveServiceName = buildinfo.ServeServiceName
 
 // serveDisplayName / serveDescription are the human-friendly metadata written
 // into the Windows service / systemd unit / launchd plist. Post-Plan-42-批1 the
