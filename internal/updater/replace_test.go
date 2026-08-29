@@ -219,9 +219,10 @@ func TestReplaceWindowsDoubleFaultReturnsErrRollbackFailed(t *testing.T) {
 	if !errors.Is(err, ErrRollbackFailed) {
 		t.Fatalf("err = %v (%T), want ErrRollbackFailed", err, err)
 	}
-	// Error() 含手工恢复命令 ren <backup> <self>
+	// Error() 含逐字可执行的手工恢复命令:move /y "<backup>" "<self>"
+	// (ren 的目的参数不接受全路径,cmd /c 实测"命令语法不正确")
 	backup := calls[0].to
-	for _, want := range []string{"ren ", backup, self} {
+	for _, want := range []string{"move /y ", `"` + backup + `"`, `"` + self + `"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("err.Error() = %q, want it to contain %q", err.Error(), want)
 		}
@@ -231,6 +232,42 @@ func TestReplaceWindowsDoubleFaultReturnsErrRollbackFailed(t *testing.T) {
 		t.Fatalf("backup content = %q, want old image", got)
 	}
 	mustNotExist(t, self)
+}
+
+func TestReplaceWindowsFirstRenameFailureLeavesZeroChange(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "sshmgr")
+	staged := filepath.Join(dir, "staged-bin")
+	writeBin(t, self, oldSelfBytes)
+	writeBin(t, staged, newSelfBytes)
+
+	origGOOS := currentGOOS
+	currentGOOS = "windows"
+	defer func() { currentGOOS = origGOOS }()
+
+	var calls []renameCall
+	origRename := osRename
+	osRename = recordingRename(origRename, &calls, func(from, to string) bool {
+		return from == self // 仅 self→backup 注入失败
+	})
+	defer func() { osRename = origRename }()
+
+	err := ReplaceBinary(staged, self)
+	if err == nil {
+		t.Fatal("want error from injected self rename failure")
+	}
+	if errors.Is(err, ErrRollbackFailed) {
+		t.Fatalf("err = %v, want plain failure (nothing to roll back)", err)
+	}
+	if got := readBin(t, self); got != oldSelfBytes {
+		t.Fatalf("self content = %q, want unchanged", got)
+	}
+	if got := readBin(t, staged); got != newSelfBytes {
+		t.Fatalf("staged content = %q, want unchanged", got)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("rename calls = %v, want exactly the failed self→backup attempt", calls)
+	}
 }
 
 func TestReplaceUnix(t *testing.T) {
@@ -379,20 +416,31 @@ func TestCleanOldBackups(t *testing.T) {
 }
 
 func TestDetectHeal(t *testing.T) {
-	t.Run("self missing with generation backup", func(t *testing.T) {
+	t.Run("self missing with generation backup: newest wins, verbatim command", func(t *testing.T) {
 		dir := t.TempDir()
 		self := filepath.Join(dir, "sshmgr")
-		writeBin(t, self+".old.1700000000", oldSelfBytes)
+		older := self + ".old.1700000000"
+		newer := self + ".old.1700000001"
+		writeBin(t, older, oldSelfBytes)
+		writeBin(t, newer, oldSelfBytes)
 		seamExecutable(t, self)
+		origGOOS := currentGOOS
+		currentGOOS = "windows"
+		defer func() { currentGOOS = origGOOS }()
 
 		hint, ok := DetectHeal()
 		if !ok {
 			t.Fatal("want heal detection for missing self with backup present")
 		}
-		for _, want := range []string{self, self + ".old.1700000000"} {
+		// hint 指向最新代际,恢复命令逐字可执行(move /y 双侧全路径)
+		for _, want := range []string{self, "move /y ", `"` + newer + `"`, `"` + self + `"`} {
 			if !strings.Contains(hint, want) {
 				t.Fatalf("hint %q missing %q", hint, want)
 			}
+		}
+		// 多代并存只指最新一代(排序写反在此暴露)
+		if strings.Contains(hint, older) {
+			t.Fatalf("hint %q must name the newest generation %q, not the older %q", hint, newer, older)
 		}
 	})
 
@@ -401,13 +449,16 @@ func TestDetectHeal(t *testing.T) {
 		backup := filepath.Join(dir, "sshmgr.old.1700000001")
 		writeBin(t, backup, oldSelfBytes)
 		seamExecutable(t, backup)
+		origGOOS := currentGOOS
+		currentGOOS = "windows"
+		defer func() { currentGOOS = origGOOS }()
 
 		hint, ok := DetectHeal()
 		if !ok {
 			t.Fatal("want heal detection when executing from a generation backup")
 		}
 		canonical := filepath.Join(dir, "sshmgr")
-		for _, want := range []string{backup, canonical} {
+		for _, want := range []string{backup, canonical, "move /y ", `"` + backup + `"`, `"` + canonical + `"`} {
 			if !strings.Contains(hint, want) {
 				t.Fatalf("hint %q missing %q", hint, want)
 			}
@@ -423,6 +474,34 @@ func TestDetectHeal(t *testing.T) {
 
 		if hint, ok := DetectHeal(); ok {
 			t.Fatalf("DetectHeal = %q, want no heal when canonical exists", hint)
+		}
+	})
+
+	t.Run("unreadable canonical counts as present (entry 1: no destructive heal)", func(t *testing.T) {
+		dir := t.TempDir()
+		self := filepath.Join(dir, "sshmgr")
+		writeBin(t, self+".old.1700000000", oldSelfBytes)
+		seamExecutable(t, self)
+		origStat := osStat
+		osStat = func(string) (os.FileInfo, error) { return nil, errors.New("access denied") }
+		defer func() { osStat = origStat }()
+
+		if hint, ok := DetectHeal(); ok {
+			t.Fatalf("DetectHeal = %q, want no heal: stat error other than NotExist is not proof of absence", hint)
+		}
+	})
+
+	t.Run("unreadable canonical counts as present (entry 2)", func(t *testing.T) {
+		dir := t.TempDir()
+		backup := filepath.Join(dir, "sshmgr.old.1700000002")
+		writeBin(t, backup, oldSelfBytes)
+		seamExecutable(t, backup)
+		origStat := osStat
+		osStat = func(string) (os.FileInfo, error) { return nil, errors.New("access denied") }
+		defer func() { osStat = origStat }()
+
+		if hint, ok := DetectHeal(); ok {
+			t.Fatalf("DetectHeal = %q, want no heal: canonical unreadable is not canonical missing", hint)
 		}
 	})
 
@@ -513,6 +592,8 @@ func TestStagedVersionCheckHelperProcess(t *testing.T) {
 		fmt.Println("v9.9.9")
 	case "flood":
 		fmt.Println(strings.Repeat("x", 8<<10))
+	case "empty":
+		// prints nothing: empty version output must be rejected
 	case "hang":
 		time.Sleep(60 * time.Second)
 	}
@@ -563,6 +644,14 @@ func TestStagedVersionCheck(t *testing.T) {
 		seamStagedHelper(t, "flood")
 		if _, err := StagedVersionCheck("staged-bin", "1.2.3"); err == nil || !strings.Contains(err.Error(), "limit") {
 			t.Fatalf("err = %v, want output-limit failure", err)
+		}
+	})
+
+	t.Run("empty output rejected regardless of want", func(t *testing.T) {
+		seamStagedHelper(t, "empty")
+		_, err := StagedVersionCheck("staged-bin", "")
+		if err == nil || !strings.Contains(err.Error(), "empty version") {
+			t.Fatalf("err = %v, want empty-version rejection (want=\"\" must not compare equal to empty output)", err)
 		}
 	})
 

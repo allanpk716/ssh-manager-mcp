@@ -36,6 +36,7 @@ var ErrRollbackFailed = errors.New("replace: rollback failed — manual recovery
 var (
 	osRename     = os.Rename
 	osRemove     = os.Remove
+	osStat       = os.Stat
 	osExecutable = os.Executable
 	fileSync     = func(f *os.File) error { return f.Sync() }
 	execStaged   = exec.CommandContext
@@ -168,8 +169,9 @@ func replaceWindows(staged, self string) error {
 	// are silent here by design.
 	_ = CleanOldBackups(self)
 
-	// 代际名防单槽被旧进程占死(spec 钉死 unix 秒级时间戳;同一秒内连续两次
-	// update 会覆盖上一代 backup — 接受,单用户工具不做更细粒度命名)。
+	// 代际名防单槽被旧进程占死(spec 钉死 unix 秒级时间戳)。同秒重名的实态:
+	// rename 到已存在的名字按覆盖语义走,但旧代文件仍被进程持有时该 rename
+	// 直接失败 ⇒ 本次替换零变更(自愈可见),次秒重试即成——无需更细粒度命名。
 	backup := self + ".old." + strconv.FormatInt(time.Now().Unix(), 10)
 	if err := osRename(self, backup); err != nil {
 		return fmt.Errorf("replace: rename %s -> %s: %w", self, backup, err)
@@ -179,7 +181,7 @@ func replaceWindows(staged, self string) error {
 		// 原字节。按 ts 扫描剩余代际反而有风险——预置残留已被起手清理,而
 		// 时钟回拨时 ts 扫描可能选中更旧的代际、恢复出更旧的字节。
 		if rbErr := osRename(backup, self); rbErr != nil {
-			return fmt.Errorf("%w: ren %s %s", ErrRollbackFailed, backup, self)
+			return fmt.Errorf("%w: %s", ErrRollbackFailed, recoverCommand(backup, self))
 		}
 		return fmt.Errorf("replace: staged rename failed, rolled back to %s: %w", backup, err)
 	}
@@ -270,8 +272,8 @@ func DetectHeal() (healHint string, ok bool) {
 		if fileExists(canonical) {
 			return "", false // canonical present: mid-update normal, nothing to heal
 		}
-		return fmt.Sprintf("running from backup %s; canonical %s missing (crash between the two renames); recover with: %s %s %s",
-			exe, canonical, healVerb(), exe, canonical), true
+		return fmt.Sprintf("running from backup %s; canonical %s missing (crash between the two renames); recover with: %s",
+			exe, canonical, recoverCommand(exe, canonical)), true
 	}
 	// Canonical self, as far as symlinks resolve. A missing target cannot be
 	// resolved — fall back to the raw path, whose absence is the very
@@ -288,23 +290,32 @@ func DetectHeal() (healHint string, ok bool) {
 		return "", false
 	}
 	newest := gens[len(gens)-1] // oldest→newest sorted; the freshest image wins
-	return fmt.Sprintf("%s missing but backup %s exists (crash between the two renames); recover with: %s %s %s",
-		self, newest.path, healVerb(), newest.path, self), true
+	return fmt.Sprintf("%s missing but backup %s exists (crash between the two renames); recover with: %s",
+		self, newest.path, recoverCommand(newest.path, self)), true
 }
 
-// healVerb is the manual-recovery command word for the current platform.
-func healVerb() string {
+// recoverCommand renders the manual recovery command for the current
+// platform, executable verbatim. Windows: `ren` does NOT accept fully
+// qualified paths as its destination argument (cmd /c 实测 "命令语法不正确")
+// — `move /y` accepts both sides fully qualified and overwrites without
+// prompting. POSIX: plain mv accepts both.
+func recoverCommand(backup, self string) string {
 	if currentGOOS == "windows" {
-		return "ren"
+		return fmt.Sprintf(`move /y "%s" "%s"`, backup, self)
 	}
-	return "mv"
+	return fmt.Sprintf("mv %s %s", backup, self)
 }
 
+// fileExists reports whether path is present. Stat errors that are NOT
+// NotExist (e.g. permission denied on a present file) count as "exists" —
+// conservative: an unreadable canonical must never trigger a destructive
+// recovery recommendation.
 func fileExists(path string) bool {
-	// Stat errors other than NotExist (e.g. permission) count as "exists":
-	// conservative — no heal on unreadable state.
-	_, err := os.Stat(path)
-	return err == nil
+	_, err := osStat(path)
+	if err == nil {
+		return true
+	}
+	return !os.IsNotExist(err)
 }
 
 // StagedVersionCheck executes the staged binary's `version` subcommand and
@@ -341,6 +352,12 @@ func StagedVersionCheck(staged, wantVersion string) (string, error) {
 		return "", fmt.Errorf("staged check: %s version exited with error: %w", filepath.Base(staged), waitErr)
 	}
 	got := NormalizeVersionOutput(string(out))
+	if got == "" {
+		// An empty version report is a broken binary under every mode —
+		// never let it masquerade as the target version (want=="" would
+		// otherwise compare equal).
+		return "", errors.New("staged check: staged binary printed empty version")
+	}
 	if got != NormalizeVersionOutput(wantVersion) {
 		return got, fmt.Errorf("staged check: version mismatch: staged reports %q, want %q", got, wantVersion)
 	}
