@@ -159,7 +159,8 @@ interactive-only — --yes does NOT exempt it.
 
 Exit codes: 0 = done (or already latest, or declined cleanly);
 3 = binary replaced OK but the service restart is pending manual action
-(the manual command is printed); anything else = failure with zero changes.`,
+(the manual command is printed); anything else = failure (zero changes,
+except a failed rollback — recovery command is printed).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runUpdateCmd(cmd, o)
@@ -261,6 +262,12 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 				buildinfo.ServeServiceName, rerr)
 		}
 		if !updater.SameBinaryPath(reg, self) {
+			// spec §3.2:旧名存在(任何态,无论新名状态)优先出迁移块——比
+			// "路径不一致"更有行动力的消息;两态都是 fail-closed 中止。
+			if probeService(updater.LegacyServiceName).State == updater.ProbeInstalled {
+				fmt.Fprint(out, updater.MigrationBlock())
+				return fmt.Errorf("检测到旧版服务 %s 仍注册(任何态)——本次 update 中止", updater.LegacyServiceName)
+			}
 			fmt.Fprintf(out, "服务注册路径: %s\n本程序路径:   %s\n", reg, self)
 			return fmt.Errorf("服务 %s 注册路径与本程序不一致(中止;防「更新 A 路径、服务跑 B 路径」静默旧版)",
 				buildinfo.ServeServiceName)
@@ -345,7 +352,10 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 	// --- 5. download (--file: none) → extract → staged self-check --------------
 	tmpdir, err := os.MkdirTemp(filepath.Dir(self), ".sshmgr-update-tmp-*")
 	if err != nil {
-		return fmt.Errorf("在 exe 同目录创建临时目录(同卷保证 rename 原子): %w", err)
+		// exe 目录不可写的确定性出错点(spec §4.3:明确报错提示 sudo/管理员,
+		// 不自动提权——给一条有出路的指引)。
+		return fmt.Errorf("在 exe 同目录创建临时目录(同卷保证 rename 原子): %w\n"+
+			"该目录不可写——用管理员/sudo 运行,或将二进制移至用户可写目录;update 不会自动提权", err)
 	}
 	defer os.RemoveAll(tmpdir) // 零残留:staged 成功时已被 rename 走,失败时整目录清理
 

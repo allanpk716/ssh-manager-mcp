@@ -831,3 +831,190 @@ func TestUpdateExplicitSameVersionRefused(t *testing.T) {
 	}
 	assertSelfUntouched(t, home, self, oldBytes)
 }
+
+// --- T8-R1 hardening (review findings 3 + 4a-4d) ------------------------------
+
+// seamInteractiveConfirm makes stdin a TTY answering confirmations from a
+// scripted sequence ("y"/"n"), one line per call.
+func seamInteractiveConfirm(t *testing.T, answers ...string) {
+	t.Helper()
+	stdinIsTTY = func() bool { return true }
+	readConfirmLine = func() (string, error) {
+		if len(answers) == 0 {
+			return "", errors.New("tests: confirmation answer sequence exhausted")
+		}
+		a := answers[0]
+		answers = answers[1:]
+		return a, nil
+	}
+}
+
+func TestUpdateRestartDeclineExitCode3(t *testing.T) {
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSource(t, "v0.0.2", testBinBytes(t))
+	seamUpdateDefaults(t, self, "0.0.1")
+	withStagedVersion(t, "0.0.2")
+	fr := &fakeRestarter{status: service.StatusRunning}
+	restartInstalledSeam(t, fr)
+	seamInteractiveConfirm(t, "y", "n") // update confirm = yes, restart confirm = NO
+
+	out, err := runUpdate(t) // no --yes: the decline must be reachable
+	var ec *ExitCodeError
+	if !errors.As(err, &ec) || ec.Code != 3 {
+		t.Fatalf("restart decline: want ExitCodeError(3), got %v\nout:\n%s", err, out)
+	}
+	if fr.restartReq != 0 {
+		t.Errorf("Restart() called %d times, want 0 after a decline", fr.restartReq)
+	}
+	if !strings.Contains(out, wantServiceCmd("restart")) {
+		t.Errorf("missing manual restart command after decline:\n%s", out)
+	}
+	assertSelfFlippedTo(t, home, self, testBinBytes(t), oldBytes) // replace DID succeed
+}
+
+func TestUpdateRestartConstructionFailureExitCode3(t *testing.T) {
+	_, self, _ := writeSelfFixture(t)
+	startFakeUpdateSource(t, "v0.0.2", testBinBytes(t))
+	seamUpdateDefaults(t, self, "0.0.1")
+	withStagedVersion(t, "0.0.2")
+	restartInstalledSeam(t, &fakeRestarter{status: service.StatusRunning})
+	serviceNew = func(service.Interface, *service.Config) (serviceRestarter, error) {
+		return nil, errors.New("no service system detected")
+	}
+
+	out, err := runUpdate(t, "--yes")
+	var ec *ExitCodeError
+	if !errors.As(err, &ec) || ec.Code != 3 {
+		t.Fatalf("serviceNew failure: want ExitCodeError(3), got %v\nout:\n%s", err, out)
+	}
+	if !strings.Contains(out, wantServiceCmd("restart")) {
+		t.Errorf("missing manual restart command after construction failure:\n%s", out)
+	}
+}
+
+// TestUpdateFileLegacyServiceAborts locks deviation note #1: --file takes the
+// SAME unconditional service gates as the GitHub path — a legacy service in
+// any state aborts with the migration block before the local file is touched
+// (the pkg path is deliberately nonexistent: the gates fire first).
+func TestUpdateFileLegacyServiceAborts(t *testing.T) {
+	cases := []struct {
+		name   string
+		byName map[string]updater.ProbeResult
+	}{
+		{
+			name: "legacy installed only",
+			byName: map[string]updater.ProbeResult{
+				updater.LegacyServiceName: {State: updater.ProbeInstalled, Desc: "installed (running)"},
+			},
+		},
+		{
+			name: "dual service",
+			byName: map[string]updater.ProbeResult{
+				buildinfo.ServeServiceName: {State: updater.ProbeInstalled, Desc: "installed (running)"},
+				updater.LegacyServiceName:  {State: updater.ProbeInstalled, Desc: "installed (stopped)"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, self, oldBytes := writeSelfFixture(t)
+			seamUpdateDefaults(t, self, "0.0.1")
+			seamProbeByName(t, tc.byName)
+
+			out, err := runUpdate(t, "--file", "no-such-pkg-anywhere.zip", "--no-verify")
+			if err == nil || !strings.Contains(err.Error(), "中止") {
+				t.Fatalf("--file: want migration abort, got %v\nout:\n%s", err, out)
+			}
+			if !strings.Contains(out, updater.LegacyServiceName) {
+				t.Errorf("migration block not printed:\n%s", out)
+			}
+			assertSelfUntouched(t, homeOf(t, self), self, oldBytes)
+		})
+	}
+}
+
+// TestUpdateDualServiceMismatchPrefersMigrationBlock locks review finding 3:
+// with BOTH services present, the migration block wins over the "path
+// mismatch" message (spec §3.2: 旧名存在任何态,无论新名状态 → 迁移块中止).
+func TestUpdateDualServiceMismatchPrefersMigrationBlock(t *testing.T) {
+	_, self, oldBytes := writeSelfFixture(t)
+	seamUpdateDefaults(t, self, "0.0.1")
+	elsewhere := filepath.Join(t.TempDir(), "elsewhere", selfFileName())
+	registeredBinaryPath = func(string) (string, error) { return elsewhere, nil }
+	seamProbeByName(t, map[string]updater.ProbeResult{
+		buildinfo.ServeServiceName: {State: updater.ProbeInstalled, Desc: "installed (running)"},
+		updater.LegacyServiceName:  {State: updater.ProbeInstalled, Desc: "installed (running)"},
+	})
+
+	out, err := runUpdate(t)
+	if err == nil || !strings.Contains(err.Error(), "中止") {
+		t.Fatalf("want migration abort, got %v\nout:\n%s", err, out)
+	}
+	if strings.Contains(err.Error(), "不一致") {
+		t.Errorf("mismatch message must yield to the migration block, got: %v", err)
+	}
+	if !strings.Contains(out, updater.LegacyServiceName) || !strings.Contains(out, "docs/deployment-modes.md") {
+		t.Errorf("migration block not printed:\n%s", out)
+	}
+	assertSelfUntouched(t, homeOf(t, self), self, oldBytes)
+}
+
+// TestUpdateHealInteractiveYesContinuesFullChain covers finding 4d: answering
+// "y" at the heal prompt performs the recovery and the run continues through
+// the whole chain to a successful replace (two confirmations answered: heal,
+// then update).
+func TestUpdateHealInteractiveYesContinuesFullChain(t *testing.T) {
+	home, self, _ := writeSelfFixture(t)
+	healedImage := []byte("healed image (was the newest .old generation)\n")
+	if err := os.WriteFile(self+".old.100", healedImage, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	startFakeUpdateSource(t, "v0.0.2", testBinBytes(t))
+	seamUpdateDefaults(t, self, "0.0.1")
+	withStagedVersion(t, "0.0.2")
+	detectHeal = func() (string, bool) { return "backup self.old.100 exists; recover with: mv ...", true }
+	seamInteractiveConfirm(t, "y", "y") // heal confirm = yes, update confirm = yes
+
+	out, err := runUpdate(t)
+	if err != nil {
+		t.Fatalf("heal-yes full chain: %v\nout:\n%s", err, out)
+	}
+	if !strings.Contains(out, "自愈完成") {
+		t.Errorf("missing heal-completed evidence line:\n%s", out)
+	}
+	// self was healed from the .old.100 image, then replaced by the staged
+	// binary; the replace's own generational backup carries the healed image.
+	b, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(b, testBinBytes(t)) {
+		t.Error("self not flipped to the staged payload after heal+update")
+	}
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPath := ""
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".old.") && e.Name() != selfFileName()+".old.100" {
+			oldPath = filepath.Join(home, e.Name())
+		}
+	}
+	if oldPath == "" {
+		t.Fatal("no generational .old backup from the replace step")
+	}
+	ob, err := os.ReadFile(oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(ob, healedImage) {
+		t.Errorf("replace backup = %q, want the healed image", ob)
+	}
+}
+
+// homeOf derives the fixture HOME from the self path (dir of self).
+func homeOf(t *testing.T, self string) string {
+	t.Helper()
+	return filepath.Dir(self)
+}
