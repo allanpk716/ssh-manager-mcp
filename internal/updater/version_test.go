@@ -41,30 +41,38 @@ func TestParseVersion(t *testing.T) {
 func TestParseVersionInvalid(t *testing.T) {
 	// "dev" first: the local-build default must be rejected so the caller
 	// fails closed to an explicit --version instead of guessing direction.
-	tests := []string{
-		"dev",
-		"",
-		"v",
-		"1",
-		"1.2",
-		"1.2.3.4",
-		"abc",
-		"1.2.x",
-		" 1.2.3",
-		"1.2.3 ",
-		"v1.2.3-",
-		"1.2.3-alpha..1",
-		"1.2.3-alpha;rm",
-		"1.2.3-rc.1\n",
-		"1.2.3@rc",
-		"99999999999999999999.0.0",      // int overflow -> reject, not clamp
-		"v1.0.0-99999999999999999999",   // R1: numeric pre id >int64 -> reject (no string-order fallback downstream)
-		"1.0.0-rc.99999999999999999999", // R1: same, inside a multi-identifier pre
-		"1.0.0-9223372036854775808",     // R1: max int64 + 1
+	tests := []struct {
+		in            string
+		wantErrSubstr string // optional: error message must contain this (pins the rejection path)
+	}{
+		{in: "dev"},
+		{in: ""},
+		{in: "v"},
+		{in: "1"},
+		{in: "1.2"},
+		{in: "1.2.3.4"},
+		{in: "abc"},
+		{in: "1.2.x"},
+		{in: " 1.2.3"},
+		{in: "1.2.3 "},
+		{in: "v1.2.3-"},
+		{in: "1.2.3-alpha..1"},
+		{in: "1.2.3-alpha;rm"},
+		{in: "1.2.3-rc.1\n"},
+		{in: "1.2.3@rc"},
+		{in: "99999999999999999999.0.0", wantErrSubstr: "is not a number"},      // triple overflow -> reject, not clamp
+		{in: "v1.0.0-99999999999999999999", wantErrSubstr: "overflows int64"},   // R1: numeric pre id >int64 -> reject (no string-order fallback downstream)
+		{in: "1.0.0-rc.99999999999999999999", wantErrSubstr: "overflows int64"}, // R1: same, inside a multi-identifier pre
+		{in: "1.0.0-9223372036854775808", wantErrSubstr: "overflows int64"},     // R1: max int64 + 1
 	}
-	for _, in := range tests {
-		if got, err := ParseVersion(in); err == nil {
-			t.Errorf("ParseVersion(%q) = %+v, want error", in, got)
+	for _, tc := range tests {
+		_, err := ParseVersion(tc.in)
+		if err == nil {
+			t.Errorf("ParseVersion(%q) = nil error, want error", tc.in)
+			continue
+		}
+		if tc.wantErrSubstr != "" && !strings.Contains(err.Error(), tc.wantErrSubstr) {
+			t.Errorf("ParseVersion(%q) error = %q, want substring %q", tc.in, err.Error(), tc.wantErrSubstr)
 		}
 	}
 }
