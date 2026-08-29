@@ -71,7 +71,7 @@
 - **未装**(`ErrNotInstalled`):放行
 - **探测机制错误**(无法判定存在性):fail-closed 中止
 
-旧名存在(任何态,无论新名状态)→ 打印迁移块并中止(不半更新,防新旧服务并存);`ErrNoServiceSystemDetected`(容器/CI 无服务管理器)→ 跳过检测直接更新。
+旧名存在(任何态,无论新名状态)→ 打印迁移块并中止(不半更新,防新旧服务并存);~~`ErrNoServiceSystemDetected`(容器/CI 无服务管理器)→ 跳过检测直接更新~~ **(勘误 2026-08-29,T7 评审发现:该哨兵在生产不可达——kardianos 在 Linux 以 `unix-systemv` 后端无条件兜底,真实容器里 sysv `Status()` 要么报机制错要么误判未装,"跳过"承诺唯一适用场景里行为随镜像漂移。**裁定:弃跳过承诺,MechanismErr 一律 fail-closed 中止**——更保守方向,无服务管理器环境(本舰队不存在)更新被拒属正确行为;T7 的 DescNoServiceSystem 标记保留但生产不可达。)**
 
 ## 4. `sshmgr update` 命令设计
 
