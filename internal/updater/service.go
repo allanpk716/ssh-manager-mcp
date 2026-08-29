@@ -22,13 +22,15 @@ import (
 	"ssh-manager-mcp/internal/buildinfo"
 )
 
-// legacyServiceName is the pre-Plan-44 registered service name. It is a
-// LITERAL on purpose: after T1 renamed the cli constant to
-// buildinfo.ServeServiceName this string has zero other occurrences in the
-// codebase — probing for it is the expected behavior, because a host that
-// still runs the pre-rename service is exactly what the migration gate must
-// detect (spec §3.2: 旧名存在(任何态)→ 打印迁移块并中止).
-const legacyServiceName = "ssh-manager-serve"
+// LegacyServiceName is the exported pre-Plan-44 registered service name so
+// the T8 update flow (cli package) can probe the legacy service without
+// re-hardcoding the literal as a second source of truth. It is a LITERAL on
+// purpose: after T1 renamed the cli constant to buildinfo.ServeServiceName
+// this string has zero other occurrences in the codebase — probing for it is
+// the expected behavior, because a host that still runs the pre-rename
+// service is exactly what the migration gate must detect (spec §3.2: 旧名存在
+// (任何态)→ 打印迁移块并中止).
+const LegacyServiceName = "ssh-manager-serve"
 
 // DescNoServiceSystem is embedded in ProbeResult.Desc when probing hit
 // kardianos ErrNoServiceSystemDetected (containers/CI with no service
@@ -110,7 +112,9 @@ func ProbeService(name string) ProbeResult {
 	svc, err := serviceNew(nopService{}, &service.Config{Name: name})
 	if err != nil {
 		if errors.Is(err, service.ErrNoServiceSystemDetected) {
-			return ProbeResult{State: ProbeMechanismErr, Desc: DescNoServiceSystem + " (" + err.Error() + ")"}
+			// Desc carries only the marker: kardianos's own error text
+			// ("No service system detected.") would duplicate it.
+			return ProbeResult{State: ProbeMechanismErr, Desc: DescNoServiceSystem}
 		}
 		return ProbeResult{State: ProbeMechanismErr, Desc: err.Error()}
 	}
@@ -380,20 +384,23 @@ func canonicalBinPath(p string) (string, bool) {
 
 // MigrationBlock returns the v0.13.0 one-time migration guidance printed when
 // the update finds the LEGACY service still registered (spec §3.2: 旧名存在 →
-// 打印迁移块并中止, 不半更新防新旧服务并存). The wording mirrors
-// docs/deployment-modes.md's runbook section verbatim — CLI output and docs
-// are one source of truth — and embeds both service names plus the three
-// commands of the serve-side migration step.
+// 打印迁移块并中止, 不半更新防新旧服务并存). This is a CONDENSED rendering —
+// it names both service names and the three serve-side commands; the
+// authoritative full runbook is docs/deployment-modes.md's ⭐ section (CLI
+// wording follows it, docs stay the single 总册). The block ends by pointing
+// at that doc so the download/SHA256 step of runbook ③ is never missed.
 func MigrationBlock() string {
-	return "检测到旧版服务「" + legacyServiceName + "」仍注册在本机——v0.13.0 一次性迁移尚未完成,本次 update 中止" +
+	return "检测到旧版服务「" + LegacyServiceName + "」仍注册在本机——v0.13.0 一次性迁移尚未完成,本次 update 中止" +
 		"(不半更新,防新旧服务并存;迁移完成后新服务 " + buildinfo.ServeServiceName + " 由 update 自动接管)。\n" +
 		"\n" +
 		"按 v0.13.0 迁移 runbook 执行(顺序不可乱:先迁 client 后升 serve):\n" +
 		"  1. ②a 存量桥迁:各 client 机 agent 从 ②a HTTP 直连姿态迁到 stdio 桥(--cache)(趁旧 serve 还在跑时完成)\n" +
 		"  2. client 机改名:sshmgr 二进制替换旧 ssh-manager(旧的最后删/改名),.mcp.json 的 command 同步改指 sshmgr\n" +
 		"  3. serve 机迁移(最后;管理员 shell),三条命令:\n" +
-		"       sc qc " + legacyServiceName + "        # Windows;记下 --addr/--tls-cert/--tls-key\n" +
+		"       sc qc " + LegacyServiceName + "        # Windows;记下 --addr/--tls-cert/--tls-key\n" +
 		"       ssh-manager serve uninstall\n" +
 		"       sshmgr serve install <照旧参数(--addr 0.0.0.0:7878 及 TLS flags 若有)>\n" +
-		"  4. 之后:sshmgr update 一条命令自续\n"
+		"  4. 之后:sshmgr update 一条命令自续\n" +
+		"\n" +
+		"完整迁移手册:docs/deployment-modes.md(含资产下载与 SHA256 核验步)\n"
 }

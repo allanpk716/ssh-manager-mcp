@@ -26,5 +26,5 @@ const Repo = "ssh-manager-mcp"
 // checks the same name the cli installs under — buildinfo is a leaf package,
 // so updater → buildinfo introduces no import cycle. The pre-rename name
 // ("ssh-manager-serve") is deliberately NOT a constant here: it exists only
-// as the updater's legacy probe target (internal/updater legacyServiceName).
+// as the updater's legacy probe target (internal/updater LegacyServiceName).
 const ServeServiceName = "sshmgr-serve"

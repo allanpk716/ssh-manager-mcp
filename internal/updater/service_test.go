@@ -123,7 +123,7 @@ func TestProbeServiceTrichotomy(t *testing.T) {
 func TestProbeServiceBothNamesIndependent(t *testing.T) {
 	byName := map[string]statusProber{
 		buildinfo.ServeServiceName: fakeProber{status: service.StatusRunning}, // new name: installed
-		legacyServiceName:          fakeProber{status: service.StatusStopped}, // old name: still installed
+		LegacyServiceName:          fakeProber{status: service.StatusStopped}, // old name: still installed
 		"ghost-serve":              fakeProber{err: service.ErrNotInstalled},  // neither
 	}
 	setServiceNew(t, func(_ service.Interface, cfg *service.Config) (statusProber, error) {
@@ -138,7 +138,7 @@ func TestProbeServiceBothNamesIndependent(t *testing.T) {
 	if got := ProbeService(buildinfo.ServeServiceName); got.State != ProbeInstalled {
 		t.Errorf("new name state = %v, want ProbeInstalled (Desc=%q)", got.State, got.Desc)
 	}
-	if got := ProbeService(legacyServiceName); got.State != ProbeInstalled {
+	if got := ProbeService(LegacyServiceName); got.State != ProbeInstalled {
 		t.Errorf("legacy name state = %v, want ProbeInstalled (Desc=%q)", got.State, got.Desc)
 	}
 	if got := ProbeService("ghost-serve"); got.State != ProbeNotInstalled {
@@ -147,16 +147,12 @@ func TestProbeServiceBothNamesIndependent(t *testing.T) {
 }
 
 func TestRegisteredBinaryPathDispatch(t *testing.T) {
-	restoreGOOS := setGOOS(t, "linux")
-	t.Cleanup(restoreGOOS)
+	t.Cleanup(setGOOS(t, "linux"))
 
 	t.Run("linux branch reads the unit file via the dir seam", func(t *testing.T) {
-		dir := t.TempDir()
-		orig := systemdUnitDir
-		systemdUnitDir = dir
-		t.Cleanup(func() { systemdUnitDir = orig })
+		setSystemdUnitDir(t, t.TempDir())
 
-		unit := filepath.Join(dir, buildinfo.ServeServiceName+".service")
+		unit := filepath.Join(systemdUnitDir, buildinfo.ServeServiceName+".service")
 		body := "[Service]\n" +
 			"ExecStart=/usr/local/bin/sshmgr serve --addr 0.0.0.0:7878\n" +
 			"Restart=on-failure\n"
@@ -174,20 +170,17 @@ func TestRegisteredBinaryPathDispatch(t *testing.T) {
 	})
 
 	t.Run("linux branch missing unit file -> error", func(t *testing.T) {
-		systemdUnitDir = t.TempDir()
+		setSystemdUnitDir(t, t.TempDir())
 		if _, err := RegisteredBinaryPath(buildinfo.ServeServiceName); err == nil {
 			t.Fatal("want error for missing unit file, got nil")
 		}
 	})
 
 	t.Run("darwin branch reads the plist via the dir seam", func(t *testing.T) {
-		setGOOS(t, "darwin")
-		dir := t.TempDir()
-		orig := launchdPlistDir
-		launchdPlistDir = dir
-		t.Cleanup(func() { launchdPlistDir = orig })
+		t.Cleanup(setGOOS(t, "darwin"))
+		setLaunchdPlistDir(t, t.TempDir())
 
-		plist := filepath.Join(dir, buildinfo.ServeServiceName+".plist")
+		plist := filepath.Join(launchdPlistDir, buildinfo.ServeServiceName+".plist")
 		body := plistTemplate("/usr/local/bin/sshmgr", "serve")
 		if err := os.WriteFile(plist, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -203,7 +196,7 @@ func TestRegisteredBinaryPathDispatch(t *testing.T) {
 	})
 
 	t.Run("windows branch delegates to the SCM seam", func(t *testing.T) {
-		setGOOS(t, "windows")
+		t.Cleanup(setGOOS(t, "windows"))
 		orig := scmQueryBinaryPath
 		scmQueryBinaryPath = func(name string) (string, error) {
 			if name != buildinfo.ServeServiceName {
@@ -223,7 +216,7 @@ func TestRegisteredBinaryPathDispatch(t *testing.T) {
 	})
 
 	t.Run("windows branch without SCM wiring -> error (fail-closed)", func(t *testing.T) {
-		setGOOS(t, "windows")
+		t.Cleanup(setGOOS(t, "windows"))
 		orig := scmQueryBinaryPath
 		scmQueryBinaryPath = nil
 		t.Cleanup(func() { scmQueryBinaryPath = orig })
@@ -234,7 +227,7 @@ func TestRegisteredBinaryPathDispatch(t *testing.T) {
 	})
 
 	t.Run("unsupported platform -> error", func(t *testing.T) {
-		setGOOS(t, "plan9")
+		t.Cleanup(setGOOS(t, "plan9"))
 		if _, err := RegisteredBinaryPath(buildinfo.ServeServiceName); err == nil {
 			t.Fatal("want error on unsupported platform, got nil")
 		}
@@ -242,20 +235,12 @@ func TestRegisteredBinaryPathDispatch(t *testing.T) {
 }
 
 func TestSystemdRegisteredBinaryPathErrors(t *testing.T) {
-	dir := t.TempDir()
-	orig := systemdUnitDir
-	systemdUnitDir = dir
-	t.Cleanup(func() { systemdUnitDir = orig })
-
-	write := func(name, body string) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name+".service"), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	setSystemdUnitDir(t, t.TempDir())
 
 	t.Run("unit without ExecStart -> error", func(t *testing.T) {
-		write("noexec", "[Service]\nType=simple\n")
+		if err := os.WriteFile(filepath.Join(systemdUnitDir, "noexec.service"), []byte("[Service]\nType=simple\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := systemdRegisteredBinaryPath("noexec"); err == nil {
 			t.Fatal("want error for unit without ExecStart, got nil")
 		}
@@ -305,20 +290,12 @@ func TestExecStartBinary(t *testing.T) {
 }
 
 func TestLaunchdRegisteredBinaryPathErrors(t *testing.T) {
-	dir := t.TempDir()
-	orig := launchdPlistDir
-	launchdPlistDir = dir
-	t.Cleanup(func() { launchdPlistDir = orig })
-
-	write := func(name, body string) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name+".plist"), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	setLaunchdPlistDir(t, t.TempDir())
 
 	t.Run("plist without ProgramArguments -> error", func(t *testing.T) {
-		write("noargs", plistTemplate("", ""))
+		if err := os.WriteFile(filepath.Join(launchdPlistDir, "noargs.plist"), []byte(plistTemplate("", "")), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := launchdRegisteredBinaryPath("noargs"); err == nil {
 			t.Fatal("want error for plist without ProgramArguments, got nil")
 		}
@@ -499,12 +476,13 @@ func TestSameBinaryPath(t *testing.T) {
 func TestMigrationBlock(t *testing.T) {
 	got := MigrationBlock()
 	for _, sub := range []string{
-		legacyServiceName,             // 旧服务名
-		buildinfo.ServeServiceName,    // 新服务名
-		"sc qc " + legacyServiceName,  // 三条命令之一:读旧参数
-		"ssh-manager serve uninstall", // 三条命令之二:卸旧
-		"sshmgr serve install",        // 三条命令之三:装新
-		"先迁 client 后升 serve",          // 顺序铁律(docs 同源措辞)
+		LegacyServiceName,                 // 旧服务名
+		buildinfo.ServeServiceName,        // 新服务名
+		"sc qc " + LegacyServiceName,      // 三条命令之一:读旧参数
+		"ssh-manager serve uninstall",     // 三条命令之二:卸旧
+		"sshmgr serve install",            // 三条命令之三:装新
+		"先迁 client 后升 serve",              // 顺序铁律(docs 同源措辞)
+		"完整迁移手册:docs/deployment-modes.md", // 唯一总册指针(块尾,含下载/SHA256 步)
 	} {
 		if !strings.Contains(got, sub) {
 			t.Errorf("MigrationBlock() missing %q\ngot:\n%s", sub, got)
@@ -519,6 +497,22 @@ func setGOOS(t *testing.T, goos string) func() {
 	orig := currentGOOS
 	currentGOOS = goos
 	return func() { currentGOOS = orig }
+}
+
+// setSystemdUnitDir / setLaunchdPlistDir swap the path seams with guaranteed
+// restore — every subtest that rewrites them goes through these.
+func setSystemdUnitDir(t *testing.T, dir string) {
+	t.Helper()
+	orig := systemdUnitDir
+	systemdUnitDir = dir
+	t.Cleanup(func() { systemdUnitDir = orig })
+}
+
+func setLaunchdPlistDir(t *testing.T, dir string) {
+	t.Helper()
+	orig := launchdPlistDir
+	launchdPlistDir = dir
+	t.Cleanup(func() { launchdPlistDir = orig })
 }
 
 // plistTemplate renders a kardianos-shaped launchd plist. Empty bin/args
