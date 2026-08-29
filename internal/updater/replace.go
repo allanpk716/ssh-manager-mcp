@@ -27,8 +27,8 @@ import (
 // to its generation backup — the staged binary could not be moved into place
 // AND the backup could not be renamed back. The system is left in the
 // recoverable-but-broken state "backup exists, canonical missing"; the error
-// message carries the manual recovery command (ren <backup> <self>) for the
-// CLI to print verbatim.
+// message carries the platform-appropriate verbatim recovery command
+// (recoverCommand) for the CLI to print verbatim.
 var ErrRollbackFailed = errors.New("replace: rollback failed — manual recovery required")
 
 // Seams for tests. Package vars solely so tests can inject failures and
@@ -322,7 +322,8 @@ func fileExists(path string) bool {
 // compares its output against wantVersion under the §4.3 normalization
 // contract (NormalizeVersionOutput on both sides). Guardrails: a 10s context
 // kills a hung binary; stdout is capped at 4KiB (a flood is not a version).
-// Any failure — unstartable, timeout, oversized output, mismatch — rejects
+// Any failure — unstartable, timeout, oversized output, empty output,
+// mismatch — rejects
 // the replacement (保留原文件,清 staged 由调用方处理).
 //
 // Returns the staged binary's normalized version, also on mismatch (for
