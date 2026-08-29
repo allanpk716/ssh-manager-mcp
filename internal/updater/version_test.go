@@ -25,6 +25,7 @@ func TestParseVersion(t *testing.T) {
 		{"1.0.0-alpha.beta.1", Version{Major: 1, Minor: 0, Patch: 0, Pre: []string{"alpha", "beta", "1"}}},
 		{"1.0.0-x-1", Version{Major: 1, Minor: 0, Patch: 0, Pre: []string{"x-1"}}},
 		{"1.0.0-0", Version{Major: 1, Minor: 0, Patch: 0, Pre: []string{"0"}}},
+		{"1.0.0-9223372036854775807", Version{Major: 1, Minor: 0, Patch: 0, Pre: []string{"9223372036854775807"}}}, // max int64: boundary of acceptance
 	}
 	for _, tc := range tests {
 		got, err := ParseVersion(tc.in)
@@ -56,7 +57,10 @@ func TestParseVersionInvalid(t *testing.T) {
 		"1.2.3-alpha;rm",
 		"1.2.3-rc.1\n",
 		"1.2.3@rc",
-		"99999999999999999999.0.0", // int overflow -> reject, not clamp
+		"99999999999999999999.0.0",      // int overflow -> reject, not clamp
+		"v1.0.0-99999999999999999999",   // R1: numeric pre id >int64 -> reject (no string-order fallback downstream)
+		"1.0.0-rc.99999999999999999999", // R1: same, inside a multi-identifier pre
+		"1.0.0-9223372036854775808",     // R1: max int64 + 1
 	}
 	for _, in := range tests {
 		if got, err := ParseVersion(in); err == nil {
@@ -89,6 +93,7 @@ func TestCompareVersionsTable(t *testing.T) {
 		{"1.0.0-1", "1.0.0-alpha", -1}, // numeric id < alpha id
 		{"1.0.0-alpha", "1.0.0-alpha", 0},
 		{"1.0.0-beta.1", "1.0.0-beta.1", 0},
+		{"1.0.0-9223372036854775806", "1.0.0-9223372036854775807", -1}, // R1: numeric path infallible up to max int64
 	}
 	for _, tc := range tests {
 		a, err := ParseVersion(tc.a)

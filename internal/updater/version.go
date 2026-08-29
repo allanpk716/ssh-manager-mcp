@@ -66,6 +66,14 @@ func ParseVersion(s string) (Version, error) {
 			if !isPreIdentifier(id) {
 				return Version{}, fmt.Errorf("invalid version %q: bad pre-release identifier %q", s, id)
 			}
+			// A numeric identifier wider than int64 is rejected (not
+			// clamped) — same philosophy as the triple fields, and it keeps
+			// CompareVersions's numeric path infallible.
+			if isNumericIdentifier(id) {
+				if _, err := strconv.Atoi(id); err != nil {
+					return Version{}, fmt.Errorf("invalid version %q: numeric pre-release identifier %q overflows int64", s, id)
+				}
+			}
 			out.Pre = append(out.Pre, id)
 		}
 	}
@@ -106,15 +114,13 @@ func CompareVersions(a, b Version) int {
 		an, bn := isNumericIdentifier(ai), isNumericIdentifier(bi)
 		switch {
 		case an && bn:
-			// Atoi can only fail on >int64 digit strings (unrepresentable
-			// in practice); fall back to string order to stay total.
-			x, xerr := strconv.Atoi(ai)
-			y, yerr := strconv.Atoi(bi)
-			if xerr == nil && yerr == nil && x != y {
+			// ParseVersion rejects numeric identifiers wider than int64,
+			// so Atoi here always succeeds — no string-order fallback (a
+			// fallback would break transitivity, e.g. "3999..." < "4").
+			x, _ := strconv.Atoi(ai)
+			y, _ := strconv.Atoi(bi)
+			if x != y {
 				return sign(x, y)
-			}
-			if ai != bi {
-				return signStr(ai, bi)
 			}
 		case an != bn:
 			if an { // numeric identifier < alphanumeric identifier
