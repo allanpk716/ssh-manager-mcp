@@ -10,3 +10,12 @@ package buildinfo
 //
 // GoReleaser sets this to the tag-derived semver (tag v1.0.0 -> "1.0.0").
 var Version = "dev"
+
+// Owner is the GitHub owner of the release repository — used by the
+// self-update flow to build the releases API URL (spec §4.1:
+// repos/allanpk716/ssh-manager-mcp/releases/...).
+const Owner = "allanpk716"
+
+// Repo is the GitHub repository name, mirroring the repo (which is also the
+// Go module path — the module path itself is NOT renamed by Plan 44).
+const Repo = "ssh-manager-mcp"
