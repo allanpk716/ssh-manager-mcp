@@ -334,8 +334,8 @@ func MigrationBlock() string            // spec §3.2 runbook 文本(cli 输出�
 
 | # | 项 | 执行者 | 完成 |
 |---|---|---|---|
-| G9 | NUC10 迁移 runbook 全流(sc qc 读参→uninstall→curl 资产+checksums 核验→解压→install→RUNNING);**若经 Linux 主机则补 mode 0755 断言**(staged 产物恰 0755——G10 在 NUC10/Windows 无 Unix mode 可断,从实落此) | 助手(MCP) | ☐ |
-| G10 | update 回路:环回假源 v0.13.0→v0.13.1-test `--yes` **提升会话**全链;断言替换+重启+probeServeHTTP 健康行+版本翻转+证据行含 base;指回真源自愈(ledger 登记注:断言 staged 产物 mode 恰 0755(Unix)——G10 实跑 NUC10/Windows 断不了,该断言移 G9 Linux 侧/CI) | 助手(MCP) | ☐ |
+| G9 | NUC10 迁移 runbook 全流(sc qc 读参→uninstall→curl 资产+checksums 核验→解压→install→RUNNING) | 助手(MCP) | ☐ |
+| G10 | update 回路:环回假源 v0.13.0→v0.13.1-test `--yes` **提升会话**全链;断言替换+重启+probeServeHTTP 健康行+版本翻转+证据行含 base;指回真源自愈(staged 产物 mode 恰 0755 的持续覆盖在 ci.yml ubuntu lane 与单测,不在本 gate——NUC10/Windows 无 Unix mode 可断) | 助手(MCP) | ☐ |
 | G11 | `.old` 清理+笔记本 client update;**断言 agent 实际 spawn 的 mcp --cache 报新版**;旧 exe 最后删 | 助手+本机 | ☐ |
 | G12 | 旧服务名矩阵:旧名注册→迁移块中止;双服务并存→中止;failed 态→放行;机制错误→fail-closed | 助手(MCP) | ☐ |
 
