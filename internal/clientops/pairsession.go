@@ -442,7 +442,9 @@ func (s *PairSession) Finish(ctx context.Context) error {
 		case 419:
 			return fmt.Errorf("pairing finish: device name %q is in use (419) — owner 在 broker 侧执行 `sshmgr cache-tokens revoke %s` 后重试", s.opts.Instance, s.opts.Instance)
 		default:
-			return fmt.Errorf("pairing finish: HTTP %d %s", res.StatusCode, clipStr(msg, 200))
+			// 未枚举的非 200(5xx/网关干扰):serve 可能已铸码后失败,两态不可分
+			// → 双路径恢复指引。
+			return fmt.Errorf("pairing finish: HTTP %d %s\n%s", res.StatusCode, clipStr(msg, 200), pairRecoverHint(s.opts.Instance))
 		}
 	}
 	var fr pairFinishResponse
@@ -455,11 +457,12 @@ func (s *PairSession) Finish(ctx context.Context) error {
 	res.Body.Close()
 	sealed, err := base64.RawURLEncoding.DecodeString(fr.Sealed)
 	if err != nil {
-		return fmt.Errorf("pairing finish: sealed is not base64url: %w", err)
+		// 200 已收、信封字段损坏 = serve 已提交、客户端拿到不可用凭据 → 双路径。
+		return fmt.Errorf("pairing finish: sealed is not base64url: %w\n%s", err, pairRecoverHint(s.opts.Instance))
 	}
 	pt, err := pairing.OpenCreds(s.kCreds, sealed)
 	if err != nil {
-		return fmt.Errorf("pairing finish: sealed envelope failed to open: %w", err)
+		return fmt.Errorf("pairing finish: sealed envelope failed to open: %w\n%s", err, pairRecoverHint(s.opts.Instance))
 	}
 	var env pairCredsEnvelope
 	if err := json.Unmarshal(pt, &env); err != nil {

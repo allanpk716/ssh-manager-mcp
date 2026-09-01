@@ -915,6 +915,100 @@ func (d *dropBodyWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+// swallowSealedWriter 丢弃 handler 写出的真信封(客户端拿到 200 + 路由层回填
+// 的损坏 sealed)= serve 已提交、客户端拿到不可用凭据的注入形态。
+type swallowSealedWriter struct{ http.ResponseWriter }
+
+func (s *swallowSealedWriter) Write(b []byte) (int, error) { return len(b), nil }
+
+// TestPairFinish_FailurePathsCarryDoublePathHint 钉住 finish 后提交失败三站的
+// 双路径指引(fix round 1 Important #1):未枚举非 200(default HTTP %d——如
+// serve 可能已铸码后的 5xx/网关干扰)、sealed 非 base64url、OpenCreds 解封失败
+// ——三者的错误文案都必须尾缀 pairRecoverHint。
+func TestPairFinish_FailurePathsCarryDoublePathHint(t *testing.T) {
+	assertHint := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("the injected finish failure must fail")
+		}
+		for _, want := range []string{"pairing finish", "直接重跑 `sshmgr pair --force`", "sshmgr cache-tokens revoke"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the failure wording must carry the double-path hint (%q), got %v", want, err)
+			}
+		}
+	}
+
+	t.Run("non_200_default_branch", func(t *testing.T) {
+		// fakePairServer 无 /pair/finish 处理器 → 404 落 default 分支;poll 注入
+		// 首轮 200 = 批准到达。
+		fs := newFakePairServer(t, http.StatusOK)
+		s, err := NewPairSession(sessionOpts(fs.url, fs.spki, "httpd-dev"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		if err := s.Enroll(ctx); err != nil {
+			t.Fatalf("Enroll: %v", err)
+		}
+		if err := s.WaitApproval(ctx, nil); err != nil {
+			t.Fatalf("WaitApproval: %v", err)
+		}
+		err = s.Finish(ctx)
+		if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+			t.Fatalf("the unenumerated non-200 must hit the default branch, got %v", err)
+		}
+		assertHint(t, err)
+	})
+
+	// corrupt 腿共用同一注入形态:运行中替换 handler,/pair/finish 的真信封被
+	// 吞掉、回填损坏 sealed(200 + 合法 JSON)。
+	for _, tc := range []struct {
+		name    string
+		sealed  string
+		wantErr string
+	}{
+		{"sealed_not_base64url", "!!!", "sealed is not base64url"},
+		// 合法 base64url 的乱码密文:OpenCreds(AES-GCM)必解不开。
+		{"sealed_opencreds_fail", base64.RawURLEncoding.EncodeToString(make([]byte, 48)), "sealed envelope failed to open"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newPairingServer(t)
+			dir := t.TempDir()
+			withDEK(t)
+			withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+			ctx := context.Background()
+
+			inner := srv.srv.Config.Handler
+			srv.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/pair/finish" {
+					inner.ServeHTTP(&swallowSealedWriter{ResponseWriter: w}, r)
+					w.Header().Set("Content-Type", "application/json")
+					blob, _ := json.Marshal(pairFinishResponse{Sealed: tc.sealed})
+					_, _ = w.Write(blob)
+					return
+				}
+				inner.ServeHTTP(w, r)
+			})
+
+			s, err := NewPairSession(sessionOpts(srv.url, srv.spki, tc.name+"-dev"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Enroll(ctx); err != nil {
+				t.Fatalf("Enroll: %v", err)
+			}
+			if err := s.WaitApproval(ctx, nil); err != nil {
+				t.Fatalf("WaitApproval: %v", err)
+			}
+			err = s.Finish(ctx)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want %q, got %v", tc.wantErr, err)
+			}
+			assertHint(t, err)
+		})
+	}
+}
+
 // TestPairForce_FinishTruncated_DoublePathHint_RerunAdmitted 注入 finish 响应
 // 截断(serve 已铸码、客户端 200 到手但信封不完整):错误文案含双路径指引;
 // 且 serve 端确已提交(active-从未pull)→ 重跑同名 enroll 必须被放行 = 全链
