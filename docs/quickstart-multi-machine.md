@@ -105,7 +105,7 @@ sshmgr pair --instance laptop
 
 - **指纹钉死**：工作机连 serve 时校验证书公钥 == 钉死的指纹，不等即拒。pair 场景指纹自动交付（**首次连接即校验，零 MITM 窗口**）。
 - **无锚默认拒连**：`pair --url` 直连又不带 `--pin` → **默认拒绝**（显式 `--allow-tofu` 才接受无锚通道，仅限受控环境——它没有完整 MITM 防护，见 [threat-model.md](./threat-model.md) R12）；`cache pull` 没拿到指纹同样 **hard-fail**。防的是打错别字静默降级。
-- **SAS 人闸 + 机械地址校验**：批准前 owner 对照 client 屏 SAS 与批准行 name@url；serve 同时机械核对 client 声明的连接地址是否本机地址（不符 → ⚠ + 强制显式覆盖）——假 discovery / 中继/研磨型 MITM 过不了这两道。
+- **SAS 人闸 + 机械地址校验**：批准前 owner 将批准行 name@url+SAS 与 client 屏三件套逐位对照；serve 同时机械核对 client 声明的连接地址是否本机地址（不符 → ⚠ + 强制显式覆盖）——假 discovery / 中继/研磨型 MITM 过不了这两道。
 - 详见 [`threat-model.md`](./threat-model.md) 的 pairing 节。
 
 ---
