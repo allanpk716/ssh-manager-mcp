@@ -74,3 +74,7 @@
 - **doctor 多实例感知（维持登记，仍跟随 Plan 38-doctor 体系，不入 Plan 40 批1/批2）**：doctor 感知命名实例（枚举全部实例诊断）——目前不感知：仅命名实例的机器 doctor 的 client-cache 检查会报"cache 缺失"（roles 已修为 client；不静默但属误报）。
 - **明确不做（YAGNI，Q11 拍板）**：`--cache-max-age`（cacheMaxAge）**不进 `cache.config.json`**——持久化只搬 MAX_OFFLINE。理由：cacheMaxAge 是进程内 lazy-pull 节流参数，无"跨进程策略一致性"病灶（MAX_OFFLINE 的 env 铺不满所有进程问题与它不同构）。
 - **残余登记（如实）**：① 存量机器**永不自动迁移**实例目录——自动归位仅第二批起、且只作用于首次 enroll；要进实例形态需显式 `--instance` 重新 enroll（零迁移承诺的有意代价）；② 同机恶意进程可读全部实例材料——与单实例现状同级（L1+ 文件 ACL 不挡同机），非新增；③ 跨进程 casefold 双插窗口——查重已入事务 + 进程内 `MaxOpenConns(1)` 串行，两个独立进程恰好同时 add 互为大小写变体的理论窗口仍在（owner 单人操作面接受；发生时 client 物理碰撞检测兜底拦截）。
+
+## Plan 45 真机验收反馈登记（2026-09-01，GW1 进行中）
+
+- **配对向导表单两态分流前置到表单层（owner 定案：方案 B 两级条件表单；时机 = GW1-GW4 测完一批改，一次发版）**：现状把"LAN 发现（地址留空，pin 由 discovery 响应自动携带，TLS 硬校验自动成立）/ 手动直连（URL+pin 必填——TUI 无 TOFU 开关，`--allow-tofu` 为 CLI 专属）"两套信任模式混在一张静态表单（newPWForm），分流靠提交后 `NewPairSession` 会话层校验才暴露——GW1 实测 owner 在 pin 字段困惑"要不要填/填啥"。定案形态：一级只问模式（LAN 发现 / 手动直连）→ 选直连才展开 URL+pin（pin 必填+指纹来源提示）；选发现则两项根本不出现，直接进 pwDiscovering。huh v2 无字段级显隐——拆两级表单串联（失败路径重建表单纪律沿用 T2-R1 huh 死锁教训）。
