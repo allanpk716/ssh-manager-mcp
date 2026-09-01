@@ -2,11 +2,15 @@ package tui
 
 // pairing.go — broker TUI 的 Pairing 批准页(Plan 42 批1 T8,spec §3.3-3)。
 //
-// 密钥隔离裁决(控制器,覆盖 brief「三件套同屏」原文):SAS 推导需要 serve 进程
-// 内存里的 X25519 私钥,本进程(TUI/CLI)只有 store 直连——因此批准面显示
-// name+target_url 两件 + 「SAS 码见 client 屏幕」提示行,owner 对照 client 屏与
-// 本行两件后批准,绝不伪造第三件。机械地址校验(ForeignTarget,批1 T5)在此
-// 复算:目标 ≠ 本机地址 → 表单顶部 ⚠ + 必须键入 OVERRIDE 才能提交。
+// SAS 双屏比对(2026-09-01 裁决:恢复 spec rev4:68 冻结原文,撤销 rev4:69
+// 的降级勘误):serve 在 enroll 时即持有 X25519 私钥与请求里的 client_pub,
+// 当场派生 6 位 SAS 落 pairing_pending 行(跨进程共享总线);本页直读真值,
+// 与 client 屏各显示同一行三件套 `<name> @ <target_url> SAS <6位>`,owner
+// 逐位比对一致才批准。密钥材料(priv/kAck/kCreds)仍只在 serve 进程内存,
+// 本进程只有 store 直连。行缺 SAS(版本错配/旧行)→ ⚠ 警示并建议拒绝——
+// 绝不静默回退到抓不住 MITM 的 name/url 两件套对照(name/url 是未认证的
+// enroll 输入,MITM 转发时天然一致)。机械地址校验(ForeignTarget,批1 T5)
+// 在此复算:目标 ≠ 本机地址 → 表单顶部 ⚠ + 必须键入 OVERRIDE 才能提交。
 //
 // 所有裁决经 store CAS(ApprovePairing/RejectPairing 的时间谓词事务),与 serve
 // 进程跨进程共享同一张 pairing_pending 表。
@@ -134,6 +138,19 @@ func (p *pairingPage) Rows() []string {
 // approve/reject accept this hex form).
 func pairingIDHex(p store.PendingPairing) string { return hex.EncodeToString(p.ID) }
 
+// sasValue renders the row's SAS piece for the three-piece line: the real
+// 6-digit code (serve derived it at enroll and landed it in the row — a
+// server-computed value, not unauthenticated enroll input, so no stripRow),
+// or the no-SAS warning when the row predates the 2026-09-01 serve (version
+// skew): never a fabricated code, never a silent fallback to the two-piece
+// comparison that cannot catch a MITM.
+func sasValue(p store.PendingPairing) string {
+	if s := strings.TrimSpace(p.SAS); s != "" {
+		return s
+	}
+	return "⚠ 行缺 SAS——serve 版本过旧或行损坏,无法比对,建议拒绝(d)后重新配对"
+}
+
 func (p *pairingPage) Detail() string {
 	row := p.current()
 	if row == nil {
@@ -156,7 +173,7 @@ func (p *pairingPage) Detail() string {
 		"Hint    " + orDash(stripRow(strings.TrimSpace(row.ProfileHint))),
 		"窗口    " + pairingWindowLabel(*row, time.Now().Unix()),
 		"标记    " + marks,
-		"SAS     见 client 屏幕(对照本行名称/地址一致后批准)",
+		"SAS     " + sasValue(*row) + "  (与 client 屏逐位一致后批准)",
 	}, "\n")
 }
 
@@ -209,11 +226,13 @@ func validatePairingOverride(override string, foreign bool) error {
 // newPairingApproveForm builds the approval form: profile select (预选
 // pair.default_profile) plus — only on a foreign target — the big-⚠ copy and
 // the OVERRIDE input. The gate lives in the field's Validate, so the form
-// cannot complete without it.
+// cannot complete without it. The description carries the frozen three-piece
+// line `<name> @ <target_url> SAS <6位>` (spec rev4:68) — the SAS is the row's
+// real server-derived value.
 func newPairingApproveForm(p *store.PendingPairing, profiles []*models.Profile, ap *pairingApproval) *huh.Form {
 	foreign := mcpserver.ForeignTarget(p.TargetURL)
-	desc := fmt.Sprintf("%s @ %s  ·  来源 %s\nSAS 码见 client 屏幕——与本行名称/地址对照一致后再批准。",
-		stripRow(p.Name), stripRow(p.TargetURL), orDash(p.SourceIP))
+	desc := fmt.Sprintf("%s @ %s SAS %s  ·  来源 %s\n与 client 屏 SAS 逐位比对一致后再批准。%s",
+		stripRow(p.Name), stripRow(p.TargetURL), sasValue(*p), orDash(p.SourceIP), sasCompareNote(*p))
 	var fields []huh.Field
 	if foreign {
 		desc = "⚠ 配对声明目标 ≠ 本机地址(疑似中继/假 discovery/错误网络)。\n\n" + desc
@@ -225,11 +244,20 @@ func newPairingApproveForm(p *store.PendingPairing, profiles []*models.Profile, 
 	return huh.NewForm(huh.NewGroup(fields...).Description(desc))
 }
 
+// sasCompareNote appends the missing-SAS warning suffix when the row carries
+// no SAS (version skew): the comparison is IMPOSSIBLE on this row, so say so
+// instead of pretending the two-piece line suffices.
+func sasCompareNote(p store.PendingPairing) string {
+	if strings.TrimSpace(p.SAS) == "" {
+		return "\n⚠ 本行无 SAS,无法与 client 屏比对——建议拒绝(d)后让设备重新配对。"
+	}
+	return ""
+}
+
 // submitPairingApproval runs the CAS approve AFTER the form closes. The
 // OVERRIDE gate is re-checked here (defense in depth — the action closure is
 // the only path that touches the store, and it must not trust its callers).
-// The status line names the two displayable pieces and points at the client
-// screen for the SAS — never a fabricated code.
+// The status line repeats the three-piece line with the row's real SAS.
 func submitPairingApproval(st *store.Store, p *store.PendingPairing, ap *pairingApproval) tea.Cmd {
 	return doAction(st, func() (string, error) {
 		if st == nil || p == nil {
@@ -248,8 +276,8 @@ func submitPairingApproval(st *store.Store, p *store.PendingPairing, ap *pairing
 		if !ok {
 			return "", errors.New("批准未生效——该配对已过期或已被处理(CAS 未命中),刷新后重试")
 		}
-		return fmt.Sprintf("已批准 %s @ %s (对照 client 屏 SAS 后批准)——client 端 120 秒内完成配对",
-			stripRow(p.Name), stripRow(p.TargetURL)), nil
+		return fmt.Sprintf("已批准 %s @ %s SAS %s——client 端 120 秒内完成配对",
+			stripRow(p.Name), stripRow(p.TargetURL), sasValue(*p)), nil
 	})
 }
 

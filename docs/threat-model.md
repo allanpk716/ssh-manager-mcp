@@ -50,7 +50,7 @@ Plan 42 批1 给 serve 新增两个网络面：**UDP 7878 discovery**（默认�
 - **pin 已知通道（主路径：discovery offer 自带 / `--pin` 显式）**：pair 全部 HTTP 走 `pinningTransport(pin)`——TLS 层 SPKI 常时硬校验，**握手期拒断，凭据不上行**。换钥型 MITM 在发 enroll 之前就死了。
 - **TOFU 逃生门（`--url` 且无 `--pin`）**：**默认拒绝**；显式 `--allow-tofu` 才接受无锚通道——**该路径无完整 MITM 防护**（SAS 可被双端换钥者离线研磨、且无 TLS 锚），**R12 登记**为逃生门残余：默认拒绝、显式 opt-in、仅限受控环境；主路径不受影响。
 - **机械地址校验（serve 侧，自动）**：serve 核对 client 声明的 `target_url` 的 host 是否 ∈ 本机地址集合（`LocalNonLoopbackIPs()` + hostname）——不符（假 discovery、研磨型换钥 MITM、错误网络）→ 批准界面大字 ⚠「配对声明目标 ≠ 本机地址」+ **拒绝常规批准**，仅显式覆盖可用（CLI `serve pair approve --allow-foreign-url`；TUI 键入大写 `OVERRIDE`）。**不依赖 owner 记 IP**——攻击者要让 client 物理连到自己，target_url 必然暴露非本机地址。这是防 SAS 研磨/假 discovery 的**机械化杀招**。
-- **人闸**：批准动作 + client 屏 SAS 与批准行 name@url 对照（批准面不显示 SAS——它派生自 serve 进程内存密钥态，批准进程物理不可算，也不伪造）。限速（enroll 5/min、poll 30/min、finish 5/min per-IP，env 可调）+ pending 配额（per-IP 2 / 全局 32）挡穷举；双窗口（enroll→批准 10min、批准→finish 120s）以**事务内时间谓词**强制，过期未清理的行不可批准/finish；一次性设备码 + delivered 重放上限（10 次）挡重放。
+- **人闸**：批准动作 + **双屏 SAS 逐位比对**（2026-09-01 起：serve 在 enroll 时即持有临时私钥与请求内的 client_pub，当场派生 SAS 落 `pairing_pending` 行,批准面直读同屏显示三件套——此前「批准面不显示 SAS、对照 name@url 两件」的形态已废,两件对照对 MITM 无感;行缺 SAS(serve 版本错配)→ ⚠ 警示并建议拒绝。落库的仅是本就印在人眼屏幕上的 6 位比对码,私钥/K_ack/K_creds 仍只在 serve 进程内存,audit 白名单不变）。限速（enroll 5/min、poll 30/min、finish 5/min per-IP，env 可调）+ pending 配额（per-IP 2 / 全局 32）挡穷举；双窗口（enroll→批准 10min、批准→finish 120s）以**事务内时间谓词**强制，过期未清理的行不可批准/finish；一次性设备码 + delivered 重放上限（10 次）挡重放。
 
 **透明中继与 R10（owner 拍板接受）。** 透明中继转发配对流量时 SAS 一致、双屏对照通过——防线 = target_url 双屏比对 + 机械校验（中继者地址 ≠ 本机地址 → ⚠）。**凭据不泄**的论证：pin 已知路径上 TLS 在握手期以 SPKI 硬校验拒断任何换钥者（中继者只能转发密文，读不了 TLS 内文）；finish 下发的凭据信封本身是 AES-256-GCM（键派生自 DH，中继者非参与方则不可得）。残余 = **位置攻击**（DoS、url 钉死、流量分析——知道配对在发生）——**R10 接受**。
 

@@ -321,7 +321,7 @@ sshmgr pair --instance laptop
 1. **发现**（可跳过）：client 对本机所有非环回 IPv4 接口广播 UDP 7878 probe；serve **只单播回请求源**一条 offer（`name` + SPKI 指纹 + TCP 端口——零敏感字段）。多台 serve 同时在网时列清单供选（含 name@addr:port 与指纹前 16 字符）。拿不到 offer（防火墙挡 UDP/跨网段）就走 `--url` 直指。
 2. **连接（pin 分级）**：pin 已知（discovery offer 自带 / `--pin` 显式）→ 全程 TLS 层 SPKI 硬校验（不匹配即中止，主防线）；`--url` 直连且无 `--pin` → **默认拒绝**，显式 `--allow-tofu` 才接受无锚通道（TOFU 逃生门，见 [threat-model.md](./threat-model.md) R12）。
 3. **enroll → SAS 三件套**：client 生成临时密钥对 + 随机 id，`POST /pair/enroll`；serve 应答后 client **立即算出并在本屏显示**同一行三件套：`<name> @ <target_url> SAS <6位数字>`。**SAS 绑定整条 transcript 与密钥材料**——pin 已知通道（discovery / `--pin`）下，换钥型 MITM 在 TLS 握手期即被指纹校验拒断；TOFU 逃生通道（`--allow-tofu`）无此防护，仅受三件套人核与机械地址校验约束——受控环境专用（[threat-model.md](./threat-model.md) R12）。pending 队列存 store 表（跨进程共享，serve 重启即作废 in-flight）。
-4. **批准（人闸 + 机械校验）**：owner 在 **broker TUI 的 Pairing 页**（或 **`serve pair ls / approve / reject`** CLI 兜底）看到待批准行：`<name> @ <target_url> · 来源IP · hint · 剩余秒`。**批准面显示的是 name@url 两件 + 「SAS 码见 client 屏幕」提示**（SAS 派生需要 serve 进程内存里的密钥态，TUI/CLI 批准进程物理不可算，也不该伪造）——批准者对照 **client 屏的 SAS** 与 **批准行的 name@url** 三项一致后才批准。**机械地址校验**：serve 核对 client 声明的 `target_url` 是否为本机地址（非环回 IP 集 + hostname）——不符（疑似中继/假 discovery/错误网络）→ 大字 ⚠ 且拒绝常规批准，仅显式覆盖可用（CLI `serve pair approve --allow-foreign-url`；TUI 键入大写 `OVERRIDE`）。owner 选 profile（`pair.default_profile` 预选）→ CAS 批准，开 **120 秒** finish 窗口（enroll 后 **10 分钟**内不批准即过期作废）。
+4. **批准（人闸 + 机械校验）**：owner 在 **broker TUI 的 Pairing 页**（或 **`serve pair ls / approve / reject`** CLI 兜底）看到待批准行。**批准面同屏显示三件套 `<name> @ <target_url> SAS <6位>`**——serve 在 enroll 时就算好 SAS 落入行内（`pairing_pending.sas`，跨进程共享），批准面直读真值；owner 将批准行的 SAS 与 **client 屏的 SAS** **逐位比对一致后才批准**。行缺 SAS（serve 版本错配/旧行）→ ⚠ 警示并建议拒绝（绝不静默回退到对 MITM 无感的 name/url 两件对照——name/url 是未认证的 enroll 输入，MITM 转发时天然一致）。**机械地址校验**：serve 核对 client 声明的 `target_url` 是否为本机地址（非环回 IP 集 + hostname）——不符（疑似中继/假 discovery/错误网络）→ 大字 ⚠ 且拒绝常规批准，仅显式覆盖可用（CLI `serve pair approve --allow-foreign-url`；TUI 键入大写 `OVERRIDE`）。owner 选 profile（`pair.default_profile` 预选）→ CAS 批准，开 **120 秒** finish 窗口（enroll 后 **10 分钟**内不批准即过期作废）。
 5. **finish（凭据自动下发）**：client 2s 轮询到 approved 后确认 finish（120s 内）；serve 在**单个事务**里铸设备码 + 建/复用 project（`pair-<名>`）+ 签 token + 落审计行，以 AES-256-GCM 信封返回 `{spki, profile, device_code, project_token, max_offline}`。
 6. **先落盘，后首拉**：client 把 `cache.auth.json`（url+设备码+pin）+ `cache.config.json`（`max_offline`，缺省 24h）+ **`pair.<名>.mcp.json`**（完整 `.mcp.json` 片段，env.SSHMGR_TOKEN = 真值，0600）全部落盘**之后**才首拉——**首拉失败零丢失**：修复后重跑 `cache pull --instance <名>`，`.mcp.json` 从产物文件抄（或当初用 `--write-mcp <path>` 已直落）。终端**零完整凭据**（打印片段用 `<project-token>` 占位符，真值只在产物文件里）。
 7. **收尾**：产物片段抄进 agent 的 `.mcp.json`（形态 = 下面「手工 enroll」Step 2 的 cache 形态；`--write-mcp` 则已就位），重启 Claude Code 即用。
@@ -337,7 +337,7 @@ sshmgr pair --instance laptop --force                           # 同名重配�
 
 # broker 机（批准）：
 serve pair ls                                   # 待批准队列（name/@url/来源IP/hint/窗口/⚠标记）
-serve pair approve laptop --profile team-a      # 批准（输出 '<name> @ <url> (对照 client 屏 SAS 后批准)'）
+serve pair approve laptop --profile team-a      # 批准（输出三件套 '<name> @ <url> SAS <6位>'）
 serve pair approve laptop --profile team-a --allow-foreign-url   # 机械校验 ⚠ 时的显式覆盖
 serve pair reject laptop                        # 拒绝（终态，该请求永远无法再 enroll）
 ```

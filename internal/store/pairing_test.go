@@ -814,3 +814,90 @@ func touchTokenForPull(t *testing.T, s *Store, name string) {
 		t.Fatal(err)
 	}
 }
+
+// TestPairingSASRoundTrip: the 2026-09-01 SAS-lands-in-the-row fix — a row's
+// sas column round-trips through AddPendingPairing/ListPendingPairing verbatim
+// (the approval surfaces read the real code from exactly this field).
+func TestPairingSASRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	p := mkPending(7, "laptop", time.Now().Unix()+600)
+	p.SAS = "314159"
+	if err := s.AddPendingPairing(p, 0, 0); err != nil {
+		t.Fatalf("AddPendingPairing: %v", err)
+	}
+	list, err := s.ListPendingPairing()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListPendingPairing = %v, %v (want 1 row)", list, err)
+	}
+	if list[0].SAS != "314159" {
+		t.Fatalf("SAS must round-trip through the row, got %q", list[0].SAS)
+	}
+}
+
+// oldShapePairingPending is the pre-2026-09-01 shape: 18 columns, no sas.
+const oldShapePairingPending = `
+CREATE TABLE pairing_pending (
+  id BLOB PRIMARY KEY, name TEXT NOT NULL, target_url TEXT NOT NULL,
+  client_pub BLOB NOT NULL, cnonce BLOB NOT NULL, server_pub BLOB, snonce BLOB, sig BLOB,
+  profile_hint TEXT NOT NULL DEFAULT '', replace_inactive INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'pending', profile TEXT NOT NULL DEFAULT '', source_ip TEXT NOT NULL DEFAULT '',
+  enroll_deadline INTEGER NOT NULL, approved_deadline INTEGER NOT NULL DEFAULT 0,
+  delivered_sealed BLOB, replay_count INTEGER NOT NULL DEFAULT 0
+);
+`
+
+// TestMigrateAddsPairingSASColumn: an old-shape DB (pairing_pending WITHOUT
+// sas) upgrades in place via Open's migrate(); its pre-existing row reads back
+// SAS=” (the no-SAS warning state for rows written by an older serve), and
+// reopening is a no-op. New writes carrying a SAS succeed post-migration.
+func TestMigrateAddsPairingSASColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-pair.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(oldShapePairingPending); err != nil {
+		t.Fatal(err)
+	}
+	// Seed one live pre-migration row (state pending, enroll window open).
+	oldID := bytes.Repeat([]byte{6}, 32)
+	if _, err := db.Exec(
+		`INSERT INTO pairing_pending (id,name,target_url,client_pub,cnonce,state,source_ip,enroll_deadline)
+		 VALUES (?,?,?,?,?,'pending','10.0.0.9',?)`,
+		oldID, "legacy", "https://10.0.0.5:7878", bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 16),
+		time.Now().Add(10*time.Minute).Unix(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	mk := make([]byte, 32)
+	randRead(t, mk)
+	s, err := Open(path, mk) // runs migrate()
+	if err != nil {
+		t.Fatalf("Open after migrate: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if !hasColumn(t, s.db, "pairing_pending", "sas") {
+		t.Fatal("migrate did not add pairing_pending.sas")
+	}
+	list, err := s.ListPendingPairing()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("legacy row must survive migration, got %d rows (%v)", len(list), err)
+	}
+	if list[0].SAS != "" {
+		t.Fatalf("legacy row must read back SAS='' (the missing-SAS state), got %q", list[0].SAS)
+	}
+	// Post-migration writes carry a SAS fine.
+	fresh := mkPending(5, "newdev", time.Now().Unix()+600)
+	fresh.SAS = "271828"
+	if err := s.AddPendingPairing(fresh, 0, 0); err != nil {
+		t.Fatalf("post-migrate AddPendingPairing with SAS: %v", err)
+	}
+	// Reopen: migrate runs again → no-op, not "duplicate column".
+	s2, err := Open(path, mk)
+	if err != nil {
+		t.Fatalf("reopen (migrate again) failed: %v", err)
+	}
+	t.Cleanup(func() { s2.Close() })
+}

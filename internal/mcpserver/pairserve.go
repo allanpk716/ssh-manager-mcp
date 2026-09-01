@@ -246,9 +246,14 @@ type pairEnrollRequest struct {
 }
 
 // handlePairEnroll validates, mints the server's ephemeral X25519 pair,
-// signs the transcript with the serve cert key, lands the pending row (the
-// ONLY side effect) and answers the three public values so the client can
-// show its three-piece SAS line immediately (spec §3.3-1 ④).
+// signs the transcript with the serve cert key, derives the 6-digit SAS from
+// its in-memory private key + the request's client_pub (both in hand at this
+// instant — no client cooperation needed) and lands it IN the pending row
+// (the cross-process bus the approval surfaces read; key material itself
+// never leaves this process), then answers the three public values so the
+// client can show its three-piece SAS line immediately (spec §3.3-1 ④).
+// A low-order/garbage client_pub fails ECDH right here → 400 (previously it
+// surfaced only at finish).
 func (r *ServeRunner) handlePairEnroll(w http.ResponseWriter, req *http.Request) {
 	var in pairEnrollRequest
 	if !pairDecode(w, req, &in) {
@@ -323,6 +328,24 @@ func (r *ServeRunner) handlePairEnroll(w http.ResponseWriter, req *http.Request)
 	transcript := buildPairTranscript(id, []byte(in.Name), []byte(in.TargetURL), clientPub, cnonce, serverPub, snonce)
 	sig := ed25519.Sign(r.pairSigner, transcript)
 
+	// SAS 落行(2026-09-01,撤销 spec rev4:69 的降级勘误):此刻 priv(刚生成)
+	// 与 clientPub(请求体)都在手,当场派生两侧一致的 6 位比对码随行落库,
+	// 批准面(TUI/CLI/批2 Web)经 pairing_pending 读真值做三件套双屏比对。
+	// 落库的只有 SAS 本身——priv/kAck/kCreds 仍只活在 serve 进程内存。
+	// 低阶/垃圾公钥在 ECDH 处即拒(400),不再拖到 finish 才暴露。
+	clientPK, err := ecdh.X25519().NewPublicKey(clientPub)
+	if err != nil {
+		http.Error(w, "client_pub is not a valid X25519 public key", http.StatusBadRequest)
+		return
+	}
+	ikm, err := priv.ECDH(clientPK)
+	if err != nil {
+		http.Error(w, "client_pub is not a valid X25519 point (low-order?)", http.StatusBadRequest)
+		return
+	}
+	_, kCreds := pairing.DeriveKeys(ikm, transcript)
+	sas := pairing.SAS(transcript, kCreds)
+
 	now := time.Now().Unix()
 	row := &store.PendingPairing{
 		ID:              id,
@@ -333,6 +356,7 @@ func (r *ServeRunner) handlePairEnroll(w http.ResponseWriter, req *http.Request)
 		ServerPub:       serverPub,
 		Snonce:          snonce,
 		Sig:             sig,
+		SAS:             sas,
 		ProfileHint:     in.ProfileHint,
 		ReplaceInactive: replaceInactive,
 		State:           "pending",
