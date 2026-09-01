@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -134,5 +135,135 @@ func TestClient_FilterLocksActions(t *testing.T) {
 	}
 	if got.list.FilterInput.Value() != "s" {
 		t.Fatalf("the keypress must land in the filter input: %q", got.list.FilterInput.Value())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Plan 45 T3: 配对向导接线 — 完成换槽刷新 / Esc 退回 / [p] 重配入口 / footer
+// ---------------------------------------------------------------------------
+
+// TestClientModel_WizardDoneSwitchesSlot: pairWizardDoneMsg carries the freshly
+// paired instance — the session switches to THAT slot and the hand-back
+// re-reads it (instancePickedMsg semantics; the slot is seeded with a
+// distinguishable server name so a routing mix-up cannot pass).
+func TestClientModel_WizardDoneSwitchesSlot(t *testing.T) {
+	base := mkInstanceDir(t, "agentA")
+	mem := tuiWithDEK(t)
+	dek, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.Set(dek); err != nil {
+		t.Fatal(err)
+	}
+	seedTUISlot(t, filepath.Join(base, "instances", "agentA"), "agentA-dev", "paired-srv", dek)
+
+	m := newClientModelForGate(t)
+	m.overlay = &spyOverlay{} // the gate must not swallow the wizard's done msg
+	nm, cmd := m.Update(pairWizardDoneMsg{instance: "agentA"})
+	cm := nm.(clientModel)
+	if cm.instance != "agentA" {
+		t.Fatalf("the wizard's instance must become the session slot, got %q", cm.instance)
+	}
+	if cm.overlay != nil {
+		t.Fatalf("done must close the wizard overlay, got %T", cm.overlay)
+	}
+	if cm.err != nil {
+		t.Fatalf("done must clear the panel error, got %v", cm.err)
+	}
+	ready, ok := cmd().(dataReadyMsg)
+	if !ok {
+		t.Fatalf("the hand-back must re-read that slot (refreshDataCmdFor), got cmd()=%T", cmd())
+	}
+	if ready.instance != "agentA" {
+		t.Fatalf("the refresh reply must carry the new slot, got %q", ready.instance)
+	}
+	if len(ready.snap.Servers) != 1 || ready.snap.Servers[0].Name != "paired-srv" {
+		t.Fatalf("refresh must have read agentA's OWN snapshot, got %+v", ready.snap.Servers)
+	}
+}
+
+// TestClientModel_WizardClosedReturnsToPage: Esc at any wizard step lands back
+// on the client panel — overlay dropped, slot untouched, no refresh cmd (a
+// zero-residue abort never touched the slot; if a mid-flight force abort left
+// the slot half-cleaned, the next [s]/refresh surfaces the honest error).
+func TestClientModel_WizardClosedReturnsToPage(t *testing.T) {
+	m := newClientModelForGate(t)
+	m.instance = "agentA"
+	m.overlay = &spyOverlay{}
+	nm, cmd := m.Update(pairWizardClosedMsg{})
+	cm := nm.(clientModel)
+	if cm.overlay != nil {
+		t.Fatalf("closed must drop the overlay, got %T", cm.overlay)
+	}
+	if cm.instance != "agentA" {
+		t.Fatalf("close must not switch the slot, got %q", cm.instance)
+	}
+	if cmd != nil {
+		t.Fatalf("close is a pure return — no cmd, got %T", cmd())
+	}
+}
+
+// TestClientModel_PickerPairOpensWizard: the picker's [p] request swaps the
+// overlay for the wizard prefilled with the row's instance + Force (the
+// wizard's own confirm screen gates the cleanup).
+func TestClientModel_PickerPairOpensWizard(t *testing.T) {
+	isolatedConfigDir(t)
+	m := newClientModelForGate(t)
+	m.overlay = newInstancePicker()
+	nm, cmd := m.Update(instancePickerPairMsg{instance: "agentA"})
+	cm := nm.(clientModel)
+	w, ok := cm.overlay.(*pairWizard)
+	if !ok {
+		t.Fatalf("[p] must swap the picker for the wizard, got overlay %T", cm.overlay)
+	}
+	if w.prefill.Instance != "agentA" || !w.prefill.Force {
+		t.Fatalf("the re-pair wizard must prefill Instance+Force, got %+v", w.prefill)
+	}
+	if cmd == nil {
+		t.Fatal("the wizard's Init cmd must be handed back")
+	}
+}
+
+// TestClientModel_PickerPairRefusedStaysOnPicker: a single-slot override makes
+// newPairWizard refuse — the picker stays up and the refusal renders below it
+// (M1 parity: an error set while an overlay is up must be visible).
+func TestClientModel_PickerPairRefusedStaysOnPicker(t *testing.T) {
+	isolatedConfigDir(t)
+	t.Setenv("SSHMGR_CACHE_DIR", t.TempDir()) // full single-slot override
+	m := newClientModelForGate(t)
+	pick := newInstancePicker()
+	m.overlay = pick
+	nm, cmd := m.Update(instancePickerPairMsg{instance: "agentA"})
+	cm := nm.(clientModel)
+	if cm.overlay != pick {
+		t.Fatalf("a refused pair request must keep the picker up, got %T", cm.overlay)
+	}
+	if cm.err == nil {
+		t.Fatal("the refusal must surface as the panel error")
+	}
+	if cmd != nil {
+		t.Fatal("a refusal hands back no cmd")
+	}
+}
+
+// TestClientView_FooterAdvertisesWizard: [c] really opens the wizard now — the
+// footer drops Plan 42's retired "=pair" pointer; under a single-slot override
+// the [c] hint disappears together with [i] (newPairWizard refuses to start
+// there — the footer must not lie).
+func TestClientView_FooterAdvertisesWizard(t *testing.T) {
+	mkInstanceDir(t, "agentA") // isolation + both override envs cleared
+	v := newClientModelForGate(t).View().Content
+	if !strings.Contains(v, "[c]入网") {
+		t.Fatalf("the multi-instance footer must advertise [c]入网, got:\n%s", v)
+	}
+	if strings.Contains(v, "=pair") {
+		t.Fatalf("the retired =pair pointer must be gone, got:\n%s", v)
+	}
+
+	t.Setenv("SSHMGR_CACHE_DIR", t.TempDir()) // single-slot override
+	v = newClientModelForGate(t).View().Content
+	if strings.Contains(v, "[c]入网") {
+		t.Fatalf("the single-slot footer must not advertise [c], got:\n%s", v)
 	}
 }

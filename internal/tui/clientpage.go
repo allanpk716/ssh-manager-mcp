@@ -20,12 +20,11 @@ import (
 // broker App: client mode writes no vault, only cache.auth.json via
 // clientops.WriteCacheCred.
 //
-// Plan 42 批1 T8: the connection-edit form and the wizard-embedded first-run
-// flow are RETIRED — pair (`sshmgr pair`) is the only guided onboarding
-// path for a new machine (spec §3.1-6). This panel is deliberately reduced to
-// sync/status/instance: [c] no longer opens a form, it points at pair. The
-// manual path (`cache pull` + hand-written .mcp.json) stays available for
-// CI/automation and is documented — it just has no TUI surface here.
+// Plan 42 批1 T8: the connection-edit form is RETIRED — it never comes back.
+// Plan 45 T3: the [c] affordance is real again as the SAS pairing wizard
+// (pairwizard.go), so a new machine pairs without leaving the TUI; `sshmgr
+// pair` stays the CLI path and the manual path (`cache pull` + hand-written
+// .mcp.json) stays documented for CI/automation.
 type clientModel struct {
 	cred          *clientops.CacheCred
 	snap          *store.Snapshot
@@ -125,8 +124,12 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg := msg.(type) {
 		case dataReadyMsg, syncDoneMsg,
 			clientStatusMsg, errMsg, formDoneMsg,
-			instancePickedMsg, instancePickerClosedMsg: // Plan 40 批2 T6
-			// owned: fall through to the switch below
+			instancePickedMsg, instancePickerClosedMsg, // Plan 40 批2 T6
+			pairWizardDoneMsg, pairWizardClosedMsg, // Plan 45 T3: the wizard's terminal msgs
+			instancePickerPairMsg: // Plan 45 T3: the picker's [p] re-pair request
+			// owned: fall through to the switch below. The wizard's five INTERNAL
+			// async msgs (discover/enroll/approval/write/tick) stay unregistered
+			// on purpose — the default branch forwards them to the overlay.
 		case tea.WindowSizeMsg:
 			m.width, m.height = msg.Width, msg.Height
 			ov, cmd := m.overlay.Update(msg)
@@ -178,6 +181,33 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instancePickerClosedMsg:
 		m.overlay = nil
 		return m, nil
+	case instancePickerPairMsg:
+		// Plan 45 T3: [p] on a paired picker row = force re-pair through the
+		// wizard (prefill Instance+Force; its own confirm screen gates the
+		// cleanup before any file is touched).
+		w, werr := newPairWizard(PairWizardPrefill{Instance: kp.instance, Force: true})
+		if werr != nil {
+			// Single-slot override refusal: keep the picker up, render the
+			// error below it (M1 parity — an error under an overlay must be
+			// visible).
+			m.err = werr
+			return m, nil
+		}
+		m.overlay = w
+		return m, w.Init()
+	case pairWizardDoneMsg:
+		// Plan 45 T3: pairing success = in-session slot switch (instancePickedMsg
+		// semantics): retarget the session to the freshly paired instance, drop
+		// the wizard, and re-read THAT slot — its reply carries the matching
+		// instance (formDoneMsg's close-then-refresh shape, retargeted).
+		m.instance, m.overlay, m.err = kp.instance, nil, nil
+		return m, refreshDataCmdFor(kp.instance)
+	case pairWizardClosedMsg:
+		// Plan 45 T3: Esc at any wizard step = pure return to the page (the
+		// wizard's aborts are zero-residue; if a mid-flight force abort left the
+		// slot half-cleaned, the next [s]/refresh surfaces the honest error).
+		m.overlay = nil
+		return m, nil
 	case tea.KeyPressMsg:
 		// List panel event stream (see listMsg): while the `/` filter input is
 		// active it owns EVERY keypress; browsing keypresses fall through to
@@ -204,12 +234,19 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.overlay = newInstancePicker()
 			return m, m.overlay.Init()
-		case k.Text == "c":
-			// Plan 42 批1 T8: the connect-form is retired — pair is the only
-			// guided onboarding path (spec §3.1-6). The key stays as the
-			// affordance slot but only points at the command.
-			m.status = "连接编辑已退役——新机入网/换码请运行 sshmgr pair（手工路径 cache pull 保留,见 docs）"
-			return m, nil
+		case k.Text == "c" && !m.busy:
+			// Plan 45 T3: the affordance is real again — [c] starts the SAS
+			// pairing wizard (Plan 42 批1 T8 had reduced it to a pointer at
+			// `sshmgr pair`). busy swallows the key above via the guard, same
+			// as [s]/[i]. A single-slot override refuses inside newPairWizard;
+			// the refusal shows as the panel error.
+			w, werr := newPairWizard(PairWizardPrefill{})
+			if werr != nil {
+				m.err = werr
+				return m, nil
+			}
+			m.overlay = w
+			return m, w.Init()
 		case k.Text == "t":
 			m.status = "TTL 由 .mcp.json 的 --cache-max-age 控制（默认 30m；0=关闭自动拉取）"
 			return m, nil
@@ -359,10 +396,10 @@ func (m clientModel) View() tea.View {
 		b.WriteString(warnStyle.Render("· 实例 "+m.instance) + "\n")
 	}
 	if m.cred == nil {
-		// Plan 42 批1 T8 (批1 前置 #4): pair is the ONLY guided onboarding
-		// path for a new machine — say so exactly where the empty panel would
-		// otherwise leave the user guessing.
-		b.WriteString(warnStyle.Render("ℹ pair 为新机唯一入网路径:运行 sshmgr pair") + "\n")
+		// Plan 45 T3 (supersedes Plan 42 批1 前置 #4's pair-only wording): the
+		// empty panel now points at the in-TUI wizard first, with the CLI path
+		// kept in the sentence.
+		b.WriteString(warnStyle.Render("ℹ 新机入网:按 [c] 启动配对向导(或运行 sshmgr pair)") + "\n")
 	}
 	n := 0
 	if m.snap != nil {
@@ -401,11 +438,12 @@ func (m clientModel) View() tea.View {
 		b.WriteString(footerStyle.Render("✓ "+m.status) + "\n")
 	}
 	// §3.5 footer variant: the [i] key would bounce off the single-slot guard
-	// in Update — don't advertise it while that mode is on. [c] no longer
-	// edits anything: it points at pair (Plan 42 批1 T8).
-	clientFooter := "[s]同步 [i]实例 [c]入网=pair [t]TTL  q 退出"
+	// in Update — don't advertise it while that mode is on. Since Plan 45 T3
+	// [c] really starts the pairing wizard, and newPairWizard refuses under a
+	// single-slot override — the hint goes dark there too (don't lie).
+	clientFooter := "[s]同步 [i]实例 [c]入网 [t]TTL  q 退出"
 	if singleSlot {
-		clientFooter = "[s]同步 [c]入网=pair [t]TTL  q 退出"
+		clientFooter = "[s]同步 [t]TTL  q 退出"
 	}
 	b.WriteString(clip(m.width, footerStyle.Render(clientFooter)))
 	return altScreen(tea.NewView(b.String()))

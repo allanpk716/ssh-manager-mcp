@@ -293,7 +293,79 @@ func TestClientSingleSlot_DEKDirExempt(t *testing.T) {
 	if strings.Contains(v, "单槽模式") {
 		t.Fatalf("SSHMGR_CACHE_DEK_DIR must not render the single-slot banner, got:\n%s", v)
 	}
-	if !strings.Contains(v, "[s]同步 [i]实例 [c]入网=pair [t]TTL  q 退出") {
+	if !strings.Contains(v, "[s]同步 [i]实例 [c]入网 [t]TTL  q 退出") {
 		t.Fatalf("multi-instance footer must stay advertised, got:\n%s", v)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Plan 45 T3: 已配对标记(auth.json 存在位)+ 已配对行 [p] 重配入口
+// ---------------------------------------------------------------------------
+
+// TestInstancePicker_PairedMarker: a named slot holding cache.auth.json rows
+// with the 已配对 marker (the same judgment the wizard's form gate uses —
+// clientops.IsEnrolled); empty slot dirs stay unpaired. Rows stay LIGHT: the
+// marker is a bare stat, never a decrypt.
+func TestInstancePicker_PairedMarker(t *testing.T) {
+	base := mkInstanceDir(t, "paired", "nude")
+	if err := os.WriteFile(filepath.Join(base, "instances", "paired", "cache.auth.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := newInstancePicker()
+	byName := map[string]pickerRow{}
+	for _, r := range p.rows {
+		byName[r.label] = r
+	}
+	if !byName["paired"].paired {
+		t.Fatal("a slot with cache.auth.json must row as paired")
+	}
+	if byName["nude"].paired {
+		t.Fatal("an empty slot dir must not row as paired")
+	}
+	if byName["（默认实例）"].paired {
+		t.Fatal("a vacuum default slot must not row as paired")
+	}
+	if v := p.View().Content; !strings.Contains(v, "已配对") {
+		t.Fatalf("paired rows must show the 已配对 marker, got:\n%s", v)
+	}
+}
+
+// TestInstancePicker_PKeyRepairsPairedRow: [p] on a paired NAMED row asks the
+// clientModel to re-pair that instance (wizard prefill Instance+Force).
+func TestInstancePicker_PKeyRepairsPairedRow(t *testing.T) {
+	base := mkInstanceDir(t, "agentA")
+	if err := os.WriteFile(filepath.Join(base, "instances", "agentA", "cache.auth.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := newInstancePicker()
+	p.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}) // cursor → agentA (sorted read)
+	_, cmd := p.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if cmd == nil {
+		t.Fatal("[p] on a paired row must emit the pair request")
+	}
+	pick, ok := cmd().(instancePickerPairMsg)
+	if !ok {
+		t.Fatalf("[p] on a paired row must emit instancePickerPairMsg, got %T", cmd())
+	}
+	if pick.instance != "agentA" {
+		t.Fatalf("the pair request must carry the row's instance, got %q", pick.instance)
+	}
+}
+
+// TestInstancePicker_PKeyDisabledRows: the default row (instance="" — the
+// wizard requires an instance name) and UNPAIRED rows (nothing to re-pair;
+// their paths are Enter to switch and [c] to enroll new) must not offer [p].
+func TestInstancePicker_PKeyDisabledRows(t *testing.T) {
+	mkInstanceDir(t, "nude")
+	p := newInstancePicker()
+	if _, cmd := p.Update(tea.KeyPressMsg{Code: 'p', Text: "p"}); cmd != nil {
+		t.Fatalf("[p] on the default row must be a no-op, got %T", cmd())
+	}
+	p.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}) // cursor → nude (unpaired)
+	if _, cmd := p.Update(tea.KeyPressMsg{Code: 'p', Text: "p"}); cmd != nil {
+		t.Fatalf("[p] on an unpaired row must be a no-op, got %T", cmd())
+	}
+	if v := p.View().Content; !strings.Contains(v, "[p]") {
+		t.Fatalf("the picker hint must advertise [p], got:\n%s", v)
 	}
 }

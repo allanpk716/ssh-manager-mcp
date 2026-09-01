@@ -518,3 +518,19 @@ func TestApp_TabSwitchRefetchesPages(t *testing.T) {
 		t.Fatalf("Tab switch must re-read pages (external last_pull must be visible), got %+v", cp.items)
 	}
 }
+
+// TestBrokerApp_NeverOwnsWizardMsgs (Plan 45 T3): the pairing wizard belongs to
+// the CLIENT page — the broker App's owned list must NOT grow the wizard's
+// terminal messages. While any overlay is open they take the gate's DEFAULT
+// branch and reach the overlay (app.go stays untouched by Plan 45).
+func TestBrokerApp_NeverOwnsWizardMsgs(t *testing.T) {
+	a := newTestApp(t)
+	spy := &spyOverlay{}
+	for _, wizardMsg := range []tea.Msg{pairWizardDoneMsg{}, pairWizardClosedMsg{}} {
+		a.overlay = spy
+		m, _ := a.Update(wizardMsg)
+		if !m.(App).overlay.(*spyOverlay).spySaw(wizardMsg) {
+			t.Fatalf("%T must reach the broker overlay via the gate's default (the App never hosts the wizard)", wizardMsg)
+		}
+	}
+}
