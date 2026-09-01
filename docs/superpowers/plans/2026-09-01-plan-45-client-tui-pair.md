@@ -137,7 +137,7 @@ type PairWizardPrefill struct{ Instance, ProfileHint, URL, Pin string; Force boo
 
 **GW1-G4 真机验收清单**(Step 3 表的勾选跟踪,发版前完成):
 - [ ] **GW1** 笔记本 TUI `[c]` 全流程对 NUC10 真配对(SAS 屏肉眼比对=owner;批准在 NUC10 TUI/CLI;批准后 Enter 门体验)——owner(SAS 必人眼)+助手陪跑
-- [ ] **GW2** 已配对实例 `p` 重配(force 清理语义+serve 侧旧码吊销)——助手(本机)
+- [ ] **GW2** 已配对实例 `p` 重配(force 清理语义+serve 侧旧码吊销;知悉:在用实例 enroll 撞 419,先吊旧码再重配)——助手(本机)
 - [ ] **GW3** 结束态→`r` 重新申请走通(NUC10 侧先 reject 再 approve;知悉:WriteAndPull 失败后 `r` 撞 broker 419——终局同 CLI 但失败点不同)——助手(MCP)+owner
 - [ ] **GW4** Esc 各步全身而退;`sshmgr pair` CLI 回归(同机双路径等价)——助手
 

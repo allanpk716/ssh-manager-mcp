@@ -351,7 +351,7 @@ serve pair reject laptop                        # 拒绝（终态，该请求永
 
 ## 手工 enroll（存量迁移官方路径 + CI 场景）
 
-> **何时走手工**：① **存量 ②a 机器迁移**（serve 升 Plan 42 版本前的过渡，见 [compat-matrix.md](./compat-matrix.md) 三步迁移——旧 serve 上没有 `/pair`，只能手工）；② **CI / 无人值守自动化**（要把 enroll 做成可脚本化的两步，而非交互式 SAS 比对）。日常新机一律 `sshmgr pair`。
+> **何时走手工**：① **存量 ②a 机器迁移**（serve 升 Plan 42 版本前的过渡，见 [compat-matrix.md](./compat-matrix.md) 三步迁移——旧 serve 上没有 `/pair`，只能手工）；② **CI / 无人值守自动化**（要把 enroll 做成可脚本化的两步，而非交互式 SAS 比对）。日常新机一律 `sshmgr pair`（或 TUI `[c]` 向导）。
 >
 > 🧭 各页签 / 设备码 / token / 指纹谁是谁，一页图解见 [concepts.md](./concepts.md)（概念模型：仓库 · 货架 · 装箱单 · 钥匙 · 水管 · 防伪封条）。
 

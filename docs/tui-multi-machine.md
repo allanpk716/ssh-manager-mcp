@@ -154,8 +154,11 @@ sshmgr pair --instance laptop
 **重配已配对实例**：`[i]` 打开实例 picker，**已配对的具名行按 `p`** → 同一向导
 以 force 预填进入，**先过 force 确认屏**（列明将删除 `cache.auth.json` /
 `cache.bin` / `cache.meta.json` / `quarantine/`、保留 `cache.config.json`——
-时效策略原地继承；Esc = 零残留）才清理并重新 enroll，serve 侧旧设备码随重配
-失效。默认实例行（实例名必填）与未配对行按 `p` 无效。
+时效策略原地继承；Esc = 零残留）才清理并重新 enroll。**serve 侧旧设备码两态
+如实**：旧码**从未拉取过** → finish 时自动收编吊销；**在用旧码（已拉取过）需
+owner 先在 broker `sshmgr cache-tokens revoke <名>` 吊销再重配，否则 enroll 被
+419「device name in use」拒**（见排错表）。默认实例行（实例名必填）与未配对行
+按 `p` 无效。
 
 **Esc 退出纪律**：**任何一步都能全身而退**——表单/选择屏直接退；等待/核对门中
 = 取消本次申请；唯一例外是写入期不可打断（半途弃写会与重试的清理竞争写盘）。
@@ -255,6 +258,7 @@ picker 不触发——**禁用而非适配**（env 是单槽完全覆盖语义�
 | `pair --url` 被拒「refusing TOFU」 | 直指又不带 `--pin` 是**默认拒绝**（默认安全）。带上 pair 卡里的 `--pin sha256:...`；`--allow-tofu` 只留给受控环境的无锚通道 |
 | client 面板 `[s]` 同步报缺 pin | 本界面永不走明文拉取（缺 pin 直接报错是**默认安全**的设计）。缺 pin 的实例用 `pair --force` 重新入网即可补全 pin（TUI：实例 picker 按 `p`） |
 | 向导结果屏「本次申请已结束（被拒或过期）」 | serve 对被拒/过期/已送达的申请返回同一终态——本次申请已死，按 `r` 以相同参数重新申请即可（enroll 新 id；若是 owner 误拒，重新批准新的即可）。反复失败查 Pairing 页的 ⚠标记（目标地址 ≠ 本机地址会被机械校验拦下） |
+| 配对失败「device name in use」（419） | 实例名的旧设备码还在 serve 上且**在用**（已拉取过）——同名重配在 enroll 一步即被拒（此时本地已按 force 语义清理完毕——确认屏已过、清理先于 enroll，属预期中间态；`[s]` 会如实报错）。owner 在 broker 先 `sshmgr cache-tokens revoke <名>` 吊销旧码再重配（回到向导按 `r` 同参重申即可）；从未拉取过的旧码无需此步（finish 事务自动收编吊销） |
 | 同步失败但面板还有数据 | 失败保留旧缓存——这是特性不是 bug。修好网络/serve 后 `[s]` 重拉 |
 | 缓存多久算旧 / 怎么自动保鲜 | TTL 由 `.mcp.json` 的 `--cache-max-age` 控制（默认 30m；0=关闭自动拉取）。`mcp --cache` 进程内 spawn 惰性拉取 + 会话内懒检查 + 热加载，无需 OS 定时器；细节见 [multi-machine.md](./multi-machine.md#离线只读缓存plan-12) |
 | server 机 serve 探活失败 | 安装结果屏的排查行：7878 端口防火墙是否放行（TCP + UDP 都要）；`sshmgr serve status` 查四项信号（service/process/http/vault）；服务可能仍在启动，稍候重试 |

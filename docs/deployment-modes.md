@@ -157,7 +157,7 @@ vault、master key、agent 全在**同一台机**：`.mcp.json` 里 `command: ss
 - **手机 / 平板** → agent 不跑在非桌面设备上（②需要本地 spawn 二进制进程）。手机的角色是**批2 的 Web 管理面**：在 serve 的 `/ui` 上批准配对、吊销、管服务器。批1 阶段手机上想批准 → 在 broker 机用 TUI / `serve pair` CLI（或让桌面代批）。
 - ②c 只留应急（serve 彻底没起时）；②a 已移除，不要再用 `"type": "http"` 配置——那是 404。
 
-一句话记忆：**①是"凭据跟人走"，②是"凭据留在 broker、agent 只拿只读快照"；多机入网 = pair 一条龙，写操作 = 管理面（TUI / `serve pair`，批2 上手机 Web）。**
+一句话记忆：**①是"凭据跟人走"，②是"凭据留在 broker、agent 只拿只读快照"；多机入网 = pair 一条龙（或 TUI `[c]` 向导），写操作 = 管理面（TUI / `serve pair`，批2 上手机 Web）。**
 
 ---
 
