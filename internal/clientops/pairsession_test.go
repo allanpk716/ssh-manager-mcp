@@ -590,6 +590,12 @@ func TestPairSession_NoExportedKeyMaterial(t *testing.T) {
 			if f.Type.Elem().Kind() == reflect.Uint8 {
 				t.Fatalf("exported field %s is a []byte — key material must never be exported", f.Name)
 			}
+		case reflect.Array:
+			// The session's real key fields are [32]byte arrays — an exported
+			// KAck [32]byte must trip the nail just like a []byte would.
+			if f.Type.Elem().Kind() == reflect.Uint8 {
+				t.Fatalf("exported field %s is a [%d]byte — key material must never be exported", f.Name, f.Type.Len())
+			}
 		case reflect.Interface, reflect.Func, reflect.Chan, reflect.UnsafePointer:
 			t.Fatalf("exported field %s is a %s — key material must never be exported", f.Name, f.Type.Kind())
 		}
