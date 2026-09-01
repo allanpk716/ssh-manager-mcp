@@ -89,7 +89,7 @@ func localTargetURL(t *testing.T) string {
 func TestPairingPage_ListAndApprove(t *testing.T) {
 	st, profiles := seedPairingStore(t)
 	local := localTargetURL(t)
-	a := enroll(t, st, "laptop", local, "home", true, "314159")                 // 本机地址 + ⚠未激活码替换
+	a := enroll(t, st, "laptop", local, "home", true, "314159")                // 本机地址 + ⚠未激活码替换
 	b := enroll(t, st, "phone", "https://127.0.0.1:7878", "", false, "271828") // 外部地址
 
 	rows, err := st.ListPendingPairing()

@@ -848,7 +848,7 @@ CREATE TABLE pairing_pending (
 
 // TestMigrateAddsPairingSASColumn: an old-shape DB (pairing_pending WITHOUT
 // sas) upgrades in place via Open's migrate(); its pre-existing row reads back
-// SAS='' (the no-SAS warning state for rows written by an older serve), and
+// SAS=” (the no-SAS warning state for rows written by an older serve), and
 // reopening is a no-op. New writes carrying a SAS succeed post-migration.
 func TestMigrateAddsPairingSASColumn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old-pair.db")
