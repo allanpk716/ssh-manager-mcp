@@ -11,6 +11,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/kardianos/service v1.3.0
 	github.com/kevinburke/ssh_config v1.6.0
+	github.com/mattn/go-runewidth v0.0.24
 	github.com/modelcontextprotocol/go-sdk v1.2.0
 	github.com/pkg/sftp v1.13.10
 	github.com/spf13/cobra v1.10.2
@@ -39,7 +40,6 @@ require (
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-runewidth v0.0.24 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect

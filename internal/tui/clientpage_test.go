@@ -210,7 +210,7 @@ func TestClientModel_WizardClosedReturnsToPage(t *testing.T) {
 func TestClientModel_PickerPairOpensWizard(t *testing.T) {
 	isolatedConfigDir(t)
 	m := newClientModelForGate(t)
-	m.overlay = newInstancePicker()
+	m.overlay = newInstancePicker("")
 	nm, cmd := m.Update(instancePickerPairMsg{instance: "agentA"})
 	cm := nm.(clientModel)
 	w, ok := cm.overlay.(*pairWizard)
@@ -232,7 +232,7 @@ func TestClientModel_PickerPairRefusedStaysOnPicker(t *testing.T) {
 	isolatedConfigDir(t)
 	t.Setenv("SSHMGR_CACHE_DIR", t.TempDir()) // full single-slot override
 	m := newClientModelForGate(t)
-	pick := newInstancePicker()
+	pick := newInstancePicker("")
 	m.overlay = pick
 	nm, cmd := m.Update(instancePickerPairMsg{instance: "agentA"})
 	cm := nm.(clientModel)

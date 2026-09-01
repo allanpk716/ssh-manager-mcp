@@ -12,10 +12,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/mattn/go-runewidth"
 
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/store"
@@ -49,7 +51,7 @@ func mkInstanceDir(t *testing.T, names ...string) string {
 
 func TestInstancePicker_RowsAndPick(t *testing.T) {
 	mkInstanceDir(t, "agentB", "agentA") // seeding order ≠ row order (sorted read)
-	p := newInstancePicker()
+	p := newInstancePicker("")
 	if len(p.rows) != 3 {
 		t.Fatalf("want default row + 2 instance rows, got %d (%+v)", len(p.rows), p.rows)
 	}
@@ -82,7 +84,7 @@ func TestInstancePicker_RowsAndPick(t *testing.T) {
 }
 
 func TestInstancePicker_EscCloses(t *testing.T) {
-	p := newInstancePicker()
+	p := newInstancePicker("")
 	_, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if _, ok := cmd().(instancePickerClosedMsg); !ok {
 		t.Fatalf("Esc must produce instancePickerClosedMsg, got %T", cmd())
@@ -311,7 +313,7 @@ func TestInstancePicker_PairedMarker(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(base, "instances", "paired", "cache.auth.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := newInstancePicker()
+	p := newInstancePicker("")
 	byName := map[string]pickerRow{}
 	for _, r := range p.rows {
 		byName[r.label] = r
@@ -337,7 +339,7 @@ func TestInstancePicker_PKeyRepairsPairedRow(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(base, "instances", "agentA", "cache.auth.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := newInstancePicker()
+	p := newInstancePicker("")
 	p.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}) // cursor → agentA (sorted read)
 	_, cmd := p.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	if cmd == nil {
@@ -352,20 +354,276 @@ func TestInstancePicker_PKeyRepairsPairedRow(t *testing.T) {
 	}
 }
 
-// TestInstancePicker_PKeyDisabledRows: the default row (instance="" — the
-// wizard requires an instance name) and UNPAIRED rows (nothing to re-pair;
-// their paths are Enter to switch and [c] to enroll new) must not offer [p].
-func TestInstancePicker_PKeyDisabledRows(t *testing.T) {
+// TestInstancePicker_PKeyDefaultRowHint (Plan 46 T3): [p] on the default row
+// shows the PINNED hint instead of emitting anything — and the hint must never
+// grow a `--instance` suggestion (reviewed contradiction: the default slot has
+// no name and no picker re-pair path, so the flag would advertise the route
+// this key refuses). REWRITES Plan 45 T3's TestInstancePicker_PKeyDisabledRows
+// unpaired-row half: Plan 46 widened [p] to ANY named row (完整 or 残缺 — a
+// 残缺 slot is exactly the one that needs re-pairing), so an unpaired NAMED
+// row now emits the pair request (covered by PKeyRepairsPairedRow's gate).
+func TestInstancePicker_PKeyDefaultRowHint(t *testing.T) {
 	mkInstanceDir(t, "nude")
-	p := newInstancePicker()
+	p := newInstancePicker("")
 	if _, cmd := p.Update(tea.KeyPressMsg{Code: 'p', Text: "p"}); cmd != nil {
-		t.Fatalf("[p] on the default row must be a no-op, got %T", cmd())
+		t.Fatalf("[p] on the default row must not emit, got %T", cmd())
 	}
-	p.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}) // cursor → nude (unpaired)
-	if _, cmd := p.Update(tea.KeyPressMsg{Code: 'p', Text: "p"}); cmd != nil {
-		t.Fatalf("[p] on an unpaired row must be a no-op, got %T", cmd())
+	if v := p.View().Content; !strings.Contains(v, pickerDefaultRowHint) {
+		t.Fatalf("the default row's [p] must show the pinned hint, got:\n%s", v)
+	}
+	if v := p.View().Content; strings.Contains(v, "--instance") {
+		t.Fatalf("the picker must never suggest --instance (矛盾文案), got:\n%s", v)
+	}
+	// 提示是瞬态的:导航即清(picker 重建/换行后不再挂旧话)。
+	p.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}) // cursor → nude
+	if v := p.View().Content; strings.Contains(v, pickerDefaultRowHint) {
+		t.Fatalf("navigating must clear the transient hint, got:\n%s", v)
+	}
+	// named 行的 [p] 照常发向导请求(含未配对/残缺行——Plan 46 放宽)。
+	_, cmd := p.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	pick, ok := cmd().(instancePickerPairMsg)
+	if !ok || pick.instance != "nude" {
+		t.Fatalf("[p] on an unpaired NAMED row must emit the pair request, got %T (%+v)", cmd(), pick)
 	}
 	if v := p.View().Content; !strings.Contains(v, "[p]") {
 		t.Fatalf("the picker hint must advertise [p], got:\n%s", v)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Plan 46 T3:行状态四要素判定 / ★ 当前槽 / ⚠ 半态 / runewidth 列对齐 / [d]
+// ---------------------------------------------------------------------------
+
+// TestSlotState_FourElementMatrix:auth/bin/meta/DEK 的 16 组合矩阵逐格断言
+// (完整=四者齐;任缺=残缺且行内点名缺什么;无目录=空,永不半态)。
+func TestSlotState_FourElementMatrix(t *testing.T) {
+	for mask := 0; mask < 16; mask++ {
+		auth, bin, meta, dek := mask&1 != 0, mask&2 != 0, mask&4 != 0, mask&8 != 0
+		var wantMissing []string
+		for _, e := range []struct {
+			name string
+			have bool
+		}{{"auth", auth}, {"bin", bin}, {"meta", meta}, {"DEK", dek}} {
+			if !e.have {
+				wantMissing = append(wantMissing, e.name)
+			}
+		}
+		label, missing := slotState(auth, bin, meta, dek, true)
+		if len(wantMissing) == 0 {
+			if label != "完整" || missing != nil {
+				t.Fatalf("mask %02d: want 完整/无缺项, got %q %v", mask, label, missing)
+			}
+			continue
+		}
+		want := "缺 " + strings.Join(wantMissing, "·")
+		if label != want || !reflect.DeepEqual(missing, wantMissing) {
+			t.Fatalf("mask %02d: want %q %v, got %q %v", mask, want, wantMissing, label, missing)
+		}
+	}
+	// 无目录 = 合法全新默认槽:既非残缺也非半态。
+	if label, missing := slotState(false, false, false, false, false); label != "空" || missing != nil {
+		t.Fatalf("a directory-less slot must read 空, got %q %v", label, missing)
+	}
+	if s := (slotStat{dir: true, auth: true}); !s.halfState() {
+		t.Fatal("dir present with material missing must be halfState (⚠ 事故形态)")
+	}
+	if s := (slotStat{}); s.halfState() {
+		t.Fatal("a directory-less vacuum must not be halfState")
+	}
+	if s := (slotStat{dir: true, auth: true, bin: true, meta: true, dek: true}); !s.complete() || s.halfState() {
+		t.Fatal("four-of-four must be complete and not half-state")
+	}
+}
+
+// TestInstancePicker_HalfStateRow:残缺行 ⚠ 前缀 + 行内缺项清单;完整行读
+// 完整、无 ⚠;auth.json 在场继续给已配对标注(本地视角,尾注兜底)。
+func TestInstancePicker_HalfStateRow(t *testing.T) {
+	base := mkInstanceDir(t, "full", "half")
+	dekDir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DEK_DIR", dekDir)
+	// half:目录在、只有 auth → 缺 bin·meta·DEK(用户事故形态)
+	if err := os.WriteFile(filepath.Join(base, "instances", "half", "cache.auth.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// full:四件齐(bin 为垃圾字节即可——完整性判定是纯 stat,永不解密)
+	for _, fn := range []string{"cache.auth.json", "cache.bin", "cache.meta.json"} {
+		if err := os.WriteFile(filepath.Join(base, "instances", "full", fn), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dekDir, "cache-dek-full.key"), []byte("k"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v := newInstancePicker("").View().Content
+	half := pickerLineOf(v, "half")
+	if !strings.Contains(half, "⚠") || !strings.Contains(half, "缺 bin·meta·DEK") {
+		t.Fatalf("half-state row must carry ⚠ and the missing list, got %q", half)
+	}
+	full := pickerLineOf(v, "full")
+	if strings.Contains(full, "⚠") || !strings.Contains(full, "完整") {
+		t.Fatalf("complete row must read 完整 without ⚠, got %q", full)
+	}
+	if !strings.Contains(half, "已配对") {
+		t.Fatalf("auth.json presence keeps the 已配对 marker, got %q", half)
+	}
+	if !strings.Contains(v, pickerLocalViewNote) {
+		t.Fatalf("the local-view footnote must render, got:\n%s", v)
+	}
+}
+
+// TestInstancePicker_CurrentSlotStar:★ 恰标一次、标在会话当前槽行
+// (clientModel.instance;"" = 默认槽行)。
+func TestInstancePicker_CurrentSlotStar(t *testing.T) {
+	mkInstanceDir(t, "agentA")
+	v := newInstancePicker("").View().Content
+	if !strings.Contains(pickerLineOf(v, "（默认实例）"), "★") {
+		t.Fatalf("with an empty session slot the DEFAULT row must carry ★, got:\n%s", v)
+	}
+	if strings.Contains(pickerLineOf(v, "agentA"), "★") {
+		t.Fatalf("a non-current named row must not carry ★, got:\n%s", v)
+	}
+	v = newInstancePicker("agentA").View().Content
+	if !strings.Contains(pickerLineOf(v, "agentA"), "★") {
+		t.Fatalf("the session's slot row must carry ★, got:\n%s", v)
+	}
+	if strings.Contains(pickerLineOf(v, "（默认实例）"), "★") || strings.Count(v, "★") != 1 {
+		t.Fatalf("★ must mark exactly the current slot once, got:\n%s", v)
+	}
+}
+
+// TestInstancePicker_DeleteKey:[d] 具名行发删除请求;默认槽行不发、给钉死
+// 提示(清空全机走 sshmgr clear,与 T2 CLI 同语义)。
+func TestInstancePicker_DeleteKey(t *testing.T) {
+	mkInstanceDir(t, "agentA")
+	p := newInstancePicker("")
+	p.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}) // cursor → agentA
+	_, cmd := p.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	del, ok := cmd().(instancePickerDeleteMsg)
+	if !ok || del.instance != "agentA" {
+		t.Fatalf("[d] on a named row must emit instancePickerDeleteMsg, got %T (%+v)", cmd(), del)
+	}
+	p2 := newInstancePicker("")
+	if _, cmd := p2.Update(tea.KeyPressMsg{Code: 'd', Text: "d"}); cmd != nil {
+		t.Fatalf("[d] on the default row must not emit, got %T", cmd())
+	}
+	if v := p2.View().Content; !strings.Contains(v, pickerDefaultRowNoDelete) {
+		t.Fatalf("the default row's [d] must show the pinned hint, got:\n%s", v)
+	}
+}
+
+// TestInstancePicker_CJKColumnAlignment:中文/ASCII/混合行渲染后状态列起点
+// (显示宽度)必须一致——老的 %-14s 按字节补空格,中文名一出场列边界即漂移。
+func TestInstancePicker_CJKColumnAlignment(t *testing.T) {
+	base := mkInstanceDir(t, "agentA", "build-runner-01")
+	dekDir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DEK_DIR", dekDir)
+	// agentA 完整;build-runner-01 残缺(缺 meta);默认行在本环境目录在而材料
+	// 缺 → 缺全部。实例名受 instname 白名单约束必为 ASCII——行内真正的宽字符
+	// 是默认行标签「（默认实例）」与状态/已配对列,而 %-14s 按字节补空格的老
+	// 病根恰在此:18 字节的宽标签超出 14 就不再补位,列边界即漂移。
+	for name, files := range map[string][]string{
+		"agentA":          {"cache.auth.json", "cache.bin", "cache.meta.json"},
+		"build-runner-01": {"cache.auth.json", "cache.bin"},
+	} {
+		for _, fn := range files {
+			if err := os.WriteFile(filepath.Join(base, "instances", name, fn), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, n := range []string{"agentA", "build-runner-01"} {
+		if err := os.WriteFile(filepath.Join(dekDir, "cache-dek-"+n+".key"), []byte("k"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := newInstancePicker("build-runner-01") // 当前槽带 ★、残缺带 ⚠ → 混合前缀行
+	nameW, _, _ := p.columnWidths()
+	stateStart := 2 + nameW + 2 // 光标列(2)+ 名称列 + 双空格栏距 —— 全按显示宽度
+
+	wantStates := map[string]string{
+		"（默认实例）":          "缺 auth·bin·meta·DEK",
+		"agentA":          "完整",
+		"build-runner-01": "缺 meta",
+	}
+	rows := 0
+	for _, line := range strings.Split(p.View().Content, "\n") {
+		key := ""
+		for k := range wantStates {
+			if strings.Contains(line, k) {
+				key = k
+			}
+		}
+		if key == "" {
+			continue
+		}
+		rows++
+		if rest := cutDisplayWidth(line, stateStart); !strings.HasPrefix(rest, wantStates[key]) {
+			t.Fatalf("state column must start at display offset %d for %q (CJK 列对齐), line %q → %q",
+				stateStart, key, line, rest)
+		}
+	}
+	if rows != 3 {
+		t.Fatalf("want 3 data rows, got %d in:\n%s", rows, p.View().Content)
+	}
+	// padW 本体:中/混内容补空格后显示宽度恰为列宽。
+	if got := runewidth.StringWidth(padW("中文实例名", 14)); got != 14 {
+		t.Fatalf("padW must pad to the DISPLAY width, got %d", got)
+	}
+	if got := runewidth.StringWidth(padW("中文abc", 12)); got != 12 {
+		t.Fatalf("padW must pad mixed-width content to the display width, got %d", got)
+	}
+	if got := padW("超宽不截断", 4); got != "超宽不截断" {
+		t.Fatalf("padW must never truncate, got %q", got)
+	}
+}
+
+// TestInstancePicker_FootnoteClipsToWidth:尾注走 clip(known width 时截断,
+// 未上报宽度时原样)。
+func TestInstancePicker_FootnoteClipsToWidth(t *testing.T) {
+	mkInstanceDir(t, "agentA")
+	p := newInstancePicker("")
+	if v := p.View().Content; !strings.Contains(v, pickerLocalViewNote) {
+		t.Fatalf("footnote must render verbatim without a reported width, got:\n%s", v)
+	}
+	p.Update(tea.WindowSizeMsg{Width: 20, Height: 24})
+	for _, line := range strings.Split(p.View().Content, "\n") {
+		if strings.Contains(line, "本地视角") && runewidth.StringWidth(line) > 20 {
+			t.Fatalf("the footnote must clip to the reported width, got %q (%d cols)",
+				line, runewidth.StringWidth(line))
+		}
+	}
+}
+
+// TestInstancePicker_VacuumDefaultRow:连目录都没有的默认槽(全新机)读作
+// 「空」,无 ⚠——真空是合法态,不是事故(T2 ls 的 dirExists 同门)。
+func TestInstancePicker_VacuumDefaultRow(t *testing.T) {
+	isolatedConfigDir(t) // 不建任何目录:instances 根与默认槽目录都不存在
+	v := newInstancePicker("").View().Content
+	line := pickerLineOf(v, "（默认实例）")
+	if strings.Contains(line, "⚠") || !strings.Contains(line, "空") {
+		t.Fatalf("a directory-less default slot must read 空 without ⚠, got %q", line)
+	}
+}
+
+// pickerLineOf returns the first view line containing needle ("" when none).
+func pickerLineOf(v, needle string) string {
+	for _, line := range strings.Split(v, "\n") {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
+}
+
+// cutDisplayWidth drops the first w display columns of s (runewidth walk) —
+// the test-side oracle for which character sits at a column boundary.
+func cutDisplayWidth(s string, w int) string {
+	gone := 0
+	for i, r := range s {
+		if gone >= w {
+			return s[i:]
+		}
+		gone += runewidth.RuneWidth(r)
+	}
+	return ""
 }

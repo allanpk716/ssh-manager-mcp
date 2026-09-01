@@ -431,6 +431,64 @@ func TestPairWizard_MultiBrokerPickAndSPKIUpgrade(t *testing.T) {
 // force:确认屏在先、Esc 零残留、零清理先行(Plan 46)
 // ---------------------------------------------------------------------------
 
+// TestPairWizard_ForceConfirm_AdvisoryTiers (Plan 46 T3):419 advisory 分档入
+// p 确认屏——完整槽=确定性提示(已拉取过,重配前需 owner 吊销);残缺槽=
+// 可能性提示(材料不齐,本地无法预判远端状态)。判定取确认屏入态时的实例名
+// (seam 收到的参数即 opts.Instance——表单确认后的那个)。
+func TestPairWizard_ForceConfirm_AdvisoryTiers(t *testing.T) {
+	t.Run("complete_slot_definite_revoke", func(t *testing.T) {
+		h := newPWHarness(t, PairWizardPrefill{Force: true})
+		var seen []string
+		h.w.slotComplete = func(inst string) bool { seen = append(seen, inst); return true }
+		h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
+		h.w.submitForm() // → pwEnrollForceConfirm
+		if h.w.state != pwEnrollForceConfirm || !h.w.forceComplete {
+			t.Fatalf("precondition: confirm screen with a complete slot, state=%v forceComplete=%v", h.w.state, h.w.forceComplete)
+		}
+		if len(seen) != 1 || seen[0] != "laptop" {
+			t.Fatalf("the tier judgment must run on the form-confirmed instance, got %v", seen)
+		}
+		v := h.w.View().Content
+		if !strings.Contains(v, "该实例已拉取过,重配前需 owner 在 broker 吊销其设备码") {
+			t.Fatalf("a complete slot must get the definite revoke advisory, got:\n%s", v)
+		}
+		if strings.Contains(v, "材料不完整") {
+			t.Fatalf("a complete slot must not get the partial-tier wording, got:\n%s", v)
+		}
+	})
+
+	t.Run("partial_slot_possibility_only", func(t *testing.T) {
+		h := newPWHarness(t, PairWizardPrefill{Force: true})
+		h.w.slotComplete = func(string) bool { return false }
+		h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
+		h.w.submitForm()
+		if h.w.state != pwEnrollForceConfirm || h.w.forceComplete {
+			t.Fatalf("precondition: confirm screen with a partial slot, state=%v forceComplete=%v", h.w.state, h.w.forceComplete)
+		}
+		v := h.w.View().Content
+		if !strings.Contains(v, "该实例材料不完整,无法本地预判远端状态;若重跑撞 419 见错误指引") {
+			t.Fatalf("a partial slot must get the possibility-only advisory, got:\n%s", v)
+		}
+		if strings.Contains(v, "已拉取过") || strings.Contains(v, "revoke") {
+			t.Fatalf("a partial slot must not promise definite remote knowledge, got:\n%s", v)
+		}
+	})
+
+	t.Run("default_seam_reads_local_disk", func(t *testing.T) {
+		// 缺省 seam = slotArtifactsComplete(本地四要素 stat):真空环境读作
+		// 残缺档——advisory 永不凭空断言远端状态。
+		h := newPWHarness(t, PairWizardPrefill{Force: true}) // isolatedConfigDir:无任何材料
+		h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
+		h.w.submitForm()
+		if h.w.forceComplete {
+			t.Fatal("the default seam must read the local disk (vacuum = not complete)")
+		}
+		if v := h.w.View().Content; !strings.Contains(v, "材料不完整") {
+			t.Fatalf("the vacuum slot must get the partial-tier advisory, got:\n%s", v)
+		}
+	})
+}
+
 func TestPairWizard_ForceConfirm_EscZeroResidue(t *testing.T) {
 	h := newPWHarness(t, PairWizardPrefill{Force: true})
 	h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
@@ -454,6 +512,9 @@ func TestPairWizard_ForceConfirm_EscZeroResidue(t *testing.T) {
 func TestPairWizard_Force_EnrollWithoutCleanup(t *testing.T) {
 	t.Run("url_combo_enroll_only", func(t *testing.T) {
 		h := newPWHarness(t, PairWizardPrefill{Force: true})
+		// Plan 46 T3:确认屏 419 advisory 分档——本用例断言含 revoke 指引,即
+		// 完整槽档,注入 seam 让判定为真(缺省真实现在本隔离环境读作残缺)。
+		h.w.slotComplete = func(string) bool { return true }
 		h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
 		h.w.submitForm() // → pwEnrollForceConfirm
 		// 确认屏文案如实化(Plan 46):说「覆盖」,不再有「删除文件」清单;并

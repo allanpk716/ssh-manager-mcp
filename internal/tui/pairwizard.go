@@ -25,8 +25,9 @@ package tui
 //   - AssumeSAS 永驻 CLI 驱动层:PairWizardPrefill 无该字段(测试 reflect 钉),
 //     本组件不读 SSHMGR_PAIR_ASSUME_SAS。
 //
-// 测试缝:session 步骤经组件持有的函数变量(newSession/discover/isEnrolled),
-// 生产默认真实现;测试注入 fake(零网络),tick 用消息注入,不真 sleep。
+// 测试缝:session 步骤经组件持有的函数变量(newSession/discover/isEnrolled/
+// slotComplete),生产默认真实现;测试注入 fake(零网络),tick 用消息注入,
+// 不真 sleep。
 
 import (
 	"context"
@@ -157,10 +158,16 @@ type pairWizard struct {
 	endReason pwEndReason
 	endErr    error
 
+	// Plan 46 T3:force 确认屏入态时的本地四要素判定(419 advisory 分档)。
+	// 在确认屏入态时现算而非走 prefill——用户可能在表单改过实例名,提示必须
+	// 描述即将被重配的那个实例。
+	forceComplete bool
+
 	// 测试缝(组件持有,非包级变量):生产默认真实现,测试注入 fake。
-	newSession func(clientops.PairOpts) (pairSessionSteps, error)
-	discover   func(targets []string, window time.Duration) ([]clientops.Discovered, error)
-	isEnrolled func(instance string) (bool, error)
+	newSession   func(clientops.PairOpts) (pairSessionSteps, error)
+	discover     func(targets []string, window time.Duration) ([]clientops.Discovered, error)
+	isEnrolled   func(instance string) (bool, error)
+	slotComplete func(instance string) bool // Plan 46 T3:四要素完整性判定(force 确认屏分档)
 }
 
 // newPairWizard 构造向导。单槽覆盖 env 命中即拒绝启动(与 CLI --instance 互斥
@@ -179,9 +186,10 @@ func newPairWizard(p PairWizardPrefill) (*pairWizard, error) {
 			Stdout: io.Discard, Stderr: io.Discard,
 		},
 		// 生产默认真实现(签名逐字 = T1);测试替换组件字段。
-		newSession: func(o clientops.PairOpts) (pairSessionSteps, error) { return clientops.NewPairSession(o) },
-		discover:   clientops.Discover,
-		isEnrolled: clientops.IsEnrolled,
+		newSession:   func(o clientops.PairOpts) (pairSessionSteps, error) { return clientops.NewPairSession(o) },
+		discover:     clientops.Discover,
+		isEnrolled:   clientops.IsEnrolled,
+		slotComplete: slotArtifactsComplete,
 	}
 	w.form = newPWForm(d)
 	return w, nil
@@ -373,7 +381,7 @@ func (w *pairWizard) keyUpdate(kp tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case pwEnrollForceConfirm:
 		switch {
 		case k.Code == tea.KeyEnter:
-			return w, w.beginEnroll() // 授权生效:清理 → enroll
+			return w, w.beginEnroll() // 授权生效:进入 enroll(零清理先行——Plan 46)
 		case k.Code == tea.KeyEsc, k.Text == "q":
 			return w.close() // 零残留:任何会话方法都没跑过
 		}
@@ -513,6 +521,9 @@ func (w *pairWizard) beginTarget(d *clientops.Discovered) tea.Cmd {
 		}
 	}
 	if w.prefill.Force {
+		// Plan 46 T3:确认屏入态时现算四要素(表单里实例名可能已被改过)——
+		// 419 advisory 按这个判定分档。
+		w.forceComplete = w.slotComplete(w.opts.Instance)
 		w.state = pwEnrollForceConfirm
 		return nil
 	}
@@ -695,8 +706,15 @@ func (w *pairWizard) View() tea.View {
 		b.WriteString(warnStyle.Render(" ⚠ Force 重配确认 —— 实例 "+w.opts.Instance) + "\n\n")
 		b.WriteString("重配成功后,新凭据将原子覆盖本实例旧材料;重配成功前,旧材料一律不动\n")
 		b.WriteString("(cache.config.json 离线 cap 保留)。\n\n")
-		b.WriteString("若上次配对中断,且重跑报设备名占用(419),需 owner 在 broker 侧执行\n")
-		b.WriteString("`sshmgr cache-tokens revoke " + w.opts.Instance + "` 后重试。\n\n")
+		// Plan 46 T3:419 advisory 分档——完整槽=确定性提示(已拉取过,重配前
+		// 需 owner 吊销);残缺槽=可能性提示(材料不齐,本地无法预判远端状态)。
+		// 判定 = 确认屏入态时的本地四要素(forceComplete)。
+		if w.forceComplete {
+			b.WriteString("该实例已拉取过,重配前需 owner 在 broker 吊销其设备码\n")
+			b.WriteString("(`sshmgr cache-tokens revoke " + w.opts.Instance + "`)。\n\n")
+		} else {
+			b.WriteString("该实例材料不完整,无法本地预判远端状态;若重跑撞 419 见错误指引。\n\n")
+		}
 		b.WriteString("Enter 继续重配    Esc 放弃(不改动任何文件)")
 
 	case pwEnrolling:

@@ -9,6 +9,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/store"
@@ -38,7 +39,8 @@ type clientModel struct {
 	status        string
 	err           error
 	busy          bool
-	overlay       overlay // instance picker
+	busyLabel     string  // what the busy line says ("" = the [s] default 同步中…; 删除实例 X… during a [d] flow)
+	overlay       overlay // instance picker / delete confirm / pair wizard
 }
 
 func newClientModel() clientModel {
@@ -96,6 +98,85 @@ func refreshDataCmdFor(instance string) tea.Cmd {
 
 var refreshDataCmd = refreshDataCmdFor("") // zero-change wrapper for existing callers
 
+// instanceDeleteConfirmedMsg reports the [d] confirm overlay's outcome:
+// confirmed=false = Esc or the 取消 key — back to the picker, nothing touched.
+type instanceDeleteConfirmedMsg struct {
+	instance  string
+	confirmed bool
+}
+
+// instanceDeleteDoneMsg reports clientops.RemoveInstance's outcome. err carries
+// the T2 residue list verbatim when the double-root cleanup was incomplete.
+type instanceDeleteDoneMsg struct {
+	instance string
+	err      error
+}
+
+// removeInstanceFn is the delete flow's seam for the destructive call
+// (production: clientops.RemoveInstance — the only caller; tests swap it to
+// drive the failure path without sculpting real residue).
+var removeInstanceFn = clientops.RemoveInstance
+
+// deleteInstanceCmd runs RemoveInstance OFF the UI loop (Plan 46 定案). The
+// exclusive write lock may wait for an in-flight [s] pull's shared section to
+// drain — that window is the busy line's job, never a frozen event loop.
+func deleteInstanceCmd(instance string) tea.Cmd {
+	return func() tea.Msg {
+		return instanceDeleteDoneMsg{instance: instance, err: removeInstanceFn(instance)}
+	}
+}
+
+// instanceDeleteConfirm is the [d] confirmation overlay (Plan 46 T3): a huh
+// confirm carrying T2's double-root semantics plus the two companion hints
+// (broker-side revoke is the owner's job; --write-mcp copies outside the slot
+// are not cleaned). BOTH exits close it with an explicit bit — cancel reopens
+// the picker, confirm starts the busy+cmd phase — so the form is never
+// re-entered after StateCompleted (the Plan 45 T2-R1 dead-form lesson; there
+// is no failed-submit path that stays on this form).
+type instanceDeleteConfirm struct {
+	instance string
+	form     *huh.Form
+	confirm  *bool
+}
+
+func newInstanceDeleteConfirm(instance string) *instanceDeleteConfirm {
+	confirm := false
+	form := huh.NewForm(huh.NewGroup(huh.NewConfirm().
+		Title(fmt.Sprintf("永久删除实例 %q 的本地材料？", instance)).
+		Description(fmt.Sprintf(
+			"删除双根:槽目录 instances/%s/(auth/bin/meta/config/配对产物等)+ 离线缓存 DEK。不可恢复。\n"+
+				"· broker 侧设备码不受影响——吊销需 owner 执行:sshmgr cache-tokens revoke %s\n"+
+				"· --write-mcp 写在槽外的 .mcp.json 副本不随删除清理(位置未持久化,请自行删除)", instance, instance)).
+		Affirmative("删除").Negative("取消").
+		Value(&confirm)))
+	return &instanceDeleteConfirm{instance: instance, form: form, confirm: &confirm}
+}
+
+func (o *instanceDeleteConfirm) Title() string { return "删除实例 — " + o.instance }
+func (o *instanceDeleteConfirm) Init() tea.Cmd { return o.form.Init() }
+
+func (o *instanceDeleteConfirm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if kp, ok := msg.(tea.KeyPressMsg); ok && kp.Code == tea.KeyEsc {
+		return o, func() tea.Msg { return instanceDeleteConfirmedMsg{instance: o.instance} }
+	}
+	f, cmd := o.form.Update(msg)
+	if nf, ok := f.(*huh.Form); ok {
+		o.form = nf
+	}
+	switch o.form.State {
+	case huh.StateCompleted:
+		c := *o.confirm
+		return o, func() tea.Msg { return instanceDeleteConfirmedMsg{instance: o.instance, confirmed: c} }
+	case huh.StateAborted:
+		return o, func() tea.Msg { return instanceDeleteConfirmedMsg{instance: o.instance} }
+	}
+	return o, cmd
+}
+
+func (o *instanceDeleteConfirm) View() tea.View {
+	return tea.NewView(titleStyle.Render(" "+o.Title()+" ") + "\n（Esc 取消）\n" + o.form.View())
+}
+
 // syncCmdMode is the pull command (panel [s]). The pin from the stored cred is
 // mandatory — the TUI NEVER offers plaintext pulls (AllowPlain stays false).
 func syncCmdMode(cred *clientops.CacheCred, instance string) tea.Cmd {
@@ -126,7 +207,8 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			clientStatusMsg, errMsg, formDoneMsg,
 			instancePickedMsg, instancePickerClosedMsg, // Plan 40 批2 T6
 			pairWizardDoneMsg, pairWizardClosedMsg, // Plan 45 T3: the wizard's terminal msgs
-			instancePickerPairMsg: // Plan 45 T3: the picker's [p] re-pair request
+			instancePickerPairMsg,                                                      // Plan 45 T3: the picker's [p] re-pair request
+			instancePickerDeleteMsg, instanceDeleteConfirmedMsg, instanceDeleteDoneMsg: // Plan 46 T3: the [d] delete flow
 			// owned: fall through to the switch below. The wizard's five INTERNAL
 			// async msgs (discover/enroll/approval/write/tick) stay unregistered
 			// on purpose — the default branch forwards them to the overlay.
@@ -153,7 +235,7 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncList()
 		return m, nil
 	case syncDoneMsg:
-		m.busy = false
+		m.busy, m.busyLabel = false, ""
 		if kp.err != nil {
 			m.err, m.status = kp.err, ""
 		} else {
@@ -181,10 +263,46 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instancePickerClosedMsg:
 		m.overlay = nil
 		return m, nil
+	case instancePickerDeleteMsg:
+		// Plan 46 T3: [d] on a picker row → the confirm overlay (clientModel
+		// owns the whole flow; the picker itself stays out of it).
+		m.overlay = newInstanceDeleteConfirm(kp.instance)
+		return m, m.overlay.Init()
+	case instanceDeleteConfirmedMsg:
+		m.overlay = nil
+		if !kp.confirmed {
+			// 取消(Esc 或「取消」键):回到实例列表——重建即顺带刷新行状态,
+			// 槽与会话数据一个字节都没动。
+			m.overlay = newInstancePicker(m.instance)
+			return m, nil
+		}
+		// 确认删除:busy 线盖住 RemoveInstance 的整个阻塞窗口——rm 持互斥写
+		// 锁,若在途 [s] 拉取还握着共享锁,rm 会等它排空才动手。cmd 在后台
+		// goroutine 里等,事件循环从不冻结(Plan 46 定案:busy 态,不冻死)。
+		m.busy, m.busyLabel, m.err, m.status = true, "删除实例 "+kp.instance+"…", nil, ""
+		return m, deleteInstanceCmd(kp.instance)
+	case instanceDeleteDoneMsg:
+		m.busy, m.busyLabel = false, ""
+		if kp.err != nil {
+			// 失败:错误(内含 T2 的残留物清单)挂在重开的列表下方(M1 parity
+			// ——overlay 下的错误必须可见);槽与会话路由一律不动(不回落)。
+			m.err, m.status = kp.err, ""
+			m.overlay = newInstancePicker(m.instance)
+			return m, nil
+		}
+		if kp.instance == m.instance {
+			// 删的是当前槽:回落默认槽并刷新。内存态一并清空——回落瞬间
+			// [s] 不得拿已删槽的凭据去打默认槽(无悬空引用)。
+			m.instance, m.cred, m.snap, m.scoped, m.cacheAge = "", nil, nil, false, 0
+		}
+		m.err, m.status = nil, "已删除实例 "+kp.instance
+		m.overlay = newInstancePicker(m.instance) // 完成后刷新列表
+		return m, refreshDataCmdFor(m.instance)
 	case instancePickerPairMsg:
-		// Plan 45 T3: [p] on a paired picker row = force re-pair through the
-		// wizard (prefill Instance+Force; its own confirm screen gates the
-		// cleanup before any file is touched).
+		// Plan 45 T3, Plan 46 T3 widened: [p] on ANY NAMED picker row (完整 or
+		// 残缺) = force re-pair through the wizard (prefill Instance+Force).
+		// The wizard's own confirm screen recomputes the slot's four-element
+		// state at entry and tiers the 419 advisory accordingly.
 		w, werr := newPairWizard(PairWizardPrefill{Instance: kp.instance, Force: true})
 		if werr != nil {
 			// Single-slot override refusal: keep the picker up, render the
@@ -226,7 +344,7 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case k.Text == "q" || (k.Code == 'c' && k.Mod == tea.ModCtrl):
 			return m, tea.Quit
 		case k.Text == "s" && !m.busy:
-			m.busy, m.err, m.status = true, nil, ""
+			m.busy, m.busyLabel, m.err, m.status = true, "", nil, ""
 			return m, syncCmdMode(m.cred, m.instance)
 		case k.Text == "i" && !m.busy:
 			// §3.5: single-slot override envs keep this UI off (T7 refines the
@@ -235,7 +353,7 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "单槽模式（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK 覆盖中）——多实例 UI 已禁用"
 				return m, nil
 			}
-			m.overlay = newInstancePicker()
+			m.overlay = newInstancePicker(m.instance)
 			return m, m.overlay.Init()
 		case k.Text == "c" && !m.busy:
 			// Plan 45 T3: the affordance is real again — [c] starts the SAS
@@ -285,7 +403,7 @@ func (m *clientModel) autoPickerIfVacuum() bool {
 	if lerr != nil || len(names) == 0 {
 		return false
 	}
-	m.overlay = newInstancePicker()
+	m.overlay = newInstancePicker(m.instance)
 	return true
 }
 
@@ -440,7 +558,11 @@ func (m clientModel) View() tea.View {
 	}
 	b.WriteString("\n")
 	if m.busy {
-		b.WriteString(footerStyle.Render("同步中…") + "\n")
+		busyLine := m.busyLabel
+		if busyLine == "" {
+			busyLine = "同步中…"
+		}
+		b.WriteString(footerStyle.Render(busyLine) + "\n")
 	}
 	if m.err != nil {
 		b.WriteString(errStyle.Render("✗ "+m.err.Error()) + "\n")
