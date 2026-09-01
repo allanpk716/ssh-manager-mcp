@@ -256,15 +256,17 @@ func (w *pairWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			w.state, w.err = pwForm, msg.err
-			return w, nil
+			return w, w.pwFormReset()
 		}
 		if len(msg.found) == 0 {
 			w.state, w.err = pwForm, errors.New("未发现 broker——确认 broker 已运行且 discovery 开启，或在表单填写直连地址")
-			return w, nil
+			return w, w.pwFormReset()
 		}
 		w.offers, w.cursor = msg.found, 0
 		if len(msg.found) == 1 {
-			return w.pickBroker() // 单 offer 直进,不问
+			// 单 offer 视作已选中:建连失败时落回选择屏(一行 + 错误),不留死态。
+			w.state = pwPickBroker
+			return w.pickBroker()
 		}
 		w.state = pwPickBroker
 		return w, nil
@@ -416,35 +418,45 @@ func (w *pairWizard) keyUpdate(kp tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // 推进
 // ---------------------------------------------------------------------------
 
+// pwFormReset 重建表单并返回其 Init 命令(draft 指针共享,已填值保留)。提交
+// 失败留在 pwForm 的路径必须调用:huh 的 Form.Update 在 State != StateNormal
+// 时直接短路——不复位则表单永远停在 StateCompleted,用户无法再输入,且 pwForm
+// 下任意非 Esc 按键都会命中 Completed 分支重跑 submitForm(发现落空屏每键重发
+// LAN sweep)。
+func (w *pairWizard) pwFormReset() tea.Cmd {
+	w.form = newPWForm(w.draft)
+	return w.form.Init()
+}
+
 // submitForm 在 huh 表单完成后运行:全量校验 → 已装判定(force 闸门)→ 材料
-// 化 opts → 直连建会话 / 进入发现。拒绝时留在表单并给出 w.err。
+// 化 opts → 直连建会话 / 进入发现。拒绝时留在表单(重建复位)并给出 w.err。
 func (w *pairWizard) submitForm() tea.Cmd {
 	w.err = nil
 	inst := strings.TrimSpace(w.draft.Instance)
 	if err := pwValidateInstance(inst); err != nil {
 		w.err = err
-		return nil
+		return w.pwFormReset()
 	}
 	rawURL := strings.TrimSpace(w.draft.URL)
 	if err := pwValidateURL(rawURL); err != nil {
 		w.err = err
-		return nil
+		return w.pwFormReset()
 	}
 	rawPin := strings.TrimSpace(w.draft.Pin)
 	if err := pwValidatePin(rawPin); err != nil {
 		w.err = err
-		return nil
+		return w.pwFormReset()
 	}
 	enrolled, ierr := w.isEnrolled(inst)
 	if ierr != nil {
 		w.err = ierr
-		return nil
+		return w.pwFormReset()
 	}
 	if enrolled && !w.prefill.Force {
 		// CLI 冻结语义("instance already enrolled; pass --force")的 TUI 等价:
 		// 重配入口在实例选择器(p 预填 Force),表单不静默覆盖在用凭据。
 		w.err = fmt.Errorf("实例 %s 已配对——重配请回实例选择器按 p(force 重配)进入", inst)
-		return nil
+		return w.pwFormReset()
 	}
 	w.opts = clientops.PairOpts{
 		Instance: inst, ProfileHint: strings.TrimSpace(w.draft.ProfileHint),
@@ -452,7 +464,7 @@ func (w *pairWizard) submitForm() tea.Cmd {
 		Stdout: io.Discard, Stderr: io.Discard,
 	}
 	if rawURL != "" {
-		return w.beginTarget() // 直连:New 即完成等价校验(先于任何清理)
+		return w.beginTarget(nil) // 直连:New 即完成等价校验(先于任何清理)
 	}
 	// 发现流:短窗口不可取消(Esc 在 pwDiscovering 仅弃结果)。
 	w.state = pwDiscovering
@@ -478,18 +490,30 @@ func (w *pairWizard) pickBroker() (tea.Model, tea.Cmd) {
 	if w.opts.Pin == "" {
 		w.opts.Pin = d.SPKI // discovery 的 SPKI 升格为 pin(TLS 硬校验)
 	}
-	return w, w.beginTarget()
+	return w, w.beginTarget(&d)
 }
 
-// beginTarget 建立已校验会话并分流:Force 且未清理 → 确认屏;否则直接 enroll。
-// newSession 失败时错误落在当前屏(表单/选择屏),状态不推进。
-func (w *pairWizard) beginTarget() tea.Cmd {
+// beginTarget 建立已校验会话并分流。发现流传非 nil d:New 之外再 Bind(d)——
+// 幂等重校验,并把 offer 显示名记入 brokerName(force 时序:校验(New+Bind)
+// 先于清理);URL 直连路径 brokerName 恒空,broker 标签渲染 URL。
+// Force 且未清理 → 确认屏;否则直接 enroll。newSession 失败:错误落在当前屏
+// (表单态须重建复位,选择屏状态不推进)。
+func (w *pairWizard) beginTarget(d *clientops.Discovered) tea.Cmd {
 	s, serr := w.newSession(w.opts)
 	if serr != nil {
 		w.err = serr
+		if w.state == pwForm {
+			return w.pwFormReset()
+		}
 		return nil
 	}
 	w.sess = s
+	if d != nil {
+		if berr := s.Bind(*d); berr != nil {
+			w.err = berr
+			return nil
+		}
+	}
 	if w.prefill.Force && !w.cleaned {
 		w.state = pwEnrollForceConfirm
 		return nil
@@ -742,7 +766,8 @@ func (w *pairWizard) View() tea.View {
 	return altScreen(tea.NewView(b.String()))
 }
 
-// brokerLabel 是等待/ enroll 屏的 broker 显示名(发现流=offer 名;直连=URL)。
+// brokerLabel 是等待/enroll 屏的 broker 标签:发现流 = Bind 记入的 offer 显示
+// 名;URL 直连路径 brokerName 恒空,回退渲染连接 URL。
 func (w *pairWizard) brokerLabel() string {
 	if w.sess != nil {
 		if n := w.sess.BrokerName(); n != "" {

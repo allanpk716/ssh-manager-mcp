@@ -24,6 +24,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 
 	"ssh-manager-mcp/internal/clientops"
 )
@@ -76,12 +77,18 @@ func (f *fakePWSess) order() []string {
 	return append([]string(nil), f.calls...)
 }
 
-func (f *fakePWSess) Bind(d clientops.Discovered) error { f.record("Bind"); return f.bindErr }
-func (f *fakePWSess) ForceCleanup() error               { f.record("ForceCleanup"); return f.cleanupErr }
-func (f *fakePWSess) Enroll(ctx context.Context) error  { f.record("Enroll"); return f.enrollErr }
-func (f *fakePWSess) SAS() string                       { return f.sas }
-func (f *fakePWSess) BrokerName() string                { return f.broker }
-func (f *fakePWSess) ApprovalDeadline() time.Time       { return f.deadline }
+func (f *fakePWSess) Bind(d clientops.Discovered) error {
+	f.record("Bind")
+	if f.bindErr == nil {
+		f.broker = d.Name // T1 契约:Bind 把 offer 显示名记入 brokerName
+	}
+	return f.bindErr
+}
+func (f *fakePWSess) ForceCleanup() error              { f.record("ForceCleanup"); return f.cleanupErr }
+func (f *fakePWSess) Enroll(ctx context.Context) error { f.record("Enroll"); return f.enrollErr }
+func (f *fakePWSess) SAS() string                      { return f.sas }
+func (f *fakePWSess) BrokerName() string               { return f.broker }
+func (f *fakePWSess) ApprovalDeadline() time.Time      { return f.deadline }
 
 func (f *fakePWSess) WaitApproval(ctx context.Context, note func(clientops.PollNote)) error {
 	f.record("WaitApproval")
@@ -243,11 +250,12 @@ func TestPWValidators(t *testing.T) {
 func TestPairWizard_SubmitRejectsIllegalInstance(t *testing.T) {
 	h := newPWHarness(t, PairWizardPrefill{})
 	h.w.draft = &pwDraft{Instance: "bad/name", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
-	if cmd := h.w.submitForm(); cmd != nil {
-		t.Fatal("refused submit must not start anything")
-	}
+	h.w.submitForm() // 返回值 = 表单复位命令(R1 发现 1),不是启动命令
 	if h.w.state != pwForm || h.w.err == nil {
 		t.Fatalf("refusal must stay on the form with an error, state=%v err=%v", h.w.state, h.w.err)
+	}
+	if h.w.form.State != huh.StateNormal {
+		t.Fatalf("refusal must reset the completed form (StateCompleted = dead input), state=%v", h.w.form.State)
 	}
 	if len(h.newed) != 0 {
 		t.Fatalf("an illegal instance name must never reach session construction, newed=%d", len(h.newed))
@@ -260,11 +268,12 @@ func TestPairWizard_SubmitEnrolledNeedsForce(t *testing.T) {
 	h := newPWHarness(t, PairWizardPrefill{})
 	h.w.isEnrolled = func(string) (bool, error) { return true, nil }
 	h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
-	if cmd := h.w.submitForm(); cmd != nil {
-		t.Fatal("enrolled instance without force must refuse (no command)")
-	}
+	h.w.submitForm() // 拒绝;返回值 = 表单复位命令
 	if h.w.state != pwForm || h.w.err == nil || !strings.Contains(h.w.err.Error(), "force") {
 		t.Fatalf("refusal must stay on the form and mention force, state=%v err=%v", h.w.state, h.w.err)
+	}
+	if h.w.form.State != huh.StateNormal {
+		t.Fatalf("refusal must reset the completed form, state=%v", h.w.form.State)
 	}
 	if len(h.newed) != 0 {
 		t.Fatalf("the enrolled gate must precede session construction, newed=%d", len(h.newed))
@@ -289,11 +298,12 @@ func TestPairWizard_NewSessionErrShowsOnForm(t *testing.T) {
 	h := newPWHarness(t, PairWizardPrefill{})
 	h.newSessionErr = errors.New("refusing TOFU pairing without --pin")
 	h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878"} // pin 空 → 会话校验拒 TOFU
-	if cmd := h.w.submitForm(); cmd != nil {
-		t.Fatal("failed session construction must not start anything")
-	}
+	h.w.submitForm()                                                        // 返回值 = 表单复位命令
 	if h.w.state != pwForm || h.w.err == nil {
 		t.Fatalf("session error must surface on the form, state=%v err=%v", h.w.state, h.w.err)
+	}
+	if h.w.form.State != huh.StateNormal {
+		t.Fatalf("session error must reset the completed form, state=%v", h.w.form.State)
 	}
 }
 
@@ -305,6 +315,38 @@ func TestPairWizard_FormEscCloses(t *testing.T) {
 	}
 	if h.w.state != pwClosed {
 		t.Fatalf("closed wizard state=%v, want pwClosed", h.w.state)
+	}
+}
+
+// TestPairWizard_FormRefusalResetsCompletedForm(评审 R1 发现 1 的回归钉):
+// huh 的 Form.Update 在 State != StateNormal 时短路——提交失败留在 pwForm 必须
+// 重建表单(draft 指针共享保值),否则用户无法再输入,且 pwForm 下任意非 Esc
+// 按键都会命中 Completed 分支重跑 submitForm(发现落空屏每键重发 LAN sweep)。
+func TestPairWizard_FormRefusalResetsCompletedForm(t *testing.T) {
+	h := newPWHarness(t, PairWizardPrefill{})
+	h.w.isEnrolled = func(string) (bool, error) { return true, nil }
+	h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
+	h.w.submitForm() // 已配对且未 force → 拒绝
+	if h.w.form.State != huh.StateNormal {
+		t.Fatalf("refusal must rebuild the form to StateNormal, got %v", h.w.form.State)
+	}
+	if h.w.draft.Instance != "laptop" || h.w.draft.URL != "https://192.0.2.5:7878" {
+		t.Fatalf("the rebuilt form must share the draft (values retained), got %+v", h.w.draft)
+	}
+	// 复位后的表单上任意按键 = 普通输入,不得重跑 submitForm(无重提交环)。
+	before := len(h.newed)
+	h.w.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if len(h.newed) != before {
+		t.Fatal("a keypress on the refused form must not re-drive submitForm")
+	}
+	if h.w.state != pwForm {
+		t.Fatalf("a stray keypress must stay on the form, got %v", h.w.state)
+	}
+	// 用户改主意(解除已装闸门)后可再次提交:流程正常推进。
+	h.w.isEnrolled = func(string) (bool, error) { return false, nil }
+	pwStep(t, h.w, h.w.submitForm())
+	if h.w.state != pwWaiting {
+		t.Fatalf("a fresh submit after the refusal must drive on, state=%v err=%v", h.w.state, h.w.err)
 	}
 }
 
@@ -325,6 +367,9 @@ func TestPairWizard_DiscoverEmptyBackToForm(t *testing.T) {
 	}
 	if h.w.err == nil || !strings.Contains(h.w.err.Error(), "未发现") {
 		t.Fatalf("empty discovery must explain itself on the form, err=%v", h.w.err)
+	}
+	if h.w.form.State != huh.StateNormal {
+		t.Fatalf("returning to the form must reset the completed form (R1 发现 1), state=%v", h.w.form.State)
 	}
 }
 
@@ -367,9 +412,20 @@ func TestPairWizard_MultiBrokerPickAndSPKIUpgrade(t *testing.T) {
 	if len(h.newed) != 1 || h.newed[0].URL != "https://192.0.2.6:7879" || h.newed[0].Pin != testPWPin2() {
 		t.Fatalf("the picked offer must materialize into opts (SPKI 升格与 CLI pickDiscovered 同规则), got %+v", h.newed)
 	}
+	// R1 发现 2:发现流必须 Bind 幂等重校验并把 offer 名记入 brokerName
+	// (校验(New+Bind)先于清理,plan 冻结时序)。
+	if got := h.sess.order(); len(got) == 0 || got[0] != "Bind" {
+		t.Fatalf("the discovered pick must re-Bind before anything else, got %v", got)
+	}
 	pwStep(t, h.w, cmd) // fake enroll 立即完成
+	if got := h.sess.order(); !reflect.DeepEqual(got, []string{"Bind", "Enroll"}) {
+		t.Fatalf("the discovered pick must Bind then enroll, got %v", got)
+	}
 	if h.w.state != pwWaiting {
 		t.Fatalf("enroll success must land in pwWaiting, got %v", h.w.state)
+	}
+	if v := h.w.View().Content; !strings.Contains(v, "nuc11") {
+		t.Fatalf("the waiting screen must show the offer name (Bind 补名), got:\n%s", v)
 	}
 }
 
@@ -397,6 +453,12 @@ func TestPairWizard_ForceCleanupRunsBeforeEnroll(t *testing.T) {
 	h := newPWHarness(t, PairWizardPrefill{Force: true})
 	h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
 	h.w.submitForm() // → pwEnrollForceConfirm
+	// R1 发现 3:确认屏必须渲染冻结的删/留清单(auth/bin/meta/quarantine 删,
+	// config 留)。
+	if v := h.w.View().Content; !strings.Contains(v, "cache.auth.json") ||
+		!strings.Contains(v, "quarantine") || !strings.Contains(v, "cache.config.json") {
+		t.Fatalf("confirm screen must render the frozen delete/keep list, got:\n%s", v)
+	}
 	_, cmd := h.w.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if h.w.state != pwEnrolling {
 		t.Fatalf("confirming must start the enroll, got %v", h.w.state)
@@ -639,6 +701,10 @@ func TestPairWizard_EndedReasonsAndRetry(t *testing.T) {
 			_, cmd := h.w.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 			if h.w.state != pwEnrolling || len(h.newed) != 2 {
 				t.Fatalf("r must re-drive with the same opts on a new session, state=%v newed=%d", h.w.state, len(h.newed))
+			}
+			// R1 发现 6:重试必须是同参数重驱(PairOpts 可比较,逐值相等)。
+			if h.newed[1] != h.newed[0] {
+				t.Fatalf("retry must reuse the SAME opts, got %+v vs %+v", h.newed[0], h.newed[1])
 			}
 			pwStep(t, h.w, cmd)
 			if h.w.state != pwWaiting {
