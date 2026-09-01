@@ -4,10 +4,12 @@ package cli
 // spec §3.3-3):store 直连的配对裁决面,与 broker TUI 的 Pairing 页共享同一张
 // pairing_pending 表(跨进程;CAS 仲裁并发)。
 //
-// SAS 裁决(控制器,覆盖 spec「批准面同屏三件套」原文):SAS 推导需要 serve 进程
-// 内存里的 X25519 私钥,本进程只有 store 直连——因此输出行 = 两件套
-// `<name> @ <target_url>` + 「对照 client 屏 SAS 后批准」的措辞,绝不伪造
-// 第三件。机械地址校验(ForeignTarget)在此复算:目标 ≠ 本机地址 → 无
+// SAS 双屏比对(2026-09-01 裁决:恢复 spec rev4:68 冻结原文,撤销 rev4:69
+// 的降级勘误):serve 在 enroll 时即持有 X25519 私钥与请求里的 client_pub,
+// 当场派生 6 位 SAS 落行;本面输出三件套 `<name> @ <target_url> SAS <6位>`,
+// owner 与 client 屏逐位比对一致后才批准。行缺 SAS(版本错配/旧行)→ ⚠
+// 警示并建议拒绝——绝不静默回退到抓不住 MITM 的 name/url 两件套对照。
+// 机械地址校验(ForeignTarget)在此复算:目标 ≠ 本机地址 → 无
 // --allow-foreign-url 拒绝并打 ⚠ 文案。
 
 import (
@@ -88,7 +90,7 @@ func servePairFlags(p store.PendingPairing, now int64) string {
 func servePairLsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "ls",
-		Short: "List the pending pairing queue (name/target/source-IP/hint/flags; the SAS shows on the client screen)",
+		Short: "List the pending pairing queue (rows show the three-piece line incl. SAS — compare digit-by-digit with the client screen)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openUnlockedStore()
 			if err != nil {
@@ -106,13 +108,25 @@ func servePairLsCmd() *cobra.Command {
 			now := time.Now().Unix()
 			for _, p := range rows {
 				fmt.Fprintf(cmd.OutOrStdout(),
-					"%-16s %s\n  source=%s hint=%s flags=%s profile=%s id=%s\n  SAS 码见 client 屏幕——对照本行名称/地址一致后再批准\n",
-					clientops.StripC0C1(p.Name), clientops.StripC0C1(p.TargetURL), orDashStr(p.SourceIP), orDashStr(clientops.StripC0C1(strings.TrimSpace(p.ProfileHint))),
+					"%-16s %s\n  SAS %s\n  source=%s hint=%s flags=%s profile=%s id=%s\n",
+					clientops.StripC0C1(p.Name), clientops.StripC0C1(p.TargetURL), servePairSAS(p),
+					orDashStr(p.SourceIP), orDashStr(clientops.StripC0C1(strings.TrimSpace(p.ProfileHint))),
 					servePairFlags(p, now), profileNameByID(s, p.Profile), hex.EncodeToString(p.ID))
 			}
 			return nil
 		},
 	}
+}
+
+// servePairSAS renders the row's SAS piece: the real 6-digit code (derived by
+// serve at enroll, landed in the row) or — for a row written by a pre-
+// 2026-09-01 serve — the no-SAS warning; a two-piece comparison cannot catch
+// a MITM, so the row is flagged as un-comparable rather than silently shown.
+func servePairSAS(p store.PendingPairing) string {
+	if s := strings.TrimSpace(p.SAS); s != "" {
+		return s
+	}
+	return "⚠ 行缺 SAS——serve 版本过旧或行损坏,无法比对,建议 reject 后重新配对"
 }
 
 func servePairApproveCmd() *cobra.Command {
@@ -154,7 +168,8 @@ func servePairApproveCmd() *cobra.Command {
 			if !ok {
 				return errors.New("approve had no effect — the row expired or was already adjudicated (CAS miss); re-run `serve pair ls`")
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s @ %s (对照 client 屏 SAS 后批准)\n", clientops.StripC0C1(row.Name), clientops.StripC0C1(row.TargetURL))
+			// 三件套行(spec rev4:83):approve 输出与 client 屏同一行,便于留痕比对。
+			fmt.Fprintf(cmd.OutOrStdout(), "%s @ %s SAS %s\n", clientops.StripC0C1(row.Name), clientops.StripC0C1(row.TargetURL), servePairSAS(*row))
 			fmt.Fprintf(cmd.OutOrStdout(), "profile=%s — the client has 120s to finish (it polls; the credentials land on its disk automatically)\n", profile)
 			return nil
 		},

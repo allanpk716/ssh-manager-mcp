@@ -282,6 +282,13 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "cache_tokens", "profile_id", "TEXT REFERENCES profiles(id)"); err != nil {
 		return err
 	}
+	// 2026-09-01 SAS 落行(撤销 rev4:69 降级勘误):serve 在 enroll 时算好 6 位
+	// SAS 写入本列,批准面(TUI/CLI/批2 Web)经同一张表读到真值做双屏比对。
+	// 落库的仅是 ~20bit 比对码(本就印在人眼屏幕上);priv/kAck/kCreds 仍只在
+	// serve 进程内存。旧行迁移为 ''(旧 serve 写的行——批准面按无 SAS 警示处理)。
+	if err := addColumnIfMissing(db, "pairing_pending", "sas", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	// Plan 20 C0: servers.credential_id becomes nullable (credential-less
 	// servers — e.g. ssh-config imports of hosts without IdentityFile).
 	// SQLite can't relax NOT NULL in place, so this is a guarded table rebuild.
@@ -556,6 +563,7 @@ CREATE TABLE IF NOT EXISTS pairing_pending (
   profile_hint TEXT NOT NULL DEFAULT '', replace_inactive INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL DEFAULT 'pending', profile TEXT NOT NULL DEFAULT '', source_ip TEXT NOT NULL DEFAULT '',
   enroll_deadline INTEGER NOT NULL, approved_deadline INTEGER NOT NULL DEFAULT 0,
-  delivered_sealed BLOB, replay_count INTEGER NOT NULL DEFAULT 0
+  delivered_sealed BLOB, replay_count INTEGER NOT NULL DEFAULT 0,
+  sas TEXT NOT NULL DEFAULT ''
 );
 `

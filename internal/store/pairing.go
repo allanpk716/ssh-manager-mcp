@@ -54,6 +54,11 @@ func pairProjectName(name string) string { return pairProjectPrefix + name }
 
 // PendingPairing is one row of the pairing queue. State:
 // pending|approved|delivered|expired|rejected|failed.
+// SAS carries the 6-digit comparison code the serve process derived at enroll
+// (from its in-memory X25519 key + the transcript) — the approval surfaces
+// read it here to render the frozen three-piece line. Empty = written by a
+// pre-2026-09-01 serve (version skew) — render the no-SAS warning, never a
+// fabricated code. Key material (priv/kAck/kCreds) is NEVER in this struct.
 type PendingPairing struct {
 	ID               []byte
 	Name             string
@@ -63,6 +68,7 @@ type PendingPairing struct {
 	ServerPub        []byte
 	Snonce           []byte
 	Sig              []byte
+	SAS              string
 	ProfileHint      string
 	ReplaceInactive  bool
 	State            string
@@ -131,11 +137,11 @@ func (s *Store) AddPendingPairing(p *PendingPairing, perIP, globalMax int) error
 		`INSERT INTO pairing_pending (
 		   id,name,target_url,client_pub,cnonce,server_pub,snonce,sig,
 		   profile_hint,replace_inactive,state,profile,source_ip,
-		   enroll_deadline,approved_deadline,delivered_sealed,replay_count
-		 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		   enroll_deadline,approved_deadline,delivered_sealed,replay_count,sas
+		 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Name, p.TargetURL, p.ClientPub, p.Cnonce, p.ServerPub, p.Snonce, p.Sig,
 		p.ProfileHint, ri, p.State, p.Profile, p.SourceIP,
-		p.EnrollDeadline, p.ApprovedDeadline, p.DeliveredSealed, p.ReplayCount,
+		p.EnrollDeadline, p.ApprovedDeadline, p.DeliveredSealed, p.ReplayCount, p.SAS,
 	); err != nil {
 		return err
 	}
@@ -181,7 +187,7 @@ func (s *Store) ListPendingPairing() ([]PendingPairing, error) {
 	rows, err := s.db.Query(
 		`SELECT id,name,target_url,client_pub,cnonce,server_pub,snonce,sig,
 		        profile_hint,replace_inactive,state,profile,source_ip,
-		        enroll_deadline,approved_deadline,delivered_sealed,replay_count
+		        enroll_deadline,approved_deadline,delivered_sealed,replay_count,sas
 		 FROM pairing_pending
 		 WHERE (state='pending' AND enroll_deadline > ?)
 		    OR (state='approved' AND approved_deadline > ?)
@@ -200,7 +206,7 @@ func (s *Store) ListPendingPairing() ([]PendingPairing, error) {
 		if err := rows.Scan(
 			&p.ID, &p.Name, &p.TargetURL, &p.ClientPub, &p.Cnonce, &p.ServerPub, &p.Snonce, &p.Sig,
 			&p.ProfileHint, &ri, &p.State, &p.Profile, &p.SourceIP,
-			&p.EnrollDeadline, &p.ApprovedDeadline, &p.DeliveredSealed, &p.ReplayCount,
+			&p.EnrollDeadline, &p.ApprovedDeadline, &p.DeliveredSealed, &p.ReplayCount, &p.SAS,
 		); err != nil {
 			return nil, err
 		}
