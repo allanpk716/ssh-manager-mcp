@@ -133,6 +133,14 @@ type PairWizardPrefill struct{ Instance, ProfileHint, URL, Pin string; Force boo
   | GW4 | Esc 各步全身而退;`sshmgr pair` CLI 回归(同机双路径等价) | 助手 |
 - [ ] **Step 4: 全仓绿 → 提交** `docs: Plan 45 T4——TUI 配对向导文档+发布注记+GW1-G4 真机清单`
 
+**发布 checklist 注记（v0.13.1）**:纯加法(非 breaking——协议/serve 零改动,CLI 行为零变化);**资产名不变**(`sshmgr_{ver}_{os}_{arch}`,无迁移面,compat-matrix 不加破坏性变更行);发版后 `sshmgr update --check` 常规验证(「资产」行与新 tag 对齐且可命中——deployment-modes.md 资产名防漂移注的例行项);升级次序铁律无新约束(client/serve 各自独立升级即生效)。
+
+**GW1-G4 真机验收清单**(Step 3 表的勾选跟踪,发版前完成):
+- [ ] **GW1** 笔记本 TUI `[c]` 全流程对 NUC10 真配对(SAS 屏肉眼比对=owner;批准在 NUC10 TUI/CLI;批准后 Enter 门体验)——owner(SAS 必人眼)+助手陪跑
+- [ ] **GW2** 已配对实例 `p` 重配(force 清理语义+serve 侧旧码吊销)——助手(本机)
+- [ ] **GW3** 结束态→`r` 重新申请走通(NUC10 侧先 reject 再 approve;知悉:WriteAndPull 失败后 `r` 撞 broker 419——终局同 CLI 但失败点不同)——助手(MCP)+owner
+- [ ] **GW4** Esc 各步全身而退;`sshmgr pair` CLI 回归(同机双路径等价)——助手
+
 ---
 
 ## Self-Review(已执行)

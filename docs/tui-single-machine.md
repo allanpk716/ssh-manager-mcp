@@ -34,7 +34,7 @@ sshmgr tui
 > - 只有本机用 → 单机
 > - 要给其他机器共享 → server
 
-选**只有本机用 → 单机**。（选「否」走的是 client 流程，属于多机部署，见 [quickstart-multi-machine.md](./quickstart-multi-machine.md)。）
+选**只有本机用 → 单机**。（选「否」走的是 client 流程，属于多机部署，见 [quickstart-multi-machine.md](./quickstart-multi-machine.md)；client 面板的 `[c]` 配对向导与 Pairing 批准页走查见 [tui-multi-machine.md](./tui-multi-machine.md)。）
 
 **选定的瞬间 role.json 就已落盘**（标记 setup 未完成）——此后**任何时刻** `q` / `Esc` / `Ctrl+C` 退出都是安全暂停，重跑 `tui` 从断点继续，不会重录已提交的数据。
 

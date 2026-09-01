@@ -266,4 +266,13 @@ func TestClientView_FooterAdvertisesWizard(t *testing.T) {
 	if strings.Contains(v, "[c]入网") {
 		t.Fatalf("the single-slot footer must not advertise [c], got:\n%s", v)
 	}
+	// T4 review B-1: the cred==nil guidance line is the other [c] billboard —
+	// under the override it must drop the [c] clause too and point at the CLI
+	// path alone (the wizard refuses to start there; no screen may say [c]).
+	if strings.Contains(v, "[c]") {
+		t.Fatalf("the single-slot view must not advertise [c] anywhere (footer + guidance line), got:\n%s", v)
+	}
+	if !strings.Contains(v, "运行 sshmgr pair") {
+		t.Fatalf("the single-slot guidance line must point at the CLI path, got:\n%s", v)
+	}
 }

@@ -4,7 +4,7 @@
 >
 > 全文只讲「最少要做什么」。架构 / 配对协议细节 / 多实例 / runbook 看详尽版 [`multi-machine.md`](./multi-machine.md)。
 >
-> **Plan 42 批1 起**：新机入网 = `sshmgr pair` 一条命令（不再跨机手抄设备码/token/指纹三串字符串）；agent 一律走本地只读缓存（多机 agent 只读 + 执行，写操作在管理面）。
+> **Plan 42 批1 起**：新机入网 = `sshmgr pair` 一条命令（不再跨机手抄设备码/token/指纹三串字符串；不想敲命令可用工作机 TUI 的 `[c]` 配对向导，Plan 45——见 [tui-multi-machine.md](./tui-multi-machine.md)）；agent 一律走本地只读缓存（多机 agent 只读 + 执行，写操作在管理面）。
 
 ---
 
@@ -66,6 +66,8 @@ sshmgr pair --instance laptop
 #   批准行 = name@url 两件 + 「SAS 码见 client 屏幕」——对照本机屏上 SAS 与 name@url 一致再批
 # → 批准后 120 秒内自动完成：凭据加密下发 → 首拉落盘 → 产物 pair.laptop.mcp.json
 ```
+
+> **TUI 等价路径（Plan 45）**：不想敲命令就在工作机 `sshmgr tui` 打开 client 面板按 **`[c]`**——同一个配对流程的向导形态（表单 → LAN 发现 → SAS 屏与 broker 批准面逐位对照 → 批准后 Enter 完成 → 自动写入首拉），逐屏走查见 [`tui-multi-machine.md`](./tui-multi-machine.md)。CI/无人值守仍走上面的 CLI（`SSHMGR_PAIR_ASSUME_SAS` 自动化跳比对仅 CLI 有，向导永远人闸比对）。
 
 收尾一步——把产物里的片段抄进该机 `.mcp.json`（或 pair 时加 `--write-mcp <path>` 直接落位）：
 

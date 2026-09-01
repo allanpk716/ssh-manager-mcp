@@ -205,7 +205,10 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pairWizardClosedMsg:
 		// Plan 45 T3: Esc at any wizard step = pure return to the page (the
 		// wizard's aborts are zero-residue; if a mid-flight force abort left the
-		// slot half-cleaned, the next [s]/refresh surfaces the honest error).
+		// slot half-cleaned, the next [s]/refresh settles it to the disk's true
+		// state — the in-memory cred may still pull and revive the slot, or the
+		// honest error surfaces; T4 review B-2 loosened the earlier "surfaces
+		// the honest error" wording, which overpromised a failure).
 		m.overlay = nil
 		return m, nil
 	case tea.KeyPressMsg:
@@ -398,8 +401,15 @@ func (m clientModel) View() tea.View {
 	if m.cred == nil {
 		// Plan 45 T3 (supersedes Plan 42 批1 前置 #4's pair-only wording): the
 		// empty panel now points at the in-TUI wizard first, with the CLI path
-		// kept in the sentence.
-		b.WriteString(warnStyle.Render("ℹ 新机入网:按 [c] 启动配对向导(或运行 sshmgr pair)") + "\n")
+		// kept in the sentence. T4 review B-1: under a single-slot override the
+		// wizard refuses to start — this line stops advertising [c] there (the
+		// same honesty discipline as the footer's hidden hint) and points at
+		// the CLI path alone.
+		guide := "ℹ 新机入网:按 [c] 启动配对向导(或运行 sshmgr pair)"
+		if singleSlot {
+			guide = "ℹ 新机入网:运行 sshmgr pair(单槽覆盖模式下向导不可用)"
+		}
+		b.WriteString(warnStyle.Render(guide) + "\n")
 	}
 	n := 0
 	if m.snap != nil {

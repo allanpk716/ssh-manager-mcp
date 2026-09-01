@@ -180,6 +180,8 @@ sshmgr pair --instance laptop
 # → 产物 pair.laptop.mcp.json（含真值 project token，0600）
 ```
 
+> TUI 形态：工作机 `sshmgr tui` → client 面板 `[c]` 配对向导（Plan 45）——同一流程的点选版，见[配对入网节](#配对入网sshmgr-pairplan-42)的 TUI 等价路径注。
+
 把产物里的片段抄进该机的 `.mcp.json`（或 pair 时用 `--write-mcp <path>` 直接落位）：
 
 ```json
@@ -311,6 +313,8 @@ sshmgr pair --instance laptop
 ## 配对入网：`sshmgr pair`（Plan 42）
 
 > **一句话**：新工作机从「装好二进制」到「agent 可用」= 一条 `sshmgr pair --instance <名>`——LAN 广播发现 broker → SAS 三件套人闸比对 → owner 批准 → 设备码 + project token + 指纹 + 时效上限**自动加密下发** → 首拉落盘 → `.mcp.json` 产物落盘。不再跨机手抄三串字符串。
+>
+> **TUI 等价路径（Plan 45）**：以上流程在工作机上也可以全键盘点完——`sshmgr tui` client 面板 **`[c]` 配对向导**（表单 → LAN 发现 → SAS 大字常显等待、与 broker 批准面逐位对照 → 批准后 Enter 完成 → 写入首拉；**重配** = 实例 picker 已配对行 `p`；**被拒/过期** = 结果屏 `r` 重新申请；Esc 全链可退，写入期除外）。逐屏走查见 [tui-multi-machine.md](./tui-multi-machine.md)；`SSHMGR_PAIR_ASSUME_SAS` 自动化跳比对仍 **CLI-only**（向导不读该 env）。
 
 ### 全流程
 
@@ -339,7 +343,7 @@ serve pair reject laptop                        # 拒绝（终态，该请求永
 ```
 
 - **`--instance` 必填** = 设备名 = 本地实例槽（Plan 40 三位一体：设备码 name = 实例名 = profile 授权单元）；命名纪律建议 `机器-实例`。
-- **自动化免比对**：env `SSHMGR_PAIR_ASSUME_SAS=1` 跳过终端 SAS 确认（**STUB 大字警告**——无人值守 CI 专用，放弃人闸；机械地址校验与 TLS pin 仍在）。
+- **自动化免比对**：env `SSHMGR_PAIR_ASSUME_SAS=1` 跳过终端 SAS 确认（**STUB 大字警告**——无人值守 CI 专用，放弃人闸；机械地址校验与 TLS pin 仍在；**CLI 专属**——TUI 配对向导不读该 env，永远人闸比对）。
 - **同名覆盖**：目标实例已有 `cache.auth.json` → 默认拒绝；`--force` 按 Plan 40 换码 runbook 清理后重写（保留 `cache.config.json`）。
 - 全部 flags 以 `sshmgr pair --help` 为准；审计（enroll/批准/finish/拒绝）与状态变更**同事务**落权威 vault 的 `audit_log`，字段走脱敏白名单（永不落凭据值/token/设备码/pin/SAS/密文）。
 
@@ -409,7 +413,7 @@ sshmgr cache status
 
 > **缓存目录**：`cache.bin` / `cache.meta.json` / `cache-audit.log` 进 `SSHMGR_CACHE_DIR`（默认 `os.UserConfigDir()/ssh-manager/`，即 Linux `~/.config/ssh-manager/`、macOS `~/Library/Application Support/ssh-manager/`、Windows `%AppData%\ssh-manager\`）。**DEK** 存在 vault 固定路径下的 `cache-dek.key` 裸文件（Win `C:\ProgramData\ssh-manager\cache-dek.key` / Unix `/var/lib/ssh-manager/cache-dek.key`，Plan 16 T4 从 OS keychain/DPAPI 迁来）。
 >
-> 💡 工作机上也可用 `sshmgr tui --mode client` 打开 client 面板：查看连接摘要 / 缓存年龄 / 实例切换（`[i]`）并手动触发同步（`[s]`）；连接编辑已退役——新机入网/换码走 `sshmgr pair`（见 [tui-multi-machine.md](./tui-multi-machine.md)）。
+> 💡 工作机上也可用 `sshmgr tui --mode client` 打开 client 面板：查看连接摘要 / 缓存年龄 / 实例切换（`[i]`）并手动触发同步（`[s]`）；连接编辑已退役——新机入网/换码 = `sshmgr pair`（Plan 45 起 client 面板 `[c]` 配对向导与实例 picker `p` 为同一流程的 TUI 等价路径，见 [tui-multi-machine.md](./tui-multi-machine.md)）。
 >
 > ⚠️ **已知不一致**（Plan 16 T4 只迁了 DEK，未迁 `cache.bin` 路径）：`cache.bin` 在 `UserConfigDir`、`cache-dek.key` 在 vault 固定路径——两份不在同一目录。功能正常（DEK 文件能读、cache 能解），但离线拷盘需同时拿到两处。后续清理工作会收敛到同一目录。**威胁模型**：cache.bin + cache-dek.key 同机不同目录 → 同盘 → 离线拷盘可解 cache；cache 是只读快照非完整凭据，与 master.key 同等级（L1+，见 [threat-model.md](./threat-model.md)）。
 
@@ -787,7 +791,7 @@ sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指纹>' -
 
 ### enroll 双 agent 全程形态（批2 picker · Plan 42 后口径）
 
-同机双 agent 的 TUI 少走命令形态（批2 的 `[i]` picker 保留；Plan 42 起 client 向导/连接表单已退役——入网一律 `sshmgr pair`）：
+同机双 agent 的 TUI 少走命令形态（批2 的 `[i]` picker 保留；Plan 42 曾退役 client 连接编辑表单，Plan 45 起 `[c]` 以 SAS 配对向导复活——入网 = `sshmgr pair` 或 TUI 向导，两条等价路径）：
 
 1. **agentA**：`sshmgr pair --instance laptop-agentA`（批准时选 profile-a）→ 首拉自动归位进 `instances/laptop-agentA/`；产物 `pair.laptop-agentA.mcp.json` 的 `args` 自动带 `"--instance", "laptop-agentA"` 及注释行（`本机 cache 位于实例槽 instances/laptop-agentA/——args 必须带 --instance laptop-agentA。`），照抄即可。
 2. **agentB**：再跑一条 `sshmgr pair --instance laptop-agentB`（批准时选 profile-b）→ 归位进自己的实例槽、产物各带各的 `--instance`。
@@ -809,7 +813,7 @@ sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指纹>' -
 
 ### 边界（如实·批2 更新）
 
-- **TUI 多实例现状（批2 落地 · Plan 42 收窄）**：`[i]` 实例 picker 会话内切换、单槽 override env 互斥（禁用而非适配）保留；client 向导与连接表单随 ②a 退役删除（Plan 42 批1）——入网/换码 = `sshmgr pair`（`--force` 承接换码清理语义）。无人值守的批量刷新仍推荐计划任务 wrapper：每实例一条任务 + 各自的 env 文件（设备码是 per-instance 的；TUI 面板 `[s]` 只管当前选中槽）。
+- **TUI 多实例现状（批2 落地 · Plan 42 收窄 · Plan 45 复活 [c]）**：`[i]` 实例 picker 会话内切换、单槽 override env 互斥（禁用而非适配）保留；连接编辑表单随 ②a 退役删除（Plan 42 批1，不会回来），Plan 45 起 `[c]` 复活为 **SAS 配对向导**——入网/换码 = `sshmgr pair`（`--force` 承接换码清理语义）或 client 面板 `[c]` 向导 / picker 已配对行 `p`。无人值守的批量刷新仍推荐计划任务 wrapper：每实例一条任务 + 各自的 env 文件（设备码是 per-instance 的；TUI 面板 `[s]` 只管当前选中槽）。
 - **自动归位只作用于真空机首次 enroll**：存量默认槽机器**永不自动迁移**（意图标记 meta/config 在场即不归位）——要进实例形态显式 `--instance` 重新 enroll，或按下方 runbook v2 清三件套后裸拉归位。
 - **doctor 暂不感知命名实例**（批2 后维持）：只有命名实例的机器，doctor 的 client-cache 检查会报"cache 缺失"（roles 判定已修为 client；不静默但属误报）——doctor 感知命名实例跟随 Plan 38 体系解决。
 - 存量单实例机器**零迁移**：无 flag 的 pull/mcp/status 行为与旧版一致（门禁对存量空 `device_name` 走补记分支）。

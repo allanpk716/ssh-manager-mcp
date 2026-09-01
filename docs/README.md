@@ -32,7 +32,7 @@
 | [broker-host-agent.md](./broker-host-agent.md) | **在 broker（serve）主机上也跑 agent**：零距离 client 走桥（pair 入网 / 手工路径）+ 应急附录（stdio 直开 vault，不推荐）。 |
 | [backup-restore.md](./backup-restore.md) | **备份与迁移（export / import）**：把整个 vault 导出成口令加密的便携文件（跨机、可恢复）——备份 / 迁移 / 灾难恢复；安全模型（KeePass 式）、限制、与复制 store.db 的对比。 |
 | [tui-single-machine.md](./tui-single-machine.md) | **单机 TUI 教程**（全键盘点选，不想记命令）：首跑向导走查、页签参考、典型任务与排错。 |
-| [tui-multi-machine.md](./tui-multi-machine.md) | **联机 TUI 教程**（server 侧主控台 + 工作机 client 面板）：Pairing 批准页、实例切换、典型任务。 |
+| [tui-multi-machine.md](./tui-multi-machine.md) | **联机 TUI 教程**（server 侧主控台 + 工作机 client 面板）：Pairing 批准页、`[c]` 配对向导（Plan 45）、实例切换、典型任务。 |
 | [agent-tools.md](./agent-tools.md) | **给 AI agent 的工具手册**（可贴进 CLAUDE.md 的规则模板在内）：铁律、逐工具语义、错误对照、部署形态与吊销三路径、行为依据表。 |
 | [compat-matrix.md](./compat-matrix.md) | **client↔serve 版本兼容矩阵**：已验证组合 / 破坏性变更 / 升级顺序铁律（含 Plan 42 批1 三步迁移 + v0.13.0 四项 breaking 面/迁移总册）。升级任何一端之前先看这篇。 |
 | [backlog.md](./backlog.md) | **欠账清单（P0/P1 已裁决待开工 + P2 已裁决未排期 + 不做留痕）**：2026-08-21 grilling 缺口分析排期——P0 三项（host 掩码 / 后台任务三件套 / upload_content）、P1 三项（离线快照失效 / tunnels 硬化（吸收原 #1/#2/#4）/ audit CLI），P2 六项工程债（doctor / DACL / flake / TUI）保持未排期，文末附明确不做清单。后续 plan 的取货架。 |

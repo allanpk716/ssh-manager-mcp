@@ -156,9 +156,9 @@ sshmgr projects ls [--all]           # status column; --all includes revoked
 
 ## TUI 主控台（`sshmgr tui`）
 
-一条命令的可视化管理台：在 **broker 机器**上管服务器 / profiles / projects / 设备码 / **配对批准**（Pairing 页，替代手敲 CLI），在 **client 工作机**上查看缓存状态 / 切换实例 / 手动同步。同一个二进制，按本机状态自动选边。各页签 / 设备码 / token 谁是谁的**概念模型图解**（仓库隐喻，中文）：[`docs/concepts.md`](docs/concepts.md)。
+一条命令的可视化管理台：在 **broker 机器**上管服务器 / profiles / projects / 设备码 / **配对批准**（Pairing 页，替代手敲 CLI），在 **client 工作机**上查看缓存状态 / 切换实例 / 手动同步 / **`[c]` 配对向导入网**（Plan 45）。同一个二进制，按本机状态自动选边。各页签 / 设备码 / token 谁是谁的**概念模型图解**（仓库隐喻，中文）：[`docs/concepts.md`](docs/concepts.md)。
 
-空机器第一次运行 `tui` 会进入**角色向导**（单机 / server / client 三选，可中断续配；client 分支 = `sshmgr pair` 入网引导页——连接表单已随 ②a 退役，多机入网一律 pair）；`sshmgr clear` 角色清理——**按实际存在枚举**删除（与 role.json 声明的角色无关）本机 vault / serve / 缓存残留（vault 角色先自动 export 备份 + 输入 `DELETE` 确认），机器回到首次向导状态。
+空机器第一次运行 `tui` 会进入**角色向导**（单机 / server / client 三选，可中断续配；client 分支 = `sshmgr pair` 入网引导页——连接表单已随 ②a 退役，多机入网 = pair：CLI 或 client 面板 `[c]` 配对向导，Plan 45）；`sshmgr clear` 角色清理——**按实际存在枚举**删除（与 role.json 声明的角色无关）本机 vault / serve / 缓存残留（vault 角色先自动 export 备份 + 输入 `DELETE` 确认），机器回到首次向导状态。
 
 ### 启动与模式判定
 
@@ -175,7 +175,7 @@ sshmgr tui --mode client  # 强制 client 面板
 - 本机有**缓存**（`cache.bin`）→ client 面板；
 - vault 存在但锁着 / 两者都没有 → **引导性报错**（告诉你该 `unlock` 还是 `--mode client`）——**绝不静默降级到 client**。
 
-Broker 主控台（服务器 / Profiles / Projects / 设备码 / Pairing 5 个页签）与 client 面板（服务器列表只读、零远程写、`[s]` 同步 / `[i]` 实例切换）的操作语义与 owner CLI 完全一致——TUI 只是同一套 vault 操作的另一个入口，做完的事在 `ls` / 审计里看到的一样。各页签键位与典型任务走查见 [docs/tui-single-machine.md](docs/tui-single-machine.md) / [docs/tui-multi-machine.md](docs/tui-multi-machine.md)。
+Broker 主控台（服务器 / Profiles / Projects / 设备码 / Pairing 5 个页签）与 client 面板（服务器列表只读、零远程写、`[s]` 同步 / `[i]` 实例切换 / `[c]` 配对向导，Plan 45）的操作语义与 owner CLI 完全一致——TUI 只是同一套 vault 操作的另一个入口，做完的事在 `ls` / 审计里看到的一样。各页签键位与典型任务走查见 [docs/tui-single-machine.md](docs/tui-single-machine.md) / [docs/tui-multi-machine.md](docs/tui-multi-machine.md)。
 
 ### 终端要求（mintty 注意）
 

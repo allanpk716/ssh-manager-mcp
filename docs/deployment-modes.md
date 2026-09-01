@@ -2,7 +2,7 @@
 
 > **场景**：你的目标是"让 AI agent 用 SSH 控制我的服务器"。本页一屏看全本项目共有哪几种部署方案、各自的优劣、怎么选——**第一次选部署方式，或忘了有几种用法时，看这篇**。每种姿势的具体配置步骤链接到对应展开文档。
 >
-> **Plan 42 批1 起的模式缩减（4 → 2 + 管理面）**：旧的 ②a「在线 HTTP 直连」已**移除**（serve 不再提供任何远程 MCP 面——根路径 404，不是降级）；②c 降为应急附录；客户端 TUI 向导的连接表单退役。多机从此只有一条接入姿势：**桥姿态**（工作机 = 本地只读缓存的零距离 client），配对入口 = `sshmgr pair` 一条龙。
+> **Plan 42 批1 起的模式缩减（4 → 2 + 管理面）**：旧的 ②a「在线 HTTP 直连」已**移除**（serve 不再提供任何远程 MCP 面——根路径 404，不是降级）；②c 降为应急附录；客户端 TUI 的连接编辑表单退役（Plan 45 起 `[c]` 复活为 SAS 配对向导——同一配对的 TUI 形态）。多机从此只有一条接入姿势：**桥姿态**（工作机 = 本地只读缓存的零距离 client），配对入口 = `sshmgr pair` 一条龙（或 client 面板 `[c]` 向导）。
 
 ---
 
@@ -96,7 +96,7 @@ vault、master key、agent 全在**同一台机**：`.mcp.json` 里 `command: ss
 
 一台权威机器常驻 `sshmgr serve`（**权威 vault + `/snapshot` 拉取 + `/pair` 配对**（+批2 `/ui` 管理）——serve 收窄为这四件事，不再承载任何 agent 会话）。每台工作机装 `sshmgr` 二进制，以**零距离 client** 接入：
 
-1. **配对（一条龙）**：`sshmgr pair --instance <名>`——LAN 广播发现 broker（或 `--url` 直指）→ SAS 三件套人闸比对 → owner 在 broker TUI Pairing 页（或 `serve pair approve`）批准 → 凭据自动加密下发 → 首拉落盘 → 产物 `pair.<名>.mcp.json` 抄进 agent 配置（或 `--write-mcp` 直落）。
+1. **配对（一条龙）**：`sshmgr pair --instance <名>`——LAN 广播发现 broker（或 `--url` 直指）→ SAS 三件套人闸比对 → owner 在 broker TUI Pairing 页（或 `serve pair approve`）批准 → 凭据自动加密下发 → 首拉落盘 → 产物 `pair.<名>.mcp.json` 抄进 agent 配置（或 `--write-mcp` 直落）。**TUI 向导两条并列**：同一流程也可在工作机 `sshmgr tui` 的 client 面板按 `[c]` 全键盘点完（SAS 常显等待、批准后 Enter 完成；重配 = 实例 picker `p`）——见 [tui-multi-machine.md](./tui-multi-machine.md)；`SSHMGR_PAIR_ASSUME_SAS` 自动化跳比对仅 CLI 有。
 2. **干活**：`.mcp.json` 用 `args: ["mcp", "--cache"]` + `env SSHMGR_TOKEN`——agent 的本地子进程用本地只读缓存干活，**命令从工作机直拨目标服务器**；缓存自动保鲜（≤30min），断网照常用（只读）。
 
 - 需要**两样凭据**：设备码（管拉取，pair 批准时自动铸发；手工路径用 `cache-tokens add --name <机> --profile <profile>` 签发）+ project token（管 spawn，pair 一并下发；手工路径 `projects add` 签发）。
@@ -136,7 +136,7 @@ vault、master key、agent 全在**同一台机**：`.mcp.json` 里 `command: ss
 | 凭据放哪 | agent 本机（vault+master key） | 只在权威 broker；工作机仅本地加密只读快照（cache.bin+DEK） |
 | 客户端要装 | sshmgr + 本机 vault | sshmgr 二进制（pair 一条龙入网） |
 | 认证材料 | project token | 设备码 + project token（两道独立闸，永不互通） |
-| 新机接入 | `.mcp.json` 即用 | **`sshmgr pair` 一条命令**（发现→批准→凭据下发→首拉→配置产物） |
+| 新机接入 | `.mcp.json` 即用 | **`sshmgr pair` 一条命令**（发现→批准→凭据下发→首拉→配置产物；或 TUI `[c]` 向导） |
 | broker 挂了/重启 | —（无 broker） | **照常用**（本地缓存兜底；≤30min 保鲜延迟） |
 | 吊销生效 | lazy（下次 spawn） | **三路径**：project token 吊销+码活 → 下次保鲜（≤30min）拿到的新快照已无该 project；设备码吊销 → 下次 pull pinned 401 → 本地缓存就地销毁（隔离）；永离线设备 → `max_offline` 硬上限（pair 下发默认 24h）到期拒载。详见 [agent-tools.md](./agent-tools.md) |
 | 新 grant 的 server 可见 | 立即 | ≤30min 保鲜延迟（或手动 `cache pull`） |

@@ -18,14 +18,15 @@
  └──────────────────────────────┬───────────────────────┘
                         pair 入网 │ 批准（对照 client 屏 SAS）
                                 ▼
- ┌──工作机（你在这台操作：pair + client 面板）────────────────┐
+ ┌──工作机（你在这台操作：pair/TUI [c] 向导 + client 面板）────┐
  │  sshmgr pair --instance <名>                       │
  │   ├─ LAN 发现 serve（或 --url 直指）→ 屏显三件套          │
  │   │   <名> @ <url> SAS <6位>（等 owner 批准）             │
  │   ├─ 批准后自动：凭据下发 → 首拉 cache.bin（只读快照；     │
  │   │   真空机自动归位进 instances/<name>/）                │
  │   └─ 产物 pair.<名>.mcp.json 抄进 agent 配置              │
- │  sshmgr tui → client 面板：[s]同步 [i]实例（零远程写）│
+ │  sshmgr tui → client 面板：[c]配对向导 [s]同步 [i]实例    │
+ │   （零远程写；TUI 入网=同一配对流程的点选版，见下）        │
  └─────────────────────────────────────────────────────────┘
 ```
 
@@ -33,8 +34,10 @@
 驱动 agent 的 MCP 工具调用（进 `.mcp.json`）；**设备码**只授权拉取 `/snapshot`
 缓存。两者永不互通，一台设备码被吊销不影响任何 project token。
 
-> **Plan 42 批1 起**：client 向导与连接表单已退役——工作机入网 = `sshmgr pair`
-> 一条龙（连接配置、设备码、指纹全部由配对自动交付）；写操作只在 server 机主控台。
+> **Plan 42 批1 起**：client 的连接编辑表单已退役；**Plan 45 起** `[c]` 以 **SAS 配对
+> 向导**形态复活——工作机入网从此有两条等价路径：CLI `sshmgr pair` 一条龙，或
+> client 面板 `[c]` 配对向导（下有逐屏走查）。连接配置、设备码、指纹仍全部由配对
+> 自动交付；写操作只在 server 机主控台。
 
 ## server 侧走查
 
@@ -91,7 +94,11 @@ client pull 后更新设备码的「最近拉取」、其它 TUI/CLI 会话增�
 ## client 侧走查
 
 **前提：server 机已完成上面的设置**（serve 在跑、手上有 pair 卡或知道 serve 地址）。
-工作机上不用碰 TUI 向导——入网一条命令：
+入网有两条**等价**路径：CLI `sshmgr pair` 一条龙（下 ①），或 client 面板 `[c]`
+配对向导（下 ②，Plan 45）——同一条配对管线（发现 → enroll → SAS 人闸 → 批准 →
+finish → 落盘首拉），选顺手的即可；CI/无人值守走 ①。
+
+### 路径 ①：CLI `sshmgr pair` 一条龙
 
 ```bash
 sshmgr pair --instance laptop
@@ -111,8 +118,57 @@ sshmgr pair --instance laptop
 5. **配 agent**——产物片段抄进 `.mcp.json`（`mcp --cache` + env token 形态；
    `--write-mcp <path>` 可让 pair 直落目标路径），重启 Claude Code 即用。
 
-> 想用 TUI：`sshmgr tui` 选 client 角色后进入 **client 面板**（向导的连接
-> 表单已退役——入网/换码都是 `sshmgr pair`，面板会显示同样的指引）。
+### 路径 ②：TUI 配对向导（client 面板 `[c]`，Plan 45）
+
+`sshmgr tui`（选 client 角色，或 `sshmgr tui --mode client`）进入 **client 面板**
+后按 **`[c]`** 启动**配对向导**——全键盘走完与 CLI 同一条管线：
+
+1. **表单**——四个字段：`实例名`（必填，设备名即实例槽名，白名单校验）、
+   `broker 地址`（**留空 = LAN 自动发现**（udp/7878）；跨网段/防火墙挡 UDP 时填
+   `https://<serve>:7878` 直连）、`pin`（发现流 offer 自动携带；直连时必填——
+   TUI **没有** TOFU 开关，`--allow-tofu` 逃生门只在 CLI）、`profile hint`
+   （可选，显示在 broker 批准面）。表单不会静默覆盖已配对的实例名——同名重配
+   走实例 picker 的 `p`（见下「重配」）。
+2. **发现/选择**——地址留空时短窗口广播发现（几秒，**不可取消**——Esc 仅弃结果
+   并退出向导）；发现多台 serve 列清单 `↑`/`↓` + Enter 选（单台直接进下一步）；
+   拿不到 offer 回到表单并提示改填直连地址。
+3. **（仅重配）force 确认屏**——见下「重配已配对实例」；新机入网无此屏。
+4. **enroll**——生成临时密钥对、注册申请（Esc 可取消；serve 侧 pending 即入
+   Pairing 页队列）。
+5. **SAS 等待屏**——**6 位 SAS 大字常显**（不是批准后才出现）：批准者在 server
+   机看到的是 name@url 两件 + 「SAS 码见 client 屏幕」，**批准前请逐位比对两边
+   一致**；屏上同时有剩余审批窗口倒计时（10 分钟）与轮询状态行。此刻去 server
+   机 **Pairing 页按 `a`**（或 `serve pair approve laptop --profile team-a`）。
+6. **批准到达 → 最终核对门**——SAS 再次放大复核，**Enter 才真正完成**（finish +
+   首次拉取发生在 Enter 之后）；Esc = 放弃本次配对（broker 侧申请自行过期）。
+   之后的**写入期（落盘 + 首拉）不可取消**——屏显「写入中，请稍候」，几秒即过。
+7. **结果屏**——成功：实例名 + 已授权 profile + 产物 `pair.<名>.mcp.json` 落点
+   （0600，含真值 token，勿外发）+ `.mcp.json` 后续指引；Enter/Esc 返回面板，
+   **自动切到新实例槽刷新**（`· 实例 <名>` 行与页头同步更新）。
+
+**结束态与重试**：批准被拒、申请过期（serve 对被拒/过期/已送达返回同一终态）或
+其它失败 → 结果屏「**本次申请已结束（被拒或过期）**」；本地 10 分钟窗口到点则
+显示超时措辞。两种结局都按 **`r`** 以相同参数重新申请（全新 generation、enroll
+新 id——旧申请不可能复活）。
+
+**重配已配对实例**：`[i]` 打开实例 picker，**已配对的具名行按 `p`** → 同一向导
+以 force 预填进入，**先过 force 确认屏**（列明将删除 `cache.auth.json` /
+`cache.bin` / `cache.meta.json` / `quarantine/`、保留 `cache.config.json`——
+时效策略原地继承；Esc = 零残留）才清理并重新 enroll，serve 侧旧设备码随重配
+失效。默认实例行（实例名必填）与未配对行按 `p` 无效。
+
+**Esc 退出纪律**：**任何一步都能全身而退**——表单/选择屏直接退；等待/核对门中
+= 取消本次申请；唯一例外是写入期不可打断（半途弃写会与重试的清理竞争写盘）。
+
+**边界（如实）**：
+
+- **单槽覆盖模式下向导不可用**——`SSHMGR_CACHE_DIR` / `SSHMGR_CACHE_DEK` 任一
+  在场时 `[c]` 拒绝启动（页脚与入网指引行都不再宣传该键），入网/重配走 CLI
+  `sshmgr pair`（与 CLI `--instance` 的互斥同语义）。
+- **AssumeSAS 仍 CLI-only**——env `SSHMGR_PAIR_ASSUME_SAS=1` 的无人值守跳比对只
+  在 `sshmgr pair` 生效；TUI 向导不读该 env，永远人闸比对。
+- 零远程写边界不变——批准永远在 server 机的管理面（Pairing 页 / `serve pair`
+  CLI / 批2 Web UI），client 机的向导只发起申请。
 
 ## client 面板参考
 
@@ -124,12 +180,12 @@ profile `<名称>` · `<N>` 服务器 · 缓存于 `<时长>` 前**——五个�
 
 | 键 | 动作 | 语义 |
 |---|---|---|
-| `s` | 同步（手动 pull） | 10 秒超时；**失败保留旧缓存**（快照只在拉取成功后原子替换）。作用于**当前选中的实例槽**（默认槽起步）。本界面**永不走明文拉取**——连接配置缺 pin 会直接报错（缺 pin 时入网/换码走 `pair`） |
-| `i` | 实例切换（picker，Plan 40 批2） | 弹「选择实例」overlay：第一行恒为「**（默认实例）**」（有实例恰好合法名叫 `default` 也靠它区分），其后每个命名实例一行（名字 + 缓存年龄 + profile；**轻量行不解密**，DEK 坏了也不影响列表）。`↑`/`↓` 移动、Enter 选中 → 面板即刻切到该实例的槽位重读数据；Esc 取消不动。**会话内有效**：不落盘、重启进程回到默认实例 |
-| `c` | 入网 = pair | 连接编辑已退役——status 行指引「新机入网/换码请运行 sshmgr pair（手工路径 cache pull 保留，见 docs）」 |
+| `s` | 同步（手动 pull） | 10 秒超时；**失败保留旧缓存**（快照只在拉取成功后原子替换）。作用于**当前选中的实例槽**（默认槽起步）。本界面**永不走明文拉取**——连接配置缺 pin 会直接报错（缺 pin 时入网/换码走 `pair`；TUI：实例 picker `p`） |
+| `i` | 实例切换（picker，Plan 40 批2） | 弹「选择实例」overlay：第一行恒为「**（默认实例）**」（有实例恰好合法名叫 `default` 也靠它区分），其后每个命名实例一行（名字 + 缓存年龄 + profile + 已配对标记；**轻量行不解密**，DEK 坏了也不影响列表）。`↑`/`↓` 移动、Enter 选中 → 面板即刻切到该实例的槽位重读数据；**已配对的具名行按 `p`** = force 重配（Plan 45，见上「重配已配对实例」）；Esc 取消不动。**会话内有效**：不落盘、重启进程回到默认实例 |
+| `c` | 配对向导（Plan 45） | 打开 **SAS 配对向导** overlay（表单 → 发现 → SAS 常显等待 → 批准后 Enter 完成 → 写入 → 自动换槽刷新；逐屏语义见上「路径 ②」）。连接编辑表单仍退役——连接参数在向导表单里填/由配对自动交付；CLI `sshmgr pair` 保留并列，手工路径 `cache pull` 见 docs |
 | `q` | 退出 | `Ctrl+C` 同 |
 
-页脚键位原样是 `[s]同步 [i]实例 [c]入网=pair  q 退出`；**单槽模式（override env 覆盖中）没有 `[i]`**——见下。
+页脚键位原样是 `[s]同步 [i]实例 [c]入网 [t]TTL  q 退出`；**单槽模式（override env 覆盖中）没有 `[i]` 也没有 `[c]`**——见下。
 
 **自动弹 picker（批2）**：启动落在默认实例；若默认槽**真真空**（四文件 `cache.bin` / `cache.auth.json` / `cache.meta.json` / `cache.config.json` 全缺）而 `instances/` 下已有命名实例，首个数据到达后自动打开 picker 并提示——这是"材料全在实例槽、启动却对着空默认槽"的引导路径。"部分缺件"形态（bin 在 auth 缺 / meta 在 / config 在）一律不弹——默认槽有意图或材料，不把你从恢复路径引开。
 
@@ -137,16 +193,19 @@ profile `<名称>` · `<N>` 服务器 · 缓存于 `<时长>` 前**——五个�
 
 > ⚠ 单槽模式（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK 覆盖中）——多实例 UI 已禁用
 
-并统一禁用多实例面：`[i]` 从页脚消失、自动 picker 不触发——**禁用而非适配**（env 是单槽完全覆盖语义，混用会静默路由错实例）。`SSHMGR_CACHE_DEK_DIR` 只搬 DEK 根目录，不触发横幅。
+并统一禁用多实例与配对面：`[i]` 与 `[c]` 从页脚消失（空面板的入网指引行同步改指
+CLI `sshmgr pair`——向导在该模式下拒绝启动，页上不留一个按了没用的键）、自动
+picker 不触发——**禁用而非适配**（env 是单槽完全覆盖语义，混用会静默路由错实例）。`SSHMGR_CACHE_DEK_DIR` 只搬 DEK 根目录，不触发横幅。
 
 **零远程写**：client 角色不碰任何 vault——这个面板和整个角色只能读缓存、只能经
 `cache.auth.json` 拉新快照；agent 侧的写操作（加改删服务器等）只能在 server 机的
 **管理面**（主控台 / `serve pair`）做，client 机的 TUI 里**没有任何写入口**。
 
-**换码/新实例 = `pair --force` / 新 `pair`**（Plan 42 批1）：对既有实例换设备码 =
+**换码/新实例 = `pair --force` / 新 `pair`**（Plan 42 批1；**Plan 45 起 TUI 等价路径**）：CLI 对既有实例换设备码 =
 `sshmgr pair --instance <名> --force`（清 auth/bin/meta/quarantine，
 **保留 cache.config.json**——时效策略原地继承）；第二个 agent = 直接再跑一条
-`pair --instance <新名>`（自动归位新实例槽）。runbook 深水区见 [multi-machine.md](./multi-machine.md)。
+`pair --instance <新名>`（自动归位新实例槽）。TUI：`[i]` picker 已配对实例行按
+`p` = force 重配（先过确认屏），`[c]` 向导填新实例名 = 新实例入网。runbook 深水区见 [multi-machine.md](./multi-machine.md)。
 
 ## 典型任务
 
@@ -154,7 +213,8 @@ profile `<名称>` · `<N>` 服务器 · 缓存于 `<时长>` 前**——五个�
 
 1. **工作机**：装好二进制后 `sshmgr pair --instance laptop`（同网段自动发现
    serve；跨网段用 `--url` + `--pin`，pair 卡上有现成命令）→ 屏显三件套
-   `laptop @ <url> SAS <6位>`，等待批准。
+   `laptop @ <url> SAS <6位>`，等待批准。不想敲命令就在工作机 `sshmgr tui` 按
+   `[c]` 走配对向导（同一条流程的点选版，见上「路径 ②」）。
 2. **server 机**：主控台切到 **Pairing 页**按 `a` → 选 profile（授权范围）→
    **对照 client 屏 SAS 与批准行 name@url 一致**后提交（⚠目标≠本机地址的行需键入
    `OVERRIDE`）。批准后 client 自动完成凭据下发与首拉（真空机自动归位进
@@ -183,7 +243,8 @@ profile `<名称>` · `<N>` 服务器 · 缓存于 `<时长>` 前**——五个�
 `pair` 一条命令覆盖（Plan 42 批1）：既有实例换设备码 = `sshmgr pair
 --instance <名> --force`（清 auth/bin/meta/quarantine，保留 `cache.config.json`
 ——时效策略原地继承）；第二个 agent = `pair --instance <新名>`（自动归位新实例槽，
-产物 args 自动带 `--instance`）。runbook 深水区见 [multi-machine.md](./multi-machine.md)。
+产物 args 自动带 `--instance`）。TUI 等价（Plan 45）：client 面板 `[i]` picker
+已配对行 `p`（force 重配，先过确认屏）/ `[c]` 向导配新实例。runbook 深水区见 [multi-machine.md](./multi-machine.md)。
 
 ## 排错
 
@@ -192,13 +253,14 @@ profile `<名称>` · `<N>` 服务器 · 缓存于 `<时长>` 前**——五个�
 | pair 报「指纹失配」/ TLS 错 | **失配 ≠ 泄露**：意味着对端证书公钥变了——可能是 server 机重装/迁移重签了证书（正常），也可能是中间人（异常）。server 机跑 `sshmgr serve cert-info` 拿新指纹，`pair --pin <新指纹>` 重新入网。重签证书的全量交接 runbook 见 [multi-machine.md](./multi-machine.md) |
 | pair 吃 ⚠「目标 ≠ 本机地址」 | client 声明的连接地址不属于 serve 机的非环回地址集/hostname——疑似中继/假 discovery/拿错了地址。核对 pair 卡上的地址重跑；确属故意（受控中继）才用 `serve pair approve --allow-foreign-url` 显式覆盖 |
 | `pair --url` 被拒「refusing TOFU」 | 直指又不带 `--pin` 是**默认拒绝**（默认安全）。带上 pair 卡里的 `--pin sha256:...`；`--allow-tofu` 只留给受控环境的无锚通道 |
-| client 面板 `[s]` 同步报缺 pin | 本界面永不走明文拉取（缺 pin 直接报错是**默认安全**的设计）。缺 pin 的实例用 `pair --force` 重新入网即可补全 pin |
+| client 面板 `[s]` 同步报缺 pin | 本界面永不走明文拉取（缺 pin 直接报错是**默认安全**的设计）。缺 pin 的实例用 `pair --force` 重新入网即可补全 pin（TUI：实例 picker 按 `p`） |
+| 向导结果屏「本次申请已结束（被拒或过期）」 | serve 对被拒/过期/已送达的申请返回同一终态——本次申请已死，按 `r` 以相同参数重新申请即可（enroll 新 id；若是 owner 误拒，重新批准新的即可）。反复失败查 Pairing 页的 ⚠标记（目标地址 ≠ 本机地址会被机械校验拦下） |
 | 同步失败但面板还有数据 | 失败保留旧缓存——这是特性不是 bug。修好网络/serve 后 `[s]` 重拉 |
 | 缓存多久算旧 / 怎么自动保鲜 | TTL 由 `.mcp.json` 的 `--cache-max-age` 控制（默认 30m；0=关闭自动拉取）。`mcp --cache` 进程内 spawn 惰性拉取 + 会话内懒检查 + 热加载，无需 OS 定时器；细节见 [multi-machine.md](./multi-machine.md#离线只读缓存plan-12) |
 | server 机 serve 探活失败 | 安装结果屏的排查行：7878 端口防火墙是否放行（TCP + UDP 都要）；`sshmgr serve status` 查四项信号（service/process/http/vault）；服务可能仍在启动，稍候重试 |
 | 吊销了 token/设备码，agent 还在跑 | 三路径：设备码吊销 → 该机下次 pull 即 quarantine（在线 ≤30min）；project token 吊销 → 下次保鲜的新快照已无该 project；永离线设备 → `max_offline` 到期拒载。已建立的隧道 revoke/disable 后 ~15s 内级联拆除（`tunnels kill` 可急停）——完整语义见 [agent-access.md](./agent-access.md#project-生命周期轮换--暂停--恢复--吊销) |
 | 向导中途退出了 | 什么都不用做，重跑 `sshmgr tui` 从断点续配（server 侧会盘点已建的 profile/project，跳过已完成步骤） |
-| client 机想改连别的 server | 重新 `pair`（`--force` 换码 / 换 `--instance` 换槽）——`[c]` 连接编辑已退役 |
+| client 机想改连别的 server | CLI：重新 `pair`（`--force` 换码 / 换 `--instance` 换槽）；TUI：`[i]` picker 已配对行 `p` 重配 / `[c]` 向导配新实例。连接编辑表单已退役——连接参数一律由配对交付或在向导表单里填 |
 
 ## 相关文档
 
