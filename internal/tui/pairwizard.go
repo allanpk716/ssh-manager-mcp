@@ -13,10 +13,11 @@ package tui
 //     done/note/tick 一律丢弃(参照 clientpage.go dataReadyMsg 的 stale-drop);
 //     tick 仅在 pwWaiting 续排。
 //   - 取消语义分层:Discover 短窗口不可取消(Esc 仅弃结果);Enroll/WaitApproval
-//     经 ctx cancel;pwWritePull 阶段 Esc 禁用(落盘+首拉不可半途弃,防与重试
-//     的 ForceCleanup 竞争写盘),界面显示「写入中,请稍候」。
-//   - force 时序:校验(New)先于清理,清理先于 Enroll;确认屏(pwEnroll-
-//     ForceConfirm)在任何会话方法之前,Esc 零残留。
+//     经 ctx cancel;pwWritePull 阶段 Esc 禁用(落盘+首拉是不可中断的收尾事务,
+//     半途弃会留下指向不明的半态),界面显示「写入中,请稍候」。
+//   - force 时序(Plan 46 零清理先行):校验(New/Bind)先于确认屏,确认屏先于
+//     Enroll;Enroll 前不删任何旧槽文件——旧材料直到 WriteAndPull 全部成功才被
+//     新凭据原子覆盖;确认屏(pwEnrollForceConfirm)在任何会话方法之前,Esc 零残留。
 //   - 单槽互斥:构造时检查 SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK(共享 helper =
 //     clientops.SingleSlotOverrideEnvSet,Plan 40 批2 已从 cli/common.go 的
 //     checkInstanceFlag 判定上提;SSHMGR_CACHE_DEK_DIR 是目录级组合 seam,权威
@@ -56,10 +57,9 @@ type PairWizardPrefill struct {
 
 // pairSessionSteps 是向导驱动的 PairSession 切面——方法集与 T1 签名逐字一致,
 // *clientops.PairSession 天然满足(生产 newSession 即返回它)。测试缝:fake
-// 实现同一接口记录调用序(Finish 门/force 时序的证据面)。
+// 实现同一接口记录调用序(Finish 门/零清理先行的证据面)。
 type pairSessionSteps interface {
 	Bind(clientops.Discovered) error
-	ForceCleanup() error
 	Enroll(ctx context.Context) error
 	SAS() string
 	BrokerName() string
@@ -78,8 +78,8 @@ const (
 	pwForm               pwState = iota // huh 表单(实例名/地址/pin/hint)
 	pwDiscovering                       // LAN 发现(短窗口,不可取消)
 	pwPickBroker                        // 多 broker 选择
-	pwEnrollForceConfirm                // force 重配确认(先于任何清理/Enroll)
-	pwEnrolling                         // 清理(force)+ enroll(ctx 可取消)
+	pwEnrollForceConfirm                // force 重配确认(先于任何会话方法;Plan 46 零清理先行)
+	pwEnrolling                         // enroll(ctx 可取消;force 不预清理)
 	pwWaiting                           // SAS 大字常显 + 倒计时 + 轮询状态行
 	pwFinishGate                        // 批准已到:SAS 放大复核;Enter 前 Finish 不被调
 	pwWritePull                         // Finish + WriteAndPull(Esc 禁用)
@@ -106,11 +106,11 @@ type (
 		found []clientops.Discovered
 		err   error
 	}
-	// pairEnrollDoneMsg:清理(force)+ enroll 完成;cleaned=本轮确已清理。
+	// pairEnrollDoneMsg:enroll 完成(Plan 46 零清理先行:向导不再于 Enroll 前
+	// 调用 ForceCleanup)。
 	pairEnrollDoneMsg struct {
-		gen     int
-		cleaned bool
-		err     error
+		gen int
+		err error
 	}
 	// pairApprovalDoneMsg:WaitApproval 返回(nil=批准到达)。
 	pairApprovalDoneMsg struct {
@@ -150,7 +150,6 @@ type pairWizard struct {
 	sess      pairSessionSteps   // 当前会话(retry 换新:每次 enroll 新 id)
 	offers    []clientops.Discovered
 	cursor    int
-	cleaned   bool // force 清理已消费(retry 不再重复清理/不再确认)
 	err       error
 	note      string // 最新轮询状态行(pwNoteText 渲染)
 	noteCh    chan clientops.PollNote
@@ -275,9 +274,6 @@ func (w *pairWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if w.gen != msg.gen || w.state != pwEnrolling {
 			return w, nil
 		}
-		if msg.cleaned {
-			w.cleaned = true // 清理已消费(retry 不重复清理)
-		}
 		if msg.err != nil {
 			w.state, w.endReason, w.endErr = pwEnded, pwEndError, msg.err
 			return w, nil
@@ -396,7 +392,8 @@ func (w *pairWizard) keyUpdate(kp tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case pwWritePull:
-		// 写入期 Esc 禁用:落盘+首拉不可半途弃(防与重试的 ForceCleanup 竞争写盘)。
+		// 写入期 Esc 禁用:落盘+首拉是不可中断的收尾事务,半途弃会留下指向
+		// 不明的半态(见文件头「取消语义分层」)。
 
 	case pwDone:
 		if k.Code == tea.KeyEnter || k.Code == tea.KeyEsc || k.Text == "q" {
@@ -495,9 +492,10 @@ func (w *pairWizard) pickBroker() (tea.Model, tea.Cmd) {
 
 // beginTarget 建立已校验会话并分流。发现流传非 nil d:New 之外再 Bind(d)——
 // 幂等重校验,并把 offer 显示名记入 brokerName(force 时序:校验(New+Bind)
-// 先于清理);URL 直连路径 brokerName 恒空,broker 标签渲染 URL。
-// Force 且未清理 → 确认屏;否则直接 enroll。newSession 失败:错误落在当前屏
-// (表单态须重建复位,选择屏状态不推进)。
+// 先于确认屏/Enroll);URL 直连路径 brokerName 恒空,broker 标签渲染 URL。
+// Force → 确认屏(Plan 46:确认的是"重配覆盖"而非"预删除"——零清理先行);
+// 否则直接 enroll。newSession 失败:错误落在当前屏(表单态须重建复位,选择屏
+// 状态不推进)。
 func (w *pairWizard) beginTarget(d *clientops.Discovered) tea.Cmd {
 	s, serr := w.newSession(w.opts)
 	if serr != nil {
@@ -514,35 +512,27 @@ func (w *pairWizard) beginTarget(d *clientops.Discovered) tea.Cmd {
 			return nil
 		}
 	}
-	if w.prefill.Force && !w.cleaned {
+	if w.prefill.Force {
 		w.state = pwEnrollForceConfirm
 		return nil
 	}
 	return w.beginEnroll()
 }
 
-// beginEnroll 进入 enroll 阶段(force 清理在内,先于 Enroll);ctx 由组件持有,
-// Esc(仅本阶段)触发取消。清理与 enroll 同一 goroutine 顺序执行——校验在
-// NewPairSession 已完成,清理不可能被坏参数触发(T1 validated 位不变量)。
+// beginEnroll 进入 enroll 阶段(Plan 46 零清理先行:force 不再于 Enroll 前调用
+// ForceCleanup,旧槽材料直到 WriteAndPull 全部成功才被原子覆盖);ctx 由组件
+// 持有,Esc(仅本阶段)触发取消。
 func (w *pairWizard) beginEnroll() tea.Cmd {
 	w.state = pwEnrolling
 	gen := w.gen
 	s := w.sess
-	force := w.prefill.Force && !w.cleaned
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
 	return func() tea.Msg {
-		cleaned := false
-		if force {
-			if cerr := s.ForceCleanup(); cerr != nil {
-				return pairEnrollDoneMsg{gen: gen, err: cerr}
-			}
-			cleaned = true
-		}
 		if eerr := s.Enroll(ctx); eerr != nil {
-			return pairEnrollDoneMsg{gen: gen, cleaned: cleaned, err: eerr}
+			return pairEnrollDoneMsg{gen: gen, err: eerr}
 		}
-		return pairEnrollDoneMsg{gen: gen, cleaned: cleaned}
+		return pairEnrollDoneMsg{gen: gen}
 	}
 }
 
@@ -627,7 +617,7 @@ func (w *pairWizard) beginWrite() tea.Cmd {
 }
 
 // retry 以相同参数、新 generation、全新会话(enroll 每次生成新 id)重新驱动。
-// force 已清理过则跳过确认屏与二次清理。
+// 同一向导运行已过 force 确认屏,retry 直接重驱 enroll(不再二次确认)。
 func (w *pairWizard) retry() tea.Cmd {
 	w.gen++ // 新 generation:旧 run 的在途消息自此全部过期
 	w.err, w.note = nil, ""
@@ -703,13 +693,11 @@ func (w *pairWizard) View() tea.View {
 
 	case pwEnrollForceConfirm:
 		b.WriteString(warnStyle.Render(" ⚠ Force 重配确认 —— 实例 "+w.opts.Instance) + "\n\n")
-		b.WriteString("继续将在重新 enroll 前删除以下文件:\n")
-		b.WriteString("  · cache.auth.json(设备凭据)\n")
-		b.WriteString("  · cache.bin(本地缓存快照)\n")
-		b.WriteString("  · cache.meta.json(元数据)\n")
-		b.WriteString("  · quarantine/(隔离区)\n")
-		b.WriteString("保留:cache.config.json(离线 cap 为机器级策略,非凭据)\n\n")
-		b.WriteString("Enter 继续重配(清理 + 重新 enroll)    Esc 放弃(不改动任何文件)")
+		b.WriteString("重配成功后,新凭据将原子覆盖本实例旧材料;重配成功前,旧材料一律不动\n")
+		b.WriteString("(cache.config.json 离线 cap 保留)。\n\n")
+		b.WriteString("若上次配对中断,且重跑报设备名占用(419),需 owner 在 broker 侧执行\n")
+		b.WriteString("`sshmgr cache-tokens revoke " + w.opts.Instance + "` 后重试。\n\n")
+		b.WriteString("Enter 继续重配    Esc 放弃(不改动任何文件)")
 
 	case pwEnrolling:
 		b.WriteString(titleStyle.Render(" 配对向导") + "\n\n")

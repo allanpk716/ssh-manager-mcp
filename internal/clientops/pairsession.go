@@ -5,12 +5,16 @@
 //
 //	NewPairSession(执行 URL/pin+TOFU 规则;URL 为空=发现流,校验推迟到 Bind)
 //	→(发现/多 broker 选择由驱动层完成)→ Bind(等价校验 + (重)建 transport)
-//	→(force:连接参数校验通过后)ForceCleanup(内部复用既有 forceCleanInstance)
-//	→ 驱动层调 IsEnrolled 做"已装判定" → Enroll(置 ID/SAS/密钥态/绝对
+//	→ 驱动层调 IsEnrolled 做"已装判定"(--force 只过闸,Plan 46 零清理先行:
+//	Enroll 前不删任何旧槽文件) → Enroll(置 ID/SAS/密钥态/绝对
 //	approvalDeadline = enroll 时刻 + pairPollMax)→ WaitApproval(2s 轮询)
 //	→(驱动层人闸:CLI = 轮询到 approved 后 y/N;TUI = Finish 前按键)
 //	→ Finish(ack + 解密封信封)→ WriteAndPull(先落盘四件套 0600 →
-//	pairBeforePullTestHook → DoPull)。
+//	pairBeforePullTestHook → DoPull → 成功尾部清 quarantine/)。
+//
+//	Plan 46 force 时序定案:旧槽材料直到 WriteAndPull 全部成功才被新凭据原子
+//	覆盖——任何 enroll/poll/写盘/首拉失败,旧槽文件一字不动;finish 后失败的
+//	错误文案统一尾缀双路径恢复指引(pairRecoverHint)。
 //
 // 哨兵只有两个(410 的 wire 语义=合并:rejected/expired/delivered/unknown
 // 不可分,协议冻结):ErrPairGone(410)与 ErrPairTimeout(本地 deadline);
@@ -187,10 +191,11 @@ func (s *PairSession) Bind(d Discovered) error {
 	return s.applyTarget(fmt.Sprintf("https://%s:%d", d.Addr, d.TCPPort), pin, d.Name)
 }
 
-// ForceCleanup 是 --force 重配的清理步骤(会话化入口,不导出自由函数):
-// 删除 enroll 态文件(cache.auth.json/cache.bin/cache.meta.json/quarantine/),
-// 保留 cache.config.json(Plan 40 离线 cap 是机器级策略,非凭据;换码 runbook
-// 不得静默丢弃)。调用前提 = 会话已完成连接参数校验(New 带 URL 或 Bind 成功):
+// ForceCleanup 删除实例的 enroll 态文件(cache.auth.json/cache.bin/cache.meta.json/
+// quarantine/,保留 cache.config.json)。Plan 46 起驱动层(CLI RunPair/TUI 向导)
+// **不再**于 Enroll 前调用它(force 零清理先行:旧材料直到 WriteAndPull 全部成功
+// 才被原子覆盖)——方法保留作显式清理入口,既有直接测试(TestForceCleanup_*)
+// 零改动。调用前提 = 会话已完成连接参数校验(New 带 URL 或 Bind 成功):
 // 校验先于清理,坏 URL/坏 pin 绝不许消耗一次 force 销毁(fix round 1 I1);
 // 未校验调用返回带前提说明的错误。内部复用既有 forceCleanInstance 原函数
 // (TestForceCleanInstance_KeepsConfig 直接调它,零改动)。
@@ -266,7 +271,7 @@ func (s *PairSession) Enroll(ctx context.Context) error {
 		case http.StatusTooManyRequests:
 			return errors.New("pairing enroll: rate limited or queue full (429) — retry shortly")
 		case 419:
-			return fmt.Errorf("pairing enroll: device name %q is in use on the broker (419) — pick another --instance", s.opts.Instance)
+			return fmt.Errorf("pairing enroll: device name %q is in use on the broker (419) — pick another --instance;或 owner 在 broker 侧执行 `sshmgr cache-tokens revoke %s` 后重试", s.opts.Instance, s.opts.Instance)
 		case http.StatusConflict:
 			return errors.New("pairing enroll: id already enrolled (409) — rerun (a fresh id is generated each run)")
 		case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
@@ -418,7 +423,12 @@ func (s *PairSession) Finish(ctx context.Context) error {
 		Ack: hex.EncodeToString(pairing.FinishAck(s.kAck, s.pairID[:])),
 	})
 	if err != nil {
-		return fmt.Errorf("pairing finish: %w", err)
+		// finish 请求自身传输失败 = 「已提交未收响应」形态可能(serve 可能已
+		// 铸码)→ 双路径恢复指引。ctx 取消是用户主动中止,不是待恢复失败。
+		if ctx.Err() != nil {
+			return fmt.Errorf("pairing finish: %w", err)
+		}
+		return fmt.Errorf("pairing finish: %w\n%s", err, pairRecoverHint(s.opts.Instance))
 	}
 	if res.StatusCode != http.StatusOK {
 		msg := pairErrBody(res)
@@ -430,7 +440,7 @@ func (s *PairSession) Finish(ctx context.Context) error {
 		case http.StatusGone:
 			return errors.New("pairing finish: approval window over (410) — start over with `sshmgr pair`")
 		case 419:
-			return fmt.Errorf("pairing finish: device name %q is in use (419)", s.opts.Instance)
+			return fmt.Errorf("pairing finish: device name %q is in use (419) — owner 在 broker 侧执行 `sshmgr cache-tokens revoke %s` 后重试", s.opts.Instance, s.opts.Instance)
 		default:
 			return fmt.Errorf("pairing finish: HTTP %d %s", res.StatusCode, clipStr(msg, 200))
 		}
@@ -438,7 +448,9 @@ func (s *PairSession) Finish(ctx context.Context) error {
 	var fr pairFinishResponse
 	if err := json.NewDecoder(res.Body).Decode(&fr); err != nil {
 		res.Body.Close()
-		return fmt.Errorf("pairing finish: response not JSON: %w", err)
+		// 200 已收但信封不完整(响应截断/非 JSON)= serve 已提交、客户端丢了
+		// 凭据 → 双路径恢复指引。
+		return fmt.Errorf("pairing finish: response not JSON: %w\n%s", err, pairRecoverHint(s.opts.Instance))
 	}
 	res.Body.Close()
 	sealed, err := base64.RawURLEncoding.DecodeString(fr.Sealed)
@@ -475,8 +487,11 @@ func (s *PairSession) AuthorizedProfile() string { return s.env.Profile }
 
 // WriteAndPull 执行 ⑦:先落盘四件套(cache.auth.json / cache.config.json /
 // pair.<name>.mcp.json 产物 0600 / --write-mcp 副本 0600)→
-// pairBeforePullTestHook → DoPull(PullOpts{Context: ctx})。成功后
-// AuthorizedProfile()/ArtifactPath() 可读;首拉失配 WARNING 沿既有文案。
+// pairBeforePullTestHook → DoPull(PullOpts{Context: ctx})→ 成功尾部清
+// quarantine/ 整目录(Plan 46 force 时序:清理在全部成功之后,清理失败仅
+// 警告不判失败,下次成功时重清)。成功后 AuthorizedProfile()/ArtifactPath()
+// 可读;首拉失配 WARNING 沿既有文案。finish 之后的一切失败(写盘段/首拉段)
+// 的错误文案统一尾缀双路径恢复指引(pairRecoverHint)。
 func (s *PairSession) WriteAndPull(ctx context.Context) (PullResult, error) {
 	if !s.finished {
 		return PullResult{}, errors.New("pair session has no sealed credentials: run Finish before WriteAndPull")
@@ -488,16 +503,17 @@ func (s *PairSession) WriteAndPull(ctx context.Context) (PullResult, error) {
 		errw = io.Discard
 	}
 
-	// ⑦ 先落盘(凭据 + max_offline 策略 + .mcp.json 产物)后首拉。
+	// ⑦ 先落盘(凭据 + max_offline 策略 + .mcp.json 产物)后首拉。写盘段的每
+	// 一处失败都尾缀双路径指引(finish 已发生,client 无法可靠分辨 serve 端状态)。
 	dir, _, _, _, err := CachePathsFor(o.Instance)
 	if err != nil {
-		return PullResult{}, err
+		return PullResult{}, fmt.Errorf("%w\n%s", err, pairRecoverHint(o.Instance))
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return PullResult{}, err
+		return PullResult{}, fmt.Errorf("%w\n%s", err, pairRecoverHint(o.Instance))
 	}
 	if err := WriteCacheCredFor(o.Instance, &CacheCred{URL: s.targetURL, Token: env.DeviceCode, Pin: s.envelopePin}); err != nil {
-		return PullResult{}, fmt.Errorf("persist cache.auth.json: %w", err)
+		return PullResult{}, fmt.Errorf("persist cache.auth.json: %w\n%s", err, pairRecoverHint(o.Instance))
 	}
 	if werr := WriteCacheConfig(dir, env.MaxOffline); werr != nil {
 		// 策略写失败与 cache pull 同姿势:WARNING(拉取照跑,只是 cap 未持久化)。
@@ -505,15 +521,15 @@ func (s *PairSession) WriteAndPull(ctx context.Context) (PullResult, error) {
 	}
 	artifact, err := pairArtifactJSON(o.Instance, env.ProjectToken)
 	if err != nil {
-		return PullResult{}, err
+		return PullResult{}, fmt.Errorf("%w\n%s", err, pairRecoverHint(o.Instance))
 	}
 	s.artifactPath = filepath.Join(dir, "pair."+o.Instance+".mcp.json")
 	if err := writePrivateFile(s.artifactPath, artifact); err != nil {
-		return PullResult{}, fmt.Errorf("write %s: %w (credentials are already on disk; finish the first pull with `sshmgr cache pull --instance %s`)", s.artifactPath, err, o.Instance)
+		return PullResult{}, fmt.Errorf("write %s: %w (credentials are already on disk; finish the first pull with `sshmgr cache pull --instance %s`)\n%s", s.artifactPath, err, o.Instance, pairRecoverHint(o.Instance))
 	}
 	if o.WriteMCPPath != "" {
 		if err := writePrivateFile(o.WriteMCPPath, artifact); err != nil {
-			return PullResult{}, fmt.Errorf("write --write-mcp %s: %w", o.WriteMCPPath, err)
+			return PullResult{}, fmt.Errorf("write --write-mcp %s: %w\n%s", o.WriteMCPPath, err, pairRecoverHint(o.Instance))
 		}
 	}
 
@@ -522,15 +538,33 @@ func (s *PairSession) WriteAndPull(ctx context.Context) (PullResult, error) {
 	}
 	// 首拉(Instance 非空 → gateNamedInstance 锁定设备身份,不存在默认槽重定位,
 	// 故 ⑦ 的落盘槽与 res.Instance 恒一致)。ctx 进 PullOpts(DoPull 把 req 建
-	// 在它之上,nil = context.Background 旧行为)。
+	// 在它之上,nil = context.Background 旧行为)。首拉段失败同样尾缀双路径指引
+	// (ctx 取消是用户主动中止,不算待恢复失败)。
 	res2, err := DoPull(s.targetURL, env.DeviceCode, s.envelopePin, PullOpts{StatusOut: errw, Instance: o.Instance, Context: ctx})
 	if err != nil {
-		return PullResult{}, fmt.Errorf("first pull failed: %w — the credentials and artifact ARE already on disk; finish with `sshmgr cache pull --instance %s` (device code in cache.auth.json)", err, o.Instance)
+		if ctx.Err() != nil {
+			return PullResult{}, fmt.Errorf("first pull failed: %w — the credentials and artifact ARE already on disk; finish with `sshmgr cache pull --instance %s` (device code in cache.auth.json)", err, o.Instance)
+		}
+		return PullResult{}, fmt.Errorf("first pull failed: %w — the credentials and artifact ARE already on disk; finish with `sshmgr cache pull --instance %s` (device code in cache.auth.json)\n%s", err, o.Instance, pairRecoverHint(o.Instance))
 	}
 	if res2.Instance != o.Instance {
 		fmt.Fprintf(errw, "WARNING: first pull landed in instance %q (asked for %q) — the pre-pull files were written to %q\n", res2.Instance, o.Instance, o.Instance)
 	}
+	// Plan 46:quarantine/ 的清理移到全部成功之后(Enroll 前零清理——事故形态
+	// 「先删后 enroll 撞 419」根除)。RemoveAll 对不存在的路径返回 nil(存在才
+	// 删);失败仅警告,不判本次配对失败——下次成功时重清。
+	if rerr := os.RemoveAll(filepath.Join(dir, "quarantine")); rerr != nil {
+		fmt.Fprintf(errw, "WARNING: quarantine/ cleanup failed (pairing is fine; 下次成功时重清): %v\n", rerr)
+	}
 	return res2, nil
+}
+
+// pairRecoverHint 是 finish 后一切失败的统一恢复指引(plan 冻结双路径措辞,
+// <实例名> 以实际实例名代入)。client 永远无法可靠分辨 serve 是否已标记拉取
+// (finish/首拉请求发出后的传输失败两态不可分辨;config 写失败是 WARNING+继续,
+// 可能已进首拉)——因此禁止任何"必定自愈"式确定性表述,统一双路径。
+func pairRecoverHint(instance string) string {
+	return fmt.Sprintf("恢复:直接重跑 `sshmgr pair --force`(或 TUI 重配);若重跑报设备名占用(419),请 owner 在 broker 侧执行 `sshmgr cache-tokens revoke %s` 后再重跑", instance)
 }
 
 // ArtifactPath 返回 pair.<name>.mcp.json 的实际落点(WriteAndPull 成功后有效;

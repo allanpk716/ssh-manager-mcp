@@ -75,7 +75,7 @@ func newPairCmd() *cobra.Command {
 	f.StringVar(&profileHint, "profile-hint", "", "optional hint shown on the broker's approval surface")
 	f.StringVar(&writeMCP, "write-mcp", "", "also copy the pair.<name>.mcp.json artifact to this path (0600)")
 	f.StringVar(&instance, "instance", "", "device name to enroll (= local instances/<name> slot) (required)")
-	f.BoolVar(&force, "force", false, "re-enroll over an existing instance credential (removes cache.auth.json/cache.bin/cache.meta.json/quarantine/, KEEPS cache.config.json)")
+	f.BoolVar(&force, "force", false, "re-enroll over an existing instance credential (nothing is deleted up front — any failure leaves the old slot untouched; on success the fresh material atomically replaces it)")
 	return c
 }
 

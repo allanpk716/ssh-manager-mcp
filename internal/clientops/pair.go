@@ -8,7 +8,9 @@
 // 印 STUB 警示自动过,否则终端 y/N;⑥finish→OpenCreds 解信封;⑦先落盘
 // (cache.auth.json + cache.config.json + pair.<name>.mcp.json 产物)后首拉;
 // ⑧打印 <project-token> 占位符片段 + 产物路径指引;⑨同名已 enroll 默认拒,
-// --force 清 enroll 态文件但保留 cache.config.json(Plan 40 换码 runbook)。
+// --force 只过闸不预清理(Plan 46 零清理先行:enroll/轮询任何失败,旧槽文件
+// 一字不动;新凭据经 WriteAndPull 原子覆盖,quarantine/ 于成功尾部清理,
+// cache.config.json 本就保留——Plan 40 换码 runbook)。
 package clientops
 
 import (
@@ -77,9 +79,11 @@ type PairOpts struct {
 	// Instance is the device name to enroll — required; it is the server-side
 	// cache-token name AND the local instances/<name> slot.
 	Instance string
-	// Force re-enrolls over an existing instance credential: removes
-	// cache.auth.json/cache.bin/cache.meta.json/quarantine/ (KEEPs
-	// cache.config.json) before the flow. Default refuses with the frozen
+	// Force re-enrolls over an existing instance credential. Plan 46 零清理
+	// 先行: NOTHING is deleted before Enroll — any enroll/poll failure leaves
+	// the old slot byte-identical; on WriteAndPull success the fresh material
+	// atomically replaces the old files and the quarantine/ subtree is cleaned
+	// at the success tail. Default refuses with the frozen
 	// "instance already enrolled; pass --force" wording.
 	Force bool
 
@@ -176,26 +180,22 @@ func RunPair(o PairOpts) error {
 	}
 
 	// ② 驱动层兜底 parse:CLI 路径 URL 必非空(cli/pair.go 的 discovery 会补
-	// 齐);为空时与旧实现同文案拒绝,且必须先于 ⑨ 的 --force 清理(fix
-	// round 1 I1);同时为 ③ 的 SAS 行取与 session 同一规范串。
+	// 齐);为空时与旧实现同文案拒绝,同时为 ③ 的 SAS 行取与 session 同一规范串。
 	targetURL, err := canonicalPairTarget(o.URL)
 	if err != nil {
 		return err
 	}
 
-	// ⑨ 同名已 enroll(驱动层 IsEnrolled 判定):默认拒;--force 清 enroll 态
-	// (保留 cache.config.json)。校验(New)已先于清理。
+	// ⑨ 同名已 enroll(驱动层 IsEnrolled 判定):默认拒。--force 只过闸——
+	// Plan 46 零清理先行:Enroll 前不删任何旧槽文件(真实事故形态「先删后
+	// enroll 撞 419 → 半配对死槽」根除);旧材料直到 WriteAndPull 全部成功才
+	// 被新凭据原子覆盖,quarantine/ 于成功尾部清理。
 	enrolled, err := IsEnrolled(o.Instance)
 	if err != nil {
 		return err
 	}
-	if enrolled {
-		if !o.Force {
-			return errors.New("instance already enrolled; pass --force")
-		}
-		if err := s.ForceCleanup(); err != nil {
-			return err
-		}
+	if enrolled && !o.Force {
+		return errors.New("instance already enrolled; pass --force")
 	}
 
 	ctx := context.Background()
@@ -285,11 +285,12 @@ func canonicalPairTarget(raw string) (string, error) {
 	return (&neturl.URL{Scheme: "https", Host: u.Host}).String(), nil
 }
 
-// forceCleanInstance removes the instance's enroll-state files ahead of a
-// --force re-pair: cache.auth.json, cache.bin, cache.meta.json and the
-// quarantine/ subtree. cache.config.json is deliberately PRESERVED — the
-// offline cap is machine-level policy (Plan 40), not a credential; the 换码
-// runbook must not silently drop it.
+// forceCleanInstance removes the instance's enroll-state files: cache.auth.json,
+// cache.bin, cache.meta.json and the quarantine/ subtree. cache.config.json is
+// deliberately PRESERVED — the offline cap is machine-level policy (Plan 40),
+// not a credential; the 换码 runbook must not silently drop it. Plan 46: only
+// reached via the retained ForceCleanup entry (drivers no longer pre-clean
+// before Enroll — zero-cleanup-first force semantics).
 func forceCleanInstance(instance string) error {
 	dir, bin, metaPath, _, err := CachePathsFor(instance)
 	if err != nil {
@@ -325,21 +326,17 @@ func pairArtifactJSON(instance, token string) ([]byte, error) {
 
 // writePrivateFile writes blob to path at 0600 (the frozen artifact posture)
 // and hardens the Windows ACL like every other client-side credential file.
+// Plan 46: the write is ATOMIC — unique temp file in the target directory +
+// rename (shared atomicWriteUnique, same posture as cache.auth.json/bin/meta)
+// so a mid-write failure never leaves a torn artifact; both the pair.<name>.mcp.json
+// artifact and the --write-mcp copy go through here.
 func writePrivateFile(path string, blob []byte) error {
 	if d := filepath.Dir(path); d != "" {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(blob); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
+	if err := atomicWriteUnique(path, blob); err != nil {
 		return err
 	}
 	return store.HardenACL(path)

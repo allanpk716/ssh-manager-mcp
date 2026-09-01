@@ -37,10 +37,23 @@ func resolveMaxOffline(dir string) (time.Duration, error) {
 	return parseMaxOffline(strings.TrimSpace(c.MaxOffline), `max_offline in cache.config.json`)
 }
 
+// failNextConfigWriteForTest, when armed, makes the NEXT WriteCacheConfig fail
+// (Plan 46 T1 失败注入矩阵:「config 写失败(既有 warning 语义)后重跑→文案仍
+// 双路径」需要确定性注入,而让文件保持可读的纯文件系统注入无法跨平台成立——
+// 镜像 expiry.go 的 FailNextMetaWriteForTest 同一模式)。生产永不置位。
+var failNextConfigWriteForTest bool
+
+// FailNextConfigWriteForTest arms the one-shot config write failure.
+func FailNextConfigWriteForTest() { failNextConfigWriteForTest = true }
+
 // WriteCacheConfig atomically persists the instance's offline cap (v is the
 // raw duration string, same grammar as the env). Called by `cache pull
 // --max-offline` AFTER a successful pull — a failed pull never rewrites policy.
 func WriteCacheConfig(dir, v string) error {
+	if failNextConfigWriteForTest {
+		failNextConfigWriteForTest = false
+		return errors.New("test-injected cache.config.json write failure")
+	}
 	blob, err := json.Marshal(struct {
 		MaxOffline string `json:"max_offline"`
 	}{v})

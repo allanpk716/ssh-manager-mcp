@@ -45,12 +45,11 @@ type fakePWSess struct {
 	artifact string
 	res      clientops.PullResult
 
-	bindErr    error
-	cleanupErr error
-	enrollErr  error
-	waitErr    error
-	finishErr  error
-	writeErr   error
+	bindErr   error
+	enrollErr error
+	waitErr   error
+	finishErr error
+	writeErr  error
 
 	cancelSeen chan struct{} // 非空 = WaitApproval 阻塞至 ctx.Done 再返回
 }
@@ -84,7 +83,6 @@ func (f *fakePWSess) Bind(d clientops.Discovered) error {
 	}
 	return f.bindErr
 }
-func (f *fakePWSess) ForceCleanup() error              { f.record("ForceCleanup"); return f.cleanupErr }
 func (f *fakePWSess) Enroll(ctx context.Context) error { f.record("Enroll"); return f.enrollErr }
 func (f *fakePWSess) SAS() string                      { return f.sas }
 func (f *fakePWSess) BrokerName() string               { return f.broker }
@@ -279,7 +277,7 @@ func TestPairWizard_SubmitEnrolledNeedsForce(t *testing.T) {
 		t.Fatalf("the enrolled gate must precede session construction, newed=%d", len(h.newed))
 	}
 
-	// force → 确认屏(New 之后、清理之前:确认屏上任何会话方法都未调用)。
+	// force → 确认屏(New 之后、Enroll 之前:确认屏上任何会话方法都未调用)。
 	h2 := newPWHarness(t, PairWizardPrefill{Force: true})
 	h2.w.isEnrolled = func(string) (bool, error) { return true, nil }
 	h2.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
@@ -413,7 +411,7 @@ func TestPairWizard_MultiBrokerPickAndSPKIUpgrade(t *testing.T) {
 		t.Fatalf("the picked offer must materialize into opts (SPKI 升格与 CLI pickDiscovered 同规则), got %+v", h.newed)
 	}
 	// R1 发现 2:发现流必须 Bind 幂等重校验并把 offer 名记入 brokerName
-	// (校验(New+Bind)先于清理,plan 冻结时序)。
+	// (校验(New+Bind)先于 enroll,plan 冻结时序)。
 	if got := h.sess.order(); len(got) == 0 || got[0] != "Bind" {
 		t.Fatalf("the discovered pick must re-Bind before anything else, got %v", got)
 	}
@@ -430,7 +428,7 @@ func TestPairWizard_MultiBrokerPickAndSPKIUpgrade(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// force:确认屏在先、Esc 零残留、清理先于 Enroll
+// force:确认屏在先、Esc 零残留、零清理先行(Plan 46)
 // ---------------------------------------------------------------------------
 
 func TestPairWizard_ForceConfirm_EscZeroResidue(t *testing.T) {
@@ -449,37 +447,40 @@ func TestPairWizard_ForceConfirm_EscZeroResidue(t *testing.T) {
 	}
 }
 
-func TestPairWizard_ForceCleanupRunsBeforeEnroll(t *testing.T) {
-	t.Run("url_combo_cleanup_before_enroll", func(t *testing.T) {
+// TestPairWizard_Force_EnrollWithoutCleanup 是 Plan 46 零清理先行的 TUI 回归钉:
+// force 确认屏 Enter 后,向导只驱动 Enroll——任何会话方法里都不再出现
+// ForceCleanup(旧材料直到 WriteAndPull 成功才被覆盖,enroll 阶段失败旧槽
+// 一字不动)。
+func TestPairWizard_Force_EnrollWithoutCleanup(t *testing.T) {
+	t.Run("url_combo_enroll_only", func(t *testing.T) {
 		h := newPWHarness(t, PairWizardPrefill{Force: true})
 		h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
 		h.w.submitForm() // → pwEnrollForceConfirm
-		// R1 发现 3:确认屏必须渲染冻结的删/留清单(auth/bin/meta/quarantine 删,
-		// config 留)。
-		if v := h.w.View().Content; !strings.Contains(v, "cache.auth.json") ||
-			!strings.Contains(v, "quarantine") || !strings.Contains(v, "cache.config.json") {
-			t.Fatalf("confirm screen must render the frozen delete/keep list, got:\n%s", v)
+		// 确认屏文案如实化(Plan 46):说「覆盖」,不再有「删除文件」清单;并
+		// 给出 419 时的 owner 吊销指引。
+		v := h.w.View().Content
+		if !strings.Contains(v, "覆盖") || !strings.Contains(v, "cache.config.json") || !strings.Contains(v, "revoke") {
+			t.Fatalf("confirm screen must carry the honest overwrite+revoke wording, got:\n%s", v)
+		}
+		if strings.Contains(v, "删除以下文件") || strings.Contains(v, "清理") {
+			t.Fatalf("confirm screen must not promise a pre-enroll deletion anymore, got:\n%s", v)
 		}
 		_, cmd := h.w.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		if h.w.state != pwEnrolling {
 			t.Fatalf("confirming must start the enroll, got %v", h.w.state)
 		}
 		pwStep(t, h.w, cmd)
-		if got := h.sess.order(); !reflect.DeepEqual(got, []string{"ForceCleanup", "Enroll"}) {
-			t.Fatalf("cleanup must run before enroll, got %v", got)
+		if got := h.sess.order(); !reflect.DeepEqual(got, []string{"Enroll"}) {
+			t.Fatalf("force must NOT clean before enroll (零清理先行), got %v", got)
 		}
 		if h.w.state != pwWaiting {
 			t.Fatalf("enroll success must land in pwWaiting, got %v", h.w.state)
 		}
-		if !h.w.cleaned {
-			t.Fatal("cleanup consumption must be recorded so a retry skips the second cleanup")
-		}
 	})
 
-	// 终审残留发现 1:force×discovery 组合钉——发现流(URL 空)+ Force 预填的
-	// 完整调用序必须是 [Bind, ForceCleanup, Enroll](plan 冻结:校验(New+Bind)
-	// 先于清理;确认屏恰落在 Bind 之后、清理之前)。
-	t.Run("discovery_combo_bind_before_cleanup", func(t *testing.T) {
+	// force×discovery 组合钉:发现流(URL 空)+ Force 预填的完整调用序必须是
+	// [Bind, Enroll](确认屏恰落在 Bind 之后;Bind 只做校验,不做任何清理)。
+	t.Run("discovery_combo_bind_then_enroll", func(t *testing.T) {
 		h := newPWHarness(t, PairWizardPrefill{Force: true})
 		h.discoverRet = []clientops.Discovered{{Name: "nuc10", Addr: "192.0.2.5", SPKI: testPWPin(), TCPPort: 7878}}
 		h.w.draft = &pwDraft{Instance: "laptop"} // 无地址 = 发现流
@@ -488,12 +489,12 @@ func TestPairWizard_ForceCleanupRunsBeforeEnroll(t *testing.T) {
 			t.Fatalf("force×discovery must stop at the confirm screen after Bind, got %v", h.w.state)
 		}
 		if got := h.sess.order(); !reflect.DeepEqual(got, []string{"Bind"}) {
-			t.Fatalf("the confirm screen must sit after Bind and before any cleanup, got %v", got)
+			t.Fatalf("the confirm screen must sit after Bind, got %v", got)
 		}
 		_, cmd := h.w.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		pwStep(t, h.w, cmd)
-		if got := h.sess.order(); !reflect.DeepEqual(got, []string{"Bind", "ForceCleanup", "Enroll"}) {
-			t.Fatalf("the combo order must be Bind → ForceCleanup → Enroll, got %v", got)
+		if got := h.sess.order(); !reflect.DeepEqual(got, []string{"Bind", "Enroll"}) {
+			t.Fatalf("the combo order must be Bind → Enroll (no cleanup), got %v", got)
 		}
 		if h.w.state != pwWaiting {
 			t.Fatalf("enroll success must land in pwWaiting, got %v", h.w.state)

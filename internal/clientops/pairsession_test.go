@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"math/big"
 	"net"
 	"net/http"
@@ -37,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -598,6 +600,473 @@ func TestPairSession_NoExportedKeyMaterial(t *testing.T) {
 			}
 		case reflect.Interface, reflect.Func, reflect.Chan, reflect.UnsafePointer:
 			t.Fatalf("exported field %s is a %s — key material must never be exported", f.Name, f.Type.Kind())
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Plan 46 T1 —— force 时序重构(零清理先行)失败注入矩阵。探针形态正式化自
+// .xcheck/20260901-170939/exp/exp_probe_close46_test.go(自愈腿 + 419 对照腿),
+// 其余注入腿为本任务的失败注入矩阵。
+// ---------------------------------------------------------------------------
+
+// approvePending CAS-approves the current pending row. WHY THIS EXISTS:
+// newPairingServer 的自动批准 goroutine 只批准其生命周期的第一个 pending 行
+// (approve 后 return)——任何「重跑第二轮」的用例,第二轮的 pending 行必须由
+// 本 helper 手动批准(与 broker 审批面同一 store 入口)。
+func approvePending(t *testing.T, srv *pairingServer) error {
+	t.Helper()
+	profs, err := srv.st.ListProfiles()
+	if err != nil || len(profs) == 0 {
+		t.Fatalf("profiles: %v (%d)", err, len(profs))
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, lerr := srv.st.ListPendingPairing()
+		if lerr == nil {
+			for i := range rows {
+				if rows[i].State == "pending" {
+					ok, aerr := srv.st.ApprovePairing(rows[i].ID, profs[0].ID)
+					if aerr != nil {
+						return aerr
+					}
+					if ok {
+						return nil
+					}
+				}
+			}
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	return context.DeadlineExceeded
+}
+
+// slotSnapshot 是旧槽文件集的黄金快照(相对路径 → 字节):「旧槽一字不动」
+// 的断言面,含子目录(quarantine/)内文件。
+func slotSnapshot(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
+	out := map[string][]byte{}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		b, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return rerr
+		}
+		rel, rerr := filepath.Rel(dir, p)
+		if rerr != nil {
+			return rerr
+		}
+		out[rel] = b
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("slot snapshot %s: %v", dir, err)
+	}
+	return out
+}
+
+// driveFullChain enrolls, waits for the harness auto-approval, finishes and
+// (when withPull) writes + pulls — the shared round-1 shape of the matrix.
+func driveFullChain(t *testing.T, srvURL, pin, instance string, withPull bool) (*PairSession, error) {
+	t.Helper()
+	s, err := NewPairSession(sessionOpts(srvURL, pin, instance))
+	if err != nil {
+		t.Fatalf("NewPairSession: %v", err)
+	}
+	ctx := context.Background()
+	if err := s.Enroll(ctx); err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	if err := s.WaitApproval(ctx, nil); err != nil {
+		t.Fatalf("WaitApproval: %v", err)
+	}
+	if err := s.Finish(ctx); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if withPull {
+		if _, err := s.WriteAndPull(ctx); err != nil {
+			t.Fatalf("WriteAndPull: %v", err)
+		}
+	}
+	return s, nil
+}
+
+// TestPairForce_EnrollFailureKeepsOldSlotByteIdentical 是事故形态根除的回归钉:
+// 任何 enroll 阶段失败(419 同名已拉取 / 网络失败),旧槽文件集逐字节不变
+// (黄金断言)——「先删后 enroll 撞 419 → 半配对死槽」不可能再发生。
+func TestPairForce_EnrollFailureKeepsOldSlotByteIdentical(t *testing.T) {
+	t.Run("enroll_419_after_pull", func(t *testing.T) {
+		srv := newPairingServer(t)
+		dir := t.TempDir()
+		withDEK(t)
+		withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+
+		driveFullChain(t, srv.url, srv.spki, "gold-dev", true)
+		before := slotSnapshot(t, dir)
+		if len(before) < 4 {
+			t.Fatalf("precondition: the pulled slot must hold the full file set, got %d files", len(before))
+		}
+
+		// 同名重跑 enroll → 419;文案必须给出 owner 吊销路径(不误导)。
+		s2, err := NewPairSession(sessionOpts(srv.url, srv.spki, "gold-dev"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = s2.Enroll(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "in use") {
+			t.Fatalf("a PULLED code's name must 419 on re-enroll, got %v", err)
+		}
+		for _, want := range []string{"419", "cache-tokens revoke", "gold-dev"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the 419 wording must carry the owner revoke guidance (%q), got %v", want, err)
+			}
+		}
+
+		after := slotSnapshot(t, dir)
+		if !reflect.DeepEqual(before, after) {
+			t.Fatalf("a failed enroll must leave the old slot byte-identical (golden)")
+		}
+	})
+
+	t.Run("enroll_network_failure", func(t *testing.T) {
+		dir := t.TempDir()
+		withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+		// 富集旧槽:auth/bin/meta/config + quarantine/ 子树 + 产物,全在黄金面内。
+		for name, body := range map[string]string{
+			"cache.auth.json":          `{"url":"https://old:7878","token":"in-use-code","pin":"sha256:aa"}`,
+			"cache.bin":                "OLD-CACHE-BYTES",
+			"cache.meta.json":          `{"url":"https://old:7878","pulled_at":1700000000}`,
+			"cache.config.json":        `{"max_offline":"72h"}`,
+			"pair.net-dev.mcp.json":    `{"mcpServers":{}}`,
+			"quarantine/manifest.json": `{"reason":"x"}`,
+		} {
+			if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(name)), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		before := slotSnapshot(t, dir)
+
+		// 网络失败(无监听端口):enroll 的 dial 必败,盘上分毫不动。
+		s, err := NewPairSession(sessionOpts("https://127.0.0.1:1", testValidPin(), "net-dev"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Enroll(context.Background()); err == nil {
+			t.Fatal("enroll against a dead endpoint must fail")
+		}
+		if !reflect.DeepEqual(before, slotSnapshot(t, dir)) {
+			t.Fatalf("a network-failed enroll must leave the old slot byte-identical (golden)")
+		}
+	})
+}
+
+// TestPairForce_FinishDropThenRerun_SelfHeals 正式化探针主腿(.xcheck/20260901-
+// 170939):finish 成功但本地写盘从未发生(码 active 且从未 pull,模拟写盘失败)
+// → 重跑 force 全链自愈:同名 enroll 必须被放行(serve 对 active-从未pull 的
+// 同名码走 replaceInactive)→ finish → WriteAndPull 落盘成功。
+func TestPairForce_FinishDropThenRerun_SelfHeals(t *testing.T) {
+	srv := newPairingServer(t)
+	dir := t.TempDir()
+	withDEK(t)
+	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	ctx := context.Background()
+
+	// 第一轮:finish 成功,写盘「失败」(= 不调 WriteAndPull)。
+	driveFullChain(t, srv.url, srv.spki, "heal-dev", false)
+	if cred, cerr := ReadCacheCredFor("heal-dev"); cerr != nil || cred != nil {
+		t.Fatalf("pre-state sanity: no on-disk cred expected (we never wrote), got %+v err=%v", cred, cerr)
+	}
+
+	// 第二轮:同名重跑(模拟用户重跑 force)——enroll 必须放行,不得 419。
+	// (自动批准 goroutine 只批准首个 pending 行——第二轮由 approvePending 手动批准。)
+	s2, err := NewPairSession(sessionOpts(srv.url, srv.spki, "heal-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.Enroll(ctx); err != nil {
+		t.Fatalf("SELF-HEAL FAILED: re-enroll after finish-without-pull must be admitted (replaceInactive), got: %v", err)
+	}
+	if err := approvePending(t, srv); err != nil {
+		t.Fatalf("round2 manual approve: %v", err)
+	}
+	if err := s2.WaitApproval(ctx, nil); err != nil {
+		t.Fatalf("round2 WaitApproval: %v", err)
+	}
+	if err := s2.Finish(ctx); err != nil {
+		t.Fatalf("round2 Finish: %v", err)
+	}
+	res, err := s2.WriteAndPull(ctx)
+	if err != nil {
+		t.Fatalf("round2 WriteAndPull (self-heal completion): %v", err)
+	}
+	if res.Instance != "heal-dev" {
+		t.Fatalf("round2 pull routed to %q, want heal-dev", res.Instance)
+	}
+	if cred, cerr := ReadCacheCredFor("heal-dev"); cerr != nil || cred == nil {
+		t.Fatalf("self-healed credential must be on disk: %v", cerr)
+	}
+}
+
+// TestPairForce_PulledThenRerun_Enroll419 正式化探针对照腿:第一轮全链含首拉
+// (码被 pull,last_pull_at 非空)→ 第二轮同名 enroll 必须 419,且文案给出
+// owner 吊销路径。
+func TestPairForce_PulledThenRerun_Enroll419(t *testing.T) {
+	srv := newPairingServer(t)
+	dir := t.TempDir()
+	withDEK(t)
+	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+
+	driveFullChain(t, srv.url, srv.spki, "pulled-dev", true)
+
+	s2, err := NewPairSession(sessionOpts(srv.url, srv.spki, "pulled-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s2.Enroll(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "in use") {
+		t.Fatalf("CONTROL FAILED: re-enroll after a PULLED code must 419 with 'in use', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "cache-tokens revoke pulled-dev") {
+		t.Fatalf("the 419 wording must name the owner-side revoke path, got %v", err)
+	}
+}
+
+// TestPairForce_FirstPullCommitFail_DoublePathHint 注入「首拉 body 已接收后
+// bin rename 必败」(cache.bin 预置为目录:gate 以可读空白身份放行,临时文件
+// 写完后 rename 撞目录必败):错误文案必须含双路径指引,且旧材料不被半写、
+// quarantine/ 不被清理(清理只在成功尾部)。
+func TestPairForce_FirstPullCommitFail_DoublePathHint(t *testing.T) {
+	srv := newPairingServer(t)
+	dir := t.TempDir()
+	withDEK(t)
+	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+
+	s, err := NewPairSession(sessionOpts(srv.url, srv.spki, "rename-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := s.Enroll(ctx); err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	if err := s.WaitApproval(ctx, nil); err != nil {
+		t.Fatalf("WaitApproval: %v", err)
+	}
+	if err := s.Finish(ctx); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	// 注入:bin = 目录(rename 必败点在 body 已接收之后)+ 可读空白身份 meta
+	// (gate 放行)+ quarantine/(成功尾部才会被清)。
+	if err := os.WriteFile(filepath.Join(dir, "cache.meta.json"), []byte(`{"url":"https://old:7878"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "cache.bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "quarantine"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "quarantine", "manifest.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, werr := s.WriteAndPull(ctx)
+	if werr == nil {
+		t.Fatal("the injected bin-rename failure must fail WriteAndPull")
+	}
+	for _, want := range []string{"first pull failed", "直接重跑 `sshmgr pair --force`", "cache-tokens revoke rename-dev"} {
+		if !strings.Contains(werr.Error(), want) {
+			t.Fatalf("the post-finish failure must carry the double-path hint (%q), got %v", want, werr)
+		}
+	}
+	// 先落盘后首拉的姿势保持:凭据与产物已在盘;旧 bin(目录)未被半写;
+	// quarantine/ 未被清(清理只属于成功尾部)。
+	if _, serr := os.Stat(filepath.Join(dir, "pair.rename-dev.mcp.json")); serr != nil {
+		t.Fatalf("artifact must already be on disk: %v", serr)
+	}
+	if cred, cerr := ReadCacheCredFor("rename-dev"); cerr != nil || cred == nil {
+		t.Fatalf("cache.auth.json must already be on disk: cred=%+v err=%v", cred, cerr)
+	}
+	if fi, serr := os.Stat(filepath.Join(dir, "cache.bin")); serr != nil || !fi.IsDir() {
+		t.Fatalf("the injected bin must be untouched by a torn write: fi=%v err=%v", fi, serr)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "quarantine", "manifest.json")); serr != nil {
+		t.Fatalf("quarantine/ must survive a FAILED run (cleanup is success-tail only): %v", serr)
+	}
+}
+
+// dropBodyWriter 吞掉 handler 的响应体(只放行首字节)却对 server 报告「已全
+// 写」——客户端拿到 200 而信封丢失 =「已提交未收响应」形态。
+type dropBodyWriter struct{ http.ResponseWriter }
+
+func (d *dropBodyWriter) Write(b []byte) (int, error) {
+	if len(b) > 0 {
+		_, _ = d.ResponseWriter.Write(b[:1])
+	}
+	return len(b), nil
+}
+
+// TestPairForce_FinishTruncated_DoublePathHint_RerunAdmitted 注入 finish 响应
+// 截断(serve 已铸码、客户端 200 到手但信封不完整):错误文案含双路径指引;
+// 且 serve 端确已提交(active-从未pull)→ 重跑同名 enroll 必须被放行 = 全链
+// 可自愈。
+func TestPairForce_FinishTruncated_DoublePathHint_RerunAdmitted(t *testing.T) {
+	srv := newPairingServer(t)
+	dir := t.TempDir()
+	withDEK(t)
+	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	ctx := context.Background()
+
+	// 仅截断第一轮 /pair/finish 的响应(httptest 的 Config.Handler 每请求读取,
+	// 运行中替换即刻生效)。
+	inner := srv.srv.Config.Handler
+	var truncated int32 = 1
+	srv.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/pair/finish" && atomic.CompareAndSwapInt32(&truncated, 1, 0) {
+			inner.ServeHTTP(&dropBodyWriter{ResponseWriter: w}, r)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
+
+	s1, err := NewPairSession(sessionOpts(srv.url, srv.spki, "trunc-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.Enroll(ctx); err != nil {
+		t.Fatalf("round1 Enroll: %v", err)
+	}
+	if err := s1.WaitApproval(ctx, nil); err != nil {
+		t.Fatalf("round1 WaitApproval: %v", err)
+	}
+	err = s1.Finish(ctx)
+	if err == nil || !strings.Contains(err.Error(), "response not JSON") {
+		t.Fatalf("a truncated finish response must fail the envelope decode, got %v", err)
+	}
+	for _, want := range []string{"直接重跑 `sshmgr pair --force`", "cache-tokens revoke trunc-dev"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the truncated-finish failure must carry the double-path hint (%q), got %v", want, err)
+		}
+	}
+
+	// 重跑:serve 端确已提交(码已铸、从未 pull)→ 同名 enroll 放行 → 全链走通。
+	s2, err := NewPairSession(sessionOpts(srv.url, srv.spki, "trunc-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.Enroll(ctx); err != nil {
+		t.Fatalf("RERUN REFUSED: re-enroll after a truncated finish must be admitted, got: %v", err)
+	}
+	if err := approvePending(t, srv); err != nil {
+		t.Fatalf("round2 manual approve: %v", err)
+	}
+	if err := s2.WaitApproval(ctx, nil); err != nil {
+		t.Fatalf("round2 WaitApproval: %v", err)
+	}
+	if err := s2.Finish(ctx); err != nil {
+		t.Fatalf("round2 Finish: %v", err)
+	}
+	if _, err := s2.WriteAndPull(ctx); err != nil {
+		t.Fatalf("round2 WriteAndPull: %v", err)
+	}
+	if cred, cerr := ReadCacheCredFor("trunc-dev"); cerr != nil || cred == nil {
+		t.Fatalf("credential must be on disk after the self-heal rerun: %v", cerr)
+	}
+}
+
+// TestPairForce_ConfigWriteFailThenRerun419_DoublePathStands 注入 config 写失败
+// (既有 WARNING+继续语义——拉取照跑,码被 pull):重跑同名 enroll 撞 419,
+// 文案必须仍给 owner 吊销路径(不得误导为"直接换名"或"必定自愈")。
+func TestPairForce_ConfigWriteFailThenRerun419_DoublePathStands(t *testing.T) {
+	srv := newPairingServer(t)
+	dir := t.TempDir()
+	withDEK(t)
+	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	ctx := context.Background()
+
+	FailNextConfigWriteForTest()
+	s1, err := NewPairSession(sessionOpts(srv.url, srv.spki, "cfg-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.Enroll(ctx); err != nil {
+		t.Fatalf("round1 Enroll: %v", err)
+	}
+	if err := s1.WaitApproval(ctx, nil); err != nil {
+		t.Fatalf("round1 WaitApproval: %v", err)
+	}
+	if err := s1.Finish(ctx); err != nil {
+		t.Fatalf("round1 Finish: %v", err)
+	}
+	res, err := s1.WriteAndPull(ctx)
+	if err != nil {
+		t.Fatalf("a config write failure is WARNING-only, the run must succeed: %v", err)
+	}
+	if res.Instance != "cfg-dev" {
+		t.Fatalf("pull routed to %q, want cfg-dev", res.Instance)
+	}
+
+	// 重跑:码已被 pull → 419;文案必须仍含吊销路径(双路径不误导)。
+	s2, err := NewPairSession(sessionOpts(srv.url, srv.spki, "cfg-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s2.Enroll(ctx)
+	if err == nil || !strings.Contains(err.Error(), "in use") {
+		t.Fatalf("re-enroll after a pulled code must 419, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "cache-tokens revoke cfg-dev") {
+		t.Fatalf("the 419 wording must keep the owner revoke path (不误导), got %v", err)
+	}
+}
+
+// TestWritePrivateFile_AtomicNoHalfFile 钉住产物原子写:成功路径整文件替换;
+// 注入失败(rename 必败:目标预置为目录)不留半文件、不留临时残留——pair 产物
+// 与 --write-mcp 副本共用本函数,同一保证。
+func TestWritePrivateFile_AtomicNoHalfFile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "pair.atomic.mcp.json")
+	if err := writePrivateFile(p, []byte("v1")); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	if b, rerr := os.ReadFile(p); rerr != nil || string(b) != "v1" {
+		t.Fatalf("first write content: %s err=%v", b, rerr)
+	}
+	if err := writePrivateFile(p, []byte("v2-replacement-longer")); err != nil {
+		t.Fatalf("replacement write must atomically replace: %v", err)
+	}
+	if b, rerr := os.ReadFile(p); rerr != nil || string(b) != "v2-replacement-longer" {
+		t.Fatalf("replacement content: %s err=%v", b, rerr)
+	}
+
+	// 注入:目标路径为目录 → temp 写完后 rename 必败;目录不被半写文件顶替,
+	// 同目录无 .tmp 残留。
+	target := filepath.Join(dir, "pair.half.mcp.json")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateFile(target, []byte("torn")); err == nil {
+		t.Fatal("renaming a file onto a directory must fail")
+	}
+	if fi, serr := os.Stat(target); serr != nil || !fi.IsDir() {
+		t.Fatalf("the failed write must not replace the target with a torn file: fi=%v err=%v", fi, serr)
+	}
+	entries, rerr := os.ReadDir(dir)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".pair.half.mcp.json.tmp-") {
+			t.Fatalf("a failed atomic write must not leave a temp file behind: %s", e.Name())
 		}
 	}
 }
