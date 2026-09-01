@@ -10,6 +10,7 @@ package clientops
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -432,6 +433,11 @@ type PullOpts struct {
 	// Validated by CachePathsFor; combined with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK
 	// it is rejected at the CLI layer (mutex, spec §2.2).
 	Instance string
+	// Context carries cancellation into the snapshot request (Plan 45 T1: the
+	// pairing session's first pull must abort with its driver's ctx). The req is
+	// built on it via NewRequestWithContext; nil = the old behavior
+	// (context.Background) — all pre-existing callers pass the zero value.
+	Context context.Context
 }
 
 // PullResult reports where a pull's materials actually landed (Plan 40 batch 2
@@ -522,7 +528,14 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 			return PullResult{}, err
 		}
 	}
-	req, err := http.NewRequest(http.MethodGet, url+"/snapshot", nil)
+	// Plan 45 T1: the snapshot request is built on o.Context (nil =
+	// context.Background — the old behavior), so a pairing session's ctx
+	// cancellation reaches the first pull.
+	pullCtx := o.Context
+	if pullCtx == nil {
+		pullCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(pullCtx, http.MethodGet, url+"/snapshot", nil)
 	if err != nil {
 		return PullResult{}, err
 	}

@@ -14,12 +14,7 @@ package clientops
 import (
 	"bufio"
 	"bytes"
-	"crypto/ecdh"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/tls"
-	"encoding/base64"
-	"encoding/hex"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,8 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"ssh-manager-mcp/internal/instname"
-	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/pairing"
 	"ssh-manager-mcp/internal/store"
 )
@@ -45,14 +38,18 @@ const (
 	// pairing package). Same mirroring discipline as the discovery wire
 	// constants in discover.go: drift breaks every pairing, tests pin both.
 	pairDomainPrefix = "sshmgr-pair-v2"
-	// pairPollInterval / pairPollMax are the frozen poll cadence (④ 2s 循环,
-	// ≤10min). The serve's own poll rate limit (30/min per IP) deliberately
-	// sits at the same order — 429s are transient backpressure, not errors.
-	pairPollInterval = 2 * time.Second
-	pairPollMax      = 10 * time.Minute
 	// pairHTTPTimeout caps each pairing HTTP request (the poll LOOP is bounded
 	// by pairPollMax, not by the per-request timeout).
 	pairHTTPTimeout = 15 * time.Second
+)
+
+// pairPollInterval / pairPollMax are the frozen poll cadence (④ 2s 循环,
+// ≤10min). The serve's own poll rate limit (30/min per IP) deliberately
+// sits at the same order — 429s are transient backpressure, not errors.
+// Plan 45 T1: 转 var 作为测试缝(timeout 用例缩窗),生产值不变。
+var (
+	pairPollInterval = 2 * time.Second
+	pairPollMax      = 10 * time.Minute
 )
 
 // PairOpts is one `pair` invocation. Stdin/Stdout/Stderr are injected so the
@@ -154,7 +151,13 @@ func buildPairTranscript(id []byte, name, targetURL string, clientPub, cnonce, s
 		[]byte(pairDomainPrefix), id, []byte(name), []byte(targetURL), clientPub, cnonce, serverPub, snonce)
 }
 
-// RunPair runs the whole pairing flow. Every frozen step is commented ①–⑨.
+// RunPair runs the whole pairing flow as the CLI DRIVER over PairSession
+// (Plan 45 T1):步骤已提升为导出状态机(pairsession.go,CLI 与 TUI 共用单一
+// 管线),本函数只保留 CLI 独占面 —— 冻结次序 ④⑤(enroll → 轮询 → SAS y/N
+// 确认 → finish)与全部 frozen wordings 逐字不变;AssumeSAS 的 env 判定与终端
+// y/N 永驻本层,discovery/多 broker 选择在 internal/cli/pair.go。轮询瞬态提示
+// 经 WaitApproval 的 note 回调回流到既有 stderr 输出点(410/超时改为
+// ErrPairGone/ErrPairTimeout 哨兵,plan 裁决)。Every frozen step is commented ①–⑨.
 func RunPair(o PairOpts) error {
 	out := o.Stdout
 	if out == nil {
@@ -165,182 +168,61 @@ func RunPair(o PairOpts) error {
 		errw = io.Discard
 	}
 
-	if o.Instance == "" {
-		return errors.New("pair requires --instance (the device name to enroll)")
-	}
-	if err := instname.Valid(o.Instance); err != nil {
+	// instance 必填 + 合法;①pin 分级;②target_url 严格 parse;①transport
+	// 分级(URL 非空路径在 NewPairSession 内一次完成,次序与旧实现一致)。
+	s, err := NewPairSession(o)
+	if err != nil {
 		return err
 	}
 
-	// ① pin 分级:无 pin 且未显式 TOFU → 冻结文案拒绝(先于任何 IO)。
-	if o.Pin == "" && !o.AllowTOFU {
-		return errors.New("refusing TOFU pairing without --pin; pass --allow-tofu to accept an unanchored channel")
-	}
-
-	// ② target_url 严格 parse + 规范化(transcript/enroll/首拉共用同一串)。
-	// 必须先于 ⑨ 的 --force 清理(fix round 1 I1):一次 typo 的 URL 绝不能
-	// 销毁在用凭据——纯字符串校验零 IO,失败即刻退出,盘上文件分毫不动。
+	// ② 驱动层兜底 parse:CLI 路径 URL 必非空(cli/pair.go 的 discovery 会补
+	// 齐);为空时与旧实现同文案拒绝,且必须先于 ⑨ 的 --force 清理(fix
+	// round 1 I1);同时为 ③ 的 SAS 行取与 session 同一规范串。
 	targetURL, err := canonicalPairTarget(o.URL)
 	if err != nil {
 		return err
 	}
 
-	// ① transport 分级:pin → pinningTransport(TLS 层硬校验,信任锚=pin);
-	// TOFU → 自签 cert 过不了系统校验,显式跳过系统验证(加密仍成立),信任由
-	// SAS 人工比对 + 密封信封里的 SPKI 补上。与 URL 同理先于 --force 清理:
-	// pinningTransport 也是纯校验,坏 pin 不许消耗一次 force 销毁。
-	var transport *http.Transport
-	if o.Pin != "" {
-		transport, err = pinningTransport(o.Pin)
-		if err != nil {
-			return err
-		}
-	} else {
-		fmt.Fprintf(errw, "WARNING: pairing over an UNVERIFIED TLS channel (--allow-tofu): trust will be anchored by the SAS comparison and the sealed envelope's pin\n")
-		transport = &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}}
-	}
-
-	// ⑨ 同名已 enroll:默认拒;--force 清 enroll 态(保留 cache.config.json)。
-	authPath, err := CacheCredPathFor(o.Instance)
+	// ⑨ 同名已 enroll(驱动层 IsEnrolled 判定):默认拒;--force 清 enroll 态
+	// (保留 cache.config.json)。校验(New)已先于清理。
+	enrolled, err := IsEnrolled(o.Instance)
 	if err != nil {
 		return err
 	}
-	if _, serr := os.Stat(authPath); serr == nil {
+	if enrolled {
 		if !o.Force {
 			return errors.New("instance already enrolled; pass --force")
 		}
-		if err := forceCleanInstance(o.Instance); err != nil {
-			return fmt.Errorf("--force cleanup: %w", err)
+		if err := s.ForceCleanup(); err != nil {
+			return err
 		}
 	}
 
-	client := &http.Client{
-		Transport:     transport,
-		Timeout:       pairHTTPTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-
-	// ② 一次性临时身份:X25519 密钥对 + id32B + cnonce16B。
-	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
-	if err != nil {
-		return fmt.Errorf("keygen: %w", err)
-	}
-	var pairID [32]byte
-	var cnonce [16]byte
-	if _, err := rand.Read(pairID[:]); err != nil {
-		return err
-	}
-	if _, err := rand.Read(cnonce[:]); err != nil {
-		return err
-	}
+	ctx := context.Background()
 
 	// ②③ enroll:严格 parse 过的 target_url 进 transcript;响应当场算 SAS。
-	res, err := pairPost(client, targetURL, "/pair/enroll", pairEnrollRequest{
-		ID:          hex.EncodeToString(pairID[:]),
-		Name:        o.Instance,
-		TargetURL:   targetURL,
-		ClientPub:   base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()),
-		Cnonce:      base64.RawURLEncoding.EncodeToString(cnonce[:]),
-		ProfileHint: o.ProfileHint,
-	})
-	if err != nil {
-		return fmt.Errorf("pairing enroll: %w", err)
-	}
-	if res.StatusCode != http.StatusOK {
-		msg := pairErrBody(res)
-		switch res.StatusCode {
-		case http.StatusTooManyRequests:
-			return errors.New("pairing enroll: rate limited or queue full (429) — retry shortly")
-		case 419:
-			return fmt.Errorf("pairing enroll: device name %q is in use on the broker (419) — pick another --instance", o.Instance)
-		case http.StatusConflict:
-			return errors.New("pairing enroll: id already enrolled (409) — rerun (a fresh id is generated each run)")
-		case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
-			return fmt.Errorf("pairing enroll refused: HTTP %d %s", res.StatusCode, clipStr(msg, 200))
-		default:
-			return fmt.Errorf("pairing enroll: HTTP %d %s", res.StatusCode, clipStr(msg, 200))
-		}
-	}
-	var er pairEnrollResponse
-	if err := json.NewDecoder(res.Body).Decode(&er); err != nil {
-		res.Body.Close()
-		return fmt.Errorf("pairing enroll: response not JSON: %w", err)
-	}
-	res.Body.Close()
-	serverPub, err := base64.RawURLEncoding.DecodeString(er.ServerPub)
-	if err != nil || len(serverPub) != 32 {
-		return fmt.Errorf("pairing enroll: bad server_pub (err=%v len=%d)", err, len(serverPub))
-	}
-	snonce, err := base64.RawURLEncoding.DecodeString(er.Snonce)
-	if err != nil || len(snonce) != 16 {
-		return fmt.Errorf("pairing enroll: bad snonce (err=%v len=%d)", err, len(snonce))
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(er.Sig)
-	if err != nil || len(sig) != ed25519.SignatureSize {
-		return fmt.Errorf("pairing enroll: bad sig (err=%v len=%d)", err, len(sig))
-	}
-
-	transcript := buildPairTranscript(pairID[:], o.Instance, targetURL,
-		priv.PublicKey().Bytes(), cnonce[:], serverPub, snonce)
-	// 响应签名绑定 TLS 端点:enroll 响应必须由(被 pin 的)TLS 证书的 ed25519
-	// 私钥签署 — 一个 HTTP 层注入者无法伪造(F5 的客户端半边)。
-	if res.TLS == nil || len(res.TLS.PeerCertificates) == 0 {
-		return errors.New("pairing enroll: no TLS peer certificate to anchor the response signature")
-	}
-	certPub, ok := res.TLS.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
-	if !ok {
-		return fmt.Errorf("pairing enroll: serve cert key is %T, want ed25519 — cannot verify the response signature",
-			res.TLS.PeerCertificates[0].PublicKey)
-	}
-	if !ed25519.Verify(certPub, transcript, sig) {
-		return errors.New("pairing enroll: response signature does not verify against the TLS certificate — aborting")
-	}
-
-	remote, err := ecdh.X25519().NewPublicKey(serverPub)
-	if err != nil {
+	if err := s.Enroll(ctx); err != nil {
 		return err
 	}
-	ikm, err := priv.ECDH(remote)
-	if err != nil {
-		return err
-	}
-	kAck, kCreds := pairing.DeriveKeys(ikm, transcript)
-	// ③ SAS 三件套。
-	fmt.Fprintf(out, "%s @ %s SAS %s\n", o.Instance, targetURL, pairing.SAS(transcript, kCreds))
+	// ③ SAS 三件套(逐字冻结)。
+	fmt.Fprintf(out, "%s @ %s SAS %s\n", o.Instance, targetURL, s.SAS())
 	fmt.Fprintf(out, "与 broker 审批面上显示的 SAS 逐位比对,一致才继续。\n")
 
-	// ④ poll 2s 循环 ≤10min;410 终局,其余(429/5xx/网络)瞬态重试。
-	approved := false
-	deadline := time.Now().Add(pairPollMax)
+	// ④ poll 2s 循环 ≤10min(ApprovalDeadline 锚);410 → ErrPairGone(合并
+	// 语义),deadline 尽 → ErrPairTimeout,ctx 取消三者可区分;瞬态(429/5xx/
+	// 网络)backoff note 回流到既有 stderr 输出点(30s 节流,session 与
+	// noteTransient 同步推进,输出逐字节不变)。
 	var lastNote time.Time
-	for !approved {
-		res, perr := pairPost(client, targetURL, "/pair/poll", pairIDRequest{ID: hex.EncodeToString(pairID[:])})
-		if perr == nil {
-			switch res.StatusCode {
-			case http.StatusOK:
-				res.Body.Close()
-				approved = true
-			case http.StatusAccepted:
-				res.Body.Close()
-			case http.StatusGone:
-				res.Body.Close()
-				return errors.New("pairing poll: request expired or rejected (410) — start over with `sshmgr pair`")
-			default:
-				res.Body.Close()
-				noteTransient(errw, &lastNote, "pairing poll: HTTP %d (retrying until the 10m deadline)", res.StatusCode)
-			}
-		} else {
-			noteTransient(errw, &lastNote, "pairing poll: %v (retrying)", perr)
+	if err := s.WaitApproval(ctx, func(n PollNote) {
+		if n.Backoff {
+			noteTransient(errw, &lastNote, "%s", n.Detail)
 		}
-		if !approved {
-			if !time.Now().Add(pairPollInterval).Before(deadline) {
-				return errors.New("pairing approval timed out after 10m — start over with `sshmgr pair`")
-			}
-			time.Sleep(pairPollInterval)
-		}
+	}); err != nil {
+		return err
 	}
 
-	// ⑤ 确认:AssumeSAS 打印 STUB 警示自动过;否则终端 y/N。
+	// ⑤ 确认:AssumeSAS 打印 STUB 警示自动过;否则终端 y/N(CLI 独占人闸;
+	// session 不读 SSHMGR_PAIR_ASSUME_SAS)。
 	if o.AssumeSAS {
 		fmt.Fprintf(errw, "!! STUB: SAS comparison SKIPPED (SSHMGR_PAIR_ASSUME_SAS)\n")
 	} else {
@@ -356,106 +238,23 @@ func RunPair(o PairOpts) error {
 		}
 	}
 
-	// ⑥ finish → OpenCreds 解信封。
-	res, err = pairPost(client, targetURL, "/pair/finish", pairFinishRequest{
-		ID:  hex.EncodeToString(pairID[:]),
-		Ack: hex.EncodeToString(pairing.FinishAck(kAck, pairID[:])),
-	})
-	if err != nil {
-		return fmt.Errorf("pairing finish: %w", err)
-	}
-	if res.StatusCode != http.StatusOK {
-		msg := pairErrBody(res)
-		switch res.StatusCode {
-		case http.StatusForbidden:
-			return errors.New("pairing finish: ack mismatch (403) — the SAS differed, the two sides are NOT the same pair; start over and compare the digits")
-		case http.StatusConflict:
-			return errors.New("pairing finish: request not approved yet (409)")
-		case http.StatusGone:
-			return errors.New("pairing finish: approval window over (410) — start over with `sshmgr pair`")
-		case 419:
-			return fmt.Errorf("pairing finish: device name %q is in use (419)", o.Instance)
-		default:
-			return fmt.Errorf("pairing finish: HTTP %d %s", res.StatusCode, clipStr(msg, 200))
-		}
-	}
-	var fr pairFinishResponse
-	if err := json.NewDecoder(res.Body).Decode(&fr); err != nil {
-		res.Body.Close()
-		return fmt.Errorf("pairing finish: response not JSON: %w", err)
-	}
-	res.Body.Close()
-	sealed, err := base64.RawURLEncoding.DecodeString(fr.Sealed)
-	if err != nil {
-		return fmt.Errorf("pairing finish: sealed is not base64url: %w", err)
-	}
-	pt, err := pairing.OpenCreds(kCreds, sealed)
-	if err != nil {
-		return fmt.Errorf("pairing finish: sealed envelope failed to open: %w", err)
-	}
-	var env pairCredsEnvelope
-	if err := json.Unmarshal(pt, &env); err != nil {
-		return fmt.Errorf("pairing finish: envelope not JSON: %w", err)
-	}
-
-	// 首拉的信任锚 = 信封里的 SPKI;与连接 pin 不一致 = 服务端证书轮换或异常,宁拒不吞。
-	fp := strings.TrimSpace(env.SPKI)
-	if _, ok := mcpserver.ParsePin(fp); !ok {
-		return fmt.Errorf("sealed envelope carries no usable SPKI pin (%q) — refusing to anchor the first pull", clipStr(fp, 80))
-	}
-	if o.Pin != "" && fp != o.Pin {
-		return fmt.Errorf("sealed envelope pins %s but the connection was pinned to %s — refusing (serve cert rotated? re-pair)", clipStr(fp, 24), clipStr(o.Pin, 24))
-	}
-	fmt.Fprintf(out, "已授权 profile: %s\n", env.Profile)
-
-	// ⑦ 先落盘(凭据 + max_offline 策略 + .mcp.json 产物)后首拉。
-	dir, _, _, _, err := CachePathsFor(o.Instance)
-	if err != nil {
+	// ⑥ finish → 解密封信封(ack 校验事务语义原样)。
+	if err := s.Finish(ctx); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	fmt.Fprintf(out, "已授权 profile: %s\n", s.AuthorizedProfile())
+
+	// ⑦ 先落盘四件套(0600)→ pairBeforePullTestHook → 首拉。
+	if _, err := s.WriteAndPull(ctx); err != nil {
 		return err
 	}
-	if err := WriteCacheCredFor(o.Instance, &CacheCred{URL: targetURL, Token: env.DeviceCode, Pin: fp}); err != nil {
-		return fmt.Errorf("persist cache.auth.json: %w", err)
-	}
-	if werr := WriteCacheConfig(dir, env.MaxOffline); werr != nil {
-		// 策略写失败与 cache pull 同姿势:WARNING(拉取照跑,只是 cap 未持久化)。
-		fmt.Fprintf(errw, "WARNING: could not persist cache.config.json (the max_offline cap is not persisted): %v\n", werr)
-	}
-	artifact, err := pairArtifactJSON(o.Instance, env.ProjectToken)
-	if err != nil {
-		return err
-	}
-	artifactPath := filepath.Join(dir, "pair."+o.Instance+".mcp.json")
-	if err := writePrivateFile(artifactPath, artifact); err != nil {
-		return fmt.Errorf("write %s: %w (credentials are already on disk; finish the first pull with `sshmgr cache pull --instance %s`)", artifactPath, err, o.Instance)
-	}
-	if o.WriteMCPPath != "" {
-		if err := writePrivateFile(o.WriteMCPPath, artifact); err != nil {
-			return fmt.Errorf("write --write-mcp %s: %w", o.WriteMCPPath, err)
-		}
-	}
 
-	if pairBeforePullTestHook != nil {
-		pairBeforePullTestHook()
-	}
-	// 首拉(Instance 非空 → gateNamedInstance 锁定设备身份,不存在默认槽重定位,
-	// 故 ⑦ 的落盘槽与 res.Instance 恒一致)。
-	res2, err := DoPull(targetURL, env.DeviceCode, fp, PullOpts{StatusOut: errw, Instance: o.Instance})
-	if err != nil {
-		return fmt.Errorf("first pull failed: %w — the credentials and artifact ARE already on disk; finish with `sshmgr cache pull --instance %s` (device code in cache.auth.json)", err, o.Instance)
-	}
-	if res2.Instance != o.Instance {
-		fmt.Fprintf(errw, "WARNING: first pull landed in instance %q (asked for %q) — the pre-pull files were written to %q\n", res2.Instance, o.Instance, o.Instance)
-	}
-
-	// ⑧ 占位符片段 + 产物指引。
+	// ⑧ 占位符片段 + 产物指引(逐字冻结)。
 	snippet, err := pairArtifactJSON(o.Instance, "<project-token>")
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "配对完成。产物(0600,含真值 token,勿提交/外发):%s\n", artifactPath)
+	fmt.Fprintf(out, "配对完成。产物(0600,含真值 token,勿提交/外发):%s\n", s.ArtifactPath())
 	if o.WriteMCPPath != "" {
 		fmt.Fprintf(out, "副本已写至:%s\n", o.WriteMCPPath)
 	}
@@ -547,12 +346,14 @@ func writePrivateFile(path string, blob []byte) error {
 }
 
 // pairPost POSTs one JSON body to the /pair surface; 3xx are never followed.
-func pairPost(client *http.Client, base, path string, payload any) (*http.Response, error) {
+// Plan 45 T1 ctx 管线:请求建在 ctx 之上(NewRequestWithContext),enroll/poll/
+// finish 的取消随调用方的 ctx 传播。
+func pairPost(ctx context.Context, client *http.Client, base, path string, payload any) (*http.Response, error) {
 	blob, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, base+path, bytes.NewReader(blob))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(blob))
 	if err != nil {
 		return nil, err
 	}
