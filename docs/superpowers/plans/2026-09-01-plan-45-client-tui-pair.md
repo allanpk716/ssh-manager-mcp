@@ -91,7 +91,7 @@ type PairWizardPrefill struct{ Instance, ProfileHint, URL, Pin string; Force boo
 // 取消语义:Discover(短窗口不可取消,Esc 仅弃结果)与 Enroll/WaitApproval(ctx cancel)区分;pwWritePull 阶段 Esc 禁用(落盘+首拉不可半途弃,防与重试的 ForceCleanup 竞争写盘)——界面显示"写入中,请稍候"
 // force 确认屏(pwEnrollForceConfirm):列明删 auth/bin/meta/quarantine、留 config;Esc 任意步全身而退(等待阶段=cancel ctx)
 // 结果屏:成功=实例名+ArtifactPath+AuthorizedProfile+后续指引(.mcp.json 需 --instance);pwEnded(gone=「本次申请已结束(被拒或过期)」——410 合并语义措辞/timeout/error)均给 `r` 重新申请(新 generation 同 opts 重新驱动)
-// 入口互斥:[c]/向导启动时检查 SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK/SSHMGR_DEK 单槽覆盖 env(复用/上提 cli common.go 的互斥判定为共享 helper)——命中即拒绝启动并提示(与 CLI --instance 互斥同语义)
+// 入口互斥:[c]/向导启动时检查 SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK 单槽覆盖 env(SSHMGR_CACHE_DEK_DIR 是组合 seam 放行——复用/上提 cli common.go 的互斥判定为共享 helper)——命中即拒绝启动并提示(与 CLI --instance 互斥同语义)
 ```
 
 - [ ] **Step 1: 失败测试**:表单校验拒非法实例名;发现空→回表单;多 broker 选择;force 确认屏在 Enroll 前、Esc 零残留;**SAS 屏在 pwWaiting 即常显**(不需要批准到达);pwFinishGate——批准到后方出现,**Enter 前 Finish 未被调用**(seam 记录调用序),Enter→WriteAndPull;Esc 在等待中 cancel ctx;generation 防串扰(注入旧 generation 的 done/tick 后 `r` 重试不被污染);pwWritePull 期间 Esc 无效;gone/timeout/error 三态结果屏+`r` 重试走通;单槽覆盖 env 命中→拒绝启动
