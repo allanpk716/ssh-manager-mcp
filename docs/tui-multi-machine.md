@@ -136,8 +136,9 @@ sshmgr pair --instance laptop
 4. **enroll**——生成临时密钥对、注册申请（Esc 可取消；serve 侧 pending 即入
    Pairing 页队列）。
 5. **SAS 等待屏**——**6 位 SAS 大字常显**（不是批准后才出现）：批准者在 server
-   机看到的是 name@url 两件 + 「SAS 码见 client 屏幕」，**批准前请逐位比对两边
-   一致**；屏上同时有剩余审批窗口倒计时（10 分钟）与轮询状态行。此刻去 server
+   机 Pairing 页**同屏看到三件套**（`name @ url` + **六位 SAS**——serve 在 enroll
+   时就算好 SAS 落入待批行，批准面直读真值，v0.13.2 起），**批准前请逐位比对
+   两边一致**；屏上同时有剩余审批窗口倒计时（10 分钟）与轮询状态行。此刻去 server
    机 **Pairing 页按 `a`**（或 `serve pair approve laptop --profile team-a`）。
 6. **批准到达 → 最终核对门**——SAS 再次放大复核，**Enter 才真正完成**（finish +
    首次拉取发生在 Enter 之后）；Esc = 放弃本次配对（broker 侧申请自行过期）。
@@ -151,17 +152,21 @@ sshmgr pair --instance laptop
 显示超时措辞。两种结局都按 **`r`** 以相同参数重新申请（全新 generation、enroll
 新 id——旧申请不可能复活）。
 
-**重配已配对实例**：`[i]` 打开实例 picker，**已配对的具名行按 `p`** → 同一向导
-以 force 预填进入，**先过 force 确认屏**（列明将删除 `cache.auth.json` /
-`cache.bin` / `cache.meta.json` / `quarantine/`、保留 `cache.config.json`——
-时效策略原地继承；Esc = 零残留）才清理并重新 enroll。**serve 侧旧设备码两态
+**重配已配对实例**：`[i]` 打开实例 picker，**任意具名行（完整或残缺——残缺行恰
+是最需要重配的）按 `p`** → 同一向导以 force 预填进入，**先过 force 确认屏**
+（Plan 46 起如实化——不再「预删除」：确认的是「重配成功后，新凭据将原子覆盖本
+实例旧材料；重配成功前，旧材料一律不动」，Esc = 零残留）。确认屏按槽的本地
+四要素（auth/bin/meta/DEK）**分档给 419 提示**：完整槽 =「该实例已拉取过，重配
+前需 owner 在 broker 吊销其设备码」（确定性）；残缺槽 =「该实例材料不完整，无法
+本地预判远端状态；若重跑撞 419 见错误指引」（可能性）。**serve 侧旧设备码两态
 如实**：旧码**从未拉取过** → finish 时自动收编吊销；**在用旧码（已拉取过）需
 owner 先在 broker `sshmgr cache-tokens revoke <名>` 吊销再重配，否则 enroll 被
-419「device name in use」拒**（见排错表）。默认实例行（实例名必填）与未配对行
-按 `p` 无效。
+419「device name in use」拒**（见排错表）。默认实例行按 `p` 显示钉死提示（默认
+槽为本机原始身份，不支持 picker 重配；不指 `--instance`——该槽无名可指）。
 
 **Esc 退出纪律**：**任何一步都能全身而退**——表单/选择屏直接退；等待/核对门中
-= 取消本次申请；唯一例外是写入期不可打断（半途弃写会与重试的清理竞争写盘）。
+= 取消本次申请；唯一例外是写入期不可打断（写入是原子覆盖语义，屏显「写入中，
+请稍候」，几秒即过——半途无 Esc 可按，也就不存在半写悬挂）。
 
 **边界（如实）**：
 
@@ -184,11 +189,13 @@ profile `<名称>` · `<N>` 服务器 · 缓存于 `<时长>` 前**——五个�
 | 键 | 动作 | 语义 |
 |---|---|---|
 | `s` | 同步（手动 pull） | 10 秒超时；**失败保留旧缓存**（快照只在拉取成功后原子替换）。作用于**当前选中的实例槽**（默认槽起步）。本界面**永不走明文拉取**——连接配置缺 pin 会直接报错（缺 pin 时入网/换码走 `pair`；TUI：实例 picker `p`） |
-| `i` | 实例切换（picker，Plan 40 批2） | 弹「选择实例」overlay：第一行恒为「**（默认实例）**」（有实例恰好合法名叫 `default` 也靠它区分），其后每个命名实例一行（名字 + 缓存年龄 + profile + 已配对标记；**轻量行不解密**，DEK 坏了也不影响列表）。`↑`/`↓` 移动、Enter 选中 → 面板即刻切到该实例的槽位重读数据；**已配对的具名行按 `p`** = force 重配（Plan 45，见上「重配已配对实例」）；Esc 取消不动。**会话内有效**：不落盘、重启进程回到默认实例 |
+| `i` | 实例切换（picker，Plan 40 批2；Plan 46 重做） | 弹「选择实例」overlay：第一行恒为「**（默认实例）**」（有实例恰好合法名叫 `default` 也靠它区分），其后每个命名实例一行。每行 = 名字 + **四要素状态列**（`auth+bin+meta+DEK` 齐 = **完整**；槽目录在而任缺 = **残缺**且行内点名缺什么；无目录 = 空）+ 缓存年龄 + profile + 已配对标记；**★ 前缀** = 当前会话所在槽，**⚠ 前缀** = 半态槽（用户事故形态优先可见）；列宽按显示宽度对齐（中文实例名不破列）。**轻量行不解密**，DEK 坏了也不影响列表。键位：`↑`/`↓` 移动；**Enter** 选中 → 面板即刻切到该实例的槽位重读数据；**具名行按 `p`** = force 重配（Plan 45 起；Plan 46 扩到残缺行，见上「重配已配对实例」）；**具名行按 `d`** = 删除实例（Plan 46，见下）；默认槽行按 `p`/`d` 均只显示提示（`p`：默认槽不支持 picker 重配；`d`：清空本机全部 sshmgr 数据请用 `sshmgr clear`）。Esc 取消不动。**会话内有效**：不落盘、重启进程回到默认实例 |
 | `c` | 配对向导（Plan 45） | 打开 **SAS 配对向导** overlay（表单 → 发现 → SAS 常显等待 → 批准后 Enter 完成 → 写入 → 自动换槽刷新；逐屏语义见上「路径 ②」）。连接编辑表单仍退役——连接参数在向导表单里填/由配对自动交付；CLI `sshmgr pair` 保留并列，手工路径 `cache pull` 见 docs |
 | `q` | 退出 | `Ctrl+C` 同 |
 
 页脚键位原样是 `[s]同步 [i]实例 [c]入网 [t]TTL  q 退出`；**单槽模式（override env 覆盖中）没有 `[i]` 也没有 `[c]`**——见下。
+
+**[d] 删除实例与并发边界（Plan 46，如实）**：picker 具名行 `d` = 确认 overlay（双根清单 + 两件配套提示，与 CLI `sshmgr cache instances rm` 同语义——broker 侧吊销与槽外 `--write-mcp` 副本两件事本机删不了，见 [multi-machine.md](./multi-machine.md)「实例删除」节）→ 确认后**后台删除**（busy 提示「删除实例 X…」，事件循环不冻结）。成功刷新列表；删的是**当前槽**则自动回落默认槽并清空内存态（`[s]` 绝不拿已删槽的凭据打默认槽）；失败错误（含残留物清单）挂在重开的列表下方、**槽与会话路由一律不动（不回落）**。**进程内互斥**：删除或 force 清理进行中，同进程并发的 pull / pair 写盘**被拒绝**（明确报错——拒绝而非排队）；跨进程并发不由文件锁拦截，由原子写 + 删除幂等可重跑兜底。
 
 **自动弹 picker（批2）**：启动落在默认实例；若默认槽**真真空**（四文件 `cache.bin` / `cache.auth.json` / `cache.meta.json` / `cache.config.json` 全缺）而 `instances/` 下已有命名实例，首个数据到达后自动打开 picker 并提示——这是"材料全在实例槽、启动却对着空默认槽"的引导路径。"部分缺件"形态（bin 在 auth 缺 / meta 在 / config 在）一律不弹——默认槽有意图或材料，不把你从恢复路径引开。
 
@@ -204,11 +211,15 @@ picker 不触发——**禁用而非适配**（env 是单槽完全覆盖语义�
 `cache.auth.json` 拉新快照；agent 侧的写操作（加改删服务器等）只能在 server 机的
 **管理面**（主控台 / `serve pair`）做，client 机的 TUI 里**没有任何写入口**。
 
-**换码/新实例 = `pair --force` / 新 `pair`**（Plan 42 批1；**Plan 45 起 TUI 等价路径**）：CLI 对既有实例换设备码 =
-`sshmgr pair --instance <名> --force`（清 auth/bin/meta/quarantine，
-**保留 cache.config.json**——时效策略原地继承）；第二个 agent = 直接再跑一条
-`pair --instance <新名>`（自动归位新实例槽）。TUI：`[i]` picker 已配对实例行按
-`p` = force 重配（先过确认屏），`[c]` 向导填新实例名 = 新实例入网。runbook 深水区见 [multi-machine.md](./multi-machine.md)。
+**换码/新实例 = `pair --force` / 新 `pair`**（Plan 42 批1；**Plan 45 起 TUI 等价路径**；**Plan 46 起 force 零清理先行**）：CLI 对既有实例换设备码 =
+`sshmgr pair --instance <名> --force`——**enroll 前零清理**（校验/确认屏/enroll
+任何一步失败，旧槽材料一字不动）；重配成功 = 新凭据**原子覆盖**旧材料
+（`cache.config.json` 始终不动——时效策略原地继承）；`quarantine/` 在成功尾部
+清理（失败仅警告，下次成功时重清）。第二个 agent = 直接再跑一条
+`pair --instance <新名>`（自动归位新实例槽）。TUI：`[i]` picker 具名实例行按
+`p` = force 重配（先过确认屏），`[c]` 向导填新实例名 = 新实例入网。实例整个
+不要了 = `cache instances rm <名>`（CLI）或 picker 行 `d`（Plan 46）。
+runbook 深水区见 [multi-machine.md](./multi-machine.md)。
 
 ## 典型任务
 
@@ -244,10 +255,12 @@ picker 不触发——**禁用而非适配**（env 是单槽完全覆盖语义�
 ### 换码 / 换实例
 
 `pair` 一条命令覆盖（Plan 42 批1）：既有实例换设备码 = `sshmgr pair
---instance <名> --force`（清 auth/bin/meta/quarantine，保留 `cache.config.json`
-——时效策略原地继承）；第二个 agent = `pair --instance <新名>`（自动归位新实例槽，
-产物 args 自动带 `--instance`）。TUI 等价（Plan 45）：client 面板 `[i]` picker
-已配对行 `p`（force 重配，先过确认屏）/ `[c]` 向导配新实例。runbook 深水区见 [multi-machine.md](./multi-machine.md)。
+--instance <名> --force`（Plan 46 起零清理先行——失败旧槽完好，成功 = 新凭据
+原子覆盖；`cache.config.json` 不动——时效策略原地继承）；第二个 agent =
+`pair --instance <新名>`（自动归位新实例槽，产物 args 自动带 `--instance`）。
+TUI 等价（Plan 45）：client 面板 `[i]` picker 具名行 `p`（force 重配，先过确认
+屏）/ `[c]` 向导配新实例；实例整个不要了 = `cache instances rm <名>` 或 picker
+行 `d`（Plan 46）。runbook 深水区见 [multi-machine.md](./multi-machine.md)。
 
 ## 排错
 
@@ -258,13 +271,14 @@ picker 不触发——**禁用而非适配**（env 是单槽完全覆盖语义�
 | `pair --url` 被拒「refusing TOFU」 | 直指又不带 `--pin` 是**默认拒绝**（默认安全）。带上 pair 卡里的 `--pin sha256:...`；`--allow-tofu` 只留给受控环境的无锚通道 |
 | client 面板 `[s]` 同步报缺 pin | 本界面永不走明文拉取（缺 pin 直接报错是**默认安全**的设计）。缺 pin 的实例用 `pair --force` 重新入网即可补全 pin（TUI：实例 picker 按 `p`） |
 | 向导结果屏「本次申请已结束（被拒或过期）」 | serve 对被拒/过期/已送达的申请返回同一终态——本次申请已死，按 `r` 以相同参数重新申请即可（enroll 新 id；若是 owner 误拒，重新批准新的即可）。反复失败查 Pairing 页的 ⚠标记（目标地址 ≠ 本机地址会被机械校验拦下） |
-| 配对失败「device name in use」（419） | 实例名的旧设备码还在 serve 上且**在用**（已拉取过）——同名重配在 enroll 一步即被拒（此时本地已按 force 语义清理完毕——确认屏已过、清理先于 enroll，属预期中间态；`[s]` 会如实报错）。owner 在 broker 先 `sshmgr cache-tokens revoke <名>` 吊销旧码再重配（回到向导按 `r` 同参重申即可）；从未拉取过的旧码无需此步（finish 事务自动收编吊销） |
+| 配对失败「device name in use」（419） | 实例名的旧设备码还在 serve 上且**在用**（已拉取过）——同名重配在 enroll 一步即被拒。**Plan 46 起 enroll 前零清理：被拒瞬间旧槽材料完好无损**（无恢复动作要做）。owner 在 broker 先 `sshmgr cache-tokens revoke <名>` 吊销旧码再重配（回到向导按 `r` 同参重申即可）；从未拉取过的旧码无需此步（finish 事务自动收编吊销） |
+| 配对/重配在 finish 后失败（写盘 / 首拉 / 传输中断） | 错误文案统一尾缀**双路径恢复指引**（Plan 46，如实——client 无法可靠分辨 serve 端是否已提交）：直接重跑 `sshmgr pair --force`（或 TUI 重配）；若重跑报设备名占用（419），请 owner 在 broker 侧执行 `sshmgr cache-tokens revoke <实例名>` 后再重跑。没有「必定自愈」式承诺——按指引两步走必达 |
 | 同步失败但面板还有数据 | 失败保留旧缓存——这是特性不是 bug。修好网络/serve 后 `[s]` 重拉 |
 | 缓存多久算旧 / 怎么自动保鲜 | TTL 由 `.mcp.json` 的 `--cache-max-age` 控制（默认 30m；0=关闭自动拉取）。`mcp --cache` 进程内 spawn 惰性拉取 + 会话内懒检查 + 热加载，无需 OS 定时器；细节见 [multi-machine.md](./multi-machine.md#离线只读缓存plan-12) |
 | server 机 serve 探活失败 | 安装结果屏的排查行：7878 端口防火墙是否放行（TCP + UDP 都要）；`sshmgr serve status` 查四项信号（service/process/http/vault）；服务可能仍在启动，稍候重试 |
 | 吊销了 token/设备码，agent 还在跑 | 三路径：设备码吊销 → 该机下次 pull 即 quarantine（在线 ≤30min）；project token 吊销 → 下次保鲜的新快照已无该 project；永离线设备 → `max_offline` 到期拒载。已建立的隧道 revoke/disable 后 ~15s 内级联拆除（`tunnels kill` 可急停）——完整语义见 [agent-access.md](./agent-access.md#project-生命周期轮换--暂停--恢复--吊销) |
 | 向导中途退出了 | 什么都不用做，重跑 `sshmgr tui` 从断点续配（server 侧会盘点已建的 profile/project，跳过已完成步骤） |
-| client 机想改连别的 server | CLI：重新 `pair`（`--force` 换码 / 换 `--instance` 换槽）；TUI：`[i]` picker 已配对行 `p` 重配 / `[c]` 向导配新实例。连接编辑表单已退役——连接参数一律由配对交付或在向导表单里填 |
+| client 机想改连别的 server | CLI：重新 `pair`（`--force` 换码 / 换 `--instance` 换槽）；TUI：`[i]` picker 具名行 `p` 重配 / `[c]` 向导配新实例（不要的实例 picker 行 `d` 删除）。连接编辑表单已退役——连接参数一律由配对交付或在向导表单里填 |
 
 ## 相关文档
 

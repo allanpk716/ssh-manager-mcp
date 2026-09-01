@@ -78,3 +78,9 @@
 ## Plan 45 真机验收反馈登记（2026-09-01，GW1 进行中）
 
 - **配对向导表单两态分流前置到表单层（owner 定案：方案 B 两级条件表单；时机 = GW1-GW4 测完一批改，一次发版）**：现状把"LAN 发现（地址留空，pin 由 discovery 响应自动携带，TLS 硬校验自动成立）/ 手动直连（URL+pin 必填——TUI 无 TOFU 开关，`--allow-tofu` 为 CLI 专属）"两套信任模式混在一张静态表单（newPWForm），分流靠提交后 `NewPairSession` 会话层校验才暴露——GW1 实测 owner 在 pin 字段困惑"要不要填/填啥"。定案形态：一级只问模式（LAN 发现 / 手动直连）→ 选直连才展开 URL+pin（pin 必填+指纹来源提示）；选发现则两项根本不出现，直接进 pwDiscovering。huh v2 无字段级显隐——拆两级表单串联（失败路径重建表单纪律沿用 T2-R1 huh 死锁教训）。
+
+## Plan 46（2026-09-01 实施，待 v0.13.3 发版后回写销项）
+
+- **实例管理与配对向导健壮性——四任务已全部实现**（worktree `plan-46-instance-mgmt`；plan 见 `docs/superpowers/plans/2026-09-01-plan-46-instance-mgmt-pairing-robustness.md`）：① **T1 force 零清理先行**——`pair --force`/TUI 重配不再于 Enroll 前清槽（任何失败旧槽材料一字不动，事故形态根除），成功 = 新凭据原子覆盖，`quarantine/` 清理移至成功尾部（失败仅警告下次重清）；finish 后一切失败的错误文案统一**双路径恢复指引**（重跑 `pair --force`；撞 419 则 owner `cache-tokens revoke` 后重跑——不做确定性承诺）；pair 产物与 `--write-mcp` 副本改临时文件+rename 原子写。② **T2 `cache instances ls/rm`**——实例删除一等公民：`ls` 纯 stat（产物/DEK 存在性+年龄，DEK 孤儿与半态槽显式标注）；`rm` 双根清理（槽目录+DEK，输名确认、幂等可重试、残留物清单、默认槽拒改指 `clear`），成功输出 broker 侧 revoke 与 `--write-mcp` 槽外副本两件配套提示；进程内 rm/force 与 pull/pair 写盘互斥（拒绝而非排队）。③ **T3 picker 重做**——行状态 = auth+bin+meta+DEK 四要素（完整/残缺点名/空），★ 当前槽 + ⚠ 半态前缀，runewidth 列对齐（中文名不破列），`p` 扩到全部具名行（残缺行恰最需要），`d` 删除流（确认 overlay→后台删→成功刷新/当前槽回落默认槽，失败不回落），419 advisory 分档（完整槽确定性/残缺槽可能性），尾注"本地视角——远端吊销状态不可见"。④ **T4 文档+发布注记**（本节；`docs/release-notes-v0.13.3.md` 草稿）。
+- **待 v0.13.3 发版 + 真机验收（GW 批：GW2' picker p 重配全链含 419 撞墙自愈 / GW3 被拒重试 / GW4 Esc 全链+CLI 回归 / GW5 `cache instances rm` 真机删除+picker ★/CJK 目验）后回写销项**。
+- 注：上节 Plan 45 GW1 反馈登记的**方案 B 两级条件表单**为 Plan 46 范围外独立改进，登记保持原样、本 plan 不含。
