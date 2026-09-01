@@ -54,3 +54,11 @@ jobs:
 
       - name: Test
         run: go test ./... -count=1
+
+      # Plan 45 终审残留:tui 配对向导 + clientops PairSession 新增的
+      # goroutine/chan/ctx 并发面在 race 检测下跑(-race 最有价值的两包;
+      # scoped 而非全仓,避免 Windows lane 时长爆炸)。本机 Windows 开发环境
+      # 的 -race 运行时 DLL 损坏(STATUS_ENTRYPOINT_NOT_FOUND,任何包都失败)
+      # ——race 门只能活在 CI,两 OS lane 都跑。
+      - name: Test (race, scoped to the concurrent pair pipeline)
+        run: go test -race ./internal/tui/ ./internal/clientops/ -count=1

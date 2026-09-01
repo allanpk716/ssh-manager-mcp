@@ -450,29 +450,55 @@ func TestPairWizard_ForceConfirm_EscZeroResidue(t *testing.T) {
 }
 
 func TestPairWizard_ForceCleanupRunsBeforeEnroll(t *testing.T) {
-	h := newPWHarness(t, PairWizardPrefill{Force: true})
-	h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
-	h.w.submitForm() // → pwEnrollForceConfirm
-	// R1 发现 3:确认屏必须渲染冻结的删/留清单(auth/bin/meta/quarantine 删,
-	// config 留)。
-	if v := h.w.View().Content; !strings.Contains(v, "cache.auth.json") ||
-		!strings.Contains(v, "quarantine") || !strings.Contains(v, "cache.config.json") {
-		t.Fatalf("confirm screen must render the frozen delete/keep list, got:\n%s", v)
-	}
-	_, cmd := h.w.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if h.w.state != pwEnrolling {
-		t.Fatalf("confirming must start the enroll, got %v", h.w.state)
-	}
-	pwStep(t, h.w, cmd)
-	if got := h.sess.order(); !reflect.DeepEqual(got, []string{"ForceCleanup", "Enroll"}) {
-		t.Fatalf("cleanup must run before enroll, got %v", got)
-	}
-	if h.w.state != pwWaiting {
-		t.Fatalf("enroll success must land in pwWaiting, got %v", h.w.state)
-	}
-	if !h.w.cleaned {
-		t.Fatal("cleanup consumption must be recorded so a retry skips the second cleanup")
-	}
+	t.Run("url_combo_cleanup_before_enroll", func(t *testing.T) {
+		h := newPWHarness(t, PairWizardPrefill{Force: true})
+		h.w.draft = &pwDraft{Instance: "laptop", URL: "https://192.0.2.5:7878", Pin: testPWPin()}
+		h.w.submitForm() // → pwEnrollForceConfirm
+		// R1 发现 3:确认屏必须渲染冻结的删/留清单(auth/bin/meta/quarantine 删,
+		// config 留)。
+		if v := h.w.View().Content; !strings.Contains(v, "cache.auth.json") ||
+			!strings.Contains(v, "quarantine") || !strings.Contains(v, "cache.config.json") {
+			t.Fatalf("confirm screen must render the frozen delete/keep list, got:\n%s", v)
+		}
+		_, cmd := h.w.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if h.w.state != pwEnrolling {
+			t.Fatalf("confirming must start the enroll, got %v", h.w.state)
+		}
+		pwStep(t, h.w, cmd)
+		if got := h.sess.order(); !reflect.DeepEqual(got, []string{"ForceCleanup", "Enroll"}) {
+			t.Fatalf("cleanup must run before enroll, got %v", got)
+		}
+		if h.w.state != pwWaiting {
+			t.Fatalf("enroll success must land in pwWaiting, got %v", h.w.state)
+		}
+		if !h.w.cleaned {
+			t.Fatal("cleanup consumption must be recorded so a retry skips the second cleanup")
+		}
+	})
+
+	// 终审残留发现 1:force×discovery 组合钉——发现流(URL 空)+ Force 预填的
+	// 完整调用序必须是 [Bind, ForceCleanup, Enroll](plan 冻结:校验(New+Bind)
+	// 先于清理;确认屏恰落在 Bind 之后、清理之前)。
+	t.Run("discovery_combo_bind_before_cleanup", func(t *testing.T) {
+		h := newPWHarness(t, PairWizardPrefill{Force: true})
+		h.discoverRet = []clientops.Discovered{{Name: "nuc10", Addr: "192.0.2.5", SPKI: testPWPin(), TCPPort: 7878}}
+		h.w.draft = &pwDraft{Instance: "laptop"} // 无地址 = 发现流
+		pwStep(t, h.w, h.w.submitForm())         // 单 offer 自动选中 → Bind → 确认屏
+		if h.w.state != pwEnrollForceConfirm {
+			t.Fatalf("force×discovery must stop at the confirm screen after Bind, got %v", h.w.state)
+		}
+		if got := h.sess.order(); !reflect.DeepEqual(got, []string{"Bind"}) {
+			t.Fatalf("the confirm screen must sit after Bind and before any cleanup, got %v", got)
+		}
+		_, cmd := h.w.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		pwStep(t, h.w, cmd)
+		if got := h.sess.order(); !reflect.DeepEqual(got, []string{"Bind", "ForceCleanup", "Enroll"}) {
+			t.Fatalf("the combo order must be Bind → ForceCleanup → Enroll, got %v", got)
+		}
+		if h.w.state != pwWaiting {
+			t.Fatalf("enroll success must land in pwWaiting, got %v", h.w.state)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
