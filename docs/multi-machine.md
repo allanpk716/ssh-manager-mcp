@@ -813,7 +813,7 @@ sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指纹>' -
 
 ### 边界（如实·批2 更新）
 
-- **TUI 多实例现状（批2 落地 · Plan 42 收窄 · Plan 45 复活 [c] · Plan 46 picker 重做+实例删除）**：`[i]` 实例 picker 会话内切换、单槽 override env 互斥（禁用而非适配）保留；连接编辑表单随 ②a 退役删除（Plan 42 批1，不会回来），Plan 45 起 `[c]` 复活为 **SAS 配对向导**——入网/换码 = `sshmgr pair`（`--force` 承接换码语义——Plan 46 起零清理先行，失败旧槽完好）或 client 面板 `[c]` 向导 / picker 具名行 `p`；实例删除 = CLI `cache instances rm` 或 picker 行 `d`（见上「实例删除」节）。无人值守的批量刷新仍推荐计划任务 wrapper：每实例一条任务 + 各自的 env 文件（设备码是 per-instance 的；TUI 面板 `[s]` 只管当前选中槽）。
+- **TUI 多实例现状（批2 落地 · Plan 42 收窄 · Plan 45 复活 [c] · Plan 46 picker 重做+实例删除）**：`[i]` 实例 picker 会话内切换、单槽 override env 互斥（禁用而非适配）保留；连接编辑表单随 ②a 退役删除（Plan 42 批1，不会回来），Plan 45 起 `[c]` 复活为 **SAS 配对向导**——入网/换码 = `sshmgr pair`（`--force` 承接换码语义——Plan 46 起零清理先行，失败旧槽完好）或 client 面板 `[c]` 向导 / picker 具名行 `p`；实例删除 = CLI `cache instances rm` 或 picker 行 `d`（见下「实例删除」节）。无人值守的批量刷新仍推荐计划任务 wrapper：每实例一条任务 + 各自的 env 文件（设备码是 per-instance 的；TUI 面板 `[s]` 只管当前选中槽）。
 - **自动归位只作用于真空机首次 enroll**：存量默认槽机器**永不自动迁移**（意图标记 meta/config 在场即不归位）——要进实例形态显式 `--instance` 重新 enroll，或按下方 runbook v2 清三件套后裸拉归位。
 - **doctor 暂不感知命名实例**（批2 后维持）：只有命名实例的机器，doctor 的 client-cache 检查会报"cache 缺失"（roles 判定已修为 client；不静默但属误报）——doctor 感知命名实例跟随 Plan 38 体系解决。
 - 存量单实例机器**零迁移**：无 flag 的 pull/mcp/status 行为与旧版一致（门禁对存量空 `device_name` 走补记分支）。
@@ -840,7 +840,7 @@ sshmgr cache pull --url https://192.0.2.5:7878 --token '<新码>:<指纹>'
 - **保留的 meta 还带着旧 `device_name` 是特性不是残留**：bin 已删后门禁对该槽不生效，下次成功 pull 时 meta 随写盘覆盖刷新——无害痕迹，不必手工清理。
 - **config 保留 = MAX_OFFLINE 策略原地继承**（时效是目录/槽位属性，不随设备码变化）；想连策略一起换用 `cache config --max-offline`（见下节）。
 - 清三件套的语义 = 按目录/槽位：旧身份的隔离材料（`quarantine/`）一并清除，不留。
-- 命名实例换码 = revoke 旧码 + `cache-tokens add` 同名（或新名）新码 + 该实例重新 `cache pull --instance <name>`（`--instance` 门禁保证同目录同身份；要彻底重来删该实例目录再 enroll 亦可——`sshmgr cache instances rm <名>` 一条命令清双根（见上「实例删除」节），注意此时裸拉也会归位回同名实例）。
+- 命名实例换码 = revoke 旧码 + `cache-tokens add` 同名（或新名）新码 + 该实例重新 `cache pull --instance <name>`（`--instance` 门禁保证同目录同身份；要彻底重来删该实例目录再 enroll 亦可——`sshmgr cache instances rm <名>` 一条命令清双根（见下「实例删除」节），注意此时裸拉也会归位回同名实例）。
 
 ### MAX_OFFLINE 持久化（cache.config.json）
 

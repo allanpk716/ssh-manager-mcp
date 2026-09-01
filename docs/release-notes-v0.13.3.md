@@ -47,7 +47,7 @@ client **无法可靠分辨** serve 端是否已提交（传输中断 = 两态�
 
 > 恢复：直接重跑 `sshmgr pair --force`（或 TUI 重配）；若重跑报设备名占用（419），请 owner 在 broker 侧执行 `sshmgr cache-tokens revoke <实例名>` 后再重跑。
 
-419 错误本身（enroll/finish 两处）也已带同样的 revoke 指引。没有「必定自愈」式承诺；按指引重跑（撞 419 先 revoke）是目前唯一的已知恢复路径，失败会再次给出同样指引。
+419 错误本身（enroll/finish 两处）也已带同样的 revoke 指引。没有「必定自愈」式承诺；按指引重跑（撞 419 先 revoke）是最直接的已知恢复路径，失败会再次给出同样指引。
 
 ## 其他
 

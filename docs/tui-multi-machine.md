@@ -272,7 +272,7 @@ TUI 等价（Plan 45）：client 面板 `[i]` picker 具名行 `p`（force 重�
 | client 面板 `[s]` 同步报缺 pin | 本界面永不走明文拉取（缺 pin 直接报错是**默认安全**的设计）。缺 pin 的实例用 `pair --force` 重新入网即可补全 pin（TUI：实例 picker 按 `p`） |
 | 向导结果屏「本次申请已结束（被拒或过期）」 | serve 对被拒/过期/已送达的申请返回同一终态——本次申请已死，按 `r` 以相同参数重新申请即可（enroll 新 id；若是 owner 误拒，重新批准新的即可）。反复失败查 Pairing 页的 ⚠标记（目标地址 ≠ 本机地址会被机械校验拦下） |
 | 配对失败「device name in use」（419） | 实例名的旧设备码还在 serve 上且**在用**（已拉取过）——同名重配在 enroll 一步即被拒。**Plan 46 起 enroll 前零清理：被拒瞬间旧槽材料完好无损**（无恢复动作要做）。owner 在 broker 先 `sshmgr cache-tokens revoke <名>` 吊销旧码再重配（回到向导按 `r` 同参重申即可）；从未拉取过的旧码无需此步（finish 事务自动收编吊销） |
-| 配对/重配在 finish 后失败（写盘 / 首拉 / 传输中断） | 错误文案统一尾缀**双路径恢复指引**（Plan 46，如实——client 无法可靠分辨 serve 端是否已提交）：直接重跑 `sshmgr pair --force`（或 TUI 重配）；若重跑报设备名占用（419），请 owner 在 broker 侧执行 `sshmgr cache-tokens revoke <实例名>` 后再重跑。没有「必定自愈」式承诺；按指引重跑（撞 419 先 revoke）是目前唯一的已知恢复路径，失败会再次给出同样指引 |
+| 配对/重配在 finish 后失败（写盘 / 首拉 / 传输中断） | 错误文案统一尾缀**双路径恢复指引**（Plan 46，如实——client 无法可靠分辨 serve 端是否已提交）：直接重跑 `sshmgr pair --force`（或 TUI 重配）；若重跑报设备名占用（419），请 owner 在 broker 侧执行 `sshmgr cache-tokens revoke <实例名>` 后再重跑。没有「必定自愈」式承诺；按指引重跑（撞 419 先 revoke）是最直接的已知恢复路径，失败会再次给出同样指引 |
 | 同步失败但面板还有数据 | 失败保留旧缓存——这是特性不是 bug。修好网络/serve 后 `[s]` 重拉 |
 | 缓存多久算旧 / 怎么自动保鲜 | TTL 由 `.mcp.json` 的 `--cache-max-age` 控制（默认 30m；0=关闭自动拉取）。`mcp --cache` 进程内 spawn 惰性拉取 + 会话内懒检查 + 热加载，无需 OS 定时器；细节见 [multi-machine.md](./multi-machine.md#离线只读缓存plan-12) |
 | server 机 serve 探活失败 | 安装结果屏的排查行：7878 端口防火墙是否放行（TCP + UDP 都要）；`sshmgr serve status` 查四项信号（service/process/http/vault）；服务可能仍在启动，稍候重试 |

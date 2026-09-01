@@ -119,6 +119,22 @@ func TestCacheInstancesLs_View(t *testing.T) {
 	}
 }
 
+// 真空默认行:空机器的默认槽连目录都无——合法 vacuum 态,列值照实全"缺"
+// 但不准挂 ⚠ 半态标注(那只为"目录在而材料缺"的事故形态保留;判据与
+// T3 picker 的 slotStat.dir 一致,真 stat 目录而非解析成功即算在)。
+func TestCacheInstancesLs_VacuumDefaultNoHalfState(t *testing.T) {
+	instancesTestEnv(t) // 不播任何种子——真空机器
+	got := runInstancesLs(t)
+	defLine := got[strings.Index(got, "instance: (默认实例)"):]
+	defLine = defLine[:strings.Index(defLine, "\n")]
+	if strings.Contains(defLine, "⚠") {
+		t.Fatalf("directory-less default slot is the legal vacuum state — no ⚠ half-state annotation allowed: %q", defLine)
+	}
+	if !strings.Contains(defLine, "auth=缺") {
+		t.Fatalf("vacuum row must still render its columns truthfully: %q", defLine)
+	}
+}
+
 func TestCacheInstancesRm_ConfirmAndCompanionHints(t *testing.T) {
 	userDir, dekDir := instancesTestEnv(t)
 	seedSlot(t, userDir, dekDir, "agentA", "cache.auth.json", "cache.bin", "cache.meta.json", "cache.config.json")

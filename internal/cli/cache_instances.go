@@ -74,9 +74,13 @@ func cacheInstancesLsCmd() *cobra.Command {
 }
 
 // slotView is one ls row's data: the five existence bits (stat only — ls
-// never decrypts), whether the slot DIRECTORY exists, and the cache age text.
+// never decrypts; dek reads "?" when its path cannot be resolved), whether
+// the slot DIRECTORY itself exists (real stat — the vacuum/half-state
+// discriminator, same judgment as the T3 picker's slotStat.dir), and the
+// cache age text.
 type slotView struct {
 	auth, bin, meta, config, dek bool
+	dekUnknown                   bool // DEK 路径解析失败:存在性不可判(渲染 "?",不冒充"缺")
 	dirExists                    bool
 	age                          string
 	pathErr                      string
@@ -91,7 +95,9 @@ func statSlotView(instance string) slotView {
 		v.pathErr = err.Error()
 		return v
 	}
-	v.dirExists = true
+	if _, serr := os.Stat(dir); serr == nil {
+		v.dirExists = true
+	}
 	exists := func(p string) bool { _, e := os.Stat(p); return e == nil }
 	v.auth = exists(filepath.Join(dir, "cache.auth.json"))
 	v.bin = exists(bin)
@@ -99,6 +105,8 @@ func statSlotView(instance string) slotView {
 	v.config = exists(filepath.Join(dir, "cache.config.json"))
 	if dp, derr := paths.CacheDekPathFor(instance); derr == nil {
 		v.dek = exists(dp)
+	} else {
+		v.dekUnknown = true
 	}
 	if v.bin {
 		if fi, serr := os.Stat(bin); serr == nil {
@@ -127,13 +135,18 @@ func printSlotRow(out io.Writer, instance string) {
 		name string
 		have bool
 	}{
-		{"auth", v.auth}, {"bin", v.bin}, {"meta", v.meta}, {"config", v.config}, {"dek", v.dek},
+		{"auth", v.auth}, {"bin", v.bin}, {"meta", v.meta}, {"config", v.config},
+		{"dek", v.dek || v.dekUnknown}, // 不可判不收进 missing(列值由 dekMark 渲染 "?")
 	}
 	var missing []string
 	for _, p := range pairs {
 		if !p.have {
 			missing = append(missing, p.name)
 		}
+	}
+	dekMark := mark[v.dek]
+	if v.dekUnknown {
+		dekMark = "?" // 解析不出 ≠ 缺失——不可判的列不冒充"缺"
 	}
 	ann := ""
 	// 半态槽 = 槽目录在而材料有缺。空机器的默认槽(连目录都无)是合法的
@@ -146,7 +159,7 @@ func printSlotRow(out io.Writer, instance string) {
 		rmHint = fmt.Sprintf("  rm: sshmgr cache instances rm %s", instance)
 	}
 	fmt.Fprintf(out, "instance: %s  auth=%s bin=%s meta=%s config=%s dek=%s  age=%s%s%s\n",
-		label, mark[v.auth], mark[v.bin], mark[v.meta], mark[v.config], mark[v.dek], v.age, ann, rmHint)
+		label, mark[v.auth], mark[v.bin], mark[v.meta], mark[v.config], dekMark, v.age, ann, rmHint)
 }
 
 // dekOrphanNames returns names that HAVE a per-instance DEK file
@@ -159,7 +172,9 @@ func dekOrphanNames(named []string) ([]string, error) {
 	if root == "" {
 		vd, err := paths.VaultDir()
 		if err != nil {
-			return nil, nil // 无 vault 根(如测试环境)→ 无孤儿可扫
+			// 无 vault 根 → 无孤儿可扫,但静默跳过会埋掉排查线索——如实说一声。
+			fmt.Fprintf(os.Stderr, "WARNING: DEK orphan scan skipped — vault dir resolution failed (%v)\n", err)
+			return nil, nil
 		}
 		root = vd
 	}
