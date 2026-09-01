@@ -296,6 +296,10 @@ func forceCleanInstance(instance string) error {
 	if err != nil {
 		return err
 	}
+	// Plan 46 T2 进程内互斥:force 清理与 RemoveInstance 同取 cacheWriteMu
+	// 独占侧 —— 清理期间并发 pull/pair 写盘被拒(拒绝而非交错)。
+	cacheWriteMu.Lock()
+	defer cacheWriteMu.Unlock()
 	for _, p := range []string{filepath.Join(dir, "cache.auth.json"), bin, metaPath} {
 		if rerr := os.Remove(p); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 			return rerr

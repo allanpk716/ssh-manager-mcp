@@ -508,6 +508,15 @@ func (s *PairSession) WriteAndPull(ctx context.Context) (PullResult, error) {
 
 	// ⑦ 先落盘(凭据 + max_offline 策略 + .mcp.json 产物)后首拉。写盘段的每
 	// 一处失败都尾缀双路径指引(finish 已发生,client 无法可靠分辨 serve 端状态)。
+	// Plan 46 T2 进程内互斥:写盘段(auth→config→artifact→尾部清 quarantine)与
+	// RemoveInstance 共享 cacheWriteMu —— rm 进行中 pair 写盘被拒(拒绝而非
+	// 交错)。内部 DoPull 会再 TryRLock(非阻塞,无死锁;rm 持锁期间同样在
+	// DoPull 的 gate 处被拒)。
+	releaseWriteGate, werr := beginCacheWrite(o.Instance)
+	if werr != nil {
+		return PullResult{}, werr
+	}
+	defer releaseWriteGate()
 	dir, _, _, _, err := CachePathsFor(o.Instance)
 	if err != nil {
 		return PullResult{}, fmt.Errorf("%w\n%s", err, pairRecoverHint(o.Instance))

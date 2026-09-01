@@ -520,6 +520,17 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 	// Plan 40 批2 §1.2-6: vacuum-candidate paths DEFER DEK creation to after
 	// every gate — a refused relocation must leave zero writes, including no
 	// freshly-created default DEK. Non-vacuum paths keep the batch-1 timing.
+	// Plan 46 T2 进程内互斥:本函数的写盘段(DEK 创建 + bin/meta 落盘)与
+	// RemoveInstance/forceCleanInstance 共享 cacheWriteMu —— rm/force 独占
+	// 期间,新 pull 在此被【拒】(拒绝而非排队,plan 定案);无 rm 时 TryRLock
+	// 即刻成功,既有并发 pull 语义(atomicWriteUnique)不变。gate 持到函数尾:
+	// 在途 pull 的 HTTP 期间 rm 会等待(排队方向只在 rm 侧),期间任何新 pull
+	// 都被拒。
+	releaseWriteGate, werr := beginCacheWrite(o.Instance)
+	if werr != nil {
+		return PullResult{}, werr
+	}
+	defer releaseWriteGate()
 	vacuumCandidate := o.Instance == "" && !singleSlotOverrideEnvSet() && defaultSlotVacuum(dir)
 	var dek []byte
 	if !vacuumCandidate {

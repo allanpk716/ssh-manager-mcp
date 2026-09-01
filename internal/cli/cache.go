@@ -33,7 +33,7 @@ func cachePresentFor(instance string) bool {
 
 func newCacheCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "cache", Short: "Offline read-only cache (pull from a serve broker)"}
-	cmd.AddCommand(cachePullCmd(), cacheStatusCmd(), cacheConfigCmd())
+	cmd.AddCommand(cachePullCmd(), cacheStatusCmd(), cacheConfigCmd(), newCacheInstancesCmd())
 	return cmd
 }
 
