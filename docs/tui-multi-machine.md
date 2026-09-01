@@ -85,7 +85,7 @@ client pull 后更新设备码的「最近拉取」、其它 TUI/CLI 会话增�
 
 | 页签/键 | 动作 | 说明 |
 |---|---|---|
-| **Pairing 页**（Plan 42 批1 新增） | 批准/拒绝配对 | 待批准队列每行：`name @ target_url · 来源IP · hint · 剩余秒 · ⚠标记`；`a` = 批准（选 profile，`pair.default_profile` 预选；⚠目标≠本机地址的行需键入大写 `OVERRIDE`）；`d` = 拒绝；`r` = 刷新。**批准面显示 name@url 两件 + 「SAS 码见 client 屏幕」——对照 client 屏 SAS 与本行一致后再批**（详见下「典型任务」）。 |
+| **Pairing 页**（Plan 42 批1 新增） | 批准/拒绝配对 | 待批准队列每行：`name @ target_url · 来源IP · hint · 剩余秒 · ⚠标记`；`a` = 批准（选 profile，`pair.default_profile` 预选；⚠目标≠本机地址的行需键入大写 `OVERRIDE`）；`d` = 拒绝；`r` = 刷新。**批准面同屏显示三件套（含 serve 在 enroll 时落行的真 SAS）——与 client 屏 SAS 逐位比对一致后再批**（行缺 SAS → ⚠ 警示建议拒绝；详见下「典型任务」）。 |
 | 设备码页 `a` / `d` | 手工签发/吊销设备码 | pair 时代日常签发由批准自动完成；这两键留给**手工路径**（CI/迁移）：表单选绑定 profile，设备码 + 指纹 + `cache pull` 示例命令一次性全屏显示；`d` 吊销（该机下次拉取被拒——机器失窃处置第一步，见下） |
 
 ## client 侧走查

@@ -7,9 +7,9 @@ package tui
 // 批准闸(foreign 必键 OVERRIDE)、以及批准/拒绝提交路径的真实 store 效果(CAS)。
 // 因此提交直接驱动 page 的 submit 函数,不经 huh 键击模拟。
 //
-// SAS 裁决(控制器):批准面只显示 name+target_url 两件 + 「SAS 码见 client 屏幕」
-// 提示行——SAS 需要 serve 进程内存里的 ECDH 私钥,批准进程(TUI/CLI)算不出,
-// 不伪造第三件。
+// SAS 双屏比对(2026-09-01 裁决,恢复 rev4:68 冻结原文):serve 在 enroll 时算好
+// SAS 落行,本页直读真值——Detail/表单/提交消息都是三件套 `<name> @ <url> SAS <6位>`;
+// 行缺 SAS(版本错配)→ ⚠ 警示并建议拒绝,不静默回退两件套。
 
 import (
 	"bytes"
@@ -50,15 +50,16 @@ func seedPairingStore(t *testing.T) (*store.Store, []*models.Profile) {
 	return st, []*models.Profile{{ID: pa, Name: "home"}, {ID: pb, Name: "work"}}
 }
 
-// enroll adds one pending pairing row with a fresh 32B id.
-func enroll(t *testing.T, st *store.Store, name, targetURL, hint string, replaceInactive bool) store.PendingPairing {
+// enroll adds one pending pairing row with a fresh 32B id. sas seeds the
+// row's landed SAS — "" models a pre-2026-09-01 serve's row.
+func enroll(t *testing.T, st *store.Store, name, targetURL, hint string, replaceInactive bool, sas string) store.PendingPairing {
 	t.Helper()
 	id := make([]byte, 32)
 	if _, err := rand.Read(id); err != nil {
 		t.Fatal(err)
 	}
 	p := store.PendingPairing{
-		ID: id, Name: name, TargetURL: targetURL, ProfileHint: hint,
+		ID: id, Name: name, TargetURL: targetURL, ProfileHint: hint, SAS: sas,
 		ClientPub: make([]byte, 32), Cnonce: make([]byte, 16), // schema NOT NULL;审批面不读密钥料
 		ServerPub: make([]byte, 32), Snonce: make([]byte, 16), Sig: make([]byte, 64),
 		ReplaceInactive: replaceInactive, State: "pending", SourceIP: "192.0.2.9",
@@ -88,8 +89,8 @@ func localTargetURL(t *testing.T) string {
 func TestPairingPage_ListAndApprove(t *testing.T) {
 	st, profiles := seedPairingStore(t)
 	local := localTargetURL(t)
-	a := enroll(t, st, "laptop", local, "home", true)                // 本机地址 + ⚠未激活码替换
-	b := enroll(t, st, "phone", "https://127.0.0.1:7878", "", false) // 外部地址
+	a := enroll(t, st, "laptop", local, "home", true, "314159")                // 本机地址 + ⚠未激活码替换
+	b := enroll(t, st, "phone", "https://127.0.0.1:7878", "", false, "271828") // 外部地址
 
 	rows, err := st.ListPendingPairing()
 	if err != nil || len(rows) != 2 {
@@ -117,10 +118,11 @@ func TestPairingPage_ListAndApprove(t *testing.T) {
 	if d := pairingRowDesc(rows[0], time.Now().Unix()); strings.Contains(d, "≠") {
 		t.Fatalf("local row must NOT carry the foreign marker:\n%s", d)
 	}
-	// 批准面提示行:两件套 + SAS 在 client 屏。
+	// 批准面三件套:Detail 显示行内真 SAS(serve enroll 时落库),owner 与
+	// client 屏逐位比对。
 	detail := page.Detail()
-	if !strings.Contains(detail, "laptop") || !strings.Contains(detail, "SAS") {
-		t.Fatalf("detail must show the two-piece line + the SAS-on-client-screen hint:\n%s", detail)
+	if !strings.Contains(detail, "laptop") || !strings.Contains(detail, "SAS     314159") {
+		t.Fatalf("detail must show the three-piece line with the row's real SAS:\n%s", detail)
 	}
 
 	// 批准(home):提交 → CAS 生效 → 行 state=approved 且 profile 落库。
@@ -153,9 +155,36 @@ func TestPairingPage_ListAndApprove(t *testing.T) {
 	}
 }
 
+// TestPairingPage_MissingSASWarns:行缺 SAS(旧版 serve 写的/版本错配)→ Detail
+// 与批准表单都打 ⚠ 警示并建议拒绝——绝不静默回退到抓不住 MITM 的两件套对照,
+// 也绝不伪造一个码。
+func TestPairingPage_MissingSASWarns(t *testing.T) {
+	st, profiles := seedPairingStore(t)
+	local := localTargetURL(t)
+	enroll(t, st, "laptop", local, "", false, "")
+
+	rows, err := st.ListPendingPairing()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("premise: 1 pending row, got %d (%v)", len(rows), err)
+	}
+	page := newPairingPage(rows, profiles, "")
+	detail := page.Detail()
+	for _, want := range []string{"⚠ 行缺 SAS", "建议拒绝"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("detail must warn on the missing SAS (%q):\n%s", want, detail)
+		}
+	}
+	if got := sasValue(rows[0]); !strings.Contains(got, "⚠ 行缺 SAS") {
+		t.Fatalf("sasValue must surface the warning, got %q", got)
+	}
+	if got := sasValue(store.PendingPairing{SAS: "314159"}); got != "314159" {
+		t.Fatalf("sasValue must pass the real code through, got %q", got)
+	}
+}
+
 func TestPairingPage_ForeignRequiresOverride(t *testing.T) {
 	st, profiles := seedPairingStore(t)
-	row := enroll(t, st, "phone", "https://127.0.0.1:7878", "", false)
+	row := enroll(t, st, "phone", "https://127.0.0.1:7878", "", false, "")
 	if !mcpserver.ForeignTarget(row.TargetURL) {
 		t.Fatalf("premise: 127.0.0.1 target must be foreign")
 	}
@@ -201,7 +230,7 @@ func TestPairingPage_ForeignRequiresOverride(t *testing.T) {
 
 func TestPairingPage_RejectAndCASMiss(t *testing.T) {
 	st, _ := seedPairingStore(t)
-	row := enroll(t, st, "tab", "https://127.0.0.1:7878", "", false)
+	row := enroll(t, st, "tab", "https://127.0.0.1:7878", "", false, "")
 
 	if msg := submitPairingReject(st, &row)(); func() bool { _, ok := msg.(actionDoneMsg); return !ok }() {
 		t.Fatalf("reject must ride actionDoneMsg, got %T (%v)", msg, msg)
