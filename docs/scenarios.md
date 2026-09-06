@@ -8,7 +8,7 @@
 
 ## 怎么读这些示例
 
-- agent 拿到的 10 个工具是：`list_servers` / `exec_command` / `download_file` / `upload_file` / `upload_content` / `forward_port` / `close_port` / `exec_background` / `exec_output` / `exec_stop`（长活命令走后台三件套；详见根 [README](../README.md#what-the-agent-gets-the-mcp-tools)）。
+- agent 拿到的 12 个工具是：`list_servers` / `exec_command` / `download_file` / `upload_file` / `upload_content` / `exec_context` / `forward_port` / `close_port` / `exec_background` / `exec_output` / `exec_stop` / `relay_file`（长活命令走后台三件套；大文件跨机走 `relay_file`，见场景 9；详见根 [README](../README.md#what-the-agent-gets-the-mcp-tools)）。
 - **你不需要记工具名**。你用自然语言说目标，agent 自己会先 `list_servers` 拿到真实的 server `id`，再用 `id` 调后续工具。下面“agent 会怎么用”只是让你知道它背后在干嘛。
 - 所有示例都假设 agent 绑定的 profile 里有名为 `gpu` / `db` / `web` 等的服务器——把名字换成你自己的。
 
@@ -67,6 +67,7 @@
 - 上传 cap：**单个文件超过 1 MiB 会在传输前被直接拒绝**（错误里带文件名/实际大小/上限，零字节传输；目录上传时此前已完成的文件照常保留）；多个文件累计超过 1 MiB 时已完成的保留并如实标 `truncated=true`（其后的文件不再上传）→ 拆小批次重传。
 - 符号链接三态（传目录时）：**根**是符号链接/junction → 跟链解析成目标目录再传；**嵌套的 symlink→目录**（含 Windows junction）→ **显式拒绝**，错误形如 `symlinked directory not uploaded: <路径> — upload the target directory directly (following directory links recursively is not supported)`（要传就直接传目标目录，不递归跟链——环/重复访问风险）；**嵌套的 symlink→文件** → 跟链上传目标内容（cap 按目标大小判，Plan 24）。
 - 上传的是你本机（broker 所在机器）上的文件——agent 在你机器上读文件再推过去。
+- 单个文件超过 1 MiB 或要**从一台服务器搬到另一台**？那是 `relay_file` 的活（见场景 9）。
 - **内容在 agent 手里、不在任何机器磁盘上？用 `upload_content`**：内容直接内联进工具参数（JSON 入参）写成远程单文件（≤8 MiB，父目录自动建、已存在即覆盖；二进制走 base64）。这是**跨机形态的关键路径**：远程 serve 拓扑（笔记本 agent → serve 主机 broker → 目标机）下，`upload_file` 读的是 **serve 主机**的文件系统，笔记本上的文件它够不到——agent 自己生成的配置/脚本/小产物直接 `upload_content` 推过去（agent 侧详见 [agent-tools.md](./agent-tools.md) upload_content 节）。单文件小配置首选它；整目录、大文件仍走 `upload_file`。
 
 ---
@@ -192,6 +193,28 @@ sshmgr ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原样�
 
 ---
 
+## 场景 9：大文件跨机中继（在线机 → 离线机，`relay_file`）
+
+**你想要**：一个几十 GB 的模型权重已经下载在能上网的服务器 `gpu` 上，要送到一台**真空离线机** `airgap`（它和 `gpu` 零网络可达，唯一交汇点是 broker 所在机）。
+
+**你怎么说**：
+> 把 gpu 上的 /models/llm-70b.q4.gguf 中继到 airgap 的 /models/ 下，传完在那边校验一下 sha256。
+
+**agent 会怎么用**：
+1. `list_servers` → 拿到两台的 id。
+2. `relay_file`（from_server_id=gpu 的 id，from_path=`/models/llm-70b.q4.gguf`，to_server_id=airgap 的 id，to_path=`/models/llm-70b.q4.gguf`）→ 立刻返回 `task_id`（文件字节流经 broker 内存，**不进 agent 上下文**）。
+3. `exec_output(task_id)` 轮询逐块进度；传完的末行带 `file_sha256` 摘要。
+4. 在 airgap 上 `exec_command`（command=`sha256sum /models/llm-70b.q4.gguf`）→ 与 `file_sha256` 比对，报出结论。
+
+**要点**：
+- 这是**服务器↔服务器**的搬运——`upload_file`（本机→服务器，单文件 1 MiB 帽）和 `download_file`（服务器→agent 上下文，1 MiB 帽）都干不了；`scp serverA:file serverB:` 形似但需要两端凭据，而凭据只活在 broker vault 里——relay 是 broker 代理中继，凭据永不出现。
+- **可断点续传**：中途断了 / 停了 / broker 重启了，重跑 `relay_file` 同参数 = 只补缺失块（进度锚在目标机的 `<to_path>.sshmgr-manifest.json`）；真名文件出现 = 传完。
+- 中断后**双摘要形态**：fresh 起步（或从零自愈）的任务报 `file_sha256`（直接对 `sha256sum`）；续传了已完成块的任务只报块 merkle 根（逐块落盘时已校验）——要简单校验，就让 agent 在两端各跑 `sha256sum` 对比（如上）。
+- 目录不直传：先在源端 `tar czf` 再 relay，目标端 untar。目标端 sftp 须为 OpenSSH 系（`posix-rename@openssh.com` 硬依赖）；root 属主路径不可写（无 sudo）。
+- 传完不续传了，目标端的 `.sshmgr-partial` / `.sshmgr-manifest.json` 残留**无害但占盘**，让 agent `rm` 掉即可（真名已在 + manifest 残留 = 无害碎片）。
+
+---
+
 ## 能力边界（故意不做）
 
 | 想做 | 现状 | 替代 |
@@ -209,6 +232,7 @@ sshmgr ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原样�
 - **跑命令** → `exec_command`（要 root 就 `sudo=true`，别自己拼 sudo）。
 - **看文件** → 小文件 `download_file`，大文件 / 目录用 `exec_command` 切片或 `tar`。
 - **推文件** → `upload_file`（目录递归；写 root 路径先传 `/tmp` 再 sudo 移）。
+- **服务器间搬大文件** → `relay_file`（断点续传、零上下文；见场景 9）。
 - **连内网服务** → `forward_port` 拿本地端口，用完 `close_port`。
 - **隔离多 agent** → 不同 profile + 不同 project。
 - **出事了** → rotate（换卡）/ disable（暂停）/ revoke（吊销）——多机 cache 下次保鲜（≤30min）新快照即拒、吊设备码回连即销毁本地缓存；stdio 会话重启客户端接管；永离线缓存场景须轮换服务器凭据（见 agent-access「断连语义」）。

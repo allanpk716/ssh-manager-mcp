@@ -200,6 +200,48 @@ download 方向相反（download 封顶防的是大文件全文灌进上下文�
 
 自更新是新增的网络取包 + 本地执行面，按窄口径收口：①**vault 数据零触碰**（master.key / store.db 不读不写）；②**权限面**——update 对**文件**只需 exe 目录写权，对**服务**重启需提权、失败路径只打印手工命令由 owner 执行，**update 自身永不自动提权**；③**无后台自动检查/自动更新**（升级次序铁律：先迁 client 后升 serve，时点由 owner 手动拍板——见 [deployment-modes.md](./deployment-modes.md) 置顶 v0.13.0 runbook）；④**降级无防**（有意：`--version` 即回滚通道，但有显式警告）；⑤传输面强制 https（仅环回字面量 `{127.0.0.1, ::1}` 例外）+ 每一跳宿主白名单 + 同 release checksums，自定义 `SSHMGR_UPDATE_BASE` 时证据行醒目显示。残余风险见 §3.8（R13）。
 
+### relay_file 大文件中继的边界（Plan 47；发版批次 owner 拍板）
+
+`relay_file`（第 12 个 MCP 工具）在封顶体系旁新开一条**零上下文大文件通道**
+（服务器↔服务器经 broker 中继，源也可以是 broker 本机盘），边界逐条登记：
+
+- **内容零过境（与 download/upload 的本质差异）**：文件字节只在 broker 持有的
+  两条 SSH 连接间分块流式转发（MiB 级内存缓冲，与文件大小无关），**broker 盘
+  零用户数据落盘**（ADR 0001）；审计行、工具返回、`exec_output` 三面都只有
+  元数据（路径/块数/进度/摘要），并有测试反向断言三面无内容片段。§6 顶部的
+  1 MiB 封顶体系防的是"内容进 agent 上下文"——relay 从通道设计上就不经过
+  上下文，不适用也无需那套帽。
+- **本机源无 1 MiB cap 的安全论证（如实登记）**：`upload_file` 的 1 MiB 单文件
+  上限从来不是安全边界——秘密都是 KB 级，1 MiB 内畅通；50GB 级大文件不是秘密。
+  relay_file 本机源（`from_server_id` 空 = broker 本机盘）移除该 cap 不引入
+  新暴露类。
+- **B→A 外发方向（单 owner 拍板，v1 放开仅审计）**：relay 对方向不做限制——
+  B（离线）机上的文件同样可中继外发到 A。agent 本可用 exec 读 B 上其可读文件、
+  经 `upload_content` 分块外送（KB 级绕行始终存在），relay 扩大的只是
+  "整文件、无 cap"的带宽面；每次中继的路径 + 字节数恒落 `relay-bg-start` /
+  `relay-bg-end` 双审计行（owner 侧可取证），(b) 类（agent 被劫持）下的实际
+  挡板仍是 profile 闸——B 不在 profile 就 relay 不到。
+- **StatVFS fail-open 边界**：目标端报不了剩余空间（不支持 statvfs，如部分
+  Windows 目标；含父目录不存在逐级上溯到根仍失败）→ `space_check:"unavailable"`
+  **知情继续**（fail-open，grilling 拍板）——不是静默：字段如实回传给 agent，
+  盘真满只是停在某块边界、腾空间后续传。空间**已知不足**仍是 fail-closed
+  refusal（avail/need 证据，零字节移动）。
+- **两个 env seam（fail-closed 登记）**：`SSHMGR_TRANSFER_CHUNK`（块大小，缺省
+  256 MiB，非法/越 [16 MiB, 1 GiB] → **broker 拒绝启动**）；`SSHMGR_TRANSFER_PARALLEL`
+  （**v1 只接受 `1`**——任何其他值拒绝启动，错误文本注明并行块传输是预留能力；
+  名称与 v2 终态钳域 `[1,8]` 已冻结，v2 放开零迁移）。72h 单任务时长为常量，
+  刻意不设 env、不与 `SSHMGR_BG_RUN_CAP` 联动（一个 env 静默改两个面是坑）。
+- **跨 project 并发秒级残余窗口（登记接受）**：任务表与 read/write 冲突集是
+  **per-project** 的（同 project 内同工件并发启动一防一）；两个不同 project 的
+  agent 并发 relay 同一目标路径不在互斥面内——秒级交错窗口，兜底 = B 端
+  Manifest 事实源 + 完成块抽读复核 + 源 re-stat（交错产物要么完整要么 failed，
+  不会静默半提交）；残余接受，不上新机制。
+- **posix-rename 硬依赖 = 兼容面收窄（登记）**：relay 的目标端 SFTP 必须支持
+  `posix-rename@openssh.com`（OpenSSH 全系含 Win32 端口支持）——非 OpenSSH 系
+  sftp 目标**出局**（stage 0 探测即拒；无 Remove+Rename 回退窗：回退窗×块数 =
+  崩溃即进度全毁，不做概率性原子）。其余工具的 SFTP 面不受影响——收窄仅限
+  relay 这一条新通道。
+
 ---
 
 ## 相关文档

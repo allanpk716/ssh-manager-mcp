@@ -52,6 +52,7 @@ The MCP server exposes these tools — **ssh-functional-equivalent for operating
 | `exec_background` | — | Start a long-running command (builds, training, log tails) in the background and get a `task_id` immediately — 24h run cap, 32 tasks per project, records live only in the broker process (a broker restart loses them all). |
 | `exec_output` | — | Poll a background task's incremental output (absolute byte-offset cursors per channel, long-poll `wait_seconds`, text/base64 encoding — use base64 for GBK/non-UTF-8 logs). |
 | `exec_stop` | — | Stop a background task (returns immediately; kill = session close → remote SIGHUP, so `nohup`'d remote processes survive). |
+| `relay_file` | — (Broker-specific — `scp serverA:file serverB:` approximates the shape but is two direct connections with credentials on both ends; the broker proxies with vault-held credentials the agent never sees) | Relay a LARGE file server-to-server through the broker, or from the broker's own disk to a server — the zero-context big-file path (file bytes stream through the broker's memory only; results carry metadata only). Resumable background transfer: returns `task_id` for the `exec_output`/`exec_stop` trio; an interrupted transfer leaves a partial + manifest on the destination and re-running with the same paths completes only the missing chunks; `fresh=true` restarts. Digest verification recipes in the tool description; destination sftp must be OpenSSH-family (`posix-rename@openssh.com` hard dependency). |
 
 Every server-touching tool is **profile-gated** (the agent only reaches servers you granted its project) and **audited** (each call logged with project, server, action, status); `exec_output` / `exec_stop` are in-process task operations (no server access, no audit row — stop 触发的终态仍由任务侧落 exec-bg-end 生命周期行). Credential bytes never appear in any tool result.
 
@@ -101,7 +102,7 @@ sshmgr projects add my-agent --profile team-a
 #   {"mcpServers":{"ssh":{"command":"sshmgr","args":["mcp"],"env":{"SSHMGR_TOKEN":"<TOKEN>"}}}}
 ```
 
-Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the ten SSH tools, scoped to the `team-a` profile's servers.
+Drop that snippet into your agent's MCP config (Claude Code: `.mcp.json`; Cursor / other MCP clients: per their setup). The agent now has the twelve SSH tools, scoped to the `team-a` profile's servers.
 
 **Other commands:** `servers ls` / `servers rm`, `profiles ls`, `projects ls`, `gc` (find/delete orphan credential rows — dry-run by default), `lock`, `clear` (role teardown — wipes the machine back to first-run), `doctor` (side-effect-free local self-check — prints a PASS/WARN/FAIL report; exit `0` = no FAIL findings, `1` = at least one FAIL), `version`, `pair` (multi-machine one-shot enrollment — LAN discovery → SAS pairing → credentials delivered; see "Multi-machine" below). Tunnel governance (owner, on the machine holding the vault): `tunnels ls` / `tunnels kill <tunnel_id>` / `tunnels kill --project <name>` (emergency stop for live tunnels — teardown within one ~15s control tick; `kill` is surgical and does not revoke the token, `--project` only tears down what exists now — use `projects disable/revoke` to stop re-opening). Audit forensics (owner, on the machine holding the vault): `audit` reads the vault audit log, newest first (owner-only) — `--since 30m|7d|RFC3339|date`, `--server/--project <name|id>`, `--owner`, `--action/--status`, `--limit` (0 = all), `--json` for JSONL.
 
@@ -117,7 +118,7 @@ sshmgr audit --since 24h --project my-agent --status error
 sshmgr audit --json --limit 0 > audit.jsonl   # nine fields, sidecar-compatible
 ```
 
-Known filter values: `action` = `exec` / `download` / `upload` / `upload-content` / `forward` / `close-forward` / `exec-bg-start` / `exec-bg-end` + owner-side `project.rotate` / `project.disable` / `project.enable` / `project.revoke` / `project.delete`; `status` = `ok` / `error` / `timeout` / `cancelled` / `denied` / `auth_error` / `hostkey_mismatch` / `connect_error` / `no_credential` / `no_sudo` / `bind_denied`. The sets evolve across versions; unknown filter values silently match nothing (empty result, never an error).
+Known filter values: `action` = `exec` / `download` / `upload` / `upload-content` / `forward` / `close-forward` / `exec-bg-start` / `exec-bg-end` / `relay-bg-start` / `relay-bg-end` + owner-side `project.rotate` / `project.disable` / `project.enable` / `project.revoke` / `project.delete`; `status` = `ok` / `error` / `timeout` / `cancelled` / `denied` / `auth_error` / `hostkey_mismatch` / `connect_error` / `no_credential` / `no_sudo` / `bind_denied`. The sets evolve across versions; unknown filter values silently match nothing (empty result, never an error).
 
 Human-mode output notes: the server / project columns render four ways — the entity's name, `(none)` (no server context, e.g. project-level owner actions), `(owner)` (no project = an owner action), or `id…(deleted)` for a row that has outlived its entity. Dynamic text (commands, entity names) is escape-notated for the terminal: control / invisible characters render as `\n`, `\x1b`, `\u202e`-style sequences, and a literal backslash becomes `\\` (the notation is reversible); seeing a bidi escape such as `\u202e` means the original command carried a direction override — don't trust the visual order of that line. `exit=0` is ambiguous by design: a failure that never produced an exit code (connect-time) and a command that ran and exited 0 both display `exit=0` — read the `status` column to tell them apart. `--limit 0` prints a stderr warning that `audit_log` has no auto-cleanup and the output may be large; when rows are truncated, stderr gets `showing first N rows (more exist) — use --limit 0 for full output` (JSON mode emits rows only, no stderr chatter).
 
@@ -226,6 +227,8 @@ sshmgr pair --instance laptop
 |---|---|---|
 | `SSHMGR_CACHE_MAX_OFFLINE` | Go duration（≥1h；unset/`0` 关，**默认关**） | 离线缓存到龄自废：超龄的下次 load/spawn 销毁本地 cache（服务器 Date 锚 + 1h 时钟容差）。优先级 env > `cache.config.json` > 关——v0.11 起可 `cache pull --max-offline 24h` 把上限持久化进每实例的 `cache.config.json`。详见 docs/multi-machine.md |
 | `SSHMGR_UPDATE_BASE` | 默认 `https://api.github.com`；自定义基址 = 换信任白名单（镜像须照搬 GitHub 的 URL 路径布局）；非环回强制 https，环回 http 仅测试假源 | 自更新基址（`sshmgr update`，Plan 44）：镜像/内网换源 seam；生效 base 恒在 update 证据行显示，非默认时醒目标记 |
+| `SSHMGR_TRANSFER_CHUNK` | 缺省 `268435456`（256 MiB）；可解析十进制字节值，合法域 `[16777216, 1073741824]`（[16 MiB, 1 GiB]） | relay_file 块大小（Plan 47）：非法/越界 → **broker 拒绝启动**（fail-closed）。续传两端块网格必须一致——改过此值的重跑会被拒（指引还原或 `fresh=true`） |
+| `SSHMGR_TRANSFER_PARALLEL` | 只接受缺省/unset 或 `1` | relay_file 并行块传输 seam（Plan 47）：**v1 单流，非 `1` → broker 拒绝启动**（"reserved for a future version"）；名称与 v2 终态钳域 `[1,8]` 已冻结，放开零迁移 |
 
 ---
 

@@ -60,7 +60,7 @@ sshmgr update --file <包> [--sha256 <hex> | --no-verify]   # 本地包模式（
 ## 共同底座（无论哪种姿势都一样）
 
 - **授权模型**：`Server（机器+凭据）→ grant → Profile（分组）← bind ← Project（token）`。agent 拿一个 project token，只能碰它绑定的 profile 里的服务器，跨 profile 一律拒绝（详见 [agent-access.md](./agent-access.md)）。
-- **工具面**：同样 10 个 MCP 工具（`list_servers` / `exec_command` / `exec_background` / `exec_output` / `exec_stop` / `download_file` / `upload_file` / `upload_content` / `forward_port` / `close_port`），语义一致（手册：[agent-tools.md](./agent-tools.md)）。
+- **工具面**：同样 12 个 MCP 工具（`list_servers` / `exec_command` / `exec_background` / `exec_output` / `exec_stop` / `download_file` / `upload_file` / `upload_content` / `exec_context` / `forward_port` / `close_port` / `relay_file`），语义一致（手册：[agent-tools.md](./agent-tools.md)）。
 - **铁律**：凭据（密码/私钥）永远不出加密 vault；agent 只拿到命令输出 / 文件字节 / 转发端口；全程审计。
 - **写边界（Plan 42 新铁律）**：**多机 agent 只读 + 执行**（离线缓存形态，写操作一律 `ErrReadOnly`）——加改删服务器 / 发码 / 批准配对等一切写操作，只在**管理面**做（broker TUI / `serve pair` CLI / 批2 的 Web UI）。单机 ① 例外，本机 vault 可写。
 

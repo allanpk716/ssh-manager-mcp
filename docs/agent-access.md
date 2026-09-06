@@ -65,7 +65,7 @@ Claude Code 读 `.mcp.json`。两种范围：
 
 token 走 `env` 字段（`SSHMGR_TOKEN`）而不是 `args` 里的 `--token`：**消除的是 argv/ps 暴露面**——token 不再出现在子进程命令行里（`ps` / 任务管理器 / `/proc/<pid>/cmdline` 看不到）；env 仍可被同用户/root 经 `/proc/<pid>/environ`（Linux）读到，**不是全部可见性**。（`--token` 仍支持，语义相同。）
 
-- Claude Code 首次加载会**弹确认**让你批准这个项目级 MCP server——批准后该项目的会话就有这 10 个 SSH 工具。
+- Claude Code 首次加载会**弹确认**让你批准这个项目级 MCP server——批准后该项目的会话就有这 12 个 SSH 工具。
 - **别提交 git（公开仓库尤其致命）**：`.mcp.json` 含**活 token**，必须加进 `.gitignore`，绝不能提交进 git 仓库。
 - **Windows**：写绝对路径最稳，例如 `"command": "C:\\Tools\\sshmgr.exe"`（JSON 里 `\` 要写成 `\\`）。
 - **headless / 无 keychain**：master key 不在 keychain，需要给子进程传环境变量，加进同一个 `env` 字段即可（见 [getting-started.md](./getting-started.md#无-keychain-环境headless-linux-等)）：
@@ -194,7 +194,7 @@ sshmgr projects add intern   --profile dev
 3. **agent 自己登不进去。** 它的 `~/.ssh` / `ssh-agent` 里没有能用的凭据——被强制走 MCP。启动 `mcp` 时，broker 还会扫一遍本机有没有散落的 SSH 凭据文件，发现就**告警到 stderr**（提示“有旁路风险，建议清掉”）。
 4. **全程审计。** 每次工具调用（project / server / action / status / 命令 / 耗时）都写进 `audit_log`；生命周期动作也记。
 5. **TOFU host key。** 第一次连记录，之后对不上就拒（防中间人）。
-6. **服务端封顶。** 单条 `exec_command` 默认 120s、硬上限 5 分钟；输出每通道 1 MiB 封顶（超出标 `truncated`，告诉你真实字节数，让你 refine 命令而不是硬拉）。防止 agent 跑飞把 broker 占死 / 把自己的上下文撑爆。
+6. **服务端封顶。** 单条 `exec_command` 默认 120s、硬上限 5 分钟；输出每通道 1 MiB 封顶（超出标 `truncated`，告诉你真实字节数，让你 refine 命令而不是硬拉）。防止 agent 跑飞把 broker 占死 / 把自己的上下文撑爆。`relay_file`（Plan 47，大文件中继）**不在这套内容封顶体系里**——它的文件字节只流经 broker 内存、从不进 agent 上下文（零上下文通道），封顶体系防的上下文膨胀对它不适用；本机源无 1 MiB cap 的安全论证与全部边界（B→A 外发仅审计、StatVFS fail-open、posix-rename 硬依赖等）见 [threat-model.md](./threat-model.md) §6。
 
 ---
 

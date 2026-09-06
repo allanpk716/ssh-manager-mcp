@@ -43,7 +43,7 @@
 
 - **PTY 交互式会话**：LLM agent 不擅长无界交互流，输出无界 + 安全面暴涨；长活一律走 #13 后台任务。
 - **按 server 的 token 授权**：更正记录（2026-08-21 grilling 曾误判为缺口，代码核实后撤回）——**已存在**：Project（token）→ Profile → Server 三层，token 解析出 project 即限定其 profile（`NewServer(st, project.ProfileID, ...)` 构造即生效，run.go / serve.go / 热重载 drift guard，eval T5 对抗覆盖）。无需新增工作。
-- **大文件分块续传 API**：#14 的 8 MiB 内联覆盖配置/脚本/小产物；更大的先落到 broker 可达位置或服务器侧拉取。
+- ~~**大文件分块续传 API**：#14 的 8 MiB 内联覆盖配置/脚本/小产物；更大的先落到 broker 可达位置或服务器侧拉取。~~ **已落地（Plan 47 relay_file = grilling 编目 #46「大文件分块续传 API」销项, 2026-09-06 实现; spec 四轮盲评收敛 rev4 定稿 + 8 任务 SDD; spec/plan 见 docs/superpowers/{specs,plans}/2026-09-06-plan-47-relay*; 剩余 owner 真机 GW 验收（销项实证）: A=阿里云↔B=LAN 1–5GB 级实测 + kill broker 中断续传演练（重跑补块完成 + file_sha256 对上）+ Windows 目标 StatVFS unavailable / posix-rename 实测; 发版批次 owner 拍板）**。终形：`relay_file` 第 12 工具——零暂存分块流式（broker 盘零用户数据、内存 MiB 级），断点续传锚在接收端 Manifest（broker 任务表保持内存态不持久化，重启重跑自愈），`from_server_id` 空 = broker 本机盘，task_id/exec_output/exec_stop 三件套，72h 常量时长，双摘要验证配方（byte0→EOF 报 file_sha256 对 sha256sum / resumed 报块 merkle 根）。附带销项：**「部署 exe 分发通道债」根因（upload_file 1 MiB 单文件上限）已由 relay 本机源路径解除**（Plan 44 `update --file` 此前已给自更新侧解法；relay 补上通用大文件根因）。
 - **跨端审计聚合**：等真实取证需求再说（sidecar 本身是 JSONL）。
 - **隧道持久化 / 自动重连 / 命名**：见 #15 不做项。
 - **运行时级 IP 隐藏**（命令过滤/输出脱敏/网络盲化）与**服务器出网管控**：不可行且杀死可用性；"不暴露"承诺边界 = 接口级（vault/工具层不主动披露）。

@@ -151,6 +151,61 @@
 > 无 HTTP 请求体封顶。**二进制 / 高转义内容（大量 `"`/`\`/控制字符）一律走
 > base64**——无需 JSON 转义、字节精确（GBK 等非 UTF-8 同理）。
 
+### relay_file
+
+把**大文件**从一台服务器**经 broker 中继**到另一台——源也可以是 **broker 本机
+盘**（`from_server_id` 省略/留空）。**零上下文大文件通道**：文件字节只在 broker
+持有的两条 SSH 连接间分块流式转发，**工具结果、`exec_output`、审计里都只有
+元数据**（task_id / 块数 / 进度 / 摘要），文件内容永远不进你的上下文。适用：
+文件超过 `upload_file` 的 1 MiB 单文件帽（模型权重、GB 级产物），或文件在一台
+机上、必须落到另一台机（在线机下载好 → 送真空离线机）。**无 ssh 二进制直接
+对应物**：`scp serverA:file serverB:` 形似，但那是两端直连、两端都要操作者的
+凭据；relay 是 broker 代理、凭据不出 vault——属 Broker-specific 能力。
+
+- **参数**：`to_server_id` + `to_path`（绝对路径，目标恒为远程服务器）+ 源二选一：
+  `from_server_id` + `from_path`（该机上的绝对路径），或只给 `from_path`
+  （**broker 所在机器**上的绝对路径）。路径 `/` 开头或 Windows 盘符形 `C:/`。
+  目标父目录不存在会自动创建；完成后**原子替换**目标路径上已存在的文件
+  （真名出现 = 传完的可见保证）。同源同径（from==to 同机同路径）会被拒
+  （自我覆盖 no-op）。
+- **三件套用法**：调用立即返回 `task_id`（`exec_background` 同款形态）——
+  `exec_output(task_id)` 轮询逐块进度与最终摘要，`exec_stop(task_id)` 中途停。
+  relay 任务占**同一张后台任务表**（每 project 32 上限、任务表纯进程内
+  **broker 重启即失**——但进度不丢：重跑 relay_file 同参数即续传，断点锚在
+  目标端盘上）。单任务时长上限 **72 小时**（常量；到点 = 可续传的 timeout 终态）。
+- **续传语义（核心）**：中断 / 停止 / 失败都会在目标端留下
+  `<to_path>.sshmgr-partial` + `<to_path>.sshmgr-manifest.json`（已完成块清单
+  ——**续传唯一事实源**，落在目标盘、不随 broker 死）。**重跑 relay_file 同参数
+  = 只补缺失块**；返回里的 `resumed_chunks` 就是接上的已完成块数。块大小来自
+  broker 构造期 env `SSHMGR_TRANSFER_CHUNK`（缺省 256 MiB，越界 broker 拒启动）
+  ——**续传两端块网格必须一致**，改过 env 的重跑会被拒（错误指引还原 env 或
+  `fresh=true`）。
+- **`fresh=true`**：丢弃目标端 partial + manifest，从 byte 0 重传。只在该放弃
+  进度时用——清单不符 / 非常态残留的错误文本都会明示 "pass fresh=true"。
+- **双摘要验证配方（重要）**：最后一行进度带摘要，按任务形态二选一：
+  - 本任务**从 byte 0 连续流到 EOF**（fresh 起步或空清单自愈）→ 报
+    `file_sha256`——直接 `exec sha256sum <to_path>` 比对即可；
+  - **续传了已完成块**的任务报**块 merkle 根**（`root=sha256:…`）——每块写盘时
+    已对 manifest 校验过；要独立复验得按块大小切块、逐块 sha256、再把摘要串接
+    哈希（很少需要；日常用下面的离线机闭环故事即可）。
+- **目录不支持**：源端先 `exec tar czf /tmp/x.tgz <dir>`，relay 那个 tar，
+  目标端 untar。
+- **离线机完整故事（核心场景）**：`exec_background` 在在线机上后台下载大文件 →
+  `relay_file` 送到离线机 → 在离线机 `exec sha256sum` 与 `exec_output` 里的
+  `file_sha256` 比对——全程零字节过你的上下文。
+- **无 sudo**：SFTP 通道，root 属主目标路径不可写。
+- **`space_check` 字段**：`"unavailable"` = 目标端报告不了剩余空间（部分
+  Windows 目标）——**知情继续是安全的**：盘真满只是停在某块边界，腾空间后续传。
+  空间**已知不足**则是 refusal（错误带 avail/need 证据，零字节移动）。
+- **posix-rename 硬依赖**：目标端 SFTP 服务端必须支持
+  `posix-rename@openssh.com`（OpenSSH 全系含 Win32 端口都支持；非 OpenSSH 系
+  sftp 目标出局）——不支持的任务启动即 failed，错误明示 "lacks posix-rename"，
+  无参数可绕。
+- **弃疗残留清理责任在你**：不打算续传时，目标端的 partial（+ manifest）残留
+  **无害但占盘**——`exec rm <to_path>.sshmgr-partial <to_path>.sshmgr-manifest.json`
+  清掉。例外：真名已在 + manifest 残留 = 提交成功后的无害碎片，随手删 manifest
+  即可。
+
 ### forward_port
 
 开一条本地端口转发（**只支持 `ssh -L` 语义**——本地监听、经服务器转发；没有
@@ -262,11 +317,14 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
 | `background task limit (32) reached — wait for a running task to finish or call exec_stop` | 后台任务满员：该 project 已有 32 个任务且全在运行（完成态会被驱逐腾位，全运行态才拒绝） | 等一个运行中任务自然结束，或对不要的任务调 `exec_stop`，再重试 `exec_background` |
 | `unknown task_id — it may never have existed, expired after the retention window (1h), been evicted for capacity (32-task limit), or the broker restarted; task records are in-process only` | task_id 失效（三因 + 从未存在）：完成超 ~1h 保留期过期 / 32 满员时被驱逐 / **broker 重启**（任务表纯进程内，重启即全失） | broker 重启 = 在跑任务全死，重新安排活；过期/驱逐的按需重跑命令；失效 id 别反复重试 |
 | `file <path> (<N> bytes) exceeds upload cap <cap> — refused before transfer` | 单文件严格大于 1 MiB，传输前被拒（零字节移动） | 按错误里的 size/cap **拆分或压缩**后重传 |
+| `destination has N bytes available but the transfer needs M (...) — refusing before any byte moves` | relay 目标盘空间**已知不足**（预检 refusal，零字节移动） | 目标机腾空间后重跑（续传只补缺块）；或换目标路径。别对着满盘反复重试 |
+| `... pass fresh=true to discard and restart`（manifest/partial 非常态族：partial 缺失 / 清单谎报进度 / 残留碎片等，错误文本各自明示） | relay 目标端续传状态不合法，断点不可信 | 判断该进度可弃 → `fresh=true` 重传；不可弃 → **报告 owner** 上目标机手工核查 `<to_path>.sshmgr-*` 残留 |
+| `destination SFTP server lacks posix-rename@openssh.com — relay requires it ...` | relay 目标端不是支持该扩展的 OpenSSH 系 sftp（硬依赖，fail-closed） | **报告 owner** 换/升级目标端 sftp 服务；没有任何参数可绕 |
 | `store is read-only (offline cache); connect to the server to mutate`（ErrReadOnly） | broker 跑在离线缓存模式（见三态环境） | **报告 owner** 切回在线/本机模式；**别**重试写操作（见下） |
 
 ## 部署形态（你通常无需分辨）
 
-broker 有两种部署形态，**工具面完全一致**（同 10 个工具、同 profile 隔离、同审计），
+broker 有两种部署形态，**工具面完全一致**（同 12 个工具、同 profile 隔离、同审计），
 差别只在可写性：
 
 | 形态 | 什么样 | 可写性 |
@@ -357,8 +415,14 @@ HEAD，后续重构以符号名为准）：
 | token 吊销/禁用 → **已开隧道 ≤15s（一个控制 tick）级联拆除**（端口不可达 + 镜像行删）；owner `tunnels kill` / `kill --project` 同域；store 持续故障 ≤~2min 有界关闭（②a 的 serve 侧 401 闸随远程 MCP 面移除——远程 client 经快照刷新/隔离感知吊销，见部署形态节的吊销三路径） | `internal/mcpserver/revoke_semantics_test.go`（TestRevokedProjectTunnelsTornByControlTick）；`internal/mcpserver/tunnels_control.go` |
 | stdio 模式 token 无效 → broker 进程起不来（stderr `invalid or unknown token` 后退出） | `internal/mcpserver/run.go:29-35`；`internal/cli/mcp.go:70-73` |
 | 工具报错形态 = IsError=true + 错误文本（非传输层错误） | `internal/mcpserver/server.go:83-89` |
+| relay_file 三件套/零上下文：工具描述即口径（task_id 立返；结果/exec_output 只有元数据零文件内容）；第 12 个工具单源注册 | `internal/mcpserver/server.go:298`（描述模板 `%d`=构造期块大小）；`internal/mcpserver/relay.go:55`（RelayForProfile preflight ①–⑨） |
+| relay 块大小 env seam：缺省 256 MiB、[16 MiB, 1 GiB] 之外构造失败（fail-closed）；`SSHMGR_TRANSFER_PARALLEL` v1 只接受 1 | `internal/mcpserver/relayenv.go:30,53`（resolveRelayChunk / resolveRelayParallel） |
+| relay 单任务 72h 常量上限（非 env）；块数闸 16384（超出 refusal + 指引 raise SSHMGR_TRANSFER_CHUNK） | `internal/mcpserver/relayenv.go:69,76`（relayRunCap / relayMaxChunks）；`internal/mcpserver/relay.go:524` |
+| relay 续传进度行（`relay plan: … (resumed N)` / `chunk i/n ok` / `relay done: root=… [file_sha256=…]`）经任务 stdout → exec_output 可见；file_sha256 仅 byte0→EOF 全程任务有，续传任务只有块 merkle 根 | `internal/mcpserver/relay.go:726,966-968` |
+| relay posix-rename@openssh.com 硬依赖：stage 0 零 IO 探测，不支持即 failed（与 IO 错误分流） | `internal/mcpserver/relay.go:781` |
+| relay 空间预检：已知不足 refusal（avail/need 文本）；报不了 = `space_check:"unavailable"` fail-open 知情继续 | `internal/mcpserver/relay.go:428-438` |
 | broker 启动检测散落 SSH 凭据 → stderr `WARNING: ssh credential files detected`（仅本机 stdio 模式） | `internal/cli/mcp.go:63-67`；另见 docs/agent-access.md「隔离与排错」 |
-| 三态工具面一致（cache 与在线同 10 工具、同 profile 隔离、同审计；仅写操作被拒 + 审计走 sidecar） | `internal/mcpserver/run.go:230-249`；`internal/mcpserver/server.go:29-40` |
+| 三态工具面一致（cache 与在线同 12 工具、同 profile 隔离、同审计；仅写操作被拒 + 审计走 sidecar） | `internal/mcpserver/run.go:230-249`；`internal/mcpserver/server.go:29-40` |
 | ErrReadOnly 文案 + SetReadOnly 语义（cache hydrate 后置只读） | `internal/store/store.go:46-54`；`internal/mcpserver/run.go:76` |
 | 离线 cache 模式：未知 host key 被拒（TOFU 无法记录，包 ErrReadOnly；已知 key 正常匹配） | `internal/sshbroker/hostkey.go:33-34`；`internal/sshbroker/hostkey_readonly_test.go:33-58`；`internal/mcpserver/run.go:211-213` |
 | 凭据字节永不出现在任何工具结果（owner 侧模型） | `internal/mcpserver/types.go:5`；docs/agent-access.md「安全模型回顾（铁律）」；../README.md "The security model" |
