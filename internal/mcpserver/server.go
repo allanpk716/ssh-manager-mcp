@@ -61,6 +61,22 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *Tunn
 // without rebuilding the MCP server or tearing down tunnels or background
 // tasks. storeFn must be safe for concurrent use and must never return nil.
 func NewServerFromSource(storeFn func() *store.Store, profileID, projectID string) (*mcp.Server, *TunnelManager, *TaskManager, error) {
+	// Plan 47 T2 (spec §4, rev3 codex#6): the relay env seams resolve BEFORE
+	// any tunnels/tasks manager construction and any StartSweeper — an invalid
+	// value must fail construction with ZERO goroutines started (the earlier
+	// resolveUploadContentCap call below keeps its pre-existing position: that
+	// ordering debt is registered in spec §4, deliberately not repaid here).
+	// relayChunk rides the closure for the relay_file tool (T4: RelayForProfile
+	// chunkBytes argument; T6: the description's %d).
+	relayChunk, err := resolveRelayChunk()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if _, err := resolveRelayParallel(); err != nil { // v1: validation-only — the value is always 1
+		return nil, nil, nil, err
+	}
+	_ = relayChunk // consumed when the relay_file tool lands (T4/T6)
+
 	srv := mcp.NewServer(&mcp.Implementation{Name: "ssh-manager", Version: buildinfo.Version}, nil)
 	tunnels := NewTunnelManager()
 	tunnels.AttachStore(storeFn, projectID) // mirror pipeline + control-loop store seam (Plan 35 spec §4) — attached BEFORE StartSweeper so the first tick already sees the live store

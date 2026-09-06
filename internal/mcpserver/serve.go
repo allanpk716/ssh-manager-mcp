@@ -75,6 +75,16 @@ type ServeRunner struct {
 
 // NewServeRunner constructs a runner over an already-open store. The caller owns st.Close().
 func NewServeRunner(st *store.Store) (*ServeRunner, error) {
+	// Plan 47 T2 (spec §4): serve-side startup VALIDATION of the relay env
+	// seams — fail-fast before RunServe binds. Per-project scoped servers
+	// re-resolve at their own construction time (NewServerFromSource, the
+	// 接线口径); this only refuses a bad value at process start.
+	if _, err := resolveRelayChunk(); err != nil {
+		return nil, err
+	}
+	if _, err := resolveRelayParallel(); err != nil {
+		return nil, err
+	}
 	// Plan 40 §2.1 legacy detection: active device-code names are about to be
 	// emitted as X-Sshmgr-Device-Name and used as client directory names — a
 	// casefold collision or an illegal legacy name must stop the serve BEFORE it
