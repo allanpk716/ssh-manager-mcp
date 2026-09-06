@@ -38,6 +38,7 @@ var BrokerTools = []string{
 	"exec_stop",       // [8] — stop a background task by id (Plan 32 T7)
 	"upload_content",  // [9] — write INLINE content (text/base64, decoded ≤ cap) to a remote path over SFTP (profile-gated; Plan 33 T4) — the cross-machine upload path upload_file cannot serve
 	"exec_context",    // [10] — capture the exec channel's TRUE context in one round: uid/gid/groups, tty, uid_map, LSM label, SSH provenance, process tree (profile-gated; Plan 41 §3)
+	"relay_file",      // [11] — relay a LARGE file server-to-server (or broker-disk → server) through the broker: chunked streaming, resumable background task, metadata-only results (profile-gated; Plan 47 §1)
 }
 
 // NewServer builds an MCP server whose tools are scoped to profileID and
@@ -75,7 +76,6 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 	if _, err := resolveRelayParallel(); err != nil { // v1: validation-only — the value is always 1
 		return nil, nil, nil, err
 	}
-	_ = relayChunk // consumed when the relay_file tool lands (T4/T6)
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: "ssh-manager", Version: buildinfo.Version}, nil)
 	tunnels := NewTunnelManager()
@@ -288,6 +288,25 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 					IsError: true,
 					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
 				}, ExecContextOutput{}, nil
+			}
+			return nil, out, nil
+		},
+	)
+
+	mcp.AddTool(srv,
+		&mcp.Tool{
+			Name:        BrokerTools[11], // "relay_file" (Plan 47 §1.2)
+			Description: fmt.Sprintf(`Relay a LARGE file server-to-server through the broker, or from the broker's own disk to a server — the zero-context big-file path (file bytes stream through the broker's memory only; neither the tool result nor exec_output ever contains file content, only per-chunk metadata). Use it when a file is too big for upload_file's 1 MiB per-file cap (e.g. model weights, GB-scale artifacts), or when the file lives on one server and must land on another (e.g. downloaded on an internet-facing server, delivered to an air-gapped one). Pass to_server_id + to_path (absolute), and either from_server_id + from_path (absolute path on that server) or just from_path (absolute path on the broker host). Chunk size %d bytes. Returns task_id immediately — poll with exec_output(task_id) for per-chunk progress and the final digests, stop with exec_stop(task_id). TRANSFER IS RESUMABLE: interrupted/stopped/failed transfers leave <to_path>.sshmgr-partial + a manifest on the destination; re-running relay_file with the same paths completes only the missing chunks. fresh=true discards them and restarts. VERIFICATION: any transfer that streamed the full file from byte 0 to EOF in this one run (a fresh start or an empty-manifest self-heal) reports file_sha256 — compare with exec sha256sum <to_path> on the destination; a transfer that resumed completed chunks reports the chunk-merkle root instead (per-chunk integrity was verified against the manifest as each chunk was written; independently re-verifying such a file requires splitting it into %d-byte chunks, hashing each, and hashing the concatenated digests). Directories are NOT supported — tar on the source first (exec tar czf), relay the tarball, untar on the destination. No sudo: root-owned destination paths are not writable. Space pre-flight: 'space_check'='unavailable' means the destination couldn't report free space (some Windows targets) — proceeding is safe because a full disk just pauses at a chunk boundary and resumes later. Complete story for an offline server: exec_background on the internet-facing server to download, relay_file to the air-gapped one, then exec sha256sum there and compare file_sha256 from exec_output.`, relayChunk, relayChunk),
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in RelayInput) (*mcp.CallToolResult, RelayOutput, error) {
+			st := storeFn()
+			out, err := RelayForProfile(ctx, st, tasks, projectID, profileID, in, relayChunk)
+			if err != nil {
+				// Surface the error to the agent as a tool error (IsError), not a transport error.
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, RelayOutput{}, nil
 			}
 			return nil, out, nil
 		},

@@ -140,7 +140,7 @@ func unmarshalToolJSON(t *testing.T, res *mcp.CallToolResult, v any) {
 
 // TestE2EBackgroundTrioFullFlow 是后台三件套 (Plan 32 T8) 的全流 capstone:
 // 同一条 in-memory MCP 会话跑完整 agent 工作流——
-//   - initialize (client.Connect 内完成握手) → tools/list 断言恰 10 工具 (6+3+1)
+//   - initialize (client.Connect 内完成握手) → tools/list 断言恰 12 工具 (6+3+1+1+1)
 //     且名称与 BrokerTools 单源核对 (集合相等——SDK featureSet 无序, 协议对
 //     tools/list 无序保证)——切片即注册面唯一事实源;
 //   - exec_background 起多行输出任务 → exec_output wait 轮询携 next offset
@@ -180,7 +180,7 @@ func TestE2EBackgroundTrioFullFlow(t *testing.T) {
 	defer cliSess.Close()
 	ctx := context.Background()
 
-	// 0. tools/list: 恰 10 工具 (6+3+1), 名称与 BrokerTools 单源核对——集合相等
+	// 0. tools/list: 恰 12 工具 (6+3+1+1+1), 名称与 BrokerTools 单源核对——集合相等
 	//    (SDK featureSet 是 map + 按名排序输出, 协议对 tools/list 无序保证,
 	//    故断言集合而非注册序)。
 	lt, err := cliSess.ListTools(ctx, nil)
@@ -389,5 +389,57 @@ func TestE2EUploadContentFullFlow(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.FromSlash(target)); !bytes.Equal(got, bin) {
 		t.Fatalf("e2e bytes = %x, want %x", got, bin)
+	}
+}
+
+// TestE2ERelayFileToolRegistered pins the 12th broker tool's registration
+// surface (Plan 47 T6): tools/list exposes relay_file, and BOTH %d fills of
+// its description embed the RESOLVED SSHMGR_TRANSFER_CHUNK value — the
+// dynamic-cap pin (Plan 33's upload_content precedent, two fills this time)
+// run against a NON-default env so a hardcoded 256 MiB default would fail.
+// No SSH server needed: registration happens at construction.
+func TestE2ERelayFileToolRegistered(t *testing.T) {
+	st := newStore(t)
+	t.Setenv("SSHMGR_TRANSFER_CHUNK", "67108864") // 64 MiB, inside [16 MiB, 1 GiB] — NOT the 256 MiB default
+	server, mgr, tasks, err := NewServer(st, "p", "proj-relay-desc")
+	if err != nil {
+		t.Fatalf("construct with legal non-default SSHMGR_TRANSFER_CHUNK: %v", err)
+	}
+	defer mgr.CloseAll()
+	defer tasks.CloseAll()
+	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "v0"}, nil)
+	t1, t2 := mcp.NewInMemoryTransports()
+	srvSess, _ := server.Connect(context.Background(), t1, nil)
+	defer srvSess.Close()
+	cliSess, _ := client.Connect(context.Background(), t2, nil) // initialize 握手在 Connect 内完成
+	defer cliSess.Close()
+
+	lt, err := cliSess.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, found := "", false
+	for _, tl := range lt.Tools {
+		if tl.Name == "relay_file" {
+			found = true
+			desc = tl.Description
+		}
+	}
+	if !found {
+		t.Fatalf("tools/list is missing relay_file (listed %d tools)", len(lt.Tools))
+	}
+	// Both %d fills must carry the resolved value (the "Chunk size … bytes"
+	// fill and the "%d-byte chunks" verification-recipe fill).
+	for _, frag := range []string{
+		"Chunk size 67108864 bytes",
+		"splitting it into 67108864-byte chunks",
+	} {
+		if !strings.Contains(desc, frag) {
+			t.Fatalf("relay_file description missing resolved-chunk fill %q; description: %s", frag, desc)
+		}
+	}
+	// The 256 MiB default must NOT leak in (the fill is dynamic, not constant).
+	if strings.Contains(desc, "268435456") {
+		t.Fatalf("relay_file description embeds the default 268435456 instead of the resolved 67108864")
 	}
 }
