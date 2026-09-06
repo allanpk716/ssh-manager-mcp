@@ -1,6 +1,6 @@
 # 零暂存 broker 中继,B 端 Manifest 为续传唯一锚
 
-50GB+ 模型权重要经 NUC10 broker 从在线服务器搬到真空离线服务器,我们决定:Relay 全程分块流式(每 Chunk 一条 SFTP 读→SFTP 写管道,broker 盘零用户数据残留、内存占用≈一块缓冲),断点续传的唯一事实源是**落在接收端 B 的 Manifest**(源指纹 size+mtime + 各 Chunk 哈希 + 根哈希),而不是 broker 侧任何状态——因此 broker 后台任务表保持 Plan 32 的"重启即失"内存态**不做持久化**:任务条目丢了,重跑同目标即凭 Manifest 自动续传。
+50GB+ 模型权重要经 NUC10 broker 从在线服务器搬到真空离线服务器,我们决定:Relay 全程分块流式(每 Chunk 一条 SFTP 读→SFTP 写管道,broker 盘零用户数据残留、内存占用≈流式缓冲),断点续传的唯一事实源是**落在接收端 B 的 Manifest**(源指纹 size+mtime + 各 Chunk 哈希与完成位;根哈希与全文件 sha256 在完成时推导,不落 Manifest),而不是 broker 侧任何状态——因此 broker 后台任务表保持 Plan 32 的"重启即失"内存态**不做持久化**:任务条目丢了,重跑同目标即凭 Manifest 自动续传。
 
 ## Considered Options
 

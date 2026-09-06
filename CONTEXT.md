@@ -15,7 +15,7 @@ Relay 的固定大小传输与断点单位;每块独立校验(sha256),重跑只�
 _Avoid_: block、part、segment、分片
 
 **Manifest(块清单)**:
-落在**接收端**目标同目录的续传唯一事实源:源文件指纹(size+mtime)、各 Chunk 哈希与完成位、根哈希。broker 任务丢失后靠它自愈续传。
+落在**接收端**目标同目录的续传唯一事实源:源文件指纹(size+mtime)、各 Chunk 哈希与完成位。broker 任务丢失后靠它自愈续传;根哈希/全文件摘要完成时推导,不存于其中。
 _Avoid_: checkpoint、resume file、断点文件
 
 **Partial File(半成品文件)**:
