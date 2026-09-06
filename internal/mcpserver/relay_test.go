@@ -625,10 +625,10 @@ func TestRelayForProfileStateTable(t *testing.T) {
 			manifest: func(src string) *sshbroker.RelayManifest {
 				return relayManifestFor(t, src, relayProfileChunk, []int{0, 1, 2})
 			},
-			real: true, wantErr: "debris"},
+			real: true, wantErr: "final file + manifest from a successful commit"},
 		{name: "r8 zero-byte debris (M:chunks=[] size==0 P:no R:yes)", srcSize: 0,
 			manifest: func(src string) *sshbroker.RelayManifest { return relayManifestFor(t, src, relayProfileChunk, nil) },
-			real:     true, wantErr: "debris"},
+			real:     true, wantErr: "zero-byte commit's manifest"},
 		{name: "r9 self-heal over old real name (M:chunks=[] size>0 P:no R:yes)", srcSize: srcSize,
 			manifest: func(src string) *sshbroker.RelayManifest { return relayManifestFor(t, src, relayProfileChunk, nil) },
 			real:     true, wantResumed: 0},

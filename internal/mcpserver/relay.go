@@ -353,13 +353,17 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 				// 已过 partial 结构校验。
 			case hasReal:
 				switch {
-				case allDone: // r7 提交成功碎片 (上次 commit 已成功)
-					status = "error"
-					err = fmt.Errorf("destination %s already holds completed-transfer debris (final file + manifest from a successful commit) — harmless leftover; remove %s manually, or pass fresh=true to overwrite intentionally", toCanon, manifestPath)
-					return
-				case empty && size == 0: // r8 零字节传输的 debris 形态
+				// r8 零字节传输的 debris 形态必须先于 allDone 判: size==0 的合法
+				// 清单恒为空 (0≤i<n=0 拒一切下标), empty && size==0 时 allDone 亦
+				// 为真——若 allDone 在前, 本分支不可达。
+				case empty && size == 0: // r8
 					status = "error"
 					err = fmt.Errorf("destination %s already holds completed-transfer debris (zero-byte commit's manifest) — harmless leftover; remove %s manually, or pass fresh=true to overwrite intentionally", toCanon, manifestPath)
+					return
+				case allDone: // r7 提交成功碎片 (上次 commit 已成功; size>0 时全完成
+					// 清单必非空——空清单 size>0 落 r9, 两分支互斥)
+					status = "error"
+					err = fmt.Errorf("destination %s already holds completed-transfer debris (final file + manifest from a successful commit) — harmless leftover; remove %s manually, or pass fresh=true to overwrite intentionally", toCanon, manifestPath)
 					return
 				case empty: // r9 覆盖旧真名的首跑中断自愈态
 					resumed = 0 // 完成时替换真名
