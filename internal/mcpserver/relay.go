@@ -1,7 +1,7 @@
 package mcpserver
 
-// Plan 47: relay_file 大文件中继 —— 同步 preflight (spec §2 ①–⑨)。T5 在本文件
-// 追加引擎 (runRelay)。
+// Plan 47: relay_file 大文件中继 —— 同步 preflight (spec §2 ①–⑨) + 引擎
+// (runRelay/RelayTaskSpec, spec §2 引擎段, T5)。
 //
 // 连接所有权纪律 (spec §2, rev2 kimi#3/codex#1): ③④ 建立的 ConnectKeepAlive 自
 // 建立起挂 defer 双 close;ReserveRelay 成功 (insertLocked 转正、引擎接管) 才解除
@@ -16,6 +16,8 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +25,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/pkg/sftp"
@@ -307,6 +311,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 
 	// ---- ⑥ Manifest 判定 (fresh=true 整段跳过语义解析——只记标记; rev3 codex#5) ----
 	var completedBytes int64
+	var manifest6 *sshbroker.RelayManifest // ⑥ 命中的已解析清单 = T5 引擎唯一事实源 (nil = 首跑/fresh)
 	if !in.Fresh {
 		manifestPresent, m, reject := relayPreflightManifest(dstSC, manifestPath, chunks, chunkBytes, size, mtime)
 		if reject != nil {
@@ -317,6 +322,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		if manifestPresent {
 			completedBytes = manifestCompletedBytes(m, chunkBytes, size)
 			resumed = int64(len(m.Chunks))
+			manifest6 = m
 			// partial 结构校验 (manifest 命中且 partial 在): 非常规文件拒;
 			// size < 最高完成块末尾拒 (manifest 谎报完成度)。
 			pFi, pErr := dstSC.Stat(partialPath)
@@ -439,6 +445,15 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 	if !localSource {
 		readKeys = []string{relayKeyOf(in.FromServerID, fromCanon)}
 	}
+	// 引擎闭包上下文 (T5): preflight 全部产物 + ⑧ 移交的双连接, 一个结构体捕获
+	// (spec §2 引擎段——闭包零重读盘上状态, Manifest 即唯一事实源)。
+	relaySpec := &RelayTaskSpec{
+		SrcServerID: in.FromServerID, DstServerID: in.ToServerID,
+		FromPath: fromCanon, ToPath: toCanon,
+		Size: size, Mtime: mtime, ChunkBytes: chunkBytes, ChunksTotal: chunks,
+		Fresh: in.Fresh, Resumed: int(resumed), Manifest: manifest6,
+		SrcCli: srcCli, DstCli: dstCli,
+	}
 	spec := BgTaskSpec{
 		ProjectID: projectID,
 		ServerID:  in.ToServerID,
@@ -455,16 +470,10 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		},
 		AuditAction: "relay-bg-end",
 		AuditEnd:    func(row store.AuditRow) error { return st.WriteAudit(row) },
-		// T4 占位引擎: 挂双连接槽 (client=dest, auxClient=source, T3 槽位语义) 后
-		// 经 runTask 走完整终态纪律 (终态即关两条连接)。T5 以真 runRelay 替换闭包
-		// 体, 槽位接线与终态纪律原样保留。
+		// T5 引擎: runRelay 挂双连接槽 (client=dest, auxClient=source, T3 槽位语义)
+		// 后经 runTask 走完整终态纪律 (终态即关两条连接)。
 		Run: func(ectx context.Context, tb *bgTask) {
-			tm.mu.Lock()
-			tb.client, tb.auxClient = dstCli, srcCli
-			tm.mu.Unlock()
-			tm.runTask(ectx, tb, dstCli, func(context.Context, io.Writer, io.Writer) (int, bool, error) {
-				return 0, false, nil
-			}, nil)
+			tm.runRelay(ectx, tb, relaySpec)
 		},
 	}
 	taskID, _, rerr := tm.ReserveRelay(spec, readKeys, writeKeys)
@@ -653,4 +662,373 @@ func relaySatAdd(a, b int64) int64 {
 		return math.MaxInt64
 	}
 	return a + b
+}
+
+// ---------- Plan 47 T5: runRelay 引擎 (spec §2 引擎段) ----------
+
+// RelayTaskSpec 是引擎闭包的一次性上下文 (preflight ①–⑦ 的产物 + ⑧ 移交的双
+// 连接): canonical 路径、③ 源 stat、③b 块网格、⑥ manifest 判定结果、fresh 标记
+// 与续传块数。闭包零重读盘上状态——Manifest 非空即 preflight 解析并结构校验过的
+// 唯一事实源, nil = 首跑/fresh (stage 0 条件落空清单)。
+type RelayTaskSpec struct {
+	SrcServerID string // "" = broker 本机源 (os.File 读, 不登记 read 键)
+	DstServerID string
+	FromPath    string // canonical 源路径 (远程 POSIX / 本机宿主语义)
+	ToPath      string // canonical 目标路径 (远程 POSIX)
+	Size, Mtime int64  // preflight ③ 的源 stat (完成段 re-stat 的基准)
+	ChunkBytes  int64
+	ChunksTotal int64
+	Fresh       bool
+	Resumed     int // 进入循环前已完成的块数 (⑥ 命中; 自愈态已归 0)
+	// Manifest 是 ⑥ 解析过的盘上清单 (引擎内取工作副本, 不改此结构); nil = 首跑
+	// 或 fresh (stage 0 fresh 删除后条件落空清单)。
+	Manifest *sshbroker.RelayManifest
+	// SrcCli/DstCli 是 ⑧ 移交的两条连接 (本机源 SrcCli=nil)。引擎入场挂任务槽
+	// (client=DstCli, auxClient=SrcCli), 终态即关 / CloseAll 可达即关 (runTask 双槽)。
+	SrcCli, DstCli *sshbroker.Client
+}
+
+// runRelay 是 relay 任务的 BgTaskSpec.Run 闭包体 (T3 终态纪律零复制): 挂双连接
+// 槽后交 runTask——stopReq/timeout/failed/done→ok 锁内映射、closed 抑制、终态
+// notify、cancel 释放 WithTimeout、锁外关双连接、auditEnd(relay-bg-end) 全继承。
+func (tm *TaskManager) runRelay(ctx context.Context, t *bgTask, spec *RelayTaskSpec) {
+	tm.mu.Lock()
+	t.client, t.auxClient = spec.DstCli, spec.SrcCli
+	tm.mu.Unlock()
+	tm.runTask(ctx, t, spec.DstCli, func(ectx context.Context, stdout, _ io.Writer) (int, bool, error) {
+		return relayEngineRun(ectx, spec, stdout)
+	}, nil)
+}
+
+// relayEngineRun 是引擎本体 (spec §2 引擎段: stage 0 钉序 → 逐块 → 完成)。经
+// runTask 的 exec 闭包形态接入终态纪律, 返回三元组: (0,false,nil)=done;
+// (0,true,deadline)=timeout; (0,false,ctx.Err)=stopped/closed 抑制 (stopReq 置位
+// 先于 cancel, 同锁无窗口——stop 恒胜过错误); (0,false,err)=failed。进度行一律
+// 经 out (runTask 的 notifyWriter) 落笔——落笔即广播, exec_output 长轮询即时唤醒。
+func relayEngineRun(ctx context.Context, spec *RelayTaskSpec, out io.Writer) (int, bool, error) {
+	startedAt := time.Now()
+	// abort 是唯一失败出口 (Upload 同款取消优先): ctx 已死时以 ctx 自身错误上报,
+	// 终态交给 runTask 的映射——stop→stopped、deadline→timeout、CloseAll→closed
+	// 抑制; ctx 活着时的 err 才是任务自身的 failed。
+	abort := func(e error) (int, bool, error) {
+		if cerr := ctx.Err(); cerr != nil {
+			if errors.Is(cerr, context.DeadlineExceeded) {
+				return 0, true, cerr
+			}
+			return 0, false, cerr
+		}
+		return 0, false, e
+	}
+	progress := func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) }
+
+	toPath, fromPath := spec.ToPath, spec.FromPath
+	partialPath, manifestPath := toPath+relayPartialSuffix, toPath+relayManifestSuffix
+	progress("relay plan: %d bytes, %d chunks (resumed %d), chunk=%d", spec.Size, spec.ChunksTotal, spec.Resumed, spec.ChunkBytes)
+
+	// 引擎自建 sftp 客户端 (preflight 的同类句柄已随其 defer 关闭); 连接本体是
+	// ⑧ 移交的两条。watchdog (Upload 同款): ctx cancel → 关 sftp → 在途块即断,
+	// manifest 保留已完成块。
+	dstSC, derr := spec.DstCli.RelaySFTP()
+	if derr != nil {
+		return abort(fmt.Errorf("destination sftp: %w", derr))
+	}
+	defer dstSC.Close() // 与 watchdog 关幂等
+	var srcSC *sftp.Client
+	if spec.SrcCli != nil {
+		var serr error
+		if srcSC, serr = spec.SrcCli.RelaySFTP(); serr != nil {
+			return abort(fmt.Errorf("source sftp: %w", serr))
+		}
+		defer srcSC.Close()
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = dstSC.Close() // 在途 sftp 操作解除阻塞 → 逐块循环即断
+			if srcSC != nil {
+				_ = srcSC.Close()
+			}
+		case <-done:
+		}
+	}()
+
+	// 源句柄 (远程 sftp / 本机 os.File; 本机源的复制走引擎本地镜像, 见
+	// relayCopyLocalChunk 的取舍注释)。
+	var srcFile *sftp.File
+	var srcLocal *os.File
+	if srcSC != nil {
+		var oerr error
+		if srcFile, oerr = srcSC.Open(fromPath); oerr != nil {
+			return abort(fmt.Errorf("open source %s: %w", fromPath, oerr))
+		}
+		defer srcFile.Close()
+	} else {
+		var oerr error
+		if srcLocal, oerr = os.Open(fromPath); oerr != nil {
+			return abort(fmt.Errorf("open source %s: %w", fromPath, oerr))
+		}
+		defer srcLocal.Close()
+	}
+
+	// ---- stage 0 (首块前; 顺序钉死——一切 mutation 以 ⑧ 租约为前提) ----
+
+	// 1. posix-rename 硬依赖探测 (零 IO 内存查找, 续传/自愈路径同样先行; rev4
+	//    codex#3: 无防御性探针 rename——首跑空清单真实落盘即活探针)。不支持与
+	//    IO 错误分流。
+	if !spec.DstCli.RelayPosixRenameOK(dstSC) {
+		return abort(errors.New("destination SFTP server lacks posix-rename@openssh.com — relay requires it for atomic manifest updates"))
+	}
+
+	// 2. MkdirAll 直调 (WriteFile 同款——不经 Client.MkdirAll 的 ToSlash)。
+	parent := path.Dir(toPath)
+	if merr := dstSC.MkdirAll(parent); merr != nil {
+		return abort(fmt.Errorf("destination mkdir %s: %w", parent, merr))
+	}
+
+	// 3. fresh 删除 (malformed/超限清单同删——⑥ 对 fresh 已跳过解析); 删除后、
+	//    任何数据移动前终检 StatVFS (rev4 codex#2: ⑦ 是投影值)。StatVFS 不可用
+	//    → fail-open 知情继续 (与 ⑦ 同口径, grilling 拍板)。
+	if spec.Fresh {
+		for _, artifact := range []string{partialPath, manifestPath} {
+			if rerr := dstSC.Remove(artifact); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+				return abort(fmt.Errorf("fresh discard %s: %w", artifact, rerr))
+			}
+		}
+		need := relaySpaceNeed(spec.Size, min(spec.Size, spec.ChunkBytes))
+		if avail, ok, aerr := spec.DstCli.RelayAvailable(dstSC, parent); aerr == nil && ok && avail < need {
+			return abort(fmt.Errorf("destination has %d bytes available after the fresh discard but the transfer needs %d — nothing moved; free space and re-run", avail, need))
+		}
+	}
+
+	// 4. 条件落空 manifest: 仅当 ⑥ 判定"无 manifest" (fresh 删除后/首跑)。续传
+	//    场景绝不写 manifest——原样保留已完成块记录 (rev2 kimi#1/codex#2)。
+	manifest := &sshbroker.RelayManifest{
+		Version: 1, ChunkBytes: spec.ChunkBytes,
+		SourceSize: spec.Size, SourceMtimeUnix: spec.Mtime,
+		Chunks: []sshbroker.RelayChunkDone{},
+	}
+	if spec.Manifest != nil { // ⑥ 命中: 工作副本从已解析清单播种 (原结构不动)
+		manifest.Chunks = append(manifest.Chunks, spec.Manifest.Chunks...)
+	} else if werr := sshbroker.RelayWriteManifestAtomic(dstSC, manifestPath, manifest); werr != nil {
+		return abort(fmt.Errorf("write empty manifest %s: %w", manifestPath, werr))
+	}
+
+	// 已完成块集 (循环跳过的依据; index→清单哈希)。
+	completed := make(map[int]string, len(manifest.Chunks))
+	for _, c := range manifest.Chunks {
+		completed[c.I] = c.SHA256
+	}
+
+	// 5. 抽读复核 (先于一切既有 manifest 之外的数据移动): 最大 index 已完成块,
+	//    源端 Seek+读+sha256 对清单; 不符 → failed, 零块移动、原 manifest 完好。
+	if len(completed) > 0 {
+		maxI := 0
+		for i := range completed {
+			if i > maxI {
+				maxI = i
+			}
+		}
+		h := sha256.New()
+		if rerr := relayReadExact(srcFile, srcLocal, int64(maxI)*spec.ChunkBytes, relayChunkLen(int64(maxI), spec.ChunkBytes, spec.Size), h); rerr != nil {
+			return abort(fmt.Errorf("spot re-check chunk %d: %w", maxI, rerr))
+		}
+		if got := hex.EncodeToString(h.Sum(nil)); !strings.EqualFold(got, completed[maxI]) {
+			return abort(fmt.Errorf("source file changed since the interrupted transfer: chunk %d hashes to %s but the manifest records %s — nothing moved, manifest intact", maxI, got, completed[maxI]))
+		}
+	}
+
+	// 6. 入场即以 O_RDWR|O_CREATE 建 partial (零块亦是; fresh 路径=重建; 自愈态=
+	//    补建) + 尺寸收敛 (stale 尾巴清到 source_size)。
+	pf, perr := dstSC.OpenFile(partialPath, os.O_RDWR|os.O_CREATE)
+	if perr != nil {
+		return abort(fmt.Errorf("open partial %s: %w", partialPath, perr))
+	}
+	pfClosed := false
+	defer func() {
+		if !pfClosed {
+			_ = pf.Close() // 失败路径的 best-effort 收口 (半成品留在盘上等续传)
+		}
+	}()
+	if pfi, serr := pf.Stat(); serr != nil {
+		return abort(fmt.Errorf("stat partial %s: %w", partialPath, serr))
+	} else if pfi.Size() > spec.Size {
+		if terr := pf.Truncate(spec.Size); terr != nil {
+			return abort(fmt.Errorf("truncate partial %s to %d: %w", partialPath, spec.Size, terr))
+		}
+	}
+
+	// ---- 逐块 (index 升序, 跳过已完成) ----
+	//
+	// 双哈希 tee: chunkHash 每块重置; fileHash 全程不重置, 但仅当本任务从 byte 0
+	// 连续流到 EOF 才有效——resumed==0 时循环无跳块、stage 0 无抽读 (无已完成块
+	// 才会 resumed==0), 全部源读恰为 0→EOF 单程; resumed>0 时有跳块, 只报 merkle
+	// 根 (判据 = 续传块数, 非 fresh 参数——自愈态空清单 resumed 恒 0, 同报)。
+	fileHash := sha256.New()
+	runBytes := int64(0) // 本任务实跑移动的字节 (速率分母)
+	baseline := int64(0) // 续传基线 (已完成块字节, 洞感知)
+	if spec.Manifest != nil {
+		baseline = manifestCompletedBytes(spec.Manifest, spec.ChunkBytes, spec.Size)
+	}
+	for i := 0; i < int(spec.ChunksTotal); i++ {
+		if _, ok := completed[i]; ok {
+			continue // 续传: 已完成块跳过
+		}
+		off := int64(i) * spec.ChunkBytes
+		n := relayChunkLen(int64(i), spec.ChunkBytes, spec.Size)
+		chunkHash := sha256.New() // 每块重置
+		// 复制形态钉死 (rev3 kimi#5): sftp 源走 T1 RelayCopyChunk (Seek+Seek →
+		// CopyN over TeeReader(LimitReader), 精确长度纪律内建); 本机源走同形态
+		// 的引擎本地镜像 (T1 签名把源钉在 *sftp.File, 见 helper 注释)。
+		var written int64
+		var cerr error
+		if srcFile != nil {
+			written, cerr = sshbroker.RelayCopyChunk(ctx, srcFile, pf, off, n, []io.Writer{chunkHash, fileHash})
+		} else {
+			written, cerr = relayCopyLocalChunk(ctx, srcLocal, pf, off, n, []io.Writer{chunkHash, fileHash})
+		}
+		if cerr != nil {
+			return abort(fmt.Errorf("chunk %d at offset %d: %w", i, off, cerr)) // written≠n 不入清单
+		}
+		_ = written // 精确长度由复制原语保证 (short → error, 到不了这里)
+		runBytes += n
+		entry := sshbroker.RelayChunkDone{I: i, SHA256: hex.EncodeToString(chunkHash.Sum(nil))}
+		completed[i] = entry.SHA256
+		manifest.Chunks = append(manifest.Chunks, entry)
+		sort.Slice(manifest.Chunks, func(a, b int) bool { return manifest.Chunks[a].I < manifest.Chunks[b].I })
+		if uerr := sshbroker.RelayWriteManifestAtomic(dstSC, manifestPath, manifest); uerr != nil {
+			return abort(fmt.Errorf("record chunk %d in manifest: %w", i, uerr))
+		}
+		elapsed := time.Since(startedAt)
+		progress("chunk %d/%d ok bytes=%d/%d rate=%s elapsed=%s", i+1, spec.ChunksTotal, baseline+runBytes, spec.Size, relayRate(runBytes, elapsed), elapsed.Round(time.Millisecond))
+	}
+
+	// 末块 EOF 确认 (再读 1 字节须 EOF——源在传输窗口内变长的即时闸; 零块任务在
+	// offset 0 处同样确认空源)。
+	if rerr := relayReadExact(srcFile, srcLocal, spec.Size, 1, io.Discard); rerr == nil {
+		return abort(fmt.Errorf("source did not end at %d bytes — the file grew during the transfer; refusing to continue", spec.Size))
+	} else if !errors.Is(rerr, io.EOF) {
+		return abort(fmt.Errorf("EOF confirm at %d: %w", spec.Size, rerr))
+	}
+
+	// ---- 完成 ----
+
+	// 源 re-stat (72h 窗口内源变更的最终防线); 不符 → failed 不提交。残余 =
+	// 同 mtime in-place 重写 (rsync 同病, 登记 §9)。
+	var curSize, curMtime int64
+	if srcSC != nil {
+		fi, serr := srcSC.Stat(fromPath)
+		if serr != nil {
+			return abort(fmt.Errorf("source re-stat %s: %w", fromPath, serr))
+		}
+		curSize, curMtime = fi.Size(), fi.ModTime().Unix()
+	} else {
+		fi, serr := os.Stat(fromPath)
+		if serr != nil {
+			return abort(fmt.Errorf("source re-stat %s: %w", fromPath, serr))
+		}
+		curSize, curMtime = fi.Size(), fi.ModTime().Unix()
+	}
+	if curSize != spec.Size || curMtime != spec.Mtime {
+		return abort(fmt.Errorf("source file changed since the transfer began (preflight size=%d mtime=%d, now size=%d mtime=%d) — refusing to commit", spec.Size, spec.Mtime, curSize, curMtime))
+	}
+
+	// rootHash = sha256(按 index 升序串接的各块 32B 摘要)——续传任务的校验凭据。
+	sort.Slice(manifest.Chunks, func(a, b int) bool { return manifest.Chunks[a].I < manifest.Chunks[b].I })
+	rootHash := sha256.New()
+	for _, c := range manifest.Chunks {
+		d, derr := hex.DecodeString(c.SHA256)
+		if derr != nil || len(d) != sha256.Size {
+			return abort(fmt.Errorf("corrupt chunk %d digest in manifest: %v", c.I, derr))
+		}
+		rootHash.Write(d)
+	}
+
+	// checked Close → PosixRename = 提交点 (此 rename 成功即传输完成; 尺寸收敛由
+	// stage 0 truncate 保证)。
+	if cerr := pf.Close(); cerr != nil {
+		return abort(fmt.Errorf("close partial %s: %w", partialPath, cerr))
+	}
+	pfClosed = true
+	if rerr := dstSC.PosixRename(partialPath, toPath); rerr != nil {
+		return abort(fmt.Errorf("commit rename %s -> %s: %w", partialPath, toPath, rerr))
+	}
+
+	// manifest 删除 = best-effort: 失败 → 任务仍 done, 警告行指引手清 (§2)。
+	if rerr := dstSC.Remove(manifestPath); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+		progress("stale manifest left behind — harmless, remove at leisure")
+	}
+
+	// 终态 done 末行 (root 恒有; file_sha256 仅 byte0→EOF 全程任务, 判据 = resumed==0)。
+	elapsed := time.Since(startedAt)
+	if spec.Resumed == 0 {
+		progress("relay done: root=sha256:%x file_sha256=sha256:%x(total=%d) renamed -> %s rate=%s elapsed=%s", rootHash.Sum(nil), fileHash.Sum(nil), spec.Size, toPath, relayRate(runBytes, elapsed), elapsed.Round(time.Millisecond))
+	} else {
+		progress("relay done: root=sha256:%x(total=%d) renamed -> %s rate=%s elapsed=%s", rootHash.Sum(nil), spec.Size, toPath, relayRate(runBytes, elapsed), elapsed.Round(time.Millisecond))
+	}
+	return 0, false, nil
+}
+
+// relayCopyLocalChunk 是本机源逐块复制的引擎本地镜像, 形态与 T1 RelayCopyChunk
+// 逐字同款钉死 (rev3 kimi#5: Seek+Seek → io.CopyN over TeeReader(LimitReader) —
+// 裸 io.Copy 读到 EOF 会把源剩余全灌进 partial 覆写后续块区域; written≠n 即
+// error 的精确长度纪律同在)。不直接复用 T1 原语的原因: 其签名把源钉在
+// *sftp.File, 而本机源是 *os.File——泛化 T1 签名会动到测试锚定的远端原语
+// (rev3 kimi#5 锚); 引擎侧镜像让 sftp→sftp 路径留在 T1 的已测代码上, 本机路径
+// 获得同一纪律。两路共享 relayChunkLen 网格与引擎的 EOF 确认, 漂移面为零。
+func relayCopyLocalChunk(ctx context.Context, src *os.File, dst *sftp.File, offset, n int64, tee []io.Writer) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if _, err := src.Seek(offset, io.SeekStart); err != nil {
+		return 0, fmt.Errorf("seek src to %d: %w", offset, err)
+	}
+	if _, err := dst.Seek(offset, io.SeekStart); err != nil {
+		return 0, fmt.Errorf("seek dst to %d: %w", offset, err)
+	}
+	written, err := io.CopyN(dst, io.TeeReader(io.LimitReader(src, n), io.MultiWriter(tee...)), n)
+	if err != nil {
+		return written, fmt.Errorf("chunk copy at offset %d stopped after %d of %d bytes: %w", offset, written, n, err)
+	}
+	if written != n { // CopyN 短拷贝必错——精确长度纪律的 belt and braces
+		return written, fmt.Errorf("chunk copy at offset %d: %d of %d bytes", offset, written, n)
+	}
+	return written, nil
+}
+
+// relayReadExact 从源句柄 offset 处精确读 n 字节进 w (抽读复核与 EOF 确认共用;
+// 短读/传输错误原样上抛——EOF 确认靠 errors.Is(err, io.EOF) 识别)。
+func relayReadExact(srcFile *sftp.File, srcLocal *os.File, off, n int64, w io.Writer) error {
+	var err error
+	if srcFile != nil {
+		if _, err = srcFile.Seek(off, io.SeekStart); err != nil {
+			return fmt.Errorf("seek source to %d: %w", off, err)
+		}
+		_, err = io.CopyN(w, srcFile, n)
+	} else {
+		if _, err = srcLocal.Seek(off, io.SeekStart); err != nil {
+			return fmt.Errorf("seek source to %d: %w", off, err)
+		}
+		_, err = io.CopyN(w, srcLocal, n)
+	}
+	if err != nil {
+		return fmt.Errorf("read %d bytes at offset %d: %w", n, off, err)
+	}
+	return nil
+}
+
+// relayRate 渲染二进制单位速率 (进度行装饰, 非协议)。
+func relayRate(bytes int64, d time.Duration) string {
+	if bytes <= 0 || d <= 0 {
+		return "0 B/s"
+	}
+	bps := float64(bytes) / d.Seconds()
+	units := []string{"B/s", "KiB/s", "MiB/s", "GiB/s", "TiB/s"}
+	u := 0
+	for bps >= 1024 && u < len(units)-1 {
+		bps /= 1024
+		u++
+	}
+	return fmt.Sprintf("%.1f %s", bps, units[u])
 }
