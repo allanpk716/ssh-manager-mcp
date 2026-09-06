@@ -697,20 +697,25 @@ func TestRelayForProfileStateTable(t *testing.T) {
 	}
 }
 
-// fresh=true: 整段跳过语义解析 — malformed/超限 manifest 也可重启 (rev3 codex#5);
-// 且 preflight 零远端状态变更: 残留工件字节级原样 (删除在引擎 stage 0)。
+// fresh=true: 整段跳过语义解析 — malformed/超限 manifest 也可重启 (rev3 codex#5)。
+//
+// "preflight 零远端状态变更"的取证 (本测试立意) 在 T5 引擎落地后重锚 (ledger:
+// task-5-report「T4 test observation race, quantified」/ progress.md T7 重锚项):
+// 原形态在 RelayForProfile 返回后直读盘上工件——返回即引擎 goroutine 起跑,
+// stage 0 的 fresh 删除与之赛跑 (after 读可能 ENOENT 或读到引擎新落的空清单),
+// 实证绿 (-count=10) 但属结构性潜在 flake。重锚为两个无竞争半边:
+//   半 1 (admission): fresh 跳过解析 → malformed 照建任务; 等终态后再断言引擎
+//     侧最终形态 (fresh 删除+重传 → done + 真名)——post-terminal 读零竞争。
+//   半 2 (non-mutation): 运行中 blocker 经 ReserveRelay 占住同目标四工件写集 →
+//     fresh 调用在 ⑧ 被拒 → 零引擎启动 → 拒绝点在 ⑥ (fresh 跳过段) 之后, 盘上
+//     工件字节级断言零竞争——"preflight 走完 fresh 段仍未删除"的最强形态。
 func TestRelayForProfileFreshRestartsMalformed(t *testing.T) {
 	e := relayNewEnv(t)
 	src := relayMkSource(t, e, "fresh/src.bin", 1000)
 	to := e.root + "/fresh/f.bin"
 
-	relayPutRaw(t, to+".sshmgr-manifest.json", "totally malformed {")
-	relayMkFile(t, to+".sshmgr-partial", strings.Repeat("p", 500))
-	before, err := os.ReadFile(filepath.FromSlash(to + ".sshmgr-manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	relayPutRaw(t, to+relayManifestSuffix, "totally malformed {")
+	relayMkFile(t, to+relayPartialSuffix, strings.Repeat("p", 500))
 	out, err := e.relayCall(e.relayInput(e.srcID, src, to, true))
 	if err != nil {
 		t.Fatalf("fresh over malformed manifest: %v", err)
@@ -718,23 +723,68 @@ func TestRelayForProfileFreshRestartsMalformed(t *testing.T) {
 	if out.ResumedChunks != 0 {
 		t.Fatalf("ResumedChunks = %d, want 0 (fresh)", out.ResumedChunks)
 	}
-	after, err := os.ReadFile(filepath.FromSlash(to + ".sshmgr-manifest.json"))
-	if err != nil {
-		t.Fatal(err)
+	if s := waitTerminal(t, e.tm, out.TaskID, 10*time.Second); s.status != bgStatusDone {
+		t.Fatalf("status = %q (err=%q), want done — fresh discarded the debris and re-transferred", s.status, s.errText)
 	}
-	if string(before) != string(after) {
-		t.Fatal("preflight must not mutate the malformed manifest (deletion belongs to engine stage 0)")
-	}
-	if fi, serr := os.Stat(filepath.FromSlash(to + ".sshmgr-partial")); serr != nil || fi.Size() != 500 {
-		t.Fatalf("partial must stay untouched in preflight: fi=%v err=%v", fi, serr)
+	if fi, serr := os.Stat(filepath.FromSlash(to)); serr != nil || fi.Size() != 1000 {
+		t.Fatalf("fresh restart must land the real name: fi=%v err=%v", fi, serr)
 	}
 
-	// 超限 manifest + fresh 同样可重启。
+	// 超限 manifest + fresh 同样可重启 (等终态后断言, 同零竞争口径)。
 	t.Run("over-cap manifest", func(t *testing.T) {
 		to2 := e.root + "/fresh/cap/f.bin"
-		relayPutRaw(t, to2+".sshmgr-manifest.json", strings.Repeat("x", 20<<10))
-		if _, err := e.relayCall(e.relayInput(e.srcID, src, to2, true)); err != nil {
+		relayPutRaw(t, to2+relayManifestSuffix, strings.Repeat("x", 20<<10))
+		out2, err := e.relayCall(e.relayInput(e.srcID, src, to2, true))
+		if err != nil {
 			t.Fatalf("fresh over over-cap manifest: %v", err)
+		}
+		if s := waitTerminal(t, e.tm, out2.TaskID, 10*time.Second); s.status != bgStatusDone {
+			t.Fatalf("status = %q (err=%q), want done", s.status, s.errText)
+		}
+	})
+
+	t.Run("preflight does not delete on fresh", func(t *testing.T) {
+		to3 := e.root + "/fresh/blocked/f.bin"
+		relayPutRaw(t, to3+relayManifestSuffix, "totally malformed {")
+		relayMkFile(t, to3+relayPartialSuffix, strings.Repeat("p", 500))
+		beforeM, merr := os.ReadFile(filepath.FromSlash(to3 + relayManifestSuffix))
+		if merr != nil {
+			t.Fatal(merr)
+		}
+		beforeP, perr := os.ReadFile(filepath.FromSlash(to3 + relayPartialSuffix))
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		// 运行中 blocker 占住 to3 四工件写集 (TestRelayForProfileConflictMatrix
+		// 同款虚拟任务; CloseAll 挂 Cleanup 收口)。
+		blocker := BgTaskSpec{
+			ProjectID: e.projID, ServerID: e.dstID, Command: "fresh-preflight-blocker", Timeout: time.Hour,
+			Run: func(ctx context.Context, _ *bgTask) { <-ctx.Done() },
+		}
+		writes := []string{
+			relayKey(e.dstID, to3),
+			relayKey(e.dstID, to3+relayPartialSuffix),
+			relayKey(e.dstID, to3+relayManifestSuffix),
+			relayKey(e.dstID, to3+relayManifestSuffix+".tmp"),
+		}
+		if _, _, rerr := e.tm.ReserveRelay(blocker, nil, writes); rerr != nil {
+			t.Fatal(rerr)
+		}
+		if _, err := e.relayCall(e.relayInput(e.srcID, src, to3, true)); err == nil || !strings.Contains(err.Error(), "relay conflict") {
+			t.Fatalf("err = %v, want the write-set conflict rejection (zero engine started)", err)
+		}
+		// 无引擎 goroutine 在场 → 字节级断言零竞争: preflight 走过 ①–⑧ 的 fresh
+		// 全程仍零删除 (删除在引擎 stage 0, 以 ⑧ 租约为前提)。
+		afterM, merr := os.ReadFile(filepath.FromSlash(to3 + relayManifestSuffix))
+		if merr != nil {
+			t.Fatal(merr)
+		}
+		afterP, perr := os.ReadFile(filepath.FromSlash(to3 + relayPartialSuffix))
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		if string(beforeM) != string(afterM) || string(beforeP) != string(afterP) {
+			t.Fatal("preflight must not mutate the malformed manifest or the partial on any rejection path (deletion belongs to engine stage 0)")
 		}
 	})
 }
