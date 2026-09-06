@@ -704,11 +704,12 @@ func TestRelayForProfileStateTable(t *testing.T) {
 // 原形态在 RelayForProfile 返回后直读盘上工件——返回即引擎 goroutine 起跑,
 // stage 0 的 fresh 删除与之赛跑 (after 读可能 ENOENT 或读到引擎新落的空清单),
 // 实证绿 (-count=10) 但属结构性潜在 flake。重锚为两个无竞争半边:
-//   半 1 (admission): fresh 跳过解析 → malformed 照建任务; 等终态后再断言引擎
-//     侧最终形态 (fresh 删除+重传 → done + 真名)——post-terminal 读零竞争。
-//   半 2 (non-mutation): 运行中 blocker 经 ReserveRelay 占住同目标四工件写集 →
-//     fresh 调用在 ⑧ 被拒 → 零引擎启动 → 拒绝点在 ⑥ (fresh 跳过段) 之后, 盘上
-//     工件字节级断言零竞争——"preflight 走完 fresh 段仍未删除"的最强形态。
+//
+//	半 1 (admission): fresh 跳过解析 → malformed 照建任务; 等终态后再断言引擎
+//	  侧最终形态 (fresh 删除+重传 → done + 真名)——post-terminal 读零竞争。
+//	半 2 (non-mutation): 运行中 blocker 经 ReserveRelay 占住同目标四工件写集 →
+//	  fresh 调用在 ⑧ 被拒 → 零引擎启动 → 拒绝点在 ⑥ (fresh 跳过段) 之后, 盘上
+//	  工件字节级断言零竞争——"preflight 走完 fresh 段仍未删除"的最强形态。
 func TestRelayForProfileFreshRestartsMalformed(t *testing.T) {
 	e := relayNewEnv(t)
 	src := relayMkSource(t, e, "fresh/src.bin", 1000)
@@ -762,10 +763,10 @@ func TestRelayForProfileFreshRestartsMalformed(t *testing.T) {
 			Run: func(ctx context.Context, _ *bgTask) { <-ctx.Done() },
 		}
 		writes := []string{
-			relayKey(e.dstID, to3),
-			relayKey(e.dstID, to3+relayPartialSuffix),
-			relayKey(e.dstID, to3+relayManifestSuffix),
-			relayKey(e.dstID, to3+relayManifestSuffix+".tmp"),
+			relayKeyOf(e.dstID, to3),
+			relayKeyOf(e.dstID, to3+relayPartialSuffix),
+			relayKeyOf(e.dstID, to3+relayManifestSuffix),
+			relayKeyOf(e.dstID, to3+relayManifestSuffix+".tmp"),
 		}
 		if _, _, rerr := e.tm.ReserveRelay(blocker, nil, writes); rerr != nil {
 			t.Fatal(rerr)
@@ -890,12 +891,12 @@ func TestRelayForProfileConflictMatrix(t *testing.T) {
 		ProjectID: e.projID, ServerID: e.dstID, Command: "blocker", Timeout: time.Hour,
 		Run: func(ctx context.Context, _ *bgTask) { <-ctx.Done() },
 	}
-	blockerReads := []string{relayKey(e.dstID, otherSrc)}
+	blockerReads := []string{relayKeyOf(e.dstID, otherSrc)}
 	blockerWrites := []string{
-		relayKey(e.dstID, target),
-		relayKey(e.dstID, target+relayPartialSuffix),
-		relayKey(e.dstID, target+relayManifestSuffix),
-		relayKey(e.dstID, target+relayManifestSuffix+".tmp"),
+		relayKeyOf(e.dstID, target),
+		relayKeyOf(e.dstID, target+relayPartialSuffix),
+		relayKeyOf(e.dstID, target+relayManifestSuffix),
+		relayKeyOf(e.dstID, target+relayManifestSuffix+".tmp"),
 	}
 	if _, _, err := e.tm.ReserveRelay(blocker, blockerReads, blockerWrites); err != nil {
 		t.Fatal(err)
@@ -963,8 +964,52 @@ func TestRelayForProfileConflictMatrix(t *testing.T) {
 		}
 	})
 
+	// spec §6: ⑧ 拒绝同落 relay-bg-start 审计行 (status=error)——共享 defer 落笔
+	// (ReserveRelay 失败路径), 四笔冲突恰好四行, 归因端点均为目标侧。
+	errStarts := 0
+	for _, r := range relayAuditRows(t, e.st, 20) {
+		if r.Action == "relay-bg-start" && r.Status == "error" {
+			if r.ServerID != e.dstID {
+				t.Fatalf("conflict start row ServerID = %q, want %q", r.ServerID, e.dstID)
+			}
+			errStarts++
+		}
+	}
+	if errStarts != 4 {
+		t.Fatalf("relay-bg-start/error rows = %d, want 4 (one per conflict rejection)", errStarts)
+	}
+
 	if got := e.tm.Len(); got != before+2 { // 恰两笔成功 (read-read + distinct-endpoint)
 		t.Fatalf("Len = %d, want %d (conflicts must not create tasks)", got, before+2)
+	}
+}
+
+// TestRelayForProfileSaturatedTableStartAuditRow: maxTasks 满员拒绝在 ForProfile
+// 层同样落 relay-bg-start status=error 审计行 (spec §6)——满员形态照
+// TestReserveRelayAdmissionEvictionAndLimit (b) 上移一层 (maxTasks=1 全 running)。
+func TestRelayForProfileSaturatedTableStartAuditRow(t *testing.T) {
+	e := relayNewEnv(t)
+	sat := newTestTM(t, 1)
+	t.Cleanup(func() { sat.CloseAll() })
+	if _, _, err := sat.ReserveRelay(BgTaskSpec{
+		ProjectID: e.projID, ServerID: e.dstID, Command: "filler", Timeout: time.Hour,
+		Run: func(ctx context.Context, _ *bgTask) { <-ctx.Done() },
+	}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	src := relayMkSource(t, e, "sat/src.bin", 16)
+	_, err := RelayForProfile(context.Background(), e.st, sat, e.projID, e.pid,
+		e.relayInput(e.srcID, src, e.root+"/sat/f.bin", false), relayProfileChunk)
+	if !errors.Is(err, ErrBgTaskLimit) {
+		t.Fatalf("saturated table must refuse with ErrBgTaskLimit, got %v", err)
+	}
+	row := relayAuditFind(t, relayAuditRows(t, e.st, 10), "relay-bg-start", "error")
+	if row.ServerID != e.dstID {
+		t.Fatalf("start row ServerID = %q, want %q", row.ServerID, e.dstID)
+	}
+	if got := sat.Len(); got != 1 {
+		t.Fatalf("Len = %d, want 1 (refusal must not create a task)", got)
 	}
 }
 
@@ -1002,7 +1047,7 @@ func TestRelayForProfileReturnValueAndAudit(t *testing.T) {
 
 	s := waitTerminal(t, e.tm, out.TaskID, 5*time.Second)
 	if s.status != bgStatusDone {
-		t.Fatalf("placeholder engine: status = %q, want done", s.status)
+		t.Fatalf("relay engine: status = %q, want done", s.status)
 	}
 
 	wantStart := fmt.Sprintf("relay local:%s -> %s:%s (1000 bytes, 1 chunks, resumed 0)",

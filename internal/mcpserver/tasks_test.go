@@ -210,10 +210,6 @@ func TestEnvSeamValidation(t *testing.T) {
 // ---------- Plan 47 T3: ReserveRelay / AuditAction / 双连接槽 (spec §1.1 运行中
 // 冲突拒绝 + §2⑧⑨ + §8 ReserveRelay/admission 段) ----------
 
-// relayKey 按 T4 的 endpoint 限定键公式构造字面键 (T3 不做键构造、不做
-// canonical 化——同构键空间求交, 测试自备键)。
-func relayKey(server, path string) string { return server + "\x00" + path }
-
 // relayRSpec 构造 relay 形 spec (Run 留空 → no-op, 任务恒 running; 取值传递
 // 是 ReserveRelay 的入参形态, 与 runningSpec 的指针形态区分)。
 func relayRSpec(cmd string) BgTaskSpec {
@@ -238,7 +234,7 @@ func reservedCount(m *TaskManager) int {
 func TestReserveRelayConcurrentSameArtifactSetOneWinner(t *testing.T) {
 	m := newTestTM(t, 8)
 	const n = 16
-	key := relayKey("srvB", "/data/f")
+	key := relayKeyOf("srvB", "/data/f")
 	keys := []string{key}
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
@@ -279,19 +275,19 @@ func TestReserveRelayConcurrentSameArtifactSetOneWinner(t *testing.T) {
 // canonical 化归 T4 参数层 ①)。
 func TestReserveRelayDistinctEndpointsNotMutuallyExclusive(t *testing.T) {
 	m := newTestTM(t, 8)
-	shared := []string{relayKey("srvA", "/src/big.tar")}
+	shared := []string{relayKeyOf("srvA", "/src/big.tar")}
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		if _, _, err := m.ReserveRelay(relayRSpec("to-B"), shared, []string{relayKey("srvB", "/data/f")}); err != nil {
+		if _, _, err := m.ReserveRelay(relayRSpec("to-B"), shared, []string{relayKeyOf("srvB", "/data/f")}); err != nil {
 			errs <- err
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		if _, _, err := m.ReserveRelay(relayRSpec("to-C"), shared, []string{relayKey("srvC", "/data/f")}); err != nil {
+		if _, _, err := m.ReserveRelay(relayRSpec("to-C"), shared, []string{relayKeyOf("srvC", "/data/f")}); err != nil {
 			errs <- err
 		}
 	}()
@@ -304,10 +300,10 @@ func TestReserveRelayDistinctEndpointsNotMutuallyExclusive(t *testing.T) {
 		t.Fatalf("Len=%d, want 2 (both admitted)", got)
 	}
 	// 字面键空间: 反斜杠路径与斜杠路径互不碰撞。
-	if _, _, err := m.ReserveRelay(relayRSpec("bs"), nil, []string{relayKey("srvB", `/tmp/a\b`)}); err != nil {
+	if _, _, err := m.ReserveRelay(relayRSpec("bs"), nil, []string{relayKeyOf("srvB", `/tmp/a\b`)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m.ReserveRelay(relayRSpec("slash"), nil, []string{relayKey("srvB", "/tmp/a/b")}); err != nil {
+	if _, _, err := m.ReserveRelay(relayRSpec("slash"), nil, []string{relayKeyOf("srvB", "/tmp/a/b")}); err != nil {
 		t.Fatalf(`/tmp/a\b and /tmp/a/b are distinct keys, must not collide: %v`, err)
 	}
 }
@@ -318,22 +314,22 @@ func TestReserveRelayDistinctEndpointsNotMutuallyExclusive(t *testing.T) {
 func TestReserveRelaySameServerArtifactCollisionRejected(t *testing.T) {
 	m := newTestTM(t, 8)
 	first := []string{
-		relayKey("srvB", "/data/f"),
-		relayKey("srvB", "/data/f.sshmgr-partial"),
-		relayKey("srvB", "/data/f.sshmgr-manifest.json"),
-		relayKey("srvB", "/data/f.sshmgr-manifest.json.tmp"),
+		relayKeyOf("srvB", "/data/f"),
+		relayKeyOf("srvB", "/data/f.sshmgr-partial"),
+		relayKeyOf("srvB", "/data/f.sshmgr-manifest.json"),
+		relayKeyOf("srvB", "/data/f.sshmgr-manifest.json.tmp"),
 	}
-	if _, _, err := m.ReserveRelay(relayRSpec("first"), []string{relayKey("srvA", "/src")}, first); err != nil {
+	if _, _, err := m.ReserveRelay(relayRSpec("first"), []string{relayKeyOf("srvA", "/src")}, first); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := m.ReserveRelay(relayRSpec("second"), nil, []string{relayKey("srvB", "/data/f.sshmgr-partial")})
+	_, _, err := m.ReserveRelay(relayRSpec("second"), nil, []string{relayKeyOf("srvB", "/data/f.sshmgr-partial")})
 	if err == nil {
 		t.Fatal("to_path matching a running task's partial must be rejected")
 	}
 	if !strings.Contains(err.Error(), "exec_stop") {
 		t.Fatalf("conflict text must advise exec_stop: %v", err)
 	}
-	if _, _, err = m.ReserveRelay(relayRSpec("third"), nil, []string{relayKey("srvA", "/src")}); err == nil {
+	if _, _, err = m.ReserveRelay(relayRSpec("third"), nil, []string{relayKeyOf("srvA", "/src")}); err == nil {
 		t.Fatal("write key matching a running task's read key must be rejected")
 	}
 }
@@ -343,11 +339,11 @@ func TestReserveRelaySameServerArtifactCollisionRejected(t *testing.T) {
 // partial, rev3 codex#2)。
 func TestReserveRelayReadWriteConflictRejected(t *testing.T) {
 	m := newTestTM(t, 8)
-	key := relayKey("srvB", "/data/f")
+	key := relayKeyOf("srvB", "/data/f")
 	if _, _, err := m.ReserveRelay(relayRSpec("writer"), nil, []string{key}); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := m.ReserveRelay(relayRSpec("reader"), []string{key}, []string{relayKey("srvC", "/copy")})
+	_, _, err := m.ReserveRelay(relayRSpec("reader"), []string{key}, []string{relayKeyOf("srvC", "/copy")})
 	if err == nil {
 		t.Fatal("source = running task's target artifact must be rejected")
 	}
@@ -360,7 +356,7 @@ func TestReserveRelayReadWriteConflictRejected(t *testing.T) {
 // 键仍在表 (保留期) 但不阻塞同工件重跑/续传 (resume 流的闸门前提)。
 func TestReserveRelayTerminalTaskDoesNotBlock(t *testing.T) {
 	m := newTestTM(t, 8)
-	keys := []string{relayKey("srvB", "/data/f")}
+	keys := []string{relayKeyOf("srvB", "/data/f")}
 	dead := relayRSpec("dead")
 	dead.PreFinished = true // 白盒: 直接以终态落表 (键仍挂在条目上)
 	if _, _, err := m.ReserveRelay(dead, nil, keys); err != nil {
@@ -378,7 +374,7 @@ func TestReserveRelayAdmissionEvictionAndLimit(t *testing.T) {
 	t.Setenv("SSHMGR_BG_MAX_TASKS", "2")
 	t.Setenv("SSHMGR_BG_RUN_CAP", "")
 	t.Setenv("SSHMGR_BG_RETAIN", "")
-	keys := func(i int) []string { return []string{relayKey("srvB", "/data/f"+strconv.Itoa(i))} }
+	keys := func(i int) []string { return []string{relayKeyOf("srvB", "/data/f"+strconv.Itoa(i))} }
 
 	// (a) 两个终态占满 (finishedAt 错峰——驱逐确定性, 照 TestAdmissionCapAndEviction)。
 	m, err := NewTaskManager()
@@ -437,7 +433,7 @@ func TestReserveRelayAdmissionEvictionAndLimit(t *testing.T) {
 // 反复冲突失败 N 次后正常建任务仍成功; 满员拒绝与 manager 已关同样零计数残留。
 func TestReserveRelayFailurePathsRestoreAdmission(t *testing.T) {
 	m := newTestTM(t, 4)
-	held := []string{relayKey("srvB", "/data/f")}
+	held := []string{relayKeyOf("srvB", "/data/f")}
 	if _, _, err := m.ReserveRelay(relayRSpec("holder"), nil, held); err != nil {
 		t.Fatal(err)
 	}
@@ -457,10 +453,10 @@ func TestReserveRelayFailurePathsRestoreAdmission(t *testing.T) {
 	}
 	// 满员拒绝路径零计数残留。
 	m2 := newTestTM(t, 1)
-	if _, _, err := m2.ReserveRelay(relayRSpec("fill"), nil, []string{relayKey("srvB", "/x")}); err != nil {
+	if _, _, err := m2.ReserveRelay(relayRSpec("fill"), nil, []string{relayKeyOf("srvB", "/x")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m2.ReserveRelay(relayRSpec("over"), nil, []string{relayKey("srvB", "/y")}); !errors.Is(err, ErrBgTaskLimit) {
+	if _, _, err := m2.ReserveRelay(relayRSpec("over"), nil, []string{relayKeyOf("srvB", "/y")}); !errors.Is(err, ErrBgTaskLimit) {
 		t.Fatalf("want ErrBgTaskLimit, got %v", err)
 	}
 	if r := reservedCount(m2); r != 0 {
@@ -563,7 +559,7 @@ func TestRelayDualConnectionSlots(t *testing.T) {
 			return 0, false, nil
 		}, nil)
 	}
-	id, eff, err := m.ReserveRelay(spec, nil, []string{relayKey("srvB", "/data/f")})
+	id, eff, err := m.ReserveRelay(spec, nil, []string{relayKeyOf("srvB", "/data/f")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +585,7 @@ func TestRelayDualConnectionSlots(t *testing.T) {
 			return 0, false, ectx.Err()
 		}, nil)
 	}
-	id2, _, err := m.ReserveRelay(spec2, nil, []string{relayKey("srvB", "/data/g")})
+	id2, _, err := m.ReserveRelay(spec2, nil, []string{relayKeyOf("srvB", "/data/g")})
 	if err != nil {
 		t.Fatal(err)
 	}
