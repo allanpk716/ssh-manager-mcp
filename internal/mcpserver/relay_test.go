@@ -32,13 +32,16 @@ import (
 // mcpserver 侧同位物)。
 const relayProfileChunk int64 = 64 << 10
 
-// relaySpaceChunk 是空间分支真字节用例的块大小: 16TiB 稀疏源 ÷ 256MiB = 64 块,
-// 远低于 relayMaxChunks 闸, 让块数闸不先于空间分支触发。
+// relaySpaceChunk 是空间分支真字节用例的块大小: 稀疏源 ÷ 256MiB 的块数远低于
+// relayMaxChunks 闸, 让块数闸不先于空间分支触发。
 const relaySpaceChunk int64 = 256 << 20
 
-// relaySparseSpaceSize 是空间分支的稀疏源体积: 任何真实 FS 的可用空间都远低于
-// 它 (不足分支必然拒), 而 Truncate 稀疏扩展零实际占用 (双平台已证)。
-const relaySparseSpaceSize int64 = 16 << 40
+// relaySparseSpaceSize 是空间分支的稀疏源体积: 远高于任何 CI runner 的可用空间
+// (ubuntu ~91GB / windows ~14GB → 不足分支必然拒), 又远低于 ext4 的 16TiB 单文件
+// 上限 (runner checkout fs 真盘可稀疏承载——原 16TiB 恰好贴着该上限, EFBIG 风险);
+// Truncate 稀疏扩展零实际占用。512GiB 同时让 resume 用例的全量-1 块 manifest
+// (2047 项 ≈ 180KB) 远低于 ⑥ 推导 cap。
+const relaySparseSpaceSize int64 = 512 << 30
 
 // ---------- fixtures ----------
 
@@ -104,23 +107,29 @@ func relayMkSource(t *testing.T, e *relayEnv, rel string, size int64) string {
 	return p
 }
 
-// relayMkSparse 稀疏扩展一个 size 字节的文件 (零实际占用, size 元数据真)。
-func relayMkSparse(t *testing.T, slashPath string, size int64) {
+// relaySparseFile 在 slashDir 下稀疏扩展一个 size 字节的 name 文件, 返回其
+// slash 路径 (零实际占用, size 元数据真)。CI runner 磁盘差异大 (tmpfs 的
+// ftruncate 上限 EFBIG / NTFS 对非稀疏扩展计费实盘 → ENOSPC): create/truncate
+// 的任何失败一律 Skipf——夹具不可行是环境事实, 不是测试失败 (错误文本带体积与
+// 底层原因, skip 理由可诊断)。
+func relaySparseFile(t *testing.T, slashDir, name string, size int64) string {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(filepath.FromSlash(slashPath)), 0o755); err != nil {
-		t.Fatal(err)
+	if err := os.MkdirAll(filepath.FromSlash(slashDir), 0o755); err != nil {
+		t.Skipf("fs cannot host a %d-byte sparse file: mkdir %s: %v", size, slashDir, err)
 	}
-	f, err := os.OpenFile(filepath.FromSlash(slashPath), os.O_CREATE|os.O_RDWR, 0o644)
+	p := slashDir + "/" + name
+	f, err := os.OpenFile(filepath.FromSlash(p), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		t.Fatal(err)
+		t.Skipf("fs cannot host a %d-byte sparse file: create %s: %v", size, p, err)
 	}
 	if err := f.Truncate(size); err != nil {
 		f.Close()
-		t.Fatal(err)
+		t.Skipf("fs cannot host a %d-byte sparse file: truncate %s: %v", size, p, err)
 	}
 	if err := f.Close(); err != nil {
-		t.Fatal(err)
+		t.Skipf("fs cannot host a %d-byte sparse file: close %s: %v", size, p, err)
 	}
+	return p
 }
 
 // relayStatSource 读源文件的 (size, mtime unix 秒) — manifest fixture 的锚。
@@ -468,25 +477,34 @@ func TestRelayChunkGateOverflowSafety(t *testing.T) {
 	}
 }
 
-// 真链路块数闸: 稀疏大源 × 小块 → refusal (双平台; 稀疏 Truncate 零实际占用)。
+// 真链路块数闸: 稀疏大源 × 小块 → refusal。夹具经 relaySparseFile (不可行即
+// skip): windows NTFS 对非稀疏扩展计费实盘, 小盘 runner 上 300GiB truncate 常不可
+// 行 → windows lane 可能整测 skip, linux lane (tmpfs/真盘稀疏均可承载) 携带真跑。
+// 块闸 ③b 先于空间 ⑦, 故正向拒绝分支与磁盘大小无关。
 func TestRelayForProfileChunkGateLive(t *testing.T) {
 	e := relayNewEnv(t)
-	src := e.root + "/gatesparse/src.bin"
-	relayMkSparse(t, src, 300<<30) // 300GiB ÷ 64KiB ≫ 16384
+	src := relaySparseFile(t, e.root+"/gatesparse", "src.bin", 300<<30) // 300GiB ÷ 64KiB ≫ 16384
 
+	// 正向: 64KiB 块 → ~5M 块 ≫ 16384 → 闸拒 (带指引)。
 	_, err := e.relayCall(e.relayInput(e.srcID, src, e.root+"/gatesparse/f.bin", false))
 	if err == nil || !strings.Contains(err.Error(), "raise SSHMGR_TRANSFER_CHUNK") {
 		t.Fatalf("live gate: err = %v, want chunk-count refusal with guidance", err)
 	}
 
-	// 反向锚: 300GiB ÷ 32MiB = 9600 块 ≤ 16384 → 过闸建任务。
+	// 反向锚: 300GiB ÷ 32MiB = 9600 块 ≤ 16384 → 过闸。磁盘无关断言: 大盘建任务
+	// (ChunksTotal=9600), 小盘 ⑦ 空间拒 (need ≈ 300GiB ≫ 可用)——两个结局都证明
+	// 块闸已过; 唯一不可接受的是块闸本身拒 ("raise SSHMGR_TRANSFER_CHUNK" 指引是
+	// 闸拒文本独有, 空间拒文本不含)。
 	out, err := RelayForProfile(context.Background(), e.st, e.tm, e.projID, e.pid,
 		e.relayInput(e.srcID, src, e.root+"/gatesparse/ok.bin", false), 32<<20)
-	if err != nil {
-		t.Fatalf("9600 chunks must pass the gate: %v", err)
+	if err == nil {
+		if out.ChunksTotal != 9600 {
+			t.Fatalf("ChunksTotal = %d, want 9600", out.ChunksTotal)
+		}
+		return
 	}
-	if out.ChunksTotal != 9600 {
-		t.Fatalf("ChunksTotal = %d, want 9600", out.ChunksTotal)
+	if strings.Contains(err.Error(), "raise SSHMGR_TRANSFER_CHUNK") {
+		t.Fatalf("9600 chunks pass the gate; on a small disk only the space refusal is acceptable, got the chunk gate: %v", err)
 	}
 }
 
@@ -816,17 +834,30 @@ func TestRelayForProfileSpaceAncestorParent(t *testing.T) {
 }
 
 // 真字节空间分支 (linux CI lane; windows statvfs stub 恒 ENOTSUP 无法产真字节)。
+// 夹具宿主 = checkout fs (os.MkdirTemp(".")): runner 的 t.TempDir() 落 /tmp tmpfs,
+// tmpfs 的 ftruncate 上限在这些体积上 EFBIG ("file too large"); checkout fs 是真盘
+// (ext4), 稀疏 truncate 零实际占用。testsshd 服务宿主 FS (无 chroot), slash 形式
+// 绝对路径直通; 大夹具经 relaySparseFile (不可行即 skip)。
 func TestRelayForProfileSpaceRealBytes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("pkg/sftp server statvfs stub returns ENOTSUP on windows hosts — linux CI lane carries the real-bytes space cases")
 	}
 	e := relayNewEnv(t)
+	tmpDir, err := os.MkdirTemp(".", "relay-space-*")
+	if err != nil {
+		t.Skipf("fs cannot host the checkout-fs fixture dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	abs, err := filepath.Abs(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := toSlash(abs)
 
 	t.Run("insufficient refuses with evidence", func(t *testing.T) {
-		src := e.root + "/space/full/src.bin"
-		relayMkSparse(t, src, relaySparseSpaceSize) // 16TiB 稀疏
+		src := relaySparseFile(t, dir+"/full", "src.bin", relaySparseSpaceSize) // 512GiB 稀疏
 		_, err := RelayForProfile(context.Background(), e.st, e.tm, e.projID, e.pid,
-			e.relayInput(e.srcID, src, e.root+"/space/full/f.bin", false), relaySpaceChunk)
+			e.relayInput(e.srcID, src, dir+"/full/f.bin", false), relaySpaceChunk)
 		if err == nil {
 			t.Fatal("want space refusal")
 		}
@@ -840,10 +871,9 @@ func TestRelayForProfileSpaceRealBytes(t *testing.T) {
 	t.Run("fresh projection counts reclaimable partial", func(t *testing.T) {
 		// 同体积稀疏源 (不足必拒) + 同体积稀疏 partial; fresh 投影计入可回收 → 照建
 		// (rev4 codex#2 锚: 消"盘满时 fresh 永远到不了 stage 0 删除"死锁)。
-		src := e.root + "/space/proj/src.bin"
-		relayMkSparse(t, src, relaySparseSpaceSize)
-		to := e.root + "/space/proj/f.bin"
-		relayMkSparse(t, to+".sshmgr-partial", relaySparseSpaceSize)
+		src := relaySparseFile(t, dir+"/proj", "src.bin", relaySparseSpaceSize)
+		to := dir + "/proj/f.bin"
+		relaySparseFile(t, dir+"/proj", "f.bin.sshmgr-partial", relaySparseSpaceSize)
 		out, err := RelayForProfile(context.Background(), e.st, e.tm, e.projID, e.pid,
 			e.relayInput(e.srcID, src, to, true), relaySpaceChunk)
 		if err != nil {
@@ -855,24 +885,25 @@ func TestRelayForProfileSpaceRealBytes(t *testing.T) {
 	})
 
 	t.Run("resume is gauged on missing bytes", func(t *testing.T) {
-		// 16TiB 源 15/16 完成: missing=256MiB (+同值余量) ≪ 可用 → 不靠投影照建
-		// (rev3 kimi#6 锚: 续传按 missing 口径, 预置大 partial 不再误拒)。
-		src := e.root + "/space/resume/src.bin"
-		relayMkSparse(t, src, relaySparseSpaceSize)
-		to := e.root + "/space/resume/f.bin"
-		idxs := make([]int, 15)
+		// 稀疏源全量-1 块完成 (n=2048 中 2047 完成): missing = 末块 256MiB (+同值
+		// 余量) ≪ 可用 → 不靠投影照建 (rev3 kimi#6 锚: 续传按 missing 字节口径——
+		// manifestCompletedBytes 逐块求和, 512GiB 大 partial 预置不再误拒)。
+		src := relaySparseFile(t, dir+"/resume", "src.bin", relaySparseSpaceSize)
+		to := dir + "/resume/f.bin"
+		n := int(relaySparseSpaceSize / relaySpaceChunk) // 2048
+		idxs := make([]int, n-1)
 		for i := range idxs {
 			idxs[i] = i
 		}
 		relayPutManifest(t, to+".sshmgr-manifest.json", relayManifestFor(t, src, relaySpaceChunk, idxs))
-		relayMkSparse(t, to+".sshmgr-partial", relaySparseSpaceSize)
+		relaySparseFile(t, dir+"/resume", "f.bin.sshmgr-partial", relaySparseSpaceSize)
 		out, err := RelayForProfile(context.Background(), e.st, e.tm, e.projID, e.pid,
 			e.relayInput(e.srcID, src, to, false), relaySpaceChunk)
 		if err != nil {
 			t.Fatalf("resume gauged on missing bytes must admit: %v", err)
 		}
-		if out.ResumedChunks != 15 {
-			t.Fatalf("ResumedChunks = %d, want 15", out.ResumedChunks)
+		if out.ResumedChunks != n-1 {
+			t.Fatalf("ResumedChunks = %d, want %d", out.ResumedChunks, n-1)
 		}
 	})
 }
