@@ -396,7 +396,12 @@ func probeVaultDecrypt(storePath, keyPath string) (servers, creds int, err error
 // and the probe degrades to the pre-rider older-snapshot read (undercount at
 // worst, never a false verdict). No -wal sidecar (clean close) → nothing to
 // fold, no-op. The busy_timeout matches store.Open so a transiently locked
-// broker store waits instead of failing fast.
+// broker store waits instead of failing fast. Two closing notes: a blocked
+// checkpoint is reported in wal_checkpoint's RESULT ROW (busy=1), not as an
+// SQL error — the row is read, not discarded; and when doctor's connection is
+// the only one attached, its clean close after the TRUNCATE removes the
+// -wal/-shm sidecars entirely — benign, the frames were folded into the main
+// file first.
 func checkpointWALBare(storePath string) error {
 	sidecar := storePath + "-wal"
 	if _, err := os.Stat(sidecar); err != nil {
@@ -405,13 +410,31 @@ func checkpointWALBare(storePath string) error {
 		}
 		return fmt.Errorf("stat %s: %w", sidecar, err)
 	}
+	// Re-check the main file: in the window past the caller's existence gate it
+	// could have been removed, and a bare open would then lazily create a fresh
+	// empty store.db on the production path — doctor must never do that.
+	if _, err := os.Stat(storePath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", storePath, err)
+	}
 	db, err := sql.Open("sqlite", storePath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+	// wal_checkpoint reports a blocked/partial run in its RESULT ROW (first
+	// column), not as an SQL error — Exec would discard the row and a busy
+	// broker would take the success path with a silently partial fold-in
+	// (checkpointed < log pages, -wal not truncated). Read all three columns
+	// and map busy≠0 onto the caller's degrade path.
+	var busy, walPages, ckpt int
+	if err := db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &walPages, &ckpt); err != nil {
 		return err
+	}
+	if busy != 0 {
+		return fmt.Errorf("checkpoint busy: a reader/writer still holds the wal (%d of %d pages folded)", ckpt, walPages)
 	}
 	return nil
 }

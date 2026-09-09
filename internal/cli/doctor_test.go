@@ -550,8 +550,11 @@ func stubServeServiceState(t *testing.T, state string) {
 
 // stubCheckpointStoreWAL replaces the bare-connection WAL checkpoint seam with
 // a failing constant (stubInspectFileACL precedent): drives the checkpoint-
-// failure branch, which cannot be seeded portably (a real TRUNCATE-checkpoint
-// busy needs a racing reader holding the WAL open).
+// failure branch without seeding a real failure — a real TRUNCATE-checkpoint
+// busy needs a racing reader holding the WAL open (and eats the 5s
+// busy_timeout); a real busy is also mapped to an error inside
+// checkpointWALBare (busy≠0 result row), so the seam stands in for BOTH
+// failure shapes on the same degrade path.
 func stubCheckpointStoreWAL(t *testing.T, err error) {
 	t.Helper()
 	prev := checkpointStoreWAL
@@ -1172,12 +1175,15 @@ func TestDoctorVaultOpenCountMatchesListServers(t *testing.T) {
 	}
 
 	// Leg 2 — checkpoint failure degrades, it never invents a verdict (spec
-	// Step 1: 现有降级路径不恶化,不假 PASS). Commit a third row (WAL-only),
-	// stub the fold-in to fail like a busy broker would, and pin the
-	// degradation contract: the probe reads the older snapshot (undercount —
-	// the documented pre-rider behavior, the row cannot claim the new row),
-	// the row stays PASS with the INFO note visible, and the exit code stays
-	// 0 — a busy broker is not a vault fault.
+	// Step 1: 现有降级路径不恶化,不假 PASS). Commit a third row (WAL-only)
+	// and pin the degradation contract: the probe reads the older snapshot
+	// (undercount — the documented pre-rider behavior, the row cannot claim
+	// the new row), the row stays PASS with the INFO note visible, and the
+	// exit code stays 0 — a busy broker is not a vault fault. The seam stub
+	// stands in for BOTH real failure shapes that checkpointWALBare maps onto
+	// this path: the SQL error AND the busy≠0 result row (see Finding 1 fix —
+	// wal_checkpoint reports a blocked run in its result row, not as an
+	// error).
 	if _, err := st.AddServer(&models.Server{
 		Name:         "orphan",
 		Host:         "192.0.2.11",
