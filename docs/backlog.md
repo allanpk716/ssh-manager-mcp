@@ -92,3 +92,13 @@
 - **跳板首连（经跳板/堡垒机发起首次连接）——独立立项登记（spec 拍板：本 plan 以锚定转发替代，跳板形态不做）**：反馈场景的原始设想「让 broker 经跳板到达目标完成首连」被否——锚定转发已闭环且不需要 broker 有通路。跳板首连若将来立项，价值面是「连工作机也不可达的目标」（双零直连），设计起点见 ADR 0002 与 spec §0。
 - **条件清除（`--clear --if-source=forward` 之类）——v1 不做，登记**：v1 以受影响条目清单输出 + `--list` 来源列可见化替代；等真实批量清毒需求再说。
 - **跨轮廓导出省略 pin_device——v1 不做，登记**：v1 以「跨轮廓可见（有意）+ 文档明示」替代（它是毒锚的主要检测面）；若设备命名体系被判定为敏感信息再收紧（一处投影过滤，见 spec §5）。
+
+### 终审延后项登记（2026-09-10 全分支终审分流，非阻塞）
+
+- **serve 错误路径日志 host 未加引号**（serve.go pin-hostkey insert/confirm 错误分支两处 `%s`）：同延迟行注入向量但仅错误路径、同请求者已认证；下一卫生波随手 `%q`（成功路径已在 f59cafe 修复）。
+- **conformance 生产引用链 testing 包**：`internal/conformance/docker.go`/`sshbin.go`（非测试文件）import `"testing"`，`cli/pinhostkey.go` 复用 knownhosts 解析后生产二进制链接 testing（体积+卫生债，无行为影响）；方向=knownhosts.go 迁中立包。
+- **测试卫生三小件**：serve_pin_test 并发 worker 内 `t.Fatal`（wg.Done 已 defer，降级为诊断丢失）；413 MaxBytesError 子分支无直接测试；run_test `firstServerID` 死助手删除。
+- **forwarder 两小件**：400/413 透传文本净化（控制字符）；进程退出时 `CloseIdleConnections`。
+- **doctor busy 分支执行覆盖**：busy≠0 判读由检视覆盖（可移植性不可测）；NUC10 真机可有意制造（serve 活跃 + doctor）验 INFO 降级行。
+- **backup-restore.md 补交叉引用**：指向 multi-machine.md 清毒时序第 6 步（毒化窗口备份不可作恢复源）。
+- **快照骨架重复**：InsertForwardedPin 与 ApplyForwardedHostKey 的 insert-only 事务骨架 ~20 行（路径不同——设备元数据来源与错误文本——合并辅助函数会糊回滚语义，暂留）。
