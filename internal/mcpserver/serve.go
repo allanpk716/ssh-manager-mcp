@@ -1,13 +1,17 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +19,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -186,9 +191,16 @@ func (r *ServeRunner) verifyCacheToken(ctx context.Context, token string, req *h
 func (r *ServeRunner) HTTPHandler() http.Handler {
 	cacheAuth := auth.RequireBearerToken(r.verifyCacheToken, &auth.RequireBearerTokenOptions{})
 	snapshotHandler := cacheAuth(http.HandlerFunc(r.handleSnapshot))
+	// Plan 48 §1: /pin-hostkey rides the SAME cacheAuth instance — one
+	// listener, one device-code gate, zero new authentication forms.
+	pinHandler := cacheAuth(http.HandlerFunc(r.handlePinHostkey))
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/snapshot" {
 			snapshotHandler.ServeHTTP(w, req)
+			return
+		}
+		if req.URL.Path == "/pin-hostkey" {
+			pinHandler.ServeHTTP(w, req)
 			return
 		}
 		if strings.HasPrefix(req.URL.Path, "/pair/") {
@@ -267,6 +279,253 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 	if err := r.st.TouchCacheToken(ti.UserID); err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: cache-tokens touch %s: %v\n", ti.UserID, err)
 	}
+}
+
+// ---- Plan 48: POST /pin-hostkey — anchored forwarding (spec §1) ----
+
+// pinMaxBodyBytes is the POST /pin-hostkey request-body cap (Plan 48 §1.1: a
+// NEW 64 KiB constant; the repo precedent is /pair's 1 KiB — a forwarded SSH
+// wire-format public key is two orders of magnitude smaller, so this bounds
+// memory with generous headroom).
+const pinMaxBodyBytes = 64 << 10
+
+// pinHostKeyRequest is the §1.1 request body: the base64 of the marshaled SSH
+// wire-format public key exactly as the client's HostKeyTOFU callback saw it.
+type pinHostKeyRequest struct {
+	Host    string `json:"host"`
+	Port    int    `json:"port"`
+	KeyBlob string `json:"key_blob"`
+}
+
+// The §1.1 response bodies — verbatim field contracts (the client's §2.1
+// branch table keys off exactly these shapes; the 409 NEVER carries a
+// fingerprint).
+type pinHostKeyResponse struct {
+	Fingerprint string `json:"fingerprint"`
+	ServerName  string `json:"server_name"`
+}
+
+type pinConflictResponse struct {
+	Error string `json:"error"`
+	Equal bool   `json:"equal"`
+}
+
+type pinErrorResponse struct {
+	Error string `json:"error"`
+}
+
+// writePinJSON emits one of the §1.1 JSON bodies with its status header.
+func writePinJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// handlePinHostkey lands a device-forwarded host-key anchor. The guard
+// sequence is ①–⑥ nailed by spec §1.2; every request leaves ONE stderr line
+// (the deferred log) — a rejected probe (403/400/409) is otherwise completely
+// traceless, and that line is the minimum detection surface (rev3).
+//
+// 401 semantics stay pure RequireBearerToken: the Plan-34 cache quarantine
+// lives only on the pull path — a bad token on THIS route is an ordinary
+// failure and must never destroy the client's local cache (§1.2).
+func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request) {
+	host, port := "", 0
+	device := "-"
+	status := http.StatusInternalServerError
+	defer func() {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey %s:%d -> %d (device %s)\n", host, port, status, device)
+	}()
+
+	// ① shape guards — method, body cap, JSON decode, field presence — ALL
+	// before any vault access, so a malformed probe can never ride the 403
+	// "not granted" wording (JSON/field validation precedes guard ③).
+	if req.Method != http.MethodPost {
+		status = http.StatusMethodNotAllowed
+		http.Error(w, "method not allowed", status)
+		return
+	}
+	if req.ContentLength > pinMaxBodyBytes {
+		status = http.StatusRequestEntityTooLarge
+		http.Error(w, "request body too large", status)
+		return
+	}
+	// A lied-about (or absent) ContentLength falls through to MaxBytesReader
+	// and is reclassified as 413 at decode time (the pairDecode precedent).
+	req.Body = http.MaxBytesReader(w, req.Body, pinMaxBodyBytes)
+	var in pinHostKeyRequest
+	if err := json.NewDecoder(req.Body).Decode(&in); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			status = http.StatusRequestEntityTooLarge
+			http.Error(w, "request body too large", status)
+			return
+		}
+		status = http.StatusBadRequest
+		writePinJSON(w, status, pinErrorResponse{Error: "unparseable key_blob"}) // §1.1's one 400 body
+		return
+	}
+	if in.Host == "" || in.Port <= 0 || in.KeyBlob == "" {
+		status = http.StatusBadRequest
+		writePinJSON(w, status, pinErrorResponse{Error: "unparseable key_blob"})
+		return
+	}
+	host, port = in.Host, in.Port
+
+	// ② the middleware's TokenInfo carries only the cache-token id; the row
+	// (and its profile binding) is re-resolved here, same as handleSnapshot.
+	ti := auth.TokenInfoFromContext(req.Context())
+	if ti == nil || ti.UserID == "" {
+		status = http.StatusForbidden
+		http.Error(w, "no authenticated cache token", status) // fail closed
+		return
+	}
+	ct, err := r.st.GetCacheToken(ti.UserID)
+	if err != nil {
+		// A store fault is NOT an authorization verdict — 403 here would send
+		// the owner chasing a pointless `cache-tokens bind` while the real DB
+		// error stays buried (the handleSnapshot lesson, verbatim).
+		fmt.Fprintf(os.Stderr, "sshmgr serve: cache token lookup %s: %v\n", ti.UserID, err)
+		status = http.StatusInternalServerError
+		http.Error(w, "cache token lookup failed", status)
+		return
+	}
+	if ct == nil {
+		status = http.StatusForbidden
+		http.Error(w, "no authenticated cache token", status) // fail closed
+		return
+	}
+	device = ct.Name
+	if ct.ProfileID == "" {
+		status = http.StatusForbidden
+		http.Error(w, "device code not bound to a profile — owner: run `sshmgr cache-tokens bind "+ct.Name+" <profile>` on the server", status)
+		return
+	}
+
+	// ③ candidate walk. ServersForProfile's row order is unspecified (it
+	// feeds the TUI), so the ids are sorted HERE — the first host+port hit is
+	// then the smallest-id candidate, the ONE deterministic attribution used
+	// for both the audit row and the response's server_name (§1.1/§1.2 ③⑤).
+	ids, err := r.st.ServersForProfile(ct.ProfileID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey grant walk %s: %v\n", ct.ProfileID, err)
+		status = http.StatusInternalServerError
+		http.Error(w, "grant walk failed", status)
+		return
+	}
+	sort.Strings(ids)
+	var attributed *models.Server
+	for _, id := range ids {
+		srv, err := r.st.GetServer(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey server lookup %s: %v\n", id, err)
+			status = http.StatusInternalServerError
+			http.Error(w, "server lookup failed", status)
+			return
+		}
+		if srv.Host == host && srv.Port == port {
+			attributed = srv
+			break
+		}
+	}
+	if attributed == nil {
+		// Deliberately vague: the body names no profile, no entry, no count —
+		// a device code must not learn vault shape from a refused pin (the
+		// Plan 31/39 boundary; only the requester-supplied address is echoed).
+		status = http.StatusForbidden
+		http.Error(w, fmt.Sprintf("pin forwarding refused for %s:%d — no matching server entry is granted to this device's bound profile; ask the owner to grant the entry (or rebind via cache-tokens bind) and cache pull again", host, port), status)
+		return
+	}
+
+	// ④ the forwarded bytes must parse as an SSH public key; the STORED value
+	// is the re-marshaled canonical form, byte-comparable with what a TOFU
+	// callback's remote.Marshal() produces (§1.2 ④).
+	raw, err := base64.StdEncoding.DecodeString(in.KeyBlob)
+	if err != nil {
+		status = http.StatusBadRequest
+		writePinJSON(w, status, pinErrorResponse{Error: "unparseable key_blob"})
+		return
+	}
+	pub, err := ssh.ParsePublicKey(raw)
+	if err != nil {
+		status = http.StatusBadRequest
+		writePinJSON(w, status, pinErrorResponse{Error: "unparseable key_blob"})
+		return
+	}
+	canonical := pub.Marshal()
+	fp := ssh.FingerprintSHA256(pub)
+
+	// The affects list is the OWNER full-vault view (ListServers — the device
+	// never receives it): every entry sharing this host:port is affected by
+	// the anchor's creation, and the audit line must let `audit --server`
+	// find "pinned me" for EACH of them (§6, symmetric with pin-clear).
+	all, err := r.st.ListServers()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey affects walk: %v\n", err)
+		status = http.StatusInternalServerError
+		http.Error(w, "server lookup failed", status)
+		return
+	}
+	var affected []string
+	for _, s := range all {
+		if s.Host == host && s.Port == port {
+			affected = append(affected, s.Name)
+		}
+	}
+	// The audit row is CONSTRUCTED here and written by InsertForwardedPin
+	// inside the insert transaction (§1.2 ⑤): a pin never lands without its
+	// history, and a rolled-back conflict leaves no audit row. project_id
+	// stays empty — a device initiated this, never a project (§6).
+	audit := store.AuditRow{
+		TS:       time.Now(),
+		ServerID: attributed.ID,
+		Action:   "pin-forward",
+		Command: fmt.Sprintf("host=%s:%d fp=%s device=%s via=forward affects=%d entries: %s",
+			host, port, fp, ct.Name, len(affected), strings.Join(affected, ", ")),
+		Status: "ok",
+	}
+
+	// ⑤ atomic landing. InsertForwardedPin answers insert-only's three
+	// outcomes with two values: equal=true is a matched existing anchor (the
+	// dual-mode judgment ran INSIDE the transaction); but a fresh insert AND
+	// a lost race to a different key both return (false, nil) — so the
+	// surviving anchor is point-read to tell them apart: ours → 201, someone
+	// else's → 409 equal=false.
+	equal, err := r.st.InsertForwardedPin(host, port, canonical, ct.Name, audit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey insert %s:%d: %v\n", host, port, err)
+		status = http.StatusInternalServerError
+		http.Error(w, "pin landing failed", status)
+		return
+	}
+	if equal {
+		// §1.1: the conflict body never echoes the fingerprint; equal lets an
+		// honest client auto-close a duplicate forward (§2.1).
+		status = http.StatusConflict
+		writePinJSON(w, status, pinConflictResponse{Error: "already pinned", Equal: true})
+		return
+	}
+	landed, err := r.st.GetHostKey(host, port)
+	if err != nil || landed == nil {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey confirm %s:%d: %v\n", host, port, err)
+		status = http.StatusInternalServerError
+		http.Error(w, "pin landing failed", status)
+		return
+	}
+	if !bytes.Equal(landed.Blob, canonical) {
+		// Lost the race to a different key — insert-only means our bytes are
+		// NOT what persisted. (An owner --force landing exactly inside this
+		// commit→read window would mislabel a real win as a conflict; the
+		// client's pull-and-retry recovery converges regardless — accepted
+		// micro-race, same class as the in-tx judgment's justification.)
+		status = http.StatusConflict
+		writePinJSON(w, status, pinConflictResponse{Error: "already pinned", Equal: false})
+		return
+	}
+
+	// ⑥
+	status = http.StatusCreated
+	writePinJSON(w, status, pinHostKeyResponse{Fingerprint: fp, ServerName: attributed.Name})
 }
 
 // ServeOpts carries the explicitly-set CLI flag inputs for the serve switches
