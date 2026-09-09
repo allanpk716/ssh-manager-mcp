@@ -334,7 +334,10 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 	device := "-"
 	status := http.StatusInternalServerError
 	defer func() {
-		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey %s:%d -> %d (device %s)\n", host, port, status, device)
+		// %q on both request-provided fields: an authenticated rogue device can
+		// send arbitrary bytes in host, and this line is the probe forensics
+		// surface — without quoting, embedded newlines forge service-log lines.
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey %q:%d -> %d (device %q)\n", host, port, status, device)
 	}()
 
 	// ① shape guards — method, body cap, JSON decode, field presence — ALL
@@ -422,6 +425,11 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 			status = http.StatusInternalServerError
 			http.Error(w, "server lookup failed", status)
 			return
+		}
+		if srv == nil {
+			// The row vanished mid-walk (servers rm race) — skip it, never
+			// dereference (the core.go GetServer nil-check convention).
+			continue
 		}
 		if srv.Host == host && srv.Port == port {
 			attributed = srv

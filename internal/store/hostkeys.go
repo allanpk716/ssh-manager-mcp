@@ -94,9 +94,19 @@ func (s *Store) SaveHostKey(host string, port int, marshaledKey []byte) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
+	// The DO UPDATE resets the pin columns along with the blob (Ruling 7):
+	// in the millisecond race where TOFU reads a nil anchor and an owner
+	// --force/--from-keyscan lands a fingerprint-format pin in between, the
+	// old blob-only overwrite would leave wire-format bytes under
+	// pin_format='fingerprint' — Pin.Matches would then compare a fingerprint
+	// STRING against the key, i.e. a permanent false MITM until --clear.
+	// Resetting to blob/tofu/empty is exactly the fresh-TOFU row this write
+	// means to create.
 	_, err := s.db.Exec(
 		`INSERT INTO host_keys (host_port, key_blob, created_at) VALUES (?,?,?)
-		 ON CONFLICT(host_port) DO UPDATE SET key_blob=excluded.key_blob`,
+		 ON CONFLICT(host_port) DO UPDATE SET
+		   key_blob=excluded.key_blob, pin_format='blob',
+		   pin_source='tofu', pin_device=''`,
 		hostKeyID(host, port), marshaledKey, now(),
 	)
 	return err

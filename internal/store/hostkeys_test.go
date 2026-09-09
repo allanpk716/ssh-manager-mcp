@@ -154,6 +154,40 @@ func TestHostKeysPinColumnsFreshSchema(t *testing.T) {
 	}
 }
 
+// TestSaveHostKeyResetsStalePinColumns: 终审修复(Ruling 7) — a TOFU
+// SaveHostKey landing ON an existing fingerprint-format pin must reset the
+// pin columns together with the blob. The millisecond race (TOFU reads a nil
+// anchor → owner --force/--from-keyscan lands a fingerprint pin → TOFU's
+// UPSERT fires) would otherwise leave wire-format bytes under
+// pin_format='fingerprint' — Pin.Matches then reads the wire bytes as a
+// fingerprint STRING: a permanent false MITM until --clear.
+func TestSaveHostKeyResetsStalePinColumns(t *testing.T) {
+	s := newTestStore(t)
+	keyA, _ := pinHostKey(t)
+	keyB, _ := pinHostKey(t)
+
+	seedFingerprintPin(t, s, "stale", 22, "SHA256:stale-fingerprint")
+	if err := s.SaveHostKey("stale", 22, keyB); err != nil {
+		t.Fatal(err)
+	}
+	var blob []byte
+	var format, source, device string
+	if err := s.db.QueryRow(
+		`SELECT key_blob, pin_format, pin_source, pin_device FROM host_keys WHERE host_port='stale:22'`).Scan(&blob, &format, &source, &device); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(blob, keyB) {
+		t.Fatalf("blob not replaced by the TOFU overwrite: got %v want %v", blob, keyB)
+	}
+	if format != PinFormatBlob || source != PinSourceTofu || device != "" {
+		t.Fatalf("stale pin columns survived the TOFU overwrite: %q/%q/%q, want blob/tofu/empty", format, source, device)
+	}
+	// the failure mode itself: the reset anchor judges as a blob anchor again
+	if p := mustLoadPin(t, s, "stale", 22); p == nil || p.Format != PinFormatBlob || !p.Matches(keyB) || p.Matches(keyA) {
+		t.Fatalf("anchor after TOFU overwrite judges wrongly: %+v", p)
+	}
+}
+
 // oldShapeHostKeys is the v0.14 host_keys shape: no pin metadata columns.
 const oldShapeHostKeys = `
 CREATE TABLE host_keys (
