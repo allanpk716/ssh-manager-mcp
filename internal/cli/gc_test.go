@@ -126,7 +126,7 @@ func TestGC_ApplyDeletesOrphansOnly(t *testing.T) {
 	}
 	// host_keys row untouched.
 	hk, err := st.GetHostKey("192.0.2.10", 22)
-	if err != nil || hk == nil || string(hk) != "hostkey-blob" {
+	if err != nil || hk == nil || string(hk.Blob) != "hostkey-blob" {
 		t.Fatalf("host_keys row must survive gc: %v %v", hk, err)
 	}
 	// cache_tokens row untouched.

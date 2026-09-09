@@ -27,18 +27,18 @@ func TestHostKeySaveGetRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = s.GetHostKey("gpu.example", 22)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || got == nil || got.Format != PinFormatBlob {
+		t.Fatalf("got %+v, %v", got, err)
 	}
-	if !bytes.Equal(got, blob) {
-		t.Fatalf("got %v want %v", got, blob)
+	if !bytes.Equal(got.Blob, blob) {
+		t.Fatalf("got %v want %v", got.Blob, blob)
 	}
 	// upsert: saving again replaces
 	if err := s.SaveHostKey("gpu.example", 22, []byte{9, 9}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.GetHostKey("gpu.example", 22)
-	if !bytes.Equal(got, []byte{9, 9}) {
+	if got == nil || !bytes.Equal(got.Blob, []byte{9, 9}) {
 		t.Fatal("upsert did not replace")
 	}
 }
@@ -82,7 +82,7 @@ func TestHostKeysKeyedByHostPort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got1, hk1.Marshal()) || !bytes.Equal(got2, hk2.Marshal()) {
+	if got1 == nil || got2 == nil || !bytes.Equal(got1.Blob, hk1.Marshal()) || !bytes.Equal(got2.Blob, hk2.Marshal()) {
 		t.Fatal("host keys clobbered across ports — keying is not host:port")
 	}
 }

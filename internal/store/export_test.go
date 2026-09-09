@@ -123,8 +123,8 @@ func TestImportSnapshot_RoundTrip_CrossMasterKey(t *testing.T) {
 	}
 	// host keys
 	hk, _ := b.GetHostKey("192.0.2.10", 22)
-	if !bytes.Equal(hk, []byte("hk-blob")) {
-		t.Fatalf("host key not restored: %v", hk)
+	if hk == nil || !bytes.Equal(hk.Blob, []byte("hk-blob")) {
+		t.Fatalf("host key not restored: %+v", hk)
 	}
 	// THE PROOF — original plaintext token from A still validates on B (hash preserved verbatim)
 	pj, err := b.VerifyToken(token)

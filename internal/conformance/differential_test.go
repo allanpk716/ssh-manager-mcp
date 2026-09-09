@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"ssh-manager-mcp/internal/sshbroker"
+	"ssh-manager-mcp/internal/store"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -19,17 +20,17 @@ import (
 // fakeHostKeyStore is a minimal sshbroker.HostKeyStore keyed by "host:port",
 // used to drive the broker's TOFU callback without a real store. Mirrors the
 // one in internal/sshbroker/hostkey_test.go.
-type fakeHostKeyStore struct{ keys map[string][]byte }
+type fakeHostKeyStore struct{ pins map[string]*store.Pin }
 
-func (f *fakeHostKeyStore) GetHostKey(host string, port int) ([]byte, error) {
-	return f.keys[fmt.Sprintf("%s:%d", host, port)], nil
+func (f *fakeHostKeyStore) GetHostKey(host string, port int) (*store.Pin, error) {
+	return f.pins[fmt.Sprintf("%s:%d", host, port)], nil
 }
 
 func (f *fakeHostKeyStore) SaveHostKey(host string, port int, k []byte) error {
-	if f.keys == nil {
-		f.keys = map[string][]byte{}
+	if f.pins == nil {
+		f.pins = map[string]*store.Pin{}
 	}
-	f.keys[fmt.Sprintf("%s:%d", host, port)] = k
+	f.pins[fmt.Sprintf("%s:%d", host, port)] = &store.Pin{Blob: k, Format: store.PinFormatBlob}
 	return nil
 }
 
@@ -120,8 +121,8 @@ func TestDifferentialHostKeyRejection(t *testing.T) {
 	}
 
 	// Broker: pre-trust keyA under hostB:portB, then connect to B → mismatch.
-	st := &fakeHostKeyStore{keys: map[string][]byte{
-		fmt.Sprintf("%s:%d", hostB, portB): keyA.Marshal(),
+	st := &fakeHostKeyStore{pins: map[string]*store.Pin{
+		fmt.Sprintf("%s:%d", hostB, portB): {Blob: keyA.Marshal(), Format: store.PinFormatBlob},
 	}}
 	cb, _ := sshbroker.HostKeyTOFU(st, hostB, portB)
 	_, err := sshbroker.Connect(context.Background(), hostB, portB, "sshuser", mustPrivAuth(t, privPath, ""), cb)

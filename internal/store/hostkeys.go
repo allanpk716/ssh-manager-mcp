@@ -76,17 +76,11 @@ func loadPin(q dbtx, hostPort string) (*Pin, error) {
 	return &p, nil
 }
 
-// GetHostKey returns the stored marshaled host key for host:port, or (nil, nil) if absent.
-//
-// Legacy byte-only view: a fingerprint-format anchor surfaces its fingerprint
-// STRING bytes here, so a pre-Plan-48 consumer byte-compares and rejects — the
-// documented mixed-version degradation (Plan 48 §5), not a bug.
-func (s *Store) GetHostKey(host string, port int) ([]byte, error) {
-	p, err := loadPin(s.db, hostKeyID(host, port))
-	if err != nil || p == nil {
-		return nil, err
-	}
-	return p.Blob, nil
+// GetHostKey returns the stored anchor for host:port, or (nil, nil) if absent.
+// The anchor is the full Pin (value bytes + format); callers judge a presented
+// key with Pin.Matches — the system's single equality definition (Plan 48 §5).
+func (s *Store) GetHostKey(host string, port int) (*Pin, error) {
+	return loadPin(s.db, hostKeyID(host, port))
 }
 
 // SaveHostKey records (trusts on first use) a marshaled host key for host:port.
