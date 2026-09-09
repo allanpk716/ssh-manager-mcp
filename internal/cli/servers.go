@@ -14,7 +14,7 @@ import (
 
 func newServersCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "servers", Short: "Manage SSH target servers"}
-	cmd.AddCommand(serversAddCmd(), serversListCmd(), serversRmCmd(), serversEditCmd(), serversImportCmd())
+	cmd.AddCommand(serversAddCmd(), serversListCmd(), serversRmCmd(), serversEditCmd(), serversImportCmd(), serversPinHostkeyCmd())
 	return cmd
 }
 

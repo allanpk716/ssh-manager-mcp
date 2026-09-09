@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"golang.org/x/crypto/ssh"
@@ -25,11 +26,13 @@ const (
 )
 
 // Pin sources (host_keys.pin_source). 'tofu' is the column DEFAULT — every
-// pre-Plan-48 anchor is an automatic first-trust blob. ('manual' — the owner
-// out-of-band command — lands in a later task of the same plan.)
+// pre-Plan-48 anchor is an automatic first-trust blob. 'forward' is the
+// device-forwarded path (/pin-hostkey); 'manual' is the owner out-of-band
+// command (servers pin-hostkey --fingerprint/--from-keyscan, Plan 48 §3).
 const (
 	PinSourceTofu    = "tofu"
 	PinSourceForward = "forward"
+	PinSourceManual  = "manual"
 )
 
 // Pin is a stored host-key anchor: its value bytes and format (Plan 48 §5).
@@ -187,4 +190,122 @@ func (s *Store) ApplyForwardedHostKey(host string, port int, marshaledKey []byte
 		return nil // equal → pass; deferred Rollback discards the no-op tx
 	}
 	return tx.Commit()
+}
+
+// ErrPinExists is UpsertManualPin's refusal outcome (Plan 48 §3): the
+// host:port already carries a pin and --force was not passed. The *PinMeta
+// returned alongside IS the incumbent — the CLI shows its fingerprint and
+// source and writes nothing.
+var ErrPinExists = errors.New("pin already present")
+
+// PinMeta is an anchor plus its provenance columns (Plan 48 §5): everything
+// the owner-facing surfaces — display, --list, refusal hints, audit rows —
+// need beyond the compared value carried by the embedded Pin.
+type PinMeta struct {
+	Pin
+	Source    string
+	Device    string
+	CreatedAt int64
+}
+
+// loadPinMeta is loadPin's provenance-carrying twin (same conventions: works
+// on the dbtx surface, (nil, nil) when the host:port is unpinned).
+func loadPinMeta(q dbtx, hostPort string) (*PinMeta, error) {
+	var m PinMeta
+	err := q.QueryRow(
+		`SELECT key_blob, pin_format, pin_source, pin_device, created_at FROM host_keys WHERE host_port=?`,
+		hostPort).Scan(&m.Blob, &m.Format, &m.Source, &m.Device, &m.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// UpsertManualPin lands an owner out-of-band anchor (servers pin-hostkey
+// --fingerprint/--from-keyscan, Plan 48 §3) — the manual twin of
+// InsertForwardedPin, same single-transaction family. The old anchor is read
+// INSIDE the transaction (rev3: serve and this CLI share the vault across
+// processes — a read-modify-write outside the tx would let a concurrent
+// --force/--clear interleave make the audit row's "was fp=X" lie):
+//   - free slot → INSERT (pin_source=manual, caller's format) + the caller's
+//     audit row, committed atomically;
+//   - occupied and force → the incumbent is REPLACED (value, format and source
+//     all switch to this manual call — --force is the ONLY override channel)
+//     and audited via auditFor(incumbent);
+//   - occupied and !force → refusal: nothing written, no audit row, tx rolled
+//     back, (incumbent, ErrPinExists) returned for the CLI's fp+source hint.
+//
+// auditFor runs INSIDE the transaction precisely so its command text can carry
+// the in-tx read. Returns the replaced incumbent (nil = the slot was free).
+func (s *Store) UpsertManualPin(host string, port int, blob []byte, format string, force bool, auditFor func(old *PinMeta) AuditRow) (*PinMeta, error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
+	if format != PinFormatBlob && format != PinFormatFingerprint {
+		return nil, fmt.Errorf("pin format must be %q or %q, got %q", PinFormatBlob, PinFormatFingerprint, format)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() // no-op after Commit; IS the rollback on the refusal path
+	old, err := loadPinMeta(tx, hostKeyID(host, port))
+	if err != nil {
+		return nil, err
+	}
+	if old != nil && !force {
+		return old, ErrPinExists // deferred Rollback: the refusal writes nothing
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO host_keys (host_port, key_blob, created_at, pin_format, pin_source, pin_device)
+		 VALUES (?,?,?,?,?,?)
+		 ON CONFLICT(host_port) DO UPDATE SET
+		   key_blob=excluded.key_blob, created_at=excluded.created_at,
+		   pin_format=excluded.pin_format, pin_source=excluded.pin_source,
+		   pin_device=excluded.pin_device`,
+		hostKeyID(host, port), blob, now(), format, PinSourceManual, ""); err != nil {
+		return nil, err
+	}
+	if err := writeAuditTx(tx, auditFor(old)); err != nil {
+		return nil, err // deferred Rollback: the pin does not persist either
+	}
+	return old, tx.Commit()
+}
+
+// ClearPin removes the anchor at host:port — the §3 poison-pin primitive, one
+// transaction like the rest of the pin family:
+//   - present → the incumbent is read IN the tx, DELETEd, and audited via
+//     auditFor(incumbent) atomically: the audit row's fingerprint and source
+//     can never diverge from what was actually deleted;
+//   - absent → idempotent success with NO audit row (rev3: a fabricated
+//     "was fp=…" line would pollute the poisoning-forensics surface);
+//     returns (nil, nil).
+//
+// Returns the deleted incumbent (nil = there was nothing to clear).
+func (s *Store) ClearPin(host string, port int, auditFor func(old PinMeta) AuditRow) (*PinMeta, error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() // no-op after Commit; IS the rollback on the absent path
+	old, err := loadPinMeta(tx, hostKeyID(host, port))
+	if err != nil {
+		return nil, err
+	}
+	if old == nil {
+		return nil, nil // nothing to clear: no write, no audit (§3 idempotence)
+	}
+	if _, err := tx.Exec(`DELETE FROM host_keys WHERE host_port=?`, hostKeyID(host, port)); err != nil {
+		return nil, err
+	}
+	if err := writeAuditTx(tx, auditFor(*old)); err != nil {
+		return nil, err // deferred Rollback: the deletion does not persist either
+	}
+	return old, tx.Commit()
 }
