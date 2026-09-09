@@ -372,7 +372,7 @@ sshmgr serve uninstall     # 停 service + 注销（不删 vault 数据）
 
 ## 自检：`doctor`（无副作用）
 
-本机状态可疑时先跑 `sshmgr doctor`：8 项只读检查——`SSHMGR_*` 环境覆盖（只报名字不报值）、role.json 状态、store.db（存在 + 大小）、master.key（32 字节长度；Unix 另查权限位）、**vault-open 解密探针**（把库拷进临时目录真解密一遍，原件零写入）、serve 证书指纹（只读孪生 API，绝不生成）、serve 服务状态、离线缓存 cache.bin / DEK——各出一行 PASS / WARN / FAIL + 修复提示。退出码（脚本可依赖）：`0` = 无 FAIL（允许 WARN），`1` = 至少一个 FAIL。全程零写入、零网络调用、不打印任何秘密值；serve 的 HTTP 存活探测（绿/黄/红）是二期项，当前只做本机自检。
+本机状态可疑时先跑 `sshmgr doctor`：8 项本机自检——`SSHMGR_*` 环境覆盖（只报名字不报值）、role.json 状态、store.db（存在 + 大小）、master.key（32 字节长度；Unix 另查权限位）、**vault-open 解密探针**（把库拷进临时目录真解密一遍；拷贝前先经免密钥裸 SQLite 连接对生产库做 WAL checkpoint，把未落盘帧折叠进 store.db——这是唯一的落盘点，逻辑内容零变更，且从不连 -wal/-shm 一起拷）、serve 证书指纹（只读孪生 API，绝不生成）、serve 服务状态、离线缓存 cache.bin / DEK——各出一行 PASS / WARN / FAIL + 修复提示。退出码（脚本可依赖）：`0` = 无 FAIL（允许 WARN），`1` = 至少一个 FAIL。除上述 checkpoint 外零写入、零网络调用、不打印任何秘密值；serve 的 HTTP 存活探测（绿/黄/红）是二期项，当前只做本机自检。
 
 ---
 

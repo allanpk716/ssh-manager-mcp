@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -20,11 +21,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// `doctor` is a side-effect-free local self-check (Plan 27): it READS local
-// state (env seams, role.json, paths, key files) and prints a PASS/WARN/FAIL
-// report with remediation hints. It never writes the vault/certs/cache, makes
-// no network calls, and never prints secret VALUES (paths, sizes, counts,
-// ages, and public fingerprints only).
+// `doctor` is a local self-check (Plan 27): it READS local state (env seams,
+// role.json, paths, key files) and prints a PASS/WARN/FAIL report with
+// remediation hints. It never touches certs/cache, makes no network calls, and
+// never prints secret VALUES (paths, sizes, counts, ages, and public
+// fingerprints only). One deliberate, narrowly-scoped write exists (Plan 48
+// rider 1): the vault-open probe first WAL-checkpoints the production store.db
+// through a bare keyless connection (checkpointWALBare) so its byte-copy is
+// complete — no key material read, no schema/ACL/row change, store.db never
+// created.
 
 // checkStatus is one check row's verdict. INFO = deliberate skip (e.g. no
 // vault on a client machine), not a lesser WARN.
@@ -52,8 +57,9 @@ type doctorCheck struct {
 var errDoctorFindings = errors.New("doctor: FAIL findings detected")
 
 // doctorCheckFuncs is the checks table — T4 (serve cert/service, client
-// cache) appends entries here. Every check is self-contained and
-// side-effect-free; order only affects display.
+// cache) appends entries here. Every check is self-contained (the single
+// deliberate write is checkVaultOpen's pre-copy WAL checkpoint — Plan 48
+// rider 1, see checkpointWALBare); order only affects display.
 var doctorCheckFuncs = []func() []doctorCheck{
 	checkEnv,
 	checkRole,
@@ -320,13 +326,15 @@ func checkVaultKey() []doctorCheck {
 // on the path it is given) mean the real decrypt must never run against the
 // production files — hence the scratch copy.
 //
-// The copy is store.db alone, WITHOUT the WAL sidecars (-wal/-shm): a
-// concurrent writer's un-checkpointed frames are simply absent, which reads
-// as an older consistent snapshot — in realistic write patterns an
-// undercount, not a false verdict; a full re-seal through a long-lived
-// un-checkpointed broker connection could transiently mis-verdict. (Copying
-// -wal mid-write would risk a torn copy, i.e. exactly the false verdict this
-// diagnostic cannot afford.)
+// The copy is store.db alone, WITHOUT the WAL sidecars (-wal/-shm) — and it
+// must stay that way: sidecars copied mid-write risk a torn copy, i.e. exactly
+// the false verdict this diagnostic cannot afford. But a sidecar-less copy
+// misses un-checkpointed frames (reads as an older consistent snapshot — an
+// undercount; feedback #5: doctor said 11, `servers ls` said 12). So before
+// this copy runs, checkVaultOpen folds the production store's WAL frames into
+// store.db via checkpointStoreWAL (Plan 48 rider 1); when that cannot run
+// (busy broker, read-only store) the probe degrades to exactly the
+// older-snapshot read described above and the row says so in an INFO note.
 func probeVaultDecrypt(storePath, keyPath string) (servers, creds int, err error) {
 	key, err := os.ReadFile(keyPath)
 	if err != nil {
@@ -369,12 +377,63 @@ func probeVaultDecrypt(storePath, keyPath string) (servers, creds int, err error
 	return len(snap.Servers), len(snap.Credentials), nil
 }
 
+// checkpointWALBare folds the store's un-checkpointed WAL frames into store.db
+// so the copy-probe's byte-copy is self-contained (Plan 48 rider 1, spec rev3
+// §9.1; feedback #5 — a long-lived broker connection leaves committed rows in
+// the -wal sidecar, and a sidecar-less copy read an older snapshot).
+//
+// Deliberately NOT store.Open: on the production path it creates store.db,
+// runs the migration, and rewrites ACLs (see checkVaultStore) — a diagnostic
+// must not. A bare database/sql connection needs no key (the vault encrypts
+// credential VALUES, not the SQLite file) and runs exactly one PRAGMA. The
+// open must be read-write: wal_checkpoint(TRUNCATE) writes folded pages back
+// into the main file and truncates the -wal to zero. journal_mode is
+// intentionally NOT set here — the production store is already WAL, and the
+// pragma would silently CONVERT a non-WAL store. The -wal/-shm sidecars are
+// never read or copied (torn-copy risk, see probeVaultDecrypt).
+//
+// Best-effort with visibility: the caller renders a failure as an INFO note
+// and the probe degrades to the pre-rider older-snapshot read (undercount at
+// worst, never a false verdict). No -wal sidecar (clean close) → nothing to
+// fold, no-op. The busy_timeout matches store.Open so a transiently locked
+// broker store waits instead of failing fast.
+func checkpointWALBare(storePath string) error {
+	sidecar := storePath + "-wal"
+	if _, err := os.Stat(sidecar); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil // no WAL sidecar — no un-checkpointed frames to fold in
+		}
+		return fmt.Errorf("stat %s: %w", sidecar, err)
+	}
+	db, err := sql.Open("sqlite", storePath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkpointStoreWAL is the seam over checkpointWALBare (inspectFileACL
+// precedent): tests stub it to drive the checkpoint-failure branch, which
+// cannot be seeded portably (a real TRUNCATE-checkpoint busy needs a racing
+// reader holding the WAL open).
+var checkpointStoreWAL = checkpointWALBare
+
 // checkVaultOpen is the FINDING A detector: the one doctor row that PROVES
 // the vault decrypts, not merely that it structurally exists. Skips (INFO)
 // when either input is absent or the key fails the structural length check —
 // the T2 store/masterkey rows own reporting those — because a probe on an
 // empty vault under a wrong-length key derives a different DEK via HKDF but
 // has nothing to decrypt, i.e. it would report a misleading PASS.
+//
+// Plan 48 rider 1: before probing, the production store's un-checkpointed WAL
+// frames are folded into store.db (checkpointStoreWAL) so the byte-copy below
+// counts every committed row. That fold-in is the row's single deliberate
+// write; a failure is best-effort — an INFO note, then the probe reads the
+// older snapshot as before the rider.
 func checkVaultOpen() []doctorCheck {
 	c := doctorCheck{Name: "vault-open"}
 	storeP, serr := paths.StorePath()
@@ -404,6 +463,18 @@ func checkVaultOpen() []doctorCheck {
 		c.Status = statusInfo
 		c.Detail = "skipped — master.key not a valid 32-byte key (see the masterkey row)"
 	default:
+		var rows []doctorCheck
+		if cerr := checkpointStoreWAL(storeP); cerr != nil {
+			// Visibility, not a verdict: a busy broker or a read-only store
+			// leaves the fold-in undone and the probe reads the same
+			// older-snapshot it read before the rider — undercount at worst,
+			// never a false PASS/FAIL — so the note is INFO.
+			rows = append(rows, doctorCheck{
+				Name:   "vault-open",
+				Status: statusInfo,
+				Detail: fmt.Sprintf("pre-copy WAL checkpoint skipped (%v) — copy-probe counts may reflect an older snapshot", cerr),
+			})
+		}
 		servers, creds, perr := probeVaultDecrypt(storeP, keyP)
 		if perr != nil {
 			c.Status = statusFail
@@ -413,6 +484,8 @@ func checkVaultOpen() []doctorCheck {
 			c.Status = statusPass
 			c.Detail = fmt.Sprintf("copy-probe decrypted %d servers / %d credentials", servers, creds)
 		}
+		rows = append(rows, c)
+		return rows
 	}
 	return []doctorCheck{c}
 }
@@ -681,11 +754,14 @@ func aclLooseFix(rep store.FileACLReport) string {
 func newDoctorCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "doctor",
-		Short: "Side-effect-free local self-check with PASS/WARN/FAIL findings",
+		Short: "Local self-check with PASS/WARN/FAIL findings",
 		Long: `Run a local self-check and print a PASS/WARN/FAIL report with remediation
-hints. Checks are read-only: doctor never writes the vault, certificates, or
-client cache, makes no network calls, and never prints secret values —
-environment overrides are reported by name only.
+hints. Checks are read-only with one narrow carve-out: the vault decrypt probe
+first WAL-checkpoints the production store.db (bare, keyless connection — no
+key read, no schema or ACL change) so its byte-copy counts every committed row.
+Doctor never creates the vault, never touches certificates or the client
+cache, makes no network calls, and never prints secret values — environment
+overrides are reported by name only.
 
 Exit codes (stable, for scripts): 0 = no FAIL findings (warnings allowed),
 1 = at least one FAIL finding.`,
