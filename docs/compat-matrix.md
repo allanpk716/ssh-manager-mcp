@@ -10,6 +10,8 @@
 
 <!-- Plan 47 (relay_file) 已随 v0.14.0 发版(2026-09-07)——占位注释已按约回写删除;已验证组合表 v0.14.0 行已登记(下)。 -->
 
+<!-- Plan 48（锚定转发 POST /pin-hostkey + 带外锚定 servers pin-hostkey 六形态 + doctor WAL checkpoint）将随 v0.15.0 发版——占位注释（未发版，历史惯例），发版双端验证后按约回写删除并登记已验证组合行。混布备忘（发版时入表/文档）：新 client + 旧 broker = 转发 404（文案指引 owner 升级 broker 后重试）；旧 client（<v0.15.0）+ 新 broker = 指纹锚被旧代码按密钥字节解读 →「possible MITM」假警报，升级即解（见 multi-machine.md「混布窗口」节）。新新组合 = 全功能。 -->
+
 | client 版本 | serve 版本 | 在线（HTTP MCP） | 离线（cache pull / mcp --cache） | 验证日期 |
 |---|---|---|---|---|
 | v0.14.0 | v0.14.0 | ✅（NUC10 `sshmgr update --yes` GitHub 直连 0.13.3→0.14.0（SHA256 命中 `c065426a…` + staged 自检 + 事务替换 + serve 重启 HEALTHY：service Running / http auth working / vault ok）；**升级窗口跨版本方向实测**：旧 client 桥↔新 serve 全程 exec/部署操作正常；本机 client 同步 0.14.0（client 姿态无服务，下个 agent 会话生效）。relay_file 新工具面待桥重连后由 agent 侧确认） | ✅ 面零变更（Plan 47 纯增量：relay_file 走 Plan 32 任务表与既有 gate/TOFU/审计管道，cache/clientops 零改动——离线行为同 v0.13.3 组合，未另测） | 2026-09-07 |

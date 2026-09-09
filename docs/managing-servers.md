@@ -313,12 +313,31 @@ sshmgr profiles add prod    && sshmgr profiles grant prod prod-web prod-db
 
 ## Host key 与 TOFU
 
-broker 连一台新机器时采用 **TOFU（trust on first use）**：第一次连接自动记下对方的 host key（存进保险柜的 `host_keys` 表），之后再次连接会核对——**对不上就拒绝**（防中间人攻击）。所以：
+broker 连一台新机器时采用 **TOFU（trust on first use）**：第一次连接自动记下对方的 host key（存进保险柜的 `host_keys` 表，锚的归属键是「主机:端口」），之后再次连接会核对——**对不上就拒绝**，拒绝文案同时带「呈现的指纹」与「已锚的指纹」，方便人工核对是换钥还是被攻击。所以：
 
 - 第一次连一台机器：自动信任并记录，无需你操作。
-- 那台机器**重装系统 / 换了 host key**：再连会被拒（报 host key 不匹配）。你需要清掉旧记录后重连。处理方式：
-  - 用 `ssh-keygen -R <host>` 不适用于本项目（broker 用自己的存储）。目前最直接的办法是连同一 `host:port` 的机器确实换了，重新建立信任——这通常意味着清掉库里那条 `host_keys` 记录。
+- 那台机器**重装系统 / 换了 host key**：再连会被拒（报 host key 不匹配，双指纹都在文案里）。处理方式：
+  - 用 `ssh-keygen -R <host>` 不适用于本项目（broker 用自己的存储）。核对双指纹、确认对方确实换了钥后，清掉旧锚重走首次信任：
+    ```bash
+    sshmgr servers pin-hostkey <名>            # 先看现存锚（指纹/来源/登记时间）
+    sshmgr servers pin-hostkey <名> --clear    # 清除（幂等；受影响条目清单随输出与审计给出）
+    ```
   - 日常你很少会遇到，除非重装了服务器的 SSH。
+
+### 锚的登记 / 巡检 / 清除：`servers pin-hostkey`
+
+锚不止「自动首次信任」一个入口：缓存客户端可达而 broker 不可达的目标，由工作机**锚定转发**自动落锚（带审计）；owner 也可**带外锚定**手工登记（`--fingerprint` / `--from-keyscan`）。六个形态一览与完整说明（含清毒完整时序、锚残留、混布窗口假警报）见 [multi-machine.md「主机密钥锚定」](./multi-machine.md#主机密钥锚定锚定转发与带外锚定plan-48)：
+
+```bash
+sshmgr servers pin-hostkey <名>                          # 显示：指纹/格式/来源/设备/登记时间
+sshmgr servers pin-hostkey --list                        # 全量清单；无条目指向的锚标 [orphan]
+sshmgr servers pin-hostkey <名> --fingerprint SHA256:…   # 带外锚定（ssh-keygen -lf 规范形态）
+sshmgr servers pin-hostkey <名> --from-keyscan <文件|->  # 从 known_hosts / ssh-keyscan 输出锚定
+sshmgr servers pin-hostkey <名> --clear                  # 清除该地址的锚（幂等，落审计）
+sshmgr servers pin-hostkey --clear --hostport <host>:<port>   # 按地址直达清除（孤儿锚唯一通道）
+```
+
+注意两点：① 覆盖既有锚**只有** `--force` 一条通道；② 删除条目或改条目地址后，锚**原地残留**（归属键是地址不是条目）——`--list` 里标 `[orphan]` 的行用 `--clear --hostport` 清除；同地址重新录入条目会静默继承旧锚。
 
 ---
 

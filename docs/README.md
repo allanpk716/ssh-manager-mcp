@@ -28,7 +28,7 @@
 | [managing-servers.md](./managing-servers.md) | **新增 / 编辑 / 维护 / 删除服务器**：`servers add` / `edit` / `ls` / `rm`、`import` 批量导入、`gc` 的全部用法，含换密钥、sudo、tags、备注（description）。 |
 | [agent-access.md](./agent-access.md) | **授权 AI agent**：project token 怎么生成、`.mcp.json` 怎么配进 Claude Code / Cursor、token 轮换 / 暂停 / 吊销的断连语义、多 agent 隔离、紧急处置。 |
 | [scenarios.md](./scenarios.md) | **应用场景与示例**：GPU 巡检装包、读 root-only 日志、上传部署、端口转发连数据库、拉日志排查、多环境隔离、token 泄露处置、owner 自己直连。 |
-| [multi-machine.md](./multi-machine.md) | **多机桥姿态 + 离线只读缓存（Plan 12）+ 配对入网（Plan 42）**：多台机器共用一份服务器清单——一台 VLAN 服务器常驻权威 vault，工作机 `sshmgr pair` 一条龙入网（UDP 发现 → SAS 批准 → 凭据下发）、agent 用本地只读缓存干活（只读 + 执行）。架构 / 配置 / 多实例 / runbook。 |
+| [multi-machine.md](./multi-machine.md) | **多机桥姿态 + 离线只读缓存（Plan 12）+ 配对入网（Plan 42）+ 主机密钥锚定（Plan 48）**：多台机器共用一份服务器清单——一台 VLAN 服务器常驻权威 vault，工作机 `sshmgr pair` 一条龙入网（UDP 发现 → SAS 批准 → 凭据下发）、agent 用本地只读缓存干活（只读 + 执行）；「仅缓存客户端可达」目标的首次信任走锚定转发 / 带外锚定。架构 / 配置 / 多实例 / runbook。 |
 | [broker-host-agent.md](./broker-host-agent.md) | **在 broker（serve）主机上也跑 agent**：零距离 client 走桥（pair 入网 / 手工路径）+ 应急附录（stdio 直开 vault，不推荐）。 |
 | [backup-restore.md](./backup-restore.md) | **备份与迁移（export / import）**：把整个 vault 导出成口令加密的便携文件（跨机、可恢复）——备份 / 迁移 / 灾难恢复；安全模型（KeePass 式）、限制、与复制 store.db 的对比。 |
 | [tui-single-machine.md](./tui-single-machine.md) | **单机 TUI 教程**（全键盘点选，不想记命令）：首跑向导走查、页签参考、典型任务与排错。 |
