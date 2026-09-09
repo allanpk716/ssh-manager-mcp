@@ -44,7 +44,7 @@ import (
 // 超限 is the all-running 32-cap refusal). projectID attributes the audit row
 // to the agent's project. mgr must be the process's TaskManager (per-Server
 // instance; the tool closure in server.go binds NewServerFromSource's).
-func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeoutSec int, mgr *TaskManager) (out BgStartOutput, err error) {
+func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeoutSec int, mgr *TaskManager, hk ...sshbroker.HostKeyStore) (out BgStartOutput, err error) {
 	var status string
 	var startOwned bool // Start 已自落 start 行的分支 (connect 三态/ok)——本层不重复写
 	start := time.Now()
@@ -94,7 +94,7 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
 	if herr != nil {
 		status = "error"
 		err = herr

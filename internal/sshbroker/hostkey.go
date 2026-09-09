@@ -17,6 +17,20 @@ import (
 // presented vs pinned — and nothing else about the keys.
 var ErrHostKeyMismatch = errors.New("host key mismatch: possible MITM, connection rejected")
 
+// PresentedHostKeyError marks a SaveHostKey-path error whose Error() text is
+// ALREADY the final user-facing presentation — the Plan 48 §2.1/§4 pin-forward
+// branch texts, asserted byte-for-byte by the clientops and cache-wiring tests.
+// HostKeyTOFU must not prepend its "save host key: " wrapper to these: any
+// added prefix breaks the verbatim contract. The forwarding HostKeyStore
+// wrapper (mcpserver) raises its failures through this type; errors.Is / As
+// keep working via Unwrap (e.g. ErrPinForwardEqual, store.ErrReadOnly).
+type PresentedHostKeyError struct {
+	Err error
+}
+
+func (e *PresentedHostKeyError) Error() string { return e.Err.Error() }
+func (e *PresentedHostKeyError) Unwrap() error { return e.Err }
+
 // HostKeyStore is the subset of *store.Store that HostKeyTOFU needs (also faked in tests).
 type HostKeyStore interface {
 	GetHostKey(host string, port int) (*store.Pin, error)
@@ -37,6 +51,13 @@ func HostKeyTOFU(st HostKeyStore, host string, port int) (ssh.HostKeyCallback, e
 		}
 		if pin == nil {
 			if err := st.SaveHostKey(host, port, marshaled); err != nil {
+				// Already-presented branch text (Plan 48 §2.1/§4) — return it
+				// verbatim; the "save host key: " wrapper is for raw store
+				// failures only (read-only ErrReadOnly keeps its asserted form).
+				var pe *PresentedHostKeyError
+				if errors.As(err, &pe) {
+					return err
+				}
 				return fmt.Errorf("save host key: %w", err)
 			}
 			return nil // trust on first use

@@ -102,7 +102,7 @@ func TestResolveRelayParallel(t *testing.T) {
 func TestNewServerFromSource_RelayChunkFailClosed(t *testing.T) {
 	st := newStore(t)
 	t.Setenv("SSHMGR_TRANSFER_CHUNK", "1024") // below the 16 MiB floor → refuse
-	srv, mgr, tasks, err := NewServerFromSource(func() *store.Store { return st }, "p", "proj-relay-chunk")
+	srv, mgr, tasks, err := NewServerFromSource(func() *store.Store { return st }, "p", "proj-relay-chunk", nil)
 	if err == nil {
 		t.Fatalf("invalid SSHMGR_TRANSFER_CHUNK: want construction error, got srv=%v", srv != nil)
 	}
@@ -121,7 +121,7 @@ func TestNewServerFromSource_RelayChunkFailClosed(t *testing.T) {
 func TestNewServerFromSource_RelayParallelFailClosed(t *testing.T) {
 	st := newStore(t)
 	t.Setenv("SSHMGR_TRANSFER_PARALLEL", "2")
-	srv, mgr, tasks, err := NewServerFromSource(func() *store.Store { return st }, "p", "proj-relay-par")
+	srv, mgr, tasks, err := NewServerFromSource(func() *store.Store { return st }, "p", "proj-relay-par", nil)
 	if err == nil {
 		t.Fatalf("SSHMGR_TRANSFER_PARALLEL=2: want construction error, got srv=%v", srv != nil)
 	}
@@ -141,7 +141,7 @@ func TestNewServerFromSource_RelayEnvLegalAccepts(t *testing.T) {
 	st := newStore(t)
 	t.Setenv("SSHMGR_TRANSFER_CHUNK", "33554432") // 32 MiB, inside [16 MiB, 1 GiB]
 	t.Setenv("SSHMGR_TRANSFER_PARALLEL", "1")
-	srv, mgr, tasks, err := NewServerFromSource(func() *store.Store { return st }, "p", "proj-relay-ok")
+	srv, mgr, tasks, err := NewServerFromSource(func() *store.Store { return st }, "p", "proj-relay-ok", nil)
 	if err != nil {
 		t.Fatalf("legal relay env must construct: %v", err)
 	}

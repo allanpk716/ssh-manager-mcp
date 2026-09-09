@@ -51,7 +51,7 @@ func newHolder(t *testing.T, snap *store.Snapshot, token, profileID string,
 	}
 	t.Cleanup(func() { af.Close() })
 	h := &cacheStoreHolder{reload: reload, token: token, auditFile: af, profileID: profileID}
-	st, _, tmp, err := hydrateCacheStore(token, snap, af)
+	st, _, tmp, err := hydrateCacheStore(token, snap, af, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestHolder_ProductionConstruction_SetsProfileIDAndSwaps(t *testing.T) {
 			return grafted, true, nil
 		}
 		return nil, false, nil
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("newCacheStoreHolderFromSnapshot: %v", err)
 	}

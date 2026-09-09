@@ -263,6 +263,28 @@ type cacheMeta struct {
 	DeviceName string `json:"device_name"`
 }
 
+// CacheDeviceNameFor returns the device-code name recorded in the given
+// instance's cache.meta ("" = the default instance; "" also when the meta is
+// absent, unreadable, or predates Plan 40). Plan 48 §2.3: cli stamps this name
+// onto locally applied forwarded pins (host_keys.pin_device) — diagnostic
+// metadata for the owner's detection surface, never load-bearing, so every
+// failure degrades to "" instead of an error.
+func CacheDeviceNameFor(instance string) string {
+	_, _, metaPath, _, err := CachePathsFor(instance)
+	if err != nil {
+		return ""
+	}
+	blob, err := os.ReadFile(metaPath)
+	if err != nil {
+		return ""
+	}
+	var m cacheMeta
+	if json.Unmarshal(blob, &m) != nil {
+		return ""
+	}
+	return m.DeviceName
+}
+
 // CacheCred persists the pull credential (cache.auth.json) so `mcp --cache` can
 // lazy-pull without env/flags. Pin is the RESOLVED effective pin from the last
 // successful pull (env > flag > token-embedded) stored bare; the lazy path

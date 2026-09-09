@@ -52,7 +52,7 @@ const (
 // RelayForProfile 执行 relay_file 的全部廉价校验并在 ⑧ 建后台中继任务, 立即返回
 // 计划元数据 (exec_background 同款形态)。chunkBytes 来自构造期 env seam
 // (SSHMGR_TRANSFER_CHUNK, T2); 测试直传小值。执行序 ①–⑨ 逐字落 spec §2。
-func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, projectID, profileID string, in RelayInput, chunkBytes int64) (out RelayOutput, err error) {
+func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, projectID, profileID string, in RelayInput, chunkBytes int64, hk ...sshbroker.HostKeyStore) (out RelayOutput, err error) {
 	var status string
 	var startOwned bool             // start(ok) 行已由 AuditStart 闭包 (持锁段) 落笔——本层不再落
 	var auditServer = in.ToServerID // 审计行归因端点: 随 ②③④ 阶段切到当下在判的一端
@@ -199,7 +199,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 			err = aerr
 			return
 		}
-		hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+		hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
 		if herr != nil {
 			status = "error"
 			err = herr
@@ -266,7 +266,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		err = aerr
 		return
 	}
-	dstHkCb, herr := sshbroker.HostKeyTOFU(st, dstSrv.Host, dstSrv.Port)
+	dstHkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), dstSrv.Host, dstSrv.Port)
 	if herr != nil {
 		status = "error"
 		err = herr

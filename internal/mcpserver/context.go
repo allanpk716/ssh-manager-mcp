@@ -205,7 +205,7 @@ func bracketValue(line string, key byte) (string, bool) {
 // branch is audited with Action="exec-context". Statuses mirror exec_command:
 // denied / error / auth_error / no_credential / hostkey_mismatch /
 // connect_error / no_sudo (sudo=true but unconfigured) / cancelled / ok.
-func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID string, sudo bool) (out ExecContextOutput, err error) {
+func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID string, sudo bool, hk ...sshbroker.HostKeyStore) (out ExecContextOutput, err error) {
 	var status string
 	start := time.Now()
 	defer func() {
@@ -249,7 +249,7 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
 	if herr != nil {
 		status = "error"
 		err = herr

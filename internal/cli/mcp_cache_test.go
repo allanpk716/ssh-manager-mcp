@@ -2,12 +2,17 @@ package cli
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
@@ -15,6 +20,20 @@ import (
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
 )
+
+// newEd25519HostKey mints a throwaway ed25519 host key as (marshaled, public).
+func newEd25519HostKey(t *testing.T) ([]byte, ssh.PublicKey) {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := ssh.NewPublicKey(priv.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pub.Marshal(), pub
+}
 
 // TestHydrateReadOnlyStore_TokenValidatesAndReadsWork is the load-bearing hydration test:
 // build a cache.bin from a seeded snapshot, then run the hydration path (the part of
@@ -226,5 +245,94 @@ func TestScopedPull_HydratesAndIronRuleHolds(t *testing.T) {
 	_, err = mcpserver.ExecCommandForProfile(context.Background(), hyd, proj.ID, proj.ProfileID, secretID, "echo hi", false, 0)
 	if !errors.Is(err, mcpserver.ErrNotInProfile) {
 		t.Fatalf("out-of-profile exec must be denied with ErrNotInProfile, got %v", err)
+	}
+}
+
+// TestCacheForwarderWiring_MissingCredentialFailsClosedToMainMessage (Plan 48
+// T4 wiring): the --instance resolver builds the pin forwarder; an ABSENT or
+// UNREADABLE cache.auth.json must produce the no-capability forwarder whose
+// Forward renders the §4 main message — "a cache without its credential
+// cannot authenticate any forward", never a silent local fallback (§2.1 last
+// row).
+func TestCacheForwarderWiring_MissingCredentialFailsClosedToMainMessage(t *testing.T) {
+	_, pub := newEd25519HostKey(t)
+	fp := ssh.FingerprintSHA256(pub)
+	want := fmt.Sprintf("host key for 192.168.1.108:22 is unknown and cannot be pinned here (presented fingerprint: %s). Retry while the broker is reachable — the pin is then forwarded and audited automatically — or ask the owner to run: sshmgr servers pin-hostkey <name> --fingerprint %s", fp, fp)
+
+	t.Run("file absent", func(t *testing.T) {
+		t.Setenv("SSHMGR_CACHE_DIR", t.TempDir()) // empty slot: no cache.auth.json
+		fwd, err := cacheForwarderFor("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fwd.Forward("192.168.1.108", 22, pub.Marshal()); err == nil || err.Error() != want {
+			t.Fatalf("missing credential must fail closed to the main message:\n got: %v\nwant: %q", err, want)
+		}
+	})
+
+	t.Run("file corrupt", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("SSHMGR_CACHE_DIR", dir)
+		if err := os.WriteFile(filepath.Join(dir, "cache.auth.json"), []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		fwd, err := cacheForwarderFor("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fwd.Forward("192.168.1.108", 22, pub.Marshal()); err == nil || err.Error() != want {
+			t.Fatalf("unreadable credential must fail closed to the main message:\n got: %v\nwant: %q", err, want)
+		}
+	})
+}
+
+// TestCacheForwarderWiring_PlaintextInstanceRefuses (Plan 48 T4 wiring): an
+// instance whose credential has NO pin gets the §2.1 plaintext refusal,
+// verbatim, without any dial.
+func TestCacheForwarderWiring_PlaintextInstanceRefuses(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DIR", dir)
+	if err := clientops.WriteCacheCredFor("", &clientops.CacheCred{URL: "http://127.0.0.1:1", Token: "devcode-1"}); err != nil {
+		t.Fatal(err)
+	}
+	fwd, err := cacheForwarderFor("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pub := newEd25519HostKey(t)
+	err = fwd.Forward("192.168.1.108", 22, pub.Marshal())
+	want := "pin forwarding requires a pinned TLS server — no plaintext forwarding (set the server pin used by cache pull); the host key for 192.168.1.108:22 stays unpinned"
+	if err == nil || err.Error() != want {
+		t.Fatalf("plaintext refusal mismatch:\n got: %v\nwant: %q", err, want)
+	}
+}
+
+// TestCacheForwardDeviceFor locks the pin_device metadata resolution (§2.3):
+// the default slot reads cache.meta.json's device_name (the serve-asserted
+// identity), a named instance falls back to its own name when its meta is
+// absent, and nothing anywhere degrades to "".
+func TestCacheForwardDeviceFor(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DIR", dir)
+
+	if got := cacheForwardDeviceFor(""); got != "" {
+		t.Fatalf("default slot without meta: got %q, want \"\"", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cache.meta.json"),
+		[]byte(`{"url":"https://broker:7878","pulled_at":1,"server_anchored":false,"scoped":true,"device_name":"LPT9"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := cacheForwardDeviceFor(""); got != "LPT9" {
+		t.Fatalf("default slot with meta: got %q, want LPT9", got)
+	}
+}
+
+// TestCacheForwardDeviceFor_NamedInstanceFallsBackToItsName: without a meta
+// file in the instance dir, the instance name IS the device identity (Plan 40's
+// pull gate enforces identity == directory name). Reads a real (absent)
+// instance dir under the user config dir — read-only probe, unique name.
+func TestCacheForwardDeviceFor_NamedInstanceFallsBackToItsName(t *testing.T) {
+	if got := cacheForwardDeviceFor("zz-cache-fwd-probe-no-meta"); got != "zz-cache-fwd-probe-no-meta" {
+		t.Fatalf("named instance without meta: got %q, want the instance name", got)
 	}
 }
