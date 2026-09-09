@@ -41,6 +41,11 @@ type Store struct {
 	masterKey    []byte
 	readOnly     bool
 	auditSidecar *os.File
+	// forwardDevice is the local device-code name ApplyForwardedHostKey stamps
+	// into pin_device, so a locally-recorded forwarded anchor carries the same
+	// metadata as the broker's authoritative row (Plan 48 §2.3). Set once by
+	// the cache hydration path alongside SetReadOnly; empty on server stores.
+	forwardDevice string
 	// NowFn is the injectable clock for the pairing time predicates (CAS
 	// enroll_deadline, approved_deadline, delivered TTL — Plan 42 §3.3-2/-6).
 	// nil means time.Now; production code never sets it, tests inject a fake
@@ -76,6 +81,12 @@ func (s *Store) SetReadOnly(auditSidecar *os.File) {
 // IsReadOnly reports whether this store rejects mutations (offline hydrated
 // cache store). Tunnel control-loop duties 3/4/5 and mirror writes key off it.
 func (s *Store) IsReadOnly() bool { return s.readOnly }
+
+// SetForwardDevice records the local device-code name that ApplyForwardedHostKey
+// stamps into pin_device (Plan 48 §2.3). Metadata only — touches no DB row and
+// is intentionally NOT gated by read-only mode: the cache hydration path sets
+// it on the temp store right after SetReadOnly.
+func (s *Store) SetForwardDevice(name string) { s.forwardDevice = name }
 
 // DefaultStorePath returns the on-disk vault location (program-fixed, spec §3.1/§5.1).
 // SSHMGR_STORE overrides (test/migrate). Falls back to paths pkg (Win
@@ -287,6 +298,21 @@ func migrate(db *sql.DB) error {
 	// 落库的仅是 ~20bit 比对码(本就印在人眼屏幕上);priv/kAck/kCreds 仍只在
 	// serve 进程内存。旧行迁移为 ''(旧 serve 写的行——批准面按无 SAS 警示处理)。
 	if err := addColumnIfMissing(db, "pairing_pending", "sas", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// Plan 48: host_keys pin metadata — format (blob|fingerprint), source
+	// (tofu|forward|manual), forwarding device name. The DEFAULTs back-fill
+	// existing rows to exactly their old meaning (every pre-Plan-48 anchor is
+	// a TOFU blob), so the sourced/dual-mode vocabulary degrades losslessly.
+	// ImportSnapshot additionally normalizes EMPTY snapshot values: ADD COLUMN
+	// DEFAULT constrains existing rows, never explicit inserts.
+	if err := addColumnIfMissing(db, "host_keys", "pin_format", "TEXT NOT NULL DEFAULT 'blob'"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "host_keys", "pin_source", "TEXT NOT NULL DEFAULT 'tofu'"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "host_keys", "pin_device", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	// Plan 20 C0: servers.credential_id becomes nullable (credential-less
@@ -526,7 +552,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE TABLE IF NOT EXISTS host_keys (
   host_port TEXT PRIMARY KEY,
   key_blob BLOB NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  pin_format TEXT NOT NULL DEFAULT 'blob',
+  pin_source TEXT NOT NULL DEFAULT 'tofu',
+  pin_device TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS forward_bind_hosts (
   ip         TEXT PRIMARY KEY,
