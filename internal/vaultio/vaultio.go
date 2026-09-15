@@ -23,7 +23,7 @@ var (
 	magic = []byte("SSHMGRV1") // 8 bytes — format identifier + future versioning
 
 	// ErrBadMagic: blob does not start with the expected magic header.
-	ErrBadMagic = errors.New("vaultio: bad magic (not an ssh-manager export)")
+	ErrBadMagic = errors.New("vaultio: bad magic (not an sshmgr export)")
 	// ErrTruncated: blob too short to contain magic+salt+nonce+tag.
 	ErrTruncated = errors.New("vaultio: truncated blob")
 )

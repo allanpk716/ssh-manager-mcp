@@ -14,9 +14,9 @@ import (
 // future code path that accidentally calls it surfaces clearly.
 func serveProcessRunningWindows() bool { panic("unreachable on posix") }
 
-// serveProcessRunningPOSIX reports whether a ssh-manager process is currently
+// serveProcessRunningPOSIX reports whether a sshmgr process is currently
 // running on Linux/macOS/etc. Scans /proc/<pid>/comm for an exact match on
-// "ssh-manager" (Linux) — on macOS /proc does not exist and this returns
+// "sshmgr" (Linux) — on macOS /proc does not exist and this returns
 // false (best-effort; the other three status signals compensate).
 //
 // Why /proc/comm and not pgrep / ps: keep the dependency surface to the
@@ -31,7 +31,7 @@ func serveProcessRunningPOSIX() bool {
 		// macOS has no /proc — return false (best-effort).
 		return false
 	}
-	target := "ssh-manager"
+	target := "sshmgr"
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -42,7 +42,7 @@ func serveProcessRunningPOSIX() bool {
 			continue
 		}
 		// /proc/<pid>/comm is the executable's base name (truncated to 15 chars
-		// by the kernel — TASK_COMM_LEN). "ssh-manager" is 11 chars so it fits
+		// by the kernel — TASK_COMM_LEN). "sshmgr" is 6 chars so it fits
 		// untruncated.
 		comm, err := os.ReadFile(filepath.Join("/proc", name, "comm"))
 		if err != nil {

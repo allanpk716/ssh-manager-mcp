@@ -151,3 +151,88 @@ func countAudit(t *testing.T, s *Store) int {
 	}
 	return n
 }
+
+// --- Plan 48: 只读态的 host_keys 唯一窄缝(spec §2.3、§8 T9) ------------------
+
+// TestReadOnly_ApplyForwardedHostKeyNarrowGap pins the narrow gap: the
+// forwarded-pin receipt is the ONLY host_keys write a read-only cache accepts,
+// stamped with the broker-identical metadata (blob/forward/<device>), with no
+// local audit row (the authoritative one lives broker-side). Everything else —
+// SaveHostKey, InsertForwardedPin — stays refused with the shared sentinel,
+// whose text is pinned verbatim (spec §4: the sentinel text must not change).
+func TestReadOnly_ApplyForwardedHostKeyNarrowGap(t *testing.T) {
+	keyA, _ := pinHostKey(t)
+	keyB, _ := pinHostKey(t)
+
+	s := newTestStore(t)
+	s.SetForwardDevice("dev-laptop")
+	s.SetReadOnly(nil)
+
+	if ErrReadOnly.Error() != "store is read-only (offline cache); connect to the server to mutate" {
+		t.Fatalf("shared ErrReadOnly sentinel text drifted: %q", ErrReadOnly.Error())
+	}
+
+	// unknown host: the forwarded receipt inserts through the narrow gap
+	if err := s.ApplyForwardedHostKey("10.0.0.9", 22, keyA); err != nil {
+		t.Fatalf("ApplyForwardedHostKey on read-only store: %v", err)
+	}
+	format, source, device, blob := pinMetaRow(t, s, "10.0.0.9:22")
+	if format != "blob" || source != "forward" || device != "dev-laptop" || !bytes.Equal(blob, keyA) {
+		t.Fatalf("forwarded row = %q/%q/%q (%v), want blob/forward/dev-laptop with the presented bytes", format, source, device, blob)
+	}
+	if n := countAudit(t, s); n != 0 {
+		t.Fatalf("forwarded receipt must not write local audit, got %d rows", n)
+	}
+
+	// the gap is NARROW: every other host_keys write stays refused — verbatim
+	if err := s.SaveHostKey("10.0.0.9", 22, keyB); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("SaveHostKey readonly: err=%v want ErrReadOnly", err)
+	}
+	if _, err := s.InsertForwardedPin("10.0.0.9", 22, keyB, "dev", AuditRow{}); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("InsertForwardedPin readonly: err=%v want ErrReadOnly", err)
+	}
+}
+
+// TestReadOnly_ApplyForwardedHostKeyDualModeGate: with an anchor already
+// present (cached from the broker), the receipt passes ONLY on dual-mode
+// equality — including a fingerprint anchor matched against the presented
+// key's fingerprint — and never disturbs the existing row.
+func TestReadOnly_ApplyForwardedHostKeyDualModeGate(t *testing.T) {
+	keyA, fpA := pinHostKey(t)
+	keyB, _ := pinHostKey(t)
+
+	s := newTestStore(t)
+	s.SetForwardDevice("dev-laptop")
+	if err := s.SaveHostKey("10.0.0.8", 22, keyA); err != nil {
+		t.Fatal(err)
+	}
+	seedFingerprintPin(t, s, "10.0.0.7", 22, fpA)
+	s.SetReadOnly(nil)
+
+	// equal blob anchor → race-tolerant pass, row untouched
+	if err := s.ApplyForwardedHostKey("10.0.0.8", 22, keyA); err != nil {
+		t.Fatalf("equal blob anchor must pass: %v", err)
+	}
+	if got := mustLoadPin(t, s, "10.0.0.8", 22); got == nil || !bytes.Equal(got.Blob, keyA) || got.Format != "blob" {
+		t.Fatalf("equal pass disturbed the anchor: %+v", got)
+	}
+	// different key → refused
+	if err := s.ApplyForwardedHostKey("10.0.0.8", 22, keyB); err == nil {
+		t.Fatal("different key against an existing anchor must be refused")
+	}
+	// fingerprint anchor vs presented key (指纹锚对呈现指纹)
+	if err := s.ApplyForwardedHostKey("10.0.0.7", 22, keyA); err != nil {
+		t.Fatalf("presented key matching the fingerprint anchor must pass: %v", err)
+	}
+	if err := s.ApplyForwardedHostKey("10.0.0.7", 22, keyB); err == nil {
+		t.Fatal("presented key NOT matching the fingerprint anchor must be refused")
+	}
+	// still exactly the two original rows, byte-identical
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM host_keys`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("gate must never add or replace rows, count = %d", n)
+	}
+}

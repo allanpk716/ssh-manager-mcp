@@ -10,6 +10,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 )
@@ -53,8 +54,11 @@ func RunStdio(token string, kp store.KeyProvider) error {
 // hydrateCacheStore builds a fresh temporary read-only store from snap and
 // verifies token against it. The caller owns closing the store and removing
 // tmpPath (cacheStoreHolder registers both). Shared by initial startup and
-// every hot rebuild, so the two paths CANNOT drift.
-func hydrateCacheStore(token string, snap *store.Snapshot, auditFile *os.File) (*store.Store, *models.Project, string, error) {
+// every hot rebuild, so the two paths CANNOT drift. device ("" = unknown) is
+// the instance's device-code name stamped onto host_keys rows written via
+// ApplyForwardedHostKey (Plan 48 §2.3) — per-generation, because every
+// hydrated store starts from a fresh temp db.
+func hydrateCacheStore(token string, snap *store.Snapshot, auditFile *os.File, device string) (*store.Store, *models.Project, string, error) {
 	mk, err := store.GenerateMasterKey() // throwaway key: creds re-sealed per hydration
 	if err != nil {
 		return nil, nil, "", err
@@ -75,7 +79,8 @@ func hydrateCacheStore(token string, snap *store.Snapshot, auditFile *os.File) (
 		os.Remove(tmpPath)
 		return nil, nil, "", err
 	}
-	st.SetReadOnly(auditFile) // AFTER ImportSnapshot: mutations → ErrReadOnly
+	st.SetReadOnly(auditFile)   // AFTER ImportSnapshot: mutations → ErrReadOnly
+	st.SetForwardDevice(device) // Plan 48 §2.3: local forwarded-pin metadata
 	project, err := st.VerifyToken(token)
 	if err != nil {
 		st.Close()
@@ -101,6 +106,7 @@ type cacheStoreHolder struct {
 	token     string
 	auditFile *os.File
 	profileID string
+	device    string // device-code name for ApplyForwardedHostKey metadata (Plan 48 §2.3)
 
 	mu       sync.Mutex // serializes rebuilds
 	cur      atomic.Pointer[store.Store]
@@ -127,7 +133,7 @@ func (h *cacheStoreHolder) Current() *store.Store {
 	defer h.mu.Unlock()
 	snap, changed, err := h.reload()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager: cache reload check failed (keeping current snapshot): %v\n", err)
+		fmt.Fprintf(os.Stderr, "sshmgr: cache reload check failed (keeping current snapshot): %v\n", err)
 		return h.cur.Load()
 	}
 	if !changed {
@@ -136,7 +142,7 @@ func (h *cacheStoreHolder) Current() *store.Store {
 	if snap == nil {
 		// changed=true with a nil snapshot is a broken reloader; hydrateCacheStore
 		// would nil-deref in ImportSnapshot. Log + keep serving the old store.
-		fmt.Fprintf(os.Stderr, "ssh-manager: cache reload reported a change with a nil snapshot (keeping current snapshot)\n")
+		fmt.Fprintf(os.Stderr, "sshmgr: cache reload reported a change with a nil snapshot (keeping current snapshot)\n")
 		return h.cur.Load()
 	}
 	// A concurrent rebuild may have consumed this exact snapshot already (the
@@ -148,16 +154,16 @@ func (h *cacheStoreHolder) Current() *store.Store {
 	if snap == h.lastSnap {
 		return h.cur.Load()
 	}
-	st, project, tmpPath, err := hydrateCacheStore(h.token, snap, h.auditFile)
+	st, project, tmpPath, err := hydrateCacheStore(h.token, snap, h.auditFile, h.device)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ssh-manager: cache hot-reload failed (keeping current snapshot): %v\n", err)
+		fmt.Fprintf(os.Stderr, "sshmgr: cache hot-reload failed (keeping current snapshot): %v\n", err)
 		return h.cur.Load()
 	}
 	if project.ProfileID != h.profileID {
 		// The owner rebound the project to a different profile mid-session; the
 		// tool closures still scope by the startup profileID, so serving the new
 		// store would show the wrong set. Keep the old store + log.
-		fmt.Fprintf(os.Stderr, "ssh-manager: cache snapshot changed the project's profile (keeping current snapshot to preserve scoping)\n")
+		fmt.Fprintf(os.Stderr, "sshmgr: cache snapshot changed the project's profile (keeping current snapshot to preserve scoping)\n")
 		st.Close()
 		os.Remove(tmpPath)
 		return h.cur.Load()
@@ -194,9 +200,9 @@ func (h *cacheStoreHolder) cleanup() {
 // reload silently disabled (the production-path bug this constructor exists to
 // make impossible). Shared with the seam test so the production construction and
 // the tested construction can never drift apart.
-func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error)) (*cacheStoreHolder, *models.Project, error) {
-	h := &cacheStoreHolder{reload: reload, token: token, auditFile: af}
-	st, project, tmpPath, err := hydrateCacheStore(token, snap, af)
+func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), device string) (*cacheStoreHolder, *models.Project, error) {
+	h := &cacheStoreHolder{reload: reload, token: token, auditFile: af, device: device}
+	st, project, tmpPath, err := hydrateCacheStore(token, snap, af, device)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -210,9 +216,11 @@ func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.
 // RunStdioCache hydrates a Snapshot into a temporary read-only store, verifies the SAME
 // project token against the cached projects (iron rule + profile scoping intact offline), and
 // runs the broker over stdio — identical agent surface to RunStdio. Offline audit lands in
-// auditPath (a JSONL sidecar); every mutation is refused (ErrReadOnly). Unknown host keys are
-// rejected (SaveHostKey returns ErrReadOnly → HostKeyTOFU fails closed). The temp store is
-// deleted on exit; creds in it are sealed under a throwaway master key.
+// auditPath (a JSONL sidecar); every mutation is refused (ErrReadOnly). An UNKNOWN host key
+// goes through fwdBinder when one is wired (Plan 48 §2.1: the key is forwarded to the broker's
+// audited /pin-hostkey endpoint, applied locally, and the handshake continues); with a nil
+// binder the pre-Plan-48 behavior stands (SaveHostKey → ErrReadOnly → fail closed). The temp
+// store is deleted on exit; creds in it are sealed under a throwaway master key.
 //
 // reload != nil enables hot-reload: before every tool call the callback is consulted
 // ((snap,true,nil) = rebuild; (nil,false,nil) = unchanged; error = keep serving the old
@@ -222,29 +230,72 @@ func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.
 // process exit (in-flight SDK tool calls may hold the old pointer); cacheStoreHolder.cleanup
 // tears every hydrated store down once.
 //
+// fwdBinder is the host-key store binder cli builds via
+// clientops.ForwardingHostKeys(NewPinForwarder(cred)) — it is invoked ONCE here with the
+// holder's Current resolver (Plan 48 §2.2: the wrapper re-resolves the current generation
+// inside every callback, never capturing a store pointer). nil binder = no override. The
+// binder (and any forwarder capability) is NEVER defaulted here: reading an instance's
+// credential stays at the --instance resolver in cli (Plan 40/46 iron rule).
+//
+// device ("" = unknown) is the instance's device-code name stamped onto locally applied
+// forwarded pins (host_keys.pin_device, Plan 48 §2.3) — metadata only, never load-bearing.
+//
 // Agent-surface invariant: the broker reads the cache via the exact same
 // list_servers / exec_command / download_file / upload_file / forward_port / close_port
 // tools, gated by the SAME profile scoping (profileID from the verified project) and attributing
 // audit to the SAME project id. The only difference from RunStdio is that the store is read-only
 // (mutations refused) and audit is sidecar'd (per-machine, single-direction, zero-merge).
-func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error)) error {
-	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string) error {
+	srv, tunnels, tasks, cleanup, err := NewCacheBroker(token, snap, auditPath, reload, fwdBinder, device)
 	if err != nil {
 		return err
 	}
-	defer af.Close()
-
-	h, project, err := newCacheStoreHolderFromSnapshot(token, snap, af, reload)
-	if err != nil {
-		return err
-	}
-	defer h.cleanup()
-
-	srv, tunnels, tasks, err := NewServerFromSource(h.Current, project.ProfileID, project.ID)
-	if err != nil {
-		return err
-	}
+	defer cleanup()
 	defer tunnels.CloseAll()
 	defer tasks.CloseAll()
 	return srv.Run(context.Background(), &mcp.StdioTransport{})
+}
+
+// NewCacheBroker assembles the hot-reloading read-only cache broker without
+// running it: the same hydration, token verification, binder wiring, and
+// profile scoping RunStdioCache serves, as a directly drivable *mcp.Server
+// (RunStdioCache runs it over stdio; the Plan 48 cache-forwarding integration
+// tests drive it over in-memory transports so the tested wiring IS the served
+// wiring). cleanup releases the hydrated stores, their temp dbs, and the audit
+// sidecar handle exactly once; the caller SHOULD also defer tunnels.CloseAll /
+// tasks.CloseAll (MCP-shutdown teardown, as in RunStdio). Parameters carry the
+// same contract as RunStdioCache.
+func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string) (*mcp.Server, *TunnelManager, *TaskManager, func(), error) {
+	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device)
+	if err != nil {
+		af.Close()
+		return nil, nil, nil, nil, err
+	}
+	return srv, tunnels, tasks, func() { h.cleanup(); af.Close() }, nil
+}
+
+// newCacheBroker assembles the hot-reloading read-only broker exactly as
+// RunStdioCache serves it — the single construction path shared with the
+// exported NewCacheBroker so the tested wiring cannot drift from the served
+// wiring. The binder is invoked once with the holder's Current; the resulting
+// wrapper is a process-lifetime value (it captures no store pointer).
+func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string) (*mcp.Server, *TunnelManager, *TaskManager, *cacheStoreHolder, error) {
+	h, project, err := newCacheStoreHolderFromSnapshot(token, snap, af, reload, device)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	var hkFn func() sshbroker.HostKeyStore
+	if fwdBinder != nil {
+		hk := fwdBinder(h.Current)
+		hkFn = func() sshbroker.HostKeyStore { return hk }
+	}
+	srv, tunnels, tasks, err := NewServerFromSource(h.Current, project.ProfileID, project.ID, hkFn)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return srv, tunnels, tasks, h, nil
 }

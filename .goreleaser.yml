@@ -4,12 +4,12 @@
 # Local dry-run (no publish):  goreleaser release --snapshot --clean
 version: 2
 
-project_name: ssh-manager
+project_name: sshmgr
 
 builds:
-  - id: ssh-manager
-    main: ./cmd/ssh-manager
-    binary: ssh-manager
+  - id: sshmgr
+    main: ./cmd/sshmgr
+    binary: sshmgr
     env:
       - CGO_ENABLED=0          # pure-Go dep stack -> static cross-compile
     flags:
@@ -37,7 +37,7 @@ changelog:
   use: github-native           # GitHub auto release notes (groups by PR)
 
 release:
-  name_template: "ssh-manager {{ .Tag }}"
+  name_template: "sshmgr {{ .Tag }}"
   prerelease: auto             # v1.0.0-rc1 -> auto-marked Pre-release
   draft: false
 

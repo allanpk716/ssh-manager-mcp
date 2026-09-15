@@ -221,6 +221,27 @@ type BgStopOutput struct {
 	Status string `json:"status" jsonschema:"the task's status at trigger time: 'running' for a running task (the stop was set in motion; watch for the terminal 'stopped' state via exec_output — this call never blocks), or the task's terminal status if it had already finished (idempotent)"`
 }
 
+// RelayInput is the relay_file tool input (Plan 47; spec §1.1 schema verbatim —
+// the jsonschema text is the agent-facing tool contract).
+type RelayInput struct {
+	FromServerID string `json:"from_server_id,omitempty" jsonschema:"source server id from list_servers; OMIT or empty = the broker's own local disk (e.g. moving a large file already on the broker host)"`
+	FromPath     string `json:"from_path" jsonschema:"absolute path of the SOURCE file: a POSIX absolute path (/...) or Windows drive root (C:/...) on the from-server; or a broker-host absolute path (drive-letter or UNC on a Windows broker) when from_server_id is empty"`
+	ToServerID   string `json:"to_server_id" jsonschema:"destination server id from list_servers"`
+	ToPath       string `json:"to_path" jsonschema:"absolute destination path on the destination server (POSIX /... or Windows drive root C:/...); its parent directory is created if missing; an existing file at the path is replaced on completion"`
+	Fresh        bool   `json:"fresh,omitempty" jsonschema:"discard any existing partial/manifest at the destination and restart from byte 0 (default: resume missing chunks when the manifest matches)"`
+}
+
+// RelayOutput is the relay_file tool output (Plan 47; spec §1.1 schema
+// verbatim). Metadata only — file bytes never enter the agent context.
+type RelayOutput struct {
+	TaskID        string `json:"task_id" jsonschema:"background task id — poll progress with exec_output(task_id), stop with exec_stop(task_id); the transfer is resumable: re-run relay_file with the same paths after any failure/stop"`
+	BytesTotal    int64  `json:"bytes_total" jsonschema:"total source bytes"`
+	ChunksTotal   int    `json:"chunks_total" jsonschema:"total chunk count"`
+	ResumedChunks int    `json:"resumed_chunks" jsonschema:"chunks already complete per the destination manifest (0 on a fresh start)"`
+	ChunkBytes    int64  `json:"chunk_bytes" jsonschema:"the chunk size in bytes (from SSHMGR_TRANSFER_CHUNK at server construction)"`
+	SpaceCheck    string `json:"space_check" jsonschema:"destination free-space pre-flight: 'ok' or 'unavailable' (the destination SFTP server does not support statvfs — e.g. some Windows targets; proceeding is safe: a full disk mid-transfer just stops at a chunk boundary and resumes after space is freed)"`
+}
+
 // ErrNotInProfile is returned when an agent requests a server outside its Profile (iron rule).
 var ErrNotInProfile = errWithString("server is not in your profile — call list_servers to see the servers you may use")
 
@@ -236,7 +257,7 @@ const defaultTimeout = 120 * time.Second
 // returns to the agent (the prefix). Bytes beyond this are counted (reported as
 // stdout_bytes/stderr_bytes with truncated=true) then discarded, so a huge remote
 // output cannot blow up broker memory or flood the agent's context — the agent
-// learns the true size and can refine its command. The owner `ssh-manager ssh`
+// learns the true size and can refine its command. The owner `sshmgr ssh`
 // path is unaffected (it requests unlimited output). 1 MiB per spec §6.
 const MaxOutputBytes int64 = 1 << 20
 

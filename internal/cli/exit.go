@@ -8,7 +8,10 @@ import (
 // ExitCodeError lets a RunE pin the process exit code that main will honor;
 // every other error keeps the generic 1. The stable convention (scripts rely
 // on it): 0 = success, 1 = command error / doctor FAIL findings, 2 = doctor
-// internal error (first real producer: #5 serve liveness probe).
+// internal error (first real producer: #5 serve liveness probe), 3 = update:
+// binary replaced OK but the serve service restart is pending manual action
+// (scripts branch here to run the printed `sc stop/start` / `systemctl
+// restart` themselves; first real producer: `sshmgr update`).
 type ExitCodeError struct {
 	Code int
 	Err  error
@@ -18,7 +21,7 @@ func (e *ExitCodeError) Error() string {
 	if e.Err == nil {
 		// hand-rolled literal that bypassed NewExitCodeError — never
 		// nil-deref at print time; the code alone is still meaningful.
-		return fmt.Sprintf("ssh-manager: exit code %d", e.Code)
+		return fmt.Sprintf("sshmgr: exit code %d", e.Code)
 	}
 	return e.Err.Error()
 }

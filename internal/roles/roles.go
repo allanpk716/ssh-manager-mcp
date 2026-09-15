@@ -120,7 +120,7 @@ func RolePath(r Role) (string, error) {
 
 // Load reads role.json, vault location first, user-config location second.
 // Neither present → (nil, nil) (fresh machine → wizard). A present-but-invalid
-// file is an error guiding `ssh-manager clear` — never silently ignored.
+// file is an error guiding `sshmgr clear` — never silently ignored.
 func Load() (*State, error) {
 	if p := vaultRolePath(); p != "" {
 		s, err := readRoleFile(p)
@@ -144,10 +144,10 @@ func readRoleFile(p string) (*State, error) {
 	}
 	var s State
 	if err := json.Unmarshal(blob, &s); err != nil {
-		return nil, fmt.Errorf("role.json (%s) 内容非法: %w — 运行 `ssh-manager clear` 后重新初始化", p, err)
+		return nil, fmt.Errorf("role.json (%s) 内容非法: %w — 运行 `sshmgr clear` 后重新初始化", p, err)
 	}
 	if !validRole(s.Role) {
-		return nil, fmt.Errorf("role.json (%s) role 值非法 %q — 运行 `ssh-manager clear` 后重新初始化", p, s.Role)
+		return nil, fmt.Errorf("role.json (%s) role 值非法 %q — 运行 `sshmgr clear` 后重新初始化", p, s.Role)
 	}
 	return &s, nil
 }
@@ -176,7 +176,7 @@ func Save(s State) error {
 }
 
 // Delete removes role.json from BOTH locations (idempotent — a missing file is
-// not an error). Used by `ssh-manager clear` and by wizard re-runs.
+// not an error). Used by `sshmgr clear` and by wizard re-runs.
 func Delete() error {
 	var firstErr error
 	paths := []string{}
@@ -302,13 +302,13 @@ func serveCertPresent() bool {
 // ResolveMode — the single launch decision (spec §1.2)
 // ---------------------------------------------------------------------------
 
-// ResolveMode decides what `ssh-manager` should launch. Order:
+// ResolveMode decides what `sshmgr` should launch. Order:
 //
 //  1. force guard: force=="client" on a machine WITH a vault is refused
 //     (accidental client mode against its own vault); any other non-empty
 //     force value is invalid.
 //  2. role.json present → anomaly checks (invalid value / vault-role without
-//     vault → error guiding `ssh-manager clear`; client without cache is
+//     vault → error guiding `sshmgr clear`; client without cache is
 //     NORMAL — first pull happens after launch) → Launch with ResumeSetup
 //     when SetupComplete=false.
 //  3. no role.json → v0.6.0 probe: locked vault fails closed (never degrades
@@ -322,7 +322,7 @@ func ResolveMode(force string) (Launch, error) {
 	}
 	if force == "client" {
 		if VaultExists() {
-			return Launch{}, errors.New("本机已有 vault，无法以 client 角色启动：`ssh-manager clear` 将删除本机全部 vault 数据（含全部凭据），确认无误后再运行")
+			return Launch{}, errors.New("本机已有 vault，无法以 client 角色启动：`sshmgr clear` 将删除本机全部 vault 数据（含全部凭据），确认无误后再运行")
 		}
 		return Launch{Kind: LaunchClient, Role: RoleClient}, nil
 	}
@@ -335,7 +335,7 @@ func ResolveMode(force string) (Launch, error) {
 
 	// No role.json: probe (pre-wizard / v0.6.0 machines).
 	if VaultExists() && !VaultUnlocked() {
-		return Launch{}, errors.New("本机 vault 存在但锁定或不可读：先运行 `ssh-manager unlock`（不会降级为 client 模式）")
+		return Launch{}, errors.New("本机 vault 存在但锁定或不可读：先运行 `sshmgr unlock`（不会降级为 client 模式）")
 	}
 	if VaultUnlocked() {
 		r := RoleStandalone
@@ -358,7 +358,7 @@ func resolveFromState(st *State) (Launch, error) {
 				// User picked a role but hasn't built the vault yet — wizard resumes
 				return Launch{Kind: LaunchWizard, Role: st.Role, ResumeSetup: true}, nil
 			}
-			return Launch{}, fmt.Errorf("role.json 声明本机为 %s，但 vault 不存在：运行 `ssh-manager clear` 清除残留状态后重新运行向导", st.Role)
+			return Launch{}, fmt.Errorf("role.json 声明本机为 %s，但 vault 不存在：运行 `sshmgr clear` 清除残留状态后重新运行向导", st.Role)
 		}
 		return Launch{Kind: LaunchBroker, Role: st.Role, ResumeSetup: !st.SetupComplete}, nil
 	case RoleClient:
@@ -367,6 +367,6 @@ func resolveFromState(st *State) (Launch, error) {
 		return Launch{Kind: LaunchClient, Role: RoleClient, ResumeSetup: !st.SetupComplete}, nil
 	default:
 		// Unreachable: Load rejects invalid roles. Kept for exhaustiveness.
-		return Launch{}, fmt.Errorf("role.json role 值非法 %q — 运行 `ssh-manager clear` 后重新初始化", st.Role)
+		return Launch{}, fmt.Errorf("role.json role 值非法 %q — 运行 `sshmgr clear` 后重新初始化", st.Role)
 	}
 }

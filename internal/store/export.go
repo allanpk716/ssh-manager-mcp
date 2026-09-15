@@ -78,6 +78,12 @@ type SnapshotHostKey struct {
 	HostPort  string `json:"host_port"` // "{host}:{port}"
 	KeyBlob   []byte `json:"key_blob"`
 	CreatedAt int64  `json:"created_at"`
+	// Plan 48 pin metadata, all omitempty: a v0.14-shaped snapshot carries no
+	// pin keys, decodes to "", and ImportSnapshot normalizes "" to blob/tofu
+	// (the column DEFAULTs govern DB rows and back-fills, not explicit inserts).
+	PinFormat string `json:"pin_format,omitempty"`
+	PinSource string `json:"pin_source,omitempty"`
+	PinDevice string `json:"pin_device,omitempty"`
 }
 
 type SnapshotAudit struct {
@@ -95,7 +101,7 @@ type SnapshotAudit struct {
 
 // ListHostKeys returns every host_keys row (point lookups already exist; this is the dump path).
 func (s *Store) ListHostKeys() ([]SnapshotHostKey, error) {
-	rows, err := s.db.Query(`SELECT host_port, key_blob, created_at FROM host_keys ORDER BY host_port`)
+	rows, err := s.db.Query(`SELECT host_port, key_blob, created_at, pin_format, pin_source, pin_device FROM host_keys ORDER BY host_port`)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +109,7 @@ func (s *Store) ListHostKeys() ([]SnapshotHostKey, error) {
 	var out []SnapshotHostKey
 	for rows.Next() {
 		var h SnapshotHostKey
-		if err := rows.Scan(&h.HostPort, &h.KeyBlob, &h.CreatedAt); err != nil {
+		if err := rows.Scan(&h.HostPort, &h.KeyBlob, &h.CreatedAt, &h.PinFormat, &h.PinSource, &h.PinDevice); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -416,14 +422,14 @@ func (s *Store) ExportSnapshotForProfile(profileID string) (*Snapshot, error) {
 			args = append(args, hp)
 		}
 		rh, err := s.db.Query(
-			`SELECT host_port, key_blob, created_at FROM host_keys WHERE host_port IN (`+
+			`SELECT host_port, key_blob, created_at, pin_format, pin_source, pin_device FROM host_keys WHERE host_port IN (`+
 				strings.Join(ph, ",")+`) ORDER BY host_port`, args...)
 		if err != nil {
 			return nil, err
 		}
 		for rh.Next() {
 			var h SnapshotHostKey
-			if err := rh.Scan(&h.HostPort, &h.KeyBlob, &h.CreatedAt); err != nil {
+			if err := rh.Scan(&h.HostPort, &h.KeyBlob, &h.CreatedAt, &h.PinFormat, &h.PinSource, &h.PinDevice); err != nil {
 				rh.Close()
 				return nil, err
 			}
@@ -524,9 +530,20 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		}
 	}
 
-	// 6. host_keys
+	// 6. host_keys — empty pin_format/pin_source normalize to blob/tofu: the
+	// ADD COLUMN DEFAULT back-fills only pre-existing rows and does NOT
+	// constrain explicit inserts, so a v0.14 snapshot's Go zero values would
+	// otherwise persist as empty strings (Plan 48 §5, T10).
 	for _, h := range snap.HostKeys {
-		if _, err := tx.Exec(`INSERT INTO host_keys(host_port,key_blob,created_at) VALUES(?,?,?)`, h.HostPort, h.KeyBlob, h.CreatedAt); err != nil {
+		format, source := h.PinFormat, h.PinSource
+		if format == "" {
+			format = PinFormatBlob
+		}
+		if source == "" {
+			source = PinSourceTofu
+		}
+		if _, err := tx.Exec(`INSERT INTO host_keys(host_port,key_blob,created_at,pin_format,pin_source,pin_device) VALUES(?,?,?,?,?,?)`,
+			h.HostPort, h.KeyBlob, h.CreatedAt, format, source, h.PinDevice); err != nil {
 			return fmt.Errorf("insert host_key %s: %w", h.HostPort, err)
 		}
 	}

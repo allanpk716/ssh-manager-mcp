@@ -29,7 +29,7 @@ func newSSHCmd() *cobra.Command {
 			// Empty/whitespace joins would otherwise run an empty command on
 			// the remote host — fail fast instead (Plan 25 / xcheck A4).
 			if len(args) == 1 || strings.TrimSpace(strings.Join(args[1:], " ")) == "" {
-				return fmt.Errorf("no command given: usage ssh-manager ssh <server> <command...> (single non-interactive command; for an interactive terminal use your own ssh client)")
+				return fmt.Errorf("no command given: usage sshmgr ssh <server> <command...> (single non-interactive command; for an interactive terminal use your own ssh client)")
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), ownerSSHDeadline)
 			defer cancel()

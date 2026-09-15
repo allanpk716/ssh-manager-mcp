@@ -10,6 +10,7 @@ package clientops
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -262,6 +263,28 @@ type cacheMeta struct {
 	DeviceName string `json:"device_name"`
 }
 
+// CacheDeviceNameFor returns the device-code name recorded in the given
+// instance's cache.meta ("" = the default instance; "" also when the meta is
+// absent, unreadable, or predates Plan 40). Plan 48 §2.3: cli stamps this name
+// onto locally applied forwarded pins (host_keys.pin_device) — diagnostic
+// metadata for the owner's detection surface, never load-bearing, so every
+// failure degrades to "" instead of an error.
+func CacheDeviceNameFor(instance string) string {
+	_, _, metaPath, _, err := CachePathsFor(instance)
+	if err != nil {
+		return ""
+	}
+	blob, err := os.ReadFile(metaPath)
+	if err != nil {
+		return ""
+	}
+	var m cacheMeta
+	if json.Unmarshal(blob, &m) != nil {
+		return ""
+	}
+	return m.DeviceName
+}
+
 // CacheCred persists the pull credential (cache.auth.json) so `mcp --cache` can
 // lazy-pull without env/flags. Pin is the RESOLVED effective pin from the last
 // successful pull (env > flag > token-embedded) stored bare; the lazy path
@@ -432,6 +455,11 @@ type PullOpts struct {
 	// Validated by CachePathsFor; combined with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK
 	// it is rejected at the CLI layer (mutex, spec §2.2).
 	Instance string
+	// Context carries cancellation into the snapshot request (Plan 45 T1: the
+	// pairing session's first pull must abort with its driver's ctx). The req is
+	// built on it via NewRequestWithContext; nil = the old behavior
+	// (context.Background) — all pre-existing callers pass the zero value.
+	Context context.Context
 }
 
 // PullResult reports where a pull's materials actually landed (Plan 40 batch 2
@@ -514,6 +542,17 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 	// Plan 40 批2 §1.2-6: vacuum-candidate paths DEFER DEK creation to after
 	// every gate — a refused relocation must leave zero writes, including no
 	// freshly-created default DEK. Non-vacuum paths keep the batch-1 timing.
+	// Plan 46 T2 进程内互斥:本函数的写盘段(DEK 创建 + bin/meta 落盘)与
+	// RemoveInstance/forceCleanInstance 共享 cacheWriteMu —— rm/force 独占
+	// 期间,新 pull 在此被【拒】(拒绝而非排队,plan 定案);无 rm 时 TryRLock
+	// 即刻成功,既有并发 pull 语义(atomicWriteUnique)不变。gate 持到函数尾:
+	// 在途 pull 的 HTTP 期间 rm 会等待(排队方向只在 rm 侧),期间任何新 pull
+	// 都被拒。
+	releaseWriteGate, werr := beginCacheWrite(o.Instance)
+	if werr != nil {
+		return PullResult{}, werr
+	}
+	defer releaseWriteGate()
 	vacuumCandidate := o.Instance == "" && !singleSlotOverrideEnvSet() && defaultSlotVacuum(dir)
 	var dek []byte
 	if !vacuumCandidate {
@@ -522,7 +561,14 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 			return PullResult{}, err
 		}
 	}
-	req, err := http.NewRequest(http.MethodGet, url+"/snapshot", nil)
+	// Plan 45 T1: the snapshot request is built on o.Context (nil =
+	// context.Background — the old behavior), so a pairing session's ctx
+	// cancellation reaches the first pull.
+	pullCtx := o.Context
+	if pullCtx == nil {
+		pullCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(pullCtx, http.MethodGet, url+"/snapshot", nil)
 	if err != nil {
 		return PullResult{}, err
 	}
@@ -567,7 +613,7 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 			// gate, proxy, WAF) gets the generic treatment with the body
 			// excerpt, never the bind advice.
 			if bytes.Contains(errBody, []byte("not bound to a profile")) {
-				return PullResult{}, fmt.Errorf("pull: server returned 403 — device code not bound to a profile (owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server)")
+				return PullResult{}, fmt.Errorf("pull: server returned 403 — device code not bound to a profile (owner: run `sshmgr cache-tokens bind <name> <profile>` on the server)")
 			}
 			if detail := strings.TrimSpace(string(errBody)); detail != "" {
 				return PullResult{}, fmt.Errorf("pull: server returned 403 — %.200s", detail)
@@ -879,7 +925,7 @@ func (r *CacheReloader) Check() (*store.Snapshot, bool, error) {
 		// call swaps the store in — this call deliberately finishes on the old
 		// one (never half-old half-new within a single tool call).
 		if err := MaybeLazyPullFor(r.instance, r.maxAge); err != nil {
-			fmt.Fprintf(os.Stderr, "ssh-manager: in-session cache refresh failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "sshmgr: in-session cache refresh failed: %v\n", err)
 		}
 		return nil, false, nil
 	}

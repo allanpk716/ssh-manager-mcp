@@ -89,7 +89,7 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 // mismatch, connect failure, missing sudo, timeout, exec error, and success.
 // projectID attributes the call to the agent's project (empty for any future
 // owner-facing caller — currently the owner path is internal/cli/ssh.go).
-func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeout time.Duration) (out ExecOutput, err error) {
+func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeout time.Duration, hk ...sshbroker.HostKeyStore) (out ExecOutput, err error) {
 	var status string
 	var exitCode int
 	start := time.Now()
@@ -136,7 +136,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
 	if herr != nil {
 		status = "error"
 		err = herr
@@ -240,7 +240,7 @@ func contains(haystack []string, needle string) bool {
 // less server, Plan 20 C0 — Plan 21 A1 unified with exec), hostkey_mismatch,
 // connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
 // download has neither sudo nor a command deadline.
-func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, path string) (out DownloadOutput, err error) {
+func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, path string, hk ...sshbroker.HostKeyStore) (out DownloadOutput, err error) {
 	var status string
 	start := time.Now()
 	defer func() {
@@ -286,7 +286,7 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
 	if herr != nil {
 		status = "error"
 		err = herr
@@ -349,7 +349,7 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 // less server, Plan 20 C0 — Plan 21 A1 unified with exec), hostkey_mismatch,
 // connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
 // upload has neither sudo nor a command deadline.
-func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, localPath, remotePath string) (out UploadOutput, err error) {
+func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, localPath, remotePath string, hk ...sshbroker.HostKeyStore) (out UploadOutput, err error) {
 	var status string
 	start := time.Now()
 	defer func() {
@@ -395,7 +395,7 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
 	if herr != nil {
 		status = "error"
 		err = herr
@@ -464,7 +464,7 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 // len(content); base64 coarse refusal = est (exact for every
 // decoder-accepted input); unreachable defensive fine-check = len(decoded);
 // decode failure + single-line rejection + param errors = 0.
-func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64) (out UploadContentOutput, err error) {
+func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64, hk ...sshbroker.HostKeyStore) (out UploadContentOutput, err error) {
 	if encoding == "" {
 		encoding = "text"
 	}
@@ -564,7 +564,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
 	if herr != nil {
 		status = "error"
 		err = herr
@@ -652,7 +652,7 @@ func isAbsRemotePath(p string) bool {
 // exec), hostkey_mismatch, connect_error, ok, error (incl. the fail-closed
 // whitelist read failure). There is no no_sudo / timeout branch — a forward is
 // a listener + pipe with no command deadline.
-func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, remoteHost string, remotePort, localPort int, listenHost string, mgr *TunnelManager) (out ForwardOutput, err error) {
+func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, remoteHost string, remotePort, localPort int, listenHost string, mgr *TunnelManager, hk ...sshbroker.HostKeyStore) (out ForwardOutput, err error) {
 	var status string
 	var cli *sshbroker.Client
 	var tunID string // "" until Open succeeded — drives the audit Command form (spec §7)
@@ -753,7 +753,7 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
 	if herr != nil {
 		status = "error"
 		err = herr

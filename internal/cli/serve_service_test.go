@@ -108,7 +108,7 @@ func TestVaultStatusString_CorruptKeyReportsLocked(t *testing.T) {
 // TLS handshake against a plaintext request never succeeds, so `serve status`
 // reported http "not responding" forever on a perfectly healthy serve.
 //
-// The new probe contract (mirroring what serve actually serves):
+// The probe contract (mirroring what serve actually serves):
 //
 //   - https 401 → alive (the auth gate answered — the correct unauthenticated
 //     probe result, Plan 10 bearer-token gate),
@@ -116,6 +116,11 @@ func TestVaultStatusString_CorruptKeyReportsLocked(t *testing.T) {
 //   - PLAINTEXT http server → not alive. We no longer accept a plaintext
 //     response as an alive signal: serve never speaks plaintext post-auto-TLS,
 //     so anything answering plaintext on that port is not our serve.
+//
+// The target path is pinned too (Plan 42 批1 T1, spec F2): the probe must GET
+// /snapshot — the only authenticated route left after the ②a removal (the root
+// answers 404 on a real serve, so a root probe would false-negative a healthy
+// serve). The handler records the request path and the alive leg asserts it.
 //
 // The httptest TLS server uses a self-signed cert — which is exactly the
 // production shape (auto-TLS self-signed on first start), so this test also
@@ -126,7 +131,10 @@ func TestProbeServeHTTPOverTLS(t *testing.T) {
 	// One TLS server; the handler's status code flips between the two alive /
 	// not-alive cases via an atomic (handler runs on the server goroutine).
 	var mode atomic.Int32 // 0 → 401, 1 → 500
+	var gotPath atomic.Pointer[string]
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		gotPath.Store(&p)
 		if mode.Load() == 0 {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -140,6 +148,9 @@ func TestProbeServeHTTPOverTLS(t *testing.T) {
 	mode.Store(0)
 	if !probeServeHTTP(tlsAddr) {
 		t.Errorf("probeServeHTTP(%q) = false for TLS 401; want true (401 = auth gate responded over https)", tlsAddr)
+	}
+	if p := gotPath.Load(); p == nil || *p != "/snapshot" {
+		t.Errorf("probe target path = %v, want /snapshot (root 404s on a real serve since ②a removal)", p)
 	}
 
 	// TLS 500 = not alive per the probe contract (only 200/401 count).

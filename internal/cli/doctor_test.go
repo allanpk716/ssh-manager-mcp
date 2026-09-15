@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,7 +18,7 @@ import (
 )
 
 // withDoctorDirs isolates every filesystem/env location doctor READS —
-// withClearDirs discipline (the dev machine REALLY runs ssh-manager, so an
+// withClearDirs discipline (the dev machine REALLY runs sshmgr, so an
 // unpinned check would inspect the operator's live vault). It adds the two
 // cache-credential seams (SSHMGR_CACHE_URL / SSHMGR_CACHE_TOKEN) that clear
 // never touched but doctor's env check enumerates, and — since T4 — pins the
@@ -72,7 +73,7 @@ func TestDoctorExitCodes(t *testing.T) {
 		t.Fatalf("fresh machine must have no FAIL (exit 0), got: %v\n%s", err, out)
 	}
 	for _, want := range []string{
-		"ssh-manager doctor (", // header carries buildinfo.Version
+		"sshmgr doctor (", // header carries buildinfo.Version
 		"no role.json — fresh machine, run the wizard",
 		"overall: 0 WARN, 0 FAIL",
 	} {
@@ -545,6 +546,20 @@ func stubServeServiceState(t *testing.T, state string) {
 	prev := serveServiceState
 	serveServiceState = func() string { return state }
 	t.Cleanup(func() { serveServiceState = prev })
+}
+
+// stubCheckpointStoreWAL replaces the bare-connection WAL checkpoint seam with
+// a failing constant (stubInspectFileACL precedent): drives the checkpoint-
+// failure branch without seeding a real failure — a real TRUNCATE-checkpoint
+// busy needs a racing reader holding the WAL open (and eats the 5s
+// busy_timeout); a real busy is also mapped to an error inside
+// checkpointWALBare (busy≠0 result row), so the seam stands in for BOTH
+// failure shapes on the same degrade path.
+func stubCheckpointStoreWAL(t *testing.T, err error) {
+	t.Helper()
+	prev := checkpointStoreWAL
+	checkpointStoreWAL = func(string) error { return err }
+	t.Cleanup(func() { checkpointStoreWAL = prev })
 }
 
 // seedDoctorServeCert generates a REAL serve cert into the pinned temp vault
@@ -1390,5 +1405,113 @@ func TestDoctorVaultOpen(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+// TestDoctorVaultOpenCountMatchesListServers pins the Plan 48 rider 1 (spec
+// rev3 §9.1, T12): with a live un-checkpointed WAL — the production shape of a
+// long-lived broker connection, feedback #5's "doctor said 11, `servers ls`
+// said 12" — the doctor copy-probe count must equal the `servers ls` count.
+// The seed writes rows through the normal store API and LEAVES THE STORE OPEN:
+// a clean close would auto-checkpoint the WAL and erase the mechanism under
+// test (which is why every other doctor test can seed via seedDoctorVault*).
+func TestDoctorVaultOpenCountMatchesListServers(t *testing.T) {
+	stubServeServiceState(t, "Running") // T4: serve-svc must not query the host SCM
+	vd, _ := withDoctorDirs(t)
+
+	mk, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(vd, "store.db")
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	cid, err := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(probeTestSecret)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"cache", "gpu"} {
+		if _, err := st.AddServer(&models.Server{
+			Name:         name,
+			Host:         "192.0.2.10",
+			User:         "deploy",
+			AuthMethod:   models.AuthPassword,
+			CredentialID: cid,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := (store.FileKeyProvider{Path: filepath.Join(vd, "master.key.plain")}).Set(mk); err != nil {
+		t.Fatal(err)
+	}
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Precondition: the committed rows really are un-checkpointed — otherwise
+	// the assertion below would pass for the wrong reason.
+	if info, err := os.Stat(dbPath + "-wal"); err != nil || info.Size() == 0 {
+		t.Fatalf("seed must leave un-checkpointed frames in the -wal sidecar (stat: %v)", err)
+	}
+
+	live, err := st.ListServers() // the `servers ls` count
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := driveDoctor(t)
+	if err != nil {
+		t.Fatalf("healthy vault must not FAIL: %v\n%s", err, out)
+	}
+	wantLine := fmt.Sprintf("copy-probe decrypted %d servers / %d credentials", len(live), 1)
+	if !strings.Contains(out, wantLine) {
+		t.Fatalf("doctor copy-probe count must equal the servers ls count (%d servers):\n%s", len(live), out)
+	}
+	if strings.Contains(out, "WAL checkpoint skipped") {
+		t.Fatalf("a successful fold-in must stay silent (no INFO note):\n%s", out)
+	}
+	if strings.Contains(out, probeTestSecret) {
+		t.Fatalf("PLAINTEXT LEAKED into the doctor report:\n%s", out)
+	}
+
+	// Leg 2 — checkpoint failure degrades, it never invents a verdict (spec
+	// Step 1: 现有降级路径不恶化,不假 PASS). Commit a third row (WAL-only)
+	// and pin the degradation contract: the probe reads the older snapshot
+	// (undercount — the documented pre-rider behavior, the row cannot claim
+	// the new row), the row stays PASS with the INFO note visible, and the
+	// exit code stays 0 — a busy broker is not a vault fault. The seam stub
+	// stands in for BOTH real failure shapes that checkpointWALBare maps onto
+	// this path: the SQL error AND the busy≠0 result row (see Finding 1 fix —
+	// wal_checkpoint reports a blocked run in its result row, not as an
+	// error).
+	if _, err := st.AddServer(&models.Server{
+		Name:         "orphan",
+		Host:         "192.0.2.11",
+		User:         "deploy",
+		AuthMethod:   models.AuthPassword,
+		CredentialID: cid,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stubCheckpointStoreWAL(t, errors.New("database is locked (simulated busy broker)"))
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("checkpoint failure must degrade, not FAIL: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"vault-open:  PASS", // degraded read, still a real decrypt of a real snapshot — not a fake PASS
+		wantLine,            // older snapshot: the WAL-only row is absent
+		"pre-copy WAL checkpoint skipped (database is locked (simulated busy broker))",
+		"overall: 0 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, probeTestSecret) {
+		t.Fatalf("PLAINTEXT LEAKED into the doctor report:\n%s", out)
 	}
 }

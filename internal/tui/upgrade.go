@@ -33,7 +33,7 @@ const (
 	upgClientName                 // 客户端机器名 form (one field, default hostname)
 	upgDeviceIssue                // device-code mint in flight (no overlay)
 	upgDeviceCode                 // 设备码 one-time screen (wizTokenScreen pattern)
-	upgAccessCard                 // 客户端接入卡 (static overlay, reused T4 accessCard)
+	upgAccessCard                 // client 入网卡 (static overlay, reused T8 clientPairCard)
 )
 
 // upgradeSegment is heap-allocated ONCE in startUpgrade: App travels by value
@@ -136,7 +136,7 @@ func (a App) upgradeFormDone(m formDoneMsg) (tea.Model, tea.Cmd) {
 		return a, a.issueDeviceCode()
 	case upgDeviceCode:
 		a.upg.step = upgAccessCard
-		a.overlay = accessCard(a.upg.serveAddr, a.upg.deviceFp)
+		a.overlay = clientPairCard(a.upg.serveAddr, a.upg.deviceFp)
 		return a, nil
 	case upgAccessCard:
 		return a.upgradeComplete()

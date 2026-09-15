@@ -1,4 +1,4 @@
-# Release pipeline — on a pushed v* tag, builds ssh-manager for
+# Release pipeline — on a pushed v* tag, builds sshmgr for
 # Windows/Linux/macOS (6 targets) and publishes a GitHub Release with
 # SHA256 checksums. See docs/superpowers/specs/2026-08-10-github-release-pipeline-design.md.
 name: release

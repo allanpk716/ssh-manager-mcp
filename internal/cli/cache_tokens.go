@@ -194,9 +194,9 @@ func printCacheToken(out io.Writer, name, code, fingerprint string) {
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "On the work machine:")
 	if fingerprint != "" {
-		fmt.Fprintf(out, "  ssh-manager cache pull --url https://<serve-host>:7878 --token '%s:%s'\n", code, fingerprint)
+		fmt.Fprintf(out, "  sshmgr cache pull --url https://<serve-host>:7878 --token '%s:%s'\n", code, fingerprint)
 		fmt.Fprintf(out, "  # (or) set SSHMGR_SERVE_PIN=%s and pass --token %s\n", fingerprint, code)
 	} else {
-		fmt.Fprintf(out, "  ssh-manager cache pull --url https://<serve-host>:7878 --token %s\n", code)
+		fmt.Fprintf(out, "  sshmgr cache pull --url https://<serve-host>:7878 --token %s\n", code)
 	}
 }

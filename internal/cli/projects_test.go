@@ -11,7 +11,7 @@ import (
 )
 
 // driveProjects runs the CLI against the pinned vault dirs (mirror of clear's
-// driveClear — the dev machine REALLY runs ssh-manager, so every path the
+// driveClear — the dev machine REALLY runs sshmgr, so every path the
 // command touches must come from withClearDirs' env seams).
 func driveProjects(args ...string) error {
 	root := NewRootCmd()

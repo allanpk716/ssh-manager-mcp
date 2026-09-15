@@ -22,7 +22,7 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-const serveCertSubject = "ssh-manager serve"
+const serveCertSubject = "sshmgr serve"
 
 // SPKIFingerprint returns the canonical pinned fingerprint of a server cert's
 // public key: "sha256:" + hex(sha256(SubjectPublicKeyInfo DER)). Pinning the

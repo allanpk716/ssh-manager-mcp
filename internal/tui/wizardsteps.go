@@ -33,7 +33,7 @@ func wizEnsureVault() error {
 		if roles.VaultUnlocked() {
 			return nil
 		}
-		return errors.New("本机 vault 已存在但锁定或不可读：先运行 `ssh-manager unlock`（向导不会覆盖既有 vault）")
+		return errors.New("本机 vault 已存在但锁定或不可读：先运行 `sshmgr unlock`（向导不会覆盖既有 vault）")
 	}
 	mk, err := store.GenerateMasterKey()
 	if err != nil {
@@ -195,16 +195,17 @@ func jsonValue(s string) string {
 }
 
 // stdioEnvLine builds the stdio member line carrying the token — the ONLY
-// sanctioned way to interpolate SSHMGR_TOKEN (symmetric encoding discipline
-// with the http builder's url/Bearer values).
+// sanctioned way to interpolate SSHMGR_TOKEN (complete-value jsonValue
+// encoding, never per-fragment concatenation).
 func stdioEnvLine(token string) string {
 	return `"env": { "SSHMGR_TOKEN": ` + jsonValue(token) + ` }`
 }
 
 // mcpSnippetLines renders the shared snippet skeleton — intro line, the
 // pretty-printed mcpServers object with comma-joined members, and the notes
-// block. Both builders (stdio mcpConfigLines / http mcpHttpConfigLines) call
-// it, so the trailing-comma discipline exists in ONE place.
+// block. mcpConfigLines calls it, so the trailing-comma discipline exists in
+// ONE place. (The http sibling mcpHttpConfigLines was retired with ②a in
+// Plan 42 批1 — MCP-over-HTTP no longer exists to configure.)
 func mcpSnippetLines(members []string, notes []string) []string {
 	lines := []string{
 		"把下面的片段写进 agent 项目的 .mcp.json：",
@@ -234,22 +235,8 @@ func mcpSnippetLines(members []string, notes []string) []string {
 // an empty fieldLines list yields valid JSON too.
 func mcpConfigLines(fieldLines []string, notes []string) []string {
 	members := make([]string, 0, len(fieldLines)+1)
-	members = append(members, `"command": "ssh-manager"`)
+	members = append(members, `"command": "sshmgr"`)
 	members = append(members, fieldLines...)
-	return mcpSnippetLines(members, notes)
-}
-
-// mcpHttpConfigLines renders the ONLINE (serve/http) .mcp.json snippet —
-// sibling of mcpConfigLines (stdio shape), sharing the mcpSnippetLines
-// skeleton. VALUE ENCODING (hard requirement, pinned): urlRef and the
-// Authorization header are encoded via jsonValue on the COMPLETE value
-// string (e.g. "Bearer "+tokenRef) — never per-fragment concatenation.
-func mcpHttpConfigLines(urlRef, tokenRef string, notes []string) []string {
-	members := []string{
-		`"type": "http"`,
-		`"url": ` + jsonValue(urlRef),
-		`"headers": { "Authorization": ` + jsonValue("Bearer "+tokenRef) + ` }`,
-	}
 	return mcpSnippetLines(members, notes)
 }
 
@@ -267,7 +254,7 @@ func mcpConfigScreen(tokenRef string) overlay {
 		},
 		[]string{
 			"单机角色用普通 mcp 启动（不要用 --cache —— 那是 client 角色的离线缓存模式）。",
-			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\ssh-manager.exe"。`,
+			`Windows 建议写绝对路径，如 "command": "C:\\Tools\\sshmgr.exe"。`,
 			".mcp.json 含 token，不要提交进 git。",
 		},
 	), "", "按任意键进入主控台", ""), "\n")

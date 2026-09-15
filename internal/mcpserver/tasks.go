@@ -62,6 +62,18 @@ type bgTask struct {
 	// client 槽 (T4): 引擎入场即挂 (持锁), 终态即关; CloseAll 可达即关。
 	// 终态保留期记录不持有活连接 (spec §1: session 返回即关 Client)。
 	client *sshbroker.Client
+	// auxClient 槽 (Plan 47 T3, spec §2 连接生命周期): relay 的第二条连接 (远程
+	// 源; 本机源为 nil)。由引擎 Run 闭包持锁入场置位; 终态即关 (runTask 终态段
+	// 锁内取引用、锁外关)、CloseAll 可达即关——语义与 client 槽逐字同款。
+	auxClient *sshbroker.Client
+	// relay 键集 (Plan 47 T3, spec §1.1): relay 任务的 read+write 键全集与写子集。
+	// 键由 T4 调用方按 endpoint 限定键空间构造 (server_id+"\x00"+canonical 路径),
+	// 本层零构造、零 canonical 化——同构键空间字面求交。exec 任务恒 nil (零开销)。
+	// 写子集单独保存: 四判定矩阵的 own read ∩ running writes 分支必须能区分运行中
+	// 任务的读键与写键 (read∩read 允许——同源多分发不互斥)。仅 ReserveRelay 持锁
+	// 判定中读, 挂上后不变。
+	relayKeys      map[string]struct{}
+	relayWriteKeys map[string]struct{}
 	// auditEnd 由 Insert 从 spec.AuditEnd 绑定 (终态行构造在闭包内); 引擎
 	// 终态置位后锁外调用。
 	auditEnd func(now time.Time) error
@@ -88,7 +100,10 @@ type BgTaskSpec struct {
 	// 只做 DB 写、无锁交互)。Insert 在持锁段内、goroutine 启动前调用——start 行
 	// 必须先于任何可能的 end 行 (spec §3/§5 顺序钉死)。
 	AuditStart func()
-	// AuditEnd 回写 exec-bg-end 终态审计行 (T4: Start 传 st.WriteAudit 闭包;
+	// AuditAction 是 AuditEnd 落行的 action 词 (Plan 47 spec §6): 空 = "exec-bg-end"
+	// (缺省字面量钉死——exec 路径零行为变化); relay 传 "relay-bg-end"。
+	AuditAction string
+	// AuditEnd 回写终态审计行 (T4: Start 传 st.WriteAudit 闭包;
 	// nil 时零终态审计)。Insert 绑定为 t.auditEnd——行由闭包调用方从 task 字段
 	// 组装 (Command=taskID, Status, ExitCode, DurationMS), 引擎终态后锁外落笔。
 	AuditEnd func(row store.AuditRow) error
@@ -189,17 +204,23 @@ var ErrBgTaskLimit = errors.New("background task limit")
 // 文本即原先两处的字面错误, 零行为变化。
 var ErrBgManagerClosed = errors.New("task manager closed")
 
-// Reserve 预约一个任务槽位 (admission, 持锁)。closed → error;
-// len(tasks)+reserved >= maxTasks → 驱逐最旧终态 (非 running 中 finishedAt 最小,
-// 平局按 id 字典序取小保确定性; 仅 delete from map, 零审计行); 无终态可逐 →
-// error (引导文案 spec §3 原文); 否则 reserved++。预约由 Insert 转正式; Insert
-// 失败时调用方必须 ReleaseReservation 归还。
+// Reserve 预约一个任务槽位 (admission, 持锁)。closed → error; 否则 admitLocked
+// (满员驱逐/ErrBgTaskLimit/reserved++)。预约由 Insert 转正式; Insert 失败时
+// 调用方必须 ReleaseReservation 归还。
 func (m *TaskManager) Reserve() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
 		return ErrBgManagerClosed
 	}
+	return m.admitLocked()
+}
+
+// admitLocked 是 Reserve/ReserveRelay 共用的 admission 体 (调用方必须已持 m.mu):
+// len(tasks)+reserved >= maxTasks → 驱逐最旧终态 (非 running 中 finishedAt 最小,
+// 平局按 id 字典序取小保确定性; 仅 delete from map, 零审计行); 无终态可逐 →
+// error (引导文案 spec §3 原文, Reserve/ReserveRelay 逐字同款); 否则 reserved++。
+func (m *TaskManager) admitLocked() error {
 	if len(m.tasks)+m.reserved >= m.maxTasks {
 		var victim *bgTask
 		for _, t := range m.tasks {
@@ -230,6 +251,72 @@ func (m *TaskManager) ReleaseReservation() {
 	}
 }
 
+// runningKeyHolder 返回持有键 k 的第一个 running relay 任务 id (writesOnly=true
+// 时只查写子集)。终态任务不参与——四矩阵只对 running 求交, 终态条目 (键仍在表,
+// 保留期) 不阻塞同工件重跑/续传。调用方必须已持 m.mu。
+func (m *TaskManager) runningKeyHolder(k string, writesOnly bool) (string, bool) {
+	for _, t := range m.tasks {
+		if t.status != bgStatusRunning {
+			continue
+		}
+		set := t.relayKeys
+		if writesOnly {
+			set = t.relayWriteKeys
+		}
+		if _, bad := set[k]; bad {
+			return t.id, true
+		}
+	}
+	return "", false
+}
+
+// ReserveRelay 是 Reserve 的超集原语 (Plan 47 spec §2⑧, rev3 kimi#3/codex#1/#2):
+// 同一 m.mu 锁闭区间内一体完成 admission (满员驱逐/ErrBgTaskLimit, admitLocked
+// 共用) + relay 键集冲突判定 (§1.1 四矩阵) + insertLocked 转正 + AuditStart 锁内
+// 先落 + goroutine 启动。scan-then-Insert 的竞态窗口因此不存在: 条目仅在本锁持有
+// 时落表, 后到者必然看见先到者的键集; 占位 bgTask 只是栈上 local, 从不进 map——
+// 对外不可见、不被 Reserve 驱逐与 SweepExpired 触及。
+//
+// readKeys/writeKeys 由调用方 (T4) 按 endpoint 限定键空间构造 (write 键 =
+// to_server_id+"\x00"+canonical 工件路径, read 键 = from_server_id+"\x00"+
+// canonical 源路径; 本机源不登记 read 键)。本层不做键构造与 canonical 化, 也不做
+// own read∩own write 检查 (T4 参数层 ① 先拒)。判定 (仅 running 任务): own write
+// ∩ running (writes∪reads) = ∅; own read ∩ running writes = ∅; read-read 允许。
+//
+// 失败路径单一记账 (不与 ReleaseReservation 混用): closed/满员拒绝时未占计数;
+// 冲突拒绝时锁内 reserved-- 回滚 (驱逐已发生的 victim 不复原——终态记录本就是
+// 保留期瞬时态)。返回 effectiveTimeout = spec.Timeout 原样 (T4 已钳定 relayRunCap
+// 72h 常量, 不走 clampBgTimeout/SSHMGR_BG_RUN_CAP; 与 Start 的响应式回显同形态)。
+func (m *TaskManager) ReserveRelay(spec BgTaskSpec, readKeys, writeKeys []string) (string, time.Duration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return "", 0, ErrBgManagerClosed
+	}
+	if err := m.admitLocked(); err != nil {
+		return "", 0, err
+	}
+	for _, k := range writeKeys { // own write ∩ running (writes∪reads)
+		if holder, bad := m.runningKeyHolder(k, false); bad {
+			m.reserved-- // admission 已占计数——失败路径锁内回滚
+			return "", 0, fmt.Errorf("relay conflict: artifact key %q is held by running task %s — wait for it to finish or stop it with exec_stop", k, holder)
+		}
+	}
+	for _, k := range readKeys { // own read ∩ running writes
+		if holder, bad := m.runningKeyHolder(k, true); bad {
+			m.reserved--
+			return "", 0, fmt.Errorf("relay conflict: source key %q is the write target of running task %s — wait for it to finish or stop it with exec_stop", k, holder)
+		}
+	}
+	id, err := m.insertLocked(&spec, readKeys, writeKeys)
+	if err != nil {
+		// 不可达: closed 已在入口同锁判定, 冲突已排除; 防御性不吞 (计数已由
+		// insertLocked 的钳非负语义归还)。
+		return "", 0, err
+	}
+	return id, spec.Timeout, nil
+}
+
 // Insert 将预约转正式注册 (持锁)。closed → error; 生成 uuid taskID; 置
 // running/startedAt/deadline=now+spec.Timeout; reserved-- (钳非负); map 写入;
 // spec.AuditStart 在持锁段内、goroutine 启动前调用 (顺序钉死, 见 BgTaskSpec);
@@ -240,6 +327,17 @@ func (m *TaskManager) ReleaseReservation() {
 func (m *TaskManager) Insert(spec *BgTaskSpec) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.insertLocked(spec, nil, nil)
+}
+
+// insertLocked 是 Insert/ReserveRelay 共用的转正原语 (调用方必须已持 m.mu; 私有
+// 不取锁——sync.Mutex 不可重入, 同一锁闭区间内复用即自死锁, Plan 47 spec §2⑧)。
+// 语义与原 Insert 完全一致 (exec 路径零行为变化): closed → ErrBgManagerClosed;
+// reserved-- (钳非负); 建条目落表; AuditStart 持锁先落; goroutine 启动。
+// readKeys/writeKeys 非空时挂入条目的 relay 键集 (ReserveRelay 专用; Insert 传
+// nil, exec 任务键集恒 nil)。auditEnd 闭包的 action 词取 spec.AuditAction
+// (空 = "exec-bg-end" 字面量, Plan 47 spec §6)。
+func (m *TaskManager) insertLocked(spec *BgTaskSpec, readKeys, writeKeys []string) (string, error) {
 	if m.closed {
 		return "", ErrBgManagerClosed
 	}
@@ -258,6 +356,19 @@ func (m *TaskManager) Insert(spec *BgTaskSpec) (string, error) {
 		deadline:  now.Add(spec.Timeout),
 		waitCh:    make(chan struct{}), // T5: 代际广播初代通道 (notify 的 close+换新对象)
 	}
+	if len(readKeys)+len(writeKeys) > 0 {
+		t.relayKeys = make(map[string]struct{}, len(readKeys)+len(writeKeys))
+		for _, k := range readKeys {
+			t.relayKeys[k] = struct{}{}
+		}
+		for _, k := range writeKeys {
+			t.relayKeys[k] = struct{}{}
+		}
+		t.relayWriteKeys = make(map[string]struct{}, len(writeKeys))
+		for _, k := range writeKeys {
+			t.relayWriteKeys[k] = struct{}{}
+		}
+	}
 	if spec.PreFinished {
 		t.status = bgStatusDone
 		t.finishedAt = now
@@ -269,6 +380,10 @@ func (m *TaskManager) Insert(spec *BgTaskSpec) (string, error) {
 	t.stderr = sshbroker.NewRollingBuffer(MaxOutputBytes)
 	if spec.AuditEnd != nil {
 		endFn := spec.AuditEnd
+		action := spec.AuditAction
+		if action == "" {
+			action = "exec-bg-end" // 缺省字面量钉死——exec 路径零行为变化 (spec §6)
+		}
 		t.auditEnd = func(finish time.Time) error {
 			status := t.status
 			if status == bgStatusDone {
@@ -276,7 +391,7 @@ func (m *TaskManager) Insert(spec *BgTaskSpec) (string, error) {
 			}
 			return endFn(store.AuditRow{
 				TS: finish, ProjectID: t.projectID, ServerID: t.serverID,
-				Action: "exec-bg-end", Command: t.id, Sudo: t.sudo,
+				Action: action, Command: t.id, Sudo: t.sudo,
 				Status: status, ExitCode: t.exitCode,
 				DurationMS: finish.Sub(t.startedAt).Milliseconds(),
 			})
@@ -347,6 +462,9 @@ func (m *TaskManager) CloseAll() {
 			// keepalive goroutine (x/crypto Close 语义)——持 m.mu 关连接无死锁面;
 			// golang.org/x/crypto 升级时需重验此论证。
 			_ = t.client.Close() // T4: client 槽接入——引擎可能尚未挂槽/尚未自关, 幂等双保险
+		}
+		if t.auxClient != nil {
+			_ = t.auxClient.Close() // Plan 47 T3: 第二连接槽同款论证、同款双保险
 		}
 		m.notify(t) // T5 触发点③: 摘表广播——唤醒在途 Output 等待者 (零等待者短路)
 	}
@@ -603,10 +721,14 @@ func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Cli
 	}
 	writeEnd := t.status != bgStatusRunning && !m.closed // 终态行由本 goroutine 落笔 (同点同锁)
 	nowFn := m.now                                       // 锁内捕获时钟, 锁外调用免字段竞争
+	aux := t.auxClient                                   // 第二连接槽锁内取引用 (引擎 Run 闭包持锁挂槽)
 	m.notify(t)                                          // 终态广播 (spec §2.3 触发点②; 零等待者短路)
 	t.cancel()                                           // 释放 WithTimeout 资源
 	m.mu.Unlock()
 	_ = cli.Close() // 终态即关 Client (锁外关, 幂等)
+	if aux != nil {
+		_ = aux.Close() // 终态即关第二连接槽 (同款锁外关, 幂等; Plan 47 spec §2)
+	}
 	if writeEnd && t.auditEnd != nil {
 		_ = t.auditEnd(nowFn()) // exec-bg-end 行: Command=taskID, Status, ExitCode, DurationMS
 	}

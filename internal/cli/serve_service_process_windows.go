@@ -7,25 +7,25 @@ import (
 	"strings"
 )
 
-// serveProcessRunningWindows reports whether ssh-manager.exe is currently
+// serveProcessRunningWindows reports whether sshmgr.exe is currently
 // running on Windows. Uses tasklist's CSV output (opencode #7 fix carried
 // forward from the old serve_install_windows.go): match the FIRST CSV field
 // EXACTLY so a substring match does not false-positive on processes whose
-// name merely contains "ssh-manager.exe" (e.g. my-ssh-manager.exe).
+// name merely contains "sshmgr.exe" (e.g. my-sshmgr.exe).
 func serveProcessRunningWindows() bool {
-	out, err := exec.Command("tasklist.exe", "/FI", "IMAGENAME eq ssh-manager.exe", "/FO", "CSV", "/NH").CombinedOutput()
+	out, err := exec.Command("tasklist.exe", "/FI", "IMAGENAME eq sshmgr.exe", "/FO", "CSV", "/NH").CombinedOutput()
 	if err != nil {
 		// tasklist prints "INFO: No tasks are running ..." (non-zero exit) when
 		// nothing matches; that is the not-running case, not an error.
 		return false
 	}
 	for _, line := range strings.Split(string(out), "\n") {
-		// CSV rows look like: "ssh-manager.exe","1234","Console","1","12,345 K"
+		// CSV rows look like: "sshmgr.exe","1234","Console","1","12,345 K"
 		// The first field is the image name; match it EXACTLY (case-insensitive).
 		fields := strings.Split(line, ",")
 		if len(fields) >= 1 {
 			name := strings.Trim(strings.TrimSpace(fields[0]), `"`)
-			if strings.EqualFold(name, "ssh-manager.exe") {
+			if strings.EqualFold(name, "sshmgr.exe") {
 				return true
 			}
 		}

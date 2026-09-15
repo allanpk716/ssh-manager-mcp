@@ -8,7 +8,7 @@
 
 ## 怎么读这些示例
 
-- agent 拿到的 10 个工具是：`list_servers` / `exec_command` / `download_file` / `upload_file` / `upload_content` / `forward_port` / `close_port` / `exec_background` / `exec_output` / `exec_stop`（长活命令走后台三件套；详见根 [README](../README.md#what-the-agent-gets-the-mcp-tools)）。
+- agent 拿到的 12 个工具是：`list_servers` / `exec_command` / `download_file` / `upload_file` / `upload_content` / `exec_context` / `forward_port` / `close_port` / `exec_background` / `exec_output` / `exec_stop` / `relay_file`（长活命令走后台三件套；大文件跨机走 `relay_file`，见场景 9；详见根 [README](../README.md#what-the-agent-gets-the-mcp-tools)）。
 - **你不需要记工具名**。你用自然语言说目标，agent 自己会先 `list_servers` 拿到真实的 server `id`，再用 `id` 调后续工具。下面“agent 会怎么用”只是让你知道它背后在干嘛。
 - 所有示例都假设 agent 绑定的 profile 里有名为 `gpu` / `db` / `web` 等的服务器——把名字换成你自己的。
 
@@ -67,6 +67,7 @@
 - 上传 cap：**单个文件超过 1 MiB 会在传输前被直接拒绝**（错误里带文件名/实际大小/上限，零字节传输；目录上传时此前已完成的文件照常保留）；多个文件累计超过 1 MiB 时已完成的保留并如实标 `truncated=true`（其后的文件不再上传）→ 拆小批次重传。
 - 符号链接三态（传目录时）：**根**是符号链接/junction → 跟链解析成目标目录再传；**嵌套的 symlink→目录**（含 Windows junction）→ **显式拒绝**，错误形如 `symlinked directory not uploaded: <路径> — upload the target directory directly (following directory links recursively is not supported)`（要传就直接传目标目录，不递归跟链——环/重复访问风险）；**嵌套的 symlink→文件** → 跟链上传目标内容（cap 按目标大小判，Plan 24）。
 - 上传的是你本机（broker 所在机器）上的文件——agent 在你机器上读文件再推过去。
+- 单个文件超过 1 MiB 或要**从一台服务器搬到另一台**？那是 `relay_file` 的活（见场景 9）。
 - **内容在 agent 手里、不在任何机器磁盘上？用 `upload_content`**：内容直接内联进工具参数（JSON 入参）写成远程单文件（≤8 MiB，父目录自动建、已存在即覆盖；二进制走 base64）。这是**跨机形态的关键路径**：远程 serve 拓扑（笔记本 agent → serve 主机 broker → 目标机）下，`upload_file` 读的是 **serve 主机**的文件系统，笔记本上的文件它够不到——agent 自己生成的配置/脚本/小产物直接 `upload_content` 推过去（agent 侧详见 [agent-tools.md](./agent-tools.md) upload_content 节）。单文件小配置首选它；整目录、大文件仍走 `upload_file`。
 
 ---
@@ -125,13 +126,13 @@ psql -h 127.0.0.1 -p <local_port> -U myuser mydb
 **怎么做**（编排见 [agent-access.md](./agent-access.md#典型编排)）：
 1. 建三个 profile，各自 grant 对应环境的 server：
    ```bash
-   ssh-manager profiles add dev  && ssh-manager profiles grant dev dev-web dev-db
-   ssh-manager profiles add prod && ssh-manager profiles grant prod prod-web prod-db
+   sshmgr profiles add dev  && sshmgr profiles grant dev dev-web dev-db
+   sshmgr profiles add prod && sshmgr profiles grant prod prod-web prod-db
    ```
 2. 建**两个** project，各绑一个 profile，得到**两个不同** token：
    ```bash
-   ssh-manager projects add dev-agent  --profile dev
-   ssh-manager projects add prod-agent --profile prod
+   sshmgr projects add dev-agent  --profile dev
+   sshmgr projects add prod-agent --profile prod
    ```
 3. 两份 `.mcp.json`（分别给两个 Claude Code 工作区 / 两个客户端）。
 4. prod 想“只读”？在 prod 工作区的 `CLAUDE.md` / 系统提示里写明“只允许 `exec_command` 跑只读命令（如 `cat / ls / ps / df / nvidia-smi`），禁止任何写操作”，配合**不给 sudo 密码**（`has_sudo=false`）来收敛破坏面。
@@ -145,7 +146,7 @@ psql -h 127.0.0.1 -p <local_port> -U myuser mydb
 **情况 A：你不小心把 `.mcp.json`（含 token）提交到了公开仓库。**
 
 ```bash
-ssh-manager projects rotate dev-agent      # 旧 token 立刻失效，打印新 token + 新 .mcp.json
+sshmgr projects rotate dev-agent      # 旧 token 立刻失效，打印新 token + 新 .mcp.json
 # 1. 把新 .mcp.json 配回客户端
 # 2. 从 git 历史里清掉旧 token（git filter-repo / BFG），强制推送
 # 3. （可选）审计：这段时间这台机器有没有异常操作
@@ -155,20 +156,20 @@ ssh-manager projects rotate dev-agent      # 旧 token 立刻失效，打印新 
 **情况 B：某 agent 用完了 / 实习结束了，彻底收回。**
 
 ```bash
-ssh-manager projects revoke intern-agent   # token 永久失效；默认从 ls 隐藏
+sshmgr projects revoke intern-agent   # token 永久失效；默认从 ls 隐藏
 # 审计记录保留（软删除）。
-# serve 模式下一请求即拒；stdio 会话重启客户端；隧道见 agent-access「断连语义（四层）」。
+# 多机 cache 下次保鲜新快照即拒（≤30min）；stdio 会话重启客户端；隧道见 agent-access「断连语义」。
 ```
 
 **情况 C：临时暂停（放假 / 审查）。**
 
 ```bash
-ssh-manager projects disable contractor-agent   # token 被拒
+sshmgr projects disable contractor-agent   # token 被拒
 # ... 审查完毕 ...
-ssh-manager projects enable  contractor-agent   # 恢复，同一张 token 重新有效
+sshmgr projects enable  contractor-agent   # 恢复，同一张 token 重新有效
 ```
 
-> 断连语义分四层（stdio=下次重连；serve=逐请求即拒；既有隧道 revoke/disable 后 ~15s 内级联拆除，owner 也可 `tunnels kill` 急停；离线 cache 须轮换凭据），详见 [agent-access.md](./agent-access.md) 的「断连语义（四层）」一节。
+> 断连语义分层（stdio=下次重连；多机 cache=下次保鲜新快照即拒 ≤30min、吊设备码回连即销毁；既有隧道 revoke/disable 后 ~15s 内级联拆除，owner 也可 `tunnels kill` 急停；永离线 cache 靠 max_offline + 轮换凭据），详见 [agent-access.md](./agent-access.md) 的「断连语义」一节。
 
 ---
 
@@ -177,11 +178,11 @@ ssh-manager projects enable  contractor-agent   # 恢复，同一张 token 重�
 有时候你不想经过 agent，想直接在服务器上跑命令。owner CLI 提供了**不受 profile 限制、输出不封顶**的直达通道：
 
 ```bash
-ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原样回来
+sshmgr ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原样回来
 ```
 
 **要点**：
-- `ssh-manager ssh <name> <command...>` = 用库里存的凭据，直接在命名机器上跑命令，**不受任何 profile 限制**（你是 owner，全权）。输出不封顶（和 agent 路径的 1 MiB 封顶不同）。单命令（连接+执行共享 120s 超时）。
+- `sshmgr ssh <name> <command...>` = 用库里存的凭据，直接在命名机器上跑命令，**不受任何 profile 限制**（你是 owner，全权）。输出不封顶（和 agent 路径的 1 MiB 封顶不同）。单命令（连接+执行共享 120s 超时）。
 - 这条命令**也不是交互式 shell**：后面的 `<command...>` 是要跑的命令（空格分隔会被拼成一行；**不带命令 / 空命令会显式报错**）。它解决的是“owner 用 broker 里存的凭据直接跑一条命令”，不是给你开个 `ssh -t` 终端。要交互式终端，用你自己的 ssh 客户端（凭据需自行已有或另行配置——它们可能只存在本 vault 里）。
 - 连接+执行**共享 120 秒超时**；输出不封顶；**远端非零退出会让本命令以非零码退出**（码值不透传，见 stderr 错误消息；脚本里判断非零即可）。
 - 这条路同样写审计（`action=exec`）。
@@ -192,6 +193,28 @@ ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原
 
 ---
 
+## 场景 9：大文件跨机中继（在线机 → 离线机，`relay_file`）
+
+**你想要**：一个几十 GB 的模型权重已经下载在能上网的服务器 `gpu` 上，要送到一台**真空离线机** `airgap`（它和 `gpu` 零网络可达，唯一交汇点是 broker 所在机）。
+
+**你怎么说**：
+> 把 gpu 上的 /models/llm-70b.q4.gguf 中继到 airgap 的 /models/ 下，传完在那边校验一下 sha256。
+
+**agent 会怎么用**：
+1. `list_servers` → 拿到两台的 id。
+2. `relay_file`（from_server_id=gpu 的 id，from_path=`/models/llm-70b.q4.gguf`，to_server_id=airgap 的 id，to_path=`/models/llm-70b.q4.gguf`）→ 立刻返回 `task_id`（文件字节流经 broker 内存，**不进 agent 上下文**）。
+3. `exec_output(task_id)` 轮询逐块进度；传完的末行带 `file_sha256` 摘要。
+4. 在 airgap 上 `exec_command`（command=`sha256sum /models/llm-70b.q4.gguf`）→ 与 `file_sha256` 比对，报出结论。
+
+**要点**：
+- 这是**服务器↔服务器**的搬运——`upload_file`（本机→服务器，单文件 1 MiB 帽）和 `download_file`（服务器→agent 上下文，1 MiB 帽）都干不了；`scp serverA:file serverB:` 形似但需要两端凭据，而凭据只活在 broker vault 里——relay 是 broker 代理中继，凭据永不出现。
+- **可断点续传**：中途断了 / 停了 / broker 重启了，重跑 `relay_file` 同参数 = 只补缺失块（进度锚在目标机的 `<to_path>.sshmgr-manifest.json`）；真名文件出现 = 传完。
+- 中断后**双摘要形态**：fresh 起步（或从零自愈）的任务报 `file_sha256`（直接对 `sha256sum`）；续传了已完成块的任务只报块 merkle 根（逐块落盘时已校验）——要简单校验，就让 agent 在两端各跑 `sha256sum` 对比（如上）。
+- 目录不直传：先在源端 `tar czf` 再 relay，目标端 untar。目标端 sftp 须为 OpenSSH 系（`posix-rename@openssh.com` 硬依赖）；root 属主路径不可写（无 sudo）。
+- 传完不续传了，目标端的 `.sshmgr-partial` / `.sshmgr-manifest.json` 残留**无害但占盘**，让 agent `rm` 掉即可（真名已在 + manifest 残留 = 无害碎片）。
+
+---
+
 ## 能力边界（故意不做）
 
 | 想做 | 现状 | 替代 |
@@ -199,7 +222,7 @@ ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原
 | 交互式 shell（`ssh -t`） | ❌ 不支持 | 用你自己的 ssh 客户端；agent 这边用 `&&` / `;` 串命令 |
 | 递归下载整个目录 | ❌ `download_file` 只单文件 | 远端 `tar` 后下载 tar |
 | 远程转发 `-R` / 动态 `-D` | ❌ 只支持本地 `-L` | — |
-| 跑超 5 分钟的长命令 | ✅ 前台 `exec_command` 5min 硬顶；长活走 `exec_background`（24h 上限）+ `exec_output` 增量轮询 + `exec_stop` | 仍可用 `ssh-manager ssh`（120s）+ `nohup` |
+| 跑超 5 分钟的长命令 | ✅ 前台 `exec_command` 5min 硬顶；长活走 `exec_background`（24h 上限）+ `exec_output` 增量轮询 + `exec_stop` | 仍可用 `sshmgr ssh`（120s）+ `nohup` |
 | 单次输出 > 1 MiB | ⚠️ 截断（标 `truncated`） | 切片（`head/tail/grep`）分多次 |
 
 ---
@@ -209,9 +232,10 @@ ssh-manager ssh gpu nvidia-smi          # 在 gpu 上跑一条命令，输出原
 - **跑命令** → `exec_command`（要 root 就 `sudo=true`，别自己拼 sudo）。
 - **看文件** → 小文件 `download_file`，大文件 / 目录用 `exec_command` 切片或 `tar`。
 - **推文件** → `upload_file`（目录递归；写 root 路径先传 `/tmp` 再 sudo 移）。
+- **服务器间搬大文件** → `relay_file`（断点续传、零上下文；见场景 9）。
 - **连内网服务** → `forward_port` 拿本地端口，用完 `close_port`。
 - **隔离多 agent** → 不同 profile + 不同 project。
-- **出事了** → rotate（换卡）/ disable（暂停）/ revoke（吊销）——serve 模式下一请求即拒；stdio 会话重启客户端接管；离线缓存场景须轮换服务器凭据（见 agent-access「断连语义（四层）」）。
-- **你自己用** → `ssh-manager ssh <name> <cmd>`，全权直达。
+- **出事了** → rotate（换卡）/ disable（暂停）/ revoke（吊销）——多机 cache 下次保鲜（≤30min）新快照即拒、吊设备码回连即销毁本地缓存；stdio 会话重启客户端接管；永离线缓存场景须轮换服务器凭据（见 agent-access「断连语义」）。
+- **你自己用** → `sshmgr ssh <name> <cmd>`，全权直达。
 
 需要更细的命令参数？看 [managing-servers.md](./managing-servers.md)。授权细节？看 [agent-access.md](./agent-access.md)。

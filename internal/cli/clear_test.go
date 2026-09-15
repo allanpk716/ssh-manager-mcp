@@ -16,7 +16,7 @@ import (
 
 // withClearDirs isolates every filesystem location `clear` touches via env —
 // mirror of roles' withDirs / tui's withRoleDirs (same rationale: the dev
-// machine REALLY runs ssh-manager, so an unpinned probe/enumeration would see
+// machine REALLY runs sshmgr, so an unpinned probe/enumeration would see
 // — and a teardown test could DELETE — the operator's live vault).
 func withClearDirs(t *testing.T) (vaultDir, userDir string) {
 	t.Helper()

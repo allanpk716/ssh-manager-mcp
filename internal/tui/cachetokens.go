@@ -125,6 +125,6 @@ func (p *cacheTokensPage) Render(width, height int) string {
 // ride in and would break the pasted command.
 func deviceCodeBody(serveURL, code, fingerprint string) string {
 	serveURL = strings.TrimSpace(serveURL)
-	return fmt.Sprintf("设备码  %s\n\n指纹    %s\n\n在工作机上执行：\nssh-manager cache pull --url %s --token '%s:%s'",
+	return fmt.Sprintf("设备码  %s\n\n指纹    %s\n\n在工作机上执行：\nsshmgr cache pull --url %s --token '%s:%s'",
 		code, fingerprint, serveURL, code, fingerprint)
 }

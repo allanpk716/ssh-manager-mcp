@@ -123,8 +123,8 @@ func TestImportSnapshot_RoundTrip_CrossMasterKey(t *testing.T) {
 	}
 	// host keys
 	hk, _ := b.GetHostKey("192.0.2.10", 22)
-	if !bytes.Equal(hk, []byte("hk-blob")) {
-		t.Fatalf("host key not restored: %v", hk)
+	if hk == nil || !bytes.Equal(hk.Blob, []byte("hk-blob")) {
+		t.Fatalf("host key not restored: %+v", hk)
 	}
 	// THE PROOF — original plaintext token from A still validates on B (hash preserved verbatim)
 	pj, err := b.VerifyToken(token)
@@ -551,5 +551,122 @@ func TestExportSnapshotForProfile_StillHydrates(t *testing.T) {
 	}
 	if len(ids) != 2 {
 		t.Fatalf("hydrated profile must resolve 2 servers, got %v", ids)
+	}
+}
+
+// --- Plan 48: 锚元数据随快照全链携带(spec §5、§8 T10) ------------------------
+
+// pinMetaRow is the raw three-column readback of one host_keys row.
+func pinMetaRow(t *testing.T, s *Store, hostPort string) (format, source, device string, blob []byte) {
+	t.Helper()
+	err := s.db.QueryRow(`SELECT pin_format, pin_source, pin_device, key_blob FROM host_keys WHERE host_port=?`, hostPort).
+		Scan(&format, &source, &device, &blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return format, source, device, blob
+}
+
+// TestSnapshotHostKeyPinMetadataRoundTrip: all three pin flavors (tofu blob,
+// forwarded blob with device, fingerprint anchor) survive export → import
+// byte- and column-exact through BOTH export paths' shared ListHostKeys read.
+func TestSnapshotHostKeyPinMetadataRoundTrip(t *testing.T) {
+	a := newTestStore(t)
+	keyA, fpA := pinHostKey(t)
+	if err := a.SaveHostKey("10.0.0.1", 22, keyA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.InsertForwardedPin("10.0.0.2", 22, keyA, "dev-laptop", AuditRow{Action: "pin-forward", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	seedFingerprintPin(t, a, "10.0.0.3", 22, fpA)
+
+	snap, err := a.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][3]string{
+		"10.0.0.1:22": {"blob", "tofu", ""},
+		"10.0.0.2:22": {"blob", "forward", "dev-laptop"},
+		"10.0.0.3:22": {"fingerprint", "tofu", ""},
+	}
+	if len(snap.HostKeys) != len(want) {
+		t.Fatalf("snapshot must carry all %d anchors, got %d", len(want), len(snap.HostKeys))
+	}
+	for _, h := range snap.HostKeys {
+		w, ok := want[h.HostPort]
+		if !ok {
+			t.Fatalf("unexpected anchor in snapshot: %s", h.HostPort)
+		}
+		if h.PinFormat != w[0] || h.PinSource != w[1] || h.PinDevice != w[2] {
+			t.Fatalf("%s pin metadata = %q/%q/%q, want %q/%q/%q", h.HostPort, h.PinFormat, h.PinSource, h.PinDevice, w[0], w[1], w[2])
+		}
+	}
+
+	// Same metadata must flow through the profile-scoped export path.
+	prof, err := a.AddProfile("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoped, err := a.ExportSnapshotForProfile(prof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scoped.HostKeys) != 0 {
+		t.Fatalf("profile with no granted servers must carry no anchors, got %+v", scoped.HostKeys)
+	}
+
+	b := newTestStore(t)
+	if err := b.ImportSnapshot(snap); err != nil {
+		t.Fatal(err)
+	}
+	for hostPort, w := range want {
+		format, source, device, blob := pinMetaRow(t, b, hostPort)
+		if format != w[0] || source != w[1] || device != w[2] {
+			t.Fatalf("imported %s = %q/%q/%q, want %q/%q/%q", hostPort, format, source, device, w[0], w[1], w[2])
+		}
+		_ = blob
+	}
+	if got := mustLoadPin(t, b, "10.0.0.3", 22); got == nil || got.Format != "fingerprint" || string(got.Blob) != fpA {
+		t.Fatalf("fingerprint anchor corrupted across roundtrip: %+v", got)
+	}
+}
+
+// TestImportSnapshotV14ShapeNormalizesPinColumns: a v0.14-shaped snapshot (the
+// three pin fields absent from the JSON) imports as blob/tofu — the ADD COLUMN
+// DEFAULT back-fills only EXISTING rows, never explicit inserts, so the
+// normalization must be code (rev3: the naive Go-zero-value insert would store
+// empty strings).
+func TestImportSnapshotV14ShapeNormalizesPinColumns(t *testing.T) {
+	keyA, _ := pinHostKey(t)
+	snap := &Snapshot{
+		Version:  1,
+		HostKeys: []SnapshotHostKey{{HostPort: "10.0.0.9:22", KeyBlob: keyA, CreatedAt: 1700000000}},
+	}
+
+	// wire fidelity: with the fields zero, omitempty ships NO pin keys — the
+	// exact JSON shape a v0.14 broker produces.
+	wire, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(wire, []byte("pin_format")) || bytes.Contains(wire, []byte("pin_source")) || bytes.Contains(wire, []byte("pin_device")) {
+		t.Fatalf("v0.14-shaped snapshot must not carry pin fields: %s", wire)
+	}
+	var decoded Snapshot
+	if err := json.Unmarshal(wire, &decoded); err != nil {
+		t.Fatal(err)
+	}
+
+	b := newTestStore(t)
+	if err := b.ImportSnapshot(&decoded); err != nil {
+		t.Fatal(err)
+	}
+	format, source, device, blob := pinMetaRow(t, b, "10.0.0.9:22")
+	if format != "blob" || source != "tofu" || device != "" {
+		t.Fatalf("v0.14 anchor imported as %q/%q/%q, want blob/tofu/empty", format, source, device)
+	}
+	if !bytes.Equal(blob, keyA) {
+		t.Fatalf("v0.14 anchor bytes corrupted: %v", blob)
 	}
 }

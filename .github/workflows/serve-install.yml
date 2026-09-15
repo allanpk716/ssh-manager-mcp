@@ -96,18 +96,18 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      # Build the ssh-manager binary the integration test will install as the
-      # service action. Resolves to ./ssh-manager (or ssh-manager.exe on
+      # Build the sshmgr binary the integration test will install as the
+      # service action. Resolves to ./sshmgr (or sshmgr.exe on
       # Windows) at the repo root; the test's resolveSSHManagerBin walks up
       # from the test working dir to find it.
-      - name: Build ssh-manager
+      - name: Build sshmgr
         shell: bash
         run: |
           # Windows runner's default shell is pwsh; force bash so the same
-          # `go build -o ssh-manager ./cmd/ssh-manager` works on all 3 lanes.
-          # On Windows Go emits ssh-manager.exe automatically because GOOS=windows
+          # `go build -o sshmgr ./cmd/sshmgr` works on all 3 lanes.
+          # On Windows Go emits sshmgr.exe automatically because GOOS=windows
           # (the .exe suffix is added by the Go linker for windows target).
-          go build -o ssh-manager ./cmd/ssh-manager
+          go build -o sshmgr ./cmd/sshmgr
 
       # Cross-platform no-regression (spec §7.4): all three GOOS build clean.
       # shell: bash is REQUIRED so `VAR=value command` works on the Windows
@@ -167,15 +167,15 @@ jobs:
         if: always()
         shell: bash
         run: |
-          if [ -x ./ssh-manager ]; then
-            ./ssh-manager serve uninstall || true
+          if [ -x ./sshmgr ]; then
+            ./sshmgr serve uninstall || true
           fi
-          if [ -x ./ssh-manager.exe ]; then
-            ./ssh-manager.exe serve uninstall || true
+          if [ -x ./sshmgr.exe ]; then
+            ./sshmgr.exe serve uninstall || true
           fi
           # Windows-specific belt-and-suspenders (the old Task Scheduler path
           # named the task differently; this clears any stale Plan 15 task).
           if command -v schtasks >/dev/null 2>&1; then
-            schtasks /Delete /TN ssh-manager-serve /F 2>/dev/null || true
+            schtasks /Delete /TN sshmgr-serve /F 2>/dev/null || true
           fi
           exit 0

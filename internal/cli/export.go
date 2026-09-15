@@ -54,7 +54,7 @@ independent of this machine's vault master key, so it restores on any machine.
 The file is only as strong as its passphrase (offline brute-force is possible if
 the file leaks — like a KeePass database). Use a strong passphrase.
 
-To restore: ssh-manager import <file> (into a fresh/empty vault).`,
+To restore: sshmgr import <file> (into a fresh/empty vault).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := openUnlockedStore()
 			if err != nil {

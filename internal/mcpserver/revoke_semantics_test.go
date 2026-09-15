@@ -1,25 +1,29 @@
 package mcpserver
 
-// Disconnect-semantics regression pins (Plan 35 contract). The three facts
-// documented in docs/agent-access.md 「断连语义（四层）」: (1) VerifyToken
-// rejects a revoked token immediately (the serve per-request gate); (2) via
-// the serve HTTP handler, a revoked project's close_port (and any other
-// request) is rejected with 401 BEFORE reaching the tool layer; (3) an
-// ALREADY-OPEN forward is torn down within one control tick (~15s; tests
-// drive runControlTick directly for determinism) — this flips the Plan-25
-// "keeps forwarding" pin (owner decision then, `tunnels kill` CLI was
-// backlog); the owner now has the emergency stop: revoke/disable cascade,
-// `tunnels kill <id>` / `--project`, and bind-whitelist shrink all close
-// tunnels within a tick (Plan 35 spec §1). Background tasks survive
-// revocation unchanged (Plan 32 pin, TestRevokedProjectKeepsBackgroundTaskRunning).
+// Disconnect-semantics regression pins (Plan 35 contract). The facts
+// documented in docs/agent-access.md 「断连语义（四层）」 that survive Plan 42
+// 批1's ②a removal: (1) VerifyToken rejects a revoked token immediately (the
+// stdio/本机 per-request gate); (2) an ALREADY-OPEN forward is torn down within
+// one control tick (~15s; tests drive runControlTick directly for determinism)
+// — this flips the Plan-25 "keeps forwarding" pin (owner decision then,
+// `tunnels kill` CLI was backlog); the owner now has the emergency stop:
+// revoke/disable cascade, `tunnels kill <id>` / `--project`, and bind-whitelist
+// shrink all close tunnels within a tick (Plan 35 spec §1). Background tasks
+// survive revocation unchanged (Plan 32 pin,
+// TestRevokedProjectKeepsBackgroundTaskRunning).
+//
+// Retired with ②a (Plan 42 批1 T1): the old layer-2 pin
+// (TestServeHTTPRejectsRevokedTokenPerRequest — a revoked project's MCP
+// request 401s at the serve HTTP middleware before reaching the tool layer).
+// The remote MCP-over-HTTP surface no longer exists (every non-/snapshot path
+// answers 404 before any auth verdict — see TestServe_MCPOverHTTPRemoved), so
+// there is no per-request HTTP gate left to pin; revocation now reaches remote
+// clients via the snapshot-refresh/quarantine paths (spec §3.1-2 三路径).
 
 import (
 	"context"
 	"fmt"
 	"net"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -32,9 +36,8 @@ import (
 // ("revoked project's tunnel keeps forwarding — owner decision, kill CLI was
 // backlog"). Plan 35 contract (spec §1): revoke cascades into tunnel teardown
 // within one control tick (~15s; tests drive runControlTick directly for
-// determinism). The HTTP per-request 401 layer above is unchanged (see
-// TestServeHTTPRejectsRevokedTokenPerRequest); background-task survival is
-// unchanged (TestRevokedProjectKeepsBackgroundTaskRunning, Plan 32 pin).
+// determinism). Background-task survival is unchanged
+// (TestRevokedProjectKeepsBackgroundTaskRunning, Plan 32 pin).
 func TestRevokedProjectTunnelsTornByControlTick(t *testing.T) {
 	st := newStore(t)
 	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
@@ -71,52 +74,6 @@ func TestRevokedProjectTunnelsTornByControlTick(t *testing.T) {
 	}
 	if has, _ := st.HasTunnelRegistryRow(out.TunnelID); has {
 		t.Fatal("mirror row must be gone after cascade teardown")
-	}
-}
-
-// TestServeHTTPRejectsRevokedTokenPerRequest pins layer 2 end-to-end at the
-// HTTP middleware: post-revoke close_port (and initialize) both 401 — the
-// request never reaches the tool layer, so a revoked project cannot even
-// close its own tunnel via close_port.
-func TestServeHTTPRejectsRevokedTokenPerRequest(t *testing.T) {
-	st := newStore(t)
-	pid, _ := st.AddProfile("p")
-	projID, token, err := st.AddProject("proj", pid)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	r, err := NewServeRunner(st)
-	if err != nil {
-		t.Fatalf("NewServeRunner: %v", err)
-	}
-	defer r.Close()
-	h := r.HTTPHandler()
-
-	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
-	closeBody := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"close_port","arguments":{"tunnel_id":"irrelevant"}}}`
-
-	post := func(body, tok string) int {
-		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		req.Header.Set("Authorization", "Bearer "+tok)
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, req)
-		return rr.Code
-	}
-
-	if code := post(initBody, token); code != http.StatusOK {
-		t.Fatalf("sanity: pre-revoke initialize = %d, want 200", code)
-	}
-	if err := st.SetProjectStatus(projID, models.ProjectRevoked); err != nil {
-		t.Fatal(err)
-	}
-	if code := post(closeBody, token); code != http.StatusUnauthorized {
-		t.Fatalf("post-revoke close_port = %d, want 401 (rejected before tool layer)", code)
-	}
-	if code := post(initBody, token); code != http.StatusUnauthorized {
-		t.Fatalf("post-revoke initialize = %d, want 401", code)
 	}
 }
 

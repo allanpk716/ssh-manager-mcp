@@ -229,23 +229,22 @@ func TestSnapshot_ProjectTokenRejected(t *testing.T) {
 	}
 }
 
+// TestSnapshot_CacheTokenRejectedOnMCPPath (Plan 42 批1 T1 rewrite): the
+// MCP-over-HTTP route is GONE — the old streamable path answers 404 to a cache
+// token (as to any token). The keystone's cache-token half survives in its new
+// form: no token class can drive a remote MCP tool, because the route no longer
+// exists.
 func TestSnapshot_CacheTokenRejectedOnMCPPath(t *testing.T) {
 	srv, cacheToken, _, _ := newSnapshotRunner(t)
-	// The MCP endpoint expects a streamable-HTTP MCP initialize. Send a real initialize
-	// body so this exercises the same shape an agent's MCP handshake would — and assert a
-	// cache token is still rejected at the auth layer (401/403), not admitted.
-	initBody := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}`)
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/", initBody)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer "+cacheToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode == 200 {
-		t.Fatalf("cache token must NOT authenticate the MCP endpoint; got 200")
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("cache token at the removed MCP path = %d, want 404", res.StatusCode)
 	}
 }
 

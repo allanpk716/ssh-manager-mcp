@@ -65,9 +65,10 @@ func driveForm(t *testing.T, o *formOverlay, presses int) formDoneMsg {
 	return formDoneMsg{}
 }
 
-// TestProjectTokenMsg_DualForms: 两条真片段——stdio 与 http 块都代入真 token，
-// recovery 指向轮换，http 块是中立 <serve URL> 占位 + 单机忽略引导行。
-func TestProjectTokenMsg_DualForms(t *testing.T) {
+// TestProjectTokenMsg_StdioForm（Plan 42 批1 T10 收敛）: http 块已随 ②a 移除退役
+// ——屏上只留 stdio 真片段（真 token 代入），recovery 指向轮换；任何 http 形态
+// （"type": "http" / Bearer 头 / <serve URL> 占位）都必须绝迹。
+func TestProjectTokenMsg_StdioForm(t *testing.T) {
 	m := projectTokenMsg("项目 token", "TOK-real")
 	if m.title != "项目 token" || m.token != "TOK-real" {
 		t.Fatalf("title/token: %+v", m)
@@ -79,13 +80,20 @@ func TestProjectTokenMsg_DualForms(t *testing.T) {
 	for _, want := range []string{
 		`"args": ["mcp"],`,
 		`"SSHMGR_TOKEN": "TOK-real"`,
-		`"type": "http",`,
-		`"Authorization": "Bearer TOK-real"`,
-		"<serve URL>",
-		"未部署 serve 可忽略本块",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("snippet missing %q:\n%s", want, joined)
+		}
+	}
+	for _, banned := range []string{
+		`"type": "http"`,
+		`"Authorization"`,
+		`Bearer`,
+		"<serve URL>",
+		"联机在线",
+	} {
+		if strings.Contains(joined, banned) {
+			t.Fatalf("http block retired (②a removed) but snippet still has %q:\n%s", banned, joined)
 		}
 	}
 	if strings.Contains(joined, "--token") {
@@ -170,7 +178,7 @@ func TestProjectsKeyA_EmitsGuidedTokenMsg(t *testing.T) {
 	if !ok {
 		t.Fatalf("add must emit tokenIssuedMsg, got %T", msg)
 	}
-	if tm.title != "项目 token" || !strings.Contains(tm.body(), `"type": "http",`) {
+	if tm.title != "项目 token" || !strings.Contains(tm.body(), `"SSHMGR_TOKEN": "`+tm.token) {
 		t.Fatalf("add msg shape: %q\n%s", tm.title, tm.body())
 	}
 }

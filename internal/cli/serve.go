@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/kardianos/service"
@@ -28,24 +29,33 @@ import (
 
 func newServeCmd() *cobra.Command {
 	var addr, tlsCert, tlsKey string
+	var pairing, discovery bool
 	c := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the SSH MCP server over HTTP for remote (multi-machine) agents",
-		Long: `Run the broker as an authenticated HTTP MCP server so agents on other
-machines can share one authoritative vault.
+		Short: "Run the authoritative vault server (/snapshot + /pair) for the multi-machine bridge posture",
+		Long: `Run the authoritative vault as a resident server for the multi-machine
+bridge posture. It serves exactly: the authenticated /snapshot endpoint
+(device-code gated, profile-scoped cache pull), the SAS pairing surface
+/pair/* (a new machine enrolls in one shot with 'sshmgr pair'), and —
+in a later release — the web admin UI. There is NO remote MCP surface:
+agents on work machines run locally from a read-only cache
+('sshmgr mcp --cache'); the MCP stdio bridge posture is documented in
+docs/multi-machine.md.
 
-Each request must carry 'Authorization: Bearer <project-token>'. The token
-resolves to a project and its profile scope (same gate as 'ssh-manager mcp').
+TLS is always on — without --tls-cert a self-signed cert is auto-generated
+on first start. UDP discovery (udp/7878) answers LAN probes with a
+non-sensitive offer (name + cert fingerprint + port). Both surfaces have
+three-state switches (--pairing / --discovery; explicit env > explicit
+flag > store setting > default on).
 
-Default bind is loopback (127.0.0.1:7878) — safe. For multi-machine use, set
---addr to 0.0.0.0:7878 or a VLAN IP, and prefer --tls-cert/--tls-key: without
-TLS the bearer token travels in cleartext on the network.
+Default bind is loopback (127.0.0.1:7878) — safe. For multi-machine use,
+set --addr to 0.0.0.0:7878 or a VLAN IP.
 
 This command is ALSO the entry point used by ` + "`serve install`" + `: when
 the OS service manager (Windows Service / systemd / launchd) starts the
 registered binary, kardianos hands control to svc.Run() inside this RunE,
 which invokes program.Start → mcpserver.RunServe in a goroutine. Interactive
-invocations (an operator typing ` + "`ssh-manager serve`" + `) run RunServe
+invocations (an operator typing ` + "`sshmgr serve`" + `) run RunServe
 directly in the foreground.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// === Service-vs-foreground mode (load-bearing — see serve_service.go) ===
@@ -56,11 +66,11 @@ directly in the foreground.`,
 			// our program.Start (which spawns RunServe in a goroutine), and
 			// returns after Stop fires when the manager signals stop.
 			//
-			// If Interactive() is true (operator typed `ssh-manager serve` at a
+			// If Interactive() is true (operator typed `sshmgr serve` at a
 			// shell) OR kardianos cannot decide (returns true on a null system),
 			// we run RunServe directly in the foreground — the original path.
 			if !service.Interactive() {
-				return runServeAsService(addr, tlsCert, tlsKey)
+				return runServeAsService(addr, tlsCert, tlsKey, serveSwitchOpts(cmd))
 			}
 
 			// Foreground: open the vault, run RunServe until ctx is cancelled.
@@ -81,18 +91,26 @@ directly in the foreground.`,
 			defer cancel()
 			// The "listening on" line is emitted by RunServe AFTER net.Listen
 			// succeeds, so a bind failure no longer prints a misleading line.
-			return mcpserver.RunServe(ctx, st, addr, tlsCert, tlsKey)
+			return mcpserver.RunServe(ctx, st, addr, tlsCert, tlsKey, serveSwitchOpts(cmd))
 		},
 	}
 	c.Flags().StringVar(&addr, "addr", "127.0.0.1:7878", "listen address (use 0.0.0.0:port or a VLAN IP for remote agents)")
 	c.Flags().StringVar(&tlsCert, "tls-cert", "", "path to a TLS cert (optional; if omitted, a self-signed cert is auto-generated on first start)")
 	c.Flags().StringVar(&tlsKey, "tls-key", "", "path to a TLS key (required only when --tls-cert is set)")
+	// Plan 42 批1 T6: explicit switch overrides. The VALUE only counts when
+	// the flag was actually passed (Flags().Changed → non-nil *bool in
+	// ServeOpts); otherwise env SSHMGR_SERVE_* → store serve.* → default(on)
+	// decide. Defaults below are cosmetic (help text only).
+	c.Flags().BoolVar(&pairing, "pairing", true, "explicitly enable/disable the SAS pairing surface (default resolved from env SSHMGR_SERVE_PAIRING, then store setting serve.pairing, then on)")
+	c.Flags().BoolVar(&discovery, "discovery", true, "explicitly enable/disable UDP discovery on udp/7878 (default resolved from env SSHMGR_SERVE_DISCOVERY, then store setting serve.discovery, then on)")
 
 	// Subcommands (install/uninstall/status) wrap the foreground RunE above as
 	// a managed background service via github.com/kardianos/service (Windows
 	// Service / systemd / launchd). See serve_service.go. Cobra allows a
 	// parent command with its own RunE to also have subcommands.
-	c.AddCommand(newServeInstallCmd(), newServeUninstallCmd(), newServeStatusCmd(), newServeCertInfoCmd(), newServeBindCmd())
+	// (`serve bind` retired with Plan 42 批1 T1: the tunnel-whitelist command
+	// only served the ②a MCP-over-HTTP agent surface, which is removed.)
+	c.AddCommand(newServeInstallCmd(), newServeUninstallCmd(), newServeStatusCmd(), newServeCertInfoCmd(), newServePairCmd())
 	return c
 }
 
@@ -116,6 +134,32 @@ func newServeCertInfoCmd() *cobra.Command {
 	}
 }
 
+// serveSwitchOpts lifts --pairing/--discovery into mcpserver.ServeOpts
+// (Plan 42 批1 T6): a flag passed on the command line (Flags().Changed) yields
+// a non-nil *bool carrying its value; an absent flag yields nil so the env →
+// store → default layers decide. This is the ONLY explicitness channel — the
+// default value of a cobra bool flag must never count as "explicitly set".
+func serveSwitchOpts(cmd *cobra.Command) mcpserver.ServeOpts {
+	return mcpserver.ServeOpts{
+		PairingFlag:   flagBoolIfChanged(cmd, "pairing"),
+		DiscoveryFlag: flagBoolIfChanged(cmd, "discovery"),
+	}
+}
+
+// flagBoolIfChanged returns the flag's value only when it was explicitly set
+// on the command line.
+func flagBoolIfChanged(cmd *cobra.Command, name string) *bool {
+	f := cmd.Flags().Lookup(name)
+	if f == nil || !f.Changed {
+		return nil
+	}
+	v, err := strconv.ParseBool(f.Value.String())
+	if err != nil {
+		return nil // unreachable for cobra bool flags; defended anyway
+	}
+	return &v
+}
+
 // runServeAsService hands control to kardianos: it constructs the program with
 // the cobra-supplied addr/tls, builds the service.Config, and calls svc.Run()
 // which BLOCKS until the service manager signals stop (at which point
@@ -134,7 +178,7 @@ func newServeCertInfoCmd() *cobra.Command {
 // and a service-managed process inherits a clean environment from the service
 // manager (no shell rc files), so the env tier is unreliable in this path.
 // Production relies on the FileKeyProvider file (vault.OpenStore(program.run)).
-func runServeAsService(addr, tlsCert, tlsKey string) error {
+func runServeAsService(addr, tlsCert, tlsKey string, opts mcpserver.ServeOpts) error {
 	cfg := &service.Config{
 		Name:        serveServiceName,
 		DisplayName: serveDisplayName,
@@ -144,7 +188,7 @@ func runServeAsService(addr, tlsCert, tlsKey string) error {
 		// the service is constructed against the right platform backend.
 		Option: platformServiceOptions(),
 	}
-	prg := &program{addr: addr, tlsCert: tlsCert, tlsKey: tlsKey}
+	prg := &program{addr: addr, tlsCert: tlsCert, tlsKey: tlsKey, opts: opts}
 	s, err := service.New(prg, cfg)
 	if err != nil {
 		// No service system detected (e.g. Linux container without systemd

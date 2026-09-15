@@ -565,7 +565,7 @@ func TestEvalT5Scope(t *testing.T) {
 
 // TestEvalT7Locked is §12 T7: drive the agent against a broker whose vault is
 // LOCKED (no keychain master key). The broker subprocess prints
-// "vault locked: run `ssh-manager unlock` …" to stderr and exits non-zero
+// "vault locked: run `sshmgr unlock` …" to stderr and exits non-zero
 // before serving any MCP tool. The §12 property under test: the agent
 // SURFACES the locked state (recognizes + reports it) rather than silently
 // failing, hallucinating success, or hanging.

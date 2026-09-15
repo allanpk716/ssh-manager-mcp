@@ -1,4 +1,4 @@
-// Package cli: `ssh-manager clear` — the high-ceremony teardown (Plan 19
+// Package cli: `sshmgr clear` — the high-ceremony teardown (Plan 19
 // spec §3 v2). The interactive sequence is PINNED by the spec:
 //
 //	enumerate what exists → show list → typed "DELETE" → (vault roles:
@@ -260,7 +260,7 @@ func enumClearTargets(role roles.Role) []string {
 func makeSafetyNet() (path, passphrase string, err error) {
 	st, err := openUnlockedStore()
 	if err != nil {
-		return "", "", fmt.Errorf("vault 未解锁或不可读：请先 `ssh-manager unlock`（clear 不提供无备份删除）: %w", err)
+		return "", "", fmt.Errorf("vault 未解锁或不可读：请先 `sshmgr unlock`（clear 不提供无备份删除）: %w", err)
 	}
 	defer st.Close()
 
@@ -357,8 +357,8 @@ func clearResolveRole() roles.Role {
 func newClearCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "clear",
-		Short: "Permanently remove ALL ssh-manager data on this machine (typed DELETE + verified safety net)",
-		Long: `Remove every ssh-manager artifact on this machine: the vault (store.db +
+		Short: "Permanently remove ALL sshmgr data on this machine (typed DELETE + verified safety net)",
+		Long: `Remove every sshmgr artifact on this machine: the vault (store.db +
 master.key), serve service + certificates, the offline client cache, the
 legacy cache-refresh scheduled task, and role.json. Afterwards the machine is
 back to the first-run wizard state.
@@ -388,7 +388,7 @@ func runClear(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintf(out, "本机角色：%s\n", role)
 	fmt.Fprintln(out, "以下文件/组件将被永久删除（按实际存在枚举）：")
 	if len(targets) == 0 {
-		fmt.Fprintln(out, "  （本机没有可清理的 ssh-manager 数据）")
+		fmt.Fprintln(out, "  （本机没有可清理的 sshmgr 数据）")
 	}
 	for _, t := range targets {
 		fmt.Fprintf(out, "  ▸ %s\n", t.desc)
@@ -430,7 +430,7 @@ func runClear(cmd *cobra.Command, _ []string) error {
 	//    lock) and a registered service whose files are gone would crash-loop
 	//    at boot. Always attempted, not gated on the display probe.
 	if err := serveUninstallFn(out); err != nil {
-		return fmt.Errorf("卸载 serve 服务失败: %w — 请以管理员/root 身份重新运行 ssh-manager clear（已完成步骤会自动跳过）", err)
+		return fmt.Errorf("卸载 serve 服务失败: %w — 请以管理员/root 身份重新运行 sshmgr clear（已完成步骤会自动跳过）", err)
 	}
 	// 2. Delete every enumerated file (ENOENT = already gone = fine).
 	for _, t := range targets {
@@ -456,6 +456,6 @@ func runClear(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("删除 role.json 失败: %w（重跑 clear 将跳过已完成步骤）", err)
 	}
 
-	fmt.Fprintln(out, "已清理。下次 ssh-manager tui 将重新进入首次向导。")
+	fmt.Fprintln(out, "已清理。下次 sshmgr tui 将重新进入首次向导。")
 	return nil
 }

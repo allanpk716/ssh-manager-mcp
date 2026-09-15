@@ -1,19 +1,15 @@
 package tui
 
-// Plan 30 T4: the clientModel gate — same shape as the App gate. The client's
-// only form overlay is editConnForm → newFormOverlay (already transparent, so
-// NO layer-2 change is needed here — the gate's default branch forwards huh's
-// unexported protocol msgs straight through to it).
+// Plan 30 T4: the clientModel gate — same shape as the App gate. Plan 42 批1
+// T8 retired the connect-form overlay; the overlays are now the instance
+// picker and (Plan 45 T3) the pairing wizard. The wizard's five INTERNAL async
+// messages ride the gate's default branch (forwarded); only its two terminal
+// messages + the picker's pair request are client-owned.
 
 import (
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-
-	"ssh-manager-mcp/internal/clientops"
 )
 
 func newClientModelForGate(t *testing.T) clientModel {
@@ -47,7 +43,7 @@ func TestClientGateOwnedFallsThrough(t *testing.T) {
 	m := newClientModelForGate(t)
 	spy := &spyOverlay{}
 	for _, owned := range []tea.Msg{
-		dataReadyMsg{}, syncDoneMsg{}, pullSucceededMsg{}, connSavedMsg{},
+		dataReadyMsg{}, syncDoneMsg{},
 		clientStatusMsg(""), errMsg{}, formDoneMsg{},
 	} {
 		m.overlay = spy
@@ -86,63 +82,93 @@ func TestClientGateWindowSizeRecordsAndForwards(t *testing.T) {
 	}
 }
 
-// TestClientLoopEditConnFormCompletes (真表单回环): drive editConnForm to
-// completion through Update + drain. huh advances fields via its unexported
-// nextFieldMsg cmds — only a correct gate routes them back into the form, so
-// pre-gate every Enter chain dies on the first field.
-//
-// Deviations from the task brief, each forced by a real definition:
-//   - values: validServeURL requires an https:// URL and validPin requires
-//     sha256:<64 hex> — the brief's "127.0.0.1:1" / "sha256/AAAA" are invalid
-//     (the brief itself defers to the validators' real rules).
-//   - entry: the brief opens the form with wizard=true, but a wizard submit
-//     (connSavedMsg) starts a REAL first pull whose failure REOPENS the form
-//     (input preservation, TestClientWizard_PullFailureReopensFormWithDraft)
-//     — the overlay would never be nil at the end. Panel mode + a seeded
-//     Token-only cred opens the SAME form with the SAME completion
-//     assertions and stays offline: the post-save path is connSavedMsg →
-//     refreshDataCmdFor(m.instance) → errMsg (no cache DEK), so no pull
-//     is ever attempted. The empty URL/Pin also mean no prefill — typed chars
-//     land where intended.
-//   - mechanics: fields advance via Enter + drain (T3's
-//     TestWizardLoopServerFormCompletes pattern); typing all fields then one
-//     Enter would pile every char into field 1. The brief's final
-//     os.Stat(filepath.Join(t.TempDir(), …)) is also a SECOND TempDir — a
-//     fresh dir that never sees the write; capture the dir once.
-func TestClientLoopEditConnFormCompletes(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("SSHMGR_CACHE_DIR", dir)
-	// Spec rev5 §4 (review F1): an empty-field submit on a four-file VACUUM
-	// resolved slot now refuses instead of silently rewriting cache.auth.json.
-	// This happy-path driver only needs a non-vacuum slot — one bare bin
-	// marker defeats the vacuum judgment and keeps the test's original intent
-	// (full keystroke round → overlay closes → auth written).
-	if err := os.WriteFile(filepath.Join(dir, "cache.bin"), []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+// TestClientPanel_CKeyStartsPairWizard (Plan 45 T3; REWRITES Plan 42 批1 T8's
+// TestClientPanel_CKeyPointsAtPair): the [c] key REALLY opens the pairing
+// wizard again — Plan 42 had retired the connect-form and reduced [c] to a
+// status-line pointer at `sshmgr pair`; Plan 45 gives the affordance its
+// guided path back (pairwizard.go).
+func TestClientPanel_CKeyStartsPairWizard(t *testing.T) {
+	isolatedConfigDir(t) // clears both single-slot override envs
 	m := newClientModelForGate(t)
-	m.cred = &clientops.CacheCred{Token: "existing-token"} // panel 'c' guard; empty URL/Pin = no prefill
 	m2, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	cm := m2.(clientModel)
+	if _, ok := cm.overlay.(*pairWizard); !ok {
+		t.Fatalf("[c] must open the pairing wizard, got overlay %T", cm.overlay)
+	}
 	if cmd == nil {
-		t.Fatal("'c' must open editConnForm and return its Init cmd")
+		t.Fatal("[c] must hand the wizard's Init cmd back to the runtime")
 	}
-	m3 := drain(t, m2, cmd)
-	for _, s := range []string{
-		"https://127.0.0.1:8443",            // serve 地址 (validServeURL: https + host)
-		"abcd1234",                          // 设备码 (replaces the seeded token)
-		"sha256:" + strings.Repeat("a", 64), // pin (validPin: SPKI fingerprint)
+}
+
+// TestClientPanel_CKeyRefusedUnderSingleSlotOverride: newPairWizard's own
+// single-slot mutual exclusion stays the authority — a direct [c] under an
+// override env opens nothing and surfaces the refusal as the panel error.
+// (The footer stops advertising [c] in this mode; the guard is defense in
+// depth, not the only line.)
+func TestClientPanel_CKeyRefusedUnderSingleSlotOverride(t *testing.T) {
+	isolatedConfigDir(t)
+	t.Setenv("SSHMGR_CACHE_DIR", t.TempDir()) // AFTER the helper's clear: full override
+	m := newClientModelForGate(t)
+	m2, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	cm := m2.(clientModel)
+	if cm.overlay != nil {
+		t.Fatalf("single-slot override must refuse the wizard, got overlay %T", cm.overlay)
+	}
+	if cmd != nil {
+		t.Fatal("a refused start must not hand back an init cmd")
+	}
+	if cm.err == nil {
+		t.Fatal("the refusal must surface as a panel error")
+	}
+}
+
+// TestClientGate_RegistersWizardMsgs (Plan 30 checklist): the wizard's two
+// terminal messages + the picker's re-pair request are CLIENT-owned types —
+// while ANY overlay is open they must fall through to clientModel's own
+// switch, never be swallowed by the gate's default branch. The wizard's five
+// INTERNAL async messages (discover/enroll/approval/write/tick) stay
+// UNREGISTERED on purpose: the default branch forwards them to the overlay.
+func TestClientGate_RegistersWizardMsgs(t *testing.T) {
+	isolatedConfigDir(t)
+	m := newClientModelForGate(t)
+	spy := &spyOverlay{}
+	for _, owned := range []tea.Msg{
+		pairWizardDoneMsg{}, pairWizardClosedMsg{}, instancePickerPairMsg{},
 	} {
-		for _, r := range s {
-			m3, _ = m3.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m.overlay = spy
+		nm, _ := m.Update(owned)
+		if _, ok := nm.(clientModel); !ok {
+			t.Fatalf("Update must return clientModel, got %T", nm)
 		}
-		var enterCmd tea.Cmd
-		m3, enterCmd = m3.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-		m3 = drain(t, m3, enterCmd)
+		if spy.spySaw(owned) {
+			t.Fatalf("owned %T must fall through to clientModel's own case", owned)
+		}
 	}
-	if cm := m3.(clientModel); cm.overlay != nil {
-		t.Fatal("editConnForm must complete and close")
+}
+
+// TestClientPanel_CKeyEscFullChain: [c] → wizard → Esc → back on the page
+// (overlay dropped, slot untouched) — the full escape hatch the brief pins
+// ("Esc 全链退回原页"), exercised through the gate's default branch.
+func TestClientPanel_CKeyEscFullChain(t *testing.T) {
+	isolatedConfigDir(t)
+	m := newClientModelForGate(t)
+	m.instance = "agentA"
+	m2, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = m2.(clientModel)
+	if _, ok := m.overlay.(*pairWizard); !ok {
+		t.Fatalf("precondition: [c] opens the wizard, got %T", m.overlay)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "cache.auth.json")); err != nil {
-		t.Fatalf("cache.auth.json must be written: %v", err)
+	_, wcmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc}) // gate default → wizard
+	closed, ok := wcmd().(pairWizardClosedMsg)
+	if !ok {
+		t.Fatalf("Esc must close the wizard, got %T", wcmd())
+	}
+	m3, _ := m.Update(closed)
+	cm := m3.(clientModel)
+	if cm.overlay != nil {
+		t.Fatalf("the chain must land back on the page, got overlay %T", cm.overlay)
+	}
+	if cm.instance != "agentA" {
+		t.Fatalf("a bare Esc must not switch the slot, got %q", cm.instance)
 	}
 }

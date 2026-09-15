@@ -1,6 +1,6 @@
 # 概念模型图解（一页看懂多机架构）
 
-> **这是什么**：`ssh-manager` 多机部署的概念参考页——数据怎么流、每样东西是什么角色。不是教程（装好跑通的步骤见 [getting-started.md](./getting-started.md) / [quickstart-multi-machine.md](./quickstart-multi-machine.md)），是"记不清谁是谁"时回来翻的那一页。首次向导首屏也指向这里。
+> **这是什么**：`sshmgr` 多机部署的概念参考页——数据怎么流、每样东西是什么角色。不是教程（装好跑通的步骤见 [getting-started.md](./getting-started.md) / [quickstart-multi-machine.md](./quickstart-multi-machine.md)），是"记不清谁是谁"时回来翻的那一页。首次向导首屏也指向这里。
 
 ---
 
@@ -8,7 +8,7 @@
 
 ```
 ┌──服务器机（server · 唯一的仓库，vault 只在这一台）──────────────────┐
-│  ssh-manager tui（broker 主控台 · 四个页签）                        │
+│  sshmgr tui（broker 主控台 · 四个页签）                        │
 │                                                                    │
 │  ┌──────────┐   ┌───────────┐   ┌──────────┐   ┌──────────┐      │
 │  │ 服务器页   │   │ Profiles  │   │ Projects │   │ 设备码页  │      │
@@ -59,7 +59,21 @@
 
 project token 背后的 agent 通过 `list_servers` 看到：服务器元数据（name/role/services/caveats/location/hardware/tags/description/user/has_sudo）+ **可选的 host**——默认是字面量 `"hidden"`，owner 逐台用 `expose_host` 放开才有明文；**永远看不到**凭据与端口。工具错误文本同样不含主机地址（连接失败时给分类原因，不给 host:port）。这是「接口级不暴露」承诺的全部边界：agent 在服务器上跑 `ip addr` 探出的地址不算违约，本机 owner CLI / cache.bin 的明文也不在本承诺防护范围（见 threat-model.md §3.5）。
 
-工具面共 9 个：`list_servers` / `exec_command` / `download_file` / `upload_file` / `forward_port` / `close_port` + 后台三件套 `exec_background` / `exec_output` / `exec_stop`——**长活命令（编译/训练/日志跟踪）走后台**：起任务、按 offset 轮询增量输出、用完停；任务表在 broker 进程内，重启即失（详见 [agent-tools.md](./agent-tools.md)）。
+工具面共 12 个：`list_servers` / `exec_command` / `download_file` / `upload_file` / `upload_content` / `exec_context` / `forward_port` / `close_port` + 后台三件套 `exec_background` / `exec_output` / `exec_stop` + `relay_file`（大文件中继，Plan 47）——**长活命令（编译/训练/日志跟踪）走后台**：起任务、按 offset 轮询增量输出、用完停；任务表在 broker 进程内，重启即失（详见 [agent-tools.md](./agent-tools.md)）。
+
+## 大文件传输术语（Relay / Chunk / Manifest / Partial File / Transfer Task）
+
+`relay_file`（Plan 47）带来五个专有名词。**权威词汇表在根 [CONTEXT.md](../CONTEXT.md) 的 Language 节**——术语以该文件为准，本页只给一屏速览、不复述全文：
+
+| 术语 | 一句话 |
+|---|---|
+| **Relay（中继）** | 服务器→服务器经 broker 的分块流式传输；源也可以是 broker 本机盘。字节只走 broker 内存，不进 agent 上下文、不落 broker 盘 |
+| **Chunk（块）** | 固定大小的传输与断点单位；每块独立 sha256 校验，重跑只补缺失块 |
+| **Manifest（块清单）** | 落在**接收端**目标同目录的续传唯一事实源：源文件指纹（size+mtime）+ 各块哈希与完成位；broker 任务丢失后靠它自愈续传 |
+| **Partial File（半成品文件）** | 传输进行中接收端以 `<target>.sshmgr-partial` 存在的目标文件；全部块完成并校验后才 rename 成真名——真名即"传完"的可见保证 |
+| **Transfer Task（传输任务）** | 一次 Relay 在 broker 后台任务表中的条目（复用 Plan 32 任务模型，经 `exec_output` 轮询进度） |
+
+工具侧完整用法（三件套 / 双摘要验证配方 / 离线机闭环故事 / posix-rename 硬依赖）见 [agent-tools.md](./agent-tools.md) 的 relay_file 节。
 
 ## 设备码的两种输入形态（等价，仅 `cache pull` 命令行）
 
@@ -76,9 +90,9 @@ project token 背后的 agent 通过 `list_servers` 看到：服务器元数据�
 
 1. **server 机 TUI「设备码」页按 `a`** 签发设备码（一台 client 一枚；**不推荐复用**——复用则失窃时只能全吊，一枚一机吊销才精准）。
 2. **server 机 TUI「Projects」页按 `a`** 新建 project（绑定想给它看的 profile）→ **token 一次性展示**（丢失可在此页重发）。
-3. **client 机**跑 `ssh-manager tui` 进向导（表单分三栏填：server 地址 / 设备码 / 指纹）或直接：
+3. **client 机**跑 `sshmgr tui` 进向导（表单分三栏填：server 地址 / 设备码 / 指纹）或直接：
    ```bash
-   ssh-manager cache pull --url https://<server>:7878 --token '<码>:sha256:<指纹>'
+   sshmgr cache pull --url https://<server>:7878 --token '<码>:sha256:<指纹>'
    ```
 4. client 机 `.mcp.json` 配 `mcp --cache` + env `SSHMGR_TOKEN=<project token>`（离线兜底）或指向 serve URL（在线）。
 
@@ -86,9 +100,9 @@ project/token 按 agent 项目粒度自由建（每台机每项目一个都行�
 
 ## 三种角色与首次向导（一段话版）
 
-本机角色由 `role.json` 唯一确定：**standalone**（单机，凭据只在本机）、**server**（仓库机）、**client**（只连仓库的工作机）。空机器第一次跑 `ssh-manager tui` 进**首次向导**：首屏两问（这台机保管凭据吗？agent 要连别的机吗？）后果导向地选角色，**选定的瞬间即落盘 role.json**——中途 Esc / 崩溃都是安全暂停，重开 `tui` 自动续配。standalone 之后可无损升级为 server（主控台按 `[u]`，vault 数据原样保留）；**vault 角色（standalone/server）转 client 必须先 `clear`**（真删数据，见下）。
+本机角色由 `role.json` 唯一确定：**standalone**（单机，凭据只在本机）、**server**（仓库机）、**client**（只连仓库的工作机）。空机器第一次跑 `sshmgr tui` 进**首次向导**：首屏两问（这台机保管凭据吗？agent 要连别的机吗？）后果导向地选角色，**选定的瞬间即落盘 role.json**——中途 Esc / 崩溃都是安全暂停，重开 `tui` 自动续配。standalone 之后可无损升级为 server（主控台按 `[u]`，vault 数据原样保留）；**vault 角色（standalone/server）转 client 必须先 `clear`**（真删数据，见下）。
 
-## `ssh-manager clear`（角色清理，一段话版）
+## `sshmgr clear`（角色清理，一段话版）
 
 把本机**按实际存在枚举**的 vault / serve 证书服务 / client 缓存残留 / 遗留定时器（Windows 计划任务 `ssh-manager-cache-refresh`）/ role.json 全部删除，回到首次向导状态。流程：列出清单 → 输入 `DELETE` 确认（输错即取消，零改动）；vault 角色先自动 export 一份口令加密备份（回读校验 + 抄录口令确认）才开始删——vault 锁定时拒绝无安全绳删除。全程**幂等**：中断后重跑，已完成的步骤跳过。exe 永远保留。
 

@@ -44,14 +44,14 @@ headlessly either). ` + "`import <file>`" + ` writes into the vault at SSHMGR_ST
 UNLOCKED target — so set the path and create the new master key first:
 
     # 1. export the old vault to a portable passphrase-encrypted file
-    ssh-manager export --out vault.sme --passphrase-file pass.txt
+    sshmgr export --out vault.sme --passphrase-file pass.txt
 
     # 2. point at the NEW fixed path and create its master key + empty store
     #    (on Windows the default is C:\ProgramData\ssh-manager\ — leave SSHMGR_STORE unset)
-    ssh-manager unlock
+    sshmgr unlock
 
     # 3. import the portable file into the new vault (re-seals under the new key)
-    ssh-manager import --passphrase-file pass.txt vault.sme
+    sshmgr import --passphrase-file pass.txt vault.sme
 
 Then delete the old store.db + master.key.* by hand. See docs/backup-restore.md.`
 

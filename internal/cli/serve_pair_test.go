@@ -1,0 +1,157 @@
+package cli
+
+// Plan 42 批1 T8: `serve pair` CLI——跨进程直连 store 的配对裁决面(TUI 批1 的
+// 兜底面)。SAS 双屏比对(2026-09-01 裁决,恢复 rev4:68 冻结原文):serve 在
+// enroll 时算好 SAS 落行,本面输出三件套 `<name> @ <target_url> SAS <6位>`;
+// 行缺 SAS(版本错配)→ ⚠ 警示并建议拒绝,不静默回退两件套。
+//
+// foreign(机械地址校验)无 --allow-foreign-url → 拒绝并打 ⚠ 文案;有 flag → 放行。
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"strings"
+	"testing"
+	"time"
+
+	"ssh-manager-mcp/internal/store"
+)
+
+// seedPendingPairing opens the pinned store directly and enrolls one pending
+// row (the /pair/enroll handler's shape: 32B id + 10min enroll window). sas
+// seeds the row's landed SAS — "" models a pre-2026-09-01 serve's row.
+func seedPendingPairing(t *testing.T, path string, mk []byte, name, targetURL, sas string) store.PendingPairing {
+	t.Helper()
+	st, err := store.Open(path, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id := make([]byte, 32)
+	if _, err := rand.Read(id); err != nil {
+		t.Fatal(err)
+	}
+	p := store.PendingPairing{
+		ID: id, Name: name, TargetURL: targetURL, ProfileHint: "team-a", SAS: sas,
+		ClientPub: make([]byte, 32), Cnonce: make([]byte, 16), // schema NOT NULL;审批面不读密钥料
+		ServerPub: make([]byte, 32), Snonce: make([]byte, 16), Sig: make([]byte, 64),
+		State: "pending", SourceIP: "192.0.2.9",
+		EnrollDeadline: time.Now().Add(10 * time.Minute).Unix(),
+	}
+	if err := st.AddPendingPairing(&p, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestServePairApprove_ThreePieceOutputAndOverride(t *testing.T) {
+	path, mk := withCliStoreEnv(t)
+	runCli(t, "profiles", "add", "team-a")
+	seedPendingPairing(t, path, mk, "laptop", "https://127.0.0.1:7878", "314159") // 127.0.0.1 恒 foreign
+
+	// ls:清单列全(NAME/TARGET_URL/SAS/SOURCE_IP/HINT/FLAGS/PROFILE_HINT)。
+	ls := runCli(t, "serve", "pair", "ls")
+	for _, want := range []string{"laptop", "https://127.0.0.1:7878", "SAS 314159", "192.0.2.9", "team-a", "≠"} {
+		if !strings.Contains(ls, want) {
+			t.Fatalf("serve pair ls missing %q:\n%s", want, ls)
+		}
+	}
+
+	// foreign 无 flag → 拒绝并打 ⚠ 文案,行保持 pending。
+	if got := runCliErr(t, "serve", "pair", "approve", "laptop", "--profile", "team-a"); !strings.Contains(got, "⚠") {
+		t.Fatalf("foreign approve without --allow-foreign-url must fail with the ⚠ copy, got %q", got)
+	}
+
+	// --allow-foreign-url → 批准;输出行 = 冻结三件套 `<name> @ <target_url> SAS <6位>`(rev4:83)。
+	out := runCli(t, "serve", "pair", "approve", "laptop", "--profile", "team-a", "--allow-foreign-url")
+	for _, want := range []string{"laptop @ https://127.0.0.1:7878 SAS 314159"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("approve output missing the three-piece line %q:\n%s", want, out)
+		}
+	}
+
+	// 批准后行仍可见但标记为 approved(finish 窗口内 store 契约:approved 行
+	// 仍在 actionable 队列);重复批准 → CAS 报错。
+	ls2 := runCli(t, "serve", "pair", "ls")
+	if !strings.Contains(ls2, "laptop") || !strings.Contains(ls2, "approved") {
+		t.Fatalf("approved row must show with the approved flag during its finish window, got:\n%s", ls2)
+	}
+	if got := runCliErr(t, "serve", "pair", "approve", "laptop", "--profile", "team-a", "--allow-foreign-url"); got == "" {
+		t.Fatal("double approve must error (row no longer pending)")
+	}
+}
+
+// TestServePairLs_MissingSASWarns:行缺 SAS(旧版 serve 写的/版本错配)→ ls 与
+// approve 都打 ⚠ 警示并建议拒绝——绝不静默回退到抓不住 MITM 的两件套对照,
+// 也绝不伪造一个码。
+func TestServePairLs_MissingSASWarns(t *testing.T) {
+	path, mk := withCliStoreEnv(t)
+	runCli(t, "profiles", "add", "team-a")
+	seedPendingPairing(t, path, mk, "laptop", "https://127.0.0.1:7878", "")
+
+	ls := runCli(t, "serve", "pair", "ls")
+	for _, want := range []string{"⚠ 行缺 SAS", "建议 reject"} {
+		if !strings.Contains(ls, want) {
+			t.Fatalf("serve pair ls must warn on the missing SAS (%q):\n%s", want, ls)
+		}
+	}
+	out := runCli(t, "serve", "pair", "approve", "laptop", "--profile", "team-a", "--allow-foreign-url")
+	if !strings.Contains(out, "⚠ 行缺 SAS") {
+		t.Fatalf("approve output must warn on the missing SAS:\n%s", out)
+	}
+}
+
+func TestServePair_ResolveAndReject(t *testing.T) {
+	path, mk := withCliStoreEnv(t)
+	runCli(t, "profiles", "add", "team-a")
+	row := seedPendingPairing(t, path, mk, "tablet", "https://127.0.0.1:7878", "271828")
+	idHex := hex.EncodeToString(row.ID)
+
+	// 未知 profile 名 / 未知设备名都报错。
+	for _, args := range [][]string{
+		{"serve", "pair", "approve", "tablet", "--profile", "ghost"},
+		{"serve", "pair", "approve", "ghost", "--profile", "team-a", "--allow-foreign-url"},
+		{"serve", "pair", "reject", "ghost"},
+	} {
+		if got := runCliErr(t, args...); got == "" {
+			t.Fatalf("serve pair %v must error", args)
+		}
+	}
+
+	// by-idHex 解析同样可用;reject 生效。
+	out := runCli(t, "serve", "pair", "reject", idHex)
+	if !strings.Contains(out, "tablet") {
+		t.Fatalf("reject output must name the device:\n%s", out)
+	}
+	if ls := runCli(t, "serve", "pair", "ls"); strings.Contains(ls, "tablet") {
+		t.Fatalf("rejected row must leave ls:\n%s", ls)
+	}
+}
+
+// TestServePairLs_StripsControlChars (终审修复 Important-2 金样): pending 行的
+// name/target_url 是未认证输入 —— ls 与 approve 的输出行必须剥净 C0/C1,终端
+// 永远收不到 ESC/CR 字节(剥离后可印正文仍可见)。
+func TestServePairLs_StripsControlChars(t *testing.T) {
+	path, mk := withCliStoreEnv(t)
+	runCli(t, "profiles", "add", "team-a")
+	row := seedPendingPairing(t, path, mk, "evil\x1b[2Jdev", "https://127.0.0.1:7878/\x1b]0;pwn\x07", "654321")
+
+	ls := runCli(t, "serve", "pair", "ls")
+	for _, bad := range []string{"\x1b", "\x07", "\r", "\n\n"} {
+		if strings.Contains(ls, bad) {
+			t.Fatalf("serve pair ls leaked control byte %q:\n%q", bad, ls)
+		}
+	}
+	if !strings.Contains(ls, "evil[2Jdev") {
+		t.Fatalf("ls must still show the stripped name:\n%q", ls)
+	}
+
+	// approve 输出行同样剥净(name 按原样匹配不到 → 走 idHex;127.0.0.1 是
+	// foreign 行,需要 --allow-foreign-url)。
+	out := runCli(t, "serve", "pair", "approve", hex.EncodeToString(row.ID), "--profile", "team-a", "--allow-foreign-url")
+	for _, bad := range []string{"\x1b", "\x07"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("approve output leaked control byte %q:\n%q", bad, out)
+		}
+	}
+}

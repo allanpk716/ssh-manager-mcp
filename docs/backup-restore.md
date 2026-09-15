@@ -9,8 +9,8 @@
 ## 命令
 
 ```bash
-ssh-manager export --out vault.sme       # 提示输口令（输两次确认）；vault.sme 是加密文件
-ssh-manager import vault.sme             # 在目标机（空 vault + 已 unlock）恢复
+sshmgr export --out vault.sme       # 提示输口令（输两次确认）；vault.sme 是加密文件
+sshmgr import vault.sme             # 在目标机（空 vault + 已 unlock）恢复
 ```
 
 - `export --out -` 或省略 `--out` → 输出到 stdout（管道 / 重定向场景）。
@@ -28,17 +28,17 @@ ssh-manager import vault.sme             # 在目标机（空 vault + 已 unlock
 
 ### 场景 ① 定期备份
 
-每周 / 每月 `ssh-manager export --out vault-YYYYMM.sme`，文件收进密码管理器 / 离线介质。vault 损坏时从最近一份恢复。
+每周 / 每月 `sshmgr export --out vault-YYYYMM.sme`，文件收进密码管理器 / 离线介质。vault 损坏时从最近一份恢复。
 
 ### 场景 ② 迁移到新机器
 
-- 旧机：`ssh-manager export --out vault.sme`。
-- 新机：装好 `ssh-manager` → `ssh-manager unlock`（建新的 master key）→ `ssh-manager import vault.sme`。
+- 旧机：`sshmgr export --out vault.sme`。
+- 新机：装好 `sshmgr` → `sshmgr unlock`（建新的 master key）→ `sshmgr import vault.sme`。
 - **原 project token 导入后仍有效**（token 的 hash 保留）——已经配进 Claude Code 的 agent 不用改 `.mcp.json`。
 
 ### 场景 ③ 灾难恢复
 
-vault 损坏 / 丢失：删掉坏的 `store.db`（或把 `SSHMGR_STORE` 指向一个新路径）→ `ssh-manager unlock` → `ssh-manager import vault.sme` → 恢复到出事前的状态。
+vault 损坏 / 丢失：删掉坏的 `store.db`（或把 `SSHMGR_STORE` 指向一个新路径）→ `sshmgr unlock` → `sshmgr import vault.sme` → 恢复到出事前的状态。
 
 ## 限制（如实）
 
@@ -64,7 +64,7 @@ vault 损坏 / 丢失：删掉坏的 `store.db`（或把 `SSHMGR_STORE` 指向�
 
 > 设计 spec：`docs/superpowers/specs/2026-08-12-plan-13-nas-backup-design.md`（v3）。
 
-`backup create` 把整个 vault 以**明文 JSON 快照**定时写到挂载的群晖目录，无变化不备份，按份数轮转，带 `.sha256` 边车抓 bit-rot。`backup verify` 按需校验。灾难恢复 = 从 NAS 拷文件 + `ssh-manager import`。
+`backup create` 把整个 vault 以**明文 JSON 快照**定时写到挂载的群晖目录，无变化不备份，按份数轮转，带 `.sha256` 边车抓 bit-rot。`backup verify` 按需校验。灾难恢复 = 从 NAS 拷文件 + `sshmgr import`。
 
 ### 部署硬约束（违反则必须回加密版）
 
@@ -85,8 +85,8 @@ vault 损坏 / 丢失：删掉坏的 `store.db`（或把 `SSHMGR_STORE` 指向�
 **用 UNC 路径，不要用 `net use` 映射盘号**：映射盘号 per-user/per-session，任务计划程序以别的 user 或 SYSTEM 跑时看不到 `Z:` → marker fail-closed 表现为"备份永远不跑"（无人值守典型静默失败）。UNC 路径 `\\synology\backups` 任何 session 都可达。
 
 ```cmd
-schtasks /Create /SC DAILY /ST 03:30 /TN ssh-manager-backup ^
-  /TR "ssh-manager.exe backup create --dir \\synology\backups --keep 7" ^
+schtasks /Create /SC DAILY /ST 03:30 /TN sshmgr-backup ^
+  /TR "sshmgr.exe backup create --dir \\synology\backups --keep 7" ^
   /RU <user> /RP <password>
 ```
 
@@ -96,16 +96,16 @@ schtasks /Create /SC DAILY /ST 03:30 /TN ssh-manager-backup ^
 ### Linux：systemd timer
 
 ```ini
-# /etc/systemd/system/ssh-manager-backup.service
+# /etc/systemd/system/sshmgr-backup.service
 [Service]
 Type=oneshot
 # master key 走固定路径裸文件 /var/lib/ssh-manager/master.key.plain（见上 Windows 段）
 # —— 服务以 root / service 账户跑即可读，不要用 Environment=/EnvironmentFile= 塞 hex
 # （明文落 service config、枚举可见、无 ACL 粒度，比 0600+ACL 裸文件更差，见 threat-model.md §5）
-ExecStart=/usr/local/bin/ssh-manager backup create --dir /mnt/nas/backups --keep 7
+ExecStart=/usr/local/bin/sshmgr backup create --dir /mnt/nas/backups --keep 7
 TimeoutStartSec=600
 
-# /etc/systemd/system/ssh-manager-backup.timer
+# /etc/systemd/system/sshmgr-backup.timer
 [Timer]
 OnCalendar=*-*-* 03:30:00
 Persistent=true
@@ -116,9 +116,9 @@ Persistent=true
 ### 恢复
 
 1. 从 NAS 拷最新的 `vault-*.json`（和它的 `.sha256`）到本机。
-2. （可选）`ssh-manager backup verify <file>` 确认没坏。
-3. `ssh-manager import <file>` —— 嗅探自动识别明文，**不弹口令**；导入到**空的** vault（`store.db` 不存在或空）。
-4. **cache_tokens 不在备份里**（设备身份，非 vault 内容——`ExportSnapshot` 零处读该表，export/import 与 NAS 两路恢复同理）：恢复后该表**为空** → 所有工作机下次回连拿到 **unknown 401** → 按 Plan 34 语义**批量切断**（各机本地 cache 四件销毁 + `quarantine/` 痕迹 + 明确归因报文）——这是**预期行为、非事故**（设备码历史本就不随 vault 走）。恢复流程 = **逐设备重新发码 + enroll**：每台 `ssh-manager cache-tokens add --name <device>` 重发授权码，工作机用新码 `cache pull` 重新拉取（全量重建）。agent 的 `.mcp.json` 不用动（project token 在备份里）。
+2. （可选）`sshmgr backup verify <file>` 确认没坏。
+3. `sshmgr import <file>` —— 嗅探自动识别明文，**不弹口令**；导入到**空的** vault（`store.db` 不存在或空）。
+4. **cache_tokens 不在备份里**（设备身份，非 vault 内容——`ExportSnapshot` 零处读该表，export/import 与 NAS 两路恢复同理）：恢复后该表**为空** → 所有工作机下次回连拿到 **unknown 401** → 按 Plan 34 语义**批量切断**（各机本地 cache 四件销毁 + `quarantine/` 痕迹 + 明确归因报文）——这是**预期行为、非事故**（设备码历史本就不随 vault 走）。恢复流程 = **逐设备重新发码 + enroll**：每台 `sshmgr cache-tokens add --name <device>` 重发授权码，工作机用新码 `cache pull` 重新拉取（全量重建）。agent 的 `.mcp.json` 不用动（project token 在备份里）。
    > ⚠️ **带外警示——raw-DB 直拷不走这条**：直接拷贝 `store.db` 文件恢复会使 cache_tokens 连**历史状态一起回滚**——**已 revoke 的码可能复活**（被吊销设备重新拉到新快照）。此类恢复后必须**逐行审计**（`cache-tokens ls` 核对每行 status），把该死的行重新 revoke、该换的码逐台重发。
 
 ### skip 语义（诚实）
@@ -127,7 +127,7 @@ Persistent=true
 
 ### 运维 footgun
 
-- 禁 `cat`/`grep -r password` 查备份；用 `backup verify` 或恢复到测试 vault 后 `ssh-manager servers ls`。
+- 禁 `cat`/`grep -r password` 查备份；用 `backup verify` 或恢复到测试 vault 后 `sshmgr servers ls`。
 - `--dir` 必须是绝对路径且不在任何 git 工作树里（`backup create` 会检测 `--dir` 自身含 `.git` 并拒绝）。
 - `.gitignore` 模板：`vault-*.json` + `*.sha256`。
 
@@ -141,20 +141,20 @@ Persistent=true
 
 > 设计 spec：`docs/superpowers/specs/2026-08-12-plan-14-windows-prod-deploy-design.md`（v2）。**⚠️ SUPERSEDED by Plan 16**（`2026-08-13-plan-16-fixed-path-filekey-design.md`，固定路径 + FileKeyProvider，废弃 DPAPI/keyring 路线）。Plan 14 先被 Plan 15（machine-scope DPAPI）取代，Plan 15 又被 Plan 16 取代——两次撞墙证明"用户态密钥模型 + 服务自起"部署形态下 DPAPI 跨 session 不可靠。**当前生产路径**见本篇末 [Plan 16 迁移 Runbook](#plan-16--固定路径--filekeyprovider迁移-runbook)。Plan 14/15 正文保留作审计轨迹。
 
-把 Windows 上的 master key 存储从 **Windows Credential Manager（keychain）** 换成 **DPAPI 加密的本地文件**（`%AppData%\ssh-manager\master.key`），并新增 `ssh-manager serve install` 把 serve 注册成 Task Scheduler 常驻任务。原因：实测发现 Windows Credential Manager 在 sshd / Service / Task-Scheduler 的非交互 session 里报 `ERROR_NO_SUCH_LOGON_SESSION (1312)`——master key 存不进 / 读不出，serve 在这些 session 里拿不到 master key 起不来；DPAPI 不受此限制（spec §12 spike 实证三 session 全通）。**Plan 15 修正为 machine-scope DPAPI**（见下方「升级 Runbook (Plan 15 修正)」）。
+把 Windows 上的 master key 存储从 **Windows Credential Manager（keychain）** 换成 **DPAPI 加密的本地文件**（`%AppData%\ssh-manager\master.key`），并新增 `sshmgr serve install` 把 serve 注册成 Task Scheduler 常驻任务。原因：实测发现 Windows Credential Manager 在 sshd / Service / Task-Scheduler 的非交互 session 里报 `ERROR_NO_SUCH_LOGON_SESSION (1312)`——master key 存不进 / 读不出，serve 在这些 session 里拿不到 master key 起不来；DPAPI 不受此限制（spec §12 spike 实证三 session 全通）。**Plan 15 修正为 machine-scope DPAPI**（见下方「升级 Runbook (Plan 15 修正)」）。
 
 ### 升级 Runbook（v0.2.0 → 新版，Windows）
 
 已有 v0.2.0 vault 的机器（master key 存在 keychain）升级到新版（master key 存 DPAPI 文件）：
 
-1. **停掉所有正在跑的 ssh-manager 进程**（v0.2.0 的 mcp / serve 等）。原因：旧进程持有 `store.db` 句柄（E2E FINDING 5），不停干净会在迁移 + 重启时撞锁；更重要的是新旧进程不能同时持有不同位置的 master key。
-2. **在交互式 session（本地终端 / RDP，不是 ssh）跑** `ssh-manager unlock`：
+1. **停掉所有正在跑的 sshmgr 进程**（v0.2.0 的 mcp / serve 等）。原因：旧进程持有 `store.db` 句柄（E2E FINDING 5），不停干净会在迁移 + 重启时撞锁；更重要的是新旧进程不能同时持有不同位置的 master key。
+2. **在交互式 session（本地终端 / RDP，不是 ssh）跑** `sshmgr unlock`：
    - 程序检测到 `master.key` 不存在但 v0.2.0 keychain slot 可读 → 提示"迁移到 DPAPI 文件？[y/N]" → 确认后写 `master.key` + 删旧 keychain slot。
    - **同时迁移 cache DEK**（Plan 12 的 cache-dek keychain slot → `cache-dek.key` 文件，和 master.key 同目录不同文件）。
    - 若在 sshd / 非交互 session 跑这一步：旧 slot 读不出（1312）→ 程序会明确提示"请在交互式 session 重跑"，**不会自动生成新 master key**（避免 orphans 旧 vault）。
-3. **`ssh-manager serve install`**（如果这台机要常驻 serve）：注册 Task Scheduler 任务，boot + logon 自起，崩溃自重启。
+3. **`sshmgr serve install`**（如果这台机要常驻 serve）：注册 Task Scheduler 任务，boot + logon 自起，崩溃自重启。
 
-⚠️ **跳过步骤 2 直接 `serve install`** → serve 读不到 master key（旧 slot 在非交互 session 读不出，新文件还没生成）→ 任务启动失败循环。`serve install` 自身会在 master.key 缺失时拒绝注册（报"run 'ssh-manager unlock' in an interactive session first"），但别依赖这道闸——正确顺序是先 unlock 迁移。
+⚠️ **跳过步骤 2 直接 `serve install`** → serve 读不到 master key（旧 slot 在非交互 session 读不出，新文件还没生成）→ 任务启动失败循环。`serve install` 自身会在 master.key 缺失时拒绝注册（报"run 'sshmgr unlock' in an interactive session first"），但别依赖这道闸——正确顺序是先 unlock 迁移。
 
 ### 升级 Runbook（Plan 15 修正：user-scope → machine-scope 迁移）
 
@@ -162,18 +162,18 @@ Plan 14 的 user-scope DPAPI 在 NUC10 §7.3 真机验收中暴露了**跨 logon
 
 **已有 Plan 14 user-scope vault 的机器升级到 Plan 15 machine-scope**：
 
-1. 部署 Plan 15 新版 `ssh-manager.exe`（覆盖旧版）。
-2. **在交互式 session（本地终端 / RDP）跑** `ssh-manager unlock`：
+1. 部署 Plan 15 新版 `sshmgr.exe`（覆盖旧版）。
+2. **在交互式 session（本地终端 / RDP）跑** `sshmgr unlock`：
    - 程序检测到 `master.key` 是 **user-scope**（可解）→ 自动触发 **`migrateDpapiScope`**（T3 实现）→ 用 **machine-scope** 重新 protect → 覆盖 `master.key`。
    - **无需手动重设 vault**——master key 内容不变，只换 DPAPI scope。
    - 若在 sshd / 非交互 session 跑这一步：user-scope `master.key` 读不出 → 程序会明确提示"请在交互式 session 重跑"（不会破坏现有 vault）。
-3. **`ssh-manager serve install`**（如果这台机要常驻 serve）：
+3. **`sshmgr serve install`**（如果这台机要常驻 serve）：
    - Plan 15 修正了 serve install 的 **Go 密码读**（codex #2：`Get-Credential` → PowerShell `secureString` 读密码，不再把密码写进 4688 审计日志）。
    - Plan 15 修正了 **precheck machine-scope**（安装前检查 master.key 是 machine-scope，避免 user-scope 的跨 session 失败）。
    - Plan 15 新增 **TLS 支持**（codex #5：`--tls-cert` / `--tls-key` 选项）。
    - Plan 15 新增 **MultipleInstances 支持**（pi #2：允许多个 serve 实例同时跑，用不同端口）。
 
-⚠️ **跳过步骤 2 直接 `serve install`** → Plan 15 的 `serve install` 会报 **precheck 失败**（"master.key is user-scope, run 'ssh-manager unlock' in an interactive session first to migrate to machine-scope"），不会注册错误配置的任务。
+⚠️ **跳过步骤 2 直接 `serve install`** → Plan 15 的 `serve install` 会报 **precheck 失败**（"master.key is user-scope, run 'sshmgr unlock' in an interactive session first to migrate to machine-scope"），不会注册错误配置的任务。
 
 ### master.key ≠ 备份（不可移植）
 
@@ -185,14 +185,14 @@ Plan 14 的 user-scope DPAPI 在 NUC10 §7.3 真机验收中暴露了**跨 logon
 
 **唯一可移植的灾备手段**是：
 
-- **Plan 11 export 信封**（口令加密）：在新机 `ssh-manager import vault.sme`（[场景②](#场景-②-迁移到新机器)）。
-- **Plan 13 NAS 明文备份**：从 NAS 拷最新 `vault-*.json` + `.sha256` → 新机 `ssh-manager import <file>`（明文嗅探自动识别，不弹口令，见 [Plan 13 恢复](#恢复)）。
+- **Plan 11 export 信封**（口令加密）：在新机 `sshmgr import vault.sme`（[场景②](#场景-②-迁移到新机器)）。
+- **Plan 13 NAS 明文备份**：从 NAS 拷最新 `vault-*.json` + `.sha256` → 新机 `sshmgr import <file>`（明文嗅探自动识别，不弹口令，见 [Plan 13 恢复](#恢复)）。
 
 两条都支持 `--passphrase-file`（export / import 加密分支）做**无人值守**恢复：
 
 ```bash
-ssh-manager export --out vault.sme --passphrase-file /secure/vault.pass   # 脚本里直接出
-ssh-manager import vault.sme --passphrase-file /secure/vault.pass          # 脚本里直接进
+sshmgr export --out vault.sme --passphrase-file /secure/vault.pass   # 脚本里直接出
+sshmgr import vault.sme --passphrase-file /secure/vault.pass          # 脚本里直接进
 # Plan 13 明文备份走 import 时 --passphrase-file 被忽略（明文分支不需要口令）
 ```
 
@@ -210,18 +210,18 @@ passphrase 文件自身要 0600、不进 git、恢复后删掉。**口令丢了 
 ### Windows：`serve install` / `uninstall` / `status`
 
 ```powershell
-ssh-manager serve install [--addr 0.0.0.0:7878] [--tls-cert cert.pem] [--tls-key key.pem]
-ssh-manager serve status
-ssh-manager serve uninstall
+sshmgr serve install [--addr 0.0.0.0:7878] [--tls-cert cert.pem] [--tls-key key.pem]
+sshmgr serve status
+sshmgr serve uninstall
 ```
 
-**`serve install`**：把前台 `serve` 包成 Task Scheduler 任务 `ssh-manager-serve`：
+**`serve install`**：把前台 `serve` 包成 Task Scheduler 任务 `sshmgr-serve`：
 
 - **触发器**：boot + 用户 logon（任务以 `LogonType=Password` 跑，boot 时无需等人登录就能起）。
 - **崩溃恢复**：`RestartOnFailure` PT1M × 3（1 分钟间隔，最多 3 次）。
 - **以当前用户身份 + filtered token（非 RunLevel Highest）**——足够读用户 profile + 监听端口，不需提权。
 - **stdout/stderr 重定向**到 `%LocalAppData%\ssh-manager\serve.log`——headless 启动失败（如 master key 解不开）也能事后翻日志。
-- **密码处理**：Task Scheduler 要存 Windows 密码才能 boot 时起任务。程序**不**用 `schtasks /Create /RP <密码>`（密码会进命令行 + 4688 审计日志），而是 shell 进 PowerShell 调 `Register-ScheduledTask`，由 PowerShell 的 `Get-Credential` 交互弹窗读密码。**密码只活在 PowerShell 进程内存里**，不进 ssh-manager.exe argv，不进 4688 日志。Task Scheduler 把它存在自己的 LSA secret store（标准路径）。
+- **密码处理**：Task Scheduler 要存 Windows 密码才能 boot 时起任务。程序**不**用 `schtasks /Create /RP <密码>`（密码会进命令行 + 4688 审计日志），而是 shell 进 PowerShell 调 `Register-ScheduledTask`，由 PowerShell 的 `Get-Credential` 交互弹窗读密码。**密码只活在 PowerShell 进程内存里**，不进 sshmgr.exe argv，不进 4688 日志。Task Scheduler 把它存在自己的 LSA secret store（标准路径）。
 - **装完立即 `schtasks /Run`** 跑一次验证 + 生成 serve.log。
 
 **`serve status`**：四路独立检查（每路单独打一行，部分失败也看得清）：
@@ -234,7 +234,7 @@ vault:     ok
 overall:   HEALTHY
 ```
 
-`vault: LOCKED` 那行特别关键：它扫 `serve.log` 末尾找硬失败标记（`unreadable` / `undecryptable` / `vault locked` / `run \`ssh-manager unlock\``），**进程在跑 ≠ vault 已解锁**——比如 admin 重置密码后 master.key 解不开，进程会崩溃自重启循环，HTTP 可能短暂 200/401 但实际不可用，这一行会标 `LOCKED`。
+`vault: LOCKED` 那行特别关键：它扫 `serve.log` 末尾找硬失败标记（`unreadable` / `undecryptable` / `vault locked` / `run \`sshmgr unlock\``），**进程在跑 ≠ vault 已解锁**——比如 admin 重置密码后 master.key 解不开，进程会崩溃自重启循环，HTTP 可能短暂 200/401 但实际不可用，这一行会标 `LOCKED`。
 
 **`serve uninstall`**：删 Task Scheduler 任务 + best-effort `taskkill` 残留 serve 进程。
 
@@ -284,11 +284,11 @@ wmic UserAccount where Name='<你的用户名>' set PasswordExpires=False
 
 CI 不能 reboot，boot 自起（BootTrigger）+ 跨重启 DPAPI（machine-scope）的闭环验证在这里：
 
-1. NUC10 部署新版 ssh-manager.exe。
-2. NUC10 交互式（RDP）跑 `ssh-manager unlock` → 触发 user→machine 迁移（重 protect C）。
-3. `ssh-manager serve install`（输 allan716 密码）→ 对象 API 注册。
+1. NUC10 部署新版 sshmgr.exe。
+2. NUC10 交互式（RDP）跑 `sshmgr unlock` → 触发 user→machine 迁移（重 protect C）。
+3. `sshmgr serve install`（输 allan716 密码）→ 对象 API 注册。
 4. **reboot NUC10** → BootTrigger 自起 serve。
-5. NUC10 起来后 `ssh-manager serve status` → `vault: ok`（machine-scope 跨重启可解）+ `overall: HEALTHY`。
+5. NUC10 起来后 `sshmgr serve status` → `vault: ok`（machine-scope 跨重启可解）+ `overall: HEALTHY`。
 6. 笔记本 MCP 连 `http://192.168.100.235:7878` → `exec_command` 在 1660Super01 跑 `hostname` → 返回 `DESKTOP-UP1MHGT`。
 7. 清理：`serve uninstall`。
 
@@ -333,9 +333,9 @@ Plan 16 把 master key 从 **DPAPI 加密文件**（Plan 14/15）换成**固定�
 
 ```bash
 # 默认从 UserConfigDir/ssh-manager/（旧默认）搬到 paths.VaultDir()（新固定路径）
-ssh-manager migrate-path
+sshmgr migrate-path
 # 或指定旧目录：
-ssh-manager migrate-path --from /old/path
+sshmgr migrate-path --from /old/path
 # --keep-old 保留旧文件（默认删，N/N 自检通过后才删）
 ```
 
@@ -347,15 +347,15 @@ ssh-manager migrate-path --from /old/path
 
 ```bash
 # 1. 在 RDP / 交互 session（旧 master.key 可解的 session）：
-ssh-manager export --out vault.sme --passphrase-file /secure/vault.pass
+sshmgr export --out vault.sme --passphrase-file /secure/vault.pass
 
-# 2. 部署 Plan 16 新版 ssh-manager（覆盖旧二进制）
+# 2. 部署 Plan 16 新版 sshmgr（覆盖旧二进制）
 
 # 3. admin/root 跑 unlock（建固定路径目录 + 新 master.key.plain + 空 store.db）：
-ssh-manager unlock
+sshmgr unlock
 
 # 4. 导入到新固定路径 vault（re-seal 到新 master.key）：
-ssh-manager import --passphrase-file /secure/vault.pass vault.sme
+sshmgr import --passphrase-file /secure/vault.pass vault.sme
 
 # 5. 手动删旧 DPAPI blob + 旧 store.db（Plan 14/15 留在 UserConfigDir 的旧文件）：
 #    Windows: del "%APPDATA%\ssh-manager\master.key" "%APPDATA%\ssh-manager\store.db"

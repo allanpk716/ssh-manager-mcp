@@ -505,7 +505,7 @@ func TestDoPullPinned403UnboundDoesNotQuarantine(t *testing.T) {
 	bin, _, cred := seedCache(t, dir)
 
 	srv := newPinnedSnapshotServer(t, func(r *http.Request) (int, string) {
-		return 403, "device code not bound to a profile — owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server"
+		return 403, "device code not bound to a profile — owner: run `sshmgr cache-tokens bind <name> <profile>` on the server"
 	})
 	_, err := DoPull(srv.URL, "unbound-code", srv.Pin, PullOpts{})
 	if err == nil {
@@ -536,7 +536,7 @@ func TestDoPull403DiscriminatesByBody(t *testing.T) {
 
 	srv := newPinnedSnapshotServer(t, func(r *http.Request) (int, string) {
 		if r.Header.Get("Authorization") == "Bearer unbound-code" {
-			return 403, "device code not bound to a profile — owner: run `ssh-manager cache-tokens bind <name> <profile>` on the server"
+			return 403, "device code not bound to a profile — owner: run `sshmgr cache-tokens bind <name> <profile>` on the server"
 		}
 		return 403, "403 Forbidden: client IP not in allowlist"
 	})

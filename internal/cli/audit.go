@@ -12,7 +12,7 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// newAuditCmd: `ssh-manager audit` — the owner's read path over the vault's
+// newAuditCmd: `sshmgr audit` — the owner's read path over the vault's
 // audit_log (backlog #16). Owner-only BY CONSTRUCTION: it goes through
 // openUnlockedStore() (the master-key gate) and is never registered as an MCP
 // tool — audit rows carry other agents' full command text and may contain

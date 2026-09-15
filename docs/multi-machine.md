@@ -1,63 +1,70 @@
-# 多机共享：serve 模式（一台服务器常驻，多台机器共用）
+# 多机共享：桥姿态（一台服务器常驻权威 vault，多台机器共用）
 
-> **适用场景**：你在**多台电脑**上开发/办公（同一个内网或虚拟局域网 VLAN），想让所有机器上的 AI agent 共用**同一份** SSH 服务器清单。
+> **适用场景**：你在**多台电脑**上开发/办公（同一个内网或虚拟局域网 VLAN），想让所有机器上的 AI agent 共用**同一份** SSH 服务器清单——凭据只存在一台权威 broker 上，工作机只持本地只读缓存。
 >
-> **单台机器不需要本篇**——直接用默认的 stdio 模式（见 [getting-started.md](./getting-started.md)）。serve 是给"多机共用"这个场景的可选项。
+> **单台机器不需要本篇**——直接用默认的 stdio 模式（见 [getting-started.md](./getting-started.md)）。多机形态是给"多机共用"这个场景的可选项。
+>
+> **Plan 42 批1 起的形态**（随下个发版）：serve 收窄为**权威 vault + `/snapshot` 拉取 + `/pair` 配对**（+批2 `/ui` 管理）——远程 MCP-over-HTTP（旧 ②a）已**移除**（根路径 404）。工作机 agent 一律走**本地只读缓存**（`mcp --cache`，只读 + 执行）；新机入网 = `sshmgr pair` 一条龙。多机 agent **只读 + 执行**，写操作只在管理面（broker TUI / `serve pair` CLI / 批2 Web UI）。
 
 ---
 
 ## 该用哪种模式？（先看这张表）
 
-| | **stdio（默认 · 单机）** | **serve（可选 · 多机）** |
+| | **stdio（默认 · 单机）** | **多机桥姿态（可选 · 多机）** |
 |---|---|---|
 | broker 跑在哪 | Claude Code **按需 spawn** 的本地子进程 | 你**手动启动并常驻**的一台 VLAN 服务器 |
-| agent 怎么连 | 本地 stdio | 远程 HTTP（streamable MCP） |
-| 凭据放在哪 | 本机（自包含） | **只在服务器上**，工作机零凭据 |
-| 离线能用吗 | ✅ 是（本机自包含） | ❌ **否（在线 only）** |
+| agent 怎么连 | 本地 stdio | **pair 一条龙入网 → 本地只读缓存**（`mcp --cache`）；无远程 MCP 面 |
+| 凭据放在哪 | 本机（自包含） | **只在服务器上**；工作机仅加密只读快照（cache.bin+DEK） |
+| agent 可写吗 | ✅（本机 vault） | ❌ **只读快照**（写操作 `ErrReadOnly`——写只在管理面） |
+| 离线能用吗 | ✅ 是（本机自包含） | ✅ 是（缓存本就为断网兜底而设计；保鲜 ≤30min 需在线） |
 | 重启后要管吗 | 不用（客户端自动拉起） | 要（你得让 serve 常驻 / 开机自启） |
 | 适合 | 单台机器 | 多台机器共用一份清单 |
-| 配置复杂度 | 最低 | 中（要常驻服务 + 建议 TLS） |
+| 配置复杂度 | 最低 | 中（要常驻服务；工作机侧 = 一条 `pair` 命令） |
 
-**默认选 stdio。** 只有"多台机器要共用同一份服务器清单"时才上 serve。
+**默认选 stdio。** 只有"多台机器要共用同一份服务器清单"时才上多机形态。
 
-> 一句话分辨：**broker 是"按需拉起的子进程"（stdio）还是"你常驻的服务"（serve）。** 这是两种模式最根本的运营差异，下面的架构会展开。
+> 一句话分辨：**broker 是"按需拉起的子进程"（stdio）还是"你常驻的服务"（多机桥）。** 这是两种模式最根本的运营差异，下面的架构会展开。
 
 ---
 
 ## 架构
 
 ```
-   多机（serve）                          单机（stdio · 默认）
+   多机（桥姿态）                         单机（stdio · 默认）
 
  ┌──工作机 A──┐  ┌──工作机 B──┐         ┌───你的机器───┐
  │  Claude    │  │  Claude    │         │  Claude      │
  │  Code      │  │  Code      │         │  Code        │
- │ （远程 MCP）│  │ （远程 MCP）│         │ （spawn 子进程）│
+ │ (mcp --cache)│ │ (mcp --cache)│      │ （spawn 子进程）│
  └─────┬──────┘  └─────┬──────┘         └───────┬───────┘
-       │ HTTPS + token   │                      │ stdio
-       └────────┬────────┘                      │
-                ▼                               ▼
+       │ pair 入网 + 保鲜拉取（TLS+指纹钉死）      │ stdio
+       │ 命令执行不走这条线 ▼                    ▼
       ┌──────────────────┐            ┌──────────────────┐
       │ VLAN 服务器       │            │ 本机              │
-      │ ssh-manager serve │            │ ssh-manager mcp   │
+      │ sshmgr serve │            │ sshmgr mcp   │
       │  （常驻进程）      │            │  （按需子进程）     │
-      │  ┌────────────┐  │            │  ┌────────────┐  │
-      │  │ vault+DEK  │  │            │  │ vault+DEK  │  │
-      │  └────────────┘  │            │  └────────────┘  │
-      └──────────────────┘            └──────────────────┘
-               │                               │
-               ▼ SSH                           ▼ SSH
-          目标服务器们                      目标服务器
+      │  权威 vault+/snapshot │        │  ┌────────────┐  │
+      │  +/pair（+批2 /ui）│           │  │ vault+DEK  │  │
+      │  ┌────────────┐  │            │  └────────────┘  │
+      │  │ vault+DEK  │  │            └──────────────────┘
+      │  └────────────┘  │                     │
+      └──────────────────┘                     ▼ SSH
+               （serve 不在命令路径上——               ▼
+                 两形态都由 agent 侧直拨）        目标服务器
+                   ▼ SSH（工作机直拨）
+              目标服务器们
 ```
 
 **本质区别：**
 
-- **stdio（单机）**：Claude Code 读 `.mcp.json` 里的 `command`，**自己 spawn** `ssh-manager mcp` 子进程，broker 和 Claude Code 之间走 stdio。broker 的生死 Claude Code 管；机器自包含（vault 在本机）。详见 [getting-started.md 的"重启/关机后"](./getting-started.md#重启--关机后还要做什么吗不用mcp-客户端会自动拉起)。
-- **serve（多机）**：你在 VLAN 一台服务器上**常驻** `ssh-manager serve`。各工作机的 Claude Code 通过**远程 MCP**（HTTP）连它。**凭据只在服务器上**，工作机上零凭据、零 vault。
+- **stdio（单机）**：Claude Code 读 `.mcp.json` 里的 `command`，**自己 spawn** `sshmgr mcp` 子进程，broker 和 Claude Code 之间走 stdio。broker 的生死 Claude Code 管；机器自包含（vault 在本机）。详见 [getting-started.md 的"重启/关机后"](./getting-started.md#重启--关机后还要做什么吗不用mcp-客户端会自动拉起)。
+- **多机桥姿态**：你在 VLAN 一台服务器上**常驻** `sshmgr serve`（权威 vault）。各工作机经 **pair 一条龙**入网（SAS 人闸 → 凭据加密下发），持一份**本地加密只读快照**，agent 的子进程 `mcp --cache` 用它干活。**凭据只在服务器上**，工作机上只有只读快照；**命令从工作机直拨目标服务器**，serve 不在命令路径上。
 
-**鉴权（和 stdio 同一个闸门）**：每个 HTTP 请求带 `Authorization: Bearer <项目token>`；服务器用同一个 `VerifyToken` 把 token resolve 成项目/profile（只放行 `active` 项目）。**铁律**（每条命令前重检 `serverID ∈ profileID`）和 stdio 完全一致——serve 没有新增任何工具、没有动 agent 表面，只是把同一个 broker 暴露到网络上。
+**鉴权（两道独立的闸，永不互通）**：
 
-> **额外的一道闸**：SDK 自带的 session-binding 防御已激活——防止"拿 A 项目的 token 重放到 B 项目已建立的 session"这类跨项目越权（→ 403 `session user mismatch`）。
+- **设备码 → `/snapshot`**：拉取该设备绑定 profile 的授权裁剪快照（Plan 39），只进 `/snapshot` 这一条 HTTP 路由；吊销后 pinned 401 触发本地缓存销毁。
+- **project token → 本地 spawn 闸**：`mcp --cache` 用 `SSHMGR_TOKEN` 对**快照内随行的 projects 表**校验后放行工具面——**它不再是任何远程 MCP 凭据**（Plan 42 批1 起 serve 无 MCP 面），也不进任何 HTTP 头。
+- **铁律**（每条命令前重检 `serverID ∈ profileID`）和 stdio 完全一致——多机形态没有新增任何工具、没有动 agent 表面，只是把数据源换成本地只读快照。
 
 ---
 
@@ -68,40 +75,42 @@
 在 VLAN 那台将常驻 broker 的机器上，像单机一样把服务器/profile/project 建好（命令和 stdio 完全一样，详见 [getting-started.md](./getting-started.md)）：
 
 ```bash
-ssh-manager unlock                                  # master key → 固定路径裸文件 (master.key.plain)
-ssh-manager servers add --name gpu --host 192.0.2.10 --user deploy --password '...'
-ssh-manager profiles add team-a && ssh-manager profiles grant team-a gpu
-ssh-manager projects add my-agent --profile team-a  # 打印一次性 token（工作机要用，记下来）
+sshmgr unlock                                  # master key → 固定路径裸文件 (master.key.plain)
+sshmgr servers add --name gpu --host 192.0.2.10 --user deploy --password '...'
+sshmgr profiles add team-a && sshmgr profiles grant team-a gpu
+sshmgr projects add my-agent --profile team-a  # 打印一次性 token（工作机要用，记下来）
 ```
 
 ### Step 2（服务器侧）：启动常驻 broker
 
 ```bash
-ssh-manager serve --addr 0.0.0.0:7878
-# → ssh-manager serve: listening on 0.0.0.0:7878 (tls=auto)
+sshmgr serve --addr 0.0.0.0:7878
+# → sshmgr serve: listening on 0.0.0.0:7878 (tls=auto)
 # → auto-TLS cert (self-signed). client pin: sha256:abcd1234...
+# → sshmgr serve: discovery: udp/7878 (on)
 ```
 
 | 选项 | 说明 |
 |---|---|
 | `--addr` | 监听地址。默认 `127.0.0.1:7878`（**只本机**——远程用不了）。多机场景写 `0.0.0.0:7878` 或服务器的 VLAN IP。 |
 | `--tls-cert` / `--tls-key` | **可选**。不挂时（默认）serve 首次启动**自动生成一张自签 ed25519 证书**，落 vault 固定目录（`serve-cert.pem` / `serve-key.pem`，ACL 与 `master.key.plain` 同级）。要用自己的证书才挂这两个 flag。 |
+| `--pairing` / `--discovery` | **可选**。SAS 配对面（`/pair/*`）与 UDP 发现（udp/7878）的三态开关：显式置位才参与裁决，优先级 **显式 env（`SSHMGR_SERVE_PAIRING`/`SSHMGR_SERVE_DISCOVERY`）> 显式 flag > store 设置 > 缺省 true**；store 变更 ≤5s 生效，env/flag 变更需重启 serve。 |
 
-**自签证书 + 指纹钉死 = 零证书分发。** 自签证书首次生成时，serve 把它的 **SPKI 指纹**（`sha256:...`）打印到启动日志（`client pin:` 那行）。客户端（`cache pull` / 工作机）用这个指纹**钉死**对端 —— 连接时校验服务器证书公钥 == 钉死的指纹，不等即拒，**首次连接即校验（零 MITM 窗口）**。无需在每台客户端装根证书。
+**自签证书 + 指纹钉死 = 零证书分发。** 自签证书首次生成时，serve 把它的 **SPKI 指纹**（`sha256:...`）打印到启动日志（`client pin:` 那行）。客户端（`pair` / `cache pull` / 工作机）用这个指纹**钉死**对端 —— 连接时校验服务器证书公钥 == 钉死的指纹，不等即拒，**首次连接即校验（零 MITM 窗口）**。无需在每台客户端装根证书。
 
-**指纹怎么交给工作机**：`cache-tokens add` 签发设备码时，会把当前 serve 指纹**一并打印**（默认编进 `cache pull` 示例命令，形态 `<设备码>:<指纹>`）。详见下面「离线只读缓存」Step 1。也可用 `ssh-manager serve cert-info` 随时查当前指纹。
+**指纹怎么交给工作机**：pair 时代它**自动交付**——discovery 的 offer 报文自带指纹、pair 信封内也封入 spki（client 钉的正是它配对的这把 key）。手工路径（`cache-tokens add`）仍会把指纹一并打印（默认编进 `cache pull` 示例命令，形态 `<设备码>:<指纹>`）。也可用 `sshmgr serve cert-info` 随时查当前指纹。
 
-> ⚠️ **客户端不带指纹 = 默认拒连（hard-fail）**：`cache pull` 在没拿到指纹（env / `--pin` / token 内嵌三处都没有）时，**默认拒绝拉取**（不再静默明文）——明文是 fail-open 隐患，已改为默认安全。若确需明文（连旧明文 serve 调试），显式加 `--allow-plaintext` opt-in。详见下「离线只读缓存」Step。
+> ⚠️ **客户端不带指纹 = 默认拒连（hard-fail）**：`cache pull` 在没拿到指纹（env / `--pin` / token 内嵌三处都没有）时，**默认拒绝拉取**（不再静默明文）——明文是 fail-open 隐患，已改为默认安全。pair 侧同理且更紧：`--url` 直连又不带 `--pin` 时**默认拒绝**（需显式 `--allow-tofu`，见 threat-model R12）。若确需明文（连旧明文 serve 调试），显式加 `--allow-plaintext` opt-in。详见下「离线只读缓存」节。
 
 **让它常驻 + 开机自启**（serve 是个长驻进程，别在前台手跑就完事）：
 
-- **Windows / Linux / macOS**：跑 `ssh-manager serve install`——程序用 [`github.com/kardianos/service`](https://github.com/kardianos/service) 自己注册系统服务（Win=Windows Service、Linux=systemd unit、macOS=launchd plist），三平台一条命令，无需手写 XML / unit / plist。详见下面「`serve install` 三平台一条龙」小节。进阶用户若偏好第三方包（NSSM / 手写 systemd / 手写 launchd），见 [getting-started 的第三方服务包小节](./getting-started.md#第三方服务包可选给不想用内置-install-的进阶用户)。
+- **Windows / Linux / macOS**：跑 `sshmgr serve install`——程序用 [`github.com/kardianos/service`](https://github.com/kardianos/service) 自己注册系统服务（Win=Windows Service、Linux=systemd unit、macOS=launchd plist），三平台一条命令，无需手写 XML / unit / plist。详见下面「`serve install` 三平台一条龙」小节。进阶用户若偏好第三方包（NSSM / 手写 systemd / 手写 launchd），见 [getting-started 的第三方服务包小节](./getting-started.md#第三方服务包可选给不想用内置-install-的进阶用户)。
 
 #### `serve install` 三平台一条龙（Plan 16，kardianos）
 
 ```bash
 # 在已经跑过 unlock（master.key.plain 已生成）的机器上（Windows 需 admin / Linux·macOS 需 sudo）：
-ssh-manager serve install --addr 0.0.0.0:7878
+sshmgr serve install --addr 0.0.0.0:7878
 ```
 
 （`--tls-cert/--tls-key` 可选；不挂则服务自签证书，同 Step 2。）
@@ -109,15 +118,15 @@ ssh-manager serve install --addr 0.0.0.0:7878
 程序会：
 
 1. **precheck master.key**：`master.key.plain` 存在且可读。不存在就报错让你先 `unlock`（Plan 16：master.key 是裸文件 + ACL，service 账户需能读——Windows 默认 `LocalSystem` / Linux·macOS 默认 root，目录 ACL 已含这两个）。
-2. **解析二进制**：`os.Executable` 取当前 ssh-manager 路径 → service 配置里写"跑这个二进制 + `serve --addr ...` 参数"。**service 用的是同一份代码同一个二进制**。
+2. **解析二进制**：`os.Executable` 取当前 sshmgr 路径 → service 配置里写"跑这个二进制 + `serve --addr ...` 参数"。**service 用的是同一份代码同一个二进制**。
 3. **加固 vault 目录 ACL**（Windows，best-effort）：`master.key.plain` 的文件 ACL 已由 `unlock` 设好（`SYSTEM` + `Administrators` + 当前用户，移除 `Users`/`Authenticated Users`/`Everyone`，禁用继承）；这一步对**目录**再做一遍 defense-in-depth。
 4. **注册 + 立即启动**：kardianos 调用各平台原生 service manager（Windows SCM / systemd / launchd），`RestartOnFailure` 用各平台原生概念表达（Win `OnFailure=restart`、Linux `Restart=on-failure`、macOS `KeepAlive=true`）。重装是**幂等**的（先 best-effort 注销旧的，再装新的——支持"升级二进制后重装"的常见流程）。
 
 配套命令：
 
 ```bash
-ssh-manager serve status      # 四信号：service / process / http / vault
-ssh-manager serve uninstall   # 停 service + 注销（不删 vault 数据）
+sshmgr serve status      # 四信号：service / process / http / vault
+sshmgr serve uninstall   # 停 service + 注销（不删 vault 数据）
 ```
 
 `serve status` 四路独立检查：
@@ -131,7 +140,7 @@ overall:   HEALTHY
 ```
 
 - **service**：kardianos `svc.Status()`（Running / Stopped / Unknown / NOT INSTALLED）。**locale-independent**（Plan 15 FINDING E 的修复沿用：旧的 PowerShell `Get-ScheduledTask.State` 文本解析在 zh-CN 下挂掉，byte 枚举无此问题）。
-- **process**：是否有 ssh-manager 进程在跑（Win `tasklist` / POSIX 扫 `/proc/comm`）。
+- **process**：是否有 sshmgr 进程在跑（Win `tasklist` / POSIX 扫 `/proc/comm`）。
 - **http**：bound addr 是否响应（401/200 都算活——auth 闸在工作）。
 - **vault**：`master.key.plain` 是否**存在 + 可读 + 是合法的 32 字节 key**（直接文件 probe，不扫日志——catch 到缺 key / 损坏 / 长度错的 key，那种"进程在跑但 boot 时会 crash-loop"的失败模式）。
 
@@ -153,36 +162,47 @@ service 默认账户：
 
 已有 Plan 14（user-scope DPAPI）或 Plan 15（machine-scope DPAPI）vault 的机器升级到 Plan 16（FileKeyProvider）——**旧 master.key 是 DPAPI blob，新版本读不了**。流程见 [backup-restore.md 的 Plan 16 迁移 Runbook](./backup-restore.md)。核心是两条路二选一：
 
-- **migrate-path**（若旧 master.key 在当前 session 可解）：`ssh-manager migrate-path --from <旧路径>`，自动搬 `store.db` + `master.key.plain` 到新固定路径 + N/N 自检 + 删旧。
+- **migrate-path**（若旧 master.key 在当前 session 可解）：`sshmgr migrate-path --from <旧路径>`，自动搬 `store.db` + `master.key.plain` 到新固定路径 + N/N 自检 + 删旧。
 - **export + import**（若旧 master.key 在当前 session 读不出——NUC10 的 sshd 现状）：在 RDP / 交互 session 跑 `export` 到 `.sme` → 新版本 `unlock` 建 new key → `import --passphrase-file` 导入新固定路径。
 
-### Step 3（每台工作机）：Claude Code 连远程
+### Step 3（每台工作机）：`sshmgr pair` 一条龙入网
 
-各工作机的 `.mcp.json`：
+> 🧭 全流程细节（发现/SAS/机械地址校验/产物落盘）见下[「配对入网：`sshmgr pair`（Plan 42）」](#配对入网sshmgr-pairplan-42)节；本步是最短路径。
+
+工作机装好 `sshmgr` 后：
+
+```bash
+sshmgr pair --instance laptop
+# → 发现（或已提示用 --url 直指）→ 屏显三件套：laptop @ https://192.0.2.5:7878 SAS 482913
+# → owner 在 broker 机 TUI Pairing 页（或 serve pair approve laptop --profile team-a）
+#   对照屏上「name @ url」与 client 屏 SAS 一致后批准
+# → 批准后 120 秒内 client 完成 finish → 凭据加密下发 → 首拉落盘
+# → 产物 pair.laptop.mcp.json（含真值 project token，0600）
+```
+
+> TUI 形态：工作机 `sshmgr tui` → client 面板 `[c]` 配对向导（Plan 45）——同一流程的点选版，见[配对入网节](#配对入网sshmgr-pairplan-42)的 TUI 等价路径注。
+
+把产物里的片段抄进该机的 `.mcp.json`（或 pair 时用 `--write-mcp <path>` 直接落位）：
 
 ```json
 {
   "mcpServers": {
     "ssh": {
-      "type": "http",
-      "url": "https://192.0.2.5:7878/",
-      "headers": { "Authorization": "Bearer <Step 1 拿到的项目token>" }
+      "command": "sshmgr",
+      "args": ["mcp", "--cache"],
+      "env": { "SSHMGR_TOKEN": "<项目token>" }
     }
   }
 }
 ```
 
-- `"type": "http"` **必填**——漏了 Claude Code 会当 stdio 处理并拒绝这个条目。
-- `url` 指向 serve 那台服务器（挂了 TLS 就用 `https://`）。
-- `headers.Authorization` 带项目 token。
+⚠️ `.mcp.json` 含 project token——**别提交 git**（和 stdio 一样）。机器失窃 = 设备码 + token 双吊销（见下「吊销三路径」）。
 
-⚠️ token 是敏感信息——`.mcp.json` **别提交 git**（和 stdio 一样）。机器失窃 = 该 token 泄露，立刻 `ssh-manager projects rotate <name>`（在服务器上跑）换发。
-
-重启 Claude Code → 该机的 agent 就能用 SSH 工具了，范围 = 这个 token 绑定的 profile。
+重启 Claude Code → 该机的 agent 就能用 SSH 工具了，范围 = 配对时绑定的 profile（**只读 + 执行**；加改删服务器去管理面）。
 
 ### Step 4：网络
 
-服务器的 `7878`（或你选的端口）只对**可信机器**开放。VLAN 内通常天然隔离；跨网段记得 ACL。这 Serve 不内置 IP 白名单——网络层隔离 + TLS + token 三道够了；要更细的按机器隔离，见下面"按机器分项目"。
+服务器的 **TCP 7878**（`/snapshot` + `/pair/*`）与 **UDP 7878**（discovery 应答）只对**可信机器**开放。VLAN 内通常天然隔离；跨网段记得 ACL。serve 不内置 IP 白名单——网络层隔离 + TLS 指纹钉死 + SAS 人闸三层够了。
 
 ---
 
@@ -192,13 +212,11 @@ service 默认账户：
 
 一台常开的家用服务器 / NUC / 软路由 + 笔记本 + 台式机，都在同一个 VLAN。
 
-- **服务器**：常驻 `ssh-manager serve`（systemd 托管 + TLS）。所有服务器清单建在它上面。
-- **笔记本 / 台式机**：Claude Code `.mcp.json` 连服务器。任意一台上的 agent 都能用**同一份**清单。
-- **一个 token 还是多个**：
-  - 所有机器看同一份清单 → 用**同一个** project token（最简）。
-  - 要按机器隔离（比如笔记本只能看部分服务器）→ 在服务器上建**多个 project**，各绑**不同 profile**，各发**不同 token**；不同机器的 `.mcp.json` 填不同 token。
+- **服务器**：常驻 `sshmgr serve`（systemd 托管 + 自动 TLS）。所有服务器清单建在它上面。
+- **笔记本 / 台式机**：各跑一条 `sshmgr pair --instance <名>`，owner 在 broker TUI 批准即入网。任意一台上的 agent 都能用**同一份**清单的**自己的只读快照**。
+- **授权范围（一机一码一 profile）**：pair 批准时 owner 选 profile——该机拉到的就是、且只是这个 profile 授权的服务器。要让某台机只看部分服务器，建一个专用 profile 授权那几台，批准时选它。
 
-> serve 的鉴权是**按 token → project → profile** 路由的：一个 serve 进程同时服务多个 project/token，互不串扰（跨 project 重放会被 session-binding 防御挡掉）。
+> serve 的授权是**按设备码 → profile 裁剪快照**（Plan 39）+ **project token → 本地 spawn 闸**两道独立闸路由的：一台 serve 同时服务多台工作机，互不串扰。
 
 ### 场景 B：单机（不需要本篇）
 
@@ -206,41 +224,30 @@ service 默认账户：
 
 ---
 
-## 隧道 bind 白名单与 owner 急停（Plan 35）
+## 隧道与 owner 急停（Plan 42 后口径）
 
-serve 拓扑下 `forward_port` 的监听缺省绑 **serve 主机的 `127.0.0.1`**——只有 serve 主机自己够得到。NUC10 惯用法：想让 **VLAN 内其他机器**（比如笔记本直接 `curl` serve 主机上开的隧道）使用一条隧道，owner 在 serve 主机预批白名单，agent 开隧道时显式传该地址：
+多机 agent 全部跑在各自工作机的本地 broker 子进程里——`forward_port` 的监听**恒在 agent 所在机器的环回地址**（缺省 `127.0.0.1`），随 ②a 移除，"隧道开在 serve 主机 + `serve bind` 白名单跨机共享"的拓扑已一并退役（`serve bind` 子命令已删除）。非环回监听仍被 fail-closed 拒绝（白名单表不再有管理入口，恒为空 = 环回 only）——被劫持 agent 无法把隧道 bind 到 VLAN 面。
 
-```bash
-# owner（serve 主机 = 权威 vault 所在机器上，一次性）：
-ssh-manager serve bind add 192.0.2.5        # serve 主机的 VLAN IP（IP 字面量 only；
-                                            # hostname / 网段 / 0.0.0.0 一律拒）
-ssh-manager serve bind ls                   # 查看当前白名单
+- **owner 急停**：在权威 vault 所在机器（如 NUC10）上 `sshmgr tunnels ls` 看**共享该 vault 的 broker**（本机 stdio broker 等）的在线隧道（registry 镜像，≤45s 新鲜度），`tunnels kill <tunnel_id>` / `tunnels kill --project <name>` 拆（≤~15s 生效）；revoke/disable 亦级联拆除。**各工作机 cache 模式 client 的隧道不在此域**——不进 registry、不受 kill 单/级联管辖（机制性恒环回）；那台机离线时要拆隧道，去那台机上杀进程（或等它回连触发 cache 销毁，见「吊销」节）。
+- **跨机用隧道**：笔记本想用某机开的端口 → 在那台机上直接用（环回），或让该机的 agent `exec_command` 起目标服务——不再有 serve 主机中转监听。
 
-# agent 侧 forward_port 传 listen_host="192.0.2.5" → 隧道监听该地址，
-# VLAN 内机器 curl http://192.0.2.5:<port> 即用。
-```
-
-- **撤回收缩**：`serve bind rm <ip>` 后，绑定该地址的存量隧道 ≤~15s（一个控制 tick）内关闭；环回隧道不受影响。白名单是 per-call 现读的——add 后下一个 `forward_port` 即可用，无需重启 serve。
-- **笔记本恒 loopback**：什么都不用配。serve 主机上的环回隧道笔记本本来就够不到，要跨机用就走上面的白名单路径；笔记本自己以 stdio / 离线 cache 模式开的隧道，绑的是**笔记本自己的**环回地址（离线模式机制性恒 loopback——白名单表不进快照）。
-- **owner 急停**：在权威 vault 所在机器（NUC10）上 `ssh-manager tunnels ls` 看全部在线隧道（serve + 在线 stdio broker 的 registry 镜像，≤45s 新鲜度），`tunnels kill <tunnel_id>` / `tunnels kill --project <name>` 拆（≤~15s 生效）。**离线 cache 客户端的隧道不在此域**——不进 registry、不受 kill 单/级联管辖；那台机离线时要拆隧道，去那台机上杀进程（或等它回连触发 cache 销毁，见「吊销」节）。
-
-**审计取证去哪台机跑（Plan 36）**：`ssh-manager audit` 读的是**本机** vault——serve 拓扑下 agent 的动作审计行落在**权威 broker 的 vault** 里；要看全量 agent 历史，在 broker 机器（如 NUC10）上跑 `ssh-manager audit`。
+**审计取证去哪台机跑（Plan 36）**：`sshmgr audit` 读的是**本机** vault——serve 拓扑下 agent 的动作审计行落在**各自 client 机的 `cache-audit.log`**（本地 JSONL，不回传）；权威 vault 的 `audit_log` 记录的是**管理面动作**（发码/批准/吊销等）与共享该 vault 的 broker 行为。要看某台工作机 agent 的历史，去那台机上收 `cache-audit.log`。
 
 ---
 
 ## 限制（如实，必读）
 
-1. **在线 only（serve 本身）**：serve 的远程 MCP 走在线——工作机连不上服务器（服务器挂了 / VLAN 断了 / 笔记本带出门）= 该机的 agent **走不了远程 MCP**。但本地若有缓存（见下条），agent 可以切到只读的 `mcp --cache` 兜底。
-2. **离线缓存：✅ 已实现（Plan 12）**：工作机本地持有一份**加密的只读** vault 快照，连不上服务器时 agent 照常 exec / download / upload / 转发（只读，不能改）。**见本篇[「离线只读缓存（Plan 12）」](#离线只读缓存plan-12)节**——它不是 serve 的"离线模式"，而是一份独立拉取、独立加密、自动保鲜（spawn 惰性拉取 + 会话内热加载）的本地缓存。在一台机器上**同时**配 serve（在线）+ cache（离线兜底）也行——两套互不冲突。
-3. **服务器是单点**：服务器挂了 = 所有人暂停，直到它恢复。**自动备份 / 灾难恢复已落地**——[Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)（NAS 定时明文备份）+ [export/import](./backup-restore.md)（Plan 11，便携加密备份）。恢复手段：从 NAS 拷最新快照或 export 文件，在新机 `ssh-manager import`（[见 backup-restore 的灾难恢复](./backup-restore.md#场景-③-灾难恢复)）。
+1. **多机 agent 只读**：agent 的活动面 = 本地只读快照——能 exec / 传输 / 转发，**任何写都被拒**（`ErrReadOnly`）。加改删服务器 / 发码 / 批准配对去**管理面**（broker TUI / `serve pair` / 批2 Web UI）。没有"在线可写"的多机 agent 模式（②a 已移除，Plan 42 批1 起根路径 404）。唯一例外（Plan 48）：未知目标的首次信任走**锚定转发**——握手时把看到的主机密钥送 broker 落库（权威侧、带审计），不是本地可写层（见[「主机密钥锚定」](#主机密钥锚定锚定转发与带外锚定plan-48)节）。
+2. **保鲜需在线**：缓存自动保鲜（≤30min TTL）要能连上 serve——服务器挂了 / VLAN 断了 / 笔记本带出门 = 停在旧快照上继续干活（功能不受影响，新授权/改动看不到）；重新连上后下次懒检查自动追平。
+3. **服务器是单点**：服务器挂了 = 没人能入网/保鲜，存量缓存照常干活，直到它恢复。**自动备份 / 灾难恢复已落地**——[Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)（NAS 定时明文备份）+ [export/import](./backup-restore.md)（Plan 11，便携加密备份）。恢复手段：从 NAS 拷最新快照或 export 文件，在新机 `sshmgr import`（[见 backup-restore 的灾难恢复](./backup-restore.md#场景-③-灾难恢复)）。
 4. **单 owner 设计**：多个人共用同一个 vault、按人隔离访问——**不在范围**。本方案是"一个人、多台机"。多人场景需要 per-user ACL + 审计隔离，是另一个量级的功能。
-5. **bearer token = 钥匙**：谁拿到某项目的 token + 能连到服务器 = 拿到那个项目 profile 里的**所有服务器**。所以：serve 默认**自签 TLS + 指纹钉死**防嗅探/防 MITM；用 [`projects rotate`](./agent-access.md)（换发）/ [`revoke`](./agent-access.md)（吊销）管 token 生命周期；token 进密码管理器、别进 git。
+5. **两把钥匙都要管**：设备码（拉取权，可吊销、pinned 401 即销毁本机缓存）+ project token（spawn 闸，轮换/吊销见 [agent-access.md](./agent-access.md)）。都进密码管理器/0600 文件、别进 git。吊销生效语义见下「吊销」节与 [agent-tools.md](./agent-tools.md) 的「吊销三路径」。
 
 ---
 
 ## 后续路线
 
-serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问**。**export/import（Plan 11，便携加密备份 / 迁移）已落地**（见 [backup-restore.md](./backup-restore.md)）。规划中的多机后续：
+多机支持历经：**Phase 1**（在线 live 远程访问，Plan 10）→ Plan 12 离线只读缓存 → **Plan 42 起收敛为桥姿态**（远程 MCP 面移除，缓存形态成为唯一多机姿势）。**export/import（Plan 11，便携加密备份 / 迁移）已落地**（见 [backup-restore.md](./backup-restore.md)）。
 
 | 计划 | 解决什么 | 状态 |
 |---|---|---|
@@ -250,8 +257,9 @@ serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问
 | Plan 14/15 · Windows 生产部署 | DPAPI master key + `serve install` Task Scheduler | ⚠️ 已 Superseded by Plan 16 |
 | Plan 16 · 固定路径 + FileKeyProvider | 三平台固定路径 + 裸文件 master key（L1+）+ kardianos 跨平台 `serve install` + `migrate-path` | ✅ 已做（本篇 + [threat-model.md](./threat-model.md) + [getting-started 第三方服务包](./getting-started.md#第三方服务包可选给不想用内置-install-的进阶用户)） |
 | Plan 40 · 多实例（批1 + 批2） | 同机 N agent 各授权各 profile 的独立 cache 实例（目录 + per-instance DEK + `--instance` + MAX_OFFLINE 持久化）；批2 = 首次 enroll **自动归位** + TUI `[i]` 实例切换 / 向导接入卡 + `cache config` 子命令 | ✅ 已做（本篇[「多实例（同机多 agent）」](#多实例同机多-agent-plan-40-第一批)节；doctor 感知命名实例跟随 Plan 38） |
+| Plan 42 · 模式缩减 + 发现配对 | 4→2 模式收敛（②a 移除）；UDP 发现 + SAS 配对一条龙（`sshmgr pair`）；批2 = Web 管理 UI（手机优先，`/ui`） | ✅ 批1 已做（本篇）· 🔜 批2 |
 
-**现在：serve = 在线 live（**三平台一条龙 `serve install`**，kardianos 收敛 Windows Service / systemd / launchd）；备份 / 迁移已可（export/import + Plan 13 NAS + Plan 16 `migrate-path`）；离线只读缓存已落地（Plan 12，cache DEK = 固定路径裸文件）。**
+**现在：多机 = 桥姿态（权威 vault 常驻 serve + 工作机 pair 一条龙入网 + 本地只读缓存干活）；备份 / 迁移已可（export/import + Plan 13 NAS + Plan 16 `migrate-path`）；写操作收敛到管理面（broker TUI / `serve pair`，批2 上手机 Web）。**
 
 ---
 
@@ -261,15 +269,15 @@ serve 模式是多机支持的**第一期（Phase 1）= 在线 live 远程访问
 
 ### 它解决什么
 
-serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带出门，该机 agent 就断了 SSH 工具。Plan 12 给工作机一份**本地兜底**：把**该设备绑定 profile 的授权集**加密拉到本机（Plan 39 起按授权裁剪），断网时 agent 切到这份缓存继续干活（只读）。**不是双写、不是同步**——缓存是单向、只读、零合并的快照。
+把**该设备绑定 profile 的授权集**加密拉到工作机本地（Plan 39 起按授权裁剪），agent 用这份缓存干活（只读 + 执行）——断网/服务器重启**照常工作**（Plan 42 起这就是多机的唯一工作方式，不再有"在线远程 MCP + 离线兜底"两态）。**不是双写、不是同步**——缓存是单向、只读、零合并的快照。
 
 ### 模型（两道独立的闸门）
 
 ```
  ┌──serve 服务器（owner 在这）─────────────────┐
  │  vault + master key                         │
- │  cache-tokens add --name laptop \           │       ① 发码：每台机一个、可吊销、
- │            --profile team-a      ──┐        │          绑定一个 profile（Plan 39）
+ │  pair 批准铸发（或 cache-tokens add）        │       ① 发码：每台机一个、可吊销、
+ │       --name laptop --profile team-a ──┐    │          绑定一个 profile（Plan 39）
  │                                     │       │
  │  GET /snapshot                      │       │   ② 拉取：设备授权码鉴权
  │   Authorization: Bearer <设备码> ◀──┼─拉─────┤   （和 project token 是
@@ -278,15 +286,15 @@ serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带�
  └─────────────────────────────────────┼───────┘
                                        │
  ┌──工作机（laptop）───────────────────▼────────┐
- │  cache pull                            ──────►  DEK 加密落盘
+ │  pair 首拉 / cache pull                ──────►  DEK 加密落盘
  │   ↓                                            cache.bin (0600)
  │   cache-dek.key 裸文件（固定路径）       ──────►  cache.meta.json
  │                                                (url + pulled_at)
  │  mcp --cache 进程内（spawn 惰性拉取 + 每 30min    ③ 自动保鲜
  │   会话内拉取 + 热加载，无需 OS 调度器）          （进程内）
  │
- │  .mcp.json（离线时）→ mcp --cache + env SSHMGR_TOKEN（同一个 project token）
- │   ↓                                            ④ 断网兜底
+ │  .mcp.json → mcp --cache + env SSHMGR_TOKEN（同一个 project token）
+ │   ↓                                            ④ 断网照常
  │   读 cache.bin → 验 project token（铁律不变）→ broker 只读跑
  └────────────────────────────────────────────────┘
 ```
@@ -295,55 +303,98 @@ serve 模式是"在线 only"——服务器挂了 / VLAN 断了 / 笔记本带�
 
 | 闸门 | 鉴什么 | 进哪 |
 |---|---|---|
-| project token（`projects add` 发的） | MCP 工具调用（exec / download / upload / forward） | 在线走 serve 的 MCP 路由；离线走 `mcp --cache` |
-| 设备授权码（`cache-tokens add` 发的，**绑定一个 profile**） | 拉取该 profile 授权集的 `/snapshot` | 只进 `/snapshot` |
+| project token（pair 下发 / `projects add` 发的） | MCP 工具调用（exec / download / upload / forward） | **本地 spawn 闸**——`mcp --cache` 对快照内 projects 校验后放行（不再是任何远程 HTTP 凭据） |
+| 设备授权码（pair 铸发 / `cache-tokens add` 发的，**绑定一个 profile**） | 拉取该 profile 授权集的 `/snapshot` | 只进 `/snapshot` |
 
 一个 project token **不能** 拉 `/snapshot`（被 verifier 拒）；一个设备码**不能**驱动 MCP 工具；设备码拉到的也**只有它绑定 profile 的授权集**（Plan 39）。三套边界独立、从不互通——这是整个设计的**基石**（已被测试钉住：project token 打 `/snapshot` 必拒，设备码打 MCP 必拒，裁剪快照不含授权外服务器/凭据/audit）。
 
-### enroll 一台新机（3 步）
+---
 
-> 🧭 各页签 / 设备码 / token / 指纹谁是谁，一页图解见 [concepts.md](./concepts.md)（概念模型：仓库 · 货架 · 装箱单 · 钥匙 · 水管 · 防伪封条）。也可不读文档，直接在空机器上跑 `ssh-manager tui` 走角色向导。
+## 配对入网：`sshmgr pair`（Plan 42）
 
-#### Step 1（服务器侧，一次性）：发一个绑定 profile 的设备授权码
+> **一句话**：新工作机从「装好二进制」到「agent 可用」= 一条 `sshmgr pair --instance <名>`——LAN 广播发现 broker → SAS 三件套人闸比对 → owner 批准 → 设备码 + project token + 指纹 + 时效上限**自动加密下发** → 首拉落盘 → `.mcp.json` 产物落盘。不再跨机手抄三串字符串。
+>
+> **TUI 等价路径（Plan 45）**：以上流程在工作机上也可以全键盘点完——`sshmgr tui` client 面板 **`[c]` 配对向导**（表单 → LAN 发现 → SAS 大字常显等待、与 broker 批准面逐位对照 → 批准后 Enter 完成 → 写入首拉；**重配** = 实例 picker 具名行 `p`（Plan 46 起，完整/残缺行均可——force 确认屏按槽状态分档提示 419）；**被拒/过期** = 结果屏 `r` 重新申请；Esc 全链可退，写入期除外）。逐屏走查见 [tui-multi-machine.md](./tui-multi-machine.md)；`SSHMGR_PAIR_ASSUME_SAS` 自动化跳比对仍 **CLI-only**（向导不读该 env）。
+
+### 全流程
+
+1. **发现**（可跳过）：client 对本机所有非环回 IPv4 接口广播 UDP 7878 probe；serve **只单播回请求源**一条 offer（`name` + SPKI 指纹 + TCP 端口——零敏感字段）。多台 serve 同时在网时列清单供选（含 name@addr:port 与指纹前 16 字符）。拿不到 offer（防火墙挡 UDP/跨网段）就走 `--url` 直指。
+2. **连接（pin 分级）**：pin 已知（discovery offer 自带 / `--pin` 显式）→ 全程 TLS 层 SPKI 硬校验（不匹配即中止，主防线）；`--url` 直连且无 `--pin` → **默认拒绝**，显式 `--allow-tofu` 才接受无锚通道（TOFU 逃生门，见 [threat-model.md](./threat-model.md) R12）。
+3. **enroll → SAS 三件套**：client 生成临时密钥对 + 随机 id，`POST /pair/enroll`；serve 应答后 client **立即算出并在本屏显示**同一行三件套：`<name> @ <target_url> SAS <6位数字>`。**SAS 绑定整条 transcript 与密钥材料**——pin 已知通道（discovery / `--pin`）下，换钥型 MITM 在 TLS 握手期即被指纹校验拒断；TOFU 逃生通道（`--allow-tofu`）无此防护，仅受三件套人核与机械地址校验约束——受控环境专用（[threat-model.md](./threat-model.md) R12）。pending 队列存 store 表（跨进程共享，serve 重启即作废 in-flight）。
+4. **批准（人闸 + 机械校验）**：owner 在 **broker TUI 的 Pairing 页**（或 **`serve pair ls / approve / reject`** CLI 兜底）看到待批准行。**批准面同屏显示三件套 `<name> @ <target_url> SAS <6位>`**——serve 在 enroll 时就算好 SAS 落入行内（`pairing_pending.sas`，跨进程共享），批准面直读真值；owner 将批准行的 SAS 与 **client 屏的 SAS** **逐位比对一致后才批准**。行缺 SAS（serve 版本错配/旧行）→ ⚠ 警示并建议拒绝（绝不静默回退到对 MITM 无感的 name/url 两件对照——name/url 是未认证的 enroll 输入，MITM 转发时天然一致）。**机械地址校验**：serve 核对 client 声明的 `target_url` 是否为本机地址（非环回 IP 集 + hostname）——不符（疑似中继/假 discovery/错误网络）→ 大字 ⚠ 且拒绝常规批准，仅显式覆盖可用（CLI `serve pair approve --allow-foreign-url`；TUI 键入大写 `OVERRIDE`）。owner 选 profile（`pair.default_profile` 预选）→ CAS 批准，开 **120 秒** finish 窗口（enroll 后 **10 分钟**内不批准即过期作废）。
+5. **finish（凭据自动下发）**：client 2s 轮询到 approved 后确认 finish（120s 内）；serve 在**单个事务**里铸设备码 + 建/复用 project（`pair-<名>`）+ 签 token + 落审计行，以 AES-256-GCM 信封返回 `{spki, profile, device_code, project_token, max_offline}`。
+6. **先落盘，后首拉**：client 把 `cache.auth.json`（url+设备码+pin）+ `cache.config.json`（`max_offline`，缺省 24h）+ **`pair.<名>.mcp.json`**（完整 `.mcp.json` 片段，env.SSHMGR_TOKEN = 真值，0600）全部落盘**之后**才首拉——落盘走临时文件+rename **原子写**（Plan 46：pair 产物与 `--write-mcp` 副本同改，失败不留半文件）。**首拉失败零丢失**：凭据已在盘，修复后重跑 `cache pull --instance <名>` 即补缓存；终端报错统一尾缀**双路径恢复指引**（Plan 46，如实——client 无法可靠分辨 serve 端状态）：直接重跑 `sshmgr pair --force`（或 TUI 重配）；若重跑报设备名占用（419），owner 在 broker 侧执行 `sshmgr cache-tokens revoke <实例名>` 后再重跑。`.mcp.json` 从产物文件抄（或当初用 `--write-mcp <path>` 已直落）。终端**零完整凭据**（打印片段用 `<project-token>` 占位符，真值只在产物文件里）。
+7. **收尾**：产物片段抄进 agent 的 `.mcp.json`（形态 = 下面「手工 enroll」Step 2 的 cache 形态；`--write-mcp` 则已就位），重启 Claude Code 即用。
+
+### 命令速查
+
+```bash
+# 工作机（默认发现；或 --url 直指）：
+sshmgr pair --instance laptop                                   # LAN 广播发现
+sshmgr pair --instance laptop --url https://192.0.2.5:7878 --pin sha256:abcd...   # 直指 + 显式 pin
+sshmgr pair --instance laptop --write-mcp /path/to/.mcp.json    # 产物片段直落 agent 配置
+sshmgr pair --instance laptop --force                           # 同名重配对（Plan 46 零清理先行：失败旧槽完好，成功=新凭据原子覆盖；config 不动——换码口径）
+
+# broker 机（批准）：
+serve pair ls                                   # 待批准队列（name/@url/来源IP/hint/窗口/⚠标记）
+serve pair approve laptop --profile team-a      # 批准（输出三件套 '<name> @ <url> SAS <6位>'）
+serve pair approve laptop --profile team-a --allow-foreign-url   # 机械校验 ⚠ 时的显式覆盖
+serve pair reject laptop                        # 拒绝（终态，该请求永远无法再 enroll）
+```
+
+- **`--instance` 必填** = 设备名 = 本地实例槽（Plan 40 三位一体：设备码 name = 实例名 = profile 授权单元）；命名纪律建议 `机器-实例`。
+- **自动化免比对**：env `SSHMGR_PAIR_ASSUME_SAS=1` 跳过终端 SAS 确认（**STUB 大字警告**——无人值守 CI 专用，放弃人闸；机械地址校验与 TLS pin 仍在；**CLI 专属**——TUI 配对向导不读该 env，永远人闸比对）。
+- **同名覆盖**：目标实例已有 `cache.auth.json` → 默认拒绝；`--force` 走 Plan 46 零清理先行时序——校验/确认屏/enroll 阶段失败旧槽一字不动，成功后新凭据原子覆盖（`cache.config.json` 不动，时效策略原地继承；`quarantine/` 于成功尾部清理，失败仅警告下次重清）。
+- 全部 flags 以 `sshmgr pair --help` 为准；审计（enroll/批准/finish/拒绝）与状态变更**同事务**落权威 vault 的 `audit_log`，字段走脱敏白名单（永不落凭据值/token/设备码/pin/SAS/密文）。
+
+---
+
+## 手工 enroll（存量迁移官方路径 + CI 场景）
+
+> **何时走手工**：① **存量 ②a 机器迁移**（serve 升 Plan 42 版本前的过渡，见 [compat-matrix.md](./compat-matrix.md) 三步迁移——旧 serve 上没有 `/pair`，只能手工）；② **CI / 无人值守自动化**（要把 enroll 做成可脚本化的两步，而非交互式 SAS 比对）。日常新机一律 `sshmgr pair`（或 TUI `[c]` 向导）。
+>
+> 🧭 各页签 / 设备码 / token / 指纹谁是谁，一页图解见 [concepts.md](./concepts.md)（概念模型：仓库 · 货架 · 装箱单 · 钥匙 · 水管 · 防伪封条）。
+
+### Step 1（服务器侧，一次性）：发一个绑定 profile 的设备授权码
 
 在 serve 服务器上（同一台常驻 broker 的机器）：
 
 ```bash
-ssh-manager profiles grant team-a gpu          # 先配好该设备的授权集（装箱单）
-ssh-manager cache-tokens add --name laptop --profile team-a
+sshmgr profiles grant team-a gpu          # 先配好该设备的授权集（装箱单）
+sshmgr cache-tokens add --name laptop --profile team-a
 # Authorization code for "laptop" (shown once): <一长串设备码>
 # Server fingerprint (serve cert SPKI): sha256:abcd1234...
 #
 # On the work machine:
-#   ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1234...'
+#   sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1234...'
 #   # (or) set SSHMGR_SERVE_PIN=sha256:abcd1234... and pass --token <设备码>
 ```
 
-> 也可在 broker 上用 `ssh-manager tui` 的「设备码」页签发——表单里选绑定 profile，设备码 + 指纹 + `cache pull` 示例命令一次性全屏显示（见 [README 的 TUI 主控台](../README.md#tui-主控台ssh-manager-tui)）。
+> 也可在 broker 上用 `sshmgr tui` 的「设备码」页签发——表单里选绑定 profile，设备码 + 指纹 + `cache pull` 示例命令一次性全屏显示（见 [README 的 TUI 主控台](../README.md#tui-主控台sshmgr-tui)）。
 
 - **`--profile` 必填（Plan 39）**：设备码绑定一个 profile，**该设备拉到的就是、且只是这个 profile 授权的服务器（含凭据）**——未授权服务器及其凭据不出服务器。一台机 = 一个码 = 一个 profile；要让某台机只看部分服务器，建一个专用 profile 授权那几台再绑它。
-- **存量未绑码**（Plan 39 之前签发的）：拉取被拒（**403，不毁本地缓存**），owner 跑 `ssh-manager cache-tokens bind <name> <profile>` 原地补绑（保留名字/状态/拉取历史）即可恢复。
+- **存量未绑码**（Plan 39 之前签发的）：拉取被拒（**403，不毁本地缓存**），owner 跑 `sshmgr cache-tokens bind <name> <profile>` 原地补绑（保留名字/状态/拉取历史）即可恢复。
 - `--name` **必填**且在 **active** 码中唯一（比如 `laptop` / `desktop-2`）；**revoke 后可重发同名**（旧的 revoked 行会被自动清理），后续吊销靠它。
 - 设备码**只显示一次**——当场拉、或记进密码管理器。
-- **指纹是自动加密的关键**：设备码旁那行 `Server fingerprint` 是 serve 自签证书的 SPKI 指纹。`cache pull` 拿到它（任一形式：token 内嵌 `<码>:<指纹>`、`--pin`、或 `SSHMGR_SERVE_PIN`）就用 TLS + 指纹钉死连 serve；**拿不到则默认拒连**（hard-fail，需显式 `--allow-plaintext` 才明文）。指纹可随时用 `ssh-manager serve cert-info` 重查。另：有 pin 时 URL 必须是 `https://`（否则 hard-fail —— http 不协商 TLS 会让 pin 静默失效）。
+- **指纹是自动加密的关键**：设备码旁那行 `Server fingerprint` 是 serve 自签证书的 SPKI 指纹。`cache pull` 拿到它（任一形式：token 内嵌 `<码>:<指纹>`、`--pin`、或 `SSHMGR_SERVE_PIN`）就用 TLS + 指纹钉死连 serve；**拿不到则默认拒连**（hard-fail，需显式 `--allow-plaintext` 才明文）。指纹可随时用 `sshmgr serve cert-info` 重查。另：有 pin 时 URL 必须是 `https://`（否则 hard-fail —— http 不协商 TLS 会让 pin 静默失效）。
 - 其他管理命令：
   ```bash
-  ssh-manager cache-tokens ls          # name / id / prefix / status / profile / last_pull（不显示码）
-  ssh-manager cache-tokens bind laptop team-a   # 未绑码补绑（Plan 39 存量修复）
-  ssh-manager cache-tokens revoke laptop   # 位置参数，吊销（断拉新 + 回连销毁，见下「吊销」节）
+  sshmgr cache-tokens ls          # name / id / prefix / status / profile / last_pull（不显示码）
+  sshmgr cache-tokens bind laptop team-a   # 未绑码补绑（Plan 39 存量修复）
+  sshmgr cache-tokens revoke laptop   # 位置参数，吊销（断拉新 + 回连销毁，见下「吊销」节）
   ```
 
-#### Step 2（工作机）：第一次拉缓存 + 配 `.mcp.json`
+### Step 2（工作机）：第一次拉缓存 + 配 `.mcp.json`
 
-在工作机装好 `ssh-manager` 后：
+在工作机装好 `sshmgr` 后：
 
 ```bash
 # 第一次拉（设备码 + 指纹一起给；之后由 `mcp --cache` 自动保鲜）
-ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1234...'
+sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1234...'
 # → pulled N servers / M credentials into <UserConfigDir>/ssh-manager/cache.bin
 
 # 看缓存状态
-ssh-manager cache status
+sshmgr cache status
 # cache:    <UserConfigDir>/ssh-manager/cache.bin
 # age:      12m3s
 # servers:  N
@@ -362,31 +413,17 @@ ssh-manager cache status
 
 > **缓存目录**：`cache.bin` / `cache.meta.json` / `cache-audit.log` 进 `SSHMGR_CACHE_DIR`（默认 `os.UserConfigDir()/ssh-manager/`，即 Linux `~/.config/ssh-manager/`、macOS `~/Library/Application Support/ssh-manager/`、Windows `%AppData%\ssh-manager\`）。**DEK** 存在 vault 固定路径下的 `cache-dek.key` 裸文件（Win `C:\ProgramData\ssh-manager\cache-dek.key` / Unix `/var/lib/ssh-manager/cache-dek.key`，Plan 16 T4 从 OS keychain/DPAPI 迁来）。
 >
-> 💡 工作机上也可用 `ssh-manager tui --mode client` 可视化配置连接（url / pin）并手动触发同步（见 [README 的 TUI 主控台](../README.md#tui-主控台ssh-manager-tui)）。
+> 💡 工作机上也可用 `sshmgr tui --mode client` 打开 client 面板：查看连接摘要 / 缓存年龄 / 实例切换（`[i]`）并手动触发同步（`[s]`）；连接编辑已退役——新机入网/换码 = `sshmgr pair`（Plan 45 起 client 面板 `[c]` 配对向导与实例 picker `p` 为同一流程的 TUI 等价路径，见 [tui-multi-machine.md](./tui-multi-machine.md)）。
 >
 > ⚠️ **已知不一致**（Plan 16 T4 只迁了 DEK，未迁 `cache.bin` 路径）：`cache.bin` 在 `UserConfigDir`、`cache-dek.key` 在 vault 固定路径——两份不在同一目录。功能正常（DEK 文件能读、cache 能解），但离线拷盘需同时拿到两处。后续清理工作会收敛到同一目录。**威胁模型**：cache.bin + cache-dek.key 同机不同目录 → 同盘 → 离线拷盘可解 cache；cache 是只读快照非完整凭据，与 master.key 同等级（L1+，见 [threat-model.md](./threat-model.md)）。
 
-`.mcp.json` 怎么配？**取决于这台机在线为主还是离线为主**——同一个 project token（和 serve 用的是**同一个**）：
+`.mcp.json` 怎么配？只有一种形态——**本地缓存**（`mcp --cache`）；project token 走 `env`（pair 下发的与 `projects add` 发的是**同一个**东西）：
 
-**在线为主（推荐默认）**——`.mcp.json` 指 serve URL，断网就临时切 cache：
 ```json
 {
   "mcpServers": {
     "ssh": {
-      "type": "http",
-      "url": "https://192.0.2.5:7878/",
-      "headers": { "Authorization": "Bearer <项目token>" }
-    }
-  }
-}
-```
-
-**离线为主**（笔记本常出门）——`.mcp.json` 指 `mcp --cache`，缓存兜底：
-```json
-{
-  "mcpServers": {
-    "ssh": {
-      "command": "ssh-manager",
+      "command": "sshmgr",
       "args": ["mcp", "--cache"],
       "env": { "SSHMGR_TOKEN": "<项目token>" }
     }
@@ -394,11 +431,11 @@ ssh-manager cache status
 }
 ```
 
-> 切两种模式只是改 `.mcp.json` + 重启 Claude Code——vault 内容、project token、profile scoping **完全一样**。在线走远程 MCP（可写），离线走本地缓存（只读）。
+> 多机 agent 只读 + 执行；写操作去管理面（broker TUI / `serve pair` / 批2 Web UI）。旧的「在线为主（`.mcp.json` 指 serve URL + Bearer）」形态已随 ②a 移除（Plan 42 批1 起根路径 404）——存量 `"type": "http"` 配置请按 [compat-matrix.md](./compat-matrix.md) 三步迁移改写。
 >
 > 片段权威源 = 代码渲染器 + golden 测试（internal/tui/wizardsteps*.go）；文档片段如与之不符以代码为准。TUI 操作教程见 [tui-multi-machine.md](./tui-multi-machine.md)。
 
-#### Step 3（工作机）：缓存自动保鲜（内置，默认无需 OS 调度器）
+### Step 3（工作机）：缓存自动保鲜（内置，默认无需 OS 调度器）
 
 缓存现在**自己保鲜**——`mcp --cache` **进程内置**了整套拉取逻辑，默认无需配任何系统定时器：
 
@@ -409,29 +446,29 @@ ssh-manager cache status
 
 ##### 可选：系统定时器（给非 Claude 的消费方）—— legacy
 
-> ⚠️ **legacy（v0.5.0+ 起基本用不上）**：`mcp --cache` 已**进程内自动保鲜**（spawn 惰性拉取 + 会话内按 TTL 懒检查 + 热加载，见上一节），Claude Code 一类经 MCP 的消费方**无需任何 OS 定时器**。下面三份模板只服务"别的程序直接读 `cache.bin`"的非 MCP 消费方。另外：Windows 下若你早年按本节配过计划任务 `ssh-manager-cache-refresh`，`ssh-manager clear`（client 角色）会**顺带删除**它；Unix 的自建 unit 不由程序删，需自行清理。
+> ⚠️ **legacy（v0.5.0+ 起基本用不上）**：`mcp --cache` 已**进程内自动保鲜**（spawn 惰性拉取 + 会话内按 TTL 懒检查 + 热加载，见上一节），Claude Code 一类经 MCP 的消费方**无需任何 OS 定时器**。下面三份模板只服务"别的程序直接读 `cache.bin`"的非 MCP 消费方。另外：Windows 下若你早年按本节配过计划任务 `ssh-manager-cache-refresh`，`sshmgr clear`（client 角色）会**顺带删除**它；Unix 的自建 unit 不由程序删，需自行清理。
 
 若这台机上还有**别的程序直接读 `cache.bin`**（不经 `mcp --cache`，比如脚本自己解快照），它们享受不到上述进程内自动保鲜——可照旧配 OS 定时器跑 `cache pull`。建议 **30 min**（按你 vault 的变动频率调）。环境变量走 unit 的 `Environment=` 或独立配置文件（**0600 权限**，里面有设备码）。
 
 **Linux（systemd timer）**：
 
 ```ini
-# ~/.config/systemd/user/ssh-manager-cache.service
+# ~/.config/systemd/user/sshmgr-cache.service
 [Unit]
-Description=ssh-manager offline cache refresh
+Description=sshmgr offline cache refresh
 
 [Service]
 Type=oneshot
 Environment=SSHMGR_CACHE_URL=https://192.0.2.5:7878
 Environment=SSHMGR_CACHE_TOKEN=<设备码>
 Environment=SSHMGR_SERVE_PIN=sha256:<指纹>   # 从 `serve cert-info` 或 `cache-tokens add` 输出取
-ExecStart=/usr/local/bin/ssh-manager cache pull
+ExecStart=/usr/local/bin/sshmgr cache pull
 ```
 
 ```ini
-# ~/.config/systemd/user/ssh-manager-cache.timer
+# ~/.config/systemd/user/sshmgr-cache.timer
 [Unit]
-Description=Refresh ssh-manager offline cache every 30 min
+Description=Refresh sshmgr offline cache every 30 min
 
 [Timer]
 OnBootSec=2min
@@ -443,7 +480,7 @@ WantedBy=timers.target
 ```
 
 ```bash
-systemctl --user enable --now ssh-manager-cache.timer
+systemctl --user enable --now sshmgr-cache.timer
 ```
 
 **Windows（任务计划，PowerShell）**：
@@ -456,7 +493,7 @@ SSHMGR_CACHE_TOKEN=<设备码>
 SSHMGR_SERVE_PIN=sha256:<指纹>
 "@ | Set-Content -Path "$env:USERPROFILE\.ssh-manager\cache.env" -Encoding UTF8
 
-$action  = New-ScheduledTaskAction -Execute "ssh-manager.exe" `
+$action  = New-ScheduledTaskAction -Execute "sshmgr.exe" `
             -Argument "cache pull"
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
             -RepetitionInterval (New-TimeSpan -Minutes 30)
@@ -478,7 +515,7 @@ Register-ScheduledTask -TaskName "ssh-manager-cache-refresh" `
     <string>com.ssh-manager.cache-refresh</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/ssh-manager</string>
+        <string>/usr/local/bin/sshmgr</string>
         <string>cache</string>
         <string>pull</string>
     </array>
@@ -505,20 +542,20 @@ launchctl load -w ~/Library/LaunchAgents/com.ssh-manager.cache-refresh.plist
 
 ⚠️ **设备码 = 钥匙**：任何机器拿到 `<设备码>` + 能连 serve = 能拉整份 vault 快照。所以：serve 默认**自签 TLS + 指纹钉死**（指纹 = serve 证书公钥，`cache pull` 钉死它防 MITM）；设备码进 0600 配置文件 / 密码管理器，**别进 git**；机器失窃 → 立刻 `cache-tokens revoke`（见下）。设备码持久化在 `cache.auth.json`（0600，Windows 另加 ACL）；证书轮换后手动带新 `--pin` 重拉一次即可覆盖。
 
-> **指纹失配 ≠ 设备码泄露**。指纹失配意味着你连到的服务器公钥变了（可能是 serve 重装重生证书 = 正常；也可能是中间人 = 异常）。serve 重生证书（如重装、迁移到新机）后，用 `ssh-manager serve cert-info` 拿新指纹，更新各客户端的 `SSHMGR_SERVE_PIN`。这是**指纹钉死**的预期代价：换 key 必须重新交接信任。
+> **指纹失配 ≠ 设备码泄露**。指纹失配意味着你连到的服务器公钥变了（可能是 serve 重装重生证书 = 正常；也可能是中间人 = 异常）。serve 重生证书（如重装、迁移到新机）后，用 `sshmgr serve cert-info` 拿新指纹，更新各客户端的 `SSHMGR_SERVE_PIN`。这是**指纹钉死**的预期代价：换 key 必须重新交接信任。
 
-### 离线能做什么 / 不能做什么
+### 多机 agent 能做什么 / 不能做什么（cache 形态 = 唯一形态）
 
-| | 离线（`mcp --cache`） | 在线（serve） |
-|---|---|---|
-| `exec_command`（含 `sudo=true`） | ✅ 凭据从缓存取，broker 直拨目标机 SSH | ✅ |
-| `download_file` / `upload_file` | ✅ 同上 | ✅ |
-| `forward_port`（`-L`） | ✅ 同上 | ✅ |
-| `list_servers` | ✅（列出缓存里 profile 范围内的） | ✅ |
-| 加 / 改 / 删 server / profile / project / 凭据 | ❌ `ErrReadOnly` | ✅ |
-| 未知目标机 host key | ❌ **fail-closed**（不写 `known_hosts`） | ❌ fail-closed（同 stdio） |
+| | 多机 agent（`mcp --cache`，唯一形态） |
+|---|---|
+| `exec_command`（含 `sudo=true`） | ✅ 凭据从缓存取，本地 broker 直拨目标机 SSH |
+| `download_file` / `upload_file` | ✅ 同上 |
+| `forward_port`（`-L`） | ✅ 同上（监听恒本机环回） |
+| `list_servers` | ✅（列出缓存里 profile 范围内的） |
+| 加 / 改 / 删 server / profile / project / 凭据 | ❌ `ErrReadOnly`——写只在**管理面**（broker TUI / `serve pair` / 批2 Web UI） |
+| 未知目标机 host key | ⚠️ broker 可达 = 自动**锚定转发**（首连一次成功，锚落权威 vault 带审计）；broker 不可达 = **fail-closed**（错误文案带呈现指纹 + 两条补救路径）——见[「主机密钥锚定」](#主机密钥锚定锚定转发与带外锚定plan-48)节 |
 
-**铁律 + profile scoping 离线不变**：同一个 project token 在线 / 离线走的是**同一套**鉴权（验 token → 解析 project → profile → 只放行 `serverID ∈ profileID` 的命令）。离线只是把 vault 换成本地只读副本，agent 的活动范围（profile）和能做的操作（只读 + 已授权的 exec / 传输 / 转发）**完全一致**。
+**铁律 + profile scoping 不变**：project token 的鉴权（验 token → 解析 project → profile → 只放行 `serverID ∈ profileID` 的命令）对快照内数据与对真实 vault 是**同一套**。多机形态只是把数据源换成本地只读副本，agent 的活动范围（profile）和能做的操作（只读 + 已授权的 exec / 传输 / 转发）与单机一致，唯独写操作被拒。
 
 ### 审计：本地 JSONL 边车，不回传、不合并
 
@@ -530,10 +567,18 @@ launchctl load -w ~/Library/LaunchAgents/com.ssh-manager.cache-refresh.plist
 
 ### 吊销（机器失窃 / 设备码泄露）
 
+**吊销生效三路径（owner 侧吊销后 client 侧何时失效，取决于吊销对象与设备在线状态）**：
+
+| 吊销对象 | client 侧失效路径 | 时效 |
+|---|---|---|
+| **project token**（设备码仍活） | 下一次保鲜拉到的新快照已无该 project → 本地 spawn 闸拒绝 | 在线 ≤30min（保鲜 TTL） |
+| **设备码** | 下一次 pull 收到 pinned 401 ⇒ **quarantine**（本地缓存四件销毁，见下） | 回连即断供（在线 ≤30min；期间旧快照里 project token 若未吊销仍可用——所以**失窃 = 双吊销**） |
+| **永离线设备**（不 pull） | 旧快照 + 本地 project token 的可用窗口 = **`max_offline` 硬上限**（per-instance，pair 下发默认 24h；到期 `LoadCacheSnapshot` 拒载） | **不是 30 分钟**；窗口内失窃设备的最终兜底 = 轮换服务器凭据（见 §3.6 登记） |
+
 设备失窃 / 设备码泄露 → 在服务器上：
 
 ```bash
-ssh-manager cache-tokens revoke laptop
+sshmgr cache-tokens revoke laptop
 # → revoked cache token laptop (status=revoked)
 # → reminder: also revoke project tokens issued to that device if it may be compromised
 ```
@@ -591,7 +636,7 @@ ssh-manager cache-tokens revoke laptop
 
 ### 限制（如实）
 
-- **缓存只读**：离线能 exec / 传输 / 转发，但**任何写都被拒**（`ErrReadOnly`）。要加改删得连上 serve。
+- **缓存只读**：离线能 exec / 传输 / 转发，但**任何写都被拒**（`ErrReadOnly`）。要加改删得连上 serve。（唯一例外：未知目标的锚定转发——broker **可达**时自动进行、只落锚不落凭据；broker 不可达时照旧 fail-closed，见[「主机密钥锚定」](#主机密钥锚定锚定转发与带外锚定plan-48)节。）
 - **快照范围 = 绑定 profile 的授权集**（Plan 39）：client 机的 `cache.bin` 只含该设备绑定 profile 授权的服务器与凭据；owner 改动授权（增删 grant）后，**下次拉取生效**（TTL ≤30min 或手动 `[s]`）。一台机**一份缓存**绑定多个 profile 不支持——一个设备码一个 profile，要不同范围就发不同码：不同机器，或**同机多实例**（Plan 40，见下「多实例（同机多 agent）」节——每实例一个码一个 profile，目录/DEK/时效各自独立）。
 - **授权边界是"服务器行"粒度，不是"凭据行"粒度**（如实）：若一台**未授权**服务器与已授权服务器**共用同一凭据**（如共享的 bastion/sudo 密码——`servers.go` 一等支持的概念），裁剪快照仍会携带该凭据（已授权服务器登录需要它），而它能登那台未授权服务器。要在凭据层面隔离授权，就别跨授权边界共享凭据——这是 owner 侧的建模决定，机制无法代劳。
 - **bind 错配 footgun**：把设备码 bind 到一个**不含该机 project** 的 profile（`cache-tokens bind` 支持 rebind）→ pull 照常 200、在线照常，但离线栈搁浅：运行中的 `mcp --cache` 热加载验证 token 失败后**静默保留旧快照**，新 spawn 直接报 token 无效——错误不会指向错配本身。处置：把设备码 bind 回该机 project 所在的 profile，或在该 profile 下建 project 并换发 token。bind 前核对 `profiles ls`（授权集）与该机 `.mcp.json` 用的 project。
@@ -607,7 +652,7 @@ ssh-manager cache-tokens revoke laptop
 新版 serve **默认强制 TLS**（无 `--tls-cert` 时自签）。已部署的明文或外部证书部署切到指纹钉死。⚠️ **顺序铁律：先升全部工作机并配 pin，最后才升 serve**（升 serve 瞬间其变 TLS-only，旧明文 client 直连会断）：
 
 1. **先升级【所有工作机】二进制**到含自动 TLS 的新版（serve 暂不动）。
-2. **拿指纹**：在 serve 机跑 `ssh-manager serve cert-info` —— 打印当前（或首次生成）的 SPKI 指纹 `sha256:...`。幂等。
+2. **拿指纹**：在 serve 机跑 `sshmgr serve cert-info` —— 打印当前（或首次生成）的 SPKI 指纹 `sha256:...`。幂等。
 3. **各工作机把指纹配上**（任一形式）：
    - 重新 `cache-tokens add`（默认把指纹打进设备码输出，形态 `<码>:<指纹>`）；或
    - 在调度器配置（systemd unit / 任务计划 / launchd plist）的 `Environment` / `EnvironmentVariables` 里加 `SSHMGR_SERVE_PIN=sha256:<指纹>`。
@@ -626,11 +671,102 @@ serve 自签证书长生（不靠过期驱动轮换），但若私钥疑似泄�
    `rm "<VaultDir>/serve-cert.pem" "<VaultDir>/serve-key.pem" "<VaultDir>/.serve-cert-initialized"`
    （⚠️ 必须三个一起删。只删 cert/key 而 marker 还在 → serve 拒启动，防误删静默重生。）
 2. 重启 serve → 生成全新 ed25519 key + 新自签证书 + 新 marker。
-3. `ssh-manager serve cert-info` → 拿**新** SPKI 指纹。
+3. `sshmgr serve cert-info` → 拿**新** SPKI 指纹。
 4. **全量重新 enroll** 所有工作机：重新 `cache-tokens add` 发带新指纹的设备码，或更新各机 `SSHMGR_SERVE_PIN=<新指纹>`。旧 pin 全部失配（看起来像 MITM，属预期）。
 5. 各工作机手动 `cache pull` 带新 `--pin`（会同时更新 `cache.auth.json` 里的 pin）→ 走新指纹成功；之后的自动拉取恢复正常。
 
 > 注：重签 = 所有客户端 pin 失效（硬失败，不是静默泄露）。这是指纹钉死的预期代价：信任根是公钥，换 key 必须重新交接。
+
+---
+
+## 主机密钥锚定：锚定转发与带外锚定（Plan 48）
+
+> **一句话**：首次信任一台目标服务器（把它的主机密钥锚进权威 vault）需要两样东西——**到目标的网络通路**和**可写的权威存储**。这两样常在不同机器上（工控网段只有笔记本一块网卡可达，broker 对目标没有路由）。Plan 48 给两条路：**锚定转发**——能连到目标的那台工作机首连时，把看到的主机密钥经 broker 落库（自动、带审计）；**带外锚定**——owner 拿到指纹后一条命令手工登记。护栏三条不可协商：**仅可新增**（已有锚绝不覆盖）、**仅在线转发**（broker 不可达即失败，不排队不留本地状态）、**全部落审计**。
+
+### 前置条件：先想清楚两个问题
+
+**① 目标首次连接的发起位置在哪里？** 锚落在「谁先连上目标」那一侧：
+
+| 谁能连到目标 | 首次信任怎么完成 |
+|---|---|
+| broker 自己可达（常规内网） | owner 侧任何连接的首次信任照旧（vault 可写，直接落锚）——无需任何新操作 |
+| 只有某台工作机可达（如工控网段只接了笔记本一块网卡） | 该机的 agent 首连时自动**锚定转发**（见下），零仪式 |
+| 当前谁都连不上 / owner 想人工把关 | **带外锚定**：`sshmgr servers pin-hostkey <名> --fingerprint <指纹>` |
+
+**② 首连时 broker 不可达怎么办？**（工作机与 broker 之间的链路断了，或 serve 停机）——首连失败，不留任何状态，错误文案逐字是：
+
+```
+host key for <host>:<port> is unknown and cannot be pinned here (presented fingerprint: <呈现指纹>). Retry while the broker is reachable — the pin is then forwarded and audited automatically — or ask the owner to run: sshmgr servers pin-hostkey <name> --fingerprint <呈现指纹>
+```
+
+两条补救路径都在文案里：**回网后重试**（broker 可达时重连，锚自动转发落库），或 owner 走**带外锚定**（指纹从目标机屏幕、`ssh-keyscan <目标>` 输出等带外渠道取得后登记）。
+
+### 锚定转发：行为与边界
+
+- **触发时机**：`mcp --cache` 的 agent 首次连接一台「尚无锚」的目标时，在握手回调里把**实际看到的**主机密钥 POST 给 broker（`/pin-hostkey`——与拉快照同一个设备码闸、同一 TLS 指纹钉死通道，不新增任何认证形态）。
+- **三个前提**，缺一即拒（fail-closed，不留本地状态）：
+  1. **broker 在线**（转发最多等 10 秒）——离线不是排队的理由；
+  2. **pinned TLS**——拉取路径的明文逃生门（`--allow-plaintext`）对转发**不存在**（改锚是安全敏感变更通道，比拉取更严是有意为之）；
+  3. **目标条目在该设备绑定 profile 的授予范围内**——未授权的条目转发被拒（403，文案指引：owner grant 后 `cache pull` 再试）。
+- **成功形态**：broker 落锚（**仅可新增**）+ 同一事务写审计行（`pin-forward`：设备名 + 指纹 + 受影响条目清单），工作机本地同步落锚，**握手当场继续——首连一次成功**。owner 在 broker 侧 `sshmgr audit` 可见全过程；serve 日志对每次转发请求（含被拒的）都留一行。
+- **目标已有锚**：与转发的密钥**不同** → 拒绝（409），客户端文案指引「`cache pull` 后重试」——拉到权威锚后连接自见分晓；**等值** → 自动放行（见下节）。
+- **吊销设备的转发尝试不毁本地缓存**：转发收到 401（设备码无效/已吊销）只是当次失败；销毁缓存的隔离只发生在拉取路径——一次带错设备码的转发不会误杀整份缓存。
+
+### 跨会话自动闭合：一次多余请求，零仪式
+
+「本进程已转发过」只记在内存里——进程退出即失。所以工作机重启 agent 进程后（本地缓存还没保鲜到含新锚时）再连同一目标：再转发一次 → broker 回「已有等值锚」→ 客户端**自动放行**，握手继续。用户可见的全部代价 = 一次多余的内部请求，**不需要任何操作**。
+
+### 锚的来源元数据（谁落的锚，快照里看得见）
+
+每个锚带三个来源字段，随快照分发（`servers pin-hostkey --list` 与各机快照里都有）：
+
+| 字段 | 取值 | 含义 |
+|---|---|---|
+| 来源（pin_source） | `tofu` / `forward` / `manual` | 自动首次信任 / 转发 / owner 手工登记 |
+| 格式（pin_format） | `blob` / `fingerprint` | 存完整密钥字节 / 只存指纹串（两种比较安全等价） |
+| 设备（pin_device） | 设备码名 | 转发来源的发起设备（其余来源为空） |
+
+> ⚠️ **跨轮廓可见（有意）**：锚按「主机:端口」全局唯一——同地址**所有**持有条目的 profile（包括与发起设备毫无其他交集的 profile）都能从快照看到「这个地址曾被哪台设备名、何时首信过」。这是有意保留的：它是发现异常锚定的**主要检测面**（见下「清毒完整时序」）。
+
+### owner 命令参考：`servers pin-hostkey` 六种形态
+
+| 调用 | 作用 |
+|---|---|
+| `servers pin-hostkey <名>` | 显示该条目地址上的锚：指纹 + 格式 + 来源 + 设备 + 登记时间；无锚则明说 |
+| `servers pin-hostkey --list` | 全量锚清单；**没有任何条目指向的锚标 `[orphan]`** |
+| `servers pin-hostkey <名> --fingerprint SHA256:… [--force]` | 按指纹锚定（`ssh-keygen -lf` 打印的规范形态，解码必须恰 32 字节——打错字符当场拒）；已有锚且未指定 `--force` → 拒绝并显示现存指纹与来源 |
+| `servers pin-hostkey <名> --from-keyscan <文件\|-> [--force]` | 从 known_hosts 行 / `ssh-keyscan` 输出锚定；同一主机出现**多个不同密钥**时拒绝（存储模型是一地址一锚，猜算法等于赌服务器下次呈现哪把钥——先首连触发转发，或从扫描输出选一把走 `--fingerprint`） |
+| `servers pin-hostkey <名> --clear` | 删除该地址的锚（幂等；回到待首次信任态） |
+| `servers pin-hostkey --clear --hostport <host>:<port>` | 按地址直达删锚——**条目已删/改址后的孤儿锚唯一清除通道** |
+
+- 全部变更动作（锚定 / `--force` 覆盖 / 清除）落审计；`--force` 是覆盖既有锚的**唯一**通道（输出先显示事务内读到的旧指纹，再显示新指纹）。
+- `--clear` 删的是**全局锚行**：共享该地址的全部条目一起回到待首次信任态——输出与审计都带受影响条目清单；无锚时清除是幂等成功、不落审计。
+
+### 清毒完整时序（设备码失窃 / 疑似毒锚）
+
+锚定转发把「落锚权」交给了持有设备码的那台设备——它若失窃，攻击者可能给任意地址落**毒锚**（用伪造的主机密钥登记锚，后续连接被导向冒充者）。完整消毒按下面的顺序，**每一步都不能省**：
+
+1. **吊销设备码**：`sshmgr cache-tokens revoke <名>`（先断源；见[「吊销」](#吊销机器失窃--设备码泄露)节，失窃 = 设备码 + project token 双吊销）。
+2. **找出它转发过的全部锚**：`sshmgr servers pin-hostkey --list`——按设备名列出它的转发锚；条目已删/改址的会标 `[orphan]`。
+3. **逐条清除**：孤儿锚走 `--clear --hostport <host>:<port>`，活条目走 `servers pin-hostkey <名> --clear`；核对输出里的受影响条目清单与被删指纹（审计同步留痕）。
+4. **合法重锚**：对每台受影响目标，用可信来源重新锚定——owner 从可靠渠道拿指纹走 `--fingerprint`，或让可信设备重新首连（触发锚定转发，走审计）。
+5. **作用域内所有设备 pull 到位前，不算消毒完成**：`--clear` 只清权威 vault——锚随快照进了各工作机的 `cache.bin`，已拉走的毒锚拷贝**不会被收回**。未重新 pull 的设备对毒钥**继续放行**、对合法重锚钥**报假不匹配**。等作用域内每台设备 `cache pull`（或等 ≤30min 自动保鲜）拿到新快照，消毒才闭环。
+6. **clear 完成之后才打备份**：毒化后、清除前打出的备份（NAS 定时快照或 export 文件）里含毒锚——日后「删库重建 + import」恢复时会原样带回，绕过全部审计。**先清毒（含重锚），后打新备份；毒化窗口内的更早备份弃用**（或明确标记不可用作恢复源）。
+
+### 条目删除 / 改地址后的锚残留
+
+锚的归属键是「主机:端口」——**删除条目或改条目地址，锚原地不动**（不迁移、不回收）。后果与补救：
+
+- 同地址**重新录入**条目 → 静默继承旧锚：期间那台服务器若换过密钥，首连会报假性不匹配（错误文本带双指纹，核对后 `--clear` 重走首次信任）。
+- 彻底废弃的地址 → 锚变成孤儿：`servers pin-hostkey --list` 找 `[orphan]` 行，`--clear --hostport <host>:<port>` 清除。
+
+### 混布窗口：旧客户端的「possible MITM」假警报
+
+**升级窗口内**（serve 已到 v0.15.0、部分工作机还是 v0.15.0 之前的版本）有个要知道的现象：带外锚定落的是「指纹锚」（只存指纹串）。旧版客户端不认识这个格式，把指纹串当密钥字节去比对——必然不匹配，于是把**完全合法的锚**报成「host key mismatch: possible MITM」。
+
+- **现象范围**：只有旧设备连接「owner 用 `--fingerprint` 锚定过的目标」时告警；转发与自动首次信任落的锚（完整密钥字节）不受影响。
+- **解法**：把该机的 sshmgr 升级到 v0.15.0 即解，别做其他操作。
+- **别对告警脱敏**：这条假警报与真告警文本相同——正确处置不是「忽略它」，而是「核对目标是否刚做过带外锚定：是则升级客户端；否则按真中间人处置」。
 
 ---
 
@@ -670,38 +806,38 @@ serve 自签证书长生（不靠过期驱动轮换），但若私钥疑似泄�
 **Step 1（服务器侧）**：发两个设备码，各绑各 profile——
 
 ```bash
-ssh-manager cache-tokens add --name laptop-agentA --profile team-a
+sshmgr cache-tokens add --name laptop-agentA --profile team-a
 # Authorization code for "laptop-agentA" (shown once): <设备码A>
 # On the work machine:
-#   ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码A>:<指纹>' --instance laptop-agentA
+#   sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码A>:<指纹>' --instance laptop-agentA
 
-ssh-manager cache-tokens add --name laptop-agentB --profile team-b   # 同上，得 <设备码B>
+sshmgr cache-tokens add --name laptop-agentB --profile team-b   # 同上，得 <设备码B>
 ```
 
 **Step 2（工作机）**：两次拉取，各进各实例——
 
 ```bash
-ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码A>:<指纹>' --instance laptop-agentA
+sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码A>:<指纹>' --instance laptop-agentA
 # → pulled N servers / M credentials into .../instances/laptop-agentA/cache.bin
-ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指纹>' --instance laptop-agentB
+sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指纹>' --instance laptop-agentB
 ```
 
 **Step 3（工作机）**：两个 agent 各配各的 `.mcp.json` 条目（stdio 形态）——每条 = 上面 Plan 12 的离线 `mcp --cache` 形态，`args` 里多一个 `--instance <name>`：
 
 ```json
 "ssh-agentA": {
-  "command": "ssh-manager",
+  "command": "sshmgr",
   "args": ["mcp", "--cache", "--instance", "laptop-agentA"],
   "env": { "SSHMGR_TOKEN": "<agentA 的项目token>" }
 },
 "ssh-agentB": {
-  "command": "ssh-manager",
+  "command": "sshmgr",
   "args": ["mcp", "--cache", "--instance", "laptop-agentB"],
   "env": { "SSHMGR_TOKEN": "<agentB 的项目token>" }
 }
 ```
 
-（两条放同一份 `.mcp.json` 的 `mcpServers` 对象下、键名不同即可；单 agent 机器就一条。命令行直接跑 = `ssh-manager mcp --cache --instance laptop-agentA`；token 也可 `--token` 传，`.mcp.json` 推荐 env 形态，理由同 [agent-access.md](./agent-access.md)——消除 argv/ps 暴露面。）
+（两条放同一份 `.mcp.json` 的 `mcpServers` 对象下、键名不同即可；单 agent 机器就一条。命令行直接跑 = `sshmgr mcp --cache --instance laptop-agentA`；token 也可 `--token` 传，`.mcp.json` 推荐 env 形态，理由同 [agent-access.md](./agent-access.md)——消除 argv/ps 暴露面。）
 
 > **真空工作机的简化形态**（批2 起）：空机上第一次拉取的码**可以省掉 `--instance`**——裸 pull 自动归位进同名实例（见下节）；第二枚码再裸拉同样归到它自己的实例目录（归位后默认槽仍真空，逐码各自归位、互不干扰）。显式 `--instance` 永远可用，语义更直白。
 
@@ -744,22 +880,22 @@ ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指�
 
 - **CLI-first 收尾一步（必读）**：CLI 路径没有向导接入卡——**手工 `.mcp.json` 必须自己补 `"args": ["mcp", "--cache", "--instance", "<name>"]`**。提示行的两层含义：继续裸 `cache pull` 刷新不受影响（幂等再归位），真正受影响的只是 agent 的 cache-mode 启动那条链。
 
-### enroll 双 agent 全程 TUI 形态（批2）
+### enroll 双 agent 全程形态（批2 picker · Plan 42 后口径）
 
-不想碰命令行：server 机照旧发两枚绑好 profile 的设备码（TUI 设备码页签 `[a]` 即可），工作机 `ssh-manager tui` 选 client——
+同机双 agent 的 TUI 少走命令形态（批2 的 `[i]` picker 保留；Plan 42 曾退役 client 连接编辑表单，Plan 45 起 `[c]` 以 SAS 配对向导复活——入网 = `sshmgr pair` 或 TUI 向导，两条等价路径）：
 
-1. **agentA**：向导连接表单填 serve 地址 + 设备码A + pin → 首次 pull 自动归位进 `instances/laptop-agentA/` 并自动选中该实例；finish 屏离线形态自动带上 `"args": ["mcp", "--cache", "--instance", "laptop-agentA"]` 及注释行（`本机 cache 位于实例槽 instances/laptop-agentA/——args 必须带 --instance laptop-agentA。`），照抄即可。
-2. **agentB**：client 面板按 `[c]` 重开连接表单，「实例名」字段填 `laptop-agentB` + 输入设备码B 提交 → 表单保存即写入新实例槽并切过去；随后 `[s]` 首次同步补齐材料（auth 先于首拉的 auth-only 窗口由首次 pull 闭合）。对该表单的字段校验三连见 [tui-multi-machine.md](./tui-multi-machine.md)。
-3. `[i]` 打开实例 picker 可随时在两实例间切换查看——会话内有效，不跨进程记忆。
+1. **agentA**：`sshmgr pair --instance laptop-agentA`（批准时选 profile-a）→ 首拉自动归位进 `instances/laptop-agentA/`；产物 `pair.laptop-agentA.mcp.json` 的 `args` 自动带 `"--instance", "laptop-agentA"` 及注释行（`本机 cache 位于实例槽 instances/laptop-agentA/——args 必须带 --instance laptop-agentA。`），照抄即可。
+2. **agentB**：再跑一条 `sshmgr pair --instance laptop-agentB`（批准时选 profile-b）→ 归位进自己的实例槽、产物各带各的 `--instance`。
+3. `sshmgr tui`（client 面板）`[i]` 打开实例 picker 可随时在两实例间切换查看——会话内有效，不跨进程记忆；`[s]` 同步只作用于当前选中槽。
 
 ### `--instance` 用法一览
 
 | 命令 | 形态 |
 |---|---|
-| 拉取 | `ssh-manager cache pull --url ... --token ... [--pin ...] --instance <name>` |
-| 状态 | `ssh-manager cache status --instance <name>`（单实例详情）；**无 flag = 列全部**（默认槽一行 + 每实例一行；单实例加载失败渲染为该行错误，不中断列表） |
-| MCP | `ssh-manager mcp --cache --instance <name>`（`.mcp.json` stdio 形态见上） |
-| 配置时效 | `ssh-manager cache config [--instance <name>] [--max-offline 24h]`（省略 `--max-offline` = 只读显示当前 cap 与来源；详见下「`cache config` 子命令」） |
+| 拉取 | `sshmgr cache pull --url ... --token ... [--pin ...] --instance <name>` |
+| 状态 | `sshmgr cache status --instance <name>`（单实例详情）；**无 flag = 列全部**（默认槽一行 + 每实例一行；单实例加载失败渲染为该行错误，不中断列表） |
+| MCP | `sshmgr mcp --cache --instance <name>`（`.mcp.json` stdio 形态见上） |
+| 配置时效 | `sshmgr cache config [--instance <name>] [--max-offline 24h]`（省略 `--max-offline` = 只读显示当前 cap 与来源；详见下「`cache config` 子命令」） |
 
 - **env × flag 互斥**：`SSHMGR_CACHE_DIR` 或 `SSHMGR_CACHE_DEK` 显式设置**且**带 `--instance` → CLI 层报错（这两个 env 是单槽完全覆盖，混用会静默路由错实例 / 令多实例共享同一 DEK）。`SSHMGR_CACHE_DEK_DIR`（目录级 DEK seam）与 `--instance` **可共存**。
 - **`mcp --cache` 无 flag 且默认目录无 cache 而 `instances/` 下有实例 → 报错列出实例清单**并指引 `--instance <name>`——读到哪个实例必须显式，不自动猜。`cache status` 不受限（列表命令，恒列全部）。
@@ -768,7 +904,7 @@ ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指�
 
 ### 边界（如实·批2 更新）
 
-- **TUI 多实例已落地（批2）**：`[i]` 实例 picker 会话内切换、连接表单「实例名」字段 + 前置校验三连、换码预防性警告、向导接入卡 `--instance`、override env 单槽模式互斥（禁用而非适配）——逐键细节见 [tui-multi-machine.md](./tui-multi-machine.md)。无人值守的批量刷新仍推荐计划任务 wrapper：每实例一条任务 + 各自的 env 文件（设备码是 per-instance 的；TUI 面板 `[s]` 只管当前选中槽）。
+- **TUI 多实例现状（批2 落地 · Plan 42 收窄 · Plan 45 复活 [c] · Plan 46 picker 重做+实例删除）**：`[i]` 实例 picker 会话内切换、单槽 override env 互斥（禁用而非适配）保留；连接编辑表单随 ②a 退役删除（Plan 42 批1，不会回来），Plan 45 起 `[c]` 复活为 **SAS 配对向导**——入网/换码 = `sshmgr pair`（`--force` 承接换码语义——Plan 46 起零清理先行，失败旧槽完好）或 client 面板 `[c]` 向导 / picker 具名行 `p`；实例删除 = CLI `cache instances rm` 或 picker 行 `d`（见下「实例删除」节）。无人值守的批量刷新仍推荐计划任务 wrapper：每实例一条任务 + 各自的 env 文件（设备码是 per-instance 的；TUI 面板 `[s]` 只管当前选中槽）。
 - **自动归位只作用于真空机首次 enroll**：存量默认槽机器**永不自动迁移**（意图标记 meta/config 在场即不归位）——要进实例形态显式 `--instance` 重新 enroll，或按下方 runbook v2 清三件套后裸拉归位。
 - **doctor 已感知命名实例**（2026-08-27 落地）：`doctor` 枚举 `instances/<name>/` 逐实例诊断（行名 `client-cache[<name>]`，sidecar 矩阵与默认行同源：DEK 缺 → FAIL / auth 缺 → WARN / 超离线 cap → WARN「下次使用即自毁」/ 空 slot → INFO）。只有命名实例的机器，默认 `client-cache` 行不再误报"cache 缺失"——降级为 INFO 并指向下方实例行（全空机器仍 FAIL）。`SSHMGR_CACHE_DIR` / `SSHMGR_CACHE_DEK` 单槽覆盖生效时整组跳过（一行 INFO 可闻）。
 - 存量单实例机器**零迁移**：无 flag 的 pull/mcp/status 行为与旧版一致（门禁对存量空 `device_name` 走补记分支）。
@@ -777,7 +913,7 @@ ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指�
 
 - **吊销设备码**（`cache-tokens revoke laptop-agentA`）= 切断未来 pull + **销毁本机该实例材料**：该实例下次 pull（手动或自动保鲜 ≤30min）收到 pinned 401 → 四件销毁（DEK / `cache.auth.json` / `cache.bin`→隔离 / `cache.meta.json`）——**只毁这一个实例**，同机其他实例不受影响（销毁粒度 = 实例，见上「吊销」节的销毁语义）。
 - **已可能外泄的凭据必须轮换**（server 端 re-credential，受影响 profile 的**全部**凭据）——吊销销毁的是"本机这份副本 + 未来的拉取权"，**不消除已发生的外泄**；永不离线的机器持有"密文 + DEK + 二进制"三件套，唯一根治仍是轮换服务器凭据（见上「吊销」节与 [threat-model.md §3.6](./threat-model.md)）。
-- **吊销纪律（快速断 agent 的顺序）**：先吊 **device code**（该实例下次 pull 即销毁 cache，切断离线能力），再吊 **project token**（在线面 serve 逐请求即拒；离线面要等下次 pull 刷新快照或 cache 到龄销毁才失效）。两个都吊 = 在线 + 离线全断。
+- **吊销纪律（快速断 agent 的顺序）**：先吊 **device code**（该实例下次 pull 即销毁 cache，切断离线能力），再吊 **project token**（下次保鲜拉到的新快照已无该 project → 本地 spawn 闸拒绝；≤30min）。两个都吊 = 双保险——完整三路径见上「吊销」节。
 
 ### 默认实例换码 runbook（v2）
 
@@ -787,7 +923,7 @@ ssh-manager cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指�
 # 在默认 cache 目录（<UserConfigDir>/ssh-manager/）删除三件：
 #   cache.auth.json + cache.bin + quarantine/（整目录）
 # ⚠️ cache.meta.json 与 cache.config.json 千万保留（见下）
-ssh-manager cache pull --url https://192.0.2.5:7878 --token '<新码>:<指纹>'
+sshmgr cache pull --url https://192.0.2.5:7878 --token '<新码>:<指纹>'
 ```
 
 - **meta/config 是默认槽的意图标记，删了重 enroll 会被归位走**：两者任一在场 = "这个槽有主"，重 enroll 按老路径写回默认目录；两个都删（或 `rm -rf` 整目录）= **机器重置语义**——下次裸 pull 触发[自动归位](#首次-enroll-自动归位批2)，材料落 `instances/<响应头name>/`，手工 `.mcp.json` 的 `--instance <name>` 也得跟着改。日常换码**不要**这么干；要彻底重置时这反而顺手。
@@ -795,14 +931,14 @@ ssh-manager cache pull --url https://192.0.2.5:7878 --token '<新码>:<指纹>'
 - **保留的 meta 还带着旧 `device_name` 是特性不是残留**：bin 已删后门禁对该槽不生效，下次成功 pull 时 meta 随写盘覆盖刷新——无害痕迹，不必手工清理。
 - **config 保留 = MAX_OFFLINE 策略原地继承**（时效是目录/槽位属性，不随设备码变化）；想连策略一起换用 `cache config --max-offline`（见下节）。
 - 清三件套的语义 = 按目录/槽位：旧身份的隔离材料（`quarantine/`）一并清除，不留。
-- 命名实例换码 = revoke 旧码 + `cache-tokens add` 同名（或新名）新码 + 该实例重新 `cache pull --instance <name>`（`--instance` 门禁保证同目录同身份；要彻底重来删该实例目录再 enroll 亦可——注意此时裸拉也会归位回同名实例）。
+- 命名实例换码 = revoke 旧码 + `cache-tokens add` 同名（或新名）新码 + 该实例重新 `cache pull --instance <name>`（`--instance` 门禁保证同目录同身份；要彻底重来删该实例目录再 enroll 亦可——`sshmgr cache instances rm <名>` 一条命令清双根（见下「实例删除」节），注意此时裸拉也会归位回同名实例）。
 
 ### MAX_OFFLINE 持久化（cache.config.json）
 
 MAX_OFFLINE（到龄自废上限，见上「离线缓存到龄自废」节）从**进程 env** 升级为可持久化的 **per-instance 配置文件**——env 是进程属性（"把 env 铺满所有进程"正是历史锚抹除 bug 的根因），config 是机器/实例属性：
 
 ```bash
-ssh-manager cache pull --url ... --token ... --max-offline 24h
+sshmgr cache pull --url ... --token ... --max-offline 24h
 # pinned pull 成功后写入该实例目录的 cache.config.json：{"max_offline":"24h"}
 ```
 
@@ -813,15 +949,31 @@ ssh-manager cache pull --url ... --token ... --max-offline 24h
 ### `cache config` 子命令
 
 ```bash
-ssh-manager cache config                                # 只读显示默认槽 cap + 来源
-ssh-manager cache config --instance laptop-agentA --max-offline 24h   # 给命名实例持久化上限
-ssh-manager cache config --max-offline 168h             # 给默认槽持久化上限
+sshmgr cache config                                # 只读显示默认槽 cap + 来源
+sshmgr cache config --instance laptop-agentA --max-offline 24h   # 给命名实例持久化上限
+sshmgr cache config --max-offline 168h             # 给默认槽持久化上限
 ```
 
 - **只读显示形态**：`instance: laptop-agentA (<目录>)` + `cap: 24h0m0s (source: file)`（Go duration 文法渲染）；来源三态 `env > file > off`，无上限渲染为 `cap: off (no offline limit)`。
 - **仅对已存在实例可读可写**：目标实例目录不存在 → 报错含 enroll 指引（提示 `cache pull --instance <name>`），**不预配置、不预建目录**——config 永远落在真实材料旁边。
 - **没有 `off` 开关**：撤销上限 = 手动删该实例目录下的 `cache.config.json`。⚠️ **默认槽的 config 别顺手删**——它和 `cache.meta.json` 一起构成默认槽意图标记，删了会改变重 enroll 的归位语义（见上[换码 runbook v2](#默认实例换码-runbookv2)）。
 - 写入时 `SSHMGR_CACHE_MAX_OFFLINE` env 在场 → WARNING 提示"env 清除前持久化不生效"（既有语义）；`--instance` 与两个 override env 互斥；纯配置命令——不 pull、不触发归位、无 plaintext 语义。
+
+### 实例删除（`cache instances ls` / `rm`，Plan 46）
+
+实例生命周期补齐删除一等公民——此前"删一个实例"只能手工 `rm -rf` 槽目录再找到 vault 目录里对应的 DEK 文件，两根容易漏一根。现在：
+
+```bash
+sshmgr cache instances ls                  # 列全部实例槽:名字/产物存在性/DEK 存在性/缓存年龄
+sshmgr cache instances rm laptop-agentA    # 删一个命名实例:槽目录 + DEK 双根清理(输实例名确认)
+```
+
+- **`ls` 是纯 stat（永不解密）**：每行 = 实例名 / 槽产物存在性 / DEK 存在性 / 缓存年龄，形态 `instance: <名>  auth=有 bin=有 meta=有 config=有 dek=有  age=12m3s`（缺件标 `缺`）；**DEK 孤儿**（DEK 文件在、槽目录已不在——崩溃残迹形态，行附 rm 命令）与**半态槽**（目录在、材料有缺，行附 `⚠ 半态槽(缺 …)`）显式标注；默认槽恒有一行（`(默认实例)`，无 rm 提示）；单槽覆盖 env（`SSHMGR_CACHE_DIR`/`SSHMGR_CACHE_DEK`）在场时拒绝执行。
+- **`rm` = 双根清理**：`instances/<名>/` 整目录（bin/auth/meta/config/配对产物/quarantine 全在内）+ `<VaultDir>/cache-dek-<名>.key`。确认屏列出两根**真实落点**，**输入实例名**才执行；stdin 非 TTY 直接拒绝（防脚本误删）。实例名过白名单校验（traversal `../x` / 分隔符 / Windows 保留名 / 绝对路径全拒），用户参数绝不直拼删除。
+- **幂等可重试**：任一根清理失败 → 报错含**残留物清单**；重跑同一条 `rm` 即可清完（已不存在 = 幂等成功）。
+- **rm ≠ 吊销（两件事，别混）**：rm 只删**本机**材料；broker 侧设备码原封不动（client 无权远程吊销）。成功输出两件配套提示：① broker 侧执行 `sshmgr cache-tokens revoke <名>`（正式切断该设备的拉取权——见上「吊销」节）；② `--write-mcp` 写在**槽外**的 `.mcp.json` 副本**不随 rm 清理**——原因明说：该目标路径不持久化（`cache.config.json` 仅存 `max_offline`），rm 无从得知其位置，请自行删除。输出另附提醒：若有 TUI / MCP 进程正使用该实例，重启对应进程后生效。
+- **默认槽不可 rm**（它没有名字）——整机清空用 `sshmgr clear`。TUI 等价入口：client 面板 picker 具名行 `d`（确认 overlay 同语义；删当前槽成功 → 自动回落默认槽并清内存态，失败错误含残留清单、不回落）——见 [tui-multi-machine.md](./tui-multi-machine.md)。
+- **进程内互斥（如实）**：rm / force 清理进行中，同进程并发的 pull / pair 写盘**被拒绝**（明确报错——拒绝而非排队、不交错）；**跨进程**并发不由任何文件锁拦截，由原子写（临时文件+rename）+ rm 幂等可重跑兜底。
 
 ### 过渡期纪律（直到双端都 ≥v0.11.0）
 
@@ -836,9 +988,12 @@ ssh-manager cache config --max-offline 168h             # 给默认槽持久化�
 
 ## 相关文档
 
+- [deployment-modes.md](./deployment-modes.md)——部署形态全景（选型总览：① 单机 / ② 多机桥姿态 + 管理面）。
+- [quickstart-multi-machine.md](./quickstart-multi-machine.md)——多机速通（pair 一条龙版）。
 - [getting-started.md](./getting-started.md)——单机 stdio 从零到跑通（**默认模式**，第一次用先看这篇）。
-- [agent-access.md](./agent-access.md)——project token 生命周期；**断连语义分四层**：serve 模式下吊销**逐请求即拒**（远程 agent 无需重启）；stdio/隧道/离线缓存各有不同（见「断连语义（四层）」一节）。token 管理在同一台服务器上做。
+- [agent-access.md](./agent-access.md)——project token 生命周期；断连语义（stdio spawn 边界 / 离线缓存保鲜 / 到龄自废，见「断连语义」一节）。token 管理在同一台服务器上做。
 - [managing-servers.md](./managing-servers.md)——服务器增删改查（在 serve 那台**服务器**上操作）。
+- [broker-host-agent.md](./broker-host-agent.md)——broker 主机上自己跑 agent 的姿势（零距离 client + 应急附录）。
 - [scenarios.md](./scenarios.md)——应用场景示例（GPU 巡检、部署、端口转发……，两种模式都适用）。
-- 仓库根 [README 的 "Multi-machine: serve mode"](../README.md#multi-machine-serve-mode-remote-agents-on-a-vlan) 节（英文概览）。
-- [compat-matrix.md](./compat-matrix.md)——client↔serve 版本兼容矩阵（升级任何一端之前先看）。
+- 仓库根 [README 的 "Multi-machine"](../README.md#multi-machine-bridge-posture-on-a-vlan) 节（英文概览）。
+- [compat-matrix.md](./compat-matrix.md)——client↔serve 版本兼容矩阵（升级任何一端之前先看；含 Plan 42 三步迁移）。

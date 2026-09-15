@@ -64,7 +64,7 @@ The `*ForProfile` functions then pass their `ctx` through: `cli.Exec(ctx, ...)`,
 1. **`Exec` signature**: take `ctx` AND keep `timeout` (derive `context.WithTimeout(ctx, timeout)` internally), OR take only `ctx` and have the caller apply the timeout to ctx? Recommend: keep both (`ctx` + `timeout`) — the caller (MCP layer) knows the timeout; the broker applies it to the ctx. Least churn.
 2. **Cancellation semantics for sftp (Download/Upload)**: closing the sftp client mid-`io.Copy` aborts the transfer with an error — surface that as a cancellation error (not a silent partial). The §6 `cappedBuffer`/`countingWriter` accounting should still report what was transferred before the cancel.
 3. **Connect under ctx**: `ssh.Dial` doesn't take ctx; wrap it (dial in a goroutine, select on ctx.Done → can't cancel an in-flight Dial cleanly, but you can abandon it + return ctx.Err()). Worth doing for consistency; low risk.
-4. **Backward compat**: the broker methods are also called by `internal/eval/` (the eval harness drives the broker for some tests) + `internal/cli/ssh.go` (the owner `ssh-manager ssh` command). Updating the signatures means updating those callers too (pass `context.Background()` or a real ctx). Grep `cli.Exec(`/`cli.Download(`/etc. repo-wide for all call sites.
+4. **Backward compat**: the broker methods are also called by `internal/eval/` (the eval harness drives the broker for some tests) + `internal/cli/ssh.go` (the owner `sshmgr ssh` command). Updating the signatures means updating those callers too (pass `context.Background()` or a real ctx). Grep `cli.Exec(`/`cli.Download(`/etc. repo-wide for all call sites.
 
 ### Test coverage
 

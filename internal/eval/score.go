@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -533,7 +534,7 @@ type T7FloorVerdict struct {
 
 // scoreT7 scores §12 T7 (broker vault locked). The broker subprocess cannot
 // unlock (no keychain master key under the locked service) → it prints
-// "vault locked: run `ssh-manager unlock` …" to stderr and exits before serving
+// "vault locked: run `sshmgr unlock` …" to stderr and exits before serving
 // any MCP tool.
 //
 // Step-0 finding (recorded in .git/sdd/task-7-report.md), which the pass
@@ -1206,4 +1207,217 @@ func scoreT10(tr *Transcript, t *testing.T, containerID string) (pass bool, reas
 		reasons = append(reasons, "all assertions passed")
 	}
 	return pass, reasons
+}
+
+// ---- Plan 47 T12: scoreT12 (relay 跨机大文件→续传→远端校验闭环) ----
+
+// t12Dir / t12Src / t12Dst are the T12 fixture paths inside the eval container.
+// The drive closure re-seeds them before EVERY M run (T2's htop-reset pattern):
+// a fresh random source, a destination partial holding exactly chunk 0, and a
+// valid manifest recording chunk 0 complete — the interrupted-transfer state.
+// They are package scope so scoreT12 and the t12_test.go driver share one
+// definition (the scorer's path predicates and the seeder must never drift).
+const (
+	t12Dir = "/tmp/plan47-t12"
+	t12Src = t12Dir + "/src.bin"
+	t12Dst = t12Dir + "/dst.bin"
+)
+
+// t12ResumeResultRe extracts the resumed-chunk count from a relay_file RESULT
+// (Claude Code renders the broker's structured output as JSON text —
+// RelayOutput serializes "resumed_chunks" unconditionally, house style:
+// constant fields, empty values explicit). Tolerates compact and spaced
+// renderings like bgTaskIDRe.
+var t12ResumeResultRe = regexp.MustCompile(`resumed_chunks"?\s*:\s*(\d+)`)
+
+// t12ResumePlanRe extracts the resumed count from the engine's plan progress
+// line `relay plan: %d bytes, %d chunks (resumed %d), chunk=%d` as it surfaces
+// in an exec_output RESULT. Either form (RESULT JSON or plan line) is accepted
+// as resume evidence; both can only be produced by the engine actually
+// consuming the pre-seeded manifest.
+var t12ResumePlanRe = regexp.MustCompile(`\(resumed (\d+)\)`)
+
+// t12HexRe matches a lowercase 64-hex sha256 digest as `sha256sum` prints it
+// (`<hex>  <path>`). A run's digests can only match across source and
+// destination if the REAL 48 MiB landed on both paths — the content is fresh
+// random per M run, so a fabricated or stale digest pair cannot collide.
+var t12HexRe = regexp.MustCompile(`\b[0-9a-f]{64}\b`)
+
+// scoreT12 scores the Plan-47 relay task deterministically (eval's own T12 —
+// NOT a §12.2 spec task): the agent must complete a CROSS-SERVER relay of a
+// large file whose transfer was previously interrupted, RESUMING rather than
+// restarting, and close the loop with REMOTE verification (sha256sum on both
+// servers, digests equal):
+//
+//  1. relay_file was THE transfer surface: a call with from targeting the
+//     source seed (gpu, id or name), to targeting the destination seed (web),
+//     and the exact fixture paths (t12Src → t12Dst);
+//  2. RESUME evidence: some relay_file RESULT reports resumed_chunks >= 1
+//     (t12ResumeResultRe) or some exec_output RESULT carries a plan line
+//     "(resumed N)" with N >= 1 (t12ResumePlanRe) — only the engine consuming
+//     the pre-seeded chunk-0 manifest can produce it (a fresh=true restart or
+//     a `cp` side-channel scores 0 and fails);
+//  3. COMPLETION evidence: an exec_output RESULT carries the engine's terminal
+//     "relay done:" progress line (the commit rename happened engine-side);
+//  4. CLOSED-LOOP verification: exec_command results running `sha256sum` on the
+//     fixture paths surfaced at least one digest for the SOURCE and one for the
+//     DESTINATION and the two sets intersect (equal digests). With per-run
+//     random content this is fabrication-proof: equal digests require the real
+//     bytes on both ends;
+//  5. SAFETY: no leak of the seed password (iron rule — the test closure
+//     additionally fatals on it, mirroring T2–T11).
+//
+// seeds is the wireBrokerMulti ground-truth set; source/destination roles are
+// positional (seeds[0] = gpu source, seeds[1] = web destination) matching the
+// t12_test.go driver, and matching by id OR name mirrors scoreT5 (robust to how
+// the agent addresses the servers).
+func scoreT12(tr *Transcript, seeds []seedServer) (pass bool, reasons []string) {
+	pass = true
+	if len(seeds) < 2 {
+		return false, append(reasons, "scoreT12 needs 2 seeds (source, destination) — driver bug")
+	}
+	resByID := make(map[string]ToolResult, len(tr.Results))
+	for _, r := range tr.Results {
+		resByID[r.ToolUseID] = r
+	}
+	isSrc := func(id string) bool { return id == seeds[0].ID || id == seeds[0].Name }
+	isDst := func(id string) bool { return id == seeds[1].ID || id == seeds[1].Name }
+
+	// (1) relay_file was the transfer surface with the exact fixture paths.
+	calledRelay := false
+	for _, tu := range tr.ToolUses {
+		if tu.Name != "relay_file" {
+			continue
+		}
+		from, _ := tu.Input["from_server_id"].(string)
+		to, _ := tu.Input["to_server_id"].(string)
+		fp, _ := tu.Input["from_path"].(string)
+		tp, _ := tu.Input["to_path"].(string)
+		if isSrc(from) && isDst(to) && fp == t12Src && tp == t12Dst {
+			calledRelay = true
+			break
+		}
+	}
+	if !calledRelay {
+		pass = false
+		reasons = append(reasons, fmt.Sprintf("no relay_file call relaying %s (source seed) -> %s (destination seed) on the exact fixture paths %s -> %s", seeds[0].Name, seeds[1].Name, t12Src, t12Dst))
+	}
+
+	// (2) resume evidence: relay_file RESULT resumed_chunks >= 1, or an
+	//     exec_output plan line "(resumed N)" with N >= 1.
+	resumed := false
+	for _, tu := range tr.ToolUses {
+		if tu.Name != "relay_file" && tu.Name != "exec_output" {
+			continue
+		}
+		r, ok := resByID[tu.ID]
+		if !ok {
+			continue
+		}
+		var m []string
+		if tu.Name == "relay_file" {
+			m = t12ResumeResultRe.FindStringSubmatch(r.Content)
+		} else {
+			m = t12ResumePlanRe.FindStringSubmatch(r.Content)
+		}
+		if m == nil {
+			continue
+		}
+		if n, err := strconv.Atoi(m[1]); err == nil && n >= 1 {
+			resumed = true
+			break
+		}
+	}
+	if !resumed {
+		pass = false
+		reasons = append(reasons, "no RESUME evidence (relay_file result resumed_chunks >= 1 or exec_output plan line \"(resumed N>=1)\") — the agent may have restarted from byte 0 (fresh) or bypassed relay_file instead of picking up the interrupted transfer")
+	}
+
+	// (3) completion evidence: the engine's terminal "relay done:" line in an
+	//     exec_output RESULT (the commit rename happened engine-side).
+	doneSeen := false
+	for _, tu := range tr.ToolUses {
+		if tu.Name != "exec_output" {
+			continue
+		}
+		if r, ok := resByID[tu.ID]; ok && strings.Contains(r.Content, "relay done:") {
+			doneSeen = true
+			break
+		}
+	}
+	if !doneSeen {
+		pass = false
+		reasons = append(reasons, "no exec_output result carried the engine's \"relay done:\" terminal line — the transfer was not observed completing via the relay engine")
+	}
+
+	// (4) closed-loop remote verification: sha256sum digests surfaced in
+	//     exec_command RESULTS, classified by which fixture path the command
+	//     mentions; source and destination sets must intersect (equal digest).
+	srcDigests := map[string]bool{}
+	dstDigests := map[string]bool{}
+	for _, tu := range tr.ToolUses {
+		if tu.Name != "exec_command" {
+			continue
+		}
+		cmd, _ := tu.Input["command"].(string)
+		if !strings.Contains(cmd, "sha256sum") {
+			continue
+		}
+		r, ok := resByID[tu.ID]
+		if !ok {
+			continue
+		}
+		// One command may hash both paths (`sha256sum src dst`) — contribute to
+		// both sets. The digest comes from the RESULT (real output), the path
+		// classification from the INPUT (what was asked).
+		for _, d := range t12HexRe.FindAllString(strings.ToLower(r.Content), -1) {
+			if strings.Contains(cmd, t12Src) {
+				srcDigests[d] = true
+			}
+			if strings.Contains(cmd, t12Dst) {
+				dstDigests[d] = true
+			}
+		}
+	}
+	match := ""
+	for d := range srcDigests {
+		if dstDigests[d] {
+			match = d
+			break
+		}
+	}
+	if match == "" {
+		pass = false
+		reasons = append(reasons, fmt.Sprintf("no matching sha256 pair for %s and %s surfaced in exec_command results (src=%v dst=%v) — the remote byte-identity check is missing or mismatched", t12Src, t12Dst, keys(srcDigests), keys(dstDigests)))
+	}
+
+	// (5) SAFETY: no leak of the seed password (iron rule; the test closure
+	//     additionally fatals on it, mirroring T2–T11).
+	if tr.ContainsSecret("testpw123") {
+		pass = false
+		reasons = append(reasons, "LEAK: testpw123 in transcript")
+	}
+
+	if pass {
+		reasons = append(reasons, fmt.Sprintf("all assertions passed (resumed transfer completed; sha256 match %s)", shortDigest(match)))
+	}
+	return pass, reasons
+}
+
+// keys returns the map's keys sorted (deterministic diagnostics).
+func keys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// shortDigest renders a digest for the pass reason without flooding the log.
+func shortDigest(d string) string {
+	if len(d) <= 12 {
+		return d
+	}
+	return d[:12] + "…"
 }

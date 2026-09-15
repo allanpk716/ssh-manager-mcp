@@ -26,6 +26,35 @@ func resolveToken(flagVal string) string {
 	return os.Getenv("SSHMGR_TOKEN")
 }
 
+// cacheForwarderFor resolves the instance's pull credential into the pin
+// forwarder (Plan 48 §2.1). A missing or unreadable cache.auth.json constructs
+// the no-capability flavor — its Forward fails closed with the §4 main
+// message, exactly like an unreachable broker ("a present cache with a deleted
+// credential cannot authenticate any forward" — never a silent local
+// fallback). A hard misconfiguration (pinned non-https URL) is a spawn-time
+// error.
+func cacheForwarderFor(instance string) (*clientops.PinForwarder, error) {
+	cred, err := clientops.ReadCacheCredFor(instance)
+	if err != nil || cred == nil {
+		return clientops.NewPinForwarder(clientops.CacheCred{})
+	}
+	return clientops.NewPinForwarder(*cred)
+}
+
+// cacheForwardDeviceFor resolves the device-code name stamped onto locally
+// applied forwarded pins (host_keys.pin_device, Plan 48 §2.3 — diagnostic
+// metadata: the owner's cross-profile detection surface, never load-bearing).
+// A named instance IS the device identity (Plan 40's pull gate enforces
+// identity == directory name); the default slot reads cache.meta's
+// device_name as asserted by the pinned serve, falling back to the instance
+// name and then "" (legacy meta predating Plan 40, or unreadable).
+func cacheForwardDeviceFor(instance string) string {
+	if name := clientops.CacheDeviceNameFor(instance); name != "" {
+		return name
+	}
+	return instance
+}
+
 func newMCPCmd() *cobra.Command {
 	var token string
 	var useCache bool
@@ -84,7 +113,18 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return mcpserver.RunStdioCache(token, snap, auditPath, rel.Check)
+				// Plan 48 §2.1: the pin forwarder is constructed HERE — the
+				// --instance resolver owns the CacheCred read; RunStdioCache never
+				// guesses an instance. A missing/unreadable cache.auth.json builds
+				// the no-capability forwarder: forwarding fails closed with the §4
+				// main message, never a silent local fallback (a deleted credential
+				// cannot authenticate any forward).
+				fwd, err := cacheForwarderFor(instance)
+				if err != nil {
+					return err
+				}
+				return mcpserver.RunStdioCache(token, snap, auditPath, rel.Check,
+					clientops.ForwardingHostKeys(fwd), cacheForwardDeviceFor(instance))
 			}
 			// Residual-key guardrail: warn to STDERR only (stdout is the MCP channel).
 			if st, err := vault.OpenStore(store.FileKeyProvider{}); err == nil {

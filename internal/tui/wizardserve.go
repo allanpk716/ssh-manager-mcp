@@ -1,10 +1,9 @@
 // wizardserve.go holds the SERVER-role wizard pieces (Plan 19 T4, spec §2.4):
 // the LAN-address picker, the serve install step + post-install probe, the
-// result banners, and the client access card — plus the serve-install hook
+// result banners, and the client pair card — plus the serve-install hook
 // that bridges tui to cli's install core without an import cycle. The flow
-// composition itself (client name → shared steps → dual secrets → serve
-// segment) lives in wizard.go; everything here is an independently testable
-// constructor or pure command.
+// composition itself (shared steps → serve segment) lives in wizard.go;
+// everything here is an independently testable constructor or pure command.
 package tui
 
 import (
@@ -37,14 +36,16 @@ func SetServeInstaller(fn func(addr, tlsCert, tlsKey string, out io.Writer) erro
 }
 
 // ---------------------------------------------------------------------------
-// ⑤b device-code issuance (server flow's second secret)
+// device-code issuance message (standalone→server upgrade segment)
 // ---------------------------------------------------------------------------
 
 // deviceCodeIssuedMsg carries the one-time device code + the serve cert's SPKI
-// fingerprint from wizardModel.issueDeviceCode into the one-time screen. The
-// plaintext code transits this message ONCE and then lives only inside the
-// overlay (same discipline as tokenIssuedMsg); the fingerprint is NOT secret
-// and is also kept in wizardData for the access card.
+// fingerprint from App.issueDeviceCode (upgrade.go) into the one-time screen.
+// Plan 42 批1 T8: the SERVER WIZARD no longer mints device codes (pair mints
+// them at approval) — the upgrade segment's on-demand mint is the one remaining
+// producer, feeding the manual/CI path. The plaintext code transits this
+// message ONCE and then lives only inside the overlay; the fingerprint is NOT
+// secret and is also kept in the segment for the pair card.
 type deviceCodeIssuedMsg struct {
 	code        string
 	fingerprint string
@@ -123,7 +124,7 @@ func installServeStep(addr string) tea.Cmd {
 	_ = addr // display-only; the registration binds 0.0.0.0:7878 (see above)
 	return func() tea.Msg {
 		if serveInstall == nil {
-			return serveInstalledMsg{err: errors.New("serve 安装核心未接线（应通过 `ssh-manager tui` 启动向导）")}
+			return serveInstalledMsg{err: errors.New("serve 安装核心未接线（应通过 `sshmgr tui` 启动向导）")}
 		}
 		return serveInstalledMsg{err: serveInstall("0.0.0.0:7878", "", "", io.Discard)}
 	}
@@ -160,9 +161,9 @@ func probeServe(addr string) tea.Cmd {
 // in-wizard install fails (spec §2.4 ⑥: 失败给出可执行的原文命令，含提权方式).
 func manualInstallCmd() string {
 	if runtime.GOOS == "windows" {
-		return "ssh-manager serve install --addr 0.0.0.0:7878\n（在管理员终端中执行）"
+		return "sshmgr serve install --addr 0.0.0.0:7878\n（在管理员终端中执行）"
 	}
-	return "sudo ssh-manager serve install --addr 0.0.0.0:7878"
+	return "sudo sshmgr serve install --addr 0.0.0.0:7878"
 }
 
 // serveAdminNotice is the pre-install screen (spec §2.4 ⑥ admin 前置提示):
@@ -202,39 +203,44 @@ func serveResultScreen(installErr error, probe serveProbeMsg) overlay {
 		b.WriteString(selStyle.Render("✓ serve 已就绪（"+probe.detail+"）") + "\n")
 	} else {
 		b.WriteString(warnStyle.Render("⚠ serve 未验证，client 可能连不上（"+probe.detail+"）") + "\n")
-		b.WriteString("排查：7878 端口防火墙是否放行；`ssh-manager serve status` 查四项信号；服务可能仍在启动，稍候重试。\n")
+		b.WriteString("排查：7878 端口防火墙是否放行；`sshmgr serve status` 查四项信号；服务可能仍在启动，稍候重试。\n")
 	}
-	b.WriteString("\n按任意键查看客户端接入卡\n")
+	b.WriteString("\n按任意键查看 client 入网卡\n")
 	return &wizStaticView{title: "serve 安装结果", body: b.String()}
 }
 
 // ---------------------------------------------------------------------------
-// ⑦ client access card
+// ⑦ client pair card
 // ---------------------------------------------------------------------------
 
-// accessCard is the client enrollment card (spec §2.4 ⑦ 全文案): the REAL
-// chosen address, the server fingerprint (pin), the two-secret 去向 table
-// (which key goes to .mcp.json, which into the client wizard), the command-form
-// alternative with the pin embedded, and the no-reshow note — the secrets
-// themselves are NOT repeated here; each was shown exactly once on its own
-// screen in ⑤, and this card only says where they go.
-func accessCard(addr, fp string) overlay {
+// clientPairCard is the flow's closing card (Plan 42 批1 T8 — the old 双密钥
+// 接入卡's replacement): the REAL chosen address + the server fingerprint
+// (pin), and the ONE guided onboarding command for a new machine —
+// `sshmgr pair`, whose device code / project token the wizard no longer
+// pre-mints (they are minted at approval, spec §3.3-6). The manual
+// cache-pull path stays documented for CI/automation; a needed device code is
+// issued from the 设备码页/CLI on demand.
+func clientPairCard(addr, fp string) overlay {
 	body := strings.Join([]string{
 		"把下面这张卡带到 client 机：",
 		"",
 		"地址    " + addr,
 		"指纹    " + fp,
 		"",
-		"两个密钥的去向（密钥本身不再重显，各自只在第 5 步展示过一次）：",
-		"  1. project token → 贴到 client 机 .mcp.json 的 SSHMGR_TOKEN 字段",
-		"  2. 设备码        → 填到 client 机向导",
+		"新机入网（pair 为新机唯一入网路径）：",
+		"  sshmgr pair --instance <本机实例名> --url " + addr + " --pin " + fp,
+		"  （也可省略 --url/--pin，用 LAN 发现自动找到本 serve）",
 		"",
-		"命令式备选（client 机离线缓存模式，指纹已拼进 token）：",
-		fmt.Sprintf("  ssh-manager cache pull --url %s --token '<设备码>:%s'", addr, fp),
+		"在该机上批准配对（其 TUI Pairing 页 / serve pair approve）并对照双方",
+		"屏幕的 SAS 码后，设备码、project token 与缓存自动落到 client 机。",
 		"",
-		"密钥丢失重发：project token → 主控台 Projects 页 [a]；设备码 → 主控台 设备码页 [a]",
+		"手工路径（CI/自动化，文档化保留）：",
+		"  设备码 → 主控台 设备码页 [a]（或 cache-tokens add），然后",
+		fmt.Sprintf("  sshmgr cache pull --url %s --token '<设备码>:%s'", addr, fp),
+		"",
+		"project token 丢失重发：主控台 Projects 页 [a]",
 		"",
 		"按任意键完成设置",
 	}, "\n")
-	return &wizStaticView{title: "客户端接入卡", body: body}
+	return &wizStaticView{title: "client 入网卡", body: body}
 }

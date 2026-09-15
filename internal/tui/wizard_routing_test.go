@@ -13,32 +13,11 @@ import (
 	"ssh-manager-mcp/internal/roles"
 )
 
-// Dispatch state A — stepClient delegation is the OUTERMOST layer: unknown
-// msgs are consumed by the inner clientModel and never reach the wizard's own
-// overlay target. Task 4 gave clientModel its own gate, so delivery is
-// observable from BOTH sides: the inner model carries a spy overlay (its gate
-// forwards unknown msgs to it — the positive assertion), and the wizard
-// carries its own overlay (w.ov = spy) which must NOT see the msg — delegation
-// must swallow it before Update's default branch could hand it to the static
-// screen.
-func TestWizardGateDelegatesInStepClient(t *testing.T) {
-	innerSpy := &spyOverlay{}
-	spy := &spyOverlay{}
-	w := wizardModel{step: stepClient, client: &clientModel{overlay: innerSpy}, ov: spy}
-	m, _ := w.Update(probeMsg{})
-	_ = m
-	if !innerSpy.spySaw(probeMsg{}) {
-		t.Fatal("stepClient delegation must DELIVER the msg to the inner clientModel's own gate")
-	}
-	if spy.spySaw(probeMsg{}) {
-		t.Fatal("stepClient delegation must consume the msg BEFORE the wizard's own overlay target")
-	}
-}
-
 // Dispatch state B — static screen: unknown msgs reach w.ov via the default
 // branch; owned msgs (errMsg) do NOT — they run wizard logic even while the
 // screen is up (they sit in the main switch, which the default branch cannot
-// preempt).
+// preempt). (Dispatch state A, stepClient delegation, was retired with the
+// client-role wizard flow in Plan 42 批1 T8.)
 func TestWizardGateOwnedBeatsStaticScreen(t *testing.T) {
 	spy := &spyOverlay{}
 	w := wizardModel{step: stepToken, ov: spy}

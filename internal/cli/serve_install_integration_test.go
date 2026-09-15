@@ -22,9 +22,11 @@
 //     kardianos (Windows Service / systemd / launchd depending on OS).
 //   - step 2: kardianos svc.Status() returns StatusRunning (service actually
 //     started, not just installed — install calls svc.Start()).
-//   - step 3: HTTPS GET https://127.0.0.1:<port>/ (auto-TLS self-signed cert,
-//     skip-verify probe) returns 401 or 200 (Plan 10 bearer-token gate; 401 =
-//     auth is wired, the right answer for an unauthenticated probe).
+//   - step 3: HTTPS GET https://127.0.0.1:<port>/snapshot (auto-TLS self-signed
+//     cert, skip-verify probe) returns 401 or 200 (Plan 10 bearer-token gate;
+//     401 = auth is wired, the right answer for an unauthenticated probe). The
+//     path is /snapshot since Plan 42 批1 removed the ②a MCP-over-HTTP route
+//     (the root now answers 404 on a real serve — same seam as probeServeHTTP).
 //   - step 4: master.key is present, readable, AND a usable 32-byte key in the
 //     service-host session — the status probe (vaultStatusString) verifies the
 //     file the running serve reads is structurally valid, catching missing /
@@ -89,10 +91,10 @@ func TestServeInstallIntegration(t *testing.T) {
 		addr = "127.0.0.1:7878"
 	}
 
-	// Resolve the ssh-manager binary to invoke. CI builds it via
-	// `go build -o ssh-manager ./cmd/ssh-manager` before running the test.
+	// Resolve the sshmgr binary to invoke. CI builds it via
+	// `go build -o sshmgr ./cmd/sshmgr` before running the test.
 	binPath := resolveSSHManagerBin(t)
-	t.Logf("using ssh-manager binary: %s", binPath)
+	t.Logf("using sshmgr binary: %s", binPath)
 	t.Logf("platform: %s/%s; service system: %s", runtime.GOOS, runtime.GOARCH, kardianosPlatform())
 
 	// === Per-test isolated vault ===========================================
@@ -112,13 +114,13 @@ func TestServeInstallIntegration(t *testing.T) {
 	// agree — see seedVaultStep0).
 	t.Setenv("SSHMGR_MASTERKEY_HEX", testMasterKeyHex)
 
-	// buildCmdEnv returns the env to hand to an ssh-manager subprocess so it
+	// buildCmdEnv returns the env to hand to an sshmgr subprocess so it
 	// inherits EVERY per-test override. os.Environ() reflects t.Setenv updates
 	// because testing.Setenv mutates the live process env; cmd.Env = os.Environ()
 	// is the documented way to inherit them into exec.Cmd.
 	buildCmdEnv := func() []string { return os.Environ() }
 
-	// runBin runs the ssh-manager binary with given args, returning combined
+	// runBin runs the sshmgr binary with given args, returning combined
 	// output + error. Fails the test on a non-zero exit ONLY when fatal=true.
 	runBin := func(args []string, fatal bool) (string, error) {
 		cmd := exec.Command(binPath, args...)
@@ -129,7 +131,7 @@ func TestServeInstallIntegration(t *testing.T) {
 		err := cmd.Run()
 		out := buf.String()
 		if err != nil && fatal {
-			t.Fatalf("ssh-manager %q failed: %v\noutput:\n%s", strings.Join(args, " "), err, out)
+			t.Fatalf("sshmgr %q failed: %v\noutput:\n%s", strings.Join(args, " "), err, out)
 		}
 		return out, err
 	}
@@ -306,10 +308,16 @@ func kardianosPlatform() string {
 	return servicePlatform()
 }
 
-// waitForHTTP401 polls https://addr/ until it returns 401 (or 200), up to the
-// timeout. Returns true if serve came up within the budget. 401 = auth gate
-// wired (Plan 10 bearer token); 200 = also acceptable (auth passed). Any other
-// status, connection refused, or timeout = false.
+// waitForHTTP401 polls https://addr/snapshot until it returns 401 (or 200), up
+// to the timeout. Returns true if serve came up within the budget. 401 = auth
+// gate wired (Plan 10 bearer token); 200 = also acceptable (auth passed). Any
+// other status, connection refused, or timeout = false.
+//
+// /snapshot, not the root (Plan 42 批1 T1, same seam fix as probeServeHTTP):
+// since the ②a removal the root mux answers 404 to everything except
+// /snapshot, so a root probe would report "serve did not come up" forever on a
+// healthy service. An unauthenticated GET /snapshot is rejected at the auth
+// layer with 401 before any side effect.
 //
 // https, not http (Plan 22 T3, same fix as probeServeHTTP): since auto-TLS,
 // serve is TLS-ONLY (self-signed cert on first start), so a plaintext probe
@@ -326,7 +334,7 @@ func waitForHTTP401(t *testing.T, addr string, timeout time.Duration) bool {
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // self-signed liveness probe — see above
 		},
 	}
-	url := "https://" + addr + "/"
+	url := "https://" + addr + "/snapshot"
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(url)
 		if err == nil {
@@ -340,16 +348,16 @@ func waitForHTTP401(t *testing.T, addr string, timeout time.Duration) bool {
 	return false
 }
 
-// resolveSSHManagerBin locates the ssh-manager binary the integration test will
+// resolveSSHManagerBin locates the sshmgr binary the integration test will
 // invoke as the registered service action. Order:
 //  1. SSHMGR_TEST_BIN env (explicit override).
-//  2. ./ssh-manager, ../ssh-manager, ../../ssh-manager walked up from the test's
+//  2. ./sshmgr, ../sshmgr, ../../sshmgr walked up from the test's
 //     working dir (repo root build output). On Windows the binary is
-//     ssh-manager.exe; we look for both.
-//  3. <test-binary-dir>/ssh-manager[.exe] (next to os.Executable()).
+//     sshmgr.exe; we look for both.
+//  3. <test-binary-dir>/sshmgr[.exe] (next to os.Executable()).
 //
 // Fails the test if no candidate exists — the integration test fundamentally
-// needs a real ssh-manager binary to install as the service action.
+// needs a real sshmgr binary to install as the service action.
 func resolveSSHManagerBin(t *testing.T) string {
 	t.Helper()
 	if p := os.Getenv("SSHMGR_TEST_BIN"); p != "" {
@@ -357,7 +365,7 @@ func resolveSSHManagerBin(t *testing.T) string {
 			return p
 		}
 	}
-	candidates := []string{"ssh-manager", "ssh-manager.exe"}
+	candidates := []string{"sshmgr", "sshmgr.exe"}
 	cwd, _ := os.Getwd()
 	for _, rel := range []string{".", "..", "../..", "../../.."} {
 		for _, name := range candidates {
@@ -375,7 +383,7 @@ func resolveSSHManagerBin(t *testing.T) string {
 			}
 		}
 	}
-	t.Fatal("resolveSSHManagerBin: no ssh-manager binary found — CI must build it via `go build -o ssh-manager ./cmd/ssh-manager` before running this test (or set SSHMGR_TEST_BIN)")
+	t.Fatal("resolveSSHManagerBin: no sshmgr binary found — CI must build it via `go build -o sshmgr ./cmd/sshmgr` before running this test (or set SSHMGR_TEST_BIN)")
 	return ""
 }
 
