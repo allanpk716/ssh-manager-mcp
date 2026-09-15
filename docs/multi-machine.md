@@ -906,7 +906,7 @@ sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指纹>' -
 
 - **TUI 多实例现状（批2 落地 · Plan 42 收窄 · Plan 45 复活 [c] · Plan 46 picker 重做+实例删除）**：`[i]` 实例 picker 会话内切换、单槽 override env 互斥（禁用而非适配）保留；连接编辑表单随 ②a 退役删除（Plan 42 批1，不会回来），Plan 45 起 `[c]` 复活为 **SAS 配对向导**——入网/换码 = `sshmgr pair`（`--force` 承接换码语义——Plan 46 起零清理先行，失败旧槽完好）或 client 面板 `[c]` 向导 / picker 具名行 `p`；实例删除 = CLI `cache instances rm` 或 picker 行 `d`（见下「实例删除」节）。无人值守的批量刷新仍推荐计划任务 wrapper：每实例一条任务 + 各自的 env 文件（设备码是 per-instance 的；TUI 面板 `[s]` 只管当前选中槽）。
 - **自动归位只作用于真空机首次 enroll**：存量默认槽机器**永不自动迁移**（意图标记 meta/config 在场即不归位）——要进实例形态显式 `--instance` 重新 enroll，或按下方 runbook v2 清三件套后裸拉归位。
-- **doctor 已感知命名实例**（2026-08-27 落地）：`doctor` 枚举 `instances/<name>/` 逐实例诊断（行名 `client-cache[<name>]`，sidecar 矩阵与默认行同源：DEK 缺 → FAIL / auth 缺 → WARN / 超离线 cap → WARN「下次使用即自毁」/ 空 slot → INFO）。只有命名实例的机器，默认 `client-cache` 行不再误报"cache 缺失"——降级为 INFO 并指向下方实例行（全空机器仍 FAIL）。`SSHMGR_CACHE_DIR` / `SSHMGR_CACHE_DEK` 单槽覆盖生效时整组跳过（一行 INFO 可闻）。
+- **doctor 已感知命名实例**（2026-08-27 实现、2026-09-15 抢救合并，随下版发版生效）：`doctor` 枚举 `instances/<name>/` 逐实例诊断（行名 `client-cache[<name>]`，sidecar 矩阵与默认行同源：DEK 缺 → FAIL / auth 缺 → WARN / 超离线 cap → WARN「下次使用即自毁」/ 空 slot → INFO）。只有命名实例的机器，默认 `client-cache` 行不再误报"cache 缺失"——降级为 INFO 并指向下方实例行（全空机器仍 FAIL）。`SSHMGR_CACHE_DIR` / `SSHMGR_CACHE_DEK` 单槽覆盖生效时整组跳过（一行 INFO 可闻）。
 - 存量单实例机器**零迁移**：无 flag 的 pull/mcp/status 行为与旧版一致（门禁对存量空 `device_name` 走补记分支）。
 
 ### 失窃响应（多实例口径）
