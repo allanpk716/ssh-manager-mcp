@@ -1,5 +1,7 @@
 # Plan 42 — doctor serve 探活二期（绿/黄/红语义）设计 spec
 
+> **编号勘误（2026-09-15 抢救合并时注）**：本稿写于 2026-08-28，「Plan 42」编号其后已归属模式缩减+发现配对 usability plan（同日晚些定案）。本稿实为 backlog P2 #5（doctor serve 探活二期）的设计稿，**非 Plan 42 的实现**；探活二期立项时应改挂新 plan 号。文头其余「Plan 42」字样均指本稿自身，按此勘误理解。
+
 - 日期：2026-08-28
 - 来源：docs/backlog.md P2 #5（「doctor serve 探活二期（绿/黄/红语义）——现状：doctor 首版只做本机自检」）
 - 前置：Plan 38-doctor（exit 2 管道已接线，**两项预埋验收挂本 plan**，见 §7）；doctor 多实例感知已落地（2026-08-27，branch `doctor-multi-instance`，commit 63b8ed5）——探针的实例枚举复用其构件

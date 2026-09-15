@@ -86,6 +86,7 @@ var doctorEnvSeams = []string{
 	"SSHMGR_SERVE_KEY",
 	"SSHMGR_SERVE_MARKER",
 	"SSHMGR_SERVE_LOG",
+	"SSHMGR_SERVE_PIN",
 	"SSHMGR_CACHE_URL",
 	"SSHMGR_CACHE_TOKEN",
 	"SSHMGR_UPDATE_BASE",
@@ -839,9 +840,14 @@ func namedInstanceCacheRow(name string) doctorCheck {
 }
 
 // emptyInstanceSlot reports whether an instance directory carries no cache
-// material at all. Any of the five known files present means NOT empty — a
-// destroyed/quarantined cache keeps meta/audit residue and must not read as
-// clean debris.
+// material at all. Any of the five known files present means NOT empty. A
+// cleanly quarantined slot (the Plan-34 destroy path removes the DEK, auth,
+// and meta files and moves bin into quarantine/) leaves ONLY the quarantine/
+// subdirectory, which this probe does not check — such a slot reads as empty
+// by accepted simplification: the INFO row does not move the exit code, and
+// on a client machine the default row still FAILs (the quarantine destroyed
+// the material this row would diagnose). A finer quarantine-residue row is
+// registered in the backlog.
 func emptyInstanceSlot(dir string) bool {
 	for _, f := range []string{"cache.bin", "cache.meta.json", "cache.auth.json", "cache.config.json", "cache-audit.log"} {
 		if ok, err := fileExists(filepath.Join(dir, f)); err == nil && ok {

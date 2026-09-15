@@ -256,7 +256,7 @@ sshmgr pair --instance laptop
 | Plan 13 · 群晖自动备份 | 服务器定时出明文快照到 NAS，灾难恢复 | ✅ 已做（[backup-restore.md Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)） |
 | Plan 14/15 · Windows 生产部署 | DPAPI master key + `serve install` Task Scheduler | ⚠️ 已 Superseded by Plan 16 |
 | Plan 16 · 固定路径 + FileKeyProvider | 三平台固定路径 + 裸文件 master key（L1+）+ kardianos 跨平台 `serve install` + `migrate-path` | ✅ 已做（本篇 + [threat-model.md](./threat-model.md) + [getting-started 第三方服务包](./getting-started.md#第三方服务包可选给不想用内置-install-的进阶用户)） |
-| Plan 40 · 多实例（批1 + 批2） | 同机 N agent 各授权各 profile 的独立 cache 实例（目录 + per-instance DEK + `--instance` + MAX_OFFLINE 持久化）；批2 = 首次 enroll **自动归位** + TUI `[i]` 实例切换 / 向导接入卡 + `cache config` 子命令 | ✅ 已做（本篇[「多实例（同机多 agent）」](#多实例同机多-agent-plan-40-第一批)节；doctor 感知命名实例跟随 Plan 38） |
+| Plan 40 · 多实例（批1 + 批2） | 同机 N agent 各授权各 profile 的独立 cache 实例（目录 + per-instance DEK + `--instance` + MAX_OFFLINE 持久化）；批2 = 首次 enroll **自动归位** + TUI `[i]` 实例切换 / 向导接入卡 + `cache config` 子命令 | ✅ 已做（本篇[「多实例（同机多 agent）」](#多实例同机多-agent-plan-40-第一批)节；doctor 感知命名实例已另行落地，见下[「边界」](#边界如实批2-更新)节） |
 | Plan 42 · 模式缩减 + 发现配对 | 4→2 模式收敛（②a 移除）；UDP 发现 + SAS 配对一条龙（`sshmgr pair`）；批2 = Web 管理 UI（手机优先，`/ui`） | ✅ 批1 已做（本篇）· 🔜 批2 |
 
 **现在：多机 = 桥姿态（权威 vault 常驻 serve + 工作机 pair 一条龙入网 + 本地只读缓存干活）；备份 / 迁移已可（export/import + Plan 13 NAS + Plan 16 `migrate-path`）；写操作收敛到管理面（broker TUI / `serve pair`，批2 上手机 Web）。**
