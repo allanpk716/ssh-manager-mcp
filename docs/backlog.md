@@ -57,8 +57,8 @@
 
 ## Plan 39 code-review 残余（2026-08-26，用户裁决：进 backlog）
 
-- **Tab 切页重读为同步 FetchAll**（app.go Tab 分支）：在 bubbletea 事件循环内同步跑 4+ 查询（MaxOpenConns(1) + busy_timeout 5s），serve 进程并发写时按键最坏卡 ~5s；且每次切页清掉各页 `/` 过滤与光标（仅 servers.warnOnly 保留——actionDoneMsg 既有语义的延续）。跟进：异步化（tea.Cmd）+ 按页保留过滤/光标。
-- **refetchPages 吞 FetchAll 错误**（失败时静默显示旧页当新的）：应置 a.err/status 提示重读失败。
+- ~~**Tab 切页重读为同步 FetchAll**（app.go Tab 分支）：在 bubbletea 事件循环内同步跑 4+ 查询（MaxOpenConns(1) + busy_timeout 5s），serve 进程并发写时按键最坏卡 ~5s；且每次切页清掉各页 `/` 过滤与光标（仅 servers.warnOnly 保留——actionDoneMsg 既有语义的延续）。跟进：异步化（tea.Cmd）+ 按页保留过滤/光标。~~ **已落地（branch `tui-tab-async-refetch`, 2026-09-16）**：`refetchCmd()` 把 FetchAll 挪出事件循环（Tab/Shift-Tab/配对页 r/actionDoneMsg/设备码签发/token 签发/升级收尾 7 个调用点全部改返回 tea.Cmd，pagesMsg 异步落地；pagesMsg 进 overlay 门 owned 注册表——token 签发后 overlay 开着时数据照样落地）；`pageNav` 快照（captureNav/restoreNav）按页保留 `/` 过滤文本 + 光标 + servers.warnOnly（restore 顺序：⚠ 视图 rebuild → 过滤 SetFilterText → 光标按过滤后行数钳制）；行为变化如实：切换后到 pagesMsg 落地前渲染旧快照（本地 SQLite 亚秒级）；配对页 r 的状态行从「已刷新」改「刷新中…」。测试：新增 TestRefetchKeepsFilterAndCursor / TestRefetchErrorSurfaces + TestApp_TabSwitchRefetchesPages 重写为异步契约断言；internal/tui 全量 89.6s 绿 + internal/cli 50.3s 绿。
+- ~~**refetchPages 吞 FetchAll 错误**（失败时静默显示旧页当新的）：应置 a.err/status 提示重读失败。~~ **已落地（同上 branch）**：pagesMsg 携带 err——失败时置 a.err/status 清空提示、旧快照保持渲染不冒充新数据；TestRefetchErrorSurfaces 钉住（关闭 store 后刷新 → 错误可见 + 旧页在场）。
 - **resolveProfileID/profileNameByID 与 projects.go 的 profileIDByName/profileNameMap 重复实现**（cli/cache_tokens.go）：同一包内两套解析器会漂移；且 `cache-tokens ls` 对 T 个码做 T+1 次全表 ListProfiles（N+1）。
 - **profile 存在性预检三处粘贴**（AddCacheToken / BindCacheToken / ExportSnapshotForProfile 各一份 `SELECT COUNT(*) FROM profiles`）：GetProfile(nil,nil) 已有；语义变化时三处易漏一。
 - **profileLabel 双实现**（cachetokens.go 页方法 + 条目方法，逐字节相同）+ 条目冗余携带 names map：应合并单 helper。

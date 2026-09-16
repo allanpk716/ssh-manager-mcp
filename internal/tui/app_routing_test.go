@@ -46,10 +46,12 @@ func TestGateOwnedFallsThrough(t *testing.T) {
 	spy := &spyOverlay{}
 	a.overlay = spy
 	// every owned type must NOT reach the overlay and must run App logic
+	// (pagesMsg uses a stale generation — it must fall through AND be
+	// dropped by the gen guard without touching the pages)
 	for _, owned := range []tea.Msg{
 		errMsg{}, actionDoneMsg{}, formDoneMsg{},
 		serveInstalledMsg{}, serveProbeMsg{}, deviceCodeIssuedMsg{},
-		tokenIssuedMsg{},
+		tokenIssuedMsg{}, pagesMsg{gen: -1},
 	} {
 		a.overlay = spy
 		m, _ := a.Update(owned)
@@ -181,11 +183,13 @@ func TestAppProjectsXDeletesRevokedOnly(t *testing.T) {
 		t.Fatalf("active 'x' must leave the revoke-first hint in the status line, got %q", m.(App).status)
 	}
 
-	// revoke it, refetch (actionDoneMsg), then x → Confirm(y) → deleted
+	// revoke it, refetch (actionDoneMsg → its Cmd must be DRAINED: the
+	// refetch went async with the nav-graft rework), then x → Confirm(y) → deleted
 	if err := st.SetProjectStatus(projID, models.ProjectRevoked); err != nil {
 		t.Fatal(err)
 	}
-	m, _ = m.Update(actionDoneMsg{desc: "refetch"}) // refetchPages keeps the page list current
+	m, refetch := m.Update(actionDoneMsg{desc: "refetch"}) // the refetch Cmd keeps the page list current
+	m = drain(t, m, refetch)
 	m, cmd = m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	if cmd == nil {
 		t.Fatalf("'x' on a REVOKED project must open the confirm overlay, status=%q", m.(App).status)

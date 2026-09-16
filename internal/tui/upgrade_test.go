@@ -324,11 +324,12 @@ func TestUpgrade_PageKeysSuppressedInFlight(t *testing.T) {
 }
 
 // TestUpgrade_CompleteKeepsWarnView (final review M-C): upgradeComplete must
-// refresh pages through refetchPages, not raw FetchAll — the servers page's
-// `!` filter and ⚠-first sort survive the segment end (same contract as
-// actionDoneMsg / tokenIssuedMsg), while the minted device code is still
-// folded into the 设备码 page. Uses the install-failure completion (no
-// roles.Save) so the test stays a pure page-refresh assertion.
+// refresh pages through the refetch Cmd (driven to completion here), not raw
+// FetchAll — the servers page's `!` filter and ⚠-first sort survive the
+// segment end (same contract as actionDoneMsg / tokenIssuedMsg), while the
+// minted device code is still folded into the 设备码 page. Uses the
+// install-failure completion (no roles.Save) so the test stays a pure
+// page-refresh assertion.
 func TestUpgrade_CompleteKeepsWarnView(t *testing.T) {
 	withServeCertDirs(t)
 	a := newTestApp(t)
@@ -358,11 +359,12 @@ func TestUpgrade_CompleteKeepsWarnView(t *testing.T) {
 	}
 	a.upg = &upgradeSegment{installErr: ioErr("denied")} // failure path: completes without roles.Save
 
-	m, _ := a.upgradeComplete()
-	am := m.(App)
+	m, refetch := a.upgradeComplete()
+	m2, _ := m.(App).Update(refetch()) // drive the async refetch to completion
+	am := m2.(App)
 	sp2, _ := am.pages[pageServers].(*serversPage)
 	if !sp2.warnOnly {
-		t.Fatal("upgradeComplete must keep the ! filter (refetchPages, not raw FetchAll)")
+		t.Fatal("upgradeComplete must keep the ! filter (the refetch nav graft, not raw FetchAll)")
 	}
 	if rows := sp2.Rows(); len(rows) != 1 || rows[0] != "⚠ gpu" {
 		t.Fatalf("filter+sort must survive the segment end: %v", rows)

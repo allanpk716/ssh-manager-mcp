@@ -51,11 +51,16 @@ type sizedPage interface {
 }
 
 // panelPage is a page whose list panel owns an event stream (see listMsg):
-// the App routes those messages to it before anything else.
+// the App routes those messages to it before anything else. filterText /
+// applyFilter are the capture/restore pair that keeps the `/` filter alive
+// across refetches (see restoreNav).
 type panelPage interface {
 	listPage
 	filtering() bool
 	listUpdate(msg tea.Msg) tea.Cmd
+	filterText() string
+	applyFilter(s string)
+	visibleCount() int
 }
 
 // chromeLines is the App frame's own row budget above and below the body:
@@ -63,16 +68,17 @@ type panelPage interface {
 const chromeLines = 4
 
 type App struct {
-	st      *store.Store
-	page    page
-	pages   [pageCount]listPage
-	overlay overlay         // nil = 无
-	role    roles.Role      // this machine's deployment role (T6: gates the [u] upgrade)
-	upg     *upgradeSegment // nil = upgrade segment not running (T6)
-	width   int             // terminal width from WindowSizeMsg (0 = not yet reported)
-	height  int             // terminal height from WindowSizeMsg (0 = not yet reported)
-	status  string
-	err     error
+	st         *store.Store
+	page       page
+	pages      [pageCount]listPage
+	overlay    overlay         // nil = 无
+	role       roles.Role      // this machine's deployment role (T6: gates the [u] upgrade)
+	upg        *upgradeSegment // nil = upgrade segment not running (T6)
+	width      int             // terminal width from WindowSizeMsg (0 = not yet reported)
+	height     int             // terminal height from WindowSizeMsg (0 = not yet reported)
+	status     string
+	err        error
+	refetchGen int // latest refetch request's generation; stale-landing pagesMsg is dropped (see refetchCmd)
 }
 
 // NewBrokerApp builds the broker console over an open store (caller owns Close).
@@ -207,7 +213,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a.overlay != nil {
 		switch msg := msg.(type) {
 		case errMsg, actionDoneMsg, formDoneMsg, serveInstalledMsg,
-			serveProbeMsg, deviceCodeIssuedMsg, tokenIssuedMsg:
+			serveProbeMsg, deviceCodeIssuedMsg, tokenIssuedMsg, pagesMsg:
 			// owned: empty body — fall out of the gate into the switch below
 		case tea.WindowSizeMsg:
 			a.resize(msg.Width, msg.Height)
@@ -232,14 +238,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// process (the serve process writes last_pull_at on every client
 			// pull; other TUI/CLI sessions edit entities). Re-reading on page
 			// entry makes what you see = what's in the DB when you look at it.
-			// Same semantics as the post-action refetch (filters drop; the
-			// servers page's ⚠ view survives via refetchPages itself).
-			a.refetchPages()
-			return a, nil
+			// The re-read runs as a Cmd (backlog Plan 39 code-review residual):
+			// a synchronous fetch inside the event loop froze the Tab key for
+			// up to busy_timeout (5s) whenever the serve process held the
+			// store busy. Until pagesMsg lands the previous snapshot renders.
+			return a, a.refetchCmd()
 		case k.Code == tea.KeyTab && k.Mod == 0:
 			a.page = (a.page + 1) % pageCount
-			a.refetchPages() // see Shift-Tab note
-			return a, nil
+			return a, a.refetchCmd() // see Shift-Tab note
 		// up/down/j/k: consumed by the page's list panel in the routing block
 		// above — nothing left to do here.
 		case k.Code == tea.KeyUp && k.Mod == 0, k.Text == "k",
@@ -459,9 +465,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				pp, _ := a.pages[pagePairing].(*pairingPage)
 				switch k.Text {
 				case "r": // 刷新:重读 store(pending 队列被 serve 进程从外部写入)
-					a.refetchPages()
-					a.status = "配对队列已刷新"
-					return a, nil
+					a.status = "配对队列刷新中…"
+					return a, a.refetchCmd()
 				case "a": // 批准:huh 表单选 profile;foreign 行需键入 OVERRIDE
 					if cur := pp.current(); cur != nil {
 						if len(pp.profiles) == 0 {
@@ -512,8 +517,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionDoneMsg:
 		a.err = nil
 		a.status = m.desc
-		a.refetchPages()
-		return a, nil
+		return a, a.refetchCmd()
 	case formDoneMsg:
 		if a.upg != nil { // upgrade segment owns its formDoneMsg progression (T6)
 			return a.upgradeFormDone(m)
@@ -551,8 +555,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.overlay = wizTokenScreen("设备码 — "+a.upg.clientName, m.code,
 			fmt.Sprintf("新机入网首选 sshmgr pair;手工路径 cache pull --token '%s:%s'", m.code, m.fingerprint),
 			"主控台 设备码页 [a] 重发")
-		a.refetchPages()
-		return a, nil
+		return a, a.refetchCmd()
 	case tokenIssuedMsg:
 		// Mutation succeeded and minted a token: take over the screen with the
 		// one-time secret view. Pages are re-fetched now so the list is fresh
@@ -560,7 +563,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.err = nil
 		a.status = ""
 		a.overlay = &secretView{title: m.title, body: m.body()}
-		a.refetchPages()
+		return a, a.refetchCmd()
+	case pagesMsg:
+		// Stale-guard first: bubbletea lands Cmd results in COMPLETION order,
+		// so a slow EARLIER refetch finishing after a later one must not
+		// overwrite the fresher pages (the "deleted server resurrects"
+		// shape — review M1). Only the latest request's generation applies.
+		if m.gen != a.refetchGen {
+			return a, nil
+		}
+		// The async refetch landed. A failure surfaces on the status line
+		// instead of silently re-rendering the stale pages as fresh (backlog
+		// Plan 39 code-review residual); the old snapshot stays rendered until
+		// a successful refetch replaces it.
+		if m.err != nil {
+			a.err, a.status = m.err, ""
+			return a, nil
+		}
+		a.pages = m.pages
+		restoreNav(&a.pages, m.nav)
 		return a, nil
 	}
 	return a, nil
@@ -571,23 +592,99 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // sync through this one method (anti-drift, Plan 30 注记 6).
 func (a *App) resize(w, h int) { a.width, a.height = w, h }
 
-// refetchPages reloads the four pages, then re-applies the servers page's ⚠
-// view (warnOnly filter + ⚠-first order + cursor clamp). Without this every
-// data refresh (actionDoneMsg / token issuance) would silently drop the `!`
-// filter and unsort the ⚠ block (T10).
-func (a *App) refetchPages() {
-	warn := false
-	if sp, ok := a.pages[pageServers].(*serversPage); ok {
-		warn = sp.warnOnly
+// pageNav is one page's transient navigation state: the `/` filter text, the
+// cursor, and — servers page only — the ⚠ view toggle. A refetch rebuilds
+// page objects from scratch (FetchAll constructs fresh ones); grafting the
+// captured nav back keeps the operator's view stable across refreshes.
+// Before this, every refresh dropped the filter and reset the cursor
+// (backlog Plan 39 code-review residual: only servers.warnOnly survived).
+type pageNav struct {
+	cursor int
+	filter string
+	warn   bool // serversPage.warnOnly (the `!` view)
+}
+
+// pagesMsg is the async result of a refetch: freshly loaded pages plus the
+// nav captured when the refetch was requested. err != nil keeps the previous
+// snapshot rendered and surfaces the failure (never swallow a stale-render).
+// gen is the request's generation — only the LATEST request may land (see
+// refetchCmd).
+type pagesMsg struct {
+	pages [pageCount]listPage
+	nav   [pageCount]pageNav
+	gen   int
+	err   error
+}
+
+// refetchCmd snapshots the per-page nav and returns a Cmd that reloads all
+// five pages OFF the event loop — the store serializes on MaxOpenConns(1),
+// so a synchronous fetch could stall a Tab press for up to busy_timeout (5s)
+// while the serve process writes (backlog Plan 39 code-review residual). The
+// servers page's ⚠ view rides in the same snapshot (T10 contract).
+//
+// Pointer receiver on purpose: it stamps a.refetchGen, so every caller's
+// `return a, a.refetchCmd()` sequence mutates the model BEFORE it is
+// returned — and late-landing results from superseded requests are dropped
+// in the pagesMsg case (completion order ≠ request order; review M1).
+func (a *App) refetchCmd() tea.Cmd {
+	a.refetchGen++
+	gen := a.refetchGen
+	nav := captureNav(a.pages)
+	return func() tea.Msg {
+		pages, err := FetchAll(a.st)
+		return pagesMsg{pages: pages, nav: nav, gen: gen, err: err}
 	}
-	pages, err := FetchAll(a.st)
-	if err != nil {
-		return
+}
+
+// captureNav reads every page's cursor and `/` filter (the ⚠ toggle
+// included). A value copy taken at request time, so a late-landing refresh
+// restores the view the operator had when they asked for it.
+func captureNav(pages [pageCount]listPage) [pageCount]pageNav {
+	var nav [pageCount]pageNav
+	for i := range pages {
+		if pages[i] == nil {
+			continue
+		}
+		nav[i].cursor = pages[i].Cursor()
+		if pp, ok := pages[i].(panelPage); ok {
+			nav[i].filter = pp.filterText()
+		}
+		if sp, ok := pages[i].(*serversPage); ok {
+			nav[i].warn = sp.warnOnly
+		}
 	}
-	a.pages = pages
-	if sp, ok := a.pages[pageServers].(*serversPage); ok {
-		sp.warnOnly = warn
-		sp.rebuild()
+	return nav
+}
+
+// restoreNav grafts a captured nav onto freshly built pages. Order matters:
+// the servers page's ⚠ view first (rebuild re-derives its row view), then
+// the `/` filter text (SetFilterText restarts the cursor at the top), the
+// cursor last — clamped into the post-filter row count.
+func restoreNav(pages *[pageCount]listPage, nav [pageCount]pageNav) {
+	for i := range pages {
+		if pages[i] == nil {
+			continue
+		}
+		n := 0
+		if pp, ok := pages[i].(panelPage); ok {
+			if sp, ok2 := pages[i].(*serversPage); ok2 {
+				sp.warnOnly = nav[i].warn
+				sp.rebuild()
+			}
+			if nav[i].filter != "" {
+				pp.applyFilter(nav[i].filter)
+			}
+			n = pp.visibleCount()
+		} else {
+			n = len(pages[i].Rows())
+		}
+		if n > 0 {
+			c := nav[i].cursor
+			if c >= n {
+				c = n - 1
+			}
+			pages[i].Select(c)
+		}
 	}
 }
 

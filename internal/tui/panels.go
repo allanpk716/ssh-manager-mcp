@@ -61,6 +61,20 @@ func (p *panelList) listUpdate(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
+// filterText is the panel's current `/` filter text ("" when none was
+// applied). Capture side of the navigation graft that keeps the operator's
+// view stable across refetches.
+func (p *panelList) filterText() string { return p.list.FilterInput.Value() }
+
+// applyFilter restores a captured filter text (production users type it via
+// `/`; this is the restore side of the refetch nav graft).
+func (p *panelList) applyFilter(s string) { p.list.SetFilterText(s) }
+
+// visibleCount is the row count AFTER the `/` filter — the correct bound for
+// cursor clamping (Rows() on some pages predates the panel redesign and
+// returns the unfiltered set).
+func (p *panelList) visibleCount() int { return len(p.list.VisibleItems()) }
+
 // setListItems mirrors items into the list (caller fixes the order — for the
 // servers page that is its ⚠-sorted view) and clamps the cursor into n when
 // the set shrank. While the `/` text filter is taking input the list owns its
