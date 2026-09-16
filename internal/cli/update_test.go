@@ -207,6 +207,7 @@ type updateSeamSet struct {
 	stdinIsTTY           func() bool
 	probeService         func(string) updater.ProbeResult
 	registeredBinaryPath func(string) (string, error)
+	registeredServeAddr  func(string) (string, error)
 	serveHTTPProbe       func(string) bool
 	readConfirmLine      func() (string, error)
 	detectHeal           func() (string, bool)
@@ -220,6 +221,7 @@ func updateSeams() updateSeamSet {
 		stdinIsTTY:           stdinIsTTY,
 		probeService:         probeService,
 		registeredBinaryPath: registeredBinaryPath,
+		registeredServeAddr:  registeredServeAddr,
 		serveHTTPProbe:       serveHTTPProbe,
 		readConfirmLine:      readConfirmLine,
 		detectHeal:           detectHeal,
@@ -233,6 +235,7 @@ func restoreUpdateSeams(s updateSeamSet) {
 	stdinIsTTY = s.stdinIsTTY
 	probeService = s.probeService
 	registeredBinaryPath = s.registeredBinaryPath
+	registeredServeAddr = s.registeredServeAddr
 	serveHTTPProbe = s.serveHTTPProbe
 	readConfirmLine = s.readConfirmLine
 	detectHeal = s.detectHeal
@@ -255,6 +258,7 @@ func seamUpdateDefaults(t *testing.T, self, curVer string) {
 		return updater.ProbeResult{State: updater.ProbeNotInstalled, Desc: service.ErrNotInstalled.Error()}
 	}
 	registeredBinaryPath = func(string) (string, error) { return self, nil }
+	registeredServeAddr = func(string) (string, error) { return "", nil } // hermetic: no registered addr → default probe target
 	serveHTTPProbe = func(string) bool { return true }
 	readConfirmLine = func() (string, error) { return "", errors.New("tests: no interactive input") }
 	// detectHeal and serviceNew keep their production defaults here: the real
@@ -674,6 +678,90 @@ func TestUpdateRestartSuccessHealthProbe(t *testing.T) {
 	for _, want := range []string{"重启", "健康回探"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestUpdateProbeUsesRegisteredAddr (backlog #17): the post-restart health
+// probe must target the --addr the service was REGISTERED with — read back
+// from the registration records, wildcard bind normalized to loopback —
+// instead of the hardcoded default (which misreported "not responding" on
+// every non-default install).
+func TestUpdateProbeUsesRegisteredAddr(t *testing.T) {
+	_, self, _ := writeSelfFixture(t)
+	startFakeUpdateSource(t, "v0.0.2", testBinBytes(t))
+	seamUpdateDefaults(t, self, "0.0.1")
+	withStagedVersion(t, "0.0.2")
+	fr := &fakeRestarter{status: service.StatusRunning}
+	restartInstalledSeam(t, fr)
+	registeredServeAddr = func(string) (string, error) { return "0.0.0.0:9000", nil }
+	probed := ""
+	serveHTTPProbe = func(addr string) bool {
+		probed = addr
+		return true
+	}
+
+	out, err := runUpdate(t, "--yes")
+	if err != nil {
+		t.Fatalf("update --yes: %v\nout:\n%s", err, out)
+	}
+	if probed != "127.0.0.1:9000" {
+		t.Fatalf("probe target = %q, want the registered addr normalized to loopback %q", probed, "127.0.0.1:9000")
+	}
+	if !strings.Contains(out, "健康回探(127.0.0.1:9000)") {
+		t.Fatalf("output must name the real probe target:\n%s", out)
+	}
+}
+
+// TestUpdateProbeFallsBackWhenAddrUnreadable: a registration read failure
+// keeps the install default as the probe target (best-effort evidence, not
+// an abort) — and the output still names what was probed.
+func TestUpdateProbeFallsBackWhenAddrUnreadable(t *testing.T) {
+	_, self, _ := writeSelfFixture(t)
+	startFakeUpdateSource(t, "v0.0.2", testBinBytes(t))
+	seamUpdateDefaults(t, self, "0.0.1")
+	withStagedVersion(t, "0.0.2")
+	fr := &fakeRestarter{status: service.StatusRunning}
+	restartInstalledSeam(t, fr)
+	registeredServeAddr = func(string) (string, error) { return "", errors.New("records unreadable") }
+	probed := ""
+	serveHTTPProbe = func(addr string) bool {
+		probed = addr
+		return false
+	}
+
+	out, err := runUpdate(t, "--yes")
+	if err != nil {
+		t.Fatalf("update --yes: %v\nout:\n%s", err, out)
+	}
+	if probed != defaultProbeAddr {
+		t.Fatalf("probe target = %q, want fallback default %q", probed, defaultProbeAddr)
+	}
+	if !strings.Contains(out, "健康回探("+defaultProbeAddr+")") {
+		t.Fatalf("output must name the fallback probe target:\n%s", out)
+	}
+	// The read failure itself must be VISIBLE (review M1): without this line
+	// the operator reads "not responding" as a slow listener and chases the
+	// wrong cause while the code already knows the registration is broken.
+	if !strings.Contains(out, "读取注册 --addr 失败") {
+		t.Fatalf("output must warn about the failed registered-addr read:\n%s", out)
+	}
+}
+
+// TestLoopbackProbeAddr pins the wildcard→loopback rewrite table.
+func TestLoopbackProbeAddr(t *testing.T) {
+	cases := map[string]string{
+		"0.0.0.0:7878":      "127.0.0.1:7878",
+		"[::]:7878":         "127.0.0.1:7878",
+		":7878":             "127.0.0.1:7878",    // empty host
+		"192.168.1.10:7878": "192.168.1.10:7878", // concrete LAN bind: probe the real address
+		"[fe80::1]:7878":    "[fe80::1]:7878",    // concrete IPv6: dial the real registered address
+		"127.0.0.1:9000":    "127.0.0.1:9000",
+		"not-a-hostport":    "not-a-hostport", // unparsable: unchanged (probe reports not-responding)
+	}
+	for in, want := range cases {
+		if got := loopbackProbeAddr(in); got != want {
+			t.Errorf("loopbackProbeAddr(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

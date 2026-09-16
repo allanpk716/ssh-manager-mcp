@@ -189,6 +189,182 @@ func RegisteredBinaryPath(name string) (string, error) {
 	}
 }
 
+// RegisteredServeAddr reads back the --addr value the serve service was
+// installed with, from the SAME per-platform records RegisteredBinaryPath
+// uses (Windows SCM lpBinaryPathName / systemd ExecStart / launchd
+// ProgramArguments) — the registration args are exactly `serve --addr <v>`
+// (serve install always writes the flag explicitly). The update flow's
+// post-restart health probe targets this instead of a hardcoded default
+// (backlog #17): a non-default install probed at the default addr
+// misreports "not responding". "" with a nil error = the registered args
+// carry no --addr — the caller keeps its own default. Read failures return
+// the error; the caller treats the probe as best-effort evidence.
+func RegisteredServeAddr(name string) (string, error) {
+	switch currentGOOS {
+	case "windows":
+		// scmQueryCommand is wired by service_windows.go's init on windows
+		// builds; nil elsewhere (and in tests that un-wire it).
+		if scmQueryCommand == nil {
+			return "", fmt.Errorf("registered-command lookup unavailable on %s (SCM wiring missing)", currentGOOS)
+		}
+		raw, err := scmQueryCommand(name)
+		if err != nil {
+			return "", err
+		}
+		return serveAddrFromArgs(commandTokensExceptBinary(raw)), nil
+	case "linux":
+		data, err := os.ReadFile(filepath.Join(systemdUnitDir, name+".service"))
+		if err != nil {
+			return "", fmt.Errorf("read systemd unit for service %q: %w", name, err)
+		}
+		toks, ok := execStartTokens(string(data))
+		if !ok || len(toks) == 0 {
+			return "", fmt.Errorf("systemd unit for service %q has no parsable ExecStart", name)
+		}
+		return serveAddrFromArgs(toks[1:]), nil
+	case "darwin":
+		data, err := os.ReadFile(filepath.Join(launchdPlistDir, name+".plist"))
+		if err != nil {
+			return "", fmt.Errorf("read launchd plist for service %q: %w", name, err)
+		}
+		items := plistProgramArgumentsStrings(string(data))
+		if len(items) == 0 {
+			return "", fmt.Errorf("launchd plist for service %q has no parsable ProgramArguments", name)
+		}
+		return serveAddrFromArgs(items[1:]), nil
+	default:
+		return "", fmt.Errorf("registered-addr lookup unsupported on %s", currentGOOS)
+	}
+}
+
+// scmQueryCommand is the raw-command-line bridge seam (lpBinaryPathName with
+// args intact — scmQueryBinaryPath strips them). Wired by service_windows.go
+// on windows builds; nil elsewhere, same fail-closed contract.
+var scmQueryCommand func(name string) (string, error)
+
+// commandTokensExceptBinary tokenizes a raw registered command line and drops
+// the leading binary token (the executable path — with quoting, on Windows
+// ImagePath it may contain spaces), leaving the argument tokens.
+func commandTokensExceptBinary(raw string) []string {
+	toks := splitCommandTokens(raw)
+	if len(toks) == 0 {
+		return nil
+	}
+	return toks[1:]
+}
+
+// serveAddrFromArgs returns the value of the first --addr flag in args, in
+// both "--addr <value>" and "--addr=<value>" forms. "" when absent or
+// dangling (a dangling --addr is not an address anyone can dial; the caller's
+// default is the safer answer than a guess).
+func serveAddrFromArgs(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--addr":
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+			return ""
+		case strings.HasPrefix(args[i], "--addr="):
+			return strings.TrimPrefix(args[i], "--addr=")
+		}
+	}
+	return ""
+}
+
+// splitCommandTokens splits a command line into argv tokens: a double- or
+// single-quoted token keeps its content with the quotes dropped, anything
+// else breaks on whitespace. Backslash is deliberately NOT an escape — the
+// registrations kardianos writes are plain unquoted tokens, and quoting
+// support exists for one shape only: a binary path containing spaces
+// (same contract as firstCommandToken).
+func splitCommandTokens(value string) []string {
+	var toks []string
+	for value = strings.TrimSpace(value); value != ""; value = strings.TrimSpace(value) {
+		if q := value[0]; q == '"' || q == '\'' {
+			end := strings.IndexByte(value[1:], q)
+			if end < 0 {
+				toks = append(toks, value[1:]) // unterminated quote: take the rest
+				return toks
+			}
+			toks = append(toks, value[1:1+end])
+			value = value[1+end+1:]
+			continue
+		}
+		token := value
+		if i := strings.IndexAny(value, " \t"); i >= 0 {
+			token, value = value[:i], value[i:]
+		} else {
+			value = ""
+		}
+		if token != "" {
+			toks = append(toks, token)
+		}
+	}
+	return toks
+}
+
+// execStartTokens returns the full argv of the first ExecStart line in a
+// systemd unit body (binary token first), with the exec-prefix modifiers
+// (- ignore-failure, + privilege, ! ! full-privilege) stripped — the
+// multi-token sibling of execStartBinary.
+func execStartTokens(unit string) ([]string, bool) {
+	for _, line := range strings.Split(unit, "\n") {
+		value, isExecStart := strings.CutPrefix(strings.TrimSpace(line), "ExecStart=")
+		if !isExecStart {
+			continue
+		}
+		toks := splitCommandTokens(strings.TrimLeft(value, "-+!"))
+		if len(toks) == 0 {
+			return nil, false
+		}
+		return toks, true
+	}
+	return nil, false
+}
+
+// plistProgramArgumentsStrings extracts EVERY <string> item of the
+// ProgramArguments array in an XML plist (the multi-item sibling of
+// plistProgramArgumentsFirst), entity-unescaped and bounded by the array's
+// closing tag so a later key's strings cannot leak in.
+func plistProgramArgumentsStrings(plist string) []string {
+	const keyTag = "<key>ProgramArguments</key>"
+	i := strings.Index(plist, keyTag)
+	if i < 0 {
+		return nil
+	}
+	rest := plist[i+len(keyTag):]
+
+	arrayStart := strings.Index(rest, "<array")
+	if arrayStart < 0 {
+		return nil
+	}
+	rest = rest[arrayStart:]
+
+	arrayEnd := strings.Index(rest, "</array>")
+	if arrayEnd < 0 {
+		return nil // unterminated / self-closing <array/> — no items
+	}
+	rest = rest[:arrayEnd]
+
+	var items []string
+	for {
+		open := strings.Index(rest, "<string>")
+		if open < 0 {
+			return items
+		}
+		rest = rest[open+len("<string>"):]
+		close := strings.Index(rest, "</string>")
+		if close < 0 {
+			return items
+		}
+		if v := strings.TrimSpace(rest[:close]); v != "" {
+			items = append(items, xmlEntityReplacer.Replace(v))
+		}
+		rest = rest[close+len("</string>"):]
+	}
+}
+
 // scmQueryBinaryPath is the SCM bridge seam. On windows builds
 // service_windows.go replaces it in init(); everywhere else it stays nil so
 // an accidental windows-branch dispatch fails closed instead of panicking.

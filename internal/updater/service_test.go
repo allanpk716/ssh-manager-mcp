@@ -271,7 +271,7 @@ func TestExecStartBinary(t *testing.T) {
 		{name: "privilege prefix +", unit: "ExecStart=+/usr/bin/sshmgr serve", want: "/usr/bin/sshmgr", wantOK: true},
 		{name: "prefix combo !+", unit: "ExecStart=!+/usr/bin/sshmgr serve", want: "/usr/bin/sshmgr", wantOK: true},
 		{name: "indented key", unit: "[Service]\n  ExecStart=/opt/sshmgr serve", want: "/opt/sshmgr", wantOK: true},
-		{name: "full kardianos unit", unit: "[Unit]\nDescription=x\n\n[Service]\nType=simple\nExecStart=/usr/local/bin/sshmgr serve --addr 0.0.0.0:7878\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n", want: "/usr/local/bin/sshmgr", wantOK: true},
+		{name: "full kardianos unit, quoted args (real render shape)", unit: "[Unit]\nDescription=x\n\n[Service]\nType=simple\nExecStart=/usr/local/bin/sshmgr \"serve\" \"--addr\" \"0.0.0.0:7878\"\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n", want: "/usr/local/bin/sshmgr", wantOK: true},
 		{name: "ExecStartPre must not match", unit: "ExecStartPre=/bin/echo hi\nExecStart=/bin/sshmgr\n", want: "/bin/sshmgr", wantOK: true},
 		{name: "commented line ignored", unit: "# ExecStart=/bin/false\nExecStart=/bin/sshmgr\n", want: "/bin/sshmgr", wantOK: true},
 		{name: "no ExecStart", unit: "[Service]\nType=simple\n", want: "", wantOK: false},
@@ -539,4 +539,186 @@ func plistTemplate(bin, firstArg string) string {
 </dict>
 </plist>
 `
+}
+
+// --- RegisteredServeAddr (backlog #17: probe target read back from the
+// registration records instead of a hardcoded default) -----------------------
+
+// TestServeAddrFromArgs pins the --addr extraction forms.
+func TestServeAddrFromArgs(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"space form", []string{"serve", "--addr", "0.0.0.0:9000"}, "0.0.0.0:9000"},
+		{"equals form", []string{"serve", "--addr=10.1.2.3:7878"}, "10.1.2.3:7878"},
+		{"first wins", []string{"--addr", "a:1", "--addr", "b:2"}, "a:1"},
+		{"absent", []string{"serve", "--tls-cert", "x"}, ""},
+		{"dangling", []string{"serve", "--addr"}, ""},
+		{"empty args", nil, ""},
+	}
+	for _, c := range cases {
+		if got := serveAddrFromArgs(c.args); got != c.want {
+			t.Errorf("%s: serveAddrFromArgs(%v) = %q, want %q", c.name, c.args, got, c.want)
+		}
+	}
+}
+
+// TestSplitCommandTokens pins the quote-aware tokenizer (quoting exists for
+// binary paths with spaces — the registrations kardianos writes are plain).
+func TestSplitCommandTokens(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"sshmgr serve --addr 0.0.0.0:7878", []string{"sshmgr", "serve", "--addr", "0.0.0.0:7878"}},
+		{`"C:\Tools With Spaces\sshmgr.exe" serve --addr=:9`, []string{`C:\Tools With Spaces\sshmgr.exe`, "serve", "--addr=:9"}},
+		{`  spaced   out  `, []string{"spaced", "out"}},
+		{`'single quoted arg' tail`, []string{"single quoted arg", "tail"}},
+		{`"unterminated`, []string{"unterminated"}},
+		{"", nil},
+	}
+	for _, c := range cases {
+		got := splitCommandTokens(c.in)
+		if len(got) != len(c.want) {
+			t.Errorf("splitCommandTokens(%q) = %v, want %v", c.in, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("splitCommandTokens(%q)[%d] = %q, want %q", c.in, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
+// TestRegisteredServeAddrWindowsSeam: the windows branch reads the RAW
+// command line through the scmQueryCommand seam and extracts --addr.
+func TestRegisteredServeAddrWindowsSeam(t *testing.T) {
+	t.Cleanup(setGOOS(t, "windows"))
+	orig := scmQueryCommand
+	t.Cleanup(func() { scmQueryCommand = orig })
+
+	scmQueryCommand = func(string) (string, error) {
+		return `"C:\Tools\sshmgr.exe" serve --addr 0.0.0.0:9000`, nil
+	}
+	got, err := RegisteredServeAddr(buildinfo.ServeServiceName)
+	if err != nil || got != "0.0.0.0:9000" {
+		t.Fatalf("got (%q, %v), want (0.0.0.0:9000, nil)", got, err)
+	}
+
+	scmQueryCommand = func(string) (string, error) {
+		return `C:\sshmgr.exe serve`, nil // no --addr registered
+	}
+	if got, err := RegisteredServeAddr(buildinfo.ServeServiceName); err != nil || got != "" {
+		t.Fatalf("no-addr case: got (%q, %v), want (\"\", nil)", got, err)
+	}
+
+	// seam unwired (non-windows builds) → fail-closed error, not a panic or
+	// a silent empty addr (mirrors RegisteredBinaryPath's nil-seam case).
+	scmQueryCommand = nil
+	if _, err := RegisteredServeAddr(buildinfo.ServeServiceName); err == nil {
+		t.Fatal("unwired scmQueryCommand must fail closed")
+	}
+}
+
+// TestRegisteredServeAddrSystemd: the linux branch reads the unit file the
+// same way systemdRegisteredBinaryPath does (systemdUnitDir seam → temp dir).
+func TestRegisteredServeAddrSystemd(t *testing.T) {
+	t.Cleanup(setGOOS(t, "linux"))
+	origDir := systemdUnitDir
+	t.Cleanup(func() { systemdUnitDir = origDir })
+	systemdUnitDir = t.TempDir()
+
+	unit := "[Service]\nExecStart=/usr/local/bin/sshmgr serve --addr 192.168.1.10:7878\n"
+	if err := os.WriteFile(filepath.Join(systemdUnitDir, buildinfo.ServeServiceName+".service"), []byte(unit), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := RegisteredServeAddr(buildinfo.ServeServiceName)
+	if err != nil || got != "192.168.1.10:7878" {
+		t.Fatalf("got (%q, %v), want (192.168.1.10:7878, nil)", got, err)
+	}
+
+	// kardianos's REAL render shape quotes every argument separately
+	// (service_systemd_linux.go: `{{Path | cmdEscape}}{{range Arguments}} {{. | cmd}}{{end}}`)
+	// — pin it, or a future tokenizer that only strips quotes off the first
+	// token would pass the unquoted fixtures while production breaks (review M2).
+	unit = "[Service]\nExecStart=/usr/local/bin/sshmgr \"serve\" \"--addr\" \"0.0.0.0:9000\"\n"
+	if err := os.WriteFile(filepath.Join(systemdUnitDir, buildinfo.ServeServiceName+".service"), []byte(unit), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := RegisteredServeAddr(buildinfo.ServeServiceName); err != nil || got != "0.0.0.0:9000" {
+		t.Fatalf("kardianos quoted-args case: got (%q, %v), want (0.0.0.0:9000, nil)", got, err)
+	}
+
+	// exec-prefix modifiers on the binary token must not eat the args.
+	unit = "[Service]\nExecStart=+/usr/local/bin/sshmgr serve --addr=:9\n"
+	if err := os.WriteFile(filepath.Join(systemdUnitDir, buildinfo.ServeServiceName+".service"), []byte(unit), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := RegisteredServeAddr(buildinfo.ServeServiceName); err != nil || got != ":9" {
+		t.Fatalf("modifier case: got (%q, %v), want (:9, nil)", got, err)
+	}
+
+	// No ExecStart at all → error (caller falls back to its default).
+	if err := os.WriteFile(filepath.Join(systemdUnitDir, buildinfo.ServeServiceName+".service"), []byte("[Service]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RegisteredServeAddr(buildinfo.ServeServiceName); err == nil {
+		t.Fatal("unit without ExecStart must error")
+	}
+}
+
+// TestRegisteredServeAddrLaunchd: the darwin branch reads the plist's full
+// ProgramArguments array (launchdPlistDir seam → temp dir).
+func TestRegisteredServeAddrLaunchd(t *testing.T) {
+	t.Cleanup(setGOOS(t, "darwin"))
+	origDir := launchdPlistDir
+	t.Cleanup(func() { launchdPlistDir = origDir })
+	launchdPlistDir = t.TempDir()
+
+	plist := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>` + buildinfo.ServeServiceName + `</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/sshmgr</string>
+		<string>serve</string>
+		<string>--addr</string>
+		<string>10.1.2.3:7878</string>
+	</array>
+	<key>LaterKey</key>
+	<string>--addr</string>
+	<string>SHOULD-NOT-LEAK</string>
+</dict>
+</plist>
+`
+	if err := os.WriteFile(filepath.Join(launchdPlistDir, buildinfo.ServeServiceName+".plist"), []byte(plist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := RegisteredServeAddr(buildinfo.ServeServiceName)
+	if err != nil || got != "10.1.2.3:7878" {
+		t.Fatalf("got (%q, %v), want (10.1.2.3:7878, nil)", got, err)
+	}
+
+	// Missing ProgramArguments → error at the wrapper level too (an empty
+	// read must not masquerade as "registered without --addr").
+	noArgs := `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>` + buildinfo.ServeServiceName + `</string>
+</dict>
+</plist>
+`
+	if err := os.WriteFile(filepath.Join(launchdPlistDir, buildinfo.ServeServiceName+".plist"), []byte(noArgs), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RegisteredServeAddr(buildinfo.ServeServiceName); err == nil {
+		t.Fatal("plist without ProgramArguments must error")
+	}
 }
