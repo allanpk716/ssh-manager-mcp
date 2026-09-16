@@ -225,7 +225,7 @@ func TestServersWarnViewSurvivesRefetch(t *testing.T) {
 	}
 	m, _ := a.Update(tea.KeyPressMsg{Code: '!', Text: "!"})
 	got := m.(App)
-	got.refetchPages()
+	got = driveRefetch(got)
 	sp, _ := got.pages[pageServers].(*serversPage)
 	if !sp.warnOnly {
 		t.Fatal("refetchPages dropped the warnOnly filter")
@@ -300,7 +300,7 @@ func TestApp_ColumnsFitTerminalWidth(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a.refetchPages()
+	a = driveRefetch(a)
 	m2, _ := a.Update(tea.WindowSizeMsg{Width: 60})
 	if m2.(App).width != 60 {
 		t.Fatalf("WindowSizeMsg must be captured, width = %d", m2.(App).width)
@@ -338,7 +338,7 @@ func TestServersPage_DesktopRender(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a.refetchPages()
+	a = driveRefetch(a)
 	m, _ := a.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
 	v := m.(App).View().Content
 	for i, line := range strings.Split(v, "\n") {
@@ -369,7 +369,7 @@ func TestServersPage_ListFilterFlow(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a.refetchPages()
+	a = driveRefetch(a)
 	// the desktop panel path needs the terminal size; without it the App
 	// falls back to the plain columns layout where the list filter is moot.
 	// App.Update has a VALUE receiver — keep the returned model.
@@ -459,7 +459,7 @@ func TestAllPages_PanelFit(t *testing.T) {
 	if _, _, err := a.st.AddCacheToken("laptop", pid); err != nil {
 		t.Fatal(err)
 	}
-	a.refetchPages()
+	a = driveRefetch(a)
 	m, _ := a.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
 	app := m.(App)
 	for pi := 0; pi < int(pageCount); pi++ {
@@ -498,7 +498,7 @@ func TestApp_TabSwitchRefetchesPages(t *testing.T) {
 	}
 	// Rebuild pages so the App's snapshot CONTAINS the token but with zero
 	// last_pull — then perform the external write (what serve does on a pull).
-	a.refetchPages()
+	a = driveRefetch(a)
 	cp0, _ := a.pages[pageTokens].(*cacheTokensPage)
 	if len(cp0.items) != 1 || !cp0.items[0].LastPullAt.IsZero() {
 		t.Fatalf("premise: page snapshot must predate the pull, got %+v", cp0.items)
@@ -508,14 +508,78 @@ func TestApp_TabSwitchRefetchesPages(t *testing.T) {
 	}
 	// Tab onto the 设备码 page → the externally-written pull time is visible.
 	a.page = pageProjects // one Tab away from pageTokens
-	m, _ := a.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, cmd := a.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	am := m.(App)
 	if am.page != pageTokens {
 		t.Fatalf("Tab must land on the tokens page, got %v", am.page)
 	}
-	cp, _ := am.pages[pageTokens].(*cacheTokensPage)
+	if cmd == nil {
+		t.Fatal("Tab must refetch via a Cmd (async, off the event loop), got nil")
+	}
+	// Async contract: the previous snapshot renders until pagesMsg lands —
+	// then the externally-written pull time is visible.
+	m2, _ := am.Update(cmd())
+	cp, _ := m2.(App).pages[pageTokens].(*cacheTokensPage)
 	if len(cp.items) != 1 || cp.items[0].LastPullAt.IsZero() {
-		t.Fatalf("Tab switch must re-read pages (external last_pull must be visible), got %+v", cp.items)
+		t.Fatalf("pagesMsg must re-read pages (external last_pull must be visible), got %+v", cp.items)
+	}
+}
+
+// driveRefetch runs one async refetch to completion the way the event loop
+// would: fire the Cmd, feed its pagesMsg back through Update.
+func driveRefetch(a App) App {
+	m, _ := a.Update(a.refetchCmd()())
+	return m.(App)
+}
+
+// TestRefetchKeepsFilterAndCursor (backlog Plan 39 code-review residual): a
+// refresh used to drop every page's `/` filter and reset the cursor — the
+// operator lost their place on each Tab switch. The nav graft
+// (captureNav/restoreNav) keeps both.
+func TestRefetchKeepsFilterAndCursor(t *testing.T) {
+	a := newTestApp(t)
+	for _, name := range []string{"alpha", "aloe", "beta"} {
+		if _, err := a.st.AddProfile(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a = driveRefetch(a)
+	pp, _ := a.pages[pageProfiles].(*profilesPage)
+	pp.applyFilter("al") // matches alpha + aloe
+	if got := pp.visibleCount(); got != 2 {
+		t.Fatalf("premise: filter 'al' must show 2 rows, got %d", got)
+	}
+	pp.Select(1) // cursor on aloe
+	got := driveRefetch(a)
+	pp2, _ := got.pages[pageProfiles].(*profilesPage)
+	if ft := pp2.filterText(); ft != "al" {
+		t.Fatalf("filter must survive the refetch, got %q", ft)
+	}
+	if n := pp2.visibleCount(); n != 2 {
+		t.Fatalf("filtered view must survive the refetch, got %d rows", n)
+	}
+	if c := pp2.Cursor(); c != 1 {
+		t.Fatalf("cursor must survive the refetch, got %d", c)
+	}
+}
+
+// TestRefetchErrorSurfaces (backlog Plan 39 code-review residual): a failed
+// refetch used to be swallowed — the console silently re-rendered the stale
+// pages as if they were fresh. The error must reach the status line (and the
+// old page snapshot stays rendered).
+func TestRefetchErrorSurfaces(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m, cmd := a.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m2, _ := m.(App).Update(cmd())
+	got := m2.(App)
+	if got.err == nil {
+		t.Fatal("a failed refetch must surface its error (was swallowed)")
+	}
+	if got.pages[pageServers] == nil {
+		t.Fatal("the previous page snapshot must stay rendered on failure")
 	}
 }
 

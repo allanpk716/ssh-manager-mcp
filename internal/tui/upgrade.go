@@ -183,21 +183,22 @@ func (a App) issueDeviceCode() tea.Cmd {
 func (a App) upgradeComplete() (tea.Model, tea.Cmd) {
 	installErr := a.upg.installErr
 	a.upg, a.overlay = nil, nil
-	// refetchPages (not raw FetchAll) so the minted device code lands AND the
-	// servers page's `!` filter + ⚠ sort survive the segment end — same
-	// contract as actionDoneMsg / tokenIssuedMsg.
-	a.refetchPages()
+	// refetchCmd (not raw FetchAll) so the minted device code lands AND the
+	// nav snapshot (per-page filter/cursor + the servers page's `!` view)
+	// survives the segment end — same contract as actionDoneMsg /
+	// tokenIssuedMsg.
+	refetch := a.refetchCmd()
 	if installErr != nil {
 		a.err = nil
 		a.status = "serve 安装失败 —— 按结果屏的手动命令安装后，再次按 u 完成升级（角色保持单机）"
-		return a, nil
+		return a, refetch
 	}
 	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
 		a.err, a.status = err, ""
-		return a, nil // stays standalone: [u] retries the whole segment
+		return a, refetch // stays standalone: [u] retries the whole segment
 	}
 	a.role = roles.RoleServer // footer drops [u]
 	a.err = nil
 	a.status = "已升级为 server"
-	return a, nil
+	return a, refetch
 }
