@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,11 +49,30 @@ import (
 	"ssh-manager-mcp/internal/updater"
 )
 
-// defaultProbeAddr is the health-probe target for the post-restart check
-// (serve install's default --addr; a serve bound to 0.0.0.0 answers on
-// loopback too). A serve installed on a non-default addr yields an honest
-// "not responding" line with a hint — the probe is evidence, not a verdict.
+// defaultProbeAddr is the health-probe FALLBACK target for the post-restart
+// check — used only when the serve registration's --addr could not be read
+// back (updater.RegisteredServeAddr is the primary source; a serve bound to
+// 0.0.0.0 answers on loopback too). The probe is evidence, not a verdict.
 const defaultProbeAddr = "127.0.0.1:7878"
+
+// loopbackProbeAddr rewrites a registered bind host that cannot be dialed
+// from this machine ("0.0.0.0", "::", or empty) to loopback, keeping the
+// port — a wildcard bind answers on 127.0.0.1 too. A concrete host (e.g.
+// the authoritative broker's LAN address) is returned as-is: dialing the
+// real registered address is the honest probe. An unparsable value is
+// returned unchanged — the probe then reports not-responding, which is the
+// correct evidence for a broken registration.
+func loopbackProbeAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+	return addr
+}
 
 // updateBaseEnv is the env seam name (spec §4.6). Referenced (not re-parsed)
 // to decide the prominence marker: a value explicitly set in the environment
@@ -69,6 +89,7 @@ var shaHexRe = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 var (
 	probeService         = updater.ProbeService
 	registeredBinaryPath = updater.RegisteredBinaryPath
+	registeredServeAddr  = updater.RegisteredServeAddr
 	detectHeal           = updater.DetectHeal
 	serveHTTPProbe       = probeServeHTTP
 
@@ -515,11 +536,22 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 		return restartPending(out, rerr)
 	}
 	fmt.Fprintf(out, "重启: OK (%s)\n", buildinfo.ServeServiceName)
-	healthy := serveHTTPProbe(defaultProbeAddr)
+	// --- post-restart health probe ---------------------------------------
+	// Target: the --addr the service was REGISTERED with (read back from the
+	// same per-platform records the binary-path pre-check uses — backlog #17:
+	// a probe hardcoded to the default addr misreported "not responding" on
+	// every non-default install). Wildcard binds probe on loopback. A read
+	// failure or a missing --addr falls back to the install default — the
+	// probe is evidence, not a verdict.
+	probeTarget := defaultProbeAddr
+	if addr, aerr := registeredServeAddr(buildinfo.ServeServiceName); aerr == nil && addr != "" {
+		probeTarget = loopbackProbeAddr(addr)
+	}
+	healthy := serveHTTPProbe(probeTarget)
 	if healthy {
-		fmt.Fprintf(out, "健康回探(%s): responding — 服务已回活\n", defaultProbeAddr)
+		fmt.Fprintf(out, "健康回探(%s): responding — 服务已回活\n", probeTarget)
 	} else {
-		fmt.Fprintf(out, "健康回探(%s): not responding(若 serve 使用非默认 --addr,此探测可能误报;可稍后用 serve status 复核)\n", defaultProbeAddr)
+		fmt.Fprintf(out, "健康回探(%s): not responding(刚重启时 TLS 监听可能需要一两秒;可稍后用 serve status 复核)\n", probeTarget)
 	}
 	return nil
 }

@@ -14,16 +14,19 @@ import (
 )
 
 func init() {
-	// Wire the windows-only SCM implementation into the platform seam that
-	// service.go's RegisteredBinaryPath dispatches to.
+	// Wire the windows-only SCM implementations into the platform seams that
+	// service.go dispatches to: the binary-only path (update pre-check) and
+	// the raw command line (RegisteredServeAddr arg extraction).
 	scmQueryBinaryPath = windowsRegisteredBinaryPath
+	scmQueryCommand = windowsQueryCommand
 }
 
-// windowsRegisteredBinaryPath opens the service with SERVICE_QUERY_CONFIG
-// (read-only, no elevation required) and returns the executable path parsed
-// out of lpBinaryPathName. Arguments the service was installed with (e.g.
-// `serve --addr 0.0.0.0:7878`) are stripped by parseWindowsBinaryPath.
-func windowsRegisteredBinaryPath(name string) (string, error) {
+// windowsQueryCommand opens the service with SERVICE_QUERY_CONFIG (read-only,
+// no elevation required) and returns the RAW lpBinaryPathName — the full
+// registered command line (`"C:\path\sshmgr.exe" serve --addr 0.0.0.0:7878`),
+// args intact. Callers strip or parse per need (parseWindowsBinaryPath for
+// the exe, splitCommandTokens for the args).
+func windowsQueryCommand(name string) (string, error) {
 	mgr, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
 		return "", fmt.Errorf("open service control manager: %w", err)
@@ -56,7 +59,17 @@ func windowsRegisteredBinaryPath(name string) (string, error) {
 		return "", fmt.Errorf("query service config for service %q: %w", name, err)
 	}
 
-	exe := parseWindowsBinaryPath(windows.UTF16PtrToString(cfg.BinaryPathName))
+	return windows.UTF16PtrToString(cfg.BinaryPathName), nil
+}
+
+// windowsRegisteredBinaryPath returns the executable path parsed out of the
+// raw registered command line (args stripped by parseWindowsBinaryPath).
+func windowsRegisteredBinaryPath(name string) (string, error) {
+	raw, err := windowsQueryCommand(name)
+	if err != nil {
+		return "", err
+	}
+	exe := parseWindowsBinaryPath(raw)
 	if exe == "" {
 		return "", fmt.Errorf("service %q reports an empty BinaryPathName", name)
 	}
