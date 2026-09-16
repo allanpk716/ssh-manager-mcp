@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 
-	"ssh-manager-mcp/internal/conformance"
+	"ssh-manager-mcp/internal/knownhosts"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
@@ -491,7 +491,7 @@ func readKeyscan(path, host string, port int) (*keyscanMatch, error) {
 			m.skipHashed++
 			continue
 		}
-		patterns, _, key, err := conformance.ParseKnownHostsLine(line)
+		patterns, _, key, err := knownhosts.ParseKnownHostsLine(line)
 		if err != nil {
 			return nil, fmt.Errorf("malformed known_hosts line in %s: %v", path, err)
 		}

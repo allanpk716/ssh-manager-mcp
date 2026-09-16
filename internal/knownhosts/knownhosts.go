@@ -1,4 +1,10 @@
-package conformance
+// Package knownhosts parses and renders OpenSSH known_hosts lines. It exists
+// as a neutral, testing-free package because production code depends on it
+// (the servers pin-hostkey --from-keyscan path): these functions used to live
+// in internal/conformance, whose docker/ssh helpers import "testing" — and a
+// single production import dragged the testing package into the sshmgr
+// binary (size + hygiene debt, Plan 48 final-review residual).
+package knownhosts
 
 import (
 	"encoding/base64"

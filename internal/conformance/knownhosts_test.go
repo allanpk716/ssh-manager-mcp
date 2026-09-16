@@ -9,11 +9,14 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/ssh"
+
+	"ssh-manager-mcp/internal/knownhosts"
 )
 
-// TestKnownHostsRoundtrip proves we parse and re-render an OpenSSH known_hosts
-// line without loss, and that the real ssh-keygen can FIND an entry we wrote
-// (true format compatibility, §13.3). The broker never touches ~/.ssh at
+// TestKnownHostsRoundtrip proves the real ssh-keygen can FIND an entry the
+// knownhosts package rendered (true format compatibility, §13.3). The pure
+// format→parse roundtrip is covered UNGATED in internal/knownhosts; what
+// stays here is the cross-binary proof. The broker never touches ~/.ssh at
 // runtime — this is a parse/serialize compat proof using a throwaway file.
 func TestKnownHostsRoundtrip(t *testing.T) {
 	requireConformance(t)
@@ -24,18 +27,7 @@ func TestKnownHostsRoundtrip(t *testing.T) {
 	patterns := "[example.com]:2222"
 	_, key := parsePubLine(t, pub)
 
-	// Roundtrip: format → parse must preserve patterns, type, and key bytes.
-	formatted := FormatKnownHostsLine(patterns, key)
-	gotPatterns, gotType, gotKey, err := ParseKnownHostsLine(formatted)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if gotPatterns != patterns || gotType != key.Type() {
-		t.Fatalf("roundtrip lost data: patterns=%q type=%q", gotPatterns, gotType)
-	}
-	if string(gotKey.Marshal()) != string(key.Marshal()) {
-		t.Fatal("roundtrip lost key bytes")
-	}
+	formatted := knownhosts.FormatKnownHostsLine(patterns, key)
 
 	// Cross-check: write our line into a throwaway known_hosts and have the
 	// real ssh-keygen -F find it. Proves the rendered line is genuinely
