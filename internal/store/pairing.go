@@ -448,12 +448,8 @@ func (s *Store) MintPairingCredentials(tx *sql.Tx, name, profile string, replace
 	if profile == "" {
 		return "", "", errors.New("pairing mint: empty profile")
 	}
-	var n int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM profiles WHERE id=?`, profile).Scan(&n); err != nil {
+	if err := requireProfile(tx, profile); err != nil {
 		return "", "", err
-	}
-	if n == 0 {
-		return "", "", fmt.Errorf("profile %q not found", profile)
 	}
 	ts := s.nowTime()
 

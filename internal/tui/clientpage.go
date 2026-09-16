@@ -450,7 +450,7 @@ func (m clientModel) current() *store.SnapshotServer {
 // fingerprint prefix, bound profile (ONLY when the pull recorded the Plan-39
 // scope header — a legacy single-profile whole-vault snapshot is
 // shape-identical, code-review #3), snapshot server count, cache age.
-func clientHeader(cred *clientops.CacheCred, snap *store.Snapshot, scoped bool, nServers int, age time.Duration) string {
+func clientHeader(cred *clientops.CacheCred, snap *store.Snapshot, scoped bool, age time.Duration) string {
 	host, pin := "-", "-"
 	if cred != nil {
 		if u, err := url.Parse(cred.URL); err == nil && u.Host != "" {
@@ -463,6 +463,10 @@ func clientHeader(cred *clientops.CacheCred, snap *store.Snapshot, scoped bool, 
 	profile := ""
 	if scoped && snap != nil && len(snap.Profiles) == 1 {
 		profile = " · profile " + snap.Profiles[0].Name
+	}
+	nServers := 0
+	if snap != nil { // nil-safe: the empty panel (pre-pairing) renders "0 服务器"
+		nServers = len(snap.Servers)
 	}
 	return fmt.Sprintf("连接 %s · pin %s%s · %d 服务器 · 缓存于 %s 前", host, pin, profile, nServers, age.Round(time.Minute))
 }
@@ -529,11 +533,7 @@ func (m clientModel) View() tea.View {
 		}
 		b.WriteString(warnStyle.Render(guide) + "\n")
 	}
-	n := 0
-	if m.snap != nil {
-		n = len(m.snap.Servers)
-	}
-	b.WriteString(clientHeader(m.cred, m.snap, m.scoped, n, m.cacheAge) + "\n")
+	b.WriteString(clientHeader(m.cred, m.snap, m.scoped, m.cacheAge) + "\n")
 	if m.width > 0 {
 		// desktop panels (2026-08-17): list + detail fitted to the terminal;
 		// body height = frame minus header/banner/status/footer rows.

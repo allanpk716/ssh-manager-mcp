@@ -27,50 +27,42 @@ func newCacheTokensPage(items []*models.CacheToken, profileNames map[string]stri
 	return p
 }
 
-// profileLabel renders a token's binding for display ("-" = unbound legacy).
-func (p *cacheTokensPage) profileLabel(ct *models.CacheToken) string {
-	if ct.ProfileID == "" {
+// profileBindingLabel renders a device code's binding for display: "-" =
+// unbound legacy code, "?" = bound to a profile this page build didn't see
+// (deleted race). Single helper for both the page detail and the list rows.
+func profileBindingLabel(profileID string, names map[string]string) string {
+	if profileID == "" {
 		return "-"
 	}
-	if n, ok := p.profileNames[ct.ProfileID]; ok {
+	if n, ok := names[profileID]; ok {
 		return n
 	}
-	return "?" // bound to a profile this page build didn't see (deleted race)
+	return "?"
 }
 
 // cacheTokenItem adapts a device code to the list panel: name, then status +
-// bound profile + last pull.
+// bound profile + last pull. profile carries the binding label precomputed at
+// syncList time (the item does not re-walk the names map).
 type cacheTokenItem struct {
-	ct    *models.CacheToken
-	names map[string]string // profileID → name (binding display)
+	ct      *models.CacheToken
+	profile string // rendered binding label ("-" / "?" / profile name)
 }
 
 func (i cacheTokenItem) FilterValue() string { return i.ct.Name }
 func (i cacheTokenItem) Title() string       { return i.ct.Name }
-
-// profileLabel renders the item's binding ("-" = unbound legacy code).
-func (i cacheTokenItem) profileLabel() string {
-	if i.ct.ProfileID == "" {
-		return "-"
-	}
-	if n, ok := i.names[i.ct.ProfileID]; ok {
-		return n
-	}
-	return "?" // bound to a profile this page build didn't see (deleted race)
-}
 
 func (i cacheTokenItem) Description() string {
 	lastPull := "-"
 	if !i.ct.LastPullAt.IsZero() {
 		lastPull = i.ct.LastPullAt.Format("2006-01-02 15:04")
 	}
-	return fmt.Sprintf("%s · profile %s · 最近拉取 %s", i.ct.Status, i.profileLabel(), lastPull)
+	return fmt.Sprintf("%s · profile %s · 最近拉取 %s", i.ct.Status, i.profile, lastPull)
 }
 
 func (p *cacheTokensPage) syncList() {
 	items := make([]list.Item, len(p.items))
 	for i, ct := range p.items {
-		items[i] = cacheTokenItem{ct: ct, names: p.profileNames}
+		items[i] = cacheTokenItem{ct: ct, profile: profileBindingLabel(ct.ProfileID, p.profileNames)}
 	}
 	p.setListItems(items, len(items))
 }
@@ -93,7 +85,7 @@ func (p *cacheTokensPage) Detail() string {
 		lastPull = ct.LastPullAt.Format("2006-01-02 15:04")
 	}
 	return fmt.Sprintf("名称    %s\nID      %s\nToken   %s…\n状态    %s\nProfile %s\n最近拉取 %s\n创建    %s\n更新    %s",
-		ct.Name, ct.ID, ct.TokenPrefix, ct.Status, p.profileLabel(ct), lastPull,
+		ct.Name, ct.ID, ct.TokenPrefix, ct.Status, profileBindingLabel(ct.ProfileID, p.profileNames), lastPull,
 		ct.CreatedAt.Format("2006-01-02 15:04"), ct.UpdatedAt.Format("2006-01-02 15:04"))
 }
 

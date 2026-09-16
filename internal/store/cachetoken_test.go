@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/testschema"
 )
 
 func TestAddCacheToken_ReturnsOneTimePlaintext(t *testing.T) {
@@ -368,7 +369,7 @@ func TestMigrateLegacyCacheTokens_Unbound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(oldShapeCacheTokens); err != nil { // pre-Plan-39 shape
+	if _, err := db.Exec(testschema.OldShapeCacheTokens); err != nil { // pre-Plan-39 shape
 		t.Fatal(err)
 	}
 	// A token row with a verifiable shape: hash/salt/prefix stand-ins (the plaintext
@@ -403,20 +404,6 @@ func TestMigrateLegacyCacheTokens_Unbound(t *testing.T) {
 		t.Fatalf("legacy row must read back unbound, got %+v", out)
 	}
 }
-
-// oldShapeCacheTokens is the pre-Plan-39 cache_tokens schema (no profile_id).
-const oldShapeCacheTokens = `
-CREATE TABLE cache_tokens (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
-  token_hash BLOB NOT NULL,
-  token_salt BLOB NOT NULL,
-  token_prefix TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active',
-  last_pull_at INTEGER,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);`
 
 // TestRevokedCacheTokenNameByPrefix pins the rev4 §1 reason lookup: a revoked
 // row matching the 8-char plaintext prefix resolves its name (most recent

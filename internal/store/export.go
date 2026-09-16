@@ -271,12 +271,8 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 // Deliberately does NOT share queries with ExportSnapshot: the owner-side
 // export/import backup path stays whole-vault by design and must not drift.
 func (s *Store) ExportSnapshotForProfile(profileID string) (*Snapshot, error) {
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM profiles WHERE id=?`, profileID).Scan(&n); err != nil {
+	if err := requireProfile(s.db, profileID); err != nil {
 		return nil, err
-	}
-	if n == 0 {
-		return nil, fmt.Errorf("profile %q not found", profileID)
 	}
 
 	snap := &Snapshot{Version: 1}

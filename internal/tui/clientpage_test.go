@@ -14,7 +14,15 @@ import (
 )
 
 func TestClientHeader(t *testing.T) {
-	h := clientHeader(&clientops.CacheCred{URL: "https://192.0.2.5:7878", Pin: "sha256:" + strings.Repeat("a", 64)}, nil, false, 3, 2*time.Minute)
+	cred := &clientops.CacheCred{URL: "https://192.0.2.5:7878", Pin: "sha256:" + strings.Repeat("a", 64)}
+	// Server count is computed from the snapshot itself (the parameter was
+	// always len(snap.Servers)); nil snap must render 0 without panicking —
+	// the pre-pairing empty panel.
+	if h := clientHeader(cred, nil, false, 2*time.Minute); !strings.Contains(h, "0 服务器") {
+		t.Fatalf("nil snapshot must render 0 servers: %s", h)
+	}
+	three := &store.Snapshot{Servers: []store.SnapshotServer{{}, {}, {}}}
+	h := clientHeader(cred, three, false, 2*time.Minute)
 	for _, want := range []string{"192.0.2.5", "sha256", "3 服务器", "2m"} {
 		if !strings.Contains(h, want) {
 			t.Fatalf("header missing %q:\n%s", want, h)
@@ -31,18 +39,18 @@ func TestClientHeader(t *testing.T) {
 func TestClientHeaderShowsProfile(t *testing.T) {
 	cred := &clientops.CacheCred{URL: "https://192.0.2.5:7878", Pin: "sha256:" + strings.Repeat("a", 64)}
 	scoped := &store.Snapshot{Profiles: []store.SnapshotProfile{{Name: "e2e-profile"}}}
-	if h := clientHeader(cred, scoped, true, 10, time.Minute); !strings.Contains(h, "profile e2e-profile") {
+	if h := clientHeader(cred, scoped, true, time.Minute); !strings.Contains(h, "profile e2e-profile") {
 		t.Fatalf("scoped header must show the bound profile: %s", h)
 	}
 	// THE FIX: same single-profile snapshot, but pulled pre-Plan-39 (scoped=false) — no segment.
-	if h := clientHeader(cred, scoped, false, 10, time.Minute); strings.Contains(h, "profile") {
+	if h := clientHeader(cred, scoped, false, time.Minute); strings.Contains(h, "profile") {
 		t.Fatalf("unverified (legacy) cache must NOT show the profile segment: %s", h)
 	}
-	if h := clientHeader(cred, nil, true, 10, time.Minute); strings.Contains(h, "profile") {
+	if h := clientHeader(cred, nil, true, time.Minute); strings.Contains(h, "profile") {
 		t.Fatalf("no-profile snapshot must omit the segment: %s", h)
 	}
 	multi := &store.Snapshot{Profiles: []store.SnapshotProfile{{Name: "a"}, {Name: "b"}}}
-	if h := clientHeader(cred, multi, true, 10, time.Minute); strings.Contains(h, "profile") {
+	if h := clientHeader(cred, multi, true, time.Minute); strings.Contains(h, "profile") {
 		t.Fatalf("multi-profile (legacy whole-vault) must omit the segment: %s", h)
 	}
 }

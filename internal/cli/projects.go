@@ -234,18 +234,24 @@ func projectsStatusCmd(use, short string, status models.ProjectStatus, action st
 	}
 }
 
-// profileIDByName resolves a profile name to its id.
+// profileIDByName maps a profile NAME to its id — the owner-facing flag is a
+// name (profiles ls shows names); the store binds by id. Empty result errors
+// with the list of known names so a typo is immediately self-correcting.
 func profileIDByName(s *store.Store, name string) (string, error) {
-	profs, err := s.ListProfiles()
+	profiles, err := s.ListProfiles()
 	if err != nil {
 		return "", err
 	}
-	for _, p := range profs {
+	for _, p := range profiles {
 		if p.Name == name {
 			return p.ID, nil
 		}
 	}
-	return "", fmt.Errorf("profile %q not found", name)
+	known := make([]string, 0, len(profiles))
+	for _, p := range profiles {
+		known = append(known, p.Name)
+	}
+	return "", fmt.Errorf("profile %q not found (known: %v)", name, known)
 }
 
 // profileNameMap returns profileID→name for readable ls/show output.
@@ -259,6 +265,19 @@ func profileNameMap(s *store.Store) (map[string]string, error) {
 		out[p.ID] = p.Name
 	}
 	return out, nil
+}
+
+// profileNameFromMap renders a row's profile binding from a single-query
+// profileNameMap: "-" = unbound legacy device code, "?" = bound to a profile
+// deleted since the map was built (display-only race).
+func profileNameFromMap(pname map[string]string, id string) string {
+	if id == "" {
+		return "-"
+	}
+	if n, ok := pname[id]; ok {
+		return n
+	}
+	return "?"
 }
 
 // printToken emits the one-time token + .mcp.json snippet (shared by add and rotate).

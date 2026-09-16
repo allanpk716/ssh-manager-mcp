@@ -13,6 +13,7 @@ import (
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testschema"
 )
 
 // newSnapshotRunner stands up a ServeRunner over a seeded store + a live httptest server.
@@ -157,10 +158,7 @@ func TestSnapshot_UnboundToken403Not401(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`CREATE TABLE cache_tokens (
-		id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, token_hash BLOB NOT NULL,
-		token_salt BLOB NOT NULL, token_prefix TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
-		last_pull_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`); err != nil {
+	if _, err := db.Exec(testschema.OldShapeCacheTokens); err != nil {
 		t.Fatal(err)
 	}
 	tok, err := store.GenerateToken()

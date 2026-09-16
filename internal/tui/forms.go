@@ -164,6 +164,15 @@ func projectProfileOptions(profiles []*models.Profile) []huh.Option[string] {
 	return opts
 }
 
+// errNoProfiles is the shared zero-profile guidance for every flow that must
+// bind a profile (issue a device code / approve a pairing / upgrade
+// enrollment): there is nothing to bind, so the flow aborts loudly instead of
+// opening a form whose code would be refused at first pull. next names the
+// flow's own resumption step (e.g. "来签发设备码").
+func errNoProfiles(next string) error {
+	return fmt.Errorf("无 profile 可绑定——先在 Profiles 页创建 profile 并授权服务器，再%s", next)
+}
+
 // newProjectForm: name + profile select for creating an agent project.
 func newProjectForm(d *projectDraft, profiles []*models.Profile) *huh.Form {
 	return huh.NewForm(huh.NewGroup(

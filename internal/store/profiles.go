@@ -57,6 +57,22 @@ func (s *Store) GetProfile(id string) (*models.Profile, error) {
 	return &p, nil
 }
 
+// requireProfile is the shared existence precheck for every mutation path that
+// binds a profile: issuing a device code, repair-binding one, and the
+// per-profile snapshot export. q takes *sql.DB or *sql.Tx (the dbtx surface in
+// tx.go) so the check runs in the caller's context — addCacheTokenTx validates
+// INSIDE its single transaction, never against the pool under it.
+func requireProfile(q dbtx, profileID string) error {
+	var n int
+	if err := q.QueryRow(`SELECT COUNT(*) FROM profiles WHERE id=?`, profileID).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("profile %q not found", profileID)
+	}
+	return nil
+}
+
 func (s *Store) ListProfiles() ([]*models.Profile, error) {
 	rows, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles ORDER BY name`)
 	if err != nil {
