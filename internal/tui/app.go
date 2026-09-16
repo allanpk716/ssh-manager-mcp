@@ -423,7 +423,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return a, nil
 					}
 					if len(profiles) == 0 {
-						a.err, a.status = fmt.Errorf("无 profile 可绑定——先在 Profiles 页创建 profile 并授权服务器，再来签发设备码"), ""
+						a.err, a.status = errNoProfiles("来签发设备码"), ""
 						return a, nil
 					}
 					d := &deviceDraft{}
@@ -470,7 +470,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "a": // 批准:huh 表单选 profile;foreign 行需键入 OVERRIDE
 					if cur := pp.current(); cur != nil {
 						if len(pp.profiles) == 0 {
-							a.err, a.status = fmt.Errorf("无 profile 可绑定——先在 Profiles 页创建 profile 并授权服务器,再来批准配对"), ""
+							a.err, a.status = errNoProfiles("来批准配对"), ""
 							return a, nil
 						}
 						ap := &pairingApproval{ProfileID: pp.defaultProfileID}

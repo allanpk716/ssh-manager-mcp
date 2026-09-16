@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testschema"
 )
 
 func TestCacheTokens_AddLsRevoke(t *testing.T) {
@@ -237,7 +238,7 @@ func TestCacheTokensBind(t *testing.T) {
 	}
 	for _, ddl := range []string{
 		`CREATE TABLE profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
-		`CREATE TABLE cache_tokens (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, token_hash BLOB NOT NULL, token_salt BLOB NOT NULL, token_prefix TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', last_pull_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+		testschema.OldShapeCacheTokens,
 		`INSERT INTO profiles VALUES ('p1','team-a',1,1)`,
 		`INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,last_pull_at,created_at,updated_at) VALUES ('ct1','laptop-legacy',x'00',x'00','legacyXXX','active',NULL,1,1)`,
 	} {

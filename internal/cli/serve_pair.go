@@ -106,12 +106,18 @@ func servePairLsCmd() *cobra.Command {
 				return nil
 			}
 			now := time.Now().Unix()
+			// One profile-name query for the whole queue (the per-row resolver
+			// used to re-read every profile row per pending pairing — N+1).
+			pname, err := profileNameMap(s)
+			if err != nil {
+				return err
+			}
 			for _, p := range rows {
 				fmt.Fprintf(cmd.OutOrStdout(),
 					"%-16s %s\n  SAS %s\n  source=%s hint=%s flags=%s profile=%s id=%s\n",
 					clientops.StripC0C1(p.Name), clientops.StripC0C1(p.TargetURL), servePairSAS(p),
 					orDashStr(p.SourceIP), orDashStr(clientops.StripC0C1(strings.TrimSpace(p.ProfileHint))),
-					servePairFlags(p, now), profileNameByID(s, p.Profile), hex.EncodeToString(p.ID))
+					servePairFlags(p, now), profileNameFromMap(pname, p.Profile), hex.EncodeToString(p.ID))
 			}
 			return nil
 		},
@@ -157,7 +163,7 @@ func servePairApproveCmd() *cobra.Command {
 			if mcpserver.ForeignTarget(row.TargetURL) && !allowForeign {
 				return fmt.Errorf("⚠ 配对声明目标 ≠ 本机地址（%s）——疑似中继/假 discovery/错误网络；确属本机地址请加 --allow-foreign-url 重新执行", clientops.StripC0C1(row.TargetURL))
 			}
-			profileID, err := resolveProfileID(s, profile)
+			profileID, err := profileIDByName(s, profile)
 			if err != nil {
 				return err
 			}

@@ -53,12 +53,8 @@ func addCacheTokenTx(tx *sql.Tx, name, profileID string) (string, string, error)
 	if profileID == "" {
 		return "", "", errors.New("device code requires a profile binding (profileID is empty)")
 	}
-	var n int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM profiles WHERE id=?`, profileID).Scan(&n); err != nil {
+	if err := requireProfile(tx, profileID); err != nil {
 		return "", "", err
-	}
-	if n == 0 {
-		return "", "", fmt.Errorf("profile %q not found", profileID)
 	}
 	if verr := instname.Valid(name); verr != nil {
 		return "", "", verr
@@ -109,12 +105,8 @@ func (s *Store) BindCacheToken(name, profileID string) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM profiles WHERE id=?`, profileID).Scan(&n); err != nil {
+	if err := requireProfile(s.db, profileID); err != nil {
 		return err
-	}
-	if n == 0 {
-		return fmt.Errorf("profile %q not found", profileID)
 	}
 	if verr := instname.Valid(name); verr != nil {
 		return verr

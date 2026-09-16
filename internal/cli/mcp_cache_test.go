@@ -44,17 +44,34 @@ func newEd25519HostKey(t *testing.T) ([]byte, ssh.PublicKey) {
 func TestHydrateReadOnlyStore_TokenValidatesAndReadsWork(t *testing.T) {
 	// --- seed a server-side store: server + profile + project (capture the token) ---
 	dir := t.TempDir()
-	mk, _ := store.GenerateMasterKey()
+	mk, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
 	src, err := store.Open(filepath.Join(dir, "src.db"), mk)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer src.Close()
-	cid, _ := src.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
-	srvID, _ := src.AddServer(&models.Server{Name: "gpu", Host: "192.0.2.10", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
-	profID, _ := src.AddProfile("team-a")
-	_ = src.GrantServers(profID, []string{srvID})
-	_, projToken, _ := src.AddProject("my-agent", profID)
+	cid, err := src.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srvID, err := src.AddServer(&models.Server{Name: "gpu", Host: "192.0.2.10", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profID, err := src.AddProfile("team-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := src.GrantServers(profID, []string{srvID}); err != nil {
+		t.Fatal(err)
+	}
+	_, projToken, err := src.AddProject("my-agent", profID)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	snap, err := src.ExportSnapshot()
 	if err != nil {
@@ -62,11 +79,20 @@ func TestHydrateReadOnlyStore_TokenValidatesAndReadsWork(t *testing.T) {
 	}
 
 	// --- write a cache.bin exactly as `cache pull` would (DEK + EncryptWithKey) ---
-	dek, _ := store.GenerateMasterKey()
-	plaintext, _ := json.Marshal(snap)
+	dek, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
 	binDir := t.TempDir()
 	binPath := filepath.Join(binDir, "cache.bin")
-	blob, _ := vaultio.EncryptWithKey(dek, plaintext)
+	blob, err := vaultio.EncryptWithKey(dek, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(binPath, blob, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +100,9 @@ func TestHydrateReadOnlyStore_TokenValidatesAndReadsWork(t *testing.T) {
 
 	// --- inject the DEK into the keychain seam so hydration finds it ---
 	mem := &store.MemKeyProvider{}
-	_ = mem.Set(dek)
+	if err := mem.Set(dek); err != nil {
+		t.Fatal(err)
+	}
 	prev := clientops.DekProvider
 	clientops.DekProvider = func(string) store.KeyProvider { return mem }
 	t.Cleanup(func() { clientops.DekProvider = prev })
@@ -84,7 +112,10 @@ func TestHydrateReadOnlyStore_TokenValidatesAndReadsWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCacheSnapshot: %v", err)
 	}
-	tmp, _ := os.CreateTemp("", "hyd-*.db")
+	tmp, err := os.CreateTemp("", "hyd-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
 	tmpPath := tmp.Name()
 	tmp.Close()
 	t.Cleanup(func() { os.Remove(tmpPath) })
@@ -124,11 +155,17 @@ func TestHydrateReadOnlyStore_TokenValidatesAndReadsWork(t *testing.T) {
 	if err := hyd.WriteAudit(store.AuditRow{Action: "exec", ProjectID: proj.ID, Status: "ok"}); err != nil {
 		t.Fatalf("WriteAudit to sidecar: %v", err)
 	}
-	rows, _ := hyd.AuditRows(1)
+	rows, err := hyd.AuditRows(1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(rows) != 0 {
 		t.Fatal("offline audit must NOT write to the cache db")
 	}
-	ab, _ := os.ReadFile(auditPath)
+	ab, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(ab) == 0 {
 		t.Fatal("offline audit must append to the sidecar")
 	}
@@ -144,14 +181,23 @@ func TestHydrateReadOnlyStore_TokenValidatesAndReadsWork(t *testing.T) {
 func TestScopedPull_HydratesAndIronRuleHolds(t *testing.T) {
 	// --- seed the serve side: 2 servers, 1 granted; project token on that profile ---
 	dir := t.TempDir()
-	mk, _ := store.GenerateMasterKey()
+	mk, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
 	src, err := store.Open(filepath.Join(dir, "serve.db"), mk)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer src.Close()
-	cid, _ := src.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
-	cid2, _ := src.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("topsecret")})
+	cid, err := src.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid2, err := src.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("topsecret")})
+	if err != nil {
+		t.Fatal(err)
+	}
 	gpuID, err := src.AddServer(&models.Server{Name: "gpu", Host: "192.0.2.10", Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +206,10 @@ func TestScopedPull_HydratesAndIronRuleHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profID, _ := src.AddProfile("team-a")
+	profID, err := src.AddProfile("team-a")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := src.GrantServers(profID, []string{gpuID}); err != nil {
 		t.Fatal(err)
 	}
@@ -183,9 +232,14 @@ func TestScopedPull_HydratesAndIronRuleHolds(t *testing.T) {
 	// --- cache-side seams (DEK + dir), then a REAL plaintext pull (test server has no TLS) ---
 	binDir := t.TempDir()
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": binDir})
-	dek, _ := store.GenerateMasterKey()
+	dek, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
 	mem := &store.MemKeyProvider{}
-	_ = mem.Set(dek)
+	if err := mem.Set(dek); err != nil {
+		t.Fatal(err)
+	}
 	prev := clientops.DekProvider
 	clientops.DekProvider = func(string) store.KeyProvider { return mem }
 	t.Cleanup(func() { clientops.DekProvider = prev })
@@ -211,7 +265,10 @@ func TestScopedPull_HydratesAndIronRuleHolds(t *testing.T) {
 	}
 
 	// --- hydrate exactly as RunStdioCache does ---
-	tmp, _ := os.CreateTemp("", "scoped-hyd-*.db")
+	tmp, err := os.CreateTemp("", "scoped-hyd-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
 	tmpPath := tmp.Name()
 	tmp.Close()
 	t.Cleanup(func() { os.Remove(tmpPath) })

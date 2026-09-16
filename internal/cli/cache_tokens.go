@@ -8,7 +8,6 @@ import (
 
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
-	"ssh-manager-mcp/internal/store"
 )
 
 func newCacheTokensCmd() *cobra.Command {
@@ -18,44 +17,6 @@ func newCacheTokensCmd() *cobra.Command {
 	}
 	cmd.AddCommand(cacheTokensAddCmd(), cacheTokensLsCmd(), cacheTokensRevokeCmd(), cacheTokensBindCmd())
 	return cmd
-}
-
-// resolveProfileID maps a profile NAME to its id — the owner-facing flag is a
-// name (profiles ls shows names); the store binds by id. Empty result errors
-// with the list of known names so a typo is immediately self-correcting.
-func resolveProfileID(s *store.Store, name string) (string, error) {
-	profiles, err := s.ListProfiles()
-	if err != nil {
-		return "", err
-	}
-	for _, p := range profiles {
-		if p.Name == name {
-			return p.ID, nil
-		}
-	}
-	known := make([]string, 0, len(profiles))
-	for _, p := range profiles {
-		known = append(known, p.Name)
-	}
-	return "", fmt.Errorf("profile %q not found (known: %v)", name, known)
-}
-
-// profileNameByID is the display-side inverse of resolveProfileID ("-" when
-// unbound — the legacy pre-Plan-39 state).
-func profileNameByID(s *store.Store, id string) string {
-	if id == "" {
-		return "-"
-	}
-	profiles, err := s.ListProfiles()
-	if err != nil {
-		return "?"
-	}
-	for _, p := range profiles {
-		if p.ID == id {
-			return p.Name
-		}
-	}
-	return "?"
 }
 
 func cacheTokensAddCmd() *cobra.Command {
@@ -76,7 +37,7 @@ func cacheTokensAddCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			profileID, err := resolveProfileID(s, profileName)
+			profileID, err := profileIDByName(s, profileName)
 			if err != nil {
 				return err
 			}
@@ -114,13 +75,19 @@ func cacheTokensLsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// One profile-name query for the whole table (the per-token resolver
+			// used to re-read every profile row per device code — N+1).
+			pname, err := profileNameMap(s)
+			if err != nil {
+				return err
+			}
 			for _, ct := range tokens {
 				last := "never"
 				if !ct.LastPullAt.IsZero() {
 					last = ct.LastPullAt.Format("2006-01-02 15:04:05")
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %s prefix=%s… status=%s profile=%s last_pull=%s\n",
-					ct.Name, ct.ID, ct.TokenPrefix, ct.Status, profileNameByID(s, ct.ProfileID), last)
+					ct.Name, ct.ID, ct.TokenPrefix, ct.Status, profileNameFromMap(pname, ct.ProfileID), last)
 			}
 			return nil
 		},
@@ -142,7 +109,7 @@ func cacheTokensBindCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			profileID, err := resolveProfileID(s, args[1])
+			profileID, err := profileIDByName(s, args[1])
 			if err != nil {
 				return err
 			}

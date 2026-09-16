@@ -110,7 +110,7 @@ func (a App) upgradeFormDone(m formDoneMsg) (tea.Model, tea.Cmd) {
 			return a.cancelUpgrade()
 		}
 		if len(profiles) == 0 {
-			a.err = fmt.Errorf("无 profile 可绑定设备码：先在 Profiles 页创建 profile 并授权服务器，再按 [u] 重试升级")
+			a.err = errNoProfiles("按 [u] 重试升级")
 			return a.cancelUpgrade()
 		}
 		nameField := huh.NewInput().Title("客户端机器名（将命名签发给它的设备码；填对方电脑的名字）").
