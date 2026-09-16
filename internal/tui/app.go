@@ -68,16 +68,17 @@ type panelPage interface {
 const chromeLines = 4
 
 type App struct {
-	st      *store.Store
-	page    page
-	pages   [pageCount]listPage
-	overlay overlay         // nil = 无
-	role    roles.Role      // this machine's deployment role (T6: gates the [u] upgrade)
-	upg     *upgradeSegment // nil = upgrade segment not running (T6)
-	width   int             // terminal width from WindowSizeMsg (0 = not yet reported)
-	height  int             // terminal height from WindowSizeMsg (0 = not yet reported)
-	status  string
-	err     error
+	st         *store.Store
+	page       page
+	pages      [pageCount]listPage
+	overlay    overlay         // nil = 无
+	role       roles.Role      // this machine's deployment role (T6: gates the [u] upgrade)
+	upg        *upgradeSegment // nil = upgrade segment not running (T6)
+	width      int             // terminal width from WindowSizeMsg (0 = not yet reported)
+	height     int             // terminal height from WindowSizeMsg (0 = not yet reported)
+	status     string
+	err        error
+	refetchGen int // latest refetch request's generation; stale-landing pagesMsg is dropped (see refetchCmd)
 }
 
 // NewBrokerApp builds the broker console over an open store (caller owns Close).
@@ -564,6 +565,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.overlay = &secretView{title: m.title, body: m.body()}
 		return a, a.refetchCmd()
 	case pagesMsg:
+		// Stale-guard first: bubbletea lands Cmd results in COMPLETION order,
+		// so a slow EARLIER refetch finishing after a later one must not
+		// overwrite the fresher pages (the "deleted server resurrects"
+		// shape — review M1). Only the latest request's generation applies.
+		if m.gen != a.refetchGen {
+			return a, nil
+		}
 		// The async refetch landed. A failure surfaces on the status line
 		// instead of silently re-rendering the stale pages as fresh (backlog
 		// Plan 39 code-review residual); the old snapshot stays rendered until
@@ -599,9 +607,12 @@ type pageNav struct {
 // pagesMsg is the async result of a refetch: freshly loaded pages plus the
 // nav captured when the refetch was requested. err != nil keeps the previous
 // snapshot rendered and surfaces the failure (never swallow a stale-render).
+// gen is the request's generation — only the LATEST request may land (see
+// refetchCmd).
 type pagesMsg struct {
 	pages [pageCount]listPage
 	nav   [pageCount]pageNav
+	gen   int
 	err   error
 }
 
@@ -610,11 +621,18 @@ type pagesMsg struct {
 // so a synchronous fetch could stall a Tab press for up to busy_timeout (5s)
 // while the serve process writes (backlog Plan 39 code-review residual). The
 // servers page's ⚠ view rides in the same snapshot (T10 contract).
-func (a App) refetchCmd() tea.Cmd {
+//
+// Pointer receiver on purpose: it stamps a.refetchGen, so every caller's
+// `return a, a.refetchCmd()` sequence mutates the model BEFORE it is
+// returned — and late-landing results from superseded requests are dropped
+// in the pagesMsg case (completion order ≠ request order; review M1).
+func (a *App) refetchCmd() tea.Cmd {
+	a.refetchGen++
+	gen := a.refetchGen
 	nav := captureNav(a.pages)
 	return func() tea.Msg {
 		pages, err := FetchAll(a.st)
-		return pagesMsg{pages: pages, nav: nav, err: err}
+		return pagesMsg{pages: pages, nav: nav, gen: gen, err: err}
 	}
 }
 

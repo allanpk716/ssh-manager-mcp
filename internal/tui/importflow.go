@@ -400,8 +400,8 @@ func (f *importFlow) pendingCount() int {
 }
 
 // dismissCmd is what runs after the result screen closes: a plain
-// actionDoneMsg refreshes the App pages (refetchPages keeps the ⚠ sort and
-// the `!` filter) and leaves the 导入完成 status line.
+// actionDoneMsg refreshes the App pages (the refetch nav graft keeps the ⚠
+// sort and the `!` filter) and leaves the 导入完成 status line.
 func (f *importFlow) dismissCmd() tea.Cmd {
 	return func() tea.Msg {
 		return actionDoneMsg{desc: fmt.Sprintf("导入完成：%d 台（待补 %d）", f.importedN, f.pendingCount())}

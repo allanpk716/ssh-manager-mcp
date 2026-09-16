@@ -207,8 +207,8 @@ func TestServersPageFilterKey(t *testing.T) {
 }
 
 // TestServersWarnViewSurvivesRefetch (Plan 20 T10): the ⚠ filter and the
-// warn-first order must survive a data refresh (refetchPages is what every
-// actionDoneMsg / tokenIssuedMsg path funnels through).
+// warn-first order must survive a data refresh (the refetch nav graft is
+// what every actionDoneMsg / tokenIssuedMsg path funnels through).
 func TestServersWarnViewSurvivesRefetch(t *testing.T) {
 	a := newTestApp(t)
 	// seed a second, COMPLETE server so the filter has something to hide
@@ -228,7 +228,7 @@ func TestServersWarnViewSurvivesRefetch(t *testing.T) {
 	got = driveRefetch(got)
 	sp, _ := got.pages[pageServers].(*serversPage)
 	if !sp.warnOnly {
-		t.Fatal("refetchPages dropped the warnOnly filter")
+		t.Fatal("the refetch nav graft dropped the warnOnly filter")
 	}
 	rows := sp.Rows()
 	if len(rows) != 1 || rows[0] != "⚠ gpu" {
@@ -580,6 +580,50 @@ func TestRefetchErrorSurfaces(t *testing.T) {
 	}
 	if got.pages[pageServers] == nil {
 		t.Fatal("the previous page snapshot must stay rendered on failure")
+	}
+}
+
+// TestRefetchStaleGenerationDropped (review M1): Cmd results land in
+// COMPLETION order, not request order — a slow EARLIER refetch finishing
+// after a later one must not overwrite the fresher pages (the
+// "deleted server resurrects" shape). The generation counter drops it.
+// Deterministic by construction: both msgs are captured as values and fed
+// in the adversarial order (late-then-fresh-then-stale), no goroutines.
+func TestRefetchStaleGenerationDropped(t *testing.T) {
+	a := newTestApp(t)
+	if _, err := a.st.AddProfile("early"); err != nil {
+		t.Fatal(err)
+	}
+	a = driveRefetch(a) // pages hold "early" only
+	has := func(m App, name string) bool {
+		pp, _ := m.pages[pageProfiles].(*profilesPage)
+		if pp == nil {
+			return false
+		}
+		for _, pr := range pp.items {
+			if pr.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	// request A (slow): its snapshot is captured NOW — before the write below
+	m1, cmdA := a.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	msgA := cmdA()
+	// the external write lands between request A and request B
+	if _, err := a.st.AddProfile("late"); err != nil {
+		t.Fatal(err)
+	}
+	// request B (fast): completes AND lands first
+	m2, cmdB := m1.(App).Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m3, _ := m2.(App).Update(cmdB())
+	if !has(m3.(App), "late") || !has(m3.(App), "early") {
+		t.Fatal("premise: request B must land with the external write visible")
+	}
+	// stale request A completes LAST — it must be dropped, not overwrite B
+	m4, _ := m3.(App).Update(msgA)
+	if !has(m4.(App), "late") {
+		t.Fatal("a stale pagesMsg must be dropped (late request would overwrite newer data)")
 	}
 }
 

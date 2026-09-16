@@ -46,10 +46,12 @@ func TestGateOwnedFallsThrough(t *testing.T) {
 	spy := &spyOverlay{}
 	a.overlay = spy
 	// every owned type must NOT reach the overlay and must run App logic
+	// (pagesMsg uses a stale generation — it must fall through AND be
+	// dropped by the gen guard without touching the pages)
 	for _, owned := range []tea.Msg{
 		errMsg{}, actionDoneMsg{}, formDoneMsg{},
 		serveInstalledMsg{}, serveProbeMsg{}, deviceCodeIssuedMsg{},
-		tokenIssuedMsg{},
+		tokenIssuedMsg{}, pagesMsg{gen: -1},
 	} {
 		a.overlay = spy
 		m, _ := a.Update(owned)
