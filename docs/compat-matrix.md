@@ -12,6 +12,8 @@
 
 <!-- Plan 48（锚定转发+带外锚定+doctor WAL checkpoint）已随 v0.15.0 发版(2026-09-10)——占位注释已按约回写删除;发版后双端部署验证完成时在已验证组合表追加 v0.15.0 行(混布备忘已入下方破坏性变更表 Plan 48 行)。 -->
 
+<!-- 下一版（doctor 多实例感知，branch `doctor-multi-instance` 2026-08-27 实现于 plan-40-p0-anchor-fix worktree、2026-09-15 抢救合并）：CLI-only 增量——doctor 枚举 `instances/<name>/` 逐实例诊断（`client-cache[<name>]` 行，sidecar 矩阵与默认行同源：DEK 缺 FAIL / auth 缺 WARN / MAX_OFFLINE 到龄 WARN「下次使用即自毁」/ 空 slot INFO）+ 仅命名实例机器默认行误报修正（降级 INFO 指向实例行，全空机器仍 FAIL）+ 单槽覆盖（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK）下整组跳过（一行 INFO）+ doctorEnvSeams 补 SSHMGR_CACHE_DEK_DIR/SSHMGR_CACHE_MAX_OFFLINE 两漏登记 seam；单实例机器输出零变化——零变化指**命名实例行**（无命名实例零行）；默认行**新增**离线 cap 到龄 WARN（MAX_OFFLINE 设置且快照超龄时 PASS→WARN，有意新增非回归——cap 生效机器发版验证时该 WARN 属预期；未设 cap 或未到龄时输出不变）。发版双端验证后回写销项。 -->
+
 | client 版本 | serve 版本 | 在线（HTTP MCP） | 离线（cache pull / mcp --cache） | 验证日期 |
 |---|---|---|---|---|
 | v0.15.0 | v0.15.0 | ✅（NUC10 `sshmgr update --yes` GitHub 直连 0.14.0→v0.15.0（SHA256 命中 `78a62d31…` + staged 自检 + 事务替换 + serve 重启）；`serve status` HEALTHY（service Running / http auth working / vault ok）；**doctor 计数差一修复当场实证**：copy-probe `12 servers / 14 credentials`（修复前 11/13——WAL 未 checkpoint 少计，现与库实况一致）。本机 client 同步 0.15.0（client 姿态无服务，下个 agent 会话生效）。锚定转发/带外锚定真机验收六项待新会话（spec §12） | ✅ `cache pull` 0.15 client ↔ 0.15 serve 实测通（`pulled 12 servers / 13 credentials`，profile 范围快照）；锚定转发的 mcp --cache 首连场景待下个 agent 会话验（生化高速工控板条目已在库） | 2026-09-10 |

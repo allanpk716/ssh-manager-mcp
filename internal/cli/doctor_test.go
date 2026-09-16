@@ -851,6 +851,309 @@ func TestDoctorServeAndCache(t *testing.T) {
 	}
 }
 
+// withDoctorInstanceEnv re-pins the DEK seams for named-instance diagnosis:
+// the single-file SSHMGR_CACHE_DEK goes OFF (doctor skips instance rows while
+// it is set — the override swallows the per-instance suffix), the whole-dir
+// SSHMGR_CACHE_DEK_DIR goes ON pointing at the temp vault dir (per-instance
+// cache-dek-<name>.key suffixes resolve correctly under it). The DEFAULT
+// instance's DEK path is unchanged: cache-dek.key in the same dir.
+func withDoctorInstanceEnv(t *testing.T) (vaultDir, userDir string) {
+	t.Helper()
+	vaultDir, userDir = withDoctorDirs(t)
+	t.Setenv("SSHMGR_CACHE_DEK", "")
+	t.Setenv("SSHMGR_CACHE_DEK_DIR", vaultDir)
+	return vaultDir, userDir
+}
+
+// seedDoctorInstance seeds a NAMED cache instance under userDir's Plan-40
+// instances tree (userDir/ssh-manager/instances/<name>/): cache.bin aged via
+// os.Chtimes plus sidecars per flags. The DEK lands at
+// vaultDir/cache-dek-<name>.key — the SSHMGR_CACHE_DEK_DIR layout, so callers
+// must have run withDoctorInstanceEnv first (under the plain withDoctorDirs
+// single-file seam doctor never diagnoses named instances at all). Returns the
+// instance dir (for extra sidecars like cache.config.json).
+func seedDoctorInstance(t *testing.T, userDir, vaultDir, name string, age time.Duration, skipDEK, skipAuth bool) string {
+	t.Helper()
+	instDir := filepath.Join(userDir, "ssh-manager", "instances", name)
+	if err := os.MkdirAll(instDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(instDir, "cache.bin")
+	if err := os.WriteFile(bin, []byte("encrypted-snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-age)
+	if err := os.Chtimes(bin, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if !skipAuth {
+		if err := os.WriteFile(filepath.Join(instDir, "cache.auth.json"),
+			[]byte(`{"url":"https://192.0.2.1:7878","token":"dev-token"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !skipDEK {
+		if err := os.WriteFile(filepath.Join(vaultDir, "cache-dek-"+name+".key"), make([]byte, 32), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return instDir
+}
+
+// seedDoctorDefaultCache seeds the DEFAULT instance's cache dir in place
+// (userDir/ssh-manager/, NO SSHMGR_CACHE_DIR override) — cache.bin aged, DEK
+// at vaultDir/cache-dek.key, auth present. Used by the offline-cap legs where
+// the DEFAULT row's overlay (not the override-dir row) is under test.
+func seedDoctorDefaultCache(t *testing.T, userDir, vaultDir string, age time.Duration) string {
+	t.Helper()
+	dir := filepath.Join(userDir, "ssh-manager")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "cache.bin")
+	if err := os.WriteFile(bin, []byte("encrypted-snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-age)
+	if err := os.Chtimes(bin, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cache.auth.json"),
+		[]byte(`{"url":"https://192.0.2.1:7878","token":"dev-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vaultDir, "cache-dek.key"), make([]byte, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestDoctorClientCacheInstances pins the Plan-40 named-instance awareness:
+// the backlog false positive (client machine whose only cache is a named
+// instance FAILed "cache.bin missing"), the per-instance sidecar matrix
+// (DEK FAIL / auth WARN / offline-cap WARN), empty-slot vs broken-instance
+// distinction, the single-slot-override skip row, and the two Plan-37/40 env
+// seams (SSHMGR_CACHE_DEK_DIR / SSHMGR_CACHE_MAX_OFFLINE) the env row must
+// now enumerate.
+func TestDoctorClientCacheInstances(t *testing.T) {
+	stubServeServiceState(t, "NOT INSTALLED") // client legs: serve-svc INFO
+
+	// Leg 1 — the backlog false positive: client machine, ONLY cache is the
+	// named instance agentA (healthy). Default row downgrades FAIL→INFO with
+	// the pointer, agentA's row carries the PASS diagnosis, exit 0.
+	vd, ud := withDoctorInstanceEnv(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	seedDoctorInstance(t, ud, vd, "agentA", time.Hour, false, false)
+	out, err := driveDoctor(t)
+	if err != nil {
+		t.Fatalf("named-only client machine must not FAIL (the false positive), got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache:  INFO",
+		"no default-instance cache.bin",
+		"1 named instance(s)",
+		"client-cache[agentA]:  PASS",
+		"instance agentA: cache.bin present (age 1h0m0s",
+		"overall: 0 WARN, 0 FAIL",
+		// Plan 40's env seam must be enumerated by name in the env row.
+		"SSHMGR_CACHE_DEK_DIR",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Leg 2 — all-empty machine: client role, one EMPTY instance slot, no
+	// default cache. No instance holds cache.bin → the default FAIL survives
+	// (no usable cache anywhere) and the slot INFOs as debris.
+	vd, ud = withDoctorInstanceEnv(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ud, "ssh-manager", "instances", "agentB"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out, err = driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("no usable cache anywhere must stay a FAIL, got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache:  FAIL",
+		"cache.bin missing on a client machine",
+		"client-cache[agentB]:  INFO",
+		"empty slot",
+		"overall: 0 WARN, 1 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Leg 3 — instance cache.bin present but its DEK missing → FAIL (the
+	// client-side FINDING A class, per-instance flavor); the --instance fix
+	// must name the instance.
+	vd, ud = withDoctorInstanceEnv(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	seedDoctorInstance(t, ud, vd, "agentA", time.Hour, true, false) // skipDEK
+	out, err = driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("undecryptable named instance must FAIL (exit 1), got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache[agentA]:  FAIL",
+		"cache DEK is missing — cache undecryptable",
+		"cache pull --instance agentA",
+		"overall: 0 WARN, 1 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Leg 4 — instance auth.json missing → WARN (offline works, never
+	// auto-refreshes), exit 0.
+	vd, ud = withDoctorInstanceEnv(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	seedDoctorInstance(t, ud, vd, "agentA", time.Hour, false, true) // skipAuth
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("an auth WARN must not change the exit code: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache[agentA]:  WARN",
+		"no auto-refresh credential",
+		"overall: 1 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Leg 5 — the Plan-37 offline cap (the owner's MAX_OFFLINE=24h posture):
+	// a snapshot older than the effective cap self-destructs on next use —
+	// doctor is the only place this state is visible BEFORE it bites.
+	// 5a: cap from the instance's cache.config.json (file source).
+	vd, ud = withDoctorInstanceEnv(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	instDir := seedDoctorInstance(t, ud, vd, "agentA", 25*time.Hour, false, false)
+	if err := os.WriteFile(filepath.Join(instDir, "cache.config.json"),
+		[]byte(`{"max_offline":"24h"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("an expiry WARN must not change the exit code: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache[agentA]:  WARN",
+		"past its offline cap (max-offline 24h0m0s from file)",
+		"destroyed on next use",
+		"overall: 1 WARN, 0 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// 5b: cap from the env (SSHMGR_CACHE_MAX_OFFLINE overrides file) — the
+	// DEFAULT row's overlay this time, pinning both the env precedence and
+	// the symmetric default-row behavior.
+	vd, ud = withDoctorInstanceEnv(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	seedDoctorDefaultCache(t, ud, vd, 25*time.Hour)
+	t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "24h")
+	out, err = driveDoctor(t)
+	if err != nil {
+		t.Fatalf("an expiry WARN must not change the exit code: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache:  WARN",
+		"past its offline cap (max-offline 24h0m0s from env)",
+		"overall: 1 WARN, 0 FAIL",
+		// and the cap env seam is enumerated by name in the env row
+		"SSHMGR_CACHE_MAX_OFFLINE",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "") // do not leak the cap into later legs
+
+	// Leg 6 — single-slot override: SSHMGR_CACHE_DEK set (plain withDoctorDirs)
+	// → named instances are NOT diagnosed (one skip row instead), even with
+	// instance material on disk; the default row keeps its own verdict.
+	vd, ud = withDoctorDirs(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ud, "ssh-manager", "instances", "agentA"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ud, "ssh-manager", "instances", "agentA", "cache.bin"),
+		[]byte("encrypted-snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err = driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("override dir without cache.bin must still FAIL, got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache-instances:  INFO",
+		"single-slot cache override",
+		"overall: 0 WARN, 1 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "client-cache[") {
+		t.Fatalf("named-instance rows must not render under a single-slot override:\n%s", out)
+	}
+
+	// Leg 7 — non-client machine: a standalone box with instance material is
+	// still diagnosed (broken cache material is broken regardless of role):
+	// agentA bin-without-DEK FAILs, agentC's empty slot INFOs, agentB (bin
+	// missing, non-client) INFOs.
+	vd, ud = withDoctorInstanceEnv(t)
+	seedDoctorVault(t, vd)
+	if err := roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	seedDoctorInstance(t, ud, vd, "agentA", time.Hour, true, false) // skipDEK
+	seedDoctorInstance(t, ud, vd, "agentB", time.Hour, false, false)
+	if err := os.Remove(filepath.Join(ud, "ssh-manager", "instances", "agentB", "cache.bin")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ud, "ssh-manager", "instances", "agentC"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out, err = driveDoctor(t)
+	if !errors.Is(err, errDoctorFindings) {
+		t.Fatalf("bin-without-DEK must FAIL even off-client, got: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"client-cache[agentA]:  FAIL",
+		"client-cache[agentB]:  INFO",
+		"client-cache[agentC]:  INFO",
+		"empty slot",
+		"overall: 0 WARN, 1 FAIL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
 // stubInspectFileACL replaces the store seam (serveServiceState precedent):
 // drives the err→FAIL branch, which cannot be seeded for real (a hardened
 // user mask carries READ_CONTROL, so SD reads succeed).
