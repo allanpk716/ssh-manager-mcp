@@ -271,7 +271,7 @@ func TestExecStartBinary(t *testing.T) {
 		{name: "privilege prefix +", unit: "ExecStart=+/usr/bin/sshmgr serve", want: "/usr/bin/sshmgr", wantOK: true},
 		{name: "prefix combo !+", unit: "ExecStart=!+/usr/bin/sshmgr serve", want: "/usr/bin/sshmgr", wantOK: true},
 		{name: "indented key", unit: "[Service]\n  ExecStart=/opt/sshmgr serve", want: "/opt/sshmgr", wantOK: true},
-		{name: "full kardianos unit", unit: "[Unit]\nDescription=x\n\n[Service]\nType=simple\nExecStart=/usr/local/bin/sshmgr serve --addr 0.0.0.0:7878\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n", want: "/usr/local/bin/sshmgr", wantOK: true},
+		{name: "full kardianos unit, quoted args (real render shape)", unit: "[Unit]\nDescription=x\n\n[Service]\nType=simple\nExecStart=/usr/local/bin/sshmgr \"serve\" \"--addr\" \"0.0.0.0:7878\"\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n", want: "/usr/local/bin/sshmgr", wantOK: true},
 		{name: "ExecStartPre must not match", unit: "ExecStartPre=/bin/echo hi\nExecStart=/bin/sshmgr\n", want: "/bin/sshmgr", wantOK: true},
 		{name: "commented line ignored", unit: "# ExecStart=/bin/false\nExecStart=/bin/sshmgr\n", want: "/bin/sshmgr", wantOK: true},
 		{name: "no ExecStart", unit: "[Service]\nType=simple\n", want: "", wantOK: false},
@@ -614,6 +614,13 @@ func TestRegisteredServeAddrWindowsSeam(t *testing.T) {
 	if got, err := RegisteredServeAddr(buildinfo.ServeServiceName); err != nil || got != "" {
 		t.Fatalf("no-addr case: got (%q, %v), want (\"\", nil)", got, err)
 	}
+
+	// seam unwired (non-windows builds) → fail-closed error, not a panic or
+	// a silent empty addr (mirrors RegisteredBinaryPath's nil-seam case).
+	scmQueryCommand = nil
+	if _, err := RegisteredServeAddr(buildinfo.ServeServiceName); err == nil {
+		t.Fatal("unwired scmQueryCommand must fail closed")
+	}
 }
 
 // TestRegisteredServeAddrSystemd: the linux branch reads the unit file the
@@ -631,6 +638,18 @@ func TestRegisteredServeAddrSystemd(t *testing.T) {
 	got, err := RegisteredServeAddr(buildinfo.ServeServiceName)
 	if err != nil || got != "192.168.1.10:7878" {
 		t.Fatalf("got (%q, %v), want (192.168.1.10:7878, nil)", got, err)
+	}
+
+	// kardianos's REAL render shape quotes every argument separately
+	// (service_systemd_linux.go: `{{Path | cmdEscape}}{{range Arguments}} {{. | cmd}}{{end}}`)
+	// — pin it, or a future tokenizer that only strips quotes off the first
+	// token would pass the unquoted fixtures while production breaks (review M2).
+	unit = "[Service]\nExecStart=/usr/local/bin/sshmgr \"serve\" \"--addr\" \"0.0.0.0:9000\"\n"
+	if err := os.WriteFile(filepath.Join(systemdUnitDir, buildinfo.ServeServiceName+".service"), []byte(unit), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := RegisteredServeAddr(buildinfo.ServeServiceName); err != nil || got != "0.0.0.0:9000" {
+		t.Fatalf("kardianos quoted-args case: got (%q, %v), want (0.0.0.0:9000, nil)", got, err)
 	}
 
 	// exec-prefix modifiers on the binary token must not eat the args.
@@ -684,5 +703,22 @@ func TestRegisteredServeAddrLaunchd(t *testing.T) {
 	got, err := RegisteredServeAddr(buildinfo.ServeServiceName)
 	if err != nil || got != "10.1.2.3:7878" {
 		t.Fatalf("got (%q, %v), want (10.1.2.3:7878, nil)", got, err)
+	}
+
+	// Missing ProgramArguments → error at the wrapper level too (an empty
+	// read must not masquerade as "registered without --addr").
+	noArgs := `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>` + buildinfo.ServeServiceName + `</string>
+</dict>
+</plist>
+`
+	if err := os.WriteFile(filepath.Join(launchdPlistDir, buildinfo.ServeServiceName+".plist"), []byte(noArgs), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RegisteredServeAddr(buildinfo.ServeServiceName); err == nil {
+		t.Fatal("plist without ProgramArguments must error")
 	}
 }

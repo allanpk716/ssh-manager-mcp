@@ -544,7 +544,16 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 	// failure or a missing --addr falls back to the install default — the
 	// probe is evidence, not a verdict.
 	probeTarget := defaultProbeAddr
-	if addr, aerr := registeredServeAddr(buildinfo.ServeServiceName); aerr == nil && addr != "" {
+	switch addr, aerr := registeredServeAddr(buildinfo.ServeServiceName); {
+	case aerr != nil:
+		// The read failed on a machine whose service JUST restarted — the
+		// registration record is anomalous (externally edited / foreign
+		// writer). Say so: without this line the operator reads "not
+		// responding" as a slow TLS listener and chases the wrong cause
+		// (review M1 — the probe target must not lie, and neither may the
+		// read failure).
+		fmt.Fprintf(out, "警告: 读取注册 --addr 失败(%v);健康回探回退默认目标\n", aerr)
+	case addr != "":
 		probeTarget = loopbackProbeAddr(addr)
 	}
 	healthy := serveHTTPProbe(probeTarget)

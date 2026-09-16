@@ -740,6 +740,12 @@ func TestUpdateProbeFallsBackWhenAddrUnreadable(t *testing.T) {
 	if !strings.Contains(out, "健康回探("+defaultProbeAddr+")") {
 		t.Fatalf("output must name the fallback probe target:\n%s", out)
 	}
+	// The read failure itself must be VISIBLE (review M1): without this line
+	// the operator reads "not responding" as a slow listener and chases the
+	// wrong cause while the code already knows the registration is broken.
+	if !strings.Contains(out, "读取注册 --addr 失败") {
+		t.Fatalf("output must warn about the failed registered-addr read:\n%s", out)
+	}
 }
 
 // TestLoopbackProbeAddr pins the wildcard→loopback rewrite table.
@@ -749,6 +755,7 @@ func TestLoopbackProbeAddr(t *testing.T) {
 		"[::]:7878":         "127.0.0.1:7878",
 		":7878":             "127.0.0.1:7878",    // empty host
 		"192.168.1.10:7878": "192.168.1.10:7878", // concrete LAN bind: probe the real address
+		"[fe80::1]:7878":    "[fe80::1]:7878",    // concrete IPv6: dial the real registered address
 		"127.0.0.1:9000":    "127.0.0.1:9000",
 		"not-a-hostport":    "not-a-hostport", // unparsable: unchanged (probe reports not-responding)
 	}
