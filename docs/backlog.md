@@ -96,7 +96,7 @@
 ### 终审延后项登记（2026-09-10 全分支终审分流，非阻塞）
 
 - **serve 错误路径日志 host 未加引号**（serve.go pin-hostkey insert/confirm 错误分支两处 `%s`）：同延迟行注入向量但仅错误路径、同请求者已认证；下一卫生波随手 `%q`（成功路径已在 f59cafe 修复）。
-- **conformance 生产引用链 testing 包**：`internal/conformance/docker.go`/`sshbin.go`（非测试文件）import `"testing"`，`cli/pinhostkey.go` 复用 knownhosts 解析后生产二进制链接 testing（体积+卫生债，无行为影响）；方向=knownhosts.go 迁中立包。
+- ~~**conformance 生产引用链 testing 包**：`internal/conformance/docker.go`/`sshbin.go`（非测试文件）import `"testing"`，`cli/pinhostkey.go` 复用 knownhosts 解析后生产二进制链接 testing（体积+卫生债，无行为影响）；方向=knownhosts.go 迁中立包。~~ **已落地（branch `conformance-drop-testing`, 2026-09-16）**：`internal/knownhosts` 中立包成立（两函数原样迁入 + 包注释留溯源），pinhostkey 改引新包；conformance 侧保留**门控的 ssh-keygen 真兼容交叉验证**（docker/ssh 助手旁），新增**不设门的纯内存回环测试**（fast lane 覆盖反而变好）。实证：`go list -deps ./cmd/sshmgr` 里 conformance 消失。**新登记（2026-09-16 排查发现）**：testing 仍在生产依赖里——来源不是 conformance 而是 `store.ExecForTest`（tunnel_registry.go 的 `testing.Testing()` 测试注入缝守卫，全仓唯一；clientops 的 Reset*ForTest 同族先例是**无守卫**导出、不链 testing）。该守卫是对 raw SQL 缝的刻意加固，去留属设计决策非机械迁移——owner 拍板：维持现状 / 改无守卫对齐 clientops 先例 / export_test 化（跨包缝做不到）三选一，维持现状即接受 testing 链入二进制的体积+卫生代价。
 - **测试卫生三小件**：serve_pin_test 并发 worker 内 `t.Fatal`（wg.Done 已 defer，降级为诊断丢失）；413 MaxBytesError 子分支无直接测试；run_test `firstServerID` 死助手删除。
 - **forwarder 两小件**：400/413 透传文本净化（控制字符）；进程退出时 `CloseIdleConnections`。
 - **doctor busy 分支执行覆盖**：busy≠0 判读由检视覆盖（可移植性不可测）；NUC10 真机可有意制造（serve 活跃 + doctor）验 INFO 降级行。
