@@ -510,6 +510,31 @@ func TestMintPairing_ReuseRules(t *testing.T) {
 	}
 }
 
+// TestMintPairingCredentials_UnknownProfile pins the profile-existence precheck
+// on the mint path — the fourth site folded into the shared requireProfile
+// helper (independent review find; Plan 42 landed it after the backlog's
+// three-site count). Unknown profile id fails the mint with the standard
+// not-found error, before any write on the caller's transaction.
+func TestMintPairingCredentials_UnknownProfile(t *testing.T) {
+	s := newTestStore(t)
+	// MaxOpenConns(1): counts must be taken OUTSIDE the tx — a query on s.db
+	// while the tx holds the single connection waits forever (same ordering
+	// discipline as the branch3 refusal test above).
+	before := snapshotCounts(t, s)
+	tx, err := s.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.MintPairingCredentials(tx, "laptop", "no-such-profile", false); err == nil || !strings.Contains(err.Error(), `profile "no-such-profile" not found`) {
+		tx.Rollback()
+		t.Fatalf("unknown profile must fail the mint with the standard error, got %v", err)
+	}
+	tx.Rollback()
+	if after := snapshotCounts(t, s); before != after {
+		t.Fatalf("refused mint must change nothing, before=%+v after=%+v", before, after)
+	}
+}
+
 // TestPairingAudit_InTransaction: mint 中途 error → 全回滚——token 零新增、
 // project 零新增、audit 零行、pending 行停在 approved。
 func TestPairingAudit_InTransaction(t *testing.T) {
