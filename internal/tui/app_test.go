@@ -361,6 +361,7 @@ func TestServersPage_DesktopRender(t *testing.T) {
 // filters the visible rows, action letters typed while filtering must be
 // consumed by the filter input (no overlay fires), Esc clears.
 func TestServersPage_ListFilterFlow(t *testing.T) {
+	t.Parallel()
 	a := newTestApp(t)
 	cid, _ := a.st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("p")})
 	if _, err := a.st.AddServer(&models.Server{

@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/cursor"
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -41,9 +44,19 @@ func newEditPageAt(t *testing.T, width int) (*serverEditPage, *store.Store, *mod
 	return newServerEditPage(st, orig, prefill(orig), width), st, orig
 }
 
-// press types one rune into the page (the huh input / list both consume it)
-// and drains the returned cmd loop the way the runtime would — the async
-// replacement for the old synchronous pump (Plan 30 T5).
+// press types one printable rune into the page. The value lands synchronously
+// (huh writes the bound draft pointer inside Update) and, on plain Input
+// fields, the ONLY cmd a character key produces is the form cursor's blink
+// re-arm — a 530ms tea.Tick closure with no observable output. Draining it
+// made every typed rune cost 530ms of pure wall clock (~66s across this
+// suite; the batch-1 #10 hot spot), so press DROPS the cmd instead. The
+// premise is pinned by TestEditPagePressCharKeysYieldBlinkOnlyCmd, plus the
+// 16-field × 2-keystroke sweep that ran once when this shortcut landed.
+//
+// Counterexample (kept on drain): huh Confirm fields consume y/Y/n/N as
+// single-key answers — the field advance rides huh's nextFieldMsg protocol,
+// real output the form needs delivered. Completing the single-field form
+// emits no blink re-arm, so that drain is instant.
 func press(t *testing.T, p *serverEditPage, r rune) *serverEditPage {
 	t.Helper()
 	m, cmd := p.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
@@ -51,7 +64,10 @@ func press(t *testing.T, p *serverEditPage, r rune) *serverEditPage {
 	if !ok {
 		t.Fatalf("press: update returned %T", m)
 	}
-	return drain(t, pp, cmd).(*serverEditPage)
+	if p.state == editStateField && p.field.Confirm {
+		return drain(t, pp, cmd).(*serverEditPage)
+	}
+	return pp
 }
 
 // tap sends a non-printable key (Enter/Esc/arrows) and drains the returned
@@ -156,6 +172,7 @@ func TestEditPagePagingAdvances(t *testing.T) {
 
 // ② Enter 进 field 态 → 打字实时改 draft → 提交回 list 且字段变 ●+（已改）。
 func TestEditPageFieldEditMarksDirty(t *testing.T) {
+	t.Parallel()
 	p, _, _ := newEditPageAt(t, 80)
 	openField(t, p, 0) // 名称
 
@@ -235,6 +252,7 @@ func TestEditPageConfirmSingleKeyCommits(t *testing.T) {
 // ③ field 态 Esc → 恢复进入该字段前的值 + 该字段脏标记消失。二次进入时
 // 快照基准是“已提交值”，不是最初原值。
 func TestEditPageFieldEscRestores(t *testing.T) {
+	t.Parallel()
 	p, _, _ := newEditPageAt(t, 80)
 	snap := snapshotDraft(p.d)
 
@@ -303,6 +321,7 @@ func TestEditPageSecretFieldEscRestores(t *testing.T) {
 
 // ④ 保存项 Enter → submit 动作 + formDoneMsg（aborted=false）。
 func TestEditPageSaveItemFiresSubmit(t *testing.T) {
+	t.Parallel()
 	p, _, _ := newEditPageAt(t, 80)
 	captured := false
 	p.submit = func() tea.Cmd { captured = true; return nil }
@@ -334,6 +353,7 @@ func TestEditPageSaveItemFiresSubmit(t *testing.T) {
 
 // ④b 端到端：默认 submit（submitServer）真落库。
 func TestEditPageSaveEndToEnd(t *testing.T) {
+	t.Parallel()
 	p, st, _ := newEditPageAt(t, 80)
 	openField(t, p, 10)
 	ctrl(t, p, 'u')
@@ -360,6 +380,7 @@ func TestEditPageSaveEndToEnd(t *testing.T) {
 
 // ⑤ list 态 Esc → formDoneMsg{aborted:true} 且 store 无写入（即使 draft 已脏）。
 func TestEditPageListEscAbortsNoWrite(t *testing.T) {
+	t.Parallel()
 	p, st, _ := newEditPageAt(t, 80)
 	openField(t, p, 10)
 	ctrl(t, p, 'u')
@@ -463,6 +484,7 @@ func TestEditPageWidthFollowsResize(t *testing.T) {
 // 返回 form 的 Init cmd;展开 Batch 找到 cursor.BlinkMsg,喂回 page 必须
 // 返回新的 cmd（自续,否则光标冻结）——"cursor blinks" 免费修复的锁定。
 func TestEditPageFieldBlinkChainAlive(t *testing.T) {
+	t.Parallel()
 	p, _, _ := newEditPageAt(t, 80)
 	m2, cmd2 := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	pp, ok := m2.(*serverEditPage)
@@ -517,4 +539,79 @@ func TestEditPageFieldBlinkChainAlive(t *testing.T) {
 	if !fed {
 		t.Fatal("field-state Init cmd chain must produce a cursor.BlinkMsg")
 	}
+}
+
+// TestEditPagePressIsFreeOfBlinkWait is the wall-clock net for press's
+// no-drain shortcut: 8 plain runes must cost milliseconds, not the 8×530ms a
+// drained cursor-blink re-arm would take. The 1.5s budget sits ~3x BELOW the
+// regressed value (4.2s) and orders of magnitude above the healthy path —
+// only the bug, not a slow machine, can turn 8 in-memory key updates into
+// 1.5s. Red first with the draining press (batch-1 #10 baseline), green after.
+func TestEditPagePressIsFreeOfBlinkWait(t *testing.T) {
+	p, _, _ := newEditPageAt(t, 80)
+	openField(t, p, 0) // 名称 — cursor sits at the prefill's end, chars append
+	start := time.Now()
+	for _, r := range "abcdefgh" {
+		p = press(t, p, r)
+	}
+	if d := time.Since(start); d > 1500*time.Millisecond {
+		t.Fatalf("8 plain-char presses took %v — press must not drain the 530ms blink re-arm per key", d)
+	}
+	if p.d.Name != "gpuabcdefgh" {
+		t.Fatalf("typed characters must land in the draft synchronously, got %q", p.d.Name)
+	}
+}
+
+// TestEditPagePressCharKeysYieldBlinkOnlyCmd pins the premise press's
+// no-drain shortcut rests on: a printable key in field state must produce
+// ONLY the cursor-blink re-arm — a 530ms tick with no observable output, so
+// nothing a caller could need to wait for. One representative huh Input is
+// executed here (every press call site targets an Input/secret/Confirm field
+// of this page; the full 16-field × 2-keystroke sweep that ran once when this
+// shortcut landed found real output only on Confirm answer keys — press's
+// drain branch — and blink-only on every Input kind). If huh ever makes
+// character keys emit real commands, this fails first and press must drain.
+func TestEditPagePressCharKeysYieldBlinkOnlyCmd(t *testing.T) {
+	p, _, _ := newEditPageAt(t, 80)
+	openField(t, p, 15) // 备注 — plain huh Input, the field kind every press types into
+	_, cmd := p.Update(tea.KeyPressMsg{Code: 'z', Text: "z"})
+	if bad := nonBlinkOutputs(cmd, "description"); len(bad) > 0 {
+		t.Fatalf("a character key must only re-arm the cursor blink, got %v — press's no-drain shortcut is unsafe now", bad)
+	}
+}
+
+// nonBlinkOutputs executes cmd and reports every produced message that is not
+// a blink/tick cosmetic, recursing through batch envelopes the way drain
+// unfolds them. Blink msgs are dropped WITHOUT feeding them back — they
+// self-perpetuate, so feeding them would never end the walk.
+func nonBlinkOutputs(c tea.Cmd, path string) []string {
+	if c == nil {
+		return nil
+	}
+	msg := c()
+	switch m := msg.(type) {
+	case nil, cursor.BlinkMsg, spinner.TickMsg:
+		return nil
+	case tea.BatchMsg:
+		var bad []string
+		for _, sub := range m {
+			bad = append(bad, nonBlinkOutputs(sub, path)...)
+		}
+		return bad
+	}
+	if rv := reflect.ValueOf(msg); rv.Kind() == reflect.Slice {
+		// huh's Init/field-advance chains ride the runtime-internal sequence
+		// msgs ([]tea.Cmd) — unfold by reflection, same flattening drain's
+		// callers rely on (see TestEditPageFieldBlinkChainAlive).
+		var bad []string
+		for i := 0; i < rv.Len(); i++ {
+			if sub, ok := rv.Index(i).Interface().(tea.Cmd); ok {
+				bad = append(bad, nonBlinkOutputs(sub, path)...)
+				continue
+			}
+			bad = append(bad, fmt.Sprintf("%s: slice elem %T", path, rv.Index(i).Interface()))
+		}
+		return bad
+	}
+	return []string{fmt.Sprintf("%s: %T", path, msg)}
 }
