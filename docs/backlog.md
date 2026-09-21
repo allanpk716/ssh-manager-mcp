@@ -6,11 +6,14 @@
 
 ## 活跃面（2026-09-21）
 
-1. **测试自助化主轴（2026-09-21 grilling 定案，详见下「测试自助化」节）**——首步 = 试点：Plan 48 验收册（`docs/acceptance/plan-48-pin-forwarding.md`）agent 可跑子集真机跑一轮，暴露的问题喂回验收册；**定于下个会话执行**。
+1. **测试自助化主轴（2026-09-21 grilling 定案，详见下「测试自助化」节）**——**试点首跑完成（2026-09-21，agent 代跑）**：Plan 48 验收册按册执行（运行记录 `docs/acceptance/runs/2026-09-21-plan48-pilot.md`），A5 过 / A1·A6 部分过 / A2·A3·A4 延后（A1①/A3 卡工控板断电、A4 建议单测代证待裁决）；姿势确认可行（MCP stdio 驱动 + SSH 工具面 + 一次性靶子护栏全跑通），暴露问题已回填验收册与本清单（第 6–8 条）。下一批：其余各册按试点姿势排跑。
 2. **P2 存活四条**：#5 doctor serve 探活二期（spec rev2.1 定稿待 owner 审，`docs/superpowers/specs/2026-08-28-plan-43-doctor-serve-probe-design.md.rev2.1.md`）；#8 sshbroker wsarecv 间歇 flake；#10 TUI 测试 ~89s（**已定先治再扩**——测试自助化的前置）；#11 TUI 表单光标常亮（等 huh/bubbles 升级复验）。
-3. **待跑真机验收**：全部移交验收册（`docs/acceptance/`）——Plan 48 六项 / Plan 47 relay / Plan 46+45 界面流程 / Plan 34+37 安全失效路径。Plan 35 清单中 serve 拓扑相关条目随 v0.13.0 拓扑移除**失效**，其余并入上列各册。
+3. **待跑真机验收**：全部移交验收册（`docs/acceptance/`）——Plan 48 六项（**2026-09-21 首轮后余：A1①/A3 等工控板上电、A2 等靶子、A4 待裁决**）/ Plan 47 relay / Plan 46+45 界面流程 / Plan 34+37 安全失效路径。Plan 35 清单中 serve 拓扑相关条目随 v0.13.0 拓扑移除**失效**，其余并入上列各册。
 4. **TUI 行为契约测试扩展**（验收册 plan-46-45 的「待测试代证」项：picker / 向导 / Esc 链进程内测试）——排在 #10 治理之后。
 5. **配对向导两级条件表单**（Plan 45 GW1 反馈，owner 已定方案 B 两级串联）——独立改进项，未实施未排期。
+6. **owner 侧命令的审计盲区（2026-09-21 试点暴露，A6 判据缺口根因）**：`cache-tokens add/revoke`、`servers add/rm`、`profiles add/grant/remove` 等所有者命令不写 vault 审计表（现只有 exec / pin-\* / pair.\* / project.\* 家族入册）——验收册 A6 判据「revoke 有痕」按现状不可满足，判据不放宽。方向：owner 变更类命令入审计（含操作者标识），随下个 plan 落地。
+7. **`cache instances rm` 无无人值守等价面（2026-09-21 试点暴露，ADR 0003 缺口）**：防脚本误删的「stdin 非 TTY 拒执行」护栏没有配对的显式确认旗标/环境变量——agent 代跑的清理步骤被拦（本轮遗留临时实例 plan48drill 待 owner 交互删除）。方向：加显式 `--yes`-语义通道，与 `SSHMGR_PAIR_ASSUME_SAS` 同款显式性。
+8. **ErrNotInProfile 建议加大小写近似提示（2026-09-21 试点暴露）**：服务器 id 大小写敏感且为随机串，agent/人抄录一位之差即持续 denied，错误文案只指引「回 list_servers 看」（肉眼看列表仍可能读错且复制链固化错值，本轮实证损失 ~40 分钟）。方向：id 匹配失败时做大小写折叠近邻提示（"did you mean …?"）。
 
 ## 测试自助化（2026-09-21 grilling 定案登记）
 
@@ -19,6 +22,7 @@
   - **验收册成文**（`docs/acceptance/`）：总则含执行者分工、人工保留面三项（SAS 双屏比对 / 真终端观感 / 物理操作）、破坏性演练一次性靶子护栏、取证要求、通过判据纪律（判据不满足登记、不放宽）。
   - **TUI 行为类关卡 → 进程内测试钉契约**；先治 P2 #10 的 89s 纯墙钟再扩（扩展 = 活跃面第 4 条）。
   - **试点先行、轻过程**（不走完整 spec 门）；试点 = 活跃面第 1 条。
+- **试点首跑登记（2026-09-21，agent 代跑）**：Plan 48 册按册执行完毕——姿势确认可行（MCP stdio 驱动脚本起新进程 + SSH 工具面操作 NUC10 + 一次性靶子护栏 + 取证纪律全部跑通）；产出 = 运行记录（`docs/acceptance/runs/2026-09-21-plan48-pilot.md`）+ 册子修订（状态表新设 / A6 补审批步骤 2b 与 pull 收敛可达性注记 / 清理护栏注记）+ 活跃面第 6–8 条新登记；A6 的「revoke 有痕」子判据按纪律登记不放宽。暴露的 agent 侧教训也入册（id 大小写抄录事故 → 第 8 条）。
 - **裁决回写**：
   - store.ExecForTest 的 testing 守卫（Plan 48 终审延后登记的三选一）——**owner 拍板维持现状**（2026-09-21）：守卫是对裸 SQL 测试注入缝的刻意加固，接受 testing 链进二进制的体积+卫生代价。**销项**。
   - eval CI secret 与 branch protection——**维持不做**（2026-09-21 复核）：翻案触发条件 = 出现第二位贡献者 / eval 结果需跨会话可比对。

@@ -28,7 +28,7 @@
 
 | 册 | 覆盖 | 状态 |
 |---|---|---|
-| [plan-48-pin-forwarding.md](./plan-48-pin-forwarding.md) | 锚定转发 / 带外锚定六项(spec §12) | 待跑(v0.15.0 发版后) |
+| [plan-48-pin-forwarding.md](./plan-48-pin-forwarding.md) | 锚定转发 / 带外锚定六项(spec §12) | **首轮 agent 代跑 2026-09-21**:A5 过;A1/A6 部分过(缺口已登记);A2/A3/A4 延后——证据见 [runs/2026-09-21-plan48-pilot.md](./runs/2026-09-21-plan48-pilot.md) |
 | [plan-47-relay.md](./plan-47-relay.md) | relay_file 大文件 / 断点续传 / Windows 目标特性 | 待跑(v0.14.0 发版后) |
 | [plan-46-45-tui-flows.md](./plan-46-45-tui-flows.md) | 实例管理 / 配对向导流程 | 待跑(行为部分依赖进程内测试补齐) |
 | [plan-34-37-cache-invalidation.md](./plan-34-37-cache-invalidation.md) | 吊销销毁 / 到龄自废 | 待跑(v0.10.0 发版后) |

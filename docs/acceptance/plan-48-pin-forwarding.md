@@ -9,6 +9,19 @@
 - [ ] NUC10 `sshmgr doctor` 0 WARN 0 FAIL
 - [ ] 工控板条目已在库且已锚(首次信任应已随 v0.15.0 部署完成;未锚则 A1 即首次锚定)
 
+## 状态(2026-09-21 首轮 agent 代跑)
+
+> 运行记录与完整证据:[runs/2026-09-21-plan48-pilot.md](./runs/2026-09-21-plan48-pilot.md)。
+
+| 项 | 判定 | 说明 |
+|---|---|---|
+| A1 | 部分过 | 判据②③过(2026-09-10 首锚历史行 + 显示三向一致);①延后——工控板断电,待 owner 上电补跑 |
+| A2 | 延后 | 无现成「仅笔记本可达的新目标」一次性靶子 |
+| A3 | 延后 | 需工控板可达(快照侧已核锚在:source=forward, device=laptop-v040) |
+| A4 | 延后 | 建议 owner 裁决降级「单测代证」——构建 v0.14.0 旧客户端成本高、混布窗口生产已不存在 |
+| A5 | 过 | copy-probe 12=servers ls 12;凭据 14=快照引用 13+孤儿 1(gc 干跑解释);`ssh -- echo` 抽查通 |
+| A6 | 部分过 | 锚生命周期六步过(含⑤受影响清单一致);「revoke 有痕」子判据不满足(`cache-tokens revoke` 不写审计行,登记 backlog);临时实例删除需交互终端(owner 待办) |
+
 ## A1 反馈场景三步复跑【agent 可跑:本机工具面 + NUC10 远程】
 
 - **步骤**:
@@ -54,10 +67,11 @@ spec 原文:「一台仍跑 v0.14 的客户端连接指纹锚目标 → 观察 p
 
 - **步骤**(全部用一次性材料:临时设备码 + 临时实例 + 靶子条目):
   1. NUC10 `sshmgr cache-tokens add --name <临时名> --profile <测试轮廓>` 签发临时码;
-  2. 笔记本 `sshmgr pair --instance <临时名>`(带 `SSHMGR_PAIR_ASSUME_SAS=1`,证据注明)入网;
-  3. 该实例对靶子目标首连 → 转发锚落地;
+  2. 笔记本 `sshmgr pair --instance <临时名> --url <serve地址> --pin <SPKI指纹>`(带 `SSHMGR_PAIR_ASSUME_SAS=1`,证据注明)发起入网,随后轮询等审批;
+  2b. NUC10 `sshmgr serve pair ls` 核对待审行(含 SAS)→ `sshmgr serve pair approve <临时名> --profile <测试轮廓>`——**profile 绑定发生在审批这一步**;客户端在 120 秒窗口内自动 finish + 首拉;
+  3. 该实例对靶子目标首连 → 转发锚落地(靶子只需完成 SSH 握手,认证失败不影响锚落地);
   4. NUC10 `sshmgr cache-tokens revoke <临时名>` 吊销;
   5. NUC10 `sshmgr servers pin-hostkey --list` 找到该设备转发锚 → `--clear`(核对受影响条目清单输出);
-  6. 合法重锚(带外 `--fingerprint`)→ 临时实例 pull 收敛(或直接进入清理)。
-- **判据**:⑤`--clear` 输出的受影响清单与实际一致;全程 audit 有痕(revoke / pin-forward / pin-clear)。
-- **清理**:删除临时实例(`cache instances rm`)、靶子条目与锚、临时码已 revoke 即终态;清理输出留档。
+  6. 合法重锚(带外 `--fingerprint`)。此后两分支:「临时实例 pull 收敛」**仅在步骤 4 尚未吊销时可达**(吊销后再 pull 会 401→按设计隔离销毁本地缓存)——按册子顺序跑则走「直接进入清理」。
+- **判据**:⑤`--clear` 输出的受影响清单与实际一致;全程 audit 有痕(revoke / pin-forward / pin-clear)。〔2026-09-21 首轮注:pin-forward/pin-clear 均有行;`cache-tokens revoke` 现不写审计行——判据维持不放宽,缺口登记 backlog〕
+- **清理**:删除临时实例(`cache instances rm`——**需交互终端确认,agent 代跑会被非 TTY 护栏拦下**,无无人值守等价面,登记 backlog;被拦时留 owner 待办)、靶子条目与锚(条目 `servers rm` 后其锚变 `[orphan]`,再 `--clear --hostport <靶>:<端口>` 清)、pair 生成的临时项目(`projects revoke` + `projects remove`,否则 `profiles remove` 拒删)、临时 profile、临时码已 revoke 即终态;清理输出留档。
