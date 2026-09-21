@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,23 @@ func newPairRunner(t *testing.T) (*httptest.Server, *store.Store, *ServeRunner, 
 func pairReq(t *testing.T, srv *httptest.Server, method, path, body string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(method, srv.URL+path, bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// pairReqChunked posts with a plain io.Reader body (no Content-Length) so the
+// early ContentLength 413 branch cannot fire — an oversized chunked body must
+// be reclassified 413 at decode time by MaxBytesReader (pairDecode's
+// http.MaxBytesError sub-branch).
+func pairReqChunked(t *testing.T, srv *httptest.Server, method, path, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(method, srv.URL+path, io.NopCloser(bytes.NewReader([]byte(body))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,6 +299,18 @@ func TestPairEnroll_HappyAndValidation(t *testing.T) {
 	wantStatus(t, pairReq(t, srv, http.MethodPost, "/pair/enroll", c.enrollBody()), http.StatusConflict)
 	// GET → 405。
 	wantStatus(t, pairReq(t, srv, http.MethodGet, "/pair/enroll", ""), http.StatusMethodNotAllowed)
+}
+
+// TestPairEnroll_ChunkedOversizedReclassified413: a chunked body (no
+// Content-Length) overflowing the 1KiB cap is reclassified 413 at decode
+// time via http.MaxBytesError — pairDecode's sub-branch, not the early
+// ContentLength branch, and never a 400. The body is a VALID JSON prefix
+// (one long string), so the decoder keeps reading until MaxBytesReader
+// trips — a syntactically invalid body would 400 on the first buffered
+// read before ever crossing the cap.
+func TestPairEnroll_ChunkedOversizedReclassified413(t *testing.T) {
+	srv, _, _, _ := newPairRunner(t)
+	wantStatus(t, pairReqChunked(t, srv, http.MethodPost, "/pair/enroll", `"`+strings.Repeat("x", 2048)), http.StatusRequestEntityTooLarge)
 }
 
 func TestPairEnroll_RateLimit429(t *testing.T) {

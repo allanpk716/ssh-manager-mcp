@@ -501,7 +501,7 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 	// else's → 409 equal=false.
 	equal, err := r.st.InsertForwardedPin(host, port, canonical, ct.Name, audit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey insert %s:%d: %v\n", host, port, err)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey insert %q:%d: %v\n", host, port, err)
 		status = http.StatusInternalServerError
 		http.Error(w, "pin landing failed", status)
 		return
@@ -515,7 +515,7 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 	}
 	landed, err := r.st.GetHostKey(host, port)
 	if err != nil || landed == nil {
-		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey confirm %s:%d: %v\n", host, port, err)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey confirm %q:%d: %v\n", host, port, err)
 		status = http.StatusInternalServerError
 		http.Error(w, "pin landing failed", status)
 		return

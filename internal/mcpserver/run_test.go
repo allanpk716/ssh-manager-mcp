@@ -209,12 +209,3 @@ func rawForwardDevice(t *testing.T, dbPath, hostPort string) string {
 	}
 	return dev
 }
-
-// firstServerID returns the snapshot's first server id (the snapshot has one).
-func firstServerID(t *testing.T, snap *store.Snapshot) string {
-	t.Helper()
-	if len(snap.Servers) == 0 {
-		t.Fatal("snapshot has no servers")
-	}
-	return snap.Servers[0].ID
-}

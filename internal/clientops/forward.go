@@ -252,6 +252,16 @@ func (f *PinForwarder) Forward(host string, port int, marshaledKey []byte) error
 	}
 }
 
+// Close releases the pinned transport's pooled connections at shutdown
+// (CloseIdleConnections). Nil-client flavors (the no-credential and plaintext
+// forms) are a no-op; Close on a nil forwarder is safe.
+func (f *PinForwarder) Close() {
+	if f == nil || f.client == nil {
+		return
+	}
+	f.client.CloseIdleConnections()
+}
+
 // presentedFingerprint renders the presented key's OpenSSH fingerprint —
 // ssh.FingerprintSHA256 output, "SHA256:"-prefixed (the §4 placeholder rule).
 // A key that fails to parse cannot come from remote.Marshal() in production;
@@ -266,15 +276,30 @@ func presentedFingerprint(marshaledKey []byte) string {
 // serverErrorText extracts the broker's error body for the 400/413 passthrough:
 // the §1.1 400 body is {"error": …} JSON; anything else (the 413 http.Error
 // text, a proxy page) passes through trimmed. An empty body degrades to the
-// status text.
+// status text. Both passthrough arms are sanitized — a pathological responder
+// must not inject terminal control characters into user-facing error text
+// (the same concern the serve-side log line guards with %q).
 func serverErrorText(res *http.Response) string {
 	raw, _ := io.ReadAll(io.LimitReader(res.Body, forwardBodyCap))
 	var er pinForwardErrorBody
 	if json.Unmarshal(raw, &er) == nil && er.Error != "" {
-		return er.Error
+		return sanitizePassthrough(er.Error)
 	}
-	if s := strings.TrimSpace(string(raw)); s != "" {
+	if s := sanitizePassthrough(strings.TrimSpace(string(raw))); s != "" {
 		return s
 	}
 	return http.StatusText(res.StatusCode)
+}
+
+// sanitizePassthrough strips control characters (C0 range and DEL) from a
+// passthrough body: the surviving text rides inside the user-facing error
+// message, where embedded escapes (newlines, ESC-led terminal sequences)
+// would forge lines or corrupt the terminal rendering it.
+func sanitizePassthrough(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }

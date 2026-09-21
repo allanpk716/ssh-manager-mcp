@@ -129,21 +129,66 @@ func newPinRunner(t *testing.T) *pinFixture {
 // marshaled bytes, SHA256 fingerprint) — hermetic, no listener needed.
 func pinTestKey(t *testing.T) (b64 string, canonical []byte, fp string) {
 	t.Helper()
-	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	b64, canonical, fp, err := mintPinTestKey()
 	if err != nil {
 		t.Fatal(err)
+	}
+	return b64, canonical, fp
+}
+
+// mintPinTestKey is pinTestKey's non-fatal core: goroutine workers must not
+// call t.Fatal (Goexit in a non-test goroutine races the test function's
+// return — the concurrent-race test's workers report via t.Errorf instead).
+func mintPinTestKey() (b64 string, canonical []byte, fp string, err error) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return "", nil, "", err
 	}
 	pk, err := ssh.NewPublicKey(pub)
 	if err != nil {
-		t.Fatal(err)
+		return "", nil, "", err
 	}
-	return base64.StdEncoding.EncodeToString(pk.Marshal()), pk.Marshal(), ssh.FingerprintSHA256(pk)
+	return base64.StdEncoding.EncodeToString(pk.Marshal()), pk.Marshal(), ssh.FingerprintSHA256(pk), nil
 }
 
 // postPin fires one POST /pin-hostkey with the given bearer token and body.
 func postPin(t *testing.T, srv *httptest.Server, token, body string) (int, string) {
 	t.Helper()
+	status, respBody, err := postPinErr(srv, token, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status, respBody
+}
+
+// postPinErr is postPin's non-fatal core — goroutine-worker safe (see
+// mintPinTestKey).
+func postPinErr(srv *httptest.Server, token, body string) (int, string, error) {
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/pin-hostkey", strings.NewReader(body))
+	if err != nil {
+		return 0, "", err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer res.Body.Close()
+	b, err := io.ReadAll(res.Body)
+	if err != nil {
+		return 0, "", err
+	}
+	return res.StatusCode, string(b), nil
+}
+
+// postPinChunked posts with a plain io.Reader body (no Content-Length), so
+// the handler's early ContentLength 413 branch cannot fire — an oversized
+// chunked body must be reclassified 413 at decode time by MaxBytesReader.
+func postPinChunked(t *testing.T, srv *httptest.Server, token, body string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/pin-hostkey", io.NopCloser(strings.NewReader(body)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,8 +343,20 @@ func TestPinHostkey_ConcurrentDistinctKeysOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			blob, canonical, _ := pinTestKey(t)
-			status, body := postPin(t, f.srv, f.laptopToken, pinBody(pinTestHost, pinTestPort, blob))
+			// No t.Fatal below: this is a non-test goroutine (Goexit here
+			// races the test function's return); a failed worker degrades to
+			// a t.Errorf diagnostic plus a missing result, which the
+			// created==1 assertion below rejects.
+			blob, canonical, _, err := mintPinTestKey()
+			if err != nil {
+				t.Errorf("worker key mint: %v", err)
+				return
+			}
+			status, body, err := postPinErr(f.srv, f.laptopToken, pinBody(pinTestHost, pinTestPort, blob))
+			if err != nil {
+				t.Errorf("worker post: %v", err)
+				return
+			}
 			results <- posted{canonical, status, body}
 		}()
 	}
@@ -336,6 +393,21 @@ func TestPinHostkey_ConcurrentDistinctKeysOneWinner(t *testing.T) {
 	}
 	if rows, _ := f.st.AuditRows(100); len(rows) != 1 {
 		t.Fatalf("exactly the winner's audit row must exist, got %d", len(rows))
+	}
+}
+
+// TestPinHostkey_OversizedChunkedBodyReclassified413: a request lying by
+// omission (chunked, no Content-Length) that overflows pinMaxBodyBytes is
+// reclassified 413 at decode time via http.MaxBytesError — never mislabeled
+// a 400 JSON error (the pairDecode precedent). Direct test for the
+// MaxBytesError sub-branch, which the early ContentLength branch shadows in
+// every length-known request.
+func TestPinHostkey_OversizedChunkedBodyReclassified413(t *testing.T) {
+	f := newPinRunner(t)
+	big := pinBody(pinTestHost, pinTestPort, strings.Repeat("x", pinMaxBodyBytes+1024))
+	status, body := postPinChunked(t, f.srv, f.laptopToken, big)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 (decode-time reclassification); body=%s", status, body)
 	}
 }
 

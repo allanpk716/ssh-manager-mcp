@@ -134,6 +134,18 @@ func TestPinForwarder_Forward_BranchTexts(t *testing.T) {
 	const host = "192.168.1.108"
 	const port = 22
 
+	// Control-character passthrough bodies, constructed at runtime so the
+	// source stays pure ASCII: the JSON arm embeds NUL+ESC via json.Marshal
+	// (which emits the backslash-u escaped form a server would really send),
+	// the plain arm concatenates raw ESC and CRLF bytes.
+	ctrlNul := string(rune(0))
+	ctrlEsc := string(rune(0x1b))
+	crlf := string(rune(13)) + string(rune(10))
+	escJSON, err := json.Marshal(pinForwardErrorBody{Error: "bad" + ctrlNul + ctrlEsc + "[2m text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	cases := []struct {
 		name      string
 		status    int
@@ -151,6 +163,10 @@ func TestPinForwarder_Forward_BranchTexts(t *testing.T) {
 			"pin forward for 192.168.1.108:22: broker returned 400 — unparseable key_blob", false},
 		{"413 passthrough plain", http.StatusRequestEntityTooLarge, "request body too large",
 			"pin forward for 192.168.1.108:22: broker returned 413 — request body too large", false},
+		{"400 passthrough json control chars", http.StatusBadRequest, string(escJSON),
+			"pin forward for 192.168.1.108:22: broker returned 400 — bad[2m text", false},
+		{"413 passthrough control chars", http.StatusRequestEntityTooLarge, "bad" + ctrlEsc + "[2m" + crlf + "request body too large",
+			"pin forward for 192.168.1.108:22: broker returned 413 — bad[2mrequest body too large", false},
 		{"500", http.StatusInternalServerError, "boom", forwardMainMessage(host, port, fp), false},
 		{"503", http.StatusServiceUnavailable, "", forwardMainMessage(host, port, fp), false},
 		{"302 unfollowed", http.StatusFound, "", forwardMainMessage(host, port, fp), false},

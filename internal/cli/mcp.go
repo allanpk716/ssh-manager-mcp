@@ -123,8 +123,12 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return mcpserver.RunStdioCache(token, snap, auditPath, rel.Check,
+				err = mcpserver.RunStdioCache(token, snap, auditPath, rel.Check,
 					clientops.ForwardingHostKeys(fwd), cacheForwardDeviceFor(instance))
+				// Release the pinned transport's idle connections on shutdown
+				// (the forwarder has served its last handshake by now).
+				fwd.Close()
+				return err
 			}
 			// Residual-key guardrail: warn to STDERR only (stdout is the MCP channel).
 			if st, err := vault.OpenStore(store.FileKeyProvider{}); err == nil {
