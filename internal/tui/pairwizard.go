@@ -2,8 +2,10 @@ package tui
 
 // pairwizard.go — Plan 45 T2:client 端 SAS 配对向导(独立 overlay 组件,T3 接
 // 线进 client 页 [c] 键)。驱动 T1 的 PairSession 分步状态机(pairsession.go,
-// 签名逐字消费),本组件只做 TUI 面:表单 → 发现/选择 → force 确认 → enroll →
-// SAS 常显等待 → Finish 门 → 写入 → 结果。
+// 签名逐字消费),本组件只做 TUI 面:两级表单(2026-09-21 owner 方案 B:一级
+// 问信任模式+实例名+profile hint;选「手动直连」才串联二级——服务地址+服务器
+// 公钥指纹,指纹必填带来源提示;选「局域网发现」则两字段根本不出现)→ 发现/
+// 选择 → force 确认 → enroll → SAS 常显等待 → Finish 门 → 写入 → 结果。
 //
 // 冻结裁决(plan):
 //   - SAS 屏在 pwWaiting 即常显(批准者需要对照 client 屏的码),不是批准后才
@@ -73,20 +75,23 @@ type pairSessionSteps interface {
 }
 
 // pwState 是向导状态机(plan 冻结的推进序;pwClosed 是收尾后的防御态)。
+// 2026-09-21 方案 B 后表单拆两级:pwFormMode(信任模式/实例名/profile hint)
+// 与 pwFormDirect(直连的服务地址+服务器公钥指纹,仅手动直连串联出现)。
 type pwState int
 
 const (
-	pwForm               pwState = iota // huh 表单(实例名/地址/pin/hint)
-	pwDiscovering                       // LAN 发现(短窗口,不可取消)
-	pwPickBroker                        // 多 broker 选择
-	pwEnrollForceConfirm                // force 重配确认(先于任何会话方法;Plan 46 零清理先行)
-	pwEnrolling                         // enroll(ctx 可取消;force 不预清理)
-	pwWaiting                           // SAS 大字常显 + 倒计时 + 轮询状态行
-	pwFinishGate                        // 批准已到:SAS 放大复核;Enter 前 Finish 不被调
-	pwWritePull                         // Finish + WriteAndPull(Esc 禁用)
-	pwDone                              // 成功结果屏
-	pwEnded                             // 终局结果屏(gone/timeout/error,r 可重试)
-	pwClosed                            // 已交还父模型(T3 关 overlay);防御态
+	pwFormMode    pwState = iota // 一级 huh 表单(信任模式/实例名/profile hint)
+	pwFormDirect                 // 二级 huh 表单(直连:服务地址+服务器公钥指纹)
+	pwDiscovering                // LAN 发现(短窗口,不可取消)
+	pwPickBroker                 // 多 broker 选择
+	pwEnrollForceConfirm         // force 重配确认(先于任何会话方法;Plan 46 零清理先行)
+	pwEnrolling                  // enroll(ctx 可取消;force 不预清理)
+	pwWaiting                    // SAS 大字常显 + 倒计时 + 轮询状态行
+	pwFinishGate                 // 批准已到:SAS 放大复核;Enter 前 Finish 不被调
+	pwWritePull                  // Finish + WriteAndPull(Esc 禁用)
+	pwDone                       // 成功结果屏
+	pwEnded                      // 终局结果屏(gone/timeout/error,r 可重试)
+	pwClosed                     // 已交还父模型(T3 关 overlay);防御态
 )
 
 // pwEndReason 是 pwEnded 的三态(gone=410 合并语义措辞;timeout=本地窗口;error=其余)。
@@ -134,8 +139,23 @@ type (
 	pairWizardClosedMsg struct{}
 )
 
-// pwDraft 是 huh 表单的绑定态。
-type pwDraft struct{ Instance, URL, Pin, ProfileHint string }
+// pwDraft 是 huh 表单的绑定态。Mode 是一级表单的信任模式选择(pwModeDiscover/
+// pwModeDirect);URL 与 Pin 只绑定二级表单——选「局域网发现」时两字段根本不
+// 出现,材料化时一并清空(不是隐藏空值:预填残值不得隐形流入 opts,发现流的
+// pin 由选中 offer 的 SPKI 升格补上)。
+type pwDraft struct {
+	Mode        string
+	Instance    string
+	URL         string
+	Pin         string
+	ProfileHint string
+}
+
+// 信任模式的两个取值(一级表单 Select 的绑定值;用户可见文案在选项标签上)。
+const (
+	pwModeDiscover = "discover" // 局域网发现(udp/7878 自动寻找 broker)
+	pwModeDirect   = "direct"   // 手动直连(自填服务地址 + 服务器公钥指纹)
+)
 
 // pairWizard 是配对向导 overlay(overlay 接口:Init/Update/View/Title)。
 // 组件实例自身持有 seam(非包级变量)——测试之间零全局串扰。
@@ -172,14 +192,20 @@ type pairWizard struct {
 
 // newPairWizard 构造向导。单槽覆盖 env 命中即拒绝启动(与 CLI --instance 互斥
 // 同语义;权威判定 = cli/common.go 的注释,共享 helper 已在 clientops)。
+// prefill 带 URL(直连)时一级的模式选择预选「手动直连」——协调者裁量的落地
+// 形态:实例名留在一级(两条路径都要填,不能整级跳过),模式预选后用户确认
+// 即落二级。
 func newPairWizard(p PairWizardPrefill) (*pairWizard, error) {
 	if clientops.SingleSlotOverrideEnvSet() {
 		return nil, errors.New("配对向导与单槽覆盖 env（SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK）互斥——覆盖会静默改写实例路径/DEK 归属；请 unset 后重试，或使用 sshmgr pair --instance")
 	}
-	d := &pwDraft{Instance: p.Instance, URL: p.URL, Pin: p.Pin, ProfileHint: p.ProfileHint}
+	d := &pwDraft{Mode: pwModeDiscover, Instance: p.Instance, URL: p.URL, Pin: p.Pin, ProfileHint: p.ProfileHint}
+	if p.URL != "" {
+		d.Mode = pwModeDirect
+	}
 	w := &pairWizard{
 		prefill: p,
-		state:   pwForm,
+		state:   pwFormMode,
 		draft:   d,
 		opts: clientops.PairOpts{
 			Instance: p.Instance, ProfileHint: p.ProfileHint, URL: p.URL, Pin: p.Pin,
@@ -191,39 +217,57 @@ func newPairWizard(p PairWizardPrefill) (*pairWizard, error) {
 		isEnrolled:   clientops.IsEnrolled,
 		slotComplete: slotArtifactsComplete,
 	}
-	w.form = newPWForm(d)
+	w.form = newPWModeForm(d)
 	return w, nil
 }
 
-// newPWForm 建表单:实例名必填(instname 白名单)、地址留空 = LAN 发现、pin 留空
-// 合法(直连时由会话校验给冻结 TOFU 文案——TUI 不提供 TOFU 开关)。
-func newPWForm(d *pwDraft) *huh.Form {
+// newPWModeForm 建一级表单:信任模式(Select)+ 实例名(必填,instname 白名单)
+// + profile hint。与信任模式无关的字段留在这里——两条路径都要填,分到任何一
+// 级都会造成另一条路径多问或漏问(协调者裁量);URL 与服务器公钥指纹按 D4 分
+// 流到二级表单,仅手动直连出现(huh v2 无字段级显隐,拆两级表单串联实现)。
+// 一级文案(含选项标签)不出现二级字段的标题/指纹来源提示——「发现流两字段
+// 根本不出现」是界面契约。
+func newPWModeForm(d *pwDraft) *huh.Form {
 	return huh.NewForm(huh.NewGroup(
+		huh.NewSelect[string]().Title("信任模式（新机如何找到 broker）").
+			Options(
+				huh.NewOption("局域网发现（udp/7878 自动寻找同网段 broker）", pwModeDiscover),
+				huh.NewOption("手动直连（自填连接信息，下一步填写）", pwModeDirect),
+			).Value(&d.Mode),
 		huh.NewInput().Title("实例名（设备名，如 laptop）").Value(&d.Instance).Validate(pwValidateInstance),
-		huh.NewInput().Title("broker 地址（留空 = LAN 自动发现）").
-			Placeholder("https://192.0.2.5:7878").Value(&d.URL).Validate(pwValidateURL),
-		huh.NewInput().Title("pin（发现流自动携带；直连时必填）").
-			Placeholder("sha256:…").Value(&d.Pin).Validate(pwValidatePin),
 		huh.NewInput().Title("profile hint（可选，显示在 broker 批准面）").Value(&d.ProfileHint),
 	))
 }
 
-// pwValidateInstance/pwValidateURL/pwValidatePin 是表单逐字段校验(与 CLI 前置
-// 同语义:instname 白名单 / https+host / ParsePin);submitForm 里再全量过一遍
-// (belt-and-braces)。
+// newPWDirectForm 建二级表单(仅手动直连):服务地址 + 服务器公钥指纹,两者必
+// 填——TUI 不提供 TOFU 开关,空指纹直连没有出口(会话层的 TOFU 拒绝是更深的
+// 兜底);指纹带来源提示(broker 机上的 cert-info 命令)。
+func newPWDirectForm(d *pwDraft) *huh.Form {
+	return huh.NewForm(huh.NewGroup(
+		huh.NewInput().Title("broker 服务地址").
+			Placeholder("https://192.0.2.5:7878").Value(&d.URL).Validate(pwValidateURL),
+		huh.NewInput().Title("服务器公钥指纹（必填）").
+			Description("在 broker 机上运行 `sshmgr serve cert-info` 查看（sha256:…）").
+			Placeholder("sha256:…").Value(&d.Pin).Validate(pwValidatePin),
+	))
+}
+
+// pwValidateInstance/pwValidateURL/pwValidatePin 是表单逐字段校验。两级形态
+// (2026-09-21 方案 B)后 URL 与服务器公钥指纹只在二级表单出现且都必填——发现
+// 流根本不经过这两个字段;提交处理器里再全量过一遍(belt-and-braces)。
 func pwValidateInstance(s string) error { return instname.Valid(strings.TrimSpace(s)) }
 
 func pwValidateURL(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil // 空 = 发现流
+		return errors.New("直连必须填写服务地址（https://host:7878）")
 	}
 	u, err := neturl.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("地址无法解析: %v", err)
 	}
 	if u.Scheme != "https" {
-		return errors.New("必须是 https:// 地址（留空 = LAN 自动发现）")
+		return errors.New("必须是 https:// 地址")
 	}
 	if u.Hostname() == "" {
 		return errors.New("地址缺少 host")
@@ -234,10 +278,10 @@ func pwValidateURL(raw string) error {
 func pwValidatePin(s string) error {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return nil // 空 pin 合法:发现流升格 SPKI;直连由会话校验拒 TOFU
+		return errors.New("直连必须提供服务器公钥指纹——在 broker 机上运行 `sshmgr serve cert-info` 查看")
 	}
 	if _, ok := mcpserver.ParsePin(s); !ok {
-		return fmt.Errorf("pin 不是合法的 sha256:<64hex> 指纹: %q", s)
+		return fmt.Errorf("指纹不是合法的 sha256:<64hex> 形态: %q", s)
 	}
 	return nil
 }
@@ -248,8 +292,15 @@ func pwValidatePin(s string) error {
 
 func (w *pairWizard) Title() string { return "配对向导" }
 
+// inForm 报告当前是否处于表单态(一级或二级)——按键转发/Esc 截获/非按键消息
+// 转发的公共条件。两级形态下任一级 Esc 都是同一中止契约(D9:沿用现行语义,
+// 不自创「Esc 返回上一级」之类的新行为)。
+func (w *pairWizard) inForm() bool {
+	return (w.state == pwFormMode || w.state == pwFormDirect) && w.form != nil
+}
+
 func (w *pairWizard) Init() tea.Cmd {
-	if w.state == pwForm && w.form != nil {
+	if w.inForm() {
 		return w.form.Init()
 	}
 	return nil
@@ -262,11 +313,11 @@ func (w *pairWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return w, nil // 旧 generation(Esc 弃结果)一律丢弃
 		}
 		if msg.err != nil {
-			w.state, w.err = pwForm, msg.err
+			w.state, w.err = pwFormMode, msg.err
 			return w, w.pwFormReset()
 		}
 		if len(msg.found) == 0 {
-			w.state, w.err = pwForm, errors.New("未发现 broker——确认 broker 已运行且 discovery 开启，或在表单填写直连地址")
+			w.state, w.err = pwFormMode, errors.New("未发现 broker——确认 broker 已运行且 discovery 开启，或改选手动直连")
 			return w, w.pwFormReset()
 		}
 		w.offers, w.cursor = msg.found, 0
@@ -318,23 +369,25 @@ func (w *pairWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return w, pwTickCmd(w.gen, w.noteCh)
 
 	case tea.KeyPressMsg:
-		if w.state == pwForm && w.form != nil {
+		if w.inForm() {
 			if msg.Code == tea.KeyEsc {
-				return w.close()
+				return w.close() // 任一级 Esc = 纯返回页面、零残留(同一中止契约)
 			}
 			return w.formUpdate(msg)
 		}
 		return w.keyUpdate(msg)
 	}
 	// 非按键消息:huh 的内部推进(nextField/nextGroup 等)只在表单态转发。
-	if w.state == pwForm && w.form != nil {
+	if w.inForm() {
 		return w.formUpdate(msg)
 	}
 	return w, nil
 }
 
 // formUpdate 转发一条消息给 huh 表单并在完成/中止时收口(形态同 formOverlay:
-// Esc 在外层截获,huh StateAborted 只会来自 ctrl+c)。
+// Esc 在外层截获,huh StateAborted 只会来自 ctrl+c)。完成按当前一级分流:一级
+// 完成 → submitModeForm(按信任模式决定是否串联二级);二级完成 → submitForm
+// (直连材料化+建会话)。
 func (w *pairWizard) formUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	f, cmd := w.form.Update(msg)
 	if nf, ok := f.(*huh.Form); ok {
@@ -343,13 +396,18 @@ func (w *pairWizard) formUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if w.form.State == huh.StateAborted {
 		return w.close()
 	}
-	if w.form.State == huh.StateCompleted && w.state == pwForm {
-		return w, w.submitForm()
+	if w.form.State == huh.StateCompleted {
+		if w.state == pwFormMode {
+			return w, w.submitModeForm()
+		}
+		if w.state == pwFormDirect {
+			return w, w.submitForm()
+		}
 	}
 	return w, cmd
 }
 
-// keyUpdate 是手绘屏的键位(pwForm 之外的每个状态)。
+// keyUpdate 是手绘屏的键位(表单态之外的每个状态)。
 func (w *pairWizard) keyUpdate(kp tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := kp.Key()
 	switch w.state {
@@ -423,21 +481,82 @@ func (w *pairWizard) keyUpdate(kp tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // 推进
 // ---------------------------------------------------------------------------
 
-// pwFormReset 重建表单并返回其 Init 命令(draft 指针共享,已填值保留)。提交
-// 失败留在 pwForm 的路径必须调用:huh 的 Form.Update 在 State != StateNormal
-// 时直接短路——不复位则表单永远停在 StateCompleted,用户无法再输入,且 pwForm
-// 下任意非 Esc 按键都会命中 Completed 分支重跑 submitForm(发现落空屏每键重发
-// LAN sweep)。
+// pwFormReset 重建「当前一级」表单并返回其 Init 命令(draft 指针共享,已填值
+// 保留)。提交失败留在表单态的路径必须调用:huh 的 Form.Update 在 State !=
+// StateNormal 时直接短路——不复位则表单永远停在 StateCompleted,用户无法再
+// 输入,且表单态下任意非 Esc 按键都会命中 Completed 分支重跑提交(发现落空屏
+// 每键重发 LAN sweep)。重建而非复用实例,沿用 T2-R1 死锁教训纪律;调用方须
+// 先把 state 落回表单态(一级失败回 pwFormMode,二级失败回 pwFormDirect)。
 func (w *pairWizard) pwFormReset() tea.Cmd {
-	w.form = newPWForm(w.draft)
+	if w.state == pwFormDirect {
+		w.form = newPWDirectForm(w.draft)
+	} else {
+		w.form = newPWModeForm(w.draft)
+	}
 	return w.form.Init()
 }
 
-// submitForm 在 huh 表单完成后运行:全量校验 → 已装判定(force 闸门)→ 材料
-// 化 opts → 直连建会话 / 进入发现。拒绝时留在表单(重建复位)并给出 w.err。
-func (w *pairWizard) submitForm() tea.Cmd {
+// pwEnrolledGate 是两级提交共享的已装闸门(CLI 冻结语义 "instance already
+// enrolled; pass --force" 的 TUI 等价):enrolled 且未 force → 拒绝,重配入口
+// 在实例选择器(p 预填 Force),表单不静默覆盖在用凭据。返回 nil = 放行。
+func (w *pairWizard) pwEnrolledGate(inst string) error {
+	enrolled, ierr := w.isEnrolled(inst)
+	if ierr != nil {
+		return ierr
+	}
+	if enrolled && !w.prefill.Force {
+		return fmt.Errorf("实例 %s 已配对——重配请回实例选择器按 p(force 重配)进入", inst)
+	}
+	return nil
+}
+
+// submitModeForm 在一级表单完成后运行:实例名全量校验 → 按信任模式分流。
+// 手动直连 → 串联二级表单(新实例,预填值经共享 draft 保留);局域网发现 →
+// 已装判定(force 闸门)→ 材料化 opts(URL/pin 强制空——两字段根本不出现,
+// 预填残值也不得作为隐藏值流入;发现流的 pin 由选中 offer 的 SPKI 升格补上)
+// → 进入发现。拒绝时留在一级表单(重建复位)并给出 w.err。
+func (w *pairWizard) submitModeForm() tea.Cmd {
 	w.err = nil
 	inst := strings.TrimSpace(w.draft.Instance)
+	if err := pwValidateInstance(inst); err != nil {
+		w.err = err
+		return w.pwFormReset()
+	}
+	if w.draft.Mode == pwModeDirect {
+		w.state = pwFormDirect
+		w.form = newPWDirectForm(w.draft)
+		return w.form.Init()
+	}
+	// 发现流(Mode 非 direct 一律按发现容错,含空串):清空直连字段的一切
+	// 残值——「两字段根本不出现」不是隐藏空值。
+	w.draft.URL, w.draft.Pin = "", ""
+	if err := w.pwEnrolledGate(inst); err != nil {
+		w.err = err
+		return w.pwFormReset()
+	}
+	w.opts = clientops.PairOpts{
+		Instance: inst, ProfileHint: strings.TrimSpace(w.draft.ProfileHint),
+		Stdout: io.Discard, Stderr: io.Discard,
+	}
+	// 发现流:短窗口不可取消(Esc 在 pwDiscovering 仅弃结果)。
+	w.state = pwDiscovering
+	gen := w.gen
+	targets, terr := clientops.NonLoopbackIPv4Broadcasts()
+	return func() tea.Msg {
+		if terr != nil {
+			return pairDiscoverDoneMsg{gen: gen, err: terr}
+		}
+		found, derr := w.discover(targets, 0)
+		return pairDiscoverDoneMsg{gen: gen, found: found, err: derr}
+	}
+}
+
+// submitForm 在二级表单(手动直连)完成后运行:全量校验 → 已装判定(force
+// 闸门)→ 材料化 opts(URL+pin)→ 直连建会话(New 即完成等价校验,先于任何
+// 清理)。拒绝时留在二级表单(重建复位)并给出 w.err。
+func (w *pairWizard) submitForm() tea.Cmd {
+	w.err = nil
+	inst := strings.TrimSpace(w.draft.Instance) // 一级已校验;belt-and-braces
 	if err := pwValidateInstance(inst); err != nil {
 		w.err = err
 		return w.pwFormReset()
@@ -452,15 +571,8 @@ func (w *pairWizard) submitForm() tea.Cmd {
 		w.err = err
 		return w.pwFormReset()
 	}
-	enrolled, ierr := w.isEnrolled(inst)
-	if ierr != nil {
-		w.err = ierr
-		return w.pwFormReset()
-	}
-	if enrolled && !w.prefill.Force {
-		// CLI 冻结语义("instance already enrolled; pass --force")的 TUI 等价:
-		// 重配入口在实例选择器(p 预填 Force),表单不静默覆盖在用凭据。
-		w.err = fmt.Errorf("实例 %s 已配对——重配请回实例选择器按 p(force 重配)进入", inst)
+	if err := w.pwEnrolledGate(inst); err != nil {
+		w.err = err
 		return w.pwFormReset()
 	}
 	w.opts = clientops.PairOpts{
@@ -468,20 +580,7 @@ func (w *pairWizard) submitForm() tea.Cmd {
 		URL: rawURL, Pin: rawPin,
 		Stdout: io.Discard, Stderr: io.Discard,
 	}
-	if rawURL != "" {
-		return w.beginTarget(nil) // 直连:New 即完成等价校验(先于任何清理)
-	}
-	// 发现流:短窗口不可取消(Esc 在 pwDiscovering 仅弃结果)。
-	w.state = pwDiscovering
-	gen := w.gen
-	targets, terr := clientops.NonLoopbackIPv4Broadcasts()
-	return func() tea.Msg {
-		if terr != nil {
-			return pairDiscoverDoneMsg{gen: gen, err: terr}
-		}
-		found, derr := w.discover(targets, 0)
-		return pairDiscoverDoneMsg{gen: gen, found: found, err: derr}
-	}
+	return w.beginTarget(nil)
 }
 
 // pickBroker 把光标 offer 材料化进 opts(URL 拼装 + SPKI 升格,与 CLI
@@ -502,13 +601,13 @@ func (w *pairWizard) pickBroker() (tea.Model, tea.Cmd) {
 // 幂等重校验,并把 offer 显示名记入 brokerName(force 时序:校验(New+Bind)
 // 先于确认屏/Enroll);URL 直连路径 brokerName 恒空,broker 标签渲染 URL。
 // Force → 确认屏(Plan 46:确认的是"重配覆盖"而非"预删除"——零清理先行);
-// 否则直接 enroll。newSession 失败:错误落在当前屏(表单态须重建复位,选择屏
-// 状态不推进)。
+// 否则直接 enroll。newSession 失败:错误落在当前屏(二级表单态须重建复位,
+// 选择屏状态不推进)。
 func (w *pairWizard) beginTarget(d *clientops.Discovered) tea.Cmd {
 	s, serr := w.newSession(w.opts)
 	if serr != nil {
 		w.err = serr
-		if w.state == pwForm {
+		if w.state == pwFormMode || w.state == pwFormDirect {
 			return w.pwFormReset()
 		}
 		return nil
@@ -673,9 +772,18 @@ func (w *pairWizard) finishSuccess() (tea.Model, tea.Cmd) {
 func (w *pairWizard) View() tea.View {
 	var b strings.Builder
 	switch w.state {
-	case pwForm:
+	case pwFormMode:
 		b.WriteString(titleStyle.Render(" 配对向导") + "\n")
-		b.WriteString("新机入网:实例名必填;地址留空 = LAN 自动发现(udp/7878)。\n\n")
+		b.WriteString("新机入网第一步:选择信任模式并填写实例名(两条路径都要填)。\n\n")
+		b.WriteString(w.form.View() + "\n")
+		if w.err != nil {
+			b.WriteString("\n" + errStyle.Render("✗ "+w.err.Error()) + "\n")
+		}
+		b.WriteString(footerStyle.Render("（Esc 退出）"))
+
+	case pwFormDirect:
+		b.WriteString(titleStyle.Render(" 配对向导·手动直连") + "\n")
+		b.WriteString("新机入网第二步:直连信息——服务地址与服务器公钥指纹都必填。\n\n")
 		b.WriteString(w.form.View() + "\n")
 		if w.err != nil {
 			b.WriteString("\n" + errStyle.Render("✗ "+w.err.Error()) + "\n")
