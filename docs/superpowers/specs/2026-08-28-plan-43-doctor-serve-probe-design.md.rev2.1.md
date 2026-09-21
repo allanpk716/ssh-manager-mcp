@@ -87,7 +87,7 @@ func ProbeBroker(cred CacheCred, timeout time.Duration) ProbeResult
   ```
 - **角色路由**（一个 check 函数输出全部行）：
   - 无 role → 一行 INFO `serve-probe`：「no role — nothing to probe」。
-  - `server` → 若 serve-svc 状态 NOT INSTALLED → INFO「serve not in use — nothing to probe」；否则 `probeLoopback("127.0.0.1:7878")` → 行 `serve-probe`：true = PASS「serve responding over TLS (401 = auth gate up)」（无 elapsed——`probeServeHTTP` 只回 bool）；false = **WARN**「serve not responding on 127.0.0.1:7878 (default addr; custom --addr installs or broker down — verify with `ssh-manager serve status`)」——歧义态（custom-addr 装机健康机不可误红 exit 1；真崩溃由 serve-svc 行的 Stopped WARN 承担红旗）。**server 侧探针无 FAIL 分支**。
+  - `server` → 若 serve-svc 状态 NOT INSTALLED → INFO「serve not in use — nothing to probe」；否则 `probeLoopback("127.0.0.1:7878")` → 行 `serve-probe`：true = PASS「serve responding over TLS (401 = auth gate up)」（无 elapsed——`probeServeHTTP` 只回 bool）；false = **WARN**「serve not responding on 127.0.0.1:7878 (default addr; custom --addr installs or broker down — verify with `sshmgr serve status`)」——歧义态（custom-addr 装机健康机不可误红 exit 1；真崩溃由 serve-svc 行的 Stopped WARN 承担红旗）。**server 侧探针无 FAIL 分支**。
   - `standalone` → INFO「standalone machine — no serve broker to probe」。
   - `client` → 默认 + `ListInstances()` 每实例各一行：行名 `serve-probe`（默认）/ `serve-probe[<name>]`；材料 = 各自 `LoadCacheCred(dir)`。cred 缺 → INFO「no pull credential — nothing to probe (see client-cache row)」；cred 损坏 → WARN「cache.auth.json unreadable: <err>」（fix: 重 pull）。
 - **client 裁决映射（冻结表）**：
@@ -97,7 +97,7 @@ func ProbeBroker(cred CacheCred, timeout time.Duration) ProbeResult
 | Active | 🟢 PASS | `instance <n>: broker reachable, device code active (auth gate passed, <elapsed>)` | — |
 | Rejected | 🔴 FAIL | `instance <n>: device code REJECTED (401<, reason 词或 unreadable/indeterminate 注记>) — the cache will self-destruct on next pull` | `owner: run `cache-tokens ls` to check the code; then re-enroll with a fresh device code (`cache pull --instance <n>`)` |
 | LocalRefusal | 🔴 FAIL | `instance <n>: <本地闸固定文案（无 pin / 非 https）>` | `re-pull with a pinned https credential (`cache pull --instance <n>`)` |
-| PinMismatch | 🔴 FAIL | `instance <n>: server certificate fingerprint does not match the pinned pin — cert rotated (re-pin via `ssh-manager pair` / re-pull) or a MITM (investigate)` | `verify the new fingerprint out-of-band (`serve cert-info` on the server), then re-pull to re-pin (or re-run `ssh-manager pair`)` |
+| PinMismatch | 🔴 FAIL | `instance <n>: server certificate fingerprint does not match the pinned pin — cert rotated (re-pin via `sshmgr pair` / re-pull) or a MITM (investigate)` | `verify the new fingerprint out-of-band (`serve cert-info` on the server), then re-pull to re-pin (or re-run `sshmgr pair`)` |
 | Unreachable | 🟡 WARN | `instance <n>: broker unreachable (<错误类>) — offline mode; cache age <X> vs max-offline <Y/off>`（age/cap 读 bin mtime + EffectiveMaxOffline，与 client-cache 行同源；bin 缺席则省略 age 从句——cred 在而 bin 无的态本就异常，client-cache 行已 FAIL 之） | `check network / serve status on the broker machine` |
 | BadStatus | 🟡 WARN | `instance <n>: broker answered <status> (expected 405)` | `inspect serve on the broker machine (serve status / serve.log)` |
 
@@ -204,7 +204,7 @@ handler 模拟真 serve 阶梯（auth-by-fixed-code + method check → 405/401�
 - **R4（备选记录）**：若评审否决 HEAD/405 阶梯（嫌依赖代码序），备选 = serve 加 reason 响应头 + HEAD 直达——引入 serve 改动与版本耦合，本设计不取。
 - **R5**：server 侧探针无 FAIL 分支（owner 拍板 WARN 化）——「broker 机真崩 + service 状态误报 Running」的复合态下 doctor 总判 WARN 非 FAIL；部署验证脚本若依赖 exit 1 捕获 server 崩溃，需改看 serve-svc 行或 serve status。接受面：serve-svc Stopped 已 WARN、真崩通常伴随 Stopped/NOT INSTALLED。
 - **R6（rev2 登记）**：ProbeRejected 合并单类的代价——revoked 与 unknown 共享一条 fix 文案（owner 查码 + 重 enroll 两步都覆盖），牺牲了两词各自的精确指引；换来 Plan 34 字面合规与 class 判定只依赖状态码的简单性。owner 拍板接受。
-- **R7（rev2.1 登记，关联易用性改造 Plan 42 grilling 定案 2026-08-28）**：易用性改造（其批1，目标 v0.11.0）将**移除 ②a 在线 HTTP 直连**（serve mux 撤 MCP streamable HTTP handler）。与本 plan 的协调三点：①**`probeServeHTTP` 共享 seam**（本 plan `probeLoopback` 与 `serve status` 同源，F6）——其根路径 401 来自 MCP 路由的 auth 层，②a 移除后根路径落 404，若不处理则 server 侧探针 + `serve status` **全线假 WARN**；该 plan 批1 已含「探活重指向 `/snapshot`」清单项（未带码 GET → `cacheAuth` 401，「401 = auth gate up」语义保真；auth 层先拒故零序列化零 touch，F2 副作用面不触及）——**一处改两受益，两个 plan 任一先落地都必须携带此 seam 改动**。②client TUI wizard 将被 `ssh-manager pair` 取代——本 rev 已将 PinMismatch 两处文案先行改指 pair / re-pull。③本 plan 探针阶梯打的是 `/snapshot` 链（F3/F9），**不受 MCP handler 移除影响**，全部技术前提继续成立。
+- **R7（rev2.1 登记，关联易用性改造 Plan 42 grilling 定案 2026-08-28）**：易用性改造（其批1，目标 v0.11.0）将**移除 ②a 在线 HTTP 直连**（serve mux 撤 MCP streamable HTTP handler）。与本 plan 的协调三点：①**`probeServeHTTP` 共享 seam**（本 plan `probeLoopback` 与 `serve status` 同源，F6）——其根路径 401 来自 MCP 路由的 auth 层，②a 移除后根路径落 404，若不处理则 server 侧探针 + `serve status` **全线假 WARN**；该 plan 批1 已含「探活重指向 `/snapshot`」清单项（未带码 GET → `cacheAuth` 401，「401 = auth gate up」语义保真；auth 层先拒故零序列化零 touch，F2 副作用面不触及）——**一处改两受益，两个 plan 任一先落地都必须携带此 seam 改动**。②client TUI wizard 将被 `sshmgr pair` 取代——本 rev 已将 PinMismatch 两处文案先行改指 pair / re-pull。③本 plan 探针阶梯打的是 `/snapshot` 链（F3/F9），**不受 MCP handler 移除影响**，全部技术前提继续成立。
 
 ## 9. 变更记录
 
@@ -238,6 +238,6 @@ handler 模拟真 serve 阶梯（auth-by-fixed-code + method check → 405/401�
 来源：owner 以 2026-08-28 易用性改造 grilling 共识（后定名 **Plan 42**）为主审基准，对本 spec 做冲突审查——结论**无硬冲突**，以下为元数据/文案级适配：
 
 1. **编号：Plan 42 → Plan 43**（与易用性改造撞号；owner 拍板易用性保 42，本 plan 改 43。文件家族三份同步改名，标题同步）。
-2. **PinMismatch 两处文案 "wizard" → `ssh-manager pair` / re-pull**（易用性批1 将删除 client TUI wizard/connect-form，被 `ssh-manager pair` 一条龙取代；§3.2 裁决表相应行）。
+2. **PinMismatch 两处文案 "wizard" → `sshmgr pair` / re-pull**（易用性批1 将删除 client TUI wizard/connect-form，被 `sshmgr pair` 一条龙取代；§3.2 裁决表相应行）。
 3. **新增 R7**：`probeServeHTTP` 共享 seam 随 ②a 移除重指向 `/snapshot` 的协调登记（两个 plan 任一先落地都必须携带；本 plan 阶梯/裁决表/测试策略全部原封不动）。
 4. **一处笔误修正（编辑性，零语义变化）**：§3.3「internal 探针不单独产行」→「不单独成行」（rev2 原稿笔误，誊入 rev2.1 时订正；除此外正文与 rev2 逐字一致——diff 已核）。

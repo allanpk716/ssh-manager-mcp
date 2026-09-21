@@ -332,6 +332,36 @@ func TestInstancePicker_PairedMarker(t *testing.T) {
 	}
 }
 
+// TestInstancePicker_ProfileFromScopedMeta:行材料 profile 列只在 meta 记录
+// 了 scoped=true 且带 device_name 时出现——旧全库快照(scoped=false)的形状
+// 与裁剪快照相同,不得当成裁剪缓存展示(Plan 39 的本地视角纪律在行上的落点;
+// 此前只有「无 meta 时 profile 保持空」的断言,scoped 门没有磁盘级测试)。
+func TestInstancePicker_ProfileFromScopedMeta(t *testing.T) {
+	base := mkInstanceDir(t, "scoped", "legacy")
+	scoped := `{"scoped":true,"device_name":"lab-nuc"}`
+	legacy := `{"scoped":false,"device_name":"lab-nuc"}`
+	if err := os.WriteFile(filepath.Join(base, "instances", "scoped", "cache.meta.json"), []byte(scoped), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "instances", "legacy", "cache.meta.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := newInstancePicker("")
+	byName := map[string]pickerRow{}
+	for _, r := range p.rows {
+		byName[r.label] = r
+	}
+	if got := byName["scoped"].profile; got != "lab-nuc" {
+		t.Fatalf("scoped meta 的 device_name 必须成为行 profile, got %q", got)
+	}
+	if got := byName["legacy"].profile; got != "" {
+		t.Fatalf("scoped=false 的旧全库快照不得展示 profile, got %q", got)
+	}
+	if line := pickerLineOf(p.View().Content, "scoped"); !strings.Contains(line, "lab-nuc") {
+		t.Fatalf("profile 必须渲染进行, got %q", line)
+	}
+}
+
 // TestInstancePicker_PKeyRepairsPairedRow: [p] on a paired NAMED row asks the
 // clientModel to re-pair that instance (wizard prefill Instance+Force).
 func TestInstancePicker_PKeyRepairsPairedRow(t *testing.T) {
@@ -432,6 +462,56 @@ func TestSlotState_FourElementMatrix(t *testing.T) {
 	}
 	if s := (slotStat{dir: true, auth: true, bin: true, meta: true, dek: true}); !s.complete() || s.halfState() {
 		t.Fatal("four-of-four must be complete and not half-state")
+	}
+}
+
+// TestInstancePicker_FourElementsDiskToRow:四要素各自的磁盘来源单独缺席
+// (其余三件以真文件在场)→ 行状态列恰点名该要素。纯函数矩阵
+// (TestSlotState_FourElementMatrix)钉的是标签逻辑,本测试钉的是「哪个文件
+// 的缺席产生哪个标签」:auth=槽内 cache.auth.json、bin=cache.bin、
+// meta=cache.meta.json、DEK=槽外 DEK 根的 cache-dek-<实例名>.key(DEK 不在
+// 槽目录里,经 SSHMGR_CACHE_DEK_DIR 指向临时目录)。四件齐 → 完整 的磁盘级
+// 闭合面由 TestInstancePicker_HalfStateRow 的 full 行覆盖。
+func TestInstancePicker_FourElementsDiskToRow(t *testing.T) {
+	for _, el := range []string{"auth", "bin", "meta", "DEK"} {
+		t.Run(el, func(t *testing.T) {
+			base := mkInstanceDir(t, "probe")
+			dekDir := t.TempDir()
+			t.Setenv("SSHMGR_CACHE_DEK_DIR", dekDir)
+			slot := filepath.Join(base, "instances", "probe")
+			touch := func(p string) {
+				if err := os.WriteFile(p, []byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if el != "auth" {
+				touch(filepath.Join(slot, "cache.auth.json"))
+			}
+			if el != "bin" {
+				touch(filepath.Join(slot, "cache.bin"))
+			}
+			if el != "meta" {
+				touch(filepath.Join(slot, "cache.meta.json"))
+			}
+			if el != "DEK" {
+				touch(filepath.Join(dekDir, "cache-dek-probe.key"))
+			}
+			p := newInstancePicker("")
+			line := pickerLineOf(p.View().Content, "probe")
+			if line == "" {
+				t.Fatalf("probe 行必须渲染, got:\n%s", p.View().Content)
+			}
+			nameW, _, _ := p.columnWidths()
+			// 状态列起点 = 光标列(2)+ 名称列 + 双空格栏距 —— 全按显示宽度
+			// (同 TestInstancePicker_CJKColumnAlignment 的列首切法)。
+			stateCol := cutDisplayWidth(line, 2+nameW+2)
+			want := "缺 " + el
+			// 恰为该标签:以 want 开头,且不得是它开头更长的缺项清单
+			// (后者意味着其余要素也被误判缺席)。
+			if !strings.HasPrefix(stateCol, want) || strings.HasPrefix(stateCol, want+"·") {
+				t.Fatalf("只缺 %s 时状态列必须恰为 %q, got %q", el, want, stateCol)
+			}
+		})
 	}
 }
 

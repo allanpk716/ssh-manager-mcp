@@ -7,9 +7,12 @@ package tui
 // messages + the picker's pair request are client-owned.
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"ssh-manager-mcp/internal/store"
 )
 
 func newClientModelForGate(t *testing.T) clientModel {
@@ -171,4 +174,102 @@ func TestClientPanel_CKeyEscFullChain(t *testing.T) {
 	if cm.instance != "agentA" {
 		t.Fatalf("a bare Esc must not switch the slot, got %q", cm.instance)
 	}
+}
+
+// TestClientModel_EscChainByContext:非向导 Esc 键链——同一个 Esc 键在三种
+// 上下文的分化行为钉成组。列表过滤态 Esc=清空过滤(不触发任何动作、不退页);
+// 覆盖层在场 Esc=收覆盖层(键先归覆盖层,已应用的过滤与会话槽都不动);无
+// 覆盖无过滤 Esc=无操作(退出键是 q,不是 Esc)。已不在此重复的部分:删除
+// 确认框的 Esc 取消路(TestClientModel_DeleteConfirm_CancelReopensPicker,
+// Esc 与 Enter 两条取消路都回实例列表)、broker 侧列表的过滤 Esc
+// (TestServersPage_ListFilterFlow)、选择器自身的 Esc 消息
+// (TestInstancePicker_EscCloses);配对向导的 Esc 链归配对向导两级表单的
+// 契约测试,不在本组。
+func TestClientModel_EscChainByContext(t *testing.T) {
+	// seedPanel 建一个带两台服务器的客户端页(两行,过滤后可见行数可断言)。
+	seedPanel := func(t *testing.T) clientModel {
+		t.Helper()
+		isolatedConfigDir(t)
+		m := newClientModelForGate(t)
+		m.snap = &store.Snapshot{Servers: []store.SnapshotServer{
+			{ID: "s1", Name: "gpu", Host: "192.0.2.10", User: "u"},
+			{ID: "s2", Name: "nuc10", Host: "192.0.2.5", User: "allan"},
+		}}
+		m.syncList()
+		return m
+	}
+
+	t.Run("filter esc clears", func(t *testing.T) {
+		m := seedPanel(t)
+		nm, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"}) // 打开过滤输入
+		m = nm.(clientModel)
+		nm, _ = m.Update(tea.KeyPressMsg{Code: 'g', Text: "g"}) // 打进过滤框
+		m = nm.(clientModel)
+		if !m.filtering() || m.filterText() != "g" {
+			t.Fatalf("前置:过滤输入必须持有按键, filtering=%v text=%q", m.filtering(), m.filterText())
+		}
+		nm, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+		m = drain(t, nm, cmd).(clientModel)
+		if m.filtering() || m.filterText() != "" {
+			t.Fatalf("过滤态 Esc 必须清空过滤, filtering=%v text=%q", m.filtering(), m.filterText())
+		}
+		if n := len(m.list.VisibleItems()); n != 2 {
+			t.Fatalf("清空过滤后两行必须复见, got %d", n)
+		}
+		if m.busy || m.overlay != nil {
+			t.Fatalf("清过滤不得触发任何动作, busy=%v overlay=%T", m.busy, m.overlay)
+		}
+	})
+
+	t.Run("overlay eats esc, filter untouched", func(t *testing.T) {
+		m := seedPanel(t)
+		mkInstanceDir(t, "agentA") // 在 seedPanel 的重定向之后建:选择器有行可列
+		m.applyFilter("gpu")       // 已应用过滤(生产重取回填用的同一函数)
+		if n := len(m.list.VisibleItems()); n != 1 {
+			t.Fatalf("前置:过滤 gpu 必须只留一行, got %d", n)
+		}
+		nm, cmd := m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"}) // 开实例选择器
+		m = drain(t, nm, cmd).(clientModel)
+		if _, ok := m.overlay.(*instancePicker); !ok {
+			t.Fatalf("前置:[i] 必须开实例选择器, got %T", m.overlay)
+		}
+		// 第一击 Esc:归覆盖层——收选择器,已应用的过滤与会话槽都不动。
+		nm, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+		m = drain(t, nm, cmd).(clientModel)
+		if m.overlay != nil {
+			t.Fatalf("覆盖层在场时 Esc 必须先收覆盖层, got %T", m.overlay)
+		}
+		if m.filterText() != "gpu" || len(m.list.VisibleItems()) != 1 {
+			t.Fatalf("收覆盖层不得动过滤, text=%q visible=%d", m.filterText(), len(m.list.VisibleItems()))
+		}
+		if m.instance != "" {
+			t.Fatalf("收选择器不得动会话槽, got %q", m.instance)
+		}
+		// 第二击 Esc:覆盖已收,这才轮到过滤——清空复见。同一键先后两击、
+		// 两种结果,即键链的分化本身。
+		nm, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+		m = drain(t, nm, cmd).(clientModel)
+		if m.filterText() != "" || len(m.list.VisibleItems()) != 2 {
+			t.Fatalf("第二击 Esc 必须清空过滤, text=%q visible=%d", m.filterText(), len(m.list.VisibleItems()))
+		}
+	})
+
+	t.Run("no overlay no filter: no-op", func(t *testing.T) {
+		m := seedPanel(t)
+		nm, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+		m = drain(t, nm, cmd).(clientModel)
+		if m.overlay != nil || m.busy || m.err != nil {
+			t.Fatalf("无覆盖无过滤时 Esc 必须无操作, overlay=%T busy=%v err=%v", m.overlay, m.busy, m.err)
+		}
+		if cmd != nil {
+			if msg := cmd(); msg != nil {
+				if _, quit := msg.(tea.QuitMsg); quit {
+					t.Fatal("Esc 不得退出(退出键是 q)")
+				}
+			}
+		}
+		if v := m.View().Content; !strings.Contains(v, "[s]同步") {
+			t.Fatalf("页面必须原地不动(页脚照常), got:\n%s", v)
+		}
+	})
 }

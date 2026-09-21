@@ -114,6 +114,7 @@ func TestAppLoopProfileFormCompletes(t *testing.T) {
 // sudo密码 | 硬件/位置/… (structuredFields) — all optional after the first 3.
 // 端口 field pre-或空值: type "22" (valid in both cases).
 func TestAppLoopServerFormCompletes(t *testing.T) {
+	t.Parallel()
 	a, st := seedStoreApp(t)
 	m, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	m, cmd := m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}) // servers 新增
