@@ -20,7 +20,7 @@
 | A3 | 延后 | 需工控板可达(快照侧已核锚在:source=forward, device=laptop-v040) |
 | A4 | 延后 | 建议 owner 裁决降级「单测代证」——构建 v0.14.0 旧客户端成本高、混布窗口生产已不存在 |
 | A5 | 过 | copy-probe 12=servers ls 12;凭据 14=快照引用 13+孤儿 1(gc 干跑解释);`ssh -- echo` 抽查通 |
-| A6 | 部分过 | 锚生命周期六步过(含⑤受影响清单一致);「revoke 有痕」子判据不满足(`cache-tokens revoke` 不写审计行,登记 backlog);临时实例删除需交互终端(owner 待办) |
+| A6 | 过 | 锚生命周期六步过(含⑤受影响清单一致);「revoke 有痕」子判据 2026-09-21 随 v0.17.0 真机补验闭环(owner 变更命令入审计——`audit --action cache-token.revoke` 行在,证据 [runs/2026-09-21-v0.17.0-deploy.md](./runs/2026-09-21-v0.17.0-deploy.md));临时实例删除的 `--yes` 无人值守面同批落地(遗留实例 plan48drill 已清) |
 
 ## A1 反馈场景三步复跑【agent 可跑:本机工具面 + NUC10 远程】
 
@@ -73,5 +73,5 @@ spec 原文:「一台仍跑 v0.14 的客户端连接指纹锚目标 → 观察 p
   4. NUC10 `sshmgr cache-tokens revoke <临时名>` 吊销;
   5. NUC10 `sshmgr servers pin-hostkey --list` 找到该设备转发锚 → `--clear`(核对受影响条目清单输出);
   6. 合法重锚(带外 `--fingerprint`)。此后两分支:「临时实例 pull 收敛」**仅在步骤 4 尚未吊销时可达**(吊销后再 pull 会 401→按设计隔离销毁本地缓存)——按册子顺序跑则走「直接进入清理」。
-- **判据**:⑤`--clear` 输出的受影响清单与实际一致;全程 audit 有痕(revoke / pin-forward / pin-clear)。〔2026-09-21 首轮注:pin-forward/pin-clear 均有行;`cache-tokens revoke` 现不写审计行——判据维持不放宽,缺口登记 backlog〕
-- **清理**:删除临时实例(`cache instances rm`——**需交互终端确认,agent 代跑会被非 TTY 护栏拦下**,无无人值守等价面,登记 backlog;被拦时留 owner 待办)、靶子条目与锚(条目 `servers rm` 后其锚变 `[orphan]`,再 `--clear --hostport <靶>:<端口>` 清)、pair 生成的临时项目(`projects revoke` + `projects remove`,否则 `profiles remove` 拒删)、临时 profile、临时码已 revoke 即终态;清理输出留档。
+- **判据**:⑤`--clear` 输出的受影响清单与实际一致;全程 audit 有痕(revoke / pin-forward / pin-clear)。〔2026-09-21 首轮注:pin-forward/pin-clear 均有行;`cache-tokens revoke` 现不写审计行——判据维持不放宽,缺口登记 backlog〕〔2026-09-21 v0.17.0 补验(同日):owner 变更命令已入审计,revoke 审计行真机实证——子判据闭环,见 [runs/2026-09-21-v0.17.0-deploy.md](./runs/2026-09-21-v0.17.0-deploy.md)〕
+- **清理**:删除临时实例(`cache instances rm`——v0.17.0 起带 `--yes` 无人值守确认旗标,agent 代跑可自完成;首轮试点时被非 TTY 护栏拦下,遗留实例已随 v0.17.0 部署验证清除)、靶子条目与锚(条目 `servers rm` 后其锚变 `[orphan]`,再 `--clear --hostport <靶>:<端口>` 清)、pair 生成的临时项目(`projects revoke` + `projects remove`,否则 `profiles remove` 拒删)、临时 profile、临时码已 revoke 即终态;清理输出留档。
