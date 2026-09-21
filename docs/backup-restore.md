@@ -40,6 +40,8 @@ sshmgr import vault.sme             # 在目标机（空 vault + 已 unlock）�
 
 vault 损坏 / 丢失：删掉坏的 `store.db`（或把 `SSHMGR_STORE` 指向一个新路径）→ `sshmgr unlock` → `sshmgr import vault.sme` → 恢复到出事前的状态。
 
+> ⚠️ **失窃 / 疑似毒锚场景下的恢复纪律**：毒化窗口内打出的备份（NAS 定时快照或 export 文件）里可能含毒锚，**不可作恢复源**——先清毒（含重锚）、后打新备份。完整时序见 multi-machine.md「清毒完整时序（设备码失窃 / 疑似毒锚）」第 6 步。
+
 ## 限制（如实）
 
 - **import 只入空 vault**：不覆盖既有数据（防误删）。要恢复到一个非空 vault，先删 / 移走 `store.db` 得到一个空 vault 再 import。
@@ -220,7 +222,7 @@ sshmgr serve uninstall
 - **触发器**：boot + 用户 logon（任务以 `LogonType=Password` 跑，boot 时无需等人登录就能起）。
 - **崩溃恢复**：`RestartOnFailure` PT1M × 3（1 分钟间隔，最多 3 次）。
 - **以当前用户身份 + filtered token（非 RunLevel Highest）**——足够读用户 profile + 监听端口，不需提权。
-- **stdout/stderr 重定向**到 `%LocalAppData%\ssh-manager\serve.log`——headless 启动失败（如 master key 解不开）也能事后翻日志。
+- **stdout/stderr 重定向**到 `C:\ProgramData\ssh-manager\serve.log`（程序固定 vault 目录下的 serve.log，`SSHMGR_SERVE_LOG` 可覆写；2026-09-21 勘误：原文误写 `%LocalAppData%`）——headless 启动失败（如 master key 解不开）也能事后翻日志。
 - **密码处理**：Task Scheduler 要存 Windows 密码才能 boot 时起任务。程序**不**用 `schtasks /Create /RP <密码>`（密码会进命令行 + 4688 审计日志），而是 shell 进 PowerShell 调 `Register-ScheduledTask`，由 PowerShell 的 `Get-Credential` 交互弹窗读密码。**密码只活在 PowerShell 进程内存里**，不进 sshmgr.exe argv，不进 4688 日志。Task Scheduler 把它存在自己的 LSA secret store（标准路径）。
 - **装完立即 `schtasks /Run`** 跑一次验证 + 生成 serve.log。
 

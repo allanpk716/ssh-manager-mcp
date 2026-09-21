@@ -30,3 +30,6 @@ known_hosts
 .omc/
 .xcheck/
 sdd/
+
+# CodeGraph index — local code-intelligence cache, not source
+.codegraph/
