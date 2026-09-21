@@ -8,7 +8,22 @@ import (
 
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
 )
+
+// writeCacheTokenAudit records the owner audit row for a cache-tokens
+// mutation: Status=ok, or Status=error when opErr is non-nil. The summary
+// carries only the command's whitelisted fields (device name, profile name)
+// — the one-time code printed to stdout never enters it. ExitCode/DurationMS
+// stay at the zero values every owner audit row uses.
+func writeCacheTokenAudit(s *store.Store, action string, summary map[string]any, opErr error) error {
+	if opErr == nil {
+		return s.WriteOwnerAudit(action, summary)
+	}
+	row := store.OwnerAuditRow(action, summary)
+	row.Status = "error"
+	return s.WriteAudit(row)
+}
 
 func newCacheTokensCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -23,7 +38,7 @@ func cacheTokensAddCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "add --name <device> --profile <profile>",
 		Short: "Issue a one-time device authorization code (printed once), bound to a profile",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			name, _ := cmd.Flags().GetString("name")
 			if name == "" {
 				return fmt.Errorf("--name is required")
@@ -37,6 +52,16 @@ func cacheTokensAddCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
+			summary := map[string]any{"name": name, "profile": profileName}
+			// One audit row when the command ends — success or any failure
+			// after the store opened (the defer sees the final err). A failed
+			// write only replaces a nil command error: the command's own
+			// failure is the primary signal.
+			defer func() {
+				if aerr := writeCacheTokenAudit(s, "cache-token.add", summary, err); aerr != nil && err == nil {
+					err = aerr
+				}
+			}()
 			profileID, err := profileIDByName(s, profileName)
 			if err != nil {
 				return err
@@ -103,12 +128,18 @@ func cacheTokensBindCmd() *cobra.Command {
 		Use:   "bind [name] [profile]",
 		Args:  cobra.ExactArgs(2),
 		Short: "Bind an unbound device code to a profile (repairs pre-Plan-39 codes; its pulls 403 until bound)",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
+			summary := map[string]any{"name": args[0], "profile": args[1]}
+			defer func() {
+				if aerr := writeCacheTokenAudit(s, "cache-token.bind", summary, err); aerr != nil && err == nil {
+					err = aerr
+				}
+			}()
 			profileID, err := profileIDByName(s, args[1])
 			if err != nil {
 				return err
@@ -127,12 +158,18 @@ func cacheTokensRevokeCmd() *cobra.Command {
 		Use:   "revoke [name]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Revoke a device authorization code (Lazy — its next pull is rejected)",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
+			summary := map[string]any{"name": args[0]}
+			defer func() {
+				if aerr := writeCacheTokenAudit(s, "cache-token.revoke", summary, err); aerr != nil && err == nil {
+					err = aerr
+				}
+			}()
 			if err := s.RevokeCacheToken(args[0]); err != nil {
 				return err
 			}
