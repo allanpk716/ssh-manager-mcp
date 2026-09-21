@@ -7,10 +7,35 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/secrethint"
+	"ssh-manager-mcp/internal/store"
 )
+
+// changedFlagNames lists, in pflag's lexical order, the flags this invocation
+// explicitly passed — FIELD NAMES only. This is what server.edit's "changed"
+// summary entry records: names are safe to audit; values (credential ones
+// included) never enter the summary.
+func changedFlagNames(cmd *cobra.Command) []string {
+	var out []string
+	cmd.Flags().Visit(func(f *pflag.Flag) {
+		out = append(out, f.Name)
+	})
+	return out
+}
+
+// writeOwnerAuditError writes the Status=error variant of an owner audit row
+// (store.OwnerAuditRow builds the ok shape; a failed mutation rewrites the
+// status before writing). Best-effort by design: on a failure path the
+// command's own error is the outcome that matters and is returned unchanged,
+// so a failed audit write never masks it.
+func writeOwnerAuditError(s *store.Store, action string, summary map[string]any) {
+	row := store.OwnerAuditRow(action, summary)
+	row.Status = "error"
+	_ = s.WriteAudit(row)
+}
 
 func newServersCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "servers", Short: "Manage SSH target servers"}
@@ -35,11 +60,16 @@ func serversAddCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
+			// Audit summary (owner whitelist: name/host/port/user only —
+			// credential values are excluded by construction). Built once from
+			// the flags so the success and the failure rows share one shape.
+			summary := map[string]any{"name": name, "host": host, "port": port, "user": user}
 			// Credential is OPTIONAL (Plan 20 C0): --password/--key are mutually
 			// exclusive, but a server may carry NEITHER (credential-less — e.g.
 			// an ssh_config host without IdentityFile). exec on such a server
 			// returns "no_credential" until one is attached via `servers edit`.
 			if password != "" && keyPath != "" {
+				writeOwnerAuditError(s, "server.add", summary)
 				return fmt.Errorf("--password and --key are mutually exclusive; provide one or neither")
 			}
 			srv := &models.Server{
@@ -71,6 +101,7 @@ func serversAddCmd() *cobra.Command {
 			case keyPath != "":
 				keyBytes, err := readKeyFile(keyPath)
 				if err != nil {
+					writeOwnerAuditError(s, "server.add", summary)
 					return err
 				}
 				cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)}
@@ -80,6 +111,12 @@ func serversAddCmd() *cobra.Command {
 			}
 			id, err := s.AddServerWithCredentials(srv, cred, sudoCred)
 			if err != nil {
+				writeOwnerAuditError(s, "server.add", summary)
+				return err
+			}
+			// Success row (projects.go precedent: a mutation's audit write
+			// failure fails the command — the row is mandatory, not advisory).
+			if err := s.WriteOwnerAudit("server.add", summary); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "added server %s id=%s\n", name, id)
@@ -162,15 +199,41 @@ func serversRmCmd() *cobra.Command {
 			}
 			defer s.Close()
 			srv, _ := s.GetServerByName(args[0])
+			if srv == nil {
+				// rm also takes an id: resolve it too, so the audit summary can
+				// name the entry that is actually about to be deleted.
+				srv, _ = s.GetServer(args[0])
+			}
 			id := args[0]
 			if srv != nil {
 				id = srv.ID
 			}
 			// Cascading: also drops credentials this server EXCLUSIVELY owned
 			// (shared credentials survive — two-column reference check).
-			return s.DeleteServerCascading(id)
+			if err := s.DeleteServerCascading(id); err != nil {
+				if srv != nil {
+					writeOwnerAuditError(s, "server.rm", rmSummary(srv))
+				}
+				return err
+			}
+			if srv == nil {
+				// Nothing matched name or id: DeleteServerCascading's idempotent
+				// no-op — a success that removed nothing, so no audit row
+				// (pin-clear precedent for absent targets).
+				return nil
+			}
+			if err := s.WriteOwnerAudit("server.rm", rmSummary(srv)); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
+}
+
+// rmSummary is server.rm's whitelist summary: exactly name/host/port (the
+// whitelist for rm has no user field, unlike server.add).
+func rmSummary(srv *models.Server) map[string]any {
+	return map[string]any{"name": srv.Name, "host": srv.Host, "port": srv.Port}
 }
 
 // serversEditCmd edits a server in place: only flags the operator passed are applied
@@ -196,8 +259,17 @@ func serversEditCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
+			// server.edit's failure rows: whitelist summary {name, changed} —
+			// "changed" carries the flag names this invocation passed (never
+			// values), so even a failed attempt is traceable field by field.
+			editAuditError := func(entryName string) {
+				writeOwnerAuditError(s, "server.edit", map[string]any{
+					"name": entryName, "changed": changedFlagNames(cmd),
+				})
+			}
 			srv, _ := s.GetServerByName(args[0])
 			if srv == nil {
+				editAuditError(args[0])
 				return fmt.Errorf("server %q not found", args[0])
 			}
 			// The PERSISTED name, captured before any field edit below applies.
@@ -249,6 +321,7 @@ func serversEditCmd() *cobra.Command {
 			pwSet := cmd.Flags().Changed("password")
 			keySet := cmd.Flags().Changed("key")
 			if pwSet && keySet {
+				editAuditError(origName)
 				return fmt.Errorf("--password and --key are mutually exclusive; provide exactly one")
 			}
 			// --clear-credential is the reverse operation: reset the server to
@@ -257,10 +330,20 @@ func serversEditCmd() *cobra.Command {
 			// cleared along with the login credential rather than set, and any
 			// field flags passed in the same invocation are not applied.
 			if clearCred && (pwSet || keySet) {
+				editAuditError(origName)
 				return fmt.Errorf("--clear-credential is mutually exclusive with --password/--key")
 			}
 			if clearCred {
 				if err := s.ClearServerCredential(srv.ID); err != nil {
+					editAuditError(origName)
+					return err
+				}
+				// Exclusive action: flags passed alongside are by contract NOT
+				// applied, so "changed" records only the clear itself — listing
+				// the ignored flags would misstate the entry's new state.
+				if err := s.WriteOwnerAudit("server.edit", map[string]any{
+					"name": origName, "changed": []string{"clear-credential"},
+				}); err != nil {
 					return err
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "cleared credentials for %s\n", origName)
@@ -271,12 +354,15 @@ func serversEditCmd() *cobra.Command {
 			// empty-secret row would brick exec with a confusing auth failure
 			// (Plan 22 T2). Clearing is --clear-credential's exclusive job.
 			if pwSet && strings.TrimSpace(password) == "" {
+				editAuditError(origName)
 				return fmt.Errorf("--password 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）")
 			}
 			if keySet && strings.TrimSpace(keyPath) == "" {
+				editAuditError(origName)
 				return fmt.Errorf("--key 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）")
 			}
 			if cmd.Flags().Changed("sudo-password") && strings.TrimSpace(sudoPassword) == "" {
+				editAuditError(origName)
 				return fmt.Errorf("--sudo-password 不能为空（更换凭据请给新值）")
 			}
 			var cred, sudoCred *models.Credential
@@ -286,6 +372,7 @@ func serversEditCmd() *cobra.Command {
 			case keySet:
 				keyBytes, err := readKeyFile(keyPath)
 				if err != nil {
+					editAuditError(origName)
 					return err
 				}
 				cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)}
@@ -311,6 +398,16 @@ func serversEditCmd() *cobra.Command {
 			// edit and the warning never echoes field content.
 			printSecretHints(cmd, scanEditMetadata(cmd, srv))
 			if err := s.UpdateServerWithCredentials(srv, cred, sudoCred); err != nil {
+				editAuditError(origName)
+				return err
+			}
+			// Success row: "changed" is the flag-name set this invocation
+			// passed — on this path every passed flag IS applied. The row names
+			// the entry as persisted BEFORE the edit (a rename does not make
+			// the row point at a name that only exists after it).
+			if err := s.WriteOwnerAudit("server.edit", map[string]any{
+				"name": origName, "changed": changedFlagNames(cmd),
+			}); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "updated server %s\n", srv.Name)

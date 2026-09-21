@@ -2,9 +2,25 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
+
+	"ssh-manager-mcp/internal/store"
 )
+
+// writeProfileAudit records the owner audit row for a profiles mutation:
+// Status=ok, or Status=error when opErr is non-nil. The summary carries only
+// the command's whitelisted fields (profile name, granted server names) —
+// same single-row shape as the cache-tokens family's writeCacheTokenAudit.
+func writeProfileAudit(s *store.Store, action string, summary map[string]any, opErr error) error {
+	if opErr == nil {
+		return s.WriteOwnerAudit(action, summary)
+	}
+	row := store.OwnerAuditRow(action, summary)
+	row.Status = "error"
+	return s.WriteAudit(row)
+}
 
 func newProfilesCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "profiles", Short: "Manage server profiles (groups)"}
@@ -20,12 +36,20 @@ func profilesRemoveCmd() *cobra.Command {
 		Use:   "remove [name]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Delete a profile (refuses while projects reference it)",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
+			summary := map[string]any{"name": args[0]}
+			// One audit row when the command ends — success or any failure
+			// after the store opened (the defer sees the final err).
+			defer func() {
+				if aerr := writeProfileAudit(s, "profile.rm", summary, err); aerr != nil && err == nil {
+					err = aerr
+				}
+			}()
 			profs, err := s.ListProfiles()
 			if err != nil {
 				return err
@@ -53,12 +77,20 @@ func profilesAddCmd() *cobra.Command {
 		Use:   "add [name]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Create a profile",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
+			summary := map[string]any{"name": args[0]}
+			// One audit row when the command ends — success or any failure
+			// after the store opened (the defer sees the final err).
+			defer func() {
+				if aerr := writeProfileAudit(s, "profile.add", summary, err); aerr != nil && err == nil {
+					err = aerr
+				}
+			}()
 			id, err := s.AddProfile(args[0])
 			if err != nil {
 				return err
@@ -97,12 +129,27 @@ func profilesGrantCmd() *cobra.Command {
 		Use:   "grant [profile] [server1 server2 ...]",
 		Args:  cobra.MinimumNArgs(2),
 		Short: "Grant servers to a profile (by name)",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
+			// The summary records the grant REQUEST exactly as typed on the
+			// command line — profile name plus the requested server-name list
+			// with its count. Also on failure paths (unknown profile, unknown
+			// server aborting the grant): the row shows what was attempted.
+			summary := map[string]any{
+				"profile": args[0],
+				"servers": fmt.Sprintf("%d台:%s", len(args)-1, strings.Join(args[1:], ",")),
+			}
+			// One audit row when the command ends — success or any failure
+			// after the store opened (the defer sees the final err).
+			defer func() {
+				if aerr := writeProfileAudit(s, "profile.grant", summary, err); aerr != nil && err == nil {
+					err = aerr
+				}
+			}()
 			profs, err := s.ListProfiles()
 			if err != nil {
 				return err

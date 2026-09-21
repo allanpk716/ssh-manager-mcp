@@ -62,14 +62,11 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 	}()
 
 	// Iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
-	allowed, ferr := st.ServersForProfile(profileID)
-	if ferr != nil {
-		err = ferr
-		return
-	}
-	if !contains(allowed, serverID) {
-		status = "denied"
-		err = ErrNotInProfile
+	if gerr := gateServer(st, profileID, serverID); gerr != nil {
+		if errors.Is(gerr, ErrNotInProfile) {
+			status = "denied"
+		}
+		err = gerr
 		return
 	}
 
