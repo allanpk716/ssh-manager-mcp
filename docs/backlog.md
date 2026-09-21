@@ -1,12 +1,30 @@
-# Backlog（P0/P1 已裁决待开工，P2 已裁决、未排期）
+# Backlog（活跃面 + 归档）
 
-- 2026-08-21 grilling 缺口分析会话（议题：满足项目目标——接口级不暴露 IP/端口/凭据 + 日常 agent 使用——还缺什么）产出 P0/P1 排期队列（#12-#16 + #3 提级），P2 维持"已裁决、未排期"。
-- P2 及历史决策记录在案（xcheck 收敛 2026-08-16 / Plan 25），均为 owner 拍板"暂不改行为"。
-- 编号稳定：老条目号码不变，#1/#2/#4 已并入 #15（留墓碑），#9 已随 Plan 30 移除，新条目顺延（现有 #12-#17）。
-- 排序逻辑：目标债（接口级不暴露承诺正被违反）→ 日常功能解锁 → 安全债 → 便利性。
+- **2026-09-21 瘦身**：2026-08-21 grilling 排期的 P0/P1 已全数销项，原节就地保留为归档（节名带「归档」标注，内容原样）；**活跃面 = 下节**。编号稳定规则不变：老条目号码不变，#1/#2/#4 已并入 #15（留墓碑），#9 已随 Plan 30 移除。
+- 排序逻辑沿革：目标债（接口级不暴露承诺正被违反）→ 日常功能解锁 → 安全债 → 便利性（2026-08-21）；2026-09-21 起新增主轴「测试自助化」。
 - 明确不做/暂缓清单见文末（scope 纪律留痕）。
 
-## P0 — 日常使用「没有」级缺口（2026-08-21 新增，已裁决待开工）
+## 活跃面（2026-09-21）
+
+1. **测试自助化主轴（2026-09-21 grilling 定案，详见下「测试自助化」节）**——首步 = 试点：Plan 48 验收册（`docs/acceptance/plan-48-pin-forwarding.md`）agent 可跑子集真机跑一轮，暴露的问题喂回验收册；**定于下个会话执行**。
+2. **P2 存活四条**：#5 doctor serve 探活二期（spec rev2.1 定稿待 owner 审，`docs/superpowers/specs/2026-08-28-plan-43-doctor-serve-probe-design.md.rev2.1.md`）；#8 sshbroker wsarecv 间歇 flake；#10 TUI 测试 ~89s（**已定先治再扩**——测试自助化的前置）；#11 TUI 表单光标常亮（等 huh/bubbles 升级复验）。
+3. **待跑真机验收**：全部移交验收册（`docs/acceptance/`）——Plan 48 六项 / Plan 47 relay / Plan 46+45 界面流程 / Plan 34+37 安全失效路径。Plan 35 清单中 serve 拓扑相关条目随 v0.13.0 拓扑移除**失效**，其余并入上列各册。
+4. **TUI 行为契约测试扩展**（验收册 plan-46-45 的「待测试代证」项：picker / 向导 / Esc 链进程内测试）——排在 #10 治理之后。
+5. **配对向导两级条件表单**（Plan 45 GW1 反馈，owner 已定方案 B 两级串联）——独立改进项，未实施未排期。
+
+## 测试自助化（2026-09-21 grilling 定案登记）
+
+- **主轴**：真机验收从「owner 手工」改为「agent 经命令行 + SSH 工具面代跑，owner 只留人工保留面」。已定决策：
+  - **ADR 0003**（`docs/adr/0003-tui-cli-parity-agent-testable.md`）：一切 TUI 能力必有命令行等价面；无人值守自动化走显式环境变量接口（前例 `SSHMGR_PAIR_ASSUME_SAS`）。
+  - **验收册成文**（`docs/acceptance/`）：总则含执行者分工、人工保留面三项（SAS 双屏比对 / 真终端观感 / 物理操作）、破坏性演练一次性靶子护栏、取证要求、通过判据纪律（判据不满足登记、不放宽）。
+  - **TUI 行为类关卡 → 进程内测试钉契约**；先治 P2 #10 的 89s 纯墙钟再扩（扩展 = 活跃面第 4 条）。
+  - **试点先行、轻过程**（不走完整 spec 门）；试点 = 活跃面第 1 条。
+- **裁决回写**：
+  - store.ExecForTest 的 testing 守卫（Plan 48 终审延后登记的三选一）——**owner 拍板维持现状**（2026-09-21）：守卫是对裸 SQL 测试注入缝的刻意加固，接受 testing 链进二进制的体积+卫生代价。**销项**。
+  - eval CI secret 与 branch protection——**维持不做**（2026-09-21 复核）：翻案触发条件 = 出现第二位贡献者 / eval 结果需跨会话可比对。
+- **同批卫生波（2026-09-21 落地）**：Plan 48 终审延后五小件（见该节销项标注）+ `.codegraph/` 进 .gitignore + compat-matrix 补登 v0.13.2/v0.13.3 行 + 本瘦身。
+
+## 归档：P0 — 日常使用「没有」级缺口（2026-08-21 新增；全数销项，2026-09-21 归档）
 
 12. ~~**list_servers host 掩码 + 错误路径清洗**（v0.9 破坏性变更）~~ **已落地（Plan 31, merge aac8555, 2026-08-21 发版 v0.9.0, 双端验证回写 447435d）**。原文：按 server 粒度 `expose_host` 布尔，默认 false；false 时 `list_servers` 不回明文 host（现状：`core.go:54` 原样返回，全仓无掩码逻辑；`ServerInfo` 无 Port 字段，端口本就未暴露）。错误路径清洗：connect_error 等返回给 agent 的文本不得带 `host:port`。目标定义措辞回写：concepts.md / threat-model.md 写明"接口级不暴露"是承诺边界（agent 主动跑 `ip addr` 探出的不算违约），运行时级隐藏与服务器出网管控明确不做。发布：v0.9 直接翻默认值，compat-matrix.md 登记。验收：expose_host 两态单测 + connect_error 文本无 host 断言 + 手工双端验证。
 
@@ -14,7 +32,7 @@
 
 14. ~~**upload_content 跨机小文件上传**——新工具：内容内联（≤8 MiB）写入远程路径。~~ **已落地（Plan 33, 2026-08-24 并 master; v0.10.0 未发版——并入 v0.10.0 行还是开 v0.11.0 留 owner 发版拍板（compat-matrix 占位注释回写时删）; spec 三轮 xcheck 收敛 rev3 定稿 + 8 任务 SDD + 整分支终审 Ready; 跨机端到端（笔记本→NUC10→目标机）owner 手工验收 + eval T10/conformance 门内实跑留 owner/CI 门）**。原文：现状缺口：`upload_file` 的 local_path 是 broker 本机路径，笔记本 agent → NUC10 serve 拓扑下无法上传本机文件（download 是内容回传、跨机可用，上/下载不对称，S1 配置下发场景残缺）。download 维持 1 MiB 前缀截断（大文件全文进 agent 上下文是反模式，不鼓励）；agent-tools.md 教 exec head/tail/grep 切片读法。验收：跨机拓扑端到端（笔记本→NUC10→目标机）+ 超限拒绝分支。
 
-## P1 — 安全债 + 第二梯队（2026-08-21 排期）
+## 归档：P1 — 安全债 + 第二梯队（2026-08-21 排期；全数销项，2026-09-21 归档）
 
 3. ~~**离线 cache 快照失效机制**（snapshot epoch/serial）~~ **已落地（Plan 34, 2026-08-24 并 master; spec 四轮 xcheck 收敛含 owner scope 降级——A 切断失效落地（pinned-401 回连销毁四件/manifest/DEGRADED/三级降级报文链），**B 时限机器砍出回 backlog 见下方「B 时限快照」条**； spec/plan 见 docs/superpowers/{specs,plans}/2026-08-24-plan-34-cache-invalidation*；owner 真机手工复验（NUC10 revoke→笔记本销毁→重新 enroll）待发版前做）**。原文：现状：revoke/rotate 不擦已落盘快照，唯一失效手段是轮换服务器凭据；`cache-tokens revoke` 只断"拉新"。排期注记（2026-08-21）：威胁模型 (b)（prompt injection）下的**切断失效**缺口——revoke 后笔记本盘上快照仍可用；安全债排在便利性前、P0 之后（兑现需"笔记本失窃/被控 + 已 revoke"复合前提，而 P0 是日常持续疼）。
 
@@ -37,7 +55,7 @@
 11. **TUI 表单光标常亮（闪烁宣称撤回）**——现状：Plan 30 曾宣称"表单内光标闪烁恢复"，真终端实测常亮。探针实证（2026-08-19）：blink 消息链活着（自续多轮）但表单视图从不切换——huh v2.0.3 `Group.Update` 对聚焦字段双重更新产生两条竞争 blink 血统，与 bubbles cursor 的 id/tag 防重机制相互作用，Set 相互覆盖致渲染恒定；属 huh/bubbles v2 嵌入式表单上游行为，本仓代码全程未设 cursor 模式。跟进方向：升级 huh/bubbles 后复验（复用探针：连喂 BlinkMsg 比对 form.View() 变化）。
 17. ~~**update 健康回探地址固定 127.0.0.1:7878**（T8 评审 Ruling F1 登记）——现状：`sshmgr update` 重启 serve 后的健康回探写死默认 `--addr`（`internal/cli/update.go` 的 `defaultProbeAddr`），非默认 `--addr` 装机的回探恒报 "not responding"（证据行已如实自认可能误报并指引 `serve status` 复核，不算错误结果但属已知钝感）。跟进：`RegisteredBinaryPath` 同源拆 args 取真实 `--addr`（读回 ImagePath/ExecStart/ProgramArguments 时顺带解析服务参数，替代写死常量）。~~ **已落地（branch `update-probe-real-addr`, 2026-09-16）**：`updater.RegisteredServeAddr` 与 RegisteredBinaryPath 同源三平台读回（Windows SCM lpBinaryPathName 原始命令行——新 seam `scmQueryCommand`，windowsRegisteredBinaryPath 改为其包装；systemd ExecStart 全 argv（execStartTokens，exec 前缀修饰符剥离）；launchd ProgramArguments 全 string 数组（plistProgramArgumentsStrings，数组界内提取））→ `serveAddrFromArgs` 取 `--addr`（空格/等号两形态）；cli 侧 `loopbackProbeAddr` 把 0.0.0.0/::/空 host 归一为 127.0.0.1（具体 LAN 地址照实探）；读失败或缺 `--addr` 回退安装默认（探针本就是证据不是判决）；`serve status` 的旗标口径**不动**（交互式命令有人在场传旗标，与「读回脆弱」的历史决策相安无事——本修复只覆盖 update 的无人值守回探）。回探 not-responding 文案换新护栏（刚重启 TLS 监听需一两秒 + serve status 复核）。测试：updater 5 个（args 提取形态/引号 tokenizer/三平台 setGOOS seam 含修饰符与越界防漏）+ cli 3 个（全链探针目标断言 0.0.0.0:9000→127.0.0.1:9000、读失败回退、归一化表）；updater 包全绿 + internal/cli 全量 48.3s 绿。附注（同批评审登记、不随 Plan 44 修复）：
     - `-race` 本机 DLL 入口点环境问题（T4/T6 登记）。
-    - backup-restore.md:223 serve.log 路径与 VaultDir 行为漂移（T2 前既有）。
+    - ~~backup-restore.md:223 serve.log 路径与 VaultDir 行为漂移（T2 前既有）。~~ 已修（2026-09-21 卫生波：勘误为 `C:\ProgramData\ssh-manager\serve.log`，注明 `SSHMGR_SERVE_LOG` 可覆写）。
 
 ## 明确不做 / 暂缓（2026-08-21 grilling 留痕）
 
@@ -55,7 +73,7 @@
 - **server TUI 停留页上时的外部写入不自动刷新**：Tab 切页重读已落地（Plan 39）；定时 tick（停留即实时）收益边际，暂缓。
 - **永离线机器的旧整库 cache.bin 不受 Plan 39 追溯**：re-pull 才被裁剪快照原子覆盖；必要时吊销旧码强制重 enroll（revoke → 回连销毁 → 新码重拉）。
 
-## Plan 39 code-review 残余（2026-08-26，用户裁决：进 backlog）
+## Plan 39 code-review 残余（2026-08-26，用户裁决：进 backlog；全数销项，2026-09-21 归档）
 
 - ~~**Tab 切页重读为同步 FetchAll**（app.go Tab 分支）：在 bubbletea 事件循环内同步跑 4+ 查询（MaxOpenConns(1) + busy_timeout 5s），serve 进程并发写时按键最坏卡 ~5s；且每次切页清掉各页 `/` 过滤与光标（仅 servers.warnOnly 保留——actionDoneMsg 既有语义的延续）。跟进：异步化（tea.Cmd）+ 按页保留过滤/光标。~~ **已落地（branch `tui-tab-async-refetch`, 2026-09-16）**：`refetchCmd()` 把 FetchAll 挪出事件循环（Tab/Shift-Tab/配对页 r/actionDoneMsg/设备码签发/token 签发/升级收尾 7 个调用点全部改返回 tea.Cmd，pagesMsg 异步落地；pagesMsg 进 overlay 门 owned 注册表——token 签发后 overlay 开着时数据照样落地）；`pageNav` 快照（captureNav/restoreNav）按页保留 `/` 过滤文本 + 光标 + servers.warnOnly（restore 顺序：⚠ 视图 rebuild → 过滤 SetFilterText → 光标按过滤后行数钳制）；行为变化如实：切换后到 pagesMsg 落地前渲染旧快照（本地 SQLite 亚秒级）；配对页 r 的状态行从「已刷新」改「刷新中…」。测试：新增 TestRefetchKeepsFilterAndCursor / TestRefetchErrorSurfaces + TestApp_TabSwitchRefetchesPages 重写为异步契约断言；internal/tui 全量 89.6s 绿 + internal/cli 50.3s 绿。
 - ~~**refetchPages 吞 FetchAll 错误**（失败时静默显示旧页当新的）：应置 a.err/status 提示重读失败。~~ **已落地（同上 branch）**：pagesMsg 携带 err——失败时置 a.err/status 清空提示、旧快照保持渲染不冒充新数据；TestRefetchErrorSurfaces 钉住（关闭 store 后刷新 → 错误可见 + 旧页在场）。
@@ -82,23 +100,23 @@
 ## Plan 46（2026-09-01 实施，待 v0.13.3 发版后回写销项）
 
 - **实例管理与配对向导健壮性——四任务已全部实现**（worktree `plan-46-instance-mgmt`；plan 见 `docs/superpowers/plans/2026-09-01-plan-46-instance-mgmt-pairing-robustness.md`）：① **T1 force 零清理先行**——`pair --force`/TUI 重配不再于 Enroll 前清槽（任何失败旧槽材料一字不动，事故形态根除），成功 = 新凭据原子覆盖，`quarantine/` 清理移至成功尾部（失败仅警告下次重清）；finish 后一切失败的错误文案统一**双路径恢复指引**（重跑 `pair --force`；撞 419 则 owner `cache-tokens revoke` 后重跑——不做确定性承诺）；pair 产物与 `--write-mcp` 副本改临时文件+rename 原子写。② **T2 `cache instances ls/rm`**——实例删除一等公民：`ls` 纯 stat（产物/DEK 存在性+年龄，DEK 孤儿与半态槽显式标注）；`rm` 双根清理（槽目录+DEK，输名确认、幂等可重试、残留物清单、默认槽拒改指 `clear`），成功输出 broker 侧 revoke 与 `--write-mcp` 槽外副本两件配套提示；进程内 rm/force 与 pull/pair 写盘互斥（拒绝而非排队）。③ **T3 picker 重做**——行状态 = auth+bin+meta+DEK 四要素（完整/残缺点名/空），★ 当前槽 + ⚠ 半态前缀，runewidth 列对齐（中文名不破列），`p` 扩到全部具名行（残缺行恰最需要），`d` 删除流（确认 overlay→后台删→成功刷新/当前槽回落默认槽，失败不回落），419 advisory 分档（完整槽确定性/残缺槽可能性），尾注"本地视角——远端吊销状态不可见"。④ **T4 文档+发布注记**（本节；`docs/release-notes-v0.13.3.md` 草稿）。
-- **待 v0.13.3 发版 + 真机验收（GW 批：GW2' picker p 重配全链含 419 撞墙自愈 / GW3 被拒重试 / GW4 Esc 全链+CLI 回归 / GW5 `cache instances rm` 真机删除+picker ★/CJK 目验）后回写销项**。
+- **待真机验收（GW 批：GW2' picker p 重配全链含 419 撞墙自愈 / GW3 被拒重试 / GW4 Esc 全链+CLI 回归 / GW5 `cache instances rm` 真机删除+picker ★/CJK 目验）后回写销项**——v0.13.3 已发版+双端部署；2026-09-21 起验收移交 [验收册 plan-46-45-tui-flows.md](./acceptance/plan-46-45-tui-flows.md)（三层拆解：CLI 等价面 agent 代跑 / TUI 行为待进程内测试代证 / 观感留 owner）。
 - 注：上节 Plan 45 GW1 反馈登记的**方案 B 两级条件表单**为 Plan 46 范围外独立改进，登记保持原样、本 plan 不含。
 - **默认槽 ⚠ 半态豁免语义（终审 2026-09-01 登记）**：半态定义"目录在、材料有缺"未豁免默认槽——自动归位机器（Plan 40 批2 姿态：默认槽真空、材料全在 instances/）上 `ls` 与 picker 都会给默认行挂 ⚠ 半态。语义噪音而非事故（picker 侧真空=目录不存在时不挂，但"目录在而默认槽材料缺"的自动归位机仍会挂）；随 GW 真机验收观察实际观感再定豁免或文档说明。
 
-## Plan 48 销项与登记（2026-09-09 实施，待 v0.15.0 发版后双端真机验收）
+## Plan 48 销项与登记（2026-09-09 实施；v0.15.0/v0.16.0 已发版+双端部署，spec §12 六项真机验收移交验收册）
 
 - ~~**仅缓存客户端可达目标的首信死锁（主机密钥带外登记）**~~ **已落地（Plan 48 锚定转发 + 带外锚定 + doctor WAL checkpoint rider, 2026-09-09 实现; spec 三轮盲评收敛 rev3 定稿 + 8 任务 SDD; spec/plan 见 docs/superpowers/{specs,plans}/2026-09-09-plan-48-pin-forwarding*; 术语见 CONTEXT.md「锚定/锚定转发/带外锚定」, 取舍见 ADR 0002; 文档=multi-machine.md「主机密钥锚定」节; 发版门=T1–T13 全绿已过, 真机验收（spec §12 六项：反馈场景复跑/真离线闭环/跨会话自动放行/混布假警报抽查/doctor 计数/清毒演练）待发版后）**。原文（2026-09-09 反馈）：「生化高速工控板 192.168.1.108 仅笔记本一块网卡可达——缓存客户端有网络通路无写权限（首次信任卡 `ErrReadOnly`），broker 有写权限无网络通路（TCP 都到不了）——首次信任两头卡死」。终形：serve `POST /pin-hostkey`（与 /snapshot 同设备码闸；insert-only 仅可新增 + 同事务审计 + 事务内等值判定 + 每次请求 stderr 行）+ 缓存客户端握手回调自动转发（409 等值自动闭合——跨会话重复转发零仪式）+ owner `servers pin-hostkey` 六形态（显示 / `--list` 含 [orphan] 枚举 / `--fingerprint` 32 字节校验 / `--from-keyscan` / `--clear` / `--clear --hostport` 孤儿直达；`--force` 唯一覆盖通道）+ 锚来源元数据三列（来源/格式/设备）随快照分发 + `servers pin-hostkey` 指纹锚的混布假警报文档化。**护栏三条不可协商：仅可新增 / 仅在线转发（明文转发通道不存在）/ 全部落审计；转发 401 不触发缓存隔离。**
 - **跳板首连（经跳板/堡垒机发起首次连接）——独立立项登记（spec 拍板：本 plan 以锚定转发替代，跳板形态不做）**：反馈场景的原始设想「让 broker 经跳板到达目标完成首连」被否——锚定转发已闭环且不需要 broker 有通路。跳板首连若将来立项，价值面是「连工作机也不可达的目标」（双零直连），设计起点见 ADR 0002 与 spec §0。
 - **条件清除（`--clear --if-source=forward` 之类）——v1 不做，登记**：v1 以受影响条目清单输出 + `--list` 来源列可见化替代；等真实批量清毒需求再说。
 - **跨轮廓导出省略 pin_device——v1 不做，登记**：v1 以「跨轮廓可见（有意）+ 文档明示」替代（它是毒锚的主要检测面）；若设备命名体系被判定为敏感信息再收紧（一处投影过滤，见 spec §5）。
 
-### 终审延后项登记（2026-09-10 全分支终审分流，非阻塞）
+### 终审延后项登记（2026-09-10 全分支终审分流，非阻塞；2026-09-21 卫生波收口）
 
-- **serve 错误路径日志 host 未加引号**（serve.go pin-hostkey insert/confirm 错误分支两处 `%s`）：同延迟行注入向量但仅错误路径、同请求者已认证；下一卫生波随手 `%q`（成功路径已在 f59cafe 修复）。
+- ~~**serve 错误路径日志 host 未加引号**（serve.go pin-hostkey insert/confirm 错误分支两处 `%s`）：同延迟行注入向量但仅错误路径、同请求者已认证；下一卫生波随手 `%q`（成功路径已在 f59cafe 修复）。~~ **已落地（2026-09-21 卫生波）**：两处改 `%q`，与成功路径同形态。
 - ~~**conformance 生产引用链 testing 包**：`internal/conformance/docker.go`/`sshbin.go`（非测试文件）import `"testing"`，`cli/pinhostkey.go` 复用 knownhosts 解析后生产二进制链接 testing（体积+卫生债，无行为影响）；方向=knownhosts.go 迁中立包。~~ **已落地（branch `conformance-drop-testing`, 2026-09-16）**：`internal/knownhosts` 中立包成立（两函数原样迁入 + 包注释留溯源），pinhostkey 改引新包；conformance 侧保留**门控的 ssh-keygen 真兼容交叉验证**（docker/ssh 助手旁），新增**不设门的纯内存回环测试**（fast lane 覆盖反而变好）。实证：`go list -deps ./cmd/sshmgr` 里 conformance 消失。**新登记（2026-09-16 排查发现）**：testing 仍在生产依赖里——来源不是 conformance 而是 `store.ExecForTest`（tunnel_registry.go 的 `testing.Testing()` 测试注入缝守卫，全仓唯一；clientops 的 Reset*ForTest 同族先例是**无守卫**导出、不链 testing）。该守卫是对 raw SQL 缝的刻意加固，去留属设计决策非机械迁移——owner 拍板：维持现状 / 改无守卫对齐 clientops 先例 / export_test 化（跨包缝做不到）三选一，维持现状即接受 testing 链入二进制的体积+卫生代价。
-- **测试卫生三小件**：serve_pin_test 并发 worker 内 `t.Fatal`（wg.Done 已 defer，降级为诊断丢失）；413 MaxBytesError 子分支无直接测试；run_test `firstServerID` 死助手删除。
-- **forwarder 两小件**：400/413 透传文本净化（控制字符）；进程退出时 `CloseIdleConnections`。
-- **doctor busy 分支执行覆盖**：busy≠0 判读由检视覆盖（可移植性不可测）；NUC10 真机可有意制造（serve 活跃 + doctor）验 INFO 降级行。
-- **backup-restore.md 补交叉引用**：指向 multi-machine.md 清毒时序第 6 步（毒化窗口备份不可作恢复源）。
+- ~~**测试卫生三小件**：serve_pin_test 并发 worker 内 `t.Fatal`（wg.Done 已 defer，降级为诊断丢失）；413 MaxBytesError 子分支无直接测试；run_test `firstServerID` 死助手删除。~~ **已落地（2026-09-21 卫生波）**：worker 改非致命形态（pinTestKey/postPin 拆非致命核心 mintPinTestKey/postPinErr + t.Errorf 降级）；pin-hostkey 与 /pair/enroll 各补「chunked 无 Content-Length 超限 → 解码期 MaxBytesError 重分类 413」直测（TestPinHostkey_OversizedChunkedBodyReclassified413 / TestPairEnroll_ChunkedOversizedReclassified413，含合法 JSON 前缀陷阱注记）；死助手删除。
+- ~~**forwarder 两小件**：400/413 透传文本净化（控制字符）；进程退出时 `CloseIdleConnections`。~~ **已落地（2026-09-21 卫生波）**：serverErrorText 双臂过 sanitizePassthrough（C0+DEL 剥除；控制字符两用例进 forward_test 契约表——JSON 臂经 json.Marshal 构造转义形态、明文臂拼接原始字节）；`PinForwarder.Close()`（nil 安全）由 cli/mcp.go 在 RunStdioCache 返回后调用。
+- **doctor busy 分支执行覆盖**：busy≠0 判读由检视覆盖（可移植性不可测）；NUC10 真机可有意制造（serve 活跃 + doctor）验 INFO 降级行——**并入验收册 plan-48 A5 顺手做**。
+- ~~**backup-restore.md 补交叉引用**：指向 multi-machine.md 清毒时序第 6 步（毒化窗口备份不可作恢复源）。~~ **已落地（2026-09-21 卫生波）**：「场景 ③ 灾难恢复」节加警示块；:223 serve.log 路径勘误同批。
 - **快照骨架重复**：InsertForwardedPin 与 ApplyForwardedHostKey 的 insert-only 事务骨架 ~20 行（路径不同——设备元数据来源与错误文本——合并辅助函数会糊回滚语义，暂留）。
