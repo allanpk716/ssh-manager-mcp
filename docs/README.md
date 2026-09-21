@@ -35,7 +35,8 @@
 | [tui-multi-machine.md](./tui-multi-machine.md) | **联机 TUI 教程**（server 侧主控台 + 工作机 client 面板）：Pairing 批准页、`[c]` 配对向导（Plan 45）、实例切换、典型任务。 |
 | [agent-tools.md](./agent-tools.md) | **给 AI agent 的工具手册**（可贴进 CLAUDE.md 的规则模板在内）：铁律、逐工具语义、错误对照、部署形态与吊销三路径、行为依据表。 |
 | [compat-matrix.md](./compat-matrix.md) | **client↔serve 版本兼容矩阵**：已验证组合 / 破坏性变更 / 升级顺序铁律（含 Plan 42 批1 三步迁移 + v0.13.0 四项 breaking 面/迁移总册）。升级任何一端之前先看这篇。 |
-| [backlog.md](./backlog.md) | **欠账清单（P0/P1 已裁决待开工 + P2 已裁决未排期 + 不做留痕）**：2026-08-21 grilling 缺口分析排期——P0 三项（host 掩码 / 后台任务三件套 / upload_content）、P1 三项（离线快照失效 / tunnels 硬化（吸收原 #1/#2/#4）/ audit CLI），P2 六项工程债（doctor / DACL / flake / TUI）保持未排期，文末附明确不做清单。后续 plan 的取货架。 |
+| [backlog.md](./backlog.md) | **欠账清单（活跃面 = P2 四条 + 测试自助化 + 明确不做留痕；已销项条目归档在后）**：后续 plan 的取货架。2026-08-21 grilling 缺口分析排期的 P0/P1 已全数销项归档。 |
+| [acceptance/](./acceptance/README.md) | **真机验收册**：发版后真机验收的正式手册（前置条件 + 步骤 + 取证要求 + 通过判据）。执行者分工、人工保留面（SAS 比对 / 观感 / 物理操作）、破坏性演练一次性靶子护栏见其总则（ADR 0003）。 |
 
 ---
 
