@@ -104,14 +104,11 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	}()
 
 	// Iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
-	allowed, ferr := st.ServersForProfile(profileID)
-	if ferr != nil {
-		err = ferr
-		return
-	}
-	if !contains(allowed, serverID) {
-		status = "denied"
-		err = ErrNotInProfile
+	if gerr := gateServer(st, profileID, serverID); gerr != nil {
+		if errors.Is(gerr, ErrNotInProfile) {
+			status = "denied"
+		}
+		err = gerr
 		return
 	}
 
@@ -254,14 +251,11 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 	}()
 
 	// Iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
-	allowed, ferr := st.ServersForProfile(profileID)
-	if ferr != nil {
-		err = ferr
-		return
-	}
-	if !contains(allowed, serverID) {
-		status = "denied"
-		err = ErrNotInProfile
+	if gerr := gateServer(st, profileID, serverID); gerr != nil {
+		if errors.Is(gerr, ErrNotInProfile) {
+			status = "denied"
+		}
+		err = gerr
 		return
 	}
 
@@ -363,14 +357,11 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 	}()
 
 	// Iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
-	allowed, ferr := st.ServersForProfile(profileID)
-	if ferr != nil {
-		err = ferr
-		return
-	}
-	if !contains(allowed, serverID) {
-		status = "denied"
-		err = ErrNotInProfile
+	if gerr := gateServer(st, profileID, serverID); gerr != nil {
+		if errors.Is(gerr, ErrNotInProfile) {
+			status = "denied"
+		}
+		err = gerr
 		return
 	}
 
@@ -494,13 +485,11 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	}
 
 	// ② iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
-	allowed, ferr := st.ServersForProfile(profileID)
-	if ferr != nil {
-		return UploadContentOutput{}, ferr
-	}
-	if !contains(allowed, serverID) {
-		status = "denied"
-		return UploadContentOutput{}, ErrNotInProfile
+	if gerr := gateServer(st, profileID, serverID); gerr != nil {
+		if errors.Is(gerr, ErrNotInProfile) {
+			status = "denied"
+		}
+		return UploadContentOutput{}, gerr
 	}
 
 	// ③ cap pre-check + decode (connect-free). base64's est is EXACT for every
@@ -676,14 +665,11 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 	}()
 
 	// Iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
-	allowed, ferr := st.ServersForProfile(profileID)
-	if ferr != nil {
-		err = ferr
-		return
-	}
-	if !contains(allowed, serverID) {
-		status = "denied"
-		err = ErrNotInProfile
+	if gerr := gateServer(st, profileID, serverID); gerr != nil {
+		if errors.Is(gerr, ErrNotInProfile) {
+			status = "denied"
+		}
+		err = gerr
 		return
 	}
 

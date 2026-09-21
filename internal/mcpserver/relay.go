@@ -150,19 +150,22 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 	}
 
 	// ---- ② profile gate: 双端独立判, 任一越权即 denied (先于一切内容级错误) ----
+	// 一次读出的授权集同帧判两端 (gateServerIn)——双端共享同一快照。
 	allowed, ferr := st.ServersForProfile(profileID)
 	if ferr != nil {
 		err = ferr
 		return
 	}
-	if !localSource && !contains(allowed, in.FromServerID) {
-		status, auditServer = "denied", in.FromServerID
-		err = ErrNotInProfile
-		return
+	if !localSource {
+		if gerr := gateServerIn(allowed, in.FromServerID); gerr != nil {
+			status, auditServer = "denied", in.FromServerID
+			err = gerr
+			return
+		}
 	}
-	if !contains(allowed, in.ToServerID) {
+	if gerr := gateServerIn(allowed, in.ToServerID); gerr != nil {
 		status = "denied"
-		err = ErrNotInProfile
+		err = gerr
 		return
 	}
 
