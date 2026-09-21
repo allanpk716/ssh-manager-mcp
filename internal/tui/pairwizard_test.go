@@ -372,7 +372,7 @@ func TestPWTwoStage_LANFlowHidesDirectFields(t *testing.T) {
 		{Name: "nuc10", Addr: "192.0.2.5", SPKI: testPWPin(), TCPPort: 7878},
 		{Name: "nuc11", Addr: "192.0.2.6", SPKI: testPWPin2(), TCPPort: 7879},
 	}
-	w := pwFocus(t, h.w) // 先跑 Init(真实运行时挂载即做):视图断言对着可交互形态
+	w := pwFocus(t, h.w)  // 先跑 Init(真实运行时挂载即做):视图断言对着可交互形态
 	v := w.View().Content // 一级表单(信任模式/实例名/profile hint)
 	for _, want := range []string{"信任模式", "局域网发现", "手动直连", "实例名", "profile hint"} {
 		if !strings.Contains(v, want) {
@@ -640,7 +640,6 @@ func TestPairWizard_SubmitRejectsIllegalInstance(t *testing.T) {
 		t.Fatalf("an illegal instance name must never reach session construction, newed=%d", len(h2.newed))
 	}
 }
-
 
 // TestPairWizard_SubmitEnrolledNeedsForce pins the form-side 已装判定:enrolled
 // 且未 force → 拒绝(先于任何会话构建;两级形态下两条路径各自的提交都闸);

@@ -80,18 +80,18 @@ type pairSessionSteps interface {
 type pwState int
 
 const (
-	pwFormMode    pwState = iota // 一级 huh 表单(信任模式/实例名/profile hint)
-	pwFormDirect                 // 二级 huh 表单(直连:服务地址+服务器公钥指纹)
-	pwDiscovering                // LAN 发现(短窗口,不可取消)
-	pwPickBroker                 // 多 broker 选择
-	pwEnrollForceConfirm         // force 重配确认(先于任何会话方法;Plan 46 零清理先行)
-	pwEnrolling                  // enroll(ctx 可取消;force 不预清理)
-	pwWaiting                    // SAS 大字常显 + 倒计时 + 轮询状态行
-	pwFinishGate                 // 批准已到:SAS 放大复核;Enter 前 Finish 不被调
-	pwWritePull                  // Finish + WriteAndPull(Esc 禁用)
-	pwDone                       // 成功结果屏
-	pwEnded                      // 终局结果屏(gone/timeout/error,r 可重试)
-	pwClosed                     // 已交还父模型(T3 关 overlay);防御态
+	pwFormMode           pwState = iota // 一级 huh 表单(信任模式/实例名/profile hint)
+	pwFormDirect                        // 二级 huh 表单(直连:服务地址+服务器公钥指纹)
+	pwDiscovering                       // LAN 发现(短窗口,不可取消)
+	pwPickBroker                        // 多 broker 选择
+	pwEnrollForceConfirm                // force 重配确认(先于任何会话方法;Plan 46 零清理先行)
+	pwEnrolling                         // enroll(ctx 可取消;force 不预清理)
+	pwWaiting                           // SAS 大字常显 + 倒计时 + 轮询状态行
+	pwFinishGate                        // 批准已到:SAS 放大复核;Enter 前 Finish 不被调
+	pwWritePull                         // Finish + WriteAndPull(Esc 禁用)
+	pwDone                              // 成功结果屏
+	pwEnded                             // 终局结果屏(gone/timeout/error,r 可重试)
+	pwClosed                            // 已交还父模型(T3 关 overlay);防御态
 )
 
 // pwEndReason 是 pwEnded 的三态(gone=410 合并语义措辞;timeout=本地窗口;error=其余)。
