@@ -50,8 +50,9 @@ func seedSlot(t *testing.T, userDir, dekDir, name string, artifacts ...string) {
 }
 
 // The confirm flow needs the stdin + output wiring per invocation, so tests
-// drive a fresh root each time via runInstancesRm.
-func runInstancesRm(t *testing.T, tty bool, stdin, arg string) (string, error) {
+// drive a fresh root each time via runInstancesRm. extra carries CLI flags
+// verbatim (e.g. "--yes") appended after the instance argument.
+func runInstancesRm(t *testing.T, tty bool, stdin, arg string, extra ...string) (string, error) {
 	t.Helper()
 	prev := cacheInstancesStdinIsTTY
 	cacheInstancesStdinIsTTY = func() bool { return tty }
@@ -61,7 +62,7 @@ func runInstancesRm(t *testing.T, tty bool, stdin, arg string) (string, error) {
 	root.SetOut(out)
 	root.SetErr(out)
 	root.SetIn(strings.NewReader(stdin))
-	root.SetArgs([]string{"cache", "instances", "rm", arg})
+	root.SetArgs(append([]string{"cache", "instances", "rm", arg}, extra...))
 	err := root.Execute()
 	return out.String(), err
 }
@@ -193,11 +194,71 @@ func TestCacheInstancesRm_NonTTYRefused(t *testing.T) {
 	seedSlot(t, userDir, dekDir, "agentA", "cache.bin")
 
 	_, err := runInstancesRm(t, false, "agentA\n", "agentA")
-	if err == nil || !strings.Contains(err.Error(), "交互式终端") {
-		t.Fatalf("non-TTY rm must be refused: %v", err)
+	// 文案钉全文:--yes 加入后此路径的拒绝文案必须一字不变。
+	if err == nil || err.Error() != "cache instances rm 需要交互式终端(stdin 不是 TTY)——为防止脚本误删,拒绝执行" {
+		t.Fatalf("non-TTY rm must be refused with the unchanged exact message: %v", err)
 	}
 	if _, serr := os.Stat(filepath.Join(userDir, "ssh-manager", "instances", "agentA")); serr != nil {
 		t.Fatalf("slot must survive the refusal: %v", serr)
+	}
+	if _, serr := os.Stat(filepath.Join(dekDir, "cache-dek-agentA.key")); serr != nil {
+		t.Fatalf("DEK must survive the refusal: %v", serr)
+	}
+}
+
+// 非 TTY + --yes:确认点 assume-yes 直接执行,双根清理与 ls 复核消失——
+// agent 无人值守清理的唯一放行通道。
+func TestCacheInstancesRm_NonTTYYesRemovesBothRoots(t *testing.T) {
+	userDir, dekDir := instancesTestEnv(t)
+	seedSlot(t, userDir, dekDir, "agentA", "cache.auth.json", "cache.bin", "cache.meta.json", "cache.config.json")
+
+	out, err := runInstancesRm(t, false, "", "agentA", "--yes")
+	if err != nil {
+		t.Fatalf("non-TTY rm --yes must delete: %v", err)
+	}
+	if strings.Contains(out, "输入实例名确认") {
+		t.Fatalf("--yes must skip the typed-name confirm:\n%s", out)
+	}
+	if !strings.Contains(out, "已删除实例 \"agentA\"") {
+		t.Fatalf("rm --yes output missing success text:\n%s", out)
+	}
+	if _, serr := os.Stat(filepath.Join(userDir, "ssh-manager", "instances", "agentA")); !os.IsNotExist(serr) {
+		t.Fatalf("slot dir must be gone: %v", serr)
+	}
+	if _, serr := os.Stat(filepath.Join(dekDir, "cache-dek-agentA.key")); !os.IsNotExist(serr) {
+		t.Fatalf("DEK must be gone: %v", serr)
+	}
+	// ls 复核:实例从列表消失(孤儿行也不许出现)。
+	ls := runInstancesLs(t)
+	if strings.Contains(ls, "instance: agentA") {
+		t.Fatalf("ls must no longer list the removed instance:\n%s", ls)
+	}
+}
+
+// TTY + --yes:跳过输名确认直接删。stdin 故意给空——若确认未被 --yes
+// 短路,空输入必然落到"已取消"分支、槽存活;删除成功本身就是短路的行为证据。
+func TestCacheInstancesRm_TTYYesSkipsTypedConfirm(t *testing.T) {
+	userDir, dekDir := instancesTestEnv(t)
+	seedSlot(t, userDir, dekDir, "agentA", "cache.bin")
+
+	out, err := runInstancesRm(t, true, "", "agentA", "--yes")
+	if err != nil {
+		t.Fatalf("TTY rm --yes must delete without typed confirm: %v", err)
+	}
+	if strings.Contains(out, "输入实例名确认") {
+		t.Fatalf("--yes must skip the typed-name confirm on TTY too:\n%s", out)
+	}
+	if strings.Contains(out, "已取消") {
+		t.Fatalf("empty stdin must not reach the confirm branch under --yes:\n%s", out)
+	}
+	if !strings.Contains(out, "已删除实例 \"agentA\"") {
+		t.Fatalf("output missing success text:\n%s", out)
+	}
+	if _, serr := os.Stat(filepath.Join(userDir, "ssh-manager", "instances", "agentA")); !os.IsNotExist(serr) {
+		t.Fatalf("slot dir must be gone: %v", serr)
+	}
+	if _, serr := os.Stat(filepath.Join(dekDir, "cache-dek-agentA.key")); !os.IsNotExist(serr) {
+		t.Fatalf("DEK must be gone: %v", serr)
 	}
 }
 

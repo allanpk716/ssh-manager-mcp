@@ -30,6 +30,9 @@ import (
 // console check clear's gate uses (GetConsoleMode on Windows, char-device
 // stat elsewhere; closes the `rm < NUL` hole a naive stat would have). The
 // typed-name confirmation remains the real guard; this is script-proofing.
+// --yes is the explicit assume-yes channel at that confirmation point
+// (same semantics as update --yes): it short-circuits both this gate and
+// the typed-name confirm on TTY and non-TTY alike.
 var cacheInstancesStdinIsTTY = func() bool {
 	return tui.IsTerminal(os.Stdin.Fd())
 }
@@ -205,9 +208,10 @@ func dekOrphanNames(named []string) ([]string, error) {
 }
 
 func cacheInstancesRmCmd() *cobra.Command {
-	return &cobra.Command{
+	var yes bool
+	c := &cobra.Command{
 		Use:   "rm <实例名>",
-		Short: "Remove one named instance's slot directory and its DEK (typed-name confirm; idempotent)",
+		Short: "Remove one named instance's slot directory and its DEK (typed-name confirm, --yes skips it; idempotent)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -227,19 +231,25 @@ func cacheInstancesRmCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !cacheInstancesStdinIsTTY() {
-				return errors.New("cache instances rm 需要交互式终端(stdin 不是 TTY)——为防止脚本误删,拒绝执行")
-			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "将永久删除实例 %q 的以下本地材料(不可恢复):\n", name)
-			fmt.Fprintf(out, "  ▸ 槽目录(整目录:cache.bin/auth/meta/config/配对产物等):%s\n", dir)
-			fmt.Fprintf(out, "  ▸ 离线缓存 DEK:%s\n", dekPath)
-			fmt.Fprintln(out, "(broker 侧设备码不受影响)")
-			fmt.Fprint(out, "输入实例名确认:")
-			line, _ := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-			if strings.TrimSpace(line) != name {
-				fmt.Fprintln(out, "\n已取消,未做任何改动。")
-				return nil
+			if !yes {
+				// 确认点:--yes 一视同仁 assume-yes(update --yes 先例)——
+				// TTY 带 --yes 跳过输名确认,非 TTY 带 --yes 直接执行。
+				// 不带 --yes 维持原护栏:非 TTY 拒绝(文案不变),TTY 走
+				// 预览 + 输名确认。删除语义两条路同一实现。
+				if !cacheInstancesStdinIsTTY() {
+					return errors.New("cache instances rm 需要交互式终端(stdin 不是 TTY)——为防止脚本误删,拒绝执行")
+				}
+				fmt.Fprintf(out, "将永久删除实例 %q 的以下本地材料(不可恢复):\n", name)
+				fmt.Fprintf(out, "  ▸ 槽目录(整目录:cache.bin/auth/meta/config/配对产物等):%s\n", dir)
+				fmt.Fprintf(out, "  ▸ 离线缓存 DEK:%s\n", dekPath)
+				fmt.Fprintln(out, "(broker 侧设备码不受影响)")
+				fmt.Fprint(out, "输入实例名确认:")
+				line, _ := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+				if strings.TrimSpace(line) != name {
+					fmt.Fprintln(out, "\n已取消,未做任何改动。")
+					return nil
+				}
 			}
 			if err := clientops.RemoveInstance(name); err != nil {
 				return err
@@ -252,4 +262,6 @@ func cacheInstancesRmCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&yes, "yes", false, "assume yes at the confirmation point (required on non-TTY stdin)")
+	return c
 }
