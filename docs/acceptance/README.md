@@ -28,7 +28,7 @@
 
 | 册 | 覆盖 | 状态 |
 |---|---|---|
-| [plan-48-pin-forwarding.md](./plan-48-pin-forwarding.md) | 锚定转发 / 带外锚定六项(spec §12) | **首轮 agent 代跑 2026-09-21**:A5 过;A1/A6 部分过(缺口已登记);A2/A3/A4 延后——证据见 [runs/2026-09-21-plan48-pilot.md](./runs/2026-09-21-plan48-pilot.md) |
-| [plan-47-relay.md](./plan-47-relay.md) | relay_file 大文件 / 断点续传 / Windows 目标特性 | 待跑(v0.14.0 发版后) |
-| [plan-46-45-tui-flows.md](./plan-46-45-tui-flows.md) | 实例管理 / 配对向导流程 | 待跑(行为部分依赖进程内测试补齐) |
-| [plan-34-37-cache-invalidation.md](./plan-34-37-cache-invalidation.md) | 吊销销毁 / 到龄自废 | 待跑(v0.10.0 发版后) |
+| [plan-48-pin-forwarding.md](./plan-48-pin-forwarding.md) | 锚定转发 / 带外锚定六项(spec §12) | **首轮 agent 代跑 2026-09-21**:A5 过;A1/A6 部分过(缺口已登记);A2/A3/A4 延后(A2 软隔离形态需按缓存客户端拓扑重述,见 backlog)——证据见 [runs/2026-09-21-plan48-pilot.md](./runs/2026-09-21-plan48-pilot.md) |
+| [plan-47-relay.md](./plan-47-relay.md) | relay_file 大文件 / 断点续传 / Windows 目标特性 | **已跑(2026-09-21 批2,agent 代跑)**:附加/R1/R2(两变体)/R3/R4 全过,R1 按 1GB 档、R2 按实际拓扑重述、R3 statvfs 认知订正、续传吞吐劣化发现登记 backlog——证据见 [runs/2026-09-21-batch2-plan47-relay.md](./runs/2026-09-21-batch2-plan47-relay.md) |
+| [plan-46-45-tui-flows.md](./plan-46-45-tui-flows.md) | 实例管理 / 配对向导流程 | CLI 等价面**已跑(2026-09-21 批2)**;行为契约层已测试代证(夜链);真终端观感留 owner(含两级表单)——证据见 [runs/2026-09-21-batch2-plan46-45-cli.md](./runs/2026-09-21-batch2-plan46-45-cli.md) |
+| [plan-34-37-cache-invalidation.md](./plan-34-37-cache-invalidation.md) | 吊销销毁 / 到龄自废 | **已跑(2026-09-21 批2,agent 代跑)**:C1/C2/C3 全过(到龄为销毁式拒载、恢复走再入网、上限地板 1h,均按实测订正)——证据见 [runs/2026-09-21-batch2-plan34-37.md](./runs/2026-09-21-batch2-plan34-37.md) |

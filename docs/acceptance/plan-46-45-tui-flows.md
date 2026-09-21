@@ -16,6 +16,7 @@
   3. 再跑 `pair --force` → 撞 419(码已吊销)→ 错误文案给出双路径恢复指引(revoke 后重跑 / 换新码);
   4. NUC10 重签码 → `pair --force` 成功,槽材料原子覆盖。
 - **判据**:③的 419 文案为「残缺槽可能性」分档形态;④成功且旧槽材料无残留半态。
+  - **2026-09-21 批2 实测订正**:CLI 层已跑([运行记录](./runs/2026-09-21-batch2-plan46-45-cli.md))。④过(force 原子覆盖、无半态、quarantine 随重建清除);③的**419 触发条件与步骤序订正**——吊销后再 force **不撞 419**(force 不使用旧码,直接提交新配对请求);419 撞的是「服务端名字上的码仍 active」的同名入网,报文带**双路径恢复指引**(换 `--instance` / owner 侧吊销后重试)原样实证,按指引第二条重试成功。TUI 确认屏的 advisory 分档仍以测试代证为准(TestPairWizard_ForceConfirm_AdvisoryTiers)。
 - **TUI 行为契约【测试代证(2026-09-21 夜链回写)】**:picker `p` 的确认屏与 419 advisory 分档——`[p]` 重配流转 = TestInstancePicker_PKeyRepairsPairedRow / TestInstancePicker_PKeyDefaultRowHint(既有);确认屏 419 advisory 分档 = TestPairWizard_ForceConfirm_AdvisoryTiers(既有,随批5 两级表单形态更新);选择器行状态四要素磁盘源映射与 scoped 门 = TestInstancePicker_FourElementsDiskToRow / TestInstancePicker_ProfileFromScopedMeta(批4 新增,commit 99dce78)。
 
 ## GW3 被拒重试
@@ -36,6 +37,7 @@
   3. `sshmgr cache instances rm <临时名>`(输名确认)→ 输出 broker 侧 revoke 与 `--write-mcp` 槽外副本两件配套提示;
   4. 复核:目录与 DEK 双根消失,`ls` 不再列出。
 - **判据**:③提示两件配套事项;④双根干净;幂等可重跑(再 rm 报不存在而非报错)。
+  - **2026-09-21 批2 实测**:CLI 层已跑,③④过(两件配套提示原样输出、双根干净);幂等再删退出码 0 无报错 ✓,但报文为**同款成功文案**而非「报不存在」——形态差异如实登记(幂等性达标)。详见[运行记录](./runs/2026-09-21-batch2-plan46-45-cli.md)。
 - **picker ★ 与中文列对齐观感【人工保留面】**:owner 真终端目验一次。
 
 ## Plan 45 GW1–G4 配对向导
