@@ -84,15 +84,15 @@ const (
 )
 
 type backupPage struct {
-	configPath string        // the backup.json this console reads and edits
-	cfg        *BackupConfig // nil = guide state (config missing / defective)
-	cfgErr     error
-	files      []smeFile // newest first
-	stale      bool      // the newest file exceeds the freshness budget
+	configPath     string        // the backup.json this console reads and edits
+	cfg            *BackupConfig // nil = guide state (config missing / defective)
+	cfgErr         error
+	files          []smeFile // newest first
+	stale          bool      // the newest file exceeds the freshness budget
 	schedInstalled bool
 	schedProbed    bool
-	entry   BackupEntry // copied from backupEntry at construction; tests stub it
-	probeFn func() (installed, probed bool)
+	entry          BackupEntry // copied from backupEntry at construction; tests stub it
+	probeFn        func() (installed, probed bool)
 	panelList
 }
 
