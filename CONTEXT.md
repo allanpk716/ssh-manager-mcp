@@ -48,6 +48,20 @@ _Avoid_: write-back(实现视角)、mutation forwarding(过泛)
 手动锚定路径:owner 经带外渠道(设备屏幕显示、人工核对等)取得目标主机密钥指纹后,人工登记进权威 vault。不依赖登记机器与目标之间有任何网络连通。
 _Avoid_: manual pin(不完整,未体现带外取指纹这一关键)、keyscan import(只是其中一种输入形态)
 
+### 备份
+
+**备份(Backup)**:
+权威 vault 全量快照封成的可移植文件;加密形态(.sme,口令加密)与 export 产物同格式,明文形态(JSON)仅限满足部署硬约束的环境。恢复统一走 import。
+_Avoid_: 快照备份(与离线缓存快照混淆)、NAS 备份(只是一种部署形态,不是独立概念)
+
+**备份配置(Backup Config)**:
+程序内备份的唯一事实源:备份目录、保留份数、口令文件路径三要素;调度时刻不属它管。
+_Avoid_: 备份策略(时序归外部调度器,这个词会让配置文件的职责越界)
+
+**口令文件(Passphrase File)**:
+无人值守备份与恢复时读备份口令的文件;活在 vault 目录(与 master key 同级保护),必须有离机副本。
+_Avoid_: 密钥文件(与 master.key.plain 混淆)
+
 ### 验收
 
 **验收册(Acceptance Playbook)**:
