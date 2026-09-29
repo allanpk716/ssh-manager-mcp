@@ -62,9 +62,185 @@ vault 损坏 / 丢失：删掉坏的 `store.db`（或把 `SSHMGR_STORE` 指向�
 - [agent-access.md](./agent-access.md)——project token 生命周期（导入后原 token 仍有效，见本篇"场景②"）。
 - 仓库根 [README](../README.md)。
 
+## Plan 49 — 口令加密定时备份（本地目录）
+
+> 设计 spec：`docs/superpowers/specs/2026-09-29-plan-49-encrypted-backup-tui-design.md`（rev0，行为以实现为准）；架构决策记录：[ADR 0004](./adr/0004-encrypted-local-dir-backup-owner-managed-replication.md)。
+
+`backup create` 新增**加密模式**：命令带上口令文件（直连旗标，或经备份配置文件）时，备份产物不再是明文 JSON，而是**口令加密的 `.sme` 文件**——和 `export` 完全同一种文件。一条命令，三个入口共用：**计划任务**（每天定时自动跑）、**TUI 备份页**（一键立即备份）、**手工命令行**。备份目录、保留份数、口令文件路径写在一份**备份配置**（`backup.json`）里，是三个入口共用的唯一事实源。
+
+**与下面 Plan 13（NAS 定时明文备份）的边界**：本节是**加密路线**——备份文件在同步链路（例如 owner 自管的群晖同步）上流动的始终是密文，备份目录和同步链路本身**不需要被信任**，因此没有 Plan 13 那些「远端必须锁死」的部署硬约束。Plan 13 的明文路线保留给满足其「部署硬约束」的部署；两种模式的文件可在同一目录并存、互不干扰（见下「不变式」的轮转按扩展名一条）。
+
+### 三入口，一条命令
+
+三个入口跑的都是同一条命令、同一套校验、同一次轮转：
+
+```bash
+# 例行（生产部署形态）：一切取自备份配置
+sshmgr backup create --config C:\ProgramData\ssh-manager\backup.json
+
+# 临时 / 一次性（不写配置文件）：直连旗标
+sshmgr backup create --dir <备份目录> --passphrase-file <口令文件> [--keep N] [--prefix vault]
+
+# 校验（解密级）
+sshmgr backup verify <备份目录>\vault-<时间戳>.sme --passphrase-file <口令文件>
+```
+
+- 产物：`vault-<UTC 时间戳>.sme`（前缀可用 `--prefix` 改）；同一秒内重跑会得到 `-2`/`-3` 后缀的新文件，**不覆盖**已有文件。
+- **不带口令文件 = 既有明文模式，行为逐字节不变**（见下文 Plan 13）。
+- 加密模式的口令只从文件读（`--passphrase-file`），**没有交互输口令的形态**——无人值守定时跑的要求使然。
+- `backup verify` 对 `.sme` 做解密级校验（解密 + JSON 重新解析，两关都过才报 `ok`），不带口令文件会明确报错要求提供；明文 `.json` 仍走 `.sha256` 边车校验，`--passphrase-file` 被忽略。
+
+### 备份配置（backup.json）
+
+```json
+{
+  "dir": "C:\\WorkSpace\\backup\\sshmgr",
+  "keep": 30,
+  "passphrase_file": "C:\\ProgramData\\ssh-manager\\backup.pass"
+}
+```
+
+| 字段 | 含义 | 约束 |
+|---|---|---|
+| `dir` | 备份目录 | 必须绝对路径；目录里必须有 marker 文件（见下「不变式」） |
+| `keep` | 保留最近几份 `.sme` | 必填；`0` = 不轮转 |
+| `passphrase_file` | 口令文件路径 | 必须绝对路径；**不得位于 `dir` 子树内** |
+
+两道硬校验，任一不过则整条命令报错退出、什么都不写（fail-closed——带错配置绝不落半套行为）：
+
+1. **绝对路径**：`dir` 与 `passphrase_file` 任何一个写相对路径 → 报错。
+2. **口令文件禁入备份目录**：`passphrase_file` 在 `dir` 里面（或就是 `dir` 本身）→ 报错——否则口令会跟着密文一起被同步出去，加密形同虚设。判定在路径规范化之后做（Windows 下大小写不敏感），并且对**生效值**生效：就算口令文件来自命令行旗标而非配置文件，同样拒绝。
+
+其余规则：
+
+- 取值优先级：**命令行旗标 > 配置文件 > 内建默认**（`--keep` 内建默认 7，`--prefix` 内建默认 `vault`）。
+- 配置文件本身有缺陷（文件不存在 / JSON 不合法 / 三个字段缺任何一个）同样报错退出。
+- TUI 备份页改配置走同一套校验——两个入口的行为永远一致。
+- 定时时刻**不**写在 `backup.json` 里——调度归计划任务管（见 runbook 第 5 步）。
+
+### 不变式（与实现行为一致）
+
+- **格式零新增**：产物与 `sshmgr export` 的文件**同构**（同一 `SSHMGRV1` 口令加密信封 + 同一份 vault 快照 JSON）。所以恢复工具就是既有的 `import`：任何能 import 一份 export 文件的 sshmgr 版本，就能恢复任何一份加密备份；`.sme` 备份和 export 产物可互相 import。
+- **跑前世代校验**：备份目录里已有 `.sme` 时，先拿当前口令试解密最新一份；解不开（口令换过，或最新文件损坏）→ 报错退出、**不写新备份**。这防止换了口令之后新旧备份悄悄分成两条「只有一条能解开」的线，到灾备当天才发现旧备份全废。报错文案同时点名两种可能（口令不符或文件损坏）——加密校验本身分不清这两种，照实说。
+- **写后验证**：写完立即重读 + 解密 + 重新解析，不过则整条命令报错（文件已落盘，但会得到明确的失败报告，不会静默留着坏文件）。
+- **无 `.sha256` 边车、无「无变化跳过」**：加密信封自带防篡改（任何字节被改或口令不对都会解密失败）；密文每次必不同，所以每跑必写一份新的——轮转（只留最近 `keep` 份）是唯一的空间兜底。
+- **轮转按扩展名**：只对 `*.sme` 数份数；同目录里如有旧的明文 `vault-*.json` 与 `.sha256`（比如从 Plan 13 路线切过来），不会被轮转、也不会被改动。
+- **marker / `.git` 防线 / 并发锁 / 原子写与明文模式同一套**：目录必须先放 marker 文件（`.ssh-manager-backup-marker`——备份目录里一个固定名字的文件，证明「要写的就是这个目录」，防写错路径）；目录自身含 `.git` 拒绝写；同目录并发跑时后到者直接跳过；先写临时文件再改名，不留半截文件。
+
+### 口令文件（backup.pass）
+
+- 单行强随机口令（至少 32 字符；runbook 的命令生成 64 字符），存放在 vault 目录 `C:\ProgramData\ssh-manager\` 下，与 master key 同级保护；用 `icacls` 对它**显式设置 Windows 权限清单（DACL，即每个文件自带的「谁能读 / 谁能写」条目表）**：仅 SYSTEM / Administrators / 当前用户三者，并禁用继承——目录继承在真机上被证伪过，不可依赖（见 runbook 第 4 步）。
+- **离机副本是硬性运营前提**：口令只活在这一台机器上 = 整机损毁时全部备份作废。部署时把口令存入 1Password（验收项 A7），恢复时机器没了也能凭 1Password 里的口令在别的机器解开备份。
+- 口令丢了 = 备份**无法恢复**（无后门，找不回）。
+- 程序不生成口令、不装 / 卸计划任务、不碰同步链路——三者都是部署期一次性的人工动作（见 runbook）。
+
+### TUI 备份页
+
+权威端角色（单机 / 多机 broker）的 TUI 新增第 6 页「备份」：查看备份配置摘要、备份文件列表与新鲜度（最新一份超过 25 小时即警示——调度没跑一眼可见）、计划任务装没装的只读探测；提供立即备份、校验最新、编辑配置三个动作——立即备份与校验在程序内跑的就是同一条 create / verify 逻辑（同锁、同轮转、同验证），改配置与命令行走同一套校验。具体键位以页面内提示为准（见 [tui-single-machine.md](./tui-single-machine.md)）。客户端角色没有这一页。
+
+### 恢复路径
+
+1. 目标机（修复后的原机，或任何新机器）装好 sshmgr → `sshmgr unlock`（建全新的空 vault）。
+2. 从备份目录（或其离机副本）取最新 `vault-*.sme` → `sshmgr import <文件>`——交互输口令，或 `--passphrase-file <口令文件>` 指向口令文件（例如从 1Password 取出的离机副本落到本地后的路径）。
+3. **设备码不随备份走**：恢复后所有工作机的设备码全部失效——各机下次回连会被批量切断（设计内行为，不是事故）。逐台在权威端 `sshmgr cache-tokens add --name <设备名>` 重发授权码，工作机用新码 `cache pull` 重新入网；agent 的 `.mcp.json` 不用动（project token 在备份里）。
+4. 恢复演练是验收必做项（A6）：用临时目录建一次性 vault 把上面 1–2 步走一遍，核对条数与生产一致后清理，全程不碰生产库（命令见 runbook A6）。
+
+与 export 相同的语义——import 只入空 vault、审计行 id 重新分配、原 project token 仍有效——见上文「限制（如实）」一节。
+
+### 部署 runbook（NUC10，发版后一次性）
+
+前置：新版已随发版部署到 NUC10（`sshmgr update`），`sshmgr serve status` 为 HEALTHY、`sshmgr doctor` 0 WARN 0 FAIL。以下全部在**管理员 PowerShell** 里执行（写 `C:\ProgramData`、设 DACL、注册 SYSTEM 计划任务都需要管理员令牌）。
+
+**1. 建备份目录 + marker 文件**
+
+```powershell
+New-Item -ItemType Directory -Force -Path C:\WorkSpace\backup\sshmgr
+New-Item -ItemType File    -Force -Path C:\WorkSpace\backup\sshmgr\.ssh-manager-backup-marker
+```
+
+**2. 生成强随机口令，写口令文件，屏幕明示一次并存入 1Password**
+
+```powershell
+# 64 字符强随机口令（48 字节密码学随机数 → Base64，384 位熵），单行无换行
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$buf = New-Object byte[] 48
+$rng.GetBytes($buf)
+[Convert]::ToBase64String($buf) | Set-Content -NoNewline C:\ProgramData\ssh-manager\backup.pass
+
+Get-Content C:\ProgramData\ssh-manager\backup.pass   # 屏幕明示一次 → 存入 1Password（验收项 A7）
+```
+
+**3. 写备份配置 `C:\ProgramData\ssh-manager\backup.json`**
+
+内容即上文「备份配置（backup.json）」的示例（`dir` / `keep: 30` / `passphrase_file`）。
+
+**4. icacls 显式设 DACL（两条命令，输出全部记入验收册）**
+
+对 `backup.pass` 与 `backup.json` **各执行一条**；**每条命令的完整输出原样记入验收册**：
+
+```powershell
+icacls "C:\ProgramData\ssh-manager\backup.pass" /inheritance:r /grant "SYSTEM:(F)" /grant "Administrators:(F)" /grant "<你的用户名>:(R,W)"
+icacls "C:\ProgramData\ssh-manager\backup.json" /inheritance:r /grant "SYSTEM:(F)" /grant "Administrators:(F)" /grant "<你的用户名>:(R,W)"
+```
+
+验收记录要求：
+
+- 每条命令输出「已成功处理 1 个文件」；
+- 再用 `icacls <文件路径>` 复核，权限恰为三条（顺序无关）：`SYSTEM:(F)`、`Administrators:(F)`（或 `BUILTIN\Administrators:(F)`）、`<机器名>\<你的用户名>:(R,W)`，且无继承条目；
+- 为什么显式设而不是靠目录继承：目录继承在真机上被证伪过，不可依赖。设完的效果：SYSTEM（计划任务）可读写，当前用户（TUI / 手工命令）可读写，其他任何人都读不到；
+- 注意：TUI 改配置会整体重写 `backup.json`，重写后该文件回到目录继承的权限（仍是 SYSTEM + Administrators + 当前用户三员，但当前用户变回完全控制）。需要严格显式权限时，重跑上面对 `backup.json` 的那一条即可。
+
+**5. 注册 SYSTEM 计划任务（每天 03:30）**
+
+```powershell
+$action    = New-ScheduledTaskAction -Execute "C:\Users\<你的用户名>\sshmgr.exe" `
+             -Argument "backup create --config C:\ProgramData\ssh-manager\backup.json"
+$trigger   = New-ScheduledTaskTrigger -Daily -At 03:30
+$settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable `
+             -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount
+Register-ScheduledTask -TaskName "sshmgr-backup" `
+             -Action $action -Trigger $trigger -Settings $settings -Principal $principal
+```
+
+- `-Execute` 用 sshmgr.exe 的**完整路径**（NUC10 现状是 `C:\Users\<你的用户名>\sshmgr.exe`，与 `update` 自更新替换的路径一致）。只写 `sshmgr.exe` 也可以，前提是其所在目录在**系统级** PATH 里——SYSTEM 账户只看机器 PATH，不看用户 PATH。
+- **SYSTEM 账户**：无人登录也照跑；master key 走固定路径裸文件 `C:\ProgramData\ssh-manager\master.key.plain`，服务账户直接读文件即可，无需 keychain（同 Plan 13 的说明）。
+- **`-StartWhenAvailable`**：03:30 关机 / 睡着错过 → 机器下次可用时补跑（默认不会为跑备份唤醒机器）。
+- **`-ExecutionTimeLimit` 10 分钟**：超时强停——磁盘 / 同步挂起的当场兜底（陈旧锁 5 分钟自动超时只救下次运行，任务层硬超时是另一道防线）。
+- 程序与 TUI 都不提供装 / 卸。卸载 = `Unregister-ScheduledTask -TaskName "sshmgr-backup" -Confirm:$false`。
+
+**6. 手工验收 A1–A6，次日 A8**（A4 的真终端观感与 A7 是 owner 人工保留面）
+
+| # | 步骤 | 通过判据 |
+|---|---|---|
+| A1 | 手工 `sshmgr backup create --config C:\ProgramData\ssh-manager\backup.json`；并把第 4 步两条 icacls 输出核对记册 | 写出 `vault-*.sme`；stdout 报 `wrote`；退出码 0；DACL 三员与第 4 步要求一致 |
+| A2 | `sshmgr backup verify <最新 .sme> --passphrase-file C:\ProgramData\ssh-manager\backup.pass` | 报 `ok: ... (decrypted and json structurally valid)` |
+| A3 | 连跑 `keep+2` 次 A1 的命令 | 目录中 `.sme` 恒 ≤ keep 份，最旧的被删 |
+| A4 | TUI 备份页目验（真终端走一遍） | 配置摘要 / 文件列表 / 新鲜度 / 计划任务探测如实显示（owner 人工） |
+| A5 | TUI 立即备份 + 校验最新 | 新文件出现在列表；校验报完好 |
+| A6 | 恢复演练（命令见下） | 临时 vault import 成功，条数与生产一致；生产库零接触；临时目录清理完成 |
+| A7 | 口令离机保管 | owner 确认口令已存入 1Password，验收册记一行（owner 人工） |
+| A8 | 次日 03:30 之后核对 | `Get-ScheduledTaskInfo -TaskName sshmgr-backup` 的 `LastTaskResult` 为 0（即任务历史里的最后运行退出码 0）；备份目录出现当日新 `.sme`。群晖侧当日副本 = owner 自管同步链路的独立观察项，不进本表判定 |
+
+A6 恢复演练（两个环境变量把 vault 的库文件与主密钥文件指到临时路径——Plan 16 的测试 / 迁移覆盖口，只在该 PowerShell 窗口内生效，生产库零接触）：
+
+```powershell
+New-Item -ItemType Directory -Force -Path C:\Temp\backup-drill
+$env:SSHMGR_STORE = "C:\Temp\backup-drill\store.db"
+$env:SSHMGR_FILEKEY_PATH = "C:\Temp\backup-drill\master.key.plain"
+sshmgr unlock                                                     # 建一次性空 vault
+sshmgr import C:\WorkSpace\backup\sshmgr\<最新.sme> --passphrase-file C:\ProgramData\ssh-manager\backup.pass
+# import 输出的 servers / credentials 条数与生产一致（生产侧条数看 sshmgr doctor 的 vault-open 一行）
+Remove-Item -Recurse -Force C:\Temp\backup-drill
+Remove-Item Env:SSHMGR_STORE, Env:SSHMGR_FILEKEY_PATH
+```
+
+**7. 收尾**：验收结果登记进 [验收册](./acceptance/README.md)，compat-matrix 按发版惯例登记；群晖同步链路（owner 自管）按 A8 观察一次当日副本。
+
 ## Plan 13 — NAS 定时明文备份（backup create / verify）
 
 > 设计 spec：`docs/superpowers/specs/2026-08-12-plan-13-nas-backup-design.md`（v3）。
+> **加密替代路线（2026-09-29 起，Plan 49）**：`backup create` 的口令加密模式（见上「Plan 49 — 口令加密定时备份（本地目录）」节）——备份目录与同步链路不需要被信任。本节明文路线保留给满足下述「部署硬约束」的部署；若当前部署已不满足这些约束，应停止明文备份、切到加密路线。
 
 `backup create` 把整个 vault 以**明文 JSON 快照**定时写到挂载的群晖目录，无变化不备份，按份数轮转，带 `.sha256` 边车抓 bit-rot。`backup verify` 按需校验。灾难恢复 = 从 NAS 拷文件 + `sshmgr import`。
 
