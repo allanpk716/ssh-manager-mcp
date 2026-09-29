@@ -97,20 +97,28 @@ func newBackupCreateCmd() *cobra.Command {
 	var keep int
 	var prefix string
 	var passphraseSrc string
+	var configPath string
 	c := &cobra.Command{
-		Use:   "create --dir <backup-dir> [--passphrase-file <file>] [--keep 7] [--prefix vault]",
-		Short: "Write a vault snapshot to --dir (plaintext JSON, or passphrase-encrypted .sme with --passphrase-file)",
-		Long: `Create a snapshot of the entire vault in --dir.
+		Use:   "create [--config <backup.json>] [--dir <backup-dir>] [--passphrase-file <file>] [--keep 7] [--prefix vault]",
+		Short: "Write a vault snapshot to the backup dir (plaintext JSON, or passphrase-encrypted .sme with a passphrase file)",
+		Long: `Create a snapshot of the entire vault in the backup target directory.
 
-Two modes, selected by --passphrase-file:
-  - ENCRYPTED (--passphrase-file set): writes vault-<UTC>.sme — the same full
-    snapshot JSON sealed in the SSHMGRV1 passphrase envelope (Argon2id +
+The target directory and mode come from --config and/or --dir: --config reads a
+backup.json (fields: dir, keep, passphrase_file — all three required, both
+paths absolute) whose values act as defaults for the corresponding flags.
+Priority: explicit flag > config value > built-in default. A passphrase file
+in effect (flag or config) switches to encrypted mode; the passphrase file must
+never live inside the backup directory (enforced on the merged values).
+
+Two modes, selected by the passphrase file:
+  - ENCRYPTED (passphrase file in effect): writes vault-<UTC>.sme — the same
+    full snapshot JSON sealed in the SSHMGRV1 passphrase envelope (Argon2id +
     AES-256-GCM), the same format ` + "`export`" + ` writes and ` + "`import`" + ` reads. Before
-    writing, the passphrase is checked against the newest existing .sme in --dir
-    (a changed passphrase or corrupted file aborts the run — no silent lineage
-    fork). After writing, the file is re-read, decrypted, and re-parsed. No
-    .sha256 sidecar (the envelope is self-authenticating); rotation keeps the
-    --keep most-recent .sme files only.
+    writing, the passphrase is checked against the newest existing .sme in the
+    dir (a changed passphrase or corrupted file aborts the run — no silent
+    lineage fork). After writing, the file is re-read, decrypted, and
+    re-parsed. No .sha256 sidecar (the envelope is self-authenticating);
+    rotation keeps the --keep most-recent .sme files only.
   - PLAINTEXT (default): writes vault-<UTC>.json + a .sha256 sidecar. Skips
     writing if the latest existing backup's SHA256 matches (idle/static-vault
     optimization — on an active server the audit log changes every run, so skip
@@ -119,27 +127,57 @@ Two modes, selected by --passphrase-file:
     The backup is PLAINTEXT (credentials in cleartext). Only safe on a trusted
     NAS with no Cloud Sync / public sharing. See docs/backup-restore.md.
 
-Both modes require a marker file (.ssh-manager-backup-marker) inside --dir as a
-mount-present guard, refuse a .git working tree, and take the same lock.`,
+Both modes require a marker file (.ssh-manager-backup-marker) inside the dir as
+a mount-present guard, refuse a .git working tree, and take the same lock.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBackupCreate(cmd, dir, keep, prefix, passphraseSrc)
+			return runBackupCreate(cmd, dir, keep, prefix, passphraseSrc, configPath)
 		},
 	}
-	c.Flags().StringVar(&dir, "dir", "", "backup target directory (must contain the marker file)")
-	c.MarkFlagRequired("dir")
+	c.Flags().StringVar(&configPath, "config", "", "backup config JSON (fields: dir, keep, passphrase_file) used as defaults for the corresponding flags; flag > config > built-in default")
+	c.Flags().StringVar(&dir, "dir", "", "backup target directory (must contain the marker file; may also come from --config)")
 	c.Flags().IntVar(&keep, "keep", 7, "number of most-recent backups to keep (0 = no rotation)")
 	c.Flags().StringVar(&prefix, "prefix", "vault", "backup filename prefix")
 	c.Flags().StringVar(&passphraseSrc, "passphrase-file", "", "read the encryption passphrase from this file (non-interactive); presence switches to encrypted .sme mode")
 	return c
 }
 
-func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, passphraseSrc string) error {
+// runBackupCreate resolves the effective settings (--config loaded and
+// validated first, then merged with priority explicit flag > config value >
+// built-in default) and dispatches to the encrypted or plaintext chain.
+func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, passphraseSrc string, configPath string) error {
+	cfg, err := loadBackupConfig(configPath)
+	if err != nil {
+		return err
+	}
+	if cfg != nil {
+		if !cmd.Flags().Changed("dir") {
+			dir = cfg.Dir
+		}
+		if !cmd.Flags().Changed("keep") {
+			keep = cfg.Keep
+		}
+		if !cmd.Flags().Changed("passphrase-file") {
+			passphraseSrc = cfg.PassphraseFile
+		}
+	}
+	// --dir carries no cobra required-annotation anymore (a config file can
+	// supply it), so the requirement is enforced here on the merged value.
+	if dir == "" {
+		return fmt.Errorf("--dir is required (pass --dir, or --config with a dir field)")
+	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
 	dir = abs
+	// passphrase-location invariant on the EFFECTIVE values: an overriding
+	// --passphrase-file must not smuggle the key into the backup dir either.
+	if passphraseSrc != "" {
+		if err := validatePassphraseNotInDir(dir, passphraseSrc); err != nil {
+			return err
+		}
+	}
 
 	// 1. marker (mount-present guard)
 	if !markerExists(dir) {

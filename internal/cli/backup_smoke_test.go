@@ -22,20 +22,23 @@ func TestBackupCmd_RegisteredWithFlags(t *testing.T) {
 			t.Errorf("backup missing %q subcommand: %v", sub, e)
 		}
 	}
-	// create flags required by spec §3.x
+	// create flags required by spec §3.x (passphrase-file arrived with the
+	// encrypted mode, config with the backup.json loader)
 	create, _, err := backup.Find([]string{"create"})
 	if err != nil {
 		t.Fatal("backup create missing:", err)
 	}
-	for _, flag := range []string{"dir", "keep", "prefix"} {
+	for _, flag := range []string{"dir", "keep", "prefix", "passphrase-file", "config"} {
 		if create.Flags().Lookup(flag) == nil {
 			t.Errorf("backup create missing --%s flag", flag)
 		}
 	}
-	// --dir must be marked required (cobra stores this as a flag annotation).
+	// --dir is intentionally NOT marked required at the cobra level anymore:
+	// --config (backup.json with a dir field) can supply it, so the
+	// requirement is enforced at merge time inside runBackupCreate.
 	if fl := create.Flags().Lookup("dir"); fl != nil {
-		if v, ok := fl.Annotations[cobra.BashCompOneRequiredFlag]; !ok || len(v) == 0 || v[0] != "true" {
-			t.Errorf("backup create --dir should be marked required")
+		if _, ok := fl.Annotations[cobra.BashCompOneRequiredFlag]; ok {
+			t.Errorf("backup create --dir must not be cobra-required; --config supplies it and runBackupCreate enforces the merge-time requirement")
 		}
 	}
 }
