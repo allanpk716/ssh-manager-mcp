@@ -417,3 +417,40 @@ func TestBackupCreate_NoDirNoConfig_ExplainsBoth(t *testing.T) {
 		t.Fatalf("error must point at --dir / --config: %v", err)
 	}
 }
+
+// TestBackupCreate_RelativePassphraseInsideDir_FailClosed: the effective-value
+// subtree check must Abs the flag passphrase first — a relative path that
+// resolves into the backup dir (cwd = parent of it) must not slip past the
+// volume-name comparison (ticket-02 review finding, fixed same night).
+func TestBackupCreate_RelativePassphraseInsideDir_FailClosed(t *testing.T) {
+	seedVaultForBackup(t)
+	bdir := t.TempDir()
+	touchMarker(t, bdir)
+	passOutside := writePassFile(t, t.TempDir(), encPass1)
+
+	cfg := writeBackupConfig(t, filepath.Join(t.TempDir(), "backup.json"),
+		backupConfigJSON(bdir, 7, passOutside))
+
+	passInside := filepath.Join(bdir, "backup.pass")
+	if err := os.WriteFile(passInside, []byte(encPass1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(filepath.Dir(bdir)); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	relPass := filepath.Join(filepath.Base(bdir), "backup.pass")
+
+	if _, err := runBackupArgs(t, "--config", cfg, "--passphrase-file", relPass); err == nil {
+		t.Fatal("a relative flag passphrase resolving inside the effective backup dir must fail closed")
+	} else if !strings.Contains(err.Error(), "must not be inside the backup dir") {
+		t.Fatalf("error must explain the passphrase file cannot live in the backup dir: %v", err)
+	}
+	if m := smeFiles(t, bdir); len(m) != 0 {
+		t.Fatalf("no failed run may write: %v", m)
+	}
+}

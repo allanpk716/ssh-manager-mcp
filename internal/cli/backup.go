@@ -173,8 +173,15 @@ func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, pa
 	dir = abs
 	// passphrase-location invariant on the EFFECTIVE values: an overriding
 	// --passphrase-file must not smuggle the key into the backup dir either.
+	// Abs first — a RELATIVE passphrase path resolves against cwd and would
+	// short-circuit the volume-name comparison inside the subtree check
+	// (ticket-02 review finding; lexical bypass, fixed 2026-09-29).
 	if passphraseSrc != "" {
-		if err := validatePassphraseNotInDir(dir, passphraseSrc); err != nil {
+		passAbs, err := filepath.Abs(passphraseSrc)
+		if err != nil {
+			return err
+		}
+		if err := validatePassphraseNotInDir(dir, passAbs); err != nil {
 			return err
 		}
 	}
