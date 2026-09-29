@@ -203,13 +203,20 @@ $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable `
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount
 Register-ScheduledTask -TaskName "sshmgr-backup" `
              -Action $action -Trigger $trigger -Settings $settings -Principal $principal
-# 注册后必做：给当前用户补任务只读权限（普通权限终端/TUI 探测要能查询它）
-icacls "C:\Windows\System32\Tasks\sshmgr-backup" /grant "<机器名>\<你的用户名>:(RX)"
+# 注册后必做第二步：重建为「普通权限终端可查询」的权限表（见下方说明）
+$svc = New-Object -ComObject Schedule.Service; $svc.Connect()
+$f = $svc.GetFolder('\')
+$xml = [regex]::Replace($f.GetTask('sshmgr-backup').Xml,
+  '<SecurityDescriptor>.*?</SecurityDescriptor>',
+  ('<SecurityDescriptor>D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;AU)(A;OICI;GRGX;;;LU)(A;OICI;GRGX;;;' +
+   ([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value) + ')</SecurityDescriptor>'))
+$f.DeleteTask('sshmgr-backup', 0)
+$f.RegisterTask('sshmgr-backup', $xml, 2, $null, $null, 3, $null) | Out-Null
 ```
 
 - `-Execute` 用 sshmgr.exe 的**完整路径**（NUC10 现状是 `C:\Users\<你的用户名>\sshmgr.exe`，与 `update` 自更新替换的路径一致）。只写 `sshmgr.exe` 也可以，前提是其所在目录在**系统级** PATH 里——SYSTEM 账户只看机器 PATH，不看用户 PATH。
 - **SYSTEM 账户**：无人登录也照跑；master key 走固定路径裸文件 `C:\ProgramData\ssh-manager\master.key.plain`，服务账户直接读文件即可，无需 keychain（同 Plan 13 的说明）。
-- **注册后那条 icacls 必做**：SYSTEM 任务的默认权限表只有 SYSTEM 与 Administrators——普通（非管理员）终端里 Administrators 组不生效，`schtasks` 查询会被拒，TUI 备份页的调度探测会一直误报「未安装」（2026-09-29 首部署实测踩中）。补 `当前用户:(RX)` 只读后即恢复；只授权查询/查看，不给运行或修改权。
+- **注册后那段「删除重建」必做**：SYSTEM 任务默认权限表只有 SYSTEM 与 Administrators——普通（非管理员）终端里 Administrators 组不生效，TUI 备份页的调度探测会一直误报「未安装」（2026-09-29 首部署实测踩中）。**就地修补不生效**（对任务文件 icacls 加权限、或带权限参数原地更新注册，服务端访问检查都不认）；唯一验证有效的方法是**删除后以权限描述符内嵌 XML 的方式全新创建**——权限表照抄 Windows 自家 SYSTEM 任务的可读模式（Authenticated Users / Local Users 只读 + 当前账户只读），普通终端即可查询。只授权查询/查看，不给运行或修改权。
 - **`-StartWhenAvailable`**：03:30 关机 / 睡着错过 → 机器下次可用时补跑（默认不会为跑备份唤醒机器）。
 - **`-ExecutionTimeLimit` 10 分钟**：超时强停——磁盘 / 同步挂起的当场兜底（陈旧锁 5 分钟自动超时只救下次运行，任务层硬超时是另一道防线）。
 - 程序与 TUI 都不提供装 / 卸。卸载 = `Unregister-ScheduledTask -TaskName "sshmgr-backup" -Confirm:$false`。
