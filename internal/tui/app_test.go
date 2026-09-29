@@ -45,6 +45,14 @@ func newTestApp(t *testing.T) App {
 	if err != nil {
 		t.Fatalf("NewBrokerApp: %v", err)
 	}
+	// Point the 备份 page at a throwaway path: no test may read or touch the
+	// real vault dir's backup.json (backup page tests stub its entry instead).
+	a.backupCfgPath = filepath.Join(t.TempDir(), "backup.json")
+	pages, err := FetchAll(st, a.backupCfgPath)
+	if err != nil {
+		t.Fatalf("refetch pages with the temp backup config path: %v", err)
+	}
+	a.pages = pages
 	return a
 }
 
@@ -53,13 +61,22 @@ func TestApp_TabCyclesPages(t *testing.T) {
 	if a.page != pageServers {
 		t.Fatalf("start page = %v", a.page)
 	}
-	m2, _ := a.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if m2.(App).page != pageProfiles {
-		t.Fatalf("tab: %v", m2.(App).page)
+	// full cycle pins the page-array shape (Plan 49 票 03: 5→6, the sixth
+	// page is 「备份」): servers → … → pairing → backup → wrap to servers.
+	want := []page{pageProfiles, pageProjects, pageTokens, pagePairing, pageBackup, pageServers}
+	m := a
+	for i, w := range want {
+		m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		got := m2.(App)
+		if got.page != w {
+			t.Fatalf("tab %d: page = %v, want %v", i+1, got.page, w)
+		}
+		m = got
 	}
-	m3, _ := m2.(App).Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	if m3.(App).page != pageServers {
-		t.Fatalf("shift-tab wrap: %v", m3.(App).page)
+	// Shift-Tab from the first page wraps to the LAST page (备份)
+	m3, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if got := m3.(App); got.page != pageBackup {
+		t.Fatalf("shift-tab wrap: %v, want pageBackup", got.page)
 	}
 }
 

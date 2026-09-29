@@ -23,6 +23,7 @@ const (
 	pageProjects
 	pageTokens
 	pagePairing
+	pageBackup // 「备份」(Plan 49 票 03) — broker/standalone only, never the client console
 	pageCount
 )
 
@@ -79,11 +80,18 @@ type App struct {
 	status     string
 	err        error
 	refetchGen int // latest refetch request's generation; stale-landing pagesMsg is dropped (see refetchCmd)
+
+	// backupCfgPath is the backup.json the 备份 page reads and edits —
+	// resolved once at App construction (backupConfigPath) and carried
+	// through every refetch's FetchAll. Test seam: newTestApp points it at a
+	// temp path so no test touches the real vault dir.
+	backupCfgPath string
 }
 
 // NewBrokerApp builds the broker console over an open store (caller owns Close).
 func NewBrokerApp(st *store.Store) (App, error) {
-	pages, err := FetchAll(st)
+	cfgPath := backupConfigPath()
+	pages, err := FetchAll(st, cfgPath)
 	if err != nil {
 		return App{}, err
 	}
@@ -91,7 +99,7 @@ func NewBrokerApp(st *store.Store) (App, error) {
 	if err != nil {
 		return App{}, err // fail closed: a corrupt role.json surfaces to the CLI
 	}
-	return App{st: st, pages: pages, status: "就绪", role: role}, nil
+	return App{st: st, pages: pages, status: "就绪", role: role, backupCfgPath: cfgPath}, nil
 }
 
 // detectBrokerRole resolves the App's role: role.json first (authoritative
@@ -118,8 +126,10 @@ func detectBrokerRole() (roles.Role, error) {
 	return roles.RoleStandalone, nil
 }
 
-// FetchAll loads the five entity pages in one shot.
-func FetchAll(st *store.Store) ([pageCount]listPage, error) {
+// FetchAll loads the six entity pages in one shot. backupCfgPath is the
+// backup.json path the 备份 page reads/edits (resolved by the caller so tests
+// can point it away from the real vault dir).
+func FetchAll(st *store.Store, backupCfgPath string) ([pageCount]listPage, error) {
 	var pages [pageCount]listPage
 	servers, err := st.ListServers()
 	if err != nil {
@@ -158,6 +168,7 @@ func FetchAll(st *store.Store) ([pageCount]listPage, error) {
 	pages[pageProjects] = newProjectsPage(projects, st)
 	pages[pageTokens] = newCacheTokensPage(tokens, profileNames)
 	pages[pagePairing] = newPairingPage(pairings, profiles, defProfile)
+	pages[pageBackup] = newBackupPage(backupCfgPath)
 	return pages, nil
 }
 
@@ -260,7 +271,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.startUpgrade()
 			return a, a.overlay.Init()
 		case k.Text == "a", k.Text == "e", k.Text == "d", k.Text == "g",
-			k.Text == "i", k.Text == "!", k.Text == "x", k.Text == "r":
+			k.Text == "i", k.Text == "!", k.Text == "x", k.Text == "r",
+			k.Text == "b", k.Text == "v":
 			// F2 (fix round): while an upgrade segment is in flight (install/
 			// probe/deviceIssue — overlay==nil windows), page action keys are
 			// suppressed: opening a form overlay here would be clobbered by the
@@ -496,6 +508,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+			if a.page == pageBackup {
+				if cmd := a.backupKey(k); cmd != nil {
+					return a, cmd
+				}
+			}
 			if a.overlay != nil {
 				return a, a.overlay.Init()
 			}
@@ -631,7 +648,7 @@ func (a *App) refetchCmd() tea.Cmd {
 	gen := a.refetchGen
 	nav := captureNav(a.pages)
 	return func() tea.Msg {
-		pages, err := FetchAll(a.st)
+		pages, err := FetchAll(a.st, a.backupCfgPath)
 		return pagesMsg{pages: pages, nav: nav, gen: gen, err: err}
 	}
 }
@@ -853,6 +870,14 @@ func (a App) footer() string {
 		keys = "[a]签发 [d]吊销"
 	case pagePairing:
 		keys = "[a]批准 [d]拒绝 [r]刷新"
+	case pageBackup:
+		// the guide state (config missing) offers only the edit affordance —
+		// there is nothing to back up or verify before a config exists
+		if bp, ok := a.pages[pageBackup].(*backupPage); ok && bp.cfg == nil {
+			keys = "[e]编辑配置"
+		} else {
+			keys = "[b]立即备份 [v]校验最新 [e]编辑配置"
+		}
 	}
 	tail := "Tab 切页  q 退出"
 	if keys != "" {

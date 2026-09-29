@@ -3,10 +3,13 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"ssh-manager-mcp/internal/tui"
 )
 
 // backupConfig is a parsed and validated backup.json — the single source of
@@ -109,4 +112,83 @@ func pathInsideDirTree(child, dir string) bool {
 		restDir += string(filepath.Separator)
 	}
 	return strings.HasPrefix(restChild, restDir)
+}
+
+// ---------------------------------------------------------------------------
+// TUI bridge (Plan 49 票 03). The broker console's 备份 page must share this
+// file's validation and backup.go's create/verify chains byte-for-byte, but
+// internal/tui cannot import internal/cli (cli imports tui for the `tui`
+// command — import cycle), so the entry points are injected through
+// tui.SetBackupEntry — the same bridge pattern as tui.SetServeInstaller
+// (Plan 19 T4). The init here keeps the whole bridge inside this one file.
+func init() {
+	tui.SetBackupEntry(tui.BackupEntry{
+		LoadConfig:     loadBackupConfigForTUI,
+		ValidateValues: validateBackupConfigValuesForTUI,
+		SaveConfig:     saveBackupConfigForTUI,
+		Create:         runBackupCreateForTUI,
+		Verify:         runBackupVerifyForTUI,
+	})
+}
+
+// loadBackupConfigForTUI adapts loadBackupConfig to the console: the exact
+// same validation, surfaced through the exported view type.
+func loadBackupConfigForTUI(path string) (*tui.BackupConfig, error) {
+	cfg, err := loadBackupConfig(path)
+	if err != nil || cfg == nil {
+		return nil, err
+	}
+	return &tui.BackupConfig{Dir: cfg.Dir, Keep: cfg.Keep, PassphraseFile: cfg.PassphraseFile}, nil
+}
+
+// validateBackupConfigValuesForTUI applies loadBackupConfig's value rules to
+// in-memory form values — both paths absolute plus the passphrase-subtree
+// invariant — so the console's save gate IS the CLI's gate, not a
+// re-statement of it.
+func validateBackupConfigValuesForTUI(dir, passphraseFile string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("backup config: %q must be an absolute path, got %q", "dir", dir)
+	}
+	if !filepath.IsAbs(passphraseFile) {
+		return fmt.Errorf("backup config: %q must be an absolute path, got %q", "passphrase_file", passphraseFile)
+	}
+	return validatePassphraseNotInDir(dir, passphraseFile)
+}
+
+// saveBackupConfigForTUI writes the three fields through the SAME on-disk
+// shape loadBackupConfig reads (backupConfigFile) and the same atomic write
+// the backups themselves use (temp + fsync + rename, 0600).
+func saveBackupConfigForTUI(configPath, dir string, keep int, passphraseFile string) error {
+	data, err := json.Marshal(backupConfigFile{Dir: &dir, Keep: &keep, PassphraseFile: &passphraseFile})
+	if err != nil {
+		return err
+	}
+	_, err = atomicWriteFile(filepath.Dir(configPath), filepath.Base(configPath), data)
+	return err
+}
+
+// runBackupCreateForTUI runs the exact `backup create --config <path>` chain
+// (no other flag overridden — the config file is the single source, same as
+// the scheduled task's invocation). Output lands in the given writers; the
+// console shows the last line on its status bar.
+func runBackupCreateForTUI(configPath string, stdout, stderr io.Writer) error {
+	c := newBackupCreateCmd()
+	c.SetOut(stdout)
+	c.SetErr(stderr)
+	if err := c.Flags().Set("config", configPath); err != nil {
+		return err
+	}
+	return c.RunE(c, nil)
+}
+
+// runBackupVerifyForTUI runs the exact `backup verify <file>
+// --passphrase-file <path>` gates (decrypt + re-parse for .sme) — the
+// console's [v] and its save-time generation check both ride it.
+func runBackupVerifyForTUI(file, passphraseSrc string, stdout io.Writer) error {
+	c := newBackupVerifyCmd()
+	c.SetOut(stdout)
+	if err := c.Flags().Set("passphrase-file", passphraseSrc); err != nil {
+		return err
+	}
+	return c.RunE(c, []string{file})
 }
