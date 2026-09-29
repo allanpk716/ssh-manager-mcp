@@ -129,7 +129,7 @@ sshmgr backup verify <备份目录>\vault-<时间戳>.sme --passphrase-file <口
 
 ### 口令文件（backup.pass）
 
-- 单行强随机口令（至少 32 字符；runbook 的命令生成 64 字符），存放在 vault 目录 `C:\ProgramData\ssh-manager\` 下，与 master key 同级保护；用 `icacls` 对它**显式设置 Windows 权限清单（DACL，即每个文件自带的「谁能读 / 谁能写」条目表）**：仅 SYSTEM / Administrators / 当前用户三者，并禁用继承——目录继承在真机上被证伪过，不可依赖（见 runbook 第 4 步）。
+- 单行强随机口令（至少 32 字符；runbook 的命令生成 64 字符。长度由部署人自守——程序只拒绝空口令，不检查长度），存放在 vault 目录 `C:\ProgramData\ssh-manager\` 下，与 master key 同级保护；用 `icacls` 对它**显式设置 Windows 权限清单（DACL，即每个文件自带的「谁能读 / 谁能写」条目表）**：仅 SYSTEM / Administrators / 当前用户三者，并禁用继承——目录继承在真机上被证伪过，不可依赖（见 runbook 第 4 步）。
 - **离机副本是硬性运营前提**：口令只活在这一台机器上 = 整机损毁时全部备份作废。部署时把口令存入 1Password（验收项 A7），恢复时机器没了也能凭 1Password 里的口令在别的机器解开备份。
 - 口令丢了 = 备份**无法恢复**（无后门，找不回）。
 - 程序不生成口令、不装 / 卸计划任务、不碰同步链路——三者都是部署期一次性的人工动作（见 runbook）。
@@ -142,7 +142,7 @@ sshmgr backup verify <备份目录>\vault-<时间戳>.sme --passphrase-file <口
 
 1. 目标机（修复后的原机，或任何新机器）装好 sshmgr → `sshmgr unlock`（建全新的空 vault）。
 2. 从备份目录（或其离机副本）取最新 `vault-*.sme` → `sshmgr import <文件>`——交互输口令，或 `--passphrase-file <口令文件>` 指向口令文件（例如从 1Password 取出的离机副本落到本地后的路径）。
-3. **设备码不随备份走**：恢复后所有工作机的设备码全部失效——各机下次回连会被批量切断（设计内行为，不是事故）。逐台在权威端 `sshmgr cache-tokens add --name <设备名>` 重发授权码，工作机用新码 `cache pull` 重新入网；agent 的 `.mcp.json` 不用动（project token 在备份里）。
+3. **设备码不随备份走**：恢复后所有工作机的设备码全部失效——各机下次回连会被批量切断（设计内行为，不是事故）。逐台在权威端 `sshmgr cache-tokens add --name <设备名> --profile <profile 名>` 重发授权码（`--profile` 是必填旗标：设备码绑定到 profile，恢复后先 `sshmgr profiles ls` 核对 profile 名），工作机用新码 `cache pull` 重新入网；agent 的 `.mcp.json` 不用动（project token 在备份里）。
 4. 恢复演练是验收必做项（A6）：用临时目录建一次性 vault 把上面 1–2 步走一遍，核对条数与生产一致后清理，全程不碰生产库（命令见 runbook A6）。
 
 与 export 相同的语义——import 只入空 vault、审计行 id 重新分配、原 project token 仍有效——见上文「限制（如实）」一节。
@@ -180,13 +180,15 @@ Get-Content C:\ProgramData\ssh-manager\backup.pass   # 屏幕明示一次 → �
 
 ```powershell
 icacls "C:\ProgramData\ssh-manager\backup.pass" /inheritance:r /grant "SYSTEM:(F)" /grant "Administrators:(F)" /grant "<你的用户名>:(R,W)"
-icacls "C:\ProgramData\ssh-manager\backup.json" /inheritance:r /grant "SYSTEM:(F)" /grant "Administrators:(F)" /grant "<你的用户名>:(R,W)"
+icacls "C:\ProgramData\ssh-manager\backup.json" /inheritance:r /grant "SYSTEM:(F)" /grant "Administrators:(F)" /grant "<你的用户名>:(M)"
 ```
+
+> backup.json 给当前用户 **(M)（修改，含删除）**而非 (R,W)：TUI 改配置保存时会整体替换这个文件（新临时文件改名顶替），Windows 上替换目标文件需要对它有删除权限——(R,W) 会让保存报拒绝访问。backup.pass 保持 (R,W)（程序从不重写它）。backup.json 内容只有路径与份数、无密钥，(M) 不扩大实质暴露。
 
 验收记录要求：
 
 - 每条命令输出「已成功处理 1 个文件」；
-- 再用 `icacls <文件路径>` 复核，权限恰为三条（顺序无关）：`SYSTEM:(F)`、`Administrators:(F)`（或 `BUILTIN\Administrators:(F)`）、`<机器名>\<你的用户名>:(R,W)`，且无继承条目；
+- 再用 `icacls <文件路径>` 复核，权限恰为三条（顺序无关）：`SYSTEM:(F)`、`Administrators:(F)`（或 `BUILTIN\Administrators:(F)`）、当前用户一条——`backup.pass` 为 `:(R,W)`、`backup.json` 为 `:(M)`——且无继承条目；
 - 为什么显式设而不是靠目录继承：目录继承在真机上被证伪过，不可依赖。设完的效果：SYSTEM（计划任务）可读写，当前用户（TUI / 手工命令）可读写，其他任何人都读不到；
 - 注意：TUI 改配置会整体重写 `backup.json`，重写后该文件回到目录继承的权限（仍是 SYSTEM + Administrators + 当前用户三员，但当前用户变回完全控制）。需要严格显式权限时，重跑上面对 `backup.json` 的那一条即可。
 
@@ -218,7 +220,7 @@ Register-ScheduledTask -TaskName "sshmgr-backup" `
 | A3 | 连跑 `keep+2` 次 A1 的命令 | 目录中 `.sme` 恒 ≤ keep 份，最旧的被删 |
 | A4 | TUI 备份页目验（真终端走一遍） | 配置摘要 / 文件列表 / 新鲜度 / 计划任务探测如实显示（owner 人工） |
 | A5 | TUI 立即备份 + 校验最新 | 新文件出现在列表；校验报完好 |
-| A6 | 恢复演练（命令见下） | 临时 vault import 成功，条数与生产一致；生产库零接触；临时目录清理完成 |
+| A6 | 恢复演练（命令见下） | 临时 vault import 成功，条数与生产一致；抽凭据解密通过；生产库零接触；临时目录清理完成 |
 | A7 | 口令离机保管 | owner 确认口令已存入 1Password，验收册记一行（owner 人工） |
 | A8 | 次日 03:30 之后核对 | `Get-ScheduledTaskInfo -TaskName sshmgr-backup` 的 `LastTaskResult` 为 0（即任务历史里的最后运行退出码 0）；备份目录出现当日新 `.sme`。群晖侧当日副本 = owner 自管同步链路的独立观察项，不进本表判定 |
 
@@ -235,7 +237,7 @@ Remove-Item -Recurse -Force C:\Temp\backup-drill
 Remove-Item Env:SSHMGR_STORE, Env:SSHMGR_FILEKEY_PATH
 ```
 
-**7. 收尾**：验收结果登记进 [验收册](./acceptance/README.md)，compat-matrix 按发版惯例登记；群晖同步链路（owner 自管）按 A8 观察一次当日副本。
+**7. 收尾**：验收结果登记进 [验收册](./acceptance/README.md)，[compat-matrix](./compat-matrix.md)（版本兼容与部署验证登记表）按发版惯例登记；群晖同步链路（owner 自管）按 A8 观察一次当日副本。
 
 ## Plan 13 — NAS 定时明文备份（backup create / verify）
 
@@ -296,7 +298,7 @@ Persistent=true
 1. 从 NAS 拷最新的 `vault-*.json`（和它的 `.sha256`）到本机。
 2. （可选）`sshmgr backup verify <file>` 确认没坏。
 3. `sshmgr import <file>` —— 嗅探自动识别明文，**不弹口令**；导入到**空的** vault（`store.db` 不存在或空）。
-4. **cache_tokens 不在备份里**（设备身份，非 vault 内容——`ExportSnapshot` 零处读该表，export/import 与 NAS 两路恢复同理）：恢复后该表**为空** → 所有工作机下次回连拿到 **unknown 401** → 按 Plan 34 语义**批量切断**（各机本地 cache 四件销毁 + `quarantine/` 痕迹 + 明确归因报文）——这是**预期行为、非事故**（设备码历史本就不随 vault 走）。恢复流程 = **逐设备重新发码 + enroll**：每台 `sshmgr cache-tokens add --name <device>` 重发授权码，工作机用新码 `cache pull` 重新拉取（全量重建）。agent 的 `.mcp.json` 不用动（project token 在备份里）。
+4. **cache_tokens 不在备份里**（设备身份，非 vault 内容——`ExportSnapshot` 零处读该表，export/import 与 NAS 两路恢复同理）：恢复后该表**为空** → 所有工作机下次回连拿到 **unknown 401** → 按 Plan 34 语义**批量切断**（各机本地 cache 四件销毁 + `quarantine/` 痕迹 + 明确归因报文）——这是**预期行为、非事故**（设备码历史本就不随 vault 走）。恢复流程 = **逐设备重新发码 + enroll**：每台 `sshmgr cache-tokens add --name <device> --profile <profile 名>` 重发授权码（`--profile` 必填），工作机用新码 `cache pull` 重新拉取（全量重建）。agent 的 `.mcp.json` 不用动（project token 在备份里）。
    > ⚠️ **带外警示——raw-DB 直拷不走这条**：直接拷贝 `store.db` 文件恢复会使 cache_tokens 连**历史状态一起回滚**——**已 revoke 的码可能复活**（被吊销设备重新拉到新快照）。此类恢复后必须**逐行审计**（`cache-tokens ls` 核对每行 status），把该死的行重新 revoke、该换的码逐台重发。
 
 ### skip 语义（诚实）
