@@ -66,6 +66,7 @@ var doctorCheckFuncs = []func() []doctorCheck{
 	checkVaultStore,
 	checkVaultKey,
 	checkVaultOpen,
+	checkStoreSidecarACL,
 	checkServeCert,
 	checkServeSvc,
 	checkClientCache,
@@ -515,6 +516,66 @@ func checkVaultOpen() []doctorCheck {
 		return rows
 	}
 	return []doctorCheck{c}
+}
+
+// sidecarACLGap is the seam over store.SidecarACLGap (inspectFileACL
+// precedent): tests stub it to drive the error and unsupported branches.
+var sidecarACLGap = store.SidecarACLGap
+
+// checkStoreSidecarACL is the WAL-sidecar twin of checkVaultOpen: the decrypt
+// proof runs on a COPY that deliberately excludes the sidecars, so a sidecar
+// the interactive user cannot write (born under serve-as-LocalSystem after a
+// reboot, before the Plan 50 parity fix) left every doctor row green while
+// `tui` / `servers` failed on the live database (NUC10 incident
+// 2026-10-02..06). Each EXISTING sidecar's write-grantors are compared
+// against store.db's — a missing principal is FAIL with the exact elevated
+// repair. Absent sidecars are a PASS (clean checkpointed state), and
+// non-Windows platforms deliberately skip (mode bits are the layer there).
+func checkStoreSidecarACL() []doctorCheck {
+	c := doctorCheck{Name: "store-sidecar"}
+	storeP, serr := paths.StorePath()
+	if serr != nil {
+		c.Status = statusInfo
+		c.Detail = "skipped — vault path unresolvable (see the store row)"
+		return []doctorCheck{c}
+	}
+	if _, err := os.Stat(storeP); err != nil {
+		c.Status = statusInfo
+		c.Detail = "skipped — no store.db on this machine"
+		return []doctorCheck{c}
+	}
+	var rows []doctorCheck
+	for _, suffix := range []string{"-shm", "-wal"} {
+		side := storeP + suffix
+		if _, err := os.Stat(side); err != nil {
+			continue // absent: checkpointed clean state — normal
+		}
+		row := doctorCheck{Name: "store-sidecar"}
+		gap, err := sidecarACLGap(storeP, side)
+		switch {
+		case errors.Is(err, store.ErrACLParityUnsupported):
+			row.Status = statusInfo
+			row.Detail = suffix + " — ACL parity is a Windows check (file mode bits are the layer elsewhere)"
+		case err != nil:
+			row.Status = statusFail
+			row.Detail = fmt.Sprintf("%s security descriptor unreadable: %v", suffix, err)
+			row.Fix = fmt.Sprintf("inspect the sidecar as admin (icacls \"%s\")", side)
+		case len(gap) > 0:
+			row.Status = statusFail
+			row.Detail = fmt.Sprintf("%s denies write to principals store.db grants (%s) — non-elevated opens of the live database fail (SQLite must write the -shm index on every connection)", suffix, strings.Join(gap, ", "))
+			row.Fix = fmt.Sprintf("elevated shell: icacls \"%s\" /grant *<each SID above>:(R,W,D) — or update sshmgr so serve mirrors store.db's ACL onto the sidecars (Plan 50)", side)
+		default:
+			row.Status = statusPass
+			row.Detail = suffix + " write-grantors match store.db"
+		}
+		rows = append(rows, row)
+	}
+	if len(rows) == 0 {
+		c.Status = statusPass
+		c.Detail = "no -wal/-shm sidecars present (checkpointed clean state)"
+		return []doctorCheck{c}
+	}
+	return rows
 }
 
 // checkServeCert reports the serve TLS cert via mcpserver.ReadServeCertFingerprint

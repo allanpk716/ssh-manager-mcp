@@ -16,3 +16,18 @@ func HardenACL(path string) error { return nil }
 func InspectFileACL(path string) (FileACLReport, error) {
 	return FileACLReport{Supported: false}, nil
 }
+
+// MirrorDACL is a no-op on non-Windows platforms: SQLite creates the WAL
+// sidecars under the operating user inside the 0700 vault directory, and the
+// Unix deployment posture is single-identity (serve and CLI run as the same
+// user), so there is no cross-identity DACL rewrite to compensate for. See the
+// Windows twin in acl_windows.go for the LocalSystem-serve vs
+// interactive-user race MirrorDACL exists to close (Plan 50).
+func MirrorDACL(src, dst string) error { return nil }
+
+// SidecarACLGap reports parity-unsupported on non-Windows: mode bits are the
+// sidecars' protection layer there, so there is nothing to compare (see
+// ErrACLParityUnsupported).
+func SidecarACLGap(storePath, sidecarPath string) ([]string, error) {
+	return nil, ErrACLParityUnsupported
+}

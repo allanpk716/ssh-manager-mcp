@@ -79,6 +79,15 @@ directly in the foreground.`,
 				return err
 			}
 			defer st.Close()
+			// Plan 50: materialize the WAL sidecars NOW under this process's
+			// identity and mirror store.db's DACL onto them. Sidecars created
+			// lazily by SQLite at first write would otherwise be born under
+			// serve's token with no interactive-user grant, and every
+			// non-elevated CLI open on this machine would fail at the -shm
+			// index ("readonly database"-class, NUC10 2026-10 incident).
+			if err := st.EnsureSidecarACL(); err != nil {
+				return err
+			}
 
 			// Post-auto-TLS: RunServe ALWAYS serves TLS. With no --tls-cert it
 			// generates a self-signed cert on first start; with --tls-cert it

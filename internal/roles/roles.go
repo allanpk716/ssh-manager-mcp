@@ -248,21 +248,32 @@ func VaultExists() bool {
 	return err == nil
 }
 
-// VaultUnlocked reports whether an UNLOCKED vault is reachable. A vault that
-// EXISTS but cannot be opened (locked / key unreadable) is distinguished by the
-// caller via VaultExists so detection never silently degrades a locked broker
-// machine into client mode (spec §6).
-func VaultUnlocked() bool {
+// VaultOpenErr is the error-preserving core of VaultUnlocked: nil when the
+// vault opens; otherwise the underlying vault.OpenStore failure — a locked
+// key tier ("vault locked: run `sshmgr unlock`"), an unreadable master.key,
+// or a SQLite open failure such as a WAL sidecar the caller cannot write
+// ("readonly database"-class). Callers that surface guidance chain this in so
+// a permission failure is not misread as "run unlock" (NUC10 incident
+// 2026-10-02..06: an access-denied sidecar wore the locked-vault wording and
+// `sshmgr unlock` "succeeded" while fixing nothing).
+func VaultOpenErr() error {
 	if !VaultExists() {
-		return false
+		return errors.New("vault absent")
 	}
 	st, err := vault.OpenStore(store.FileKeyProvider{})
 	if err != nil {
-		return false
+		return err
 	}
 	st.Close()
-	return true
+	return nil
 }
+
+// VaultUnlocked reports whether an UNLOCKED vault is reachable. A vault that
+// EXISTS but cannot be opened (locked / key unreadable / store unopenable) is
+// distinguished by the caller via VaultExists so detection never silently
+// degrades a locked broker machine into client mode (spec §6). Callers that
+// need the underlying cause use VaultOpenErr.
+func VaultUnlocked() bool { return VaultOpenErr() == nil }
 
 // cachePresent reports whether this machine is an enrolled client: a readable
 // default-slot cache.auth.json (nil,nil = never enrolled) OR any named
@@ -334,10 +345,10 @@ func ResolveMode(force string) (Launch, error) {
 	}
 
 	// No role.json: probe (pre-wizard / v0.6.0 machines).
-	if VaultExists() && !VaultUnlocked() {
-		return Launch{}, errors.New("本机 vault 存在但锁定或不可读：先运行 `sshmgr unlock`（不会降级为 client 模式）")
-	}
-	if VaultUnlocked() {
+	if VaultExists() {
+		if oerr := VaultOpenErr(); oerr != nil {
+			return Launch{}, fmt.Errorf("本机 vault 存在但锁定或不可读：%w — 钥匙问题先运行 `sshmgr unlock`；权限或数据库打开失败则运行 `sshmgr doctor` 查 store 边车检查（不会降级为 client 模式）", oerr)
+		}
 		r := RoleStandalone
 		if serveCertPresent() {
 			r = RoleServer

@@ -7,7 +7,6 @@ package tui
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -30,10 +29,10 @@ import (
 // overwrite.
 func wizEnsureVault() error {
 	if roles.VaultExists() {
-		if roles.VaultUnlocked() {
-			return nil
+		if oerr := roles.VaultOpenErr(); oerr != nil {
+			return fmt.Errorf("本机 vault 已存在但锁定或不可读：%w — 先运行 `sshmgr unlock`（向导不会覆盖既有 vault）", oerr)
 		}
-		return errors.New("本机 vault 已存在但锁定或不可读：先运行 `sshmgr unlock`（向导不会覆盖既有 vault）")
+		return nil
 	}
 	mk, err := store.GenerateMasterKey()
 	if err != nil {

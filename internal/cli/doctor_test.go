@@ -1515,3 +1515,63 @@ func TestDoctorVaultOpenCountMatchesListServers(t *testing.T) {
 		t.Fatalf("PLAINTEXT LEAKED into the doctor report:\n%s", out)
 	}
 }
+
+// TestDoctorStoreSidecarACL covers the store-sidecar row (Plan 50): absent
+// sidecars PASS (checkpointed clean state), a write-grantor gap FAILs naming
+// the SID with the elevated icacls repair, parity-unsupported platforms
+// deliberately skip, and an unreadable descriptor FAILs. The real ACL walk is
+// covered by the store package's acl_windows tests; here the sidecarACLGap
+// seam drives the branches.
+func TestDoctorStoreSidecarACL(t *testing.T) {
+	prev := sidecarACLGap
+	t.Cleanup(func() { sidecarACLGap = prev })
+
+	dir := t.TempDir()
+	vaultDir := filepath.Join(dir, "vault")
+	if err := os.MkdirAll(vaultDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	storeP := filepath.Join(vaultDir, "store.db")
+	withEnv(t, map[string]string{"SSHMGR_STORE": storeP})
+
+	// No store.db at all → INFO skip.
+	for _, r := range checkStoreSidecarACL() {
+		if r.Name == "store-sidecar" && r.Status != statusInfo {
+			t.Fatalf("no store.db must INFO-skip, got %+v", r)
+		}
+	}
+
+	// store.db present, no sidecars → PASS (checkpointed clean state).
+	if err := os.WriteFile(storeP, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rows := checkStoreSidecarACL()
+	if len(rows) != 1 || rows[0].Status != statusPass {
+		t.Fatalf("absent sidecars must PASS as clean state, got %+v", rows)
+	}
+
+	// Sidecar present + gap → FAIL naming the SID, Fix carrying the repair.
+	if err := os.WriteFile(storeP+"-shm", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sidecarACLGap = func(string, string) ([]string, error) { return []string{"S-1-1-0"}, nil }
+	rows = checkStoreSidecarACL()
+	if len(rows) != 1 || rows[0].Status != statusFail ||
+		!strings.Contains(rows[0].Detail, "S-1-1-0") || !strings.Contains(rows[0].Fix, "icacls") {
+		t.Fatalf("gap must FAIL naming the SID with the icacls repair, got %+v", rows)
+	}
+
+	// Parity unsupported (non-Windows shape) → INFO, not a verdict.
+	sidecarACLGap = func(string, string) ([]string, error) { return nil, store.ErrACLParityUnsupported }
+	rows = checkStoreSidecarACL()
+	if len(rows) != 1 || rows[0].Status != statusInfo {
+		t.Fatalf("parity-unsupported must INFO-skip, got %+v", rows)
+	}
+
+	// Read error → FAIL (unreadable security descriptor).
+	sidecarACLGap = func(string, string) ([]string, error) { return nil, errors.New("boom") }
+	rows = checkStoreSidecarACL()
+	if len(rows) != 1 || rows[0].Status != statusFail {
+		t.Fatalf("read error must FAIL, got %+v", rows)
+	}
+}

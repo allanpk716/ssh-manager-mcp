@@ -1,5 +1,13 @@
 package store
 
+import "errors"
+
+// ErrACLParityUnsupported is returned by SidecarACLGap on platforms where the
+// WAL sidecars' protection layer is file mode bits, not a DACL (non-Windows):
+// there is no per-principal ACL to compare, so the caller (doctor's
+// store-sidecar row) reports a deliberate skip instead of a verdict.
+var ErrACLParityUnsupported = errors.New("sidecar ACL parity is a Windows-only check (file mode bits elsewhere)")
+
 // FileACLReport is the read-side verdict of InspectFileACL — the read-only
 // twin of HardenACL (same LoadOrCreateServeCert/ReadServeCertFingerprint
 // pairing precedent). The "who may read" semantics live in this package, next

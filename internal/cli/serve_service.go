@@ -184,6 +184,14 @@ func (p *program) run(ctx context.Context) {
 		return
 	}
 	defer st.Close()
+	// Same Plan 50 duty as the foreground path: materialize the WAL sidecars
+	// under the service identity at start and bring them to DACL parity with
+	// store.db (see Store.EnsureSidecarACL — the NUC10 2026-10 post-reboot
+	// race this closes).
+	if err := st.EnsureSidecarACL(); err != nil {
+		fmt.Fprintf(w, "sshmgr serve (service): ensure sidecar ACL: %v\n", err)
+		return
+	}
 	// Post-auto-TLS: RunServe always serves TLS (self-signed when p.tlsCert is
 	// empty), so the old "plaintext on non-loopback" warning no longer applies.
 	//

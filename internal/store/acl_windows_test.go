@@ -307,60 +307,117 @@ func getDACLForTestOrFatal(t *testing.T, path string) *windows.SECURITY_DESCRIPT
 	return sd
 }
 
-// TestHardenWALSidecars verifies the F2 fix: when -shm/-wal sidecars exist next
-// to storePath, hardenWALSidecars applies HardenACL to them (disabling the broad
-// inherited ACEs SQLite's creator-token would otherwise leave). These sidecars
-// are created on demand by SQLite at first write under whatever process first
-// writes — they inherit a too-broad / Admins-read-only DACL and block concurrent
-// openers under WAL mode ("attempt to write a readonly database").
-func TestHardenWALSidecars(t *testing.T) {
+// setDACLEntriesForTest replaces path's DACL with exactly these entries
+// (PROTECTED — inheritance cut). Generalization of the
+// TestOpen_DoesNotRewriteExistingStoreDBACL corruption seeding.
+func setDACLEntriesForTest(t *testing.T, path string, entries ...windows.EXPLICIT_ACCESS) {
+	t.Helper()
+	dacl, err := windows.ACLFromEntries(entries, nil)
+	if err != nil {
+		t.Fatalf("build DACL: %v", err)
+	}
+	const si = windows.PROTECTED_DACL_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, si, nil, nil, dacl, nil); err != nil {
+		t.Fatalf("set DACL on %s: %v", path, err)
+	}
+}
+
+// foreignWriteGrantorEntries is the canonical HardenACL entry set plus a
+// FOREIGN well-known write grantor (Everyone FullControl). Seeding store.db
+// with this makes the parity property testable identity-INDEPENDENTLY: no
+// current-identity ACL builder (HardenACL stamps SYSTEM+Admins+caller) would
+// ever produce the Everyone grant, so a sidecar carrying it after
+// hardenWALSidecars PROVES the DACL was copied from store.db, not re-derived.
+func foreignWriteGrantorEntries(t *testing.T) []windows.EXPLICIT_ACCESS {
+	t.Helper()
+	systemSID := mustWellKnownSID(t, windows.WinLocalSystemSid, "SYSTEM")
+	adminsSID := mustWellKnownSID(t, windows.WinBuiltinAdministratorsSid, "Administrators")
+	userSID := currentUserSIDForTest(t)
+	if userSID == nil {
+		t.Fatal("could not resolve current user SID")
+	}
+	const userMask = windows.READ_CONTROL | windows.DELETE | windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE
+	return []windows.EXPLICIT_ACCESS{
+		buildExplicitAccess(systemSID, windows.GENERIC_ALL, windows.SET_ACCESS, windows.TRUSTEE_IS_WELL_KNOWN_GROUP),
+		buildExplicitAccess(adminsSID, windows.GENERIC_ALL, windows.SET_ACCESS, windows.TRUSTEE_IS_GROUP),
+		buildExplicitAccess(mustEveryoneSID(t), windows.GENERIC_ALL, windows.SET_ACCESS, windows.TRUSTEE_IS_WELL_KNOWN_GROUP),
+		buildExplicitAccess(userSID, userMask, windows.SET_ACCESS, windows.TRUSTEE_IS_USER),
+	}
+}
+
+// TestHardenWALSidecars_MirrorsStoreDBDACL is the Plan 50 rewrite of the F2
+// test: hardenWALSidecars must bring each existing sidecar into DACL PARITY
+// with store.db — copying store.db's canonical access set verbatim — instead
+// of stamping the caller's identity (the F2 behavior that recreated the hole
+// cross-identity: serve-as-LocalSystem "hardened" the sidecars for SYSTEM
+// only, locking the non-elevated interactive user out of the -shm index every
+// WAL connection must write; NUC10 incident 2026-10-02..06).
+func TestHardenWALSidecars_MirrorsStoreDBDACL(t *testing.T) {
 	dir := t.TempDir()
 	storePath := filepath.Join(dir, "store.db")
 
-	// Create fake sidecar files with a deliberately-broad inherited ACL that
-	// mimics what SQLite (LocalSystem) would leave: Everyone FullControl. If
-	// hardenWALSidecars works, these get hardened (broad ACE gone, inheritance
-	// disabled). Use icacls-equivalent via SetNamedSecurityInfo directly.
-	everyoneSID := mustWellKnownSID(t, windows.WinWorldSid, "Everyone")
+	// store.db carrying a FOREIGN write grantor (the identity-independence
+	// marker — see foreignWriteGrantorEntries).
+	if err := os.WriteFile(storePath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setDACLEntriesForTest(t, storePath, foreignWriteGrantorEntries(t)...)
+	wantSDDL := getDACLForTestOrFatal(t, storePath).String()
+
+	// Sidecars planted with a deliberately-wrong DACL (Everyone-only — the
+	// shape a bare creator-token default would leave).
+	everyone := mustEveryoneSID(t)
 	for _, suffix := range []string{"-shm", "-wal"} {
 		p := storePath + suffix
 		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
 			t.Fatalf("create %s: %v", suffix, err)
 		}
-		// Plant a broad DACL (Everyone FullControl, inheritance enabled) —
-		// exactly the kind of thing SQLite's default-token creation leaves.
-		broadDACL, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{
-			buildExplicitAccess(everyoneSID, windows.GENERIC_ALL, windows.SET_ACCESS, windows.TRUSTEE_IS_WELL_KNOWN_GROUP),
-		}, nil)
-		if err != nil {
-			t.Fatalf("build broad DACL: %v", err)
-		}
-		if err := windows.SetNamedSecurityInfo(p, windows.SE_FILE_OBJECT,
-			windows.UNPROTECTED_DACL_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
-			nil, nil, broadDACL, nil); err != nil {
-			t.Fatalf("plant broad DACL on %s: %v", suffix, err)
-		}
+		setDACLEntriesForTest(t, p,
+			buildExplicitAccess(everyone, windows.GENERIC_ALL, windows.SET_ACCESS, windows.TRUSTEE_IS_WELL_KNOWN_GROUP))
 	}
 
 	// Run the fix.
 	hardenWALSidecars(storePath)
 
-	// Both sidecars must now be hardened: inheritance disabled, no Everyone.
+	// Both sidecars must now be DACL-identical to store.db — including the
+	// foreign grantor no caller-identity builder would produce.
 	for _, suffix := range []string{"-shm", "-wal"} {
 		p := storePath + suffix
-		dacl, sd, err := readDACL(p)
-		if err != nil {
-			t.Fatalf("read DACL on %s: %v", suffix, err)
+		gotSDDL := getDACLForTestOrFatal(t, p).String()
+		if gotSDDL != wantSDDL {
+			t.Errorf("%s DACL not in parity with store.db:\n got %s\nwant %s", suffix, gotSDDL, wantSDDL)
 		}
-		if !isDaclProtected(sd) {
-			t.Errorf("%s DACL not protected after hardenWALSidecars", suffix)
-		}
-		if trusteeInACL(dacl, everyoneSID) {
-			t.Errorf("%s still has Everyone ACE after hardenWALSidecars", suffix)
+		dacl, _, _ := readDACL(p)
+		if !trusteeInACL(dacl, everyone) {
+			t.Errorf("%s lost the foreign grantor — DACL was re-derived from the caller identity, not mirrored", suffix)
 		}
 	}
+}
 
-	// A missing storePath (no sidecars at all) must not error — normal for a
+// TestHardenWALSidecars_NoStoreDBIsNoOp pins the best-effort boundary: with
+// NO store.db next to them, sidecars are left untouched (there is no canonical
+// DACL to mirror; a re-derivation from the caller identity is exactly the
+// behavior Plan 50 removed). Production never sees this shape — sidecars only
+// exist next to a store.db — but hardenWALSidecars must not crash or invent.
+func TestHardenWALSidecars_NoStoreDBIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store.db")
+	everyone := mustEveryoneSID(t)
+	p := storePath + "-shm"
+	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setDACLEntriesForTest(t, p,
+		buildExplicitAccess(everyone, windows.GENERIC_ALL, windows.SET_ACCESS, windows.TRUSTEE_IS_WELL_KNOWN_GROUP))
+	before := getDACLForTestOrFatal(t, p).String()
+
+	hardenWALSidecars(storePath)
+
+	if after := getDACLForTestOrFatal(t, p).String(); after != before {
+		t.Fatalf("sidecar DACL changed without a store.db to mirror (want untouched):\n got %s\nwant %s", after, before)
+	}
+
+	// A storePath with no sidecars at all must not error — normal for a
 	// fresh vault with no writes yet.
 	hardenWALSidecars(filepath.Join(dir, "nonexistent.db"))
 }
@@ -377,11 +434,105 @@ func TestHardenWALSidecars_NoOpOnFreshStore(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	st.Close()
-	// No -shm/-wal should exist (Open + schema does not create them; only
-	// writes do). hardenWALSidecars must be a silent no-op here.
+	// No -shm/-wal should exist after a clean Close: Open's DDL write does
+	// materialize them while the connection is open, but SQLite deletes both
+	// sidecars on the last connection's clean close (measured; the Plan 50
+	// materialization premise — absent sidecars at reopen — rests on this).
 	for _, suffix := range []string{"-shm", "-wal"} {
 		if _, err := os.Stat(storePath + suffix); err == nil {
 			t.Errorf("unexpected %s on fresh store (Open should not create WAL sidecars)", suffix)
+		}
+	}
+}
+
+// TestSidecarACLGap drives the detector behind doctor's store-sidecar row:
+// the gap must name exactly the principals store.db grants write to but the
+// sidecar denies — the NUC10 shape (store.db carried the interactive user,
+// the SYSTEM-created sidecar did not) — and MirrorDACL must close it.
+func TestSidecarACLGap(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store.db")
+	side := storePath + "-shm"
+	for _, p := range []string{storePath, side} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	systemSID := mustWellKnownSID(t, windows.WinLocalSystemSid, "SYSTEM")
+	adminsSID := mustWellKnownSID(t, windows.WinBuiltinAdministratorsSid, "Administrators")
+	everyone := mustEveryoneSID(t)
+	userSID := currentUserSIDForTest(t)
+	if userSID == nil {
+		t.Fatal("could not resolve current user SID")
+	}
+	// store.db: SYSTEM+Admins+Everyone+user (foreignWriteGrantorEntries).
+	// sidecar: SYSTEM+Admins only — exactly the serve-created shape.
+	setDACLEntriesForTest(t, storePath, foreignWriteGrantorEntries(t)...)
+	setDACLEntriesForTest(t, side,
+		buildExplicitAccess(systemSID, windows.GENERIC_ALL, windows.SET_ACCESS, windows.TRUSTEE_IS_WELL_KNOWN_GROUP),
+		buildExplicitAccess(adminsSID, windows.GENERIC_ALL, windows.SET_ACCESS, windows.TRUSTEE_IS_GROUP))
+
+	gap, err := SidecarACLGap(storePath, side)
+	if err != nil {
+		t.Fatalf("SidecarACLGap: %v", err)
+	}
+	if len(gap) != 2 || !containsSID(gap, everyone.String()) || !containsSID(gap, userSID.String()) {
+		t.Fatalf("gap = %v, want exactly [Everyone, current user] (the principals store.db grants but the sidecar denies)", gap)
+	}
+
+	// Mirror closes the gap.
+	if err := MirrorDACL(storePath, side); err != nil {
+		t.Fatalf("MirrorDACL: %v", err)
+	}
+	if gap, err = SidecarACLGap(storePath, side); err != nil || len(gap) != 0 {
+		t.Fatalf("after mirror: gap = %v (err %v), want empty", gap, err)
+	}
+}
+
+// TestEnsureSidecarACL_MaterializesAndMirrors pins the Plan 50 boot-race
+// closure on the shape that actually raced on NUC10: an EXISTING store. On
+// reopen, migrate/initSchema write nothing (tables already exist), so the
+// sidecars are absent at Open — they would only materialize at the first
+// client-driven write a minute later, under serve's identity and with no
+// interactive-user grant. EnsureSidecarACL's one real write materializes them
+// NOW and the immediately-following mirror brings them to parity with the
+// canonical store.db DACL — so every boot, the sidecars are born already
+// carrying the interactive user's grant.
+func TestEnsureSidecarACL_MaterializesAndMirrors(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store.db")
+	mk := make([]byte, 32)
+	// Create + schema, then clean-close: the WAL sidecars are deleted on the
+	// last connection's clean close (the TestHardenWALSidecars_NoOpOnFreshStore
+	// observation).
+	st1, err := Open(storePath, mk)
+	if err != nil {
+		t.Fatalf("Open #1: %v", err)
+	}
+	st1.Close()
+
+	// Reopen the EXISTING store — no DDL write happens, the NUC10 boot shape.
+	st, err := Open(storePath, mk)
+	if err != nil {
+		t.Fatalf("Open #2: %v", err)
+	}
+	defer st.Close()
+
+	if err := st.EnsureSidecarACL(); err != nil {
+		t.Fatalf("EnsureSidecarACL: %v", err)
+	}
+	wantSDDL := getDACLForTestOrFatal(t, storePath).String()
+	for _, suffix := range []string{"-shm", "-wal"} {
+		p := storePath + suffix
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s not materialized by EnsureSidecarACL's write: %v", suffix, err)
+		}
+		if got := getDACLForTestOrFatal(t, p).String(); got != wantSDDL {
+			t.Errorf("%s DACL not in parity with store.db:\n got %s\nwant %s", suffix, got, wantSDDL)
+		}
+		gap, gerr := SidecarACLGap(storePath, p)
+		if gerr != nil || len(gap) != 0 {
+			t.Errorf("%s write-grantor gap after EnsureSidecarACL: %v (err %v)", suffix, gap, gerr)
 		}
 	}
 }

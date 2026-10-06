@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -49,7 +50,19 @@ func TestUnlockPassphraseFallbackDerivesKey(t *testing.T) {
 		t.Fatalf("unlock: %v", err)
 	}
 
-	hexStr := strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(out.String(), "\n"), "export SSHMGR_MASTERKEY_HEX="))
+	outLine := strings.TrimSpace(out.String())
+	var hexStr string
+	if runtime.GOOS == "windows" {
+		// Plan 50: on Windows the line is PowerShell syntax — a POSIX `export`
+		// was inert text there (the NUC10 2026-10 session that motivated this).
+		const prefix = "$env:SSHMGR_MASTERKEY_HEX = '"
+		if !strings.HasPrefix(outLine, prefix) || !strings.HasSuffix(outLine, "'") {
+			t.Fatalf("output not the PowerShell env line: %q", outLine)
+		}
+		hexStr = outLine[len(prefix) : len(outLine)-1]
+	} else {
+		hexStr = strings.TrimPrefix(outLine, "export SSHMGR_MASTERKEY_HEX=")
+	}
 	if _, err := hex.DecodeString(hexStr); err != nil {
 		t.Fatalf("output not hex: %q", out.String())
 	}
@@ -60,5 +73,30 @@ func TestUnlockPassphraseFallbackDerivesKey(t *testing.T) {
 	want := store.DeriveFromPassphrase([]byte("my-passphrase"), meta.PassphraseSalt)
 	if hex.EncodeToString(want) != hexStr {
 		t.Fatal("derived key does not match passphrase+salt")
+	}
+}
+
+// TestMasterKeyEnvLineMatchesPlatform pins the Plan 50 shell-syntax fix: the
+// emitted line must be sourceable by the platform's default shell — PowerShell
+// assignment on Windows, POSIX export elsewhere. The assertion derives the
+// expectation from the same runtime.GOOS the helper uses, so it stays green on
+// both CI platforms while pinning that the two can never be swapped.
+func TestMasterKeyEnvLineMatchesPlatform(t *testing.T) {
+	mk := []byte{0xde, 0xad, 0xbe, 0xef}
+	got := masterKeyEnvLine(mk)
+	var want string
+	if runtime.GOOS == "windows" {
+		want = "$env:SSHMGR_MASTERKEY_HEX = 'deadbeef'"
+		if masterKeyUnsetLine() != "Remove-Item Env:SSHMGR_MASTERKEY_HEX" {
+			t.Fatalf("unset line wrong on windows: %q", masterKeyUnsetLine())
+		}
+	} else {
+		want = "export SSHMGR_MASTERKEY_HEX=deadbeef"
+		if masterKeyUnsetLine() != "unset SSHMGR_MASTERKEY_HEX" {
+			t.Fatalf("unset line wrong on unix: %q", masterKeyUnsetLine())
+		}
+	}
+	if got != want {
+		t.Fatalf("env line = %q, want %q", got, want)
 	}
 }

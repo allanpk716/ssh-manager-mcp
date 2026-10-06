@@ -294,6 +294,104 @@ func aclWhitelist() ([]*windows.SID, error) {
 	return []*windows.SID{systemSID, adminsSID, userSID}, nil
 }
 
+// MirrorDACL copies src's DACL verbatim onto dst (PROTECTED_DACL |
+// DACL_SECURITY_INFORMATION; owner and group untouched). It exists for the
+// SQLite WAL sidecars (store.db-wal / store.db-shm):
+//
+// Plan 16 F2's fix hardened the sidecars with HardenACL — which stamps the
+// CALLER's identity into the "current user" slot. On the multi-machine broker
+// the store is opened by BOTH identities: serve as LocalSystem (whose service
+// auto-start wins the post-reboot sidecar-creation race) and the interactive
+// user in CLI/TUI. A sidecar created by serve therefore carries no
+// interactive-user grant; a non-elevated interactive process (UAC-filtered
+// token — Administrators is deny-only) then has zero access to the -shm index
+// SQLite requires EVERY connection to write, and store.Open fails with a
+// "readonly database"-class error that surfaced to TUI as
+// "本机 vault 存在但锁定或不可读" (NUC10 incident 2026-10-02..06). The same
+// hole opens in reverse (user-created sidecars, no grant for the service).
+//
+// store.db's own DACL is the machine's canonical access set — written once at
+// creation by whoever created the vault and deliberately NEVER rewritten
+// (Plan 16 F1: a re-ACL under a different token silently drops the other
+// principal's ACE). Bringing the sidecars to PARITY with it — instead of
+// re-deriving an ACL from the current identity — closes both directions
+// regardless of which process is calling. A caller without WRITE_DAC on a
+// foreign-owned sidecar (the non-elevated user on a SYSTEM-owned file) fails;
+// that is fine — the next privileged Open retries (serve, running as
+// LocalSystem, can always re-ACL).
+func MirrorDACL(src, dst string) error {
+	dacl, _, err := readDACL(src)
+	if err != nil {
+		return fmt.Errorf("mirrorDACL: read source DACL: %w", err)
+	}
+	if dacl == nil {
+		return fmt.Errorf("mirrorDACL: source %q has no DACL", src)
+	}
+	const si = windows.PROTECTED_DACL_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION
+	if err := windows.SetNamedSecurityInfo(dst, windows.SE_FILE_OBJECT, si, nil, nil, dacl, nil); err != nil {
+		return fmt.Errorf("mirrorDACL: SetNamedSecurityInfo: %w", err)
+	}
+	return nil
+}
+
+// SidecarACLGap reports the SIDs (string form, ascending) that hold write
+// access on store.db but NOT on sidecarPath — non-empty means the sidecar is
+// tighter than the store, and every process running as those principals will
+// fail store.Open on the live database (SQLite requires write access to the
+// -shm index from every WAL connection). Read-only; the detector behind
+// doctor's store-sidecar row.
+func SidecarACLGap(storePath, sidecarPath string) ([]string, error) {
+	storeW, err := aclWriteGrantors(storePath)
+	if err != nil {
+		return nil, fmt.Errorf("sidecar ACL gap: %w", err)
+	}
+	sideW, err := aclWriteGrantors(sidecarPath)
+	if err != nil {
+		return nil, fmt.Errorf("sidecar ACL gap: %w", err)
+	}
+	var gap []string
+	for sid := range storeW {
+		if !sideW[sid] {
+			gap = append(gap, sid)
+		}
+	}
+	sort.Strings(gap)
+	return gap, nil
+}
+
+// aclWriteGrantors walks path's DACL and returns the SIDs holding a walked
+// allow ACE with write-data access. Stored masks are kernel-expanded
+// (GENERIC_ALL / FILE_GENERIC_WRITE collapse into specific rights — see the
+// aclDangerousBits note), so FILE_WRITE_DATA alone is a faithful write test
+// for every mask HardenACL and MirrorDACL produce.
+func aclWriteGrantors(path string) (map[string]bool, error) {
+	dacl, _, err := readDACL(path)
+	if err != nil {
+		return nil, err
+	}
+	if dacl == nil {
+		return nil, fmt.Errorf("%q has no DACL", path)
+	}
+	out := make(map[string]bool)
+	for i := uint16(0); i < dacl.AceCount; i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, uint32(i), &ace); err != nil {
+			continue
+		}
+		if !isWalkedAllowAceType(ace.Header.AceType) {
+			continue
+		}
+		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
+			continue
+		}
+		if ace.Mask&windows.FILE_WRITE_DATA == 0 {
+			continue
+		}
+		out[(*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()] = true
+	}
+	return out, nil
+}
+
 // isDaclProtected reports whether the security descriptor has SE_DACL_PROTECTED
 // set (inheritance from parent disabled). Production reader since Plan 38 —
 // promoted out of the former test-helper block, behavior unchanged.

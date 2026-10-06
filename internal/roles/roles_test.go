@@ -50,6 +50,33 @@ func seedVault(t *testing.T, vaultDir string) {
 	}
 }
 
+// TestResolveMode_LockedVaultErrorChainsCause pins the Plan 50 probe fix: the
+// no-role.json probe's "锁定或不可读" guidance must CHAIN the underlying
+// VaultOpenErr cause, so a locked key tier says "vault locked: run `sshmgr
+// unlock`" and a permission/SQLite failure is not misread as a key problem
+// (NUC10 2026-10 incident: an access-denied WAL sidecar wore the locked-vault
+// wording; `sshmgr unlock` "succeeded" and fixed nothing).
+func TestResolveMode_LockedVaultErrorChainsCause(t *testing.T) {
+	vaultDir, _ := withDirs(t)
+	seedVault(t, vaultDir)
+	// Locked shape: store.db exists, the master key does not.
+	if err := os.Remove(filepath.Join(vaultDir, "master.key.plain")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ResolveMode("")
+	if err == nil {
+		t.Fatal("locked vault must fail closed (never degrade to client)")
+	}
+	for _, want := range []string{
+		"vault locked: run `sshmgr unlock`", // the CHAINED underlying cause
+		"sshmgr doctor",                     // the permission-failure guidance
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("probe error must chain %q, got: %v", want, err)
+		}
+	}
+}
+
 func TestLoad_Empty(t *testing.T) {
 	withDirs(t)
 	s, err := Load()

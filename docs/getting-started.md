@@ -201,7 +201,7 @@ agent 会自己：
 ## 日常：`lock` / `unlock` / 备份
 
 - **`unlock`**：master key 写进固定路径的裸文件（`master.key.plain`）。**只需第一次跑**（或换机器后）。常态下不用每天跑。
-- **`lock`**：在你当前 shell 里 `unset SSHMGR_MASTERKEY_HEX`（只是清掉环境变量，**不删 master.key 文件**）。脚本里做完事想收尾时用。
+- **`lock`**：在你当前 shell 里清掉环境变量（bash：`unset SSHMGR_MASTERKEY_HEX`；PowerShell：`Remove-Item Env:SSHMGR_MASTERKEY_HEX`）——**不删 master.key 文件**。脚本里做完事想收尾时用。`unlock`/`lock` 打印的命令行语法按平台给（Windows 打印 PowerShell 语法）。
 - **备份**：`master.key.plain` + `store.db`（+ cache 模式下的 `cache-dek.key`）是全部凭据存储。丢了 `store.db` = 丢了所有服务器凭据；丢了 `master.key.plain` = `store.db` 解不开。**两者都不可移植**（绑本机固定路径 + L1+ 威胁模型），便携备份走 [export/import](./backup-restore.md)。
 
 ---

@@ -37,8 +37,11 @@ func now() int64 { return time.Now().Unix() }
 // WriteAudit appends to auditSidecar instead of touching db. Set via SetReadOnly,
 // AFTER ImportSnapshot during cache hydration.
 type Store struct {
-	db           *sql.DB
-	masterKey    []byte
+	db        *sql.DB
+	masterKey []byte
+	// path is the store.db path Open was given — EnsureSidecarACL targets the
+	// WAL sidecars that live next to it.
+	path         string
 	readOnly     bool
 	auditSidecar *os.File
 	// forwardDevice is the local device-code name ApplyForwardedHostKey stamps
@@ -138,45 +141,86 @@ func Open(path string, masterKey []byte) (*Store, error) {
 			return nil, fmt.Errorf("harden ACL on store %q: %w", path, err)
 		}
 	}
-	// HardenACL the SQLite WAL sidecars (-shm / -wal) whenever they exist.
-	// Unlike store.db, these are created ON DEMAND by SQLite at first write
-	// (not by store.Open), under whatever process first writes — so they miss
-	// the creation-time HardenACL above and inherit the creating token's
-	// default DACL (e.g. LocalSystem-created -shm ends up SYSTEM+Admins-read,
-	// no user ACE). Under WAL mode every opener must write -shm (shared memory
-	// index); a second process lacking write access to -shm gets "attempt to
-	// write a readonly database" (Plan 16 F2 root cause). These sidecars are
-	// owned by SQLite not the user, so re-ACLing them on every Open is safe
-	// (unlike store.db, they have no "original creator's intent" to preserve)
-	// and is the only way to catch them as they appear. best-effort, non-fatal:
-	// a missing sidecar at Open time is normal (no writes yet); an ACL failure
-	// is logged but does not block Open (the main store.db ACL is the real gate).
+	// Bring the SQLite WAL sidecars (-shm / -wal) that exist into DACL PARITY
+	// with store.db whenever Open runs (see hardenWALSidecars). Sidecars are
+	// created ON DEMAND by SQLite at first write (not by store.Open), under
+	// whatever process first writes, so the ones that exist at Open time were
+	// born under SOME identity's default DACL — parity makes the identity
+	// irrelevant (Plan 50; supersedes Plan 16 F2's same-identity HardenACL).
+	// NOTE the ordering dependency: this runs AFTER the creation-time
+	// HardenACL above, so a FRESH store's sidecars mirror the just-hardened
+	// canonical DACL, not the pre-write default. Do not move it earlier.
 	hardenWALSidecars(path)
 	mk := make([]byte, len(masterKey))
 	copy(mk, masterKey)
-	return &Store{db: db, masterKey: mk}, nil
+	return &Store{db: db, masterKey: mk, path: path}, nil
 }
 
 func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// hardenWALSidecars applies HardenACL to the SQLite WAL sidecar files (-shm,
-// -wal) if they exist next to storePath. Best-effort, non-fatal: these files
-// are created on demand by SQLite at first write and may not exist yet at
-// Open time; a HardenACL failure is swallowed because the main store.db ACL
-// is the real protection gate and a missing/bad sidecar ACL degrades
-// gracefully (worst case: a concurrent process gets "readonly database", not
-// a security exposure — the sidecars contain no plaintext credentials, only
-// the WAL frame index / shared-memory page map). Plan 16 F2.
+// EnsureSidecarACL deterministically materializes the WAL sidecars under the
+// CURRENT process's identity and then brings them to DACL parity with
+// store.db (hardenWALSidecars). Called by both serve entry points right
+// after OpenStore:
+//
+// hardenWALSidecars-at-Open only catches sidecars that already exist, but on
+// the broker SQLite creates them at first WRITE — typically a minute after
+// boot when the first client request lands, long after serve's Open returned
+// (NUC10: boot 11:12:27, store.db-shm first observed 11:13:23). One real
+// write NOW (a serve-start audit row) makes the sidecars appear under serve's
+// token at a moment we control, and the immediately-following parity mirror
+// stamps store.db's canonical DACL onto them — so on every boot the sidecars
+// are born already carrying the interactive user's grant, and no non-elevated
+// CLI open can be locked out by the creation race again.
+//
+// Read-only stores (client cache hydration) skip: the offline cache has no
+// multi-identity WAL posture worth guarding.
+func (s *Store) EnsureSidecarACL() error {
+	if s.readOnly {
+		return nil
+	}
+	if err := insertAuditRow(s.db, AuditRow{
+		TS:      s.nowTime(),
+		Action:  "serve-start",
+		Command: "ensure-sidecar-acl",
+		Status:  "ok",
+	}); err != nil {
+		return fmt.Errorf("ensure sidecar ACL: materialize WAL sidecars: %w", err)
+	}
+	hardenWALSidecars(s.path)
+	return nil
+}
+
+// hardenWALSidecars brings the SQLite WAL sidecar files (-shm, -wal) that
+// exist next to storePath into DACL PARITY with store.db: MirrorDACL copies
+// store.db's canonical access set onto each sidecar (Windows; no-op
+// elsewhere).
+//
+// Why parity and not HardenACL (Plan 16 F2's fix): HardenACL stamps the
+// CURRENT process identity into the "current user" slot. The broker's store
+// is opened by two identities — serve as LocalSystem (whose service
+// auto-start wins the post-reboot sidecar-creation race) and the interactive
+// user (CLI/TUI, non-elevated). Whichever identity HardenACL ran under, the
+// OTHER was locked out of the -shm index SQLite requires every connection to
+// write → "attempt to write a readonly database" → surfaced to TUI as
+// "本机 vault 存在但锁定或不可读" (NUC10 incident 2026-10-02..06). store.db's
+// DACL — frozen at creation, never rewritten (Plan 16 F1) — already names
+// BOTH principals; mirroring it is identity-independent.
+//
+// Best-effort, non-fatal: an opener without WRITE_DAC on a foreign-owned
+// sidecar (the non-elevated user on a SYSTEM-owned file) skips, the next
+// privileged Open retries, and doctor's store-sidecar row surfaces the gap
+// (worst case a concurrent process gets "readonly database", not a security
+// exposure — the sidecars contain no plaintext credentials, only the WAL
+// frame index / shared-memory page map). Plan 16 F2 → Plan 50.
 func hardenWALSidecars(storePath string) {
 	for _, suffix := range []string{"-shm", "-wal"} {
 		sidecar := storePath + suffix
 		if _, err := os.Stat(sidecar); err == nil {
-			// File exists — ensure its ACL matches the hardened contract. Ignore
-			// errors (best-effort): we may lack WRITE_DAC under some service
-			// tokens, and the next Open will retry.
-			_ = HardenACL(sidecar)
+			// File exists — copy store.db's DACL over it.
+			_ = MirrorDACL(storePath, sidecar)
 		}
 	}
 }
