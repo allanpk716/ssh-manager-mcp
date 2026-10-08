@@ -138,6 +138,14 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 	}
 	tasks.StartSweeper() // 照 tunnels 先例: 构造器不启, 生产接线点在此 (1min tick, spec §3)
 
+	// 桥热升级 (spec 实施决策第 2 条): 统一忙判据 —— 隧道/任务两路计数源挂上
+	// 两个管理器 (各自持锁现读), 在飞一路由下面 addTrackedTool 的包装层进出
+	// 计数。reload_self 工具与自动换手 (后续票) 以 busy.Report() 判忙; 发起
+	// 换手的 reload_self 注册时走 wrapInflight 豁免自身 (不计入在飞, 否则工具
+	// 触发永远自拒)。busy 目前止于本函数作用域 —— 集成票把它随返回值带出时
+	// 一并改签名 (签名变更归该票)。
+	busy := NewBusyTracker(tunnels.ActiveTunnels, tasks.RunningTasks)
+
 	uploadCap, err := resolveUploadContentCap() // env seam (SSHMGR_UPLOAD_CONTENT_MAX): invalid/非正/>1 GiB → construction fails (fail-closed, spec rev3 §3.1)
 	if err != nil {
 		return nil, nil, nil, err
@@ -146,7 +154,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 	// The tool names below reference BrokerTools by index so the slice above IS
 	// the source of truth — adding a broker tool means editing BrokerTools, not
 	// copy-pasting a new literal here (and risk the eval scorer drifting).
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[0], // "list_servers"
 			Description: "List the SSH servers you may use. ALWAYS call this first to discover server ids and capabilities before exec_command. Returns id/name/host/user/has_sudo (host is \"hidden\" unless the owner exposed it — address servers via id, never by host), plus owner-provided context: role, services (what's deployed), location, hardware, caveats (special handling — read before acting), tags, description. Never includes credentials.",
@@ -161,7 +169,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[1], // "exec_command"
 			Description: "Run a shell command on a server. Pass the server's id (from list_servers), not its name. If sudo=true the broker runs `sudo -S` for you — do NOT prepend 'sudo' to the command yourself. sudo=true only works on servers where has_sudo=true. Out-of-profile server ids are rejected. timeout_seconds defaults to 120 and is hard-capped at 300 (5 min) — the value actually in effect is echoed back as effective_timeout_seconds; anything longer belongs in exec_background. Output is capped at 1 MiB per channel: if truncated=true you received only the PREFIX — read stdout_bytes/stderr_bytes for the true size, then refine your command (tail -n / head -n / grep) and re-run to get the part you need, rather than asking for the whole huge output again.",
@@ -180,7 +188,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[2], // "download_file"
 			Description: "Download a file from a server to read its contents. Pass the server's id (from list_servers) + the absolute remote path. Returns the file content (capped at 1 MiB; if truncated=true you got the PREFIX — read 'bytes' for the true size, then refine: re-download a slice via exec_command head/tail if you need a specific part). Out-of-profile server ids are rejected. Use this for file retrieval; do NOT fabricate file contents.",
@@ -198,7 +206,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[3], // "upload_file"
 			Description: "Push a LOCAL file or directory to a server (the mirror of download_file — direction matters: LocalPath is read from the machine the broker runs on — with a stdio MCP that is your machine; with a remote serve broker it is the serve host — and RemotePath is the destination on the server). Pass the server's id (from list_servers), LocalPath (absolute path on the broker host of the file or directory to push — a directory is uploaded recursively, preserving relative paths; a symlinked directory as the upload root is resolved to its target, while symlinked sub-directories inside it are refused (upload the target directly)), and RemotePath (absolute destination on the server; its parent directory is created if missing). Returns the file count + total bytes. The 1 MiB cap is a hard per-file bound: a single file larger than 1 MiB is REFUSED before transfer — an error names the file, its size, and the cap, and ZERO bytes of it is sent (in a directory upload, files already completed before the refusal remain); multiple files whose cumulative total crosses 1 MiB (each file within the cap) keep the already-completed files and honestly report truncated=true, with later files not uploaded — retry with smaller payloads. Out-of-profile server ids are rejected. SFTP is used, so sudo is not applicable. Use this to push configs/scripts/artifacts to a server; the broker holds the credentials.",
@@ -216,7 +224,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[4], // "forward_port"
 			Description: "Open a local port that forwards to a remote service through a server (the `ssh -L` semantic). Use this to reach a service running ON the server (or reachable from it) from the machine the broker runs on — e.g. a database, web UI, or metrics endpoint. Pass the server's id (from list_servers), remote_host + remote_port (the host:port to forward to FROM THE SERVER'S PERSPECTIVE — usually 127.0.0.1 + the service's port on the server's own loopback), an optional local_port (omit / 0 = the broker picks a free port), and an optional listen_host (IP literal only — the local address to bind; default 127.0.0.1; loopback is always allowed, a non-loopback address must be owner-approved). Returns tunnel_id + local_port + listen_host: the forward listens on listen_host:<local_port> ON THE MACHINE THE BROKER RUNS ON — with a stdio MCP that is your machine; with a remote serve broker it is the serve host, so reach it from there (e.g. curl on that host) — it is NOT reachable from a different machine. Out-of-profile server ids are rejected. This holds an SSH connection open in the broker for the tunnel's life — call close_port with tunnel_id when done (tunnels auto-close after ~10 minutes of INACTIVITY — a tunnel carrying traffic stays alive).",
@@ -234,7 +242,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[5], // "close_port"
 			Description: "Close a tunnel opened by forward_port. Pass the tunnel_id forward_port returned. Tears down the local listener AND the SSH connection that backed it (frees the resource — the broker was holding it open). Returns ok on success; an error if the tunnel_id is unknown (already closed, or never opened). No server_id / profile needed: the tunnel_id is an opaque handle bound to the broker process that opened it. You SHOULD call this when you are done with a forward rather than waiting for the ~10-minutes-of-inactivity auto-close.",
@@ -253,7 +261,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[6], // "exec_background" (Plan 32 T6)
 			Description: "Start a LONG-RUNNING command on a server in the background (builds, training, log tails, watches — anything that would outlive one exec_command call) and return immediately with a task_id. Poll incremental output with exec_output(task_id); stop early with exec_stop(task_id). Pass the server's id (from list_servers), not its name. If sudo=true the broker runs `sudo -S` for you — do NOT prepend 'sudo' to the command yourself; sudo=true only works on servers where has_sudo=true. timeout_seconds defaults to 24h and is capped at 24h; the effective value is echoed back as effective_timeout_seconds. At most 32 background tasks exist per project (running + finished retained); when the limit is hit and every task is running, new starts are refused — wait for a task to finish or call exec_stop. Finished tasks keep their tail output readable for ~1h, then are evicted. Task records live only in the broker process memory: a broker restart loses them all (no recovery) — treat a restart as 'every task died'. No env/workdir/stdin parameters: compose the command line yourself, e.g. 'cd /var/log && tail -f app.log' or 'VAR=x make build'. Rule of thumb: short commands (under ~5 min, output needed at once) → exec_command; long-lived or incremental → exec_background + exec_output polling.",
@@ -272,7 +280,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[7], // "exec_output" (Plan 32 T7)
 			Description: "Read incremental output from a background task started with exec_background. Pass the task_id it returned. stdout_offset/stderr_offset are ABSOLUTE byte offsets into each stream (0/omit = stream start): pass back the next_stdout_offset/next_stderr_offset you received to continue where you left off — poll repeatedly to tail a task (tail -f / journalctl -f style). encoding: 'text' (default — raw bytes as UTF-8; invalid sequences become U+FFFD and a multi-byte character can be split at a read boundary) or 'base64' (exact bytes — decode it yourself; use it for binary or non-UTF-8 e.g. GBK output). Offsets are byte-based in BOTH modes. wait_seconds (0-60, omit = 0) long-polls: the call returns once either stream has new bytes past your offsets, the task leaves running, or the budget expires — keep it under ~30 to stay below your own client timeout. If an offset fell behind the retained 1 MiB tail window you get truncated=true plus lost_stdout_bytes/lost_stderr_bytes — those bytes are gone; continue from next_*_offset instead of retrying the old offset. An offset past the stream end is pulled back to the end. Finished tasks keep their tail readable for ~1h, then the id fails with the unknown-task error (never existed / expired retention / evicted for capacity / broker restarted — records are in-process only).",
@@ -291,7 +299,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[8], // "exec_stop" (Plan 32 T7)
 			Description: "Stop a background task. Pass the task_id exec_background returned. Returns immediately with the task's status AT the moment you triggered the stop: a running task answers 'running' — the stop was set in motion, the terminal 'stopped' state shows up on your next exec_output call (this call never blocks waiting for the task to die). Stopping an already-finished task is idempotent: it just returns that terminal status. Kill semantics, honestly: there is no signal ladder — stopping closes the SSH session, which delivers SIGHUP remotely (the same thing killing a real ssh session does); processes the command started with nohup/setsid on the server survive it. Unknown task_id → error (never existed / expired after the ~1h retention window / evicted for capacity / broker restarted — task records are in-process only).",
@@ -310,7 +318,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[9], // "upload_content"
 			Description: fmt.Sprintf("Upload inline content as a file on a server — the cross-machine path (upload_file reads from the broker's own filesystem; use upload_content to push content YOU hold). Pass the server's id (from list_servers) + the content + the absolute destination path (must start with / or a Windows drive root like C:/; parent directories are created; an existing file is overwritten). encoding: 'text' (default, UTF-8 — invalid sequences are replaced with U+FFFD, not byte-exact) or 'base64' (exact bytes — SINGLE-LINE standard base64 with padding; use it for binary, non-UTF-8 or byte-exact content). Capped at %d bytes decoded — larger payloads are refused before transfer; for bigger files place them where the broker can reach and use upload_file. No sudo: root-owned paths are not writable. Concurrent writes to the same path are not atomic — avoid racing another upload. On failure the remote file may be left partially written — verify and clean up yourself.", uploadCap),
@@ -325,7 +333,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[10], // "exec_context" (Plan 41 §3)
 			Description: "Capture the exec channel's TRUE execution context in one round: uid/gid/groups, tty (exec channels have no PTY — 'no-tty' is expected, not an anomaly), user-namespace mapping ('0 0 4294967295' = initial namespace, real root — not userns fakeroot), LSM label, SSH provenance (client/connection — captured BEFORE elevation: sudo's env_reset empties them in the privileged layer), and the process tree position. Use this BEFORE hypothesizing about identities, interception layers, or 'mystery permission denied' — e.g. when exec_command(sudo=true) returns uid=0 yet a path stays EACCES, one call tells you whether the channel, the namespace, or the LSM label explains it. Pass sudo=true to probe the privileged channel (uid should be 0; requires has_sudo=true).",
@@ -344,7 +352,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
-	mcp.AddTool(srv,
+	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[11], // "relay_file" (Plan 47 §1.2)
 			Description: fmt.Sprintf(`Relay a LARGE file server-to-server through the broker, or from the broker's own disk to a server — the zero-context big-file path (file bytes stream through the broker's memory only; neither the tool result nor exec_output ever contains file content, only per-chunk metadata). Use it when a file is too big for upload_file's 1 MiB per-file cap (e.g. model weights, GB-scale artifacts), or when the file lives on one server and must land on another (e.g. downloaded on an internet-facing server, delivered to an air-gapped one). Pass to_server_id + to_path (absolute), and either from_server_id + from_path (absolute path on that server) or just from_path (absolute path on the broker host). Chunk size %d bytes. Returns task_id immediately — poll with exec_output(task_id) for per-chunk progress and the final digests, stop with exec_stop(task_id). TRANSFER IS RESUMABLE: interrupted/stopped/failed transfers leave <to_path>.sshmgr-partial + a manifest on the destination; re-running relay_file with the same paths completes only the missing chunks. fresh=true discards them and restarts. VERIFICATION: any transfer that streamed the full file from byte 0 to EOF in this one run (a fresh start or an empty-manifest self-heal) reports file_sha256 — compare with exec sha256sum <to_path> on the destination; a transfer that resumed completed chunks reports the chunk-merkle root instead (per-chunk integrity was verified against the manifest as each chunk was written; independently re-verifying such a file requires splitting it into %d-byte chunks, hashing each, and hashing the concatenated digests). Directories are NOT supported — tar on the source first (exec tar czf), relay the tarball, untar on the destination. No sudo: root-owned destination paths are not writable. Space pre-flight: 'space_check'='unavailable' means the destination couldn't report free space (some Windows targets) — proceeding is safe because a full disk just pauses at a chunk boundary and resumes later. Complete story for an offline server: exec_background on the internet-facing server to download, relay_file to the air-gapped one, then exec sha256sum there and compare file_sha256 from exec_output.`, relayChunk, relayChunk),
@@ -371,7 +379,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 	// then mirrors the accepted write onto the CURRENT store generation
 	// (resolved AFTER the HTTP call — the Plan 48 T5b discipline).
 	if meta != nil {
-		mcp.AddTool(srv,
+		addTrackedTool(srv, busy,
 			&mcp.Tool{
 				Name:        BrokerTools[12], // "update_server_metadata" (Plan 51)
 				Description: `Edit a server entry's descriptive metadata (role / services / location / hardware / caveats / description) in the shared vault, via the broker. Pass server_id (from list_servers) and expected_revision — the revision value you saw in list_servers (the optimistic-lock token). Each of the six fields is optional: OMIT a field to leave it unchanged; pass an EMPTY STRING to clear it. Record what you actually verified (e.g. after probing hardware or discovering deployed services) — this keeps list_servers accurate for every future session. On conflict (409, someone else edited first) the error carries the current revision AND current values of all six fields: merge your intent with those values, then retry once with the new revision. Connection details (host/port/user/credentials) and tags are NOT editable here — the owner manages those.`,

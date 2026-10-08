@@ -265,6 +265,15 @@ func (m *TunnelManager) Touch(id string) bool {
 	return true
 }
 
+// ActiveTunnels returns the number of currently-registered tunnels — the busy
+// criterion's tunnel count (bridge hot-upgrade spec Implementation Decision 2;
+// consumed via BusyTracker's counting-source closure).
+func (m *TunnelManager) ActiveTunnels() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.tunnels)
+}
+
 // Close tears down a tunnel by id: closes the local listener (tunnel.Close,
 // idempotent) AND the owning *sshbroker.Client (client.Close), then removes it
 // from the registry and mirror-deletes its tunnel_registry row. Returns false
