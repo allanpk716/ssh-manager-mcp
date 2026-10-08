@@ -313,7 +313,8 @@ func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func
 //     并向已领养会话补发一次 tools/list_changed(重新注册 reload_self 触发
 //     SDK 的清单变更通知)。
 //   - 字节面接管:真实标准输入输出的读写收进 hotswap.BridgeIO(细节见
-//     该文件头注释),为可能的首代退位做准备。
+//     该文件头注释),为可能的退位做准备——首代化泵、后续代停读退出,
+//     两条退位路径共用这一接管面。
 //   - reload_self 注册:工具面第 14 把(BrokerTools[13]),忙判据经
 //     serverRuntimes 登记表取本服务的 BusyTracker。
 //   - 收尾次序:会话结束(宿主断开或退位交割)→ 等换手编排终态(退位为
@@ -335,7 +336,10 @@ func serveBridge(ctx context.Context, srv *mcp.Server) error {
 		}
 	}
 
-	bio, err := hotswap.NewBridgeIO(os.Stdin, os.Stdout, !adopted)
+	// 首代与被领养的后续代一律经 feeder 接管读侧:后续代退位(Park 停读
+	// → EndSdkRead)以此为前提,直读真实标准输入的形态给不出「停读」
+	// 的确定点。
+	bio, err := hotswap.NewBridgeIO(os.Stdin, os.Stdout, true)
 	if err != nil {
 		return err
 	}
@@ -348,9 +352,13 @@ func serveBridge(ctx context.Context, srv *mcp.Server) error {
 		SessionEnded: sessionEnded,
 		// 测试仪表缝:换手端到端测试用同一测试二进制扮两代,经
 		// SSHMGR_TEST_SUCCESSOR_ENV 给继任注入版本/角色环境(生产为空)。
-		Env:     successorEnvSeam(),
-		Adopted: adopted,
-		Latest:  latestReleaseTag,
+		Env: successorEnvSeam(),
+		// 票 05:被领养桥(后续代)照常换手——GenerationLater 继承句柄
+		// 形态(继任继承本进程的标准输入输出=泵侧管道,应答写回后本进程
+		// 退出,不化泵);工具面不因领养身份拒绝,Adopted 只留给取不到
+		// 可执行路径、无力拉继任的桥。
+		LaterGeneration: adopted,
+		Latest:          latestReleaseTag,
 	}
 	if exeErr == nil {
 		cfg.Exe = exe
@@ -359,7 +367,7 @@ func serveBridge(ctx context.Context, srv *mcp.Server) error {
 		cfg.BirthGeneration = updater.BirthGeneration(exe)
 	} else {
 		fmt.Fprintf(os.Stderr, "sshmgr: hotswap disabled (os.Executable: %v)\n", exeErr)
-		cfg.Adopted = true // 无可执行路径即无可拉继任:Arm 一律拒绝,行为同被领养桥
+		cfg.Adopted = true // 无可执行路径即无可拉继任:Arm 拒绝、工具面报 not_first_generation
 	}
 	applyReloadTimingSeams(&cfg)
 	rs := hotswap.NewReloadService(cfg)

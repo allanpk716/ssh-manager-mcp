@@ -31,16 +31,18 @@ import (
 )
 
 // BridgeIO 持有桥进程标准输入输出的接管面。一个桥进程一份,由 run.go
-// 两形态入口在起服务前构造;首代(未被领养)ownStdin=true 时才接管读侧。
+// 两形态入口在起服务前构造;首代与被领养的后续代都经 feeder 接管读侧
+// (ownStdin=true)——后续代退位需要「停读」语义(见 Park),直读真实
+// 标准输入的老形态仅供不打算退位的调用方。
 type BridgeIO struct {
-	realIn  *os.File // 真实标准输入(首代由 feeder 独占读)
+	realIn  *os.File // 真实标准输入(feeder 独占读)
 	realOut *os.File // 真实标准输出(由 copier 独占写)
 
 	// SDK 侧管道:SDK 的传输只碰这两端,不碰真实句柄。
 	sdkInR, sdkInW   *os.File // feeder 写 → SDK 读(ownStdin 时存在)
 	sdkOutR, sdkOutW *os.File // SDK 写 → copier 读
 
-	feeder *feeder // ownStdin=false(被领养的后续代)时为 nil
+	feeder *feeder // ownStdin=false 时为 nil(SDK 直读真实标准输入,不可退位)
 	copier *copier
 
 	callsIn, responsesOut atomic.Int64 // interceptConn 的进/出账
@@ -50,9 +52,11 @@ type BridgeIO struct {
 	closeOnce        sync.Once
 }
 
-// NewBridgeIO 构造接管面并启动搬运 goroutine。ownStdin=true(首代)时
-// feeder 接管真实标准输入;false(被领养桥)时 SDK 直读真实标准输入
-// (其读端在会话收场时由 SDK 关闭——被领养桥本票不支持退位,无碍)。
+// NewBridgeIO 构造接管面并启动搬运 goroutine。ownStdin=true 时 feeder 接管
+// 真实标准输入(SDK 只读 feeder 喂的管道)——退位编排(首代 Hold/Retire、
+// 后续代 Park/EndSdkRead)都以此为前提,桥入口对两代一律传 true;false
+// 仅供确定不会退位的调用方(SDK 直读真实标准输入,届时 Hold/Park 一律
+// 返回 false)。
 func NewBridgeIO(realIn, realOut *os.File, ownStdin bool) (*BridgeIO, error) {
 	sdkOutR, sdkOutW, err := os.Pipe()
 	if err != nil {
@@ -164,6 +168,41 @@ func (b *BridgeIO) Retire(hostInW, hostOutR *os.File) {
 	b.copier.switchTo(hostOutR)
 }
 
+// Park 是后续代(被领养桥)退位的第一步:登记停读请求。feeder 将在
+// 下一个消息边界(转发流的换行处)停止消费真实标准输入——此后到达的
+// 字节留在管道里,归直接继承本进程句柄的继任;停读前已进入转发流程的
+// 半行会补完并照常送达 SDK(由静默判据兜底应答)。返回 false 表示 feeder
+// 不存在或宿主侧已断。生效时刻经 WaitFrozen 可等。
+func (b *BridgeIO) Park() bool {
+	return b.feeder != nil && b.feeder.park()
+}
+
+// WaitFrozen 等 feeder 冻结(hold/park 已在消息边界生效,或 feeder 已
+// 死亡):此后转发循环不再投递任何字节,关闭 SDK 读侧(EndSdkRead /
+// Retire)不再与写路径竞争。超时返回 false(宿主停在半行等病态输入,
+// 调用方按兜底路径继续)。
+func (b *BridgeIO) WaitFrozen(d time.Duration) bool {
+	if b.feeder == nil {
+		return true
+	}
+	select {
+	case <-b.feeder.frozen:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// EndSdkRead 关闭 SDK 读侧管道的写端:SDK 读到 EOF,会话按序收场。前置
+// 条件是静默判据已过且 feeder 已冻结——SDK 此后再收不到新请求,也不会
+// 有未写出的应答被 jsonrpc2 的读侧 EOF 路径丢弃。后续代退位专用:真实
+// 标准输入不动(句柄已由继任继承,最外层泵无感知)。
+func (b *BridgeIO) EndSdkRead() {
+	if b.feeder != nil {
+		b.feeder.endSdkRead()
+	}
+}
+
 // WaitCopierPhase1 等待 copier 排干 SDK 侧管道(SDK 应答全部落到真实
 // 标准输出)。超时返回 false(顺序性仍然成立——copier 顺序搬运,只是
 // 尚未确认;调用方可选择记日志后继续)。
@@ -195,27 +234,72 @@ func (b *BridgeIO) Close() {
 
 // ---------------------------------------------------------------------------
 // feeder:真实标准输入的独占读者。
+//
+// 读循环是窥视式的:管道无数据时不发起阻塞读(短暂轮询)。「挂起的读
+// 迟到返回」的字节已离开管道,既回不去也送不到继任——Park(后续代停读)
+// 需要一个「无在飞读」的确定点生效,阻塞读给不出这个点。平台不支持
+// 窥视时退回阻塞读,Park 的收尾由调用方兜底(见 ReloadService.retireLater)。
+//
+// Hold(首代冻结)与 Park(后续代停读)都只在消息边界生效:线上帧是换行
+// 分隔 JSON(串内换行必转义),转发流最后字节是 '\n' 即帧边界。跨请求
+// 瞬间的大帧由此不被撕成两半(规格「在消息边界停止解析」)。
 
 type feederState int
 
 const (
 	feederRun  feederState = iota // 转发进 SDK 侧管道
 	feederHold                    // 扣住新字节(Hold 与 Retire/Release 之间)
+	feederPark                    // 后续代退位:停止消费真实标准输入(循环已退出)
 	feederPump                    // 退位后:转发进泵侧管道
+)
+
+// feederIdlePoll 是窥视无数据时的轮询间隔;peekProbeTimeout 是单次窥视
+// 的卡死探测预算(正常窥视在微秒级返回,超时即认定该句柄形态不可窥视)。
+const (
+	feederIdlePoll   = 2 * time.Millisecond
+	peekProbeTimeout = 250 * time.Millisecond
 )
 
 type feeder struct {
 	in *os.File
 
-	mu    sync.Mutex
-	state feederState
-	dest  *os.File // 当前转发目的地(run: SDK 写端;pump: 泵侧写端)
-	held  []byte   // hold 期间扣住的字节
-	dead  bool     // 真实标准输入已 EOF/出错
+	mu         sync.Mutex
+	state      feederState
+	dest       *os.File      // 当前转发目的地(run: SDK 写端;pump: 泵侧写端)
+	held       []byte        // hold 期间扣住的字节
+	dead       bool          // 真实标准输入已 EOF/出错
+	wantHold   bool          // Hold 已登记,待消息边界生效
+	wantPark   bool          // Park 已登记,待消息边界生效
+	noPeek     bool          // 窥视卡死后置真:本 feeder 永久退回阻塞读
+	atBoundary bool          // 已转发流的最后字节是 '\n'(或尚无转发)——帧边界
+	frozen     chan struct{} // hold/park 生效或 feeder 死亡时关闭,一次
+	frozenOnce sync.Once
+}
+
+// peekProbe 窥视一次,带卡死探测:stuck=true 表示窥视调用在预算内没有
+// 返回(调用方应永久放弃窥视)。
+func (f *feeder) peekProbe() (readable, ok, stuck bool) {
+	f.mu.Lock()
+	noPeek := f.noPeek
+	f.mu.Unlock()
+	if noPeek {
+		return false, false, false
+	}
+	type res struct {
+		readable, ok bool
+	}
+	ch := make(chan res, 1)
+	go func() { r, k := peekReadable(f.in); ch <- res{r, k} }()
+	select {
+	case r := <-ch:
+		return r.readable, r.ok, false
+	case <-time.After(peekProbeTimeout):
+		return false, false, true
+	}
 }
 
 func newFeeder(in, dest *os.File) *feeder {
-	f := &feeder{in: in, dest: dest}
+	f := &feeder{in: in, dest: dest, atBoundary: true, frozen: make(chan struct{})}
 	go f.loop()
 	return f
 }
@@ -223,7 +307,24 @@ func newFeeder(in, dest *os.File) *feeder {
 func (f *feeder) loop() {
 	buf := make([]byte, 32*1024)
 	for {
-		n, rerr := f.in.Read(buf) // 不持锁读:Hold/Retire 只动锁内状态
+		readable, known, stuck := f.peekProbe()
+		if stuck {
+			// 该句柄形态上窥视调用不返回(实测:本进程自建的 os.Pipe 读端
+			// 被另一进程并发读时,PeekNamedPipe 会卡死;生产形态——继承的
+			// 标准输入句柄——不受影响)。永久退回阻塞读:链路绝不悬挂,
+			// park 的收尾改由退位编排的冻结超时兜底。
+			f.mu.Lock()
+			f.noPeek = true
+			f.mu.Unlock()
+		}
+		if known && !readable {
+			if f.idleCycle() {
+				return // Park 已生效:此后的字节留在管道里归继任
+			}
+			time.Sleep(feederIdlePoll)
+			continue
+		}
+		n, rerr := f.in.Read(buf) // 不持锁读:状态切换只动锁内状态
 		f.mu.Lock()
 		if n > 0 {
 			switch f.state {
@@ -238,13 +339,26 @@ func (f *feeder) loop() {
 				if _, werr := f.dest.Write(data); werr != nil {
 					// 目的地已断:SDK 会话收场(SDK 端关闭)或泵已终态。
 					// 字节面已无意义,feeder 退役。
-					f.dead = true
-					f.held = nil
+					f.dieLocked()
 					f.mu.Unlock()
 					return
 				}
 				f.held = nil
-			case feederHold:
+				if f.state == feederRun {
+					// hold/park 只在帧边界生效(见文件头注释)。
+					f.atBoundary = data[len(data)-1] == '\n'
+					if f.wantPark && f.atBoundary {
+						f.state = feederPark
+						f.markFrozenLocked()
+						f.mu.Unlock()
+						return // 停读:字节此后留在管道里归继任
+					}
+					if f.wantHold && f.atBoundary {
+						f.state = feederHold
+						f.markFrozenLocked()
+					}
+				}
+			case feederHold, feederPark:
 				f.held = append(f.held, buf[:n]...)
 			}
 		}
@@ -252,37 +366,93 @@ func (f *feeder) loop() {
 			// 宿主侧读端关闭:关掉当前目的地,让下游(SDK 或泵)读到 EOF
 			// 按各自语义收场(规格 F4)。hold 期间扣住的字节随宿主离去
 			// 一并丢弃(退位本就不该发生在宿主已断之后——Hold 会先拒绝)。
-			f.dead = true
-			dest := f.dest
-			f.held = nil
+			f.dieLocked()
 			f.mu.Unlock()
-			_ = dest.Close()
 			return
 		}
 		f.mu.Unlock()
 	}
 }
 
-// hold 冻结转发;dead(宿主已 EOF 或 feeder 退役)时返回 false。
+// idleCycle 处理一次「窥视无数据」(已确定无在飞读):park/hold 请求在
+// 帧边界即时生效。返回 true 表示循环应当退出(park 已生效或 feeder 已死)。
+// 只在 run 态翻状态——hold/park/pump 一旦定型(如 retireTo 已切泵侧)不再
+// 回退,否则停读后的空闲周期会把泵态错翻回扣住态,字节被扣进缓冲再无人
+// 冲刷。
+func (f *feeder) idleCycle() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.dead {
+		f.markFrozenLocked()
+		return true
+	}
+	if f.state != feederRun {
+		return false
+	}
+	if f.wantPark && f.atBoundary {
+		f.state = feederPark
+		f.markFrozenLocked()
+		return true
+	}
+	if f.wantHold && f.atBoundary {
+		f.state = feederHold
+		f.markFrozenLocked()
+	}
+	return false
+}
+
+// hold 登记首代冻结请求(在下一个帧边界生效,生效前在途的帧照常送达
+// SDK 并被应答)。dead(宿主已 EOF 或 feeder 退役)时返回 false。
 func (f *feeder) hold() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.dead || (f.state != feederRun && f.state != feederHold) {
+		return false
+	}
+	f.wantHold = true
+	if f.atBoundary {
+		f.state = feederHold
+		f.markFrozenLocked()
+	}
+	return true
+}
+
+// releaseHold 回到 run,扣住的字节冲回 SDK 侧管道(退位放弃路径)。
+// 未及生效的 hold 请求(等待半行补完中)一并撤销。
+func (f *feeder) releaseHold() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.dead {
+		return
+	}
+	f.wantHold = false
+	if f.state != feederHold {
+		return
+	}
+	f.state = feederRun
+	f.flushLocked()
+}
+
+// park 登记后续代停读请求(在下一个帧边界生效)。dead 时返回 false。
+func (f *feeder) park() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.dead {
 		return false
 	}
-	f.state = feederHold
+	f.wantPark = true
 	return true
 }
 
-// releaseHold 回到 run,扣住的字节冲回 SDK 侧管道。
-func (f *feeder) releaseHold() {
+// endSdkRead 关闭 SDK 读侧管道的写端(SDK 读到 EOF,会话按序收场)。
+// 只应在 feeder 冻结(见 WaitFrozen)之后调用——那是「不会再有投递」的
+// 确定点,关闭与转发循环的写路径无竞争。
+func (f *feeder) endSdkRead() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.dead || f.state != feederHold {
-		return
+	if f.dest != nil {
+		f.dest.Close()
 	}
-	f.state = feederRun
-	f.flushLocked()
 }
 
 // retireTo 切到泵侧:扣住的字节冲进 hostInW,原 SDK 读侧写端关闭(SDK
@@ -317,8 +487,7 @@ func (f *feeder) flushPumpSide() {
 		return
 	}
 	if _, werr := f.dest.Write(f.held); werr != nil {
-		f.dead = true
-		f.held = nil
+		f.dieLocked()
 		return
 	}
 	f.held = nil
@@ -332,8 +501,7 @@ func (f *feeder) stop() {
 	if f.dead {
 		return
 	}
-	f.dead = true
-	_ = f.dest.Close()
+	f.dieLocked()
 }
 
 // flushLocked 把扣住的字节冲进当前目的地(持锁调用)。
@@ -343,6 +511,21 @@ func (f *feeder) flushLocked() {
 	}
 	_, _ = f.dest.Write(f.held)
 	f.held = nil
+}
+
+// dieLocked 标记 feeder 死亡,关当前目的地让下游读到 EOF,并放行冻结
+// 等待者(持锁调用)。
+func (f *feeder) dieLocked() {
+	if f.dead {
+		return
+	}
+	f.dead = true
+	f.markFrozenLocked()
+	_ = f.dest.Close()
+}
+
+func (f *feeder) markFrozenLocked() {
+	f.frozenOnce.Do(func() { close(f.frozen) })
 }
 
 // ---------------------------------------------------------------------------

@@ -276,6 +276,137 @@ func TestBridgeIOHoldRetireLargeHeld(t *testing.T) {
 	hostOutR.Close()
 }
 
+// TestBridgeIOHoldWaitsForMessageBoundary:Hold 在消息边界生效——跨 Hold
+// 瞬间的大帧不被撕成两半。先写半行(无换行),再 Hold,再补完同一帧:
+// 补完的字节仍进 SDK(整帧合法 JSON 到达);之后的下一帧才被扣住,
+// ReleaseHold 后回到 SDK。
+func TestBridgeIOHoldWaitsForMessageBoundary(t *testing.T) {
+	b, inW, _ := newTestIO(t)
+	conn, err := b.Transport().Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	half := `{"jsonrpc":"2.0","id":50,"method":"big"`
+	if _, err := inW.WriteString(half); err != nil { // 半行:帧未完
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond) // 让 feeder 转发半行(此时不在边界)
+	if !b.Hold() {
+		t.Fatal("Hold must succeed mid-frame")
+	}
+	// 补完同一帧:边界对齐要求这些字节仍送达 SDK。
+	if _, err := inW.WriteString(`,"params":{"x":1}}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	// 下一帧:应被扣住,不进 SDK。
+	if _, err := inW.WriteString(`{"jsonrpc":"2.0","id":51,"method":"next"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	// SDK 侧:读到的是完整的 id=50 帧;id=51 不得到达。探测读可取消
+	//(jsonrpc2 连接是单读者,探测 goroutine 不得滞留到下一步)。
+	m, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("completed frame must reach the SDK side: %v", err)
+	}
+	req, ok := m.(*jsonrpc.Request)
+	if !ok || req.Method != "big" {
+		t.Fatalf("unexpected SDK-side message: %#v", m)
+	}
+	if string(req.Params) != `{"x":1}` {
+		t.Fatalf("completed frame must carry its params intact, got %s", req.Params)
+	}
+	probeCtx, cancelProbe := context.WithCancel(ctx)
+	leaked := make(chan error, 1)
+	go func() { _, err := conn.Read(probeCtx); leaked <- err }()
+	select {
+	case err := <-leaked:
+		t.Fatalf("held frame leaked into the SDK side: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	cancelProbe()
+	<-leaked // 探测读退场,连接回归单读者
+
+	// 解除:扣住的下一帧回到 SDK(字节面无损)。
+	b.ReleaseHold()
+	m2, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("released frame must reach the SDK side: %v", err)
+	}
+	if req2, ok := m2.(*jsonrpc.Request); !ok || req2.Method != "next" {
+		t.Fatalf("unexpected released message: %#v", m2)
+	}
+}
+
+// TestBridgeIORetiredFeederSurvivesIdleGap:Retire(切泵侧)之后、下一笔
+// 字节到达之前若隔了一段空闲(窥视循环空转多轮),feeder 必须仍处于泵侧
+// 转发态——回归测试:空闲周期曾把已定型的泵态错翻回扣住态,之后的字节
+// 被扣进缓冲永远无人冲刷。
+func TestBridgeIORetiredFeederSurvivesIdleGap(t *testing.T) {
+	b, inW, _ := newTestIO(t)
+	if !b.Hold() {
+		t.Fatal("Hold failed")
+	}
+	hostInR, hostInW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostOutR, _, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		hostInR.Close()
+		hostInW.Close()
+		hostOutR.Close()
+	})
+	b.Retire(hostInW, hostOutR)
+
+	time.Sleep(150 * time.Millisecond) // 空闲多轮(回归点:状态不得回退)
+
+	if _, err := inW.WriteString(`{"jsonrpc":"2.0","id":60,"method":"ping"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	line := readLineWithTimeout(t, "post-idle-gap request on pump side", hostInR, 2*time.Second)
+	if line != `{"jsonrpc":"2.0","id":60,"method":"ping"}`+"\n" {
+		t.Fatalf("post-retire idle-gap bytes wrong on pump side: %q", line)
+	}
+}
+
+// TestBridgeIOParkAndFreeze:Park 登记后,空闲管道上的窥视循环在一个
+// 轮询周期内于帧边界生效(冻结);此后到达的字节不被消费——留在真实
+// 输入管道里(测试侧仍可从写端继续写入而不阻塞,读端无人读取),SDK
+// 读侧不受影响。
+func TestBridgeIOParkAndFreeze(t *testing.T) {
+	b, inW, _ := newTestIO(t)
+	conn, err := b.Transport().Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.Park() {
+		t.Fatal("Park must succeed on a live host side")
+	}
+	if !b.WaitFrozen(2 * time.Second) {
+		t.Fatal("park did not engage within 2s on an idle pipe")
+	}
+	// 冻结后写入的真实输入字节不被 feeder 消费:管道照常可写(无读者
+	// 吞字节),SDK 侧也无从读到它们。
+	if _, err := inW.WriteString(`{"jsonrpc":"2.0","id":80,"method":"parked"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan error, 1)
+	go func() { _, err := conn.Read(context.Background()); read <- err }()
+	select {
+	case err := <-read:
+		t.Fatalf("parked bytes must not reach the SDK side, read returned %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+}
+
 // 确认 copier phase1 的排干信号在 SDK 写端关闭后置位。
 func TestBridgeIOCopierPhase1Done(t *testing.T) {
 	b, _, _ := newTestIO(t)

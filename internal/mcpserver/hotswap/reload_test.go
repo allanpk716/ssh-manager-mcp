@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"ssh-manager-mcp/internal/mcpserver/hotswap"
@@ -240,7 +241,8 @@ func TestReloadServiceArmAndDance(t *testing.T) {
 // errEOFExpected 标记「读到了 EOF 才对」的哨兵(非错误路径)。
 var errEOFExpected = errors.New("expected EOF after retire")
 
-// TestReloadServiceArmAdoptedRefused:被领养桥(后续代)Arm 一律拒绝。
+// TestReloadServiceArmAdoptedRefused:显式标记为不可换手的桥(Adopted,
+// 如取不到自身可执行路径)Arm 一律拒绝。
 func TestReloadServiceArmAdoptedRefused(t *testing.T) {
 	rs := hotswap.NewReloadService(hotswap.ReloadConfig{Adopted: true})
 	arm := rs.Arm()
@@ -248,4 +250,117 @@ func TestReloadServiceArmAdoptedRefused(t *testing.T) {
 		t.Fatalf("adopted bridge Arm must fail: %+v", arm)
 	}
 	rs.WaitTerminal() // 未启动编排:立即返回
+}
+
+// 后续代(GenerationLater)换手的库内闭环说明:继任直接继承 os.Stdin/
+// os.Stdout 句柄,而本进程自建 os.Pipe 读端被继任并发读时,Windows 上
+// PeekNamedPipe 会不返回(见 feeder.loop 的 noPeek 兜底)——库内管道拓扑
+// 无法真实还原生产形态(继承的标准输入句柄)。该路径的验收由进程边界
+// 真实的端到端覆盖:internal/mcpserver/reload_later_e2e_test.go 的三代链
+// (TestGenerationChainE2EDirect)。
+
+// TestReloadServiceQuiesceTimeoutRollback:静默判据到不了(一笔已送达 SDK
+// 的请求永不应答)→ QuiesceTimeout 到期 → ReleaseHold + Rollback:旧桥
+// 字节面解冻,扣住的请求回到 SDK 侧(旧桥继续应答),编排终态返回。
+func TestReloadServiceQuiesceTimeoutRollback(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := mcp.NewServer(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := srv.Connect(context.Background(), t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "0"}, nil)
+	cliSess, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cliSess.Close()
+
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		inR.Close()
+		inW.Close()
+		outR.Close()
+		outW.Close()
+	})
+	bio, err := hotswap.NewBridgeIO(inR, outW, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bio.Close()
+
+	rs := hotswap.NewReloadService(hotswap.ReloadConfig{
+		IO:             bio,
+		Srv:            srv,
+		Exe:            exe,
+		Env:            []string{testRoleEnv + "=echo"},
+		QuiesceTimeout: 400 * time.Millisecond,
+		ReadyTimeout:   5 * time.Second,
+		PollInterval:   20 * time.Millisecond,
+	})
+
+	sdkConn, err := bio.Transport().Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// 一笔永不应答的请求:送达 SDK(conn.Read 读到,进账+1)但不写应答
+	// ——静默判据永远到不了。
+	if _, err := inW.WriteString(`{"jsonrpc":"2.0","id":77,"method":"tools/call"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	m, err := sdkConn.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req, ok := m.(*jsonrpc.Request); !ok || req.Method != "tools/call" {
+		t.Fatalf("unexpected first message: %#v", m)
+	}
+
+	arm := rs.Arm()
+	if arm.State != hotswap.ArmArmed {
+		t.Fatalf("Arm = %+v", arm)
+	}
+	// 等 Hold 生效(空闲+边界,毫秒级)后写第二笔:应被扣住不进 SDK。
+	// 探测读可取消(jsonrpc2 连接单读者,探测 goroutine 不得滞留)。
+	time.Sleep(150 * time.Millisecond)
+	if _, err := inW.WriteString(`{"jsonrpc":"2.0","id":78,"method":"tools/list"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	probeCtx, cancelProbe := context.WithCancel(ctx)
+	held := make(chan error, 1)
+	go func() { _, err := sdkConn.Read(probeCtx); held <- err }()
+	select {
+	case err := <-held:
+		t.Fatalf("held request leaked into the SDK side during quiesce wait: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	cancelProbe()
+	<-held
+
+	// 编排终态:静默超时 → ReleaseHold + Rollback(继任被杀),旧桥继续。
+	withDeadline(t, "WaitTerminal after quiesce timeout", 10*time.Second, func() error {
+		rs.WaitTerminal()
+		return nil
+	})
+
+	// 回退后字节面解冻:扣住的 id=78 回到 SDK 侧(旧桥照常应答的证明)。
+	m2, err := sdkConn.Read(ctx)
+	if err != nil {
+		t.Fatalf("released request must reach the SDK side after rollback: %v", err)
+	}
+	if req2, ok := m2.(*jsonrpc.Request); !ok || req2.Method != "tools/list" {
+		t.Fatalf("unexpected released message: %#v", m2)
+	}
 }

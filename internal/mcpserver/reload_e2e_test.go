@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -52,8 +53,14 @@ func TestMain(m *testing.M) {
 }
 
 // roleBridgeMain 两种桥形态的公共角色体:按角色读各自的输入,起桥服务。
+// 测试仪表缝(可选,不设即无行为):SSHMGR_TEST_STATE_DIR 存在时,角色在
+// 起服务前把自身进程号写进 <dir>/pid-<版本>,在进程收尾时写 <dir>/exit-
+// <版本>(版本取 SSHMGR_TEST_VERSION;换手链测试靠它逐代观测「谁还活着/
+// 谁已退出」——链上每代自报版本唯一)。
 func roleBridgeMain(role string) int {
 	token := os.Getenv("SSHMGR_TEST_TOKEN")
+	writeStateProbe("pid", os.Getpid())
+	defer writeStateProbe("exit", 0)
 	switch role {
 	case roleBridgeDirect:
 		// 库:vault 走 env 缝(SSHMGR_STORE + SSHMGR_MASTERKEY_HEX,kp=nil
@@ -79,6 +86,22 @@ func roleBridgeMain(role string) int {
 		}
 	}
 	return 0
+}
+
+// writeStateProbe 写角色状态探针文件(pid/exit);未配置 SSHMGR_TEST_STATE_DIR
+// 时是无操作。exit 的内容无意义,存在性即信号。
+func writeStateProbe(kind string, content int) {
+	dir := os.Getenv("SSHMGR_TEST_STATE_DIR")
+	ver := os.Getenv("SSHMGR_TEST_VERSION")
+	if dir == "" || ver == "" {
+		return
+	}
+	name := fmt.Sprintf("%s-%s", kind, ver)
+	if kind == "pid" {
+		os.WriteFile(filepath.Join(dir, name), []byte(strconv.Itoa(content)), 0o600)
+	} else {
+		os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600)
+	}
 }
 
 func testBinaryPath(t *testing.T) string {
@@ -171,6 +194,9 @@ type fakeHost struct {
 	seen     []wireMsg
 	wakeup   chan struct{}
 	stderrFn func() string
+
+	stdoutEOF    chan struct{} // 桥侧标准输出断开(读循环 EOF)时关闭,一次
+	stdoutEOFOne sync.Once
 }
 
 // spawnBridgeRole 拉起一个桥角色进程并开始读它的标准输出。
@@ -219,6 +245,7 @@ func spawnBridgeRole(t *testing.T, role string, extraEnv map[string]string) *fak
 	stdoutW.Close()
 
 	h := &fakeHost{cmd: cmd, stdinW: stdinW, wakeup: make(chan struct{}, 1),
+		stdoutEOF: make(chan struct{}),
 		stderrFn: func() string {
 			b, _ := os.ReadFile(stderrPath)
 			return string(b)
@@ -244,9 +271,51 @@ func (h *fakeHost) readLoop(r *os.File) {
 			h.record(line)
 		}
 		if err != nil {
+			h.stdoutEOFOne.Do(func() { close(h.stdoutEOF) })
 			return
 		}
 	}
+}
+
+// frames 返回已记录帧的快照。
+func (h *fakeHost) frames() []wireMsg {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]wireMsg, len(h.seen))
+	copy(out, h.seen)
+	return out
+}
+
+// awaitNotificationCount 等到第 n 个 method 通知到达(链式换手中继任会
+// 各发一次 tools/list_changed,靠计数区分代次)。独立轮询,不走 wait 的
+// 持锁回调(cond 内不得再取帧锁)。
+func (h *fakeHost) awaitNotificationCount(t *testing.T, method string, n int, d time.Duration) {
+	t.Helper()
+	deadline := time.After(d)
+	for {
+		h.mu.Lock()
+		count := 0
+		for _, w := range h.seen {
+			if w.method == method {
+				count++
+			}
+		}
+		h.mu.Unlock()
+		if count >= n {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("%d x notification %s: not seen within %v; bridge stderr:\n%s", n, method, d, h.stderrFn())
+		case <-h.wakeup:
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// stateProbePath 是角色状态探针文件的路径(见 roleBridgeMain)。
+func stateProbePath(dir, kind, version string) string {
+	return filepath.Join(dir, fmt.Sprintf("%s-%s", kind, version))
 }
 
 func (h *fakeHost) record(line string) {
@@ -308,7 +377,11 @@ func (h *fakeHost) wait(t *testing.T, what string, d time.Duration, cond func(wi
 		h.mu.Unlock()
 		select {
 		case <-deadline:
-			t.Fatalf("%s: not seen within %v; bridge stderr:\n%s", what, d, h.stderrFn())
+			var sb strings.Builder
+			for _, w := range h.frames() {
+				sb.WriteString(w.raw)
+			}
+			t.Fatalf("%s: not seen within %v; seen frames:\n%s\nbridge stderr:\n%s", what, d, sb.String(), h.stderrFn())
 			return wireMsg{}
 		case <-h.wakeup:
 		case <-time.After(50 * time.Millisecond):
@@ -439,13 +512,14 @@ func runReloadHappyPath(t *testing.T, h *fakeHost, v1, v2 string) {
 	}
 
 	// 继任接管:后续 reload_self 由继任应答,自报 v2 证明换代;被领养桥
-	// 如实说明不做(后续代换手是后续票)。
+	// 换手已接线(票 05)——此刻盘上无更新代际,如实报 no_new_generation
+	// (再换代的三代链见 reload_later_e2e_test.go)。
 	out2 := h.callReloadSelf(t, 4, 30*time.Second)
 	if out2.Version != v2 {
 		t.Fatalf("second reload_self version = %q want %q (successor must answer)", out2.Version, v2)
 	}
-	if out2.Handover != "not_first_generation" {
-		t.Fatalf("successor reload_self handover = %q want not_first_generation", out2.Handover)
+	if out2.Handover != "no_new_generation" {
+		t.Fatalf("successor reload_self handover = %q want no_new_generation", out2.Handover)
 	}
 
 	// 继任的工具面完整。

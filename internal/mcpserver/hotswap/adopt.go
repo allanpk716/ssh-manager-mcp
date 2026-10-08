@@ -184,10 +184,13 @@ func StartSuccessor(opts Options) (*SuccessorHandle, error) {
 	drainExited := func() { h.exitOnce.Do(func() { <-h.exited }) }
 	rollback := func(cause error) (*SuccessorHandle, error) {
 		pair.close()
-		if kerr := cmd.Process.Kill(); kerr != nil && !errors.Is(kerr, os.ErrProcessDone) {
-			cause = errors.Join(cause, fmt.Errorf("hotswap: cleanup: kill successor: %w", kerr))
-		}
+		// Kill 只是「确保继任消失」的手段:Windows 对「已退出但尚未收割」
+		// 的进程会报 ERROR_ACCESS_DENIED,收割能完成即目标已达成,故 Kill
+		// 失败不并入错误(与 PumpThen 的补刀同一语义);进程若真还活着,
+		// 下面的收割会一直等,问题不会静默。
+		_ = cmd.Process.Kill()
 		drainExited()
+		os.Remove(readyPath) // 就绪文件生命周期止于确认,回退即收走
 		return nil, cause
 	}
 
@@ -229,11 +232,21 @@ func (h *SuccessorHandle) Rollback() error {
 
 func (h *SuccessorHandle) rollback(cause error) error {
 	h.pair.close()
-	if kerr := h.cmd.Process.Kill(); kerr != nil && !errors.Is(kerr, os.ErrProcessDone) {
-		cause = errors.Join(cause, fmt.Errorf("hotswap: cleanup: kill successor: %w", kerr))
-	}
+	// Kill 只是「确保继任消失」的手段(Windows 对已退出未收割的进程报
+	// ERROR_ACCESS_DENIED,收割能完成即目标已达成;见 StartSuccessor 内
+	// 同一处理)。
+	_ = h.cmd.Process.Kill()
 	h.exitOnce.Do(func() { <-h.exited })
+	os.Remove(h.readyPath) // 就绪文件生命周期止于确认,回退即收走
 	return cause
+}
+
+// cleanupReady 收走就绪文件(就绪确认之后文件已无读者;避免临时目录
+// 遗留垃圾——票 03 评审留档)。幂等。
+func (h *SuccessorHandle) cleanupReady() {
+	if h.readyPath != "" {
+		os.Remove(h.readyPath)
+	}
 }
 
 // PumpThen 执行首代退位:化为泵,在宿主侧句柄与泵侧管道之间双向搬运,
@@ -243,6 +256,7 @@ func (h *SuccessorHandle) PumpThen(hostIn, hostOut *os.File) error {
 	if h.pair == nil {
 		return errors.New("hotswap: PumpThen on a GenerationLater successor (caller exits instead)")
 	}
+	defer h.cleanupReady()
 	pumpErr := Pump(hostIn, hostOut, h.pair.toSuccessor, h.pair.fromSuccessor)
 	// 泵到终态后继任若仍活着(如只关标准输出的畸形继任),补一刀防孤儿。
 	// kill 的结果不并入返回值:此刻继任必已死或将死,而 Windows 上对
