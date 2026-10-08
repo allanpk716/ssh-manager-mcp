@@ -48,6 +48,20 @@ _Avoid_: write-back(实现视角)、mutation forwarding(过泛)
 手动锚定路径:owner 经带外渠道(设备屏幕显示、人工核对等)取得目标主机密钥指纹后,人工登记进权威 vault。不依赖登记机器与目标之间有任何网络连通。
 _Avoid_: manual pin(不完整,未体现带外取指纹这一关键)、keyscan import(只是其中一种输入形态)
 
+### 服务器元数据
+
+**服务器元数据(Server Metadata)**:
+服务器条目的六个描述性字段:Role(用途)/Services(部署了什么)/Location(在哪)/Hardware(硬件配置)/Caveats(注意事项)/Description(备注);各为 ≤4 KiB 自由文本,经 list_servers 全量给 agent 读。连接信息(地址/端口/用户/凭据)与标签(Tags)不属于它——三类东西的修改权限边界不同。
+_Avoid_: 服务器信息(过泛,混入连接信息)、notes(只是其中一字段)
+
+**受审计转发写(Audited Forwarded Write)**:
+客户端机器经设备码认证发起、权威 broker 在单个事务里落库并写审计行的远程写通道族;broker 不可达直接失败,不排队不留本地状态,本地只以窄写口镜像补记(镜像不是第二事实源)。现有两员:锚定转发(仅可新增)与元数据编辑(带 revision 乐观锁的部分更新)。
+_Avoid_: write-back(实现视角)、远程修改(未体现「审计+事务」这两个护栏)
+
+**元数据编辑(Metadata Edit)**:
+受审计转发写的一员:客户端把服务器元数据的部分字段变更(字段缺席=保持原值,显式空串=清空)连同 expected_revision(乐观锁令牌,取自 list_servers)发给 broker;revision 不匹配回 409 并附六字段现值,客户端一跳内合并重试。owner 端 CLI/TUI 编辑与它共用同一把 revision 锁。
+_Avoid_: 元数据同步(是写不是同步)、远程表单(实现形态)
+
 ### 备份
 
 **备份(Backup)**:

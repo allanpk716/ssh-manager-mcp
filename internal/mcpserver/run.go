@@ -245,8 +245,8 @@ func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.
 // tools, gated by the SAME profile scoping (profileID from the verified project) and attributing
 // audit to the SAME project id. The only difference from RunStdio is that the store is read-only
 // (mutations refused) and audit is sidecar'd (per-machine, single-direction, zero-merge).
-func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string) error {
-	srv, tunnels, tasks, cleanup, err := NewCacheBroker(token, snap, auditPath, reload, fwdBinder, device)
+func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) error {
+	srv, tunnels, tasks, cleanup, err := NewCacheBroker(token, snap, auditPath, reload, fwdBinder, device, metaEditor)
 	if err != nil {
 		return err
 	}
@@ -265,12 +265,12 @@ func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload 
 // sidecar handle exactly once; the caller SHOULD also defer tunnels.CloseAll /
 // tasks.CloseAll (MCP-shutdown teardown, as in RunStdio). Parameters carry the
 // same contract as RunStdioCache.
-func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string) (*mcp.Server, *TunnelManager, *TaskManager, func(), error) {
+func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, func(), error) {
 	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device)
+	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor)
 	if err != nil {
 		af.Close()
 		return nil, nil, nil, nil, err
@@ -283,7 +283,7 @@ func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload
 // exported NewCacheBroker so the tested wiring cannot drift from the served
 // wiring. The binder is invoked once with the holder's Current; the resulting
 // wrapper is a process-lifetime value (it captures no store pointer).
-func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string) (*mcp.Server, *TunnelManager, *TaskManager, *cacheStoreHolder, error) {
+func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, *cacheStoreHolder, error) {
 	h, project, err := newCacheStoreHolderFromSnapshot(token, snap, af, reload, device)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -293,7 +293,7 @@ func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func
 		hk := fwdBinder(h.Current)
 		hkFn = func() sshbroker.HostKeyStore { return hk }
 	}
-	srv, tunnels, tasks, err := NewServerFromSource(h.Current, project.ProfileID, project.ID, hkFn)
+	srv, tunnels, tasks, err := NewServerFromSource(h.Current, project.ProfileID, project.ID, hkFn, metaEditor)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}

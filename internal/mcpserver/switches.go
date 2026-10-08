@@ -24,6 +24,9 @@ const (
 const (
 	settingPairing   = "serve.pairing"
 	settingDiscovery = "serve.discovery"
+	// settingMetaEdit gates POST /server-metadata (Plan 51): off refuses every
+	// client metadata edit with a 403 naming the owner-side enable paths.
+	settingMetaEdit = "serve.metadata_edit"
 )
 
 // Frozen env seam names (spec §3.1): read ONLY via envSwitch — the exact
@@ -31,8 +34,9 @@ const (
 // defers to the next precedence layer. RunServe reads both so the foreground
 // and service-managed paths inject identically.
 const (
-	envServePairing   = "SSHMGR_SERVE_PAIRING"
-	envServeDiscovery = "SSHMGR_SERVE_DISCOVERY"
+	envServePairing      = "SSHMGR_SERVE_PAIRING"
+	envServeDiscovery    = "SSHMGR_SERVE_DISCOVERY"
+	envServeMetadataEdit = "SSHMGR_SERVE_METADATA_EDIT"
 )
 
 // switchTTL bounds how stale a memoized switch value may be: the spec caps
@@ -41,11 +45,13 @@ const (
 // stays off the store-read hot path.
 const switchTTL = 5 * time.Second
 
-// Both switches default ON (spec §3.1-8 缺省 true): silence never silently
-// disables a surface — operators opt out explicitly via env/flag/store.
+// All switches default ON: silence never silently disables a surface —
+// operators opt out explicitly via env/flag/store. The metadata-edit default
+// being ON is Plan 51 Q3-A's deliberate choice (upgrade = live).
 const (
-	defaultPairing   = true
-	defaultDiscovery = true
+	defaultPairing    = true
+	defaultDiscovery  = true
+	defaultMetaEditOn = true
 )
 
 // parseSwitch maps a switch value to the tri-state: only the exact strings
@@ -104,6 +110,7 @@ func envSwitch(name string) *bool {
 type switchInputs struct {
 	envPairing, flagPairing     *bool
 	envDiscovery, flagDiscovery *bool
+	envMetaEdit, flagMetaEdit   *bool
 }
 
 // switchCache memoizes one resolve pass. Held on ServeRunner via
@@ -113,6 +120,7 @@ type switchInputs struct {
 type switchCache struct {
 	at                 time.Time
 	pairing, discovery bool
+	metaEdit           bool
 }
 
 // switchString maps an injected tri-state back to the string form
@@ -131,13 +139,16 @@ func switchString(b *bool) string {
 // RefreshSwitches injects the explicitly-set env/flag inputs (nil = not set —
 // the caller owns reading the env seams and the flags' Changed() explicitness)
 // and rebuilds the cache immediately, so the next PairingEnabled/
-// DiscoveryEnabled observes the injection without waiting for TTL expiry.
-func (r *ServeRunner) RefreshSwitches(envPairing, flagPairing, envDiscovery, flagDiscovery *bool) {
+// DiscoveryEnabled/MetadataEditEnabled observes the injection without waiting
+// for TTL expiry.
+func (r *ServeRunner) RefreshSwitches(envPairing, flagPairing, envDiscovery, flagDiscovery, envMetaEdit, flagMetaEdit *bool) {
 	r.switchIn.Store(&switchInputs{
 		envPairing:    envPairing,
 		flagPairing:   flagPairing,
 		envDiscovery:  envDiscovery,
 		flagDiscovery: flagDiscovery,
+		envMetaEdit:   envMetaEdit,
+		flagMetaEdit:  flagMetaEdit,
 	})
 	r.switches.Store(r.rebuildSwitches())
 }
@@ -152,6 +163,13 @@ func (r *ServeRunner) PairingEnabled() bool {
 // DiscoveryEnabled is PairingEnabled for the UDP discovery responder.
 func (r *ServeRunner) DiscoveryEnabled() bool {
 	return r.cachedSwitches().discovery
+}
+
+// MetadataEditEnabled gates POST /server-metadata (Plan 51): off refuses
+// every client metadata edit with a 403 that names the owner-side enable
+// paths (flag/env/store — same four layers as the other serve switches).
+func (r *ServeRunner) MetadataEditEnabled() bool {
+	return r.cachedSwitches().metaEdit
 }
 
 // cachedSwitches returns the memoized resolution when fresh, else a fresh one
@@ -171,14 +189,15 @@ func (r *ServeRunner) cachedSwitches() *switchCache {
 // underlying error still surfaces on every other store use.
 func (r *ServeRunner) rebuildSwitches() *switchCache {
 	in := r.switchIn.Load()
-	var envP, flagP, envD, flagD *bool
+	var envP, flagP, envD, flagD, envM, flagM *bool
 	if in != nil {
-		envP, flagP, envD, flagD = in.envPairing, in.flagPairing, in.envDiscovery, in.flagDiscovery
+		envP, flagP, envD, flagD, envM, flagM = in.envPairing, in.flagPairing, in.envDiscovery, in.flagDiscovery, in.envMetaEdit, in.flagMetaEdit
 	}
 	return &switchCache{
 		at:        time.Now(),
 		pairing:   ResolveSwitch(switchString(envP), flagP != nil, flagP != nil && *flagP, storeSwitchVal(r.st, settingPairing), defaultPairing),
 		discovery: ResolveSwitch(switchString(envD), flagD != nil, flagD != nil && *flagD, storeSwitchVal(r.st, settingDiscovery), defaultDiscovery),
+		metaEdit:  ResolveSwitch(switchString(envM), flagM != nil, flagM != nil && *flagM, storeSwitchVal(r.st, settingMetaEdit), defaultMetaEditOn),
 	}
 }
 

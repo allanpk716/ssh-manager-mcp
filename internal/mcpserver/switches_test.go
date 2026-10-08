@@ -107,12 +107,12 @@ func TestServeRunner_RefreshSwitchesInjection(t *testing.T) {
 	if err := st.SetSetting(settingPairing, "false"); err != nil {
 		t.Fatal(err)
 	}
-	r.RefreshSwitches(&tv, nil, nil, nil)
+	r.RefreshSwitches(&tv, nil, nil, nil, nil, nil)
 	if !r.PairingEnabled() {
 		t.Fatal("explicit env=true must beat store=false")
 	}
 	// explicit env=false (no store row for the env layer to fight) → off.
-	r.RefreshSwitches(&fv, nil, nil, nil)
+	r.RefreshSwitches(&fv, nil, nil, nil, nil, nil)
 	if r.PairingEnabled() {
 		t.Fatal("explicit env=false must disable pairing")
 	}
@@ -120,17 +120,17 @@ func TestServeRunner_RefreshSwitchesInjection(t *testing.T) {
 	if err := st.SetSetting(settingPairing, "true"); err != nil {
 		t.Fatal(err)
 	}
-	r.RefreshSwitches(nil, &fv, nil, nil)
+	r.RefreshSwitches(nil, &fv, nil, nil, nil, nil)
 	if r.PairingEnabled() {
 		t.Fatal("explicit flag=false must beat store=true")
 	}
 	// All layers unset → back to the store value.
-	r.RefreshSwitches(nil, nil, nil, nil)
+	r.RefreshSwitches(nil, nil, nil, nil, nil, nil)
 	if !r.PairingEnabled() {
 		t.Fatal("with env/flag unset the store=true setting must enable pairing")
 	}
 	// Discovery injection is independent: flag=false flips only discovery.
-	r.RefreshSwitches(nil, nil, nil, &fv)
+	r.RefreshSwitches(nil, nil, nil, &fv, nil, nil)
 	if !r.PairingEnabled() || r.DiscoveryEnabled() {
 		t.Fatal("discovery flag injection must not disturb pairing")
 	}

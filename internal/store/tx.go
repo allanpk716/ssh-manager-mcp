@@ -32,8 +32,8 @@ func insertServerTx(db dbtx, srv *models.Server) (string, error) {
 	// credential_id has no '' row to reference, so a literal '' would violate it.
 	cred := nullableString(srv.CredentialID)
 	_, err := db.Exec(
-		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
 		id, srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), cred, sudo, string(tagsJSON), srv.Description,
 		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, srv.ExposeHost, ts, ts,
 	)
@@ -51,13 +51,16 @@ func insertServerTx(db dbtx, srv *models.Server) (string, error) {
 
 // updateServerTx writes the full row (id-preserving) on db. Errors when the id
 // is absent (RowsAffected==0) — same contract as the legacy UpdateServer.
+// revision is bumped unconditionally (Plan 51's optimistic-lock invariant:
+// EVERY full-row write is a revision advance, so owner-side edits and
+// device-forwarded metadata edits contend on the same CAS token).
 func updateServerTx(db dbtx, srv *models.Server) error {
 	tagsJSON, _ := json.Marshal(srv.Tags)
 	sudo := nullableString(srv.SudoCredentialID)
 	// Same NULL-for-"" mapping as insertServerTx (Plan 20 C0 credential-less form).
 	cred := nullableString(srv.CredentialID)
 	res, err := db.Exec(
-		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,tags=?,description=?,location=?,hardware=?,services=?,role=?,caveats=?,expose_host=?,updated_at=? WHERE id=?`,
+		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,tags=?,description=?,location=?,hardware=?,services=?,role=?,caveats=?,expose_host=?,updated_at=?,revision=revision+1 WHERE id=?`,
 		srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), cred, sudo, string(tagsJSON), srv.Description,
 		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, srv.ExposeHost, now(), srv.ID,
 	)
@@ -73,7 +76,7 @@ func updateServerTx(db dbtx, srv *models.Server) error {
 // getServerTx loads one server row by id on db.
 func getServerTx(db dbtx, id string) (*models.Server, error) {
 	return scanServer(db.QueryRow(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at FROM servers WHERE id=?`, id,
+		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers WHERE id=?`, id,
 	))
 }
 

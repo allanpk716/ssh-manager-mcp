@@ -73,6 +73,7 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 			Hardware:    srv.Hardware,
 			Tags:        tags,
 			Description: srv.Description,
+			Revision:    srv.Revision,
 		})
 	}
 	return out, nil

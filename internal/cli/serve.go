@@ -29,7 +29,7 @@ import (
 
 func newServeCmd() *cobra.Command {
 	var addr, tlsCert, tlsKey string
-	var pairing, discovery bool
+	var pairing, discovery, metaEdit bool
 	c := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the authoritative vault server (/snapshot + /pair) for the multi-machine bridge posture",
@@ -112,6 +112,7 @@ directly in the foreground.`,
 	// decide. Defaults below are cosmetic (help text only).
 	c.Flags().BoolVar(&pairing, "pairing", true, "explicitly enable/disable the SAS pairing surface (default resolved from env SSHMGR_SERVE_PAIRING, then store setting serve.pairing, then on)")
 	c.Flags().BoolVar(&discovery, "discovery", true, "explicitly enable/disable UDP discovery on udp/7878 (default resolved from env SSHMGR_SERVE_DISCOVERY, then store setting serve.discovery, then on)")
+	c.Flags().BoolVar(&metaEdit, "metadata-edit", true, "explicitly enable/disable client metadata editing via POST /server-metadata (default resolved from env SSHMGR_SERVE_METADATA_EDIT, then store setting serve.metadata_edit, then on)")
 
 	// Subcommands (install/uninstall/status) wrap the foreground RunE above as
 	// a managed background service via github.com/kardianos/service (Windows
@@ -150,8 +151,9 @@ func newServeCertInfoCmd() *cobra.Command {
 // default value of a cobra bool flag must never count as "explicitly set".
 func serveSwitchOpts(cmd *cobra.Command) mcpserver.ServeOpts {
 	return mcpserver.ServeOpts{
-		PairingFlag:   flagBoolIfChanged(cmd, "pairing"),
-		DiscoveryFlag: flagBoolIfChanged(cmd, "discovery"),
+		PairingFlag:      flagBoolIfChanged(cmd, "pairing"),
+		DiscoveryFlag:    flagBoolIfChanged(cmd, "discovery"),
+		MetadataEditFlag: flagBoolIfChanged(cmd, "metadata-edit"),
 	}
 }
 

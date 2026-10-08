@@ -359,6 +359,12 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "host_keys", "pin_device", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// Plan 51: servers.revision — the monotonic optimistic-lock token for
+	// metadata edits (every UPDATE servers path bumps it; see metadata.go).
+	// DEFAULT 0 back-fills legacy rows losslessly ("never written").
+	if err := addColumnIfMissing(db, "servers", "revision", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	// Plan 20 C0: servers.credential_id becomes nullable (credential-less
 	// servers — e.g. ssh-config imports of hosts without IdentityFile).
 	// SQLite can't relax NOT NULL in place, so this is a guarded table rebuild.
@@ -453,10 +459,11 @@ func rebuildServersNullable(db *sql.DB) error {
   caveats TEXT DEFAULT '',
   expose_host INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0
 )`,
-		`INSERT INTO servers_new (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at)
-SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at FROM servers`,
+		`INSERT INTO servers_new (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision)
+SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers`,
 		`DROP TABLE servers`,
 		`ALTER TABLE servers_new RENAME TO servers`,
 	}
@@ -544,7 +551,8 @@ CREATE TABLE IF NOT EXISTS servers (
   caveats TEXT DEFAULT '',
   expose_host INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS profiles (
   id TEXT PRIMARY KEY,

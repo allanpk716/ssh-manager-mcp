@@ -128,3 +128,8 @@
 - **doctor busy 分支执行覆盖**：busy≠0 判读由检视覆盖（可移植性不可测）；NUC10 真机可有意制造（serve 活跃 + doctor）验 INFO 降级行——**并入验收册 plan-48 A5 顺手做**。
 - ~~**backup-restore.md 补交叉引用**：指向 multi-machine.md 清毒时序第 6 步（毒化窗口备份不可作恢复源）。~~ **已落地（2026-09-21 卫生波）**：「场景 ③ 灾难恢复」节加警示块；:223 serve.log 路径勘误同批。
 - **快照骨架重复**：InsertForwardedPin 与 ApplyForwardedHostKey 的 insert-only 事务骨架 ~20 行（路径不同——设备元数据来源与错误文本——合并辅助函数会糊回滚语义，暂留）。
+
+## Plan 51 登记与批 2（2026-10-08 定案实施；spec `docs/superpowers/specs/2026-10-08-plan-51-client-metadata-edit-design.md`，取舍 ADR 0005，术语 CONTEXT.md「服务器元数据/受审计转发写/元数据编辑」）
+
+- **已落地（批 1，2026-10-08）**：客户端元数据编辑——serve 新路由 `POST /server-metadata`（同设备码闸门；`servers.revision` 乐观锁列迁移，一切 UPDATE servers 路径统一自增；409 带六字段现值一跳自愈；`meta-edit` 审计行含旧值截断 200 字节）+ 缓存脸 MCP 工具 `update_server_metadata`（六字段指针语义：省略=保持/空串=清空；权威脸不注册）+ 本地窄写口镜像 `ApplyForwardedMetadata`（单调守卫防代际回退）+ 第三 serve 开关 `--metadata-edit`（默认开，四层解析）+ 快照/`list_servers` 全链携带 revision。
+- **批 2（backlog，同路由复用）**：客户端 CLI/TUI 元数据编辑表单（owner 手工修一笔的入口，不必登权威端）；TUI Settings 面 `serve.metadata_edit` 开关写入位（store 键已就绪）。

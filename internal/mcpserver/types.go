@@ -26,6 +26,38 @@ type ServerInfo struct {
 	Hardware    string   `json:"hardware" jsonschema:"hardware configuration (CPU/RAM/disk/GPU)"`
 	Tags        []string `json:"tags" jsonschema:"free-form labels"`
 	Description string   `json:"description" jsonschema:"owner's free-text notes (supplementary; prefer structured fields above)"`
+	// Revision (Plan 51) is the optimistic-lock token for update_server_metadata
+	// (cache mode): echo the value you read here as expected_revision; a 409
+	// means someone wrote in between — the error carries the current values,
+	// merge your intent and retry with the new revision.
+	Revision int64 `json:"revision" jsonschema:"monotonic edit counter — pass as expected_revision to update_server_metadata; on conflict re-read and retry"`
+}
+
+// UpdateServerMetadataInput is update_server_metadata's input (cache mode
+// only). The six metadata fields are OPTIONAL POINTERS: absent (nil) = keep
+// the current value; present with an empty string = CLEAR the field. A field
+// may not be null. At least one of the six must be present.
+type UpdateServerMetadataInput struct {
+	ServerID         string  `json:"server_id" jsonschema:"server id from list_servers"`
+	ExpectedRevision int64   `json:"expected_revision" jsonschema:"the revision you read from list_servers (the optimistic-lock token); a mismatch returns 409 with the current values"`
+	Role             *string `json:"role,omitempty" jsonschema:"this server's purpose/role — omit to keep, empty string to clear"`
+	Services         *string `json:"services,omitempty" jsonschema:"what is deployed/running — omit to keep, empty string to clear"`
+	Location         *string `json:"location,omitempty" jsonschema:"where deployed — omit to keep, empty string to clear"`
+	Hardware         *string `json:"hardware,omitempty" jsonschema:"hardware configuration — omit to keep, empty string to clear"`
+	Caveats          *string `json:"caveats,omitempty" jsonschema:"operational gotchas — omit to keep, empty string to clear"`
+	Description      *string `json:"description,omitempty" jsonschema:"free-text notes — omit to keep, empty string to clear"`
+}
+
+// UpdateServerMetadataOutput reports where the edit landed. Mirrored=false
+// means the broker committed it (authoritative) but the local cache could not
+// mirror the change — the next cache pull closes the gap.
+type UpdateServerMetadataOutput struct {
+	ServerID   string `json:"server_id" jsonschema:"the edited server id"`
+	ServerName string `json:"server_name" jsonschema:"the edited server name"`
+	Revision   int64  `json:"revision" jsonschema:"the row's new revision (use this as expected_revision for the next edit)"`
+	UpdatedAt  int64  `json:"updated_at" jsonschema:"unix seconds of the broker-side write"`
+	Mirrored   bool   `json:"mirrored" jsonschema:"true if the local cache now reflects the edit; false = applied on the broker only — run cache pull"`
+	Warning    string `json:"warning,omitempty" jsonschema:"present iff mirrored=false: why the local mirror was skipped"`
 }
 
 // ExecOutput is the result of exec_command. EffectiveTimeoutSeconds (Plan 32

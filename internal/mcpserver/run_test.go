@@ -95,7 +95,7 @@ func TestRunStdioCacheBinder_ReachesTOFU(t *testing.T) {
 		return &recordingHK{cur: cur, gets: &gets}
 	}
 
-	srv, tunnels, tasks, cleanup2, err := NewCacheBroker(token, snap, auditPath, nil, binder, "laptop")
+	srv, tunnels, tasks, cleanup2, err := NewCacheBroker(token, snap, auditPath, nil, binder, "laptop", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -206,6 +206,30 @@
   清掉。例外：真名已在 + manifest 残留 = 提交成功后的无害碎片，随手删 manifest
   即可。
 
+### update_server_metadata
+
+**只在缓存模式（多机部署的工作机）存在**——把服务器条目的六个描述性字段
+（`role` / `services` / `location` / `hardware` / `caveats` / `description`）
+写回共享 vault：agent 探明一台服务器后（查了硬件、发现了部署了什么服务），当场
+记回去，后续所有会话的 `list_servers` 都受益。**仅缓存脸**：权威端本机的
+agent 面没有这个工具（owner 用 TUI/CLI 编辑）。
+
+- 参数：`server_id` + `expected_revision`（你在 `list_servers` 里读到的
+  `revision` 值——乐观锁令牌）+ 六个字段各可选。
+- **省略 = 不改，空串 = 清空**：不传 `location` 就是保持原值；传
+  `"location": ""` 才是清掉它。每次至少传一个字段。
+- **只写你验证过的**：这是共享事实源——把猜的、道听途说的写进去会误导所有
+  后续会话。
+- **冲突自愈**：别人（owner 或另一台设备）在你列出之后先改了，你会得到 409
+  错误——错误里带**当前的 revision 和六个字段的现值**：把你的意图和现值合并，
+  用新 revision 重试一次即可，不需要任何人工介入。
+- 连接信息（host/port/用户/凭据）与标签（tags）**不可**经此工具修改——那是
+  owner 的结构性操作。
+- broker 不可达时直接失败（本地零改动、不留草稿）；写成功会自动镜像进本机
+  缓存（`mirrored: false` 时按提示跑一次 `cache pull`）。
+- 全程审计：owner 侧 `sshmgr audit` 可见 `meta-edit` 行（设备名 + 改了哪些
+  字段 + 旧值截断）。owner 可用 `serve --metadata-edit=false` 一键全局关闭。
+
 ### forward_port
 
 开一条本地端口转发（**只支持 `ssh -L` 语义**——本地监听、经服务器转发；没有

@@ -55,6 +55,19 @@ func cacheForwardDeviceFor(instance string) string {
 	return instance
 }
 
+// cacheMetaForwarderFor resolves the instance's pull credential into the
+// metadata forwarder (Plan 51 §2) — cacheForwarderFor's twin: a missing or
+// unreadable cache.auth.json constructs the no-capability flavor whose Edit
+// fails closed with the main message (never a silent local write); a hard
+// misconfiguration (pinned non-https URL) is a spawn-time error.
+func cacheMetaForwarderFor(instance string) (*clientops.MetadataForwarder, error) {
+	cred, err := clientops.ReadCacheCredFor(instance)
+	if err != nil || cred == nil {
+		return clientops.NewMetadataForwarder(clientops.CacheCred{})
+	}
+	return clientops.NewMetadataForwarder(*cred)
+}
+
 func newMCPCmd() *cobra.Command {
 	var token string
 	var useCache bool
@@ -123,11 +136,21 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				// Plan 51 §7: the metadata forwarder is constructed at the
+				// SAME --instance resolver (one CacheCred read, both
+				// capabilities); a missing credential yields the no-capability
+				// forwarder — the update_server_metadata tool exists but its
+				// calls fail closed with the §2.1 main message.
+				mfwd, err := cacheMetaForwarderFor(instance)
+				if err != nil {
+					return err
+				}
 				err = mcpserver.RunStdioCache(token, snap, auditPath, rel.Check,
-					clientops.ForwardingHostKeys(fwd), cacheForwardDeviceFor(instance))
-				// Release the pinned transport's idle connections on shutdown
-				// (the forwarder has served its last handshake by now).
+					clientops.ForwardingHostKeys(fwd), cacheForwardDeviceFor(instance), mfwd)
+				// Release the pinned transports' idle connections on shutdown
+				// (the forwarders have served their last call by now).
 				fwd.Close()
+				mfwd.Close()
 				return err
 			}
 			// Residual-key guardrail: warn to STDERR only (stdout is the MCP channel).

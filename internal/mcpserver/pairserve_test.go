@@ -573,14 +573,14 @@ func TestPairDisabled_404(t *testing.T) {
 	if err := st.SetSetting("serve.pairing", "false"); err != nil {
 		t.Fatal(err)
 	}
-	r.RefreshSwitches(nil, nil, nil, nil) // rebuild the ≤5s memo immediately
+	r.RefreshSwitches(nil, nil, nil, nil, nil, nil) // rebuild the ≤5s memo immediately
 	for _, path := range []string{"/pair/enroll", "/pair/poll", "/pair/finish"} {
 		wantStatus(t, pairReq(t, srv, http.MethodPost, path, `{"id":"x"}`), http.StatusNotFound)
 	}
 	// 未知 /pair/ 路径 → 404(开关开着也一样)。
-	r.RefreshSwitches(nil, nil, nil, nil)
+	r.RefreshSwitches(nil, nil, nil, nil, nil, nil)
 	_ = st.SetSetting("serve.pairing", "true")
-	r.RefreshSwitches(nil, nil, nil, nil)
+	r.RefreshSwitches(nil, nil, nil, nil, nil, nil)
 	wantStatus(t, pairReq(t, srv, http.MethodPost, "/pair/nope", `{}`), http.StatusNotFound)
 }
 

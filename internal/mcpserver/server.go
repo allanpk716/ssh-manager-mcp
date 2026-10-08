@@ -12,6 +12,25 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
+// MetadataEditOutcome is the accepted-edit outcome the cache face mirrors
+// locally (clientops.MetaEditResult's twin — the type lives HERE because the
+// import direction is clientops → mcpserver (pairsession), never the reverse;
+// the clientops adapter maps into it).
+type MetadataEditOutcome struct {
+	ServerName string
+	Revision   int64
+	UpdatedAt  int64
+}
+
+// MetadataEditor is the metadata-forwarding capability injected into
+// NewServerFromSource (Plan 51 §7): the cache face's update_server_metadata
+// tool calls it; nil = the tool is NOT registered (the authority face, Q10-A).
+// The concrete adapter is clientops.MetadataForwarder.EditMeta; error texts
+// are the §2.1 branch contracts, surfaced verbatim to the agent.
+type MetadataEditor interface {
+	EditMeta(serverID string, expectedRevision int64, fields map[string]*string) (MetadataEditOutcome, error)
+}
+
 // BrokerTools is the canonical set of MCP tools the broker exposes (the agent's
 // broker-tool surface). NewServer registers exactly these tools, in this order,
 // by indexing into this slice (BrokerTools[0] = list_servers, [1] = exec_command,
@@ -28,19 +47,40 @@ import (
 // place that names the tools, and the eval scorer reads it instead of
 // re-hardcoding the names.
 var BrokerTools = []string{
-	"list_servers",    // [0] — enumerate the in-profile servers (no credentials)
-	"exec_command",    // [1] — run a shell command on a server (profile-gated)
-	"download_file",   // [2] — download a remote file over SFTP (profile-gated, §6-capped)
-	"upload_file",     // [3] — push a local file/dir to a server over SFTP (profile-gated, §6-capped)
-	"forward_port",    // [4] — open a `ssh -L` tunnel (profile-gated, STATEFUL — held by TunnelManager)
-	"close_port",      // [5] — tear down a forward_port tunnel by id (closes listener + SSH client)
-	"exec_background", // [6] — start a long-running command in the background (profile-gated, STATEFUL — held by TaskManager; Plan 32 T6)
-	"exec_output",     // [7] — poll incremental output of a background task (Plan 32 T7)
-	"exec_stop",       // [8] — stop a background task by id (Plan 32 T7)
-	"upload_content",  // [9] — write INLINE content (text/base64, decoded ≤ cap) to a remote path over SFTP (profile-gated; Plan 33 T4) — the cross-machine upload path upload_file cannot serve
-	"exec_context",    // [10] — capture the exec channel's TRUE context in one round: uid/gid/groups, tty, uid_map, LSM label, SSH provenance, process tree (profile-gated; Plan 41 §3)
-	"relay_file",      // [11] — relay a LARGE file server-to-server (or broker-disk → server) through the broker: chunked streaming, resumable background task, metadata-only results (profile-gated; Plan 47 §1)
+	"list_servers",           // [0] — enumerate the in-profile servers (no credentials)
+	"exec_command",           // [1] — run a shell command on a server (profile-gated)
+	"download_file",          // [2] — download a remote file over SFTP (profile-gated, §6-capped)
+	"upload_file",            // [3] — push a local file/dir to a server over SFTP (profile-gated, §6-capped)
+	"forward_port",           // [4] — open a `ssh -L` tunnel (profile-gated, STATEFUL — held by TunnelManager)
+	"close_port",             // [5] — tear down a forward_port tunnel by id (closes listener + SSH client)
+	"exec_background",        // [6] — start a long-running command in the background (profile-gated, STATEFUL — held by TaskManager; Plan 32 T6)
+	"exec_output",            // [7] — poll incremental output of a background task (Plan 32 T7)
+	"exec_stop",              // [8] — stop a background task by id (Plan 32 T7)
+	"upload_content",         // [9] — write INLINE content (text/base64, decoded ≤ cap) to a remote path over SFTP (profile-gated; Plan 33 T4) — the cross-machine upload path upload_file cannot serve
+	"exec_context",           // [10] — capture the exec channel's TRUE context in one round: uid/gid/groups, tty, uid_map, LSM label, SSH provenance, process tree (profile-gated; Plan 41 §3)
+	"relay_file",             // [11] — relay a LARGE file server-to-server (or broker-disk → server) through the broker: chunked streaming, resumable background task, metadata-only results (profile-gated; Plan 47 §1)
+	"update_server_metadata", // [12] — partial edit of a server entry's six metadata fields via the broker (optimistic-lock revision; CACHE FACE ONLY — registered when the metadata forwarder is injected; Plan 51 §7)
 }
+
+// cacheOnlyTools names BrokerTools entries that ONLY the cache face registers
+// (injected MetadataEditor present) — Plan 51 Q10-A keeps them off the
+// authority face. authorityTools (below) is the single source the face-count
+// test asserts against, so the exclusion stays lockstep with BrokerTools.
+var cacheOnlyTools = map[string]bool{
+	BrokerTools[12]: true, // "update_server_metadata"
+}
+
+// authorityTools is BrokerTools minus the cache-only entries: exactly the set
+// NewServer/RunStdio (direct-store mode) registers.
+var authorityTools = func() []string {
+	out := make([]string, 0, len(BrokerTools))
+	for _, t := range BrokerTools {
+		if !cacheOnlyTools[t] {
+			out = append(out, t)
+		}
+	}
+	return out
+}()
 
 // NewServer builds an MCP server whose tools are scoped to profileID and
 // attribute exec_command / download_file / upload_file / forward_port /
@@ -54,7 +94,7 @@ var BrokerTools = []string{
 // The tools are bound to a FIXED store. Hot-reloading callers (mcp --cache)
 // use NewServerFromSource instead.
 func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *TunnelManager, *TaskManager, error) {
-	return NewServerFromSource(func() *store.Store { return st }, profileID, projectID, nil)
+	return NewServerFromSource(func() *store.Store { return st }, profileID, projectID, nil, nil)
 }
 
 // NewServerFromSource is NewServer with a swappable store source: every tool
@@ -69,7 +109,7 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *Tunn
 // byte-identical to pre-Plan-48 behavior. Cache mode passes a provider
 // returning the forwarding wrapper (see run.go / hostkey_forward.go), whose
 // reads and writes re-resolve the current generation inside the callback.
-func NewServerFromSource(storeFn func() *store.Store, profileID, projectID string, hkFn func() sshbroker.HostKeyStore) (*mcp.Server, *TunnelManager, *TaskManager, error) {
+func NewServerFromSource(storeFn func() *store.Store, profileID, projectID string, hkFn func() sshbroker.HostKeyStore, meta MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, error) {
 	if hkFn == nil {
 		hkFn = func() sshbroker.HostKeyStore { return storeFn() }
 	}
@@ -323,7 +363,82 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 	)
 
+	// update_server_metadata (Plan 51 §7) — CACHE FACE ONLY: registered iff
+	// the metadata forwarder was injected (mcp --cache builds it from the
+	// instance's cache.auth.json; NewServer/RunStdio pass nil → the tool does
+	// not exist on the authority face, Q10-A). The broker does ALL gating
+	// (device-code auth, profile grant, revision CAS); this side forwards and
+	// then mirrors the accepted write onto the CURRENT store generation
+	// (resolved AFTER the HTTP call — the Plan 48 T5b discipline).
+	if meta != nil {
+		mcp.AddTool(srv,
+			&mcp.Tool{
+				Name:        BrokerTools[12], // "update_server_metadata" (Plan 51)
+				Description: `Edit a server entry's descriptive metadata (role / services / location / hardware / caveats / description) in the shared vault, via the broker. Pass server_id (from list_servers) and expected_revision — the revision value you saw in list_servers (the optimistic-lock token). Each of the six fields is optional: OMIT a field to leave it unchanged; pass an EMPTY STRING to clear it. Record what you actually verified (e.g. after probing hardware or discovering deployed services) — this keeps list_servers accurate for every future session. On conflict (409, someone else edited first) the error carries the current revision AND current values of all six fields: merge your intent with those values, then retry once with the new revision. Connection details (host/port/user/credentials) and tags are NOT editable here — the owner manages those.`,
+			},
+			func(ctx context.Context, req *mcp.CallToolRequest, in UpdateServerMetadataInput) (*mcp.CallToolResult, UpdateServerMetadataOutput, error) {
+				fields := metadataFieldsFromInput(&in)
+				if len(fields) == 0 {
+					return &mcp.CallToolResult{
+						IsError: true,
+						Content: []mcp.Content{&mcp.TextContent{Text: "update_server_metadata: provide at least one of the six metadata fields (role, services, location, hardware, caveats, description) — omit a field to keep its value, pass an empty string to clear it"}},
+					}, UpdateServerMetadataOutput{}, nil
+				}
+				res, err := meta.EditMeta(in.ServerID, in.ExpectedRevision, fields)
+				if err != nil {
+					// Branch text is the verbatim §2.1 contract (includes the
+					// 409 current-values merge input).
+					return &mcp.CallToolResult{
+						IsError: true,
+						Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+					}, UpdateServerMetadataOutput{}, nil
+				}
+				out := UpdateServerMetadataOutput{
+					ServerID:   in.ServerID,
+					ServerName: res.ServerName,
+					Revision:   res.Revision,
+					UpdatedAt:  res.UpdatedAt,
+					Mirrored:   true,
+				}
+				// Mirror onto the CURRENT generation, re-resolved AFTER the
+				// HTTP call (T5b). The broker already committed — a mirror
+				// failure is reported, never fatal.
+				if aerr := storeFn().ApplyForwardedMetadata(in.ServerID, fields, res.Revision, res.UpdatedAt); aerr != nil {
+					out.Mirrored = false
+					out.Warning = "applied on the broker, but the local cache could not mirror it — run cache pull to refresh (" + aerr.Error() + ")"
+				}
+				return nil, out, nil
+			},
+		)
+	}
+
 	return srv, tunnels, tasks, nil
+}
+
+// metadataFieldsFromInput collects the present (non-nil) metadata params into
+// the wire map: key present = write (empty string = clear); key absent =
+// keep. Pointer nil-ness IS the three-way distinction the schema carries.
+func metadataFieldsFromInput(in *UpdateServerMetadataInput) map[string]*string {
+	fields := map[string]*string{}
+	if in.Role != nil {
+		fields["role"] = in.Role
+	}
+	if in.Services != nil {
+		fields["services"] = in.Services
+	}
+	if in.Location != nil {
+		fields["location"] = in.Location
+	}
+	if in.Hardware != nil {
+		fields["hardware"] = in.Hardware
+	}
+	if in.Caveats != nil {
+		fields["caveats"] = in.Caveats
+	}
+	if in.Description != nil {
+		fields["description"] = in.Description
+	}
+	return fields
 }
 
 // ListServersOutput is the list_servers tool output.

@@ -203,6 +203,13 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 			pinHandler.ServeHTTP(w, req)
 			return
 		}
+		// Plan 51 §1: /server-metadata rides the SAME cacheAuth instance —
+		// one listener, one device-code gate, zero new authentication forms.
+		metaHandler := cacheAuth(http.HandlerFunc(r.handleServerMetadata))
+		if req.URL.Path == "/server-metadata" {
+			metaHandler.ServeHTTP(w, req)
+			return
+		}
 		if strings.HasPrefix(req.URL.Path, "/pair/") {
 			r.handlePair(w, req) // unauthenticated SAS pairing surface (Plan 42 §3.3) — self-gated
 			return
@@ -545,6 +552,8 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 type ServeOpts struct {
 	DiscoveryFlag *bool
 	PairingFlag   *bool
+	// MetadataEditFlag (Plan 51) gates POST /server-metadata the same way.
+	MetadataEditFlag *bool
 }
 
 // RunServe runs the serve HTTP server until ctx is cancelled (SIGINT/SIGTERM,
@@ -582,7 +591,8 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	// 开关注入(Plan 42 批1 T2/T6):显式 env 在此读取(前台/服务路径一致),
 	// 显式 flag 由 CLI 经 ServeOpts 注入;store/缺省两层由 switch 机制解析。
 	runner.RefreshSwitches(envSwitch(envServePairing), opts.PairingFlag,
-		envSwitch(envServeDiscovery), opts.DiscoveryFlag)
+		envSwitch(envServeDiscovery), opts.DiscoveryFlag,
+		envSwitch(envServeMetadataEdit), opts.MetadataEditFlag)
 
 	// Cert resolution: if the operator did not pass an explicit --tls-cert,
 	// auto-generate + load a self-signed cert. After this block tlsCert is

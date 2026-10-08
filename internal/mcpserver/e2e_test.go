@@ -180,15 +180,16 @@ func TestE2EBackgroundTrioFullFlow(t *testing.T) {
 	defer cliSess.Close()
 	ctx := context.Background()
 
-	// 0. tools/list: 恰 12 工具 (6+3+1+1+1), 名称与 BrokerTools 单源核对——集合相等
+	// 0. tools/list: 权威面恰 authorityTools 个, 名称单源核对——集合相等
 	//    (SDK featureSet 是 map + 按名排序输出, 协议对 tools/list 无序保证,
-	//    故断言集合而非注册序)。
+	//    故断言集合而非注册序; update_server_metadata 是缓存脸专属,
+	//    不在权威面——Plan 51 Q10-A)。
 	lt, err := cliSess.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lt.Tools) != len(BrokerTools) {
-		t.Fatalf("tools/list = %d tools (BrokerTools has %d), want exactly %d", len(lt.Tools), len(BrokerTools), len(BrokerTools))
+	if len(lt.Tools) != len(authorityTools) {
+		t.Fatalf("tools/list = %d tools (authorityTools has %d), want exactly %d", len(lt.Tools), len(authorityTools), len(authorityTools))
 	}
 	listed := map[string]bool{}
 	for _, tl := range lt.Tools {
@@ -197,7 +198,7 @@ func TestE2EBackgroundTrioFullFlow(t *testing.T) {
 		}
 		listed[tl.Name] = true
 	}
-	for i, want := range BrokerTools {
+	for i, want := range authorityTools {
 		if !listed[want] {
 			t.Fatalf("tools/list is missing BrokerTools[%d] = %q (listed: %v)", i, want, listed)
 		}

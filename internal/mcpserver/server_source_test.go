@@ -48,7 +48,7 @@ func TestNewServerFromSource_ResolvesStorePerCall(t *testing.T) {
 	server, mgr, tasks, err := NewServerFromSource(func() *store.Store {
 		atomic.AddInt32(&calls, 1)
 		return cur
-	}, pid, "proj-src", nil)
+	}, pid, "proj-src", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

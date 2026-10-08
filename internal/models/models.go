@@ -60,8 +60,14 @@ type Server struct {
 	// Never affects the broker's own dialing — the vault always stores the
 	// real host.
 	ExposeHost bool
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	// Revision (Plan 51) is the monotonic optimistic-lock token for the six
+	// metadata fields above: every UPDATE servers path bumps it, and a
+	// client-side metadata edit (POST /server-metadata) must echo the value it
+	// read via list_servers — a mismatch is a 409 carrying the current row.
+	// 0 = never written (legacy rows back-fill to 0).
+	Revision  int64
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Credential stores an encrypted secret. Secret and Passphrase are decrypted only in memory by the store.

@@ -48,6 +48,11 @@ type SnapshotServer struct {
 	ExposeHost       bool   `json:"expose_host"`
 	CreatedAt        int64  `json:"created_at"`
 	UpdatedAt        int64  `json:"updated_at"`
+	// Revision (Plan 51) rides both export paths and MUST survive
+	// ImportSnapshot verbatim — the cache store's CAS tokens have to agree
+	// with the broker's or every pull would reset them to permanent 409s.
+	// Old snapshots (no field) import as 0 ("never written") losslessly.
+	Revision int64 `json:"revision"`
 }
 
 type SnapshotProfile struct {
@@ -124,7 +129,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 
 	// servers (COALESCE the nullable text cols to '' — credential_id is nullable
 	// since Plan 20 C0: a credential-less server carries "" in the snapshot)
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at FROM servers ORDER BY id`)
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +137,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 		var sv SnapshotServer
 		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
 			&sv.CredentialID, &sv.SudoCredentialID, &sv.TagsRaw, &sv.Description, &sv.Location,
-			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.CreatedAt, &sv.UpdatedAt); err != nil {
+			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
 			rs.Close()
 			return nil, err
 		}
@@ -314,7 +319,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string) (*Snapshot, error) {
 	}
 
 	// servers granted to the profile (same column shape as ExportSnapshot)
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
 		FROM servers WHERE id IN (SELECT server_id FROM profile_servers WHERE profile_id=?) ORDER BY id`, profileID)
 	if err != nil {
 		return nil, err
@@ -326,7 +331,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string) (*Snapshot, error) {
 		var sv SnapshotServer
 		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
 			&sv.CredentialID, &sv.SudoCredentialID, &sv.TagsRaw, &sv.Description, &sv.Location,
-			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.CreatedAt, &sv.UpdatedAt); err != nil {
+			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
 			rs.Close()
 			return nil, err
 		}
@@ -498,8 +503,8 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 			sudoArg = sv.SudoCredentialID
 		}
 		credArg := nullIfEmpty(sv.CredentialID)
-		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, sv.CreatedAt, sv.UpdatedAt); err != nil {
+		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, sv.CreatedAt, sv.UpdatedAt, sv.Revision); err != nil {
 			return fmt.Errorf("insert server %s: %w", sv.ID, err)
 		}
 	}

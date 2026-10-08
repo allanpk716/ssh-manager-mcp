@@ -147,7 +147,7 @@ func (fx *cacheFwdFixture) newBrokerSnap(t *testing.T, snap *store.Snapshot, rel
 	t.Helper()
 	srv, tunnels, tasks, cleanup, err := mcpserver.NewCacheBroker(
 		fx.projToken, snap, filepath.Join(t.TempDir(), "audit.log"), reload,
-		clientops.ForwardingHostKeys(mustForwarder(t, cred)), "laptop")
+		clientops.ForwardingHostKeys(mustForwarder(t, cred)), "laptop", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestCacheForwardE2E_FirstConnectOnceSuccess(t *testing.T) {
 	auditPath := filepath.Join(t.TempDir(), "audit.log")
 	srv, tunnels, tasks, cleanup, err := mcpserver.NewCacheBroker(
 		fx.projToken, fx.snap, auditPath, nil,
-		clientops.ForwardingHostKeys(mustForwarder(t, fx.cred)), "laptop")
+		clientops.ForwardingHostKeys(mustForwarder(t, fx.cred)), "laptop", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

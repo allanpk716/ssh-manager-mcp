@@ -770,6 +770,44 @@ host key for <host>:<port> is unknown and cannot be pinned here (presented finge
 
 ---
 
+## 客户端元数据编辑（Plan 51）
+
+> **一句话**：工作机上的 agent（缓存模式）可以把它探明的服务器信息（硬件、
+> 部署了什么、注意事项）直接写回权威 vault——不再需要 owner 登 NUC10 手工
+> 维护。写受三重护栏：设备码认证 + 授权档（profile）授予集合、revision 乐观
+> 锁（与 owner 编辑互踩必被拦）、单事务审计（旧值截断入行，写坏多半可手工改回）。
+
+### 面向谁
+
+- **agent**（缓存模式专属工具 `update_server_metadata`，权威端本机 agent 面没有
+  此工具）：探完一台服务器，把验证过的发现记回去。语义=部分更新：省略字段=
+  保持原值、空串=清空；`expected_revision` 取自 `list_servers` 输出的
+  `revision`。
+- **owner**：NUC10 上照旧 TUI/CLI 编辑；两边的写共用同一把 revision 锁，互相
+  踩踏会得到明确的 409 而不是静默覆盖。
+
+### 服务端形态
+
+- 路由 `POST /server-metadata`，与 `/snapshot`、`/pin-hostkey` 同一个设备码
+  闸门；目标条目必须在该设备码绑定 profile 的授予集合内（越界 403，措辞故意
+  含糊不泄露库形状）。
+- 409 响应带当前 revision 与六字段现值——agent 一跳内合并重试，无需 cache
+  pull（响应内容 ⊆ 该设备码下一次快照拉取可自算的内容，零新增泄露）。
+- 审计行 `meta-edit`：设备名 + 改动字段清单 + 每字段旧值截断 200 字节。
+- **全局开关默认开**（升级即生效）：`serve --metadata-edit=false` /
+  环境变量 `SSHMGR_SERVE_METADATA_EDIT=false` / vault 设置
+  `serve.metadata_edit=false`（显式环境变量 > 显式命令行参数 > vault 设置 >
+  默认开）。关闭时该路由 403，工具报「owner 已关闭」。
+
+### 混布与升级
+
+旧 broker（无此路由）遇到新客户端的工具调用 → 404 → 工具错误指引 owner 升级
+broker 后重试；新 broker 对旧客户端零影响（新路由/新列/新 JSON 字段全部可
+忽略）。旧缓存快照里没有 `revision` 字段（一律读 0）：首次编辑若已被别人写过
+会 409 一次，照错误里的现值重试即收敛。
+
+---
+
 ## 多实例（同机多 agent Plan 40 第一批）
 
 > **一句话**：同一台工作机上 N 个 agent（各持不同 project token / 设备码 / profile）各自拥有**独立的离线 cache 实例**——独立目录、独立 DEK、独立审计、独立 MAX_OFFLINE 时效，互不串扰、泄露不连坐。
