@@ -4,14 +4,19 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ssh-manager-mcp/internal/mcpserver/hotswap"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/updater"
 	"ssh-manager-mcp/internal/vault"
 )
 
@@ -48,7 +53,7 @@ func RunStdio(token string, kp store.KeyProvider) error {
 	// which is the single-session stdio case.)
 	defer tunnels.CloseAll()
 	defer tasks.CloseAll()
-	return srv.Run(context.Background(), &mcp.StdioTransport{})
+	return serveBridge(context.Background(), srv)
 }
 
 // hydrateCacheStore builds a fresh temporary read-only store from snap and
@@ -253,7 +258,7 @@ func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload 
 	defer cleanup()
 	defer tunnels.CloseAll()
 	defer tasks.CloseAll()
-	return srv.Run(context.Background(), &mcp.StdioTransport{})
+	return serveBridge(context.Background(), srv)
 }
 
 // NewCacheBroker assembles the hot-reloading read-only cache broker without
@@ -298,4 +303,142 @@ func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func
 		return nil, nil, nil, nil, err
 	}
 	return srv, tunnels, tasks, h, nil
+}
+
+// serveBridge 在一个已构造好的 broker 服务面上接入桥热升级(stdio 两形态
+// 入口 RunStdio/RunStdioCache 的共同收尾,规格实施决策第 3/4 条):
+//
+//   - 领养检测:SSHMGR_HOTSWAP_* 环境存在即本桥是被领养拉起的继任——以
+//     注入的「已握手」会话状态起服务(不再收 initialize),写出就绪文件,
+//     并向已领养会话补发一次 tools/list_changed(重新注册 reload_self 触发
+//     SDK 的清单变更通知)。
+//   - 字节面接管:真实标准输入输出的读写收进 hotswap.BridgeIO(细节见
+//     该文件头注释),为可能的首代退位做准备。
+//   - reload_self 注册:工具面第 14 把(BrokerTools[13]),忙判据经
+//     serverRuntimes 登记表取本服务的 BusyTracker。
+//   - 收尾次序:会话结束(宿主断开或退位交割)→ 等换手编排终态(退位为
+//     泵的进程要等泵终态才退;未退位的进程立即返回)→ 调用方的 defer
+//     (CloseAll 等)照常执行。
+func serveBridge(ctx context.Context, srv *mcp.Server) error {
+	exe, exeErr := os.Executable()
+
+	sessEnv, readyPath, adopted := hotswap.ParseEnv(os.Environ())
+	var adoptState *mcp.ServerSessionState
+	if adopted {
+		var err error
+		adoptState, err = hotswap.AdoptedSessionState(sessEnv)
+		if err != nil {
+			// 领养环境存在但无法解读:起一个「会拒绝一切请求」的假握手服务
+			// 没有意义(宿主已握手,不会再发 initialize),宁可失败退出——
+			// 父桥会在就绪超时后回退。
+			return err
+		}
+	}
+
+	bio, err := hotswap.NewBridgeIO(os.Stdin, os.Stdout, !adopted)
+	if err != nil {
+		return err
+	}
+	defer bio.Close()
+
+	sessionEnded := make(chan struct{})
+	cfg := hotswap.ReloadConfig{
+		IO:           bio,
+		Srv:          srv,
+		SessionEnded: sessionEnded,
+		// 测试仪表缝:换手端到端测试用同一测试二进制扮两代,经
+		// SSHMGR_TEST_SUCCESSOR_ENV 给继任注入版本/角色环境(生产为空)。
+		Env:     successorEnvSeam(),
+		Adopted: adopted,
+		Latest:  latestReleaseTag,
+	}
+	if exeErr == nil {
+		cfg.Exe = exe
+		// 出生代际快照(票 01):此后 reload_self 以「盘上代际 > 出生代际」
+		// 判新(不比版本大小,降级同样触发;文件缺失/损坏=无信号)。
+		cfg.BirthGeneration = updater.BirthGeneration(exe)
+	} else {
+		fmt.Fprintf(os.Stderr, "sshmgr: hotswap disabled (os.Executable: %v)\n", exeErr)
+		cfg.Adopted = true // 无可执行路径即无可拉继任:Arm 一律拒绝,行为同被领养桥
+	}
+	applyReloadTimingSeams(&cfg)
+	rs := hotswap.NewReloadService(cfg)
+
+	register := func() { registerReloadSelfTool(srv, busyTrackerFor(srv), rs) }
+	register()
+
+	serveErr := hotswap.ServeSession(ctx, srv, bio.Transport(), adoptState, func(ss *mcp.ServerSession) {
+		if !adopted {
+			return
+		}
+		// 继任收尾三连:就绪文件(父桥在等它确认后才开始退位)→ 补发清单
+		// 变更通知(重新注册同一工具,SDK 的 changeAndNotify 会向本会话发
+		// 一次 tools/list_changed;幂等替换,清单内容不变,规格 D3)。
+		if werr := hotswap.WriteReady(readyPath, hotswap.BridgeVersion()); werr != nil {
+			fmt.Fprintf(os.Stderr, "sshmgr: hotswap ready file: %v (parent will roll back)\n", werr)
+			return
+		}
+		register()
+	})
+	close(sessionEnded)
+	rs.WaitTerminal()
+	return serveErr
+}
+
+// latestReleaseTag 是 reload_self 的「GitHub 最新版本」只读查询:复用
+// internal/updater 的发现逻辑(同一传输与白名单,SSHMGR_UPDATE_BASE 缝),
+// 不下载任何资产,只取 release 的 tag。
+func latestReleaseTag(ctx context.Context) (string, error) {
+	rel, err := updater.LatestRelease(ctx)
+	if err != nil {
+		return "", err
+	}
+	return rel.Tag, nil
+}
+
+// successorEnvSeam 解析 SSHMGR_TEST_SUCCESSOR_ENV(分号分隔的 K=V 列表)
+// 为继任的附加环境。这是换手端到端测试的仪表缝(同一测试二进制扮两代,
+// 靠它给继任注入 SSHMGR_TEST_VERSION 等覆盖);生产不设此变量,返回 nil。
+func successorEnvSeam() []string {
+	raw := os.Getenv("SSHMGR_TEST_SUCCESSOR_ENV")
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, kv := range strings.Split(raw, ";") {
+		kv = strings.TrimSpace(kv)
+		if kv == "" {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// applyReloadTimingSeams 应用换手时限的测试缝(env 覆盖;生产不设,默认
+// 值见 hotswap.NewReloadService)。
+func applyReloadTimingSeams(cfg *hotswap.ReloadConfig) {
+	if ms := envMillis("SSHMGR_TEST_READY_TIMEOUT_MS"); ms > 0 {
+		cfg.ReadyTimeout = ms
+	}
+	if ms := envMillis("SSHMGR_TEST_POLL_MS"); ms > 0 {
+		cfg.PollInterval = ms
+	}
+	if ms := envMillis("SSHMGR_TEST_QUIESCE_TIMEOUT_MS"); ms > 0 {
+		cfg.QuiesceTimeout = ms
+	}
+	if ms := envMillis("SSHMGR_TEST_SESSION_END_TIMEOUT_MS"); ms > 0 {
+		cfg.SessionEndTimeout = ms
+	}
+	if ms := envMillis("SSHMGR_TEST_COPIER_DRAIN_TIMEOUT_MS"); ms > 0 {
+		cfg.CopierDrainTimeout = ms
+	}
+}
+
+func envMillis(name string) time.Duration {
+	v, err := strconv.Atoi(os.Getenv(name))
+	if err != nil || v <= 0 {
+		return 0
+	}
+	return time.Duration(v) * time.Millisecond
 }

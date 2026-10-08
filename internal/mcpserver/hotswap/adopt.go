@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -68,7 +69,7 @@ type Options struct {
 	BeforeRetire func() error
 }
 
-// Handover 执行一次换手:以领养模式拉起继任、等它写出就绪文件、执行退位
+// Handover 执行一次完整换手:以领养模式拉起继任、等它写出就绪文件、执行退位
 // 前应答钩子,然后退位。
 //
 // 成功路径按代次分叉:GenerationFirst 化为泵并阻塞到终态(返回即本进程应
@@ -77,18 +78,65 @@ type Options struct {
 // 失败路径(继任起不来/就绪超时/继任未及就绪先退出/应答钩子失败)一律
 // 回退(规格 D8):杀掉继任、释放泵侧管道,返回带原因的错误;本进程自身
 // 状态未动,继续以服务进程应答。
+//
+// 需要在「就绪已确认」与「退位」之间插自定义动作的调用方(如 reload_self
+// 先返回工具应答、再退位)用两段式 API:StartSuccessor + SuccessorHandle。
 func Handover(opts Options) error {
+	h, err := StartSuccessor(opts)
+	if err != nil {
+		return err
+	}
+	// 退位前应答钩子:失败即回退,不进入退位
+	if opts.BeforeRetire != nil {
+		if herr := opts.BeforeRetire(); herr != nil {
+			return h.rollback(fmt.Errorf("hotswap: pre-retire hook: %w", herr))
+		}
+	}
+	if opts.Generation == GenerationLater {
+		// 继任已持有全部所需句柄;本进程的退出由调用方完成。
+		return nil
+	}
+	hostIn, hostOut := opts.HostIn, opts.HostOut
+	if hostIn == nil {
+		hostIn = os.Stdin
+	}
+	if hostOut == nil {
+		hostOut = os.Stdout
+	}
+	return h.PumpThen(hostIn, hostOut)
+}
+
+// SuccessorHandle 是一次已武装的换手继任:继任进程已拉起、就绪文件已确认,
+// 泵侧管道两端由本结构持有,等待调用方在退位时机二选一——Rollback(放弃
+// 退位,回退)或 PumpThen(首代退位为泵)。GenerationLater 的继任直接继承
+// 本进程句柄(handle 不持管道),退位动作由调用方退出本进程完成。
+type SuccessorHandle struct {
+	cmd       *exec.Cmd
+	pair      *pipePair // GenerationFirst 的泵侧管道;GenerationLater 为 nil
+	readyPath string
+	exited    chan error
+	exitOnce  sync.Once
+	// Version 是继任就绪文件里自报的版本。
+	Version string
+}
+
+// StartSuccessor 执行换手的前半程:以领养模式拉起继任并等待它写出就绪
+// 文件。任何失败(拉起失败/就绪超时/继任未及就绪先退出)都已就地回退
+// (杀继任 + 释放泵侧管道)后返回带原因的错误;成功返回 SuccessorHandle,
+// 调用方此后择机 Rollback 或 PumpThen。参数语义与 Handover 相同
+// (BeforeRetire/HostIn/HostOut 在这一段不参与)。
+func StartSuccessor(opts Options) (*SuccessorHandle, error) {
 	if opts.Exe == "" {
-		return errors.New("hotswap: Options.Exe is required")
+		return nil, errors.New("hotswap: Options.Exe is required")
 	}
 	if opts.Generation != GenerationFirst && opts.Generation != GenerationLater {
-		return errors.New("hotswap: Options.Generation must be GenerationFirst or GenerationLater")
+		return nil, errors.New("hotswap: Options.Generation must be GenerationFirst or GenerationLater")
 	}
 	readyPath := opts.ReadyPath
 	if readyPath == "" {
 		f, err := os.CreateTemp("", "sshmgr-hotswap-ready-*.json")
 		if err != nil {
-			return fmt.Errorf("hotswap: allocate ready file: %w", err)
+			return nil, fmt.Errorf("hotswap: allocate ready file: %w", err)
 		}
 		readyPath = f.Name()
 		f.Close()
@@ -96,7 +144,7 @@ func Handover(opts Options) error {
 	}
 	childEnv, err := BuildEnv(append(os.Environ(), opts.Env...), opts.Session, readyPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	cmd := exec.Command(opts.Exe, opts.Args...)
@@ -111,7 +159,7 @@ func Handover(opts Options) error {
 	var pair *pipePair
 	if opts.Generation == GenerationFirst {
 		if pair, err = newPipePair(); err != nil {
-			return err
+			return nil, err
 		}
 		cmd.Stdin = pair.childStdin
 		cmd.Stdout = pair.childStdout
@@ -123,29 +171,24 @@ func Handover(opts Options) error {
 	}
 	if err := cmd.Start(); err != nil {
 		pair.close()
-		return fmt.Errorf("hotswap: start successor %q: %w", opts.Exe, err)
+		return nil, fmt.Errorf("hotswap: start successor %q: %w", opts.Exe, err)
 	}
 	// 子进程已持有自己那份句柄;父侧副本必须关,否则管道 EOF 语义失效。
 	pair.closeChildEnds()
 
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
+	h := &SuccessorHandle{cmd: cmd, pair: pair, readyPath: readyPath, exited: exited}
 
 	// exited 只发一次、只收一次:收过后标记,避免回退收尾二次等待死锁。
-	consumedExit := false
-	drainExited := func() {
-		if !consumedExit {
-			<-exited
-			consumedExit = true
-		}
-	}
-	rollback := func(cause error) error {
+	drainExited := func() { h.exitOnce.Do(func() { <-h.exited }) }
+	rollback := func(cause error) (*SuccessorHandle, error) {
 		pair.close()
 		if kerr := cmd.Process.Kill(); kerr != nil && !errors.Is(kerr, os.ErrProcessDone) {
 			cause = errors.Join(cause, fmt.Errorf("hotswap: cleanup: kill successor: %w", kerr))
 		}
 		drainExited()
-		return cause
+		return nil, cause
 	}
 
 	poll := opts.PollInterval
@@ -161,45 +204,52 @@ func Handover(opts Options) error {
 	alarm := time.NewTimer(timeout)
 	defer alarm.Stop()
 	for {
-		if _, ok := readReady(readyPath); ok {
-			break
+		if r, ok := readReady(readyPath); ok {
+			h.Version = r.Version
+			return h, nil
 		}
 		select {
 		case werr := <-exited:
-			consumedExit = true
+			h.exitOnce.Do(func() {}) // 本 select 已收走 exited 的唯一一次发送
 			return rollback(fmt.Errorf("hotswap: %w before writing the ready file: %v (ready file %q)", ErrSuccessorExited, werr, readyPath))
 		case <-tick.C:
 		case <-alarm.C:
 			return rollback(fmt.Errorf("hotswap: ready file %q: %w after %v", readyPath, ErrReadyTimeout, timeout))
 		}
 	}
+}
 
-	// 退位前应答钩子:失败即回退,不进入退位
-	if opts.BeforeRetire != nil {
-		if herr := opts.BeforeRetire(); herr != nil {
-			return rollback(fmt.Errorf("hotswap: pre-retire hook: %w", herr))
-		}
-	}
+// Rollback 放弃退位并回退:杀掉继任、释放泵侧管道(幂等,重复调用无害)。
+// 用于就绪已确认之后、退位动作尚未开始的放弃路径(规格 D8 的回退语义
+// 覆盖到「退位动作开始前」为止——开始后本进程字节面已交出,不再可回)。
+// 返回值只含收尾错误(杀失败等);「主动放弃」本身不是错误。
+func (h *SuccessorHandle) Rollback() error {
+	return h.rollback(nil)
+}
 
-	if opts.Generation == GenerationLater {
-		// 继任已持有全部所需句柄;本进程的退出由调用方完成。
-		return nil
+func (h *SuccessorHandle) rollback(cause error) error {
+	h.pair.close()
+	if kerr := h.cmd.Process.Kill(); kerr != nil && !errors.Is(kerr, os.ErrProcessDone) {
+		cause = errors.Join(cause, fmt.Errorf("hotswap: cleanup: kill successor: %w", kerr))
 	}
+	h.exitOnce.Do(func() { <-h.exited })
+	return cause
+}
 
-	hostIn, hostOut := opts.HostIn, opts.HostOut
-	if hostIn == nil {
-		hostIn = os.Stdin
+// PumpThen 执行首代退位:化为泵,在宿主侧句柄与泵侧管道之间双向搬运,
+// 阻塞到泵终态(返回即本进程应立即退出)。GenerationLater 的 handle 不持
+// 泵侧管道,调用它报错——后续代的退位是调用方直接退出本进程。
+func (h *SuccessorHandle) PumpThen(hostIn, hostOut *os.File) error {
+	if h.pair == nil {
+		return errors.New("hotswap: PumpThen on a GenerationLater successor (caller exits instead)")
 	}
-	if hostOut == nil {
-		hostOut = os.Stdout
-	}
-	pumpErr := Pump(hostIn, hostOut, pair.toSuccessor, pair.fromSuccessor)
+	pumpErr := Pump(hostIn, hostOut, h.pair.toSuccessor, h.pair.fromSuccessor)
 	// 泵到终态后继任若仍活着(如只关标准输出的畸形继任),补一刀防孤儿。
 	// kill 的结果不并入返回值:此刻继任必已死或将死,而 Windows 上对
 	// 「已退出但尚未收割」的进程 Kill 可能报 Access is denied,并入会
 	// 污染泵结果的错误语义(errors.Is 身份)。
-	_ = cmd.Process.Kill()
-	drainExited()
+	_ = h.cmd.Process.Kill()
+	h.exitOnce.Do(func() { <-h.exited })
 	return pumpErr
 }
 

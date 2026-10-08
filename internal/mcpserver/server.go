@@ -3,11 +3,13 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/mcpserver/hotswap"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 )
@@ -42,7 +44,7 @@ type MetadataEditor interface {
 // through them.
 //
 // Adding a new broker MCP tool means appending to this slice AND adding a
-// matching mcp.AddTool call in NewServer that indexes the new entry. That keeps
+// matching registration that indexes the new entry. That keeps
 // the safety scorers in lock-step with the registration source: there is ONE
 // place that names the tools, and the eval scorer reads it instead of
 // re-hardcoding the names.
@@ -60,6 +62,7 @@ var BrokerTools = []string{
 	"exec_context",           // [10] — capture the exec channel's TRUE context in one round: uid/gid/groups, tty, uid_map, LSM label, SSH provenance, process tree (profile-gated; Plan 41 §3)
 	"relay_file",             // [11] — relay a LARGE file server-to-server (or broker-disk → server) through the broker: chunked streaming, resumable background task, metadata-only results (profile-gated; Plan 47 §1)
 	"update_server_metadata", // [12] — partial edit of a server entry's six metadata fields via the broker (optimistic-lock revision; CACHE FACE ONLY — registered when the metadata forwarder is injected; Plan 51 §7)
+	hotswap.ToolReloadSelf,   // [13] — report this bridge's current/disk/latest versions and, when the disk holds a newer generation and the bridge is idle, hot-swap into it (bridge hot-upgrade; BRIDGE FACES ONLY — registered by run.go's stdio entries, see bridgeOnlyTools)
 }
 
 // cacheOnlyTools names BrokerTools entries that ONLY the cache face registers
@@ -70,12 +73,21 @@ var cacheOnlyTools = map[string]bool{
 	BrokerTools[12]: true, // "update_server_metadata"
 }
 
-// authorityTools is BrokerTools minus the cache-only entries: exactly the set
-// NewServer/RunStdio (direct-store mode) registers.
+// bridgeOnlyTools names BrokerTools entries that ONLY the stdio bridge entries
+// (run.go's RunStdio / RunStdioCache via serveBridge) register — they describe
+// the BRIDGE PROCESS, not the broker face, so the remote-serve face (serve.go,
+// built on NewServer) and bare-constructor consumers never see them. Excluded
+// from authorityTools for the same lockstep reason as cacheOnlyTools.
+var bridgeOnlyTools = map[string]bool{
+	BrokerTools[13]: true, // "reload_self"
+}
+
+// authorityTools is BrokerTools minus the cache-only and bridge-only entries:
+// exactly the set NewServer registers.
 var authorityTools = func() []string {
 	out := make([]string, 0, len(BrokerTools))
 	for _, t := range BrokerTools {
-		if !cacheOnlyTools[t] {
+		if !cacheOnlyTools[t] && !bridgeOnlyTools[t] {
 			out = append(out, t)
 		}
 	}
@@ -142,9 +154,11 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 	// 两个管理器 (各自持锁现读), 在飞一路由下面 addTrackedTool 的包装层进出
 	// 计数。reload_self 工具与自动换手 (后续票) 以 busy.Report() 判忙; 发起
 	// 换手的 reload_self 注册时走 wrapInflight 豁免自身 (不计入在飞, 否则工具
-	// 触发永远自拒)。busy 目前止于本函数作用域 —— 集成票把它随返回值带出时
-	// 一并改签名 (签名变更归该票)。
+	// 触发永远自拒)。busy 的进程内出口是 serverRuntimes 登记表 (签名不动:
+	// NewServerFromSource 的返回形状被 serve.go 等既有调用方依赖), stdio
+	// 桥入口 (run.go serveBridge) 经 busyTrackerFor 取用。
 	busy := NewBusyTracker(tunnels.ActiveTunnels, tasks.RunningTasks)
+	serverRuntimes.Store(srv, busy)
 
 	uploadCap, err := resolveUploadContentCap() // env seam (SSHMGR_UPLOAD_CONTENT_MAX): invalid/非正/>1 GiB → construction fails (fail-closed, spec rev3 §3.1)
 	if err != nil {
@@ -447,6 +461,99 @@ func metadataFieldsFromInput(in *UpdateServerMetadataInput) map[string]*string {
 		fields["description"] = in.Description
 	}
 	return fields
+}
+
+// serverRuntimes 登记每个已构造 *mcp.Server 的忙判据库(NewServerFromSource
+// 构造时写入;stdio 桥入口 serveBridge 经 busyTrackerFor 读出,供
+// reload_self 的忙检查与豁免注册)。加法出口而非改 NewServerFromSource
+// 签名:返回形状被 serve.go 等既有调用方依赖。
+var serverRuntimes sync.Map // *mcp.Server → *BusyTracker
+
+// busyTrackerFor 返回 serverRuntimes 里登记的忙判据库;未登记(裸构造、
+// 或登记被测试清理)返回 nil——调用方据此退化为「无忙判据」行为。
+func busyTrackerFor(srv *mcp.Server) *BusyTracker {
+	if v, ok := serverRuntimes.Load(srv); ok {
+		return v.(*BusyTracker)
+	}
+	return nil
+}
+
+// addExemptTool 是豁免形态的注册帮手(票 02 评审建议):与 addTrackedTool
+// 一样走 wrapInflight,只是 exempt=true——发起换手的 reload_self 必须豁免
+// 自身,否则它做忙检查时永远看见自己忙碌(规格 D5)。保住「全部注册走
+// wrapInflight 包装」的 grep 不变量:豁免注册也在这里,不走裸 mcp.AddTool。
+func addExemptTool[In, Out any](srv *mcp.Server, busy *BusyTracker, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	mcp.AddTool(srv, t, wrapInflight(busy, h, true))
+}
+
+// ReloadSelfOutput is the reload_self tool output. busy (the active list) is
+// present only when the handover was declined because the bridge was busy.
+type ReloadSelfOutput struct {
+	Version          string      `json:"version" jsonschema:"version of THIS bridge process"`
+	DiskGeneration   int64       `json:"disk_generation" jsonschema:"generation recorded on disk next to the binary (sshmgr update writes it); 0 = no signal"`
+	DiskVersion      string      `json:"disk_version,omitempty" jsonschema:"version recorded in the on-disk generation signal; empty when no signal"`
+	Latest           string      `json:"latest,omitempty" jsonschema:"tag of the latest GitHub release (queried live once per call)"`
+	LatestError      string      `json:"latest_error,omitempty" jsonschema:"why the latest-release query failed, verbatim; empty on success"`
+	Handover         string      `json:"handover" jsonschema:"handover outcome: started | declined_busy | no_new_generation | not_first_generation | already_armed | failed"`
+	SuccessorVersion string      `json:"successor_version,omitempty" jsonschema:"version the ready successor reported (handover=started)"`
+	Error            string      `json:"error,omitempty" jsonschema:"why the handover failed (handover=failed)"`
+	Busy             *BusyReport `json:"busy,omitempty" jsonschema:"active list present when handover=declined_busy"`
+}
+
+// registerReloadSelfTool 注册 reload_self(工具面第 14 把,BrokerTools[13];
+// 只由 stdio 桥入口注册,见 bridgeOnlyTools)。处理器经 wrapInflight 豁免
+// 自身在飞计数(规格 D5)。重复调用是幂等的同义替换——继任接管后由
+// serveBridge 再调一次,借 SDK 的「工具集变更」路径向已领养会话补发一次
+// tools/list_changed 通知(规格 D3:继任接管后无条件发一次)。
+func registerReloadSelfTool(srv *mcp.Server, busy *BusyTracker, rs *hotswap.ReloadService) {
+	addExemptTool(srv, busy,
+		&mcp.Tool{
+			Name:        BrokerTools[13], // "reload_self" (bridge hot-upgrade)
+			Description: "Report THIS bridge process's version status — current version, the on-disk generation+version (written by sshmgr update; a NEWER GENERATION, upgrade or downgrade alike, is what triggers a handover), and the latest GitHub release tag (one live read-only query; a query failure is reported verbatim in latest_error and changes nothing else). Takes no arguments. When the disk holds a newer generation AND the bridge is idle (no active tunnels, running background tasks, or in-flight requests — this very call is exempt), it hot-swaps into the new binary without dropping the connection: the response you are reading is written by the OLD process, the successor then takes over the SAME session (no re-initialize) and emits one tools/list_changed. If the successor fails to become ready the handover is rolled back and the failure reason is returned here — the old bridge keeps serving. When busy, returns the active list instead of swapping. Known host quirk: a tool first used in the same turn it was registered may be reported missing once — retry next turn.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ReloadSelfOutput, error) {
+			return nil, reloadSelf(ctx, busy, rs), nil
+		},
+	)
+}
+
+// reloadSelf 是 reload_self 的处理器主体(从注册闭包拆出便于单测)。
+func reloadSelf(ctx context.Context, busy *BusyTracker, rs *hotswap.ReloadService) ReloadSelfOutput {
+	out := ReloadSelfOutput{Handover: "no_new_generation"}
+	st := rs.Report(ctx)
+	out.Version = st.CurrentVersion
+	out.DiskGeneration = st.DiskGeneration
+	out.DiskVersion = st.DiskVersion
+	out.Latest = st.Latest
+	out.LatestError = st.LatestError
+
+	switch {
+	case rs.Adopted():
+		// 本桥自身是被领养拉起的后续代:后续代换手(直接继承句柄形态)
+		// 是后续票的接线,这里如实说明而不冒充换手。
+		out.Handover = "not_first_generation"
+	case st.DiskGeneration <= rs.BirthGen():
+		// 盘上无新代际(无信号=0,或仍是出生代际):只报情报。
+	default:
+		if busy != nil {
+			if rep := busy.Report(); rep.Busy {
+				out.Handover = "declined_busy"
+				out.Busy = &rep
+				return out
+			}
+		}
+		switch arm := rs.Arm(); arm.State {
+		case hotswap.ArmArmed:
+			out.Handover = "started"
+			out.SuccessorVersion = arm.SuccessorVersion
+		case hotswap.ArmAlreadyArmed:
+			out.Handover = "already_armed"
+		default: // ArmFailed
+			out.Handover = "failed"
+			out.Error = arm.Err.Error()
+		}
+	}
+	return out
 }
 
 // ListServersOutput is the list_servers tool output.
