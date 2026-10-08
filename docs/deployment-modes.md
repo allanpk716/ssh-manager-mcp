@@ -49,7 +49,7 @@ sshmgr update --file <包> [--sha256 <hex> | --no-verify]   # 本地包模式（
 - **版本源**：GitHub Releases 直连（`releases/latest`，天然排除 prerelease/draft；未认证 API 限速 60/h/IP——手动更新场景足够）；`--version <tag>` 可钉版/降级。镜像/内网用 `SSHMGR_UPDATE_BASE` env seam 换源（非环回强制 https，证据行醒目显示生效 base）。**降级通道下限：update 仅覆盖 v0.13.0 及以上**——更早版本（v0.12.x 旧名资产 `ssh-manager_*`）不在资产名计算内，回滚到它们走手工下载安装（二进制改名的固有代价，一次性）。
 - **信任链**：强制 https（仅环回字面量例外）+ 重定向**每一跳**宿主白名单 + 同 release `checksums.txt` SHA256 比对——校验不过即中止，目标文件零触碰；解压只落地根条目精确名 `sshmgr`（Windows `sshmgr.exe`），zip slip 不可能。
 - **事务性替换**：临时目录建在 exe 同目录（同卷原子 rename）；替换点之前的任何失败 = 零变更；Windows 走 `.old` 代际名 + 崩溃窗口启动自愈；exe 目录不可写（如 `/usr/local/bin`）→ 明确报错提示提权，**update 自身永不自动提权**。
-- **服务重启**：serve 机替换成功后询问重启（LocalSystem 服务非提升会话 `Restart()` 必 Access denied——NUC10 常态，不算更新失败；失败打印手工命令 + 专用退出码「替换成功/重启待手工」，成功后健康回探）。**重启将断开活动隧道、作废进行中的配对请求**。client 机未装服务：新版本下次 agent 会话生效，运行中的桥继续旧版。
+- **服务重启**：serve 机替换成功后询问重启（LocalSystem 服务非提升会话 `Restart()` 必 Access denied——NUC10 常态，不算更新失败；失败打印手工命令 + 专用退出码「替换成功/重启待手工」，成功后健康回探）。**重启将断开活动隧道、作废进行中的配对请求**。client 机未装服务：v0.20.0 起运行中的桥空闲时**自动热升级**（约 30 秒内，机制见 [agent-access.md](./agent-access.md) 桥热升级节与 [ADR 0006](./adr/0006-bridge-hot-upgrade-self-demote-pump.md)）；尚在 ≤v0.19 旧版本上的在飞会话仍需下次 agent 会话或 `/mcp` 重连上车（一次性引导）。
 - **升级次序铁律不因 update 改变**：多机拓扑仍「先迁 client 后升 serve」；无后台自动检查/自动更新，升级时点由 owner 手动拍板。
 - 并发跑两个 update 无锁保护——**不要并发**。
 
