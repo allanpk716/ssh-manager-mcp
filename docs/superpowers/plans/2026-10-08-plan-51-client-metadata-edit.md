@@ -1,6 +1,6 @@
 # Plan 51 — 客户端元数据编辑(受审计转发写:乐观锁更新)
 
-日期:2026-10-08 ｜ 状态:已实施(测试矩阵 T1–T8 全绿 + linux/darwin 交叉编译绿;待 owner 审/合并/发版 v0.19.0)
+日期:2026-10-08 ｜ 状态:已实施并闭环(测试矩阵全绿;2026-10-08 合并 master 05a861c+发版 v0.19.0+双端自更新部署+真机验收首轮 agent 代跑过——验收册 acceptance/plan-51-client-metadata-edit.md)
 
 spec:`docs/superpowers/specs/2026-10-08-plan-51-client-metadata-edit-design.md`(事实源,本文件只做任务分解)
 术语:CONTEXT.md「服务器元数据/受审计转发写/元数据编辑」;取舍:ADR 0005。
@@ -26,4 +26,4 @@ spec:`docs/superpowers/specs/2026-10-08-plan-51-client-metadata-edit-design.md`(
 
 ## 发版与验收门
 
-捆发 v0.19.0(假定);发版门=测试矩阵全绿;真机验收六项(spec §12)发版后进验收册。
+捆发 v0.19.0(已发,CI+release 双绿);真机验收首轮已进验收册(A1/A2/A6 真机过,A3/A4/A5 单测/进程内代证)。
