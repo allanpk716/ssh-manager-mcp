@@ -317,6 +317,10 @@ func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func
 //     两条退位路径共用这一接管面。
 //   - reload_self 注册:工具面第 14 把(BrokerTools[13]),忙判据经
 //     serverRuntimes 登记表取本服务的 BusyTracker。
+//   - 自动换手循环(票 06,spec 实施决策第 1/2 条):定期(默认约 30 秒,
+//     SSHMGR_TEST_AUTOSWAP_INTERVAL_MS 缝)比对盘上代际与出生代际,新且
+//     不忙时经与 reload_self 同一个 Arm 入口静默换手;忙时静默跳过本轮。
+//     多把桥(不同缓存实例)各自起一个循环,互不干扰(实施决策第 5 条)。
 //   - 收尾次序:会话结束(宿主断开或退位交割)→ 等换手编排终态(退位为
 //     泵的进程要等泵终态才退;未退位的进程立即返回)→ 调用方的 defer
 //     (CloseAll 等)照常执行。
@@ -362,18 +366,34 @@ func serveBridge(ctx context.Context, srv *mcp.Server) error {
 	}
 	if exeErr == nil {
 		cfg.Exe = exe
-		// 出生代际快照(票 01):此后 reload_self 以「盘上代际 > 出生代际」
-		// 判新(不比版本大小,降级同样触发;文件缺失/损坏=无信号)。
+		// 继任 = 同一可执行 + 原始命令行(os.Args[1:] 继承子命令与旗标,
+		// 如 mcp --cache --instance <名>)——裸二进制拉起的继任不成桥,
+		// 就绪超时必然回退,热升级在真机不可用(票 06 修复的生产阻断缺陷;
+		// 测试角色进程 argv[1:] 为空,此默认对测试形态无影响)。
+		cfg.Args = os.Args[1:]
+		// 出生代际快照(票 01):此后 reload_self 与自动换手循环都以
+		// 「盘上代际 > 出生代际」判新(不比版本大小,降级同样触发;文件
+		// 缺失/损坏=无信号)。
 		cfg.BirthGeneration = updater.BirthGeneration(exe)
 	} else {
 		fmt.Fprintf(os.Stderr, "sshmgr: hotswap disabled (os.Executable: %v)\n", exeErr)
 		cfg.Adopted = true // 无可执行路径即无可拉继任:Arm 拒绝、工具面报 not_first_generation
 	}
+	// 票 06:自动换手循环的忙判据——与 reload_self 同一登记表、同一快照
+	// 语义(busyTrackerFor 未登记的裸构造退化为 nil=永不忙)。
+	cfg.Busy = autoSwapBusyClosure(srv)
 	applyReloadTimingSeams(&cfg)
 	rs := hotswap.NewReloadService(cfg)
 
 	register := func() { registerReloadSelfTool(srv, busyTrackerFor(srv), rs) }
 	register()
+
+	// 自动换手循环(票 06):与工具触发共用 rs.Arm 单飞入口。ctx 随本函数
+	// 返回取消——退位为泵的进程要到泵终态才返回,泵阶段循环空转(Arm 单飞
+	// 必然 already_armed),未退位的进程照常退出。
+	autoCtx, cancelAuto := context.WithCancel(ctx)
+	defer cancelAuto()
+	rs.StartAutoSwap(autoCtx)
 
 	serveErr := hotswap.ServeSession(ctx, srv, bio.Transport(), adoptState, func(ss *mcp.ServerSession) {
 		if !adopted {
@@ -423,6 +443,18 @@ func successorEnvSeam() []string {
 	return out
 }
 
+// autoSwapBusyClosure 返回自动换手循环(hotswap.ReloadService.StartAutoSwap)
+// 的忙判据闭包:直取 serverRuntimes 登记表里本服务的 BusyTracker(与
+// reload_self 工具同一登记、同一快照语义——活跃隧道/运行中任务/在飞未答
+// 请求的或聚合)。未登记(裸构造的测试服务)返回 nil:循环按永不忙处理。
+func autoSwapBusyClosure(srv *mcp.Server) func() bool {
+	busy := busyTrackerFor(srv)
+	if busy == nil {
+		return nil
+	}
+	return func() bool { return busy.Report().Busy }
+}
+
 // applyReloadTimingSeams 应用换手时限的测试缝(env 覆盖;生产不设,默认
 // 值见 hotswap.NewReloadService)。
 func applyReloadTimingSeams(cfg *hotswap.ReloadConfig) {
@@ -440,6 +472,9 @@ func applyReloadTimingSeams(cfg *hotswap.ReloadConfig) {
 	}
 	if ms := envMillis("SSHMGR_TEST_COPIER_DRAIN_TIMEOUT_MS"); ms > 0 {
 		cfg.CopierDrainTimeout = ms
+	}
+	if ms := envMillis("SSHMGR_TEST_AUTOSWAP_INTERVAL_MS"); ms > 0 {
+		cfg.AutoSwapInterval = ms
 	}
 }
 

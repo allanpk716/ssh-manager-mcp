@@ -16,6 +16,7 @@ import (
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/updater"
 
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
@@ -71,6 +72,7 @@ var doctorCheckFuncs = []func() []doctorCheck{
 	checkServeSvc,
 	checkClientCache,
 	checkClientCacheInstances,
+	checkUpdateGeneration,
 }
 
 // doctorEnvSeams is every SSHMGR_* env the CLI honors. Doctor reports which
@@ -916,6 +918,43 @@ func emptyInstanceSlot(dir string) bool {
 		}
 	}
 	return true
+}
+
+// checkUpdateGeneration reports the on-disk update-generation signal (bridge
+// hot-upgrade spec implementation decision 6): `sshmgr update` writes
+// sshmgr.update-gen next to the binary when it replaces it, and running
+// bridges compare generations against their birth snapshot to notice the new
+// binary. Purely local — one file read beside the running executable, zero
+// network (the doctor constraint is untouched). Valid signal → PASS carrying
+// the generation and version; absent → INFO (no `sshmgr update` has replaced
+// this binary yet — normal on a fresh install); present but unparsable → WARN:
+// every consumer treats a corrupt file as "no signal", so update propagation
+// is silently masked until the file is removed or rewritten.
+func checkUpdateGeneration() []doctorCheck {
+	c := doctorCheck{Name: "update-gen"}
+	exe, err := os.Executable()
+	if err != nil {
+		c.Status = statusFail
+		c.Detail = fmt.Sprintf("running binary path unresolvable: %v", err)
+		c.Fix = "run doctor from the installed sshmgr binary (not through a symlink farm that breaks /proc lookups)"
+		return []doctorCheck{c}
+	}
+	sig, ok := updater.ReadGenerationSignal(exe)
+	switch {
+	case ok:
+		c.Status = statusPass
+		c.Detail = fmt.Sprintf("on-disk generation signal: version %s written %s (gen %d)", sig.Version, sig.Time.Format(time.RFC3339), sig.Gen)
+	default:
+		if _, serr := os.Stat(updater.SignalPath(exe)); serr == nil {
+			c.Status = statusWarn
+			c.Detail = "generation signal file present but unreadable — every consumer treats it as no signal, so running bridges will not notice updates"
+			c.Fix = fmt.Sprintf("delete the stale file (%s); the next successful sshmgr update rewrites it", updater.SignalPath(exe))
+		} else {
+			c.Status = statusInfo
+			c.Detail = "no on-disk generation signal (no sshmgr update has replaced this binary yet)"
+		}
+	}
+	return []doctorCheck{c}
 }
 
 // runDoctor executes every check, renders the report, and returns an error

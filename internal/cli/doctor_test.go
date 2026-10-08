@@ -15,6 +15,7 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/updater"
 )
 
 // withDoctorDirs isolates every filesystem/env location doctor READS —
@@ -1573,5 +1574,82 @@ func TestDoctorStoreSidecarACL(t *testing.T) {
 	rows = checkStoreSidecarACL()
 	if len(rows) != 1 || rows[0].Status != statusFail {
 		t.Fatalf("read error must FAIL, got %+v", rows)
+	}
+}
+
+// withDoctorGenSignal controls the update-generation signal file next to the
+// TEST binary (the check resolves os.Executable — under `go test` that is the
+// cli test binary). Missing/corrupt/valid are the check's three inputs; each
+// leg first removes whatever a previous leg (or test) left, since the file
+// lives in the shared build directory.
+func withDoctorGenSignal(t *testing.T, content string) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := updater.SignalPath(exe)
+	os.Remove(path)
+	t.Cleanup(func() { os.Remove(path) })
+	if content == "" {
+		return // missing-file leg
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDoctorUpdateGeneration pins the update-gen row (bridge hot-upgrade spec
+// implementation decision 6): a valid on-disk signal → PASS carrying the
+// generation and version; no signal → INFO (a binary `sshmgr update` has never
+// replaced — normal); a present-but-corrupt file → WARN (consumers treat it as
+// no signal, masking update propagation); and the row renders in the full
+// report without touching the WARN/FAIL counts (zero network — the check reads
+// one local file).
+func TestDoctorUpdateGeneration(t *testing.T) {
+	stubServeServiceState(t, "Running")
+
+	// Leg 1 — no signal: INFO, honest "no signal" detail.
+	withDoctorGenSignal(t, "")
+	withDoctorDirs(t) // fresh machine: every other row quiet
+	rows := checkUpdateGeneration()
+	if len(rows) != 1 || rows[0].Name != "update-gen" || rows[0].Status != statusInfo {
+		t.Fatalf("missing signal must INFO, got %+v", rows)
+	}
+	if !strings.Contains(rows[0].Detail, "no on-disk generation signal") {
+		t.Fatalf("INFO detail must say no signal honestly: %+v", rows[0])
+	}
+
+	// Full report renders the row; INFO never moves the counts.
+	out, err := driveDoctor(t)
+	if err != nil {
+		t.Fatalf("no-signal row must not FAIL: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "update-gen:  INFO") || !strings.Contains(out, "no on-disk generation signal") {
+		t.Fatalf("update-gen row must render in the report:\n%s", out)
+	}
+	if !strings.Contains(out, "overall: 0 WARN, 0 FAIL") {
+		t.Fatalf("fresh machine with no signal must stay 0/0:\n%s", out)
+	}
+
+	// Leg 2 — valid signal: PASS with the generation and version in Detail.
+	withDoctorGenSignal(t, `{"gen": 1234567890123456789, "version": "v0.19.0-test", "time": "2026-10-08T12:00:00Z"}`)
+	rows = checkUpdateGeneration()
+	if len(rows) != 1 || rows[0].Status != statusPass {
+		t.Fatalf("valid signal must PASS, got %+v", rows)
+	}
+	if !strings.Contains(rows[0].Detail, "v0.19.0-test") ||
+		!strings.Contains(rows[0].Detail, "1234567890123456789") {
+		t.Fatalf("PASS detail must carry generation and version: %+v", rows[0])
+	}
+
+	// Leg 3 — corrupt file: WARN (masked propagation), with a removal fix.
+	withDoctorGenSignal(t, "{not json")
+	rows = checkUpdateGeneration()
+	if len(rows) != 1 || rows[0].Status != statusWarn {
+		t.Fatalf("corrupt signal must WARN, got %+v", rows)
+	}
+	if !strings.Contains(rows[0].Detail, "unreadable") || rows[0].Fix == "" {
+		t.Fatalf("corrupt signal must explain the masking and carry a fix: %+v", rows[0])
 	}
 }

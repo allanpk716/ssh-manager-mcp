@@ -97,6 +97,13 @@ type ReloadConfig struct {
 	// Latest 只读查询最新 release 版本 tag(复用 updater 发现逻辑;nil =
 	// 未接线,Report 如实报「未配置」)。
 	Latest func(ctx context.Context) (string, error)
+	// Busy 是自动换手轮询(StartAutoSwap)的忙判据回调:true = 忙,本轮
+	// 静默跳过(无输出、不换手)。nil = 无忙判据可用,按不忙处理。
+	Busy func() bool
+	// AutoSwapInterval 是自动换手轮询间隔;非正值用默认
+	// DefaultAutoSwapInterval(约 30 秒)。测试经 SSHMGR_TEST_AUTOSWAP_
+	// INTERVAL_MS 缝注入短周期(mcpserver/run.go applyReloadTimingSeams)。
+	AutoSwapInterval time.Duration
 	// 各时限的非正值用默认:
 	LatestTimeout  time.Duration // GitHub 查询预算,默认 10s
 	ReadyTimeout   time.Duration // 继任就绪等待,默认 15s(库默认)
@@ -129,6 +136,9 @@ func NewReloadService(cfg ReloadConfig) *ReloadService {
 	}
 	if cfg.CopierDrainTimeout <= 0 {
 		cfg.CopierDrainTimeout = 30 * time.Second
+	}
+	if cfg.AutoSwapInterval <= 0 {
+		cfg.AutoSwapInterval = DefaultAutoSwapInterval
 	}
 	return &ReloadService{cfg: cfg, done: make(chan struct{})}
 }

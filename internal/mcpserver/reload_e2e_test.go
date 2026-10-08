@@ -56,10 +56,13 @@ func TestMain(m *testing.M) {
 // 测试仪表缝(可选,不设即无行为):SSHMGR_TEST_STATE_DIR 存在时,角色在
 // 起服务前把自身进程号写进 <dir>/pid-<版本>,在进程收尾时写 <dir>/exit-
 // <版本>(版本取 SSHMGR_TEST_VERSION;换手链测试靠它逐代观测「谁还活着/
-// 谁已退出」——链上每代自报版本唯一)。
+// 谁已退出」——链上每代自报版本唯一),并把完整命令行 os.Args 回显进
+// <dir>/args-<版本>(票 06:继任必须继承原始命令行参数,探针是防回归的
+// 观测点)。
 func roleBridgeMain(role string) int {
 	token := os.Getenv("SSHMGR_TEST_TOKEN")
 	writeStateProbe("pid", os.Getpid())
+	writeArgsProbe()
 	defer writeStateProbe("exit", 0)
 	switch role {
 	case roleBridgeDirect:
@@ -102,6 +105,22 @@ func writeStateProbe(kind string, content int) {
 	} else {
 		os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600)
 	}
+}
+
+// writeArgsProbe 把本进程的完整命令行(os.Args,JSON 数组)回显进
+// <dir>/args-<版本>;未配置 SSHMGR_TEST_STATE_DIR 时无操作。换手继任是否
+// 以「同一可执行+原始命令行」拉起的观测点(票 06 生产阻断缺陷的防回归)。
+func writeArgsProbe() {
+	dir := os.Getenv("SSHMGR_TEST_STATE_DIR")
+	ver := os.Getenv("SSHMGR_TEST_VERSION")
+	if dir == "" || ver == "" {
+		return
+	}
+	raw, err := json.Marshal(os.Args)
+	if err != nil {
+		return
+	}
+	os.WriteFile(filepath.Join(dir, fmt.Sprintf("args-%s", ver)), raw, 0o600)
 }
 
 func testBinaryPath(t *testing.T) string {
@@ -199,8 +218,16 @@ type fakeHost struct {
 	stdoutEOFOne sync.Once
 }
 
-// spawnBridgeRole 拉起一个桥角色进程并开始读它的标准输出。
+// spawnBridgeRole 拉起一个桥角色进程(无额外命令行参数——测试角色经环境
+// 变量选定,argv[1:] 为空)并开始读它的标准输出。
 func spawnBridgeRole(t *testing.T, role string, extraEnv map[string]string) *fakeHost {
+	return spawnBridgeRoleWithArgs(t, role, extraEnv, nil)
+}
+
+// spawnBridgeRoleWithArgs 是 spawnBridgeRole 的显式命令行形态:argv 原样传给
+// 角色进程(角色分支经 TestMain 在环境变量上分派,argv 不进 cobra,仅由
+// serveBridge 的继任装配继承)——票 06 继任继承原始命令行的 e2e 用它。
+func spawnBridgeRoleWithArgs(t *testing.T, role string, extraEnv map[string]string, args []string) *fakeHost {
 	t.Helper()
 	exe := testBinaryPath(t)
 	stdinR, stdinW, err := os.Pipe()
@@ -217,7 +244,7 @@ func spawnBridgeRole(t *testing.T, role string, extraEnv map[string]string) *fak
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(exe)
+	cmd := exec.Command(exe, args...)
 	cmd.Stdin = stdinR
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrF
