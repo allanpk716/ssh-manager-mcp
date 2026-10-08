@@ -529,8 +529,9 @@ func reloadSelf(ctx context.Context, busy *BusyTracker, rs *hotswap.ReloadServic
 
 	switch {
 	case rs.Adopted():
-		// 本桥自身是被领养拉起的后续代:后续代换手(直接继承句柄形态)
-		// 是后续票的接线,这里如实说明而不冒充换手。
+		// Adopted 语义(v0.20.0 起):仅指本桥取不到自身可执行路径、无力拉继任
+		// 的形态——被领养的后续代照常换手(见 reload.go 的代次分叉)。
+		// 这里如实说明而不冒充换手。
 		out.Handover = "not_first_generation"
 	case st.DiskGeneration <= rs.BirthGen():
 		// 盘上无新代际(无信号=0,或仍是出生代际):只报情报。

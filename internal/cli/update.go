@@ -515,7 +515,7 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 
 	// --- 10. service branch -------------------------------------------------------
 	if prNew.State != updater.ProbeInstalled {
-		fmt.Fprintln(out, "未安装服务(client 姿态):新版本下次 agent 会话生效;运行中的桥继续旧版")
+		fmt.Fprintln(out, "未安装服务(client 姿态):运行中的桥空闲时自动热升级(约 30 秒内;≤v0.19 的旧桥仍需下次 agent 会话或 /mcp 重连上车)")
 		return nil
 	}
 

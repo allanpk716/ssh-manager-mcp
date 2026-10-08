@@ -518,14 +518,14 @@ func TestUpdateFullChainYesFlipsVersion(t *testing.T) {
 		t.Fatalf("update --yes: %v\nout:\n%s", err, out)
 	}
 	for _, want := range []string{
-		"update base",   // 证据行:base
-		"0.0.1",         // 版本对(当前)
-		"v0.0.2",        // 版本对(目标)
-		src.asset,       // 资产名
-		src.sha[:16],    // SHA256 命中(证据行含哈希)
-		"staged 自检",     // staged 结果
-		"替换: " + self,   // 替换路径
-		"下次 agent 会话生效", // 未装服务
+		"update base", // 证据行:base
+		"0.0.1",       // 版本对(当前)
+		"v0.0.2",      // 版本对(目标)
+		src.asset,     // 资产名
+		src.sha[:16],  // SHA256 命中(证据行含哈希)
+		"staged 自检",   // staged 结果
+		"替换: " + self, // 替换路径
+		"自动热升级",       // 未装服务(v0.20.0 起运行中的桥空闲时自动热升级)
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("evidence output missing %q:\n%s", want, out)
