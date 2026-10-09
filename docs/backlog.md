@@ -18,6 +18,11 @@
 10. **relay 续传段吞吐劣化 ~30 倍（2026-09-21 批2 relay 验收暴露，单次观测）**：同一 NUC10→3090x2 链路、同样有并发拉取在跑的条件下，全新跑实测 8.8–10.2 MiB/s（三轮稳定），而断点续传段（`resumed_chunks:1` 咬合后）单次观测仅 ~0.3 MiB/s——约 30 倍劣化，机理未查（当轮环境有多次进程击杀残留，不排除干扰，未复现）。文件完整性已由全新全量跑收口验收（证据：[runs/2026-09-21-batch2-plan47-relay.md](./acceptance/runs/2026-09-21-batch2-plan47-relay.md) §R2）。方向：干净环境复现（隔离进程击杀残留）→ 若复现，查续传路径的块重校验/追加写缓冲策略。
 11. **到龄隔离报文的误导性提示（2026-09-21 批2 C2 暴露，小 UX）**：缓存到龄自废走隔离销毁链时，报文首行 reason 正确（`snapshot expired (offline beyond SSHMGR_CACHE_MAX_OFFLINE)`），但第二段错误提示沿用吊销模板的 `(token revoked?)`——该场景设备码并未吊销，误导排障方向。方向：到龄场景的报文分支换用不带吊销猜测的文案（证据：[runs/2026-09-21-batch2-plan34-37.md](./acceptance/runs/2026-09-21-batch2-plan34-37.md) §C2）。
 12. ~~**WAL 边车 DACL 跨身份锁死（2026-10-06 NUC10 实发，Plan 16 F2 的孪生缺口）**：serve（LocalSystem）重启后抢跑创建 `store.db-wal/-shm`，Plan 16 F2 的 `hardenWALSidecars` 按**当前进程身份**重建边车 ACL → 交互用户条目缺席 → 普通窗口一切打开现场库的命令（tui/servers/backup）被 SQLite 拒于 -shm 索引，报错文案误指「先运行 unlock」且 doctor 全绿（copy-probe 绕开边车）。当天已 icacls 补条目解堵（治标）。~~ **已销项（2026-10-06 随 v0.18.1 发版+双端部署）**：四件套全落地（MirrorDACL 边车与 store.db 平价 + serve 启动 EnsureSidecarACL 确定性物化 / 探测报错链上真因 / unlock 按平台语法 / doctor store-sidecar 行）——真机实证：serve 重启后边车 ACL 即被启动镜像重写为恰三员规范集合、doctor 出两行 store-sidecar PASS、`servers ls` 冒烟过（V1–V4 全过，[runs/2026-10-06-v0.18.1-deploy.md](./acceptance/runs/2026-10-06-v0.18.1-deploy.md)）；余 V5（owner 普通窗口 tui 真机过场，ACL 证据已等效覆盖判据）收口即闭环。
+13. **OpenSSH 9.6 断连不清理子进程的服务器端根因**（2026-10-09 Plan 52 真机调查发现，范围外登记）：实测 Ubuntu 24.04 OpenSSH 9.6p1 上客户端断连（杀 sshd 进程 / `ss -K` 内核销毁 socket）后 bash+sleep 转挂 1 号进程继续跑——该机连正常断连都不清理子进程；systemd 会话 scope / PAM 清理两条假说未深挖。owner 侧服务器排查方向，客户端根治不了。
+14. **远端进程墓碑/孤儿扫描工具**（反馈建议的 `exec_list_orphans`）：需要远端进程注册表——任务表纯进程内（broker 重启即失），对不上远端实况，超出当前架构。修好 Plan 52 超时挂死后「记录丢了进程还在」的主要来源已消失，本条留作将来立项起点。
+15. **testsshd 无法仿真 OpenSSH 通道关闭语义**：进程内测试 sshd 底层是 x/crypto 服务端库，收到通道关闭自动立即回关，与真实 OpenSSH「等子进程退出才回关」根本不同——挂死形态测试内不可复现（「测试全绿、真机挂死」根因）。Plan 52 黑洞代理夹具（停止转发但双侧 TCP 保持开放的测试代理）为快速通道替代，conformance（docker 真 OpenSSH 门控一致性验证）覆盖真形态；本条登记仿真缺口本体。
+16. **SFTP 上传/中继停止路径同类挂死风险**（Plan 52 调查新发现）：upload_file 的取消看门狗只关 sftp 客户端（`upload.go:48-56`）、relay 引擎看门狗同款（`relay.go:732-738`）——都依赖通道级拆除，在不配合服务器上可能出现同款挂死。独立调查，未排期。
+17. **sudo Start→写密码窗口超时分类微边缘**：sudo 提权路径超时若恰好落在 `sess.Start`→stdin 写密码窗口，会被分类为 error 而非 timeout——毫秒级窗口，现状保留。
 
 ## 测试自助化（2026-09-21 grilling 定案登记）
 

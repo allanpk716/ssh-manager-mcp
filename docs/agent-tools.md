@@ -71,9 +71,14 @@
   调用本身的上下文管理）。**长活别塞前台**：会超 5 分钟的活（编译 / 训练 /
   日志跟踪）用 `exec_background` 后台跑 + `exec_output` 轮询增量；前台留给
   短命令，要缩量时分页/分文件拆步。
-- **超时不是错误**：到点后命令被杀，你收到正常结果对象，`timed_out=true` +
-  已产生的部分输出——据此判断是拆步还是后台化。非零退出码同理（`exit_code`
-  承载它，不是工具报错）。
+- **超时不是错误**：到点后 broker 发出 SIGKILL 信号请求并断开连接，你收到正常
+  结果对象，`timed_out=true` + 已接收的部分输出——返回以超时点为界（加一小段
+  宽限，默认 2 秒），不会挂到远端进程自然结束。据此判断是拆步还是后台化。
+  非零退出码同理（`exit_code` 承载它，不是工具报错）。
+- **少数服务器不清理远端进程**：断开连接后，部分服务器（实测 OpenSSH 9.6）上的
+  远端进程可能残留——超时后不确定进程状态就用 `ps`/`pgrep` 自查，必要时报告
+  owner 手工清理。高延迟链路可经环境变量 `SSHMGR_EXEC_KILL_GRACE` 上调宽限
+  （默认 2 秒，允许 100 毫秒–30 秒；broker 进程的 env，owner 操作）。
 - **输出每通道（stdout / stderr 各自）1 MiB 封顶**。超出时 `truncated=true`，
   你拿到的只是**前缀**；`stdout_bytes` / `stderr_bytes` 是**真实总字节数**。
   此时要 **refine**——改跑 `tail -n 200 <file>`、`head -n`、`grep <pattern>`
@@ -332,7 +337,7 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
 | `invalid or unknown token`（stdio：broker 起不来；多机缓存：spawn 即拒） | token 错了 / 被 owner `rotate` 换发 / project 被 disable/revoke | **报告 owner**；别反复重试。owner 会核 status、必要时换发并更新 `.mcp.json`（见 [agent-access.md](./agent-access.md)「Project 生命周期」） |
 | `server is not in your profile — call list_servers ...` | id 不在授权清单（用错 id、拿 name 当 id、或它不在你 profile） | **重新 `list_servers` 核对 id**；还不在就是 owner 没授权，报告 owner，别试别的 id |
 | `server has no credential configured (set one with: ...)`（`no_credential`） | owner 建了服务器但没配登录凭据——连接前就被拒 | **报告 owner** 按错误里的提示配凭据；重试无意义 |
-| 结果里 `timed_out: true`（不是报错） | 前台命令超过 timeout（默认 120s、硬顶 5 分钟）被杀 | **拆小命令**：分页/分文件；长活改走 `exec_background` + `exec_output` 轮询（前台永远只有 5 分钟） |
+| 结果里 `timed_out: true`（不是报错） | 前台命令超过 timeout（默认 120s、硬顶 5 分钟）到点——broker 发出 SIGKILL 请求并断开连接，按时返回 | **拆小命令**：分页/分文件；长活改走 `exec_background` + `exec_output` 轮询（前台永远只有 5 分钟）；少数服务器断连后远端进程残留，用 `ps`/`pgrep` 自查、必要时报告 owner 清理 |
 | 结果里 `truncated: true`（不是报错） | 输出超每通道 1 MiB（download 是文件超 1 MiB），你只有前缀 | **refine**：`tail -n` / `head -n` / `grep` 取目标段重跑；看 `*_bytes` 判断真实体量；别硬拉全量 |
 | `host key mismatch: possible MITM, connection rejected` | 服务器 host key 和首次记录的不一致——可能是中间人（TOFU fail-closed） | **报告 owner 核实**，**绝对别**尝试绕过（没有任何"跳过检查"参数） |
 | `ssh dial: connect failed: connection refused`（等分类短语） | 连不上目标机（地址细节已按可见性边界清洗） | 核对 server_id 是否正确；网络问题报告 owner |
@@ -406,8 +411,8 @@ HEAD，后续重构以符号名为准）：
 | exec 默认超时 120s（`defaultTimeout = 120 * time.Second`；schema 提示 "defaults to 120"） | `internal/mcpserver/types.go:103`；`internal/mcpserver/server.go:180` |
 | 超时硬上限 5 分钟、超限值钳到上限并**回显生效值**（`clampExecTimeout` → `ExecOutput.EffectiveTimeoutSeconds` 恒存在，spec §6 钳制改响） | `internal/mcpserver/core.go:18-27,157,194`；`internal/mcpserver/types.go:31-45` |
 | 超时只作用于**执行**：Connect 用工具调用 ctx（dial 不可中断，取消即弃）；clamp 在 Connect 之后、只传给 Exec/ExecSudo | `internal/mcpserver/core.go:131,146,161,163`；`internal/sshbroker/client.go:15-22` |
-| 超时是 result 不是 error（`timed_out=true` + 部分输出）；非零退出码同理 | `internal/sshbroker/exec.go:74-77,81-84` |
-| 输出每通道 1 MiB 封顶（`MaxOutputBytes = 1 << 20`）、前缀 + truncated + 真实总字节 | `internal/mcpserver/types.go:105-111,30-32`；`internal/sshbroker/exec.go:26-28` |
+| 超时是 result 不是 error（`timed_out=true` + 部分输出）；非零退出码同理；超时升级 = 共享三段式看门狗 `killWatchdog`（SIGKILL 请求+关会话通道 → 宽限 `SSHMGR_EXEC_KILL_GRACE` → 关整条连接），两个执行内核（exec.go 的 runSession、sudo.go 的 runSessionRaw）共用 | `internal/sshbroker/exec.go`（runSession / killWatchdog，符号名为准）；`internal/sshbroker/sudo.go`（runSessionRaw）；`internal/sshbroker/execenv.go`（宽限解析） |
+| 输出每通道 1 MiB 封顶（`MaxOutputBytes = 1 << 20`）、前缀 + truncated + 真实总字节 | `internal/mcpserver/types.go`（MaxOutputBytes，符号名为准）；`internal/sshbroker/output.go`（cappedBuffer，符号名为准） |
 | download 同 1 MiB 帽：truncated=true 给前缀、bytes=真实大小；建议 exec head/tail refine | `internal/mcpserver/core.go:272`；`internal/mcpserver/types.go:43-45`；`internal/mcpserver/server.go:97` |
 | `sudo=true` → broker 跑 `sudo -S -p '' -- <cmd>`、密码写 stdin；**不要自己拼 sudo 前缀** | `internal/sshbroker/sudo.go:25-30,46`；`internal/mcpserver/server.go:179`；`internal/mcpserver/core.go:70` |
 | `has_sudo` = owner 配了 sudo 凭据（`SudoCredentialID != ""`）；false 时 sudo=true 报 `sudo not configured for server ...` | `internal/mcpserver/core.go:56,150-153`；`internal/mcpserver/types.go:14` |

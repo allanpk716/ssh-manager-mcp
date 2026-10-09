@@ -28,6 +28,7 @@
 
 | 册 | 覆盖 | 状态 |
 |---|---|---|
+| [plan-52-exec-timeout-conn-kill.md](./plan-52-exec-timeout-conn-kill.md) | exec 超时断连拆除五项(A1–A5) | **待跑(owner 门,2026-10-09 夜链未执行)**:v0.19.1 发版+双端部署后按册执行——A1 有界返回(4090x2 ≤18 秒)/A2 残留如实记录后手工 kill/A3 后台任务进终态/A4 3090x2 对照无回归/A5 超时后正常往返 |
 | [plan-48-pin-forwarding.md](./plan-48-pin-forwarding.md) | 锚定转发 / 带外锚定六项(spec §12) | **首轮 agent 代跑 2026-09-21**:A5 过;A1/A6 部分过(缺口已登记);A2/A3/A4 延后(A2 软隔离形态需按缓存客户端拓扑重述,见 backlog)——证据见 [runs/2026-09-21-plan48-pilot.md](./runs/2026-09-21-plan48-pilot.md) |
 | [plan-47-relay.md](./plan-47-relay.md) | relay_file 大文件 / 断点续传 / Windows 目标特性 | **已跑(2026-09-21 批2,agent 代跑)**:附加/R1/R2(两变体)/R3/R4 全过,R1 按 1GB 档、R2 按实际拓扑重述、R3 statvfs 认知订正、续传吞吐劣化发现登记 backlog——证据见 [runs/2026-09-21-batch2-plan47-relay.md](./runs/2026-09-21-batch2-plan47-relay.md) |
 | [plan-46-45-tui-flows.md](./plan-46-45-tui-flows.md) | 实例管理 / 配对向导流程 | CLI 等价面**已跑(2026-09-21 批2)**;行为契约层已测试代证(夜链);真终端观感留 owner(含两级表单)——证据见 [runs/2026-09-21-batch2-plan46-45-cli.md](./runs/2026-09-21-batch2-plan46-45-cli.md) |
