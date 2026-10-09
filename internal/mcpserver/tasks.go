@@ -483,6 +483,23 @@ func (m *TaskManager) Len() int {
 	return len(m.tasks) + m.reserved
 }
 
+// RunningTasks 返回运行中任务数 —— 忙判据的运行中任务分项 (桥热升级 spec
+// 实施决策第 2 条; 消费方是 BusyTracker 的计数源闭包)。终态保留期条目
+// (done/stopped/timeout/failed) 不算; relay 传输已挂任务槽, 进行中传输由本
+// 计数覆盖。未兑现预约不计: 预约到 Insert 之间任务尚未运行, 忙判据口径是
+// 「运行中」字面义。
+func (m *TaskManager) RunningTasks() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, t := range m.tasks {
+		if t.status == bgStatusRunning {
+			n++
+		}
+	}
+	return n
+}
+
 // lookup 按 id 取任务 (持锁)。T5/6/7 内部消费 (exec_stop / result 等工具路径)。
 func (m *TaskManager) lookup(id string) (*bgTask, bool) {
 	m.mu.Lock()

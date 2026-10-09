@@ -138,3 +138,11 @@
 
 - **已落地并闭环（批 1，2026-10-08 合并+发版 v0.19.0+双端部署+真机验收首轮过；commit 05a861c）**：客户端元数据编辑——serve 新路由 `POST /server-metadata`（同设备码闸门；`servers.revision` 乐观锁列迁移，一切 UPDATE servers 路径统一自增；409 带六字段现值一跳自愈；`meta-edit` 审计行含旧值截断 200 字节）+ 缓存脸 MCP 工具 `update_server_metadata`（六字段指针语义：省略=保持/空串=清空；权威脸不注册）+ 本地窄写口镜像 `ApplyForwardedMetadata`（单调守卫防代际回退）+ 第三 serve 开关 `--metadata-edit`（默认开，四层解析）+ 快照/`list_servers` 全链携带 revision。
 - **批 2（backlog，同路由复用）**：客户端 CLI/TUI 元数据编辑表单（owner 手工修一笔的入口，不必登权威端）；TUI Settings 面 `serve.metadata_edit` 开关写入位（store 键已就绪）。
+
+## 桥热升级（reload_self）登记（2026-10-08 夜链落地）
+
+- **功能已落地（2026-10-08 夜链分支，行为文档见 [agent-access.md「桥热升级」节](./agent-access.md#桥热升级reload_self) 与 README 工具表）**：stdio 桥（`sshmgr mcp` 直连 / `mcp --cache`）自带热升级——`sshmgr update` 成功替换二进制后在二进制同目录写代际信号文件 `sshmgr.update-gen`，运行中的桥每约 30 秒比对出生代际，盘上较新且空闲即自动换手（会话不断、免重启客户端；降级同样触发——判据只看代际、不比版本号）。工具面第 14 把 `reload_self`（无参数；直连与缓存形态都挂，远程 serve 面不挂）：报当前进程 / 盘上代际 / GitHub 最新三路版本 + 换手结果六态（`no_new_generation` / `started`（带继任版本）/ `already_armed` / `declined_busy`（带活跃清单）/ `failed`（带原因，旧桥继续服务）/ `not_first_generation`）。忙判据 = 活跃隧道 / 运行中后台任务（含在跑传输）/ 在飞未答请求，发起换手的调用自身豁免；自动换手遇忙静默跳过、下轮再试。继任换手中途崩溃的兜底 = 宿主手动 `/mcp` 重连（与桥进程崩溃恢复路径一致）。doctor 新增 `update-gen` 行（有效 PASS / 缺失 INFO / 损坏 WARN + 修复提示，零网络）。首次上车：首发版本部署后，正开着的会话需手动 `/mcp` Reconnect 一次换成新版桥，此后全自动；已知宿主小坑 = 同一轮对话中途注册的新工具可能报一次「无此工具」，下一轮恢复。
+- **验收册人工项建议（三条，登记待排；能命令行代跑的部分按测试自助化姿势先代跑）**：
+  1. **当前会话新工具可用**：新版部署后，正开着的会话手动 `/mcp` Reconnect 一次 → 工具清单出现 `reload_self` 且可调用返回版本情报（顺带如实验证「同轮新工具下一轮才可调」的宿主小坑）；
+  2. **忙拒绝**：桥上有活跃隧道或运行中后台任务时调 `reload_self` → `handover=declined_busy` 且 `busy` 活跃清单计数与实况对得上；
+  3. **掉线重连恢复**：换手进行中制造继任崩溃 → 宿主侧断线 → 手动 `/mcp` 重连后会话恢复、桥已是新版本。

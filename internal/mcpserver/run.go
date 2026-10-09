@@ -4,14 +4,19 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ssh-manager-mcp/internal/mcpserver/hotswap"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/updater"
 	"ssh-manager-mcp/internal/vault"
 )
 
@@ -48,7 +53,7 @@ func RunStdio(token string, kp store.KeyProvider) error {
 	// which is the single-session stdio case.)
 	defer tunnels.CloseAll()
 	defer tasks.CloseAll()
-	return srv.Run(context.Background(), &mcp.StdioTransport{})
+	return serveBridge(context.Background(), srv)
 }
 
 // hydrateCacheStore builds a fresh temporary read-only store from snap and
@@ -253,7 +258,7 @@ func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload 
 	defer cleanup()
 	defer tunnels.CloseAll()
 	defer tasks.CloseAll()
-	return srv.Run(context.Background(), &mcp.StdioTransport{})
+	return serveBridge(context.Background(), srv)
 }
 
 // NewCacheBroker assembles the hot-reloading read-only cache broker without
@@ -298,4 +303,185 @@ func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func
 		return nil, nil, nil, nil, err
 	}
 	return srv, tunnels, tasks, h, nil
+}
+
+// serveBridge 在一个已构造好的 broker 服务面上接入桥热升级(stdio 两形态
+// 入口 RunStdio/RunStdioCache 的共同收尾,规格实施决策第 3/4 条):
+//
+//   - 领养检测:SSHMGR_HOTSWAP_* 环境存在即本桥是被领养拉起的继任——以
+//     注入的「已握手」会话状态起服务(不再收 initialize),写出就绪文件,
+//     并向已领养会话补发一次 tools/list_changed(重新注册 reload_self 触发
+//     SDK 的清单变更通知)。
+//   - 字节面接管:真实标准输入输出的读写收进 hotswap.BridgeIO(细节见
+//     该文件头注释),为可能的退位做准备——首代化泵、后续代停读退出,
+//     两条退位路径共用这一接管面。
+//   - reload_self 注册:工具面第 14 把(BrokerTools[13]),忙判据经
+//     serverRuntimes 登记表取本服务的 BusyTracker。
+//   - 自动换手循环(票 06,spec 实施决策第 1/2 条):定期(默认约 30 秒,
+//     SSHMGR_TEST_AUTOSWAP_INTERVAL_MS 缝)比对盘上代际与出生代际,新且
+//     不忙时经与 reload_self 同一个 Arm 入口静默换手;忙时静默跳过本轮。
+//     多把桥(不同缓存实例)各自起一个循环,互不干扰(实施决策第 5 条)。
+//   - 收尾次序:会话结束(宿主断开或退位交割)→ 等换手编排终态(退位为
+//     泵的进程要等泵终态才退;未退位的进程立即返回)→ 调用方的 defer
+//     (CloseAll 等)照常执行。
+func serveBridge(ctx context.Context, srv *mcp.Server) error {
+	exe, exeErr := os.Executable()
+
+	sessEnv, readyPath, adopted := hotswap.ParseEnv(os.Environ())
+	var adoptState *mcp.ServerSessionState
+	if adopted {
+		var err error
+		adoptState, err = hotswap.AdoptedSessionState(sessEnv)
+		if err != nil {
+			// 领养环境存在但无法解读:起一个「会拒绝一切请求」的假握手服务
+			// 没有意义(宿主已握手,不会再发 initialize),宁可失败退出——
+			// 父桥会在就绪超时后回退。
+			return err
+		}
+	}
+
+	// 首代与被领养的后续代一律经 feeder 接管读侧:后续代退位(Park 停读
+	// → EndSdkRead)以此为前提,直读真实标准输入的形态给不出「停读」
+	// 的确定点。
+	bio, err := hotswap.NewBridgeIO(os.Stdin, os.Stdout, true)
+	if err != nil {
+		return err
+	}
+	defer bio.Close()
+
+	sessionEnded := make(chan struct{})
+	cfg := hotswap.ReloadConfig{
+		IO:           bio,
+		Srv:          srv,
+		SessionEnded: sessionEnded,
+		// 测试仪表缝:换手端到端测试用同一测试二进制扮两代,经
+		// SSHMGR_TEST_SUCCESSOR_ENV 给继任注入版本/角色环境(生产为空)。
+		Env: successorEnvSeam(),
+		// 票 05:被领养桥(后续代)照常换手——GenerationLater 继承句柄
+		// 形态(继任继承本进程的标准输入输出=泵侧管道,应答写回后本进程
+		// 退出,不化泵);工具面不因领养身份拒绝,Adopted 只留给取不到
+		// 可执行路径、无力拉继任的桥。
+		LaterGeneration: adopted,
+		Latest:          latestReleaseTag,
+	}
+	if exeErr == nil {
+		cfg.Exe = exe
+		// 继任 = 同一可执行 + 原始命令行(os.Args[1:] 继承子命令与旗标,
+		// 如 mcp --cache --instance <名>)——裸二进制拉起的继任不成桥,
+		// 就绪超时必然回退,热升级在真机不可用(票 06 修复的生产阻断缺陷;
+		// 测试角色进程 argv[1:] 为空,此默认对测试形态无影响)。
+		cfg.Args = os.Args[1:]
+		// 出生代际快照(票 01):此后 reload_self 与自动换手循环都以
+		// 「盘上代际 > 出生代际」判新(不比版本大小,降级同样触发;文件
+		// 缺失/损坏=无信号)。
+		cfg.BirthGeneration = updater.BirthGeneration(exe)
+	} else {
+		fmt.Fprintf(os.Stderr, "sshmgr: hotswap disabled (os.Executable: %v)\n", exeErr)
+		cfg.Adopted = true // 无可执行路径即无可拉继任:Arm 拒绝、工具面报 not_first_generation
+	}
+	// 票 06:自动换手循环的忙判据——与 reload_self 同一登记表、同一快照
+	// 语义(busyTrackerFor 未登记的裸构造退化为 nil=永不忙)。
+	cfg.Busy = autoSwapBusyClosure(srv)
+	applyReloadTimingSeams(&cfg)
+	rs := hotswap.NewReloadService(cfg)
+
+	register := func() { registerReloadSelfTool(srv, busyTrackerFor(srv), rs) }
+	register()
+
+	// 自动换手循环(票 06):与工具触发共用 rs.Arm 单飞入口。ctx 随本函数
+	// 返回取消——退位为泵的进程要到泵终态才返回,泵阶段循环空转(Arm 单飞
+	// 必然 already_armed),未退位的进程照常退出。
+	autoCtx, cancelAuto := context.WithCancel(ctx)
+	defer cancelAuto()
+	rs.StartAutoSwap(autoCtx)
+
+	serveErr := hotswap.ServeSession(ctx, srv, bio.Transport(), adoptState, func(ss *mcp.ServerSession) {
+		if !adopted {
+			return
+		}
+		// 继任收尾三连:就绪文件(父桥在等它确认后才开始退位)→ 补发清单
+		// 变更通知(重新注册同一工具,SDK 的 changeAndNotify 会向本会话发
+		// 一次 tools/list_changed;幂等替换,清单内容不变,规格 D3)。
+		if werr := hotswap.WriteReady(readyPath, hotswap.BridgeVersion()); werr != nil {
+			fmt.Fprintf(os.Stderr, "sshmgr: hotswap ready file: %v (parent will roll back)\n", werr)
+			return
+		}
+		register()
+	})
+	close(sessionEnded)
+	rs.WaitTerminal()
+	return serveErr
+}
+
+// latestReleaseTag 是 reload_self 的「GitHub 最新版本」只读查询:复用
+// internal/updater 的发现逻辑(同一传输与白名单,SSHMGR_UPDATE_BASE 缝),
+// 不下载任何资产,只取 release 的 tag。
+func latestReleaseTag(ctx context.Context) (string, error) {
+	rel, err := updater.LatestRelease(ctx)
+	if err != nil {
+		return "", err
+	}
+	return rel.Tag, nil
+}
+
+// successorEnvSeam 解析 SSHMGR_TEST_SUCCESSOR_ENV(分号分隔的 K=V 列表)
+// 为继任的附加环境。这是换手端到端测试的仪表缝(同一测试二进制扮两代,
+// 靠它给继任注入 SSHMGR_TEST_VERSION 等覆盖);生产不设此变量,返回 nil。
+func successorEnvSeam() []string {
+	raw := os.Getenv("SSHMGR_TEST_SUCCESSOR_ENV")
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, kv := range strings.Split(raw, ";") {
+		kv = strings.TrimSpace(kv)
+		if kv == "" {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// autoSwapBusyClosure 返回自动换手循环(hotswap.ReloadService.StartAutoSwap)
+// 的忙判据闭包:直取 serverRuntimes 登记表里本服务的 BusyTracker(与
+// reload_self 工具同一登记、同一快照语义——活跃隧道/运行中任务/在飞未答
+// 请求的或聚合)。未登记(裸构造的测试服务)返回 nil:循环按永不忙处理。
+func autoSwapBusyClosure(srv *mcp.Server) func() bool {
+	busy := busyTrackerFor(srv)
+	if busy == nil {
+		return nil
+	}
+	return func() bool { return busy.Report().Busy }
+}
+
+// applyReloadTimingSeams 应用换手时限的测试缝(env 覆盖;生产不设,默认
+// 值见 hotswap.NewReloadService)。
+func applyReloadTimingSeams(cfg *hotswap.ReloadConfig) {
+	if ms := envMillis("SSHMGR_TEST_READY_TIMEOUT_MS"); ms > 0 {
+		cfg.ReadyTimeout = ms
+	}
+	if ms := envMillis("SSHMGR_TEST_POLL_MS"); ms > 0 {
+		cfg.PollInterval = ms
+	}
+	if ms := envMillis("SSHMGR_TEST_QUIESCE_TIMEOUT_MS"); ms > 0 {
+		cfg.QuiesceTimeout = ms
+	}
+	if ms := envMillis("SSHMGR_TEST_SESSION_END_TIMEOUT_MS"); ms > 0 {
+		cfg.SessionEndTimeout = ms
+	}
+	if ms := envMillis("SSHMGR_TEST_COPIER_DRAIN_TIMEOUT_MS"); ms > 0 {
+		cfg.CopierDrainTimeout = ms
+	}
+	if ms := envMillis("SSHMGR_TEST_AUTOSWAP_INTERVAL_MS"); ms > 0 {
+		cfg.AutoSwapInterval = ms
+	}
+}
+
+func envMillis(name string) time.Duration {
+	v, err := strconv.Atoi(os.Getenv(name))
+	if err != nil || v <= 0 {
+		return 0
+	}
+	return time.Duration(v) * time.Millisecond
 }

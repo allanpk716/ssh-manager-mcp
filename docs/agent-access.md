@@ -65,7 +65,7 @@ Claude Code 读 `.mcp.json`。两种范围：
 
 token 走 `env` 字段（`SSHMGR_TOKEN`）而不是 `args` 里的 `--token`：**消除的是 argv/ps 暴露面**——token 不再出现在子进程命令行里（`ps` / 任务管理器 / `/proc/<pid>/cmdline` 看不到）；env 仍可被同用户/root 经 `/proc/<pid>/environ`（Linux）读到，**不是全部可见性**。（`--token` 仍支持，语义相同。）
 
-- Claude Code 首次加载会**弹确认**让你批准这个项目级 MCP server——批准后该项目的会话就有这 12 个 SSH 工具。
+- Claude Code 首次加载会**弹确认**让你批准这个项目级 MCP server——批准后该项目的会话就有这 12 个 SSH 工具（外加桥自升级工具 `reload_self`，见下文「桥热升级」节）。
 - **别提交 git（公开仓库尤其致命）**：`.mcp.json` 含**活 token**，必须加进 `.gitignore`，绝不能提交进 git 仓库。
 - **Windows**：写绝对路径最稳，例如 `"command": "C:\\Tools\\sshmgr.exe"`（JSON 里 `\` 要写成 `\\`）。
 - **headless / 无 keychain**：master key 不在 keychain，需要给子进程传环境变量，加进同一个 `env` 字段即可（见 [getting-started.md](./getting-started.md#无-keychain-环境headless-linux-等)）：
@@ -210,6 +210,43 @@ sshmgr projects add intern   --profile dev
 
 ---
 
+## 桥热升级（reload_self）
+
+stdio 桥形态（`sshmgr mcp` 直连与 `mcp --cache` 缓存）在 SSH 工具之外多一把 `reload_self`（无参数；远程 serve 面不挂这把）。它管的是**桥自己的升级**：`sshmgr update` 换好二进制后，不用重启 agent 客户端、不断开你的会话，运行中的桥自己换到新版本。
+
+它做两件事：
+
+1. **报版本情报**（每次调用都返回）：当前进程版本（`version`）、盘上代际信号（`disk_generation` / `disk_version`，没跑过 `sshmgr update` 时为 0 / 空）、GitHub 最新 release（`latest`——调用时联网查一次，失败原样写在 `latest_error`，不影响其余字段）。
+2. **盘上有新代际且桥空闲时，当场换手**：`sshmgr update` 成功替换二进制后，会在二进制同目录写一个代际信号文件 `sshmgr.update-gen`。桥每约 30 秒看一眼：盘上代际比自己出生时的新 → 发起换手。判据只看代际、不比版本号——**降级（`update --version <旧版本>`）同样触发换手**。
+
+换手对会话透明：你读到的应答由旧进程写出，继任进程接管**同一个会话**（不用重新握手），随后补发一次工具清单变更通知。
+
+**handover 字段的取值**（每次调用都有）：
+
+| 取值 | 含义 |
+|---|---|
+| `no_new_generation` | 盘上没有新代际——只报情报，不换手 |
+| `started` | 换手已启动，`successor_version` 是继任自报的版本 |
+| `already_armed` | 已有一次换手在途（同一时刻只允许一次） |
+| `declined_busy` | 桥忙，拒绝换手；`busy` 字段带活跃清单（活跃隧道数 / 运行中后台任务数 / 在飞未答请求数）。发起这次调用的请求本身不算忙 |
+| `failed` | 继任起不来或就绪超时——已原地回退，旧桥继续服务，原因在 `error` 字段 |
+| `not_first_generation` | 这座桥无力拉起继任（如取不到自身可执行路径的罕见形态），如实说明而不假装换手 |
+
+**忙判据**：活跃隧道、运行中的后台任务（含在跑的文件传输）、在飞未答的工具请求——任一非零即忙。工具触发遇忙明确拒绝（`declined_busy`）；**自动换手遇忙静默跳过本轮**，下一轮（约 30 秒后）再试，无任何输出。
+
+**失败回退与掉线兜底**：
+
+- 继任起不来 / 就绪超时 → 旧桥继续服务，失败原因如实返回（`failed` + `error`）。升级失败 ≠ 会话丢失。
+- 继任在换手中途崩溃 → 宿主侧表现为连接断开（与今天桥进程崩溃一致）——手动 `/mcp` 重连即恢复，重连后桥已是新版本。
+
+**首次上车（本机制随首发版本落地时的一次性动作）**：升级到这个版本后，**新拉起的桥**即新版、一切自动；**正开着的会话**还在旧版桥上——在客户端手动 `/mcp` Reconnect 一次，让 MCP 子进程换成新版；此后升级全自动，无需再管。
+
+> **已知宿主小坑**：同一轮对话中途新出现的工具（比如刚重连完就调 `reload_self`），宿主可能报一次「无此工具」——下一轮就恢复了，重试即可。
+
+**体检**：`sshmgr doctor` 新增 `update-gen` 行，报盘上代际信号三态——有效（PASS，带版本、代际与写入时间）/ 缺失（INFO，新装机没跑过 `sshmgr update` 的正常形态）/ 损坏（WARN + 修复提示：删掉残留文件即可，所有消费方都把损坏当无信号，不删则升级通知一直哑着）。零网络，纯本机读一个文件。
+
+---
+
 ## 隔离与排错
 
 | 现象 | 处理 |
@@ -219,6 +256,7 @@ sshmgr projects add intern   --profile dev
 | `mcp` 启动时 stderr 有 `WARNING: ssh credential files detected` | 你本机有散落的 SSH 私钥/密码文件，agent 可能绕过 broker 直接读它们。按提示删掉，以保持“强制走 broker”的隔离。 |
 | 暂停了 agent 还在跑 | Lazy：下次重连/保鲜才接管，重启那个客户端（多机 cache 的设备码吊销走回连销毁，见「断连语义」第 4 层）。它已开的隧道另有 ≤~15s 的级联/急停路径（`tunnels kill`，见「断连语义」第 3 层）。详见「断连语义」。 |
 | 隧道约 2 分钟后批量关闭（`tunnels ls` 变空、agent 端口突然不可达） | vault DB 持续读写故障触发**有界关闭**（≤~2min，防「无限期暴露」的纪律降级）——看 serve.log / stderr 的 `lease renewal failed N ticks` / `enforcement degraded: ...` 日志行定位 store 故障；DB 恢复后 agent 重开 `forward_port` 即恢复。 |
+| 会话进行中桥连接突然断开 | 桥热升级换手中继任崩溃会这样（与桥进程崩溃同形）。手动 `/mcp` 重连即恢复，重连后桥已是新版本——见「桥热升级」节。 |
 | Windows 下 agent 说找不到 `sshmgr` | `.mcp.json` 的 `command` 写绝对路径（`C:\\...\\sshmgr.exe`）。 |
 
 下一步：去 [scenarios.md](./scenarios.md) 看这些授权在真实任务里长什么样。

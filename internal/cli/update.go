@@ -21,10 +21,13 @@ package cli
 //	 6. confirm (current → target; non-TTY without --yes errors HERE only)
 //	 7. downgrade verdict (target < current): prominent line even with --yes
 //	 8. ReplaceBinary (fsync folded inside; rollback/double-fault surface)
-//	 9. service branch: running → warn+confirm+Restart (exit 3 on failure);
+//	 9. generation signal: write sshmgr.update-gen next to the replaced
+//	    binary (bridge hot-upgrade decision 1 — both the GitHub and --file
+//	    paths converge here; failure warns, never fails the committed update)
+//	10. service branch: running → warn+confirm+Restart (exit 3 on failure);
 //	    stopped → start command only; not installed → "next agent session"
-//	10. evidence lines interleaved: base / version pair / asset / SHA256 /
-//	    staged check / replace path / restart + health probe
+//	11. evidence lines interleaved: base / version pair / asset / SHA256 /
+//	    staged check / replace path / generation signal / restart + health probe
 
 import (
 	"bufio"
@@ -501,9 +504,18 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 	}
 	fmt.Fprintf(out, "替换: %s\n", self)
 
-	// --- 9. service branch -------------------------------------------------------
+	// --- 9. generation signal ----------------------------------------------------
+	// 替换成功点(GitHub 与 --file 两条路在此汇合;CommittedWithError 同样落到
+	// 这里——盘上二进制确已换过)。在二进制同目录写代际信号(桥热升级实施
+	// 决策第 1 条),让在飞桥感知「盘上换了新代际」。信号写失败不推翻已提交
+	// 的替换:警告后继续(升级成败不由它决定)。
+	if _, werr := updater.WriteGenerationSignal(self, targetVer); werr != nil {
+		fmt.Fprintf(out, "警告: 写入代际信号失败(运行中的桥感知不到本次换版,下次 update 重写): %v\n", werr)
+	}
+
+	// --- 10. service branch -------------------------------------------------------
 	if prNew.State != updater.ProbeInstalled {
-		fmt.Fprintln(out, "未安装服务(client 姿态):新版本下次 agent 会话生效;运行中的桥继续旧版")
+		fmt.Fprintln(out, "未安装服务(client 姿态):运行中的桥空闲时自动热升级(约 30 秒内;≤v0.19 的旧桥仍需下次 agent 会话或 /mcp 重连上车)")
 		return nil
 	}
 
