@@ -475,13 +475,16 @@ func TestAutoSwapE2EDualInstance(t *testing.T) {
 	t.Cleanup(func() { os.Remove(updater.SignalPath(exe)) })
 
 	// 第一个代际信号:两把桥各自自动换到自己的继任(A→v2-a,B→v2-b)。
+	// 过渡窗内的 reload_self 可能被退位中的旧代完整应答(retireLater 文档
+	// 化的双读者过渡窗边界),经 callReloadSelfRetry 有界重试到继任版本。
 	if _, err := updater.WriteGenerationSignal(exe, "v2-disk"); err != nil {
 		t.Fatal(err)
 	}
 	awaitNotifAbove(t, hA, "notifications/tools/list_changed", baseA, 20*time.Second)
 	awaitNotifAbove(t, hB, "notifications/tools/list_changed", baseB, 20*time.Second)
-	outA := hA.callReloadSelf(t, 3, 30*time.Second)
-	outB := hB.callReloadSelf(t, 3, 30*time.Second)
+	nextA, nextB := int64(3), int64(3)
+	outA, idsA := hA.callReloadSelfRetry(t, &nextA, "v2-a", 3)
+	outB, idsB := hB.callReloadSelfRetry(t, &nextB, "v2-b", 3)
 	if outA.Version != "v2-a" || outB.Version != "v2-b" {
 		t.Fatalf("round 1 successors: A=%q want v2-a, B=%q want v2-b (A stderr:\n%s\nB stderr:\n%s)",
 			outA.Version, outB.Version, hA.stderrFn(), hB.stderrFn())
@@ -495,8 +498,10 @@ func TestAutoSwapE2EDualInstance(t *testing.T) {
 	}
 	awaitNotifAbove(t, hA, "notifications/tools/list_changed", baseA, 20*time.Second)
 	awaitNotifAbove(t, hB, "notifications/tools/list_changed", baseB, 20*time.Second)
-	outA2 := hA.callReloadSelf(t, 4, 30*time.Second)
-	outB2 := hB.callReloadSelf(t, 4, 30*time.Second)
+	outA2, idsA2 := hA.callReloadSelfRetry(t, &nextA, "v3-a", 3)
+	outB2, idsB2 := hB.callReloadSelfRetry(t, &nextB, "v3-b", 3)
+	idsA = append(idsA, idsA2...)
+	idsB = append(idsB, idsB2...)
 	if outA2.Version != "v3-a" || outB2.Version != "v3-b" {
 		t.Fatalf("round 2 successors: A=%q want v3-a, B=%q want v3-b (A stderr:\n%s\nB stderr:\n%s)",
 			outA2.Version, outB2.Version, hA.stderrFn(), hB.stderrFn())
@@ -504,16 +509,19 @@ func TestAutoSwapE2EDualInstance(t *testing.T) {
 
 	// 互不串扰的收尾证据:两把桥会话都活着、工具面完整、帧序无损、无自动
 	// 换手失败日志。
+	if names := hA.listToolNames(t, nextA); len(names) != len(authorityTools)+1 {
+		t.Fatalf("final face (A) = %d tools, want %d", len(names), len(authorityTools)+1)
+	}
+	if names := hB.listToolNames(t, nextB); len(names) != len(authorityTools)+1 {
+		t.Fatalf("final face (B) = %d tools, want %d", len(names), len(authorityTools)+1)
+	}
 	for _, h := range []*fakeHost{hA, hB} {
-		if names := h.listToolNames(t, 5); len(names) != len(authorityTools)+1 {
-			t.Fatalf("final face = %d tools, want %d", len(names), len(authorityTools)+1)
-		}
 		if s := h.stderrFn(); strings.Contains(s, "auto handover attempt failed") {
 			t.Fatalf("auto handovers must not log failures:\n%s", s)
 		}
 	}
-	assertFrameIntegrity(t, hA, []int64{1, 2, 3, 4, 5})
-	assertFrameIntegrity(t, hB, []int64{1, 2, 3, 4, 5})
+	assertFrameIntegrity(t, hA, append([]int64{1, 2, nextA}, idsA...))
+	assertFrameIntegrity(t, hB, append([]int64{1, 2, nextB}, idsB...))
 
 	// 断开两把桥:各自整链(首代泵→三代)干净退出。
 	for _, h := range []*fakeHost{hA, hB} {

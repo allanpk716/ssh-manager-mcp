@@ -447,6 +447,29 @@ func (h *fakeHost) callReloadSelf(t *testing.T, id int64, d time.Duration) Reloa
 	return envelope.StructuredContent
 }
 
+// callReloadSelfRetry 调 reload_self 直到拿到目标版本(有界次),返回
+// (末次输出, 用过的全部请求 id)。换手过渡窗内,宿主请求可能被退位中的
+// 旧代完整应答(retireLater 文档化的「双读者过渡窗」边界:拉起到停读的
+// 过渡窗内两代同管道,各自消费的帧由各自完整应答)——旧代自报旧版本
+// 属设计内行为,不是失败;用新 id 重试直到继任应答。id 经 *next 发放,
+// 帧序完整性断言用返回的 id 集。
+func (h *fakeHost) callReloadSelfRetry(t *testing.T, next *int64, wantVersion string, tries int) (ReloadSelfOutput, []int64) {
+	t.Helper()
+	var used []int64
+	for i := 0; i < tries; i++ {
+		id := *next
+		*next++
+		used = append(used, id)
+		out := h.callReloadSelf(t, id, 30*time.Second)
+		if out.Version == wantVersion {
+			return out, used
+		}
+		t.Logf("reload_self id %d answered by a transitional (pre-handover) generation: version %q, want %q — retrying", id, out.Version, wantVersion)
+	}
+	t.Fatalf("reload_self never answered with version %q after %d tries (last stderr:\n%s)", wantVersion, tries, h.stderrFn())
+	return ReloadSelfOutput{}, used
+}
+
 func (h *fakeHost) listToolNames(t *testing.T, id int64) []string {
 	t.Helper()
 	h.sendReq(id, "tools/list", map[string]any{})

@@ -117,6 +117,54 @@ func TestBridgeIOCountsCallsAndResponses(t *testing.T) {
 	}
 }
 
+// TestBridgeIOQuiescentRequiresByteDrain 钉字节级配平堵住的盲区形态:
+// 请求字节已被 feeder 送达 SDK 侧管道、但 SDK 读循环尚未消费时,消息层
+// 两边都是零(请求未计数、无应答可等)——只看消息层的静默判据会误放
+// 行,此刻关读侧(EndSdkRead/Retire)即丢请求(2026-10-09 v0.20.1 发版
+// 门 ubuntu 车道 2/2 复现的真机竞态即此形态)。字节层配平必须把这笔
+// 在途字节判为不静默;SDK 读走并应答后放行。
+func TestBridgeIOQuiescentRequiresByteDrain(t *testing.T) {
+	b, inW, _ := newTestIO(t)
+
+	// 先不连 SDK 读侧(模拟 SDK 读循环尚未消费):宿主写入一笔请求。
+	if _, err := inW.WriteString(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{}}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 字节已落 SDK 侧管道(feeder 送达)但无人消费:必须判不静默。
+	deadline := time.Now().Add(2 * time.Second)
+	for b.Quiescent() {
+		if time.Now().After(deadline) {
+			t.Fatal("delivered-but-unconsumed request bytes must not be quiescent (byte-level drain required)")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// SDK 侧消费这笔字节(经传输层读,计入消费账):消息层失衡继续拦。
+	conn, err := b.Transport().Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	req, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := req.(*jsonrpc.Request).Method; m != "tools/call" {
+		t.Fatalf("unexpected method %q", m)
+	}
+	if b.Quiescent() {
+		t.Fatal("call consumed but unanswered: message-level imbalance must still block")
+	}
+	resp := &jsonrpc.Response{ID: req.(*jsonrpc.Request).ID, Result: json.RawMessage(`{}`)}
+	if err := conn.Write(ctx, resp); err != nil {
+		t.Fatal(err)
+	}
+	if !b.Quiescent() {
+		t.Fatal("consumed and answered: must be quiescent")
+	}
+}
+
 func TestBridgeIOHoldRetireNoLoss(t *testing.T) {
 	b, inW, outR := newTestIO(t)
 	conn, err := b.Transport().Connect(context.Background())

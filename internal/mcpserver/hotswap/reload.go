@@ -38,6 +38,12 @@ import (
 // 继续。
 const feederFreezeTimeout = 5 * time.Second
 
+// quiesceSettle 是关 SDK 读侧(不可回点)前静默判据的安定窗:配平必须在
+// 窗两侧都成立。计数器间的相邻语句存在纳秒级调度窗(消息在「字节已
+// 消费↔消息已计数」的两步之间),安定窗把这类瞬时态排除在放行条件
+// 之外——代价是每次退位多 5 毫秒。
+const quiesceSettle = 5 * time.Millisecond
+
 // ToolReloadSelf 是 reload_self 工具的名称(BrokerTools 第 14 把的单一
 // 命名源;mcpserver 包的注册与热升级集成共用)。
 const ToolReloadSelf = "reload_self"
@@ -258,9 +264,10 @@ func (s *ReloadService) retire(h *SuccessorHandle) {
 		return
 	}
 
-	// 2. 静默判据:发起调用的应答(以及一切在途应答)已写出。
+	// 2. 静默判据(消息层 + 字节层,跨安定窗双检):发起调用的应答(以及
+	//    一切在途应答)已写出、其请求字节已被 SDK 消费。
 	//    超时放弃:解冻字节面、杀继任,旧桥继续应答(规格 D8)。
-	if !s.waitQuiescent() {
+	if !s.quiesceSettled() {
 		s.cfg.IO.ReleaseHold()
 		if err := h.Rollback(); err != nil {
 			s.logf("rollback after quiesce timeout: %v", err)
@@ -353,9 +360,10 @@ func (s *ReloadService) retireLater(h *SuccessorHandle) {
 	if !s.cfg.IO.WaitFrozen(feederFreezeTimeout) {
 		s.logf("retire (later generation): feeder freeze wait timed out; closing the SDK read side anyway")
 	}
-	// 4. 复验静默:冻结前后最后送达 SDK 的帧已应答(关读侧的前置,否则
-	//    jsonrpc2 在读侧 EOF 后丢弃未写出的应答)。
-	if !s.waitQuiescent() {
+	// 4. 复验静默(消息层+字节层,跨安定窗双检):冻结前后最后送达 SDK 的
+	//    帧已应答且字节已消费(关读侧的前置,否则 jsonrpc2 在读侧 EOF 后
+	//    丢弃未写出的应答与未处理的请求)。
+	if !s.quiesceSettled() {
 		s.logf("retire (later generation): final quiesce wait timed out")
 	}
 
@@ -390,4 +398,15 @@ func (s *ReloadService) waitQuiescent() bool {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// quiesceSettled 等静默成立并要求跨安定窗(quiesceSettle)仍成立:用于
+// 「关 SDK 读侧」这类不可回点动作的前置——两层配平(消息+字节)在窗
+// 两侧都成立才放行,排除计数器相邻语句间的瞬时调度窗。
+func (s *ReloadService) quiesceSettled() bool {
+	if !s.waitQuiescent() {
+		return false
+	}
+	time.Sleep(quiesceSettle)
+	return s.waitQuiescent()
 }

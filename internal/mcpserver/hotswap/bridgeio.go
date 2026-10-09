@@ -47,6 +47,12 @@ type BridgeIO struct {
 
 	callsIn, responsesOut atomic.Int64 // interceptConn 的进/出账
 
+	// sdkInDelivered/sdkInConsumed 是 SDK 读侧管道的字节级账本:
+	// delivered 记 feeder 写进管道的字节,consumed 记 SDK 传输层实际读走
+	// 的字节。两者与消息账一起构成 Quiescent 的两层配平(见其注释)。
+	sdkInDelivered atomic.Int64
+	sdkInConsumed  atomic.Int64
+
 	copierPhase1Done chan struct{} // copier 排干 SDK 侧管道(或写失败)时关闭,一次
 	copierQuit       chan struct{} // Close 时关闭,让 copier 不再等退位
 	closeOnce        sync.Once
@@ -78,7 +84,7 @@ func NewBridgeIO(realIn, realOut *os.File, ownStdin bool) (*BridgeIO, error) {
 			return nil, err
 		}
 		b.sdkInR, b.sdkInW = sdkInR, sdkInW
-		b.feeder = newFeeder(realIn, sdkInW)
+		b.feeder = newFeeder(realIn, sdkInW, &b.sdkInDelivered)
 	}
 	b.copier = newCopier(sdkOutR, realOut, b.copierPhase1Done, b.copierQuit)
 	return b, nil
@@ -93,7 +99,8 @@ type bridgeTransport struct{ b *BridgeIO }
 func (t *bridgeTransport) Connect(ctx context.Context) (mcp.Connection, error) {
 	var r io.ReadCloser = t.b.realIn
 	if t.b.sdkInR != nil {
-		r = t.b.sdkInR
+		// 计 SDK 传输层实际读走的字节(字节级静默配平的消费侧账本)。
+		r = &sdkInCountingReader{r: t.b.sdkInR, consumed: &t.b.sdkInConsumed}
 	}
 	delegate, err := (&mcp.IOTransport{Reader: r, Writer: t.b.sdkOutW}).Connect(ctx)
 	if err != nil {
@@ -101,6 +108,23 @@ func (t *bridgeTransport) Connect(ctx context.Context) (mcp.Connection, error) {
 	}
 	return &interceptConn{Connection: delegate, b: t.b}, nil
 }
+
+// sdkInCountingReader 计 SDK 传输层从 SDK 侧管道实际读走的字节(字节级
+// 静默配平的消费侧账本;见 BridgeIO.Quiescent)。
+type sdkInCountingReader struct {
+	r        *os.File
+	consumed *atomic.Int64
+}
+
+func (c *sdkInCountingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if n > 0 {
+		c.consumed.Add(int64(n))
+	}
+	return n, err
+}
+
+func (c *sdkInCountingReader) Close() error { return c.r.Close() }
 
 // interceptConn 在连接层记账:每个带 ID 的进站请求计一笔进账,每个成功
 // 写出的应答计一笔出账。通知(无 ID)与出站请求不计——它们不参与
@@ -130,13 +154,25 @@ func (c *interceptConn) Write(ctx context.Context, msg jsonrpc.Message) error {
 	return err
 }
 
-// Quiescent 是退位静默判据:SDK 已见的每个带 ID 请求,其应答都已写进
-// SDK 侧管道(由 copier 顺序搬到真实标准输出)。正确性:任一已送达而
-// 未应答的请求都会使进账严格大于出账;因此在「发起换手的那个工具处理器
-// 已返回(其应答在 jsonrpc2 的出账路径上,写完才减 pending)」之后的任一
-// 相等瞬间,该次调用的应答必已写出。
+// Quiescent 是退位静默判据,两层配平缺一不可:
+//   - 消息层(callsIn/responsesOut):SDK 已见的每个带 ID 请求,其应答都
+//     已写进 SDK 侧管道(由 copier 顺序搬到真实标准输出);
+//   - 字节层(sdkInDelivered/sdkInConsumed):feeder 已写进 SDK 侧管道的
+//     每个字节,SDK 传输层都已实际读走。
+//
+// 字节层堵的是消息层看不见的盲区:请求字节已落 SDK 侧管道、SDK 读循环
+// 尚未消费时,消息层两边都是零,看似静默实则有一笔在途——此刻关读侧
+// (EndSdkRead/Retire)会让 jsonrpc2 的 EOF 收场路径丢弃它,宿主侧表现为
+// 该调用永久无应答(2026-10-09 v0.20.1 发版门 ubuntu 车道 2/2 复现的
+// 真机竞态即此形态)。
+//
+// 正确性:任一已送达而未应答的请求都会使消息层进账严格大于出账;任一
+// 已写而未读的字节都会使字节层两账不等;因此在「发起换手的那个工具
+// 处理器已返回」之后的任一两层相等瞬间,该次调用的应答必已写出、其
+// 请求字节必已被 SDK 消费。
 func (b *BridgeIO) Quiescent() bool {
-	return b.callsIn.Load() == b.responsesOut.Load()
+	return b.callsIn.Load() == b.responsesOut.Load() &&
+		b.sdkInDelivered.Load() == b.sdkInConsumed.Load()
 }
 
 // Hold 让 feeder 停止向 SDK 侧转发(此后读到的字节扣在缓冲里)。返回
@@ -263,17 +299,18 @@ const (
 type feeder struct {
 	in *os.File
 
-	mu         sync.Mutex
-	state      feederState
-	dest       *os.File      // 当前转发目的地(run: SDK 写端;pump: 泵侧写端)
-	held       []byte        // hold 期间扣住的字节
-	dead       bool          // 真实标准输入已 EOF/出错
-	wantHold   bool          // Hold 已登记,待消息边界生效
-	wantPark   bool          // Park 已登记,待消息边界生效
-	noPeek     bool          // 窥视卡死后置真:本 feeder 永久退回阻塞读
-	atBoundary bool          // 已转发流的最后字节是 '\n'(或尚无转发)——帧边界
-	frozen     chan struct{} // hold/park 生效或 feeder 死亡时关闭,一次
-	frozenOnce sync.Once
+	mu           sync.Mutex
+	state        feederState
+	dest         *os.File      // 当前转发目的地(run: SDK 写端;pump: 泵侧写端)
+	held         []byte        // hold 期间扣住的字节
+	dead         bool          // 真实标准输入已 EOF/出错
+	wantHold     bool          // Hold 已登记,待消息边界生效
+	wantPark     bool          // Park 已登记,待消息边界生效
+	noPeek       bool          // 窥视卡死后置真:本 feeder 永久退回阻塞读
+	atBoundary   bool          // 已转发流的最后字节是 '\n'(或尚无转发)——帧边界
+	frozen       chan struct{} // hold/park 生效或 feeder 死亡时关闭,一次
+	frozenOnce   sync.Once
+	sdkDelivered *atomic.Int64 // 字节级进账(目的地为 SDK 侧管道时累计;retireTo 切泵侧后置 nil,泵侧字节不参与 SDK 配平)
 }
 
 // peekProbe 窥视一次,带卡死探测:stuck=true 表示窥视调用在预算内没有
@@ -298,8 +335,8 @@ func (f *feeder) peekProbe() (readable, ok, stuck bool) {
 	}
 }
 
-func newFeeder(in, dest *os.File) *feeder {
-	f := &feeder{in: in, dest: dest, atBoundary: true, frozen: make(chan struct{})}
+func newFeeder(in, dest *os.File, sdkDelivered *atomic.Int64) *feeder {
+	f := &feeder{in: in, dest: dest, sdkDelivered: sdkDelivered, atBoundary: true, frozen: make(chan struct{})}
 	go f.loop()
 	return f
 }
@@ -336,7 +373,7 @@ func (f *feeder) loop() {
 					f.held = append(f.held, data...)
 					data = f.held
 				}
-				if _, werr := f.dest.Write(data); werr != nil {
+				if _, werr := f.writeCountedLocked(data); werr != nil {
 					// 目的地已断:SDK 会话收场(SDK 端关闭)或泵已终态。
 					// 字节面已无意义,feeder 退役。
 					f.dieLocked()
@@ -473,6 +510,7 @@ func (f *feeder) retireTo(hostInW *os.File) {
 	old := f.dest
 	f.state = feederPump
 	f.dest = hostInW
+	f.sdkDelivered = nil // 泵侧字节不参与 SDK 配平:此后写账停止(消费侧已随退位封账)
 	old.Close()
 	f.mu.Unlock()
 	go f.flushPumpSide()
@@ -504,12 +542,23 @@ func (f *feeder) stop() {
 	f.dieLocked()
 }
 
+// writeCountedLocked 写进当前目的地;目的地仍是 SDK 侧管道时累计字节级
+// 进账(sdkDelivered 在 retireTo 切泵侧时置 nil,泵侧字节不参与 SDK 配平)。
+// 持锁调用。
+func (f *feeder) writeCountedLocked(data []byte) (int, error) {
+	n, err := f.dest.Write(data)
+	if err == nil && f.sdkDelivered != nil {
+		f.sdkDelivered.Add(int64(n))
+	}
+	return n, err
+}
+
 // flushLocked 把扣住的字节冲进当前目的地(持锁调用)。
 func (f *feeder) flushLocked() {
 	if len(f.held) == 0 {
 		return
 	}
-	_, _ = f.dest.Write(f.held)
+	_, _ = f.writeCountedLocked(f.held)
 	f.held = nil
 }
 
