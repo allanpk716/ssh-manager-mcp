@@ -168,8 +168,9 @@ func clampWaitSeconds(sec int) int {
 
 // ErrBgUnknownTask 是 unknown task_id 的三因文案 (spec §4 原文 verbatim——
 // 过期/驱逐/重启三因不可区分: task 记录纯进程内, 无持久化无恢复; 泛化文案
-// 防误导排障)。exec_output 与 exec_stop 共用; 表项已失与 manager 关闭同因。
-var ErrBgUnknownTask = errors.New("unknown task_id — it may never have existed, expired after the retention window (1h), been evicted for capacity (32-task limit), or the broker restarted; task records are in-process only")
+// 防误导排障; 末句为 Plan 52 追加: unknown id 不代表远端进程已消失)。
+// exec_output 与 exec_stop 共用; 表项已失与 manager 关闭同因。
+var ErrBgUnknownTask = errors.New("unknown task_id — it may never have existed, expired after the retention window (1h), been evicted for capacity (32-task limit), or the broker restarted; task records are in-process only; an unknown id does NOT mean the remote process is gone — the command may still be running server-side; check with exec_command (ps/pgrep) and clean up manually")
 
 // ExecOutputForProfile 读取 taskID 的增量输出 (exec_output, spec §4)。
 //
