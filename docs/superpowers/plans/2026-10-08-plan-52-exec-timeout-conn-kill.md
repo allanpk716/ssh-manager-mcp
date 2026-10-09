@@ -1,6 +1,6 @@
 # Plan 52 — exec 超时升级为断连拆除(三段式看门狗)
 
-日期:2026-10-08 立项 ｜ 2026-10-09 定案(评审链一轮修订收敛,两家盲评复审通过) ｜ 状态:夜链实施中(代码/测试/文档;发版 v0.19.1、双端部署、真机验收 A1–A5 为 owner 门,夜里不做)
+日期:2026-10-08 立项 ｜ 2026-10-09 定案(评审链一轮修订收敛,两家盲评复审通过) ｜ 状态:夜链实施中(代码/测试/文档;发版 v0.20.1、双端部署、真机验收 A1–A5 为 owner 门,夜里不做)
 
 spec:`.scratch/exec-timeout-conn-kill/spec.md`(事实源,本文件只做任务分解;`.scratch/` 过程账路径)。
 评审账:`.xcheck/20261009-075840/proposal.md`(收敛稿=方案定稿)、`.xcheck/20261009-075840/FINDINGS.md`(六条审核问题 F1–F6 与裁定)、`.xcheck/20261009-074751/NIGHT.md`(夜链账)。`.xcheck/` 在 .gitignore 内不入库,以上引用仅作过程账。
@@ -21,7 +21,7 @@ spec:`.scratch/exec-timeout-conn-kill/spec.md`(事实源,本文件只做任务�
 | T3 | 后台黑洞用例 2 条(仿 killableProxy 先例建本包夹具):后台任务超时→经 exec_output 观察进终态 timeout;exec_stop→进终态 stopped;注明保活判死阈值(30s×3=90s)远大于用例外部死线(10s)——唯一解锁源=看门狗第三段 | internal/mcpserver 测试 | 票 03 |
 | T4 | 工具描述与错误文案:exec_command 补「超时=发出 SIGKILL 请求并断开连接、按时返回 timed_out=true 与已接收的部分输出;少数服务器不清理远端进程——ps/pgrep 自查;高延迟链路可用 SSHMGR_EXEC_KILL_GRACE 上调宽限」;exec_background/exec_output/exec_stop 补「任务终态是 broker 侧判定,不是远端进程已死的证明」;ErrBgUnknownTask 追加「unknown 任务号不代表远端进程已消失,用 ps/pgrep 检查并手工清理」 | internal/mcpserver/{server.go, bgtools.go} | 票 04 |
 | T5 | conformance 真线用例(SSHMGR_CONFORMANCE=1 门控+docker 真 OpenSSH):短超时+阻塞命令→有界返回+TimedOut+无传输错误+容器仍健康;differences-ledger 登记「逐命令超时杀除」「exec_stop 杀除语义」两行 | internal/conformance, docs/ssh-conformance/differences-ledger.md | 票 05 |
-| T6 | 文档包:计划文档(本文件)+验收册 A1–A5+验收册目加行+backlog 五条+agent-tools.md 超时语义+compat-matrix v0.19.1 行 | docs/ | 票 06 |
+| T6 | 文档包:计划文档(本文件)+验收册 A1–A5+验收册目加行+backlog 五条+agent-tools.md 超时语义+compat-matrix v0.20.1 行 | docs/ | 票 06 |
 
 ## 取舍
 
@@ -39,6 +39,6 @@ spec:`.scratch/exec-timeout-conn-kill/spec.md`(事实源,本文件只做任务�
 
 ## 发版与验收门
 
-- 版本 **v0.19.1**(patch;buildinfo.Version 由 tag 注入,代码零改动)。发版打 tag、双端部署(NUC10 broker+本机 client,`sshmgr update --yes`)、4090x2 真机验收 A1–A5——**全部 owner 门,夜链不做**(晨报列出)。
+- 版本 **v0.20.1**(patch;buildinfo.Version 由 tag 注入,代码零改动)。**版本号顺延注记**:夜链立项时最新 tag 为 v0.19.0 故原记 v0.19.1,合并时 v0.20.0(桥热升级)已在其间发版,顺延为 v0.20.1(patch 不变)。发版打 tag、双端部署(NUC10 broker+本机 client,`sshmgr update --yes`)、4090x2 真机验收 A1–A5——**全部 owner 门,夜链不做**(晨报列出)。
 - 验收判据见 [acceptance/plan-52-exec-timeout-conn-kill.md](../../acceptance/plan-52-exec-timeout-conn-kill.md):A1 有界返回(≤18 秒 `timed_out=true`)/A2 残留进程如实记录后手工 kill/A3 后台任务 ~20 秒内进终态/A4 3090x2 对照无回归/A5 超时后正常往返。
-- compat-matrix 登记 v0.19.1 行(纯行为修复,工具 schema 参数零变化、仅描述文本);backlog 范围外五条登记(docs/backlog.md 活跃面 13–17)。
+- compat-matrix 登记 v0.20.1 行(纯行为修复,工具 schema 参数零变化、仅描述文本);backlog 范围外五条登记(docs/backlog.md 活跃面 13–17)。

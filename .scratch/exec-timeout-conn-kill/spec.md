@@ -1,4 +1,4 @@
-# Spec · exec 超时升级为断连拆除（三段式看门狗）· v0.19.1
+# Spec · exec 超时升级为断连拆除（三段式看门狗）· v0.20.1
 
 > 来源：Plan 52 评审收敛稿（.xcheck/20261009-075840/proposal.md，两家盲评一轮修订后 AGREE）
 > 决策快照：.xcheck/20261009-075840/decisions.md（D1-D7 已确认）
@@ -27,7 +27,7 @@
 - **宽限 seam**：新文件 internal/sshbroker/execenv.go，`killGraceFromEnv()` 解析 SSHMGR_EXEC_KILL_GRACE——未设/空 → 默认 2s；time.ParseDuration 非法 / 非正 / 超出 [100ms, 30s] → 报错（fail-closed，错误文本含变量名与取值范围）。在 connectWith 拨号前解析，存 Client.killGrace 不可变字段（构造时一次，协程免同步）；不进 doctorEnvSeams；不做进程级缓存（sshbroker 既有旋钮 connect.go:20-45 同为每次构造解析，且测试需要按连接覆盖）。
 - **注释修正**：删除 sudo.go:391 的假注释（"closing forces Wait to return"——已被真机证伪）；exec.go:26-35 陈旧注释改为三段式描述，写明"部分服务器等子进程退出才回关通道"。
 - **工具描述与错误文案**（rev1 4.4 定稿措辞）：exec_command 补"超时 = 发出 SIGKILL 请求并断开连接、按时返回 timed_out=true 与已接收的部分输出；少数服务器不清理远端进程——超时后用 ps/pgrep 自查、必要时手工清理；高延迟链路可用 SSHMGR_EXEC_KILL_GRACE 上调宽限"；exec_background / exec_output / exec_stop 各补"任务终态是 broker 侧判定，不是远端进程已死的证明；部分服务器完全无视会话拆除"；ErrBgUnknownTask（bgtools.go）追加"unknown 任务号不代表远端进程已消失——命令可能仍在服务器上运行；用 exec_command（ps/pgrep）检查并手工清理"。
-- **文档**：docs/superpowers/plans/2026-10-08-plan-52-exec-timeout-conn-kill.md（计划文档，照 plan-51 结构）、docs/acceptance/plan-52-exec-timeout-conn-kill.md（验收册，A1-A5 判据见 Further Notes）、docs/backlog.md 登记 5 条范围外项、docs/agent-tools.md 超时语义两处更新、docs/compat-matrix.md 登记 v0.19.1 行（纯修复，工具参数零变化、仅描述文本）。
+- **文档**：docs/superpowers/plans/2026-10-08-plan-52-exec-timeout-conn-kill.md（计划文档，照 plan-51 结构）、docs/acceptance/plan-52-exec-timeout-conn-kill.md（验收册，A1-A5 判据见 Further Notes）、docs/backlog.md 登记 5 条范围外项、docs/agent-tools.md 超时语义两处更新、docs/compat-matrix.md 登记 v0.20.1 行（纯修复，工具参数零变化、仅描述文本）。
 
 ## Testing Decisions
 
@@ -49,11 +49,11 @@ testsshd（进程内测试 sshd）底层库自动回关通道，无法复现挂�
 - 远端进程墓碑 / 孤儿扫描工具（需远端进程注册表，backlog）。
 - testsshd 语义仿真缺口（库层自动回关改不动；黑洞代理为快速通道替代，backlog 登记覆盖缺口）。
 - sudo Start→写密码窗口超时分类为 error 而非 timeout 的毫秒级微边缘（backlog）。
-- 发版打 tag v0.19.1、双端部署、4090x2 真机验收 A1-A5——owner 门，夜链不做（晨报列出）。
+- 发版打 tag v0.20.1、双端部署、4090x2 真机验收 A1-A5——owner 门，夜链不做（晨报列出）。
 
 ## Further Notes
 
 - 事实基线（不重审，D7）：4090x2（OpenSSH 9.6p1 / Ubuntu 24.04 / root，server_id LcXe1qH2IeU）实测挂死+进程残留；3090x2（8.9p1）对照正常；TCP 断开（杀 sshd 进程 / ss -K 内核销毁 socket）均立即解锁挂着的调用。
 - 真机验收判据（owner 门，A1：elapsed ≤ 18s 且 timed_out=true 且无错误；A3：~20s 内进终态；A2 残留进程如实记录后手工清理）。
 - 风险已评估：宽限定时器与 done 通道竞态良性；连接重复关闭幂等；与保活循环 / TaskManager.CloseAll 交互幂等；Windows 时序偶发用宽上界+外部死线+多次重跑防假红。
-- 版本 v0.19.1（tag 由 owner 打）；buildinfo.Version 由 tag 注入，代码零改动。
+- 版本 v0.20.1（tag 由 owner 打）；buildinfo.Version 由 tag 注入，代码零改动。

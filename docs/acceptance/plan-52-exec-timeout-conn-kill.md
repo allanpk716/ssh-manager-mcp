@@ -1,16 +1,16 @@
-# Plan 52 验收册:exec 超时升级为断连拆除(v0.19.1 起)
+# Plan 52 验收册:exec 超时升级为断连拆除(v0.20.1 起)
 
 > 来源:spec(`.scratch/exec-timeout-conn-kill/spec.md`,过程账)+ 计划文档(`docs/superpowers/plans/2026-10-08-plan-52-exec-timeout-conn-kill.md`);评审账 `.xcheck/20261009-075840/`(gitignore 过程账)。
 > 环境:4090x2(OpenSSH 9.6p1/Ubuntu 24.04/root,server_id `LcXe1qH2IeU`——实测不配合通道级拆除的机器)+ 3090x2(OpenSSH 8.9p1,server_id `7_758HkSaA0`——对照机)。
 
 ## 状态(2026-10-09 建册)
 
-**全部五项为 owner 门,夜链未执行**——待 v0.19.1 发版+双端部署后按册执行(agent 代跑留证,证据回写本册与 compat-matrix;判据不满足登记 backlog、不放宽)。
+**全部五项为 owner 门,夜链未执行**——待 v0.20.1 发版+双端部署后按册执行(agent 代跑留证,证据回写本册与 compat-matrix;判据不满足登记 backlog、不放宽)。
 
 ## 前置
 
-- [ ] 双端 ≥ v0.19.1(owner 发版 tag 后 NUC10 `sshmgr update --yes`+本机 client 同步)
-- [ ] CI(master push)+ release(tag v0.19.1,含 CI 门)双绿
+- [ ] 双端 ≥ v0.20.1(owner 发版 tag 后 NUC10 `sshmgr update --yes`+本机 client 同步)
+- [ ] CI(master push)+ release(tag v0.20.1,含 CI 门)双绿
 
 ## 判据总表
 
