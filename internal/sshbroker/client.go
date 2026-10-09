@@ -13,6 +13,10 @@ import (
 // Client wraps an ssh.Client.
 type Client struct {
 	c *ssh.Client
+	// killGrace 是执行看门狗 (killWatchdog) 在「关会话通道」与「关整条连接」
+	// 之间的等待窗口。构造时从 SSHMGR_EXEC_KILL_GRACE 解析一次 (Plan 52),
+	// 之后只读——看门狗协程免同步; 非法值在拨号前即拒绝构造 (fail-closed)。
+	killGrace time.Duration
 	// closeOnce 使 Close 幂等于 kaStop 的关闭 (close(kaStop) 不可重入); plain
 	// Connect 出品的 Client kaStop 为 nil, 行为与既有完全一致。
 	closeOnce sync.Once
@@ -52,8 +56,14 @@ func ConnectKeepAlive(ctx context.Context, host string, port int, user string, a
 
 // connectWith 是 Connect/ConnectKeepAlive 的共用体: ka 为 zero 值时不启
 // keepalive 循环 (Connect 的零行为变化); 否则拨号成功后起循环并接线 kaStop。
+// 拨号前还解析 SSHMGR_EXEC_KILL_GRACE (killGraceFromEnv)——非法值即拒绝
+// 构造, 与 host-key 算法旋钮同一 fail-closed 先例。
 func connectWith(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
 	algos, err := hostKeyAlgosChecked() // fail-closed BEFORE dial (typo → no connection attempt)
+	if err != nil {
+		return nil, err
+	}
+	grace, err := killGraceFromEnv() // fail-closed BEFORE dial (同上: 非法值不发起连接)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +98,7 @@ func connectWith(ctx context.Context, host string, port int, user string, auth s
 			// classification) and net.Error is delegated; see redact.go.
 			return nil, redactAddr(r.err, host, port)
 		}
-		cli := &Client{c: r.c}
+		cli := &Client{c: r.c, killGrace: grace}
 		if ka.interval > 0 && ka.maxFail > 0 {
 			cli.kaStop = make(chan struct{})
 			go cli.keepAliveLoop(ka.interval, ka.maxFail)

@@ -142,6 +142,79 @@ func TestExecSudoPreCancelledCtx(t *testing.T) {
 	}
 }
 
+// TestExecSudoTimeoutGraceBoundedReturn is the sudo-path twin of
+// TestExecTimeoutGraceBoundedReturn: with the grace dialed down to 300ms
+// (SSHMGR_EXEC_KILL_GRACE is read at connection construction, so Setenv must
+// precede Connect), a 200ms timeout against a blocking elevated command
+// returns TimedOut well before the command's own 2s sleep would end — the
+// privileged kernel tears down with the same three-stage watchdog.
+func TestExecSudoTimeoutGraceBoundedReturn(t *testing.T) {
+	t.Setenv("SSHMGR_EXEC_KILL_GRACE", "300ms")
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password:     "pw",
+		SudoPassword: "sudopw",
+		Exec: func(cmd string, _ io.Reader) (string, string, int) {
+			time.Sleep(2 * time.Second)
+			return "done\n", "", 0
+		},
+	})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	start := time.Now()
+	res, err := c.ExecSudo(context.Background(), "slow", []byte("sudopw"), 200*time.Millisecond, 0)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("timeout must surface as a result, not an error: %v", err)
+	}
+	if !res.TimedOut {
+		t.Fatal("expected TimedOut=true")
+	}
+	if strings.Contains(res.Stdout, "done") {
+		t.Fatal("should not have completed")
+	}
+	// 200ms timeout + 300ms grace + scheduler slack — far under the 2s the
+	// command itself would need, so a bounded return proves the teardown ran.
+	if elapsed > 2*time.Second {
+		t.Fatalf("ExecSudo took %v, want bounded (< 2s)", elapsed)
+	}
+}
+
+// TestExecSudoTimeoutGraceKeepsConnection is the sudo-path twin of
+// TestExecTimeoutGraceKeepsConnection: a timeout that returns WITHIN the grace
+// must leave the connection alive — a second ExecSudo on the SAME connection
+// succeeds, proving the watchdog does not tear down the connection when the
+// kernel already returned during its grace window.
+func TestExecSudoTimeoutGraceKeepsConnection(t *testing.T) {
+	t.Setenv("SSHMGR_EXEC_KILL_GRACE", "300ms")
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password:     "pw",
+		SudoPassword: "sudopw",
+		Exec: func(cmd string, _ io.Reader) (string, string, int) {
+			if cmd == "whoami" {
+				return "root\n", "", 0
+			}
+			time.Sleep(2 * time.Second)
+			return "done\n", "", 0
+		},
+	})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	res, err := c.ExecSudo(context.Background(), "slow", []byte("sudopw"), 200*time.Millisecond, 0)
+	if err != nil || !res.TimedOut {
+		t.Fatalf("first execSudo: res.TimedOut=%v err=%v, want a TimedOut result with nil error", res.TimedOut, err)
+	}
+
+	res2, err := c.ExecSudo(context.Background(), "whoami", []byte("sudopw"), 0, 0)
+	if err != nil {
+		t.Fatalf("second ExecSudo on the same connection: %v (connection must survive a timeout that returned within the grace)", err)
+	}
+	if strings.TrimSpace(res2.Stdout) != "root" {
+		t.Fatalf("stdout = %q, want %q", res2.Stdout, "root\n")
+	}
+}
+
 // --- Plan 41 rev3 §1.3 batch-1 matrix ---
 
 // §1.3-2: shellQuote is complete — every special character survives a

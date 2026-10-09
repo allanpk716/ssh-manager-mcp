@@ -30,9 +30,16 @@ type ExecResult struct {
 // a non-zero remote exit folds into (code, false, nil); anything else is
 // (0, false, err).
 //
-// Because some servers (notably the in-process testsshd) do not act on signal
-// requests, we also close the session to guarantee Run unblocks; the resulting
-// ExitMissingError is swallowed by the timeout/cancellation branches below.
+// Timeout/cancel teardown is three-stage (killWatchdog below): ① signal the
+// session (SIGKILL) and close the session channel; ② wait the client's kill
+// grace (SSHMGR_EXEC_KILL_GRACE, default 2s) watching ONLY whether the kernel
+// has returned; ③ if it still has not, close the WHOLE SSH connection. Stage ③
+// exists because some servers wait for the remote child process to exit before
+// they close the session channel back — for those servers the channel-level
+// close of stage ① never unblocks Run/Wait, and only tearing down the whole
+// connection does (verified against OpenSSH 9.6p1 on Ubuntu 24.04). The
+// connection-death errors this can produce (ExitMissingError, io.ErrClosedPipe)
+// are swallowed by the timeout/cancellation branches below.
 func (c *Client) runSession(ctx context.Context, cmd string, timeout time.Duration, stdout, stderr io.Writer) (exitCode int, timedOut bool, err error) {
 	sess, err := c.c.NewSession()
 	if err != nil {
@@ -49,20 +56,13 @@ func (c *Client) runSession(ctx context.Context, cmd string, timeout time.Durati
 		defer cancel()
 	}
 
-	// Abort the session on EITHER the (possibly deadline-bearing) ctx OR a caller
-	// cancellation. `done` lets the watchdog exit cleanly when Run returns on its
-	// own, so it never outlives the call — no goroutine leak when the caller
-	// passes a never-cancelled ctx (e.g. context.Background()).
+	// killWatchdog aborts the session on EITHER the (possibly deadline-bearing)
+	// ctx OR a caller cancellation. `done` lets it exit cleanly when Run returns
+	// on its own, so it never outlives the call — no goroutine leak when the
+	// caller passes a never-cancelled ctx (e.g. context.Background()).
 	done := make(chan struct{})
 	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = sess.Signal(ssh.SIGKILL)
-			_ = sess.Close()
-		case <-done:
-		}
-	}()
+	go c.killWatchdog(ctx, sess, done)
 
 	err = sess.Run(cmd)
 	switch ctx.Err() {
@@ -75,6 +75,46 @@ func (c *Client) runSession(ctx context.Context, cmd string, timeout time.Durati
 		return exitErr.ExitStatus(), false, nil // non-zero exit is a result, not an error
 	}
 	return 0, false, err
+}
+
+// killWatchdog is the three-stage teardown shared by the two execution kernels
+// (runSession here, runSessionRaw in sudo.go). It arms on ctx (timeout or
+// caller cancellation) and then escalates:
+//
+//	① sess.Signal(ssh.SIGKILL) + sess.Close() — the signal is a request the
+//	  server may ignore; closing the session channel additionally unblocks
+//	  Wait on servers that echo the channel close (the historical behavior,
+//	  which every cooperative server — testsshd included — satisfies).
+//	② wait c.killGrace watching ONLY done (whether the kernel returned) —
+//	  servers that wait for the remote child process to exit before closing
+//	  the channel back are NOT unlocked by ①, and the grace gives them the
+//	  chance to return on their own.
+//	③ still not returned → c.Close() — the WRAPPED Close (not c.c.Close()),
+//	  so the keepalive loop (if any) stops too. Killing the whole connection
+//	  is the only teardown verified to unblock Wait against such servers;
+//	  every sshmgr exec path rides a dedicated connection per call, so this
+//	  has no collateral damage.
+//
+// done closes when the kernel returns, so stages ②/③ never fire for a command
+// that finishes (or is cooperatively killed) — the watchdog exits and never
+// outlives the call. The timer-vs-done race inside stage ② is benign: when
+// both become ready together the kernel was returning anyway.
+func (c *Client) killWatchdog(ctx context.Context, sess *ssh.Session, done <-chan struct{}) {
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	_ = sess.Signal(ssh.SIGKILL)
+	_ = sess.Close()
+	timer := time.NewTimer(c.killGrace)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return
+	case <-timer.C:
+	}
+	_ = c.Close()
 }
 
 // ExecWriters 是 runSession 内核的导出 writer-seam (Plan 32 T4: 后台引擎

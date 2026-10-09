@@ -209,3 +209,75 @@ func TestExecCancelContext(t *testing.T) {
 		t.Fatalf("Exec took %v on cancel, want < 2s (sleep 30 should have been aborted)", elapsed)
 	}
 }
+
+// TestExecTimeoutGraceBoundedReturn pins the kill-grace knob on the timeout
+// path: with the grace dialed down to 300ms (SSHMGR_EXEC_KILL_GRACE is read at
+// connection construction, so Setenv must precede Connect), a 200ms timeout
+// against a blocking command returns TimedOut well before the command's own 2s
+// sleep would end — worst case bounded by timeout + grace, and much faster
+// here because the in-process test server honors the stage-1 channel close.
+func TestExecTimeoutGraceBoundedReturn(t *testing.T) {
+	t.Setenv("SSHMGR_EXEC_KILL_GRACE", "300ms")
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		Exec: func(cmd string, _ io.Reader) (string, string, int) {
+			time.Sleep(2 * time.Second)
+			return "done\n", "", 0
+		},
+	})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	start := time.Now()
+	res, err := c.Exec(context.Background(), "slow", 200*time.Millisecond, 0)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("timeout must surface as a result, not an error: %v", err)
+	}
+	if !res.TimedOut {
+		t.Fatal("expected TimedOut=true")
+	}
+	if strings.Contains(res.Stdout, "done") {
+		t.Fatal("should not have completed")
+	}
+	// 200ms timeout + 300ms grace + scheduler slack — far under the 2s the
+	// command itself would need, so a bounded return proves the teardown ran.
+	if elapsed > 2*time.Second {
+		t.Fatalf("Exec took %v, want bounded (< 2s)", elapsed)
+	}
+}
+
+// TestExecTimeoutGraceKeepsConnection proves the grace window does not
+// over-tear: a timeout whose kernel returns WITHIN the grace (the cooperative
+// test server unblocks on the stage-1 channel close) must leave the connection
+// alive — a second Exec on the SAME connection succeeds. If the watchdog
+// skipped its grace wait and jumped straight to closing the connection, that
+// second Exec would fail.
+func TestExecTimeoutGraceKeepsConnection(t *testing.T) {
+	t.Setenv("SSHMGR_EXEC_KILL_GRACE", "300ms")
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		Exec: func(cmd string, _ io.Reader) (string, string, int) {
+			if cmd == "ping" {
+				return "pong\n", "", 0
+			}
+			time.Sleep(2 * time.Second)
+			return "done\n", "", 0
+		},
+	})
+	defer cleanup()
+	c := connectTest(t, addr, hk)
+
+	res, err := c.Exec(context.Background(), "slow", 200*time.Millisecond, 0)
+	if err != nil || !res.TimedOut {
+		t.Fatalf("first exec: res.TimedOut=%v err=%v, want a TimedOut result with nil error", res.TimedOut, err)
+	}
+
+	res2, err := c.Exec(context.Background(), "ping", 0, 0)
+	if err != nil {
+		t.Fatalf("second Exec on the same connection: %v (connection must survive a timeout that returned within the grace)", err)
+	}
+	if res2.Stdout != "pong\n" {
+		t.Fatalf("stdout = %q, want %q", res2.Stdout, "pong\n")
+	}
+}

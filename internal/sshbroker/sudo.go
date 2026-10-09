@@ -384,14 +384,11 @@ func (c *Client) runSessionRaw(ctx context.Context, wrapped, pass string, timeou
 	}
 	done := make(chan struct{})
 	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = sess.Signal(ssh.SIGKILL)
-			_ = sess.Close() // some servers ignore SIGKILL; closing forces Wait to return
-		case <-done:
-		}
-	}()
+	// The shared three-stage watchdog (killWatchdog in exec.go), started BEFORE
+	// sess.Start on purpose: a cancellation biting in the narrow Start →
+	// password-write window is covered by it too, with ctxErrOr folding the
+	// resulting Start/Write error back into ctx.Err().
+	go c.killWatchdog(ctx, sess, done)
 
 	if err := sess.Start(wrapped); err != nil {
 		return 0, false, ctxErrOr(ctx, err)
