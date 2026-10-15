@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,11 @@ type Options struct {
 	// refusals). The inner command never runs.
 	SudoStartFailure string
 	Exec             func(cmd string, stdin io.Reader) (stdout, stderr string, exitCode int)
+	// Connections, when non-nil, is atomically bumped for every accepted TCP
+	// connection (right after Accept, before any SSH handshake) — lets a test
+	// prove a client never even dialed, e.g. a policy-blocked command must
+	// leave it at zero. Optional and purely observational.
+	Connections *atomic.Int64
 }
 
 // Start launches an in-process SSH server on a random local port.
@@ -77,6 +83,9 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 			if err != nil {
 				close(stop)
 				return
+			}
+			if opts.Connections != nil {
+				opts.Connections.Add(1)
 			}
 			go serve(conn, cfg, opts.SudoPassword, opts.SudoStartFailure, execFn)
 		}

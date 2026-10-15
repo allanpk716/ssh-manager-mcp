@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"time"
 
+	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -46,7 +47,8 @@ import (
 // instance; the tool closure in server.go binds NewServerFromSource's).
 func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeoutSec int, mgr *TaskManager, hk ...sshbroker.HostKeyStore) (out BgStartOutput, err error) {
 	var status string
-	var startOwned bool // Start 已自落 start 行的分支 (connect 三态/ok)——本层不重复写
+	var action = "exec-bg-start" // 命令策略拦截档换用新动作 exec-bg-blocked (Status 存命中规则编号)
+	var startOwned bool          // Start 已自落 start 行的分支 (connect 三态/ok)——本层不重复写
 	start := time.Now()
 	defer func() {
 		if status == "" {
@@ -54,7 +56,7 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 		}
 		if !startOwned {
 			_ = st.WriteAudit(store.AuditRow{
-				TS: start, ProjectID: projectID, ServerID: serverID, Action: "exec-bg-start",
+				TS: start, ProjectID: projectID, ServerID: serverID, Action: action,
 				Command: command, Sudo: sudo, Status: status,
 				DurationMS: time.Since(start).Milliseconds(),
 			})
@@ -74,6 +76,16 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 	if serr != nil || srv == nil {
 		status = "error"
 		err = fmt.Errorf("server %s not found", serverID)
+		return
+	}
+
+	// 命令策略 (ticket #10 / ADR 0007):与前台镜像——拦截档命令在取凭据、
+	// 建连接之前拒绝,不建立 SSH 连接。审计行换用新动作 exec-bg-blocked,
+	// Status 存命中规则编号,Command 保持命令原文。需确认档由命令策略后续
+	// 的 GitHub Issue 在此接一次性确认码。
+	if d := policyJudge(command); d.Disposition == policy.DispositionBlock {
+		action, status = "exec-bg-blocked", d.RuleID
+		err = policyBlockError(d)
 		return
 	}
 
