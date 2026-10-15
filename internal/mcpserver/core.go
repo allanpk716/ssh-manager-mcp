@@ -122,14 +122,16 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	// 命令策略 (ticket #10/#11 / ADR 0007):拦截档命令在取凭据、建连接之前
+	// 命令策略 (ticket #10/#11/#15 / ADR 0007):拦截档命令在取凭据、建连接之前
 	// 拒绝——不建立 SSH 连接,命令一个字节都不会送到服务器;审计行换用
 	// 新动作 exec-blocked,Status 存命中规则编号,Command 保持命令原文。
+	// 生效规则集(默认规则减停用、加自定义,ticket #15)在 policyJudge 里
+	// 从本 store 读取,语法按服务器条目的 shell 类型选择(ticket #14)。
 	// 需确认档同样在连接之前退回:一行说明 + 一次性确认码
 	// (gateExecConfirmation,见 confirmcode.go);agent 征得用户同意后带
 	// 确认码与理由重调才继续走下面的正常执行链。退回行的审计动作用
 	// exec-confirm-required,带确认码执行行 (含理由) 由门内落。
-	if d := policyJudge(srv.ShellType, command); d.Disposition != policy.DispositionAllow {
+	if d := policyJudge(st, srv.ShellType, command); d.Disposition != policy.DispositionAllow {
 		switch d.Disposition {
 		case policy.DispositionBlock:
 			action, status = "exec-blocked", d.RuleID

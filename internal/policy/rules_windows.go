@@ -13,9 +13,10 @@ type windowsRule struct {
 	matches     func(ev *winEvidence, seg *winSegment) bool
 }
 
-// applyWindowsRules 按声明顺序过一遍 Windows 默认规则表,返回第一条
-// 命中的结论;没有命中则放行。
-func applyWindowsRules(ev *winEvidence, seg *winSegment, rules *RuleSet) Decision {
+// applyWindowsRules 按声明顺序过一遍 Windows 默认规则表,再过适用的
+// 自定义规则,返回第一条命中的结论;没有命中则放行。shell 用于自定义
+// 规则的适用 shell 集合过滤。
+func applyWindowsRules(ev *winEvidence, seg *winSegment, shell ShellType, rules *RuleSet) Decision {
 	for _, r := range defaultWindowsRules {
 		if rules.isDisabled(r.id) {
 			continue
@@ -26,6 +27,16 @@ func applyWindowsRules(ev *winEvidence, seg *winSegment, rules *RuleSet) Decisio
 				RuleID:      r.id,
 				Explanation: r.explanation,
 				Alternative: r.alternative,
+			}
+		}
+	}
+	for _, cr := range rules.customsFor(shell) {
+		if matchCustomWindows(cr, ev.rawCommand, seg) {
+			return Decision{
+				Disposition: cr.Disposition,
+				RuleID:      cr.ID,
+				Explanation: cr.Explanation,
+				Alternative: cr.Alternative,
 			}
 		}
 	}

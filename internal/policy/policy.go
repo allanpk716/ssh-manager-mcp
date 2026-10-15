@@ -6,7 +6,10 @@
 // 都只调用 Evaluate,不各自实现判定。
 package policy
 
-import "strconv"
+import (
+	"fmt"
+	"strconv"
+)
 
 // Disposition 是命令策略对一条命令给出的结论,三档之一:拦截、需确认、
 // 放行(领域定义见 CONTEXT.md「处置」)。零值是放行;数值越大越严重,
@@ -28,6 +31,33 @@ func (d Disposition) String() string {
 		return "拦截"
 	default:
 		return "放行"
+	}
+}
+
+// Code 返回处置的存储稳定代号("allow" / "confirm" / "block"),用于
+// vault 表与快照 JSON。它与展示文字是两回事:代号永不随语言或版本变。
+func (d Disposition) Code() string {
+	switch d {
+	case DispositionConfirmRequired:
+		return "confirm"
+	case DispositionBlock:
+		return "block"
+	default:
+		return "allow"
+	}
+}
+
+// ParseDisposition 把存储代号解析回处置;未知代号报错。
+func ParseDisposition(code string) (Disposition, error) {
+	switch code {
+	case "allow":
+		return DispositionAllow, nil
+	case "confirm":
+		return DispositionConfirmRequired, nil
+	case "block":
+		return DispositionBlock, nil
+	default:
+		return DispositionAllow, fmt.Errorf("unknown disposition code %q (want allow, confirm or block)", code)
 	}
 }
 
@@ -79,11 +109,16 @@ type Decision struct {
 }
 
 // RuleSet 是 Evaluate 的生效规则集输入。默认规则内置在程序里随版本升级,
-// 这里只携带权威端对它的调整;自定义规则由命令策略后续的 GitHub Issue 在同一模型上加入。
-// nil 指针表示默认规则全部生效。
+// 这里只携带权威端对它的调整与补充:被停用的默认规则编号,加上 owner
+// 在权威端增加的自定义规则(随快照下发,客户端只读镜像同一形态)。
+// nil 指针表示默认规则全部生效、没有自定义规则。
 type RuleSet struct {
 	// DisabledDefaultRuleIDs 是被 owner 按编号停用的默认规则。
 	DisabledDefaultRuleIDs []string
+	// CustomRules 是 owner 增加的自定义规则(结构化字段 + 可选正则,
+	// 见 CustomRule)。判定时先过默认规则,再按声明顺序过自定义规则,
+	// 每条简单命令取第一条命中的结论。
+	CustomRules []CustomRule
 }
 
 func (r *RuleSet) isDisabled(id string) bool {
@@ -98,6 +133,21 @@ func (r *RuleSet) isDisabled(id string) bool {
 	return false
 }
 
+// customsFor 返回适用于给定 shell 类型的自定义规则(nil 指针与空集
+// 都归为无自定义规则)。
+func (r *RuleSet) customsFor(shell ShellType) []CustomRule {
+	if r == nil {
+		return nil
+	}
+	var out []CustomRule
+	for _, cr := range r.CustomRules {
+		if cr.appliesToShell(shell) {
+			out = append(out, cr)
+		}
+	}
+	return out
+}
+
 // Evaluate 是命令策略的判定入口:对一条按 shell 类型拆解的命令文本,
 // 依据生效规则集给出处置结论。组合命令(分号、&&、||、管道、子 shell)
 // 拆成一条条简单命令分别判定,整体取最严重的处置,规则编号对应最严重
@@ -109,7 +159,7 @@ func Evaluate(shell ShellType, command string, rules *RuleSet) Decision {
 	case ShellPowerShell, ShellWindowsCmd:
 		// PowerShell 与 cmd 没有可用的语法解析库,按分隔符粗略分段后判定,
 		// 两类 shell 共用同一套 Windows 默认规则。
-		return evaluateWindows(command, rules)
+		return evaluateWindows(shell, command, rules)
 	default:
 		return Decision{
 			Disposition: DispositionConfirmRequired,

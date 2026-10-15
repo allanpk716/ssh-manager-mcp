@@ -46,8 +46,8 @@ func (c *posixCall) firstPositional() (string, bool) {
 	return "", true
 }
 
-// evaluatePOSIX 把命令文本按 POSIX shell 语法拆解并逐条应用默认规则,
-// 返回最严重的结论。
+// evaluatePOSIX 把命令文本按 POSIX shell 语法拆解并逐条应用生效规则集
+// (默认规则在前、自定义规则在后),返回最严重的结论。
 func evaluatePOSIX(command string, rules *RuleSet) Decision {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
@@ -64,7 +64,7 @@ func evaluatePOSIX(command string, rules *RuleSet) Decision {
 	ev := collectEvidence(file)
 	var worst Decision
 	for _, call := range ev.calls {
-		worst = merge(worst, applyRules(ev, &call, rules))
+		worst = merge(worst, applyRules(ev, &call, command, rules))
 	}
 	return worst
 }
@@ -76,9 +76,30 @@ type posixEvidence struct {
 	forkBomb bool
 }
 
-// applyRules 按声明顺序过一遍默认规则表(拦截在前、需确认在后,
-// 语义上拦截更严重、优先给出),返回第一条命中的结论;没有命中则放行。
-func applyRules(ev *posixEvidence, call *posixCall, rules *RuleSet) Decision {
+// applyRules 先在默认规则表里取第一条命中(拦截在前、需确认在后,
+// 语义上拦截更严重、优先给出),再在适用的自定义规则里取第一条命中,
+// 两个结论取更严重的一档返回——owner 加的自定义规则能把默认的需确认
+// 收紧成拦截,但不能把内置拦截放松(默认规则只能按编号停用,不能被
+// 自定义改写)。两边都没命中则放行。command 是整条命令原文,自定义
+// 规则的正则条件对它匹配。
+func applyRules(ev *posixEvidence, call *posixCall, command string, rules *RuleSet) Decision {
+	def := firstDefaultMatch(ev, call, rules)
+	for _, cr := range rules.customsFor(ShellPOSIX) {
+		if matchCustomPOSIX(cr, command, call) {
+			return merge(def, Decision{
+				Disposition: cr.Disposition,
+				RuleID:      cr.ID,
+				Explanation: cr.Explanation,
+				Alternative: cr.Alternative,
+			})
+		}
+	}
+	return def
+}
+
+// firstDefaultMatch 按声明顺序过一遍默认规则表(拦截在前、需确认在
+// 后),返回第一条命中的结论;没有命中则放行。
+func firstDefaultMatch(ev *posixEvidence, call *posixCall, rules *RuleSet) Decision {
 	for _, list := range [][]posixRule{defaultPOSIXRules, defaultPOSIXConfirmRules} {
 		for _, r := range list {
 			if rules.isDisabled(r.id) {

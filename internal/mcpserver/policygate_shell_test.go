@@ -129,8 +129,9 @@ func TestExecBackgroundShellTypePicksGrammar(t *testing.T) {
 // 需确认——拆解不准的命令偏向需确认,不悄悄放行(规格 user story 42)。
 // 存储层会把空值归一为 POSIX,能到这里的是坏数据/未知值。
 func TestPolicyJudgeUnknownShellLeansConfirm(t *testing.T) {
+	st := newStore(t)
 	for _, bad := range []models.ShellType{"fish", "POSIX", "powershel"} {
-		d := policyJudge(bad, "rm -rf /data")
+		d := policyJudge(st, bad, "rm -rf /data")
 		if d.Disposition != policy.DispositionConfirmRequired {
 			t.Fatalf("policyJudge(shell=%q) = %+v, want 需确认", bad, d.Disposition)
 		}
@@ -138,14 +139,14 @@ func TestPolicyJudgeUnknownShellLeansConfirm(t *testing.T) {
 			t.Fatalf("需确认必须带说明,shell=%q", bad)
 		}
 	}
-	// 已知三类值正常分派(不落入保守分支)。
-	if d := policyJudge(models.ShellPowerShell, winBlockedCmd); d.Disposition != policy.DispositionBlock || d.RuleID != "WIN-FORMAT" {
+	// 已知三类值正常分派(不落入保守分支;空库即纯内置默认规则)。
+	if d := policyJudge(st, models.ShellPowerShell, winBlockedCmd); d.Disposition != policy.DispositionBlock || d.RuleID != "WIN-FORMAT" {
 		t.Fatalf("powershell dispatch = %+v, want WIN-FORMAT 拦截", d)
 	}
-	if d := policyJudge(models.ShellPOSIX, blockedCmd); d.Disposition != policy.DispositionBlock || d.RuleID != "POSIX-FORMAT" {
+	if d := policyJudge(st, models.ShellPOSIX, blockedCmd); d.Disposition != policy.DispositionBlock || d.RuleID != "POSIX-FORMAT" {
 		t.Fatalf("posix dispatch = %+v, want POSIX-FORMAT 拦截", d)
 	}
-	if d := policyJudge(models.ShellWindowsCmd, "echo ok"); d.Disposition != policy.DispositionAllow {
+	if d := policyJudge(st, models.ShellWindowsCmd, "echo ok"); d.Disposition != policy.DispositionAllow {
 		t.Fatalf("cmd dispatch = %+v, want 放行", d)
 	}
 }

@@ -5,21 +5,38 @@ package mcpserver
 // 做一次命令策略判定,拦截档直接拒绝——不建立连接,命令一个字节都不会
 // 送到服务器。判定内核是 internal/policy 的纯函数 Evaluate,本层不重复
 // 实现规则,只负责接线与审计。
+//
+// ticket #15 起判定按「生效规则集」进行:内置默认规则减去停用表,加上
+// 自定义规则,直接从本次执行所用的 store 读取——权威端(本地 vault 或
+// serve 库)与客户端(快照水合出的只读镜像库)走同一条代码路径,离线
+// 时用最后一次拉到的规则。
 
 import (
 	"fmt"
+	"os"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
+	"ssh-manager-mcp/internal/policymanage"
+	"ssh-manager-mcp/internal/store"
 )
 
-// policyJudge 是两个执行工具共用的判定入口。判定按服务器条目标注的
-// shell 类型选择语法(ticket #14;存储层已把空值归一为 POSIX,能到这里的
-// 未知值不改写——Evaluate 的保守分支判需确认,不悄悄放行)。后续票接
-// 快照下发的生效规则集(换第三参)时只改这里,不动两个调用点的时序。
-// 拦截档在调用点直接拒绝;需确认档经 confirmcode.go 的一次性确认码门。
-func policyJudge(shell models.ShellType, command string) policy.Decision {
-	return policy.Evaluate(policy.ShellType(shell), command, nil)
+// policyJudge 是两个执行工具共用的判定入口:从执行的 store 组装生效
+// 规则集(默认规则减停用、加自定义,ticket #15)后交给判定内核;语法按
+// 服务器条目标注的 shell 类型选择(ticket #14;存储层已把空值归一为
+// POSIX,能到这里的未知值不改写——Evaluate 的保守分支判需确认,不悄悄
+// 放行)。权威端(本地 vault 或 serve 库)与客户端(快照水合出的只读
+// 镜像库)走同一条代码路径,离线时用最后一次拉到的规则。规则表读取
+// 失败时退回纯内置默认规则继续判定(默认规则仍然护住严重后果),绝不
+// 因读不到规则放行一切或拦死一切。拦截档在调用点直接拒绝;需确认档
+// 经 confirmcode.go 的一次性确认码门(ticket #11)。
+func policyJudge(st *store.Store, shell models.ShellType, command string) policy.Decision {
+	rules, err := policymanage.EffectiveRuleSet(st)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr: command policy rule lookup failed (judging with built-in defaults only): %v\n", err)
+		rules = nil
+	}
+	return policy.Evaluate(policy.ShellType(shell), command, rules)
 }
 
 // policyBlockError 把拦截结论拼成 agent 能直接向用户转述的一行错误:
