@@ -135,7 +135,7 @@ L1+ 模型下**未消除**的威胁：
 - **R13.2 本地环境注入**：`SSHMGR_UPDATE_BASE` 被继承 env 重定向 = **信任根迁移**——缓解：非环回强制 https + 白名单换为 base 宿主 + 证据行显示生效 base（真假源在输出里可辨）。
 - **R13.3 `--no-verify`**：owner 显式声明信任本地文件；打印未校验警告留档。
 - **R13.4 staged 自检执行面**：替换前以当前用户执行 staged 二进制的 `version` 自检（已过 checksum，但 checksum 信任链 = GitHub；`--file --no-verify` 下更是**零校验执行**——比「只落盘不执行」多一个执行面）；缓解 = 超时 10s + 有限输出缓冲，执行后即删。
-- **R13.5 服务 exe 在用户可写目录（NUC10 现状）= same-user→SYSTEM 提权面**：**owner 拍板维持**（v0.10.0 既有姿态；单用户威胁模型 M1 下 master.key 机器域可解，same-user 妥协 ≈ 全丢，SYSTEM 增量小；update 免提权是本 plan 核心易用性诉求）。残余在此登记；可选加固 = 迁 `C:\Program Files\sshmgr\` + ACL（加固后 update 的文件替换亦需提权）——给指引不做默认。
+- **R13.5 服务 exe 在用户可写目录（NUC10 现状）= same-user→SYSTEM 提权面**：**owner 拍板维持**（v0.10.0 既有做法；单用户威胁模型 M1 下 master.key 机器域可解，same-user 妥协 ≈ 全丢，SYSTEM 增量小；update 免提权是本 plan 核心易用性诉求）。残余在此登记；可选加固 = 迁 `C:\Program Files\sshmgr\` + ACL（加固后 update 的文件替换亦需提权）——给指引不做默认。
 
 ---
 

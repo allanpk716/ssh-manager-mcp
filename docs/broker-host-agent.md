@@ -2,7 +2,7 @@
 
 这篇讲：serve 机（broker 主机，比如 VLAN 里那台常驻 `sshmgr serve` 的服务器）**自己也想跑 agent**（Claude Code / Cursor / 任何 MCP 客户端）时，agent 怎么接入 SSH MCP——以及与工作机唯一的差异点、应急姿势。
 
-> 前置阅读：[multi-machine.md](./multi-machine.md)（多机桥姿态架构 + pair 一条龙）+ [agent-access.md](./agent-access.md)（project token / profile 授权模型）。
+> 前置阅读：[multi-machine.md](./multi-machine.md)（多机部署架构 + pair 一条龙）+ [agent-access.md](./agent-access.md)（project token / profile 授权模型）。
 
 ---
 
@@ -109,4 +109,4 @@ broker 机上全**自洽**——不像远程工作机那样有"文件在笔记�
 
 ---
 
-下一步：[agent-tools.md](./agent-tools.md)（贴给 agent 的规则模板）· [multi-machine.md](./multi-machine.md)（多机桥姿态全量细节）· [scenarios.md](./scenarios.md)（真实任务示例）。
+下一步：[agent-tools.md](./agent-tools.md)（贴给 agent 的规则模板）· [multi-machine.md](./multi-machine.md)（多机部署全量细节）· [scenarios.md](./scenarios.md)（真实任务示例）。

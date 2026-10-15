@@ -572,7 +572,7 @@ func MigrationBlock() string {
 		"(不半更新,防新旧服务并存;迁移完成后新服务 " + buildinfo.ServeServiceName + " 由 update 自动接管)。\n" +
 		"\n" +
 		"按 v0.13.0 迁移 runbook 执行(顺序不可乱:先迁 client 后升 serve):\n" +
-		"  1. ②a 存量桥迁:各 client 机 agent 从 ②a HTTP 直连姿态迁到 stdio 桥(--cache)(趁旧 serve 还在跑时完成)\n" +
+		"  1. ②a 存量桥迁:各 client 机 agent 从 ②a HTTP 直连方式迁到 stdio 桥(--cache)(趁旧 serve 还在跑时完成)\n" +
 		"  2. client 机改名:sshmgr 二进制替换旧 ssh-manager(旧的最后删/改名),.mcp.json 的 command 同步改指 sshmgr\n" +
 		"  3. serve 机迁移(最后;管理员 shell),三条命令:\n" +
 		"       sc qc " + LegacyServiceName + "        # Windows;记下 --addr/--tls-cert/--tls-key\n" +

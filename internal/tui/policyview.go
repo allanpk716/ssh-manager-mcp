@@ -204,7 +204,7 @@ const (
 	policyViewerResult
 )
 
-// pvReadOnlyNote 是客户端只读姿态的统一提示(修改键只给这一句,与 CLI
+// pvReadOnlyNote 是客户端只读时的统一提示(修改键只给这一句,与 CLI
 // 的客户端拒绝文案同一语义):规则在权威端管理、随 cache pull 下发。
 const pvReadOnlyNote = "客户端只读——命令策略规则在权威端维护,随 cache pull 下发,本机不可修改;如需变更请在权威端操作"
 

@@ -8,7 +8,7 @@ import (
 )
 
 // runPolicyTest 以给定参数执行 `sshmgr policy test`,返回其输出。
-// 环境钉到空临时目录:试算自 ticket #15 起按本机姿态(权威库/客户端缓存)
+// 环境钉到空临时目录:试算自 ticket #15 起按本机角色(权威库/客户端缓存)
 // 取生效规则集,不钉住会把开发者本机的真实 vault/缓存串进测试。
 func runPolicyTest(t *testing.T, args ...string) (*bytes.Buffer, error) {
 	t.Helper()

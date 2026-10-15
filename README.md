@@ -21,7 +21,7 @@ Single Go binary. Cross-platform (Windows / Linux / macOS). No daemon — the br
 
 | 我想要…… | 看这篇 |
 |---|---|
-| 一屏看全部署形态（单机 / 多机桥姿态 + 管理面）怎么选 | [`docs/deployment-modes.md`](docs/deployment-modes.md) |
+| 一屏看全部署形态（单机 / 多机部署 + 管理面）怎么选 | [`docs/deployment-modes.md`](docs/deployment-modes.md) |
 | 从零到跑通（安装 / 解锁 / 第一台服务器 / 授权 Claude Code） | [`docs/getting-started.md`](docs/getting-started.md) |
 | 新增 / 编辑 / 维护 / 删除服务器 | [`docs/managing-servers.md`](docs/managing-servers.md) |
 | 授权 Claude Code / Cursor / 其他 agent；token 轮换与吊销 | [`docs/agent-access.md`](docs/agent-access.md) |

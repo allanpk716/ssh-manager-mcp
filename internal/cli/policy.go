@@ -18,9 +18,9 @@ import (
 // `sshmgr policy` 命令组(owner 管理命令策略的入口,ticket #15):列出、
 // 增加自定义规则、删除自定义规则、按编号停用/恢复默认规则、试算。
 // 管理操作经可复用层 internal/policymanage 落库并写审计(后续 TUI 页
-// 调同一层,ADR 0003);本层只做姿态判定与命令行接线,不做规则判定。
+// 调同一层,ADR 0003);本层只做本机角色判定与命令行接线,不做规则判定。
 //
-// 姿态(权威端 / 客户端):
+// 本机角色(权威端 / 客户端):
 //   - 本机有可打开的 vault:权威端(含单机部署),全功能。
 //   - 本机无 vault 但已登记为客户端(缓存凭据或命名实例在场):只读——
 //     列出与试算读本地缓存快照,修改命令被明确拒绝(规则在权威端维护,
@@ -29,35 +29,35 @@ import (
 //   - vault 存在但锁定/不可读:报错不降级(与 roles.ResolveMode 同一
 //     哲学:绝不把锁定着的权威机静默降成客户端)。
 
-// policyPosture 是本机对命令策略的姿态。
-type policyPosture int
+// policyRole 是本机在命令策略上的角色;未登记的机器单列一档。
+type policyRole int
 
 const (
-	policyPostureVault  policyPosture = iota // 权威端(或单机):全功能
-	policyPostureClient                      // 客户端:只读(缓存快照)
-	policyPostureBare                        // 无 vault 无缓存:仅内置默认规则
+	policyRoleAuthority  policyRole = iota // 权威端(或单机):全功能
+	policyRoleClient                       // 客户端:只读(缓存快照)
+	policyRoleUnenrolled                   // 无 vault 无缓存:仅内置默认规则
 )
 
-// resolvePolicyPosture 按上面的规则判定本机姿态。vault 优先:即使残留
+// resolvePolicyRole 按上面的规则判定本机角色。vault 优先:即使残留
 // 的客户端登记(缓存凭据)也在,vault 在场就以权威端对待。vault 文件
 // 还不存在时再尝试开一次库——权威机的第一条 vault 命令才会创建库文件
 // (与 `servers add` 的既有行为一致),主键可用即按权威端对待;开不了
 // (无主键)才继续看客户端登记。
-func resolvePolicyPosture() (policyPosture, error) {
+func resolvePolicyRole() (policyRole, error) {
 	if roles.VaultExists() {
 		if oerr := roles.VaultOpenErr(); oerr != nil {
 			return 0, fmt.Errorf("this machine has a vault but it is locked or unreadable: %w — unlock it (`sshmgr unlock`) before managing command policy; never silently degraded to client mode", oerr)
 		}
-		return policyPostureVault, nil
+		return policyRoleAuthority, nil
 	}
 	if st, err := openUnlockedStore(); err == nil {
 		st.Close()
-		return policyPostureVault, nil
+		return policyRoleAuthority, nil
 	}
 	if roles.CachePresent() {
-		return policyPostureClient, nil
+		return policyRoleClient, nil
 	}
-	return policyPostureBare, nil
+	return policyRoleUnenrolled, nil
 }
 
 // errPolicyClientRefused 是客户端上修改命令的统一拒绝文案。
@@ -69,19 +69,19 @@ var errPolicyClientRefused = fmt.Errorf("this machine is a cache client: command
 //     内置默认规则并在标准错误提示一句;
 //   - 无数据机器:内置默认规则。
 func loadEffectiveRulesForJudge(stderr io.Writer) (*policy.RuleSet, error) {
-	posture, err := resolvePolicyPosture()
+	role, err := resolvePolicyRole()
 	if err != nil {
 		return nil, err
 	}
-	switch posture {
-	case policyPostureVault:
+	switch role {
+	case policyRoleAuthority:
 		st, err := openUnlockedStore()
 		if err != nil {
 			return nil, err
 		}
 		defer st.Close()
 		return policymanage.EffectiveRuleSet(st)
-	case policyPostureClient:
+	case policyRoleClient:
 		snap, err := clientops.LoadCacheSnapshotFor("")
 		if err != nil {
 			fmt.Fprintf(stderr, "note: local cache snapshot unreadable (%v) — judging with the built-in default rules only; run `cache pull` to receive the owner's rules\n", err)
@@ -112,14 +112,14 @@ func newPolicyCmd() *cobra.Command {
 // requirePolicyVault 断言本机是权威端并返回已解锁的 vault;客户端上被
 // errPolicyClientRefused 拒绝,无数据机器上给出初始化指引。
 func requirePolicyVault() (*store.Store, error) {
-	posture, err := resolvePolicyPosture()
+	role, err := resolvePolicyRole()
 	if err != nil {
 		return nil, err
 	}
-	switch posture {
-	case policyPostureClient:
+	switch role {
+	case policyRoleClient:
 		return nil, errPolicyClientRefused
-	case policyPostureBare:
+	case policyRoleUnenrolled:
 		return nil, fmt.Errorf("no vault on this machine — command policy rules are managed where the vault lives (the authoritative machine, or this machine in single-machine use); run the setup wizard (`sshmgr` with no arguments) first")
 	}
 	return openUnlockedStore()
@@ -133,13 +133,13 @@ func newPolicyLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List all rules in effect: built-in defaults (marking disabled ones) + custom rules",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			posture, err := resolvePolicyPosture()
+			role, err := resolvePolicyRole()
 			if err != nil {
 				return err
 			}
 			var views []policymanage.RuleView
-			switch posture {
-			case policyPostureVault:
+			switch role {
+			case policyRoleAuthority:
 				st, err := openUnlockedStore()
 				if err != nil {
 					return err
@@ -148,7 +148,7 @@ func newPolicyLsCmd() *cobra.Command {
 				if views, err = policymanage.ListRules(st); err != nil {
 					return err
 				}
-			case policyPostureClient:
+			case policyRoleClient:
 				snap, err := clientops.LoadCacheSnapshotFor("")
 				if err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "note: local cache snapshot unreadable (%v) — listing the built-in default rules only; run `cache pull` to receive the owner's rules\n", err)
@@ -339,7 +339,7 @@ func newPolicyEnableCmd() *cobra.Command {
 }
 
 // newPolicyTestCmd:`sshmgr policy test --shell posix "<command>"` 是
-// owner 的试算命令:不做任何连接,按本机姿态取生效规则集(权威端读
+// owner 的试算命令:不做任何连接,按本机角色取生效规则集(权威端读
 // vault,客户端读缓存快照,无数据机器用内置默认规则)后调用策略判定
 // 内核,打印处置、命中规则编号、风险说明与更安全的替代做法。
 func newPolicyTestCmd() *cobra.Command {

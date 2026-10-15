@@ -147,10 +147,10 @@ sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码>:sha256:abcd1
 
 Plan 42 批1（随下个发版）起 serve **移除远程 MCP 面**——旧 ②a `.mcp.json`（`"type": "http"`）打过去是 **404**。升级已部署的多机环境按**三步迁移**：
 
-> ⚠️ **顺序铁律：先升全部工作机（client ≥ v0.10.1）并迁到桥姿态，最后才升 serve。**
+> ⚠️ **顺序铁律：先升全部工作机（client ≥ v0.10.1）并改为经桥接入，最后才升 serve。**
 
 1. **手工桥迁移**：在**旧** serve 上按上面附录的手工流程给每台工作机发码 + 拉缓存 + 配 `.mcp.json`（此时工作机二进制先升到 ≥ v0.10.1）。
-2. **升 serve**（含 ②a 移除的 Plan 42 版本，版本号发版拍板）——前置检查：全部 client 已在桥姿态；当刻起 ②a 路径 404。
+2. **升 serve**（含 ②a 移除的 Plan 42 版本，版本号发版拍板）——前置检查：全部 client 已改为经桥接入；当刻起 ②a 路径 404。
 3. **pair 时代**：此后所有新机/重配对一律 `sshmgr pair`。
 
 完整迁移 runbook + 密钥轮换 runbook → [`multi-machine.md`](./multi-machine.md) / [`compat-matrix.md`](./compat-matrix.md)。

@@ -69,7 +69,7 @@ func enrollAt(t *testing.T, srv *pairingServer, name, target string, clientPubOv
 	if err != nil {
 		t.Fatal(err)
 	}
-	// InsecureSkipVerify: 自签测试证书——SAS 人闸语义下 client 的标准姿态
+	// InsecureSkipVerify: 自签测试证书——SAS 人闸语义下 client 的标准做法
 	// (pair.go 同款);本测试关注的是 SAS 同源性,不是 TLS 锚。
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},

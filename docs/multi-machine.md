@@ -1,4 +1,4 @@
-# 多机共享：桥姿态（一台服务器常驻权威 vault，多台机器共用）
+# 多机部署（一台服务器常驻权威 vault，多台机器共用）
 
 > **适用场景**：你在**多台电脑**上开发/办公（同一个内网或虚拟局域网 VLAN），想让所有机器上的 AI agent 共用**同一份** SSH 服务器清单——凭据只存在一台权威 broker 上，工作机只持本地只读缓存。
 >
@@ -10,7 +10,7 @@
 
 ## 该用哪种模式？（先看这张表）
 
-| | **stdio（默认 · 单机）** | **多机桥姿态（可选 · 多机）** |
+| | **stdio（默认 · 单机）** | **多机部署（可选 · 多机）** |
 |---|---|---|
 | broker 跑在哪 | Claude Code **按需 spawn** 的本地子进程 | 你**手动启动并常驻**的一台 VLAN 服务器 |
 | agent 怎么连 | 本地 stdio | **pair 一条龙入网 → 本地只读缓存**（`mcp --cache`）；无远程 MCP 面 |
@@ -30,7 +30,7 @@
 ## 架构
 
 ```
-   多机（桥姿态）                         单机（stdio · 默认）
+   多机（经桥接入）                         单机（stdio · 默认）
 
  ┌──工作机 A──┐  ┌──工作机 B──┐         ┌───你的机器───┐
  │  Claude    │  │  Claude    │         │  Claude      │
@@ -58,7 +58,7 @@
 **本质区别：**
 
 - **stdio（单机）**：Claude Code 读 `.mcp.json` 里的 `command`，**自己 spawn** `sshmgr mcp` 子进程，broker 和 Claude Code 之间走 stdio。broker 的生死 Claude Code 管；机器自包含（vault 在本机）。详见 [getting-started.md 的"重启/关机后"](./getting-started.md#重启--关机后还要做什么吗不用mcp-客户端会自动拉起)。
-- **多机桥姿态**：你在 VLAN 一台服务器上**常驻** `sshmgr serve`（权威 vault）。各工作机经 **pair 一条龙**入网（SAS 人闸 → 凭据加密下发），持一份**本地加密只读快照**，agent 的子进程 `mcp --cache` 用它干活。**凭据只在服务器上**，工作机上只有只读快照；**命令从工作机直拨目标服务器**，serve 不在命令路径上。
+- **多机部署**：你在 VLAN 一台服务器上**常驻** `sshmgr serve`（权威 vault）。各工作机经 **pair 一条龙**入网（SAS 人闸 → 凭据加密下发），持一份**本地加密只读快照**，agent 的子进程 `mcp --cache` 用它干活。**凭据只在服务器上**，工作机上只有只读快照；**命令从工作机直拨目标服务器**，serve 不在命令路径上。
 
 **鉴权（两道独立的闸，永不互通）**：
 
@@ -248,7 +248,7 @@ sshmgr pair --instance laptop
 
 ## 后续路线
 
-多机支持历经：**Phase 1**（在线 live 远程访问，Plan 10）→ Plan 12 离线只读缓存 → **Plan 42 起收敛为桥姿态**（远程 MCP 面移除，缓存形态成为唯一多机姿势）。**export/import（Plan 11，便携加密备份 / 迁移）已落地**（见 [backup-restore.md](./backup-restore.md)）。
+多机支持历经：**Phase 1**（在线 live 远程访问，Plan 10）→ Plan 12 离线只读缓存 → **Plan 42 起收敛为经桥接入**（远程 MCP 面移除，缓存形态成为唯一多机接入方式）。**export/import（Plan 11，便携加密备份 / 迁移）已落地**（见 [backup-restore.md](./backup-restore.md)）。
 
 | 计划 | 解决什么 | 状态 |
 |---|---|---|
@@ -260,7 +260,7 @@ sshmgr pair --instance laptop
 | Plan 40 · 多实例（批1 + 批2） | 同机 N agent 各授权各 profile 的独立 cache 实例（目录 + per-instance DEK + `--instance` + MAX_OFFLINE 持久化）；批2 = 首次 enroll **自动归位** + TUI `[i]` 实例切换 / 向导接入卡 + `cache config` 子命令 | ✅ 已做（本篇[「多实例（同机多 agent）」](#多实例同机多-agent-plan-40-第一批)节；doctor 感知命名实例已另行落地，见下[「边界」](#边界如实批2-更新)节） |
 | Plan 42 · 模式缩减 + 发现配对 | 4→2 模式收敛（②a 移除）；UDP 发现 + SAS 配对一条龙（`sshmgr pair`）；批2 = Web 管理 UI（手机优先，`/ui`） | ✅ 批1 已做（本篇）· 🔜 批2 |
 
-**现在：多机 = 桥姿态（权威 vault 常驻 serve + 工作机 pair 一条龙入网 + 本地只读缓存干活）；备份 / 迁移已可（export/import + Plan 13 NAS + Plan 16 `migrate-path`）；写操作收敛到管理面（broker TUI / `serve pair`，批2 上手机 Web）。**
+**现在：多机 = 经桥接入（权威 vault 常驻 serve + 工作机 pair 一条龙入网 + 本地只读缓存干活）；备份 / 迁移已可（export/import + Plan 13 NAS + Plan 16 `migrate-path`）；写操作收敛到管理面（broker TUI / `serve pair`，批2 上手机 Web）。**
 
 ---
 
@@ -1027,7 +1027,7 @@ sshmgr cache instances rm laptop-agentA    # 删一个命名实例:槽目录 + D
 
 ## 相关文档
 
-- [deployment-modes.md](./deployment-modes.md)——部署形态全景（选型总览：① 单机 / ② 多机桥姿态 + 管理面）。
+- [deployment-modes.md](./deployment-modes.md)——部署形态全景（选型总览：① 单机 / ② 多机部署 + 管理面）。
 - [quickstart-multi-machine.md](./quickstart-multi-machine.md)——多机速通（pair 一条龙版）。
 - [getting-started.md](./getting-started.md)——单机 stdio 从零到跑通（**默认模式**，第一次用先看这篇）。
 - [agent-access.md](./agent-access.md)——project token 生命周期；断连语义（stdio spawn 边界 / 离线缓存保鲜 / 到龄自废，见「断连语义」一节）。token 管理在同一台服务器上做。

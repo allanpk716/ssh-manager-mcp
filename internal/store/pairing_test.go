@@ -454,7 +454,7 @@ func TestMintPairing_ReuseRules(t *testing.T) {
 	projID := proj.ID
 
 	// 分支 2:pair_generated=1 + 同 profile → 原地 rotate。replaceInactive=true 是
-	// 真实重配对姿态:分支 1 留下的同名 active 码(零拉取)按撞名规则被收编。
+	// 真实重配对场景:分支 1 留下的同名 active 码(零拉取)按撞名规则被收编。
 	tx, _ = s.db.Begin()
 	_, token2, err := s.MintPairingCredentials(tx, "laptop", pidA, true)
 	if err != nil {

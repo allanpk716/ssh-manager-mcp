@@ -281,7 +281,7 @@ func TestPolicyAddValidation(t *testing.T) {
 
 // seedClientCacheFixture 造一台「客户端机器」:无 vault(SSHMGR_STORE 指
 // 向不存在的路径),缓存目录里有 cache.bin(带一条自定义规则与一条停用
-// 记录的快照)与 cache.auth.json(姿态探测认得它)。返回缓存目录。
+// 记录的快照)与 cache.auth.json(本机角色判定认得它)。返回缓存目录。
 func seedClientCacheFixture(t *testing.T) string {
 	t.Helper()
 	// 权威侧种子库:自定义规则 + 停用记录 + 一台服务器一个 profile(快照
@@ -316,7 +316,7 @@ func seedClientCacheFixture(t *testing.T) string {
 		t.Fatal(err)
 	}
 
-	// cache.bin(DEK 加密)+ cache.auth.json(客户端姿态探测的依据)。
+	// cache.bin(DEK 加密)+ cache.auth.json(判定本机为客户端的依据)。
 	cacheDir := t.TempDir()
 	dek, _ := store.GenerateMasterKey()
 	blob, err := vaultio.EncryptWithKey(dek, plaintext)
