@@ -9,16 +9,18 @@ package mcpserver
 import (
 	"fmt"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
 )
 
-// policyJudge 是两个执行工具共用的判定入口。本票所有服务器按 POSIX 判定;
-// 后续票接服务器条目的 shell 类型字段 (换 Evaluate 的第一参) 与快照下发的
-// 生效规则集 (换第三参) 时只改这里,不动两个调用点的时序。
+// policyJudge 是两个执行工具共用的判定入口。判定按服务器条目标注的
+// shell 类型选择语法(ticket #14;存储层已把空值归一为 POSIX,能到这里的
+// 未知值不改写——Evaluate 的保守分支判需确认,不悄悄放行)。后续票接
+// 快照下发的生效规则集(换第三参)时只改这里,不动两个调用点的时序。
 // 需确认档由命令策略后续的 GitHub Issue 在调用点接一次性确认码,本票
 // 只对拦截档动作。
-func policyJudge(command string) policy.Decision {
-	return policy.Evaluate(policy.ShellPOSIX, command, nil)
+func policyJudge(shell models.ShellType, command string) policy.Decision {
+	return policy.Evaluate(policy.ShellType(shell), command, nil)
 }
 
 // policyBlockError 把拦截结论拼成 agent 能直接向用户转述的一行错误:
