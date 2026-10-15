@@ -50,6 +50,16 @@ var criticalPOSIXPaths = map[string]bool{
 	"/Users":        true,
 }
 
+// init 把 WSL 的 Windows 盘挂载根(/mnt/<单字母>,即整块 Windows 盘
+// 的根本身,如 /mnt/c)并入上面的关键路径集合:递归删除它等于删掉
+// 整块 Windows 盘,与删根同罪;盘内的子路径(/mnt/c/Users/me/tmp)
+// 不受影响。wsl 嵌套执行的 Linux 侧判定用同一张表。
+func init() {
+	for c := 'a'; c <= 'z'; c++ {
+		criticalPOSIXPaths["/mnt/"+string(c)] = true
+	}
+}
+
 // criticalWindowsPaths 是删除判定用的 Windows 系统关键路径集合的
 // 规范化形态:盘符写死的四个路径本身,加上不带盘符的根定位写法
 // (\Windows 这类指当前盘根下的同名目录,ssh 会话几乎总在 C 盘)。

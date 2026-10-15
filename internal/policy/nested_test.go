@@ -71,9 +71,12 @@ func TestEvaluate_NestedWindowsLaunchersJudgedRecursively(t *testing.T) {
 		{"PowerShell 里的 wsl", ShellPowerShell, `powershell -Command "wsl mkfs.ext4 /dev/sdb"`, "POSIX-FORMAT"},
 		{"wsl 带自身选项", ShellPowerShell, `wsl --distribution Ubuntu rm -rf /etc`, "POSIX-CRITICAL-DELETE"},
 		{"三层跨 shell 串联", ShellWindowsCmd, `cmd /c wsl bash -c "rm -rf /etc"`, "POSIX-CRITICAL-DELETE"},
+		{"PowerShell 里 wsl 删盘挂载根", ShellPowerShell, `wsl rm -rf /mnt/c`, "POSIX-CRITICAL-DELETE"},
+		{"cmd 里 wsl 删盘挂载根", ShellWindowsCmd, `wsl rm -rf /mnt/c`, "POSIX-CRITICAL-DELETE"},
 		{"内层是普通命令放行", ShellPowerShell, `powershell -Command "Get-Date"`, ""},
 		{"cmd /c 普通命令放行", ShellWindowsCmd, `cmd /c dir C:\Windows`, ""},
 		{"wsl 内层普通命令放行", ShellPowerShell, `wsl ls -la /mnt/c`, ""},
+		{"wsl 里删盘挂载盘内子目录放行", ShellPowerShell, `wsl rm -rf /mnt/c/Users/me/tmp`, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

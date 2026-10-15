@@ -209,6 +209,8 @@ func TestEvaluate_BlocksCriticalPathDeletion(t *testing.T) {
 		{"macOS /Library", "rm -rf /Library"},
 		{"macOS /Applications", "rm -rf /Applications"},
 		{"macOS /Users", "rm -rf /Users"},
+		{"WSL 挂载的盘根本身", "rm -rf /mnt/c"},
+		{"WSL 挂载的盘根结尾斜杠", "rm -rf /mnt/d/"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -238,6 +240,7 @@ func TestEvaluate_AllowsOrdinaryDeletion(t *testing.T) {
 		{"循环删除日志", `for f in *.log; do rm "$f"; done`},
 		{"rmdir", "rmdir /tmp/empty"},
 		{"删 home 下的用户目录", "rm -rf /home/deployer/build"},
+		{"删 WSL 挂载盘里的子目录", "rm -rf /mnt/c/Users/me/tmp"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
