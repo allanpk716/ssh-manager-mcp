@@ -42,8 +42,8 @@ type ShellType string
 const (
 	// ShellPOSIX 覆盖 Linux 与 macOS 的 shell(bash / sh / zsh 等)。
 	ShellPOSIX ShellType = "posix"
-	// ShellPowerShell 与 ShellWindowsCmd 的判定由命令策略后续的 GitHub Issue 实现;
-	// 在此之前 Evaluate 对它们保守地返回需确认,而不是悄悄放行。
+	// ShellPowerShell 与 ShellWindowsCmd 共用一套 Windows 默认规则
+	// (粗略分段 + 不区分大小写的命令名匹配,见 windows.go 与 rules_windows.go)。
 	ShellPowerShell ShellType = "powershell"
 	ShellWindowsCmd ShellType = "cmd"
 )
@@ -107,12 +107,9 @@ func Evaluate(shell ShellType, command string, rules *RuleSet) Decision {
 	case ShellPOSIX:
 		return evaluatePOSIX(command, rules)
 	case ShellPowerShell, ShellWindowsCmd:
-		// Windows 两类 shell 的判定由命令策略后续的 GitHub Issue 实现;在那之前宁可多问一次,
-		// 不悄悄放行。
-		return Decision{
-			Disposition: DispositionConfirmRequired,
-			Explanation: "this shell type is not judged yet (coming in a later release); ask the owner to confirm manually",
-		}
+		// PowerShell 与 cmd 没有可用的语法解析库,按分隔符粗略分段后判定,
+		// 两类 shell 共用同一套 Windows 默认规则。
+		return evaluateWindows(command, rules)
 	default:
 		return Decision{
 			Disposition: DispositionConfirmRequired,
