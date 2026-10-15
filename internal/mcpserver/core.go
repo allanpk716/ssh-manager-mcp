@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -92,6 +93,7 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 // owner-facing caller — currently the owner path is internal/cli/ssh.go).
 func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeout time.Duration, hk ...sshbroker.HostKeyStore) (out ExecOutput, err error) {
 	var status string
+	var action = "exec" // 命令策略拦截档换用新动作 exec-blocked (Status 存命中规则编号)
 	var exitCode int
 	start := time.Now()
 	defer func() {
@@ -99,7 +101,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 			status = "error"
 		}
 		_ = st.WriteAudit(store.AuditRow{
-			TS: start, ProjectID: projectID, ServerID: serverID, Action: "exec",
+			TS: start, ProjectID: projectID, ServerID: serverID, Action: action,
 			Command: command, Sudo: sudo, Status: status, ExitCode: exitCode, DurationMS: time.Since(start).Milliseconds(),
 		})
 	}()
@@ -117,6 +119,16 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	if serr != nil || srv == nil {
 		status = "error"
 		err = fmt.Errorf("server %s not found", serverID)
+		return
+	}
+
+	// 命令策略 (ticket #10 / ADR 0007):拦截档命令在取凭据、建连接之前拒绝——
+	// 不建立 SSH 连接,命令一个字节都不会送到服务器。审计行换用新动作
+	// exec-blocked,Status 存命中规则编号,Command 保持命令原文。需确认档
+	// 由命令策略后续的 GitHub Issue 在此接一次性确认码。
+	if d := policyJudge(command); d.Disposition == policy.DispositionBlock {
+		action, status = "exec-blocked", d.RuleID
+		err = policyBlockError(d)
 		return
 	}
 
