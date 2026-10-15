@@ -77,7 +77,7 @@
 - ~~**大文件分块续传 API**：#14 的 8 MiB 内联覆盖配置/脚本/小产物；更大的先落到 broker 可达位置或服务器侧拉取。~~ **已落地（Plan 47 relay_file = grilling 编目 #46「大文件分块续传 API」销项, 2026-09-06 实现; spec 四轮盲评收敛 rev4 定稿 + 8 任务 SDD; spec/plan 见 docs/superpowers/{specs,plans}/2026-09-06-plan-47-relay*; 剩余 owner 真机 GW 验收（销项实证）: A=阿里云↔B=LAN 1–5GB 级实测 + kill broker 中断续传演练（重跑补块完成 + file_sha256 对上）+ Windows 目标 StatVFS unavailable / posix-rename 实测; 发版批次 owner 拍板）**。终形：`relay_file` 第 12 工具——零暂存分块流式（broker 盘零用户数据、内存 MiB 级），断点续传锚在接收端 Manifest（broker 任务表保持内存态不持久化，重启重跑自愈），`from_server_id` 空 = broker 本机盘，task_id/exec_output/exec_stop 三件套，72h 常量时长，双摘要验证配方（byte0→EOF 报 file_sha256 对 sha256sum / resumed 报块 merkle 根）。附带销项：**「部署 exe 分发通道债」根因（upload_file 1 MiB 单文件上限）已由 relay 本机源路径解除**（Plan 44 `update --file` 此前已给自更新侧解法；relay 补上通用大文件根因）。
 - **跨端审计聚合**：等真实取证需求再说（sidecar 本身是 JSONL）。
 - **隧道持久化 / 自动重连 / 命名**：见 #15 不做项。
-- **运行时级 IP 隐藏**（命令过滤/输出脱敏/网络盲化）与**服务器出网管控**：不可行且杀死可用性；"不暴露"承诺边界 = 接口级（vault/工具层不主动披露）。
+- **运行时级 IP 隐藏**（命令过滤/输出脱敏/网络盲化）与**服务器出网管控**：不可行且杀死可用性；"不暴露"承诺边界 = 接口级（vault/工具层不主动披露）。补注（2026-10-15）：本条「命令过滤」的目的是对 agent 隐藏服务器地址；后来落地的**命令策略**（agent 执行命令前的严重后果兜底护栏）是另一件事，不隐藏任何地址——取舍见 [ADR 0007](./adr/0007-command-policy-client-enforced-guardrail.md)。
 - **(d) 类加固**（agent 宿主机整体沦陷，anti-debug/内存加密等）：现有 broker 架构（本机零明文凭据、凭据只在权威端 vault）即该层最优解，不再追加投入。
 
 ## Plan 39 残余登记（2026-08-26）
