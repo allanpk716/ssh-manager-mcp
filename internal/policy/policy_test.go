@@ -435,13 +435,14 @@ func TestEvaluate_DisabledDefaultRuleByID(t *testing.T) {
 	}
 }
 
-// TestEvaluate_UnimplementedShellsNeedConfirmation:尚未实现判定的
-// shell 类型(PowerShell、cmd)保守返回需确认,不悄悄放行。
-func TestEvaluate_UnimplementedShellsNeedConfirmation(t *testing.T) {
-	for _, shell := range []ShellType{ShellPowerShell, ShellWindowsCmd} {
-		got := Evaluate(shell, "Get-ChildItem", nil)
-		if got.Disposition != DispositionConfirmRequired {
-			t.Fatalf("Evaluate(%s) = %+v, want 需确认", shell, got)
-		}
+// TestEvaluate_UnknownShellNeedsConfirmation:无法识别的 shell 类型保守
+// 返回需确认,不悄悄放行(PowerShell 与 cmd 的判定已由 Windows 规则实现)。
+func TestEvaluate_UnknownShellNeedsConfirmation(t *testing.T) {
+	got := Evaluate(ShellType("fish"), "Get-ChildItem", nil)
+	if got.Disposition != DispositionConfirmRequired {
+		t.Fatalf("Evaluate(fish) = %+v, want 需确认", got)
+	}
+	if got.Explanation == "" {
+		t.Fatalf("需确认必须带说明,got %+v", got)
 	}
 }
