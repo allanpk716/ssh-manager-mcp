@@ -7,3 +7,17 @@
 1. **禁止使用非常见缩写、生僻词。** 只用大众/行业通行的词；不常见的缩写一律写全称（例：写「主机密钥指纹」，不写「hostkey fp」）。
 2. **若特定名称需要从前文找到解释，则禁止使用该名称，使用完整释义。** 某个名称若要靠读者回翻前文才能懂，就不许再用这个名字，改为直接写出它的完整含义。每一处使用都应当自含可懂。
    - 例外：已在 `CONTEXT.md` 定义的领域词可直接使用（它们有固定的定义入口，不需要依赖「前文」）。
+
+## Agent skills
+
+### Issue tracker
+
+需求与票以 GitHub Issues 管理(`gh` 命令行)。See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+默认五种分诊标签(needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix)。See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+单上下文:领域术语在根目录 `CONTEXT.md`,ADR 在 `docs/adr/`。See `docs/agents/domain.md`.
