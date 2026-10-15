@@ -116,7 +116,7 @@ func TestDisabledDefaultsCRUD(t *testing.T) {
 	}
 }
 
-// TestPolicyTablesReadOnly:客户端水合出的只读缓存库上,一切策略变更
+// TestPolicyTablesReadOnly:客户端由快照载入的只读缓存库上,一切策略变更
 // 结构性返回 ErrReadOnly——「客户端只读」不靠自觉。
 func TestPolicyTablesReadOnly(t *testing.T) {
 	s := newTestStore(t)

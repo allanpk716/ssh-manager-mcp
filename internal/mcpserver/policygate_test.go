@@ -215,7 +215,7 @@ func TestExecPolicyBlockedBeforeCredentialLookup(t *testing.T) {
 // TestExecBlockedAuditGoesOfflineSidecar: 客户端离线 (只读 store) 时拦截审计行
 // 进现有离线审计侧文件 (JSONL),不碰缓存库。两个工具各一行。
 func TestExecBlockedAuditGoesOfflineSidecar(t *testing.T) {
-	// 可写 fixture 库 → 快照 → 只读水合库 + 侧文件 (现有 cache 桥的装配形态)。
+	// 可写 fixture 库 → 快照 → 只读镜像库 + 侧文件 (现有 cache 桥的装配形态)。
 	st := newStore(t)
 	srvID, _ := st.AddServer(&models.Server{
 		Name: "off", Host: "offline.example.internal", Port: 22, User: "u",

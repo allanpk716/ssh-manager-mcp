@@ -605,7 +605,7 @@ sshmgr cache-tokens revoke laptop
 
 > ⚠️ **永离线的失窃机，唯一根治仍是轮换服务器凭据**：销毁要"回连"才兑现——永不离线的机器持有"密文 + DEK + 二进制"三件套，没有任何服务端机制能远程废掉其本地解密能力。**视敏感度轮换该机接触过的服务器凭据**（`servers edit <name> --password/--key`），必要时 `projects rotate` 换 project token。详见 [threat-model.md §3.6](./threat-model.md)。
 
-**Lazy 生效，运行中会话不断**：已水合的 store 在内存继续服务至进程退出；隔离在 **spawn 边界**生效（与 revoke 懒语义一致）。
+**Lazy 生效，运行中会话不断**：已从快照载入的 store 在内存继续服务至进程退出；隔离在 **spawn 边界**生效（与 revoke 懒语义一致）。
 
 ### 离线缓存到龄自废（SSHMGR_CACHE_MAX_OFFLINE）
 

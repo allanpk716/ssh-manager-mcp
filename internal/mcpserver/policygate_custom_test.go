@@ -1,13 +1,13 @@
 package mcpserver
 
 // 命令策略·生效规则集接入执行工具(ticket #15 / ADR 0007):policyJudge
-// 从执行的 store(权威库或客户端水合出的只读镜像库)读自定义规则与停用
+// 从执行的 store(权威库或客户端由快照载入的只读镜像库)读自定义规则与停用
 // 记录,判定不再是「只有内置默认规则」。行为断言——
 //   - 自定义规则(结构化与正则各一例)改变执行工具结果:原本放行的
 //     命令被拦,一行错误含自定义规则编号;
 //   - 停用一条默认规则后该规则不再命中(命令照常执行);恢复后重新命中;
-//   - 旧快照(无策略段)水合出的客户端库上,内置默认规则照常拦截;
-//   - 带自定义规则的快照水合出的只读库(客户端镜像)同样按规则判定。
+//   - 旧快照(无策略段)载入成的客户端库上,内置默认规则照常拦截;
+//   - 由带自定义规则的快照载入的只读库(客户端镜像)同样按规则判定。
 
 import (
 	"context"
@@ -145,7 +145,7 @@ func TestExecPolicyDisabledDefaultRule_NoLongerMatches(t *testing.T) {
 }
 
 // TestExecPolicyClientMirror_JudgesBySnapshotRules:客户端只读镜像——快照
-// 里的自定义规则与停用记录经水合库生效(客户端离线执行侧与权威端同一条
+// 里的自定义规则与停用记录经由快照载入的库生效(客户端离线执行侧与权威端同一条
 // 判定代码路径)。
 func TestExecPolicyClientMirror_JudgesBySnapshotRules(t *testing.T) {
 	src := newStore(t)

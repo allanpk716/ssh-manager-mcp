@@ -3,7 +3,7 @@ package cli
 // 命令策略·服务器 shell 类型字段(ticket #14)随 cache pull 到达客户端的
 // 端到端测试:权威端 serve 下发的裁剪快照(ExportSnapshotForProfile)携带
 // 字段 → cache pull 落盘 cache.bin → 客户端经 LoadCacheSnapshotFor 读回 →
-// 水合进只读镜像库后 GetServerByName 读到同一标注。写法沿用
+// 载入只读镜像库后 GetServerByName 读到同一标注。写法沿用
 // cache_test.go 的 standUpServe + TestCachePull_WritesEncryptedCacheAndMeta。
 
 import (
@@ -60,7 +60,7 @@ func standUpServeWithShell(t *testing.T) (url, cacheToken string) {
 	return srv.URL, code
 }
 
-// mk0 生成水合库用的主密钥(store.Open 需要)。
+// mk0 生成镜像库用的主密钥(store.Open 需要)。
 func mk0(t *testing.T) []byte {
 	t.Helper()
 	mk, err := store.GenerateMasterKey()
@@ -71,7 +71,7 @@ func mk0(t *testing.T) []byte {
 }
 
 // TestCachePull_CarriesShellType: pull 之后客户端读回的快照带 shell 类型,
-// 水合后的镜像库里 GetServerByName 读到 PowerShell(客户端执行侧据此选
+// 载入后的镜像库里 GetServerByName 读到 PowerShell(客户端执行侧据此选
 // 拆解语法)。
 func TestCachePull_CarriesShellType(t *testing.T) {
 	url, code := standUpServeWithShell(t)
@@ -105,7 +105,7 @@ func TestCachePull_CarriesShellType(t *testing.T) {
 		t.Fatalf("pulled snapshot missing winbox: %+v", snap.Servers)
 	}
 
-	// 水合进镜像库(桥·缓存形态的装配 guts),字段原样可读。
+	// 载入镜像库(桥·缓存形态的装配 guts),字段原样可读。
 	hyd, err := store.Open(filepath.Join(t.TempDir(), "hyd.db"), mk0(t))
 	if err != nil {
 		t.Fatal(err)

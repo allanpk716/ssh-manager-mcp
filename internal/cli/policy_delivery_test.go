@@ -4,7 +4,7 @@ package cli
 //   - 备份与恢复携带规则:`sshmgr export` → `sshmgr import` 后,规则与停用
 //     记录原样到达恢复库,试算按它们判定;
 //   - 规则随 cache pull 到达客户端并生效:权威库导出的裁剪快照经真实
-//     HTTP 拉取落成 cache.bin,再按 `mcp --cache` 的水合形态(导入临时
+//     HTTP 拉取落成 cache.bin,再按 `mcp --cache` 的快照载入方式(导入临时
 //     只读库)驱动执行工具——自定义规则拦下、停用的默认规则放行。
 
 import (
@@ -128,7 +128,7 @@ func TestPolicyBackupRestore_KeepsRules(t *testing.T) {
 // TestCachePull_DeliversPolicyRules_AndTheyTakeEffect:验收用例——规则与
 // 停用记录随 `cache pull` 到达客户端并生效。权威侧用真实导出路径
 // (ExportSnapshotForProfile)出快照,经 HTTP 拉取落成 cache.bin,再按
-// `mcp --cache` 的水合形态(快照 → 临时只读库)驱动执行工具判定。
+// `mcp --cache` 的快照载入方式(快照 → 临时只读库)驱动执行工具判定。
 func TestCachePull_DeliversPolicyRules_AndTheyTakeEffect(t *testing.T) {
 	// 权威库:服务器 + profile + 授权 + 一条自定义规则 + 一条停用记录。
 	dir := t.TempDir()
@@ -207,7 +207,7 @@ func TestCachePull_DeliversPolicyRules_AndTheyTakeEffect(t *testing.T) {
 		t.Fatalf("pulled snapshot disabled defaults = %v", loaded.PolicyDisabledDefaults)
 	}
 
-	// 生效:按 `mcp --cache` 的水合形态(导入临时只读库)驱动执行工具。
+	// 生效:按 `mcp --cache` 的快照载入方式(导入临时只读库)驱动执行工具。
 	hyd := newPolicyHydratedStore(t, loaded)
 	var gotSrvID, gotPid string
 	for _, sv := range loaded.Servers {
@@ -236,7 +236,7 @@ func loadCacheSnapshotDefault(t *testing.T) *store.Snapshot {
 	return snap
 }
 
-// newPolicyHydratedStore 按 `mcp --cache` 的水合形态造客户端只读库:
+// newPolicyHydratedStore 按 `mcp --cache` 的快照载入方式造客户端只读库:
 // 临时库 + 丢弃型主键 + ImportSnapshot + SetReadOnly。
 func newPolicyHydratedStore(t *testing.T, snap *store.Snapshot) *store.Store {
 	t.Helper()
