@@ -170,6 +170,7 @@ func TestEvaluate_WindowsBlocksCriticalPathDeletion(t *testing.T) {
 		{"正斜杠路径", ShellPowerShell, "Remove-Item -Recurse C:/Windows"},
 		{"双反斜杠与结尾斜杠", ShellPowerShell, "Remove-Item -Recurse C:\\\\Windows\\\\"},
 		{"盘根下通配", ShellPowerShell, "Remove-Item -Recurse C:\\*"},
+		{"盘根下通配带结尾斜杠", ShellWindowsCmd, "rd /s /q C:\\*\\"},
 		{"关键路径下通配", ShellWindowsCmd, "rd /s /q C:\\Windows\\*"},
 		{"通配加点扩展", ShellWindowsCmd, "del /s C:\\Users\\*.*"},
 		{"点段", ShellPowerShell, "Remove-Item -Recurse C:\\.\\Users"},
@@ -209,6 +210,8 @@ func TestEvaluate_WindowsAllowsOrdinaryDeletion(t *testing.T) {
 		{"不递归删关键路径里的文件", ShellPowerShell, "Remove-Item C:\\Windows\\notes.txt"},
 		{"cmd 删子目录树", ShellWindowsCmd, "rd /s /q C:\\Temp\\build"},
 		{"相对路径递归删", ShellPowerShell, "Remove-Item -Recurse .\\build"},
+		{"当前目录通配", ShellWindowsCmd, "del /s *"},
+		{"PowerShell 当前目录通配", ShellPowerShell, "Remove-Item -Recurse *"},
 		{"遍历删除当前目录日志", ShellWindowsCmd, `for %f in (*.log) do del "%f"`},
 		{"cmd 带属性过滤的删除", ShellWindowsCmd, "del /a:h *.log"},
 	}

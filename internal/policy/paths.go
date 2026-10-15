@@ -84,6 +84,12 @@ func normalizeWindowsPath(path string) string {
 		absolute = true
 	}
 
+	// 结尾的反斜杠先剥掉(至少保留定位符自身):C:\*\ 与 C:\* 同等,
+	// 都指盘根;纯相对路径的结尾斜杠同样不影响形态。
+	for len(p) > 1 && strings.HasSuffix(p, "\\") {
+		p = strings.TrimSuffix(p, "\\")
+	}
+
 	// 结尾的通配符段剥掉;剥到没有斜杠分隔就停(纯相对通配如 *.log
 	// 不是盘根,保留相对形态)。
 	for {
@@ -127,16 +133,27 @@ func normalizeWindowsPath(path string) string {
 // 结尾斜杠,按字面消化 .. 段,结尾的通配符段按其父路径对待(/* 与 /
 // 同等)。它只做文字层面的整理,不碰文件系统。
 func normalizePOSIXPath(path string) string {
-	// 结尾的通配符段去掉:/etc/* 与 /etc 同等对待;全剥完后只剩根。
+	// 是否指根只看开头:结尾斜杠与通配符段都剩下,不改写这一点。
+	absolute := strings.HasPrefix(path, "/")
+	// 结尾斜杠先剥掉(根自身保留):/*/ 与 /* 同等,都指根。
+	for len(path) > 1 && strings.HasSuffix(path, "/") {
+		path = strings.TrimSuffix(path, "/")
+	}
+	// 结尾的通配符段去掉:/etc/* 与 /etc 同等对待;剥完后只剩斜杠即是根。
 	for strings.HasSuffix(path, "*") {
 		path = strings.TrimSuffix(path, "*")
 		path = strings.TrimSuffix(path, "/")
 	}
+	if !absolute {
+		// 相对路径(不含前导斜杠)起点是当前目录,执行前可以确定;
+		// 剥完通配符段后即使为空,也停在当前目录形态,绝不升成根。
+		if path == "" || path == "." {
+			return "."
+		}
+		return path
+	}
 	if path == "" {
 		return "/"
-	}
-	if !strings.HasPrefix(path, "/") {
-		return path
 	}
 	var segs []string
 	for _, seg := range strings.Split(path, "/") {
