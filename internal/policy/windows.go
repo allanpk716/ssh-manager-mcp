@@ -32,17 +32,18 @@ type winEvidence struct {
 }
 
 // evaluateWindows 是 PowerShell 与 cmd 共用的判定入口:粗略分段后逐段
-// 应用默认规则,整体取最严重的处置,规则编号对应最严重的那条。
+// 应用默认规则,再过适用的自定义规则,整体取最严重的处置,规则编号对
+// 应最严重的那条。shell 参数用于自定义规则的适用 shell 集合过滤。
 // 嵌套执行(`powershell -Command "…"` 等)的递归判定由命令策略后续的
 // GitHub Issue 在同一分段事实上加入,不改这里的入口。
-func evaluateWindows(command string, rules *RuleSet) Decision {
+func evaluateWindows(shell ShellType, command string, rules *RuleSet) Decision {
 	ev := &winEvidence{rawCommand: command}
 	for _, seg := range splitWindowsSegments(command) {
 		ev.segments = append(ev.segments, parseWinSegment(seg))
 	}
 	var worst Decision
 	for i := range ev.segments {
-		worst = merge(worst, applyWindowsRules(ev, &ev.segments[i], rules))
+		worst = merge(worst, applyWindowsRules(ev, &ev.segments[i], shell, rules))
 	}
 	return worst
 }

@@ -245,3 +245,80 @@ func TestDefaultRuleInfos(t *testing.T) {
 		}
 	}
 }
+
+// TestCustomRule_WindowsJudging:自定义规则对 PowerShell 与 cmd 的判定
+// 同样生效——命令名匹配不区分大小写并按 Windows 名字规范化,shell 适用
+// 集合区分两类 Windows shell,正则对整条命令原文匹配。
+func TestCustomRule_WindowsJudging(t *testing.T) {
+	rules := &RuleSet{CustomRules: []CustomRule{{
+		ID:          "NO-RESTART-COMPUTER",
+		Shells:      []ShellType{ShellPowerShell},
+		Commands:    []string{"Restart-Computer"}, // 大小写任意写,匹配按小写规范化
+		Args:        []string{"-Force"},           // 参数条件同样不区分大小写
+		Disposition: DispositionBlock,
+		Explanation: "reboots are scheduled by the owner",
+		Alternative: "ask the owner to schedule a reboot window",
+	}, {
+		ID:          "CMD-NO-DEFRAG",
+		Shells:      []ShellType{ShellWindowsCmd},
+		Regex:       `(?i)defrag\s+c:`,
+		Disposition: DispositionBlock,
+		Explanation: "defrag runs are scheduled by the owner",
+		Alternative: "ask the owner to schedule it",
+	}}}
+	// PowerShell:结构化规则命中(命令名大小写不敏感)。
+	d := Evaluate(ShellPowerShell, "restart-computer -force", rules)
+	if d.Disposition != DispositionBlock || d.RuleID != "NO-RESTART-COMPUTER" {
+		t.Fatalf("powershell restart-computer = %+v, want block/NO-RESTART-COMPUTER", d)
+	}
+	// cmd:同一条 PowerShell 专用规则不适用;cmd 专用正则规则命中。
+	if d := Evaluate(ShellWindowsCmd, "shutdown /r", rules); d.Disposition != DispositionAllow {
+		t.Fatalf("cmd shutdown (powershell-only rule) = %+v, want allow", d)
+	}
+	d = Evaluate(ShellWindowsCmd, "defrag C: /U", rules)
+	if d.Disposition != DispositionBlock || d.RuleID != "CMD-NO-DEFRAG" {
+		t.Fatalf("cmd defrag = %+v, want block/CMD-NO-DEFRAG", d)
+	}
+	if d := Evaluate(ShellPowerShell, "defrag C: /U", rules); d.Disposition != DispositionAllow {
+		t.Fatalf("powershell defrag (cmd-only rule) = %+v, want allow", d)
+	}
+	// 参数不逐字出现就不命中(Windows 参数比较不区分大小写)。
+	if d := Evaluate(ShellPowerShell, "restart-computer", rules); d.Disposition != DispositionAllow {
+		t.Fatalf("powershell restart-computer without -force = %+v, want allow", d)
+	}
+}
+
+// TestCustomRule_WindowsPathCategory:目标路径类别 critical 在 Windows 判定
+// 里用 Windows 的关键路径表(大小写与正反斜杠等价)。
+func TestCustomRule_WindowsPathCategory(t *testing.T) {
+	rules := &RuleSet{CustomRules: []CustomRule{{
+		ID:           "NO-MOVE-INTO-CRITICAL",
+		Shells:       []ShellType{ShellPowerShell},
+		Commands:     []string{"Move-Item"},
+		PathCategory: "critical",
+		Disposition:  DispositionBlock,
+		Explanation:  "system directories are the owner's territory",
+	}}}
+	if d := Evaluate(ShellPowerShell, "Move-Item -Path C:/Temp/x -Destination 'C:/Windows'", rules); d.Disposition != DispositionBlock {
+		t.Fatalf("move into C:/Windows = %+v, want block", d)
+	}
+	if d := Evaluate(ShellPowerShell, "Move-Item C:/Temp/a C:/Temp/b", rules); d.Disposition != DispositionAllow {
+		t.Fatalf("move inside C:/Temp = %+v, want allow", d)
+	}
+}
+
+// TestDefaultRuleIDs include WIN rules — ls/disable must know them post-#12.
+func TestDefaultRuleIDsIncludeWindows(t *testing.T) {
+	for _, want := range []string{"WIN-FORMAT", "WIN-PARTITION", "WIN-CRITICAL-DELETE", "WIN-DATA-WIPE", "WIN-DELETE-TARGET-UNKNOWN", "WIN-LOCKOUT", "WIN-DYNAMIC-EXEC"} {
+		found := false
+		for _, id := range DefaultRuleIDs() {
+			if id == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("DefaultRuleIDs missing windows rule %q", want)
+		}
+	}
+}

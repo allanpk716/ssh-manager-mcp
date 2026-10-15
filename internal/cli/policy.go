@@ -253,7 +253,7 @@ func newPolicyAddCmd() *cobra.Command {
 	c.Flags().StringSlice("shell", nil, "applicable shell types (posix, powershell, cmd); repeat or comma-separate; empty = all shells")
 	c.Flags().StringSlice("command", nil, "command name or alias the rule applies to; repeat or comma-separate; empty = not limited by command name")
 	c.Flags().StringSlice("arg", nil, "argument condition: must appear verbatim among the command's arguments; repeat or comma-separate")
-	c.Flags().String("path-category", "", "target path category: critical (a system-critical path) or disk (a raw disk device under /dev/); empty = any path")
+	c.Flags().String("path-category", "", "target path category: critical (a system-critical path) or disk (a raw disk device under /dev/, POSIX shells only; it never matches on Windows); empty = any path")
 	c.Flags().String("regex", "", "advanced option: regular expression matched against the whole command text (structured fields stay in effect alongside)")
 	c.Flags().String("disposition", "", "what happens when the rule fires: block or confirm")
 	_ = c.MarkFlagRequired("disposition")

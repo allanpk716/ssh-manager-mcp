@@ -182,11 +182,19 @@ type RuleInfo struct {
 }
 
 // DefaultRuleInfos 返回全部内置默认规则的描述(按声明顺序,编号一经
-// 发布不可更改)。PowerShell 与 cmd 的默认规则由命令策略后续的
-// GitHub Issue 加入本清单。
+// 发布不可更改):POSIX 一套 + PowerShell 与 cmd 共用的一套(WIN- 前缀)。
+// 列出命令与停用编号校验用它。
 func DefaultRuleInfos() []RuleInfo {
-	out := make([]RuleInfo, 0, len(defaultPOSIXRules))
+	out := make([]RuleInfo, 0, len(defaultPOSIXRules)+len(defaultWindowsRules))
 	for _, r := range defaultPOSIXRules {
+		out = append(out, RuleInfo{
+			ID:          r.id,
+			Disposition: r.disposition,
+			Explanation: r.explanation,
+			Alternative: r.alternative,
+		})
+	}
+	for _, r := range defaultWindowsRules {
 		out = append(out, RuleInfo{
 			ID:          r.id,
 			Disposition: r.disposition,
@@ -206,4 +214,60 @@ func DefaultRuleIDs() []string {
 		out = append(out, i.ID)
 	}
 	return out
+}
+
+// matchCustomWindows 报告一条自定义规则是否命中当前这段 Windows 简单
+// 命令。语义与 POSIX 侧对齐,并遵循 Windows 的匹配惯例:命令名与参数
+// 比较不区分大小写;目标路径类别 critical 用 Windows 关键路径表;disk
+// 类别是 POSIX 的 /dev/ 磁盘设备概念,Windows 判定不命中(命令行帮助
+// 文案已写明)。正则对整条命令原文匹配。
+func matchCustomWindows(r CustomRule, rawCommand string, seg *winSegment) bool {
+	if len(r.Commands) > 0 {
+		name := seg.name // 已小写规范化
+		hit := false
+		for _, c := range r.Commands {
+			if normalizeWinCommandName(c) == name {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			return false
+		}
+	}
+	for _, want := range r.Args {
+		w := strings.ToLower(want)
+		found := false
+		for _, a := range seg.args {
+			if !a.dynamic && strings.ToLower(a.text) == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	if r.PathCategory == PathCategoryCritical {
+		critical := false
+		for _, a := range seg.args {
+			if !a.dynamic && criticalWindowsPaths[normalizeWindowsPath(a.text)] {
+				critical = true
+				break
+			}
+		}
+		if !critical {
+			return false
+		}
+	}
+	if r.Regex != "" {
+		re, err := regexp.Compile(r.Regex)
+		if err != nil {
+			return false
+		}
+		if !re.MatchString(rawCommand) {
+			return false
+		}
+	}
+	return true
 }

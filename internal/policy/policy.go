@@ -159,7 +159,7 @@ func Evaluate(shell ShellType, command string, rules *RuleSet) Decision {
 	case ShellPowerShell, ShellWindowsCmd:
 		// PowerShell 与 cmd 没有可用的语法解析库,按分隔符粗略分段后判定,
 		// 两类 shell 共用同一套 Windows 默认规则。
-		return evaluateWindows(command, rules)
+		return evaluateWindows(shell, command, rules)
 	default:
 		return Decision{
 			Disposition: DispositionConfirmRequired,

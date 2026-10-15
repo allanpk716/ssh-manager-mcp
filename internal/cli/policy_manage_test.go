@@ -411,3 +411,37 @@ func TestPolicyVaultAndSingleMachineSamePath(t *testing.T) {
 		t.Fatalf("single-machine policy test must judge by the local vault, got:\n%s", out.String())
 	}
 }
+
+// TestPolicyWindowsRules_ListAndDisable:合并 #12 后,Windows 默认规则
+// (WIN- 前缀)进列出面,停用/恢复按编号同样可用。
+func TestPolicyWindowsRules_ListAndDisable(t *testing.T) {
+	newPolicyVaultEnv(t)
+	out, err := runCLI(t, "policy", "ls")
+	if err != nil {
+		t.Fatalf("policy ls: %v", err)
+	}
+	if !strings.Contains(out.String(), "WIN-FORMAT") || !strings.Contains(out.String(), "WIN-LOCKOUT") {
+		t.Fatalf("policy ls must list the windows default rules too, got:\n%s", out.String())
+	}
+	// 停用 WIN-FORMAT 后,Windows 判定里它不再命中;恢复后重新命中。
+	if out, err = runCLI(t, "policy", "disable", "WIN-FORMAT"); err != nil {
+		t.Fatalf("policy disable WIN-FORMAT: %v\n%s", err, out.String())
+	}
+	out, err = runCLI(t, "policy", "test", "--shell", "powershell", "Format-Volume -DriveLetter D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "放行") {
+		t.Fatalf("disabled WIN-FORMAT must stop matching, got:\n%s", out.String())
+	}
+	if out, err = runCLI(t, "policy", "enable", "WIN-FORMAT"); err != nil {
+		t.Fatalf("policy enable WIN-FORMAT: %v\n%s", err, out.String())
+	}
+	out, err = runCLI(t, "policy", "test", "--shell", "powershell", "Format-Volume -DriveLetter D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "拦截") || !strings.Contains(out.String(), "WIN-FORMAT") {
+		t.Fatalf("re-enabled WIN-FORMAT must match again, got:\n%s", out.String())
+	}
+}
