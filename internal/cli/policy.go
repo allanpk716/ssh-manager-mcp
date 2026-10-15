@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 	"ssh-manager-mcp/internal/models"
 	"strings"
 
@@ -65,11 +66,11 @@ var errPolicyClientRefused = fmt.Errorf("this machine is a cache client: command
 
 // loadEffectiveRulesForJudge 取试算用的生效规则集:
 //   - 权威端:打开 vault 组装(读表失败如实报错,不静默丢自定义规则);
-//   - 客户端:读本地缓存快照(离线即最后一次拉到的形态);读不到时退回
-//     内置默认规则并在标准错误提示一句;
+//   - 客户端:读本地缓存快照(离线即最后一次拉到的形态),缓存槽的选法
+//     见 loadPolicyClientSnapshot;
 //   - 无数据机器:内置默认规则。
-func loadEffectiveRulesForJudge(stderr io.Writer) (*policy.RuleSet, error) {
-	role, err := resolvePolicyRole()
+func loadEffectiveRulesForJudge(stderr io.Writer, instance string) (*policy.RuleSet, error) {
+	role, err := resolvePolicyRoleFor(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -82,15 +83,71 @@ func loadEffectiveRulesForJudge(stderr io.Writer) (*policy.RuleSet, error) {
 		defer st.Close()
 		return policymanage.EffectiveRuleSet(st)
 	case policyRoleClient:
-		snap, err := clientops.LoadCacheSnapshotFor("")
+		snap, err := loadPolicyClientSnapshot(stderr, instance, "judging")
 		if err != nil {
-			fmt.Fprintf(stderr, "note: local cache snapshot unreadable (%v) — judging with the built-in default rules only; run `cache pull` to receive the owner's rules\n", err)
+			return nil, err
+		}
+		if snap == nil {
 			return nil, nil
 		}
 		return policymanage.EffectiveRuleSetFromSnapshot(snap), nil
 	default:
+		if instance != "" {
+			return nil, errPolicyNoSuchInstance(instance)
+		}
 		return nil, nil
 	}
+}
+
+// errPolicyNoSuchInstance:未登记的机器上点名了缓存实例。
+func errPolicyNoSuchInstance(instance string) error {
+	return fmt.Errorf("cache instance %q not found — this machine has no cache instances (`cache status` lists them)", instance)
+}
+
+// resolvePolicyRoleFor 在 resolvePolicyRole 之上校验 --instance:它只在
+// 客户端上有意义(权威端读 vault,给了就报错,不静默忽略),并与
+// SSHMGR_CACHE_DIR / SSHMGR_CACHE_DEK 互斥、名字过白名单。
+func resolvePolicyRoleFor(instance string) (policyRole, error) {
+	if err := checkInstanceFlag(instance); err != nil {
+		return 0, err
+	}
+	role, err := resolvePolicyRole()
+	if err != nil {
+		return 0, err
+	}
+	if instance != "" && role == policyRoleAuthority {
+		return 0, fmt.Errorf("--instance selects a cache instance on a cache client, but this machine holds the vault (authoritative machine or single-machine use) — its rules are read from the vault; drop --instance")
+	}
+	return role, nil
+}
+
+// loadPolicyClientSnapshot 读客户端的缓存快照给列出与试算用。what 是
+// 退回提示里的动词(listing / judging)。
+//   - 给了 --instance:读该命名实例;读不到如实报错,不退回内置默认规则。
+//   - 没给:读默认槽。默认槽没有缓存而本机有命名实例时报错并列出实例名
+//     ——静默退回内置默认规则会漏掉权威端下发的自定义规则,试算与 agent
+//     的真实执行不一致;即使只有一个命名实例也不替用户选(与 `mcp --cache`
+//     一致)。SSHMGR_CACHE_DIR 整体改写了默认槽,设了它就不看命名实例。
+//   - 默认槽有缓存但读不了:提示一句,返回 nil(调用方按内置默认规则)。
+func loadPolicyClientSnapshot(stderr io.Writer, instance, what string) (*store.Snapshot, error) {
+	if instance != "" {
+		snap, err := clientops.LoadCacheSnapshotFor(instance)
+		if err != nil {
+			return nil, fmt.Errorf("cache instance %q: %w", instance, err)
+		}
+		return snap, nil
+	}
+	if os.Getenv("SSHMGR_CACHE_DIR") == "" && !cachePresentFor("") {
+		if names, lerr := clientops.ListInstances(); lerr == nil && len(names) > 0 {
+			return nil, fmt.Errorf("no cache in the default slot, but %d named instance(s) exist: %s — pass --instance <name> to read that instance's rules (the instance is never guessed)", len(names), strings.Join(names, ", "))
+		}
+	}
+	snap, err := clientops.LoadCacheSnapshotFor("")
+	if err != nil {
+		fmt.Fprintf(stderr, "note: local cache snapshot unreadable (%v) — %s with the built-in default rules only; run `cache pull` to receive the owner's rules\n", err, what)
+		return nil, nil
+	}
+	return snap, nil
 }
 
 func newPolicyCmd() *cobra.Command {
@@ -126,14 +183,15 @@ func requirePolicyVault() (*store.Store, error) {
 }
 
 // newPolicyLsCmd:`sshmgr policy ls`——列出当前生效的全部规则:内置默认
-// 规则(标注已停用)与自定义规则。权威端读 vault,客户端读缓存快照,
-// 无数据机器退回内置默认规则并提示。
+// 规则(标注已停用)与自定义规则。权威端读 vault,客户端读缓存快照
+// (--instance 选命名实例),无数据机器退回内置默认规则并提示。
 func newPolicyLsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "ls",
+	var instance string
+	c := &cobra.Command{
+		Use:   "ls [--instance <name>]",
 		Short: "List all rules in effect: built-in defaults (marking disabled ones) + custom rules",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			role, err := resolvePolicyRole()
+			role, err := resolvePolicyRoleFor(instance)
 			if err != nil {
 				return err
 			}
@@ -149,12 +207,15 @@ func newPolicyLsCmd() *cobra.Command {
 					return err
 				}
 			case policyRoleClient:
-				snap, err := clientops.LoadCacheSnapshotFor("")
+				snap, err := loadPolicyClientSnapshot(cmd.ErrOrStderr(), instance, "listing")
 				if err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "note: local cache snapshot unreadable (%v) — listing the built-in default rules only; run `cache pull` to receive the owner's rules\n", err)
+					return err
 				}
 				views = policymanage.ListRulesFromSnapshot(snap)
 			default:
+				if instance != "" {
+					return errPolicyNoSuchInstance(instance)
+				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: no policy data on this machine — the built-in default rules are the whole rule set\n")
 				views = policymanage.ListRulesFromSnapshot(nil)
 			}
@@ -165,7 +226,12 @@ func newPolicyLsCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&instance, "instance", "", policyInstanceFlagHelp)
+	return c
 }
+
+// policyInstanceFlagHelp 是 policy ls / test 的 --instance 说明。
+const policyInstanceFlagHelp = "on a cache client, read the rules from the named instance instances/<name> (default slot when omitted; required when only named instances exist; mutually exclusive with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK)"
 
 // printPolicyRuleLine 打一行规则:种类、编号、处置、风险说明,以及附加
 // 条件摘要与停用标注。
@@ -343,9 +409,9 @@ func newPolicyEnableCmd() *cobra.Command {
 // vault,客户端读缓存快照,无数据机器用内置默认规则)后调用策略判定
 // 内核,打印处置、命中规则编号、风险说明与更安全的替代做法。
 func newPolicyTestCmd() *cobra.Command {
-	var shell string
+	var shell, instance string
 	c := &cobra.Command{
-		Use:   "test [--shell posix|powershell|cmd] <command>",
+		Use:   "test [--shell posix|powershell|cmd] [--instance <name>] <command>",
 		Short: "Show the disposition a command would get, with the rule that fires",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -353,7 +419,7 @@ func newPolicyTestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rules, err := loadEffectiveRulesForJudge(cmd.ErrOrStderr())
+			rules, err := loadEffectiveRulesForJudge(cmd.ErrOrStderr(), instance)
 			if err != nil {
 				return err
 			}
@@ -373,5 +439,6 @@ func newPolicyTestCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&shell, "shell", "posix", "shell type the command will run under (posix, powershell, cmd)")
+	c.Flags().StringVar(&instance, "instance", "", policyInstanceFlagHelp)
 	return c
 }

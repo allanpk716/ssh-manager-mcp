@@ -293,7 +293,7 @@ sshmgr servers probe-shell [<name>...]   # 不给名字 = 探测全部服务器
 
 TUI 等价：服务器页 `p` 探测光标所在服务器，结果在状态行报告（ADR 0003 的对等面）。
 
-命令策略规则本身的管理是独立的 `sshmgr policy` 命令组（列出 `policy ls` / 增加自定义规则 `policy add` / 删除 `policy rm` / 停用默认规则 `policy disable` / 恢复 `policy enable` / 试算 `policy test`）——权威端机器全功能，客户端机器只读（列出与试算读拉到的快照，修改被拒：规则在权威端维护、随 `cache pull` 下发）。agent 侧收到拦截 / 需确认时的处理方式见 [agent-tools.md](./agent-tools.md)。
+命令策略规则本身的管理是独立的 `sshmgr policy` 命令组（列出 `policy ls` / 增加自定义规则 `policy add` / 删除 `policy rm` / 停用默认规则 `policy disable` / 恢复 `policy enable` / 试算 `policy test`）——权威端机器全功能，客户端机器只读（列出与试算读拉到的快照，修改被拒：规则在权威端维护、随 `cache pull` 下发）。客户端上用命名缓存实例时给 `--instance <实例名>`（如 `sshmgr policy test --instance laptop --shell posix "reboot"`）；默认槽为空而本机有命名实例时，不给 `--instance` 会报错并列出实例名，不会静默按内置默认规则试算。agent 侧收到拦截 / 需确认时的处理方式见 [agent-tools.md](./agent-tools.md)。
 
 ---
 

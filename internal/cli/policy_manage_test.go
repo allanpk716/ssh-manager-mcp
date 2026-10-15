@@ -284,6 +284,43 @@ func TestPolicyAddValidation(t *testing.T) {
 // 记录的快照)与 cache.auth.json(本机角色判定认得它)。返回缓存目录。
 func seedClientCacheFixture(t *testing.T) string {
 	t.Helper()
+	cacheDir := t.TempDir()
+	writePolicyCacheSlot(t, cacheDir)
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         filepath.Join(t.TempDir(), "no-vault.db"),
+		"SSHMGR_CACHE_DIR":     cacheDir,
+		"SSHMGR_MASTERKEY_HEX": "",                                               // 不许真实主键从环境串进来
+		"SSHMGR_FILEKEY_PATH":  filepath.Join(t.TempDir(), "no-such-master.key"), // 也不从默认固定路径拿到开发者本机的真实 master.key
+	})
+	return cacheDir
+}
+
+// seedNamedInstanceClientFixture 造一台「只用命名实例的客户端机器」:无
+// vault,默认槽为空,命名实例 instances/<name>/ 里有与 seedClientCacheFixture
+// 同一份快照。用户配置目录指到临时目录,不读开发者本机真实的实例。
+func seedNamedInstanceClientFixture(t *testing.T, name string) {
+	t.Helper()
+	userDir := t.TempDir()
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	writePolicyCacheSlot(t, filepath.Join(userDir, "ssh-manager", "instances", name))
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         filepath.Join(t.TempDir(), "no-vault.db"),
+		"SSHMGR_CACHE_DIR":     "",
+		"SSHMGR_CACHE_DEK":     "",
+		"SSHMGR_MASTERKEY_HEX": "",
+		"SSHMGR_FILEKEY_PATH":  filepath.Join(t.TempDir(), "no-such-master.key"),
+	})
+}
+
+// writePolicyCacheSlot 往一个缓存槽目录写入客户端缓存:cache.bin(带一条
+// 自定义规则 NO-REBOOT 与停用记录 POSIX-FORK-BOMB 的快照,DEK 加密)与
+// cache.auth.json(本机角色判定认得它);DEK 注入内存钥匙缝。
+func writePolicyCacheSlot(t *testing.T, cacheDir string) {
+	t.Helper()
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	// 权威侧种子库:自定义规则 + 停用记录 + 一台服务器一个 profile(快照
 	// 不是空壳)。
 	srcDir := t.TempDir()
@@ -317,7 +354,6 @@ func seedClientCacheFixture(t *testing.T) string {
 	}
 
 	// cache.bin(DEK 加密)+ cache.auth.json(判定本机为客户端的依据)。
-	cacheDir := t.TempDir()
 	dek, _ := store.GenerateMasterKey()
 	blob, err := vaultio.EncryptWithKey(dek, plaintext)
 	if err != nil {
@@ -336,14 +372,73 @@ func seedClientCacheFixture(t *testing.T) string {
 	if err := mem.Set(dek); err != nil {
 		t.Fatal(err)
 	}
+}
 
-	withEnv(t, map[string]string{
-		"SSHMGR_STORE":         filepath.Join(t.TempDir(), "no-vault.db"),
-		"SSHMGR_CACHE_DIR":     cacheDir,
-		"SSHMGR_MASTERKEY_HEX": "",                                               // 不许真实主键从环境串进来
-		"SSHMGR_FILEKEY_PATH":  filepath.Join(t.TempDir(), "no-such-master.key"), // 也不从默认固定路径拿到开发者本机的真实 master.key
-	})
-	return cacheDir
+// TestPolicyClient_NamedInstanceOnly_RequiresInstanceFlag:只用命名实例的
+// 客户端上,不给 --instance 时列出与试算都报错并列出实例名,不静默退回
+// 内置默认规则(那样试算会漏掉权威端下发的自定义规则,与真实执行不一致)。
+func TestPolicyClient_NamedInstanceOnly_RequiresInstanceFlag(t *testing.T) {
+	seedNamedInstanceClientFixture(t, "laptop")
+	for _, args := range [][]string{
+		{"policy", "ls"},
+		{"policy", "test", "--shell", "posix", "reboot"},
+	} {
+		_, err := runCLI(t, args...)
+		if err == nil {
+			t.Fatalf("%v without --instance on a named-instance-only client must fail", args)
+		}
+		if !strings.Contains(err.Error(), "laptop") || !strings.Contains(err.Error(), "--instance") {
+			t.Fatalf("%v: error must list the instance names and point at --instance, got %v", args, err)
+		}
+	}
+}
+
+// TestPolicyClient_InstanceFlag_ReadsThatSnapshot:--instance <名> 按该命名
+// 实例的快照列出与试算。
+func TestPolicyClient_InstanceFlag_ReadsThatSnapshot(t *testing.T) {
+	seedNamedInstanceClientFixture(t, "laptop")
+	out, err := runCLI(t, "policy", "ls", "--instance", "laptop")
+	if err != nil {
+		t.Fatalf("policy ls --instance: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "NO-REBOOT") || !strings.Contains(out.String(), "已停用") {
+		t.Fatalf("ls --instance must reflect that instance's snapshot, got:\n%s", out.String())
+	}
+	out, err = runCLI(t, "policy", "test", "--instance", "laptop", "--shell", "posix", "reboot")
+	if err != nil {
+		t.Fatalf("policy test --instance: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "NO-REBOOT") {
+		t.Fatalf("test --instance must judge by that instance's rules, got:\n%s", out.String())
+	}
+}
+
+// TestPolicyClient_InstanceFlag_Errors:点名的实例不存在时报错(不退回内置
+// 默认规则);--instance 与 SSHMGR_CACHE_DIR 互斥。
+func TestPolicyClient_InstanceFlag_Errors(t *testing.T) {
+	seedNamedInstanceClientFixture(t, "laptop")
+	if _, err := runCLI(t, "policy", "test", "--instance", "nosuch", "reboot"); err == nil {
+		t.Fatal("--instance naming a missing instance must fail")
+	}
+	t.Setenv("SSHMGR_CACHE_DIR", t.TempDir())
+	if _, err := runCLI(t, "policy", "ls", "--instance", "laptop"); err == nil || !strings.Contains(err.Error(), "SSHMGR_CACHE_DIR") {
+		t.Fatalf("--instance with SSHMGR_CACHE_DIR must be refused, got %v", err)
+	}
+}
+
+// TestPolicyAuthority_RefusesInstanceFlag:--instance 只在客户端上有意义;
+// 权威端(读 vault)给了它就报错,不静默忽略。
+func TestPolicyAuthority_RefusesInstanceFlag(t *testing.T) {
+	newPolicyVaultEnv(t)
+	t.Setenv("SSHMGR_CACHE_DIR", "")
+	for _, args := range [][]string{
+		{"policy", "ls", "--instance", "laptop"},
+		{"policy", "test", "--instance", "laptop", "reboot"},
+	} {
+		if _, err := runCLI(t, args...); err == nil || !strings.Contains(err.Error(), "client") {
+			t.Fatalf("%v on the authoritative machine must be refused, got %v", args, err)
+		}
+	}
 }
 
 // TestPolicyClient_RefusesMutations:验收用例——客户端上的修改命令被明确
