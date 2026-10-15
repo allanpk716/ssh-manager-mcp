@@ -160,7 +160,7 @@ func newConfirmHarness(t *testing.T, bg bool) *confirmHarness {
 		return &confirmHarness{
 			name: "exec_background", st: st, srvID: srvID, pid: pid, conns: conns,
 			call: func(serverID, command, code, reason string) error {
-				_, err := ExecBackgroundForProfile(ctx, st, proj, pid, serverID, command, false, 0, m, code, reason)
+				_, err := ExecBackgroundForProfile(ctx, st, proj, pid, serverID, command, false, 0, m, ExecConfirmation{Code: code, Reason: reason})
 				return err
 			},
 			confirm:   "exec-bg-confirm-required",
@@ -177,7 +177,7 @@ func newConfirmHarness(t *testing.T, bg bool) *confirmHarness {
 	return &confirmHarness{
 		name: "exec_command", st: st, srvID: srvID, pid: pid, conns: conns,
 		call: func(serverID, command, code, reason string) error {
-			_, err := ExecCommandForProfile(ctx, st, proj, pid, serverID, command, false, 5*time.Second, code, reason)
+			_, err := ExecCommandForProfile(ctx, st, proj, pid, serverID, command, false, 5*time.Second, ExecConfirmation{Code: code, Reason: reason})
 			return err
 		},
 		confirm:   "exec-confirm-required",

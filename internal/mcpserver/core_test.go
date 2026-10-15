@@ -98,7 +98,7 @@ func TestExecCommandRejectsOutOfProfile(t *testing.T) {
 	_ = st.GrantServers(pid, []string{a})
 
 	const projectID = "proj-test"
-	_, err := ExecCommandForProfile(context.Background(), st, projectID, pid, b, "echo hi", false, time.Second, "", "")
+	_, err := ExecCommandForProfile(context.Background(), st, projectID, pid, b, "echo hi", false, time.Second, ExecConfirmation{})
 	if !errors.Is(err, ErrNotInProfile) {
 		t.Fatalf("want ErrNotInProfile, got %v", err)
 	}
@@ -139,7 +139,7 @@ func TestExecCommandNoCredential(t *testing.T) {
 	_ = st.GrantServers(pid, []string{srvID})
 
 	const projectID = "proj-test"
-	_, err = ExecCommandForProfile(context.Background(), st, projectID, pid, srvID, "echo hi", false, time.Second, "", "")
+	_, err = ExecCommandForProfile(context.Background(), st, projectID, pid, srvID, "echo hi", false, time.Second, ExecConfirmation{})
 	if !errors.Is(err, vault.ErrNoCredential) {
 		t.Fatalf("want vault.ErrNoCredential, got %v", err)
 	}
@@ -175,7 +175,7 @@ func TestExecCommandRunsInProfileServer(t *testing.T) {
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{srvID})
 
-	out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "hello", false, 5*time.Second, "", "")
+	out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "hello", false, 5*time.Second, ExecConfirmation{})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestExecCommandSudoWired(t *testing.T) {
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{srvID})
 
-	out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "whoami", true, 5*time.Second, "", "")
+	out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "whoami", true, 5*time.Second, ExecConfirmation{})
 	if err != nil {
 		t.Fatalf("sudo exec: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestExecCommandTruncatesLargeOutput(t *testing.T) {
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{srvID})
 
-	out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "big", false, 5*time.Second, "", "")
+	out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "big", false, 5*time.Second, ExecConfirmation{})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -1149,7 +1149,7 @@ func TestErrorBranchesNeverLeakHost(t *testing.T) {
 
 	// denied (all five ops, out-of-profile id) — the gate fires before any
 	// server lookup, so the vault host is never even read.
-	_, err := ExecCommandForProfile(context.Background(), st, "proj", pid, "bogus-id", "true", false, time.Second, "", "")
+	_, err := ExecCommandForProfile(context.Background(), st, "proj", pid, "bogus-id", "true", false, time.Second, ExecConfirmation{})
 	assertBranch(t, err, "not in your profile")
 	assertNoLeak(t, err, vh)
 	_, err = DownloadForProfile(context.Background(), st, "proj", pid, "bogus-id", "/x")
@@ -1170,12 +1170,12 @@ func TestErrorBranchesNeverLeakHost(t *testing.T) {
 	gone, _ := st.AddServer(&models.Server{Name: "gone", Host: vh, Port: 22, User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st)})
 	_ = st.GrantServers(pid, []string{gone})
 	deleteServerRowRaw(t, dir+"/t.db", gone)
-	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, gone, "true", false, time.Second, "", "")
+	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, gone, "true", false, time.Second, ExecConfirmation{})
 	assertBranch(t, err, "not found")
 	assertNoLeak(t, err, vh)
 
 	// no_credential (refused pre-connect, so vh is never dialed)
-	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, nocred, "true", false, time.Second, "", "")
+	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, nocred, "true", false, time.Second, ExecConfirmation{})
 	assertBranch(t, err, "no credential")
 	assertNoLeak(t, err, vh)
 
@@ -1187,7 +1187,7 @@ func TestErrorBranchesNeverLeakHost(t *testing.T) {
 	defer cleanup()
 	nosudo := seedRealServer(t, st, "nosudo", addr, hk, "") // no sudo credential attached
 	_ = st.GrantServers(pid, []string{nosudo})
-	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, nosudo, "true", true, 5*time.Second, "", "")
+	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, nosudo, "true", true, 5*time.Second, ExecConfirmation{})
 	assertBranch(t, err, "sudo not configured")
 	assertNoLeak(t, err, "127.0.0.1")
 
@@ -1195,7 +1195,7 @@ func TestErrorBranchesNeverLeakHost(t *testing.T) {
 	// BOTH checks bite (substring + shape). Task 5 washes the text at the
 	// source (Connect returns redactAddr's output), so exec and forward both
 	// surface one of the frozen "ssh dial: ..." phrases.
-	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, unreach, "true", false, 2*time.Second, "", "")
+	_, err = ExecCommandForProfile(context.Background(), st, "proj", pid, unreach, "true", false, 2*time.Second, ExecConfirmation{})
 	assertBranch(t, err, "ssh dial:")
 	assertNoLeak(t, err, "127.0.0.1")
 	_, err = ForwardForProfile(context.Background(), st, "proj", pid, unreach, "10.255.255.1", 65001, 0, "", mgr)
@@ -1234,7 +1234,7 @@ func TestConnectErrorHostKeyMismatchNoLeak(t *testing.T) {
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{id})
 
-	_, err := ExecCommandForProfile(context.Background(), st, "proj", pid, id, "true", false, 5*time.Second, "", "")
+	_, err := ExecCommandForProfile(context.Background(), st, "proj", pid, id, "true", false, 5*time.Second, ExecConfirmation{})
 	if err == nil {
 		t.Fatal("want hostkey mismatch error")
 	}
@@ -1268,7 +1268,7 @@ func TestExecCommandEffectiveTimeoutEcho(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "hi", false, c.in, "", "")
+			out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "hi", false, c.in, ExecConfirmation{})
 			if err != nil {
 				t.Fatalf("exec: %v", err)
 			}

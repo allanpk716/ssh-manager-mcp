@@ -81,7 +81,7 @@ func TestExecCommandShellTypePicksGrammar(t *testing.T) {
 	ctx := context.Background()
 
 	// PowerShell 标注:拦截,一行错误,零新连接,审计行带规则编号。
-	_, err := ExecCommandForProfile(ctx, st, "proj-shell", pid, psID, winBlockedCmd, false, 5*time.Second, "", "")
+	_, err := ExecCommandForProfile(ctx, st, "proj-shell", pid, psID, winBlockedCmd, false, 5*time.Second, ExecConfirmation{})
 	assertWinBlockedError(t, err)
 	if n := conns.Load(); n != 0 {
 		t.Fatalf("test sshd received %d connections after blocked call, want 0", n)
@@ -91,7 +91,7 @@ func TestExecCommandShellTypePicksGrammar(t *testing.T) {
 	// 对照:POSIX 标注上同一条命令按 POSIX 语法本身放行,但跨 shell 家族
 	// 试判发现它在 PowerShell 语法里危险——改判需确认(SHELL-MISMATCH),
 	// 零新连接,审计行 Status 存 SHELL-MISMATCH。
-	_, err = ExecCommandForProfile(ctx, st, "proj-shell", pid, nixID, winBlockedCmd, false, 5*time.Second, "", "")
+	_, err = ExecCommandForProfile(ctx, st, "proj-shell", pid, nixID, winBlockedCmd, false, 5*time.Second, ExecConfirmation{})
 	if err == nil || !strings.Contains(err.Error(), "[SHELL-MISMATCH]") || !strings.Contains(err.Error(), "confirmation code") {
 		t.Fatalf("posix-labeled Format-Volume must come back as a SHELL-MISMATCH confirmation, got %v", err)
 	}
@@ -118,7 +118,7 @@ func TestExecBackgroundShellTypePicksGrammar(t *testing.T) {
 	defer m.CloseAll()
 	ctx := context.Background()
 
-	_, err := ExecBackgroundForProfile(ctx, st, "proj-shell", pid, psID, winBlockedCmd, false, 2, m, "", "")
+	_, err := ExecBackgroundForProfile(ctx, st, "proj-shell", pid, psID, winBlockedCmd, false, 2, m, ExecConfirmation{})
 	assertWinBlockedError(t, err)
 	if n := conns.Load(); n != 0 {
 		t.Fatalf("test sshd received %d connections after blocked bg call, want 0", n)

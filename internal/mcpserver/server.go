@@ -190,7 +190,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in ExecCommandInput) (*mcp.CallToolResult, ExecOutput, error) {
 			st := storeFn()
-			out, err := ExecCommandForProfile(ctx, st, projectID, profileID, in.ServerID, in.Command, in.Sudo, time.Duration(in.TimeoutSeconds)*time.Second, in.ConfirmationCode, in.ConfirmationReason, hkFn())
+			out, err := ExecCommandForProfile(ctx, st, projectID, profileID, in.ServerID, in.Command, in.Sudo, time.Duration(in.TimeoutSeconds)*time.Second, ExecConfirmation{Code: in.ConfirmationCode, Reason: in.ConfirmationReason}, hkFn())
 			if err != nil {
 				// Surface the error to the agent as a tool error (IsError), not a transport error.
 				return &mcp.CallToolResult{
@@ -282,7 +282,7 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in ExecBackgroundInput) (*mcp.CallToolResult, BgStartOutput, error) {
 			st := storeFn()
-			out, err := ExecBackgroundForProfile(ctx, st, projectID, profileID, in.ServerID, in.Command, in.Sudo, in.TimeoutSeconds, tasks, in.ConfirmationCode, in.ConfirmationReason, hkFn())
+			out, err := ExecBackgroundForProfile(ctx, st, projectID, profileID, in.ServerID, in.Command, in.Sudo, in.TimeoutSeconds, tasks, ExecConfirmation{Code: in.ConfirmationCode, Reason: in.ConfirmationReason}, hkFn())
 			if err != nil {
 				// Surface the error to the agent as a tool error (IsError), not a transport error.
 				return &mcp.CallToolResult{

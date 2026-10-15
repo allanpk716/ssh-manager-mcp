@@ -45,3 +45,50 @@ func policyJudge(st *store.Store, shell models.ShellType, command string) policy
 func policyBlockError(d policy.Decision) error {
 	return fmt.Errorf("blocked by command policy [%s]: %s — instead: %s", d.RuleID, d.Explanation, d.Alternative)
 }
+
+// policyGateActions 是一个执行工具的命令策略审计动作名三元组:拦截行、
+// 需确认退回行、带确认码执行行。前台 exec_command 与后台
+// exec_background 只差前缀,门链同构。
+type policyGateActions struct {
+	blocked         string // 拦截行的动作名(exec-blocked / exec-bg-blocked)
+	confirmRequired string // 需确认退回行的动作名
+	confirmed       string // 带确认码执行行的动作名(由确认码门自落)
+}
+
+// execPolicyActions 与 execBgPolicyActions 分别是前台与后台执行工具的
+// 审计动作名。
+var (
+	execPolicyActions = policyGateActions{
+		blocked:         "exec-blocked",
+		confirmRequired: "exec-confirm-required",
+		confirmed:       "exec-confirmed",
+	}
+	execBgPolicyActions = policyGateActions{
+		blocked:         "exec-bg-blocked",
+		confirmRequired: "exec-bg-confirm-required",
+		confirmed:       "exec-bg-confirmed",
+	}
+)
+
+// applyPolicyGate 对一条非放行的判定结论执行两个执行工具共用的门:
+//   - 拦截:拼一行错误返回,granted=false;
+//   - 需确认:经一次性确认码门(confirmcode.go)——未带码或码不对时
+//     退回一行说明加(新)确认码,granted=false;核销通过则落「带确认码
+//     执行」审计行并放行,granted=true。
+//
+// 返回的 action/status 供调用方的 defer 审计写本分支的行(状态恒为命中
+// 规则编号);granted=true 时两者为零值,调用方继续正常执行链。
+func applyPolicyGate(st *store.Store, projectID, serverID, command string, sudo bool, confirm ExecConfirmation, d policy.Decision, actions policyGateActions) (granted bool, action, status string, err error) {
+	switch d.Disposition {
+	case policy.DispositionBlock:
+		return false, actions.blocked, d.RuleID, policyBlockError(d)
+	case policy.DispositionConfirmRequired:
+		granted, err = gateExecConfirmation(st, projectID, serverID, command, sudo, confirm, d, actions.confirmed)
+		if !granted {
+			return false, actions.confirmRequired, d.RuleID, err
+		}
+		return true, "", "", nil
+	default:
+		return true, "", "", nil
+	}
+}
