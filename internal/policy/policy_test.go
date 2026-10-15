@@ -599,6 +599,52 @@ func TestEvaluate_AllowsDeterminableDeletes(t *testing.T) {
 	}
 }
 
+// TestEvaluate_WrapperPrefixesStrippedBeforeJudging:command、exec、
+// doas、busybox 这类前缀包装命令与 sudo/env/nohup 同等待遇——自身的
+// 选项与取值不属于真正的命令,剥掉后按内层命令判定;command 的
+// -v / -V 是按名查找(打印路径),不执行任何命令,按放行对待。
+func TestEvaluate_WrapperPrefixesStrippedBeforeJudging(t *testing.T) {
+	blocks := []struct{ name, command string }{
+		{"command 前缀", "command rm -rf /"},
+		{"command 带默认路径选项", "command -p rm -rf /etc"},
+		{"exec 前缀", "exec rm -rf /"},
+		{"exec -a 带名字", "exec -a cleanup rm -rf /etc"},
+		{"exec -c 清环境", "exec -c rm -rf /usr"},
+		{"exec -l 登录形态", "exec -l rm -rf /boot"},
+		{"doas 前缀", "doas rm -rf /"},
+		{"doas -u 带用户", "doas -u root rm -rf /etc"},
+		{"doas -n 不交互", "doas -n rm -rf /usr"},
+		{"busybox 前缀", "busybox rm -rf /"},
+		{"包装叠加", "doas command rm -rf /etc"},
+	}
+	for _, tt := range blocks {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalPOSIX(t, tt.command)
+			if got.Disposition != DispositionBlock || got.RuleID != "POSIX-CRITICAL-DELETE" {
+				t.Fatalf("Evaluate(%q) = %+v, want 拦截/POSIX-CRITICAL-DELETE", tt.command, got)
+			}
+		})
+	}
+	allows := []struct{ name, command string }{
+		{"command -v 是查找不执行", "command -v mkfs.ext4"},
+		{"command -V 大写查找", "command -V rm"},
+		{"command -v 查多个名字", "command -v mkfs.ext4 wipefs"},
+		{"command 查日常命令", "command -v curl"},
+		{"busybox 列小程序清单", "busybox --list"},
+		{"busybox 日常小程序", "busybox ls -la"},
+		{"exec 日常命令", "exec ls -la"},
+		{"doas 日常命令", "doas ls -la"},
+	}
+	for _, tt := range allows {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalPOSIX(t, tt.command)
+			if got.Disposition != DispositionAllow {
+				t.Fatalf("Evaluate(%q) = %+v, want 放行", tt.command, got)
+			}
+		})
+	}
+}
+
 // TestEvaluate_CombinedCommandsTakeConfirmTier:组合命令混入需确认档时
 // 取最严重处置(拦截 > 需确认 > 放行),规则编号对最严重那条;同严重度
 // 保留先出现的那条。
