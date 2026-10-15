@@ -295,7 +295,7 @@ func TestClientSingleSlot_DEKDirExempt(t *testing.T) {
 	if strings.Contains(v, "单槽模式") {
 		t.Fatalf("SSHMGR_CACHE_DEK_DIR must not render the single-slot banner, got:\n%s", v)
 	}
-	if !strings.Contains(v, "[s]同步 [i]实例 [c]入网 [t]TTL  q 退出") {
+	if !strings.Contains(v, "[s]同步 [i]实例 [c]入网 [p]策略 [t]TTL  q 退出") {
 		t.Fatalf("multi-instance footer must stay advertised, got:\n%s", v)
 	}
 }

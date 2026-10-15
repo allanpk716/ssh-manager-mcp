@@ -61,9 +61,9 @@ func TestApp_TabCyclesPages(t *testing.T) {
 	if a.page != pageServers {
 		t.Fatalf("start page = %v", a.page)
 	}
-	// full cycle pins the page-array shape (Plan 49 票 03: 5→6, the sixth
-	// page is 「备份」): servers → … → pairing → backup → wrap to servers.
-	want := []page{pageProfiles, pageProjects, pageTokens, pagePairing, pageBackup, pageServers}
+	// full cycle pins the page-array shape (票 16: 6→7, the seventh page
+	// is 「命令策略」): servers → … → backup → policy → wrap to servers.
+	want := []page{pageProfiles, pageProjects, pageTokens, pagePairing, pageBackup, pagePolicy, pageServers}
 	m := a
 	for i, w := range want {
 		m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -73,10 +73,10 @@ func TestApp_TabCyclesPages(t *testing.T) {
 		}
 		m = got
 	}
-	// Shift-Tab from the first page wraps to the LAST page (备份)
+	// Shift-Tab from the first page wraps to the LAST page (命令策略)
 	m3, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	if got := m3.(App); got.page != pageBackup {
-		t.Fatalf("shift-tab wrap: %v, want pageBackup", got.page)
+	if got := m3.(App); got.page != pagePolicy {
+		t.Fatalf("shift-tab wrap: %v, want pagePolicy", got.page)
 	}
 }
 
