@@ -194,6 +194,7 @@ func TestEvaluate_BlocksCriticalPathDeletion(t *testing.T) {
 		{"双斜杠", "rm -rf //etc"},
 		{"点段", "rm -rf /./etc"},
 		{"根下通配", "rm -rf /*"},
+		{"根下通配带结尾斜杠", "rm -rf /*/"},
 		{"关键路径下通配", "rm -rf /etc/*"},
 		{"点段升层", "rm -rf /usr/share/../../etc"},
 		{"仅 -r", "rm -r /etc"},
@@ -208,6 +209,8 @@ func TestEvaluate_BlocksCriticalPathDeletion(t *testing.T) {
 		{"macOS /Library", "rm -rf /Library"},
 		{"macOS /Applications", "rm -rf /Applications"},
 		{"macOS /Users", "rm -rf /Users"},
+		{"WSL 挂载的盘根本身", "rm -rf /mnt/c"},
+		{"WSL 挂载的盘根结尾斜杠", "rm -rf /mnt/d/"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -231,10 +234,13 @@ func TestEvaluate_AllowsOrdinaryDeletion(t *testing.T) {
 		{"删临时目录", "rm -rf /tmp/x"},
 		{"删单个文件", "rm -f /etc/hosts"},
 		{"删相对路径", "rm -rf build"},
+		{"删当前目录通配", "rm -rf *"},
+		{"删当前目录通配带点斜杠", "rm -rf ./*"},
 		{"删家目录内容", "rm -rf ~/cache"},
 		{"循环删除日志", `for f in *.log; do rm "$f"; done`},
 		{"rmdir", "rmdir /tmp/empty"},
 		{"删 home 下的用户目录", "rm -rf /home/deployer/build"},
+		{"删 WSL 挂载盘里的子目录", "rm -rf /mnt/c/Users/me/tmp"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -593,6 +599,52 @@ func TestEvaluate_AllowsDeterminableDeletes(t *testing.T) {
 	}
 }
 
+// TestEvaluate_WrapperPrefixesStrippedBeforeJudging:command、exec、
+// doas、busybox 这类前缀包装命令与 sudo/env/nohup 同等待遇——自身的
+// 选项与取值不属于真正的命令,剥掉后按内层命令判定;command 的
+// -v / -V 是按名查找(打印路径),不执行任何命令,按放行对待。
+func TestEvaluate_WrapperPrefixesStrippedBeforeJudging(t *testing.T) {
+	blocks := []struct{ name, command string }{
+		{"command 前缀", "command rm -rf /"},
+		{"command 带默认路径选项", "command -p rm -rf /etc"},
+		{"exec 前缀", "exec rm -rf /"},
+		{"exec -a 带名字", "exec -a cleanup rm -rf /etc"},
+		{"exec -c 清环境", "exec -c rm -rf /usr"},
+		{"exec -l 登录形态", "exec -l rm -rf /boot"},
+		{"doas 前缀", "doas rm -rf /"},
+		{"doas -u 带用户", "doas -u root rm -rf /etc"},
+		{"doas -n 不交互", "doas -n rm -rf /usr"},
+		{"busybox 前缀", "busybox rm -rf /"},
+		{"包装叠加", "doas command rm -rf /etc"},
+	}
+	for _, tt := range blocks {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalPOSIX(t, tt.command)
+			if got.Disposition != DispositionBlock || got.RuleID != "POSIX-CRITICAL-DELETE" {
+				t.Fatalf("Evaluate(%q) = %+v, want 拦截/POSIX-CRITICAL-DELETE", tt.command, got)
+			}
+		})
+	}
+	allows := []struct{ name, command string }{
+		{"command -v 是查找不执行", "command -v mkfs.ext4"},
+		{"command -V 大写查找", "command -V rm"},
+		{"command -v 查多个名字", "command -v mkfs.ext4 wipefs"},
+		{"command 查日常命令", "command -v curl"},
+		{"busybox 列小程序清单", "busybox --list"},
+		{"busybox 日常小程序", "busybox ls -la"},
+		{"exec 日常命令", "exec ls -la"},
+		{"doas 日常命令", "doas ls -la"},
+	}
+	for _, tt := range allows {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalPOSIX(t, tt.command)
+			if got.Disposition != DispositionAllow {
+				t.Fatalf("Evaluate(%q) = %+v, want 放行", tt.command, got)
+			}
+		})
+	}
+}
+
 // TestEvaluate_CombinedCommandsTakeConfirmTier:组合命令混入需确认档时
 // 取最严重处置(拦截 > 需确认 > 放行),规则编号对最严重那条;同严重度
 // 保留先出现的那条。
@@ -673,5 +725,110 @@ func TestEvaluate_UnknownShellNeedsConfirmation(t *testing.T) {
 	}
 	if got.Explanation == "" {
 		t.Fatalf("需确认必须带说明,got %+v", got)
+	}
+}
+
+// TestEvaluate_ShellAnnotationMismatchNeedsConfirmation:服务器条目上标注
+// 错的 shell 类型会让按标注拆解的命令被误放行。按标注判为放行的命令,
+// 再用别的 shell 家族语法试判同一文本:另一侧判出拦截或需确认时,
+// 整体改判需确认并命中 SHELL-MISMATCH——偏向需确认,不悄悄放行;
+// 也绝不因试判升成拦截。
+func TestEvaluate_ShellAnnotationMismatchNeedsConfirmation(t *testing.T) {
+	tests := []struct {
+		name    string
+		shell   ShellType
+		command string
+	}{
+		{"POSIX 标注藏 PowerShell 格式化", ShellPOSIX, "Format-Volume -DriveLetter D"},
+		{"POSIX 标注藏 cmd 删关键路径", ShellPOSIX, `rd /s /q C:\`},
+		{"POSIX 标注藏 Windows 分区工具", ShellPOSIX, "diskpart"},
+		{"PowerShell 标注藏 POSIX 格式化", ShellPowerShell, "mkfs.ext4 /dev/sdb"},
+		{"PowerShell 标注藏 POSIX 删根", ShellPowerShell, "rm -rf /"},
+		{"cmd 标注藏 POSIX 写盘", ShellWindowsCmd, "dd if=/dev/zero of=/dev/sda"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Evaluate(tt.shell, tt.command, nil)
+			if got.Disposition != DispositionConfirmRequired || got.RuleID != "SHELL-MISMATCH" {
+				t.Fatalf("Evaluate(%s, %q) = %+v, want 需确认/SHELL-MISMATCH", tt.shell, tt.command, got)
+			}
+			if got.Explanation == "" || got.Alternative == "" {
+				t.Fatalf("Evaluate(%s, %q) must carry explanation and alternative, got %+v", tt.shell, tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_ShellAnnotationMismatchSparesEverydayCommands:三类 shell
+// 的日常命令在试判下仍是放行,不因跨 shell 试判被打扰。
+func TestEvaluate_ShellAnnotationMismatchSparesEverydayCommands(t *testing.T) {
+	tests := []struct {
+		name    string
+		shell   ShellType
+		command string
+	}{
+		{"POSIX 日常列表", ShellPOSIX, "ls -la"},
+		{"POSIX 删写死的构建产物", ShellPOSIX, "rm -r ./build"},
+		{"POSIX 打印危险命令文字", ShellPOSIX, `echo "rm -rf /"`},
+		{"POSIX 变量目录", ShellPOSIX, "cd $HOME"},
+		{"POSIX git 状态", ShellPOSIX, "git status"},
+		{"POSIX docker 列容器", ShellPOSIX, "docker ps"},
+		{"PowerShell 日常列表", ShellPowerShell, "Get-ChildItem"},
+		{"PowerShell 删写死的构建产物", ShellPowerShell, `Remove-Item .\build -Recurse`},
+		{"cmd 日常列表", ShellWindowsCmd, "dir"},
+		{"cmd 删写死的文件", ShellWindowsCmd, "del foo.txt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Evaluate(tt.shell, tt.command, nil)
+			if got.Disposition != DispositionAllow || got.RuleID != "" {
+				t.Fatalf("Evaluate(%s, %q) = %+v, want 放行", tt.shell, tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_ShellMismatchDisableableLikeDefaultRule:SHELL-MISMATCH
+// 注册在内置默认规则清单里,可像别的默认规则一样按编号停用;停用后
+// 试判不再改判,按标注侧的原结论返回。
+func TestEvaluate_ShellMismatchDisableableLikeDefaultRule(t *testing.T) {
+	found := false
+	for _, id := range DefaultRuleIDs() {
+		if id == "SHELL-MISMATCH" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("SHELL-MISMATCH must be listed among built-in default rule ids")
+	}
+	rules := &RuleSet{DisabledDefaultRuleIDs: []string{"SHELL-MISMATCH"}}
+	if got := Evaluate(ShellPOSIX, "diskpart", rules); got.Disposition != DispositionAllow {
+		t.Fatalf("disabled SHELL-MISMATCH still fired: %+v", got)
+	}
+	// 只停用 SHELL-MISMATCH 不影响标注侧本就危险的判定。
+	if got := Evaluate(ShellPOSIX, "rm -rf /etc", rules); got.Disposition != DispositionBlock {
+		t.Fatalf("annotated-shell judging must stay active: %+v", got)
+	}
+}
+
+// TestEvaluate_ShellMismatchUsesEffectiveRuleSet:跨 shell 试判用同一份
+// 生效规则集——自定义规则与停用记录对试判同样生效。
+func TestEvaluate_ShellMismatchUsesEffectiveRuleSet(t *testing.T) {
+	rules := &RuleSet{CustomRules: []CustomRule{{
+		ID:          "CUSTOM-WINFMT",
+		Shells:      []ShellType{ShellPowerShell},
+		Commands:    []string{"myformat"},
+		Disposition: DispositionBlock,
+		Explanation: "custom rule for the test",
+		Alternative: "none",
+	}}}
+	// POSIX 标注下无规则命中;PowerShell 家族试判命中自定义规则 → 需确认。
+	if got := Evaluate(ShellPOSIX, "myformat D:", rules); got.Disposition != DispositionConfirmRequired || got.RuleID != "SHELL-MISMATCH" {
+		t.Fatalf("custom rule must fire in the cross-judgement: %+v", got)
+	}
+	// 停用 SHELL-MISMATCH 后试判不再改判。
+	rules.DisabledDefaultRuleIDs = []string{"SHELL-MISMATCH"}
+	if got := Evaluate(ShellPOSIX, "myformat D:", rules); got.Disposition != DispositionAllow {
+		t.Fatalf("disabled SHELL-MISMATCH still fired: %+v", got)
 	}
 }

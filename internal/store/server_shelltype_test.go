@@ -59,7 +59,7 @@ func TestServerShellTypePersist(t *testing.T) {
 }
 
 // TestServerShellTypeDefaultsPOSIX: 未标注(零值)的服务器按默认 POSIX
-// 落库并读回——POSIX 是规格给定的默认值。
+// 落库并读回——shell 类型字段的默认值就是 POSIX。
 func TestServerShellTypeDefaultsPOSIX(t *testing.T) {
 	s := newTestStore(t)
 	id, err := s.AddServer(&models.Server{

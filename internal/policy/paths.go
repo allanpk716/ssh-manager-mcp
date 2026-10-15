@@ -50,6 +50,16 @@ var criticalPOSIXPaths = map[string]bool{
 	"/Users":        true,
 }
 
+// init 把 WSL 的 Windows 盘挂载根(/mnt/<单字母>,即整块 Windows 盘
+// 的根本身,如 /mnt/c)并入上面的关键路径集合:递归删除它等于删掉
+// 整块 Windows 盘,与删根同罪;盘内的子路径(/mnt/c/Users/me/tmp)
+// 不受影响。wsl 嵌套执行的 Linux 侧判定用同一张表。
+func init() {
+	for c := 'a'; c <= 'z'; c++ {
+		criticalPOSIXPaths["/mnt/"+string(c)] = true
+	}
+}
+
 // criticalWindowsPaths 是删除判定用的 Windows 系统关键路径集合的
 // 规范化形态:盘符写死的四个路径本身,加上不带盘符的根定位写法
 // (\Windows 这类指当前盘根下的同名目录,ssh 会话几乎总在 C 盘)。
@@ -82,6 +92,12 @@ func normalizeWindowsPath(path string) string {
 	}
 	if strings.HasPrefix(p, "\\") {
 		absolute = true
+	}
+
+	// 结尾的反斜杠先剥掉(至少保留定位符自身):C:\*\ 与 C:\* 同等,
+	// 都指盘根;纯相对路径的结尾斜杠同样不影响形态。
+	for len(p) > 1 && strings.HasSuffix(p, "\\") {
+		p = strings.TrimSuffix(p, "\\")
 	}
 
 	// 结尾的通配符段剥掉;剥到没有斜杠分隔就停(纯相对通配如 *.log
@@ -127,16 +143,27 @@ func normalizeWindowsPath(path string) string {
 // 结尾斜杠,按字面消化 .. 段,结尾的通配符段按其父路径对待(/* 与 /
 // 同等)。它只做文字层面的整理,不碰文件系统。
 func normalizePOSIXPath(path string) string {
-	// 结尾的通配符段去掉:/etc/* 与 /etc 同等对待;全剥完后只剩根。
+	// 是否指根只看开头:结尾斜杠与通配符段都剩下,不改写这一点。
+	absolute := strings.HasPrefix(path, "/")
+	// 结尾斜杠先剥掉(根自身保留):/*/ 与 /* 同等,都指根。
+	for len(path) > 1 && strings.HasSuffix(path, "/") {
+		path = strings.TrimSuffix(path, "/")
+	}
+	// 结尾的通配符段去掉:/etc/* 与 /etc 同等对待;剥完后只剩斜杠即是根。
 	for strings.HasSuffix(path, "*") {
 		path = strings.TrimSuffix(path, "*")
 		path = strings.TrimSuffix(path, "/")
 	}
+	if !absolute {
+		// 相对路径(不含前导斜杠)起点是当前目录,执行前可以确定;
+		// 剥完通配符段后即使为空,也停在当前目录形态,绝不升成根。
+		if path == "" || path == "." {
+			return "."
+		}
+		return path
+	}
 	if path == "" {
 		return "/"
-	}
-	if !strings.HasPrefix(path, "/") {
-		return path
 	}
 	var segs []string
 	for _, seg := range strings.Split(path, "/") {

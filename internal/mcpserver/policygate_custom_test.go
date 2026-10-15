@@ -74,21 +74,21 @@ func TestExecPolicyCustomRules_ChangeExecToolResults(t *testing.T) {
 	ctx := context.Background()
 
 	// 结构化规则 → exec_command。
-	_, err := ExecCommandForProfile(ctx, st, "proj-c", pid, srvID, "reboot", false, 5*time.Second, "", "")
+	_, err := ExecCommandForProfile(ctx, st, "proj-c", pid, srvID, "reboot", false, 5*time.Second, ExecConfirmation{})
 	assertBlockedBy(t, err, "NO-REBOOT")
 	wantSolePolicyRow(t, st, "exec-blocked", "NO-REBOOT", "reboot", false, srvID, "proj-c")
 
 	// 正则规则 → exec_command。
-	_, err = ExecCommandForProfile(ctx, st, "proj-c", pid, srvID, "docker system prune -a --volumes", false, 5*time.Second, "", "")
+	_, err = ExecCommandForProfile(ctx, st, "proj-c", pid, srvID, "docker system prune -a --volumes", false, 5*time.Second, ExecConfirmation{})
 	assertBlockedBy(t, err, "NO-DOCKER-PRUNE")
 
 	// 结构化规则 → exec_background。
-	_, err = ExecBackgroundForProfile(ctx, st, "proj-c", pid, srvID, "sudo reboot", false, 0, m, "", "")
+	_, err = ExecBackgroundForProfile(ctx, st, "proj-c", pid, srvID, "sudo reboot", false, 0, m, ExecConfirmation{})
 	assertBlockedBy(t, err, "NO-REBOOT")
 	wantSolePolicyRow(t, st, "exec-bg-blocked", "NO-REBOOT", "sudo reboot", false, srvID, "proj-c")
 
 	// 未命中的命令不受影响:仍走默认规则面(此处放行到取凭据一步)。
-	_, err = ExecCommandForProfile(ctx, st, "proj-c", pid, srvID, "uptime", false, 5*time.Second, "", "")
+	_, err = ExecCommandForProfile(ctx, st, "proj-c", pid, srvID, "uptime", false, 5*time.Second, ExecConfirmation{})
 	if err == nil || strings.Contains(err.Error(), "NO-REBOOT") {
 		t.Fatalf("uptime must not hit the custom rule, got %v", err)
 	}
@@ -112,7 +112,7 @@ func TestExecPolicyDisabledDefaultRule_NoLongerMatches(t *testing.T) {
 	ctx := context.Background()
 
 	// 停用前:默认规则拦截(ticket #10 的既有行为)。
-	_, err := ExecCommandForProfile(ctx, st, "proj-d", pid, srvID, blockedCmd, false, 5*time.Second, "", "")
+	_, err := ExecCommandForProfile(ctx, st, "proj-d", pid, srvID, blockedCmd, false, 5*time.Second, ExecConfirmation{})
 	assertBlockedError(t, err)
 	if n := conns.Load(); n != 0 {
 		t.Fatalf("connections = %d before disable, want 0", n)
@@ -122,7 +122,7 @@ func TestExecPolicyDisabledDefaultRule_NoLongerMatches(t *testing.T) {
 	if _, err := policymanage.DisableDefaultRule(st, "POSIX-FORMAT"); err != nil {
 		t.Fatal(err)
 	}
-	out, err := ExecCommandForProfile(ctx, st, "proj-d", pid, srvID, blockedCmd, false, 5*time.Second, "", "")
+	out, err := ExecCommandForProfile(ctx, st, "proj-d", pid, srvID, blockedCmd, false, 5*time.Second, ExecConfirmation{})
 	if err != nil {
 		t.Fatalf("disabled default must let the command run: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestExecPolicyDisabledDefaultRule_NoLongerMatches(t *testing.T) {
 	if _, err := policymanage.EnableDefaultRule(st, "POSIX-FORMAT"); err != nil {
 		t.Fatal(err)
 	}
-	_, err = ExecCommandForProfile(ctx, st, "proj-d", pid, srvID, blockedCmd, false, 5*time.Second, "", "")
+	_, err = ExecCommandForProfile(ctx, st, "proj-d", pid, srvID, blockedCmd, false, 5*time.Second, ExecConfirmation{})
 	assertBlockedError(t, err)
 	if n := conns.Load(); n != 1 {
 		t.Fatalf("connections = %d after re-enable, want still 1", n)
@@ -175,12 +175,12 @@ func TestExecPolicyClientMirror_JudgesBySnapshotRules(t *testing.T) {
 	ctx := context.Background()
 
 	// 自定义规则在客户端执行侧命中。
-	_, err = ExecCommandForProfile(ctx, hyd, "proj-m", pid, srvID, "reboot", false, 5*time.Second, "", "")
+	_, err = ExecCommandForProfile(ctx, hyd, "proj-m", pid, srvID, "reboot", false, 5*time.Second, ExecConfirmation{})
 	assertBlockedBy(t, err, "NO-REBOOT")
 
 	// 停用的默认规则在客户端执行侧不再命中:此处断言「不再是拦截错误」
 	// ——无凭据服务器上走到取凭据一步(no_credential)而不是拦。
-	_, err = ExecCommandForProfile(ctx, hyd, "proj-m", pid, srvID, "mkfs.ext4 /dev/sdb", false, 5*time.Second, "", "")
+	_, err = ExecCommandForProfile(ctx, hyd, "proj-m", pid, srvID, "mkfs.ext4 /dev/sdb", false, 5*time.Second, ExecConfirmation{})
 	if err == nil || strings.Contains(err.Error(), "POSIX-FORMAT") {
 		t.Fatalf("disabled default must not block on the client mirror, got %v", err)
 	}
@@ -208,7 +208,7 @@ func TestExecPolicyOldSnapshot_DefaultsStillBlock(t *testing.T) {
 	hyd.SetReadOnly(nil)
 	ctx := context.Background()
 
-	_, err = ExecCommandForProfile(ctx, hyd, "proj-o", pid, srvID, blockedCmd, false, 5*time.Second, "", "")
+	_, err = ExecCommandForProfile(ctx, hyd, "proj-o", pid, srvID, blockedCmd, false, 5*time.Second, ExecConfirmation{})
 	assertBlockedError(t, err)
 }
 
@@ -241,18 +241,32 @@ func TestExecPolicyCustomRule_WindowsShellAnnotatedServer(t *testing.T) {
 	ctx := context.Background()
 
 	// PowerShell 标注:PowerShell 专用自定义规则命中,零连接。
-	_, err := ExecCommandForProfile(ctx, st, "proj-w", pid, psID, "Restart-Computer -Force", false, 5*time.Second, "", "")
+	_, err := ExecCommandForProfile(ctx, st, "proj-w", pid, psID, "Restart-Computer -Force", false, 5*time.Second, ExecConfirmation{})
 	assertBlockedBy(t, err, "NO-RESTART")
 	if n := conns.Load(); n != 0 {
 		t.Fatalf("connections = %d after blocked windows custom rule, want 0", n)
 	}
 	wantSolePolicyRow(t, st, "exec-blocked", "NO-RESTART", "Restart-Computer -Force", false, psID, "proj-w")
 
-	// 同一台测试 sshd、POSIX 标注:同一条命令不适用 PowerShell 专用规则,
+	// 同一台测试 sshd、POSIX 标注:同一条命令按 POSIX 语法不适用 PowerShell
+	// 专用规则,但跨 shell 试判用同一份生效规则集——规则在 PowerShell 侧
+	// 命中,改判需确认(SHELL-MISMATCH),零新连接。
+	_, err = ExecCommandForProfile(ctx, st, "proj-w", pid, nixID, "Restart-Computer -Force", false, 5*time.Second, ExecConfirmation{})
+	if err == nil || !strings.Contains(err.Error(), "[SHELL-MISMATCH]") {
+		t.Fatalf("posix-annotated server must surface the powershell-only rule via the cross-judgement, got %v", err)
+	}
+	if n := conns.Load(); n != 0 {
+		t.Fatalf("connections = %d after mismatch call, want 0", n)
+	}
+
+	// 停用跨 shell 试判规则后,POSIX 标注确实跳过 PowerShell 专用规则,
 	// 照常执行(连接数 +1)。
-	out, err := ExecCommandForProfile(ctx, st, "proj-w", pid, nixID, "Restart-Computer -Force", false, 5*time.Second, "", "")
+	if _, err := st.DisableDefaultRule(policy.RuleIDShellMismatch); err != nil {
+		t.Fatal(err)
+	}
+	out, err := ExecCommandForProfile(ctx, st, "proj-w", pid, nixID, "Restart-Computer -Force", false, 5*time.Second, ExecConfirmation{})
 	if err != nil {
-		t.Fatalf("posix-annotated server must not hit the powershell-only rule: %v", err)
+		t.Fatalf("posix-annotated server must not hit the powershell-only rule once the cross-judgement is disabled: %v", err)
 	}
 	if want := "RAN:Restart-Computer -Force\n"; out.Stdout != want {
 		t.Fatalf("stdout = %q, want %q", out.Stdout, want)
@@ -263,13 +277,13 @@ func TestExecPolicyCustomRule_WindowsShellAnnotatedServer(t *testing.T) {
 
 	// 停用 WIN- 前缀默认规则在执行侧同样不再命中:PowerShell 标注的
 	// Format-Volume 原被 WIN-FORMAT 拦,停用后照常执行。
-	if _, err := ExecCommandForProfile(ctx, st, "proj-w", pid, psID, winBlockedCmd, false, 5*time.Second, "", ""); err == nil || !strings.Contains(err.Error(), "WIN-FORMAT") {
+	if _, err := ExecCommandForProfile(ctx, st, "proj-w", pid, psID, winBlockedCmd, false, 5*time.Second, ExecConfirmation{}); err == nil || !strings.Contains(err.Error(), "WIN-FORMAT") {
 		t.Fatalf("Format-Volume on powershell must be blocked by WIN-FORMAT, got %v", err)
 	}
 	if _, err := policymanage.DisableDefaultRule(st, "WIN-FORMAT"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ExecCommandForProfile(ctx, st, "proj-w", pid, psID, winBlockedCmd, false, 5*time.Second, "", ""); err != nil {
+	if _, err := ExecCommandForProfile(ctx, st, "proj-w", pid, psID, winBlockedCmd, false, 5*time.Second, ExecConfirmation{}); err != nil {
 		t.Fatalf("disabled WIN-FORMAT must let the command run: %v", err)
 	}
 	if n := conns.Load(); n != 2 {

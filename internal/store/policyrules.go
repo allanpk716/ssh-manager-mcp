@@ -1,7 +1,7 @@
 package store
 
-// 自定义命令策略规则与默认规则停用记录的权威存储(ticket #15,规格
-// #8「存储与下发」):两张新表 policy_rules / policy_disabled_defaults。
+// 自定义命令策略规则与默认规则停用记录的权威存储(ticket #15):两张
+// 新表 policy_rules / policy_disabled_defaults。
 // 只读缓存(客户端水合库)上一切变更返回 ErrReadOnly——「客户端只读」
 // 由 SetReadOnly 开关结构性保证。规则本体的判定语义在 internal/policy,
 // 本文件只管行的进出。

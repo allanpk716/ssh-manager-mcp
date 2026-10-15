@@ -531,7 +531,7 @@ func serversEditCmd() *cobra.Command {
 	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "set / replace sudo password")
 	c.Flags().BoolVar(&clearCred, "clear-credential", false, "remove the server's credentials (back to credential-less)")
 	c.Flags().BoolVar(&exposeHost, "expose-host", false, "return the plaintext host in list_servers (default: masked as \"hidden\")")
-	c.Flags().StringVar(&shell, "shell", "posix", "shell type for command-policy judging (posix, powershell, cmd); omit to keep current")
+	c.Flags().StringVar(&shell, "shell", "", "shell type for command-policy judging (posix, powershell, cmd); omit to keep current")
 	return c
 }
 

@@ -26,7 +26,7 @@ const (
 	pageTokens
 	pagePairing
 	pageBackup // 「备份」(Plan 49 票 03) — broker/standalone only, never the client console
-	pagePolicy // 「命令策略」(票 16, 规格 #8) — broker/standalone only; the client console has its own read-only viewer
+	pagePolicy // 「命令策略」(票 16) — broker/standalone only; the client console has its own read-only viewer
 	pageCount
 )
 

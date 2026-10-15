@@ -45,7 +45,7 @@ import (
 // 超限 is the all-running 32-cap refusal). projectID attributes the audit row
 // to the agent's project. mgr must be the process's TaskManager (per-Server
 // instance; the tool closure in server.go binds NewServerFromSource's).
-func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeoutSec int, mgr *TaskManager, confirmCode, confirmReason string, hk ...sshbroker.HostKeyStore) (out BgStartOutput, err error) {
+func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeoutSec int, mgr *TaskManager, confirm ExecConfirmation, hk ...sshbroker.HostKeyStore) (out BgStartOutput, err error) {
 	var status string
 	var action = "exec-bg-start" // 命令策略换用新动作:拦截 exec-bg-blocked / 需确认退回 exec-bg-confirm-required (Status 存命中规则编号)
 	var startOwned bool          // Start 已自落 start 行的分支 (connect 三态/ok)——本层不重复写
@@ -80,25 +80,15 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 	}
 
 	// 命令策略 (ticket #10/#11/#15 / ADR 0007):与前台镜像——拦截档命令在
-	// 取凭据、建连接之前拒绝,不建立 SSH 连接;审计行换用新动作
-	// exec-bg-blocked,Status 存命中规则编号,Command 保持命令原文。生效
-	// 规则集(默认规则减停用、加自定义,ticket #15)在 policyJudge 里从本
-	// store 读取,语法按服务器条目的 shell 类型选择(ticket #14)。需确认
-	// 档同样在连接之前退回 (一行说明 + 一次性确认码,见 confirmcode.go);
-	// 带正确确认码与理由重调才继续 Start 编排。
+	// 取凭据、建连接之前拒绝,不建立 SSH 连接;需确认档同样在连接之前
+	// 退回 (一行说明 + 一次性确认码),带正确确认码与理由重调才继续
+	// Start 编排。两档的门与审计动作名都在 applyPolicyGate(policygate.go)
+	// 里,与前台共用;退回/拦截行的 Command 保持命令原文,「带确认码
+	// 执行」行由门内自落。
 	if d := policyJudge(st, srv.ShellType, command); d.Disposition != policy.DispositionAllow {
-		switch d.Disposition {
-		case policy.DispositionBlock:
-			action, status = "exec-bg-blocked", d.RuleID
-			err = policyBlockError(d)
+		if granted, gAction, gStatus, gErr := applyPolicyGate(st, projectID, serverID, command, sudo, confirm, d, execBgPolicyActions); !granted {
+			action, status, err = gAction, gStatus, gErr
 			return
-		case policy.DispositionConfirmRequired:
-			var granted bool
-			granted, err = gateExecConfirmation(st, projectID, serverID, command, sudo, confirmCode, confirmReason, d, "exec-bg-confirmed")
-			if !granted {
-				action, status = "exec-bg-confirm-required", d.RuleID
-				return
-			}
 		}
 	}
 

@@ -20,7 +20,7 @@ type Snapshot struct {
 	Projects    []SnapshotProject    `json:"projects"`
 	HostKeys    []SnapshotHostKey    `json:"host_keys"`
 	Audit       []SnapshotAudit      `json:"audit"`
-	// 命令策略段 (ticket #15 / 规格 #8「存储与下发」):自定义规则与被停用
+	// 命令策略段 (ticket #15):自定义规则与被停用
 	// 的默认规则编号。规则全局一套,两条导出路径都携带,不做 profile 裁剪。
 	// 旧快照(策略段尚不存在)解码为 nil 切片 → 导入零行 → 内置默认规则
 	// 照常生效,由判定内核兑底。
@@ -271,7 +271,8 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	// policy (ticket #15): custom rules + disabled default-rule ids — global,
-	// no profile scoping (规格 #8 第 35/36 条:规则随快照全局下发)。
+	// no profile scoping (the rules are maintained once on the authoritative
+	// side and reach every client with the snapshot).
 	snap.PolicyRules, snap.PolicyDisabledDefaults, err = s.exportPolicySections()
 	if err != nil {
 		return nil, err
@@ -547,8 +548,8 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 			sudoArg = sv.SudoCredentialID
 		}
 		credArg := nullIfEmpty(sv.CredentialID)
-		// 旧快照无 shell_type 字段时为零值——归一为 posix(规格:旧快照
-		// 导入为 POSIX)。与 host_keys pin 列的归一化同理:ADD COLUMN
+		// 旧快照无 shell_type 字段时为零值——归一为 posix(旧快照导入
+		// 即按默认 POSIX 处理)。与 host_keys pin 列的归一化同理:ADD COLUMN
 		// DEFAULT 只约束存量行,不管显式插入。
 		shellArg := string(models.NormalizeShellType(sv.ShellType))
 		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,

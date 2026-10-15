@@ -153,8 +153,48 @@ func (r *RuleSet) customsFor(shell ShellType) []CustomRule {
 // 拆成一条条简单命令分别判定,整体取最严重的处置,规则编号对应最严重
 // 的那条;嵌套执行(bash -c、cmd /c、wsl 等把一段命令文本交给另一个
 // shell 执行的写法)按内层 shell 递归判定,层数上限见 nested.go。
+//
+// 顶层还有一道 shell 标注不匹配的试判:按标注判为放行的命令,再用别的
+// shell 家族语法试判同一文本,另一侧判出拦截或需确认时改判需确认
+// (SHELL-MISMATCH)——服务器条目上标注错的 shell 类型不会让危险命令
+// 被悄悄放行。只升到需确认、不升到拦截,也不改写标注侧本就更严重的
+// 结论;只在顶层做,嵌套递归的内层 shell 是从写法里认出来的,不做试判。
 func Evaluate(shell ShellType, command string, rules *RuleSet) Decision {
-	return judgeAtNestingDepth(shell, command, rules, 0)
+	d := judgeAtNestingDepth(shell, command, rules, 0)
+	if d.Disposition != DispositionAllow || rules.isDisabled(RuleIDShellMismatch) {
+		return d
+	}
+	for _, other := range crossJudgementShells(shell) {
+		if judgeAtNestingDepth(other, command, rules, 0).Disposition != DispositionAllow {
+			return Decision{
+				Disposition: DispositionConfirmRequired,
+				RuleID:      RuleIDShellMismatch,
+				Explanation: "the command text reads as a destructive command in another shell's syntax, which usually means the server's shell annotation is wrong — judged as needing confirmation instead of allowed silently",
+				Alternative: "ask the owner to check the server's shell annotation with `sshmgr servers probe-shell`, correct it if needed, then retry the command",
+			}
+		}
+	}
+	return d
+}
+
+// RuleIDShellMismatch 是 shell 标注不匹配试判的稳定规则编号:按标注
+// 放行、但按别的 shell 家族语法试判危险时改判需确认。它像内置默认
+// 规则一样注册在 DefaultRuleInfos 里,可按编号停用。
+const RuleIDShellMismatch = "SHELL-MISMATCH"
+
+// crossJudgementShells 返回试判要用的其它 shell 家族:POSIX 标注时用
+// PowerShell 与 cmd 各试一次(PowerShell 与 cmd 共用一套 Windows 判定,
+// 但自定义规则可只适用其一);PowerShell 或 cmd 标注时用 POSIX 试一次。
+// 两类 Windows 之间不互试——同一套规则同一套拆解,试了也同结论。
+func crossJudgementShells(shell ShellType) []ShellType {
+	switch shell {
+	case ShellPOSIX:
+		return []ShellType{ShellPowerShell, ShellWindowsCmd}
+	case ShellPowerShell, ShellWindowsCmd:
+		return []ShellType{ShellPOSIX}
+	default:
+		return nil
+	}
 }
 
 // merge 取两条结论里更严重的一条;同严重度时保留先出现的那条,

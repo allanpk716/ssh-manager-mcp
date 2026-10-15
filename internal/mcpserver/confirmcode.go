@@ -31,9 +31,9 @@ import (
 )
 
 const (
-	// confirmationTTL 是确认码的有效期 (规格:5 分钟)。
+	// confirmationTTL 是确认码的有效期 (5 分钟)。
 	confirmationTTL = 5 * time.Minute
-	// confirmationCodeLength 是确认码长度 (规格:约 6 位字母数字)。
+	// confirmationCodeLength 是确认码长度 (约 6 位字母数字)。
 	confirmationCodeLength = 6
 )
 
@@ -64,7 +64,7 @@ func newConfirmationRegistry() *confirmationRegistry {
 }
 
 // execConfirmations 是两个执行工具共用的进程级登记表——桥与单机
-// broker 都在同一进程内签发与核销 (规格:由执行所在进程签发并保存)。
+// broker 都在同一进程内签发与核销(确认码只活在执行所在进程里)。
 var execConfirmations = newConfirmationRegistry()
 
 // confirmBindingKey 把确认码绑到「服务器编号 + 命令完整文本」的哈希
@@ -168,6 +168,15 @@ func confirmRequiredError(d policy.Decision, code, note string) error {
 	return errors.New(b.String())
 }
 
+// ExecConfirmation 是 agent 重调执行工具时带上的确认凭据:一次性确认码
+// 与 agent 给出的确认理由(用户同意了什么)。两者总是一起旅行,零值
+// 表示首次调用(未带确认)。它是导出的——两个执行工具的 ForProfile
+// 函数签名带着它,CLI 侧的测试也要能构造零值。
+type ExecConfirmation struct {
+	Code   string // 一次性确认码,由需确认退回时签发
+	Reason string // agent 给出的确认理由,与码间缺一不可
+}
+
 // gateExecConfirmation 是两个执行工具共用的需确认门,在拦截档之后、
 // 取凭据之前:
 //   - 未带确认码:签发新码,返回一行说明 + 码 (granted=false);
@@ -180,18 +189,18 @@ func confirmRequiredError(d policy.Decision, code, note string) error {
 // 家族) 并把 err 返回给 agent;「需确认退回」行由调用方的 defer 审计
 // 统一落笔,这里只落「带确认码执行」这一行。confirmedAction 是该行的
 // 动作名 (前台 exec-confirmed / 后台 exec-bg-confirmed)。
-func gateExecConfirmation(st *store.Store, projectID, serverID, command string, sudo bool, confirmCode, confirmReason string, d policy.Decision, confirmedAction string) (granted bool, err error) {
-	if confirmCode != "" && confirmReason == "" {
+func gateExecConfirmation(st *store.Store, projectID, serverID, command string, sudo bool, confirm ExecConfirmation, d policy.Decision, confirmedAction string) (granted bool, err error) {
+	if confirm.Code != "" && confirm.Reason == "" {
 		return false, errors.New("confirmation_reason is required together with confirmation_code — describe what the user consented to, then call again with the same command, the same confirmation_code and confirmation_reason")
 	}
-	if confirmCode == "" {
+	if confirm.Code == "" {
 		code, ierr := execConfirmations.issue(serverID, command)
 		if ierr != nil {
 			return false, ierr
 		}
 		return false, confirmRequiredError(d, code, "")
 	}
-	if !execConfirmations.consume(serverID, command, confirmCode) {
+	if !execConfirmations.consume(serverID, command, confirm.Code) {
 		code, ierr := execConfirmations.issue(serverID, command)
 		if ierr != nil {
 			return false, ierr
@@ -205,7 +214,7 @@ func gateExecConfirmation(st *store.Store, projectID, serverID, command string, 
 		// 理由,事后追查「谁为什么放行了这条命令」两样都在。
 		Command: store.MarshalAuditSummary(map[string]any{
 			"command": command,
-			"reason":  sanitizeConfirmReason(confirmReason),
+			"reason":  sanitizeConfirmReason(confirm.Reason),
 		}),
 		Sudo:   sudo,
 		Status: d.RuleID,

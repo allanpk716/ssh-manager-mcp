@@ -281,6 +281,14 @@ var wrapperCommands = map[string]map[string]bool{
 	"timeout": {"-k": true, "-s": true, "--signal": true, "--kill-after": true},
 	"nohup":   {},
 	"setsid":  {},
+	// 同属前缀包装:command / exec / doas 自身的选项不是真正的命令
+	// (exec -a 名字、doas -u 用户),busybox 后接的第一个位置参数才是
+	// 要跑的小程序。command 的 -v / -V 查找形态在 stripPrefix 里另行
+	// 按放行对待。
+	"command": {},
+	"exec":    {"-a": true}, // -l、-c 不带值
+	"doas":    {"-u": true}, // -n、-s 不带值
+	"busybox": {},
 }
 
 // stripPrefix 剥掉 sudo、env、nohup 等前缀包装命令及其自身的选项,
@@ -295,8 +303,10 @@ func stripPrefix(call posixCall) posixCall {
 		valueOpts := wrapperCommands[call.name]
 		args := call.args
 		// 剥掉包装命令自身的选项;「带值选项」连同它的取值一起剥。
+		var opts []string
 		for len(args) > 0 && !args[0].dynamic && strings.HasPrefix(args[0].text, "-") {
 			opt := args[0].text
+			opts = append(opts, opt)
 			args = args[1:]
 			if strings.ContainsAny(opt, "=") {
 				continue // --adjustment=5 这类自带取值的写法
@@ -308,6 +318,15 @@ func stripPrefix(call posixCall) posixCall {
 			}
 		}
 		// env 特有:剥掉命令前的 NAME=value 环境变量赋值。
+		// command 自有的 -v / -V 是按名查找(打印可执行文件路径),不执行
+		// 任何命令——整条简单命令按无命令名对待,判放行。
+		if call.name == "command" {
+			for _, opt := range opts {
+				if opt == "-v" || opt == "-V" {
+					return posixCall{}
+				}
+			}
+		}
 		if call.name == "env" {
 			for len(args) > 0 && !args[0].dynamic && strings.Contains(args[0].text, "=") {
 				args = args[1:]

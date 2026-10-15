@@ -1,5 +1,5 @@
-// Package policymanage 是命令策略的管理层(ticket #15,规格 #8「owner
-// 管理面」):把权威 vault 里的自定义规则与停用记录组装成判定内核的
+// Package policymanage 是命令策略的管理层(owner 管理规则用的入口,
+// ticket #15):把权威 vault 里的自定义规则与停用记录组装成判定内核的
 // 生效规则集,并提供增、删、停用、恢复四个管理操作(各写 owner 审计)。
 // 它是 CLI(`sshmgr policy`)与后续 TUI 页(ticket #16,ADR 0003 的
 // CLI 与 TUI 对等)共用的可复用层——判定语义一律在 internal/policy,
@@ -37,33 +37,66 @@ type RuleView struct {
 	Regex        string             // 仅自定义规则
 }
 
-// EffectiveRuleSet 读权威库的两张策略表,组装判定内核的生效规则集:
-// 内置默认规则减去停用表,加上全部自定义规则。
-func EffectiveRuleSet(st *store.Store) (*policy.RuleSet, error) {
+// ruleSources 是列出面与生效规则集共用的数据源:被停用的默认规则编号
+// 加上全部自定义规则。权威库与快照两侧各自己读出这个形态,后续构造
+// (RuleView 列表 / 判定内核的生效规则集)只写一次。
+type ruleSources struct {
+	disabledDefaults []string
+	customRules      []policy.CustomRule
+}
+
+// ruleSourcesFromStore 从权威库的两张策略表读出数据源。
+func ruleSourcesFromStore(st *store.Store) (ruleSources, error) {
 	disabled, err := st.ListDisabledDefaultRuleIDs()
 	if err != nil {
-		return nil, err
+		return ruleSources{}, err
 	}
 	customs, err := st.ListPolicyRules()
 	if err != nil {
+		return ruleSources{}, err
+	}
+	return ruleSources{disabledDefaults: disabled, customRules: customs}, nil
+}
+
+// ruleSourcesFromSnapshot 从快照的策略段读出数据源(客户端只读镜像的
+// 数据面);nil 快照等于空数据源(旧快照形态)。
+func ruleSourcesFromSnapshot(snap *store.Snapshot) ruleSources {
+	if snap == nil {
+		return ruleSources{}
+	}
+	return ruleSources{
+		disabledDefaults: snap.PolicyDisabledDefaults,
+		customRules:      customRulesFromSnapshot(snap),
+	}
+}
+
+// EffectiveRuleSet 读权威库的两张策略表,组装判定内核的生效规则集:
+// 内置默认规则减去停用表,加上全部自定义规则。空库返回 nil——对判定
+// 内核与空规则集等价(默认规则全部生效、无自定义规则)。
+func EffectiveRuleSet(st *store.Store) (*policy.RuleSet, error) {
+	src, err := ruleSourcesFromStore(st)
+	if err != nil {
 		return nil, err
 	}
-	return &policy.RuleSet{
-		DisabledDefaultRuleIDs: disabled,
-		CustomRules:            customs,
-	}, nil
+	return src.effectiveRuleSet(), nil
 }
 
 // EffectiveRuleSetFromSnapshot 从快照的策略段组装生效规则集(客户端
 // 只读镜像的数据面)。旧快照无策略段时返回的规则集等于 nil——内置
-// 默认规则全部生效(规格 #8 第 38 条),由判定内核兑现。
+// 默认规则全部生效,由判定内核兑现。
 func EffectiveRuleSetFromSnapshot(snap *store.Snapshot) *policy.RuleSet {
-	if snap == nil || (len(snap.PolicyRules) == 0 && len(snap.PolicyDisabledDefaults) == 0) {
+	return ruleSourcesFromSnapshot(snap).effectiveRuleSet()
+}
+
+// effectiveRuleSet 把数据源组装成判定内核的生效规则集;两段全空时
+// 返回 nil(nil 与空规则集对判定内核等价)。
+func (s ruleSources) effectiveRuleSet() *policy.RuleSet {
+	if len(s.disabledDefaults) == 0 && len(s.customRules) == 0 {
 		return nil
 	}
 	return &policy.RuleSet{
-		DisabledDefaultRuleIDs: snap.PolicyDisabledDefaults,
-		CustomRules:            customRulesFromSnapshot(snap),
+		DisabledDefaultRuleIDs: s.disabledDefaults,
+		CustomRules:            s.customRules,
 	}
 }
 
@@ -98,17 +131,30 @@ func customRulesFromSnapshot(snap *store.Snapshot) []policy.CustomRule {
 // ListRules 列出当前的全部规则:内置默认规则(带停用标注)在前,
 // 自定义规则(按编号序)在后。
 func ListRules(st *store.Store) ([]RuleView, error) {
-	disabled, err := st.ListDisabledDefaultRuleIDs()
+	src, err := ruleSourcesFromStore(st)
 	if err != nil {
 		return nil, err
 	}
-	disabledSet := make(map[string]bool, len(disabled))
-	for _, id := range disabled {
+	return buildRuleViews(src), nil
+}
+
+// ListRulesFromSnapshot 从快照段构造列出面(客户端只读面与后续 TUI 页
+// 共用):内置默认规则 + 停用标注 + 自定义规则。nil 快照 = 只列默认规则
+// (全部生效,旧快照形态)。
+func ListRulesFromSnapshot(snap *store.Snapshot) []RuleView {
+	return buildRuleViews(ruleSourcesFromSnapshot(snap))
+}
+
+// buildRuleViews 从数据源构造列出面:内置默认规则(带停用标注)在前,
+// 自定义规则(带全部结构化字段)在后——权威库与快照两侧同一构造。
+func buildRuleViews(src ruleSources) []RuleView {
+	disabledSet := make(map[string]bool, len(src.disabledDefaults))
+	for _, id := range src.disabledDefaults {
 		disabledSet[id] = true
 	}
-	var out []RuleView
+	views := make([]RuleView, 0, len(policy.DefaultRuleInfos())+len(src.customRules))
 	for _, info := range policy.DefaultRuleInfos() {
-		out = append(out, RuleView{
+		views = append(views, RuleView{
 			ID:          info.ID,
 			Disposition: info.Disposition,
 			Explanation: info.Explanation,
@@ -116,12 +162,8 @@ func ListRules(st *store.Store) ([]RuleView, error) {
 			Disabled:    disabledSet[info.ID],
 		})
 	}
-	customs, err := st.ListPolicyRules()
-	if err != nil {
-		return nil, err
-	}
-	for _, cr := range customs {
-		out = append(out, RuleView{
+	for _, cr := range src.customRules {
+		views = append(views, RuleView{
 			Custom:       true,
 			ID:           cr.ID,
 			Disposition:  cr.Disposition,
@@ -132,39 +174,6 @@ func ListRules(st *store.Store) ([]RuleView, error) {
 			Args:         cr.Args,
 			PathCategory: cr.PathCategory,
 			Regex:        cr.Regex,
-		})
-	}
-	return out, nil
-}
-
-// ListRulesFromSnapshot 从快照段构造列出面(客户端只读面与后续 TUI 页
-// 共用):内置默认规则 + 停用标注 + 自定义规则。nil 快照 = 只列默认规则
-// (全部生效,旧快照形态)。
-func ListRulesFromSnapshot(snap *store.Snapshot) []RuleView {
-	var disabled []string
-	var customs []policy.CustomRule
-	if snap != nil {
-		disabled = snap.PolicyDisabledDefaults
-		customs = customRulesFromSnapshot(snap)
-	}
-	disabledSet := make(map[string]bool, len(disabled))
-	for _, id := range disabled {
-		disabledSet[id] = true
-	}
-	var views []RuleView
-	for _, info := range policy.DefaultRuleInfos() {
-		views = append(views, RuleView{
-			ID: info.ID, Disposition: info.Disposition,
-			Explanation: info.Explanation, Alternative: info.Alternative,
-			Disabled: disabledSet[info.ID],
-		})
-	}
-	for _, cr := range customs {
-		views = append(views, RuleView{
-			Custom: true, ID: cr.ID, Disposition: cr.Disposition,
-			Explanation: cr.Explanation, Alternative: cr.Alternative,
-			Shells: cr.Shells, Commands: cr.Commands, Args: cr.Args,
-			PathCategory: cr.PathCategory, Regex: cr.Regex,
 		})
 	}
 	return views

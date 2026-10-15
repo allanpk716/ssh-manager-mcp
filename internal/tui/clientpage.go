@@ -369,7 +369,7 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.overlay = w
 			return m, w.Init()
 		case k.Text == "p" && !m.busy:
-			// 票 #16(规格 #8):客户端上的命令策略只读面——规则列表与
+			// 票 #16:客户端上的命令策略只读面——规则列表与
 			// 试算读当前实例的缓存快照,无任何修改入口(规则在权威端
 			// 维护,随 cache pull 下发,ADR 0007)。
 			m.overlay = newPolicyViewer(m.snap)

@@ -216,11 +216,11 @@ func TestCachePull_DeliversPolicyRules_AndTheyTakeEffect(t *testing.T) {
 	for _, p := range loaded.Profiles {
 		gotPid = p.ID
 	}
-	_, err = mcpserver.ExecCommandForProfile(t.Context(), hyd, "proj-pull", gotPid, gotSrvID, "reboot", false, 5*time.Second, "", "")
+	_, err = mcpserver.ExecCommandForProfile(t.Context(), hyd, "proj-pull", gotPid, gotSrvID, "reboot", false, 5*time.Second, mcpserver.ExecConfirmation{})
 	if err == nil || !strings.Contains(err.Error(), "[NO-REBOOT]") {
 		t.Fatalf("pulled custom rule must block on the client execution path, got %v", err)
 	}
-	_, err = mcpserver.ExecCommandForProfile(t.Context(), hyd, "proj-pull", gotPid, gotSrvID, ":(){ :|:& };:", false, 5*time.Second, "", "")
+	_, err = mcpserver.ExecCommandForProfile(t.Context(), hyd, "proj-pull", gotPid, gotSrvID, ":(){ :|:& };:", false, 5*time.Second, mcpserver.ExecConfirmation{})
 	if err == nil || strings.Contains(err.Error(), "POSIX-FORK-BOMB") {
 		t.Fatalf("pulled disable record must reach the client execution path, got %v", err)
 	}
