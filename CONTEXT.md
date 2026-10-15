@@ -51,7 +51,7 @@ _Avoid_: manual pin(不完整,未体现带外取指纹这一关键)、keyscan im
 ### 服务器元数据
 
 **服务器元数据(Server Metadata)**:
-服务器条目的六个描述性字段:Role(用途)/Services(部署了什么)/Location(在哪)/Hardware(硬件配置)/Caveats(注意事项)/Description(备注);各为 ≤4 KiB 自由文本,经 list_servers 全量给 agent 读。连接信息(地址/端口/用户/凭据)与标签(Tags)不属于它——三类东西的修改权限边界不同。
+服务器条目的六个描述性字段:Role(用途)/Services(部署了什么)/Location(在哪)/Hardware(硬件配置)/Caveats(注意事项)/Description(备注);各为 ≤4 KiB 自由文本,经 list_servers 全量给 agent 读。连接信息(地址/端口/用户/凭据/命令策略用的 shell 类型标注)与标签(Tags)不属于它——三类东西的修改权限边界不同。
 _Avoid_: 服务器信息(过泛,混入连接信息)、notes(只是其中一字段)
 
 **受审计转发写(Audited Forwarded Write)**:

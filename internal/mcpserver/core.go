@@ -125,9 +125,10 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	// 命令策略 (ticket #10 / ADR 0007):拦截档命令在取凭据、建连接之前拒绝——
 	// 不建立 SSH 连接,命令一个字节都不会送到服务器。审计行换用新动作
 	// exec-blocked,Status 存命中规则编号,Command 保持命令原文。生效规则集
-	// (默认规则减停用、加自定义, ticket #15)在 policyJudge 里从本 store 读取;
-	// 需确认档由命令策略后续的 GitHub Issue 在此接一次性确认码。
-	if d := policyJudge(st, command); d.Disposition == policy.DispositionBlock {
+	// (默认规则减停用、加自定义,ticket #15)在 policyJudge 里从本 store 读取,
+	// 语法按服务器条目的 shell 类型选择(ticket #14);需确认档由命令策略后续
+	// 的 GitHub Issue 在此接一次性确认码。
+	if d := policyJudge(st, srv.ShellType, command); d.Disposition == policy.DispositionBlock {
 		action, status = "exec-blocked", d.RuleID
 		err = policyBlockError(d)
 		return

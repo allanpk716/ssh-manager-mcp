@@ -13,6 +13,7 @@ func freshEditDraft() *serverDraft {
 		Name: "n", Host: "h", User: "u", Port: 22,
 		Hardware: "hw", Location: "loc", Role: "r",
 		Services: "s", Caveats: "c", Description: "desc",
+		Shell: "posix",
 	}
 }
 
@@ -28,13 +29,14 @@ func fieldByKey(t *testing.T, fields []editField, key string) editField {
 }
 
 // TestEditFieldsTableShape locks the fixed field order (design decision) and
-// the per-mode shape: 16 items in edit mode, 14 in add mode (neither 清除凭据
+// the per-mode shape: 17 items in edit mode, 15 in add mode (neither 清除凭据
 // nor 暴露 Host exists in add mode — no credential to clear, host masking
-// defaults on). The save item is NOT part of the table
-// (the page appends it as a list sentinel), so 备注 must be the last entry.
+// defaults on; shell 类型两态都有,默认 POSIX). The save item is NOT part of
+// the table (the page appends it as a list sentinel), so 备注 must be the last
+// entry.
 func TestEditFieldsTableShape(t *testing.T) {
 	wantEdit := []string{
-		"名称", "Host", "端口", "SSH 用户", "密码", "私钥路径", "密钥口令",
+		"名称", "Host", "端口", "SSH 用户", "Shell 类型", "密码", "私钥路径", "密钥口令",
 		"sudo 密码", "清除凭据", "暴露 Host", "硬件", "位置", "角色", "服务", "Caveats", "备注",
 	}
 	got := editFields(true)
@@ -59,7 +61,7 @@ func TestEditFieldsTableShape(t *testing.T) {
 	}
 
 	wantAdd := []string{
-		"名称", "Host", "端口", "SSH 用户", "密码", "私钥路径", "密钥口令",
+		"名称", "Host", "端口", "SSH 用户", "Shell 类型", "密码", "私钥路径", "密钥口令",
 		"sudo 密码", "硬件", "位置", "角色", "服务", "Caveats", "备注",
 	}
 	add := editFields(false)
@@ -84,7 +86,7 @@ func TestEditFieldsSecretFlags(t *testing.T) {
 	}
 }
 
-// TestEditFieldsKeysMatchSnapshot: snapshotDraft must capture exactly the 16
+// TestEditFieldsKeysMatchSnapshot: snapshotDraft must capture exactly the 17
 // table keys, and every field's Set must flip exactly its own key dirty —
 // the Key↔snapshot correspondence the page's dirty marks rely on.
 func TestEditFieldsKeysMatchSnapshot(t *testing.T) {
@@ -93,11 +95,11 @@ func TestEditFieldsKeysMatchSnapshot(t *testing.T) {
 		"password": "pw", "keypath": "/key", "keypass": "kp", "sudopassword": "sp",
 		"clearcredential": "已勾选", "exposehost": "已勾选", "hardware": "hw2",
 		"location": "loc2", "role": "r2", "services": "s2", "caveats": "c2",
-		"description": "desc2",
+		"description": "desc2", "shell": "powershell",
 	}
 	snap0 := snapshotDraft(freshEditDraft())
-	if len(snap0) != 16 {
-		t.Fatalf("snapshotDraft captured %d keys, want 16", len(snap0))
+	if len(snap0) != 17 {
+		t.Fatalf("snapshotDraft captured %d keys, want 17", len(snap0))
 	}
 	for _, f := range editFields(true) {
 		if _, ok := snap0[f.Key]; !ok {

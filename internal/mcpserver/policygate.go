@@ -15,25 +15,28 @@ import (
 	"fmt"
 	"os"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/policymanage"
 	"ssh-manager-mcp/internal/store"
 )
 
 // policyJudge 是两个执行工具共用的判定入口:从执行的 store 组装生效
-// 规则集(默认规则减停用、加自定义)后交给判定内核。本票所有服务器按
-// POSIX 判定;后续票接服务器条目的 shell 类型字段 (换 Evaluate 的第一参)
-// 时只改这里,不动两个调用点的时序。规则表读取失败时退回纯内置默认
-// 规则继续判定(默认规则仍然护住严重后果),绝不因读不到规则放行一切
-// 或拦死一切;需确认档由命令策略后续的 GitHub Issue 在调用点接一次性
-// 确认码,本票只对拦截档动作。
-func policyJudge(st *store.Store, command string) policy.Decision {
+// 规则集(默认规则减停用、加自定义,ticket #15)后交给判定内核;语法按
+// 服务器条目标注的 shell 类型选择(ticket #14;存储层已把空值归一为
+// POSIX,能到这里的未知值不改写——Evaluate 的保守分支判需确认,不悄悄
+// 放行)。权威端(本地 vault 或 serve 库)与客户端(快照水合出的只读
+// 镜像库)走同一条代码路径,离线时用最后一次拉到的规则。规则表读取
+// 失败时退回纯内置默认规则继续判定(默认规则仍然护住严重后果),绝不
+// 因读不到规则放行一切或拦死一切;需确认档由命令策略后续的 GitHub
+// Issue 在调用点接一次性确认码,本票只对拦截档动作。
+func policyJudge(st *store.Store, shell models.ShellType, command string) policy.Decision {
 	rules, err := policymanage.EffectiveRuleSet(st)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr: command policy rule lookup failed (judging with built-in defaults only): %v\n", err)
 		rules = nil
 	}
-	return policy.Evaluate(policy.ShellPOSIX, command, rules)
+	return policy.Evaluate(policy.ShellType(shell), command, rules)
 }
 
 // policyBlockError 把拦截结论拼成 agent 能直接向用户转述的一行错误:

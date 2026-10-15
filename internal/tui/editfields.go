@@ -20,19 +20,21 @@ type editField struct {
 	Build   func(d *serverDraft) *huh.Form // 单字段编辑表单（复用 forms.go 构造器）
 }
 
-// editFields 按固定顺序返回字段表（设计决策）：名称/Host/端口/SSH 用户/密码/
-// 私钥路径/密钥口令/sudo 密码/清除凭据(编辑态)/暴露 Host(编辑态)/硬件/位置/
-// 角色/服务/Caveats/备注——编辑态 16 项，新增态 14 项（新增态没有可清除的
-// 凭据；暴露 Host 默认隐藏，建后在编辑页开启）。保存项不在表内：
-// 它是编辑页（T2）在列表末尾追加的哨兵项。editing 同时被各闭包捕获，
-// 决定秘密字段的状态文案与表单标题（编辑态的"留空=不变"语义）。
+// editFields 按固定顺序返回字段表（设计决策）：名称/Host/端口/SSH 用户/
+// Shell 类型/密码/私钥路径/密钥口令/sudo 密码/清除凭据(编辑态)/暴露
+// Host(编辑态)/硬件/位置/角色/服务/Caveats/备注——编辑态 17 项，新增态
+// 15 项（新增态没有可清除的凭据；暴露 Host 默认隐藏，建后在编辑页开
+// 启）。保存项不在表内：它是编辑页（T2）在列表末尾追加的哨兵项。editing
+// 同时被各闭包捕获，决定秘密字段的状态文案与表单标题（编辑态的"留空=
+// 不变"语义）。
 func editFields(editing bool) []editField {
-	fields := make([]editField, 0, 16)
+	fields := make([]editField, 0, 17)
 	fields = append(fields,
 		strField("name", "名称", func(d *serverDraft) *string { return &d.Name }, "名称（唯一）", nonEmpty),
 		strField("host", "Host", func(d *serverDraft) *string { return &d.Host }, "Host / IP", nonEmpty),
 		portEditField(),
 		strField("user", "SSH 用户", func(d *serverDraft) *string { return &d.User }, "SSH 用户", nonEmpty),
+		shellEditField(),
 		secretField("password", "密码", editing, "（留空=保持现有）",
 			func(d *serverDraft) *string { return &d.Password },
 			func(d *serverDraft) huh.Field { return passwordField(d, editing) }),
@@ -139,6 +141,21 @@ func portEditField() editField {
 	}
 }
 
+// shellEditField:命令策略(ticket #14)的 shell 类型三选一。Get 返回原始
+// 值(空值预览为（空）,与其它空字段一致——空草稿提交时 toParts 归一为
+// posix);Set 接受任意字符串(表单只出三类值,脏比较用)。
+func shellEditField() editField {
+	return editField{
+		Key:   "shell",
+		Label: "Shell 类型",
+		Get:   func(d *serverDraft) string { return d.Shell },
+		Set:   func(d *serverDraft, v string) { d.Shell = v },
+		Build: func(d *serverDraft) *huh.Form {
+			return huh.NewForm(huh.NewGroup(shellSelectField(d)))
+		},
+	}
+}
+
 // clearCredentialEditField：仅编辑态存在（新增态没有可清除的凭据）。bool 的
 // 字符串形态是状态对"未勾选/已勾选"；Set 额外接受规范形"true"（"false"及
 // 其他一律 false），让 snapshotDraft 的原值能经 Set 往返。表单复用
@@ -200,6 +217,7 @@ func snapshotDraft(d *serverDraft) map[string]string {
 		"sudopassword":    d.SudoPassword,
 		"clearcredential": strconv.FormatBool(d.ClearCredential),
 		"exposehost":      strconv.FormatBool(d.ExposeHost),
+		"shell":           d.Shell,
 		"hardware":        d.Hardware,
 		"location":        d.Location,
 		"role":            d.Role,

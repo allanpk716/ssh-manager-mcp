@@ -382,6 +382,13 @@ func migrate(db *sql.DB) error {
 			}
 		}
 	}
+	// 命令策略(ticket #14): servers.shell_type —— 服务器条目标注的 shell
+	// 类型(连接信息的一员,默认 POSIX)。DEFAULT 'posix' 回填存量行为
+	// POSIX。必须排在 credential_id 可空化表重建之后:重建的 CREATE 表定义
+	// 不含本列,先加列会被随后的重建整表丢弃,下一次 Open 才补回。
+	if err := addColumnIfMissing(db, "servers", "shell_type", "TEXT NOT NULL DEFAULT 'posix'"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -410,7 +417,9 @@ func columnNullable(db *sql.DB, table, column string) (bool, error) {
 // rebuildServersNullable recreates servers with a nullable credential_id inside
 // one transaction (SQLite ALTER-rename dance: create new → copy → drop old →
 // rename). The new table is the CURRENT schemaSQL servers definition verbatim
-// with the single difference that credential_id loses NOT NULL.
+// with two deliberate differences: credential_id loses NOT NULL, and shell_type
+// is absent — migrate() re-adds the column (with its DEFAULT back-fill) right
+// AFTER this dance, so ordering there is load-bearing.
 //
 // FK enforcement is disabled for the dance: with foreign_keys ON, DROP TABLE
 // servers performs an implicit DELETE FROM servers that would cascade-delete
@@ -542,6 +551,7 @@ CREATE TABLE IF NOT EXISTS servers (
   auth_method TEXT NOT NULL,
   credential_id TEXT REFERENCES credentials(id),
   sudo_credential_id TEXT,
+  shell_type TEXT NOT NULL DEFAULT 'posix',
   tags TEXT,
   description TEXT DEFAULT '',
   location TEXT DEFAULT '',

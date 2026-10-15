@@ -153,8 +153,10 @@ func (p *serversPage) Detail() string {
 	if s.CredentialID == "" {
 		cred = "未设置"
 	}
-	return fmt.Sprintf("名称   %s\nHost   %s\n端口   %d\n用户   %s\n凭据   %s（%s）\n硬件   %s\n位置   %s\n角色   %s\n服务   %s\nCaveats %s\n暴露Host %s\n标签   %s\n备注   %s",
-		s.Name, s.Host, s.Port, s.User, cred, s.AuthMethod,
+	return fmt.Sprintf("名称   %s\nHost   %s\n端口   %d\n用户   %s\nShell  %s\n凭据   %s（%s）\n硬件   %s\n位置   %s\n角色   %s\n服务   %s\nCaveats %s\n暴露Host %s\n标签   %s\n备注   %s",
+		s.Name, s.Host, s.Port, s.User,
+		"shell="+string(models.NormalizeShellType(string(s.ShellType))),
+		cred, s.AuthMethod,
 		orDash(s.Hardware), orDash(s.Location), orDash(s.Role), orDash(s.Services), orDash(s.Caveats),
 		exposeLabel(s.ExposeHost),
 		orDash(strings.Join(s.Tags, ",")), orDash(s.Description))

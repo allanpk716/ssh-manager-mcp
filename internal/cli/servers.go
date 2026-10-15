@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/secrethint"
 	"ssh-manager-mcp/internal/store"
 )
@@ -50,6 +51,7 @@ func serversAddCmd() *cobra.Command {
 		port                                                                    int
 		tags                                                                    []string
 		exposeHost                                                              bool
+		shell                                                                   string
 	)
 	c := &cobra.Command{
 		Use:   "add",
@@ -72,6 +74,12 @@ func serversAddCmd() *cobra.Command {
 				writeOwnerAuditError(s, "server.add", summary)
 				return fmt.Errorf("--password and --key are mutually exclusive; provide one or neither")
 			}
+			// 命令策略(ticket #14):shell 类型是三选一的连接信息字段,
+			// 非法值在入口拒绝(取值表与策略判定内核一致)。
+			if _, err := policy.ParseShellType(shell); err != nil {
+				writeOwnerAuditError(s, "server.add", summary)
+				return err
+			}
 			srv := &models.Server{
 				Name: name, Host: host, Port: port, User: user, Tags: tags,
 				Description: strings.TrimSpace(description),
@@ -81,6 +89,7 @@ func serversAddCmd() *cobra.Command {
 				Role:        strings.TrimSpace(role),
 				Caveats:     strings.TrimSpace(caveats),
 				ExposeHost:  exposeHost,
+				ShellType:   models.ShellType(shell),
 			}
 			// Suspected-secret hint (Plan 28 T2): advisory, non-blocking scan
 			// of the free-text metadata this add is about to persist, in its
@@ -139,6 +148,7 @@ func serversAddCmd() *cobra.Command {
 	c.Flags().StringVar(&role, "role", "", "this server's purpose (e.g. 'prod pg primary') — shown to the agent")
 	c.Flags().StringVar(&caveats, "special-handling", "", "operational gotchas / special handling rules — the agent reads this BEFORE acting")
 	c.Flags().BoolVar(&exposeHost, "expose-host", false, "return the plaintext host in list_servers (default: masked as \"hidden\")")
+	c.Flags().StringVar(&shell, "shell", "posix", "shell type for command-policy judging (posix, powershell, cmd)")
 	_ = c.MarkFlagRequired("name")
 	_ = c.MarkFlagRequired("host")
 	_ = c.MarkFlagRequired("user")
@@ -168,8 +178,11 @@ func serversListCmd() *cobra.Command {
 				if role == "" {
 					role = "-"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-20s %s@%s:%d [%s] (%s) · %s\n",
-					srv.Name, srv.ID, srv.User, srv.Host, srv.Port, sudo, role, truncate(srv.Caveats))
+				// 命令策略(ticket #14):shell 类型是连接信息的一员,owner 在
+				// ls 里能看到标注(存储层已归一,空值不会到这里)。
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-20s %s@%s:%d [shell=%s] [%s] (%s) · %s\n",
+					srv.Name, srv.ID, srv.User, srv.Host, srv.Port,
+					string(models.NormalizeShellType(string(srv.ShellType))), sudo, role, truncate(srv.Caveats))
 			}
 			return nil
 		},
@@ -248,6 +261,7 @@ func serversEditCmd() *cobra.Command {
 		tags                                                                       []string
 		clearCred                                                                  bool
 		exposeHost                                                                 bool
+		shell                                                                      string
 	)
 	c := &cobra.Command{
 		Use:   "edit [name]",
@@ -313,6 +327,15 @@ func serversEditCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("expose-host") {
 				srv.ExposeHost = exposeHost
+			}
+			// 命令策略(ticket #14):部分更新语义,与其他字段一致——只在显式
+			// 传入时改写;非法值在入口拒绝。
+			if cmd.Flags().Changed("shell") {
+				if _, err := policy.ParseShellType(shell); err != nil {
+					editAuditError(origName)
+					return err
+				}
+				srv.ShellType = models.ShellType(shell)
 			}
 			// Re-credential (optional; mutually exclusive). nil cred/sudo keeps
 			// the existing rows; a swap runs in ONE transaction with the row
@@ -431,6 +454,7 @@ func serversEditCmd() *cobra.Command {
 	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "set / replace sudo password")
 	c.Flags().BoolVar(&clearCred, "clear-credential", false, "remove the server's credentials (back to credential-less)")
 	c.Flags().BoolVar(&exposeHost, "expose-host", false, "return the plaintext host in list_servers (default: masked as \"hidden\")")
+	c.Flags().StringVar(&shell, "shell", "posix", "shell type for command-policy judging (posix, powershell, cmd); omit to keep current")
 	return c
 }
 
