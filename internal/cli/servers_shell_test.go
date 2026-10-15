@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
@@ -106,5 +108,34 @@ func TestServersListShowsShellType(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "ps") || !strings.Contains(lines[1], "shell=powershell") {
 		t.Fatalf("ps line missing shell=powershell: %q", lines[1])
+	}
+}
+
+// TestServersEditShellFlagDefaultEmpty:`servers edit --shell` 的帮助文案
+// 承诺「不传则保持现值」,旗标的缺省值因此必须是空串——否则 cobra 的
+// 帮助面会把不传暗示成 posix。不传旗标保持现值的行为由上面的
+// TestServersShellFlag 覆盖,这里只钉缺省值与文案一致。
+func TestServersEditShellFlagDefaultEmpty(t *testing.T) {
+	root := NewRootCmd()
+	var edit *cobra.Command
+	for _, c := range root.Commands() {
+		if c.Name() != "servers" {
+			continue
+		}
+		for _, sub := range c.Commands() {
+			if sub.Name() == "edit" {
+				edit = sub
+			}
+		}
+	}
+	if edit == nil {
+		t.Fatal("servers edit subcommand not found")
+	}
+	flag := edit.Flags().Lookup("shell")
+	if flag == nil {
+		t.Fatal("servers edit has no --shell flag")
+	}
+	if flag.DefValue != "" {
+		t.Fatalf("--shell default = %q, want \"\" (help says omit to keep current)", flag.DefValue)
 	}
 }
