@@ -45,9 +45,9 @@ import (
 // 超限 is the all-running 32-cap refusal). projectID attributes the audit row
 // to the agent's project. mgr must be the process's TaskManager (per-Server
 // instance; the tool closure in server.go binds NewServerFromSource's).
-func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeoutSec int, mgr *TaskManager, hk ...sshbroker.HostKeyStore) (out BgStartOutput, err error) {
+func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeoutSec int, mgr *TaskManager, confirmCode, confirmReason string, hk ...sshbroker.HostKeyStore) (out BgStartOutput, err error) {
 	var status string
-	var action = "exec-bg-start" // 命令策略拦截档换用新动作 exec-bg-blocked (Status 存命中规则编号)
+	var action = "exec-bg-start" // 命令策略换用新动作:拦截 exec-bg-blocked / 需确认退回 exec-bg-confirm-required (Status 存命中规则编号)
 	var startOwned bool          // Start 已自落 start 行的分支 (connect 三态/ok)——本层不重复写
 	start := time.Now()
 	defer func() {
@@ -79,14 +79,25 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 		return
 	}
 
-	// 命令策略 (ticket #10 / ADR 0007):与前台镜像——拦截档命令在取凭据、
-	// 建连接之前拒绝,不建立 SSH 连接。审计行换用新动作 exec-bg-blocked,
-	// Status 存命中规则编号,Command 保持命令原文。需确认档由命令策略后续
-	// 的 GitHub Issue 在此接一次性确认码。
-	if d := policyJudge(srv.ShellType, command); d.Disposition == policy.DispositionBlock {
-		action, status = "exec-bg-blocked", d.RuleID
-		err = policyBlockError(d)
-		return
+	// 命令策略 (ticket #10/#11 / ADR 0007):与前台镜像——拦截档命令在
+	// 取凭据、建连接之前拒绝,不建立 SSH 连接;审计行换用新动作
+	// exec-bg-blocked,Status 存命中规则编号,Command 保持命令原文。
+	// 需确认档同样在连接之前退回 (一行说明 + 一次性确认码,见
+	// confirmcode.go);带正确确认码与理由重调才继续 Start 编排。
+	if d := policyJudge(srv.ShellType, command); d.Disposition != policy.DispositionAllow {
+		switch d.Disposition {
+		case policy.DispositionBlock:
+			action, status = "exec-bg-blocked", d.RuleID
+			err = policyBlockError(d)
+			return
+		case policy.DispositionConfirmRequired:
+			var granted bool
+			granted, err = gateExecConfirmation(st, projectID, serverID, command, sudo, confirmCode, confirmReason, d, "exec-bg-confirmed")
+			if !granted {
+				action, status = "exec-bg-confirm-required", d.RuleID
+				return
+			}
+		}
 	}
 
 	auth, aerr := vault.AuthForServer(st, srv)

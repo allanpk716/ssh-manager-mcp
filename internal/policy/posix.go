@@ -76,19 +76,21 @@ type posixEvidence struct {
 	forkBomb bool
 }
 
-// applyRules 按声明顺序过一遍默认规则表,返回第一条命中的结论;
-// 没有命中则放行。
+// applyRules 按声明顺序过一遍默认规则表(拦截在前、需确认在后,
+// 语义上拦截更严重、优先给出),返回第一条命中的结论;没有命中则放行。
 func applyRules(ev *posixEvidence, call *posixCall, rules *RuleSet) Decision {
-	for _, r := range defaultPOSIXRules {
-		if rules.isDisabled(r.id) {
-			continue
-		}
-		if r.matches(ev, call) {
-			return Decision{
-				Disposition: r.disposition,
-				RuleID:      r.id,
-				Explanation: r.explanation,
-				Alternative: r.alternative,
+	for _, list := range [][]posixRule{defaultPOSIXRules, defaultPOSIXConfirmRules} {
+		for _, r := range list {
+			if rules.isDisabled(r.id) {
+				continue
+			}
+			if r.matches(ev, call) {
+				return Decision{
+					Disposition: r.disposition,
+					RuleID:      r.id,
+					Explanation: r.explanation,
+					Alternative: r.alternative,
+				}
 			}
 		}
 	}
@@ -319,6 +321,10 @@ var dangerousNameMarkers = []string{
 	"fdisk", "sfdisk", "cfdisk", "gdisk", "cgdisk", "sgdisk", "parted",
 	"diskutil", "rm ", "rm\t", "chmod ", "chown ", "mkswap", "pvremove",
 	"vgremove", "zfs destroy", "lvremove",
+	// 需确认家族的命令名(同上,只在拆解失败时作兜底探测)。
+	"iptables -F", "iptables --flush", "flush ruleset", "ufw disable",
+	"ufw reset", "sshd_config", "zpool destroy", "docker volume rm",
+	"docker system prune", "systemctl stop ssh", "-setremotelogin",
 }
 
 // containsDangerousName 报告文本里是否出现任何危险命令名标记。

@@ -107,7 +107,7 @@ func TestExecCommandPolicyBlockedBeforeConnect(t *testing.T) {
 	ctx := context.Background()
 
 	// 对照:放行命令照常执行 (同时证明计数器确实会计数,后面的零断言不空转)。
-	out, err := ExecCommandForProfile(ctx, st, "proj-pol", pid, srvID, "echo ok", false, 5*time.Second)
+	out, err := ExecCommandForProfile(ctx, st, "proj-pol", pid, srvID, "echo ok", false, 5*time.Second, "", "")
 	if err != nil {
 		t.Fatalf("allowed exec: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestExecCommandPolicyBlockedBeforeConnect(t *testing.T) {
 	}
 
 	// 拦截:一行错误,测试 sshd 未收到任何新连接。
-	_, err = ExecCommandForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, false, 5*time.Second)
+	_, err = ExecCommandForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, false, 5*time.Second, "", "")
 	assertBlockedError(t, err)
 	if n := conns.Load(); n != 1 {
 		t.Fatalf("test sshd received %d connections after blocked call, want still 1 (no new connection)", n)
@@ -127,7 +127,7 @@ func TestExecCommandPolicyBlockedBeforeConnect(t *testing.T) {
 	wantSolePolicyRow(t, st, "exec-blocked", "POSIX-FORMAT", blockedCmd, false, srvID, "proj-pol")
 
 	// sudo 开关不影响处置:sudo=true 同样拦截、同一规则编号。
-	_, err = ExecCommandForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, true, 5*time.Second)
+	_, err = ExecCommandForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, true, 5*time.Second, "", "")
 	assertBlockedError(t, err)
 	if n := conns.Load(); n != 1 {
 		t.Fatalf("test sshd received %d connections after sudo blocked call, want still 1", n)
@@ -161,7 +161,7 @@ func TestExecBackgroundPolicyBlockedBeforeConnect(t *testing.T) {
 	ctx := context.Background()
 
 	// 对照:放行命令照常起后台任务 (计数器自证)。
-	out, err := ExecBackgroundForProfile(ctx, st, "proj-pol", pid, srvID, "echo ok", false, 2, m)
+	out, err := ExecBackgroundForProfile(ctx, st, "proj-pol", pid, srvID, "echo ok", false, 2, m, "", "")
 	if err != nil {
 		t.Fatalf("allowed bg start: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestExecBackgroundPolicyBlockedBeforeConnect(t *testing.T) {
 	}
 
 	// 拦截:一行错误,零新连接,任务表不进任务。
-	_, err = ExecBackgroundForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, false, 2, m)
+	_, err = ExecBackgroundForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, false, 2, m, "", "")
 	assertBlockedError(t, err)
 	if n := conns.Load(); n != 1 {
 		t.Fatalf("test sshd received %d connections after blocked bg call, want still 1", n)
@@ -184,7 +184,7 @@ func TestExecBackgroundPolicyBlockedBeforeConnect(t *testing.T) {
 	wantSolePolicyRow(t, st, "exec-bg-blocked", "POSIX-FORMAT", blockedCmd, false, srvID, "proj-pol")
 
 	// sudo 开关不影响处置。
-	_, err = ExecBackgroundForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, true, 2, m)
+	_, err = ExecBackgroundForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, true, 2, m, "", "")
 	assertBlockedError(t, err)
 	if rows := policyRows(t, st, "exec-bg-blocked"); len(rows) != 2 {
 		t.Fatalf("exec-bg-blocked rows = %d, want 2 (one per call)", len(rows))
@@ -203,11 +203,11 @@ func TestExecPolicyBlockedBeforeCredentialLookup(t *testing.T) {
 	defer m.CloseAll()
 	ctx := context.Background()
 
-	_, err := ExecCommandForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, false, 5*time.Second)
+	_, err := ExecCommandForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, false, 5*time.Second, "", "")
 	assertBlockedError(t, err)
 	wantSolePolicyRow(t, st, "exec-blocked", "POSIX-FORMAT", blockedCmd, false, srvID, "proj-pol")
 
-	_, err = ExecBackgroundForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, false, 0, m)
+	_, err = ExecBackgroundForProfile(ctx, st, "proj-pol", pid, srvID, blockedCmd, false, 0, m, "", "")
 	assertBlockedError(t, err)
 	wantSolePolicyRow(t, st, "exec-bg-blocked", "POSIX-FORMAT", blockedCmd, false, srvID, "proj-pol")
 }
@@ -242,9 +242,9 @@ func TestExecBlockedAuditGoesOfflineSidecar(t *testing.T) {
 	defer m.CloseAll()
 	ctx := context.Background()
 
-	_, err = ExecCommandForProfile(ctx, hyd, "proj-off", pid, srvID, blockedCmd, false, 5*time.Second)
+	_, err = ExecCommandForProfile(ctx, hyd, "proj-off", pid, srvID, blockedCmd, false, 5*time.Second, "", "")
 	assertBlockedError(t, err)
-	_, err = ExecBackgroundForProfile(ctx, hyd, "proj-off", pid, srvID, blockedCmd, false, 0, m)
+	_, err = ExecBackgroundForProfile(ctx, hyd, "proj-off", pid, srvID, blockedCmd, false, 0, m, "", "")
 	assertBlockedError(t, err)
 	_ = af.Close() // 落盘后立即关句柄再读回 (Cleanup 里的二次 Close 忽错)
 

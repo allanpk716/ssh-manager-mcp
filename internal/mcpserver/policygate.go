@@ -17,8 +17,7 @@ import (
 // shell 类型选择语法(ticket #14;存储层已把空值归一为 POSIX,能到这里的
 // 未知值不改写——Evaluate 的保守分支判需确认,不悄悄放行)。后续票接
 // 快照下发的生效规则集(换第三参)时只改这里,不动两个调用点的时序。
-// 需确认档由命令策略后续的 GitHub Issue 在调用点接一次性确认码,本票
-// 只对拦截档动作。
+// 拦截档在调用点直接拒绝;需确认档经 confirmcode.go 的一次性确认码门。
 func policyJudge(shell models.ShellType, command string) policy.Decision {
 	return policy.Evaluate(policy.ShellType(shell), command, nil)
 }
