@@ -65,6 +65,20 @@
 - **`sudo=true` 让 broker 替你跑 `sudo -S`**——broker 把存储的 sudo 密码写进
   远端 sudo 的 stdin，你**别自己在 command 里拼 `sudo` 前缀**（会变成
   `sudo -S -p '' -- sudo ...`，密码喂不进去）。前提 `has_sudo=true`。
+- **命令策略：执行前有一道严重后果兜底检查**（拦截 / 需确认 / 放行三档，
+  判定在建立连接之前——被拦下的命令一个字节都不会到服务器）。
+  **拦截**：你收到
+  `blocked by command policy [<规则编号>]: <为什么危险> — instead: <更安全的做法>`
+  ——**不要换写法重试**（改写、拆段、换写法绕过都是错误反应）；把规则
+  编号、风险说明与建议的替代做法解释给用户；用户确实需要执行时报告
+  owner 裁量（规则的停用是 owner 的决定，不是你的）。
+  **需确认**：你收到
+  `confirmation required by command policy ... | confirmation code XXXXXX: ...`
+  ——**先把风险说给用户、征得同意**，然后用**同一条命令**重调，附
+  `confirmation_code`（那串码）与 `confirmation_reason`（用户同意了什么的
+  简短说明）。码与「服务器 + 命令完整文本」绑定、5 分钟有效、单次
+  使用——命令改一个字符或换一台服务器，都要重新走一轮确认。你看不到
+  完整规则清单（设计如此），每次返回里只有当次命中的那一条。
 - **超时只作用于命令执行阶段**：`timeout_seconds` 缺省 = **120 秒**；硬上限
   **5 分钟**（超限值被钳到 5 分钟，**生效值以 `effective_timeout_seconds`
   字段回显**——恒存在，读它别猜）。连接建立不受这个参数约束（由 MCP 工具
@@ -276,9 +290,11 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
 ### exec_background
 
 在服务器上**后台**跑一条长活命令（编译 / 训练 / `tail -f` 日志跟踪 / watch），
-立刻拿 `task_id` 返回——不等它结束。与 `exec_command` 同一道 profile 门和
+立刻拿 `task_id` 返回——不等它结束。与 `exec_command` 同一道 profile 门、
 同一套 sudo 规则（`sudo=true` 由 broker 代跑 `sudo -S`，**别自己拼 `sudo`
-前缀**，前提 `has_sudo=true`）。
+前缀**，前提 `has_sudo=true`）和**同一道命令策略门**（拦截 / 需确认的处理
+与 exec_command 完全相同——需确认时带 `confirmation_code` /
+`confirmation_reason` 重调的是 exec_background 本身）。
 
 - `timeout_seconds` 缺省 = **24 小时**，这也是硬上限（超限值被钳到 24h）；
   生效值回显 `effective_timeout_seconds`。
@@ -364,6 +380,10 @@ v0.20.0+)。无参数。**平时你不需要调它**——owner 更新磁盘二�
 | `host key mismatch: possible MITM, connection rejected` | 服务器 host key 和首次记录的不一致——可能是中间人（TOFU fail-closed） | **报告 owner 核实**，**绝对别**尝试绕过（没有任何"跳过检查"参数） |
 | `ssh dial: connect failed: connection refused`（等分类短语） | 连不上目标机（地址细节已按可见性边界清洗） | 核对 server_id 是否正确；网络问题报告 owner |
 | `sudo not configured for server <name> (call list_servers: has_sudo tells you)` | `sudo=true` 但该机 `has_sudo=false` | 回 `list_servers` 核对；确实需要提权就报告 owner 配 sudo 凭据 |
+| `blocked by command policy [<规则编号>]: <为什么危险> — instead: <更安全的做法>` | 命令策略把这条命令判为**拦截**（严重后果兜底里「不可恢复损失」一档）；判定发生在建立连接之前，命令零字节到服务器 | **不要换写法重试**；把规则编号、风险说明与建议的替代做法解释给用户；用户确实要执行就报告 owner 裁量（规则停用是 owner 的决定） |
+| `confirmation required by command policy [<规则编号>]: … — instead: … \| confirmation code XXXXXX: ask the user for consent …` | 命令策略判为**需确认**（锁在门外 / 整卷整池销毁 / 删除目标执行前无法确定一类）；随行附一枚一次性确认码 | **先向用户转述风险并征求同意**，同意后**同一条命令**原样重调 + `confirmation_code` + `confirmation_reason`（用户同意了什么的简短说明）；码 5 分钟有效、单次使用、绑定此命令与此服务器 |
+| `confirmation required … the confirmation code was not accepted (wrong code, expired, already used, or issued for a different command or server); a new one follows — confirmation code YYYYYY` | 确认码没对上（码错 / 过期 / 已用 / 命令或服务器对不上）；系统已签发新码 | 用**新码**重走流程（先确认用户仍同意，再带新码与理由重调）；别拿旧码反复试 |
+| `confirmation_reason is required together with confirmation_code — describe what the user consented to, then call again …` | 带了 `confirmation_code` 但缺 `confirmation_reason` | 补上理由（用户同意了什么的简短说明）重调同一条命令；已签发的码不作废 |
 | `no open tunnel with id <id>` | 隧道已关/已被 ~10 分钟**空闲**回收/被 owner `tunnels kill` 拆除/revoke-disable 级联拆除/从未开过 | 正常现象；需要转发就重开 `forward_port` |
 | `background task limit (32) reached — wait for a running task to finish or call exec_stop` | 后台任务满员：该 project 已有 32 个任务且全在运行（完成态会被驱逐腾位，全运行态才拒绝） | 等一个运行中任务自然结束，或对不要的任务调 `exec_stop`，再重试 `exec_background` |
 | `unknown task_id — it may never have existed, expired after the retention window (1h), been evicted for capacity (32-task limit), or the broker restarted; task records are in-process only` | task_id 失效（三因 + 从未存在）：完成超 ~1h 保留期过期 / 32 满员时被驱逐 / **broker 重启**（任务表纯进程内，重启即全失） | broker 重启 = 在跑任务全死，重新安排活；过期/驱逐的按需重跑命令；失效 id 别反复重试 |
@@ -418,6 +438,10 @@ cache 模式下你最可能撞上的具体形态是**首次连接一台缓存里
 禁止裸 ssh/scp/寻找私钥（本机没有可用凭据，直连必失败）。
 - 先 list_servers 拿真实 id（name ≠ id），动手前读目标机的 caveats/role。
 - 提权用 sudo=true 参数，不要自己拼 sudo 前缀。
+- 命令策略拦截（blocked by command policy…）不换写法重试，向用户解释规则
+  编号与原因；需确认（confirmation required…）先征求用户同意，再用同一条
+  命令带 confirmation_code + confirmation_reason 重调（码 5 分钟有效、单次、
+  绑定此命令与服务器）。
 - 工具报错先查 docs/agent-tools.md 错误对照表；read-only 报错=多机缓存
   （只读形态），报告 owner 去管理面操作，不要重试写操作。
 （按需替换工具前缀 mcp__ssh__* 为你的客户端实际命名。）
@@ -478,3 +502,6 @@ HEAD，后续重构以符号名为准）：
 | 离线 cache 模式：未知 host key 被拒（TOFU 无法记录，包 ErrReadOnly；已知 key 正常匹配） | `internal/sshbroker/hostkey.go:33-34`；`internal/sshbroker/hostkey_readonly_test.go:33-58`；`internal/mcpserver/run.go:211-213` |
 | 凭据字节永不出现在任何工具结果（owner 侧模型） | `internal/mcpserver/types.go:5`；docs/agent-access.md「安全模型回顾（铁律）」；../README.md "The security model" |
 | 每次工具调用全程审计（project/server/action/status/命令/耗时） | `internal/mcpserver/core.go:81-89` 等；../README.md "What the agent gets" |
+| 命令策略门在取凭据、建 SSH 连接之前（拦截 / 需确认都不建连接，拦截零字节到服务器）；判定内核是纯函数，权威端与客户端同一条代码路径，离线用最后一次拉到的规则 | `internal/mcpserver/policygate.go`（policyJudge）；`internal/mcpserver/core.go`（ExecCommandForProfile 的 gate 段）；`internal/mcpserver/bgtools.go`（后台同款门）；`internal/policy/policy.go`（Evaluate） |
+| 确认码与「服务器编号 + 命令完整文本」的哈希绑定、5 分钟有效、单次作废、进程内存不持久化；约 6 位字母数字（字母表去 0/O、1/I/L） | `internal/mcpserver/confirmcode.go`（confirmationTTL / confirmBindingKey / issue / consume / confirmationCodeAlphabet） |
+| 命令策略审计动作：前台 exec-blocked / exec-confirm-required / exec-confirmed，后台 exec-bg-blocked / exec-bg-confirm-required / exec-bg-confirmed（Status 列存命中规则编号；带码执行行的 Command 列存「命令原文 + 确认理由」JSON 摘要） | `internal/mcpserver/core.go`；`internal/mcpserver/bgtools.go`；`internal/mcpserver/confirmcode.go`（gateExecConfirmation） |

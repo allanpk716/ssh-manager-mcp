@@ -368,6 +368,12 @@ func (m clientModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.overlay = w
 			return m, w.Init()
+		case k.Text == "p" && !m.busy:
+			// 票 #16:客户端上的命令策略只读面——规则列表与
+			// 试算读当前实例的缓存快照,无任何修改入口(规则在权威端
+			// 维护,随 cache pull 下发,ADR 0007)。
+			m.overlay = newPolicyViewer(m.snap)
+			return m, m.overlay.Init()
 		case k.Text == "t":
 			m.status = "TTL 由 .mcp.json 的 --cache-max-age 控制（默认 30m；0=关闭自动拉取）"
 			return m, nil
@@ -573,9 +579,11 @@ func (m clientModel) View() tea.View {
 	// in Update — don't advertise it while that mode is on. Since Plan 45 T3
 	// [c] really starts the pairing wizard, and newPairWizard refuses under a
 	// single-slot override — the hint goes dark there too (don't lie).
-	clientFooter := "[s]同步 [i]实例 [c]入网 [t]TTL  q 退出"
+	clientFooter := "[s]同步 [i]实例 [c]入网 [p]策略 [t]TTL  q 退出"
 	if singleSlot {
-		clientFooter = "[s]同步 [t]TTL  q 退出"
+		// §3.5 变体只熄灭被门住的 [i]/[c];[p] 策略查看器只读快照,单槽下
+		// 照常可用,继续宣传。
+		clientFooter = "[s]同步 [p]策略 [t]TTL  q 退出"
 	}
 	b.WriteString(clip(m.width, footerStyle.Render(clientFooter)))
 	return altScreen(tea.NewView(b.String()))

@@ -97,7 +97,7 @@ func TestGateServerNotInProfileHintViaToolPaths(t *testing.T) {
 	variant := caseVariant(t, granted)
 
 	// exec_command
-	_, err := ExecCommandForProfile(context.Background(), st, "proj", pid, variant, "true", false, 0)
+	_, err := ExecCommandForProfile(context.Background(), st, "proj", pid, variant, "true", false, 0, ExecConfirmation{})
 	assertBranch(t, err, `did you mean "`+granted+`"?`)
 	assertBranch(t, err, "server ids are case-sensitive")
 	if !errors.Is(err, ErrNotInProfile) {

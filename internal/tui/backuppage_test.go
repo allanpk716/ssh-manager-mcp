@@ -103,14 +103,14 @@ func (e *backupTestEnv) breakConfig() {
 	e.bp.syncList()
 }
 
-// TestBackupPage_SixPagesAndClientNeverBuildsBrokerArray pins the page-array
-// shape (Plan 49 票 03: 5→6) and the role gate: the client launch dispatches
+// TestBackupPage_BrokerOnlyPageArray pins the page-array shape (Plan 49
+// 票 03: 5→6;票 16 增至 7) and the role gate: the client launch dispatches
 // to the client panel and never constructs the broker page array, so the
-// sixth page exists only on the broker console.
-func TestBackupPage_SixPagesAndClientNeverBuildsBrokerArray(t *testing.T) {
+// 备份 and 命令策略 pages exist only on the broker console.
+func TestBackupPage_BrokerOnlyPageArray(t *testing.T) {
 	a := newTestApp(t)
-	if int(pageCount) != 6 {
-		t.Fatalf("pageCount = %d, want 6 (备份 is the sixth page)", pageCount)
+	if int(pageCount) != 7 {
+		t.Fatalf("pageCount = %d, want 7 (命令策略 is the seventh page)", pageCount)
 	}
 	if _, ok := a.pages[pageBackup].(*backupPage); !ok {
 		t.Fatalf("pages[pageBackup] must be a *backupPage, got %T", a.pages[pageBackup])

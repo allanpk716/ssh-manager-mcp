@@ -242,6 +242,7 @@ sshmgr pair --instance laptop
 3. **服务器是单点**：服务器挂了 = 没人能入网/保鲜，存量缓存照常干活，直到它恢复。**自动备份 / 灾难恢复已落地**——[Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)（NAS 定时明文备份）+ [export/import](./backup-restore.md)（Plan 11，便携加密备份）。恢复手段：从 NAS 拷最新快照或 export 文件，在新机 `sshmgr import`（[见 backup-restore 的灾难恢复](./backup-restore.md#场景-③-灾难恢复)）。
 4. **单 owner 设计**：多个人共用同一个 vault、按人隔离访问——**不在范围**。本方案是"一个人、多台机"。多人场景需要 per-user ACL + 审计隔离，是另一个量级的功能。
 5. **两把钥匙都要管**：设备码（拉取权，可吊销、pinned 401 即销毁本机缓存）+ project token（spawn 闸，轮换/吊销见 [agent-access.md](./agent-access.md)）。都进密码管理器/0600 文件、别进 git。吊销生效语义见下「吊销」节与 [agent-tools.md](./agent-tools.md) 的「吊销三路径」。
+6. **权威端看不到客户端版本**：工作机拉取快照时不携带自己的程序版本，权威 vault 里也没有每台工作机的版本记录——因此权威端无法列出「仍在使用不支持命令策略版本的客户端设备」（这类设备拉到规则后仍照常执行一切命令；命令策略的检查只发生在各台工作机自己的执行路径上）。要让规则在某台工作机生效，唯一途径是在那台机上升级程序。
 
 ---
 

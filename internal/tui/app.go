@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
+	"ssh-manager-mcp/internal/shellprobe"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -24,6 +26,7 @@ const (
 	pageTokens
 	pagePairing
 	pageBackup // 「备份」(Plan 49 票 03) — broker/standalone only, never the client console
+	pagePolicy // 「命令策略」(票 16) — broker/standalone only; the client console has its own read-only viewer
 	pageCount
 )
 
@@ -169,6 +172,11 @@ func FetchAll(st *store.Store, backupCfgPath string) ([pageCount]listPage, error
 	pages[pageTokens] = newCacheTokensPage(tokens, profileNames)
 	pages[pagePairing] = newPairingPage(pairings, profiles, defProfile)
 	pages[pageBackup] = newBackupPage(backupCfgPath)
+	policyPage, err := newPolicyPage(st)
+	if err != nil {
+		return pages, err
+	}
+	pages[pagePolicy] = policyPage
 	return pages, nil
 }
 
@@ -272,7 +280,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, a.overlay.Init()
 		case k.Text == "a", k.Text == "e", k.Text == "d", k.Text == "g",
 			k.Text == "i", k.Text == "!", k.Text == "x", k.Text == "r",
-			k.Text == "b", k.Text == "v":
+			k.Text == "b", k.Text == "v", k.Text == "s", k.Text == "t", k.Text == "p":
 			// F2 (fix round): while an upgrade segment is in flight (install/
 			// probe/deviceIssue — overlay==nil windows), page action keys are
 			// suppressed: opening a form overlay here would be clobbered by the
@@ -513,6 +521,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return a, cmd
 				}
 			}
+			if a.page == pagePolicy {
+				if cmd := a.policyKey(k); cmd != nil {
+					return a, cmd
+				}
+			}
 			if a.overlay != nil {
 				return a, a.overlay.Init()
 			}
@@ -707,9 +720,11 @@ func restoreNav(pages *[pageCount]listPage, nav [pageCount]pageNav) {
 
 // serversKey dispatches the servers page's action keys: a=新增, e=编辑,
 // d=删除, i=导入 ssh config (Plan 20 T10 — broker App only; client mode runs
-// clientModel and never builds this page), !=toggle the ⚠ filter. Form keys
-// open their overlay (setting a.overlay) and return the overlay's Init cmd;
-// `!` is a pure list-state toggle returning nil. Any other key is a no-op
+// clientModel and never builds this page), !=toggle the ⚠ filter, p=探测
+// 当前服务器的实际 shell 类型(票 #17,走 doAction 异步执行、状态行报告,
+// 不开 overlay)。Form keys open their overlay (setting a.overlay) and return
+// the overlay's Init cmd; `!` is a pure list-state toggle returning nil, `p`
+// returns the probe's doAction cmd directly. Any other key is a no-op
 // returning nil (notably g: the profiles page's grant key must do nothing
 // here — per-page dispatch is what keeps the overlapping letters across pages
 // from swallowing each other). Extracted from Update in Plan 20 T1 so the
@@ -738,6 +753,29 @@ func (a *App) serversKey(k tea.Key) tea.Cmd {
 			// entry is a paginated field list. Width comes from the App's
 			// WindowSizeMsg state (0 pre-report; the page floors itself).
 			a.overlay = newServerEditPage(a.st, cur, prefill(cur), a.width)
+		}
+	case "p":
+		// 票 #17(命令策略诊断面):探测当前服务器的实际 shell 类型并
+		// 在状态行报告——CLI `servers probe-shell` 的等价面(ADR 0003)。
+		// 探测是网络操作,走 doAction(在 UI 循环外执行,结果经消息回
+		// 来);shellprobe 自带整次探测的期限,不会卡住界面。只提示不
+		// 代改:修正标注走 `e` 编辑页。
+		if cur := sp.current(); cur != nil {
+			return doAction(a.st, func() (string, error) {
+				detected, evidence, err := shellprobe.ProbeServer(context.Background(), a.st, cur)
+				if err != nil {
+					return "", err
+				}
+				annotated := models.NormalizeShellType(string(cur.ShellType))
+				switch {
+				case detected == "":
+					return fmt.Sprintf("探测完成:%s 无法判定实际 shell 类型(%s);当前标注为 %s", cur.Name, evidence, annotated), nil
+				case detected != annotated:
+					return fmt.Sprintf("探测完成:%s 实际 shell=%s,与标注 %s 不一致——请用编辑键(e)修正标注,探测不代改", cur.Name, detected, annotated), nil
+				default:
+					return fmt.Sprintf("探测完成:%s 实际 shell=%s,与标注一致", cur.Name, detected), nil
+				}
+			})
 		}
 	case "d":
 		if cur := sp.current(); cur != nil {
@@ -861,7 +899,7 @@ func (a App) footer() string {
 		if sp, ok := a.pages[pageServers].(*serversPage); ok && sp.warnOnly {
 			bang = "[!]显示全部"
 		}
-		keys = "[a]新增 [e]编辑 [d]删除 [i]导入 " + bang
+		keys = "[a]新增 [e]编辑 [d]删除 [i]导入 [p]探测shell " + bang
 	case pageProfiles:
 		keys = "[a]新增 [g]授权 [d]删除"
 	case pageProjects:
@@ -878,6 +916,9 @@ func (a App) footer() string {
 		} else {
 			keys = "[b]立即备份 [v]校验最新 [e]编辑配置"
 		}
+	case pagePolicy:
+		// CLI 对等(ADR 0003):add/rm/disable/enable/test 四类能力
+		keys = "[a]新增自定义 [d]删除 [s]停用/恢复默认 [t]试算"
 	}
 	tail := "Tab 切页  q 退出"
 	if keys != "" {

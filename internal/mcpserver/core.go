@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -90,8 +91,9 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 // mismatch, connect failure, missing sudo, timeout, exec error, and success.
 // projectID attributes the call to the agent's project (empty for any future
 // owner-facing caller — currently the owner path is internal/cli/ssh.go).
-func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeout time.Duration, hk ...sshbroker.HostKeyStore) (out ExecOutput, err error) {
+func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeout time.Duration, confirm ExecConfirmation, hk ...sshbroker.HostKeyStore) (out ExecOutput, err error) {
 	var status string
+	var action = "exec" // 命令策略换用新动作:拦截 exec-blocked / 需确认退回 exec-confirm-required (Status 存命中规则编号)
 	var exitCode int
 	start := time.Now()
 	defer func() {
@@ -99,7 +101,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 			status = "error"
 		}
 		_ = st.WriteAudit(store.AuditRow{
-			TS: start, ProjectID: projectID, ServerID: serverID, Action: "exec",
+			TS: start, ProjectID: projectID, ServerID: serverID, Action: action,
 			Command: command, Sudo: sudo, Status: status, ExitCode: exitCode, DurationMS: time.Since(start).Milliseconds(),
 		})
 	}()
@@ -118,6 +120,19 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		status = "error"
 		err = fmt.Errorf("server %s not found", serverID)
 		return
+	}
+
+	// 命令策略 (ticket #10/#11/#15 / ADR 0007):拦截档命令在取凭据、建连接之前
+	// 拒绝——不建立 SSH 连接,命令一个字节都不会送到服务器;需确认档同样
+	// 在连接之前退回:一行说明 + 一次性确认码,agent 征得用户同意后带码
+	// 与理由重调才继续走下面的正常执行链。两档的门与审计动作名都在
+	// applyPolicyGate(policygate.go)里,与后台镜像;退回/拦截行的
+	// Command 保持命令原文,「带确认码执行」行由门内自落。
+	if d := policyJudge(st, srv.ShellType, command); d.Disposition != policy.DispositionAllow {
+		if granted, gAction, gStatus, gErr := applyPolicyGate(st, projectID, serverID, command, sudo, confirm, d, execPolicyActions); !granted {
+			action, status, err = gAction, gStatus, gErr
+			return
+		}
 	}
 
 	auth, aerr := vault.AuthForServer(st, srv)

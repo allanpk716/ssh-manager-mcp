@@ -19,6 +19,10 @@ type serverDraft struct {
 	Port                                                     int
 	Password, KeyPath, KeyPass, SudoPassword                 string
 	Description, Location, Hardware, Services, Role, Caveats string
+	// Shell (命令策略 ticket #14) 是服务器条目的 shell 类型标注,三选一
+	// (posix / powershell / cmd),空值提交为默认 posix。字符串而非
+	// models.ShellType:huh Select 绑定 *string。
+	Shell string
 	// ClearCredential is the edit form's 清除凭据 toggle (rendered only in
 	// editing mode): ticked = submitServer routes through ClearServerCredential
 	// instead of a normal update — the reverse operation of re-credential.
@@ -54,8 +58,21 @@ func newServerForm(d *serverDraft, editing bool) *huh.Form {
 			portField(&d.Port),
 		),
 		huh.NewGroup(credFields...),
+		huh.NewGroup(shellSelectField(d)),
 		huh.NewGroup(structuredFields(d)...),
 	)
+}
+
+// shellSelectField 构造 shell 类型的三选一(命令策略:命令按该标注的
+// 语法拆解判定,默认 POSIX)。绑定 *string(d.Shell):空值(新增态未碰过)
+// 时无预选,首项即 POSIX;提交后选中值直接落回草稿。
+func shellSelectField(d *serverDraft) huh.Field {
+	return huh.NewSelect[string]().Title("Shell 类型（命令策略按此语法拆解命令）").
+		Options(
+			huh.NewOption("POSIX（Linux/macOS）", "posix"),
+			huh.NewOption("PowerShell（Windows）", "powershell"),
+			huh.NewOption("cmd（Windows）", "cmd"),
+		).Value(&d.Shell)
 }
 
 func passwordField(d *serverDraft, editing bool) *huh.Input {
@@ -226,6 +243,7 @@ func prefill(cur *models.Server) *serverDraft {
 		Description: cur.Description, Location: cur.Location, Hardware: cur.Hardware,
 		Services: cur.Services, Role: cur.Role, Caveats: cur.Caveats,
 		ExposeHost: cur.ExposeHost,
+		Shell:      string(cur.ShellType),
 	}
 }
 
@@ -245,6 +263,7 @@ func (d *serverDraft) toParts() (*models.Server, *models.Credential, *models.Cre
 		Hardware: strings.TrimSpace(d.Hardware), Services: strings.TrimSpace(d.Services),
 		Role: strings.TrimSpace(d.Role), Caveats: strings.TrimSpace(d.Caveats),
 		ExposeHost: d.ExposeHost,
+		ShellType:  models.NormalizeShellType(d.Shell),
 	}
 	var cred, sudo *models.Credential
 	switch {
