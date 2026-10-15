@@ -213,10 +213,8 @@ func TestResolve_RoleFileAnomalies(t *testing.T) {
 // ONLY cache material is named-instance slots is still an enrolled client —
 // never misrouted to the wizard.
 func TestResolveMode_OnlyNamedInstances_IsClient(t *testing.T) {
-	userDir := t.TempDir()
-	t.Setenv("APPDATA", userDir)
-	t.Setenv("XDG_CONFIG_HOME", userDir)
-	t.Setenv("SSHMGR_CACHE_DIR", "") // 默认槽 auth 也不在
+	// withDirs 同时把 vault 指向空临时目录:否则本机真实的 vault 会让判定落到权威端。
+	_, userDir := withDirs(t) // 默认槽 auth 也不在
 	os.MkdirAll(filepath.Join(userDir, "ssh-manager", "instances", "agentA"), 0o700)
 	if l, err := ResolveMode(""); err != nil || l.Kind != LaunchClient {
 		t.Fatalf("named-instance-only machine must be a client: %+v %v", l, err)

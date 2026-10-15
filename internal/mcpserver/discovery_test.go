@@ -13,6 +13,9 @@ import (
 // §3.4 / task-6-brief):probe = 首行 `sshmgr-disc-v1\n` + JSON {"t":"probe"};
 // offer = {"t":"offer","name","spki","tcp"} 只单播回源。开关逐包评估,关=不答;
 // 魔数/JSON 畸形静默。
+//
+// 这些测试绑定真实的 UDP 7878 端口。本机若正运行着 `sshmgr serve`(它也占
+// 这个端口),其中 3 个会失败;这是环境冲突,不是代码回归,停掉 serve 再跑即可。
 
 // mustResolve is the brief's helper: resolve a UDP address or fail the test.
 func mustResolve(t *testing.T, addr string) *net.UDPAddr {

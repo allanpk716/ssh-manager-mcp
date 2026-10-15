@@ -44,12 +44,32 @@ import (
 // answers with the version the test pinned in the environment — no real
 // cross-compile needed. Any other invocation (the normal `go test` run, or a
 // child spawned without the env) runs the test suite as usual.
+//
+// It also points SSHMGR_FILEKEY_PATH at a file that does not exist (unless
+// the caller already set it), so a real master.key.plain on the developer
+// machine never outranks the SSHMGR_MASTERKEY_HEX each test pins. Without
+// this, every test that decrypts a credential fails on a machine where
+// sshmgr is installed. Tests that need the file layer set the variable
+// themselves with t.Setenv.
 func TestMain(m *testing.M) {
 	if v := os.Getenv("SSHMGR_TEST_STAGED_VERSION"); v != "" {
 		fmt.Println(v)
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	os.Exit(runIsolated(m))
+}
+
+func runIsolated(m *testing.M) int {
+	if _, set := os.LookupEnv("SSHMGR_FILEKEY_PATH"); !set {
+		dir, err := os.MkdirTemp("", "sshmgr-cli-test-")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		defer os.RemoveAll(dir)
+		os.Setenv("SSHMGR_FILEKEY_PATH", filepath.Join(dir, "no-such-master.key"))
+	}
+	return m.Run()
 }
 
 // --- fixtures and seams -----------------------------------------------------
