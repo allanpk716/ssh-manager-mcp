@@ -61,6 +61,7 @@ sshmgr servers add \
   [--role '<这台机器的用途>']          # e.g. prod pg primary
   [--special-handling '<注意事项>']    # agent 行动前必读（Caveats 字段）
   [--expose-host]                   # bool，默认 false：list_servers 回显该机 host 明文（默认掩码 "hidden"）
+  [--shell posix|powershell|cmd]    # 命令策略拆解命令用的 shell 类型标注，默认 posix（见下文「Shell 类型标注与探测」）
 ```
 
 ### 必填 vs 选填
@@ -207,6 +208,7 @@ sshmgr servers edit <name> [flags...]
 | `--role '<用途>'` | 改 / 加 role |
 | `--special-handling '<注意事项>'` | 改 / 加 Caveats；传 `--special-handling ""` 清空 |
 | `--expose-host` | 开「agent 可见 host」：`list_servers` 的 host 默认掩码为 `"hidden"`，本 flag 裸用 = 开（回明文），`--expose-host=false` = 关（bool，默认 false；`servers add` 同名 flag 同语义） |
+| `--shell posix\|powershell\|cmd` | 改 shell 类型标注（命令策略拆解命令用，见[下文](#shell-类型标注与探测命令策略)） |
 | `--password '<新密码>'` | 切换到 / 替换密码认证（会发新凭据） |
 | `--key <私钥路径> [--key-passphrase '<口令>']` | 切换到 / 替换密钥认证 |
 | `--sudo-password '<新sudo密码>'` | 设 / 换 sudo 密码 |
@@ -268,6 +270,27 @@ sshmgr servers edit gpu --clear-credential
 - **改名后**，后续命令要用新名字引用（id 不变，用 id 也行）。
 - **换密钥/密码不影响 profile 绑定**——这台 server 仍然在原来那些 profile 里，绑定的 agent 不用重新授权。
 - `--tags` 是**替换语义**：`edit --tags a,b` 会把原有 tags 整个换成 `a,b`，不是追加。
+
+---
+
+## Shell 类型标注与探测（命令策略）
+
+命令策略（agent 经执行工具下发的命令在执行前的严重后果兜底检查，规则全局一套、随快照下发）按服务器条目上标注的 shell 类型选择命令拆解语法：`posix`（Linux / macOS，默认）、`powershell`（Windows PowerShell）、`cmd`（Windows cmd）。标注属于连接信息——owner 在 `servers add --shell` / `servers edit --shell`（或 TUI 编辑页的 Shell 类型字段）设置，agent 的元数据编辑工具改不到它。
+
+标注错了不会静默放行（不认识的值按保守分支处理，偏向需确认），但拆解会不准。拿不准一台机器（尤其 Windows 机器）的实际 shell 时，用探测命令看真实情况：
+
+```bash
+sshmgr servers probe-shell [<name>...]   # 不给名字 = 探测全部服务器
+```
+
+探测连上服务器发两条固定的 `echo` 命令（只打印文字，无副作用），判定实际 shell 类型后与标注比对，每台一行：
+
+- 一致：`real shell=… — matches the annotation`；
+- 不一致：提示并附修正指引（如 `sshmgr servers edit <name> --shell powershell`）——**探测只提示，从不代改标注**；
+- 无法判定：如实说明并附判定依据，请人工确认；
+- 连不上：打失败行，命令以非零退出（诊断要诚实——连不上不装成「一致」）。
+
+TUI 等价：服务器页 `p` 探测光标所在服务器，结果在状态行报告（ADR 0003 的对等面）。
 
 ---
 

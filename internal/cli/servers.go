@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -12,6 +15,7 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/secrethint"
+	"ssh-manager-mcp/internal/shellprobe"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -40,7 +44,7 @@ func writeOwnerAuditError(s *store.Store, action string, summary map[string]any)
 
 func newServersCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "servers", Short: "Manage SSH target servers"}
-	cmd.AddCommand(serversAddCmd(), serversListCmd(), serversRmCmd(), serversEditCmd(), serversImportCmd(), serversPinHostkeyCmd())
+	cmd.AddCommand(serversAddCmd(), serversListCmd(), serversRmCmd(), serversEditCmd(), serversImportCmd(), serversPinHostkeyCmd(), serversProbeShellCmd())
 	return cmd
 }
 
@@ -153,6 +157,79 @@ func serversAddCmd() *cobra.Command {
 	_ = c.MarkFlagRequired("host")
 	_ = c.MarkFlagRequired("user")
 	return c
+}
+
+// serversProbeShellCmd:`sshmgr servers probe-shell [<name>...]`——探测服
+// 务器实际的 shell 类型并与标注比对(ticket #17,命令策略的诊断面;探
+// 测只向服务器发两条固定的 echo 命令,无副作用)。与标注不一致时提示
+// owner 用 servers edit 修正——探测从不改标注;无法判定时如实说明并给
+// 出判定依据。不给名字则探测全部服务器。退出码:连接或执行失败为非
+// 零;不一致与无法判定只是提示,不是失败。
+func serversProbeShellCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "probe-shell [name...]",
+		Short: "Probe each server's real shell type and compare with the annotation (read-only: a mismatch is hinted at, never fixed)",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := openUnlockedStore()
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			// 先把全部目标解析出来再探测:名字拼错立刻报错,不在长网
+			// 络操作之后才暴露(与 ssh 命令的查找语义一致)。
+			var targets []*models.Server
+			if len(args) == 0 {
+				if targets, err = st.ListServers(); err != nil {
+					return err
+				}
+			} else {
+				for _, name := range args {
+					srv, gerr := st.GetServerByName(name)
+					if gerr != nil {
+						return gerr
+					}
+					if srv == nil {
+						return fmt.Errorf("server %q not found", name)
+					}
+					targets = append(targets, srv)
+				}
+			}
+			out := cmd.OutOrStdout()
+			failed := false
+			for _, srv := range targets {
+				if err := probeAndReportShell(out, st, srv); err != nil {
+					failed = true
+					fmt.Fprintf(out, "%s: probe failed: %v\n", srv.Name, err)
+				}
+			}
+			if failed {
+				return errors.New("servers probe-shell: one or more servers could not be probed")
+			}
+			return nil
+		},
+	}
+}
+
+// probeAndReportShell 探测一台服务器并打一行结论,三种形态:与标注一
+// 致 / 不一致(带修正指引)/ 无法判定(带判定依据)。探测本身出错时由
+// 调用方打失败行。
+func probeAndReportShell(out io.Writer, st *store.Store, srv *models.Server) error {
+	detected, evidence, err := shellprobe.ProbeServer(context.Background(), st, srv)
+	if err != nil {
+		return err
+	}
+	annotated := models.NormalizeShellType(string(srv.ShellType))
+	switch {
+	case detected == "":
+		fmt.Fprintf(out, "%s: could not determine the real shell type (evidence: %s); the annotation says %s — check this server by hand\n", srv.Name, evidence, annotated)
+	case detected != annotated:
+		fmt.Fprintf(out, "%s: real shell=%s, annotation=%s — MISMATCH: fix the annotation with `sshmgr servers edit %s --shell %s` (this probe never changes the annotation; evidence: %s)\n",
+			srv.Name, detected, annotated, srv.Name, detected, evidence)
+	default:
+		fmt.Fprintf(out, "%s: real shell=%s — matches the annotation (evidence: %s)\n", srv.Name, detected, evidence)
+	}
+	return nil
 }
 
 func serversListCmd() *cobra.Command {
