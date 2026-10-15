@@ -125,7 +125,7 @@ func TestExecCommandSudoFailLoud(t *testing.T) {
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{srvID})
 
-	out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "true", true, 5*time.Second)
+	out, err := ExecCommandForProfile(context.Background(), st, "proj-test", pid, srvID, "true", true, 5*time.Second, "", "")
 	if err == nil {
 		t.Fatal("auth-failed must surface as an error (fail-loud), not a normal result")
 	}

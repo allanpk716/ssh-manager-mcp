@@ -93,7 +93,7 @@ func TestExecBackgroundDenied(t *testing.T) {
 	m := newTestTM(t, 4)
 	defer m.CloseAll()
 
-	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, out, "echo hi", false, 0, m)
+	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, out, "echo hi", false, 0, m, "", "")
 	if !errors.Is(err, ErrNotInProfile) {
 		t.Fatalf("want ErrNotInProfile, got %v", err)
 	}
@@ -113,7 +113,7 @@ func TestExecBackgroundNoCredential(t *testing.T) {
 	m := newTestTM(t, 4)
 	defer m.CloseAll()
 
-	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "echo hi", false, 0, m)
+	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "echo hi", false, 0, m, "", "")
 	if !errors.Is(err, vault.ErrNoCredential) {
 		t.Fatalf("want vault.ErrNoCredential, got %v", err)
 	}
@@ -134,7 +134,7 @@ func TestExecBackgroundNoSudo(t *testing.T) {
 	m := newTestTM(t, 4)
 	defer m.CloseAll()
 
-	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "echo hi", true, 0, m)
+	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "echo hi", true, 0, m, "", "")
 	assertBranch(t, err, "sudo not configured")
 	assertNoLeak(t, err, vh)
 	wantSoleStartRow(t, st, "no_sudo", "echo hi", true, srvID, "proj-bg")
@@ -150,7 +150,7 @@ func TestExecBackgroundConnectError(t *testing.T) {
 	m := newTestTM(t, 4)
 	defer m.CloseAll()
 
-	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "true", false, 2, m)
+	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "true", false, 2, m, "", "")
 	assertBranch(t, err, "ssh dial:")
 	assertNoLeak(t, err, "127.0.0.1")
 	wantSoleStartRow(t, st, "connect_error", "true", false, srvID, "proj-bg")
@@ -177,7 +177,7 @@ func TestExecBackgroundHostKeyMismatch(t *testing.T) {
 	m := newTestTM(t, 4)
 	defer m.CloseAll()
 
-	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "true", false, 5, m)
+	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "true", false, 5, m, "", "")
 	assertBranch(t, err, "host key mismatch")
 	assertNoLeak(t, err, srv.Host)
 	wantSoleStartRow(t, st, "hostkey_mismatch", "true", false, srvID, "proj-bg")
@@ -197,7 +197,7 @@ func TestExecBackgroundLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "echo hi", false, 0, m)
+	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "echo hi", false, 0, m, "", "")
 	if !errors.Is(err, ErrBgTaskLimit) {
 		t.Fatalf("want ErrBgTaskLimit, got %v", err)
 	}
@@ -226,7 +226,7 @@ func TestExecBackgroundSuccess(t *testing.T) {
 	defer m.CloseAll()
 
 	// 缺省 (0) → runCap=1h。
-	out1, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "first", false, 0, m)
+	out1, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "first", false, 0, m, "", "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -245,14 +245,14 @@ func TestExecBackgroundSuccess(t *testing.T) {
 	}
 
 	// 超 cap → 钳到 cap; 中值 → 直通。
-	out2, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "second", false, 999999, m)
+	out2, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "second", false, 999999, m, "", "")
 	if err != nil {
 		t.Fatalf("start over-cap: %v", err)
 	}
 	if out2.EffectiveTimeoutSeconds != 3600 {
 		t.Fatalf("over-cap effective = %d, want 3600", out2.EffectiveTimeoutSeconds)
 	}
-	out3, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "third", false, 60, m)
+	out3, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "third", false, 60, m, "", "")
 	if err != nil {
 		t.Fatalf("start mid: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestExecBackgroundManagerClosedAuditedAsError(t *testing.T) {
 	m := newTestTM(t, 4)
 	m.CloseAll() // 收口后一切启动拒绝
 
-	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "echo hi", false, 0, m)
+	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "echo hi", false, 0, m, "", "")
 	if !errors.Is(err, ErrBgManagerClosed) {
 		t.Fatalf("want ErrBgManagerClosed, got %v", err)
 	}

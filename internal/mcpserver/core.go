@@ -91,9 +91,9 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 // mismatch, connect failure, missing sudo, timeout, exec error, and success.
 // projectID attributes the call to the agent's project (empty for any future
 // owner-facing caller — currently the owner path is internal/cli/ssh.go).
-func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeout time.Duration, hk ...sshbroker.HostKeyStore) (out ExecOutput, err error) {
+func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, command string, sudo bool, timeout time.Duration, confirmCode, confirmReason string, hk ...sshbroker.HostKeyStore) (out ExecOutput, err error) {
 	var status string
-	var action = "exec" // 命令策略拦截档换用新动作 exec-blocked (Status 存命中规则编号)
+	var action = "exec" // 命令策略换用新动作:拦截 exec-blocked / 需确认退回 exec-confirm-required (Status 存命中规则编号)
 	var exitCode int
 	start := time.Now()
 	defer func() {
@@ -122,16 +122,29 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	// 命令策略 (ticket #10 / ADR 0007):拦截档命令在取凭据、建连接之前拒绝——
-	// 不建立 SSH 连接,命令一个字节都不会送到服务器。审计行换用新动作
-	// exec-blocked,Status 存命中规则编号,Command 保持命令原文。生效规则集
-	// (默认规则减停用、加自定义,ticket #15)在 policyJudge 里从本 store 读取,
-	// 语法按服务器条目的 shell 类型选择(ticket #14);需确认档由命令策略后续
-	// 的 GitHub Issue 在此接一次性确认码。
-	if d := policyJudge(st, srv.ShellType, command); d.Disposition == policy.DispositionBlock {
-		action, status = "exec-blocked", d.RuleID
-		err = policyBlockError(d)
-		return
+	// 命令策略 (ticket #10/#11/#15 / ADR 0007):拦截档命令在取凭据、建连接之前
+	// 拒绝——不建立 SSH 连接,命令一个字节都不会送到服务器;审计行换用
+	// 新动作 exec-blocked,Status 存命中规则编号,Command 保持命令原文。
+	// 生效规则集(默认规则减停用、加自定义,ticket #15)在 policyJudge 里
+	// 从本 store 读取,语法按服务器条目的 shell 类型选择(ticket #14)。
+	// 需确认档同样在连接之前退回:一行说明 + 一次性确认码
+	// (gateExecConfirmation,见 confirmcode.go);agent 征得用户同意后带
+	// 确认码与理由重调才继续走下面的正常执行链。退回行的审计动作用
+	// exec-confirm-required,带确认码执行行 (含理由) 由门内落。
+	if d := policyJudge(st, srv.ShellType, command); d.Disposition != policy.DispositionAllow {
+		switch d.Disposition {
+		case policy.DispositionBlock:
+			action, status = "exec-blocked", d.RuleID
+			err = policyBlockError(d)
+			return
+		case policy.DispositionConfirmRequired:
+			var granted bool
+			granted, err = gateExecConfirmation(st, projectID, serverID, command, sudo, confirmCode, confirmReason, d, "exec-confirmed")
+			if !granted {
+				action, status = "exec-confirm-required", d.RuleID
+				return
+			}
+		}
 	}
 
 	auth, aerr := vault.AuthForServer(st, srv)

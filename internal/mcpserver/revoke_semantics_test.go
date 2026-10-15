@@ -105,7 +105,7 @@ func TestRevokedProjectKeepsBackgroundTaskRunning(t *testing.T) {
 	defer tasks.CloseAll()
 
 	// 长跑任务: 门控滞留 handler → 恒 running (waitEntered = 会话确在途的确定性锚)。
-	startOut, err := ExecBackgroundForProfile(context.Background(), st, projID, pid, srvID, "longrun", false, 60, tasks)
+	startOut, err := ExecBackgroundForProfile(context.Background(), st, projID, pid, srvID, "longrun", false, 60, tasks, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

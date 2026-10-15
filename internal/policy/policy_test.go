@@ -232,7 +232,6 @@ func TestEvaluate_AllowsOrdinaryDeletion(t *testing.T) {
 		{"删单个文件", "rm -f /etc/hosts"},
 		{"删相对路径", "rm -rf build"},
 		{"删家目录内容", "rm -rf ~/cache"},
-		{"动态目标", "rm -rf $DIR/"},
 		{"循环删除日志", `for f in *.log; do rm "$f"; done`},
 		{"rmdir", "rmdir /tmp/empty"},
 		{"删 home 下的用户目录", "rm -rf /home/deployer/build"},
@@ -388,8 +387,6 @@ func TestEvaluate_AllowsEverydayCommands(t *testing.T) {
 		{"重载服务", "systemctl restart nginx"},
 		{"删用户", "userdel foo"},
 		{"清 crontab", "crontab -r"},
-		{"删整卷(后续票归需确认)", "docker volume rm data"},
-		{"zfs 销毁(后续票归需确认)", "zfs destroy tank/vol"},
 		{"环境变量前缀的日常命令", "LANG=C ls -la"},
 		{"写日志文件", "echo done >> /var/log/my.log"},
 	}
@@ -398,6 +395,224 @@ func TestEvaluate_AllowsEverydayCommands(t *testing.T) {
 			got := evalPOSIX(t, tt.command)
 			if got.Disposition != DispositionAllow {
 				t.Fatalf("Evaluate(%q) = %+v, want 放行", tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_RequiresConfirmationForLockoutOps:会把自己锁在门外的
+// 操作(清空防火墙规则、停止 sshd、修改 sshd_config、关闭网卡、macOS
+// 关闭远程登录)一律需确认,命中 POSIX-LOCKOUT。
+func TestEvaluate_RequiresConfirmationForLockoutOps(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{"清空 iptables 规则", "iptables -F"},
+		{"清空指定链", "iptables -t nat -F PREROUTING"},
+		{"iptables --flush", "iptables --flush"},
+		{"sudo 清空", "sudo iptables -F"},
+		{"nft 冲掉整个规则集", "nft flush ruleset"},
+		{"ufw 关停", "ufw disable"},
+		{"ufw 重置", "ufw reset"},
+		{"systemctl 停 sshd", "systemctl stop sshd"},
+		{"systemctl 停 ssh(service 名)", "systemctl stop ssh.service"},
+		{"service 停 sshd", "service sshd stop"},
+		{"编辑器开 sshd_config", "vim /etc/ssh/sshd_config"},
+		{"nano 开 sshd_config", "sudo nano /etc/ssh/sshd_config"},
+		{"追加写 sshd_config", "echo 'PermitRootLogin no' >> /etc/ssh/sshd_config"},
+		{"覆盖写 sshd_config", "cat new.conf > /etc/ssh/sshd_config"},
+		{"sed 就地改 sshd_config", "sed -i s/Port 22/Port 2222/ /etc/ssh/sshd_config"},
+		{"tee 写 sshd_config", "tee /etc/ssh/sshd_config"},
+		{"拷贝覆盖 sshd_config", "cp new.conf /etc/ssh/sshd_config"},
+		{"写增量配置目录里的文件", "echo 'Port 2222' > /etc/ssh/sshd_config.d/99-agent.conf"},
+		{"路径变体双斜杠", "sed -i s/a/b/ //etc/ssh//sshd_config"},
+		{"ip 关网卡", "ip link set eth0 down"},
+		{"ifconfig 关网卡", "ifconfig eth0 down"},
+		{"ifdown 关网卡", "ifdown eth0"},
+		{"macOS 关远程登录", "systemsetup -setremotelogin off"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalPOSIX(t, tt.command)
+			if got.Disposition != DispositionConfirmRequired || got.RuleID != "POSIX-LOCKOUT" {
+				t.Fatalf("Evaluate(%q) = %+v, want 需确认/POSIX-LOCKOUT", tt.command, got)
+			}
+			if got.Explanation == "" || got.Alternative == "" {
+				t.Fatalf("Evaluate(%q) 必须带风险说明与替代做法, got %+v", tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_AllowsLockoutLookalikes:只是查看防火墙/服务状态、读
+// sshd_config、停别的服务、开网卡的命令必须照常放行,不打扰日常运维。
+func TestEvaluate_AllowsLockoutLookalikes(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{"iptables 列规则", "iptables -L -n"},
+		{"nft 列规则集", "nft list ruleset"},
+		{"ufw 看状态", "ufw status"},
+		{"systemctl 看 sshd 状态", "systemctl status sshd"},
+		{"systemctl 重载 sshd", "systemctl reload sshd"},
+		{"systemctl 重启 nginx", "systemctl restart nginx"},
+		{"service 状态", "service ssh status"},
+		{"停别的服务", "systemctl stop nginx"},
+		{"读 sshd_config", "grep -i port /etc/ssh/sshd_config"},
+		{"cat sshd_config", "cat /etc/ssh/sshd_config"},
+		{"sed 只打印不改", "sed -n p /etc/ssh/sshd_config"},
+		{"备份 sshd_config", "cp /etc/ssh/sshd_config /tmp/sshd_config.bak"},
+		{"编辑别的文件", "vim /etc/hosts"},
+		{"ip 开网卡", "ip link set eth0 up"},
+		{"ifconfig 看网卡", "ifconfig eth0"},
+		{"macOS 开远程登录", "systemsetup -setremotelogin on"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalPOSIX(t, tt.command)
+			if got.Disposition != DispositionAllow {
+				t.Fatalf("Evaluate(%q) = %+v, want 放行", tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_RequiresConfirmationForVolumeDestruction:整卷或整池销毁
+// (zfs/zpool destroy、lvremove、docker volume rm、docker system prune -a)
+// 一律需确认,命中 POSIX-VOLUME-DESTROY——销毁的是整块存储,错了没有
+// 回头路。
+func TestEvaluate_RequiresConfirmationForVolumeDestruction(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{"zfs destroy", "zfs destroy tank/vol"},
+		{"zfs destroy -r", "zfs destroy -r tank/vol@snap"},
+		{"sudo zfs destroy", "sudo zfs destroy tank/data"},
+		{"zpool destroy 整池", "zpool destroy tank"},
+		{"lvremove 删逻辑卷", "lvremove /dev/vg0/data"},
+		{"lvremove -y", "lvremove -y /dev/vg0/data"},
+		{"docker volume rm", "docker volume rm data"},
+		{"docker volume rm 多个", "docker volume rm a b c"},
+		{"docker system prune -a", "docker system prune -a"},
+		{"docker system prune --all", "docker system prune --all"},
+		{"组合里的销毁", "echo cleaning && docker volume rm data"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalPOSIX(t, tt.command)
+			if got.Disposition != DispositionConfirmRequired || got.RuleID != "POSIX-VOLUME-DESTROY" {
+				t.Fatalf("Evaluate(%q) = %+v, want 需确认/POSIX-VOLUME-DESTROY", tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_AllowsVolumeLookalikes:只是查看或快照存储、prune 不带
+// -a 的日常清理,照常放行。
+func TestEvaluate_AllowsVolumeLookalikes(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{"zfs list", "zfs list -t all"},
+		{"zfs snapshot", "zfs snapshot tank/vol@today"},
+		{"zpool status", "zpool status"},
+		{"lvdisplay 查看", "lvdisplay /dev/vg0/data"},
+		{"docker ps", "docker ps -a"},
+		{"docker volume ls", "docker volume ls"},
+		{"docker system prune 不带 -a", "docker system prune"},
+		{"docker rm 容器", "docker rm web"},
+		{"docker rmi 镜像", "docker rmi nginx:latest"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalPOSIX(t, tt.command)
+			if got.Disposition != DispositionAllow {
+				t.Fatalf("Evaluate(%q) = %+v, want 放行", tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_RequiresConfirmationForDynamicRecursiveDelete:删除目标在
+// 执行前无法确定的递归删除(目标含变量或命令替换)一律需确认,命中
+// POSIX-DELETE-TARGET-UNKNOWN——变量为空时它就是删错位置的那一下。
+func TestEvaluate_RequiresConfirmationForDynamicRecursiveDelete(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{"变量目标带尾斜杠", "rm -rf $DIR/"},
+		{"引号变量目标", `rm -rf "$DIR"/`},
+		{"命令替换目标", `rm -rf "$(pwd)"/*`},
+		{"反引号命令替换", "rm -rf `cat /tmp/path`"},
+		{"仅 -r 变量目标", "rm -r $TARGET"},
+		{"sudo 变量目标", "sudo rm -rf $BUILD_DIR"},
+		{"静态前缀加变量", "rm -rf /data/$REL"},
+		{"变量作多个目标之一", "rm -rf /tmp/cache $DIR"},
+		{"组合里的动态删除", "cd /opt && rm -rf $APP_DIR"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalPOSIX(t, tt.command)
+			if got.Disposition != DispositionConfirmRequired || got.RuleID != "POSIX-DELETE-TARGET-UNKNOWN" {
+				t.Fatalf("Evaluate(%q) = %+v, want 需确认/POSIX-DELETE-TARGET-UNKNOWN", tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_AllowsDeterminableDeletes:目标写死或不含动态成分的删除
+// 照常放行——只有「危险删除命令 + 动态目标」才触发,变量出现在别的
+// 命令里一律不影响处置。
+func TestEvaluate_AllowsDeterminableDeletes(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{"cd 变量路径", "cd $HOME"},
+		{"相对路径递归删", "rm -r ./build"},
+		{"写死路径递归删", "rm -rf /tmp/build"},
+		{"写死通配删", "rm -rf /var/log/app/*.log"},
+		{"非递归变量删除", `for f in *.log; do rm "$f"; done`},
+		{"非递归单变量", `rm "$file"`},
+		{"ls 变量参数", "ls $DIR"},
+		{"mkdir 变量路径", "mkdir -p $ROOT/sub"},
+		{"cat 变量文件", "cat $CONF"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalPOSIX(t, tt.command)
+			if got.Disposition != DispositionAllow {
+				t.Fatalf("Evaluate(%q) = %+v, want 放行", tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_CombinedCommandsTakeConfirmTier:组合命令混入需确认档时
+// 取最严重处置(拦截 > 需确认 > 放行),规则编号对最严重那条;同严重度
+// 保留先出现的那条。
+func TestEvaluate_CombinedCommandsTakeConfirmTier(t *testing.T) {
+	tests := []struct {
+		name       string
+		command    string
+		want       Disposition
+		wantRuleID string
+	}{
+		{"需确认压过放行", "echo ok && iptables -F", DispositionConfirmRequired, "POSIX-LOCKOUT"},
+		{"拦截压过需确认", "rm -rf /etc && iptables -F", DispositionBlock, "POSIX-CRITICAL-DELETE"},
+		{"同严重度保留先出现", "ufw disable; zfs destroy tank/vol", DispositionConfirmRequired, "POSIX-LOCKOUT"},
+		{"动态删除压过放行", "cd /opt && rm -rf $APP_DIR", DispositionConfirmRequired, "POSIX-DELETE-TARGET-UNKNOWN"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalPOSIX(t, tt.command)
+			if got.Disposition != tt.want || got.RuleID != tt.wantRuleID {
+				t.Fatalf("Evaluate(%q) = %+v, want %v/%s", tt.command, got, tt.want, tt.wantRuleID)
 			}
 		})
 	}
@@ -421,6 +636,12 @@ func TestEvaluate_ParseFailureFallback(t *testing.T) {
 			t.Fatalf("需确认必须带说明,got %+v", got)
 		}
 	})
+	t.Run("拆不动且含需确认家族命令名需确认", func(t *testing.T) {
+		got := evalPOSIX(t, `iptables -F "$(broken`)
+		if got.Disposition != DispositionConfirmRequired {
+			t.Fatalf("got %+v, want 需确认", got)
+		}
+	})
 }
 
 // TestEvaluate_DisabledDefaultRuleByID:按编号停用默认规则后,该规则
@@ -432,6 +653,14 @@ func TestEvaluate_DisabledDefaultRuleByID(t *testing.T) {
 	}
 	if got := Evaluate(ShellPOSIX, "rm -rf /etc", rules); got.Disposition != DispositionBlock {
 		t.Fatalf("other rules must stay active: %+v", got)
+	}
+	// 需确认档的默认规则同样能按编号停用。
+	crules := &RuleSet{DisabledDefaultRuleIDs: []string{"POSIX-DELETE-TARGET-UNKNOWN"}}
+	if got := Evaluate(ShellPOSIX, "rm -rf $DIR/", crules); got.Disposition != DispositionAllow {
+		t.Fatalf("disabled POSIX-DELETE-TARGET-UNKNOWN still fired: %+v", got)
+	}
+	if got := Evaluate(ShellPOSIX, "iptables -F", crules); got.Disposition != DispositionConfirmRequired {
+		t.Fatalf("other confirm rules must stay active: %+v", got)
 	}
 }
 

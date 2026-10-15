@@ -299,7 +299,7 @@ func TestScopedPull_HydratesAndIronRuleHolds(t *testing.T) {
 	}
 	// (c) the iron rule still rejects the out-of-profile server id — denied at the
 	// authorization check, before any dial (the server isn't even IN the store).
-	_, err = mcpserver.ExecCommandForProfile(context.Background(), hyd, proj.ID, proj.ProfileID, secretID, "echo hi", false, 0)
+	_, err = mcpserver.ExecCommandForProfile(context.Background(), hyd, proj.ID, proj.ProfileID, secretID, "echo hi", false, 0, "", "")
 	if !errors.Is(err, mcpserver.ErrNotInProfile) {
 		t.Fatalf("out-of-profile exec must be denied with ErrNotInProfile, got %v", err)
 	}

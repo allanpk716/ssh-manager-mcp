@@ -28,8 +28,8 @@ import (
 // 放行)。权威端(本地 vault 或 serve 库)与客户端(快照水合出的只读
 // 镜像库)走同一条代码路径,离线时用最后一次拉到的规则。规则表读取
 // 失败时退回纯内置默认规则继续判定(默认规则仍然护住严重后果),绝不
-// 因读不到规则放行一切或拦死一切;需确认档由命令策略后续的 GitHub
-// Issue 在调用点接一次性确认码,本票只对拦截档动作。
+// 因读不到规则放行一切或拦死一切。拦截档在调用点直接拒绝;需确认档
+// 经 confirmcode.go 的一次性确认码门(ticket #11)。
 func policyJudge(st *store.Store, shell models.ShellType, command string) policy.Decision {
 	rules, err := policymanage.EffectiveRuleSet(st)
 	if err != nil {

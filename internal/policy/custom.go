@@ -185,8 +185,17 @@ type RuleInfo struct {
 // 发布不可更改):POSIX 一套 + PowerShell 与 cmd 共用的一套(WIN- 前缀)。
 // 列出命令与停用编号校验用它。
 func DefaultRuleInfos() []RuleInfo {
-	out := make([]RuleInfo, 0, len(defaultPOSIXRules)+len(defaultWindowsRules))
+	out := make([]RuleInfo, 0, len(defaultPOSIXRules)+len(defaultPOSIXConfirmRules)+len(defaultWindowsRules))
 	for _, r := range defaultPOSIXRules {
+		out = append(out, RuleInfo{
+			ID:          r.id,
+			Disposition: r.disposition,
+			Explanation: r.explanation,
+			Alternative: r.alternative,
+		})
+	}
+	// 需确认档的默认规则同样可列出、可按编号停用(ticket #11)。
+	for _, r := range defaultPOSIXConfirmRules {
 		out = append(out, RuleInfo{
 			ID:          r.id,
 			Disposition: r.disposition,

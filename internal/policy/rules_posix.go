@@ -89,8 +89,8 @@ func rmInvocation(c *posixCall) (recursive bool, targets []posixArg) {
 	return recursive, targets
 }
 
-// posixRule 是一条 POSIX shell 的默认拦截规则:稳定编号、处置、一行
-// 风险说明、更安全的替代做法,以及「是否命中」的判定闭包。
+// posixRule 是一条 POSIX shell 的默认规则(拦截或需确认):稳定编号、
+// 处置、一行风险说明、更安全的替代做法,以及「是否命中」的判定闭包。
 // 编号一经发布不可更改(owner 按编号停用,审计按编号追查);
 // 自定义规则(命令策略后续的 GitHub Issue)会以结构化字段编译成同样的形态,不改 Evaluate 接口。
 type posixRule struct {
