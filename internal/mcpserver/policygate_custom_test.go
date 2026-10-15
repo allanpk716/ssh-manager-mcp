@@ -211,3 +211,68 @@ func TestExecPolicyOldSnapshot_DefaultsStillBlock(t *testing.T) {
 	_, err = ExecCommandForProfile(ctx, hyd, "proj-o", pid, srvID, blockedCmd, false, 5*time.Second)
 	assertBlockedError(t, err)
 }
+
+// TestExecPolicyCustomRule_WindowsShellAnnotatedServer:合并票 #14 后,
+// 执行工具按服务器条目的 shell 类型选择语法,自定义规则的适用 shell 集合
+// 在执行侧同样分派——PowerShell 标注的服务器上 PowerShell 专用自定义规则
+// 拦下 Restart-Computer(零连接);同一台机器若标注 POSIX 则该规则不适用,
+// 命令照常执行。停用 WIN- 前缀默认规则在执行侧同样不再命中。
+func TestExecPolicyCustomRule_WindowsShellAnnotatedServer(t *testing.T) {
+	var conns atomic.Int64
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password:    "pw",
+		Connections: &conns,
+		Exec:        func(cmd string, _ io.Reader) (string, string, int) { return "RAN:" + cmd + "\n", "", 0 },
+	})
+	defer cleanup()
+	st := newStore(t)
+	if err := st.AddPolicyRule(policy.CustomRule{
+		ID: "NO-RESTART", Shells: []policy.ShellType{policy.ShellPowerShell},
+		Commands: []string{"Restart-Computer"}, Disposition: policy.DispositionBlock,
+		Explanation: "reboots are scheduled by the owner, never run by the agent",
+		Alternative: "ask the owner to schedule a reboot window",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	psID := seedRealServerShell(t, st, "ps", addr, hk, models.ShellPowerShell)
+	nixID := seedRealServerShell(t, st, "nix", addr, hk, models.ShellPOSIX)
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{psID, nixID})
+	ctx := context.Background()
+
+	// PowerShell 标注:PowerShell 专用自定义规则命中,零连接。
+	_, err := ExecCommandForProfile(ctx, st, "proj-w", pid, psID, "Restart-Computer -Force", false, 5*time.Second)
+	assertBlockedBy(t, err, "NO-RESTART")
+	if n := conns.Load(); n != 0 {
+		t.Fatalf("connections = %d after blocked windows custom rule, want 0", n)
+	}
+	wantSolePolicyRow(t, st, "exec-blocked", "NO-RESTART", "Restart-Computer -Force", false, psID, "proj-w")
+
+	// 同一台测试 sshd、POSIX 标注:同一条命令不适用 PowerShell 专用规则,
+	// 照常执行(连接数 +1)。
+	out, err := ExecCommandForProfile(ctx, st, "proj-w", pid, nixID, "Restart-Computer -Force", false, 5*time.Second)
+	if err != nil {
+		t.Fatalf("posix-annotated server must not hit the powershell-only rule: %v", err)
+	}
+	if want := "RAN:Restart-Computer -Force\n"; out.Stdout != want {
+		t.Fatalf("stdout = %q, want %q", out.Stdout, want)
+	}
+	if n := conns.Load(); n != 1 {
+		t.Fatalf("connections = %d after posix-annotated run, want 1", n)
+	}
+
+	// 停用 WIN- 前缀默认规则在执行侧同样不再命中:PowerShell 标注的
+	// Format-Volume 原被 WIN-FORMAT 拦,停用后照常执行。
+	if _, err := ExecCommandForProfile(ctx, st, "proj-w", pid, psID, winBlockedCmd, false, 5*time.Second); err == nil || !strings.Contains(err.Error(), "WIN-FORMAT") {
+		t.Fatalf("Format-Volume on powershell must be blocked by WIN-FORMAT, got %v", err)
+	}
+	if _, err := policymanage.DisableDefaultRule(st, "WIN-FORMAT"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ExecCommandForProfile(ctx, st, "proj-w", pid, psID, winBlockedCmd, false, 5*time.Second); err != nil {
+		t.Fatalf("disabled WIN-FORMAT must let the command run: %v", err)
+	}
+	if n := conns.Load(); n != 2 {
+		t.Fatalf("connections = %d after disabled WIN-FORMAT run, want 2", n)
+	}
+}
