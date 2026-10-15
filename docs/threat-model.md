@@ -244,9 +244,50 @@ download 方向相反（download 封顶防的是大文件全文灌进上下文�
 
 ---
 
+## 7. 命令策略（防误操作护栏，非安全边界）
+
+agent 经 `exec_command` / `exec_background` 下发的命令，在取凭据、建立 SSH
+连接**之前**先过一道命令策略判定（取舍见
+[ADR 0007](./adr/0007-command-policy-client-enforced-guardrail.md)）：规则由
+权威端统一管理（程序内置默认规则 + owner 自定义规则 + 按编号停用），随快照
+下发，客户端只读、在执行发生的地方就地检查。它在本威胁模型里的定位与
+边界，如实登记：
+
+- **护栏，不是安全边界**：定位是**严重后果兜底**——只识别会造成不可恢复
+  损失或把自己锁在门外的命令（拦截 / 需确认 / 放行三档处置），防的是
+  agent 误操作（误解、路径拼错、变量为空把 `rm -rf $DIR/` 变成
+  `rm -rf /`）。**不防有意绕过**：编码后解码执行、先上传脚本再运行、换用
+  解释器删文件——写法无穷，任何命令规则都挡不住；因此它不构成安全边界。
+  这与 backlog「明确不做」中否决的「命令过滤」不冲突——那一条的目的是对
+  agent 隐藏服务器地址，因不可行且杀死可用性被否；本条目的不同，且只承诺
+  兜底。
+- **agent 看不到规则清单**：被拦截或需确认时，agent 只拿到一行「规则编号 +
+  为什么危险 + 该怎么做」（处理方式见 [agent-tools.md](./agent-tools.md)）；
+  完整规则清单只属于 owner 管理面（`sshmgr policy` 命令组，含试算）。
+- **Windows 判定精度低于 POSIX（如实承认）**：POSIX shell 按语法解析库拆解
+  命令；PowerShell 与 cmd 没有可用的解析库，只按分隔符粗略分段 + 命令名
+  （含别名、不区分大小写）匹配，动态执行写法判需确认。按服务器条目上
+  owner 标注的 shell 类型选择拆解语法（默认 POSIX）；标注错误时拆解不准，
+  但不认识的值走保守分支（偏向需确认），不悄悄放行（标注与探测命令见
+  [managing-servers.md](./managing-servers.md)）。
+- **旧版客户端静默失效，且权威端列不出来**：不认识命令策略的旧版客户端
+  拉到带规则的快照后照常执行一切命令——检查只发生在各台工作机自己的
+  执行路径上，权威端无法代劳；而快照拉取不携带客户端程序版本、权威
+  vault 里也没有每台工作机的版本记录，**权威端无法列出仍在使用旧版的
+  设备**（[multi-machine.md 限制节](./multi-machine.md)）。要让规则在某台
+  工作机生效，唯一途径是在那台机上升级程序。
+- **需确认的一次性确认码同属护栏定位**：确认码与「服务器编号 + 命令完整
+  文本」的哈希绑定、5 分钟有效、用一次即作废，只活在执行所在进程的内存里
+  （不持久化）；agent 征得用户同意后带码与理由重调才执行，确认动作（含
+  理由）入审计。它防的是「未经同意继续」与「拿一个码去执行别的命令」，
+  同样不防有意绕过。
+
+---
+
 ## 相关文档
 
 - [Plan 16 设计 spec §6](./superpowers/specs/2026-08-13-plan-16-fixed-path-filekey-design.md)——本篇来源。
 - [getting-started.md](./getting-started.md)——路径表、master.key 形态、service 安装。
 - [multi-machine.md](./multi-machine.md)——serve 常驻、cache DEK 介质。
 - [backup-restore.md](./backup-restore.md)——便携备份 / 灾难恢复（export/import + NAS）。
+- [ADR 0007](./adr/0007-command-policy-client-enforced-guardrail.md)——命令策略取舍（严重后果兜底护栏、规则权威端管理随快照下发、客户端执行）。
