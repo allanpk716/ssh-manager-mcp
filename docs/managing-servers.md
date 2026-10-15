@@ -26,13 +26,14 @@
 sshmgr servers ls
 ```
 
-输出每行：`name  id  user@host:port  [sudo|-]  (role|-)  · <special-handling 前 ~40 字符>|-`。例如：
+输出每行：`name  id  user@host:port  [shell=…]  [sudo|-]  (role|-)  · <special-handling 前 ~40 字符>|-`。例如：
 
 ```
-gpu              <uuid>              deploy@192.0.2.10:22 [sudo] (prod train) · do not reboot 02-03:00; failover is m...
-db               <uuid>              pguser@10.0.0.5:22 [-] (prod pg primary) · -
+gpu              <uuid>              deploy@192.0.2.10:22 [shell=posix] [sudo] (prod train) · do not reboot 02-03:00; failover is m...
+db               <uuid>              pguser@10.0.0.5:22 [shell=posix] [-] (prod pg primary) · -
 ```
 
+- `[shell=…]` 是命令策略拆解命令用的 shell 类型标注（默认 `posix`，见[下文专节](#shell-类型标注与探测命令策略)）。
 - `[sudo]` 表示这台机器给了 sudo 密码（agent 看到 `has_sudo=true`）；`[-]` 表示没有。
 - `(role)` 来自 `--role`（这台机器的用途）；空则显示 `-`。
 - `·` 后面是 `--special-handling`（Caveats）的截断预览——给 agent 看的操作注意事项，约 40 字符截断；空则 `-`。其余结构化字段（location / hardware / services / description）不在 ls 行上，agent 通过 `list_servers` 看全。
@@ -291,6 +292,8 @@ sshmgr servers probe-shell [<name>...]   # 不给名字 = 探测全部服务器
 - 连不上：打失败行，命令以非零退出（诊断要诚实——连不上不装成「一致」）。
 
 TUI 等价：服务器页 `p` 探测光标所在服务器，结果在状态行报告（ADR 0003 的对等面）。
+
+命令策略规则本身的管理是独立的 `sshmgr policy` 命令组（列出 `policy ls` / 增加自定义规则 `policy add` / 删除 `policy rm` / 停用默认规则 `policy disable` / 恢复 `policy enable` / 试算 `policy test`）——权威端机器全功能，客户端机器只读（列出与试算读拉到的快照，修改被拒：规则在权威端维护、随 `cache pull` 下发）。agent 侧收到拦截 / 需确认时的处理方式见 [agent-tools.md](./agent-tools.md)。
 
 ---
 
