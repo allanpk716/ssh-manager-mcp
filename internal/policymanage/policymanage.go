@@ -8,6 +8,7 @@ package policymanage
 
 import (
 	"fmt"
+	"ssh-manager-mcp/internal/models"
 
 	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/store"
@@ -30,7 +31,7 @@ type RuleView struct {
 	Explanation  string
 	Alternative  string
 	Disabled     bool               // 仅默认规则:被 owner 按编号停用
-	Shells       []policy.ShellType // 仅自定义规则
+	Shells       []models.ShellType // 仅自定义规则
 	Commands     []string           // 仅自定义规则
 	Args         []string           // 仅自定义规则
 	PathCategory string             // 仅自定义规则
@@ -116,7 +117,7 @@ func customRulesFromSnapshot(snap *store.Snapshot) []policy.CustomRule {
 			Alternative:  r.Alternative,
 		}
 		for _, sh := range r.Shells {
-			cr.Shells = append(cr.Shells, policy.ShellType(sh))
+			cr.Shells = append(cr.Shells, models.ShellType(sh))
 		}
 		d, err := policy.ParseDisposition(r.Disposition)
 		if err != nil {
@@ -275,7 +276,7 @@ func requireDefaultRuleID(id string) error {
 }
 
 // shellStrings 把 shell 类型集合转成字符串列表(审计摘要用)。
-func shellStrings(shells []policy.ShellType) []string {
+func shellStrings(shells []models.ShellType) []string {
 	out := make([]string, 0, len(shells))
 	for _, sh := range shells {
 		out = append(out, string(sh))

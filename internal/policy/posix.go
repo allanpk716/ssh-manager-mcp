@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"ssh-manager-mcp/internal/models"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -90,7 +91,7 @@ type posixEvidence struct {
 // 规则的正则条件对它匹配。
 func applyRules(ev *posixEvidence, call *posixCall, command string, rules *RuleSet) Decision {
 	def := firstDefaultMatch(ev, call, rules)
-	for _, cr := range rules.customsFor(ShellPOSIX) {
+	for _, cr := range rules.customsFor(models.ShellPOSIX) {
 		if matchCustomPOSIX(cr, command, call) {
 			return merge(def, Decision{
 				Disposition: cr.Disposition,

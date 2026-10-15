@@ -50,7 +50,7 @@ func TestPolicyBackupRestore_KeepsRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := stA.AddPolicyRule(policy.CustomRule{
-		ID: "NO-REBOOT", Shells: []policy.ShellType{policy.ShellPOSIX},
+		ID: "NO-REBOOT", Shells: []models.ShellType{models.ShellPOSIX},
 		Commands: []string{"reboot"}, Disposition: policy.DispositionBlock,
 		Explanation: "reboots are scheduled by the owner", Alternative: "ask the owner",
 	}); err != nil {
@@ -142,7 +142,7 @@ func TestCachePull_DeliversPolicyRules_AndTheyTakeEffect(t *testing.T) {
 	pid, _ := src.AddProfile("team-a")
 	_ = src.GrantServers(pid, []string{srvID})
 	if err := src.AddPolicyRule(policy.CustomRule{
-		ID: "NO-REBOOT", Shells: []policy.ShellType{policy.ShellPOSIX},
+		ID: "NO-REBOOT", Shells: []models.ShellType{models.ShellPOSIX},
 		Commands: []string{"reboot"}, Disposition: policy.DispositionBlock,
 		Explanation: "reboots are scheduled by the owner, never run by the agent",
 		Alternative: "ask the owner to schedule a reboot window",

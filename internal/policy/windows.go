@@ -1,6 +1,9 @@
 package policy
 
-import "strings"
+import (
+	"ssh-manager-mcp/internal/models"
+	"strings"
+)
 
 // Windows 两类 shell(PowerShell 与 cmd)没有可用的语法解析库,按
 // `;`、`&&`、`|`、`&` 与换行把命令文本粗略拆成一段段简单命令,再按
@@ -37,7 +40,7 @@ type winEvidence struct {
 // 过滤;depth 是当前文本的嵌套层数(最外层为 0),嵌套执行
 // (powershell -Command "…"、cmd /c …、wsl … 等)的递归判定在每段
 // 上叠加,结论一并参与取最严重。
-func evaluateWindowsAt(shell ShellType, command string, rules *RuleSet, depth int) Decision {
+func evaluateWindowsAt(shell models.ShellType, command string, rules *RuleSet, depth int) Decision {
 	ev := &winEvidence{rawCommand: command}
 	for _, seg := range splitWindowsSegments(command) {
 		ev.segments = append(ev.segments, parseWinSegment(seg))

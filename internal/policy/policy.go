@@ -8,7 +8,7 @@ package policy
 
 import (
 	"fmt"
-	"strconv"
+	"ssh-manager-mcp/internal/models"
 )
 
 // Disposition 是命令策略对一条命令给出的结论,三档之一:拦截、需确认、
@@ -66,39 +66,6 @@ func (d Disposition) moreSevereThan(other Disposition) bool {
 	return d > other
 }
 
-// ShellType 是标注在服务器条目上的 shell 类型,决定命令按哪种语法拆解。
-type ShellType string
-
-const (
-	// ShellPOSIX 覆盖 Linux 与 macOS 的 shell(bash / sh / zsh 等)。
-	ShellPOSIX ShellType = "posix"
-	// ShellPowerShell 与 ShellWindowsCmd 共用一套 Windows 默认规则
-	// (粗略分段 + 不区分大小写的命令名匹配,见 windows.go 与 rules_windows.go)。
-	ShellPowerShell ShellType = "powershell"
-	ShellWindowsCmd ShellType = "cmd"
-)
-
-// ParseShellType 把 CLI 标志里的文字解析成 shell 类型。
-func ParseShellType(s string) (ShellType, error) {
-	switch ShellType(s) {
-	case ShellPOSIX:
-		return ShellPOSIX, nil
-	case ShellPowerShell:
-		return ShellPowerShell, nil
-	case ShellWindowsCmd:
-		return ShellWindowsCmd, nil
-	default:
-		return "", &InvalidShellTypeError{input: s}
-	}
-}
-
-// InvalidShellTypeError 表示 --shell 标志不是三类已知 shell 之一。
-type InvalidShellTypeError struct{ input string }
-
-func (e *InvalidShellTypeError) Error() string {
-	return "unknown shell type " + strconv.Quote(e.input) + " (want posix, powershell or cmd)"
-}
-
 // Decision 是 Evaluate 的结论:处置,以及命中规则时的一行风险说明与
 // 更安全的替代做法。放行时后三个字段为空。
 type Decision struct {
@@ -135,7 +102,7 @@ func (r *RuleSet) isDisabled(id string) bool {
 
 // customsFor 返回适用于给定 shell 类型的自定义规则(nil 指针与空集
 // 都归为无自定义规则)。
-func (r *RuleSet) customsFor(shell ShellType) []CustomRule {
+func (r *RuleSet) customsFor(shell models.ShellType) []CustomRule {
 	if r == nil {
 		return nil
 	}
@@ -159,7 +126,7 @@ func (r *RuleSet) customsFor(shell ShellType) []CustomRule {
 // (SHELL-MISMATCH)——服务器条目上标注错的 shell 类型不会让危险命令
 // 被悄悄放行。只升到需确认、不升到拦截,也不改写标注侧本就更严重的
 // 结论;只在顶层做,嵌套递归的内层 shell 是从写法里认出来的,不做试判。
-func Evaluate(shell ShellType, command string, rules *RuleSet) Decision {
+func Evaluate(shell models.ShellType, command string, rules *RuleSet) Decision {
 	d := judgeAtNestingDepth(shell, command, rules, 0)
 	if d.Disposition != DispositionAllow || rules.isDisabled(RuleIDShellMismatch) {
 		return d
@@ -186,12 +153,12 @@ const RuleIDShellMismatch = "SHELL-MISMATCH"
 // PowerShell 与 cmd 各试一次(PowerShell 与 cmd 共用一套 Windows 判定,
 // 但自定义规则可只适用其一);PowerShell 或 cmd 标注时用 POSIX 试一次。
 // 两类 Windows 之间不互试——同一套规则同一套拆解,试了也同结论。
-func crossJudgementShells(shell ShellType) []ShellType {
+func crossJudgementShells(shell models.ShellType) []models.ShellType {
 	switch shell {
-	case ShellPOSIX:
-		return []ShellType{ShellPowerShell, ShellWindowsCmd}
-	case ShellPowerShell, ShellWindowsCmd:
-		return []ShellType{ShellPOSIX}
+	case models.ShellPOSIX:
+		return []models.ShellType{models.ShellPowerShell, models.ShellWindowsCmd}
+	case models.ShellPowerShell, models.ShellWindowsCmd:
+		return []models.ShellType{models.ShellPOSIX}
 	default:
 		return nil
 	}

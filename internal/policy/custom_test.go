@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"ssh-manager-mcp/internal/models"
 	"strings"
 	"testing"
 )
@@ -14,7 +15,7 @@ import (
 func csRule(id string, disposition Disposition, cmds, args []string, pathCategory string) CustomRule {
 	return CustomRule{
 		ID:           id,
-		Shells:       []ShellType{ShellPOSIX},
+		Shells:       []models.ShellType{models.ShellPOSIX},
 		Commands:     cmds,
 		Args:         args,
 		PathCategory: pathCategory,
@@ -30,7 +31,7 @@ func TestCustomRule_StructuredCommands(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{
 		csRule("NO-REBOOT", DispositionBlock, []string{"reboot", "shutdown"}, nil, ""),
 	}}
-	d := Evaluate(ShellPOSIX, "reboot", rules)
+	d := Evaluate(models.ShellPOSIX, "reboot", rules)
 	if d.Disposition != DispositionBlock || d.RuleID != "NO-REBOOT" {
 		t.Fatalf("reboot = %+v, want block/NO-REBOOT", d)
 	}
@@ -38,10 +39,10 @@ func TestCustomRule_StructuredCommands(t *testing.T) {
 		t.Fatalf("custom rule decision must carry explanation and alternative: %+v", d)
 	}
 	// 别名同样命中。
-	if d := Evaluate(ShellPOSIX, "shutdown -h now", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-REBOOT" {
+	if d := Evaluate(models.ShellPOSIX, "shutdown -h now", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-REBOOT" {
 		t.Fatalf("shutdown = %+v, want block/NO-REBOOT", d)
 	}
-	if d := Evaluate(ShellPOSIX, "uptime", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPOSIX, "uptime", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("uptime = %+v, want allow", d)
 	}
 }
@@ -51,7 +52,7 @@ func TestCustomRule_NeedsConfirmDisposition(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{
 		csRule("ASK-BEFORE-KILL", DispositionConfirmRequired, []string{"pkill"}, nil, ""),
 	}}
-	d := Evaluate(ShellPOSIX, "pkill sshd", rules)
+	d := Evaluate(models.ShellPOSIX, "pkill sshd", rules)
 	if d.Disposition != DispositionConfirmRequired || d.RuleID != "ASK-BEFORE-KILL" {
 		t.Fatalf("pkill = %+v, want confirm/ASK-BEFORE-KILL", d)
 	}
@@ -63,10 +64,10 @@ func TestCustomRule_ArgsCondition(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{
 		csRule("NO-FORCE-PUSH", DispositionBlock, []string{"git"}, []string{"push", "--force"}, ""),
 	}}
-	if d := Evaluate(ShellPOSIX, "git push --force origin", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-FORCE-PUSH" {
+	if d := Evaluate(models.ShellPOSIX, "git push --force origin", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-FORCE-PUSH" {
 		t.Fatalf("git push --force = %+v, want block/NO-FORCE-PUSH", d)
 	}
-	if d := Evaluate(ShellPOSIX, "git push origin", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPOSIX, "git push origin", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("git push (no --force) = %+v, want allow", d)
 	}
 }
@@ -76,10 +77,10 @@ func TestCustomRule_PathCategoryCritical(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{
 		csRule("NO-MOVE-INTO-CRITICAL", DispositionBlock, []string{"mv"}, nil, "critical"),
 	}}
-	if d := Evaluate(ShellPOSIX, "mv /tmp/x /etc", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-MOVE-INTO-CRITICAL" {
+	if d := Evaluate(models.ShellPOSIX, "mv /tmp/x /etc", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-MOVE-INTO-CRITICAL" {
 		t.Fatalf("mv into /etc = %+v, want block/NO-MOVE-INTO-CRITICAL", d)
 	}
-	if d := Evaluate(ShellPOSIX, "mv /tmp/a /tmp/b", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPOSIX, "mv /tmp/a /tmp/b", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("mv inside /tmp = %+v, want allow", d)
 	}
 }
@@ -89,10 +90,10 @@ func TestCustomRule_PathCategoryDisk(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{
 		csRule("NO-RAW-COPY", DispositionBlock, []string{"cp"}, nil, "disk"),
 	}}
-	if d := Evaluate(ShellPOSIX, "cp img.bin /dev/sdb", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-RAW-COPY" {
+	if d := Evaluate(models.ShellPOSIX, "cp img.bin /dev/sdb", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-RAW-COPY" {
 		t.Fatalf("cp onto /dev/sdb = %+v, want block/NO-RAW-COPY", d)
 	}
-	if d := Evaluate(ShellPOSIX, "cp img.bin /tmp/img.bin", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPOSIX, "cp img.bin /tmp/img.bin", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("cp into /tmp = %+v, want allow", d)
 	}
 }
@@ -107,10 +108,10 @@ func TestCustomRule_Regex(t *testing.T) {
 		Explanation: "the warehouse is replicated, never deleted in place",
 		Alternative: "ask the owner to archive and drop partitions instead",
 	}}}
-	if d := Evaluate(ShellPOSIX, "sudo rm -rf /data/warehouse/2024", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-DESTRUCTIVE-PIPES" {
+	if d := Evaluate(models.ShellPOSIX, "sudo rm -rf /data/warehouse/2024", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-DESTRUCTIVE-PIPES" {
 		t.Fatalf("rm -rf /data/warehouse = %+v, want block/NO-DESTRUCTIVE-PIPES", d)
 	}
-	if d := Evaluate(ShellPOSIX, "rm -rf /data/scratch", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPOSIX, "rm -rf /data/scratch", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("rm -rf /data/scratch = %+v, want allow", d)
 	}
 }
@@ -119,21 +120,21 @@ func TestCustomRule_Regex(t *testing.T) {
 func TestCustomRule_ConditionsCombineWithAnd(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{{
 		ID:           "COMBINED",
-		Shells:       []ShellType{ShellPOSIX},
+		Shells:       []models.ShellType{models.ShellPOSIX},
 		Commands:     []string{"find"},
 		Args:         []string{"-delete"},
 		PathCategory: "critical",
 		Disposition:  DispositionBlock,
 	}}}
-	if d := Evaluate(ShellPOSIX, "find /etc -name x -delete", rules); d.Disposition != DispositionBlock || d.RuleID != "COMBINED" {
+	if d := Evaluate(models.ShellPOSIX, "find /etc -name x -delete", rules); d.Disposition != DispositionBlock || d.RuleID != "COMBINED" {
 		t.Fatalf("find /etc -delete = %+v, want block/COMBINED", d)
 	}
 	// 命令名与参数命中但目标不在关键路径:不命中。
-	if d := Evaluate(ShellPOSIX, "find /tmp -name x -delete", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPOSIX, "find /tmp -name x -delete", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("find /tmp -delete = %+v, want allow", d)
 	}
 	// 命令名不对:参数与路径命中也不算。
-	if d := Evaluate(ShellPOSIX, "ls /etc -delete", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPOSIX, "ls /etc -delete", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("ls /etc -delete = %+v, want allow", d)
 	}
 }
@@ -144,17 +145,17 @@ func TestCustomRule_ConditionsCombineWithAnd(t *testing.T) {
 func TestCustomRule_ShellFilter(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{{
 		ID:          "WIN-ONLY",
-		Shells:      []ShellType{ShellPowerShell, ShellWindowsCmd},
+		Shells:      []models.ShellType{models.ShellPowerShell, models.ShellWindowsCmd},
 		Commands:    []string{"format"},
 		Disposition: DispositionBlock,
 	}}}
-	d := Evaluate(ShellPOSIX, "format c:", rules)
+	d := Evaluate(models.ShellPOSIX, "format c:", rules)
 	if d.Disposition != DispositionConfirmRequired || d.RuleID != "SHELL-MISMATCH" {
 		t.Fatalf("windows-only rule must surface via the cross-judgement as SHELL-MISMATCH, got %+v", d)
 	}
 	// 停用试判后,按标注的 POSIX 判定确实跳过 Windows 专属规则。
 	rules.DisabledDefaultRuleIDs = []string{RuleIDShellMismatch}
-	if d := Evaluate(ShellPOSIX, "format c:", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPOSIX, "format c:", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("posix judging must skip a windows-only rule, got %+v", d)
 	}
 }
@@ -165,7 +166,7 @@ func TestCustomRule_AppliesInsideCompoundCommand(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{
 		csRule("NO-REBOOT", DispositionBlock, []string{"reboot"}, nil, ""),
 	}}
-	d := Evaluate(ShellPOSIX, "cd /x && sudo reboot", rules)
+	d := Evaluate(models.ShellPOSIX, "cd /x && sudo reboot", rules)
 	if d.Disposition != DispositionBlock || d.RuleID != "NO-REBOOT" {
 		t.Fatalf("compound reboot = %+v, want block/NO-REBOOT", d)
 	}
@@ -180,10 +181,10 @@ func TestCustomRule_AloneWithDisabledDefault(t *testing.T) {
 			csRule("NO-REBOOT", DispositionBlock, []string{"reboot"}, nil, ""),
 		},
 	}
-	if d := Evaluate(ShellPOSIX, "mkfs.ext4 /dev/sdb", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPOSIX, "mkfs.ext4 /dev/sdb", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("disabled default must stop matching, got %+v", d)
 	}
-	if d := Evaluate(ShellPOSIX, "reboot", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-REBOOT" {
+	if d := Evaluate(models.ShellPOSIX, "reboot", rules); d.Disposition != DispositionBlock || d.RuleID != "NO-REBOOT" {
 		t.Fatalf("custom rule must still fire, got %+v", d)
 	}
 }
@@ -201,7 +202,7 @@ func TestCustomRule_Validate(t *testing.T) {
 		{"ok regex", CustomRule{ID: "OK-2", Regex: "x+", Disposition: DispositionConfirmRequired, Explanation: "why"}, ""},
 		{"empty id", csRule("", DispositionBlock, []string{"x"}, nil, ""), "id"},
 		{"allow disposition", csRule("A", DispositionAllow, []string{"x"}, nil, ""), "disposition"},
-		{"bad shell", CustomRule{ID: "B", Shells: []ShellType{"fish"}, Commands: []string{"x"}, Disposition: DispositionBlock, Explanation: "w"}, "shell"},
+		{"bad shell", CustomRule{ID: "B", Shells: []models.ShellType{"fish"}, Commands: []string{"x"}, Disposition: DispositionBlock, Explanation: "w"}, "shell"},
 		{"bad path category", csRule("C", DispositionBlock, []string{"x"}, nil, "somewhere"), "path category"},
 		{"bad regex", CustomRule{ID: "D", Regex: "(", Disposition: DispositionBlock, Explanation: "w"}, "regex"},
 		{"no condition", CustomRule{ID: "E", Disposition: DispositionBlock, Explanation: "w"}, "condition"},
@@ -259,7 +260,7 @@ func TestDefaultRuleInfos(t *testing.T) {
 func TestCustomRule_WindowsJudging(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{{
 		ID:          "NO-RESTART-COMPUTER",
-		Shells:      []ShellType{ShellPowerShell},
+		Shells:      []models.ShellType{models.ShellPowerShell},
 		Commands:    []string{"Restart-Computer"}, // 大小写任意写,匹配按小写规范化
 		Args:        []string{"-Force"},           // 参数条件同样不区分大小写
 		Disposition: DispositionBlock,
@@ -267,30 +268,30 @@ func TestCustomRule_WindowsJudging(t *testing.T) {
 		Alternative: "ask the owner to schedule a reboot window",
 	}, {
 		ID:          "CMD-NO-DEFRAG",
-		Shells:      []ShellType{ShellWindowsCmd},
+		Shells:      []models.ShellType{models.ShellWindowsCmd},
 		Regex:       `(?i)defrag\s+c:`,
 		Disposition: DispositionBlock,
 		Explanation: "defrag runs are scheduled by the owner",
 		Alternative: "ask the owner to schedule it",
 	}}}
 	// PowerShell:结构化规则命中(命令名大小写不敏感)。
-	d := Evaluate(ShellPowerShell, "restart-computer -force", rules)
+	d := Evaluate(models.ShellPowerShell, "restart-computer -force", rules)
 	if d.Disposition != DispositionBlock || d.RuleID != "NO-RESTART-COMPUTER" {
 		t.Fatalf("powershell restart-computer = %+v, want block/NO-RESTART-COMPUTER", d)
 	}
 	// cmd:同一条 PowerShell 专用规则不适用;cmd 专用正则规则命中。
-	if d := Evaluate(ShellWindowsCmd, "shutdown /r", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellWindowsCmd, "shutdown /r", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("cmd shutdown (powershell-only rule) = %+v, want allow", d)
 	}
-	d = Evaluate(ShellWindowsCmd, "defrag C: /U", rules)
+	d = Evaluate(models.ShellWindowsCmd, "defrag C: /U", rules)
 	if d.Disposition != DispositionBlock || d.RuleID != "CMD-NO-DEFRAG" {
 		t.Fatalf("cmd defrag = %+v, want block/CMD-NO-DEFRAG", d)
 	}
-	if d := Evaluate(ShellPowerShell, "defrag C: /U", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPowerShell, "defrag C: /U", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("powershell defrag (cmd-only rule) = %+v, want allow", d)
 	}
 	// 参数不逐字出现就不命中(Windows 参数比较不区分大小写)。
-	if d := Evaluate(ShellPowerShell, "restart-computer", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPowerShell, "restart-computer", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("powershell restart-computer without -force = %+v, want allow", d)
 	}
 }
@@ -300,16 +301,16 @@ func TestCustomRule_WindowsJudging(t *testing.T) {
 func TestCustomRule_WindowsPathCategory(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{{
 		ID:           "NO-MOVE-INTO-CRITICAL",
-		Shells:       []ShellType{ShellPowerShell},
+		Shells:       []models.ShellType{models.ShellPowerShell},
 		Commands:     []string{"Move-Item"},
 		PathCategory: "critical",
 		Disposition:  DispositionBlock,
 		Explanation:  "system directories are the owner's territory",
 	}}}
-	if d := Evaluate(ShellPowerShell, "Move-Item -Path C:/Temp/x -Destination 'C:/Windows'", rules); d.Disposition != DispositionBlock {
+	if d := Evaluate(models.ShellPowerShell, "Move-Item -Path C:/Temp/x -Destination 'C:/Windows'", rules); d.Disposition != DispositionBlock {
 		t.Fatalf("move into C:/Windows = %+v, want block", d)
 	}
-	if d := Evaluate(ShellPowerShell, "Move-Item C:/Temp/a C:/Temp/b", rules); d.Disposition != DispositionAllow {
+	if d := Evaluate(models.ShellPowerShell, "Move-Item C:/Temp/a C:/Temp/b", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("move inside C:/Temp = %+v, want allow", d)
 	}
 }

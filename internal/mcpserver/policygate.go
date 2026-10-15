@@ -36,7 +36,7 @@ func policyJudge(st *store.Store, shell models.ShellType, command string) policy
 		fmt.Fprintf(os.Stderr, "sshmgr: command policy rule lookup failed (judging with built-in defaults only): %v\n", err)
 		rules = nil
 	}
-	return policy.Evaluate(policy.ShellType(shell), command, rules)
+	return policy.Evaluate(shell, command, rules)
 }
 
 // policyBlockError 把拦截结论拼成 agent 能直接向用户转述的一行错误:

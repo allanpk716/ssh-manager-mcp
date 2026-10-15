@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"ssh-manager-mcp/internal/models"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -55,14 +56,14 @@ const (
 )
 
 // innerShell 返回这类启动器的内层命令按哪种 shell 类型判定。
-func (k nestedLauncherKind) innerShell() ShellType {
+func (k nestedLauncherKind) innerShell() models.ShellType {
 	switch k {
 	case launcherWindowsPowerShell:
-		return ShellPowerShell
+		return models.ShellPowerShell
 	case launcherWindowsCmd:
-		return ShellWindowsCmd
+		return models.ShellWindowsCmd
 	default:
-		return ShellPOSIX
+		return models.ShellPOSIX
 	}
 }
 
@@ -95,11 +96,11 @@ var windowsNestedLaunchers = map[string]nestedLauncherKind{
 // judgeAtNestingDepth 在给定嵌套层数上判定一段命令文本:最外层命令
 // 是第 0 层,每识别出一层嵌套执行(bash -c、cmd /c 等)就把内层文本
 // 加深一层交给本函数。Evaluate 是第 0 层的入口。
-func judgeAtNestingDepth(shell ShellType, command string, rules *RuleSet, depth int) Decision {
+func judgeAtNestingDepth(shell models.ShellType, command string, rules *RuleSet, depth int) Decision {
 	switch shell {
-	case ShellPOSIX:
+	case models.ShellPOSIX:
 		return evaluatePOSIXAt(command, rules, depth)
-	case ShellPowerShell, ShellWindowsCmd:
+	case models.ShellPowerShell, models.ShellWindowsCmd:
 		// PowerShell 与 cmd 没有可用的语法解析库,按分隔符粗略分段后判定,
 		// 两类 shell 共用同一套 Windows 默认规则。
 		return evaluateWindowsAt(shell, command, rules, depth)
@@ -197,19 +198,19 @@ func extractNestedInner(kind nestedLauncherKind, args []nestedArg) (nestedInner,
 		if i < 0 || i+1 >= len(args) {
 			return nestedInner{}, false
 		}
-		return joinNestedArgs(ShellPowerShell, args[i+1:]), true
+		return joinNestedArgs(models.ShellPowerShell, args[i+1:]), true
 	case launcherWindowsCmd:
 		i := indexFlagFold(args, "/", "/c", "/k")
 		if i < 0 || i+1 >= len(args) {
 			return nestedInner{}, false
 		}
-		return joinNestedArgs(ShellWindowsCmd, args[i+1:]), true
+		return joinNestedArgs(models.ShellWindowsCmd, args[i+1:]), true
 	default: // launcherWSL
 		rest := wslCommandStart(args)
 		if len(rest) == 0 {
 			return nestedInner{}, false
 		}
-		return joinNestedArgs(ShellPOSIX, rest), true
+		return joinNestedArgs(models.ShellPOSIX, rest), true
 	}
 }
 
@@ -254,7 +255,7 @@ func indexFlagFold(args []nestedArg, optPrefix string, flags ...string) int {
 // 使用;多个参数时按空格拼接,含空白或影响分词的字符的参数重新包一层
 // 引号,保证内层再拆解时分词不散。任一参数含动态成分则整层视为拼
 // 出来的,原文按空格连接供兜底探测。
-func joinNestedArgs(innerShell ShellType, args []nestedArg) nestedInner {
+func joinNestedArgs(innerShell models.ShellType, args []nestedArg) nestedInner {
 	if len(args) == 1 {
 		return nestedInner{quoted: args[0].text, raw: args[0].text, dynamic: args[0].dynamic}
 	}
@@ -278,8 +279,8 @@ func joinNestedArgs(innerShell ShellType, args []nestedArg) nestedInner {
 // requoteNestedArg 把逐字确定的参数重新包成内层 shell 里的一个词:
 // 只含日常字符时原样返回;含空白、引号等会影响分词的字符时按内层
 // shell 的引号惯例包一层。
-func requoteNestedArg(text string, innerShell ShellType) string {
-	if innerShell == ShellPowerShell || innerShell == ShellWindowsCmd {
+func requoteNestedArg(text string, innerShell models.ShellType) string {
+	if innerShell == models.ShellPowerShell || innerShell == models.ShellWindowsCmd {
 		return requoteWindowsArg(text)
 	}
 	return requotePOSIXArg(text)
@@ -348,9 +349,9 @@ func wslCommandStart(args []nestedArg) []nestedArg {
 // nestedMentionsDangerous 报告内层文本是否出现危险命令名,按内层
 // shell 类型选探测表:POSIX 用拆解失败兜底的标记表,PowerShell 与
 // cmd 用 Windows 危险命令名集合(按词比对)。
-func nestedMentionsDangerous(shell ShellType, text string) bool {
+func nestedMentionsDangerous(shell models.ShellType, text string) bool {
 	switch shell {
-	case ShellPowerShell, ShellWindowsCmd:
+	case models.ShellPowerShell, models.ShellWindowsCmd:
 		return containsDangerousWinName(text)
 	default:
 		return containsDangerousName(text)

@@ -12,6 +12,7 @@ package tui
 
 import (
 	"fmt"
+	"ssh-manager-mcp/internal/models"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -32,15 +33,15 @@ type policyTestDraft struct {
 // 必填,shell 三选一,默认 POSIX。
 func newPolicyTestForm(d *policyTestDraft) *huh.Form {
 	if d.Shell == "" {
-		d.Shell = string(policy.ShellPOSIX)
+		d.Shell = string(models.ShellPOSIX)
 	}
 	return huh.NewForm(huh.NewGroup(
 		huh.NewInput().Title("命令全文（按 shell 类型拆解判定）").Value(&d.Command).Validate(nonEmpty),
 		huh.NewSelect[string]().Title("Shell 类型").
 			Options(
-				huh.NewOption("POSIX（Linux/macOS）", string(policy.ShellPOSIX)),
-				huh.NewOption("PowerShell（Windows）", string(policy.ShellPowerShell)),
-				huh.NewOption("cmd（Windows）", string(policy.ShellWindowsCmd)),
+				huh.NewOption("POSIX（Linux/macOS）", string(models.ShellPOSIX)),
+				huh.NewOption("PowerShell（Windows）", string(models.ShellPowerShell)),
+				huh.NewOption("cmd（Windows）", string(models.ShellWindowsCmd)),
 			).Value(&d.Shell),
 	))
 }
@@ -48,7 +49,7 @@ func newPolicyTestForm(d *policyTestDraft) *huh.Form {
 // policyTestResult 是一次试算的结论:输入的命令与 shell 类型,加上
 // 判定内核给出的 Decision。
 type policyTestResult struct {
-	shell    policy.ShellType
+	shell    models.ShellType
 	command  string
 	decision policy.Decision
 }
@@ -76,7 +77,7 @@ func policyTestResultBody(r *policyTestResult) string {
 // 开着时宿主的转发门把未知消息交给 overlay——App 与 clientModel 的门
 // 都如此)。err 非空 = 规则集组装失败,结论屏如实报错。
 type policyTestComputedMsg struct {
-	shell    policy.ShellType
+	shell    models.ShellType
 	command  string
 	decision policy.Decision
 	err      error
@@ -91,7 +92,7 @@ func policyTestCmd(load func() (*policy.RuleSet, error), d *policyTestDraft) tea
 		if err != nil {
 			return policyTestComputedMsg{err: err}
 		}
-		shell, serr := policy.ParseShellType(d.Shell)
+		shell, serr := models.ParseShellType(d.Shell)
 		if serr != nil {
 			return policyTestComputedMsg{err: serr}
 		}

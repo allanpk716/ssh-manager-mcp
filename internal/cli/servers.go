@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/pflag"
 
 	"ssh-manager-mcp/internal/models"
-	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/secrethint"
 	"ssh-manager-mcp/internal/shellprobe"
 	"ssh-manager-mcp/internal/store"
@@ -80,7 +79,7 @@ func serversAddCmd() *cobra.Command {
 			}
 			// 命令策略(ticket #14):shell 类型是三选一的连接信息字段,
 			// 非法值在入口拒绝(取值表与策略判定内核一致)。
-			if _, err := policy.ParseShellType(shell); err != nil {
+			if _, err := models.ParseShellType(shell); err != nil {
 				writeOwnerAuditError(s, "server.add", summary)
 				return err
 			}
@@ -408,7 +407,7 @@ func serversEditCmd() *cobra.Command {
 			// 命令策略(ticket #14):部分更新语义,与其他字段一致——只在显式
 			// 传入时改写;非法值在入口拒绝。
 			if cmd.Flags().Changed("shell") {
-				if _, err := policy.ParseShellType(shell); err != nil {
+				if _, err := models.ParseShellType(shell); err != nil {
 					editAuditError(origName)
 					return err
 				}

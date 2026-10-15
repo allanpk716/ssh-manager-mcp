@@ -1,6 +1,7 @@
 package policymanage
 
 import (
+	"ssh-manager-mcp/internal/models"
 	"strings"
 	"testing"
 
@@ -31,7 +32,7 @@ func newStore(t *testing.T) *store.Store {
 func rebootRule(id string) policy.CustomRule {
 	return policy.CustomRule{
 		ID:          id,
-		Shells:      []policy.ShellType{policy.ShellPOSIX},
+		Shells:      []models.ShellType{models.ShellPOSIX},
 		Commands:    []string{"reboot"},
 		Disposition: policy.DispositionBlock,
 		Explanation: "no unattended reboots",
@@ -59,10 +60,10 @@ func TestEffectiveRuleSet_FromStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := policy.Evaluate(policy.ShellPOSIX, "mkfs.ext4 /dev/sdb", rules); d.Disposition != policy.DispositionBlock || d.RuleID != "POSIX-FORMAT" {
+	if d := policy.Evaluate(models.ShellPOSIX, "mkfs.ext4 /dev/sdb", rules); d.Disposition != policy.DispositionBlock || d.RuleID != "POSIX-FORMAT" {
 		t.Fatalf("empty-store judge = %+v, want block/POSIX-FORMAT", d)
 	}
-	if d := policy.Evaluate(policy.ShellPOSIX, "reboot", rules); d.Disposition != policy.DispositionAllow {
+	if d := policy.Evaluate(models.ShellPOSIX, "reboot", rules); d.Disposition != policy.DispositionAllow {
 		t.Fatalf("reboot with no custom rule = %+v, want allow", d)
 	}
 
@@ -76,10 +77,10 @@ func TestEffectiveRuleSet_FromStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := policy.Evaluate(policy.ShellPOSIX, "mkfs.ext4 /dev/sdb", rules); d.Disposition != policy.DispositionAllow {
+	if d := policy.Evaluate(models.ShellPOSIX, "mkfs.ext4 /dev/sdb", rules); d.Disposition != policy.DispositionAllow {
 		t.Fatalf("disabled default must stop matching, got %+v", d)
 	}
-	if d := policy.Evaluate(policy.ShellPOSIX, "reboot", rules); d.Disposition != policy.DispositionBlock || d.RuleID != "NO-REBOOT" {
+	if d := policy.Evaluate(models.ShellPOSIX, "reboot", rules); d.Disposition != policy.DispositionBlock || d.RuleID != "NO-REBOOT" {
 		t.Fatalf("custom rule must fire, got %+v", d)
 	}
 }
@@ -99,15 +100,15 @@ func TestEffectiveRuleSetFromSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules := EffectiveRuleSetFromSnapshot(snap)
-	if d := policy.Evaluate(policy.ShellPOSIX, "reboot", rules); d.Disposition != policy.DispositionBlock || d.RuleID != "NO-REBOOT" {
+	if d := policy.Evaluate(models.ShellPOSIX, "reboot", rules); d.Disposition != policy.DispositionBlock || d.RuleID != "NO-REBOOT" {
 		t.Fatalf("custom rule from snapshot = %+v, want block/NO-REBOOT", d)
 	}
-	if d := policy.Evaluate(policy.ShellPOSIX, ":(){ :|:& };:", rules); d.Disposition != policy.DispositionAllow {
+	if d := policy.Evaluate(models.ShellPOSIX, ":(){ :|:& };:", rules); d.Disposition != policy.DispositionAllow {
 		t.Fatalf("fork bomb with disabled default = %+v, want allow", d)
 	}
 	// 旧快照(无策略段):nil 段 → 默认规则全部生效。
 	old := EffectiveRuleSetFromSnapshot(&store.Snapshot{})
-	if d := policy.Evaluate(policy.ShellPOSIX, ":(){ :|:& };:", old); d.Disposition != policy.DispositionBlock {
+	if d := policy.Evaluate(models.ShellPOSIX, ":(){ :|:& };:", old); d.Disposition != policy.DispositionBlock {
 		t.Fatalf("old snapshot fork bomb = %+v, want block", d)
 	}
 }

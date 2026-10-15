@@ -294,7 +294,7 @@ func seedClientCacheFixture(t *testing.T) string {
 	}
 	defer src.Close()
 	if err := src.AddPolicyRule(policy.CustomRule{
-		ID: "NO-REBOOT", Shells: []policy.ShellType{policy.ShellPOSIX},
+		ID: "NO-REBOOT", Shells: []models.ShellType{models.ShellPOSIX},
 		Commands: []string{"reboot"}, Disposition: policy.DispositionBlock,
 		Explanation: "reboots are scheduled by the owner, never run by the agent",
 		Alternative: "ask the owner to schedule a reboot window",

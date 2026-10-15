@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"ssh-manager-mcp/internal/models"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -216,9 +217,9 @@ func newPolicyAddCmd() *cobra.Command {
 				return err
 			}
 			shellStrs, _ := cmd.Flags().GetStringSlice("shell")
-			shells := make([]policy.ShellType, 0, len(shellStrs))
+			shells := make([]models.ShellType, 0, len(shellStrs))
 			for _, sh := range shellStrs {
-				sht, perr := policy.ParseShellType(sh)
+				sht, perr := models.ParseShellType(sh)
 				if perr != nil {
 					return perr
 				}
@@ -348,7 +349,7 @@ func newPolicyTestCmd() *cobra.Command {
 		Short: "Show the disposition a command would get, with the rule that fires",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			shellType, err := policy.ParseShellType(shell)
+			shellType, err := models.ParseShellType(shell)
 			if err != nil {
 				return err
 			}

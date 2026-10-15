@@ -3,6 +3,7 @@ package policy
 import (
 	"fmt"
 	"regexp"
+	"ssh-manager-mcp/internal/models"
 	"strings"
 )
 
@@ -30,15 +31,15 @@ var knownPathCategories = map[string]bool{
 // 说明、更安全的替代做法;正则是高级选项,处理结构化字段表达不了的
 // 情况。非空的匹配条件之间是「同时满足」(AND)。
 type CustomRule struct {
-	ID           string      // 规则编号,owner 自定,唯一
-	Shells       []ShellType // 适用 shell 类型集合;空 = 全部三类
-	Commands     []string    // 命令名及别名(剥掉 sudo 等前缀后匹配);空 = 不按命令名限定
-	Args         []string    // 参数条件:每个都必须逐字出现在参数里;空 = 无参数条件
-	PathCategory string      // 目标路径类别:""=不限;critical=系统关键路径;disk=磁盘设备
-	Regex        string      // 可选正则,对整条命令原文匹配;空 = 不用正则
-	Disposition  Disposition // 命中后的处置:拦截或需确认
-	Explanation  string      // 风险说明(为什么危险),命中时返回给 agent
-	Alternative  string      // 更安全的替代做法,命中时返回给 agent
+	ID           string             // 规则编号,owner 自定,唯一
+	Shells       []models.ShellType // 适用 shell 类型集合;空 = 全部三类
+	Commands     []string           // 命令名及别名(剥掉 sudo 等前缀后匹配);空 = 不按命令名限定
+	Args         []string           // 参数条件:每个都必须逐字出现在参数里;空 = 无参数条件
+	PathCategory string             // 目标路径类别:""=不限;critical=系统关键路径;disk=磁盘设备
+	Regex        string             // 可选正则,对整条命令原文匹配;空 = 不用正则
+	Disposition  Disposition        // 命中后的处置:拦截或需确认
+	Explanation  string             // 风险说明(为什么危险),命中时返回给 agent
+	Alternative  string             // 更安全的替代做法,命中时返回给 agent
 }
 
 // Validate 校验一条自定义规则的自描述完整性:处置只能是拦截或需确认
@@ -53,7 +54,7 @@ func (r CustomRule) Validate() error {
 		return fmt.Errorf("custom rule disposition must be block or confirm (allowing everything needs no rule)")
 	}
 	for _, sh := range r.Shells {
-		if _, err := ParseShellType(string(sh)); err != nil {
+		if _, err := models.ParseShellType(string(sh)); err != nil {
 			return fmt.Errorf("custom rule shell type %q is not one of posix, powershell, cmd", string(sh))
 		}
 	}
@@ -75,7 +76,7 @@ func (r CustomRule) Validate() error {
 }
 
 // appliesToShell 报告规则是否适用于给定 shell 类型(空集合 = 全部适用)。
-func (r CustomRule) appliesToShell(shell ShellType) bool {
+func (r CustomRule) appliesToShell(shell models.ShellType) bool {
 	if len(r.Shells) == 0 {
 		return true
 	}

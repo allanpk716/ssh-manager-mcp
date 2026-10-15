@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 type AuthMethod string
 
@@ -23,8 +26,8 @@ type ProjectStatus string
 
 // ShellType 标注在服务器条目上的 shell 类型,决定命令策略按哪种语法
 // 拆解该服务器上执行的命令(POSIX / PowerShell / cmd,默认 POSIX)。它是
-// 连接信息的一员——不属于服务器元数据,agent 的元数据编辑工具摸不到它;
-// 取值与 internal/policy 的 ShellType 字面值一一对应。
+// 连接信息的一员——不属于服务器元数据,agent 的元数据编辑工具摸不到它。
+// 命令策略判定内核(internal/policy)直接使用本类型。
 type ShellType string
 
 const (
@@ -41,6 +44,23 @@ func NormalizeShellType(s string) ShellType {
 		return ShellPOSIX
 	}
 	return ShellType(s)
+}
+
+// ParseShellType 把 CLI 标志或规则里的文字解析成 shell 类型;只接受三类已知值。
+func ParseShellType(s string) (ShellType, error) {
+	switch ShellType(s) {
+	case ShellPOSIX, ShellPowerShell, ShellWindowsCmd:
+		return ShellType(s), nil
+	default:
+		return "", &InvalidShellTypeError{input: s}
+	}
+}
+
+// InvalidShellTypeError 表示给出的 shell 类型不是三类已知 shell 之一。
+type InvalidShellTypeError struct{ input string }
+
+func (e *InvalidShellTypeError) Error() string {
+	return "unknown shell type " + strconv.Quote(e.input) + " (want posix, powershell or cmd)"
 }
 
 const (

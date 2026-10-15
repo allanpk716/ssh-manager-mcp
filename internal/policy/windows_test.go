@@ -1,10 +1,13 @@
 package policy
 
-import "testing"
+import (
+	"ssh-manager-mcp/internal/models"
+	"testing"
+)
 
 // evalWindows 以 PowerShell 或 cmd 判定一条命令,返回完整结论,是
 // Windows 判定对外行为断言的主要入口(试算命令与执行工具都只调 Evaluate)。
-func evalWindows(t *testing.T, shell ShellType, command string) Decision {
+func evalWindows(t *testing.T, shell models.ShellType, command string) Decision {
 	t.Helper()
 	return Evaluate(shell, command, nil)
 }
@@ -16,18 +19,18 @@ func evalWindows(t *testing.T, shell ShellType, command string) Decision {
 func TestEvaluate_WindowsBlocksFormatCommands(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"powershell Format-Volume", ShellPowerShell, "Format-Volume -DriveLetter D"},
-		{"powershell 全小写", ShellPowerShell, "format-volume -drivetter d"},
-		{"powershell 大小写混杂", ShellPowerShell, "FORMAT-VOLUME -DriveLetter D"},
-		{"powershell 带 -Force", ShellPowerShell, "Format-Volume -DriveLetter D -Force"},
-		{"cmd format", ShellWindowsCmd, "format D:"},
-		{"cmd 全大写", ShellWindowsCmd, "FORMAT D: /FS:NTFS"},
-		{"cmd 带扩展名", ShellWindowsCmd, "format.com D:"},
-		{"cmd 全路径", ShellWindowsCmd, `C:\Windows\System32\format.com D:`},
-		{"powershell 跑 format.com", ShellPowerShell, "format.com D:"},
+		{"powershell Format-Volume", models.ShellPowerShell, "Format-Volume -DriveLetter D"},
+		{"powershell 全小写", models.ShellPowerShell, "format-volume -drivetter d"},
+		{"powershell 大小写混杂", models.ShellPowerShell, "FORMAT-VOLUME -DriveLetter D"},
+		{"powershell 带 -Force", models.ShellPowerShell, "Format-Volume -DriveLetter D -Force"},
+		{"cmd format", models.ShellWindowsCmd, "format D:"},
+		{"cmd 全大写", models.ShellWindowsCmd, "FORMAT D: /FS:NTFS"},
+		{"cmd 带扩展名", models.ShellWindowsCmd, "format.com D:"},
+		{"cmd 全路径", models.ShellWindowsCmd, `C:\Windows\System32\format.com D:`},
+		{"powershell 跑 format.com", models.ShellPowerShell, "format.com D:"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -51,17 +54,17 @@ func TestEvaluate_WindowsBlocksFormatCommands(t *testing.T) {
 func TestEvaluate_WindowsBlocksPartitionTools(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"powershell Clear-Disk", ShellPowerShell, "Clear-Disk -Number 1"},
-		{"powershell Clear-Disk 小写", ShellPowerShell, "clear-disk -number 1 -removeoem"},
-		{"powershell Initialize-Disk", ShellPowerShell, "Initialize-Disk -Number 2"},
-		{"powershell Initialize-Disk 大写", ShellPowerShell, "INITIALIZE-DISK -NUMBER 2 -PARTITIONSTYLE GPT"},
-		{"cmd diskpart", ShellWindowsCmd, "diskpart"},
-		{"cmd diskpart 大写", ShellWindowsCmd, "DISKPART /S clean.txt"},
-		{"cmd diskpart 全路径", ShellWindowsCmd, `C:\Windows\System32\diskpart.exe`},
-		{"powershell 跑 diskpart", ShellPowerShell, "diskpart"},
+		{"powershell Clear-Disk", models.ShellPowerShell, "Clear-Disk -Number 1"},
+		{"powershell Clear-Disk 小写", models.ShellPowerShell, "clear-disk -number 1 -removeoem"},
+		{"powershell Initialize-Disk", models.ShellPowerShell, "Initialize-Disk -Number 2"},
+		{"powershell Initialize-Disk 大写", models.ShellPowerShell, "INITIALIZE-DISK -NUMBER 2 -PARTITIONSTYLE GPT"},
+		{"cmd diskpart", models.ShellWindowsCmd, "diskpart"},
+		{"cmd diskpart 大写", models.ShellWindowsCmd, "DISKPART /S clean.txt"},
+		{"cmd diskpart 全路径", models.ShellWindowsCmd, `C:\Windows\System32\diskpart.exe`},
+		{"powershell 跑 diskpart", models.ShellPowerShell, "diskpart"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -78,12 +81,12 @@ func TestEvaluate_WindowsBlocksPartitionTools(t *testing.T) {
 func TestEvaluate_WindowsAllowsPartitionLookalikes(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"Get-Disk", ShellPowerShell, "Get-Disk"},
-		{"Get-Partition", ShellPowerShell, "Get-Partition -DiskNumber 1"},
-		{"Get-Volume 使用统计", ShellPowerShell, "Get-Volume | Sort-Object SizeRemaining"},
+		{"Get-Disk", models.ShellPowerShell, "Get-Disk"},
+		{"Get-Partition", models.ShellPowerShell, "Get-Partition -DiskNumber 1"},
+		{"Get-Volume 使用统计", models.ShellPowerShell, "Get-Volume | Sort-Object SizeRemaining"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -101,17 +104,17 @@ func TestEvaluate_WindowsAllowsPartitionLookalikes(t *testing.T) {
 func TestEvaluate_WindowsBlocksDataWipe(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"cmd cipher /w 当前目录所在盘", ShellWindowsCmd, "cipher /w"},
-		{"cmd cipher /w:C", ShellWindowsCmd, "cipher /w:C"},
-		{"cmd cipher /w: 带空格", ShellWindowsCmd, "cipher /w: D:"},
-		{"cmd CIPHER 大写", ShellWindowsCmd, "CIPHER /W:C:\\"},
-		{"cmd vssadmin 删还原点", ShellWindowsCmd, "vssadmin delete shadows /all"},
-		{"cmd vssadmin 大写", ShellWindowsCmd, "VSSADMIN DELETE SHADOWS /ALL /QUIET"},
-		{"powershell 跑 vssadmin", ShellPowerShell, "vssadmin delete shadows /for=C:"},
-		{"powershell 跑 cipher", ShellPowerShell, "cipher /w:C"},
+		{"cmd cipher /w 当前目录所在盘", models.ShellWindowsCmd, "cipher /w"},
+		{"cmd cipher /w:C", models.ShellWindowsCmd, "cipher /w:C"},
+		{"cmd cipher /w: 带空格", models.ShellWindowsCmd, "cipher /w: D:"},
+		{"cmd CIPHER 大写", models.ShellWindowsCmd, "CIPHER /W:C:\\"},
+		{"cmd vssadmin 删还原点", models.ShellWindowsCmd, "vssadmin delete shadows /all"},
+		{"cmd vssadmin 大写", models.ShellWindowsCmd, "VSSADMIN DELETE SHADOWS /ALL /QUIET"},
+		{"powershell 跑 vssadmin", models.ShellPowerShell, "vssadmin delete shadows /for=C:"},
+		{"powershell 跑 cipher", models.ShellPowerShell, "cipher /w:C"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -128,13 +131,13 @@ func TestEvaluate_WindowsBlocksDataWipe(t *testing.T) {
 func TestEvaluate_WindowsAllowsBenignCipherAndVssadmin(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"cipher 加密单个文件", ShellWindowsCmd, "cipher /e C:\\temp\\secret.txt"},
-		{"cipher 解密目录", ShellWindowsCmd, "cipher /d C:\\temp\\docs"},
-		{"vssadmin 列还原点", ShellWindowsCmd, "vssadmin list shadows"},
-		{"vssadmin 列写入器", ShellWindowsCmd, "vssadmin list writers"},
+		{"cipher 加密单个文件", models.ShellWindowsCmd, "cipher /e C:\\temp\\secret.txt"},
+		{"cipher 解密目录", models.ShellWindowsCmd, "cipher /d C:\\temp\\docs"},
+		{"vssadmin 列还原点", models.ShellWindowsCmd, "vssadmin list shadows"},
+		{"vssadmin 列写入器", models.ShellWindowsCmd, "vssadmin list writers"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -154,33 +157,33 @@ func TestEvaluate_WindowsAllowsBenignCipherAndVssadmin(t *testing.T) {
 func TestEvaluate_WindowsBlocksCriticalPathDeletion(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"Remove-Item 删盘根", ShellPowerShell, "Remove-Item -Recurse -Force C:\\"},
-		{"Remove-Item 删 Windows", ShellPowerShell, "Remove-Item -Recurse C:\\Windows"},
-		{"小写命令名与路径", ShellPowerShell, "remove-item -recurse c:\\windows"},
-		{"全大写", ShellWindowsCmd, "REMOVE-ITEM -RECURSE C:\\WINDOWS"},
-		{"rm 别名 + 短递归旗标", ShellPowerShell, "rm -r C:\\Users"},
-		{"ri 别名", ShellPowerShell, "ri -Recurse C:\\Users"},
-		{"PowerShell del 别名", ShellPowerShell, "del -Recurse C:\\Windows"},
-		{"cmd rd /s", ShellWindowsCmd, "rd /s C:\\Windows"},
-		{"cmd rmdir /s /q", ShellWindowsCmd, "rmdir /s /q c:\\windows"},
-		{"cmd del /s", ShellWindowsCmd, "del /s /q C:\\Users"},
-		{"正斜杠路径", ShellPowerShell, "Remove-Item -Recurse C:/Windows"},
-		{"双反斜杠与结尾斜杠", ShellPowerShell, "Remove-Item -Recurse C:\\\\Windows\\\\"},
-		{"盘根下通配", ShellPowerShell, "Remove-Item -Recurse C:\\*"},
-		{"盘根下通配带结尾斜杠", ShellWindowsCmd, "rd /s /q C:\\*\\"},
-		{"关键路径下通配", ShellWindowsCmd, "rd /s /q C:\\Windows\\*"},
-		{"通配加点扩展", ShellWindowsCmd, "del /s C:\\Users\\*.*"},
-		{"点段", ShellPowerShell, "Remove-Item -Recurse C:\\.\\Users"},
-		{"升层回到盘根", ShellPowerShell, "Remove-Item -Recurse C:\\Users\\Public\\..\\.."},
-		{"带空格路径加引号", ShellPowerShell, `Remove-Item -Recurse "C:\Program Files"`},
-		{"cmd 带空格路径加引号", ShellWindowsCmd, `rmdir /s "C:\Program Files"`},
-		{"多个目标其中一个关键", ShellPowerShell, "Remove-Item -Recurse C:\\temp C:\\Users"},
-		{"冒号带值写路径", ShellPowerShell, "Remove-Item -Path:C:\\Windows -Recurse"},
-		{"不带盘符的根定位", ShellPowerShell, "Remove-Item -Recurse \\Windows"},
-		{"正斜杠根定位路径", ShellPowerShell, "Remove-Item -Recurse /Windows"},
+		{"Remove-Item 删盘根", models.ShellPowerShell, "Remove-Item -Recurse -Force C:\\"},
+		{"Remove-Item 删 Windows", models.ShellPowerShell, "Remove-Item -Recurse C:\\Windows"},
+		{"小写命令名与路径", models.ShellPowerShell, "remove-item -recurse c:\\windows"},
+		{"全大写", models.ShellWindowsCmd, "REMOVE-ITEM -RECURSE C:\\WINDOWS"},
+		{"rm 别名 + 短递归旗标", models.ShellPowerShell, "rm -r C:\\Users"},
+		{"ri 别名", models.ShellPowerShell, "ri -Recurse C:\\Users"},
+		{"PowerShell del 别名", models.ShellPowerShell, "del -Recurse C:\\Windows"},
+		{"cmd rd /s", models.ShellWindowsCmd, "rd /s C:\\Windows"},
+		{"cmd rmdir /s /q", models.ShellWindowsCmd, "rmdir /s /q c:\\windows"},
+		{"cmd del /s", models.ShellWindowsCmd, "del /s /q C:\\Users"},
+		{"正斜杠路径", models.ShellPowerShell, "Remove-Item -Recurse C:/Windows"},
+		{"双反斜杠与结尾斜杠", models.ShellPowerShell, "Remove-Item -Recurse C:\\\\Windows\\\\"},
+		{"盘根下通配", models.ShellPowerShell, "Remove-Item -Recurse C:\\*"},
+		{"盘根下通配带结尾斜杠", models.ShellWindowsCmd, "rd /s /q C:\\*\\"},
+		{"关键路径下通配", models.ShellWindowsCmd, "rd /s /q C:\\Windows\\*"},
+		{"通配加点扩展", models.ShellWindowsCmd, "del /s C:\\Users\\*.*"},
+		{"点段", models.ShellPowerShell, "Remove-Item -Recurse C:\\.\\Users"},
+		{"升层回到盘根", models.ShellPowerShell, "Remove-Item -Recurse C:\\Users\\Public\\..\\.."},
+		{"带空格路径加引号", models.ShellPowerShell, `Remove-Item -Recurse "C:\Program Files"`},
+		{"cmd 带空格路径加引号", models.ShellWindowsCmd, `rmdir /s "C:\Program Files"`},
+		{"多个目标其中一个关键", models.ShellPowerShell, "Remove-Item -Recurse C:\\temp C:\\Users"},
+		{"冒号带值写路径", models.ShellPowerShell, "Remove-Item -Path:C:\\Windows -Recurse"},
+		{"不带盘符的根定位", models.ShellPowerShell, "Remove-Item -Recurse \\Windows"},
+		{"正斜杠根定位路径", models.ShellPowerShell, "Remove-Item -Recurse /Windows"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -198,22 +201,22 @@ func TestEvaluate_WindowsBlocksCriticalPathDeletion(t *testing.T) {
 func TestEvaluate_WindowsAllowsOrdinaryDeletion(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"删关键路径里的子目录", ShellPowerShell, "Remove-Item -Recurse C:\\Windows\\Temp"},
-		{"删普通目录", ShellPowerShell, "Remove-Item -Recurse C:\\temp\\build"},
-		{"删别的盘", ShellPowerShell, "Remove-Item -Recurse D:\\"},
-		{"删写死的普通文件", ShellPowerShell, "Remove-Item C:\\temp\\debug.log"},
-		{"cmd 删写死的普通文件", ShellWindowsCmd, "del C:\\temp\\debug.log"},
-		{"erase 删普通文件", ShellWindowsCmd, "erase old.txt"},
-		{"不递归删关键路径里的文件", ShellPowerShell, "Remove-Item C:\\Windows\\notes.txt"},
-		{"cmd 删子目录树", ShellWindowsCmd, "rd /s /q C:\\Temp\\build"},
-		{"相对路径递归删", ShellPowerShell, "Remove-Item -Recurse .\\build"},
-		{"当前目录通配", ShellWindowsCmd, "del /s *"},
-		{"PowerShell 当前目录通配", ShellPowerShell, "Remove-Item -Recurse *"},
-		{"遍历删除当前目录日志", ShellWindowsCmd, `for %f in (*.log) do del "%f"`},
-		{"cmd 带属性过滤的删除", ShellWindowsCmd, "del /a:h *.log"},
+		{"删关键路径里的子目录", models.ShellPowerShell, "Remove-Item -Recurse C:\\Windows\\Temp"},
+		{"删普通目录", models.ShellPowerShell, "Remove-Item -Recurse C:\\temp\\build"},
+		{"删别的盘", models.ShellPowerShell, "Remove-Item -Recurse D:\\"},
+		{"删写死的普通文件", models.ShellPowerShell, "Remove-Item C:\\temp\\debug.log"},
+		{"cmd 删写死的普通文件", models.ShellWindowsCmd, "del C:\\temp\\debug.log"},
+		{"erase 删普通文件", models.ShellWindowsCmd, "erase old.txt"},
+		{"不递归删关键路径里的文件", models.ShellPowerShell, "Remove-Item C:\\Windows\\notes.txt"},
+		{"cmd 删子目录树", models.ShellWindowsCmd, "rd /s /q C:\\Temp\\build"},
+		{"相对路径递归删", models.ShellPowerShell, "Remove-Item -Recurse .\\build"},
+		{"当前目录通配", models.ShellWindowsCmd, "del /s *"},
+		{"PowerShell 当前目录通配", models.ShellPowerShell, "Remove-Item -Recurse *"},
+		{"遍历删除当前目录日志", models.ShellWindowsCmd, `for %f in (*.log) do del "%f"`},
+		{"cmd 带属性过滤的删除", models.ShellWindowsCmd, "del /a:h *.log"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -231,18 +234,18 @@ func TestEvaluate_WindowsAllowsOrdinaryDeletion(t *testing.T) {
 func TestEvaluate_WindowsConfirmsRecursiveDeleteWithUnknownTarget(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"Remove-Item 变量目标", ShellPowerShell, "Remove-Item -Recurse $x"},
-		{"Remove-Item 环境变量拼接", ShellPowerShell, "Remove-Item -Path $env:TEMP\\build -Recurse"},
-		{"rm 别名变量目标", ShellPowerShell, "rm -r $DIR"},
-		{"cmd rd /s 变量目标", ShellWindowsCmd, "rd /s %TEMP%"},
-		{"cmd del /s 批参数", ShellWindowsCmd, "del /s %1"},
-		{"裸点当前目录", ShellPowerShell, "Remove-Item -Recurse ."},
-		{"cmd 裸双点", ShellWindowsCmd, "rd /s .."},
-		{"带斜杠的裸点", ShellPowerShell, "Remove-Item -Recurse .\\"},
-		{"写死与动态目标混合", ShellPowerShell, "Remove-Item -Recurse C:\\temp $x"},
+		{"Remove-Item 变量目标", models.ShellPowerShell, "Remove-Item -Recurse $x"},
+		{"Remove-Item 环境变量拼接", models.ShellPowerShell, "Remove-Item -Path $env:TEMP\\build -Recurse"},
+		{"rm 别名变量目标", models.ShellPowerShell, "rm -r $DIR"},
+		{"cmd rd /s 变量目标", models.ShellWindowsCmd, "rd /s %TEMP%"},
+		{"cmd del /s 批参数", models.ShellWindowsCmd, "del /s %1"},
+		{"裸点当前目录", models.ShellPowerShell, "Remove-Item -Recurse ."},
+		{"cmd 裸双点", models.ShellWindowsCmd, "rd /s .."},
+		{"带斜杠的裸点", models.ShellPowerShell, "Remove-Item -Recurse .\\"},
+		{"写死与动态目标混合", models.ShellPowerShell, "Remove-Item -Recurse C:\\temp $x"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -262,15 +265,15 @@ func TestEvaluate_WindowsConfirmsRecursiveDeleteWithUnknownTarget(t *testing.T) 
 func TestEvaluate_WindowsAllowsDeterminateDeletesAndVariables(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"不递归的变量目标删除", ShellPowerShell, "Remove-Item $log"},
-		{"不递归的环境变量文件", ShellPowerShell, "Remove-Item $env:TEMP\\debug.log"},
-		{"变量路径导航", ShellPowerShell, "Set-Location $env:TEMP"},
-		{"cmd 变量路径导航", ShellWindowsCmd, "cd %TEMP%"},
-		{"变量参数的日常命令", ShellPowerShell, "Get-ChildItem $HOME\\docs"},
-		{"写死的递归普通目录", ShellPowerShell, "Remove-Item -Recurse C:\\temp\\build"},
+		{"不递归的变量目标删除", models.ShellPowerShell, "Remove-Item $log"},
+		{"不递归的环境变量文件", models.ShellPowerShell, "Remove-Item $env:TEMP\\debug.log"},
+		{"变量路径导航", models.ShellPowerShell, "Set-Location $env:TEMP"},
+		{"cmd 变量路径导航", models.ShellWindowsCmd, "cd %TEMP%"},
+		{"变量参数的日常命令", models.ShellPowerShell, "Get-ChildItem $HOME\\docs"},
+		{"写死的递归普通目录", models.ShellPowerShell, "Remove-Item -Recurse C:\\temp\\build"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -289,21 +292,21 @@ func TestEvaluate_WindowsAllowsDeterminateDeletesAndVariables(t *testing.T) {
 func TestEvaluate_WindowsConfirmsLockoutOps(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"netsh 加防火墙规则", ShellWindowsCmd, `netsh advfirewall firewall add rule name="agent" dir=in action=allow protocol=tcp localport=8080`},
-		{"netsh 关防火墙", ShellWindowsCmd, "netsh advfirewall set allprofiles state off"},
-		{"netsh 大写删规则", ShellWindowsCmd, `NETSH ADVFIREWALL FIREWALL DELETE RULE NAME=SSH`},
-		{"powershell 跑 netsh", ShellPowerShell, "netsh advfirewall firewall delete rule name=all"},
-		{"Set-NetFirewallProfile", ShellPowerShell, "Set-NetFirewallProfile -Profile Public -Enabled False"},
-		{"set-netfirewallprofile 小写", ShellPowerShell, "set-netfirewallprofile -allprofiles enabled false"},
-		{"Stop-Service sshd", ShellPowerShell, "Stop-Service sshd"},
-		{"Stop-Service -Name", ShellPowerShell, "Stop-Service -Name sshd"},
-		{"spsv 别名", ShellPowerShell, "spsv sshd"},
-		{"cmd net stop sshd", ShellWindowsCmd, "net stop sshd"},
-		{"Disable-NetAdapter", ShellPowerShell, "Disable-NetAdapter -Name Ethernet"},
-		{"disable-netadapter 小写裸名", ShellPowerShell, "disable-netadapter ethernet"},
+		{"netsh 加防火墙规则", models.ShellWindowsCmd, `netsh advfirewall firewall add rule name="agent" dir=in action=allow protocol=tcp localport=8080`},
+		{"netsh 关防火墙", models.ShellWindowsCmd, "netsh advfirewall set allprofiles state off"},
+		{"netsh 大写删规则", models.ShellWindowsCmd, `NETSH ADVFIREWALL FIREWALL DELETE RULE NAME=SSH`},
+		{"powershell 跑 netsh", models.ShellPowerShell, "netsh advfirewall firewall delete rule name=all"},
+		{"Set-NetFirewallProfile", models.ShellPowerShell, "Set-NetFirewallProfile -Profile Public -Enabled False"},
+		{"set-netfirewallprofile 小写", models.ShellPowerShell, "set-netfirewallprofile -allprofiles enabled false"},
+		{"Stop-Service sshd", models.ShellPowerShell, "Stop-Service sshd"},
+		{"Stop-Service -Name", models.ShellPowerShell, "Stop-Service -Name sshd"},
+		{"spsv 别名", models.ShellPowerShell, "spsv sshd"},
+		{"cmd net stop sshd", models.ShellWindowsCmd, "net stop sshd"},
+		{"Disable-NetAdapter", models.ShellPowerShell, "Disable-NetAdapter -Name Ethernet"},
+		{"disable-netadapter 小写裸名", models.ShellPowerShell, "disable-netadapter ethernet"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -323,17 +326,17 @@ func TestEvaluate_WindowsConfirmsLockoutOps(t *testing.T) {
 func TestEvaluate_WindowsAllowsReadonlyAndOtherServices(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"netsh 只读 show", ShellWindowsCmd, "netsh advfirewall show allprofiles"},
-		{"netsh 其他子树", ShellWindowsCmd, "netsh interface show interface"},
-		{"Get-NetFirewallProfile", ShellPowerShell, "Get-NetFirewallProfile"},
-		{"Get-NetFirewallRule", ShellPowerShell, "Get-NetFirewallRule -Enabled True"},
-		{"Get-Service sshd", ShellPowerShell, "Get-Service sshd"},
-		{"停其他服务", ShellPowerShell, "Stop-Service WinDefend"},
-		{"Restart-Service sshd", ShellPowerShell, "Restart-Service sshd"},
-		{"Get-NetAdapter", ShellPowerShell, "Get-NetAdapter | Format-Table Name,Status"},
+		{"netsh 只读 show", models.ShellWindowsCmd, "netsh advfirewall show allprofiles"},
+		{"netsh 其他子树", models.ShellWindowsCmd, "netsh interface show interface"},
+		{"Get-NetFirewallProfile", models.ShellPowerShell, "Get-NetFirewallProfile"},
+		{"Get-NetFirewallRule", models.ShellPowerShell, "Get-NetFirewallRule -Enabled True"},
+		{"Get-Service sshd", models.ShellPowerShell, "Get-Service sshd"},
+		{"停其他服务", models.ShellPowerShell, "Stop-Service WinDefend"},
+		{"Restart-Service sshd", models.ShellPowerShell, "Restart-Service sshd"},
+		{"Get-NetAdapter", models.ShellPowerShell, "Get-NetAdapter | Format-Table Name,Status"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -351,15 +354,15 @@ func TestEvaluate_WindowsAllowsReadonlyAndOtherServices(t *testing.T) {
 func TestEvaluate_WindowsConfirmsDynamicExecution(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"iex 拼删除命令", ShellPowerShell, `iex "Remove-Item -Recurse C:\Windows -Force"`},
-		{"iex 拼 rm 别名", ShellPowerShell, `iex "rm -r C:\"`},
-		{"Invoke-Expression 拼 format", ShellPowerShell, "Invoke-Expression 'format D:'"},
-		{"invoke-expression 小写", ShellPowerShell, `invoke-expression "del /s C:\Users"`},
-		{"EncodedCommand 旁边有危险名", ShellPowerShell, "Remove-Item $log; powershell -EncodedCommand UgBtACAALQByIDpcAA=="},
-		{"cmd 里的 powershell -EncodedCommand", ShellWindowsCmd, "echo rd /s C:\\ & powershell -EncodedCommand UgBtACAA=="},
+		{"iex 拼删除命令", models.ShellPowerShell, `iex "Remove-Item -Recurse C:\Windows -Force"`},
+		{"iex 拼 rm 别名", models.ShellPowerShell, `iex "rm -r C:\"`},
+		{"Invoke-Expression 拼 format", models.ShellPowerShell, "Invoke-Expression 'format D:'"},
+		{"invoke-expression 小写", models.ShellPowerShell, `invoke-expression "del /s C:\Users"`},
+		{"EncodedCommand 旁边有危险名", models.ShellPowerShell, "Remove-Item $log; powershell -EncodedCommand UgBtACAALQByIDpcAA=="},
+		{"cmd 里的 powershell -EncodedCommand", models.ShellWindowsCmd, "echo rd /s C:\\ & powershell -EncodedCommand UgBtACAA=="},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -379,16 +382,16 @@ func TestEvaluate_WindowsConfirmsDynamicExecution(t *testing.T) {
 func TestEvaluate_WindowsAllowsDynamicExecutionWithoutDanger(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"iex 跑脚本文件", ShellPowerShell, "iex (Get-Content C:\\scripts\\build.ps1)"},
-		{"iex 变量命令无危险名", ShellPowerShell, "iex $cmd"},
-		{"Invoke-Expression 跑 Get-Date", ShellPowerShell, `Invoke-Expression "Get-Date"`},
-		{"纯 EncodedCommand 无危险名", ShellPowerShell, "powershell -EncodedCommand UgBlAHQAIAB=="},
-		{"iex 拼 Format-Table", ShellPowerShell, `iex "Get-Process | Format-Table"`},
-		{"查命令文档", ShellPowerShell, "Get-Command Invoke-Expression"},
-		{"打印文字提到 iex", ShellPowerShell, `Write-Host "Invoke-Expression is risky"`},
+		{"iex 跑脚本文件", models.ShellPowerShell, "iex (Get-Content C:\\scripts\\build.ps1)"},
+		{"iex 变量命令无危险名", models.ShellPowerShell, "iex $cmd"},
+		{"Invoke-Expression 跑 Get-Date", models.ShellPowerShell, `Invoke-Expression "Get-Date"`},
+		{"纯 EncodedCommand 无危险名", models.ShellPowerShell, "powershell -EncodedCommand UgBlAHQAIAB=="},
+		{"iex 拼 Format-Table", models.ShellPowerShell, `iex "Get-Process | Format-Table"`},
+		{"查命令文档", models.ShellPowerShell, "Get-Command Invoke-Expression"},
+		{"打印文字提到 iex", models.ShellPowerShell, `Write-Host "Invoke-Expression is risky"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -406,20 +409,20 @@ func TestEvaluate_WindowsAllowsDynamicExecutionWithoutDanger(t *testing.T) {
 func TestEvaluate_WindowsCombinedCommandsTakeMostSevere(t *testing.T) {
 	tests := []struct {
 		name       string
-		shell      ShellType
+		shell      models.ShellType
 		command    string
 		want       Disposition
 		wantRuleID string
 	}{
-		{"分号后删关键路径", ShellPowerShell, "Get-ChildItem; Remove-Item -Recurse C:\\Windows", DispositionBlock, "WIN-CRITICAL-DELETE"},
-		{"cmd 双与号接 format", ShellWindowsCmd, "dir && format D:", DispositionBlock, "WIN-FORMAT"},
-		{"cmd 单与号接 rd /s 盘根", ShellWindowsCmd, "cd C:\\temp & rd /s C:\\", DispositionBlock, "WIN-CRITICAL-DELETE"},
-		{"需确认藏在管道后", ShellPowerShell, "Get-Process; Stop-Service sshd", DispositionConfirmRequired, "WIN-LOCKOUT"},
-		{"需确认与拦截同现", ShellWindowsCmd, "netsh advfirewall set allprofiles state off; format D:", DispositionBlock, "WIN-FORMAT"},
-		{"动态目标递归删单独成段", ShellPowerShell, "Remove-Item -Recurse $x; echo done", DispositionConfirmRequired, "WIN-DELETE-TARGET-UNKNOWN"},
-		{"换行分段", ShellPowerShell, "Get-ChildItem\r\nRemove-Item -Recurse C:\\Users", DispositionBlock, "WIN-CRITICAL-DELETE"},
-		{"重定向流合并不误判", ShellPowerShell, "Get-Process 2>&1 | Out-Null", DispositionAllow, ""},
-		{"引号里的分隔符不成段", ShellPowerShell, `Write-Host "a;b|c&d"`, DispositionAllow, ""},
+		{"分号后删关键路径", models.ShellPowerShell, "Get-ChildItem; Remove-Item -Recurse C:\\Windows", DispositionBlock, "WIN-CRITICAL-DELETE"},
+		{"cmd 双与号接 format", models.ShellWindowsCmd, "dir && format D:", DispositionBlock, "WIN-FORMAT"},
+		{"cmd 单与号接 rd /s 盘根", models.ShellWindowsCmd, "cd C:\\temp & rd /s C:\\", DispositionBlock, "WIN-CRITICAL-DELETE"},
+		{"需确认藏在管道后", models.ShellPowerShell, "Get-Process; Stop-Service sshd", DispositionConfirmRequired, "WIN-LOCKOUT"},
+		{"需确认与拦截同现", models.ShellWindowsCmd, "netsh advfirewall set allprofiles state off; format D:", DispositionBlock, "WIN-FORMAT"},
+		{"动态目标递归删单独成段", models.ShellPowerShell, "Remove-Item -Recurse $x; echo done", DispositionConfirmRequired, "WIN-DELETE-TARGET-UNKNOWN"},
+		{"换行分段", models.ShellPowerShell, "Get-ChildItem\r\nRemove-Item -Recurse C:\\Users", DispositionBlock, "WIN-CRITICAL-DELETE"},
+		{"重定向流合并不误判", models.ShellPowerShell, "Get-Process 2>&1 | Out-Null", DispositionAllow, ""},
+		{"引号里的分隔符不成段", models.ShellPowerShell, `Write-Host "a;b|c&d"`, DispositionAllow, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -437,30 +440,30 @@ func TestEvaluate_WindowsCombinedCommandsTakeMostSevere(t *testing.T) {
 func TestEvaluate_WindowsAllowsEverydayCommands(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"Get-ChildItem", ShellPowerShell, "Get-ChildItem C:\\"},
-		{"Get-ChildItem 管道统计", ShellPowerShell, "Get-ChildItem C:\\Windows\\System32 | Measure-Object -Line"},
-		{"dir", ShellWindowsCmd, "dir"},
-		{"dir 带路径", ShellWindowsCmd, "dir C:\\Windows"},
-		{"type 看日志", ShellWindowsCmd, "type C:\\logs\\app.log"},
-		{"Get-Content 看日志尾部", ShellPowerShell, "Get-Content C:\\logs\\app.log -Tail 100"},
-		{"进程排序", ShellPowerShell, "Get-Process | Sort-Object CPU -Descending | Select-Object -First 10"},
-		{"切目录再看", ShellPowerShell, "Set-Location C:\\work; Get-ChildItem"},
-		{"建目录", ShellPowerShell, "New-Item -ItemType Directory C:\\work\\build"},
-		{"复制文件", ShellPowerShell, "Copy-Item C:\\a.txt C:\\b.txt"},
-		{"移动文件", ShellPowerShell, "Move-Item C:\\a.txt D:\\"},
-		{"删写死的普通文件", ShellPowerShell, "Remove-Item C:\\temp\\debug.log"},
-		{"cmd 删写死的普通文件", ShellWindowsCmd, "del C:\\temp\\debug.log"},
-		{"ping", ShellWindowsCmd, "ping example.com"},
-		{"ipconfig", ShellWindowsCmd, "ipconfig /all"},
-		{"systeminfo", ShellWindowsCmd, "systeminfo"},
-		{"tasklist 过滤", ShellWindowsCmd, "tasklist | findstr python"},
-		{"查询停止的服务", ShellPowerShell, "Get-Service | Where-Object Status -eq Stopped"},
-		{"重定向写文件", ShellWindowsCmd, "echo done > C:\\temp\\out.txt"},
-		{"建目录与上跳", ShellWindowsCmd, "mkdir build & cd .."},
-		{"打印删除文字不误触", ShellPowerShell, `Write-Output "Remove-Item -Recurse C:\Windows"`},
+		{"Get-ChildItem", models.ShellPowerShell, "Get-ChildItem C:\\"},
+		{"Get-ChildItem 管道统计", models.ShellPowerShell, "Get-ChildItem C:\\Windows\\System32 | Measure-Object -Line"},
+		{"dir", models.ShellWindowsCmd, "dir"},
+		{"dir 带路径", models.ShellWindowsCmd, "dir C:\\Windows"},
+		{"type 看日志", models.ShellWindowsCmd, "type C:\\logs\\app.log"},
+		{"Get-Content 看日志尾部", models.ShellPowerShell, "Get-Content C:\\logs\\app.log -Tail 100"},
+		{"进程排序", models.ShellPowerShell, "Get-Process | Sort-Object CPU -Descending | Select-Object -First 10"},
+		{"切目录再看", models.ShellPowerShell, "Set-Location C:\\work; Get-ChildItem"},
+		{"建目录", models.ShellPowerShell, "New-Item -ItemType Directory C:\\work\\build"},
+		{"复制文件", models.ShellPowerShell, "Copy-Item C:\\a.txt C:\\b.txt"},
+		{"移动文件", models.ShellPowerShell, "Move-Item C:\\a.txt D:\\"},
+		{"删写死的普通文件", models.ShellPowerShell, "Remove-Item C:\\temp\\debug.log"},
+		{"cmd 删写死的普通文件", models.ShellWindowsCmd, "del C:\\temp\\debug.log"},
+		{"ping", models.ShellWindowsCmd, "ping example.com"},
+		{"ipconfig", models.ShellWindowsCmd, "ipconfig /all"},
+		{"systeminfo", models.ShellWindowsCmd, "systeminfo"},
+		{"tasklist 过滤", models.ShellWindowsCmd, "tasklist | findstr python"},
+		{"查询停止的服务", models.ShellPowerShell, "Get-Service | Where-Object Status -eq Stopped"},
+		{"重定向写文件", models.ShellWindowsCmd, "echo done > C:\\temp\\out.txt"},
+		{"建目录与上跳", models.ShellWindowsCmd, "mkdir build & cd .."},
+		{"打印删除文字不误触", models.ShellPowerShell, `Write-Output "Remove-Item -Recurse C:\Windows"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {
@@ -479,14 +482,14 @@ func TestEvaluate_WindowsAllowsEverydayCommands(t *testing.T) {
 // 该规则不再参与判定,其余规则照常。
 func TestEvaluate_WindowsDisabledDefaultRuleByID(t *testing.T) {
 	rules := &RuleSet{DisabledDefaultRuleIDs: []string{"WIN-FORMAT"}}
-	if got := Evaluate(ShellWindowsCmd, "format D:", rules); got.Disposition != DispositionAllow {
+	if got := Evaluate(models.ShellWindowsCmd, "format D:", rules); got.Disposition != DispositionAllow {
 		t.Fatalf("disabled WIN-FORMAT still fired: %+v", got)
 	}
-	if got := Evaluate(ShellPowerShell, "diskpart", rules); got.Disposition != DispositionBlock {
+	if got := Evaluate(models.ShellPowerShell, "diskpart", rules); got.Disposition != DispositionBlock {
 		t.Fatalf("other rules must stay active: %+v", got)
 	}
 	lockoutOff := &RuleSet{DisabledDefaultRuleIDs: []string{"WIN-LOCKOUT"}}
-	if got := Evaluate(ShellPowerShell, "Stop-Service sshd", lockoutOff); got.Disposition != DispositionAllow {
+	if got := Evaluate(models.ShellPowerShell, "Stop-Service sshd", lockoutOff); got.Disposition != DispositionAllow {
 		t.Fatalf("disabled WIN-LOCKOUT still fired: %+v", got)
 	}
 }
@@ -496,14 +499,14 @@ func TestEvaluate_WindowsDisabledDefaultRuleByID(t *testing.T) {
 func TestEvaluate_WindowsAllowsFormatLookalikes(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"Format-Table", ShellPowerShell, "Get-Process | Format-Table"},
-		{"Format-List", ShellPowerShell, "Get-Service | Format-List -Property Name"},
-		{"Format-Hex", ShellPowerShell, "Format-Hex -Path C:\\temp\\dump.bin"},
-		{"打印文字里的 format", ShellWindowsCmd, "echo format D:"},
-		{"打印文字里的 Format-Volume", ShellPowerShell, `Write-Host "Format-Volume -DriveLetter D"`},
+		{"Format-Table", models.ShellPowerShell, "Get-Process | Format-Table"},
+		{"Format-List", models.ShellPowerShell, "Get-Service | Format-List -Property Name"},
+		{"Format-Hex", models.ShellPowerShell, "Format-Hex -Path C:\\temp\\dump.bin"},
+		{"打印文字里的 format", models.ShellWindowsCmd, "echo format D:"},
+		{"打印文字里的 Format-Volume", models.ShellPowerShell, `Write-Host "Format-Volume -DriveLetter D"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+string(tt.shell), func(t *testing.T) {

@@ -7,6 +7,7 @@ package tui
 // 测判定语义(判定在 internal/policy 的测试面)。
 
 import (
+	"ssh-manager-mcp/internal/models"
 	"strings"
 	"testing"
 
@@ -23,7 +24,7 @@ func newPolicyApp(t *testing.T) (App, *store.Store) {
 	t.Helper()
 	st := newStore(t)
 	if err := st.AddPolicyRule(policy.CustomRule{
-		ID: "NO-REBOOT", Shells: []policy.ShellType{policy.ShellPOSIX},
+		ID: "NO-REBOOT", Shells: []models.ShellType{models.ShellPOSIX},
 		Commands:    []string{"reboot"},
 		Disposition: policy.DispositionBlock,
 		Explanation: "重启由 owner 排期,不由 agent 执行",
@@ -214,7 +215,7 @@ func TestPolicyPage_AddViaForm_WritesAudit(t *testing.T) {
 	}
 	if found.Disposition != policy.DispositionBlock ||
 		len(found.Commands) != 2 || found.Commands[0] != "shutdown" ||
-		len(found.Shells) != 1 || found.Shells[0] != policy.ShellPOSIX {
+		len(found.Shells) != 1 || found.Shells[0] != models.ShellPOSIX {
 		t.Fatalf("stored rule fields: %+v", found)
 	}
 	// 审计:恰一行 policy-rule.add,与 CLI 的动作名与摘要形态一致。

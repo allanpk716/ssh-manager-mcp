@@ -6,6 +6,7 @@ package tui
 // 提示,不存在任何修改入口。判定语义在 internal/policy,这里只测接线。
 
 import (
+	"ssh-manager-mcp/internal/models"
 	"strings"
 	"testing"
 
@@ -59,7 +60,7 @@ func drivePolicyTestResult(t *testing.T, m tea.Model, done func(tea.Model) bool)
 // seedPolicyRule 往权威库种一条自定义规则(试算的判定数据面)。
 func seedPolicyRule(st *store.Store) error {
 	return st.AddPolicyRule(policy.CustomRule{
-		ID: "NO-REBOOT", Shells: []policy.ShellType{policy.ShellPOSIX},
+		ID: "NO-REBOOT", Shells: []models.ShellType{models.ShellPOSIX},
 		Commands:    []string{"reboot"},
 		Disposition: policy.DispositionBlock,
 		Explanation: "重启由 owner 排期,不由 agent 执行",

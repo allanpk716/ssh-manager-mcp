@@ -51,7 +51,7 @@ func TestExecPolicyCustomRules_ChangeExecToolResults(t *testing.T) {
 	st := newStore(t)
 	// 结构化一例:按命令名拦 reboot。正则一例:拦「docker system prune -a」。
 	if err := st.AddPolicyRule(policy.CustomRule{
-		ID: "NO-REBOOT", Shells: []policy.ShellType{policy.ShellPOSIX},
+		ID: "NO-REBOOT", Shells: []models.ShellType{models.ShellPOSIX},
 		Commands: []string{"reboot"}, Disposition: policy.DispositionBlock,
 		Explanation: "reboots are scheduled by the owner, never run by the agent",
 		Alternative: "ask the owner to schedule a reboot window",
@@ -150,7 +150,7 @@ func TestExecPolicyDisabledDefaultRule_NoLongerMatches(t *testing.T) {
 func TestExecPolicyClientMirror_JudgesBySnapshotRules(t *testing.T) {
 	src := newStore(t)
 	if err := src.AddPolicyRule(policy.CustomRule{
-		ID: "NO-REBOOT", Shells: []policy.ShellType{policy.ShellPOSIX},
+		ID: "NO-REBOOT", Shells: []models.ShellType{models.ShellPOSIX},
 		Commands: []string{"reboot"}, Disposition: policy.DispositionBlock,
 		Explanation: "reboots are scheduled by the owner, never run by the agent",
 		Alternative: "ask the owner to schedule a reboot window",
@@ -227,7 +227,7 @@ func TestExecPolicyCustomRule_WindowsShellAnnotatedServer(t *testing.T) {
 	defer cleanup()
 	st := newStore(t)
 	if err := st.AddPolicyRule(policy.CustomRule{
-		ID: "NO-RESTART", Shells: []policy.ShellType{policy.ShellPowerShell},
+		ID: "NO-RESTART", Shells: []models.ShellType{models.ShellPowerShell},
 		Commands: []string{"Restart-Computer"}, Disposition: policy.DispositionBlock,
 		Explanation: "reboots are scheduled by the owner, never run by the agent",
 		Alternative: "ask the owner to schedule a reboot window",

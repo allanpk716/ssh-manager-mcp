@@ -1,12 +1,15 @@
 package policy
 
-import "testing"
+import (
+	"ssh-manager-mcp/internal/models"
+	"testing"
+)
 
 // evalPOSIX 以 POSIX shell 判定一条命令,返回处置与命中规则编号,
 // 是本包对外行为断言的主要入口(试算命令与执行工具都只调它)。
 func evalPOSIX(t *testing.T, command string) Decision {
 	t.Helper()
-	return Evaluate(ShellPOSIX, command, nil)
+	return Evaluate(models.ShellPOSIX, command, nil)
 }
 
 // TestEvaluate_BlocksFormatCommands:格式化类命令(格式化、抹签名、
@@ -700,18 +703,18 @@ func TestEvaluate_ParseFailureFallback(t *testing.T) {
 // 不再参与判定,其余规则照常。
 func TestEvaluate_DisabledDefaultRuleByID(t *testing.T) {
 	rules := &RuleSet{DisabledDefaultRuleIDs: []string{"POSIX-FORMAT"}}
-	if got := Evaluate(ShellPOSIX, "mkfs.ext4 /dev/sdb", rules); got.Disposition != DispositionAllow {
+	if got := Evaluate(models.ShellPOSIX, "mkfs.ext4 /dev/sdb", rules); got.Disposition != DispositionAllow {
 		t.Fatalf("disabled POSIX-FORMAT still fired: %+v", got)
 	}
-	if got := Evaluate(ShellPOSIX, "rm -rf /etc", rules); got.Disposition != DispositionBlock {
+	if got := Evaluate(models.ShellPOSIX, "rm -rf /etc", rules); got.Disposition != DispositionBlock {
 		t.Fatalf("other rules must stay active: %+v", got)
 	}
 	// 需确认档的默认规则同样能按编号停用。
 	crules := &RuleSet{DisabledDefaultRuleIDs: []string{"POSIX-DELETE-TARGET-UNKNOWN"}}
-	if got := Evaluate(ShellPOSIX, "rm -rf $DIR/", crules); got.Disposition != DispositionAllow {
+	if got := Evaluate(models.ShellPOSIX, "rm -rf $DIR/", crules); got.Disposition != DispositionAllow {
 		t.Fatalf("disabled POSIX-DELETE-TARGET-UNKNOWN still fired: %+v", got)
 	}
-	if got := Evaluate(ShellPOSIX, "iptables -F", crules); got.Disposition != DispositionConfirmRequired {
+	if got := Evaluate(models.ShellPOSIX, "iptables -F", crules); got.Disposition != DispositionConfirmRequired {
 		t.Fatalf("other confirm rules must stay active: %+v", got)
 	}
 }
@@ -719,7 +722,7 @@ func TestEvaluate_DisabledDefaultRuleByID(t *testing.T) {
 // TestEvaluate_UnknownShellNeedsConfirmation:无法识别的 shell 类型保守
 // 返回需确认,不悄悄放行(PowerShell 与 cmd 的判定已由 Windows 规则实现)。
 func TestEvaluate_UnknownShellNeedsConfirmation(t *testing.T) {
-	got := Evaluate(ShellType("fish"), "Get-ChildItem", nil)
+	got := Evaluate(models.ShellType("fish"), "Get-ChildItem", nil)
 	if got.Disposition != DispositionConfirmRequired {
 		t.Fatalf("Evaluate(fish) = %+v, want 需确认", got)
 	}
@@ -736,15 +739,15 @@ func TestEvaluate_UnknownShellNeedsConfirmation(t *testing.T) {
 func TestEvaluate_ShellAnnotationMismatchNeedsConfirmation(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"POSIX 标注藏 PowerShell 格式化", ShellPOSIX, "Format-Volume -DriveLetter D"},
-		{"POSIX 标注藏 cmd 删关键路径", ShellPOSIX, `rd /s /q C:\`},
-		{"POSIX 标注藏 Windows 分区工具", ShellPOSIX, "diskpart"},
-		{"PowerShell 标注藏 POSIX 格式化", ShellPowerShell, "mkfs.ext4 /dev/sdb"},
-		{"PowerShell 标注藏 POSIX 删根", ShellPowerShell, "rm -rf /"},
-		{"cmd 标注藏 POSIX 写盘", ShellWindowsCmd, "dd if=/dev/zero of=/dev/sda"},
+		{"POSIX 标注藏 PowerShell 格式化", models.ShellPOSIX, "Format-Volume -DriveLetter D"},
+		{"POSIX 标注藏 cmd 删关键路径", models.ShellPOSIX, `rd /s /q C:\`},
+		{"POSIX 标注藏 Windows 分区工具", models.ShellPOSIX, "diskpart"},
+		{"PowerShell 标注藏 POSIX 格式化", models.ShellPowerShell, "mkfs.ext4 /dev/sdb"},
+		{"PowerShell 标注藏 POSIX 删根", models.ShellPowerShell, "rm -rf /"},
+		{"cmd 标注藏 POSIX 写盘", models.ShellWindowsCmd, "dd if=/dev/zero of=/dev/sda"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -764,19 +767,19 @@ func TestEvaluate_ShellAnnotationMismatchNeedsConfirmation(t *testing.T) {
 func TestEvaluate_ShellAnnotationMismatchSparesEverydayCommands(t *testing.T) {
 	tests := []struct {
 		name    string
-		shell   ShellType
+		shell   models.ShellType
 		command string
 	}{
-		{"POSIX 日常列表", ShellPOSIX, "ls -la"},
-		{"POSIX 删写死的构建产物", ShellPOSIX, "rm -r ./build"},
-		{"POSIX 打印危险命令文字", ShellPOSIX, `echo "rm -rf /"`},
-		{"POSIX 变量目录", ShellPOSIX, "cd $HOME"},
-		{"POSIX git 状态", ShellPOSIX, "git status"},
-		{"POSIX docker 列容器", ShellPOSIX, "docker ps"},
-		{"PowerShell 日常列表", ShellPowerShell, "Get-ChildItem"},
-		{"PowerShell 删写死的构建产物", ShellPowerShell, `Remove-Item .\build -Recurse`},
-		{"cmd 日常列表", ShellWindowsCmd, "dir"},
-		{"cmd 删写死的文件", ShellWindowsCmd, "del foo.txt"},
+		{"POSIX 日常列表", models.ShellPOSIX, "ls -la"},
+		{"POSIX 删写死的构建产物", models.ShellPOSIX, "rm -r ./build"},
+		{"POSIX 打印危险命令文字", models.ShellPOSIX, `echo "rm -rf /"`},
+		{"POSIX 变量目录", models.ShellPOSIX, "cd $HOME"},
+		{"POSIX git 状态", models.ShellPOSIX, "git status"},
+		{"POSIX docker 列容器", models.ShellPOSIX, "docker ps"},
+		{"PowerShell 日常列表", models.ShellPowerShell, "Get-ChildItem"},
+		{"PowerShell 删写死的构建产物", models.ShellPowerShell, `Remove-Item .\build -Recurse`},
+		{"cmd 日常列表", models.ShellWindowsCmd, "dir"},
+		{"cmd 删写死的文件", models.ShellWindowsCmd, "del foo.txt"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -802,11 +805,11 @@ func TestEvaluate_ShellMismatchDisableableLikeDefaultRule(t *testing.T) {
 		t.Fatal("SHELL-MISMATCH must be listed among built-in default rule ids")
 	}
 	rules := &RuleSet{DisabledDefaultRuleIDs: []string{"SHELL-MISMATCH"}}
-	if got := Evaluate(ShellPOSIX, "diskpart", rules); got.Disposition != DispositionAllow {
+	if got := Evaluate(models.ShellPOSIX, "diskpart", rules); got.Disposition != DispositionAllow {
 		t.Fatalf("disabled SHELL-MISMATCH still fired: %+v", got)
 	}
 	// 只停用 SHELL-MISMATCH 不影响标注侧本就危险的判定。
-	if got := Evaluate(ShellPOSIX, "rm -rf /etc", rules); got.Disposition != DispositionBlock {
+	if got := Evaluate(models.ShellPOSIX, "rm -rf /etc", rules); got.Disposition != DispositionBlock {
 		t.Fatalf("annotated-shell judging must stay active: %+v", got)
 	}
 }
@@ -816,19 +819,19 @@ func TestEvaluate_ShellMismatchDisableableLikeDefaultRule(t *testing.T) {
 func TestEvaluate_ShellMismatchUsesEffectiveRuleSet(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{{
 		ID:          "CUSTOM-WINFMT",
-		Shells:      []ShellType{ShellPowerShell},
+		Shells:      []models.ShellType{models.ShellPowerShell},
 		Commands:    []string{"myformat"},
 		Disposition: DispositionBlock,
 		Explanation: "custom rule for the test",
 		Alternative: "none",
 	}}}
 	// POSIX 标注下无规则命中;PowerShell 家族试判命中自定义规则 → 需确认。
-	if got := Evaluate(ShellPOSIX, "myformat D:", rules); got.Disposition != DispositionConfirmRequired || got.RuleID != "SHELL-MISMATCH" {
+	if got := Evaluate(models.ShellPOSIX, "myformat D:", rules); got.Disposition != DispositionConfirmRequired || got.RuleID != "SHELL-MISMATCH" {
 		t.Fatalf("custom rule must fire in the cross-judgement: %+v", got)
 	}
 	// 停用 SHELL-MISMATCH 后试判不再改判。
 	rules.DisabledDefaultRuleIDs = []string{"SHELL-MISMATCH"}
-	if got := Evaluate(ShellPOSIX, "myformat D:", rules); got.Disposition != DispositionAllow {
+	if got := Evaluate(models.ShellPOSIX, "myformat D:", rules); got.Disposition != DispositionAllow {
 		t.Fatalf("disabled SHELL-MISMATCH still fired: %+v", got)
 	}
 }

@@ -20,7 +20,7 @@ import (
 func seedRule(id string) policy.CustomRule {
 	return policy.CustomRule{
 		ID:           id,
-		Shells:       []policy.ShellType{policy.ShellPOSIX},
+		Shells:       []models.ShellType{models.ShellPOSIX},
 		Commands:     []string{"reboot", "shutdown"},
 		Args:         []string{"--force"},
 		PathCategory: policy.PathCategoryCritical,
@@ -56,7 +56,7 @@ func TestPolicyRulesCRUD(t *testing.T) {
 		got.Explanation != rule.Explanation || got.Alternative != rule.Alternative {
 		t.Fatalf("rule fields not round-tripped: %+v", got)
 	}
-	if len(got.Shells) != 1 || got.Shells[0] != policy.ShellPOSIX ||
+	if len(got.Shells) != 1 || got.Shells[0] != models.ShellPOSIX ||
 		len(got.Commands) != 2 || got.Commands[0] != "reboot" || got.Commands[1] != "shutdown" ||
 		len(got.Args) != 1 || got.Args[0] != "--force" {
 		t.Fatalf("rule list fields not round-tripped: %+v", got)

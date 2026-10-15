@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"ssh-manager-mcp/internal/models"
 	"strings"
 
 	"ssh-manager-mcp/internal/policy"
@@ -74,7 +75,7 @@ func (s *Store) AddPolicyRule(rule policy.CustomRule) error {
 }
 
 // marshalShells 把 shell 类型集合序列化成 JSON 字符串数组。
-func marshalShells(shells []policy.ShellType) string {
+func marshalShells(shells []models.ShellType) string {
 	strs := make([]string, 0, len(shells))
 	for _, sh := range shells {
 		strs = append(strs, string(sh))
@@ -121,7 +122,7 @@ func (s *Store) ListPolicyRules() ([]policy.CustomRule, error) {
 			return nil, err
 		}
 		for _, sh := range unmarshalStringList(shellsRaw) {
-			r.Shells = append(r.Shells, policy.ShellType(sh))
+			r.Shells = append(r.Shells, models.ShellType(sh))
 		}
 		r.Commands = unmarshalStringList(commandsRaw)
 		r.Args = unmarshalStringList(argsRaw)

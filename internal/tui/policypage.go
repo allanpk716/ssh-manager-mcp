@@ -9,6 +9,7 @@ package tui
 
 import (
 	"fmt"
+	"ssh-manager-mcp/internal/models"
 	"strings"
 
 	"charm.land/bubbles/v2/list"
@@ -232,9 +233,9 @@ func (d *policyRuleDraft) toRule() policy.CustomRule {
 		}
 		return out
 	}
-	shells := make([]policy.ShellType, 0, len(d.Shells))
+	shells := make([]models.ShellType, 0, len(d.Shells))
 	for _, sh := range d.Shells {
-		shells = append(shells, policy.ShellType(sh))
+		shells = append(shells, models.ShellType(sh))
 	}
 	disposition := policy.DispositionBlock
 	if d.Disposition == "confirm" {
