@@ -1,5 +1,5 @@
-// Package policymanage 是命令策略的管理层(ticket #15,规格 #8「owner
-// 管理面」):把权威 vault 里的自定义规则与停用记录组装成判定内核的
+// Package policymanage 是命令策略的管理层(owner 管理规则用的入口,
+// ticket #15):把权威 vault 里的自定义规则与停用记录组装成判定内核的
 // 生效规则集,并提供增、删、停用、恢复四个管理操作(各写 owner 审计)。
 // 它是 CLI(`sshmgr policy`)与后续 TUI 页(ticket #16,ADR 0003 的
 // CLI 与 TUI 对等)共用的可复用层——判定语义一律在 internal/policy,
@@ -56,7 +56,7 @@ func EffectiveRuleSet(st *store.Store) (*policy.RuleSet, error) {
 
 // EffectiveRuleSetFromSnapshot 从快照的策略段组装生效规则集(客户端
 // 只读镜像的数据面)。旧快照无策略段时返回的规则集等于 nil——内置
-// 默认规则全部生效(规格 #8 第 38 条),由判定内核兑现。
+// 默认规则全部生效,由判定内核兑现。
 func EffectiveRuleSetFromSnapshot(snap *store.Snapshot) *policy.RuleSet {
 	if snap == nil || (len(snap.PolicyRules) == 0 && len(snap.PolicyDisabledDefaults) == 0) {
 		return nil

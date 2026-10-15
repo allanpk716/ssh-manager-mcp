@@ -1,5 +1,5 @@
 // Package shellprobe 探测服务器实际的 shell 类型(命令策略的诊断面,
-// ticket #17,规格 #8):向服务器发两条固定的无害探测命令,按输出判定
+// ticket #17):向服务器发两条固定的无害探测命令,按输出判定
 // POSIX / PowerShell / cmd。判定是纯函数(Detect)——不做任何网络或
 // 磁盘读写;连接与执行的接线在 ProbeServer,owner 的 CLI 诊断命令与
 // TUI 服务器页共用它(ADR 0003 的对等要求)。

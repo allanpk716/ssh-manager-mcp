@@ -31,9 +31,9 @@ import (
 )
 
 const (
-	// confirmationTTL 是确认码的有效期 (规格:5 分钟)。
+	// confirmationTTL 是确认码的有效期 (5 分钟)。
 	confirmationTTL = 5 * time.Minute
-	// confirmationCodeLength 是确认码长度 (规格:约 6 位字母数字)。
+	// confirmationCodeLength 是确认码长度 (约 6 位字母数字)。
 	confirmationCodeLength = 6
 )
 
@@ -64,7 +64,7 @@ func newConfirmationRegistry() *confirmationRegistry {
 }
 
 // execConfirmations 是两个执行工具共用的进程级登记表——桥与单机
-// broker 都在同一进程内签发与核销 (规格:由执行所在进程签发并保存)。
+// broker 都在同一进程内签发与核销(确认码只活在执行所在进程里)。
 var execConfirmations = newConfirmationRegistry()
 
 // confirmBindingKey 把确认码绑到「服务器编号 + 命令完整文本」的哈希

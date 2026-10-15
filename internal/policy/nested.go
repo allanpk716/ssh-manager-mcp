@@ -6,7 +6,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// 本文件实现嵌套执行的递归判定(规格 #8 第 15、16 条):识别把一段
+// 本文件实现嵌套执行的递归判定:识别把一段
 // 命令文本交给另一个 shell 执行的写法——bash -c、sh -c、zsh -c(dash、
 // ksh 同形)、pwsh -c / -Command、powershell -Command / -c、cmd 的 /c
 // 与 /k、以及 wsl(含 wsl -e、wsl --exec、wsl -- 后接命令)。内层是

@@ -1,5 +1,4 @@
-// policyview.go 承载命令策略的试算面与客户端只读查看器(票 #16,
-// 规格 #8):
+// policyview.go 承载命令策略的试算面与客户端只读查看器(票 #16):
 //   - policyTestOverlay 是主控台策略页 [t] 的试算 overlay:输入命令与
 //     shell 类型,结论屏显示处置、命中规则编号、风险说明与替代做法
 //     (与 `sshmgr policy test` 同一信息集)。生效规则集在后台命令里

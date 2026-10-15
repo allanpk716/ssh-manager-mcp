@@ -2,7 +2,7 @@ package policy
 
 import "testing"
 
-// 嵌套执行递归判定(ticket #13 / 规格 #8 第 15、16 条)的测试:识别把
+// 嵌套执行递归判定(ticket #13)的测试:识别把
 // 一段命令文本交给另一个 shell 执行的写法——bash -c、sh -c、zsh -c
 // (dash、ksh 同形)、pwsh -c / -Command、powershell -Command / -c、
 // cmd /c 与 /k、wsl(含 wsl -e、wsl --exec、wsl -- 后接命令)。

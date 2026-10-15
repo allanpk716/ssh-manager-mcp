@@ -130,8 +130,8 @@ func TestExecBackgroundShellTypePicksGrammar(t *testing.T) {
 }
 
 // TestPolicyJudgeUnknownShellLeansConfirm: 标注值无法识别时,判定结论是
-// 需确认——拆解不准的命令偏向需确认,不悄悄放行(规格 user story 42)。
-// 存储层会把空值归一为 POSIX,能到这里的是坏数据/未知值。
+// 需确认——拆解不准的命令偏向需确认,不悄悄放行。存储层会把空值
+// 归一为 POSIX,能到这里的是坏数据/未知值。
 func TestPolicyJudgeUnknownShellLeansConfirm(t *testing.T) {
 	st := newStore(t)
 	for _, bad := range []models.ShellType{"fish", "POSIX", "powershel"} {
