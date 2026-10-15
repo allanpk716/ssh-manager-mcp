@@ -275,6 +275,13 @@ func VaultOpenErr() error {
 // need the underlying cause use VaultOpenErr.
 func VaultUnlocked() bool { return VaultOpenErr() == nil }
 
+// CachePresent is the exported read of the client-side enrollment probe: a
+// readable cache credential (default slot) OR any named instance slot. The
+// policy command group (ticket #15) uses it to decide the machine's posture
+// (a cache client shows and tests rules from its pulled snapshot, never
+// mutates them) without going through the launch chain.
+func CachePresent() bool { return cachePresent() }
+
 // cachePresent reports whether this machine is an enrolled client: a readable
 // default-slot cache.auth.json (nil,nil = never enrolled) OR any named
 // instance slot (Plan 40 §2.7 — a named-instance-only machine is still a

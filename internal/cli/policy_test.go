@@ -2,13 +2,20 @@ package cli
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // runPolicyTest 以给定参数执行 `sshmgr policy test`,返回其输出。
+// 环境钉到空临时目录:试算自 ticket #15 起按本机姿态(权威库/客户端缓存)
+// 取生效规则集,不钉住会把开发者本机的真实 vault/缓存串进测试。
 func runPolicyTest(t *testing.T, args ...string) (*bytes.Buffer, error) {
 	t.Helper()
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":     filepath.Join(t.TempDir(), "no-vault.db"),
+		"SSHMGR_CACHE_DIR": t.TempDir(),
+	})
 	full := append([]string{"policy", "test"}, args...)
 	root := NewRootCmd()
 	root.SetArgs(full)
