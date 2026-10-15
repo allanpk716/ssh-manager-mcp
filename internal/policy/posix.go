@@ -82,30 +82,42 @@ type posixEvidence struct {
 	forkBomb bool
 }
 
-// applyRules 按声明顺序过一遍默认规则表,再过适用的自定义规则,
-// 返回第一条命中的结论;没有命中则放行。command 是整条命令原文,
-// 自定义规则的正则条件对它匹配。
+// applyRules 先在默认规则表里取第一条命中(拦截在前、需确认在后,
+// 语义上拦截更严重、优先给出),再在适用的自定义规则里取第一条命中,
+// 两个结论取更严重的一档返回——owner 加的自定义规则能把默认的需确认
+// 收紧成拦截,但不能把内置拦截放松(默认规则只能按编号停用,不能被
+// 自定义改写)。两边都没命中则放行。command 是整条命令原文,自定义
+// 规则的正则条件对它匹配。
 func applyRules(ev *posixEvidence, call *posixCall, command string, rules *RuleSet) Decision {
-	for _, r := range defaultPOSIXRules {
-		if rules.isDisabled(r.id) {
-			continue
-		}
-		if r.matches(ev, call) {
-			return Decision{
-				Disposition: r.disposition,
-				RuleID:      r.id,
-				Explanation: r.explanation,
-				Alternative: r.alternative,
-			}
-		}
-	}
+	def := firstDefaultMatch(ev, call, rules)
 	for _, cr := range rules.customsFor(ShellPOSIX) {
 		if matchCustomPOSIX(cr, command, call) {
-			return Decision{
+			return merge(def, Decision{
 				Disposition: cr.Disposition,
 				RuleID:      cr.ID,
 				Explanation: cr.Explanation,
 				Alternative: cr.Alternative,
+			})
+		}
+	}
+	return def
+}
+
+// firstDefaultMatch 按声明顺序过一遍默认规则表(拦截在前、需确认在
+// 后),返回第一条命中的结论;没有命中则放行。
+func firstDefaultMatch(ev *posixEvidence, call *posixCall, rules *RuleSet) Decision {
+	for _, list := range [][]posixRule{defaultPOSIXRules, defaultPOSIXConfirmRules} {
+		for _, r := range list {
+			if rules.isDisabled(r.id) {
+				continue
+			}
+			if r.matches(ev, call) {
+				return Decision{
+					Disposition: r.disposition,
+					RuleID:      r.id,
+					Explanation: r.explanation,
+					Alternative: r.alternative,
+				}
 			}
 		}
 	}
@@ -365,6 +377,10 @@ var dangerousNameMarkers = []string{
 	"fdisk", "sfdisk", "cfdisk", "gdisk", "cgdisk", "sgdisk", "parted",
 	"diskutil", "rm ", "rm\t", "chmod ", "chown ", "mkswap", "pvremove",
 	"vgremove", "zfs destroy", "lvremove",
+	// 需确认家族的命令名(同上,只在拆解失败时作兜底探测)。
+	"iptables -F", "iptables --flush", "flush ruleset", "ufw disable",
+	"ufw reset", "sshd_config", "zpool destroy", "docker volume rm",
+	"docker system prune", "systemctl stop ssh", "-setremotelogin",
 }
 
 // containsDangerousName 报告文本里是否出现任何危险命令名标记。

@@ -80,7 +80,7 @@ func TestExecCommandShellTypePicksGrammar(t *testing.T) {
 	ctx := context.Background()
 
 	// PowerShell 标注:拦截,一行错误,零新连接,审计行带规则编号。
-	_, err := ExecCommandForProfile(ctx, st, "proj-shell", pid, psID, winBlockedCmd, false, 5*time.Second)
+	_, err := ExecCommandForProfile(ctx, st, "proj-shell", pid, psID, winBlockedCmd, false, 5*time.Second, "", "")
 	assertWinBlockedError(t, err)
 	if n := conns.Load(); n != 0 {
 		t.Fatalf("test sshd received %d connections after blocked call, want 0", n)
@@ -88,7 +88,7 @@ func TestExecCommandShellTypePicksGrammar(t *testing.T) {
 	wantSolePolicyRow(t, st, "exec-blocked", "WIN-FORMAT", winBlockedCmd, false, psID, "proj-shell")
 
 	// 对照:POSIX 标注上同一条命令放行(照常执行)。
-	out, err := ExecCommandForProfile(ctx, st, "proj-shell", pid, nixID, winBlockedCmd, false, 5*time.Second)
+	out, err := ExecCommandForProfile(ctx, st, "proj-shell", pid, nixID, winBlockedCmd, false, 5*time.Second, "", "")
 	if err != nil {
 		t.Fatalf("posix-labeled Format-Volume must pass through: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestExecBackgroundShellTypePicksGrammar(t *testing.T) {
 	defer m.CloseAll()
 	ctx := context.Background()
 
-	_, err := ExecBackgroundForProfile(ctx, st, "proj-shell", pid, psID, winBlockedCmd, false, 2, m)
+	_, err := ExecBackgroundForProfile(ctx, st, "proj-shell", pid, psID, winBlockedCmd, false, 2, m, "", "")
 	assertWinBlockedError(t, err)
 	if n := conns.Load(); n != 0 {
 		t.Fatalf("test sshd received %d connections after blocked bg call, want 0", n)
