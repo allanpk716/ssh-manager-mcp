@@ -151,21 +151,10 @@ func (r *RuleSet) customsFor(shell ShellType) []CustomRule {
 // Evaluate 是命令策略的判定入口:对一条按 shell 类型拆解的命令文本,
 // 依据生效规则集给出处置结论。组合命令(分号、&&、||、管道、子 shell)
 // 拆成一条条简单命令分别判定,整体取最严重的处置,规则编号对应最严重
-// 的那条。
+// 的那条;嵌套执行(bash -c、cmd /c、wsl 等把一段命令文本交给另一个
+// shell 执行的写法)按内层 shell 递归判定,层数上限见 nested.go。
 func Evaluate(shell ShellType, command string, rules *RuleSet) Decision {
-	switch shell {
-	case ShellPOSIX:
-		return evaluatePOSIX(command, rules)
-	case ShellPowerShell, ShellWindowsCmd:
-		// PowerShell 与 cmd 没有可用的语法解析库,按分隔符粗略分段后判定,
-		// 两类 shell 共用同一套 Windows 默认规则。
-		return evaluateWindows(shell, command, rules)
-	default:
-		return Decision{
-			Disposition: DispositionConfirmRequired,
-			Explanation: "unknown shell type; cannot judge the command, ask the owner to confirm manually",
-		}
-	}
+	return judgeAtNestingDepth(shell, command, rules, 0)
 }
 
 // merge 取两条结论里更严重的一条;同严重度时保留先出现的那条,

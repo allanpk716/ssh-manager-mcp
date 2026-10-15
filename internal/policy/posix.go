@@ -8,11 +8,13 @@ import (
 
 // posixArg 是简单命令的一个参数:能逐字确定时 text 是它的文字;
 // 含变量、命令替换、通配起点不确定的展开等动态成分时 dynamic 为真,
-// text 为空——这类参数在执行前无法知道会指向哪里,交给具体规则决定
-// 如何对待。
+// text 为空、raw 保留它在原命令文本里的源码片段(含引号与变量写法,
+// 供嵌套执行的危险命令名兜底探测)——这类参数在执行前无法知道会
+// 指向哪里,交给具体规则决定如何对待。
 type posixArg struct {
 	text    string
 	dynamic bool
+	raw     string
 }
 
 // posixRedirect 是附在一条简单命令上的一个重定向:操作符种类(只区分
@@ -46,9 +48,12 @@ func (c *posixCall) firstPositional() (string, bool) {
 	return "", true
 }
 
-// evaluatePOSIX 把命令文本按 POSIX shell 语法拆解并逐条应用生效规则集
-// (默认规则在前、自定义规则在后),返回最严重的结论。
-func evaluatePOSIX(command string, rules *RuleSet) Decision {
+// evaluatePOSIXAt 把命令文本按 POSIX shell 语法拆解并逐条应用生效
+// 规则集(默认规则的结论与自定义规则的结论取更严重的一档),返回
+// 最严重的结论。depth 是当前文本的嵌套层数(最外层为 0);每条简单
+// 命令除规则结论外,还会做嵌套执行识别(bash -c、wsl 等把一段命令
+// 文本交给另一个 shell 执行的写法),内层结论一并参与取最严重。
+func evaluatePOSIXAt(command string, rules *RuleSet, depth int) Decision {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
 		// 拆解失败:文本里出现危险命令名的,判需确认交 owner 把关;
@@ -61,10 +66,11 @@ func evaluatePOSIX(command string, rules *RuleSet) Decision {
 		}
 		return Decision{Disposition: DispositionAllow}
 	}
-	ev := collectEvidence(file)
+	ev := collectEvidence(file, command)
 	var worst Decision
-	for _, call := range ev.calls {
-		worst = merge(worst, applyRules(ev, &call, command, rules))
+	for i := range ev.calls {
+		worst = merge(worst, applyRules(ev, &ev.calls[i], command, rules))
+		worst = merge(worst, nestedPOSIXDecision(&ev.calls[i], depth, rules))
 	}
 	return worst
 }
@@ -119,13 +125,14 @@ func firstDefaultMatch(ev *posixEvidence, call *posixCall, rules *RuleSet) Decis
 }
 
 // collectEvidence 遍历语法树,收集每条语句里的简单命令(含重定向),
-// 并识别 fork 炸弹形态的函数定义。
-func collectEvidence(file *syntax.File) *posixEvidence {
+// 并识别 fork 炸弹形态的函数定义。command 是整条命令原文,动态参数
+// 的源码片段从它身上切取。
+func collectEvidence(file *syntax.File, command string) *posixEvidence {
 	ev := &posixEvidence{}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.Stmt:
-			ev.calls = append(ev.calls, stmtCall(n)...)
+			ev.calls = append(ev.calls, stmtCall(n, command)...)
 		case *syntax.FuncDecl:
 			if funcDeclIsForkBomb(n) {
 				ev.forkBomb = true
@@ -140,10 +147,10 @@ func collectEvidence(file *syntax.File) *posixEvidence {
 // 参数与重定向;命令体为空(纯重定向,如 `> /dev/sda`)时只带重定向;
 // 其余形态(子 shell、if、for 等)由语法树遍历继续下钻,语句自身的
 // 重定向单独成一条事实。
-func stmtCall(stmt *syntax.Stmt) []posixCall {
+func stmtCall(stmt *syntax.Stmt, command string) []posixCall {
 	var call posixCall
 	if expr, ok := stmt.Cmd.(*syntax.CallExpr); ok {
-		call = callExprToCall(expr)
+		call = callExprToCall(expr, command)
 	}
 	for _, r := range stmt.Redirs {
 		if red, ok := redirectFact(r); ok {
@@ -159,7 +166,7 @@ func stmtCall(stmt *syntax.Stmt) []posixCall {
 // callExprToCall 把语法树的简单命令转成事实:第一个词是命令名(取基础名,
 // 兼容 /sbin/mkfs.ext4 这类全路径写法),其余词是参数;然后剥掉
 // sudo、env、nohup 等前缀。
-func callExprToCall(expr *syntax.CallExpr) posixCall {
+func callExprToCall(expr *syntax.CallExpr, command string) posixCall {
 	var call posixCall
 	words := expr.Args // 命令前的环境变量赋值(expr.Assigns)不属于命令名与参数
 	if len(words) > 0 {
@@ -173,7 +180,7 @@ func callExprToCall(expr *syntax.CallExpr) posixCall {
 		if text, ok := wordLiteral(w); ok {
 			call.args = append(call.args, posixArg{text: text})
 		} else {
-			call.args = append(call.args, posixArg{dynamic: true})
+			call.args = append(call.args, posixArg{dynamic: true, raw: wordSourceText(w, command)})
 		}
 	}
 	return stripPrefix(call)
@@ -214,7 +221,7 @@ func wordLiteral(w *syntax.Word) (string, bool) {
 		case *syntax.DblQuoted:
 			for _, q := range p.Parts {
 				if lit, ok := q.(*syntax.Lit); ok {
-					b.WriteString(lit.Value)
+					b.WriteString(unescapeDblQuoted(lit.Value))
 				} else {
 					return "", false
 				}
@@ -224,6 +231,34 @@ func wordLiteral(w *syntax.Word) (string, bool) {
 		}
 	}
 	return b.String(), true
+}
+
+// unescapeDblQuoted 消化双引号内字面量里的转义:POSIX 规定双引号内
+// 反斜杠只对美元符、反引号、双引号、反斜杠、换行五个字符有转义义
+// (语法树里的字面量节点原样保留了反斜杠),其余场合反斜杠原样保留。
+// 剥掉转义后的文字才是双引号词的真正字面值——嵌套执行把内层文本交给
+// 下一层拆解时必须用剥过转义的形态,否则内层的引号还带着上一层的
+// 转义反斜杠,在下一层拆解时对不上号。
+func unescapeDblQuoted(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case '$', '`', '"', '\\':
+				b.WriteByte(s[i+1])
+				i++
+				continue
+			case '\n':
+				i++ // 行尾续行反斜杠,双引号内同样去掉
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // commandBaseName 取命令名的基础名,让 /usr/sbin/mkfs.ext4 与
