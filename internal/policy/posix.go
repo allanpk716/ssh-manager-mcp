@@ -91,13 +91,13 @@ type posixEvidence struct {
 // 规则的正则条件对它匹配。
 func applyRules(ev *posixEvidence, call *posixCall, command string, rules *RuleSet) Decision {
 	def := firstDefaultMatch(ev, call, rules)
-	for _, cr := range rules.customsFor(models.ShellPOSIX) {
-		if matchCustomPOSIX(cr, command, call) {
+	for _, customRule := range rules.customRulesForShell(models.ShellPOSIX) {
+		if matchCustomPOSIX(customRule, command, call) {
 			return merge(def, Decision{
-				Disposition: cr.Disposition,
-				RuleID:      cr.ID,
-				Explanation: cr.Explanation,
-				Alternative: cr.Alternative,
+				Disposition: customRule.Disposition,
+				RuleID:      customRule.ID,
+				Explanation: customRule.Explanation,
+				Alternative: customRule.Alternative,
 			})
 		}
 	}

@@ -33,13 +33,13 @@ func applyWindowsRules(ev *winEvidence, seg *winSegment, shell models.ShellType,
 			}
 		}
 	}
-	for _, cr := range rules.customsFor(shell) {
-		if matchCustomWindows(cr, ev.rawCommand, seg) {
+	for _, customRule := range rules.customRulesForShell(shell) {
+		if matchCustomWindows(customRule, ev.rawCommand, seg) {
 			return Decision{
-				Disposition: cr.Disposition,
-				RuleID:      cr.ID,
-				Explanation: cr.Explanation,
-				Alternative: cr.Alternative,
+				Disposition: customRule.Disposition,
+				RuleID:      customRule.ID,
+				Explanation: customRule.Explanation,
+				Alternative: customRule.Alternative,
 			}
 		}
 	}

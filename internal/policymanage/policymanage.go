@@ -107,7 +107,7 @@ func (s ruleSources) effectiveRuleSet() *policy.RuleSet {
 func customRulesFromSnapshot(snap *store.Snapshot) []policy.CustomRule {
 	var out []policy.CustomRule
 	for _, r := range snap.PolicyRules {
-		cr := policy.CustomRule{
+		customRule := policy.CustomRule{
 			ID:           r.ID,
 			Commands:     r.Commands,
 			Args:         r.Args,
@@ -117,14 +117,14 @@ func customRulesFromSnapshot(snap *store.Snapshot) []policy.CustomRule {
 			Alternative:  r.Alternative,
 		}
 		for _, sh := range r.Shells {
-			cr.Shells = append(cr.Shells, models.ShellType(sh))
+			customRule.Shells = append(customRule.Shells, models.ShellType(sh))
 		}
 		d, err := policy.ParseDisposition(r.Disposition)
 		if err != nil {
 			d = policy.DispositionConfirmRequired
 		}
-		cr.Disposition = d
-		out = append(out, cr)
+		customRule.Disposition = d
+		out = append(out, customRule)
 	}
 	return out
 }
@@ -163,18 +163,18 @@ func buildRuleViews(src ruleSources) []RuleView {
 			Disabled:    disabledSet[info.ID],
 		})
 	}
-	for _, cr := range src.customRules {
+	for _, customRule := range src.customRules {
 		views = append(views, RuleView{
 			Custom:       true,
-			ID:           cr.ID,
-			Disposition:  cr.Disposition,
-			Explanation:  cr.Explanation,
-			Alternative:  cr.Alternative,
-			Shells:       cr.Shells,
-			Commands:     cr.Commands,
-			Args:         cr.Args,
-			PathCategory: cr.PathCategory,
-			Regex:        cr.Regex,
+			ID:           customRule.ID,
+			Disposition:  customRule.Disposition,
+			Explanation:  customRule.Explanation,
+			Alternative:  customRule.Alternative,
+			Shells:       customRule.Shells,
+			Commands:     customRule.Commands,
+			Args:         customRule.Args,
+			PathCategory: customRule.PathCategory,
+			Regex:        customRule.Regex,
 		})
 	}
 	return views

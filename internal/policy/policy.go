@@ -100,16 +100,16 @@ func (r *RuleSet) isDisabled(id string) bool {
 	return false
 }
 
-// customsFor 返回适用于给定 shell 类型的自定义规则(nil 指针与空集
+// customRulesForShell 返回适用于给定 shell 类型的自定义规则(nil 指针与空集
 // 都归为无自定义规则)。
-func (r *RuleSet) customsFor(shell models.ShellType) []CustomRule {
+func (r *RuleSet) customRulesForShell(shell models.ShellType) []CustomRule {
 	if r == nil {
 		return nil
 	}
 	var out []CustomRule
-	for _, cr := range r.CustomRules {
-		if cr.appliesToShell(shell) {
-			out = append(out, cr)
+	for _, customRule := range r.CustomRules {
+		if customRule.appliesToShell(shell) {
+			out = append(out, customRule)
 		}
 	}
 	return out
