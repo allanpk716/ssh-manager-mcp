@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 // Snapshot is a portable, master-key-independent capture of the entire vault.
@@ -46,8 +48,12 @@ type SnapshotServer struct {
 	Role             string `json:"role"`
 	Caveats          string `json:"caveats"`
 	ExposeHost       bool   `json:"expose_host"`
-	CreatedAt        int64  `json:"created_at"`
-	UpdatedAt        int64  `json:"updated_at"`
+	// ShellType (命令策略 ticket #14) 是连接信息的一员,随两条导出路径
+	// 下发。旧快照(无字段)解码为零值,ImportSnapshot 归一为 posix——
+	// 与 Revision 的「缺字段无损导入」同一语义。
+	ShellType string `json:"shell_type"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 	// Revision (Plan 51) rides both export paths and MUST survive
 	// ImportSnapshot verbatim — the cache store's CAS tokens have to agree
 	// with the broker's or every pull would reset them to permanent 409s.
@@ -129,14 +135,14 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 
 	// servers (COALESCE the nullable text cols to '' — credential_id is nullable
 	// since Plan 20 C0: a credential-less server carries "" in the snapshot)
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers ORDER BY id`)
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	for rs.Next() {
 		var sv SnapshotServer
 		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
-			&sv.CredentialID, &sv.SudoCredentialID, &sv.TagsRaw, &sv.Description, &sv.Location,
+			&sv.CredentialID, &sv.SudoCredentialID, &sv.ShellType, &sv.TagsRaw, &sv.Description, &sv.Location,
 			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
 			rs.Close()
 			return nil, err
@@ -319,7 +325,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string) (*Snapshot, error) {
 	}
 
 	// servers granted to the profile (same column shape as ExportSnapshot)
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
 		FROM servers WHERE id IN (SELECT server_id FROM profile_servers WHERE profile_id=?) ORDER BY id`, profileID)
 	if err != nil {
 		return nil, err
@@ -330,7 +336,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string) (*Snapshot, error) {
 	for rs.Next() {
 		var sv SnapshotServer
 		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
-			&sv.CredentialID, &sv.SudoCredentialID, &sv.TagsRaw, &sv.Description, &sv.Location,
+			&sv.CredentialID, &sv.SudoCredentialID, &sv.ShellType, &sv.TagsRaw, &sv.Description, &sv.Location,
 			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
 			rs.Close()
 			return nil, err
@@ -503,8 +509,12 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 			sudoArg = sv.SudoCredentialID
 		}
 		credArg := nullIfEmpty(sv.CredentialID)
-		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, sv.CreatedAt, sv.UpdatedAt, sv.Revision); err != nil {
+		// 旧快照无 shell_type 字段时为零值——归一为 posix(规格:旧快照
+		// 导入为 POSIX)。与 host_keys pin 列的归一化同理:ADD COLUMN
+		// DEFAULT 只约束存量行,不管显式插入。
+		shellArg := string(models.NormalizeShellType(sv.ShellType))
+		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, shellArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, sv.CreatedAt, sv.UpdatedAt, sv.Revision); err != nil {
 			return fmt.Errorf("insert server %s: %w", sv.ID, err)
 		}
 	}

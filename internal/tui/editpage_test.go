@@ -213,7 +213,7 @@ func TestEditPageFieldEditMarksDirty(t *testing.T) {
 func TestEditPageConfirmSingleKeyCommits(t *testing.T) {
 	// y (Accept): completes the form and marks the row dirty
 	p, _, _ := newEditPageAt(t, 80)
-	openField(t, p, 8) // 清除凭据 — first of the table's Confirm fields (y/n single-key)
+	openField(t, p, 9) // 清除凭据 — first of the table's Confirm fields (y/n single-key)
 	p = press(t, p, 'y')
 	if p.state != editStateList {
 		t.Fatalf("y on the Confirm must complete the form, got state=%v", p.state)
@@ -228,7 +228,7 @@ func TestEditPageConfirmSingleKeyCommits(t *testing.T) {
 
 	// n (Reject): completes with the clean value
 	p2, _, _ := newEditPageAt(t, 80)
-	openField(t, p2, 8)
+	openField(t, p2, 9)
 	p2 = press(t, p2, 'n')
 	if p2.state != editStateList {
 		t.Fatalf("n on the Confirm must complete the form, got state=%v", p2.state)
@@ -239,7 +239,7 @@ func TestEditPageConfirmSingleKeyCommits(t *testing.T) {
 
 	// negative: y on an Input field is a typed character — no completion
 	p3, _, _ := newEditPageAt(t, 80)
-	openField(t, p3, 15) // 备注 — prefill is ""
+	openField(t, p3, 16) // 备注 — prefill is ""
 	p3 = press(t, p3, 'y')
 	if p3.state != editStateField {
 		t.Fatalf("y on an Input field must stay in field state, got %v", p3.state)
@@ -256,7 +256,7 @@ func TestEditPageFieldEscRestores(t *testing.T) {
 	p, _, _ := newEditPageAt(t, 80)
 	snap := snapshotDraft(p.d)
 
-	openField(t, p, 10) // 硬件
+	openField(t, p, 11) // 硬件
 	ctrl(t, p, 'u')
 	for _, r := range "JUNK-VALUE" {
 		p = press(t, p, r)
@@ -280,13 +280,13 @@ func TestEditPageFieldEscRestores(t *testing.T) {
 	}
 
 	// committed-then-reenter: Esc restores the COMMITTED value, not orig.
-	openField(t, p, 10)
+	openField(t, p, 11) // 硬件
 	ctrl(t, p, 'u')
 	for _, r := range "committed" {
 		p = press(t, p, r)
 	}
 	p = tap(t, p, tea.KeyEnter)
-	openField(t, p, 10)
+	openField(t, p, 11) // 硬件
 	ctrl(t, p, 'u')
 	for _, r := range "X" {
 		p = press(t, p, r)
@@ -303,7 +303,7 @@ func TestEditPageFieldEscRestores(t *testing.T) {
 // ③b 秘密字段的 Esc 恢复走 T1 缝合规则：快照值经 Set 写回（Get 只给状态串）。
 func TestEditPageSecretFieldEscRestores(t *testing.T) {
 	p, _, _ := newEditPageAt(t, 80)
-	openField(t, p, 4) // 密码 — edit-mode prefill is "" (keep existing)
+	openField(t, p, 5) // 密码 — edit-mode prefill is "" (keep existing)
 	for _, r := range "PW-ENTRY-SENTINEL" {
 		p = press(t, p, r)
 	}
@@ -326,7 +326,7 @@ func TestEditPageSaveItemFiresSubmit(t *testing.T) {
 	captured := false
 	p.submit = func() tea.Cmd { captured = true; return nil }
 
-	openField(t, p, 10) // dirty one field first — a real save scenario
+	openField(t, p, 11) // dirty one field first — a real save scenario
 	ctrl(t, p, 'u')
 	for _, r := range "2x4090" {
 		p = press(t, p, r)
@@ -355,7 +355,7 @@ func TestEditPageSaveItemFiresSubmit(t *testing.T) {
 func TestEditPageSaveEndToEnd(t *testing.T) {
 	t.Parallel()
 	p, st, _ := newEditPageAt(t, 80)
-	openField(t, p, 10)
+	openField(t, p, 11) // 硬件
 	ctrl(t, p, 'u')
 	for _, r := range "2x4090" {
 		p = press(t, p, r)
@@ -382,7 +382,7 @@ func TestEditPageSaveEndToEnd(t *testing.T) {
 func TestEditPageListEscAbortsNoWrite(t *testing.T) {
 	t.Parallel()
 	p, st, _ := newEditPageAt(t, 80)
-	openField(t, p, 10)
+	openField(t, p, 11) // 硬件
 	ctrl(t, p, 'u')
 	for _, r := range "SHOULD-NOT-PERSIST" {
 		p = press(t, p, r)
@@ -405,7 +405,7 @@ func TestEditPageListEscAbortsNoWrite(t *testing.T) {
 // ⑥ 秘密预览掩码（哨兵）：经真实 field 流程输入的明文绝不出现在任何 View。
 func TestEditPageSecretMaskingSentinel(t *testing.T) {
 	p, _, _ := newEditPageAt(t, 80)
-	openField(t, p, 4) // 密码
+	openField(t, p, 5) // 密码
 	for _, r := range "PW-FIELD-SENTINEL" {
 		p = press(t, p, r)
 	}
@@ -418,7 +418,7 @@ func TestEditPageSecretMaskingSentinel(t *testing.T) {
 		t.Fatalf("dirty secret must show the status wording, not content:\n%s", v)
 	}
 	// same for 密钥口令 — then its page also shows the clean sudo status
-	openField(t, p, 6)
+	openField(t, p, 7)
 	for _, r := range "KP-FIELD-SENTINEL" {
 		p = press(t, p, r)
 	}
@@ -438,7 +438,7 @@ func TestEditPageSecretMaskingSentinel(t *testing.T) {
 // ⑥b field 态同样掩码：密钥口令的 EchoModePassword 输入 View 不含哨兵明文。
 func TestEditPageSecretFieldStateMasked(t *testing.T) {
 	p, _, _ := newEditPageAt(t, 80)
-	openField(t, p, 6) // 密钥口令 — EchoModePassword
+	openField(t, p, 7) // 密钥口令 — EchoModePassword
 	for _, r := range "KP-FIELD-SENTINEL" {
 		p = press(t, p, r)
 	}
@@ -460,7 +460,7 @@ func TestEditPageWidthFit(t *testing.T) {
 			}
 		}
 		checkWidth(p.View().Content, "list state")
-		openField(t, p, 14) // Caveats — the longest field title
+		openField(t, p, 15) // Caveats — the longest field title
 		checkWidth(p.View().Content, "field state")
 	}
 }
@@ -573,7 +573,7 @@ func TestEditPagePressIsFreeOfBlinkWait(t *testing.T) {
 // character keys emit real commands, this fails first and press must drain.
 func TestEditPagePressCharKeysYieldBlinkOnlyCmd(t *testing.T) {
 	p, _, _ := newEditPageAt(t, 80)
-	openField(t, p, 15) // 备注 — plain huh Input, the field kind every press types into
+	openField(t, p, 16) // 备注 — plain huh Input, the field kind every press types into
 	_, cmd := p.Update(tea.KeyPressMsg{Code: 'z', Text: "z"})
 	if bad := nonBlinkOutputs(cmd, "description"); len(bad) > 0 {
 		t.Fatalf("a character key must only re-arm the cursor blink, got %v — press's no-drain shortcut is unsafe now", bad)

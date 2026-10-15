@@ -21,6 +21,28 @@ const (
 // live-killed; the status takes effect on the next mcp process spawn.
 type ProjectStatus string
 
+// ShellType 标注在服务器条目上的 shell 类型,决定命令策略按哪种语法
+// 拆解该服务器上执行的命令(POSIX / PowerShell / cmd,默认 POSIX)。它是
+// 连接信息的一员——不属于服务器元数据,agent 的元数据编辑工具摸不到它;
+// 取值与 internal/policy 的 ShellType 字面值一一对应。
+type ShellType string
+
+const (
+	ShellPOSIX      ShellType = "posix"      // Linux 与 macOS 的 shell(bash / sh / zsh 等)
+	ShellPowerShell ShellType = "powershell" // Windows PowerShell
+	ShellWindowsCmd ShellType = "cmd"        // Windows cmd
+)
+
+// NormalizeShellType 把存储或快照里的 shell 类型值归一化:空值(旧快照、
+// 迁移前的旧行、未设置的字段)按默认 POSIX;其余值原样返回——无法识别
+// 的值不改写,留给策略判定内核走保守分支(需确认),不悄悄放行。
+func NormalizeShellType(s string) ShellType {
+	if s == "" {
+		return ShellPOSIX
+	}
+	return ShellType(s)
+}
+
 const (
 	ProjectActive   ProjectStatus = "active"   // default; token admitted
 	ProjectDisabled ProjectStatus = "disabled" // suspended; token rejected, reversible via enable
@@ -48,13 +70,16 @@ type Server struct {
 	AuthMethod       AuthMethod
 	CredentialID     string
 	SudoCredentialID string // empty if none
-	Tags             []string
-	Description      string // owner free-text notes; surfaced to agent (supplementary to structured fields below)
-	Location         string // where deployed: datacenter/region/rack/tenant
-	Hardware         string // hardware config: CPU/RAM/disk/GPU
-	Services         string // what is deployed/running here
-	Role             string // this server's purpose (e.g. "prod pg primary")
-	Caveats          string // operational gotchas; agent reads before acting
+	// ShellType (命令策略) 标注该服务器命令按哪种语法拆解;连接信息的一
+	// 员,随快照下发,默认 POSIX(空值经 NormalizeShellType 归一)。
+	ShellType   ShellType
+	Tags        []string
+	Description string // owner free-text notes; surfaced to agent (supplementary to structured fields below)
+	Location    string // where deployed: datacenter/region/rack/tenant
+	Hardware    string // hardware config: CPU/RAM/disk/GPU
+	Services    string // what is deployed/running here
+	Role        string // this server's purpose (e.g. "prod pg primary")
+	Caveats     string // operational gotchas; agent reads before acting
 	// ExposeHost (Plan 31): owner opt-in to return the plaintext host in
 	// list_servers. Default false = the projection masks it as "hidden".
 	// Never affects the broker's own dialing — the vault always stores the

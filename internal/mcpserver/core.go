@@ -126,7 +126,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	// 不建立 SSH 连接,命令一个字节都不会送到服务器。审计行换用新动作
 	// exec-blocked,Status 存命中规则编号,Command 保持命令原文。需确认档
 	// 由命令策略后续的 GitHub Issue 在此接一次性确认码。
-	if d := policyJudge(command); d.Disposition == policy.DispositionBlock {
+	if d := policyJudge(srv.ShellType, command); d.Disposition == policy.DispositionBlock {
 		action, status = "exec-blocked", d.RuleID
 		err = policyBlockError(d)
 		return
