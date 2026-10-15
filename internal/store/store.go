@@ -648,6 +648,23 @@ CREATE TABLE IF NOT EXISTS settings (
   value      TEXT NOT NULL,
   updated_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS policy_rules (
+  id            TEXT PRIMARY KEY,
+  shells        TEXT NOT NULL DEFAULT '[]',
+  commands      TEXT NOT NULL DEFAULT '[]',
+  args          TEXT NOT NULL DEFAULT '[]',
+  path_category TEXT NOT NULL DEFAULT '',
+  regex         TEXT NOT NULL DEFAULT '',
+  disposition   TEXT NOT NULL,
+  explanation   TEXT NOT NULL DEFAULT '',
+  alternative   TEXT NOT NULL DEFAULT '',
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS policy_disabled_defaults (
+  rule_id    TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pairing_pending (
   id BLOB PRIMARY KEY, name TEXT NOT NULL, target_url TEXT NOT NULL,
   client_pub BLOB NOT NULL, cnonce BLOB NOT NULL, server_pub BLOB, snonce BLOB, sig BLOB,

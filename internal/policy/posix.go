@@ -46,8 +46,8 @@ func (c *posixCall) firstPositional() (string, bool) {
 	return "", true
 }
 
-// evaluatePOSIX 把命令文本按 POSIX shell 语法拆解并逐条应用默认规则,
-// 返回最严重的结论。
+// evaluatePOSIX 把命令文本按 POSIX shell 语法拆解并逐条应用生效规则集
+// (默认规则在前、自定义规则在后),返回最严重的结论。
 func evaluatePOSIX(command string, rules *RuleSet) Decision {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
@@ -64,7 +64,7 @@ func evaluatePOSIX(command string, rules *RuleSet) Decision {
 	ev := collectEvidence(file)
 	var worst Decision
 	for _, call := range ev.calls {
-		worst = merge(worst, applyRules(ev, &call, rules))
+		worst = merge(worst, applyRules(ev, &call, command, rules))
 	}
 	return worst
 }
@@ -76,9 +76,10 @@ type posixEvidence struct {
 	forkBomb bool
 }
 
-// applyRules 按声明顺序过一遍默认规则表,返回第一条命中的结论;
-// 没有命中则放行。
-func applyRules(ev *posixEvidence, call *posixCall, rules *RuleSet) Decision {
+// applyRules 按声明顺序过一遍默认规则表,再过适用的自定义规则,
+// 返回第一条命中的结论;没有命中则放行。command 是整条命令原文,
+// 自定义规则的正则条件对它匹配。
+func applyRules(ev *posixEvidence, call *posixCall, command string, rules *RuleSet) Decision {
 	for _, r := range defaultPOSIXRules {
 		if rules.isDisabled(r.id) {
 			continue
@@ -89,6 +90,16 @@ func applyRules(ev *posixEvidence, call *posixCall, rules *RuleSet) Decision {
 				RuleID:      r.id,
 				Explanation: r.explanation,
 				Alternative: r.alternative,
+			}
+		}
+	}
+	for _, cr := range rules.customsFor(ShellPOSIX) {
+		if matchCustomPOSIX(cr, command, call) {
+			return Decision{
+				Disposition: cr.Disposition,
+				RuleID:      cr.ID,
+				Explanation: cr.Explanation,
+				Alternative: cr.Alternative,
 			}
 		}
 	}

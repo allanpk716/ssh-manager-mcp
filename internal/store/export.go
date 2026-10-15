@@ -20,6 +20,29 @@ type Snapshot struct {
 	Projects    []SnapshotProject    `json:"projects"`
 	HostKeys    []SnapshotHostKey    `json:"host_keys"`
 	Audit       []SnapshotAudit      `json:"audit"`
+	// 命令策略段 (ticket #15 / 规格 #8「存储与下发」):自定义规则与被停用
+	// 的默认规则编号。规则全局一套,两条导出路径都携带,不做 profile 裁剪。
+	// 旧快照(策略段尚不存在)解码为 nil 切片 → 导入零行 → 内置默认规则
+	// 照常生效,由判定内核兑底。
+	PolicyRules            []SnapshotPolicyRule `json:"policy_rules"`
+	PolicyDisabledDefaults []string             `json:"policy_disabled_defaults"`
+}
+
+// SnapshotPolicyRule 是快照里的自定义命令策略规则:结构化字段与可选
+// 正则,形态即 policy.CustomRule 的传输形态。处置用 policy.Disposition
+// 的存储代号(allow/confirm/block)。
+type SnapshotPolicyRule struct {
+	ID           string   `json:"id"`
+	Shells       []string `json:"shells"`        // shell 类型代号 (posix/powershell/cmd);空=全部
+	Commands     []string `json:"commands"`      // 命令名及别名
+	Args         []string `json:"args"`          // 参数条件(逐字)
+	PathCategory string   `json:"path_category"` // ""=不限;critical;disk
+	Regex        string   `json:"regex"`         // 可选正则;空=不用
+	Disposition  string   `json:"disposition"`   // allow/confirm/block
+	Explanation  string   `json:"explanation"`
+	Alternative  string   `json:"alternative"`
+	CreatedAt    int64    `json:"created_at"`
+	UpdatedAt    int64    `json:"updated_at"`
 }
 
 type SnapshotCredential struct {
@@ -247,6 +270,13 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 		return nil, err
 	}
 
+	// policy (ticket #15): custom rules + disabled default-rule ids — global,
+	// no profile scoping (规格 #8 第 35/36 条:规则随快照全局下发)。
+	snap.PolicyRules, snap.PolicyDisabledDefaults, err = s.exportPolicySections()
+	if err != nil {
+		return nil, err
+	}
+
 	// audit — RAW SQL (AuditRows clamps limit<=0 to 1; dump all)
 	ra, err := s.db.Query(`SELECT id,ts,COALESCE(project_id,''),COALESCE(server_id,''),action,COALESCE(command,''),sudo,COALESCE(status,''),COALESCE(exit_code,0),COALESCE(duration_ms,0) FROM audit_log ORDER BY id`)
 	if err != nil {
@@ -448,6 +478,14 @@ func (s *Store) ExportSnapshotForProfile(profileID string) (*Snapshot, error) {
 		}
 	}
 
+	// policy (ticket #15): the SAME global policy sections the owner-side
+	// export carries — rules are one set for every machine, never cropped by
+	// profile (audit below stays intentionally empty).
+	snap.PolicyRules, snap.PolicyDisabledDefaults, err = s.exportPolicySections()
+	if err != nil {
+		return nil, err
+	}
+
 	// audit: intentionally empty (see doc comment)
 	return snap, nil
 }
@@ -559,7 +597,23 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		}
 	}
 
-	// 7. audit (id autoincrement — insert without id, letting the target assign; ts preserved)
+	// 7. policy (ticket #15) — custom rules + disabled default-rule ids. No FK
+	// dependencies; an old snapshot's nil sections import zero rows (the
+	// built-in default rules then remain fully in effect).
+	for _, r := range snap.PolicyRules {
+		if _, err := tx.Exec(`INSERT INTO policy_rules(id,shells,commands,args,path_category,regex,disposition,explanation,alternative,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			r.ID, marshalStringList(r.Shells), marshalStringList(r.Commands), marshalStringList(r.Args),
+			r.PathCategory, r.Regex, r.Disposition, r.Explanation, r.Alternative, r.CreatedAt, r.UpdatedAt); err != nil {
+			return fmt.Errorf("insert policy rule %s: %w", r.ID, err)
+		}
+	}
+	for _, id := range snap.PolicyDisabledDefaults {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO policy_disabled_defaults(rule_id, created_at) VALUES(?,?)`, id, now()); err != nil {
+			return fmt.Errorf("insert disabled default %s: %w", id, err)
+		}
+	}
+
+	// 8. audit (id autoincrement — insert without id, letting the target assign; ts preserved)
 	for _, a := range snap.Audit {
 		if _, err := tx.Exec(`INSERT INTO audit_log(ts,project_id,server_id,action,command,sudo,status,exit_code,duration_ms) VALUES(?,?,?,?,?,?,?,?,?)`,
 			a.TS, nullIfEmpty(a.ProjectID), nullIfEmpty(a.ServerID), a.Action, nullIfEmpty(a.Command), a.Sudo, nullIfEmpty(a.Status), a.ExitCode, a.DurationMS); err != nil {
