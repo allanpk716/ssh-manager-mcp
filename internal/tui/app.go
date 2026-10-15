@@ -24,6 +24,7 @@ const (
 	pageTokens
 	pagePairing
 	pageBackup // 「备份」(Plan 49 票 03) — broker/standalone only, never the client console
+	pagePolicy // 「命令策略」(票 16, 规格 #8) — broker/standalone only; the client console has its own read-only viewer
 	pageCount
 )
 
@@ -169,6 +170,11 @@ func FetchAll(st *store.Store, backupCfgPath string) ([pageCount]listPage, error
 	pages[pageTokens] = newCacheTokensPage(tokens, profileNames)
 	pages[pagePairing] = newPairingPage(pairings, profiles, defProfile)
 	pages[pageBackup] = newBackupPage(backupCfgPath)
+	policyPage, err := newPolicyPage(st)
+	if err != nil {
+		return pages, err
+	}
+	pages[pagePolicy] = policyPage
 	return pages, nil
 }
 
@@ -272,7 +278,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, a.overlay.Init()
 		case k.Text == "a", k.Text == "e", k.Text == "d", k.Text == "g",
 			k.Text == "i", k.Text == "!", k.Text == "x", k.Text == "r",
-			k.Text == "b", k.Text == "v":
+			k.Text == "b", k.Text == "v", k.Text == "s", k.Text == "t":
 			// F2 (fix round): while an upgrade segment is in flight (install/
 			// probe/deviceIssue — overlay==nil windows), page action keys are
 			// suppressed: opening a form overlay here would be clobbered by the
@@ -510,6 +516,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if a.page == pageBackup {
 				if cmd := a.backupKey(k); cmd != nil {
+					return a, cmd
+				}
+			}
+			if a.page == pagePolicy {
+				if cmd := a.policyKey(k); cmd != nil {
 					return a, cmd
 				}
 			}
@@ -878,6 +889,9 @@ func (a App) footer() string {
 		} else {
 			keys = "[b]立即备份 [v]校验最新 [e]编辑配置"
 		}
+	case pagePolicy:
+		// CLI 对等(ADR 0003):add/rm/disable/enable/test 四类能力
+		keys = "[a]新增自定义 [d]删除 [s]停用/恢复默认 [t]试算"
 	}
 	tail := "Tab 切页  q 退出"
 	if keys != "" {
