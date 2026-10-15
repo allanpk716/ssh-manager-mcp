@@ -49,10 +49,10 @@ func (c *posixCall) firstPositional() (string, bool) {
 }
 
 // evaluatePOSIXAt 把命令文本按 POSIX shell 语法拆解并逐条应用生效
-// 规则集(默认规则在前、自定义规则在后),返回最严重的结论。depth
-// 是当前文本的嵌套层数(最外层为 0);每条简单命令除规则结论外,
-// 还会做嵌套执行识别(bash -c、wsl 等把一段命令文本交给另一个 shell
-// 执行的写法),内层结论一并参与取最严重。
+// 规则集(默认规则的结论与自定义规则的结论取更严重的一档),返回
+// 最严重的结论。depth 是当前文本的嵌套层数(最外层为 0);每条简单
+// 命令除规则结论外,还会做嵌套执行识别(bash -c、wsl 等把一段命令
+// 文本交给另一个 shell 执行的写法),内层结论一并参与取最严重。
 func evaluatePOSIXAt(command string, rules *RuleSet, depth int) Decision {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {

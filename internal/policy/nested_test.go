@@ -285,6 +285,60 @@ func TestEvaluate_NestedFlagOnlyInLeadingOptionRun(t *testing.T) {
 	}
 }
 
+// TestEvaluate_NestedInnerHitsConfirmRules:嵌套执行的内层按完整生效
+// 规则集判定——需确认默认规则(ticket #11)在内层同样命中,写死的
+// 内层文本递归判定时给出需确认档与内层规则的编号;组合命令里拦截与
+// 需确认并存时整体取更严重的一档(拦截)。
+func TestEvaluate_NestedInnerHitsConfirmRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		command    string
+		want       Disposition
+		wantRuleID string
+	}{
+		{"bash -c 清空防火墙规则需确认", `bash -c "iptables -F"`, DispositionConfirmRequired, "POSIX-LOCKOUT"},
+		{"sh -c 关防火墙需确认", `sh -c 'ufw disable'`, DispositionConfirmRequired, "POSIX-LOCKOUT"},
+		{"su -c 停 sshd 需确认", `su -c "systemctl stop sshd"`, DispositionConfirmRequired, "POSIX-LOCKOUT"},
+		{"两层嵌套的内层需确认", `bash -c "bash -c 'nft flush ruleset'"`, DispositionConfirmRequired, "POSIX-LOCKOUT"},
+		{"单引号内层写死、删除目标在内层拼出来", `sh -c 'rm -rf $DIR/'`, DispositionConfirmRequired, "POSIX-DELETE-TARGET-UNKNOWN"},
+		{"bash -c 整卷销毁需确认", `bash -c "zpool destroy tank"`, DispositionConfirmRequired, "POSIX-VOLUME-DESTROY"},
+		{"docker prune 带 -a 内层需确认", `bash -c "docker system prune -a"`, DispositionConfirmRequired, "POSIX-VOLUME-DESTROY"},
+		{"docker prune 不带 -a 内层放行", `bash -c "docker system prune"`, DispositionAllow, ""},
+		{"内层需确认与外层拦截并存,拦截更严重", `bash -c "iptables -F"; mkfs.ext4 /dev/sdb`, DispositionBlock, "POSIX-FORMAT"},
+		{"外层需确认与内层拦截并存,拦截更严重", `ufw disable && bash -c "mkfs.ext4 /dev/sdb"`, DispositionBlock, "POSIX-FORMAT"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Evaluate(ShellPOSIX, tt.command, nil)
+			if got.Disposition != tt.want || got.RuleID != tt.wantRuleID {
+				t.Fatalf("Evaluate(%q) = %+v, want %v/%s", tt.command, got, tt.want, tt.wantRuleID)
+			}
+			if tt.want == DispositionConfirmRequired && (got.Explanation == "" || got.Alternative == "") {
+				t.Fatalf("Evaluate(%q) 需确认必须带风险说明与替代做法, got %+v", tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_NestedCustomRuleTightensInnerConfirm:自定义规则在内层
+// 命中且处置更严重时,与默认需确认的合流同样在内层成立——自定义拦截
+// 把内层默认的需确认(POSIX-VOLUME-DESTROY)收紧成拦截,规则编号取
+// 自定义规则的。
+func TestEvaluate_NestedCustomRuleTightensInnerConfirm(t *testing.T) {
+	rules := &RuleSet{CustomRules: []CustomRule{{
+		ID:          "NO-DOCKER-PRUNE",
+		Commands:    []string{"docker"},
+		Args:        []string{"prune"},
+		Disposition: DispositionBlock,
+		Explanation: "prune decisions belong to the owner",
+		Alternative: "ask the owner which images to remove",
+	}}}
+	got := Evaluate(ShellPOSIX, `bash -c "docker system prune -a"`, rules)
+	if got.Disposition != DispositionBlock || got.RuleID != "NO-DOCKER-PRUNE" {
+		t.Fatalf(`Evaluate(bash -c "docker system prune -a", 自定义拦截) = %+v, want 拦截/NO-DOCKER-PRUNE`, got)
+	}
+}
+
 // TestEvaluate_NestedSUCommand:su -c 的取值同样交给目标用户的 shell
 // 执行,与 bash -c 同形识别;su 只是切换用户,不接 -c 时不是嵌套执行。
 func TestEvaluate_NestedSUCommand(t *testing.T) {
