@@ -80,6 +80,39 @@ func TestPolicyTest_DefaultShellIsPOSIX(t *testing.T) {
 	}
 }
 
+// TestPolicyTest_PowerShellAndCmdShells:`--shell powershell` 与
+// `--shell cmd` 两类 Windows shell 的试算可用,输出同样的四要素面。
+func TestPolicyTest_PowerShellAndCmdShells(t *testing.T) {
+	tests := []struct {
+		name    string
+		shell   string
+		command string
+		want    string
+		notWant string
+	}{
+		{"powershell 拦截", "powershell", "Remove-Item -Recurse C:\\Windows", "WIN-CRITICAL-DELETE", ""},
+		{"cmd 拦截", "cmd", "rd /s C:\\Windows", "WIN-CRITICAL-DELETE", ""},
+		{"powershell 需确认", "powershell", "Stop-Service sshd", "需确认", ""},
+		{"powershell 放行", "powershell", "Get-ChildItem", "放行", "rule:"},
+		{"cmd 放行", "cmd", "dir", "放行", "rule:"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := runPolicyTest(t, "--shell", tt.shell, tt.command)
+			if err != nil {
+				t.Fatalf("policy test: %v", err)
+			}
+			got := out.String()
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("output must contain %q, got:\n%s", tt.want, got)
+			}
+			if tt.notWant != "" && strings.Contains(got, tt.notWant) {
+				t.Fatalf("output must not contain %q, got:\n%s", tt.notWant, got)
+			}
+		})
+	}
+}
+
 // TestPolicyTest_RejectsUnknownShell:未知 shell 类型直接报错。
 func TestPolicyTest_RejectsUnknownShell(t *testing.T) {
 	_, err := runPolicyTest(t, "--shell", "fish", "ls")
