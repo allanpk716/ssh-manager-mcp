@@ -211,6 +211,15 @@ func DefaultRuleInfos() []RuleInfo {
 			Alternative: r.alternative,
 		})
 	}
+	// SHELL-MISMATCH 不在两张规则表里——它在 Evaluate 顶层兑现(按标注
+	// 放行后用别的 shell 家族语法试判同一文本)。同样登记在默认规则
+	// 清单里,可像别的默认规则一样按编号停用。
+	out = append(out, RuleInfo{
+		ID:          RuleIDShellMismatch,
+		Disposition: DispositionConfirmRequired,
+		Explanation: "the command text reads as a destructive command in another shell's syntax, which usually means the server's shell annotation is wrong — judged as needing confirmation instead of allowed silently",
+		Alternative: "ask the owner to check the server's shell annotation with `sshmgr servers probe-shell`, correct it if needed, then retry the command",
+	})
 	return out
 }
 

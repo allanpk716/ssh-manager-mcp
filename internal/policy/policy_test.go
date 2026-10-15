@@ -727,3 +727,108 @@ func TestEvaluate_UnknownShellNeedsConfirmation(t *testing.T) {
 		t.Fatalf("需确认必须带说明,got %+v", got)
 	}
 }
+
+// TestEvaluate_ShellAnnotationMismatchNeedsConfirmation:服务器条目上标注
+// 错的 shell 类型会让按标注拆解的命令被误放行。按标注判为放行的命令,
+// 再用别的 shell 家族语法试判同一文本:另一侧判出拦截或需确认时,
+// 整体改判需确认并命中 SHELL-MISMATCH——偏向需确认,不悄悄放行;
+// 也绝不因试判升成拦截。
+func TestEvaluate_ShellAnnotationMismatchNeedsConfirmation(t *testing.T) {
+	tests := []struct {
+		name    string
+		shell   ShellType
+		command string
+	}{
+		{"POSIX 标注藏 PowerShell 格式化", ShellPOSIX, "Format-Volume -DriveLetter D"},
+		{"POSIX 标注藏 cmd 删关键路径", ShellPOSIX, `rd /s /q C:\`},
+		{"POSIX 标注藏 Windows 分区工具", ShellPOSIX, "diskpart"},
+		{"PowerShell 标注藏 POSIX 格式化", ShellPowerShell, "mkfs.ext4 /dev/sdb"},
+		{"PowerShell 标注藏 POSIX 删根", ShellPowerShell, "rm -rf /"},
+		{"cmd 标注藏 POSIX 写盘", ShellWindowsCmd, "dd if=/dev/zero of=/dev/sda"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Evaluate(tt.shell, tt.command, nil)
+			if got.Disposition != DispositionConfirmRequired || got.RuleID != "SHELL-MISMATCH" {
+				t.Fatalf("Evaluate(%s, %q) = %+v, want 需确认/SHELL-MISMATCH", tt.shell, tt.command, got)
+			}
+			if got.Explanation == "" || got.Alternative == "" {
+				t.Fatalf("Evaluate(%s, %q) must carry explanation and alternative, got %+v", tt.shell, tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_ShellAnnotationMismatchSparesEverydayCommands:三类 shell
+// 的日常命令在试判下仍是放行,不因跨 shell 试判被打扰。
+func TestEvaluate_ShellAnnotationMismatchSparesEverydayCommands(t *testing.T) {
+	tests := []struct {
+		name    string
+		shell   ShellType
+		command string
+	}{
+		{"POSIX 日常列表", ShellPOSIX, "ls -la"},
+		{"POSIX 删写死的构建产物", ShellPOSIX, "rm -r ./build"},
+		{"POSIX 打印危险命令文字", ShellPOSIX, `echo "rm -rf /"`},
+		{"POSIX 变量目录", ShellPOSIX, "cd $HOME"},
+		{"POSIX git 状态", ShellPOSIX, "git status"},
+		{"POSIX docker 列容器", ShellPOSIX, "docker ps"},
+		{"PowerShell 日常列表", ShellPowerShell, "Get-ChildItem"},
+		{"PowerShell 删写死的构建产物", ShellPowerShell, `Remove-Item .\build -Recurse`},
+		{"cmd 日常列表", ShellWindowsCmd, "dir"},
+		{"cmd 删写死的文件", ShellWindowsCmd, "del foo.txt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Evaluate(tt.shell, tt.command, nil)
+			if got.Disposition != DispositionAllow || got.RuleID != "" {
+				t.Fatalf("Evaluate(%s, %q) = %+v, want 放行", tt.shell, tt.command, got)
+			}
+		})
+	}
+}
+
+// TestEvaluate_ShellMismatchDisableableLikeDefaultRule:SHELL-MISMATCH
+// 注册在内置默认规则清单里,可像别的默认规则一样按编号停用;停用后
+// 试判不再改判,按标注侧的原结论返回。
+func TestEvaluate_ShellMismatchDisableableLikeDefaultRule(t *testing.T) {
+	found := false
+	for _, id := range DefaultRuleIDs() {
+		if id == "SHELL-MISMATCH" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("SHELL-MISMATCH must be listed among built-in default rule ids")
+	}
+	rules := &RuleSet{DisabledDefaultRuleIDs: []string{"SHELL-MISMATCH"}}
+	if got := Evaluate(ShellPOSIX, "diskpart", rules); got.Disposition != DispositionAllow {
+		t.Fatalf("disabled SHELL-MISMATCH still fired: %+v", got)
+	}
+	// 只停用 SHELL-MISMATCH 不影响标注侧本就危险的判定。
+	if got := Evaluate(ShellPOSIX, "rm -rf /etc", rules); got.Disposition != DispositionBlock {
+		t.Fatalf("annotated-shell judging must stay active: %+v", got)
+	}
+}
+
+// TestEvaluate_ShellMismatchUsesEffectiveRuleSet:跨 shell 试判用同一份
+// 生效规则集——自定义规则与停用记录对试判同样生效。
+func TestEvaluate_ShellMismatchUsesEffectiveRuleSet(t *testing.T) {
+	rules := &RuleSet{CustomRules: []CustomRule{{
+		ID:          "CUSTOM-WINFMT",
+		Shells:      []ShellType{ShellPowerShell},
+		Commands:    []string{"myformat"},
+		Disposition: DispositionBlock,
+		Explanation: "custom rule for the test",
+		Alternative: "none",
+	}}}
+	// POSIX 标注下无规则命中;PowerShell 家族试判命中自定义规则 → 需确认。
+	if got := Evaluate(ShellPOSIX, "myformat D:", rules); got.Disposition != DispositionConfirmRequired || got.RuleID != "SHELL-MISMATCH" {
+		t.Fatalf("custom rule must fire in the cross-judgement: %+v", got)
+	}
+	// 停用 SHELL-MISMATCH 后试判不再改判。
+	rules.DisabledDefaultRuleIDs = []string{"SHELL-MISMATCH"}
+	if got := Evaluate(ShellPOSIX, "myformat D:", rules); got.Disposition != DispositionAllow {
+		t.Fatalf("disabled SHELL-MISMATCH still fired: %+v", got)
+	}
+}

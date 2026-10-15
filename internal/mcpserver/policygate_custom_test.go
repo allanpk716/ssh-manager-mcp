@@ -248,11 +248,25 @@ func TestExecPolicyCustomRule_WindowsShellAnnotatedServer(t *testing.T) {
 	}
 	wantSolePolicyRow(t, st, "exec-blocked", "NO-RESTART", "Restart-Computer -Force", false, psID, "proj-w")
 
-	// 同一台测试 sshd、POSIX 标注:同一条命令不适用 PowerShell 专用规则,
+	// 同一台测试 sshd、POSIX 标注:同一条命令按 POSIX 语法不适用 PowerShell
+	// 专用规则,但跨 shell 试判用同一份生效规则集——规则在 PowerShell 侧
+	// 命中,改判需确认(SHELL-MISMATCH),零新连接。
+	_, err = ExecCommandForProfile(ctx, st, "proj-w", pid, nixID, "Restart-Computer -Force", false, 5*time.Second, "", "")
+	if err == nil || !strings.Contains(err.Error(), "[SHELL-MISMATCH]") {
+		t.Fatalf("posix-annotated server must surface the powershell-only rule via the cross-judgement, got %v", err)
+	}
+	if n := conns.Load(); n != 0 {
+		t.Fatalf("connections = %d after mismatch call, want 0", n)
+	}
+
+	// 停用跨 shell 试判规则后,POSIX 标注确实跳过 PowerShell 专用规则,
 	// 照常执行(连接数 +1)。
+	if _, err := st.DisableDefaultRule(policy.RuleIDShellMismatch); err != nil {
+		t.Fatal(err)
+	}
 	out, err := ExecCommandForProfile(ctx, st, "proj-w", pid, nixID, "Restart-Computer -Force", false, 5*time.Second, "", "")
 	if err != nil {
-		t.Fatalf("posix-annotated server must not hit the powershell-only rule: %v", err)
+		t.Fatalf("posix-annotated server must not hit the powershell-only rule once the cross-judgement is disabled: %v", err)
 	}
 	if want := "RAN:Restart-Computer -Force\n"; out.Stdout != want {
 		t.Fatalf("stdout = %q, want %q", out.Stdout, want)

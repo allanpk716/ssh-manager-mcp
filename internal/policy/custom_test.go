@@ -139,7 +139,8 @@ func TestCustomRule_ConditionsCombineWithAnd(t *testing.T) {
 }
 
 // TestCustomRule_ShellFilter:只适用于其他 shell 类型的自定义规则不影响
-// POSIX 判定。
+// 按标注的 POSIX 判定本身;但 shell 标注不匹配的试判会用同一份生效
+// 规则集,Windows 专属规则在试判里命中时按 SHELL-MISMATCH 改判需确认。
 func TestCustomRule_ShellFilter(t *testing.T) {
 	rules := &RuleSet{CustomRules: []CustomRule{{
 		ID:          "WIN-ONLY",
@@ -147,6 +148,12 @@ func TestCustomRule_ShellFilter(t *testing.T) {
 		Commands:    []string{"format"},
 		Disposition: DispositionBlock,
 	}}}
+	d := Evaluate(ShellPOSIX, "format c:", rules)
+	if d.Disposition != DispositionConfirmRequired || d.RuleID != "SHELL-MISMATCH" {
+		t.Fatalf("windows-only rule must surface via the cross-judgement as SHELL-MISMATCH, got %+v", d)
+	}
+	// 停用试判后,按标注的 POSIX 判定确实跳过 Windows 专属规则。
+	rules.DisabledDefaultRuleIDs = []string{RuleIDShellMismatch}
 	if d := Evaluate(ShellPOSIX, "format c:", rules); d.Disposition != DispositionAllow {
 		t.Fatalf("posix judging must skip a windows-only rule, got %+v", d)
 	}

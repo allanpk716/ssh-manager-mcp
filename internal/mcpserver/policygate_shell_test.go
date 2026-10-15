@@ -61,9 +61,10 @@ func assertWinBlockedError(t *testing.T, err error) {
 
 // TestExecCommandShellTypePicksGrammar: 同一条 Format-Volume,在标注为
 // PowerShell 的服务器上被拦截(WIN-FORMAT)、零新连接;对照——POSIX 标注
-// 的服务器上放行(POSIX 语法里它只是个普通命令名,拆解按标注进行;
-// 标注错误的诊断提示是票 #17 的事)。mkfs 在 POSIX 标注上拦截由
-// policygate_test.go 的 POSIX 用例覆盖。
+// 的服务器上不再被悄悄放行:按 POSIX 语法判放行后,跨 shell 家族试判发现
+// 它在 PowerShell 语法里危险,改判需确认(SHELL-MISMATCH),同样零新连接
+// (标注错误的修正提示见 servers probe-shell 诊断面)。mkfs 在 POSIX 标注上
+// 拦截由 policygate_test.go 的 POSIX 用例覆盖。
 func TestExecCommandShellTypePicksGrammar(t *testing.T) {
 	var conns atomic.Int64
 	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
@@ -87,14 +88,17 @@ func TestExecCommandShellTypePicksGrammar(t *testing.T) {
 	}
 	wantSolePolicyRow(t, st, "exec-blocked", "WIN-FORMAT", winBlockedCmd, false, psID, "proj-shell")
 
-	// 对照:POSIX 标注上同一条命令放行(照常执行)。
-	out, err := ExecCommandForProfile(ctx, st, "proj-shell", pid, nixID, winBlockedCmd, false, 5*time.Second, "", "")
-	if err != nil {
-		t.Fatalf("posix-labeled Format-Volume must pass through: %v", err)
+	// 对照:POSIX 标注上同一条命令按 POSIX 语法本身放行,但跨 shell 家族
+	// 试判发现它在 PowerShell 语法里危险——改判需确认(SHELL-MISMATCH),
+	// 零新连接,审计行 Status 存 SHELL-MISMATCH。
+	_, err = ExecCommandForProfile(ctx, st, "proj-shell", pid, nixID, winBlockedCmd, false, 5*time.Second, "", "")
+	if err == nil || !strings.Contains(err.Error(), "[SHELL-MISMATCH]") || !strings.Contains(err.Error(), "confirmation code") {
+		t.Fatalf("posix-labeled Format-Volume must come back as a SHELL-MISMATCH confirmation, got %v", err)
 	}
-	if !strings.HasPrefix(out.Stdout, "RAN:") {
-		t.Fatalf("allowed stdout = %q", out.Stdout)
+	if n := conns.Load(); n != 0 {
+		t.Fatalf("test sshd received %d connections after mismatch call, want 0", n)
 	}
+	wantSolePolicyRow(t, st, "exec-confirm-required", "SHELL-MISMATCH", winBlockedCmd, false, nixID, "proj-shell")
 }
 
 // TestExecBackgroundShellTypePicksGrammar: exec_background 的镜像断言。

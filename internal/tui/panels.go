@@ -13,6 +13,7 @@ import (
 	"charm.land/bubbles/v2/cursor"
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/paginator"
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -121,6 +122,13 @@ func renderPanel(l *list.Model, detail string, width, height int) string {
 	// Style.Height sets the CONTENT height (borders add 2) — size both
 	// panels to height-2 so the joined body is exactly `height` rows.
 	l.SetSize(listW-4, height-4)
+	// 分页点行可能比面板宽:bubbles 自身的兜底只拿点串宽度比列表宽度,
+	// 没算分页样式的左内边距与面板的边框/内边距;页数多到点行放不进
+	// 面板实际内容宽(到 listW-6)时换成阿拉伯数字分页,点行不再折行
+	// 把面板撑高。
+	if l.Paginator.Type == paginator.Dots && ansi.StringWidth(l.Paginator.View())+2 > listW-6 {
+		l.Paginator.Type = paginator.Arabic
+	}
 	avail := width - listW - colGutter - detailChrome
 	if avail > 0 {
 		detail = ansi.Wrap(detail, avail, "-")
