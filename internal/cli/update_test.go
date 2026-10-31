@@ -35,6 +35,7 @@ import (
 	"github.com/kardianos/service"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/updater"
 )
 
@@ -156,50 +157,116 @@ func buildTestArchive(t *testing.T, assetName string, payload []byte) []byte {
 }
 
 // fakeUpdateSource is an httptest loopback fake of the GitHub Releases
-// surface (latest + tags/<tag> return the same payload; asset and
-// checksums.txt sit in one flat directory, as goreleaser ships them).
+// surface. It can serve a latest release and several exact tags separately;
+// assets and checksums.txt sit in one flat directory, as goreleaser ships
+// them.
 type fakeUpdateSource struct {
-	srv     *httptest.Server
+	srv      *httptest.Server
+	latest   string
+	tag      string
+	asset    string
+	archive  []byte
+	sha      string
+	releases map[string]fakeUpdateRelease
+}
+
+type fakeUpdateRelease struct {
 	tag     string
 	asset   string
 	archive []byte
 	sha     string
 }
 
-// startFakeUpdateSource starts the fake source and points
-// SSHMGR_UPDATE_BASE at it (loopback http — the §4.2(4) exception).
-// browser_download_url deliberately names an off-whitelist host: with a
-// custom base the updater must rebuild the URL onto the base (spec
-// §4.2(4)), so the fake only answers on its own paths.
-func startFakeUpdateSource(t *testing.T, tag string, payload []byte) *fakeUpdateSource {
+// startFakeUpdateSourceWithTags starts the fake source and points
+// SSHMGR_UPDATE_BASE at it. `latest` is returned by releases/latest; every
+// entry in `releases` is also reachable by its exact tag. This lets command
+// tests distinguish “GitHub 最新版” from “本地缓存推荐版本”.
+func startFakeUpdateSourceWithTags(t *testing.T, latest string, releases map[string][]byte) *fakeUpdateSource {
 	t.Helper()
-	asset, err := updater.AssetName(tag, runtime.GOOS, runtime.GOARCH)
-	if err != nil {
-		t.Fatalf("compute asset name: %v", err)
+	fs := &fakeUpdateSource{
+		latest:   latest,
+		releases: make(map[string]fakeUpdateRelease),
 	}
-	fs := &fakeUpdateSource{tag: tag, asset: asset, archive: buildTestArchive(t, asset, payload)}
-	sum := sha256.Sum256(fs.archive)
-	fs.sha = hex.EncodeToString(sum[:])
+	for requestedTag, payload := range releases {
+		asset, err := updater.AssetName(requestedTag, runtime.GOOS, runtime.GOARCH)
+		if err != nil {
+			t.Fatalf("compute asset name for %s: %v", requestedTag, err)
+		}
+		release := fakeUpdateRelease{
+			tag:     requestedTag,
+			asset:   asset,
+			archive: buildTestArchive(t, asset, payload),
+		}
+		sum := sha256.Sum256(release.archive)
+		release.sha = hex.EncodeToString(sum[:])
+		fs.releases[requestedTag] = release
+		fs.releases[strings.TrimPrefix(requestedTag, "v")] = release
+		fs.releases["v"+strings.TrimPrefix(requestedTag, "v")] = release
+	}
+	latestRelease := fs.releases[latest]
+	if latestRelease.asset == "" {
+		t.Fatalf("fake update source has no release %q", latest)
+	}
+	fs.tag = latestRelease.tag
+	fs.asset = latestRelease.asset
+	fs.archive = latestRelease.archive
+	fs.sha = latestRelease.sha
 
-	relJSON := fmt.Sprintf(`{"tag_name":%q,"assets":[`+
-		`{"name":%q,"browser_download_url":"http://origin.invalid/%s"},`+
-		`{"name":"checksums.txt","browser_download_url":"http://origin.invalid/checksums.txt"}]}`,
-		fs.tag, fs.asset, fs.asset)
+	releaseJSON := func(release fakeUpdateRelease) string {
+		return fmt.Sprintf(`{"tag_name":%q,"assets":[`+
+			`{"name":%q,"browser_download_url":"http://origin.invalid/%s"},`+
+			`{"name":"checksums.txt","browser_download_url":"http://origin.invalid/checksums.txt"}]}`,
+			release.tag, release.asset, release.asset)
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/repos/"+buildinfo.Owner+"/"+buildinfo.Repo+"/releases/", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/repos/"+buildinfo.Owner+"/"+buildinfo.Repo+"/releases/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, relJSON)
+		suffix := strings.TrimPrefix(r.URL.Path, "/repos/"+buildinfo.Owner+"/"+buildinfo.Repo+"/releases/")
+		if suffix == "latest" {
+			_, _ = io.WriteString(w, releaseJSON(latestRelease))
+			return
+		}
+		release, ok := fs.releases[strings.TrimPrefix(suffix, "tags/")]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, releaseJSON(release))
 	})
-	mux.HandleFunc("/"+fs.asset, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(fs.archive)
-	})
+	registeredAssets := map[string]bool{}
+	for _, release := range fs.releases {
+		if registeredAssets[release.asset] {
+			continue
+		}
+		registeredAssets[release.asset] = true
+		asset := release
+		mux.HandleFunc("/"+asset.asset, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write(asset.archive)
+		})
+	}
 	mux.HandleFunc("/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprintf(w, "%s  %s\n", fs.sha, fs.asset)
+		seen := make(map[string]bool)
+		for _, release := range fs.releases {
+			if seen[release.asset] {
+				continue
+			}
+			seen[release.asset] = true
+			_, _ = fmt.Fprintf(w, "%s  %s\n", release.sha, release.asset)
+		}
 	})
 	fs.srv = httptest.NewServer(mux)
 	t.Cleanup(fs.srv.Close)
 	t.Setenv("SSHMGR_UPDATE_BASE", fs.srv.URL)
 	return fs
+}
+
+// startFakeUpdateSource starts a one-release fake source. browser_download_url
+// deliberately names an off-whitelist host: with a custom base the updater
+// must rebuild the URL onto the base (spec §4.2(4)), so the fake only answers
+// on its own paths.
+func startFakeUpdateSource(t *testing.T, tag string, payload []byte) *fakeUpdateSource {
+	t.Helper()
+	return startFakeUpdateSourceWithTags(t, tag, map[string][]byte{tag: payload})
 }
 
 // withStagedVersion pins what the staged-binary helper (TestMain) answers.
@@ -232,6 +299,7 @@ type updateSeamSet struct {
 	readConfirmLine      func() (string, error)
 	detectHeal           func() (string, bool)
 	serviceNew           func(service.Interface, *service.Config) (serviceRestarter, error)
+	resolveUpdateLaunch  func(string) (roles.Launch, error)
 }
 
 func updateSeams() updateSeamSet {
@@ -246,6 +314,7 @@ func updateSeams() updateSeamSet {
 		readConfirmLine:      readConfirmLine,
 		detectHeal:           detectHeal,
 		serviceNew:           serviceNew,
+		resolveUpdateLaunch:  resolveUpdateLaunch,
 	}
 }
 
@@ -260,6 +329,7 @@ func restoreUpdateSeams(s updateSeamSet) {
 	readConfirmLine = s.readConfirmLine
 	detectHeal = s.detectHeal
 	serviceNew = s.serviceNew
+	resolveUpdateLaunch = s.resolveUpdateLaunch
 }
 
 // seamUpdateDefaults swaps every update seam for a deterministic stand-in:
@@ -284,6 +354,22 @@ func seamUpdateDefaults(t *testing.T, self, curVer string) {
 	// detectHeal and serviceNew keep their production defaults here: the real
 	// DetectHeal inspects the pristine test binary and reports nothing, and
 	// serviceNew is only reached in restart tests, which stub it explicitly.
+	resolveUpdateLaunch = func(string) (roles.Launch, error) {
+		return roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleStandalone}, nil
+	}
+}
+
+// seamUpdateRole pins the launch decision without consulting this developer
+// machine's role.json. Client-specific tests combine it with a seeded local
+// cache, so the command still exercises the public update behavior end to end.
+func seamUpdateRole(role roles.Role) {
+	kind := roles.LaunchBroker
+	if role == roles.RoleClient {
+		kind = roles.LaunchClient
+	}
+	resolveUpdateLaunch = func(string) (roles.Launch, error) {
+		return roles.Launch{Kind: kind, Role: role}, nil
+	}
 }
 
 // seamProbeByName installs a probeService stand-in answering per name
@@ -552,6 +638,190 @@ func TestUpdateFullChainYesFlipsVersion(t *testing.T) {
 		}
 	}
 	assertSelfFlippedTo(t, home, self, testBinBytes(t), oldBytes)
+}
+
+// --- 客户端推荐版本 -----------------------------------------------------------
+
+// seedUpdateRecommendedCache 复用既有的真实本地加密缓存夹具，并把 HOME 指到
+// 临时目录，避免测试读写这台开发机的 macOS 用户配置目录。
+func seedUpdateRecommendedCache(t *testing.T, recommendedVersion string) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	seedRootVersionCache(t, recommendedVersion)
+}
+
+func TestUpdateClientInstallsRecommendedVersionFromCache(t *testing.T) {
+	seedUpdateRecommendedCache(t, "0.0.2")
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSourceWithTags(t, "v0.0.3", map[string][]byte{
+		"v0.0.2": testBinBytes(t),
+		"v0.0.3": testBinBytes(t),
+	})
+	seamUpdateDefaults(t, self, "0.0.1")
+	seamUpdateRole(roles.RoleClient)
+	withStagedVersion(t, "0.0.2")
+
+	out, err := runUpdate(t, "--yes")
+	if err != nil {
+		t.Fatalf("客户端 update: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "版本: 0.0.1 → v0.0.2\n") {
+		t.Fatalf("客户端 update 应安装缓存推荐版本 v0.0.2：\n%s", out)
+	}
+	if strings.Contains(out, "v0.0.3") {
+		t.Fatalf("客户端 update 不应回退到 GitHub 最新版本 v0.0.3：\n%s", out)
+	}
+	assertSelfFlippedTo(t, home, self, testBinBytes(t), oldBytes)
+}
+
+func TestUpdateClientWithoutRecommendedVersionRefuses(t *testing.T) {
+	seedUpdateRecommendedCache(t, "")
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSource(t, "v0.0.3", testBinBytes(t))
+	seamUpdateDefaults(t, self, "0.0.1")
+	seamUpdateRole(roles.RoleClient)
+
+	out, err := runUpdate(t, "--yes")
+	if err == nil || !strings.Contains(err.Error(), "无法确定推荐版本，请先升级权威端，或用 `--version` 指定") {
+		t.Fatalf("缺少推荐版本时应该拒绝执行，错误为 %v", err)
+	}
+	if strings.Contains(out, "v0.0.3") {
+		t.Fatalf("缺少推荐版本时不应查询或安装 GitHub 最新版本：\n%s", out)
+	}
+	assertSelfUntouched(t, home, self, oldBytes)
+}
+
+func TestUpdateClientVersionFlagOverridesRecommendedVersion(t *testing.T) {
+	seedUpdateRecommendedCache(t, "0.0.2")
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSourceWithTags(t, "v0.0.4", map[string][]byte{
+		"v0.0.2": testBinBytes(t),
+		"v0.0.3": testBinBytes(t),
+		"v0.0.4": testBinBytes(t),
+	})
+	seamUpdateDefaults(t, self, "0.0.1")
+	seamUpdateRole(roles.RoleClient)
+	withStagedVersion(t, "0.0.3")
+
+	out, err := runUpdate(t, "--yes", "--version", "v0.0.3")
+	if err != nil {
+		t.Fatalf("--version 覆盖推荐版本失败: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "版本: 0.0.1 → v0.0.3\n") {
+		t.Fatalf("--version 应优先于推荐版本，应安装 v0.0.3：\n%s", out)
+	}
+	if strings.Contains(out, "v0.0.2") || strings.Contains(out, "v0.0.4") {
+		t.Fatalf("--version 指定目标以外不应安装推荐版本或最新版本：\n%s", out)
+	}
+	assertSelfFlippedTo(t, home, self, testBinBytes(t), oldBytes)
+}
+
+func TestUpdateClientCheckListsRecommendedAndLatestVersions(t *testing.T) {
+	seedUpdateRecommendedCache(t, "0.0.2")
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSourceWithTags(t, "v0.0.3", map[string][]byte{
+		"v0.0.2": testBinBytes(t),
+		"v0.0.3": testBinBytes(t),
+	})
+	seamUpdateDefaults(t, self, "0.0.1")
+	seamUpdateRole(roles.RoleClient)
+
+	out, err := runUpdate(t, "--check")
+	if err != nil {
+		t.Fatalf("客户端 update --check: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"当前版本: 0.0.1",
+		"推荐版本: 0.0.2",
+		"GitHub 最新版本: v0.0.3",
+		"干跑:未下载、未替换、未重启任何东西",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("输出缺少 %q：\n%s", want, out)
+		}
+	}
+	assertSelfUntouched(t, home, self, oldBytes)
+}
+
+func TestUpdateClientCheckListsVersionsWhenCurrentVersionIsDev(t *testing.T) {
+	seedUpdateRecommendedCache(t, "0.0.2")
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSourceWithTags(t, "v0.0.3", map[string][]byte{
+		"v0.0.2": testBinBytes(t),
+		"v0.0.3": testBinBytes(t),
+	})
+	seamUpdateDefaults(t, self, "dev")
+	seamUpdateRole(roles.RoleClient)
+
+	out, err := runUpdate(t, "--check")
+	if err != nil {
+		t.Fatalf("开发构建客户端 update --check: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"当前版本: dev",
+		"推荐版本: 0.0.2",
+		"GitHub 最新版本: v0.0.3",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("输出缺少 %q：\n%s", want, out)
+		}
+	}
+	assertSelfUntouched(t, home, self, oldBytes)
+}
+
+func TestUpdateBrokerRolesKeepGitHubLatest(t *testing.T) {
+	for _, role := range []roles.Role{roles.RoleStandalone, roles.RoleServer} {
+		t.Run(string(role), func(t *testing.T) {
+			seedUpdateRecommendedCache(t, "0.0.2")
+			home, self, oldBytes := writeSelfFixture(t)
+			startFakeUpdateSourceWithTags(t, "v0.0.3", map[string][]byte{
+				"v0.0.2": testBinBytes(t),
+				"v0.0.3": testBinBytes(t),
+			})
+			seamUpdateDefaults(t, self, "0.0.1")
+			seamUpdateRole(role)
+			withStagedVersion(t, "0.0.3")
+
+			out, err := runUpdate(t, "--yes")
+			if err != nil {
+				t.Fatalf("%s update: %v\n%s", role, err, out)
+			}
+			if !strings.Contains(out, "版本: 0.0.1 → v0.0.3\n") {
+				t.Fatalf("%s update 应继续安装 GitHub 最新版本：\n%s", role, out)
+			}
+			if strings.Contains(out, "v0.0.2") {
+				t.Fatalf("%s 不应读取推荐版本：\n%s", role, out)
+			}
+			assertSelfFlippedTo(t, home, self, testBinBytes(t), oldBytes)
+		})
+	}
+}
+
+func TestUpdateBrokerRolesCheckOnlyListsGitHubLatest(t *testing.T) {
+	for _, role := range []roles.Role{roles.RoleStandalone, roles.RoleServer} {
+		t.Run(string(role), func(t *testing.T) {
+			seedUpdateRecommendedCache(t, "0.0.2")
+			home, self, oldBytes := writeSelfFixture(t)
+			startFakeUpdateSourceWithTags(t, "v0.0.3", map[string][]byte{
+				"v0.0.2": testBinBytes(t),
+				"v0.0.3": testBinBytes(t),
+			})
+			seamUpdateDefaults(t, self, "0.0.1")
+			seamUpdateRole(role)
+
+			out, err := runUpdate(t, "--check")
+			if err != nil {
+				t.Fatalf("%s update --check: %v\n%s", role, err, out)
+			}
+			if !strings.Contains(out, "最新版本: v0.0.3\n") {
+				t.Fatalf("%s --check 应列出 GitHub 最新版本：\n%s", role, out)
+			}
+			if strings.Contains(out, "推荐版本") || strings.Contains(out, "0.0.2") {
+				t.Fatalf("%s --check 不应列出推荐版本：\n%s", role, out)
+			}
+			assertSelfUntouched(t, home, self, oldBytes)
+		})
+	}
 }
 
 // --- service gates (seam-faked; SCM read-back is real-machine G10/G12) ------

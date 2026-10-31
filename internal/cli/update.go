@@ -14,7 +14,8 @@ package cli
 //	 3. service gates: probe NEW name (MechanismErr → fail-closed abort —
 //	    spec §3.2 勘误, no skip branch; Installed → registered-path precheck),
 //	    probe LEGACY name (Installed in ANY state → migration block + abort)
-//	 4. version discovery (--version → ByTag, else LatestRelease);
+//	 4. role decision + version discovery (--version → ByTag; client
+//	    default → cached recommended version; otherwise LatestRelease);
 //	    already-latest → exit 0; dev current version handling
 //	 5. download checksums+asset (SHA256) → ExtractBinary → StagedVersionCheck
 //	    (--file: skip discovery/download; staged output IS the target version)
@@ -49,6 +50,8 @@ import (
 	"golang.org/x/term"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/updater"
 )
 
@@ -95,6 +98,7 @@ var (
 	registeredServeAddr  = updater.RegisteredServeAddr
 	detectHeal           = updater.DetectHeal
 	serveHTTPProbe       = probeServeHTTP
+	resolveUpdateLaunch  = roles.ResolveMode
 
 	// resolveSelf pins the binary the update replaces (canonical form).
 	resolveSelf = func() (string, error) {
@@ -305,12 +309,30 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 		return fmt.Errorf("检测到旧版服务 %s 仍注册(任何态)——本次 update 中止", updater.LegacyServiceName)
 	}
 
+	// 客户端不能越过权威端已声明的版本去装 GitHub 最新版。推荐版本只读
+	// 本地加密缓存；这里不访问权威端，断网时也能执行。
+	recommendedVersion := ""
+	if o.file == "" && o.wantTag == "" {
+		launch, rerr := resolveUpdateLaunch("")
+		if rerr != nil {
+			return fmt.Errorf("判定本机角色失败: %w", rerr)
+		}
+		if launch.Role == roles.RoleClient {
+			snap, serr := clientops.LoadCacheSnapshot()
+			if serr != nil || snap == nil || snap.RecommendedVersion == "" {
+				return errors.New("无法确定推荐版本，请先升级权威端，或用 `--version` 指定")
+			}
+			recommendedVersion = snap.RecommendedVersion
+		}
+	}
+
 	// --- 4. version discovery + comparison ------------------------------------
 	curStr := currentVersionStr()
 	curVer, curErr := updater.ParseVersion(curStr)
 
 	var (
 		rel        *updater.Release // nil on the --file path
+		latestRel  *updater.Release // 客户端 --check 同时展示的 GitHub 最新版
 		targetVer  string           // "v…" tag, or the staged output (--file)
 		assetLabel string
 		downgrade  bool
@@ -320,6 +342,11 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 		var derr error
 		if o.wantTag != "" {
 			rel, derr = updater.ReleaseByTag(ctx, o.wantTag)
+		} else if recommendedVersion != "" {
+			rel, derr = updater.ReleaseByTag(ctx, recommendedVersion)
+			if derr == nil && o.check {
+				latestRel, derr = updater.LatestRelease(ctx)
+			}
 		} else {
 			rel, derr = updater.LatestRelease(ctx)
 		}
@@ -330,11 +357,15 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 		assetLabel = rel.AssetName
 
 		if curErr != nil {
-			if o.wantTag == "" {
+			if o.wantTag == "" && recommendedVersion == "" {
 				// dev / 本地构建:拒绝自动比较,要求显式 --version(spec §4.1)。
 				return fmt.Errorf("无法解析当前版本 %q(本地构建?):自动比较已拒绝;请用 --version 显式指定目标版本", curStr)
 			}
-			fmt.Fprintf(out, "警告: 无法判定升降级(当前版本 %q 无法解析);将按指定目标 %s 继续\n", curStr, rel.Tag)
+			if o.wantTag != "" {
+				fmt.Fprintf(out, "警告: 无法判定升降级(当前版本 %q 无法解析);将按指定目标 %s 继续\n", curStr, rel.Tag)
+			} else {
+				fmt.Fprintf(out, "警告: 无法判定升降级(当前版本 %q 无法解析);将按推荐版本 %s 继续\n", curStr, rel.Tag)
+			}
 		} else {
 			tgt, terr := updater.ParseVersion(rel.Tag)
 			if terr != nil {
@@ -344,6 +375,10 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 			case 0:
 				if o.wantTag != "" {
 					return fmt.Errorf("已安装该版本(%s);如需重装请先卸载或选择其他版本", rel.Tag)
+				}
+				// 客户端 --check 仍要继续输出推荐版本与 GitHub 最新版本。
+				if o.check && recommendedVersion != "" {
+					break
 				}
 				fmt.Fprintf(out, "已是最新(%s);无事可做\n", rel.Tag)
 				return nil
@@ -357,6 +392,12 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 			which := "最新版本"
 			if o.wantTag != "" {
 				which = "目标版本"
+			}
+			if recommendedVersion != "" && o.wantTag == "" {
+				fmt.Fprintf(out, "当前版本: %s\n推荐版本: %s\nGitHub 最新版本: %s\n",
+					curStr, recommendedVersion, latestRel.Tag)
+				fmt.Fprintf(out, "资产: %s\n干跑:未下载、未替换、未重启任何东西\n", rel.AssetName)
+				return nil
 			}
 			fmt.Fprintf(out, "当前版本: %s\n%s: %s\n资产: %s\n干跑:未下载、未替换、未重启任何东西\n",
 				curStr, which, rel.Tag, rel.AssetName)
