@@ -143,9 +143,9 @@ func (s *Store) GetCacheToken(id string) (*models.CacheToken, error) {
 		updated  int64
 	)
 	err := s.db.QueryRow(
-		`SELECT id,name,token_prefix,status,COALESCE(profile_id,''),last_pull_at,created_at,updated_at
+		`SELECT id,name,token_prefix,status,COALESCE(profile_id,''),COALESCE(client_version,''),last_pull_at,created_at,updated_at
 		 FROM cache_tokens WHERE id=?`, id,
-	).Scan(&ct.ID, &ct.Name, &ct.TokenPrefix, &status, &ct.ProfileID, &lastPull, &created, &updated)
+	).Scan(&ct.ID, &ct.Name, &ct.TokenPrefix, &status, &ct.ProfileID, &ct.ClientVersion, &lastPull, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -168,7 +168,7 @@ func (s *Store) GetCacheToken(id string) (*models.CacheToken, error) {
 func (s *Store) VerifyCacheToken(token string) (*models.CacheToken, error) {
 	prefix := tokenPrefix(token)
 	rows, err := s.db.Query(
-		`SELECT id,name,token_hash,token_salt,token_prefix,status,COALESCE(profile_id,''),last_pull_at FROM cache_tokens WHERE token_prefix=? AND status='active'`,
+		`SELECT id,name,token_hash,token_salt,token_prefix,status,COALESCE(profile_id,''),COALESCE(client_version,''),last_pull_at FROM cache_tokens WHERE token_prefix=? AND status='active'`,
 		prefix,
 	)
 	if err != nil {
@@ -183,7 +183,7 @@ func (s *Store) VerifyCacheToken(token string) (*models.CacheToken, error) {
 			status   string
 			lastPull sql.NullInt64
 		)
-		if err := rows.Scan(&ct.ID, &ct.Name, &hash, &salt, &ct.TokenPrefix, &status, &ct.ProfileID, &lastPull); err != nil {
+		if err := rows.Scan(&ct.ID, &ct.Name, &hash, &salt, &ct.TokenPrefix, &status, &ct.ProfileID, &ct.ClientVersion, &lastPull); err != nil {
 			return nil, err
 		}
 		if verifyTokenHash([]byte(token), salt, hash) {
@@ -199,7 +199,7 @@ func (s *Store) VerifyCacheToken(token string) (*models.CacheToken, error) {
 
 // ListCacheTokens returns every device code (owner-facing fields only — never the hash).
 func (s *Store) ListCacheTokens() ([]*models.CacheToken, error) {
-	rows, err := s.db.Query(`SELECT id,name,token_prefix,status,COALESCE(profile_id,''),last_pull_at,created_at,updated_at FROM cache_tokens ORDER BY name`)
+	rows, err := s.db.Query(`SELECT id,name,token_prefix,status,COALESCE(profile_id,''),COALESCE(client_version,''),last_pull_at,created_at,updated_at FROM cache_tokens ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +213,7 @@ func (s *Store) ListCacheTokens() ([]*models.CacheToken, error) {
 			created  int64
 			updated  int64
 		)
-		if err := rows.Scan(&ct.ID, &ct.Name, &ct.TokenPrefix, &status, &ct.ProfileID, &lastPull, &created, &updated); err != nil {
+		if err := rows.Scan(&ct.ID, &ct.Name, &ct.TokenPrefix, &status, &ct.ProfileID, &ct.ClientVersion, &lastPull, &created, &updated); err != nil {
 			return nil, err
 		}
 		ct.Status = models.CacheTokenStatus(status)
@@ -257,13 +257,14 @@ func revokeCacheTokenTx(tx *sql.Tx, name string) error {
 	return nil
 }
 
-// TouchCacheToken bumps last_pull_at for id (called by /snapshot on a successful fetch).
-// Errors if the id is absent.
-func (s *Store) TouchCacheToken(id string) error {
+// TouchCacheToken 记录一次成功拉取:更新 last_pull_at,并把 client_version
+// 设置为这次声明的客户端版本;未声明时传入空值,因此降级后的下一次拉取会覆盖旧值。
+// 设备码不存在时返回错误。
+func (s *Store) TouchCacheToken(id, clientVersion string) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
-	res, err := s.db.Exec(`UPDATE cache_tokens SET last_pull_at=? WHERE id=?`, now(), id)
+	res, err := s.db.Exec(`UPDATE cache_tokens SET last_pull_at=?, client_version=? WHERE id=?`, now(), clientVersion, id)
 	if err != nil {
 		return err
 	}

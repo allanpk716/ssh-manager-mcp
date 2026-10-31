@@ -82,7 +82,7 @@ func TestReadOnly_MutationsRefused(t *testing.T) {
 	if err := s.RevokeCacheToken("dev"); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("RevokeCacheToken: err=%v want ErrReadOnly", err)
 	}
-	if err := s.TouchCacheToken("x"); !errors.Is(err, ErrReadOnly) {
+	if err := s.TouchCacheToken("x", ""); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("TouchCacheToken: err=%v want ErrReadOnly", err)
 	}
 }

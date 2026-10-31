@@ -100,7 +100,7 @@ func TestTouchCacheToken_UpdatesLastPullAt(t *testing.T) {
 	if err != nil || ct == nil {
 		t.Fatalf("VerifyCacheToken: err=%v ct=%v", err, ct)
 	}
-	if err := s.TouchCacheToken(ct.ID); err != nil {
+	if err := s.TouchCacheToken(ct.ID, ""); err != nil {
 		t.Fatalf("TouchCacheToken: %v", err)
 	}
 	got, err := s.VerifyCacheToken(plaintext)

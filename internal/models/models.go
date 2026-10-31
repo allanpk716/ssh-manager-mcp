@@ -173,8 +173,11 @@ type CacheToken struct {
 	// ("unbound") exists ONLY as the pre-Plan-39 legacy-DB migration state —
 	// serve refuses unbound pulls with 403 (not 401: a pinned 401 destroys the
 	// client cache under Plan 34) until `cache-tokens bind` repairs it.
-	ProfileID  string
-	LastPullAt time.Time // zero value if last_pull_at was NULL (never pulled)
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ProfileID string
+	// ClientVersion 是该设备码最近一次拉取快照时声明的客户端版本；空值
+	// 表示这次拉取没有声明版本，或设备码从未拉取过。
+	ClientVersion string
+	LastPullAt    time.Time // zero value if last_pull_at was NULL (never pulled)
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }

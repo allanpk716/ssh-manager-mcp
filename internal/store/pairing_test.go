@@ -612,7 +612,7 @@ func TestActiveCacheTokenInfo(t *testing.T) {
 	if err != nil || ct == nil {
 		t.Fatalf("verify: %v %v", ct, err)
 	}
-	if err := s.TouchCacheToken(ct.ID); err != nil {
+	if err := s.TouchCacheToken(ct.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if zero, active, err := s.ActiveCacheTokenInfo("laptop"); zero || !active || err != nil {
@@ -835,7 +835,7 @@ func touchTokenForPull(t *testing.T, s *Store, name string) {
 	if err := s.db.QueryRow(`SELECT id FROM cache_tokens WHERE name=? AND status='active'`, name).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.TouchCacheToken(id); err != nil {
+	if err := s.TouchCacheToken(id, ""); err != nil {
 		t.Fatal(err)
 	}
 }

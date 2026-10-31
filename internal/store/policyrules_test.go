@@ -215,7 +215,7 @@ func TestExportSnapshotForProfile_CarriesPolicySections(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snap, err := s.ExportSnapshotForProfile(profID)
+	snap, err := s.ExportSnapshotForProfile(profID, false)
 	if err != nil {
 		t.Fatalf("ExportSnapshotForProfile: %v", err)
 	}

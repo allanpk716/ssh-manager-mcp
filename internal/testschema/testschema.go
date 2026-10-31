@@ -6,10 +6,10 @@
 // file is exactly how the next migration gets missed.
 package testschema
 
-// OldShapeCacheTokens is the pre-Plan-39 cache_tokens schema (no profile_id):
-// the shape a legacy fleet DB presents to store.Open's migration, which adds
-// the column and leaves existing rows NULL (= unbound, pulls refused with 403
-// until `cache-tokens bind` repairs them).
+// OldShapeCacheTokens 是没有 profile_id 与 client_version 的历史设备码表。
+// 旧 vault 打开时,现有迁移会补上 profile_id 并保持旧行为空值(未绑定,
+// 拉取会被拒绝,直到 `cache-tokens bind` 修复),再补上空 client_version,
+// 显示为旧版客户端。
 const OldShapeCacheTokens = `CREATE TABLE cache_tokens (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,

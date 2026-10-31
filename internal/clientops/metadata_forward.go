@@ -209,7 +209,7 @@ func (f *MetadataForwarder) Edit(serverID string, expectedRevision int64, fields
 	if err != nil {
 		return MetaEditResult{}, &metaError{text: metaMainMessage(serverID), err: err}
 	}
-	req.Header.Set("Authorization", "Bearer "+f.code)
+	setAuthorityRequestHeaders(req, f.code)
 	res, err := f.client.Do(req)
 	if err != nil {
 		return MetaEditResult{}, &metaError{text: metaMainMessage(serverID), err: err}

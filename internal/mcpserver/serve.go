@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -30,6 +31,9 @@ import (
 // requirement (auth.go:120-126). Device codes have no real expiry — their
 // lifecycle is governed by VerifyCacheToken (status='active': revoke).
 const cacheTokenNominalTTL = 100 * 365 * 24 * time.Hour
+
+// clientVersionMaxLength 是设备码表保存客户端版本的最大字符数。
+const clientVersionMaxLength = 64
 
 // scopedServer is a project-scoped MCP server + its tunnel manager + its
 // background-task manager, cached per project so concurrent sessions of the
@@ -223,8 +227,8 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 // the granted servers + their referenced credentials, the profile/grants, the
 // same-profile projects, and those servers' host keys — NO audit rows. Cache
 // tokens are NEVER in the Snapshot (server-side only — ExportSnapshot does not
-// read the cache_tokens table). Best-effort TouchCacheToken AFTER the body is
-// written — a touch failure is logged, not fatal (the pull already succeeded).
+// read the cache_tokens table). 响应体写完后用 TouchCacheToken 记录最后拉取
+// 时间和这次请求声明的客户端版本;记录失败只写日志,不影响已经成功的拉取。
 //
 // An UNBOUND device code (pre-Plan-39 legacy migration state) is refused with
 // 403 — deliberately NOT 401: a pinned 401 is the Plan-34 quarantine trigger
@@ -259,7 +263,8 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "device code not bound to a profile — owner: run `sshmgr cache-tokens bind "+ct.Name+" <profile>` on the server", http.StatusForbidden)
 		return
 	}
-	snap, err := r.st.ExportSnapshotForProfile(ct.ProfileID)
+	clientVersion := req.Header.Get("X-Sshmgr-Client-Version")
+	snap, err := r.st.ExportSnapshotForProfile(ct.ProfileID, clientVersion != "")
 	if err != nil {
 		http.Error(w, "snapshot unavailable", http.StatusInternalServerError)
 		return
@@ -283,9 +288,28 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 	if err := json.NewEncoder(w).Encode(snap); err != nil {
 		return // client gone; nothing more to do
 	}
-	if err := r.st.TouchCacheToken(ti.UserID); err != nil {
+	if err := r.st.TouchCacheToken(ti.UserID, normalizedClientVersion(clientVersion)); err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: cache-tokens touch %s: %v\n", ti.UserID, err)
 	}
+}
+
+// normalizedClientVersion 清洗设备码表要保存的客户端版本：先去掉不可
+// 打印字符，再截断到 64 个字符。调用方判断「是否声明」必须用原始请求头
+// 是否非空，不能用这里的返回值替代。
+func normalizedClientVersion(version string) string {
+	var cleaned strings.Builder
+	characters := 0
+	for _, character := range version {
+		if !unicode.IsPrint(character) {
+			continue
+		}
+		if characters == clientVersionMaxLength {
+			break
+		}
+		cleaned.WriteRune(character)
+		characters++
+	}
+	return cleaned.String()
 }
 
 // ---- Plan 48: POST /pin-hostkey — anchored forwarding (spec §1) ----

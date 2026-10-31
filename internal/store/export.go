@@ -312,7 +312,9 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 //
 // Deliberately does NOT share queries with ExportSnapshot: the owner-side
 // export/import backup path stays whole-vault by design and must not drift.
-func (s *Store) ExportSnapshotForProfile(profileID string) (*Snapshot, error) {
+// clientDeclaredVersion 表示这次拉取是否声明了客户端版本；票 #90 只把输入
+// 传进函数，真正按它裁剪机密项的工作由票 #60 完成。
+func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion bool) (*Snapshot, error) {
 	if err := requireProfile(s.db, profileID); err != nil {
 		return nil, err
 	}

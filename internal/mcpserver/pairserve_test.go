@@ -366,7 +366,7 @@ func TestPairEnroll_UnauthenticatedZeroSideEffects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.TouchCacheToken(busyID); err != nil { // sets last_pull_at
+	if err := st.TouchCacheToken(busyID, ""); err != nil { // sets last_pull_at
 		t.Fatal(err)
 	}
 	b := newPairClient(t, "busy", "https://192.0.2.10:7878")
