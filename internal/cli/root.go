@@ -52,14 +52,9 @@ func (r *rootCommand) ExecuteC() (*cobra.Command, error) {
 }
 
 func (r *rootCommand) finish(cmd *cobra.Command, err error) {
+	// 与改动前 main 的输出保持一致:错误原样打印一行,版本提示排在它之后。
 	if err != nil && !errors.Is(err, flag.ErrHelp) {
-		output := r.Command
-		if cmd != nil {
-			output = cmd
-		}
-		if output.SilenceErrors || r.Command.SilenceErrors {
-			fmt.Fprintln(output.ErrOrStderr(), output.ErrPrefix(), err)
-		}
+		fmt.Fprintln(r.Command.ErrOrStderr(), err)
 	}
 	writeClientVersionHint(cmd)
 }
