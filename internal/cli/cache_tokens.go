@@ -89,7 +89,7 @@ func cacheTokensAddCmd() *cobra.Command {
 func cacheTokensLsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "ls",
-		Short: "List device authorization codes (prefix + status + bound profile + last pull; never the code)",
+		Short: "List device authorization codes (prefix + status + bound profile + last pull + client version; never the code)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openUnlockedStore()
 			if err != nil {
@@ -111,8 +111,12 @@ func cacheTokensLsCmd() *cobra.Command {
 				if !ct.LastPullAt.IsZero() {
 					last = ct.LastPullAt.Format("2006-01-02 15:04:05")
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %s prefix=%s… status=%s profile=%s last_pull=%s\n",
-					ct.Name, ct.ID, ct.TokenPrefix, ct.Status, profileNameFromMap(pname, ct.ProfileID), last)
+				clientVersion := ct.ClientVersion
+				if clientVersion == "" {
+					clientVersion = "旧版客户端:不支持机密项"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %s prefix=%s… status=%s profile=%s last_pull=%s client_version=%s\n",
+					ct.Name, ct.ID, ct.TokenPrefix, ct.Status, profileNameFromMap(pname, ct.ProfileID), last, clientVersion)
 			}
 			return nil
 		},

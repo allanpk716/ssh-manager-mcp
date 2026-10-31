@@ -285,7 +285,7 @@ func TestPinHostkey_ForwardsAndLands201(t *testing.T) {
 	if string(pin.Blob) != string(canonical) {
 		t.Fatalf("stored blob is not the re-marshaled canonical bytes")
 	}
-	snap, err := f.st.ExportSnapshotForProfile(f.teamA)
+	snap, err := f.st.ExportSnapshotForProfile(f.teamA, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +434,7 @@ func TestPinHostkey_PreExistingAnchorConflict(t *testing.T) {
 	if err != nil || pin == nil || string(pin.Blob) != string(canonicalA) || pin.Format != store.PinFormatBlob {
 		t.Fatalf("existing anchor disturbed by the equal conflict: %+v %v", pin, err)
 	}
-	snap, err := f.st.ExportSnapshotForProfile(f.teamA)
+	snap, err := f.st.ExportSnapshotForProfile(f.teamA, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,6 +58,8 @@ type cacheFwdFixture struct {
 	dbPath    string
 	serveHTTP *httptest.Server // TLS, /pin-hostkey POST-counted
 	posts     *int32
+	versionMu *sync.Mutex
+	versions  map[string]string   // 请求路径 → 最近一次看到的客户端版本请求头
 	cred      clientops.CacheCred // pull/pin credential for the "laptop" device
 	projToken string
 	snap      *store.Snapshot // exported BEFORE any test-side anchor preset
@@ -107,10 +110,15 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	}
 	t.Cleanup(r.Close)
 	var posts int32
+	versionMu := &sync.Mutex{}
+	versions := map[string]string{}
 	mux := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/pin-hostkey" {
 			atomic.AddInt32(&posts, 1)
 		}
+		versionMu.Lock()
+		versions[req.URL.Path] = req.Header.Get("X-Sshmgr-Client-Version")
+		versionMu.Unlock()
 		r.HTTPHandler().ServeHTTP(w, req)
 	})
 	serveHTTP := httptest.NewTLSServer(mux)
@@ -119,13 +127,14 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap, err := sv.ExportSnapshotForProfile(profID)
+	snap, err := sv.ExportSnapshotForProfile(profID, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &cacheFwdFixture{
 		sshdAddr: addr, sshdKey: sshdKey, targetID: targetID, profID: profID,
 		serve: sv, dbPath: dbPath, serveHTTP: serveHTTP, posts: &posts,
+		versionMu: versionMu, versions: versions,
 		cred: clientops.CacheCred{
 			URL:   serveHTTP.URL,
 			Token: laptopTok,
@@ -139,6 +148,12 @@ func (fx *cacheFwdFixture) host() string { return fx.sshdAddr[:strings.Index(fx.
 func (fx *cacheFwdFixture) port() int    { return portFromAddr(fx.sshdAddr) }
 func (fx *cacheFwdFixture) postCount() int {
 	return int(atomic.LoadInt32(fx.posts))
+}
+
+func (fx *cacheFwdFixture) seenClientVersion(path string) string {
+	fx.versionMu.Lock()
+	defer fx.versionMu.Unlock()
+	return fx.versions[path]
 }
 func (fx *cacheFwdFixture) fingerprint() string { return ssh.FingerprintSHA256(fx.sshdKey) }
 
@@ -608,6 +623,125 @@ func TestCacheVersionE2E_MultipleHintsKeepSourceOrder(t *testing.T) {
 	}
 }
 
+// TestCacheForwardEndToEnd_ClientVersionHeaderAndDeviceCodeRecord：新客户端的
+// 拉快照、锚定转发、元数据编辑请求都声明版本；权威端只在拉快照时覆盖
+// 记录，未声明会变回空值，超长值按规格截断并去掉不可打印字符。
+func TestCacheForwardEndToEnd_ClientVersionHeaderAndDeviceCodeRecord(t *testing.T) {
+	fx := newCacheFwdFixture(t)
+	previousVersion := buildinfo.Version
+	buildinfo.Version = "dev"
+	t.Cleanup(func() { buildinfo.Version = previousVersion })
+
+	cacheDir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DIR", cacheDir)
+	dek, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	memoryKeyProvider := &store.MemKeyProvider{}
+	if err := memoryKeyProvider.Set(dek); err != nil {
+		t.Fatal(err)
+	}
+	previousKeyProvider := clientops.DekProvider
+	clientops.DekProvider = func(string) store.KeyProvider { return memoryKeyProvider }
+	t.Cleanup(func() { clientops.DekProvider = previousKeyProvider })
+
+	if _, err := clientops.DoPull(fx.cred.URL, fx.cred.Token, fx.cred.Pin, clientops.PullOpts{StatusOut: io.Discard}); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if got := fx.seenClientVersion("/snapshot"); got != "dev" {
+		t.Fatalf("snapshot client version header = %q, want %q", got, "dev")
+	}
+	if got := fx.deviceCodeClientVersion(t); got != "dev" {
+		t.Fatalf("device code client version after pull = %q, want %q", got, "dev")
+	}
+
+	brokerSession := fx.newBroker(t, nil, fx.cred)
+	text, isError := callExec(t, brokerSession, fx.targetID, "hi")
+	if isError {
+		t.Fatalf("exec through anchored forwarding must succeed: %s", text)
+	}
+	if got := fx.seenClientVersion("/pin-hostkey"); got != "dev" {
+		t.Fatalf("pin-hostkey client version header = %q, want %q", got, "dev")
+	}
+
+	metadataForwarder, err := clientops.NewMetadataForwarder(fx.cred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadataForwarder.Close()
+	metadataServer, tunnels, tasks, cleanup, err := mcpserver.NewCacheBroker(
+		fx.projToken, fx.snap, filepath.Join(t.TempDir(), "audit.log"), nil,
+		clientops.ForwardingHostKeys(mustForwarder(t, fx.cred)), "laptop", metadataForwarder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	t.Cleanup(func() { tunnels.CloseAll(); tasks.CloseAll() })
+	metadataSession := attachMCPClient(t, metadataServer)
+	role := "edited by the client"
+	text, isError = callTool(t, metadataSession, "update_server_metadata", map[string]any{
+		"server_id":         fx.targetID,
+		"expected_revision": 0,
+		"role":              role,
+	})
+	if isError {
+		t.Fatalf("metadata edit must succeed: %s", text)
+	}
+	if got := fx.seenClientVersion("/server-metadata"); got != "dev" {
+		t.Fatalf("server-metadata client version header = %q, want %q", got, "dev")
+	}
+
+	rawSnapshotPull := func(clientVersion string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, fx.serveHTTP.URL+"/snapshot", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+fx.cred.Token)
+		if clientVersion != "" {
+			req.Header.Set("X-Sshmgr-Client-Version", clientVersion)
+		}
+		res, err := fx.serveHTTP.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		_, _ = io.Copy(io.Discard, res.Body)
+		return res.StatusCode
+	}
+
+	if status := rawSnapshotPull(""); status != http.StatusOK {
+		t.Fatalf("snapshot pull without client version returned %d, want 200", status)
+	}
+	if got := fx.deviceCodeClientVersion(t); got != "" {
+		t.Fatalf("snapshot pull without client version must clear the stored version, got %q", got)
+	}
+
+	declaredVersion := "A" + string(rune(0x200b)) + strings.Repeat("A", 69) + " tail"
+	if status := rawSnapshotPull(declaredVersion); status != http.StatusOK {
+		t.Fatalf("snapshot pull with a long client version returned %d, want 200", status)
+	}
+	if got := fx.deviceCodeClientVersion(t); got != strings.Repeat("A", 64) {
+		t.Fatalf("stored client version = %q, want the first 64 printable characters", got)
+	}
+}
+
+func (fx *cacheFwdFixture) deviceCodeClientVersion(t *testing.T) string {
+	t.Helper()
+	tokens, err := fx.serve.ListCacheTokens()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, token := range tokens {
+		if token.Name == "laptop" {
+			return token.ClientVersion
+		}
+	}
+	t.Fatal("laptop device code not found")
+	return ""
+}
+
 // TestCacheForwardE2E_GenerationSwapKeepsThePin is T5b (black-box): a hot
 // rebuild fires between the broker's 201 and the local apply (the reload is
 // consulted exactly there by the real-time resolution rule). The anchor must
@@ -627,7 +761,7 @@ func TestCacheForwardE2E_GenerationSwapKeepsThePin(t *testing.T) {
 	if err := fx.serve.GrantServers(fx.profID, []string{witnessID}); err != nil {
 		t.Fatal(err)
 	}
-	snap2, err := fx.serve.ExportSnapshotForProfile(fx.profID)
+	snap2, err := fx.serve.ExportSnapshotForProfile(fx.profID, false)
 	if err != nil {
 		t.Fatal(err)
 	}

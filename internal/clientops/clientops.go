@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
@@ -471,6 +472,13 @@ type PullResult struct {
 	Instance string
 }
 
+// setAuthorityRequestHeaders 统一构造客户端访问权威端的请求头。设备码与
+// 客户端版本必须一起出现；新增权威端请求时应复用这里，避免某条路径漏声明。
+func setAuthorityRequestHeaders(req *http.Request, deviceCode string) {
+	req.Header.Set("Authorization", "Bearer "+deviceCode)
+	req.Header.Set("X-Sshmgr-Client-Version", buildinfo.Version)
+}
+
 // DoPull fetches /snapshot from url with the device code and atomically writes
 // cache.bin + cache.meta.json. pin=="" means no pin: AllowPlain must be true or
 // the pull refuses (F4 hard-fail contract). pin!="" pins TLS to that SPKI
@@ -572,7 +580,7 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 	if err != nil {
 		return PullResult{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+code)
+	setAuthorityRequestHeaders(req, code)
 	res, err := client.Do(req)
 	if err != nil {
 		return PullResult{}, fmt.Errorf("pull: %w", err)

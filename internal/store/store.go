@@ -337,6 +337,11 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "cache_tokens", "profile_id", "TEXT REFERENCES profiles(id)"); err != nil {
 		return err
 	}
+	// 票 #90：设备码表记录最近一次拉取快照声明的客户端版本。空值表示
+	// 没有声明版本；旧行迁移为空值，即按旧版客户端显示。
+	if err := addColumnIfMissing(db, "cache_tokens", "client_version", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	// 2026-09-01 SAS 落行(撤销 rev4:69 降级勘误):serve 在 enroll 时算好 6 位
 	// SAS 写入本列,批准面(TUI/CLI/批2 Web)经同一张表读到真值做双屏比对。
 	// 落库的仅是 ~20bit 比对码(本就印在人眼屏幕上);priv/kAck/kCreds 仍只在
@@ -595,6 +600,7 @@ CREATE TABLE IF NOT EXISTS cache_tokens (
   token_prefix TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   profile_id TEXT REFERENCES profiles(id),
+  client_version TEXT NOT NULL DEFAULT '',
   last_pull_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL

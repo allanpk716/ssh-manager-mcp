@@ -274,3 +274,75 @@ func TestCacheTokensBind(t *testing.T) {
 		}
 	}
 }
+
+// TestCacheTokensLsShowsClientVersion：旧设备码表自动加「客户端版本」列；
+// 已声明版本的设备码显示版本，从未声明的设备码显示固定的旧版提示。
+func TestCacheTokensLsShowsClientVersion(t *testing.T) {
+	dir := t.TempDir()
+	mk, _ := store.GenerateMasterKey()
+	storePath := filepath.Join(dir, "test.db")
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         storePath,
+		"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mk),
+		"SSHMGR_SERVE_CERT":    filepath.Join(dir, "serve-cert.pem"),
+		"SSHMGR_SERVE_KEY":     filepath.Join(dir, "serve-key.pem"),
+	})
+
+	db, err := sql.Open("sqlite", storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+		testschema.OldShapeCacheTokens,
+		`INSERT INTO profiles VALUES ('p1','team-a',1,1)`,
+		`INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,last_pull_at,created_at,updated_at)
+		 VALUES ('ct-new','laptop-new',x'00',x'00','newXXX','active',1000,1,1)`,
+		`INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,last_pull_at,created_at,updated_at)
+		 VALUES ('ct-old','laptop-old',x'00',x'00','oldXXX','active',1000,1,1)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 先打开一次旧库，让现有的加列迁移机制补上 client_version；再从外部
+	// 写入已声明版本，命令测试只观察 `cache-tokens ls` 的最终显示。
+	st, err := store.Open(storePath, mk)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	st.Close()
+	db, err = sql.Open("sqlite", storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE cache_tokens SET client_version='9.8.7' WHERE id='ct-new'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	root := NewRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetArgs([]string{"cache-tokens", "ls"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("cache-tokens ls: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"laptop-new",
+		"client_version=9.8.7",
+		"laptop-old",
+		"client_version=旧版客户端:不支持机密项",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("cache-tokens ls missing %q:\n%s", want, got)
+		}
+	}
+}

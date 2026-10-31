@@ -521,7 +521,7 @@ func TestApp_TabSwitchRefetchesPages(t *testing.T) {
 	if len(cp0.items) != 1 || !cp0.items[0].LastPullAt.IsZero() {
 		t.Fatalf("premise: page snapshot must predate the pull, got %+v", cp0.items)
 	}
-	if err := a.st.TouchCacheToken(id); err != nil {
+	if err := a.st.TouchCacheToken(id, ""); err != nil {
 		t.Fatal(err)
 	}
 	// Tab onto the 设备码 page → the externally-written pull time is visible.

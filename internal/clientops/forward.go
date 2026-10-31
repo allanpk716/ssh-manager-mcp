@@ -207,7 +207,7 @@ func (f *PinForwarder) Forward(host string, port int, marshaledKey []byte) error
 	if err != nil {
 		return &forwardError{text: forwardMainMessage(host, port, fp), err: err}
 	}
-	req.Header.Set("Authorization", "Bearer "+f.code)
+	setAuthorityRequestHeaders(req, f.code)
 	res, err := f.client.Do(req)
 	if err != nil {
 		// Unreachable broker or the 10s cap tripped: §4 main message. The cause
