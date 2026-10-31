@@ -71,6 +71,7 @@ var doctorCheckFuncs = []func() []doctorCheck{
 	checkServeCert,
 	checkServeSvc,
 	checkClientCache,
+	checkClientVersions,
 	checkClientCacheInstances,
 	checkUpdateGeneration,
 }
@@ -741,6 +742,28 @@ func checkClientCache() []doctorCheck {
 	}
 	cacheSidecarMatrix(&c, dir, dekP, "", age)
 	return []doctorCheck{c}
+}
+
+// checkClientVersions 列出本机二进制版本与客户端加密快照里的推荐版本。
+// 无法比较时也原样展示，让开发构建或旧权威端保持可见。
+func checkClientVersions() []doctorCheck {
+	state, err := roles.Load()
+	if err != nil || state == nil || state.Role != roles.RoleClient {
+		return nil
+	}
+	snap, err := clientops.LoadCacheSnapshot()
+	if err != nil {
+		return nil
+	}
+	recommended := snap.RecommendedVersion
+	if recommended == "" {
+		recommended = "未记录"
+	}
+	return []doctorCheck{{
+		Name:   "client-versions",
+		Status: statusInfo,
+		Detail: fmt.Sprintf("客户端版本 %s；推荐版本 %s", buildinfo.Version, recommended),
+	}}
 }
 
 // cacheSidecarMatrix completes a cache row whose cache.bin exists and statted

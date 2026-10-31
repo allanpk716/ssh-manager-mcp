@@ -122,6 +122,12 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *Tunn
 // returning the forwarding wrapper (see run.go / hostkey_forward.go), whose
 // reads and writes re-resolve the current generation inside the callback.
 func NewServerFromSource(storeFn func() *store.Store, profileID, projectID string, hkFn func() sshbroker.HostKeyStore, meta MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, error) {
+	return NewServerFromSourceWithHints(storeFn, profileID, projectID, hkFn, meta)
+}
+
+// NewServerFromSourceWithHints 额外把会话提示来源挂到通用工具包装层。既有
+// 构造函数不传来源，单机与权威端的工具面保持不变。
+func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projectID string, hkFn func() sshbroker.HostKeyStore, meta MetadataEditor, sources ...SessionHintSource) (*mcp.Server, *TunnelManager, *TaskManager, error) {
 	if hkFn == nil {
 		hkFn = func() sshbroker.HostKeyStore { return storeFn() }
 	}
@@ -158,6 +164,10 @@ func NewServerFromSource(storeFn func() *store.Store, profileID, projectID strin
 	// NewServerFromSource 的返回形状被 serve.go 等既有调用方依赖), stdio
 	// 桥入口 (run.go serveBridge) 经 busyTrackerFor 取用。
 	busy := NewBusyTracker(tunnels.ActiveTunnels, tasks.RunningTasks)
+	for _, source := range sources {
+		busy.hints.Add(source)
+	}
+	attachSessionHints(srv, busy.hints)
 	serverRuntimes.Store(srv, busy)
 
 	uploadCap, err := resolveUploadContentCap() // env seam (SSHMGR_UPLOAD_CONTENT_MAX): invalid/非正/>1 GiB → construction fails (fail-closed, spec rev3 §3.1)

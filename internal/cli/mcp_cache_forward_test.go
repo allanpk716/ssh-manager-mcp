@@ -22,6 +22,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,6 +37,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/crypto/ssh"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
@@ -203,6 +205,27 @@ func callTool(t *testing.T, sess *mcp.ClientSession, name string, args map[strin
 	return text, res.IsError
 }
 
+func callToolTexts(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any) []string {
+	t.Helper()
+	texts, _, _ := callToolResultTexts(t, sess, name, args)
+	return texts
+}
+
+func callToolResultTexts(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any) ([]string, bool, any) {
+	t.Helper()
+	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, content := range res.Content {
+		if text, ok := content.(*mcp.TextContent); ok {
+			texts = append(texts, text.Text)
+		}
+	}
+	return texts, res.IsError, res.StructuredContent
+}
+
 func callExec(t *testing.T, sess *mcp.ClientSession, serverID, command string) (string, bool) {
 	return callTool(t, sess, "exec_command", map[string]any{"server_id": serverID, "command": command})
 }
@@ -343,6 +366,246 @@ func TestCacheForwardE2E_FirstConnectOnceSuccess(t *testing.T) {
 		t.Fatalf("the second connection re-forwarded: posts = %d", fx.postCount())
 	}
 	assertSidecarHasNoForwardRows(t, auditPath)
+}
+
+// TestCacheVersionE2E_SnapshotCarriesRecommendedVersion: 权威端二进制版本随
+// 快照下发,信封版本号仍为 1;真实 cache pull 把它原样写进客户端加密缓存;
+// 旧版快照结构解码新快照时忽略新增字段。
+func TestCacheVersionE2E_SnapshotCarriesRecommendedVersion(t *testing.T) {
+	savedVersion := buildinfo.Version
+	buildinfo.Version = "1.1.0"
+	t.Cleanup(func() { buildinfo.Version = savedVersion })
+
+	fx := newCacheFwdFixture(t)
+	if fx.snap.Version != 1 {
+		t.Fatalf("快写信封版本 = %d，应为 1", fx.snap.Version)
+	}
+	if fx.snap.RecommendedVersion != "1.1.0" {
+		t.Fatalf("推荐版本 = %q，应为 1.1.0", fx.snap.RecommendedVersion)
+	}
+
+	cacheDir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DIR", cacheDir)
+	dek, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem := &store.MemKeyProvider{}
+	if err := mem.Set(dek); err != nil {
+		t.Fatal(err)
+	}
+	prevDek := clientops.DekProvider
+	clientops.DekProvider = func(string) store.KeyProvider { return mem }
+	t.Cleanup(func() { clientops.DekProvider = prevDek })
+
+	if _, err := clientops.DoPull(fx.cred.URL, fx.cred.Token, fx.cred.Pin, clientops.PullOpts{StatusOut: io.Discard}); err != nil {
+		t.Fatalf("pull snapshot: %v", err)
+	}
+	loaded, err := clientops.LoadCacheSnapshot()
+	if err != nil {
+		t.Fatalf("load cached snapshot: %v", err)
+	}
+	if loaded.RecommendedVersion != "1.1.0" {
+		t.Fatalf("缓存中的推荐版本 = %q，应为 1.1.0", loaded.RecommendedVersion)
+	}
+
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(encoded, &legacy); err != nil {
+		t.Fatalf("旧版快照解码失败：%v", err)
+	}
+	if legacy.Version != 1 {
+		t.Fatalf("旧版快照信封版本 = %d，应为 1", legacy.Version)
+	}
+}
+
+// TestCacheVersionE2E_ToolHintComparesVersions: MCP 工具面按现有版本比较规则
+// 生成会话提示;相等与无法解析不提示,成功结果的结构化输出保持原样。
+func TestCacheVersionE2E_ToolHintComparesVersions(t *testing.T) {
+	fx := newCacheFwdFixture(t)
+	cases := []struct {
+		name       string
+		client     string
+		recommend  string
+		wantHint   string
+		wantNoHint bool
+	}{
+		{
+			name:      "落后",
+			client:    "1.0.0",
+			recommend: "1.1.0",
+			wantHint:  "客户端 1.0.0 落后于权威端 1.1.0，运行 `sshmgr update` 升级",
+		},
+		{
+			name:      "较新",
+			client:    "1.2.0",
+			recommend: "1.1.0",
+			wantHint:  "客户端比权威端新，建议先升级权威端",
+		},
+		{
+			name:       "相等",
+			client:     "1.1.0",
+			recommend:  "1.1.0",
+			wantNoHint: true,
+		},
+		{
+			name:       "开发版本",
+			client:     "dev",
+			recommend:  "1.1.0",
+			wantNoHint: true,
+		},
+		{
+			name:       "推荐版本为空",
+			client:     "1.1.0",
+			recommend:  "",
+			wantNoHint: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SSHMGR_TEST_VERSION", tc.client)
+			fx.snap.RecommendedVersion = tc.recommend
+			sess := fx.newBroker(t, nil, fx.cred)
+
+			res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{
+				Name:      "list_servers",
+				Arguments: map[string]any{},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var firstText string
+			for i, content := range res.Content {
+				text, ok := content.(*mcp.TextContent)
+				if !ok {
+					continue
+				}
+				if i == 0 || firstText == "" {
+					firstText = text.Text
+				}
+				if tc.wantNoHint && strings.Contains(text.Text, "权威端") {
+					t.Fatalf("不应出现版本提示：%q", text.Text)
+				}
+			}
+			if tc.wantNoHint {
+				if !strings.HasPrefix(firstText, `{"servers":`) {
+					t.Fatalf("原工具结果应仍在最前，实际为 %q", firstText)
+				}
+			} else if firstText != tc.wantHint {
+				t.Fatalf("第一段文本 = %q，应为提示 %q", firstText, tc.wantHint)
+			}
+			structured, ok := res.StructuredContent.(map[string]any)
+			if !ok || len(structured["servers"].([]any)) != 1 {
+				t.Fatalf("结构化输出被改动：%#v", res.StructuredContent)
+			}
+		})
+	}
+}
+
+// TestCacheVersionE2E_ToolHintSessionLifecycle: 同一提示内容只出现一次,版本
+// 对变化后再次出现;工具失败结果同样在最前附带提示。
+func TestCacheVersionE2E_ToolHintSessionLifecycle(t *testing.T) {
+	fx := newCacheFwdFixture(t)
+	t.Setenv("SSHMGR_TEST_VERSION", "1.0.0")
+	fx.snap.RecommendedVersion = "1.1.0"
+	var next *store.Snapshot
+	reload := func() (*store.Snapshot, bool, error) {
+		if next == nil {
+			return nil, false, nil
+		}
+		changed := next
+		next = nil
+		return changed, true, nil
+	}
+	sess := fx.newBroker(t, reload, fx.cred)
+	hint := "客户端 1.0.0 落后于权威端 1.1.0，运行 `sshmgr update` 升级"
+
+	first := callToolTexts(t, sess, "list_servers", map[string]any{})
+	if len(first) != 2 || first[0] != hint || !strings.HasPrefix(first[1], `{"servers":`) {
+		t.Fatalf("第一次工具结果内容 = %#v", first)
+	}
+	second := callToolTexts(t, sess, "list_servers", map[string]any{})
+	if len(second) != 1 || !strings.HasPrefix(second[0], `{"servers":`) {
+		t.Fatalf("同一提示只应出现一次，实际为 %#v", second)
+	}
+
+	next = &store.Snapshot{Version: 1, RecommendedVersion: "1.2.0", Profiles: fx.snap.Profiles, Projects: fx.snap.Projects}
+	third := callToolTexts(t, sess, "list_servers", map[string]any{})
+	wantChanged := "客户端 1.0.0 落后于权威端 1.2.0，运行 `sshmgr update` 升级"
+	if len(third) != 2 || third[0] != wantChanged || !strings.HasPrefix(third[1], `{"servers":`) {
+		t.Fatalf("版本对变化后应再次提示，实际为 %#v", third)
+	}
+
+	failureSession := fx.newBroker(t, nil, fx.cred)
+	failure, failureIsError, failureStructured := callToolResultTexts(t, failureSession, "exec_command", map[string]any{
+		"server_id": "missing", "command": "true",
+	})
+	if !failureIsError {
+		t.Fatal("越权 exec_command 应保持为失败的工具结果")
+	}
+	if len(failure) != 2 || failure[0] != hint || !strings.Contains(failure[1], "server is not in your profile") {
+		t.Fatalf("失败的工具结果应先携带提示，实际为 %#v", failure)
+	}
+	failureFields, ok := failureStructured.(map[string]any)
+	if !ok || len(failureFields) != 5 {
+		t.Fatalf("失败工具结果的结构化输出被改动：%#v", failureStructured)
+	}
+	if _, exists := failureFields["stdout"]; !exists {
+		t.Fatalf("失败工具结果丢失了结构化输出：%#v", failureStructured)
+	}
+}
+
+// TestCacheVersionE2E_StandaloneDoesNotHint: 单机部署没有推荐版本通道,即使
+// 本进程版本可比较也不在 MCP 工具结果前插入提示。
+func TestCacheVersionE2E_StandaloneDoesNotHint(t *testing.T) {
+	fx := newCacheFwdFixture(t)
+	t.Setenv("SSHMGR_TEST_VERSION", "1.0.0")
+	project, err := fx.serve.VerifyToken(fx.projToken)
+	if err != nil || project == nil {
+		t.Fatalf("verify project token: %v, %#v", err, project)
+	}
+	srv, _, _, err := mcpserver.NewServer(fx.serve, project.ProfileID, project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := attachMCPClient(t, srv)
+	texts := callToolTexts(t, sess, "list_servers", map[string]any{})
+	if len(texts) != 1 || !strings.HasPrefix(texts[0], `{"servers":`) {
+		t.Fatalf("单机工具结果不应有提示，实际为 %#v", texts)
+	}
+}
+
+// TestCacheVersionE2E_MultipleHintsKeepSourceOrder: 会话提示通道支持多条
+// 提示,按注册顺序插在原工具结果前;后续调用全部去重。
+func TestCacheVersionE2E_MultipleHintsKeepSourceOrder(t *testing.T) {
+	fx := newCacheFwdFixture(t)
+	project, err := fx.serve.VerifyToken(fx.projToken)
+	if err != nil || project == nil {
+		t.Fatalf("verify project token: %v, %#v", err, project)
+	}
+	srv, _, _, err := mcpserver.NewServerFromSourceWithHints(
+		func() *store.Store { return fx.serve },
+		project.ProfileID, project.ID, nil, nil,
+		func() string { return "变更提示" },
+		func() string { return "版本提示" },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := attachMCPClient(t, srv)
+	first := callToolTexts(t, sess, "list_servers", map[string]any{})
+	if len(first) != 3 || first[0] != "变更提示" || first[1] != "版本提示" || !strings.HasPrefix(first[2], `{"servers":`) {
+		t.Fatalf("第一次工具结果内容 = %#v", first)
+	}
+	second := callToolTexts(t, sess, "list_servers", map[string]any{})
+	if len(second) != 1 || !strings.HasPrefix(second[0], `{"servers":`) {
+		t.Fatalf("两条提示都应去重，实际为 %#v", second)
+	}
 }
 
 // TestCacheForwardE2E_GenerationSwapKeepsThePin is T5b (black-box): a hot

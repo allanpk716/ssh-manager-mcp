@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/models"
 )
 
@@ -12,14 +13,17 @@ import (
 // Credential Secret/Passphrase hold DECRYPTED plaintext; the serialized form
 // MUST be encrypted (vaultio.Encrypt) before touching disk. Version = format version.
 type Snapshot struct {
-	Version     int                  `json:"version"`
-	Credentials []SnapshotCredential `json:"credentials"`
-	Servers     []SnapshotServer     `json:"servers"`
-	Profiles    []SnapshotProfile    `json:"profiles"`
-	Grants      []SnapshotGrant      `json:"grants"`
-	Projects    []SnapshotProject    `json:"projects"`
-	HostKeys    []SnapshotHostKey    `json:"host_keys"`
-	Audit       []SnapshotAudit      `json:"audit"`
+	Version int `json:"version"`
+	// RecommendedVersion 是导出这份快照的二进制版本。多机客户端用它比较
+	// 自己是否落后；旧快照与旧客户端分别解码、忽略该字段。
+	RecommendedVersion string               `json:"recommended_version"`
+	Credentials        []SnapshotCredential `json:"credentials"`
+	Servers            []SnapshotServer     `json:"servers"`
+	Profiles           []SnapshotProfile    `json:"profiles"`
+	Grants             []SnapshotGrant      `json:"grants"`
+	Projects           []SnapshotProject    `json:"projects"`
+	HostKeys           []SnapshotHostKey    `json:"host_keys"`
+	Audit              []SnapshotAudit      `json:"audit"`
 	// 命令策略段 (ticket #15):自定义规则与被停用
 	// 的默认规则编号。规则全局一套,两条导出路径都携带,不做 profile 裁剪。
 	// 旧快照(策略段尚不存在)解码为 nil 切片 → 导入零行 → 内置默认规则
@@ -154,7 +158,7 @@ func (s *Store) ListHostKeys() ([]SnapshotHostKey, error) {
 // ExportSnapshot captures every table. Credentials are DECRYPTED under s.masterKey.
 // Requires the store to be unlocked. The caller must encrypt the serialized form.
 func (s *Store) ExportSnapshot() (*Snapshot, error) {
-	snap := &Snapshot{Version: 1}
+	snap := &Snapshot{Version: 1, RecommendedVersion: buildinfo.Version}
 
 	// servers (COALESCE the nullable text cols to '' — credential_id is nullable
 	// since Plan 20 C0: a credential-less server carries "" in the snapshot)
@@ -317,7 +321,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string) (*Snapshot, error) {
 		return nil, err
 	}
 
-	snap := &Snapshot{Version: 1}
+	snap := &Snapshot{Version: 1, RecommendedVersion: buildinfo.Version}
 
 	// profile row
 	rp, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles WHERE id=?`, profileID)

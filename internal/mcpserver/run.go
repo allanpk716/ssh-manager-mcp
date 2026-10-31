@@ -212,10 +212,23 @@ func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.
 		return nil, nil, err
 	}
 	h.profileID = project.ProfileID // set BEFORE the holder is served: Current()'s drift guard depends on it
+	h.lastSnap = snap
 	h.cur.Store(st)
 	h.stores = append(h.stores, st)
 	h.tmpPaths = append(h.tmpPaths, tmpPath)
 	return h, project, nil
+}
+
+// versionHint 先刷新当前快照，再比较桥自身版本与快照携带的推荐版本。这里
+// 先调用 Current，缓存重载后的第一枚工具调用就能报告新版本对，而不是晚一枚。
+func (h *cacheStoreHolder) versionHint() string {
+	h.Current()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.lastSnap == nil {
+		return ""
+	}
+	return updater.VersionMismatchHint(hotswap.BridgeVersion(), h.lastSnap.RecommendedVersion)
 }
 
 // RunStdioCache hydrates a Snapshot into a temporary read-only store, verifies the SAME
@@ -298,7 +311,7 @@ func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func
 		hk := fwdBinder(h.Current)
 		hkFn = func() sshbroker.HostKeyStore { return hk }
 	}
-	srv, tunnels, tasks, err := NewServerFromSource(h.Current, project.ProfileID, project.ID, hkFn, metaEditor)
+	srv, tunnels, tasks, err := NewServerFromSourceWithHints(h.Current, project.ProfileID, project.ID, hkFn, metaEditor, h.versionHint)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}

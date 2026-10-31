@@ -137,6 +137,27 @@ func CompareVersions(a, b Version) int {
 	return sign(len(a.Pre), len(b.Pre))
 }
 
+// VersionMismatchHint 比较客户端二进制版本与权威端下发的推荐版本。空字符串
+// 表示不提示：两边相等，或任一边不是可解析的发布版本（例如 dev）。
+func VersionMismatchHint(clientVersion, recommendedVersion string) string {
+	client, err := ParseVersion(clientVersion)
+	if err != nil {
+		return ""
+	}
+	recommended, err := ParseVersion(recommendedVersion)
+	if err != nil {
+		return ""
+	}
+	switch CompareVersions(client, recommended) {
+	case -1:
+		return fmt.Sprintf("客户端 %s 落后于权威端 %s，运行 `sshmgr update` 升级", clientVersion, recommendedVersion)
+	case 1:
+		return "客户端比权威端新，建议先升级权威端"
+	default:
+		return ""
+	}
+}
+
 // NormalizeVersionOutput applies the staged-binary self-check contract (spec
 // §4.3): trim surrounding whitespace, then strip one leading "v", so the
 // binary's `version` output ("v1.2.3", " 1.2.3\n") compares equal to the
