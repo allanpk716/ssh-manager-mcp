@@ -197,17 +197,165 @@ sudo -n rmdir /mnt/mounttest
 sudo -n systemctl daemon-reload
 ```
 
-## 5. 结果(执行者填写,脱敏)
+## 5. 结果(已回填,脱敏)
 
-按下面格式填写,每个小项都要有:
+> 执行日期:2026-10-31。SSH 全程经 ssh-manager。记录中的替换:<NAS 地址>=NAS 的虚拟局域网地址,<测试共享>/<测试账号>/***=本次凭据与共享,<既有共享>/<既有映射>=owner 测试前就存在、与本次无关的数据。部分 Windows 中文报错在传输编码下转写为可读原文,语义未改。
 
+### 5.0 环境与预检
+
+- Windows 测试机:Windows 11(内部版本 22621),密钥认证 OpenSSH,默认 shell 实测为 cmd.exe。它同时是 ssh-manager 多机架构 serve broker 的宿主(因此一切注销/重启类步骤未执行)。机器上存在 owner 自己的持久盘符映射 Z: → `\\<NAS 地址>\<既有共享>`,全程未改动。
+- macOS 测试机:macOS 27.0.1,常驻「开机自动登录」的全自动服务器(Orca、Ferryman 等随桌面会话自启)。本地免密 sudo(命令内 `sudo -n`)。
+- NAS:群晖 DS918+。445 端口连通:两台测试机经虚拟局域网地址均通(NAS 的局域网地址实测也通)。实测协商 SMB 方言为 **2.0.2**(客户端 Get-SmbConnection 的 Dialect 列),与 NAS smb.conf 的 `max protocol=SMB2` 一致。
+- 「禁止同一 IP 多个连接」开关:owner 口头确认无禁止(未在 DSM 界面逐项复核)。测试中同一客户端同时存在多条到 NAS 的会话,未出现被拒。
+- 共享与账号:owner 指定使用 NAS 上**已有的** <测试共享> 与专用测试账号(未按第 1 节预期新建空共享)。执行约定:测试文件一律 `sshmgr-` 前缀;不在记录里列举共享中已有文件;测后删除。
+- Linux 测试机:原候选机两次 TCP 连接超时(机器不可达),整节跳过(见 5.6)。
+
+### 5.1 Windows 会话身份
+
+命令:`whoami /all`、`query user`
+输出(节选):用户 <Windows 测试机>\<Windows 账号>;组含 `NT AUTHORITY\NETWORK`、`BUILTIN\Administrators`;`query user` 显示该账号有一条远程桌面会话(状态 Active、长时间空闲)。
+结论:SSH 会话为网络登录(Network logon),无交互桌面;但机器上存在 owner 的远程桌面会话,后续 (c) 免密码变体即借用它。
+
+### 5.2 Windows (a) cmdkey 复现
+
+命令:`cmdkey /add:<NAS 地址> /user:<测试账号> /pass:***`
+输出:`CMDKEY: Credentials cannot be saved from this logon session.`;随后 `cmdkey /list` 为 `* NONE *`。
+结论:复现成功。网络登录会话无法向凭据管理器写入。
+
+### 5.3 Windows (b) 显式凭据访问 UNC
+
+命令(同一 exec_command 会话内):
 ```
-### Windows (a) cmdkey 复现
-命令:...
-输出:...
-结论:...
+net use \\<NAS 地址>\<测试共享> /user:<测试账号> ***
+dir \\<NAS 地址>\<测试共享>\sshmgr-mounttest*
+echo hello> \\<NAS 地址>\<测试共享>\sshmgr-mounttest-from-ssh.txt
+type \\<NAS 地址>\<测试共享>\sshmgr-mounttest-from-ssh.txt
+net use
 ```
+输出:连接成功;写入 8 字节文件、读回 `hello`;`net use` 显示 `\\<NAS 地址>\<测试共享>` 状态 OK。
 
-最后写一段「总结」,逐条回答 issue #41 的三组问题(Windows a–d、macOS、Linux),并列出未能验证的项和原因。
+新开 exec_command(新 SSH 登录会话,不带凭据):
+命令:`dir \\<NAS 地址>\<测试共享>\sshmgr-mounttest*`
+输出:失败——「用户名或密码不正确。」(系统错误 1326);`net use` 中无该连接(仅剩原有 Z: 记忆条目)。
+
+PowerShell 对照(独立会话):
+命令:`New-PSDrive -Name T -PSProvider FileSystem -Root '\\<NAS 地址>\<测试共享>' -Credential <PSCredential>` 后 `Get-ChildItem`
+输出:成功列出并读到测试文件。
+结论:
+1. 同会话显式凭据读写可行;
+2. 凭据与 SMB 连接都绑定登录会话:新会话不可见、不可用,必须重新携带凭据;
+3. PSDrive 是等价的会话内做法(随进程消失,无残留);
+4. 桌面会话直接访问:未直接验证(owner 未操作桌面),由 5.4 (c)-2 的任务日志侧面证明桌面会话存在且可写凭据。
+
+### 5.4 Windows (c) 计划任务(免密码变体)
+
+手册原方案需 Windows 登录密码(`/rp`)。owner 决定不提供密码,改为免密码变体:创建任务时不指定 `/ru`/`/rp`,任务登录方式为「仅交互」(Interactive only),手动 `/run` 时借用 owner 活跃的远程桌面会话执行。带密码路径未测(见未验证清单)。
+
+(c)-1 创建:
+命令:`schtasks /create /tn sshmgr-mounttest-nopw /sc onlogon /rl highest /tr "cmd /c cmdkey /add:<NAS 地址> /user:<测试账号> /pass:*** > C:\Users\Public\mounttest-nopw.log 2>&1"`
+输出:`SUCCESS: ... successfully been created`;查询显示 `Logon Mode: Interactive only`、`Run As User: <Windows 账号>`。
+结论:密钥认证会话内创建无密码任务可行。
+
+(c)-2 手动运行与凭据落库:
+命令:`schtasks /run /tn sshmgr-mounttest-nopw`,随后读日志、`cmdkey /list`
+输出:`Last Result: 0`;日志为 `CMDKEY: 成功保存凭据。`;但 SSH 会话 `cmdkey /list` 仍为 `* NONE *`。
+结论:任务在交互会话里执行成功、凭据确实存入;**网络会话枚举不到这条凭据**。
+
+(c)-3 新 SSH 会话静默认证(关键测试):
+命令(新会话,无凭据):`dir \\<NAS 地址>\<测试共享>\sshmgr-nosuchpattern*`
+输出:「用户名或密码不正确。」(1326)。
+结论:**桌面会话存入的凭据,SSH 网络会话自动认证用不上**——对「让 SSH 会话共享桌面侧凭据」是否定性结论。
+
+(c)-4 net use 变体:
+命令:任务 `/tr` 换成 `net use \\<NAS 地址>\<测试共享> /user:<测试账号> *** /persistent:yes`
+输出:运行成功(日志「命令成功完成。」);但 SSH 会话 `net use` 看不到该 UNC 连接(对比:盘符型记忆条目如原有 Z: 跨会话可见,状态 Unavailable)。
+结论:桌面会话内的 net use 同样会话绑定;`/persistent:yes` 的 UNC 记忆对 SSH 会话不可见。
+
+(c)-5 onstart 变体(只创建未运行):
+命令:`schtasks /create ... /sc onstart`(免密码)
+输出:创建成功;`Logon Mode: Interactive only`。
+结论:免密码的 onstart 任务「能创建、但开机无登录时不会运行」;要开机无人登录运行必须带密码(`/rp`),该路径未测。
+
+(c)-7 SYSTEM 变体(手册可选项):
+命令:`schtasks /create ... /ru SYSTEM`(免密码,无需桌面)后 `/run`
+输出:`Logon Mode: Interactive/Background`,`Last Result: 1`,任务内 `dir` 失败(1326)。
+结论:SYSTEM 账户用不到用户凭据,与手册预期一致。
+
+### 5.5 Windows (d) persistent:yes 盘符映射
+
+偏差说明:盘符 Z: 已被 owner 既有映射占用,本项改用 **Y:**;手册清理段的 `net use * /delete /y` 与 `reg delete HKCU\Network\Z /f` 会误删该既有映射,**未按手册执行**,清理改为只删本次建立的条目。
+命令(同会话):`net use Y: \\<NAS 地址>\<测试共享> /user:<测试账号> *** /persistent:yes`
+输出:成功;`net use` 显示 `Y: ... OK`;`reg query HKCU\Network` 出现 `Y` 键(RemotePath/UserName 等);`cmdkey /list` 仍为 `* NONE *`。
+新会话验证:`net use` 显示 `Y: ... Unavailable`(仅注册表记忆,无活动连接);`if exist Y:\` 不成立,无法访问。
+结论:盘符映射成功且注册表持久化(下次该用户交互登录时会尝试恢复);**密码不落凭据管理器**,恢复需要凭据;活动连接不跨会话。
+附带观察:
+- owner 既有 Z:→<既有共享> 持久映射本身就是该机制的现存实例;
+- `/persistent:yes` 会把用户级「新连接是否记住」默认翻为「记住」,测后已还原为「不记住」;
+- 系统级连接表(Get-SmbConnection)显示桌面会话的既有连接实际存活——SSH 会话里 `net use` 显示的 Unavailable 只代表「盘符未恢复到本会话」,不代表系统无连接;本次测试在桌面会话建立过的一条连接,SSH 侧删不掉,已由桌面会话内任务执行删除。
+
+### 5.6 macOS(两轮:手册直接图 + 补充间接图)
+
+公共条件:macOS 27.0.1;`sudo -n` 可用;凭据写在映射文件里(URL 编码:密码中的反斜杠→`%5C`,实测有效);映射文件权限 600、属主 root。
+
+第一轮——直接图(手册配方,含一次重启):
+1. 备份并编辑 `/etc/auto_master`(追加 `/-  auto_smb  -nosuid,noowners`),写 `/etc/auto_smb`(`/Volumes/mounttest  -fstype=smbfs,soft  ://<测试账号>:***@<NAS 地址>/<测试共享>`)。
+2. `automount -cv` 后**触发点未生成**:`/Volumes/mounttest` 不存在;automountd 日志:`automount_realpath:getattrlist:fail:2`、`mountpoint unavailable`。
+3. 补 `sudo -n mkdir -p /Volumes/mounttest` 后再 `automount -cv`:触发点生成(`map auto_smb on /Volumes/mounttest (autofs, ...)`);一 touch 即挂 SMB(`//<测试账号>@<NAS 地址>/<测试共享> on /Volumes/mounttest (smbfs, ..., mounted by <macOS 账号>)`),读写正常。
+   → **手册缺陷:macOS 直接图必须先建挂载点目录**(Linux 的 autofs 会自建,macOS 不会)。
+4. 关自动登录(`defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser`)+ 重启(owner 批准;机上 3 个 agent 会话按约定被终止)。
+5. 重启后确认无人登录(`who` 为空、`/dev/console` 属主 root),但 `/Volumes/mounttest` **目录已消失**,开机时 automountd 日志同样报 `getattrlist:fail:2`,触发点没有恢复。
+   → **直接图过不了重启:挂载点目录在关机/开机周期中被清除,automountd 不会自建**。
+6. 无人登录状态下重演「mkdir + automount -cv」:触发→挂载→写入全部成功。
+   → 机制本身无人值守可用(凭据走文件,不依赖登录与钥匙串)。
+
+第二轮——间接图(owner 批准补测,再重启一次):
+配置:`/etc/auto_master` 追加 `/mnt  auto_smb  -nosuid,noowners`;`/etc/auto_smb` 为 `mounttest  -fstype=smbfs,soft  ://<测试账号>:***@<NAS 地址>/<测试共享>`(访问路径 `/mnt/mounttest`)。
+- 部署:**无需 mkdir**,automount 自建触发点;`/mnt` 由系统目录映射(firmlink)指向数据卷。
+- 重启后无人登录(`who` 为空):触发点**由开机过程自动重建**(目录时间戳为开机后),一访问即挂载、写入成功。
+结论:**间接图免 mkdir 且抗重启,无人登录即挂即用——macOS 的推荐候选**;直接图若要用,每轮开机都需要有东西补 `mkdir`+`automount -cv`(即仍需 LaunchDaemon 一类开机钩子)。
+
+第 7 步 系统升级是否覆盖 `/etc/auto_master`:
+- 实测:`ls -lO /etc/auto_master` 无系统完整性保护旗标;`df` 显示该文件位于 `/System/Volumes/Data`(数据卷,不在密封系统卷快照内);`/etc` 是指向 `private/etc` 的符号链接;root 可改(本轮实际修改/还原过)。
+- 公开资料:社区报告互相矛盾——既有「macOS 更新后 `/etc/auto_master` 被重置为默认」的报告,也有「升级保留了自定义」的报告;未见 Apple 官方文档承诺保留。
+- 结论:不能假设升级后保留;若 #42 采纳 autofs,应配「升级后检查/重应用」兜底(或并入自愈 LaunchDaemon)。
+- 来源:[Apple StackExchange:automount is broken after upgrading macOS Monterey](https://apple.stackexchange.com/questions/440554/automount-is-broken-after-upgrading-macos-monterey)、[autofs on macOS 要点(gist)](https://gist.github.com/rudelm/7bcc905ab748ab9879ea);另经搜索引擎聚合页见到两种矛盾报告,未取得原始直接链接。
+
+### 5.7 Linux:整节未验证
+
+- 原选机两次 TCP 连接超时(机器不可达,内部状态无法评估)。
+- 备选逐台探测(三个条件:到 NAS 的 445 可达、免密 sudo、空闲且允许重启):公司/实验内网的各备选机到 NAS 均不通(无虚拟局域网成员身份,也无到 NAS 所在网段的路由);生产用途机器(推理主力、源码服务器、生产服务)排除;一台云上机器虽可达,但承载虚拟局域网管理面与多项服务,重启会波及整个虚拟局域网,排除。
+- 附带实测:NAS SMB 方言上限 2.0.2 → 手册第 4 节 fstab 配方里的 `vers=3.0` 对这台 NAS 必然失败,cifs 挂载需改用 `vers=2.0`(供 #42 参考;本轮未实测挂载)。
+
+### 5.8 清理记录(逐项复核)
+
+- Windows 测试机:Y: 映射与注册表 `HKCU\Network\Y` 已删;`cmdkey` 为空;全部 6 个测试任务(`sshmgr-mounttest-nopw/nopw2/nopw3/cleanup/cleanup2/sys`)与全部日志已删;「新连接是否记住」默认已还原;原有 Z:/<既有共享> 映射未动(注册表详情前后一致)。桌面会话曾建立的一条到 <测试共享> 的连接已由桌面会话内任务删除,系统级连接表随后仅剩 owner 自己的既有连接;凭据的删除同样在桌面会话内完成,并以 `cmdkey /list`(`* NONE *`)自证。
+- macOS 测试机:两轮各自完整清理——`/etc/auto_master` 均从备份还原(字节数一致、内容为原版)、`/etc/auto_smb` 删除、挂载卸载、触发点目录消失、无任何 smbfs 残留;自动登录经 owner 授权恢复(defaults 键写回,原有的开机自动登录口令文件未改动),并经一次重启验证:开机自动登录成功,Orca、Ferryman 随桌面会话恢复。
+- NAS:仅出现过 `sshmgr-` 前缀的测试文件,均已删除;共享、账号、服务配置零改动。
+
+### 5.9 总结(回答 issue #41 的三组问题)
+
+**Windows(a–d):**
+1. 网络登录会话 `cmdkey` 必败,凭据管理器写不进((a) 复现)。
+2. 会话内「显式凭据 net use / PSDrive」完全可用,连接与凭据随登录会话消失((b));跨会话不可继承。
+3. 持久化(`HKCU\Network` 盘符记忆)只对交互登录的下次恢复有意义((d));SSH 会话既拿不到活动连接,也没有可用凭据;密码不会随 `/persistent:yes` 落库。
+4. 计划任务路线:免密码(Interactive only,借桌面会话)能把凭据存进交互侧,但 SSH 会话枚举不到、自动认证也用不上((c)-2/3);SYSTEM 用不了用户凭据((c)-7);开机无人登录运行必须带密码((c)-5 的推论,未实测)。
+→ 对 sshmgr 的含义:Windows 上不存在「配置一次、SSH 会话自动可用」的开机级做法;可行形态是**每次 exec_command 会话内注入显式凭据**(net use 或 PSDrive,均可程序化),凭据由 sshmgr 的机密项供给。
+
+**macOS:**
+- 直接图:需补 mkdir 且过不了重启,不能单独作为方案;
+- **间接图:一行 auto_master + 一个 600 权限映射文件,免 mkdir、抗重启、无人登录即挂即用——推荐 #42 采纳的候选**;
+- 系统升级可能重置 `/etc/auto_master`(文件在数据卷、无系统完整性保护,但社区报告矛盾),需配升级后自愈检查。
+
+**Linux:** 未验证(原选机不可达、无合格替补);NAS 方言 2.0.2 对 `vers=3.0` 的否定性约束已实测记录。
+
+### 5.10 未验证项及原因
+
+1. Windows (c) 带 `/rp` 密码的全部小项,以及 onlogon/onstart 的真实注销/开机触发:需要重启 serve broker 宿主(已排除)与登录密码(owner 决定不提供)。
+2. Windows (b) 桌面会话(资源管理器)直接访问:owner 未操作桌面;已由 (c)-2 任务日志侧面证明桌面会话可存凭据。
+3. Linux 全节(含 fstab+nofail 配方、NAS 不在线开机实验、断线重连):原选机不可达,备选无一满足条件。
+4. macOS 系统升级覆盖行为:未实际升级,仅文件位置实测 + 公开资料(互相矛盾),按「可能重置」处置。
+5. NAS「禁止同一 IP 多个连接」开关状态:owner 口头确认,未在 DSM 界面逐项复核。
+
+---
 
 填写完成后,把本文件交还 owner;owner 会在新的会话里把结论贴到 issue #41 并关票。
