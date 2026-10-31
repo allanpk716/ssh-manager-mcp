@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -747,15 +748,11 @@ func checkClientCache() []doctorCheck {
 // checkClientVersions 列出本机二进制版本与客户端加密快照里的推荐版本。
 // 无法比较时也原样展示，让开发构建或旧权威端保持可见。
 func checkClientVersions() []doctorCheck {
-	state, err := roles.Load()
-	if err != nil || state == nil || state.Role != roles.RoleClient {
+	state, err := readClientVersionState("", io.Discard)
+	if err != nil || !state.IsClient || state.Snapshot == nil {
 		return nil
 	}
-	snap, err := clientops.LoadCacheSnapshot()
-	if err != nil {
-		return nil
-	}
-	recommended := snap.RecommendedVersion
+	recommended := state.Snapshot.RecommendedVersion
 	if recommended == "" {
 		recommended = "未记录"
 	}

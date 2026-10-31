@@ -50,8 +50,6 @@ import (
 	"golang.org/x/term"
 
 	"ssh-manager-mcp/internal/buildinfo"
-	"ssh-manager-mcp/internal/clientops"
-	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/updater"
 )
 
@@ -98,7 +96,6 @@ var (
 	registeredServeAddr  = updater.RegisteredServeAddr
 	detectHeal           = updater.DetectHeal
 	serveHTTPProbe       = probeServeHTTP
-	resolveUpdateLaunch  = roles.ResolveMode
 
 	// resolveSelf pins the binary the update replaces (canonical form).
 	resolveSelf = func() (string, error) {
@@ -145,6 +142,28 @@ type updateOpts struct {
 	file      string // --file <包>
 	sha256Hex string // --sha256 <hex>
 	noVerify  bool   // --no-verify
+	instance  string // --instance <name>
+}
+
+// updateTargetSource 表示不带 --file 时目标版本的来源；这个判定只做一次，
+// 后续版本发现、比较与输出都复用同一结果。
+type updateTargetSource int
+
+const (
+	targetFromSpecifiedVersion updateTargetSource = iota
+	targetFromRecommendedVersion
+	targetFromGitHubLatest
+)
+
+func (s updateTargetSource) String() string {
+	switch s {
+	case targetFromSpecifiedVersion:
+		return "指定版本"
+	case targetFromRecommendedVersion:
+		return "推荐版本"
+	default:
+		return "GitHub 最新版本"
+	}
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -196,6 +215,7 @@ except a failed rollback — recovery command is printed).`,
 	f.StringVar(&o.file, "file", "", "install from a local archive (.zip/.tar.gz/.tgz) instead of GitHub discovery")
 	f.StringVar(&o.sha256Hex, "sha256", "", "expected sha256 of --file (hex); with --file only")
 	f.BoolVar(&o.noVerify, "no-verify", false, "skip --file integrity check (explicit trust in the local file); with --file only")
+	f.StringVar(&o.instance, "instance", "", "read the recommended version from this named cache instance (default slot when omitted)")
 	return c
 }
 
@@ -210,6 +230,9 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 	}
 
 	// --- 1. flag validation ---------------------------------------------------
+	if err := checkInstanceFlag(o.instance); err != nil {
+		return err
+	}
 	if o.file != "" && o.wantTag != "" {
 		return errors.New("--file 与 --version 互斥:--file 的目标版本以包内 staged 输出为准,请二选一")
 	}
@@ -309,21 +332,28 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 		return fmt.Errorf("检测到旧版服务 %s 仍注册(任何态)——本次 update 中止", updater.LegacyServiceName)
 	}
 
-	// 客户端不能越过权威端已声明的版本去装 GitHub 最新版。推荐版本只读
-	// 本地加密缓存；这里不访问权威端，断网时也能执行。
+	// 三个目标来源共用同一种角色判定；客户端不能越过权威端已声明的版本
+	// 去装 GitHub 最新版。推荐版本只读本地加密缓存；这里不访问权威端，
+	// 断网时也能执行。
 	recommendedVersion := ""
+	clientRole := false
 	if o.file == "" && o.wantTag == "" {
-		launch, rerr := resolveUpdateLaunch("")
-		if rerr != nil {
-			return fmt.Errorf("判定本机角色失败: %w", rerr)
-		}
-		if launch.Role == roles.RoleClient {
-			snap, serr := clientops.LoadCacheSnapshot()
-			if serr != nil || snap == nil || snap.RecommendedVersion == "" {
-				return errors.New("无法确定推荐版本，请先升级权威端，或用 `--version` 指定")
+		state, readErr := readClientVersionState(o.instance, errw)
+		if readErr != nil && state.IsClient {
+			if errors.Is(readErr, errAmbiguousClientCacheInstance) {
+				return readErr
 			}
-			recommendedVersion = snap.RecommendedVersion
+			return errors.New("无法确定推荐版本，请先升级权威端，或用 `--version` 指定")
 		}
+		clientRole = state.IsClient
+		if state.IsClient && state.Snapshot != nil {
+			recommendedVersion = state.Snapshot.RecommendedVersion
+		}
+		if clientRole && recommendedVersion == "" {
+			return errors.New("无法确定推荐版本，请先升级权威端，或用 `--version` 指定")
+		}
+	} else {
+		clientRole = isClientRole(errw)
 	}
 
 	// --- 4. version discovery + comparison ------------------------------------
@@ -337,17 +367,24 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 		assetLabel string
 		downgrade  bool
 	)
+	targetSource := targetFromGitHubLatest
+	if o.wantTag != "" {
+		targetSource = targetFromSpecifiedVersion
+	} else if recommendedVersion != "" {
+		targetSource = targetFromRecommendedVersion
+	}
 
 	if o.file == "" {
 		var derr error
-		if o.wantTag != "" {
+		switch targetSource {
+		case targetFromSpecifiedVersion:
 			rel, derr = updater.ReleaseByTag(ctx, o.wantTag)
-		} else if recommendedVersion != "" {
+		case targetFromRecommendedVersion:
 			rel, derr = updater.ReleaseByTag(ctx, recommendedVersion)
 			if derr == nil && o.check {
 				latestRel, derr = updater.LatestRelease(ctx)
 			}
-		} else {
+		default:
 			rel, derr = updater.LatestRelease(ctx)
 		}
 		if derr != nil {
@@ -357,15 +394,11 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 		assetLabel = rel.AssetName
 
 		if curErr != nil {
-			if o.wantTag == "" && recommendedVersion == "" {
+			if targetSource == targetFromGitHubLatest {
 				// dev / 本地构建:拒绝自动比较,要求显式 --version(spec §4.1)。
 				return fmt.Errorf("无法解析当前版本 %q(本地构建?):自动比较已拒绝;请用 --version 显式指定目标版本", curStr)
 			}
-			if o.wantTag != "" {
-				fmt.Fprintf(out, "警告: 无法判定升降级(当前版本 %q 无法解析);将按指定目标 %s 继续\n", curStr, rel.Tag)
-			} else {
-				fmt.Fprintf(out, "警告: 无法判定升降级(当前版本 %q 无法解析);将按推荐版本 %s 继续\n", curStr, rel.Tag)
-			}
+			fmt.Fprintf(out, "警告: 无法判定升降级(当前版本 %q 无法解析);将按%s %s 继续\n", curStr, targetSource, rel.Tag)
 		} else {
 			tgt, terr := updater.ParseVersion(rel.Tag)
 			if terr != nil {
@@ -373,11 +406,11 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 			}
 			switch updater.CompareVersions(tgt, curVer) {
 			case 0:
-				if o.wantTag != "" {
+				if targetSource == targetFromSpecifiedVersion {
 					return fmt.Errorf("已安装该版本(%s);如需重装请先卸载或选择其他版本", rel.Tag)
 				}
 				// 客户端 --check 仍要继续输出推荐版本与 GitHub 最新版本。
-				if o.check && recommendedVersion != "" {
+				if o.check && targetSource == targetFromRecommendedVersion {
 					break
 				}
 				fmt.Fprintf(out, "已是最新(%s);无事可做\n", rel.Tag)
@@ -390,10 +423,10 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 		if o.check {
 			// 干跑:只报 当前/最新/资产名/update base,零下载零替换。
 			which := "最新版本"
-			if o.wantTag != "" {
+			if targetSource == targetFromSpecifiedVersion {
 				which = "目标版本"
 			}
-			if recommendedVersion != "" && o.wantTag == "" {
+			if targetSource == targetFromRecommendedVersion {
 				fmt.Fprintf(out, "当前版本: %s\n推荐版本: %s\nGitHub 最新版本: %s\n",
 					curStr, recommendedVersion, latestRel.Tag)
 				fmt.Fprintf(out, "资产: %s\n干跑:未下载、未替换、未重启任何东西\n", rel.AssetName)
@@ -555,7 +588,7 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 	}
 
 	// --- 10. service branch -------------------------------------------------------
-	if prNew.State != updater.ProbeInstalled {
+	if clientRole || prNew.State != updater.ProbeInstalled {
 		fmt.Fprintln(out, "未安装服务(客户端):运行中的桥空闲时自动热升级(约 30 秒内;≤v0.19 的旧桥仍需下次 agent 会话或 /mcp 重连上车)")
 		return nil
 	}

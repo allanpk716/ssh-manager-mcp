@@ -476,7 +476,7 @@ type PullResult struct {
 // 客户端版本必须一起出现；新增权威端请求时应复用这里，避免某条路径漏声明。
 func setAuthorityRequestHeaders(req *http.Request, deviceCode string) {
 	req.Header.Set("Authorization", "Bearer "+deviceCode)
-	req.Header.Set("X-Sshmgr-Client-Version", buildinfo.Version)
+	req.Header.Set(buildinfo.ClientVersionHeader, buildinfo.Version)
 }
 
 // DoPull fetches /snapshot from url with the device code and atomically writes

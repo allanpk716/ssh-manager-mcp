@@ -152,7 +152,7 @@ func VersionMismatchHint(clientVersion, recommendedVersion string) string {
 	case -1:
 		return fmt.Sprintf("客户端 %s 落后于权威端 %s，运行 `sshmgr update` 升级", clientVersion, recommendedVersion)
 	case 1:
-		return "客户端比权威端新，建议先升级权威端"
+		return fmt.Sprintf("客户端 %s 比权威端 %s 新，建议先升级权威端", clientVersion, recommendedVersion)
 	default:
 		return ""
 	}

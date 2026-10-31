@@ -29,6 +29,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -428,14 +429,42 @@ func TestCacheVersionE2E_SnapshotCarriesRecommendedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 旧版顶层快照结构不包含推荐版本字段；嵌套类型仍引用现有类型，
+	// 重点是用旧版顶层视角确认新增字段不会破坏已有字段导入。
 	var legacy struct {
-		Version int `json:"version"`
+		Version                int                        `json:"version"`
+		Credentials            []store.SnapshotCredential `json:"credentials"`
+		Servers                []store.SnapshotServer     `json:"servers"`
+		Profiles               []store.SnapshotProfile    `json:"profiles"`
+		Grants                 []store.SnapshotGrant      `json:"grants"`
+		Projects               []store.SnapshotProject    `json:"projects"`
+		HostKeys               []store.SnapshotHostKey    `json:"host_keys"`
+		Audit                  []store.SnapshotAudit      `json:"audit"`
+		PolicyRules            []store.SnapshotPolicyRule `json:"policy_rules"`
+		PolicyDisabledDefaults []string                   `json:"policy_disabled_defaults"`
 	}
 	if err := json.Unmarshal(encoded, &legacy); err != nil {
 		t.Fatalf("旧版快照解码失败：%v", err)
 	}
-	if legacy.Version != 1 {
-		t.Fatalf("旧版快照信封版本 = %d，应为 1", legacy.Version)
+	if legacy.Version != loaded.Version {
+		t.Fatalf("旧版快照信封版本 = %d，应为 %d", legacy.Version, loaded.Version)
+	}
+	for name, compare := range map[string]func() bool{
+		"凭据":   func() bool { return reflect.DeepEqual(legacy.Credentials, loaded.Credentials) },
+		"服务器":  func() bool { return reflect.DeepEqual(legacy.Servers, loaded.Servers) },
+		"权限配置": func() bool { return reflect.DeepEqual(legacy.Profiles, loaded.Profiles) },
+		"授权关系": func() bool { return reflect.DeepEqual(legacy.Grants, loaded.Grants) },
+		"项目":   func() bool { return reflect.DeepEqual(legacy.Projects, loaded.Projects) },
+		"主机密钥": func() bool { return reflect.DeepEqual(legacy.HostKeys, loaded.HostKeys) },
+		"审计记录": func() bool { return reflect.DeepEqual(legacy.Audit, loaded.Audit) },
+		"命令策略": func() bool {
+			return reflect.DeepEqual(legacy.PolicyRules, loaded.PolicyRules) &&
+				reflect.DeepEqual(legacy.PolicyDisabledDefaults, loaded.PolicyDisabledDefaults)
+		},
+	} {
+		if !compare() {
+			t.Errorf("旧版快照结构解码后，%s内容应与新结构一致", name)
+		}
 	}
 }
 
@@ -460,7 +489,7 @@ func TestCacheVersionE2E_ToolHintComparesVersions(t *testing.T) {
 			name:      "较新",
 			client:    "1.2.0",
 			recommend: "1.1.0",
-			wantHint:  "客户端比权威端新，建议先升级权威端",
+			wantHint:  "客户端 1.2.0 比权威端 1.1.0 新，建议先升级权威端",
 		},
 		{
 			name:       "相等",
@@ -572,6 +601,42 @@ func TestCacheVersionE2E_ToolHintSessionLifecycle(t *testing.T) {
 	}
 	if _, exists := failureFields["stdout"]; !exists {
 		t.Fatalf("失败工具结果丢失了结构化输出：%#v", failureStructured)
+	}
+}
+
+// TestCacheVersionE2E_NewerClientHintChangesWithVersionPair：客户端较新的
+// 提示也必须携带两边版本；版本对变化后，同一会话会再次提示。
+func TestCacheVersionE2E_NewerClientHintChangesWithVersionPair(t *testing.T) {
+	fx := newCacheFwdFixture(t)
+	t.Setenv("SSHMGR_TEST_VERSION", "1.2.0")
+	fx.snap.RecommendedVersion = "1.1.0"
+	var next *store.Snapshot
+	reload := func() (*store.Snapshot, bool, error) {
+		if next == nil {
+			return nil, false, nil
+		}
+		changed := next
+		next = nil
+		return changed, true, nil
+	}
+	sess := fx.newBroker(t, reload, fx.cred)
+
+	first := callToolTexts(t, sess, "list_servers", map[string]any{})
+	wantFirst := "客户端 1.2.0 比权威端 1.1.0 新，建议先升级权威端"
+	if len(first) != 2 || first[0] != wantFirst || !strings.HasPrefix(first[1], `{"servers":`) {
+		t.Fatalf("第一次客户端较新提示 = %#v，应为 %q", first, wantFirst)
+	}
+
+	second := callToolTexts(t, sess, "list_servers", map[string]any{})
+	if len(second) != 1 || !strings.HasPrefix(second[0], `{"servers":`) {
+		t.Fatalf("同样的客户端较新提示只应出现一次，实际为 %#v", second)
+	}
+
+	next = &store.Snapshot{Version: 1, RecommendedVersion: "1.0.0", Profiles: fx.snap.Profiles, Projects: fx.snap.Projects}
+	third := callToolTexts(t, sess, "list_servers", map[string]any{})
+	wantThird := "客户端 1.2.0 比权威端 1.0.0 新，建议先升级权威端"
+	if len(third) != 2 || third[0] != wantThird || !strings.HasPrefix(third[1], `{"servers":`) {
+		t.Fatalf("版本对变化后应再次携带客户端较新提示，实际为 %#v", third)
 	}
 }
 

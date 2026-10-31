@@ -302,7 +302,7 @@ func TestAutoSwapBusyClosure(t *testing.T) {
 
 	var tunnels atomic.Int32
 	srv := mcp.NewServer(&mcp.Implementation{Name: "reg", Version: "0"}, nil)
-	serverRuntimes.Store(srv, NewBusyTracker(func() int { return int(tunnels.Load()) }, func() int { return 0 }))
+	serverRuntimes.Store(srv, &serverRuntime{busy: NewBusyTracker(func() int { return int(tunnels.Load()) }, func() int { return 0 })})
 	t.Cleanup(func() { serverRuntimes.Delete(srv) })
 
 	c := autoSwapBusyClosure(srv)

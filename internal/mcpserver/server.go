@@ -164,11 +164,12 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 	// NewServerFromSource 的返回形状被 serve.go 等既有调用方依赖), stdio
 	// 桥入口 (run.go serveBridge) 经 busyTrackerFor 取用。
 	busy := NewBusyTracker(tunnels.ActiveTunnels, tasks.RunningTasks)
+	sessionHints := &SessionHints{}
 	for _, source := range sources {
-		busy.hints.Add(source)
+		sessionHints.Add(source)
 	}
-	attachSessionHints(srv, busy.hints)
-	serverRuntimes.Store(srv, busy)
+	attachSessionHints(srv, sessionHints)
+	serverRuntimes.Store(srv, &serverRuntime{busy: busy, sessionHints: sessionHints})
 
 	uploadCap, err := resolveUploadContentCap() // env seam (SSHMGR_UPLOAD_CONTENT_MAX): invalid/非正/>1 GiB → construction fails (fail-closed, spec rev3 §3.1)
 	if err != nil {
@@ -473,17 +474,26 @@ func metadataFieldsFromInput(in *UpdateServerMetadataInput) map[string]*string {
 	return fields
 }
 
-// serverRuntimes 登记每个已构造 *mcp.Server 的忙判据库(NewServerFromSource
+// serverRuntime 把互相独立的忙判据库与会话提示记录挂在同一个服务运行对象
+// 上；二者生命周期相同，职责不混在同一个结构里。
+type serverRuntime struct {
+	busy         *BusyTracker
+	sessionHints *SessionHints
+}
+
+// serverRuntimes 登记每个已构造 *mcp.Server 的运行对象(NewServerFromSource
 // 构造时写入;stdio 桥入口 serveBridge 经 busyTrackerFor 读出,供
 // reload_self 的忙检查与豁免注册)。加法出口而非改 NewServerFromSource
 // 签名:返回形状被 serve.go 等既有调用方依赖。
-var serverRuntimes sync.Map // *mcp.Server → *BusyTracker
+var serverRuntimes sync.Map // *mcp.Server → *serverRuntime
 
 // busyTrackerFor 返回 serverRuntimes 里登记的忙判据库;未登记(裸构造、
 // 或登记被测试清理)返回 nil——调用方据此退化为「无忙判据」行为。
 func busyTrackerFor(srv *mcp.Server) *BusyTracker {
 	if v, ok := serverRuntimes.Load(srv); ok {
-		return v.(*BusyTracker)
+		if runtime, ok := v.(*serverRuntime); ok {
+			return runtime.busy
+		}
 	}
 	return nil
 }

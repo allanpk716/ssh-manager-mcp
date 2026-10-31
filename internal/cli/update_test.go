@@ -299,7 +299,7 @@ type updateSeamSet struct {
 	readConfirmLine      func() (string, error)
 	detectHeal           func() (string, bool)
 	serviceNew           func(service.Interface, *service.Config) (serviceRestarter, error)
-	resolveUpdateLaunch  func(string) (roles.Launch, error)
+	resolveMachineRole   func(string) (roles.Launch, error)
 }
 
 func updateSeams() updateSeamSet {
@@ -314,7 +314,7 @@ func updateSeams() updateSeamSet {
 		readConfirmLine:      readConfirmLine,
 		detectHeal:           detectHeal,
 		serviceNew:           serviceNew,
-		resolveUpdateLaunch:  resolveUpdateLaunch,
+		resolveMachineRole:   resolveMachineRole,
 	}
 }
 
@@ -329,7 +329,7 @@ func restoreUpdateSeams(s updateSeamSet) {
 	readConfirmLine = s.readConfirmLine
 	detectHeal = s.detectHeal
 	serviceNew = s.serviceNew
-	resolveUpdateLaunch = s.resolveUpdateLaunch
+	resolveMachineRole = s.resolveMachineRole
 }
 
 // seamUpdateDefaults swaps every update seam for a deterministic stand-in:
@@ -354,7 +354,7 @@ func seamUpdateDefaults(t *testing.T, self, curVer string) {
 	// detectHeal and serviceNew keep their production defaults here: the real
 	// DetectHeal inspects the pristine test binary and reports nothing, and
 	// serviceNew is only reached in restart tests, which stub it explicitly.
-	resolveUpdateLaunch = func(string) (roles.Launch, error) {
+	resolveMachineRole = func(string) (roles.Launch, error) {
 		return roles.Launch{Kind: roles.LaunchBroker, Role: roles.RoleStandalone}, nil
 	}
 }
@@ -367,7 +367,7 @@ func seamUpdateRole(role roles.Role) {
 	if role == roles.RoleClient {
 		kind = roles.LaunchClient
 	}
-	resolveUpdateLaunch = func(string) (roles.Launch, error) {
+	resolveMachineRole = func(string) (roles.Launch, error) {
 		return roles.Launch{Kind: kind, Role: role}, nil
 	}
 }
@@ -395,6 +395,19 @@ func runUpdate(t *testing.T, args ...string) (string, error) {
 	root.SetArgs(append([]string{"update"}, args...))
 	err := root.Execute()
 	return out.String(), err
+}
+
+// runUpdateWithStderr 也返回标准错误输出，用于断言不改变命令结果的提示。
+func runUpdateWithStderr(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+	root := NewRootCmd()
+	out := &bytes.Buffer{}
+	errw := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(errw)
+	root.SetArgs(append([]string{"update"}, args...))
+	err := root.Execute()
+	return out.String(), errw.String(), err
 }
 
 // assertSelfUntouched asserts the fixture binary is byte-identical and the
@@ -712,6 +725,157 @@ func TestUpdateClientVersionFlagOverridesRecommendedVersion(t *testing.T) {
 	}
 	if strings.Contains(out, "v0.0.2") || strings.Contains(out, "v0.0.4") {
 		t.Fatalf("--version 指定目标以外不应安装推荐版本或最新版本：\n%s", out)
+	}
+	assertSelfFlippedTo(t, home, self, testBinBytes(t), oldBytes)
+}
+
+func TestUpdateClientUsesRoleInsteadOfServiceInstallationState(t *testing.T) {
+	seedUpdateRecommendedCache(t, "0.0.2")
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSourceWithTags(t, "v0.0.3", map[string][]byte{
+		"v0.0.2": testBinBytes(t),
+		"v0.0.3": testBinBytes(t),
+	})
+	seamUpdateDefaults(t, self, "0.0.1")
+	seamUpdateRole(roles.RoleClient)
+	withStagedVersion(t, "0.0.2")
+	seamProbeByName(t, map[string]updater.ProbeResult{
+		buildinfo.ServeServiceName: {State: updater.ProbeInstalled, Desc: "installed (stopped)"},
+	})
+	serviceNew = func(service.Interface, *service.Config) (serviceRestarter, error) {
+		return &fakeRestarter{status: service.StatusStopped}, nil
+	}
+
+	out, err := runUpdate(t, "--yes")
+	if err != nil {
+		t.Fatalf("客户端 update 不应按服务安装状态进入服务分支: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "未安装服务(客户端)") {
+		t.Fatalf("客户端 update 应按客户端角色输出热升级提示:\n%s", out)
+	}
+	assertSelfFlippedTo(t, home, self, testBinBytes(t), oldBytes)
+}
+
+func TestUpdateClientExplicitVersionUsesRoleInsteadOfServiceInstallationState(t *testing.T) {
+	seedUpdateRecommendedCache(t, "0.0.2")
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSourceWithTags(t, "v0.0.3", map[string][]byte{
+		"v0.0.2": testBinBytes(t),
+		"v0.0.3": testBinBytes(t),
+	})
+	seamUpdateDefaults(t, self, "0.0.1")
+	seamUpdateRole(roles.RoleClient)
+	withStagedVersion(t, "0.0.3")
+	seamProbeByName(t, map[string]updater.ProbeResult{
+		buildinfo.ServeServiceName: {State: updater.ProbeInstalled, Desc: "installed (stopped)"},
+	})
+	serviceNew = func(service.Interface, *service.Config) (serviceRestarter, error) {
+		return &fakeRestarter{status: service.StatusStopped}, nil
+	}
+
+	out, err := runUpdate(t, "--yes", "--version", "v0.0.3")
+	if err != nil {
+		t.Fatalf("客户端显式指定版本时不应按服务安装状态进入服务分支: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "未安装服务(客户端)") {
+		t.Fatalf("客户端显式指定版本也应按客户端角色输出热升级提示:\n%s", out)
+	}
+	assertSelfFlippedTo(t, home, self, testBinBytes(t), oldBytes)
+}
+
+func TestUpdateRoleResolutionFailureKeepsGitHubLatestBehavior(t *testing.T) {
+	seedUpdateRecommendedCache(t, "0.0.2")
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSource(t, "v0.0.3", testBinBytes(t))
+	seamUpdateDefaults(t, self, "0.0.1")
+	resolveMachineRole = func(string) (roles.Launch, error) {
+		return roles.Launch{}, errors.New("role state unreadable")
+	}
+	withStagedVersion(t, "0.0.3")
+
+	out, errw, err := runUpdateWithStderr(t, "--yes")
+	if err != nil {
+		t.Fatalf("角色判定失败时应保持改动前行为并继续更新: %v\n%s%s", err, out, errw)
+	}
+	if !strings.Contains(out, "版本: 0.0.1 → v0.0.3\n") {
+		t.Fatalf("角色判定失败时应安装 GitHub 最新版本:\n%s", out)
+	}
+	if !strings.Contains(errw, "判定本机角色失败") || !strings.Contains(errw, "按非客户端处理") {
+		t.Fatalf("角色判定失败应在标准错误输出说明回退行为:%q", errw)
+	}
+	assertSelfFlippedTo(t, home, self, testBinBytes(t), oldBytes)
+}
+
+func TestUpdateClientReadsOnlyNamedCacheInstance(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	seedRootVersionCacheForInstance(t, "0.0.2", "laptop")
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSourceWithTags(t, "v0.0.3", map[string][]byte{
+		"v0.0.2": testBinBytes(t),
+		"v0.0.3": testBinBytes(t),
+	})
+	seamUpdateDefaults(t, self, "0.0.1")
+	seamUpdateRole(roles.RoleClient)
+	withStagedVersion(t, "0.0.2")
+
+	out, err := runUpdate(t, "--yes")
+	if err != nil {
+		t.Fatalf("只有一个命名实例时客户端 update 应读取它的推荐版本: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "版本: 0.0.1 → v0.0.2\n") {
+		t.Fatalf("客户端 update 应安装唯一命名实例的推荐版本:\n%s", out)
+	}
+	assertSelfFlippedTo(t, home, self, testBinBytes(t), oldBytes)
+}
+
+func TestUpdateClientMultipleNamedInstancesRequireInstanceFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	seedRootVersionCacheForInstance(t, "0.0.2", "laptop")
+	configRoot, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(configRoot, "ssh-manager", "instances", "laptop")
+	target := filepath.Join(configRoot, "ssh-manager", "instances", "desk")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"cache.bin", "cache.meta.json", "cache.auth.json"} {
+		blob, err := os.ReadFile(filepath.Join(source, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(target, name), blob, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSourceWithTags(t, "v0.0.3", map[string][]byte{
+		"v0.0.2": testBinBytes(t),
+		"v0.0.3": testBinBytes(t),
+	})
+	seamUpdateDefaults(t, self, "0.0.1")
+	seamUpdateRole(roles.RoleClient)
+	withStagedVersion(t, "0.0.2")
+
+	out, errw, err := runUpdateWithStderr(t, "--yes")
+	if err == nil || !strings.Contains(err.Error(), "无法确定唯一实例") || !strings.Contains(err.Error(), "--instance") {
+		t.Fatalf("多个命名实例应要求 --instance，错误为 %v", err)
+	}
+	if strings.Contains(out, "v0.0.3") || strings.Contains(errw, "v0.0.3") {
+		t.Fatalf("未选定实例时不应查询 GitHub 最新版本：stdout=%s stderr=%s", out, errw)
+	}
+	assertSelfUntouched(t, home, self, oldBytes)
+
+	out, err = runUpdate(t, "--yes", "--instance", "laptop")
+	if err != nil {
+		t.Fatalf("--instance 选定实例后应继续更新: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "版本: 0.0.1 → v0.0.2\n") {
+		t.Fatalf("--instance 应读取指定实例的推荐版本:\n%s", out)
 	}
 	assertSelfFlippedTo(t, home, self, testBinBytes(t), oldBytes)
 }

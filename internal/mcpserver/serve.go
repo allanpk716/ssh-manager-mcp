@@ -22,6 +22,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/crypto/ssh"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
@@ -263,7 +264,7 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "device code not bound to a profile — owner: run `sshmgr cache-tokens bind "+ct.Name+" <profile>` on the server", http.StatusForbidden)
 		return
 	}
-	clientVersion := req.Header.Get("X-Sshmgr-Client-Version")
+	clientVersion := req.Header.Get(buildinfo.ClientVersionHeader)
 	snap, err := r.st.ExportSnapshotForProfile(ct.ProfileID, clientVersion != "")
 	if err != nil {
 		http.Error(w, "snapshot unavailable", http.StatusInternalServerError)

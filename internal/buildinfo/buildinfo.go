@@ -11,6 +11,10 @@ package buildinfo
 // GoReleaser sets this to the tag-derived semver (tag v1.0.0 -> "1.0.0").
 var Version = "dev"
 
+// ClientVersionHeader 是新客户端每次访问权威端时声明自身二进制版本的
+// HTTP 请求头。
+const ClientVersionHeader = "X-Sshmgr-Client-Version"
+
 // Owner is the GitHub owner of the release repository — used by the
 // self-update flow to build the releases API URL (spec §4.1:
 // repos/allanpk716/ssh-manager-mcp/releases/...).

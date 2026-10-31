@@ -220,7 +220,7 @@ func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.
 }
 
 // versionHint 先刷新当前快照，再比较桥自身版本与快照携带的推荐版本。这里
-// 先调用 Current，缓存重载后的第一枚工具调用就能报告新版本对，而不是晚一枚。
+// 先调用 Current，缓存重载后的第一次工具调用就能报告新版本对，而不是晚一次。
 func (h *cacheStoreHolder) versionHint() string {
 	h.Current()
 	h.mu.Lock()

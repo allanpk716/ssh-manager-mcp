@@ -25,18 +25,16 @@ type BusyReport struct {
 // BusyTracker 聚合三路计数。隧道与任务两路不复制状态 —— 持计数源闭包
 // (TunnelManager.ActiveTunnels / TaskManager.RunningTasks 的方法值), 每次
 // 快照现读, 各管理器自己的锁是各自的并发安全边界; 在飞一路是本结构内的
-// 原子计数, 由工具处理器包装层 (wrapInflight) 进出各增减一次。会话提示
-// 记录也挂在这里,与同一个工具面共存亡。
+// 原子计数, 由工具处理器包装层 (wrapInflight) 进出各增减一次。
 type BusyTracker struct {
 	activeTunnels func() int
 	runningTasks  func() int
 	inflight      atomic.Int64
-	hints         *SessionHints
 }
 
 // NewBusyTracker 组装忙判据库。两个计数源闭包必须并发安全 (管理器方法值满足)。
 func NewBusyTracker(activeTunnels, runningTasks func() int) *BusyTracker {
-	return &BusyTracker{activeTunnels: activeTunnels, runningTasks: runningTasks, hints: &SessionHints{}}
+	return &BusyTracker{activeTunnels: activeTunnels, runningTasks: runningTasks}
 }
 
 // Report 返回当前忙快照。三分项非同一锁下的原子读 (各归各的并发边界), 快照

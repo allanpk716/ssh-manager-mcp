@@ -1,27 +1,67 @@
 package cli
 
 import (
+	"context"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 
 	"ssh-manager-mcp/internal/buildinfo"
-	"ssh-manager-mcp/internal/clientops"
-	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/updater"
 
 	"github.com/spf13/cobra"
 )
 
-func NewRootCmd() *cobra.Command {
+// rootCommand 在 Cobra 完成错误输出后执行根命令收尾动作。包装类型必须
+// 覆盖 Execute 系列 方法；直接把收尾放在 PersistentPostRunE 无法覆盖
+// RunE 返回错误的情况。
+type rootCommand struct {
+	*cobra.Command
+}
+
+func NewRootCmd() *rootCommand {
 	root := &cobra.Command{
 		Use:   "sshmgr",
 		Short: "Encrypted SSH credential vault and broker (MCP)",
-		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
-			writeClientVersionHint(cmd)
-			return nil
-		},
 	}
 	root.AddCommand(versionCmd, newServersCmd(), newProfilesCmd(), newProjectsCmd(), newCacheTokensCmd(), newCacheCmd(), newPairCmd(), newGCCmd(), newAuditCmd(), newUnlockCmd(), newLockCmd(), newSSHCmd(), newMCPCmd(), newServeCmd(), newTunnelsCmd(), newExportCmd(), newImportCmd(), newBackupCmd(), newMigratePathCmd(), newTUICmd(), newClearCmd(), newDoctorCmd(), newUpdateCmd(), newPolicyCmd())
-	return root
+	return &rootCommand{Command: root}
+}
+
+func (r *rootCommand) Execute() error {
+	_, err := r.ExecuteC()
+	return err
+}
+
+func (r *rootCommand) ExecuteContext(ctx context.Context) error {
+	_, err := r.ExecuteContextC(ctx)
+	return err
+}
+
+func (r *rootCommand) ExecuteContextC(ctx context.Context) (*cobra.Command, error) {
+	cmd, err := r.Command.ExecuteContextC(ctx)
+	r.finish(cmd, err)
+	return cmd, err
+}
+
+func (r *rootCommand) ExecuteC() (*cobra.Command, error) {
+	cmd, err := r.Command.ExecuteC()
+	r.finish(cmd, err)
+	return cmd, err
+}
+
+func (r *rootCommand) finish(cmd *cobra.Command, err error) {
+	if err != nil && !errors.Is(err, flag.ErrHelp) {
+		output := r.Command
+		if cmd != nil {
+			output = cmd
+		}
+		if output.SilenceErrors || r.Command.SilenceErrors {
+			fmt.Fprintln(output.ErrOrStderr(), output.ErrPrefix(), err)
+		}
+	}
+	writeClientVersionHint(cmd)
 }
 
 var versionCmd = &cobra.Command{
@@ -35,21 +75,21 @@ var versionCmd = &cobra.Command{
 // writeClientVersionHint 是根命令收尾时的客户端版本提示。它只读取本地加密
 // 缓存；update 与 doctor 已经展示两边版本，不再重复提示。
 func writeClientVersionHint(cmd *cobra.Command) {
-	if name := cmd.Name(); name == "update" || name == "doctor" {
+	if cmd == nil {
 		return
 	}
-	state, err := roles.Load()
-	if err != nil || state == nil || state.Role != roles.RoleClient {
+	if name := cmd.Name(); name == "update" || name == "doctor" {
 		return
 	}
 	instance := ""
 	if flag := cmd.Flags().Lookup("instance"); flag != nil {
 		instance = flag.Value.String()
 	}
-	snap, err := clientops.LoadCacheSnapshotFor(instance)
-	if err != nil || snap == nil {
+	state, err := readClientVersionState(instance, io.Discard)
+	if err != nil || !state.IsClient || state.Snapshot == nil {
 		return
 	}
+	snap := state.Snapshot
 	if hint := updater.VersionMismatchHint(buildinfo.Version, snap.RecommendedVersion); hint != "" {
 		fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", hint)
 	}
