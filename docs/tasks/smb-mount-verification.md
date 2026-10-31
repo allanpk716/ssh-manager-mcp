@@ -208,7 +208,7 @@ sudo -n systemctl daemon-reload
 - NAS:群晖 DS918+。445 端口连通:两台测试机经虚拟局域网地址均通(NAS 的局域网地址实测也通)。实测协商 SMB 方言为 **2.0.2**(客户端 Get-SmbConnection 的 Dialect 列),与 NAS smb.conf 的 `max protocol=SMB2` 一致。
 - 「禁止同一 IP 多个连接」开关:owner 口头确认无禁止(未在 DSM 界面逐项复核)。测试中同一客户端同时存在多条到 NAS 的会话,未出现被拒。
 - 共享与账号:owner 指定使用 NAS 上**已有的** <测试共享> 与专用测试账号(未按第 1 节预期新建空共享)。执行约定:测试文件一律 `sshmgr-` 前缀;不在记录里列举共享中已有文件;测后删除。
-- Linux 测试机:原候选机两次 TCP 连接超时(机器不可达),整节跳过(见 5.6)。
+- Linux 测试机:手册原定候选机多次 TCP 连接超时(不可达);经 owner 决定,改用另一台受管 Linux 机(Ubuntu 24.04 虚拟机、运行生产服务、本地免密 sudo),由 owner 提供虚拟局域网接入密钥临时入网以到达 NAS,完成全节测试;测毕已退网卸载、完全还原(见 5.7)。
 
 ### 5.1 Windows 会话身份
 
@@ -320,16 +320,35 @@ PowerShell 对照(独立会话):
 - 结论:不能假设升级后保留;若 #42 采纳 autofs,应配「升级后检查/重应用」兜底(或并入自愈 LaunchDaemon)。
 - 来源:[Apple StackExchange:automount is broken after upgrading macOS Monterey](https://apple.stackexchange.com/questions/440554/automount-is-broken-after-upgrading-macos-monterey)、[autofs on macOS 要点(gist)](https://gist.github.com/rudelm/7bcc905ab748ab9879ea);另经搜索引擎聚合页见到两种矛盾报告,未取得原始直接链接。
 
-### 5.7 Linux:整节未验证
+### 5.7 Linux(fstab + 凭据文件 + systemd 自动挂载,全节验证)
 
-- 原选机两次 TCP 连接超时(机器不可达,内部状态无法评估)。
-- 备选逐台探测(三个条件:到 NAS 的 445 可达、免密 sudo、空闲且允许重启):公司/实验内网的各备选机到 NAS 均不通(无虚拟局域网成员身份,也无到 NAS 所在网段的路由);生产用途机器(推理主力、源码服务器、生产服务)排除;一台云上机器虽可达,但承载虚拟局域网管理面与多项服务,重启会波及整个虚拟局域网,排除。
-- 附带实测:NAS SMB 方言上限 2.0.2 → 手册第 4 节 fstab 配方里的 `vers=3.0` 对这台 NAS 必然失败,cifs 挂载需改用 `vers=2.0`(供 #42 参考;本轮未实测挂载)。
+测试机说明:手册原定候选机多次不可达。备选逐台探测(到 NAS 的 445 可达、免密 sudo、空闲且允许重启三个条件):公司/实验内网的各备选机到 NAS 均不通(无虚拟局域网成员身份,也无到 NAS 所在网段的路由);生产用途机器(推理主力、源码服务器)排除;一台云上机器虽可达,但承载虚拟局域网管理面与多项服务,重启会波及整个虚拟局域网,排除。最终由 owner 决定:一台 Ubuntu 24.04 受管虚拟机(免密 sudo、空闲)临时入虚拟局域网(入网密钥由 owner 提供)后作为测试机;其上的生产服务因重启短暂中断,owner 已知情。NAS SMB 方言上限实测 2.0.2,手册配方的 `vers=3.0` 必失败,本轮按 `vers=2.0` 验证(唯一参数偏差)。
+
+1. 预检:`sudo -n true` 通过;systemd 255;**cifs-utils 未预装**,`sudo -n apt-get install -y cifs-utils` 完成(记录:配方需安装此包)。
+2. **仅有免密 sudo 时的最小命令集合**(原样记录,凭据打码;fstab 备份在改动前做):
+```
+sudo -n cp /etc/fstab /etc/fstab.bak-mounttest
+sudo -n mkdir -p /mnt/mounttest
+printf '%s\n' 'username=<测试账号>' 'password=***' | sudo -n tee /etc/sshmgr-mounttest.cred >/dev/null
+sudo -n chmod 600 /etc/sshmgr-mounttest.cred
+echo '//<NAS 地址>/<测试共享> /mnt/mounttest cifs credentials=/etc/sshmgr-mounttest.cred,vers=2.0,uid=1000,gid=1000,file_mode=0664,dir_mode=0775,_netdev,nofail,x-systemd.automount,x-systemd.idle-timeout=600 0 0' | sudo -n tee -a /etc/fstab
+sudo -n systemctl daemon-reload
+sudo -n systemctl restart remote-fs.target
+ls /mnt/mounttest && findmnt /mnt/mounttest
+```
+输出:`ls` 触发即挂;findmnt 显示 cifs 以 `vers=2.0` 挂载,uid/gid=1000(forceuid/forcegid)与 file_mode=0664/dir_mode=0775 均生效;普通用户(uid 1000)写入测试文件成功。
+结论:最小命令集合成立;**`vers` 必须按提供方设备的实际方言生成**(本 NAS 上限 2.0.2),不能写死。
+3. NAS 在线重启:开机 6.3 秒(无卡顿);虚拟局域网客户端开机自连后,访问挂载点即自动挂载,写入成功;`mnt-mounttest.automount` 为 active(waiting)。注:挂载发生在首次访问时(automount 惰性),实际使用要先等虚拟局域网连通,时间顺序上由访问时点天然保证。
+4. NAS 不在线(fstab 地址临时换为不可达地址 `192.0.2.1`,`daemon-reload` 后重启):开机 6.16 秒,无失败单元、无紧急模式、SSH 正常;访问挂载点约 4 秒返回失败(退出码 2),mount 单元干净置 failed,automount 继续待命重试,不悬挂调用进程。
+5. 对照实验(去掉 `nofail` 与 `x-systemd.automount`,纯 fstab,不可达地址;owner 批准后执行):开机 9.47 秒(慢约 3.3 秒,即一次失败的挂载尝试),无紧急模式、SSH 正常,系统状态 degraded(挂载单元 failed)。
+   诚实说明:本网络下该测试地址为「快速失败型」(连接尝试约 4 秒被拒);**慢失败/超时型不可达(真正能卡住开机的场景)未能复现**——未验证。据此 #42 配方建议:保留 `nofail`+`x-systemd.automount`,并追加 `x-systemd.mount-timeout=20s`(量级示例)兜底超时场景。
+6. 断线重连(NAS 侧断开):未验证(无法在 NAS 侧操作,跳过——手册允许)。
 
 ### 5.8 清理记录(逐项复核)
 
 - Windows 测试机:Y: 映射与注册表 `HKCU\Network\Y` 已删;`cmdkey` 为空;全部 6 个测试任务(`sshmgr-mounttest-nopw/nopw2/nopw3/cleanup/cleanup2/sys`)与全部日志已删;「新连接是否记住」默认已还原;原有 Z:/<既有共享> 映射未动(注册表详情前后一致)。桌面会话曾建立的一条到 <测试共享> 的连接已由桌面会话内任务删除,系统级连接表随后仅剩 owner 自己的既有连接;凭据的删除同样在桌面会话内完成,并以 `cmdkey /list`(`* NONE *`)自证。
 - macOS 测试机:两轮各自完整清理——`/etc/auto_master` 均从备份还原(字节数一致、内容为原版)、`/etc/auto_smb` 删除、挂载卸载、触发点目录消失、无任何 smbfs 残留;自动登录经 owner 授权恢复(defaults 键写回,原有的开机自动登录口令文件未改动),并经一次重启验证:开机自动登录成功,Orca、Ferryman 随桌面会话恢复。
+- Linux 测试机:fstab 从备份还原(0 条 cifs 行)、凭据文件与备份删除、挂载点删除、无 cifs 挂载、reset-failed 后无失败单元;临时入网的虚拟局域网客户端已退网并卸载(二进制/服务/网络接口/软件源配置全清),退网后到 NAS 的 445 恢复不通,网络状态还原到测试前。
 - NAS:仅出现过 `sshmgr-` 前缀的测试文件,均已删除;共享、账号、服务配置零改动。
 
 ### 5.9 总结(回答 issue #41 的三组问题)
@@ -346,13 +365,13 @@ PowerShell 对照(独立会话):
 - **间接图:一行 auto_master + 一个 600 权限映射文件,免 mkdir、抗重启、无人登录即挂即用——推荐 #42 采纳的候选**;
 - 系统升级可能重置 `/etc/auto_master`(文件在数据卷、无系统完整性保护,但社区报告矛盾),需配升级后自愈检查。
 
-**Linux:** 未验证(原选机不可达、无合格替补);NAS 方言 2.0.2 对 `vers=3.0` 的否定性约束已实测记录。
+**Linux:** fstab + 仅 root 可读凭据文件 + `_netdev,nofail,x-systemd.automount` 配方真机验证通过(NAS 在线重启 6.3 秒、不可达地址重启 6.16 秒均不卡开机,访问失败快速干净,普通用户可读写);`vers` 必须按提供方设备实际方言生成(本 NAS 上限 2.0.2,取 2.0);去掉 `nofail`+`automount` 的对照显示「快速失败型」不可达仅慢约 3 秒且不卡开机,但慢失败/超时型场景未复现,配方建议追加 `x-systemd.mount-timeout` 兜底。
 
 ### 5.10 未验证项及原因
 
 1. Windows (c) 带 `/rp` 密码的全部小项,以及 onlogon/onstart 的真实注销/开机触发:需要重启 serve broker 宿主(已排除)与登录密码(owner 决定不提供)。
 2. Windows (b) 桌面会话(资源管理器)直接访问:owner 未操作桌面;已由 (c)-2 任务日志侧面证明桌面会话可存凭据。
-3. Linux 全节(含 fstab+nofail 配方、NAS 不在线开机实验、断线重连):原选机不可达,备选无一满足条件。
+3. Linux 慢失败/超时型不可达场景(目标在线但无响应、或防火墙静默丢包)的 fstab 行为:本网络只能构造「快速失败型」不可达(约 4 秒被拒),慢失败场景未复现,`nofail` 在该场景下的防卡价值系依据公开资料的推断;断线重连(NAS 侧断开)因无法在 NAS 侧操作未验证。
 4. macOS 系统升级覆盖行为:未实际升级,仅文件位置实测 + 公开资料(互相矛盾),按「可能重置」处置。
 5. NAS「禁止同一 IP 多个连接」开关状态:owner 口头确认,未在 DSM 界面逐项复核。
 
