@@ -12,8 +12,9 @@ import (
 func redirectUserConfigDir(t *testing.T) string {
 	t.Helper()
 	userDir := t.TempDir()
-	t.Setenv("APPDATA", userDir)         // os.UserConfigDir on Windows
-	t.Setenv("XDG_CONFIG_HOME", userDir) // and on Unix
+	t.Setenv("APPDATA", userDir)            // os.UserConfigDir on Windows
+	t.Setenv("XDG_CONFIG_HOME", userDir)    // and on Unix
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir) // one injection seam across platforms
 	t.Setenv("SSHMGR_CACHE_DIR", "")
 	return userDir
 }

@@ -15,6 +15,7 @@ func runPolicyTest(t *testing.T, args ...string) (*bytes.Buffer, error) {
 	userDir := t.TempDir() // 用户配置目录也钉住:不读开发者本机真实的命名实例
 	t.Setenv("APPDATA", userDir)
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{
 		"SSHMGR_STORE":     filepath.Join(t.TempDir(), "no-vault.db"),
 		"SSHMGR_CACHE_DIR": t.TempDir(),

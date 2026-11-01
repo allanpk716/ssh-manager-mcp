@@ -33,6 +33,7 @@ func TestDualInstance_E2E(t *testing.T) {
 	userDir := t.TempDir()
 	t.Setenv("APPDATA", userDir)
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
 	dekDir := t.TempDir()
 	t.Setenv("SSHMGR_CACHE_DEK_DIR", dekDir)
@@ -196,6 +197,7 @@ func TestDualInstanceEnroll_E2E(t *testing.T) {
 	userDir := t.TempDir()
 	t.Setenv("APPDATA", userDir)
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{
 		"SSHMGR_CACHE_DIR":         "",
 		"SSHMGR_CACHE_DEK":         "",

@@ -20,6 +20,7 @@ func instancesTestEnv(t *testing.T) (userDir, dekDir string) {
 	userDir = t.TempDir()
 	t.Setenv("APPDATA", userDir)
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	dekDir = t.TempDir()
 	withEnv(t, map[string]string{
 		"SSHMGR_CACHE_DIR":     "",

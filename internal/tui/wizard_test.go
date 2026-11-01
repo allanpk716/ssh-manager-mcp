@@ -28,6 +28,7 @@ func withRoleDirs(t *testing.T) (vaultDir, userDir string) {
 	t.Setenv("SSHMGR_SERVE_CERT", "")
 	t.Setenv("APPDATA", userDir) // os.UserConfigDir on Windows
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	return vaultDir, userDir
 }
 

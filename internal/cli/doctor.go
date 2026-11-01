@@ -706,7 +706,7 @@ func checkClientCache() []doctorCheck {
 	if err != nil {
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("cache dir unresolvable: %v", err)
-		c.Fix = "check the user config dir (os.UserConfigDir could not be resolved)"
+		c.Fix = "check the user configuration root (it could not be resolved)"
 		return []doctorCheck{c}
 	}
 	info, serr := os.Stat(bin)
