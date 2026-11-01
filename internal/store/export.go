@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"golang.org/x/crypto/ssh"
-
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/models"
 )
@@ -155,6 +153,17 @@ type SnapshotAudit struct {
 	DurationMS int64  `json:"duration_ms"`
 }
 
+// normalizeSnapshotPinColumns 把旧快照缺失的锚格式与来源归一为默认值。
+func normalizeSnapshotPinColumns(format, source string) (string, string) {
+	if format == "" {
+		format = PinFormatBlob
+	}
+	if source == "" {
+		source = PinSourceTofu
+	}
+	return format, source
+}
+
 // snapshotEntryPins 读取全部按条目存放的锚并转成快照行（按条目标识符排序）。
 func (s *Store) snapshotEntryPins() ([]SnapshotEntryHostKey, error) {
 	pins, err := s.ListEntryPins()
@@ -176,19 +185,6 @@ func (s *Store) snapshotEntryPins() ([]SnapshotEntryHostKey, error) {
 	return out, nil
 }
 
-// legacyKeyIdentity 把一把锚折算成可比较的密钥身份：指纹格式的锚就是指纹串；
-// 密钥字节格式的锚取其 SHA256 指纹。用于判断同一兜底地址上的多把锚是否是
-// 同一把密钥。
-func legacyKeyIdentity(p SnapshotEntryHostKey) string {
-	if p.PinFormat == PinFormatFingerprint {
-		return string(p.KeyBlob)
-	}
-	if pub, err := ssh.ParsePublicKey(p.KeyBlob); err == nil {
-		return ssh.FingerprintSHA256(pub)
-	}
-	return fmt.Sprintf("raw:%x", p.KeyBlob)
-}
-
 // deriveLegacyHostKeys 为旧客户端推导旧格式锚行：同一兜底「Host:端口」上
 // 所有已锚定条目的密钥都相同时生成一行（行内容取条目标识符最小的锚），
 // 密钥不同时不生成这一行，避免旧客户端导入时主键冲突。
@@ -203,7 +199,7 @@ func deriveLegacyHostKeys(servers []SnapshotServer, entryPins []SnapshotEntryHos
 		if !ok {
 			continue
 		}
-		hp := fmt.Sprintf("%s:%d", sv.Host, sv.Port)
+		hp := fallbackAddr(sv.Host, sv.Port)
 		groups[hp] = append(groups[hp], p)
 	}
 	hosts := make([]string, 0, len(groups))
@@ -216,10 +212,10 @@ func deriveLegacyHostKeys(servers []SnapshotServer, entryPins []SnapshotEntryHos
 		group := groups[hp]
 		sort.Slice(group, func(i, j int) bool { return group[i].ServerID < group[j].ServerID })
 		first := group[0]
-		identity := legacyKeyIdentity(first)
+		identity := PinFingerprint(first.KeyBlob, first.PinFormat)
 		same := true
 		for _, p := range group[1:] {
-			if legacyKeyIdentity(p) != identity {
+			if PinFingerprint(p.KeyBlob, p.PinFormat) != identity {
 				same = false
 				break
 			}
@@ -662,13 +658,7 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 	// 锚的旧快照 / 旧备份：先落旧表，再执行与升级相同的迁移规则。
 	if len(snap.EntryHostKeys) > 0 {
 		for _, p := range snap.EntryHostKeys {
-			format, source := p.PinFormat, p.PinSource
-			if format == "" {
-				format = PinFormatBlob
-			}
-			if source == "" {
-				source = PinSourceTofu
-			}
+			format, source := normalizeSnapshotPinColumns(p.PinFormat, p.PinSource)
 			if _, err := tx.Exec(
 				`INSERT INTO entry_host_keys(server_id,key_blob,created_at,pin_format,pin_source,pin_device,handshake_addr) VALUES(?,?,?,?,?,?,?)`,
 				p.ServerID, p.KeyBlob, p.CreatedAt, format, source, p.PinDevice, p.HandshakeAddr); err != nil {
@@ -677,20 +667,11 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		}
 	} else {
 		for _, h := range snap.HostKeys {
-			format, source := h.PinFormat, h.PinSource
-			if format == "" {
-				format = PinFormatBlob
-			}
-			if source == "" {
-				source = PinSourceTofu
-			}
+			format, source := normalizeSnapshotPinColumns(h.PinFormat, h.PinSource)
 			if _, err := tx.Exec(`INSERT INTO host_keys(host_port,key_blob,created_at,pin_format,pin_source,pin_device) VALUES(?,?,?,?,?,?)`,
 				h.HostPort, h.KeyBlob, h.CreatedAt, format, source, h.PinDevice); err != nil {
 				return fmt.Errorf("insert host_key %s: %w", h.HostPort, err)
 			}
-		}
-		if err := migrateEntryPinsTx(tx); err != nil {
-			return fmt.Errorf("migrate legacy host keys: %w", err)
 		}
 	}
 
@@ -715,6 +696,14 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		if _, err := tx.Exec(`INSERT INTO audit_log(ts,project_id,server_id,action,command,sudo,status,exit_code,duration_ms) VALUES(?,?,?,?,?,?,?,?,?)`,
 			a.TS, nullIfEmpty(a.ProjectID), nullIfEmpty(a.ServerID), a.Action, nullIfEmpty(a.Command), a.Sudo, nullIfEmpty(a.Status), a.ExitCode, a.DurationMS); err != nil {
 			return fmt.Errorf("insert audit: %w", err)
+		}
+	}
+
+	// 旧格式锚迁移必须在恢复快照历史审计之后执行：迁移审计的编号才会排在
+	// 历史行之后，保持导入后的历史顺序可读。
+	if len(snap.EntryHostKeys) == 0 {
+		if err := migrateEntryPinsTx(tx); err != nil {
+			return fmt.Errorf("migrate legacy host keys: %w", err)
 		}
 	}
 

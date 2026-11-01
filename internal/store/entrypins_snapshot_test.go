@@ -98,7 +98,7 @@ func TestSnapshotEntryPins_ExportAndLegacyDerivation(t *testing.T) {
 	for _, id := range []string{rootID, deployID, splitA, splitB, labID} {
 		p := findSnapshotEntryPin(snap, id)
 		if p == nil || p.HandshakeAddr == "" {
-			t.Fatalf("快照缺少条目 %s 的锚或学习地址：%+v", id, p)
+			t.Fatalf("快照缺少条目 %s 的锚或握手地址：%+v", id, p)
 		}
 	}
 
@@ -148,6 +148,7 @@ func TestImportSnapshot_OldShapeAppliesEntryMigration(t *testing.T) {
 			{HostPort: "10.0.0.9:2222", KeyBlob: labKey, CreatedAt: 1700000000, PinFormat: PinFormatBlob, PinSource: PinSourceForward, PinDevice: "laptop"},
 			{HostPort: "192.0.2.1:22", KeyBlob: orphanKey, CreatedAt: 1700000000, PinFormat: PinFormatBlob, PinSource: PinSourceTofu},
 		},
+		Audit: []SnapshotAudit{{TS: 1699999999, ServerID: "srv-root", Action: "exec", Command: "history-before-migration", Status: "ok"}},
 	}
 
 	b := newTestStore(t)
@@ -173,6 +174,13 @@ func TestImportSnapshot_OldShapeAppliesEntryMigration(t *testing.T) {
 	}
 	if len(migrations) != 1 || !containsAll(migrations[0].Command, "192.0.2.1:22", orphanFP) {
 		t.Fatalf("导入迁移审计不正确：%+v", migrations)
+	}
+	history, err := b.QueryAudit(AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 || history[0].Action != "pin-migrate" || history[1].Command != "history-before-migration" {
+		t.Fatalf("导入顺序应先恢复历史审计再写迁移审计：%+v", history)
 	}
 	var legacy int
 	if err := b.db.QueryRow(`SELECT COUNT(*) FROM host_keys`).Scan(&legacy); err != nil {
