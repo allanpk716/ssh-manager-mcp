@@ -85,10 +85,10 @@ func TestExportSnapshotForProfile_ScopesSecrets(t *testing.T) {
 	}
 }
 
-// TestListSecretsForAuthorizedServers 验证机密项可见列表的共用服务器授权
-// 判定：「全部服务器」返回所有关联，「指定服务器集合」只返回交集非空的
+// TestListSecretsInScope 验证机密项可见列表的共用服务器范围
+// 判定：「全部服务器」返回所有关联，「指定服务器范围」只返回交集非空的
 // 机密项并裁剪关联；删除服务器条目后关联随之消失。
-func TestListSecretsForAuthorizedServers(t *testing.T) {
+func TestListSecretsInScope(t *testing.T) {
 	s := newTestStore(t)
 	seedScopedVault(t, s)
 	serverA, err := s.GetServerByName("srvA")
@@ -112,13 +112,13 @@ func TestListSecretsForAuthorizedServers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	allViews, err := s.ListSecretsForAuthorizedServers(AuthorizeAllSecretServers())
+	allViews, err := s.ListSecretsInScope(ScopeAllServers())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if names := secretViewNames(allViews); len(names) != 2 ||
 		names[0] != "A_ONLY_TOKEN" || names[1] != "SHARED_TOKEN" {
-		t.Fatalf("全部服务器授权应列出全部机密项，实际：%v", allViews)
+		t.Fatalf("全部服务器范围应列出全部机密项，实际：%v", allViews)
 	}
 	if servers := allViews[0].AllowedServers; len(servers) != 1 || servers[0] != "srvA" {
 		t.Fatalf("A_ONLY_TOKEN 应只能写 srvA，实际：%v", servers)
@@ -127,7 +127,7 @@ func TestListSecretsForAuthorizedServers(t *testing.T) {
 		t.Fatalf("SHARED_TOKEN 应能写 srvA 与 srvB，实际：%v", servers)
 	}
 
-	profileAViews, err := s.ListSecretsForAuthorizedServers(AuthorizeSecretServers(serverA.ID))
+	profileAViews, err := s.ListSecretsInScope(ScopeToServers(serverA.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,11 +136,11 @@ func TestListSecretsForAuthorizedServers(t *testing.T) {
 	}
 	for _, view := range profileAViews {
 		if len(view.AllowedServers) != 1 || view.AllowedServers[0] != "srvA" {
-			t.Fatalf("指定服务器集合外的不应出现在可写入列表：%+v", view)
+			t.Fatalf("指定服务器范围外的不应出现在可写入列表：%+v", view)
 		}
 	}
 
-	profileBViews, err := s.ListSecretsForAuthorizedServers(AuthorizeSecretServers(serverB.ID))
+	profileBViews, err := s.ListSecretsInScope(ScopeToServers(serverB.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestListSecretsForAuthorizedServers(t *testing.T) {
 	if err := s.DeleteServerCascading(serverA.ID); err != nil {
 		t.Fatal(err)
 	}
-	afterDelete, err := s.ListSecretsForAuthorizedServers(AuthorizeAllSecretServers())
+	afterDelete, err := s.ListSecretsInScope(ScopeAllServers())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,6 +189,95 @@ func TestExportSnapshotForProfile_SecretsFollowRevokedGrant(t *testing.T) {
 	if len(snapshot.Secrets) != 0 || len(snapshot.SecretAllows) != 0 {
 		t.Fatalf("撤销全部授权后客户端快照不应再带机密项：%+v %+v",
 			snapshot.Secrets, snapshot.SecretAllows)
+	}
+}
+
+// TestExportSnapshotForProfile_SecretsFollowServerDeletion 覆盖删除服务器条
+// 目后的下一次客户端快照：只因该条目才下发的机密项消失，仍下发机密项的关
+// 联行随之裁剪；全量导出（备份命令的底层导出）不受这次裁剪影响。
+func TestExportSnapshotForProfile_SecretsFollowServerDeletion(t *testing.T) {
+	s := newTestStore(t)
+	profileA := seedScopedVault(t, s)
+	serverA, err := s.GetServerByName("srvA")
+	if err != nil || serverA == nil {
+		t.Fatalf("取 srvA 失败：%v %+v", err, serverA)
+	}
+	serverNoCred, err := s.GetServerByName("srvNoCred")
+	if err != nil || serverNoCred == nil {
+		t.Fatalf("取 srvNoCred 失败：%v %+v", err, serverNoCred)
+	}
+	if err := s.AddSecret("A_ONLY_TOKEN", "只因 srvA 下发", []byte("a-only-secret-value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddSecret("SHARED_TOKEN", "删掉 srvA 后仍有交集", []byte("shared-secret-value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AllowSecrets([]string{"A_ONLY_TOKEN"}, []string{"srvA"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AllowSecrets([]string{"SHARED_TOKEN"}, []string{"srvA", "srvNoCred"}); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := s.ExportSnapshotForProfile(profileA, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Secrets) != 2 || len(before.SecretAllows) != 3 {
+		t.Fatalf("删除前客户端快照应带两个机密项与三条关联，实际：%+v %+v",
+			before.Secrets, before.SecretAllows)
+	}
+
+	if err := s.DeleteServerCascading(serverA.ID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.ExportSnapshotForProfile(profileA, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Secrets) != 1 || after.Secrets[0].Name != "SHARED_TOKEN" {
+		t.Fatalf("删除 srvA 后只因 srvA 下发的机密项应消失，实际：%+v", after.Secrets)
+	}
+	if len(after.SecretAllows) != 1 ||
+		after.SecretAllows[0].SecretID != after.Secrets[0].ID ||
+		after.SecretAllows[0].ServerID != serverNoCred.ID {
+		t.Fatalf("删除 srvA 后仍下发机密项的关联应只剩 srvNoCred，实际：%+v", after.SecretAllows)
+	}
+
+	full, err := s.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full.Secrets) != 2 || len(full.SecretAllows) != 1 {
+		t.Fatalf("备份的底层全量导出应保留全部机密项与未删除的关联，实际：%+v %+v",
+			full.Secrets, full.SecretAllows)
+	}
+	if full.SecretAllows[0].ServerID != serverNoCred.ID {
+		t.Fatalf("全量导出不应再带已删除服务器的关联，实际：%+v", full.SecretAllows)
+	}
+}
+
+// TestSecretViewsFromSnapshotSkipsDanglingAllows 钉住快照读取的防御：关联行
+// 引用了快照里不存在的机密项或服务器条目时跳过该行，不生成名字为空的
+// 机密项条目，也不把不存在的服务器算进可写入列表。
+func TestSecretViewsFromSnapshotSkipsDanglingAllows(t *testing.T) {
+	snapshot := &Snapshot{
+		Secrets: []SnapshotSecret{{
+			ID: "secret-1", Name: "KNOWN_TOKEN", CreatedAt: 1, ValueUpdatedAt: 2,
+		}},
+		Servers: []SnapshotServer{{ID: "server-1", Name: "srv1"}},
+		SecretAllows: []SnapshotSecretAllow{
+			{SecretID: "ghost-secret", ServerID: "server-1"},
+			{SecretID: "secret-1", ServerID: "ghost-server"},
+			{SecretID: "secret-1", ServerID: "server-1"},
+		},
+	}
+	views := SecretViewsFromSnapshot(snapshot)
+	if len(views) != 1 || views[0].Name != "KNOWN_TOKEN" {
+		t.Fatalf("悬空关联不应生成额外或空名字的机密项条目，实际：%+v", views)
+	}
+	if servers := views[0].AllowedServers; len(servers) != 1 || servers[0] != "srv1" {
+		t.Fatalf("悬空关联不应进入可写入列表，实际：%v", servers)
 	}
 }
 

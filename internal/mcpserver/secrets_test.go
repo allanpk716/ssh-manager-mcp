@@ -17,7 +17,7 @@ import (
 func TestListSecretsStandaloneTools(t *testing.T) {
 	st := newStore(t)
 	alpha := mustAddServer(t, st, "alpha")
-	mustAddServer(t, st, "beta")
+	beta := mustAddServer(t, st, "beta")
 	profileID, _ := st.AddProfile("agent-profile")
 	if err := st.GrantServers(profileID, []string{alpha}); err != nil {
 		t.Fatal(err)
@@ -69,8 +69,12 @@ func TestListSecretsStandaloneTools(t *testing.T) {
 		{name: "query matches name case-insensitively", args: map[string]any{"query": "api"}, want: "API_TOKEN | Deploy token | alpha"},
 		{name: "query matches note", args: map[string]any{"query": "MAINTENANCE"}, want: "NOTE_MATCH | maintenance phrase | alpha"},
 		{name: "server filters", args: map[string]any{"server": "alpha"}, want: "API_TOKEN | Deploy token | alpha\nNOTE_MATCH | maintenance phrase | alpha"},
+		{name: "server filters by id", args: map[string]any{"server": alpha}, want: "API_TOKEN | Deploy token | alpha\nNOTE_MATCH | maintenance phrase | alpha"},
 		{name: "query and server intersect", args: map[string]any{"query": "maintenance", "server": "alpha"}, want: "NOTE_MATCH | maintenance phrase | alpha"},
+		// beta 在库里真实存在、也在 API_TOKEN 的可写入列表里，但不在 profile
+		// 授权范围内：输出必须与「missing」完全相同，不能泄露它是否存在。
 		{name: "out-of-profile server", args: map[string]any{"server": "beta"}, want: noAvailableSecretsText},
+		{name: "out-of-profile server id", args: map[string]any{"server": beta}, want: noAvailableSecretsText},
 		{name: "missing server", args: map[string]any{"server": "missing"}, want: noAvailableSecretsText},
 		{name: "no secret matches", args: map[string]any{"query": "nothing"}, want: noAvailableSecretsText},
 	}

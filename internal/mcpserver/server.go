@@ -217,7 +217,7 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 	addTrackedTool(srv, busy,
 		&mcp.Tool{
 			Name:        BrokerTools[14], // "list_secrets"
-			Description: "Read-only list of secrets you may reference. Each output line is: name | note | server names. Optional query matches case-insensitively against the name or note; optional server takes a server NAME from list_servers and filters to secrets that may write to it. This tool never returns secret values, value lengths, hashes, timestamps, or servers outside your authorization. The reference form for future features is {{sshmgr-secret:NAME}}; the current version does not offer writing secret values.",
+			Description: "Read-only list of secrets you may reference. Each output line is: name | note | server names. Optional query matches case-insensitively against the name or note; optional server takes a server ID (exact match, preferred) or a server NAME from list_servers and filters to secrets that may write to it. This tool never returns secret values, value lengths, hashes, timestamps, or servers outside your authorization. The reference form for future features is {{sshmgr-secret:NAME}}; the current version does not offer writing secret values.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in ListSecretsInput) (*mcp.CallToolResult, any, error) {
 			st := storeFn()

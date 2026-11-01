@@ -653,19 +653,27 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 		for _, server := range snap.Servers {
 			grantedServerIDs = append(grantedServerIDs, server.ID)
 		}
-		authorization := AuthorizeSecretServers(grantedServerIDs...)
-		allowedSecretIDs := make(map[string]bool)
+		// 裁剪判定与机密项列表共用 secretServersInScope：只保留与 profile
+		// 授予的服务器有交集的机密项，关联行只保留交集内的服务器条目。
+		cropRows := make([]secretDisplayRow, 0, len(allows))
+		for _, allow := range allows {
+			cropRows = append(cropRows, secretDisplayRow{
+				secretID: allow.SecretID, hasServer: true, serverID: allow.ServerID,
+			})
+		}
+		inScope := secretServersInScope(cropRows, ScopeToServers(grantedServerIDs...))
 		scopedAllows := make([]SnapshotSecretAllow, 0, len(allows))
 		for _, allow := range allows {
-			if !authorization.containsServerID(allow.ServerID) {
-				continue
+			for _, server := range inScope[allow.SecretID] {
+				if server.id == allow.ServerID {
+					scopedAllows = append(scopedAllows, allow)
+					break
+				}
 			}
-			allowedSecretIDs[allow.SecretID] = true
-			scopedAllows = append(scopedAllows, allow)
 		}
 		scopedSecrets := make([]SnapshotSecret, 0, len(secrets))
 		for _, secret := range secrets {
-			if allowedSecretIDs[secret.ID] {
+			if _, exists := inScope[secret.ID]; exists {
 				scopedSecrets = append(scopedSecrets, secret)
 			}
 		}

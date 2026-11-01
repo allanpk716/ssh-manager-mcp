@@ -1,7 +1,6 @@
 package mcpserver
 
 import (
-	"slices"
 	"strings"
 
 	"ssh-manager-mcp/internal/store"
@@ -16,36 +15,39 @@ var secretNoteLineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " "
 // ListSecretsInput is the list_secrets tool input.
 type ListSecretsInput struct {
 	Query  string `json:"query,omitempty" jsonschema:"optional case-insensitive substring to match against the secret name or note"`
-	Server string `json:"server,omitempty" jsonschema:"optional server name; only secrets that may write to this server are listed"`
+	Server string `json:"server,omitempty" jsonschema:"optional server id (exact match, preferred) or server name; only secrets that may write to this server are listed"`
 }
 
 // ListSecretsTextForProfile returns the agent-visible secret list. The server
 // scope is the profile's granted server set, and the text deliberately carries
-// only names, notes, and granted server names.
-func ListSecretsTextForProfile(st *store.Store, profileID, query, serverName string) (string, error) {
+// only names, notes, and granted server names. serverIdentifier accepts a
+// server id (exact match first) or a server name, resolved only within the
+// granted set; out-of-scope and unknown identifiers are indistinguishable.
+func ListSecretsTextForProfile(st *store.Store, profileID, query, serverIdentifier string) (string, error) {
+	serverName := serverIdentifier
+	if serverIdentifier != "" {
+		server, err := st.ResolveGrantedServer(profileID, serverIdentifier)
+		if err != nil {
+			return "", err
+		}
+		if server == nil {
+			return noAvailableSecretsText, nil
+		}
+		serverName = server.Name
+	}
+
 	serverIDs, err := st.ServersForProfile(profileID)
 	if err != nil {
 		return "", err
 	}
-	if serverName != "" && !profileContainsServerName(st, serverIDs, serverName) {
-		return noAvailableSecretsText, nil
-	}
-
-	views, err := st.ListSecretsForAuthorizedServers(store.AuthorizeSecretServers(serverIDs...))
+	views, err := st.ListSecretsInScope(store.ScopeToServers(serverIDs...))
 	if err != nil {
 		return "", err
 	}
-	needle := strings.ToLower(query)
+	views = store.FilterSecretsByServer(views, serverName)
+	views = store.FilterSecretsByQuery(views, query)
 	lines := make([]string, 0, len(views))
 	for _, view := range views {
-		if needle != "" &&
-			!strings.Contains(strings.ToLower(view.Name), needle) &&
-			!strings.Contains(strings.ToLower(view.Note), needle) {
-			continue
-		}
-		if serverName != "" && !slices.Contains(view.AllowedServers, serverName) {
-			continue
-		}
 		note := secretNoteLineBreaks.Replace(view.Note)
 		lines = append(lines, view.Name+" | "+note+" | "+strings.Join(view.AllowedServers, ","))
 	}
@@ -53,17 +55,4 @@ func ListSecretsTextForProfile(st *store.Store, profileID, query, serverName str
 		return noAvailableSecretsText, nil
 	}
 	return strings.Join(lines, "\n"), nil
-}
-
-func profileContainsServerName(st *store.Store, serverIDs []string, serverName string) bool {
-	for _, serverID := range serverIDs {
-		server, err := st.GetServer(serverID)
-		if err != nil || server == nil {
-			continue
-		}
-		if server.Name == serverName {
-			return true
-		}
-	}
-	return false
 }

@@ -131,6 +131,8 @@ func TestSecretsCacheDeliveryE2E(t *testing.T) {
 		{name: "query", args: map[string]any{"query": "DELIVERED"}, want: "DELIVERED_TOKEN | 下发给客户端 | target"},
 		{name: "server", args: map[string]any{"server": "target"}, want: "DELIVERED_TOKEN | 下发给客户端 | target"},
 		{name: "query and server", args: map[string]any{"query": "delivered", "server": "target"}, want: "DELIVERED_TOKEN | 下发给客户端 | target"},
+		// outside 在权威端库里真实存在，但不在本客户端的授权范围内：桥进程
+		// 的快照里没有它，输出必须与「missing」完全相同。
 		{name: "out-of-profile server", args: map[string]any{"server": "outside"}, want: "没有可用的机密项"},
 		{name: "missing server", args: map[string]any{"server": "missing"}, want: "没有可用的机密项"},
 		{name: "no match", args: map[string]any{"query": "nothing"}, want: "没有可用的机密项"},
@@ -206,9 +208,20 @@ func TestSecretsCacheDeliveryE2E(t *testing.T) {
 	if err != nil || !strings.Contains(filtered, "DELIVERED_TOKEN") {
 		t.Fatalf("客户端按服务器筛选应保留下发机密项：\n%s\n错误：%v", filtered, err)
 	}
-	filtered, _, err = runSecretsRoot(t, "", "secrets", "list", "--query", "delivered", "--server", "outside")
-	if err != nil || strings.Contains(filtered, "DELIVERED_TOKEN") || strings.Contains(filtered, "outside") {
-		t.Fatalf("客户端组合筛选不应泄露范围外服务器结果：\n%s\n错误：%v", filtered, err)
+	filtered, _, err = runSecretsRoot(t, "", "secrets", "list", "--server", fx.targetID)
+	if err != nil || !strings.Contains(filtered, "DELIVERED_TOKEN") {
+		t.Fatalf("客户端按服务器条目标识符筛选应保留下发机密项：\n%s\n错误：%v", filtered, err)
+	}
+	// 客户端快照里没有 outside（它在权威端存在但不在本客户端授权范围内）。
+	// 客户端侧范围外与不存在不可区分，也不应区分：都报同一条「不存在」；
+	// 真正的授权裁剪门由上面的权威端导出断言覆盖。
+	_, _, err = runSecretsRoot(t, "", "secrets", "list", "--server", "outside")
+	if err == nil || !strings.Contains(err.Error(), `服务器条目 "outside" 不存在`) {
+		t.Fatalf("客户端范围外服务器应报不存在，错误：%v", err)
+	}
+	_, _, err = runSecretsRoot(t, "", "secrets", "list", "--query", "delivered", "--server", "missing")
+	if err == nil || !strings.Contains(err.Error(), `服务器条目 "missing" 不存在`) {
+		t.Fatalf("客户端不存在的服务器应报不存在，错误：%v", err)
 	}
 }
 
