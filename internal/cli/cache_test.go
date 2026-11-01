@@ -25,7 +25,6 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
-	"ssh-manager-mcp/internal/testutil"
 )
 
 // TestDefaultDekProvider_IsFileKeyAtFixedPath pins the Plan 16 T4 contract:
@@ -35,6 +34,7 @@ import (
 // SSHMGR_FILEKEY_PATH must NOT redirect the cache DEK — cache-dek.key uses its
 // own fixed path (paths.CacheDekPath() does not consult that env var).
 func TestDefaultDekProvider_IsFileKeyAtFixedPath(t *testing.T) {
+	t.Setenv(paths.VaultRootEnv, t.TempDir())
 	t.Setenv("SSHMGR_FILEKEY_PATH", "") // must not influence cache-dek
 	dp := clientops.DekProvider("")
 	fp, ok := dp.(*store.FileKeyProvider)
@@ -162,6 +162,10 @@ func TestCachePull_FailedPullLeavesExistingCacheIntact(t *testing.T) {
 }
 
 func TestCacheStatus_ReportsSnapshot(t *testing.T) {
+	userDir := t.TempDir()
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	url, code := standUpServe(t)
 	withDEK(t)
 	cacheDir := t.TempDir()
@@ -203,9 +207,13 @@ func TestCacheStatus_ReportsSnapshot(t *testing.T) {
 func TestCacheStatus_UnverifiedScope(t *testing.T) {
 	// Fix round 1: the negative assertion below scans the whole LIST output,
 	// and ListInstances() reads the REAL user-config root (only the cache dir
-	// is env-redirected). 隔离三个平台的用户配置目录，避免本机真实命名实例
-	// 作为无关行混进断言。
-	testutil.IsolateDirs(t)
+	// is env-redirected). Isolate APPDATA/XDG_CONFIG_HOME like the T11/T12
+	// tests so a real scoped instance on this machine can't fail us on an
+	// unrelated row.
+	userDir := t.TempDir()
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	url, code := standUpServe(t)
 	withDEK(t)
 	cacheDir := t.TempDir()
@@ -643,6 +651,10 @@ func TestCachePullDoesNotPersistCredOn401(t *testing.T) {
 // default slot's quarantine summary line (spec §2.6 field list), and the list
 // itself never fails overall.
 func TestCacheStatus_AttributesQuarantine(t *testing.T) {
+	userDir := t.TempDir()
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withDEK(t) // in-memory DEK: LoadCacheSnapshot fails here regardless of machine state
 	cacheDir := t.TempDir()
 	t.Setenv("SSHMGR_CACHE_DIR", cacheDir)

@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"ssh-manager-mcp/internal/testutil"
 )
 
 // instancesTestEnv redirects both roots (UserConfigDir + SSHMGR_CACHE_DEK_DIR)
@@ -19,10 +17,15 @@ import (
 // FileKeyProvider delete path.
 func instancesTestEnv(t *testing.T) (userDir, dekDir string) {
 	t.Helper()
-	dekDir, userDir = testutil.IsolateDirs(t)
+	userDir = t.TempDir()
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
+	dekDir = t.TempDir()
 	withEnv(t, map[string]string{
-		"SSHMGR_CACHE_DIR": "",
-		"SSHMGR_CACHE_DEK": "",
+		"SSHMGR_CACHE_DIR":     "",
+		"SSHMGR_CACHE_DEK":     "",
+		"SSHMGR_CACHE_DEK_DIR": dekDir,
 	})
 	return userDir, dekDir
 }

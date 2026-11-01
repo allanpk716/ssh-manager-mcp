@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -47,6 +49,71 @@ func TestServeRunner_CachesByProject(t *testing.T) {
 	}
 	if s1 != s2 {
 		t.Fatal("cache miss: same project must yield the same *mcp.Server pointer")
+	}
+}
+
+// TestServeRunner_ListSecrets 走远程 serve 的工具面：ServeRunner 为每个项目
+// 构造的 NewServer 工具面（serve 进程实际服务的面）。list_secrets 按 profile
+// 授予的服务器范围裁剪，不返回值，也不返回范围外服务器名。
+func TestServeRunner_ListSecrets(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+	alpha := mustAddServer(t, st, "alpha")
+	mustAddServer(t, st, "beta")
+	token, _, profileID := seedActiveProjectToken(t, st, "secrets-serve")
+	if err := st.GrantServers(profileID, []string{alpha}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("REMOTE_TOKEN", "serve 面可见", []byte("remote-serve-secret-value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("BETA_ONLY", "范围外", []byte("beta-secret-value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"REMOTE_TOKEN"}, []string{"alpha", "beta"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"BETA_ONLY"}, []string{"beta"}); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatalf("NewServeRunner: %v", err)
+	}
+	defer r.Close()
+	project, err := st.VerifyToken(token)
+	if err != nil || project == nil {
+		t.Fatalf("VerifyToken: err=%v project=%v", err, project)
+	}
+	srv, err := r.ServerForProject(project)
+	if err != nil || srv == nil {
+		t.Fatalf("ServerForProject: err=%v srv=%v", err, srv)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "v0"}, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := srv.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	session, err := client.Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	got, isError := callListSecrets(t, session, map[string]any{"server": alpha})
+	if isError {
+		t.Fatalf("serve 面的 list_secrets 失败：%s", got)
+	}
+	if want := "REMOTE_TOKEN | serve 面可见 | alpha"; got != want {
+		t.Fatalf("serve 面的 list_secrets = %q, want %q", got, want)
+	}
+	for _, leaked := range []string{"remote-serve-secret-value", "beta-secret-value", "beta", "BETA_ONLY"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("serve 面的 list_secrets 泄露了 %q：%s", leaked, got)
+		}
 	}
 }
 

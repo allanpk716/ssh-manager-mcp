@@ -28,6 +28,7 @@ import (
 
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/instname"
+	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
 )
@@ -143,7 +144,7 @@ func CachePathsFor(instance string) (dir, bin, meta, audit string, err error) {
 		}
 	}
 	if dir = os.Getenv("SSHMGR_CACHE_DIR"); dir == "" {
-		base, derr := os.UserConfigDir()
+		base, derr := paths.UserConfigDir()
 		if derr != nil {
 			return "", "", "", "", derr
 		}
@@ -162,11 +163,13 @@ func CachePaths() (dir, bin, meta, audit string, err error) {
 }
 
 // InstancesRoot is where named instances live: "instances/" under the
-// UserConfigDir base — deliberately NOT env-redirected: SSHMGR_CACHE_DIR is a
-// single-slot full override (CachePathsFor ignores the instance when it is
-// set), so following it here would create two competing instances/ roots.
+// user configuration base. SSHMGR_CACHE_DIR is deliberately not followed:
+// it is a single-cache full override (CachePathsFor ignores the instance when
+// it is set), so following it here would create two competing instances/ roots.
+// SSHMGR_CONFIG_ROOT moves the entire user configuration base, and instances/
+// follows that base as one unit.
 func InstancesRoot() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := paths.UserConfigDir()
 	if err != nil {
 		return "", err
 	}

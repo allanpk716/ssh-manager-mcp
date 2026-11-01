@@ -36,6 +36,35 @@ type SecretView struct {
 	ValueUpdatedAt int64
 }
 
+// SecretServerScope 是机密项可见列表的服务器范围：客户端为 profile 授予
+// 的服务器集合，单机与权威端为全部服务器。
+type SecretServerScope struct {
+	all       bool
+	serverIDs map[string]bool
+}
+
+// ScopeAllServers 返回覆盖全部服务器的范围，供单机与权威端使用。
+func ScopeAllServers() SecretServerScope {
+	return SecretServerScope{all: true}
+}
+
+// ScopeToServers 返回只包含给定服务器条目标识符的范围，供客户端按
+// profile 授予的服务器集合裁剪。
+func ScopeToServers(serverIDs ...string) SecretServerScope {
+	ids := make(map[string]bool, len(serverIDs))
+	for _, id := range serverIDs {
+		if id != "" {
+			ids[id] = true
+		}
+	}
+	return SecretServerScope{serverIDs: ids}
+}
+
+// containsServerID 判断一个服务器条目标识符是否在服务器范围内。
+func (scope SecretServerScope) containsServerID(serverID string) bool {
+	return scope.all || scope.serverIDs[serverID]
+}
+
 // ValidateSecretName 校验机密项名字：首字符为字母或下划线，其余为字母、
 // 数字、下划线，长度 1 到 64。唯一性检查按小写形式进行，由调用方另行查询。
 func ValidateSecretName(name string) error {
@@ -206,11 +235,13 @@ func (s *Store) DeleteSecret(name string) error {
 	return tx.Commit()
 }
 
-// ListSecrets 列出全部机密项的可见形态，按名字排序；可写入服务器条目名在
-// 每个机密项内按名字排序。
-func (s *Store) ListSecrets() ([]SecretView, error) {
+// ListSecretsInScope 列出服务器范围内的机密项可见列表。指定集合时只返回
+// 交集非空的机密项；全部服务器范围保留空列表，供 owner 在本机排查还没有
+// 配置可写入服务器的机密项。
+func (s *Store) ListSecretsInScope(scope SecretServerScope) ([]SecretView, error) {
 	rows, err := s.db.Query(`
-		SELECT sec.name, sec.note, sec.created_at, sec.value_updated_at, srv.name
+		SELECT sec.id, sec.name, sec.note, sec.created_at, sec.value_updated_at,
+		       srv.id, srv.name
 		FROM secrets sec
 		LEFT JOIN secret_server_allow allow ON allow.secret_id = sec.id
 		LEFT JOIN servers srv ON srv.id = allow.server_id
@@ -219,27 +250,190 @@ func (s *Store) ListSecrets() ([]SecretView, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []SecretView
-	index := make(map[string]int)
+	displayRows := make([]secretDisplayRow, 0)
 	for rows.Next() {
-		var view SecretView
-		var server sql.NullString
-		if err := rows.Scan(&view.Name, &view.Note, &view.CreatedAt, &view.ValueUpdatedAt, &server); err != nil {
+		var row secretDisplayRow
+		var secretID string
+		var serverID, serverName sql.NullString
+		if err := rows.Scan(&secretID, &row.view.Name, &row.view.Note, &row.view.CreatedAt, &row.view.ValueUpdatedAt,
+			&serverID, &serverName); err != nil {
 			return nil, err
 		}
-		if i, ok := index[view.Name]; ok {
-			if server.Valid {
-				out[i].AllowedServers = append(out[i].AllowedServers, server.String)
-			}
+		row.secretID = secretID
+		if serverID.Valid && serverName.Valid {
+			row.hasServer = true
+			row.serverID = serverID.String
+			row.serverName = serverName.String
+		}
+		displayRows = append(displayRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return secretViewsForDisplayRows(displayRows, scope), nil
+}
+
+// secretDisplayRow 是机密项可见列表的一行原始材料：机密项本身与一条可写入
+// 服务器关联。数据库读取与快照读取都先转换成它，再走同一个授权判定。
+type secretDisplayRow struct {
+	secretID   string
+	view       SecretView
+	hasServer  bool
+	serverID   string
+	serverName string
+}
+
+// scopedSecretServer 是一个机密项在服务器范围内的一台可写入服务器：条目
+// 标识符与名字都保留，列表路径用名字，快照裁剪路径用标识符。
+type scopedSecretServer struct {
+	id   string
+	name string
+}
+
+// secretServersInScope 是机密项按服务器范围裁剪的唯一判定：给定机密项与
+// 可写入服务器关联的原始行，算出每个机密项在范围内还能写入哪些服务器。
+// 指定服务器集合时交集为空的机密项不出现在结果里；全部服务器范围时空
+// 列表的机密项仍出现，供 owner 排查尚未配置可写入服务器的机密项。
+func secretServersInScope(rows []secretDisplayRow, scope SecretServerScope) map[string][]scopedSecretServer {
+	all := make(map[string][]scopedSecretServer, len(rows))
+	for _, row := range rows {
+		if _, exists := all[row.secretID]; !exists {
+			all[row.secretID] = nil
+		}
+		if row.hasServer && scope.containsServerID(row.serverID) {
+			all[row.secretID] = append(all[row.secretID], scopedSecretServer{id: row.serverID, name: row.serverName})
+		}
+	}
+	if scope.all {
+		return all
+	}
+	inScope := make(map[string][]scopedSecretServer, len(all))
+	for secretID, servers := range all {
+		if len(servers) > 0 {
+			inScope[secretID] = servers
+		}
+	}
+	return inScope
+}
+
+// secretViewsForDisplayRows 把共用范围判定组装成机密项可见列表：按名字排
+// 序，每个机密项内的可写入服务器条目名也按名字排序。
+func secretViewsForDisplayRows(rows []secretDisplayRow, scope SecretServerScope) []SecretView {
+	viewsByID := make(map[string]SecretView, len(rows))
+	for _, row := range rows {
+		if _, exists := viewsByID[row.secretID]; !exists {
+			viewsByID[row.secretID] = row.view
+		}
+	}
+
+	inScope := secretServersInScope(rows, scope)
+	scoped := make([]SecretView, 0, len(inScope))
+	for secretID, view := range viewsByID {
+		servers, exists := inScope[secretID]
+		if !exists {
 			continue
 		}
-		if server.Valid {
-			view.AllowedServers = []string{server.String}
+		view.AllowedServers = make([]string, 0, len(servers))
+		for _, server := range servers {
+			view.AllowedServers = append(view.AllowedServers, server.name)
 		}
-		index[view.Name] = len(out)
-		out = append(out, view)
+		sort.Strings(view.AllowedServers)
+		scoped = append(scoped, view)
 	}
-	return out, rows.Err()
+	sort.Slice(scoped, func(i, j int) bool { return scoped[i].Name < scoped[j].Name })
+	return scoped
+}
+
+// FilterSecretsByQuery 按文本筛选机密项可见列表：名字或备注包含该文本
+// （不区分大小写的子串匹配）的机密项保留。空文本返回全部条目。
+func FilterSecretsByQuery(views []SecretView, query string) []SecretView {
+	needle := strings.ToLower(query)
+	out := make([]SecretView, 0, len(views))
+	for _, view := range views {
+		if strings.Contains(strings.ToLower(view.Name), needle) ||
+			strings.Contains(strings.ToLower(view.Note), needle) {
+			out = append(out, view)
+		}
+	}
+	return out
+}
+
+// FilterSecretsByServer 按服务器条目名筛选机密项可见列表：只保留可写入
+// 服务器列表包含该条目名的机密项。空名字返回全部条目。
+func FilterSecretsByServer(views []SecretView, serverName string) []SecretView {
+	if serverName == "" {
+		return views
+	}
+	out := make([]SecretView, 0, len(views))
+	for _, view := range views {
+		for _, name := range view.AllowedServers {
+			if name == serverName {
+				out = append(out, view)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// SecretViewsFromSnapshot 从快照生成机密项可见列表。客户端快照本身已经按
+// profile 裁剪过，因此这里以快照内的全部服务器为范围；这个入口与数据库
+// 读取共用同一段服务器范围判定。
+func SecretViewsFromSnapshot(snapshot *Snapshot) []SecretView {
+	rows := make([]secretDisplayRow, 0, len(snapshot.Secrets)+len(snapshot.SecretAllows))
+	secretIDs := make(map[string]bool, len(snapshot.Secrets))
+	for _, secret := range snapshot.Secrets {
+		secretIDs[secret.ID] = true
+		rows = append(rows, secretDisplayRow{
+			secretID: secret.ID,
+			view: SecretView{
+				Name:           secret.Name,
+				Note:           secret.Note,
+				CreatedAt:      secret.CreatedAt,
+				ValueUpdatedAt: secret.ValueUpdatedAt,
+			},
+		})
+	}
+	serverNames := make(map[string]string, len(snapshot.Servers))
+	for _, server := range snapshot.Servers {
+		serverNames[server.ID] = server.Name
+	}
+	for _, allow := range snapshot.SecretAllows {
+		if !secretIDs[allow.SecretID] {
+			// 防御：快照缺了被引用的机密项时跳过该行，不生成空名字条目。
+			continue
+		}
+		name, exists := serverNames[allow.ServerID]
+		if !exists {
+			continue
+		}
+		rows = append(rows, secretDisplayRow{
+			secretID: allow.SecretID, hasServer: true,
+			serverID: allow.ServerID, serverName: name,
+		})
+	}
+	return secretViewsForDisplayRows(rows, ScopeAllServers())
+}
+
+// ResolveServerInSnapshot resolves a server identifier inside a snapshot's
+// server entries: an exact server-id match wins, then a name match; nil means
+// no match. A client snapshot only carries granted entries, so out-of-scope
+// and unknown identifiers are equally "not found" here.
+func ResolveServerInSnapshot(snapshot *Snapshot, identifier string) *SnapshotServer {
+	if snapshot == nil || identifier == "" {
+		return nil
+	}
+	for i := range snapshot.Servers {
+		if snapshot.Servers[i].ID == identifier {
+			return &snapshot.Servers[i]
+		}
+	}
+	for i := range snapshot.Servers {
+		if snapshot.Servers[i].Name == identifier {
+			return &snapshot.Servers[i]
+		}
+	}
+	return nil
 }
 
 // secretAllowTarget 是一次授权改动的目标：机密项或服务器条目的内部标识符

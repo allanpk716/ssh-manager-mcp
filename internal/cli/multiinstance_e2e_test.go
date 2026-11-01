@@ -21,7 +21,6 @@ import (
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
-	"ssh-manager-mcp/internal/testutil"
 	"ssh-manager-mcp/internal/vaultio"
 )
 
@@ -31,8 +30,13 @@ import (
 // revoking A's device code quarantines ONLY A's instance.
 func TestDualInstance_E2E(t *testing.T) {
 	// --- client-side redirection (spec §9.5: instance tests never set SSHMGR_CACHE_DIR) ---
-	dekDir, userDir := testutil.IsolateDirs(t)
+	userDir := t.TempDir()
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
+	dekDir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DEK_DIR", dekDir)
 	// NB: 不 swap DekProvider seam——默认 var 本就是 FileKeyProvider(CacheDekPathFor)，
 	// per-instance DEK 隔离要测的就是这个真实形态（任何前置测试的 swap 都有 t.Cleanup 还原）。
 
@@ -190,12 +194,17 @@ func TestDualInstanceEnroll_E2E(t *testing.T) {
 	// --- client-side redirection (same posture as TestDualInstance_E2E; spec §9.5:
 	// instance tests never set SSHMGR_CACHE_DIR — cleared defensively along with the
 	// other single-slot override envs so relocation stays armed) ---
-	dekDir, userDir := testutil.IsolateDirs(t)
+	userDir := t.TempDir()
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{
 		"SSHMGR_CACHE_DIR":         "",
 		"SSHMGR_CACHE_DEK":         "",
 		"SSHMGR_CACHE_MAX_OFFLINE": "", // hermetic against a developer-shell leak (a leaked cap would skew the §1.2 shape)
 	})
+	dekDir := t.TempDir()
+	t.Setenv("SSHMGR_CACHE_DEK_DIR", dekDir)
 
 	// --- serve side: gpu→team-a, secret→team-b; device codes laptop-agentA/B ---
 	dir := t.TempDir()

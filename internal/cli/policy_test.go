@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"ssh-manager-mcp/internal/testutil"
 )
 
 // runPolicyTest 以给定参数执行 `sshmgr policy test`,返回其输出。
@@ -14,7 +12,10 @@ import (
 // 取生效规则集,不钉住会把开发者本机的真实 vault/缓存串进测试。
 func runPolicyTest(t *testing.T, args ...string) (*bytes.Buffer, error) {
 	t.Helper()
-	testutil.IsolateDirs(t) // 用户配置目录也钉住:不读开发者本机真实的命名实例
+	userDir := t.TempDir() // 用户配置目录也钉住:不读开发者本机真实的命名实例
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{
 		"SSHMGR_STORE":     filepath.Join(t.TempDir(), "no-vault.db"),
 		"SSHMGR_CACHE_DIR": t.TempDir(),

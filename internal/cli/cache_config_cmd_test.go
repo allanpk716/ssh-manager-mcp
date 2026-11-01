@@ -7,16 +7,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"ssh-manager-mcp/internal/testutil"
 )
 
-// redirectCacheEnv 把测试从操作者真实 vault/cache 隔离出来：共享辅助函数重定向
-// HOME/APPDATA/XDG 与系统级路径，三个 cache 环境变量清空，
+// redirectCacheEnv 把测试从操作者真实 vault/cache 隔离出来：APPDATA/XDG 指向
+// 新 temp 目录（形态同 cache_status_instances_test.go），三个 cache 环境变量清空，
 // 返回 userDir（ssh-manager 根的父目录）。
 func redirectCacheEnv(t *testing.T) string {
 	t.Helper()
-	_, userDir := testutil.IsolateDirs(t)
+	userDir := t.TempDir()
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{
 		"SSHMGR_CACHE_DIR":         "",
 		"SSHMGR_CACHE_DEK":         "",

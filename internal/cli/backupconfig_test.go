@@ -425,12 +425,6 @@ func TestBackupCreate_NoDirNoConfig_ExplainsBoth(t *testing.T) {
 func TestBackupCreate_RelativePassphraseInsideDir_FailClosed(t *testing.T) {
 	seedVaultForBackup(t)
 	bdir := t.TempDir()
-	// macOS 的测试临时目录可能是符号链接；先解析成真实路径，保证相对口令
-	// 文件按同一个词法前缀参与子树判断。
-	bdir, err := filepath.EvalSymlinks(bdir)
-	if err != nil {
-		t.Fatal(err)
-	}
 	touchMarker(t, bdir)
 	passOutside := writePassFile(t, t.TempDir(), encPass1)
 
@@ -458,5 +452,30 @@ func TestBackupCreate_RelativePassphraseInsideDir_FailClosed(t *testing.T) {
 	}
 	if m := smeFiles(t, bdir); len(m) != 0 {
 		t.Fatalf("no failed run may write: %v", m)
+	}
+}
+
+// TestBackupConfig_PassphraseSymlinkInsideDir_FailClosed: a passphrase path
+// outside the backup directory by spelling can still be a symbolic link to a
+// file inside it. Validation must follow the link and reject the configuration.
+func TestBackupConfig_PassphraseSymlinkInsideDir_FailClosed(t *testing.T) {
+	backupDir := t.TempDir()
+	passphraseInside := filepath.Join(backupDir, "backup.pass")
+	if err := os.WriteFile(passphraseInside, []byte(encPass1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	passphraseLink := filepath.Join(t.TempDir(), "backup.pass")
+	if err := os.Symlink(passphraseInside, passphraseLink); err != nil {
+		t.Skipf("creating a symbolic link is unavailable: %v", err)
+	}
+	configPath := writeBackupConfig(t, filepath.Join(t.TempDir(), "backup.json"),
+		backupConfigJSON(backupDir, 7, passphraseLink))
+
+	_, err := loadBackupConfig(configPath)
+	if err == nil {
+		t.Fatal("a symbolic-link passphrase path resolving inside the backup dir must fail closed")
+	}
+	if !strings.Contains(err.Error(), "must not be inside the backup dir") {
+		t.Fatalf("error must explain the passphrase file cannot live in the backup dir: %v", err)
 	}
 }

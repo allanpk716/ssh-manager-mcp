@@ -18,7 +18,6 @@ import (
 
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/store"
-	"ssh-manager-mcp/internal/testutil"
 	"ssh-manager-mcp/internal/vaultio"
 )
 
@@ -74,7 +73,12 @@ func seedTUISlot(t *testing.T, dir, deviceName, serverName string, dek []byte) {
 // slot view whose reply carries instance:"". Both slots are seeded with true-
 // encrypted bins and DIFFERENT server names so a routing mix-up cannot pass.
 func TestRefreshDataCmdFor_InstanceSlot(t *testing.T) {
-	_, userDir := testutil.IsolateDirs(t)
+	userDir := t.TempDir()
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
+	t.Setenv("SSHMGR_CACHE_DIR", "")
+	t.Setenv("SSHMGR_CACHE_DEK", "")
 	mem := tuiWithDEK(t)
 	dek, _ := store.GenerateMasterKey()
 	if err := mem.Set(dek); err != nil {

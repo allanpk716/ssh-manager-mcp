@@ -15,12 +15,11 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
-	"ssh-manager-mcp/internal/testutil"
 	"ssh-manager-mcp/internal/updater"
 )
 
 // withDoctorDirs isolates every filesystem/env location doctor READS —
-// withClearDirs discipline via the shared test helper (the dev machine REALLY runs sshmgr, so an
+// withClearDirs discipline (the dev machine REALLY runs sshmgr, so an
 // unpinned check would inspect the operator's live vault). It adds the two
 // cache-credential seams (SSHMGR_CACHE_URL / SSHMGR_CACHE_TOKEN) that clear
 // never touched but doctor's env check enumerates, and — since T4 — pins the
@@ -29,11 +28,27 @@ import (
 // there; the serve-cert check would read it.
 func withDoctorDirs(t *testing.T) (vaultDir, userDir string) {
 	t.Helper()
-	vaultDir, userDir = testutil.IsolateDirs(t)
-	// 默认实例沿用单文件覆盖；命名实例辅助函数会关闭它，只保留目录级覆盖。
+	vaultRoot := t.TempDir()
+	vaultDir = filepath.Join(vaultRoot, "ssh-manager")
+	userDir = t.TempDir()
+	if err := os.MkdirAll(vaultDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSHMGR_VAULT_ROOT", vaultRoot)
+	t.Setenv("SSHMGR_STORE", filepath.Join(vaultDir, "store.db"))
+	t.Setenv("SSHMGR_FILEKEY_PATH", filepath.Join(vaultDir, "master.key.plain"))
+	t.Setenv("SSHMGR_MASTERKEY_HEX", "")
+	t.Setenv("SSHMGR_CACHE_DIR", "")
 	t.Setenv("SSHMGR_CACHE_DEK", filepath.Join(vaultDir, "cache-dek.key"))
+	t.Setenv("SSHMGR_SERVE_LOG", filepath.Join(vaultDir, "serve.log"))
+	t.Setenv("SSHMGR_SERVE_CERT", filepath.Join(vaultDir, "serve-cert.pem"))
+	t.Setenv("SSHMGR_SERVE_KEY", filepath.Join(vaultDir, "serve-key.pem"))
+	t.Setenv("SSHMGR_SERVE_MARKER", filepath.Join(vaultDir, ".serve-cert-initialized"))
 	t.Setenv("SSHMGR_CACHE_URL", "")
 	t.Setenv("SSHMGR_CACHE_TOKEN", "")
+	t.Setenv("APPDATA", userDir) // os.UserConfigDir on Windows
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	return vaultDir, userDir
 }
 

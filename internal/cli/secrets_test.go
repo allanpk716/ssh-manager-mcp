@@ -347,6 +347,20 @@ func TestSecretsAllowDisallow(t *testing.T) {
 	if strings.Count(out, "API_TOKEN") != 1 || strings.Count(out, "DB_PASSWORD") != 1 {
 		t.Fatalf("--server web1 must keep both secrets:\n%s", out)
 	}
+	// --server 也接受服务器条目标识符：与其他 agent 工具的标识写法一致。
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	web1, err := st.GetServerByName("web1")
+	if err != nil || web1 == nil {
+		t.Fatalf("取 web1 失败：%v %+v", err, web1)
+	}
+	st.Close()
+	out = mustSecretsCli(t, "", "secrets", "list", "--server", web1.ID)
+	if strings.Count(out, "API_TOKEN") != 1 || strings.Count(out, "DB_PASSWORD") != 1 {
+		t.Fatalf("--server <条目标识符> must keep both secrets:\n%s", out)
+	}
 	out = mustSecretsCli(t, "", "secrets", "list", "--server", "web2")
 	if strings.Contains(out, "API_TOKEN") || strings.Contains(out, "DB_PASSWORD") {
 		t.Fatalf("--server web2 must filter both secrets out:\n%s", out)
@@ -361,7 +375,7 @@ func TestSecretsAllowDisallow(t *testing.T) {
 	}
 
 	// 写错名字：机密项与条目混着错时，一次列出全部错误，整体不生效。
-	_, _, err := runSecretsRoot(t, "", "secrets", "allow", "--secrets", "GHOST_TOKEN,DB_PASSWORD", "--servers", "web1,no-such-entry")
+	_, _, err = runSecretsRoot(t, "", "secrets", "allow", "--secrets", "GHOST_TOKEN,DB_PASSWORD", "--servers", "web1,no-such-entry")
 	if err == nil || !strings.Contains(err.Error(), "GHOST_TOKEN") || !strings.Contains(err.Error(), "no-such-entry") {
 		t.Fatalf("invalid names must all be reported at once, got %v", err)
 	}
@@ -580,7 +594,8 @@ func TestSecretsExportImportRoundTrip(t *testing.T) {
 }
 
 // TestSecretsEncryptedBackupRoundTrip 走加密备份路径：backup create 生成的
-// 加密备份导入新库后，机密项段与备份前完全一致。
+// 加密备份导入新库后，机密项段与备份前完全一致。备份走全量导出，不做
+// profile 裁剪——即使机密项不会下发给任何客户端也照样备份。
 func TestSecretsEncryptedBackupRoundTrip(t *testing.T) {
 	dbA, mkA := seedSecretVaultForExport(t)
 	want := secretsSnapshot(t, dbA, mkA)

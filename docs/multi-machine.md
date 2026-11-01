@@ -553,6 +553,7 @@ launchctl load -w ~/Library/LaunchAgents/com.ssh-manager.cache-refresh.plist
 | `download_file` / `upload_file` | ✅ 同上 |
 | `forward_port`（`-L`） | ✅ 同上（监听恒本机环回） |
 | `list_servers` | ✅（列出缓存里 profile 范围内的） |
+| `list_secrets` | ✅（只读列出缓存里 profile 范围内的机密项名字、备注与可写入服务器；不返回值） |
 | 加 / 改 / 删 server / profile / project / 凭据 | ❌ `ErrReadOnly`——写只在**管理面**（broker TUI / `serve pair` / 批2 Web UI） |
 | 未知目标机 host key | ⚠️ broker 可达 = 自动**锚定转发**（首连一次成功，锚落权威 vault 带审计）；broker 不可达 = **fail-closed**（错误文案带呈现指纹 + 两条补救路径）——见[「主机密钥锚定」](#主机密钥锚定锚定转发与带外锚定plan-48)节 |
 
