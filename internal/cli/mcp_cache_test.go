@@ -311,6 +311,11 @@ func TestScopedPull_HydratesAndIronRuleHolds(t *testing.T) {
 // Forward renders the §4 main message — "a cache without its credential
 // cannot authenticate any forward", never a silent local fallback (§2.1 last
 // row).
+// fwdTargetEntry 构造转发器连线测试用的目标条目。
+func fwdTargetEntry() *models.Server {
+	return &models.Server{ID: "srv-fwd", Name: "target", Host: "192.168.1.108", Port: 22, User: "u", AuthMethod: models.AuthPassword}
+}
+
 func TestCacheForwarderWiring_MissingCredentialFailsClosedToMainMessage(t *testing.T) {
 	_, pub := newEd25519HostKey(t)
 	fp := ssh.FingerprintSHA256(pub)
@@ -322,7 +327,7 @@ func TestCacheForwarderWiring_MissingCredentialFailsClosedToMainMessage(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := fwd.Forward("192.168.1.108", 22, pub.Marshal()); err == nil || err.Error() != want {
+		if err := fwd.Forward(fwdTargetEntry(), pub.Marshal()); err == nil || err.Error() != want {
 			t.Fatalf("missing credential must fail closed to the main message:\n got: %v\nwant: %q", err, want)
 		}
 	})
@@ -337,7 +342,7 @@ func TestCacheForwarderWiring_MissingCredentialFailsClosedToMainMessage(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := fwd.Forward("192.168.1.108", 22, pub.Marshal()); err == nil || err.Error() != want {
+		if err := fwd.Forward(fwdTargetEntry(), pub.Marshal()); err == nil || err.Error() != want {
 			t.Fatalf("unreadable credential must fail closed to the main message:\n got: %v\nwant: %q", err, want)
 		}
 	})
@@ -357,7 +362,7 @@ func TestCacheForwarderWiring_PlaintextInstanceRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, pub := newEd25519HostKey(t)
-	err = fwd.Forward("192.168.1.108", 22, pub.Marshal())
+	err = fwd.Forward(fwdTargetEntry(), pub.Marshal())
 	want := "pin forwarding requires a pinned TLS server — no plaintext forwarding (set the server pin used by cache pull); the host key for 192.168.1.108:22 stays unpinned"
 	if err == nil || err.Error() != want {
 		t.Fatalf("plaintext refusal mismatch:\n got: %v\nwant: %q", err, want)

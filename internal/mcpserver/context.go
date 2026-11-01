@@ -246,7 +246,7 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
 	if herr != nil {
 		status = "error"
 		err = herr

@@ -1,9 +1,9 @@
 package mcpserver
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,7 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -321,12 +321,13 @@ func normalizedClientVersion(version string) string {
 // memory with generous headroom).
 const pinMaxBodyBytes = 64 << 10
 
-// pinHostKeyRequest is the §1.1 request body: the base64 of the marshaled SSH
-// wire-format public key exactly as the client's HostKeyTOFU callback saw it.
+// pinHostKeyRequest is the request body（票 #58）：条目标识符、握手地址，
+// 以及客户端回调看到的 SSH 公钥序列化字节的 base64。缺少条目标识符即为
+// 旧格式请求。
 type pinHostKeyRequest struct {
-	Host    string `json:"host"`
-	Port    int    `json:"port"`
-	KeyBlob string `json:"key_blob"`
+	ServerID      string `json:"server_id"`
+	HandshakeAddr string `json:"handshake_addr"`
+	KeyBlob       string `json:"key_blob"`
 }
 
 // The §1.1 response bodies — verbatim field contracts (the client's §2.1
@@ -362,19 +363,19 @@ func writePinJSON(w http.ResponseWriter, status int, v any) {
 // lives only on the pull path — a bad token on THIS route is an ordinary
 // failure and must never destroy the client's local cache (§1.2).
 func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request) {
-	host, port := "", 0
+	serverID, handshake := "", ""
 	device := "-"
 	status := http.StatusInternalServerError
 	defer func() {
 		// %q on both request-provided fields: an authenticated rogue device can
-		// send arbitrary bytes in host, and this line is the probe forensics
-		// surface — without quoting, embedded newlines forge service-log lines.
-		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey %q:%d -> %d (device %q)\n", host, port, status, device)
+		// send arbitrary bytes, and this line is the probe forensics surface —
+		// without quoting, embedded newlines forge service-log lines.
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey entry=%q handshake=%q -> %d (device %q)\n", serverID, handshake, status, device)
 	}()
 
-	// ① shape guards — method, body cap, JSON decode, field presence — ALL
-	// before any vault access, so a malformed probe can never ride the 403
-	// "not granted" wording (JSON/field validation precedes guard ③).
+	// ① 形状检查：方法、请求体上限、JSON 解码、字段齐全。缺少条目标识符
+	// 即为旧格式请求（票 #58）：拒绝并提示升级客户端，不去猜它对应哪个
+	// 条目。全部排在访问 vault 之前。
 	if req.Method != http.MethodPost {
 		status = http.StatusMethodNotAllowed
 		http.Error(w, "method not allowed", status)
@@ -385,8 +386,6 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 		http.Error(w, "request body too large", status)
 		return
 	}
-	// A lied-about (or absent) ContentLength falls through to MaxBytesReader
-	// and is reclassified as 413 at decode time (the pairDecode precedent).
 	req.Body = http.MaxBytesReader(w, req.Body, pinMaxBodyBytes)
 	var in pinHostKeyRequest
 	if err := json.NewDecoder(req.Body).Decode(&in); err != nil {
@@ -397,29 +396,30 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 			return
 		}
 		status = http.StatusBadRequest
-		writePinJSON(w, status, pinErrorResponse{Error: "unparseable key_blob"}) // §1.1's one 400 body
+		writePinJSON(w, status, pinErrorResponse{Error: "unparseable key_blob"})
 		return
 	}
-	if in.Host == "" || in.Port <= 0 || in.KeyBlob == "" {
+	if in.ServerID == "" {
+		status = http.StatusBadRequest
+		writePinJSON(w, status, pinErrorResponse{Error: "old-format pin forwarding request: no server entry id — upgrade the client, then retry"})
+		return
+	}
+	if in.HandshakeAddr == "" || in.KeyBlob == "" {
 		status = http.StatusBadRequest
 		writePinJSON(w, status, pinErrorResponse{Error: "unparseable key_blob"})
 		return
 	}
-	host, port = in.Host, in.Port
+	serverID, handshake = in.ServerID, in.HandshakeAddr
 
-	// ② the middleware's TokenInfo carries only the cache-token id; the row
-	// (and its profile binding) is re-resolved here, same as handleSnapshot.
+	// ② 设备码行与 profile 绑定（与 /snapshot 同一套闸）。
 	ti := auth.TokenInfoFromContext(req.Context())
 	if ti == nil || ti.UserID == "" {
 		status = http.StatusForbidden
-		http.Error(w, "no authenticated cache token", status) // fail closed
+		http.Error(w, "no authenticated cache token", status)
 		return
 	}
 	ct, err := r.st.GetCacheToken(ti.UserID)
 	if err != nil {
-		// A store fault is NOT an authorization verdict — 403 here would send
-		// the owner chasing a pointless `cache-tokens bind` while the real DB
-		// error stays buried (the handleSnapshot lesson, verbatim).
 		fmt.Fprintf(os.Stderr, "sshmgr serve: cache token lookup %s: %v\n", ti.UserID, err)
 		status = http.StatusInternalServerError
 		http.Error(w, "cache token lookup failed", status)
@@ -427,7 +427,7 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 	}
 	if ct == nil {
 		status = http.StatusForbidden
-		http.Error(w, "no authenticated cache token", status) // fail closed
+		http.Error(w, "no authenticated cache token", status)
 		return
 	}
 	device = ct.Name
@@ -437,49 +437,52 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	// ③ candidate walk. ServersForProfile's row order is unspecified (it
-	// feeds the TUI), so the ids are sorted HERE — the first host+port hit is
-	// then the smallest-id candidate, the ONE deterministic attribution used
-	// for both the audit row and the response's server_name (§1.1/§1.2 ③⑤).
-	ids, err := r.st.ServersForProfile(ct.ProfileID)
+	// ③ 条目存在且在设备码绑定的 profile 内。未知条目与未授权条目共用同一
+	// 条模糊文案：设备码不应从拒绝响应里学到库的形状。
+	srv, err := r.st.GetServer(in.ServerID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey server lookup %s: %v\n", in.ServerID, err)
+		status = http.StatusInternalServerError
+		http.Error(w, "server lookup failed", status)
+		return
+	}
+	granted, err := r.st.ServersForProfile(ct.ProfileID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey grant walk %s: %v\n", ct.ProfileID, err)
 		status = http.StatusInternalServerError
 		http.Error(w, "grant walk failed", status)
 		return
 	}
-	sort.Strings(ids)
-	var attributed *models.Server
-	for _, id := range ids {
-		srv, err := r.st.GetServer(id)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey server lookup %s: %v\n", id, err)
-			status = http.StatusInternalServerError
-			http.Error(w, "server lookup failed", status)
-			return
-		}
-		if srv == nil {
-			// The row vanished mid-walk (servers rm race) — skip it, never
-			// dereference (the core.go GetServer nil-check convention).
-			continue
-		}
-		if srv.Host == host && srv.Port == port {
-			attributed = srv
+	inProfile := false
+	for _, id := range granted {
+		if id == in.ServerID {
+			inProfile = true
 			break
 		}
 	}
-	if attributed == nil {
-		// Deliberately vague: the body names no profile, no entry, no count —
-		// a device code must not learn vault shape from a refused pin (the
-		// Plan 31/39 boundary; only the requester-supplied address is echoed).
+	if srv == nil || !inProfile {
 		status = http.StatusForbidden
-		http.Error(w, fmt.Sprintf("pin forwarding refused for %s:%d — no matching server entry is granted to this device's bound profile; ask the owner to grant the entry (or rebind via cache-tokens bind) and cache pull again", host, port), status)
+		http.Error(w, fmt.Sprintf("pin forwarding refused for %s — the server entry is not granted to this device's bound profile; ask the owner to grant the entry (or rebind via cache-tokens bind) and cache pull again", in.HandshakeAddr), status)
 		return
 	}
 
-	// ④ the forwarded bytes must parse as an SSH public key; the STORED value
-	// is the re-marshaled canonical form, byte-comparable with what a TOFU
-	// callback's remote.Marshal() produces (§1.2 ④).
+	// ④ 握手地址必须是该条目的候选地址之一（本票阶段即兜底 Host 加端口）；
+	// 条目有虚拟局域网地址时必须落在虚拟局域网地址里（本票地址数据源恒为
+	// 空，规则由网络拓扑票接入后生效）。
+	if in.HandshakeAddr != store.EntryFallbackAddr(srv) {
+		status = http.StatusBadRequest
+		writePinJSON(w, status, pinErrorResponse{Error: fmt.Sprintf("handshake address %s is not a candidate address of the server entry — cache pull and retry", in.HandshakeAddr)})
+		return
+	}
+	if vlan := store.EntryVirtualLanAddresses(srv); len(vlan) > 0 {
+		if !slices.Contains(vlan, in.HandshakeAddr) {
+			status = http.StatusBadRequest
+			writePinJSON(w, status, pinErrorResponse{Error: "handshake address must be a virtual LAN address of the server entry — cache pull and retry"})
+			return
+		}
+	}
+
+	// ⑤ 密钥字节必须能解析为 SSH 公钥；落库的是重新序列化后的规范形式。
 	raw, err := base64.StdEncoding.DecodeString(in.KeyBlob)
 	if err != nil {
 		status = http.StatusBadRequest
@@ -495,77 +498,40 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 	canonical := pub.Marshal()
 	fp := ssh.FingerprintSHA256(pub)
 
-	// The affects list is the OWNER full-vault view (ListServers — the device
-	// never receives it): every entry sharing this host:port is affected by
-	// the anchor's creation, and the audit line must let `audit --server`
-	// find "pinned me" for EACH of them (§6, symmetric with pin-clear).
-	all, err := r.st.ListServers()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey affects walk: %v\n", err)
-		status = http.StatusInternalServerError
-		http.Error(w, "server lookup failed", status)
-		return
-	}
-	var affected []string
-	for _, s := range all {
-		if s.Host == host && s.Port == port {
-			affected = append(affected, s.Name)
-		}
-	}
-	// The audit row is CONSTRUCTED here and written by InsertForwardedPin
-	// inside the insert transaction (§1.2 ⑤): a pin never lands without its
-	// history, and a rolled-back conflict leaves no audit row. project_id
-	// stays empty — a device initiated this, never a project (§6).
+	// 审计行在这里构造，由存储原语在插入事务里写入：锚与历史同进同退。
+	// 握手地址进审计与锚的来源信息（票 #58 用户故事 20）。
 	audit := store.AuditRow{
 		TS:       time.Now(),
-		ServerID: attributed.ID,
+		ServerID: srv.ID,
 		Action:   "pin-forward",
-		Command: fmt.Sprintf("host=%s:%d fp=%s device=%s via=forward affects=%d entries: %s",
-			host, port, fp, ct.Name, len(affected), strings.Join(affected, ", ")),
+		Command: fmt.Sprintf("entry=%s(%s) handshake=%s fp=%s device=%s via=forward",
+			srv.Name, srv.ID, in.HandshakeAddr, fp, ct.Name),
 		Status: "ok",
 	}
 
-	// ⑤ atomic landing. InsertForwardedPin answers insert-only's three
-	// outcomes with two values: equal=true is a matched existing anchor (the
-	// dual-mode judgment ran INSIDE the transaction); but a fresh insert AND
-	// a lost race to a different key both return (false, nil) — so the
-	// surviving anchor is point-read to tell them apart: ours → 201, someone
-	// else's → 409 equal=false.
-	equal, err := r.st.InsertForwardedPin(host, port, canonical, ct.Name, audit)
+	// ⑥ 仅可新增的原子落库。存储层按插入影响行数返回 inserted：只有本次
+	// 请求确实插入才回答 201；否则读取现有锚并用等价语义判断 equal。
+	inserted, err := r.st.InsertForwardedEntryPin(srv, in.HandshakeAddr, canonical, ct.Name, audit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey insert %q:%d: %v\n", host, port, err)
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey insert entry=%q: %v\n", srv.ID, err)
 		status = http.StatusInternalServerError
 		http.Error(w, "pin landing failed", status)
 		return
 	}
-	if equal {
-		// §1.1: the conflict body never echoes the fingerprint; equal lets an
-		// honest client auto-close a duplicate forward (§2.1).
+	if !inserted {
+		landed, err := r.st.GetEntryPin(srv)
+		if err != nil || landed == nil {
+			fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey confirm entry=%q: %v\n", srv.ID, err)
+			status = http.StatusInternalServerError
+			http.Error(w, "pin landing failed", status)
+			return
+		}
 		status = http.StatusConflict
-		writePinJSON(w, status, pinConflictResponse{Error: "already pinned", Equal: true})
+		writePinJSON(w, status, pinConflictResponse{Error: "already pinned", Equal: landed.Matches(canonical)})
 		return
 	}
-	landed, err := r.st.GetHostKey(host, port)
-	if err != nil || landed == nil {
-		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey confirm %q:%d: %v\n", host, port, err)
-		status = http.StatusInternalServerError
-		http.Error(w, "pin landing failed", status)
-		return
-	}
-	if !bytes.Equal(landed.Blob, canonical) {
-		// Lost the race to a different key — insert-only means our bytes are
-		// NOT what persisted. (An owner --force landing exactly inside this
-		// commit→read window would mislabel a real win as a conflict; the
-		// client's pull-and-retry recovery converges regardless — accepted
-		// micro-race, same class as the in-tx judgment's justification.)
-		status = http.StatusConflict
-		writePinJSON(w, status, pinConflictResponse{Error: "already pinned", Equal: false})
-		return
-	}
-
-	// ⑥
 	status = http.StatusCreated
-	writePinJSON(w, status, pinHostKeyResponse{Fingerprint: fp, ServerName: attributed.Name})
+	writePinJSON(w, status, pinHostKeyResponse{Fingerprint: fp, ServerName: srv.Name})
 }
 
 // ServeOpts carries the explicitly-set CLI flag inputs for the serve switches

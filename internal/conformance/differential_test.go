@@ -5,32 +5,32 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 
 	"golang.org/x/crypto/ssh"
 )
 
-// fakeHostKeyStore is a minimal sshbroker.HostKeyStore keyed by "host:port",
+// fakeHostKeyStore is a minimal sshbroker.HostKeyStore keyed by entry id,
 // used to drive the broker's TOFU callback without a real store. Mirrors the
 // one in internal/sshbroker/hostkey_test.go.
 type fakeHostKeyStore struct{ pins map[string]*store.Pin }
 
-func (f *fakeHostKeyStore) GetHostKey(host string, port int) (*store.Pin, error) {
-	return f.pins[fmt.Sprintf("%s:%d", host, port)], nil
+func (f *fakeHostKeyStore) GetEntryPin(srv *models.Server) (*store.Pin, error) {
+	return f.pins[srv.ID], nil
 }
 
-func (f *fakeHostKeyStore) SaveHostKey(host string, port int, k []byte) error {
+func (f *fakeHostKeyStore) SaveEntryPin(srv *models.Server, k []byte) error {
 	if f.pins == nil {
 		f.pins = map[string]*store.Pin{}
 	}
-	f.pins[fmt.Sprintf("%s:%d", host, port)] = &store.Pin{Blob: k, Format: store.PinFormatBlob}
+	f.pins[srv.ID] = &store.Pin{Blob: k, Format: store.PinFormatBlob}
 	return nil
 }
 
@@ -122,9 +122,9 @@ func TestDifferentialHostKeyRejection(t *testing.T) {
 
 	// Broker: pre-trust keyA under hostB:portB, then connect to B → mismatch.
 	st := &fakeHostKeyStore{pins: map[string]*store.Pin{
-		fmt.Sprintf("%s:%d", hostB, portB): {Blob: keyA.Marshal(), Format: store.PinFormatBlob},
+		"srv-b": {Blob: keyA.Marshal(), Format: store.PinFormatBlob},
 	}}
-	cb, _ := sshbroker.HostKeyTOFU(st, hostB, portB)
+	cb, _ := sshbroker.HostKeyTOFU(st, &models.Server{ID: "srv-b", Name: "b", Host: hostB, Port: portB, User: "sshuser", AuthMethod: models.AuthPassword})
 	_, err := sshbroker.Connect(context.Background(), hostB, portB, "sshuser", mustPrivAuth(t, privPath, ""), cb)
 	if err == nil {
 		t.Fatal("broker accepted a mismatched host key")

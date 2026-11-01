@@ -77,7 +77,7 @@ func openTestTunnelOnHost(t *testing.T, mgr *TunnelManager, st *store.Store, pro
 	if err != nil {
 		return "", err
 	}
-	hkCb, err := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	hkCb, err := sshbroker.HostKeyTOFU(st, srv)
 	if err != nil {
 		return "", err
 	}

@@ -4,11 +4,11 @@
 //     POST /server-metadata — one transaction holds the row read, the
 //     revision compare, the field writes, the revision bump AND the audit
 //     row, so a metadata change never lands without its history (the
-//     InsertForwardedPin shape, lifted from insert-only to conditional
+//     与 InsertForwardedEntryPin 同族的形状,从仅可新增收紧为条件更新
 //     update).
 //   - ApplyForwardedMetadata (client side): the local read-only-store mirror
 //     of a write the broker already accepted — the SECOND narrow write gap
-//     (after ApplyForwardedHostKey); it never creates local truth of its own.
+//     (在 ApplyForwardedEntryPin 之后);它绝不自行产生本地事实。
 package store
 
 import (
@@ -259,7 +259,7 @@ func truncateForAudit(s string) string {
 
 // ApplyForwardedMetadata mirrors a write the broker ALREADY accepted onto
 // this (read-only) cache store — the second narrow write gap, twin of
-// ApplyForwardedHostKey. Only the fields this edit carried are touched;
+// ApplyForwardedEntryPin. Only the fields this edit carried are touched;
 // revision/updated_at take the BROKER's response values (not local now());
 // the WHERE revision<? guard makes the mirror monotonic: a hot rebuild that
 // swapped in a generation already at or past this edit is a no-op success

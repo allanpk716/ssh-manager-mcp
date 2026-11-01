@@ -42,7 +42,8 @@ func TestOwnerSSHExecRunsCommand(t *testing.T) {
 		AuthMethod: models.AuthPassword, CredentialID: cid,
 	})
 	// pre-trust the test host key (TOFU would also work, but pin for determinism)
-	st.SaveHostKey(host, portOfAddr(addr), hostKey.Marshal())
+	smokeSrv, _ := st.GetServer(srvID)
+	st.SaveEntryPin(smokeSrv, hostKey.Marshal())
 	st.Close()
 	_ = srvID
 

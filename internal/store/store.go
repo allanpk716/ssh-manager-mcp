@@ -44,7 +44,7 @@ type Store struct {
 	path         string
 	readOnly     bool
 	auditSidecar *os.File
-	// forwardDevice is the local device-code name ApplyForwardedHostKey stamps
+	// forwardDevice 是 ApplyForwardedEntryPin 写入本地缓存锚时携带的设备码名字
 	// into pin_device, so a locally-recorded forwarded anchor carries the same
 	// metadata as the broker's authoritative row (Plan 48 §2.3). Set once by
 	// the cache hydration path alongside SetReadOnly; empty on server stores.
@@ -85,7 +85,7 @@ func (s *Store) SetReadOnly(auditSidecar *os.File) {
 // cache store). Tunnel control-loop duties 3/4/5 and mirror writes key off it.
 func (s *Store) IsReadOnly() bool { return s.readOnly }
 
-// SetForwardDevice records the local device-code name that ApplyForwardedHostKey
+// SetForwardDevice 记录 ApplyForwardedEntryPin 写锚时携带的设备码名字
 // stamps into pin_device (Plan 48 §2.3). Metadata only — touches no DB row and
 // is intentionally NOT gated by read-only mode: the cache hydration path sets
 // it on the temp store right after SetReadOnly.
@@ -128,6 +128,12 @@ func Open(path string, masterKey []byte) (*Store, error) {
 		return nil, err
 	}
 	if err := initSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// 票 #58：旧「主机:端口」锚迁移到按服务器条目存放。必须排在
+	// initSchema 之后：迁移要写审计行，也要读新建的按条目锚表。
+	if err := migrateEntryPins(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -624,6 +630,15 @@ CREATE TABLE IF NOT EXISTS host_keys (
   pin_format TEXT NOT NULL DEFAULT 'blob',
   pin_source TEXT NOT NULL DEFAULT 'tofu',
   pin_device TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS entry_host_keys (
+  server_id TEXT PRIMARY KEY REFERENCES servers(id),
+  key_blob BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  pin_format TEXT NOT NULL DEFAULT 'blob',
+  pin_source TEXT NOT NULL DEFAULT 'tofu',
+  pin_device TEXT NOT NULL DEFAULT '',
+  handshake_addr TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS forward_bind_hosts (
   ip         TEXT PRIMARY KEY,

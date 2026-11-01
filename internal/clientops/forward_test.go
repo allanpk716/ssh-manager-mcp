@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/mcpserver"
+	"ssh-manager-mcp/internal/models"
 )
 
 // testPin is a well-formed (but meaningless) SPKI pin for constructor-level
@@ -62,6 +64,11 @@ func newTestForwarder(t *testing.T, srv *httptest.Server) *PinForwarder {
 	return f
 }
 
+// fwdEntry 构造转发测试用的服务器条目模型（同地址两个条目可共用地址）。
+func fwdEntry(host string, port int) *models.Server {
+	return &models.Server{ID: "srv-fwd", Name: "target", Host: host, Port: port, User: "u", AuthMethod: models.AuthPassword}
+}
+
 // assertPinPost checks the wire shape of one forwarding POST (§1.1 request).
 func assertPinPost(t *testing.T, r *http.Request, blob []byte, host string, port int) {
 	t.Helper()
@@ -84,8 +91,11 @@ func assertPinPost(t *testing.T, r *http.Request, blob []byte, host string, port
 		t.Errorf("body is not the §1.1 JSON shape: %v (%.100s)", err, raw)
 		return
 	}
-	if req.Host != host || req.Port != port {
-		t.Errorf("body host/port = %q/%d, want %q/%d", req.Host, req.Port, host, port)
+	if req.ServerID != "srv-fwd" {
+		t.Errorf("body server_id = %q, want the server entry id", req.ServerID)
+	}
+	if want := fmt.Sprintf("%s:%d", host, port); req.HandshakeAddr != want {
+		t.Errorf("body handshake_addr = %q, want %q", req.HandshakeAddr, want)
 	}
 	if req.KeyBlob != base64.StdEncoding.EncodeToString(blob) {
 		t.Error("key_blob is not the base64(std) of the marshaled key")
@@ -181,7 +191,7 @@ func TestPinForwarder_Forward_BranchTexts(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			err := newTestForwarder(t, srv).Forward(host, port, blob)
+			err := newTestForwarder(t, srv).Forward(fwdEntry(host, port), blob)
 			if tc.want == "" {
 				if err != nil {
 					t.Fatalf("Forward: want nil, got %v", err)
@@ -219,7 +229,7 @@ func TestPinForwarder_Forward_RedirectNotFollowed(t *testing.T) {
 	srv := httptest.NewTLSServer(mux)
 	defer srv.Close()
 
-	err := newTestForwarder(t, srv).Forward("h", 22, blob)
+	err := newTestForwarder(t, srv).Forward(fwdEntry("h", 22), blob)
 	if followed {
 		t.Fatal("the 302 was followed — redirects must never be followed (Plan 37 §2.0)")
 	}
@@ -246,7 +256,7 @@ func TestPinForwarder_Forward_Unreachable_MainMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := f.Forward("192.168.1.108", 22, blob)
+	got := f.Forward(fwdEntry("192.168.1.108", 22), blob)
 	want := forwardMainMessage("192.168.1.108", 22, fp)
 	if got == nil || got.Error() != want {
 		t.Fatalf("unreachable broker must render the main message:\n got: %v\nwant: %q", got, want)
@@ -268,7 +278,7 @@ func TestPinForwarder_Forward_Timeout_MainMessage(t *testing.T) {
 	f.client.Timeout = 200 * time.Millisecond // test-only shrink of forwardTimeout
 
 	start := time.Now()
-	err := f.Forward("192.168.1.108", 22, blob)
+	err := f.Forward(fwdEntry("192.168.1.108", 22), blob)
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("Forward blocked for %v — the timeout must bound the handshake path", elapsed)
 	}
@@ -310,7 +320,7 @@ func TestPinForwarder_Forward_401_CacheUntouched(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err = newTestForwarder(t, srv).Forward("192.168.1.108", 22, blob)
+	err = newTestForwarder(t, srv).Forward(fwdEntry("192.168.1.108", 22), blob)
 	if err == nil || err.Error() != forwardMsg401 {
 		t.Fatalf("401 text mismatch:\n got: %v\nwant: %q", err, forwardMsg401)
 	}
@@ -344,7 +354,7 @@ func TestPinForwarder_NoCredential_FailsClosedToMainMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a missing credential must construct a no-capability forwarder, got: %v", err)
 	}
-	err = f.Forward("192.168.1.108", 22, blob)
+	err = f.Forward(fwdEntry("192.168.1.108", 22), blob)
 	want := forwardMainMessage("192.168.1.108", 22, fp)
 	if err == nil || err.Error() != want {
 		t.Fatalf("missing cache.auth.json must fail closed with the main message:\n got: %v\nwant: %q", err, want)
@@ -361,7 +371,7 @@ func TestPinForwarder_PlaintextRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no pin → no scheme requirement; construction must succeed: %v", err)
 	}
-	err = f.Forward("192.168.1.108", 22, blob)
+	err = f.Forward(fwdEntry("192.168.1.108", 22), blob)
 	want := forwardMsgPlaintext("192.168.1.108", 22)
 	if err == nil || err.Error() != want {
 		t.Fatalf("plaintext refusal text mismatch:\n got: %v\nwant: %q", err, want)

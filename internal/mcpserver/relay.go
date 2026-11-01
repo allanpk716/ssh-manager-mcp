@@ -202,7 +202,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 			err = aerr
 			return
 		}
-		hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
+		hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
 		if herr != nil {
 			status = "error"
 			err = herr
@@ -269,7 +269,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		err = aerr
 		return
 	}
-	dstHkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), dstSrv.Host, dstSrv.Port)
+	dstHkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), dstSrv)
 	if herr != nil {
 		status = "error"
 		err = herr

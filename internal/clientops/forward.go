@@ -21,6 +21,9 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
 )
 
 // forwardTimeout bounds one pin-forward POST (§2.1: "转发超时 10 秒(它在 SSH
@@ -37,7 +40,7 @@ const forwardBodyCap = 8 << 10
 // holds an anchor EQUAL to the presented key (a duplicate forward after a
 // restart, or a concurrent equal race). The caller (the HostKeyTOFU wrapper
 // wired in the next task) errors.Is-matches this, applies the key locally via
-// ApplyForwardedHostKey, and lets the handshake continue — zero user ceremony.
+// ApplyForwardedEntryPin, and lets the handshake continue — zero user ceremony.
 // The user-facing text rides the returned error's Error(); the sentinel is for
 // programmatic branching only.
 var ErrPinForwardEqual = errors.New("pin-forward conflict: the broker already holds an equal anchor")
@@ -97,12 +100,14 @@ func (e *forwardError) Unwrap() error { return e.err }
 
 // pinForwardRequest is the §1.1 request body (client-side copy; the serve-side
 // definition lives in mcpserver/serve.go — the JSON field names are the
-// contract). key_blob is base64(std) of the marshaled SSH wire-format key,
-// the same bytes remote.Marshal() produced in the handshake callback.
+// contract). 锚定转发协议（票 #58）携带条目标识符、握手地址和主机密钥；
+// key_blob is base64(std) of the marshaled SSH wire-format key, the same bytes
+// remote.Marshal() produced in the handshake callback. 条目标识符缺失即为旧
+// 格式请求，权威端会拒绝并提示升级客户端。
 type pinForwardRequest struct {
-	Host    string `json:"host"`
-	Port    int    `json:"port"`
-	KeyBlob string `json:"key_blob"`
+	ServerID      string `json:"server_id"`
+	HandshakeAddr string `json:"handshake_addr"`
+	KeyBlob       string `json:"key_blob"`
 }
 
 // pinForwardConflictBody is the 409 shape: the error text is fixed
@@ -181,13 +186,14 @@ func NewPinForwarder(cred CacheCred) (*PinForwarder, error) {
 	}, nil
 }
 
-// Forward POSTs the presented host key to the broker (§2.1 branch table).
-// marshaledKey is the handshake's remote.Marshal() bytes; every failure returns
-// an error whose Error() is the branch's verbatim text (nil on 201; the 409
-// equal=true outcome wraps ErrPinForwardEqual for the caller's branching).
-// The HTTP call is synchronous and bounded by forwardTimeout — it sits on the
-// SSH handshake critical path.
-func (f *PinForwarder) Forward(host string, port int, marshaledKey []byte) error {
+// Forward POSTs the presented host key of one server entry to the broker
+// (§2.1 branch table). marshaledKey is the handshake's remote.Marshal() bytes;
+// every failure returns an error whose Error() is the branch's verbatim text
+// (nil on 201; the 409 equal=true outcome wraps ErrPinForwardEqual for the
+// caller's branching). The HTTP call is synchronous and bounded by
+// forwardTimeout — it sits on the SSH handshake critical path.
+func (f *PinForwarder) Forward(srv *models.Server, marshaledKey []byte) error {
+	host, port := srv.Host, srv.Port
 	fp := presentedFingerprint(marshaledKey)
 	if !f.capable {
 		if f.noCred {
@@ -196,9 +202,9 @@ func (f *PinForwarder) Forward(host string, port int, marshaledKey []byte) error
 		return &forwardError{text: forwardMsgPlaintext(host, port)}
 	}
 	body, err := json.Marshal(pinForwardRequest{
-		Host:    host,
-		Port:    port,
-		KeyBlob: base64.StdEncoding.EncodeToString(marshaledKey),
+		ServerID:      srv.ID,
+		HandshakeAddr: store.EntryFallbackAddr(srv),
+		KeyBlob:       base64.StdEncoding.EncodeToString(marshaledKey),
 	})
 	if err != nil {
 		return &forwardError{text: forwardMainMessage(host, port, fp), err: err}

@@ -119,7 +119,11 @@ func seedServerOnHost(t *testing.T, st *store.Store, name, host, addr string, hk
 		srv.SudoCredentialID = sid
 	}
 	id, _ := st.AddServer(srv)
-	_ = st.SaveHostKey(host, srv.Port, hk.Marshal()) // pre-trust the testsshd host key under this host alias
+	if row, err := st.GetServer(id); err != nil {
+		t.Fatal(err)
+	} else if err := st.SaveEntryPin(row, hk.Marshal()); err != nil { // pre-trust the testsshd host key on this entry
+		t.Fatal(err)
+	}
 	return id
 }
 

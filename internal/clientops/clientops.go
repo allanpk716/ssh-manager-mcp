@@ -267,7 +267,7 @@ type cacheMeta struct {
 // CacheDeviceNameFor returns the device-code name recorded in the given
 // instance's cache.meta ("" = the default instance; "" also when the meta is
 // absent, unreadable, or predates Plan 40). Plan 48 §2.3: cli stamps this name
-// onto locally applied forwarded pins (host_keys.pin_device) — diagnostic
+// onto locally applied forwarded pins (entry_host_keys.pin_device) — diagnostic
 // metadata for the owner's detection surface, never load-bearing, so every
 // failure degrades to "" instead of an error.
 func CacheDeviceNameFor(instance string) string {

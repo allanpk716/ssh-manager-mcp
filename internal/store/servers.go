@@ -80,8 +80,19 @@ func (s *Store) DeleteServer(id string) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
-	_, err := s.db.Exec(`DELETE FROM servers WHERE id=?`, id)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	srv, err := deleteServerEntryTx(tx, id)
+	if err != nil {
+		return err
+	}
+	if srv == nil {
+		return nil
+	}
+	return tx.Commit()
 }
 
 type scanner interface {

@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -42,7 +43,7 @@ func TestHostKeyTOFU_ReadOnlyRefusesUnknown(t *testing.T) {
 	defer s.Close()
 	s.SetReadOnly(nil) // read-only, no audit sidecar
 
-	cb, err := HostKeyTOFU(s, "10.0.0.99", 22)
+	cb, err := HostKeyTOFU(s, &models.Server{ID: "srv-x", Name: "x", Host: "10.0.0.99", Port: 22, User: "u", AuthMethod: models.AuthPassword})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,13 +67,21 @@ func TestHostKeyTOFU_ReadOnlyAllowsKnown(t *testing.T) {
 	defer s.Close()
 	remote := testPublicKey(t)
 	marshaled := remote.Marshal()
+	id, err := s.AddServer(&models.Server{Name: "x", Host: "10.0.0.99", Port: 22, User: "u", AuthMethod: models.AuthPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := s.GetServer(id)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// pin the key while WRITABLE, then go read-only
-	if err := s.SaveHostKey("10.0.0.99", 22, marshaled); err != nil {
+	if err := s.SaveEntryPin(srv, marshaled); err != nil {
 		t.Fatal(err)
 	}
 	s.SetReadOnly(nil)
 
-	cb, err := HostKeyTOFU(s, "10.0.0.99", 22)
+	cb, err := HostKeyTOFU(s, srv)
 	if err != nil {
 		t.Fatal(err)
 	}

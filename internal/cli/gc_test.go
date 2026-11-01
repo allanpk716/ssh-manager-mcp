@@ -12,8 +12,8 @@ import (
 )
 
 // seedGCStore points SSHMGR_STORE at a fresh vault holding 2 orphan credential
-// rows, 1 in-use credential (bound to a server), 1 host_keys row and 1
-// cache_tokens row — everything gc must NOT touch — then closes the store.
+// rows, 1 in-use credential (bound to a server), 1 条目锚 and 1 cache_tokens
+// row — everything gc must NOT touch — then closes the store.
 // Returns the master key so tests can re-open the vault and assert state.
 func seedGCStore(t *testing.T) []byte {
 	t.Helper()
@@ -29,11 +29,17 @@ func seedGCStore(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	// In-use credential: referenced by the server row.
-	if _, err := st.AddServerWithCredentials(
+	gpuID, err := st.AddServerWithCredentials(
 		&models.Server{Name: "gpu", Host: "192.0.2.10", Port: 22, User: "u"},
 		&models.Credential{Type: models.CredPassword, Secret: []byte("in-use")},
 		nil,
-	); err != nil {
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gpu, err := st.GetServer(gpuID); err != nil {
+		t.Fatal(err)
+	} else if err := st.SaveEntryPin(gpu, []byte("hostkey-blob")); err != nil {
 		t.Fatal(err)
 	}
 	// 2 orphans: minted, never referenced by any server (the historical leak
@@ -42,9 +48,6 @@ func seedGCStore(t *testing.T) []byte {
 		if _, err := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte(pw)}); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := st.SaveHostKey("192.0.2.10", 22, []byte("hostkey-blob")); err != nil {
-		t.Fatal(err)
 	}
 	gcProf, err := st.AddProfile("gc-p")
 	if err != nil {
@@ -124,10 +127,9 @@ func TestGC_ApplyDeletesOrphansOnly(t *testing.T) {
 	if c, err := st.GetCredential(srv.CredentialID); err != nil || c == nil || string(c.Secret) != "in-use" {
 		t.Fatalf("in-use credential damaged by gc: %v %+v", err, c)
 	}
-	// host_keys row untouched.
-	hk, err := st.GetHostKey("192.0.2.10", 22)
-	if err != nil || hk == nil || string(hk.Blob) != "hostkey-blob" {
-		t.Fatalf("host_keys row must survive gc: %v %v", hk, err)
+	// 条目的锚不受凭据清理影响。
+	if pins, err := st.ListEntryPins(); err != nil || len(pins) != 1 {
+		t.Fatalf("gc 不得触碰锚：%v %v", pins, err)
 	}
 	// cache_tokens row untouched.
 	cts, err := st.ListCacheTokens()
