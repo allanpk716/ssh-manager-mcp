@@ -27,9 +27,9 @@ type Snapshot struct {
 	// EntryHostKeys（票 #58）是按服务器条目存放的锚；HostKeys 仍为兜底地址
 	// 推导出的旧格式行，旧客户端靠它继续校验。旧快照解码时本字段为空。
 	EntryHostKeys []SnapshotEntryHostKey `json:"entry_host_keys,omitempty"`
-	// Secrets / SecretAllows（票 #59）只进全量导出：备份与导出文件本身整体
-	// 加密，快照段里按明文字段携带值，靠外层加密保护；导入时用目标 vault
-	// 的主密钥重新加密。按 profile 裁剪的客户端快照不带这两个字段。
+	// Secrets / SecretAllows（票 #59）在全量导出与声明了客户端版本的
+	// profile 裁剪快照中携带：备份与导出文件本身整体加密，快照段里按
+	// 明文字段携带值，靠外层加密保护；导入时用目标库的主密钥重新加密。
 	Secrets      []SnapshotSecret      `json:"secrets,omitempty"`
 	SecretAllows []SnapshotSecretAllow `json:"secret_allows,omitempty"`
 	Audit        []SnapshotAudit       `json:"audit"`
@@ -477,10 +477,10 @@ func (s *Store) snapshotSecrets() ([]SnapshotSecret, []SnapshotSecretAllow, erro
 // unchanged. Unknown profileID is an explicit error (owner misconfiguration must
 // be loud, not an empty-but-200 snapshot).
 //
-// Deliberately does NOT share queries with ExportSnapshot: the owner-side
-// export/import backup path stays whole-vault by design and must not drift.
-// clientDeclaredVersion 表示这次拉取是否声明了客户端版本；目前尚未据此
-// 裁剪，未声明时去掉机密项将另行实现。
+// The owner-side whole-vault export and this authorization-scoped assembly stay
+// separate so the backup path cannot drift into accidental cropping.
+// clientDeclaredVersion 表示这次拉取是否声明了客户端版本；未声明时按
+// ADR 0014 去掉全部机密项。
 func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion bool) (*Snapshot, error) {
 	if err := requireProfile(s.db, profileID); err != nil {
 		return nil, err
@@ -642,8 +642,44 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 		return nil, err
 	}
 
-	// 机密项与审计在这里有意为空：按 profile 裁剪的客户端快照在本规格里
-	// 不带机密项段（快照下发属于后续工作）；审计从不离开权威端。
+	// 机密项只下发给声明了客户端版本的客户端，并且按该 profile 授权的
+	// 服务器集合裁剪；审计从不离开权威端。
+	if clientDeclaredVersion {
+		secrets, allows, err := s.snapshotSecrets()
+		if err != nil {
+			return nil, err
+		}
+		grantedServerIDs := make([]string, 0, len(snap.Servers))
+		for _, server := range snap.Servers {
+			grantedServerIDs = append(grantedServerIDs, server.ID)
+		}
+		// 裁剪判定与机密项列表共用 secretServersInScope：只保留与 profile
+		// 授予的服务器有交集的机密项，关联行只保留交集内的服务器条目。
+		cropRows := make([]secretDisplayRow, 0, len(allows))
+		for _, allow := range allows {
+			cropRows = append(cropRows, secretDisplayRow{
+				secretID: allow.SecretID, hasServer: true, serverID: allow.ServerID,
+			})
+		}
+		inScope := secretServersInScope(cropRows, ScopeToServers(grantedServerIDs...))
+		scopedAllows := make([]SnapshotSecretAllow, 0, len(allows))
+		for _, allow := range allows {
+			for _, server := range inScope[allow.SecretID] {
+				if server.id == allow.ServerID {
+					scopedAllows = append(scopedAllows, allow)
+					break
+				}
+			}
+		}
+		scopedSecrets := make([]SnapshotSecret, 0, len(secrets))
+		for _, secret := range secrets {
+			if _, exists := inScope[secret.ID]; exists {
+				scopedSecrets = append(scopedSecrets, secret)
+			}
+		}
+		snap.Secrets = scopedSecrets
+		snap.SecretAllows = scopedAllows
+	}
 	return snap, nil
 }
 

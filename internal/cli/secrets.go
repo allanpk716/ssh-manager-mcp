@@ -27,20 +27,33 @@ var secretsReadHiddenLine = func() ([]byte, error) {
 	return term.ReadPassword(int(os.Stdin.Fd()))
 }
 
+// errSecretsNeedVault 是「本机还没有 vault」的统一报错：机密项随 vault 存
+// 放，无 vault 也无客户端缓存的机器先跑初始化向导。
+var errSecretsNeedVault = errors.New("本机还没有 vault：机密项随 vault 一起存放，请先运行初始化向导（直接执行 sshmgr）")
+
+// secretsRoleFor 判定本机在机密项命令下的角色，与 policy 命令组共用同一套
+// 判定链（vault 优先，其次看客户端缓存登记）。只返回权威端（或单机）与客
+// 户端两档；无 vault 无缓存的机器直接得到 errSecretsNeedVault。
+func secretsRoleFor(instance string) (policyRole, error) {
+	role, err := resolvePolicyRoleFor(instance)
+	if err != nil {
+		return 0, err
+	}
+	if role == policyRoleUnenrolled {
+		return 0, errSecretsNeedVault
+	}
+	return role, nil
+}
+
 // requireSecretsVault 断言本机持有 vault（权威端或单机部署）并返回已解锁的
-// 存储。角色判定与 policy 命令组共用同一套判定（vault 优先，其次看客户端缓
-// 存登记）。客户端上机密项还没有下发通道，整个命令组都拒绝执行，避免让人
-// 误以为本地有一份机密项数据。
+// 存储。客户端上机密项是只读快照，写操作仍到权威端执行。
 func requireSecretsVault() (*store.Store, error) {
-	role, err := resolvePolicyRole()
+	role, err := secretsRoleFor("")
 	if err != nil {
 		return nil, err
 	}
-	switch role {
-	case policyRoleClient:
-		return nil, errors.New("本机是缓存客户端：机密项在权威端维护，客户端还没有接收机密项的快照通道——请在权威端执行这条命令")
-	case policyRoleUnenrolled:
-		return nil, errors.New("本机还没有 vault：机密项随 vault 一起存放，请先运行初始化向导（直接执行 sshmgr）")
+	if role == policyRoleClient {
+		return nil, errors.New("本机是缓存客户端：机密项在权威端维护，客户端只能执行只读的 secrets list——请在权威端执行这条命令")
 	}
 	return openUnlockedStore()
 }
@@ -192,33 +205,18 @@ func secretsRmCmd() *cobra.Command {
 }
 
 func secretsListCmd() *cobra.Command {
-	var query, server string
+	var query, server, instance string
 	c := &cobra.Command{
-		Use:   "list [--query 文本] [--server 条目]",
+		Use:   "list [--query 文本] [--server 条目] [--instance 名称]",
 		Args:  cobra.NoArgs,
 		Short: "List secrets (never their values)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := requireSecretsVault()
+			views, err := loadSecretViews(cmd.ErrOrStderr(), instance, server)
 			if err != nil {
 				return err
-			}
-			defer s.Close()
-			views, err := s.ListSecrets()
-			if err != nil {
-				return err
-			}
-			if server != "" {
-				srv, err := s.GetServerByName(server)
-				if err != nil {
-					return err
-				}
-				if srv == nil {
-					return fmt.Errorf("服务器条目 %q 不存在", server)
-				}
-				views = filterSecretsByServer(views, server)
 			}
 			if query != "" {
-				views = filterSecretsByQuery(views, query)
+				views = store.FilterSecretsByQuery(views, query)
 			}
 			out := cmd.OutOrStdout()
 			for _, v := range views {
@@ -229,7 +227,62 @@ func secretsListCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&query, "query", "", "只显示名字或备注包含该文本的机密项")
 	c.Flags().StringVar(&server, "server", "", "只显示可写入列表包含该服务器条目的机密项")
+	c.Flags().StringVar(&instance, "instance", "", policyInstanceFlagHelp)
 	return c
+}
+
+// loadSecretViews 按本机角色读取机密项可见列表：权威端与单机部署从 vault
+// 读；客户端从加密缓存快照读。两条路径共用存储层的服务器范围判定与
+// 筛选函数；--server 同时接受服务器条目标识符与名字。
+func loadSecretViews(errOut io.Writer, instance, server string) ([]store.SecretView, error) {
+	role, err := secretsRoleFor(instance)
+	if err != nil {
+		return nil, err
+	}
+	switch role {
+	case policyRoleAuthority:
+		s, err := openUnlockedStore()
+		if err != nil {
+			return nil, err
+		}
+		defer s.Close()
+		if server != "" {
+			srv, err := s.ResolveServer(server)
+			if err != nil {
+				return nil, err
+			}
+			if srv == nil {
+				return nil, fmt.Errorf("服务器条目 %q 不存在", server)
+			}
+			server = srv.Name
+		}
+		views, err := s.ListSecretsInScope(store.ScopeAllServers())
+		if err != nil {
+			return nil, err
+		}
+		return store.FilterSecretsByServer(views, server), nil
+	case policyRoleClient:
+		snapshot, err := loadPolicyClientSnapshot(errOut, instance, "listing secrets")
+		if err != nil {
+			return nil, err
+		}
+		if snapshot == nil {
+			return nil, errors.New("本机客户端缓存不可读：请先执行 cache pull，再查看机密项列表")
+		}
+		if server != "" {
+			srv := store.ResolveServerInSnapshot(snapshot, server)
+			if srv == nil {
+				// 客户端快照里没有这台服务器：范围外与不存在无法区分，
+				// 也不应区分，都按权威端同款「不存在」报错。
+				return nil, fmt.Errorf("服务器条目 %q 不存在", server)
+			}
+			server = srv.Name
+		}
+		views := store.SecretViewsFromSnapshot(snapshot)
+		return store.FilterSecretsByServer(views, server), nil
+	default:
+		return nil, errSecretsNeedVault
+	}
 }
 
 func secretsAllowCmd() *cobra.Command {
@@ -312,30 +365,6 @@ func printSecretView(out io.Writer, v store.SecretView) {
 
 func formatSecretTime(unix int64) string {
 	return time.Unix(unix, 0).Format("2006-01-02 15:04:05 Z07:00")
-}
-
-func filterSecretsByServer(views []store.SecretView, server string) []store.SecretView {
-	out := make([]store.SecretView, 0, len(views))
-	for _, v := range views {
-		for _, name := range v.AllowedServers {
-			if name == server {
-				out = append(out, v)
-				break
-			}
-		}
-	}
-	return out
-}
-
-func filterSecretsByQuery(views []store.SecretView, query string) []store.SecretView {
-	needle := strings.ToLower(query)
-	out := make([]store.SecretView, 0, len(views))
-	for _, v := range views {
-		if strings.Contains(strings.ToLower(v.Name), needle) || strings.Contains(strings.ToLower(v.Note), needle) {
-			out = append(out, v)
-		}
-	}
-	return out
 }
 
 // readSecretValueInput 是新增与换值共用的值读取器。任何报错都不回显读到的
