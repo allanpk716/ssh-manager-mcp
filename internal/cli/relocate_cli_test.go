@@ -17,6 +17,7 @@ import (
 
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
+	"ssh-manager-mcp/internal/testutil"
 )
 
 // runCachePull executes the real `cache pull` cobra command in-process against
@@ -39,9 +40,7 @@ func runCachePull(t *testing.T, url, token, pin string) string {
 }
 
 func TestCachePull_FirstEnrollRelocateFollowsResultSlot(t *testing.T) {
-	userDir := t.TempDir()
-	t.Setenv("APPDATA", userDir)
-	t.Setenv("XDG_CONFIG_HOME", userDir)
+	dekDir, userDir := testutil.IsolateDirs(t)
 	withEnv(t, map[string]string{
 		"SSHMGR_CACHE_DIR":         "",
 		"SSHMGR_CACHE_DEK":         "",
@@ -50,8 +49,6 @@ func TestCachePull_FirstEnrollRelocateFollowsResultSlot(t *testing.T) {
 		"SSHMGR_CACHE_URL":         "",
 		"SSHMGR_CACHE_TOKEN":       "",
 	})
-	dekDir := t.TempDir()
-	t.Setenv("SSHMGR_CACHE_DEK_DIR", dekDir)
 
 	// Light pinned serve: Plan-40 header derived from the bearer code prefix
 	// (plan40Serve shape), snapshot body, auto Date (valid for the anchor gate).

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ssh-manager-mcp/internal/testutil"
 )
 
 func TestInstanceFlagMutex(t *testing.T) {
@@ -37,11 +39,8 @@ func TestInstanceFlagMutex(t *testing.T) {
 
 // mcp 无默认 cache 且有实例 → 报错列实例（exit 前的 RunE 错误）
 func TestMCP_NoDefaultCache_WithInstances_Errors(t *testing.T) {
-	userDir := t.TempDir()
-	t.Setenv("APPDATA", userDir)
-	t.Setenv("XDG_CONFIG_HOME", userDir)
+	_, userDir := testutil.IsolateDirs(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
-	t.Setenv("SSHMGR_CACHE_DEK_DIR", t.TempDir())
 	for _, n := range []string{"agentA", "agentB"} {
 		os.MkdirAll(filepath.Join(userDir, "ssh-manager", "instances", n), 0o700)
 	}

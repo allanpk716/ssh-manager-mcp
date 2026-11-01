@@ -16,20 +16,17 @@ import (
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testutil"
 )
 
 // seedRootVersionCache 写出真实的本地加密缓存，之后不再联系权威端。命令测试
 // 用它证明根命令提示只读本地数据，且不污染标准输出。
 func seedRootVersionCacheForInstance(t *testing.T, recommendedVersion, instance string) []byte {
 	t.Helper()
-	userDir := t.TempDir()
-	vaultDir := t.TempDir()
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", userDir)
-	t.Setenv("APPDATA", userDir)
-	t.Setenv("SSHMGR_STORE", filepath.Join(vaultDir, "store.db"))
+	vaultDir, _ := testutil.IsolateDirs(t)
 	if instance == "" {
 		t.Setenv("SSHMGR_CACHE_DIR", t.TempDir())
+		t.Setenv("SSHMGR_CACHE_DEK", filepath.Join(vaultDir, "cache-dek.key"))
 	} else {
 		t.Setenv("SSHMGR_CACHE_DIR", "")
 		t.Setenv("SSHMGR_CACHE_DEK", "")

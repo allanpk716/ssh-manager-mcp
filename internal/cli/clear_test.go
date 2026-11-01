@@ -11,6 +11,7 @@ import (
 
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testutil"
 	"ssh-manager-mcp/internal/vaultio"
 )
 
@@ -20,20 +21,7 @@ import (
 // — and a teardown test could DELETE — the operator's live vault).
 func withClearDirs(t *testing.T) (vaultDir, userDir string) {
 	t.Helper()
-	vaultDir = t.TempDir()
-	userDir = t.TempDir()
-	t.Setenv("SSHMGR_STORE", filepath.Join(vaultDir, "store.db"))
-	t.Setenv("SSHMGR_FILEKEY_PATH", filepath.Join(vaultDir, "master.key.plain"))
-	t.Setenv("SSHMGR_MASTERKEY_HEX", "")
-	t.Setenv("SSHMGR_CACHE_DIR", "")
-	t.Setenv("SSHMGR_CACHE_DEK", filepath.Join(vaultDir, "cache-dek.key"))
-	t.Setenv("SSHMGR_SERVE_LOG", filepath.Join(vaultDir, "serve.log")) // Plan 19 T7 lesson: pin the seam or clear's enumeration Stats the real vault dir
-	t.Setenv("SSHMGR_SERVE_CERT", "")
-	t.Setenv("SSHMGR_SERVE_KEY", "")
-	t.Setenv("SSHMGR_SERVE_MARKER", "")
-	t.Setenv("APPDATA", userDir) // os.UserConfigDir on Windows
-	t.Setenv("XDG_CONFIG_HOME", userDir)
-	return vaultDir, userDir
+	return testutil.IsolateDirs(t)
 }
 
 // seedClearVault creates an unlocked (openable) vault at the pinned dirs —
@@ -490,15 +478,11 @@ func TestClear_CorruptRoleJSONStillClears(t *testing.T) {
 // instances/ tree and every per-instance DEK variant are enumerated — a
 // residual instance dir IS residual credentials.
 func TestClear_EnumeratesInstancesAndDekVariants(t *testing.T) {
-	// 自包含重定向（clear_test.go 顶部已有同款 APPDATA/XDG 手法,形式一致）
-	userDir, vault := t.TempDir(), t.TempDir()
-	t.Setenv("APPDATA", userDir)
-	t.Setenv("XDG_CONFIG_HOME", userDir)
+	// 自包含重定向：用户配置目录与系统级 vault 目录同在一个测试临时根下。
+	vault, userDir := testutil.IsolateDirs(t)
 	withEnv(t, map[string]string{
-		"SSHMGR_CACHE_DIR":     "",
-		"SSHMGR_CACHE_DEK":     "",
-		"SSHMGR_STORE":         filepath.Join(vault, "store.db"), // clearVaultDir 从 store 路径派生
-		"SSHMGR_CACHE_DEK_DIR": vault,                            // DEK 变体 glob 的 seam 基目录
+		"SSHMGR_CACHE_DIR": "",
+		"SSHMGR_CACHE_DEK": "",
 	})
 	instRoot := filepath.Join(userDir, "ssh-manager", "instances")
 	os.MkdirAll(filepath.Join(instRoot, "agentA"), 0o700)

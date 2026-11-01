@@ -21,18 +21,14 @@ import (
 
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testutil"
 )
 
-// isolatedConfigDir redirects os.UserConfigDir to a fresh temp dir (so
-// InstancesRoot/default-slot paths never touch the real machine) and clears the
-// two single-slot override envs (empty string = unset for Getenv).
+// isolatedConfigDir redirects os.UserConfigDir to a fresh temp dir on every
+// platform (so InstancesRoot/default-slot paths never touch the real machine).
 func isolatedConfigDir(t *testing.T) string {
 	t.Helper()
-	userDir := t.TempDir()
-	t.Setenv("APPDATA", userDir)
-	t.Setenv("XDG_CONFIG_HOME", userDir)
-	t.Setenv("SSHMGR_CACHE_DIR", "")
-	t.Setenv("SSHMGR_CACHE_DEK", "")
+	_, userDir := testutil.IsolateDirs(t)
 	return filepath.Join(userDir, "ssh-manager")
 }
 

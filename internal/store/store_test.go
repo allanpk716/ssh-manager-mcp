@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -58,6 +59,17 @@ func newTestStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+// TestNewIDNeverStartsWithDash 钉住命令行安全规则：新生成的存储标识必须能
+// 作为位置参数传入，不能让命令行把它误认成参数开关。
+func TestNewIDNeverStartsWithDash(t *testing.T) {
+	const count = 4096
+	for i := 0; i < count; i++ {
+		if id := newID(); strings.HasPrefix(id, "-") {
+			t.Fatalf("newID() = %q at attempt %d; generated ids must not start with -", id, i)
+		}
+	}
 }
 
 func randRead(t *testing.T, b []byte) {

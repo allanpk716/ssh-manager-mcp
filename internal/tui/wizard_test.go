@@ -9,26 +9,15 @@ import (
 
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testutil"
 )
 
-// withRoleDirs isolates both role-file locations via env (SSHMGR_STORE pins the
-// vault dir; XDG_CONFIG_HOME/APPDATA pins the user dir), mirroring the roles
-// package's withDirs helper (Plan 19 T2). The master-key path and cache dir are
-// also pinned so a real vault / cache on the dev machine
-// (C:\ProgramData\ssh-manager, %AppData%\ssh-manager) can never leak into the
-// wizard under test.
+// withRoleDirs isolates both role-file locations and every system-level path,
+// mirroring the roles package's withDirs helper (Plan 19 T2). A real vault or
+// user config on the developer machine can never leak into the wizard test.
 func withRoleDirs(t *testing.T) (vaultDir, userDir string) {
 	t.Helper()
-	vaultDir = t.TempDir()
-	userDir = t.TempDir()
-	t.Setenv("SSHMGR_STORE", filepath.Join(vaultDir, "store.db"))
-	t.Setenv("SSHMGR_FILEKEY_PATH", filepath.Join(vaultDir, "master.key.plain"))
-	t.Setenv("SSHMGR_MASTERKEY_HEX", "")
-	t.Setenv("SSHMGR_CACHE_DIR", "")
-	t.Setenv("SSHMGR_SERVE_CERT", "")
-	t.Setenv("APPDATA", userDir) // os.UserConfigDir on Windows
-	t.Setenv("XDG_CONFIG_HOME", userDir)
-	return vaultDir, userDir
+	return testutil.IsolateDirs(t)
 }
 
 // seedWizardVault creates an unlocked vault at the pinned SSHMGR_STORE (mirror

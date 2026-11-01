@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testutil"
 	"ssh-manager-mcp/internal/vaultio"
 )
 
@@ -17,9 +18,7 @@ import (
 // meta + withDEK seam + LoadCacheSnapshotFor 可载的 bin。此处只验证 VIEW,
 // bin 用真加密太啰嗦:改为断言"列出了实例名 + 加载错误也成行不炸"。
 func TestCacheStatus_ListsAllInstances(t *testing.T) {
-	userDir := t.TempDir()
-	t.Setenv("APPDATA", userDir)
-	t.Setenv("XDG_CONFIG_HOME", userDir)
+	_, userDir := testutil.IsolateDirs(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
 	for _, n := range []string{"agentA", "agentB"} {
 		dir := filepath.Join(userDir, "ssh-manager", "instances", n)
@@ -78,9 +77,7 @@ func seedInstanceSlot(t *testing.T, userDir, name, metaJSON string, dek []byte) 
 // preserved unverified/profile switch) — this pins it: a scoped slot with a
 // recorded device identity renders device, the bound profile, and the counts.
 func TestCacheStatus_InstanceSingleView(t *testing.T) {
-	userDir := t.TempDir()
-	t.Setenv("APPDATA", userDir)
-	t.Setenv("XDG_CONFIG_HOME", userDir)
+	_, userDir := testutil.IsolateDirs(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
 	mem := withDEK(t)
 	dek, _ := store.GenerateMasterKey()
@@ -110,9 +107,7 @@ func TestCacheStatus_InstanceSingleView(t *testing.T) {
 // render the device line BLANK — same rule as the list view; "(unknown)" is
 // reserved for an unreadable meta, not for a recorded-blank identity.
 func TestCacheStatus_InstanceSingleView_UnscopedBlankDevice(t *testing.T) {
-	userDir := t.TempDir()
-	t.Setenv("APPDATA", userDir)
-	t.Setenv("XDG_CONFIG_HOME", userDir)
+	_, userDir := testutil.IsolateDirs(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
 	mem := withDEK(t)
 	dek, _ := store.GenerateMasterKey()

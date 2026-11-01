@@ -18,6 +18,7 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testutil"
 	"ssh-manager-mcp/internal/vaultio"
 )
 
@@ -300,9 +301,7 @@ func seedClientCacheFixture(t *testing.T) string {
 // 同一份快照。用户配置目录指到临时目录,不读开发者本机真实的实例。
 func seedNamedInstanceClientFixture(t *testing.T, name string) {
 	t.Helper()
-	userDir := t.TempDir()
-	t.Setenv("APPDATA", userDir)
-	t.Setenv("XDG_CONFIG_HOME", userDir)
+	_, userDir := testutil.IsolateDirs(t)
 	writePolicyCacheSlot(t, filepath.Join(userDir, "ssh-manager", "instances", name))
 	withEnv(t, map[string]string{
 		"SSHMGR_STORE":         filepath.Join(t.TempDir(), "no-vault.db"),

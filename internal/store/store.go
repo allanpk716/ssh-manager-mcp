@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"ssh-manager-mcp/internal/paths"
@@ -23,11 +24,18 @@ var readRand = func(b []byte) (int, error) { return rand.Read(b) }
 
 // newID returns a short random base64url id.
 func newID() string {
-	b := make([]byte, 8)
-	if _, err := io.ReadFull(rand.Reader, b); err != nil {
-		panic(err)
+	for {
+		b := make([]byte, 8)
+		if _, err := io.ReadFull(rand.Reader, b); err != nil {
+			panic(err)
+		}
+		// 以 - 开头的 ID 会被命令行解析成参数开关。整次随机结果丢弃后
+		// 重新生成，不改动其余字符，保持每个候选 ID 仍是完整 64 位随机数。
+		id := base64.RawURLEncoding.EncodeToString(b)
+		if !strings.HasPrefix(id, "-") {
+			return id
+		}
 	}
-	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 func now() int64 { return time.Now().Unix() }

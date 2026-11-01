@@ -425,6 +425,12 @@ func TestBackupCreate_NoDirNoConfig_ExplainsBoth(t *testing.T) {
 func TestBackupCreate_RelativePassphraseInsideDir_FailClosed(t *testing.T) {
 	seedVaultForBackup(t)
 	bdir := t.TempDir()
+	// macOS 的测试临时目录可能是符号链接；先解析成真实路径，保证相对口令
+	// 文件按同一个词法前缀参与子树判断。
+	bdir, err := filepath.EvalSymlinks(bdir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	touchMarker(t, bdir)
 	passOutside := writePassFile(t, t.TempDir(), encPass1)
 

@@ -25,6 +25,7 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testutil"
 )
 
 // TestDefaultDekProvider_IsFileKeyAtFixedPath pins the Plan 16 T4 contract:
@@ -202,11 +203,9 @@ func TestCacheStatus_ReportsSnapshot(t *testing.T) {
 func TestCacheStatus_UnverifiedScope(t *testing.T) {
 	// Fix round 1: the negative assertion below scans the whole LIST output,
 	// and ListInstances() reads the REAL user-config root (only the cache dir
-	// is env-redirected). Isolate APPDATA/XDG_CONFIG_HOME like the T11/T12
-	// tests so a real scoped instance on this machine can't fail us on an
-	// unrelated row.
-	t.Setenv("APPDATA", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	// is env-redirected). 隔离三个平台的用户配置目录，避免本机真实命名实例
+	// 作为无关行混进断言。
+	testutil.IsolateDirs(t)
 	url, code := standUpServe(t)
 	withDEK(t)
 	cacheDir := t.TempDir()

@@ -4,16 +4,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"ssh-manager-mcp/internal/testutil"
 )
 
-// redirectUserConfigDir pins os.UserConfigDir to a temp dir (roles_test /
-// clear_test precedent). Multi-instance tests must NOT set SSHMGR_CACHE_DIR
-// (spec §9.5: env and --instance are mutually exclusive).
+// redirectUserConfigDir pins os.UserConfigDir to a temp dir on every platform.
+// Multi-instance tests must NOT set SSHMGR_CACHE_DIR (spec §9.5: env and
+// --instance are mutually exclusive).
 func redirectUserConfigDir(t *testing.T) string {
 	t.Helper()
-	userDir := t.TempDir()
-	t.Setenv("APPDATA", userDir)         // os.UserConfigDir on Windows
-	t.Setenv("XDG_CONFIG_HOME", userDir) // and on Unix
+	_, userDir := testutil.IsolateDirs(t)
 	t.Setenv("SSHMGR_CACHE_DIR", "")
 	return userDir
 }
