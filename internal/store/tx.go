@@ -250,19 +250,12 @@ func (s *Store) DeleteServerCascading(id string) error {
 		return err
 	}
 	defer tx.Rollback() // no-op after Commit
-	srv, err := getServerTx(tx, id)
+	srv, err := deleteServerEntryTx(tx, id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil // already gone — nothing to cascade
-		}
 		return err
 	}
-	// 票 #58：条目的主机密钥锚随条目在同一事务删除并写审计。
-	if err := deleteEntryPinWithAudit(tx, srv); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM servers WHERE id=?`, id); err != nil {
-		return err
+	if srv == nil {
+		return nil // already gone — nothing to cascade
 	}
 	for _, cid := range []string{srv.CredentialID, srv.SudoCredentialID} {
 		if cid == "" {
@@ -277,6 +270,26 @@ func (s *Store) DeleteServerCascading(id string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// deleteServerEntryTx 在事务里删除服务器条目及其主机密钥锚，并返回删除前的
+// 条目模型供调用方继续处理凭据。条目不存在时返回 nil。
+func deleteServerEntryTx(tx *sql.Tx, id string) (*models.Server, error) {
+	srv, err := getServerTx(tx, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	// 票 #58：条目的主机密钥锚随条目在同一事务删除并写审计。
+	if err := deleteEntryPinWithAudit(tx, srv); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`DELETE FROM servers WHERE id=?`, id); err != nil {
+		return nil, err
+	}
+	return srv, nil
 }
 
 // dropTagFrom returns tags minus every occurrence of tag (fresh slice, valid

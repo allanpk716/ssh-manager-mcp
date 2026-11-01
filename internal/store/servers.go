@@ -3,7 +3,6 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -86,19 +85,12 @@ func (s *Store) DeleteServer(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	srv, err := getServerTx(tx, id)
+	srv, err := deleteServerEntryTx(tx, id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
 		return err
 	}
-	// 与 DeleteServerCascading 一致：锚随条目在同一事务删除并写审计。
-	if err := deleteEntryPinWithAudit(tx, srv); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM servers WHERE id=?`, id); err != nil {
-		return err
+	if srv == nil {
+		return nil
 	}
 	return tx.Commit()
 }
