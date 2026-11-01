@@ -243,8 +243,15 @@ func (s *Store) Checkpoint() error {
 func initSchema(db *sql.DB) error {
 	// 快照修订号的表、初始行和触发器拼接在既有结构之后:旧库第一次打开
 	// 时在这里完成迁移,后续打开全部是无操作。
-	_, err := db.Exec(schemaSQL + snapshotRevisionSchema())
-	return err
+	// 放进一个事务只落一次盘;自动提交下新库每条语句各落一次,Windows 上明显变慢。
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(schemaSQL + snapshotRevisionSchema()); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+	return tx.Commit()
 }
 
 // migrate evolves the schema from prior pre-release shapes. host_keys was keyed by
