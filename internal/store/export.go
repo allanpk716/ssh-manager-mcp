@@ -14,6 +14,10 @@ import (
 // MUST be encrypted (vaultio.Encrypt) before touching disk. Version = format version.
 type Snapshot struct {
 	Version int `json:"version"`
+	// SnapshotRevision (规格 #93) 是权威端全库统一的快照修订号,两条导出
+	// 路径都携带。旧快照没有该字段时解码为零值 0;客户端把 0 视为
+	// 「修订号未知」,第一次比较必然触发一次全量拉取。
+	SnapshotRevision int64 `json:"snapshot_revision"`
 	// RecommendedVersion 是导出这份快照的二进制版本。多机客户端用它比较
 	// 自己是否落后；旧快照与旧客户端分别解码、忽略该字段。
 	RecommendedVersion string               `json:"recommended_version"`
@@ -158,7 +162,11 @@ func (s *Store) ListHostKeys() ([]SnapshotHostKey, error) {
 // ExportSnapshot captures every table. Credentials are DECRYPTED under s.masterKey.
 // Requires the store to be unlocked. The caller must encrypt the serialized form.
 func (s *Store) ExportSnapshot() (*Snapshot, error) {
-	snap := &Snapshot{Version: 1, RecommendedVersion: buildinfo.Version}
+	revision, err := s.SnapshotRevision()
+	if err != nil {
+		return nil, err
+	}
+	snap := &Snapshot{Version: 1, SnapshotRevision: revision, RecommendedVersion: buildinfo.Version}
 
 	// servers (COALESCE the nullable text cols to '' — credential_id is nullable
 	// since Plan 20 C0: a credential-less server carries "" in the snapshot)
@@ -322,8 +330,12 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	if err := requireProfile(s.db, profileID); err != nil {
 		return nil, err
 	}
+	revision, err := s.SnapshotRevision()
+	if err != nil {
+		return nil, err
+	}
 
-	snap := &Snapshot{Version: 1, RecommendedVersion: buildinfo.Version}
+	snap := &Snapshot{Version: 1, SnapshotRevision: revision, RecommendedVersion: buildinfo.Version}
 
 	// profile row
 	rp, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles WHERE id=?`, profileID)
@@ -626,6 +638,11 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 			a.TS, nullIfEmpty(a.ProjectID), nullIfEmpty(a.ServerID), a.Action, nullIfEmpty(a.Command), a.Sudo, nullIfEmpty(a.Status), a.ExitCode, a.DurationMS); err != nil {
 			return fmt.Errorf("insert audit: %w", err)
 		}
+	}
+
+	// 9. 快照修订号按快照原值恢复(触发器在导入过程中的加一被显式覆盖)。
+	if err := setSnapshotRevisionTx(tx, snap.SnapshotRevision); err != nil {
+		return fmt.Errorf("restore snapshot revision: %w", err)
 	}
 
 	return tx.Commit()

@@ -97,6 +97,13 @@ func newTLSSnapshotServer(t *testing.T) *tlsSnapshotServer {
 			http.Error(w, "no auth", http.StatusUnauthorized)
 			return
 		}
+		if r.URL.Path == "/snapshot/version" {
+			// 规格以后的权威端都有轻量修订号接口;固定返回 1,让带旧缓存的
+			// 到期保鲜走「修订号不同→全量拉取」分支。
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"snapshot_revision":1}`)
+			return
+		}
 		fmt.Fprint(w, `{"servers":[],"credentials":[]}`)
 	}))
 	srv.TLS = &tls.Config{Certificates: []tls.Certificate{tlsCert}}

@@ -195,11 +195,16 @@ func (r *ServeRunner) verifyCacheToken(ctx context.Context, token string, req *h
 // The device-code gate on /snapshot is unchanged and remains the only remote credential.
 func (r *ServeRunner) HTTPHandler() http.Handler {
 	cacheAuth := auth.RequireBearerToken(r.verifyCacheToken, &auth.RequireBearerTokenOptions{})
+	versionHandler := cacheAuth(http.HandlerFunc(r.handleSnapshotVersion))
 	snapshotHandler := cacheAuth(http.HandlerFunc(r.handleSnapshot))
 	// Plan 48 §1: /pin-hostkey rides the SAME cacheAuth instance — one
 	// listener, one device-code gate, zero new authentication forms.
 	pinHandler := cacheAuth(http.HandlerFunc(r.handlePinHostkey))
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/snapshot/version" {
+			versionHandler.ServeHTTP(w, req)
+			return
+		}
 		if req.URL.Path == "/snapshot" {
 			snapshotHandler.ServeHTTP(w, req)
 			return
@@ -292,6 +297,47 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 	if err := r.st.TouchCacheToken(ti.UserID, normalizedClientVersion(clientVersion)); err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: cache-tokens touch %s: %v\n", ti.UserID, err)
 	}
+}
+
+// handleSnapshotVersion 只返回当前的全库快照修订号(规格 #93 / 票 #94)。
+// 它与 /snapshot 复用同一个设备码认证;未绑定 profile 的设备码同样返回
+// 403。这个查询是轻量探针:既不导出快照,也不更新设备码的最后拉取时间
+// 和最近声明的客户端版本,所以 `cache-tokens ls` 不因轮询而变化。
+func (r *ServeRunner) handleSnapshotVersion(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ti := auth.TokenInfoFromContext(req.Context())
+	if ti == nil || ti.UserID == "" {
+		http.Error(w, "no authenticated cache token", http.StatusForbidden) // fail closed
+		return
+	}
+	ct, err := r.st.GetCacheToken(ti.UserID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: cache token lookup %s: %v\n", ti.UserID, err)
+		http.Error(w, "cache token lookup failed", http.StatusInternalServerError)
+		return
+	}
+	if ct == nil {
+		http.Error(w, "no authenticated cache token", http.StatusForbidden) // fail closed
+		return
+	}
+	if ct.ProfileID == "" {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: cache token %s unbound (device %s) — refusing snapshot version; owner: cache-tokens bind\n", ct.ID, ct.Name)
+		http.Error(w, "device code not bound to a profile — owner: run `sshmgr cache-tokens bind "+ct.Name+" <profile>` on the server", http.StatusForbidden)
+		return
+	}
+	revision, err := r.st.SnapshotRevision()
+	if err != nil {
+		http.Error(w, "snapshot revision unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store, no-cache")
+	_ = json.NewEncoder(w).Encode(struct {
+		SnapshotRevision int64 `json:"snapshot_revision"`
+	}{revision})
 }
 
 // normalizedClientVersion 清洗设备码表要保存的客户端版本：先去掉不可

@@ -63,11 +63,16 @@ var cacheQuarantinedFlag bool
 // flag intentionally lasts the process lifetime in production).
 func ResetCacheQuarantineForTest() { cacheQuarantinedFlag = false }
 
-// MaybeLazyPullFor runs ONE automatic pull for the given instance ("" = the
-// default instance) when cache.bin is missing / older than maxAge and a
-// persisted cache.auth.json exists. maxAge<=0 disables entirely — INCLUDING the
-// missing-cache case (the first pull stays a deliberate manual step). Errors
-// are returned for the caller to log; never fatal.
+// MaybeLazyPullFor runs ONE automatic freshness check for the given instance
+// ("" = the default instance) when cache.bin is missing / older than maxAge and
+// a persisted cache.auth.json exists. maxAge<=0 disables entirely — INCLUDING
+// the missing-cache case (the first pull stays a deliberate manual step).
+//
+// 规格 #93 / 票 #94:缓存到期时先查询权威端的快照修订号。修订号与缓存里
+// 的一致,就只把缓存元数据里的最后联系时间推进到权威端时间,不下载全量
+// 快照;不一致才全量拉取。查询失败只返回错误交给调用方记录日志,当前
+// 快照继续使用;旧权威端返回 404 时,回到原来的到期直接全量拉取。
+// Errors are returned for the caller to log; never fatal.
 func MaybeLazyPullFor(instance string, maxAge time.Duration) error {
 	if maxAge <= 0 {
 		return nil
@@ -106,6 +111,17 @@ func MaybeLazyPullFor(instance string, maxAge time.Duration) error {
 	}
 	if pin == "" {
 		return fmt.Errorf("cache.auth.json has no pin; refusing plaintext auto-pull")
+	}
+	if cachedRevision, present, rerr := cachedSnapshotRevision(instance); rerr == nil && present {
+		remoteRevision, serverTime, verr := querySnapshotVersion(cred.URL, code, pin, LazyPullTimeout)
+		switch {
+		case errors.Is(verr, errSnapshotVersionNotFound):
+			// 旧权威端没有修订号接口:保持原有行为,下面直接全量拉取。
+		case verr != nil:
+			return verr
+		case remoteRevision == cachedRevision:
+			return refreshCacheContactTime(instance, serverTime)
+		}
 	}
 	_, err = DoPull(cred.URL, code, pin, PullOpts{Timeout: LazyPullTimeout, StatusOut: os.Stderr, Instance: instance})
 	if errors.Is(err, ErrCacheQuarantined) {

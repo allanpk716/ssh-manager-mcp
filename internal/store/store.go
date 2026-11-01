@@ -237,7 +237,9 @@ func (s *Store) Checkpoint() error {
 }
 
 func initSchema(db *sql.DB) error {
-	_, err := db.Exec(schemaSQL)
+	// 快照修订号的表、初始行和触发器拼接在既有结构之后:旧库第一次打开
+	// 时在这里完成迁移,后续打开全部是无操作。
+	_, err := db.Exec(schemaSQL + snapshotRevisionSchema())
 	return err
 }
 

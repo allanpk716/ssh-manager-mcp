@@ -51,19 +51,22 @@ import (
 // client snapshot materials. The serve store starts with NO anchor — every
 // anchor in T5's assertions is produced by the forward under test.
 type cacheFwdFixture struct {
-	sshdAddr  string
-	sshdKey   ssh.PublicKey
-	targetID  string
-	profID    string
-	serve     *store.Store
-	dbPath    string
-	serveHTTP *httptest.Server // TLS, /pin-hostkey POST-counted
-	posts     *int32
-	versionMu *sync.Mutex
-	versions  map[string]string   // 请求路径 → 最近一次看到的客户端版本请求头
-	cred      clientops.CacheCred // pull/pin credential for the "laptop" device
-	projToken string
-	snap      *store.Snapshot // exported BEFORE any test-side anchor preset
+	sshdAddr        string
+	sshdKey         ssh.PublicKey
+	targetID        string
+	profID          string
+	serve           *store.Store
+	dbPath          string
+	serveHTTP       *httptest.Server // TLS, /pin-hostkey POST-counted
+	posts           *int32
+	versionGets     *int32       // GET /snapshot/version 的请求次数
+	snapshotGets    *int32       // GET /snapshot 的请求次数
+	versionNotFound *atomic.Bool // 打开后,/snapshot/version 返回 404(模拟旧权威端)
+	versionMu       *sync.Mutex
+	versions        map[string]string   // 请求路径 → 最近一次看到的客户端版本请求头
+	cred            clientops.CacheCred // pull/pin credential for the "laptop" device
+	projToken       string
+	snap            *store.Snapshot // exported BEFORE any test-side anchor preset
 }
 
 // newCacheFwdFixture seeds the whole topology. The POST counter wraps only
@@ -111,11 +114,29 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	}
 	t.Cleanup(r.Close)
 	var posts int32
+	var versionGets int32
+	var snapshotGets int32
+	versionNotFound := &atomic.Bool{}
 	versionMu := &sync.Mutex{}
 	versions := map[string]string{}
+	fx := &cacheFwdFixture{
+		versionMu: versionMu, versions: versions,
+		posts: &posts, versionGets: &versionGets, snapshotGets: &snapshotGets,
+		versionNotFound: versionNotFound,
+	}
 	mux := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/pin-hostkey" {
 			atomic.AddInt32(&posts, 1)
+		}
+		if req.URL.Path == "/snapshot/version" {
+			atomic.AddInt32(&versionGets, 1)
+			if versionNotFound.Load() {
+				http.NotFound(w, req)
+				return
+			}
+		}
+		if req.URL.Path == "/snapshot" {
+			atomic.AddInt32(&snapshotGets, 1)
 		}
 		versionMu.Lock()
 		versions[req.URL.Path] = req.Header.Get("X-Sshmgr-Client-Version")
@@ -132,17 +153,21 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &cacheFwdFixture{
-		sshdAddr: addr, sshdKey: sshdKey, targetID: targetID, profID: profID,
-		serve: sv, dbPath: dbPath, serveHTTP: serveHTTP, posts: &posts,
-		versionMu: versionMu, versions: versions,
-		cred: clientops.CacheCred{
-			URL:   serveHTTP.URL,
-			Token: laptopTok,
-			Pin:   mcpserver.SPKIFingerprint(serveHTTP.Certificate()),
-		},
-		projToken: projToken, snap: snap,
+	fx.sshdAddr = addr
+	fx.sshdKey = sshdKey
+	fx.targetID = targetID
+	fx.profID = profID
+	fx.serve = sv
+	fx.dbPath = dbPath
+	fx.serveHTTP = serveHTTP
+	fx.cred = clientops.CacheCred{
+		URL:   serveHTTP.URL,
+		Token: laptopTok,
+		Pin:   mcpserver.SPKIFingerprint(serveHTTP.Certificate()),
 	}
+	fx.projToken = projToken
+	fx.snap = snap
+	return fx
 }
 
 func (fx *cacheFwdFixture) host() string { return fx.sshdAddr[:strings.Index(fx.sshdAddr, ":")] }
@@ -150,6 +175,9 @@ func (fx *cacheFwdFixture) port() int    { return portFromAddr(fx.sshdAddr) }
 func (fx *cacheFwdFixture) postCount() int {
 	return int(atomic.LoadInt32(fx.posts))
 }
+
+func (fx *cacheFwdFixture) versionCount() int  { return int(atomic.LoadInt32(fx.versionGets)) }
+func (fx *cacheFwdFixture) snapshotCount() int { return int(atomic.LoadInt32(fx.snapshotGets)) }
 
 func (fx *cacheFwdFixture) seenClientVersion(path string) string {
 	fx.versionMu.Lock()
