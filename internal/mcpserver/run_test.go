@@ -453,6 +453,7 @@ func TestAutoSwapE2EDualInstance(t *testing.T) {
 	// 继任自报版本唯一,「换成谁」可观测。
 	const chainA = "SSHMGR_TEST_VERSION=v2-a;SSHMGR_TEST_SUCCESSOR_ENV=SSHMGR_TEST_VERSION=v3-a"
 	const chainB = "SSHMGR_TEST_VERSION=v2-b;SSHMGR_TEST_SUCCESSOR_ENV=SSHMGR_TEST_VERSION=v3-b"
+	stateDir := t.TempDir()
 	hA := spawnBridgeRole(t, roleBridgeDirect, map[string]string{
 		"SSHMGR_STORE":                     storePath,
 		"SSHMGR_MASTERKEY_HEX":             masterHex,
@@ -460,6 +461,7 @@ func TestAutoSwapE2EDualInstance(t *testing.T) {
 		"SSHMGR_TEST_VERSION":              "v1-a",
 		"SSHMGR_TEST_SUCCESSOR_ENV":        chainA,
 		"SSHMGR_TEST_AUTOSWAP_INTERVAL_MS": "300",
+		"SSHMGR_TEST_STATE_DIR":            stateDir,
 	})
 	hB := spawnBridgeRole(t, roleBridgeCache, map[string]string{
 		"SSHMGR_TEST_SNAPSHOT":             snapPath,
@@ -468,6 +470,7 @@ func TestAutoSwapE2EDualInstance(t *testing.T) {
 		"SSHMGR_TEST_VERSION":              "v1-b",
 		"SSHMGR_TEST_SUCCESSOR_ENV":        chainB,
 		"SSHMGR_TEST_AUTOSWAP_INTERVAL_MS": "300",
+		"SSHMGR_TEST_STATE_DIR":            stateDir,
 	})
 	hA.handshake(t)
 	hB.handshake(t)
@@ -483,16 +486,18 @@ func TestAutoSwapE2EDualInstance(t *testing.T) {
 	t.Cleanup(func() { os.Remove(updater.SignalPath(exe)) })
 
 	// 第一个代际信号:两把桥各自自动换到自己的继任(A→v2-a,B→v2-b)。
-	// 过渡窗内的 reload_self 可能被退位中的旧代完整应答(retireLater 文档
-	// 化的双读者过渡窗边界),经 callReloadSelfRetry 有界重试到继任版本。
+	// notifications/tools/list_changed 只证明继任已进入会话并注册工具,不证
+	// 明旧代已停读。首轮旧代是首代泵,断开宿主前不会退出,因此不等待它的
+	// 退出探针;过渡窗内的 reload_self 可能仍被旧代完整应答,由按时间预算
+	// 轮询的 callReloadSelfRetry 重试到继任版本。
 	if _, err := updater.WriteGenerationSignal(exe, "v2-disk"); err != nil {
 		t.Fatal(err)
 	}
 	awaitNotifAbove(t, hA, "notifications/tools/list_changed", baseA, 20*time.Second)
 	awaitNotifAbove(t, hB, "notifications/tools/list_changed", baseB, 20*time.Second)
 	nextA, nextB := int64(3), int64(3)
-	outA, idsA := hA.callReloadSelfRetry(t, &nextA, "v2-a", 3)
-	outB, idsB := hB.callReloadSelfRetry(t, &nextB, "v2-b", 3)
+	outA, idsA := hA.callReloadSelfRetry(t, &nextA, "v2-a", 10*time.Second)
+	outB, idsB := hB.callReloadSelfRetry(t, &nextB, "v2-b", 10*time.Second)
 	if outA.Version != "v2-a" || outB.Version != "v2-b" {
 		t.Fatalf("round 1 successors: A=%q want v2-a, B=%q want v2-b (A stderr:\n%s\nB stderr:\n%s)",
 			outA.Version, outB.Version, hA.stderrFn(), hB.stderrFn())
@@ -506,8 +511,14 @@ func TestAutoSwapE2EDualInstance(t *testing.T) {
 	}
 	awaitNotifAbove(t, hA, "notifications/tools/list_changed", baseA, 20*time.Second)
 	awaitNotifAbove(t, hB, "notifications/tools/list_changed", baseB, 20*time.Second)
-	outA2, idsA2 := hA.callReloadSelfRetry(t, &nextA, "v3-a", 3)
-	outB2, idsB2 := hB.callReloadSelfRetry(t, &nextB, "v3-b", 3)
+	// 第二轮旧代是被领养的第二代,通过异步 Park 退位。它在读取循环的下一
+	// 个空闲周期才停读并退出;notifications/tools/list_changed 到达时可能仍
+	// 处于这个过渡窗。先等 exit-v2-a 与 exit-v2-b 探针出现,确保两把桥的第
+	// 二代都已停读,再请求第三代应答。
+	waitForStateProbe(t, stateDir, "exit", "v2-a", 20*time.Second)
+	waitForStateProbe(t, stateDir, "exit", "v2-b", 20*time.Second)
+	outA2, idsA2 := hA.callReloadSelfRetry(t, &nextA, "v3-a", 10*time.Second)
+	outB2, idsB2 := hB.callReloadSelfRetry(t, &nextB, "v3-b", 10*time.Second)
 	idsA = append(idsA, idsA2...)
 	idsB = append(idsB, idsB2...)
 	if outA2.Version != "v3-a" || outB2.Version != "v3-b" {
