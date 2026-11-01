@@ -1,81 +1,54 @@
 package clientops
 
-// Plan 48 §2.2 — the cache-mode HostKeyStore: a forwarding wrapper between the
-// TOFU callback and the hot-reloading read-only store. This lives in clientops
-// (not mcpserver) because every piece it composes is ours — the PinForwarder,
-// the §2.1 branch texts, ErrPinForwardEqual — and clientops already builds on
-// mcpserver, so the dependency cannot point the other way. mcpserver binds it
-// through ForwardingHostKeys at RunStdioCache time.
-//
-// Reads AND writes resolve cur() INSIDE every method (the real-time
-// resolution iron rule: the ≤10 s forwarding HTTP call may straddle a hot
-// rebuild, so any construction-time store capture would strand the anchor in
-// a swapped-out generation — §8 T5b asserts this). SaveHostKey forwards the
-// presented key to the broker's /pin-hostkey endpoint:
-//
-//	201            → ApplyForwardedHostKey on the current store → nil (handshake continues)
-//	409 equal=true → ApplyForwardedHostKey (the broker already holds an equal
-//	                 anchor) → nil — automatic closure of duplicate forwards
-//	anything else  → the branch's verbatim §2.1/§4 text, raised through
-//	                 sshbroker.PresentedHostKeyError so HostKeyTOFU adds no prefix
-//
-// A nil forwarder (no forwarding capability) degrades to the plain read-only
-// store behavior — SaveHostKey returns ErrReadOnly exactly as pre-Plan-48
-// cache mode did. Never a silent local writable overlay (§0).
+// 客户端缓存模式的锚存取包装（规格 #88）：首次连接即信任的回调经这里把
+// 学到的主机密钥转发给权威端，转发成功（201，或 409 且密钥相同）后把锚写
+// 进当前热更新代的本地缓存，键为服务器条目。没有转发能力时退化为只读库
+// 的拒绝，绝不写本地可写覆盖层。
 
 import (
 	"errors"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 )
 
 // forwardingHostKeys adapts cache mode to the TOFU callback. cur is the
-// holder's Current (resolved per call — the iron rule); fwd is the cli-built
-// PinForwarder for this instance.
+// holder's Current (resolved per call); fwd is the cli-built PinForwarder for
+// this instance.
 type forwardingHostKeys struct {
 	cur func() *store.Store
 	fwd *PinForwarder
 }
 
-// ForwardingHostKeys returns the RunStdioCache binder (the "转发构造器" the
-// brief hands from cli): invoking it with the holder's Current yields the
-// process-lifetime forwarding HostKeyStore. The two-phase shape exists because
-// the hot-reload holder — and therefore the cur resolver — only exists inside
-// RunStdioCache, while the PinForwarder is built at the --instance resolver in
-// cli (reading an instance is always explicit; Plan 40/46).
+// ForwardingHostKeys returns the RunStdioCache binder: invoking it with the
+// holder's Current yields the process-lifetime forwarding HostKeyStore.
 func ForwardingHostKeys(fwd *PinForwarder) func(cur func() *store.Store) sshbroker.HostKeyStore {
 	return func(cur func() *store.Store) sshbroker.HostKeyStore {
 		return &forwardingHostKeys{cur: cur, fwd: fwd}
 	}
 }
 
-// GetHostKey reads the CURRENT generation — resolved at callback time, not
-// construction time (§2.2).
-func (h *forwardingHostKeys) GetHostKey(host string, port int) (*store.Pin, error) {
-	return h.cur().GetHostKey(host, port)
+// GetEntryPin 在回调发生时的当前热更新代里读取条目的锚。
+func (h *forwardingHostKeys) GetEntryPin(srv *models.Server) (*store.Pin, error) {
+	return h.cur().GetEntryPin(srv)
 }
 
-// SaveHostKey is the forwarding path: an unknown anchor is POSTed to the
+// SaveEntryPin is the forwarding path: an unknown anchor is POSTed to the
 // broker (audited server-side), and on 201 / 409-equal applied to the CURRENT
 // store locally so the handshake continues. Every other outcome surfaces the
 // branch's verbatim text — no prefix — via sshbroker.PresentedHostKeyError.
-func (h *forwardingHostKeys) SaveHostKey(host string, port int, marshaledKey []byte) error {
+func (h *forwardingHostKeys) SaveEntryPin(srv *models.Server, marshaledKey []byte) error {
 	if h.fwd == nil {
-		// No forwarding capability: the plain read-only store refusal
-		// (ErrReadOnly, wrapped by HostKeyTOFU as before — pre-Plan-48 form).
-		return h.cur().SaveHostKey(host, port, marshaledKey)
+		// No forwarding capability: the plain read-only store refusal.
+		return h.cur().SaveEntryPin(srv, marshaledKey)
 	}
-	ferr := h.fwd.Forward(host, port, marshaledKey)
+	ferr := h.fwd.Forward(srv, marshaledKey)
 	if ferr == nil || errors.Is(ferr, ErrPinForwardEqual) {
-		// 201, or the broker already holds an EQUAL anchor: apply locally.
 		// cur() is re-resolved HERE — after the HTTP call — so a hot rebuild
 		// that fired during the forwarding window lands the anchor in the
-		// current generation (the T5b contract).
-		if aerr := h.cur().ApplyForwardedHostKey(host, port, marshaledKey); aerr != nil {
-			// Ultra-rare race (§2.3): a rebuild between the 201 and this apply
-			// swapped in a generation holding a DIFFERENT anchor. The text
-			// already carries the pull-and-retry guidance.
+		// current generation.
+		if aerr := h.cur().ApplyForwardedEntryPin(srv, store.EntryFallbackAddr(srv), marshaledKey); aerr != nil {
 			return &sshbroker.PresentedHostKeyError{Err: aerr}
 		}
 		return nil

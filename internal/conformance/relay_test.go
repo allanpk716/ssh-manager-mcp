@@ -476,7 +476,11 @@ func TestRelayWin32OpenSSHRealTarget(t *testing.T) {
 	if err := st.GrantServers(pid, []string{row}); err != nil {
 		t.Fatal(err)
 	}
-	hkCb, err := sshbroker.HostKeyTOFU(st, host, port)
+	srvRow, err := st.GetServer(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hkCb, err := sshbroker.HostKeyTOFU(st, srvRow)
 	if err != nil {
 		t.Fatal(err)
 	}

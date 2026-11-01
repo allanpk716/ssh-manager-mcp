@@ -82,15 +82,17 @@ func migrateEntryPinsTx(tx *sql.Tx) error {
 	if _, err := tx.Exec(`DELETE FROM host_keys`); err != nil {
 		return err
 	}
-	command := fmt.Sprintf("copied=%d entries: %s dropped=%d: %s",
-		len(copied), strings.Join(copied, ","), len(dropped), strings.Join(dropped, ", "))
-	if err := writeAuditTx(tx, AuditRow{
-		TS:      time.Now(),
-		Action:  "pin-migrate",
-		Command: command,
-		Status:  "ok",
-	}); err != nil {
-		return err
+	if len(copied) > 0 || len(dropped) > 0 {
+		command := fmt.Sprintf("copied=%d entries: %s dropped=%d: %s",
+			len(copied), strings.Join(copied, ","), len(dropped), strings.Join(dropped, ", "))
+		if err := writeAuditTx(tx, AuditRow{
+			TS:      time.Now(),
+			Action:  "pin-migrate",
+			Command: command,
+			Status:  "ok",
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -143,8 +145,8 @@ func loadEntryPinMeta(q dbtx, serverID string) (*PinMeta, error) {
 }
 
 // GetEntryPin 返回服务器条目当前的主机密钥锚；条目尚无锚时返回 (nil, nil)。
-func (s *Store) GetEntryPin(serverID string) (*Pin, error) {
-	m, err := loadEntryPinMeta(s.db, serverID)
+func (s *Store) GetEntryPin(srv *models.Server) (*Pin, error) {
+	m, err := loadEntryPinMeta(s.db, srv.ID)
 	if err != nil || m == nil {
 		return nil, err
 	}

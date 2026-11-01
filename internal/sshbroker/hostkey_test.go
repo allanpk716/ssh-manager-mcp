@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/testsshd"
 )
@@ -18,20 +18,25 @@ import (
 // as real *store.Pin values so the dual-mode matrix drives the same struct the
 // production store returns (Plan 48 §5).
 type fakeHostKeyStore struct {
-	pins  map[string]*store.Pin // keyed by host:port
+	pins  map[string]*store.Pin // 按条目标识符存放
 	saves int
 }
 
-func (f *fakeHostKeyStore) GetHostKey(host string, port int) (*store.Pin, error) {
-	return f.pins[fmt.Sprintf("%s:%d", host, port)], nil
+func (f *fakeHostKeyStore) GetEntryPin(srv *models.Server) (*store.Pin, error) {
+	return f.pins[srv.ID], nil
 }
-func (f *fakeHostKeyStore) SaveHostKey(host string, port int, k []byte) error {
+func (f *fakeHostKeyStore) SaveEntryPin(srv *models.Server, k []byte) error {
 	if f.pins == nil {
 		f.pins = map[string]*store.Pin{}
 	}
 	f.saves++
-	f.pins[fmt.Sprintf("%s:%d", host, port)] = &store.Pin{Blob: k, Format: store.PinFormatBlob}
+	f.pins[srv.ID] = &store.Pin{Blob: k, Format: store.PinFormatBlob}
 	return nil
+}
+
+// entryAt 构造一个指向 host:port 的服务器条目模型。
+func entryAt(id, host string, port int) *models.Server {
+	return &models.Server{ID: id, Name: id, Host: host, Port: port, User: "u", AuthMethod: models.AuthPassword}
 }
 
 func TestHostKeyTOFURecordsThenVerifies(t *testing.T) {
@@ -39,7 +44,7 @@ func TestHostKeyTOFURecordsThenVerifies(t *testing.T) {
 	addr, _, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
 	defer cleanup()
 
-	cb, err := HostKeyTOFU(st, "h", portOf(addr))
+	cb, err := HostKeyTOFU(st, entryAt("srv-a", "h", portOf(addr)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +59,7 @@ func TestHostKeyTOFURecordsThenVerifies(t *testing.T) {
 	}
 
 	// second connect: verifies, succeeds
-	cb2, _ := HostKeyTOFU(st, "h", portOf(addr))
+	cb2, _ := HostKeyTOFU(st, entryAt("srv-a", "h", portOf(addr)))
 	cli2, err := Connect(context.Background(), hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), cb2)
 	if err != nil {
 		t.Fatalf("second connect (verify): %v", err)
@@ -68,9 +73,9 @@ func TestHostKeyMismatchRejected(t *testing.T) {
 	addr, _, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
 	defer cleanup()
 	st := &fakeHostKeyStore{pins: map[string]*store.Pin{
-		fmt.Sprintf("h:%d", portOf(addr)): {Blob: []byte("stale-different-key"), Format: store.PinFormatBlob},
+		"srv-a": {Blob: []byte("stale-different-key"), Format: store.PinFormatBlob},
 	}}
-	cb, _ := HostKeyTOFU(st, "h", portOf(addr))
+	cb, _ := HostKeyTOFU(st, entryAt("srv-a", "h", portOf(addr)))
 	_, err := Connect(context.Background(), hostOf(addr), portOf(addr), "u", PasswordAuth("pw"), cb)
 	if err == nil {
 		t.Fatal("mismatched host key must be rejected")
@@ -82,9 +87,9 @@ func TestHostKeyMismatchRejected(t *testing.T) {
 
 // --- Plan 48: 双模 TOFU + 双指纹 mismatch(spec §2.2、§5、rider 2) ------------
 
-// anchorWith is fakeHostKeyStore seeding sugar: one pin under "h:22".
+// anchorWith is fakeHostKeyStore seeding sugar: one pin under entry "srv-a".
 func anchorWith(p *store.Pin) *fakeHostKeyStore {
-	return &fakeHostKeyStore{pins: map[string]*store.Pin{"h:22": p}}
+	return &fakeHostKeyStore{pins: map[string]*store.Pin{"srv-a": p}}
 }
 
 // TestHostKeyTOFU_BlobAnchorEqualPassesWithoutWrite: blob 锚旧语义零回归 —
@@ -93,7 +98,7 @@ func anchorWith(p *store.Pin) *fakeHostKeyStore {
 func TestHostKeyTOFU_BlobAnchorEqualPassesWithoutWrite(t *testing.T) {
 	remote := testPublicKey(t)
 	st := anchorWith(&store.Pin{Blob: remote.Marshal(), Format: store.PinFormatBlob})
-	cb, err := HostKeyTOFU(st, "h", 22)
+	cb, err := HostKeyTOFU(st, entryAt("srv-a", "h", 22))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +115,7 @@ func TestHostKeyTOFU_BlobAnchorEqualPassesWithoutWrite(t *testing.T) {
 func TestHostKeyTOFU_FingerprintAnchorEqualPassesWithoutWrite(t *testing.T) {
 	remote := testPublicKey(t)
 	st := anchorWith(&store.Pin{Blob: []byte(ssh.FingerprintSHA256(remote)), Format: store.PinFormatFingerprint})
-	cb, err := HostKeyTOFU(st, "h", 22)
+	cb, err := HostKeyTOFU(st, entryAt("srv-a", "h", 22))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +135,7 @@ func TestHostKeyTOFU_MismatchCarriesBothFingerprints(t *testing.T) {
 	remote := testPublicKey(t)
 	pinned := testPublicKey(t)
 	st := anchorWith(&store.Pin{Blob: pinned.Marshal(), Format: store.PinFormatBlob})
-	cb, err := HostKeyTOFU(st, "h", 22)
+	cb, err := HostKeyTOFU(st, entryAt("srv-a", "h", 22))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +173,7 @@ func TestHostKeyTOFU_FingerprintAnchorMismatchCarriesStoredString(t *testing.T) 
 	other := testPublicKey(t) // must differ from remote
 	storedFP := ssh.FingerprintSHA256(other)
 	st := anchorWith(&store.Pin{Blob: []byte(storedFP), Format: store.PinFormatFingerprint})
-	cb, err := HostKeyTOFU(st, "h", 22)
+	cb, err := HostKeyTOFU(st, entryAt("srv-a", "h", 22))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,5 +189,38 @@ func TestHostKeyTOFU_FingerprintAnchorMismatchCarriesStoredString(t *testing.T) 
 	}
 	if !strings.Contains(err.Error(), storedFP) {
 		t.Fatalf("error text must carry the pinned fingerprint STRING as-is (%s): %v", storedFP, err)
+	}
+}
+
+// TestHostKeyTOFU_EntriesAtSameAddressIndependent 同一兜底地址上的两个条目
+// 经回调各自锚定、各自校验：一个条目的锚不影响另一个（规格 #88）。
+func TestHostKeyTOFU_EntriesAtSameAddressIndependent(t *testing.T) {
+	st := &fakeHostKeyStore{}
+	keyA, keyB := testPublicKey(t), testPublicKey(t)
+	a := entryAt("srv-a", "192.168.1.10", 22)
+	b := entryAt("srv-b", "192.168.1.10", 22)
+
+	cbA, err := HostKeyTOFU(st, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cbA("192.168.1.10", nil, keyA); err != nil {
+		t.Fatalf("条目 A 首次锚定失败：%v", err)
+	}
+	cbB, err := HostKeyTOFU(st, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cbB("192.168.1.10", nil, keyB); err != nil {
+		t.Fatalf("同地址条目 B 应能独立首次锚定：%v", err)
+	}
+
+	// 换机后的语义：条目 A 换成另一台机器（不同密钥）应报不一致；
+	// 条目 B 的锚不受影响。
+	if err := cbA("192.168.1.10", nil, keyB); !errors.Is(err, ErrHostKeyMismatch) {
+		t.Fatalf("条目 A 呈现不同密钥应被拒绝：%v", err)
+	}
+	if err := cbB("192.168.1.10", nil, keyB); err != nil {
+		t.Fatalf("条目 B 的锚不应受条目 A 影响：%v", err)
 	}
 }

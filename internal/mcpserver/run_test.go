@@ -39,13 +39,13 @@ type recordingHK struct {
 	gets *int32
 }
 
-func (r *recordingHK) GetHostKey(host string, port int) (*store.Pin, error) {
+func (r *recordingHK) GetEntryPin(srv *models.Server) (*store.Pin, error) {
 	atomic.AddInt32(r.gets, 1)
-	return r.cur().GetHostKey(host, port)
+	return r.cur().GetEntryPin(srv)
 }
 
-func (r *recordingHK) SaveHostKey(host string, port int, marshaledKey []byte) error {
-	return r.cur().SaveHostKey(host, port, marshaledKey)
+func (r *recordingHK) SaveEntryPin(srv *models.Server, marshaledKey []byte) error {
+	return r.cur().SaveEntryPin(srv, marshaledKey)
 }
 
 // seedTofuTargetSnap builds a snapshot with one granted server pointing at a

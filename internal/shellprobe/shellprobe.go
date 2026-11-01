@@ -91,7 +91,7 @@ func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (m
 	if err != nil {
 		return "", "", fmt.Errorf("resolve credential: %w", err)
 	}
-	hkCb, err := sshbroker.HostKeyTOFU(st, srv.Host, srv.Port)
+	hkCb, err := sshbroker.HostKeyTOFU(st, srv)
 	if err != nil {
 		return "", "", err
 	}

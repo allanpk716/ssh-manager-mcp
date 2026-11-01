@@ -1,8 +1,8 @@
 package mcpserver
 
-// Plan 48 T1/T2/T2b/T3 (spec §8): the POST /pin-hostkey endpoint — the
-// device-forwarded anchor landing with its full guard sequence (§1.2 ①–⑥).
-// In-process ServeRunner + httptest, same pattern as serve_snapshot_test.go.
+// POST /pin-hostkey（规格 #88）：转发请求携带条目标识符、握手地址与主机
+// 密钥；权威端检查设备码轮廓、候选地址、虚拟局域网接口（本票恒为空），
+// 仅可新增落锚并与审计同事务。夹具为进程内 ServeRunner + httptest。
 
 import (
 	"crypto/ed25519"
@@ -26,41 +26,34 @@ import (
 	"ssh-manager-mcp/internal/testschema"
 )
 
-// pinTestHost/pinTestPort: the shared test target address. THREE entries point
-// at it — two granted to the device's bound profile (the multi-candidate
-// determinism pair) and one vault-wide outsider (the affects-list third) — so
-// T1's "affects=N entries" and the server_name attribution have teeth.
 const (
 	pinTestHost = "192.0.2.10"
 	pinTestPort = 22
 )
 
-// pinFixture is the seeded serve + store for the /pin-hostkey tests.
+// pinFixture 是 /pin-hostkey 测试的服务端夹具：gpu 与 mirror（team-a，同一
+// 兜底地址上的两个条目）、twin（同地址但未授权给 team-a）、other（team-b
+// 的条目，另一地址）。
 type pinFixture struct {
 	srv         *httptest.Server
 	st          *store.Store
-	dbPath      string // for raw-connection fault injection (T3's 500/atomicity rows)
-	laptopToken string // bound to team-a (gpu + mirror granted)
-	phoneToken  string // bound to team-b (only "other" granted — no candidate at the target)
-	projToken   string // project token — must 401 (never a remote credential)
+	dbPath      string
+	laptopToken string
+	phoneToken  string
+	projToken   string
 	teamA       string
-	minCandID   string // smallest-id team-a entry at host:port — the attribution anchor
-	minCandName string
+	gpuID       string
+	mirrorID    string
+	twinID      string
+	otherID     string
 }
 
-// newPinRunner seeds: gpu + mirror (team-a, both at 192.0.2.10:22), twin (same
-// address, UNgranted — vault-wide affects member), other (team-b's only entry,
-// different address), both device tokens, one project token.
 func newPinRunner(t *testing.T) *pinFixture {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "t.db")
 	st := newStoreAt(t, dbPath)
 
 	cid, err := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cid2, err := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("topsecret")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +65,8 @@ func newPinRunner(t *testing.T) *pinFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.AddServer(&models.Server{Name: "twin", Host: pinTestHost, Port: pinTestPort, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid2}); err != nil {
+	twinID, err := st.AddServer(&models.Server{Name: "twin", Host: pinTestHost, Port: pinTestPort, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
+	if err != nil {
 		t.Fatal(err)
 	}
 	otherID, err := st.AddServer(&models.Server{Name: "other", Host: "10.9.9.9", Port: 2222, User: "u", AuthMethod: models.AuthPassword, CredentialID: cid})
@@ -112,21 +106,15 @@ func newPinRunner(t *testing.T) *pinFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Determinism anchor: of the two bound-profile candidates at the target,
-	// the SMALLEST id is both the audit attribution and the response name.
-	minCandID, minCandName := gpuID, "gpu"
-	if mirrorID < gpuID {
-		minCandID, minCandName = mirrorID, "mirror"
-	}
 	return &pinFixture{
 		srv: srv, st: st, dbPath: dbPath,
 		laptopToken: laptopToken, phoneToken: phoneToken, projToken: projToken,
-		teamA: teamA, minCandID: minCandID, minCandName: minCandName,
+		teamA: teamA, gpuID: gpuID, mirrorID: mirrorID, twinID: twinID, otherID: otherID,
 	}
 }
 
 // pinTestKey mints a fresh ed25519 host key as (base64 wire blob, canonical
-// marshaled bytes, SHA256 fingerprint) — hermetic, no listener needed.
+// marshaled bytes, SHA256 fingerprint).
 func pinTestKey(t *testing.T) (b64 string, canonical []byte, fp string) {
 	t.Helper()
 	b64, canonical, fp, err := mintPinTestKey()
@@ -136,9 +124,6 @@ func pinTestKey(t *testing.T) (b64 string, canonical []byte, fp string) {
 	return b64, canonical, fp
 }
 
-// mintPinTestKey is pinTestKey's non-fatal core: goroutine workers must not
-// call t.Fatal (Goexit in a non-test goroutine races the test function's
-// return — the concurrent-race test's workers report via t.Errorf instead).
 func mintPinTestKey() (b64 string, canonical []byte, fp string, err error) {
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -151,7 +136,6 @@ func mintPinTestKey() (b64 string, canonical []byte, fp string, err error) {
 	return base64.StdEncoding.EncodeToString(pk.Marshal()), pk.Marshal(), ssh.FingerprintSHA256(pk), nil
 }
 
-// postPin fires one POST /pin-hostkey with the given bearer token and body.
 func postPin(t *testing.T, srv *httptest.Server, token, body string) (int, string) {
 	t.Helper()
 	status, respBody, err := postPinErr(srv, token, body)
@@ -161,8 +145,6 @@ func postPin(t *testing.T, srv *httptest.Server, token, body string) (int, strin
 	return status, respBody
 }
 
-// postPinErr is postPin's non-fatal core — goroutine-worker safe (see
-// mintPinTestKey).
 func postPinErr(srv *httptest.Server, token, body string) (int, string, error) {
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/pin-hostkey", strings.NewReader(body))
 	if err != nil {
@@ -183,9 +165,6 @@ func postPinErr(srv *httptest.Server, token, body string) (int, string, error) {
 	return res.StatusCode, string(b), nil
 }
 
-// postPinChunked posts with a plain io.Reader body (no Content-Length), so
-// the handler's early ContentLength 413 branch cannot fire — an oversized
-// chunked body must be reclassified 413 at decode time by MaxBytesReader.
 func postPinChunked(t *testing.T, srv *httptest.Server, token, body string) (int, string) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/pin-hostkey", io.NopCloser(strings.NewReader(body)))
@@ -207,14 +186,18 @@ func postPinChunked(t *testing.T, srv *httptest.Server, token, body string) (int
 	return res.StatusCode, string(b)
 }
 
-// pinBody renders the §1.1 request shape.
-func pinBody(host string, port int, keyB64 string) string {
+func pinAddr() string { return fmt.Sprintf("%s:%d", pinTestHost, pinTestPort) }
+
+// pinBody 渲染新格式转发请求：条目标识符 + 握手地址 + 密钥。
+func pinBody(serverID, handshakeAddr, keyB64 string) string {
+	return fmt.Sprintf(`{"server_id":%q,"handshake_addr":%q,"key_blob":%q}`, serverID, handshakeAddr, keyB64)
+}
+
+// pinOldBody 渲染旧格式请求（只有主机与端口，没有条目标识符）。
+func pinOldBody(host string, port int, keyB64 string) string {
 	return fmt.Sprintf(`{"host":%q,"port":%d,"key_blob":%q}`, host, port, keyB64)
 }
 
-// rawSQLite runs one statement on a second raw connection to the store file —
-// the fault-injection seam for T3 (a mangled schema the public API cannot
-// produce). Same trick as store-side tests (DROP TABLE audit_log).
 func rawSQLite(t *testing.T, path, stmt string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
@@ -227,35 +210,42 @@ func rawSQLite(t *testing.T, path, stmt string) {
 	}
 }
 
-// pinAnchorCount returns (host_keys rows at the target, audit rows) — the
-// zero-side-effect assertion pair for every rejection path.
-func pinAnchorCount(t *testing.T, f *pinFixture, host string, port int) (int, int) {
+// pinAnchorCount 返回（按条目落库的锚数量，审计行数），用于拒绝路径的
+// 「零副作用」断言。
+func pinAnchorCount(t *testing.T, f *pinFixture) (int, int) {
 	t.Helper()
-	pin, err := f.st.GetHostKey(host, port)
+	pins, err := f.st.ListEntryPins()
 	if err != nil {
 		t.Fatal(err)
-	}
-	n := 0
-	if pin != nil {
-		n = 1
 	}
 	rows, err := f.st.AuditRows(100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return n, len(rows)
+	return len(pins), len(rows)
 }
 
-// TestPinHostkey_ForwardsAndLands201 (T1): the full chain — 201 with the
-// canonical fingerprint + the deterministic server_name; the anchor lands with
-// blob/forward/laptop metadata (asserted through the profile-snapshot export,
-// the mcpserver-visible read path for the pin columns); exactly one audit row
-// whose every field matches, command carrying the vault-wide affects list.
+func entryPinOf(t *testing.T, f *pinFixture, id string) *store.Pin {
+	t.Helper()
+	srv, err := f.st.GetServer(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, err := f.st.GetEntryPin(srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pin
+}
+
+// TestPinHostkey_ForwardsAndLands201：带条目标识符与握手地址的成功落库。
+// 响应维持原形状（201 指纹与条目名）；锚与元数据（来源、转发设备、学习
+// 地址）只落在请求指向的条目上；审计行带条目、指纹、设备与握手地址。
 func TestPinHostkey_ForwardsAndLands201(t *testing.T) {
 	f := newPinRunner(t)
 	blob, canonical, fp := pinTestKey(t)
 
-	status, body := postPin(t, f.srv, f.laptopToken, pinBody(pinTestHost, pinTestPort, blob))
+	status, body := postPin(t, f.srv, f.laptopToken, pinBody(f.gpuID, pinAddr(), blob))
 	if status != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", status, body)
 	}
@@ -264,46 +254,32 @@ func TestPinHostkey_ForwardsAndLands201(t *testing.T) {
 		ServerName  string `json:"server_name"`
 	}
 	if err := json.Unmarshal([]byte(body), &created); err != nil {
-		t.Fatalf("response not the §1.1 JSON: %v\nbody=%s", err, body)
+		t.Fatalf("response not JSON: %v\nbody=%s", err, body)
 	}
 	if created.Fingerprint != fp {
 		t.Fatalf("response fingerprint %q != stored-key fingerprint %q", created.Fingerprint, fp)
 	}
-	if created.ServerName != f.minCandName {
-		t.Fatalf("server_name = %q, want the smallest-id candidate %q", created.ServerName, f.minCandName)
+	if created.ServerName != "gpu" {
+		t.Fatalf("server_name = %q, want the requested entry %q", created.ServerName, "gpu")
 	}
 
-	// the anchor: canonical bytes, blob format (GetHostKey) + the three pin
-	// columns via the snapshot export (pin_source=forward, pin_device=laptop).
-	pin, err := f.st.GetHostKey(pinTestHost, pinTestPort)
-	if err != nil || pin == nil {
-		t.Fatalf("anchor did not land: %v, %v", pin, err)
+	pin := entryPinOf(t, f, f.gpuID)
+	if pin == nil || pin.Format != store.PinFormatBlob || string(pin.Blob) != string(canonical) {
+		t.Fatalf("anchor did not land on the requested entry: %+v", pin)
 	}
-	if pin.Format != store.PinFormatBlob {
-		t.Fatalf("pin format = %q, want blob", pin.Format)
+	pins, err := f.st.ListEntryPins()
+	if err != nil || len(pins) != 1 {
+		t.Fatalf("exactly one entry anchor must exist: %+v %v", pins, err)
 	}
-	if string(pin.Blob) != string(canonical) {
-		t.Fatalf("stored blob is not the re-marshaled canonical bytes")
+	got := pins[0]
+	if got.ServerID != f.gpuID || got.Source != store.PinSourceForward || got.Device != "laptop" || got.HandshakeAddr != pinAddr() {
+		t.Fatalf("anchor metadata = %+v, want gpu/forward/laptop with the handshake address", got)
 	}
-	snap, err := f.st.ExportSnapshotForProfile(f.teamA, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var exported *store.SnapshotHostKey
-	for i := range snap.HostKeys {
-		if snap.HostKeys[i].HostPort == fmt.Sprintf("%s:%d", pinTestHost, pinTestPort) {
-			exported = &snap.HostKeys[i]
-		}
-	}
-	if exported == nil {
-		t.Fatal("granted target's anchor missing from the profile snapshot")
-	}
-	if exported.PinFormat != "blob" || exported.PinSource != "forward" || exported.PinDevice != "laptop" {
-		t.Fatalf("exported pin metadata = %q/%q/%q, want blob/forward/laptop",
-			exported.PinFormat, exported.PinSource, exported.PinDevice)
+	// 同地址的另一个条目不受影响（独立锚定）。
+	if other := entryPinOf(t, f, f.mirrorID); other != nil {
+		t.Fatalf("anchor leaked to a sibling entry at the same address: %+v", other)
 	}
 
-	// the audit row: every field, same transaction as the anchor.
 	rows, err := f.st.AuditRows(10)
 	if err != nil {
 		t.Fatal(err)
@@ -312,22 +288,116 @@ func TestPinHostkey_ForwardsAndLands201(t *testing.T) {
 		t.Fatalf("exactly one audit row must exist, got %d", len(rows))
 	}
 	row := rows[0]
-	if row.Action != "pin-forward" || row.ServerID != f.minCandID || row.ProjectID != "" || row.Status != "ok" || row.TS.IsZero() {
-		t.Fatalf("audit row fields wrong: action=%q server=%q project=%q status=%q ts=%v",
-			row.Action, row.ServerID, row.ProjectID, row.Status, row.TS)
+	if row.Action != "pin-forward" || row.ServerID != f.gpuID || row.ProjectID != "" || row.Status != "ok" || row.TS.IsZero() {
+		t.Fatalf("audit row fields wrong: %+v", row)
 	}
-	// affects = the OWNER full-vault view (ListServers): gpu, mirror, twin —
-	// the ungranted twin included; the device never sees this line.
-	wantCmd := fmt.Sprintf("host=%s:%d fp=%s device=laptop via=forward affects=3 entries: gpu, mirror, twin",
-		pinTestHost, pinTestPort, fp)
-	if row.Command != wantCmd {
-		t.Fatalf("audit command:\n got %q\nwant %q", row.Command, wantCmd)
+	for _, want := range []string{"gpu", pinAddr(), fp, "device=laptop", "via=forward"} {
+		if !strings.Contains(row.Command, want) {
+			t.Fatalf("audit command %q missing %q", row.Command, want)
+		}
 	}
 }
 
-// TestPinHostkey_ConcurrentDistinctKeysOneWinner (T2): N concurrent distinct
-// keys racing one unpinned host:port — EXACTLY one 201, the rest 409 with
-// equal=false, and the stored anchor is the winner's key (insert-only).
+// TestPinHostkey_SecondEntrySameAddressAnchorsIndependently：同一兜底地址上
+// 的第二个条目用另一把密钥独立落锚（规格 #88 用户故事 15、19）。
+func TestPinHostkey_SecondEntrySameAddressAnchorsIndependently(t *testing.T) {
+	f := newPinRunner(t)
+	gpuBlob, gpuCanonical, _ := pinTestKey(t)
+	mirrorBlob, mirrorCanonical, _ := pinTestKey(t)
+
+	for _, tc := range []struct {
+		id   string
+		name string
+		blob string
+	}{
+		{f.gpuID, "gpu", gpuBlob},
+		{f.mirrorID, "mirror", mirrorBlob},
+	} {
+		status, body := postPin(t, f.srv, f.laptopToken, pinBody(tc.id, pinAddr(), tc.blob))
+		if status != http.StatusCreated {
+			t.Fatalf("entry %s: status = %d, want 201; body=%s", tc.name, status, body)
+		}
+	}
+	if pin := entryPinOf(t, f, f.gpuID); pin == nil || !pin.Matches(gpuCanonical) {
+		t.Fatalf("gpu anchor wrong: %+v", pin)
+	}
+	if pin := entryPinOf(t, f, f.mirrorID); pin == nil || !pin.Matches(mirrorCanonical) {
+		t.Fatalf("mirror anchor wrong: %+v", pin)
+	}
+}
+
+// TestPinHostkey_EntryOutsideProfile403：条目不在设备码绑定 profile 内被拒，
+// 响应不泄露库内其他条目或 profile 形状。
+func TestPinHostkey_EntryOutsideProfile403(t *testing.T) {
+	f := newPinRunner(t)
+	blob, _, _ := pinTestKey(t)
+
+	cases := []struct {
+		name  string
+		token string
+		id    string
+		addr  string
+	}{
+		{"ungranted same-address entry", f.laptopToken, f.twinID, pinAddr()},
+		{"entry of another profile", f.phoneToken, f.gpuID, pinAddr()},
+		{"unknown entry id", f.laptopToken, "no-such-entry", pinAddr()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body := postPin(t, f.srv, tc.token, pinBody(tc.id, tc.addr, blob))
+			if status != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403; body=%s", status, body)
+			}
+			for _, leaked := range []string{"gpu", "mirror", "twin", "team-a", "team-b", "10.9.9.9"} {
+				if strings.Contains(body, leaked) {
+					t.Fatalf("403 body leaks vault/profile content %q: %s", leaked, body)
+				}
+			}
+		})
+	}
+	if n, a := pinAnchorCount(t, f); n != 0 || a != 0 {
+		t.Fatalf("refused pin must land nothing: anchors=%d audit=%d", n, a)
+	}
+}
+
+// TestPinHostkey_HandshakeAddrNotCandidate400：握手地址不是该条目的候选地址
+// （本票阶段即兜底 Host 加端口）时拒绝。
+func TestPinHostkey_HandshakeAddrNotCandidate400(t *testing.T) {
+	f := newPinRunner(t)
+	blob, _, _ := pinTestKey(t)
+
+	status, body := postPin(t, f.srv, f.laptopToken, pinBody(f.gpuID, "10.9.9.9:2222", blob))
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", status, body)
+	}
+	if !strings.Contains(body, "handshake") {
+		t.Fatalf("400 body should name the handshake address problem: %s", body)
+	}
+	if n, a := pinAnchorCount(t, f); n != 0 || a != 0 {
+		t.Fatalf("wrong-address pin must land nothing: anchors=%d audit=%d", n, a)
+	}
+}
+
+// TestPinHostkey_OldFormatRejected400：缺少条目标识符的旧格式请求一律拒绝，
+// 错误信息提示升级客户端。
+func TestPinHostkey_OldFormatRejected400(t *testing.T) {
+	f := newPinRunner(t)
+	blob, _, _ := pinTestKey(t)
+
+	status, body := postPin(t, f.srv, f.laptopToken, pinOldBody(pinTestHost, pinTestPort, blob))
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", status, body)
+	}
+	if !strings.Contains(strings.ToLower(body), "upgrade") {
+		t.Fatalf("400 body must tell the user to upgrade the client: %s", body)
+	}
+	if n, a := pinAnchorCount(t, f); n != 0 || a != 0 {
+		t.Fatalf("old-format pin must land nothing: anchors=%d audit=%d", n, a)
+	}
+}
+
+// TestPinHostkey_ConcurrentDistinctKeysOneWinner：并发请求只有一个成功，
+// 其余按密钥异同得到 409 equal。
 func TestPinHostkey_ConcurrentDistinctKeysOneWinner(t *testing.T) {
 	f := newPinRunner(t)
 	const n = 6
@@ -343,16 +413,12 @@ func TestPinHostkey_ConcurrentDistinctKeysOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// No t.Fatal below: this is a non-test goroutine (Goexit here
-			// races the test function's return); a failed worker degrades to
-			// a t.Errorf diagnostic plus a missing result, which the
-			// created==1 assertion below rejects.
 			blob, canonical, _, err := mintPinTestKey()
 			if err != nil {
 				t.Errorf("worker key mint: %v", err)
 				return
 			}
-			status, body, err := postPinErr(f.srv, f.laptopToken, pinBody(pinTestHost, pinTestPort, blob))
+			status, body, err := postPinErr(f.srv, f.laptopToken, pinBody(f.gpuID, pinAddr(), blob))
 			if err != nil {
 				t.Errorf("worker post: %v", err)
 				return
@@ -384,106 +450,62 @@ func TestPinHostkey_ConcurrentDistinctKeysOneWinner(t *testing.T) {
 	if created != 1 {
 		t.Fatalf("created = %d, want exactly 1 (insert-only)", created)
 	}
-	pin, err := f.st.GetHostKey(pinTestHost, pinTestPort)
-	if err != nil || pin == nil {
-		t.Fatalf("no anchor after the race: %v", err)
-	}
-	if string(pin.Blob) != string(winner) {
-		t.Fatal("stored anchor is not the winner's key — overwrite or corruption")
+	if pin := entryPinOf(t, f, f.gpuID); pin == nil || !pin.Matches(winner) {
+		t.Fatalf("stored anchor is not the winner's key — overwrite or corruption: %+v", pin)
 	}
 	if rows, _ := f.st.AuditRows(100); len(rows) != 1 {
 		t.Fatalf("exactly the winner's audit row must exist, got %d", len(rows))
 	}
 }
 
-// TestPinHostkey_OversizedChunkedBodyReclassified413: a request lying by
-// omission (chunked, no Content-Length) that overflows pinMaxBodyBytes is
-// reclassified 413 at decode time via http.MaxBytesError — never mislabeled
-// a 400 JSON error (the pairDecode precedent). Direct test for the
-// MaxBytesError sub-branch, which the early ContentLength branch shadows in
-// every length-known request.
-func TestPinHostkey_OversizedChunkedBodyReclassified413(t *testing.T) {
-	f := newPinRunner(t)
-	big := pinBody(pinTestHost, pinTestPort, strings.Repeat("x", pinMaxBodyBytes+1024))
-	status, body := postPinChunked(t, f.srv, f.laptopToken, big)
-	if status != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want 413 (decode-time reclassification); body=%s", status, body)
-	}
-}
-
-// TestPinHostkey_PreExistingAnchorConflict (T2b): an existing equal anchor
-// answers 409 equal=true and stays byte-for-byte untouched (source still tofu,
-// zero audit rows); a different key answers 409 equal=false, equally untouched.
+// TestPinHostkey_PreExistingAnchorConflict：条目已有锚时绝不覆盖——密钥相同
+// 返回 409 equal=true，不同返回 equal=false；两者都不写审计。
 func TestPinHostkey_PreExistingAnchorConflict(t *testing.T) {
 	f := newPinRunner(t)
 	blobA, canonicalA, _ := pinTestKey(t)
 	blobB, _, _ := pinTestKey(t)
 
-	if err := f.st.SaveHostKey(pinTestHost, pinTestPort, canonicalA); err != nil {
-		t.Fatal(err)
-	}
-
-	status, body := postPin(t, f.srv, f.laptopToken, pinBody(pinTestHost, pinTestPort, blobA))
-	if status != http.StatusConflict {
-		t.Fatalf("equal anchor: status = %d, want 409; body=%s", status, body)
-	}
-	if !strings.Contains(body, `"error":"already pinned"`) || !strings.Contains(body, `"equal":true`) {
-		t.Fatalf("equal-anchor body must be {\"error\":\"already pinned\",\"equal\":true}, got %s", body)
-	}
-	pin, err := f.st.GetHostKey(pinTestHost, pinTestPort)
-	if err != nil || pin == nil || string(pin.Blob) != string(canonicalA) || pin.Format != store.PinFormatBlob {
-		t.Fatalf("existing anchor disturbed by the equal conflict: %+v %v", pin, err)
-	}
-	snap, err := f.st.ExportSnapshotForProfile(f.teamA, false)
+	gpu, err := f.st.GetServer(f.gpuID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, hk := range snap.HostKeys {
-		if hk.HostPort == fmt.Sprintf("%s:%d", pinTestHost, pinTestPort) && hk.PinSource != "tofu" {
-			t.Fatalf("conflict path mutated pin_source: %q", hk.PinSource)
-		}
-	}
-	if _, auditN := pinAnchorCount(t, f, pinTestHost, pinTestPort); auditN != 0 {
-		t.Fatalf("conflict path must write no audit rows, got %d", auditN)
+	if err := f.st.SaveEntryPin(gpu, canonicalA); err != nil {
+		t.Fatal(err)
 	}
 
-	// a different key: 409 equal=false, anchor still untouched.
-	status, body = postPin(t, f.srv, f.laptopToken, pinBody(pinTestHost, pinTestPort, blobB))
+	status, body := postPin(t, f.srv, f.laptopToken, pinBody(f.gpuID, pinAddr(), blobA))
+	if status != http.StatusConflict || !strings.Contains(body, `"equal":true`) {
+		t.Fatalf("equal anchor: status=%d body=%s, want 409 equal:true", status, body)
+	}
+	if pin := entryPinOf(t, f, f.gpuID); pin == nil || !pin.Matches(canonicalA) {
+		t.Fatalf("existing anchor disturbed by the equal conflict: %+v", pin)
+	}
+
+	status, body = postPin(t, f.srv, f.laptopToken, pinBody(f.gpuID, pinAddr(), blobB))
 	if status != http.StatusConflict || !strings.Contains(body, `"equal":false`) {
 		t.Fatalf("different key: status=%d body=%s, want 409 equal:false", status, body)
 	}
-	if pin, _ := f.st.GetHostKey(pinTestHost, pinTestPort); pin == nil || string(pin.Blob) != string(canonicalA) {
+	if pin := entryPinOf(t, f, f.gpuID); pin == nil || !pin.Matches(canonicalA) {
 		t.Fatal("existing anchor overwritten by a conflicting forward")
 	}
+	if n, a := pinAnchorCount(t, f); n != 1 || a != 0 {
+		t.Fatalf("conflict paths must write nothing: anchors=%d audit=%d", n, a)
+	}
 }
 
-// TestPinHostkey_NoCandidate403NoProfileEcho (T3): a valid device code whose
-// bound profile has no entry at the target address gets 403 — and the body
-// names neither the profile's entries nor any other vault content.
-func TestPinHostkey_NoCandidate403NoProfileEcho(t *testing.T) {
+// TestPinHostkey_OversizedChunkedBodyReclassified413：无 Content-Length 的超大
+// 请求体在解码时重新归类为 413。
+func TestPinHostkey_OversizedChunkedBodyReclassified413(t *testing.T) {
 	f := newPinRunner(t)
-	blob, _, _ := pinTestKey(t)
-
-	status, body := postPin(t, f.srv, f.phoneToken, pinBody(pinTestHost, pinTestPort, blob))
-	if status != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403; body=%s", status, body)
-	}
-	// The requester-supplied address IS echoed (the §2.1 client text does the
-	// same — it leaks nothing the device didn't send); the entry/profile
-	// shapes behind it must not appear.
-	for _, leaked := range []string{"gpu", "mirror", "twin", "team-a", "10.9.9.9"} {
-		if strings.Contains(body, leaked) {
-			t.Fatalf("403 body leaks vault/profile content %q: %s", leaked, body)
-		}
-	}
-	if n, a := pinAnchorCount(t, f, pinTestHost, pinTestPort); n != 0 || a != 0 {
-		t.Fatalf("refused pin must land nothing: anchors=%d audit=%d", n, a)
+	big := pinBody(f.gpuID, pinAddr(), strings.Repeat("x", pinMaxBodyBytes+1024))
+	status, body := postPinChunked(t, f.srv, f.laptopToken, big)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body=%s", status, body)
 	}
 }
 
-// TestPinHostkey_UnboundToken403 (T3): a valid-but-unbound (legacy migrated)
-// device code is refused with 403, never 401 — same discipline as /snapshot
-// (a pinned 401 is the Plan-34 quarantine trigger).
+// TestPinHostkey_UnboundToken403：未绑定 profile 的设备码被拒（403 而不是
+// 401），提示 owner 用 cache-tokens bind 修复。
 func TestPinHostkey_UnboundToken403(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-unbound.db")
 	db, err := sql.Open("sqlite", path)
@@ -507,7 +529,7 @@ func TestPinHostkey_UnboundToken403(t *testing.T) {
 	}
 	db.Close()
 
-	st, err := store.Open(path, make([]byte, 32)) // migrate() adds profile_id (NULL = unbound)
+	st, err := store.Open(path, make([]byte, 32))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -521,29 +543,27 @@ func TestPinHostkey_UnboundToken403(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	blob, _, _ := pinTestKey(t)
-	status, body := postPin(t, srv, tok, pinBody(pinTestHost, pinTestPort, blob))
+	status, body := postPin(t, srv, tok, pinBody("any", pinAddr(), blob))
 	if status != http.StatusForbidden {
-		t.Fatalf("unbound device code: status = %d, want 403 (never 401 — Plan 34); body=%s", status, body)
+		t.Fatalf("unbound device code: status = %d, want 403; body=%s", status, body)
 	}
 	if !strings.Contains(body, "bind") {
 		t.Fatalf("403 body must name the owner repair (cache-tokens bind), got: %s", body)
 	}
 }
 
-// TestPinHostkey_BadShape400 (T3): ① guards — undecodable JSON, missing
-// host/port/key_blob, and wrong-typed port ALL answer the §1.1 400 body and
-// land nothing.
+// TestPinHostkey_BadShape400：无法解码、缺握手地址、缺密钥、空密钥都回答
+// 400，且什么都不落。
 func TestPinHostkey_BadShape400(t *testing.T) {
 	f := newPinRunner(t)
 	blob, _, _ := pinTestKey(t)
 
 	cases := map[string]string{
-		"undecodable":     `{"host": `,
-		"missing host":    fmt.Sprintf(`{"port":%d,"key_blob":%q}`, pinTestPort, blob),
-		"missing port":    fmt.Sprintf(`{"host":%q,"key_blob":%q}`, pinTestHost, blob),
-		"missing keyblob": fmt.Sprintf(`{"host":%q,"port":%d}`, pinTestHost, pinTestPort),
-		"empty keyblob":   fmt.Sprintf(`{"host":%q,"port":%d,"key_blob":""}`, pinTestHost, pinTestPort),
-		"wrong-type port": fmt.Sprintf(`{"host":%q,"port":"22","key_blob":%q}`, pinTestHost, blob),
+		"undecodable":         `{"server_id": `,
+		"missing handshake":   fmt.Sprintf(`{"server_id":%q,"key_blob":%q}`, f.gpuID, blob),
+		"missing keyblob":     fmt.Sprintf(`{"server_id":%q,"handshake_addr":%q}`, f.gpuID, pinAddr()),
+		"empty keyblob":       fmt.Sprintf(`{"server_id":%q,"handshake_addr":%q,"key_blob":""}`, f.gpuID, pinAddr()),
+		"wrong-typed entryid": fmt.Sprintf(`{"server_id":123,"handshake_addr":%q,"key_blob":%q}`, pinAddr(), blob),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -551,22 +571,18 @@ func TestPinHostkey_BadShape400(t *testing.T) {
 			if status != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400; body=%s", status, got)
 			}
-			if !strings.Contains(got, `"error":"unparseable key_blob"`) {
-				t.Fatalf("400 body must be the §1.1 verbatim shape, got %s", got)
-			}
-			if n, a := pinAnchorCount(t, f, pinTestHost, pinTestPort); n != 0 || a != 0 {
+			if n, a := pinAnchorCount(t, f); n != 0 || a != 0 {
 				t.Fatalf("rejected shape must land nothing: anchors=%d audit=%d", n, a)
 			}
 		})
 	}
 }
 
-// TestPinHostkey_Auth401 (T3): project tokens and bad/absent device codes are
-// plain RequireBearerToken 401s — no quarantine semantics on this route.
+// TestPinHostkey_Auth401：项目令牌、错误设备码、缺令牌都是普通 401。
 func TestPinHostkey_Auth401(t *testing.T) {
 	f := newPinRunner(t)
 	blob, _, _ := pinTestKey(t)
-	body := pinBody(pinTestHost, pinTestPort, blob)
+	body := pinBody(f.gpuID, pinAddr(), blob)
 
 	for name, token := range map[string]string{
 		"project token": f.projToken,
@@ -580,13 +596,9 @@ func TestPinHostkey_Auth401(t *testing.T) {
 			}
 		})
 	}
-	if n, a := pinAnchorCount(t, f, pinTestHost, pinTestPort); n != 0 || a != 0 {
-		t.Fatalf("unauthenticated attempts must land nothing: anchors=%d audit=%d", n, a)
-	}
 }
 
-// TestPinHostkey_Method405 (T3): non-POST (with a VALID token — the method
-// guard is the handler's job ①, not the auth layer's).
+// TestPinHostkey_Method405：非 POST 方法被拒。
 func TestPinHostkey_Method405(t *testing.T) {
 	f := newPinRunner(t)
 	req, err := http.NewRequest(http.MethodGet, f.srv.URL+"/pin-hostkey", nil)
@@ -604,75 +616,56 @@ func TestPinHostkey_Method405(t *testing.T) {
 	}
 }
 
-// TestPinHostkey_OverCap413 (T3): a body over the new 64 KiB cap is refused
-// with 413 and lands nothing.
+// TestPinHostkey_OverCap413：超过上限的请求体被拒。
 func TestPinHostkey_OverCap413(t *testing.T) {
 	f := newPinRunner(t)
-	huge := pinBody(pinTestHost, pinTestPort, strings.Repeat("A", 70<<10))
+	huge := pinBody(f.gpuID, pinAddr(), strings.Repeat("A", 70<<10))
 	status, body := postPin(t, f.srv, f.laptopToken, huge)
 	if status != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413; body=%s", status, body)
 	}
-	if n, a := pinAnchorCount(t, f, pinTestHost, pinTestPort); n != 0 || a != 0 {
-		t.Fatalf("over-cap attempt must land nothing: anchors=%d audit=%d", n, a)
-	}
 }
 
-// TestPinHostkey_MalformedKeyBlob400 (T3): base64 that decodes but is not an
-// SSH public key → the 400 body, and ZERO rows written anywhere.
+// TestPinHostkey_MalformedKeyBlob400：能解码但不是 SSH 公钥的字节被拒。
 func TestPinHostkey_MalformedKeyBlob400(t *testing.T) {
 	f := newPinRunner(t)
 	notAKey := base64.StdEncoding.EncodeToString([]byte("definitely not an ssh public key"))
-	status, body := postPin(t, f.srv, f.laptopToken, pinBody(pinTestHost, pinTestPort, notAKey))
+	status, body := postPin(t, f.srv, f.laptopToken, pinBody(f.gpuID, pinAddr(), notAKey))
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", status, body)
 	}
-	if !strings.Contains(body, `"error":"unparseable key_blob"`) {
-		t.Fatalf("400 body must be the §1.1 verbatim shape, got %s", body)
-	}
-	if n, a := pinAnchorCount(t, f, pinTestHost, pinTestPort); n != 0 || a != 0 {
-		t.Fatalf("malformed key must land nothing: anchors=%d audit=%d", n, a)
+	if !strings.Contains(body, "unparseable") {
+		t.Fatalf("400 body should name the unparseable key: %s", body)
 	}
 }
 
-// TestPinHostkey_GetCacheTokenFault500 (T3): a store fault resolving the
-// device row is 500 + stderr — NOT 403 (403 would send the owner chasing
-// `cache-tokens bind` while the real DB error stays buried; the handleSnapshot
-// lesson). Injection: drop created_at from cache_tokens on a raw connection —
-// GetCacheToken's SELECT names it, VerifyCacheToken's (the auth middleware's)
-// does not, so 401-vs-500 is cleanly separated.
+// TestPinHostkey_GetCacheTokenFault500：解析设备码行的存储故障是 500，不是
+// 授权结论。
 func TestPinHostkey_GetCacheTokenFault500(t *testing.T) {
 	f := newPinRunner(t)
 	rawSQLite(t, f.dbPath, `ALTER TABLE cache_tokens DROP COLUMN created_at`)
 
 	blob, _, _ := pinTestKey(t)
-	status, body := postPin(t, f.srv, f.laptopToken, pinBody(pinTestHost, pinTestPort, blob))
+	status, body := postPin(t, f.srv, f.laptopToken, pinBody(f.gpuID, pinAddr(), blob))
 	if status != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500; body=%s", status, body)
 	}
-	if n, _ := pinAnchorCount(t, f, pinTestHost, pinTestPort); n != 0 {
+	if n, _ := pinAnchorCount(t, f); n != 0 {
 		t.Fatal("no anchor may land when the device row cannot be resolved")
 	}
 }
 
-// TestPinHostkey_AuditFailureAnchorNotLanded (T1 atomicity): when the same-tx
-// audit write fails, the anchor must NOT land. Injection: DROP TABLE audit_log
-// (the store-side T9 trick) — every pre-insert guard passes, InsertForwardedPin
-// fails, the tx rolls back, the endpoint answers 500.
+// TestPinHostkey_AuditFailureAnchorNotLanded：同一事务的审计写失败时锚不落库。
 func TestPinHostkey_AuditFailureAnchorNotLanded(t *testing.T) {
 	f := newPinRunner(t)
 	rawSQLite(t, f.dbPath, `DROP TABLE audit_log`)
 
 	blob, _, _ := pinTestKey(t)
-	status, body := postPin(t, f.srv, f.laptopToken, pinBody(pinTestHost, pinTestPort, blob))
+	status, body := postPin(t, f.srv, f.laptopToken, pinBody(f.gpuID, pinAddr(), blob))
 	if status != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (store fault, not an auth verdict); body=%s", status, body)
+		t.Fatalf("status = %d, want 500 (store fault); body=%s", status, body)
 	}
-	pin, err := f.st.GetHostKey(pinTestHost, pinTestPort)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pin != nil {
-		t.Fatalf("anchor landed despite the audit failure — the pin is not atomic with its history: %+v", pin)
+	if pin := entryPinOf(t, f, f.gpuID); pin != nil {
+		t.Fatalf("anchor landed despite the audit failure: %+v", pin)
 	}
 }

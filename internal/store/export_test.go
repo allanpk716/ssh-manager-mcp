@@ -130,7 +130,7 @@ func TestImportSnapshot_RoundTrip_CrossMasterKey(t *testing.T) {
 		t.Fatalf("grants not restored on B: %v", ids)
 	}
 	// host keys
-	hk, _ := b.GetEntryPin(srvID)
+	hk, _ := b.GetEntryPin(serverOf(t, b, srvID))
 	if hk == nil || !bytes.Equal(hk.Blob, []byte("hk-blob")) {
 		t.Fatalf("host key not restored: %+v", hk)
 	}

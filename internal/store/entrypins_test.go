@@ -46,11 +46,11 @@ func TestEntryPins_SameAddressIndependent(t *testing.T) {
 	if err := s.SaveEntryPin(&models.Server{ID: b, Host: "192.168.1.10", Port: 22}, keyB); err != nil {
 		t.Fatal(err)
 	}
-	pinA, err := s.GetEntryPin(a)
+	pinA, err := s.GetEntryPin(serverOf(t, s, a))
 	if err != nil {
 		t.Fatal(err)
 	}
-	pinB, err := s.GetEntryPin(b)
+	pinB, err := s.GetEntryPin(serverOf(t, s, b))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestInsertForwardedEntryPin_OnlyInsert(t *testing.T) {
 	if err != nil || equal {
 		t.Fatalf("首次转发应插入新锚：equal=%v err=%v", equal, err)
 	}
-	pin, err := s.GetEntryPin(id)
+	pin, err := s.GetEntryPin(serverOf(t, s, id))
 	if err != nil || pin == nil || !pin.Matches(key) {
 		t.Fatalf("转发锚没有落库：%v %v", pin, err)
 	}
@@ -92,7 +92,7 @@ func TestInsertForwardedEntryPin_OnlyInsert(t *testing.T) {
 	if equal, err = s.InsertForwardedEntryPin(srv, "203.0.113.10:22", other, "laptop", AuditRow{TS: time.Now(), Action: "pin-forward"}); err != nil || equal {
 		t.Fatalf("不同密钥的转发应返回不同且不覆盖：equal=%v err=%v", equal, err)
 	}
-	pin, _ = s.GetEntryPin(id)
+	pin, _ = s.GetEntryPin(serverOf(t, s, id))
 	if pin == nil || !pin.Matches(key) {
 		t.Fatal("转发通道覆盖了已有锚")
 	}
@@ -125,7 +125,7 @@ func TestManualAndClearEntryPin(t *testing.T) {
 	if err == nil || old == nil || !old.Matches(key) {
 		t.Fatalf("已有锚不加 --force 应拒绝并带回现有锚：%v %v", old, err)
 	}
-	if pin, _ := s.GetEntryPin(id); pin == nil || !pin.Matches(key) {
+	if pin, _ := s.GetEntryPin(serverOf(t, s, id)); pin == nil || !pin.Matches(key) {
 		t.Fatal("拒绝路径不应改动锚")
 	}
 	if _, err = s.UpsertManualEntryPin(srv, "", next, PinFormatBlob, true, func(old *PinMeta) AuditRow {
@@ -133,7 +133,7 @@ func TestManualAndClearEntryPin(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if pin, _ := s.GetEntryPin(id); pin == nil || !pin.Matches(next) {
+	if pin, _ := s.GetEntryPin(serverOf(t, s, id)); pin == nil || !pin.Matches(next) {
 		t.Fatal("--force 没有覆盖锚")
 	}
 
@@ -143,7 +143,7 @@ func TestManualAndClearEntryPin(t *testing.T) {
 	if err != nil || cleared == nil || !cleared.Matches(next) {
 		t.Fatalf("按条目清除失败：%v %v", cleared, err)
 	}
-	if pin, _ := s.GetEntryPin(id); pin != nil {
+	if pin, _ := s.GetEntryPin(serverOf(t, s, id)); pin != nil {
 		t.Fatal("清除后条目仍有锚")
 	}
 	if again, err := s.ClearEntryPin(id, func(old PinMeta) AuditRow {
@@ -179,15 +179,15 @@ func TestEntryLifecycle_PinFollowsEntry(t *testing.T) {
 	if err := s.UpdateServer(srv); err != nil {
 		t.Fatal(err)
 	}
-	if pin, err := s.GetEntryPin(id); err != nil || pin == nil || !pin.Matches(key) {
+	if pin, err := s.GetEntryPin(serverOf(t, s, id)); err != nil || pin == nil || !pin.Matches(key) {
 		t.Fatalf("修改地址不应清除锚：%v %v", pin, err)
 	}
 
 	if err := s.DeleteServerCascading(id); err != nil {
 		t.Fatal(err)
 	}
-	if pin, err := s.GetEntryPin(id); err != nil || pin != nil {
-		t.Fatalf("删除条目后锚应随之删除：%v %v", pin, err)
+	if pins := mustEntryPins(t, s); len(pins) != 0 {
+		t.Fatalf("删除条目后锚应随之删除：%+v", pins)
 	}
 	deletes, err := s.QueryAudit(AuditFilter{Actions: []string{"pin-delete"}})
 	if err != nil {
