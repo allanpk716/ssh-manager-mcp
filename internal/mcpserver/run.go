@@ -40,7 +40,7 @@ func RunStdio(token string, kp store.KeyProvider) error {
 	if project == nil {
 		return fmt.Errorf("invalid or unknown token")
 	}
-	srv, tunnels, tasks, err := NewServer(st, project.ProfileID, project.ID)
+	srv, tunnels, tasks, err := newLocalVaultServer(st, project.ProfileID, project.ID)
 	if err != nil {
 		return err
 	}
