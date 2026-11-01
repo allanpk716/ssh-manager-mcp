@@ -28,7 +28,7 @@ var secretsReadHiddenLine = func() ([]byte, error) {
 }
 
 // requireSecretsVault 断言本机持有 vault（权威端或单机部署）并返回已解锁的
-// 存储。角色判定与 policy 命令组共用同一套探针（vault 优先，其次看客户端缓
+// 存储。角色判定与 policy 命令组共用同一套判定（vault 优先，其次看客户端缓
 // 存登记）。客户端上机密项还没有下发通道，整个命令组都拒绝执行，避免让人
 // 误以为本地有一份机密项数据。
 func requireSecretsVault() (*store.Store, error) {
@@ -66,7 +66,7 @@ const secretsValueInputHelp = `值没有任何命令参数入口，以免进入 
   1. --from-file PATH：按字节原样读取，末尾换行会保留；
   2. --stdin：读到输入结束，按字节原样读取，末尾换行会保留；
   3. 交互终端：关闭回显输入两次，两次不一致时报错；只取一行，不含换行符。
-  4. 非交互终端且未给 --from-file / --stdin：报错，提示改用这两个旗标。`
+  4. 非交互终端且未给 --from-file / --stdin：报错，提示改用这两个参数。`
 
 func secretsAddCmd() *cobra.Command {
 	var note, fromFile string
@@ -81,6 +81,11 @@ func secretsAddCmd() *cobra.Command {
 
 --note 备注：备注对 agent 可见，不要写敏感内容。`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := requireSecretsVault()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
 			if err := store.ValidateSecretName(args[0]); err != nil {
 				return err
 			}
@@ -88,11 +93,6 @@ func secretsAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			s, err := requireSecretsVault()
-			if err != nil {
-				return err
-			}
-			defer s.Close()
 			if err := s.AddSecret(args[0], note, value); err != nil {
 				return err
 			}
@@ -101,9 +101,14 @@ func secretsAddCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&note, "note", "", "备注（对 agent 可见，不要写敏感内容）")
-	c.Flags().StringVar(&fromFile, "from-file", "", "从文件按字节原样读取值（末尾换行保留）")
-	c.Flags().BoolVar(&fromStdin, "stdin", false, "从标准输入读到结束并按字节原样保存（末尾换行保留）")
+	registerSecretValueInputFlags(c, &fromFile, &fromStdin)
 	return c
+}
+
+// registerSecretValueInputFlags 注册新增与换值共用的两个值来源参数。
+func registerSecretValueInputFlags(c *cobra.Command, fromFile *string, fromStdin *bool) {
+	c.Flags().StringVar(fromFile, "from-file", "", "从文件按字节原样读取值（末尾换行保留）")
+	c.Flags().BoolVar(fromStdin, "stdin", false, "从标准输入读到结束并按字节原样保存（末尾换行保留）")
 }
 
 func secretsSetCmd() *cobra.Command {
@@ -119,6 +124,11 @@ func secretsSetCmd() *cobra.Command {
 
 换值只改值、上一个值与值版本号；备注和可写入服务器列表保持不变。`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := requireSecretsVault()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
 			if err := store.ValidateSecretName(args[0]); err != nil {
 				return err
 			}
@@ -126,11 +136,6 @@ func secretsSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			s, err := requireSecretsVault()
-			if err != nil {
-				return err
-			}
-			defer s.Close()
 			if err := s.SetSecretValue(args[0], value); err != nil {
 				return err
 			}
@@ -138,8 +143,7 @@ func secretsSetCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&fromFile, "from-file", "", "从文件按字节原样读取值（末尾换行保留）")
-	c.Flags().BoolVar(&fromStdin, "stdin", false, "从标准输入读到结束并按字节原样保存（末尾换行保留）")
+	registerSecretValueInputFlags(c, &fromFile, &fromStdin)
 	return c
 }
 
@@ -229,37 +233,28 @@ func secretsListCmd() *cobra.Command {
 }
 
 func secretsAllowCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "allow --secrets NAME[,NAME...] --servers 条目[,条目...]",
-		Args:  cobra.NoArgs,
-		Short: "Add server entries to secrets' write lists",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			secrets, servers, err := secretAllowFlags(cmd)
-			if err != nil {
-				return err
-			}
-			s, err := requireSecretsVault()
-			if err != nil {
-				return err
-			}
-			defer s.Close()
-			if err := s.AllowSecrets(secrets, servers); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "已授权 %d 个机密项写入 %d 个服务器条目\n", len(secrets), len(servers))
-			return nil
-		},
-	}
-	c.Flags().StringSlice("secrets", nil, "机密项名字（逗号分隔或重复旗标，可给多个）")
-	c.Flags().StringSlice("servers", nil, "服务器条目名（逗号分隔或重复旗标，可给多个）")
-	return c
+	return newSecretAllowChangeCmd(true)
 }
 
 func secretsDisallowCmd() *cobra.Command {
+	return newSecretAllowChangeCmd(false)
+}
+
+// newSecretAllowChangeCmd 构造授权与取消授权共用的命令：两者只有动作方向
+// 与成功提示不同，参数解析与调用顺序保持一致。
+func newSecretAllowChangeCmd(allow bool) *cobra.Command {
+	name := "disallow"
+	short := "Remove server entries from secrets' write lists"
+	done := "已取消 %d 个机密项写入 %d 个服务器条目\n"
+	if allow {
+		name = "allow"
+		short = "Add server entries to secrets' write lists"
+		done = "已授权 %d 个机密项写入 %d 个服务器条目\n"
+	}
 	c := &cobra.Command{
-		Use:   "disallow --secrets NAME[,NAME...] --servers 条目[,条目...]",
+		Use:   name + " --secrets NAME[,NAME...] --servers 条目[,条目...]",
 		Args:  cobra.NoArgs,
-		Short: "Remove server entries from secrets' write lists",
+		Short: short,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			secrets, servers, err := secretAllowFlags(cmd)
 			if err != nil {
@@ -270,19 +265,28 @@ func secretsDisallowCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			if err := s.DisallowSecrets(secrets, servers); err != nil {
+			if allow {
+				if err := s.AllowSecrets(secrets, servers); err != nil {
+					return err
+				}
+			} else if err := s.DisallowSecrets(secrets, servers); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "已取消 %d 个机密项写入 %d 个服务器条目\n", len(secrets), len(servers))
+			fmt.Fprintf(cmd.OutOrStdout(), done, len(secrets), len(servers))
 			return nil
 		},
 	}
-	c.Flags().StringSlice("secrets", nil, "机密项名字（逗号分隔或重复旗标，可给多个）")
-	c.Flags().StringSlice("servers", nil, "服务器条目名（逗号分隔或重复旗标，可给多个）")
+	registerSecretAllowFlags(c)
 	return c
 }
 
-// secretAllowFlags 读取 allow / disallow 的两个多值旗标，并要求两个都给出。
+// registerSecretAllowFlags 注册授权与取消授权共用的两个多值参数。
+func registerSecretAllowFlags(c *cobra.Command) {
+	c.Flags().StringSlice("secrets", nil, "机密项名字（逗号分隔或重复参数，可给多个）")
+	c.Flags().StringSlice("servers", nil, "服务器条目名（逗号分隔或重复参数，可给多个）")
+}
+
+// secretAllowFlags 读取 allow / disallow 的两个多值参数，并要求两个都给出。
 func secretAllowFlags(cmd *cobra.Command) ([]string, []string, error) {
 	secrets, _ := cmd.Flags().GetStringSlice("secrets")
 	servers, _ := cmd.Flags().GetStringSlice("servers")
@@ -366,6 +370,6 @@ func readSecretValueInput(cmd *cobra.Command, fromFile string, fromStdin bool) (
 		}
 		return first, nil
 	default:
-		return nil, errors.New("标准输入不是交互终端，且未指定 --from-file 或 --stdin；请改用这两个旗标之一录入机密项的值")
+		return nil, errors.New("标准输入不是交互终端，且未指定 --from-file 或 --stdin；请改用这两个参数之一录入机密项的值")
 	}
 }

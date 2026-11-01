@@ -63,9 +63,9 @@ func validateSecretValue(value []byte) error {
 	case n == 0:
 		return errors.New("机密项值不能为空")
 	case n < secretValueMinBytes:
-		return fmt.Errorf("机密项值太短：至少需要 %d 个字节，当前 %d 个字节；短值无法可靠参与后续的输出遮蔽", secretValueMinBytes, n)
+		return fmt.Errorf("机密项值太短：至少需要 %d 个字节；短值无法可靠参与后续的输出遮蔽", secretValueMinBytes)
 	case n > secretValueMaxBytes:
-		return fmt.Errorf("机密项值太大：最多 %d 个字节，当前 %d 个字节", secretValueMaxBytes, n)
+		return fmt.Errorf("机密项值太大：最多 %d 个字节", secretValueMaxBytes)
 	default:
 		return nil
 	}
@@ -101,15 +101,15 @@ func (s *Store) AddSecret(name, note string, value []byte) error {
 	if err != sql.ErrNoRows {
 		return err
 	}
-	ts := now()
+	ts := s.nowTime()
 	id := newID()
 	if _, err := tx.Exec(
 		`INSERT INTO secrets (id,name,name_lower,note,value_blob,previous_value_blob,value_version,created_at,value_updated_at)
 		 VALUES (?,?,?,?,?,?,1,?,?)`,
-		id, name, strings.ToLower(name), note, blob, nil, ts, ts); err != nil {
+		id, name, strings.ToLower(name), note, blob, nil, ts.Unix(), ts.Unix()); err != nil {
 		return err
 	}
-	if err := writeSecretAuditTx(tx, "secret-add", map[string]any{"name": name}); err != nil {
+	if err := writeSecretAuditTx(tx, ts, "secret-add", map[string]any{"name": name}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -143,12 +143,13 @@ func (s *Store) SetSecretValue(name string, value []byte) error {
 	if err != nil {
 		return err
 	}
+	ts := s.nowTime()
 	if _, err := tx.Exec(
 		`UPDATE secrets SET previous_value_blob=?, value_blob=?, value_version=?, value_updated_at=? WHERE name=?`,
-		oldBlob, blob, version+1, now(), name); err != nil {
+		oldBlob, blob, version+1, ts.Unix(), name); err != nil {
 		return err
 	}
-	if err := writeSecretAuditTx(tx, "secret-set", map[string]any{"name": name, "change": "值已更改"}); err != nil {
+	if err := writeSecretAuditTx(tx, ts, "secret-set", map[string]any{"name": name, "change": "值已更改"}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -173,7 +174,7 @@ func (s *Store) EditSecretNote(name, note string) error {
 	} else if n == 0 {
 		return ErrSecretNotFound
 	}
-	if err := writeSecretAuditTx(tx, "secret-edit", map[string]any{"name": name, "change": "备注已更改"}); err != nil {
+	if err := writeSecretAuditTx(tx, s.nowTime(), "secret-edit", map[string]any{"name": name, "change": "备注已更改"}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -199,7 +200,7 @@ func (s *Store) DeleteSecret(name string) error {
 	} else if n == 0 {
 		return ErrSecretNotFound
 	}
-	if err := writeSecretAuditTx(tx, "secret-rm", map[string]any{"name": name}); err != nil {
+	if err := writeSecretAuditTx(tx, s.nowTime(), "secret-rm", map[string]any{"name": name}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -248,22 +249,29 @@ type secretAllowTarget struct {
 	name string
 }
 
+// secretAllowDeletion 是服务器条目删除时受影响的机密项：内部标识符与名字
+// 供补写审计使用，before 是删除前的完整可写入列表。
+type secretAllowDeletion struct {
+	id     string
+	name   string
+	before string
+}
+
 // AllowSecrets 把若干服务器条目加入若干机密项的可写入列表。先校验全部名字，
 // 任何一个不存在就一次列出全部错误并整体不生效；校验通过后在一个事务内完成
 // 全部改动，并为每个发生变化的机密项写一条审计行。
 func (s *Store) AllowSecrets(secretNames, serverNames []string) error {
-	return s.changeSecretAllows(secretNames, serverNames, true, "")
+	return s.changeSecretAllows(secretNames, serverNames, true)
 }
 
 // DisallowSecrets 把若干服务器条目移出若干机密项的可写入列表。校验、事务
 // 与审计语义与 AllowSecrets 相同。
 func (s *Store) DisallowSecrets(secretNames, serverNames []string) error {
-	return s.changeSecretAllows(secretNames, serverNames, false, "")
+	return s.changeSecretAllows(secretNames, serverNames, false)
 }
 
-// changeSecretAllows 是 allow / disallow 的共用主体。reason 非空时写进审计
-// 摘要，用于删除服务器条目时的联动审计。
-func (s *Store) changeSecretAllows(secretNames, serverNames []string, allow bool, reason string) error {
+// changeSecretAllows 是 allow / disallow 的共用主体。
+func (s *Store) changeSecretAllows(secretNames, serverNames []string, allow bool) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -285,6 +293,7 @@ func (s *Store) changeSecretAllows(secretNames, serverNames []string, allow bool
 	}
 	action := "secret-allow"
 	stmt := `INSERT OR IGNORE INTO secret_server_allow(secret_id,server_id) VALUES(?,?)`
+	auditAt := s.nowTime()
 	if !allow {
 		action = "secret-disallow"
 		stmt = `DELETE FROM secret_server_allow WHERE secret_id=? AND server_id=?`
@@ -311,10 +320,7 @@ func (s *Store) changeSecretAllows(secretNames, serverNames []string, allow bool
 			"before": strings.Join(before, ","),
 			"after":  strings.Join(after, ","),
 		}
-		if reason != "" {
-			summary["reason"] = reason
-		}
-		if err := writeSecretAuditTx(tx, action, summary); err != nil {
+		if err := writeSecretAuditTx(tx, auditAt, action, summary); err != nil {
 			return err
 		}
 	}
@@ -367,57 +373,53 @@ func secretAllowServerNames(tx *sql.Tx, secretID string) ([]string, error) {
 	return out, rows.Err()
 }
 
-// secretAllowsBeforeServerDelete 在删除服务器条目前读出该条目所在的全部机密
-// 项，返回机密项名字到它当时完整可写入列表的映射，供删除后补写审计。
-func secretAllowsBeforeServerDelete(tx *sql.Tx, serverID string) (map[string]string, error) {
+// secretAllowsBeforeServerDelete 在删除服务器条目前读出受影响的机密项列表，
+// 供删除后按内部标识符补写审计。
+func secretAllowsBeforeServerDelete(tx *sql.Tx, serverID string) ([]secretAllowDeletion, error) {
 	rows, err := tx.Query(`
-		SELECT DISTINCT sec.name FROM secret_server_allow allow
+		SELECT DISTINCT sec.id, sec.name FROM secret_server_allow allow
 		JOIN secrets sec ON sec.id = allow.secret_id
 		WHERE allow.server_id=? ORDER BY sec.name`, serverID)
 	if err != nil {
 		return nil, err
 	}
-	var names []string
+	defer rows.Close()
+	var affected []secretAllowDeletion
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var target secretAllowDeletion
+		if err := rows.Scan(&target.id, &target.name); err != nil {
 			return nil, err
 		}
-		names = append(names, name)
+		affected = append(affected, target)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return nil, err
 	}
-	rows.Close()
-	out := make(map[string]string, len(names))
-	for _, name := range names {
-		list, err := secretAllowServerNamesForName(tx, name)
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range affected {
+		list, err := secretAllowServerNames(tx, affected[i].id)
 		if err != nil {
 			return nil, err
 		}
-		out[name] = strings.Join(list, ",")
+		affected[i].before = strings.Join(list, ",")
 	}
-	return out, nil
+	return affected, nil
 }
 
 // writeServerDeleteSecretAudits 在删除服务器条目的同一事务里，为每个受影响的
 // 机密项补写一条取消授权审计，摘要标明原因是条目被删除。
-func writeServerDeleteSecretAudits(tx *sql.Tx, before map[string]string) error {
-	names := make([]string, 0, len(before))
-	for name := range before {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		beforeList := before[name]
-		after, err := secretAllowServerNamesForName(tx, name)
+func writeServerDeleteSecretAudits(tx *sql.Tx, affected []secretAllowDeletion, at time.Time) error {
+	sort.Slice(affected, func(i, j int) bool { return affected[i].name < affected[j].name })
+	for _, secret := range affected {
+		after, err := secretAllowServerNames(tx, secret.id)
 		if err != nil {
 			return err
 		}
-		if err := writeSecretAuditTx(tx, "secret-disallow", map[string]any{
-			"name":   name,
-			"before": beforeList,
+		if err := writeSecretAuditTx(tx, at, "secret-disallow", map[string]any{
+			"name":   secret.name,
+			"before": secret.before,
 			"after":  strings.Join(after, ","),
 			"reason": "服务器条目已删除",
 		}); err != nil {
@@ -427,33 +429,11 @@ func writeServerDeleteSecretAudits(tx *sql.Tx, before map[string]string) error {
 	return nil
 }
 
-// secretAllowServerNamesForName 按机密项名字取当前可写入服务器条目名。
-func secretAllowServerNamesForName(tx *sql.Tx, secretName string) ([]string, error) {
-	rows, err := tx.Query(`
-		SELECT srv.name FROM secret_server_allow allow
-		JOIN secrets sec ON sec.id = allow.secret_id
-		JOIN servers srv ON srv.id = allow.server_id
-		WHERE sec.name=? ORDER BY srv.name`, secretName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		out = append(out, name)
-	}
-	return out, rows.Err()
-}
-
 // writeSecretAuditTx 在机密项数据改动的同一事务里写一条 owner 审计行。摘要
 // 只含调用方传入的白名单字段；任何路径都不得把值放进摘要。
-func writeSecretAuditTx(tx *sql.Tx, action string, summary map[string]any) error {
+func writeSecretAuditTx(tx *sql.Tx, at time.Time, action string, summary map[string]any) error {
 	return writeAuditTx(tx, AuditRow{
-		TS:      time.Now(),
+		TS:      at,
 		Action:  action,
 		Command: MarshalAuditSummary(summary),
 		Status:  "ok",

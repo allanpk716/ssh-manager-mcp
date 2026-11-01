@@ -248,6 +248,9 @@ func TestSecretsValueLimits(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("value of %d bytes must fail with %q, got %v", tc.n, tc.wantErr, err)
 			}
+			if strings.Contains(err.Error(), "当前") {
+				t.Fatalf("value rejection must state the limit without disclosing the current byte count, got %v", err)
+			}
 			continue
 		}
 		if err != nil {
@@ -627,6 +630,23 @@ func TestSecretsClientRefused(t *testing.T) {
 		if !strings.Contains(err.Error(), "权威端") {
 			t.Fatalf("refusal must point at the authoritative machine, got %v", err)
 		}
+	}
+}
+
+// TestSecretsClientRefusedBeforeValueInput 钉住客户端拒绝的位置：角色判定
+// 必须先于值录入提示，非交互终端上不能先收到「改用 --from-file/--stdin」。
+func TestSecretsClientRefusedBeforeValueInput(t *testing.T) {
+	seedClientCacheFixture(t)
+	oldTTY := secretsStdinIsTTY
+	secretsStdinIsTTY = func() bool { return false }
+	t.Cleanup(func() { secretsStdinIsTTY = oldTTY })
+
+	_, _, err := runSecretsRoot(t, "", "secrets", "add", "API_TOKEN")
+	if err == nil || !strings.Contains(err.Error(), "权威端") {
+		t.Fatalf("client add must be refused with the authoritative-machine hint before reading the value, got %v", err)
+	}
+	if strings.Contains(err.Error(), "--from-file") || strings.Contains(err.Error(), "--stdin") {
+		t.Fatalf("client refusal must not be replaced by the input-source error, got %v", err)
 	}
 }
 

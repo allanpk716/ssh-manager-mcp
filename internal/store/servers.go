@@ -85,7 +85,7 @@ func (s *Store) DeleteServer(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	srv, err := deleteServerEntryTx(tx, id)
+	srv, err := deleteServerEntryTx(tx, id, s.nowTime())
 	if err != nil {
 		return err
 	}
