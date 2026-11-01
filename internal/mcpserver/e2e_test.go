@@ -144,7 +144,7 @@ func unmarshalToolJSON(t *testing.T, res *mcp.CallToolResult, v any) {
 
 // TestE2EBackgroundTrioFullFlow 是后台三件套 (Plan 32 T8) 的全流 capstone:
 // 同一条 in-memory MCP 会话跑完整 agent 工作流——
-//   - initialize (client.Connect 内完成握手) → tools/list 断言恰 12 工具 (6+3+1+1+1)
+//   - initialize (client.Connect 内完成握手) → tools/list 断言恰 13 工具 (6+3+1+1+1+1)
 //     且名称与 BrokerTools 单源核对 (集合相等——SDK featureSet 无序, 协议对
 //     tools/list 无序保证)——切片即注册面唯一事实源;
 //   - exec_background 起多行输出任务 → exec_output wait 轮询携 next offset

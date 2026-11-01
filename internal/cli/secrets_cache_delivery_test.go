@@ -122,6 +122,54 @@ func TestSecretsCacheDeliveryE2E(t *testing.T) {
 		t.Fatalf("带机密项的快照应照常驱动桥进程执行命令：%s", text)
 	}
 
+	listCases := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{name: "all", args: map[string]any{}, want: "DELIVERED_TOKEN | 下发给客户端 | target"},
+		{name: "query", args: map[string]any{"query": "DELIVERED"}, want: "DELIVERED_TOKEN | 下发给客户端 | target"},
+		{name: "server", args: map[string]any{"server": "target"}, want: "DELIVERED_TOKEN | 下发给客户端 | target"},
+		{name: "query and server", args: map[string]any{"query": "delivered", "server": "target"}, want: "DELIVERED_TOKEN | 下发给客户端 | target"},
+		{name: "out-of-profile server", args: map[string]any{"server": "outside"}, want: "没有可用的机密项"},
+		{name: "missing server", args: map[string]any{"server": "missing"}, want: "没有可用的机密项"},
+		{name: "no match", args: map[string]any{"query": "nothing"}, want: "没有可用的机密项"},
+	}
+	for _, listCase := range listCases {
+		t.Run(listCase.name, func(t *testing.T) {
+			listText, listErr := callTool(t, session, "list_secrets", listCase.args)
+			if listErr {
+				t.Fatalf("客户端桥进程应能列出已下发的机密项：%s", listText)
+			}
+			if listText != listCase.want {
+				t.Fatalf("客户端桥进程的机密项列表不正确：\n得到：%q\n想要：%q", listText, listCase.want)
+			}
+			if strings.Contains(listText, "outside") || strings.Contains(listText, "OUTSIDE_ONLY") ||
+				strings.Contains(listText, deliverySecretCurrent) || strings.Contains(listText, deliverySecretPrevious) {
+				t.Fatalf("客户端桥进程的机密项列表泄露了范围外信息或值：%s", listText)
+			}
+		})
+	}
+
+	oldAuthoritySnapshot := *loaded
+	oldAuthoritySnapshot.Secrets = nil
+	oldAuthoritySnapshot.SecretAllows = nil
+	oldAuthorityBroker, oldTunnels, oldTasks, closeOldAuthorityBroker, err := mcpserver.NewCacheBroker(
+		fx.projToken, &oldAuthoritySnapshot, auditPath, nil, clientops.ForwardingHostKeys(forwarder), "laptop-old-authority", nil)
+	if err != nil {
+		t.Fatalf("桥进程导入旧权威端的空机密项快照失败：%v", err)
+	}
+	t.Cleanup(func() {
+		closeOldAuthorityBroker()
+		oldTunnels.CloseAll()
+		oldTasks.CloseAll()
+	})
+	oldAuthoritySession := attachMCPClient(t, oldAuthorityBroker)
+	oldAuthorityText, oldAuthorityErr := callTool(t, oldAuthoritySession, "list_secrets", map[string]any{})
+	if oldAuthorityErr || oldAuthorityText != "没有可用的机密项" {
+		t.Fatalf("旧权威端快照应返回没有可用的机密项：\n%s\n错误结果：%v", oldAuthorityText, oldAuthorityErr)
+	}
+
 	cacheBytes, err := os.ReadFile(filepath.Join(cacheDir, "cache.bin"))
 	if err != nil {
 		t.Fatal(err)
@@ -131,6 +179,10 @@ func TestSecretsCacheDeliveryE2E(t *testing.T) {
 	assertAuditFileHasNoDeliveryValues(t, auditPath)
 
 	fx.serveHTTP.Close()
+	offlineText, offlineErr := callTool(t, session, "list_secrets", map[string]any{})
+	if offlineErr || offlineText != "DELIVERED_TOKEN | 下发给客户端 | target" {
+		t.Fatalf("权威端停止后客户端桥进程应仍能从缓存列出机密项：\n%s\n错误结果：%v", offlineText, offlineErr)
+	}
 	out, errOut, err := runSecretsRoot(t, "", "secrets", "list")
 	if err != nil {
 		t.Fatalf("权威端停止后客户端机密项列表失败：%v\n%s", err, errOut)
