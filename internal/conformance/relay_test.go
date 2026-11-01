@@ -70,7 +70,9 @@ func relayConfSeed(t *testing.T, st *store.Store, name, host string, port int, h
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SaveHostKey(host, port, hostKey.Marshal()); err != nil {
+	if row, err := st.GetServer(id); err != nil {
+		t.Fatal(err)
+	} else if err := st.SaveEntryPin(row, hostKey.Marshal()); err != nil {
 		t.Fatal(err)
 	}
 	return id

@@ -272,13 +272,13 @@ func rawSQLiteStmt(t *testing.T, path, stmt string, args ...any) {
 	}
 }
 
-// presetServeAnchor inserts an anchor directly into the serve's host_keys —
+// presetServeAnchor inserts an anchor directly onto the serve-side entry —
 // the owner pre-anchoring shape (blob or fingerprint format).
 func (fx *cacheFwdFixture) presetServeAnchor(t *testing.T, blob []byte, format, source string) {
 	t.Helper()
 	rawSQLiteStmt(t, fx.dbPath,
-		`INSERT INTO host_keys (host_port, key_blob, pin_format, pin_source, pin_device, created_at) VALUES (?,?,?,?,?,?)`,
-		fmt.Sprintf("%s:%d", fx.host(), fx.port()), blob, format, source, "", time.Now().Unix())
+		`INSERT INTO entry_host_keys (server_id, key_blob, pin_format, pin_source, pin_device, handshake_addr, created_at) VALUES (?,?,?,?,?,?,?)`,
+		fx.targetID, blob, format, source, "", fmt.Sprintf("%s:%d", fx.host(), fx.port()), time.Now().Unix())
 }
 
 // assertServeAnchor checks the authoritative landing: anchor present, dual-mode
@@ -286,7 +286,11 @@ func (fx *cacheFwdFixture) presetServeAnchor(t *testing.T, blob []byte, format, 
 // surface reads the same columns).
 func (fx *cacheFwdFixture) assertServeAnchor(t *testing.T) {
 	t.Helper()
-	pin, err := fx.serve.GetHostKey(fx.host(), fx.port())
+	serveSrv, err := fx.serve.GetServer(fx.targetID)
+	if err != nil || serveSrv == nil {
+		t.Fatalf("取条目失败：%v %v", serveSrv, err)
+	}
+	pin, err := fx.serve.GetEntryPin(serveSrv)
 	if err != nil || pin == nil {
 		t.Fatalf("serve-side anchor missing: pin=%v err=%v", pin, err)
 	}
@@ -299,8 +303,8 @@ func (fx *cacheFwdFixture) assertServeAnchor(t *testing.T) {
 	}
 	defer db.Close()
 	var source, device string
-	if err := db.QueryRow(`SELECT pin_source, pin_device FROM host_keys WHERE host_port=?`,
-		fmt.Sprintf("%s:%d", fx.host(), fx.port())).Scan(&source, &device); err != nil {
+	if err := db.QueryRow(`SELECT pin_source, pin_device FROM entry_host_keys WHERE server_id=?`,
+		fx.targetID).Scan(&source, &device); err != nil {
 		t.Fatal(err)
 	}
 	if source != "forward" || device != "laptop" {

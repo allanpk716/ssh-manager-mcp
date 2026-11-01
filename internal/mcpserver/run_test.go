@@ -144,7 +144,7 @@ func TestRunStdioCacheBinder_ReachesTOFU(t *testing.T) {
 func TestHydrateCacheStore_ForwardDevicePerGeneration(t *testing.T) {
 	addr, _, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
 	defer cleanup()
-	snap, token, _ := seedTofuTargetSnap(t, addr)
+	snap, token, serverID := seedTofuTargetSnap(t, addr)
 	af, err := os.OpenFile(filepath.Join(t.TempDir(), "audit.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -159,10 +159,14 @@ func TestHydrateCacheStore_ForwardDevicePerGeneration(t *testing.T) {
 
 	// Initial generation: the applied pin must carry the device name.
 	gen1 := h.Current()
-	if err := gen1.ApplyForwardedHostKey("10.1.1.1", 22, []byte("key-bytes")); err != nil {
+	gen1Srv, err := gen1.GetServer(serverID)
+	if err != nil || gen1Srv == nil {
+		t.Fatalf("取条目 %s 失败：%v %v", serverID, gen1Srv, err)
+	}
+	if err := gen1.ApplyForwardedEntryPin(gen1Srv, store.EntryFallbackAddr(gen1Srv), []byte("key-bytes")); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawForwardDevice(t, h.tmpPaths[0], "10.1.1.1:22"); got != "laptop-7" {
+	if got := rawForwardDevice(t, h.tmpPaths[0], serverID); got != "laptop-7" {
 		t.Fatalf("generation 1 pin_device = %q, want laptop-7", got)
 	}
 
@@ -184,10 +188,14 @@ func TestHydrateCacheStore_ForwardDevicePerGeneration(t *testing.T) {
 	if gen2 == gen1 {
 		t.Fatal("fixture self-check: the reload must swap generations")
 	}
-	if err := gen2.ApplyForwardedHostKey("10.1.1.2", 22, []byte("key-bytes")); err != nil {
+	gen2Srv, err := gen2.GetServer(serverID)
+	if err != nil || gen2Srv == nil {
+		t.Fatalf("取条目 %s 失败：%v %v", serverID, gen2Srv, err)
+	}
+	if err := gen2.ApplyForwardedEntryPin(gen2Srv, store.EntryFallbackAddr(gen2Srv), []byte("key-bytes")); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawForwardDevice(t, h.tmpPaths[1], "10.1.1.2:22"); got != "laptop-7" {
+	if got := rawForwardDevice(t, h.tmpPaths[1], serverID); got != "laptop-7" {
 		t.Fatalf("generation 2 pin_device = %q, want laptop-7 (per-generation metadata)", got)
 	}
 }
@@ -201,8 +209,8 @@ func reseedSnap(t *testing.T, snap *store.Snapshot) (*store.Snapshot, error) {
 	return &dup, nil
 }
 
-// rawForwardDevice reads host_keys.pin_device straight from a hydrated temp db.
-func rawForwardDevice(t *testing.T, dbPath, hostPort string) string {
+// rawForwardDevice reads entry_host_keys.pin_device straight from a hydrated temp db.
+func rawForwardDevice(t *testing.T, dbPath, serverID string) string {
 	t.Helper()
 	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
@@ -210,8 +218,8 @@ func rawForwardDevice(t *testing.T, dbPath, hostPort string) string {
 	}
 	defer db.Close()
 	var dev string
-	if err := db.QueryRow(`SELECT pin_device FROM host_keys WHERE host_port=?`, hostPort).Scan(&dev); err != nil {
-		t.Fatalf("pin row for %s: %v", hostPort, err)
+	if err := db.QueryRow(`SELECT pin_device FROM entry_host_keys WHERE server_id=?`, serverID).Scan(&dev); err != nil {
+		t.Fatalf("pin row for %s: %v", serverID, err)
 	}
 	return dev
 }

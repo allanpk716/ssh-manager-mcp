@@ -64,8 +64,8 @@ func TestReadOnly_MutationsRefused(t *testing.T) {
 	if err := s.SetProjectStatus("x", models.ProjectDisabled); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("SetProjectStatus: err=%v want ErrReadOnly", err)
 	}
-	if err := s.SaveHostKey("h", 22, []byte("k")); !errors.Is(err, ErrReadOnly) {
-		t.Fatalf("SaveHostKey: err=%v want ErrReadOnly", err)
+	if err := s.SaveEntryPin(&models.Server{ID: "h", Host: "h", Port: 22}, []byte("k")); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("SaveEntryPin: err=%v want ErrReadOnly", err)
 	}
 	if err := s.ImportSnapshot(&Snapshot{Version: 1}); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("ImportSnapshot: err=%v want ErrReadOnly", err)

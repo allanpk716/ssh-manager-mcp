@@ -155,24 +155,6 @@ type SnapshotAudit struct {
 	DurationMS int64  `json:"duration_ms"`
 }
 
-// ListHostKeys returns every host_keys row (point lookups already exist; this is the dump path).
-func (s *Store) ListHostKeys() ([]SnapshotHostKey, error) {
-	rows, err := s.db.Query(`SELECT host_port, key_blob, created_at, pin_format, pin_source, pin_device FROM host_keys ORDER BY host_port`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []SnapshotHostKey
-	for rows.Next() {
-		var h SnapshotHostKey
-		if err := rows.Scan(&h.HostPort, &h.KeyBlob, &h.CreatedAt, &h.PinFormat, &h.PinSource, &h.PinDevice); err != nil {
-			return nil, err
-		}
-		out = append(out, h)
-	}
-	return out, rows.Err()
-}
-
 // snapshotEntryPins 读取全部按条目存放的锚并转成快照行（按条目标识符排序）。
 func (s *Store) snapshotEntryPins() ([]SnapshotEntryHostKey, error) {
 	pins, err := s.ListEntryPins()

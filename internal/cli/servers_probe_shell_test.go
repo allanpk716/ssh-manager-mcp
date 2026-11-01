@@ -98,12 +98,13 @@ func startProbeTarget(t *testing.T, script *probeScript) (string, interface{ Mar
 func addProbeServerRow(t *testing.T, st *store.Store, name, addr string, hostKey interface{ Marshal() []byte }, annotateShell string) {
 	t.Helper()
 	cid, _ := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
-	_, _ = st.AddServer(&models.Server{
+	id, _ := st.AddServer(&models.Server{
 		Name: name, Host: addr[:bytesIndex(addr, ':')], Port: portOfAddr(addr), User: "u",
 		AuthMethod: models.AuthPassword, CredentialID: cid,
 		ShellType: models.ShellType(annotateShell),
 	})
-	_ = st.SaveHostKey(addr[:bytesIndex(addr, ':')], portOfAddr(addr), hostKey.Marshal())
+	row, _ := st.GetServer(id)
+	_ = st.SaveEntryPin(row, hostKey.Marshal())
 }
 
 // seedProbeServer wires the whole one-server fixture: env + scripted test sshd

@@ -1,8 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -198,6 +200,105 @@ func TestEntryLifecycle_PinFollowsEntry(t *testing.T) {
 	}
 	if row := deletes[0]; row.ServerID != id || !strings.Contains(row.Command, fp) {
 		t.Fatalf("随条目删除的审计应带条目与指纹：%+v", row)
+	}
+}
+
+// TestEntryPins_FreshSchemaColumns：新建库的锚表带全部来源列；首次信任写入
+// 落为 blob/tofu、无转发设备。
+func TestEntryPins_FreshSchemaColumns(t *testing.T) {
+	s := newTestStore(t)
+	for _, col := range []string{"pin_format", "pin_source", "pin_device", "handshake_addr"} {
+		if !hasColumn(t, s.db, "entry_host_keys", col) {
+			t.Fatalf("新建锚表缺少 %s 列", col)
+		}
+	}
+	id := addEntryForTest(t, s, "fresh", "198.51.100.1", 22)
+	if err := s.SaveEntryPin(serverOf(t, s, id), []byte("k")); err != nil {
+		t.Fatal(err)
+	}
+	pin := pinEntryForTest(t, s, id)
+	if pin.Format != PinFormatBlob || pin.Source != PinSourceTofu || pin.Device != "" || pin.HandshakeAddr != "198.51.100.1:22" {
+		t.Fatalf("首次信任写入的来源信息 = %+v", pin)
+	}
+}
+
+// TestSaveEntryPinResetsStalePinColumns：首次信任覆盖已有指纹锚时，格式、
+// 来源、设备与学习地址一起重置，避免旧来源信息留在新锚上造成误判。
+func TestSaveEntryPinResetsStalePinColumns(t *testing.T) {
+	s := newTestStore(t)
+	id := addEntryForTest(t, s, "stale", "198.51.100.2", 22)
+	srv := serverOf(t, s, id)
+	keyB, _ := pinHostKey(t)
+	if _, err := s.UpsertManualEntryPin(srv, "", []byte("SHA256:stale-fingerprint"), PinFormatFingerprint, false, func(old *PinMeta) AuditRow {
+		return AuditRow{Action: "pin-manual"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveEntryPin(srv, keyB); err != nil {
+		t.Fatal(err)
+	}
+	pin := pinEntryForTest(t, s, id)
+	if !bytes.Equal(pin.Blob, keyB) || pin.Format != PinFormatBlob || pin.Source != PinSourceTofu || pin.Device != "" {
+		t.Fatalf("首次信任覆盖后来源信息未重置：%+v", pin)
+	}
+}
+
+// TestInsertForwardedEntryPin_AuditFailureRollsBack：同一事务的审计写失败时
+// 锚不落库。
+func TestInsertForwardedEntryPin_AuditFailureRollsBack(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.db.Exec(`DROP TABLE audit_log`); err != nil {
+		t.Fatal(err)
+	}
+	id := addEntryForTest(t, s, "atomic", "198.51.100.3", 22)
+	key, _ := pinHostKey(t)
+	if _, err := s.InsertForwardedEntryPin(serverOf(t, s, id), "198.51.100.3:22", key, "dev", AuditRow{Action: "pin-forward"}); err == nil {
+		t.Fatal("审计写失败必须让整个插入失败")
+	}
+	if pins := mustEntryPins(t, s); len(pins) != 0 {
+		t.Fatalf("审计失败后锚仍落库：%+v", pins)
+	}
+}
+
+// TestInsertForwardedEntryPin_ConcurrentInsertOnly：并发仅可新增——两个不同
+// 密钥竞争同一个未锚条目，只落一把锚、只写一行审计，输家得到 equal=false。
+func TestInsertForwardedEntryPin_ConcurrentInsertOnly(t *testing.T) {
+	s := newTestStore(t)
+	id := addEntryForTest(t, s, "race", "198.51.100.4", 22)
+	srv := serverOf(t, s, id)
+	keyA, _ := pinHostKey(t)
+	keyB, _ := pinHostKey(t)
+
+	type outcome struct {
+		equal bool
+		err   error
+	}
+	results := make(chan outcome, 2)
+	var wg sync.WaitGroup
+	for _, blob := range [][]byte{keyA, keyB} {
+		wg.Add(1)
+		go func(b []byte) {
+			defer wg.Done()
+			equal, err := s.InsertForwardedEntryPin(srv, "198.51.100.4:22", b, "dev", AuditRow{Action: "pin-forward"})
+			results <- outcome{equal, err}
+		}(blob)
+	}
+	wg.Wait()
+	close(results)
+	for r := range results {
+		if r.err != nil {
+			t.Fatalf("并发插入不应报错：%v", r.err)
+		}
+		if r.equal {
+			t.Fatal("不同密钥竞争的输家应得到 equal=false")
+		}
+	}
+	pins := mustEntryPins(t, s)
+	if len(pins) != 1 || (!bytes.Equal(pins[0].Blob, keyA) && !bytes.Equal(pins[0].Blob, keyB)) {
+		t.Fatalf("并发后应只剩一把赢家的锚：%+v", pins)
+	}
+	if rows, _ := s.AuditRows(10); len(rows) != 1 {
+		t.Fatalf("只应有一行赢家的审计，实际 %d 行", len(rows))
 	}
 }
 
