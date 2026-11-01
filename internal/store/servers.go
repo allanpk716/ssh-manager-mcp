@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -53,6 +54,47 @@ func (s *Store) GetServerByName(name string) (*models.Server, error) {
 	return srv, err
 }
 
+// ResolveServer resolves a server identifier across ALL server entries: an
+// exact server-id match wins, then a name match. (nil, nil) means the
+// identifier matches no server. Single-machine and authoritative-machine
+// secret listing use this for --server.
+func (s *Store) ResolveServer(identifier string) (*models.Server, error) {
+	if identifier == "" {
+		return nil, nil
+	}
+	srv, err := s.GetServer(identifier)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if srv != nil {
+		return srv, nil
+	}
+	return s.GetServerByName(identifier)
+}
+
+// ResolveGrantedServer resolves a server identifier ONLY within the servers
+// granted to profileID, in one query: an exact server-id match wins, then a
+// name match. (nil, nil) means the identifier matches no granted server, so
+// out-of-scope and unknown identifiers stay indistinguishable. Errors are
+// returned, never swallowed.
+func (s *Store) ResolveGrantedServer(profileID, identifier string) (*models.Server, error) {
+	if identifier == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRow(`
+		SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
+		FROM servers
+		WHERE id IN (SELECT server_id FROM profile_servers WHERE profile_id=?)
+		  AND (id=? OR name=?)
+		ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END
+		LIMIT 1`, profileID, identifier, identifier, identifier)
+	srv, err := scanServer(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return srv, err
+}
+
 func (s *Store) ListServers() ([]*models.Server, error) {
 	rows, err := s.db.Query(
 		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers ORDER BY name`)
@@ -85,7 +127,7 @@ func (s *Store) DeleteServer(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	srv, err := deleteServerEntryTx(tx, id)
+	srv, err := deleteServerEntryTx(tx, id, s.nowTime())
 	if err != nil {
 		return err
 	}

@@ -58,6 +58,22 @@
 不是错误。哪些 server 会出现在你的清单里、owner 怎么改，见
 [agent-access.md](./agent-access.md)；背后的概念模型见 [concepts.md](./concepts.md)。
 
+### list_secrets
+
+只读发现你能引用的机密项。每个机密项一行，格式是
+`名字 | 备注 | 能写入的服务器名`；服务器名用逗号分隔，只包含你的授权范围内的
+服务器。
+
+- 可选 `query` 在名字与备注里做不区分大小写的子串匹配。
+- 可选 `server` 填服务器名，只返回能写入这台服务器的机密项；两个参数同时给
+  时取交集。
+- 服务器不存在与不在你的授权范围内的输出完全相同，都是
+  `没有可用的机密项`；筛选后没有结果时也返回这句话。
+- 结果永不包含机密项的值、值的长度、值的哈希、时间或授权范围外的服务器，也
+  不写审计。
+- 后续功能的引用写法是占位符 `{{sshmgr-secret:NAME}}`。当前版本还没有提供
+  机密项填值能力；不要把它理解成可以写入机密项的值。
+
 ### exec_command
 
 在服务器上跑一条 shell 命令。
@@ -395,7 +411,8 @@ v0.20.0+)。无参数。**平时你不需要调它**——owner 更新磁盘二�
 
 ## 部署形态（你通常无需分辨）
 
-broker 有两种部署形态，**工具面完全一致**（同 12 个工具、同 profile 隔离、同审计），
+broker 有两种部署形态，核心工具面一致（含 `list_secrets`，同 profile 隔离；
+缓存模式另有 `update_server_metadata`），
 差别只在可写性：
 
 | 形态 | 什么样 | 可写性 |
@@ -497,7 +514,7 @@ HEAD，后续重构以符号名为准）：
 | relay posix-rename@openssh.com 硬依赖：stage 0 零 IO 探测，不支持即 failed（与 IO 错误分流） | `internal/mcpserver/relay.go:781` |
 | relay 空间预检：已知不足 refusal（avail/need 文本）；报不了 = `space_check:"unavailable"` fail-open 知情继续 | `internal/mcpserver/relay.go:428-438` |
 | broker 启动检测散落 SSH 凭据 → stderr `WARNING: ssh credential files detected`（仅本机 stdio 模式） | `internal/cli/mcp.go:63-67`；另见 docs/agent-access.md「隔离与排错」 |
-| 三态工具面一致（cache 与在线同 12 工具、同 profile 隔离、同审计；仅写操作被拒 + 审计走 sidecar） | `internal/mcpserver/run.go:230-249`；`internal/mcpserver/server.go:29-40` |
+| 工具面一致性（cache 与在线共用同一注册包装点与 profile 授权；只读工具含 `list_secrets`，仅写操作被拒 + 审计走 sidecar） | `internal/mcpserver/run.go:230-249`；`internal/mcpserver/server.go` |
 | ErrReadOnly 文案 + SetReadOnly 语义（cache hydrate 后置只读） | `internal/store/store.go:46-54`；`internal/mcpserver/run.go:76` |
 | 离线 cache 模式：未知 host key 被拒（TOFU 无法记录，包 ErrReadOnly；已知 key 正常匹配） | `internal/sshbroker/hostkey.go:33-34`；`internal/sshbroker/hostkey_readonly_test.go:33-58`；`internal/mcpserver/run.go:211-213` |
 | 凭据字节永不出现在任何工具结果（owner 侧模型） | `internal/mcpserver/types.go:5`；docs/agent-access.md「安全模型回顾（铁律）」；../README.md "The security model" |

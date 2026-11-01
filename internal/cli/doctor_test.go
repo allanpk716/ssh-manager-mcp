@@ -28,8 +28,13 @@ import (
 // there; the serve-cert check would read it.
 func withDoctorDirs(t *testing.T) (vaultDir, userDir string) {
 	t.Helper()
-	vaultDir = t.TempDir()
+	vaultRoot := t.TempDir()
+	vaultDir = filepath.Join(vaultRoot, "ssh-manager")
 	userDir = t.TempDir()
+	if err := os.MkdirAll(vaultDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSHMGR_VAULT_ROOT", vaultRoot)
 	t.Setenv("SSHMGR_STORE", filepath.Join(vaultDir, "store.db"))
 	t.Setenv("SSHMGR_FILEKEY_PATH", filepath.Join(vaultDir, "master.key.plain"))
 	t.Setenv("SSHMGR_MASTERKEY_HEX", "")
@@ -43,6 +48,7 @@ func withDoctorDirs(t *testing.T) (vaultDir, userDir string) {
 	t.Setenv("SSHMGR_CACHE_TOKEN", "")
 	t.Setenv("APPDATA", userDir) // os.UserConfigDir on Windows
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	return vaultDir, userDir
 }
 

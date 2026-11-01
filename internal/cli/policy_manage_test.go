@@ -303,6 +303,7 @@ func seedNamedInstanceClientFixture(t *testing.T, name string) {
 	userDir := t.TempDir()
 	t.Setenv("APPDATA", userDir)
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	writePolicyCacheSlot(t, filepath.Join(userDir, "ssh-manager", "instances", name))
 	withEnv(t, map[string]string{
 		"SSHMGR_STORE":         filepath.Join(t.TempDir(), "no-vault.db"),

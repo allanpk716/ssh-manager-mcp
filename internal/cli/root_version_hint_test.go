@@ -27,6 +27,7 @@ func seedRootVersionCacheForInstance(t *testing.T, recommendedVersion, instance 
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", userDir)
 	t.Setenv("APPDATA", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	t.Setenv("SSHMGR_STORE", filepath.Join(vaultDir, "store.db"))
 	if instance == "" {
 		t.Setenv("SSHMGR_CACHE_DIR", t.TempDir())

@@ -96,7 +96,7 @@ func oldVaultDir(from string) (string, error) {
 	if from != "" {
 		return from, nil
 	}
-	cfg, err := os.UserConfigDir()
+	cfg, err := paths.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve user config dir for old vault: %w", err)
 	}

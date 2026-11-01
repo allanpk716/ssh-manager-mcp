@@ -49,11 +49,9 @@ type Store struct {
 	// metadata as the broker's authoritative row (Plan 48 §2.3). Set once by
 	// the cache hydration path alongside SetReadOnly; empty on server stores.
 	forwardDevice string
-	// NowFn is the injectable clock for the pairing time predicates (CAS
-	// enroll_deadline, approved_deadline, delivered TTL — Plan 42 §3.3-2/-6).
-	// nil means time.Now; production code never sets it, tests inject a fake
-	// clock. All OTHER timestamps keep using the package now() helper, so this
-	// seam is behavior-neutral outside pairing.go.
+	// NowFn 是可注入时钟，供配对时间判断与机密项时间戳使用。取值为空时
+	// 使用真实时钟；生产代码不设置它，测试可以注入固定时钟。其余时间戳
+	// 继续使用包内的 now 辅助函数。
 	NowFn func() time.Time
 }
 
@@ -649,6 +647,22 @@ CREATE TABLE IF NOT EXISTS entry_host_keys (
   pin_source TEXT NOT NULL DEFAULT 'tofu',
   pin_device TEXT NOT NULL DEFAULT '',
   handshake_addr TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS secrets (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL UNIQUE,
+  note TEXT NOT NULL DEFAULT '',
+  value_blob BLOB NOT NULL,
+  previous_value_blob BLOB,
+  value_version INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  value_updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS secret_server_allow (
+  secret_id TEXT NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  PRIMARY KEY (secret_id, server_id)
 );
 CREATE TABLE IF NOT EXISTS forward_bind_hosts (
   ip         TEXT PRIMARY KEY,

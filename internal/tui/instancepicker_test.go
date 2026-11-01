@@ -31,6 +31,7 @@ func isolatedConfigDir(t *testing.T) string {
 	userDir := t.TempDir()
 	t.Setenv("APPDATA", userDir)
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	t.Setenv("SSHMGR_CACHE_DIR", "")
 	t.Setenv("SSHMGR_CACHE_DEK", "")
 	return filepath.Join(userDir, "ssh-manager")

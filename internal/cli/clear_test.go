@@ -33,6 +33,7 @@ func withClearDirs(t *testing.T) (vaultDir, userDir string) {
 	t.Setenv("SSHMGR_SERVE_MARKER", "")
 	t.Setenv("APPDATA", userDir) // os.UserConfigDir on Windows
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	return vaultDir, userDir
 }
 
@@ -494,6 +495,7 @@ func TestClear_EnumeratesInstancesAndDekVariants(t *testing.T) {
 	userDir, vault := t.TempDir(), t.TempDir()
 	t.Setenv("APPDATA", userDir)
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{
 		"SSHMGR_CACHE_DIR":     "",
 		"SSHMGR_CACHE_DEK":     "",

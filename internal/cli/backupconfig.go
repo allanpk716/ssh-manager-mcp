@@ -2,8 +2,10 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -83,11 +85,59 @@ func loadBackupConfig(path string) (*backupConfig, error) {
 // directory), otherwise the key would be synced alongside the very ciphertext
 // it unlocks.
 func validatePassphraseNotInDir(dir, passphraseFile string) error {
-	if pathInsideDirTree(filepath.Clean(passphraseFile), filepath.Clean(dir)) {
+	resolvedDir, err := resolvePathForComparison(dir)
+	if err != nil {
+		return fmt.Errorf("resolving backup dir %s: %w", dir, err)
+	}
+	resolvedPassphraseFile, err := resolvePathForComparison(passphraseFile)
+	if err != nil {
+		return fmt.Errorf("resolving passphrase_file %s: %w", passphraseFile, err)
+	}
+	if pathInsideDirTree(resolvedPassphraseFile, resolvedDir) {
 		return fmt.Errorf("passphrase_file %s must not be inside the backup dir %s — the passphrase file cannot live in the directory being backed up; move it outside the backup directory",
 			passphraseFile, dir)
 	}
 	return nil
+}
+
+// resolvePathForComparison resolves symbolic links so two spellings of the
+// same physical location compare equal. A path that does not exist yet is
+// resolved by following links in its nearest existing parent directory and
+// appending the missing path elements. Any other failure is returned to the
+// caller so validation stays closed.
+func resolvePathForComparison(path string) (string, error) {
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	current := filepath.Clean(absolutePath)
+	var missing []string
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			if len(missing) == 0 {
+				return resolved, nil
+			}
+			return filepath.Join(append([]string{resolved}, missing...)...), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		// EvalSymlinks can report "not exist" for a broken symbolic link. The
+		// link itself exists, so fail rather than stripping it off as a missing
+		// path element and losing its target.
+		if _, statErr := os.Lstat(current); statErr == nil {
+			return "", err
+		} else if !errors.Is(statErr, fs.ErrNotExist) {
+			return "", statErr
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		missing = append([]string{filepath.Base(current)}, missing...)
+		current = parent
+	}
 }
 
 // pathInsideDirTree reports whether child is dir itself or lies anywhere under

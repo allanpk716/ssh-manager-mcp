@@ -16,7 +16,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -241,19 +240,14 @@ func TestQuarantineManifestBestEffort(t *testing.T) {
 // SENTINEL-wrapped error — DoPull's 401 branch passes a non-nil qerr through
 // untouched, so this is the one error path that must stay errors.Is-matchable
 // against ErrCacheQuarantined. Deterministic failure construction:
-// SSHMGR_CACHE_DIR blank (so CachePaths falls back to os.UserConfigDir) AND
-// the platform config env blank (AppData on Windows; XDG_CONFIG_HOME/HOME
-// elsewhere). NB the alternative of pointing SSHMGR_CACHE_DIR at a file does
-// NOT construct a failure — a non-empty override never consults
-// UserConfigDir, so CachePaths cannot fail that way.
+// SSHMGR_CACHE_DIR blank (so CachePaths falls back to the user configuration
+// root) AND SSHMGR_CONFIG_ROOT blank. The paths package test guard fails
+// closed instead of touching the real user configuration directory. NB the
+// alternative of pointing SSHMGR_CACHE_DIR at a file does NOT construct a
+// failure — a non-empty override never consults the user configuration root.
 func TestQuarantineCachePathsErrorWrapsSentinel(t *testing.T) {
 	t.Setenv("SSHMGR_CACHE_DIR", "")
-	if runtime.GOOS == "windows" {
-		t.Setenv("AppData", "")
-	} else {
-		t.Setenv("XDG_CONFIG_HOME", "")
-		t.Setenv("HOME", "")
-	}
+	t.Setenv("SSHMGR_CONFIG_ROOT", "")
 	res, err := QuarantineCache("server rejected device code")
 	if err == nil {
 		t.Fatal("want error when cache paths are unavailable")

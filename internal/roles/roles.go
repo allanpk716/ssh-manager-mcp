@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 )
@@ -86,11 +87,11 @@ func vaultRolePath() string {
 	return filepath.Join(filepath.Dir(p), "role.json")
 }
 
-// clientRolePath is role.json for the client role: os.UserConfigDir()/
-// ssh-manager/role.json, colocated with the client cache data (clientops
-// cache.bin / cache.auth.json live in the same directory).
+// clientRolePath is role.json for the client role: the user configuration
+// root / ssh-manager/role.json, colocated with the client cache data
+// (clientops cache.bin / cache.auth.json live in the same directory).
 func clientRolePath() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := paths.UserConfigDir()
 	if err != nil {
 		return "", err
 	}

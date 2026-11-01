@@ -63,6 +63,7 @@ var BrokerTools = []string{
 	"relay_file",             // [11] — relay a LARGE file server-to-server (or broker-disk → server) through the broker: chunked streaming, resumable background task, metadata-only results (profile-gated; Plan 47 §1)
 	"update_server_metadata", // [12] — partial edit of a server entry's six metadata fields via the broker (optimistic-lock revision; CACHE FACE ONLY — registered when the metadata forwarder is injected; Plan 51 §7)
 	hotswap.ToolReloadSelf,   // [13] — report this bridge's current/disk/latest versions and, when the disk holds a newer generation and the bridge is idle, hot-swap into it (bridge hot-upgrade; BRIDGE FACES ONLY — registered by run.go's stdio entries, see bridgeOnlyTools)
+	"list_secrets",           // [14] — discover secret names, notes, and granted writable servers without exposing secret values (READ-ONLY)
 }
 
 // cacheOnlyTools names BrokerTools entries that ONLY the cache face registers
@@ -210,6 +211,26 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 				}, ExecOutput{}, nil
 			}
 			return nil, out, nil
+		},
+	)
+
+	addTrackedTool(srv, busy,
+		&mcp.Tool{
+			Name:        BrokerTools[14], // "list_secrets"
+			Description: "Read-only list of secrets you may reference. Each output line is: name | note | server names. Optional query matches case-insensitively against the name or note; optional server takes a server ID (exact match, preferred) or a server NAME from list_servers and filters to secrets that may write to it. This tool never returns secret values, value lengths, hashes, timestamps, or servers outside your authorization. The reference form for future features is {{sshmgr-secret:NAME}}; the current version does not offer writing secret values.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in ListSecretsInput) (*mcp.CallToolResult, any, error) {
+			st := storeFn()
+			text, err := ListSecretsTextForProfile(st, profileID, in.Query, in.Server)
+			if err != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, nil, nil
+			}
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: text}},
+			}, nil, nil
 		},
 	)
 

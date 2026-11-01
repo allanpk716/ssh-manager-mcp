@@ -20,6 +20,7 @@ func TestCacheStatus_ListsAllInstances(t *testing.T) {
 	userDir := t.TempDir()
 	t.Setenv("APPDATA", userDir)
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
 	for _, n := range []string{"agentA", "agentB"} {
 		dir := filepath.Join(userDir, "ssh-manager", "instances", n)
@@ -81,6 +82,7 @@ func TestCacheStatus_InstanceSingleView(t *testing.T) {
 	userDir := t.TempDir()
 	t.Setenv("APPDATA", userDir)
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
 	mem := withDEK(t)
 	dek, _ := store.GenerateMasterKey()
@@ -113,6 +115,7 @@ func TestCacheStatus_InstanceSingleView_UnscopedBlankDevice(t *testing.T) {
 	userDir := t.TempDir()
 	t.Setenv("APPDATA", userDir)
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
 	mem := withDEK(t)
 	dek, _ := store.GenerateMasterKey()

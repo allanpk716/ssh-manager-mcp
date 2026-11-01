@@ -40,6 +40,7 @@ func TestMCP_NoDefaultCache_WithInstances_Errors(t *testing.T) {
 	userDir := t.TempDir()
 	t.Setenv("APPDATA", userDir)
 	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
 	t.Setenv("SSHMGR_CACHE_DEK_DIR", t.TempDir())
 	for _, n := range []string{"agentA", "agentB"} {
