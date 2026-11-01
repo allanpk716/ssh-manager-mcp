@@ -28,8 +28,9 @@ var secretsReadHiddenLine = func() ([]byte, error) {
 }
 
 // requireSecretsVault 断言本机持有 vault（权威端或单机部署）并返回已解锁的
-// 存储。客户端上机密项还没有下发通道，整个命令组都拒绝执行，避免让人误以
-// 为本地有一份机密项数据。
+// 存储。角色判定与 policy 命令组共用同一套探针（vault 优先，其次看客户端缓
+// 存登记）。客户端上机密项还没有下发通道，整个命令组都拒绝执行，避免让人
+// 误以为本地有一份机密项数据。
 func requireSecretsVault() (*store.Store, error) {
 	role, err := resolvePolicyRole()
 	if err != nil {
