@@ -36,6 +36,34 @@ type SecretView struct {
 	ValueUpdatedAt int64
 }
 
+// SecretServerAuthorization 是机密项可见列表的服务器授权集合。全部服务器
+// 用于单机部署；指定服务器集合用于客户端 profile 授予的服务器。
+type SecretServerAuthorization struct {
+	all       bool
+	serverIDs map[string]bool
+}
+
+// AuthorizeAllSecretServers 返回「全部服务器」授权。
+func AuthorizeAllSecretServers() SecretServerAuthorization {
+	return SecretServerAuthorization{all: true}
+}
+
+// AuthorizeSecretServers 返回只包含给定服务器条目标识符的授权。
+func AuthorizeSecretServers(serverIDs ...string) SecretServerAuthorization {
+	ids := make(map[string]bool, len(serverIDs))
+	for _, id := range serverIDs {
+		if id != "" {
+			ids[id] = true
+		}
+	}
+	return SecretServerAuthorization{serverIDs: ids}
+}
+
+// containsServerID 判断一个服务器条目标识符是否在授权集合内。
+func (a SecretServerAuthorization) containsServerID(serverID string) bool {
+	return a.all || a.serverIDs[serverID]
+}
+
 // ValidateSecretName 校验机密项名字：首字符为字母或下划线，其余为字母、
 // 数字、下划线，长度 1 到 64。唯一性检查按小写形式进行，由调用方另行查询。
 func ValidateSecretName(name string) error {
@@ -209,8 +237,16 @@ func (s *Store) DeleteSecret(name string) error {
 // ListSecrets 列出全部机密项的可见形态，按名字排序；可写入服务器条目名在
 // 每个机密项内按名字排序。
 func (s *Store) ListSecrets() ([]SecretView, error) {
+	return s.ListSecretsForAuthorizedServers(AuthorizeAllSecretServers())
+}
+
+// ListSecretsForAuthorizedServers 列出服务器授权集合内的机密项可见列表。
+// 指定集合时只返回交集非空的机密项；全部服务器授权保留空列表，供 owner
+// 在本机排查还没有配置可写入服务器的机密项。
+func (s *Store) ListSecretsForAuthorizedServers(authorization SecretServerAuthorization) ([]SecretView, error) {
 	rows, err := s.db.Query(`
-		SELECT sec.name, sec.note, sec.created_at, sec.value_updated_at, srv.name
+		SELECT sec.id, sec.name, sec.note, sec.created_at, sec.value_updated_at,
+		       srv.id, srv.name
 		FROM secrets sec
 		LEFT JOIN secret_server_allow allow ON allow.secret_id = sec.id
 		LEFT JOIN servers srv ON srv.id = allow.server_id
@@ -219,27 +255,98 @@ func (s *Store) ListSecrets() ([]SecretView, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []SecretView
-	index := make(map[string]int)
+	displayRows := make([]secretDisplayRow, 0)
 	for rows.Next() {
-		var view SecretView
-		var server sql.NullString
-		if err := rows.Scan(&view.Name, &view.Note, &view.CreatedAt, &view.ValueUpdatedAt, &server); err != nil {
+		var row secretDisplayRow
+		var secretID string
+		var serverID, serverName sql.NullString
+		if err := rows.Scan(&secretID, &row.view.Name, &row.view.Note, &row.view.CreatedAt, &row.view.ValueUpdatedAt,
+			&serverID, &serverName); err != nil {
 			return nil, err
 		}
-		if i, ok := index[view.Name]; ok {
-			if server.Valid {
-				out[i].AllowedServers = append(out[i].AllowedServers, server.String)
-			}
+		row.secretID = secretID
+		if serverID.Valid && serverName.Valid {
+			row.hasServer = true
+			row.serverID = serverID.String
+			row.serverName = serverName.String
+		}
+		displayRows = append(displayRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return secretViewsForDisplayRows(displayRows, authorization), nil
+}
+
+// secretDisplayRow 是机密项可见列表的一行原始材料：机密项本身与一条可写入
+// 服务器关联。数据库读取与快照读取都先转换成它，再走同一个授权判定。
+type secretDisplayRow struct {
+	secretID   string
+	view       SecretView
+	hasServer  bool
+	serverID   string
+	serverName string
+}
+
+// secretViewsForDisplayRows 是机密项可见列表的共用判定：按服务器授权集合裁
+// 剪关联；指定集合时只保留交集非空的机密项，全部服务器时保留空列表。
+func secretViewsForDisplayRows(rows []secretDisplayRow, authorization SecretServerAuthorization) []SecretView {
+	out := make([]SecretView, 0, len(rows))
+	index := make(map[string]int, len(rows))
+	for _, row := range rows {
+		i, exists := index[row.secretID]
+		if !exists {
+			i = len(out)
+			index[row.secretID] = i
+			out = append(out, row.view)
+		}
+		if row.hasServer && authorization.containsServerID(row.serverID) {
+			out[i].AllowedServers = append(out[i].AllowedServers, row.serverName)
+		}
+	}
+	scoped := make([]SecretView, 0, len(out))
+	for _, view := range out {
+		if len(view.AllowedServers) == 0 && !authorization.all {
 			continue
 		}
-		if server.Valid {
-			view.AllowedServers = []string{server.String}
-		}
-		index[view.Name] = len(out)
-		out = append(out, view)
+		sort.Strings(view.AllowedServers)
+		scoped = append(scoped, view)
 	}
-	return out, rows.Err()
+	sort.Slice(scoped, func(i, j int) bool { return scoped[i].Name < scoped[j].Name })
+	return scoped
+}
+
+// SecretViewsFromSnapshot 从快照生成机密项可见列表。客户端快照本身已经按
+// profile 裁剪，所以调用方通常传「全部服务器」授权；这个入口与数据库读取
+// 共用同一段服务器授权判定。
+func SecretViewsFromSnapshot(snapshot *Snapshot, authorization SecretServerAuthorization) []SecretView {
+	rows := make([]secretDisplayRow, 0, len(snapshot.Secrets)+len(snapshot.SecretAllows))
+	for _, secret := range snapshot.Secrets {
+		rows = append(rows, secretDisplayRow{
+			secretID: secret.ID,
+			view: SecretView{
+				Name:           secret.Name,
+				Note:           secret.Note,
+				CreatedAt:      secret.CreatedAt,
+				ValueUpdatedAt: secret.ValueUpdatedAt,
+			},
+		})
+	}
+	serverNames := make(map[string]string, len(snapshot.Servers))
+	for _, server := range snapshot.Servers {
+		serverNames[server.ID] = server.Name
+	}
+	for _, allow := range snapshot.SecretAllows {
+		name, exists := serverNames[allow.ServerID]
+		if !exists {
+			continue
+		}
+		rows = append(rows, secretDisplayRow{
+			secretID: allow.SecretID, hasServer: true,
+			serverID: allow.ServerID, serverName: name,
+		})
+	}
+	return secretViewsForDisplayRows(rows, authorization)
 }
 
 // secretAllowTarget 是一次授权改动的目标：机密项或服务器条目的内部标识符

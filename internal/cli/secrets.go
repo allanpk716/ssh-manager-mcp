@@ -29,8 +29,7 @@ var secretsReadHiddenLine = func() ([]byte, error) {
 
 // requireSecretsVault 断言本机持有 vault（权威端或单机部署）并返回已解锁的
 // 存储。角色判定与 policy 命令组共用同一套判定（vault 优先，其次看客户端缓
-// 存登记）。客户端上机密项还没有下发通道，整个命令组都拒绝执行，避免让人
-// 误以为本地有一份机密项数据。
+// 存登记）。客户端上机密项是只读快照，写操作仍到权威端执行。
 func requireSecretsVault() (*store.Store, error) {
 	role, err := resolvePolicyRole()
 	if err != nil {
@@ -38,7 +37,7 @@ func requireSecretsVault() (*store.Store, error) {
 	}
 	switch role {
 	case policyRoleClient:
-		return nil, errors.New("本机是缓存客户端：机密项在权威端维护，客户端还没有接收机密项的快照通道——请在权威端执行这条命令")
+		return nil, errors.New("本机是缓存客户端：机密项在权威端维护，客户端只能执行只读的 secrets list——请在权威端执行这条命令")
 	case policyRoleUnenrolled:
 		return nil, errors.New("本机还没有 vault：机密项随 vault 一起存放，请先运行初始化向导（直接执行 sshmgr）")
 	}
@@ -192,30 +191,15 @@ func secretsRmCmd() *cobra.Command {
 }
 
 func secretsListCmd() *cobra.Command {
-	var query, server string
+	var query, server, instance string
 	c := &cobra.Command{
-		Use:   "list [--query 文本] [--server 条目]",
+		Use:   "list [--query 文本] [--server 条目] [--instance 名称]",
 		Args:  cobra.NoArgs,
 		Short: "List secrets (never their values)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := requireSecretsVault()
+			views, err := loadSecretViews(cmd.ErrOrStderr(), instance, server)
 			if err != nil {
 				return err
-			}
-			defer s.Close()
-			views, err := s.ListSecrets()
-			if err != nil {
-				return err
-			}
-			if server != "" {
-				srv, err := s.GetServerByName(server)
-				if err != nil {
-					return err
-				}
-				if srv == nil {
-					return fmt.Errorf("服务器条目 %q 不存在", server)
-				}
-				views = filterSecretsByServer(views, server)
 			}
 			if query != "" {
 				views = filterSecretsByQuery(views, query)
@@ -229,7 +213,57 @@ func secretsListCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&query, "query", "", "只显示名字或备注包含该文本的机密项")
 	c.Flags().StringVar(&server, "server", "", "只显示可写入列表包含该服务器条目的机密项")
+	c.Flags().StringVar(&instance, "instance", "", policyInstanceFlagHelp)
 	return c
+}
+
+// loadSecretViews 按本机角色读取机密项可见列表：权威端与单机部署从 vault
+// 读；客户端从加密缓存快照读。两条路径共用存储层的服务器授权判定。
+func loadSecretViews(errOut io.Writer, instance, server string) ([]store.SecretView, error) {
+	role, err := resolvePolicyRoleFor(instance)
+	if err != nil {
+		return nil, err
+	}
+	switch role {
+	case policyRoleAuthority:
+		s, err := openUnlockedStore()
+		if err != nil {
+			return nil, err
+		}
+		defer s.Close()
+		if server != "" {
+			srv, err := s.GetServerByName(server)
+			if err != nil {
+				return nil, err
+			}
+			if srv == nil {
+				return nil, fmt.Errorf("服务器条目 %q 不存在", server)
+			}
+		}
+		views, err := s.ListSecretsForAuthorizedServers(store.AuthorizeAllSecretServers())
+		if err != nil {
+			return nil, err
+		}
+		if server == "" {
+			return views, nil
+		}
+		return filterSecretsByServer(views, server), nil
+	case policyRoleClient:
+		snapshot, err := loadPolicyClientSnapshot(errOut, instance, "listing secrets")
+		if err != nil {
+			return nil, err
+		}
+		if snapshot == nil {
+			return nil, errors.New("本机客户端缓存不可读：请先执行 cache pull，再查看机密项列表")
+		}
+		views := store.SecretViewsFromSnapshot(snapshot, store.AuthorizeAllSecretServers())
+		if server == "" {
+			return views, nil
+		}
+		return filterSecretsByServer(views, server), nil
+	default:
+		return nil, errors.New("本机还没有 vault：机密项随 vault 一起存放，请先运行初始化向导（直接执行 sshmgr）")
+	}
 }
 
 func secretsAllowCmd() *cobra.Command {
