@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/hex"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,56 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
+
+// TestServersRmLegacyIDStartingWithDash 覆盖旧数据里的特殊形态：ID 以 -
+// 开头时，用户必须能用 -- 把它明确交给位置参数，帮助文本也要说明这个写法。
+func TestServersRmLegacyIDStartingWithDash(t *testing.T) {
+	dbPath, mk := withCliStoreEnv(t)
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServer(&models.Server{Name: "legacy", Host: "192.0.2.10", User: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyID := "-legacy-server-id"
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE servers SET id=? WHERE name='legacy'`, legacyID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runCli(t, "servers", "rm", "--", legacyID)
+
+	st, err = store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if srv, _ := st.GetServer(legacyID); srv != nil {
+		t.Fatalf("server with legacy id %q still exists", legacyID)
+	}
+
+	root := NewRootCmd()
+	help := &bytes.Buffer{}
+	root.SetOut(help)
+	root.SetArgs([]string{"help", "servers", "rm"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(help.String(), "servers rm -- -AbC123xyz") {
+		t.Fatalf("help must explain the -- form for ids starting with -:\n%s", help.String())
+	}
+}
 
 // TestServersEditNeedsPassphraseTag (final review I-2): the needs-passphrase
 // tag the import flows write means "current credential lacks its passphrase" —
