@@ -27,7 +27,12 @@ type Snapshot struct {
 	// EntryHostKeys（票 #58）是按服务器条目存放的锚；HostKeys 仍为兜底地址
 	// 推导出的旧格式行，旧客户端靠它继续校验。旧快照解码时本字段为空。
 	EntryHostKeys []SnapshotEntryHostKey `json:"entry_host_keys,omitempty"`
-	Audit         []SnapshotAudit        `json:"audit"`
+	// Secrets / SecretAllows（票 #59）只进全量导出：备份与导出文件本身整体
+	// 加密，快照段里按明文字段携带值，靠外层加密保护；导入时用目标 vault
+	// 的主密钥重新加密。按 profile 裁剪的客户端快照不带这两个字段。
+	Secrets      []SnapshotSecret      `json:"secrets,omitempty"`
+	SecretAllows []SnapshotSecretAllow `json:"secret_allows,omitempty"`
+	Audit        []SnapshotAudit       `json:"audit"`
 	// 命令策略段 (ticket #15):自定义规则与被停用
 	// 的默认规则编号。规则全局一套,两条导出路径都携带,不做 profile 裁剪。
 	// 旧快照(策略段尚不存在)解码为 nil 切片 → 导入零行 → 内置默认规则
@@ -151,6 +156,26 @@ type SnapshotAudit struct {
 	Status     string `json:"status"`
 	ExitCode   int    `json:"exit_code"`
 	DurationMS int64  `json:"duration_ms"`
+}
+
+// SnapshotSecret 是快照里的机密项行。Value 与 PreviousValue 是解密后的原始
+// 字节；序列化后的快照必须整体加密后才能落盘。
+type SnapshotSecret struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Note           string `json:"note"`
+	Value          []byte `json:"value"`
+	PreviousValue  []byte `json:"previous_value"`
+	ValueVersion   int64  `json:"value_version"`
+	CreatedAt      int64  `json:"created_at"`
+	ValueUpdatedAt int64  `json:"value_updated_at"`
+}
+
+// SnapshotSecretAllow 是机密项与服务器条目的可写入关联，按双方的内部标识符
+// 记录，导入后由目标库重新解析。
+type SnapshotSecretAllow struct {
+	SecretID string `json:"secret_id"`
+	ServerID string `json:"server_id"`
 }
 
 // normalizeSnapshotPinColumns 把旧快照缺失的锚格式与来源归一为默认值。
@@ -355,6 +380,12 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 	snap.HostKeys = deriveLegacyHostKeys(snap.Servers, snap.EntryHostKeys)
 
+	// 机密项（票 #59）：当前值与上一个值都在这里解密，快照序列化后必须由
+	// 调用方整体加密。
+	if snap.Secrets, snap.SecretAllows, err = s.snapshotSecrets(); err != nil {
+		return nil, err
+	}
+
 	// policy (ticket #15): custom rules + disabled default-rule ids — global,
 	// no profile scoping (the rules are maintained once on the authoritative
 	// side and reach every client with the snapshot).
@@ -382,6 +413,57 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	return snap, nil
+}
+
+// snapshotSecrets 读取全部机密项及其可写入服务器关联并转成快照行（机密项
+// 按内部标识符排序，关联按双方标识符排序）。
+func (s *Store) snapshotSecrets() ([]SnapshotSecret, []SnapshotSecretAllow, error) {
+	rs, err := s.db.Query(`
+		SELECT id,name,note,value_blob,COALESCE(previous_value_blob,''),value_version,created_at,value_updated_at
+		FROM secrets ORDER BY id`)
+	if err != nil {
+		return nil, nil, err
+	}
+	secrets := make([]SnapshotSecret, 0)
+	for rs.Next() {
+		var row SnapshotSecret
+		var valueBlob, previousBlob []byte
+		if err := rs.Scan(&row.ID, &row.Name, &row.Note, &valueBlob, &previousBlob, &row.ValueVersion, &row.CreatedAt, &row.ValueUpdatedAt); err != nil {
+			rs.Close()
+			return nil, nil, err
+		}
+		if row.Value, err = open(s.masterKey, valueBlob); err != nil {
+			rs.Close()
+			return nil, nil, fmt.Errorf("decrypt secret %s: %w", row.ID, err)
+		}
+		if len(previousBlob) > 0 {
+			if row.PreviousValue, err = open(s.masterKey, previousBlob); err != nil {
+				rs.Close()
+				return nil, nil, fmt.Errorf("decrypt previous secret %s: %w", row.ID, err)
+			}
+		}
+		secrets = append(secrets, row)
+	}
+	rs.Close()
+	if err := rs.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	ra, err := s.db.Query(`SELECT secret_id, server_id FROM secret_server_allow ORDER BY secret_id, server_id`)
+	if err != nil {
+		return nil, nil, err
+	}
+	allows := make([]SnapshotSecretAllow, 0)
+	for ra.Next() {
+		var row SnapshotSecretAllow
+		if err := ra.Scan(&row.SecretID, &row.ServerID); err != nil {
+			ra.Close()
+			return nil, nil, err
+		}
+		allows = append(allows, row)
+	}
+	ra.Close()
+	return secrets, allows, ra.Err()
 }
 
 // ExportSnapshotForProfile returns the authorization-scoped Snapshot served to a
@@ -560,7 +642,8 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 		return nil, err
 	}
 
-	// audit: intentionally empty (see doc comment)
+	// 机密项与审计在这里有意为空：按 profile 裁剪的客户端快照在本规格里
+	// 不带机密项段（快照下发属于后续工作）；审计从不离开权威端。
 	return snap, nil
 }
 
@@ -642,6 +725,33 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 	for _, g := range snap.Grants {
 		if _, err := tx.Exec(`INSERT INTO profile_servers(profile_id,server_id) VALUES(?,?)`, g.ProfileID, g.ServerID); err != nil {
 			return fmt.Errorf("insert grant %s/%s: %w", g.ProfileID, g.ServerID, err)
+		}
+	}
+
+	// 4a. 机密项（票 #59）：值用目标库的主密钥重新加密，其余字段原样恢复。
+	// 旧快照没有机密项段时循环体不执行，导入后机密项为空。
+	for _, sec := range snap.Secrets {
+		valueBlob, err := seal(s.masterKey, sec.Value)
+		if err != nil {
+			return fmt.Errorf("seal secret %s: %w", sec.ID, err)
+		}
+		var previousArg any // nil -> SQL NULL
+		if len(sec.PreviousValue) > 0 {
+			previousBlob, err := seal(s.masterKey, sec.PreviousValue)
+			if err != nil {
+				return fmt.Errorf("seal previous secret %s: %w", sec.ID, err)
+			}
+			previousArg = previousBlob
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO secrets(id,name,name_lower,note,value_blob,previous_value_blob,value_version,created_at,value_updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+			sec.ID, sec.Name, strings.ToLower(sec.Name), sec.Note, valueBlob, previousArg, sec.ValueVersion, sec.CreatedAt, sec.ValueUpdatedAt); err != nil {
+			return fmt.Errorf("insert secret %s: %w", sec.ID, err)
+		}
+	}
+	for _, a := range snap.SecretAllows {
+		if _, err := tx.Exec(`INSERT INTO secret_server_allow(secret_id,server_id) VALUES(?,?)`, a.SecretID, a.ServerID); err != nil {
+			return fmt.Errorf("insert secret allow %s/%s: %w", a.SecretID, a.ServerID, err)
 		}
 	}
 

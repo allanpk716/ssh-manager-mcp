@@ -640,6 +640,22 @@ CREATE TABLE IF NOT EXISTS entry_host_keys (
   pin_device TEXT NOT NULL DEFAULT '',
   handshake_addr TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS secrets (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL UNIQUE,
+  note TEXT NOT NULL DEFAULT '',
+  value_blob BLOB NOT NULL,
+  previous_value_blob BLOB,
+  value_version INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  value_updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS secret_server_allow (
+  secret_id TEXT NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  PRIMARY KEY (secret_id, server_id)
+);
 CREATE TABLE IF NOT EXISTS forward_bind_hosts (
   ip         TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL
