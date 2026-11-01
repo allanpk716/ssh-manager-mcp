@@ -246,6 +246,94 @@ VALUES ('192.0.2.10:22',X'0102',1700000000,'blob','tofu','');
 	}
 }
 
+// TestSnapshotRevision_HostOnlyHostKeysUpgrade: 更早的旧结构按 host 列存放
+// 锚，打开时整张 host_keys 表会被删除重建。即使库里已有旧修订号触发器，
+// 升级、重复打开和后续按条目写锚也都必须成功。
+func TestSnapshotRevision_HostOnlyHostKeysUpgrade(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "store.db")
+	legacy, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldShape := `
+CREATE TABLE servers (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, host TEXT NOT NULL,
+  port INTEGER NOT NULL, user TEXT NOT NULL, auth_method TEXT NOT NULL,
+  credential_id TEXT, sudo_credential_id TEXT, tags TEXT,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE host_keys (
+  host TEXT PRIMARY KEY, key_blob BLOB NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE TABLE snapshot_revision (
+  id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL
+);
+INSERT INTO snapshot_revision(id, revision) VALUES (1, 7);
+INSERT INTO servers(id,name,host,port,user,auth_method,tags,created_at,updated_at)
+VALUES ('srv-old','old','192.0.2.10',22,'u','password','',1700000000,1700000000);
+CREATE TRIGGER snapshot_revision_host_keys_insert
+AFTER INSERT ON host_keys BEGIN
+  UPDATE snapshot_revision SET revision = revision + 1;
+END;
+`
+	if _, err := legacy.Exec(oldShape); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mk := make([]byte, 32)
+	randRead(t, mk)
+	s, err := Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("升级打开按主机列存锚的旧库失败:%v", err)
+	}
+	rev, err := s.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != 7 {
+		t.Fatalf("删除旧锚表后的快照修订号 = %d,应保持 7", rev)
+	}
+	for _, trigger := range snapshotRevisionRetiredTriggers {
+		if triggerExists(t, s.db, trigger) {
+			t.Fatalf("删除旧锚表后仍存在过期触发器 %s", trigger)
+		}
+	}
+	srv, err := s.GetServer("srv-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveEntryPin(srv, []byte("new-anchor")); err != nil {
+		t.Fatal(err)
+	}
+	afterWrite, err := s.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterWrite != rev+1 {
+		t.Fatalf("写入按条目锚后的快照修订号 = %d,应为 %d", afterWrite, rev+1)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("重复打开升级后的库失败:%v", err)
+	}
+	defer reopened.Close()
+	reopenedRev, err := reopened.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopenedRev != afterWrite {
+		t.Fatalf("重复打开后的快照修订号 = %d,应保持 %d", reopenedRev, afterWrite)
+	}
+}
+
 // TestSnapshotRevision_AdvancesOnEverySnapshotWrite: 存储层性质测试——只要
 // 导出快照内容变了,修订号就增加。新写入路径出现时,在这张表里加一行。
 func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
