@@ -122,9 +122,17 @@ func newMCPCmd() *cobra.Command {
 					}
 					return err
 				}
-				_, _, _, auditPath, err := clientops.CachePathsFor(instance)
+				cacheDir, _, _, auditPath, err := clientops.CachePathsFor(instance)
 				if err != nil {
 					return err
+				}
+				// 规格 #93 / 票 #95:多机客户端的桥启动快照修订号后台轮询循环。
+				// 间隔读实例配置(环境变量可临时覆盖);非法值按本仓库一贯的
+				// 失败关闭语义拒绝启动,而不是静默换默认值。单机部署不走这个
+				// 分支,不启动任何定时器。
+				pollInterval, _, perr := clientops.EffectiveSnapshotPollInterval(cacheDir)
+				if perr != nil {
+					return perr
 				}
 				// Plan 48 §2.1: the pin forwarder is constructed HERE — the
 				// --instance resolver owns the CacheCred read; RunStdioCache never
@@ -145,8 +153,15 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				err = mcpserver.RunStdioCache(token, snap, auditPath, rel.Check,
-					clientops.ForwardingHostKeys(fwd), cacheForwardDeviceFor(instance), mfwd)
+				err = mcpserver.RunStdioCacheWithRefresher(token, snap, auditPath, rel.Check,
+					clientops.ForwardingHostKeys(fwd), cacheForwardDeviceFor(instance), mfwd,
+					func(refresher mcpserver.CacheRefresher) func() {
+						return clientops.StartSnapshotPoller(clientops.SnapshotPollerConfig{
+							Instance:  instance,
+							Interval:  pollInterval,
+							Refresher: refresher,
+						})
+					})
 				// Release the pinned transports' idle connections on shutdown
 				// (the forwarders have served their last call by now).
 				fwd.Close()

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ssh-manager-mcp/internal/clientops"
 )
 
 // redirectCacheEnv 把测试从操作者真实 vault/cache 隔离出来：APPDATA/XDG 指向
@@ -164,5 +166,129 @@ func TestCacheConfig_InstanceEnvMutex(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("expected checkInstanceFlag mutex error, got: %v\n%s", err, out)
+	}
+}
+
+// redirectCacheEnvAllPlatforms 在 redirectCacheEnv 的基础上再隔离 HOME,并清空
+// 轮询间隔环境变量:macOS 的 os.UserConfigDir 走 $HOME/Library,只设
+// APPDATA/XDG_CONFIG_HOME 挡不住。缓存根目录按平台真实解析(不假设目录形状),
+// 保证新测试在 macOS 上也能通过。
+func redirectCacheEnvAllPlatforms(t *testing.T) string {
+	t.Helper()
+	userDir := redirectCacheEnv(t)
+	t.Setenv("HOME", userDir)
+	withEnv(t, map[string]string{"SSHMGR_CACHE_SNAPSHOT_POLL_INTERVAL": ""})
+	dir, _, _, _, err := clientops.CachePaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestCacheConfig_SnapshotPollInterval_SetReadAndEnvOverride — 规格 #93 / 票 #95:
+// 轮询间隔默认 5 分钟;`cache config --snapshot-poll-interval` 写入实例级
+// cache.config.json;环境变量临时覆盖;与离线上限两个键互不覆盖。
+func TestCacheConfig_SnapshotPollInterval_SetReadAndEnvOverride(t *testing.T) {
+	dir := redirectCacheEnvAllPlatforms(t)
+
+	// ① 无文件、无环境变量:显示默认值 5 分钟。
+	out, err := runCacheConfig(t)
+	if err != nil {
+		t.Fatalf("显示默认轮询间隔必须成功: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "poll:") || !strings.Contains(out, "5m0s (default)") {
+		t.Fatalf("默认显示应包含 5 分钟轮询间隔:\n%s", out)
+	}
+
+	// ② 写入 3m:文件里出现 snapshot_poll_interval,回显 file 来源。
+	out, err = runCacheConfig(t, "--snapshot-poll-interval", "3m")
+	if err != nil {
+		t.Fatalf("写入轮询间隔必须成功: %v\n%s", err, out)
+	}
+	cfgPath := filepath.Join(dir, "cache.config.json")
+	blob, rerr := os.ReadFile(cfgPath)
+	if rerr != nil {
+		t.Fatalf("写入后 cache.config.json 必须存在: %v", rerr)
+	}
+	var parsed struct {
+		MaxOffline           string `json:"max_offline"`
+		SnapshotPollInterval string `json:"snapshot_poll_interval"`
+	}
+	if jerr := json.Unmarshal(blob, &parsed); jerr != nil || parsed.SnapshotPollInterval != "3m" {
+		t.Fatalf("文件内容应为 snapshot_poll_interval=3m: %s (解码错误=%v)", blob, jerr)
+	}
+	out, err = runCacheConfig(t)
+	if err != nil {
+		t.Fatalf("回显轮询间隔必须成功: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "3m0s (file)") {
+		t.Fatalf("回显应显示 file 来源的 3 分钟:\n%s", out)
+	}
+
+	// ③ 再写离线上限:两个键并存,互不覆盖。
+	out, err = runCacheConfig(t, "--max-offline", "24h")
+	if err != nil {
+		t.Fatalf("同时写离线上限必须成功: %v\n%s", err, out)
+	}
+	blob, rerr = os.ReadFile(cfgPath)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if jerr := json.Unmarshal(blob, &parsed); jerr != nil ||
+		parsed.MaxOffline != "24h" || parsed.SnapshotPollInterval != "3m" {
+		t.Fatalf("两个配置键应并存且互不覆盖: %s (解码错误=%v)", blob, jerr)
+	}
+	out, err = runCacheConfig(t)
+	if err != nil {
+		t.Fatalf("双键回显必须成功: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "24h0m0s (source: file)") || !strings.Contains(out, "3m0s (file)") {
+		t.Fatalf("回显应同时显示离线上限与轮询间隔:\n%s", out)
+	}
+
+	// ④ 环境变量覆盖文件:轮询间隔显示 env 来源,离线上限仍走 file 来源。
+	t.Setenv("SSHMGR_CACHE_SNAPSHOT_POLL_INTERVAL", "2m")
+	out, err = runCacheConfig(t)
+	if err != nil {
+		t.Fatalf("环境变量覆盖后的显示必须成功: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "2m0s (env)") || !strings.Contains(out, "24h0m0s (source: file)") {
+		t.Fatalf("环境变量应只覆盖轮询间隔,不影响离线上限:\n%s", out)
+	}
+
+	// ⑤ 环境变量在场时写入:仍成功,但给出与离线上限同款警示。
+	out, err = runCacheConfig(t, "--snapshot-poll-interval", "3m")
+	if err != nil {
+		t.Fatalf("环境变量在场时写入必须成功: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "SSHMGR_CACHE_SNAPSHOT_POLL_INTERVAL is set") ||
+		!strings.Contains(out, "takes effect only after the env is cleared") {
+		t.Fatalf("环境变量在场写入必须出警示:\n%s", out)
+	}
+}
+
+// TestCacheConfig_SnapshotPollInterval_MinimumBound — 下限 1 分钟:过小或无法
+// 解析的值被拒绝;恰为 1 分钟可以写入。
+func TestCacheConfig_SnapshotPollInterval_MinimumBound(t *testing.T) {
+	redirectCacheEnvAllPlatforms(t)
+
+	for _, bad := range []string{"30s", "0s", "-1m", "abc"} {
+		out, err := runCacheConfig(t, "--snapshot-poll-interval", bad)
+		if err == nil {
+			t.Fatalf("过小或非法的轮询间隔 %q 必须被拒绝:\n%s", bad, out)
+		}
+		if !strings.Contains(err.Error(), ">= 1m") {
+			t.Fatalf("错误文案应说明下限 1 分钟,得到: %v", err)
+		}
+	}
+	out, err := runCacheConfig(t, "--snapshot-poll-interval", "1m")
+	if err != nil {
+		t.Fatalf("恰好 1 分钟应允许写入: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "wrote") {
+		t.Fatalf("下限值写入应有确认输出:\n%s", out)
 	}
 }
