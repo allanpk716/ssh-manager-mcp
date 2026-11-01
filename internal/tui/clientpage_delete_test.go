@@ -207,6 +207,7 @@ func TestClientModel_DeleteFlow_FailureNoFallback(t *testing.T) {
 // RemoveInstance 的阻塞窗口(含等在途 [s] 拉取的共享写锁排空);overlay 落下
 // (busy 渲染在页面上);done 收口 busy,幂等 rm 对不存在的槽 = 成功。
 func TestClientModel_DeleteConfirm_BusyWindow(t *testing.T) {
+	isolatedConfigDir(t)
 	t.Setenv("SSHMGR_CACHE_DEK_DIR", t.TempDir())
 	m := newClientModelForGate(t)
 	nm, cmd := m.Update(instanceDeleteConfirmedMsg{instance: "agentX", confirmed: true})

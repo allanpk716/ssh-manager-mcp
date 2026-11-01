@@ -35,6 +35,7 @@ import (
 	"github.com/kardianos/service"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/updater"
 )
@@ -831,7 +832,7 @@ func TestUpdateClientReadsOnlyNamedCacheInstance(t *testing.T) {
 func TestUpdateClientMultipleNamedInstancesRequireInstanceFlag(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	seedRootVersionCacheForInstance(t, "0.0.2", "laptop")
-	configRoot, err := os.UserConfigDir()
+	configRoot, err := paths.UserConfigDir()
 	if err != nil {
 		t.Fatal(err)
 	}

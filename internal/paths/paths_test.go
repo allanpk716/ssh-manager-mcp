@@ -3,20 +3,35 @@ package paths
 import (
 	"os"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"testing"
 )
 
 func TestVaultDir_FixedPath(t *testing.T) {
+	root := useTestVaultRoot(t)
 	t.Setenv("SSHMGR_STORE", "")
 	t.Setenv("SSHMGR_FILEKEY_PATH", "")
 	got, err := VaultDir()
 	if err != nil {
 		t.Fatalf("VaultDir: %v", err)
 	}
-	want := winOrUnix("C:\\ProgramData\\ssh-manager", "/var/lib/ssh-manager")
+	want := filepath.Join(root, "ssh-manager")
 	if got != want {
 		t.Errorf("VaultDir = %q, want %q", got, want)
+	}
+}
+
+func TestVaultDir_TestProcessRequiresEnv(t *testing.T) {
+	t.Setenv(VaultRootEnv, "")
+	got, err := VaultDir()
+	if err == nil {
+		t.Fatalf("VaultDir = %q, want an error in a test process", got)
+	}
+	if !strings.Contains(err.Error(), "SSHMGR_VAULT_ROOT must be set in tests") {
+		t.Fatalf("VaultDir error = %v, want the SSHMGR_VAULT_ROOT test guard", err)
+	}
+	if got != "" {
+		t.Fatalf("VaultDir returned %q with an error; want an empty path", got)
 	}
 }
 
@@ -28,7 +43,34 @@ func TestStorePath_EnvOverride(t *testing.T) {
 	}
 }
 
+func TestUserConfigDir_EnvOverride(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(UserConfigRootEnv, root)
+	got, err := UserConfigDir()
+	if err != nil {
+		t.Fatalf("UserConfigDir: %v", err)
+	}
+	if got != root {
+		t.Fatalf("UserConfigDir = %q, want %q", got, root)
+	}
+}
+
+func TestUserConfigDir_TestProcessRequiresEnv(t *testing.T) {
+	t.Setenv(UserConfigRootEnv, "")
+	got, err := UserConfigDir()
+	if err == nil {
+		t.Fatalf("UserConfigDir = %q, want an error in a test process", got)
+	}
+	if !strings.Contains(err.Error(), "SSHMGR_CONFIG_ROOT must be set in tests") {
+		t.Fatalf("UserConfigDir error = %v, want the SSHMGR_CONFIG_ROOT test guard", err)
+	}
+	if got != "" {
+		t.Fatalf("UserConfigDir returned %q with an error; want an empty path", got)
+	}
+}
+
 func TestMasterKeyPath_NoEnvLandsInVaultDir(t *testing.T) {
+	useTestVaultRoot(t)
 	t.Setenv("SSHMGR_FILEKEY_PATH", "")
 	got, _ := MasterKeyPath()
 	dir, _ := VaultDir()
@@ -39,6 +81,7 @@ func TestMasterKeyPath_NoEnvLandsInVaultDir(t *testing.T) {
 }
 
 func TestCacheDekPath(t *testing.T) {
+	useTestVaultRoot(t)
 	got, _ := CacheDekPath()
 	dir, _ := VaultDir()
 	want := filepath.Join(dir, "cache-dek.key")
@@ -48,6 +91,7 @@ func TestCacheDekPath(t *testing.T) {
 }
 
 func TestServeLogPath(t *testing.T) {
+	useTestVaultRoot(t)
 	// Default: serve.log under VaultDir.
 	t.Setenv("SSHMGR_SERVE_LOG", "")
 	got, err := ServeLogPath()
@@ -65,14 +109,8 @@ func TestServeLogPath(t *testing.T) {
 	}
 }
 
-func winOrUnix(win, unix string) string {
-	if runtime.GOOS == "windows" {
-		return win
-	}
-	return unix
-}
-
 func TestServeCertPaths(t *testing.T) {
+	useTestVaultRoot(t)
 	// Default: under VaultDir.
 	t.Setenv("SSHMGR_STORE", "")
 	t.Setenv("SSHMGR_SERVE_CERT", "")
@@ -128,6 +166,13 @@ func TestCacheDekPathFor(t *testing.T) {
 	if _, err := CacheDekPathFor("../evil"); err == nil {
 		t.Fatal("illegal instance must be refused")
 	}
+}
+
+func useTestVaultRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv(VaultRootEnv, root)
+	return root
 }
 
 var _ = os.Getenv // keep import if unused after edits

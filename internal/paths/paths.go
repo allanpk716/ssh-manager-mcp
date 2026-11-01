@@ -1,8 +1,10 @@
 package paths
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"testing"
 
 	"ssh-manager-mcp/internal/instname"
 )
@@ -19,6 +21,14 @@ const CacheDekFilename = "cache-dek.key"
 // and must keep an env seam (the SSHMGR_CACHE_DEK lesson) — tests and
 // migrations point this at a temp dir instead of the real vault dir.
 const CacheDekDirEnv = "SSHMGR_CACHE_DEK_DIR"
+
+// UserConfigRootEnv replaces the platform-specific user configuration root
+// used by client data such as the offline cache and client role state.
+const UserConfigRootEnv = "SSHMGR_CONFIG_ROOT"
+
+// VaultRootEnv replaces the platform-specific root directory that contains the
+// program's vault directory.
+const VaultRootEnv = "SSHMGR_VAULT_ROOT"
 
 // StoreFilename is the encrypted vault database.
 const StoreFilename = "store.db"
@@ -40,10 +50,17 @@ const (
 // pin and look like a MITM). (xcheck F10)
 const ServeCertMarkerFilename = ".serve-cert-initialized"
 
-// VaultDir returns the program-fixed vault directory (env override via
-// SSHMGR_STORE / SSHMGR_FILEKEY_PATH is handled per-file, not here).
-// See spec §3.1. Platform root from vaultRoot() (paths_windows.go / paths_unix.go).
+// VaultDir returns the program's vault directory. The SSHMGR_VAULT_ROOT
+// environment variable replaces the platform-specific root directory, and
+// "ssh-manager" is always appended. See spec §3.1. Per-file overrides such as
+// SSHMGR_STORE are handled by their own path functions, not here.
 func VaultDir() (string, error) {
+	if v := os.Getenv(VaultRootEnv); v != "" {
+		return filepath.Join(v, "ssh-manager"), nil
+	}
+	if testing.Testing() {
+		return "", errors.New("SSHMGR_VAULT_ROOT must be set in tests; refusing to use the real vault dir")
+	}
 	root, err := vaultRoot()
 	if err != nil {
 		return "", err
@@ -61,6 +78,20 @@ func StorePath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, StoreFilename), nil
+}
+
+// UserConfigDir returns the user configuration root. SSHMGR_CONFIG_ROOT takes
+// precedence over the operating-system default. Test binaries must set it so a
+// test cannot silently read or write the operator's real configuration
+// directory; outside tests the operating-system default is used.
+func UserConfigDir() (string, error) {
+	if v := os.Getenv(UserConfigRootEnv); v != "" {
+		return v, nil
+	}
+	if testing.Testing() {
+		return "", errors.New("SSHMGR_CONFIG_ROOT must be set in tests; refusing to use the real user config dir")
+	}
+	return os.UserConfigDir()
 }
 
 // MasterKeyPath returns the master.key path. SSHMGR_FILEKEY_PATH overrides (test/migrate).
