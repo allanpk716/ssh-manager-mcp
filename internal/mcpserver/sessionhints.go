@@ -7,9 +7,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// SessionHintSource 返回一条会话提示；空字符串表示本次没有提示。来源按注册
-// 顺序消费，以后变更提示可以注册在版本提示之前。
-type SessionHintSource func() string
+// SessionHintSource 返回零条或多条会话提示。来源按注册顺序消费，以后
+// 变更提示可以注册在版本提示之前；一个来源一次可以给出多条提示，例如
+// 桥在 agent 两次调用之间换上了多份新快照。
+type SessionHintSource func() []string
 
 // SessionHints 是桥进程里的一次性工具提示通道。记录只放在内存里，热升级后
 // 从空记录重新开始是有意行为。
@@ -39,21 +40,26 @@ func (h *SessionHints) Take(sessionID string) []string {
 	defer h.mu.Unlock()
 	var hints []string
 	for _, source := range h.sources {
-		text := source()
-		if text == "" {
+		notices := source()
+		if len(notices) == 0 {
 			continue
 		}
-		if h.seenText == nil {
-			h.seenText = make(map[string]map[string]struct{})
+		for _, text := range notices {
+			if text == "" {
+				continue
+			}
+			if h.seenText == nil {
+				h.seenText = make(map[string]map[string]struct{})
+			}
+			if h.seenText[sessionID] == nil {
+				h.seenText[sessionID] = make(map[string]struct{})
+			}
+			if _, shown := h.seenText[sessionID][text]; shown {
+				continue
+			}
+			h.seenText[sessionID][text] = struct{}{}
+			hints = append(hints, text)
 		}
-		if h.seenText[sessionID] == nil {
-			h.seenText[sessionID] = make(map[string]struct{})
-		}
-		if _, shown := h.seenText[sessionID][text]; shown {
-			continue
-		}
-		h.seenText[sessionID][text] = struct{}{}
-		hints = append(hints, text)
 	}
 	return hints
 }

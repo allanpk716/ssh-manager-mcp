@@ -14,6 +14,7 @@ import (
 
 	"ssh-manager-mcp/internal/mcpserver/hotswap"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/snapshotdiff"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/updater"
@@ -116,8 +117,14 @@ type cacheStoreHolder struct {
 	mu       sync.Mutex // serializes rebuilds
 	cur      atomic.Pointer[store.Store]
 	lastSnap *store.Snapshot // guarded by mu — last snapshot successfully hydrated
-	stores   []*store.Store  // every hydrated store, closed once in cleanup
-	tmpPaths []string        // every temp db, removed once in cleanup
+	// 变更比较与提示(票 #96):每次换上新快照时比较新旧快照,产生的
+	// 变更提示保存在进程内存里,经会话提示通道按「会话 + 提示文本」
+	// 去重。changes 为空时退回默认比较器,保证直接构造 holder 的测试
+	// 路径与生产路径走同一套比较。
+	changes     *snapshotdiff.Comparer
+	changeHints []string       // guarded by mu
+	stores      []*store.Store // every hydrated store, closed once in cleanup
+	tmpPaths    []string       // every temp db, removed once in cleanup
 }
 
 // Current returns the store to serve THIS tool call from, rebuilding first if
@@ -173,6 +180,9 @@ func (h *cacheStoreHolder) Current() *store.Store {
 		os.Remove(tmpPath)
 		return h.cur.Load()
 	}
+	if hint := h.snapshotComparer().Hint(h.lastSnap, snap); hint != "" {
+		h.changeHints = append(h.changeHints, hint)
+	}
 	h.lastSnap = snap
 	h.stores = append(h.stores, st)
 	h.tmpPaths = append(h.tmpPaths, tmpPath)
@@ -206,7 +216,7 @@ func (h *cacheStoreHolder) cleanup() {
 // make impossible). Shared with the seam test so the production construction and
 // the tested construction can never drift apart.
 func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), device string) (*cacheStoreHolder, *models.Project, error) {
-	h := &cacheStoreHolder{reload: reload, token: token, auditFile: af, device: device}
+	h := &cacheStoreHolder{reload: reload, token: token, auditFile: af, device: device, changes: snapshotdiff.Default()}
 	st, project, tmpPath, err := hydrateCacheStore(token, snap, af, device)
 	if err != nil {
 		return nil, nil, err
@@ -219,16 +229,40 @@ func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.
 	return h, project, nil
 }
 
+// snapshotComparer 返回换快照时要用的比较器;直接构造 holder 的路径没有
+// 设置比较器时退回默认比较器,与生产路径保持一致。
+func (h *cacheStoreHolder) snapshotComparer() *snapshotdiff.Comparer {
+	if h.changes == nil {
+		return snapshotdiff.Default()
+	}
+	return h.changes
+}
+
+// changeHint 返回启动以来产生的全部变更提示,按发生顺序排列。提示保存
+// 在进程内存里,由会话提示通道按「会话 + 提示文本」去重,每个会话各看到
+// 一次;桥在 agent 两次调用之间换上多份新快照时,每条提示都不会丢。
+func (h *cacheStoreHolder) changeHint() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.changeHints) == 0 {
+		return nil
+	}
+	return append([]string(nil), h.changeHints...)
+}
+
 // versionHint 先刷新当前快照，再比较桥自身版本与快照携带的推荐版本。这里
 // 先调用 Current，缓存重载后的第一次工具调用就能报告新版本对，而不是晚一次。
-func (h *cacheStoreHolder) versionHint() string {
+func (h *cacheStoreHolder) versionHint() []string {
 	h.Current()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.lastSnap == nil {
-		return ""
+		return nil
 	}
-	return updater.VersionMismatchHint(hotswap.BridgeVersion(), h.lastSnap.RecommendedVersion)
+	if text := updater.VersionMismatchHint(hotswap.BridgeVersion(), h.lastSnap.RecommendedVersion); text != "" {
+		return []string{text}
+	}
+	return nil
 }
 
 // RunStdioCache hydrates a Snapshot into a temporary read-only store, verifies the SAME
@@ -311,7 +345,9 @@ func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func
 		hk := fwdBinder(h.Current)
 		hkFn = func() sshbroker.HostKeyStore { return hk }
 	}
-	srv, tunnels, tasks, err := NewServerFromSourceWithHints(h.Current, project.ProfileID, project.ID, hkFn, metaEditor, h.versionHint)
+	// 变更提示来源注册在版本提示来源之前:两种提示同时出现时,变更
+	// 提示排在前面。
+	srv, tunnels, tasks, err := NewServerFromSourceWithHints(h.Current, project.ProfileID, project.ID, hkFn, metaEditor, h.changeHint, h.versionHint)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}

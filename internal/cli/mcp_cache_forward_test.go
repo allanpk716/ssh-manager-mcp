@@ -606,7 +606,13 @@ func TestCacheVersionE2E_ToolHintSessionLifecycle(t *testing.T) {
 		t.Fatalf("同一提示只应出现一次，实际为 %#v", second)
 	}
 
-	next = &store.Snapshot{Version: 1, RecommendedVersion: "1.2.0", Profiles: fx.snap.Profiles, Projects: fx.snap.Projects}
+	// 保留服务器集合与修订号:这张快照只改推荐版本,不应顺带触发 #96 的
+	// 变更提示。
+	next = &store.Snapshot{
+		Version: 1, SnapshotRevision: fx.snap.SnapshotRevision, RecommendedVersion: "1.2.0",
+		Credentials: fx.snap.Credentials, Servers: fx.snap.Servers,
+		Profiles: fx.snap.Profiles, Grants: fx.snap.Grants, Projects: fx.snap.Projects,
+	}
 	third := callToolTexts(t, sess, "list_servers", map[string]any{})
 	wantChanged := "客户端 1.0.0 落后于权威端 1.2.0，运行 `sshmgr update` 升级"
 	if len(third) != 2 || third[0] != wantChanged || !strings.HasPrefix(third[1], `{"servers":`) {
@@ -660,7 +666,11 @@ func TestCacheVersionE2E_NewerClientHintChangesWithVersionPair(t *testing.T) {
 		t.Fatalf("同样的客户端较新提示只应出现一次，实际为 %#v", second)
 	}
 
-	next = &store.Snapshot{Version: 1, RecommendedVersion: "1.0.0", Profiles: fx.snap.Profiles, Projects: fx.snap.Projects}
+	next = &store.Snapshot{
+		Version: 1, SnapshotRevision: fx.snap.SnapshotRevision, RecommendedVersion: "1.0.0",
+		Credentials: fx.snap.Credentials, Servers: fx.snap.Servers,
+		Profiles: fx.snap.Profiles, Grants: fx.snap.Grants, Projects: fx.snap.Projects,
+	}
 	third := callToolTexts(t, sess, "list_servers", map[string]any{})
 	wantThird := "客户端 1.2.0 比权威端 1.0.0 新，建议先升级权威端"
 	if len(third) != 2 || third[0] != wantThird || !strings.HasPrefix(third[1], `{"servers":`) {
@@ -699,8 +709,8 @@ func TestCacheVersionE2E_MultipleHintsKeepSourceOrder(t *testing.T) {
 	srv, _, _, err := mcpserver.NewServerFromSourceWithHints(
 		func() *store.Store { return fx.serve },
 		project.ProfileID, project.ID, nil, nil,
-		func() string { return "变更提示" },
-		func() string { return "版本提示" },
+		func() []string { return []string{"变更提示"} },
+		func() []string { return []string{"版本提示"} },
 	)
 	if err != nil {
 		t.Fatal(err)
