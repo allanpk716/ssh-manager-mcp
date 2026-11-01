@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 
 	"golang.org/x/crypto/ssh"
 
@@ -17,6 +18,10 @@ import (
 // wrapped text (Plan 48 rider 2) additionally names BOTH fingerprints —
 // presented vs pinned — and nothing else about the keys.
 var ErrHostKeyMismatch = errors.New("host key mismatch: possible MITM, connection rejected")
+
+// entryVirtualLanAddresses 是虚拟局域网候选地址的数据源。生产代码用存储层
+// 的实现；单元测试注入候选地址以覆盖回调地址判定。
+var entryVirtualLanAddresses = store.EntryVirtualLanAddresses
 
 // PresentedHostKeyError marks a first-trust save-path error whose Error() text is
 // ALREADY the final user-facing presentation — the Plan 48 §2.1/§4 pin-forward
@@ -47,7 +52,7 @@ type HostKeyStore interface {
 // both fingerprints in the text. 条目改地址时锚不动，新地址上是另一台机器就
 // 会在这里报密钥不一致。
 func HostKeyTOFU(st HostKeyStore, srv *models.Server) (ssh.HostKeyCallback, error) {
-	return func(_ string, _ net.Addr, remote ssh.PublicKey) error {
+	return func(hostname string, _ net.Addr, remote ssh.PublicKey) error {
 		marshaled := remote.Marshal()
 		pin, err := st.GetEntryPin(srv)
 		if err != nil {
@@ -57,8 +62,9 @@ func HostKeyTOFU(st HostKeyStore, srv *models.Server) (ssh.HostKeyCallback, erro
 			// 虚拟局域网首次锚定规则（票 #58 只留接口，地址数据源恒为空，
 			// 由网络拓扑票接入后生效）：条目有虚拟局域网地址时，首次信任
 			// 只接受虚拟局域网握手地址。
-			if vlan := store.EntryVirtualLanAddresses(srv); len(vlan) > 0 && !containsString(vlan, store.EntryFallbackAddr(srv)) {
-				return fmt.Errorf("first trust for server %q requires a virtual LAN address, got %s", srv.Name, store.EntryFallbackAddr(srv))
+			handshakeAddr := normalizeHandshakeAddr(hostname, srv.Port)
+			if vlan := entryVirtualLanAddresses(srv); len(vlan) > 0 && !slices.Contains(vlan, handshakeAddr) {
+				return fmt.Errorf("first trust for server %q requires a virtual LAN address, got %s", srv.Name, handshakeAddr)
 			}
 			if err := st.SaveEntryPin(srv, marshaled); err != nil {
 				// Already-presented branch text (Plan 48 §2.1/§4) — return it
@@ -80,14 +86,13 @@ func HostKeyTOFU(st HostKeyStore, srv *models.Server) (ssh.HostKeyCallback, erro
 	}, nil
 }
 
-// containsString 判断列表是否包含指定字符串。
-func containsString(list []string, want string) bool {
-	for _, v := range list {
-		if v == want {
-			return true
-		}
+// normalizeHandshakeAddr 把 SSH 回调给出的主机名规范成候选地址使用的
+// 「主机:端口」写法；回调已经带端口时保持原样。
+func normalizeHandshakeAddr(hostname string, port int) string {
+	if _, _, err := net.SplitHostPort(hostname); err == nil {
+		return hostname
 	}
-	return false
+	return fmt.Sprintf("%s:%d", hostname, port)
 }
 
 // pinnedFingerprint renders the anchor's fingerprint for the mismatch text —

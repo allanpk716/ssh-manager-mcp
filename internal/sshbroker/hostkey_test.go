@@ -193,7 +193,7 @@ func TestHostKeyTOFU_FingerprintAnchorMismatchCarriesStoredString(t *testing.T) 
 }
 
 // TestHostKeyTOFU_EntriesAtSameAddressIndependent 同一兜底地址上的两个条目
-// 经回调各自锚定、各自校验：一个条目的锚不影响另一个（规格 #88）。
+// 经回调各自锚定、各自校验：一个条目的锚不影响另一个（票 #58）。
 func TestHostKeyTOFU_EntriesAtSameAddressIndependent(t *testing.T) {
 	st := &fakeHostKeyStore{}
 	keyA, keyB := testPublicKey(t), testPublicKey(t)
@@ -222,5 +222,40 @@ func TestHostKeyTOFU_EntriesAtSameAddressIndependent(t *testing.T) {
 	}
 	if err := cbB("192.168.1.10", nil, keyB); err != nil {
 		t.Fatalf("条目 B 的锚不应受条目 A 影响：%v", err)
+	}
+}
+
+// TestHostKeyTOFU_FirstTrustUsesDialedHandshakeAddress：首次信任的虚拟局域网
+// 检查必须用回调参数里的实际握手地址，而不是条目的兜底地址。
+func TestHostKeyTOFU_FirstTrustUsesDialedHandshakeAddress(t *testing.T) {
+	original := entryVirtualLanAddresses
+	entryVirtualLanAddresses = func(*models.Server) []string {
+		return []string{"100.64.10.5:22"}
+	}
+	defer func() { entryVirtualLanAddresses = original }()
+
+	st := &fakeHostKeyStore{}
+	remote := testPublicKey(t)
+	cb, err := HostKeyTOFU(st, entryAt("srv-vlan", "192.0.2.10", 22))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cb("100.64.10.5", nil, remote); err != nil {
+		t.Fatalf("实际握手地址在候选列表中，首次信任应成功：%v", err)
+	}
+	if st.saves != 1 {
+		t.Fatalf("首次信任应保存一次主机密钥，实际 %d 次", st.saves)
+	}
+
+	other := &fakeHostKeyStore{}
+	cb, err = HostKeyTOFU(other, entryAt("srv-vlan", "192.0.2.10", 22))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cb("192.0.2.10:22", nil, testPublicKey(t)); err == nil {
+		t.Fatal("兜底地址不在虚拟局域网候选列表中，首次信任应拒绝")
+	}
+	if other.saves != 0 {
+		t.Fatal("被拒绝的首次信任不应保存主机密钥")
 	}
 }
