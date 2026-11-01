@@ -264,7 +264,10 @@ func TestBridgeIOReleaseHold(t *testing.T) {
 	if _, err := inW.WriteString(`{"jsonrpc":"2.0","id":9,"method":"ping"}` + "\n"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(150 * time.Millisecond) // 让 feeder 扣住它
+	// 等待 Hold 确实在消息边界生效，再撤销；固定睡眠在满负载机器上可能等不够。
+	if !b.WaitFrozen(2 * time.Second) {
+		t.Fatal("feeder did not freeze after Hold")
+	}
 	b.ReleaseHold()
 	ctx := context.Background()
 	m, err := conn.Read(ctx)

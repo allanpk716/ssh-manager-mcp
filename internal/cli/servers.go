@@ -278,9 +278,10 @@ func truncate(s string) string {
 
 func serversRmCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "rm [name-or-id]",
-		Short: "Remove a server",
-		Args:  cobra.ExactArgs(1),
+		Use:     "rm [name-or-id]",
+		Short:   "Remove a server",
+		Example: "  sshmgr servers rm web-01\n  sshmgr servers rm -- -AbC123xyz   # an older ID that starts with \"-\": put -- before it",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openUnlockedStore()
 			if err != nil {
