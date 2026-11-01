@@ -4,9 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
-	"unicode"
 )
 
 // 机密项的名字与值规则。名字从严（字母、数字、下划线，首字符不是数字），
@@ -42,11 +42,12 @@ func ValidateSecretName(name string) error {
 	if name == "" || len(name) > secretNameMaxLength {
 		return ErrSecretNameInvalid
 	}
-	for i, r := range name {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
 		switch {
-		case r == '_' || unicode.IsLetter(r):
+		case c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z'):
 			// 首字符与后续字符都允许。
-		case i > 0 && unicode.IsDigit(r):
+		case i > 0 && '0' <= c && c <= '9':
 			// 数字只允许出现在非首字符。
 		default:
 			return ErrSecretNameInvalid
@@ -403,7 +404,13 @@ func secretAllowsBeforeServerDelete(tx *sql.Tx, serverID string) (map[string]str
 // writeServerDeleteSecretAudits 在删除服务器条目的同一事务里，为每个受影响的
 // 机密项补写一条取消授权审计，摘要标明原因是条目被删除。
 func writeServerDeleteSecretAudits(tx *sql.Tx, before map[string]string) error {
-	for name, beforeList := range before {
+	names := make([]string, 0, len(before))
+	for name := range before {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		beforeList := before[name]
 		after, err := secretAllowServerNamesForName(tx, name)
 		if err != nil {
 			return err

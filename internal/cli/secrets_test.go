@@ -10,9 +10,11 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -256,6 +258,11 @@ func TestSecretsValueLimits(t *testing.T) {
 	if strings.Contains(out, "REJECTED") {
 		t.Fatalf("rejected values must not register secrets:\n%s", out)
 	}
+	for _, name := range []string{"EIGHT_BYTES", "MAX_BYTES"} {
+		if !strings.Contains(out, name) {
+			t.Fatalf("value of legal length must register %s:\n%s", name, out)
+		}
+	}
 	snap := secretsSnapshot(t, dbPath, mk)
 	if got := len(secretSnapshotRow(t, snap, "MAX_BYTES").Value); got != 65536 {
 		t.Fatalf("65536-byte value length = %d, want 65536", got)
@@ -281,6 +288,10 @@ func TestSecretsNameRules(t *testing.T) {
 		},
 		{
 			args:    []string{"secrets", "add", "BAD-NAME", "--stdin"},
+			wantErr: "机密项名字不合法",
+		},
+		{
+			args:    []string{"secrets", "add", "口令", "--stdin"},
 			wantErr: "机密项名字不合法",
 		},
 		{
@@ -324,6 +335,9 @@ func TestSecretsAllowDisallow(t *testing.T) {
 	if !strings.Contains(out, "可写入服务器: db1, web1") {
 		t.Fatalf("allow must record both server entries in name order, got:\n%s", out)
 	}
+	if strings.Index(out, "API_TOKEN") > strings.Index(out, "DB_PASSWORD") {
+		t.Fatalf("list must be sorted by name:\n%s", out)
+	}
 
 	// 筛选：按服务器条目与按名字/备注文本。
 	out = mustSecretsCli(t, "", "secrets", "list", "--server", "web1")
@@ -366,6 +380,59 @@ func TestSecretsAllowDisallow(t *testing.T) {
 	if strings.Count(out, "可写入服务器: db1, web1") != 1 {
 		t.Fatalf("DB_PASSWORD must keep both entries, got:\n%s", out)
 	}
+}
+
+// TestSecretsHelpMentionsNewlineAndNoteRisk 钉住帮助文字里的两条提醒：文件与
+// 标准输入保留末尾换行；备注对 agent 可见，不要写敏感内容。
+func TestSecretsHelpMentionsNewlineAndNoteRisk(t *testing.T) {
+	newSecretsEnv(t)
+	for _, args := range [][]string{
+		{"secrets", "add", "--help"},
+		{"secrets", "set", "--help"},
+	} {
+		out := mustSecretsCli(t, "", args...)
+		if !strings.Contains(out, "末尾换行会保留") {
+			t.Fatalf("%v help must mention that trailing newlines are kept:\n%s", args, out)
+		}
+		if !strings.Contains(out, "值没有任何命令参数入口") {
+			t.Fatalf("%v help must state that no command argument carries the value:\n%s", args, out)
+		}
+	}
+	out := mustSecretsCli(t, "", "secrets", "add", "--help")
+	if !strings.Contains(out, "备注对 agent 可见，不要写敏感内容") {
+		t.Fatalf("add help must warn about notes being visible to agents:\n%s", out)
+	}
+}
+
+// TestSecretsSingleMachineRole 单机部署与权威端走同一条 vault 路径：本机
+// role.json 标记为单机时，机密项命令照常可用。
+func TestSecretsSingleMachineRole(t *testing.T) {
+	newSecretsEnv(t)
+	if err := roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: true}); err != nil {
+		t.Fatalf("save standalone role: %v", err)
+	}
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--stdin")
+	if out := mustSecretsCli(t, "", "secrets", "list"); !strings.Contains(out, "API_TOKEN") {
+		t.Fatalf("single-machine list must show the secret:\n%s", out)
+	}
+}
+
+// TestSecretsImportOldSnapshotKeepsSecretsEmpty 导入没有机密项段的旧快照后，
+// 机密项为空且命令照常可用。
+func TestSecretsImportOldSnapshotKeepsSecretsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	old := `{"version":1,"credentials":[],"servers":[],"profiles":[],"grants":[],"projects":[],"host_keys":[],"audit":[]}`
+	inFile := filepath.Join(dir, "old-snapshot.json")
+	if err := os.WriteFile(inFile, []byte(old), 0o600); err != nil {
+		t.Fatalf("write old snapshot: %v", err)
+	}
+	newSecretsEnv(t)
+	mustSecretsCli(t, "", "import", inFile)
+	out := mustSecretsCli(t, "", "secrets", "list")
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("old snapshot must import zero secrets, got:\n%s", out)
+	}
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--stdin")
 }
 
 // TestSecretsAuditRows 钉住每个动作的审计行：动作名、状态与摘要白名单；换值
@@ -451,5 +518,155 @@ func TestSecretsServerRemoveCascade(t *testing.T) {
 			!strings.Contains(row.Command, `"after":"web1"`) {
 			t.Fatalf("cascade audit row = %s", row.Command)
 		}
+	}
+}
+
+// seedSecretVaultForExport 建一个带机密项的权威库：两个机密项，一个换过值
+// （因此有上一个值与版本号 2），并把两个服务器条目授权给其中一个。
+func seedSecretVaultForExport(t *testing.T) (string, []byte) {
+	t.Helper()
+	dbPath, mk := newSecretsEnv(t)
+	seedSecretServers(t)
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
+	mustSecretsCli(t, testSecretValueB, "secrets", "set", "API_TOKEN", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "数据库口令", "--stdin")
+	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN", "--servers", "db1,web1")
+	return dbPath, mk
+}
+
+// assertSecretSnapshotSegments 比较两个快照的机密项段：字段原样恢复，包括
+// 上一个值、值版本号与可写入服务器关联。
+func assertSecretSnapshotSegments(t *testing.T, want, got *store.Snapshot) {
+	t.Helper()
+	if !reflect.DeepEqual(want.Secrets, got.Secrets) {
+		t.Fatalf("secret snapshot segments differ:\nwant %+v\ngot  %+v", want.Secrets, got.Secrets)
+	}
+	if !reflect.DeepEqual(want.SecretAllows, got.SecretAllows) {
+		t.Fatalf("secret allow snapshot rows differ:\nwant %+v\ngot  %+v", want.SecretAllows, got.SecretAllows)
+	}
+}
+
+// TestSecretsExportImportRoundTrip 导出后再导入到另一个主键的新库：命令行
+// 列表一致，再导出的机密项段（含上一个值与值版本号）逐字段一致。
+func TestSecretsExportImportRoundTrip(t *testing.T) {
+	dbA, mkA := seedSecretVaultForExport(t)
+	want := secretsSnapshot(t, dbA, mkA)
+	before := mustSecretsCli(t, "", "secrets", "list")
+
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "vault.sme")
+	passFile := writeSecretValueFile(t, "pass.txt", []byte("export-passphrase-123"))
+	mustSecretsCli(t, "", "export", "--out", outFile, "--passphrase-file", passFile)
+
+	mkB, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatalf("generate master key B: %v", err)
+	}
+	dbB := filepath.Join(dir, "store-b.db")
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         dbB,
+		"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mkB),
+	})
+	mustSecretsCli(t, "", "import", outFile, "--passphrase-file", passFile)
+
+	after := mustSecretsCli(t, "", "secrets", "list")
+	if before != after {
+		t.Fatalf("secrets list must survive export/import unchanged:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	assertSecretSnapshotSegments(t, want, secretsSnapshot(t, dbB, mkB))
+}
+
+// TestSecretsEncryptedBackupRoundTrip 走加密备份路径：backup create 生成的
+// 加密备份导入新库后，机密项段与备份前完全一致。
+func TestSecretsEncryptedBackupRoundTrip(t *testing.T) {
+	dbA, mkA := seedSecretVaultForExport(t)
+	want := secretsSnapshot(t, dbA, mkA)
+
+	backupDir := t.TempDir()
+	touchMarker(t, backupDir)
+	passFile := writeSecretValueFile(t, "backup-pass.txt", []byte("backup-passphrase-123"))
+	if _, err := runCreate(t, backupDir, "--passphrase-file", passFile); err != nil {
+		t.Fatalf("backup create: %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(backupDir, "vault-*.sme"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("encrypted backup products = %v (err %v), want exactly one", matches, err)
+	}
+
+	mkB, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatalf("generate master key B: %v", err)
+	}
+	dir := t.TempDir()
+	dbB := filepath.Join(dir, "store-b.db")
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         dbB,
+		"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mkB),
+	})
+	mustSecretsCli(t, "", "import", matches[0], "--passphrase-file", passFile)
+	assertSecretSnapshotSegments(t, want, secretsSnapshot(t, dbB, mkB))
+}
+
+// TestSecretsClientRefused 在客户端（无 vault、有缓存）上执行全部写操作，每
+// 条都被拒绝并提示去权威端。
+func TestSecretsClientRefused(t *testing.T) {
+	seedClientCacheFixture(t)
+	commands := [][]string{
+		{"secrets", "add", "API_TOKEN", "--stdin"},
+		{"secrets", "set", "API_TOKEN", "--stdin"},
+		{"secrets", "edit", "API_TOKEN", "--note", "x"},
+		{"secrets", "rm", "API_TOKEN"},
+		{"secrets", "allow", "--secrets", "API_TOKEN", "--servers", "web1"},
+		{"secrets", "disallow", "--secrets", "API_TOKEN", "--servers", "web1"},
+	}
+	for _, args := range commands {
+		_, _, err := runSecretsRoot(t, testSecretValueA, args...)
+		if err == nil {
+			t.Fatalf("client command %v must be refused", args)
+		}
+		if !strings.Contains(err.Error(), "权威端") {
+			t.Fatalf("refusal must point at the authoritative machine, got %v", err)
+		}
+	}
+}
+
+// TestSecretsValueNeverVisible 是规格允许的唯一内部观察点：成功与失败的命令
+// 输出、报错文本、列表与审计输出里都检索不到值原文。
+func TestSecretsValueNeverVisible(t *testing.T) {
+	newSecretsEnv(t)
+	seedSecretServers(t)
+	var visible strings.Builder
+	record := func(stdout, stderr string, err error) {
+		visible.WriteString(stdout)
+		visible.WriteString(stderr)
+		if err != nil {
+			visible.WriteString(err.Error())
+		}
+	}
+
+	stdout, stderr, err := runSecretsRoot(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
+	record(stdout, stderr, err)
+	stdout, stderr, err = runSecretsRoot(t, testSecretValueB, "secrets", "set", "API_TOKEN", "--stdin")
+	record(stdout, stderr, err)
+	stdout, stderr, err = runSecretsRoot(t, "short", "secrets", "add", "TOO_SHORT", "--stdin")
+	record(stdout, stderr, err)
+	stdout, stderr, err = runSecretsRoot(t, testSecretValueA, "secrets", "add", "api_token", "--stdin")
+	record(stdout, stderr, err)
+	stdout, stderr, err = runSecretsRoot(t, "", "secrets", "allow", "--secrets", "GHOST", "--servers", "no-such-entry")
+	record(stdout, stderr, err)
+	stdout, stderr, err = runSecretsRoot(t, "", "secrets", "list")
+	record(stdout, stderr, err)
+	stdout, stderr, err = runSecretsRoot(t, "", "audit", "--owner", "--limit", "0")
+	record(stdout, stderr, err)
+
+	got := visible.String()
+	for _, secret := range []string{testSecretValueA, strings.TrimSuffix(testSecretValueB, "\n")} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("secret value leaked into visible output:\n%s", got)
+		}
+	}
+	// 审计里必须能看到机密项动作本身，证明上面检索的不是空文本。
+	if !strings.Contains(got, "secret-set") || !strings.Contains(got, "值已更改") {
+		t.Fatalf("audit output must show secret actions without values:\n%s", got)
 	}
 }
