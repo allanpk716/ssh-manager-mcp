@@ -40,7 +40,7 @@ const forwardBodyCap = 8 << 10
 // holds an anchor EQUAL to the presented key (a duplicate forward after a
 // restart, or a concurrent equal race). The caller (the HostKeyTOFU wrapper
 // wired in the next task) errors.Is-matches this, applies the key locally via
-// ApplyForwardedHostKey, and lets the handshake continue — zero user ceremony.
+// ApplyForwardedEntryPin, and lets the handshake continue — zero user ceremony.
 // The user-facing text rides the returned error's Error(); the sentinel is for
 // programmatic branching only.
 var ErrPinForwardEqual = errors.New("pin-forward conflict: the broker already holds an equal anchor")

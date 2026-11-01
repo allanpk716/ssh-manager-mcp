@@ -61,7 +61,7 @@ func RunStdio(token string, kp store.KeyProvider) error {
 // tmpPath (cacheStoreHolder registers both). Shared by initial startup and
 // every hot rebuild, so the two paths CANNOT drift. device ("" = unknown) is
 // the instance's device-code name stamped onto host_keys rows written via
-// ApplyForwardedHostKey (Plan 48 §2.3) — per-generation, because every
+// ApplyForwardedEntryPin(Plan 48 §2.3)按代保存,因为每个水合代都要
 // hydrated store starts from a fresh temp db.
 func hydrateCacheStore(token string, snap *store.Snapshot, auditFile *os.File, device string) (*store.Store, *models.Project, string, error) {
 	mk, err := store.GenerateMasterKey() // throwaway key: creds re-sealed per hydration
@@ -111,7 +111,7 @@ type cacheStoreHolder struct {
 	token     string
 	auditFile *os.File
 	profileID string
-	device    string // device-code name for ApplyForwardedHostKey metadata (Plan 48 §2.3)
+	device    string // device-code name for ApplyForwardedEntryPin metadata
 
 	mu       sync.Mutex // serializes rebuilds
 	cur      atomic.Pointer[store.Store]
@@ -237,7 +237,7 @@ func (h *cacheStoreHolder) versionHint() string {
 // auditPath (a JSONL sidecar); every mutation is refused (ErrReadOnly). An UNKNOWN host key
 // goes through fwdBinder when one is wired (Plan 48 §2.1: the key is forwarded to the broker's
 // audited /pin-hostkey endpoint, applied locally, and the handshake continues); with a nil
-// binder the pre-Plan-48 behavior stands (SaveHostKey → ErrReadOnly → fail closed). The temp
+// binder the pre-Plan-48 behavior stands (SaveEntryPin → ErrReadOnly → fail closed). The temp
 // store is deleted on exit; creds in it are sealed under a throwaway master key.
 //
 // reload != nil enables hot-reload: before every tool call the callback is consulted
@@ -256,7 +256,7 @@ func (h *cacheStoreHolder) versionHint() string {
 // credential stays at the --instance resolver in cli (Plan 40/46 iron rule).
 //
 // device ("" = unknown) is the instance's device-code name stamped onto locally applied
-// forwarded pins (host_keys.pin_device, Plan 48 §2.3) — metadata only, never load-bearing.
+// forwarded pins (entry_host_keys.pin_device) — metadata only, never load-bearing.
 //
 // Agent-surface invariant: the broker reads the cache via the exact same
 // list_servers / exec_command / download_file / upload_file / forward_port / close_port

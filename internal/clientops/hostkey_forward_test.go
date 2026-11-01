@@ -10,9 +10,9 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
-	"time"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sshbroker"
@@ -20,7 +20,7 @@ import (
 )
 
 // newReadOnlyStoreWithEntry 水合出一个带固定标识符服务器条目的只读缓存库
-//（热更新换代时条目标识符保持不变，与真实快照水合一致）。
+// （热更新换代时条目标识符保持不变，与真实快照水合一致）。
 func newReadOnlyStoreWithEntry(t *testing.T) (*store.Store, *models.Server) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "gen.db"), make([]byte, 32))
@@ -233,4 +233,3 @@ func TestForwardingHostKeys_BranchWiringThroughTOFU(t *testing.T) {
 		}
 	})
 }
-

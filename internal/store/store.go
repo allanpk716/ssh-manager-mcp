@@ -44,7 +44,7 @@ type Store struct {
 	path         string
 	readOnly     bool
 	auditSidecar *os.File
-	// forwardDevice is the local device-code name ApplyForwardedHostKey stamps
+	// forwardDevice 是 ApplyForwardedEntryPin 写入本地缓存锚时携带的设备码名字
 	// into pin_device, so a locally-recorded forwarded anchor carries the same
 	// metadata as the broker's authoritative row (Plan 48 §2.3). Set once by
 	// the cache hydration path alongside SetReadOnly; empty on server stores.
@@ -85,7 +85,7 @@ func (s *Store) SetReadOnly(auditSidecar *os.File) {
 // cache store). Tunnel control-loop duties 3/4/5 and mirror writes key off it.
 func (s *Store) IsReadOnly() bool { return s.readOnly }
 
-// SetForwardDevice records the local device-code name that ApplyForwardedHostKey
+// SetForwardDevice 记录 ApplyForwardedEntryPin 写锚时携带的设备码名字
 // stamps into pin_device (Plan 48 §2.3). Metadata only — touches no DB row and
 // is intentionally NOT gated by read-only mode: the cache hydration path sets
 // it on the temp store right after SetReadOnly.

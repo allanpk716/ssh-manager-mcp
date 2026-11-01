@@ -8,7 +8,7 @@ import (
 
 // newGCCmd: `sshmgr gc [--apply]`. Dry-run (default) reports how many
 // credential rows no server references via EITHER reference column; --apply
-// deletes exactly those rows. host_keys / cache_tokens are never touched.
+// deletes exactly those rows. 锚 / cache_tokens 不受影响。
 func newGCCmd() *cobra.Command {
 	apply := false
 	c := &cobra.Command{
@@ -25,7 +25,7 @@ func newGCCmd() *cobra.Command {
 				return err
 			}
 			if !apply {
-				fmt.Fprintf(cmd.OutOrStdout(), "%d orphan credential(s); rerun with --apply to delete (servers, host keys, cache tokens are never touched)\n", n)
+				fmt.Fprintf(cmd.OutOrStdout(), "%d orphan credential(s); rerun with --apply to delete (servers, host key anchors, cache tokens are never touched)\n", n)
 				return nil
 			}
 			deleted, err := s.DeleteOrphanCredentials()

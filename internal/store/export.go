@@ -452,9 +452,8 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	if err != nil {
 		return nil, err
 	}
-	// referenced credential ids + host:port keys, collected while scanning servers
+	// referenced credential ids, collected while scanning servers
 	credIDs := make(map[string]bool)
-	hostPorts := make(map[string]bool)
 	for rs.Next() {
 		var sv SnapshotServer
 		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
@@ -469,7 +468,6 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 		if sv.SudoCredentialID != "" {
 			credIDs[sv.SudoCredentialID] = true
 		}
-		hostPorts[fmt.Sprintf("%s:%d", sv.Host, sv.Port)] = true
 		snap.Servers = append(snap.Servers, sv)
 	}
 	rs.Close()

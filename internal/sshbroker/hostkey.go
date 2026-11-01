@@ -18,7 +18,7 @@ import (
 // presented vs pinned — and nothing else about the keys.
 var ErrHostKeyMismatch = errors.New("host key mismatch: possible MITM, connection rejected")
 
-// PresentedHostKeyError marks a SaveHostKey-path error whose Error() text is
+// PresentedHostKeyError marks a first-trust save-path error whose Error() text is
 // ALREADY the final user-facing presentation — the Plan 48 §2.1/§4 pin-forward
 // branch texts, asserted byte-for-byte by the clientops and cache-wiring tests.
 // HostKeyTOFU must not prepend its "save host key: " wrapper to these: any
