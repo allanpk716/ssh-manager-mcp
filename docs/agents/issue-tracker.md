@@ -44,3 +44,11 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
 - **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+
+## Spec → implementation ticket link
+
+Used by `/implement-spec-split` (its `pipeline-status.sh` scan). A spec issue produced by `/to-spec` must name its implementation tickets on a dedicated line in the body:
+
+- `实现票：#<n>, #<n>` (English form `Implementation ticket(s): #<n>` is also recognised).
+- Write this line when the implementation tickets are created, and update it if tickets are added or split.
+- The scan reads **only** this line. Other `#<n>` mentions in the body (for example in the out-of-scope section) are not treated as implementation tickets, so a spec without this line shows up as "spec with no tickets" and its tickets as "missing spec".
