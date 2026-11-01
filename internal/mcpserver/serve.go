@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -320,7 +321,7 @@ func normalizedClientVersion(version string) string {
 // memory with generous headroom).
 const pinMaxBodyBytes = 64 << 10
 
-// pinHostKeyRequest is the request body（规格 #88）：条目标识符、握手地址，
+// pinHostKeyRequest is the request body（票 #58）：条目标识符、握手地址，
 // 以及客户端回调看到的 SSH 公钥序列化字节的 base64。缺少条目标识符即为
 // 旧格式请求。
 type pinHostKeyRequest struct {
@@ -373,7 +374,7 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 	}()
 
 	// ① 形状检查：方法、请求体上限、JSON 解码、字段齐全。缺少条目标识符
-	// 即为旧格式请求（规格 #88）：拒绝并提示升级客户端，不去猜它对应哪个
+	// 即为旧格式请求（票 #58）：拒绝并提示升级客户端，不去猜它对应哪个
 	// 条目。全部排在访问 vault 之前。
 	if req.Method != http.MethodPost {
 		status = http.StatusMethodNotAllowed
@@ -474,14 +475,7 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	if vlan := store.EntryVirtualLanAddresses(srv); len(vlan) > 0 {
-		ok := false
-		for _, addr := range vlan {
-			if addr == in.HandshakeAddr {
-				ok = true
-				break
-			}
-		}
-		if !ok {
+		if !slices.Contains(vlan, in.HandshakeAddr) {
 			status = http.StatusBadRequest
 			writePinJSON(w, status, pinErrorResponse{Error: "handshake address must be a virtual LAN address of the server entry — cache pull and retry"})
 			return
@@ -505,7 +499,7 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 	fp := ssh.FingerprintSHA256(pub)
 
 	// 审计行在这里构造，由存储原语在插入事务里写入：锚与历史同进同退。
-	// 握手地址进审计与锚的来源信息（规格 #88 用户故事 20）。
+	// 握手地址进审计与锚的来源信息（票 #58 用户故事 20）。
 	audit := store.AuditRow{
 		TS:       time.Now(),
 		ServerID: srv.ID,
@@ -515,33 +509,27 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 		Status: "ok",
 	}
 
-	// ⑥ 仅可新增的原子落库。equal=true 是密钥相同的重复转发；插入成功与
-	// 输给并发的不同密钥都返回 (false,nil)，落库后再回读区分 201 与 409。
-	equal, err := r.st.InsertForwardedEntryPin(srv, in.HandshakeAddr, canonical, ct.Name, audit)
+	// ⑥ 仅可新增的原子落库。存储层按插入影响行数返回 inserted：只有本次
+	// 请求确实插入才回答 201；否则读取现有锚并用等价语义判断 equal。
+	inserted, err := r.st.InsertForwardedEntryPin(srv, in.HandshakeAddr, canonical, ct.Name, audit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey insert entry=%q: %v\n", srv.ID, err)
 		status = http.StatusInternalServerError
 		http.Error(w, "pin landing failed", status)
 		return
 	}
-	if equal {
+	if !inserted {
+		landed, err := r.st.GetEntryPin(srv)
+		if err != nil || landed == nil {
+			fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey confirm entry=%q: %v\n", srv.ID, err)
+			status = http.StatusInternalServerError
+			http.Error(w, "pin landing failed", status)
+			return
+		}
 		status = http.StatusConflict
-		writePinJSON(w, status, pinConflictResponse{Error: "already pinned", Equal: true})
+		writePinJSON(w, status, pinConflictResponse{Error: "already pinned", Equal: landed.Matches(canonical)})
 		return
 	}
-	landed, err := r.st.GetEntryPin(srv)
-	if err != nil || landed == nil {
-		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey confirm entry=%q: %v\n", srv.ID, err)
-		status = http.StatusInternalServerError
-		http.Error(w, "pin landing failed", status)
-		return
-	}
-	if !landed.Matches(canonical) {
-		status = http.StatusConflict
-		writePinJSON(w, status, pinConflictResponse{Error: "already pinned", Equal: false})
-		return
-	}
-
 	status = http.StatusCreated
 	writePinJSON(w, status, pinHostKeyResponse{Fingerprint: fp, ServerName: srv.Name})
 }

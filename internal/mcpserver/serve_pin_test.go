@@ -1,6 +1,6 @@
 package mcpserver
 
-// POST /pin-hostkey（规格 #88）：转发请求携带条目标识符、握手地址与主机
+// POST /pin-hostkey（票 #58）：转发请求携带条目标识符、握手地址与主机
 // 密钥；权威端检查设备码轮廓、候选地址、虚拟局域网接口（本票恒为空），
 // 仅可新增落锚并与审计同事务。夹具为进程内 ServeRunner + httptest。
 
@@ -299,7 +299,7 @@ func TestPinHostkey_ForwardsAndLands201(t *testing.T) {
 }
 
 // TestPinHostkey_SecondEntrySameAddressAnchorsIndependently：同一兜底地址上
-// 的第二个条目用另一把密钥独立落锚（规格 #88 用户故事 15、19）。
+// 的第二个条目用另一把密钥独立落锚（票 #58 用户故事 15、19）。
 func TestPinHostkey_SecondEntrySameAddressAnchorsIndependently(t *testing.T) {
 	f := newPinRunner(t)
 	gpuBlob, gpuCanonical, _ := pinTestKey(t)
@@ -490,6 +490,37 @@ func TestPinHostkey_PreExistingAnchorConflict(t *testing.T) {
 	}
 	if n, a := pinAnchorCount(t, f); n != 1 || a != 0 {
 		t.Fatalf("conflict paths must write nothing: anchors=%d audit=%d", n, a)
+	}
+}
+
+// TestPinHostkey_EquivalentFingerprintAnchorIsConflict：owner 已写入同一密钥
+// 的指纹格式锚时，转发请求没有插入新行，必须回答 409 且 equal=true。
+func TestPinHostkey_EquivalentFingerprintAnchorIsConflict(t *testing.T) {
+	f := newPinRunner(t)
+	blob, canonical, fp := pinTestKey(t)
+	gpu, err := f.st.GetServer(f.gpuID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.UpsertManualEntryPin(gpu, "", []byte(fp), store.PinFormatFingerprint, false, func(old *store.PinMeta) store.AuditRow {
+		return store.AuditRow{Action: "pin-manual"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	status, body := postPin(t, f.srv, f.laptopToken, pinBody(f.gpuID, pinAddr(), blob))
+	if status != http.StatusConflict || !strings.Contains(body, `"equal":true`) {
+		t.Fatalf("equivalent fingerprint anchor: status=%d body=%s, want 409 equal:true", status, body)
+	}
+	if pin := entryPinOf(t, f, f.gpuID); pin == nil || pin.Format != store.PinFormatFingerprint || !pin.Matches(canonical) {
+		t.Fatalf("existing fingerprint anchor disturbed: %+v", pin)
+	}
+	forwards, err := f.st.QueryAudit(store.AuditFilter{Actions: []string{"pin-forward"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(forwards) != 0 {
+		t.Fatalf("non-inserting forward must not write audit, got %+v", forwards)
 	}
 }
 

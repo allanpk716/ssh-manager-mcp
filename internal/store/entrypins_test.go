@@ -34,7 +34,7 @@ func serverOf(t *testing.T, s *Store, id string) *models.Server {
 }
 
 // TestEntryPins_SameAddressIndependent 同一兜底地址上的两个条目各自锚定、
-// 各自校验：一个条目的锚不影响另一个（规格 #88 用户故事 15）。
+// 各自校验：一个条目的锚不影响另一个（票 #58 用户故事 15）。
 func TestEntryPins_SameAddressIndependent(t *testing.T) {
 	s := newTestStore(t)
 	a := addEntryForTest(t, s, "a", "192.168.1.10", 22)
@@ -64,8 +64,8 @@ func TestEntryPins_SameAddressIndependent(t *testing.T) {
 	}
 }
 
-// TestInsertForwardedEntryPin_OnlyInsert 覆盖转发落锚的仅可新增语义：空位
-// 插入并写审计；密钥相同的重复转发返回相同；密钥不同返回不同且绝不覆盖。
+// TestInsertForwardedEntryPin_OnlyInsert 覆盖转发落锚的仅可新增语义：返回值
+// 只表示本次调用是否插入了新行；没有插入时绝不写审计、绝不覆盖已有锚。
 func TestInsertForwardedEntryPin_OnlyInsert(t *testing.T) {
 	s := newTestStore(t)
 	id := addEntryForTest(t, s, "edge", "203.0.113.10", 22)
@@ -73,11 +73,11 @@ func TestInsertForwardedEntryPin_OnlyInsert(t *testing.T) {
 	key, fp := pinHostKey(t)
 	other, _ := pinHostKey(t)
 
-	equal, err := s.InsertForwardedEntryPin(srv, "203.0.113.10:22", key, "laptop", AuditRow{
+	inserted, err := s.InsertForwardedEntryPin(srv, "203.0.113.10:22", key, "laptop", AuditRow{
 		TS: time.Now(), ServerID: id, Action: "pin-forward", Command: "fp=" + fp, Status: "ok",
 	})
-	if err != nil || equal {
-		t.Fatalf("首次转发应插入新锚：equal=%v err=%v", equal, err)
+	if err != nil || !inserted {
+		t.Fatalf("首次转发应插入新锚：inserted=%v err=%v", inserted, err)
 	}
 	pin, err := s.GetEntryPin(serverOf(t, s, id))
 	if err != nil || pin == nil || !pin.Matches(key) {
@@ -88,11 +88,11 @@ func TestInsertForwardedEntryPin_OnlyInsert(t *testing.T) {
 		t.Fatalf("转发锚来源信息不完整：%+v", pins)
 	}
 
-	if equal, err = s.InsertForwardedEntryPin(srv, "203.0.113.10:22", key, "laptop", AuditRow{TS: time.Now(), Action: "pin-forward"}); err != nil || !equal {
-		t.Fatalf("相同密钥的重复转发应返回相同：equal=%v err=%v", equal, err)
+	if inserted, err = s.InsertForwardedEntryPin(srv, "203.0.113.10:22", key, "laptop", AuditRow{TS: time.Now(), Action: "pin-forward"}); err != nil || inserted {
+		t.Fatalf("相同密钥的重复转发不应再插入：inserted=%v err=%v", inserted, err)
 	}
-	if equal, err = s.InsertForwardedEntryPin(srv, "203.0.113.10:22", other, "laptop", AuditRow{TS: time.Now(), Action: "pin-forward"}); err != nil || equal {
-		t.Fatalf("不同密钥的转发应返回不同且不覆盖：equal=%v err=%v", equal, err)
+	if inserted, err = s.InsertForwardedEntryPin(srv, "203.0.113.10:22", other, "laptop", AuditRow{TS: time.Now(), Action: "pin-forward"}); err != nil || inserted {
+		t.Fatalf("不同密钥的转发不应插入且不覆盖：inserted=%v err=%v", inserted, err)
 	}
 	pin, _ = s.GetEntryPin(serverOf(t, s, id))
 	if pin == nil || !pin.Matches(key) {
@@ -223,7 +223,7 @@ func TestEntryPins_FreshSchemaColumns(t *testing.T) {
 }
 
 // TestSaveEntryPinResetsStalePinColumns：首次信任覆盖已有指纹锚时，格式、
-// 来源、设备与学习地址一起重置，避免旧来源信息留在新锚上造成误判。
+// 来源、设备与握手地址一起重置，避免旧来源信息留在新锚上造成误判。
 func TestSaveEntryPinResetsStalePinColumns(t *testing.T) {
 	s := newTestStore(t)
 	id := addEntryForTest(t, s, "stale", "198.51.100.2", 22)
@@ -261,7 +261,7 @@ func TestInsertForwardedEntryPin_AuditFailureRollsBack(t *testing.T) {
 }
 
 // TestInsertForwardedEntryPin_ConcurrentInsertOnly：并发仅可新增——两个不同
-// 密钥竞争同一个未锚条目，只落一把锚、只写一行审计，输家得到 equal=false。
+// 密钥竞争同一个未锚条目，只落一把锚、只写一行审计，只有一个调用插入成功。
 func TestInsertForwardedEntryPin_ConcurrentInsertOnly(t *testing.T) {
 	s := newTestStore(t)
 	id := addEntryForTest(t, s, "race", "198.51.100.4", 22)
@@ -270,8 +270,8 @@ func TestInsertForwardedEntryPin_ConcurrentInsertOnly(t *testing.T) {
 	keyB, _ := pinHostKey(t)
 
 	type outcome struct {
-		equal bool
-		err   error
+		inserted bool
+		err      error
 	}
 	results := make(chan outcome, 2)
 	var wg sync.WaitGroup
@@ -279,19 +279,23 @@ func TestInsertForwardedEntryPin_ConcurrentInsertOnly(t *testing.T) {
 		wg.Add(1)
 		go func(b []byte) {
 			defer wg.Done()
-			equal, err := s.InsertForwardedEntryPin(srv, "198.51.100.4:22", b, "dev", AuditRow{Action: "pin-forward"})
-			results <- outcome{equal, err}
+			inserted, err := s.InsertForwardedEntryPin(srv, "198.51.100.4:22", b, "dev", AuditRow{Action: "pin-forward"})
+			results <- outcome{inserted, err}
 		}(blob)
 	}
 	wg.Wait()
 	close(results)
+	insertedCount := 0
 	for r := range results {
 		if r.err != nil {
 			t.Fatalf("并发插入不应报错：%v", r.err)
 		}
-		if r.equal {
-			t.Fatal("不同密钥竞争的输家应得到 equal=false")
+		if r.inserted {
+			insertedCount++
 		}
+	}
+	if insertedCount != 1 {
+		t.Fatalf("并发调用中插入成功数 = %d，应为 1", insertedCount)
 	}
 	pins := mustEntryPins(t, s)
 	if len(pins) != 1 || (!bytes.Equal(pins[0].Blob, keyA) && !bytes.Equal(pins[0].Blob, keyB)) {
@@ -373,7 +377,7 @@ func TestEntryPinMigration_CopiesAndDropsOrphans(t *testing.T) {
 			t.Fatalf("同一兜底地址上的条目 %s 没有继承旧锚：%+v", id, p)
 		}
 		if p.HandshakeAddr != "10.0.0.5:22" {
-			t.Fatalf("条目 %s 的锚学习地址 = %q，应为 10.0.0.5:22", id, p.HandshakeAddr)
+			t.Fatalf("条目 %s 的锚握手地址 = %q，应为 10.0.0.5:22", id, p.HandshakeAddr)
 		}
 	}
 	lab := byEntry[labID]
@@ -417,5 +421,61 @@ func TestEntryPinMigration_CopiesAndDropsOrphans(t *testing.T) {
 	}
 	if len(migrations2) != 1 {
 		t.Fatalf("重复打开后迁移审计行数 = %d，应为 1", len(migrations2))
+	}
+}
+
+// TestEntryPinMigration_DoesNotCountExistingEntryAnchor：条目已有锚时，旧格式
+// 锚迁移不会覆盖它；迁移审计只统计实际插入的行。
+func TestEntryPinMigration_DoesNotCountExistingEntryAnchor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-vault.db")
+	mk, err := GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := addEntryForTest(t, s, "already-anchored", "10.0.0.5", 22)
+	anchoredKey, _ := pinHostKey(t)
+	if err := s.SaveEntryPin(serverOf(t, s, id), anchoredKey); err != nil {
+		t.Fatal(err)
+	}
+	legacyKey, _ := pinHostKey(t)
+	orphanKey, orphanFP := pinHostKey(t)
+	for _, row := range []struct {
+		hostPort string
+		blob     []byte
+	}{
+		{"10.0.0.5:22", legacyKey},
+		{"192.0.2.9:22", orphanKey},
+	} {
+		if _, err := s.db.Exec(
+			`INSERT INTO host_keys (host_port, key_blob, created_at, pin_format, pin_source, pin_device) VALUES (?,?,?,?,?,?)`,
+			row.hostPort, row.blob, int64(1700000000), PinFormatBlob, PinSourceTofu, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(path, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	if pin := pinEntryForTest(t, upgraded, id); !pin.Matches(anchoredKey) {
+		t.Fatalf("迁移不应覆盖条目已有锚：%+v", pin)
+	}
+	migrations, err := upgraded.QueryAudit(AuditFilter{Actions: []string{"pin-migrate"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) != 1 {
+		t.Fatalf("迁移审计行数 = %d，应为 1：%+v", len(migrations), migrations)
+	}
+	if cmd := migrations[0].Command; !containsAll(cmd, "copied=0", "dropped=1", "192.0.2.9:22", orphanFP) || strings.Contains(cmd, id) {
+		t.Fatalf("条目已有锚时不应被计入复制：%q", cmd)
 	}
 }

@@ -62,15 +62,23 @@ func migrateEntryPinsTx(tx *sql.Tx) error {
 			continue
 		}
 		for _, id := range matched {
-			if _, err := tx.Exec(
+			res, err := tx.Exec(
 				`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr)
 				 VALUES (?,?,?,?,?,?,?)
 				 ON CONFLICT(server_id) DO NOTHING`,
-				id, blob, createdAt, format, source, device, hostPort); err != nil {
+				id, blob, createdAt, format, source, device, hostPort)
+			if err != nil {
 				rows.Close()
 				return err
 			}
-			copied = append(copied, id)
+			inserted, err := res.RowsAffected()
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			if inserted > 0 {
+				copied = append(copied, id)
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -115,9 +123,9 @@ func entryIDsAtAddress(q *sql.Tx, hostPort string) ([]string, error) {
 	return ids, rows.Err()
 }
 
-// PinFingerprint 渲染一把锚的主机密钥指纹，供审计与展示使用。指纹格式的锚
-// 本身就是指纹串；密钥字节格式的锚解析后计算 SHA256 指纹。无法解析的密钥
-// 字节（正常写入路径不会产生）退化为占位文本。
+// PinFingerprint 把一把锚折算成可比较的密钥身份，并用于审计与展示。指纹
+// 格式的锚本身就是指纹串；密钥字节格式的锚解析后计算 SHA256 指纹。无法
+// 解析的密钥字节（正常写入路径不会产生）退化为原始字节的十六进制写法。
 func PinFingerprint(blob []byte, format string) string {
 	if format == PinFormatFingerprint {
 		return string(blob)
@@ -125,7 +133,7 @@ func PinFingerprint(blob []byte, format string) string {
 	if pub, err := ssh.ParsePublicKey(blob); err == nil {
 		return ssh.FingerprintSHA256(pub)
 	}
-	return "unparseable"
+	return fmt.Sprintf("raw:%x", blob)
 }
 
 // loadEntryPinMeta 按条目标识符读取锚及其来源信息；没有锚时返回 (nil, nil)。
@@ -154,6 +162,11 @@ func (s *Store) GetEntryPin(srv *models.Server) (*Pin, error) {
 	return &pin, nil
 }
 
+// GetEntryPinMeta 按条目标识符返回锚及来源信息；条目尚无锚时返回 (nil, nil)。
+func (s *Store) GetEntryPinMeta(serverID string) (*PinMeta, error) {
+	return loadEntryPinMeta(s.db, serverID)
+}
+
 // ListEntryPins 列出全部按条目存放的锚（含来源信息），按条目标识符排序。
 func (s *Store) ListEntryPins() ([]PinMeta, error) {
 	rows, err := s.db.Query(
@@ -176,7 +189,7 @@ func (s *Store) ListEntryPins() ([]PinMeta, error) {
 
 // SaveEntryPin 记录一次首次连接即信任（单机直连或权威端本地连接）学到的
 // 主机密钥。按条目整行覆盖：同一条目重开首次信任窗口时，格式、来源、转发
-// 设备与学习地址一起重置，避免旧来源信息留在新锚上。
+// 设备与握手地址一起重置，避免旧来源信息留在新锚上。
 func (s *Store) SaveEntryPin(srv *models.Server, marshaledKey []byte) error {
 	if s.readOnly {
 		return ErrReadOnly
@@ -192,8 +205,8 @@ func (s *Store) SaveEntryPin(srv *models.Server, marshaledKey []byte) error {
 }
 
 // InsertForwardedEntryPin 落一条设备转发的锚（权威端 /pin-hostkey 的存储侧）。
-// 仅可新增：条目已有锚时绝不覆盖，密钥相同返回 equal=true，不同返回
-// equal=false；锚与审计行同一事务提交，审计失败时锚一并回滚。
+// 仅可新增：返回值只表示本次调用是否插入了新行；条目已有锚时绝不覆盖、
+// 不写审计。锚与审计行同一事务提交，审计失败时锚一并回滚。
 func (s *Store) InsertForwardedEntryPin(srv *models.Server, handshakeAddr string, blob []byte, device string, audit AuditRow) (bool, error) {
 	if s.readOnly {
 		return false, ErrReadOnly
@@ -223,12 +236,12 @@ func (s *Store) InsertForwardedEntryPin(srv *models.Server, handshakeAddr string
 		if existing == nil {
 			return false, fmt.Errorf("entry pin for %s vanished inside the insert transaction", srv.ID)
 		}
-		return existing.Matches(blob), nil
+		return false, nil
 	}
 	if err := writeAuditTx(tx, audit); err != nil {
 		return false, err
 	}
-	return false, tx.Commit()
+	return true, tx.Commit()
 }
 
 // ApplyForwardedEntryPin 在客户端只读缓存里记录权威端已接受的转发锚。这是
@@ -257,7 +270,10 @@ func (s *Store) ApplyForwardedEntryPin(srv *models.Server, handshakeAddr string,
 		if err != nil {
 			return err
 		}
-		if existing == nil || !existing.Matches(marshaledKey) {
+		if existing == nil {
+			return fmt.Errorf("apply forwarded host key for entry %s: anchor is missing after the insert was skipped (pull and retry)", srv.ID)
+		}
+		if !existing.Matches(marshaledKey) {
 			return fmt.Errorf("apply forwarded host key for entry %s: existing pin differs from the presented key (pull and retry)", srv.ID)
 		}
 		return nil
@@ -356,7 +372,12 @@ func deleteEntryPinWithAudit(tx *sql.Tx, srv *models.Server) error {
 // EntryFallbackAddr 渲染条目的兜底 SSH 地址「Host:端口」。本票阶段每个条目
 // 只有这一个候选地址；多地址按序选址由网络拓扑票接入。
 func EntryFallbackAddr(srv *models.Server) string {
-	return fmt.Sprintf("%s:%d", srv.Host, srv.Port)
+	return fallbackAddr(srv.Host, srv.Port)
+}
+
+// fallbackAddr 是条目兜底地址的唯一拼接入口，模型与快照行共用。
+func fallbackAddr(host string, port int) string {
+	return fmt.Sprintf("%s:%d", host, port)
 }
 
 // EntryVirtualLanAddresses 返回条目的虚拟局域网候选地址。本票阶段候选地址
