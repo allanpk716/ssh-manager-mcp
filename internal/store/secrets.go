@@ -240,6 +240,208 @@ func (s *Store) ListSecrets() ([]SecretView, error) {
 	return out, rows.Err()
 }
 
+// secretAllowTarget 是一次授权改动的目标：机密项或服务器条目的内部标识符
+// 与名字。
+type secretAllowTarget struct {
+	id   string
+	name string
+}
+
+// AllowSecrets 把若干服务器条目加入若干机密项的可写入列表。先校验全部名字，
+// 任何一个不存在就一次列出全部错误并整体不生效；校验通过后在一个事务内完成
+// 全部改动，并为每个发生变化的机密项写一条审计行。
+func (s *Store) AllowSecrets(secretNames, serverNames []string) error {
+	return s.changeSecretAllows(secretNames, serverNames, true, "")
+}
+
+// DisallowSecrets 把若干服务器条目移出若干机密项的可写入列表。校验、事务
+// 与审计语义与 AllowSecrets 相同。
+func (s *Store) DisallowSecrets(secretNames, serverNames []string) error {
+	return s.changeSecretAllows(secretNames, serverNames, false, "")
+}
+
+// changeSecretAllows 是 allow / disallow 的共用主体。reason 非空时写进审计
+// 摘要，用于删除服务器条目时的联动审计。
+func (s *Store) changeSecretAllows(secretNames, serverNames []string, allow bool, reason string) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	secrets, secretMissing, err := resolveSecretAllowTargets(tx, `SELECT id, name FROM secrets WHERE name=?`, secretNames, "机密项")
+	if err != nil {
+		return err
+	}
+	servers, serverMissing, err := resolveSecretAllowTargets(tx, `SELECT id, name FROM servers WHERE name=?`, serverNames, "服务器条目")
+	if err != nil {
+		return err
+	}
+	if missing := append(secretMissing, serverMissing...); len(missing) > 0 {
+		return fmt.Errorf("以下名称不存在，整体未生效：\n%s", strings.Join(missing, "\n"))
+	}
+	action := "secret-allow"
+	stmt := `INSERT OR IGNORE INTO secret_server_allow(secret_id,server_id) VALUES(?,?)`
+	if !allow {
+		action = "secret-disallow"
+		stmt = `DELETE FROM secret_server_allow WHERE secret_id=? AND server_id=?`
+	}
+	for _, secret := range secrets {
+		before, err := secretAllowServerNames(tx, secret.id)
+		if err != nil {
+			return err
+		}
+		for _, server := range servers {
+			if _, err := tx.Exec(stmt, secret.id, server.id); err != nil {
+				return err
+			}
+		}
+		after, err := secretAllowServerNames(tx, secret.id)
+		if err != nil {
+			return err
+		}
+		if strings.Join(before, ",") == strings.Join(after, ",") {
+			continue // 幂等重跑：数据没有变化，不写审计行。
+		}
+		summary := map[string]any{
+			"name":   secret.name,
+			"before": strings.Join(before, ","),
+			"after":  strings.Join(after, ","),
+		}
+		if reason != "" {
+			summary["reason"] = reason
+		}
+		if err := writeSecretAuditTx(tx, action, summary); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// resolveSecretAllowTargets 按名字逐个解析目标，返回解析成功的目标与缺失名
+// 单；缺失名单由调用方合并后一次报出，保证整体不生效。
+func resolveSecretAllowTargets(tx *sql.Tx, query string, names []string, label string) ([]secretAllowTarget, []string, error) {
+	seen := make(map[string]bool, len(names))
+	out := make([]secretAllowTarget, 0, len(names))
+	var missing []string
+	for _, name := range names {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		var target secretAllowTarget
+		err := tx.QueryRow(query, name).Scan(&target.id, &target.name)
+		if err == sql.ErrNoRows {
+			missing = append(missing, fmt.Sprintf("%s %q 不存在", label, name))
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		out = append(out, target)
+	}
+	return out, missing, nil
+}
+
+// secretAllowServerNames 返回一个机密项当前的可写入服务器条目名，按名字排序。
+func secretAllowServerNames(tx *sql.Tx, secretID string) ([]string, error) {
+	rows, err := tx.Query(`
+		SELECT srv.name FROM secret_server_allow allow
+		JOIN servers srv ON srv.id = allow.server_id
+		WHERE allow.secret_id=? ORDER BY srv.name`, secretID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+// secretAllowsBeforeServerDelete 在删除服务器条目前读出该条目所在的全部机密
+// 项，返回机密项名字到它当时完整可写入列表的映射，供删除后补写审计。
+func secretAllowsBeforeServerDelete(tx *sql.Tx, serverID string) (map[string]string, error) {
+	rows, err := tx.Query(`
+		SELECT DISTINCT sec.name FROM secret_server_allow allow
+		JOIN secrets sec ON sec.id = allow.secret_id
+		WHERE allow.server_id=? ORDER BY sec.name`, serverID)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	out := make(map[string]string, len(names))
+	for _, name := range names {
+		list, err := secretAllowServerNamesForName(tx, name)
+		if err != nil {
+			return nil, err
+		}
+		out[name] = strings.Join(list, ",")
+	}
+	return out, nil
+}
+
+// writeServerDeleteSecretAudits 在删除服务器条目的同一事务里，为每个受影响的
+// 机密项补写一条取消授权审计，摘要标明原因是条目被删除。
+func writeServerDeleteSecretAudits(tx *sql.Tx, before map[string]string) error {
+	for name, beforeList := range before {
+		after, err := secretAllowServerNamesForName(tx, name)
+		if err != nil {
+			return err
+		}
+		if err := writeSecretAuditTx(tx, "secret-disallow", map[string]any{
+			"name":   name,
+			"before": beforeList,
+			"after":  strings.Join(after, ","),
+			"reason": "服务器条目已删除",
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// secretAllowServerNamesForName 按机密项名字取当前可写入服务器条目名。
+func secretAllowServerNamesForName(tx *sql.Tx, secretName string) ([]string, error) {
+	rows, err := tx.Query(`
+		SELECT srv.name FROM secret_server_allow allow
+		JOIN secrets sec ON sec.id = allow.secret_id
+		JOIN servers srv ON srv.id = allow.server_id
+		WHERE sec.name=? ORDER BY srv.name`, secretName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
 // writeSecretAuditTx 在机密项数据改动的同一事务里写一条 owner 审计行。摘要
 // 只含调用方传入的白名单字段；任何路径都不得把值放进摘要。
 func writeSecretAuditTx(tx *sql.Tx, action string, summary map[string]any) error {

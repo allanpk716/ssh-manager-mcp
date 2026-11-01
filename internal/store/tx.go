@@ -282,11 +282,20 @@ func deleteServerEntryTx(tx *sql.Tx, id string) (*models.Server, error) {
 		}
 		return nil, err
 	}
+	// 票 #59：删除条目前读出它所在的机密项可写入列表，删除后为每个受影响
+	// 的机密项补写取消授权审计；关联行由外键级联删除。
+	secretAllows, err := secretAllowsBeforeServerDelete(tx, id)
+	if err != nil {
+		return nil, err
+	}
 	// 票 #58：条目的主机密钥锚随条目在同一事务删除并写审计。
 	if err := deleteEntryPinWithAudit(tx, srv); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(`DELETE FROM servers WHERE id=?`, id); err != nil {
+		return nil, err
+	}
+	if err := writeServerDeleteSecretAudits(tx, secretAllows); err != nil {
 		return nil, err
 	}
 	return srv, nil

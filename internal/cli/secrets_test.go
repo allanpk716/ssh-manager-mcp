@@ -153,3 +153,303 @@ func TestSecretsLifecycle(t *testing.T) {
 		t.Fatalf("rm must remove the secret from list, got:\n%s", out)
 	}
 }
+
+// TestSecretsValueInputModes 覆盖三种录入方式与两条拒绝路径。文件与标准输入
+// 都按字节原样保存（末尾换行保留），通过再导出的快照段比对；交互输入两次
+// 不一致时报错；非交互终端且没给来源时报错；两个来源同时给出时报错。
+func TestSecretsValueInputModes(t *testing.T) {
+	dbPath, mk := newSecretsEnv(t)
+
+	fileValue := []byte("from-file-value\n\n")
+	valueFile := writeSecretValueFile(t, "value.bin", fileValue)
+	mustSecretsCli(t, "", "secrets", "add", "FILE_VALUE", "--from-file", valueFile)
+	if got := secretSnapshotRow(t, secretsSnapshot(t, dbPath, mk), "FILE_VALUE").Value; string(got) != string(fileValue) {
+		t.Fatalf("file value must keep every byte including trailing newlines, got %q want %q", got, fileValue)
+	}
+
+	stdinValue := []byte("stdin-value\r\n")
+	mustSecretsCli(t, string(stdinValue), "secrets", "add", "STDIN_VALUE", "--stdin")
+	if got := secretSnapshotRow(t, secretsSnapshot(t, dbPath, mk), "STDIN_VALUE").Value; string(got) != string(stdinValue) {
+		t.Fatalf("stdin value must keep every byte including the trailing newline, got %q want %q", got, stdinValue)
+	}
+
+	// 交互输入：两次一致时保存第一行（不含换行符）。
+	oldTTY, oldRead := secretsStdinIsTTY, secretsReadHiddenLine
+	secretsStdinIsTTY = func() bool { return true }
+	inputs := [][]byte{[]byte("interactive-value"), []byte("interactive-value")}
+	secretsReadHiddenLine = func() ([]byte, error) {
+		v := inputs[0]
+		inputs = inputs[1:]
+		return v, nil
+	}
+	t.Cleanup(func() {
+		secretsStdinIsTTY = oldTTY
+		secretsReadHiddenLine = oldRead
+	})
+	mustSecretsCli(t, "", "secrets", "add", "INTERACTIVE_VALUE")
+	if got := secretSnapshotRow(t, secretsSnapshot(t, dbPath, mk), "INTERACTIVE_VALUE").Value; string(got) != "interactive-value" {
+		t.Fatalf("interactive value = %q, want one line without the newline", got)
+	}
+
+	// 两次不一致：报错且不登记。
+	inputs = [][]byte{[]byte("interactive-value"), []byte("different-value!")}
+	_, _, err := runSecretsRoot(t, "", "secrets", "add", "MISMATCH_VALUE")
+	if err == nil || !strings.Contains(err.Error(), "两次输入的机密项值不一致") {
+		t.Fatalf("mismatched interactive input must be refused, got %v", err)
+	}
+
+	// 非交互终端且没有来源：明确报错。
+	secretsStdinIsTTY = func() bool { return false }
+	_, _, err = runSecretsRoot(t, "", "secrets", "add", "NO_SOURCE_VALUE")
+	if err == nil || !strings.Contains(err.Error(), "--from-file") || !strings.Contains(err.Error(), "--stdin") {
+		t.Fatalf("non-interactive input without a source must point at --from-file/--stdin, got %v", err)
+	}
+
+	// 两个来源同时给出：直接拒绝。
+	_, _, err = runSecretsRoot(t, "", "secrets", "add", "BOTH_SOURCES", "--from-file", valueFile, "--stdin")
+	if err == nil || !strings.Contains(err.Error(), "不能同时使用") {
+		t.Fatalf("--from-file with --stdin must be refused, got %v", err)
+	}
+	out := mustSecretsCli(t, "", "secrets", "list")
+	for _, absent := range []string{"MISMATCH_VALUE", "NO_SOURCE_VALUE", "BOTH_SOURCES"} {
+		if strings.Contains(out, absent) {
+			t.Fatalf("refused input must not register a secret, %s present:\n%s", absent, out)
+		}
+	}
+}
+
+// TestSecretsValueLimits 覆盖空值、7 字节、8 字节、65536 字节与 65537 字节。
+func TestSecretsValueLimits(t *testing.T) {
+	dbPath, mk := newSecretsEnv(t)
+	valueFile := func(t *testing.T, n int, fill byte) string {
+		t.Helper()
+		return writeSecretValueFile(t, "limit.bin", bytes.Repeat([]byte{fill}, n))
+	}
+
+	for _, tc := range []struct {
+		n        int
+		wantErr  string
+		wantName string
+	}{
+		{n: 0, wantErr: "机密项值不能为空"},
+		{n: 7, wantErr: "至少需要 8 个字节"},
+		{n: 8, wantName: "EIGHT_BYTES"},
+		{n: 65536, wantName: "MAX_BYTES"},
+		{n: 65537, wantErr: "最多 65536 个字节"},
+	} {
+		name := tc.wantName
+		if name == "" {
+			name = "REJECTED"
+		}
+		_, _, err := runSecretsRoot(t, "", "secrets", "add", name, "--from-file", valueFile(t, tc.n, 'v'))
+		if tc.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("value of %d bytes must fail with %q, got %v", tc.n, tc.wantErr, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("value of %d bytes must be accepted, got %v", tc.n, err)
+		}
+	}
+	out := mustSecretsCli(t, "", "secrets", "list")
+	if strings.Contains(out, "REJECTED") {
+		t.Fatalf("rejected values must not register secrets:\n%s", out)
+	}
+	snap := secretsSnapshot(t, dbPath, mk)
+	if got := len(secretSnapshotRow(t, snap, "MAX_BYTES").Value); got != 65536 {
+		t.Fatalf("65536-byte value length = %d, want 65536", got)
+	}
+}
+
+// TestSecretsNameRules 覆盖名字只差大小写的冲突、非法字符与目标不存在。
+func TestSecretsNameRules(t *testing.T) {
+	newSecretsEnv(t)
+	mustSecretsCli(t, "initial-value", "secrets", "add", "API_TOKEN", "--stdin")
+
+	for _, tc := range []struct {
+		args    []string
+		wantErr string
+	}{
+		{
+			args:    []string{"secrets", "add", "api_token", "--stdin"},
+			wantErr: "大小写不同的名字视为同一个",
+		},
+		{
+			args:    []string{"secrets", "add", "9BAD_NAME", "--stdin"},
+			wantErr: "机密项名字不合法",
+		},
+		{
+			args:    []string{"secrets", "add", "BAD-NAME", "--stdin"},
+			wantErr: "机密项名字不合法",
+		},
+		{
+			args:    []string{"secrets", "set", "GHOST_NAME", "--stdin"},
+			wantErr: "机密项不存在",
+		},
+		{
+			args:    []string{"secrets", "edit", "GHOST_NAME", "--note", "x"},
+			wantErr: "机密项不存在",
+		},
+		{
+			args:    []string{"secrets", "rm", "GHOST_NAME"},
+			wantErr: "机密项不存在",
+		},
+	} {
+		_, _, err := runSecretsRoot(t, "replacement-value", tc.args...)
+		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Fatalf("%v must fail with %q, got %v", tc.args, tc.wantErr, err)
+		}
+	}
+}
+
+// seedSecretServers 登记三个服务器条目，供可写入列表与筛选用例使用。
+func seedSecretServers(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"web1", "web2", "db1"} {
+		mustSecretsCli(t, "", "servers", "add", "--name", name, "--host", "192.0.2.10", "--user", "u")
+	}
+}
+
+// TestSecretsAllowDisallow 覆盖批量授权、取消授权、写错名字时整体不生效且
+// 一次列出全部错误、重复执行幂等，以及 --query 与 --server 筛选。
+func TestSecretsAllowDisallow(t *testing.T) {
+	dbPath, mk := newSecretsEnv(t)
+	seedSecretServers(t)
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "数据库口令", "--stdin")
+
+	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN,DB_PASSWORD", "--servers", "db1,web1")
+	out := mustSecretsCli(t, "", "secrets", "list")
+	if !strings.Contains(out, "可写入服务器: db1, web1") {
+		t.Fatalf("allow must record both server entries in name order, got:\n%s", out)
+	}
+
+	// 筛选：按服务器条目与按名字/备注文本。
+	out = mustSecretsCli(t, "", "secrets", "list", "--server", "web1")
+	if strings.Count(out, "API_TOKEN") != 1 || strings.Count(out, "DB_PASSWORD") != 1 {
+		t.Fatalf("--server web1 must keep both secrets:\n%s", out)
+	}
+	out = mustSecretsCli(t, "", "secrets", "list", "--server", "web2")
+	if strings.Contains(out, "API_TOKEN") || strings.Contains(out, "DB_PASSWORD") {
+		t.Fatalf("--server web2 must filter both secrets out:\n%s", out)
+	}
+	out = mustSecretsCli(t, "", "secrets", "list", "--query", "db_password")
+	if !strings.Contains(out, "DB_PASSWORD") || strings.Contains(out, "API_TOKEN") {
+		t.Fatalf("--query must match names case-insensitively:\n%s", out)
+	}
+	out = mustSecretsCli(t, "", "secrets", "list", "--query", "数据库")
+	if !strings.Contains(out, "DB_PASSWORD") || strings.Contains(out, "API_TOKEN") {
+		t.Fatalf("--query must also match notes:\n%s", out)
+	}
+
+	// 写错名字：机密项与条目混着错时，一次列出全部错误，整体不生效。
+	_, _, err := runSecretsRoot(t, "", "secrets", "allow", "--secrets", "GHOST_TOKEN,DB_PASSWORD", "--servers", "web1,no-such-entry")
+	if err == nil || !strings.Contains(err.Error(), "GHOST_TOKEN") || !strings.Contains(err.Error(), "no-such-entry") {
+		t.Fatalf("invalid names must all be reported at once, got %v", err)
+	}
+	if snap := secretsSnapshot(t, dbPath, mk); len(snap.SecretAllows) != 4 {
+		t.Fatalf("failed allow must change nothing, allow rows = %+v", snap.SecretAllows)
+	}
+
+	// 幂等：重复 allow 不改变结果，也不再写新的授权审计行。
+	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN,DB_PASSWORD", "--servers", "db1,web1")
+	if snap := secretsSnapshot(t, dbPath, mk); len(snap.SecretAllows) != 4 {
+		t.Fatalf("idempotent allow must not add rows, got %+v", snap.SecretAllows)
+	}
+
+	mustSecretsCli(t, "", "secrets", "disallow", "--secrets", "API_TOKEN", "--servers", "db1")
+	out = mustSecretsCli(t, "", "secrets", "list")
+	if !strings.Contains(out, "API_TOKEN") || !strings.Contains(out, "可写入服务器: web1") {
+		t.Fatalf("disallow must remove only the named pair, got:\n%s", out)
+	}
+	if strings.Count(out, "可写入服务器: db1, web1") != 1 {
+		t.Fatalf("DB_PASSWORD must keep both entries, got:\n%s", out)
+	}
+}
+
+// TestSecretsAuditRows 钉住每个动作的审计行：动作名、状态与摘要白名单；换值
+// 只记「值已更改」，改备注不记备注原文。
+func TestSecretsAuditRows(t *testing.T) {
+	dbPath, mk := newSecretsEnv(t)
+	seedSecretServers(t)
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "旧备注", "--stdin")
+	mustSecretsCli(t, testSecretValueB, "secrets", "set", "API_TOKEN", "--stdin")
+	mustSecretsCli(t, "", "secrets", "edit", "API_TOKEN", "--note", "新备注")
+	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN", "--servers", "db1,web1")
+	mustSecretsCli(t, "", "secrets", "disallow", "--secrets", "API_TOKEN", "--servers", "db1")
+	mustSecretsCli(t, "", "secrets", "rm", "API_TOKEN")
+
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	rows, err := st.QueryAudit(store.AuditFilter{OwnerOnly: true, Actions: []string{
+		"secret-add", "secret-set", "secret-edit", "secret-allow", "secret-disallow", "secret-rm",
+	}})
+	if err != nil {
+		t.Fatalf("query audit: %v", err)
+	}
+	want := []struct{ action, command string }{
+		{"secret-rm", `{"name":"API_TOKEN"}`},
+		{"secret-disallow", `{"after":"web1","before":"db1,web1","name":"API_TOKEN"}`},
+		{"secret-allow", `{"after":"db1,web1","before":"","name":"API_TOKEN"}`},
+		{"secret-edit", `{"change":"备注已更改","name":"API_TOKEN"}`},
+		{"secret-set", `{"change":"值已更改","name":"API_TOKEN"}`},
+		{"secret-add", `{"name":"API_TOKEN"}`},
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("audit rows = %d, want %d: %+v", len(rows), len(want), rows)
+	}
+	for i, w := range want {
+		if rows[i].Action != w.action || rows[i].Command != w.command || rows[i].Status != "ok" {
+			t.Fatalf("row %d = action %s command %s status %s, want %s %s ok", i, rows[i].Action, rows[i].Command, rows[i].Status, w.action, w.command)
+		}
+		if rows[i].ProjectID != "" || rows[i].ServerID != "" {
+			t.Fatalf("owner row %d must carry no project/server: %+v", i, rows[i])
+		}
+	}
+}
+
+// TestSecretsServerRemoveCascade 覆盖删除服务器条目的联动：条目从所有可写入
+// 列表消失，并在同一事务里为每个受影响的机密项写 secret-disallow 审计。
+func TestSecretsServerRemoveCascade(t *testing.T) {
+	dbPath, mk := newSecretsEnv(t)
+	seedSecretServers(t)
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--stdin")
+	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN,DB_PASSWORD", "--servers", "db1,web1")
+
+	mustSecretsCli(t, "", "servers", "rm", "db1")
+	out := mustSecretsCli(t, "", "secrets", "list")
+	if strings.Contains(out, "db1") {
+		t.Fatalf("removed entry must disappear from every allow list:\n%s", out)
+	}
+	if !strings.Contains(out, "web1") {
+		t.Fatalf("other entries must survive the cascade:\n%s", out)
+	}
+	if snap := secretsSnapshot(t, dbPath, mk); len(snap.SecretAllows) != 2 {
+		t.Fatalf("snapshot allow rows = %+v, want only the two web1 rows", snap.SecretAllows)
+	}
+
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	rows, err := st.QueryAudit(store.AuditFilter{OwnerOnly: true, Actions: []string{"secret-disallow"}})
+	if err != nil {
+		t.Fatalf("query audit: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("server deletion must leave one secret-disallow row per affected secret, got %d rows: %+v", len(rows), rows)
+	}
+	for _, row := range rows {
+		if !strings.Contains(row.Command, "服务器条目已删除") ||
+			!strings.Contains(row.Command, `"before":"db1,web1"`) ||
+			!strings.Contains(row.Command, `"after":"web1"`) {
+			t.Fatalf("cascade audit row = %s", row.Command)
+		}
+	}
+}

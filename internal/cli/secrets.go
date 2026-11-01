@@ -55,6 +55,8 @@ func newSecretsCmd() *cobra.Command {
 		secretsEditCmd(),
 		secretsRmCmd(),
 		secretsListCmd(),
+		secretsAllowCmd(),
+		secretsDisallowCmd(),
 	)
 	return cmd
 }
@@ -223,6 +225,70 @@ func secretsListCmd() *cobra.Command {
 	c.Flags().StringVar(&query, "query", "", "只显示名字或备注包含该文本的机密项")
 	c.Flags().StringVar(&server, "server", "", "只显示可写入列表包含该服务器条目的机密项")
 	return c
+}
+
+func secretsAllowCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "allow --secrets NAME[,NAME...] --servers 条目[,条目...]",
+		Args:  cobra.NoArgs,
+		Short: "Add server entries to secrets' write lists",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			secrets, servers, err := secretAllowFlags(cmd)
+			if err != nil {
+				return err
+			}
+			s, err := requireSecretsVault()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			if err := s.AllowSecrets(secrets, servers); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "已授权 %d 个机密项写入 %d 个服务器条目\n", len(secrets), len(servers))
+			return nil
+		},
+	}
+	c.Flags().StringSlice("secrets", nil, "机密项名字（逗号分隔或重复旗标，可给多个）")
+	c.Flags().StringSlice("servers", nil, "服务器条目名（逗号分隔或重复旗标，可给多个）")
+	return c
+}
+
+func secretsDisallowCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "disallow --secrets NAME[,NAME...] --servers 条目[,条目...]",
+		Args:  cobra.NoArgs,
+		Short: "Remove server entries from secrets' write lists",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			secrets, servers, err := secretAllowFlags(cmd)
+			if err != nil {
+				return err
+			}
+			s, err := requireSecretsVault()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			if err := s.DisallowSecrets(secrets, servers); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "已取消 %d 个机密项写入 %d 个服务器条目\n", len(secrets), len(servers))
+			return nil
+		},
+	}
+	c.Flags().StringSlice("secrets", nil, "机密项名字（逗号分隔或重复旗标，可给多个）")
+	c.Flags().StringSlice("servers", nil, "服务器条目名（逗号分隔或重复旗标，可给多个）")
+	return c
+}
+
+// secretAllowFlags 读取 allow / disallow 的两个多值旗标，并要求两个都给出。
+func secretAllowFlags(cmd *cobra.Command) ([]string, []string, error) {
+	secrets, _ := cmd.Flags().GetStringSlice("secrets")
+	servers, _ := cmd.Flags().GetStringSlice("servers")
+	if len(secrets) == 0 || len(servers) == 0 {
+		return nil, nil, errors.New("--secrets 与 --servers 都至少要给一个值")
+	}
+	return secrets, servers, nil
 }
 
 // printSecretView 打印一个机密项的可见字段。绝不打印值、上一个值、值的哈
