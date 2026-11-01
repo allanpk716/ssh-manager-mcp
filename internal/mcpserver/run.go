@@ -120,11 +120,12 @@ type cacheStoreHolder struct {
 	tmpPaths []string        // every temp db, removed once in cleanup
 }
 
-// Current returns the store to serve THIS tool call from, rebuilding first if
-// the reload callback reports a change. Every failure path keeps serving the
-// previous store — Lazy revocation semantics: a session outlives its token
-// until the next spawn.
-func (h *cacheStoreHolder) Current() *store.Store {
+// refresh 是桥唯一的「换上新快照」入口(规格 #93):先询问热加载接缝,变化才
+// 水合并换入新存储。工具调用前的 Current 与后台轮询的 ReloadNow 都走这一
+// 条路径,任何一方都不另写替换内存快照的逻辑。Every failure path keeps
+// serving the previous store — Lazy revocation semantics: a session outlives
+// its token until the next spawn.
+func (h *cacheStoreHolder) refresh() *store.Store {
 	if h.reload == nil {
 		return h.cur.Load()
 	}
@@ -178,6 +179,26 @@ func (h *cacheStoreHolder) Current() *store.Store {
 	h.tmpPaths = append(h.tmpPaths, tmpPath)
 	h.cur.Store(st) // old store intentionally left open (in-flight calls)
 	return st
+}
+
+// Current returns the store to serve THIS tool call from, rebuilding first if
+// the reload callback reports a change.
+func (h *cacheStoreHolder) Current() *store.Store { return h.refresh() }
+
+// ReloadNow 经由与工具调用相同的统一换快照入口立即热加载一次。供快照修订号
+// 后台轮询循环在拉到新快照(或发现共享缓存已被别的桥更新)后安装新快照;不
+// 产生任何用户可见输出,失败路径与工具调用路径一致(保留旧快照并记日志)。
+func (h *cacheStoreHolder) ReloadNow() { h.refresh() }
+
+// CurrentRevision 返回当前内存快照的快照修订号(旧快照缺该字段时为 0),供
+// 后台轮询与远端修订号比较。
+func (h *cacheStoreHolder) CurrentRevision() int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.lastSnap == nil {
+		return 0
+	}
+	return h.lastSnap.SnapshotRevision
 }
 
 // cleanup closes every hydrated store and removes every temp db. Called once,
@@ -264,13 +285,43 @@ func (h *cacheStoreHolder) versionHint() string {
 // audit to the SAME project id. The only difference from RunStdio is that the store is read-only
 // (mutations refused) and audit is sidecar'd (per-machine, single-direction, zero-merge).
 func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) error {
-	srv, tunnels, tasks, cleanup, err := NewCacheBroker(token, snap, auditPath, reload, fwdBinder, device, metaEditor)
+	return RunStdioCacheWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor, nil)
+}
+
+// CacheRefresher 是桥统一换快照入口的触发器(规格 #93 / 票 #95):后台轮询
+// 循环用它读取当前内存快照的修订号,并在拉到新快照或发现共享缓存更新后,
+// 经由与工具调用完全相同的路径安装新快照。
+type CacheRefresher interface {
+	// CurrentRevision 返回当前内存快照的快照修订号(旧快照缺该字段时为 0)。
+	CurrentRevision() int64
+	// ReloadNow 立即经统一换快照入口热加载一次;失败保留旧快照并记日志。
+	ReloadNow()
+}
+
+// RunStdioCacheWithRefresher 是 RunStdioCache 的扩展入口:桥装配完成后、开始
+// 服务前,把统一换快照入口的触发器交给 startBackground;其返回的停止函数在
+// 服务结束(宿主断开或热升级交割)后调用,先于桥的清理执行。startBackground
+// 为 nil 时行为与 RunStdioCache 完全一致。
+func RunStdioCacheWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, startBackground func(CacheRefresher) func()) error {
+	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor)
+	if err != nil {
+		af.Close()
+		return err
+	}
+	defer af.Close()
+	defer h.cleanup()
 	defer tunnels.CloseAll()
 	defer tasks.CloseAll()
+	if startBackground != nil {
+		if stop := startBackground(h); stop != nil {
+			// 注册在其余收尾之后:停止顺序为 先停后台循环,再关任务/隧道/桥。
+			defer stop()
+		}
+	}
 	return serveBridge(context.Background(), srv)
 }
 
@@ -284,16 +335,28 @@ func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload 
 // tasks.CloseAll (MCP-shutdown teardown, as in RunStdio). Parameters carry the
 // same contract as RunStdioCache.
 func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, func(), error) {
-	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	srv, tunnels, tasks, _, cleanup, err := NewCacheBrokerWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor)
 	if err != nil {
 		return nil, nil, nil, nil, err
+	}
+	return srv, tunnels, tasks, cleanup, nil
+}
+
+// NewCacheBrokerWithRefresher 按 NewCacheBroker 的同一装配构建桥,并额外交出
+// 统一换快照入口的触发器:端到端测试用它驱动后台轮询循环(短间隔注入),
+// `mcp --cache` 的生产路径则经 RunStdioCacheWithRefresher 拿到同一个触发器。
+// cleanup 的契约与 NewCacheBroker 相同。
+func NewCacheBrokerWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, CacheRefresher, func(), error) {
+	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
 	}
 	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor)
 	if err != nil {
 		af.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
-	return srv, tunnels, tasks, func() { h.cleanup(); af.Close() }, nil
+	return srv, tunnels, tasks, h, func() { h.cleanup(); af.Close() }, nil
 }
 
 // newCacheBroker assembles the hot-reloading read-only broker exactly as
