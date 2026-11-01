@@ -123,17 +123,23 @@ func entryIDsAtAddress(q *sql.Tx, hostPort string) ([]string, error) {
 	return ids, rows.Err()
 }
 
-// PinFingerprint 把一把锚折算成可比较的密钥身份，并用于审计与展示。指纹
-// 格式的锚本身就是指纹串；密钥字节格式的锚解析后计算 SHA256 指纹。无法
-// 解析的密钥字节（正常写入路径不会产生）退化为原始字节的十六进制写法。
+// PinFingerprint 渲染一把锚的主机密钥指纹，供审计与展示使用。指纹格式的锚
+// 本身就是指纹串；密钥字节格式的锚解析后计算 SHA256 指纹。无法解析的密钥
+// 字节（正常写入路径不会产生）退化为占位文本。
 func PinFingerprint(blob []byte, format string) string {
+	return pinKeyIdentity(blob, format, "unparseable")
+}
+
+// pinKeyIdentity 是锚身份的唯一判定逻辑，展示与旧格式行推导共用；无法解析
+// 的密钥字节由调用方指定占位表示。
+func pinKeyIdentity(blob []byte, format, invalid string) string {
 	if format == PinFormatFingerprint {
 		return string(blob)
 	}
 	if pub, err := ssh.ParsePublicKey(blob); err == nil {
 		return ssh.FingerprintSHA256(pub)
 	}
-	return fmt.Sprintf("raw:%x", blob)
+	return invalid
 }
 
 // loadEntryPinMeta 按条目标识符读取锚及其来源信息；没有锚时返回 (nil, nil)。

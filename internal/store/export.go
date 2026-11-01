@@ -212,10 +212,10 @@ func deriveLegacyHostKeys(servers []SnapshotServer, entryPins []SnapshotEntryHos
 		group := groups[hp]
 		sort.Slice(group, func(i, j int) bool { return group[i].ServerID < group[j].ServerID })
 		first := group[0]
-		identity := PinFingerprint(first.KeyBlob, first.PinFormat)
+		identity := pinKeyIdentity(first.KeyBlob, first.PinFormat, fmt.Sprintf("raw:%x", first.KeyBlob))
 		same := true
 		for _, p := range group[1:] {
-			if PinFingerprint(p.KeyBlob, p.PinFormat) != identity {
+			if pinKeyIdentity(p.KeyBlob, p.PinFormat, fmt.Sprintf("raw:%x", p.KeyBlob)) != identity {
 				same = false
 				break
 			}
