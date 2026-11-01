@@ -198,8 +198,9 @@ CREATE TABLE host_keys (
 `
 
 // TestMigrateHostKeysPinColumnsOldShape: 旧库升级态 — a v0.14-shape DB gains
-// the three columns via Open's guarded ADD COLUMN, and the pre-existing anchor
-// back-fills to exactly its old meaning (a blob/tofu pin with no device).
+// the pin columns via Open's guarded ADD COLUMN, and the pre-existing anchor
+// lands on the matching entry as a blob/tofu pin with no device（票 #58 的
+// 升级迁移把旧表迁空，host_keys 不再是事实源）。
 func TestMigrateHostKeysPinColumnsOldShape(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
 	db, err := sql.Open("sqlite", path)
@@ -210,6 +211,17 @@ func TestMigrateHostKeysPinColumnsOldShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO host_keys (host_port, key_blob, created_at) VALUES ('10.0.0.5:22', x'0102', 1700000000)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE servers (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, host TEXT NOT NULL,
+		port INTEGER NOT NULL, user TEXT NOT NULL, auth_method TEXT NOT NULL, credential_id TEXT, sudo_credential_id TEXT,
+		shell_type TEXT NOT NULL DEFAULT 'posix', tags TEXT, description TEXT DEFAULT '', location TEXT DEFAULT '',
+		hardware TEXT DEFAULT '', services TEXT DEFAULT '', role TEXT DEFAULT '', caveats TEXT DEFAULT '',
+		expose_host INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+		revision INTEGER NOT NULL DEFAULT 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO servers (id,name,host,port,user,auth_method,created_at,updated_at) VALUES ('srv-old','old','10.0.0.5',22,'u','password',1700000000,1700000000)`); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -226,12 +238,20 @@ func TestMigrateHostKeysPinColumnsOldShape(t *testing.T) {
 			t.Fatalf("migrated host_keys missing %s", col)
 		}
 	}
-	var format, source, device string
-	if err := s.db.QueryRow(`SELECT pin_format, pin_source, pin_device FROM host_keys WHERE host_port='10.0.0.5:22'`).Scan(&format, &source, &device); err != nil {
+	pins, err := s.ListEntryPins()
+	if err != nil || len(pins) != 1 {
+		t.Fatalf("迁移后按条目的锚 = %+v, %v", pins, err)
+	}
+	got := pins[0]
+	if got.ServerID != "srv-old" || got.Source != "tofu" || got.Device != "" || got.HandshakeAddr != "10.0.0.5:22" {
+		t.Fatalf("迁移后的锚来源信息 = %+v", got)
+	}
+	var legacy int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM host_keys`).Scan(&legacy); err != nil {
 		t.Fatal(err)
 	}
-	if format != "blob" || source != "tofu" || device != "" {
-		t.Fatalf("migrated anchor = %q/%q/%q, want blob/tofu/empty", format, source, device)
+	if legacy != 0 {
+		t.Fatalf("迁移后旧锚表应清空，仍有 %d 行", legacy)
 	}
 }
 

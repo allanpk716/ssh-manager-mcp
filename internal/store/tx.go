@@ -257,6 +257,10 @@ func (s *Store) DeleteServerCascading(id string) error {
 		}
 		return err
 	}
+	// 票 #58：条目的主机密钥锚随条目在同一事务删除并写审计。
+	if err := deleteEntryPinWithAudit(tx, srv); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM servers WHERE id=?`, id); err != nil {
 		return err
 	}

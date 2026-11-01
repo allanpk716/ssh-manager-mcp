@@ -131,6 +131,12 @@ func Open(path string, masterKey []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// 票 #58：旧「主机:端口」锚迁移到按服务器条目存放。必须排在
+	// initSchema 之后：迁移要写审计行，也要读新建的按条目锚表。
+	if err := migrateEntryPins(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	// HardenACL ONLY on first creation (Plan 16 F1 fix, spec §5.2 xcheck codex
 	// P6). On an existing store.db the ACL was set at creation time by whoever
 	// first created it (interactive user or service account); re-running it
@@ -624,6 +630,15 @@ CREATE TABLE IF NOT EXISTS host_keys (
   pin_format TEXT NOT NULL DEFAULT 'blob',
   pin_source TEXT NOT NULL DEFAULT 'tofu',
   pin_device TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS entry_host_keys (
+  server_id TEXT PRIMARY KEY REFERENCES servers(id),
+  key_blob BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  pin_format TEXT NOT NULL DEFAULT 'blob',
+  pin_source TEXT NOT NULL DEFAULT 'tofu',
+  pin_device TEXT NOT NULL DEFAULT '',
+  handshake_addr TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS forward_bind_hosts (
   ip         TEXT PRIMARY KEY,

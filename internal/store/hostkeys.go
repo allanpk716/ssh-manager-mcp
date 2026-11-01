@@ -213,9 +213,11 @@ var ErrPinExists = errors.New("pin already present")
 // need beyond the compared value carried by the embedded Pin.
 type PinMeta struct {
 	Pin
-	Source    string
-	Device    string
-	CreatedAt int64
+	ServerID      string
+	Source        string
+	Device        string
+	HandshakeAddr string
+	CreatedAt     int64
 }
 
 // loadPinMeta is loadPin's provenance-carrying twin (same conventions: works

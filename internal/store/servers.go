@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -80,8 +81,26 @@ func (s *Store) DeleteServer(id string) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
-	_, err := s.db.Exec(`DELETE FROM servers WHERE id=?`, id)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	srv, err := getServerTx(tx, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	// 与 DeleteServerCascading 一致：锚随条目在同一事务删除并写审计。
+	if err := deleteEntryPinWithAudit(tx, srv); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM servers WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type scanner interface {
