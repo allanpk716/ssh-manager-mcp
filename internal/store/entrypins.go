@@ -28,7 +28,15 @@ func migrateEntryPins(db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := migrateEntryPinsTx(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
+// migrateEntryPinsTx 是迁移主体，运行在调用方的事务里：打开 vault 与导入
+// 快照两个入口共用同一套规则。
+func migrateEntryPinsTx(tx *sql.Tx) error {
 	rows, err := tx.Query(`SELECT host_port, key_blob, created_at, pin_format, pin_source, pin_device FROM host_keys ORDER BY host_port`)
 	if err != nil {
 		return err
@@ -84,7 +92,7 @@ func migrateEntryPins(db *sql.DB) error {
 	}); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 // entryIDsAtAddress 返回兜底地址（host:port）上的全部条目标识符，按标识符排序。

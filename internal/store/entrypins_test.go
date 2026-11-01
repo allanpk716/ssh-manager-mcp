@@ -21,6 +21,16 @@ func addEntryForTest(t *testing.T, s *Store, name, host string, port int) string
 	return id
 }
 
+// serverOf 取一个条目的完整模型。
+func serverOf(t *testing.T, s *Store, id string) *models.Server {
+	t.Helper()
+	srv, err := s.GetServer(id)
+	if err != nil || srv == nil {
+		t.Fatalf("取条目 %s 失败：%v %v", id, srv, err)
+	}
+	return srv
+}
+
 // TestEntryPins_SameAddressIndependent 同一兜底地址上的两个条目各自锚定、
 // 各自校验：一个条目的锚不影响另一个（规格 #88 用户故事 15）。
 func TestEntryPins_SameAddressIndependent(t *testing.T) {

@@ -3,7 +3,10 @@ package store
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+
+	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/models"
@@ -23,7 +26,10 @@ type Snapshot struct {
 	Grants             []SnapshotGrant      `json:"grants"`
 	Projects           []SnapshotProject    `json:"projects"`
 	HostKeys           []SnapshotHostKey    `json:"host_keys"`
-	Audit              []SnapshotAudit      `json:"audit"`
+	// EntryHostKeys（票 #58）是按服务器条目存放的锚；HostKeys 仍为兜底地址
+	// 推导出的旧格式行，旧客户端靠它继续校验。旧快照解码时本字段为空。
+	EntryHostKeys []SnapshotEntryHostKey `json:"entry_host_keys,omitempty"`
+	Audit         []SnapshotAudit        `json:"audit"`
 	// 命令策略段 (ticket #15):自定义规则与被停用
 	// 的默认规则编号。规则全局一套,两条导出路径都携带,不做 profile 裁剪。
 	// 旧快照(策略段尚不存在)解码为 nil 切片 → 导入零行 → 内置默认规则
@@ -124,6 +130,18 @@ type SnapshotHostKey struct {
 	PinDevice string `json:"pin_device,omitempty"`
 }
 
+// SnapshotEntryHostKey 是快照里按服务器条目存放的主机密钥锚：每个条目至多
+// 一行，携带条目标识符与学习锚时使用的握手地址。
+type SnapshotEntryHostKey struct {
+	ServerID      string `json:"server_id"`
+	KeyBlob       []byte `json:"key_blob"`
+	CreatedAt     int64  `json:"created_at"`
+	PinFormat     string `json:"pin_format,omitempty"`
+	PinSource     string `json:"pin_source,omitempty"`
+	PinDevice     string `json:"pin_device,omitempty"`
+	HandshakeAddr string `json:"handshake_addr,omitempty"`
+}
+
 type SnapshotAudit struct {
 	ID         int64  `json:"id"`
 	TS         int64  `json:"ts"`
@@ -153,6 +171,90 @@ func (s *Store) ListHostKeys() ([]SnapshotHostKey, error) {
 		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+// snapshotEntryPins 读取全部按条目存放的锚并转成快照行（按条目标识符排序）。
+func (s *Store) snapshotEntryPins() ([]SnapshotEntryHostKey, error) {
+	pins, err := s.ListEntryPins()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SnapshotEntryHostKey, 0, len(pins))
+	for _, p := range pins {
+		out = append(out, SnapshotEntryHostKey{
+			ServerID:      p.ServerID,
+			KeyBlob:       p.Blob,
+			CreatedAt:     p.CreatedAt,
+			PinFormat:     p.Format,
+			PinSource:     p.Source,
+			PinDevice:     p.Device,
+			HandshakeAddr: p.HandshakeAddr,
+		})
+	}
+	return out, nil
+}
+
+// legacyKeyIdentity 把一把锚折算成可比较的密钥身份：指纹格式的锚就是指纹串；
+// 密钥字节格式的锚取其 SHA256 指纹。用于判断同一兜底地址上的多把锚是否是
+// 同一把密钥。
+func legacyKeyIdentity(p SnapshotEntryHostKey) string {
+	if p.PinFormat == PinFormatFingerprint {
+		return string(p.KeyBlob)
+	}
+	if pub, err := ssh.ParsePublicKey(p.KeyBlob); err == nil {
+		return ssh.FingerprintSHA256(pub)
+	}
+	return fmt.Sprintf("raw:%x", p.KeyBlob)
+}
+
+// deriveLegacyHostKeys 为旧客户端推导旧格式锚行：同一兜底「Host:端口」上
+// 所有已锚定条目的密钥都相同时生成一行（行内容取条目标识符最小的锚），
+// 密钥不同时不生成这一行，避免旧客户端导入时主键冲突。
+func deriveLegacyHostKeys(servers []SnapshotServer, entryPins []SnapshotEntryHostKey) []SnapshotHostKey {
+	byServer := make(map[string]SnapshotEntryHostKey, len(entryPins))
+	for _, p := range entryPins {
+		byServer[p.ServerID] = p
+	}
+	groups := make(map[string][]SnapshotEntryHostKey)
+	for _, sv := range servers {
+		p, ok := byServer[sv.ID]
+		if !ok {
+			continue
+		}
+		hp := fmt.Sprintf("%s:%d", sv.Host, sv.Port)
+		groups[hp] = append(groups[hp], p)
+	}
+	hosts := make([]string, 0, len(groups))
+	for hp := range groups {
+		hosts = append(hosts, hp)
+	}
+	sort.Strings(hosts)
+	out := make([]SnapshotHostKey, 0, len(hosts))
+	for _, hp := range hosts {
+		group := groups[hp]
+		sort.Slice(group, func(i, j int) bool { return group[i].ServerID < group[j].ServerID })
+		first := group[0]
+		identity := legacyKeyIdentity(first)
+		same := true
+		for _, p := range group[1:] {
+			if legacyKeyIdentity(p) != identity {
+				same = false
+				break
+			}
+		}
+		if !same {
+			continue
+		}
+		out = append(out, SnapshotHostKey{
+			HostPort:  hp,
+			KeyBlob:   first.KeyBlob,
+			CreatedAt: first.CreatedAt,
+			PinFormat: first.PinFormat,
+			PinSource: first.PinSource,
+			PinDevice: first.PinDevice,
+		})
+	}
+	return out
 }
 
 // ExportSnapshot captures every table. Credentials are DECRYPTED under s.masterKey.
@@ -268,11 +370,12 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 		return nil, err
 	}
 
-	// host_keys
-	snap.HostKeys, err = s.ListHostKeys()
+	// 按条目的锚 + 由条目推导的旧格式兜底行（票 #58）
+	snap.EntryHostKeys, err = s.snapshotEntryPins()
 	if err != nil {
 		return nil, err
 	}
+	snap.HostKeys = deriveLegacyHostKeys(snap.Servers, snap.EntryHostKeys)
 
 	// policy (ticket #15): custom rules + disabled default-rule ids — global,
 	// no profile scoping (the rules are maintained once on the authoritative
@@ -457,33 +560,21 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 		return nil, err
 	}
 
-	// host_keys of the granted servers only
-	if len(hostPorts) > 0 {
-		args := make([]any, 0, len(hostPorts))
-		ph := make([]string, 0, len(hostPorts))
-		for hp := range hostPorts {
-			ph = append(ph, "?")
-			args = append(args, hp)
-		}
-		rh, err := s.db.Query(
-			`SELECT host_port, key_blob, created_at, pin_format, pin_source, pin_device FROM host_keys WHERE host_port IN (`+
-				strings.Join(ph, ",")+`) ORDER BY host_port`, args...)
-		if err != nil {
-			return nil, err
-		}
-		for rh.Next() {
-			var h SnapshotHostKey
-			if err := rh.Scan(&h.HostPort, &h.KeyBlob, &h.CreatedAt, &h.PinFormat, &h.PinSource, &h.PinDevice); err != nil {
-				rh.Close()
-				return nil, err
+	// 按条目的锚只带被授权条目的；旧格式行由裁剪后的条目推导（票 #58）。
+	snap.EntryHostKeys, err = s.snapshotEntryPins()
+	if err != nil {
+		return nil, err
+	}
+	granted := make([]SnapshotEntryHostKey, 0, len(snap.Servers))
+	for _, sv := range snap.Servers {
+		for _, p := range snap.EntryHostKeys {
+			if p.ServerID == sv.ID {
+				granted = append(granted, p)
 			}
-			snap.HostKeys = append(snap.HostKeys, h)
-		}
-		rh.Close()
-		if err := rh.Err(); err != nil {
-			return nil, err
 		}
 	}
+	snap.EntryHostKeys = granted
+	snap.HostKeys = deriveLegacyHostKeys(snap.Servers, snap.EntryHostKeys)
 
 	// policy (ticket #15): the SAME global policy sections the owner-side
 	// export carries — rules are one set for every machine, never cropped by
@@ -586,21 +677,40 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		}
 	}
 
-	// 6. host_keys — empty pin_format/pin_source normalize to blob/tofu: the
-	// ADD COLUMN DEFAULT back-fills only pre-existing rows and does NOT
-	// constrain explicit inserts, so a v0.14 snapshot's Go zero values would
-	// otherwise persist as empty strings (Plan 48 §5, T10).
-	for _, h := range snap.HostKeys {
-		format, source := h.PinFormat, h.PinSource
-		if format == "" {
-			format = PinFormatBlob
+	// 6. 锚（票 #58）。带按条目锚的新快照：直接按条目落库；随快照携带的
+	// host_keys 是导出时推导的旧格式兼容行，不再作为事实源导入。只有旧格式
+	// 锚的旧快照 / 旧备份：先落旧表，再执行与升级相同的迁移规则。
+	if len(snap.EntryHostKeys) > 0 {
+		for _, p := range snap.EntryHostKeys {
+			format, source := p.PinFormat, p.PinSource
+			if format == "" {
+				format = PinFormatBlob
+			}
+			if source == "" {
+				source = PinSourceTofu
+			}
+			if _, err := tx.Exec(
+				`INSERT INTO entry_host_keys(server_id,key_blob,created_at,pin_format,pin_source,pin_device,handshake_addr) VALUES(?,?,?,?,?,?,?)`,
+				p.ServerID, p.KeyBlob, p.CreatedAt, format, source, p.PinDevice, p.HandshakeAddr); err != nil {
+				return fmt.Errorf("insert entry host_key %s: %w", p.ServerID, err)
+			}
 		}
-		if source == "" {
-			source = PinSourceTofu
+	} else {
+		for _, h := range snap.HostKeys {
+			format, source := h.PinFormat, h.PinSource
+			if format == "" {
+				format = PinFormatBlob
+			}
+			if source == "" {
+				source = PinSourceTofu
+			}
+			if _, err := tx.Exec(`INSERT INTO host_keys(host_port,key_blob,created_at,pin_format,pin_source,pin_device) VALUES(?,?,?,?,?,?)`,
+				h.HostPort, h.KeyBlob, h.CreatedAt, format, source, h.PinDevice); err != nil {
+				return fmt.Errorf("insert host_key %s: %w", h.HostPort, err)
+			}
 		}
-		if _, err := tx.Exec(`INSERT INTO host_keys(host_port,key_blob,created_at,pin_format,pin_source,pin_device) VALUES(?,?,?,?,?,?)`,
-			h.HostPort, h.KeyBlob, h.CreatedAt, format, source, h.PinDevice); err != nil {
-			return fmt.Errorf("insert host_key %s: %w", h.HostPort, err)
+		if err := migrateEntryPinsTx(tx); err != nil {
+			return fmt.Errorf("migrate legacy host keys: %w", err)
 		}
 	}
 
