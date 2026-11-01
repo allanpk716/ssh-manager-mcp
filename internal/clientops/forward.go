@@ -100,7 +100,7 @@ func (e *forwardError) Unwrap() error { return e.err }
 
 // pinForwardRequest is the §1.1 request body (client-side copy; the serve-side
 // definition lives in mcpserver/serve.go — the JSON field names are the
-// contract). 锚定转发协议（规格 #88）携带条目标识符、握手地址和主机密钥；
+// contract). 锚定转发协议（票 #58）携带条目标识符、握手地址和主机密钥；
 // key_blob is base64(std) of the marshaled SSH wire-format key, the same bytes
 // remote.Marshal() produced in the handshake callback. 条目标识符缺失即为旧
 // 格式请求，权威端会拒绝并提示升级客户端。

@@ -61,8 +61,7 @@ func RunStdio(token string, kp store.KeyProvider) error {
 // tmpPath (cacheStoreHolder registers both). Shared by initial startup and
 // every hot rebuild, so the two paths CANNOT drift. device ("" = unknown) is
 // the instance's device-code name stamped onto host_keys rows written via
-// ApplyForwardedEntryPin(Plan 48 §2.3)按代保存,因为每个水合代都要
-// hydrated store starts from a fresh temp db.
+// ApplyForwardedEntryPin（Plan 48 §2.3）按缓存代保存：每次都从快照重建一个临时数据库。
 func hydrateCacheStore(token string, snap *store.Snapshot, auditFile *os.File, device string) (*store.Store, *models.Project, string, error) {
 	mk, err := store.GenerateMasterKey() // throwaway key: creds re-sealed per hydration
 	if err != nil {

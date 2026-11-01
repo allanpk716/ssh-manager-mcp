@@ -19,11 +19,11 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// servers pin-hostkey（规格 #88）：owner 的带外锚通道。对象是服务器条目：
+// servers pin-hostkey（票 #58）：owner 的带外锚通道。对象是服务器条目：
 // 一个条目一把锚，条目的全部候选地址共用。五种形态：
 //
 //	pin-hostkey <name>                       显示该条目的锚
-//	pin-hostkey --list                       按条目列出全部锚与学习地址
+//	pin-hostkey --list                       按条目列出全部锚与握手地址
 //	pin-hostkey <name> --fingerprint SHA256:… [--force]
 //	pin-hostkey <name> --from-keyscan <file|-> [--force]
 //	pin-hostkey <name> --clear               删除该条目的锚（幂等、写审计）
@@ -48,8 +48,8 @@ the entry's candidate SSH addresses. Changing the entry's host or port keeps
 the anchor; deleting the entry removes it.
 
 Forms:
-  pin-hostkey <name>                     show fingerprint/format/source/device/learned/created
-  pin-hostkey --list                     list every entry anchor with its learned address
+  pin-hostkey <name>                     show fingerprint/format/source/device/handshake/created
+  pin-hostkey --list                     list every entry anchor with its handshake address
   pin-hostkey <name> --fingerprint SHA256:<base64> [--force]
   pin-hostkey <name> --from-keyscan <file|-> [--force]
   pin-hostkey <name> --clear             remove the entry's anchor (idempotent, audited)
@@ -61,7 +61,7 @@ Forms:
 			fingerprintSet := fl.Changed("fingerprint")
 			keyscanSet := fl.Changed("from-keyscan")
 
-			// 旗标纪律在打开 vault 之前判定：错误调用绝不触库、绝不写审计。
+			// 参数组合检查在打开 vault 之前判定：错误调用绝不触库、绝不写审计。
 			if clear {
 				if force || fingerprintSet || keyscanSet {
 					return fmt.Errorf("--clear is mutually exclusive with --force/--fingerprint/--from-keyscan")
@@ -115,7 +115,7 @@ Forms:
 				if err != nil {
 					return err
 				}
-				// 指纹锚没有握手地址可学，学习地址记空（展示为 "-"）。
+				// 指纹锚没有握手地址可学，握手地址记空（展示为 "-"）。
 				return runPinManual(cmd, s, srv, "", blob, store.PinFormatFingerprint, fp, "fingerprint", "", force)
 			case keyscanSet:
 				srv, err := pinResolve(s, args[0])
@@ -140,7 +140,7 @@ Forms:
 			}
 		},
 	}
-	c.Flags().BoolVar(&list, "list", false, "list every entry anchor with its learned address")
+	c.Flags().BoolVar(&list, "list", false, "list every entry anchor with its handshake address")
 	c.Flags().StringVar(&fingerprint, "fingerprint", "", "pin by OpenSSH fingerprint SHA256:<base64, unpadded> (must decode to exactly 32 bytes)")
 	c.Flags().StringVar(&keyscan, "from-keyscan", "", "pin from a known_hosts / ssh-keyscan file (\"-\" = stdin)")
 	c.Flags().BoolVar(&clear, "clear", false, "remove the entry's anchor (idempotent; audited)")
@@ -160,11 +160,6 @@ func pinResolve(s *store.Store, name string) (*models.Server, error) {
 	return srv, nil
 }
 
-// pinFingerprint 渲染一把锚的主机密钥指纹（展示与审计共用）。
-func pinFingerprint(blob []byte, format string) string {
-	return store.PinFingerprint(blob, format)
-}
-
 // dash renders an empty provenance field as "-".
 func dash(s string) string {
 	if s == "" {
@@ -178,23 +173,9 @@ func pinTime(unix int64) string {
 	return time.Unix(unix, 0).Local().Format("2006-01-02 15:04:05-07:00")
 }
 
-// entryPinMeta 取条目的锚与来源信息；条目无锚时为 nil。
-func entryPinMeta(s *store.Store, srv *models.Server) (*store.PinMeta, error) {
-	pins, err := s.ListEntryPins()
-	if err != nil {
-		return nil, err
-	}
-	for i := range pins {
-		if pins[i].ServerID == srv.ID {
-			return &pins[i], nil
-		}
-	}
-	return nil, nil
-}
-
-// runPinShow 实现显示形态：指纹、格式、来源、转发设备、学习地址与时间。
+// runPinShow 实现显示形态：指纹、格式、来源、转发设备、握手地址与时间。
 func runPinShow(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
-	m, err := entryPinMeta(s, srv)
+	m, err := s.GetEntryPinMeta(srv.ID)
 	if err != nil {
 		return err
 	}
@@ -202,8 +183,8 @@ func runPinShow(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "no pin for %s (unanchored — first trust or pin forwarding will create it)\n", srv.Name)
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "entry=%s host=%s fp=%s (format=%s, source=%s, device=%s, learned=%s, created=%s)\n",
-		srv.Name, store.EntryFallbackAddr(srv), pinFingerprint(m.Blob, m.Format),
+	fmt.Fprintf(cmd.OutOrStdout(), "entry=%s host=%s fp=%s (format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
+		srv.Name, store.EntryFallbackAddr(srv), store.PinFingerprint(m.Blob, m.Format),
 		m.Format, m.Source, dash(m.Device), dash(m.HandshakeAddr), pinTime(m.CreatedAt))
 	return nil
 }
@@ -233,8 +214,8 @@ func runPinList(cmd *cobra.Command, s *store.Store) error {
 		if srv != nil {
 			name, hostPort = srv.Name, store.EntryFallbackAddr(srv)
 		}
-		fmt.Fprintf(out, "entry=%s host=%s fp=%s (format=%s, source=%s, device=%s, learned=%s, created=%s)\n",
-			name, hostPort, pinFingerprint(p.Blob, p.Format), p.Format, p.Source,
+		fmt.Fprintf(out, "entry=%s host=%s fp=%s (format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
+			name, hostPort, store.PinFingerprint(p.Blob, p.Format), p.Format, p.Source,
 			dash(p.Device), dash(p.HandshakeAddr), pinTime(p.CreatedAt))
 	}
 	return nil
@@ -242,12 +223,12 @@ func runPinList(cmd *cobra.Command, s *store.Store) error {
 
 // runPinManual 落 --fingerprint / --from-keyscan 锚：单事务原语，审计行在
 // 这里构造、在事务里写入，was= 指纹是事务内读到的旧锚。
-func runPinManual(cmd *cobra.Command, s *store.Store, srv *models.Server, learnedAddr string, blob []byte, format, fp, via, note string, force bool) error {
+func runPinManual(cmd *cobra.Command, s *store.Store, srv *models.Server, handshakeAddr string, blob []byte, format, fp, via, note string, force bool) error {
 	hostPort := store.EntryFallbackAddr(srv)
 	auditFor := func(old *store.PinMeta) store.AuditRow {
 		command := fmt.Sprintf("entry=%s host=%s fp=%s via=%s forced=%t", srv.Name, hostPort, fp, via, force)
 		if force && old != nil {
-			command += " was=" + pinFingerprint(old.Blob, old.Format)
+			command += " was=" + store.PinFingerprint(old.Blob, old.Format)
 		}
 		return store.AuditRow{
 			TS:       time.Now(),
@@ -257,11 +238,11 @@ func runPinManual(cmd *cobra.Command, s *store.Store, srv *models.Server, learne
 			Status:   "ok",
 		}
 	}
-	old, err := s.UpsertManualEntryPin(srv, learnedAddr, blob, format, force, auditFor)
+	old, err := s.UpsertManualEntryPin(srv, handshakeAddr, blob, format, force, auditFor)
 	if err != nil {
 		if errors.Is(err, store.ErrPinExists) {
 			return fmt.Errorf("refusing to replace the existing pin for %s: fp=%s (source=%s) — pass --force to replace it",
-				srv.Name, pinFingerprint(old.Blob, old.Format), old.Source)
+				srv.Name, store.PinFingerprint(old.Blob, old.Format), old.Source)
 		}
 		return err
 	}
@@ -270,23 +251,23 @@ func runPinManual(cmd *cobra.Command, s *store.Store, srv *models.Server, learne
 		fmt.Fprint(out, note)
 	}
 	if old != nil {
-		fmt.Fprintf(out, "replacing existing pin fp=%s (source=%s)\n", pinFingerprint(old.Blob, old.Format), old.Source)
+		fmt.Fprintf(out, "replacing existing pin fp=%s (source=%s)\n", store.PinFingerprint(old.Blob, old.Format), old.Source)
 	}
-	fmt.Fprintf(out, "pinned %s host=%s fp=%s (format=%s, source=manual, learned=%s, forced=%t)\n",
-		srv.Name, hostPort, fp, format, dash(learnedAddr), force)
+	fmt.Fprintf(out, "pinned %s host=%s fp=%s (format=%s, source=manual, handshake=%s, forced=%t)\n",
+		srv.Name, hostPort, fp, format, dash(handshakeAddr), force)
 	return nil
 }
 
 // runPinClear 按条目删除锚：单事务原语，输出与审计带条目、指纹、来源与
-// 学习地址；无锚时幂等成功且不写审计。
+// 握手地址；无锚时幂等成功且不写审计。
 func runPinClear(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 	auditFor := func(old store.PinMeta) store.AuditRow {
 		return store.AuditRow{
 			TS:       time.Now(),
 			ServerID: srv.ID,
 			Action:   "pin-clear",
-			Command: fmt.Sprintf("entry=%s host=%s fp=%s source=%s learned=%s",
-				srv.Name, store.EntryFallbackAddr(srv), pinFingerprint(old.Blob, old.Format), old.Source, dash(old.HandshakeAddr)),
+			Command: fmt.Sprintf("entry=%s host=%s fp=%s source=%s handshake=%s",
+				srv.Name, store.EntryFallbackAddr(srv), store.PinFingerprint(old.Blob, old.Format), old.Source, dash(old.HandshakeAddr)),
 			Status: "ok",
 		}
 	}
@@ -298,8 +279,8 @@ func runPinClear(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "no pin for %s (nothing cleared)\n", srv.Name)
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "unpinned %s host=%s (was fp=%s, source=%s, learned=%s)\n",
-		srv.Name, store.EntryFallbackAddr(srv), pinFingerprint(old.Blob, old.Format), old.Source, dash(old.HandshakeAddr))
+	fmt.Fprintf(cmd.OutOrStdout(), "unpinned %s host=%s (was fp=%s, source=%s, handshake=%s)\n",
+		srv.Name, store.EntryFallbackAddr(srv), store.PinFingerprint(old.Blob, old.Format), old.Source, dash(old.HandshakeAddr))
 	return nil
 }
 

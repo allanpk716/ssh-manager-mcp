@@ -16,7 +16,7 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// `servers pin-hostkey`（规格 #88）：命令对象是服务器条目，显示、列出学习
+// `servers pin-hostkey`（票 #58）：命令对象是服务器条目，显示、列出学习
 // 地址、手工锚定与 --force、按条目清除；旧的按主机端口清除入口不再存在。
 
 // genHostKey generates a fresh ed25519 host key and returns its parsed form
@@ -141,12 +141,12 @@ func TestPinHostkey_Display(t *testing.T) {
 	if !strings.Contains(out, "entry=alpha host=192.0.2.50:22 fp="+fpA) {
 		t.Fatalf("display missing entry/host/fp:\n%s", out)
 	}
-	if !strings.Contains(out, "(format=blob, source=tofu, device=-, learned=192.0.2.50:22, created=") {
+	if !strings.Contains(out, "(format=blob, source=tofu, device=-, handshake=192.0.2.50:22, created=") {
 		t.Fatalf("display missing format/source/device/learned/created:\n%s", out)
 	}
 
 	out = runCli(t, "servers", "pin-hostkey", "gamma")
-	if !strings.Contains(out, "(format=blob, source=forward, device=dev-pad, learned=192.0.2.60:2222, created=") {
+	if !strings.Contains(out, "(format=blob, source=forward, device=dev-pad, handshake=192.0.2.60:2222, created=") {
 		t.Fatalf("forward pin display missing provenance:\n%s", out)
 	}
 
@@ -161,7 +161,7 @@ func TestPinHostkey_Display(t *testing.T) {
 	}
 }
 
-// TestPinHostkey_List：--list 按条目列出全部锚并显示学习地址；同地址的两个
+// TestPinHostkey_List：--list 按条目列出全部锚并显示握手地址；同地址的两个
 // 条目各占一行；不再有「孤立」标记。
 func TestPinHostkey_List(t *testing.T) {
 	_, mk := withCliStoreEnv(t)
@@ -180,7 +180,7 @@ func TestPinHostkey_List(t *testing.T) {
 	for _, l := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 		switch {
 		case strings.HasPrefix(l, "entry=alpha host=192.0.2.50:22 fp="+fpA):
-			alphaLine = strings.Contains(l, "learned=192.0.2.50:22")
+			alphaLine = strings.Contains(l, "handshake=192.0.2.50:22")
 		case strings.HasPrefix(l, "entry=beta host=192.0.2.50:22 fp="):
 			betaLine = !strings.Contains(l, fpA)
 		}
@@ -212,7 +212,7 @@ func TestPinHostkey_FingerprintStrict(t *testing.T) {
 	}
 
 	out := runCli(t, "servers", "pin-hostkey", "alpha", "--fingerprint", fp)
-	want := "pinned alpha host=192.0.2.50:22 fp=" + fp + " (format=fingerprint, source=manual, learned=-, forced=false)"
+	want := "pinned alpha host=192.0.2.50:22 fp=" + fp + " (format=fingerprint, source=manual, handshake=-, forced=false)"
 	if !strings.Contains(out, want) {
 		t.Fatalf("success line mismatch:\nwant: %s\ngot:\n%s", want, out)
 	}
@@ -261,7 +261,7 @@ func TestPinHostkey_ExistingRefusalAndForce(t *testing.T) {
 	if !strings.Contains(out, "replacing existing pin fp="+fpA+" (source=tofu)") {
 		t.Fatalf("force output must show the old pin first:\n%s", out)
 	}
-	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fp="+fpB+" (format=fingerprint, source=manual, learned=-, forced=true)") {
+	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fp="+fpB+" (format=fingerprint, source=manual, handshake=-, forced=true)") {
 		t.Fatalf("force success line wrong:\n%s", out)
 	}
 	rows := pinAuditRows(t, mk, "pin-manual")
@@ -312,7 +312,7 @@ func TestPinHostkey_Clear(t *testing.T) {
 	tofuPin(t, mk, "gamma", keyG)
 
 	out := runCli(t, "servers", "pin-hostkey", "alpha", "--clear")
-	want := "unpinned alpha host=192.0.2.50:22 (was fp=" + fpA + ", source=tofu, learned=192.0.2.50:22)"
+	want := "unpinned alpha host=192.0.2.50:22 (was fp=" + fpA + ", source=tofu, handshake=192.0.2.50:22)"
 	if !strings.Contains(out, want) {
 		t.Fatalf("clear output mismatch:\nwant: %s\ngot:\n%s", want, out)
 	}
@@ -326,7 +326,7 @@ func TestPinHostkey_Clear(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("want exactly 1 pin-clear row, got %d", len(rows))
 	}
-	wantCmd := "entry=alpha host=192.0.2.50:22 fp=" + fpA + " source=tofu learned=192.0.2.50:22"
+	wantCmd := "entry=alpha host=192.0.2.50:22 fp=" + fpA + " source=tofu handshake=192.0.2.50:22"
 	if rows[0].Command != wantCmd || rows[0].ServerID != ids["alpha"] || rows[0].ProjectID != "" || rows[0].Status != "ok" {
 		t.Fatalf("pin-clear audit row mismatch: want cmd %q, got %q (%+v)", wantCmd, rows[0].Command, rows[0])
 	}
@@ -372,7 +372,7 @@ func TestPinHostkey_Keyscan(t *testing.T) {
 	lineBare := "192.0.2.60 " + keyG.Type() + " " + base64.StdEncoding.EncodeToString(keyG.Marshal())
 
 	out := runCli(t, "servers", "pin-hostkey", "alpha", "--from-keyscan", keyscanFile(t, lineA))
-	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fp="+fpA+" (format=blob, source=manual, learned=192.0.2.50:22, forced=false)") {
+	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fp="+fpA+" (format=blob, source=manual, handshake=192.0.2.50:22, forced=false)") {
 		t.Fatalf("keyscan success line wrong:\n%s", out)
 	}
 	if pin := entryPinAt(t, mk, "alpha"); pin == nil || pin.Format != store.PinFormatBlob {

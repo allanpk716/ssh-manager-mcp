@@ -342,7 +342,7 @@ func (fx *cacheFwdFixture) assertServeAnchor(t *testing.T) {
 }
 
 // assertServeAuditPinForward: 权威端审计行带条目、握手地址、指纹、转发设备
-// 与来源（规格 #88 用户故事 20、27）。
+// 与来源（票 #58 用户故事 20、27）。
 func (fx *cacheFwdFixture) assertServeAuditPinForward(t *testing.T) {
 	t.Helper()
 	rows, err := fx.serve.AuditRows(50)
@@ -424,7 +424,7 @@ func TestCacheForwardE2E_FirstConnectOnceSuccess(t *testing.T) {
 
 // TestCacheForwardE2E_OldVaultUpgradedBeforeForward：权威端用旧格式 vault
 // 打开并完成升级——没有任何条目指向的旧锚被丢弃，迁移审计列出地址与指纹；
-// 目标条目仍然无锚，快照正常下发（规格 #88 测试决策的主接缝场景前半段）。
+// 目标条目仍然无锚，快照正常下发（票 #58 测试决策的主接缝场景前半段）。
 func TestCacheForwardE2E_OldVaultUpgradedBeforeForward(t *testing.T) {
 	fx := newCacheFwdFixture(t)
 
