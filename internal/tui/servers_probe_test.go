@@ -49,12 +49,13 @@ func newProbeApp(t *testing.T, family, annotateShell string) App {
 
 	st := newStore(t)
 	cid, _ := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
-	_, _ = st.AddServer(&models.Server{
+	boxID, _ := st.AddServer(&models.Server{
 		Name: "box", Host: addr[:strings.IndexByte(addr, ':')], Port: portOf(addr), User: "u",
 		AuthMethod: models.AuthPassword, CredentialID: cid,
 		ShellType: models.ShellType(annotateShell),
 	})
-	_ = st.SaveHostKey(addr[:strings.IndexByte(addr, ':')], portOf(addr), hostKey.Marshal())
+	boxRow, _ := st.GetServer(boxID)
+	_ = st.SaveEntryPin(boxRow, hostKey.Marshal())
 
 	a, err := NewBrokerApp(st)
 	if err != nil {

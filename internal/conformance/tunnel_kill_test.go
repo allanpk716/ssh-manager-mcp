@@ -61,7 +61,11 @@ func TestTunnelKillRealSSH(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add server: %v", err)
 	}
-	_ = st.SaveHostKey(host, port, hostKey.Marshal()) // TOFU pre-trust the container's fresh key
+	if row, err := st.GetServer(srvID); err != nil {
+		t.Fatal(err)
+	} else if err := st.SaveEntryPin(row, hostKey.Marshal()); err != nil { // TOFU pre-trust the container's fresh key
+		t.Fatal(err)
+	}
 	pid, err := st.AddProfile("p")
 	if err != nil {
 		t.Fatal(err)

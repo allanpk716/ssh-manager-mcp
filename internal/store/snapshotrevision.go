@@ -17,9 +17,17 @@ var snapshotRevisionTables = []string{
 	"profiles",
 	"profile_servers",
 	"projects",
-	"host_keys",
+	"entry_host_keys",
 	"policy_rules",
 	"policy_disabled_defaults",
+}
+
+// snapshotRevisionRetiredTriggers 列出旧版本为不再导出的表建立的修订号
+// 触发器。打开旧库时删除它们，避免遗留触发器把无关写入误判成快照变化。
+var snapshotRevisionRetiredTriggers = []string{
+	"snapshot_revision_host_keys_insert",
+	"snapshot_revision_host_keys_update",
+	"snapshot_revision_host_keys_delete",
 }
 
 // snapshotRevisionSchema 生成快照修订号的表结构、初始行和触发器。触发器

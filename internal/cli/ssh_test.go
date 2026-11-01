@@ -79,11 +79,12 @@ func TestOwnerSSHPropagatesRemoteExitCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	cid, _ := st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
-	_, _ = st.AddServer(&models.Server{
+	tid, _ := st.AddServer(&models.Server{
 		Name: "t", Host: host, Port: portOfAddr(addr), User: "u",
 		AuthMethod: models.AuthPassword, CredentialID: cid,
 	})
-	_ = st.SaveHostKey(host, portOfAddr(addr), hostKey.Marshal())
+	tsrv, _ := st.GetServer(tid)
+	_ = st.SaveEntryPin(tsrv, hostKey.Marshal())
 	st.Close()
 
 	root := NewRootCmd()

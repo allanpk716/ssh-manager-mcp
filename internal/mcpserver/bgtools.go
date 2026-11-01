@@ -106,7 +106,7 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
 	if herr != nil {
 		status = "error"
 		err = herr

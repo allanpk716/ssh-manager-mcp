@@ -171,7 +171,7 @@ func TestExecBackgroundHostKeyMismatch(t *testing.T) {
 		User: "u", AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st),
 	}
 	srvID, _ := st.AddServer(srv)
-	_ = st.SaveHostKey(srv.Host, srv.Port, []byte("not-the-real-host-key"))
+	_ = st.SaveEntryPin(serverByAddr(st, srv.Host, srv.Port), []byte("not-the-real-host-key"))
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{srvID})
 	m := newTestTM(t, 4)

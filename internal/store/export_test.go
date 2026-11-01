@@ -25,6 +25,7 @@ func TestExportSnapshot_CapturesAllTables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	srv.ID = srvID
 	profID, err := s.AddProfile("team-a")
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +37,7 @@ func TestExportSnapshot_CapturesAllTables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveHostKey("192.0.2.10", 22, []byte("fake-host-key-blob")); err != nil {
+	if err := s.SaveEntryPin(srv, []byte("fake-host-key-blob")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.WriteAudit(AuditRow{Action: "exec", ProjectID: projID, ServerID: srvID, Status: "ok"}); err != nil {
@@ -66,8 +67,11 @@ func TestExportSnapshot_CapturesAllTables(t *testing.T) {
 	if len(snap.Projects) != 1 || len(snap.Projects[0].TokenHash) == 0 || len(snap.Projects[0].TokenSalt) == 0 {
 		t.Errorf("projects hash/salt not captured: %+v", snap.Projects)
 	}
+	if len(snap.EntryHostKeys) != 1 || snap.EntryHostKeys[0].ServerID != srvID {
+		t.Errorf("entry host_keys not captured: %+v", snap.EntryHostKeys)
+	}
 	if len(snap.HostKeys) != 1 || snap.HostKeys[0].HostPort != "192.0.2.10:22" {
-		t.Errorf("host_keys not captured: %+v", snap.HostKeys)
+		t.Errorf("derived legacy host_keys not captured: %+v", snap.HostKeys)
 	}
 	if len(snap.Audit) != 1 || snap.Audit[0].Action != "exec" {
 		t.Errorf("audit not captured: %+v", snap.Audit)
@@ -92,7 +96,11 @@ func TestImportSnapshot_RoundTrip_CrossMasterKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.SaveHostKey("192.0.2.10", 22, []byte("hk-blob"))
+	if srv, err := a.GetServer(srvID); err != nil {
+		t.Fatal(err)
+	} else if err := a.SaveEntryPin(srv, []byte("hk-blob")); err != nil {
+		t.Fatal(err)
+	}
 	a.WriteAudit(AuditRow{Action: "exec", ProjectID: projID, ServerID: srvID, Status: "ok"})
 
 	snap, err := a.ExportSnapshot()
@@ -122,7 +130,7 @@ func TestImportSnapshot_RoundTrip_CrossMasterKey(t *testing.T) {
 		t.Fatalf("grants not restored on B: %v", ids)
 	}
 	// host keys
-	hk, _ := b.GetHostKey("192.0.2.10", 22)
+	hk, _ := b.GetEntryPin(serverOf(t, b, srvID))
 	if hk == nil || !bytes.Equal(hk.Blob, []byte("hk-blob")) {
 		t.Fatalf("host key not restored: %+v", hk)
 	}
@@ -226,7 +234,11 @@ func TestExportSnapshot_Deterministic(t *testing.T) {
 	s.GrantServers(prof2, []string{srv1})
 	s.AddProject("p2", prof2)
 	s.AddProject("p1", prof1)
-	s.SaveHostKey("192.0.2.2", 22, []byte("hk"))
+	if srv, err := s.GetServer(srv2); err != nil {
+		t.Fatal(err)
+	} else if err := s.SaveEntryPin(srv, []byte("hk")); err != nil {
+		t.Fatal(err)
+	}
 	s.WriteAudit(AuditRow{Action: "exec", ProjectID: "p1", ServerID: srv1, Status: "ok"})
 	s.WriteAudit(AuditRow{Action: "exec", ProjectID: "p2", ServerID: srv2, Status: "ok"})
 
@@ -376,6 +388,7 @@ func seedScopedVault(t *testing.T, s *Store) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	srvA.ID = aID
 	ncID, err := s.AddServer(srvNoCred)
 	if err != nil {
 		t.Fatal(err)
@@ -384,6 +397,7 @@ func seedScopedVault(t *testing.T, s *Store) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	srvB.ID = bID
 	profA, err := s.AddProfile("profileA")
 	if err != nil {
 		t.Fatal(err)
@@ -406,10 +420,10 @@ func seedScopedVault(t *testing.T, s *Store) string {
 	} else {
 		_ = pb
 	}
-	if err := s.SaveHostKey("10.0.0.1", 22, []byte("hkA")); err != nil {
+	if err := s.SaveEntryPin(srvA, []byte("hkA")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveHostKey("10.0.0.2", 22, []byte("hkB")); err != nil {
+	if err := s.SaveEntryPin(srvB, []byte("hkB")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.WriteAudit(AuditRow{Action: "exec", ServerID: bID, Status: "ok"}); err != nil {
@@ -557,49 +571,47 @@ func TestExportSnapshotForProfile_StillHydrates(t *testing.T) {
 // --- Plan 48: 锚元数据随快照全链携带(spec §5、§8 T10) ------------------------
 
 // pinMetaRow is the raw three-column readback of one host_keys row.
-func pinMetaRow(t *testing.T, s *Store, hostPort string) (format, source, device string, blob []byte) {
-	t.Helper()
-	err := s.db.QueryRow(`SELECT pin_format, pin_source, pin_device, key_blob FROM host_keys WHERE host_port=?`, hostPort).
-		Scan(&format, &source, &device, &blob)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return format, source, device, blob
-}
-
-// TestSnapshotHostKeyPinMetadataRoundTrip: all three pin flavors (tofu blob,
+// TestSnapshotEntryPinMetadataRoundTrip: all three pin flavors (tofu blob,
 // forwarded blob with device, fingerprint anchor) survive export → import
-// byte- and column-exact through BOTH export paths' shared ListHostKeys read.
-func TestSnapshotHostKeyPinMetadataRoundTrip(t *testing.T) {
+// byte- and column-exact; 指纹锚与转发设备列随按条目的锚一起往返。
+func TestSnapshotEntryPinMetadataRoundTrip(t *testing.T) {
 	a := newTestStore(t)
 	keyA, fpA := pinHostKey(t)
-	if err := a.SaveHostKey("10.0.0.1", 22, keyA); err != nil {
+	tofuID := addEntryForTest(t, a, "tofu", "10.0.0.1", 22)
+	fwdID := addEntryForTest(t, a, "fwd", "10.0.0.2", 22)
+	fpID := addEntryForTest(t, a, "fp", "10.0.0.3", 22)
+	tofuSrv, fwdSrv, fpSrv := serverOf(t, a, tofuID), serverOf(t, a, fwdID), serverOf(t, a, fpID)
+	if err := a.SaveEntryPin(tofuSrv, keyA); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.InsertForwardedPin("10.0.0.2", 22, keyA, "dev-laptop", AuditRow{Action: "pin-forward", Status: "ok"}); err != nil {
+	if _, err := a.InsertForwardedEntryPin(fwdSrv, "10.0.0.2:22", keyA, "dev-laptop", AuditRow{Action: "pin-forward", Status: "ok"}); err != nil {
 		t.Fatal(err)
 	}
-	seedFingerprintPin(t, a, "10.0.0.3", 22, fpA)
+	if _, err := a.UpsertManualEntryPin(fpSrv, "", []byte(fpA), PinFormatFingerprint, false, func(old *PinMeta) AuditRow {
+		return AuditRow{Action: "pin-manual"}
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	snap, err := a.ExportSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string][3]string{
-		"10.0.0.1:22": {"blob", "tofu", ""},
-		"10.0.0.2:22": {"blob", "forward", "dev-laptop"},
-		"10.0.0.3:22": {"fingerprint", "tofu", ""},
+		tofuID: {"blob", "tofu", ""},
+		fwdID:  {"blob", "forward", "dev-laptop"},
+		fpID:   {"fingerprint", "manual", ""},
 	}
-	if len(snap.HostKeys) != len(want) {
-		t.Fatalf("snapshot must carry all %d anchors, got %d", len(want), len(snap.HostKeys))
+	if len(snap.EntryHostKeys) != len(want) {
+		t.Fatalf("snapshot must carry all %d anchors, got %d", len(want), len(snap.EntryHostKeys))
 	}
-	for _, h := range snap.HostKeys {
-		w, ok := want[h.HostPort]
+	for _, p := range snap.EntryHostKeys {
+		w, ok := want[p.ServerID]
 		if !ok {
-			t.Fatalf("unexpected anchor in snapshot: %s", h.HostPort)
+			t.Fatalf("unexpected anchor in snapshot: %s", p.ServerID)
 		}
-		if h.PinFormat != w[0] || h.PinSource != w[1] || h.PinDevice != w[2] {
-			t.Fatalf("%s pin metadata = %q/%q/%q, want %q/%q/%q", h.HostPort, h.PinFormat, h.PinSource, h.PinDevice, w[0], w[1], w[2])
+		if p.PinFormat != w[0] || p.PinSource != w[1] || p.PinDevice != w[2] {
+			t.Fatalf("%s pin metadata = %q/%q/%q, want %q/%q/%q", p.ServerID, p.PinFormat, p.PinSource, p.PinDevice, w[0], w[1], w[2])
 		}
 	}
 
@@ -612,23 +624,20 @@ func TestSnapshotHostKeyPinMetadataRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(scoped.HostKeys) != 0 {
-		t.Fatalf("profile with no granted servers must carry no anchors, got %+v", scoped.HostKeys)
+	if len(scoped.EntryHostKeys) != 0 {
+		t.Fatalf("profile with no granted servers must carry no anchors, got %+v", scoped.EntryHostKeys)
 	}
 
 	b := newTestStore(t)
 	if err := b.ImportSnapshot(snap); err != nil {
 		t.Fatal(err)
 	}
-	for hostPort, w := range want {
-		format, source, device, blob := pinMetaRow(t, b, hostPort)
-		if format != w[0] || source != w[1] || device != w[2] {
-			t.Fatalf("imported %s = %q/%q/%q, want %q/%q/%q", hostPort, format, source, device, w[0], w[1], w[2])
-		}
-		_ = blob
-	}
-	if got := mustLoadPin(t, b, "10.0.0.3", 22); got == nil || got.Format != "fingerprint" || string(got.Blob) != fpA {
+	got := pinEntryForTest(t, b, fpID)
+	if got.Format != "fingerprint" || string(got.Blob) != fpA || got.Source != PinSourceManual {
 		t.Fatalf("fingerprint anchor corrupted across roundtrip: %+v", got)
+	}
+	if fwd := pinEntryForTest(t, b, fwdID); fwd.Source != PinSourceForward || fwd.Device != "dev-laptop" {
+		t.Fatalf("forwarded anchor metadata corrupted across roundtrip: %+v", fwd)
 	}
 }
 
@@ -641,6 +650,7 @@ func TestImportSnapshotV14ShapeNormalizesPinColumns(t *testing.T) {
 	keyA, _ := pinHostKey(t)
 	snap := &Snapshot{
 		Version:  1,
+		Servers:  []SnapshotServer{{ID: "srv-14", Name: "old", Host: "10.0.0.9", Port: 22, User: "u", AuthMethod: "password", CreatedAt: 1700000000, UpdatedAt: 1700000000}},
 		HostKeys: []SnapshotHostKey{{HostPort: "10.0.0.9:22", KeyBlob: keyA, CreatedAt: 1700000000}},
 	}
 
@@ -662,11 +672,11 @@ func TestImportSnapshotV14ShapeNormalizesPinColumns(t *testing.T) {
 	if err := b.ImportSnapshot(&decoded); err != nil {
 		t.Fatal(err)
 	}
-	format, source, device, blob := pinMetaRow(t, b, "10.0.0.9:22")
-	if format != "blob" || source != "tofu" || device != "" {
-		t.Fatalf("v0.14 anchor imported as %q/%q/%q, want blob/tofu/empty", format, source, device)
+	pin := pinEntryForTest(t, b, "srv-14")
+	if pin.Format != "blob" || pin.Source != "tofu" || pin.Device != "" {
+		t.Fatalf("v0.14 anchor imported as %+v, want blob/tofu/empty", pin)
 	}
-	if !bytes.Equal(blob, keyA) {
-		t.Fatalf("v0.14 anchor bytes corrupted: %v", blob)
+	if !bytes.Equal(pin.Blob, keyA) {
+		t.Fatalf("v0.14 anchor bytes corrupted: %v", pin.Blob)
 	}
 }

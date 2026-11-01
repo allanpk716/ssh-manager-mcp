@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,6 +68,7 @@ type cacheFwdFixture struct {
 	cred            clientops.CacheCred // pull/pin credential for the "laptop" device
 	projToken       string
 	snap            *store.Snapshot // exported BEFORE any test-side anchor preset
+	orphanFP        string          // 旧格式孤立锚的指纹（升级迁移审计应列出）
 }
 
 // newCacheFwdFixture seeds the whole topology. The POST counter wraps only
@@ -87,7 +89,6 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sv.Close() })
 
 	cid, err := sv.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
 	if err != nil {
@@ -104,6 +105,19 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	if err := sv.GrantServers(profID, []string{targetID}); err != nil {
 		t.Fatal(err)
 	}
+	orphanKey, orphanFP := mustEd25519Pin(t)
+	if err := sv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rawSQLiteStmt(t, dbPath,
+		`INSERT INTO host_keys (host_port, key_blob, created_at, pin_format, pin_source, pin_device) VALUES (?,?,?,?,?,?)`,
+		"192.0.2.99:22", orphanKey, time.Now().Unix(), store.PinFormatBlob, store.PinSourceTofu, "")
+	// 重新打开：旧格式 vault 在这里完成升级迁移（孤立锚丢弃并写审计）。
+	sv, err = store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sv.Close() })
 	_, projToken, err := sv.AddProject("agent", profID)
 	if err != nil {
 		t.Fatal(err)
@@ -165,6 +179,7 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 		Token: laptopTok,
 		Pin:   mcpserver.SPKIFingerprint(serveHTTP.Certificate()),
 	}
+	fx.orphanFP = orphanFP
 	fx.projToken = projToken
 	fx.snap = snap
 	return fx
@@ -185,6 +200,20 @@ func (fx *cacheFwdFixture) seenClientVersion(path string) string {
 	return fx.versions[path]
 }
 func (fx *cacheFwdFixture) fingerprint() string { return ssh.FingerprintSHA256(fx.sshdKey) }
+
+// mustEd25519Pin 生成一把新的 ed25519 主机密钥，返回序列化字节与指纹。
+func mustEd25519Pin(t *testing.T) (marshaled []byte, fp string) {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := ssh.NewPublicKey(priv.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pub.Marshal(), ssh.FingerprintSHA256(pub)
+}
 
 // newBrokerSnap assembles the cache broker exactly as mcp --cache does (the
 // binder from the fixture credential, or a per-test override credential) and
@@ -300,13 +329,13 @@ func rawSQLiteStmt(t *testing.T, path, stmt string, args ...any) {
 	}
 }
 
-// presetServeAnchor inserts an anchor directly into the serve's host_keys —
+// presetServeAnchor inserts an anchor directly onto the serve-side entry —
 // the owner pre-anchoring shape (blob or fingerprint format).
 func (fx *cacheFwdFixture) presetServeAnchor(t *testing.T, blob []byte, format, source string) {
 	t.Helper()
 	rawSQLiteStmt(t, fx.dbPath,
-		`INSERT INTO host_keys (host_port, key_blob, pin_format, pin_source, pin_device, created_at) VALUES (?,?,?,?,?,?)`,
-		fmt.Sprintf("%s:%d", fx.host(), fx.port()), blob, format, source, "", time.Now().Unix())
+		`INSERT INTO entry_host_keys (server_id, key_blob, pin_format, pin_source, pin_device, handshake_addr, created_at) VALUES (?,?,?,?,?,?,?)`,
+		fx.targetID, blob, format, source, "", fmt.Sprintf("%s:%d", fx.host(), fx.port()), time.Now().Unix())
 }
 
 // assertServeAnchor checks the authoritative landing: anchor present, dual-mode
@@ -314,7 +343,11 @@ func (fx *cacheFwdFixture) presetServeAnchor(t *testing.T, blob []byte, format, 
 // surface reads the same columns).
 func (fx *cacheFwdFixture) assertServeAnchor(t *testing.T) {
 	t.Helper()
-	pin, err := fx.serve.GetHostKey(fx.host(), fx.port())
+	serveSrv, err := fx.serve.GetServer(fx.targetID)
+	if err != nil || serveSrv == nil {
+		t.Fatalf("取条目失败：%v %v", serveSrv, err)
+	}
+	pin, err := fx.serve.GetEntryPin(serveSrv)
 	if err != nil || pin == nil {
 		t.Fatalf("serve-side anchor missing: pin=%v err=%v", pin, err)
 	}
@@ -327,8 +360,8 @@ func (fx *cacheFwdFixture) assertServeAnchor(t *testing.T) {
 	}
 	defer db.Close()
 	var source, device string
-	if err := db.QueryRow(`SELECT pin_source, pin_device FROM host_keys WHERE host_port=?`,
-		fmt.Sprintf("%s:%d", fx.host(), fx.port())).Scan(&source, &device); err != nil {
+	if err := db.QueryRow(`SELECT pin_source, pin_device FROM entry_host_keys WHERE server_id=?`,
+		fx.targetID).Scan(&source, &device); err != nil {
 		t.Fatal(err)
 	}
 	if source != "forward" || device != "laptop" {
@@ -336,8 +369,8 @@ func (fx *cacheFwdFixture) assertServeAnchor(t *testing.T) {
 	}
 }
 
-// assertServeAuditPinForward: the authoritative audit row carries the device
-// name and the affects list (§1.2 ⑤ / §6).
+// assertServeAuditPinForward: 权威端审计行带条目、握手地址、指纹、转发设备
+// 与来源（票 #58 用户故事 20、27）。
 func (fx *cacheFwdFixture) assertServeAuditPinForward(t *testing.T) {
 	t.Helper()
 	rows, err := fx.serve.AuditRows(50)
@@ -346,8 +379,13 @@ func (fx *cacheFwdFixture) assertServeAuditPinForward(t *testing.T) {
 	}
 	for _, r := range rows {
 		if r.Action == "pin-forward" {
-			if !strings.Contains(r.Command, "device=laptop") || !strings.Contains(r.Command, "affects=1") {
-				t.Fatalf("pin-forward audit row lacks device/affects details: %q", r.Command)
+			for _, want := range []string{"entry=target(", "handshake=" + fx.host() + ":" + strconv.Itoa(fx.port()), "fp=" + fx.fingerprint(), "device=laptop", "via=forward"} {
+				if !strings.Contains(r.Command, want) {
+					t.Fatalf("pin-forward audit row missing %q: %q", want, r.Command)
+				}
+			}
+			if r.ServerID != fx.targetID {
+				t.Fatalf("pin-forward audit row attributed to %q, want the entry %q", r.ServerID, fx.targetID)
 			}
 			return
 		}
@@ -410,6 +448,105 @@ func TestCacheForwardE2E_FirstConnectOnceSuccess(t *testing.T) {
 		t.Fatalf("the second connection re-forwarded: posts = %d", fx.postCount())
 	}
 	assertSidecarHasNoForwardRows(t, auditPath)
+}
+
+// TestCacheForwardE2E_OldVaultUpgradedBeforeForward：权威端用旧格式 vault
+// 打开并完成升级——没有任何条目指向的旧锚被丢弃，迁移审计列出地址与指纹；
+// 目标条目仍然无锚，快照正常下发（票 #58 测试决策的主接缝场景前半段）。
+func TestCacheForwardE2E_OldVaultUpgradedBeforeForward(t *testing.T) {
+	fx := newCacheFwdFixture(t)
+
+	migrations, err := fx.serve.QueryAudit(store.AuditFilter{Actions: []string{"pin-migrate"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) != 1 {
+		t.Fatalf("升级应写一条迁移审计，实际 %d 条", len(migrations))
+	}
+	if cmd := migrations[0].Command; !strings.Contains(cmd, "192.0.2.99:22") || !strings.Contains(cmd, fx.orphanFP) {
+		t.Fatalf("迁移审计应列出被丢弃的地址与指纹：%q", cmd)
+	}
+	if pins, err := fx.serve.ListEntryPins(); err != nil || len(pins) != 0 {
+		t.Fatalf("升级后目标条目应无锚（孤立锚已丢弃）：%v %v", pins, err)
+	}
+	var legacy int
+	db, err := sql.Open("sqlite", fx.dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.QueryRow(`SELECT COUNT(*) FROM host_keys`).Scan(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy != 0 {
+		t.Fatalf("升级后旧锚表应清空，仍有 %d 行", legacy)
+	}
+}
+
+// TestCacheForwardE2E_SecondEntrySameAddressIndependent：同一兜底地址上的第
+// 二个条目独立首次锚定、独立校验，一个条目的锚不影响另一个；随后的重复连
+// 接不再转发。
+func TestCacheForwardE2E_SecondEntrySameAddressIndependent(t *testing.T) {
+	fx := newCacheFwdFixture(t)
+
+	// 权威端补一个同地址条目并授权，再重新导出快照（客户端旧快照不认识它）。
+	cid, err := fx.serve.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondID, err := fx.serve.AddServer(&models.Server{
+		Name: "target-2", Host: fx.host(), Port: fx.port(), User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: cid,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.serve.GrantServers(fx.profID, []string{secondID}); err != nil {
+		t.Fatal(err)
+	}
+	snap2, err := fx.serve.ExportSnapshotForProfile(fx.profID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := fx.newBrokerSnap(t, snap2, nil, fx.cred)
+
+	if text, isErr := callExec(t, sess, fx.targetID, "one"); isErr {
+		t.Fatalf("第一个条目应经转发完成首次连接：%s", text)
+	}
+	if fx.postCount() != 1 {
+		t.Fatalf("第一个条目转发后 posts = %d，应为 1", fx.postCount())
+	}
+	if text, isErr := callExec(t, sess, secondID, "two"); isErr {
+		t.Fatalf("同地址第二个条目应独立完成首次锚定：%s", text)
+	}
+	if fx.postCount() != 2 {
+		t.Fatalf("第二个条目转发后 posts = %d，应为 2", fx.postCount())
+	}
+
+	pins, err := fx.serve.ListEntryPins()
+	if err != nil || len(pins) != 2 {
+		t.Fatalf("两个条目应各有一把锚：%v %v", pins, err)
+	}
+	seen := map[string]bool{}
+	for _, p := range pins {
+		seen[p.ServerID] = true
+		if !p.Matches(fx.sshdKey.Marshal()) || p.Source != store.PinSourceForward {
+			t.Fatalf("条目锚不正确：%+v", p)
+		}
+	}
+	if !seen[fx.targetID] || !seen[secondID] {
+		t.Fatalf("两个条目应各自落锚：%v", seen)
+	}
+
+	// 各自的后续连接照常校验，不再转发。
+	for i, id := range []string{fx.targetID, secondID} {
+		if text, isErr := callExec(t, sess, id, "again"); isErr {
+			t.Fatalf("条目 %d 的后续连接应凭已有锚通过：%s", i, text)
+		}
+	}
+	if fx.postCount() != 2 {
+		t.Fatalf("后续连接不应再转发：posts = %d", fx.postCount())
+	}
 }
 
 // TestCacheVersionE2E_SnapshotCarriesRecommendedVersion: 权威端二进制版本随

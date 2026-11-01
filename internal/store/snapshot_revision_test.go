@@ -4,11 +4,21 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
 )
+
+func triggerExists(t *testing.T, db *sql.DB, name string) bool {
+	t.Helper()
+	var exists bool
+	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?)`, name).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	return exists
+}
 
 // snapshotSeed 是快照修订号测试的基础库:一台已授权的服务器、一个
 // profile、一个项目。各操作表条目可以用 setup 先补充自己的前置状态,
@@ -129,6 +139,110 @@ func TestSnapshotRevision_LegacyDatabaseMigratesToOne(t *testing.T) {
 	}
 	if after <= rev {
 		t.Fatalf("迁移后写入的快照修订号 = %d,应大于 %d", after, rev)
+	}
+}
+
+// TestSnapshotRevision_OldHostKeyTriggerUpgrade: 旧库已经带着指向
+// host_keys 的修订号触发器。升级打开时必须迁移锚、删除过期触发器，并让
+// 按条目锚的写入继续推进修订号；重复打开也不能因触发器迁移失败。
+func TestSnapshotRevision_OldHostKeyTriggerUpgrade(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "store.db")
+	legacy, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldShape := `
+CREATE TABLE servers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  user TEXT NOT NULL,
+  auth_method TEXT NOT NULL,
+  credential_id TEXT,
+  sudo_credential_id TEXT,
+  tags TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE host_keys (
+  host_port TEXT PRIMARY KEY,
+  key_blob BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  pin_format TEXT NOT NULL,
+  pin_source TEXT NOT NULL,
+  pin_device TEXT NOT NULL
+);
+CREATE TABLE snapshot_revision (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL
+);
+INSERT INTO snapshot_revision(id, revision) VALUES (1, 41);
+INSERT INTO servers(id,name,host,port,user,auth_method,tags,created_at,updated_at)
+VALUES ('srv-old','old','192.0.2.10',22,'u','password','',1700000000,1700000000);
+INSERT INTO host_keys(host_port,key_blob,created_at,pin_format,pin_source,pin_device)
+VALUES ('192.0.2.10:22',X'0102',1700000000,'blob','tofu','');
+`
+	for _, event := range []string{"insert", "update", "delete"} {
+		oldShape += "CREATE TRIGGER snapshot_revision_host_keys_" + event +
+			" AFTER " + strings.ToUpper(event) + " ON host_keys BEGIN" +
+			" UPDATE snapshot_revision SET revision = revision + 1; END;\n"
+	}
+	if _, err := legacy.Exec(oldShape); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mk := make([]byte, 32)
+	randRead(t, mk)
+	s, err := Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("升级打开旧库失败:%v", err)
+	}
+	rev, err := s.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != 42 {
+		t.Fatalf("锚迁移后的快照修订号 = %d,应为 42", rev)
+	}
+	for _, trigger := range snapshotRevisionRetiredTriggers {
+		if triggerExists(t, s.db, trigger) {
+			t.Fatalf("升级后仍存在过期触发器 %s", trigger)
+		}
+	}
+	srv, err := s.GetServer("srv-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveEntryPin(srv, []byte("new-anchor")); err != nil {
+		t.Fatal(err)
+	}
+	afterWrite, err := s.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterWrite != rev+1 {
+		t.Fatalf("写入按条目锚后的快照修订号 = %d,应为 %d", afterWrite, rev+1)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("重复打开升级后的库失败:%v", err)
+	}
+	defer reopened.Close()
+	reopenedRev, err := reopened.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopenedRev != afterWrite {
+		t.Fatalf("重复打开后的快照修订号 = %d,应保持 %d", reopenedRev, afterWrite)
 	}
 }
 
@@ -326,7 +440,11 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 		{
 			name: "手动锚定主机密钥",
 			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
-				_, err := s.UpsertManualPin("192.0.2.10", 22, []byte("anchor-blob"), PinFormatBlob, false,
+				srv, err := s.GetServer(seed.serverID)
+				if err != nil {
+					return err
+				}
+				_, err = s.UpsertManualEntryPin(srv, "192.0.2.10:22", []byte("anchor-blob"), PinFormatBlob, false,
 					func(old *PinMeta) AuditRow { return AuditRow{Action: "pin-manual"} })
 				return err
 			},
@@ -334,26 +452,38 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 		{
 			name: "首次信任主机密钥",
 			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
-				return s.SaveHostKey("192.0.2.10", 22, []byte("tofu-blob"))
+				srv, err := s.GetServer(seed.serverID)
+				if err != nil {
+					return err
+				}
+				return s.SaveEntryPin(srv, []byte("tofu-blob"))
 			},
 		},
 		{
 			name: "清除主机密钥锚",
 			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
-				if _, err := s.UpsertManualPin("192.0.2.10", 22, []byte("anchor-blob"), PinFormatBlob, false,
+				srv, err := s.GetServer(seed.serverID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.UpsertManualEntryPin(srv, "192.0.2.10:22", []byte("anchor-blob"), PinFormatBlob, false,
 					func(old *PinMeta) AuditRow { return AuditRow{Action: "pin-manual"} }); err != nil {
 					t.Fatal(err)
 				}
 			},
 			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
-				_, err := s.ClearPin("192.0.2.10", 22, func(old PinMeta) AuditRow { return AuditRow{Action: "pin-clear"} })
+				_, err := s.ClearEntryPin(seed.serverID, func(old PinMeta) AuditRow { return AuditRow{Action: "pin-clear"} })
 				return err
 			},
 		},
 		{
 			name: "客户端转发主机密钥锚",
 			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
-				_, err := s.InsertForwardedPin("192.0.2.10", 22, []byte("forwarded-blob"), "laptop",
+				srv, err := s.GetServer(seed.serverID)
+				if err != nil {
+					return err
+				}
+				_, err = s.InsertForwardedEntryPin(srv, "192.0.2.10:22", []byte("forwarded-blob"), "laptop",
 					AuditRow{Action: "pin-forward", Status: "ok"})
 				return err
 			},

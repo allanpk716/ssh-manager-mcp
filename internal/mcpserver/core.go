@@ -149,7 +149,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
 	if herr != nil {
 		status = "error"
 		err = herr
@@ -296,7 +296,7 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
 	if herr != nil {
 		status = "error"
 		err = herr
@@ -402,7 +402,7 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
 	if herr != nil {
 		status = "error"
 		err = herr
@@ -569,7 +569,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
 	if herr != nil {
 		status = "error"
 		err = herr
@@ -755,7 +755,7 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv.Host, srv.Port)
+	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
 	if herr != nil {
 		status = "error"
 		err = herr

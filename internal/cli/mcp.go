@@ -42,7 +42,7 @@ func cacheForwarderFor(instance string) (*clientops.PinForwarder, error) {
 }
 
 // cacheForwardDeviceFor resolves the device-code name stamped onto locally
-// applied forwarded pins (host_keys.pin_device, Plan 48 §2.3 — diagnostic
+// applied forwarded pins (entry_host_keys.pin_device — diagnostic
 // metadata: the owner's cross-profile detection surface, never load-bearing).
 // A named instance IS the device identity (Plan 40's pull gate enforces
 // identity == directory name); the default slot reads cache.meta's
