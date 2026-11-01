@@ -1,14 +1,17 @@
 package cli
 
-// 规格 #93 / 票 #95 的主测试接缝:在「客户端缓存加锚定转发」端到端夹具上驮
-// 快照修订号后台轮询。本文件覆盖:
+// 快照修订号后台轮询的主要端到端测试入口:在「客户端缓存加锚定转发」
+// 测试环境上验证后台轮询。本文件覆盖:
 //   - 共享缓存被别的桥更新后,本桥经由现有统一换快照入口立即热加载;
 //   - 后台轮询循环(短间隔注入):修订号不变只查询不下载、变化才拉取;
 //   - 两个桥指向同一实例目录:一个拉取,另一个不下载直接热加载;
 //   - 权威端停掉后工具调用照常工作;旧权威端返回 404 后停止轮询。
 
 import (
+	"bytes"
+	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -74,7 +77,7 @@ func waitForTrue(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// setUpPollableCache 把端到端夹具接到一个临时实例目录:写入拉取凭据、完成
+// setUpPollableCache 把端到端测试环境接到一个临时实例目录:写入拉取凭据、完成
 // 初次全量拉取,并把缓存解密密钥指到进程内的内存密钥提供器(与
 // mcp_cache_revision_test.go 相同的隔离方式)。
 func setUpPollableCache(t *testing.T, fx *cacheFwdFixture) string {
@@ -118,7 +121,7 @@ func (fx *cacheFwdFixture) newBrokerWithRefresher(t *testing.T, snap *store.Snap
 
 // startTestPoller 用注入的短间隔启动快照修订号后台轮询循环(生产默认 5 分钟,
 // 测试不真等),日志丢弃以保持测试输出干净。
-func startTestPoller(t *testing.T, interval time.Duration, refresher clientops.SnapshotRefresher) {
+func startTestPoller(t *testing.T, interval time.Duration, refresher mcpserver.CacheRefresher) {
 	t.Helper()
 	stop := clientops.StartSnapshotPoller(clientops.SnapshotPollerConfig{
 		Interval:  interval,
@@ -126,6 +129,69 @@ func startTestPoller(t *testing.T, interval time.Duration, refresher clientops.S
 		LogOutput: io.Discard,
 	})
 	t.Cleanup(stop)
+}
+
+// TestMCPCache_InvalidSnapshotPollIntervalFallsBack — 桥启动时发现轮询间隔
+// 非法,只写一行英文告警并使用默认 5 分钟;桥的后续装配继续执行。
+func TestMCPCache_InvalidSnapshotPollIntervalFallsBack(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		prepare      func(t *testing.T, dir string)
+		wantFeedback string
+	}{
+		{
+			name: "环境变量",
+			prepare: func(t *testing.T, _ string) {
+				t.Setenv("SSHMGR_CACHE_SNAPSHOT_POLL_INTERVAL", "30s")
+			},
+			wantFeedback: `sshmgr: invalid SSHMGR_CACHE_SNAPSHOT_POLL_INTERVAL "30s"`,
+		},
+		{
+			name: "实例配置文件",
+			prepare: func(t *testing.T, dir string) {
+				blob := []byte(`{"snapshot_poll_interval":"30s"}`)
+				if err := os.WriteFile(filepath.Join(dir, "cache.config.json"), blob, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantFeedback: `sshmgr: invalid snapshot_poll_interval in cache.config.json "30s"`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newCacheFwdFixture(t)
+			dir := setUpPollableCache(t, fx)
+			t.Setenv("SSHMGR_TOKEN", fx.projToken)
+			t.Setenv("SSHMGR_CACHE_SNAPSHOT_POLL_INTERVAL", "")
+			tc.prepare(t, dir)
+
+			// 让审计文件路径无法打开:如果间隔解析已经放行,命令会走到桥装配
+			// 阶段,再因这个路径返回确定错误,而不是因为轮询间隔拒绝启动。
+			auditPath := filepath.Join(dir, "cache-audit.log")
+			if err := os.MkdirAll(auditPath, 0o700); err != nil {
+				t.Fatal(err)
+			}
+
+			cmd := newMCPCmd()
+			cmd.SetArgs([]string{"--cache"})
+			var stderr bytes.Buffer
+			cmd.SetOut(&stderr)
+			cmd.SetErr(&stderr)
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("审计路径是目录时,命令最终应返回打开失败")
+			}
+			if strings.Contains(err.Error(), "snapshot poll interval") {
+				t.Fatalf("非法轮询间隔不应让桥拒绝启动,实际错误: %v", err)
+			}
+			warning := stderr.String()
+			if !strings.HasPrefix(warning, tc.wantFeedback) {
+				t.Fatalf("标准错误流应先出现一行来源与取值都明确的告警,实际:\n%s", warning)
+			}
+			if !strings.Contains(warning, "using the default 5m snapshot poll interval") {
+				t.Fatalf("告警应说明已改用默认 5 分钟,实际:\n%s", warning)
+			}
+		})
+	}
 }
 
 // TestSnapshotPollE2E_SharedCacheHotReloadThroughUnifiedEntry — 同一台机器上
@@ -194,6 +260,7 @@ func TestSnapshotPollE2E_BackgroundPollPullsOnlyOnChange(t *testing.T) {
 	if got := waitStable(t, "全量快照请求", fx.snapshotCount); got != 1 {
 		t.Fatalf("修订号未变化时的全量快照请求 = %d,应为 1", got)
 	}
+	beforeRevision := refresher.CurrentRevision()
 
 	// 权威端写入配置:轮询发现修订号变化,全量拉取一次并热加载。
 	boxID, err := fx.serve.AddServer(&models.Server{Name: "poll-box", Host: "192.0.2.60", Port: 22, User: "u", AuthMethod: models.AuthPassword})
@@ -220,26 +287,43 @@ func TestSnapshotPollE2E_BackgroundPollPullsOnlyOnChange(t *testing.T) {
 		t.Fatalf("缓存文件修订号 = %d,应为 %d", loaded.SnapshotRevision, wantRevision)
 	}
 	texts := callToolTexts(t, sess, "list_servers", map[string]any{})
-	joined := strings.Join(texts, "\n")
-	if !strings.Contains(joined, "poll-box") {
-		t.Fatalf("换上新快照后 list_servers 应包含新增服务器:\n%s", joined)
+	wantHint := fmt.Sprintf(
+		"权威端配置已更新（修订号 %d → %d）：新增服务器 poll-box",
+		beforeRevision, wantRevision,
+	)
+	if len(texts) != 2 || texts[0] != wantHint || !strings.Contains(texts[1], "poll-box") {
+		t.Fatalf("后台轮询换上新快照后,工具结果应先携带变更提示,实际为 %#v,应为 %q", texts, wantHint)
+	}
+	if again := callToolTexts(t, sess, "list_servers", map[string]any{}); len(again) != 1 || strings.Contains(again[0], "权威端配置已更新") {
+		t.Fatalf("同一会话的变更提示只应出现一次,实际为 %#v", again)
 	}
 }
 
-// TestSnapshotPollE2E_TwoBridgesSharedCache — 两个桥指向同一实例目录:权威端
-// 改配置后一个桥完成全量拉取,另一个桥只查修订号、不再下载,直接从共享缓存
-// 热加载,两个桥都服务新快照。
+// TestSnapshotPollE2E_TwoBridgesSharedCache — 两个桥先在同一实例目录上启动,
+// 权威端改配置后一个桥完成全量拉取,另一个桥只查修订号、不再下载,直接从
+// 共享缓存热加载;两个会话各自看到一次变更提示。
 func TestSnapshotPollE2E_TwoBridgesSharedCache(t *testing.T) {
 	fx := newCacheFwdFixture(t)
 	setUpPollableCache(t, fx)
 
-	snapA, err := clientops.LoadCacheSnapshot()
+	snapshot, err := clientops.LoadCacheSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
 	relA := clientops.NewCacheReloader(30 * time.Minute)
-	_, refresherA := fx.newBrokerWithRefresher(t, snapA, relA.Check)
+	sessA, refresherA := fx.newBrokerWithRefresher(t, snapshot, relA.Check)
+	relB := clientops.NewCacheReloader(30 * time.Minute)
+	sessB, refresherB := fx.newBrokerWithRefresher(t, snapshot, relB.Check)
+	for _, sess := range []*mcp.ClientSession{sessA, sessB} {
+		if texts := callToolTexts(t, sess, "list_servers", map[string]any{}); len(texts) != 1 {
+			t.Fatalf("配置变化前不应有变更提示,实际为 %#v", texts)
+		}
+	}
 	startTestPoller(t, 20*time.Millisecond, refresherA)
+	startTestPoller(t, 2*time.Second, refresherB)
+	waitForCount(t, "两个桥的启动修订号查询", 2, fx.versionCount)
+	time.Sleep(100 * time.Millisecond)
+	beforeRevision := refresherA.CurrentRevision()
 
 	// 权威端写入配置,桥 A 的轮询先完成全量拉取。
 	boxID, err := fx.serve.AddServer(&models.Server{Name: "shared-box", Host: "192.0.2.61", Port: 22, User: "u", AuthMethod: models.AuthPassword})
@@ -255,27 +339,25 @@ func TestSnapshotPollE2E_TwoBridgesSharedCache(t *testing.T) {
 	}
 	waitForCount(t, "桥 A 的全量快照请求", 2, fx.snapshotCount)
 	waitForTrue(t, "桥 A 热加载后的修订号", func() bool { return refresherA.CurrentRevision() == wantRevision })
-
-	// 桥 B 与桥 A 指向同一实例目录,后启动:它的轮询只查修订号,发现共享缓存
-	// 已达到远端修订号,直接热加载,不再下载。
-	snapB, err := clientops.LoadCacheSnapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relB := clientops.NewCacheReloader(30 * time.Minute)
-	sessB, refresherB := fx.newBrokerWithRefresher(t, snapB, relB.Check)
-	versionsBefore := fx.versionCount()
-	startTestPoller(t, 20*time.Millisecond, refresherB)
-	waitForCount(t, "桥 B 的修订号查询", versionsBefore+1, fx.versionCount)
+	waitForTrue(t, "桥 B 从共享缓存热加载后的修订号", func() bool { return refresherB.CurrentRevision() == wantRevision })
 	if got := refresherB.CurrentRevision(); got != wantRevision {
 		t.Fatalf("桥 B 热加载后的修订号 = %d,应为 %d(不得再下载)", got, wantRevision)
 	}
 	if got := waitStable(t, "全量快照请求", fx.snapshotCount); got != 2 {
 		t.Fatalf("两个桥共存时全量快照请求 = %d,应为 2(只有一个桥下载)", got)
 	}
-	texts := callToolTexts(t, sessB, "list_servers", map[string]any{})
-	if joined := strings.Join(texts, "\n"); !strings.Contains(joined, "shared-box") {
-		t.Fatalf("桥 B 应服务热加载后的新快照:\n%s", joined)
+	wantHint := fmt.Sprintf(
+		"权威端配置已更新（修订号 %d → %d）：新增服务器 shared-box",
+		beforeRevision, wantRevision,
+	)
+	for name, sess := range map[string]*mcp.ClientSession{"A": sessA, "B": sessB} {
+		texts := callToolTexts(t, sess, "list_servers", map[string]any{})
+		if len(texts) != 2 || texts[0] != wantHint || !strings.Contains(texts[1], "shared-box") {
+			t.Fatalf("桥 %s 应先看到一次变更提示再看到新快照,实际为 %#v,应为 %q", name, texts, wantHint)
+		}
+		if again := callToolTexts(t, sess, "list_servers", map[string]any{}); len(again) != 1 || strings.Contains(again[0], "权威端配置已更新") {
+			t.Fatalf("桥 %s 的同一会话不应重复看到变更提示,实际为 %#v", name, again)
+		}
 	}
 }
 

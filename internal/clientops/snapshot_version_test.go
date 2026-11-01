@@ -16,7 +16,7 @@ import (
 	"ssh-manager-mcp/internal/vaultio"
 )
 
-// revisionAuthority 是规格 #93 的假权威端:配置放在真实 store 里,快照
+// revisionAuthority 是测试用的权威端桩:配置放在真实 store 里,快照
 // 修订号与导出内容都来自真实导出路径;/snapshot/version 与 /snapshot 的
 // 请求次数和请求头被记录下来供断言。
 type revisionAuthority struct {

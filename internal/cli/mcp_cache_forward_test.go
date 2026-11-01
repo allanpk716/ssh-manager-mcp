@@ -606,7 +606,7 @@ func TestCacheVersionE2E_ToolHintSessionLifecycle(t *testing.T) {
 		t.Fatalf("同一提示只应出现一次，实际为 %#v", second)
 	}
 
-	// 保留服务器集合与修订号:这张快照只改推荐版本,不应顺带触发 #96 的
+	// 保留服务器集合与修订号:这张快照只改推荐版本,不应顺带触发配置
 	// 变更提示。
 	next = &store.Snapshot{
 		Version: 1, SnapshotRevision: fx.snap.SnapshotRevision, RecommendedVersion: "1.2.0",

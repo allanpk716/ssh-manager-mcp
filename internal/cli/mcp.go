@@ -126,13 +126,14 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				// 规格 #93 / 票 #95:多机客户端的桥启动快照修订号后台轮询循环。
-				// 间隔读实例配置(环境变量可临时覆盖);非法值按本仓库一贯的
-				// 失败关闭语义拒绝启动,而不是静默换默认值。单机部署不走这个
-				// 分支,不启动任何定时器。
+				// 多机客户端的桥启动快照修订号后台轮询循环。间隔读实例配置
+				// (环境变量可临时覆盖);启动阶段发现非法值时写告警并退回默认
+				// 5 分钟,桥继续可用。单机部署不走这个分支,不启动任何定时器。
 				pollInterval, _, perr := clientops.EffectiveSnapshotPollInterval(cacheDir)
 				if perr != nil {
-					return perr
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"sshmgr: %v; using the default 5m snapshot poll interval\n", perr)
+					pollInterval = clientops.DefaultSnapshotPollInterval
 				}
 				// Plan 48 §2.1: the pin forwarder is constructed HERE — the
 				// --instance resolver owns the CacheCred read; RunStdioCache never

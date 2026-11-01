@@ -1,6 +1,6 @@
 package clientops
 
-// 快照修订号后台轮询循环(规格 #93 / 票 #95)。多机客户端的每个桥
+// 快照修订号后台轮询循环。多机客户端的每个桥
 // (`mcp --cache`)启动一个可停止的循环,默认每 5 分钟查询一次权威端的
 // GET /snapshot/version:
 //
@@ -8,7 +8,7 @@ package clientops
 //	的修订号,已达到远端修订号就直接热加载 → 否则沿用现有全量拉取函数
 //	(唯一临时文件加原子重命名)再热加载。
 //
-// 「热加载」一律经调用方注入的 SnapshotRefresher 完成——它就是桥现有的统一
+// 「热加载」一律经调用方注入的 CacheRefresher 完成——它就是桥现有的统一
 // 换快照入口(工具调用前的热加载与这里共用同一条路径),本包不另写任何替换
 // 内存快照的逻辑。不加跨进程文件锁:各个桥的定时器起点不同,即使同时拉取,
 // 原子替换也保证缓存不会写坏。
@@ -24,17 +24,9 @@ import (
 	"os"
 	"sync"
 	"time"
-)
 
-// SnapshotRefresher 是桥统一换快照入口在本包一侧的抽象:读取当前内存快照
-// 的修订号,并立即经统一入口安装缓存里的新快照。由桥(内部 mcpserver 的
-// 缓存持有者)实现,本包只依赖这两个能力。
-type SnapshotRefresher interface {
-	// CurrentRevision 返回当前内存快照的快照修订号(旧快照缺该字段时为 0)。
-	CurrentRevision() int64
-	// ReloadNow 立即经统一换快照入口热加载一次;失败保留旧快照并记日志。
-	ReloadNow()
-}
+	"ssh-manager-mcp/internal/mcpserver"
+)
 
 // SnapshotPollerConfig 配置一个桥的后台轮询循环。Interval 由调用方注入
 // (默认值来自实例配置,测试可注入很短的间隔,不必真的等 5 分钟)。
@@ -44,7 +36,7 @@ type SnapshotPollerConfig struct {
 	// Interval 是轮询间隔;小于等于 0 时不启动循环。
 	Interval time.Duration
 	// Refresher 是桥的统一换快照入口;为空时不启动循环。
-	Refresher SnapshotRefresher
+	Refresher mcpserver.CacheRefresher
 	// LogOutput 是诊断日志出口;为空时写到标准错误流。
 	LogOutput io.Writer
 }
@@ -122,12 +114,7 @@ func (p *snapshotPoller) round() bool {
 		}
 		return true
 	}
-	code, pin := cred.Token, cred.Pin
-	if pin == "" {
-		if c, resolved, ok := SplitTokenPin(cred.Token); ok {
-			code, pin = c, resolved
-		}
-	}
+	code, pin := deviceCodeAndPin(*cred)
 	if pin == "" {
 		if !p.missingCredLogged {
 			p.missingCredLogged = true

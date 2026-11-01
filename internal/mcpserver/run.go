@@ -117,7 +117,7 @@ type cacheStoreHolder struct {
 	mu       sync.Mutex // serializes rebuilds
 	cur      atomic.Pointer[store.Store]
 	lastSnap *store.Snapshot // guarded by mu — last snapshot successfully hydrated
-	// 变更比较与提示(票 #96):每次换上新快照时比较新旧快照,产生的
+	// 变更比较与提示:每次换上新快照时比较新旧快照,产生的
 	// 变更提示保存在进程内存里,经会话提示通道按「会话 + 提示文本」
 	// 去重。changes 为空时退回默认比较器,保证直接构造 holder 的测试
 	// 路径与生产路径走同一套比较。
@@ -127,8 +127,8 @@ type cacheStoreHolder struct {
 	tmpPaths    []string       // every temp db, removed once in cleanup
 }
 
-// refresh 是桥唯一的「换上新快照」入口(规格 #93):先询问热加载接缝,变化才
-// 水合并换入新存储。工具调用前的 Current 与后台轮询的 ReloadNow 都走这一
+// refresh 是桥唯一的「换上新快照」入口:先询问重新加载回调,变化才
+// 解密快照并建出内存数据库。工具调用前的 Current 与后台轮询的 ReloadNow 都走这一
 // 条路径,任何一方都不另写替换内存快照的逻辑。Every failure path keeps
 // serving the previous store — Lazy revocation semantics: a session outlives
 // its token until the next spawn.
@@ -181,7 +181,7 @@ func (h *cacheStoreHolder) refresh() *store.Store {
 		os.Remove(tmpPath)
 		return h.cur.Load()
 	}
-	if hint := h.snapshotComparer().Hint(h.lastSnap, snap); hint != "" {
+	if hint := effectiveSnapshotComparer(h.changes).Hint(h.lastSnap, snap); hint != "" {
 		h.changeHints = append(h.changeHints, hint)
 	}
 	h.lastSnap = snap
@@ -250,15 +250,6 @@ func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.
 	return h, project, nil
 }
 
-// snapshotComparer 返回换快照时要用的比较器;直接构造 holder 的路径没有
-// 设置比较器时退回默认比较器,与生产路径保持一致。
-func (h *cacheStoreHolder) snapshotComparer() *snapshotdiff.Comparer {
-	if h.changes == nil {
-		return snapshotdiff.Default()
-	}
-	return h.changes
-}
-
 // changeHint 返回启动以来产生的全部变更提示,按发生顺序排列。提示保存
 // 在进程内存里,由会话提示通道按「会话 + 提示文本」去重,每个会话各看到
 // 一次;桥在 agent 两次调用之间换上多份新快照时,每条提示都不会丢。
@@ -322,7 +313,7 @@ func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload 
 	return RunStdioCacheWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor, nil)
 }
 
-// CacheRefresher 是桥统一换快照入口的触发器(规格 #93 / 票 #95):后台轮询
+// CacheRefresher 是桥统一换快照入口的触发器:后台轮询
 // 循环用它读取当前内存快照的修订号,并在拉到新快照或发现共享缓存更新后,
 // 经由与工具调用完全相同的路径安装新快照。
 type CacheRefresher interface {

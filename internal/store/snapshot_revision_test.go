@@ -14,9 +14,10 @@ import (
 // profile、一个项目。各操作表条目可以用 setup 先补充自己的前置状态,
 // 让 op 只包含被测的那一次写入。
 type snapshotSeed struct {
-	serverID  string
-	profileID string
-	projectID string
+	serverID        string
+	profileID       string
+	rebindProfileID string
+	projectID       string
 }
 
 func seedSnapshotStore(t *testing.T) (*Store, *snapshotSeed) {
@@ -139,9 +140,12 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 		return &models.Server{Name: name, Host: host, Port: 22, User: "u", AuthMethod: models.AuthPassword}
 	}
 	cases := []struct {
-		name  string
-		setup func(t *testing.T, s *Store, seed *snapshotSeed)
-		op    func(t *testing.T, s *Store, seed *snapshotSeed) error
+		name string
+		// sameWholeSnapshot marks operations that change which profile a device
+		// code can see, rather than the whole-vault export itself.
+		sameWholeSnapshot bool
+		setup             func(t *testing.T, s *Store, seed *snapshotSeed)
+		op                func(t *testing.T, s *Store, seed *snapshotSeed) error
 	}{
 		{
 			name: "新增服务器",
@@ -193,6 +197,23 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
 				_, err := s.AddProfile("team-b")
 				return err
+			},
+		},
+		{
+			name:              "改绑设备码",
+			sameWholeSnapshot: true,
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				profileID, err := s.AddProfile("team-b")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := s.AddCacheToken("laptop", seed.profileID); err != nil {
+					t.Fatal(err)
+				}
+				seed.rebindProfileID = profileID
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				return s.BindCacheToken("laptop", seed.rebindProfileID)
 			},
 		},
 		{
@@ -358,7 +379,7 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 				t.Fatalf("执行写入失败:%v", err)
 			}
 			after, afterContent := snapshotContent(t, s)
-			if beforeContent == afterContent {
+			if !tc.sameWholeSnapshot && beforeContent == afterContent {
 				t.Fatalf("操作表条目「%s」没有改变导出快照内容,请修正测试或操作表", tc.name)
 			}
 			if after <= before {
@@ -399,7 +420,8 @@ func TestSnapshotRevision_AuditOnlyWritesDoNotAdvance(t *testing.T) {
 }
 
 // TestSnapshotRevision_RidesBothExportPaths: 两条导出路径都携带顶层
-// snapshot_revision,信封版本号保持 1;导入按快照里的修订号原样恢复。
+// snapshot_revision,信封版本号保持 1;导入后的修订号必须大于导入前的当前
+// 值与快照携带值,保持单调递增。
 func TestSnapshotRevision_RidesBothExportPaths(t *testing.T) {
 	s, seed := seedSnapshotStore(t)
 	if _, err := s.AddServer(&models.Server{Name: "extra", Host: "192.0.2.11", Port: 22, User: "u", AuthMethod: models.AuthPassword}); err != nil {
@@ -431,6 +453,26 @@ func TestSnapshotRevision_RidesBothExportPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer target.Close()
+	// 目标库先做几轮「新增又删除服务器」的空库写入,让导入前的修订号高于
+	// 快照携带值,覆盖「取两者较大值」这一侧。
+	for i := 0; i < int(rev)+2; i++ {
+		id, aerr := target.AddServer(&models.Server{
+			Name: "temporary", Host: "192.0.2.99", Port: 22, User: "u", AuthMethod: models.AuthPassword,
+		})
+		if aerr != nil {
+			t.Fatal(aerr)
+		}
+		if derr := target.DeleteServer(id); derr != nil {
+			t.Fatal(derr)
+		}
+	}
+	currentBefore, err := target.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentBefore <= rev {
+		t.Fatalf("测试前置失败:导入前修订号 = %d,应大于快照携带值 %d", currentBefore, rev)
+	}
 	if err := target.ImportSnapshot(whole); err != nil {
 		t.Fatal(err)
 	}
@@ -438,8 +480,11 @@ func TestSnapshotRevision_RidesBothExportPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if imported != rev {
-		t.Fatalf("导入后的快照修订号 = %d,应原样为 %d", imported, rev)
+	if imported <= currentBefore || imported <= rev {
+		t.Fatalf("导入后的快照修订号 = %d,应大于导入前值 %d 与快照携带值 %d", imported, currentBefore, rev)
+	}
+	if imported != currentBefore+1 {
+		t.Fatalf("导入后的快照修订号 = %d,应为导入前值与快照携带值中较大者的后一个值 %d", imported, currentBefore+1)
 	}
 }
 

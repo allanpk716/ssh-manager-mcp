@@ -37,7 +37,7 @@ func resolveMaxOffline(dir string) (time.Duration, error) {
 	return parseMaxOffline(strings.TrimSpace(c.MaxOffline), `max_offline in cache.config.json`)
 }
 
-// envSnapshotPollInterval 是轮询间隔的环境变量覆盖入口(规格 #93 / 票 #95),
+// envSnapshotPollInterval 是快照修订号轮询间隔的环境变量覆盖入口,
 // 写法与 SSHMGR_CACHE_MAX_OFFLINE 相同:进程在场时压过实例配置文件。
 const envSnapshotPollInterval = "SSHMGR_CACHE_SNAPSHOT_POLL_INTERVAL"
 
@@ -89,8 +89,9 @@ func readCacheConfigFile(dir string) (cacheConfigFile, error) {
 // 来源标签("default" / "file" / "env"),供 `cache config` 显示与桥启动读取。
 // 环境变量在场时压过文件;两者都未设置时用默认值 5 分钟。
 func EffectiveSnapshotPollInterval(dir string) (time.Duration, string, error) {
-	if strings.TrimSpace(os.Getenv(envSnapshotPollInterval)) != "" {
-		d, err := parseSnapshotPollInterval(strings.TrimSpace(os.Getenv(envSnapshotPollInterval)), envSnapshotPollInterval)
+	envValue := strings.TrimSpace(os.Getenv(envSnapshotPollInterval))
+	if envValue != "" {
+		d, err := parseSnapshotPollInterval(envValue, envSnapshotPollInterval)
 		if err != nil {
 			return 0, "env", err
 		}

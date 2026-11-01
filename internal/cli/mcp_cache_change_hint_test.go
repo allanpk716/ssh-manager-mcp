@@ -1,9 +1,9 @@
 package cli
 
-// 票 #96 的端到端测试:多机客户端桥换上新快照(共享缓存文件哈希热加载或
+// 多机客户端配置变更提示的端到端测试:桥换上新快照(共享缓存文件哈希热加载或
 // 到期保鲜)时比较新旧快照,把变更提示附在 agent 下一次工具结果开头。
-// 这里只用既有的换快照途径触发(改写共享缓存 / 到期保鲜),不依赖 #95 的
-// 后台轮询。
+// 这里只用既有的换快照途径触发(改写共享缓存 / 到期保鲜),不依赖后台轮询
+// 循环。
 
 import (
 	"fmt"
@@ -365,7 +365,7 @@ func TestCacheChangeHintE2E_DeleteThenAddSameServerTwoHints(t *testing.T) {
 }
 
 // snapshotVariant 复制基准快照并施加改动,供自定义热加载回调按次返回
-// 新快照(与 #95 后台轮询经由同一换快照入口安装的效果等价)。
+// 新快照(与后台轮询循环经由同一换快照入口安装的效果等价)。
 func snapshotVariant(t *testing.T, base *store.Snapshot, revision int64, mutate func(*store.Snapshot)) *store.Snapshot {
 	t.Helper()
 	cp := *base
@@ -380,7 +380,7 @@ func snapshotVariant(t *testing.T, base *store.Snapshot, revision int64, mutate 
 }
 
 // TestCacheChangeHintE2E_MultiplePendingHintsKeptInOrder: 桥在进程内存里保存
-// 启动以来产生的每条变更提示。快照在工具调用过程中被换新(等价于 #95 的
+// 启动以来产生的每条变更提示。快照在工具调用过程中被换新(等价于
 // 后台轮询在任意时刻安装新快照)时,提示不会因为下一条到来而丢失,下一次
 // 调用按发生顺序全部出现。
 func TestCacheChangeHintE2E_MultiplePendingHintsKeptInOrder(t *testing.T) {

@@ -299,7 +299,7 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// handleSnapshotVersion 只返回当前的全库快照修订号(规格 #93 / 票 #94)。
+// handleSnapshotVersion 只返回当前的全库快照修订号。
 // 它与 /snapshot 复用同一个设备码认证;未绑定 profile 的设备码同样返回
 // 403。这个查询是轻量探针:既不导出快照,也不更新设备码的最后拉取时间
 // 和最近声明的客户端版本,所以 `cache-tokens ls` 不因轮询而变化。

@@ -14,7 +14,7 @@ import (
 // MUST be encrypted (vaultio.Encrypt) before touching disk. Version = format version.
 type Snapshot struct {
 	Version int `json:"version"`
-	// SnapshotRevision (规格 #93) 是权威端全库统一的快照修订号,两条导出
+	// SnapshotRevision 是权威端全库统一的快照修订号,两条导出
 	// 路径都携带。旧快照没有该字段时解码为零值 0;客户端把 0 视为
 	// 「修订号未知」,第一次比较必然触发一次全量拉取。
 	SnapshotRevision int64 `json:"snapshot_revision"`
@@ -538,6 +538,11 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 	}
 	defer tx.Rollback() // no-op after Commit
 
+	var currentRevision int64
+	if err = tx.QueryRow(`SELECT revision FROM snapshot_revision WHERE id=1`).Scan(&currentRevision); err != nil {
+		return err
+	}
+
 	// 1. credentials (re-seal under THIS store's master key)
 	for _, c := range snap.Credentials {
 		secretBlob, err := seal(s.masterKey, c.Secret)
@@ -640,9 +645,10 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		}
 	}
 
-	// 9. 快照修订号按快照原值恢复(触发器在导入过程中的加一被显式覆盖)。
-	if err := setSnapshotRevisionTx(tx, snap.SnapshotRevision); err != nil {
-		return fmt.Errorf("restore snapshot revision: %w", err)
+	// 9. 快照修订号推进到导入前值与快照携带值中较大者的后一个值;配置行
+	// 导入过程中触发的加一只影响事务内部状态,最终由这里统一覆盖。
+	if err := setSnapshotRevisionTx(tx, snap.SnapshotRevision, currentRevision); err != nil {
+		return fmt.Errorf("advance snapshot revision after import: %w", err)
 	}
 
 	return tx.Commit()

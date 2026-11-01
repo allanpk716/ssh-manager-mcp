@@ -14,7 +14,7 @@ import (
 )
 
 // localChangeHintSession 直接在本地 vault 上构造单机 MCP 服务，并用真实
-// in-memory MCP 会话调用工具。这里是票 #97 的测试接缝：测试只看工具结果，
+// in-memory MCP 会话调用工具。这里是单机变更提示的测试入口：测试只看工具结果，
 // 不进入提示来源内部。
 func localChangeHintSession(t *testing.T, st *store.Store, profileID string) *mcp.ClientSession {
 	t.Helper()

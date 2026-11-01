@@ -188,7 +188,7 @@ func redirectCacheEnvAllPlatforms(t *testing.T) string {
 	return dir
 }
 
-// TestCacheConfig_SnapshotPollInterval_SetReadAndEnvOverride — 规格 #93 / 票 #95:
+// TestCacheConfig_SnapshotPollInterval_SetReadAndEnvOverride — 快照修订号轮询间隔:
 // 轮询间隔默认 5 分钟;`cache config --snapshot-poll-interval` 写入实例级
 // cache.config.json;环境变量临时覆盖;与离线上限两个键互不覆盖。
 func TestCacheConfig_SnapshotPollInterval_SetReadAndEnvOverride(t *testing.T) {

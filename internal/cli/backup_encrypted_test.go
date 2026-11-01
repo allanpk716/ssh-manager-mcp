@@ -426,8 +426,9 @@ func TestBackupVerify_Plaintext_IgnoresPassphraseFile(t *testing.T) {
 // TestBackupEncrypted_RoundTrip_ImportEquivalent: fixture vault (servers,
 // credentials incl. a private-key passphrase, profile, grant, project) ->
 // encrypted create -> `import --passphrase-file` into a fresh vault under a
-// DIFFERENT master key -> the two snapshots must be field-for-field identical,
-// and the original project token must still validate.
+// DIFFERENT master key -> the two snapshots must be field-for-field identical
+// except that the target's snapshot revision advances monotonically, and the
+// original project token must still validate.
 func TestBackupEncrypted_RoundTrip_ImportEquivalent(t *testing.T) {
 	dir := t.TempDir()
 	dbA := filepath.Join(dir, "a.db")
@@ -482,6 +483,8 @@ func TestBackupEncrypted_RoundTrip_ImportEquivalent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportSnapshot A: %v", err)
 	}
+	revisionA := snapA.SnapshotRevision
+	snapA.SnapshotRevision = 0
 	if err := stA.Close(); err != nil {
 		t.Fatalf("close A: %v", err)
 	}
@@ -524,12 +527,17 @@ func TestBackupEncrypted_RoundTrip_ImportEquivalent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportSnapshot B: %v", err)
 	}
+	revisionB := snapB.SnapshotRevision
+	snapB.SnapshotRevision = 0
 	plainB, err := json.MarshalIndent(snapB, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(plainA) != string(plainB) {
 		t.Fatalf("round-trip snapshots differ:\n--- A ---\n%s\n--- B ---\n%s", plainA, plainB)
+	}
+	if revisionB <= revisionA {
+		t.Fatalf("round-trip snapshot revision = %d, must advance from %d", revisionB, revisionA)
 	}
 	// explicit count assertions (servers/credentials/profiles/projects/grants)
 	if len(snapB.Servers) != 2 || len(snapB.Credentials) != 2 || len(snapB.Profiles) != 1 || len(snapB.Projects) != 1 || len(snapB.Grants) != 1 {

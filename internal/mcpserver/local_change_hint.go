@@ -34,7 +34,7 @@ func (h *localVaultChangeHints) notices() []string {
 
 	revision, err := h.store.SnapshotRevision()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sshmgr: 读取本地 vault 快照修订号失败（跳过变更提示）: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sshmgr: read local vault snapshot revision (skipping change hints): %v\n", err)
 		return nil
 	}
 	if h.baseline != nil && h.baseline.SnapshotRevision == revision {
@@ -43,7 +43,7 @@ func (h *localVaultChangeHints) notices() []string {
 
 	snapshot, err := h.store.ExportSnapshotForProfile(h.profileID, false)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sshmgr: 导出本地 vault 快照失败（跳过变更提示）: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sshmgr: export local vault snapshot (skipping change hints): %v\n", err)
 		return nil
 	}
 	if h.baseline == nil {
@@ -51,7 +51,7 @@ func (h *localVaultChangeHints) notices() []string {
 		return nil
 	}
 
-	hint := h.snapshotComparer().Hint(h.baseline, snapshot)
+	hint := effectiveSnapshotComparer(h.changes).Hint(h.baseline, snapshot)
 	h.baseline = snapshot
 	if hint == "" {
 		return nil
@@ -59,11 +59,13 @@ func (h *localVaultChangeHints) notices() []string {
 	return []string{hint}
 }
 
-func (h *localVaultChangeHints) snapshotComparer() *snapshotdiff.Comparer {
-	if h.changes == nil {
+// effectiveSnapshotComparer 返回要使用的快照比较器;调用方没有注入比较器时
+// 退回默认比较器,让测试路径与生产路径比较同一组配置差异。
+func effectiveSnapshotComparer(changes *snapshotdiff.Comparer) *snapshotdiff.Comparer {
+	if changes == nil {
 		return snapshotdiff.Default()
 	}
-	return h.changes
+	return changes
 }
 
 // newLocalVaultServer 构造直接读取本地 vault 的单机工具面，并只挂本地

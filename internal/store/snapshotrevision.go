@@ -43,6 +43,17 @@ INSERT OR IGNORE INTO snapshot_revision(id, revision) VALUES (1, 1);
 				table, event, strings.ToUpper(event), table)
 		}
 	}
+	// 改绑设备码会改变这个设备码下一次拉到的 profile 快照,但普通设备码
+	// 维护(记录最后拉取时间、客户端版本、吊销)不改变任何快照内容。因此
+	// 这里只对 profile 绑定列建更新触发器,并且只在绑定真正变化时加一。
+	b.WriteString(`
+CREATE TRIGGER IF NOT EXISTS snapshot_revision_cache_tokens_profile
+AFTER UPDATE OF profile_id ON cache_tokens
+FOR EACH ROW WHEN OLD.profile_id IS NOT NEW.profile_id
+BEGIN
+  UPDATE snapshot_revision SET revision = revision + 1;
+END;
+`)
 	return b.String()
 }
 
@@ -58,12 +69,17 @@ func (s *Store) SnapshotRevision() (int64, error) {
 	return rev, err
 }
 
-// setSnapshotRevisionTx 在导入快照的事务里把修订号恢复为快照携带的值。
-// 触发器在导入各配置表时已经加过一,这里显式覆盖成快照原值,保证恢复
-// 是无损的:导入后的库继续从原修订号往前走。
-func setSnapshotRevisionTx(tx *sql.Tx, revision int64) error {
+// setSnapshotRevisionTx 在导入快照的事务里把修订号推进到导入前当前值与
+// 快照携带值中较大者的后一个值。修订号必须全库单调递增:如果恢复成快照
+// 携带值,目标库此前更高的修订号会倒退,轮询方会把不同内容误判成未变化。
+func setSnapshotRevisionTx(tx *sql.Tx, revision, currentBeforeImport int64) error {
+	next := currentBeforeImport
+	if revision > next {
+		next = revision
+	}
+	next++
 	_, err := tx.Exec(
 		`INSERT INTO snapshot_revision(id, revision) VALUES (1, ?)
-		 ON CONFLICT(id) DO UPDATE SET revision=excluded.revision`, revision)
+		 ON CONFLICT(id) DO UPDATE SET revision=excluded.revision`, next)
 	return err
 }

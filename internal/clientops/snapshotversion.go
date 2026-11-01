@@ -23,6 +23,19 @@ type snapshotVersionResponse struct {
 	SnapshotRevision int64 `json:"snapshot_revision"`
 }
 
+// deviceCodeAndPin resolves the bare device code and server pin used by snapshot
+// requests. A separately stored pin wins over a stale pin embedded in the token;
+// when it is absent, the combined "<code>:<pin>" token form is split.
+func deviceCodeAndPin(cred CacheCred) (string, string) {
+	if cred.Pin != "" {
+		return cred.Token, cred.Pin
+	}
+	if code, pin, ok := SplitTokenPin(cred.Token); ok {
+		return code, pin
+	}
+	return cred.Token, ""
+}
+
 // querySnapshotVersion 调用权威端的 GET /snapshot/version,返回当前快照
 // 修订号与响应里的权威端时间。请求头复用统一的设备码与客户端版本设置
 // 函数。pin 必须非空:自动保鲜只走锚定 TLS 连接。

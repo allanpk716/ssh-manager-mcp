@@ -68,7 +68,7 @@ func ResetCacheQuarantineForTest() { cacheQuarantinedFlag = false }
 // a persisted cache.auth.json exists. maxAge<=0 disables entirely — INCLUDING
 // the missing-cache case (the first pull stays a deliberate manual step).
 //
-// 规格 #93 / 票 #94:缓存到期时先查询权威端的快照修订号。修订号与缓存里
+// 缓存到期时先查询权威端的快照修订号。修订号与缓存里
 // 的一致,就只把缓存元数据里的最后联系时间推进到权威端时间,不下载全量
 // 快照;不一致才全量拉取。查询失败只返回错误交给调用方记录日志,当前
 // 快照继续使用;旧权威端返回 404 时,回到原来的到期直接全量拉取。
@@ -102,13 +102,7 @@ func MaybeLazyPullFor(instance string, maxAge time.Duration) error {
 	lazyPullBackoff.lastAttempt = time.Now()
 	lazyPullBackoff.mu.Unlock()
 
-	pin := cred.Pin // resolved pin wins over any embedded stale pin (cert rotation)
-	code := cred.Token
-	if pin == "" {
-		if c, p, ok := SplitTokenPin(cred.Token); ok {
-			code, pin = c, p
-		}
-	}
+	code, pin := deviceCodeAndPin(*cred)
 	if pin == "" {
 		return fmt.Errorf("cache.auth.json has no pin; refusing plaintext auto-pull")
 	}
