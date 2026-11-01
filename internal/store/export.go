@@ -15,6 +15,10 @@ import (
 // MUST be encrypted (vaultio.Encrypt) before touching disk. Version = format version.
 type Snapshot struct {
 	Version int `json:"version"`
+	// SnapshotRevision 是权威端全库统一的快照修订号,两条导出
+	// 路径都携带。旧快照没有该字段时解码为零值 0;客户端把 0 视为
+	// 「修订号未知」,第一次比较必然触发一次全量拉取。
+	SnapshotRevision int64 `json:"snapshot_revision"`
 	// RecommendedVersion 是导出这份快照的二进制版本。多机客户端用它比较
 	// 自己是否落后；旧快照与旧客户端分别解码、忽略该字段。
 	RecommendedVersion string               `json:"recommended_version"`
@@ -263,7 +267,11 @@ func deriveLegacyHostKeys(servers []SnapshotServer, entryPins []SnapshotEntryHos
 // ExportSnapshot captures every table. Credentials are DECRYPTED under s.masterKey.
 // Requires the store to be unlocked. The caller must encrypt the serialized form.
 func (s *Store) ExportSnapshot() (*Snapshot, error) {
-	snap := &Snapshot{Version: 1, RecommendedVersion: buildinfo.Version}
+	revision, err := s.SnapshotRevision()
+	if err != nil {
+		return nil, err
+	}
+	snap := &Snapshot{Version: 1, SnapshotRevision: revision, RecommendedVersion: buildinfo.Version}
 
 	// servers (COALESCE the nullable text cols to '' — credential_id is nullable
 	// since Plan 20 C0: a credential-less server carries "" in the snapshot)
@@ -485,8 +493,12 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	if err := requireProfile(s.db, profileID); err != nil {
 		return nil, err
 	}
+	revision, err := s.SnapshotRevision()
+	if err != nil {
+		return nil, err
+	}
 
-	snap := &Snapshot{Version: 1, RecommendedVersion: buildinfo.Version}
+	snap := &Snapshot{Version: 1, SnapshotRevision: revision, RecommendedVersion: buildinfo.Version}
 
 	// profile row
 	rp, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles WHERE id=?`, profileID)
@@ -712,6 +724,11 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 	}
 	defer tx.Rollback() // no-op after Commit
 
+	var currentRevision int64
+	if err = tx.QueryRow(`SELECT revision FROM snapshot_revision WHERE id=1`).Scan(&currentRevision); err != nil {
+		return err
+	}
+
 	// 1. credentials (re-seal under THIS store's master key)
 	for _, c := range snap.Credentials {
 		secretBlob, err := seal(s.masterKey, c.Secret)
@@ -846,11 +863,18 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 	}
 
 	// 旧格式锚迁移必须在恢复快照历史审计之后执行：迁移审计的编号才会排在
-	// 历史行之后，保持导入后的历史顺序可读。
+	// 历史行后面，保持导入后的历史顺序可读。
 	if len(snap.EntryHostKeys) == 0 {
 		if err := migrateEntryPinsTx(tx); err != nil {
 			return fmt.Errorf("migrate legacy host keys: %w", err)
 		}
+	}
+
+	// 9. 快照修订号推进到导入前值与快照携带值中较大者的后一个值；配置行
+	// 导入过程中触发的加一只影响事务内部状态，最终由这里统一覆盖。它必须
+	// 放在包括旧格式锚迁移在内的全部配置写入之后。
+	if err := setSnapshotRevisionTx(tx, snap.SnapshotRevision, currentRevision); err != nil {
+		return fmt.Errorf("advance snapshot revision after import: %w", err)
 	}
 
 	return tx.Commit()

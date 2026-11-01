@@ -317,10 +317,10 @@ func cacheStatusList(cmd *cobra.Command) error {
 }
 
 func cacheConfigCmd() *cobra.Command {
-	var instance, maxOffline string
+	var instance, maxOffline, snapshotPollInterval string
 	c := &cobra.Command{
 		Use:   "config",
-		Short: "Show or set the per-instance offline cap (cache.config.json)",
+		Short: "Show or set per-instance cache settings (offline cap, snapshot poll interval)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := checkInstanceFlag(instance); err != nil {
 				return err
@@ -341,27 +341,45 @@ func cacheConfigCmd() *cobra.Command {
 			if label == "" {
 				label = "default"
 			}
-			if maxOffline == "" {
+			if maxOffline == "" && snapshotPollInterval == "" {
 				cap, src, rerr := clientops.EffectiveMaxOffline(dir)
 				if rerr != nil {
 					return rerr
 				}
-				if src == "off" {
-					fmt.Fprintf(out, "instance: %s (%s)\ncap:      off (no offline limit)\n", label, dir)
-				} else {
-					fmt.Fprintf(out, "instance: %s (%s)\ncap:      %s (source: %s)\n", label, dir, cap, src)
+				poll, pollSrc, perr := clientops.EffectiveSnapshotPollInterval(dir)
+				if perr != nil {
+					return perr
 				}
+				pollLine := fmt.Sprintf("%s (%s)", poll, pollSrc)
+				capLine := "off (no offline limit)"
+				if src != "off" {
+					capLine = fmt.Sprintf("%s (source: %s)", cap, src)
+				}
+				fmt.Fprintf(out, "instance: %s (%s)\ncap:      %s\npoll:     %s\n", label, dir, capLine, pollLine)
 				return nil
 			}
-			if _, verr := clientops.ValidateMaxOffline(maxOffline); verr != nil {
-				return verr
+			if maxOffline != "" {
+				if _, verr := clientops.ValidateMaxOffline(maxOffline); verr != nil {
+					return verr
+				}
+				if werr := clientops.WriteCacheConfig(dir, maxOffline); werr != nil {
+					return werr
+				}
 			}
-			if werr := clientops.WriteCacheConfig(dir, maxOffline); werr != nil {
-				return werr
+			if snapshotPollInterval != "" {
+				if _, verr := clientops.ValidateSnapshotPollInterval(snapshotPollInterval); verr != nil {
+					return verr
+				}
+				if werr := clientops.WriteSnapshotPollIntervalConfig(dir, snapshotPollInterval); werr != nil {
+					return werr
+				}
 			}
 			fmt.Fprintf(out, "wrote %s (instance %s)\n", filepath.Join(dir, "cache.config.json"), label)
 			if strings.TrimSpace(os.Getenv("SSHMGR_CACHE_MAX_OFFLINE")) != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: SSHMGR_CACHE_MAX_OFFLINE is set — the persisted config takes effect only after the env is cleared")
+			}
+			if strings.TrimSpace(os.Getenv("SSHMGR_CACHE_SNAPSHOT_POLL_INTERVAL")) != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: SSHMGR_CACHE_SNAPSHOT_POLL_INTERVAL is set — the persisted interval takes effect only after the env is cleared")
 			}
 			// 默认槽警示（rev5 §8）：删默认槽 config 或 meta 都会削弱意图标记。
 			if instance == "" {
@@ -372,5 +390,6 @@ func cacheConfigCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&instance, "instance", "", "target this named instance (directory must exist; mutually exclusive with SSHMGR_CACHE_DIR/SSHMGR_CACHE_DEK)")
 	c.Flags().StringVar(&maxOffline, "max-offline", "", "persist this Go duration (e.g. 24h) as the instance's offline cap; omit to display the current effective cap")
+	c.Flags().StringVar(&snapshotPollInterval, "snapshot-poll-interval", "", "persist this Go duration (e.g. 5m, minimum 1m) as the instance's snapshot revision poll interval in cache.config.json")
 	return c
 }

@@ -14,6 +14,7 @@ import (
 
 	"ssh-manager-mcp/internal/mcpserver/hotswap"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/snapshotdiff"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/updater"
@@ -39,7 +40,7 @@ func RunStdio(token string, kp store.KeyProvider) error {
 	if project == nil {
 		return fmt.Errorf("invalid or unknown token")
 	}
-	srv, tunnels, tasks, err := NewServer(st, project.ProfileID, project.ID)
+	srv, tunnels, tasks, err := newLocalVaultServer(st, project.ProfileID, project.ID)
 	if err != nil {
 		return err
 	}
@@ -115,15 +116,22 @@ type cacheStoreHolder struct {
 	mu       sync.Mutex // serializes rebuilds
 	cur      atomic.Pointer[store.Store]
 	lastSnap *store.Snapshot // guarded by mu — last snapshot successfully hydrated
-	stores   []*store.Store  // every hydrated store, closed once in cleanup
-	tmpPaths []string        // every temp db, removed once in cleanup
+	// 变更比较与提示:每次换上新快照时比较新旧快照,产生的
+	// 变更提示保存在进程内存里,经会话提示通道按「会话 + 提示文本」
+	// 去重。changes 为空时退回默认比较器,保证直接构造 holder 的测试
+	// 路径与生产路径走同一套比较。
+	changes     *snapshotdiff.Comparer
+	changeHints []string       // guarded by mu
+	stores      []*store.Store // every hydrated store, closed once in cleanup
+	tmpPaths    []string       // every temp db, removed once in cleanup
 }
 
-// Current returns the store to serve THIS tool call from, rebuilding first if
-// the reload callback reports a change. Every failure path keeps serving the
-// previous store — Lazy revocation semantics: a session outlives its token
-// until the next spawn.
-func (h *cacheStoreHolder) Current() *store.Store {
+// refresh 是桥唯一的「换上新快照」入口:先询问重新加载回调,变化才
+// 解密快照并建出内存数据库。工具调用前的 Current 与后台轮询的 ReloadNow 都走这一
+// 条路径,任何一方都不另写替换内存快照的逻辑。Every failure path keeps
+// serving the previous store — Lazy revocation semantics: a session outlives
+// its token until the next spawn.
+func (h *cacheStoreHolder) refresh() *store.Store {
 	if h.reload == nil {
 		return h.cur.Load()
 	}
@@ -172,11 +180,34 @@ func (h *cacheStoreHolder) Current() *store.Store {
 		os.Remove(tmpPath)
 		return h.cur.Load()
 	}
+	if hint := effectiveSnapshotComparer(h.changes).Hint(h.lastSnap, snap); hint != "" {
+		h.changeHints = append(h.changeHints, hint)
+	}
 	h.lastSnap = snap
 	h.stores = append(h.stores, st)
 	h.tmpPaths = append(h.tmpPaths, tmpPath)
 	h.cur.Store(st) // old store intentionally left open (in-flight calls)
 	return st
+}
+
+// Current returns the store to serve THIS tool call from, rebuilding first if
+// the reload callback reports a change.
+func (h *cacheStoreHolder) Current() *store.Store { return h.refresh() }
+
+// ReloadNow 经由与工具调用相同的统一换快照入口立即热加载一次。供快照修订号
+// 后台轮询循环在拉到新快照(或发现共享缓存已被别的桥更新)后安装新快照;不
+// 产生任何用户可见输出,失败路径与工具调用路径一致(保留旧快照并记日志)。
+func (h *cacheStoreHolder) ReloadNow() { h.refresh() }
+
+// CurrentRevision 返回当前内存快照的快照修订号(旧快照缺该字段时为 0),供
+// 后台轮询与远端修订号比较。
+func (h *cacheStoreHolder) CurrentRevision() int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.lastSnap == nil {
+		return 0
+	}
+	return h.lastSnap.SnapshotRevision
 }
 
 // cleanup closes every hydrated store and removes every temp db. Called once,
@@ -205,7 +236,7 @@ func (h *cacheStoreHolder) cleanup() {
 // make impossible). Shared with the seam test so the production construction and
 // the tested construction can never drift apart.
 func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), device string) (*cacheStoreHolder, *models.Project, error) {
-	h := &cacheStoreHolder{reload: reload, token: token, auditFile: af, device: device}
+	h := &cacheStoreHolder{reload: reload, token: token, auditFile: af, device: device, changes: snapshotdiff.Default()}
 	st, project, tmpPath, err := hydrateCacheStore(token, snap, af, device)
 	if err != nil {
 		return nil, nil, err
@@ -218,16 +249,31 @@ func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.
 	return h, project, nil
 }
 
+// changeHint 返回启动以来产生的全部变更提示,按发生顺序排列。提示保存
+// 在进程内存里,由会话提示通道按「会话 + 提示文本」去重,每个会话各看到
+// 一次;桥在 agent 两次调用之间换上多份新快照时,每条提示都不会丢。
+func (h *cacheStoreHolder) changeHint() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.changeHints) == 0 {
+		return nil
+	}
+	return append([]string(nil), h.changeHints...)
+}
+
 // versionHint 先刷新当前快照，再比较桥自身版本与快照携带的推荐版本。这里
 // 先调用 Current，缓存重载后的第一次工具调用就能报告新版本对，而不是晚一次。
-func (h *cacheStoreHolder) versionHint() string {
+func (h *cacheStoreHolder) versionHint() []string {
 	h.Current()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.lastSnap == nil {
-		return ""
+		return nil
 	}
-	return updater.VersionMismatchHint(hotswap.BridgeVersion(), h.lastSnap.RecommendedVersion)
+	if text := updater.VersionMismatchHint(hotswap.BridgeVersion(), h.lastSnap.RecommendedVersion); text != "" {
+		return []string{text}
+	}
+	return nil
 }
 
 // RunStdioCache hydrates a Snapshot into a temporary read-only store, verifies the SAME
@@ -263,13 +309,43 @@ func (h *cacheStoreHolder) versionHint() string {
 // audit to the SAME project id. The only difference from RunStdio is that the store is read-only
 // (mutations refused) and audit is sidecar'd (per-machine, single-direction, zero-merge).
 func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) error {
-	srv, tunnels, tasks, cleanup, err := NewCacheBroker(token, snap, auditPath, reload, fwdBinder, device, metaEditor)
+	return RunStdioCacheWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor, nil)
+}
+
+// CacheRefresher 是桥统一换快照入口的触发器:后台轮询
+// 循环用它读取当前内存快照的修订号,并在拉到新快照或发现共享缓存更新后,
+// 经由与工具调用完全相同的路径安装新快照。
+type CacheRefresher interface {
+	// CurrentRevision 返回当前内存快照的快照修订号(旧快照缺该字段时为 0)。
+	CurrentRevision() int64
+	// ReloadNow 立即经统一换快照入口热加载一次;失败保留旧快照并记日志。
+	ReloadNow()
+}
+
+// RunStdioCacheWithRefresher 是 RunStdioCache 的扩展入口:桥装配完成后、开始
+// 服务前,把统一换快照入口的触发器交给 startBackground;其返回的停止函数在
+// 服务结束(宿主断开或热升级交割)后调用,先于桥的清理执行。startBackground
+// 为 nil 时行为与 RunStdioCache 完全一致。
+func RunStdioCacheWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, startBackground func(CacheRefresher) func()) error {
+	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor)
+	if err != nil {
+		af.Close()
+		return err
+	}
+	defer af.Close()
+	defer h.cleanup()
 	defer tunnels.CloseAll()
 	defer tasks.CloseAll()
+	if startBackground != nil {
+		if stop := startBackground(h); stop != nil {
+			// 注册在其余收尾之后:停止顺序为 先停后台循环,再关任务/隧道/桥。
+			defer stop()
+		}
+	}
 	return serveBridge(context.Background(), srv)
 }
 
@@ -283,16 +359,28 @@ func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload 
 // tasks.CloseAll (MCP-shutdown teardown, as in RunStdio). Parameters carry the
 // same contract as RunStdioCache.
 func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, func(), error) {
-	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	srv, tunnels, tasks, _, cleanup, err := NewCacheBrokerWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor)
 	if err != nil {
 		return nil, nil, nil, nil, err
+	}
+	return srv, tunnels, tasks, cleanup, nil
+}
+
+// NewCacheBrokerWithRefresher 按 NewCacheBroker 的同一装配构建桥,并额外交出
+// 统一换快照入口的触发器:端到端测试用它驱动后台轮询循环(短间隔注入),
+// `mcp --cache` 的生产路径则经 RunStdioCacheWithRefresher 拿到同一个触发器。
+// cleanup 的契约与 NewCacheBroker 相同。
+func NewCacheBrokerWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, CacheRefresher, func(), error) {
+	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
 	}
 	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor)
 	if err != nil {
 		af.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
-	return srv, tunnels, tasks, func() { h.cleanup(); af.Close() }, nil
+	return srv, tunnels, tasks, h, func() { h.cleanup(); af.Close() }, nil
 }
 
 // newCacheBroker assembles the hot-reloading read-only broker exactly as
@@ -310,7 +398,9 @@ func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func
 		hk := fwdBinder(h.Current)
 		hkFn = func() sshbroker.HostKeyStore { return hk }
 	}
-	srv, tunnels, tasks, err := NewServerFromSourceWithHints(h.Current, project.ProfileID, project.ID, hkFn, metaEditor, h.versionHint)
+	// 变更提示来源注册在版本提示来源之前:两种提示同时出现时,变更
+	// 提示排在前面。
+	srv, tunnels, tasks, err := NewServerFromSourceWithHints(h.Current, project.ProfileID, project.ID, hkFn, metaEditor, h.changeHint, h.versionHint)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}

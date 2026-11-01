@@ -52,20 +52,23 @@ import (
 // client snapshot materials. The serve store starts with NO anchor — every
 // anchor in T5's assertions is produced by the forward under test.
 type cacheFwdFixture struct {
-	sshdAddr  string
-	sshdKey   ssh.PublicKey
-	targetID  string
-	profID    string
-	serve     *store.Store
-	dbPath    string
-	serveHTTP *httptest.Server // TLS, /pin-hostkey POST-counted
-	posts     *int32
-	versionMu *sync.Mutex
-	versions  map[string]string   // 请求路径 → 最近一次看到的客户端版本请求头
-	cred      clientops.CacheCred // pull/pin credential for the "laptop" device
-	projToken string
-	snap      *store.Snapshot // exported BEFORE any test-side anchor preset
-	orphanFP  string          // 旧格式孤立锚的指纹（升级迁移审计应列出）
+	sshdAddr        string
+	sshdKey         ssh.PublicKey
+	targetID        string
+	profID          string
+	serve           *store.Store
+	dbPath          string
+	serveHTTP       *httptest.Server // TLS, /pin-hostkey POST-counted
+	posts           *int32
+	versionGets     *int32       // GET /snapshot/version 的请求次数
+	snapshotGets    *int32       // GET /snapshot 的请求次数
+	versionNotFound *atomic.Bool // 打开后,/snapshot/version 返回 404(模拟旧权威端)
+	versionMu       *sync.Mutex
+	versions        map[string]string   // 请求路径 → 最近一次看到的客户端版本请求头
+	cred            clientops.CacheCred // pull/pin credential for the "laptop" device
+	projToken       string
+	snap            *store.Snapshot // exported BEFORE any test-side anchor preset
+	orphanFP        string          // 旧格式孤立锚的指纹（升级迁移审计应列出）
 }
 
 // newCacheFwdFixture seeds the whole topology. The POST counter wraps only
@@ -125,11 +128,29 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	}
 	t.Cleanup(r.Close)
 	var posts int32
+	var versionGets int32
+	var snapshotGets int32
+	versionNotFound := &atomic.Bool{}
 	versionMu := &sync.Mutex{}
 	versions := map[string]string{}
+	fx := &cacheFwdFixture{
+		versionMu: versionMu, versions: versions,
+		posts: &posts, versionGets: &versionGets, snapshotGets: &snapshotGets,
+		versionNotFound: versionNotFound,
+	}
 	mux := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/pin-hostkey" {
 			atomic.AddInt32(&posts, 1)
+		}
+		if req.URL.Path == "/snapshot/version" {
+			atomic.AddInt32(&versionGets, 1)
+			if versionNotFound.Load() {
+				http.NotFound(w, req)
+				return
+			}
+		}
+		if req.URL.Path == "/snapshot" {
+			atomic.AddInt32(&snapshotGets, 1)
 		}
 		versionMu.Lock()
 		versions[req.URL.Path] = req.Header.Get("X-Sshmgr-Client-Version")
@@ -146,18 +167,22 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &cacheFwdFixture{
-		sshdAddr: addr, sshdKey: sshdKey, targetID: targetID, profID: profID,
-		serve: sv, dbPath: dbPath, serveHTTP: serveHTTP, posts: &posts,
-		versionMu: versionMu, versions: versions,
-		orphanFP: orphanFP,
-		cred: clientops.CacheCred{
-			URL:   serveHTTP.URL,
-			Token: laptopTok,
-			Pin:   mcpserver.SPKIFingerprint(serveHTTP.Certificate()),
-		},
-		projToken: projToken, snap: snap,
+	fx.sshdAddr = addr
+	fx.sshdKey = sshdKey
+	fx.targetID = targetID
+	fx.profID = profID
+	fx.serve = sv
+	fx.dbPath = dbPath
+	fx.serveHTTP = serveHTTP
+	fx.cred = clientops.CacheCred{
+		URL:   serveHTTP.URL,
+		Token: laptopTok,
+		Pin:   mcpserver.SPKIFingerprint(serveHTTP.Certificate()),
 	}
+	fx.orphanFP = orphanFP
+	fx.projToken = projToken
+	fx.snap = snap
+	return fx
 }
 
 func (fx *cacheFwdFixture) host() string { return fx.sshdAddr[:strings.Index(fx.sshdAddr, ":")] }
@@ -165,6 +190,9 @@ func (fx *cacheFwdFixture) port() int    { return portFromAddr(fx.sshdAddr) }
 func (fx *cacheFwdFixture) postCount() int {
 	return int(atomic.LoadInt32(fx.posts))
 }
+
+func (fx *cacheFwdFixture) versionCount() int  { return int(atomic.LoadInt32(fx.versionGets)) }
+func (fx *cacheFwdFixture) snapshotCount() int { return int(atomic.LoadInt32(fx.snapshotGets)) }
 
 func (fx *cacheFwdFixture) seenClientVersion(path string) string {
 	fx.versionMu.Lock()
@@ -715,7 +743,13 @@ func TestCacheVersionE2E_ToolHintSessionLifecycle(t *testing.T) {
 		t.Fatalf("同一提示只应出现一次，实际为 %#v", second)
 	}
 
-	next = &store.Snapshot{Version: 1, RecommendedVersion: "1.2.0", Profiles: fx.snap.Profiles, Projects: fx.snap.Projects}
+	// 保留服务器集合与修订号:这张快照只改推荐版本,不应顺带触发配置
+	// 变更提示。
+	next = &store.Snapshot{
+		Version: 1, SnapshotRevision: fx.snap.SnapshotRevision, RecommendedVersion: "1.2.0",
+		Credentials: fx.snap.Credentials, Servers: fx.snap.Servers,
+		Profiles: fx.snap.Profiles, Grants: fx.snap.Grants, Projects: fx.snap.Projects,
+	}
 	third := callToolTexts(t, sess, "list_servers", map[string]any{})
 	wantChanged := "客户端 1.0.0 落后于权威端 1.2.0，运行 `sshmgr update` 升级"
 	if len(third) != 2 || third[0] != wantChanged || !strings.HasPrefix(third[1], `{"servers":`) {
@@ -769,7 +803,11 @@ func TestCacheVersionE2E_NewerClientHintChangesWithVersionPair(t *testing.T) {
 		t.Fatalf("同样的客户端较新提示只应出现一次，实际为 %#v", second)
 	}
 
-	next = &store.Snapshot{Version: 1, RecommendedVersion: "1.0.0", Profiles: fx.snap.Profiles, Projects: fx.snap.Projects}
+	next = &store.Snapshot{
+		Version: 1, SnapshotRevision: fx.snap.SnapshotRevision, RecommendedVersion: "1.0.0",
+		Credentials: fx.snap.Credentials, Servers: fx.snap.Servers,
+		Profiles: fx.snap.Profiles, Grants: fx.snap.Grants, Projects: fx.snap.Projects,
+	}
 	third := callToolTexts(t, sess, "list_servers", map[string]any{})
 	wantThird := "客户端 1.2.0 比权威端 1.0.0 新，建议先升级权威端"
 	if len(third) != 2 || third[0] != wantThird || !strings.HasPrefix(third[1], `{"servers":`) {
@@ -808,8 +846,8 @@ func TestCacheVersionE2E_MultipleHintsKeepSourceOrder(t *testing.T) {
 	srv, _, _, err := mcpserver.NewServerFromSourceWithHints(
 		func() *store.Store { return fx.serve },
 		project.ProfileID, project.ID, nil, nil,
-		func() string { return "变更提示" },
-		func() string { return "版本提示" },
+		func() []string { return []string{"变更提示"} },
+		func() []string { return []string{"版本提示"} },
 	)
 	if err != nil {
 		t.Fatal(err)

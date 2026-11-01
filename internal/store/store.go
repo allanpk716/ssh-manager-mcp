@@ -249,8 +249,17 @@ func (s *Store) Checkpoint() error {
 }
 
 func initSchema(db *sql.DB) error {
-	_, err := db.Exec(schemaSQL)
-	return err
+	// 快照修订号的表、初始行和触发器拼接在既有结构之后:旧库第一次打开
+	// 时在这里完成迁移,后续打开全部是无操作。
+	// 放进一个事务只落一次盘;自动提交下新库每条语句各落一次,Windows 上明显变慢。
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(schemaSQL + snapshotRevisionSchema()); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+	return tx.Commit()
 }
 
 // migrate evolves the schema from prior pre-release shapes. host_keys was keyed by
@@ -259,6 +268,14 @@ func initSchema(db *sql.DB) error {
 // rows are port-ambiguous and are NOT secrets (regenerated via TOFU on next connect),
 // so we drop and let CREATE rebuild. Idempotent: no-op on fresh and already-migrated DBs.
 func migrate(db *sql.DB) error {
+	// 旧版快照修订号触发器指向 host_keys。新导出只读取按条目存放的
+	// entry_host_keys，因此先删除旧触发器；即使下面的旧结构迁移删除
+	// host_keys 表，这里也不会再尝试重建它们。
+	for _, trigger := range snapshotRevisionRetiredTriggers {
+		if _, err := db.Exec(`DROP TRIGGER IF EXISTS ` + trigger); err != nil {
+			return err
+		}
+	}
 	rows, err := db.Query(`PRAGMA table_info(host_keys)`)
 	if err != nil {
 		return err
