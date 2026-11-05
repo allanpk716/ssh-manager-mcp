@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"ssh-manager-mcp/internal/secretmask"
 	"ssh-manager-mcp/internal/sshbroker"
@@ -15,12 +16,14 @@ import (
 // 值集合。缓存命中时只读一个原子计数，不查询数据库，也不解密机密项。
 type backgroundMaskingSource struct {
 	storeFn func() *store.Store
+	cache   atomic.Pointer[backgroundMaskerCache]
+	mu      sync.Mutex
+}
 
-	mu       sync.Mutex
-	store    *store.Store
-	version  uint64
-	masker   secretmask.Masker
-	hasCache bool
+type backgroundMaskerCache struct {
+	store   *store.Store
+	version uint64
+	masker  secretmask.Masker
 }
 
 func newBackgroundMaskingSource(storeFn func() *store.Store) *backgroundMaskingSource {
@@ -33,11 +36,14 @@ func (s *backgroundMaskingSource) currentMasker() (secretmask.Masker, error) {
 		return secretmask.Masker{}, fmt.Errorf("current store is unavailable")
 	}
 	version := st.SecretValuesForMaskingVersion()
+	if cached := s.cache.Load(); cached != nil && cached.store == st && cached.version == version {
+		return cached.masker, nil
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.hasCache && s.store == st && s.version == version {
-		return s.masker, nil
+	if cached := s.cache.Load(); cached != nil && cached.store == st && cached.version == version {
+		return cached.masker, nil
 	}
 	rows, err := st.SecretValuesForMasking()
 	if err != nil {
@@ -56,7 +62,7 @@ func (s *backgroundMaskingSource) currentMasker() (secretmask.Masker, error) {
 		}
 	}
 	masker := secretmask.New(secrets)
-	s.store, s.version, s.masker, s.hasCache = st, version, masker, true
+	s.cache.Store(&backgroundMaskerCache{store: st, version: version, masker: masker})
 	return masker, nil
 }
 
@@ -85,8 +91,7 @@ func (w *notifyWriter) Write(p []byte) (int, error) {
 		w.reportMaskingUnavailable()
 		return len(p), nil
 	}
-	results := w.maskInput(masker, p)
-	w.writeResults(results)
+	w.writeMasked(masker, p)
 	w.after()
 	return len(p), nil
 }
@@ -102,22 +107,24 @@ func (w *notifyWriter) Flush() {
 		w.reportMaskingUnavailable()
 		return
 	}
-	results := w.flushWithMasker(masker)
-	w.writeResults(results)
+	w.flushMasked(masker)
 	w.after()
 }
 
-func (w *notifyWriter) maskInput(masker secretmask.Masker, input []byte) []secretmask.MaskResult {
+func (w *notifyWriter) writeMasked(masker secretmask.Masker, input []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if masker.LongestMatchLength() == 0 {
 		if w.stream == nil {
-			return []secretmask.MaskResult{{Output: input}}
+			_, _ = w.buf.Write(input)
+			return
 		}
 		result := w.stream.SwitchMasker(masker)
 		w.stream = nil
 		w.recordNames(result.MaskedNames)
-		return []secretmask.MaskResult{result}
+		w.writeResult(result)
+		_, _ = w.buf.Write(input)
+		return
 	}
 	if w.stream == nil {
 		streamValue := masker.NewStream(w.serverID)
@@ -127,21 +134,23 @@ func (w *notifyWriter) maskInput(masker secretmask.Masker, input []byte) []secre
 	writeResult := w.stream.Write(input)
 	w.recordNames(switchResult.MaskedNames)
 	w.recordNames(writeResult.MaskedNames)
-	return []secretmask.MaskResult{switchResult, writeResult}
+	w.writeResult(switchResult)
+	w.writeResult(writeResult)
 }
 
-func (w *notifyWriter) flushWithMasker(masker secretmask.Masker) []secretmask.MaskResult {
+func (w *notifyWriter) flushMasked(masker secretmask.Masker) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.stream == nil {
-		return nil
+		return
 	}
 	switchResult := w.stream.SwitchMasker(masker)
 	flushResult := w.stream.Flush()
 	w.stream = nil
 	w.recordNames(switchResult.MaskedNames)
 	w.recordNames(flushResult.MaskedNames)
-	return []secretmask.MaskResult{switchResult, flushResult}
+	w.writeResult(switchResult)
+	w.writeResult(flushResult)
 }
 
 func (w *notifyWriter) maskedNames() []string {
@@ -168,13 +177,11 @@ func (w *notifyWriter) writeDirect(p []byte) (int, error) {
 	return n, err
 }
 
-func (w *notifyWriter) writeResults(results []secretmask.MaskResult) {
-	for _, result := range results {
-		if len(result.Output) == 0 {
-			continue
-		}
-		_, _ = w.buf.Write(result.Output)
+func (w *notifyWriter) writeResult(result secretmask.MaskResult) {
+	if len(result.Output) == 0 {
+		return
 	}
+	_, _ = w.buf.Write(result.Output)
 }
 
 func (w *notifyWriter) reportMaskingUnavailable() {

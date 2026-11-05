@@ -43,6 +43,28 @@
 占位符才是 sshmgr 的遮蔽结果；文件或输出里原本就有的占位符字面量会原样
 返回，名字也不会被加入 `masked`。
 
+### 后台任务与 relay_file
+
+`exec_background` 的标准输出、标准错误，以及 `relay_file` 写入任务标准输出的
+进度文本，都在进入后台输出缓冲前完成遮蔽。因此 `exec_output` 返回的
+`stdout`、`stderr`、`next_stdout_offset`、`next_stderr_offset`、
+`stdout_bytes_total`、`stderr_bytes_total`、`lost_stdout_bytes`、
+`lost_stderr_bytes` 与 1 MiB 保留窗口，全部按遮蔽后的数据流计算；把
+`next_*_offset` 原样传回即可续读，不会错位或重复。base64 模式也是对缓冲里
+已经遮蔽的字节编码后再返回。
+
+任务仍在运行时，每个输出通道会暂留足以跨越机密项值边界的尾部字节；这些
+字节还没有计入可读偏移。任务正常结束、超时或被停止时，sshmgr 会先放出这段
+尾部并把任务标成结束状态，再让 `exec_output` 看到结束状态。后台任务结果里的
+`masked` 按整个任务累计，而不是只统计本次读取区间；即使早先输出已滚出 1 MiB
+窗口，对应名字仍会在后续读取的 `masked` 里出现。
+
+后台任务每次写入输出时都会读取当前 store 的机密项值集合。owner 换值、删除
+机密项，或多机客户端换到新快照 store 后，只有之后写入的输出使用新集合；已经
+进入缓冲的字节不会重扫。若读取值集合失败，该通道会丢弃后续远端输出，并写入
+一行「sshmgr: output dropped because secret values could not be read」作为
+报错占位，绝不把未遮蔽原文放进缓冲。
+
 输出遮蔽与命令策略一样，是**护栏，不是安全边界**
 （[ADR 0007](./adr/0007-command-policy-client-enforced-guardrail.md)）。它防
 的是机密项值无意中进入 agent 上下文；不承诺识别统一资源定位地址编码、

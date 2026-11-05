@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math/rand"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -227,6 +228,38 @@ func TestStreamMatchesWholeMaskForRandomAndByteByByteSplits(t *testing.T) {
 	}
 	if !equalStrings(got.MaskedNames, whole.MaskedNames) {
 		t.Fatalf("byte-by-byte masked names = %#v, want %#v", got.MaskedNames, whole.MaskedNames)
+	}
+}
+
+func TestStreamSwitchMaskerKeepsPendingBytes(t *testing.T) {
+	first := New([]Secret{{Name: "FIRST_TOKEN", Current: []byte("shared-secret-old")}})
+	second := New([]Secret{{Name: "SECOND_TOKEN", Current: []byte("shared-secret-new")}})
+	stream := first.NewStream("")
+	prefix := strings.Repeat("1", 20)
+
+	decided := stream.Write([]byte(prefix + "shared-secret"))
+	if string(decided.Output) != prefix[:17] || decided.MaskedNames != nil {
+		t.Fatalf("first write = %#v, want only decided prefix", decided)
+	}
+	switched := stream.SwitchMasker(second)
+	if len(switched.Output) != 0 || switched.MaskedNames != nil {
+		t.Fatalf("switch released held bytes: %#v", switched)
+	}
+	written := stream.Write([]byte("-new"))
+	flushed := stream.Flush()
+	if string(written.Output) != prefix[17:]+"{{sshmgr-secret:SECOND_TOKEN}}" {
+		t.Fatalf("switched output = %q", append(written.Output, flushed.Output...))
+	}
+	if !equalStrings(written.MaskedNames, []string{"SECOND_TOKEN"}) {
+		t.Fatalf("switched names = %#v", written.MaskedNames)
+	}
+
+	stream = first.NewStream("")
+	stream.Write([]byte(prefix + "shared-secret"))
+	empty := New(nil)
+	switched = stream.SwitchMasker(empty)
+	if string(switched.Output) != prefix[17:]+"shared-secret" || switched.MaskedNames != nil {
+		t.Fatalf("empty switch result = %#v", switched)
 	}
 }
 

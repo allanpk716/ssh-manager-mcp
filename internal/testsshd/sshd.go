@@ -26,9 +26,8 @@ type Options struct {
 	// refusals). The inner command never runs.
 	SudoStartFailure string
 	Exec             func(cmd string, stdin io.Reader) (stdout, stderr string, exitCode int)
-	// ExecStream, when non-nil, replaces Exec and receives the live channel
-	// writers. It lets integration tests reproduce commands that emit output in
-	// multiple chunks before exiting.
+	// ExecStream 非空时替代 Exec，直接拿到会话的实时输出写入器；集成测试
+	// 用它模拟命令在退出前分多次输出。
 	ExecStream func(cmd string, stdin io.Reader, stdout, stderr io.Writer) int
 	// Connections, when non-nil, is atomically bumped for every accepted TCP
 	// connection (right after Accept, before any SSH handshake) — lets a test

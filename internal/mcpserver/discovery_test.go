@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -115,15 +116,16 @@ func TestDiscovery_DisabledStillBoundButSilent(t *testing.T) {
 // started enabled goes silent the moment enabled() flips false — no restart,
 // no lingering offers.
 func TestDiscovery_SwitchedOffMidFlight(t *testing.T) {
-	on := true
-	stop := StartDiscovery(context.Background(), "n", 7878, "sha256:ab", func() bool { return on })
+	var on atomic.Bool
+	on.Store(true)
+	stop := StartDiscovery(context.Background(), "n", 7878, "sha256:ab", on.Load)
 	defer stop()
 	conn := openProbeConn(t)
 	addr := mustResolve(t, "127.0.0.1:7878")
 	if resp := probeOnce(t, conn, []byte(tValidProbe), addr, 2*time.Second); resp == nil {
 		t.Fatal("enabled responder must answer")
 	}
-	on = false // 关=不答(逐包评估,不重启进程)
+	on.Store(false) // 关=不答(逐包评估,不重启进程)
 	if resp := probeOnce(t, conn, []byte(tValidProbe), addr, 400*time.Millisecond); resp != nil {
 		t.Fatalf("per-packet gate: switched-off responder must not answer, got %s", resp)
 	}
