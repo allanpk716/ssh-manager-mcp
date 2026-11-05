@@ -179,7 +179,11 @@ func (s *Store) AddSecret(name, note string, value []byte) error {
 	if err := writeSecretAuditTx(tx, ts, "secret-add", map[string]any{"name": name}); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.secretValuesForMaskingVersion.Add(1)
+	return nil
 }
 
 // SetSecretValue 覆盖机密项的值：旧值移入上一个值字段，值版本号加一，值的
@@ -219,7 +223,11 @@ func (s *Store) SetSecretValue(name string, value []byte) error {
 	if err := writeSecretAuditTx(tx, ts, "secret-set", map[string]any{"name": name, "change": "值已更改"}); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.secretValuesForMaskingVersion.Add(1)
+	return nil
 }
 
 // EditSecretNote 只改备注。数据与审计行在同一事务提交，审计不记录备注原文。
@@ -270,7 +278,11 @@ func (s *Store) DeleteSecret(name string) error {
 	if err := writeSecretAuditTx(tx, s.nowTime(), "secret-rm", map[string]any{"name": name}); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.secretValuesForMaskingVersion.Add(1)
+	return nil
 }
 
 // ListSecretsInScope 列出服务器范围内的机密项可见列表。指定集合时只返回
@@ -556,7 +568,11 @@ func (s *Store) changeSecretAllows(secretNames, serverNames []string, allow bool
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.secretValuesForMaskingVersion.Add(1)
+	return nil
 }
 
 // resolveSecretAllowTargets 按名字逐个解析目标，返回解析成功的目标与缺失名

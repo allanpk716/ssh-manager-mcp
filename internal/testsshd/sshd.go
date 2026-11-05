@@ -26,6 +26,10 @@ type Options struct {
 	// refusals). The inner command never runs.
 	SudoStartFailure string
 	Exec             func(cmd string, stdin io.Reader) (stdout, stderr string, exitCode int)
+	// ExecStream, when non-nil, replaces Exec and receives the live channel
+	// writers. It lets integration tests reproduce commands that emit output in
+	// multiple chunks before exiting.
+	ExecStream func(cmd string, stdin io.Reader, stdout, stderr io.Writer) int
 	// Connections, when non-nil, is atomically bumped for every accepted TCP
 	// connection (right after Accept, before any SSH handshake) — lets a test
 	// prove a client never even dialed, e.g. a policy-blocked command must
@@ -87,7 +91,7 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 			if opts.Connections != nil {
 				opts.Connections.Add(1)
 			}
-			go serve(conn, cfg, opts.SudoPassword, opts.SudoStartFailure, execFn)
+			go serve(conn, cfg, opts.SudoPassword, opts.SudoStartFailure, execFn, opts.ExecStream)
 		}
 	}()
 	cleanup := func() {
@@ -111,7 +115,7 @@ func bytesEqual(a, b []byte) bool {
 	return d == 0
 }
 
-func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int)) {
+func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int) {
 	defer c.Close()
 	sc, chans, reqs, err := ssh.NewServerConn(c, cfg)
 	if err != nil {
@@ -122,7 +126,7 @@ func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw, sudoStartFailure string, e
 	for newChan := range chans {
 		switch newChan.ChannelType() {
 		case "session":
-			go handleSession(newChan, sudoPw, sudoStartFailure, execFn)
+			go handleSession(newChan, sudoPw, sudoStartFailure, execFn, execStreamFn)
 		case "direct-tcpip":
 			// Direct TCP/IP forwarding (RFC 4254 §7.2) — the server-side of `ssh -L`.
 			// The broker's ForwardLocal opens this channel via (*ssh.Client).Dial; the
@@ -138,7 +142,7 @@ func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw, sudoStartFailure string, e
 	}
 }
 
-func handleSession(newChan ssh.NewChannel, sudoPw, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int)) {
+func handleSession(newChan ssh.NewChannel, sudoPw, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int) {
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		return
@@ -214,12 +218,18 @@ func handleSession(newChan ssh.NewChannel, sudoPw, sudoStartFailure string, exec
 				}
 				cmd = inner
 			}
-			stdout, stderr, exit := execFn(cmd, stdin)
-			if stdout != "" {
-				ch.Write([]byte(stdout))
-			}
-			if stderr != "" {
-				ch.Stderr().Write([]byte(stderr))
+			exit := 0
+			if execStreamFn != nil {
+				exit = execStreamFn(cmd, stdin, ch, ch.Stderr())
+			} else {
+				stdout, stderr, code := execFn(cmd, stdin)
+				if stdout != "" {
+					ch.Write([]byte(stdout))
+				}
+				if stderr != "" {
+					ch.Stderr().Write([]byte(stderr))
+				}
+				exit = code
 			}
 			ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{uint32(exit)}))
 			return

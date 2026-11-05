@@ -877,7 +877,11 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		return fmt.Errorf("advance snapshot revision after import: %w", err)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.secretValuesForMaskingVersion.Add(1)
+	return nil
 }
 
 // nullIfEmpty returns nil (-> SQL NULL) for "", else s. Mirrors COALESCE-on-read.

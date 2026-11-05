@@ -112,7 +112,7 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *Tunn
 
 // NewServerFromSource 接受可替换的 store 来源：通用工具包装层每次调用只求值
 // 一次 storeFn，并把同一个 store 经 context 传给处理器。这样热加载调用方
-//（mcp --cache）可以在两次调用之间原子换掉底层 store，而不需要重建 MCP
+// （mcp --cache）可以在两次调用之间原子换掉底层 store，而不需要重建 MCP
 // 服务或拆除隧道与后台任务。storeFn 必须并发安全，且不能返回空值。
 //
 // hkFn 是主机密钥存储提供者（Plan 48 §2.2）：每个会拨号的工具都在调用时
@@ -149,7 +149,8 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	tasks.StartSweeper() // 照 tunnels 先例: 构造器不启, 生产接线点在此 (1min tick, spec §3)
+	tasks.AttachStore(storeFn) // 后台输出协程遮蔽使用当前 store，不绑定某次工具调用
+	tasks.StartSweeper()       // 照 tunnels 先例: 构造器不启, 生产接线点在此 (1min tick, spec §3)
 
 	// 桥热升级 (spec 实施决策第 2 条): 统一忙判据 —— 隧道/任务两路计数源挂上
 	// 两个管理器 (各自持锁现读), 在飞一路由下面 addTrackedTool 的包装层进出

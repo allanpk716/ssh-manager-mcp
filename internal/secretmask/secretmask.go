@@ -69,6 +69,18 @@ func (m Masker) NewStream(currentServerID string) Stream {
 	return Stream{masker: m, currentServerID: currentServerID}
 }
 
+// SwitchMasker 换用新的机密项值集合，但保留尚未确定的暂留字节。暂留字节
+// 会按新集合重新判断；新集合为空时立即原样放出全部暂留字节。
+func (s *Stream) SwitchMasker(masker Masker) MaskResult {
+	s.masker = masker
+	if len(masker.matchStrings) == 0 {
+		output := s.pending
+		s.pending = nil
+		return MaskResult{Output: output}
+	}
+	return s.takeDecidedOutput()
+}
+
 func (m *Masker) addMatchString(value []byte, name string, writableServerIDs []string) {
 	m.matchStrings = append(m.matchStrings, matchString{
 		value:             value,
