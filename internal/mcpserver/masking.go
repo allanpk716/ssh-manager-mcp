@@ -280,7 +280,7 @@ func (w *maskWalker) walk(value reflect.Value) {
 			value.Set(replacement)
 		}
 	case reflect.Slice:
-		if value.Type() == reflect.TypeFor[[]byte]() {
+		if value.Type().Elem().Kind() == reflect.Uint8 {
 			w.maskBytes(value)
 			return
 		}

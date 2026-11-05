@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -414,6 +415,8 @@ type maskingProbeNested struct {
 	Values []string
 }
 
+type maskingProbeBytes []byte
+
 type maskingProbeOutput struct {
 	MaskedOutput
 	Text            string              `json:"text"`
@@ -421,6 +424,8 @@ type maskingProbeOutput struct {
 	Slice           []string            `json:"slice"`
 	Map             map[string]string   `json:"map"`
 	Any             any                 `json:"any"`
+	Raw             json.RawMessage     `json:"raw"`
+	Custom          maskingProbeBytes   `json:"custom"`
 	ContextServerID string              `json:"context_server_id"`
 }
 
@@ -446,6 +451,8 @@ func TestMaskingLifecycleAndFieldShapes(t *testing.T) {
 			Slice:  append([]string(nil), values...),
 			Map:    map[string]string{values[0]: values[1]},
 			Any:    maskingProbeNested{Text: values[1]},
+			Raw:    json.RawMessage(`"` + values[0] + `"`),
+			Custom: maskingProbeBytes(values[1]),
 		}
 	})
 	defer clientSession.Close()
@@ -477,6 +484,12 @@ func TestMaskingLifecycleAndFieldShapes(t *testing.T) {
 	}
 	if anyText, _ := first.Any.(map[string]any); anyText["Text"] != placeholder {
 		t.Fatalf("interface string not masked: %#v", first.Any)
+	}
+	if string(first.Raw) != `"`+placeholder+`"` {
+		t.Fatalf("json.RawMessage not masked: %s", first.Raw)
+	}
+	if string(first.Custom) != placeholder {
+		t.Fatalf("named byte slice not masked: %q", first.Custom)
 	}
 	if len(first.Masked) != 1 || first.Masked[0] != "API_TOKEN" {
 		t.Fatalf("masked = %#v", first.Masked)
@@ -733,9 +746,12 @@ func TestMaskingEmptyValueSetKeepsResultUnchangedAndExposesContext(t *testing.T)
 func newMaskingProbeServer(t *testing.T, st *store.Store, output func() maskingProbeOutput) *mcp.ClientSession {
 	t.Helper()
 	server := mcp.NewServer(&mcp.Implementation{Name: "mask-probe", Version: "test"}, nil)
+	// json.RawMessage 的输出会被序列化为内嵌 JSON，而自动推断会把它当作
+	// 字节切片；这里放宽输出结构校验，让本测试只关注遮蔽行为。
+	tool := &mcp.Tool{Name: "masking_probe", OutputSchema: map[string]any{"type": "object"}}
 	addTrackedTool(server, NewBusyTracker(func() int { return 0 }, func() int { return 0 }),
 		func() *store.Store { return st }, nil,
-		&mcp.Tool{Name: "masking_probe"},
+		tool,
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ maskingProbeInput) (*mcp.CallToolResult, maskingProbeOutput, error) {
 			out := output()
 			_, contextServerID, contextOK := MaskingCallFromContext(ctx)
