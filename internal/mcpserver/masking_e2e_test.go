@@ -22,40 +22,12 @@ func TestMaskingExecCommandStdoutAndStderr(t *testing.T) {
 	if err := st.AddSecret("API_TOKEN", "Deploy token", []byte(secretValue)); err != nil {
 		t.Fatal(err)
 	}
-	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
+	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
 		Password: "pw",
 		Exec: func(string, io.Reader) (string, string, int) {
 			return "stdout has " + secretValue, "stderr has " + secretValue, 0
 		},
 	})
-	defer cleanup()
-	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
-	profileID, err := st.AddProfile("agent-profile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
-		t.Fatal(err)
-	}
-
-	server, tunnels, tasks, err := NewServer(st, profileID, "project-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tunnels.CloseAll()
-	defer tasks.CloseAll()
-	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "v0"}, nil)
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	serverSession, err := server.Connect(context.Background(), serverTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer serverSession.Close()
-	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clientSession.Close()
 
 	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "exec_command",
@@ -163,40 +135,12 @@ func TestMaskingExecCommandTruncatesAfterMasking(t *testing.T) {
 	}
 	prefix := strings.Repeat("x", int(MaxOutputBytes)-5)
 	stdout := prefix + secretValue + "tail"
-	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
+	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
 		Password: "pw",
 		Exec: func(string, io.Reader) (string, string, int) {
 			return stdout, unifiedSecretValue, 0
 		},
 	})
-	defer cleanup()
-	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
-	profileID, err := st.AddProfile("agent-profile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
-		t.Fatal(err)
-	}
-
-	server, tunnels, tasks, err := NewServer(st, profileID, "project-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tunnels.CloseAll()
-	defer tasks.CloseAll()
-	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "v0"}, nil)
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	serverSession, err := server.Connect(context.Background(), serverTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer serverSession.Close()
-	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clientSession.Close()
 
 	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "exec_command",
@@ -246,39 +190,11 @@ func TestMaskingDownloadFileTruncatesAfterMasking(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := strings.Repeat("y", int(MaxOutputBytes)-6) + secretValue + "tail"
-	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
-	defer cleanup()
-	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
-	profileID, err := st.AddProfile("agent-profile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
-		t.Fatal(err)
-	}
+	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{Password: "pw"})
 	remote := filepath.Join(t.TempDir(), "boundary.txt")
 	if err := os.WriteFile(remote, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
-
-	server, tunnels, tasks, err := NewServer(st, profileID, "project-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tunnels.CloseAll()
-	defer tasks.CloseAll()
-	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "v0"}, nil)
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	serverSession, err := server.Connect(context.Background(), serverTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer serverSession.Close()
-	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clientSession.Close()
 
 	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "download_file",
