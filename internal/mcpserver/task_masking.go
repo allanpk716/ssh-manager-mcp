@@ -5,17 +5,24 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"ssh-manager-mcp/internal/secretmask"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 )
 
-// backgroundMaskingSource 按 store 实例与机密项值集合变化计数缓存遮蔽器。
-// 后台任务不能使用工具调用的 context；它的输出协程在这里按「当前 store」取
-// 值集合。缓存命中时只读一个原子计数，不查询数据库，也不解密机密项。
+// backgroundMaskerCacheTTL 是后台遮蔽器缓存的有效期。其他进程改动同一个
+// 数据库文件时，本进程的机密项值集合变化计数不会递增，因此缓存必须定期
+// 重新读库，才能察觉这类改动。
+const backgroundMaskerCacheTTL = time.Second
+
+// backgroundMaskingSource 按 store 实例、机密项值集合变化计数与缓存建立时间
+// 缓存遮蔽器。后台任务不能使用工具调用的 context；它的输出协程在这里按
+// 「当前 store」取值集合。缓存命中时不查询数据库，也不解密机密项。
 type backgroundMaskingSource struct {
 	storeFn func() *store.Store
+	now     func() time.Time
 	cache   atomic.Pointer[backgroundMaskerCache]
 	mu      sync.Mutex
 }
@@ -23,11 +30,12 @@ type backgroundMaskingSource struct {
 type backgroundMaskerCache struct {
 	store   *store.Store
 	version uint64
+	created time.Time
 	masker  secretmask.Masker
 }
 
 func newBackgroundMaskingSource(storeFn func() *store.Store) *backgroundMaskingSource {
-	return &backgroundMaskingSource{storeFn: storeFn}
+	return &backgroundMaskingSource{storeFn: storeFn, now: time.Now}
 }
 
 func (s *backgroundMaskingSource) currentMasker() (secretmask.Masker, error) {
@@ -36,13 +44,13 @@ func (s *backgroundMaskingSource) currentMasker() (secretmask.Masker, error) {
 		return secretmask.Masker{}, fmt.Errorf("current store is unavailable")
 	}
 	version := st.SecretValuesForMaskingVersion()
-	if cached := s.cache.Load(); cached != nil && cached.store == st && cached.version == version {
+	if cached := s.cache.Load(); s.cacheMatches(cached, st, version) {
 		return cached.masker, nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cached := s.cache.Load(); cached != nil && cached.store == st && cached.version == version {
+	if cached := s.cache.Load(); s.cacheMatches(cached, st, version) {
 		return cached.masker, nil
 	}
 	rows, err := st.SecretValuesForMasking()
@@ -62,8 +70,15 @@ func (s *backgroundMaskingSource) currentMasker() (secretmask.Masker, error) {
 		}
 	}
 	masker := secretmask.New(secrets)
-	s.cache.Store(&backgroundMaskerCache{store: st, version: version, masker: masker})
+	s.cache.Store(&backgroundMaskerCache{store: st, version: version, created: s.now(), masker: masker})
 	return masker, nil
+}
+
+func (s *backgroundMaskingSource) cacheMatches(cached *backgroundMaskerCache, st *store.Store, version uint64) bool {
+	return cached != nil &&
+		cached.store == st &&
+		cached.version == version &&
+		s.now().Sub(cached.created) < backgroundMaskerCacheTTL
 }
 
 // notifyWriter 在远端字节进入环形缓冲前做流式遮蔽。maskedNames 记录整个
