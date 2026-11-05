@@ -47,6 +47,30 @@ func MaskingCallFromContext(ctx context.Context) (secretmask.Masker, string, boo
 	return call.masker, call.currentServerID, ok
 }
 
+// readLimitForMasking 返回前台输出或下载的读取上限。存在机密项时，在
+// 原上限之外多保留最长匹配串的字节数，调用方先整段遮蔽再截回原上限。
+func readLimitForMasking(ctx context.Context, outputLimit int64) int64 {
+	masker, _, ok := MaskingCallFromContext(ctx)
+	if !ok {
+		return outputLimit
+	}
+	return outputLimit + int64(masker.LongestMatchLength())
+}
+
+// maskCappedContent 整段遮蔽已多读的内容，再截回输出上限，并把专门处理层
+// 遮蔽到的机密项名字交还给输出结构里的 MaskedOutput。
+func maskCappedContent(ctx context.Context, content string, outputLimit int64) (string, []string) {
+	masker, currentServerID, ok := MaskingCallFromContext(ctx)
+	if !ok || masker.LongestMatchLength() == 0 {
+		return content, nil
+	}
+	result := masker.Mask([]byte(content), currentServerID)
+	if int64(len(result.Output)) > outputLimit {
+		result.Output = result.Output[:outputLimit]
+	}
+	return string(result.Output), result.MaskedNames
+}
+
 // withToolStore 把本次调用从「调用时求值 store 获取函数」取到的同一个
 // store 放进 context。工具处理器必须经 storeFromContext 取它，避免同一个
 // 调用里再次执行带热刷新副作用的获取函数。

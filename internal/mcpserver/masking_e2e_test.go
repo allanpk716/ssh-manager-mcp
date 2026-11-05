@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -145,6 +146,90 @@ func TestMaskingToolErrorText(t *testing.T) {
 		if !containsStr(text, "\nMasked secrets: ERROR_TOKEN") {
 			t.Fatalf("%s does not report masked name: %q", toolName, text)
 		}
+	}
+}
+
+func TestMaskingExecCommandTruncatesAfterMasking(t *testing.T) {
+	const secretValue = "boundary-secret-value"
+	st := newStore(t)
+	if err := st.AddSecret("BOUNDARY_TOKEN", "", []byte(secretValue)); err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.Repeat("x", int(MaxOutputBytes)-5)
+	stdout := prefix + secretValue + "tail"
+	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		Exec: func(string, io.Reader) (string, string, int) {
+			return stdout, "", 0
+		},
+	})
+	defer cleanup()
+	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
+	profileID, err := st.AddProfile("agent-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+
+	server, tunnels, tasks, err := NewServer(st, profileID, "project-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tunnels.CloseAll()
+	defer tasks.CloseAll()
+	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "v0"}, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": serverID, "command": "print"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	var output struct {
+		Stdout      string   `json:"stdout"`
+		Stderr      string   `json:"stderr"`
+		Truncated   bool     `json:"truncated"`
+		StdoutBytes int64    `json:"stdout_bytes"`
+		StderrBytes int64    `json:"stderr_bytes"`
+		Masked      []string `json:"masked"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if int64(len(output.Stdout)) != MaxOutputBytes {
+		t.Fatalf("stdout length = %d, want %d", len(output.Stdout), MaxOutputBytes)
+	}
+	if !strings.HasSuffix(output.Stdout, prefix+"{{ssh") {
+		t.Fatalf("stdout ending = %q", output.Stdout[len(output.Stdout)-40:])
+	}
+	for i := 1; i <= len(secretValue); i++ {
+		if strings.HasSuffix(output.Stdout, secretValue[:i]) {
+			t.Fatalf("stdout ends with a %d-byte prefix of the secret value", i)
+		}
+	}
+	if !output.Truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if output.StdoutBytes != int64(len(stdout)) || output.StderrBytes != 0 {
+		t.Fatalf("byte counts = stdout %d stderr %d, want stdout %d stderr 0", output.StdoutBytes, output.StderrBytes, len(stdout))
+	}
+	if len(output.Masked) != 1 || output.Masked[0] != "BOUNDARY_TOKEN" {
+		t.Fatalf("masked = %#v", output.Masked)
 	}
 }
 

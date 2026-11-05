@@ -186,10 +186,17 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 			err = fmt.Errorf("sudo credential for %s not found", srv.Name)
 			return
 		}
-		res, err = cli.ExecSudo(ctx, command, sudoCred.Secret, timeout, MaxOutputBytes)
+		readLimit := readLimitForMasking(ctx, MaxOutputBytes)
+		res, err = cli.ExecSudo(ctx, command, sudoCred.Secret, timeout, readLimit)
 	} else {
-		res, err = cli.Exec(ctx, command, timeout, MaxOutputBytes)
+		readLimit := readLimitForMasking(ctx, MaxOutputBytes)
+		res, err = cli.Exec(ctx, command, timeout, readLimit)
 	}
+	// sshbroker 按多读后的上限标记 Truncated；对 agent 仍按原 1 MiB 上限判定。
+	res.Truncated = res.StdoutBytes > MaxOutputBytes || res.StderrBytes > MaxOutputBytes
+	maskedStdout, stdoutNames := maskCappedContent(ctx, res.Stdout, MaxOutputBytes)
+	maskedStderr, stderrNames := maskCappedContent(ctx, res.Stderr, MaxOutputBytes)
+	res.Stdout, res.Stderr = maskedStdout, maskedStderr
 	exitCode = res.ExitCode
 	// sshbroker returns nil err for non-zero exits (*ssh.ExitError) and for timeouts;
 	// both are results, not errors. A non-nil err here is a genuine exec failure.
@@ -212,6 +219,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	out = ExecOutput{
 		Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, TimedOut: res.TimedOut,
 		Truncated: res.Truncated, StdoutBytes: res.StdoutBytes, StderrBytes: res.StderrBytes,
+		MaskedOutput: MaskedOutput{Masked: mergeMaskedNames(stdoutNames, stderrNames)},
 		// 钳制改响 (Plan 32 T7 / spec §6): 回显 clamp 后实际生效秒数——
 		// timeout 已在上方钳定 (<=0 → defaultTimeout; cap MaxExecTimeout)。
 		EffectiveTimeoutSeconds: int(timeout.Seconds()),
