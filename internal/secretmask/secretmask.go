@@ -133,25 +133,22 @@ func (s *Stream) Flush() MaskResult {
 func (s *Stream) takeDecidedOutput() MaskResult {
 	var output []byte
 	var names []string
-	for len(s.pending) >= s.masker.longest {
-		selected, matched := s.masker.matchAt(s.pending, s.currentServerID)
+	start := 0
+	for len(s.pending)-start >= s.masker.longest {
+		selected, matched := s.masker.matchAt(s.pending[start:], s.currentServerID)
 		if matched {
 			output = append(output, "{{sshmgr-secret:"+selected.name+"}}"...)
 			names = append(names, selected.name)
-			s.removeFirst(len(selected.value))
+			start += len(selected.value)
 		} else {
-			output = append(output, s.pending[0])
-			s.removeFirst(1)
+			output = append(output, s.pending[start])
+			start++
 		}
 	}
+	s.pending = s.pending[:copy(s.pending, s.pending[start:])]
 	sort.Strings(names)
 	names = deduplicateStrings(names)
 	return MaskResult{Output: output, MaskedNames: names}
-}
-
-func (s *Stream) removeFirst(length int) {
-	copy(s.pending, s.pending[length:])
-	s.pending = s.pending[:len(s.pending)-length]
 }
 
 func (m Masker) matchAt(input []byte, currentServerID string) (matchString, bool) {
