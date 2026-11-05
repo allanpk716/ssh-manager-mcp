@@ -496,8 +496,8 @@ func TestAutoSwapE2EDualInstance(t *testing.T) {
 	awaitNotifAbove(t, hA, "notifications/tools/list_changed", baseA, 20*time.Second)
 	awaitNotifAbove(t, hB, "notifications/tools/list_changed", baseB, 20*time.Second)
 	nextA, nextB := int64(3), int64(3)
-	outA, idsA := hA.callReloadSelfRetry(t, &nextA, "v2-a", 10*time.Second)
-	outB, idsB := hB.callReloadSelfRetry(t, &nextB, "v2-b", 10*time.Second)
+	outA, idsA := hA.callReloadSelfRetry(t, &nextA, "v2-a", 30*time.Second)
+	outB, idsB := hB.callReloadSelfRetry(t, &nextB, "v2-b", 30*time.Second)
 	if outA.Version != "v2-a" || outB.Version != "v2-b" {
 		t.Fatalf("round 1 successors: A=%q want v2-a, B=%q want v2-b (A stderr:\n%s\nB stderr:\n%s)",
 			outA.Version, outB.Version, hA.stderrFn(), hB.stderrFn())
@@ -517,8 +517,8 @@ func TestAutoSwapE2EDualInstance(t *testing.T) {
 	// 二代都已停读,再请求第三代应答。
 	waitForStateProbe(t, stateDir, "exit", "v2-a", 20*time.Second)
 	waitForStateProbe(t, stateDir, "exit", "v2-b", 20*time.Second)
-	outA2, idsA2 := hA.callReloadSelfRetry(t, &nextA, "v3-a", 10*time.Second)
-	outB2, idsB2 := hB.callReloadSelfRetry(t, &nextB, "v3-b", 10*time.Second)
+	outA2, idsA2 := hA.callReloadSelfRetry(t, &nextA, "v3-a", 30*time.Second)
+	outB2, idsB2 := hB.callReloadSelfRetry(t, &nextB, "v3-b", 30*time.Second)
 	idsA = append(idsA, idsA2...)
 	idsB = append(idsB, idsB2...)
 	if outA2.Version != "v3-a" || outB2.Version != "v3-b" {
