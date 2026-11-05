@@ -118,7 +118,7 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *Tunn
 // hkFn 是主机密钥存储提供者（Plan 48 §2.2）：每个会拨号的工具都在调用时
 // 取得它并传入首次信任路径。nil 表示 vault 模式：通用包装层直接使用本次
 // 已取到的同一个 store。缓存模式传入稳定的转发包装器（见 run.go 与
-// hostkey_forward.go），它的读写会在回调内重新解析当前代。
+// hostkey_forward.go），它的读写会在回调内重新取当前快照 store。
 func NewServerFromSource(storeFn func() *store.Store, profileID, projectID string, hkFn func() sshbroker.HostKeyStore, meta MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, error) {
 	return NewServerFromSourceWithHints(storeFn, profileID, projectID, hkFn, meta)
 }

@@ -540,7 +540,6 @@ func (m *TaskManager) notifyWrite(t *bgTask) {
 	m.mu.Unlock()
 }
 
-// notifyWriter: 落笔后先释 buffer.mu 再广播（Write 内部锁已释放, after 才取 m.mu）
 // ---------- Task 5: 代际广播消费 + Output 等待回路 (spec §2.3) ----------
 
 // BgView 是 Output 返回的观察快照, Task 7 的 exec_output ForProfile 消费。

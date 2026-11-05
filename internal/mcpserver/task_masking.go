@@ -85,6 +85,7 @@ func (s *backgroundMaskingSource) cacheMatches(cached *backgroundMaskerCache, st
 // 任务生命周期内这个通道实际遮蔽到的名字；即使对应字节后来被环形窗口丢弃，
 // 后续读取仍会在 masked 里看到名字。这是有意选择「任务累计」而不是「本次
 // 读取区间」，因为它不需要把名字与每个字节区间的生命周期绑定在一起。
+// 落笔后先释放环形缓冲的内部锁，再调用 after；after 里才取任务管理器的锁。
 type notifyWriter struct {
 	buf   *sshbroker.RollingBuffer
 	after func()

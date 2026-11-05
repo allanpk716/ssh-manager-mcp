@@ -80,7 +80,7 @@ store 后立即生效；owner 在同一个 sshmgr 进程内换值或删除机密
 
 输出遮蔽与命令策略一样，是**护栏，不是安全边界**
 （[ADR 0007](./adr/0007-command-policy-client-enforced-guardrail.md)）。它防
-的是机密项值无意中进入 agent 上下文；不承诺识别统一资源定位地址编码、
+的是机密项值无意中进入 agent 上下文；不承诺识别 URL 编码、
 JSON 转义、压缩、加密等变换后的值，也不防 agent 有意绕开遮蔽。真正的访问
 控制仍由 SSH 凭据、profile/project 授权、命令策略与 owner 管理的机密项
 可写入范围承担。
