@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,40 +22,12 @@ func TestMaskingExecCommandStdoutAndStderr(t *testing.T) {
 	if err := st.AddSecret("API_TOKEN", "Deploy token", []byte(secretValue)); err != nil {
 		t.Fatal(err)
 	}
-	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
+	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
 		Password: "pw",
 		Exec: func(string, io.Reader) (string, string, int) {
 			return "stdout has " + secretValue, "stderr has " + secretValue, 0
 		},
 	})
-	defer cleanup()
-	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
-	profileID, err := st.AddProfile("agent-profile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
-		t.Fatal(err)
-	}
-
-	server, tunnels, tasks, err := NewServer(st, profileID, "project-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tunnels.CloseAll()
-	defer tasks.CloseAll()
-	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "v0"}, nil)
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	serverSession, err := server.Connect(context.Background(), serverTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer serverSession.Close()
-	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clientSession.Close()
 
 	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "exec_command",
@@ -146,6 +121,221 @@ func TestMaskingToolErrorText(t *testing.T) {
 			t.Fatalf("%s does not report masked name: %q", toolName, text)
 		}
 	}
+}
+
+func TestMaskingExecCommandTruncatesAfterMasking(t *testing.T) {
+	const secretValue = "boundary-secret-value"
+	const unifiedSecretValue = "unified-layer-secret-value"
+	st := newStore(t)
+	if err := st.AddSecret("BOUNDARY_TOKEN", "", []byte(secretValue)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("UNIFIED_TOKEN", "", []byte(unifiedSecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.Repeat("x", int(MaxOutputBytes)-5)
+	stdout := prefix + secretValue + "tail"
+	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
+		Password: "pw",
+		Exec: func(string, io.Reader) (string, string, int) {
+			return stdout, unifiedSecretValue, 0
+		},
+	})
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": serverID, "command": "print"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	var output struct {
+		Stdout      string   `json:"stdout"`
+		Stderr      string   `json:"stderr"`
+		Truncated   bool     `json:"truncated"`
+		StdoutBytes int64    `json:"stdout_bytes"`
+		StderrBytes int64    `json:"stderr_bytes"`
+		Masked      []string `json:"masked"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if int64(len(output.Stdout)) != MaxOutputBytes {
+		t.Fatalf("stdout length = %d, want %d", len(output.Stdout), MaxOutputBytes)
+	}
+	if !strings.HasSuffix(output.Stdout, prefix+"{{ssh") {
+		t.Fatalf("stdout ending = %q", output.Stdout[len(output.Stdout)-40:])
+	}
+	for i := 1; i <= len(secretValue); i++ {
+		if strings.HasSuffix(output.Stdout, secretValue[:i]) {
+			t.Fatalf("stdout ends with a %d-byte prefix of the secret value", i)
+		}
+	}
+	if !output.Truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if output.StdoutBytes != int64(len(stdout)) || output.StderrBytes != int64(len(unifiedSecretValue)) {
+		t.Fatalf("byte counts = stdout %d stderr %d, want stdout %d stderr %d", output.StdoutBytes, output.StderrBytes, len(stdout), len(unifiedSecretValue))
+	}
+	if len(output.Masked) != 2 || output.Masked[0] != "BOUNDARY_TOKEN" || output.Masked[1] != "UNIFIED_TOKEN" {
+		t.Fatalf("masked = %#v", output.Masked)
+	}
+}
+
+func TestMaskingDownloadFileTruncatesAfterMasking(t *testing.T) {
+	const secretValue = "download-boundary-secret"
+	st := newStore(t)
+	if err := st.AddSecret("DOWNLOAD_TOKEN", "", []byte(secretValue)); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Repeat("y", int(MaxOutputBytes)-6) + secretValue + "tail"
+	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{Password: "pw"})
+	remote := filepath.Join(t.TempDir(), "boundary.txt")
+	if err := os.WriteFile(remote, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "download_file",
+		Arguments: map[string]any{"server_id": serverID, "path": remote},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("download_file failed: %+v", result.Content)
+	}
+	var output struct {
+		Content   string   `json:"content"`
+		Bytes     int64    `json:"bytes"`
+		Truncated bool     `json:"truncated"`
+		Masked    []string `json:"masked"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if int64(len(output.Content)) != MaxOutputBytes {
+		t.Fatalf("content length = %d, want %d", len(output.Content), MaxOutputBytes)
+	}
+	if !strings.HasSuffix(output.Content, strings.Repeat("y", 20)+"{{sshm") {
+		t.Fatalf("content ending = %q", output.Content[len(output.Content)-40:])
+	}
+	for i := 1; i <= len(secretValue); i++ {
+		if strings.HasSuffix(output.Content, secretValue[:i]) {
+			t.Fatalf("content ends with a %d-byte prefix of the secret value", i)
+		}
+	}
+	if !output.Truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if output.Bytes != int64(len(content)) {
+		t.Fatalf("bytes = %d, want remote file size %d", output.Bytes, len(content))
+	}
+	if len(output.Masked) != 1 || output.Masked[0] != "DOWNLOAD_TOKEN" {
+		t.Fatalf("masked = %#v", output.Masked)
+	}
+}
+
+func TestMaskingEmptyValueSetKeepsForegroundAndDownloadUnchanged(t *testing.T) {
+	st := newStore(t)
+	stdout := strings.Repeat("x", int(MaxOutputBytes)*2)
+	stderr := strings.Repeat("e", int(MaxOutputBytes)+1)
+	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
+		Password: "pw",
+		Exec: func(string, io.Reader) (string, string, int) {
+			return stdout, stderr, 0
+		},
+	})
+
+	execResult, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": serverID, "command": "big"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execResult.IsError {
+		t.Fatalf("exec_command failed: %+v", execResult.Content)
+	}
+	var execOutput struct {
+		Stdout      string   `json:"stdout"`
+		Stderr      string   `json:"stderr"`
+		Truncated   bool     `json:"truncated"`
+		StdoutBytes int64    `json:"stdout_bytes"`
+		StderrBytes int64    `json:"stderr_bytes"`
+		Masked      []string `json:"masked"`
+	}
+	unmarshalToolJSON(t, execResult, &execOutput)
+	if execOutput.Stdout != stdout[:MaxOutputBytes] || execOutput.Stderr != stderr[:MaxOutputBytes] {
+		t.Fatal("empty secret set changed retained command output")
+	}
+	if !execOutput.Truncated || execOutput.StdoutBytes != int64(len(stdout)) || execOutput.StderrBytes != int64(len(stderr)) {
+		t.Fatalf("empty secret set changed truncation or byte counts: %+v", execOutput)
+	}
+	if execOutput.Masked != nil {
+		t.Fatalf("empty secret set reported masked names: %#v", execOutput.Masked)
+	}
+
+	fileContent := strings.Repeat("z", int(MaxOutputBytes)*2)
+	remote := filepath.Join(t.TempDir(), "large.txt")
+	if err := os.WriteFile(remote, []byte(fileContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+	downloadResult, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "download_file",
+		Arguments: map[string]any{"server_id": serverID, "path": remote},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if downloadResult.IsError {
+		t.Fatalf("download_file failed: %+v", downloadResult.Content)
+	}
+	var downloadOutput struct {
+		Content   string   `json:"content"`
+		Bytes     int64    `json:"bytes"`
+		Truncated bool     `json:"truncated"`
+		Masked    []string `json:"masked"`
+	}
+	unmarshalToolJSON(t, downloadResult, &downloadOutput)
+	if downloadOutput.Content != fileContent[:MaxOutputBytes] || downloadOutput.Bytes != int64(len(fileContent)) || !downloadOutput.Truncated {
+		t.Fatalf("empty secret set changed download output: %+v", downloadOutput)
+	}
+	if downloadOutput.Masked != nil {
+		t.Fatalf("empty secret set reported download masked names: %#v", downloadOutput.Masked)
+	}
+}
+
+func newMaskingSSHToolClient(t *testing.T, st *store.Store, options testsshd.Options) (*mcp.ClientSession, string) {
+	t.Helper()
+	addr, hostKey, cleanup := testsshd.Start(t, options)
+	t.Cleanup(cleanup)
+	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
+	profileID, err := st.AddProfile("agent-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	server, tunnels, tasks, err := NewServer(st, profileID, "project-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tunnels.CloseAll)
+	t.Cleanup(tasks.CloseAll)
+	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "v0"}, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = clientSession.Close() })
+	return clientSession, serverID
 }
 
 type testMetadataEditor struct{}
