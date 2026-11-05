@@ -326,7 +326,7 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 	}
 	defer cli.Close()
 
-	res, derr := cli.Download(ctx, path, MaxOutputBytes)
+	res, derr := cli.Download(ctx, path, readLimitForMasking(ctx, MaxOutputBytes))
 	if derr != nil {
 		if errors.Is(derr, context.Canceled) {
 			status = "cancelled"
@@ -337,7 +337,15 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		return
 	}
 	status = "ok"
-	out = DownloadOutput{Content: res.Content, Bytes: res.Bytes, Truncated: res.Truncated}
+	// 下载与前台命令相同：按原 1 MiB 上限判定截断，先遮蔽多读到的内容再截回。
+	res.Truncated = res.Bytes > MaxOutputBytes
+	content, maskedNames := maskCappedContent(ctx, res.Content, MaxOutputBytes)
+	out = DownloadOutput{
+		Content:      content,
+		Bytes:        res.Bytes,
+		Truncated:    res.Truncated,
+		MaskedOutput: MaskedOutput{Masked: maskedNames},
+	}
 	return
 }
 

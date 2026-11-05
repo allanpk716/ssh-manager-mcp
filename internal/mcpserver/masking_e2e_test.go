@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -229,6 +231,86 @@ func TestMaskingExecCommandTruncatesAfterMasking(t *testing.T) {
 		t.Fatalf("byte counts = stdout %d stderr %d, want stdout %d stderr 0", output.StdoutBytes, output.StderrBytes, len(stdout))
 	}
 	if len(output.Masked) != 1 || output.Masked[0] != "BOUNDARY_TOKEN" {
+		t.Fatalf("masked = %#v", output.Masked)
+	}
+}
+
+func TestMaskingDownloadFileTruncatesAfterMasking(t *testing.T) {
+	const secretValue = "download-boundary-secret"
+	st := newStore(t)
+	if err := st.AddSecret("DOWNLOAD_TOKEN", "", []byte(secretValue)); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Repeat("y", int(MaxOutputBytes)-6) + secretValue + "tail"
+	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	defer cleanup()
+	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
+	profileID, err := st.AddProfile("agent-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	remote := filepath.Join(t.TempDir(), "boundary.txt")
+	if err := os.WriteFile(remote, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	server, tunnels, tasks, err := NewServer(st, profileID, "project-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tunnels.CloseAll()
+	defer tasks.CloseAll()
+	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "v0"}, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "download_file",
+		Arguments: map[string]any{"server_id": serverID, "path": remote},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("download_file failed: %+v", result.Content)
+	}
+	var output struct {
+		Content   string   `json:"content"`
+		Bytes     int64    `json:"bytes"`
+		Truncated bool     `json:"truncated"`
+		Masked    []string `json:"masked"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if int64(len(output.Content)) != MaxOutputBytes {
+		t.Fatalf("content length = %d, want %d", len(output.Content), MaxOutputBytes)
+	}
+	if !strings.HasSuffix(output.Content, strings.Repeat("y", 20)+"{{sshm") {
+		t.Fatalf("content ending = %q", output.Content[len(output.Content)-40:])
+	}
+	for i := 1; i <= len(secretValue); i++ {
+		if strings.HasSuffix(output.Content, secretValue[:i]) {
+			t.Fatalf("content ends with a %d-byte prefix of the secret value", i)
+		}
+	}
+	if !output.Truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if output.Bytes != int64(len(content)) {
+		t.Fatalf("bytes = %d, want remote file size %d", output.Bytes, len(content))
+	}
+	if len(output.Masked) != 1 || output.Masked[0] != "DOWNLOAD_TOKEN" {
 		t.Fatalf("masked = %#v", output.Masked)
 	}
 }
