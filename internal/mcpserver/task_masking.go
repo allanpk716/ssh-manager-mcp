@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"fmt"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,23 +52,10 @@ func (s *backgroundMaskingSource) currentMasker() (secretmask.Masker, error) {
 	if cached := s.cache.Load(); s.cacheMatches(cached, st, version) {
 		return cached.masker, nil
 	}
-	rows, err := st.SecretValuesForMasking()
+	masker, err := maskerFromStore(st)
 	if err != nil {
 		return secretmask.Masker{}, fmt.Errorf("read secret values for background masking: %w", err)
 	}
-	var secrets []secretmask.Secret
-	if len(rows) > 0 {
-		secrets = make([]secretmask.Secret, 0, len(rows))
-		for _, row := range rows {
-			secrets = append(secrets, secretmask.Secret{
-				Name:              row.Name,
-				Current:           row.Current,
-				Previous:          row.Previous,
-				WritableServerIDs: row.WritableServerIDs,
-			})
-		}
-	}
-	masker := secretmask.New(secrets)
 	s.cache.Store(&backgroundMaskerCache{store: st, version: version, created: s.now(), masker: masker})
 	return masker, nil
 }
@@ -90,12 +76,12 @@ type notifyWriter struct {
 	buf   *sshbroker.RollingBuffer
 	after func()
 
-	source              *backgroundMaskingSource
-	serverID            string
-	mu                  sync.Mutex
-	stream              *secretmask.Stream
-	names               []string
-	readFailureReported bool
+	source                     *backgroundMaskingSource
+	serverID                   string
+	mu                         sync.Mutex
+	stream                     *secretmask.Stream
+	names                      []string
+	maskingUnavailableReported bool
 }
 
 func (w *notifyWriter) Write(p []byte) (int, error) {
@@ -182,9 +168,7 @@ func (w *notifyWriter) recordNames(names []string) {
 	if len(names) == 0 {
 		return
 	}
-	w.names = append(w.names, names...)
-	sort.Strings(w.names)
-	w.names = deduplicateBackgroundMaskedNames(w.names)
+	w.names = mergeMaskedNames(w.names, names)
 }
 
 func (w *notifyWriter) writeDirect(p []byte) (int, error) {
@@ -202,8 +186,8 @@ func (w *notifyWriter) writeResult(result secretmask.MaskResult) {
 
 func (w *notifyWriter) reportMaskingUnavailable() {
 	w.mu.Lock()
-	alreadyReported := w.readFailureReported
-	w.readFailureReported = true
+	alreadyReported := w.maskingUnavailableReported
+	w.maskingUnavailableReported = true
 	w.mu.Unlock()
 	if alreadyReported {
 		return
@@ -211,29 +195,4 @@ func (w *notifyWriter) reportMaskingUnavailable() {
 	const marker = "sshmgr: output dropped because secret values could not be read\n"
 	_, _ = w.buf.Write([]byte(marker))
 	w.after()
-}
-
-func deduplicateBackgroundMaskedNames(values []string) []string {
-	if len(values) < 2 {
-		return values
-	}
-	out := values[:1]
-	for _, value := range values[1:] {
-		if value != out[len(out)-1] {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func mergeBackgroundMaskedNames(groups ...[]string) []string {
-	var names []string
-	for _, group := range groups {
-		names = append(names, group...)
-	}
-	if len(names) == 0 {
-		return nil
-	}
-	sort.Strings(names)
-	return deduplicateBackgroundMaskedNames(names)
 }

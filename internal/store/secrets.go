@@ -138,6 +138,16 @@ func validateSecretValue(value []byte) error {
 	}
 }
 
+// commitSecretChange 提交会改变机密项值集合的事务；提交成功后递增进程内
+// 变化计数，让后台遮蔽器立即察觉本进程的改动。
+func (s *Store) commitSecretChange(tx *sql.Tx) error {
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.secretValuesForMaskingVersion.Add(1)
+	return nil
+}
+
 // AddSecret 新增一个机密项：值用 vault 主密钥加密，值版本号为 1，创建时间
 // 与值的最后更改时间相同。名字唯一性按小写形式检查。数据与审计行在同一
 // 事务提交。
@@ -179,10 +189,9 @@ func (s *Store) AddSecret(name, note string, value []byte) error {
 	if err := writeSecretAuditTx(tx, ts, "secret-add", map[string]any{"name": name}); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitSecretChange(tx); err != nil {
 		return err
 	}
-	s.secretValuesForMaskingVersion.Add(1)
 	return nil
 }
 
@@ -223,10 +232,9 @@ func (s *Store) SetSecretValue(name string, value []byte) error {
 	if err := writeSecretAuditTx(tx, ts, "secret-set", map[string]any{"name": name, "change": "值已更改"}); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitSecretChange(tx); err != nil {
 		return err
 	}
-	s.secretValuesForMaskingVersion.Add(1)
 	return nil
 }
 
@@ -278,10 +286,9 @@ func (s *Store) DeleteSecret(name string) error {
 	if err := writeSecretAuditTx(tx, s.nowTime(), "secret-rm", map[string]any{"name": name}); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitSecretChange(tx); err != nil {
 		return err
 	}
-	s.secretValuesForMaskingVersion.Add(1)
 	return nil
 }
 
@@ -568,10 +575,9 @@ func (s *Store) changeSecretAllows(secretNames, serverNames []string, allow bool
 			return err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitSecretChange(tx); err != nil {
 		return err
 	}
-	s.secretValuesForMaskingVersion.Add(1)
 	return nil
 }
 

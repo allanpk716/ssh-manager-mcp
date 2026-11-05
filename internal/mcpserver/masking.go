@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -94,10 +95,58 @@ func toolHostKeyStoreFromContext(ctx context.Context) sshbroker.HostKeyStore {
 	return hk
 }
 
-func newMaskingCall(st *store.Store, input any) (maskingCall, error) {
+func maskToolOutput[In, Out any](storeFn func() *store.Store, hkFn func() sshbroker.HostKeyStore, h mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		st := storeFn()
+		call, err := newMaskingCall(st, in)
+		if err != nil {
+			var zero Out
+			return nil, zero, fmt.Errorf("prepare output masking: %w", err)
+		}
+		ctx = withMaskingCall(ctx, call)
+		ctx = withToolStore(ctx, st)
+		hk := sshbroker.HostKeyStore(st)
+		if hkFn != nil {
+			hk = hkFn()
+		}
+		ctx = withToolHostKeyStore(ctx, hk)
+		result, output, handlerErr := h(ctx, req, in)
+		names, maskedErr := maskToolResultAndOutput(result, &output, call, handlerErr)
+		if len(names) > 0 && result != nil && reflect.TypeFor[Out]() == reflect.TypeFor[any]() {
+			encoded, err := json.Marshal(MaskedOutput{Masked: names})
+			if err == nil {
+				result.StructuredContent = encoded
+			} else {
+				return nil, output, fmt.Errorf("encode masked output: %w", err)
+			}
+		}
+		return result, output, maskedErr
+	}
+}
+
+func withMaskingDescription(tool *mcp.Tool) {
+	const sentence = " Only a {{sshmgr-secret:NAME}} placeholder whose NAME appears in the masked field is a masking result."
+	tool.Description += sentence
+}
+
+func withMaskOnlyOutputSchema(tool *mcp.Tool) {
+	tool.OutputSchema = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"masked": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+		},
+		"additionalProperties": false,
+	}
+}
+
+// maskerFromStore 读取当前 store 的机密项值集合并构建遮蔽器。
+func maskerFromStore(st *store.Store) (secretmask.Masker, error) {
 	rows, err := st.SecretValuesForMasking()
 	if err != nil {
-		return maskingCall{}, fmt.Errorf("read secret values for masking: %w", err)
+		return secretmask.Masker{}, err
 	}
 	secrets := make([]secretmask.Secret, 0, len(rows))
 	for _, row := range rows {
@@ -108,8 +157,16 @@ func newMaskingCall(st *store.Store, input any) (maskingCall, error) {
 			WritableServerIDs: row.WritableServerIDs,
 		})
 	}
+	return secretmask.New(secrets), nil
+}
+
+func newMaskingCall(st *store.Store, input any) (maskingCall, error) {
+	masker, err := maskerFromStore(st)
+	if err != nil {
+		return maskingCall{}, fmt.Errorf("read secret values for masking: %w", err)
+	}
 	return maskingCall{
-		masker:          secretmask.New(secrets),
+		masker:          masker,
 		currentServerID: currentServerIDForInput(st, input),
 	}, nil
 }
@@ -147,6 +204,12 @@ func serverIDInputRank(name string) int {
 	}
 }
 
+// shouldVisitStructField 判断结构字段是否参与遍历：非导出字段与 JSON 忽略
+// 字段不会进入工具输出。
+func shouldVisitStructField(field reflect.StructField) bool {
+	return field.PkgPath == "" && strings.Split(field.Tag.Get("json"), ",")[0] != "-"
+}
+
 func walkServerIDFields(value reflect.Value, found func(name, value string)) {
 	switch value.Kind() {
 	case reflect.Pointer:
@@ -161,11 +224,8 @@ func walkServerIDFields(value reflect.Value, found func(name, value string)) {
 		fieldType := reflect.TypeFor[MaskedOutput]()
 		for i := 0; i < value.NumField(); i++ {
 			field := value.Type().Field(i)
-			if field.PkgPath != "" || field.Type == fieldType {
-				continue
-			}
 			jsonName := strings.Split(field.Tag.Get("json"), ",")[0]
-			if jsonName == "-" {
+			if !shouldVisitStructField(field) || field.Type == fieldType {
 				continue
 			}
 			if field.Type.Kind() == reflect.String && containsServerIDJSONName(jsonName) {
@@ -220,7 +280,11 @@ func maskToolResultAndOutput(result *mcp.CallToolResult, output any, call maskin
 	}
 	outputValue := reflect.ValueOf(output)
 	walker.walk(outputValue)
-	names := sortedMaskedNames(walker.names)
+	names := make([]string, 0, len(walker.names))
+	for name := range walker.names {
+		names = append(names, name)
+	}
+	names = mergeMaskedNames(names)
 	if result != nil && result.IsError {
 		appendMaskedNamesToErrorText(result, names)
 	}
@@ -294,10 +358,7 @@ func (w *maskWalker) walk(value reflect.Value) {
 	case reflect.Struct:
 		maskedType := reflect.TypeFor[MaskedOutput]()
 		for i := 0; i < value.NumField(); i++ {
-			if value.Type().Field(i).PkgPath != "" {
-				continue
-			}
-			if strings.Split(value.Type().Field(i).Tag.Get("json"), ",")[0] == "-" {
+			if !shouldVisitStructField(value.Type().Field(i)) {
 				continue
 			}
 			if value.Type().Field(i).Type == maskedType {
@@ -362,10 +423,7 @@ func setMaskedOutputFields(value reflect.Value, names []string) {
 	case reflect.Struct:
 		for i := 0; i < value.NumField(); i++ {
 			field := value.Type().Field(i)
-			if field.PkgPath != "" {
-				continue
-			}
-			if strings.Split(field.Tag.Get("json"), ",")[0] == "-" {
+			if !shouldVisitStructField(field) {
 				continue
 			}
 			if field.Type == maskedType {
@@ -406,10 +464,7 @@ func maskedOutputFieldNames(value reflect.Value) []string {
 	case reflect.Struct:
 		var names []string
 		for i := 0; i < value.NumField(); i++ {
-			if value.Type().Field(i).PkgPath != "" {
-				continue
-			}
-			if strings.Split(value.Type().Field(i).Tag.Get("json"), ",")[0] == "-" {
+			if !shouldVisitStructField(value.Type().Field(i)) {
 				continue
 			}
 			if value.Type().Field(i).Type == maskedType {
@@ -418,26 +473,35 @@ func maskedOutputFieldNames(value reflect.Value) []string {
 			}
 			names = append(names, maskedOutputFieldNames(value.Field(i))...)
 		}
-		return sortedUniqueStrings(names)
+		return mergeMaskedNames(names)
 	case reflect.Slice, reflect.Array:
 		var names []string
 		for i := 0; i < value.Len(); i++ {
 			names = append(names, maskedOutputFieldNames(value.Index(i))...)
 		}
-		return sortedUniqueStrings(names)
+		return mergeMaskedNames(names)
 	case reflect.Map:
 		var names []string
 		iter := value.MapRange()
 		for iter.Next() {
 			names = append(names, maskedOutputFieldNames(iter.Value())...)
 		}
-		return sortedUniqueStrings(names)
+		return mergeMaskedNames(names)
 	}
 	return nil
 }
 
+// mergeMaskedNames 合并多组遮蔽到的机密项名字，按字母顺序去重；没有名字时
+// 返回空值。
 func mergeMaskedNames(groups ...[]string) []string {
-	all := make([]string, 0)
+	total := 0
+	for _, group := range groups {
+		total += len(group)
+	}
+	if total == 0 {
+		return nil
+	}
+	all := make([]string, 0, total)
 	for _, group := range groups {
 		all = append(all, group...)
 	}
@@ -451,35 +515,6 @@ func mergeMaskedNames(groups ...[]string) []string {
 	return merged
 }
 
-func sortedMaskedNames(names map[string]bool) []string {
-	if len(names) == 0 {
-		return nil
-	}
-	result := make([]string, 0, len(names))
-	for name := range names {
-		result = append(result, name)
-	}
-	sort.Strings(result)
-	return result
-}
-
-func sortedUniqueStrings(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	sort.Strings(values)
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		if len(result) == 0 || value != result[len(result)-1] {
-			result = append(result, value)
-		}
-	}
-	return result
-}
-
 func maskedErrorMessage(text string, names []string) error {
-	if len(names) == 0 {
-		return errors.New(text)
-	}
 	return errors.New(text + "\nMasked secrets: " + strings.Join(names, ", "))
 }

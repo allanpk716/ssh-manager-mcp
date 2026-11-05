@@ -424,8 +424,8 @@ type maskingProbeOutput struct {
 	Slice           []string            `json:"slice"`
 	Map             map[string]string   `json:"map"`
 	Any             any                 `json:"any"`
-	Raw             json.RawMessage     `json:"raw"`
-	Custom          maskingProbeBytes   `json:"custom"`
+	Raw             json.RawMessage     `json:"raw,omitempty"`
+	Custom          maskingProbeBytes   `json:"custom,omitempty"`
 	ContextServerID string              `json:"context_server_id"`
 }
 

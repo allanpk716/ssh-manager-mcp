@@ -2,8 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"reflect"
 	"sync/atomic"
 
@@ -84,51 +82,4 @@ func addTrackedTool[In, Out any](srv *mcp.Server, busy *BusyTracker, storeFn fun
 		withMaskOnlyOutputSchema(t)
 	}
 	mcp.AddTool(srv, t, maskToolOutput(storeFn, hkFn, wrapInflight(busy, h, false)))
-}
-
-func maskToolOutput[In, Out any](storeFn func() *store.Store, hkFn func() sshbroker.HostKeyStore, h mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
-	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		st := storeFn()
-		call, err := newMaskingCall(st, in)
-		if err != nil {
-			var zero Out
-			return nil, zero, fmt.Errorf("prepare output masking: %w", err)
-		}
-		ctx = withMaskingCall(ctx, call)
-		ctx = withToolStore(ctx, st)
-		hk := sshbroker.HostKeyStore(st)
-		if hkFn != nil {
-			hk = hkFn()
-		}
-		ctx = withToolHostKeyStore(ctx, hk)
-		result, output, handlerErr := h(ctx, req, in)
-		names, maskedErr := maskToolResultAndOutput(result, &output, call, handlerErr)
-		if len(names) > 0 && result != nil && reflect.TypeFor[Out]() == reflect.TypeFor[any]() {
-			encoded, err := json.Marshal(MaskedOutput{Masked: names})
-			if err == nil {
-				result.StructuredContent = encoded
-			} else {
-				return nil, output, fmt.Errorf("encode masked output: %w", err)
-			}
-		}
-		return result, output, maskedErr
-	}
-}
-
-func withMaskingDescription(tool *mcp.Tool) {
-	const sentence = " Only a {{sshmgr-secret:NAME}} placeholder whose NAME appears in the masked field is a masking result."
-	tool.Description += sentence
-}
-
-func withMaskOnlyOutputSchema(tool *mcp.Tool) {
-	tool.OutputSchema = map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"masked": map[string]any{
-				"type":  "array",
-				"items": map[string]any{"type": "string"},
-			},
-		},
-		"additionalProperties": false,
-	}
 }

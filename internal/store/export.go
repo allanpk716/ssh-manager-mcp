@@ -877,10 +877,9 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		return fmt.Errorf("advance snapshot revision after import: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := s.commitSecretChange(tx); err != nil {
 		return err
 	}
-	s.secretValuesForMaskingVersion.Add(1)
 	return nil
 }
 

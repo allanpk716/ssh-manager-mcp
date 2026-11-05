@@ -167,7 +167,7 @@ func (m Masker) matchAt(input []byte, currentServerID string) (matchString, bool
 	var selected matchString
 	found := false
 	for _, candidate := range m.matchStrings {
-		if bytesEqual(input, candidate.value) {
+		if bytes.HasPrefix(input, candidate.value) {
 			if !found || betterMatch(candidate, selected, currentServerID) {
 				selected = candidate
 			}
@@ -196,10 +196,6 @@ func containsServer(serverIDs []string, currentServerID string) bool {
 		}
 	}
 	return false
-}
-
-func bytesEqual(input []byte, want []byte) bool {
-	return len(input) >= len(want) && bytes.Equal(input[:len(want)], want)
 }
 
 func deduplicateStrings(values []string) []string {
