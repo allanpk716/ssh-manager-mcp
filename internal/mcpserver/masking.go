@@ -202,7 +202,12 @@ func maskToolResultAndOutput(result *mcp.CallToolResult, output any, call maskin
 	}
 	setMaskedOutputFields(outputValue, names)
 	if maskedErr != nil {
-		maskedErr = maskedErrorMessage(maskedText, names)
+		if len(names) == 0 {
+			// 没有遮蔽到任何名字时保留原错误，不丢失它的类型。
+			maskedErr = handlerErr
+		} else {
+			maskedErr = maskedErrorMessage(maskedText, names)
+		}
 	}
 	return maskedOutputFieldNames(outputValue), maskedErr
 }
