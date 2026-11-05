@@ -64,6 +64,7 @@
 进入缓冲的字节不会重扫。若读取值集合失败，该通道会丢弃后续远端输出，并写入
 一行「sshmgr: output dropped because secret values could not be read」作为
 报错占位，绝不把未遮蔽原文放进缓冲。
+
 ### 前台输出与下载的截断顺序
 
 `exec_command` 与 `download_file` 都先读取、后遮蔽、最后截断：sshmgr 会在
