@@ -36,6 +36,44 @@ type SecretView struct {
 	ValueUpdatedAt int64
 }
 
+// SecretValuesForMasking 是只供进程内部输出遮蔽使用的机密项值集合。它包含
+// 解密后的当前值与上一个值，以及可写入服务器条目标识符；不能接入任何
+// MCP 工具，也不能写入日志或审计。
+type SecretValuesForMasking struct {
+	Name              string
+	Current           []byte
+	Previous          []byte
+	WritableServerIDs []string
+}
+
+// SecretValuesForMasking 读取全部机密项的当前值、上一个值与可写入服务器
+// 条目标识符。该读取路径只服务本进程内的输出遮蔽；调用方不得把返回值
+// 序列化到工具结果、日志或审计。
+func (s *Store) SecretValuesForMasking() ([]SecretValuesForMasking, error) {
+	rows, allows, err := s.snapshotSecrets()
+	if err != nil {
+		return nil, err
+	}
+	indexByID := make(map[string]int, len(rows))
+	values := make([]SecretValuesForMasking, 0, len(rows))
+	for _, row := range rows {
+		indexByID[row.ID] = len(values)
+		values = append(values, SecretValuesForMasking{
+			Name:     row.Name,
+			Current:  row.Value,
+			Previous: row.PreviousValue,
+		})
+	}
+	for _, allow := range allows {
+		index, exists := indexByID[allow.SecretID]
+		if !exists {
+			continue
+		}
+		values[index].WritableServerIDs = append(values[index].WritableServerIDs, allow.ServerID)
+	}
+	return values, nil
+}
+
 // SecretServerScope 是机密项可见列表的服务器范围：客户端为 profile 授予
 // 的服务器集合，单机与权威端为全部服务器。
 type SecretServerScope struct {

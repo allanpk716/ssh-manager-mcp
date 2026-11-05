@@ -2,9 +2,15 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"reflect"
 	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"ssh-manager-mcp/internal/sshbroker"
+	"ssh-manager-mcp/internal/store"
 )
 
 // 忙判据库 (桥热升级 spec 实施决策第 2 条, D5/F3): 桥进程内统一的忙判定 ——
@@ -70,9 +76,59 @@ func wrapInflight[In, Out any](b *BusyTracker, h mcp.ToolHandlerFor[In, Out], ex
 	}
 }
 
-// addTrackedTool 是 mcp.AddTool 的忙计数挂接版: server.go 的全部工具注册走
-// 它, 处理器一律包上在飞计数 (豁免注册形态: wrapInflight(busy, h, true) +
-// mcp.AddTool —— reload_self 票使用)。
-func addTrackedTool[In, Out any](srv *mcp.Server, busy *BusyTracker, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
-	mcp.AddTool(srv, t, wrapInflight(busy, h, false))
+// addTrackedTool 是 mcp.AddTool 的忙计数与输出遮蔽挂接版: server.go 的全部
+// 工具注册走它, 处理器一律包上在飞计数, 并在返回后、序列化前遮蔽字符串。
+func addTrackedTool[In, Out any](srv *mcp.Server, busy *BusyTracker, storeFn func() *store.Store, hkFn func() sshbroker.HostKeyStore, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	withMaskingDescription(t)
+	if reflect.TypeFor[Out]() == reflect.TypeFor[any]() {
+		withMaskOnlyOutputSchema(t)
+	}
+	mcp.AddTool(srv, t, maskToolOutput(storeFn, hkFn, wrapInflight(busy, h, false)))
+}
+
+func maskToolOutput[In, Out any](storeFn func() *store.Store, hkFn func() sshbroker.HostKeyStore, h mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		st := storeFn()
+		call, err := newMaskingCall(st, in)
+		if err != nil {
+			var zero Out
+			return nil, zero, fmt.Errorf("prepare output masking: %w", err)
+		}
+		ctx = withMaskingCall(ctx, call)
+		ctx = withToolStore(ctx, st)
+		hk := sshbroker.HostKeyStore(st)
+		if hkFn != nil {
+			hk = hkFn()
+		}
+		ctx = withToolHostKeyStore(ctx, hk)
+		result, output, handlerErr := h(ctx, req, in)
+		names, maskedErr := maskToolResultAndOutput(result, &output, call, handlerErr)
+		if len(names) > 0 && result != nil && reflect.TypeFor[Out]() == reflect.TypeFor[any]() {
+			encoded, err := json.Marshal(MaskedOutput{Masked: names})
+			if err == nil {
+				result.StructuredContent = encoded
+			} else {
+				return nil, output, fmt.Errorf("encode masked output: %w", err)
+			}
+		}
+		return result, output, maskedErr
+	}
+}
+
+func withMaskingDescription(tool *mcp.Tool) {
+	const sentence = " Only a {{sshmgr-secret:NAME}} placeholder whose NAME appears in the masked field is a masking result."
+	tool.Description += sentence
+}
+
+func withMaskOnlyOutputSchema(tool *mcp.Tool) {
+	tool.OutputSchema = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"masked": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+		},
+		"additionalProperties": false,
+	}
 }
