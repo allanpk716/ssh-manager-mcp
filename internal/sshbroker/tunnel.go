@@ -37,8 +37,10 @@ type Tunnel struct {
 	listener  net.Listener
 	client    *ssh.Client // the long-lived SSH connection the tunnel dials through
 
-	onActivity func()       // nil = no hook; throttled activity signal for the manager's sweeper (spec §3)
-	touchNano  atomic.Int64 // unix-nano of the last REAL callback (0 = never) — the throttle window start
+	// onActivity 是可并发替换的活动回调；空指针表示没有回调。
+	onActivity atomic.Pointer[func()]
+	// touchNano 是最近一次真实回调的 Unix 纳秒时间戳（0 表示从未回调）。
+	touchNano atomic.Int64
 
 	closeOnce sync.Once
 	closeErr  error
@@ -50,25 +52,30 @@ type Tunnel struct {
 // Touch is idempotent. Hot path is lock- and allocation-free: one atomic
 // load/compare per event, a store + call only when the window opens.
 func (t *Tunnel) activity() {
-	if t.onActivity == nil {
+	callbackPointer := t.onActivity.Load()
+	if callbackPointer == nil {
 		return
 	}
+	onActivity := *callbackPointer
 	now := time.Now().UnixNano()
 	if now-t.touchNano.Load() < int64(activityThrottle) {
 		return
 	}
 	t.touchNano.Store(now)
-	t.onActivity()
+	onActivity()
 }
 
-// SetOnActivity attaches (or, with nil, clears) the activity callback after
-// the tunnel is open. The TunnelManager wiring (Plan 35 T5) uses it to attach
-// its Touch after mgr.Open; the ForwardLocal constructor param route stays
-// for direct callers and tests. Plain assignment, no synchronization: it is
-// meant to run before or between connections — the worst case of a racing
-// swap is one extra or one missed throttled ping, which the idempotent
-// manager Touch absorbs.
-func (t *Tunnel) SetOnActivity(fn func()) { t.onActivity = fn }
+// SetOnActivity 在隧道打开后挂接活动回调；传入空值表示清除。管理器接线在
+// Open 返回注册标识后调用它，构造参数仍保留给直接调用方与测试。回调用原子
+// 指针存放：并发替换最多让一次活动信号按旧回调或新回调处理，管理器的
+// Touch 本身幂等，因此语义不变。
+func (t *Tunnel) SetOnActivity(fn func()) {
+	if fn == nil {
+		t.onActivity.Store(nil)
+		return
+	}
+	t.onActivity.Store(&fn)
+}
 
 // LocalAddr returns the tunnel's local listen address (e.g. "127.0.0.1:54321").
 // Callers (the MCP forward_port tool reports it to the agent; the test dials it
@@ -115,12 +122,12 @@ func (c *Client) ForwardLocal(localPort int, listenHost, remoteHost string, remo
 		return nil, fmt.Errorf("local listen %s: %w", addr, err)
 	}
 	t := &Tunnel{
-		ID:         uuid.NewString(),
-		localAddr:  ln.Addr().String(),
-		listener:   ln,
-		client:     c.c,
-		onActivity: onActivity,
+		ID:        uuid.NewString(),
+		localAddr: ln.Addr().String(),
+		listener:  ln,
+		client:    c.c,
 	}
+	t.SetOnActivity(onActivity)
 	go t.serve(remoteHost, remotePort)
 	return t, nil
 }

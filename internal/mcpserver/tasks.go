@@ -54,11 +54,14 @@ type bgTask struct {
 	exitCode       int
 	errText        string
 	stdout, stderr *sshbroker.RollingBuffer
-	cancel         context.CancelFunc
-	stopReq        bool
-	startedAt      time.Time
-	finishedAt     time.Time
-	deadline       time.Time
+	// stdoutWriter/stderrWriter 持有每个输出通道自己的流式遮蔽状态；终态
+	// Flush 后它们只提供任务累计的 masked 名单。
+	stdoutWriter, stderrWriter *notifyWriter
+	cancel                     context.CancelFunc
+	stopReq                    bool
+	startedAt                  time.Time
+	finishedAt                 time.Time
+	deadline                   time.Time
 	// client 槽 (T4): 引擎入场即挂 (持锁), 终态即关; CloseAll 可达即关。
 	// 终态保留期记录不持有活连接 (spec §1: session 返回即关 Client)。
 	client *sshbroker.Client
@@ -120,6 +123,7 @@ type TaskManager struct {
 	runCap, retain      time.Duration
 	maxTasks            int
 	now                 func() time.Time // 测试可覆写
+	maskingSource       *backgroundMaskingSource
 	quit                chan struct{}
 	startOnce, stopOnce sync.Once
 	wg                  sync.WaitGroup
@@ -164,6 +168,13 @@ func NewTaskManager() (*TaskManager, error) {
 		now:      time.Now,
 		quit:     make(chan struct{}),
 	}, nil
+}
+
+// AttachStore 挂接后台任务遮蔽使用的当前 store 来源。生产路径必须在启动
+// sweeper 或插入任务前调用；后台写入协程不能使用某一次工具调用的 context，
+// 因此这里保留「调用时求值 store」的来源。
+func (m *TaskManager) AttachStore(storeFn func() *store.Store) {
+	m.maskingSource = newBackgroundMaskingSource(storeFn)
 }
 
 // StartSweeper 至多启动一次清扫 goroutine; CloseAll 后为 no-op。生产入口
@@ -529,18 +540,6 @@ func (m *TaskManager) notifyWrite(t *bgTask) {
 	m.mu.Unlock()
 }
 
-// notifyWriter: 落笔后先释 buffer.mu 再广播（Write 内部锁已释放, after 才取 m.mu）
-type notifyWriter struct {
-	buf   *sshbroker.RollingBuffer
-	after func()
-}
-
-func (w *notifyWriter) Write(p []byte) (int, error) {
-	n, err := w.buf.Write(p)
-	w.after()
-	return n, err
-}
-
 // ---------- Task 5: 代际广播消费 + Output 等待回路 (spec §2.3) ----------
 
 // BgView 是 Output 返回的观察快照, Task 7 的 exec_output ForProfile 消费。
@@ -559,6 +558,9 @@ type BgView struct {
 	// StdoutTotal/StderrTotal: 通道全流字节计数 (快照后取, 单调 → 恒 ≥ Next*)。
 	StdoutTotal int64
 	StderrTotal int64
+	// StdoutMaskedNames/StderrMaskedNames 是各通道任务累计遮蔽到的名字。
+	StdoutMaskedNames []string
+	StderrMaskedNames []string
 	// StartStdout/StartStderr: 保留窗首字节的流内偏移 (gap 判据的锚)。
 	StartStdout int64
 	StartStderr int64
@@ -651,7 +653,14 @@ func (m *TaskManager) Output(id string, so, eo int64, wait time.Duration, ctx co
 func (m *TaskManager) view(t *bgTask, so, eo int64) BgView {
 	m.mu.Lock()
 	v := BgView{Status: t.status, ExitCode: t.exitCode, ErrText: t.errText, Sudo: t.sudoMeta}
+	stdoutWriter, stderrWriter := t.stdoutWriter, t.stderrWriter
 	m.mu.Unlock()
+	if stdoutWriter != nil {
+		v.StdoutMaskedNames = stdoutWriter.maskedNames()
+	}
+	if stderrWriter != nil {
+		v.StderrMaskedNames = stderrWriter.maskedNames()
+	}
 
 	oChunk, oNext, oStart := t.stdout.Snapshot(so)
 	eChunk, eNext, eStart := t.stderr.Snapshot(eo)
@@ -711,15 +720,20 @@ func redactRuntimeErr(err error) string {
 // CloseAll 摘除), 但 client 仍由本 goroutine 自关 (幂等)。终态即关 Client:
 // 锁外关、幂等; 保留期只保 task 记录 + rollingBuffer (spec §1)。
 func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Client, exec func(ctx context.Context, stdout, stderr io.Writer) (int, bool, error), sudoMetaBox *sshbroker.SudoMeta) {
+	stdoutWriter := &notifyWriter{buf: t.stdout, source: m.maskingSource, serverID: t.serverID}
+	stderrWriter := &notifyWriter{buf: t.stderr, source: m.maskingSource, serverID: t.serverID}
 	// 引擎入场即挂 client 槽 (持锁): CloseAll 可达即关, 观察路径可捕获引用。
 	m.mu.Lock()
 	t.client = cli
+	t.stdoutWriter, t.stderrWriter = stdoutWriter, stderrWriter
 	m.mu.Unlock()
 
 	after := func() { m.notifyWrite(t) } // 锁序: buffer.mu 已释, 才进 notifyWrite 取 m.mu
-	code, timedOut, rerr := exec(ctx,
-		&notifyWriter{buf: t.stdout, after: after},
-		&notifyWriter{buf: t.stderr, after: after})
+	stdoutWriter.after = after
+	stderrWriter.after = after
+	code, timedOut, rerr := exec(ctx, stdoutWriter, stderrWriter)
+	stdoutWriter.Flush()
+	stderrWriter.Flush()
 
 	m.mu.Lock()
 	switch {

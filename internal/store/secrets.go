@@ -36,6 +36,44 @@ type SecretView struct {
 	ValueUpdatedAt int64
 }
 
+// SecretValuesForMasking 是只供进程内部输出遮蔽使用的机密项值集合。它包含
+// 解密后的当前值与上一个值，以及可写入服务器条目标识符；不能接入任何
+// MCP 工具，也不能写入日志或审计。
+type SecretValuesForMasking struct {
+	Name              string
+	Current           []byte
+	Previous          []byte
+	WritableServerIDs []string
+}
+
+// SecretValuesForMasking 读取全部机密项的当前值、上一个值与可写入服务器
+// 条目标识符。该读取路径只服务本进程内的输出遮蔽；调用方不得把返回值
+// 序列化到工具结果、日志或审计。
+func (s *Store) SecretValuesForMasking() ([]SecretValuesForMasking, error) {
+	rows, allows, err := s.snapshotSecrets()
+	if err != nil {
+		return nil, err
+	}
+	indexByID := make(map[string]int, len(rows))
+	values := make([]SecretValuesForMasking, 0, len(rows))
+	for _, row := range rows {
+		indexByID[row.ID] = len(values)
+		values = append(values, SecretValuesForMasking{
+			Name:     row.Name,
+			Current:  row.Value,
+			Previous: row.PreviousValue,
+		})
+	}
+	for _, allow := range allows {
+		index, exists := indexByID[allow.SecretID]
+		if !exists {
+			continue
+		}
+		values[index].WritableServerIDs = append(values[index].WritableServerIDs, allow.ServerID)
+	}
+	return values, nil
+}
+
 // SecretServerScope 是机密项可见列表的服务器范围：客户端为 profile 授予
 // 的服务器集合，单机与权威端为全部服务器。
 type SecretServerScope struct {
@@ -100,6 +138,16 @@ func validateSecretValue(value []byte) error {
 	}
 }
 
+// commitSecretChange 提交会改变机密项值集合的事务；提交成功后递增进程内
+// 变化计数，让后台遮蔽器立即察觉本进程的改动。
+func (s *Store) commitSecretChange(tx *sql.Tx) error {
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.secretValuesForMaskingVersion.Add(1)
+	return nil
+}
+
 // AddSecret 新增一个机密项：值用 vault 主密钥加密，值版本号为 1，创建时间
 // 与值的最后更改时间相同。名字唯一性按小写形式检查。数据与审计行在同一
 // 事务提交。
@@ -141,7 +189,10 @@ func (s *Store) AddSecret(name, note string, value []byte) error {
 	if err := writeSecretAuditTx(tx, ts, "secret-add", map[string]any{"name": name}); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := s.commitSecretChange(tx); err != nil {
+		return err
+	}
+	return nil
 }
 
 // SetSecretValue 覆盖机密项的值：旧值移入上一个值字段，值版本号加一，值的
@@ -181,7 +232,10 @@ func (s *Store) SetSecretValue(name string, value []byte) error {
 	if err := writeSecretAuditTx(tx, ts, "secret-set", map[string]any{"name": name, "change": "值已更改"}); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := s.commitSecretChange(tx); err != nil {
+		return err
+	}
+	return nil
 }
 
 // EditSecretNote 只改备注。数据与审计行在同一事务提交，审计不记录备注原文。
@@ -232,7 +286,10 @@ func (s *Store) DeleteSecret(name string) error {
 	if err := writeSecretAuditTx(tx, s.nowTime(), "secret-rm", map[string]any{"name": name}); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := s.commitSecretChange(tx); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ListSecretsInScope 列出服务器范围内的机密项可见列表。指定集合时只返回
@@ -518,7 +575,10 @@ func (s *Store) changeSecretAllows(secretNames, serverNames []string, allow bool
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := s.commitSecretChange(tx); err != nil {
+		return err
+	}
+	return nil
 }
 
 // resolveSecretAllowTargets 按名字逐个解析目标，返回解析成功的目标与缺失名

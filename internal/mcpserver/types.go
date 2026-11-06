@@ -52,6 +52,7 @@ type UpdateServerMetadataInput struct {
 // means the broker committed it (authoritative) but the local cache could not
 // mirror the change — the next cache pull closes the gap.
 type UpdateServerMetadataOutput struct {
+	MaskedOutput
 	ServerID   string `json:"server_id" jsonschema:"the edited server id"`
 	ServerName string `json:"server_name" jsonschema:"the edited server name"`
 	Revision   int64  `json:"revision" jsonschema:"the row's new revision (use this as expected_revision for the next edit)"`
@@ -65,6 +66,7 @@ type UpdateServerMetadataOutput struct {
 // clamp (input <= 0 → 120 default, anything over 300 → 300 cap): silent
 // clamping became an echo.
 type ExecOutput struct {
+	MaskedOutput
 	Stdout      string `json:"stdout" jsonschema:"combined/normal command stdout"`
 	Stderr      string `json:"stderr,omitempty" jsonschema:"command stderr"`
 	ExitCode    int    `json:"exit_code" jsonschema:"process exit code (0 = success)"`
@@ -101,6 +103,7 @@ type ExecContextInput struct {
 // layer BEFORE elevation (sudo's env_reset empties them in the privileged
 // layer — the tool shows the channel's true provenance, not empty strings).
 type ExecContextOutput struct {
+	MaskedOutput
 	UID           int    `json:"uid" jsonschema:"real uid the channel runs as (0 on the sudo=true path if elevation succeeded)"`
 	GID           int    `json:"gid" jsonschema:"real gid"`
 	Groups        string `json:"groups" jsonschema:"supplementary groups (raw id(1) groups= segment)"`
@@ -123,6 +126,7 @@ type DownloadInput struct {
 
 // DownloadOutput is the download_file tool output.
 type DownloadOutput struct {
+	MaskedOutput
 	Content   string `json:"content" jsonschema:"the file content (the prefix if truncated=true)"`
 	Bytes     int64  `json:"bytes" jsonschema:"total file size in bytes (may exceed len(content) when truncated)"`
 	Truncated bool   `json:"truncated,omitempty" jsonschema:"true if the file exceeded the size cap and content is only the prefix"`
@@ -138,6 +142,7 @@ type UploadInput struct {
 
 // UploadOutput is the upload_file tool output.
 type UploadOutput struct {
+	MaskedOutput
 	Files     int   `json:"files" jsonschema:"number of files uploaded (>=1; >1 if local_path was a directory)"`
 	Bytes     int64 `json:"bytes" jsonschema:"total bytes uploaded (may be less than the source size when truncated=true)"`
 	Truncated bool  `json:"truncated,omitempty" jsonschema:"true if the cumulative 1 MiB cap was crossed mid-upload by files each within the single-file cap — already-completed files are kept, the file in flight lands complete, and later files are not uploaded (a single file larger than the cap is refused before transfer with an error instead, zero bytes sent)"`
@@ -157,6 +162,7 @@ type UploadContentInput struct {
 // UploadContentOutput is the upload_content tool output. No truncated field:
 // over-cap is a refusal ERROR before transfer, never a partial success.
 type UploadContentOutput struct {
+	MaskedOutput
 	Bytes int64 `json:"bytes" jsonschema:"bytes written to the remote file (the decoded byte count)"`
 }
 
@@ -180,6 +186,7 @@ type ForwardInput struct {
 // Pass tunnel_id to close_port when done (tunnels auto-close after ~10 minutes
 // of inactivity — a tunnel carrying traffic stays alive).
 type ForwardOutput struct {
+	MaskedOutput
 	TunnelID   string `json:"tunnel_id" jsonschema:"opaque id; pass to close_port when done with the forward"`
 	LocalPort  int    `json:"local_port" jsonschema:"the local port now forwarding to remote_host:remote_port"`
 	ListenHost string `json:"listen_host" jsonschema:"the local address the forward is bound to (127.0.0.1 unless you passed a whitelisted listen_host)"`
@@ -208,6 +215,7 @@ type ExecBackgroundInput struct {
 // BgStartOutput is the exec_background tool output (Plan 32 T6; T7's
 // BgReadOutput/BgStopOutput are the same naming family).
 type BgStartOutput struct {
+	MaskedOutput
 	TaskID                  string `json:"task_id" jsonschema:"opaque task id; poll its output with exec_output, stop it with exec_stop"`
 	EffectiveTimeoutSeconds int    `json:"effective_timeout_seconds" jsonschema:"the clamped timeout actually in effect, in seconds (default and cap: 86400 = 24h)"`
 	Status                  string `json:"status" jsonschema:"task status right after start; running"`
@@ -230,6 +238,7 @@ type ExecOutputInput struct {
 // after each offset plus running/terminal status and honest-degradation
 // bookkeeping. House style: constant fields, empty values explicit.
 type BgReadOutput struct {
+	MaskedOutput
 	Status           string    `json:"status" jsonschema:"task status: running|done|stopped|timeout|failed"`
 	ExitCode         int       `json:"exit_code" jsonschema:"process exit code (meaningful when status=done; 0 otherwise)"`
 	Error            string    `json:"error" jsonschema:"error text when status=failed (address shapes cleaned); empty otherwise"`
@@ -252,6 +261,7 @@ type ExecStopInput struct {
 
 // BgStopOutput is the exec_stop tool output (Plan 32 T7).
 type BgStopOutput struct {
+	MaskedOutput
 	Status string `json:"status" jsonschema:"the task's status at trigger time: 'running' for a running task (the stop was set in motion; watch for the terminal 'stopped' state via exec_output — this call never blocks), or the task's terminal status if it had already finished (idempotent)"`
 }
 
@@ -268,6 +278,7 @@ type RelayInput struct {
 // RelayOutput is the relay_file tool output (Plan 47; spec §1.1 schema
 // verbatim). Metadata only — file bytes never enter the agent context.
 type RelayOutput struct {
+	MaskedOutput
 	TaskID        string `json:"task_id" jsonschema:"background task id — poll progress with exec_output(task_id), stop with exec_stop(task_id); the transfer is resumable: re-run relay_file with the same paths after any failure/stop"`
 	BytesTotal    int64  `json:"bytes_total" jsonschema:"total source bytes"`
 	ChunksTotal   int    `json:"chunks_total" jsonschema:"total chunk count"`

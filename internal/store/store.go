@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"ssh-manager-mcp/internal/paths"
@@ -61,6 +62,10 @@ type Store struct {
 	// 使用真实时钟；生产代码不设置它，测试可以注入固定时钟。其余时间戳
 	// 继续使用包内的 now 辅助函数。
 	NowFn func() time.Time
+	// secretValuesForMaskingVersion 只服务进程内输出遮蔽：机密项值或可写入
+	// 范围成功变化后加一。后台任务写缓冲前需要频繁判断值集合是否变化，
+	// 这个内存计数避免每次写输出都查询数据库和解密全部机密项。
+	secretValuesForMaskingVersion atomic.Uint64
 }
 
 // nowTime is the Store-scoped clock read: honors the injected NowFn when set.
@@ -73,6 +78,12 @@ func (s *Store) nowTime() time.Time {
 
 // nowUnix is nowTime as unix seconds — the form every pairing time predicate uses.
 func (s *Store) nowUnix() int64 { return s.nowTime().Unix() }
+
+// SecretValuesForMaskingVersion 返回机密项遮蔽值集合的进程内变化计数。
+// 它只用于缓存遮蔽器，不进入快照、日志或任何工具结果。
+func (s *Store) SecretValuesForMaskingVersion() uint64 {
+	return s.secretValuesForMaskingVersion.Load()
+}
 
 // ErrReadOnly is returned by every mutation method when the store is in read-only
 // (offline-cache) mode. The cache is a pulled snapshot — mutations belong on the server.

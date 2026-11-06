@@ -244,6 +244,7 @@ func ExecOutputForProfile(ctx context.Context, st *store.Store, projectID, taskI
 		NextStdoutOffset: v.NextStdout, NextStderrOffset: v.NextStderr,
 		StdoutBytesTotal: v.StdoutTotal, StderrBytesTotal: v.StderrTotal,
 		Truncated: v.Truncated, LostStdoutBytes: v.LostStdout, LostStderrBytes: v.LostStderr,
+		MaskedOutput: MaskedOutput{Masked: mergeMaskedNames(v.StdoutMaskedNames, v.StderrMaskedNames)},
 	}
 	if v.Sudo != nil { // Plan 41 §2: 后台 sudo 任务的提权元数据 (终态后非 nil)
 		out.Sudo = &SudoInfo{Outcome: v.Sudo.Outcome, UID: v.Sudo.UID}
