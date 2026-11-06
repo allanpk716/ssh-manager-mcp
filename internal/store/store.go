@@ -587,6 +587,28 @@ CREATE TABLE IF NOT EXISTS credentials (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sites (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL UNIQUE,
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS networks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL UNIQUE,
+  type TEXT NOT NULL CHECK(type IN ('physical','virtual')),
+  site_id TEXT REFERENCES sites(id),
+  note TEXT NOT NULL DEFAULT '',
+  cidr TEXT NOT NULL DEFAULT '',
+  bandwidth_mbps INTEGER NOT NULL DEFAULT 0,
+  metered INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK ((type='physical' AND site_id IS NOT NULL) OR (type='virtual' AND site_id IS NULL))
+);
 CREATE TABLE IF NOT EXISTS servers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,

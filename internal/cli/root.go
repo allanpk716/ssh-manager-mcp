@@ -25,7 +25,7 @@ func NewRootCmd() *rootCommand {
 		Use:   "sshmgr",
 		Short: "Encrypted SSH credential vault and broker (MCP)",
 	}
-	root.AddCommand(versionCmd, newServersCmd(), newProfilesCmd(), newProjectsCmd(), newSecretsCmd(), newCacheTokensCmd(), newCacheCmd(), newPairCmd(), newGCCmd(), newAuditCmd(), newUnlockCmd(), newLockCmd(), newSSHCmd(), newMCPCmd(), newServeCmd(), newTunnelsCmd(), newExportCmd(), newImportCmd(), newBackupCmd(), newMigratePathCmd(), newTUICmd(), newClearCmd(), newDoctorCmd(), newUpdateCmd(), newPolicyCmd())
+	root.AddCommand(versionCmd, newServersCmd(), newProfilesCmd(), newProjectsCmd(), newSecretsCmd(), newSitesCmd(), newNetworksCmd(), newCacheTokensCmd(), newCacheCmd(), newPairCmd(), newGCCmd(), newAuditCmd(), newUnlockCmd(), newLockCmd(), newSSHCmd(), newMCPCmd(), newServeCmd(), newTunnelsCmd(), newExportCmd(), newImportCmd(), newBackupCmd(), newMigratePathCmd(), newTUICmd(), newClearCmd(), newDoctorCmd(), newUpdateCmd(), newPolicyCmd())
 	return &rootCommand{Command: root}
 }
 

@@ -23,11 +23,15 @@ type Snapshot struct {
 	// 自己是否落后；旧快照与旧客户端分别解码、忽略该字段。
 	RecommendedVersion string               `json:"recommended_version"`
 	Credentials        []SnapshotCredential `json:"credentials"`
-	Servers            []SnapshotServer     `json:"servers"`
-	Profiles           []SnapshotProfile    `json:"profiles"`
-	Grants             []SnapshotGrant      `json:"grants"`
-	Projects           []SnapshotProject    `json:"projects"`
-	HostKeys           []SnapshotHostKey    `json:"host_keys"`
+	// Sites / Networks（票 #123）是网络拓扑里的站点与网络，只进入备份与
+	// 导出的全量快照；下发给客户端的 profile 裁剪快照不填这两段。
+	Sites    []SnapshotSite    `json:"sites,omitempty"`
+	Networks []SnapshotNetwork `json:"networks,omitempty"`
+	Servers  []SnapshotServer  `json:"servers"`
+	Profiles []SnapshotProfile `json:"profiles"`
+	Grants   []SnapshotGrant   `json:"grants"`
+	Projects []SnapshotProject `json:"projects"`
+	HostKeys []SnapshotHostKey `json:"host_keys"`
 	// EntryHostKeys（票 #58）是按服务器条目存放的锚；HostKeys 仍为兜底地址
 	// 推导出的旧格式行，旧客户端靠它继续校验。旧快照解码时本字段为空。
 	EntryHostKeys []SnapshotEntryHostKey `json:"entry_host_keys,omitempty"`
@@ -69,6 +73,30 @@ type SnapshotCredential struct {
 	Passphrase []byte `json:"passphrase"` // DECRYPTED plaintext; nil/empty if none
 	CreatedAt  int64  `json:"created_at"`
 	UpdatedAt  int64  `json:"updated_at"`
+}
+
+// SnapshotSite 是全量快照里的站点段。
+type SnapshotSite struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Note      string `json:"note"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+// SnapshotNetwork 是全量快照里的网络段。CIDR 是导出文件里的既有字段名，
+// 语义是「网段，只给人看」。
+type SnapshotNetwork struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	SiteID        string `json:"site_id"`
+	Note          string `json:"note"`
+	CIDR          string `json:"cidr"`
+	BandwidthMbps int64  `json:"bandwidth_mbps"`
+	Metered       bool   `json:"metered"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 type SnapshotServer struct {
@@ -324,6 +352,46 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 	rc.Close()
 	if err := rc.Err(); err != nil {
+		return nil, err
+	}
+
+	// 网络拓扑（票 #123）：站点先导出，网络段携带站点标识符；导入时按
+	// 同一依赖顺序写回。
+	rts, err := s.db.Query(`SELECT id,name,note,created_at,updated_at FROM sites ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	for rts.Next() {
+		var site SnapshotSite
+		if err := rts.Scan(&site.ID, &site.Name, &site.Note, &site.CreatedAt, &site.UpdatedAt); err != nil {
+			rts.Close()
+			return nil, err
+		}
+		snap.Sites = append(snap.Sites, site)
+	}
+	rts.Close()
+	if err := rts.Err(); err != nil {
+		return nil, err
+	}
+
+	rn, err := s.db.Query(`
+		SELECT id,name,type,COALESCE(site_id,''),note,cidr,bandwidth_mbps,metered,created_at,updated_at
+		FROM networks ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	for rn.Next() {
+		var network SnapshotNetwork
+		if err := rn.Scan(&network.ID, &network.Name, &network.Type, &network.SiteID,
+			&network.Note, &network.CIDR, &network.BandwidthMbps, &network.Metered,
+			&network.CreatedAt, &network.UpdatedAt); err != nil {
+			rn.Close()
+			return nil, err
+		}
+		snap.Networks = append(snap.Networks, network)
+	}
+	rn.Close()
+	if err := rn.Err(); err != nil {
 		return nil, err
 	}
 
@@ -727,6 +795,28 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 	var currentRevision int64
 	if err = tx.QueryRow(`SELECT revision FROM snapshot_revision WHERE id=1`).Scan(&currentRevision); err != nil {
 		return err
+	}
+
+	// 0. 网络拓扑（票 #123）：站点先写回，网络随后按站点标识符恢复。
+	// 旧快照没有这两段时循环体不执行，导入后仍是零行。
+	for _, site := range snap.Sites {
+		if _, err := tx.Exec(
+			`INSERT INTO sites(id,name,name_lower,note,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
+			site.ID, site.Name, strings.ToLower(site.Name), site.Note, site.CreatedAt, site.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("insert site %s: %w", site.ID, err)
+		}
+	}
+	for _, network := range snap.Networks {
+		if _, err := tx.Exec(`
+			INSERT INTO networks(id,name,name_lower,type,site_id,note,cidr,bandwidth_mbps,metered,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			network.ID, network.Name, strings.ToLower(network.Name), network.Type,
+			nullIfEmpty(network.SiteID), network.Note, network.CIDR, network.BandwidthMbps,
+			network.Metered, network.CreatedAt, network.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("insert network %s: %w", network.ID, err)
+		}
 	}
 
 	// 1. credentials (re-seal under THIS store's master key)
