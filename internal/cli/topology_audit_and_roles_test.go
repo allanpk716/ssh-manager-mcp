@@ -159,7 +159,8 @@ func TestDevicesWriteAuditOnce(t *testing.T) {
 		{
 			action: "device.rm",
 			want: map[string]any{
-				"name": "新工作站", "client": "", "members": []any{},
+				"name": "新工作站", "client": "", "servers": []any{}, "anchors": []any{},
+				"members": []any{}, "layout-coordinates": float64(0),
 			},
 		},
 	} {

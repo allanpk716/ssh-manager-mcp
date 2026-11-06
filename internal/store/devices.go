@@ -406,49 +406,13 @@ func (s *Store) ListServersForDevice(deviceName string) ([]*models.DeviceServer,
 	return out, rows.Err()
 }
 
-// DeleteDevice 删除还没有关联服务器条目的设备，并在同一个事务里删除它的
-// 全部网络成员。客户端实例关联保存在设备行上，设备删除后即解除。
+// DeleteDevice 删除设备及其全部关联对象，保留旧调用方的返回形态。
 func (s *Store) DeleteDevice(name string) (*models.Device, []*models.NetworkMembership, error) {
-	if s.readOnly {
-		return nil, nil, ErrReadOnly
-	}
-	tx, err := s.db.Begin()
+	preview, err := s.DeleteDeviceCascading(name)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer tx.Rollback()
-	device, err := deviceByNameTx(tx, name)
-	if err != nil {
-		return nil, nil, err
-	}
-	serverNames, err := serverNamesForDeviceTx(tx, device.ID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(serverNames) > 0 {
-		return nil, nil, fmt.Errorf("%w：%s", ErrDeviceHasServers, strings.Join(serverNames, "、"))
-	}
-	memberships, err := networkMembershipsForDeviceTx(tx, device.ID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := tx.Exec(`DELETE FROM network_memberships WHERE device_id=?`, device.ID); err != nil {
-		return nil, nil, err
-	}
-	if _, err := tx.Exec(`DELETE FROM devices WHERE id=?`, device.ID); err != nil {
-		return nil, nil, err
-	}
-	memberSummaries := make([]map[string]any, 0, len(memberships))
-	for _, membership := range memberships {
-		memberSummaries = append(memberSummaries, membershipAuditSummary(membership))
-	}
-	summary := map[string]any{
-		"name": device.Name, "client": device.ClientName, "members": memberSummaries,
-	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.rm", summary); err != nil {
-		return nil, nil, err
-	}
-	return device, memberships, tx.Commit()
+	return preview.Device, preview.Memberships, nil
 }
 
 // ListDevices 按筛选条件返回设备。站点筛选由设备所在的物理局域网推出；

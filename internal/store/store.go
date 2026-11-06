@@ -271,7 +271,7 @@ func initSchema(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(schemaSQL + snapshotRevisionSchema(!hasServerRevisionUpdate)); err != nil {
+	if _, err = tx.Exec(schemaSQL + deviceLayoutSchema + snapshotRevisionSchema(!hasServerRevisionUpdate)); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 	return tx.Commit()
