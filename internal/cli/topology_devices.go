@@ -67,39 +67,23 @@ func devicesRmCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "rm NAME [--yes]",
 		Args:  cobra.ExactArgs(1),
-		Short: "Remove a device without server entries after confirmation",
+		Short: "Remove a device and its related rows after confirmation",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := requireTopologyVault()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
+			preview, err := s.DeviceDeletePreview(args[0])
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			printDeviceDeletePreview(out, preview)
 			if !yes {
 				if !topologyStdinIsInteractive() {
 					return errors.New("非交互终端不能确认删除设备；请加 --yes 后重跑")
 				}
-				device, err := s.GetDevice(args[0])
-				if err != nil {
-					return err
-				}
-				memberships, err := s.ListNetworkMemberships(args[0])
-				if err != nil {
-					return err
-				}
-				out := cmd.OutOrStdout()
-				fmt.Fprintf(out, "将删除设备 %s。\n", device.Name)
-				fmt.Fprintln(out, "网络成员：")
-				if len(memberships) == 0 {
-					fmt.Fprintln(out, "  无")
-				}
-				for _, membership := range memberships {
-					fmt.Fprintf(out, "  %s：%s\n", membership.NetworkName, membership.Address)
-				}
-				client := device.ClientName
-				if client == "" {
-					client = "无"
-				}
-				fmt.Fprintf(out, "会被解除关联的客户端实例：%s\n", client)
 				fmt.Fprint(out, "输入 y 确认删除：")
 				line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 				if err != nil && line == "" {
@@ -110,16 +94,59 @@ func devicesRmCmd() *cobra.Command {
 					return nil
 				}
 			}
-			device, _, err := s.DeleteDevice(args[0])
+			result, err := s.DeleteDeviceCascading(args[0])
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "已删除设备 %s\n", device.Name)
+			fmt.Fprintf(cmd.OutOrStdout(), "已删除设备 %s\n", result.Device.Name)
 			return nil
 		},
 	}
 	c.Flags().BoolVar(&yes, "yes", false, "跳过删除确认；非交互终端必须显式给出")
 	return c
+}
+
+// printDeviceDeletePreview 只负责输出 vault 层组装好的删除影响，分组顺序
+// 固定，便于 owner 在确认前核对全部级联结果。
+func printDeviceDeletePreview(w io.Writer, preview *store.DeviceDeletePreview) {
+	fmt.Fprintf(w, "将删除设备 %s。\n", preview.Device.Name)
+	fmt.Fprintln(w, "服务器条目：")
+	if len(preview.Servers) == 0 {
+		fmt.Fprintln(w, "  无")
+	}
+	for _, server := range preview.Servers {
+		anchor := "未锚定"
+		if server.Pinned {
+			anchor = "已锚定"
+		}
+		fmt.Fprintf(w, "  %s（用户 %s，端口 %d，%s）\n", server.Name, server.User, server.Port, anchor)
+	}
+	fmt.Fprintln(w, "会从以下机密项的可写入服务器列表移出：")
+	if len(preview.SecretServerAllows) == 0 {
+		fmt.Fprintln(w, "  无")
+	}
+	for _, allow := range preview.SecretServerAllows {
+		fmt.Fprintf(w, "  %s：%s\n", allow.SecretName, strings.Join(allow.ServerNames, "、"))
+	}
+	fmt.Fprintln(w, "网络成员：")
+	if len(preview.Memberships) == 0 {
+		fmt.Fprintln(w, "  无")
+	}
+	for _, membership := range preview.Memberships {
+		fmt.Fprintf(w, "  %s：%s\n", membership.NetworkName, membership.Address)
+	}
+	fmt.Fprintln(w, "布局坐标：")
+	if len(preview.LayoutCoordinates) == 0 {
+		fmt.Fprintln(w, "  无")
+	}
+	for _, coordinate := range preview.LayoutCoordinates {
+		fmt.Fprintf(w, "  %s：(%g, %g)\n", coordinate.ViewKey, coordinate.X, coordinate.Y)
+	}
+	client := preview.Device.ClientName
+	if client == "" {
+		client = "无"
+	}
+	fmt.Fprintf(w, "会被解除关联的客户端实例：%s\n", client)
 }
 
 func devicesMoveServerCmd() *cobra.Command {

@@ -252,26 +252,39 @@ func (s *Store) DeleteServerCascading(id string) error {
 	}
 	defer tx.Rollback() // no-op after Commit
 	auditAt := s.nowTime()
-	srv, err := deleteServerEntryTx(tx, id, auditAt)
+	srv, err := s.deleteServerCascadingTx(tx, id, auditAt)
 	if err != nil {
 		return err
 	}
 	if srv == nil {
 		return nil // already gone — nothing to cascade
 	}
+	return tx.Commit()
+}
+
+// deleteServerCascadingTx 是可在外部事务内复用的服务器条目删除主体：
+// 删除条目、锚与机密项可写入关联，并清理仅该条目引用的凭据。
+func (s *Store) deleteServerCascadingTx(tx *sql.Tx, id string, auditAt time.Time) (*models.Server, error) {
+	srv, err := deleteServerEntryTx(tx, id, auditAt)
+	if err != nil {
+		return nil, err
+	}
+	if srv == nil {
+		return nil, nil
+	}
 	for _, cid := range []string{srv.CredentialID, srv.SudoCredentialID} {
 		if cid == "" {
 			continue
 		}
 		if n, err := credentialReferencedElseBy(tx, cid, id); err != nil {
-			return err // fail-closed: unknown reference state must not delete
+			return nil, err // fail-closed: unknown reference state must not delete
 		} else if n == 0 {
 			if _, err := tx.Exec(`DELETE FROM credentials WHERE id=?`, cid); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
-	return tx.Commit()
+	return srv, nil
 }
 
 // deleteServerEntryTx 在事务里删除服务器条目及其主机密钥锚，并返回删除前的

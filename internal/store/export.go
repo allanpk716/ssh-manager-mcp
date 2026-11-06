@@ -32,13 +32,14 @@ type Snapshot struct {
 	Networks []SnapshotNetwork `json:"networks,omitempty"`
 	// Devices / NetworkMemberships（票 #124）是网络拓扑里的设备与设备在
 	// 各网络里的地址，同样只进入备份与导出的全量快照。
-	Devices            []SnapshotDevice            `json:"devices,omitempty"`
-	NetworkMemberships []SnapshotNetworkMembership `json:"network_memberships,omitempty"`
-	Servers            []SnapshotServer            `json:"servers"`
-	Profiles           []SnapshotProfile           `json:"profiles"`
-	Grants             []SnapshotGrant             `json:"grants"`
-	Projects           []SnapshotProject           `json:"projects"`
-	HostKeys           []SnapshotHostKey           `json:"host_keys"`
+	Devices                 []SnapshotDevice                 `json:"devices,omitempty"`
+	NetworkMemberships      []SnapshotNetworkMembership      `json:"network_memberships,omitempty"`
+	DeviceLayoutCoordinates []SnapshotDeviceLayoutCoordinate `json:"device_layout_coordinates,omitempty"`
+	Servers                 []SnapshotServer                 `json:"servers"`
+	Profiles                []SnapshotProfile                `json:"profiles"`
+	Grants                  []SnapshotGrant                  `json:"grants"`
+	Projects                []SnapshotProject                `json:"projects"`
+	HostKeys                []SnapshotHostKey                `json:"host_keys"`
 	// EntryHostKeys（票 #58）是按服务器条目存放的锚；HostKeys 仍为兜底地址
 	// 推导出的旧格式行，旧客户端靠它继续校验。旧快照解码时本字段为空。
 	EntryHostKeys []SnapshotEntryHostKey `json:"entry_host_keys,omitempty"`
@@ -463,6 +464,10 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 	rm.Close()
 	if err := rm.Err(); err != nil {
+		return nil, err
+	}
+	snap.DeviceLayoutCoordinates, err = s.snapshotDeviceLayoutCoordinates()
+	if err != nil {
 		return nil, err
 	}
 
@@ -909,6 +914,9 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		); err != nil {
 			return fmt.Errorf("insert network membership %s/%s: %w", membership.DeviceID, membership.NetworkID, err)
 		}
+	}
+	if err := importDeviceLayoutCoordinatesTx(tx, snap.DeviceLayoutCoordinates); err != nil {
+		return err
 	}
 
 	// 1. credentials (re-seal under THIS store's master key)

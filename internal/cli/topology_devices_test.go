@@ -4,6 +4,8 @@ package cli
 // 登记与客户端实例一对一关联，再进入网络成员与筛选。
 
 import (
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -223,18 +225,196 @@ func TestServersRemoveKeepsDevice(t *testing.T) {
 	}
 }
 
-// TestDevicesRemoveStillRequiresNoServerEntries 覆盖本票保留的删除限制：
-// 设备还有关联服务器条目时不能删除，错误要列出这些条目。
-func TestDevicesRemoveStillRequiresNoServerEntries(t *testing.T) {
-	withCliStoreEnv(t)
-	runCli(t, "servers", "add", "--name", "deploy", "--host", "192.0.2.10", "--user", "deploy")
-
-	errText := runCliErr(t, "devices", "rm", "deploy", "--yes")
-	if !strings.Contains(errText, "还有关联的服务器条目") || !strings.Contains(errText, "deploy") {
-		t.Fatalf("device removal must list associated server entries and refuse:\n%s", errText)
+// seedDeviceDeleteFixture 通过“导出、追加布局坐标、导入”构造一个完整设备
+// 删除现场。布局坐标本票没有命令行写入入口，这是规格允许的测试构造方式。
+func seedDeviceDeleteFixture(t *testing.T, dbPath string, masterKey []byte) {
+	t.Helper()
+	sourcePath := filepath.Join(t.TempDir(), "fixture.db")
+	source, err := store.Open(sourcePath, masterKey)
+	if err != nil {
+		t.Fatalf("open fixture source store: %v", err)
 	}
-	if out := runCli(t, "devices", "show", "deploy"); !strings.Contains(out, "服务器条目：deploy") {
-		t.Fatalf("refused device removal must keep the device and entry:\n%s", out)
+	defer source.Close()
+	profileID, err := source.AddProfile("device-delete-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := source.AddDevice("工作站", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := source.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "root", Host: "192.0.2.10", Port: 22, User: "root",
+	}, &models.Credential{Type: models.CredPassword, Secret: []byte("root-password")}, nil, "工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploy, err := source.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "deploy", Host: "192.0.2.10", Port: 22, User: "deploy",
+	}, nil, nil, "工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.GrantServers(profileID, []string{root.ServerID, deploy.ServerID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.AddSecret("deploy_secret", "", []byte("secret-value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.AllowSecrets([]string{"deploy_secret"}, []string{"root", "deploy"}); err != nil {
+		t.Fatal(err)
+	}
+	rootServer, err := source.GetServerByName("root")
+	if err != nil || rootServer == nil {
+		t.Fatalf("read root server: server=%v err=%v", rootServer, err)
+	}
+	if _, err := source.UpsertManualEntryPin(
+		rootServer, "", []byte("SHA256:fixture-host-key-fingerprint"),
+		store.PinFormatFingerprint, false,
+		func(old *store.PinMeta) store.AuditRow {
+			return store.AuditRow{Action: "pin-manual"}
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AddSite("家A", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AddNetwork(models.Network{
+		Name: "家A局域网", Type: models.NetworkPhysical, SiteName: "家A",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := source.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.DeviceLayoutCoordinates = []store.SnapshotDeviceLayoutCoordinate{{
+		ViewKey: "主视图", DeviceID: device.ID, X: 12.5, Y: -3, CreatedAt: 1000, UpdatedAt: 1001,
+	}}
+	target, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatalf("open fixture target store: %v", err)
+	}
+	if err := target.ImportSnapshot(snapshot); err != nil {
+		target.Close()
+		t.Fatalf("import fixture snapshot: %v", err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	seedTopologyClient(t, dbPath, masterKey, "laptop")
+	runCli(t, "devices", "edit", "工作站", "--client", "laptop")
+}
+
+// TestDevicesRemovePreviewsAndCascadesServerEntries 覆盖完整删除预览、
+// 非交互守卫，以及确认后服务器条目、锚、授权、网络成员与布局坐标的级联。
+func TestDevicesRemovePreviewsAndCascadesServerEntries(t *testing.T) {
+	dbPath, masterKey := withCliStoreEnv(t)
+	seedDeviceDeleteFixture(t, dbPath, masterKey)
+
+	oldIsInteractive := topologyStdinIsInteractive
+	topologyStdinIsInteractive = func() bool { return false }
+	t.Cleanup(func() { topologyStdinIsInteractive = oldIsInteractive })
+	errText := runCliErr(t, "devices", "rm", "工作站")
+	if !strings.Contains(errText, "非交互终端") || !strings.Contains(errText, "--yes") {
+		t.Fatalf("non-interactive device removal must require --yes:\n%s", errText)
+	}
+	if out := runCli(t, "devices", "show", "工作站"); !strings.Contains(out, "服务器条目：root") {
+		t.Fatalf("refused device removal must keep the fixture:\n%s", out)
+	}
+
+	out := runCli(t, "devices", "rm", "工作站", "--yes")
+	groups := []string{
+		"将删除设备 工作站",
+		"服务器条目：\n  deploy（用户 deploy，端口 22，未锚定）\n  root（用户 root，端口 22，已锚定）",
+		"会从以下机密项的可写入服务器列表移出：\n  deploy_secret：deploy、root",
+		"网络成员：\n  家A局域网：192.168.1.20",
+		"布局坐标：\n  主视图：(12.5, -3)",
+		"会被解除关联的客户端实例：laptop",
+	}
+	position := -1
+	for _, want := range groups {
+		next := strings.Index(out, want)
+		if next < 0 {
+			t.Fatalf("device removal preview must contain %q:\n%s", want, out)
+		}
+		if next < position {
+			t.Fatalf("device removal preview groups are out of order:\n%s", out)
+		}
+		position = next
+	}
+	if !strings.Contains(out, "已删除设备 工作站") {
+		t.Fatalf("device removal must report success:\n%s", out)
+	}
+
+	verification, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer verification.Close()
+	snapshot, err := verification.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Servers) != 0 || len(snapshot.EntryHostKeys) != 0 ||
+		len(snapshot.SecretAllows) != 0 || len(snapshot.DeviceLayoutCoordinates) != 0 {
+		t.Fatalf("device removal must cascade server entries, anchors, secret allows, and layouts: %+v",
+			snapshot)
+	}
+	profiles, err := verification.ListProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range profiles {
+		if profile.Name != "device-delete-profile" {
+			continue
+		}
+		servers, err := verification.ServersForProfile(profile.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(servers) != 0 {
+			t.Fatalf("device removal must remove profile grants, got %+v", servers)
+		}
+	}
+	clients, err := verification.ListCacheTokens()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clients) != 1 || clients[0].Name != "laptop" {
+		t.Fatalf("device removal must keep the client instance: %+v", clients)
+	}
+	if out := runCli(t, "networks", "list"); !strings.Contains(out, "家A局域网") {
+		t.Fatalf("device removal must keep networks:\n%s", out)
+	}
+
+	deviceRows := topologyAuditRows(t, dbPath, masterKey, "device.rm")
+	if len(deviceRows) != 1 {
+		t.Fatalf("device removal must leave exactly one device.rm audit row, got %d", len(deviceRows))
+	}
+	gotSummary := topologyAuditSummary(t, deviceRows[0])
+	wantSummary := map[string]any{
+		"name":               "工作站",
+		"client":             "laptop",
+		"servers":            []any{"deploy", "root"},
+		"anchors":            []any{"root"},
+		"members":            []any{map[string]any{"device": "工作站", "network": "家A局域网", "address": "192.168.1.20"}},
+		"layout-coordinates": float64(1),
+	}
+	if !reflect.DeepEqual(gotSummary, wantSummary) {
+		t.Fatalf("device.rm summary = %#v, want %#v", gotSummary, wantSummary)
+	}
+	for action, want := range map[string]int{
+		"server.rm": 2, "pin-delete": 1, "secret-disallow": 2,
+	} {
+		if rows := topologyAuditRows(t, dbPath, masterKey, action); len(rows) != want {
+			t.Fatalf("action %s must leave %d audit rows, got %d", action, want, len(rows))
+		}
 	}
 }
 
