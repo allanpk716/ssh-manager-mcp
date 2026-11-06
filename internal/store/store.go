@@ -269,6 +269,9 @@ func initSchema(db *sql.DB) error {
 	// 快照修订号的表、初始行和触发器拼接在既有结构之后:旧库第一次打开
 	// 时在这里完成迁移,后续打开全部是无操作。
 	// 放进一个事务只落一次盘;自动提交下新库每条语句各落一次,Windows 上明显变慢。
+	// CREATE TRIGGER IF NOT EXISTS 不能替换旧定义。这里先探测更新触发器是否
+	// 已存在:第一次打开旧库时暂不创建新定义,让下面的迁移函数删除旧触发器,
+	// 下一次打开再落新的条件触发器;新定义已在位时则完全不改动数据库文件。
 	hasServerRevisionUpdate, err := sqliteTriggerExists(db, "snapshot_revision_servers_update")
 	if err != nil {
 		return err
@@ -441,26 +444,29 @@ func migrate(db *sql.DB) error {
 	// 类型(连接信息的一员,默认 POSIX)。DEFAULT 'posix' 回填存量行为
 	// POSIX。必须排在 credential_id 可空化表重建之后:重建的 CREATE 表定义
 	// 不含本列,先加列会被随后的重建整表丢弃,下一次 Open 才补回。
-	if err := ensureServerDeviceMigration(db); err != nil {
+	if err := ensureServerShellTypeColumn(db); err != nil {
+		return err
+	}
+	if err := ensureServerDeviceReferenceMigration(db); err != nil {
 		return err
 	}
 	return nil
 }
 
-// addServerColumnsIfMissing 一次读取服务器条目表结构并补齐 shell_type 与
-// device_id。两个列都必须排在 credential_id 可空化表重建之后；合并成一次
-// 结构读取，避免重复打开已有 vault 时多做一次无关检查。
-func addServerColumnsIfMissing(db *sql.DB) error {
+// ensureServerShellTypeColumn 补齐服务器条目标注的 shell 类型列。它必须排
+// 在 credential_id 可空化表重建之后，否则重建会丢弃刚补的列。
+func ensureServerShellTypeColumn(db *sql.DB) error {
+	exists, err := tableExists(db, "servers")
+	if err != nil || !exists {
+		return err
+	}
 	rows, err := db.Query(`PRAGMA table_info(servers)`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	hasShellType := false
-	hasDeviceID := false
-	sawAny := false
 	for rows.Next() {
-		sawAny = true
 		var cid int
 		var name, ctype string
 		var notnull, pk int
@@ -471,33 +477,23 @@ func addServerColumnsIfMissing(db *sql.DB) error {
 		switch name {
 		case "shell_type":
 			hasShellType = true
-		case "device_id":
-			hasDeviceID = true
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
-	}
-	if !sawAny {
-		return nil
 	}
 	if !hasShellType {
 		if _, err := db.Exec(`ALTER TABLE servers ADD COLUMN shell_type TEXT NOT NULL DEFAULT 'posix'`); err != nil {
 			return err
 		}
 	}
-	if !hasDeviceID {
-		if _, err := db.Exec(`ALTER TABLE servers ADD COLUMN device_id TEXT REFERENCES devices(id)`); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
-// ensureServerDeviceMigration 补齐服务器条目的所属设备字段，并把旧版
-// “任何服务器条目更新都加一”的快照修订号触发器替换成排除所属设备字段
-// 的新触发器。新触发器已在位时表示迁移已完成，不写数据库。
-func ensureServerDeviceMigration(db *sql.DB) error {
+// ensureServerDeviceReferenceMigration 补齐服务器条目的所属设备引用列，并
+// 把旧版「任何服务器条目更新都加一」的快照修订号触发器替换成排除所属设
+// 备引用的新触发器。新触发器已在位时表示迁移已完成，不写数据库。
+func ensureServerDeviceReferenceMigration(db *sql.DB) error {
 	var definition string
 	err := db.QueryRow(
 		`SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`,
@@ -512,8 +508,20 @@ func ensureServerDeviceMigration(db *sql.DB) error {
 	if strings.Contains(strings.ToUpper(definition), "WHEN") {
 		return nil
 	}
-	if err := addServerColumnsIfMissing(db); err != nil {
+	exists, err := tableExists(db, "servers")
+	if err != nil {
 		return err
+	}
+	if exists {
+		hasDeviceID, err := serverColumnExists(db, "servers", "device_id")
+		if err != nil {
+			return err
+		}
+		if !hasDeviceID {
+			if _, err := db.Exec(`ALTER TABLE servers ADD COLUMN device_id TEXT REFERENCES devices(id)`); err != nil {
+				return err
+			}
+		}
 	}
 	if definition != "" {
 		if _, err := db.Exec(`DROP TRIGGER snapshot_revision_servers_update`); err != nil {
@@ -521,6 +529,28 @@ func ensureServerDeviceMigration(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// serverColumnExists 判断表里是否已有指定列。
+func serverColumnExists(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // columnNullable reports whether table.column exists and lacks the NOT NULL flag.

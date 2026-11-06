@@ -4,12 +4,57 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
 )
+
+func TestSnapshotRevisionServerUpdateTriggerCoversAllExportedColumns(t *testing.T) {
+	st := newTestStore(t)
+	columns, err := st.db.Query(`PRAGMA table_info(servers)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer columns.Close()
+	var checked []string
+	for columns.Next() {
+		var columnIndex int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := columns.Scan(&columnIndex, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		if name != "device_id" {
+			checked = append(checked, name)
+		}
+	}
+	if err := columns.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(checked) == 0 {
+		t.Fatal("servers table has no columns to check")
+	}
+
+	var triggerSQL string
+	if err := st.db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`,
+		"snapshot_revision_servers_update",
+	).Scan(&triggerSQL); err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range checked {
+		comparison := regexp.MustCompile(
+			`OLD\.` + regexp.QuoteMeta(column) + `\s+IS NOT NEW\.` + regexp.QuoteMeta(column),
+		)
+		if !comparison.MatchString(triggerSQL) {
+			t.Fatalf("snapshot revision update trigger must compare exported servers column %s", column)
+		}
+	}
+}
 
 func triggerExists(t *testing.T, db *sql.DB, name string) bool {
 	t.Helper()

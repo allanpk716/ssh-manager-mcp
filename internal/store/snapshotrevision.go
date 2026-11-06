@@ -10,9 +10,10 @@ import (
 // snapshotRevisionTables 列出会影响导出快照内容的全部配置表。写入这些表
 // 的每一条插入、更新、删除都让全库快照修订号加一;审计表、设备码表、
 // 配对表、隧道表和设置表不在其中,因为它们不出现在任何 profile 的导出
-// 快照里。站点表与网络表也暂不加入:它们只进备份与导出的全量快照,这一
-// 版不随客户端快照下发(票 #123;随快照下发的票会一并调整这里)。其余
-// 新配置表加入 schema 时,应同时补进这张清单。
+// 快照里。站点、网络、设备、网络成员与布局坐标这五张拓扑表也暂不加
+// 入:它们只进备份与导出的全量快照,这一版不随客户端快照下发;后续票
+// 让拓扑随快照下发时会一并调整。其余新配置表加入 schema 时,应同时补
+// 进这张清单。
 var snapshotRevisionTables = []string{
 	"credentials",
 	"servers",
@@ -38,7 +39,7 @@ var snapshotRevisionRetiredTriggers = []string{
 // 提供,因此旧库第一次打开时也会迁移到修订号 1,之后重复打开是无操作。
 // 一次业务写入如果落了多张配置表的行(例如「带凭据新增服务器」),修订号
 // 会加多于一;消费方只比较修订号是否相同,不依赖每次恰好加一。
-func snapshotRevisionSchema(includeServerDeviceUpdate bool) string {
+func snapshotRevisionSchema(createServerDeviceUpdateTrigger bool) string {
 	var b strings.Builder
 	b.WriteString(`
 CREATE TABLE IF NOT EXISTS snapshot_revision (
@@ -57,14 +58,14 @@ INSERT OR IGNORE INTO snapshot_revision(id, revision) VALUES (1, 1);
 				table, event, strings.ToUpper(event), table)
 		}
 	}
-	if includeServerDeviceUpdate {
+	if createServerDeviceUpdateTrigger {
 		// 服务器条目的所属设备是拓扑数据，不随客户端快照下发。只改这个
 		// 字段时不能让客户端误判快照变化；其余字段更新仍照常加一。
 		b.WriteString(`
 CREATE TRIGGER IF NOT EXISTS snapshot_revision_servers_update
 AFTER UPDATE ON servers
 FOR EACH ROW WHEN
-  OLD.name IS NOT NEW.name OR OLD.host IS NOT NEW.host OR OLD.port IS NOT NEW.port OR
+  OLD.id IS NOT NEW.id OR OLD.name IS NOT NEW.name OR OLD.host IS NOT NEW.host OR OLD.port IS NOT NEW.port OR
   OLD.user IS NOT NEW.user OR OLD.auth_method IS NOT NEW.auth_method OR
   OLD.credential_id IS NOT NEW.credential_id OR OLD.sudo_credential_id IS NOT NEW.sudo_credential_id OR
   OLD.shell_type IS NOT NEW.shell_type OR OLD.tags IS NOT NEW.tags OR

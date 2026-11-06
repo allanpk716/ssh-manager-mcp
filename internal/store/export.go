@@ -89,8 +89,8 @@ type SnapshotSite struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
-// SnapshotNetwork 是全量快照里的网络段。CIDR 是导出文件里的既有字段名，
-// 语义是「网段，只给人看」；这个字段与整个网络段都是网络拓扑这次新增的。
+// SnapshotNetwork 是网络拓扑这次新增的全量快照网络段。CIDR 是快照 JSON
+// 字段名，语义是「网段，只给人看」。
 type SnapshotNetwork struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`

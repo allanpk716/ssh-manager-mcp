@@ -42,8 +42,8 @@ type NetworkFilter struct {
 	Type models.NetworkType
 }
 
-// validateTopologyName 只拒绝空名字与首尾空白名字，不限制 owner 使用的
-// 字符；名字唯一性另按小写形式检查。
+// validateTopologyName 只拒绝去掉首尾空白后为空的名字，不限制 owner 使用
+// 的字符；调用方负责先去掉首尾空白，名字唯一性另按小写形式检查。
 func validateTopologyName(objectType, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("%s名字不能为空", objectType)
