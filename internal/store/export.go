@@ -24,14 +24,18 @@ type Snapshot struct {
 	RecommendedVersion string               `json:"recommended_version"`
 	Credentials        []SnapshotCredential `json:"credentials"`
 	// Sites / Networks（票 #123）是网络拓扑里的站点与网络，只进入备份与
-	// 导出的全量快照；下发给客户端的 profile 裁剪快照不填这两段。
+	// 导出的全量快照；下发给客户端的 profile 裁剪快照不填这些拓扑段。
 	Sites    []SnapshotSite    `json:"sites,omitempty"`
 	Networks []SnapshotNetwork `json:"networks,omitempty"`
-	Servers  []SnapshotServer  `json:"servers"`
-	Profiles []SnapshotProfile `json:"profiles"`
-	Grants   []SnapshotGrant   `json:"grants"`
-	Projects []SnapshotProject `json:"projects"`
-	HostKeys []SnapshotHostKey `json:"host_keys"`
+	// Devices / NetworkMemberships（票 #124）是网络拓扑里的设备与设备在
+	// 各网络里的地址，同样只进入备份与导出的全量快照。
+	Devices            []SnapshotDevice            `json:"devices,omitempty"`
+	NetworkMemberships []SnapshotNetworkMembership `json:"network_memberships,omitempty"`
+	Servers            []SnapshotServer            `json:"servers"`
+	Profiles           []SnapshotProfile           `json:"profiles"`
+	Grants             []SnapshotGrant             `json:"grants"`
+	Projects           []SnapshotProject           `json:"projects"`
+	HostKeys           []SnapshotHostKey           `json:"host_keys"`
 	// EntryHostKeys（票 #58）是按服务器条目存放的锚；HostKeys 仍为兜底地址
 	// 推导出的旧格式行，旧客户端靠它继续校验。旧快照解码时本字段为空。
 	EntryHostKeys []SnapshotEntryHostKey `json:"entry_host_keys,omitempty"`
@@ -97,6 +101,27 @@ type SnapshotNetwork struct {
 	Metered       bool   `json:"metered"`
 	CreatedAt     int64  `json:"created_at"`
 	UpdatedAt     int64  `json:"updated_at"`
+}
+
+// SnapshotDevice 是全量快照里的设备段。客户端实例凭据不随快照携带，
+// 标识符与名字成对保存，导入后关联信息不丢。
+type SnapshotDevice struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Note          string `json:"note"`
+	ClientTokenID string `json:"client_token_id"`
+	ClientName    string `json:"client_name"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
+}
+
+// SnapshotNetworkMembership 是全量快照里的网络成员段。
+type SnapshotNetworkMembership struct {
+	DeviceID  string `json:"device_id"`
+	NetworkID string `json:"network_id"`
+	Address   string `json:"address"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 type SnapshotServer struct {
@@ -392,6 +417,46 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 	rn.Close()
 	if err := rn.Err(); err != nil {
+		return nil, err
+	}
+
+	rd, err := s.db.Query(`
+		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
+		FROM devices ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	for rd.Next() {
+		var device SnapshotDevice
+		if err := rd.Scan(&device.ID, &device.Name, &device.Note, &device.ClientTokenID,
+			&device.ClientName, &device.CreatedAt, &device.UpdatedAt); err != nil {
+			rd.Close()
+			return nil, err
+		}
+		snap.Devices = append(snap.Devices, device)
+	}
+	rd.Close()
+	if err := rd.Err(); err != nil {
+		return nil, err
+	}
+
+	rm, err := s.db.Query(`
+		SELECT device_id,network_id,address,created_at,updated_at
+		FROM network_memberships ORDER BY device_id,network_id`)
+	if err != nil {
+		return nil, err
+	}
+	for rm.Next() {
+		var membership SnapshotNetworkMembership
+		if err := rm.Scan(&membership.DeviceID, &membership.NetworkID, &membership.Address,
+			&membership.CreatedAt, &membership.UpdatedAt); err != nil {
+			rm.Close()
+			return nil, err
+		}
+		snap.NetworkMemberships = append(snap.NetworkMemberships, membership)
+	}
+	rm.Close()
+	if err := rm.Err(); err != nil {
 		return nil, err
 	}
 
@@ -816,6 +881,26 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 			network.Metered, network.CreatedAt, network.UpdatedAt,
 		); err != nil {
 			return fmt.Errorf("insert network %s: %w", network.ID, err)
+		}
+	}
+	for _, device := range snap.Devices {
+		if _, err := tx.Exec(`
+			INSERT INTO devices(id,name,name_lower,note,client_token_id,client_name,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?)`,
+			device.ID, device.Name, strings.ToLower(device.Name), device.Note,
+			nullIfEmpty(device.ClientTokenID), device.ClientName, device.CreatedAt, device.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("insert device %s: %w", device.ID, err)
+		}
+	}
+	for _, membership := range snap.NetworkMemberships {
+		if _, err := tx.Exec(`
+			INSERT INTO network_memberships(device_id,network_id,address,address_lower,created_at,updated_at)
+			VALUES(?,?,?,?,?,?)`,
+			membership.DeviceID, membership.NetworkID, membership.Address,
+			strings.ToLower(membership.Address), membership.CreatedAt, membership.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("insert network membership %s/%s: %w", membership.DeviceID, membership.NetworkID, err)
 		}
 	}
 

@@ -609,6 +609,26 @@ CREATE TABLE IF NOT EXISTS networks (
   updated_at INTEGER NOT NULL,
   CHECK ((type='physical' AND site_id IS NOT NULL) OR (type='virtual' AND site_id IS NULL))
 );
+CREATE TABLE IF NOT EXISTS devices (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL UNIQUE,
+  note TEXT NOT NULL DEFAULT '',
+  client_token_id TEXT UNIQUE,
+  client_name TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS network_memberships (
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  network_id TEXT NOT NULL REFERENCES networks(id) ON DELETE CASCADE,
+  address TEXT NOT NULL,
+  address_lower TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (device_id, network_id),
+  UNIQUE (network_id, address_lower)
+);
 CREATE TABLE IF NOT EXISTS servers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,

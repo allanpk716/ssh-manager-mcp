@@ -278,6 +278,9 @@ func (s *Store) DeleteNetwork(name string) error {
 	if err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`DELETE FROM network_memberships WHERE network_id=?`, network.ID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM networks WHERE id=?`, network.ID); err != nil {
 		return err
 	}

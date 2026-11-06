@@ -48,6 +48,8 @@ func TestTopologyWritesAuditOnce(t *testing.T) {
 	runCli(t, "sites", "edit", "家A", "--name", "家B", "--note", "新备注")
 	runCli(t, "networks", "edit", "家A局域网", "--name", "家A主网", "--site", "家B",
 		"--note", "新备注", "--cidr", "10.0.0.0/8", "--bandwidth-mbps", "2000", "--metered=false")
+	runCli(t, "devices", "add", "工作站")
+	runCli(t, "devices", "member", "add", "工作站", "--network", "家A主网", "--address", "192.168.1.20")
 	runCli(t, "networks", "rm", "家A主网", "--yes")
 	runCli(t, "sites", "rm", "家B")
 
@@ -106,6 +108,70 @@ func TestTopologyWritesAuditOnce(t *testing.T) {
 			t.Fatalf("action %s summary = %#v, want %#v", tc.action, got, tc.want)
 		}
 	}
+	if rows := topologyAuditRows(t, dbPath, masterKey, "device.member-rm"); len(rows) != 0 {
+		t.Fatalf("network member cascade must not write member removal audits: %+v", rows)
+	}
+}
+
+// TestDevicesWriteAuditOnce 覆盖设备与网络成员的每个成功写操作恰好一行
+// 审计；删除网络的成员级联不额外写成员审计。
+func TestDevicesWriteAuditOnce(t *testing.T) {
+	dbPath, masterKey := withCliStoreEnv(t)
+	seedTopologyClient(t, dbPath, masterKey, "laptop")
+	seedTopologySites(t, "家A")
+	runCli(t, "networks", "add", "家A局域网", "--type", "physical", "--site", "家A")
+	runCli(t, "devices", "add", "工作站", "--note", "初始备注", "--client", "laptop")
+	runCli(t, "devices", "member", "add", "工作站", "--network", "家A局域网", "--address", "192.168.1.20")
+	runCli(t, "devices", "member", "edit", "工作站", "--network", "家A局域网", "--address", "192.168.1.21")
+	runCli(t, "devices", "member", "rm", "工作站", "--network", "家A局域网")
+	runCli(t, "devices", "edit", "工作站", "--name", "新工作站", "--note", "新备注", "--no-client")
+	runCli(t, "devices", "rm", "新工作站", "--yes")
+
+	for _, tc := range []struct {
+		action string
+		want   map[string]any
+	}{
+		{
+			action: "device.add",
+			want:   map[string]any{"name": "工作站", "note": "初始备注", "client": "laptop"},
+		},
+		{
+			action: "device.member-add",
+			want:   map[string]any{"device": "工作站", "network": "家A局域网", "address": "192.168.1.20"},
+		},
+		{
+			action: "device.member-edit",
+			want:   map[string]any{"device": "工作站", "network": "家A局域网", "address": "192.168.1.21"},
+		},
+		{
+			action: "device.member-rm",
+			want:   map[string]any{"device": "工作站", "network": "家A局域网", "address": "192.168.1.21"},
+		},
+		{
+			action: "device.edit",
+			want: map[string]any{
+				"name": "工作站",
+				"changes": map[string]any{
+					"name": "新工作站", "note": "新备注", "client": "",
+				},
+			},
+		},
+		{
+			action: "device.rm",
+			want: map[string]any{
+				"name": "新工作站", "client": "", "members": []any{},
+			},
+		},
+	} {
+		rows := topologyAuditRows(t, dbPath, masterKey, tc.action)
+		if len(rows) != 1 {
+			t.Fatalf("action %s must leave exactly one audit row, got %d", tc.action, len(rows))
+		}
+		got := topologyAuditSummary(t, rows[0])
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("action %s summary = %#v, want %#v", tc.action, got, tc.want)
+		}
+	}
 }
 
 // TestTopologyClientRoleRefused 覆盖客户端角色：写命令统一拒绝并提示权威
@@ -119,6 +185,12 @@ func TestTopologyClientRoleRefused(t *testing.T) {
 		{"networks", "add", "家A局域网", "--type", "physical", "--site", "家A"},
 		{"networks", "edit", "家A局域网", "--note", "新备注"},
 		{"networks", "rm", "家A局域网", "--yes"},
+		{"devices", "add", "工作站"},
+		{"devices", "edit", "工作站", "--note", "新备注"},
+		{"devices", "rm", "工作站", "--yes"},
+		{"devices", "member", "add", "工作站", "--network", "家A局域网", "--address", "192.168.1.20"},
+		{"devices", "member", "edit", "工作站", "--network", "家A局域网", "--address", "192.168.1.21"},
+		{"devices", "member", "rm", "工作站", "--network", "家A局域网"},
 	}
 	for _, args := range writes {
 		errText := runCliErr(t, args...)
@@ -126,7 +198,7 @@ func TestTopologyClientRoleRefused(t *testing.T) {
 			t.Fatalf("client write %v must point at the authoritative machine, got:\n%s", args, errText)
 		}
 	}
-	for _, args := range [][]string{{"sites", "list"}, {"networks", "list"}} {
+	for _, args := range [][]string{{"sites", "list"}, {"networks", "list"}, {"devices", "list"}, {"devices", "show", "工作站"}} {
 		errText := runCliErr(t, args...)
 		if !strings.Contains(errText, "网络拓扑这一版尚未随快照下发") {
 			t.Fatalf("client view %v must explain that topology is not delivered yet, got:\n%s", args, errText)
@@ -150,6 +222,9 @@ func TestTopologyWithoutVaultOrCacheGuidesInitialization(t *testing.T) {
 		{"sites", "list"},
 		{"networks", "add", "家A局域网", "--type", "virtual"},
 		{"networks", "list"},
+		{"devices", "add", "工作站"},
+		{"devices", "list"},
+		{"devices", "show", "工作站"},
 	} {
 		errText := runCliErr(t, args...)
 		if !strings.Contains(errText, "请先运行初始化向导") {

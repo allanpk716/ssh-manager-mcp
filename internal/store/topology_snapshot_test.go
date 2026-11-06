@@ -27,6 +27,14 @@ func TestTopologySnapshotRoundTripAndClientDelivery(t *testing.T) {
 	}
 	defer st.Close()
 
+	profileID, err := st.AddProfile("client-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTokenID, _, err := st.AddCacheToken("laptop", profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	revisionBeforeTopology, err := st.SnapshotRevision()
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +51,14 @@ func TestTopologySnapshotRoundTripAndClientDelivery(t *testing.T) {
 	if _, err := st.AddNetwork(models.Network{
 		Name: "虚拟网", Type: models.NetworkVirtual, Note: "跨站点网络",
 	}); err != nil {
+		t.Fatal(err)
+	}
+	device, err := st.AddDevice("工作站", "主力机器", "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	membership, err := st.AddNetworkMembership("工作站", "家A局域网", " 192.168.1.20 ")
+	if err != nil {
 		t.Fatal(err)
 	}
 	revisionAfterTopology, err := st.SnapshotRevision()
@@ -84,24 +100,36 @@ func TestTopologySnapshotRoundTripAndClientDelivery(t *testing.T) {
 	if !gotHome || !gotVirtual {
 		t.Fatalf("full snapshot network fields are wrong: %+v", snapshot.Networks)
 	}
-
-	profileID, err := st.AddProfile("client-profile")
-	if err != nil {
-		t.Fatal(err)
+	if len(snapshot.Devices) != 1 {
+		t.Fatalf("full snapshot devices = %+v, want one device", snapshot.Devices)
+	}
+	gotDevice := snapshot.Devices[0]
+	if gotDevice.ID != device.ID || gotDevice.Name != "工作站" || gotDevice.Note != "主力机器" ||
+		gotDevice.ClientTokenID != clientTokenID || gotDevice.ClientName != "laptop" {
+		t.Fatalf("full snapshot device fields are wrong: %+v", gotDevice)
+	}
+	if len(snapshot.NetworkMemberships) != 1 {
+		t.Fatalf("full snapshot network memberships = %+v, want one row", snapshot.NetworkMemberships)
+	}
+	gotMembership := snapshot.NetworkMemberships[0]
+	if gotMembership.DeviceID != device.ID || gotMembership.NetworkID != membership.NetworkID ||
+		gotMembership.Address != "192.168.1.20" {
+		t.Fatalf("full snapshot network membership fields are wrong: %+v", gotMembership)
 	}
 	clientSnapshot, err := st.ExportSnapshotForProfile(profileID, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if clientSnapshot.Sites != nil || clientSnapshot.Networks != nil {
-		t.Fatalf("client snapshot must not carry topology sections: sites=%+v networks=%+v",
-			clientSnapshot.Sites, clientSnapshot.Networks)
+	if clientSnapshot.Sites != nil || clientSnapshot.Networks != nil ||
+		clientSnapshot.Devices != nil || clientSnapshot.NetworkMemberships != nil {
+		t.Fatalf("client snapshot must not carry topology sections: sites=%+v networks=%+v devices=%+v memberships=%+v",
+			clientSnapshot.Sites, clientSnapshot.Networks, clientSnapshot.Devices, clientSnapshot.NetworkMemberships)
 	}
 	encoded, err := json.Marshal(clientSnapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{`"sites"`, `"networks"`} {
+	for _, forbidden := range []string{`"sites"`, `"networks"`, `"devices"`, `"network_memberships"`} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("client snapshot JSON must not contain %s:\n%s", forbidden, encoded)
 		}
@@ -123,8 +151,12 @@ func TestTopologySnapshotRoundTripAndClientDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(snapshot.Sites, restored.Sites) || !reflect.DeepEqual(snapshot.Networks, restored.Networks) {
-		t.Fatalf("topology sections changed after import:\nsites: %+v -> %+v\nnetworks: %+v -> %+v",
-			snapshot.Sites, restored.Sites, snapshot.Networks, restored.Networks)
+	if !reflect.DeepEqual(snapshot.Sites, restored.Sites) || !reflect.DeepEqual(snapshot.Networks, restored.Networks) ||
+		!reflect.DeepEqual(snapshot.Devices, restored.Devices) ||
+		!reflect.DeepEqual(snapshot.NetworkMemberships, restored.NetworkMemberships) {
+		t.Fatalf("topology sections changed after import:\nsites: %+v -> %+v\nnetworks: %+v -> %+v\ndevices: %+v -> %+v\nmemberships: %+v -> %+v",
+			snapshot.Sites, restored.Sites, snapshot.Networks, restored.Networks,
+			snapshot.Devices, restored.Devices,
+			snapshot.NetworkMemberships, restored.NetworkMemberships)
 	}
 }

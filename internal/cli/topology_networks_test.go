@@ -148,6 +148,47 @@ func TestNetworkRemoveInteractiveConfirm(t *testing.T) {
 	}
 }
 
+// TestNetworksRemovePreviewsAndCascadesMembers 覆盖删除网络前列出网络成员，
+// 确认后网络与这些成员一起删除。
+func TestNetworksRemovePreviewsAndCascadesMembers(t *testing.T) {
+	withCliStoreEnv(t)
+	seedTopologySites(t, "家A")
+	runCli(t, "networks", "add", "家A局域网", "--type", "physical", "--site", "家A")
+	runCli(t, "devices", "add", "工作站")
+	runCli(t, "devices", "add", "NAS")
+	runCli(t, "devices", "member", "add", "工作站", "--network", "家A局域网", "--address", "192.168.1.20")
+	runCli(t, "devices", "member", "add", "NAS", "--network", "家A局域网", "--address", "192.168.1.30")
+
+	oldIsInteractive := topologyStdinIsInteractive
+	topologyStdinIsInteractive = func() bool { return true }
+	t.Cleanup(func() { topologyStdinIsInteractive = oldIsInteractive })
+	out := runTopologyRootWithStdin(t, "n\n", "networks", "rm", "家A局域网")
+	for _, want := range []string{
+		"将删除网络 家A局域网", "工作站 — 192.168.1.20", "NAS — 192.168.1.30", "已取消，未删除网络",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("network removal preview must contain %q:\n%s", want, out)
+		}
+	}
+	if out := runCli(t, "devices", "show", "工作站"); !strings.Contains(out, "192.168.1.20") {
+		t.Fatalf("cancelled network removal must keep memberships:\n%s", out)
+	}
+
+	out = runTopologyRootWithStdin(t, "y\n", "networks", "rm", "家A局域网")
+	if !strings.Contains(out, "已删除网络 家A局域网") {
+		t.Fatalf("answering y must delete the network:\n%s", out)
+	}
+	if out := runCli(t, "networks", "list", "--site", "家A"); strings.Contains(out, "家A局域网") {
+		t.Fatalf("network must be deleted, got:\n%s", out)
+	}
+	for device, address := range map[string]string{"工作站": "192.168.1.20", "NAS": "192.168.1.30"} {
+		out := runCli(t, "devices", "show", device)
+		if strings.Contains(out, address) || !strings.Contains(out, "网络成员：无") {
+			t.Fatalf("deleting network must remove %s's membership:\n%s", device, out)
+		}
+	}
+}
+
 // runTopologyRootWithStdin 从根命令执行命令并喂入标准输入，返回标准输出。
 func runTopologyRootWithStdin(t *testing.T, stdin string, args ...string) string {
 	t.Helper()

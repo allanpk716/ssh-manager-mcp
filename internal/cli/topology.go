@@ -321,7 +321,17 @@ func networksRmCmd() *cobra.Command {
 				}
 				out := cmd.OutOrStdout()
 				fmt.Fprintf(out, "将删除网络 %s。\n", args[0])
-				fmt.Fprintln(out, "网络成员：本版本还没有网络成员。")
+				memberships, err := s.ListNetworkMembershipsForNetwork(args[0])
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(out, "网络成员：")
+				if len(memberships) == 0 {
+					fmt.Fprintln(out, "  无")
+				}
+				for _, membership := range memberships {
+					fmt.Fprintf(out, "  %s — %s\n", membership.DeviceName, membership.Address)
+				}
 				fmt.Fprint(out, "输入 y 确认删除：")
 				line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 				if err != nil && line == "" {
