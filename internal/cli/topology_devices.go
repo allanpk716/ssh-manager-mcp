@@ -94,7 +94,7 @@ func devicesRmCmd() *cobra.Command {
 					return nil
 				}
 			}
-			result, err := s.DeleteDeviceCascading(args[0])
+			result, err := s.DeleteDeviceCascading(args[0], preview)
 			if err != nil {
 				return err
 			}

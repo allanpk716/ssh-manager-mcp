@@ -2,10 +2,18 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"ssh-manager-mcp/internal/models"
+)
+
+// ErrDeviceDeletePreviewChanged 表示 owner 确认的删除预览与执行时重新组装的
+// 清单不一致。删除必须整体中止，由 owner 重新查看新预览后再确认。
+var ErrDeviceDeletePreviewChanged = errors.New(
+	"设备删除预览已变化；未删除任何数据，请重新执行命令查看新的预览",
 )
 
 // DeviceDeleteSecretAllow 是设备删除时会从某个机密项的可写入服务器列表
@@ -37,10 +45,16 @@ func (s *Store) DeviceDeletePreview(name string) (*DeviceDeletePreview, error) {
 }
 
 // DeleteDeviceCascading 在同一个事务里删除设备的全部服务器条目、网络成
-// 员与布局坐标，然后删除设备本身。客户端实例只因为设备行删除而解除关联。
-func (s *Store) DeleteDeviceCascading(name string) (*DeviceDeletePreview, error) {
+// 员与布局坐标，然后删除设备本身。confirmed 是 owner 已经确认过的预览；
+// 执行前会在删除事务里重新组装预览并逐项比对，避免确认与执行之间又有
+// 条目挂到这台设备时删掉未确认的内容。客户端实例只因为设备行删除而解除
+// 关联。
+func (s *Store) DeleteDeviceCascading(name string, confirmed *DeviceDeletePreview) (*DeviceDeletePreview, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
+	}
+	if confirmed == nil {
+		return nil, fmt.Errorf("设备删除缺少已确认的预览；请重新执行命令查看预览")
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -50,6 +64,9 @@ func (s *Store) DeleteDeviceCascading(name string) (*DeviceDeletePreview, error)
 	preview, err := deviceDeletePreviewTx(tx, name)
 	if err != nil {
 		return nil, err
+	}
+	if !reflect.DeepEqual(confirmed, preview) {
+		return nil, ErrDeviceDeletePreviewChanged
 	}
 	auditAt := s.nowTime()
 	for _, server := range preview.Servers {

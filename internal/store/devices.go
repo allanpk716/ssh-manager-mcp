@@ -408,7 +408,7 @@ func (s *Store) ListServersForDevice(deviceName string) ([]*models.DeviceServer,
 
 // DeleteDevice 删除设备及其全部关联对象，保留旧调用方的返回形态。
 func (s *Store) DeleteDevice(name string) (*models.Device, []*models.NetworkMembership, error) {
-	preview, err := s.DeleteDeviceCascading(name)
+	preview, err := s.DeleteDeviceCascading(name, nil)
 	if err != nil {
 		return nil, nil, err
 	}

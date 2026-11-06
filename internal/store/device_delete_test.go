@@ -11,6 +11,54 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
+func TestDeviceDeleteRejectsPreviewChangedAfterConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	masterKey, err := GenerateMasterKey()
+	if err != nil {
+		t.Fatalf("generate master key: %v", err)
+	}
+	st, err := Open(filepath.Join(dir, "vault.db"), masterKey)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	if _, err := st.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	first, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "root", Host: "192.0.2.10", Port: 22, User: "root",
+	}, nil, nil, "工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := st.DeviceDeletePreview("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "deploy", Host: "192.0.2.10", Port: 22, User: "deploy",
+	}, nil, nil, "工作站"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = st.DeleteDeviceCascading("工作站", confirmed)
+	if err == nil || !strings.Contains(err.Error(), "设备删除预览已变化") ||
+		!strings.Contains(err.Error(), "请重新执行命令") {
+		t.Fatalf("stale preview must abort with rerun guidance, got: %v", err)
+	}
+	if _, err := st.GetDevice("工作站"); err != nil {
+		t.Fatalf("stale preview must keep the device: %v", err)
+	}
+	for _, name := range []string{"root", "deploy"} {
+		if _, err := st.GetServerByName(name); err != nil {
+			t.Fatalf("stale preview must keep server %s: %v", name, err)
+		}
+	}
+	if first == nil {
+		t.Fatal("test fixture lost the first added server")
+	}
+}
+
 func TestDeviceDeleteRollsBackWhenLayoutDeleteFails(t *testing.T) {
 	dir := t.TempDir()
 	masterKey, err := GenerateMasterKey()
@@ -73,7 +121,11 @@ func TestDeviceDeleteRollsBackWhenLayoutDeleteFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = st.DeleteDeviceCascading("工作站")
+	confirmed, err := st.DeviceDeletePreview("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.DeleteDeviceCascading("工作站", confirmed)
 	if err == nil || !strings.Contains(err.Error(), "injected layout delete failure") {
 		t.Fatalf("device deletion must surface the injected failure, got: %v", err)
 	}
