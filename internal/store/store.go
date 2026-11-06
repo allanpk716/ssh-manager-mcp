@@ -269,18 +269,13 @@ func initSchema(db *sql.DB) error {
 	// 快照修订号的表、初始行和触发器拼接在既有结构之后:旧库第一次打开
 	// 时在这里完成迁移,后续打开全部是无操作。
 	// 放进一个事务只落一次盘;自动提交下新库每条语句各落一次,Windows 上明显变慢。
-	// CREATE TRIGGER IF NOT EXISTS 不能替换旧定义。这里先探测更新触发器是否
-	// 已存在:第一次打开旧库时暂不创建新定义,让下面的迁移函数删除旧触发器,
-	// 下一次打开再落新的条件触发器;新定义已在位时则完全不改动数据库文件。
-	hasServerRevisionUpdate, err := sqliteTriggerExists(db, "snapshot_revision_servers_update")
-	if err != nil {
-		return err
-	}
+	// 旧版服务器条目更新触发器如需替换，迁移函数会在同一个事务里删除并
+	// 重建；这里的 IF NOT EXISTS 在重复打开时不会改动数据库文件。
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(schemaSQL + deviceLayoutSchema + snapshotRevisionSchema(!hasServerRevisionUpdate)); err != nil {
+	if _, err = tx.Exec(schemaSQL + deviceLayoutSchema + snapshotRevisionSchema()); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 	return tx.Commit()
@@ -512,23 +507,31 @@ func ensureServerDeviceReferenceMigration(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if exists {
-		hasDeviceID, err := serverColumnExists(db, "servers", "device_id")
-		if err != nil {
+	if !exists {
+		// 全新库还没有服务器条目表；结构初始化稍后会连同条件触发器一起创建。
+		return nil
+	}
+	hasDeviceID, err := serverColumnExists(db, "servers", "device_id")
+	if err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !hasDeviceID {
+		if _, err := tx.Exec(`ALTER TABLE servers ADD COLUMN device_id TEXT REFERENCES devices(id)`); err != nil {
 			return err
 		}
-		if !hasDeviceID {
-			if _, err := db.Exec(`ALTER TABLE servers ADD COLUMN device_id TEXT REFERENCES devices(id)`); err != nil {
-				return err
-			}
-		}
 	}
-	if definition != "" {
-		if _, err := db.Exec(`DROP TRIGGER snapshot_revision_servers_update`); err != nil {
-			return err
-		}
+	if _, err := tx.Exec(`DROP TRIGGER IF EXISTS snapshot_revision_servers_update`); err != nil {
+		return err
 	}
-	return nil
+	if _, err := tx.Exec(snapshotRevisionServerUpdateTrigger()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // serverColumnExists 判断表里是否已有指定列。
@@ -686,20 +689,6 @@ func tableExists(db *sql.DB, table string) (bool, error) {
 	var tmp int
 	err := db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&tmp)
 	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// sqliteTriggerExists 判断命名触发器是否已经安装。初始化结构时用它跳过
-// 已在位的语句，避免重复打开 vault 时改动数据库文件。
-func sqliteTriggerExists(db *sql.DB, trigger string) (bool, error) {
-	var one int
-	err := db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?`, trigger).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {

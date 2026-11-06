@@ -65,6 +65,174 @@ func triggerExists(t *testing.T, db *sql.DB, name string) bool {
 	return exists
 }
 
+func triggerDefinition(t *testing.T, db *sql.DB, name string) string {
+	t.Helper()
+	var definition string
+	err := db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`,
+		name,
+	).Scan(&definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return definition
+}
+
+// TestSnapshotRevisionServerDeviceTriggerUpgradeHasNoGap 构造升级前形态的
+// vault：服务器条目表还没有所属设备引用列，修订号更新触发器还是「任何
+// 更新都加一」的旧定义。升级后的第一个 Store 实例必须立即得到新触发器，
+// 不能等进程重启后的下一次打开。
+func TestSnapshotRevisionServerDeviceTriggerUpgradeHasNoGap(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "store.db")
+	legacy, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldShape := `
+CREATE TABLE servers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  user TEXT NOT NULL,
+  auth_method TEXT NOT NULL,
+  credential_id TEXT,
+  sudo_credential_id TEXT,
+  shell_type TEXT NOT NULL DEFAULT 'posix',
+  tags TEXT,
+  description TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  hardware TEXT NOT NULL DEFAULT '',
+  services TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT '',
+  caveats TEXT NOT NULL DEFAULT '',
+  expose_host INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE snapshot_revision (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL
+);
+INSERT INTO snapshot_revision(id, revision) VALUES (1, 41);
+INSERT INTO servers(
+  id,name,host,port,user,auth_method,tags,created_at,updated_at
+) VALUES (
+  'srv-old','old','192.0.2.10',22,'u','password','',1700000000,1700000000
+);
+CREATE TRIGGER snapshot_revision_servers_update
+AFTER UPDATE ON servers BEGIN
+  UPDATE snapshot_revision SET revision = revision + 1;
+END;
+`
+	if _, err := legacy.Exec(oldShape); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mk := make([]byte, 32)
+	randRead(t, mk)
+	migrated, err := Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("升级打开旧库失败:%v", err)
+	}
+	srv, err := migrated.GetServer("srv-old")
+	if err != nil {
+		migrated.Close()
+		t.Fatal(err)
+	}
+	srv.Host = "198.51.100.20"
+	if err := migrated.UpdateServer(srv); err != nil {
+		migrated.Close()
+		t.Fatal(err)
+	}
+	afterConnectionChange, err := migrated.SnapshotRevision()
+	if err != nil {
+		migrated.Close()
+		t.Fatal(err)
+	}
+	if afterConnectionChange != 42 {
+		migrated.Close()
+		t.Fatalf("升级后第一次连接字段更新的快照修订号 = %d,应为 42", afterConnectionChange)
+	}
+	if _, err := migrated.db.Exec(
+		`UPDATE servers SET device_id=NULL WHERE id='srv-old'`,
+	); err != nil {
+		migrated.Close()
+		t.Fatal(err)
+	}
+	afterDeviceReferenceChange, err := migrated.SnapshotRevision()
+	if err != nil {
+		migrated.Close()
+		t.Fatal(err)
+	}
+	if afterDeviceReferenceChange != 42 {
+		migrated.Close()
+		t.Fatalf("只改所属设备引用后的快照修订号 = %d,应保持 42", afterDeviceReferenceChange)
+	}
+	triggerBeforeReopen := triggerDefinition(
+		t, migrated.db, "snapshot_revision_servers_update",
+	)
+
+	// SQLite 的 data_version 是数据库改动计数。这里用另一个连接观察，如果
+	// 重复打开还要改库，这个计数会增加。
+	observer, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		migrated.Close()
+		t.Fatal(err)
+	}
+	var dataVersionBeforeReopen int
+	if err := observer.QueryRow(`PRAGMA data_version`).Scan(&dataVersionBeforeReopen); err != nil {
+		migrated.Close()
+		observer.Close()
+		t.Fatal(err)
+	}
+	if err := migrated.Close(); err != nil {
+		observer.Close()
+		t.Fatal(err)
+	}
+	reopened, err := Open(dbPath, mk)
+	if err != nil {
+		observer.Close()
+		t.Fatalf("重复打开升级后的库失败:%v", err)
+	}
+	var dataVersionAfterReopen int
+	if err := observer.QueryRow(`PRAGMA data_version`).Scan(&dataVersionAfterReopen); err != nil {
+		reopened.Close()
+		observer.Close()
+		t.Fatal(err)
+	}
+	if dataVersionAfterReopen != dataVersionBeforeReopen {
+		reopened.Close()
+		observer.Close()
+		t.Fatalf(
+			"重复打开的数据改动计数从 %d 变成 %d,应保持不变",
+			dataVersionBeforeReopen, dataVersionAfterReopen,
+		)
+	}
+	if definition := triggerDefinition(
+		t, reopened.db, "snapshot_revision_servers_update",
+	); definition != triggerBeforeReopen {
+		reopened.Close()
+		observer.Close()
+		t.Fatalf(
+			"重复打开后修订号更新触发器定义改变:\n第一次打开:\n%s\n重复打开:\n%s",
+			triggerBeforeReopen, definition,
+		)
+	}
+	if err := observer.Close(); err != nil {
+		reopened.Close()
+		t.Fatal(err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // snapshotSeed 是快照修订号测试的基础库:一台已授权的服务器、一个
 // profile、一个项目。各操作表条目可以用 setup 先补充自己的前置状态,
 // 让 op 只包含被测的那一次写入。

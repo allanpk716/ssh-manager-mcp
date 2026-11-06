@@ -39,7 +39,7 @@ var snapshotRevisionRetiredTriggers = []string{
 // 提供,因此旧库第一次打开时也会迁移到修订号 1,之后重复打开是无操作。
 // 一次业务写入如果落了多张配置表的行(例如「带凭据新增服务器」),修订号
 // 会加多于一;消费方只比较修订号是否相同,不依赖每次恰好加一。
-func snapshotRevisionSchema(createServerDeviceUpdateTrigger bool) string {
+func snapshotRevisionSchema() string {
 	var b strings.Builder
 	b.WriteString(`
 CREATE TABLE IF NOT EXISTS snapshot_revision (
@@ -58,10 +58,28 @@ INSERT OR IGNORE INTO snapshot_revision(id, revision) VALUES (1, 1);
 				table, event, strings.ToUpper(event), table)
 		}
 	}
-	if createServerDeviceUpdateTrigger {
-		// 服务器条目的所属设备是拓扑数据，不随客户端快照下发。只改这个
-		// 字段时不能让客户端误判快照变化；其余字段更新仍照常加一。
-		b.WriteString(`
+	b.WriteString(snapshotRevisionServerUpdateTrigger())
+	// 改绑设备码会改变这个设备码下一次拉到的 profile 快照,但普通设备码
+	// 维护(记录最后拉取时间、客户端版本、吊销)不改变任何快照内容。因此
+	// 这里只对 profile 绑定列建更新触发器,并且只在绑定真正变化时加一。
+	b.WriteString(`
+CREATE TRIGGER IF NOT EXISTS snapshot_revision_cache_tokens_profile
+AFTER UPDATE OF profile_id ON cache_tokens
+FOR EACH ROW WHEN OLD.profile_id IS NOT NEW.profile_id
+BEGIN
+  UPDATE snapshot_revision SET revision = revision + 1;
+END;
+`)
+	return b.String()
+}
+
+// snapshotRevisionServerUpdateTrigger 生成服务器条目表的快照修订号更新触
+// 发器。结构初始化与旧库迁移共用这一份结构化查询语言，保证新库和升级库
+// 得到相同定义。
+func snapshotRevisionServerUpdateTrigger() string {
+	// 服务器条目的所属设备是拓扑数据，不随客户端快照下发。只改这个
+	// 字段时不能让客户端误判快照变化；其余字段更新仍照常加一。
+	return `
 CREATE TRIGGER IF NOT EXISTS snapshot_revision_servers_update
 AFTER UPDATE ON servers
 FOR EACH ROW WHEN
@@ -77,20 +95,7 @@ FOR EACH ROW WHEN
 BEGIN
   UPDATE snapshot_revision SET revision = revision + 1;
 END;
-`)
-	}
-	// 改绑设备码会改变这个设备码下一次拉到的 profile 快照,但普通设备码
-	// 维护(记录最后拉取时间、客户端版本、吊销)不改变任何快照内容。因此
-	// 这里只对 profile 绑定列建更新触发器,并且只在绑定真正变化时加一。
-	b.WriteString(`
-CREATE TRIGGER IF NOT EXISTS snapshot_revision_cache_tokens_profile
-AFTER UPDATE OF profile_id ON cache_tokens
-FOR EACH ROW WHEN OLD.profile_id IS NOT NEW.profile_id
-BEGIN
-  UPDATE snapshot_revision SET revision = revision + 1;
-END;
-`)
-	return b.String()
+`
 }
 
 // SnapshotRevision 返回全库统一、持久、单调递增的快照修订号。单机库与
