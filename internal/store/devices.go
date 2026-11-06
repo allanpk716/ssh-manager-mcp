@@ -359,7 +359,6 @@ func (s *Store) copySiblingEntryPinTx(tx *sql.Tx, srv *models.Server) (*ServerAn
 	}
 
 	source := siblings[0]
-	sourceText := "复制自条目 " + source.name
 	handshakeAddr := source.pin.HandshakeAddr
 	if handshakeAddr == "" {
 		handshakeAddr = EntryFallbackAddr(srv)
@@ -367,13 +366,17 @@ func (s *Store) copySiblingEntryPinTx(tx *sql.Tx, srv *models.Server) (*ServerAn
 	audit := AuditRow{
 		TS:       s.nowTime(),
 		ServerID: srv.ID,
-		Action:   "pin-forward",
-		Command: fmt.Sprintf("entry=%s host=%s fp=%s source=%s via=copy",
-			srv.Name, EntryFallbackAddr(srv), PinFingerprint(source.pin.Blob, source.pin.Format), sourceText),
+		Action:   "pin-copy",
+		Command: MarshalAuditSummary(map[string]any{
+			"entry":   srv.Name,
+			"host":    EntryFallbackAddr(srv),
+			"主机密钥指纹":  PinFingerprint(source.pin.Blob, source.pin.Format),
+			"来源服务器条目": source.name,
+		}),
 		Status: "ok",
 	}
 	inserted, err := insertEntryPinWithAuditTx(tx, srv.ID, handshakeAddr,
-		source.pin.Blob, source.pin.Format, sourceText, source.pin.Device, audit)
+		source.pin.Blob, source.pin.Format, source.pin.Source, source.pin.Device, audit)
 	if err != nil {
 		return nil, err
 	}

@@ -125,15 +125,30 @@ func TestServerDeviceAnchorCopySamePort(t *testing.T) {
 		t.Fatalf("server add must report the copied anchor and its source entry:\n%s", out)
 	}
 	out = runCli(t, "servers", "pin-hostkey", "deploy")
-	if !strings.Contains(out, fingerprint) || !strings.Contains(out, "source=复制自条目 root") {
-		t.Fatalf("copied anchor must carry its value and source entry:\n%s", out)
+	if !strings.Contains(out, fingerprint) || !strings.Contains(out, "source=manual") ||
+		!strings.Contains(out, "format=fingerprint") || !strings.Contains(out, "device=-") ||
+		strings.Contains(out, "复制自条目") {
+		t.Fatalf("copied anchor must keep the sibling pin metadata instead of free-text provenance:\n%s", out)
 	}
-	rows := topologyAuditRows(t, dbPath, masterKey, "pin-forward")
+	rows := topologyAuditRows(t, dbPath, masterKey, "pin-copy")
 	if len(rows) != 1 {
 		t.Fatalf("anchor copy must leave exactly one pin-copy audit row, got %d", len(rows))
 	}
-	if rows[0].ServerID == "" || !strings.Contains(rows[0].Command, "source=复制自条目 root") {
-		t.Fatalf("anchor copy audit must name the source entry: %+v", rows[0])
+	if rows[0].ServerID == "" {
+		t.Fatalf("anchor copy audit must name the target entry: %+v", rows[0])
+	}
+	summary := topologyAuditSummary(t, rows[0])
+	wantSummary := map[string]any{
+		"entry":   "deploy",
+		"host":    "192.0.2.10:22",
+		"主机密钥指纹":  fingerprint,
+		"来源服务器条目": "root",
+	}
+	if !reflect.DeepEqual(summary, wantSummary) {
+		t.Fatalf("anchor copy audit summary = %#v, want %#v", summary, wantSummary)
+	}
+	if forwardRows := topologyAuditRows(t, dbPath, masterKey, "pin-forward"); len(forwardRows) != 0 {
+		t.Fatalf("anchor copy must not use pin-forward audit action: %+v", forwardRows)
 	}
 }
 
