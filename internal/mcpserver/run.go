@@ -79,7 +79,7 @@ func hydrateCacheStore(token string, snap *store.Snapshot, auditFile *os.File, d
 		os.Remove(tmpPath)
 		return nil, nil, "", err
 	}
-	if err := st.ImportSnapshot(snap); err != nil {
+	if err := st.ImportSnapshotForClientCache(snap); err != nil {
 		st.Close()
 		os.Remove(tmpPath)
 		return nil, nil, "", err

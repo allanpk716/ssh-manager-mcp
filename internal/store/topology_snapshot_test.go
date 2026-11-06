@@ -129,7 +129,7 @@ func TestTopologySnapshotRoundTripAndClientDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{`"sites"`, `"networks"`, `"devices"`, `"network_memberships"`} {
+	for _, forbidden := range []string{`"sites"`, `"networks"`, `"devices"`, `"network_memberships"`, `"profile_scoped"`} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("client snapshot JSON must not contain %s:\n%s", forbidden, encoded)
 		}

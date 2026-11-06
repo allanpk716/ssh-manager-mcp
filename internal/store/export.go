@@ -22,9 +22,6 @@ type Snapshot struct {
 	// RecommendedVersion 是导出这份快照的二进制版本。多机客户端用它比较
 	// 自己是否落后；旧快照与旧客户端分别解码、忽略该字段。
 	RecommendedVersion string `json:"recommended_version"`
-	// ProfileScoped 表示这是按客户端授权裁剪的快照。它永远不携带拓扑段，
-	// 也不代表一次旧的全量备份恢复；导入时不能因此触发设备迁移。
-	ProfileScoped bool                 `json:"profile_scoped,omitempty"`
 	Credentials   []SnapshotCredential `json:"credentials"`
 	// Sites / Networks（票 #123）是网络拓扑里的站点与网络，只进入备份与
 	// 导出的全量快照；下发给客户端的 profile 裁剪快照不填这些拓扑段。
@@ -93,7 +90,7 @@ type SnapshotSite struct {
 }
 
 // SnapshotNetwork 是全量快照里的网络段。CIDR 是导出文件里的既有字段名，
-// 语义是「网段，只给人看」。
+// 语义是「网段，只给人看」；这个字段与整个网络段都是网络拓扑这次新增的。
 type SnapshotNetwork struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
@@ -643,7 +640,6 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	}
 
 	snap := &Snapshot{Version: 1, SnapshotRevision: revision, RecommendedVersion: buildinfo.Version}
-	snap.ProfileScoped = true
 
 	// profile row
 	rp, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles WHERE id=?`, profileID)
@@ -845,13 +841,37 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 // store.db (or point SSHMGR_STORE at a fresh path) to get an empty vault.
 var ErrVaultNotEmpty = errors.New("vault is not empty; import into a fresh/empty store (move/delete store.db first)")
 
-// ImportSnapshot restores a Snapshot into THIS store in one transaction:
+// ImportSnapshot restores an owner-side full backup or export into THIS store in
+// one transaction:
 //   - credentials are RE-SEALED under this store's master key (master-key-independent file);
 //   - rows are inserted id-preserving in FK order (credentials -> servers -> profiles -> profile_servers -> projects -> host_keys -> audit);
 //   - projects.token_hash/salt/prefix are written verbatim so the original plaintext token keeps validating.
 //
-// Refuses a non-empty target (any row in servers) with ErrVaultNotEmpty.
+// Refuses a non-empty target (any row in servers) with ErrVaultNotEmpty. 旧备份
+// 或旧导出没有拓扑段时，这个 owner 导入入口执行与升级相同的设备生成迁移。
 func (s *Store) ImportSnapshot(snap *Snapshot) error {
+	return s.importSnapshot(snap, true)
+}
+
+// ImportSnapshotForClientCache restores a profile-scoped snapshot delivered by
+// the authoritative machine into a fresh client cache. 这一版拓扑不随快照下
+// 发；本入口还会丢弃快照里可能出现的拓扑段和服务器条目的所属设备引用，
+// 并且永不执行设备生成迁移，保证客户端缓存不落拓扑数据与迁移审计。
+func (s *Store) ImportSnapshotForClientCache(snap *Snapshot) error {
+	clientSnap := *snap
+	clientSnap.Sites = nil
+	clientSnap.Networks = nil
+	clientSnap.Devices = nil
+	clientSnap.NetworkMemberships = nil
+	clientSnap.DeviceLayoutCoordinates = nil
+	clientSnap.Servers = append([]SnapshotServer(nil), snap.Servers...)
+	for i := range clientSnap.Servers {
+		clientSnap.Servers[i].DeviceID = ""
+	}
+	return s.importSnapshot(&clientSnap, false)
+}
+
+func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -1059,9 +1079,10 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 			return fmt.Errorf("migrate legacy host keys: %w", err)
 		}
 	}
-	// 旧备份与旧导出没有设备段。导入后强制执行与升级相同的设备生成规则：
-	// 目标库虽然是新库且打开时已写完成标记，这次恢复的数据仍来自旧格式。
-	if !snap.ProfileScoped && len(snap.Devices) == 0 && len(snap.NetworkMemberships) == 0 {
+	// 旧备份与旧导出没有设备段。owner 导入后强制执行与升级相同的设备生成
+	// 规则：目标库虽然是新库且打开时已写完成标记，这次恢复的数据仍来自旧
+	// 格式；客户端缓存导入显式关闭这条迁移。
+	if generateMissingDevices && len(snap.Devices) == 0 && len(snap.NetworkMemberships) == 0 {
 		if err := migrateServerDevicesTx(tx, s.nowTime(), true); err != nil {
 			return fmt.Errorf("migrate server devices: %w", err)
 		}
