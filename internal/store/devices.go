@@ -444,15 +444,15 @@ func (s *Store) ListDevices(filter DeviceFilter) ([]*models.Device, error) {
 			SELECT 1 FROM network_memberships member
 			JOIN networks network ON network.id=member.network_id
 			JOIN sites site ON site.id=network.site_id
-			WHERE member.device_id=devices.id AND network.type=? AND site.name=?)`)
-		arguments = append(arguments, string(models.NetworkPhysical), filter.Site)
+				WHERE member.device_id=devices.id AND network.type=? AND lower(site.name)=lower(?))`)
+		arguments = append(arguments, string(models.NetworkPhysical), strings.TrimSpace(filter.Site))
 	}
 	if filter.Network != "" {
 		conditions = append(conditions, `EXISTS (
 			SELECT 1 FROM network_memberships member
 			JOIN networks network ON network.id=member.network_id
-			WHERE member.device_id=devices.id AND network.name=?)`)
-		arguments = append(arguments, filter.Network)
+				WHERE member.device_id=devices.id AND lower(network.name)=lower(?))`)
+		arguments = append(arguments, strings.TrimSpace(filter.Network))
 	}
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
