@@ -21,8 +21,8 @@ type Snapshot struct {
 	SnapshotRevision int64 `json:"snapshot_revision"`
 	// RecommendedVersion 是导出这份快照的二进制版本。多机客户端用它比较
 	// 自己是否落后；旧快照与旧客户端分别解码、忽略该字段。
-	RecommendedVersion string `json:"recommended_version"`
-	Credentials   []SnapshotCredential `json:"credentials"`
+	RecommendedVersion string               `json:"recommended_version"`
+	Credentials        []SnapshotCredential `json:"credentials"`
 	// Sites / Networks（票 #123）是网络拓扑里的站点与网络，只进入备份与
 	// 导出的全量快照；下发给客户端的 profile 裁剪快照不填这些拓扑段。
 	Sites    []SnapshotSite    `json:"sites,omitempty"`
@@ -837,7 +837,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 }
 
 // ErrVaultNotEmpty is returned by ImportSnapshot when the target store already
-// has servers. Import is restore-into-empty only — no silent clobber. Delete
+// has servers or topology rows. Import is restore-into-empty only — no silent clobber. Delete
 // store.db (or point SSHMGR_STORE at a fresh path) to get an empty vault.
 var ErrVaultNotEmpty = errors.New("vault is not empty; import into a fresh/empty store (move/delete store.db first)")
 
@@ -847,7 +847,8 @@ var ErrVaultNotEmpty = errors.New("vault is not empty; import into a fresh/empty
 //   - rows are inserted id-preserving in FK order (credentials -> servers -> profiles -> profile_servers -> projects -> host_keys -> audit);
 //   - projects.token_hash/salt/prefix are written verbatim so the original plaintext token keeps validating.
 //
-// Refuses a non-empty target (any row in servers) with ErrVaultNotEmpty. 旧备份
+// Refuses a non-empty target (any row in servers, sites, networks, devices,
+// network memberships, or layout coordinates) with ErrVaultNotEmpty. 旧备份
 // 或旧导出没有拓扑段时，这个 owner 导入入口执行与升级相同的设备生成迁移。
 func (s *Store) ImportSnapshot(snap *Snapshot) error {
 	return s.importSnapshot(snap, true)
@@ -875,11 +876,19 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 	if s.readOnly {
 		return ErrReadOnly
 	}
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM servers`).Scan(&n); err != nil {
+	var existingRows int
+	if err := s.db.QueryRow(`
+		SELECT
+		  (SELECT COUNT(*) FROM servers) +
+		  (SELECT COUNT(*) FROM sites) +
+		  (SELECT COUNT(*) FROM networks) +
+		  (SELECT COUNT(*) FROM devices) +
+		  (SELECT COUNT(*) FROM network_memberships) +
+		  (SELECT COUNT(*) FROM device_layout_coordinates)
+	`).Scan(&existingRows); err != nil {
 		return err
 	}
-	if n > 0 {
+	if existingRows > 0 {
 		return ErrVaultNotEmpty
 	}
 

@@ -4,6 +4,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -11,6 +12,91 @@ import (
 
 	"ssh-manager-mcp/internal/models"
 )
+
+func TestImportSnapshotRejectsTopologyOnlyTarget(t *testing.T) {
+	sourceDir := t.TempDir()
+	masterKey, err := GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := Open(filepath.Join(sourceDir, "source.db"), masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if _, err := source.AddServer(&models.Server{
+		Name: "gpu", Host: "192.0.2.10", Port: 22, User: "deploy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := source.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Servers) != 1 {
+		t.Fatalf("test fixture needs a server entry, got: %+v", snapshot.Servers)
+	}
+
+	seeds := map[string]func(t *testing.T, st *Store){
+		"site": func(t *testing.T, st *Store) {
+			if _, err := st.AddSite("家A", ""); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"network": func(t *testing.T, st *Store) {
+			if _, err := st.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"device": func(t *testing.T, st *Store) {
+			if _, err := st.AddDevice("工作站", "", ""); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"network membership": func(t *testing.T, st *Store) {
+			device, err := st.AddDevice("工作站", "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.AddNetworkMembership("工作站", "虚拟网", "100.64.0.5"); err != nil {
+				t.Fatal(err)
+			}
+			if device.ID == "" {
+				t.Fatal("test fixture lost the device identifier")
+			}
+		},
+		"layout coordinate": func(t *testing.T, st *Store) {
+			device, err := st.AddDevice("工作站", "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.db.Exec(
+				`INSERT INTO device_layout_coordinates(view_key,device_id,x,y,created_at,updated_at)
+				 VALUES(?,?,?,?,?,?)`, "主视图", device.ID, 1, 2, 1000, 1000,
+			); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, seed := range seeds {
+		t.Run(name, func(t *testing.T) {
+			target, err := Open(filepath.Join(t.TempDir(), "target.db"), masterKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer target.Close()
+			seed(t, target)
+
+			err = target.ImportSnapshot(snapshot)
+			if !errors.Is(err, ErrVaultNotEmpty) {
+				t.Fatalf("topology-only target must refuse import with ErrVaultNotEmpty, got: %v", err)
+			}
+		})
+	}
+}
 
 // TestTopologySnapshotRoundTripAndClientDelivery 覆盖三件事：全量快照携带
 // 站点与网络并在导入后原样恢复；profile 裁剪快照不携带这两段；登记拓扑
