@@ -204,6 +204,11 @@ func TestNetworkRemoveHintsServersWithOnlyFallbackAddress(t *testing.T) {
 	runCli(t, "devices", "member", "add", "db", "--network", "虚拟网", "--address", "100.64.0.20")
 
 	out := runCli(t, "networks", "rm", "家A局域网", "--yes")
+	for _, want := range []string{"将删除网络 家A局域网", "网络成员：", "web — 192.168.1.10", "db — 192.168.1.20"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("network removal with --yes must still print the member preview, missing %q:\n%s", want, out)
+		}
+	}
 	if !strings.Contains(out, "服务器条目 web：候选地址只剩兜底 Host") {
 		t.Fatalf("network removal must warn each entry whose device lost its last membership:\n%s", out)
 	}
