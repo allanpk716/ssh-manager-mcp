@@ -33,9 +33,9 @@ func insertServerTx(db dbtx, srv *models.Server) (string, error) {
 	// credential_id has no '' row to reference, so a literal '' would violate it.
 	cred := nullableString(srv.CredentialID)
 	_, err := db.Exec(
-		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
-		id, srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), cred, sudo,
+		`INSERT INTO servers (id,name,host,port,user,device_id,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+		id, srv.Name, srv.Host, srv.Port, srv.User, nullableString(srv.DeviceID), string(srv.AuthMethod), cred, sudo,
 		string(models.NormalizeShellType(string(srv.ShellType))), string(tagsJSON), srv.Description,
 		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, srv.ExposeHost, ts, ts,
 	)
@@ -79,7 +79,7 @@ func updateServerTx(db dbtx, srv *models.Server) error {
 // getServerTx loads one server row by id on db.
 func getServerTx(db dbtx, id string) (*models.Server, error) {
 	return scanServer(db.QueryRow(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers WHERE id=?`, id,
+		`SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers WHERE id=?`, id,
 	))
 }
 

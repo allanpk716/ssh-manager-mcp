@@ -55,6 +55,7 @@ func serversAddCmd() *cobra.Command {
 		tags                                                                    []string
 		exposeHost                                                              bool
 		shell                                                                   string
+		device                                                                  string
 	)
 	c := &cobra.Command{
 		Use:   "add",
@@ -121,7 +122,7 @@ func serversAddCmd() *cobra.Command {
 			if sudoPassword != "" {
 				sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)}
 			}
-			id, err := s.AddServerWithCredentials(srv, cred, sudoCred)
+			added, err := s.AddServerWithCredentialsToDevice(srv, cred, sudoCred, device)
 			if err != nil {
 				writeOwnerAuditError(s, "server.add", summary)
 				return err
@@ -131,7 +132,8 @@ func serversAddCmd() *cobra.Command {
 			if err := s.WriteOwnerAudit("server.add", summary); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "added server %s id=%s\n", name, id)
+			fmt.Fprintf(cmd.OutOrStdout(), "added server %s id=%s device=%s\n", name, added.ServerID, added.Device.Name)
+			printServerAnchorCopyResult(cmd.OutOrStdout(), added.AnchorCopy)
 			return nil
 		},
 	}
@@ -152,6 +154,7 @@ func serversAddCmd() *cobra.Command {
 	c.Flags().StringVar(&caveats, "special-handling", "", "operational gotchas / special handling rules — the agent reads this BEFORE acting")
 	c.Flags().BoolVar(&exposeHost, "expose-host", false, "return the plaintext host in list_servers (default: masked as \"hidden\")")
 	c.Flags().StringVar(&shell, "shell", "posix", "shell type for command-policy judging (posix, powershell, cmd)")
+	c.Flags().StringVar(&device, "device", "", "关联的拓扑设备；不给时自动生成同名设备")
 	_ = c.MarkFlagRequired("name")
 	_ = c.MarkFlagRequired("host")
 	_ = c.MarkFlagRequired("user")

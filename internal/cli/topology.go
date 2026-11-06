@@ -342,10 +342,15 @@ func networksRmCmd() *cobra.Command {
 					return nil
 				}
 			}
-			if err := s.DeleteNetwork(args[0]); err != nil {
+			onlyFallbackServers, err := s.DeleteNetwork(args[0])
+			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "已删除网络 %s\n", args[0])
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "已删除网络 %s\n", args[0])
+			for _, server := range onlyFallbackServers {
+				fmt.Fprintf(out, "服务器条目 %s：候选地址只剩兜底 Host\n", server)
+			}
 			return nil
 		},
 	}

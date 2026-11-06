@@ -189,6 +189,29 @@ func TestNetworksRemovePreviewsAndCascadesMembers(t *testing.T) {
 	}
 }
 
+// TestNetworkRemoveHintsServersWithOnlyFallbackAddress 覆盖删除网络后的逐
+// 条提示：所属设备因此没有网络成员的服务器条目只剩兜底 Host；还有其他
+// 网络成员的条目不提示。
+func TestNetworkRemoveHintsServersWithOnlyFallbackAddress(t *testing.T) {
+	withCliStoreEnv(t)
+	seedTopologySites(t, "家A")
+	runCli(t, "networks", "add", "家A局域网", "--type", "physical", "--site", "家A")
+	runCli(t, "networks", "add", "虚拟网", "--type", "virtual")
+	runCli(t, "servers", "add", "--name", "web", "--host", "192.0.2.10", "--user", "root")
+	runCli(t, "servers", "add", "--name", "db", "--host", "192.0.2.20", "--user", "root")
+	runCli(t, "devices", "member", "add", "web", "--network", "家A局域网", "--address", "192.168.1.10")
+	runCli(t, "devices", "member", "add", "db", "--network", "家A局域网", "--address", "192.168.1.20")
+	runCli(t, "devices", "member", "add", "db", "--network", "虚拟网", "--address", "100.64.0.20")
+
+	out := runCli(t, "networks", "rm", "家A局域网", "--yes")
+	if !strings.Contains(out, "服务器条目 web：候选地址只剩兜底 Host") {
+		t.Fatalf("network removal must warn each entry whose device lost its last membership:\n%s", out)
+	}
+	if strings.Contains(out, "服务器条目 db：") {
+		t.Fatalf("entries whose device keeps another membership must not be warned:\n%s", out)
+	}
+}
+
 // runTopologyRootWithStdin 从根命令执行命令并喂入标准输入，返回标准输出。
 func runTopologyRootWithStdin(t *testing.T, stdin string, args ...string) string {
 	t.Helper()

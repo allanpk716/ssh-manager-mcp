@@ -263,31 +263,62 @@ func (s *Store) EditNetwork(name string, changes NetworkChanges) (*models.Networ
 	return network, tx.Commit()
 }
 
-// DeleteNetwork 删除网络。当前版本还没有网络成员；后续成员级联会在同一
-// 个事务里扩展。网络行与审计行同一个事务提交。
-func (s *Store) DeleteNetwork(name string) error {
+// DeleteNetwork 删除网络并级联删除它的网络成员。返回因此不再有任何网络
+// 成员的服务器条目名字，供命令行逐条提示候选地址只剩兜底 Host。
+func (s *Store) DeleteNetwork(name string) ([]string, error) {
 	if s.readOnly {
-		return ErrReadOnly
+		return nil, ErrReadOnly
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback()
 	network, err := networkByNameTx(tx, name)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	serverNames, err := serversWithoutOtherMembershipsTx(tx, network.ID)
+	if err != nil {
+		return nil, err
 	}
 	if _, err := tx.Exec(`DELETE FROM network_memberships WHERE network_id=?`, network.ID); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := tx.Exec(`DELETE FROM networks WHERE id=?`, network.ID); err != nil {
-		return err
+		return nil, err
 	}
 	if err := writeTopologyAuditTx(tx, s.nowTime(), "network.rm", map[string]any{"name": network.Name}); err != nil {
-		return err
+		return nil, err
 	}
-	return tx.Commit()
+	return serverNames, tx.Commit()
+}
+
+// serversWithoutOtherMembershipsTx 返回所属设备只在指定网络里有网络成员
+// 的服务器条目名字；删除这个网络后它们只剩兜底 Host。
+func serversWithoutOtherMembershipsTx(tx *sql.Tx, networkID string) ([]string, error) {
+	rows, err := tx.Query(`
+		SELECT server.name
+		FROM servers server
+		WHERE server.device_id IN (
+		        SELECT member.device_id FROM network_memberships member WHERE member.network_id=?)
+		  AND NOT EXISTS (
+		        SELECT 1 FROM network_memberships other
+		        WHERE other.device_id=server.device_id AND other.network_id<>?)
+		ORDER BY server.name,server.id`, networkID, networkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	names := make([]string, 0)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
 }
 
 // ListNetworks 按筛选条件返回网络。结果先按站点名字、再按网络名字排序，

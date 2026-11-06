@@ -160,3 +160,96 @@ func TestTopologySnapshotRoundTripAndClientDelivery(t *testing.T) {
 			snapshot.NetworkMemberships, restored.NetworkMemberships)
 	}
 }
+
+// TestServerDeviceSnapshotRoundTripAndClientDelivery 覆盖服务器条目的所属
+// 设备字段：全量快照往返保留；下发客户端的快照不携带；只改归属设备不改
+// 变快照修订号。
+func TestServerDeviceSnapshotRoundTripAndClientDelivery(t *testing.T) {
+	dir := t.TempDir()
+	masterKey, err := GenerateMasterKey()
+	if err != nil {
+		t.Fatalf("generate master key: %v", err)
+	}
+	st, err := Open(filepath.Join(dir, "source.db"), masterKey)
+	if err != nil {
+		t.Fatalf("open source store: %v", err)
+	}
+	defer st.Close()
+	profileID, err := st.AddProfile("client-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("机器A", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	targetDevice, err := st.AddDevice("机器B", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "deploy", Host: "192.0.2.10", Port: 22, User: "deploy",
+	}, nil, nil, "机器A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{added.ServerID}); err != nil {
+		t.Fatal(err)
+	}
+	revisionBeforeMove, err := st.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.MoveServerToDevice("deploy", "机器B"); err != nil {
+		t.Fatal(err)
+	}
+	revisionAfterMove, err := st.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revisionAfterMove != revisionBeforeMove {
+		t.Fatalf("moving a server between devices must not change the client snapshot revision: before=%d after=%d",
+			revisionBeforeMove, revisionAfterMove)
+	}
+
+	snapshot, err := st.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Servers) != 1 || snapshot.Servers[0].DeviceID != targetDevice.ID {
+		t.Fatalf("full snapshot must carry the server's device reference: %+v", snapshot.Servers)
+	}
+	clientSnapshot, err := st.ExportSnapshotForProfile(profileID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clientSnapshot.Servers) != 1 || clientSnapshot.Servers[0].DeviceID != "" {
+		t.Fatalf("client snapshot must not carry the device reference: %+v", clientSnapshot.Servers)
+	}
+	encoded, err := json.Marshal(clientSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"device_id"`) {
+		t.Fatalf("client snapshot JSON must not contain device_id:\n%s", encoded)
+	}
+
+	targetKey, err := GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := Open(filepath.Join(dir, "target.db"), targetKey)
+	if err != nil {
+		t.Fatalf("open target store: %v", err)
+	}
+	defer target.Close()
+	if err := target.ImportSnapshot(snapshot); err != nil {
+		t.Fatalf("import snapshot: %v", err)
+	}
+	restored, err := target.GetServerByName("deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored == nil || restored.DeviceID != targetDevice.ID {
+		t.Fatalf("device reference changed after import: %+v", restored)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -37,6 +38,203 @@ func seedTopologyClient(t *testing.T, dbPath string, masterKey []byte, name stri
 	}
 	if _, _, err := st.AddCacheToken(name, profileID); err != nil {
 		t.Fatalf("add client %s: %v", name, err)
+	}
+}
+
+// seedTopologyServer 直接种一个还没有所属设备的服务器条目，用来测试
+// devices move-server 的第一次关联。
+func seedTopologyServer(t *testing.T, dbPath string, masterKey []byte, name string, port int) {
+	t.Helper()
+	st, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	_, err = st.AddServerWithCredentials(&models.Server{
+		Name: name, Host: "192.0.2.10", Port: port, User: "deploy",
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("add server %s: %v", name, err)
+	}
+}
+
+// TestDevicesMoveServerCoversAssociateAndMove 覆盖服务器条目第一次关联设
+// 备、从一台设备移到另一台设备，以及设备详情中的条目清单；原设备变空也
+// 保留。
+func TestDevicesMoveServerCoversAssociateAndMove(t *testing.T) {
+	dbPath, masterKey := withCliStoreEnv(t)
+	seedTopologyServer(t, dbPath, masterKey, "deploy", 22)
+	runCli(t, "devices", "add", "机器A")
+	runCli(t, "devices", "add", "机器B")
+
+	runCli(t, "devices", "move-server", "deploy", "--to", "机器A")
+	out := runCli(t, "devices", "show", "机器A")
+	if !strings.Contains(out, "服务器条目：deploy（用户 deploy，端口 22，未锚定）") {
+		t.Fatalf("device show must list the associated server entry:\n%s", out)
+	}
+
+	runCli(t, "devices", "move-server", "deploy", "--to", "机器B")
+	out = runCli(t, "devices", "show", "机器A")
+	if !strings.Contains(out, "服务器条目：无") || strings.Contains(out, "deploy") {
+		t.Fatalf("source device must stay but no longer list the moved entry:\n%s", out)
+	}
+	out = runCli(t, "devices", "show", "机器B")
+	if !strings.Contains(out, "服务器条目：deploy（用户 deploy，端口 22，未锚定）") {
+		t.Fatalf("target device show must list the moved server entry:\n%s", out)
+	}
+}
+
+// TestServersAddCreatesOrUsesDevice 覆盖 servers add 的两种设备归属：不带
+// --device 时生成同名设备，设备名冲突则加数字后缀；带 --device 时关联已有
+// 设备。两种生成出来的设备都没有网络成员，因此出现在未归类列表。
+func TestServersAddCreatesOrUsesDevice(t *testing.T) {
+	withCliStoreEnv(t)
+	runCli(t, "devices", "add", "deploy")
+	runCli(t, "servers", "add", "--name", "deploy", "--host", "192.0.2.10", "--user", "deploy")
+	runCli(t, "devices", "add", "NAS")
+	runCli(t, "servers", "add", "--name", "api", "--host", "192.0.2.20", "--user", "root", "--device", "NAS")
+
+	out := runCli(t, "devices", "show", "deploy-2")
+	if !strings.Contains(out, "服务器条目：deploy（用户 deploy，端口 22，未锚定）") {
+		t.Fatalf("server add without --device must create a same-named device with a numeric suffix:\n%s", out)
+	}
+	out = runCli(t, "devices", "show", "NAS")
+	if !strings.Contains(out, "服务器条目：api（用户 root，端口 22，未锚定）") {
+		t.Fatalf("server add with --device must associate the existing device:\n%s", out)
+	}
+	out = runCli(t, "devices", "list", "--unassigned")
+	if !strings.Contains(out, "设备 deploy") || !strings.Contains(out, "设备 deploy-2") || !strings.Contains(out, "设备 NAS") {
+		t.Fatalf("new devices have no network memberships and must appear as unassigned:\n%s", out)
+	}
+}
+
+// TestServerDeviceAnchorCopySamePort 覆盖同端口兄弟条目的锚复制：新条目
+// 尚无锚时复制既有锚，命令输出、锚来源信息与审计都写明来源条目。
+func TestServerDeviceAnchorCopySamePort(t *testing.T) {
+	dbPath, masterKey := withCliStoreEnv(t)
+	_, fingerprint := genHostKey(t)
+	runCli(t, "devices", "add", "机器")
+	runCli(t, "servers", "add", "--name", "root", "--host", "192.0.2.10", "--user", "root", "--device", "机器")
+	runCli(t, "servers", "pin-hostkey", "root", "--fingerprint", fingerprint)
+
+	out := runCli(t, "servers", "add", "--name", "deploy", "--host", "192.0.2.10",
+		"--user", "deploy", "--device", "机器")
+	if !strings.Contains(out, "已从服务器条目 root 复制主机密钥锚") {
+		t.Fatalf("server add must report the copied anchor and its source entry:\n%s", out)
+	}
+	out = runCli(t, "servers", "pin-hostkey", "deploy")
+	if !strings.Contains(out, fingerprint) || !strings.Contains(out, "source=复制自条目 root") {
+		t.Fatalf("copied anchor must carry its value and source entry:\n%s", out)
+	}
+	rows := topologyAuditRows(t, dbPath, masterKey, "pin-forward")
+	if len(rows) != 1 {
+		t.Fatalf("anchor copy must leave exactly one pin-copy audit row, got %d", len(rows))
+	}
+	if rows[0].ServerID == "" || !strings.Contains(rows[0].Command, "source=复制自条目 root") {
+		t.Fatalf("anchor copy audit must name the source entry: %+v", rows[0])
+	}
+}
+
+// TestDevicesMoveServerCopiesAnchor 覆盖移动条目进入设备时的同端口锚复制，
+// 并钉住 device.move-server 审计动作。
+func TestDevicesMoveServerCopiesAnchor(t *testing.T) {
+	dbPath, masterKey := withCliStoreEnv(t)
+	_, fingerprint := genHostKey(t)
+	runCli(t, "devices", "add", "机器")
+	runCli(t, "servers", "add", "--name", "root", "--host", "192.0.2.10",
+		"--user", "root", "--device", "机器")
+	runCli(t, "servers", "pin-hostkey", "root", "--fingerprint", fingerprint)
+	runCli(t, "servers", "add", "--name", "admin", "--host", "192.0.2.10", "--user", "admin")
+
+	out := runCli(t, "devices", "move-server", "admin", "--to", "机器")
+	if !strings.Contains(out, "已从服务器条目 root 复制主机密钥锚") {
+		t.Fatalf("moving an unpinned entry must copy the sibling anchor:\n%s", out)
+	}
+	if out := runCli(t, "servers", "pin-hostkey", "admin"); !strings.Contains(out, fingerprint) {
+		t.Fatalf("moved entry must carry the copied anchor:\n%s", out)
+	}
+	if rows := topologyAuditRows(t, dbPath, masterKey, "device.move-server"); len(rows) != 1 {
+		t.Fatalf("moving a server entry must leave one device.move-server audit row, got %d", len(rows))
+	}
+}
+
+// TestServerDeviceAnchorCopyConflict 覆盖多个同端口兄弟条目的锚互不一致：
+// 不复制、不落锚，并在命令结果里逐项提示。
+func TestServerDeviceAnchorCopyConflict(t *testing.T) {
+	withCliStoreEnv(t)
+	_, fingerprintA := genHostKey(t)
+	_, fingerprintB := genHostKey(t)
+	runCli(t, "devices", "add", "机器")
+	runCli(t, "servers", "add", "--name", "root", "--host", "192.0.2.10", "--user", "root", "--device", "机器")
+	runCli(t, "servers", "add", "--name", "admin", "--host", "192.0.2.10", "--user", "admin", "--device", "机器")
+	runCli(t, "servers", "pin-hostkey", "root", "--fingerprint", fingerprintA)
+	runCli(t, "servers", "pin-hostkey", "admin", "--fingerprint", fingerprintB)
+
+	out := runCli(t, "servers", "add", "--name", "deploy", "--host", "192.0.2.10",
+		"--user", "deploy", "--device", "机器")
+	if !strings.Contains(out, "同端口兄弟条目的主机密钥锚不一致，未复制；请手工确认后锚定") {
+		t.Fatalf("conflicting sibling anchors must be reported and not copied:\n%s", out)
+	}
+	out = runCli(t, "servers", "pin-hostkey", "deploy")
+	if !strings.Contains(out, "no pin for deploy") {
+		t.Fatalf("conflicting sibling anchors must not create an anchor:\n%s", out)
+	}
+}
+
+// TestServerDeviceAnchorCopyGuards 覆盖锚复制的两个保护：端口不同不复制；
+// 目标条目已有锚时绝不覆盖。
+func TestServerDeviceAnchorCopyGuards(t *testing.T) {
+	withCliStoreEnv(t)
+	_, fingerprintA := genHostKey(t)
+	_, fingerprintB := genHostKey(t)
+	runCli(t, "devices", "add", "机器")
+	runCli(t, "servers", "add", "--name", "root", "--host", "192.0.2.10",
+		"--user", "root", "--device", "机器")
+	runCli(t, "servers", "pin-hostkey", "root", "--fingerprint", fingerprintA)
+
+	runCli(t, "servers", "add", "--name", "container", "--host", "192.0.2.10",
+		"--port", "2222", "--user", "deploy", "--device", "机器")
+	out := runCli(t, "servers", "pin-hostkey", "container")
+	if !strings.Contains(out, "no pin for container") {
+		t.Fatalf("a different port must not inherit the sibling anchor:\n%s", out)
+	}
+
+	runCli(t, "servers", "add", "--name", "deploy", "--host", "192.0.2.10", "--user", "deploy")
+	runCli(t, "servers", "pin-hostkey", "deploy", "--fingerprint", fingerprintB)
+	runCli(t, "devices", "move-server", "deploy", "--to", "机器")
+	out = runCli(t, "servers", "pin-hostkey", "deploy")
+	if !strings.Contains(out, fingerprintB) || strings.Contains(out, fingerprintA) {
+		t.Fatalf("an existing anchor must never be replaced during a move:\n%s", out)
+	}
+}
+
+// TestServersRemoveKeepsDevice 覆盖删除服务器条目只解除设备关联，设备本
+// 身保留，详情里不再列出被删除的条目。
+func TestServersRemoveKeepsDevice(t *testing.T) {
+	withCliStoreEnv(t)
+	runCli(t, "devices", "add", "机器")
+	runCli(t, "servers", "add", "--name", "deploy", "--host", "192.0.2.10",
+		"--user", "deploy", "--device", "机器")
+
+	runCli(t, "servers", "rm", "deploy")
+	out := runCli(t, "devices", "show", "机器")
+	if !strings.Contains(out, "设备 机器") || !strings.Contains(out, "服务器条目：无") {
+		t.Fatalf("removing a server entry must keep its now-empty device:\n%s", out)
+	}
+}
+
+// TestDevicesRemoveStillRequiresNoServerEntries 覆盖本票保留的删除限制：
+// 设备还有关联服务器条目时不能删除，错误要列出这些条目。
+func TestDevicesRemoveStillRequiresNoServerEntries(t *testing.T) {
+	withCliStoreEnv(t)
+	runCli(t, "servers", "add", "--name", "deploy", "--host", "192.0.2.10", "--user", "deploy")
+
+	errText := runCliErr(t, "devices", "rm", "deploy", "--yes")
+	if !strings.Contains(errText, "还有关联的服务器条目") || !strings.Contains(errText, "deploy") {
+		t.Fatalf("device removal must list associated server entries and refuse:\n%s", errText)
+	}
+	if out := runCli(t, "devices", "show", "deploy"); !strings.Contains(out, "服务器条目：deploy") {
+		t.Fatalf("refused device removal must keep the device and entry:\n%s", out)
 	}
 }
 

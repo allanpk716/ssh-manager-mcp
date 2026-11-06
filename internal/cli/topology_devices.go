@@ -15,7 +15,7 @@ import (
 
 func newDevicesCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "devices", Short: "Manage topology devices"}
-	cmd.AddCommand(devicesAddCmd(), devicesEditCmd(), devicesShowCmd(), devicesListCmd(), devicesRmCmd(), newDevicesMemberCmd())
+	cmd.AddCommand(devicesAddCmd(), devicesEditCmd(), devicesShowCmd(), devicesListCmd(), devicesRmCmd(), devicesMoveServerCmd(), newDevicesMemberCmd())
 	return cmd
 }
 
@@ -51,7 +51,7 @@ func devicesListCmd() *cobra.Command {
 				return nil
 			}
 			for _, device := range devices {
-				printDevice(out, device, device.Memberships)
+				printDevice(out, device, nil, device.Memberships)
 			}
 			return nil
 		},
@@ -120,6 +120,53 @@ func devicesRmCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&yes, "yes", false, "跳过删除确认；非交互终端必须显式给出")
 	return c
+}
+
+func devicesMoveServerCmd() *cobra.Command {
+	var device string
+	c := &cobra.Command{
+		Use:   "move-server SERVER --to DEVICE",
+		Args:  cobra.ExactArgs(1),
+		Short: "把服务器条目关联或移动到设备",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := requireTopologyVault()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			move, err := s.MoveServerToDevice(args[0], device)
+			if err != nil {
+				return err
+			}
+			if move.FromDevice == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "已把服务器条目 %s 关联到设备 %s\n", move.Server.Name, move.ToDevice.Name)
+			}
+			if move.FromDevice != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "已把服务器条目 %s 从设备 %s 移到设备 %s\n",
+					move.Server.Name, move.FromDevice.Name, move.ToDevice.Name)
+			}
+			printServerAnchorCopyResult(cmd.OutOrStdout(), move.AnchorCopy)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&device, "to", "", "目标设备名字")
+	_ = c.MarkFlagRequired("to")
+	return c
+}
+
+// printServerAnchorCopyResult 输出锚复制结论；兄弟锚冲突时不复制但明确
+// 提示 owner 手工确认。
+func printServerAnchorCopyResult(w io.Writer, result *store.ServerAnchorCopy) {
+	if result == nil {
+		return
+	}
+	if result.Copied {
+		fmt.Fprintf(w, "已从服务器条目 %s 复制主机密钥锚\n", result.FromServerName)
+		return
+	}
+	if result.AnchorConflict {
+		fmt.Fprintln(w, "同端口兄弟条目的主机密钥锚不一致，未复制；请手工确认后锚定")
+	}
 }
 
 func newDevicesMemberCmd() *cobra.Command {
@@ -306,14 +353,18 @@ func devicesShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printDevice(cmd.OutOrStdout(), device, memberships)
+			entries, err := s.ListServersForDevice(args[0])
+			if err != nil {
+				return err
+			}
+			printDevice(cmd.OutOrStdout(), device, entries, memberships)
 			return nil
 		},
 	}
 }
 
 // printDevice 输出设备详情；网络成员由网络成员命令补上。
-func printDevice(w io.Writer, device *models.Device, memberships []*models.NetworkMembership) {
+func printDevice(w io.Writer, device *models.Device, entries []*models.DeviceServer, memberships []*models.NetworkMembership) {
 	fmt.Fprintf(w, "设备 %s\n", device.Name)
 	if device.Note != "" {
 		fmt.Fprintf(w, "  备注：%s\n", device.Note)
@@ -323,6 +374,17 @@ func printDevice(w io.Writer, device *models.Device, memberships []*models.Netwo
 		client = "无"
 	}
 	fmt.Fprintf(w, "  客户端实例：%s\n", client)
+	if len(entries) == 0 {
+		fmt.Fprintln(w, "  服务器条目：无")
+	} else {
+		for _, entry := range entries {
+			pinned := "未锚定"
+			if entry.Pinned {
+				pinned = "已锚定"
+			}
+			fmt.Fprintf(w, "  服务器条目：%s（用户 %s，端口 %d，%s）\n", entry.Name, entry.User, entry.Port, pinned)
+		}
+	}
 	if len(memberships) == 0 {
 		fmt.Fprintln(w, "  网络成员：无")
 		return

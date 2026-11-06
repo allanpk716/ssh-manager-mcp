@@ -188,6 +188,7 @@ func TestTopologyClientRoleRefused(t *testing.T) {
 		{"devices", "add", "工作站"},
 		{"devices", "edit", "工作站", "--note", "新备注"},
 		{"devices", "rm", "工作站", "--yes"},
+		{"devices", "move-server", "web", "--to", "工作站"},
 		{"devices", "member", "add", "工作站", "--network", "家A局域网", "--address", "192.168.1.20"},
 		{"devices", "member", "edit", "工作站", "--network", "家A局域网", "--address", "192.168.1.21"},
 		{"devices", "member", "rm", "工作站", "--network", "家A局域网"},

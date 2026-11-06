@@ -263,11 +263,15 @@ func initSchema(db *sql.DB) error {
 	// 快照修订号的表、初始行和触发器拼接在既有结构之后:旧库第一次打开
 	// 时在这里完成迁移,后续打开全部是无操作。
 	// 放进一个事务只落一次盘;自动提交下新库每条语句各落一次,Windows 上明显变慢。
+	hasServerRevisionUpdate, err := sqliteTriggerExists(db, "snapshot_revision_servers_update")
+	if err != nil {
+		return err
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(schemaSQL + snapshotRevisionSchema()); err != nil {
+	if _, err = tx.Exec(schemaSQL + snapshotRevisionSchema(!hasServerRevisionUpdate)); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 	return tx.Commit()
@@ -431,8 +435,84 @@ func migrate(db *sql.DB) error {
 	// 类型(连接信息的一员,默认 POSIX)。DEFAULT 'posix' 回填存量行为
 	// POSIX。必须排在 credential_id 可空化表重建之后:重建的 CREATE 表定义
 	// 不含本列,先加列会被随后的重建整表丢弃,下一次 Open 才补回。
-	if err := addColumnIfMissing(db, "servers", "shell_type", "TEXT NOT NULL DEFAULT 'posix'"); err != nil {
+	if err := ensureServerDeviceMigration(db); err != nil {
 		return err
+	}
+	return nil
+}
+
+// addServerColumnsIfMissing 一次读取服务器条目表结构并补齐 shell_type 与
+// device_id。两个列都必须排在 credential_id 可空化表重建之后；合并成一次
+// 结构读取，避免重复打开已有 vault 时多做一次无关检查。
+func addServerColumnsIfMissing(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(servers)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasShellType := false
+	hasDeviceID := false
+	sawAny := false
+	for rows.Next() {
+		sawAny = true
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		switch name {
+		case "shell_type":
+			hasShellType = true
+		case "device_id":
+			hasDeviceID = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !sawAny {
+		return nil
+	}
+	if !hasShellType {
+		if _, err := db.Exec(`ALTER TABLE servers ADD COLUMN shell_type TEXT NOT NULL DEFAULT 'posix'`); err != nil {
+			return err
+		}
+	}
+	if !hasDeviceID {
+		if _, err := db.Exec(`ALTER TABLE servers ADD COLUMN device_id TEXT REFERENCES devices(id)`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureServerDeviceMigration 补齐服务器条目的所属设备字段，并把旧版
+// “任何服务器条目更新都加一”的快照修订号触发器替换成排除所属设备字段
+// 的新触发器。新触发器已在位时表示迁移已完成，不写数据库。
+func ensureServerDeviceMigration(db *sql.DB) error {
+	var definition string
+	err := db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`,
+		"snapshot_revision_servers_update",
+	).Scan(&definition)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		definition = ""
+	case err != nil:
+		return err
+	}
+	if strings.Contains(strings.ToUpper(definition), "WHEN") {
+		return nil
+	}
+	if err := addServerColumnsIfMissing(db); err != nil {
+		return err
+	}
+	if definition != "" {
+		if _, err := db.Exec(`DROP TRIGGER snapshot_revision_servers_update`); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -578,6 +658,20 @@ func tableExists(db *sql.DB, table string) (bool, error) {
 	return true, nil
 }
 
+// sqliteTriggerExists 判断命名触发器是否已经安装。初始化结构时用它跳过
+// 已在位的语句，避免重复打开 vault 时改动数据库文件。
+func sqliteTriggerExists(db *sql.DB, trigger string) (bool, error) {
+	var one int
+	err := db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?`, trigger).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS credentials (
   id TEXT PRIMARY KEY,
@@ -647,6 +741,7 @@ CREATE TABLE IF NOT EXISTS servers (
   role TEXT DEFAULT '',
   caveats TEXT DEFAULT '',
   expose_host INTEGER NOT NULL DEFAULT 0,
+  device_id TEXT REFERENCES devices(id),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   revision INTEGER NOT NULL DEFAULT 0

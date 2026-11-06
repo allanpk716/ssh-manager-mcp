@@ -15,6 +15,16 @@ type Device struct {
 	UpdatedAt     time.Time
 }
 
+// DeviceServer 是设备详情里的服务器条目摘要，只携带 owner 需要识别入口
+// 与判断主机密钥锚状态的字段。
+type DeviceServer struct {
+	ID     string
+	Name   string
+	User   string
+	Port   int
+	Pinned bool
+}
+
 // NetworkMembership 是一台设备在某个网络里的身份及地址。地址可以是 IP 或
 // 域名，登记时不解析、不校验格式。
 type NetworkMembership struct {

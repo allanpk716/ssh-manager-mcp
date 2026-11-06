@@ -15,6 +15,7 @@ var (
 	ErrDeviceNotFound   = errors.New("设备不存在")
 	ErrDeviceNameExists = errors.New("设备名字已存在")
 	ErrClientNotFound   = errors.New("客户端实例不存在")
+	ErrDeviceHasServers = errors.New("设备还有关联的服务器条目")
 )
 
 // deviceQueryer 抽象数据库连接与事务都能执行的按行查询。
@@ -35,6 +36,29 @@ type DeviceFilter struct {
 	Site       string
 	Network    string
 	Unassigned bool
+}
+
+// ServerDeviceMove 描述一次服务器条目关联或移动的结果，供命令行输出。
+type ServerDeviceMove struct {
+	Server     *models.Server
+	FromDevice *models.Device
+	ToDevice   *models.Device
+	AnchorCopy *ServerAnchorCopy
+}
+
+// AddServerDeviceResult 描述 servers add 连同设备归属一起落库后的结果。
+type AddServerDeviceResult struct {
+	ServerID      string
+	Device        *models.Device
+	CreatedDevice bool
+	AnchorCopy    *ServerAnchorCopy
+}
+
+// ServerAnchorCopy 描述设备内兄弟条目锚复制的判定结果。
+type ServerAnchorCopy struct {
+	Copied         bool
+	FromServerName string
+	AnchorConflict bool
 }
 
 // AddDevice 登记一台设备。客户端实例按名字解析成设备码标识符；设备行与
@@ -148,6 +172,240 @@ func (s *Store) GetDevice(name string) (*models.Device, error) {
 	return deviceByNameTx(s.db, name)
 }
 
+// MoveServerToDevice 把服务器条目关联到目标设备；已有归属时就是移动。
+// 条目、目标设备与 owner 审计在同一个事务里提交。
+func (s *Store) MoveServerToDevice(serverIdentifier, deviceName string) (*ServerDeviceMove, error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	srv, err := serverByIdentifierTx(tx, serverIdentifier)
+	if err != nil {
+		return nil, err
+	}
+	target, err := deviceByNameTx(tx, deviceName)
+	if err != nil {
+		return nil, err
+	}
+	var from *models.Device
+	if srv.DeviceID != "" {
+		from, err = deviceByIDTx(tx, srv.DeviceID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE servers SET device_id=? WHERE id=?`, nullableString(target.ID), srv.ID); err != nil {
+		return nil, err
+	}
+	srv.DeviceID = target.ID
+	anchorCopy, err := s.copySiblingEntryPinTx(tx, srv)
+	if err != nil {
+		return nil, err
+	}
+	summary := map[string]any{"server": srv.Name, "to": target.Name}
+	if from != nil {
+		summary["from"] = from.Name
+	}
+	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.move-server", summary); err != nil {
+		return nil, err
+	}
+	return &ServerDeviceMove{
+		Server: srv, FromDevice: from, ToDevice: target, AnchorCopy: anchorCopy,
+	}, tx.Commit()
+}
+
+// AddServerWithCredentialsToDevice 新增服务器条目并处理它的设备归属：目标
+// 设备为空时自动生成同名设备（设备名冲突加数字后缀）；给出目标设备时关联
+// 已有设备。条目、凭据、设备与审计在同一个事务里提交。
+func (s *Store) AddServerWithCredentialsToDevice(
+	srv *models.Server, cred, sudo *models.Credential, deviceName string,
+) (*AddServerDeviceResult, error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
+	if err := validateServerText(srv); err != nil {
+		return nil, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	srv.CredentialID, srv.AuthMethod = "", ""
+	if cred != nil {
+		cid, err := insertCredentialTx(tx, s.masterKey, cred)
+		if err != nil {
+			return nil, err
+		}
+		srv.CredentialID, srv.AuthMethod = cid, cred.Type.AuthMethodForServer()
+	}
+	if sudo != nil {
+		sid, err := insertCredentialTx(tx, s.masterKey, sudo)
+		if err != nil {
+			return nil, err
+		}
+		srv.SudoCredentialID = sid
+	}
+
+	created := false
+	device := &models.Device{Name: strings.TrimSpace(deviceName)}
+	if device.Name == "" {
+		device.Name, err = availableDeviceNameTx(tx, srv.Name)
+		if err != nil {
+			return nil, err
+		}
+		created = true
+	} else {
+		device, err = deviceByNameTx(tx, device.Name)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if created {
+		device.ID = newID()
+		device.CreatedAt, device.UpdatedAt = time.Unix(now(), 0), time.Unix(now(), 0)
+		if _, err := tx.Exec(
+			`INSERT INTO devices(id,name,name_lower,note,client_token_id,client_name,created_at,updated_at)
+			 VALUES(?,?,?,?,?,?,?,?)`,
+			device.ID, device.Name, strings.ToLower(device.Name), device.Note,
+			nullableString(device.ClientTokenID), device.ClientName,
+			device.CreatedAt.Unix(), device.UpdatedAt.Unix(),
+		); err != nil {
+			return nil, err
+		}
+		if err := writeTopologyAuditTx(tx, s.nowTime(), "device.add", deviceAuditSummary(device)); err != nil {
+			return nil, err
+		}
+	}
+	srv.DeviceID = device.ID
+	id, err := insertServerTx(tx, srv)
+	if err != nil {
+		return nil, err
+	}
+	srv.ID = id
+	anchorCopy, err := s.copySiblingEntryPinTx(tx, srv)
+	if err != nil {
+		return nil, err
+	}
+	return &AddServerDeviceResult{
+		ServerID: id, Device: device, CreatedDevice: created, AnchorCopy: anchorCopy,
+	}, tx.Commit()
+}
+
+// copySiblingEntryPinTx 在同一个事务里判断并复制同设备、同端口兄弟条目
+// 的锚。目标条目已有锚、没有可复制锚、或多个兄弟锚互不一致时不覆盖。
+func (s *Store) copySiblingEntryPinTx(tx *sql.Tx, srv *models.Server) (*ServerAnchorCopy, error) {
+	existing, err := loadEntryPinMeta(tx, srv.ID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return &ServerAnchorCopy{}, nil
+	}
+	rows, err := tx.Query(`
+		SELECT pin.server_id,server.name,pin.key_blob,pin.pin_format,pin.pin_source,
+		       pin.pin_device,pin.handshake_addr,pin.created_at
+		FROM servers server
+		JOIN entry_host_keys pin ON pin.server_id=server.id
+		WHERE server.device_id=? AND server.port=? AND server.id<>?
+		ORDER BY server.name,server.id`, srv.DeviceID, srv.Port, srv.ID)
+	if err != nil {
+		return nil, err
+	}
+	type siblingPin struct {
+		name string
+		pin  PinMeta
+	}
+	var siblings []siblingPin
+	identities := make(map[string]struct{})
+	for rows.Next() {
+		var item siblingPin
+		if err := rows.Scan(&item.pin.ServerID, &item.name, &item.pin.Blob, &item.pin.Format,
+			&item.pin.Source, &item.pin.Device, &item.pin.HandshakeAddr, &item.pin.CreatedAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		siblings = append(siblings, item)
+		identities[entryPinIdentity(item.pin)] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(siblings) == 0 {
+		return &ServerAnchorCopy{}, nil
+	}
+	if len(identities) > 1 {
+		return &ServerAnchorCopy{AnchorConflict: true}, nil
+	}
+
+	source := siblings[0]
+	sourceText := "复制自条目 " + source.name
+	handshakeAddr := source.pin.HandshakeAddr
+	if handshakeAddr == "" {
+		handshakeAddr = EntryFallbackAddr(srv)
+	}
+	audit := AuditRow{
+		TS:       s.nowTime(),
+		ServerID: srv.ID,
+		Action:   "pin-forward",
+		Command: fmt.Sprintf("entry=%s host=%s fp=%s source=%s via=copy",
+			srv.Name, EntryFallbackAddr(srv), PinFingerprint(source.pin.Blob, source.pin.Format), sourceText),
+		Status: "ok",
+	}
+	inserted, err := insertEntryPinWithAuditTx(tx, srv.ID, handshakeAddr,
+		source.pin.Blob, source.pin.Format, sourceText, source.pin.Device, audit)
+	if err != nil {
+		return nil, err
+	}
+	return &ServerAnchorCopy{Copied: inserted, FromServerName: source.name}, nil
+}
+
+// entryPinIdentity 返回锚身份的唯一比较值。可解析的密钥字节用主机密钥
+// 指纹，指纹锚用原字符串；异常的密钥字节退化为原始字节，避免两个不同
+// 值都被占位文本遮住后被误判为一致。
+func entryPinIdentity(pin PinMeta) string {
+	if pin.Format == PinFormatFingerprint {
+		return string(pin.Blob)
+	}
+	if fingerprint := PinFingerprint(pin.Blob, pin.Format); fingerprint != "unparseable" {
+		return fingerprint
+	}
+	return fmt.Sprintf("raw:%x", pin.Blob)
+}
+
+// ListServersForDevice 返回一台设备关联的服务器条目摘要，按条目名字排序。
+func (s *Store) ListServersForDevice(deviceName string) ([]*models.DeviceServer, error) {
+	device, err := s.GetDevice(deviceName)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`
+		SELECT server.id,server.name,server.user,server.port,
+		       EXISTS(SELECT 1 FROM entry_host_keys pin WHERE pin.server_id=server.id)
+		FROM servers server
+		WHERE server.device_id=?
+		ORDER BY server.name,server.id`, device.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*models.DeviceServer, 0)
+	for rows.Next() {
+		var entry models.DeviceServer
+		if err := rows.Scan(&entry.ID, &entry.Name, &entry.User, &entry.Port, &entry.Pinned); err != nil {
+			return nil, err
+		}
+		out = append(out, &entry)
+	}
+	return out, rows.Err()
+}
+
 // DeleteDevice 删除还没有关联服务器条目的设备，并在同一个事务里删除它的
 // 全部网络成员。客户端实例关联保存在设备行上，设备删除后即解除。
 func (s *Store) DeleteDevice(name string) (*models.Device, []*models.NetworkMembership, error) {
@@ -162,6 +420,13 @@ func (s *Store) DeleteDevice(name string) (*models.Device, []*models.NetworkMemb
 	device, err := deviceByNameTx(tx, name)
 	if err != nil {
 		return nil, nil, err
+	}
+	serverNames, err := serverNamesForDeviceTx(tx, device.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(serverNames) > 0 {
+		return nil, nil, fmt.Errorf("%w：%s", ErrDeviceHasServers, strings.Join(serverNames, "、"))
 	}
 	memberships, err := networkMembershipsForDeviceTx(tx, device.ID)
 	if err != nil {
@@ -282,6 +547,43 @@ func deviceByNameTx(q deviceQueryer, name string) (*models.Device, error) {
 	return &device, nil
 }
 
+// deviceByIDTx 按内部标识符取设备，供服务器条目读取原设备时使用。
+func deviceByIDTx(q deviceQueryer, id string) (*models.Device, error) {
+	var device models.Device
+	var created, updated int64
+	err := q.QueryRow(`
+		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
+		FROM devices WHERE id=?`, id,
+	).Scan(&device.ID, &device.Name, &device.Note, &device.ClientTokenID, &device.ClientName, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w：%s", ErrDeviceNotFound, id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	device.CreatedAt, device.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
+	return &device, nil
+}
+
+// serverByIdentifierTx 先按内部标识符、再按名字解析服务器条目。
+func serverByIdentifierTx(tx *sql.Tx, identifier string) (*models.Server, error) {
+	srv, err := getServerTx(tx, identifier)
+	if err == nil {
+		return srv, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	row := tx.QueryRow(`
+		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
+		FROM servers WHERE name=?`, identifier)
+	srv, err = scanServer(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("服务器条目不存在：%s", identifier)
+	}
+	return srv, err
+}
+
 // ensureDeviceNameAvailableTx 检查设备名字在小写比较下的唯一性。
 func ensureDeviceNameAvailableTx(tx *sql.Tx, name, excludeID string) error {
 	var count int
@@ -294,6 +596,57 @@ func ensureDeviceNameAvailableTx(tx *sql.Tx, name, excludeID string) error {
 		return fmt.Errorf("%w：%s", ErrDeviceNameExists, name)
 	}
 	return nil
+}
+
+// availableDeviceNameTx 返回可用的设备名字；与服务器条目同名冲突时从
+// 「-2」开始追加数字后缀。
+func availableDeviceNameTx(tx *sql.Tx, base string) (string, error) {
+	if err := validateTopologyName("设备", base); err != nil {
+		return "", err
+	}
+	for number := 1; ; number++ {
+		name := base
+		if number > 1 {
+			name = fmt.Sprintf("%s-%d", base, number)
+		}
+		available, err := deviceNameAvailableTx(tx, name)
+		if err != nil {
+			return "", err
+		}
+		if available {
+			return name, nil
+		}
+	}
+}
+
+// deviceNameAvailableTx 只做小写名字唯一性查询，供自动命名循环复用。
+func deviceNameAvailableTx(tx *sql.Tx, name string) (bool, error) {
+	var count int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM devices WHERE name_lower=?`, strings.ToLower(name),
+	).Scan(&count); err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+// serverNamesForDeviceTx 返回仍关联某台设备的服务器条目名字，删除设备
+// 前用它保持本阶段的限制并给出完整名单。
+func serverNamesForDeviceTx(tx *sql.Tx, deviceID string) ([]string, error) {
+	rows, err := tx.Query(`SELECT name FROM servers WHERE device_id=? ORDER BY name,id`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	names := make([]string, 0)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
 }
 
 // activeClientTx 按设备码名字找仍可使用的客户端实例。

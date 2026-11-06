@@ -82,11 +82,13 @@ func (c CredentialType) AuthMethodForServer() AuthMethod {
 // the agent via list_servers (full-open, reversing Plan-8's owner-only rule — see
 // docs/superpowers/specs/2026-08-11-server-structured-metadata-design.md).
 type Server struct {
-	ID               string
-	Name             string
-	Host             string
-	Port             int
-	User             string
+	ID   string
+	Name string
+	Host string
+	Port int
+	User string
+	// DeviceID 是网络拓扑里这台机器的标识符；空值表示条目还没有归属设备。
+	DeviceID         string
 	AuthMethod       AuthMethod
 	CredentialID     string
 	SudoCredentialID string // empty if none

@@ -222,11 +222,24 @@ func (s *Store) InsertForwardedEntryPin(srv *models.Server, handshakeAddr string
 		return false, err
 	}
 	defer tx.Rollback()
+	inserted, err := insertEntryPinWithAuditTx(tx, srv.ID, handshakeAddr, blob,
+		PinFormatBlob, PinSourceForward, device, audit)
+	if err != nil || !inserted {
+		return inserted, err
+	}
+	return true, tx.Commit()
+}
+
+// insertEntryPinWithAuditTx 是“只新增不覆盖”的锚写入公共入口：插入成功才
+// 在同一事务写锚审计；条目已有锚时不写审计。设备转发与设备内锚复制共用。
+func insertEntryPinWithAuditTx(
+	tx *sql.Tx, serverID, handshakeAddr string, blob []byte, format, source, device string, audit AuditRow,
+) (bool, error) {
 	res, err := tx.Exec(
 		`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr)
 		 VALUES (?,?,?,?,?,?,?)
 		 ON CONFLICT(server_id) DO NOTHING`,
-		srv.ID, blob, now(), PinFormatBlob, PinSourceForward, device, handshakeAddr)
+		serverID, blob, now(), format, source, device, handshakeAddr)
 	if err != nil {
 		return false, err
 	}
@@ -235,19 +248,19 @@ func (s *Store) InsertForwardedEntryPin(srv *models.Server, handshakeAddr string
 		return false, err
 	}
 	if n == 0 {
-		existing, err := loadEntryPinMeta(tx, srv.ID)
+		existing, err := loadEntryPinMeta(tx, serverID)
 		if err != nil {
 			return false, err
 		}
 		if existing == nil {
-			return false, fmt.Errorf("entry pin for %s vanished inside the insert transaction", srv.ID)
+			return false, fmt.Errorf("entry pin for %s vanished inside the insert transaction", serverID)
 		}
 		return false, nil
 	}
 	if err := writeAuditTx(tx, audit); err != nil {
 		return false, err
 	}
-	return true, tx.Commit()
+	return true, nil
 }
 
 // ApplyForwardedEntryPin 在客户端只读缓存里记录权威端已接受的转发锚。这是

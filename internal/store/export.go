@@ -141,6 +141,9 @@ type SnapshotServer struct {
 	Role             string `json:"role"`
 	Caveats          string `json:"caveats"`
 	ExposeHost       bool   `json:"expose_host"`
+	// DeviceID 是服务器条目的所属设备引用，只进备份与导出的全量快照；
+	// 下发给客户端的裁剪快照不填写。
+	DeviceID string `json:"device_id,omitempty"`
 	// ShellType (命令策略 ticket #14) 是连接信息的一员,随两条导出路径
 	// 下发。旧快照(无字段)解码为零值,ImportSnapshot 归一为 posix——
 	// 与 Revision 的「缺字段无损导入」同一语义。
@@ -328,7 +331,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 
 	// servers (COALESCE the nullable text cols to '' — credential_id is nullable
 	// since Plan 20 C0: a credential-less server carries "" in the snapshot)
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers ORDER BY id`)
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,COALESCE(device_id,''),created_at,updated_at,revision FROM servers ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +339,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 		var sv SnapshotServer
 		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
 			&sv.CredentialID, &sv.SudoCredentialID, &sv.ShellType, &sv.TagsRaw, &sv.Description, &sv.Location,
-			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
+			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.DeviceID, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
 			rs.Close()
 			return nil, err
 		}
@@ -936,8 +939,8 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		// 即按默认 POSIX 处理)。与 host_keys pin 列的归一化同理:ADD COLUMN
 		// DEFAULT 只约束存量行,不管显式插入。
 		shellArg := string(models.NormalizeShellType(sv.ShellType))
-		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, shellArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, sv.CreatedAt, sv.UpdatedAt, sv.Revision); err != nil {
+		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,device_id,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, shellArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, nullIfEmpty(sv.DeviceID), sv.CreatedAt, sv.UpdatedAt, sv.Revision); err != nil {
 			return fmt.Errorf("insert server %s: %w", sv.ID, err)
 		}
 	}

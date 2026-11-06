@@ -45,7 +45,7 @@ func (s *Store) GetServer(id string) (*models.Server, error) {
 
 func (s *Store) GetServerByName(name string) (*models.Server, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers WHERE name=?`, name,
+		`SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers WHERE name=?`, name,
 	)
 	srv, err := scanServer(row)
 	if err == sql.ErrNoRows {
@@ -82,7 +82,7 @@ func (s *Store) ResolveGrantedServer(profileID, identifier string) (*models.Serv
 		return nil, nil
 	}
 	row := s.db.QueryRow(`
-		SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
+		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
 		FROM servers
 		WHERE id IN (SELECT server_id FROM profile_servers WHERE profile_id=?)
 		  AND (id=? OR name=?)
@@ -97,7 +97,7 @@ func (s *Store) ResolveGrantedServer(profileID, identifier string) (*models.Serv
 
 func (s *Store) ListServers() ([]*models.Server, error) {
 	rows, err := s.db.Query(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers ORDER BY name`)
+		`SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +152,7 @@ func scanServer(sc scanner) (*models.Server, error) {
 		createdAt        int64
 		updatedAt        int64
 	)
-	if err := sc.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.User, &authMethod, &credentialID, &sudoCredentialID, &shellType, &tagsJSON, &srv.Description, &srv.Location, &srv.Hardware, &srv.Services, &srv.Role, &srv.Caveats, &srv.ExposeHost, &createdAt, &updatedAt, &srv.Revision); err != nil {
+	if err := sc.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.User, &srv.DeviceID, &authMethod, &credentialID, &sudoCredentialID, &shellType, &tagsJSON, &srv.Description, &srv.Location, &srv.Hardware, &srv.Services, &srv.Role, &srv.Caveats, &srv.ExposeHost, &createdAt, &updatedAt, &srv.Revision); err != nil {
 		return nil, err
 	}
 	srv.AuthMethod = models.AuthMethod(authMethod)
