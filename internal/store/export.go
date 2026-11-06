@@ -21,8 +21,11 @@ type Snapshot struct {
 	SnapshotRevision int64 `json:"snapshot_revision"`
 	// RecommendedVersion 是导出这份快照的二进制版本。多机客户端用它比较
 	// 自己是否落后；旧快照与旧客户端分别解码、忽略该字段。
-	RecommendedVersion string               `json:"recommended_version"`
-	Credentials        []SnapshotCredential `json:"credentials"`
+	RecommendedVersion string `json:"recommended_version"`
+	// ProfileScoped 表示这是按客户端授权裁剪的快照。它永远不携带拓扑段，
+	// 也不代表一次旧的全量备份恢复；导入时不能因此触发设备迁移。
+	ProfileScoped bool                 `json:"profile_scoped,omitempty"`
+	Credentials   []SnapshotCredential `json:"credentials"`
 	// Sites / Networks（票 #123）是网络拓扑里的站点与网络，只进入备份与
 	// 导出的全量快照；下发给客户端的 profile 裁剪快照不填这些拓扑段。
 	Sites    []SnapshotSite    `json:"sites,omitempty"`
@@ -635,6 +638,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	}
 
 	snap := &Snapshot{Version: 1, SnapshotRevision: revision, RecommendedVersion: buildinfo.Version}
+	snap.ProfileScoped = true
 
 	// profile row
 	rp, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles WHERE id=?`, profileID)
@@ -1045,6 +1049,13 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 	if len(snap.EntryHostKeys) == 0 {
 		if err := migrateEntryPinsTx(tx); err != nil {
 			return fmt.Errorf("migrate legacy host keys: %w", err)
+		}
+	}
+	// 旧备份与旧导出没有设备段。导入后强制执行与升级相同的设备生成规则：
+	// 目标库虽然是新库且打开时已写完成标记，这次恢复的数据仍来自旧格式。
+	if !snap.ProfileScoped && len(snap.Devices) == 0 && len(snap.NetworkMemberships) == 0 {
+		if err := migrateServerDevicesTx(tx, s.nowTime(), true); err != nil {
+			return fmt.Errorf("migrate server devices: %w", err)
 		}
 	}
 

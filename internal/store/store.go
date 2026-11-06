@@ -154,6 +154,12 @@ func Open(path string, masterKey []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// 票 #126：旧库里的现有服务器条目一次性生成设备。它必须排在锚迁移
+	// 之后，合并规则要读取按服务器条目存放的主机密钥指纹。
+	if err := migrateServerDevices(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	// HardenACL ONLY on first creation (Plan 16 F1 fix, spec §5.2 xcheck codex
 	// P6). On an existing store.db the ACL was set at creation time by whoever
 	// first created it (interactive user or service account); re-running it

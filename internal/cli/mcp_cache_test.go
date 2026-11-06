@@ -73,7 +73,7 @@ func TestHydrateReadOnlyStore_TokenValidatesAndReadsWork(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snap, err := src.ExportSnapshot()
+	snap, err := src.ExportSnapshotForProfile(profID, false)
 	if err != nil {
 		t.Fatal(err)
 	}

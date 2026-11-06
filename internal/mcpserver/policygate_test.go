@@ -223,7 +223,7 @@ func TestExecBlockedAuditGoesOfflineSidecar(t *testing.T) {
 	})
 	pid, _ := st.AddProfile("p")
 	_ = st.GrantServers(pid, []string{srvID})
-	snap, err := st.ExportSnapshot()
+	snap, err := st.ExportSnapshotForProfile(pid, false)
 	if err != nil {
 		t.Fatalf("ExportSnapshot: %v", err)
 	}
