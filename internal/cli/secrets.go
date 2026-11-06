@@ -35,27 +35,16 @@ var errSecretsNeedVault = errors.New("本机还没有 vault：机密项随 vault
 // 判定链（vault 优先，其次看客户端缓存登记）。只返回权威端（或单机）与客
 // 户端两档；无 vault 无缓存的机器直接得到 errSecretsNeedVault。
 func secretsRoleFor(instance string) (policyRole, error) {
-	role, err := resolvePolicyRoleFor(instance)
-	if err != nil {
-		return 0, err
-	}
-	if role == policyRoleUnenrolled {
-		return 0, errSecretsNeedVault
-	}
-	return role, nil
+	return roleForVaultBackedCommand(instance, errSecretsNeedVault)
 }
 
 // requireSecretsVault 断言本机持有 vault（权威端或单机部署）并返回已解锁的
 // 存储。客户端上机密项是只读快照，写操作仍到权威端执行。
 func requireSecretsVault() (*store.Store, error) {
-	role, err := secretsRoleFor("")
-	if err != nil {
-		return nil, err
-	}
-	if role == policyRoleClient {
-		return nil, errors.New("本机是缓存客户端：机密项在权威端维护，客户端只能执行只读的 secrets list——请在权威端执行这条命令")
-	}
-	return openUnlockedStore()
+	return requireOwnerVaultForCommand(
+		errSecretsNeedVault,
+		errors.New("本机是缓存客户端：机密项在权威端维护，客户端只能执行只读的 secrets list——请在权威端执行这条命令"),
+	)
 }
 
 func newSecretsCmd() *cobra.Command {

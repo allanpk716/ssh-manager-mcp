@@ -180,7 +180,7 @@ func devicesMoveServerCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "move-server SERVER --to DEVICE",
 		Args:  cobra.ExactArgs(1),
-		Short: "把服务器条目关联或移动到设备",
+		Short: "Associate or move a server entry to a device",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := requireTopologyVault()
 			if err != nil {
@@ -331,7 +331,7 @@ func devicesAddCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&note, "note", "", "备注")
-	c.Flags().StringVar(&client, "client", "", "关联的客户端实例设备码")
+	c.Flags().StringVar(&client, "client", "", "关联的客户端实例设备码名字（不是设备码本体）")
 	return c
 }
 
@@ -375,7 +375,7 @@ func devicesEditCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&name, "name", "", "新名字")
 	c.Flags().StringVar(&note, "note", "", "新备注；传空字符串清空")
-	c.Flags().StringVar(&client, "client", "", "新的客户端实例设备码")
+	c.Flags().StringVar(&client, "client", "", "新的客户端实例设备码名字（不是设备码本体）")
 	c.Flags().BoolVar(&noClient, "no-client", false, "解除客户端实例关联")
 	return c
 }

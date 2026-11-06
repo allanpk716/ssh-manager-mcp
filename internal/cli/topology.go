@@ -27,27 +27,16 @@ var topologyStdinIsInteractive = func() bool {
 // topologyRoleFor 沿用机密项命令的角色判定链：vault 优先，其次看客户端
 // 缓存登记；两者都没有时给出初始化引导。
 func topologyRoleFor() (policyRole, error) {
-	role, err := resolvePolicyRoleFor("")
-	if err != nil {
-		return 0, err
-	}
-	if role == policyRoleUnenrolled {
-		return 0, errTopologyNeedVault
-	}
-	return role, nil
+	return roleForVaultBackedCommand("", errTopologyNeedVault)
 }
 
 // requireTopologyVault 断言本机持有 vault 并返回已解锁的存储。客户端上的
 // 拓扑写命令必须到权威端执行。
 func requireTopologyVault() (*store.Store, error) {
-	role, err := topologyRoleFor()
-	if err != nil {
-		return nil, err
-	}
-	if role == policyRoleClient {
-		return nil, errors.New("本机是缓存客户端：网络拓扑在权威端维护——请在权威端执行这条命令")
-	}
-	return openUnlockedStore()
+	return requireOwnerVaultForCommand(
+		errTopologyNeedVault,
+		errors.New("本机是缓存客户端：网络拓扑在权威端维护——请在权威端执行这条命令"),
+	)
 }
 
 func newSitesCmd() *cobra.Command {

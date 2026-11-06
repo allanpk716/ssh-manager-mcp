@@ -18,6 +18,7 @@ import (
 type dbtx interface {
 	Exec(query string, args ...any) (sql.Result, error)
 	QueryRow(query string, args ...any) *sql.Row
+	Query(query string, args ...any) (*sql.Rows, error)
 }
 
 // insertServerTx inserts a full server row on db (a *sql.Tx inside the

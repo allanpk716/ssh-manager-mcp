@@ -15,7 +15,6 @@ var (
 	ErrDeviceNotFound   = errors.New("设备不存在")
 	ErrDeviceNameExists = errors.New("设备名字已存在")
 	ErrClientNotFound   = errors.New("客户端实例不存在")
-	ErrDeviceHasServers = errors.New("设备还有关联的服务器条目")
 )
 
 // deviceQueryer 抽象数据库连接与事务都能执行的按行查询。
@@ -347,7 +346,8 @@ func (s *Store) copySiblingEntryPinTx(tx *sql.Tx, srv *models.Server) (*ServerAn
 			return nil, err
 		}
 		siblings = append(siblings, item)
-		identities[entryPinIdentity(item.pin)] = struct{}{}
+		invalidIdentity := fmt.Sprintf("raw:%x", item.pin.Blob)
+		identities[pinKeyIdentity(item.pin.Blob, item.pin.Format, invalidIdentity)] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -386,53 +386,13 @@ func (s *Store) copySiblingEntryPinTx(tx *sql.Tx, srv *models.Server) (*ServerAn
 	return &ServerAnchorCopy{Copied: inserted, FromServerName: source.name}, nil
 }
 
-// entryPinIdentity 返回锚身份的唯一比较值。可解析的密钥字节用主机密钥
-// 指纹，指纹锚用原字符串；异常的密钥字节退化为原始字节，避免两个不同
-// 值都被占位文本遮住后被误判为一致。
-func entryPinIdentity(pin PinMeta) string {
-	if pin.Format == PinFormatFingerprint {
-		return string(pin.Blob)
-	}
-	if fingerprint := PinFingerprint(pin.Blob, pin.Format); fingerprint != "unparseable" {
-		return fingerprint
-	}
-	return fmt.Sprintf("raw:%x", pin.Blob)
-}
-
 // ListServersForDevice 返回一台设备关联的服务器条目摘要，按条目名字排序。
 func (s *Store) ListServersForDevice(deviceName string) ([]*models.DeviceServer, error) {
 	device, err := s.GetDevice(deviceName)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(`
-		SELECT server.id,server.name,server.user,server.port,
-		       EXISTS(SELECT 1 FROM entry_host_keys pin WHERE pin.server_id=server.id)
-		FROM servers server
-		WHERE server.device_id=?
-		ORDER BY server.name,server.id`, device.ID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]*models.DeviceServer, 0)
-	for rows.Next() {
-		var entry models.DeviceServer
-		if err := rows.Scan(&entry.ID, &entry.Name, &entry.User, &entry.Port, &entry.Pinned); err != nil {
-			return nil, err
-		}
-		out = append(out, &entry)
-	}
-	return out, rows.Err()
-}
-
-// DeleteDevice 删除设备及其全部关联对象，保留旧调用方的返回形态。
-func (s *Store) DeleteDevice(name string) (*models.Device, []*models.NetworkMembership, error) {
-	preview, err := s.DeleteDeviceCascading(name, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	return preview.Device, preview.Memberships, nil
+	return deviceServersForDeviceTx(s.db, device.ID)
 }
 
 // ListDevices 按筛选条件返回设备。站点筛选由设备所在的物理局域网推出；
@@ -515,35 +475,41 @@ func (s *Store) ListDevices(filter DeviceFilter) ([]*models.Device, error) {
 
 // deviceByNameTx 按名字取设备；名字比较不区分大小写。
 func deviceByNameTx(q deviceQueryer, name string) (*models.Device, error) {
-	var device models.Device
-	var created, updated int64
 	name = strings.TrimSpace(name)
-	err := q.QueryRow(`
+	device, err := scanDevice(q.QueryRow(`
 		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
 		FROM devices WHERE name_lower=?`, strings.ToLower(name),
-	).Scan(&device.ID, &device.Name, &device.Note, &device.ClientTokenID, &device.ClientName, &created, &updated)
+	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w：%s", ErrDeviceNotFound, name)
 	}
 	if err != nil {
 		return nil, err
 	}
-	device.CreatedAt, device.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
-	return &device, nil
+	return device, nil
 }
 
 // deviceByIDTx 按内部标识符取设备，供服务器条目读取原设备时使用。
 func deviceByIDTx(q deviceQueryer, id string) (*models.Device, error) {
-	var device models.Device
-	var created, updated int64
-	err := q.QueryRow(`
+	device, err := scanDevice(q.QueryRow(`
 		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
 		FROM devices WHERE id=?`, id,
-	).Scan(&device.ID, &device.Name, &device.Note, &device.ClientTokenID, &device.ClientName, &created, &updated)
+	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w：%s", ErrDeviceNotFound, id)
 	}
 	if err != nil {
+		return nil, err
+	}
+	return device, nil
+}
+
+// scanDevice 把设备行扫描成对象；按名字与按内部标识符查询共用。
+func scanDevice(sc scanner) (*models.Device, error) {
+	var device models.Device
+	var created, updated int64
+	if err := sc.Scan(&device.ID, &device.Name, &device.Note, &device.ClientTokenID,
+		&device.ClientName, &created, &updated); err != nil {
 		return nil, err
 	}
 	device.CreatedAt, device.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
@@ -596,44 +562,14 @@ func availableDeviceNameTx(tx *sql.Tx, base string) (string, error) {
 		if number > 1 {
 			name = fmt.Sprintf("%s-%d", base, number)
 		}
-		available, err := deviceNameAvailableTx(tx, name)
-		if err != nil {
-			return "", err
-		}
-		if available {
+		err := ensureDeviceNameAvailableTx(tx, name, "")
+		if err == nil {
 			return name, nil
 		}
-	}
-}
-
-// deviceNameAvailableTx 只做小写名字唯一性查询，供自动命名循环复用。
-func deviceNameAvailableTx(tx *sql.Tx, name string) (bool, error) {
-	var count int
-	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM devices WHERE name_lower=?`, strings.ToLower(name),
-	).Scan(&count); err != nil {
-		return false, err
-	}
-	return count == 0, nil
-}
-
-// serverNamesForDeviceTx 返回仍关联某台设备的服务器条目名字，删除设备
-// 前用它保持本阶段的限制并给出完整名单。
-func serverNamesForDeviceTx(tx *sql.Tx, deviceID string) ([]string, error) {
-	rows, err := tx.Query(`SELECT name FROM servers WHERE device_id=? ORDER BY name,id`, deviceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	names := make([]string, 0)
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
+		if !errors.Is(err, ErrDeviceNameExists) {
+			return "", err
 		}
-		names = append(names, name)
 	}
-	return names, rows.Err()
 }
 
 // activeClientTx 按设备码名字找仍可使用的客户端实例。

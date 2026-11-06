@@ -136,13 +136,7 @@ func migrateServerDevicesTx(tx *sql.Tx, at time.Time, force bool) error {
 		deviceID := newID()
 		device := &models.Device{ID: deviceID, Name: name}
 		device.CreatedAt, device.UpdatedAt = time.Unix(now(), 0), time.Unix(now(), 0)
-		if _, err := tx.Exec(
-			`INSERT INTO devices(id,name,name_lower,note,client_token_id,client_name,created_at,updated_at)
-			 VALUES(?,?,?,?,?,?,?,?)`,
-			device.ID, device.Name, strings.ToLower(device.Name), device.Note,
-			nullableString(device.ClientTokenID), device.ClientName,
-			device.CreatedAt.Unix(), device.UpdatedAt.Unix(),
-		); err != nil {
+		if err := insertDeviceTx(tx, device); err != nil {
 			return err
 		}
 		serverNames := make([]string, 0, len(group.servers))

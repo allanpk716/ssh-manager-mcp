@@ -103,7 +103,7 @@ func deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePreview, error
 	if err != nil {
 		return nil, err
 	}
-	servers, err := deviceServersForDeleteTx(tx, device.ID)
+	servers, err := deviceServersForDeviceTx(tx, device.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -125,9 +125,10 @@ func deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePreview, error
 	}, nil
 }
 
-// deviceServersForDeleteTx 返回设备关联的服务器条目摘要及锚状态。
-func deviceServersForDeleteTx(tx *sql.Tx, deviceID string) ([]*models.DeviceServer, error) {
-	rows, err := tx.Query(`
+// deviceServersForDeviceTx 返回设备关联的服务器条目摘要及锚状态，详情与
+// 删除预览共用。
+func deviceServersForDeviceTx(q dbtx, deviceID string) ([]*models.DeviceServer, error) {
+	rows, err := q.Query(`
 		SELECT server.id,server.name,server.user,server.port,
 		       EXISTS(SELECT 1 FROM entry_host_keys pin WHERE pin.server_id=server.id)
 		FROM servers server WHERE server.device_id=? ORDER BY server.name,server.id`, deviceID)

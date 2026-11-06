@@ -542,12 +542,7 @@ func networkNamesForSiteTx(tx *sql.Tx, siteID string) ([]string, error) {
 
 // writeTopologyAuditTx 在拓扑写事务里写一条 owner 审计行。
 func writeTopologyAuditTx(tx *sql.Tx, at time.Time, action string, summary map[string]any) error {
-	return writeAuditTx(tx, AuditRow{
-		TS:      at,
-		Action:  action,
-		Command: MarshalAuditSummary(summary),
-		Status:  "ok",
-	})
+	return writeAuditTx(tx, OwnerAuditRowAt(at, action, summary))
 }
 
 // topologyEditSummary 生成「对象名 + 实际传入字段的新值」的审计摘要。

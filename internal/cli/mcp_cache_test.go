@@ -124,7 +124,7 @@ func TestHydrateReadOnlyStore_TokenValidatesAndReadsWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer hyd.Close()
-	if err := hyd.ImportSnapshot(loaded); err != nil {
+	if err := hyd.ImportSnapshotForClientCache(loaded); err != nil {
 		t.Fatalf("ImportSnapshot: %v", err)
 	}
 	auditPath := filepath.Join(binDir, "cache-audit.log")
@@ -277,8 +277,8 @@ func TestScopedPull_HydratesAndIronRuleHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer hyd.Close()
-	if err := hyd.ImportSnapshot(loaded); err != nil {
-		t.Fatalf("ImportSnapshot(scoped): %v", err)
+	if err := hyd.ImportSnapshotForClientCache(loaded); err != nil {
+		t.Fatalf("ImportSnapshotForClientCache(scoped): %v", err)
 	}
 	af, err := os.OpenFile(filepath.Join(binDir, "cache-audit.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
