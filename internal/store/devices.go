@@ -67,6 +67,7 @@ func (s *Store) AddDevice(name, note, client string) (*models.Device, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
+	name = strings.TrimSpace(name)
 	if err := validateTopologyName("设备", name); err != nil {
 		return nil, err
 	}
@@ -120,6 +121,7 @@ func (s *Store) EditDevice(name string, changes DeviceChanges) (*models.Device, 
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
+	name = strings.TrimSpace(name)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -131,13 +133,14 @@ func (s *Store) EditDevice(name string, changes DeviceChanges) (*models.Device, 
 	}
 	editChanges := make(map[string]any)
 	if changes.Name != nil {
-		if err := validateTopologyName("设备", *changes.Name); err != nil {
+		newName := strings.TrimSpace(*changes.Name)
+		if err := validateTopologyName("设备", newName); err != nil {
 			return nil, err
 		}
-		if err := ensureDeviceNameAvailableTx(tx, *changes.Name, device.ID); err != nil {
+		if err := ensureDeviceNameAvailableTx(tx, newName, device.ID); err != nil {
 			return nil, err
 		}
-		device.Name = *changes.Name
+		device.Name = newName
 		editChanges["name"] = device.Name
 	}
 	if changes.Note != nil {
@@ -189,7 +192,7 @@ func (s *Store) MoveServerToDevice(serverIdentifier, deviceName string) (*Server
 		return nil, err
 	}
 	defer tx.Rollback()
-	srv, err := serverByIdentifierTx(tx, serverIdentifier)
+	srv, err := serverByIdentifierTx(tx, strings.TrimSpace(serverIdentifier))
 	if err != nil {
 		return nil, err
 	}
@@ -514,6 +517,7 @@ func (s *Store) ListDevices(filter DeviceFilter) ([]*models.Device, error) {
 func deviceByNameTx(q deviceQueryer, name string) (*models.Device, error) {
 	var device models.Device
 	var created, updated int64
+	name = strings.TrimSpace(name)
 	err := q.QueryRow(`
 		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
 		FROM devices WHERE name_lower=?`, strings.ToLower(name),
@@ -568,6 +572,7 @@ func serverByIdentifierTx(tx *sql.Tx, identifier string) (*models.Server, error)
 // ensureDeviceNameAvailableTx 检查设备名字在小写比较下的唯一性。
 func ensureDeviceNameAvailableTx(tx *sql.Tx, name, excludeID string) error {
 	var count int
+	name = strings.TrimSpace(name)
 	if err := tx.QueryRow(
 		`SELECT COUNT(*) FROM devices WHERE name_lower=? AND id<>?`, strings.ToLower(name), excludeID,
 	).Scan(&count); err != nil {
@@ -582,6 +587,7 @@ func ensureDeviceNameAvailableTx(tx *sql.Tx, name, excludeID string) error {
 // availableDeviceNameTx 返回可用的设备名字；与服务器条目同名冲突时从
 // 「-2」开始追加数字后缀。
 func availableDeviceNameTx(tx *sql.Tx, base string) (string, error) {
+	base = strings.TrimSpace(base)
 	if err := validateTopologyName("设备", base); err != nil {
 		return "", err
 	}

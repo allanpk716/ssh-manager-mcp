@@ -56,6 +56,7 @@ func (s *Store) AddSite(name, note string) (*models.Site, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
+	name = strings.TrimSpace(name)
 	if err := validateTopologyName("站点", name); err != nil {
 		return nil, err
 	}
@@ -98,6 +99,7 @@ func (s *Store) EditSite(name string, changes SiteChanges) (*models.Site, error)
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
+	name = strings.TrimSpace(name)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -108,13 +110,14 @@ func (s *Store) EditSite(name string, changes SiteChanges) (*models.Site, error)
 		return nil, err
 	}
 	if changes.Name != nil {
-		if err := validateTopologyName("站点", *changes.Name); err != nil {
+		newName := strings.TrimSpace(*changes.Name)
+		if err := validateTopologyName("站点", newName); err != nil {
 			return nil, err
 		}
-		if err := ensureSiteNameAvailableTx(tx, *changes.Name, site.ID); err != nil {
+		if err := ensureSiteNameAvailableTx(tx, newName, site.ID); err != nil {
 			return nil, err
 		}
-		site.Name = *changes.Name
+		site.Name = newName
 	}
 	if changes.Note != nil {
 		site.Note = strings.TrimSpace(*changes.Note)
@@ -145,6 +148,8 @@ func (s *Store) AddNetwork(input models.Network) (*models.Network, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.SiteName = strings.TrimSpace(input.SiteName)
 	if _, err := models.ParseNetworkType(string(input.Type)); err != nil {
 		return nil, err
 	}
@@ -201,6 +206,7 @@ func (s *Store) EditNetwork(name string, changes NetworkChanges) (*models.Networ
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
+	name = strings.TrimSpace(name)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -212,17 +218,18 @@ func (s *Store) EditNetwork(name string, changes NetworkChanges) (*models.Networ
 	}
 	editChanges := make(map[string]any)
 	if changes.Name != nil {
-		if err := validateTopologyName("网络", *changes.Name); err != nil {
+		newName := strings.TrimSpace(*changes.Name)
+		if err := validateTopologyName("网络", newName); err != nil {
 			return nil, err
 		}
-		if err := ensureNetworkNameAvailableTx(tx, *changes.Name, network.ID); err != nil {
+		if err := ensureNetworkNameAvailableTx(tx, newName, network.ID); err != nil {
 			return nil, err
 		}
-		network.Name = *changes.Name
+		network.Name = newName
 		editChanges["name"] = network.Name
 	}
 	if changes.Site != nil {
-		siteID, siteName, err := networkSiteForTypeTx(tx, network.Type, *changes.Site)
+		siteID, siteName, err := networkSiteForTypeTx(tx, network.Type, strings.TrimSpace(*changes.Site))
 		if err != nil {
 			return nil, err
 		}
@@ -336,8 +343,8 @@ func (s *Store) ListNetworks(filter NetworkFilter) ([]*models.Network, error) {
 	var conditions []string
 	var arguments []any
 	if filter.Site != "" {
-		conditions = append(conditions, "site.name=?")
-		arguments = append(arguments, filter.Site)
+		conditions = append(conditions, "lower(site.name)=lower(?)")
+		arguments = append(arguments, strings.TrimSpace(filter.Site))
 	}
 	if filter.Type != "" {
 		conditions = append(conditions, "net.type=?")
@@ -417,6 +424,7 @@ func (s *Store) ListSites() ([]*models.Site, error) {
 // 为空时检查全表，编辑时传当前站点标识符排除自己。
 func ensureSiteNameAvailableTx(tx *sql.Tx, name, excludeID string) error {
 	var count int
+	name = strings.TrimSpace(name)
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM sites WHERE name_lower=? AND id<>?`, strings.ToLower(name), excludeID).Scan(&count); err != nil {
 		return err
 	}
@@ -430,7 +438,8 @@ func ensureSiteNameAvailableTx(tx *sql.Tx, name, excludeID string) error {
 func siteByNameTx(tx *sql.Tx, name string) (*models.Site, error) {
 	var site models.Site
 	var created, updated int64
-	err := tx.QueryRow(`SELECT id,name,note,created_at,updated_at FROM sites WHERE name=?`, name).
+	name = strings.TrimSpace(name)
+	err := tx.QueryRow(`SELECT id,name,note,created_at,updated_at FROM sites WHERE name_lower=?`, strings.ToLower(name)).
 		Scan(&site.ID, &site.Name, &site.Note, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w：%s", ErrSiteNotFound, name)
@@ -468,6 +477,7 @@ func networkSiteForTypeTx(tx *sql.Tx, networkType models.NetworkType, siteName s
 // ensureNetworkNameAvailableTx 检查网络名字在小写比较下的唯一性。
 func ensureNetworkNameAvailableTx(tx *sql.Tx, name, excludeID string) error {
 	var count int
+	name = strings.TrimSpace(name)
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM networks WHERE name_lower=? AND id<>?`, strings.ToLower(name), excludeID).Scan(&count); err != nil {
 		return err
 	}
@@ -479,11 +489,12 @@ func ensureNetworkNameAvailableTx(tx *sql.Tx, name, excludeID string) error {
 
 // networkByNameTx 按名字取网络，并带出站点名字供命令行输出。
 func networkByNameTx(tx *sql.Tx, name string) (*models.Network, error) {
+	name = strings.TrimSpace(name)
 	row := tx.QueryRow(`
 		SELECT net.id,net.name,net.type,COALESCE(net.site_id,''),COALESCE(site.name,''),net.note,net.cidr,
 		       net.bandwidth_mbps,net.metered,net.created_at,net.updated_at
 		FROM networks net LEFT JOIN sites site ON site.id=net.site_id
-		WHERE net.name=?`, name)
+		WHERE net.name_lower=?`, strings.ToLower(name))
 	network, err := scanNetwork(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w：%s", ErrNetworkNotFound, name)

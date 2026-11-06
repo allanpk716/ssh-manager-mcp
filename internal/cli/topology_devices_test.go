@@ -592,6 +592,45 @@ func TestDevicesListShowsUnassignedSection(t *testing.T) {
 	}
 }
 
+func TestTopologyNamesTrimSurroundingWhitespace(t *testing.T) {
+	withCliStoreEnv(t)
+
+	out := runCli(t, "sites", "add", " 家A ")
+	if !strings.Contains(out, "已登记站点 家A\n") {
+		t.Fatalf("site registration must trim the stored name:\n%s", out)
+	}
+	out = runCli(t, "networks", "add", " 家A局域网 ", "--type", "physical", "--site", " 家A ")
+	if !strings.Contains(out, "已登记网络 家A局域网") {
+		t.Fatalf("network registration must trim its name and look up the site after trimming:\n%s", out)
+	}
+	out = runCli(t, "devices", "add", " 工作站 ")
+	if !strings.Contains(out, "已登记设备 工作站\n") {
+		t.Fatalf("device registration must trim the stored name:\n%s", out)
+	}
+
+	out = runCli(t, "sites", "edit", " 家A ", "--name", " 家B ")
+	if !strings.Contains(out, "新名字 家B") {
+		t.Fatalf("site rename must trim lookup and new names:\n%s", out)
+	}
+	out = runCli(t, "networks", "edit", " 家A局域网 ", "--name", " 家B局域网 ", "--site", " 家B ")
+	if !strings.Contains(out, "新名字 家B局域网") {
+		t.Fatalf("network rename must trim lookup and new names:\n%s", out)
+	}
+	out = runCli(t, "devices", "edit", " 工作站 ", "--name", " 新工作站 ")
+	if !strings.Contains(out, "新名字 新工作站") {
+		t.Fatalf("device rename must trim lookup and new names:\n%s", out)
+	}
+
+	out = runCli(t, "networks", "list", "--site", " 家B ")
+	if !strings.Contains(out, "网络 家B局域网") || strings.Contains(out, "网络  ") {
+		t.Fatalf("network lookup and output must use trimmed names:\n%s", out)
+	}
+	out = runCli(t, "devices", "show", " 新工作站 ")
+	if !strings.Contains(out, "设备 新工作站\n") {
+		t.Fatalf("device lookup and output must use trimmed names:\n%s", out)
+	}
+}
+
 // TestDevicesRemoveCleansCurrentRelations 覆盖设备删除确认、删除网络成员、
 // 解除客户端实例关联；本票设备还不能关联服务器条目。
 func TestDevicesRemoveCleansCurrentRelations(t *testing.T) {
