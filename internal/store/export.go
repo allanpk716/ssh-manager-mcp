@@ -23,11 +23,20 @@ type Snapshot struct {
 	// 自己是否落后；旧快照与旧客户端分别解码、忽略该字段。
 	RecommendedVersion string               `json:"recommended_version"`
 	Credentials        []SnapshotCredential `json:"credentials"`
-	Servers            []SnapshotServer     `json:"servers"`
-	Profiles           []SnapshotProfile    `json:"profiles"`
-	Grants             []SnapshotGrant      `json:"grants"`
-	Projects           []SnapshotProject    `json:"projects"`
-	HostKeys           []SnapshotHostKey    `json:"host_keys"`
+	// Sites / Networks（票 #123）是网络拓扑里的站点与网络，只进入备份与
+	// 导出的全量快照；下发给客户端的 profile 裁剪快照不填这些拓扑段。
+	Sites    []SnapshotSite    `json:"sites,omitempty"`
+	Networks []SnapshotNetwork `json:"networks,omitempty"`
+	// Devices / NetworkMemberships（票 #124）是网络拓扑里的设备与设备在
+	// 各网络里的地址，同样只进入备份与导出的全量快照。
+	Devices                 []SnapshotDevice                 `json:"devices,omitempty"`
+	NetworkMemberships      []SnapshotNetworkMembership      `json:"network_memberships,omitempty"`
+	DeviceLayoutCoordinates []SnapshotDeviceLayoutCoordinate `json:"device_layout_coordinates,omitempty"`
+	Servers                 []SnapshotServer                 `json:"servers"`
+	Profiles                []SnapshotProfile                `json:"profiles"`
+	Grants                  []SnapshotGrant                  `json:"grants"`
+	Projects                []SnapshotProject                `json:"projects"`
+	HostKeys                []SnapshotHostKey                `json:"host_keys"`
 	// EntryHostKeys（票 #58）是按服务器条目存放的锚；HostKeys 仍为兜底地址
 	// 推导出的旧格式行，旧客户端靠它继续校验。旧快照解码时本字段为空。
 	EntryHostKeys []SnapshotEntryHostKey `json:"entry_host_keys,omitempty"`
@@ -71,6 +80,51 @@ type SnapshotCredential struct {
 	UpdatedAt  int64  `json:"updated_at"`
 }
 
+// SnapshotSite 是全量快照里的站点段。
+type SnapshotSite struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Note      string `json:"note"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+// SnapshotNetwork 是网络拓扑这次新增的全量快照网络段。CIDR 是快照 JSON
+// 字段名，语义是「网段，只给人看」。
+type SnapshotNetwork struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	SiteID        string `json:"site_id"`
+	Note          string `json:"note"`
+	CIDR          string `json:"cidr"`
+	BandwidthMbps int64  `json:"bandwidth_mbps"`
+	Metered       bool   `json:"metered"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
+}
+
+// SnapshotDevice 是全量快照里的设备段。客户端实例凭据不随快照携带，
+// 标识符与名字成对保存，导入后关联信息不丢。
+type SnapshotDevice struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Note          string `json:"note"`
+	ClientTokenID string `json:"client_token_id"`
+	ClientName    string `json:"client_name"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
+}
+
+// SnapshotNetworkMembership 是全量快照里的网络成员段。
+type SnapshotNetworkMembership struct {
+	DeviceID  string `json:"device_id"`
+	NetworkID string `json:"network_id"`
+	Address   string `json:"address"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
 type SnapshotServer struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
@@ -88,6 +142,9 @@ type SnapshotServer struct {
 	Role             string `json:"role"`
 	Caveats          string `json:"caveats"`
 	ExposeHost       bool   `json:"expose_host"`
+	// DeviceID 是服务器条目的所属设备引用，只进备份与导出的全量快照；
+	// 下发给客户端的裁剪快照不填写。
+	DeviceID string `json:"device_id,omitempty"`
 	// ShellType (命令策略 ticket #14) 是连接信息的一员,随两条导出路径
 	// 下发。旧快照(无字段)解码为零值,ImportSnapshot 归一为 posix——
 	// 与 Revision 的「缺字段无损导入」同一语义。
@@ -275,7 +332,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 
 	// servers (COALESCE the nullable text cols to '' — credential_id is nullable
 	// since Plan 20 C0: a credential-less server carries "" in the snapshot)
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers ORDER BY id`)
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,COALESCE(device_id,''),created_at,updated_at,revision FROM servers ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +340,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 		var sv SnapshotServer
 		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
 			&sv.CredentialID, &sv.SudoCredentialID, &sv.ShellType, &sv.TagsRaw, &sv.Description, &sv.Location,
-			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
+			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.DeviceID, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
 			rs.Close()
 			return nil, err
 		}
@@ -324,6 +381,90 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 	rc.Close()
 	if err := rc.Err(); err != nil {
+		return nil, err
+	}
+
+	// 网络拓扑（票 #123）：站点先导出，网络段携带站点标识符；导入时按
+	// 同一依赖顺序写回。
+	rts, err := s.db.Query(`SELECT id,name,note,created_at,updated_at FROM sites ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	for rts.Next() {
+		var site SnapshotSite
+		if err := rts.Scan(&site.ID, &site.Name, &site.Note, &site.CreatedAt, &site.UpdatedAt); err != nil {
+			rts.Close()
+			return nil, err
+		}
+		snap.Sites = append(snap.Sites, site)
+	}
+	rts.Close()
+	if err := rts.Err(); err != nil {
+		return nil, err
+	}
+
+	rn, err := s.db.Query(`
+		SELECT id,name,type,COALESCE(site_id,''),note,cidr,bandwidth_mbps,metered,created_at,updated_at
+		FROM networks ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	for rn.Next() {
+		var network SnapshotNetwork
+		if err := rn.Scan(&network.ID, &network.Name, &network.Type, &network.SiteID,
+			&network.Note, &network.CIDR, &network.BandwidthMbps, &network.Metered,
+			&network.CreatedAt, &network.UpdatedAt); err != nil {
+			rn.Close()
+			return nil, err
+		}
+		snap.Networks = append(snap.Networks, network)
+	}
+	rn.Close()
+	if err := rn.Err(); err != nil {
+		return nil, err
+	}
+
+	rd, err := s.db.Query(`
+		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
+		FROM devices ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	for rd.Next() {
+		var device SnapshotDevice
+		if err := rd.Scan(&device.ID, &device.Name, &device.Note, &device.ClientTokenID,
+			&device.ClientName, &device.CreatedAt, &device.UpdatedAt); err != nil {
+			rd.Close()
+			return nil, err
+		}
+		snap.Devices = append(snap.Devices, device)
+	}
+	rd.Close()
+	if err := rd.Err(); err != nil {
+		return nil, err
+	}
+
+	rm, err := s.db.Query(`
+		SELECT device_id,network_id,address,created_at,updated_at
+		FROM network_memberships ORDER BY device_id,network_id`)
+	if err != nil {
+		return nil, err
+	}
+	for rm.Next() {
+		var membership SnapshotNetworkMembership
+		if err := rm.Scan(&membership.DeviceID, &membership.NetworkID, &membership.Address,
+			&membership.CreatedAt, &membership.UpdatedAt); err != nil {
+			rm.Close()
+			return nil, err
+		}
+		snap.NetworkMemberships = append(snap.NetworkMemberships, membership)
+	}
+	rm.Close()
+	if err := rm.Err(); err != nil {
+		return nil, err
+	}
+	snap.DeviceLayoutCoordinates, err = s.snapshotDeviceLayoutCoordinates()
+	if err != nil {
 		return nil, err
 	}
 
@@ -696,25 +837,58 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 }
 
 // ErrVaultNotEmpty is returned by ImportSnapshot when the target store already
-// has servers. Import is restore-into-empty only — no silent clobber. Delete
+// has servers or topology rows. Import is restore-into-empty only — no silent clobber. Delete
 // store.db (or point SSHMGR_STORE at a fresh path) to get an empty vault.
 var ErrVaultNotEmpty = errors.New("vault is not empty; import into a fresh/empty store (move/delete store.db first)")
 
-// ImportSnapshot restores a Snapshot into THIS store in one transaction:
+// ImportSnapshot restores an owner-side full backup or export into THIS store in
+// one transaction:
 //   - credentials are RE-SEALED under this store's master key (master-key-independent file);
 //   - rows are inserted id-preserving in FK order (credentials -> servers -> profiles -> profile_servers -> projects -> host_keys -> audit);
 //   - projects.token_hash/salt/prefix are written verbatim so the original plaintext token keeps validating.
 //
-// Refuses a non-empty target (any row in servers) with ErrVaultNotEmpty.
+// Refuses a non-empty target (any row in servers, sites, networks, devices,
+// network memberships, or layout coordinates) with ErrVaultNotEmpty. 旧备份
+// 或旧导出没有拓扑段时，这个 owner 导入入口执行与升级相同的设备生成迁移。
 func (s *Store) ImportSnapshot(snap *Snapshot) error {
+	return s.importSnapshot(snap, true)
+}
+
+// ImportSnapshotForClientCache restores a profile-scoped snapshot delivered by
+// the authoritative machine into a fresh client cache. 这一版拓扑不随快照下
+// 发；本入口还会丢弃快照里可能出现的拓扑段和服务器条目的所属设备引用，
+// 并且永不执行设备生成迁移，保证客户端缓存不落拓扑数据与迁移审计。
+func (s *Store) ImportSnapshotForClientCache(snap *Snapshot) error {
+	clientSnap := *snap
+	clientSnap.Sites = nil
+	clientSnap.Networks = nil
+	clientSnap.Devices = nil
+	clientSnap.NetworkMemberships = nil
+	clientSnap.DeviceLayoutCoordinates = nil
+	clientSnap.Servers = append([]SnapshotServer(nil), snap.Servers...)
+	for i := range clientSnap.Servers {
+		clientSnap.Servers[i].DeviceID = ""
+	}
+	return s.importSnapshot(&clientSnap, false)
+}
+
+func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM servers`).Scan(&n); err != nil {
+	var existingRows int
+	if err := s.db.QueryRow(`
+		SELECT
+		  (SELECT COUNT(*) FROM servers) +
+		  (SELECT COUNT(*) FROM sites) +
+		  (SELECT COUNT(*) FROM networks) +
+		  (SELECT COUNT(*) FROM devices) +
+		  (SELECT COUNT(*) FROM network_memberships) +
+		  (SELECT COUNT(*) FROM device_layout_coordinates)
+	`).Scan(&existingRows); err != nil {
 		return err
 	}
-	if n > 0 {
+	if existingRows > 0 {
 		return ErrVaultNotEmpty
 	}
 
@@ -726,6 +900,51 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 
 	var currentRevision int64
 	if err = tx.QueryRow(`SELECT revision FROM snapshot_revision WHERE id=1`).Scan(&currentRevision); err != nil {
+		return err
+	}
+
+	// 0. 网络拓扑（票 #123）：站点先写回，网络随后按站点标识符恢复。
+	// 旧快照没有这两段时循环体不执行，导入后仍是零行。
+	for _, site := range snap.Sites {
+		if _, err := tx.Exec(
+			`INSERT INTO sites(id,name,name_lower,note,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
+			site.ID, site.Name, strings.ToLower(site.Name), site.Note, site.CreatedAt, site.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("insert site %s: %w", site.ID, err)
+		}
+	}
+	for _, network := range snap.Networks {
+		if _, err := tx.Exec(`
+			INSERT INTO networks(id,name,name_lower,type,site_id,note,cidr,bandwidth_mbps,metered,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			network.ID, network.Name, strings.ToLower(network.Name), network.Type,
+			nullIfEmpty(network.SiteID), network.Note, network.CIDR, network.BandwidthMbps,
+			network.Metered, network.CreatedAt, network.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("insert network %s: %w", network.ID, err)
+		}
+	}
+	for _, device := range snap.Devices {
+		if _, err := tx.Exec(`
+			INSERT INTO devices(id,name,name_lower,note,client_token_id,client_name,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?)`,
+			device.ID, device.Name, strings.ToLower(device.Name), device.Note,
+			nullIfEmpty(device.ClientTokenID), device.ClientName, device.CreatedAt, device.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("insert device %s: %w", device.ID, err)
+		}
+	}
+	for _, membership := range snap.NetworkMemberships {
+		if _, err := tx.Exec(`
+			INSERT INTO network_memberships(device_id,network_id,address,address_lower,created_at,updated_at)
+			VALUES(?,?,?,?,?,?)`,
+			membership.DeviceID, membership.NetworkID, membership.Address,
+			strings.ToLower(membership.Address), membership.CreatedAt, membership.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("insert network membership %s/%s: %w", membership.DeviceID, membership.NetworkID, err)
+		}
+	}
+	if err := importDeviceLayoutCoordinatesTx(tx, snap.DeviceLayoutCoordinates); err != nil {
 		return err
 	}
 
@@ -761,8 +980,8 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 		// 即按默认 POSIX 处理)。与 host_keys pin 列的归一化同理:ADD COLUMN
 		// DEFAULT 只约束存量行,不管显式插入。
 		shellArg := string(models.NormalizeShellType(sv.ShellType))
-		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, shellArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, sv.CreatedAt, sv.UpdatedAt, sv.Revision); err != nil {
+		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,device_id,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, shellArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, nullIfEmpty(sv.DeviceID), sv.CreatedAt, sv.UpdatedAt, sv.Revision); err != nil {
 			return fmt.Errorf("insert server %s: %w", sv.ID, err)
 		}
 	}
@@ -867,6 +1086,14 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 	if len(snap.EntryHostKeys) == 0 {
 		if err := migrateEntryPinsTx(tx); err != nil {
 			return fmt.Errorf("migrate legacy host keys: %w", err)
+		}
+	}
+	// 旧备份与旧导出没有设备段。owner 导入后强制执行与升级相同的设备生成
+	// 规则：目标库虽然是新库且打开时已写完成标记，这次恢复的数据仍来自旧
+	// 格式；客户端缓存导入显式关闭这条迁移。
+	if generateMissingDevices && len(snap.Devices) == 0 && len(snap.NetworkMemberships) == 0 {
+		if err := migrateServerDevicesTx(tx, s.nowTime(), true); err != nil {
+			return fmt.Errorf("migrate server devices: %w", err)
 		}
 	}
 

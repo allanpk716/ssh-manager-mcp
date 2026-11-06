@@ -179,8 +179,9 @@ func TestImportSnapshot_OldShapeAppliesEntryMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 2 || history[0].Action != "pin-migrate" || history[1].Command != "history-before-migration" {
-		t.Fatalf("导入顺序应先恢复历史审计再写迁移审计：%+v", history)
+	if len(history) != 3 || history[0].Action != "device.migrate" ||
+		history[1].Action != "pin-migrate" || history[2].Command != "history-before-migration" {
+		t.Fatalf("导入顺序应先恢复历史审计，再写锚迁移与设备迁移审计：%+v", history)
 	}
 	var legacy int
 	if err := b.db.QueryRow(`SELECT COUNT(*) FROM host_keys`).Scan(&legacy); err != nil {

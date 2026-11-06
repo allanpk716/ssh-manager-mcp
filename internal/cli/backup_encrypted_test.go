@@ -458,13 +458,25 @@ func TestBackupEncrypted_RoundTrip_ImportEquivalent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetCredential 2: %v", err)
 	}
-	srv1, err := stA.AddServer(&models.Server{Name: "gpu", Host: "192.0.2.10", User: "deploy", AuthMethod: models.AuthPassword, CredentialID: cid1})
+	gpuDevice, err := stA.AddDevice("gpu", "", "")
+	if err != nil {
+		t.Fatalf("AddDevice gpu: %v", err)
+	}
+	nasDevice, err := stA.AddDevice("nas", "", "")
+	if err != nil {
+		t.Fatalf("AddDevice nas: %v", err)
+	}
+	srv1, err := stA.AddServer(&models.Server{
+		Name: "gpu", Host: "192.0.2.10", User: "deploy", AuthMethod: models.AuthPassword,
+		CredentialID: cid1, DeviceID: gpuDevice.ID,
+	})
 	if err != nil {
 		t.Fatalf("AddServer 1: %v", err)
 	}
 	if _, err := stA.AddServer(&models.Server{
 		Name: "nas", Host: "192.0.2.20", User: "backup", AuthMethod: models.AuthPrivateKey,
 		CredentialID: cid2, SudoCredentialID: cid1, Description: "box", ExposeHost: true,
+		DeviceID: nasDevice.ID,
 	}); err != nil {
 		t.Fatalf("AddServer 2: %v", err)
 	}

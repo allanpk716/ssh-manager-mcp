@@ -62,6 +62,46 @@ func newHolder(t *testing.T, snap *store.Snapshot, token, profileID string,
 	return h
 }
 
+func TestHydrateCacheStoreDoesNotGenerateDevices(t *testing.T) {
+	snap, token, profileID := seedSnap(t, 1)
+	snap.Devices = nil
+	snap.NetworkMemberships = nil
+	snap.DeviceLayoutCoordinates = nil
+	for i := range snap.Servers {
+		snap.Servers[i].DeviceID = ""
+	}
+	af, err := os.OpenFile(filepath.Join(t.TempDir(), "audit.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer af.Close()
+
+	hydrated, _, tmpPath, err := hydrateCacheStore(token, snap, af, "")
+	if err != nil {
+		t.Fatalf("hydrateCacheStore: %v", err)
+	}
+	defer hydrated.Close()
+	defer os.Remove(tmpPath)
+
+	devices, err := hydrated.ListDevices(store.DeviceFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("client cache import must not write topology devices, got: %+v", devices)
+	}
+	migrations, err := hydrated.QueryAudit(store.AuditFilter{Actions: []string{"device.migrate"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) != 0 {
+		t.Fatalf("client cache import must not write device migration audits, got: %+v", migrations)
+	}
+	if profileID == "" {
+		t.Fatal("test fixture lost the profile identifier")
+	}
+}
+
 // graftExtraServer builds a copy of snap1 carrying one extra server (grafted from
 // snap2) granted to the same profile — a genuine SAME-profile change for the
 // holder to hot-reload onto. snap2 must come from seedSnap with a LARGER n.

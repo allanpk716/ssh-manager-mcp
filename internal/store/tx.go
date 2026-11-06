@@ -18,6 +18,7 @@ import (
 type dbtx interface {
 	Exec(query string, args ...any) (sql.Result, error)
 	QueryRow(query string, args ...any) *sql.Row
+	Query(query string, args ...any) (*sql.Rows, error)
 }
 
 // insertServerTx inserts a full server row on db (a *sql.Tx inside the
@@ -33,9 +34,9 @@ func insertServerTx(db dbtx, srv *models.Server) (string, error) {
 	// credential_id has no '' row to reference, so a literal '' would violate it.
 	cred := nullableString(srv.CredentialID)
 	_, err := db.Exec(
-		`INSERT INTO servers (id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
-		id, srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), cred, sudo,
+		`INSERT INTO servers (id,name,host,port,user,device_id,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+		id, srv.Name, srv.Host, srv.Port, srv.User, nullableString(srv.DeviceID), string(srv.AuthMethod), cred, sudo,
 		string(models.NormalizeShellType(string(srv.ShellType))), string(tagsJSON), srv.Description,
 		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, srv.ExposeHost, ts, ts,
 	)
@@ -79,7 +80,7 @@ func updateServerTx(db dbtx, srv *models.Server) error {
 // getServerTx loads one server row by id on db.
 func getServerTx(db dbtx, id string) (*models.Server, error) {
 	return scanServer(db.QueryRow(
-		`SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers WHERE id=?`, id,
+		`SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers WHERE id=?`, id,
 	))
 }
 
@@ -141,26 +142,11 @@ func (s *Store) AddServerWithCredentials(srv *models.Server, cred, sudo *models.
 		return "", err
 	}
 	defer tx.Rollback() // no-op after Commit
-	srv.CredentialID, srv.AuthMethod = "", ""
-	if cred != nil {
-		cid, err := insertCredentialTx(tx, s.masterKey, cred)
-		if err != nil {
-			return "", err
-		}
-		srv.CredentialID, srv.AuthMethod = cid, cred.Type.AuthMethodForServer()
-	}
-	if sudo != nil {
-		sid, err := insertCredentialTx(tx, s.masterKey, sudo)
-		if err != nil {
-			return "", err
-		}
-		srv.SudoCredentialID = sid
-	}
-	id, err := insertServerTx(tx, srv)
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, "")
 	if err != nil {
 		return "", err
 	}
-	return id, tx.Commit()
+	return added.ServerID, tx.Commit()
 }
 
 // UpdateServerWithCredentials updates srv and swaps credentials atomically:
@@ -252,26 +238,39 @@ func (s *Store) DeleteServerCascading(id string) error {
 	}
 	defer tx.Rollback() // no-op after Commit
 	auditAt := s.nowTime()
-	srv, err := deleteServerEntryTx(tx, id, auditAt)
+	srv, err := s.deleteServerCascadingTx(tx, id, auditAt)
 	if err != nil {
 		return err
 	}
 	if srv == nil {
 		return nil // already gone — nothing to cascade
 	}
+	return tx.Commit()
+}
+
+// deleteServerCascadingTx 是可在外部事务内复用的服务器条目删除主体：
+// 删除条目、锚与机密项可写入关联，并清理仅该条目引用的凭据。
+func (s *Store) deleteServerCascadingTx(tx *sql.Tx, id string, auditAt time.Time) (*models.Server, error) {
+	srv, err := deleteServerEntryTx(tx, id, auditAt)
+	if err != nil {
+		return nil, err
+	}
+	if srv == nil {
+		return nil, nil
+	}
 	for _, cid := range []string{srv.CredentialID, srv.SudoCredentialID} {
 		if cid == "" {
 			continue
 		}
 		if n, err := credentialReferencedElseBy(tx, cid, id); err != nil {
-			return err // fail-closed: unknown reference state must not delete
+			return nil, err // fail-closed: unknown reference state must not delete
 		} else if n == 0 {
 			if _, err := tx.Exec(`DELETE FROM credentials WHERE id=?`, cid); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
-	return tx.Commit()
+	return srv, nil
 }
 
 // deleteServerEntryTx 在事务里删除服务器条目及其主机密钥锚，并返回删除前的

@@ -206,6 +206,16 @@ func TestServersImportFlow(t *testing.T) {
 		if bare == nil || bare.CredentialID != "" {
 			t.Fatalf("bare should be credential-less: %+v", bare)
 		}
+		for _, srv := range []*models.Server{gpu, bare} {
+			if srv.DeviceID == "" {
+				t.Fatalf("imported server %s must be associated with a generated device: %+v", srv.Name, srv)
+			}
+			device, err := st.GetDevice(srv.Name)
+			if err != nil || device == nil || device.ID != srv.DeviceID {
+				t.Fatalf("imported server %s must have a same-named device: device=%v err=%v",
+					srv.Name, device, err)
+			}
+		}
 
 		// idempotent rerun: everything now conflicts by name (dup still by endpoint)
 		out2, err := run("servers", "import", "--file", cfg)

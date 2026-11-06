@@ -10,7 +10,10 @@ import (
 // snapshotRevisionTables 列出会影响导出快照内容的全部配置表。写入这些表
 // 的每一条插入、更新、删除都让全库快照修订号加一;审计表、设备码表、
 // 配对表、隧道表和设置表不在其中,因为它们不出现在任何 profile 的导出
-// 快照里。新配置表加入 schema 时,应同时补进这张清单。
+// 快照里。站点、网络、设备、网络成员与布局坐标这五张拓扑表也暂不加
+// 入:它们只进备份与导出的全量快照,这一版不随客户端快照下发;后续票
+// 让拓扑随快照下发时会一并调整。其余新配置表加入 schema 时,应同时补
+// 进这张清单。
 var snapshotRevisionTables = []string{
 	"credentials",
 	"servers",
@@ -46,11 +49,16 @@ CREATE TABLE IF NOT EXISTS snapshot_revision (
 INSERT OR IGNORE INTO snapshot_revision(id, revision) VALUES (1, 1);
 `)
 	for _, table := range snapshotRevisionTables {
-		for _, event := range []string{"insert", "update", "delete"} {
+		events := []string{"insert", "update", "delete"}
+		if table == "servers" {
+			events = []string{"insert", "delete"}
+		}
+		for _, event := range events {
 			fmt.Fprintf(&b, "CREATE TRIGGER IF NOT EXISTS snapshot_revision_%s_%s\nAFTER %s ON %s BEGIN\n  UPDATE snapshot_revision SET revision = revision + 1;\nEND;\n",
 				table, event, strings.ToUpper(event), table)
 		}
 	}
+	b.WriteString(snapshotRevisionServerUpdateTrigger())
 	// 改绑设备码会改变这个设备码下一次拉到的 profile 快照,但普通设备码
 	// 维护(记录最后拉取时间、客户端版本、吊销)不改变任何快照内容。因此
 	// 这里只对 profile 绑定列建更新触发器,并且只在绑定真正变化时加一。
@@ -63,6 +71,31 @@ BEGIN
 END;
 `)
 	return b.String()
+}
+
+// snapshotRevisionServerUpdateTrigger 生成服务器条目表的快照修订号更新触
+// 发器。结构初始化与旧库迁移共用这一份结构化查询语言，保证新库和升级库
+// 得到相同定义。
+func snapshotRevisionServerUpdateTrigger() string {
+	// 服务器条目的所属设备是拓扑数据，不随客户端快照下发。只改这个
+	// 字段时不能让客户端误判快照变化；其余字段更新仍照常加一。
+	return `
+CREATE TRIGGER IF NOT EXISTS snapshot_revision_servers_update
+AFTER UPDATE ON servers
+FOR EACH ROW WHEN
+  OLD.id IS NOT NEW.id OR OLD.name IS NOT NEW.name OR OLD.host IS NOT NEW.host OR OLD.port IS NOT NEW.port OR
+  OLD.user IS NOT NEW.user OR OLD.auth_method IS NOT NEW.auth_method OR
+  OLD.credential_id IS NOT NEW.credential_id OR OLD.sudo_credential_id IS NOT NEW.sudo_credential_id OR
+  OLD.shell_type IS NOT NEW.shell_type OR OLD.tags IS NOT NEW.tags OR
+  OLD.description IS NOT NEW.description OR OLD.location IS NOT NEW.location OR
+  OLD.hardware IS NOT NEW.hardware OR OLD.services IS NOT NEW.services OR
+  OLD.role IS NOT NEW.role OR OLD.caveats IS NOT NEW.caveats OR
+  OLD.expose_host IS NOT NEW.expose_host OR OLD.created_at IS NOT NEW.created_at OR
+  OLD.updated_at IS NOT NEW.updated_at OR OLD.revision IS NOT NEW.revision
+BEGIN
+  UPDATE snapshot_revision SET revision = revision + 1;
+END;
+`
 }
 
 // SnapshotRevision 返回全库统一、持久、单调递增的快照修订号。单机库与

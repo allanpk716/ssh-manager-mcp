@@ -13,8 +13,14 @@ import (
 // 字段——本函数不做白名单过滤以外的任何补全:调用方没传的字段在行里不
 // 存在(宁缺勿泄)。
 func OwnerAuditRow(action string, summary map[string]any) AuditRow {
+	return OwnerAuditRowAt(time.Now(), action, summary)
+}
+
+// OwnerAuditRowAt 与 OwnerAuditRow 相同，但使用调用方传入的事务时间；
+// 需要把数据行与审计行保持同一时间语义的事务写入使用这个入口。
+func OwnerAuditRowAt(at time.Time, action string, summary map[string]any) AuditRow {
 	return AuditRow{
-		TS:      time.Now(),
+		TS:      at,
 		Action:  action,
 		Command: MarshalAuditSummary(summary),
 		Status:  "ok",

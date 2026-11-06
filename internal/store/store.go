@@ -154,6 +154,12 @@ func Open(path string, masterKey []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// 票 #126：旧库里的现有服务器条目一次性生成设备。它必须排在锚迁移
+	// 之后，合并规则要读取按服务器条目存放的主机密钥指纹。
+	if err := migrateServerDevices(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	// HardenACL ONLY on first creation (Plan 16 F1 fix, spec §5.2 xcheck codex
 	// P6). On an existing store.db the ACL was set at creation time by whoever
 	// first created it (interactive user or service account); re-running it
@@ -263,11 +269,13 @@ func initSchema(db *sql.DB) error {
 	// 快照修订号的表、初始行和触发器拼接在既有结构之后:旧库第一次打开
 	// 时在这里完成迁移,后续打开全部是无操作。
 	// 放进一个事务只落一次盘;自动提交下新库每条语句各落一次,Windows 上明显变慢。
+	// 旧版服务器条目更新触发器如需替换，迁移函数会在同一个事务里删除并
+	// 重建；这里的 IF NOT EXISTS 在重复打开时不会改动数据库文件。
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(schemaSQL + snapshotRevisionSchema()); err != nil {
+	if _, err = tx.Exec(schemaSQL + deviceLayoutSchema + snapshotRevisionSchema()); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 	return tx.Commit()
@@ -431,10 +439,121 @@ func migrate(db *sql.DB) error {
 	// 类型(连接信息的一员,默认 POSIX)。DEFAULT 'posix' 回填存量行为
 	// POSIX。必须排在 credential_id 可空化表重建之后:重建的 CREATE 表定义
 	// 不含本列,先加列会被随后的重建整表丢弃,下一次 Open 才补回。
-	if err := addColumnIfMissing(db, "servers", "shell_type", "TEXT NOT NULL DEFAULT 'posix'"); err != nil {
+	if err := ensureServerShellTypeColumn(db); err != nil {
+		return err
+	}
+	if err := ensureServerDeviceReferenceMigration(db); err != nil {
 		return err
 	}
 	return nil
+}
+
+// ensureServerShellTypeColumn 补齐服务器条目标注的 shell 类型列。它必须排
+// 在 credential_id 可空化表重建之后，否则重建会丢弃刚补的列。
+func ensureServerShellTypeColumn(db *sql.DB) error {
+	exists, err := tableExists(db, "servers")
+	if err != nil || !exists {
+		return err
+	}
+	rows, err := db.Query(`PRAGMA table_info(servers)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasShellType := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		switch name {
+		case "shell_type":
+			hasShellType = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !hasShellType {
+		if _, err := db.Exec(`ALTER TABLE servers ADD COLUMN shell_type TEXT NOT NULL DEFAULT 'posix'`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureServerDeviceReferenceMigration 补齐服务器条目的所属设备引用列，并
+// 把旧版「任何服务器条目更新都加一」的快照修订号触发器替换成排除所属设
+// 备引用的新触发器。新触发器已在位时表示迁移已完成，不写数据库。
+func ensureServerDeviceReferenceMigration(db *sql.DB) error {
+	var definition string
+	err := db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`,
+		"snapshot_revision_servers_update",
+	).Scan(&definition)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		definition = ""
+	case err != nil:
+		return err
+	}
+	if strings.Contains(strings.ToUpper(definition), "WHEN") {
+		return nil
+	}
+	exists, err := tableExists(db, "servers")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		// 全新库还没有服务器条目表；结构初始化稍后会连同条件触发器一起创建。
+		return nil
+	}
+	hasDeviceID, err := serverColumnExists(db, "servers", "device_id")
+	if err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !hasDeviceID {
+		if _, err := tx.Exec(`ALTER TABLE servers ADD COLUMN device_id TEXT REFERENCES devices(id)`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`DROP TRIGGER IF EXISTS snapshot_revision_servers_update`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(snapshotRevisionServerUpdateTrigger()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// serverColumnExists 判断表里是否已有指定列。
+func serverColumnExists(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // columnNullable reports whether table.column exists and lacks the NOT NULL flag.
@@ -587,6 +706,48 @@ CREATE TABLE IF NOT EXISTS credentials (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sites (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL UNIQUE,
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS networks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL UNIQUE,
+  type TEXT NOT NULL CHECK(type IN ('physical','virtual')),
+  site_id TEXT REFERENCES sites(id),
+  note TEXT NOT NULL DEFAULT '',
+  cidr TEXT NOT NULL DEFAULT '',
+  bandwidth_mbps INTEGER NOT NULL DEFAULT 0,
+  metered INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK ((type='physical' AND site_id IS NOT NULL) OR (type='virtual' AND site_id IS NULL))
+);
+CREATE TABLE IF NOT EXISTS devices (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL UNIQUE,
+  note TEXT NOT NULL DEFAULT '',
+  client_token_id TEXT UNIQUE,
+  client_name TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS network_memberships (
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  network_id TEXT NOT NULL REFERENCES networks(id) ON DELETE CASCADE,
+  address TEXT NOT NULL,
+  address_lower TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (device_id, network_id),
+  UNIQUE (network_id, address_lower)
+);
 CREATE TABLE IF NOT EXISTS servers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
@@ -605,6 +766,7 @@ CREATE TABLE IF NOT EXISTS servers (
   role TEXT DEFAULT '',
   caveats TEXT DEFAULT '',
   expose_host INTEGER NOT NULL DEFAULT 0,
+  device_id TEXT REFERENCES devices(id),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   revision INTEGER NOT NULL DEFAULT 0
