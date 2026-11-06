@@ -50,6 +50,22 @@ func devicesListCmd() *cobra.Command {
 				fmt.Fprintln(out, "没有匹配的设备")
 				return nil
 			}
+			if site == "" && network == "" && !unassigned {
+				categorized := make([]*models.Device, 0, len(devices))
+				withoutMembership := make([]*models.Device, 0, len(devices))
+				for _, device := range devices {
+					if len(device.Memberships) == 0 {
+						withoutMembership = append(withoutMembership, device)
+					} else {
+						categorized = append(categorized, device)
+					}
+				}
+				fmt.Fprintln(out, "已归类设备：")
+				printDeviceSection(out, categorized)
+				fmt.Fprintln(out, "未归类设备：")
+				printDeviceSection(out, withoutMembership)
+				return nil
+			}
 			for _, device := range devices {
 				printDevice(out, device, nil, device.Memberships)
 			}
@@ -60,6 +76,16 @@ func devicesListCmd() *cobra.Command {
 	c.Flags().StringVar(&network, "network", "", "只显示在这个网络里的设备")
 	c.Flags().BoolVar(&unassigned, "unassigned", false, "只显示没有任何网络成员的设备")
 	return c
+}
+
+func printDeviceSection(out io.Writer, devices []*models.Device) {
+	if len(devices) == 0 {
+		fmt.Fprintln(out, "  无")
+		return
+	}
+	for _, device := range devices {
+		printDevice(out, device, nil, device.Memberships)
+	}
 }
 
 func devicesRmCmd() *cobra.Command {

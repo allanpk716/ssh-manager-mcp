@@ -553,6 +553,30 @@ func TestDevicesListFilters(t *testing.T) {
 	}
 }
 
+func TestDevicesListShowsUnassignedSection(t *testing.T) {
+	withCliStoreEnv(t)
+	seedTopologySites(t, "家A")
+	runCli(t, "networks", "add", "家A局域网", "--type", "physical", "--site", "家A")
+	runCli(t, "devices", "add", "工作站")
+	runCli(t, "devices", "add", "未归类设备")
+	runCli(t, "devices", "member", "add", "工作站", "--network", "家A局域网", "--address", "192.168.1.20")
+
+	out := runCli(t, "devices", "list")
+	categorizedAt := strings.Index(out, "已归类设备：")
+	unassignedAt := strings.Index(out, "未归类设备：")
+	if categorizedAt < 0 || unassignedAt < 0 || categorizedAt > unassignedAt {
+		t.Fatalf("unfiltered list must show categorized devices before a separate unassigned section:\n%s", out)
+	}
+	if !strings.Contains(out[categorizedAt:unassignedAt], "工作站") ||
+		strings.Contains(out[categorizedAt:unassignedAt], "未归类设备") {
+		t.Fatalf("categorized section must contain only devices with network memberships:\n%s", out)
+	}
+	if !strings.Contains(out[unassignedAt:], "未归类设备") ||
+		strings.Contains(out[unassignedAt:], "工作站") {
+		t.Fatalf("unassigned section must contain only devices without network memberships:\n%s", out)
+	}
+}
+
 // TestDevicesRemoveCleansCurrentRelations 覆盖设备删除确认、删除网络成员、
 // 解除客户端实例关联；本票设备还不能关联服务器条目。
 func TestDevicesRemoveCleansCurrentRelations(t *testing.T) {
