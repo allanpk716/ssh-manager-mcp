@@ -16,7 +16,8 @@ import (
 const nastyCmd = "echo \"<hi>&\x1b]0;pwn\x7f"
 
 // seedAuditStore: SSHMGR_STORE 指向新 vault——profile "dev"、project "alpha"、
-// server "gpu",六行审计行覆盖过滤维度(含已删实体原串、owner 行、恶劣 command)。
+// server "gpu",七行审计行覆盖过滤维度(含新增服务器自动生成设备的
+// device.add、已删实体原串、owner 行、恶劣 command)。
 func seedAuditStore(t *testing.T) []byte {
 	t.Helper()
 	dir := t.TempDir()
@@ -99,8 +100,8 @@ func TestAudit_FiltersAndDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	ls := auditLines(t, out)
-	if len(ls) != 6 {
-		t.Fatalf("default (limit 100) must show all 6, got %d: %q", len(ls), out.String())
+	if len(ls) != 7 {
+		t.Fatalf("default (limit 100) must show all 7, got %d: %q", len(ls), out.String())
 	}
 	if !strings.Contains(ls[0], `echo "<hi>&\x1b]0;pwn\x7f`) { // newest first + escaping (quote is NOT in the six-row escape table — brief's `\"` needle was a one-char bug)
 		t.Fatalf("newest row first with escaping: %q", ls[0])
@@ -130,7 +131,8 @@ func TestAudit_FiltersAndDefaults(t *testing.T) {
 		t.Fatalf("--server comma-split multi-value IN: %v %q", err, out.String())
 	}
 	out, err = runAudit(t, "--owner")
-	if err != nil || len(auditLines(t, out)) != 1 || !strings.Contains(out.String(), "(owner)") || !strings.Contains(out.String(), "(none)") {
+	if err != nil || len(auditLines(t, out)) != 2 || !strings.Contains(out.String(), "(owner)") ||
+		!strings.Contains(out.String(), "(none)") || !strings.Contains(out.String(), "device.add") {
 		t.Fatalf("--owner render: %v %q", err, out.String())
 	}
 	out, err = runAudit(t, "--project", "proj-gone")
@@ -144,7 +146,7 @@ func TestAudit_FiltersAndDefaults(t *testing.T) {
 
 	// --since: 相对(单数+单位)/复合拒/绝对三字面量/坏值文案。
 	out, err = runAudit(t, "--since", "1h")
-	if err != nil || len(auditLines(t, out)) != 1 {
+	if err != nil || len(auditLines(t, out)) != 2 {
 		t.Fatalf("--since 1h: %v %q", err, out.String())
 	}
 	if _, err = runAudit(t, "--since", "1.5h"); err != nil {
@@ -168,7 +170,7 @@ func TestAudit_FiltersAndDefaults(t *testing.T) {
 	}
 	// RFC3339 实际过滤行为(过滤断言走 UTC 形态,避开本地时区分支)。
 	out, err = runAudit(t, "--since", time.Now().UTC().Add(-time.Minute).Format(time.RFC3339))
-	if err != nil || len(auditLines(t, out)) != 1 {
+	if err != nil || len(auditLines(t, out)) != 2 {
 		t.Fatalf("--since RFC3339 filter: %v %q", err, out.String())
 	}
 
@@ -223,8 +225,8 @@ func TestAudit_JSON(t *testing.T) {
 		t.Fatalf("--json must stay silent on stderr hints: %q", out.String())
 	}
 	ls := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(ls) != 6 {
-		t.Fatalf("--json --limit 0 must emit 6 lines, got %d", len(ls))
+	if len(ls) != 7 {
+		t.Fatalf("--json --limit 0 must emit 7 lines, got %d", len(ls))
 	}
 	var m map[string]any
 	if err := json.Unmarshal([]byte(ls[0]), &m); err != nil {
@@ -240,7 +242,7 @@ func TestAudit_JSON(t *testing.T) {
 	if !strings.Contains(ls[0], `\u003c`) || strings.Contains(ls[0], "\x1b") {
 		t.Fatalf("json line must show json.Marshal escaping: %s", ls[0])
 	}
-	out, err = runAudit(t, "--json", "--owner")
+	out, err = runAudit(t, "--json", "--owner", "--action", "project.revoke")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +269,7 @@ func TestAudit_LimitSemantics(t *testing.T) {
 	if err != nil || len(auditLines(t, out)) != 2 || !strings.Contains(out.String(), "showing first 2 rows (more exist)") {
 		t.Fatalf("truncation hint: %v %q", err, out.String())
 	}
-	out, err = runAudit(t, "--limit", "6")
+	out, err = runAudit(t, "--limit", "7")
 	if err != nil || strings.Contains(out.String(), "showing first") {
 		t.Fatalf("exactly-limit must not hint: %v %q", err, out.String())
 	}

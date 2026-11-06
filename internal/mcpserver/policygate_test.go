@@ -228,8 +228,8 @@ func TestExecBlockedAuditGoesOfflineSidecar(t *testing.T) {
 		t.Fatalf("ExportSnapshot: %v", err)
 	}
 	hyd := newStoreAt(t, filepath.Join(t.TempDir(), "cache.db"))
-	if err := hyd.ImportSnapshot(snap); err != nil {
-		t.Fatalf("ImportSnapshot: %v", err)
+	if err := hyd.ImportSnapshotForClientCache(snap); err != nil {
+		t.Fatalf("ImportSnapshotForClientCache: %v", err)
 	}
 	sidePath := filepath.Join(t.TempDir(), "cache-audit.log")
 	af, err := os.OpenFile(sidePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)

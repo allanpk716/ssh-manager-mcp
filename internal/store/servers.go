@@ -20,6 +20,8 @@ func (s *Store) AddServer(srv *models.Server) (string, error) {
 	}
 	// Row SQL lives in insertServerTx (tx.go), shared with the transactional
 	// AddServerWithCredentials — one copy of the NULL-for-"" mapping etc.
+	// 这是保留给旧调用方的直接插入形态；生产新增入口走
+	// AddServerWithCredentials，在那里生成所属设备。
 	return insertServerTx(s.db, srv)
 }
 

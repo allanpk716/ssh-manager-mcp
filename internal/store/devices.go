@@ -93,19 +93,25 @@ func (s *Store) AddDevice(name, note, client string) (*models.Device, error) {
 		}
 	}
 	device.CreatedAt, device.UpdatedAt = time.Unix(now(), 0), time.Unix(now(), 0)
-	if _, err := tx.Exec(
-		`INSERT INTO devices(id,name,name_lower,note,client_token_id,client_name,created_at,updated_at)
-		 VALUES(?,?,?,?,?,?,?,?)`,
-		device.ID, device.Name, strings.ToLower(device.Name), device.Note,
-		nullableString(device.ClientTokenID), device.ClientName,
-		device.CreatedAt.Unix(), device.UpdatedAt.Unix(),
-	); err != nil {
+	if err := insertDeviceTx(tx, device); err != nil {
 		return nil, err
 	}
 	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.add", deviceAuditSummary(device)); err != nil {
 		return nil, err
 	}
 	return device, tx.Commit()
+}
+
+// insertDeviceTx 写入一台设备；自动生成与手工登记共用这一份列映射。
+func insertDeviceTx(tx *sql.Tx, device *models.Device) error {
+	_, err := tx.Exec(
+		`INSERT INTO devices(id,name,name_lower,note,client_token_id,client_name,created_at,updated_at)
+		 VALUES(?,?,?,?,?,?,?,?)`,
+		device.ID, device.Name, strings.ToLower(device.Name), device.Note,
+		nullableString(device.ClientTokenID), device.ClientName,
+		device.CreatedAt.Unix(), device.UpdatedAt.Unix(),
+	)
+	return err
 }
 
 // EditDevice 按设备名字做部分更新。客户端实例关联既能换成另一个设备码，
@@ -235,6 +241,19 @@ func (s *Store) AddServerWithCredentialsToDevice(
 		return nil, err
 	}
 	defer tx.Rollback()
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName)
+	if err != nil {
+		return nil, err
+	}
+	return added, tx.Commit()
+}
+
+// addServerWithCredentialsToDeviceTx 是新增服务器条目的唯一存储层主体：
+// 凭据、所属设备、条目与锚复制共用一个事务。deviceName 为空时自动生成
+// 同名设备（重名追加数字后缀），非空时关联已有设备。
+func (s *Store) addServerWithCredentialsToDeviceTx(
+	tx *sql.Tx, srv *models.Server, cred, sudo *models.Credential, deviceName string,
+) (*AddServerDeviceResult, error) {
 	srv.CredentialID, srv.AuthMethod = "", ""
 	if cred != nil {
 		cid, err := insertCredentialTx(tx, s.masterKey, cred)
@@ -253,6 +272,7 @@ func (s *Store) AddServerWithCredentialsToDevice(
 
 	created := false
 	device := &models.Device{Name: strings.TrimSpace(deviceName)}
+	var err error
 	if device.Name == "" {
 		device.Name, err = availableDeviceNameTx(tx, srv.Name)
 		if err != nil {
@@ -268,13 +288,7 @@ func (s *Store) AddServerWithCredentialsToDevice(
 	if created {
 		device.ID = newID()
 		device.CreatedAt, device.UpdatedAt = time.Unix(now(), 0), time.Unix(now(), 0)
-		if _, err := tx.Exec(
-			`INSERT INTO devices(id,name,name_lower,note,client_token_id,client_name,created_at,updated_at)
-			 VALUES(?,?,?,?,?,?,?,?)`,
-			device.ID, device.Name, strings.ToLower(device.Name), device.Note,
-			nullableString(device.ClientTokenID), device.ClientName,
-			device.CreatedAt.Unix(), device.UpdatedAt.Unix(),
-		); err != nil {
+		if err := insertDeviceTx(tx, device); err != nil {
 			return nil, err
 		}
 		if err := writeTopologyAuditTx(tx, s.nowTime(), "device.add", deviceAuditSummary(device)); err != nil {
@@ -293,7 +307,7 @@ func (s *Store) AddServerWithCredentialsToDevice(
 	}
 	return &AddServerDeviceResult{
 		ServerID: id, Device: device, CreatedDevice: created, AnchorCopy: anchorCopy,
-	}, tx.Commit()
+	}, nil
 }
 
 // copySiblingEntryPinTx 在同一个事务里判断并复制同设备、同端口兄弟条目

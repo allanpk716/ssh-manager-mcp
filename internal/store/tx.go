@@ -141,26 +141,11 @@ func (s *Store) AddServerWithCredentials(srv *models.Server, cred, sudo *models.
 		return "", err
 	}
 	defer tx.Rollback() // no-op after Commit
-	srv.CredentialID, srv.AuthMethod = "", ""
-	if cred != nil {
-		cid, err := insertCredentialTx(tx, s.masterKey, cred)
-		if err != nil {
-			return "", err
-		}
-		srv.CredentialID, srv.AuthMethod = cid, cred.Type.AuthMethodForServer()
-	}
-	if sudo != nil {
-		sid, err := insertCredentialTx(tx, s.masterKey, sudo)
-		if err != nil {
-			return "", err
-		}
-		srv.SudoCredentialID = sid
-	}
-	id, err := insertServerTx(tx, srv)
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, "")
 	if err != nil {
 		return "", err
 	}
-	return id, tx.Commit()
+	return added.ServerID, tx.Commit()
 }
 
 // UpdateServerWithCredentials updates srv and swaps credentials atomically:
