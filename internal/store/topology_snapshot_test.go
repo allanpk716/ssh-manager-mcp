@@ -1,6 +1,6 @@
 package store
 
-// 网络拓扑随全量备份与导出保存、不随客户端快照下发的防回归测试。
+// 网络拓扑随全量备份与导出保存，并按授权范围随客户端快照下发的测试。
 
 import (
 	"encoding/json"
@@ -99,8 +99,8 @@ func TestImportSnapshotRejectsTopologyOnlyTarget(t *testing.T) {
 }
 
 // TestTopologySnapshotRoundTripAndClientDelivery 覆盖三件事：全量快照携带
-// 站点与网络并在导入后原样恢复；profile 裁剪快照不携带这两段；登记拓扑
-// 数据不改变快照修订号。
+// 站点与网络并在导入后原样恢复；profile 裁剪快照携带全部站点与网络，
+// 并携带发起拉取的客户端实例所在设备；登记拓扑数据不改变快照修订号。
 func TestTopologySnapshotRoundTripAndClientDelivery(t *testing.T) {
 	dir := t.TempDir()
 	masterKey, err := GenerateMasterKey()
@@ -202,22 +202,31 @@ func TestTopologySnapshotRoundTripAndClientDelivery(t *testing.T) {
 		gotMembership.Address != "192.168.1.20" {
 		t.Fatalf("full snapshot network membership fields are wrong: %+v", gotMembership)
 	}
-	clientSnapshot, err := st.ExportSnapshotForProfile(profileID, false)
+	clientSnapshot, err := st.ExportSnapshotForProfile(profileID, false, clientTokenID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if clientSnapshot.Sites != nil || clientSnapshot.Networks != nil ||
-		clientSnapshot.Devices != nil || clientSnapshot.NetworkMemberships != nil {
-		t.Fatalf("client snapshot must not carry topology sections: sites=%+v networks=%+v devices=%+v memberships=%+v",
-			clientSnapshot.Sites, clientSnapshot.Networks, clientSnapshot.Devices, clientSnapshot.NetworkMemberships)
+	if !reflect.DeepEqual(clientSnapshot.Sites, snapshot.Sites) ||
+		!reflect.DeepEqual(clientSnapshot.Networks, snapshot.Networks) {
+		t.Fatalf("client snapshot must carry every site and network: sites=%+v networks=%+v",
+			clientSnapshot.Sites, clientSnapshot.Networks)
+	}
+	if len(clientSnapshot.Devices) != 1 || !reflect.DeepEqual(clientSnapshot.Devices[0], snapshot.Devices[0]) {
+		t.Fatalf("client snapshot must carry the initiating client's device: %+v, want %+v",
+			clientSnapshot.Devices, snapshot.Devices)
+	}
+	if len(clientSnapshot.NetworkMemberships) != 1 ||
+		!reflect.DeepEqual(clientSnapshot.NetworkMemberships[0], snapshot.NetworkMemberships[0]) {
+		t.Fatalf("client snapshot must carry the initiating client device's membership: %+v, want %+v",
+			clientSnapshot.NetworkMemberships, snapshot.NetworkMemberships)
 	}
 	encoded, err := json.Marshal(clientSnapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{`"sites"`, `"networks"`, `"devices"`, `"network_memberships"`, `"profile_scoped"`} {
-		if strings.Contains(string(encoded), forbidden) {
-			t.Fatalf("client snapshot JSON must not contain %s:\n%s", forbidden, encoded)
+	for _, required := range []string{`"sites"`, `"networks"`, `"devices"`, `"network_memberships"`} {
+		if !strings.Contains(string(encoded), required) {
+			t.Fatalf("client snapshot JSON must contain %s:\n%s", required, encoded)
 		}
 	}
 
@@ -248,8 +257,8 @@ func TestTopologySnapshotRoundTripAndClientDelivery(t *testing.T) {
 }
 
 // TestServerDeviceSnapshotRoundTripAndClientDelivery 覆盖服务器条目的所属
-// 设备字段：全量快照往返保留；下发客户端的快照不携带；只改归属设备不改
-// 变快照修订号。
+// 设备字段：全量快照往返保留；下发客户端的快照照常携带；只改归属设备
+// 不改变快照修订号。
 func TestServerDeviceSnapshotRoundTripAndClientDelivery(t *testing.T) {
 	dir := t.TempDir()
 	masterKey, err := GenerateMasterKey()
@@ -304,19 +313,19 @@ func TestServerDeviceSnapshotRoundTripAndClientDelivery(t *testing.T) {
 	if len(snapshot.Servers) != 1 || snapshot.Servers[0].DeviceID != targetDevice.ID {
 		t.Fatalf("full snapshot must carry the server's device reference: %+v", snapshot.Servers)
 	}
-	clientSnapshot, err := st.ExportSnapshotForProfile(profileID, false)
+	clientSnapshot, err := st.ExportSnapshotForProfile(profileID, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(clientSnapshot.Servers) != 1 || clientSnapshot.Servers[0].DeviceID != "" {
-		t.Fatalf("client snapshot must not carry the device reference: %+v", clientSnapshot.Servers)
+	if len(clientSnapshot.Servers) != 1 || clientSnapshot.Servers[0].DeviceID != targetDevice.ID {
+		t.Fatalf("client snapshot must carry the device reference: %+v", clientSnapshot.Servers)
 	}
 	encoded, err := json.Marshal(clientSnapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), `"device_id"`) {
-		t.Fatalf("client snapshot JSON must not contain device_id:\n%s", encoded)
+	if !strings.Contains(string(encoded), `"device_id"`) {
+		t.Fatalf("client snapshot JSON must contain device_id:\n%s", encoded)
 	}
 
 	targetKey, err := GenerateMasterKey()

@@ -19,6 +19,9 @@ type ServerInfo struct {
 	Host        string   `json:"host" jsonschema:"server host; 'hidden' = owner has not exposed it (default) — address the server via its id"`
 	User        string   `json:"user" jsonschema:"ssh user"`
 	HasSudo     bool     `json:"has_sudo" jsonschema:"true if sudo=true is supported on this server"`
+	Device      string   `json:"device" jsonschema:"registered device name for this server; same value means two entries are the same physical machine; empty means no device is registered"`
+	Site        string   `json:"site" jsonschema:"site names of the device's physical local-area networks, sorted by name and joined with 、; empty means none is registered"`
+	Networks    []string `json:"networks" jsonschema:"network names of the device, physical local-area networks first then virtual local-area networks, each sorted by name; empty means none is registered"`
 	Role        string   `json:"role" jsonschema:"this server's purpose/role (e.g. 'prod pg primary')"`
 	Services    string   `json:"services" jsonschema:"what is deployed/running on this server"`
 	Caveats     string   `json:"caveats" jsonschema:"operational gotchas & special handling rules — READ BEFORE acting on this server; empty means none"`

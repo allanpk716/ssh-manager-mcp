@@ -51,7 +51,7 @@ func TestSnapshotShellTypeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scoped, err := st.ExportSnapshotForProfile(profID, false)
+	scoped, err := st.ExportSnapshotForProfile(profID, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

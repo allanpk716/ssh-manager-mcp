@@ -163,7 +163,7 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap, err := sv.ExportSnapshotForProfile(profID, false)
+	snap, err := sv.ExportSnapshotForProfile(profID, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +504,7 @@ func TestCacheForwardE2E_SecondEntrySameAddressIndependent(t *testing.T) {
 	if err := fx.serve.GrantServers(fx.profID, []string{secondID}); err != nil {
 		t.Fatal(err)
 	}
-	snap2, err := fx.serve.ExportSnapshotForProfile(fx.profID, false)
+	snap2, err := fx.serve.ExportSnapshotForProfile(fx.profID, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1001,7 +1001,7 @@ func TestCacheForwardE2E_GenerationSwapKeepsThePin(t *testing.T) {
 	if err := fx.serve.GrantServers(fx.profID, []string{witnessID}); err != nil {
 		t.Fatal(err)
 	}
-	snap2, err := fx.serve.ExportSnapshotForProfile(fx.profID, false)
+	snap2, err := fx.serve.ExportSnapshotForProfile(fx.profID, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

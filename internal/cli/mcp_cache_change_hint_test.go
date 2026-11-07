@@ -577,7 +577,7 @@ func snapshotVariant(t *testing.T, base *store.Snapshot, revision int64, mutate 
 // 调用按发生顺序全部出现。
 func TestCacheChangeHintE2E_MultiplePendingHintsKeptInOrder(t *testing.T) {
 	fx := newCacheFwdFixture(t)
-	base, err := fx.serve.ExportSnapshotForProfile(fx.profID, false)
+	base, err := fx.serve.ExportSnapshotForProfile(fx.profID, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

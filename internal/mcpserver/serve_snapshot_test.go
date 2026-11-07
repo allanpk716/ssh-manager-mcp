@@ -147,6 +147,78 @@ func TestSnapshot_ScopedToBoundProfile(t *testing.T) {
 	}
 }
 
+// TestSnapshotTopologyUsesAuthenticatedClientIdentity 证明设备码认证后，快
+// 照裁剪拿到的是这次发起拉取的客户端实例标识符，而不是调用方手工指定
+// 的另一个客户端实例。
+func TestSnapshotTopologyUsesAuthenticatedClientIdentity(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+	profileID, err := st.AddProfile("topology-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	laptopID, laptopToken, err := st.AddCacheToken("laptop", profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phoneID, _, err := st.AddCacheToken("phone", profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("laptop-machine", "", "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("authorized-machine", "", "phone"); err != nil {
+		t.Fatal(err)
+	}
+	added, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "gpu", Host: "192.0.2.10", Port: 22, User: "deploy",
+	}, nil, nil, "authorized-machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{added.ServerID}); err != nil {
+		t.Fatal(err)
+	}
+
+	runner, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(runner.Close)
+	server := httptest.NewServer(runner.HTTPHandler())
+	t.Cleanup(server.Close)
+	request, _ := http.NewRequest(http.MethodGet, server.URL+"/snapshot", nil)
+	request.Header.Set("Authorization", "Bearer "+laptopToken)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot status = %d, body = %s", response.StatusCode, body)
+	}
+	var snapshot store.Snapshot
+	if err := json.Unmarshal(body, &snapshot); err != nil {
+		t.Fatalf("decode snapshot: %v\n%s", err, body)
+	}
+	associations := make(map[string]string, len(snapshot.Devices))
+	for _, device := range snapshot.Devices {
+		associations[device.Name] = device.ClientTokenID
+	}
+	if associations["laptop-machine"] != laptopID {
+		t.Fatalf("initiating client association = %q, want %q; devices=%+v",
+			associations["laptop-machine"], laptopID, snapshot.Devices)
+	}
+	if associations["authorized-machine"] == phoneID {
+		t.Fatalf("another client association must be cleared: %+v", snapshot.Devices)
+	}
+}
+
 // TestSnapshot_UnboundToken403Not401 pins the Plan-39 upgrade path: a device code that
 // migrated UNBOUND (legacy pre-Plan-39 row, profile_id NULL) is REFUSED — but with 403,
 // never 401. 401 on a pinned connection is the Plan-34 quarantine trigger (client
