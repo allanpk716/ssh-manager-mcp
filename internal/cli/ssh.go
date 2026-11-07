@@ -55,9 +55,11 @@ func newSSHCmd() *cobra.Command {
 			commandStr := strings.Join(args[1:], " ")
 			status := "ok"
 			var res sshbroker.ExecResult
+			dialSource := dialplan.NewStoreSource(st, "")
 			cli, connectionNotes, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 				Server: srv, Auth: auth, HostKeys: st,
-				Topology: dialplan.NewStoreSource(st, ""),
+				SuccessCache: dialSource,
+				Topology:     dialSource,
 			})
 			if err != nil {
 				status = "error"

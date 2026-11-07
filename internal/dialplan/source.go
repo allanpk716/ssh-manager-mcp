@@ -67,13 +67,26 @@ func (s *StoreSource) ServerDialTopology(server *models.Server) (sshbroker.DialT
 	}, nil
 }
 
-// ServerDialSuccess 读取这个实例为服务器条目记录的最近成功地址。
-func (s *StoreSource) ServerDialSuccess(server *models.Server) (sshbroker.DialSuccessRecord, bool, error) {
+// ResolveDialSuccessCache 每次拨号只解析一次角色状态与本实例的缓存位置。
+// 当前部署形态没有可写缓存时返回空缓存。
+func (s *StoreSource) ResolveDialSuccessCache() (sshbroker.DialSuccessCacheSource, error) {
+	cache, ok, err := s.successCache()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return cache, nil
+}
+
+// ServerDialSuccess 读取这个实例为服务器条目记录的仍有效成功地址。
+func (s *StoreSource) ServerDialSuccess(server *models.Server) ([]sshbroker.DialSuccessRecord, bool, error) {
 	cache, ok, err := s.successCache()
 	if err != nil || !ok {
-		return sshbroker.DialSuccessRecord{}, false, err
+		return nil, false, err
 	}
-	return cache.Success(server)
+	return cache.Successes(server)
 }
 
 // RecordServerDialSuccess 写入服务器条目的最近成功地址。

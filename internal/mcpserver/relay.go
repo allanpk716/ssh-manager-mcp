@@ -205,8 +205,10 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 			err = aerr
 			return
 		}
+		dialSource := dialplan.NewStoreSource(st, "")
 		cli, sourceNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
-			Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true, Topology: dialplan.NewStoreSource(st, ""),
+			Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true,
+			SuccessCache: dialSource, Topology: dialSource,
 		})
 		srcConnectionNotes = sourceNotes
 		if cerr != nil {
@@ -269,9 +271,11 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		err = aerr
 		return
 	}
+	dialSource := dialplan.NewStoreSource(st, "")
 	dstCli, dstConnectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: dstSrv, Auth: dstAuth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true,
-		Topology: dialplan.NewStoreSource(st, ""),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
 	})
 	if cerr != nil {
 		switch {

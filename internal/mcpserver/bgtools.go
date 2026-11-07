@@ -127,11 +127,12 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 	// Start 编排门外的全部启动链 (spec §1): Reserve (超限/closed 原样上抛——
 	// 超限行归本层) → 按服务器条目拨号的统一入口 (connect 三态行由 Start 落) → Insert
 	// (start(ok) 行在持锁段内、goroutine 启动前) → runTask goroutine。
+	dialSource := dialplan.NewStoreSource(st, "")
 	tid, eff, connectionNotes, stErr := mgr.Start(ctx, st, BgStartSpec{
 		ProjectID: projectID, ServerID: serverID, Command: command,
 		Sudo: sudo, SudoPass: sudoPass, TimeoutSec: timeoutSec,
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
-		DialTopology: dialplan.NewStoreSource(st, ""),
+		DialTopology: dialSource, DialSuccessCache: dialSource,
 	})
 	if stErr != nil {
 		switch {

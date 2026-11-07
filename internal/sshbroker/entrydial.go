@@ -246,9 +246,15 @@ type DialTopologySource interface {
 // DialSuccessCacheSource 是拓扑来源可以附加的成功地址缓存接口。统一拨号
 // 入口在规划候选时读取它，在连接成功或主机密钥不一致时写回。
 type DialSuccessCacheSource interface {
-	ServerDialSuccess(server *models.Server) (DialSuccessRecord, bool, error)
+	ServerDialSuccess(server *models.Server) ([]DialSuccessRecord, bool, error)
 	RecordServerDialSuccess(server *models.Server, record DialSuccessRecord) error
 	DeleteServerDialSuccess(server *models.Server, address string) error
+}
+
+// DialSuccessCacheResolver lets a production source resolve its concrete cache
+// once per dial instead of re-reading role state for each cache operation.
+type DialSuccessCacheResolver interface {
+	ResolveDialSuccessCache() (DialSuccessCacheSource, error)
 }
 
 // StaticDialTopology 是固定拓扑视图，供测试和调用方显式注入。
@@ -260,7 +266,7 @@ func (s StaticDialTopology) ServerDialTopology(*models.Server) (DialTopology, er
 }
 
 // ServerDialRequest 是按服务器条目拨号统一入口的输入。Topology 在入口内
-// 部按次读取；当它同时实现成功地址缓存接口时，入口会读取并写回该缓存。
+// 部按次读取；SuccessCache 显式携带成功地址缓存，空值表示不使用缓存。
 type ServerDialRequest struct {
 	// Server 是目标服务器条目；兜底主机与端口始终来自这里。
 	Server *models.Server
@@ -279,6 +285,8 @@ type ServerDialRequest struct {
 	// Topology 是本次拨号的网络拓扑来源；nil 表示旧部署没有拓扑登记，
 	// 只尝试条目的兜底「主机:端口」。
 	Topology DialTopologySource
+	// SuccessCache 是本次拨号使用的成功地址缓存；nil 表示不使用。
+	SuccessCache DialSuccessCacheSource
 }
 
 // lowLevelDial 是统一入口的低层连接函数：按「主机、端口」拨一个地址并完成
@@ -354,37 +362,48 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		}
 	}
 	var successCache DialSuccessCacheSource
-	if source, ok := req.Topology.(DialSuccessCacheSource); ok && source != nil {
-		successCache = source
-		record, present, err := successCache.ServerDialSuccess(req.Server)
-		if err != nil {
-			return nil, nil, err
-		}
-		if present {
-			plan = orderPlanWithDialSuccess(plan, record, time.Now())
+	if req.SuccessCache != nil && !fallbackOnlyDialPlan(plan) {
+		successCache = req.SuccessCache
+		if resolver, ok := successCache.(DialSuccessCacheResolver); ok {
+			resolved, err := resolver.ResolveDialSuccessCache()
+			if err != nil {
+				warnDialSuccessCacheFailure("解析", err)
+				successCache = nil
+			} else {
+				successCache = resolved
+			}
 		}
 	}
-	hkCb, err := HostKeyTOFU(req.HostKeys, req.Server)
+	if successCache != nil {
+		records, present, err := successCache.ServerDialSuccess(req.Server)
+		if err != nil {
+			warnDialSuccessCacheFailure("读取", err)
+		}
+		if present {
+			plan = orderPlanWithDialSuccess(plan, records, time.Now())
+		}
+	}
+	hostKeyCallback, err := HostKeyTOFU(req.HostKeys, req.Server)
 	if err != nil {
 		return nil, nil, err
 	}
-	ka := keepAliveSpec{}
+	keepAlive := keepAliveSpec{}
 	if req.KeepAlive {
-		ka = backgroundKeepAlive
+		keepAlive = backgroundKeepAlive
 	}
 	failures := make([]DialAttemptError, 0, len(plan.Candidates))
 	var notes []string
 	for _, candidate := range plan.Candidates {
 		dialCtx := ctx
 		stopAddressTimeout := func() {}
-		candidateHostKeyCb := hkCb
+		candidateHostKeyCallback := hostKeyCallback
 		if len(plan.Candidates) > 1 {
 			var releaseHostKeyVerification func()
 			dialCtx, releaseHostKeyVerification, stopAddressTimeout = newHostKeyVerificationContext(ctx, addressTimeout)
-			candidateHostKeyCb = hostKeyCallbackReleasingVerification(hkCb, releaseHostKeyVerification)
+			candidateHostKeyCallback = hostKeyCallbackReleasingVerification(hostKeyCallback, releaseHostKeyVerification)
 		}
 		attemptStarted := time.Now()
-		cli, err := lowLevelDial(dialCtx, candidate.Address, req.Server.Port, req.Server.User, req.Auth, candidateHostKeyCb, ka)
+		cli, err := lowLevelDial(dialCtx, candidate.Address, req.Server.Port, req.Server.User, req.Auth, candidateHostKeyCallback, keepAlive)
 		if contextErr := dialCtx.Err(); contextErr != nil {
 			if cli != nil {
 				cli.Close()
@@ -403,8 +422,7 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 					Address: candidate.Address, SucceededAt: time.Now(), Duration: time.Since(attemptStarted),
 				}
 				if err := successCache.RecordServerDialSuccess(req.Server, record); err != nil {
-					cli.Close()
-					return nil, nil, err
+					warnDialSuccessCacheFailure("写入", err)
 				}
 			}
 			return cli, notes, nil
@@ -412,7 +430,7 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		if errors.Is(err, ErrHostKeyMismatch) {
 			if successCache != nil {
 				if cacheErr := successCache.DeleteServerDialSuccess(req.Server, candidate.Address); cacheErr != nil {
-					return nil, nil, cacheErr
+					warnDialSuccessCacheFailure("清除", cacheErr)
 				}
 			}
 			notes = append(notes, candidateLabel(candidate)+"呈现了不同的主机密钥，已跳过")
@@ -427,6 +445,14 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		dialErr.Hint = "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。"
 	}
 	return nil, nil, dialErr
+}
+
+func warnDialSuccessCacheFailure(action string, err error) {
+	fmt.Fprintf(os.Stderr, "sshmgr: 成功地址缓存%s失败（继续拨号）: %v\n", action, err)
+}
+
+func fallbackOnlyDialPlan(plan DialAddressPlan) bool {
+	return len(plan.Candidates) == 1 && plan.Candidates[0].Source == DialAddressFallback
 }
 
 func hasVirtualLanAddress(memberships []*models.NetworkMembership) bool {
@@ -450,31 +476,46 @@ func keepVirtualLanCandidates(plan DialAddressPlan) DialAddressPlan {
 }
 
 // orderPlanWithDialSuccess 只重排同一选址级别内部的地址：仍有效且仍在候选
-// 里的成功地址排前，其余地址保持原登记顺序。
-func orderPlanWithDialSuccess(plan DialAddressPlan, record DialSuccessRecord, now time.Time) DialAddressPlan {
-	if !dialSuccessRecordValid(record, now) {
-		return plan
+// 里的成功地址按记录耗时从短到长排在前面，其余地址保持原登记顺序。
+func orderPlanWithDialSuccess(plan DialAddressPlan, records []DialSuccessRecord, now time.Time) DialAddressPlan {
+	durationByAddress := make(map[string]time.Duration, len(records))
+	for _, record := range records {
+		if !dialSuccessRecordValid(record, now) {
+			continue
+		}
+		durationByAddress[normalizeDialAddress(record.Address)] = record.Duration
 	}
-	normalized := normalizeDialAddress(record.Address)
 	out := make([]DialAddress, 0, len(plan.Candidates))
-	for _, source := range []DialAddressSource{DialAddressPhysical, DialAddressVirtual, DialAddressFallback} {
+	for _, source := range dialAddressSourcesInPriorityOrder() {
+		var cached, uncached []DialAddress
 		for _, candidate := range plan.Candidates {
-			if candidate.Source == source && normalizeDialAddress(candidate.Address) == normalized {
-				out = append(out, candidate)
+			if candidate.Source != source {
+				continue
 			}
-		}
-		for _, candidate := range plan.Candidates {
-			if candidate.Source == source && normalizeDialAddress(candidate.Address) != normalized {
-				out = append(out, candidate)
+			if _, present := durationByAddress[normalizeDialAddress(candidate.Address)]; present {
+				cached = append(cached, candidate)
+				continue
 			}
+			uncached = append(uncached, candidate)
 		}
+		sort.SliceStable(cached, func(i, j int) bool {
+			return durationByAddress[normalizeDialAddress(cached[i].Address)] <
+				durationByAddress[normalizeDialAddress(cached[j].Address)]
+		})
+		out = append(out, cached...)
+		out = append(out, uncached...)
 	}
 	plan.Candidates = out
 	return plan
 }
 
+func dialAddressSourcesInPriorityOrder() []DialAddressSource {
+	return []DialAddressSource{DialAddressPhysical, DialAddressVirtual, DialAddressFallback}
+}
+
 func dialSuccessRecordValid(record DialSuccessRecord, now time.Time) bool {
-	return !record.SucceededAt.IsZero() &&
+	return record.Address != "" && record.Duration >= 0 &&
+		!record.SucceededAt.IsZero() &&
 		!record.SucceededAt.After(now) &&
 		now.Sub(record.SucceededAt) <= DialSuccessCacheLifetime
 }

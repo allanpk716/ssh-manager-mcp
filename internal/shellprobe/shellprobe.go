@@ -94,9 +94,11 @@ func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (m
 	}
 	ctx, cancel := context.WithTimeout(parent, probeShellDeadline)
 	defer cancel()
+	dialSource := dialplan.NewStoreSource(st, "")
 	cli, connectionNotes, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: st,
-		Topology: dialplan.NewStoreSource(st, ""),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
 	})
 	if err != nil {
 		return "", "", nil, fmt.Errorf("connect: %w", err)

@@ -263,9 +263,11 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 		sudoCred = cred.Secret
 	}
 
+	dialSource := dialplan.NewStoreSource(st, "")
 	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
-		Topology: dialplan.NewStoreSource(st, ""),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
 	})
 	if cerr != nil {
 		switch {
