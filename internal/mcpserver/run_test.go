@@ -166,7 +166,7 @@ func TestHydrateCacheStore_ForwardDevicePerGeneration(t *testing.T) {
 	if err := gen1.ApplyForwardedEntryPin(gen1Srv, store.EntryFallbackAddr(gen1Srv), []byte("key-bytes")); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawForwardDevice(t, h.tmpPaths[0], serverID); got != "laptop-7" {
+	if got := rawForwardDevice(t, h.temporaryStores[0].Path, serverID); got != "laptop-7" {
 		t.Fatalf("generation 1 pin_device = %q, want laptop-7", got)
 	}
 
@@ -195,7 +195,7 @@ func TestHydrateCacheStore_ForwardDevicePerGeneration(t *testing.T) {
 	if err := gen2.ApplyForwardedEntryPin(gen2Srv, store.EntryFallbackAddr(gen2Srv), []byte("key-bytes")); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawForwardDevice(t, h.tmpPaths[1], serverID); got != "laptop-7" {
+	if got := rawForwardDevice(t, h.temporaryStores[1].Path, serverID); got != "laptop-7" {
 		t.Fatalf("generation 2 pin_device = %q, want laptop-7 (per-generation metadata)", got)
 	}
 }

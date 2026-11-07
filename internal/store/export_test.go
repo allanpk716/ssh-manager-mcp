@@ -476,7 +476,7 @@ func TestExportSnapshotForProfile_ScopesEveryTable(t *testing.T) {
 	s := newTestStore(t)
 	profA := seedScopedVault(t, s)
 
-	snap, err := s.ExportSnapshotForProfile(profA, false)
+	snap, err := s.ExportSnapshotForProfile(profA, false, "")
 	if err != nil {
 		t.Fatalf("ExportSnapshotForProfile: %v", err)
 	}
@@ -522,7 +522,7 @@ func TestExportSnapshotForProfile_ScopesEveryTable(t *testing.T) {
 // empty-but-200 snapshot.
 func TestExportSnapshotForProfile_UnknownProfileErrors(t *testing.T) {
 	s := newTestStore(t)
-	if _, err := s.ExportSnapshotForProfile("no-such-profile", false); err == nil {
+	if _, err := s.ExportSnapshotForProfile("no-such-profile", false, ""); err == nil {
 		t.Fatal("unknown profile must error")
 	}
 }
@@ -533,7 +533,7 @@ func TestExportSnapshotForProfile_UnknownProfileErrors(t *testing.T) {
 func TestExportSnapshotForProfile_ZeroGrants(t *testing.T) {
 	s := newTestStore(t)
 	pid := seedProfile(t, s, "empty")
-	snap, err := s.ExportSnapshotForProfile(pid, false)
+	snap, err := s.ExportSnapshotForProfile(pid, false, "")
 	if err != nil {
 		t.Fatalf("ExportSnapshotForProfile(empty): %v", err)
 	}
@@ -551,7 +551,7 @@ func TestExportSnapshotForProfile_ZeroGrants(t *testing.T) {
 func TestExportSnapshotForProfile_StillHydrates(t *testing.T) {
 	s := newTestStore(t)
 	profA := seedScopedVault(t, s)
-	snap, err := s.ExportSnapshotForProfile(profA, false)
+	snap, err := s.ExportSnapshotForProfile(profA, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,7 +620,7 @@ func TestSnapshotEntryPinMetadataRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scoped, err := a.ExportSnapshotForProfile(prof, false)
+	scoped, err := a.ExportSnapshotForProfile(prof, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

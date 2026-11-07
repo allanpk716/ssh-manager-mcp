@@ -270,7 +270,7 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	clientVersion := req.Header.Get(buildinfo.ClientVersionHeader)
-	snap, err := r.st.ExportSnapshotForProfile(ct.ProfileID, clientVersion != "")
+	snap, err := r.st.ExportSnapshotForProfile(ct.ProfileID, clientVersion != "", ct.ID)
 	if err != nil {
 		http.Error(w, "snapshot unavailable", http.StatusInternalServerError)
 		return

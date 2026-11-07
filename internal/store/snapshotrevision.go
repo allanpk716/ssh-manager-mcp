@@ -10,10 +10,9 @@ import (
 // snapshotRevisionTables 列出会影响导出快照内容的全部配置表。写入这些表
 // 的每一条插入、更新、删除都让全库快照修订号加一;审计表、设备码表、
 // 配对表、隧道表和设置表不在其中,因为它们不出现在任何 profile 的导出
-// 快照里。站点、网络、设备、网络成员与布局坐标这五张拓扑表也暂不加
-// 入:它们只进备份与导出的全量快照,这一版不随客户端快照下发;后续票
-// 让拓扑随快照下发时会一并调整。其余新配置表加入 schema 时,应同时补
-// 进这张清单。
+// 快照里。布局坐标表是拓扑表的明确例外:拓扑图拖动会频繁改坐标,坐标变
+// 化不产生变更提示,也不触发重新拉取,只随下一次因其他原因发生的全量拉
+// 取更新。其余新配置表加入 schema 时,应同时补进这张清单。
 var snapshotRevisionTables = []string{
 	"credentials",
 	"servers",
@@ -21,6 +20,10 @@ var snapshotRevisionTables = []string{
 	"profile_servers",
 	"projects",
 	"entry_host_keys",
+	"sites",
+	"networks",
+	"devices",
+	"network_memberships",
 	"policy_rules",
 	"policy_disabled_defaults",
 	"secrets",
@@ -79,8 +82,7 @@ END;
 // 发器。结构初始化与旧库迁移共用这一份结构化查询语言，保证新库和升级库
 // 得到相同定义。
 func snapshotRevisionServerUpdateTrigger() string {
-	// 服务器条目的所属设备是拓扑数据，不随客户端快照下发。只改这个
-	// 字段时不能让客户端误判快照变化；其余字段更新仍照常加一。
+	// 服务器条目的所属设备随客户端快照下发，变化必须让客户端重新拉取。
 	return `
 CREATE TRIGGER IF NOT EXISTS snapshot_revision_servers_update
 AFTER UPDATE ON servers
@@ -88,6 +90,7 @@ FOR EACH ROW WHEN
   OLD.id IS NOT NEW.id OR OLD.name IS NOT NEW.name OR OLD.host IS NOT NEW.host OR OLD.port IS NOT NEW.port OR
   OLD.user IS NOT NEW.user OR OLD.auth_method IS NOT NEW.auth_method OR
   OLD.credential_id IS NOT NEW.credential_id OR OLD.sudo_credential_id IS NOT NEW.sudo_credential_id OR
+  OLD.device_id IS NOT NEW.device_id OR
   OLD.shell_type IS NOT NEW.shell_type OR OLD.tags IS NOT NEW.tags OR
   OLD.description IS NOT NEW.description OR OLD.location IS NOT NEW.location OR
   OLD.hardware IS NOT NEW.hardware OR OLD.services IS NOT NEW.services OR

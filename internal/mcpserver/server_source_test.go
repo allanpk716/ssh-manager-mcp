@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"sync/atomic"
 	"testing"
 
@@ -76,7 +77,16 @@ func TestNewServerFromSource_ResolvesStorePerCall(t *testing.T) {
 		}
 		for _, c := range res.Content {
 			if tc, ok := c.(*mcp.TextContent); ok {
-				return containsCount(tc.Text, `"one"`) + containsCount(tc.Text, `"two"`)
+				var output ListServersOutput
+				if err := json.Unmarshal([]byte(tc.Text), &output); err != nil {
+					t.Fatalf("decode list_servers output: %v\n%s", err, tc.Text)
+				}
+				for _, server := range output.Servers {
+					if server.Name == "one" || server.Name == "two" {
+						n++
+					}
+				}
+				return n
 			}
 		}
 		return 0
@@ -94,14 +104,4 @@ func TestNewServerFromSource_ResolvesStorePerCall(t *testing.T) {
 	if n2 := atomic.LoadInt32(&calls); n2 <= n1 {
 		t.Fatalf("storeFn not called per tool invocation: %d -> %d", n1, n2)
 	}
-}
-
-func containsCount(s, sub string) int {
-	n := 0
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			n++
-		}
-	}
-	return n
 }

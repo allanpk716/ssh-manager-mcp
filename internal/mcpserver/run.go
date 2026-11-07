@@ -57,54 +57,35 @@ func RunStdio(token string, kp store.KeyProvider) error {
 	return serveBridge(context.Background(), srv)
 }
 
-// hydrateCacheStore builds a fresh temporary read-only store from snap and
-// verifies token against it. The caller owns closing the store and removing
-// tmpPath (cacheStoreHolder registers both). Shared by initial startup and
-// every hot rebuild, so the two paths CANNOT drift. device ("" = unknown) is
-// the instance's device-code name stamped onto host_keys rows written via
-// ApplyForwardedEntryPin（Plan 48 §2.3）按缓存代保存：每次都从快照重建一个临时数据库。
-func hydrateCacheStore(token string, snap *store.Snapshot, auditFile *os.File, device string) (*store.Store, *models.Project, string, error) {
-	mk, err := store.GenerateMasterKey() // throwaway key: creds re-sealed per hydration
+// hydrateCacheStore 从快照构建新的临时只读数据库，并在其中校验设备码。
+// 调用方负责通过返回值的 Close 方法清理；cacheStoreHolder 会登记每一代。
+// 初始启动与每次热重建共用这里，保证两条路径不漂移。device 为空表示未
+// 知；它是 ApplyForwardedEntryPin 写入按服务器条目存放的锚时携带的设备码
+// 名字（Plan 48 §2.3）。每次换快照都重建临时数据库，元数据按缓存代保存。
+func hydrateCacheStore(token string, snap *store.Snapshot, auditFile *os.File, device string) (store.TemporaryClientCacheStore, *models.Project, error) {
+	temporary, err := store.OpenTemporaryClientCacheStore(snap, "sshmgr-cache-*.db")
 	if err != nil {
-		return nil, nil, "", err
+		return store.TemporaryClientCacheStore{}, nil, err
 	}
-	tmp, err := os.CreateTemp("", "sshmgr-cache-*.db")
+	temporary.Store.SetReadOnly(auditFile)   // 必须在导入快照后再设只读
+	temporary.Store.SetForwardDevice(device) // Plan 48 §2.3：本地转发锚元数据
+	project, err := temporary.Store.VerifyToken(token)
 	if err != nil {
-		return nil, nil, "", err
-	}
-	tmpPath := tmp.Name()
-	tmp.Close()
-	st, err := store.Open(tmpPath, mk)
-	if err != nil {
-		os.Remove(tmpPath)
-		return nil, nil, "", err
-	}
-	if err := st.ImportSnapshotForClientCache(snap); err != nil {
-		st.Close()
-		os.Remove(tmpPath)
-		return nil, nil, "", err
-	}
-	st.SetReadOnly(auditFile)   // AFTER ImportSnapshot: mutations → ErrReadOnly
-	st.SetForwardDevice(device) // Plan 48 §2.3: local forwarded-pin metadata
-	project, err := st.VerifyToken(token)
-	if err != nil {
-		st.Close()
-		os.Remove(tmpPath)
-		return nil, nil, "", err
+		_ = temporary.Close()
+		return store.TemporaryClientCacheStore{}, nil, err
 	}
 	if project == nil {
-		st.Close()
-		os.Remove(tmpPath)
-		return nil, nil, "", fmt.Errorf("invalid or unknown token")
+		_ = temporary.Close()
+		return store.TemporaryClientCacheStore{}, nil, fmt.Errorf("invalid or unknown token")
 	}
-	return st, project, tmpPath, nil
+	return temporary, project, nil
 }
 
 // cacheStoreHolder owns the hot-reloading read-only store behind mcp --cache.
 // Swapped-out stores are NOT closed on swap: the SDK dispatches tool calls on
 // separate goroutines, so an in-flight call may still hold the old pointer —
 // closing it would surface "sql: database is closed" as a tool error. They are
-// registered in stores/tmpPaths and torn down once at process exit instead
+// registered in temporaryStores and torn down once at process exit instead
 // (rebuilds are rare; the leak is bounded and harmless).
 type cacheStoreHolder struct {
 	reload    func() (*store.Snapshot, bool, error)
@@ -121,9 +102,10 @@ type cacheStoreHolder struct {
 	// 去重。changes 为空时退回默认比较器,保证直接构造 holder 的测试
 	// 路径与生产路径走同一套比较。
 	changes     *snapshotdiff.Comparer
-	changeHints []string       // guarded by mu
-	stores      []*store.Store // every hydrated store, closed once in cleanup
-	tmpPaths    []string       // every temp db, removed once in cleanup
+	changeHints []string // guarded by mu
+	// temporaryStores 保存每一代已导入快照的临时客户端缓存；进程退出时统
+	// 一关闭数据库并删除数据库文件和附属文件。
+	temporaryStores []store.TemporaryClientCacheStore
 }
 
 // refresh 是桥唯一的「换上新快照」入口:先询问重新加载回调,变化才
@@ -166,7 +148,7 @@ func (h *cacheStoreHolder) refresh() *store.Store {
 	if snap == h.lastSnap {
 		return h.cur.Load()
 	}
-	st, project, tmpPath, err := hydrateCacheStore(h.token, snap, h.auditFile, h.device)
+	temporary, project, err := hydrateCacheStore(h.token, snap, h.auditFile, h.device)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr: cache hot-reload failed (keeping current snapshot): %v\n", err)
 		return h.cur.Load()
@@ -176,18 +158,16 @@ func (h *cacheStoreHolder) refresh() *store.Store {
 		// tool closures still scope by the startup profileID, so serving the new
 		// store would show the wrong set. Keep the old store + log.
 		fmt.Fprintf(os.Stderr, "sshmgr: cache snapshot changed the project's profile (keeping current snapshot to preserve scoping)\n")
-		st.Close()
-		os.Remove(tmpPath)
+		_ = temporary.Close()
 		return h.cur.Load()
 	}
 	if hint := effectiveSnapshotComparer(h.changes).Hint(h.lastSnap, snap); hint != "" {
 		h.changeHints = append(h.changeHints, hint)
 	}
 	h.lastSnap = snap
-	h.stores = append(h.stores, st)
-	h.tmpPaths = append(h.tmpPaths, tmpPath)
-	h.cur.Store(st) // old store intentionally left open (in-flight calls)
-	return st
+	h.temporaryStores = append(h.temporaryStores, temporary)
+	h.cur.Store(temporary.Store) // 旧库刻意保持打开，避免打断仍在执行的调用
+	return temporary.Store
 }
 
 // Current returns the store to serve THIS tool call from, rebuilding first if
@@ -213,18 +193,14 @@ func (h *cacheStoreHolder) CurrentRevision() int64 {
 // cleanup closes every hydrated store and removes every temp db. Called once,
 // deferred from RunStdioCache.
 //
-// Reading stores/tmpPaths without the mutex is safe: cleanup is invoked exactly
+// Reading temporaryStores without the mutex is safe: cleanup is invoked exactly
 // once via defer after srv.Run returns, at which point no in-flight tool calls
 // remain to race a rebuild.
 func (h *cacheStoreHolder) cleanup() {
-	for _, s := range h.stores {
-		s.Close()
+	for i := range h.temporaryStores {
+		_ = h.temporaryStores[i].Close()
 	}
-	h.stores = nil
-	for _, p := range h.tmpPaths {
-		os.Remove(p)
-	}
-	h.tmpPaths = nil
+	h.temporaryStores = nil
 }
 
 // newCacheStoreHolderFromSnapshot constructs the holder EXACTLY as RunStdioCache
@@ -237,15 +213,14 @@ func (h *cacheStoreHolder) cleanup() {
 // the tested construction can never drift apart.
 func newCacheStoreHolderFromSnapshot(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), device string) (*cacheStoreHolder, *models.Project, error) {
 	h := &cacheStoreHolder{reload: reload, token: token, auditFile: af, device: device, changes: snapshotdiff.Default()}
-	st, project, tmpPath, err := hydrateCacheStore(token, snap, af, device)
+	temporary, project, err := hydrateCacheStore(token, snap, af, device)
 	if err != nil {
 		return nil, nil, err
 	}
 	h.profileID = project.ProfileID // set BEFORE the holder is served: Current()'s drift guard depends on it
 	h.lastSnap = snap
-	h.cur.Store(st)
-	h.stores = append(h.stores, st)
-	h.tmpPaths = append(h.tmpPaths, tmpPath)
+	h.cur.Store(temporary.Store)
+	h.temporaryStores = append(h.temporaryStores, temporary)
 	return h, project, nil
 }
 

@@ -28,9 +28,7 @@ func TestSnapshotRevisionServerUpdateTriggerCoversAllExportedColumns(t *testing.
 		if err := columns.Scan(&columnIndex, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
 			t.Fatal(err)
 		}
-		if name != "device_id" {
-			checked = append(checked, name)
-		}
+		checked = append(checked, name)
 	}
 	if err := columns.Err(); err != nil {
 		t.Fatal(err)
@@ -140,6 +138,11 @@ END;
 	if err != nil {
 		t.Fatalf("升级打开旧库失败:%v", err)
 	}
+	migrationBaseline, err := migrated.SnapshotRevision()
+	if err != nil {
+		migrated.Close()
+		t.Fatal(err)
+	}
 	srv, err := migrated.GetServer("srv-old")
 	if err != nil {
 		migrated.Close()
@@ -155,9 +158,12 @@ END;
 		migrated.Close()
 		t.Fatal(err)
 	}
-	if afterConnectionChange != 42 {
+	if afterConnectionChange != migrationBaseline+1 {
 		migrated.Close()
-		t.Fatalf("升级后第一次连接字段更新的快照修订号 = %d,应为 42", afterConnectionChange)
+		t.Fatalf(
+			"升级后第一次连接字段更新的快照修订号 = %d,应为 %d",
+			afterConnectionChange, migrationBaseline+1,
+		)
 	}
 	if _, err := migrated.db.Exec(
 		`UPDATE servers SET device_id=NULL WHERE id='srv-old'`,
@@ -170,9 +176,12 @@ END;
 		migrated.Close()
 		t.Fatal(err)
 	}
-	if afterDeviceReferenceChange != 42 {
+	if afterDeviceReferenceChange != afterConnectionChange+1 {
 		migrated.Close()
-		t.Fatalf("只改所属设备引用后的快照修订号 = %d,应保持 42", afterDeviceReferenceChange)
+		t.Fatalf(
+			"只改所属设备引用后的快照修订号 = %d,应为 %d",
+			afterDeviceReferenceChange, afterConnectionChange+1,
+		)
 	}
 	triggerBeforeReopen := triggerDefinition(
 		t, migrated.db, "snapshot_revision_servers_update",
@@ -230,6 +239,137 @@ END;
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestSnapshotRevisionServerDeviceTriggerReplacesConditionalLegacy 构造票
+// #130 之前的升级形态：所属设备列已经存在，但条件触发器刻意排除它。升级
+// 打开必须在同一事务里替换触发器，让第一个所属设备变更立即推进修订号；
+// 新库与升级库的触发器定义也必须完全相同。
+func TestSnapshotRevisionServerDeviceTriggerReplacesConditionalLegacy(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "store.db")
+	legacy, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldShape := `
+CREATE TABLE servers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  user TEXT NOT NULL,
+  auth_method TEXT NOT NULL,
+  credential_id TEXT,
+  sudo_credential_id TEXT,
+  shell_type TEXT NOT NULL DEFAULT 'posix',
+  tags TEXT,
+  description TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  hardware TEXT NOT NULL DEFAULT '',
+  services TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT '',
+  caveats TEXT NOT NULL DEFAULT '',
+  expose_host INTEGER NOT NULL DEFAULT 0,
+  device_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE snapshot_revision (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL
+);
+INSERT INTO snapshot_revision(id, revision) VALUES (1, 41);
+INSERT INTO servers(
+  id,name,host,port,user,auth_method,tags,device_id,created_at,updated_at
+) VALUES (
+  'srv-old','old','192.0.2.10',22,'u','password','','device-old',1700000000,1700000000
+);
+CREATE TRIGGER snapshot_revision_servers_update
+AFTER UPDATE ON servers
+FOR EACH ROW WHEN
+  OLD.id IS NOT NEW.id OR OLD.name IS NOT NEW.name OR OLD.host IS NOT NEW.host OR OLD.port IS NOT NEW.port OR
+  OLD.user IS NOT NEW.user OR OLD.auth_method IS NOT NEW.auth_method OR
+  OLD.credential_id IS NOT NEW.credential_id OR OLD.sudo_credential_id IS NOT NEW.sudo_credential_id OR
+  OLD.shell_type IS NOT NEW.shell_type OR OLD.tags IS NOT NEW.tags OR
+  OLD.description IS NOT NEW.description OR OLD.location IS NOT NEW.location OR
+  OLD.hardware IS NOT NEW.hardware OR OLD.services IS NOT NEW.services OR
+  OLD.role IS NOT NEW.role OR OLD.caveats IS NOT NEW.caveats OR
+  OLD.expose_host IS NOT NEW.expose_host OR OLD.created_at IS NOT NEW.created_at OR
+  OLD.updated_at IS NOT NEW.updated_at OR OLD.revision IS NOT NEW.revision
+BEGIN
+  UPDATE snapshot_revision SET revision = revision + 1;
+END;
+`
+	if _, err := legacy.Exec(oldShape); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mk := make([]byte, 32)
+	randRead(t, mk)
+	migrated, err := Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("升级打开旧库失败:%v", err)
+	}
+	if _, err := migrated.db.Exec(
+		`UPDATE servers SET device_id='device-new' WHERE id='srv-old'`,
+	); err != nil {
+		migrated.Close()
+		t.Fatal(err)
+	}
+	afterDeviceReferenceChange, err := migrated.SnapshotRevision()
+	if err != nil {
+		migrated.Close()
+		t.Fatal(err)
+	}
+	if afterDeviceReferenceChange != 42 {
+		migrated.Close()
+		t.Fatalf("升级后第一次所属设备变更的快照修订号 = %d,应为 42", afterDeviceReferenceChange)
+	}
+
+	fresh := newTestStore(t)
+	wantDefinition := triggerDefinition(t, fresh.db, "snapshot_revision_servers_update")
+	if definition := triggerDefinition(
+		t, migrated.db, "snapshot_revision_servers_update",
+	); definition != wantDefinition {
+		migrated.Close()
+		t.Fatalf(
+			"升级库的修订号更新触发器定义:\n%s\n应与新库一致:\n%s",
+			definition, wantDefinition,
+		)
+	}
+	if err := migrated.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	observer, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer observer.Close()
+	var dataVersionBeforeReopen int
+	if err := observer.QueryRow(`PRAGMA data_version`).Scan(&dataVersionBeforeReopen); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("重复打开升级后的库失败:%v", err)
+	}
+	defer reopened.Close()
+	var dataVersionAfterReopen int
+	if err := observer.QueryRow(`PRAGMA data_version`).Scan(&dataVersionAfterReopen); err != nil {
+		t.Fatal(err)
+	}
+	if dataVersionAfterReopen != dataVersionBeforeReopen {
+		t.Fatalf(
+			"重复打开的数据改动计数从 %d 变成 %d,应保持不变",
+			dataVersionBeforeReopen, dataVersionAfterReopen,
+		)
 	}
 }
 
@@ -419,8 +559,8 @@ VALUES ('192.0.2.10:22',X'0102',1700000000,'blob','tofu','');
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rev != 42 {
-		t.Fatalf("锚迁移后的快照修订号 = %d,应为 42", rev)
+	if rev <= 41 {
+		t.Fatalf("锚迁移后的快照修订号 = %d,应大于 41", rev)
 	}
 	for _, trigger := range snapshotRevisionRetiredTriggers {
 		if triggerExists(t, s.db, trigger) {
@@ -507,8 +647,8 @@ END;
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rev != 7 {
-		t.Fatalf("删除旧锚表后的快照修订号 = %d,应保持 7", rev)
+	if rev <= 7 {
+		t.Fatalf("删除旧锚表并生成设备后的快照修订号 = %d,应大于 7", rev)
 	}
 	for _, trigger := range snapshotRevisionRetiredTriggers {
 		if triggerExists(t, s.db, trigger) {
@@ -566,6 +706,208 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 			name: "新增服务器",
 			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
 				_, err := s.AddServer(newServer("extra", "192.0.2.11"))
+				return err
+			},
+		},
+		{
+			name: "新增站点",
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				_, err := s.AddSite("办公室", "新增站点")
+				return err
+			},
+		},
+		{
+			name: "编辑站点",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, err := s.AddSite("办公室", "原备注"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				note := "新备注"
+				_, err := s.EditSite("办公室", SiteChanges{Note: &note})
+				return err
+			},
+		},
+		{
+			name: "删除站点",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, err := s.AddSite("办公室", ""); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				return s.DeleteSite("办公室")
+			},
+		},
+		{
+			name: "新增网络",
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				_, err := s.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual})
+				return err
+			},
+		},
+		{
+			name: "编辑网络",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, err := s.AddNetwork(models.Network{
+					Name: "虚拟网", Type: models.NetworkVirtual, NetworkRange: "192.0.2.0/24",
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				networkRange := "198.51.100.0/24"
+				_, err := s.EditNetwork("虚拟网", NetworkChanges{NetworkRange: &networkRange})
+				return err
+			},
+		},
+		{
+			name: "删除网络",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, err := s.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				_, err := s.DeleteNetwork("虚拟网")
+				return err
+			},
+		},
+		{
+			name: "新增设备",
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				_, err := s.AddDevice("工作站", "新增设备", "")
+				return err
+			},
+		},
+		{
+			name: "编辑设备",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, err := s.AddDevice("工作站", "原备注", ""); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				note := "新备注"
+				_, err := s.EditDevice("工作站", DeviceChanges{Note: &note})
+				return err
+			},
+		},
+		{
+			name: "删除设备",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, err := s.AddDevice("工作站", "", ""); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				preview, err := s.DeviceDeletePreview("工作站")
+				if err != nil {
+					return err
+				}
+				_, err = s.DeleteDeviceCascading("工作站", preview)
+				return err
+			},
+		},
+		{
+			name: "关联客户端实例",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, _, err := s.AddCacheToken("laptop", seed.profileID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.AddDevice("工作站", "", ""); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				client := "laptop"
+				_, err := s.EditDevice("工作站", DeviceChanges{Client: &client})
+				return err
+			},
+		},
+		{
+			name: "解除客户端实例关联",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, _, err := s.AddCacheToken("laptop", seed.profileID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.AddDevice("工作站", "", "laptop"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				client := ""
+				_, err := s.EditDevice("工作站", DeviceChanges{Client: &client})
+				return err
+			},
+		},
+		{
+			name: "新增网络成员",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, err := s.AddDevice("工作站", "", ""); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				_, err := s.AddNetworkMembership("工作站", "虚拟网", "192.0.2.20")
+				return err
+			},
+		},
+		{
+			name: "编辑网络成员",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, err := s.AddDevice("工作站", "", ""); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.AddNetworkMembership("工作站", "虚拟网", "192.0.2.20"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				_, err := s.EditNetworkMembership("工作站", "虚拟网", "198.51.100.20")
+				return err
+			},
+		},
+		{
+			name: "删除网络成员",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, err := s.AddDevice("工作站", "", ""); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.AddNetworkMembership("工作站", "虚拟网", "192.0.2.20"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				_, err := s.RemoveNetworkMembership("工作站", "虚拟网")
+				return err
+			},
+		},
+		{
+			name: "移动服务器条目所属设备",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if _, err := s.AddDevice("机器A", "", ""); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.AddDevice("机器B", "", ""); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.MoveServerToDevice(seed.serverID, "机器A"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				_, err := s.MoveServerToDevice(seed.serverID, "机器B")
 				return err
 			},
 		},
@@ -896,6 +1238,60 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 	}
 }
 
+// TestSnapshotRevision_TopologyTransactionRollsBack: 拓扑表写入让修订号
+// 前进发生在同一个数据库事务里。设备删除在删除网络成员之后失败时，已触
+// 发的修订号加一必须随事务一起回滚。
+func TestSnapshotRevision_TopologyTransactionRollsBack(t *testing.T) {
+	s := newTestStore(t)
+	device, err := s.AddDevice("工作站", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddSite("办公室", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddNetwork(models.Network{
+		Name: "办公局域网", Type: models.NetworkPhysical, SiteName: "办公室",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddNetworkMembership("工作站", "办公局域网", "192.0.2.20"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO device_layout_coordinates(view_key,device_id,x,y,created_at,updated_at)
+		 VALUES(?,?,?,?,?,?)`, "主视图", device.ID, 1, 2, 1000, 1000,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(
+		`CREATE TRIGGER topology_delete_layout_fail
+		 BEFORE DELETE ON device_layout_coordinates
+		 BEGIN SELECT RAISE(ABORT, 'injected topology rollback failure'); END`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := s.DeviceDeletePreview("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteDeviceCascading("工作站", preview); err == nil ||
+		!strings.Contains(err.Error(), "injected topology rollback failure") {
+		t.Fatalf("设备删除应暴露注入的失败，实际:%v", err)
+	}
+	after, err := s.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("事务回滚后的快照修订号 = %d,应保持 %d", after, before)
+	}
+}
+
 // TestSnapshotRevision_AuditOnlyWritesDoNotAdvance: 只写审计与设备码状态的
 // 操作不改变快照修订号。
 func TestSnapshotRevision_AuditOnlyWritesDoNotAdvance(t *testing.T) {
@@ -945,7 +1341,7 @@ func TestSnapshotRevision_RidesBothExportPaths(t *testing.T) {
 	if whole.Version != 1 || whole.SnapshotRevision != rev {
 		t.Fatalf("全库导出:信封版本 = %d,快照修订号 = %d,应为 1/%d", whole.Version, whole.SnapshotRevision, rev)
 	}
-	scoped, err := s.ExportSnapshotForProfile(seed.profileID, false)
+	scoped, err := s.ExportSnapshotForProfile(seed.profileID, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

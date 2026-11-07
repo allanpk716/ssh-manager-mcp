@@ -1,7 +1,7 @@
 // Package snapshotdiff 比较同一 profile 可见的新旧两份快照,产出给 agent
-// 看的变更提示。比较环节由可追加的比较项组成:本包先带服务器集合比较项,
-// 后续机密项、网络拓扑、共享存储的票只需往默认比较器里加自己的比较项,
-// 不必改动换快照与提示通道。
+// 看的变更提示。比较环节由可追加的比较项组成:本包默认带服务器集合、网
+// 络拓扑、机密项与命令策略比较项,后续共享存储等票只需往默认比较器里加
+// 自己的比较项,不必改动换快照与提示通道。
 package snapshotdiff
 
 import (
@@ -27,12 +27,15 @@ func NewComparer(items ...Item) *Comparer {
 	return &Comparer{items: append([]Item(nil), items...)}
 }
 
-// Default 返回默认比较器:当前 profile 可见的服务器集合、机密项与命令策略。
-func Default() *Comparer { return NewComparer(ServerSet{}, SecretSet{}, CommandPolicy{}) }
+// Default 返回默认比较器:当前 profile 可见的服务器集合、网络拓扑、机密项
+// 与命令策略。
+func Default() *Comparer {
+	return NewComparer(ServerSet{}, NetworkTopology{}, SecretSet{}, CommandPolicy{})
+}
 
 // Hint 比较新旧快照并返回变更提示;没有任何差异时返回空字符串。提示只
-// 含服务器名、机密项名字、修订号与固定的命令策略说明,不含地址、凭据或
-// 机密项的值。
+// 含服务器名、机密项名字、修订号与固定的网络拓扑、命令策略说明,不含
+// 地址、凭据或机密项的值。
 func (c *Comparer) Hint(old, fresh *store.Snapshot) string {
 	if c == nil || old == nil || fresh == nil {
 		return ""

@@ -1,7 +1,8 @@
 package store
 
 // 布局坐标存储只服务拓扑图。它必须随备份与导出的全量快照往返保留，
-// 但不随客户端快照下发，也不改变客户端用来判断是否重新拉取的快照修订号。
+// 也随 profile 裁剪快照下发；只有布局坐标变化不改变客户端用来判断是否
+// 重新拉取的快照修订号。
 
 import (
 	"encoding/json"
@@ -69,20 +70,20 @@ func TestDeviceLayoutCoordinatesSnapshotRoundTripAndClientDelivery(t *testing.T)
 			snapshot.DeviceLayoutCoordinates, want)
 	}
 
-	clientSnapshot, err := source.ExportSnapshotForProfile(profileID, false)
+	clientSnapshot, err := source.ExportSnapshotForProfile(profileID, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if clientSnapshot.DeviceLayoutCoordinates != nil {
-		t.Fatalf("client snapshot must not carry layout coordinates: %+v",
-			clientSnapshot.DeviceLayoutCoordinates)
+	if !reflect.DeepEqual(clientSnapshot.DeviceLayoutCoordinates, want) {
+		t.Fatalf("client snapshot layout coordinates = %+v, want %+v",
+			clientSnapshot.DeviceLayoutCoordinates, want)
 	}
 	encoded, err := json.Marshal(clientSnapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), `"device_layout_coordinates"`) {
-		t.Fatalf("client snapshot JSON must not contain layout coordinates:\n%s", encoded)
+	if !strings.Contains(string(encoded), `"device_layout_coordinates"`) {
+		t.Fatalf("client snapshot JSON must contain layout coordinates:\n%s", encoded)
 	}
 
 	targetKey, err := GenerateMasterKey()

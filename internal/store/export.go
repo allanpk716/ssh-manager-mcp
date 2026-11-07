@@ -23,12 +23,12 @@ type Snapshot struct {
 	// 自己是否落后；旧快照与旧客户端分别解码、忽略该字段。
 	RecommendedVersion string               `json:"recommended_version"`
 	Credentials        []SnapshotCredential `json:"credentials"`
-	// Sites / Networks（票 #123）是网络拓扑里的站点与网络，只进入备份与
-	// 导出的全量快照；下发给客户端的 profile 裁剪快照不填这些拓扑段。
+	// Sites / Networks 是网络拓扑里的站点与网络。全量快照全部携带；
+	// profile 裁剪快照也全部携带，让授权服务器引用的名字不因授权裁剪丢失。
 	Sites    []SnapshotSite    `json:"sites,omitempty"`
 	Networks []SnapshotNetwork `json:"networks,omitempty"`
-	// Devices / NetworkMemberships（票 #124）是网络拓扑里的设备与设备在
-	// 各网络里的地址，同样只进入备份与导出的全量快照。
+	// Devices / NetworkMemberships 是网络拓扑里的设备与设备在各网络里的
+	// 地址。全量快照全部携带；profile 裁剪快照按设备授权范围裁剪。
 	Devices                 []SnapshotDevice                 `json:"devices,omitempty"`
 	NetworkMemberships      []SnapshotNetworkMembership      `json:"network_memberships,omitempty"`
 	DeviceLayoutCoordinates []SnapshotDeviceLayoutCoordinate `json:"device_layout_coordinates,omitempty"`
@@ -142,8 +142,8 @@ type SnapshotServer struct {
 	Role             string `json:"role"`
 	Caveats          string `json:"caveats"`
 	ExposeHost       bool   `json:"expose_host"`
-	// DeviceID 是服务器条目的所属设备引用，只进备份与导出的全量快照；
-	// 下发给客户端的裁剪快照不填写。
+	// DeviceID 是服务器条目的所属设备引用，随备份、导出与 profile 裁剪
+	// 快照一起携带。
 	DeviceID string `json:"device_id,omitempty"`
 	// ShellType (命令策略 ticket #14) 是连接信息的一员,随两条导出路径
 	// 下发。旧快照(无字段)解码为零值,ImportSnapshot 归一为 posix——
@@ -385,88 +385,17 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	// 网络拓扑（票 #123）：站点先导出，网络段携带站点标识符；导入时按
-	// 同一依赖顺序写回。
-	rts, err := s.db.Query(`SELECT id,name,note,created_at,updated_at FROM sites ORDER BY id`)
+	// 同一依赖顺序写回。全量快照与按 profile 裁剪的快照共用同一段读取
+	// 逻辑，只让设备选择在这里分叉。
+	topology, err := s.readSnapshotTopologySection("", "")
 	if err != nil {
 		return nil, err
 	}
-	for rts.Next() {
-		var site SnapshotSite
-		if err := rts.Scan(&site.ID, &site.Name, &site.Note, &site.CreatedAt, &site.UpdatedAt); err != nil {
-			rts.Close()
-			return nil, err
-		}
-		snap.Sites = append(snap.Sites, site)
-	}
-	rts.Close()
-	if err := rts.Err(); err != nil {
-		return nil, err
-	}
-
-	rn, err := s.db.Query(`
-		SELECT id,name,type,COALESCE(site_id,''),note,cidr,bandwidth_mbps,metered,created_at,updated_at
-		FROM networks ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	for rn.Next() {
-		var network SnapshotNetwork
-		if err := rn.Scan(&network.ID, &network.Name, &network.Type, &network.SiteID,
-			&network.Note, &network.CIDR, &network.BandwidthMbps, &network.Metered,
-			&network.CreatedAt, &network.UpdatedAt); err != nil {
-			rn.Close()
-			return nil, err
-		}
-		snap.Networks = append(snap.Networks, network)
-	}
-	rn.Close()
-	if err := rn.Err(); err != nil {
-		return nil, err
-	}
-
-	rd, err := s.db.Query(`
-		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
-		FROM devices ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	for rd.Next() {
-		var device SnapshotDevice
-		if err := rd.Scan(&device.ID, &device.Name, &device.Note, &device.ClientTokenID,
-			&device.ClientName, &device.CreatedAt, &device.UpdatedAt); err != nil {
-			rd.Close()
-			return nil, err
-		}
-		snap.Devices = append(snap.Devices, device)
-	}
-	rd.Close()
-	if err := rd.Err(); err != nil {
-		return nil, err
-	}
-
-	rm, err := s.db.Query(`
-		SELECT device_id,network_id,address,created_at,updated_at
-		FROM network_memberships ORDER BY device_id,network_id`)
-	if err != nil {
-		return nil, err
-	}
-	for rm.Next() {
-		var membership SnapshotNetworkMembership
-		if err := rm.Scan(&membership.DeviceID, &membership.NetworkID, &membership.Address,
-			&membership.CreatedAt, &membership.UpdatedAt); err != nil {
-			rm.Close()
-			return nil, err
-		}
-		snap.NetworkMemberships = append(snap.NetworkMemberships, membership)
-	}
-	rm.Close()
-	if err := rm.Err(); err != nil {
-		return nil, err
-	}
-	snap.DeviceLayoutCoordinates, err = s.snapshotDeviceLayoutCoordinates()
-	if err != nil {
-		return nil, err
-	}
+	snap.Sites = topology.Sites
+	snap.Networks = topology.Networks
+	snap.Devices = topology.Devices
+	snap.NetworkMemberships = topology.NetworkMemberships
+	snap.DeviceLayoutCoordinates = topology.DeviceLayoutCoordinates
 
 	// profiles
 	rp, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles ORDER BY id`)
@@ -629,8 +558,10 @@ func (s *Store) snapshotSecrets() ([]SnapshotSecret, []SnapshotSecretAllow, erro
 // The owner-side whole-vault export and this authorization-scoped assembly stay
 // separate so the backup path cannot drift into accidental cropping.
 // clientDeclaredVersion 表示这次拉取是否声明了客户端版本；未声明时按
-// ADR 0014 去掉全部机密项。
-func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion bool) (*Snapshot, error) {
+// ADR 0014 去掉全部机密项。initiatingClientTokenID 是发起拉取的客户端
+// 实例的设备码标识符；单机部署等没有客户端身份的调用方传空。网络拓扑
+// 不按客户端版本裁剪，未声明版本的请求照常收到拓扑段。
+func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion bool, initiatingClientTokenID string) (*Snapshot, error) {
 	if err := requireProfile(s.db, profileID); err != nil {
 		return nil, err
 	}
@@ -678,7 +609,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	}
 
 	// servers granted to the profile (same column shape as ExportSnapshot)
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,COALESCE(device_id,''),created_at,updated_at,revision
 		FROM servers WHERE id IN (SELECT server_id FROM profile_servers WHERE profile_id=?) ORDER BY id`, profileID)
 	if err != nil {
 		return nil, err
@@ -689,7 +620,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 		var sv SnapshotServer
 		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
 			&sv.CredentialID, &sv.SudoCredentialID, &sv.ShellType, &sv.TagsRaw, &sv.Description, &sv.Location,
-			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
+			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.DeviceID, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
 			rs.Close()
 			return nil, err
 		}
@@ -705,6 +636,19 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	if err := rs.Err(); err != nil {
 		return nil, err
 	}
+
+	// 站点与网络全部下发，字段与全量快照相同。设备只保留：挂着本次授权
+	// 条目的设备、不受管设备，以及发起拉取的客户端实例所在的设备。设备上
+	// 的客户端实例关联只对发起方自己的设备保留。
+	topology, err := s.readSnapshotTopologySection(profileID, initiatingClientTokenID)
+	if err != nil {
+		return nil, err
+	}
+	snap.Sites = topology.Sites
+	snap.Networks = topology.Networks
+	snap.Devices = topology.Devices
+	snap.NetworkMemberships = topology.NetworkMemberships
+	snap.DeviceLayoutCoordinates = topology.DeviceLayoutCoordinates
 
 	// ONLY the referenced credentials (decrypted under s.masterKey). The IN
 	// clause is built from collected ids — a granted set is small (tens), and
@@ -836,6 +780,146 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	return snap, nil
 }
 
+// snapshotTopologySection 是快照里的五段网络拓扑数据。全量快照与按 profile
+// 裁剪的快照都用这个结构承载，避免两类导出的字段读取方式漂移。
+type snapshotTopologySection struct {
+	Sites                   []SnapshotSite
+	Networks                []SnapshotNetwork
+	Devices                 []SnapshotDevice
+	NetworkMemberships      []SnapshotNetworkMembership
+	DeviceLayoutCoordinates []SnapshotDeviceLayoutCoordinate
+}
+
+// readSnapshotTopologySection 读取快照需要的五段网络拓扑数据。profileID
+// 非空时按该 profile 的授权范围裁剪设备，并把客户端实例关联只保留给发起
+// 拉取的客户端实例；为空时读取全量拓扑。站点与网络始终全部读取。
+func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID string) (snapshotTopologySection, error) {
+	cropToProfile := profileID != ""
+	var sites []SnapshotSite
+	siteRows, err := s.db.Query(`SELECT id,name,note,created_at,updated_at FROM sites ORDER BY id`)
+	if err != nil {
+		return snapshotTopologySection{}, err
+	}
+	for siteRows.Next() {
+		var site SnapshotSite
+		if err := siteRows.Scan(&site.ID, &site.Name, &site.Note, &site.CreatedAt, &site.UpdatedAt); err != nil {
+			siteRows.Close()
+			return snapshotTopologySection{}, err
+		}
+		sites = append(sites, site)
+	}
+	siteRows.Close()
+	if err := siteRows.Err(); err != nil {
+		return snapshotTopologySection{}, err
+	}
+
+	var networks []SnapshotNetwork
+	networkRows, err := s.db.Query(`
+		SELECT id,name,type,COALESCE(site_id,''),note,cidr,bandwidth_mbps,metered,created_at,updated_at
+		FROM networks ORDER BY id`)
+	if err != nil {
+		return snapshotTopologySection{}, err
+	}
+	for networkRows.Next() {
+		var network SnapshotNetwork
+		if err := networkRows.Scan(&network.ID, &network.Name, &network.Type, &network.SiteID,
+			&network.Note, &network.CIDR, &network.BandwidthMbps, &network.Metered,
+			&network.CreatedAt, &network.UpdatedAt); err != nil {
+			networkRows.Close()
+			return snapshotTopologySection{}, err
+		}
+		networks = append(networks, network)
+	}
+	networkRows.Close()
+	if err := networkRows.Err(); err != nil {
+		return snapshotTopologySection{}, err
+	}
+
+	deviceQuery := `
+		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
+		FROM devices
+		`
+	queryArguments := make([]any, 0, 3)
+	if cropToProfile {
+		deviceQuery += `WHERE id IN (
+			          SELECT COALESCE(server.device_id,'')
+			          FROM servers server
+			          JOIN profile_servers grant_row ON grant_row.server_id=server.id
+			          WHERE grant_row.profile_id=?)
+			   OR (
+			          NOT EXISTS(SELECT 1 FROM servers server WHERE server.device_id=devices.id)
+			          AND COALESCE(devices.client_token_id,'')='')
+			   OR (?<>'' AND COALESCE(devices.client_token_id,'')=?)
+			`
+		queryArguments = append(queryArguments, profileID, initiatingClientTokenID, initiatingClientTokenID)
+	}
+	deviceQuery += `ORDER BY id`
+	deviceRows, err := s.db.Query(deviceQuery, queryArguments...)
+	if err != nil {
+		return snapshotTopologySection{}, err
+	}
+	var devices []SnapshotDevice
+	delivered := make(map[string]bool)
+	for deviceRows.Next() {
+		var device SnapshotDevice
+		if err := deviceRows.Scan(&device.ID, &device.Name, &device.Note, &device.ClientTokenID,
+			&device.ClientName, &device.CreatedAt, &device.UpdatedAt); err != nil {
+			deviceRows.Close()
+			return snapshotTopologySection{}, err
+		}
+		if cropToProfile && device.ClientTokenID != initiatingClientTokenID {
+			device.ClientTokenID, device.ClientName = "", ""
+		}
+		devices = append(devices, device)
+		delivered[device.ID] = true
+	}
+	deviceRows.Close()
+	if err := deviceRows.Err(); err != nil {
+		return snapshotTopologySection{}, err
+	}
+
+	var memberships []SnapshotNetworkMembership
+	membershipRows, err := s.db.Query(`
+		SELECT device_id,network_id,address,created_at,updated_at
+		FROM network_memberships ORDER BY device_id,network_id`)
+	if err != nil {
+		return snapshotTopologySection{}, err
+	}
+	for membershipRows.Next() {
+		var membership SnapshotNetworkMembership
+		if err := membershipRows.Scan(&membership.DeviceID, &membership.NetworkID, &membership.Address,
+			&membership.CreatedAt, &membership.UpdatedAt); err != nil {
+			membershipRows.Close()
+			return snapshotTopologySection{}, err
+		}
+		if delivered[membership.DeviceID] {
+			memberships = append(memberships, membership)
+		}
+	}
+	membershipRows.Close()
+	if err := membershipRows.Err(); err != nil {
+		return snapshotTopologySection{}, err
+	}
+
+	allCoordinates, err := s.snapshotDeviceLayoutCoordinates()
+	if err != nil {
+		return snapshotTopologySection{}, err
+	}
+	coordinates := make([]SnapshotDeviceLayoutCoordinate, 0, len(allCoordinates))
+	for _, coordinate := range allCoordinates {
+		if delivered[coordinate.DeviceID] {
+			coordinates = append(coordinates, coordinate)
+		}
+	}
+	return snapshotTopologySection{
+		Sites:                   sites,
+		Networks:                networks,
+		Devices:                 devices,
+		NetworkMemberships:      memberships,
+		DeviceLayoutCoordinates: coordinates,
+	}, nil
+}
+
 // ErrVaultNotEmpty is returned by ImportSnapshot when the target store already
 // has servers or topology rows. Import is restore-into-empty only — no silent clobber. Delete
 // store.db (or point SSHMGR_STORE at a fresh path) to get an empty vault.
@@ -844,7 +928,9 @@ var ErrVaultNotEmpty = errors.New("vault is not empty; import into a fresh/empty
 // ImportSnapshot restores an owner-side full backup or export into THIS store in
 // one transaction:
 //   - credentials are RE-SEALED under this store's master key (master-key-independent file);
-//   - rows are inserted id-preserving in FK order (credentials -> servers -> profiles -> profile_servers -> projects -> host_keys -> audit);
+//   - rows are inserted id-preserving in foreign-key order (sites -> networks ->
+//     devices -> network memberships -> layout coordinates -> credentials ->
+//     servers -> profiles -> grants -> projects -> host keys -> audit);
 //   - projects.token_hash/salt/prefix are written verbatim so the original plaintext token keeps validating.
 //
 // Refuses a non-empty target (any row in servers, sites, networks, devices,
@@ -855,21 +941,11 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 }
 
 // ImportSnapshotForClientCache restores a profile-scoped snapshot delivered by
-// the authoritative machine into a fresh client cache. 这一版拓扑不随快照下
-// 发；本入口还会丢弃快照里可能出现的拓扑段和服务器条目的所属设备引用，
-// 并且永不执行设备生成迁移，保证客户端缓存不落拓扑数据与迁移审计。
+// the authoritative machine into a fresh client cache. 快照里的网络拓扑与服
+// 务器条目的所属设备引用按外键顺序原样写回；本入口永不执行设备生成迁
+// 移，也不产生迁移审计。
 func (s *Store) ImportSnapshotForClientCache(snap *Snapshot) error {
-	clientSnap := *snap
-	clientSnap.Sites = nil
-	clientSnap.Networks = nil
-	clientSnap.Devices = nil
-	clientSnap.NetworkMemberships = nil
-	clientSnap.DeviceLayoutCoordinates = nil
-	clientSnap.Servers = append([]SnapshotServer(nil), snap.Servers...)
-	for i := range clientSnap.Servers {
-		clientSnap.Servers[i].DeviceID = ""
-	}
-	return s.importSnapshot(&clientSnap, false)
+	return s.importSnapshot(snap, false)
 }
 
 func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) error {

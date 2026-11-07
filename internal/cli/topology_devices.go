@@ -20,25 +20,18 @@ func newDevicesCmd() *cobra.Command {
 }
 
 func devicesListCmd() *cobra.Command {
-	var site, network string
+	var site, network, instance string
 	var unassigned bool
 	c := &cobra.Command{
-		Use:   "list [--site 站点] [--network 网络] [--unassigned]",
+		Use:   "list [--site 站点] [--network 网络] [--unassigned] [--instance <name>]",
 		Args:  cobra.NoArgs,
 		Short: "List topology devices, optionally filtered",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			role, err := topologyRoleFor()
+			s, closeStore, err := openTopologyViewStore(instance)
 			if err != nil {
 				return err
 			}
-			if role == policyRoleClient {
-				return errors.New("网络拓扑这一版尚未随快照下发；请在权威端查看设备")
-			}
-			s, err := openUnlockedStore()
-			if err != nil {
-				return err
-			}
-			defer s.Close()
+			defer closeStore()
 			devices, err := s.ListDevices(store.DeviceFilter{
 				Site: site, Network: network, Unassigned: unassigned,
 			})
@@ -75,6 +68,7 @@ func devicesListCmd() *cobra.Command {
 	c.Flags().StringVar(&site, "site", "", "只显示在这个站点的物理局域网里的设备")
 	c.Flags().StringVar(&network, "network", "", "只显示在这个网络里的设备")
 	c.Flags().BoolVar(&unassigned, "unassigned", false, "只显示没有任何网络成员的设备")
+	c.Flags().StringVar(&instance, "instance", "", topologyInstanceFlagHelp)
 	return c
 }
 
@@ -381,23 +375,17 @@ func devicesEditCmd() *cobra.Command {
 }
 
 func devicesShowCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "show NAME",
+	var instance string
+	c := &cobra.Command{
+		Use:   "show NAME [--instance <name>]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Show a topology device",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			role, err := topologyRoleFor()
+			s, closeStore, err := openTopologyViewStore(instance)
 			if err != nil {
 				return err
 			}
-			if role == policyRoleClient {
-				return errors.New("网络拓扑这一版尚未随快照下发；请在权威端查看设备")
-			}
-			s, err := openUnlockedStore()
-			if err != nil {
-				return err
-			}
-			defer s.Close()
+			defer closeStore()
 			device, err := s.GetDevice(args[0])
 			if err != nil {
 				return err
@@ -414,6 +402,8 @@ func devicesShowCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&instance, "instance", "", topologyInstanceFlagHelp)
+	return c
 }
 
 // printDevice 输出设备详情；网络成员由网络成员命令补上。

@@ -10,10 +10,12 @@ import (
 	"net"
 	"os"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
@@ -38,6 +40,14 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 	if err != nil {
 		return nil, err
 	}
+	devices, err := st.ListDevices(store.DeviceFilter{})
+	if err != nil {
+		return nil, err
+	}
+	devicesByID := make(map[string]*models.Device, len(devices))
+	for _, device := range devices {
+		devicesByID[device.ID] = device
+	}
 	out := make([]ServerInfo, 0, len(ids))
 	for _, id := range ids {
 		srv, err := st.GetServer(id)
@@ -61,6 +71,7 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 		if srv.ExposeHost {
 			host = srv.Host
 		}
+		deviceName, site, networkNames := topologyFieldsForServer(devicesByID[srv.DeviceID])
 		out = append(out, ServerInfo{
 			ID:          srv.ID,
 			Name:        srv.Name,
@@ -74,10 +85,47 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 			Hardware:    srv.Hardware,
 			Tags:        tags,
 			Description: srv.Description,
+			Device:      deviceName,
+			Site:        site,
+			Networks:    networkNames,
 			Revision:    srv.Revision,
 		})
 	}
 	return out, nil
+}
+
+// topologyFieldsForServer 从设备与网络成员算出 list_servers 的三个拓扑名
+// 字字段。单机部署的本机 vault 与多机客户端的缓存 Store 都先经 ListDevices
+// 读出同一形态，再进入这里，保证两个角色的输出一致。
+func topologyFieldsForServer(device *models.Device) (deviceName, site string, networks []string) {
+	networks = []string{}
+	if device == nil {
+		return "", "", networks
+	}
+	physicalNetworks := make([]string, 0, len(device.Memberships))
+	virtualNetworks := make([]string, 0, len(device.Memberships))
+	siteSet := make(map[string]bool)
+	for _, membership := range device.Memberships {
+		switch membership.NetworkType {
+		case models.NetworkPhysical:
+			physicalNetworks = append(physicalNetworks, membership.NetworkName)
+			if membership.SiteName != "" {
+				siteSet[membership.SiteName] = true
+			}
+		case models.NetworkVirtual:
+			virtualNetworks = append(virtualNetworks, membership.NetworkName)
+		}
+	}
+	sort.Strings(physicalNetworks)
+	sort.Strings(virtualNetworks)
+	networks = append(networks, physicalNetworks...)
+	networks = append(networks, virtualNetworks...)
+	sites := make([]string, 0, len(siteSet))
+	for name := range siteSet {
+		sites = append(sites, name)
+	}
+	sort.Strings(sites)
+	return device.Name, strings.Join(sites, "、"), networks
 }
 
 // ExecCommandForProfile runs command on serverID iff serverID is in profileID (iron rule).

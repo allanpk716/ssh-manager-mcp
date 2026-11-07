@@ -81,7 +81,7 @@ func newRevisionAuthority(t *testing.T) *revisionAuthority {
 			}{revision})
 		case "/snapshot":
 			a.snapshotHits.Add(1)
-			snap, serr := st.ExportSnapshotForProfile(profileID, true)
+			snap, serr := st.ExportSnapshotForProfile(profileID, true, "")
 			if serr != nil {
 				t.Errorf("导出快照:%v", serr)
 				w.WriteHeader(http.StatusInternalServerError)

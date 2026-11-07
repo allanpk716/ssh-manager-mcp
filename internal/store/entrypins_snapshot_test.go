@@ -116,7 +116,7 @@ func TestSnapshotEntryPins_ExportAndLegacyDerivation(t *testing.T) {
 		t.Fatalf("同地址密钥不同时不应生成旧格式锚：%+v", legacy)
 	}
 
-	scoped, err := s.ExportSnapshotForProfile(profID, false)
+	scoped, err := s.ExportSnapshotForProfile(profID, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
