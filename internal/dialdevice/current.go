@@ -89,9 +89,9 @@ func Current(st *store.Store, instance string) (Result, error) {
 	return Result{Device: device, Known: true}, nil
 }
 
-// CurrentForClientCache 从客户端缓存存储解析本机设备。裁剪快照只给发起
-// 拉取的客户端设备保留设备码标识；即使调用链没有实例名，这个唯一关联也能
-// 识别本机，不会误读默认实例的元数据。
+// CurrentForClientCache 从客户端缓存存储解析本机设备。优先使用 cache.meta.json
+// 记录的设备标识；旧缓存没有这个字段时，才用裁剪快照里唯一带设备码关联
+// 的设备推断。
 func CurrentForClientCache(st *store.Store) (Result, error) {
 	state, err := roles.Load()
 	if err != nil {
@@ -102,6 +102,16 @@ func CurrentForClientCache(st *store.Store) (Result, error) {
 	}
 	if state.Role != roles.RoleClient {
 		return Current(st, "")
+	}
+	if deviceID := cacheDeviceIDFor(""); deviceID != "" {
+		device, err := deviceByID(st, deviceID)
+		if err != nil {
+			return Result{}, err
+		}
+		if device == nil {
+			return unknown(ReasonDeviceMissingFromSnapshot), nil
+		}
+		return Result{Device: device, Known: true}, nil
 	}
 	devices, err := st.ListDevices(store.DeviceFilter{})
 	if err != nil {

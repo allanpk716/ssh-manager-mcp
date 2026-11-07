@@ -138,3 +138,47 @@ func TestStoreSourceSuccessCacheLocationByRole(t *testing.T) {
 		t.Fatalf("cache directory override success cache: %v", err)
 	}
 }
+
+// TestStoreSourceMarksDeletedLocalDevice: 单机部署与权威端的本机设备设定指向
+// 已删除设备时，拓扑结果保留这个原因，统一拨号入口才能给出重新设定提示。
+func TestStoreSourceMarksDeletedLocalDevice(t *testing.T) {
+	vaultDir := t.TempDir()
+	t.Setenv("SSHMGR_STORE", filepath.Join(vaultDir, "store.db"))
+	if err := roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	masterKey, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(vaultDir, "store.db"), masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	result, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "工作站 SSH", Host: "198.51.100.10", Port: 22, User: "u",
+	}, nil, nil, "工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := st.GetServer(result.ServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := roles.SetLocalDeviceID("device-removed"); err != nil {
+		t.Fatal(err)
+	}
+
+	source := NewStoreSource(st, "")
+	topology, err := source.ServerDialTopology(srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if topology.DialerKnown || topology.DialerUnknownReason != sshbroker.FallbackOnlyLocalDeviceDeleted {
+		t.Fatalf("topology = %+v, want the deleted-local-device reason", topology)
+	}
+}

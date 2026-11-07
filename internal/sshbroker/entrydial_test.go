@@ -496,6 +496,32 @@ func TestConnectServerEntryFailureLabelsEveryPlannedCandidate(t *testing.T) {
 	}
 }
 
+// TestConnectServerEntryDeletedLocalDeviceHint: 本机设备设定指向的设备已被
+// 删除时，兜底地址失败要明确提示重新设定本机设备，而不是只提示补登记共同
+// 网络。
+func TestConnectServerEntryDeletedLocalDeviceHint(t *testing.T) {
+	srv := entryAt("srv-a", "198.51.100.10", 2202)
+	original := lowLevelDial
+	lowLevelDial = func(_ context.Context, _ string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+		return nil, errors.New("dial 198.51.100.10:2202: refused")
+	}
+	t.Cleanup(func() { lowLevelDial = original })
+
+	_, _, err := ConnectServerEntry(context.Background(), ServerDialRequest{
+		Server: srv, Auth: PasswordAuth("pw"),
+		HostKeys: &fakeHostKeyStore{pins: map[string]*store.Pin{
+			srv.ID: {Blob: []byte("anchor"), Format: store.PinFormatBlob},
+		}},
+		Topology: StaticDialTopology{DialerUnknownReason: FallbackOnlyLocalDeviceDeleted},
+	})
+	if err == nil {
+		t.Fatal("fallback dial failed: want an error")
+	}
+	if !strings.Contains(err.Error(), "本机设备设定指向的设备已不存在，请重新设定本机设备") {
+		t.Fatalf("error must explain the deleted local device setting: %q", err.Error())
+	}
+}
+
 // TestConnectServerEntryFailureLabelsSkippedHostKeyMismatch: 全部候选的主机
 // 密钥都与锚不一致时，逐地址错误用统一的短说明，不输出指纹，也不泄露地址。
 func TestConnectServerEntryFailureLabelsSkippedHostKeyMismatch(t *testing.T) {

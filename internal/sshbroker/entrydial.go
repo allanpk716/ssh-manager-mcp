@@ -35,6 +35,8 @@ const (
 	FallbackOnlyDialerUnknown FallbackOnlyReason = "dialer-unknown"
 	// FallbackOnlyNoCommonNetwork 表示两台设备没有任何共同网络。
 	FallbackOnlyNoCommonNetwork FallbackOnlyReason = "no-common-network"
+	// FallbackOnlyLocalDeviceDeleted 表示本机设备设定指向的设备已不存在。
+	FallbackOnlyLocalDeviceDeleted FallbackOnlyReason = "local-device-deleted"
 )
 
 // DialAddress 是一个去重后的候选 SSH 地址。NetworkSequence 是同一网络内
@@ -235,6 +237,8 @@ type DialTopology struct {
 	TargetMemberships []*models.NetworkMembership
 	DialerMemberships []*models.NetworkMembership
 	DialerKnown       bool
+	// DialerUnknownReason 保留拓扑来源识别出的本机设备未知原因。
+	DialerUnknownReason FallbackOnlyReason
 }
 
 // DialTopologySource 在每次按服务器条目拨号时读取当前拓扑。生产实现从当前
@@ -340,6 +344,9 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		}
 		targetMemberships = topology.TargetMemberships
 		plan = PlanServerDialAddresses(targetMemberships, dialerMemberships, req.Server.Host)
+		if !topology.DialerKnown && topology.DialerUnknownReason != "" {
+			plan.FallbackOnlyReason = topology.DialerUnknownReason
+		}
 	}
 	pin, err := req.HostKeys.GetEntryPin(req.Server)
 	if err != nil {
@@ -443,6 +450,9 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 	dialErr := &ServerDialError{Failures: failures, Port: req.Server.Port}
 	if plan.FallbackOnlyReason != "" {
 		dialErr.Hint = "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。"
+		if plan.FallbackOnlyReason == FallbackOnlyLocalDeviceDeleted {
+			dialErr.Hint = "本机设备设定指向的设备已不存在，请重新设定本机设备。"
+		}
 	}
 	return nil, nil, dialErr
 }

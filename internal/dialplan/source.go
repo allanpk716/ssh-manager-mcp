@@ -55,7 +55,11 @@ func (s *StoreSource) ServerDialTopology(server *models.Server) (sshbroker.DialT
 		return sshbroker.DialTopology{}, err
 	}
 	if !current.Known || current.Device == nil {
-		return sshbroker.DialTopology{TargetMemberships: targetMemberships}, nil
+		topology := sshbroker.DialTopology{TargetMemberships: targetMemberships}
+		if current.Reason == dialdevice.ReasonLocalDeviceDeleted {
+			topology.DialerUnknownReason = sshbroker.FallbackOnlyLocalDeviceDeleted
+		}
+		return topology, nil
 	}
 	dialerMemberships, err := s.store.ListNetworkMembershipsByRegistration(current.Device.Name)
 	if err != nil {
