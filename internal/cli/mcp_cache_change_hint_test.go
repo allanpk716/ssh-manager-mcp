@@ -210,6 +210,140 @@ func TestCacheChangeHintE2E_PolicyChanged(t *testing.T) {
 	}
 }
 
+// TestCacheChangeHintE2E_SecretChanges: 多机客户端在新机密项下发、换值、
+// 可写入服务器列表变化、真实删除与因裁剪消失时都收到只含名字的提示;同一
+// 会话每条提示只出现一次,范围外的机密项变化不提示,提示文本不含任何值。
+func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
+	const (
+		valueOne   = "change-hint-secret-value-one"
+		valueTwo   = "change-hint-secret-value-two"
+		valueThree = "change-hint-secret-value-three"
+		outsideVal = "change-hint-secret-value-outside"
+	)
+	env := newChangeHintEnv(t, 0)
+	if texts := callToolTexts(t, env.sess, "list_servers", map[string]any{}); len(texts) != 1 {
+		t.Fatalf("启动后的第一次工具调用不应有提示,实际为 %#v", texts)
+	}
+
+	step := func(name string) string {
+		texts := callToolTexts(t, env.sess, "list_servers", map[string]any{})
+		if len(texts) != 2 || !strings.HasPrefix(texts[1], `{"servers":`) {
+			t.Fatalf("「%s」后的工具结果 = %#v,应为一条提示 + 原结果", name, texts)
+		}
+		for _, value := range []string{valueOne, valueTwo, valueThree, outsideVal} {
+			if strings.Contains(texts[0], value) {
+				t.Fatalf("「%s」的变更提示包含机密项值:%q", name, texts[0])
+			}
+		}
+		again := callToolTexts(t, env.sess, "list_servers", map[string]any{})
+		if len(again) != 1 || !strings.HasPrefix(again[0], `{"servers":`) {
+			t.Fatalf("「%s」的提示在同一会话只应出现一次,第二次结果为 %#v", name, again)
+		}
+		return texts[0]
+	}
+
+	before := env.revision(t)
+	if err := env.fx.serve.AddSecret("DB_PASSWORD", "数据库口令", []byte(valueOne)); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.fx.serve.AllowSecrets([]string{"DB_PASSWORD"}, []string{"target"}); err != nil {
+		t.Fatal(err)
+	}
+	after := env.revision(t)
+	env.pullNow()
+	want := fmt.Sprintf("权威端配置已更新（修订号 %d → %d）：新增机密项 DB_PASSWORD", before, after)
+	if got := step("新增机密项"); got != want {
+		t.Fatalf("新增机密项提示 = %q,应为 %q", got, want)
+	}
+
+	before = env.revision(t)
+	if err := env.fx.serve.SetSecretValue("DB_PASSWORD", []byte(valueTwo)); err != nil {
+		t.Fatal(err)
+	}
+	after = env.revision(t)
+	env.pullNow()
+	want = fmt.Sprintf("权威端配置已更新（修订号 %d → %d）：机密项 DB_PASSWORD 的值已更改，用到它的文件需要重新部署", before, after)
+	if got := step("更换机密项值"); got != want {
+		t.Fatalf("换值提示 = %q,应为 %q", got, want)
+	}
+
+	before = env.revision(t)
+	extraID, err := env.fx.serve.AddServer(&models.Server{
+		Name: "extra", Host: "192.0.2.61", Port: 22, User: "u", AuthMethod: models.AuthPassword,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.fx.serve.GrantServers(env.fx.profID, []string{extraID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.fx.serve.AllowSecrets([]string{"DB_PASSWORD"}, []string{"extra"}); err != nil {
+		t.Fatal(err)
+	}
+	after = env.revision(t)
+	env.pullNow()
+	want = fmt.Sprintf(
+		"权威端配置已更新（修订号 %d → %d）：新增服务器 extra；机密项 DB_PASSWORD 的可写入服务器列表已变化：新增 extra",
+		before, after,
+	)
+	if got := step("可写入服务器列表变化"); got != want {
+		t.Fatalf("可写入服务器列表变化提示 = %q,应为 %q", got, want)
+	}
+
+	before = env.revision(t)
+	if err := env.fx.serve.DeleteSecret("DB_PASSWORD"); err != nil {
+		t.Fatal(err)
+	}
+	after = env.revision(t)
+	env.pullNow()
+	want = fmt.Sprintf("权威端配置已更新（修订号 %d → %d）：删除机密项 DB_PASSWORD", before, after)
+	if got := step("删除机密项"); got != want {
+		t.Fatalf("删除机密项提示 = %q,应为 %q", got, want)
+	}
+
+	if _, err := env.fx.serve.AddServer(&models.Server{
+		Name: "outside", Host: "192.0.2.62", Port: 22, User: "u", AuthMethod: models.AuthPassword,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.fx.serve.AddSecret("OUTSIDE_TOKEN", "范围外机密项", []byte(outsideVal)); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.fx.serve.AllowSecrets([]string{"OUTSIDE_TOKEN"}, []string{"outside"}); err != nil {
+		t.Fatal(err)
+	}
+	env.pullNow()
+	if texts := callToolTexts(t, env.sess, "list_servers", map[string]any{}); len(texts) != 1 ||
+		!strings.HasPrefix(texts[0], `{"servers":`) {
+		t.Fatalf("与本客户端无关的机密项变化不应产生提示,实际为 %#v", texts)
+	}
+
+	before = env.revision(t)
+	if err := env.fx.serve.AddSecret("DB_PASSWORD", "重新下发", []byte(valueThree)); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.fx.serve.AllowSecrets([]string{"DB_PASSWORD"}, []string{"target"}); err != nil {
+		t.Fatal(err)
+	}
+	after = env.revision(t)
+	env.pullNow()
+	want = fmt.Sprintf("权威端配置已更新（修订号 %d → %d）：新增机密项 DB_PASSWORD", before, after)
+	if got := step("重新下发机密项"); got != want {
+		t.Fatalf("重新下发机密项提示 = %q,应为 %q", got, want)
+	}
+
+	before = env.revision(t)
+	if err := env.fx.serve.DisallowSecrets([]string{"DB_PASSWORD"}, []string{"target"}); err != nil {
+		t.Fatal(err)
+	}
+	after = env.revision(t)
+	env.pullNow()
+	want = fmt.Sprintf("权威端配置已更新（修订号 %d → %d）：删除机密项 DB_PASSWORD", before, after)
+	if got := step("因裁剪消失"); got != want {
+		t.Fatalf("因裁剪消失提示 = %q,应与删除提示 %q 相同", got, want)
+	}
+}
+
 // TestCacheChangeHintE2E_NoVisibleDifferenceNoHint: 服务器改名、改连接信息、
 // 改 shell 类型、只改其他 profile、规则只改时间戳,这些都不是本票的比较项;
 // 快照换了但可见内容没变时不产生提示。
