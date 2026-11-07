@@ -69,8 +69,8 @@ func clipEvidence(s string) string {
 
 // probeShellDeadline 约束一台服务器的整次探测——连接与两条探测命令共
 // 用它(owner ssh 命令的 ownerSSHDeadline 同款考虑:ssh.Dial 本身不可中
-// 断,sshbroker.Connect 在期限到达时放弃拨号,不可达主机不会挂到操作
-// 系统级的 TCP 超时)。
+// 断,sshbroker 的按服务器条目拨号入口在期限到达时放弃拨号,不可达主机
+// 不会挂到操作系统级的 TCP 超时)。
 var probeShellDeadline = 60 * time.Second
 
 // 每条探测命令的执行超时与输出上限。探测只是 echo,正常毫秒级返回;
@@ -91,13 +91,11 @@ func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (m
 	if err != nil {
 		return "", "", fmt.Errorf("resolve credential: %w", err)
 	}
-	hkCb, err := sshbroker.HostKeyTOFU(st, srv)
-	if err != nil {
-		return "", "", err
-	}
 	ctx, cancel := context.WithTimeout(parent, probeShellDeadline)
 	defer cancel()
-	cli, err := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, _, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: st,
+	})
 	if err != nil {
 		return "", "", fmt.Errorf("connect: %w", err)
 	}

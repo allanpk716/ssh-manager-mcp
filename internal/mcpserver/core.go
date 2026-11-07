@@ -197,14 +197,9 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):
@@ -352,14 +347,9 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):
@@ -466,14 +456,9 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):
@@ -521,7 +506,7 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 // the denied-first principle constrains CONTENT-level errors: cap/base64) →
 // ② profile gate → ③ cap pre-check (two-stage for base64; connect-free, zero
 // bytes move, no remote file) → ④ GetServer → AuthForServer (no_credential)
-// → HostKeyTOFU → Connect (Plan 31 redaction at the source) → ⑤ WriteFile
+// → HostKeyTOFU → ConnectServerEntry (Plan 31 redaction at the source) → ⑤ WriteFile
 // (parent creation INSIDE, one watchdog, checked Close) → ⑥ audit + {bytes}.
 //
 // cap arrives from the NewServerFromSource-resolved env seam
@@ -611,7 +596,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 
 	// ④ server + credential + host key + connect — the same chain every broker
 	// tool walks (DownloadForProfile verbatim; Plan 31 redaction lives in
-	// sshbroker.Connect at the source).
+	// sshbroker.ConnectServerEntry at the source).
 	srv, serr := st.GetServer(serverID)
 	if serr != nil || srv == nil {
 		status = "error"
@@ -633,14 +618,9 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):
@@ -819,14 +799,9 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):

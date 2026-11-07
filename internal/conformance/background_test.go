@@ -11,16 +11,28 @@ import (
 
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 
 	"golang.org/x/crypto/ssh"
 )
 
+// fixedHostKeys 把一把已知主机密钥包装成「条目已锚定」的主机密钥存储，
+// 等价于原先后台任务启动参数里直接传 ssh.FixedHostKey 的固定密钥语义；
+// 这里的服务器条目未落库（条目标识符为空），复用本包按条目标识符存锚的
+// 假主机密钥存储。
+func fixedHostKeys(key ssh.PublicKey) sshbroker.HostKeyStore {
+	return &fakeHostKeyStore{pins: map[string]*store.Pin{
+		"": {Blob: key.Marshal(), Format: store.PinFormatBlob},
+	}}
+}
+
 // bgLifecycleTrio drives the Plan-32 background lifecycle (start → incremental
 // output → stop → terminal) against a REAL OpenSSH container through the
-// production TaskManager: Start connects via ConnectKeepAlive (30s interval /
-// 3-strike keepalive — the 24h-long-connection variant), the engine runs the
-// command through runSession over the wire, and Output/Stop exercise the
+// production TaskManager: Start connects via the server-entry unified dialer
+// (keepalive: 30s interval / 3-strike — the 24h-long-connection variant),
+// the engine runs the command through runSession over the wire, and
+// Output/Stop exercise the
 // long-poll + terminal semantics exactly as the broker serves them. The
 // mcpserver suite covers the same lifecycle against the in-process testsshd;
 // THIS test is the real-OpenSSH wire evidence (the §13 conformance role), and
@@ -60,7 +72,7 @@ func TestBackgroundLifecycleRealSSH(t *testing.T) {
 
 	auth := mustPrivAuth(t, privPath, "")
 	server := &models.Server{Host: host, Port: port, User: "sshuser"}
-	hostKeyCb := ssh.FixedHostKey(hostKey)
+	hostKeys := fixedHostKeys(hostKey)
 	ctx := context.Background()
 
 	// ---- Phase 1: start → incremental output → natural done ----
@@ -69,7 +81,7 @@ func TestBackgroundLifecycleRealSSH(t *testing.T) {
 	const loopCmd = `for i in 1 2 3 4 5; do echo "line $i"; sleep 1; done`
 	loopID, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
 		ProjectID: "conformance", ServerID: "srv-conf", Command: loopCmd,
-		TimeoutSec: 60, Server: server, Auth: auth, HostKeyCb: hostKeyCb,
+		TimeoutSec: 60, Server: server, Auth: auth, HostKeys: hostKeys,
 	})
 	if err != nil {
 		t.Fatalf("start loop task: %v", err)
@@ -145,7 +157,7 @@ func TestBackgroundLifecycleRealSSH(t *testing.T) {
 	// ---- Phase 2: stop path → terminal stopped ----
 	sleepID, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
 		ProjectID: "conformance", ServerID: "srv-conf", Command: "sleep 300",
-		Server: server, Auth: auth, HostKeyCb: hostKeyCb,
+		Server: server, Auth: auth, HostKeys: hostKeys,
 	})
 	if err != nil {
 		t.Fatalf("start sleep task: %v", err)
@@ -226,7 +238,7 @@ func TestBackgroundKeepAliveRealSSH(t *testing.T) {
 	id, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
 		ProjectID: "conformance", ServerID: "srv-conf", Command: "sleep 90",
 		TimeoutSec: 300, Server: server,
-		Auth: mustPrivAuth(t, privPath, ""), HostKeyCb: ssh.FixedHostKey(hostKey),
+		Auth: mustPrivAuth(t, privPath, ""), HostKeys: fixedHostKeys(hostKey),
 	})
 	if err != nil {
 		t.Fatalf("start sleep 90: %v", err)

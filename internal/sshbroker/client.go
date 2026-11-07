@@ -35,6 +35,10 @@ type keepAliveSpec struct {
 	maxFail  int
 }
 
+// backgroundKeepAlive 是 ConnectKeepAlive 与按服务器条目拨号统一入口共用的
+// 保活参数：30 秒周期，连续 3 次无响应判死。
+var backgroundKeepAlive = keepAliveSpec{interval: 30 * time.Second, maxFail: 3}
+
 // Connect dials the SSH server and authenticates. hostKeyCb enforces host-key
 // policy. The SSHMGR_SSH_HOST_KEY_ALGORITHMS knob (if set) is validated FIRST
 // and fail-closed: a typo'd value returns an error before any dial. ctx is
@@ -51,7 +55,7 @@ func Connect(ctx context.Context, host string, port int, user string, auth ssh.A
 // keepalive 循环 (Plan 32 T4: 后台 24h 长连接防 NAT/防火墙空闲拆连的诚实
 // 失败形态; 前台 ≤5min 路径不走此变体)。循环生命周期随 Client.Close 终止。
 func ConnectKeepAlive(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback) (*Client, error) {
-	return connectWith(ctx, host, port, user, auth, hostKeyCb, keepAliveSpec{interval: 30 * time.Second, maxFail: 3})
+	return connectWith(ctx, host, port, user, auth, hostKeyCb, backgroundKeepAlive)
 }
 
 // connectWith 是 Connect/ConnectKeepAlive 的共用体: ka 为 zero 值时不启

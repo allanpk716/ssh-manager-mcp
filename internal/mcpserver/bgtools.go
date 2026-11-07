@@ -106,13 +106,6 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
 	// sudo 密码解析 (先于连接, 见文件头): 瞬时传给 Start, 不入 task 记录。
 	sudoPass := ""
 	if sudo {
@@ -131,12 +124,12 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 	}
 
 	// Start 编排门外的全部启动链 (spec §1): Reserve (超限/closed 原样上抛——
-	// 超限行归本层) → ConnectKeepAlive (connect 三态行由 Start 落) → Insert
+	// 超限行归本层) → 按服务器条目拨号的统一入口 (connect 三态行由 Start 落) → Insert
 	// (start(ok) 行在持锁段内、goroutine 启动前) → runTask goroutine。
 	tid, eff, stErr := mgr.Start(ctx, st, BgStartSpec{
 		ProjectID: projectID, ServerID: serverID, Command: command,
 		Sudo: sudo, SudoPass: sudoPass, TimeoutSec: timeoutSec,
-		Server: srv, Auth: auth, HostKeyCb: hkCb,
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
 	})
 	if stErr != nil {
 		switch {

@@ -20,6 +20,17 @@ type Options struct {
 	Password      string        // accept this password (empty = no password auth)
 	AuthorizedKey ssh.PublicKey // accept this client public key (nil = no key auth)
 	SudoPassword  string        // if set, Exec handler simulates sudo -S (reads pw from stdin)
+	// HostKey, when non-nil, is presented as the server's host key instead of
+	// a freshly generated one — lets a test pin the exact key (or run several
+	// fixtures with known, distinct keys). Nil keeps the original behavior:
+	// a random RSA key per Start call.
+	HostKey ssh.Signer
+	// AuthRequests, when non-nil, is atomically bumped for every user
+	// authentication request that reaches a configured password or public-key
+	// callback. Host-key verification happens BEFORE user authentication, so a
+	// client rejected over a mismatched host key leaves this at zero — the
+	// observable proof that no credentials were sent. Purely observational.
+	AuthRequests *atomic.Int64
 	// SudoStartFailure, when non-empty, makes the simulated sudo fail AFTER a
 	// correct password with this diagnostic (exit 1) — for exercising the
 	// sudo-start-failed classification (command-specific sudoers / NOEXEC-ish
@@ -43,19 +54,25 @@ type Options struct {
 // (LIFO) so the client closes first and server goroutines exit cleanly.
 func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 	t.Helper()
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("rsa key: %v", err)
-	}
-	signer, err := ssh.NewSignerFromKey(rsaKey)
-	if err != nil {
-		t.Fatalf("signer: %v", err)
+	signer := opts.HostKey
+	if signer == nil {
+		rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatalf("rsa key: %v", err)
+		}
+		signer, err = ssh.NewSignerFromKey(rsaKey)
+		if err != nil {
+			t.Fatalf("signer: %v", err)
+		}
 	}
 	cfg := &ssh.ServerConfig{}
 	cfg.AddHostKey(signer)
 	if opts.Password != "" {
 		pw := opts.Password
 		cfg.PasswordCallback = func(_ ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+			if opts.AuthRequests != nil {
+				opts.AuthRequests.Add(1)
+			}
 			if string(pass) == pw {
 				return nil, nil
 			}
@@ -65,6 +82,9 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 	if opts.AuthorizedKey != nil {
 		allowed := opts.AuthorizedKey.Marshal()
 		cfg.PublicKeyCallback = func(_ ssh.ConnMetadata, pub ssh.PublicKey) (*ssh.Permissions, error) {
+			if opts.AuthRequests != nil {
+				opts.AuthRequests.Add(1)
+			}
 			if bytesEqual(pub.Marshal(), allowed) {
 				return nil, nil
 			}
