@@ -132,16 +132,17 @@ func TestCurrentForClientCacheUsesUniqueSnapshotAssociation(t *testing.T) {
 	}
 }
 
-// TestCurrentForClientCacheIgnoresDefaultSlotMetadata: 命名实例的桥没有把实
-// 例名传进旧调用链；客户端缓存解析不能因此读取默认实例的 cache.meta，必须
-// 只信裁剪快照里唯一保留的设备码关联。
-func TestCurrentForClientCacheIgnoresDefaultSlotMetadata(t *testing.T) {
+// TestCurrentForClientCacheUsesMetadataBeforeAssociation: cache.meta.json 记录
+// 的设备标识优先；即使快照里有多台设备仍带设备码关联，也按元数据精确选中
+// 本机设备。
+func TestCurrentForClientCacheUsesMetadataBeforeAssociation(t *testing.T) {
 	redirectClientConfig(t)
 	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
 		t.Fatal(err)
 	}
 	st := withSnapshotStore(t,
 		store.SnapshotDevice{ID: "device-default", Name: "default laptop"},
+		store.SnapshotDevice{ID: "device-first", Name: "first laptop", ClientTokenID: "token-first"},
 		store.SnapshotDevice{ID: "device-named", Name: "named laptop", ClientTokenID: "token-named"},
 	)
 	writeClientMeta(t, "", "device-default")
@@ -150,8 +151,51 @@ func TestCurrentForClientCacheIgnoresDefaultSlotMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !current.Known || current.Device == nil || current.Device.ID != "device-default" {
+		t.Fatalf("current device = %+v, want the metadata-recorded device-default", current)
+	}
+}
+
+// TestCurrentForClientCacheFallsBackWithoutMetadata: 旧缓存的元数据没有设备
+// 标识时，才使用裁剪快照里唯一带设备码关联的设备。
+func TestCurrentForClientCacheFallsBackWithoutMetadata(t *testing.T) {
+	redirectClientConfig(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	st := withSnapshotStore(t,
+		store.SnapshotDevice{ID: "device-default", Name: "default laptop"},
+		store.SnapshotDevice{ID: "device-named", Name: "named laptop", ClientTokenID: "token-named"},
+	)
+	writeClientMeta(t, "", "")
+
+	current, err := CurrentForClientCache(st)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !current.Known || current.Device == nil || current.Device.ID != "device-named" {
 		t.Fatalf("current device = %+v, want the snapshot-associated device-named", current)
+	}
+}
+
+// TestCurrentForClientCacheMetadataDeviceMissing: 元数据记录的设备已不在当前
+// 快照代里时，按“记录的设备缺失”处理，而不是回退猜另一台设备。
+func TestCurrentForClientCacheMetadataDeviceMissing(t *testing.T) {
+	redirectClientConfig(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	st := withSnapshotStore(t,
+		store.SnapshotDevice{ID: "device-named", Name: "named laptop", ClientTokenID: "token-named"},
+	)
+	writeClientMeta(t, "", "device-removed")
+
+	current, err := CurrentForClientCache(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Known || current.Reason != ReasonDeviceMissingFromSnapshot {
+		t.Fatalf("current device = %+v, want the recorded device to be missing", current)
 	}
 }
 

@@ -365,7 +365,11 @@ func TestRelayForProfileSourceStatBranches(t *testing.T) {
 	hmID := seedRealServer(t, e.st, "hm-src", e.addr, e.hk, "")
 	_ = e.st.GrantServers(e.pid, []string{hmID})
 	src := relayMkSource(t, e, "hmsrc.bin", 16)
-	_ = e.st.SaveEntryPin(serverByAddr(e.st, hostOfAddr(e.addr), portOfAddr(e.addr)), []byte("not-the-real-host-key"))
+	hmSource := serverByAddr(e.st, hostOfAddr(e.addr), portOfAddr(e.addr))
+	_, _ = e.st.ClearEntryPin(hmSource.ID, func(old store.PinMeta) store.AuditRow {
+		return store.AuditRow{Action: "pin-delete"}
+	})
+	_ = e.st.SaveEntryPin(hmSource, []byte("not-the-real-host-key"))
 	_, err = e.relayCall(e.relayInput(hmID, src, to, false))
 	if err == nil || !strings.Contains(err.Error(), "主机密钥不同，已跳过") {
 		t.Fatalf("source hostkey: err = %v, want the host key skip note", err)
@@ -426,7 +430,11 @@ func TestRelayForProfileDestBranches(t *testing.T) {
 	// dest hostkey_mismatch (放最后: 覆写同址共享的 host key 条目)。
 	hmID := seedRealServer(t, e.st, "hm-dst", e.addr, e.hk, "")
 	_ = e.st.GrantServers(e.pid, []string{hmID})
-	_ = e.st.SaveEntryPin(serverByAddr(e.st, hostOfAddr(e.addr), portOfAddr(e.addr)), []byte("not-the-real-host-key"))
+	hmDestination := serverByAddr(e.st, hostOfAddr(e.addr), portOfAddr(e.addr))
+	_, _ = e.st.ClearEntryPin(hmDestination.ID, func(old store.PinMeta) store.AuditRow {
+		return store.AuditRow{Action: "pin-delete"}
+	})
+	_ = e.st.SaveEntryPin(hmDestination, []byte("not-the-real-host-key"))
 	_, err = RelayForProfile(context.Background(), e.st, e.tm, e.projID, e.pid,
 		RelayInput{FromServerID: e.srcID, FromPath: src, ToServerID: hmID, ToPath: "/data/d"}, relayProfileChunk)
 	if err == nil || !strings.Contains(err.Error(), "主机密钥不同，已跳过") {

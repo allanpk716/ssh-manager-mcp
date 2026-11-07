@@ -59,11 +59,17 @@ func newHostKeyVerificationContext(parent context.Context, timeout time.Duration
 
 func (c *hostKeyVerificationContext) Deadline() (time.Time, bool) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.released {
-		return time.Time{}, false
+	released := c.released
+	deadline := c.deadline
+	c.mu.Unlock()
+	if released {
+		return c.parent.Deadline()
 	}
-	return c.deadline, true
+	parentDeadline, parentPresent := c.parent.Deadline()
+	if parentPresent && parentDeadline.Before(deadline) {
+		return parentDeadline, true
+	}
+	return deadline, true
 }
 
 func (c *hostKeyVerificationContext) Done() <-chan struct{} {
@@ -81,7 +87,10 @@ func (c *hostKeyVerificationContext) Value(key any) any {
 }
 
 func (c *hostKeyVerificationContext) releaseHostKeyVerification() {
-	c.signalOne.Do(func() { close(c.release) })
+	c.signalOne.Do(func() {
+		c.setReleased()
+		close(c.release)
+	})
 }
 
 func (c *hostKeyVerificationContext) stopTiming() {
@@ -105,15 +114,15 @@ func (c *hostKeyVerificationContext) finish(err error) {
 	close(c.done)
 }
 
-// hostKeyCallbackReleasingVerification 在底层回调接受主机密钥时解除候选地址
-// 短超时。密钥不一致或其他校验错误不会解除，短超时继续覆盖这次未完成的
-// 连接与校验。
+// hostKeyCallbackReleasingVerification 在服务器呈现主机密钥、校验回调开始
+// 时解除候选地址短超时。其后的锚读取、锚定转发与指纹比较只受调用方原始
+// 上下文约束；校验错误仍由回调返回并让统一入口跳过该地址。
 func hostKeyCallbackReleasingVerification(callback ssh.HostKeyCallback, release func()) ssh.HostKeyCallback {
 	return func(hostname string, address net.Addr, remote ssh.PublicKey) error {
+		release()
 		if err := callback(hostname, address, remote); err != nil {
 			return err
 		}
-		release()
 		return nil
 	}
 }

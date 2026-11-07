@@ -3,13 +3,11 @@
 package dialplan
 
 import (
-	"os"
 	"path/filepath"
 
+	"ssh-manager-mcp/internal/clientcache"
 	"ssh-manager-mcp/internal/dialdevice"
-	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/models"
-	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
@@ -55,7 +53,11 @@ func (s *StoreSource) ServerDialTopology(server *models.Server) (sshbroker.DialT
 		return sshbroker.DialTopology{}, err
 	}
 	if !current.Known || current.Device == nil {
-		return sshbroker.DialTopology{TargetMemberships: targetMemberships}, nil
+		topology := sshbroker.DialTopology{TargetMemberships: targetMemberships}
+		if current.Reason == dialdevice.ReasonLocalDeviceDeleted {
+			topology.DialerUnknownReason = sshbroker.FallbackOnlyLocalDeviceDeleted
+		}
+		return topology, nil
 	}
 	dialerMemberships, err := s.store.ListNetworkMembershipsByRegistration(current.Device.Name)
 	if err != nil {
@@ -67,13 +69,26 @@ func (s *StoreSource) ServerDialTopology(server *models.Server) (sshbroker.DialT
 	}, nil
 }
 
-// ServerDialSuccess 读取这个实例为服务器条目记录的最近成功地址。
-func (s *StoreSource) ServerDialSuccess(server *models.Server) (sshbroker.DialSuccessRecord, bool, error) {
+// ResolveDialSuccessCache 每次拨号只解析一次角色状态与本实例的缓存位置。
+// 当前部署形态没有可写缓存时返回空缓存。
+func (s *StoreSource) ResolveDialSuccessCache() (sshbroker.DialSuccessCacheSource, error) {
+	cache, ok, err := s.successCache()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return cache, nil
+}
+
+// ServerDialSuccess 读取这个实例为服务器条目记录的仍有效成功地址。
+func (s *StoreSource) ServerDialSuccess(server *models.Server) ([]sshbroker.DialSuccessRecord, bool, error) {
 	cache, ok, err := s.successCache()
 	if err != nil || !ok {
-		return sshbroker.DialSuccessRecord{}, false, err
+		return nil, false, err
 	}
-	return cache.Success(server)
+	return cache.Successes(server)
 }
 
 // RecordServerDialSuccess 写入服务器条目的最近成功地址。
@@ -106,23 +121,11 @@ func (s *StoreSource) successCache() (*sshbroker.FileDialSuccessCache, bool, err
 	var directory string
 	switch state.Role {
 	case roles.RoleClient:
-		if s.instance != "" {
-			if err := instname.Valid(s.instance); err != nil {
-				return nil, false, err
-			}
+		resolved, err := clientcache.DirectoryFor(s.instance)
+		if err != nil {
+			return nil, false, err
 		}
-		if override := os.Getenv("SSHMGR_CACHE_DIR"); override != "" {
-			directory = override
-		} else {
-			base, err := paths.UserConfigDir()
-			if err != nil {
-				return nil, false, err
-			}
-			directory = filepath.Join(base, "ssh-manager")
-			if s.instance != "" {
-				directory = filepath.Join(directory, "instances", s.instance)
-			}
-		}
+		directory = resolved
 	case roles.RoleStandalone, roles.RoleServer:
 		statePath, err := roles.LocalDevicePath()
 		if err != nil {

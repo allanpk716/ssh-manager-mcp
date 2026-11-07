@@ -62,9 +62,17 @@ func HostKeyTOFU(st HostKeyStore, srv *models.Server) (ssh.HostKeyCallback, erro
 				return err
 			}
 			if len(vlan) > 0 && !store.ContainsSSHAddress(vlan, handshakeAddr, srv.Port) {
-				return fmt.Errorf("first trust for server %q requires a virtual LAN address, got %s", srv.Name, handshakeAddr)
+				return fmt.Errorf("服务器 %q 首次锚定只能使用虚拟局域网地址，实际握手地址是 %s", srv.Name, handshakeAddr)
 			}
 			if err := st.SaveEntryPinAtHandshake(srv, handshakeAddr, marshaled); err != nil {
+				if errors.Is(err, store.ErrEntryPinMismatch) {
+					stored, readErr := st.GetEntryPin(srv)
+					if readErr != nil {
+						return readErr
+					}
+					return fmt.Errorf("%w: presented %s != pinned %s",
+						ErrHostKeyMismatch, ssh.FingerprintSHA256(remote), pinnedFingerprint(stored))
+				}
 				// Already-presented branch text (Plan 48 §2.1/§4) — return it
 				// verbatim; the "save host key: " wrapper is for raw store
 				// failures only (read-only ErrReadOnly keeps its asserted form).

@@ -777,6 +777,7 @@ type BgStartSpec struct {
 	Auth                         ssh.AuthMethod
 	HostKeys                     sshbroker.HostKeyStore
 	DialTopology                 sshbroker.DialTopologySource
+	DialSuccessCache             sshbroker.DialSuccessCacheSource
 }
 
 // clampBgTimeout 钳定后台生效超时 (spec §3): 0/缺省 → cap (生产即 24h
@@ -817,7 +818,7 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 	}
 	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: spec.Server, Auth: spec.Auth, HostKeys: spec.HostKeys, KeepAlive: true,
-		Topology: spec.DialTopology,
+		SuccessCache: spec.DialSuccessCache, Topology: spec.DialTopology,
 	})
 	if cerr != nil {
 		status := "connect_error"

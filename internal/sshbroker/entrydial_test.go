@@ -48,7 +48,7 @@ func mapFallbackToFixture(t *testing.T, srv *models.Server, addr string) {
 // TestConnectServerEntryDefaultDialRecordsThenVerifiesHostKey: 统一入口默认
 // 注入现有的按「主机:端口」拨号的底层函数——不替换任何注入点时，用条目的
 // 兜底地址直连进程内 SSH 服务器：首次连接按服务器条目记录主机密钥，第二次
-// 连接校验同一把锚并成功。本票的连接说明恒为空。
+// 连接校验同一把锚并成功。没有地址跳过或成功地址缓存警告时，连接说明为空。
 func TestConnectServerEntryDefaultDialRecordsThenVerifiesHostKey(t *testing.T) {
 	st := &fakeHostKeyStore{}
 	addr, _, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
@@ -493,6 +493,32 @@ func TestConnectServerEntryFailureLabelsEveryPlannedCandidate(t *testing.T) {
 		if strings.Contains(err.Error(), address) {
 			t.Fatalf("error text leaked address %q: %q", address, err.Error())
 		}
+	}
+}
+
+// TestConnectServerEntryDeletedLocalDeviceHint: 本机设备设定指向的设备已被
+// 删除时，兜底地址失败要明确提示重新设定本机设备，而不是只提示补登记共同
+// 网络。
+func TestConnectServerEntryDeletedLocalDeviceHint(t *testing.T) {
+	srv := entryAt("srv-a", "198.51.100.10", 2202)
+	original := lowLevelDial
+	lowLevelDial = func(_ context.Context, _ string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+		return nil, errors.New("dial 198.51.100.10:2202: refused")
+	}
+	t.Cleanup(func() { lowLevelDial = original })
+
+	_, _, err := ConnectServerEntry(context.Background(), ServerDialRequest{
+		Server: srv, Auth: PasswordAuth("pw"),
+		HostKeys: &fakeHostKeyStore{pins: map[string]*store.Pin{
+			srv.ID: {Blob: []byte("anchor"), Format: store.PinFormatBlob},
+		}},
+		Topology: StaticDialTopology{DialerUnknownReason: FallbackOnlyLocalDeviceDeleted},
+	})
+	if err == nil {
+		t.Fatal("fallback dial failed: want an error")
+	}
+	if !strings.Contains(err.Error(), "本机设备设定指向的设备已不存在，请重新设定本机设备") {
+		t.Fatalf("error must explain the deleted local device setting: %q", err.Error())
 	}
 }
 

@@ -198,9 +198,11 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
+	dialSource := dialplan.NewStoreSource(st, "")
 	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
-		Topology: dialplan.NewStoreSource(st, ""),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
 	})
 	if cerr != nil {
 		switch {
@@ -350,9 +352,11 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		return
 	}
 
+	dialSource := dialplan.NewStoreSource(st, "")
 	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
-		Topology: dialplan.NewStoreSource(st, ""),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
 	})
 	if cerr != nil {
 		switch {
@@ -463,9 +467,11 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		return
 	}
 
+	dialSource := dialplan.NewStoreSource(st, "")
 	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
-		Topology: dialplan.NewStoreSource(st, ""),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
 	})
 	if cerr != nil {
 		switch {
@@ -631,9 +637,11 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return
 	}
 
+	dialSource := dialplan.NewStoreSource(st, "")
 	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
-		Topology: dialplan.NewStoreSource(st, ""),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
 	})
 	if cerr != nil {
 		switch {
@@ -816,9 +824,11 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		return
 	}
 
+	dialSource := dialplan.NewStoreSource(st, "")
 	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
-		Topology: dialplan.NewStoreSource(st, ""),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
 	})
 	if cerr != nil {
 		switch {
