@@ -211,8 +211,9 @@ func TestCacheChangeHintE2E_PolicyChanged(t *testing.T) {
 }
 
 // TestCacheChangeHintE2E_SecretChanges: 多机客户端在新机密项下发、换值、
-// 可写入服务器列表变化、真实删除与因裁剪消失时都收到只含名字的提示;同一
-// 会话每条提示只出现一次,范围外的机密项变化不提示,提示文本不含任何值。
+// 可写入服务器列表变化、真实删除与可写入服务器移出授权后消失时都收到
+// 只含名字的提示;同一会话每条提示只出现一次,范围外的机密项变化不提示,
+// 提示文本不含任何值。
 func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	const (
 		valueOne   = "change-hint-secret-value-one"
@@ -339,8 +340,8 @@ func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	after = env.revision(t)
 	env.pullNow()
 	want = fmt.Sprintf("权威端配置已更新（修订号 %d → %d）：删除机密项 DB_PASSWORD，引用它的模板将被拒绝", before, after)
-	if got := step("因裁剪消失"); got != want {
-		t.Fatalf("因裁剪消失提示 = %q,应与删除提示 %q 相同", got, want)
+	if got := step("可写入服务器移出授权后消失"); got != want {
+		t.Fatalf("可写入服务器移出授权后消失提示 = %q,应与删除提示 %q 相同", got, want)
 	}
 }
 

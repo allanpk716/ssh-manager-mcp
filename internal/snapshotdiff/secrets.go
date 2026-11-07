@@ -11,13 +11,15 @@ import (
 // 器列表变化分别成句;提示只使用机密项名字和服务器名,不读取机密项值。
 type SecretSet struct{}
 
-// Describe 返回机密项差异的描述分句。因 profile 裁剪而从快照消失的机密
-// 项,在这里与被删除的机密项走同一个「删除」分支。
+// Describe 返回机密项差异的描述分句。profile 授权服务器与机密项可写入
+// 服务器列表的交集变空时,机密项不再下发给本客户端,在这里与被删除的
+// 机密项走同一个「删除」分支。
 func (SecretSet) Describe(old, fresh *store.Snapshot) []string {
 	oldIndex := newSecretIndex(old)
 	freshIndex := newSecretIndex(fresh)
 
 	var added, removed, changedValue, changedServers []string
+	changedServerDetails := make(map[string]string)
 	for name, freshSecret := range freshIndex.byName {
 		oldSecret, exists := oldIndex.byName[name]
 		if !exists {
@@ -27,10 +29,12 @@ func (SecretSet) Describe(old, fresh *store.Snapshot) []string {
 		if freshSecret.id != oldSecret.id || freshSecret.version != oldSecret.version {
 			changedValue = append(changedValue, name)
 		}
-		if _, _, difference := serverNameDiff(
-			oldIndex.allowedServerNames(oldSecret.id), freshIndex.allowedServerNames(freshSecret.id),
-		); difference {
+		addedServers, removedServers, difference := stringSetDiff(
+			oldIndex.serversByID[oldSecret.id], freshIndex.serversByID[freshSecret.id],
+		)
+		if difference {
 			changedServers = append(changedServers, name)
+			changedServerDetails[name] = listChangeText(addedServers, removedServers)
 		}
 	}
 	for name := range oldIndex.byName {
@@ -54,13 +58,7 @@ func (SecretSet) Describe(old, fresh *store.Snapshot) []string {
 		parts = append(parts, "机密项 "+name+" 的值已更改，用到它的文件需要重新部署")
 	}
 	for _, name := range changedServers {
-		freshSecret := freshIndex.byName[name]
-		oldSecret := oldIndex.byName[name]
-		addedServers, removedServers, _ := serverNameDiff(
-			oldIndex.allowedServerNames(oldSecret.id), freshIndex.allowedServerNames(freshSecret.id),
-		)
-		details := listChangeText(addedServers, removedServers)
-		parts = append(parts, "机密项 "+name+" 的可写入服务器列表已变化："+details)
+		parts = append(parts, "机密项 "+name+" 的可写入服务器列表已变化："+changedServerDetails[name])
 	}
 	return parts
 }
@@ -112,11 +110,7 @@ func newSecretIndex(snap *store.Snapshot) secretIndex {
 	return out
 }
 
-func (index secretIndex) allowedServerNames(secretID string) []string {
-	return index.serversByID[secretID]
-}
-
-func serverNameDiff(old, fresh []string) (added, removed []string, changed bool) {
+func stringSetDiff(old, fresh []string) (added, removed []string, changed bool) {
 	oldSet := make(map[string]struct{}, len(old))
 	freshSet := make(map[string]struct{}, len(fresh))
 	for _, name := range old {
