@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/tui"
@@ -37,6 +38,54 @@ func requireTopologyVault() (*store.Store, error) {
 		errTopologyNeedVault,
 		errors.New("本机是缓存客户端：网络拓扑在权威端维护——请在权威端执行这条命令"),
 	)
+}
+
+// openTopologyViewStore 打开拓扑查看命令的数据源：权威端与单机部署读
+// vault；客户端把本地缓存快照导入一个一次性临时库后只读查询，复用存储
+// 层既有的筛选与排序语义。返回的清理函数负责关闭并删除临时库。
+func openTopologyViewStore() (*store.Store, func(), error) {
+	role, err := topologyRoleFor()
+	if err != nil {
+		return nil, nil, err
+	}
+	if role != policyRoleClient {
+		s, err := openUnlockedStore()
+		if err != nil {
+			return nil, nil, err
+		}
+		return s, func() { s.Close() }, nil
+	}
+
+	snapshot, err := clientops.LoadCacheSnapshotFor("")
+	if err != nil {
+		return nil, nil, fmt.Errorf("本机客户端缓存不可读：请先执行 cache pull，再查看网络拓扑（%w）", err)
+	}
+	throwawayKey, err := store.GenerateMasterKey()
+	if err != nil {
+		return nil, nil, err
+	}
+	tempFile, err := os.CreateTemp("", "sshmgr-topology-*.db")
+	if err != nil {
+		return nil, nil, err
+	}
+	tempPath := tempFile.Name()
+	tempFile.Close()
+	removeTempStore := func() { os.Remove(tempPath) }
+	s, err := store.Open(tempPath, throwawayKey)
+	if err != nil {
+		removeTempStore()
+		return nil, nil, err
+	}
+	if err := s.ImportSnapshotForClientCache(snapshot); err != nil {
+		s.Close()
+		removeTempStore()
+		return nil, nil, err
+	}
+	s.SetReadOnly(nil)
+	return s, func() {
+		s.Close()
+		removeTempStore()
+	}, nil
 }
 
 func newSitesCmd() *cobra.Command {
@@ -128,18 +177,11 @@ func sitesListCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		Short: "List topology sites and their physical networks",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			role, err := topologyRoleFor()
+			s, closeStore, err := openTopologyViewStore()
 			if err != nil {
 				return err
 			}
-			if role == policyRoleClient {
-				return errors.New("网络拓扑这一版尚未随快照下发；请在权威端查看站点与网络")
-			}
-			s, err := openUnlockedStore()
-			if err != nil {
-				return err
-			}
-			defer s.Close()
+			defer closeStore()
 			sites, err := s.ListSites()
 			if err != nil {
 				return err
@@ -353,18 +395,11 @@ func networksListCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		Short: "List topology networks, optionally filtered",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			role, err := topologyRoleFor()
+			s, closeStore, err := openTopologyViewStore()
 			if err != nil {
 				return err
 			}
-			if role == policyRoleClient {
-				return errors.New("网络拓扑这一版尚未随快照下发；请在权威端查看站点与网络")
-			}
-			s, err := openUnlockedStore()
-			if err != nil {
-				return err
-			}
-			defer s.Close()
+			defer closeStore()
 			parsedType := models.NetworkType(networkType)
 			if parsedType != "" {
 				parsedType, err = models.ParseNetworkType(networkType)
