@@ -233,6 +233,28 @@ func TestRejectedRequestsDoNotReadVersionHintOrRevealRole(t *testing.T) {
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("有效启动令牌状态码 = %d，应为 303", resp.StatusCode)
 	}
+	if len(resp.Cookies()) != 1 {
+		t.Fatalf("有效启动令牌应签发一个会话 cookie，实际 %d 个", len(resp.Cookies()))
+	}
+
+	write := httptest.NewRequest(http.MethodPost, "/ui/", nil)
+	write.Host = "127.0.0.1:18080"
+	write.AddCookie(resp.Cookies()[0])
+	writeRec := httptest.NewRecorder()
+	h.ServeHTTP(writeRec, write)
+	writeResp := writeRec.Result()
+	body, _ := io.ReadAll(writeResp.Body)
+	writeResp.Body.Close()
+	if writeResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("缺少 Origin 的写请求状态码 = %d，应为 403", writeResp.StatusCode)
+	}
+	if page := string(body); strings.Contains(page, "客户端 · 只读") ||
+		strings.Contains(page, "客户端 1.0.0 落后于权威端 1.1.0") {
+		t.Fatalf("写请求被拒的错误页不得泄露角色或版本提示：\n%s", page)
+	}
+	if versionHintCalls != 0 {
+		t.Fatalf("被拒绝的请求不得读取版本提示来源，实际读取 %d 次", versionHintCalls)
+	}
 }
 
 func TestStartupTokenURLUsesGivenListenerAddress(t *testing.T) {
@@ -281,8 +303,8 @@ func loginWithStartup(t *testing.T, client *http.Client, serverURL string, start
 
 func TestListPageRequiresSession(t *testing.T) {
 	rows := []ServerRow{
-		{ID: "s1", Name: "web-1", User: "root", Host: "192.0.2.10", Port: 22},
-		{ID: "s2", Name: "数据库", User: "admin", Host: "192.0.2.20", Port: 22022},
+		{Name: "web-1", User: "root", Host: "192.0.2.10", Port: 22},
+		{Name: "数据库", User: "admin", Host: "192.0.2.20", Port: 22022},
 	}
 	h, startup := newTestHandler(t, RoleStandalone, rows)
 
@@ -567,9 +589,9 @@ func TestVersionHintShownOnlyWhenPresent(t *testing.T) {
 
 func TestNeedsAttentionRowsSortFirstAndAreMarked(t *testing.T) {
 	page := loginAndGetList(t, RoleStandalone, []ServerRow{
-		{ID: "ok", Name: "正常服务器", User: "u", Host: "192.0.2.1", Port: 22},
-		{ID: "warn", Name: "待处理服务器", User: "u", Host: "192.0.2.2", Port: 22, NeedsAttention: true},
-		{ID: "ok2", Name: "正常服务器二", User: "u", Host: "192.0.2.3", Port: 22},
+		{Name: "正常服务器", User: "u", Host: "192.0.2.1", Port: 22},
+		{Name: "待处理服务器", User: "u", Host: "192.0.2.2", Port: 22, NeedsAttention: true},
+		{Name: "正常服务器二", User: "u", Host: "192.0.2.3", Port: 22},
 	}, "")
 	warnPos := strings.Index(page, "待处理服务器")
 	firstOK := strings.Index(page, "正常服务器")

@@ -28,16 +28,7 @@ func (standaloneUIServerSource) Servers() ([]webui.ServerRow, error) {
 	}
 	rows := make([]webui.ServerRow, 0, len(servers))
 	for _, srv := range servers {
-		rows = append(rows, webui.ServerRow{
-			ID:             srv.ID,
-			Name:           srv.Name,
-			User:           srv.User,
-			Host:           srv.Host,
-			Port:           srv.Port,
-			NeedsAttention: models.ServerNeedsAttention(srv.CredentialID, srv.Role, srv.Tags),
-			Role:           srv.Role,
-			Description:    srv.Description,
-		})
+		rows = append(rows, webUIServerRow(srv.Name, srv.User, srv.Host, srv.Port, srv.CredentialID, srv.Role, srv.Tags))
 	}
 	return rows, nil
 }
@@ -57,18 +48,20 @@ func (s clientUIServerSource) Servers() ([]webui.ServerRow, error) {
 	rows := make([]webui.ServerRow, 0, len(snap.Servers))
 	for i := range snap.Servers {
 		srv := &snap.Servers[i]
-		rows = append(rows, webui.ServerRow{
-			ID:             srv.ID,
-			Name:           srv.Name,
-			User:           srv.User,
-			Host:           srv.Host,
-			Port:           srv.Port,
-			NeedsAttention: models.ServerNeedsAttention(srv.CredentialID, srv.Role, snapshotServerTags(srv.TagsRaw)),
-			Role:           srv.Role,
-			Description:    srv.Description,
-		})
+		rows = append(rows, webUIServerRow(srv.Name, srv.User, srv.Host, srv.Port, srv.CredentialID, srv.Role, snapshotServerTags(srv.TagsRaw)))
 	}
 	return rows, nil
+}
+
+// webUIServerRow 把服务器连接信息与标签转换成 Web UI 的展示行。
+func webUIServerRow(name, user, host string, port int, credentialID, role string, tags []string) webui.ServerRow {
+	return webui.ServerRow{
+		Name:           name,
+		User:           user,
+		Host:           host,
+		Port:           port,
+		NeedsAttention: models.ServerNeedsAttention(credentialID, role, tags),
+	}
 }
 
 // snapshotServerTags 解析快照服务器条目里按 JSON 数组字符串存放的标签；解析

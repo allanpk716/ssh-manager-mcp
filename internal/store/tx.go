@@ -337,7 +337,7 @@ func (s *Store) ClearServerCredential(id string) error {
 	}
 	oldCred, oldSudo := srv.CredentialID, srv.SudoCredentialID
 	srv.CredentialID, srv.AuthMethod, srv.SudoCredentialID = "", "", ""
-	srv.Tags = dropTagFrom(srv.Tags, "needs-passphrase")
+	srv.Tags = dropTagFrom(srv.Tags, models.TagNeedsPassphrase)
 	if err := updateServerTx(tx, srv); err != nil {
 		return err
 	}

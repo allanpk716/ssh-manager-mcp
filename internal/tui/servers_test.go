@@ -32,16 +32,16 @@ func TestServersPage_RowsAndDetail(t *testing.T) {
 // no role, or the needs-passphrase tag each demand attention; a complete
 // server does not.
 func TestServerNeedsAttention(t *testing.T) {
-	if !serverNeedsAttention(&models.Server{Name: "x"}) {
+	if !models.ServerNeedsAttention("", "", nil) {
 		t.Fatal("无凭据须 ⚠")
 	}
-	if !serverNeedsAttention(&models.Server{CredentialID: "c", Role: ""}) {
+	if !models.ServerNeedsAttention("c", "", nil) {
 		t.Fatal("role 空须 ⚠")
 	}
-	if !serverNeedsAttention(&models.Server{CredentialID: "c", Role: "r", Tags: []string{"needs-passphrase"}}) {
+	if !models.ServerNeedsAttention("c", "r", []string{models.TagNeedsPassphrase}) {
 		t.Fatal("缺口令标签须 ⚠")
 	}
-	if serverNeedsAttention(&models.Server{CredentialID: "c", Role: "r"}) {
+	if models.ServerNeedsAttention("c", "r", nil) {
 		t.Fatal("完整不应 ⚠")
 	}
 }

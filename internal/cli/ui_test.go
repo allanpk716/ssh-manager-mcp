@@ -140,6 +140,16 @@ func TestUICommandStandaloneListensOnLoopbackRandomPort(t *testing.T) {
 	}
 }
 
+func TestUICommandStandaloneRejectsInstanceFlag(t *testing.T) {
+	createVaultStore(t)
+	_, _, _, finish := startUICommand(t, []string{"--instance", "laptop"})
+
+	err := finish(t)
+	if err == nil || !strings.Contains(err.Error(), "--instance") {
+		t.Fatalf("单机角色带 --instance 应明确报错，实际：%v", err)
+	}
+}
+
 func TestUICommandClientListensOnLoopback(t *testing.T) {
 	seedClientCacheSnapshot(t, &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
 		{ID: "s", Name: "服务器", User: "u", Host: "192.0.2.10", Port: 22, CredentialID: "c", Role: "r"},

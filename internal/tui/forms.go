@@ -372,7 +372,7 @@ func submitServer(st *store.Store, cur *models.Server, d *serverDraft) tea.Cmd {
 			// "current credential lacks its passphrase". Drop it, keep every
 			// other tag (dropTag stores a valid empty slice when it was the
 			// only one).
-			srv.Tags = dropTag(srv.Tags, "needs-passphrase")
+			srv.Tags = dropTag(srv.Tags, models.TagNeedsPassphrase)
 		}
 		// Plan 28 T3: advisory suspected-secret hints for the metadata this
 		// save persists, appended to the ✓ status line (non-blocking; never

@@ -21,7 +21,7 @@ import (
 )
 
 // Role 是 Web UI 需要区分的本机角色子集：本包只服务单机与客户端两种回环
-// 模式；权威端的独立监听属于后续票，不在本包构造参数里出现。
+// 模式；权威端 Web UI 的独立监听功能上线时再引入它的构造参数。
 type Role int
 
 const (
@@ -31,17 +31,13 @@ const (
 	RoleClient
 )
 
-// ServerRow 是服务器列表的展示行：名称、用户、主机、端口与「需要注意」
-// 标记；其余字段留给将来的服务器详情页使用。
+// ServerRow 是服务器列表的展示行：名称、用户、主机、端口与「需要注意」标记。
 type ServerRow struct {
-	ID             string
 	Name           string
 	User           string
 	Host           string
 	Port           int
 	NeedsAttention bool
-	Role           string
-	Description    string
 }
 
 // ServerSource 是 Web UI 读取服务器列表的唯一入口，由命令行按本机角色提供
@@ -98,8 +94,8 @@ func sortNeedsAttentionFirst(rows []ServerRow) []ServerRow {
 	return sorted
 }
 
-// capabilities 是页面能力开关：模板按它决定显示哪些标记与入口。后续票新增
-// 写操作页面时扩展这个结构，不另造机制。
+// capabilities 是页面能力开关：模板按它决定显示哪些标记与入口。写操作页面
+// 上线时扩展这个结构，不另造机制。
 type capabilities struct {
 	// RoleLabel 是页头展示的本机角色标记。
 	RoleLabel string
@@ -118,7 +114,7 @@ func capabilitiesForRole(role Role) capabilities {
 			ReadOnlyNotice: "这里只读，修改需到权威端 Web UI 去做。",
 		}
 	}
-	return capabilities{RoleLabel: "单机 · 全功能可写", CanWrite: true}
+	return capabilities{RoleLabel: "单机", CanWrite: true}
 }
 
 // Startup 携带一次性启动令牌，并按监听地址拼出浏览器要打开的网址。
@@ -228,7 +224,7 @@ func (h *handler) writeRequestAllowed(w http.ResponseWriter, r *http.Request) bo
 	}
 	sess := h.currentSession(r)
 	if sess == nil {
-		h.renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
+		h.renderSessionRequired(w, r)
 		return false
 	}
 	token := r.Header.Get("X-CSRF-Token")
@@ -293,16 +289,13 @@ func (h *handler) handleStart(w http.ResponseWriter, r *http.Request) {
 // handleUIRoot 是 /ui/ 前缀的总入口：精确命中服务器列表页时要求有效会话，
 // 其余地址按会话状态返回 401 或中文 404 页。
 func (h *handler) handleUIRoot(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != listPath {
-		if sess := h.currentSession(r); sess == nil {
-			h.renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
-			return
-		}
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	sess := h.currentSession(r)
+	if sess == nil {
+		h.renderSessionRequired(w, r)
 		return
 	}
-	if sess := h.currentSession(r); sess == nil {
-		h.renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
+	if r.URL.Path != listPath {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
 	rows, err := h.cfg.Servers.Servers()
@@ -311,6 +304,11 @@ func (h *handler) handleUIRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.renderPage(w, r, http.StatusOK, "servers.tmpl", pageData{Title: "服务器", Servers: sortNeedsAttentionFirst(rows)})
+}
+
+// renderSessionRequired 输出需要重新启动 Web UI 的会话错误页。
+func (h *handler) renderSessionRequired(w http.ResponseWriter, r *http.Request) {
+	h.renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
 }
 
 // currentSession 校验请求携带的会话 cookie，返回当前会话；无会话、cookie
@@ -359,38 +357,6 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
-// mountPost 在内部路由表上登记写操作路由：所有非 GET/HEAD/OPTIONS 的业务
-// 路由都必须经它登记，统一获得会话校验、Origin 校验和与会话绑定的防跨站
-// 请求伪造令牌校验。本票没有业务写操作，测试用它挂无副作用的写路由验证
-// 中间件；后续票的写操作页面沿用同一入口。
-func (h *handler) mountPost(pattern string, fn func(http.ResponseWriter, *http.Request, *session)) {
-	h.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "本地址只接受写请求。")
-			return
-		}
-		sess := h.currentSession(r)
-		if sess == nil {
-			h.renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
-			return
-		}
-		if !originAllowed(r.Header.Get("Origin"), h.cfg.Port) {
-			h.renderError(w, r, http.StatusForbidden, "请求来源校验失败", "请求来源不是本次启动的 Web UI，已拒绝。")
-			return
-		}
-		token := r.Header.Get("X-CSRF-Token")
-		if token == "" {
-			_ = r.ParseForm()
-			token = r.PostFormValue("csrf_token")
-		}
-		if subtle.ConstantTimeCompare([]byte(token), []byte(sess.csrf)) != 1 {
-			h.renderError(w, r, http.StatusForbidden, "防跨站请求伪造校验失败", "防跨站请求伪造令牌缺失或无效，已拒绝。请刷新页面后重试。")
-			return
-		}
-		fn(w, r, sess)
-	})
 }
 
 // originAllowed 校验写请求的 Origin：必须存在，且等于由配置端口生成的任一

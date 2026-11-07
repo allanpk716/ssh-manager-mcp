@@ -39,13 +39,17 @@ func newUICmd() *cobra.Command {
 	return c
 }
 
-// runUICommand 是 ui 命令的薄胶水：按既有角色判定入口解析本机角色，单机与
-// 客户端构造 Web UI Handler 并监听回环随机端口，权威端与未初始化角色直接拒
-// 绝且不启动任何监听。
+// runUICommand 组装 ui 命令：按既有角色判定入口解析本机角色，单机与客户端
+// 构造 Web UI Handler 并监听回环随机端口，权威端与未初始化角色直接拒绝且
+// 不启动任何监听。
 func runUICommand(cmd *cobra.Command, instance string) error {
 	launch, err := resolveMachineRole("")
 	if err != nil {
 		return err
+	}
+	if instance != "" && launch.Kind == roles.LaunchBroker &&
+		(launch.Role == roles.RoleStandalone || launch.Role == roles.RoleServer) {
+		return NewExitCodeError(1, errors.New("`--instance` 只选择客户端缓存实例；本机自持 vault 的 Web UI 直接读取 vault，请去掉 `--instance`"))
 	}
 
 	var (
@@ -98,8 +102,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 
 	startupURL := startup.URL(fmt.Sprintf("127.0.0.1:%d", port))
 	fmt.Fprintf(cmd.OutOrStdout(), "Web UI 已启动：%s\n", startupURL)
-	openBrowser := uiOpenBrowser
-	if err := openBrowser(startupURL); err != nil {
+	if err := uiOpenBrowser(startupURL); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "自动打开浏览器失败（%v）。请把上面的网址手动复制到浏览器打开。\n", err)
 	}
 
@@ -112,19 +115,20 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		close(stdinDone)
 	}()
 
+	var listenerErr error
 	select {
 	case <-ctx.Done():
 	case <-stdinDone:
 	case err := <-serveErr:
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
-		return fmt.Errorf("Web UI 监听异常退出：%w", err)
+		listenerErr = err
 	}
-
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
+	shutdownErr := server.Shutdown(shutdownCtx)
+	if listenerErr != nil {
+		return fmt.Errorf("Web UI 监听异常退出：%w", listenerErr)
+	}
+	if err := shutdownErr; err != nil {
 		return fmt.Errorf("关闭 Web UI 失败：%w", err)
 	}
 	return nil

@@ -13,23 +13,19 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-// assetURLs 是模板引用静态资源时使用的带内容哈希地址。
-type assetURLs struct {
-	HTMX  string
-	Style string
-	App   string
-}
+// assetURLs 以静态资源文件名为键，值是模板使用的带内容哈希地址。
+type assetURLs map[string]string
 
-// hashedAssetNames 是需要生成长期缓存地址的静态资源；third-party.json 是
-// 清单文件，不作为可访问资源分发。
-var hashedAssetNames = []string{"htmx.min.js", "app.css", "app.js"}
+// hashedAssetFiles 是唯一的静态资源登记表；third-party.json 是清单文件，
+// 不作为可访问资源分发。
+var hashedAssetFiles = []string{"htmx.min.js", "app.css", "app.js"}
 
 // loadAssets 计算每个静态资源的内容哈希并生成带哈希的地址。内容变化后地址
 // 随之变化，浏览器不会继续使用旧版本的脚本或样式。
 func loadAssets() (assetURLs, map[string]string, error) {
-	urls := assetURLs{}
-	files := make(map[string]string, len(hashedAssetNames))
-	for _, name := range hashedAssetNames {
+	urls := make(assetURLs, len(hashedAssetFiles))
+	files := make(map[string]string, len(hashedAssetFiles))
+	for _, name := range hashedAssetFiles {
 		content, err := staticFS.ReadFile("static/" + name)
 		if err != nil {
 			return assetURLs{}, nil, fmt.Errorf("读取内嵌静态资源 %s 失败：%w", name, err)
@@ -39,14 +35,7 @@ func loadAssets() (assetURLs, map[string]string, error) {
 		base := strings.TrimSuffix(name, ext)
 		address := "/ui/assets/" + base + "." + hex.EncodeToString(sum[:])[:12] + ext
 		files[address] = name // 以完整地址为键，静态资源处理器直接按请求路径查找
-		switch name {
-		case "htmx.min.js":
-			urls.HTMX = address
-		case "app.css":
-			urls.Style = address
-		case "app.js":
-			urls.App = address
-		}
+		urls[name] = address
 	}
 	return urls, files, nil
 }

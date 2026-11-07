@@ -41,7 +41,7 @@ type serverItem struct{ srv *models.Server }
 func (i serverItem) FilterValue() string { return i.Title() }
 func (i serverItem) Title() string {
 	name := i.srv.Name
-	if serverNeedsAttention(i.srv) {
+	if models.ServerNeedsAttention(i.srv.CredentialID, i.srv.Role, i.srv.Tags) {
 		name = "⚠ " + name
 	}
 	return name
@@ -52,16 +52,6 @@ func (i serverItem) Description() string {
 		host = fmt.Sprintf("%s:%d", host, i.srv.Port)
 	}
 	return i.srv.User + "@" + host
-}
-
-// serverNeedsAttention 是本页对共享「需要注意」规则（models.ServerNeedsAttention）
-// 的薄封装：未挂凭据、未设角色、带待补口令标记任一成立即置顶标记。
-func serverNeedsAttention(s *models.Server) bool {
-	return models.ServerNeedsAttention(s.CredentialID, s.Role, s.Tags)
-}
-
-func hasTag(s *models.Server, tag string) bool {
-	return models.ServerHasTag(s.Tags, tag)
 }
 
 // dropTag removes all occurrences of tag from tags (the needs-passphrase
@@ -81,7 +71,8 @@ func dropTag(tags []string, tag string) []string {
 // on every refresh.
 func (p *serversPage) sortWarnFirst() {
 	sort.SliceStable(p.items, func(i, j int) bool {
-		return serverNeedsAttention(p.items[i]) && !serverNeedsAttention(p.items[j])
+		return models.ServerNeedsAttention(p.items[i].CredentialID, p.items[i].Role, p.items[i].Tags) &&
+			!models.ServerNeedsAttention(p.items[j].CredentialID, p.items[j].Role, p.items[j].Tags)
 	})
 }
 
@@ -92,7 +83,7 @@ func (p *serversPage) rebuild() {
 	p.sortWarnFirst()
 	p.view = make([]int, 0, len(p.items))
 	for i, s := range p.items {
-		if p.warnOnly && !serverNeedsAttention(s) {
+		if p.warnOnly && !models.ServerNeedsAttention(s.CredentialID, s.Role, s.Tags) {
 			continue
 		}
 		p.view = append(p.view, i)
@@ -126,7 +117,7 @@ func (p *serversPage) Rows() []string {
 	out := make([]string, len(p.view))
 	for i, idx := range p.view {
 		name := p.items[idx].Name
-		if serverNeedsAttention(p.items[idx]) {
+		if models.ServerNeedsAttention(p.items[idx].CredentialID, p.items[idx].Role, p.items[idx].Tags) {
 			name = "⚠ " + name
 		}
 		out[i] = name

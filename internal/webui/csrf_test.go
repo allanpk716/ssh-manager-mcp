@@ -31,7 +31,7 @@ func newCSRFTestEnv(t *testing.T) *csrfTestEnv {
 		t.Fatalf("构造 Web UI Handler 失败：%v", err)
 	}
 	env := &csrfTestEnv{h: h, handler: h.(*handler), startup: startup}
-	env.handler.mountPost("/ui/test-write", func(w http.ResponseWriter, _ *http.Request, _ *session) {
+	env.handler.mux.HandleFunc("/ui/test-write", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -163,7 +163,7 @@ func TestWriteRouteWithoutSessionRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构造 Web UI Handler 失败：%v", err)
 	}
-	h.(*handler).mountPost("/ui/test-write", func(w http.ResponseWriter, _ *http.Request, _ *session) {
+	h.(*handler).mux.HandleFunc("/ui/test-write", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	req := httptest.NewRequest(http.MethodPost, "/ui/test-write", nil)

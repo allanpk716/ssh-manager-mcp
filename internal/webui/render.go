@@ -18,7 +18,7 @@ type parsedPage struct {
 	fragment *template.Template
 }
 
-// pageData 是所有页面模板共享的渲染数据；后续票新增页面时在这里扩展字段，
+// pageData 是所有页面模板共享的渲染数据；新增页面时在这里扩展字段，
 // 不另建一套传递结构。
 type pageData struct {
 	Title        string

@@ -23,9 +23,9 @@ func TestStaticAssetsServedWithHashedURLsAndLongCache(t *testing.T) {
 	root := h.(*handler)
 
 	for name, urlPath := range map[string]string{
-		"htmx.min.js": root.assets.HTMX,
-		"app.css":     root.assets.Style,
-		"app.js":      root.assets.App,
+		"htmx.min.js": root.assets["htmx.min.js"],
+		"app.css":     root.assets["app.css"],
+		"app.js":      root.assets["app.js"],
 	} {
 		want, err := staticFS.ReadFile("static/" + name)
 		if err != nil {
@@ -71,7 +71,8 @@ func TestPagesReferenceHashedAssetURLs(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	page := string(body)
-	for _, urlPath := range []string{root.assets.HTMX, root.assets.Style, root.assets.App} {
+	for _, name := range hashedAssetFiles {
+		urlPath := root.assets[name]
 		if !strings.Contains(page, urlPath) {
 			t.Fatalf("页面应引用带哈希的静态资源地址 %q：\n%s", urlPath, page)
 		}
@@ -94,7 +95,7 @@ func TestStaticAssetRejectsNonLoopbackHost(t *testing.T) {
 		t.Fatalf("构造 Web UI Handler 失败：%v", err)
 	}
 	root := h.(*handler)
-	resp := doGet(t, h, "127.0.0.1.evil.example:18080", root.assets.Style)
+	resp := doGet(t, h, "127.0.0.1.evil.example:18080", root.assets["app.css"])
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusMisdirectedRequest && resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("非回环 Host 访问静态资源状态码 = %d，应被拒绝", resp.StatusCode)
