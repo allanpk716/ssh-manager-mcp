@@ -133,6 +133,9 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 	// ordering debt is registered in spec §4, deliberately not repaid here).
 	// relayChunk rides the closure for the relay_file tool (T4: RelayForProfile
 	// chunkBytes argument; T6: the description's %d).
+	if _, err := sshbroker.ResolveAddressTimeout(); err != nil {
+		return nil, nil, nil, err
+	}
 	relayChunk, err := resolveRelayChunk()
 	if err != nil {
 		return nil, nil, nil, err

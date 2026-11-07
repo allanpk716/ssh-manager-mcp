@@ -18,8 +18,11 @@ import (
 // as real *store.Pin values so the dual-mode matrix drives the same struct the
 // production store returns (Plan 48 §5).
 type fakeHostKeyStore struct {
-	pins  map[string]*store.Pin // 按条目标识符存放
-	saves int
+	pins           map[string]*store.Pin // 按条目标识符存放
+	saves          int
+	lastHandshake  string
+	handshakeSaves int
+	virtualLan     []string
 }
 
 func (f *fakeHostKeyStore) GetEntryPin(srv *models.Server) (*store.Pin, error) {
@@ -32,6 +35,19 @@ func (f *fakeHostKeyStore) SaveEntryPin(srv *models.Server, k []byte) error {
 	f.saves++
 	f.pins[srv.ID] = &store.Pin{Blob: k, Format: store.PinFormatBlob}
 	return nil
+}
+
+func (f *fakeHostKeyStore) SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string, k []byte) error {
+	if err := f.SaveEntryPin(srv, k); err != nil {
+		return err
+	}
+	f.handshakeSaves++
+	f.lastHandshake = handshakeAddr
+	return nil
+}
+
+func (f *fakeHostKeyStore) EntryVirtualLanAddresses(*models.Server) ([]string, error) {
+	return f.virtualLan, nil
 }
 
 // entryAt 构造一个指向 host:port 的服务器条目模型。
@@ -65,6 +81,40 @@ func TestHostKeyTOFURecordsThenVerifies(t *testing.T) {
 		t.Fatalf("second connect (verify): %v", err)
 	}
 	defer cli2.Close()
+}
+
+// TestHostKeyTOFUPassesHandshakeAddressToStore：首次锚定必须把 SSH 回调的
+// 实际握手地址交给保存锚的存储，不能改写为条目的兜底地址。
+func TestHostKeyTOFUPassesHandshakeAddressToStore(t *testing.T) {
+	st := &fakeHostKeyStore{}
+	remote := testPublicKey(t)
+	cb, err := HostKeyTOFU(st, entryAt("srv-vlan", "192.0.2.10", 22))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cb("100.64.10.5", nil, remote); err != nil {
+		t.Fatalf("首次锚定失败：%v", err)
+	}
+	if st.handshakeSaves != 1 || st.lastHandshake != "100.64.10.5:22" {
+		t.Fatalf("保存接口收到的握手地址 = %q（调用 %d 次），应为 100.64.10.5:22", st.lastHandshake, st.handshakeSaves)
+	}
+}
+
+// TestHostKeyTOFU normalizes IPv6 handshake addresses with ports. The SSH
+// callback receives the bare IPv6 host before the address is joined, while
+// candidate addresses are complete host-and-port values.
+func TestHostKeyTOFUNormalizesIPv6HandshakeAddress(t *testing.T) {
+	st := &fakeHostKeyStore{virtualLan: []string{"[2001:db8::5]:2202"}}
+	cb, err := HostKeyTOFU(st, entryAt("srv-vlan", "192.0.2.10", 2202))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cb("2001:db8::5", nil, testPublicKey(t)); err != nil {
+		t.Fatalf("IPv6 虚拟局域网地址应能完成首次锚定：%v", err)
+	}
+	if st.lastHandshake != "[2001:db8::5]:2202" {
+		t.Fatalf("握手地址 = %q, want [2001:db8::5]:2202", st.lastHandshake)
+	}
 }
 
 func TestHostKeyMismatchRejected(t *testing.T) {
@@ -228,13 +278,7 @@ func TestHostKeyTOFU_EntriesAtSameAddressIndependent(t *testing.T) {
 // TestHostKeyTOFU_FirstTrustUsesDialedHandshakeAddress：首次信任的虚拟局域网
 // 检查必须用回调参数里的实际握手地址，而不是条目的兜底地址。
 func TestHostKeyTOFU_FirstTrustUsesDialedHandshakeAddress(t *testing.T) {
-	original := entryVirtualLanAddresses
-	entryVirtualLanAddresses = func(*models.Server) []string {
-		return []string{"100.64.10.5:22"}
-	}
-	defer func() { entryVirtualLanAddresses = original }()
-
-	st := &fakeHostKeyStore{}
+	st := &fakeHostKeyStore{virtualLan: []string{"100.64.10.5:22"}}
 	remote := testPublicKey(t)
 	cb, err := HostKeyTOFU(st, entryAt("srv-vlan", "192.0.2.10", 22))
 	if err != nil {
@@ -247,13 +291,14 @@ func TestHostKeyTOFU_FirstTrustUsesDialedHandshakeAddress(t *testing.T) {
 		t.Fatalf("首次信任应保存一次主机密钥，实际 %d 次", st.saves)
 	}
 
-	other := &fakeHostKeyStore{}
+	other := &fakeHostKeyStore{virtualLan: []string{"100.64.10.5:22"}}
 	cb, err = HostKeyTOFU(other, entryAt("srv-vlan", "192.0.2.10", 22))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cb("192.0.2.10:22", nil, testPublicKey(t)); err == nil {
-		t.Fatal("兜底地址不在虚拟局域网候选列表中，首次信任应拒绝")
+	if err := cb("192.0.2.10:22", nil, testPublicKey(t)); err == nil ||
+		!strings.Contains(err.Error(), "首次锚定只能使用虚拟局域网地址") {
+		t.Fatalf("兜底地址不在虚拟局域网候选列表中，首次信任应拒绝并说明原因：%v", err)
 	}
 	if other.saves != 0 {
 		t.Fatal("被拒绝的首次信任不应保存主机密钥")

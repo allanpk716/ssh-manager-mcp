@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/clientcache"
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -288,11 +288,23 @@ func CachePresent() bool { return cachePresent() }
 // instance slot (Plan 40 §2.7 — a named-instance-only machine is still a
 // client, not a wizard candidate).
 func cachePresent() bool {
-	if cred, err := clientops.ReadCacheCred(); err == nil && cred != nil {
+	if readableDefaultCacheCred() {
 		return true
 	}
-	names, err := clientops.ListInstances()
+	names, err := instanceSlotNames()
 	return err == nil && len(names) > 0
+}
+
+// readableDefaultCacheCred 按客户端缓存文件的共同可读凭据规则检查默认实例。
+func readableDefaultCacheCred() bool {
+	credential, err := clientcache.ReadCredentialFor("")
+	return err == nil && credential != nil
+}
+
+// instanceSlotNames 只按目录名列出缓存实例，不读取实例内容；不导入客户端
+// 操作层的原因与上一函数相同。
+func instanceSlotNames() ([]string, error) {
+	return clientcache.ListInstanceSlots()
 }
 
 // serveCertPresent is the server-vs-standalone heuristic when no role.json

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/sshbroker"
@@ -197,14 +198,12 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	dialSource := dialplan.NewStoreSource(st, "")
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):
@@ -267,7 +266,8 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	out = ExecOutput{
 		Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, TimedOut: res.TimedOut,
 		Truncated: res.Truncated, StdoutBytes: res.StdoutBytes, StderrBytes: res.StderrBytes,
-		MaskedOutput: MaskedOutput{Masked: mergeMaskedNames(stdoutNames, stderrNames)},
+		MaskedOutput:          MaskedOutput{Masked: mergeMaskedNames(stdoutNames, stderrNames)},
+		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
 		// 钳制改响 (Plan 32 T7 / spec §6): 回显 clamp 后实际生效秒数——
 		// timeout 已在上方钳定 (<=0 → defaultTimeout; cap MaxExecTimeout)。
 		EffectiveTimeoutSeconds: int(timeout.Seconds()),
@@ -352,14 +352,12 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	dialSource := dialplan.NewStoreSource(st, "")
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):
@@ -393,6 +391,9 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		Bytes:        res.Bytes,
 		Truncated:    res.Truncated,
 		MaskedOutput: MaskedOutput{Masked: maskedNames},
+		ConnectionNotesOutput: ConnectionNotesOutput{
+			ConnectionNotes: connectionNotes,
+		},
 	}
 	return
 }
@@ -466,14 +467,12 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	dialSource := dialplan.NewStoreSource(st, "")
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):
@@ -509,7 +508,12 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		return
 	}
 	status = "ok"
-	out = UploadOutput{Files: res.Files, Bytes: res.Bytes, Truncated: res.Truncated}
+	out = UploadOutput{
+		Files:                 res.Files,
+		Bytes:                 res.Bytes,
+		Truncated:             res.Truncated,
+		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
+	}
 	return
 }
 
@@ -521,7 +525,7 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 // the denied-first principle constrains CONTENT-level errors: cap/base64) →
 // ② profile gate → ③ cap pre-check (two-stage for base64; connect-free, zero
 // bytes move, no remote file) → ④ GetServer → AuthForServer (no_credential)
-// → HostKeyTOFU → Connect (Plan 31 redaction at the source) → ⑤ WriteFile
+// → HostKeyTOFU → ConnectServerEntry (Plan 31 redaction at the source) → ⑤ WriteFile
 // (parent creation INSIDE, one watchdog, checked Close) → ⑥ audit + {bytes}.
 //
 // cap arrives from the NewServerFromSource-resolved env seam
@@ -611,7 +615,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 
 	// ④ server + credential + host key + connect — the same chain every broker
 	// tool walks (DownloadForProfile verbatim; Plan 31 redaction lives in
-	// sshbroker.Connect at the source).
+	// sshbroker.ConnectServerEntry at the source).
 	srv, serr := st.GetServer(serverID)
 	if serr != nil || srv == nil {
 		status = "error"
@@ -633,14 +637,12 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	dialSource := dialplan.NewStoreSource(st, "")
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):
@@ -666,7 +668,10 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return
 	}
 	status = "ok"
-	out = UploadContentOutput{Bytes: byteCount}
+	out = UploadContentOutput{
+		Bytes:                 byteCount,
+		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
+	}
 	return
 }
 
@@ -819,14 +824,12 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	dialSource := dialplan.NewStoreSource(st, "")
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):
@@ -870,7 +873,12 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 	// the id (the closure must capture the registered id, not a stale one).
 	tun.SetOnActivity(func() { mgr.Touch(id) })
 	status = "ok"
-	out = ForwardOutput{TunnelID: id, LocalPort: localPortOfAddr(tun.LocalAddr()), ListenHost: hostOfAddr(tun.LocalAddr())}
+	out = ForwardOutput{
+		TunnelID:              id,
+		LocalPort:             localPortOfAddr(tun.LocalAddr()),
+		ListenHost:            hostOfAddr(tun.LocalAddr()),
+		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
+	}
 	return
 }
 

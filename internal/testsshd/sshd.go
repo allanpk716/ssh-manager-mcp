@@ -17,9 +17,31 @@ import (
 
 // Options configures the in-process test SSH server.
 type Options struct {
+	// ListenHost overrides the default loopback listener address. Tests use a
+	// distinct loopback address to model two candidate hosts in one process.
+	ListenHost string
+	// ListenPort overrides the random listener port. Tests modeling candidate
+	// addresses use the same port on different loopback addresses.
+	ListenPort    int
 	Password      string        // accept this password (empty = no password auth)
 	AuthorizedKey ssh.PublicKey // accept this client public key (nil = no key auth)
 	SudoPassword  string        // if set, Exec handler simulates sudo -S (reads pw from stdin)
+	// HostKey, when non-nil, is presented as the server's host key instead of
+	// a freshly generated one — lets a test pin the exact key (or run several
+	// fixtures with known, distinct keys). Nil keeps the original behavior:
+	// a random RSA key per Start call.
+	HostKey ssh.Signer
+	// AuthRequests, when non-nil, is atomically bumped for every user
+	// authentication request that reaches a configured password or public-key
+	// callback. Host-key verification happens BEFORE user authentication, so a
+	// client rejected over a mismatched host key leaves this at zero — the
+	// observable proof that no credentials were sent. Purely observational.
+	AuthRequests *atomic.Int64
+	// AuthDelay pauses the user authentication callback before it answers.
+	// Host-key verification has already completed when this delay starts, so
+	// tests can prove an address timeout ends at host-key verification rather
+	// than covering a slow login authentication exchange.
+	AuthDelay time.Duration
 	// SudoStartFailure, when non-empty, makes the simulated sudo fail AFTER a
 	// correct password with this diagnostic (exit 1) — for exercising the
 	// sudo-start-failed classification (command-specific sudoers / NOEXEC-ish
@@ -43,19 +65,28 @@ type Options struct {
 // (LIFO) so the client closes first and server goroutines exit cleanly.
 func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 	t.Helper()
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("rsa key: %v", err)
-	}
-	signer, err := ssh.NewSignerFromKey(rsaKey)
-	if err != nil {
-		t.Fatalf("signer: %v", err)
+	signer := opts.HostKey
+	if signer == nil {
+		rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatalf("rsa key: %v", err)
+		}
+		signer, err = ssh.NewSignerFromKey(rsaKey)
+		if err != nil {
+			t.Fatalf("signer: %v", err)
+		}
 	}
 	cfg := &ssh.ServerConfig{}
 	cfg.AddHostKey(signer)
 	if opts.Password != "" {
 		pw := opts.Password
 		cfg.PasswordCallback = func(_ ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+			if opts.AuthRequests != nil {
+				opts.AuthRequests.Add(1)
+			}
+			if opts.AuthDelay > 0 {
+				time.Sleep(opts.AuthDelay)
+			}
 			if string(pass) == pw {
 				return nil, nil
 			}
@@ -65,13 +96,20 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 	if opts.AuthorizedKey != nil {
 		allowed := opts.AuthorizedKey.Marshal()
 		cfg.PublicKeyCallback = func(_ ssh.ConnMetadata, pub ssh.PublicKey) (*ssh.Permissions, error) {
+			if opts.AuthRequests != nil {
+				opts.AuthRequests.Add(1)
+			}
 			if bytesEqual(pub.Marshal(), allowed) {
 				return nil, nil
 			}
 			return nil, io.EOF
 		}
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	listenHost := opts.ListenHost
+	if listenHost == "" {
+		listenHost = "127.0.0.1"
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(listenHost, strconv.Itoa(opts.ListenPort)))
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}

@@ -34,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -246,13 +247,6 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
 	var sudoCred []byte
 	if sudo {
 		if srv.SudoCredentialID == "" {
@@ -269,7 +263,12 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 		sudoCred = cred.Secret
 	}
 
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	dialSource := dialplan.NewStoreSource(st, "")
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		SuccessCache: dialSource,
+		Topology:     dialSource,
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):
@@ -312,5 +311,6 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 	}
 	status = "ok"
 	out = parseCtxOutput(res.Stdout, nonce, sudo)
+	out.ConnectionNotes = connectionNotes
 	return
 }

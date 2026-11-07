@@ -3,7 +3,8 @@ package mcpserver
 // Plan 47: relay_file 大文件中继 —— 同步 preflight (spec §2 ①–⑨) + 引擎
 // (runRelay/RelayTaskSpec, spec §2 引擎段, T5)。
 //
-// 连接所有权纪律 (spec §2, rev2 kimi#3/codex#1): ③④ 建立的 ConnectKeepAlive 自
+// 连接所有权纪律 (spec §2, rev2 kimi#3/codex#1): ③④ 经按服务器条目拨号的
+// 统一入口 (保活连接) 自
 // 建立起挂 defer 双 close;ReserveRelay 成功 (insertLocked 转正、引擎接管) 才解除
 // defer 并把两条连接移交任务槽 (client=dest, auxClient=source)——此前一切 return
 // (①–⑦ 的全部拒绝分支) 零泄漏。形态是 ForwardForProfile 的 err!=nil && cli!=nil
@@ -31,6 +32,7 @@ import (
 
 	"github.com/pkg/sftp"
 
+	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -171,6 +173,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 
 	// ---- ③ 源端 stat (远程 sftp / 本机 os; 须常规文件; mtime 整秒) ----
 	var mtime int64
+	var srcConnectionNotes []string
 	if localSource {
 		fi, serr := os.Stat(fromCanon)
 		if serr != nil {
@@ -202,13 +205,12 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 			err = aerr
 			return
 		}
-		hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-		if herr != nil {
-			status = "error"
-			err = herr
-			return
-		}
-		cli, cerr := sshbroker.ConnectKeepAlive(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+		dialSource := dialplan.NewStoreSource(st, "")
+		cli, sourceNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+			Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true,
+			SuccessCache: dialSource, Topology: dialSource,
+		})
+		srcConnectionNotes = sourceNotes
 		if cerr != nil {
 			switch {
 			case errors.Is(cerr, context.Canceled):
@@ -269,13 +271,12 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		err = aerr
 		return
 	}
-	dstHkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), dstSrv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-	dstCli, cerr := sshbroker.ConnectKeepAlive(ctx, dstSrv.Host, dstSrv.Port, dstSrv.User, dstAuth, dstHkCb)
+	dialSource := dialplan.NewStoreSource(st, "")
+	dstCli, dstConnectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: dstSrv, Auth: dstAuth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true,
+		SuccessCache: dialSource,
+		Topology:     dialSource,
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):
@@ -490,6 +491,8 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 	// 即关, runTask 双槽语义);本层 defer 双 close 整体解除, start 行已由闭包落笔。
 	transferred = true
 	startOwned = true
+	connectionNotes := srcConnectionNotes
+	connectionNotes = append(connectionNotes, dstConnectionNotes...)
 	out = RelayOutput{
 		TaskID:        taskID,
 		BytesTotal:    size,
@@ -497,6 +500,9 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		ResumedChunks: int(resumed),
 		ChunkBytes:    chunkBytes,
 		SpaceCheck:    spaceCheck,
+		ConnectionNotesOutput: ConnectionNotesOutput{
+			ConnectionNotes: connectionNotes,
+		},
 	}
 	return
 }

@@ -118,11 +118,12 @@ type SnapshotDevice struct {
 
 // SnapshotNetworkMembership 是全量快照里的网络成员段。
 type SnapshotNetworkMembership struct {
-	DeviceID  string `json:"device_id"`
-	NetworkID string `json:"network_id"`
-	Address   string `json:"address"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
+	DeviceID          string `json:"device_id"`
+	NetworkID         string `json:"network_id"`
+	Address           string `json:"address"`
+	RegistrationOrder int64  `json:"registration_order"`
+	CreatedAt         int64  `json:"created_at"`
+	UpdatedAt         int64  `json:"updated_at"`
 }
 
 type SnapshotServer struct {
@@ -880,7 +881,7 @@ func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID s
 
 	var memberships []SnapshotNetworkMembership
 	membershipRows, err := s.db.Query(`
-		SELECT device_id,network_id,address,created_at,updated_at
+		SELECT device_id,network_id,address,registration_order,created_at,updated_at
 		FROM network_memberships ORDER BY device_id,network_id`)
 	if err != nil {
 		return snapshotTopologySection{}, err
@@ -888,7 +889,7 @@ func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID s
 	for membershipRows.Next() {
 		var membership SnapshotNetworkMembership
 		if err := membershipRows.Scan(&membership.DeviceID, &membership.NetworkID, &membership.Address,
-			&membership.CreatedAt, &membership.UpdatedAt); err != nil {
+			&membership.RegistrationOrder, &membership.CreatedAt, &membership.UpdatedAt); err != nil {
 			membershipRows.Close()
 			return snapshotTopologySection{}, err
 		}
@@ -1010,12 +1011,23 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 			return fmt.Errorf("insert device %s: %w", device.ID, err)
 		}
 	}
+	// 旧快照与旧备份没有登记序号时，按这段快照内的出现顺序补齐；新快
+	// 照的序号原样保留，保证客户端缓存与权威端的登记顺序一致。
+	nextRegistrationOrder := int64(0)
 	for _, membership := range snap.NetworkMemberships {
+		if membership.RegistrationOrder > nextRegistrationOrder {
+			nextRegistrationOrder = membership.RegistrationOrder
+		}
+		if membership.RegistrationOrder <= 0 {
+			nextRegistrationOrder++
+			membership.RegistrationOrder = nextRegistrationOrder
+		}
 		if _, err := tx.Exec(`
-			INSERT INTO network_memberships(device_id,network_id,address,address_lower,created_at,updated_at)
-			VALUES(?,?,?,?,?,?)`,
+			INSERT INTO network_memberships(device_id,network_id,address,address_lower,registration_order,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,?)`,
 			membership.DeviceID, membership.NetworkID, membership.Address,
-			strings.ToLower(membership.Address), membership.CreatedAt, membership.UpdatedAt,
+			strings.ToLower(membership.Address), membership.RegistrationOrder,
+			membership.CreatedAt, membership.UpdatedAt,
 		); err != nil {
 			return fmt.Errorf("insert network membership %s/%s: %w", membership.DeviceID, membership.NetworkID, err)
 		}

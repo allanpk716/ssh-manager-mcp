@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -194,20 +196,48 @@ func (s *Store) ListEntryPins() ([]PinMeta, error) {
 }
 
 // SaveEntryPin 记录一次首次连接即信任（单机直连或权威端本地连接）学到的
-// 主机密钥。按条目整行覆盖：同一条目重开首次信任窗口时，格式、来源、转发
-// 设备与握手地址一起重置，避免旧来源信息留在新锚上。
+// 主机密钥。
 func (s *Store) SaveEntryPin(srv *models.Server, marshaledKey []byte) error {
+	return s.SaveEntryPinAtHandshake(srv, EntryFallbackAddr(srv), marshaledKey)
+}
+
+// SaveEntryPinAtHandshake 记录实际握手时学到的主机密钥。统一拨号回调把
+// SSH 返回的握手地址传进来，避免多地址条目固定记录兜底地址。首次锚定只
+// 新增：并发竞争时已有一致锚则成功返回，不同锚则报锚不一致。
+func (s *Store) SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string, marshaledKey []byte) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
-	_, err := s.db.Exec(
-		`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr)
-		 VALUES (?,?,?,?,?,?,?)
-		 ON CONFLICT(server_id) DO UPDATE SET
-		   key_blob=excluded.key_blob, created_at=excluded.created_at,
-		   pin_format='blob', pin_source='tofu', pin_device='', handshake_addr=excluded.handshake_addr`,
-		srv.ID, marshaledKey, now(), PinFormatBlob, PinSourceTofu, "", EntryFallbackAddr(srv))
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	inserted, err := insertEntryPinWithAuditTx(tx, srv.ID, handshakeAddr, marshaledKey,
+		PinFormatBlob, PinSourceTofu, "", AuditRow{
+			TS: time.Now(), ServerID: srv.ID, Action: "pin-tofu",
+			Command: fmt.Sprintf("entry=%s(%s) handshake=%s fp=%s source=%s",
+				srv.Name, srv.ID, handshakeAddr, PinFingerprint(marshaledKey, PinFormatBlob), PinSourceTofu),
+			Status: "ok",
+		})
+	if err != nil {
+		return err
+	}
+	if inserted {
+		return tx.Commit()
+	}
+	existing, err := loadEntryPinMeta(tx, srv.ID)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return fmt.Errorf("entry pin for %s vanished inside the first-trust transaction", srv.ID)
+	}
+	if !existing.Matches(marshaledKey) {
+		return fmt.Errorf("%w: presented %s", ErrEntryPinMismatch,
+			PinFingerprint(marshaledKey, PinFormatBlob))
+	}
+	return nil
 }
 
 // InsertForwardedEntryPin 落一条设备转发的锚（权威端 /pin-hostkey 的存储侧）。
@@ -388,8 +418,8 @@ func deleteEntryPinWithAudit(tx *sql.Tx, srv *models.Server) error {
 	})
 }
 
-// EntryFallbackAddr 渲染条目的兜底 SSH 地址「Host:端口」。本票阶段每个条目
-// 只有这一个候选地址；多地址按序选址由网络拓扑票接入。
+// EntryFallbackAddr 渲染条目的兜底 SSH 地址「Host:端口」。它始终是统一
+// 拨号入口的最后一个候选地址。
 func EntryFallbackAddr(srv *models.Server) string {
 	return fallbackAddr(srv.Host, srv.Port)
 }
@@ -399,9 +429,85 @@ func fallbackAddr(host string, port int) string {
 	return fmt.Sprintf("%s:%d", host, port)
 }
 
-// EntryVirtualLanAddresses 返回条目的虚拟局域网候选地址。本票阶段候选地址
-// 数据源恒为空；网络拓扑票（#67）接入数据后，首次锚定与锚定转发才会只接受
-// 虚拟局域网握手地址。
-func EntryVirtualLanAddresses(srv *models.Server) []string {
-	return nil
+// NormalizeSSHHost renders one host name in the canonical form shared by
+// topology addresses and complete SSH addresses. IP addresses use their
+// standard text; domain names are case-insensitive.
+func NormalizeSSHHost(address string) string {
+	address = strings.TrimSpace(address)
+	host := address
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
+	}
+	return strings.ToLower(host)
+}
+
+// NormalizeSSHAddress renders a complete SSH address in one canonical form.
+func NormalizeSSHAddress(address string, port int) string {
+	host, portText := address, strconv.Itoa(port)
+	if parsedHost, parsedPort, err := net.SplitHostPort(address); err == nil {
+		host, portText = parsedHost, parsedPort
+	}
+	return net.JoinHostPort(NormalizeSSHHost(host), portText)
+}
+
+// ContainsSSHAddress reports whether one complete SSH address is in a
+// candidate list, comparing both sides after canonical normalization.
+func ContainsSSHAddress(addresses []string, address string, port int) bool {
+	want := NormalizeSSHAddress(address, port)
+	for _, candidate := range addresses {
+		if NormalizeSSHAddress(candidate, port) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// EntryVirtualLanAddresses 返回条目所属设备在虚拟局域网里的候选 SSH 地址。
+// 单机 vault 与客户端缓存使用同一个存储查询，因此快照热更新后的下一次
+// 询问就能看到当前网络成员。
+func (s *Store) EntryVirtualLanAddresses(srv *models.Server) ([]string, error) {
+	if s == nil || srv == nil || srv.DeviceID == "" {
+		return nil, nil
+	}
+	return s.networkMembershipAddresses(`
+		SELECT member.address
+		FROM network_memberships member
+		JOIN networks network ON network.id=member.network_id
+		WHERE member.device_id=? AND network.type=?
+		ORDER BY member.registration_order,network.name,member.address`,
+		srv.Port, srv.DeviceID, models.NetworkVirtual)
+}
+
+// EntryCandidateAddresses 返回条目所属设备的全部网络成员地址，加上条目的
+// 兜底地址。锚定转发用它校验客户端报告的握手地址确实可能是本条目的地址。
+func (s *Store) EntryCandidateAddresses(srv *models.Server) ([]string, error) {
+	if s == nil || srv == nil {
+		return nil, nil
+	}
+	out, err := s.networkMembershipAddresses(`
+		SELECT member.address
+		FROM network_memberships member
+		WHERE member.device_id=?
+		ORDER BY member.registration_order,member.address`, srv.Port, srv.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, NormalizeSSHAddress(srv.Host, srv.Port)), nil
+}
+
+func (s *Store) networkMembershipAddresses(query string, port int, arguments ...any) ([]string, error) {
+	rows, err := s.db.Query(query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]string, 0)
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			return nil, err
+		}
+		out = append(out, NormalizeSSHAddress(address, port))
+	}
+	return out, rows.Err()
 }

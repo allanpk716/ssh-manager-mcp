@@ -21,14 +21,13 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/clientcache"
 	"ssh-manager-mcp/internal/instname"
-	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
 )
@@ -148,22 +147,7 @@ func MaybeLazyPull(maxAge time.Duration) error { return MaybeLazyPullFor("", max
 // CLI layer rejects combining it with --instance) > instances/<name> > the
 // default dir. A named instance must pass the whitelist before Join.
 func CachePathsFor(instance string) (dir, bin, meta, audit string, err error) {
-	if instance != "" {
-		if verr := instname.Valid(instance); verr != nil {
-			return "", "", "", "", verr
-		}
-	}
-	if dir = os.Getenv("SSHMGR_CACHE_DIR"); dir == "" {
-		base, derr := paths.UserConfigDir()
-		if derr != nil {
-			return "", "", "", "", derr
-		}
-		dir = filepath.Join(base, "ssh-manager")
-		if instance != "" {
-			dir = filepath.Join(dir, "instances", instance)
-		}
-	}
-	return dir, filepath.Join(dir, "cache.bin"), filepath.Join(dir, "cache.meta.json"), filepath.Join(dir, "cache-audit.log"), nil
+	return clientcache.PathsFor(instance)
 }
 
 // CachePaths resolves the DEFAULT instance's paths (zero-change wrapper; every
@@ -179,36 +163,14 @@ func CachePaths() (dir, bin, meta, audit string, err error) {
 // SSHMGR_CONFIG_ROOT moves the entire user configuration base, and instances/
 // follows that base as one unit.
 func InstancesRoot() (string, error) {
-	base, err := paths.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "ssh-manager", "instances"), nil
+	return clientcache.InstancesRoot()
 }
 
 // ListInstances returns the sorted directory names under InstancesRoot()
 // (nil, nil when the root does not exist — an empty machine). A directory is
 // an instance SLOT; presence of material inside is the caller's concern.
 func ListInstances() ([]string, error) {
-	root, err := InstancesRoot()
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var out []string
-	for _, e := range entries {
-		if e.IsDir() {
-			out = append(out, e.Name())
-		}
-	}
-	sort.Strings(out)
-	return out, nil
+	return clientcache.ListInstanceSlots()
 }
 
 // atomicWriteUnique atomically replaces path with blob via a UNIQUE temp file +
@@ -275,6 +237,11 @@ type cacheMeta struct {
 	// injectable header must never gate). No omitempty, same zero-value
 	// semantics as ServerAnchored/Scoped.
 	DeviceName string `json:"device_name"`
+	// DeviceID records the network topology device identifier associated with
+	// this device code. It comes only from a pinned serve response; an old
+	// authority and an unassociated device code both decode to the empty zero
+	// value.
+	DeviceID string `json:"device_id"`
 }
 
 // CacheDeviceNameFor returns the device-code name recorded in the given
@@ -299,6 +266,26 @@ func CacheDeviceNameFor(instance string) string {
 	return m.DeviceName
 }
 
+// CacheDeviceIDFor returns the topology device identifier recorded in the
+// given instance's cache.meta ("" = the default instance; "" also when the
+// authority is old, the device code is unassociated, or the metadata cannot be
+// read). Dial-device resolution treats that empty value as "unknown".
+func CacheDeviceIDFor(instance string) string {
+	_, _, metaPath, _, err := CachePathsFor(instance)
+	if err != nil {
+		return ""
+	}
+	blob, err := os.ReadFile(metaPath)
+	if err != nil {
+		return ""
+	}
+	var m cacheMeta
+	if json.Unmarshal(blob, &m) != nil {
+		return ""
+	}
+	return m.DeviceID
+}
+
 // CacheCred persists the pull credential (cache.auth.json) so `mcp --cache` can
 // lazy-pull without env/flags. Pin is the RESOLVED effective pin from the last
 // successful pull (env > flag > token-embedded) stored bare; the lazy path
@@ -306,20 +293,12 @@ func CacheDeviceNameFor(instance string) string {
 // --pin re-pull must override a stale embedded pin). The device code grants
 // FUTURE snapshot pulls — cache.bin alone only holds the past — so this file is
 // bearer-token-grade: 0600 + HardenACL on Windows, revoke on theft (threat-model §1.1).
-type CacheCred struct {
-	URL   string `json:"url"`
-	Token string `json:"token"`         // bare device code
-	Pin   string `json:"pin,omitempty"` // resolved effective pin at last successful pull
-}
+type CacheCred = clientcache.Credential
 
 // CacheCredPathFor returns the path of cache.auth.json inside the given
 // instance's cache dir ("" = the default instance).
 func CacheCredPathFor(instance string) (string, error) {
-	dir, _, _, _, err := CachePathsFor(instance)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "cache.auth.json"), nil
+	return clientcache.CredentialPathFor(instance)
 }
 
 // CacheCredPath returns the DEFAULT instance's cache.auth.json path
@@ -330,25 +309,7 @@ func CacheCredPath() (string, error) { return CacheCredPathFor("") }
 // the file is absent (never enrolled / not yet pulled). A present-but-corrupt
 // file is an error: silently ignoring it would disable auto-refresh invisibly.
 func ReadCacheCredFor(instance string) (*CacheCred, error) {
-	p, err := CacheCredPathFor(instance)
-	if err != nil {
-		return nil, err
-	}
-	blob, err := os.ReadFile(p)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var c CacheCred
-	if err := json.Unmarshal(blob, &c); err != nil {
-		return nil, fmt.Errorf("cache.auth.json corrupt: %w", err)
-	}
-	if c.URL == "" || c.Token == "" {
-		return nil, fmt.Errorf("cache.auth.json incomplete (missing url/token)")
-	}
-	return &c, nil
+	return clientcache.ReadCredentialFor(instance)
 }
 
 // ReadCacheCred reads the DEFAULT instance's credential (zero-change wrapper).
@@ -677,8 +638,10 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 	// runs BEFORE any write (bin included) — a refusal leaves the old cache
 	// byte-identical.
 	deviceName := ""
+	deviceID := ""
 	if pin != "" {
 		deviceName = res.Header.Get("X-Sshmgr-Device-Name")
+		deviceID = res.Header.Get("X-Sshmgr-Device-ID")
 	}
 	if o.Instance != "" {
 		if err := gateNamedInstance(bin, metaPath, deviceName, o.Instance); err != nil {
@@ -744,7 +707,10 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 		}
 	} else {
 		scoped := res.Header.Get("X-Sshmgr-Snapshot-Scope") == "profile"
-		mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: pulledAt, ServerAnchored: anchored, Scoped: scoped, DeviceName: deviceName})
+		mb, _ := json.Marshal(cacheMeta{
+			URL: url, PulledAt: pulledAt, ServerAnchored: anchored,
+			Scoped: scoped, DeviceName: deviceName, DeviceID: deviceID,
+		})
 		if werr := atomicWriteUnique(metaPath, mb); werr != nil && o.StatusOut != nil {
 			fmt.Fprintf(o.StatusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): %v\n", werr)
 		}

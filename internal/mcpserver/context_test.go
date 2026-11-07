@@ -16,8 +16,6 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/testsshd"
-
-	"golang.org/x/crypto/ssh"
 )
 
 // fakeCtxBody recognizes an exec_context body arriving at the (simulated
@@ -174,12 +172,12 @@ func TestBgSudoMetaInOutput(t *testing.T) {
 
 	host, portStr, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(portStr)
-	id, _, serr := m.Start(context.Background(), st, BgStartSpec{
+	id, _, _, serr := m.Start(context.Background(), st, BgStartSpec{
 		ProjectID: "proj", ServerID: "srv", Command: "whoami",
 		Sudo: true, SudoPass: "sp", TimeoutSec: 60,
-		Server:    &models.Server{Host: host, Port: port, User: "u"},
-		Auth:      sshbroker.PasswordAuth("pw"),
-		HostKeyCb: ssh.FixedHostKey(hk),
+		Server:   &models.Server{Host: host, Port: port, User: "u"},
+		Auth:     sshbroker.PasswordAuth("pw"),
+		HostKeys: fixedHostKeys(hk),
 	})
 	if serr != nil {
 		t.Fatalf("start: %v", serr)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -16,7 +17,8 @@ import (
 // ownerSSHDeadline bounds the WHOLE owner ssh invocation — connect AND exec
 // share it (was: connect used context.Background() and could hang for the OS
 // TCP timeout on an unreachable host). ssh.Dial cannot be interrupted;
-// sshbroker.Connect abandons the dial at ctx expiry (client.go contract).
+// sshbroker's server-entry dialer abandons the dial at ctx expiry (client.go
+// contract).
 var ownerSSHDeadline = 120 * time.Second
 
 func newSSHCmd() *cobra.Command {
@@ -49,21 +51,25 @@ func newSSHCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			hkCb, err := sshbroker.HostKeyTOFU(st, srv)
-			if err != nil {
-				return err
-			}
 			start := time.Now()
 			commandStr := strings.Join(args[1:], " ")
 			status := "ok"
 			var res sshbroker.ExecResult
-			cli, err := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+			dialSource := dialplan.NewStoreSource(st, "")
+			cli, connectionNotes, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+				Server: srv, Auth: auth, HostKeys: st,
+				SuccessCache: dialSource,
+				Topology:     dialSource,
+			})
 			if err != nil {
 				status = "error"
 				_ = st.WriteAudit(store.AuditRow{TS: start, ServerID: srv.ID, Action: "exec", Command: commandStr, Status: status, DurationMS: time.Since(start).Milliseconds()})
 				return err
 			}
 			defer cli.Close()
+			for _, note := range connectionNotes {
+				fmt.Fprintf(cmd.ErrOrStderr(), "连接说明：%s\n", note)
+			}
 			res, err = cli.Exec(ctx, commandStr, ownerSSHDeadline, 0) // owner path: unlimited output; shared deadline caps total time
 			if err != nil {
 				status = "error"

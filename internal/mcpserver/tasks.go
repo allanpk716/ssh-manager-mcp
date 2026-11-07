@@ -765,8 +765,8 @@ func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Cli
 	}
 }
 
-// BgStartSpec 是 Start 的入参 (Task 6 的 ForProfile 构造): profile 门/凭据/
-// 主机键链已过, 这里只剩启动链。SudoPass 瞬时传递——用完即弃, 不入 task
+// BgStartSpec 是 Start 的入参 (Task 6 的 ForProfile 构造): profile 门与凭据
+// 已过, 主机密钥存储随服务器条目传入。SudoPass 瞬时传递——用完即弃, 不入 task
 // 记录 (spec §1: task 记录不持有任何秘密)。
 type BgStartSpec struct {
 	ProjectID, ServerID, Command string
@@ -775,7 +775,9 @@ type BgStartSpec struct {
 	TimeoutSec                   int
 	Server                       *models.Server
 	Auth                         ssh.AuthMethod
-	HostKeyCb                    ssh.HostKeyCallback
+	HostKeys                     sshbroker.HostKeyStore
+	DialTopology                 sshbroker.DialTopologySource
+	DialSuccessCache             sshbroker.DialSuccessCacheSource
 }
 
 // clampBgTimeout 钳定后台生效超时 (spec §3): 0/缺省 → cap (生产即 24h
@@ -794,13 +796,14 @@ func clampBgTimeout(sec int, cap time.Duration) time.Duration {
 
 // Start 编排 profile 门外的全部启动链 (Task 6 只调本入口, spec §1 钉死顺序):
 // Reserve（closed/超限原样上抛——该分支的 start 审计行归 ForProfile 词汇表,
-// 哨兵 ErrBgTaskLimit 供 errors.Is 识别）→ ConnectKeepAlive（锁外慢连接;
-// 连接失败: start 行 (connect_error/cancelled/hostkey_mismatch) 先落笔再
-// ReleaseReservation, 此路径无 client 可关）→ Insert（持锁写 start(ok) 行、
+// 哨兵 ErrBgTaskLimit 供 errors.Is 识别）→ 按服务器条目拨号的统一入口
+// （保活连接, 锁外慢连接; 连接失败: start 行 (connect_error/cancelled/
+// hostkey_mismatch) 先落笔再 ReleaseReservation, 此路径无 client 可关）
+// → Insert（持锁写 start(ok) 行、
 // goroutine 启动前——end 行必晚于 start 行）→ runTask goroutine（Insert 的
 // wg 票）。Insert 失败 (manager 已关): 锁外关 client + 归还预约, 零泄漏。
-// 成功返回 taskID 与钳定后的生效超时。
-func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSpec) (taskID string, effectiveTimeout time.Duration, err error) {
+// 成功返回 taskID、钳定后的生效超时与统一拨号入口的连接说明。
+func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSpec) (taskID string, effectiveTimeout time.Duration, connectionNotes []string, err error) {
 	t0 := time.Now()
 	effective := clampBgTimeout(spec.TimeoutSec, m.runCap)
 	auditStart := func(status string) {
@@ -811,9 +814,12 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 		})
 	}
 	if err := m.Reserve(); err != nil {
-		return "", 0, err
+		return "", 0, nil, err
 	}
-	cli, cerr := sshbroker.ConnectKeepAlive(ctx, spec.Server.Host, spec.Server.Port, spec.Server.User, spec.Auth, spec.HostKeyCb)
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: spec.Server, Auth: spec.Auth, HostKeys: spec.HostKeys, KeepAlive: true,
+		SuccessCache: spec.DialSuccessCache, Topology: spec.DialTopology,
+	})
 	if cerr != nil {
 		status := "connect_error"
 		switch {
@@ -824,7 +830,7 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 		}
 		auditStart(status)
 		m.ReleaseReservation()
-		return "", 0, cerr
+		return "", 0, nil, cerr
 	}
 	// sudoMetaBox (Plan 41 §2): exec 闭包的第四返回值落点。闭包在 runTask 内
 	// 执行, 返回后值已定; runTask 终态段持锁把它挂上 bgTask——happens-before
@@ -854,7 +860,7 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 	if ierr != nil {
 		_ = cli.Close() // Insert 拒绝 (manager 已关): 锁外关, 零泄漏
 		m.ReleaseReservation()
-		return "", 0, ierr
+		return "", 0, nil, ierr
 	}
-	return tid, effective, nil
+	return tid, effective, connectionNotes, nil
 }

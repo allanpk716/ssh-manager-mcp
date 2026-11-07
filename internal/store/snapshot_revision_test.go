@@ -571,6 +571,15 @@ VALUES ('192.0.2.10:22',X'0102',1700000000,'blob','tofu','');
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.ClearEntryPin("srv-old", func(old PinMeta) AuditRow {
+		return AuditRow{Action: "pin-delete"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rev, err = s.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := s.SaveEntryPin(srv, []byte("new-anchor")); err != nil {
 		t.Fatal(err)
 	}
@@ -656,6 +665,15 @@ END;
 		}
 	}
 	srv, err := s.GetServer("srv-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClearEntryPin("srv-old", func(old PinMeta) AuditRow {
+		return AuditRow{Action: "pin-delete"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rev, err = s.SnapshotRevision()
 	if err != nil {
 		t.Fatal(err)
 	}

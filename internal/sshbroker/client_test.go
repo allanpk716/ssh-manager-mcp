@@ -118,6 +118,53 @@ func TestConnectCancelContext(t *testing.T) {
 		scenarioDeadline, rounds, lastFail)
 }
 
+// TestConnectCancelContextClosesUnderlyingConnection proves that cancellation
+// does not merely abandon the handshake: the TCP connection already accepted by
+// the server is closed immediately, so a competing address cannot continue the
+// SSH handshake and authentication in the background.
+func TestConnectCancelContextClosesUnderlyingConnection(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	closed := make(chan error, 1)
+	go func() {
+		connection, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		accepted <- connection
+		_, err = io.Copy(io.Discard, connection)
+		closed <- err
+		_ = connection.Close()
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		connection := <-accepted
+		_ = connection
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err = Connect(
+		ctx, hostOf(listener.Addr().String()), portOf(listener.Addr().String()),
+		"u", PasswordAuth("pw"), ssh.InsecureIgnoreHostKey(),
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("connect error = %v, want context.Canceled", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("the underlying TCP connection stayed open after context cancellation")
+	}
+}
+
 // connectCancelOnce runs one full cancel scenario and reports the outcome
 // without failing the test, so the caller can re-run the whole scenario within
 // its stabilization deadline.

@@ -35,14 +35,16 @@ type keepAliveSpec struct {
 	maxFail  int
 }
 
+// backgroundKeepAlive 是 ConnectKeepAlive 与按服务器条目拨号统一入口共用的
+// 保活参数：30 秒周期，连续 3 次无响应判死。
+var backgroundKeepAlive = keepAliveSpec{interval: 30 * time.Second, maxFail: 3}
+
 // Connect dials the SSH server and authenticates. hostKeyCb enforces host-key
 // policy. The SSHMGR_SSH_HOST_KEY_ALGORITHMS knob (if set) is validated FIRST
 // and fail-closed: a typo'd value returns an error before any dial. ctx is
-// honored: ssh.Dial itself cannot be interrupted, so on cancellation Connect
-// returns ctx.Err() immediately and abandons the in-flight dial; a background
-// goroutine closes the connection the dial eventually yields (so no *ssh.Client
-// leaks). This bounds a cancelled dial to an unreachable host to milliseconds
-// rather than the OS TCP timeout (~minutes).
+// honored for both the TCP connection and the SSH handshake: on cancellation
+// Connect closes the underlying TCP connection, which aborts an in-flight
+// handshake immediately instead of letting it finish in the background.
 func Connect(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback) (*Client, error) {
 	return connectWith(ctx, host, port, user, auth, hostKeyCb, keepAliveSpec{})
 }
@@ -51,7 +53,7 @@ func Connect(ctx context.Context, host string, port int, user string, auth ssh.A
 // keepalive 循环 (Plan 32 T4: 后台 24h 长连接防 NAT/防火墙空闲拆连的诚实
 // 失败形态; 前台 ≤5min 路径不走此变体)。循环生命周期随 Client.Close 终止。
 func ConnectKeepAlive(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback) (*Client, error) {
-	return connectWith(ctx, host, port, user, auth, hostKeyCb, keepAliveSpec{interval: 30 * time.Second, maxFail: 3})
+	return connectWith(ctx, host, port, user, auth, hostKeyCb, backgroundKeepAlive)
 }
 
 // connectWith 是 Connect/ConnectKeepAlive 的共用体: ka 为 zero 值时不启
@@ -76,43 +78,49 @@ func connectWith(ctx context.Context, host string, port int, user string, auth s
 		cfg.HostKeyAlgorithms = algos
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	type result struct {
-		c   *ssh.Client
-		err error
+	connection, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, redactAddr(err, host, port)
 	}
-	ch := make(chan result, 1)
+
+	handshakeComplete := make(chan struct{})
 	go func() {
-		c, err := ssh.Dial("tcp", addr, cfg)
-		ch <- result{c, err}
+		select {
+		case <-ctx.Done():
+			_ = connection.Close()
+		case <-handshakeComplete:
+		}
 	}()
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			// Plan 31: scrub the dialed address (and any resolved-IP / DNS
-			// residue) from the error text AT THE SOURCE, so every consumer —
-			// MCP tool errors included — is safe by construction. redactAddr's
-			// rendered text is itself prefixed with "ssh dial: " (and its frozen
-			// degraded phrases carry the same prefix), so Connect returns it
-			// AS-IS — no outer wrap, or the prefix would double end-to-end
-			// (owner ruling). The chain survives via Unwrap (errors.Is
-			// classification) and net.Error is delegated; see redact.go.
-			return nil, redactAddr(r.err, host, port)
+	sshConnection, channels, requests, err := ssh.NewClientConn(connection, addr, cfg)
+	close(handshakeComplete)
+	if err != nil {
+		_ = connection.Close()
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
 		}
-		cli := &Client{c: r.c, killGrace: grace}
-		if ka.interval > 0 && ka.maxFail > 0 {
-			cli.kaStop = make(chan struct{})
-			go cli.keepAliveLoop(ka.interval, ka.maxFail)
-		}
-		return cli, nil
-	case <-ctx.Done():
-		go func() {
-			r := <-ch // let the in-flight Dial finish, then reclaim its connection
-			if r.c != nil {
-				r.c.Close()
-			}
-		}()
-		return nil, ctx.Err()
+		// Plan 31: scrub the dialed address (and any resolved-IP / DNS
+		// residue) from the error text AT THE SOURCE, so every consumer —
+		// MCP tool errors included — is safe by construction. redactAddr's
+		// rendered text is itself prefixed with "ssh dial: " (and its frozen
+		// degraded phrases carry the same prefix), so Connect returns it
+		// AS-IS — no outer wrap, or the prefix would double end-to-end
+		// (owner ruling). The chain survives via Unwrap (errors.Is
+		// classification) and net.Error is delegated; see redact.go.
+		return nil, redactAddr(err, host, port)
 	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		_ = sshConnection.Close()
+		return nil, contextErr
+	}
+	cli := &Client{c: ssh.NewClient(sshConnection, channels, requests), killGrace: grace}
+	if ka.interval > 0 && ka.maxFail > 0 {
+		cli.kaStop = make(chan struct{})
+		go cli.keepAliveLoop(ka.interval, ka.maxFail)
+	}
+	return cli, nil
 }
 
 // keepAliveLoop 周期发 keepalive@openssh.com 全局请求 (wantReply): 对端回

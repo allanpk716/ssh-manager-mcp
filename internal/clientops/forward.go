@@ -23,7 +23,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/models"
-	"ssh-manager-mcp/internal/store"
 )
 
 // forwardTimeout bounds one pin-forward POST (§2.1: "转发超时 10 秒(它在 SSH
@@ -192,7 +191,7 @@ func NewPinForwarder(cred CacheCred) (*PinForwarder, error) {
 // (nil on 201; the 409 equal=true outcome wraps ErrPinForwardEqual for the
 // caller's branching). The HTTP call is synchronous and bounded by
 // forwardTimeout — it sits on the SSH handshake critical path.
-func (f *PinForwarder) Forward(srv *models.Server, marshaledKey []byte) error {
+func (f *PinForwarder) Forward(srv *models.Server, handshakeAddr string, marshaledKey []byte) error {
 	host, port := srv.Host, srv.Port
 	fp := presentedFingerprint(marshaledKey)
 	if !f.capable {
@@ -203,7 +202,7 @@ func (f *PinForwarder) Forward(srv *models.Server, marshaledKey []byte) error {
 	}
 	body, err := json.Marshal(pinForwardRequest{
 		ServerID:      srv.ID,
-		HandshakeAddr: store.EntryFallbackAddr(srv),
+		HandshakeAddr: handshakeAddr,
 		KeyBlob:       base64.StdEncoding.EncodeToString(marshaledKey),
 	})
 	if err != nil {

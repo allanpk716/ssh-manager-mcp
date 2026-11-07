@@ -106,7 +106,26 @@ func waitClientClosed(t *testing.T, cli *sshbroker.Client) {
 
 // ---------- 启动/门控/杀连 fixtures ----------
 
-// startBg 经 m.Start 全链 (Reserve→ConnectKeepAlive→Insert→引擎) 起一个真任务。
+// fixedHostKeys 把一把已知主机密钥包装成「条目已锚定」的主机密钥存储，
+// 等价于原先后台任务启动参数里直接传 ssh.FixedHostKey 的固定密钥语义：
+// 只校验、不写入。
+func fixedHostKeys(key ssh.PublicKey) sshbroker.HostKeyStore {
+	blob := key.Marshal()
+	return staticHostKeys{pin: &store.Pin{Blob: blob, Format: store.PinFormatBlob}}
+}
+
+// staticHostKeys 是 fixedHostKeys 的存储实现：任何服务器条目都呈现同一把锚。
+type staticHostKeys struct{ pin *store.Pin }
+
+func (s staticHostKeys) GetEntryPin(*models.Server) (*store.Pin, error) { return s.pin, nil }
+func (s staticHostKeys) EntryVirtualLanAddresses(*models.Server) ([]string, error) {
+	return nil, nil
+}
+func (s staticHostKeys) SaveEntryPinAtHandshake(*models.Server, string, []byte) error {
+	return nil
+}
+
+// startBg 经 m.Start 全链 (Reserve→按服务器条目拨号→Insert→引擎) 起一个真任务。
 func startBg(t *testing.T, m *TaskManager, st *store.Store, addr string, hk ssh.PublicKey, command string, timeoutSec int) (string, time.Duration) {
 	t.Helper()
 	host, portStr, err := net.SplitHostPort(addr)
@@ -114,12 +133,12 @@ func startBg(t *testing.T, m *TaskManager, st *store.Store, addr string, hk ssh.
 		t.Fatal(err)
 	}
 	port, _ := strconv.Atoi(portStr)
-	id, eff, serr := m.Start(context.Background(), st, BgStartSpec{
+	id, eff, _, serr := m.Start(context.Background(), st, BgStartSpec{
 		ProjectID: "proj", ServerID: "srv", Command: command,
 		TimeoutSec: timeoutSec,
 		Server:     &models.Server{Host: host, Port: port, User: "u"},
 		Auth:       sshbroker.PasswordAuth("pw"),
-		HostKeyCb:  ssh.FixedHostKey(hk),
+		HostKeys:   fixedHostKeys(hk),
 	})
 	if serr != nil {
 		t.Fatalf("start %q: %v", command, serr)
@@ -561,12 +580,12 @@ func TestBackgroundSudoLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	port, _ := strconv.Atoi(portStr)
-	id, _, serr := m.Start(context.Background(), st, BgStartSpec{
+	id, _, _, serr := m.Start(context.Background(), st, BgStartSpec{
 		ProjectID: "proj", ServerID: "srv", Command: "whoami",
 		Sudo: true, SudoPass: "sp", TimeoutSec: 60,
-		Server:    &models.Server{Host: host, Port: port, User: "u"},
-		Auth:      sshbroker.PasswordAuth("pw"),
-		HostKeyCb: ssh.FixedHostKey(hk),
+		Server:   &models.Server{Host: host, Port: port, User: "u"},
+		Auth:     sshbroker.PasswordAuth("pw"),
+		HostKeys: fixedHostKeys(hk),
 	})
 	if serr != nil {
 		t.Fatalf("start sudo task: %v", serr)

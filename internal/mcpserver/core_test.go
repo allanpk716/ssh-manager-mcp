@@ -1238,7 +1238,7 @@ func TestConnectErrorHostKeyMismatchNoLeak(t *testing.T) {
 	if err == nil {
 		t.Fatal("want hostkey mismatch error")
 	}
-	assertBranch(t, err, "host key mismatch")
+	assertBranch(t, err, "主机密钥不同，已跳过")
 	assertNoLeak(t, err, srv.Host)
 }
 
