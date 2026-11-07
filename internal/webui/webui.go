@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,6 +80,47 @@ func (c Config) now() time.Time {
 	return time.Now()
 }
 
+// versionHint 读取版本提示来源；空串表示不显示。
+func (c Config) versionHint() string {
+	if c.VersionHint == nil {
+		return ""
+	}
+	return c.VersionHint()
+}
+
+// sortNeedsAttentionFirst 稳定地把需要注意的服务器排到最前，与终端图形
+// 界面的排序口径一致。
+func sortNeedsAttentionFirst(rows []ServerRow) []ServerRow {
+	sorted := append([]ServerRow(nil), rows...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].NeedsAttention && !sorted[j].NeedsAttention
+	})
+	return sorted
+}
+
+// capabilities 是页面能力开关：模板按它决定显示哪些标记与入口。后续票新增
+// 写操作页面时扩展这个结构，不另造机制。
+type capabilities struct {
+	// RoleLabel 是页头展示的本机角色标记。
+	RoleLabel string
+	// CanWrite 表示本机角色是否可写 vault；客户端恒为 false。
+	CanWrite bool
+	// ReadOnlyNotice 非空时在页头下方显示只读指引；单机角色为空串。
+	ReadOnlyNotice string
+}
+
+// capabilitiesForRole 按构造时声明的本机角色推导页面能力开关。
+func capabilitiesForRole(role Role) capabilities {
+	if role == RoleClient {
+		return capabilities{
+			RoleLabel:      "客户端 · 只读",
+			CanWrite:       false,
+			ReadOnlyNotice: "这里只读，修改需到权威端 Web UI 去做。",
+		}
+	}
+	return capabilities{RoleLabel: "单机 · 全功能可写", CanWrite: true}
+}
+
 // Startup 携带一次性启动令牌，并按监听地址拼出浏览器要打开的网址。
 type Startup struct {
 	token string
@@ -102,6 +144,7 @@ type session struct {
 // handler 是回环模式 Web UI 的根处理器，所有路由都在 /ui/ 前缀下。
 type handler struct {
 	cfg         Config
+	caps        capabilities
 	startDigest [sha256.Size]byte
 	mu          sync.Mutex
 	startUsed   bool
@@ -130,6 +173,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	}
 	h := &handler{
 		cfg:         cfg,
+		caps:        capabilitiesForRole(cfg.Role),
 		startDigest: sha256.Sum256([]byte(token)),
 		mux:         http.NewServeMux(),
 	}
@@ -148,7 +192,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "no-store")
 	if !hostAllowed(r.Host, h.cfg.Port) {
-		renderError(w, r, http.StatusMisdirectedRequest, "请求来源不被接受", "Web UI 只允许从本机回环地址访问。请重新运行 `sshmgr ui`。")
+		h.renderError(w, r, http.StatusMisdirectedRequest, "请求来源不被接受", "Web UI 只允许从本机回环地址访问。请重新运行 `sshmgr ui`。")
 		return
 	}
 	h.mux.ServeHTTP(w, r)
@@ -182,12 +226,12 @@ func (h *handler) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 	if !valid {
-		renderError(w, r, http.StatusForbidden, "启动链接无效", "启动链接无效或已使用。请关闭本页，重新运行 `sshmgr ui` 获取新的启动链接。")
+		h.renderError(w, r, http.StatusForbidden, "启动链接无效", "启动链接无效或已使用。请关闭本页，重新运行 `sshmgr ui` 获取新的启动链接。")
 		return
 	}
 	sess, err := newSession()
 	if err != nil {
-		renderError(w, r, http.StatusInternalServerError, "无法建立会话", "生成会话标识失败，请重新运行 `sshmgr ui`。")
+		h.renderError(w, r, http.StatusInternalServerError, "无法建立会话", "生成会话标识失败，请重新运行 `sshmgr ui`。")
 		return
 	}
 	h.mu.Lock()
@@ -208,22 +252,22 @@ func (h *handler) handleStart(w http.ResponseWriter, r *http.Request) {
 func (h *handler) handleUIRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != listPath {
 		if sess := h.currentSession(r); sess == nil {
-			renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
+			h.renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
 			return
 		}
-		renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
 	if sess := h.currentSession(r); sess == nil {
-		renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
+		h.renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
 		return
 	}
 	rows, err := h.cfg.Servers.Servers()
 	if err != nil {
-		renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请重新运行 `sshmgr ui`。")
+		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请重新运行 `sshmgr ui`。")
 		return
 	}
-	renderPage(w, r, http.StatusOK, "servers.tmpl", pageData{Title: "服务器", Servers: rows})
+	h.renderPage(w, r, http.StatusOK, "servers.tmpl", pageData{Title: "服务器", Servers: sortNeedsAttentionFirst(rows)})
 }
 
 // currentSession 校验请求携带的会话 cookie，返回当前会话；无会话、cookie

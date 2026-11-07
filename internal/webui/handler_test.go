@@ -384,3 +384,100 @@ func TestFragmentVersusFullPage(t *testing.T) {
 		t.Fatalf("片段仍应包含列表内容：\n%s", fragment)
 	}
 }
+
+// loginAndGetList 换会话后取列表页全文。
+func loginAndGetList(t *testing.T, role Role, rows []ServerRow, versionHint string) string {
+	t.Helper()
+	h, startup, err := New(Config{
+		Role:        role,
+		Servers:     &stubServerSource{rows: rows},
+		VersionHint: func() string { return versionHint },
+		Port:        18080,
+	})
+	if err != nil {
+		t.Fatalf("构造 Web UI Handler 失败：%v", err)
+	}
+	resp := exchangeStartupToken(t, h, startup.URL("127.0.0.1:18080"))
+	var cookie *http.Cookie
+	if len(resp.Cookies()) == 1 {
+		cookie = resp.Cookies()[0]
+	}
+	resp.Body.Close()
+	if cookie == nil {
+		t.Fatal("启动令牌换会话后应得到会话 cookie")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	req.Host = "127.0.0.1:18080"
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Body.String()
+}
+
+func TestStandaloneRoleShowsWritableBadgeWithoutReadOnlyNotice(t *testing.T) {
+	page := loginAndGetList(t, RoleStandalone, []ServerRow{{Name: "web-1"}}, "")
+	if !strings.Contains(page, "单机 · 全功能可写") {
+		t.Fatalf("单机角色应显示全功能可写标记：\n%s", page)
+	}
+	if strings.Contains(page, "只读") {
+		t.Fatalf("单机角色不应显示只读提示：\n%s", page)
+	}
+}
+
+func TestClientRoleShowsReadOnlyNoticeWithoutWriteEntries(t *testing.T) {
+	page := loginAndGetList(t, RoleClient, []ServerRow{{Name: "web-1"}}, "")
+	if !strings.Contains(page, "客户端 · 只读") {
+		t.Fatalf("客户端角色应显示只读角色标记：\n%s", page)
+	}
+	if !strings.Contains(page, "这里只读，修改需到权威端 Web UI 去做") {
+		t.Fatalf("客户端角色应显示权威端指引：\n%s", page)
+	}
+	for _, word := range []string{"编辑", "删除", "新增", "添加"} {
+		if strings.Contains(page, word) {
+			t.Fatalf("客户端角色页面不得出现写操作入口 %q：\n%s", word, page)
+		}
+	}
+}
+
+func TestVersionHintShownOnlyWhenPresent(t *testing.T) {
+	shown := loginAndGetList(t, RoleClient, nil, "客户端 1.0.0 落后于权威端 1.1.0，运行 `sshmgr update` 升级")
+	if !strings.Contains(shown, "客户端 1.0.0 落后于权威端 1.1.0") {
+		t.Fatalf("版本提示来源非空时页面应显示该文字：\n%s", shown)
+	}
+	hidden := loginAndGetList(t, RoleClient, nil, "")
+	if strings.Contains(hidden, "落后于") || strings.Contains(hidden, "比权威端新") {
+		t.Fatalf("版本提示来源为空串时页面不应显示提示：\n%s", hidden)
+	}
+}
+
+func TestNeedsAttentionRowsSortFirstAndAreMarked(t *testing.T) {
+	page := loginAndGetList(t, RoleStandalone, []ServerRow{
+		{ID: "ok", Name: "正常服务器", User: "u", Host: "192.0.2.1", Port: 22},
+		{ID: "warn", Name: "待处理服务器", User: "u", Host: "192.0.2.2", Port: 22, NeedsAttention: true},
+		{ID: "ok2", Name: "正常服务器二", User: "u", Host: "192.0.2.3", Port: 22},
+	}, "")
+	warnPos := strings.Index(page, "待处理服务器")
+	firstOK := strings.Index(page, "正常服务器")
+	secondOK := strings.Index(page, "正常服务器二")
+	if warnPos < 0 || firstOK < 0 || secondOK < 0 {
+		t.Fatalf("列表页应包含全部服务器名称：\n%s", page)
+	}
+	if !(warnPos < firstOK && warnPos < secondOK) {
+		t.Fatalf("需要注意的服务器应排在最前：\n%s", page)
+	}
+	if !strings.Contains(page, "需要注意") {
+		t.Fatalf("需要注意的服务器应有醒目标记：\n%s", page)
+	}
+}
+
+func TestServerNamesAreHTMLEscaped(t *testing.T) {
+	page := loginAndGetList(t, RoleStandalone, []ServerRow{
+		{Name: "<script>alert(1)</script>", User: "u", Host: "192.0.2.1", Port: 22},
+	}, "")
+	if strings.Contains(page, "<script>alert(1)</script>") {
+		t.Fatalf("服务器名称必须转义输出：\n%s", page)
+	}
+	if !strings.Contains(page, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatalf("转义后的服务器名称应出现在页面中：\n%s", page)
+	}
+}

@@ -8,7 +8,10 @@
 <body>
 <header class="site-header">
 <p class="brand">sshmgr 管理界面</p>
+<p class="role">{{.Caps.RoleLabel}}</p>
 </header>
+{{if .VersionHint}}<p class="version-hint">{{.VersionHint}}</p>{{end}}
+{{if .Caps.ReadOnlyNotice}}<p class="readonly-notice">{{.Caps.ReadOnlyNotice}}</p>{{end}}
 <main id="content">
 {{template "content" .}}
 </main>

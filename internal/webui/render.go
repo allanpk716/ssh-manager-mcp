@@ -13,14 +13,20 @@ var templateFS embed.FS
 // 不另建一套传递结构。
 type pageData struct {
 	Title        string
+	Caps         capabilities
+	VersionHint  string
+	CSRFToken    string
 	Servers      []ServerRow
 	ErrorTitle   string
 	ErrorMessage string
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染
-// 内容区片段，普通请求渲染带布局外壳的整页。
-func renderPage(w http.ResponseWriter, r *http.Request, status int, page string, data pageData) {
+// 内容区片段，普通请求渲染带布局外壳的整页。页头共用的角色标记与版本提示在
+// 这里统一注入。
+func (h *handler) renderPage(w http.ResponseWriter, r *http.Request, status int, page string, data pageData) {
+	data.Caps = h.caps
+	data.VersionHint = h.cfg.versionHint()
 	if isFragmentRequest(r) {
 		tmpl, err := template.ParseFS(templateFS, "templates/"+page)
 		if err != nil {
@@ -51,8 +57,8 @@ func isFragmentRequest(r *http.Request) bool {
 }
 
 // renderError 渲染中文错误页；htmx 请求得到片段，普通请求得到整页。
-func renderError(w http.ResponseWriter, r *http.Request, status int, title, message string) {
-	renderPage(w, r, status, "error.tmpl", pageData{
+func (h *handler) renderError(w http.ResponseWriter, r *http.Request, status int, title, message string) {
+	h.renderPage(w, r, status, "error.tmpl", pageData{
 		Title:        title,
 		ErrorTitle:   title,
 		ErrorMessage: message,
