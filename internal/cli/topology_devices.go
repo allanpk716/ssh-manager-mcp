@@ -27,18 +27,11 @@ func devicesListCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		Short: "List topology devices, optionally filtered",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			role, err := topologyRoleFor()
+			s, closeStore, err := openTopologyViewStore()
 			if err != nil {
 				return err
 			}
-			if role == policyRoleClient {
-				return errors.New("网络拓扑这一版尚未随快照下发；请在权威端查看设备")
-			}
-			s, err := openUnlockedStore()
-			if err != nil {
-				return err
-			}
-			defer s.Close()
+			defer closeStore()
 			devices, err := s.ListDevices(store.DeviceFilter{
 				Site: site, Network: network, Unassigned: unassigned,
 			})
@@ -386,18 +379,11 @@ func devicesShowCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		Short: "Show a topology device",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			role, err := topologyRoleFor()
+			s, closeStore, err := openTopologyViewStore()
 			if err != nil {
 				return err
 			}
-			if role == policyRoleClient {
-				return errors.New("网络拓扑这一版尚未随快照下发；请在权威端查看设备")
-			}
-			s, err := openUnlockedStore()
-			if err != nil {
-				return err
-			}
-			defer s.Close()
+			defer closeStore()
 			device, err := s.GetDevice(args[0])
 			if err != nil {
 				return err
