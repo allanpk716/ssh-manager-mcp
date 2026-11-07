@@ -41,7 +41,9 @@ func (h *localVaultChangeHints) notices() []string {
 		return nil
 	}
 
-	snapshot, err := h.store.ExportSnapshotForProfile(h.profileID, false)
+	// 单机部署的当前程序认识机密项段,与声明了客户端版本的多机客户端
+	// 一样导出;这样才能对机密项变化给出同样的变更提示。
+	snapshot, err := h.store.ExportSnapshotForProfile(h.profileID, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr: export local vault snapshot (skipping change hints): %v\n", err)
 		return nil
