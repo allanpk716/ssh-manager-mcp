@@ -378,6 +378,111 @@ func TestPinHostkey_HandshakeAddrNotCandidate400(t *testing.T) {
 	}
 }
 
+// attachPinTestEntryToDevice 给条目补上物理局域网与虚拟局域网成员地址，
+// 形成多地址条目的权威端校验场景。
+func attachPinTestEntryToDevice(t *testing.T, f *pinFixture, serverID string) {
+	t.Helper()
+	if _, err := f.st.AddSite("家A", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AddNetwork(models.Network{Name: "家A局域网", Type: models.NetworkPhysical, SiteName: "家A"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AddNetwork(models.Network{Name: "虚拟局域网", Type: models.NetworkVirtual}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.MoveServerToDevice(serverID, "工作站"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AddNetworkMembership("工作站", "家A局域网", "192.0.2.20"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AddNetworkMembership("工作站", "虚拟局域网", "100.64.10.5"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPinHostkey_MultiAddressHandshakeValidation：权威端只接受条目候选地址；
+// 条目有虚拟局域网地址时，物理局域网地址与旧版客户端提交的兜底地址都
+// 不能完成锚定转发。
+func TestPinHostkey_MultiAddressHandshakeValidation(t *testing.T) {
+	blob, canonical, fp := pinTestKey(t)
+	cases := []struct {
+		name          string
+		handshakeAddr string
+		wantStatus    int
+		wantBody      string
+	}{
+		{
+			name:          "virtual LAN candidate",
+			handshakeAddr: "100.64.10.5:22",
+			wantStatus:    http.StatusCreated,
+		},
+		{
+			name:          "not a candidate",
+			handshakeAddr: "203.0.113.99:22",
+			wantStatus:    http.StatusBadRequest,
+			wantBody:      "handshake address",
+		},
+		{
+			name:          "physical LAN candidate",
+			handshakeAddr: "192.0.2.20:22",
+			wantStatus:    http.StatusBadRequest,
+			wantBody:      "virtual LAN address",
+		},
+		{
+			name:          "old client fallback address",
+			handshakeAddr: pinAddr(),
+			wantStatus:    http.StatusBadRequest,
+			wantBody:      "upgrade",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			f := newPinRunner(t)
+			attachPinTestEntryToDevice(t, f, f.gpuID)
+			pinsBefore, _ := f.st.ListEntryPins()
+			auditBefore, err := f.st.QueryAudit(store.AuditFilter{Actions: []string{"pin-forward"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			status, body := postPin(t, f.srv, f.laptopToken, pinBody(f.gpuID, testCase.handshakeAddr, blob))
+			if status != testCase.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", status, testCase.wantStatus, body)
+			}
+			if testCase.wantBody != "" && !strings.Contains(strings.ToLower(body), strings.ToLower(testCase.wantBody)) {
+				t.Fatalf("body %q must contain %q", body, testCase.wantBody)
+			}
+			pinsAfter, err := f.st.ListEntryPins()
+			if err != nil {
+				t.Fatal(err)
+			}
+			auditAfter, err := f.st.QueryAudit(store.AuditFilter{Actions: []string{"pin-forward"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if testCase.wantStatus == http.StatusCreated {
+				if len(pinsAfter) != 1 || !pinsAfter[0].Matches(canonical) || pinsAfter[0].HandshakeAddr != testCase.handshakeAddr {
+					t.Fatalf("accepted forward did not record the real handshake address: %+v", pinsAfter)
+				}
+				if len(auditAfter) != 1 || !strings.Contains(auditAfter[0].Command, "handshake="+testCase.handshakeAddr) ||
+					!strings.Contains(auditAfter[0].Command, "fp="+fp) {
+					t.Fatalf("accepted forward audit is wrong: %+v", auditAfter)
+				}
+				return
+			}
+			if len(pinsAfter) != len(pinsBefore) || len(auditAfter) != len(auditBefore) {
+				t.Fatalf("refused forward wrote data: pins before=%d after=%d audit before=%d after=%d",
+					len(pinsBefore), len(pinsAfter), len(auditBefore), len(auditAfter))
+			}
+		})
+	}
+}
+
 // TestPinHostkey_OldFormatRejected400：缺少条目标识符的旧格式请求一律拒绝，
 // 错误信息提示升级客户端。
 func TestPinHostkey_OldFormatRejected400(t *testing.T) {
@@ -488,8 +593,12 @@ func TestPinHostkey_PreExistingAnchorConflict(t *testing.T) {
 	if pin := entryPinOf(t, f, f.gpuID); pin == nil || !pin.Matches(canonicalA) {
 		t.Fatal("existing anchor overwritten by a conflicting forward")
 	}
-	if n, a := pinAnchorCount(t, f); n != 1 || a != 0 {
-		t.Fatalf("conflict paths must write nothing: anchors=%d audit=%d", n, a)
+	forwards, err := f.st.QueryAudit(store.AuditFilter{Actions: []string{"pin-forward"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(forwards) != 0 {
+		t.Fatalf("conflict paths must not write pin-forward audit rows: %+v", forwards)
 	}
 }
 

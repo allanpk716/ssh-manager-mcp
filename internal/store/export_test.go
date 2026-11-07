@@ -73,7 +73,11 @@ func TestExportSnapshot_CapturesAllTables(t *testing.T) {
 	if len(snap.HostKeys) != 1 || snap.HostKeys[0].HostPort != "192.0.2.10:22" {
 		t.Errorf("derived legacy host_keys not captured: %+v", snap.HostKeys)
 	}
-	if len(snap.Audit) != 1 || snap.Audit[0].Action != "exec" {
+	actions := make(map[string]bool, len(snap.Audit))
+	for _, row := range snap.Audit {
+		actions[row.Action] = true
+	}
+	if len(snap.Audit) != 2 || !actions["pin-tofu"] || !actions["exec"] {
 		t.Errorf("audit not captured: %+v", snap.Audit)
 	}
 }

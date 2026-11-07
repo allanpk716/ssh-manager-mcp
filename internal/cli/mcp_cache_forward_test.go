@@ -44,6 +44,7 @@ import (
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/testsshd"
 )
@@ -448,6 +449,108 @@ func TestCacheForwardE2E_FirstConnectOnceSuccess(t *testing.T) {
 		t.Fatalf("the second connection re-forwarded: posts = %d", fx.postCount())
 	}
 	assertSidecarHasNoForwardRows(t, auditPath)
+}
+
+// TestCacheForwardE2E_MultiAddressFirstTrustUsesVirtualLan：客户端缓存模式
+// 下，多地址条目首次锚定经真实虚拟局域网地址握手；转发请求、权威端锚来源
+// 与审计都记录这个地址，而不是条目的兜底地址。
+func TestCacheForwardE2E_MultiAddressFirstTrustUsesVirtualLan(t *testing.T) {
+	fx := newCacheFwdFixture(t)
+	configRoot := t.TempDir()
+	t.Setenv("APPDATA", configRoot)
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	t.Setenv("SSHMGR_CONFIG_ROOT", configRoot)
+	t.Setenv("SSHMGR_CACHE_DIR", "")
+	t.Setenv("SSHMGR_STORE", filepath.Join(t.TempDir(), "absent-store.db"))
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := fx.serve.AddNetwork(models.Network{Name: "虚拟局域网", Type: models.NetworkVirtual}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.serve.AddDevice("目标工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.serve.AddDevice("笔记本", "", "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.serve.MoveServerToDevice(fx.targetID, "目标工作站"); err != nil {
+		t.Fatal(err)
+	}
+	for _, membership := range []struct {
+		device, address string
+	}{
+		{"目标工作站", fx.host()},
+		{"笔记本", "127.0.0.2"},
+	} {
+		if _, err := fx.serve.AddNetworkMembership(membership.device, "虚拟局域网", membership.address); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serveSrv, err := fx.serve.GetServer(fx.targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveSrv.Host = "203.0.113.20"
+	if err := fx.serve.UpdateServer(serveSrv); err != nil {
+		t.Fatal(err)
+	}
+	devices, err := fx.serve.ListDevices(store.DeviceFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var laptopTokenID string
+	for _, device := range devices {
+		if device.Name == "笔记本" {
+			laptopTokenID = device.ClientTokenID
+		}
+	}
+	if laptopTokenID == "" {
+		t.Fatal("client device is not associated with the cache token")
+	}
+	snapshot, err := fx.serve.ExportSnapshotForProfile(fx.profID, false, laptopTokenID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	broker, tunnels, tasks, cleanup, err := mcpserver.NewCacheBroker(
+		fx.projToken, snapshot, auditPath, nil,
+		clientops.ForwardingHostKeys(mustForwarder(t, fx.cred)), "laptop", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	t.Cleanup(func() { tunnels.CloseAll(); tasks.CloseAll() })
+	sess := attachMCPClient(t, broker)
+
+	text, isErr := callExec(t, sess, fx.targetID, "hi")
+	if isErr {
+		t.Fatalf("multi-address first trust must succeed over the virtual LAN: %s", text)
+	}
+	if !strings.Contains(text, "PONG:hi") {
+		t.Fatalf("exec output missing: %q", text)
+	}
+	if fx.postCount() != 1 {
+		t.Fatalf("posts = %d, want exactly 1", fx.postCount())
+	}
+	realAddr := fmt.Sprintf("%s:%d", fx.host(), fx.port())
+	pins, err := fx.serve.ListEntryPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pins) != 1 || pins[0].HandshakeAddr != realAddr || !pins[0].Matches(fx.sshdKey.Marshal()) {
+		t.Fatalf("权威端锚没有记录真实虚拟局域网握手地址：%+v", pins)
+	}
+	rows, err := fx.serve.QueryAudit(store.AuditFilter{Actions: []string{"pin-forward"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0].Command, "handshake="+realAddr) {
+		t.Fatalf("权威端锚定转发审计没有记录真实握手地址：%+v", rows)
+	}
 }
 
 // TestCacheForwardE2E_OldVaultUpgradedBeforeForward：权威端用旧格式 vault

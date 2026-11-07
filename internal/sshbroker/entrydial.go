@@ -312,6 +312,7 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		addressTimeout = resolved
 	}
 	plan := PlanServerDialAddresses(nil, nil, req.Server.Host)
+	var targetMemberships []*models.NetworkMembership
 	if req.Topology != nil {
 		topology, err := req.Topology.ServerDialTopology(req.Server)
 		if err != nil {
@@ -321,7 +322,28 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		if !topology.DialerKnown {
 			dialerMemberships = nil
 		}
-		plan = PlanServerDialAddresses(topology.TargetMemberships, dialerMemberships, req.Server.Host)
+		targetMemberships = topology.TargetMemberships
+		plan = PlanServerDialAddresses(targetMemberships, dialerMemberships, req.Server.Host)
+	}
+	pin, err := req.HostKeys.GetEntryPin(req.Server)
+	if err != nil {
+		return nil, nil, err
+	}
+	if pin == nil {
+		firstTrustNeedsVirtualLan := hasVirtualLanAddress(targetMemberships)
+		if !firstTrustNeedsVirtualLan {
+			virtualLan, err := req.HostKeys.EntryVirtualLanAddresses(req.Server)
+			if err != nil {
+				return nil, nil, err
+			}
+			firstTrustNeedsVirtualLan = len(virtualLan) > 0
+		}
+		if firstTrustNeedsVirtualLan {
+			plan = keepVirtualLanCandidates(plan)
+			if len(plan.Candidates) == 0 {
+				return nil, nil, errors.New("首次锚定只能经虚拟局域网；当前拨号设备与目标没有共同虚拟局域网。请用带外锚定，或先从虚拟局域网内的机器连接一次。")
+			}
+		}
 	}
 	hkCb, err := HostKeyTOFU(req.HostKeys, req.Server)
 	if err != nil {
@@ -371,4 +393,24 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		dialErr.Hint = "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。"
 	}
 	return nil, nil, dialErr
+}
+
+func hasVirtualLanAddress(memberships []*models.NetworkMembership) bool {
+	for _, membership := range memberships {
+		if membership != nil && membership.NetworkType == models.NetworkVirtual {
+			return true
+		}
+	}
+	return false
+}
+
+func keepVirtualLanCandidates(plan DialAddressPlan) DialAddressPlan {
+	candidates := make([]DialAddress, 0, len(plan.Candidates))
+	for _, candidate := range plan.Candidates {
+		if candidate.Source == DialAddressVirtual {
+			candidates = append(candidates, candidate)
+		}
+	}
+	plan.Candidates = candidates
+	return plan
 }
