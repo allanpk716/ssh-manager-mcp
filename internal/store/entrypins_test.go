@@ -158,33 +158,48 @@ func TestSaveEntryPinRecordsHandshakeAddressAndAudit(t *testing.T) {
 }
 
 // TestSaveEntryPinConcurrentFirstTrustDoesNotOverwrite：两个并发首次锚定
-// 竞争同一个条目时只能落第一把锚；赢家之外的调用与已存锚一致时成功返回，
-// 且只有真正写入的那次产生首次锚定审计。
+// 带不同主机密钥竞争同一个条目时只能落第一把锚；输家按锚不一致返回，且
+// 只有真正写入的那次产生首次锚定审计。
 func TestSaveEntryPinConcurrentFirstTrustDoesNotOverwrite(t *testing.T) {
 	s := newTestStore(t)
 	id := addEntryForTest(t, s, "race", "100.64.10.5", 22)
 	srv := serverOf(t, s, id)
-	key, _ := pinHostKey(t)
+	firstKey, _ := pinHostKey(t)
+	secondKey, _ := pinHostKey(t)
 
-	errCh := make(chan error, 2)
+	type firstTrustResult struct {
+		err error
+	}
+	resultCh := make(chan firstTrustResult, 2)
 	var workers sync.WaitGroup
-	for worker := 0; worker < 2; worker++ {
+	for _, key := range [][]byte{firstKey, secondKey} {
 		workers.Add(1)
-		go func() {
+		go func(presentedKey []byte) {
 			defer workers.Done()
-			errCh <- s.SaveEntryPinAtHandshake(srv, "100.64.10.5:22", key)
-		}()
+			resultCh <- firstTrustResult{
+				err: s.SaveEntryPinAtHandshake(srv, "100.64.10.5:22", presentedKey),
+			}
+		}(key)
 	}
 	workers.Wait()
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			t.Fatalf("concurrent first trust with the same key must succeed: %v", err)
+	close(resultCh)
+	winners, mismatches := 0, 0
+	for result := range resultCh {
+		switch {
+		case result.err == nil:
+			winners++
+		case errors.Is(result.err, ErrEntryPinMismatch):
+			mismatches++
+		default:
+			t.Fatalf("concurrent first trust returned %v", result.err)
 		}
+	}
+	if winners != 1 || mismatches != 1 {
+		t.Fatalf("concurrent first trust winners=%d mismatches=%d, want 1 and 1", winners, mismatches)
 	}
 
 	pins := mustEntryPins(t, s)
-	if len(pins) != 1 || !bytes.Equal(pins[0].Blob, key) {
+	if len(pins) != 1 || (!bytes.Equal(pins[0].Blob, firstKey) && !bytes.Equal(pins[0].Blob, secondKey)) {
 		t.Fatalf("concurrent first trust changed the anchor: %+v", pins)
 	}
 	rows, err := s.QueryAudit(AuditFilter{Actions: []string{"pin-tofu"}})
