@@ -145,9 +145,11 @@ func TestConnectServerEntryMismatchFailsWithoutSendingCredentials(t *testing.T) 
 // 网地址映射到进程内 SSH 服务器，证明 IPv6 主机交给底层时保持独立字段，
 // 由底层用带括号的形式拼接。
 func TestConnectServerEntryTriesPlannedAddressesInOrder(t *testing.T) {
-	st := &fakeHostKeyStore{}
-	fixtureAddr, _, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	fixtureAddr, fixtureKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
 	defer cleanup()
+	st := &fakeHostKeyStore{pins: map[string]*store.Pin{
+		"srv-a": {Blob: fixtureKey.Marshal(), Format: store.PinFormatBlob},
+	}}
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 	var attempted []string
 
@@ -189,8 +191,163 @@ func TestConnectServerEntryTriesPlannedAddressesInOrder(t *testing.T) {
 			t.Fatalf("attempted addresses = %v, want %v", attempted, want)
 		}
 	}
-	if st.saves != 1 {
-		t.Fatalf("successful address must record one host key, got %d saves", st.saves)
+	if st.saves != 0 {
+		t.Fatalf("an already anchored entry must verify without saving, got %d saves", st.saves)
+	}
+}
+
+// TestConnectServerEntryFirstTrustWithoutVirtualLanKeepsAllCandidates：条目
+// 所属设备没有虚拟局域网地址时，首次锚定仍可按普通候选顺序使用任何地址。
+func TestConnectServerEntryFirstTrustWithoutVirtualLanKeepsAllCandidates(t *testing.T) {
+	st := &fakeHostKeyStore{}
+	srv := entryAt("srv-a", "198.51.100.10", 2202)
+	remoteKey := testPublicKey(t)
+	var attempted []string
+	original := lowLevelDial
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+		attempted = append(attempted, host)
+		if host == "192.0.2.10" {
+			return nil, errors.New("physical address unavailable")
+		}
+		if err := hostKeyCb(host, nil, remoteKey); err != nil {
+			return nil, err
+		}
+		return &Client{}, nil
+	}
+	t.Cleanup(func() { lowLevelDial = original })
+
+	_, _, err := ConnectServerEntry(context.Background(), ServerDialRequest{
+		Server: srv, Auth: PasswordAuth("pw"), HostKeys: st,
+		Topology: StaticDialTopology{
+			TargetMemberships: []*models.NetworkMembership{
+				membershipAt("device-target", "network-home", "家A局域网", models.NetworkPhysical, "192.0.2.10", 1),
+			},
+			DialerKnown: true,
+			DialerMemberships: []*models.NetworkMembership{
+				membershipAt("device-dialer", "network-home", "家A局域网", models.NetworkPhysical, "192.0.2.2", 2),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first trust may use any candidate when there is no virtual LAN address: %v", err)
+	}
+	want := []string{"192.0.2.10", "198.51.100.10"}
+	if len(attempted) != len(want) || attempted[0] != want[0] || attempted[1] != want[1] {
+		t.Fatalf("attempted addresses = %v, want %v", attempted, want)
+	}
+	if st.saves != 1 || st.lastHandshake != "198.51.100.10:2202" {
+		t.Fatalf("fallback first trust must save over the real handshake address: saves=%d address=%q", st.saves, st.lastHandshake)
+	}
+}
+
+// TestConnectServerEntryFirstTrustUsesOnlyVirtualLan：条目尚无锚且所属设备
+// 有虚拟局域网地址时，首次锚定不能尝试物理局域网地址与兜底地址。
+func TestConnectServerEntryFirstTrustUsesOnlyVirtualLan(t *testing.T) {
+	st := &fakeHostKeyStore{}
+	srv := entryAt("srv-a", "198.51.100.10", 2202)
+	remoteKey := testPublicKey(t)
+	var attempted []string
+
+	original := lowLevelDial
+	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+		attempted = append(attempted, host)
+		if err := hostKeyCb(host, nil, remoteKey); err != nil {
+			return nil, err
+		}
+		return &Client{}, nil
+	}
+	t.Cleanup(func() { lowLevelDial = original })
+
+	cli, _, err := ConnectServerEntry(context.Background(), ServerDialRequest{
+		Server: srv, Auth: PasswordAuth("pw"), HostKeys: st,
+		Topology: StaticDialTopology{
+			TargetMemberships: []*models.NetworkMembership{
+				membershipAt("device-target", "network-home", "家A局域网", models.NetworkPhysical, "192.0.2.10", 2),
+				membershipAt("device-target", "network-virtual", "虚拟局域网", models.NetworkVirtual, "100.64.10.5", 1),
+			},
+			DialerKnown: true,
+			DialerMemberships: []*models.NetworkMembership{
+				membershipAt("device-dialer", "network-home", "家A局域网", models.NetworkPhysical, "192.0.2.2", 3),
+				membershipAt("device-dialer", "network-virtual", "虚拟局域网", models.NetworkVirtual, "100.64.10.2", 4),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first trust over virtual LAN: %v", err)
+	}
+	_ = cli
+
+	want := []string{"100.64.10.5"}
+	if len(attempted) != len(want) || attempted[0] != want[0] {
+		t.Fatalf("attempted addresses = %v, want %v", attempted, want)
+	}
+	if st.saves != 1 || st.lastHandshake != "100.64.10.5:2202" {
+		t.Fatalf("first trust must save over the real handshake address: saves=%d address=%q", st.saves, st.lastHandshake)
+	}
+}
+
+// TestConnectServerEntryFirstTrustWithoutCommonVirtualLanFails：拨号设备与
+// 目标没有共同虚拟局域网时，首次锚定不能退回物理局域网或兜底地址。
+func TestConnectServerEntryFirstTrustWithoutCommonVirtualLanFails(t *testing.T) {
+	srv := entryAt("srv-a", "198.51.100.10", 2202)
+	var attempted []string
+	original := lowLevelDial
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+		attempted = append(attempted, host)
+		return nil, errors.New("must not dial")
+	}
+	t.Cleanup(func() { lowLevelDial = original })
+
+	_, _, err := ConnectServerEntry(context.Background(), ServerDialRequest{
+		Server: srv, Auth: PasswordAuth("pw"), HostKeys: &fakeHostKeyStore{},
+		Topology: StaticDialTopology{
+			TargetMemberships: []*models.NetworkMembership{
+				membershipAt("device-target", "network-home", "家A局域网", models.NetworkPhysical, "192.0.2.10", 2),
+				membershipAt("device-target", "network-virtual", "虚拟局域网", models.NetworkVirtual, "100.64.10.5", 1),
+			},
+			DialerKnown: true,
+			DialerMemberships: []*models.NetworkMembership{
+				membershipAt("device-dialer", "network-home", "家A局域网", models.NetworkPhysical, "192.0.2.2", 3),
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("first trust without a common virtual LAN must fail")
+	}
+	want := "首次锚定只能经虚拟局域网；当前拨号设备与目标没有共同虚拟局域网。请用带外锚定，或先从虚拟局域网内的机器连接一次。"
+	if err.Error() != want {
+		t.Fatalf("error text:\n got %q\nwant %q", err.Error(), want)
+	}
+	if len(attempted) != 0 {
+		t.Fatalf("no address may be attempted, got %v", attempted)
+	}
+}
+
+// TestConnectServerEntryFirstTrustWithoutTopologyStillHonorsVirtualLan：即使
+// 拨号请求没有提供拓扑视图，也不能把尚无锚的多地址条目退回兜底地址。
+func TestConnectServerEntryFirstTrustWithoutTopologyStillHonorsVirtualLan(t *testing.T) {
+	srv := entryAt("srv-a", "198.51.100.10", 2202)
+	var attempted []string
+	original := lowLevelDial
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+		attempted = append(attempted, host)
+		return nil, errors.New("must not dial")
+	}
+	t.Cleanup(func() { lowLevelDial = original })
+
+	_, _, err := ConnectServerEntry(context.Background(), ServerDialRequest{
+		Server: srv, Auth: PasswordAuth("pw"),
+		HostKeys: &fakeHostKeyStore{virtualLan: []string{"100.64.10.5:2202"}},
+	})
+	if err == nil {
+		t.Fatal("first trust without a reachable virtual LAN address must fail")
+	}
+	want := "首次锚定只能经虚拟局域网；当前拨号设备与目标没有共同虚拟局域网。请用带外锚定，或先从虚拟局域网内的机器连接一次。"
+	if err.Error() != want {
+		t.Fatalf("error text:\n got %q\nwant %q", err.Error(), want)
+	}
+	if len(attempted) != 0 {
+		t.Fatalf("no address may be attempted, got %v", attempted)
 	}
 }
 
@@ -240,7 +397,9 @@ func TestConnectServerEntryFailureLabelsEveryPlannedCandidate(t *testing.T) {
 	t.Cleanup(func() { lowLevelDial = original })
 
 	_, _, err := ConnectServerEntry(context.Background(), ServerDialRequest{
-		Server: srv, Auth: PasswordAuth("pw"), HostKeys: &fakeHostKeyStore{},
+		Server: srv, Auth: PasswordAuth("pw"), HostKeys: &fakeHostKeyStore{pins: map[string]*store.Pin{
+			srv.ID: {Blob: []byte("existing anchor"), Format: store.PinFormatBlob},
+		}},
 		Topology: StaticDialTopology{
 			TargetMemberships: []*models.NetworkMembership{
 				membershipAt("device-target", "network-virtual", "虚拟局域网", models.NetworkVirtual, "100.64.10.5", 1),

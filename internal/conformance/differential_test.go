@@ -34,6 +34,14 @@ func (f *fakeHostKeyStore) SaveEntryPin(srv *models.Server, k []byte) error {
 	return nil
 }
 
+func (f *fakeHostKeyStore) EntryVirtualLanAddresses(*models.Server) ([]string, error) {
+	return nil, nil
+}
+
+func (f *fakeHostKeyStore) SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string, k []byte) error {
+	return f.SaveEntryPin(srv, k)
+}
+
 // sshBinaryKnownHostsLine renders an OpenSSH known_hosts entry for a non-default
 // port: "[host]:port <keytype> <base64>". The bracketed hostname is OpenSSH's
 // format when the port is not 22 (see known_hosts PROTOCOL).

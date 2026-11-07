@@ -5,6 +5,7 @@ package clientops
 // HostKeyTOFU 原样透出，不再叠加前缀。
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -117,6 +118,48 @@ func TestForwardingHostKeys_AppliesToCurrentGeneration(t *testing.T) {
 	}
 	if n := pin.postCount(); n != 1 {
 		t.Fatalf("reconnect re-forwarded: posts = %d, want still 1", n)
+	}
+}
+
+// TestForwardingHostKeys_UsesRealHandshakeAddress：客户端缓存模式必须把
+// 实际握手地址发给权威端，并写进当前热更新代的本地锚来源。
+func TestForwardingHostKeys_UsesRealHandshakeAddress(t *testing.T) {
+	blob, pub := newHostKey(t)
+	var postedAddr string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			HandshakeAddr string `json:"handshake_addr"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode forward request: %v", err)
+		} else {
+			postedAddr = req.HandshakeAddr
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"fingerprint":"SHA256:abc","server_name":"target"}`))
+	}))
+	t.Cleanup(server.Close)
+	fwd := newTestForwarder(t, server)
+	gen, srv := newReadOnlyStoreWithEntry(t)
+	hk := ForwardingHostKeys(fwd)(func() *store.Store { return gen })
+
+	cb, err := sshbroker.HostKeyTOFU(hk, srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cb("100.64.10.5", nil, pub); err != nil {
+		t.Fatalf("first handshake must continue after forwarding: %v", err)
+	}
+	if postedAddr != "100.64.10.5:22" {
+		t.Fatalf("forward request handshake_addr = %q, want 100.64.10.5:22", postedAddr)
+	}
+	pins, err := gen.ListEntryPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pins) != 1 || pins[0].HandshakeAddr != "100.64.10.5:22" || !pins[0].Matches(blob) {
+		t.Fatalf("本地缓存锚没有记录真实握手地址：%+v", pins)
 	}
 }
 

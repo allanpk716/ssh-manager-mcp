@@ -64,6 +64,98 @@ func TestEntryPins_SameAddressIndependent(t *testing.T) {
 	}
 }
 
+// TestEntryVirtualLanAddressesReadsDeviceMemberships：条目的虚拟局域网
+// 候选地址必须来自它所属设备的网络成员，而不是恒为空。
+func TestEntryVirtualLanAddressesReadsDeviceMemberships(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.AddSite("家A", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddNetwork(models.Network{Name: "家A局域网", Type: models.NetworkPhysical, SiteName: "家A"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddNetwork(models.Network{Name: "虚拟局域网", Type: models.NetworkVirtual}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "工作站 SSH", Host: "198.51.100.10", Port: 22, User: "u", AuthMethod: models.AuthPassword,
+	}, nil, nil, "工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddNetworkMembership("工作站", "家A局域网", "192.0.2.10"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddNetworkMembership("工作站", "虚拟局域网", "100.64.10.5"); err != nil {
+		t.Fatal(err)
+	}
+	srv := serverOf(t, s, result.ServerID)
+
+	got, err := s.EntryVirtualLanAddresses(srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "100.64.10.5:22" {
+		t.Fatalf("条目的虚拟局域网地址 = %v, want [100.64.10.5:22]", got)
+	}
+
+	snapshot, err := s.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, err := Open(filepath.Join(t.TempDir(), "cache.db"), make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	if err := cache.ImportSnapshotForClientCache(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	cachedSrv, err := cache.GetServer(srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := cache.EntryVirtualLanAddresses(cachedSrv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cached) != 1 || cached[0] != "100.64.10.5:22" {
+		t.Fatalf("客户端缓存中的条目的虚拟局域网地址 = %v, want [100.64.10.5:22]", cached)
+	}
+}
+
+// TestSaveEntryPinRecordsHandshakeAddressAndAudit：单机与权威端的直接首次
+// 锚定必须把实际握手地址写进锚来源和审计。
+func TestSaveEntryPinRecordsHandshakeAddressAndAudit(t *testing.T) {
+	s := newTestStore(t)
+	id := addEntryForTest(t, s, "工作站 SSH", "198.51.100.10", 22)
+	srv := serverOf(t, s, id)
+	key, fp := pinHostKey(t)
+
+	if err := s.SaveEntryPinAtHandshake(srv, "100.64.10.5:22", key); err != nil {
+		t.Fatal(err)
+	}
+	pins, err := s.ListEntryPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pins) != 1 || pins[0].Source != PinSourceTofu || pins[0].HandshakeAddr != "100.64.10.5:22" {
+		t.Fatalf("首次锚定来源信息不完整：%+v", pins)
+	}
+	rows, err := s.QueryAudit(AuditFilter{Actions: []string{"pin-tofu"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ServerID != id || rows[0].Status != "ok" ||
+		!strings.Contains(rows[0].Command, "handshake=100.64.10.5:22") ||
+		!strings.Contains(rows[0].Command, "fp="+fp) {
+		t.Fatalf("首次锚定审计不完整：%+v", rows)
+	}
+}
+
 // TestInsertForwardedEntryPin_OnlyInsert 覆盖转发落锚的仅可新增语义：返回值
 // 只表示本次调用是否插入了新行；没有插入时绝不写审计、绝不覆盖已有锚。
 func TestInsertForwardedEntryPin_OnlyInsert(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/testsshd"
 )
 
@@ -51,7 +52,7 @@ func TestResolveAddressTimeout(t *testing.T) {
 // 不套用短超时，仍只受调用方上下文约束。
 func TestConnectServerEntryAddressTimeoutAndSingleCandidate(t *testing.T) {
 	t.Run("multiple candidates", func(t *testing.T) {
-		fixtureAddr, _, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+		fixtureAddr, fixtureKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
 		defer cleanup()
 		reclaimed := make(chan struct{})
 		var attempted []string
@@ -84,7 +85,9 @@ func TestConnectServerEntryAddressTimeoutAndSingleCandidate(t *testing.T) {
 			defer close(done)
 			cli, _, err := ConnectServerEntry(ctx, ServerDialRequest{
 				Server: entryAt("srv-a", "198.51.100.10", 2202), Auth: PasswordAuth("pw"),
-				HostKeys: &fakeHostKeyStore{}, AddressTimeout: 20 * time.Millisecond,
+				HostKeys: &fakeHostKeyStore{pins: map[string]*store.Pin{
+					"srv-a": {Blob: fixtureKey.Marshal(), Format: store.PinFormatBlob},
+				}}, AddressTimeout: 20 * time.Millisecond,
 				Topology: StaticDialTopology{
 					TargetMemberships: []*models.NetworkMembership{
 						membershipAt("target", "home", "家A局域网", models.NetworkPhysical, "192.0.2.10", 1),
