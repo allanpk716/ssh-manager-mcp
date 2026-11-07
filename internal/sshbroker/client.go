@@ -80,6 +80,9 @@ func connectWith(ctx context.Context, host string, port int, user string, auth s
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	connection, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
 		return nil, redactAddr(err, host, port)
 	}
 
