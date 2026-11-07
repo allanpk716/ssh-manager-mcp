@@ -32,6 +32,7 @@ import (
 
 	"github.com/pkg/sftp"
 
+	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -204,7 +205,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 			return
 		}
 		cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
-			Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true,
+			Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true, Topology: dialplan.NewStoreSource(st, ""),
 		})
 		if cerr != nil {
 			switch {
@@ -268,6 +269,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 	}
 	dstCli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: dstSrv, Auth: dstAuth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true,
+		Topology: dialplan.NewStoreSource(st, ""),
 	})
 	if cerr != nil {
 		switch {

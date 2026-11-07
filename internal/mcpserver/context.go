@@ -34,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -264,6 +265,7 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 
 	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		Topology: dialplan.NewStoreSource(st, ""),
 	})
 	if cerr != nil {
 		switch {

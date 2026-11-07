@@ -13,9 +13,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
-	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -288,11 +288,58 @@ func CachePresent() bool { return cachePresent() }
 // instance slot (Plan 40 §2.7 — a named-instance-only machine is still a
 // client, not a wizard candidate).
 func cachePresent() bool {
-	if cred, err := clientops.ReadCacheCred(); err == nil && cred != nil {
+	if readableDefaultCacheCred() {
 		return true
 	}
-	names, err := clientops.ListInstances()
+	names, err := instanceSlotNames()
 	return err == nil && len(names) > 0
+}
+
+// readableDefaultCacheCred 按客户端操作层的可读凭据规则检查默认实例。这里
+// 不能导入客户端操作层：角色状态位于它的下层，而网络拓扑拨号需要这条依赖
+// 保持无环。
+func readableDefaultCacheCred() bool {
+	dir := os.Getenv("SSHMGR_CACHE_DIR")
+	if dir == "" {
+		base, err := paths.UserConfigDir()
+		if err != nil {
+			return false
+		}
+		dir = filepath.Join(base, "ssh-manager")
+	}
+	blob, err := os.ReadFile(filepath.Join(dir, "cache.auth.json"))
+	if err != nil {
+		return false
+	}
+	var credential struct {
+		URL   string `json:"url"`
+		Token string `json:"token"`
+	}
+	return json.Unmarshal(blob, &credential) == nil && credential.URL != "" && credential.Token != ""
+}
+
+// instanceSlotNames 只按目录名列出缓存实例，不读取实例内容；不导入客户端
+// 操作层的原因与上一函数相同。
+func instanceSlotNames() ([]string, error) {
+	base, err := paths.UserConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Join(base, "ssh-manager", "instances"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			out = append(out, entry.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // serveCertPresent is the server-vs-standalone heuristic when no role.json

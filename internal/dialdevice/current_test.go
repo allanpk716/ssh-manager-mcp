@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
@@ -23,16 +23,20 @@ func withSnapshotStore(t *testing.T, devices ...store.SnapshotDevice) *store.Sto
 
 func writeClientMeta(t *testing.T, instance, deviceID string) {
 	t.Helper()
-	dir, _, metaPath, _, err := clientops.CachePathsFor(instance)
+	base, err := paths.UserConfigDir()
 	if err != nil {
 		t.Fatal(err)
+	}
+	dir := filepath.Join(base, "ssh-manager")
+	if instance != "" {
+		dir = filepath.Join(dir, "instances", instance)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	meta := `{"url":"https://authority","pulled_at":1,"server_anchored":true,` +
 		`"scoped":true,"device_name":"` + instance + `","device_id":"` + deviceID + `"}`
-	if err := os.WriteFile(metaPath, []byte(meta), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "cache.meta.json"), []byte(meta), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -103,6 +107,51 @@ func TestCurrentClientUnknowns(t *testing.T) {
 	}
 	if current.Known || current.Reason != ReasonDeviceMissingFromSnapshot {
 		t.Fatalf("missing current device = %+v, want snapshot-missing unknown", current)
+	}
+}
+
+// TestCurrentForClientCacheUsesUniqueSnapshotAssociation: mcp --cache 的生产
+// 源可能拿不到实例名；裁剪快照会只给发起客户端保留设备码关联，因此唯一带
+// 关联的设备就是本机设备。
+func TestCurrentForClientCacheUsesUniqueSnapshotAssociation(t *testing.T) {
+	redirectClientConfig(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	st := withSnapshotStore(t,
+		store.SnapshotDevice{ID: "device-target", Name: "target"},
+		store.SnapshotDevice{ID: "device-laptop", Name: "laptop", ClientTokenID: "token-laptop"},
+	)
+
+	current, err := CurrentForClientCache(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current.Known || current.Device == nil || current.Device.ID != "device-laptop" {
+		t.Fatalf("current device = %+v, want the uniquely associated device-laptop", current)
+	}
+}
+
+// TestCurrentForClientCacheIgnoresDefaultSlotMetadata: 命名实例的桥没有把实
+// 例名传进旧调用链；客户端缓存解析不能因此读取默认实例的 cache.meta，必须
+// 只信裁剪快照里唯一保留的设备码关联。
+func TestCurrentForClientCacheIgnoresDefaultSlotMetadata(t *testing.T) {
+	redirectClientConfig(t)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	st := withSnapshotStore(t,
+		store.SnapshotDevice{ID: "device-default", Name: "default laptop"},
+		store.SnapshotDevice{ID: "device-named", Name: "named laptop", ClientTokenID: "token-named"},
+	)
+	writeClientMeta(t, "", "device-default")
+
+	current, err := CurrentForClientCache(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current.Known || current.Device == nil || current.Device.ID != "device-named" {
+		t.Fatalf("current device = %+v, want the snapshot-associated device-named", current)
 	}
 }
 
