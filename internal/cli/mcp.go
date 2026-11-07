@@ -126,6 +126,19 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				// 统一拨号入口里的成功地址缓存按实例存放。这里把已解析的
+				// 实例目录固定给本次桥进程，避免深处重新解析时落回默认槽。
+				previousCacheDir := os.Getenv("SSHMGR_CACHE_DIR")
+				if err := os.Setenv("SSHMGR_CACHE_DIR", cacheDir); err != nil {
+					return err
+				}
+				defer func() {
+					if previousCacheDir == "" {
+						_ = os.Unsetenv("SSHMGR_CACHE_DIR")
+						return
+					}
+					_ = os.Setenv("SSHMGR_CACHE_DIR", previousCacheDir)
+				}()
 				// 多机客户端的桥启动快照修订号后台轮询循环。间隔读实例配置
 				// (环境变量可临时覆盖);启动阶段发现非法值时写告警并退回默认
 				// 5 分钟,桥继续可用。单机部署不走这个分支,不启动任何定时器。

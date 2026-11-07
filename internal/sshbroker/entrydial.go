@@ -243,6 +243,14 @@ type DialTopologySource interface {
 	ServerDialTopology(server *models.Server) (DialTopology, error)
 }
 
+// DialSuccessCacheSource 是拓扑来源可以附加的成功地址缓存接口。统一拨号
+// 入口在规划候选时读取它，在连接成功或主机密钥不一致时写回。
+type DialSuccessCacheSource interface {
+	ServerDialSuccess(server *models.Server) (DialSuccessRecord, bool, error)
+	RecordServerDialSuccess(server *models.Server, record DialSuccessRecord) error
+	DeleteServerDialSuccess(server *models.Server, address string) error
+}
+
 // StaticDialTopology 是固定拓扑视图，供测试和调用方显式注入。
 type StaticDialTopology DialTopology
 
@@ -252,7 +260,7 @@ func (s StaticDialTopology) ServerDialTopology(*models.Server) (DialTopology, er
 }
 
 // ServerDialRequest 是按服务器条目拨号统一入口的输入。Topology 在入口内
-// 部按次读取；成功地址缓存由后续票作为同一来源的附加排序信息接入。
+// 部按次读取；当它同时实现成功地址缓存接口时，入口会读取并写回该缓存。
 type ServerDialRequest struct {
 	// Server 是目标服务器条目；兜底主机与端口始终来自这里。
 	Server *models.Server
@@ -345,6 +353,17 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			}
 		}
 	}
+	var successCache DialSuccessCacheSource
+	if source, ok := req.Topology.(DialSuccessCacheSource); ok && source != nil {
+		successCache = source
+		record, present, err := successCache.ServerDialSuccess(req.Server)
+		if err != nil {
+			return nil, nil, err
+		}
+		if present {
+			plan = orderPlanWithDialSuccess(plan, record, time.Now())
+		}
+	}
 	hkCb, err := HostKeyTOFU(req.HostKeys, req.Server)
 	if err != nil {
 		return nil, nil, err
@@ -364,6 +383,7 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			dialCtx, releaseHostKeyVerification, stopAddressTimeout = newHostKeyVerificationContext(ctx, addressTimeout)
 			candidateHostKeyCb = hostKeyCallbackReleasingVerification(hkCb, releaseHostKeyVerification)
 		}
+		attemptStarted := time.Now()
 		cli, err := lowLevelDial(dialCtx, candidate.Address, req.Server.Port, req.Server.User, req.Auth, candidateHostKeyCb, ka)
 		if contextErr := dialCtx.Err(); contextErr != nil {
 			if cli != nil {
@@ -378,9 +398,23 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			stopAddressTimeout()
 		}
 		if err == nil {
+			if successCache != nil {
+				record := DialSuccessRecord{
+					Address: candidate.Address, SucceededAt: time.Now(), Duration: time.Since(attemptStarted),
+				}
+				if err := successCache.RecordServerDialSuccess(req.Server, record); err != nil {
+					cli.Close()
+					return nil, nil, err
+				}
+			}
 			return cli, notes, nil
 		}
 		if errors.Is(err, ErrHostKeyMismatch) {
+			if successCache != nil {
+				if cacheErr := successCache.DeleteServerDialSuccess(req.Server, candidate.Address); cacheErr != nil {
+					return nil, nil, cacheErr
+				}
+			}
 			notes = append(notes, candidateLabel(candidate)+"呈现了不同的主机密钥，已跳过")
 		}
 		failures = append(failures, DialAttemptError{Candidate: candidate, Err: err})
@@ -413,4 +447,34 @@ func keepVirtualLanCandidates(plan DialAddressPlan) DialAddressPlan {
 	}
 	plan.Candidates = candidates
 	return plan
+}
+
+// orderPlanWithDialSuccess 只重排同一选址级别内部的地址：仍有效且仍在候选
+// 里的成功地址排前，其余地址保持原登记顺序。
+func orderPlanWithDialSuccess(plan DialAddressPlan, record DialSuccessRecord, now time.Time) DialAddressPlan {
+	if !dialSuccessRecordValid(record, now) {
+		return plan
+	}
+	normalized := normalizeDialAddress(record.Address)
+	out := make([]DialAddress, 0, len(plan.Candidates))
+	for _, source := range []DialAddressSource{DialAddressPhysical, DialAddressVirtual, DialAddressFallback} {
+		for _, candidate := range plan.Candidates {
+			if candidate.Source == source && normalizeDialAddress(candidate.Address) == normalized {
+				out = append(out, candidate)
+			}
+		}
+		for _, candidate := range plan.Candidates {
+			if candidate.Source == source && normalizeDialAddress(candidate.Address) != normalized {
+				out = append(out, candidate)
+			}
+		}
+	}
+	plan.Candidates = out
+	return plan
+}
+
+func dialSuccessRecordValid(record DialSuccessRecord, now time.Time) bool {
+	return !record.SucceededAt.IsZero() &&
+		!record.SucceededAt.After(now) &&
+		now.Sub(record.SucceededAt) <= DialSuccessCacheLifetime
 }

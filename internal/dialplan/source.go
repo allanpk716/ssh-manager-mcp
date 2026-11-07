@@ -3,8 +3,14 @@
 package dialplan
 
 import (
+	"os"
+	"path/filepath"
+
 	"ssh-manager-mcp/internal/dialdevice"
+	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/paths"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 )
@@ -16,6 +22,8 @@ type StoreSource struct {
 	store    *store.Store
 	instance string
 }
+
+var _ sshbroker.DialSuccessCacheSource = (*StoreSource)(nil)
 
 // NewStoreSource 返回绑定到指定存储的拓扑来源；这个存储可以是当前热更新
 // 后的客户端缓存存储。
@@ -57,6 +65,74 @@ func (s *StoreSource) ServerDialTopology(server *models.Server) (sshbroker.DialT
 		TargetMemberships: targetMemberships, DialerMemberships: dialerMemberships,
 		DialerKnown: true,
 	}, nil
+}
+
+// ServerDialSuccess 读取这个实例为服务器条目记录的最近成功地址。
+func (s *StoreSource) ServerDialSuccess(server *models.Server) (sshbroker.DialSuccessRecord, bool, error) {
+	cache, ok, err := s.successCache()
+	if err != nil || !ok {
+		return sshbroker.DialSuccessRecord{}, false, err
+	}
+	return cache.Success(server)
+}
+
+// RecordServerDialSuccess 写入服务器条目的最近成功地址。
+func (s *StoreSource) RecordServerDialSuccess(server *models.Server, record sshbroker.DialSuccessRecord) error {
+	cache, ok, err := s.successCache()
+	if err != nil || !ok {
+		return err
+	}
+	return cache.Record(server, record)
+}
+
+// DeleteServerDialSuccess 删除服务器条目的成功地址记录。
+func (s *StoreSource) DeleteServerDialSuccess(server *models.Server, address string) error {
+	cache, ok, err := s.successCache()
+	if err != nil || !ok {
+		return err
+	}
+	return cache.Delete(server, address)
+}
+
+func (s *StoreSource) successCache() (*sshbroker.FileDialSuccessCache, bool, error) {
+	state, err := roles.Load()
+	if err != nil {
+		return nil, false, err
+	}
+	if state == nil {
+		return nil, false, nil
+	}
+
+	var directory string
+	switch state.Role {
+	case roles.RoleClient:
+		if s.instance != "" {
+			if err := instname.Valid(s.instance); err != nil {
+				return nil, false, err
+			}
+		}
+		if override := os.Getenv("SSHMGR_CACHE_DIR"); override != "" {
+			directory = override
+		} else {
+			base, err := paths.UserConfigDir()
+			if err != nil {
+				return nil, false, err
+			}
+			directory = filepath.Join(base, "ssh-manager")
+			if s.instance != "" {
+				directory = filepath.Join(directory, "instances", s.instance)
+			}
+		}
+	case roles.RoleStandalone, roles.RoleServer:
+		statePath, err := roles.LocalDevicePath()
+		if err != nil {
+			return nil, false, err
+		}
+		directory = filepath.Dir(statePath)
+	default:
+		return nil, false, nil
+	}
+	return sshbroker.NewFileDialSuccessCache(filepath.Join(directory, "ssh-dial-successes.json")), true, nil
 }
 
 func deviceByID(st *store.Store, id string) (*models.Device, error) {
