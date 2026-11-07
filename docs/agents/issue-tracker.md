@@ -30,6 +30,12 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 
 Create a GitHub issue.
 
+## 规格与地图实现票的关联（to-spec / implement-spec-split）
+
+- 规格（正文用 `## Problem Statement` 的 issue）若是为某张地图实现票写的，正文必须有一行 `实现票：#<n>`（多张写 `实现票：#<n>、#<m>`），并在同一行或下一行写 `地图：#<地图编号>`。只认这一行：正文里以「不在范围内」身份提到的其他地图票不算。
+- `implement-spec-split` 与 `find-next`（经 `pipeline-status.sh`）只靠这一行判断哪张地图实现票已有规格；漏写会让这张实现票被当成「缺规格」，再推荐一次 to-spec。
+- 规格实现并合入 master 后，关闭规格，同时关闭它 `实现票` 行上的地图实现票，留言写明规格编号与合并提交。
+
 ## When a skill says "fetch the relevant ticket"
 
 Read it as in **Read an issue** above.
