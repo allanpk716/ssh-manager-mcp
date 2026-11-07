@@ -344,6 +344,63 @@ func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	}
 }
 
+// TestCacheChangeHintE2E_SecretDisappearsWhenServerLeavesProfile: 从客户端
+// profile 撤掉某台服务器后，只因这台服务器才下发的机密项从下一次快照消失；
+// 机密项分句与真实删除相同，同一会话只出现一次，且提示不含值。
+func TestCacheChangeHintE2E_SecretDisappearsWhenServerLeavesProfile(t *testing.T) {
+	const secretValue = "profile-only-secret-value"
+	env := newChangeHintEnv(t, 0)
+	if texts := callToolTexts(t, env.sess, "list_servers", map[string]any{}); len(texts) != 1 {
+		t.Fatalf("启动后的第一次工具调用不应有提示,实际为 %#v", texts)
+	}
+
+	serverID, err := env.fx.serve.AddServer(&models.Server{
+		Name: "profile-only", Host: "192.0.2.63", Port: 22, User: "u", AuthMethod: models.AuthPassword,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.fx.serve.GrantServers(env.fx.profID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.fx.serve.AddSecret("PROFILE_ONLY_TOKEN", "只因这台服务器下发", []byte(secretValue)); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.fx.serve.AllowSecrets([]string{"PROFILE_ONLY_TOKEN"}, []string{"profile-only"}); err != nil {
+		t.Fatal(err)
+	}
+	env.pullNow()
+	if texts := callToolTexts(t, env.sess, "list_servers", map[string]any{}); len(texts) != 2 ||
+		!strings.Contains(texts[0], "新增机密项 PROFILE_ONLY_TOKEN") ||
+		!strings.HasPrefix(texts[1], `{"servers":`) {
+		t.Fatalf("建立基线后的工具结果 = %#v,应先提示新增机密项再返回服务器列表", texts)
+	}
+
+	before := env.revision(t)
+	if _, _, err := env.fx.serve.SyncServers(env.fx.profID, []string{env.fx.targetID}); err != nil {
+		t.Fatal(err)
+	}
+	after := env.revision(t)
+	env.pullNow()
+
+	want := fmt.Sprintf(
+		"权威端配置已更新（修订号 %d → %d）：删除服务器 profile-only；删除机密项 PROFILE_ONLY_TOKEN，引用它的模板将被拒绝",
+		before, after,
+	)
+	texts := callToolTexts(t, env.sess, "list_servers", map[string]any{})
+	if len(texts) != 2 || texts[0] != want || !strings.HasPrefix(texts[1], `{"servers":`) {
+		t.Fatalf("服务器移出 profile 后的工具结果 = %#v,应为提示 %q + 原结果", texts, want)
+	}
+	if strings.Contains(texts[0], secretValue) {
+		t.Fatalf("机密项消失提示不应包含值:%q", texts[0])
+	}
+
+	again := callToolTexts(t, env.sess, "list_servers", map[string]any{})
+	if len(again) != 1 || !strings.HasPrefix(again[0], `{"servers":`) {
+		t.Fatalf("机密项消失提示在同一会话只应出现一次,第二次结果为 %#v", again)
+	}
+}
+
 // TestCacheChangeHintE2E_NoVisibleDifferenceNoHint: 服务器改名、改连接信息、
 // 改 shell 类型、只改其他 profile、规则只改时间戳,这些都不是本票的比较项;
 // 快照换了但可见内容没变时不产生提示。
