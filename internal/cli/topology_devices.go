@@ -15,7 +15,7 @@ import (
 
 func newDevicesCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "devices", Short: "Manage topology devices"}
-	cmd.AddCommand(devicesAddCmd(), devicesEditCmd(), devicesShowCmd(), devicesListCmd(), devicesRmCmd(), devicesMoveServerCmd(), newDevicesMemberCmd())
+	cmd.AddCommand(devicesAddCmd(), devicesEditCmd(), devicesShowCmd(), devicesListCmd(), devicesRmCmd(), devicesMoveServerCmd(), newDevicesMemberCmd(), newDevicesLocalCmd())
 	return cmd
 }
 

@@ -59,17 +59,26 @@ func (s *Store) AddNetworkMembership(deviceName, networkName, address string) (*
 	if count > 0 {
 		return nil, fmt.Errorf("同一设备 %s 在网络 %s 里已有网络成员；请用 devices member edit 修改地址", device.Name, network.Name)
 	}
+	// 登记序号按全表单调递增：同一台设备的新成员保持新增顺序，删除成员
+	// 后也不回收已经用过的序号。
+	var registrationOrder int64
+	if err := tx.QueryRow(
+		`SELECT COALESCE(MAX(registration_order),0)+1 FROM network_memberships`,
+	).Scan(&registrationOrder); err != nil {
+		return nil, err
+	}
 	membership := &models.NetworkMembership{
 		DeviceID: device.ID, DeviceName: device.Name,
 		NetworkID: network.ID, NetworkName: network.Name,
 		NetworkType: network.Type, SiteName: network.SiteName, Address: address,
+		RegistrationOrder: registrationOrder,
 	}
 	membership.CreatedAt, membership.UpdatedAt = time.Unix(now(), 0), time.Unix(now(), 0)
 	if _, err := tx.Exec(
-		`INSERT INTO network_memberships(device_id,network_id,address,address_lower,created_at,updated_at)
-		 VALUES(?,?,?,?,?,?)`,
+		`INSERT INTO network_memberships(device_id,network_id,address,address_lower,registration_order,created_at,updated_at)
+		 VALUES(?,?,?,?,?,?,?)`,
 		membership.DeviceID, membership.NetworkID, membership.Address, strings.ToLower(membership.Address),
-		membership.CreatedAt.Unix(), membership.UpdatedAt.Unix(),
+		membership.RegistrationOrder, membership.CreatedAt.Unix(), membership.UpdatedAt.Unix(),
 	); err != nil {
 		return nil, err
 	}
@@ -151,13 +160,44 @@ func (s *Store) ListNetworkMemberships(deviceName string) ([]*models.NetworkMemb
 	}
 	rows, err := s.db.Query(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.created_at,member.updated_at
+		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
 		LEFT JOIN sites site ON site.id=network.site_id
 		WHERE member.device_id=?
 		ORDER BY network.name,member.address`, device.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*models.NetworkMembership, 0)
+	for rows.Next() {
+		membership, err := scanNetworkMembership(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, membership)
+	}
+	return out, rows.Err()
+}
+
+// ListNetworkMembershipsByRegistration 返回一台设备的全部网络成员，按登记
+// 序号排序，供后续连接选址按 owner 的登记顺序尝试地址。
+func (s *Store) ListNetworkMembershipsByRegistration(deviceName string) ([]*models.NetworkMembership, error) {
+	device, err := s.GetDevice(deviceName)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`
+		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
+		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
+		FROM network_memberships member
+		JOIN devices device ON device.id=member.device_id
+		JOIN networks network ON network.id=member.network_id
+		LEFT JOIN sites site ON site.id=network.site_id
+		WHERE member.device_id=?
+		ORDER BY member.registration_order,network.name,member.address`, device.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +227,7 @@ func (s *Store) ListNetworkMembershipsForNetwork(networkName string) ([]*models.
 	}
 	rows, err := tx.Query(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.created_at,member.updated_at
+		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
@@ -216,7 +256,7 @@ func (s *Store) ListNetworkMembershipsForNetwork(networkName string) ([]*models.
 func networkMembershipsForDeviceTx(tx *sql.Tx, deviceID string) ([]*models.NetworkMembership, error) {
 	rows, err := tx.Query(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.created_at,member.updated_at
+		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
@@ -250,7 +290,7 @@ func networkMembershipTx(tx *sql.Tx, deviceName, networkName string) (*models.Ne
 	}
 	row := tx.QueryRow(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.created_at,member.updated_at
+		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
@@ -286,15 +326,17 @@ func scanNetworkMembership(sc scanner) (*models.NetworkMembership, error) {
 	var (
 		membership  models.NetworkMembership
 		networkType string
+		order       int64
 		created     int64
 		updated     int64
 	)
 	if err := sc.Scan(&membership.DeviceID, &membership.DeviceName, &membership.NetworkID,
 		&membership.NetworkName, &networkType, &membership.SiteName, &membership.Address,
-		&created, &updated); err != nil {
+		&order, &created, &updated); err != nil {
 		return nil, err
 	}
 	membership.NetworkType = models.NetworkType(networkType)
+	membership.RegistrationOrder = order
 	membership.CreatedAt, membership.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
 	return &membership, nil
 }

@@ -275,6 +275,11 @@ type cacheMeta struct {
 	// injectable header must never gate). No omitempty, same zero-value
 	// semantics as ServerAnchored/Scoped.
 	DeviceName string `json:"device_name"`
+	// DeviceID records the network topology device identifier associated with
+	// this device code. It comes only from a pinned serve response; an old
+	// authority and an unassociated device code both decode to the empty zero
+	// value.
+	DeviceID string `json:"device_id"`
 }
 
 // CacheDeviceNameFor returns the device-code name recorded in the given
@@ -297,6 +302,26 @@ func CacheDeviceNameFor(instance string) string {
 		return ""
 	}
 	return m.DeviceName
+}
+
+// CacheDeviceIDFor returns the topology device identifier recorded in the
+// given instance's cache.meta ("" = the default instance; "" also when the
+// authority is old, the device code is unassociated, or the metadata cannot be
+// read). Dial-device resolution treats that empty value as "unknown".
+func CacheDeviceIDFor(instance string) string {
+	_, _, metaPath, _, err := CachePathsFor(instance)
+	if err != nil {
+		return ""
+	}
+	blob, err := os.ReadFile(metaPath)
+	if err != nil {
+		return ""
+	}
+	var m cacheMeta
+	if json.Unmarshal(blob, &m) != nil {
+		return ""
+	}
+	return m.DeviceID
 }
 
 // CacheCred persists the pull credential (cache.auth.json) so `mcp --cache` can
@@ -677,8 +702,10 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 	// runs BEFORE any write (bin included) — a refusal leaves the old cache
 	// byte-identical.
 	deviceName := ""
+	deviceID := ""
 	if pin != "" {
 		deviceName = res.Header.Get("X-Sshmgr-Device-Name")
+		deviceID = res.Header.Get("X-Sshmgr-Device-ID")
 	}
 	if o.Instance != "" {
 		if err := gateNamedInstance(bin, metaPath, deviceName, o.Instance); err != nil {
@@ -744,7 +771,10 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 		}
 	} else {
 		scoped := res.Header.Get("X-Sshmgr-Snapshot-Scope") == "profile"
-		mb, _ := json.Marshal(cacheMeta{URL: url, PulledAt: pulledAt, ServerAnchored: anchored, Scoped: scoped, DeviceName: deviceName})
+		mb, _ := json.Marshal(cacheMeta{
+			URL: url, PulledAt: pulledAt, ServerAnchored: anchored,
+			Scoped: scoped, DeviceName: deviceName, DeviceID: deviceID,
+		})
 		if werr := atomicWriteUnique(metaPath, mb); werr != nil && o.StatusOut != nil {
 			fmt.Fprintf(o.StatusOut, "WARNING: cache.meta.json write failed (source URL will show as unknown): %v\n", werr)
 		}
