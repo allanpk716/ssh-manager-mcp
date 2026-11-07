@@ -246,13 +246,6 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	hkCb, herr := sshbroker.HostKeyTOFU(hostKeyStoreFor(st, hk), srv)
-	if herr != nil {
-		status = "error"
-		err = herr
-		return
-	}
-
 	var sudoCred []byte
 	if sudo {
 		if srv.SudoCredentialID == "" {
@@ -269,7 +262,9 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 		sudoCred = cred.Secret
 	}
 
-	cli, cerr := sshbroker.Connect(ctx, srv.Host, srv.Port, srv.User, auth, hkCb)
+	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+	})
 	if cerr != nil {
 		switch {
 		case errors.Is(cerr, context.Canceled):

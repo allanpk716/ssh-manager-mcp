@@ -765,8 +765,8 @@ func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Cli
 	}
 }
 
-// BgStartSpec 是 Start 的入参 (Task 6 的 ForProfile 构造): profile 门/凭据/
-// 主机键链已过, 这里只剩启动链。SudoPass 瞬时传递——用完即弃, 不入 task
+// BgStartSpec 是 Start 的入参 (Task 6 的 ForProfile 构造): profile 门与凭据
+// 已过, 主机密钥存储随服务器条目传入。SudoPass 瞬时传递——用完即弃, 不入 task
 // 记录 (spec §1: task 记录不持有任何秘密)。
 type BgStartSpec struct {
 	ProjectID, ServerID, Command string
@@ -775,7 +775,7 @@ type BgStartSpec struct {
 	TimeoutSec                   int
 	Server                       *models.Server
 	Auth                         ssh.AuthMethod
-	HostKeyCb                    ssh.HostKeyCallback
+	HostKeys                     sshbroker.HostKeyStore
 }
 
 // clampBgTimeout 钳定后台生效超时 (spec §3): 0/缺省 → cap (生产即 24h
@@ -794,9 +794,10 @@ func clampBgTimeout(sec int, cap time.Duration) time.Duration {
 
 // Start 编排 profile 门外的全部启动链 (Task 6 只调本入口, spec §1 钉死顺序):
 // Reserve（closed/超限原样上抛——该分支的 start 审计行归 ForProfile 词汇表,
-// 哨兵 ErrBgTaskLimit 供 errors.Is 识别）→ ConnectKeepAlive（锁外慢连接;
-// 连接失败: start 行 (connect_error/cancelled/hostkey_mismatch) 先落笔再
-// ReleaseReservation, 此路径无 client 可关）→ Insert（持锁写 start(ok) 行、
+// 哨兵 ErrBgTaskLimit 供 errors.Is 识别）→ 按服务器条目拨号的统一入口
+// （保活连接, 锁外慢连接; 连接失败: start 行 (connect_error/cancelled/
+// hostkey_mismatch) 先落笔再 ReleaseReservation, 此路径无 client 可关）
+// → Insert（持锁写 start(ok) 行、
 // goroutine 启动前——end 行必晚于 start 行）→ runTask goroutine（Insert 的
 // wg 票）。Insert 失败 (manager 已关): 锁外关 client + 归还预约, 零泄漏。
 // 成功返回 taskID 与钳定后的生效超时。
@@ -813,7 +814,9 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 	if err := m.Reserve(); err != nil {
 		return "", 0, err
 	}
-	cli, cerr := sshbroker.ConnectKeepAlive(ctx, spec.Server.Host, spec.Server.Port, spec.Server.User, spec.Auth, spec.HostKeyCb)
+	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: spec.Server, Auth: spec.Auth, HostKeys: spec.HostKeys, KeepAlive: true,
+	})
 	if cerr != nil {
 		status := "connect_error"
 		switch {
