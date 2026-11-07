@@ -79,7 +79,7 @@ func TestBackgroundLifecycleRealSSH(t *testing.T) {
 	// The script paces one "line N" per second for ~5s, so long-polls observe
 	// genuinely incremental chunks while the task is still running.
 	const loopCmd = `for i in 1 2 3 4 5; do echo "line $i"; sleep 1; done`
-	loopID, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
+	loopID, _, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
 		ProjectID: "conformance", ServerID: "srv-conf", Command: loopCmd,
 		TimeoutSec: 60, Server: server, Auth: auth, HostKeys: hostKeys,
 	})
@@ -155,7 +155,7 @@ func TestBackgroundLifecycleRealSSH(t *testing.T) {
 	}
 
 	// ---- Phase 2: stop path → terminal stopped ----
-	sleepID, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
+	sleepID, _, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
 		ProjectID: "conformance", ServerID: "srv-conf", Command: "sleep 300",
 		Server: server, Auth: auth, HostKeys: hostKeys,
 	})
@@ -235,7 +235,7 @@ func TestBackgroundKeepAliveRealSSH(t *testing.T) {
 
 	server := &models.Server{Host: host, Port: port, User: "sshuser"}
 	ctx := context.Background()
-	id, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
+	id, _, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
 		ProjectID: "conformance", ServerID: "srv-conf", Command: "sleep 90",
 		TimeoutSec: 300, Server: server,
 		Auth: mustPrivAuth(t, privPath, ""), HostKeys: fixedHostKeys(hostKey),

@@ -1128,7 +1128,6 @@ func TestCacheForwardE2E_ConflictBranches(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		foreignFP := ssh.FingerprintSHA256(foreignPub)
 		fx.presetServeAnchor(t, foreignPub.Marshal(), "blob", "tofu")
 
 		sess := fx.newBroker(t, nil, fx.cred)
@@ -1164,7 +1163,7 @@ func TestCacheForwardE2E_ConflictBranches(t *testing.T) {
 		if !isErr {
 			t.Fatal("the rehydrated foreign anchor must reject the true key")
 		}
-		want2 := "ssh dial: ssh: handshake failed: host key mismatch: possible MITM, connection rejected: presented " + fx.fingerprint() + " != pinned " + foreignFP
+		want2 := "全部候选地址连接失败：\n兜底地址：主机密钥不同，已跳过"
 		if text2 != want2 {
 			t.Fatalf("mismatch text mismatch:\n got: %q\nwant: %q", text2, want2)
 		}

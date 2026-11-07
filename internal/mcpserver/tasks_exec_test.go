@@ -128,7 +128,7 @@ func startBg(t *testing.T, m *TaskManager, st *store.Store, addr string, hk ssh.
 		t.Fatal(err)
 	}
 	port, _ := strconv.Atoi(portStr)
-	id, eff, serr := m.Start(context.Background(), st, BgStartSpec{
+	id, eff, _, serr := m.Start(context.Background(), st, BgStartSpec{
 		ProjectID: "proj", ServerID: "srv", Command: command,
 		TimeoutSec: timeoutSec,
 		Server:     &models.Server{Host: host, Port: port, User: "u"},
@@ -575,7 +575,7 @@ func TestBackgroundSudoLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	port, _ := strconv.Atoi(portStr)
-	id, _, serr := m.Start(context.Background(), st, BgStartSpec{
+	id, _, _, serr := m.Start(context.Background(), st, BgStartSpec{
 		ProjectID: "proj", ServerID: "srv", Command: "whoami",
 		Sudo: true, SudoPass: "sp", TimeoutSec: 60,
 		Server:   &models.Server{Host: host, Port: port, User: "u"},

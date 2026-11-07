@@ -99,6 +99,8 @@ func candidateLabel(candidate DialAddress) string {
 
 func candidateFailureText(err error, host string, port int) string {
 	switch {
+	case errors.Is(err, ErrHostKeyMismatch):
+		return "主机密钥不同，已跳过"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "连接超时"
 	case errors.Is(err, context.Canceled):
@@ -297,8 +299,9 @@ func ResolveAddressTimeout() (time.Duration, error) {
 }
 
 // ConnectServerEntry 是 sshmgr 发起 SSH 连接的统一生产入口：按目标服务器
-// 条目规划候选地址、逐个试连，返回已建立的客户端与连接说明。主机密钥不
-// 一致时的跳过说明与成功地址缓存由后续票在同一个循环内接入。
+// 条目规划候选地址、逐个试连，返回已建立的客户端与连接说明。主机密钥与
+// 条目锚不一致的地址会被跳过；说明只用网络名加序号或「兜底地址」指称，
+// 不泄露 IP 或域名。成功地址缓存由后续票在同一个循环内接入。
 func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []string, error) {
 	addressTimeout := req.AddressTimeout
 	if addressTimeout == 0 {
@@ -329,31 +332,38 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		ka = backgroundKeepAlive
 	}
 	failures := make([]DialAttemptError, 0, len(plan.Candidates))
+	var notes []string
 	for _, candidate := range plan.Candidates {
 		dialCtx := ctx
-		cancel := func() {}
+		stopAddressTimeout := func() {}
+		candidateHostKeyCb := hkCb
 		if len(plan.Candidates) > 1 {
-			dialCtx, cancel = context.WithTimeout(ctx, addressTimeout)
+			var releaseHostKeyVerification func()
+			dialCtx, releaseHostKeyVerification, stopAddressTimeout = newHostKeyVerificationContext(ctx, addressTimeout)
+			candidateHostKeyCb = hostKeyCallbackReleasingVerification(hkCb, releaseHostKeyVerification)
 		}
-		cli, err := lowLevelDial(dialCtx, candidate.Address, req.Server.Port, req.Server.User, req.Auth, hkCb, ka)
+		cli, err := lowLevelDial(dialCtx, candidate.Address, req.Server.Port, req.Server.User, req.Auth, candidateHostKeyCb, ka)
 		if contextErr := dialCtx.Err(); contextErr != nil {
 			if cli != nil {
 				cli.Close()
 			}
 			err = contextErr
-			cancel()
+			stopAddressTimeout()
 			if parentErr := ctx.Err(); parentErr != nil {
 				return nil, nil, parentErr
 			}
 		} else {
-			cancel()
+			stopAddressTimeout()
 		}
 		if err == nil {
-			return cli, nil, nil
+			return cli, notes, nil
+		}
+		if errors.Is(err, ErrHostKeyMismatch) {
+			notes = append(notes, candidateLabel(candidate)+"呈现了不同的主机密钥，已跳过")
 		}
 		failures = append(failures, DialAttemptError{Candidate: candidate, Err: err})
 	}
-	if len(failures) == 1 && plan.FallbackOnlyReason == "" {
+	if len(failures) == 1 && plan.FallbackOnlyReason == "" && !errors.Is(failures[0].Err, ErrHostKeyMismatch) {
 		return nil, nil, failures[0].Err
 	}
 	dialErr := &ServerDialError{Failures: failures, Port: req.Server.Port}
