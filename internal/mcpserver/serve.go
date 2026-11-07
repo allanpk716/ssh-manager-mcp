@@ -269,6 +269,12 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "device code not bound to a profile — owner: run `sshmgr cache-tokens bind "+ct.Name+" <profile>` on the server", http.StatusForbidden)
 		return
 	}
+	deviceID, err := r.st.DeviceIDForCacheToken(ct.ID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: device association lookup %s: %v\n", ct.ID, err)
+		http.Error(w, "device association lookup failed", http.StatusInternalServerError)
+		return
+	}
 	clientVersion := req.Header.Get(buildinfo.ClientVersionHeader)
 	snap, err := r.st.ExportSnapshotForProfile(ct.ProfileID, clientVersion != "", ct.ID)
 	if err != nil {
@@ -287,6 +293,9 @@ func (r *ServeRunner) handleSnapshot(w http.ResponseWriter, req *http.Request) {
 	// security boundary (the name is not a secret; pinned TLS blocks tampering);
 	// old clients ignore it.
 	w.Header().Set("X-Sshmgr-Device-Name", ct.Name)
+	if deviceID != "" {
+		w.Header().Set("X-Sshmgr-Device-ID", deviceID)
+	}
 	// The snapshot body is the decrypted credential dump — never let an
 	// intermediary (CDN/proxy/HTTP cache) store it. no-store + no-cache (the
 	// latter also forbids reading a cached copy without revalidation).
