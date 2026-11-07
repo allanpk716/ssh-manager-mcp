@@ -52,6 +52,11 @@ func (p *Pin) Matches(presented []byte) bool {
 // the incumbent — the CLI shows its fingerprint and source and writes nothing.
 var ErrPinExists = errors.New("pin already present")
 
+// ErrEntryPinMismatch means a first-trust save lost a concurrent race to an
+// already-stored anchor whose key differs from the presented key. The caller
+// must reject that address as a host-key mismatch.
+var ErrEntryPinMismatch = errors.New("entry host key pin mismatch")
+
 // PinMeta is an anchor plus its provenance columns: everything the
 // owner-facing surfaces — display, --list, refusal hints, audit rows — need
 // beyond the compared value carried by the embedded Pin.

@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -153,6 +154,45 @@ func TestSaveEntryPinRecordsHandshakeAddressAndAudit(t *testing.T) {
 		!strings.Contains(rows[0].Command, "handshake=100.64.10.5:22") ||
 		!strings.Contains(rows[0].Command, "fp="+fp) {
 		t.Fatalf("首次锚定审计不完整：%+v", rows)
+	}
+}
+
+// TestSaveEntryPinConcurrentFirstTrustDoesNotOverwrite：两个并发首次锚定
+// 竞争同一个条目时只能落第一把锚；赢家之外的调用与已存锚一致时成功返回，
+// 且只有真正写入的那次产生首次锚定审计。
+func TestSaveEntryPinConcurrentFirstTrustDoesNotOverwrite(t *testing.T) {
+	s := newTestStore(t)
+	id := addEntryForTest(t, s, "race", "100.64.10.5", 22)
+	srv := serverOf(t, s, id)
+	key, _ := pinHostKey(t)
+
+	errCh := make(chan error, 2)
+	var workers sync.WaitGroup
+	for worker := 0; worker < 2; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			errCh <- s.SaveEntryPinAtHandshake(srv, "100.64.10.5:22", key)
+		}()
+	}
+	workers.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent first trust with the same key must succeed: %v", err)
+		}
+	}
+
+	pins := mustEntryPins(t, s)
+	if len(pins) != 1 || !bytes.Equal(pins[0].Blob, key) {
+		t.Fatalf("concurrent first trust changed the anchor: %+v", pins)
+	}
+	rows, err := s.QueryAudit(AuditFilter{Actions: []string{"pin-tofu"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("only the writer may write first-trust audit, got %d rows: %+v", len(rows), rows)
 	}
 }
 
@@ -314,9 +354,9 @@ func TestEntryPins_FreshSchemaColumns(t *testing.T) {
 	}
 }
 
-// TestSaveEntryPinResetsStalePinColumns：首次信任覆盖已有指纹锚时，格式、
-// 来源、设备与握手地址一起重置，避免旧来源信息留在新锚上造成误判。
-func TestSaveEntryPinResetsStalePinColumns(t *testing.T) {
+// TestSaveEntryPinDoesNotOverwriteDifferentExistingAnchor：首次信任与已有
+// 锚不一致时拒绝覆盖；owner 手工锚的格式与来源保持原样。
+func TestSaveEntryPinDoesNotOverwriteDifferentExistingAnchor(t *testing.T) {
 	s := newTestStore(t)
 	id := addEntryForTest(t, s, "stale", "198.51.100.2", 22)
 	srv := serverOf(t, s, id)
@@ -326,12 +366,13 @@ func TestSaveEntryPinResetsStalePinColumns(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveEntryPin(srv, keyB); err != nil {
-		t.Fatal(err)
+	if err := s.SaveEntryPin(srv, keyB); !errors.Is(err, ErrEntryPinMismatch) {
+		t.Fatalf("SaveEntryPin error = %v, want ErrEntryPinMismatch", err)
 	}
 	pin := pinEntryForTest(t, s, id)
-	if !bytes.Equal(pin.Blob, keyB) || pin.Format != PinFormatBlob || pin.Source != PinSourceTofu || pin.Device != "" {
-		t.Fatalf("首次信任覆盖后来源信息未重置：%+v", pin)
+	if !bytes.Equal(pin.Blob, []byte("SHA256:stale-fingerprint")) ||
+		pin.Format != PinFormatFingerprint || pin.Source != PinSourceManual {
+		t.Fatalf("不一致的首次信任不得改写已有锚：%+v", pin)
 	}
 }
 

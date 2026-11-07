@@ -196,14 +196,14 @@ func (s *Store) ListEntryPins() ([]PinMeta, error) {
 }
 
 // SaveEntryPin 记录一次首次连接即信任（单机直连或权威端本地连接）学到的
-// 主机密钥。按条目整行覆盖：同一条目重开首次信任窗口时，格式、来源、转发
-// 设备与握手地址一起重置，避免旧来源信息留在新锚上。
+// 主机密钥。
 func (s *Store) SaveEntryPin(srv *models.Server, marshaledKey []byte) error {
 	return s.SaveEntryPinAtHandshake(srv, EntryFallbackAddr(srv), marshaledKey)
 }
 
 // SaveEntryPinAtHandshake 记录实际握手时学到的主机密钥。统一拨号回调把
-// SSH 返回的握手地址传进来，避免多地址条目固定记录兜底地址。
+// SSH 返回的握手地址传进来，避免多地址条目固定记录兜底地址。首次锚定只
+// 新增：并发竞争时已有一致锚则成功返回，不同锚则报锚不一致。
 func (s *Store) SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string, marshaledKey []byte) error {
 	if s.readOnly {
 		return ErrReadOnly
@@ -213,25 +213,31 @@ func (s *Store) SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec(
-		`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr)
-		 VALUES (?,?,?,?,?,?,?)
-		 ON CONFLICT(server_id) DO UPDATE SET
-		   key_blob=excluded.key_blob, created_at=excluded.created_at,
-		   pin_format='blob', pin_source='tofu', pin_device='', handshake_addr=excluded.handshake_addr`,
-		srv.ID, marshaledKey, now(), PinFormatBlob, PinSourceTofu, "", handshakeAddr)
+	inserted, err := insertEntryPinWithAuditTx(tx, srv.ID, handshakeAddr, marshaledKey,
+		PinFormatBlob, PinSourceTofu, "", AuditRow{
+			TS: time.Now(), ServerID: srv.ID, Action: "pin-tofu",
+			Command: fmt.Sprintf("entry=%s(%s) handshake=%s fp=%s source=%s",
+				srv.Name, srv.ID, handshakeAddr, PinFingerprint(marshaledKey, PinFormatBlob), PinSourceTofu),
+			Status: "ok",
+		})
 	if err != nil {
 		return err
 	}
-	if err := writeAuditTx(tx, AuditRow{
-		TS: time.Now(), ServerID: srv.ID, Action: "pin-tofu",
-		Command: fmt.Sprintf("entry=%s(%s) handshake=%s fp=%s source=%s",
-			srv.Name, srv.ID, handshakeAddr, PinFingerprint(marshaledKey, PinFormatBlob), PinSourceTofu),
-		Status: "ok",
-	}); err != nil {
+	if inserted {
+		return tx.Commit()
+	}
+	existing, err := loadEntryPinMeta(tx, srv.ID)
+	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	if existing == nil {
+		return fmt.Errorf("entry pin for %s vanished inside the first-trust transaction", srv.ID)
+	}
+	if !existing.Matches(marshaledKey) {
+		return fmt.Errorf("%w: presented %s", ErrEntryPinMismatch,
+			PinFingerprint(marshaledKey, PinFormatBlob))
+	}
+	return nil
 }
 
 // InsertForwardedEntryPin 落一条设备转发的锚（权威端 /pin-hostkey 的存储侧）。
