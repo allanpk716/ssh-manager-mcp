@@ -173,6 +173,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 
 	// ---- ③ 源端 stat (远程 sftp / 本机 os; 须常规文件; mtime 整秒) ----
 	var mtime int64
+	var srcConnectionNotes []string
 	if localSource {
 		fi, serr := os.Stat(fromCanon)
 		if serr != nil {
@@ -204,9 +205,10 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 			err = aerr
 			return
 		}
-		cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		cli, sourceNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 			Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true, Topology: dialplan.NewStoreSource(st, ""),
 		})
+		srcConnectionNotes = sourceNotes
 		if cerr != nil {
 			switch {
 			case errors.Is(cerr, context.Canceled):
@@ -267,7 +269,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		err = aerr
 		return
 	}
-	dstCli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+	dstCli, dstConnectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: dstSrv, Auth: dstAuth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true,
 		Topology: dialplan.NewStoreSource(st, ""),
 	})
@@ -485,6 +487,8 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 	// 即关, runTask 双槽语义);本层 defer 双 close 整体解除, start 行已由闭包落笔。
 	transferred = true
 	startOwned = true
+	connectionNotes := srcConnectionNotes
+	connectionNotes = append(connectionNotes, dstConnectionNotes...)
 	out = RelayOutput{
 		TaskID:        taskID,
 		BytesTotal:    size,
@@ -492,6 +496,9 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		ResumedChunks: int(resumed),
 		ChunkBytes:    chunkBytes,
 		SpaceCheck:    spaceCheck,
+		ConnectionNotesOutput: ConnectionNotesOutput{
+			ConnectionNotes: connectionNotes,
+		},
 	}
 	return
 }

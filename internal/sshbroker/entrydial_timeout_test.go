@@ -2,7 +2,6 @@ package sshbroker
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -48,8 +47,8 @@ func TestResolveAddressTimeout(t *testing.T) {
 }
 
 // TestConnectServerEntryAddressTimeoutAndSingleCandidate: 多候选时每个地址
-// 得到独立短超时，超时后迟到的底层连接被关闭并继续下一个地址；唯一候选
-// 不套用短超时，仍只受调用方上下文约束。
+// 在主机密钥校验完成前都有独立短超时，超时后继续下一个地址；唯一候选不套
+// 用短超时，仍只受调用方上下文约束。
 func TestConnectServerEntryAddressTimeoutAndSingleCandidate(t *testing.T) {
 	t.Run("multiple candidates", func(t *testing.T) {
 		fixtureAddr, fixtureKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
@@ -62,18 +61,10 @@ func TestConnectServerEntryAddressTimeoutAndSingleCandidate(t *testing.T) {
 			if host != "192.0.2.10" {
 				return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka)
 			}
-			cli, err := connectWith(context.Background(), hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka)
-			if err != nil {
-				return nil, err
-			}
 			select {
 			case <-ctx.Done():
-				cli.Close()
 				close(reclaimed)
 				return nil, ctx.Err()
-			case <-time.After(2 * time.Second):
-				cli.Close()
-				return nil, errors.New("test dial release timed out")
 			}
 		}
 		t.Cleanup(func() { lowLevelDial = original })
@@ -156,4 +147,51 @@ func TestConnectServerEntryAddressTimeoutAndSingleCandidate(t *testing.T) {
 		close(release)
 		<-done
 	})
+}
+
+// TestConnectServerEntryAddressTimeoutEndsAtHostKeyVerification: 多地址短
+// 超时只覆盖建立连接到主机密钥校验完成。密钥校验通过后，登录认证可以慢于
+// 短超时；这条地址仍应成功，而不是被误判为超时后继续尝试兜底地址。
+func TestConnectServerEntryAddressTimeoutEndsAtHostKeyVerification(t *testing.T) {
+	signer := fixedSigner(t)
+	fixtureAddr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
+		HostKey: signer, Password: "pw", AuthDelay: 120 * time.Millisecond,
+	})
+	defer cleanup()
+
+	st := &fakeHostKeyStore{pins: map[string]*store.Pin{
+		"srv-a": {Blob: hostKey.Marshal(), Format: store.PinFormatBlob},
+	}}
+	original := lowLevelDial
+	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+		if host == "192.0.2.10" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka)
+	}
+	t.Cleanup(func() { lowLevelDial = original })
+
+	cli, _, err := ConnectServerEntry(context.Background(), ServerDialRequest{
+		Server: entryAt("srv-a", "198.51.100.10", 2202), Auth: PasswordAuth("pw"),
+		HostKeys: st, AddressTimeout: 20 * time.Millisecond,
+		Topology: StaticDialTopology{
+			TargetMemberships: []*models.NetworkMembership{
+				membershipAt("target", "home", "家A局域网", models.NetworkPhysical, "192.0.2.10", 1),
+				membershipAt("target", "virtual", "虚拟局域网", models.NetworkVirtual, "100.64.10.5", 2),
+			},
+			DialerKnown: true,
+			DialerMemberships: []*models.NetworkMembership{
+				membershipAt("dialer", "home", "家A局域网", models.NetworkPhysical, "192.0.2.2", 3),
+				membershipAt("dialer", "virtual", "虚拟局域网", models.NetworkVirtual, "100.64.10.2", 4),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("authentication slower than the address timeout must still connect: %v", err)
+	}
+	defer cli.Close()
+	if st.saves != 0 {
+		t.Fatalf("the matching anchor must not be rewritten, got %d saves", st.saves)
+	}
 }

@@ -87,35 +87,35 @@ const (
 // 数 Detect 判定。除此之外只读——不改服务器条目上的任何字段。detect
 // 为空串表示无法判定(见 Detect)。owner 的 CLI 诊断命令与 TUI 服务器
 // 页都调它,不各自接绕(ADR 0003)。
-func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (models.ShellType, string, error) {
+func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (models.ShellType, string, []string, error) {
 	auth, err := vault.AuthForServer(st, srv)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve credential: %w", err)
+		return "", "", nil, fmt.Errorf("resolve credential: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(parent, probeShellDeadline)
 	defer cancel()
-	cli, _, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+	cli, connectionNotes, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: st,
 		Topology: dialplan.NewStoreSource(st, ""),
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("connect: %w", err)
+		return "", "", nil, fmt.Errorf("connect: %w", err)
 	}
 	defer cli.Close()
 	osRes, err := cli.Exec(ctx, CmdOSExpand, probeExecTimeout, probeMaxBytes)
 	if err != nil {
-		return "", "", fmt.Errorf("run %q: %w", CmdOSExpand, err)
+		return "", "", nil, fmt.Errorf("run %q: %w", CmdOSExpand, err)
 	}
 	if osRes.TimedOut {
-		return "", "", fmt.Errorf("probe command %q timed out", CmdOSExpand)
+		return "", "", nil, fmt.Errorf("probe command %q timed out", CmdOSExpand)
 	}
 	psRes, err := cli.Exec(ctx, CmdPSVar, probeExecTimeout, probeMaxBytes)
 	if err != nil {
-		return "", "", fmt.Errorf("run %q: %w", CmdPSVar, err)
+		return "", "", nil, fmt.Errorf("run %q: %w", CmdPSVar, err)
 	}
 	if psRes.TimedOut {
-		return "", "", fmt.Errorf("probe command %q timed out", CmdPSVar)
+		return "", "", nil, fmt.Errorf("probe command %q timed out", CmdPSVar)
 	}
 	detected, evidence := Detect(Probes{OSExpand: osRes.Stdout, PSVar: psRes.Stdout})
-	return detected, evidence, nil
+	return detected, evidence, connectionNotes, nil
 }

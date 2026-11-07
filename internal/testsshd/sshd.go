@@ -17,6 +17,12 @@ import (
 
 // Options configures the in-process test SSH server.
 type Options struct {
+	// ListenHost overrides the default loopback listener address. Tests use a
+	// distinct loopback address to model two candidate hosts in one process.
+	ListenHost string
+	// ListenPort overrides the random listener port. Tests modeling candidate
+	// addresses use the same port on different loopback addresses.
+	ListenPort    int
 	Password      string        // accept this password (empty = no password auth)
 	AuthorizedKey ssh.PublicKey // accept this client public key (nil = no key auth)
 	SudoPassword  string        // if set, Exec handler simulates sudo -S (reads pw from stdin)
@@ -31,6 +37,11 @@ type Options struct {
 	// client rejected over a mismatched host key leaves this at zero — the
 	// observable proof that no credentials were sent. Purely observational.
 	AuthRequests *atomic.Int64
+	// AuthDelay pauses the user authentication callback before it answers.
+	// Host-key verification has already completed when this delay starts, so
+	// tests can prove an address timeout ends at host-key verification rather
+	// than covering a slow login authentication exchange.
+	AuthDelay time.Duration
 	// SudoStartFailure, when non-empty, makes the simulated sudo fail AFTER a
 	// correct password with this diagnostic (exit 1) — for exercising the
 	// sudo-start-failed classification (command-specific sudoers / NOEXEC-ish
@@ -73,6 +84,9 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 			if opts.AuthRequests != nil {
 				opts.AuthRequests.Add(1)
 			}
+			if opts.AuthDelay > 0 {
+				time.Sleep(opts.AuthDelay)
+			}
 			if string(pass) == pw {
 				return nil, nil
 			}
@@ -91,7 +105,11 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 			return nil, io.EOF
 		}
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	listenHost := opts.ListenHost
+	if listenHost == "" {
+		listenHost = "127.0.0.1"
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(listenHost, strconv.Itoa(opts.ListenPort)))
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}

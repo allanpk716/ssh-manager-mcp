@@ -198,9 +198,10 @@ func serversProbeShellCmd() *cobra.Command {
 				}
 			}
 			out := cmd.OutOrStdout()
+			stderr := cmd.ErrOrStderr()
 			failed := false
 			for _, srv := range targets {
-				if err := probeAndReportShell(out, st, srv); err != nil {
+				if err := probeAndReportShell(out, stderr, st, srv); err != nil {
 					failed = true
 					fmt.Fprintf(out, "%s: probe failed: %v\n", srv.Name, err)
 				}
@@ -216,10 +217,13 @@ func serversProbeShellCmd() *cobra.Command {
 // probeAndReportShell 探测一台服务器并打一行结论,三种形态:与标注一
 // 致 / 不一致(带修正指引)/ 无法判定(带判定依据)。探测本身出错时由
 // 调用方打失败行。
-func probeAndReportShell(out io.Writer, st *store.Store, srv *models.Server) error {
-	detected, evidence, err := shellprobe.ProbeServer(context.Background(), st, srv)
+func probeAndReportShell(out, stderr io.Writer, st *store.Store, srv *models.Server) error {
+	detected, evidence, connectionNotes, err := shellprobe.ProbeServer(context.Background(), st, srv)
 	if err != nil {
 		return err
+	}
+	for _, note := range connectionNotes {
+		fmt.Fprintf(stderr, "连接说明：%s\n", note)
 	}
 	annotated := models.NormalizeShellType(string(srv.ShellType))
 	switch {

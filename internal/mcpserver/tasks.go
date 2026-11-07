@@ -801,8 +801,8 @@ func clampBgTimeout(sec int, cap time.Duration) time.Duration {
 // → Insert（持锁写 start(ok) 行、
 // goroutine 启动前——end 行必晚于 start 行）→ runTask goroutine（Insert 的
 // wg 票）。Insert 失败 (manager 已关): 锁外关 client + 归还预约, 零泄漏。
-// 成功返回 taskID 与钳定后的生效超时。
-func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSpec) (taskID string, effectiveTimeout time.Duration, err error) {
+// 成功返回 taskID、钳定后的生效超时与统一拨号入口的连接说明。
+func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSpec) (taskID string, effectiveTimeout time.Duration, connectionNotes []string, err error) {
 	t0 := time.Now()
 	effective := clampBgTimeout(spec.TimeoutSec, m.runCap)
 	auditStart := func(status string) {
@@ -813,9 +813,9 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 		})
 	}
 	if err := m.Reserve(); err != nil {
-		return "", 0, err
+		return "", 0, nil, err
 	}
-	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: spec.Server, Auth: spec.Auth, HostKeys: spec.HostKeys, KeepAlive: true,
 		Topology: spec.DialTopology,
 	})
@@ -829,7 +829,7 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 		}
 		auditStart(status)
 		m.ReleaseReservation()
-		return "", 0, cerr
+		return "", 0, nil, cerr
 	}
 	// sudoMetaBox (Plan 41 §2): exec 闭包的第四返回值落点。闭包在 runTask 内
 	// 执行, 返回后值已定; runTask 终态段持锁把它挂上 bgTask——happens-before
@@ -859,7 +859,7 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 	if ierr != nil {
 		_ = cli.Close() // Insert 拒绝 (manager 已关): 锁外关, 零泄漏
 		m.ReleaseReservation()
-		return "", 0, ierr
+		return "", 0, nil, ierr
 	}
-	return tid, effective, nil
+	return tid, effective, connectionNotes, nil
 }

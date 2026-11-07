@@ -55,7 +55,7 @@ func newSSHCmd() *cobra.Command {
 			commandStr := strings.Join(args[1:], " ")
 			status := "ok"
 			var res sshbroker.ExecResult
-			cli, _, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+			cli, connectionNotes, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 				Server: srv, Auth: auth, HostKeys: st,
 				Topology: dialplan.NewStoreSource(st, ""),
 			})
@@ -65,6 +65,9 @@ func newSSHCmd() *cobra.Command {
 				return err
 			}
 			defer cli.Close()
+			for _, note := range connectionNotes {
+				fmt.Fprintf(cmd.ErrOrStderr(), "连接说明：%s\n", note)
+			}
 			res, err = cli.Exec(ctx, commandStr, ownerSSHDeadline, 0) // owner path: unlimited output; shared deadline caps total time
 			if err != nil {
 				status = "error"

@@ -198,7 +198,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 
-	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
 		Topology: dialplan.NewStoreSource(st, ""),
 	})
@@ -264,7 +264,8 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	out = ExecOutput{
 		Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, TimedOut: res.TimedOut,
 		Truncated: res.Truncated, StdoutBytes: res.StdoutBytes, StderrBytes: res.StderrBytes,
-		MaskedOutput: MaskedOutput{Masked: mergeMaskedNames(stdoutNames, stderrNames)},
+		MaskedOutput:          MaskedOutput{Masked: mergeMaskedNames(stdoutNames, stderrNames)},
+		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
 		// 钳制改响 (Plan 32 T7 / spec §6): 回显 clamp 后实际生效秒数——
 		// timeout 已在上方钳定 (<=0 → defaultTimeout; cap MaxExecTimeout)。
 		EffectiveTimeoutSeconds: int(timeout.Seconds()),
@@ -349,7 +350,7 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		return
 	}
 
-	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
 		Topology: dialplan.NewStoreSource(st, ""),
 	})
@@ -386,6 +387,9 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		Bytes:        res.Bytes,
 		Truncated:    res.Truncated,
 		MaskedOutput: MaskedOutput{Masked: maskedNames},
+		ConnectionNotesOutput: ConnectionNotesOutput{
+			ConnectionNotes: connectionNotes,
+		},
 	}
 	return
 }
@@ -459,7 +463,7 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		return
 	}
 
-	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
 		Topology: dialplan.NewStoreSource(st, ""),
 	})
@@ -498,7 +502,12 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		return
 	}
 	status = "ok"
-	out = UploadOutput{Files: res.Files, Bytes: res.Bytes, Truncated: res.Truncated}
+	out = UploadOutput{
+		Files:                 res.Files,
+		Bytes:                 res.Bytes,
+		Truncated:             res.Truncated,
+		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
+	}
 	return
 }
 
@@ -622,7 +631,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return
 	}
 
-	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
 		Topology: dialplan.NewStoreSource(st, ""),
 	})
@@ -651,7 +660,10 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return
 	}
 	status = "ok"
-	out = UploadContentOutput{Bytes: byteCount}
+	out = UploadContentOutput{
+		Bytes:                 byteCount,
+		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
+	}
 	return
 }
 
@@ -804,7 +816,7 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 		return
 	}
 
-	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
 		Topology: dialplan.NewStoreSource(st, ""),
 	})
@@ -851,7 +863,12 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 	// the id (the closure must capture the registered id, not a stale one).
 	tun.SetOnActivity(func() { mgr.Touch(id) })
 	status = "ok"
-	out = ForwardOutput{TunnelID: id, LocalPort: localPortOfAddr(tun.LocalAddr()), ListenHost: hostOfAddr(tun.LocalAddr())}
+	out = ForwardOutput{
+		TunnelID:              id,
+		LocalPort:             localPortOfAddr(tun.LocalAddr()),
+		ListenHost:            hostOfAddr(tun.LocalAddr()),
+		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
+	}
 	return
 }
 

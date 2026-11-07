@@ -762,7 +762,7 @@ func (a *App) serversKey(k tea.Key) tea.Cmd {
 		// 代改:修正标注走 `e` 编辑页。
 		if cur := sp.current(); cur != nil {
 			return doAction(a.st, func() (string, error) {
-				detected, evidence, err := shellprobe.ProbeServer(context.Background(), a.st, cur)
+				detected, evidence, _, err := shellprobe.ProbeServer(context.Background(), a.st, cur)
 				if err != nil {
 					return "", err
 				}

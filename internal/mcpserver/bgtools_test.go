@@ -178,7 +178,7 @@ func TestExecBackgroundHostKeyMismatch(t *testing.T) {
 	defer m.CloseAll()
 
 	_, err := ExecBackgroundForProfile(context.Background(), st, "proj-bg", pid, srvID, "true", false, 5, m, ExecConfirmation{})
-	assertBranch(t, err, "host key mismatch")
+	assertBranch(t, err, "主机密钥不同，已跳过")
 	assertNoLeak(t, err, srv.Host)
 	wantSoleStartRow(t, st, "hostkey_mismatch", "true", false, srvID, "proj-bg")
 }

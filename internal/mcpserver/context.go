@@ -263,7 +263,7 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 		sudoCred = cred.Secret
 	}
 
-	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
 		Topology: dialplan.NewStoreSource(st, ""),
 	})
@@ -309,5 +309,6 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 	}
 	status = "ok"
 	out = parseCtxOutput(res.Stdout, nonce, sudo)
+	out.ConnectionNotes = connectionNotes
 	return
 }

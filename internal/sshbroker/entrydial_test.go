@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -132,11 +133,80 @@ func TestConnectServerEntryMismatchFailsWithoutSendingCredentials(t *testing.T) 
 	if !errors.Is(err, ErrHostKeyMismatch) {
 		t.Fatalf("mismatched host key must fail with ErrHostKeyMismatch, got %v", err)
 	}
+	want := "全部候选地址连接失败：\n兜底地址：主机密钥不同，已跳过"
+	if err.Error() != want {
+		t.Fatalf("mismatch error text:\n got %q\nwant %q", err.Error(), want)
+	}
 	if n := authRequests.Load(); n != 0 {
 		t.Fatalf("server must not receive any user authentication request, got %d", n)
 	}
 	if st.saves != 0 {
 		t.Fatalf("a rejected connect must not overwrite the pinned key, got %d saves", st.saves)
+	}
+}
+
+// TestConnectServerEntrySkipsMismatchedHostKeyThenConnectsNextAddress: 第一
+// 个候选地址呈现的锚外主机密钥只让这个地址失败；统一入口继续尝试兜底地址，
+// 成功后返回不泄露地址的连接说明，且错误地址从未收到登录认证请求。
+func TestConnectServerEntrySkipsMismatchedHostKeyThenConnectsNextAddress(t *testing.T) {
+	wrongSigner, correctSigner := fixedSigner(t), fixedSigner(t)
+	var wrongAuthRequests, correctAuthRequests atomic.Int64
+	wrongAddr, _, wrongCleanup := testsshd.Start(t, testsshd.Options{
+		HostKey: wrongSigner, Password: "pw", AuthRequests: &wrongAuthRequests,
+	})
+	defer wrongCleanup()
+	correctAddr, correctHostKey, correctCleanup := testsshd.Start(t, testsshd.Options{
+		HostKey: correctSigner, Password: "pw", AuthRequests: &correctAuthRequests,
+	})
+	defer correctCleanup()
+
+	st := &fakeHostKeyStore{pins: map[string]*store.Pin{
+		"srv-a": {Blob: correctHostKey.Marshal(), Format: store.PinFormatBlob},
+	}}
+	srv := entryAt("srv-a", "198.51.100.10", 2202)
+	fixtureByAddress := map[string]string{
+		"192.0.2.10":    wrongAddr,
+		"198.51.100.10": correctAddr,
+	}
+	original := lowLevelDial
+	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+		fixtureAddr, ok := fixtureByAddress[host]
+		if !ok {
+			return nil, errors.New("unexpected candidate address")
+		}
+		return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka)
+	}
+	t.Cleanup(func() { lowLevelDial = original })
+
+	cli, notes, err := ConnectServerEntry(context.Background(), ServerDialRequest{
+		Server: srv, Auth: PasswordAuth("pw"), HostKeys: st,
+		Topology: StaticDialTopology{
+			TargetMemberships: []*models.NetworkMembership{
+				membershipAt("target", "home", "家A局域网", models.NetworkPhysical, "192.0.2.10", 1),
+			},
+			DialerKnown: true,
+			DialerMemberships: []*models.NetworkMembership{
+				membershipAt("dialer", "home", "家A局域网", models.NetworkPhysical, "192.0.2.2", 2),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("connect through the second candidate: %v", err)
+	}
+	defer cli.Close()
+
+	wantNotes := []string{"家A局域网 第1个地址呈现了不同的主机密钥，已跳过"}
+	if strings.Join(notes, "\n") != strings.Join(wantNotes, "\n") {
+		t.Fatalf("connection notes = %q, want %q", notes, wantNotes)
+	}
+	if n := wrongAuthRequests.Load(); n != 0 {
+		t.Fatalf("the mismatched address must not receive user authentication requests, got %d", n)
+	}
+	if n := correctAuthRequests.Load(); n != 1 {
+		t.Fatalf("the successful address must receive one user authentication request, got %d", n)
+	}
+	if st.saves != 0 {
+		t.Fatalf("the existing anchor must not be overwritten, got %d saves", st.saves)
 	}
 }
 
@@ -423,5 +493,49 @@ func TestConnectServerEntryFailureLabelsEveryPlannedCandidate(t *testing.T) {
 		if strings.Contains(err.Error(), address) {
 			t.Fatalf("error text leaked address %q: %q", address, err.Error())
 		}
+	}
+}
+
+// TestConnectServerEntryFailureLabelsSkippedHostKeyMismatch: 全部候选的主机
+// 密钥都与锚不一致时，逐地址错误用统一的短说明，不输出指纹，也不泄露地址。
+func TestConnectServerEntryFailureLabelsSkippedHostKeyMismatch(t *testing.T) {
+	srv := entryAt("srv-a", "198.51.100.10", 2202)
+	original := lowLevelDial
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+		return nil, fmt.Errorf("%w: presented SHA256:test", ErrHostKeyMismatch)
+	}
+	t.Cleanup(func() { lowLevelDial = original })
+
+	_, notes, err := ConnectServerEntry(context.Background(), ServerDialRequest{
+		Server: srv, Auth: PasswordAuth("pw"), HostKeys: &fakeHostKeyStore{pins: map[string]*store.Pin{
+			"srv-a": {Blob: []byte("pinned"), Format: store.PinFormatBlob},
+		}},
+		Topology: StaticDialTopology{
+			TargetMemberships: []*models.NetworkMembership{
+				membershipAt("target", "home", "家A局域网", models.NetworkPhysical, "192.0.2.10", 1),
+			},
+			DialerKnown: true,
+			DialerMemberships: []*models.NetworkMembership{
+				membershipAt("dialer", "home", "家A局域网", models.NetworkPhysical, "192.0.2.2", 2),
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("all candidates failed: want an error")
+	}
+	if !errors.Is(err, ErrHostKeyMismatch) {
+		t.Fatalf("error must remain identifiable as a host key mismatch, got %v", err)
+	}
+	want := "全部候选地址连接失败：\n" +
+		"家A局域网 第1个地址：主机密钥不同，已跳过\n" +
+		"兜底地址：主机密钥不同，已跳过"
+	if err.Error() != want {
+		t.Fatalf("error text:\n got %q\nwant %q", err.Error(), want)
+	}
+	if strings.Contains(err.Error(), "SHA256") {
+		t.Fatalf("aggregate failure text must not carry fingerprints: %q", err.Error())
+	}
+	if len(notes) != 0 {
+		t.Fatalf("failed connect must not return success-path connection notes, got %q", notes)
 	}
 }

@@ -367,8 +367,8 @@ func TestRelayForProfileSourceStatBranches(t *testing.T) {
 	src := relayMkSource(t, e, "hmsrc.bin", 16)
 	_ = e.st.SaveEntryPin(serverByAddr(e.st, hostOfAddr(e.addr), portOfAddr(e.addr)), []byte("not-the-real-host-key"))
 	_, err = e.relayCall(e.relayInput(hmID, src, to, false))
-	if err == nil || !strings.Contains(err.Error(), "host key mismatch") {
-		t.Fatalf("source hostkey: err = %v, want host key mismatch", err)
+	if err == nil || !strings.Contains(err.Error(), "主机密钥不同，已跳过") {
+		t.Fatalf("source hostkey: err = %v, want the host key skip note", err)
 	}
 	relayAuditFind(t, relayAuditRows(t, e.st, 30), "relay-bg-start", "hostkey_mismatch")
 
@@ -429,8 +429,8 @@ func TestRelayForProfileDestBranches(t *testing.T) {
 	_ = e.st.SaveEntryPin(serverByAddr(e.st, hostOfAddr(e.addr), portOfAddr(e.addr)), []byte("not-the-real-host-key"))
 	_, err = RelayForProfile(context.Background(), e.st, e.tm, e.projID, e.pid,
 		RelayInput{FromServerID: e.srcID, FromPath: src, ToServerID: hmID, ToPath: "/data/d"}, relayProfileChunk)
-	if err == nil || !strings.Contains(err.Error(), "host key mismatch") {
-		t.Fatalf("dest hostkey: err = %v, want host key mismatch", err)
+	if err == nil || !strings.Contains(err.Error(), "主机密钥不同，已跳过") {
+		t.Fatalf("dest hostkey: err = %v, want the host key skip note", err)
 	}
 }
 
