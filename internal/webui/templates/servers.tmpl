@@ -1,0 +1,17 @@
+{{define "content"}}
+<section class="server-list">
+<h1>服务器</h1>
+<table class="server-table">
+<thead>
+<tr><th scope="col">名称</th><th scope="col">登录</th><th scope="col">端口</th></tr>
+</thead>
+<tbody>
+{{range .Servers}}<tr>
+<td>{{.Name}}</td>
+<td>{{.User}}@{{.Host}}</td>
+<td>{{.Port}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+</section>
+{{end}}

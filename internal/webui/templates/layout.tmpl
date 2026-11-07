@@ -1,0 +1,16 @@
+{{define "layout"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · sshmgr</title>
+</head>
+<body>
+<header class="site-header">
+<p class="brand">sshmgr 管理界面</p>
+</header>
+<main id="content">
+{{template "content" .}}
+</main>
+</body>
+</html>{{end}}
