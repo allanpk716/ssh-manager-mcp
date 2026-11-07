@@ -269,8 +269,8 @@ func initSchema(db *sql.DB) error {
 	// 快照修订号的表、初始行和触发器拼接在既有结构之后:旧库第一次打开
 	// 时在这里完成迁移,后续打开全部是无操作。
 	// 放进一个事务只落一次盘;自动提交下新库每条语句各落一次,Windows 上明显变慢。
-	// 旧版服务器条目更新触发器如需替换，迁移函数会在同一个事务里删除并
-	// 重建；这里的 IF NOT EXISTS 在重复打开时不会改动数据库文件。
+	// 服务器条目更新触发器如需替换，迁移函数会在同一个事务里删除并重
+	// 建；这里的 IF NOT EXISTS 在重复打开时不会改动数据库文件。
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -442,7 +442,7 @@ func migrate(db *sql.DB) error {
 	if err := ensureServerShellTypeColumn(db); err != nil {
 		return err
 	}
-	if err := ensureServerDeviceReferenceMigration(db); err != nil {
+	if err := migrateServerSnapshotRevisionTrigger(db); err != nil {
 		return err
 	}
 	return nil
@@ -485,10 +485,10 @@ func ensureServerShellTypeColumn(db *sql.DB) error {
 	return nil
 }
 
-// ensureServerDeviceReferenceMigration 补齐服务器条目的所属设备引用列，并
-// 把未覆盖所属设备引用列的旧快照修订号触发器替换成当前触发器。新触发器
-// 已在位时表示迁移已完成，不写数据库。
-func ensureServerDeviceReferenceMigration(db *sql.DB) error {
+// migrateServerSnapshotRevisionTrigger 检查服务器表快照修订号更新触发器
+// 是否已经是最新定义；不是的话，先补齐触发器依赖的所属设备引用列，再在
+// 同一个事务里替换触发器。最新定义已在位时不写数据库。
+func migrateServerSnapshotRevisionTrigger(db *sql.DB) error {
 	var definition string
 	err := db.QueryRow(
 		`SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`,
