@@ -44,8 +44,12 @@ func (r *recordingHK) GetEntryPin(srv *models.Server) (*store.Pin, error) {
 	return r.cur().GetEntryPin(srv)
 }
 
-func (r *recordingHK) SaveEntryPin(srv *models.Server, marshaledKey []byte) error {
-	return r.cur().SaveEntryPin(srv, marshaledKey)
+func (r *recordingHK) EntryVirtualLanAddresses(srv *models.Server) ([]string, error) {
+	return r.cur().EntryVirtualLanAddresses(srv)
+}
+
+func (r *recordingHK) SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string, marshaledKey []byte) error {
+	return r.cur().SaveEntryPinAtHandshake(srv, handshakeAddr, marshaledKey)
 }
 
 // seedTofuTargetSnap builds a snapshot with one granted server pointing at a

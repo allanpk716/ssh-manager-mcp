@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"slices"
 
 	"golang.org/x/crypto/ssh"
 
@@ -18,10 +17,6 @@ import (
 // wrapped text (Plan 48 rider 2) additionally names BOTH fingerprints —
 // presented vs pinned — and nothing else about the keys.
 var ErrHostKeyMismatch = errors.New("host key mismatch: possible MITM, connection rejected")
-
-// entryVirtualLanAddresses 是虚拟局域网候选地址的数据源。生产代码用存储层
-// 的实现；单元测试注入候选地址以覆盖回调地址判定。
-var entryVirtualLanAddresses = store.EntryVirtualLanAddresses
 
 // PresentedHostKeyError marks a first-trust save-path error whose Error() text is
 // ALREADY the final user-facing presentation — the Plan 48 §2.1/§4 pin-forward
@@ -41,7 +36,8 @@ func (e *PresentedHostKeyError) Unwrap() error { return e.Err }
 // in tests). 按服务器条目读写（票 #58）：锚跟随条目而不是地址。
 type HostKeyStore interface {
 	GetEntryPin(srv *models.Server) (*store.Pin, error)
-	SaveEntryPin(srv *models.Server, marshaledKey []byte) error
+	EntryVirtualLanAddresses(srv *models.Server) ([]string, error)
+	SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string, marshaledKey []byte) error
 }
 
 // HostKeyTOFU returns a trust-on-first-use host-key callback bound to st and one
@@ -59,14 +55,16 @@ func HostKeyTOFU(st HostKeyStore, srv *models.Server) (ssh.HostKeyCallback, erro
 			return err
 		}
 		if pin == nil {
-			// 虚拟局域网首次锚定规则（票 #58 只留接口，地址数据源恒为空，
-			// 由网络拓扑票接入后生效）：条目有虚拟局域网地址时，首次信任
-			// 只接受虚拟局域网握手地址。
+			// 条目有虚拟局域网地址时，首次信任只接受虚拟局域网握手地址。
 			handshakeAddr := normalizeHandshakeAddr(hostname, srv.Port)
-			if vlan := entryVirtualLanAddresses(srv); len(vlan) > 0 && !slices.Contains(vlan, handshakeAddr) {
+			vlan, err := st.EntryVirtualLanAddresses(srv)
+			if err != nil {
+				return err
+			}
+			if len(vlan) > 0 && !store.ContainsSSHAddress(vlan, handshakeAddr, srv.Port) {
 				return fmt.Errorf("first trust for server %q requires a virtual LAN address, got %s", srv.Name, handshakeAddr)
 			}
-			if err := st.SaveEntryPin(srv, marshaled); err != nil {
+			if err := st.SaveEntryPinAtHandshake(srv, handshakeAddr, marshaled); err != nil {
 				// Already-presented branch text (Plan 48 §2.1/§4) — return it
 				// verbatim; the "save host key: " wrapper is for raw store
 				// failures only (read-only ErrReadOnly keeps its asserted form).
@@ -89,10 +87,7 @@ func HostKeyTOFU(st HostKeyStore, srv *models.Server) (ssh.HostKeyCallback, erro
 // normalizeHandshakeAddr 把 SSH 回调给出的主机名规范成候选地址使用的
 // 「主机:端口」写法；回调已经带端口时保持原样。
 func normalizeHandshakeAddr(hostname string, port int) string {
-	if _, _, err := net.SplitHostPort(hostname); err == nil {
-		return hostname
-	}
-	return fmt.Sprintf("%s:%d", hostname, port)
+	return store.NormalizeSSHAddress(hostname, port)
 }
 
 // pinnedFingerprint renders the anchor's fingerprint for the mismatch text —

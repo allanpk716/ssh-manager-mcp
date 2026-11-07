@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -197,17 +199,39 @@ func (s *Store) ListEntryPins() ([]PinMeta, error) {
 // 主机密钥。按条目整行覆盖：同一条目重开首次信任窗口时，格式、来源、转发
 // 设备与握手地址一起重置，避免旧来源信息留在新锚上。
 func (s *Store) SaveEntryPin(srv *models.Server, marshaledKey []byte) error {
+	return s.SaveEntryPinAtHandshake(srv, EntryFallbackAddr(srv), marshaledKey)
+}
+
+// SaveEntryPinAtHandshake 记录实际握手时学到的主机密钥。统一拨号回调把
+// SSH 返回的握手地址传进来，避免多地址条目固定记录兜底地址。
+func (s *Store) SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string, marshaledKey []byte) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
-	_, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(
 		`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr)
 		 VALUES (?,?,?,?,?,?,?)
 		 ON CONFLICT(server_id) DO UPDATE SET
 		   key_blob=excluded.key_blob, created_at=excluded.created_at,
 		   pin_format='blob', pin_source='tofu', pin_device='', handshake_addr=excluded.handshake_addr`,
-		srv.ID, marshaledKey, now(), PinFormatBlob, PinSourceTofu, "", EntryFallbackAddr(srv))
-	return err
+		srv.ID, marshaledKey, now(), PinFormatBlob, PinSourceTofu, "", handshakeAddr)
+	if err != nil {
+		return err
+	}
+	if err := writeAuditTx(tx, AuditRow{
+		TS: time.Now(), ServerID: srv.ID, Action: "pin-tofu",
+		Command: fmt.Sprintf("entry=%s(%s) handshake=%s fp=%s source=%s",
+			srv.Name, srv.ID, handshakeAddr, PinFingerprint(marshaledKey, PinFormatBlob), PinSourceTofu),
+		Status: "ok",
+	}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // InsertForwardedEntryPin 落一条设备转发的锚（权威端 /pin-hostkey 的存储侧）。
@@ -399,9 +423,89 @@ func fallbackAddr(host string, port int) string {
 	return fmt.Sprintf("%s:%d", host, port)
 }
 
-// EntryVirtualLanAddresses 返回条目的虚拟局域网候选地址。本票阶段候选地址
-// 数据源恒为空；网络拓扑票（#67）接入数据后，首次锚定与锚定转发才会只接受
-// 虚拟局域网握手地址。
-func EntryVirtualLanAddresses(srv *models.Server) []string {
-	return nil
+// NormalizeSSHAddress renders a host and port in one canonical form. IPv6
+// addresses are bracketed; IP addresses use their standard text and domain
+// names are case-insensitive.
+func NormalizeSSHAddress(address string, port int) string {
+	address = strings.TrimSpace(address)
+	host, portText := address, strconv.Itoa(port)
+	if parsedHost, parsedPort, err := net.SplitHostPort(address); err == nil {
+		host, portText = parsedHost, parsedPort
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	} else {
+		host = strings.ToLower(host)
+	}
+	return net.JoinHostPort(host, portText)
+}
+
+// ContainsSSHAddress reports whether one complete SSH address is in a
+// candidate list, comparing both sides after canonical normalization.
+func ContainsSSHAddress(addresses []string, address string, port int) bool {
+	want := NormalizeSSHAddress(address, port)
+	for _, candidate := range addresses {
+		if NormalizeSSHAddress(candidate, port) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// EntryVirtualLanAddresses 返回条目所属设备在虚拟局域网里的候选 SSH 地址。
+// 单机 vault 与客户端缓存使用同一个存储查询，因此快照热更新后的下一次
+// 询问就能看到当前网络成员。
+func (s *Store) EntryVirtualLanAddresses(srv *models.Server) ([]string, error) {
+	if s == nil || srv == nil || srv.DeviceID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`
+		SELECT member.address
+		FROM network_memberships member
+		JOIN networks network ON network.id=member.network_id
+		WHERE member.device_id=? AND network.type=?
+		ORDER BY member.registration_order,network.name,member.address`,
+		srv.DeviceID, models.NetworkVirtual)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]string, 0)
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			return nil, err
+		}
+		out = append(out, NormalizeSSHAddress(address, srv.Port))
+	}
+	return out, rows.Err()
+}
+
+// EntryCandidateAddresses 返回条目所属设备的全部网络成员地址，加上条目的
+// 兜底地址。锚定转发用它校验客户端报告的握手地址确实可能是本条目的地址。
+func (s *Store) EntryCandidateAddresses(srv *models.Server) ([]string, error) {
+	if s == nil || srv == nil {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`
+		SELECT member.address
+		FROM network_memberships member
+		WHERE member.device_id=?
+		ORDER BY member.registration_order,member.address`, srv.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]string, 0)
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			return nil, err
+		}
+		out = append(out, NormalizeSSHAddress(address, srv.Port))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return append(out, NormalizeSSHAddress(srv.Host, srv.Port)), nil
 }

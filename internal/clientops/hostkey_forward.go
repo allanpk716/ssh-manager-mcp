@@ -34,21 +34,25 @@ func (h *forwardingHostKeys) GetEntryPin(srv *models.Server) (*store.Pin, error)
 	return h.cur().GetEntryPin(srv)
 }
 
+func (h *forwardingHostKeys) EntryVirtualLanAddresses(srv *models.Server) ([]string, error) {
+	return h.cur().EntryVirtualLanAddresses(srv)
+}
+
 // SaveEntryPin is the forwarding path: an unknown anchor is POSTed to the
 // broker (audited server-side), and on 201 / 409-equal applied to the CURRENT
 // store locally so the handshake continues. Every other outcome surfaces the
 // branch's verbatim text — no prefix — via sshbroker.PresentedHostKeyError.
-func (h *forwardingHostKeys) SaveEntryPin(srv *models.Server, marshaledKey []byte) error {
+func (h *forwardingHostKeys) SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string, marshaledKey []byte) error {
 	if h.fwd == nil {
 		// No forwarding capability: the plain read-only store refusal.
-		return h.cur().SaveEntryPin(srv, marshaledKey)
+		return h.cur().SaveEntryPinAtHandshake(srv, handshakeAddr, marshaledKey)
 	}
-	ferr := h.fwd.Forward(srv, marshaledKey)
+	ferr := h.fwd.Forward(srv, handshakeAddr, marshaledKey)
 	if ferr == nil || errors.Is(ferr, ErrPinForwardEqual) {
 		// cur() is re-resolved HERE — after the HTTP call — so a hot rebuild
 		// that fired during the forwarding window lands the anchor in the
 		// current generation.
-		if aerr := h.cur().ApplyForwardedEntryPin(srv, store.EntryFallbackAddr(srv), marshaledKey); aerr != nil {
+		if aerr := h.cur().ApplyForwardedEntryPin(srv, handshakeAddr, marshaledKey); aerr != nil {
 			return &sshbroker.PresentedHostKeyError{Err: aerr}
 		}
 		return nil

@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -521,20 +520,36 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	// ④ 握手地址必须是该条目的候选地址之一（本票阶段即兜底 Host 加端口）；
-	// 条目有虚拟局域网地址时必须落在虚拟局域网地址里（本票地址数据源恒为
-	// 空，规则由网络拓扑票接入后生效）。
-	if in.HandshakeAddr != store.EntryFallbackAddr(srv) {
+	// ④ 握手地址必须是该条目的候选地址之一；条目有虚拟局域网地址时，
+	// 首次锚定只接受虚拟局域网地址。
+	candidates, err := r.st.EntryCandidateAddresses(srv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey candidate lookup %s: %v\n", in.ServerID, err)
+		status = http.StatusInternalServerError
+		http.Error(w, "candidate lookup failed", status)
+		return
+	}
+	if !store.ContainsSSHAddress(candidates, in.HandshakeAddr, srv.Port) {
 		status = http.StatusBadRequest
 		writePinJSON(w, status, pinErrorResponse{Error: fmt.Sprintf("handshake address %s is not a candidate address of the server entry — cache pull and retry", in.HandshakeAddr)})
 		return
 	}
-	if vlan := store.EntryVirtualLanAddresses(srv); len(vlan) > 0 {
-		if !slices.Contains(vlan, in.HandshakeAddr) {
+	vlan, err := r.st.EntryVirtualLanAddresses(srv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pin-hostkey virtual LAN lookup %s: %v\n", in.ServerID, err)
+		status = http.StatusInternalServerError
+		http.Error(w, "virtual LAN lookup failed", status)
+		return
+	}
+	if len(vlan) > 0 && !store.ContainsSSHAddress(vlan, in.HandshakeAddr, srv.Port) {
+		if store.ContainsSSHAddress([]string{store.EntryFallbackAddr(srv)}, in.HandshakeAddr, srv.Port) {
 			status = http.StatusBadRequest
-			writePinJSON(w, status, pinErrorResponse{Error: "handshake address must be a virtual LAN address of the server entry — cache pull and retry"})
+			writePinJSON(w, status, pinErrorResponse{Error: "the client submitted the fallback address; upgrade the client and retry over a virtual LAN address"})
 			return
 		}
+		status = http.StatusBadRequest
+		writePinJSON(w, status, pinErrorResponse{Error: "handshake address must be a virtual LAN address of the server entry — cache pull and retry"})
+		return
 	}
 
 	// ⑤ 密钥字节必须能解析为 SSH 公钥；落库的是重新序列化后的规范形式。

@@ -118,7 +118,12 @@ func fixedHostKeys(key ssh.PublicKey) sshbroker.HostKeyStore {
 type staticHostKeys struct{ pin *store.Pin }
 
 func (s staticHostKeys) GetEntryPin(*models.Server) (*store.Pin, error) { return s.pin, nil }
-func (s staticHostKeys) SaveEntryPin(*models.Server, []byte) error      { return nil }
+func (s staticHostKeys) EntryVirtualLanAddresses(*models.Server) ([]string, error) {
+	return nil, nil
+}
+func (s staticHostKeys) SaveEntryPinAtHandshake(*models.Server, string, []byte) error {
+	return nil
+}
 
 // startBg 经 m.Start 全链 (Reserve→按服务器条目拨号→Insert→引擎) 起一个真任务。
 func startBg(t *testing.T, m *TaskManager, st *store.Store, addr string, hk ssh.PublicKey, command string, timeoutSec int) (string, time.Duration) {
