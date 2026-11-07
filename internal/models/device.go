@@ -28,15 +28,16 @@ type DeviceServer struct {
 // NetworkMembership 是一台设备在某个网络里的身份及地址。地址可以是 IP 或
 // 域名，登记时不解析、不校验格式。
 type NetworkMembership struct {
-	DeviceID    string
-	DeviceName  string
-	NetworkID   string
-	NetworkName string
-	NetworkType NetworkType
-	SiteName    string
-	Address     string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	DeviceID          string
+	DeviceName        string
+	NetworkID         string
+	NetworkName       string
+	NetworkType       NetworkType
+	SiteName          string
+	Address           string
+	RegistrationOrder int64
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // DeviceLayoutCoordinate 是拓扑图某个视图里一台设备的坐标。视图用字符串

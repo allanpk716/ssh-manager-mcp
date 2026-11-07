@@ -451,7 +451,7 @@ func (s *Store) ListDevices(filter DeviceFilter) ([]*models.Device, error) {
 	}
 	memberRows, err := s.db.Query(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.created_at,member.updated_at
+		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
