@@ -27,6 +27,9 @@ type pageData struct {
 func (h *handler) renderPage(w http.ResponseWriter, r *http.Request, status int, page string, data pageData) {
 	data.Caps = h.caps
 	data.VersionHint = h.cfg.versionHint()
+	if sess := h.currentSession(r); sess != nil {
+		data.CSRFToken = sess.csrf
+	}
 	if isFragmentRequest(r) {
 		tmpl, err := template.ParseFS(templateFS, "templates/"+page)
 		if err != nil {

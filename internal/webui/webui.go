@@ -321,3 +321,41 @@ func writePlainPage(w http.ResponseWriter, status int, title, message string) {
 	w.WriteHeader(status)
 	fmt.Fprintf(w, "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>%s</title></head><body><h1>%s</h1><p>%s</p></body></html>", title, title, message)
 }
+
+// mountPost 在内部路由表上登记写操作路由：所有非 GET/HEAD/OPTIONS 的业务
+// 路由都必须经它登记，统一获得会话校验、Origin 校验和与会话绑定的防跨站
+// 请求伪造令牌校验。本票没有业务写操作，测试用它挂无副作用的写路由验证
+// 中间件；后续票的写操作页面沿用同一入口。
+func (h *handler) mountPost(pattern string, fn func(http.ResponseWriter, *http.Request, *session)) {
+	h.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "本地址只接受写请求。")
+			return
+		}
+		sess := h.currentSession(r)
+		if sess == nil {
+			h.renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
+			return
+		}
+		if !originAllowed(r) {
+			h.renderError(w, r, http.StatusForbidden, "请求来源校验失败", "请求来源不是本次启动的 Web UI，已拒绝。")
+			return
+		}
+		token := r.Header.Get("X-CSRF-Token")
+		if token == "" {
+			_ = r.ParseForm()
+			token = r.PostFormValue("csrf_token")
+		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(sess.csrf)) != 1 {
+			h.renderError(w, r, http.StatusForbidden, "防跨站请求伪造校验失败", "防跨站请求伪造令牌缺失或无效，已拒绝。请刷新页面后重试。")
+			return
+		}
+		fn(w, r, sess)
+	})
+}
+
+// originAllowed 校验写请求的 Origin：必须存在，且等于本次监听的回环来源。
+func originAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	return origin != "" && origin == "http://"+r.Host
+}
