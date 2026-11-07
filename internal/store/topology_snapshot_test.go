@@ -100,7 +100,7 @@ func TestImportSnapshotRejectsTopologyOnlyTarget(t *testing.T) {
 
 // TestTopologySnapshotRoundTripAndClientDelivery 覆盖三件事：全量快照携带
 // 站点与网络并在导入后原样恢复；profile 裁剪快照携带全部站点与网络，
-// 并携带发起拉取的客户端实例所在设备；登记拓扑数据不改变快照修订号。
+// 并携带发起拉取的客户端实例所在设备；登记拓扑数据推进快照修订号。
 func TestTopologySnapshotRoundTripAndClientDelivery(t *testing.T) {
 	dir := t.TempDir()
 	masterKey, err := GenerateMasterKey()
@@ -151,8 +151,8 @@ func TestTopologySnapshotRoundTripAndClientDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if revisionAfterTopology != revisionBeforeTopology {
-		t.Fatalf("topology writes must not change snapshot revision: before=%d after=%d",
+	if revisionAfterTopology <= revisionBeforeTopology {
+		t.Fatalf("topology writes must advance snapshot revision: before=%d after=%d",
 			revisionBeforeTopology, revisionAfterTopology)
 	}
 
@@ -290,6 +290,10 @@ func TestServerDeviceSnapshotRoundTripAndClientDelivery(t *testing.T) {
 	if err := st.GrantServers(profileID, []string{added.ServerID}); err != nil {
 		t.Fatal(err)
 	}
+	serverBeforeMove, err := st.GetServer(added.ServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	revisionBeforeMove, err := st.SnapshotRevision()
 	if err != nil {
 		t.Fatal(err)
@@ -301,9 +305,19 @@ func TestServerDeviceSnapshotRoundTripAndClientDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if revisionAfterMove != revisionBeforeMove {
-		t.Fatalf("moving a server between devices must not change the client snapshot revision: before=%d after=%d",
+	if revisionAfterMove <= revisionBeforeMove {
+		t.Fatalf("moving a server between devices must advance the client snapshot revision: before=%d after=%d",
 			revisionBeforeMove, revisionAfterMove)
+	}
+	serverAfterMove, err := st.GetServer(added.ServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serverAfterMove.Revision != serverBeforeMove.Revision {
+		t.Fatalf(
+			"moving a server between devices must not change the server entry revision: before=%d after=%d",
+			serverBeforeMove.Revision, serverAfterMove.Revision,
+		)
 	}
 
 	snapshot, err := st.ExportSnapshot()

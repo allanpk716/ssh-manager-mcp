@@ -486,8 +486,8 @@ func ensureServerShellTypeColumn(db *sql.DB) error {
 }
 
 // ensureServerDeviceReferenceMigration 补齐服务器条目的所属设备引用列，并
-// 把旧版「任何服务器条目更新都加一」的快照修订号触发器替换成排除所属设
-// 备引用的新触发器。新触发器已在位时表示迁移已完成，不写数据库。
+// 把未覆盖所属设备引用列的旧快照修订号触发器替换成当前触发器。新触发器
+// 已在位时表示迁移已完成，不写数据库。
 func ensureServerDeviceReferenceMigration(db *sql.DB) error {
 	var definition string
 	err := db.QueryRow(
@@ -500,7 +500,7 @@ func ensureServerDeviceReferenceMigration(db *sql.DB) error {
 	case err != nil:
 		return err
 	}
-	if strings.Contains(strings.ToUpper(definition), "WHEN") {
+	if snapshotRevisionServerUpdateTriggerIsCurrent(definition) {
 		return nil
 	}
 	exists, err := tableExists(db, "servers")
@@ -532,6 +532,22 @@ func ensureServerDeviceReferenceMigration(db *sql.DB) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// snapshotRevisionServerUpdateTriggerIsCurrent 判断数据库里的服务器条目
+// 修订号更新触发器是否已经与当前生成函数完全一致。
+func snapshotRevisionServerUpdateTriggerIsCurrent(definition string) bool {
+	return normalizeServerRevisionTriggerSQL(definition) ==
+		normalizeServerRevisionTriggerSQL(snapshotRevisionServerUpdateTrigger())
+}
+
+// normalizeServerRevisionTriggerSQL 把结构初始化语句与 SQLite 保存的触发
+// 器定义归一到同一形态：忽略空白差异、可选的 IF NOT EXISTS 与结尾分号。
+func normalizeServerRevisionTriggerSQL(definition string) string {
+	definition = strings.ToUpper(strings.Join(strings.Fields(definition), " "))
+	definition = strings.TrimPrefix(definition, "CREATE TRIGGER IF NOT EXISTS ")
+	definition = strings.TrimPrefix(definition, "CREATE TRIGGER ")
+	return strings.TrimSuffix(definition, ";")
 }
 
 // serverColumnExists 判断表里是否已有指定列。

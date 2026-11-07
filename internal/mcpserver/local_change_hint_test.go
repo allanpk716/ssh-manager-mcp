@@ -196,6 +196,54 @@ func TestLocalVaultChangeHint_CommandPolicyChanged(t *testing.T) {
 	}
 }
 
+// TestLocalVaultChangeHint_TopologyChanged: owner 修改网络拓扑后，单机部署
+// 的下一次工具调用复用默认比较器，开头出现同一条拓扑变化提示。
+func TestLocalVaultChangeHint_TopologyChanged(t *testing.T) {
+	st := newStore(t)
+	serverID, err := st.AddServer(&models.Server{
+		Name: "gpu", Host: "192.0.2.10", Port: 22, User: "u", AuthMethod: models.AuthPassword,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSite("办公室", "原备注"); err != nil {
+		t.Fatal(err)
+	}
+	session := localChangeHintSession(t, st, profileID)
+	if texts := localChangeHintTexts(t, session); len(texts) != 1 {
+		t.Fatalf("第一次工具调用不应有提示，实际为 %#v", texts)
+	}
+
+	before, err := st.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	note := "新备注"
+	if _, err := st.EditSite("办公室", store.SiteChanges{Note: &note}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := st.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := fmt.Sprintf(
+		"权威端配置已更新（修订号 %d → %d）：网络拓扑已变化，list_servers 的 site、networks、device 字段可能不同",
+		before, after,
+	)
+	texts := localChangeHintTexts(t, session)
+	if len(texts) != 2 || texts[0] != want || !strings.HasPrefix(texts[1], `{"servers":`) {
+		t.Fatalf("拓扑变化后的工具结果 = %#v，开头应为 %q 再接原结果", texts, want)
+	}
+}
+
 // TestLocalVaultChangeHint_OtherProfileOnlyChangeDoesNotHint: 快照修订号
 // 因其他 profile 的配置变化而前进时，如果当前 profile 可见的服务器与
 // 命令策略都没变，不产生变更提示。
