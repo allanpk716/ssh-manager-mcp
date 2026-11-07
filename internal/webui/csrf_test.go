@@ -130,6 +130,29 @@ func TestCSRFTokenBoundToSession(t *testing.T) {
 	}
 }
 
+func TestOriginAllowedFromEveryConfiguredLoopbackOrigin(t *testing.T) {
+	env := newCSRFTestEnv(t)
+
+	for _, origin := range []string{
+		"http://127.0.0.1:18080",
+		"http://localhost:18080",
+		"http://[::1]:18080",
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/ui/test-write", nil)
+		req.Host = "127.0.0.1:18080"
+		req.AddCookie(env.cookie)
+		req.Header.Set("Origin", origin)
+		req.Header.Set("X-CSRF-Token", env.csrfToken)
+		rec := httptest.NewRecorder()
+		env.h.ServeHTTP(rec, req)
+		resp := rec.Result()
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("配置端口对应的回环来源 %q 应被接受，状态码 = %d", origin, resp.StatusCode)
+		}
+	}
+}
+
 func TestWriteRouteWithoutSessionRejected(t *testing.T) {
 	h, _, err := New(Config{
 		Role:        RoleStandalone,
@@ -150,5 +173,40 @@ func TestWriteRouteWithoutSessionRejected(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("无会话写请求状态码 = %d，应为 401", rec.Code)
+	}
+}
+
+func TestAllWriteMethodsRequireOriginAndCSRFToken(t *testing.T) {
+	env := newCSRFTestEnv(t)
+
+	cases := []struct {
+		name       string
+		origin     string
+		csrfHeader string
+	}{
+		{"缺少 Origin", "", "correct"},
+		{"缺少防跨站请求伪造令牌", "http://127.0.0.1:18080", ""},
+	}
+	for _, tc := range cases {
+		token := tc.csrfHeader
+		if token == "correct" {
+			token = env.csrfToken
+		}
+		req := httptest.NewRequest(http.MethodPost, "/ui/", nil)
+		req.Host = "127.0.0.1:18080"
+		req.AddCookie(env.cookie)
+		if tc.origin != "" {
+			req.Header.Set("Origin", tc.origin)
+		}
+		if token != "" {
+			req.Header.Set("X-CSRF-Token", token)
+		}
+		rec := httptest.NewRecorder()
+		env.h.ServeHTTP(rec, req)
+		resp := rec.Result()
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s：POST /ui/ 状态码 = %d，应为 403", tc.name, resp.StatusCode)
+		}
 	}
 }

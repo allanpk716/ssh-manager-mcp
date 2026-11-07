@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -112,6 +113,67 @@ func TestStartupTokenIsOneTime(t *testing.T) {
 	}
 }
 
+func TestStartupTokenHEADDoesNotConsumeToken(t *testing.T) {
+	h, startup := newTestHandler(t, RoleStandalone, nil)
+	u, err := url.Parse(startup.URL("127.0.0.1:18080"))
+	if err != nil {
+		t.Fatalf("解析启动网址失败：%v", err)
+	}
+
+	head := httptest.NewRequest(http.MethodHead, u.RequestURI(), nil)
+	head.Host = u.Host
+	headRec := httptest.NewRecorder()
+	h.ServeHTTP(headRec, head)
+	headResp := headRec.Result()
+	headResp.Body.Close()
+	if headResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("HEAD 访问启动入口状态码 = %d，应为 405", headResp.StatusCode)
+	}
+	if len(headResp.Cookies()) != 0 {
+		t.Fatal("HEAD 访问启动入口不得签发会话 cookie")
+	}
+
+	get := doGet(t, h, u.Host, u.RequestURI())
+	defer get.Body.Close()
+	if get.StatusCode != http.StatusSeeOther {
+		t.Fatalf("HEAD 之后启动令牌仍应可用，GET 状态码 = %d，应为 303", get.StatusCode)
+	}
+}
+
+func TestStartupTokenSurvivesSessionGenerationFailure(t *testing.T) {
+	h, startup := newTestHandler(t, RoleStandalone, nil)
+	u, err := url.Parse(startup.URL("127.0.0.1:18080"))
+	if err != nil {
+		t.Fatalf("解析启动网址失败：%v", err)
+	}
+
+	prev := generateSessionToken
+	calls := 0
+	generateSessionToken = func() (string, error) {
+		calls++
+		if calls == 1 {
+			return "", errors.New("第一段随机数生成失败")
+		}
+		return prev()
+	}
+	t.Cleanup(func() { generateSessionToken = prev })
+
+	failed := doGet(t, h, u.Host, u.RequestURI())
+	failed.Body.Close()
+	if failed.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("会话生成失败时状态码 = %d，应为 500", failed.StatusCode)
+	}
+	if len(failed.Cookies()) != 0 {
+		t.Fatal("会话生成失败时不得签发会话 cookie")
+	}
+
+	retried := doGet(t, h, u.Host, u.RequestURI())
+	defer retried.Body.Close()
+	if retried.StatusCode != http.StatusSeeOther {
+		t.Fatalf("会话生成失败不得作废启动令牌，重试状态码 = %d，应为 303", retried.StatusCode)
+	}
+}
+
 func TestStartupTokenWrongTokenRejected(t *testing.T) {
 	h, _ := newTestHandler(t, RoleStandalone, nil)
 	resp := doGet(t, h, "127.0.0.1:18080", "/ui/start?token=wrong-token")
@@ -122,6 +184,54 @@ func TestStartupTokenWrongTokenRejected(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "重新运行 `sshmgr ui`") {
 		t.Fatalf("错误令牌的错误页应提示重新运行 `sshmgr ui`，实际：%s", body)
+	}
+}
+
+func TestRejectedRequestsDoNotReadVersionHintOrRevealRole(t *testing.T) {
+	versionHintCalls := 0
+	h, startup, err := New(Config{
+		Role: RoleClient,
+		Servers: &stubServerSource{rows: []ServerRow{
+			{Name: "secret-server", User: "u", Host: "192.0.2.1", Port: 22},
+		}},
+		VersionHint: func() string {
+			versionHintCalls++
+			return "客户端 1.0.0 落后于权威端 1.1.0，运行 `sshmgr update` 升级"
+		},
+		Port: 18080,
+	})
+	if err != nil {
+		t.Fatalf("构造 Web UI Handler 失败：%v", err)
+	}
+
+	responses := []*http.Response{
+		doGet(t, h, "evil.example:18080", "/ui/"),
+		doGet(t, h, "127.0.0.1:18080", "/ui/"),
+		doGet(t, h, "127.0.0.1:18080", "/ui/start?token=wrong-token"),
+	}
+	for _, resp := range responses {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		page := string(body)
+		for _, leaked := range []string{
+			"客户端 · 只读",
+			"单机 · 全功能可写",
+			"客户端 1.0.0 落后于权威端 1.1.0",
+			"secret-server",
+		} {
+			if strings.Contains(page, leaked) {
+				t.Fatalf("被拒绝的请求不得在错误页泄露 %q：\n%s", leaked, page)
+			}
+		}
+	}
+	if versionHintCalls != 0 {
+		t.Fatalf("被拒绝的请求不得读取版本提示来源，实际读取 %d 次", versionHintCalls)
+	}
+
+	resp := exchangeStartupToken(t, h, startup.URL("127.0.0.1:18080"))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("有效启动令牌状态码 = %d，应为 303", resp.StatusCode)
 	}
 }
 

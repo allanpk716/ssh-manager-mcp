@@ -147,6 +147,7 @@ type handler struct {
 	caps        capabilities
 	assets      assetURLs
 	assetFiles  map[string]string
+	pages       map[string]parsedPage
 	startDigest [sha256.Size]byte
 	mu          sync.Mutex
 	startUsed   bool
@@ -177,11 +178,16 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	if err != nil {
 		return nil, Startup{}, err
 	}
+	pages, err := loadPageTemplates()
+	if err != nil {
+		return nil, Startup{}, err
+	}
 	h := &handler{
 		cfg:         cfg,
 		caps:        capabilitiesForRole(cfg.Role),
 		assets:      assets,
 		assetFiles:  assetFiles,
+		pages:       pages,
 		startDigest: sha256.Sum256([]byte(token)),
 		mux:         http.NewServeMux(),
 	}
@@ -204,7 +210,37 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusMisdirectedRequest, "请求来源不被接受", "Web UI 只允许从本机回环地址访问。请重新运行 `sshmgr ui`。")
 		return
 	}
+	if !h.writeRequestAllowed(w, r) {
+		return
+	}
 	h.mux.ServeHTTP(w, r)
+}
+
+// writeRequestAllowed 统一校验所有写请求：非 GET、HEAD、OPTIONS 都必须来自
+// 本次监听的回环来源，并携带当前会话绑定的防跨站请求伪造令牌。
+func (h *handler) writeRequestAllowed(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		return true
+	}
+	if !originAllowed(r.Header.Get("Origin"), h.cfg.Port) {
+		h.renderError(w, r, http.StatusForbidden, "请求来源校验失败", "请求来源不是本次启动的 Web UI，已拒绝。")
+		return false
+	}
+	sess := h.currentSession(r)
+	if sess == nil {
+		h.renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
+		return false
+	}
+	token := r.Header.Get("X-CSRF-Token")
+	if token == "" {
+		_ = r.ParseForm()
+		token = r.PostFormValue("csrf_token")
+	}
+	if subtle.ConstantTimeCompare([]byte(token), []byte(sess.csrf)) != 1 {
+		h.renderError(w, r, http.StatusForbidden, "防跨站请求伪造校验失败", "防跨站请求伪造令牌缺失或无效，已拒绝。请刷新页面后重试。")
+		return false
+	}
+	return true
 }
 
 // hostAllowed 判断 Host 是否为本次监听端口对应的回环地址：127.0.0.1、
@@ -223,29 +259,27 @@ func hostAllowed(host string, port int) bool {
 // handleStart 是启动入口：有效令牌首次使用即作废、签发会话并 303 重定向到
 // 不带令牌的服务器列表页；令牌缺失、错误或已用都返回 403 中文错误页。
 func (h *handler) handleStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+	if r.Method != http.MethodGet {
 		http.Error(w, "只允许 GET 访问启动入口", http.StatusMethodNotAllowed)
 		return
 	}
 	digest := sha256.Sum256([]byte(r.URL.Query().Get("token")))
-	h.mu.Lock()
-	valid := !h.startUsed && subtle.ConstantTimeCompare(digest[:], h.startDigest[:]) == 1
-	if valid {
-		h.startUsed = true
-	}
-	h.mu.Unlock()
-	if !valid {
-		h.renderError(w, r, http.StatusForbidden, "启动链接无效", "启动链接无效或已使用。请关闭本页，重新运行 `sshmgr ui` 获取新的启动链接。")
-		return
-	}
 	sess, err := newSession()
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "无法建立会话", "生成会话标识失败，请重新运行 `sshmgr ui`。")
 		return
 	}
 	h.mu.Lock()
-	h.session = sess
+	valid := !h.startUsed && subtle.ConstantTimeCompare(digest[:], h.startDigest[:]) == 1
+	if valid {
+		h.startUsed = true
+		h.session = sess
+	}
 	h.mu.Unlock()
+	if !valid {
+		h.renderError(w, r, http.StatusForbidden, "启动链接无效", "启动链接无效或已使用。请关闭本页，重新运行 `sshmgr ui` 获取新的启动链接。")
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName(h.cfg.Port),
 		Value:    sess.id,
@@ -305,16 +339,19 @@ func sessionCookieName(port int) string {
 }
 
 func newSession() (*session, error) {
-	id, err := randomToken()
+	id, err := generateSessionToken()
 	if err != nil {
 		return nil, err
 	}
-	csrf, err := randomToken()
+	csrf, err := generateSessionToken()
 	if err != nil {
 		return nil, err
 	}
 	return &session{id: id, csrf: csrf}, nil
 }
+
+// generateSessionToken 是会话随机数生成接缝，测试用它模拟系统随机数失败。
+var generateSessionToken = randomToken
 
 func randomToken() (string, error) {
 	buf := make([]byte, 32)
@@ -339,7 +376,7 @@ func (h *handler) mountPost(pattern string, fn func(http.ResponseWriter, *http.R
 			h.renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
 			return
 		}
-		if !originAllowed(r) {
+		if !originAllowed(r.Header.Get("Origin"), h.cfg.Port) {
 			h.renderError(w, r, http.StatusForbidden, "请求来源校验失败", "请求来源不是本次启动的 Web UI，已拒绝。")
 			return
 		}
@@ -356,8 +393,11 @@ func (h *handler) mountPost(pattern string, fn func(http.ResponseWriter, *http.R
 	})
 }
 
-// originAllowed 校验写请求的 Origin：必须存在，且等于本次监听的回环来源。
-func originAllowed(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	return origin != "" && origin == "http://"+r.Host
+// originAllowed 校验写请求的 Origin：必须存在，且等于由配置端口生成的任一
+// 回环来源，不信任请求自带的 Host。
+func originAllowed(origin string, port int) bool {
+	portText := strconv.Itoa(port)
+	return origin == "http://"+net.JoinHostPort("127.0.0.1", portText) ||
+		origin == "http://"+net.JoinHostPort("localhost", portText) ||
+		origin == "http://"+net.JoinHostPort("::1", portText)
 }

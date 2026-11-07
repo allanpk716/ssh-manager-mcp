@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -147,22 +146,21 @@ func TestTemplatesContainNoInlineStyleScriptOrEventAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("遍历内嵌模板失败：%v", err)
 	}
-	styleAttr := regexp.MustCompile(`(?i)\sstyle\s*=`)
-	eventAttr := regexp.MustCompile(`(?i)\son[a-z]+\s*=`)
 	for name, content := range entries {
-		if styleAttr.MatchString(content) {
-			t.Fatalf("模板 %s 含内联 style 属性", name)
+		for _, problem := range templateStaticProblems(content) {
+			t.Fatalf("模板 %s %s", name, problem)
 		}
-		if eventAttr.MatchString(content) {
-			t.Fatalf("模板 %s 含内联事件属性", name)
-		}
-		if strings.Contains(content, "hx-on") {
-			t.Fatalf("模板 %s 含 hx-on", name)
-		}
-		for _, script := range regexp.MustCompile(`<script[^>]*>`).FindAllString(content, -1) {
-			if !strings.Contains(script, "src=") && !strings.Contains(script, `type="application/json"`) {
-				t.Fatalf("模板 %s 含非 JSON 的内联脚本：%s", name, script)
-			}
-		}
+	}
+}
+
+func TestTemplateStaticScanRejectsCodeInsideExternalScript(t *testing.T) {
+	problems := templateStaticProblems(`<script src="/ui/assets/app.js">window.alert(1)</script>`)
+	if len(problems) == 0 {
+		t.Fatal("带 src 的 script 标签之间有代码时，静态扫描必须报告问题")
+	}
+
+	problems = templateStaticProblems(`<script src="/ui/assets/app.js"></script>`)
+	if len(problems) != 0 {
+		t.Fatalf("带 src 且标签之间为空的 script 应通过扫描，实际问题：%v", problems)
 	}
 }
