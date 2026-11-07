@@ -48,7 +48,7 @@ func (SecretSet) Describe(old, fresh *store.Snapshot) []string {
 		parts = append(parts, "新增机密项 "+strings.Join(added, "、"))
 	}
 	if len(removed) > 0 {
-		parts = append(parts, "删除机密项 "+strings.Join(removed, "、"))
+		parts = append(parts, "删除机密项 "+strings.Join(removed, "、")+"，引用它的模板将被拒绝")
 	}
 	for _, name := range changedValue {
 		parts = append(parts, "机密项 "+name+" 的值已更改，用到它的文件需要重新部署")

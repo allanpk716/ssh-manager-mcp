@@ -65,7 +65,7 @@ func TestDefaultHintSecretChanges(t *testing.T) {
 				snap.SecretAllows = allows(serverID1)
 			},
 			fresh: func(snap *store.Snapshot) {},
-			want:  "权威端配置已更新（修订号 10 → 11）：删除机密项 DB_PASSWORD",
+			want:  "权威端配置已更新（修订号 10 → 11）：删除机密项 DB_PASSWORD，引用它的模板将被拒绝",
 		},
 		{
 			name: "更换机密项值",

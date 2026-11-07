@@ -296,7 +296,7 @@ func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	}
 	after = env.revision(t)
 	env.pullNow()
-	want = fmt.Sprintf("权威端配置已更新（修订号 %d → %d）：删除机密项 DB_PASSWORD", before, after)
+	want = fmt.Sprintf("权威端配置已更新（修订号 %d → %d）：删除机密项 DB_PASSWORD，引用它的模板将被拒绝", before, after)
 	if got := step("删除机密项"); got != want {
 		t.Fatalf("删除机密项提示 = %q,应为 %q", got, want)
 	}
@@ -338,7 +338,7 @@ func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	}
 	after = env.revision(t)
 	env.pullNow()
-	want = fmt.Sprintf("权威端配置已更新（修订号 %d → %d）：删除机密项 DB_PASSWORD", before, after)
+	want = fmt.Sprintf("权威端配置已更新（修订号 %d → %d）：删除机密项 DB_PASSWORD，引用它的模板将被拒绝", before, after)
 	if got := step("因裁剪消失"); got != want {
 		t.Fatalf("因裁剪消失提示 = %q,应与删除提示 %q 相同", got, want)
 	}
