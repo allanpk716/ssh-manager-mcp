@@ -104,11 +104,13 @@ func TestStaticAssetRejectsNonLoopbackHost(t *testing.T) {
 
 // thirdPartyManifestEntry 是第三方前端库清单里的一条登记。
 type thirdPartyManifestEntry struct {
-	File      string `json:"file"`
-	Name      string `json:"name"`
-	Version   string `json:"version"`
-	SourceURL string `json:"source_url"`
-	SHA256    string `json:"sha256"`
+	File       string `json:"file"`
+	Name       string `json:"name"`
+	Version    string `json:"version"`
+	SourceURL  string `json:"source_url"`
+	License    string `json:"license"`
+	LicenseURL string `json:"license_url"`
+	SHA256     string `json:"sha256"`
 }
 
 func TestThirdPartyManifestMatchesEmbeddedFiles(t *testing.T) {
@@ -126,8 +128,8 @@ func TestThirdPartyManifestMatchesEmbeddedFiles(t *testing.T) {
 		t.Fatal("第三方资源清单至少应登记 htmx")
 	}
 	for _, entry := range manifest.Files {
-		if entry.File == "" || entry.Name == "" || entry.Version == "" || entry.SourceURL == "" {
-			t.Fatalf("清单条目必须写全文件名、名称、版本与来源网址：%+v", entry)
+		if entry.File == "" || entry.Name == "" || entry.Version == "" || entry.SourceURL == "" || entry.License == "" || entry.LicenseURL == "" {
+			t.Fatalf("清单条目必须写全文件名、名称、版本、来源网址与许可证：%+v", entry)
 		}
 		content, err := staticFS.ReadFile("static/" + entry.File)
 		if err != nil {

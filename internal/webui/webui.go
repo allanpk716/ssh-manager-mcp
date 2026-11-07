@@ -324,13 +324,6 @@ func randomToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// writePlainPage 写出无外部依赖的中文错误页/占位页。
-func writePlainPage(w http.ResponseWriter, status int, title, message string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	fmt.Fprintf(w, "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>%s</title></head><body><h1>%s</h1><p>%s</p></body></html>", title, title, message)
-}
-
 // mountPost 在内部路由表上登记写操作路由：所有非 GET/HEAD/OPTIONS 的业务
 // 路由都必须经它登记，统一获得会话校验、Origin 校验和与会话绑定的防跨站
 // 请求伪造令牌校验。本票没有业务写操作，测试用它挂无副作用的写路由验证
