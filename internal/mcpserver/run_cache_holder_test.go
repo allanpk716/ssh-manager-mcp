@@ -51,13 +51,12 @@ func newHolder(t *testing.T, snap *store.Snapshot, token, profileID string,
 	}
 	t.Cleanup(func() { af.Close() })
 	h := &cacheStoreHolder{reload: reload, token: token, auditFile: af, profileID: profileID}
-	st, _, tmp, err := hydrateCacheStore(token, snap, af, "")
+	temporary, _, err := hydrateCacheStore(token, snap, af, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.cur.Store(st)
-	h.stores = append(h.stores, st)
-	h.tmpPaths = append(h.tmpPaths, tmp)
+	h.cur.Store(temporary.Store)
+	h.temporaryStores = append(h.temporaryStores, temporary)
 	t.Cleanup(h.cleanup)
 	return h
 }
@@ -76,12 +75,12 @@ func TestHydrateCacheStoreDoesNotGenerateDevices(t *testing.T) {
 	}
 	defer af.Close()
 
-	hydrated, _, tmpPath, err := hydrateCacheStore(token, snap, af, "")
+	temporary, _, err := hydrateCacheStore(token, snap, af, "")
 	if err != nil {
 		t.Fatalf("hydrateCacheStore: %v", err)
 	}
-	defer hydrated.Close()
-	defer os.Remove(tmpPath)
+	defer temporary.Close()
+	hydrated := temporary.Store
 
 	devices, err := hydrated.ListDevices(store.DeviceFilter{})
 	if err != nil {

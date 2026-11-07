@@ -27,8 +27,8 @@ var topologyStdinIsInteractive = func() bool {
 
 // topologyRoleFor 沿用机密项命令的角色判定链：vault 优先，其次看客户端
 // 缓存登记；两者都没有时给出初始化引导。
-func topologyRoleFor() (policyRole, error) {
-	return roleForVaultBackedCommand("", errTopologyNeedVault)
+func topologyRoleFor(instance string) (policyRole, error) {
+	return roleForVaultBackedCommand(instance, errTopologyNeedVault)
 }
 
 // requireTopologyVault 断言本机持有 vault 并返回已解锁的存储。客户端上的
@@ -42,9 +42,10 @@ func requireTopologyVault() (*store.Store, error) {
 
 // openTopologyViewStore 打开拓扑查看命令的数据源：权威端与单机部署读
 // vault；客户端把本地缓存快照导入一个一次性临时库后只读查询，复用存储
-// 层既有的筛选与排序语义。返回的清理函数负责关闭并删除临时库。
-func openTopologyViewStore() (*store.Store, func(), error) {
-	role, err := topologyRoleFor()
+// 层既有的筛选与排序语义。返回的清理函数负责关闭并删除临时库及其附属
+// 文件。
+func openTopologyViewStore(instance string) (*store.Store, func(), error) {
+	role, err := topologyRoleFor(instance)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -56,36 +57,45 @@ func openTopologyViewStore() (*store.Store, func(), error) {
 		return s, func() { s.Close() }, nil
 	}
 
+	snapshot, err := loadTopologyClientSnapshot(instance)
+	if err != nil {
+		return nil, nil, err
+	}
+	temporary, err := store.OpenTemporaryClientCacheStore(snapshot, "sshmgr-topology-*.db")
+	if err != nil {
+		return nil, nil, err
+	}
+	temporary.Store.SetReadOnly(nil)
+	return temporary.Store, func() { _ = temporary.Close() }, nil
+}
+
+// topologyInstanceFlagHelp 是四个拓扑查看命令的 --instance 说明。
+const topologyInstanceFlagHelp = "在客户端上读取命名实例 instances/<名称> 的缓存；省略时读默认缓存槽；只有命名实例时必须指定；与 SSHMGR_CACHE_DIR、SSHMGR_CACHE_DEK 互斥"
+
+// loadTopologyClientSnapshot 按命令策略查看命令的同一规则选择客户端缓存
+// 实例：点名实例就只读该实例；默认缓存槽为空而本机有命名实例时报错并列
+// 出实例名，绝不替用户猜。拓扑查看必须有快照，读失败时不像命令策略那样
+// 退回内置默认规则，而是保留原有的缓存拉取指引。
+func loadTopologyClientSnapshot(instance string) (*store.Snapshot, error) {
+	if instance != "" {
+		snapshot, err := clientops.LoadCacheSnapshotFor(instance)
+		if err != nil {
+			return nil, fmt.Errorf("cache instance %q: %w", instance, err)
+		}
+		return snapshot, nil
+	}
+	if os.Getenv("SSHMGR_CACHE_DIR") == "" && !cachePresentFor("") {
+		if names, listErr := clientops.ListInstances(); listErr == nil && len(names) > 0 {
+			return nil, fmt.Errorf(
+				"no cache in the default slot, but %d named client instance(s) exist: %s — pass --instance <name> to read topology (the instance is never guessed)",
+				len(names), strings.Join(names, ", "))
+		}
+	}
 	snapshot, err := clientops.LoadCacheSnapshotFor("")
 	if err != nil {
-		return nil, nil, fmt.Errorf("本机客户端缓存不可读：请先执行 cache pull，再查看网络拓扑（%w）", err)
+		return nil, fmt.Errorf("本机客户端缓存不可读：请先执行 cache pull，再查看网络拓扑（%w）", err)
 	}
-	throwawayKey, err := store.GenerateMasterKey()
-	if err != nil {
-		return nil, nil, err
-	}
-	tempFile, err := os.CreateTemp("", "sshmgr-topology-*.db")
-	if err != nil {
-		return nil, nil, err
-	}
-	tempPath := tempFile.Name()
-	tempFile.Close()
-	removeTempStore := func() { os.Remove(tempPath) }
-	s, err := store.Open(tempPath, throwawayKey)
-	if err != nil {
-		removeTempStore()
-		return nil, nil, err
-	}
-	if err := s.ImportSnapshotForClientCache(snapshot); err != nil {
-		s.Close()
-		removeTempStore()
-		return nil, nil, err
-	}
-	s.SetReadOnly(nil)
-	return s, func() {
-		s.Close()
-		removeTempStore()
-	}, nil
+	return snapshot, nil
 }
 
 func newSitesCmd() *cobra.Command {
@@ -172,12 +182,13 @@ func sitesRmCmd() *cobra.Command {
 }
 
 func sitesListCmd() *cobra.Command {
+	var instance string
 	c := &cobra.Command{
-		Use:   "list",
+		Use:   "list [--instance <name>]",
 		Args:  cobra.NoArgs,
 		Short: "List topology sites and their physical networks",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeStore, err := openTopologyViewStore()
+			s, closeStore, err := openTopologyViewStore(instance)
 			if err != nil {
 				return err
 			}
@@ -221,6 +232,7 @@ func sitesListCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&instance, "instance", "", topologyInstanceFlagHelp)
 	return c
 }
 
@@ -389,13 +401,13 @@ func networksRmCmd() *cobra.Command {
 }
 
 func networksListCmd() *cobra.Command {
-	var site, networkType string
+	var site, networkType, instance string
 	c := &cobra.Command{
-		Use:   "list [--site 站点] [--type physical|virtual]",
+		Use:   "list [--site 站点] [--type physical|virtual] [--instance <name>]",
 		Args:  cobra.NoArgs,
 		Short: "List topology networks, optionally filtered",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeStore, err := openTopologyViewStore()
+			s, closeStore, err := openTopologyViewStore(instance)
 			if err != nil {
 				return err
 			}
@@ -424,6 +436,7 @@ func networksListCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&site, "site", "", "只显示属于该站点的物理局域网")
 	c.Flags().StringVar(&networkType, "type", "", "只显示该类型：physical 或 virtual")
+	c.Flags().StringVar(&instance, "instance", "", topologyInstanceFlagHelp)
 	return c
 }
 

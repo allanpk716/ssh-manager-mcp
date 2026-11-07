@@ -20,14 +20,14 @@ func newDevicesCmd() *cobra.Command {
 }
 
 func devicesListCmd() *cobra.Command {
-	var site, network string
+	var site, network, instance string
 	var unassigned bool
 	c := &cobra.Command{
-		Use:   "list [--site 站点] [--network 网络] [--unassigned]",
+		Use:   "list [--site 站点] [--network 网络] [--unassigned] [--instance <name>]",
 		Args:  cobra.NoArgs,
 		Short: "List topology devices, optionally filtered",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeStore, err := openTopologyViewStore()
+			s, closeStore, err := openTopologyViewStore(instance)
 			if err != nil {
 				return err
 			}
@@ -68,6 +68,7 @@ func devicesListCmd() *cobra.Command {
 	c.Flags().StringVar(&site, "site", "", "只显示在这个站点的物理局域网里的设备")
 	c.Flags().StringVar(&network, "network", "", "只显示在这个网络里的设备")
 	c.Flags().BoolVar(&unassigned, "unassigned", false, "只显示没有任何网络成员的设备")
+	c.Flags().StringVar(&instance, "instance", "", topologyInstanceFlagHelp)
 	return c
 }
 
@@ -374,12 +375,13 @@ func devicesEditCmd() *cobra.Command {
 }
 
 func devicesShowCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "show NAME",
+	var instance string
+	c := &cobra.Command{
+		Use:   "show NAME [--instance <name>]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Show a topology device",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeStore, err := openTopologyViewStore()
+			s, closeStore, err := openTopologyViewStore(instance)
 			if err != nil {
 				return err
 			}
@@ -400,6 +402,8 @@ func devicesShowCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&instance, "instance", "", topologyInstanceFlagHelp)
+	return c
 }
 
 // printDevice 输出设备详情；网络成员由网络成员命令补上。

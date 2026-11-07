@@ -327,6 +327,56 @@ func TestTopologyClientViewsCacheAndRefusesWrites(t *testing.T) {
 	}
 }
 
+// seedTopologyNamedInstanceFixture 把客户端拓扑缓存放进命名实例 laptop，并
+// 保持默认缓存槽为空，用来测试拓扑查看命令的 --instance 选择。
+func seedTopologyNamedInstanceFixture(t *testing.T) {
+	t.Helper()
+	defaultCacheDir := seedTopologyClientCacheFixture(t)
+	userDir := t.TempDir()
+	instanceDir := filepath.Join(userDir, "ssh-manager", "instances", "laptop")
+	if err := os.MkdirAll(instanceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, fileName := range []string{"cache.bin", "cache.auth.json"} {
+		if err := os.Rename(filepath.Join(defaultCacheDir, fileName), filepath.Join(instanceDir, fileName)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
+	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
+}
+
+// TestTopologyClientInstanceFlagReadsNamedCache 覆盖四个只读拓扑命令的客
+// 户端实例选择：命名实例可用 --instance 指定；只有命名实例时不静默猜默认槽。
+func TestTopologyClientInstanceFlagReadsNamedCache(t *testing.T) {
+	seedTopologyNamedInstanceFixture(t)
+
+	if _, err := runCLI(t, "sites", "list"); err == nil ||
+		!strings.Contains(err.Error(), "--instance") || !strings.Contains(err.Error(), "laptop") {
+		t.Fatalf("sites list without --instance must list the named instance instead of guessing, got %v", err)
+	}
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"sites", "list", "--instance", "laptop"}, "家A"},
+		{[]string{"networks", "list", "--instance", "laptop"}, "家A局域网"},
+		{[]string{"devices", "list", "--instance", "laptop"}, "工作站"},
+		{[]string{"devices", "show", "工作站", "--instance", "laptop"}, "gpu"},
+	}
+	for _, testCase := range cases {
+		out, err := runCLI(t, testCase.args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", testCase.args, err, out.String())
+		}
+		if !strings.Contains(out.String(), testCase.want) {
+			t.Fatalf("%v must read the named instance cache, got:\n%s", testCase.args, out.String())
+		}
+	}
+}
+
 // TestTopologyWithoutVaultOrCacheGuidesInitialization 覆盖既没有 vault 也
 // 没有客户端缓存的机器：写与查看都给初始化引导，不伪装成空拓扑。
 func TestTopologyWithoutVaultOrCacheGuidesInitialization(t *testing.T) {
