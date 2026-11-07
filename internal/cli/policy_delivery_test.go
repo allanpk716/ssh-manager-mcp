@@ -152,7 +152,7 @@ func TestCachePull_DeliversPolicyRules_AndTheyTakeEffect(t *testing.T) {
 	if _, err := src.DisableDefaultRule("POSIX-FORK-BOMB"); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := src.ExportSnapshotForProfile(pid, false)
+	snap, err := src.ExportSnapshotForProfile(pid, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

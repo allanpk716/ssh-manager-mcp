@@ -178,7 +178,7 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
 			Name:        BrokerTools[0], // "list_servers"
-			Description: "List the SSH servers you may use. ALWAYS call this first to discover server ids and capabilities before exec_command. Returns id/name/host/user/has_sudo (host is \"hidden\" unless the owner exposed it — address servers via id, never by host), plus owner-provided context: role, services (what's deployed), location, hardware, caveats (special handling — read before acting), tags, description. Never includes credentials.",
+			Description: "List the SSH servers you may use. ALWAYS call this first to discover server ids and capabilities before exec_command. Returns id/name/host/user/has_sudo (host is \"hidden\" unless the owner exposed it — address servers via id, never by host), plus owner-provided context: role, services (what's deployed), location, hardware, caveats (special handling — read before acting), tags, description, and topology registration fields device/site/networks. Topology names mean two entries may share one machine or network; they are registered information only and do NOT mean the server is currently reachable. Never includes credentials or topology addresses.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListServersOutput, error) {
 			st := storeFromContext(ctx, storeFn)

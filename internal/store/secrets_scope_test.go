@@ -40,7 +40,7 @@ func TestExportSnapshotForProfile_ScopesSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	declared, err := s.ExportSnapshotForProfile(profileA, true)
+	declared, err := s.ExportSnapshotForProfile(profileA, true, "")
 	if err != nil {
 		t.Fatalf("导出声明版本的客户端快照失败：%v", err)
 	}
@@ -68,7 +68,7 @@ func TestExportSnapshotForProfile_ScopesSecrets(t *testing.T) {
 		t.Fatalf("客户端快照泄露了范围外服务器名 srvB：%s", encoded)
 	}
 
-	undeclared, err := s.ExportSnapshotForProfile(profileA, false)
+	undeclared, err := s.ExportSnapshotForProfile(profileA, false, "")
 	if err != nil {
 		t.Fatalf("导出未声明版本的客户端快照失败：%v", err)
 	}
@@ -182,7 +182,7 @@ func TestExportSnapshotForProfile_SecretsFollowRevokedGrant(t *testing.T) {
 	if _, _, err := s.SyncServers(profileA, nil); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := s.ExportSnapshotForProfile(profileA, true)
+	snapshot, err := s.ExportSnapshotForProfile(profileA, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestExportSnapshotForProfile_SecretsFollowServerDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	before, err := s.ExportSnapshotForProfile(profileA, true)
+	before, err := s.ExportSnapshotForProfile(profileA, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestExportSnapshotForProfile_SecretsFollowServerDeletion(t *testing.T) {
 	if err := s.DeleteServerCascading(serverA.ID); err != nil {
 		t.Fatal(err)
 	}
-	after, err := s.ExportSnapshotForProfile(profileA, true)
+	after, err := s.ExportSnapshotForProfile(profileA, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}

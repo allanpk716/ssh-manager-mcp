@@ -945,7 +945,7 @@ func TestSnapshotRevision_RidesBothExportPaths(t *testing.T) {
 	if whole.Version != 1 || whole.SnapshotRevision != rev {
 		t.Fatalf("全库导出:信封版本 = %d,快照修订号 = %d,应为 1/%d", whole.Version, whole.SnapshotRevision, rev)
 	}
-	scoped, err := s.ExportSnapshotForProfile(seed.profileID, false)
+	scoped, err := s.ExportSnapshotForProfile(seed.profileID, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
