@@ -48,7 +48,7 @@ func mapFallbackToFixture(t *testing.T, srv *models.Server, addr string) {
 // TestConnectServerEntryDefaultDialRecordsThenVerifiesHostKey: 统一入口默认
 // 注入现有的按「主机:端口」拨号的底层函数——不替换任何注入点时，用条目的
 // 兜底地址直连进程内 SSH 服务器：首次连接按服务器条目记录主机密钥，第二次
-// 连接校验同一把锚并成功。本票的连接说明恒为空。
+// 连接校验同一把锚并成功。没有地址跳过或成功地址缓存警告时，连接说明为空。
 func TestConnectServerEntryDefaultDialRecordsThenVerifiesHostKey(t *testing.T) {
 	st := &fakeHostKeyStore{}
 	addr, _, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})

@@ -7,9 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"ssh-manager-mcp/internal/instname"
+	"ssh-manager-mcp/internal/clientcache"
 	"ssh-manager-mcp/internal/models"
-	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
@@ -150,21 +149,9 @@ func deviceByID(st *store.Store, id string) (*models.Device, error) {
 // 客户端缓存辅助函数位于依赖图上层；本机设备解析必须位于服务器代理层之
 // 下，统一拨号入口才能使用它而不形成循环依赖。
 func cacheDeviceIDFor(instance string) string {
-	if instance != "" {
-		if err := instname.Valid(instance); err != nil {
-			return ""
-		}
-	}
-	dir := os.Getenv("SSHMGR_CACHE_DIR")
-	if dir == "" {
-		base, err := paths.UserConfigDir()
-		if err != nil {
-			return ""
-		}
-		dir = filepath.Join(base, "ssh-manager")
-		if instance != "" {
-			dir = filepath.Join(dir, "instances", instance)
-		}
+	dir, err := clientcache.DirectoryFor(instance)
+	if err != nil {
+		return ""
 	}
 	blob, err := os.ReadFile(filepath.Join(dir, "cache.meta.json"))
 	if err != nil {

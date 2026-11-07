@@ -418,8 +418,8 @@ func deleteEntryPinWithAudit(tx *sql.Tx, srv *models.Server) error {
 	})
 }
 
-// EntryFallbackAddr 渲染条目的兜底 SSH 地址「Host:端口」。本票阶段每个条目
-// 只有这一个候选地址；多地址按序选址由网络拓扑票接入。
+// EntryFallbackAddr 渲染条目的兜底 SSH 地址「Host:端口」。它始终是统一
+// 拨号入口的最后一个候选地址。
 func EntryFallbackAddr(srv *models.Server) string {
 	return fallbackAddr(srv.Host, srv.Port)
 }
@@ -429,21 +429,25 @@ func fallbackAddr(host string, port int) string {
 	return fmt.Sprintf("%s:%d", host, port)
 }
 
-// NormalizeSSHAddress renders a host and port in one canonical form. IPv6
-// addresses are bracketed; IP addresses use their standard text and domain
-// names are case-insensitive.
-func NormalizeSSHAddress(address string, port int) string {
+// NormalizeSSHHost renders one host name in the canonical form shared by
+// topology addresses and complete SSH addresses. IP addresses use their
+// standard text; domain names are case-insensitive.
+func NormalizeSSHHost(address string) string {
 	address = strings.TrimSpace(address)
+	host := address
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
+	}
+	return strings.ToLower(host)
+}
+
+// NormalizeSSHAddress renders a complete SSH address in one canonical form.
+func NormalizeSSHAddress(address string, port int) string {
 	host, portText := address, strconv.Itoa(port)
 	if parsedHost, parsedPort, err := net.SplitHostPort(address); err == nil {
 		host, portText = parsedHost, parsedPort
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		host = ip.String()
-	} else {
-		host = strings.ToLower(host)
-	}
-	return net.JoinHostPort(host, portText)
+	return net.JoinHostPort(NormalizeSSHHost(host), portText)
 }
 
 // ContainsSSHAddress reports whether one complete SSH address is in a
@@ -465,26 +469,13 @@ func (s *Store) EntryVirtualLanAddresses(srv *models.Server) ([]string, error) {
 	if s == nil || srv == nil || srv.DeviceID == "" {
 		return nil, nil
 	}
-	rows, err := s.db.Query(`
+	return s.networkMembershipAddresses(`
 		SELECT member.address
 		FROM network_memberships member
 		JOIN networks network ON network.id=member.network_id
 		WHERE member.device_id=? AND network.type=?
 		ORDER BY member.registration_order,network.name,member.address`,
-		srv.DeviceID, models.NetworkVirtual)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]string, 0)
-	for rows.Next() {
-		var address string
-		if err := rows.Scan(&address); err != nil {
-			return nil, err
-		}
-		out = append(out, NormalizeSSHAddress(address, srv.Port))
-	}
-	return out, rows.Err()
+		srv.Port, srv.DeviceID, models.NetworkVirtual)
 }
 
 // EntryCandidateAddresses 返回条目所属设备的全部网络成员地址，加上条目的
@@ -493,11 +484,19 @@ func (s *Store) EntryCandidateAddresses(srv *models.Server) ([]string, error) {
 	if s == nil || srv == nil {
 		return nil, nil
 	}
-	rows, err := s.db.Query(`
+	out, err := s.networkMembershipAddresses(`
 		SELECT member.address
 		FROM network_memberships member
 		WHERE member.device_id=?
-		ORDER BY member.registration_order,member.address`, srv.DeviceID)
+		ORDER BY member.registration_order,member.address`, srv.Port, srv.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, NormalizeSSHAddress(srv.Host, srv.Port)), nil
+}
+
+func (s *Store) networkMembershipAddresses(query string, port int, arguments ...any) ([]string, error) {
+	rows, err := s.db.Query(query, arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -508,10 +507,7 @@ func (s *Store) EntryCandidateAddresses(srv *models.Server) ([]string, error) {
 		if err := rows.Scan(&address); err != nil {
 			return nil, err
 		}
-		out = append(out, NormalizeSSHAddress(address, srv.Port))
+		out = append(out, NormalizeSSHAddress(address, port))
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return append(out, NormalizeSSHAddress(srv.Host, srv.Port)), nil
+	return out, rows.Err()
 }

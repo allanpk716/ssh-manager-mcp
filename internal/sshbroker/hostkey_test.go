@@ -296,8 +296,9 @@ func TestHostKeyTOFU_FirstTrustUsesDialedHandshakeAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cb("192.0.2.10:22", nil, testPublicKey(t)); err == nil {
-		t.Fatal("兜底地址不在虚拟局域网候选列表中，首次信任应拒绝")
+	if err := cb("192.0.2.10:22", nil, testPublicKey(t)); err == nil ||
+		!strings.Contains(err.Error(), "首次锚定只能使用虚拟局域网地址") {
+		t.Fatalf("兜底地址不在虚拟局域网候选列表中，首次信任应拒绝并说明原因：%v", err)
 	}
 	if other.saves != 0 {
 		t.Fatal("被拒绝的首次信任不应保存主机密钥")

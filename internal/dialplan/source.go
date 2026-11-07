@@ -3,13 +3,11 @@
 package dialplan
 
 import (
-	"os"
 	"path/filepath"
 
+	"ssh-manager-mcp/internal/clientcache"
 	"ssh-manager-mcp/internal/dialdevice"
-	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/models"
-	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
@@ -123,23 +121,11 @@ func (s *StoreSource) successCache() (*sshbroker.FileDialSuccessCache, bool, err
 	var directory string
 	switch state.Role {
 	case roles.RoleClient:
-		if s.instance != "" {
-			if err := instname.Valid(s.instance); err != nil {
-				return nil, false, err
-			}
+		resolved, err := clientcache.DirectoryFor(s.instance)
+		if err != nil {
+			return nil, false, err
 		}
-		if override := os.Getenv("SSHMGR_CACHE_DIR"); override != "" {
-			directory = override
-		} else {
-			base, err := paths.UserConfigDir()
-			if err != nil {
-				return nil, false, err
-			}
-			directory = filepath.Join(base, "ssh-manager")
-			if s.instance != "" {
-				directory = filepath.Join(directory, "instances", s.instance)
-			}
-		}
+		directory = resolved
 	case roles.RoleStandalone, roles.RoleServer:
 		statePath, err := roles.LocalDevicePath()
 		if err != nil {

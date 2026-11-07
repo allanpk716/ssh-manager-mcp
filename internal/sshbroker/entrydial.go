@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"sort"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
 )
 
 // DialAddressSource 标明一个候选地址来自哪一级选址优先级。
@@ -58,8 +58,7 @@ type DialAddressPlan struct {
 	FallbackOnlyReason FallbackOnlyReason
 }
 
-// DialAttemptError 记录一个候选地址的失败结果。后续主机密钥跳过与成功地址
-// 缓存票可以在这一层补充结果分类，而不改变统一拨号入口的调用方。
+// DialAttemptError 记录一个候选地址的失败结果，供逐地址错误汇总使用。
 type DialAttemptError struct {
 	Candidate DialAddress
 	Err       error
@@ -118,11 +117,7 @@ func candidateFailureText(err error, host string, port int) string {
 // normalizeDialAddress 统一 IP 与域名的等价写法，供去重使用。IPv6 归一为
 // net.IP 的标准文本；域名按大小写不敏感处理。
 func normalizeDialAddress(address string) string {
-	address = strings.TrimSpace(address)
-	if ip := net.ParseIP(address); ip != nil {
-		return ip.String()
-	}
-	return strings.ToLower(address)
+	return store.NormalizeSSHHost(address)
 }
 
 // PlanServerDialAddresses 是按网络拓扑规划候选 SSH 地址的纯函数：只取拨号
@@ -154,12 +149,11 @@ func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.Netw
 			continue
 		}
 		source := DialAddressVirtual
-		rank := 1
 		switch membership.NetworkType {
 		case models.NetworkPhysical:
-			source, rank = DialAddressPhysical, 0
+			source = DialAddressPhysical
 		case models.NetworkVirtual:
-			source, rank = DialAddressVirtual, 1
+			source = DialAddressVirtual
 		default:
 			continue
 		}
@@ -170,12 +164,12 @@ func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.Netw
 				NetworkSequence: sequenceByNetwork[membership.NetworkID],
 				Source:          source, RegistrationOrder: membership.RegistrationOrder,
 			},
-			key: normalizeDialAddress(membership.Address), rank: rank,
+			key: normalizeDialAddress(membership.Address), rank: dialAddressPriority(source),
 		})
 	}
 	prepared = append(prepared, preparedAddress{
 		item: DialAddress{Address: fallbackHost, Source: DialAddressFallback},
-		key:  normalizeDialAddress(fallbackHost), rank: 2,
+		key:  normalizeDialAddress(fallbackHost), rank: dialAddressPriority(DialAddressFallback),
 	})
 	sort.SliceStable(prepared, func(i, j int) bool {
 		if prepared[i].rank != prepared[j].rank {
@@ -321,7 +315,7 @@ func ResolveAddressTimeout() (time.Duration, error) {
 // ConnectServerEntry 是 sshmgr 发起 SSH 连接的统一生产入口：按目标服务器
 // 条目规划候选地址、逐个试连，返回已建立的客户端与连接说明。主机密钥与
 // 条目锚不一致的地址会被跳过；说明只用网络名加序号或「兜底地址」指称，
-// 不泄露 IP 或域名。成功地址缓存由后续票在同一个循环内接入。
+// 不泄露 IP 或域名。连接成功的地址会写入请求显式携带的成功地址缓存。
 func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []string, error) {
 	addressTimeout := req.AddressTimeout
 	if addressTimeout == 0 {
@@ -521,6 +515,15 @@ func orderPlanWithDialSuccess(plan DialAddressPlan, records []DialSuccessRecord,
 
 func dialAddressSourcesInPriorityOrder() []DialAddressSource {
 	return []DialAddressSource{DialAddressPhysical, DialAddressVirtual, DialAddressFallback}
+}
+
+func dialAddressPriority(source DialAddressSource) int {
+	for priority, candidate := range dialAddressSourcesInPriorityOrder() {
+		if candidate == source {
+			return priority
+		}
+	}
+	return len(dialAddressSourcesInPriorityOrder())
 }
 
 func dialSuccessRecordValid(record DialSuccessRecord, now time.Time) bool {
