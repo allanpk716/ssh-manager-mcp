@@ -305,3 +305,82 @@ func exchangeStartupTokenWithHost(t *testing.T, h http.Handler, host, startupURL
 	}
 	return doGet(t, h, host, u.RequestURI())
 }
+
+// assertSecurityHeaders 断言所有响应都必须携带的安全头。
+func assertSecurityHeaders(t *testing.T, resp *http.Response, where string) {
+	t.Helper()
+	wantCSP := "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+	if got := resp.Header.Get("Content-Security-Policy"); got != wantCSP {
+		t.Fatalf("%s 的内容安全策略 = %q，应为 %q", where, got, wantCSP)
+	}
+	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("%s 的 X-Content-Type-Options = %q，应为 nosniff", where, got)
+	}
+	if got := resp.Header.Get("Referrer-Policy"); got != "no-referrer" {
+		t.Fatalf("%s 的 Referrer-Policy = %q，应为 no-referrer", where, got)
+	}
+}
+
+func TestSecurityHeadersOnEveryResponse(t *testing.T) {
+	h, _ := newTestHandler(t, RoleStandalone, []ServerRow{{Name: "web-1"}})
+
+	full := doGet(t, h, "127.0.0.1:18080", "/ui/")
+	defer full.Body.Close()
+	assertSecurityHeaders(t, full, "整页")
+	if got := full.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("整页 Cache-Control = %q，应为 no-store", got)
+	}
+
+	fragment := doGet(t, h, "127.0.0.1:18080", "/ui/")
+	fragment.Body.Close()
+	assertSecurityHeaders(t, fragment, "片段")
+
+	badToken := doGet(t, h, "127.0.0.1:18080", "/ui/start?token=bad")
+	badToken.Body.Close()
+	assertSecurityHeaders(t, badToken, "错误页")
+
+	noSession := doGet(t, h, "127.0.0.1:18080", "/ui/unknown")
+	noSession.Body.Close()
+	assertSecurityHeaders(t, noSession, "无会话错误页")
+
+	badHost := doGet(t, h, "evil.example:18080", "/ui/")
+	badHost.Body.Close()
+	assertSecurityHeaders(t, badHost, "Host 被拒响应")
+}
+
+func TestFragmentVersusFullPage(t *testing.T) {
+	h, startup := newTestHandler(t, RoleStandalone, []ServerRow{{Name: "web-1"}})
+
+	full := exchangeStartupToken(t, h, startup.URL("127.0.0.1:18080"))
+	var cookie *http.Cookie
+	if len(full.Cookies()) == 1 {
+		cookie = full.Cookies()[0]
+	}
+	full.Body.Close()
+	if cookie == nil {
+		t.Fatal("启动令牌换会话后应得到会话 cookie")
+	}
+
+	fullReq := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	fullReq.Host = "127.0.0.1:18080"
+	fullReq.AddCookie(cookie)
+	fullRec := httptest.NewRecorder()
+	h.ServeHTTP(fullRec, fullReq)
+	if !strings.Contains(fullRec.Body.String(), "<html") {
+		t.Fatalf("普通请求应返回整页：\n%s", fullRec.Body.String())
+	}
+
+	fragReq := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	fragReq.Host = "127.0.0.1:18080"
+	fragReq.AddCookie(cookie)
+	fragReq.Header.Set("HX-Request", "true")
+	fragRec := httptest.NewRecorder()
+	h.ServeHTTP(fragRec, fragReq)
+	fragment := fragRec.Body.String()
+	if strings.Contains(fragment, "<html") {
+		t.Fatalf("htmx 请求不应包含布局外壳：\n%s", fragment)
+	}
+	if !strings.Contains(fragment, "web-1") {
+		t.Fatalf("片段仍应包含列表内容：\n%s", fragment)
+	}
+}

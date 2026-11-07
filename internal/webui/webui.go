@@ -112,6 +112,10 @@ type handler struct {
 const (
 	startPath = "/ui/start"
 	listPath  = "/ui/"
+
+	// contentSecurityPolicy 只允许同源脚本、样式、连接、图片与字体，禁止
+	// 内联脚本、内联事件属性、内联样式以及任何被嵌入、跳转的可能。
+	contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 )
 
 // New 构造 Web UI 的根处理器与一次性启动令牌。构造完成后令牌只在第一次
@@ -137,8 +141,14 @@ func New(cfg Config) (http.Handler, Startup, error) {
 // ServeHTTP 让 handler 直接作为 http.Server 的根处理器使用。所有请求（包括
 // 启动入口与静态资源）先校验回环 Host，拒绝域名重绑定后再进入路由。
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// 安全头对所有响应生效（静态资源随后覆盖缓存策略）；HTML 默认不缓存，
+	// 静态资源在自身处理器里改成长期缓存。
+	w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cache-Control", "no-store")
 	if !hostAllowed(r.Host, h.cfg.Port) {
-		renderError(w, http.StatusMisdirectedRequest, "请求来源不被接受", "Web UI 只允许从本机回环地址访问。请重新运行 `sshmgr ui`。")
+		renderError(w, r, http.StatusMisdirectedRequest, "请求来源不被接受", "Web UI 只允许从本机回环地址访问。请重新运行 `sshmgr ui`。")
 		return
 	}
 	h.mux.ServeHTTP(w, r)
@@ -172,12 +182,12 @@ func (h *handler) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 	if !valid {
-		renderError(w, http.StatusForbidden, "启动链接无效", "启动链接无效或已使用。请关闭本页，重新运行 `sshmgr ui` 获取新的启动链接。")
+		renderError(w, r, http.StatusForbidden, "启动链接无效", "启动链接无效或已使用。请关闭本页，重新运行 `sshmgr ui` 获取新的启动链接。")
 		return
 	}
 	sess, err := newSession()
 	if err != nil {
-		renderError(w, http.StatusInternalServerError, "无法建立会话", "生成会话标识失败，请重新运行 `sshmgr ui`。")
+		renderError(w, r, http.StatusInternalServerError, "无法建立会话", "生成会话标识失败，请重新运行 `sshmgr ui`。")
 		return
 	}
 	h.mu.Lock()
@@ -198,22 +208,22 @@ func (h *handler) handleStart(w http.ResponseWriter, r *http.Request) {
 func (h *handler) handleUIRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != listPath {
 		if sess := h.currentSession(r); sess == nil {
-			renderError(w, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
+			renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
 			return
 		}
-		renderError(w, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
 	if sess := h.currentSession(r); sess == nil {
-		renderError(w, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
+		renderError(w, r, http.StatusUnauthorized, "需要启动会话", "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
 		return
 	}
 	rows, err := h.cfg.Servers.Servers()
 	if err != nil {
-		renderError(w, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请重新运行 `sshmgr ui`。")
+		renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请重新运行 `sshmgr ui`。")
 		return
 	}
-	renderFullPage(w, http.StatusOK, "servers.tmpl", pageData{Title: "服务器", Servers: rows})
+	renderPage(w, r, http.StatusOK, "servers.tmpl", pageData{Title: "服务器", Servers: rows})
 }
 
 // currentSession 校验请求携带的会话 cookie，返回当前会话；无会话、cookie
