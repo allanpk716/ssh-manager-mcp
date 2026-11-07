@@ -145,6 +145,8 @@ type session struct {
 type handler struct {
 	cfg         Config
 	caps        capabilities
+	assets      assetURLs
+	assetFiles  map[string]string
 	startDigest [sha256.Size]byte
 	mu          sync.Mutex
 	startUsed   bool
@@ -171,13 +173,20 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	if err != nil {
 		return nil, Startup{}, fmt.Errorf("生成启动令牌失败：%w", err)
 	}
+	assets, assetFiles, err := loadAssets()
+	if err != nil {
+		return nil, Startup{}, err
+	}
 	h := &handler{
 		cfg:         cfg,
 		caps:        capabilitiesForRole(cfg.Role),
+		assets:      assets,
+		assetFiles:  assetFiles,
 		startDigest: sha256.Sum256([]byte(token)),
 		mux:         http.NewServeMux(),
 	}
 	h.mux.HandleFunc(startPath, h.handleStart)
+	h.mux.HandleFunc("/ui/assets/", h.handleAsset)
 	h.mux.HandleFunc(listPath, h.handleUIRoot)
 	return h, Startup{token: token}, nil
 }

@@ -331,7 +331,12 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 		t.Fatalf("整页 Cache-Control = %q，应为 no-store", got)
 	}
 
-	fragment := doGet(t, h, "127.0.0.1:18080", "/ui/")
+	fragReq := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	fragReq.Host = "127.0.0.1:18080"
+	fragReq.Header.Set("HX-Request", "true")
+	fragRec := httptest.NewRecorder()
+	h.ServeHTTP(fragRec, fragReq)
+	fragment := fragRec.Result()
 	fragment.Body.Close()
 	assertSecurityHeaders(t, fragment, "片段")
 
@@ -479,5 +484,29 @@ func TestServerNamesAreHTMLEscaped(t *testing.T) {
 	}
 	if !strings.Contains(page, "&lt;script&gt;alert(1)&lt;/script&gt;") {
 		t.Fatalf("转义后的服务器名称应出现在页面中：\n%s", page)
+	}
+}
+
+func TestUnknownUIPathReturnsChinese404WithSession(t *testing.T) {
+	h, startup := newTestHandler(t, RoleStandalone, []ServerRow{{Name: "web-1"}})
+	resp := exchangeStartupToken(t, h, startup.URL("127.0.0.1:18080"))
+	var cookie *http.Cookie
+	if len(resp.Cookies()) == 1 {
+		cookie = resp.Cookies()[0]
+	}
+	resp.Body.Close()
+	if cookie == nil {
+		t.Fatal("启动令牌换会话后应得到会话 cookie")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/ui/not-exist", nil)
+	req.Host = "127.0.0.1:18080"
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("已登录访问未知地址状态码 = %d，应为 404", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "页面不存在") {
+		t.Fatalf("未知地址应返回中文 404 页：%s", rec.Body.String())
 	}
 }

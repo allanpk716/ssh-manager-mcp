@@ -13,6 +13,7 @@ var templateFS embed.FS
 // 不另建一套传递结构。
 type pageData struct {
 	Title        string
+	Assets       assetURLs
 	Caps         capabilities
 	VersionHint  string
 	CSRFToken    string
@@ -25,6 +26,7 @@ type pageData struct {
 // 内容区片段，普通请求渲染带布局外壳的整页。页头共用的角色标记与版本提示在
 // 这里统一注入。
 func (h *handler) renderPage(w http.ResponseWriter, r *http.Request, status int, page string, data pageData) {
+	data.Assets = h.assets
 	data.Caps = h.caps
 	data.VersionHint = h.cfg.versionHint()
 	if sess := h.currentSession(r); sess != nil {
@@ -57,6 +59,26 @@ func (h *handler) renderPage(w http.ResponseWriter, r *http.Request, status int,
 // isFragmentRequest 判断是否为 htmx 发起的局部刷新请求。
 func isFragmentRequest(r *http.Request) bool {
 	return r != nil && r.Header.Get("HX-Request") == "true"
+}
+
+// templateContents 返回内嵌的全部模板文件内容，供模板静态扫描测试使用。
+func templateContents() (map[string]string, error) {
+	entries, err := templateFS.ReadDir("templates")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		content, err := templateFS.ReadFile("templates/" + entry.Name())
+		if err != nil {
+			return nil, err
+		}
+		out[entry.Name()] = string(content)
+	}
+	return out, nil
 }
 
 // renderError 渲染中文错误页；htmx 请求得到片段，普通请求得到整页。
