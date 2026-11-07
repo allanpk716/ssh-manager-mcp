@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"time"
 
+	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
@@ -130,6 +131,7 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 		ProjectID: projectID, ServerID: serverID, Command: command,
 		Sudo: sudo, SudoPass: sudoPass, TimeoutSec: timeoutSec,
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		DialTopology: dialplan.NewStoreSource(st, ""),
 	})
 	if stErr != nil {
 		switch {

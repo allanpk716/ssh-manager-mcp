@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/updater"
 
 	"github.com/spf13/cobra"
@@ -40,12 +41,18 @@ func (r *rootCommand) ExecuteContext(ctx context.Context) error {
 }
 
 func (r *rootCommand) ExecuteContextC(ctx context.Context) (*cobra.Command, error) {
+	if _, err := sshbroker.ResolveAddressTimeout(); err != nil {
+		return nil, err
+	}
 	cmd, err := r.Command.ExecuteContextC(ctx)
 	r.finish(cmd, err)
 	return cmd, err
 }
 
 func (r *rootCommand) ExecuteC() (*cobra.Command, error) {
+	if _, err := sshbroker.ResolveAddressTimeout(); err != nil {
+		return nil, err
+	}
 	cmd, err := r.Command.ExecuteC()
 	r.finish(cmd, err)
 	return cmd, err

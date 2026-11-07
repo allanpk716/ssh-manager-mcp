@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -56,6 +57,7 @@ func newSSHCmd() *cobra.Command {
 			var res sshbroker.ExecResult
 			cli, _, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 				Server: srv, Auth: auth, HostKeys: st,
+				Topology: dialplan.NewStoreSource(st, ""),
 			})
 			if err != nil {
 				status = "error"

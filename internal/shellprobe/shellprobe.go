@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
@@ -95,6 +96,7 @@ func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (m
 	defer cancel()
 	cli, _, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: st,
+		Topology: dialplan.NewStoreSource(st, ""),
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("connect: %w", err)

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
 	"ssh-manager-mcp/internal/sshbroker"
@@ -199,6 +200,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 
 	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		Topology: dialplan.NewStoreSource(st, ""),
 	})
 	if cerr != nil {
 		switch {
@@ -349,6 +351,7 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 
 	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		Topology: dialplan.NewStoreSource(st, ""),
 	})
 	if cerr != nil {
 		switch {
@@ -458,6 +461,7 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 
 	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		Topology: dialplan.NewStoreSource(st, ""),
 	})
 	if cerr != nil {
 		switch {
@@ -620,6 +624,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 
 	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		Topology: dialplan.NewStoreSource(st, ""),
 	})
 	if cerr != nil {
 		switch {
@@ -801,6 +806,7 @@ func ForwardForProfile(ctx context.Context, st *store.Store, projectID, profileI
 
 	cli, _, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
+		Topology: dialplan.NewStoreSource(st, ""),
 	})
 	if cerr != nil {
 		switch {
