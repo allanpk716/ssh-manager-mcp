@@ -54,22 +54,14 @@ func (i serverItem) Description() string {
 	return i.srv.User + "@" + host
 }
 
-// serverNeedsAttention is the ⚠ rule: no credential attached (Plan 20 C0
-// credential-less), no role yet, or carrying the needs-passphrase tag an
-// encrypted-key import left behind (both import flows write it; every
-// re-credential path — the supplement loop's passphrase step, TUI edit, CLI
-// edit — removes it).
+// serverNeedsAttention 是本页对共享「需要注意」规则（models.ServerNeedsAttention）
+// 的薄封装：未挂凭据、未设角色、带待补口令标记任一成立即置顶标记。
 func serverNeedsAttention(s *models.Server) bool {
-	return s.CredentialID == "" || s.Role == "" || hasTag(s, "needs-passphrase")
+	return models.ServerNeedsAttention(s.CredentialID, s.Role, s.Tags)
 }
 
 func hasTag(s *models.Server, tag string) bool {
-	for _, t := range s.Tags {
-		if t == tag {
-			return true
-		}
-	}
-	return false
+	return models.ServerHasTag(s.Tags, tag)
 }
 
 // dropTag removes all occurrences of tag from tags (the needs-passphrase
