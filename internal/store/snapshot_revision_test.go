@@ -705,6 +705,82 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 			},
 		},
 		{
+			name: "新增机密项",
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				return s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-add-secret"))
+			},
+		},
+		{
+			name: "更换机密项值",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-old-secret")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				return s.SetSecretValue("DEPLOY_TOKEN", []byte("revision-new-secret"))
+			},
+		},
+		{
+			name: "修改机密项备注",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if err := s.AddSecret("DEPLOY_TOKEN", "旧备注", []byte("revision-note-secret")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				return s.EditSecretNote("DEPLOY_TOKEN", "新备注")
+			},
+		},
+		{
+			name: "删除机密项",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-delete-secret")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				return s.DeleteSecret("DEPLOY_TOKEN")
+			},
+		},
+		{
+			name: "增加机密项可写入服务器",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-allow-secret")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				srv, err := s.GetServer(seed.serverID)
+				if err != nil {
+					return err
+				}
+				return s.AllowSecrets([]string{"DEPLOY_TOKEN"}, []string{srv.Name})
+			},
+		},
+		{
+			name: "减少机密项可写入服务器",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-disallow-secret")); err != nil {
+					t.Fatal(err)
+				}
+				srv, err := s.GetServer(seed.serverID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := s.AllowSecrets([]string{"DEPLOY_TOKEN"}, []string{srv.Name}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				srv, err := s.GetServer(seed.serverID)
+				if err != nil {
+					return err
+				}
+				return s.DisallowSecrets([]string{"DEPLOY_TOKEN"}, []string{srv.Name})
+			},
+		},
+		{
 			name: "删除命令策略规则",
 			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
 				if err := s.AddPolicyRule(policy.CustomRule{

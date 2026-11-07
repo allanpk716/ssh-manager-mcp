@@ -27,12 +27,12 @@ func NewComparer(items ...Item) *Comparer {
 	return &Comparer{items: append([]Item(nil), items...)}
 }
 
-// Default 返回本阶段的默认比较器:当前 profile 可见的服务器集合与命令
-// 策略。后续票往这里追加自己的比较项即可。
-func Default() *Comparer { return NewComparer(ServerSet{}, CommandPolicy{}) }
+// Default 返回默认比较器:当前 profile 可见的服务器集合、机密项与命令策略。
+func Default() *Comparer { return NewComparer(ServerSet{}, SecretSet{}, CommandPolicy{}) }
 
 // Hint 比较新旧快照并返回变更提示;没有任何差异时返回空字符串。提示只
-// 含服务器名、修订号与固定的命令策略说明,不含地址、凭据或机密项的值。
+// 含服务器名、机密项名字、修订号与固定的命令策略说明,不含地址、凭据或
+// 机密项的值。
 func (c *Comparer) Hint(old, fresh *store.Snapshot) string {
 	if c == nil || old == nil || fresh == nil {
 		return ""

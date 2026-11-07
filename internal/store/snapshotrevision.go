@@ -23,6 +23,8 @@ var snapshotRevisionTables = []string{
 	"entry_host_keys",
 	"policy_rules",
 	"policy_disabled_defaults",
+	"secrets",
+	"secret_server_allow",
 }
 
 // snapshotRevisionRetiredTriggers 列出旧版本为不再导出的表建立的修订号
