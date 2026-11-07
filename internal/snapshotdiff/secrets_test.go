@@ -118,3 +118,31 @@ func TestDefaultHintUnrelatedSecretChangeProducesNoHint(t *testing.T) {
 		t.Fatalf("与本客户端无关的机密项变化不应产生提示，实际为 %q", got)
 	}
 }
+
+func TestDefaultHintSecretRecreatedWithSameNameAndVersionReportsValueChange(t *testing.T) {
+	const (
+		oldValue = "snapshot-diff-recreated-old-value"
+		newValue = "snapshot-diff-recreated-new-value"
+	)
+	snapshot := func(revision int64, secretID string, value []byte) *store.Snapshot {
+		return &store.Snapshot{
+			SnapshotRevision: revision,
+			Servers: []store.SnapshotServer{
+				{ID: "server-1", Name: "gpu"},
+			},
+			Secrets: []store.SnapshotSecret{{
+				ID: secretID, Name: "DB_PASSWORD", Value: value, ValueVersion: 1,
+			}},
+			SecretAllows: []store.SnapshotSecretAllow{{SecretID: secretID, ServerID: "server-1"}},
+		}
+	}
+
+	got := Default().Hint(snapshot(10, "secret-old", []byte(oldValue)), snapshot(11, "secret-new", []byte(newValue)))
+	want := "权威端配置已更新（修订号 10 → 11）：机密项 DB_PASSWORD 的值已更改，用到它的文件需要重新部署"
+	if got != want {
+		t.Fatalf("同名机密项删除后重建的变更提示 = %q，应为 %q", got, want)
+	}
+	if strings.Contains(got, oldValue) || strings.Contains(got, newValue) {
+		t.Fatalf("变更提示绝不应包含机密项值：%q", got)
+	}
+}

@@ -24,7 +24,7 @@ func (SecretSet) Describe(old, fresh *store.Snapshot) []string {
 			added = append(added, name)
 			continue
 		}
-		if freshSecret.version != oldSecret.version {
+		if freshSecret.id != oldSecret.id || freshSecret.version != oldSecret.version {
 			changedValue = append(changedValue, name)
 		}
 		if _, _, difference := serverNameDiff(
