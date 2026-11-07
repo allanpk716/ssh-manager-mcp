@@ -161,6 +161,27 @@ func (s *Store) GetCacheToken(id string) (*models.CacheToken, error) {
 	return &ct, nil
 }
 
+// DeviceIDForCacheToken returns the topology device identifier associated with
+// an active device code. An empty identifier means the owner has not yet
+// associated this client instance with a device.
+func (s *Store) DeviceIDForCacheToken(id string) (string, error) {
+	var deviceID sql.NullString
+	err := s.db.QueryRow(`
+		SELECT devices.id
+		FROM devices
+		JOIN cache_tokens ON cache_tokens.id=devices.client_token_id
+		WHERE devices.client_token_id=? AND cache_tokens.status='active'`,
+		id,
+	).Scan(&deviceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return deviceID.String, nil
+}
+
 // VerifyCacheToken returns the active cache token matching the plaintext, or (nil, nil) if none.
 // Only status='active' admits — a revoked device code is rejected even with the correct secret
 // (Lazy: takes effect on the next /snapshot fetch). Prefiltered by token_prefix so Argon2id

@@ -376,3 +376,62 @@ func TestSnapshot_DeviceNameHeader(t *testing.T) {
 		t.Fatalf("X-Sshmgr-Device-Name = %q, want laptop", got)
 	}
 }
+
+// TestSnapshot_DeviceIDHeader 证明快照响应携带设备码关联的网络拓扑设备
+// 标识符；未关联设备码不携带该标识符。
+func TestSnapshot_DeviceIDHeader(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+	profileID, err := st.AddProfile("主视图")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, associatedToken, err := st.AddCacheToken("laptop", profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, unassociatedToken, err := st.AddCacheToken("phone", profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	laptop, err := st.AddDevice("laptop-machine", "", "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner, err := NewServeRunner(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runner.Close()
+	server := httptest.NewServer(runner.HTTPHandler())
+	defer server.Close()
+
+	request, _ := http.NewRequest(http.MethodGet, server.URL+"/snapshot", nil)
+	request.Header.Set("Authorization", "Bearer "+associatedToken)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("associated snapshot status = %d", response.StatusCode)
+	}
+	if got := response.Header.Get("X-Sshmgr-Device-ID"); got != laptop.ID {
+		t.Fatalf("associated device identifier = %q, want %q", got, laptop.ID)
+	}
+
+	request, _ = http.NewRequest(http.MethodGet, server.URL+"/snapshot", nil)
+	request.Header.Set("Authorization", "Bearer "+unassociatedToken)
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("unassociated snapshot status = %d", response.StatusCode)
+	}
+	if got := response.Header.Get("X-Sshmgr-Device-ID"); got != "" {
+		t.Fatalf("unassociated device identifier = %q, want empty", got)
+	}
+}
