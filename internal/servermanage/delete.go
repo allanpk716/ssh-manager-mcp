@@ -36,6 +36,11 @@ func (m *Manager) DeletePreview(identifier string) (*DeletePreview, error) {
 	if err != nil || preview == nil {
 		return nil, err
 	}
+	return deletePreview(preview), nil
+}
+
+// deletePreview 把存储层的删除预览换成模块的删除预览。
+func deletePreview(preview *store.ServerDeletePreview) *DeletePreview {
 	out := &DeletePreview{
 		Server: preview.Server, HasDevice: preview.HasDevice,
 		Anchors: preview.Anchors, ProfileNames: preview.ProfileNames,
@@ -45,7 +50,7 @@ func (m *Manager) DeletePreview(identifier string) (*DeletePreview, error) {
 	if preview.Device != nil {
 		out.DeviceName = preview.Device.Name
 	}
-	return out, nil
+	return out
 }
 
 // Delete 带已确认的预览摘要删除一台服务器。执行事务里会重新生成预览比对；
@@ -79,5 +84,5 @@ func (m *Manager) Delete(identifier, digest string, src Source) (*DeletePreview,
 	if err := m.writeAudit("server.delete", summary, nil, src); err != nil {
 		return nil, err
 	}
-	return m.DeletePreview(srv.Name)
+	return deletePreview(preview), nil
 }

@@ -37,6 +37,7 @@ type pageData struct {
 	ServerDetail                *ServerDetailView
 	ServerEdit                  *serverEditView
 	ServerDeletePreview         *ServerDeletePreviewView
+	ServerDeleteNotice          string
 	ServerImportError           string
 	ServerImportPlan            *ServerImportPlanView
 	ServerImportRun             *ServerImportRunView

@@ -1,10 +1,13 @@
 package webui
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 // ServerListEntry 是服务器页列表与过滤视图的一行；注意原因已经是界面文
@@ -95,6 +98,14 @@ type ServerEditResultView struct {
 	AffectedServers []string
 }
 
+// ServerFormError 表示服务器表单的提交内容校验失败；Message 是可直接显示
+// 的中文提示，不含命令行参数名，也不含任何凭据内容。
+type ServerFormError struct {
+	Message string
+}
+
+func (e *ServerFormError) Error() string { return e.Message }
+
 // ServerEditConflictView 表示编辑表单打开后服务器条目已被别的入口修改。
 type ServerEditConflictView struct {
 	Current *ServerDetailView
@@ -112,6 +123,19 @@ type ServerDeletePreviewView struct {
 	DeletedCredentials []string
 	KeptCredentials    []string
 	Digest             string
+}
+
+// ErrServerNotFound 表示要操作的服务器条目不存在，页面按 404 处理。
+var ErrServerNotFound = errors.New("服务器不存在")
+
+// ServerDeletePreviewChanged 表示 owner 确认的删除预览与执行时的最新预览不
+// 一致；Preview 是执行时重新组装的最新预览，页面直接渲染它供再次确认。
+type ServerDeletePreviewChanged struct {
+	Preview *ServerDeletePreviewView
+}
+
+func (e *ServerDeletePreviewChanged) Error() string {
+	return "服务器删除预览已变化，未删除任何数据"
 }
 
 // ServerImportCandidateView 是导入候选清单里的一台机器。
@@ -143,7 +167,11 @@ type ServerImportPlanView struct {
 	Candidates   []ServerImportCandidateView
 	VaultSkipped []ServerImportSkipView
 	ParseSkipped []ServerImportSkipView
-	Profiles     []ServerProfileOption
+	// Failed 是计划阶段已能确定会失败的候选。当前导入实现里失败都发生在
+	// 执行阶段（插入写入），计划阶段无法判定任何失败，因此恒为空；页面
+	// 仍显示这一组，计数为 0。
+	Failed   []ServerImportSkipView
+	Profiles []ServerProfileOption
 }
 
 // ServerImportEntryView 是导入结果里的一台机器状态。
@@ -189,6 +217,9 @@ type ServerWriter interface {
 	EditServer(id string, form ServerEditForm, source ServerWriteSource) (*ServerEditResultView, *ServerEditConflictView, error)
 	DeleteServerPreview(identifier string) (*ServerDeletePreviewView, error)
 	DeleteServer(identifier, digest string, source ServerWriteSource) error
+	// SharedCredentialServers 返回与这台服务器共用同一份登录凭据的服务器
+	// 名字，补私钥口令前的提示需要它；列表含目标服务器本身。
+	SharedCredentialServers(identifier string) ([]string, error)
 	ImportPlan(path, profile string) (*ServerImportPlanView, error)
 	ImportRun(path string, selected []string, profile string, source ServerWriteSource) (*ServerImportRunView, error)
 	CompleteServer(id string, form ServerCompleteForm, source ServerWriteSource) (*ServerCompleteResultView, error)
@@ -306,14 +337,22 @@ func (h *handler) handleServerEdit(w http.ResponseWriter, r *http.Request, id st
 }
 
 type serverEditView struct {
-	Detail        *ServerDetailView
-	Notice        string
-	NeedsReverify bool
-	ReverifyPath  string
+	Detail             *ServerDetailView
+	Notice             string
+	NeedsReverify      bool
+	ReverifyPath       string
+	SharedKeyServers   []string
+	HasSharedKeyNotice bool
 }
 
 func (h *handler) serverEditView(w http.ResponseWriter, r *http.Request, detail *ServerDetailView, notice string) *serverEditView {
 	view := &serverEditView{Detail: detail, Notice: notice}
+	if detail.CredentialType == string(models.CredPrivateKey) {
+		if names, err := h.cfg.ServerWriter.SharedCredentialServers(detail.ID); err == nil {
+			view.SharedKeyServers = names
+			view.HasSharedKeyNotice = len(names) > 0
+		}
+	}
 	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
 		view.NeedsReverify = true
 		view.ReverifyPath = reverifyPath("/ui/servers/" + url.PathEscape(detail.ID) + "/edit")
@@ -334,6 +373,14 @@ func (h *handler) handleServerEditPost(w http.ResponseWriter, r *http.Request, i
 	}
 	result, conflict, err := h.cfg.ServerWriter.EditServer(id, form, ServerWriteSource{RemoteAddress: remoteIP(r)})
 	if err != nil {
+		var formErr *ServerFormError
+		if errors.As(err, &formErr) {
+			view := h.serverEditView(w, r, editErrorDetail(r, detail), formErr.Message)
+			h.renderPage(w, r, http.StatusBadRequest, "servers-edit.tmpl", pageData{
+				Title: "编辑 " + view.Detail.Name, ServerEdit: view,
+			})
+			return
+		}
 		h.renderError(w, r, http.StatusInternalServerError, "保存服务器失败", "保存服务器失败，请稍后重试。")
 		return
 	}
@@ -347,10 +394,47 @@ func (h *handler) handleServerEditPost(w http.ResponseWriter, r *http.Request, i
 	http.Redirect(w, r, "/ui/servers/"+url.PathEscape(result.Detail.ID), http.StatusSeeOther)
 }
 
+// editErrorDetail 用提交值覆盖当前详情的非凭据字段，供校验失败后重新渲染
+// 表单时保留 owner 刚输入的内容；凭据字段一律不回显。
+func editErrorDetail(r *http.Request, current *ServerDetailView) *ServerDetailView {
+	submitted := *current
+	_ = r.ParseForm()
+	if v := r.PostFormValue("name"); v != "" {
+		submitted.Name = v
+	}
+	if v := r.PostFormValue("host"); v != "" {
+		submitted.Host = v
+	}
+	if port, err := strconv.Atoi(strings.TrimSpace(r.PostFormValue("port"))); err == nil && port > 0 {
+		submitted.Port = port
+	}
+	if v := r.PostFormValue("user"); v != "" {
+		submitted.User = v
+	}
+	if v := r.PostFormValue("shell"); v != "" {
+		submitted.Shell = v
+	}
+	submitted.Description = r.PostFormValue("description")
+	submitted.Location = r.PostFormValue("location")
+	submitted.Hardware = r.PostFormValue("hardware")
+	submitted.Services = r.PostFormValue("services")
+	submitted.Role = r.PostFormValue("role")
+	submitted.Caveats = r.PostFormValue("special_handling")
+	if tags := parseTags(r.PostFormValue("tags")); tags != nil {
+		submitted.Tags = tags
+	}
+	submitted.ExposeHost = r.PostFormValue("expose_host") == "1"
+	return &submitted
+}
+
 // parseServerEditForm 把提交值与当前值比对，只保留变化过的字段，避免把没
-// 动过的字段清空。
+// 动过的字段清空。修订号取表单隐藏字段携带的值做乐观锁；与当前修订号不
+// 一致时由写来源按冲突拒绝。
 func (h *handler) parseServerEditForm(r *http.Request, current *ServerDetailView) ServerEditForm {
-	form := ServerEditForm{ExpectedRevision: current.Revision, CredentialAction: "keep"}
+	form := ServerEditForm{CredentialAction: "keep"}
+	if revision, err := strconv.ParseInt(strings.TrimSpace(r.PostFormValue("revision")), 10, 64); err == nil {
+		form.ExpectedRevision = revision
+	}
 	_ = r.ParseForm()
 	changedString := func(submitted, current string) *string {
 		if submitted != current {
@@ -439,7 +523,20 @@ func (h *handler) handleServerDelete(w http.ResponseWriter, r *http.Request, id 
 			return
 		}
 		if err := h.cfg.ServerWriter.DeleteServer(id, digest, ServerWriteSource{RemoteAddress: remoteIP(r)}); err != nil {
-			h.renderError(w, r, http.StatusConflict, "删除服务器失败", "删除预览已变化，未删除任何数据。请重新查看新的预览。")
+			var changed *ServerDeletePreviewChanged
+			if errors.As(err, &changed) && changed.Preview != nil {
+				h.renderPage(w, r, http.StatusConflict, "servers-delete.tmpl", pageData{
+					Title:               "删除 " + changed.Preview.ServerName,
+					ServerDeletePreview: changed.Preview,
+					ServerDeleteNotice:  "删除预览已变化，未删除任何数据。以下是最新的影响预览，请核对后重新确认。",
+				})
+				return
+			}
+			if errors.Is(err, ErrServerNotFound) {
+				h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
+				return
+			}
+			h.renderError(w, r, http.StatusInternalServerError, "删除服务器失败", "删除服务器失败，请稍后重试。")
 			return
 		}
 		http.Redirect(w, r, "/ui/", http.StatusSeeOther)
@@ -556,7 +653,7 @@ func (h *handler) handleServerComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	queue, position := completeQueueFromRequest(r)
-	h.renderCompleteForm(w, r, queue, position, "")
+	h.renderCompleteForm(w, r, queue, position, "", nil, http.StatusOK)
 }
 
 func completeQueueFromRequest(r *http.Request) (queue []string, position int) {
@@ -619,7 +716,7 @@ type serverCompleteView struct {
 	Failed            int
 }
 
-func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, queue []string, position int, notice string) {
+func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, queue []string, position int, notice string, submitted *ServerCompleteForm, status int) {
 	if position >= len(queue) {
 		http.Redirect(w, r, completeResultPath(queue, requestCounts(r)), http.StatusSeeOther)
 		return
@@ -629,6 +726,18 @@ func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, que
 		h.renderError(w, r, http.StatusNotFound, "读取补全目标失败", "补全目标服务器不存在，请从服务器列表重新进入补全。")
 		return
 	}
+	if submitted != nil {
+		// 校验失败后重新渲染时保留 owner 刚输入的元数据；凭据输入一律不
+		// 回显。
+		shown := *detail
+		shown.Description = submitted.Description
+		shown.Location = submitted.Location
+		shown.Hardware = submitted.Hardware
+		shown.Services = submitted.Services
+		shown.Role = submitted.Role
+		shown.Caveats = submitted.Caveats
+		detail = &shown
+	}
 	counts := requestCounts(r)
 	view := &serverCompleteView{
 		Detail: detail, Queue: queue, Position: position, Notice: notice,
@@ -637,14 +746,18 @@ func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, que
 		Imported:          counts.Imported, Skipped: counts.Skipped, Failed: counts.Failed,
 	}
 	if view.ShowKeyPassphrase {
-		// 共用凭据的机器清单由写来源在保存时返回；表单先按当前条目标注。
-		view.SharedKeyServers = []string{detail.Name}
+		if names, err := h.cfg.ServerWriter.SharedCredentialServers(detail.ID); err == nil {
+			view.SharedKeyServers = names
+		}
+		if view.SharedKeyServers == nil {
+			view.SharedKeyServers = []string{detail.Name}
+		}
 	}
 	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
 		view.NeedsReverify = true
 		view.ReverifyPath = reverifyPath(completeResumePath(queue, position, counts))
 	}
-	h.renderPage(w, r, http.StatusOK, "servers-complete.tmpl", pageData{
+	h.renderPage(w, r, status, "servers-complete.tmpl", pageData{
 		Title: "补全 " + detail.Name, ServerComplete: view, ServerCompleteQueue: strings.Join(queue, ","),
 	})
 }
@@ -684,7 +797,12 @@ func (h *handler) handleServerCompletePost(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if _, err := h.cfg.ServerWriter.CompleteServer(id, form, ServerWriteSource{RemoteAddress: remoteIP(r)}); err != nil {
-		h.renderCompleteForm(w, r, queue, position, err.Error())
+		var formErr *ServerFormError
+		if errors.As(err, &formErr) {
+			h.renderCompleteForm(w, r, queue, position, formErr.Message, &form, http.StatusBadRequest)
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "保存补全失败", "保存补全失败，请稍后重试。")
 		return
 	}
 	http.Redirect(w, r, completeResumePath(queue, position+1, counts), http.StatusSeeOther)

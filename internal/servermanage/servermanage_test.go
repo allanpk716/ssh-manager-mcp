@@ -350,3 +350,81 @@ func serverRevision(t *testing.T, m *Manager, id string) int64 {
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestSharedCredentialServersListsPeers 补私钥口令前要列出共用同一份登录凭
+// 据的全部服务器：按名字排序、含目标本身、不混入 sudo 凭据或其他凭据。
+func TestSharedCredentialServersListsPeers(t *testing.T) {
+	m := newTestManager(t)
+	cred, err := m.st.SetCredential(&models.Credential{Type: models.CredPrivateKey, Secret: []byte("KEY")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := m.st.SetCredential(&models.Credential{Type: models.CredPrivateKey, Secret: []byte("OTHER")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sudo, err := m.st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("sudo")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeta := mustAddServer(t, m, &models.Server{Name: "zeta", Host: "192.0.2.1", Port: 22, User: "u", CredentialID: cred})
+	mustAddServer(t, m, &models.Server{Name: "alpha", Host: "192.0.2.2", Port: 22, User: "u", CredentialID: cred})
+	mustAddServer(t, m, &models.Server{Name: "elsewhere", Host: "192.0.2.3", Port: 22, User: "u", CredentialID: other})
+	mustAddServer(t, m, &models.Server{Name: "sudo-peer", Host: "192.0.2.4", Port: 22, User: "u", SudoCredentialID: sudo})
+
+	names, err := m.SharedCredentialServers(zeta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(names, ",") != "alpha,zeta" {
+		t.Fatalf("共用凭据服务器 = %v", names)
+	}
+}
+
+// TestEditCombinesKeyPassphraseWithOtherFields 编辑页把「只补私钥口令」和其
+// 他字段一起提交时，同一请求要同时生效：口令写进凭据并清理共用服务器的标
+// 签，其他字段也保存。
+func TestEditCombinesKeyPassphraseWithOtherFields(t *testing.T) {
+	m := newTestManager(t)
+	keyPEM := genEncryptedKey(t, "secret-pass")
+	cred, err := m.st.SetCredential(&models.Credential{Type: models.CredPrivateKey, Secret: keyPEM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := m.st.AddServer(&models.Server{
+		Name: "enc", Host: "192.0.2.3", Port: 22, User: "root", Role: "旧角色",
+		CredentialID: cred, Tags: []string{models.TagNeedsPassphrase},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.st.AddServer(&models.Server{
+		Name: "peer", Host: "192.0.2.4", Port: 22, User: "root", CredentialID: cred,
+		Role: "同伴", Tags: []string{models.TagNeedsPassphrase},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	newRole := "新角色"
+	result, err := m.Edit(EditRequest{
+		Identifier: target, Role: &newRole, KeyPassphrase: strPtr("secret-pass"),
+	}, CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _ := m.st.GetServerByName("enc")
+	if srv == nil || srv.Role != "新角色" || models.ServerHasTag(srv.Tags, models.TagNeedsPassphrase) {
+		t.Fatalf("组合提交应同时保存角色与私钥口令：%+v", srv)
+	}
+	savedCred, _ := m.st.GetCredential(srv.CredentialID)
+	if savedCred == nil || string(savedCred.Passphrase) != "secret-pass" {
+		t.Fatalf("口令应写进凭据：%+v", savedCred)
+	}
+	peer, _ := m.st.GetServerByName("peer")
+	if models.ServerHasTag(peer.Tags, models.TagNeedsPassphrase) {
+		t.Fatalf("共用凭据的服务器应一起去掉待补标签：%+v", peer)
+	}
+	if len(result.AffectedServers) != 2 {
+		t.Fatalf("结果应列出受影响服务器：%v", result.AffectedServers)
+	}
+}

@@ -430,6 +430,13 @@ func serversEditCmd() *cobra.Command {
 			}
 			req.ClearCredential = clearCred
 			manager := servermanage.New(s)
+			// 只补私钥口令会同时影响共用这把私钥的其他服务器：写入前列出名
+			// 单，让 owner 在提交前看到影响范围。
+			if fl.Changed("key-passphrase") && !fl.Changed("key") && !fl.Changed("password") && !clearCred {
+				if peers, err := manager.SharedCredentialServers(args[0]); err == nil && len(peers) > 1 {
+					fmt.Fprintf(cmd.OutOrStdout(), "补私钥口令会影响共用这把私钥的全部服务器：%s\n", strings.Join(peers, ","))
+				}
+			}
 			result, err := manager.Edit(req, servermanage.CLISource())
 			if err != nil {
 				var conflict *servermanage.RevisionConflict

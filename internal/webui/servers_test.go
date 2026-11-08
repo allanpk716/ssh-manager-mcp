@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -77,7 +78,9 @@ type stubServerWriter struct {
 	plan         *ServerImportPlanView
 	run          *ServerImportRunView
 	completeErr  error
+	editErr      error
 	deleteDigest string
+	deleteErr    error
 }
 
 type stubImportRun struct {
@@ -95,6 +98,9 @@ type stubComplete struct {
 
 func (w *stubServerWriter) EditServer(id string, form ServerEditForm, source ServerWriteSource) (*ServerEditResultView, *ServerEditConflictView, error) {
 	w.edits = append(w.edits, form)
+	if w.editErr != nil {
+		return nil, nil, w.editErr
+	}
 	if w.conflict != nil {
 		return nil, w.conflict, nil
 	}
@@ -114,7 +120,11 @@ func (w *stubServerWriter) DeleteServerPreview(identifier string) (*ServerDelete
 func (w *stubServerWriter) DeleteServer(identifier, digest string, source ServerWriteSource) error {
 	w.deletes = append(w.deletes, identifier)
 	w.deleteDigest = digest
-	return nil
+	return w.deleteErr
+}
+
+func (w *stubServerWriter) SharedCredentialServers(identifier string) ([]string, error) {
+	return []string{"fine", "peer"}, nil
 }
 
 func (w *stubServerWriter) ImportPlan(path, profile string) (*ServerImportPlanView, error) {
@@ -377,7 +387,7 @@ func TestServersImportThreeStepsAndComplete(t *testing.T) {
 		"path": {"/tmp/config"}, "profile": {"profile-1"},
 	})
 	planBody := readResponseBody(t, planResp)
-	for _, want := range []string{"web", "bare", "taken", "同名冲突", "运维"} {
+	for _, want := range []string{"web", "bare", "taken", "同名冲突", "运维", "失败", "失败 0"} {
 		if !strings.Contains(planBody, want) {
 			t.Fatalf("候选清单缺少 %q：\n%s", want, planBody)
 		}
@@ -711,7 +721,7 @@ func TestAuthorityClearCredentialNeedsRecentVerify(t *testing.T) {
 	form := url.Values{
 		"csrf_token": {editCSRF},
 		"server_id":  {"srv-fine"}, "name": {"fine"}, "host": {"192.0.2.10"}, "port": {"22"},
-		"user":       {"root"}, "shell": {"posix"}, "revision": {"4"},
+		"user": {"root"}, "shell": {"posix"}, "revision": {"4"},
 		"credential_action": {"clear"},
 	}
 	resp := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine/edit", form, cookie)
@@ -749,5 +759,153 @@ func TestAuthorityCompleteSudoPasswordNeedsRecentVerify(t *testing.T) {
 	}
 	if strings.Contains(body, `name="sudo_password"`) {
 		t.Fatalf("未验证的补全页不应显示 sudo 密码输入框：\n%s", body)
+	}
+}
+
+// TestServersEditUsesSubmittedRevision 编辑提交必须使用表单隐藏字段携带的
+// 修订号做乐观锁，而不是提交时重新读取的当前修订号。
+func TestServersEditUsesSubmittedRevision(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{}
+	h, cookie := newServersTestHandler(t, RoleStandalone, store, writer)
+
+	form := url.Values{
+		"server_id": {"srv-fine"}, "name": {"fine"}, "host": {"192.0.2.10"},
+		"port": {"22"}, "user": {"root"}, "shell": {"posix"}, "revision": {"3"},
+		"description": {"新说明"},
+	}
+	resp := serversPost(t, h, cookie, "/ui/servers/srv-fine/edit", form)
+	body := readResponseBody(t, resp)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("编辑提交状态码 = %d，应为 303：\n%s", resp.StatusCode, body)
+	}
+	if len(writer.edits) != 1 || writer.edits[0].ExpectedRevision != 3 {
+		t.Fatalf("编辑应使用表单提交的修订号 3，实际：%+v", writer.edits)
+	}
+}
+
+// TestServersDeletePreviewChangedShowsFreshPreview 删除预览变化时不能给固定
+// 409 文案，而要渲染执行时重新组装的最新预览，让 owner 可以直接再次确认。
+func TestServersDeletePreviewChangedShowsFreshPreview(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{}
+	writer.deleteErr = &ServerDeletePreviewChanged{Preview: &ServerDeletePreviewView{
+		ServerID: "srv-fine", ServerName: "fine", AnchorCount: 3, Digest: "digest-2",
+		DeletedCredentials: []string{"登录凭据（密码）"},
+	}}
+	h, cookie := newServersTestHandler(t, RoleStandalone, store, writer)
+
+	body := serversPost(t, h, cookie, "/ui/servers/srv-fine/delete", url.Values{
+		"server_id": {"srv-fine"}, "digest": {"digest-1"},
+	})
+	page := readResponseBody(t, body)
+	if body.StatusCode != http.StatusConflict {
+		t.Fatalf("预览变化状态码 = %d，应为 409", body.StatusCode)
+	}
+	for _, want := range []string{"删除预览已变化", "要删除 3 个", `name="digest" value="digest-2"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("新预览页缺少 %q：\n%s", want, page)
+		}
+	}
+}
+
+// TestServersDeleteErrorsAreTyped 删除的其他错误按类型给出对应状态码：服务
+// 器不存在是 404，其余失败是 500。
+func TestServersDeleteErrorsAreTyped(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{deleteErr: ErrServerNotFound}
+	h, cookie := newServersTestHandler(t, RoleStandalone, store, writer)
+	resp := serversPost(t, h, cookie, "/ui/servers/srv-fine/delete", url.Values{
+		"server_id": {"srv-fine"}, "digest": {"digest-1"},
+	})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("服务器不存在状态码 = %d，应为 404", resp.StatusCode)
+	}
+
+	writer.deleteErr = errServerWriterFailure
+	resp = serversPost(t, h, cookie, "/ui/servers/srv-fine/delete", url.Values{
+		"server_id": {"srv-fine"}, "digest": {"digest-1"},
+	})
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("存储失败状态码 = %d，应为 500", resp.StatusCode)
+	}
+	if strings.Contains(readResponseBody(t, resp), "预览已变化") {
+		t.Fatal("其他失败不得误报为预览变化")
+	}
+}
+
+var errServerWriterFailure = errors.New("存储暂时不可用")
+
+// TestServersPagesListSharedCredentialServers 补私钥口令影响共用凭据的全部
+// 服务器：补全页与编辑页在提交前列出受影响的服务器名。
+func TestServersPagesListSharedCredentialServers(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-key"] = &ServerDetailView{
+		ID: "srv-key", Name: "key", User: "root", Host: "192.0.2.30", Port: 22,
+		Shell: "posix", CredentialType: "private_key", Role: "网站",
+		AttentionReasons: []string{"待补私钥口令"}, Revision: 2,
+	}
+	h, cookie := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
+
+	complete := serversGet(t, h, cookie, "/ui/servers/complete?queue=srv-key&position=0")
+	if !strings.Contains(complete, "共用这把私钥的服务器会一起去掉待补标记：fine,peer") {
+		t.Fatalf("补全页应列出共用凭据的服务器：\n%s", complete)
+	}
+	edit := serversGet(t, h, cookie, "/ui/servers/srv-key/edit")
+	if !strings.Contains(edit, "「只补私钥口令」会影响共用这把私钥的全部服务器：fine,peer") {
+		t.Fatalf("编辑页应列出共用凭据的服务器：\n%s", edit)
+	}
+}
+
+// TestServersEditValidationErrorRendersForm 编辑校验失败要重新渲染表单并给出
+// 指向字段的中文提示：非凭据字段保留提交值，凭据不回显。
+func TestServersEditValidationErrorRendersForm(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{editErr: &ServerFormError{Message: "密码不能为空（更换凭据请给新值）"}}
+	h, cookie := newServersTestHandler(t, RoleStandalone, store, writer)
+
+	resp := serversPost(t, h, cookie, "/ui/servers/srv-fine/edit", url.Values{
+		"server_id": {"srv-fine"}, "name": {"fine"}, "host": {"192.0.2.10"},
+		"port": {"22"}, "user": {"root"}, "shell": {"posix"}, "revision": {"4"},
+		"description": {"页面说明"}, "role": {"新角色"},
+		"credential_action": {"password"}, "password": {"secret-input"},
+	})
+	body := readResponseBody(t, resp)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("校验失败状态码 = %d，应为 400：\n%s", resp.StatusCode, body)
+	}
+	for _, want := range []string{"密码不能为空", `value="页面说明"`, `value="新角色"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("校验页面缺少 %q：\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "secret-input") || strings.Contains(body, "--password") {
+		t.Fatalf("校验页面不得回显凭据或命令行参数名：\n%s", body)
+	}
+}
+
+// TestServersCompleteValidationErrorRendersForm 补全校验失败同样重新渲染表单
+// 并显示面向页面的中文提示。
+func TestServersCompleteValidationErrorRendersForm(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{completeErr: &ServerFormError{Message: "这台服务器已有登录凭据，补全表单不能另设密码"}}
+	h, cookie := newServersTestHandler(t, RoleStandalone, store, writer)
+
+	resp := serversPost(t, h, cookie, "/ui/servers/complete", url.Values{
+		"csrf_token": {serversCSRF(t, h, cookie)},
+		"queue":      {"srv-fine"}, "position": {"0"}, "action": {"save"},
+		"description": {"页面说明"}, "password": {"secret-input"},
+	})
+	body := readResponseBody(t, resp)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("补全校验失败状态码 = %d，应为 400：\n%s", resp.StatusCode, body)
+	}
+	for _, want := range []string{"已有登录凭据", `value="页面说明"`, "srv-fine"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("补全校验页面缺少 %q：\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "secret-input") {
+		t.Fatalf("补全校验页面不得回显凭据：\n%s", body)
 	}
 }

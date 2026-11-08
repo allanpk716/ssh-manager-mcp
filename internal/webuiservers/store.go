@@ -3,6 +3,7 @@
 package webuiservers
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -221,6 +222,10 @@ func EditServer(manager *servermanage.Manager, id string, form webui.ServerEditF
 			}
 			return nil, &webui.ServerEditConflictView{Current: current}, nil
 		}
+		var fieldErr *servermanage.FieldError
+		if errors.As(err, &fieldErr) {
+			return nil, nil, &webui.ServerFormError{Message: fieldErr.Page}
+		}
 		return nil, nil, err
 	}
 	detail, err := DetailView(manager, result.Server.ID)
@@ -257,6 +262,11 @@ func DeletePreviewView(manager *servermanage.Manager, identifier string) (*webui
 	if err != nil || preview == nil {
 		return nil, err
 	}
+	return deletePreviewView(preview), nil
+}
+
+// deletePreviewView 把服务器管理模块的删除预览换成页面数据。
+func deletePreviewView(preview *servermanage.DeletePreview) *webui.ServerDeletePreviewView {
 	view := &webui.ServerDeletePreviewView{
 		ServerID: preview.Server.ID, ServerName: preview.Server.Name,
 		HasDevice: preview.HasDevice, DeviceName: preview.DeviceName,
@@ -272,7 +282,7 @@ func DeletePreviewView(manager *servermanage.Manager, identifier string) (*webui
 				label+"（仍被 "+itoa(impact.References)+" 台服务器引用）")
 		}
 	}
-	return view, nil
+	return view
 }
 
 func credentialLabel(kind, typ string) string {
@@ -293,15 +303,46 @@ func credentialLabel(kind, typ string) string {
 func itoa(v int) string { return strconv.Itoa(v) }
 
 func (w writerStore) DeleteServer(identifier, digest string, source webui.ServerWriteSource) error {
-	_, err := w.manager.Delete(identifier, digest, servermanage.WebUISource(source.RemoteAddress))
-	return err
+	return deleteServer(w.manager, identifier, digest, source)
+}
+
+func (w writerStore) SharedCredentialServers(identifier string) ([]string, error) {
+	return w.manager.SharedCredentialServers(identifier)
 }
 
 func (w writerOpener) DeleteServer(identifier, digest string, source webui.ServerWriteSource) error {
-	return w.withManager(func(manager *servermanage.Manager) error {
-		_, err := manager.Delete(identifier, digest, servermanage.WebUISource(source.RemoteAddress))
-		return err
+	var err error
+	w.withManager(func(manager *servermanage.Manager) error {
+		err = deleteServer(manager, identifier, digest, source)
+		return nil
 	})
+	return err
+}
+
+func (w writerOpener) SharedCredentialServers(identifier string) ([]string, error) {
+	var names []string
+	var err error
+	w.withManager(func(manager *servermanage.Manager) error {
+		names, err = manager.SharedCredentialServers(identifier)
+		return nil
+	})
+	return names, err
+}
+
+// deleteServer 执行删除并把服务器管理模块的错误换算成页面错误类型：预览
+// 变化携带最新预览，条目不存在映射为 404，其余原样返回。
+func deleteServer(manager *servermanage.Manager, identifier, digest string, source webui.ServerWriteSource) error {
+	preview, err := manager.Delete(identifier, digest, servermanage.WebUISource(source.RemoteAddress))
+	if err != nil {
+		if errors.Is(err, servermanage.ErrDeletePreviewChanged) && preview != nil {
+			return &webui.ServerDeletePreviewChanged{Preview: deletePreviewView(preview)}
+		}
+		return err
+	}
+	if preview == nil {
+		return webui.ErrServerNotFound
+	}
+	return nil
 }
 
 func (w writerStore) ImportPlan(path, profile string) (*webui.ServerImportPlanView, error) {
@@ -445,14 +486,21 @@ func CompleteServerView(manager *servermanage.Manager, id string, form webui.Ser
 		Identifier:   id,
 		SudoPassword: form.SudoPassword, Password: form.Password, KeyPassphrase: form.KeyPassphrase,
 	}
-	req.Description = optionalString(form.Description)
-	req.Location = optionalString(form.Location)
-	req.Hardware = optionalString(form.Hardware)
-	req.Services = optionalString(form.Services)
-	req.Role = optionalString(form.Role)
-	req.Caveats = optionalString(form.Caveats)
+	// 服务器元数据字段按提交值写入：表单预填当前值，空输入就是清空这个字
+	// 段；与当前值相同时由服务器管理模块跳过写入。sudo 密码与条件凭据仍
+	// 然是空值表示不变。
+	req.Description = &form.Description
+	req.Location = &form.Location
+	req.Hardware = &form.Hardware
+	req.Services = &form.Services
+	req.Role = &form.Role
+	req.Caveats = &form.Caveats
 	result, err := manager.Complete(req, servermanage.WebUISource(source.RemoteAddress))
 	if err != nil {
+		var fieldErr *servermanage.FieldError
+		if errors.As(err, &fieldErr) {
+			return nil, &webui.ServerFormError{Message: fieldErr.Page}
+		}
 		return nil, err
 	}
 	detail, err := DetailView(manager, result.Server.ID)
@@ -460,14 +508,6 @@ func CompleteServerView(manager *servermanage.Manager, id string, form webui.Ser
 		return nil, err
 	}
 	return &webui.ServerCompleteResultView{Detail: detail, AffectedServers: result.AffectedServers}, nil
-}
-
-// optionalString 把补全表单的空输入换成 nil（保持当前值）。
-func optionalString(value string) *string {
-	if value == "" {
-		return nil
-	}
-	return &value
 }
 
 // parseTagList 把逗号分隔的标签输入拆成列表；输入与当前标签串相同时由页面

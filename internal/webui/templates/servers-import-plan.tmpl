@@ -20,6 +20,10 @@
 {{range .ServerImportPlan.ParseSkipped}}<p class="muted">{{.Name}}：{{.Reason}}</p>{{end}}
 {{if and (not .ServerImportPlan.VaultSkipped) (not .ServerImportPlan.ParseSkipped)}}<p class="muted">无</p>{{end}}
 </fieldset>
+<fieldset><legend>失败</legend>
+{{range .ServerImportPlan.Failed}}<p class="muted">{{.Name}}：{{.Reason}}</p>{{end}}
+{{if not .ServerImportPlan.Failed}}<p class="muted">失败 0：当前实现在执行阶段才知道单台导入是否失败，计划阶段无法提前判定。</p>{{end}}
+</fieldset>
 <div class="inline-form"><button type="submit">执行导入</button><a class="button-link" href="/ui/servers/import">返回</a></div>
 </form>
 {{end}}

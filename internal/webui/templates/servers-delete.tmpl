@@ -1,6 +1,7 @@
 {{define "content"}}
 <section class="server-delete">
 <h1>删除 {{.ServerDeletePreview.ServerName}}</h1>
+{{if .ServerDeleteNotice}}<div class="operation-refusal"><p>{{.ServerDeleteNotice}}</p></div>{{end}}
 <div class="operation-refusal">
 <p>删除前请核对影响预览；确认一次后立即执行。</p>
 </div>

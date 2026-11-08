@@ -83,3 +83,37 @@ func (s *Store) CredentialSummary(id string) (kind models.CredentialType, hasPas
 	}
 	return models.CredentialType(typ), passRaw != nil, true, nil
 }
+
+// ServersUsingCredential 返回把 credID 用作登录凭据的全部服务器条目，按名
+// 字排序。只匹配登录凭据列，不包含 sudo 凭据引用；供补私钥口令前列出受影
+// 响的服务器。
+func (s *Store) ServersUsingCredential(credID string) ([]*models.Server, error) {
+	if credID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`SELECT id FROM servers WHERE credential_id=? ORDER BY name`, credID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	servers := make([]*models.Server, 0, len(ids))
+	for _, id := range ids {
+		srv, err := s.GetServer(id)
+		if err != nil {
+			return nil, err
+		}
+		servers = append(servers, srv)
+	}
+	return servers, nil
+}

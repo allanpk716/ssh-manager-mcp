@@ -314,7 +314,11 @@ func runServersComplete(cmd *cobra.Command, queue []string) error {
 			}
 		}
 		if models.ServerHasTag(detail.Server.Tags, models.TagNeedsPassphrase) {
-			fmt.Fprintln(out, "补私钥口令会影响共用这把私钥的全部服务器。")
+			if peers, err := manager.SharedCredentialServers(detail.Server.ID); err == nil && len(peers) > 0 {
+				fmt.Fprintf(out, "补私钥口令会影响共用这把私钥的全部服务器：%s\n", strings.Join(peers, ","))
+			} else {
+				fmt.Fprintln(out, "补私钥口令会影响共用这把私钥的全部服务器。")
+			}
 			if value := readCompletionSecret(reader, out, "私钥口令（回车跳过）"); value != "" {
 				req.KeyPassphrase = value
 			}

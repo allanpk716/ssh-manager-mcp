@@ -39,6 +39,7 @@
 {{if .ServerEdit.NeedsReverify}}
 <p class="muted">重新验证后才能填写凭据。</p>
 {{else}}
+{{if .ServerEdit.HasSharedKeyNotice}}<p class="muted">「只补私钥口令」会影响共用这把私钥的全部服务器：{{joinTags .ServerEdit.SharedKeyServers}}</p>{{end}}
 <div class="form-field"><label for="edit-credential">登录凭据</label>
 <select id="edit-credential" name="credential_action">
 <option value="keep">保持不变</option>

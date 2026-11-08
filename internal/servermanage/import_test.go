@@ -208,3 +208,70 @@ func TestImportPlanProfilesMissing(t *testing.T) {
 }
 
 var _ = store.AuditSourceCLI
+
+// TestImportWritesAuditAndGrantsThroughAccessModule 导入本身要写带来源的
+// 审计行；profile 授权必须走访问管理模块（同样写带来源的授权审计），不能
+// 直接改存储层。
+func TestImportWritesAuditAndGrantsThroughAccessModule(t *testing.T) {
+	m := newTestManager(t)
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "plain_key")
+	genPlainKey(t, keyPath)
+	config := writeSSHConfig(t, dir, fmt.Sprintf(
+		"Host web\n  HostName 192.0.2.20\n  User deploy\n  IdentityFile %q\n", filepath.ToSlash(keyPath)))
+	profileID, err := m.st.AddProfile("team")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := m.RunImport(config, []string{"web"}, "team", WebUISource("192.0.2.7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 1 {
+		t.Fatalf("应导入一台：%+v", result)
+	}
+
+	importRows, err := m.st.QueryAudit(store.AuditFilter{Actions: []string{"server.import"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(importRows) != 1 {
+		t.Fatalf("导入应写一条 server.import 审计，实际 %d", len(importRows))
+	}
+	row := importRows[0]
+	if row.Source != store.AuditSourceWebUI || row.SourceIP != "192.0.2.7" || row.Status != "ok" {
+		t.Fatalf("导入审计来源不正确：%+v", row)
+	}
+	if strings.Contains(row.Command, "PRIVATE KEY") || strings.Contains(row.Command, "secret") {
+		t.Fatalf("导入审计摘要不得包含凭据内容：%s", row.Command)
+	}
+
+	grantRows, err := m.st.QueryAudit(store.AuditFilter{Actions: []string{"profile.grant"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grantRows) != 1 || grantRows[0].Source != store.AuditSourceWebUI || grantRows[0].SourceIP != "192.0.2.7" {
+		t.Fatalf("导入授权应走访问管理模块并带来源审计：%+v", grantRows)
+	}
+	granted, err := m.st.ServersForProfile(profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(granted) != 1 {
+		t.Fatalf("导入应授权 profile，实际 %v", granted)
+	}
+
+	// 命令行来源同样落在两行审计的来源列上。
+	otherConfig := writeSSHConfig(t, dir, "Host cli\n  HostName 192.0.2.21\n  User deploy\n")
+	if _, err := m.RunImport(otherConfig, []string{"cli"}, "", CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	importRows, err = m.st.QueryAudit(store.AuditFilter{Actions: []string{"server.import"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(importRows) != 2 || importRows[0].Source != store.AuditSourceCLI || importRows[0].SourceIP != "" {
+		t.Fatalf("命令行导入审计来源不正确：%+v", importRows)
+	}
+}

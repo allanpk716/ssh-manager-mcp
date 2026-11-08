@@ -78,62 +78,83 @@ func (m *Manager) Edit(req EditRequest, src Source) (*EditResult, error) {
 		return nil, m.auditEditError(srv.Name, attempted, &RevisionConflict{Current: srv}, src)
 	}
 	origName := srv.Name
-	changed := make([]string, 0, len(attempted))
-	apply := func(field string, set func()) {
-		changed = append(changed, field)
-		set()
-	}
-	if req.Name != nil {
-		apply("name", func() { srv.Name = *req.Name })
-	}
-	if req.Host != nil {
-		apply("host", func() { srv.Host = *req.Host })
-	}
-	if req.Port != nil {
-		apply("port", func() { srv.Port = *req.Port })
-	}
-	if req.User != nil {
-		apply("user", func() { srv.User = *req.User })
-	}
-	if req.Shell != nil {
-		if _, err := models.ParseShellType(*req.Shell); err != nil {
-			return nil, m.auditEditError(origName, attempted, err, src)
+	supplementAffected := []string(nil)
+	// applyEditFields 把非凭据字段套用到一行服务器条目上并返回字段名。
+	applyEditFields := func(target *models.Server) ([]string, error) {
+		fields := make([]string, 0, len(attempted))
+		apply := func(field string, set func()) {
+			fields = append(fields, field)
+			set()
 		}
-		apply("shell", func() { srv.ShellType = models.ShellType(*req.Shell) })
+		if req.Name != nil {
+			apply("name", func() { target.Name = *req.Name })
+		}
+		if req.Host != nil {
+			apply("host", func() { target.Host = *req.Host })
+		}
+		if req.Port != nil {
+			apply("port", func() { target.Port = *req.Port })
+		}
+		if req.User != nil {
+			apply("user", func() { target.User = *req.User })
+		}
+		if req.Shell != nil {
+			if _, parseErr := models.ParseShellType(*req.Shell); parseErr != nil {
+				return nil, &FieldError{
+					Field: "shell",
+					CLI:   parseErr.Error(),
+					Page:  "shell 类型无效（可选 posix、powershell、cmd）。",
+				}
+			}
+			apply("shell", func() { target.ShellType = models.ShellType(*req.Shell) })
+		}
+		if req.Description != nil {
+			apply("description", func() { target.Description = strings.TrimSpace(*req.Description) })
+		}
+		if req.Tags != nil {
+			apply("tags", func() { target.Tags = *req.Tags })
+		}
+		if req.Location != nil {
+			apply("location", func() { target.Location = strings.TrimSpace(*req.Location) })
+		}
+		if req.Hardware != nil {
+			apply("hardware", func() { target.Hardware = strings.TrimSpace(*req.Hardware) })
+		}
+		if req.Services != nil {
+			apply("services", func() { target.Services = strings.TrimSpace(*req.Services) })
+		}
+		if req.Role != nil {
+			apply("role", func() { target.Role = strings.TrimSpace(*req.Role) })
+		}
+		if req.Caveats != nil {
+			apply("special-handling", func() { target.Caveats = strings.TrimSpace(*req.Caveats) })
+		}
+		if req.ExposeHost != nil {
+			apply("expose-host", func() { target.ExposeHost = *req.ExposeHost })
+		}
+		return fields, nil
 	}
-	if req.Description != nil {
-		apply("description", func() { srv.Description = strings.TrimSpace(*req.Description) })
-	}
-	if req.Tags != nil {
-		apply("tags", func() { srv.Tags = *req.Tags })
-	}
-	if req.Location != nil {
-		apply("location", func() { srv.Location = strings.TrimSpace(*req.Location) })
-	}
-	if req.Hardware != nil {
-		apply("hardware", func() { srv.Hardware = strings.TrimSpace(*req.Hardware) })
-	}
-	if req.Services != nil {
-		apply("services", func() { srv.Services = strings.TrimSpace(*req.Services) })
-	}
-	if req.Role != nil {
-		apply("role", func() { srv.Role = strings.TrimSpace(*req.Role) })
-	}
-	if req.Caveats != nil {
-		apply("special-handling", func() { srv.Caveats = strings.TrimSpace(*req.Caveats) })
-	}
-	if req.ExposeHost != nil {
-		apply("expose-host", func() { srv.ExposeHost = *req.ExposeHost })
+	changed, err := applyEditFields(srv)
+	if err != nil {
+		return nil, m.auditEditError(origName, attempted, err, src)
 	}
 
 	passwordSet := req.Password != nil
 	keySet := req.KeyPath != nil || req.KeyContent != nil
 	if passwordSet && keySet {
-		err := errors.New("--password and --key are mutually exclusive; provide exactly one")
+		err := &FieldError{
+			Field: "password",
+			CLI:   "--password and --key are mutually exclusive; provide exactly one",
+			Page:  "密码与私钥只能选择其一。",
+		}
 		return nil, m.auditEditError(origName, attempted, err, src)
 	}
 	if req.ClearCredential && (passwordSet || keySet || req.KeyPassphrase != nil) {
-		err := errors.New("--clear-credential is mutually exclusive with --password/--key")
+		err := &FieldError{
+			Field: "clear-credential",
+			CLI:   "--clear-credential is mutually exclusive with --password/--key",
+			Page:  "清除凭据不能与密码、私钥或私钥口令同时提交。",
+		}
 		return nil, m.auditEditError(origName, attempted, err, src)
 	}
 	if req.ClearCredential {
@@ -152,25 +173,72 @@ func (m *Manager) Edit(req EditRequest, src Source) (*EditResult, error) {
 		return &EditResult{Server: cleared, ChangedFields: []string{"clear-credential"}}, nil
 	}
 	if passwordSet && strings.TrimSpace(*req.Password) == "" {
-		err := errors.New("--password 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）")
+		err := &FieldError{
+			Field: "password",
+			CLI:   "--password 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）",
+			Page:  "密码不能为空（更换凭据请给新值；清除凭据请选择清除凭据）。",
+		}
 		return nil, m.auditEditError(origName, attempted, err, src)
 	}
 	if keySet && strings.TrimSpace(keyText(req)) == "" {
-		err := errors.New("--key 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）")
+		err := &FieldError{
+			Field: "key",
+			CLI:   "--key 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）",
+			Page:  "私钥不能为空（更换凭据请给新值；清除凭据请选择清除凭据）。",
+		}
 		return nil, m.auditEditError(origName, attempted, err, src)
 	}
 	if req.SudoPassword != nil && strings.TrimSpace(*req.SudoPassword) == "" {
-		err := errors.New("--sudo-password 不能为空（更换凭据请给新值）")
+		err := &FieldError{
+			Field: "sudo-password",
+			CLI:   "--sudo-password 不能为空（更换凭据请给新值）",
+			Page:  "sudo 密码不能为空（更换凭据请给新值）。",
+		}
 		return nil, m.auditEditError(origName, attempted, err, src)
 	}
 
-	// 只补私钥口令：不重新粘贴私钥，直接校验并写入 vault 里已存私钥的口令。
+	// 只补私钥口令：不重新粘贴私钥，直接校验并写入 vault 里已存私钥的口
+	// 令。单独使用时只写凭据与标签；与其他字段一起提交时，先写口令并重新
+	// 读取目标行，再把其余字段套用到最新行上，两部分同一请求生效。
 	if req.KeyPassphrase != nil && *req.KeyPassphrase != "" && !keySet && !passwordSet {
-		if len(changed) > 0 || req.SudoPassword != nil {
-			err := errors.New("只补私钥口令与其他字段编辑不能混在一次提交里")
+		affected, err := m.applyKeyPassphrase(srv, *req.KeyPassphrase)
+		if err != nil {
+			var fieldErr *FieldError
+			if !errors.As(err, &fieldErr) {
+				err = &FieldError{Field: "key-passphrase", CLI: err.Error(), Page: err.Error()}
+			}
 			return nil, m.auditEditError(origName, attempted, err, src)
 		}
-		return m.SupplementKeyPassphrase(srv.ID, *req.KeyPassphrase, src)
+		changed = append(changed, "key-passphrase")
+		affectedNames := serverNames(affected)
+		if len(changed) == 1 && req.SudoPassword == nil {
+			var saved *models.Server
+			for _, item := range affected {
+				if item.ID == srv.ID {
+					saved = item
+				}
+			}
+			if saved == nil {
+				if saved, err = m.st.GetServer(srv.ID); err != nil {
+					return nil, err
+				}
+			}
+			if err := m.writeAudit("server.edit", map[string]any{
+				"name": origName, "changed": changed,
+			}, nil, src); err != nil {
+				return nil, err
+			}
+			return &EditResult{Server: saved, ChangedFields: changed, AffectedServers: affectedNames}, nil
+		}
+		if srv, err = m.st.GetServer(srv.ID); err != nil {
+			return nil, err
+		}
+		fieldChanges, err := applyEditFields(srv)
+		if err != nil {
+			return nil, m.auditEditError(origName, attempted, err, src)
+		}
+		changed = append(changed, fieldChanges...)
+		supplementAffected = affectedNames
 	}
 
 	var cred, sudoCred *models.Credential
@@ -214,7 +282,7 @@ func (m *Manager) Edit(req EditRequest, src Source) (*EditResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &EditResult{Server: saved, ChangedFields: changed}, nil
+	return &EditResult{Server: saved, ChangedFields: changed, AffectedServers: supplementAffected}, nil
 }
 
 // attemptedFields 列出这次请求实际提交的字段名（用于失败审计）。
@@ -275,3 +343,14 @@ func keyText(req EditRequest) string {
 	}
 	return ""
 }
+
+// FieldError 表示一次服务器提交里某个字段的校验失败。CLI 是命令行措辞（含
+// 参数名），Page 是页面措辞（不含命令行参数名）；两个界面各取所需，存储
+// 与审计不受影响。
+type FieldError struct {
+	Field string
+	CLI   string
+	Page  string
+}
+
+func (e *FieldError) Error() string { return e.CLI }

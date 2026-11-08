@@ -332,3 +332,41 @@ func serverRevisions(t *testing.T, dbPath string, mk []byte, names ...string) ma
 	}
 	return out
 }
+
+// TestServersListSharedCredentialBeforeWrite 补私钥口令影响共用凭据的全部
+// 服务器：命令行在询问口令或写入前列出受影响的服务器名。
+func TestServersListSharedCredentialBeforeWrite(t *testing.T) {
+	dbPath, mk := newVaultEnvNoRun(t)
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "enc_key")
+	keyPEM := genKeyFile(t, keyPath, "secret-pass")
+	st := openInspect(t, dbPath, mk)
+	cred := &models.Credential{Type: models.CredPrivateKey, Secret: keyPEM}
+	if _, err := st.AddServerWithCredentials(&models.Server{
+		Name: "enc", Host: "192.0.2.3", Port: 22, User: "root", Role: "r",
+		Tags: []string{models.TagNeedsPassphrase},
+	}, cred, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServerWithCredentials(&models.Server{
+		Name: "peer", Host: "192.0.2.4", Port: 22, User: "root", Role: "r",
+	}, &models.Credential{ID: cred.ID, Type: models.CredPrivateKey}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCliWithInput(t, "\n\n\n\n\n\n\nsecret-pass\ns\ne\n", "servers", "complete")
+	if err != nil {
+		t.Fatalf("complete: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "补私钥口令会影响共用这把私钥的全部服务器：enc,peer") {
+		t.Fatalf("complete 应在询问口令前列出共用服务器：\n%s", out)
+	}
+
+	editOut := runCli(t, "servers", "edit", "enc", "--key-passphrase", "secret-pass")
+	if !strings.Contains(editOut, "补私钥口令会影响共用这把私钥的全部服务器：enc,peer") {
+		t.Fatalf("edit 应在写入前列出共用服务器：\n%s", editOut)
+	}
+}

@@ -29,20 +29,7 @@ func (m *Manager) SupplementKeyPassphrase(identifier, passphrase string, src Sou
 		}, opErr, src)
 		return opErr
 	}
-	if srv.CredentialID == "" {
-		return nil, auditError(errors.New("这台服务器还没有登录凭据，不能只补私钥口令"))
-	}
-	cred, err := m.st.GetCredential(srv.CredentialID)
-	if err != nil {
-		return nil, err
-	}
-	if cred == nil || cred.Type != models.CredPrivateKey {
-		return nil, auditError(errors.New("这台服务器的登录凭据不是私钥，不能补私钥口令"))
-	}
-	if err := ValidateKeyPassphrase(cred.Secret, []byte(passphrase)); err != nil {
-		return nil, auditError(fmt.Errorf("私钥口令校验失败，未保存：%w", err))
-	}
-	affected, err := m.st.UpdateCredentialPassphrase(cred.ID, []byte(passphrase))
+	affected, err := m.applyKeyPassphrase(srv, passphrase)
 	if err != nil {
 		return nil, auditError(err)
 	}
@@ -66,6 +53,30 @@ func (m *Manager) SupplementKeyPassphrase(identifier, passphrase string, src Sou
 	return &EditResult{
 		Server: saved, AffectedServers: serverNames(affected), ChangedFields: []string{"key-passphrase"},
 	}, nil
+}
+
+// applyKeyPassphrase 校验口令能解开 vault 里已存的私钥，再把口令写进这份
+// 凭据，并从所有引用这份凭据的服务器条目上移除待补口令标签。只做数据写
+// 入，不写审计；审计摘要由两个调用入口按各自请求构造。
+func (m *Manager) applyKeyPassphrase(srv *models.Server, passphrase string) ([]*models.Server, error) {
+	if srv.CredentialID == "" {
+		return nil, errors.New("这台服务器还没有登录凭据，不能只补私钥口令")
+	}
+	cred, err := m.st.GetCredential(srv.CredentialID)
+	if err != nil {
+		return nil, err
+	}
+	if cred == nil || cred.Type != models.CredPrivateKey {
+		return nil, errors.New("这台服务器的登录凭据不是私钥，不能补私钥口令")
+	}
+	if err := ValidateKeyPassphrase(cred.Secret, []byte(passphrase)); err != nil {
+		return nil, fmt.Errorf("私钥口令校验失败，未保存：%w", err)
+	}
+	affected, err := m.st.UpdateCredentialPassphrase(cred.ID, []byte(passphrase))
+	if err != nil {
+		return nil, err
+	}
+	return affected, nil
 }
 
 // ValidateKeyPassphrase 校验口令确实能解开这把私钥。先走 OpenSSH 支持的
@@ -99,4 +110,25 @@ func serverNames(servers []*models.Server) []string {
 		names = append(names, srv.Name)
 	}
 	return names
+}
+
+// SharedCredentialServers 返回与这台服务器共用同一份登录凭据的全部服务器
+// 名字（含这台服务器本身），供补私钥口令前列出受影响条目；没有登录凭据时
+// 返回空列表。
+func (m *Manager) SharedCredentialServers(identifier string) ([]string, error) {
+	srv, err := m.st.ResolveServer(identifier)
+	if err != nil {
+		return nil, err
+	}
+	if srv == nil {
+		return nil, fmt.Errorf("server %q not found", identifier)
+	}
+	if srv.CredentialID == "" {
+		return nil, nil
+	}
+	servers, err := m.st.ServersUsingCredential(srv.CredentialID)
+	if err != nil {
+		return nil, err
+	}
+	return serverNames(servers), nil
 }

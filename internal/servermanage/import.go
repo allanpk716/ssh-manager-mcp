@@ -6,8 +6,10 @@ import (
 	"os/user"
 	"path/filepath"
 
+	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/importer"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
 )
 
 // 候选凭据注释代号：Web UI 与命令行换成人能读懂的说明。
@@ -72,11 +74,11 @@ type ImportResult struct {
 func (m *Manager) PlanImport(configPath, profile string) (*ImportPlan, error) {
 	plan := &ImportPlan{Path: configPath}
 	if profile != "" {
-		profID, err := m.profileIDByName(profile)
+		profID, profName, err := m.resolveProfile(profile)
 		if err != nil {
 			return nil, err
 		}
-		plan.ProfileID, plan.ProfileName = profID, profile
+		plan.ProfileID, plan.ProfileName = profID, profName
 	}
 	candidates, err := m.planCandidates(configPath, plan)
 	if err != nil {
@@ -132,15 +134,16 @@ func (m *Manager) planCandidates(configPath string, plan *ImportPlan) ([]importe
 
 // RunImport 重新解析并执行导入：selected 是要导入的候选名字集合；不在计划
 // 里或产生冲突的名字按跳过计数。同批相同私钥只建一份凭据，加密私钥原样导
-// 入并写待补口令标签。profile 非空时在导入成功后授权这批服务器。
-func (m *Manager) RunImport(configPath string, selected []string, profile string, _ Source) (*ImportResult, error) {
+// 入并写待补口令标签。profile 非空时在导入成功后经访问管理模块授权这批服
+// 务器。导入结束写一条 server.import 审计，摘要只含计数，不含凭据。
+func (m *Manager) RunImport(configPath string, selected []string, profile string, src Source) (*ImportResult, error) {
 	plan := &ImportPlan{Path: configPath}
 	if profile != "" {
-		profID, err := m.profileIDByName(profile)
+		profID, profName, err := m.resolveProfile(profile)
 		if err != nil {
 			return nil, err
 		}
-		plan.ProfileID, plan.ProfileName = profID, profile
+		plan.ProfileID, plan.ProfileName = profID, profName
 	}
 	candidates, err := m.planCandidates(configPath, plan)
 	if err != nil {
@@ -202,13 +205,37 @@ func (m *Manager) RunImport(configPath string, selected []string, profile string
 		status(cand.Name, "imported", nil)
 		result.Entries[len(result.Entries)-1].Note = note
 	}
+	result.Pending = m.pendingCount(result.ImportedServerIDs)
+	runErr := error(nil)
+	if err := m.writeAudit("server.import", importAuditSummary(result), nil, src); err != nil {
+		return result, err
+	}
 	if plan.ProfileID != "" && len(result.ImportedServerIDs) > 0 {
-		if err := m.st.GrantServers(plan.ProfileID, result.ImportedServerIDs); err != nil {
-			return result, fmt.Errorf("导入成功但授权 profile 失败：%w", err)
+		if _, err := access.New(m.st).GrantServers(profile, result.ImportedServerIDs, accessSource(src)); err != nil {
+			runErr = fmt.Errorf("导入成功但授权 profile 失败：%w", err)
+			_ = m.writeAudit("server.import", importAuditSummary(result), runErr, src)
+			return result, runErr
 		}
 	}
-	result.Pending = m.pendingCount(result.ImportedServerIDs)
 	return result, nil
+}
+
+// importAuditSummary 构造导入审计摘要：只含四类计数，不含任何路径或凭据
+// 内容。
+func importAuditSummary(result *ImportResult) map[string]any {
+	return map[string]any{
+		"imported": result.Imported, "skipped": result.Skipped,
+		"failed": result.Failed, "pending": result.Pending,
+	}
+}
+
+// accessSource 把服务器管理模块的来源换算成访问管理模块的来源，保证授权
+// 审计与导入审计带同一来源。
+func accessSource(src Source) access.Source {
+	if src.kind == store.AuditSourceWebUI {
+		return access.WebUISource(src.addr)
+	}
+	return access.CLISource()
 }
 
 // pendingCount 统计给定服务器里当前仍需要注意的数量；导入结果与补全结果页
@@ -243,17 +270,19 @@ func (m *Manager) AttentionPendingIDs(ids []string) []string {
 	return pending
 }
 
-func (m *Manager) profileIDByName(name string) (string, error) {
+// resolveProfile 把 profile 的名字或标识符解析成标识符：命令行按名字提
+// 交，Web UI 候选页下拉框按标识符提交，两个入口都能用。
+func (m *Manager) resolveProfile(identifier string) (id, name string, err error) {
 	profiles, err := m.st.ListProfiles()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	for _, profile := range profiles {
-		if profile.Name == name {
-			return profile.ID, nil
+		if profile.Name == identifier || profile.ID == identifier {
+			return profile.ID, profile.Name, nil
 		}
 	}
-	return "", fmt.Errorf("profile %q not found（可先创建 profile 再导入）", name)
+	return "", "", fmt.Errorf("profile %q not found（可先创建 profile 再导入）", identifier)
 }
 
 // Profiles 返回全部 profile，供导入计划页提供授权选项。
