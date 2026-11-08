@@ -130,6 +130,8 @@ type capabilities struct {
 	ShowAccessArea bool
 	// CanManageProfiles 控制是否显示 Profile 页入口与写操作。
 	CanManageProfiles bool
+	// CanManageProjects 控制是否显示项目令牌页入口与写操作。
+	CanManageProjects bool
 	// HasPairingAndDeviceCodes 表示本机角色是否有配对与设备码能力，后续
 	// 页面接入时用它决定导航。
 	HasPairingAndDeviceCodes bool
@@ -149,12 +151,13 @@ func capabilitiesForRole(role Role) capabilities {
 	if role == RoleServer {
 		return capabilities{
 			RoleLabel: "权威端", CanWrite: true, ShowAuthorityActions: true,
-			ShowAccessArea: true, CanManageProfiles: true, HasPairingAndDeviceCodes: true,
+			ShowAccessArea: true, CanManageProfiles: true, CanManageProjects: true,
+			HasPairingAndDeviceCodes: true,
 		}
 	}
 	return capabilities{
 		RoleLabel: "单机", CanWrite: true,
-		ShowAccessArea: true, CanManageProfiles: true,
+		ShowAccessArea: true, CanManageProfiles: true, CanManageProjects: true,
 	}
 }
 
@@ -253,7 +256,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 静态资源在自身处理器里改成长期缓存。
 	w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	// same-origin 而不是 no-referrer：no-referrer 会让浏览器在同源表单提交
+	// 时发送 Origin: null，写请求的来源校验会拒绝真实用户；same-origin 同
+	// 样不向跨源目标透露引用地址。
+	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("Cache-Control", "no-store")
 	hostOK := hostAllowed(r.Host, h.cfg.Port)
 	if h.cfg.Role == RoleServer {

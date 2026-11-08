@@ -99,6 +99,13 @@ type AccessStore interface {
 	AddProfile(name string, source AccessWriteSource) error
 	DeleteProfile(id string, source AccessWriteSource) (*AccessProfileInUse, error)
 	SetServerGrants(profileID string, expected, desired []string, source AccessWriteSource) (AccessGrantChange, *AccessGrantConflict, error)
+	ListProjects(includeRevoked bool) ([]AccessProjectSummary, error)
+	AddProject(name, profileID string, source AccessWriteSource) (AccessProjectToken, error)
+	RotateProject(id string, source AccessWriteSource) (AccessProjectToken, error)
+	DisableProject(id string, source AccessWriteSource) error
+	EnableProject(id string, source AccessWriteSource) error
+	RevokeProject(id string, source AccessWriteSource) error
+	DeleteProject(id string, source AccessWriteSource) error
 }
 
 // AccessWriteSource 描述一次 Web UI 写请求的来源；访问管理适配器把它换算
@@ -125,6 +132,12 @@ func (h *handler) registerAccessRoutes() {
 	h.mux.HandleFunc(accessProfilesPath, h.handleAccessProfiles)
 	h.mux.HandleFunc(accessProfileDeletePath, h.handleAccessProfileDelete)
 	h.mux.HandleFunc(accessProfilesPrefix, h.handleAccessProfileGrants)
+	h.mux.HandleFunc(accessProjectsPath, h.handleAccessProjects)
+	h.mux.HandleFunc(projectRotatePath, h.handleAccessProjectRotate)
+	h.mux.HandleFunc(projectDisablePath, h.handleAccessProjectDisable)
+	h.mux.HandleFunc(projectEnablePath, h.handleAccessProjectEnable)
+	h.mux.HandleFunc(projectRevokePath, h.handleAccessProjectRevoke)
+	h.mux.HandleFunc(projectDeletePath, h.handleAccessProjectDelete)
 }
 
 func (h *handler) handleAccessRoot(w http.ResponseWriter, r *http.Request) {

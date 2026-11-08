@@ -449,8 +449,11 @@ func assertSecurityHeaders(t *testing.T, resp *http.Response, where string) {
 	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Fatalf("%s 的 X-Content-Type-Options = %q，应为 nosniff", where, got)
 	}
-	if got := resp.Header.Get("Referrer-Policy"); got != "no-referrer" {
-		t.Fatalf("%s 的 Referrer-Policy = %q，应为 no-referrer", where, got)
+	// Referrer-Policy 用 same-origin：no-referrer 会让浏览器在同源表单提交
+	// 里把 Origin 头序列化成字符串 "null"，写请求自己的来源校验就会全部
+	// 失败；same-origin 同样不向跨源目标透露引用地址。
+	if got := resp.Header.Get("Referrer-Policy"); got != "same-origin" {
+		t.Fatalf("%s 的 Referrer-Policy = %q，应为 same-origin", where, got)
 	}
 }
 

@@ -77,6 +77,63 @@ func (s openerStore) SetServerGrants(profileID string, expected, desired []strin
 	return change, conflict, err
 }
 
+func (s openerStore) ListProjects(includeRevoked bool) ([]webui.AccessProjectSummary, error) {
+	var projects []webui.AccessProjectSummary
+	err := s.withManager(func(manager *access.Manager) error {
+		rows, err := managerStore{manager: manager}.ListProjects(includeRevoked)
+		if err != nil {
+			return err
+		}
+		projects = rows
+		return nil
+	})
+	return projects, err
+}
+
+func (s openerStore) AddProject(name, profileID string, source webui.AccessWriteSource) (webui.AccessProjectToken, error) {
+	var token webui.AccessProjectToken
+	err := s.withManager(func(manager *access.Manager) error {
+		result, err := managerStore{manager: manager}.AddProject(name, profileID, source)
+		token = result
+		return err
+	})
+	return token, err
+}
+
+func (s openerStore) RotateProject(id string, source webui.AccessWriteSource) (webui.AccessProjectToken, error) {
+	var token webui.AccessProjectToken
+	err := s.withManager(func(manager *access.Manager) error {
+		result, err := managerStore{manager: manager}.RotateProject(id, source)
+		token = result
+		return err
+	})
+	return token, err
+}
+
+func (s openerStore) DisableProject(id string, source webui.AccessWriteSource) error {
+	return s.withManager(func(manager *access.Manager) error {
+		return managerStore{manager: manager}.DisableProject(id, source)
+	})
+}
+
+func (s openerStore) EnableProject(id string, source webui.AccessWriteSource) error {
+	return s.withManager(func(manager *access.Manager) error {
+		return managerStore{manager: manager}.EnableProject(id, source)
+	})
+}
+
+func (s openerStore) RevokeProject(id string, source webui.AccessWriteSource) error {
+	return s.withManager(func(manager *access.Manager) error {
+		return managerStore{manager: manager}.RevokeProject(id, source)
+	})
+}
+
+func (s openerStore) DeleteProject(id string, source webui.AccessWriteSource) error {
+	return s.withManager(func(manager *access.Manager) error {
+		return managerStore{manager: manager}.DeleteProject(id, source)
+	})
+}
+
 func (s managerStore) ListProfiles() ([]webui.AccessProfileSummary, error) {
 	profiles, err := s.manager.ListProfiles()
 	if err != nil {
@@ -128,6 +185,66 @@ func (s managerStore) SetServerGrants(profileID string, expected, desired []stri
 		return webui.AccessGrantChange{}, nil, err
 	}
 	return webui.AccessGrantChange{Added: serverRefs(result.Added), Removed: serverRefs(result.Removed)}, nil, nil
+}
+
+func (s managerStore) ListProjects(includeRevoked bool) ([]webui.AccessProjectSummary, error) {
+	projects, err := s.manager.ListProjects(includeRevoked)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]webui.AccessProjectSummary, 0, len(projects))
+	for _, project := range projects {
+		out = append(out, webui.AccessProjectSummary{
+			ID:          project.ID,
+			Name:        project.Name,
+			TokenPrefix: project.TokenPrefix,
+			Status:      string(project.Status),
+			ProfileID:   project.ProfileID,
+			ProfileName: project.ProfileName,
+			CreatedAt:   project.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+func (s managerStore) AddProject(name, profileID string, source webui.AccessWriteSource) (webui.AccessProjectToken, error) {
+	result, err := s.manager.AddProject(name, profileID, access.WebUISource(source.RemoteAddress))
+	if err != nil {
+		return webui.AccessProjectToken{}, err
+	}
+	return projectToken(result), nil
+}
+
+func (s managerStore) RotateProject(id string, source webui.AccessWriteSource) (webui.AccessProjectToken, error) {
+	result, err := s.manager.RotateProject(id, access.WebUISource(source.RemoteAddress))
+	if err != nil {
+		return webui.AccessProjectToken{}, err
+	}
+	return projectToken(result), nil
+}
+
+func (s managerStore) DisableProject(id string, source webui.AccessWriteSource) error {
+	return s.manager.DisableProject(id, access.WebUISource(source.RemoteAddress))
+}
+
+func (s managerStore) EnableProject(id string, source webui.AccessWriteSource) error {
+	return s.manager.EnableProject(id, access.WebUISource(source.RemoteAddress))
+}
+
+func (s managerStore) RevokeProject(id string, source webui.AccessWriteSource) error {
+	return s.manager.RevokeProject(id, access.WebUISource(source.RemoteAddress))
+}
+
+func (s managerStore) DeleteProject(id string, source webui.AccessWriteSource) error {
+	return s.manager.DeleteProject(id, access.WebUISource(source.RemoteAddress))
+}
+
+// projectToken 把访问管理模块的一次性签发或轮换结果转成 Web UI 展示结
+// 构；片段保持模块生成的原文，保证与命令行输出完全一致。
+func projectToken(result access.ProjectTokenResult) webui.AccessProjectToken {
+	return webui.AccessProjectToken{
+		ID: result.ID, Name: result.Name, Token: result.Token, Snippet: result.Snippet,
+	}
 }
 
 func serverRefs(refs []access.ServerRef) []webui.AccessServerRef {

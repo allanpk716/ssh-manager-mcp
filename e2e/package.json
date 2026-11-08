@@ -1,0 +1,11 @@
+{
+  "name": "sshmgr-browser-tests",
+  "private": true,
+  "description": "sshmgr Web UI 的 Playwright 浏览器测试，只在本机或独立工作流运行",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0"
+  }
+}

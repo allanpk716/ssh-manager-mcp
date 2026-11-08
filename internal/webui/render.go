@@ -22,26 +22,32 @@ type parsedPage struct {
 // pageData 是所有页面模板共享的渲染数据；新增页面时在这里扩展字段，
 // 不另建一套传递结构。
 type pageData struct {
-	Title                  string
-	Assets                 assetURLs
-	Caps                   capabilities
-	VersionHint            string
-	CSRFToken              string
-	Authenticated          bool
-	Servers                []ServerRow
-	AccessProfiles         []AccessProfileSummary
-	AccessDeleteRefusal    *AccessProfileInUse
-	AccessGrant            *AccessGrantView
-	AccessGrantNotice      string
-	AccessFlash            *AccessFlash
-	AccessDeleteReverifyID string
-	ErrorTitle             string
-	ErrorMessage           string
-	AdminPasswordSet       bool
-	CertificateFingerprint string
-	LoginError             string
-	LockRemaining          time.Duration
-	NextPath               string
+	Title                       string
+	Assets                      assetURLs
+	Caps                        capabilities
+	VersionHint                 string
+	CSRFToken                   string
+	Authenticated               bool
+	Servers                     []ServerRow
+	AccessProfiles              []AccessProfileSummary
+	AccessProjects              []AccessProjectSummary
+	AccessProjectToken          *AccessProjectToken
+	AccessProjectIncludeRevoked bool
+	AccessProjectNotice         string
+	AccessProjectFormName       string
+	AccessProjectFormProfileID  string
+	AccessDeleteRefusal         *AccessProfileInUse
+	AccessGrant                 *AccessGrantView
+	AccessGrantNotice           string
+	AccessFlash                 *AccessFlash
+	AccessDeleteReverifyID      string
+	ErrorTitle                  string
+	ErrorMessage                string
+	AdminPasswordSet            bool
+	CertificateFingerprint      string
+	LoginError                  string
+	LockRemaining               time.Duration
+	NextPath                    string
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染
