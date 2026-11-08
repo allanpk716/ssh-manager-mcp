@@ -113,7 +113,7 @@ type OpsStore interface {
 	// ClientStatus 读取指定客户端实例的连接状态与本地快照摘要。
 	ClientStatus(instance string) (OpsClientStatus, error)
 	// SwitchClientInstance 校验目标实例可切换并写实例本机审计。
-	SwitchClientInstance(instance, sourceIP string) error
+	SwitchClientInstance(from, instance, sourceIP string) error
 	// SyncClient 立即同步指定客户端实例并写实例本机审计。
 	SyncClient(instance, sourceIP string) (OpsClientStatus, error)
 }

@@ -145,7 +145,7 @@ func TestSwitchClientInstanceRejectsIncompleteAndWritesAudit(t *testing.T) {
 		t.Fatal("拒绝切换时不应写实例审计日志")
 	}
 
-	if err := SwitchClientInstance("", "laptop", WebUISource("127.0.0.1")); err != nil {
+	if err := SwitchClientInstance("startup", "laptop", WebUISource("127.0.0.1")); err != nil {
 		t.Fatalf("切换到材料齐全实例失败：%v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(cacheRoot, "instances", "laptop", "cache-audit.log"))
@@ -160,8 +160,9 @@ func TestSwitchClientInstanceRejectsIncompleteAndWritesAudit(t *testing.T) {
 		row["source_ip"] != "127.0.0.1" || row["status"] != "ok" {
 		t.Fatalf("实例切换审计行不符：%s", data)
 	}
-	if command, _ := row["command"].(string); !strings.Contains(command, `"to_instance":"laptop"`) {
-		t.Fatalf("实例切换审计摘要应记录目标实例：%s", data)
+	if command, _ := row["command"].(string); !strings.Contains(command, `"from_instance":"startup"`) ||
+		!strings.Contains(command, `"to_instance":"laptop"`) {
+		t.Fatalf("实例切换审计摘要应记录原实例与目标实例：%s", data)
 	}
 }
 

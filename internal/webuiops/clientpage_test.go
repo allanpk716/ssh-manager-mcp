@@ -38,7 +38,7 @@ func TestClientAdapterListsAndSwitchesInstances(t *testing.T) {
 	if len(instances) != 1 || instances[0].DisplayName != "默认实例" || !instances[0].Complete {
 		t.Fatalf("适配器返回的实例列表不符：%+v", instances)
 	}
-	if err := source.SwitchClientInstance("", "127.0.0.1"); err != nil {
+	if err := source.SwitchClientInstance("", "", "127.0.0.1"); err != nil {
 		t.Fatalf("适配器切换默认实例失败：%v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(cacheDir, "cache-audit.log"))

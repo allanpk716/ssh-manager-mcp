@@ -132,7 +132,8 @@ func (h *handler) handleOpsClientInstance(w http.ResponseWriter, r *http.Request
 		return
 	}
 	target := r.PostFormValue("instance")
-	if err := h.cfg.Ops.SwitchClientInstance(target, remoteIP(r)); err != nil {
+	from := h.requestClientInstance(r)
+	if err := h.cfg.Ops.SwitchClientInstance(from, target, remoteIP(r)); err != nil {
 		data, response := h.renderOpsClientPage(w, r, "", err.Error())
 		if response {
 			return

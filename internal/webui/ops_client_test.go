@@ -23,6 +23,7 @@ type stubClientOpsStore struct {
 	*stubOpsStore
 
 	switchInstances      []string
+	switchFromInstances  []string
 	switchSourceIPs      []string
 	statusInstances      []string
 	updateInstances      []string
@@ -45,7 +46,7 @@ func (s *stubOpsStore) ClientStatus(string) (OpsClientStatus, error) {
 	return OpsClientStatus{}, nil
 }
 
-func (s *stubOpsStore) SwitchClientInstance(string, string) error { return nil }
+func (s *stubOpsStore) SwitchClientInstance(string, string, string) error { return nil }
 
 func (s *stubOpsStore) SyncClient(string, string) (OpsClientStatus, error) {
 	return OpsClientStatus{}, nil
@@ -79,7 +80,8 @@ func (s *stubClientOpsStore) QueryClientAudit(instance string, limit int) ([]Ops
 	return s.clientAuditRows, nil
 }
 
-func (s *stubClientOpsStore) SwitchClientInstance(instance, sourceIP string) error {
+func (s *stubClientOpsStore) SwitchClientInstance(from, instance, sourceIP string) error {
+	s.switchFromInstances = append(s.switchFromInstances, from)
 	s.switchInstances = append(s.switchInstances, instance)
 	s.switchSourceIPs = append(s.switchSourceIPs, sourceIP)
 	return s.switchErr
@@ -127,8 +129,10 @@ func TestClientInstanceSwitchChangesServerListOnlyForItsSession(t *testing.T) {
 		t.Fatalf("切换实例状态码=%d 跳转=%q", switchResponse.StatusCode, switchResponse.Header.Get("Location"))
 	}
 	if len(ops.switchInstances) != 1 || ops.switchInstances[0] != "laptop" ||
+		len(ops.switchFromInstances) != 1 || ops.switchFromInstances[0] != "startup" ||
 		len(ops.switchSourceIPs) != 1 || ops.switchSourceIPs[0] != "192.0.2.1" {
-		t.Fatalf("实例切换调用不符：%+v %+v", ops.switchInstances, ops.switchSourceIPs)
+		t.Fatalf("实例切换调用不符：原实例=%+v 目标=%+v 来源地址=%+v",
+			ops.switchFromInstances, ops.switchInstances, ops.switchSourceIPs)
 	}
 
 	switchedList := doGetWithCookie(t, webHandler, cookie, "/ui/")

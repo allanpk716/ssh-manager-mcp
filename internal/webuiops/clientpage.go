@@ -44,8 +44,8 @@ func clientStatus(instance string) (webui.OpsClientStatus, error) {
 	}, nil
 }
 
-func switchClientInstance(instance, sourceIP string) error {
-	return ops.SwitchClientInstance("", instance, ops.WebUISource(sourceIP))
+func switchClientInstance(from, instance, sourceIP string) error {
+	return ops.SwitchClientInstance(from, instance, ops.WebUISource(sourceIP))
 }
 
 func syncClient(instance, sourceIP string, pull ops.ClientPullFunction) (webui.OpsClientStatus, error) {
@@ -78,8 +78,8 @@ func (clientAuditStore) ClientStatus(instance string) (webui.OpsClientStatus, er
 	return clientStatus(instance)
 }
 
-func (clientAuditStore) SwitchClientInstance(instance, sourceIP string) error {
-	return switchClientInstance(instance, sourceIP)
+func (clientAuditStore) SwitchClientInstance(from, instance, sourceIP string) error {
+	return switchClientInstance(from, instance, sourceIP)
 }
 
 func (s clientAuditStore) SyncClient(instance, sourceIP string) (webui.OpsClientStatus, error) {
@@ -94,7 +94,9 @@ func (managerStore) ClientStatus(string) (webui.OpsClientStatus, error) {
 	return webui.OpsClientStatus{}, errClientOpsUnavailable
 }
 
-func (managerStore) SwitchClientInstance(string, string) error { return errClientOpsUnavailable }
+func (managerStore) SwitchClientInstance(string, string, string) error {
+	return errClientOpsUnavailable
+}
 
 func (managerStore) SyncClient(string, string) (webui.OpsClientStatus, error) {
 	return webui.OpsClientStatus{}, errClientOpsUnavailable
@@ -108,7 +110,9 @@ func (openerStore) ClientStatus(string) (webui.OpsClientStatus, error) {
 	return webui.OpsClientStatus{}, errClientOpsUnavailable
 }
 
-func (openerStore) SwitchClientInstance(string, string) error { return errClientOpsUnavailable }
+func (openerStore) SwitchClientInstance(string, string, string) error {
+	return errClientOpsUnavailable
+}
 
 func (openerStore) SyncClient(string, string) (webui.OpsClientStatus, error) {
 	return webui.OpsClientStatus{}, errClientOpsUnavailable
