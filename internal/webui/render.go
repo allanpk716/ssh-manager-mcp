@@ -67,6 +67,7 @@ type pageData struct {
 	OpsUpdate                   *OpsUpdateStatus
 	OpsUpdateResult             *OpsUpdateApplyResult
 	OpsUpdateError              *OpsUpdateError
+	OpsUpdateRestarting         bool
 	ErrorTitle                  string
 	ErrorMessage                string
 	AdminPasswordSet            bool

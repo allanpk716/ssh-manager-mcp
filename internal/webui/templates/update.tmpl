@@ -1,6 +1,11 @@
 {{define "content"}}
 <section class="ops-section">
 <h1>升级</h1>
+{{if .OpsUpdateRestarting}}
+<div class="notice notice-info">
+<p>正在重启，请稍后刷新。重启会断开活动隧道，待批准的配对请求会作废。</p>
+</div>
+{{end}}
 {{if .OpsUpdateError}}
 <div class="notice notice-error">
 <p>{{if eq .OpsUpdateError.Step.Text "进行中"}}升级正在进行，请等待当前升级完成后重试。{{else}}升级在「{{.OpsUpdateError.Step.Text}}」这一步失败：{{.OpsUpdateError.Message}}。旧二进制保持不变，可重试。{{end}}</p>
@@ -9,7 +14,8 @@
 {{if .OpsUpdateResult}}
 <div class="notice notice-success">
 <p>已把 {{.OpsUpdateResult.OldVersion}} 替换为 {{.OpsUpdateResult.NewVersion}}。</p>
-<p>请关闭并重新运行 sshmgr ui 以使用新版本；正在运行的 MCP 桥会在空闲时自动换到新版本。</p>
+{{if .Caps.CanRestartService}}<p>待重启服务；新版本会在服务重启后运行。</p>{{end}}
+{{if not .Caps.CanRestartService}}<p>请关闭并重新运行 sshmgr ui 以使用新版本；正在运行的 MCP 桥会在空闲时自动换到新版本。</p>{{end}}
 {{if .OpsUpdateResult.Warning}}<p>{{.OpsUpdateResult.Warning}}</p>{{end}}
 </div>
 {{end}}
@@ -28,6 +34,16 @@
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <button type="submit">升级到 {{.OpsUpdate.TargetVersion}}</button>
 </form>
+{{end}}
+{{if .Caps.CanRestartService}}
+<section class="restart-service">
+<h2>重启服务</h2>
+<p class="operation-warning">重启会断开活动隧道，待批准的配对请求会作废。请确认现在可以中断连接。</p>
+<form class="restart-form" method="post" action="/ui/ops/update/restart">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">确认重启服务</button>
+</form>
+</section>
 {{end}}
 {{end}}
 </section>
