@@ -193,6 +193,8 @@ func (h *handler) handleAuthorityLoginPost(w http.ResponseWriter, r *http.Reques
 		h.writeAuthorityAudit(ip, "web.login.failed", "error", nil)
 		if limit.Locked {
 			h.writeAuthorityAudit(ip, "web.login.locked", "blocked", nil)
+			h.renderLoginPageWithError(w, r, http.StatusForbidden, "来源 IP 已锁定", "这个来源 IP 已被锁定，请等剩余时间结束后再试。", limit.LockRemaining)
+			return
 		}
 		h.renderLoginPageWithError(w, r, http.StatusUnauthorized, "口令不正确", "管理员口令不正确，请重试。", limit.LockRemaining)
 		return
