@@ -8,6 +8,7 @@ import (
 	"ssh-manager-mcp/internal/clientcache"
 	"ssh-manager-mcp/internal/dialdevice"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/probeobserve"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
@@ -80,6 +81,16 @@ func (s *StoreSource) ResolveDialSuccessCache() (sshbroker.DialSuccessCacheSourc
 		return nil, nil
 	}
 	return cache, nil
+}
+
+// ResolveDialObserver 为统一拨号入口解析真实 SSH 连接顺带记录的观察者。
+// 当前部署形态没有可写探测结果文件时返回空观察者。
+func (s *StoreSource) ResolveDialObserver() (sshbroker.DialAttemptObserver, error) {
+	path, ok, err := probeobserve.PathFor(s.instance)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return probeobserve.NewDialObserver(s.store, s.instance, path), nil
 }
 
 // ServerDialSuccess 读取这个实例为服务器条目记录的仍有效成功地址。

@@ -120,10 +120,11 @@ func normalizeDialAddress(address string) string {
 	return store.NormalizeSSHHost(address)
 }
 
-// PlanServerDialAddresses 是按网络拓扑规划候选 SSH 地址的纯函数：只取拨号
-// 设备也是成员的网络里的目标地址，加上服务器条目的兜底主机；物理局域网
-// 优先于虚拟局域网，兜底主机最后，同级按网络成员登记序号。
-func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.NetworkMembership, fallbackHost string) DialAddressPlan {
+// PlanCommonNetworkAddresses 是共享的候选地址规划纯函数：只取拨号设备也
+// 是成员的网络里的目标地址，物理局域网优先于虚拟局域网，同级按网络成
+// 员登记序号；不追加任何兜底主机。按服务器条目拨号与连通探测共用它，
+// 保证两条路径的共同网络判定与排序不会漂移。
+func PlanCommonNetworkAddresses(targetMemberships, dialerMemberships []*models.NetworkMembership) DialAddressPlan {
 	dialerNetworks := make(map[string]bool, len(dialerMemberships))
 	for _, membership := range dialerMemberships {
 		if membership != nil {
@@ -167,10 +168,6 @@ func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.Netw
 			key: normalizeDialAddress(membership.Address), rank: dialAddressPriority(source),
 		})
 	}
-	prepared = append(prepared, preparedAddress{
-		item: DialAddress{Address: fallbackHost, Source: DialAddressFallback},
-		key:  normalizeDialAddress(fallbackHost), rank: dialAddressPriority(DialAddressFallback),
-	})
 	sort.SliceStable(prepared, func(i, j int) bool {
 		if prepared[i].rank != prepared[j].rank {
 			return prepared[i].rank < prepared[j].rank
@@ -204,6 +201,32 @@ func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.Netw
 		}
 	}
 	return DialAddressPlan{Candidates: out, HasTargetTopology: hasTopology, FallbackOnlyReason: reason}
+}
+
+// PlanServerDialAddresses 是按服务器条目拨号使用的候选地址规划纯函数：
+// 先取共享规划给出的共同网络地址，再追加服务器条目的兜底主机；物理局
+// 域网优先于虚拟局域网，兜底主机最后，同级按网络成员登记序号。
+func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.NetworkMembership, fallbackHost string) DialAddressPlan {
+	plan := PlanCommonNetworkAddresses(targetMemberships, dialerMemberships)
+	prepared := make([]DialAddress, 0, len(plan.Candidates)+1)
+	prepared = append(prepared, plan.Candidates...)
+	prepared = append(prepared, DialAddress{
+		Address: fallbackHost, Source: DialAddressFallback,
+	})
+	// 兜底主机排在共同网络地址之后；与拓扑地址重复时只保留优先级更高
+	// 的那份，与共享规划使用同一条等价地址去重规则。
+	out := make([]DialAddress, 0, len(prepared))
+	seen := make(map[string]bool, len(prepared))
+	for _, candidate := range prepared {
+		key := normalizeDialAddress(candidate.Address)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, candidate)
+	}
+	plan.Candidates = out
+	return plan
 }
 
 func networkSequencesByRegistration(memberships []*models.NetworkMembership) map[string]int {
@@ -255,6 +278,28 @@ type DialSuccessCacheResolver interface {
 	ResolveDialSuccessCache() (DialSuccessCacheSource, error)
 }
 
+// DialAttemptOutcome 是统一拨号入口对一个候选地址的观察结论。Category 使
+// 用连通探测的共用错误分类；连接成功时为空。Detail 附人可读说明（例如
+// 主机密钥不同）。
+type DialAttemptOutcome struct {
+	OK       bool
+	Category models.ProbeErrorCategory
+	Detail   string
+	Duration time.Duration
+}
+
+// DialAttemptObserver 接收统一拨号入口实际试过的每个拓扑候选地址的观察。
+// 兜底主机不属于任何登记网络，不会交给观察者；观察记录失败不影响连接。
+type DialAttemptObserver interface {
+	ObserveDialAttempt(server *models.Server, candidate DialAddress, outcome DialAttemptOutcome)
+}
+
+// DialObserverResolver lets a production topology source resolve its concrete
+// dial observer once per dial, mirroring DialSuccessCacheResolver.
+type DialObserverResolver interface {
+	ResolveDialObserver() (DialAttemptObserver, error)
+}
+
 // StaticDialTopology 是固定拓扑视图，供测试和调用方显式注入。
 type StaticDialTopology DialTopology
 
@@ -285,6 +330,10 @@ type ServerDialRequest struct {
 	Topology DialTopologySource
 	// SuccessCache 是本次拨号使用的成功地址缓存；nil 表示不使用。
 	SuccessCache DialSuccessCacheSource
+	// Observer 接收每个实际试过的拓扑候选地址的探测观察；nil 表示本次
+	// 拨号不记录。生产拓扑来源可以实现 DialObserverResolver，让入口自动
+	// 解析观察者。
+	Observer DialAttemptObserver
 }
 
 // lowLevelDial 是统一入口的低层连接函数：按「主机、端口」拨一个地址并完成
@@ -384,6 +433,17 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			plan = orderPlanWithDialSuccess(plan, records, time.Now())
 		}
 	}
+	observer := req.Observer
+	if observer == nil {
+		if resolver, ok := req.Topology.(DialObserverResolver); ok && resolver != nil {
+			resolved, err := resolver.ResolveDialObserver()
+			if err != nil {
+				warnDialObserverFailure(err)
+			} else {
+				observer = resolved
+			}
+		}
+	}
 	hostKeyCallback, err := HostKeyTOFU(req.HostKeys, req.Server)
 	if err != nil {
 		return nil, nil, err
@@ -416,6 +476,15 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			}
 		} else {
 			stopAddressTimeout()
+		}
+		if observer != nil && candidate.Source != DialAddressFallback {
+			outcome := DialAttemptOutcome{
+				OK: err == nil, Category: ClassifyProbeDialError(err), Duration: time.Since(attemptStarted),
+			}
+			if errors.Is(err, ErrHostKeyMismatch) {
+				outcome.Detail = "主机密钥不同"
+			}
+			observer.ObserveDialAttempt(req.Server, candidate, outcome)
 		}
 		if err == nil {
 			if successCache != nil {
@@ -453,6 +522,10 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 
 func warnDialSuccessCacheFailure(action string, err error) {
 	fmt.Fprintf(os.Stderr, "sshmgr: 成功地址缓存%s失败（继续拨号）: %v\n", action, err)
+}
+
+func warnDialObserverFailure(err error) {
+	fmt.Fprintf(os.Stderr, "sshmgr: 解析探测结果记录器失败（本次拨号不记录）: %v\n", err)
 }
 
 func fallbackOnlyDialPlan(plan DialAddressPlan) bool {

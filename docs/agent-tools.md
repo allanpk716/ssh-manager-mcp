@@ -460,6 +460,30 @@ v0.20.0+)。无参数。**平时你不需要调它**——owner 更新磁盘二�
 失败安全:继任进程起不来时,旧桥继续服务并返回失败原因,会话不受损。详细行为
 与兜底路径见 [agent-access.md](./agent-access.md) 桥热升级(reload_self)一节。
 
+### probe_connectivity
+
+探测「从这里/某台受管服务器出发，到登记设备的指定传输控制协议端口现在
+通不通、建连多快」。参数：
+
+| 字段 | 含义 |
+|---|---|
+| `from` | 起点：`self`（当前 sshmgr 实例对应的本机设备）或授权范围内某台服务器的编号 |
+| `targets` | 目标列表，最多 10 个（去重后）；每项是服务器编号或设备名，可附「:端口」 |
+
+- 只测 **TCP 建连与耗时**，不测带宽；端口缺省时目标写服务器编号用条目端
+  口，否则用 22。
+- **只探测登记过的组合**：按起点设备与目标设备的共同网络逐个探测登记
+  地址（物理局域网在前、虚拟局域网其次）；没有共同网络的目标返回「无共
+  同网络，未探测」，不自动发现、不测兜底主机。
+- 结果为紧凑文本（不暴露 IP），**只存在发起实例本地**的探测结果文件，
+  不回传权威端。
+- `from` 写服务器编号时经 SSH 在那台服务器上执行 sshmgr 生成的**固定命令**
+  （按条目 shell 类型），**不经命令策略，但写审计**（与 `exec_context`
+  同一先例：策略是护栏不是安全边界，见 ADR 0007）；审计摘要会注明这一
+  点。
+- 每个地址超时 1.5 秒（`SSHMGR_SSH_ADDRESS_TIMEOUT`）、整次调用总时限
+  30 秒、最多 5 个目标并发；超时或被打断的地址标「探测未完成」。
+
 ## 错误对照表（每条给"你该做什么"）
 
 | 报错 | 含义 | 你该做 |
@@ -596,5 +620,6 @@ HEAD，后续重构以符号名为准）：
 | 凭据字节永不出现在任何工具结果（owner 侧模型） | `internal/mcpserver/types.go:5`；docs/agent-access.md「安全模型回顾（铁律）」；../README.md "The security model" |
 | 每次工具调用全程审计（project/server/action/status/命令/耗时） | `internal/mcpserver/core.go:81-89` 等；../README.md "What the agent gets" |
 | 命令策略门在取凭据、建 SSH 连接之前（拦截 / 需确认都不建连接，拦截零字节到服务器）；判定内核是纯函数，权威端与客户端同一条代码路径，离线用最后一次拉到的规则 | `internal/mcpserver/policygate.go`（policyJudge）；`internal/mcpserver/core.go`（ExecCommandForProfile 的 gate 段）；`internal/mcpserver/bgtools.go`（后台同款门）；`internal/policy/policy.go`（Evaluate） |
+| probe_connectivity：只测 TCP 建连与耗时、只探测登记过的共同网络组合（不测兜底主机）、结果只存发起实例本地；经服务器探测执行固定命令、不经命令策略但写审计 | 规格 #142；ADR 0007（命令策略是护栏不是安全边界） |
 | 确认码与「服务器编号 + 命令完整文本」的哈希绑定、5 分钟有效、单次作废、进程内存不持久化；约 6 位字母数字（字母表去 0/O、1/I/L） | `internal/mcpserver/confirmcode.go`（confirmationTTL / confirmBindingKey / issue / consume / confirmationCodeAlphabet） |
 | 命令策略审计动作：前台 exec-blocked / exec-confirm-required / exec-confirmed，后台 exec-bg-blocked / exec-bg-confirm-required / exec-bg-confirmed（Status 列存命中规则编号；带码执行行的 Command 列存「命令原文 + 确认理由」JSON 摘要） | `internal/mcpserver/core.go`；`internal/mcpserver/bgtools.go`；`internal/mcpserver/confirmcode.go`（gateExecConfirmation） |
