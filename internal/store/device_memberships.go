@@ -88,6 +88,30 @@ func (s *Store) AddNetworkMembership(deviceName, networkName, address string) (*
 	return membership, tx.Commit()
 }
 
+// AllVirtualNetworkAddresses 返回拓扑里所有设备在虚拟局域网中的成员地址。
+// 监听地址推导只拿这一组地址与本机网卡地址求交集，不按网卡名或网段猜测。
+func (s *Store) AllVirtualNetworkAddresses() ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT member.address
+		FROM network_memberships member
+		JOIN networks network ON network.id=member.network_id
+		WHERE network.type=?
+		ORDER BY member.address`, string(models.NetworkVirtual))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]string, 0)
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			return nil, err
+		}
+		out = append(out, address)
+	}
+	return out, rows.Err()
+}
+
 // EditNetworkMembership 修改设备在指定网络里的地址。数据行与审计行在同一
 // 个事务里提交。
 func (s *Store) EditNetworkMembership(deviceName, networkName, address string) (*models.NetworkMembership, error) {
