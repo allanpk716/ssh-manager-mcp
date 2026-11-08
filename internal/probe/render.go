@@ -83,13 +83,19 @@ func (r *Report) Text() string {
 	return strings.Join(lines, "\n")
 }
 
-// Summary 返回审计摘要：起点与「目标:端口」列表，只写服务器编号与设备
-// 名，不写地址。经服务器探测时额外注明固定命令不经命令策略。
-func (r *Report) Summary() string {
+// TargetSummaries 返回「目标:端口」列表，只含服务器编号与设备名。
+func (r *Report) TargetSummaries() []string {
 	targets := make([]string, 0, len(r.Targets))
 	for _, target := range r.Targets {
 		targets = append(targets, fmt.Sprintf("%s:%d", target.Label, target.Port))
 	}
+	return targets
+}
+
+// Summary 返回审计摘要：起点与「目标:端口」列表，只写服务器编号与设备
+// 名，不写地址。经服务器探测时额外注明固定命令不经命令策略。
+func (r *Report) Summary() string {
+	targets := r.TargetSummaries()
 	from := r.From
 	if r.FromDevice != "" {
 		from = r.From + "（" + r.FromDevice + "）"
