@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/updater"
 )
 
@@ -380,6 +381,22 @@ func (s *UpdateService) writeAudit(source Source, entry UpdateAuditEntry) error 
 		return nil
 	}
 	return s.deps.Audit(source, entry)
+}
+
+// WriteUpdateAudit 把替换二进制的结果写入权威 vault 审计表。
+func (m *Manager) WriteUpdateAudit(source Source, entry UpdateAuditEntry) error {
+	summary := map[string]any{
+		"old_version": entry.OldVersion, "new_version": entry.NewVersion, "result": entry.Result,
+	}
+	if entry.Detail != "" {
+		summary["detail"] = entry.Detail
+	}
+	row := store.OwnerAuditRow(entry.Action, summary)
+	row.Source, row.SourceIP = source.AuditFields()
+	if entry.Result != "ok" {
+		row.Status = "error"
+	}
+	return m.st.WriteAudit(row)
 }
 
 func nonEmpty(values ...string) []string {

@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"ssh-manager-mcp/internal/mcpserver"
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 )
@@ -151,10 +152,20 @@ func newServeCertInfoCmd() *cobra.Command {
 // default value of a cobra bool flag must never count as "explicitly set".
 func serveSwitchOpts(cmd *cobra.Command) mcpserver.ServeOpts {
 	return mcpserver.ServeOpts{
-		PairingFlag:      flagBoolIfChanged(cmd, "pairing"),
-		DiscoveryFlag:    flagBoolIfChanged(cmd, "discovery"),
-		MetadataEditFlag: flagBoolIfChanged(cmd, "metadata-edit"),
+		PairingFlag:             flagBoolIfChanged(cmd, "pairing"),
+		DiscoveryFlag:           flagBoolIfChanged(cmd, "discovery"),
+		MetadataEditFlag:        flagBoolIfChanged(cmd, "metadata-edit"),
+		ServiceRestarterFactory: newServeServiceRestarter,
 	}
+}
+
+// newServeServiceRestarter 复用 kardianos/service 现有抽象构造 serve 服务的
+// 重启句柄；不在 Web UI 层写任何平台专属服务管理命令。
+func newServeServiceRestarter() (ops.ServiceRestarter, error) {
+	return serviceNew(&program{}, &service.Config{
+		Name:   serveServiceName,
+		Option: platformServiceOptions(),
+	})
 }
 
 // flagBoolIfChanged returns the flag's value only when it was explicitly set

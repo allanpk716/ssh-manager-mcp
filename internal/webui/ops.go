@@ -180,9 +180,15 @@ func (h *handler) registerOpsRoutes() {
 		h.caps.CanUpgradeBinary = false
 		return
 	}
-	// 回环升级页本票只接单机与客户端；权威端的两步升级由后续票接入。
-	if h.caps.CanUpgradeBinary && h.cfg.Role != RoleServer {
-		h.mux.HandleFunc(opsUpdatePath, h.handleOpsUpdate)
+	if h.caps.CanUpgradeBinary {
+		if h.cfg.Role == RoleServer {
+			h.mux.HandleFunc(opsUpdatePath, h.handleAuthorityOpsUpdate)
+		} else {
+			h.mux.HandleFunc(opsUpdatePath, h.handleOpsUpdate)
+		}
+	}
+	if h.cfg.Role == RoleServer && h.caps.CanRestartService {
+		h.mux.HandleFunc(opsUpdateRestartPath, h.handleRestartAfterResponse(h.handleAuthorityOpsUpdateRestart))
 	}
 	if h.cfg.Role == RoleClient {
 		if h.caps.CanQueryClientAudit {
