@@ -88,7 +88,7 @@ func (m *webUIListenerManager) Sync(now time.Time) (WebUIListenerStatus, error) 
 		listener, bindErr := m.options.Bind(net.JoinHostPort(address, strconv.Itoa(m.options.Port)))
 		if bindErr != nil {
 			m.pending[address] = now.Add(30 * time.Second)
-			m.logLocked("sshmgr serve: web UI bind %s failed, retry in 30s: %v", address, bindErr)
+			m.logLocked("sshmgr serve: Web UI 绑定 %s 失败，30 秒后重试：%v", address, bindErr)
 			continue
 		}
 		delete(m.pending, address)
@@ -114,7 +114,7 @@ func (m *webUIListenerManager) Sync(now time.Time) (WebUIListenerStatus, error) 
 	sort.Strings(activeAddresses)
 	sort.Strings(pendingAddresses)
 	if plan.NeedsManualListen && !m.hintLog {
-		m.logLocked("sshmgr serve: web UI has no virtual LAN address; only 127.0.0.1 is listening; set serve.ui_listen to override")
+		m.logLocked("sshmgr serve: 未找到本机存在的虚拟局域网地址，Web UI 当前只监听 127.0.0.1；可用设置项 serve.ui_listen 指定地址")
 	}
 	m.hintLog = plan.NeedsManualListen
 	m.mu.Unlock()
@@ -122,7 +122,7 @@ func (m *webUIListenerManager) Sync(now time.Time) (WebUIListenerStatus, error) 
 	for _, listener := range opened {
 		go func(listener net.Listener) {
 			if err := m.options.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				m.options.Log("sshmgr serve: web UI listener %s exited: %v", listener.Addr(), err)
+				m.options.Log("sshmgr serve: Web UI 监听 %s 退出：%v", listener.Addr(), err)
 			}
 		}(listener)
 	}

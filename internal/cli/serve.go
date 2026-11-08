@@ -32,12 +32,13 @@ func newServeCmd() *cobra.Command {
 	var pairing, discovery, metaEdit bool
 	c := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the authoritative vault server (/snapshot + /pair) for the multi-machine bridge posture",
+		Short: "常驻运行权威端：主监听提供 /snapshot 与 /pair，Web UI 使用独立 HTTPS 端口",
 		Long: `Run the authoritative vault as a resident server for the multi-machine
-bridge posture. It serves exactly: the authenticated /snapshot endpoint
-(device-code gated, profile-scoped cache pull), the SAS pairing surface
-/pair/* (a new machine enrolls in one shot with 'sshmgr pair'), and —
-in a later release — the web admin UI. There is NO remote MCP surface:
+bridge posture. The main listener serves exactly: the authenticated
+/snapshot endpoint (device-code gated, profile-scoped cache pull) and the
+SAS pairing surface /pair/* (a new machine enrolls in one shot with
+'sshmgr pair'); /ui and its subpaths answer 404 there. The authority Web
+UI is served on its own HTTPS listener. There is NO remote MCP surface:
 agents on work machines run locally from a read-only cache
 ('sshmgr mcp --cache'); the MCP stdio bridge posture is documented in
 docs/multi-machine.md.

@@ -188,6 +188,9 @@ const (
 // New 构造 Web UI 的根处理器与一次性启动令牌。构造完成后令牌只在第一次
 // 有效使用时换取会话，之后立即作废。
 func New(cfg Config) (http.Handler, Startup, error) {
+	if cfg.Role == RoleServer {
+		return nil, Startup{}, errors.New("权威端 Web UI 必须使用 NewAuthority 构造")
+	}
 	if err := cfg.validate(); err != nil {
 		return nil, Startup{}, err
 	}
@@ -232,7 +235,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		hostOK = h.authorityHostAllowed(r.Host)
 	}
 	if !hostOK {
-		h.renderError(w, r, http.StatusMisdirectedRequest, "请求来源不被接受", "Web UI 只允许从本机回环地址访问。请重新运行 `sshmgr ui`。")
+		message := "Web UI 只允许从本机回环地址访问。请重新运行 `sshmgr ui`。"
+		if h.cfg.Role == RoleServer {
+			message = "Web UI 只允许从实际监听地址访问。请核对 `sshmgr serve admin status` 输出的地址。"
+		}
+		h.renderError(w, r, http.StatusMisdirectedRequest, "请求来源不被接受", message)
 		return
 	}
 	if h.cfg.Role == RoleServer {

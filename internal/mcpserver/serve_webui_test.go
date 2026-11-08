@@ -45,7 +45,7 @@ func TestRunServeSeparatesWebUIListenerFromMainListener(t *testing.T) {
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // 测试只验证分离监听，不校准自签证书。
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // 测试只验证分离监听，不校对自签证书。
 		},
 		Timeout: 2 * time.Second,
 	}

@@ -27,7 +27,7 @@ var serveAdminPasswordPrompt = func() ([]byte, error) {
 func newServeAdminCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "admin",
-		Short: "Manage the authoritative web UI administrator password and sessions",
+		Short: "管理权威端 Web UI 的管理员口令与会话",
 	}
 	c.AddCommand(
 		newServeAdminSetCmd(),
@@ -84,7 +84,7 @@ func writeAuthorityWebUIStatus(out io.Writer, st *store.Store) error {
 func newServeAdminSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set",
-		Short: "Set or reset the authoritative web UI administrator password",
+		Short: "设置或重置权威端 Web UI 的管理员口令",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := requireServerRoleVault()
@@ -122,7 +122,7 @@ func newServeAdminSetCmd() *cobra.Command {
 func newServeAdminUnlockCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "unlock [IP]",
-		Short: "Clear one web UI login lock, or list active locks",
+		Short: "解除一个 Web UI 登录锁定；不带参数时列出当前锁定",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := requireServerRoleVault()
@@ -163,7 +163,7 @@ func newServeAdminUnlockCmd() *cobra.Command {
 func newServeAdminLogoutAllCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout-all",
-		Short: "Invalidate every authoritative web UI session",
+		Short: "注销全部权威端 Web UI 会话",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := requireServerRoleVault()
@@ -187,7 +187,7 @@ func newServeAdminLogoutAllCmd() *cobra.Command {
 func newServeAdminStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show authoritative web UI addresses and certificate fingerprint",
+		Short: "显示权威端 Web UI 地址与证书指纹",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := requireServerRoleVault()

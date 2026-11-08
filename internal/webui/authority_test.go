@@ -109,6 +109,13 @@ func TestAuthorityWithoutPasswordShowsOnlySetupGuidance(t *testing.T) {
 	if strings.Contains(page, "<form") {
 		t.Fatalf("未设口令页面不应提供表单或操作入口：\n%s", page)
 	}
+	for _, target := range []string{"/ui/", "/ui/password", "/ui/other"} {
+		resp := authorityGet(t, handler, "127.0.0.1:7879", target, nil)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != loginPath {
+			t.Fatalf("未设口令时 %s 应跳转登录页，状态码=%d 跳转=%q", target, resp.StatusCode, resp.Header.Get("Location"))
+		}
+	}
 }
 
 func TestAuthorityLoginExchangesPasswordForSecureSession(t *testing.T) {
