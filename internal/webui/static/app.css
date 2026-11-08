@@ -234,6 +234,62 @@ h1 {
   cursor: pointer;
 }
 
+.confirm-form {
+  /* 吊销确认的勾选与按钮在窄屏也保持可点，不用横向滚动。 */
+  align-items: flex-start;
+}
+
+.confirm-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-small);
+  color: var(--color-warning-text);
+}
+
+.token-block {
+  margin: var(--space-medium) 0;
+  padding: var(--space-medium);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  background: var(--color-panel);
+}
+
+.token-value {
+  display: block;
+  padding: var(--space-small);
+  border: 1px dashed var(--color-panel-border);
+  border-radius: 6px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.token-snippet {
+  margin: 0;
+  padding: var(--space-small);
+  border: 1px dashed var(--color-panel-border);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.token-snippet code {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.copy-button {
+  margin-top: var(--space-small);
+  padding: var(--space-small);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.token-warning {
+  color: var(--color-warning-text);
+}
+
 .server-table tr.needs-attention {
   background: rgba(163, 116, 42, 0.16);
 }

@@ -6,6 +6,9 @@ node_modules/
 dist/
 build/
 *.log
+e2e/.artifacts/
+e2e/test-results/
+e2e/playwright-report/
 
 # Secrets & local state — credential-management tool; never commit these
 .env
