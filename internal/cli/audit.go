@@ -98,12 +98,14 @@ func newAuditCmd() *cobra.Command {
 			}
 			projNames, srvNames := auditNameMaps(s)
 			for _, r := range rows {
-				fmt.Fprintf(out, "%s  %s  %s  %s  %s  exit=%d  %dms  %s%s\n",
+				fmt.Fprintf(out, "%s  %s  %s  %s  %s  来源=%s 来源IP=%s exit=%d  %dms  %s%s\n",
 					r.TS.Local().Format("2006-01-02 15:04:05-07:00"),
 					escapeAuditText(displayAuditEntity(r.ServerID, srvNames)),
 					escapeAuditText(displayAuditProject(r.ProjectID, projNames)),
 					escapeAuditText(r.Action),
 					escapeAuditText(r.Status),
+					escapeAuditText(r.Source),
+					escapeAuditText(r.SourceIP),
 					r.ExitCode, r.DurationMS,
 					sudoMark(r.Sudo),
 					escapeAuditText(r.Command),
@@ -122,7 +124,7 @@ func newAuditCmd() *cobra.Command {
 	c.Flags().StringSliceVar(&actions, "action", nil, "filter by action (repeatable/comma; unknown values match nothing)")
 	c.Flags().StringSliceVar(&statuses, "status", nil, "filter by status (repeatable/comma; unknown values match nothing)")
 	c.Flags().IntVar(&limit, "limit", 100, "max rows (default 100; 0 = unlimited — audit_log has no auto-cleanup, mind big vaults)")
-	c.Flags().BoolVar(&asJSON, "json", false, "JSONL output (same nine fields as the offline sidecar)")
+	c.Flags().BoolVar(&asJSON, "json", false, "JSONL output (same eleven fields as the offline sidecar)")
 	return c
 }
 

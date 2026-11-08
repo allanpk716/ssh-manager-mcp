@@ -1,6 +1,13 @@
 package vault
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,4 +70,73 @@ func TestWebUIAuthStoreAdaptsVaultStateAndAudit(t *testing.T) {
 		rows[0].SourceIP != "192.0.2.10" {
 		t.Fatalf("适配器应写入 Web UI 审计：%+v", rows)
 	}
+}
+
+func TestAuthorityHandlerUsesVaultAuthStore(t *testing.T) {
+	masterKey, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSHMGR_VAULT_ROOT", t.TempDir())
+	t.Setenv("SSHMGR_STORE", filepath.Join(t.TempDir(), "store.db"))
+	st, err := OpenStore(&fakeKeyProvider{key: masterKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	auth := NewWebUIAuthStore(st)
+	if _, err := auth.SetAdminPassword([]byte("vault-password")); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1800000000, 0)
+	handler, _, err := webui.NewAuthority(webui.Config{
+		Role: webui.RoleServer, Port: 7879, Auth: auth,
+		Servers: fixedVaultUIRows{}, CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts: []string{"127.0.0.1"}, Now: func() time.Time { return now },
+		Sleep: func(time.Duration) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pageRequest := httptest.NewRequest(http.MethodGet, "/ui/login", nil)
+	pageRequest.Host = "127.0.0.1:7879"
+	pageRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(pageRecorder, pageRequest)
+	pageResponse := pageRecorder.Result()
+	pageBody, _ := io.ReadAll(pageResponse.Body)
+	pageResponse.Body.Close()
+	match := regexp.MustCompile(`<input type="hidden" name="csrf_token" value="([^"]+)"`).FindStringSubmatch(string(pageBody))
+	if match == nil {
+		t.Fatalf("登录页缺少防跨站请求伪造令牌：\n%s", pageBody)
+	}
+	var csrfCookie *http.Cookie
+	for _, cookie := range pageResponse.Cookies() {
+		if cookie.Name == "__Host-sshmgr_csrf" {
+			csrfCookie = cookie
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("登录页缺少 __Host- 前缀防跨站请求伪造 cookie")
+	}
+	form := url.Values{"password": {"vault-password"}, "csrf_token": {match[1]}}
+	loginRequest := httptest.NewRequest(http.MethodPost, "/ui/login", strings.NewReader(form.Encode()))
+	loginRequest.Host = "127.0.0.1:7879"
+	loginRequest.RemoteAddr = "198.51.100.9:45678"
+	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRequest.Header.Set("Origin", "https://127.0.0.1:7879")
+	loginRequest.AddCookie(csrfCookie)
+	loginRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(loginRecorder, loginRequest)
+	loginResponse := loginRecorder.Result()
+	loginResponse.Body.Close()
+	if loginResponse.StatusCode != http.StatusSeeOther {
+		t.Fatalf("vault 口令登录状态码 = %d，应为 303", loginResponse.StatusCode)
+	}
+}
+
+type fixedVaultUIRows struct{}
+
+func (fixedVaultUIRows) Servers() ([]webui.ServerRow, error) {
+	return []webui.ServerRow{{Name: "权威服务器"}}, nil
 }

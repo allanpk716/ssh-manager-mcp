@@ -71,6 +71,12 @@ func insertAuditRow(db dbtx, r AuditRow) error {
 	if r.Sudo {
 		sudo = 1
 	}
+	if r.Source == "" {
+		r.Source = AuditSourceCLI
+		if r.ProjectID != "" {
+			r.Source = AuditSourceAgent
+		}
+	}
 	_, err := db.Exec(
 		`INSERT INTO audit_log (ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,

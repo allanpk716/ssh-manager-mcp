@@ -139,6 +139,11 @@ func (m *webUIListenerManager) Sync(now time.Time) (WebUIListenerStatus, error) 
 
 // Run 周期性重新计算监听地址。固定轮询避免要求 vault 提供专门的变更通知。
 func (m *webUIListenerManager) Run(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return m.Close()
+	default:
+	}
 	if _, err := m.Sync(time.Now()); err != nil {
 		return err
 	}
