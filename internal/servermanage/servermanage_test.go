@@ -1,7 +1,13 @@
 package servermanage
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -136,4 +142,209 @@ func TestDetailShowsNonSensitiveFacts(t *testing.T) {
 	if err != nil || missing != nil {
 		t.Fatalf("不存在的服务器应返回 nil，实际 detail=%+v err=%v", missing, err)
 	}
+}
+
+func auditActions(t *testing.T, m *Manager) []store.AuditRow {
+	t.Helper()
+	rows, err := m.st.QueryAudit(store.AuditFilter{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+// TestEditPartialUpdateAndRevisionLock 校验部分更新语义、修订号乐观锁与审
+// 计：只提交的字段写入；修订号不一致时拒绝并返回当前值；审计带来源与字段
+// 名、不带字段值。
+func TestEditPartialUpdateAndRevisionLock(t *testing.T) {
+	m := newTestManager(t)
+	id := mustAddServer(t, m, &models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "deploy", Role: "旧角色",
+		Location: "机房 A",
+	})
+	before, err := m.st.GetServer(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	role := "网站前端"
+	result, err := m.Edit(EditRequest{
+		Identifier: "web", Role: &role,
+		ExpectedRevision: before.Revision, CheckRevision: true,
+	}, CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Server.Role != "网站前端" || result.Server.Location != "机房 A" {
+		t.Fatalf("部分更新不得清空未提交字段：%+v", result.Server)
+	}
+	if result.Server.Revision != before.Revision+1 {
+		t.Fatalf("编辑后修订号应加一：%d -> %d", before.Revision, result.Server.Revision)
+	}
+	wantChanged := []string{"role"}
+	if len(result.ChangedFields) != len(wantChanged) || result.ChangedFields[0] != wantChanged[0] {
+		t.Fatalf("变更字段 = %v", result.ChangedFields)
+	}
+
+	stale := before.Revision
+	_, err = m.Edit(EditRequest{
+		Identifier: "web", Role: &role, ExpectedRevision: stale, CheckRevision: true,
+	}, CLISource())
+	var conflict *RevisionConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("修订号不一致应返回冲突错误，实际 %v", err)
+	}
+	if conflict.Current == nil || conflict.Current.Revision != before.Revision+1 {
+		t.Fatalf("冲突错误应带当前值：%+v", conflict.Current)
+	}
+
+	rows := auditActions(t, m)
+	if len(rows) < 1 || rows[len(rows)-1].Action != "server.edit" || rows[len(rows)-1].Source != store.AuditSourceCLI {
+		t.Fatalf("编辑审计缺失或来源不对：%+v", rows)
+	}
+}
+
+// TestEditCredentialReplaceCleansTagAndOldCredential 校验更换登录凭据后移除
+// 待补私钥口令标签，且旧凭据在无其他引用时被清理。
+func TestEditCredentialReplaceCleansTagAndOldCredential(t *testing.T) {
+	m := newTestManager(t)
+	id := mustAddServer(t, m, &models.Server{
+		Name: "key-host", Host: "192.0.2.10", Port: 22, User: "u",
+		Tags: []string{models.TagNeedsPassphrase, "gpu"},
+	})
+	srv, err := m.st.GetServer(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCred, err := m.st.SetCredential(&models.Credential{Type: models.CredPrivateKey, Secret: []byte("old-key")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.AuthMethod, srv.CredentialID = models.AuthPrivateKey, oldCred
+	if err := m.st.UpdateServer(srv); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.Edit(EditRequest{Identifier: "key-host", Password: "new-pass"}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := m.st.GetServer(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Tags) != 1 || after.Tags[0] != "gpu" {
+		t.Fatalf("更换凭据后应移除待补口令标签并保留其他标签：%v", after.Tags)
+	}
+	if after.AuthMethod != models.AuthPassword {
+		t.Fatalf("凭据类型应换成密码：%v", after.AuthMethod)
+	}
+	if _, _, found, err := m.st.CredentialSummary(oldCred); err != nil || found {
+		t.Fatalf("无引用的旧凭据应被删除：found=%v err=%v", found, err)
+	}
+}
+
+// errorsAs 是测试里的小包装，避免每个用例重复 import errors。
+
+// genEncryptedKey 生成一把口令加密的测试私钥，返回 PEM 内容。
+func genEncryptedKey(t *testing.T, passphrase string) []byte {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := x509.EncryptPEMBlock(rand.Reader, "PRIVATE KEY", der, []byte(passphrase), x509.PEMCipherAES256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(block)
+}
+
+// TestSupplementKeyPassphraseSharedCredential 校验只补私钥口令：错误口令被拒
+// 且不写入；正确口令写进凭据，共用同一份私钥的多台服务器同时去掉待补口令
+// 标签，每台修订号加一。
+func TestSupplementKeyPassphraseSharedCredential(t *testing.T) {
+	m := newTestManager(t)
+	keyPEM := genEncryptedKey(t, "secret-pass")
+	credID, err := m.st.SetCredential(&models.Credential{Type: models.CredPrivateKey, Secret: keyPEM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstID := mustAddServer(t, m, &models.Server{
+		Name: "alpha", Host: "192.0.2.1", Port: 22, User: "u",
+		CredentialID: credID, Role: "r", Tags: []string{models.TagNeedsPassphrase},
+	})
+	secondID := mustAddServer(t, m, &models.Server{
+		Name: "beta", Host: "192.0.2.2", Port: 22, User: "u",
+		CredentialID: credID, Role: "r", Tags: []string{models.TagNeedsPassphrase, "gpu"},
+	})
+	firstBefore, secondBefore := serverRevision(t, m, firstID), serverRevision(t, m, secondID)
+
+	if _, err := m.SupplementKeyPassphrase("alpha", "wrong-pass", CLISource()); err == nil {
+		t.Fatal("错误口令应被拒绝")
+	}
+	cred, err := m.st.GetCredential(credID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cred.Passphrase) != 0 {
+		t.Fatal("错误口令不得写进凭据")
+	}
+
+	result, err := m.SupplementKeyPassphrase("alpha", "secret-pass", WebUISource("127.0.0.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.AffectedServers) != 2 || result.AffectedServers[0] != "alpha" || result.AffectedServers[1] != "beta" {
+		t.Fatalf("受影响服务器 = %v", result.AffectedServers)
+	}
+	cred, err = m.st.GetCredential(credID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(cred.Passphrase) != "secret-pass" {
+		t.Fatal("正确口令应写进凭据")
+	}
+	for _, id := range []string{firstID, secondID} {
+		srv, err := m.st.GetServer(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if models.ServerHasTag(srv.Tags, models.TagNeedsPassphrase) {
+			t.Fatalf("%s 的待补口令标签应被移除：%v", srv.Name, srv.Tags)
+		}
+	}
+	if beta, _ := m.st.GetServer(secondID); len(beta.Tags) != 1 || beta.Tags[0] != "gpu" {
+		t.Fatalf("beta 应保留其他标签：%v", beta.Tags)
+	}
+	if got := serverRevision(t, m, firstID); got != firstBefore+1 {
+		t.Fatalf("alpha 修订号应加一：%d -> %d", firstBefore, got)
+	}
+	if got := serverRevision(t, m, secondID); got != secondBefore+1 {
+		t.Fatalf("beta 修订号应加一：%d -> %d", secondBefore, got)
+	}
+	var last store.AuditRow
+	for _, row := range auditActions(t, m) {
+		if row.Status == "ok" {
+			last = row
+		}
+	}
+	if last.Action != "server.edit" || last.Source != store.AuditSourceWebUI || last.SourceIP != "127.0.0.1" {
+		t.Fatalf("补口令审计来源不正确：%+v", last)
+	}
+	if strings.Contains(last.Command, "secret-pass") {
+		t.Fatalf("审计摘要不得包含口令：%s", last.Command)
+	}
+}
+
+func serverRevision(t *testing.T, m *Manager, id string) int64 {
+	t.Helper()
+	srv, err := m.st.GetServer(id)
+	if err != nil || srv == nil {
+		t.Fatalf("读取服务器 %s 失败：%v", id, err)
+	}
+	return srv.Revision
 }
