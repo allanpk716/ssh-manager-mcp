@@ -153,7 +153,7 @@ func TestServiceSelfProbeGroupsResultsByText(t *testing.T) {
 	service, results := fixture.service(dial.dial)
 
 	report, err := service.Probe(context.Background(), Request{
-		From: "self", Targets: []string{"NAS:445"}, Source: proberesults.SourceProbe,
+		From: "self", Targets: []string{"NAS:445"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +209,7 @@ func TestServiceTargetParsingDefaultsAndLimits(t *testing.T) {
 	service, _ := fixture.service(dial.dial)
 
 	report, err := service.Probe(context.Background(), Request{
-		From: "self", Targets: []string{serverResult.ServerID, serverResult.ServerID, "NAS"}, Source: proberesults.SourceProbe,
+		From: "self", Targets: []string{serverResult.ServerID, serverResult.ServerID, "NAS"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +251,7 @@ func TestServiceNoCommonNetworkAndMismatchNotes(t *testing.T) {
 	service, _ := fixture.service(dial.dial)
 
 	report, err := service.Probe(context.Background(), Request{
-		From: "self", Targets: []string{"NAS:445", "云端机器:22"}, Source: proberesults.SourceProbe,
+		From: "self", Targets: []string{"NAS:445", "云端机器:22"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -486,7 +486,7 @@ func TestServiceRemoteProbeUsesFixedCommandAndParsesOutput(t *testing.T) {
 	}
 
 	report, err := service.Probe(context.Background(), Request{
-		From: originResult.ServerID, Targets: []string{"NAS:445"}, Source: proberesults.SourceProbe,
+		From: originResult.ServerID, Targets: []string{"NAS:445"},
 	})
 	if err != nil {
 		t.Fatal(err)

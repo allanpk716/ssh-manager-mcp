@@ -38,12 +38,10 @@ const (
 type Request struct {
 	From    string
 	Targets []string
-	// Source 写入探测结果文件的来源标记（固定为 probe）。
-	Source string
 }
 
-// LocalDialFunc 是本机 TCP 拨号接缝：按地址、端口与逐地址超时建连，返回
-// 建连耗时或错误。
+// LocalDialFunc 是本机 TCP 拨号的可替换注入点：按地址、端口与逐地址超时
+// 建连，返回建连耗时或错误。
 type LocalDialFunc func(ctx context.Context, address string, port int, timeout time.Duration) (time.Duration, error)
 
 // RemoteExecFunc 是在受管服务器上执行固定命令的可替换注入点：返回标准
@@ -63,7 +61,7 @@ type Service struct {
 	Results *proberesults.FileProbeResults
 	// HostKeys 是经服务器探测时使用的主机密钥存储；空值使用存储本身。
 	HostKeys sshbroker.HostKeyStore
-	// LocalDial 与 RemoteExec 是可注入接缝；空值使用生产实现。
+	// LocalDial 与 RemoteExec 是可替换的注入点；空值使用生产实现。
 	LocalDial  LocalDialFunc
 	RemoteExec RemoteExecFunc
 	// TotalDeadline 覆盖整次调用总时限；零值使用规格默认值。
@@ -140,11 +138,8 @@ func (s *Service) Probe(parent context.Context, request Request) (*Report, error
 	if err != nil {
 		return nil, err
 	}
-	source := request.Source
-	if source == "" {
-		source = proberesults.SourceProbe
-	}
-	report := &Report{From: request.From, FromDevice: origin.device.Name, Remote: origin.remote, fromDeviceID: origin.device.ID, source: source}
+	report := &Report{From: request.From, FromDevice: origin.device.Name, Remote: origin.remote,
+		fromDeviceID: origin.device.ID, source: proberesults.SourceProbe}
 	originMemberships, err := s.Store.ListNetworkMembershipsByRegistration(origin.device.Name)
 	if err != nil {
 		return nil, err
@@ -480,9 +475,6 @@ func (s *Service) record(report *Report, target *TargetReport, line AddressRepor
 // FromDeviceID 返回起点设备标识，供调用面写审计摘要。
 func (r *Report) FromDeviceID() string { return r.fromDeviceID }
 
-// SetFromDeviceID 由服务内部写入起点设备标识。
-func (r *Report) SetFromDeviceID(id string) { r.fromDeviceID = id }
-
 func (s *Service) localDial() LocalDialFunc {
 	if s.LocalDial != nil {
 		return s.LocalDial
@@ -618,7 +610,7 @@ func annotateTarget(target *TargetReport) {
 		summary := byNetwork[name]
 		if summary.physical && summary.allFail {
 			physicalAllFail = true
-			target.Notes = append(target.Notes, fmt.Sprintf("登记与实际不一致：%s（%s）", name, CategoryLabel(summary.reason)))
+			target.Notes = append(target.Notes, fmt.Sprintf("登记与实际不一致：%s（%s）", name, models.ProbeErrorCategoryLabel(summary.reason)))
 		}
 	}
 	if physicalAllFail {

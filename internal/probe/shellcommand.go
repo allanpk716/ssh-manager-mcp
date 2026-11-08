@@ -157,7 +157,7 @@ func ParseShellProbeOutput(output string, count int) []ShellProbeResult {
 				duration = time.Duration(milliseconds) * time.Millisecond
 			}
 		}
-		category := probeCategoryFromCode(categoryCode)
+		category := models.NormalizeProbeErrorCategory(categoryCode)
 		if fields[2] == "ok" {
 			results[index] = ShellProbeResult{OK: true, Category: models.ProbeErrorNone, Duration: duration}
 			continue
@@ -168,17 +168,6 @@ func ParseShellProbeOutput(output string, count int) []ShellProbeResult {
 		results[index] = ShellProbeResult{OK: false, Category: category, Duration: duration}
 	}
 	return results
-}
-
-func probeCategoryFromCode(code string) models.ProbeErrorCategory {
-	switch models.ProbeErrorCategory(code) {
-	case models.ProbeErrorConnectionRefused, models.ProbeErrorTimeout, models.ProbeErrorNoRoute,
-		models.ProbeErrorDNSFailure, models.ProbeErrorMissingTool, models.ProbeErrorNoResult,
-		models.ProbeErrorIncomplete, models.ProbeErrorOther:
-		return models.ProbeErrorCategory(code)
-	default:
-		return models.ProbeErrorOther
-	}
 }
 
 func posixProbeFunctions() string {
