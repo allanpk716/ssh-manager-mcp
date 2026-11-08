@@ -61,3 +61,19 @@ func CLISource() Source {
 func WebUISource(addr string) Source {
 	return Source{kind: store.AuditSourceWebUI, addr: addr}
 }
+
+// ownerAuditRow 构造 owner 审计行；failed 决定状态列取 ok 还是 error。
+func ownerAuditRow(action string, summary map[string]any, failed bool, src Source) store.AuditRow {
+	row := store.OwnerAuditRow(action, summary)
+	row.Source, row.SourceIP = src.AuditFields()
+	if failed {
+		row.Status = "error"
+	}
+	return row
+}
+
+// writeOwnerAudit 是运维模块写 vault 审计表的唯一私有入口，保证各领域动
+// 作的来源字段使用同一份换算。
+func writeOwnerAudit(st *store.Store, action string, summary map[string]any, failed bool, src Source) error {
+	return st.WriteAudit(ownerAuditRow(action, summary, failed, src))
+}

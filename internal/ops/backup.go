@@ -817,13 +817,7 @@ func (m *Manager) latestVerifyState(file string) *BackupVerifyState {
 // writeAudit 记录一次运维写操作的 owner 审计行：操作成功写 Status=ok，
 // 失败写 error；摘要由调用方按白名单构造，不得包含口令与令牌。
 func (m *Manager) writeAudit(action string, summary map[string]any, opErr error, src Source) error {
-	row := store.OwnerAuditRow(action, summary)
-	row.Source = src.kind
-	row.SourceIP = src.addr
-	if opErr != nil {
-		row.Status = "error"
-	}
-	return m.st.WriteAudit(row)
+	return writeOwnerAudit(m.st, action, summary, opErr != nil, src)
 }
 
 // defaultBackupConfigPath 返回 backup.json 的标准位置：vault 目录下的

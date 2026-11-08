@@ -132,10 +132,9 @@ func SwitchClientInstance(from, to string, source Source) error {
 		if !instance.Complete {
 			return &ClientInstanceIncompleteError{Instance: to, MissingMaterials: instance.MissingMaterials}
 		}
-		row := store.OwnerAuditRow("instance.switch", map[string]any{
+		row := ownerAuditRow("instance.switch", map[string]any{
 			"from_instance": from, "to_instance": to,
-		})
-		row.Source, row.SourceIP = source.AuditFields()
+		}, false, source)
 		return writeClientPageAudit(to, row)
 	}
 	return fmt.Errorf("实例 %s 不存在", to)
@@ -254,11 +253,7 @@ func writeClientSyncAudit(instance string, source Source, status ClientStatus, r
 	if detail != "" {
 		summary["detail"] = detail
 	}
-	row := store.OwnerAuditRow("cache.pull", summary)
-	row.Source, row.SourceIP = source.AuditFields()
-	if result != "ok" {
-		row.Status = "error"
-	}
+	row := ownerAuditRow("cache.pull", summary, result != "ok", source)
 	return writeClientPageAudit(instance, row)
 }
 

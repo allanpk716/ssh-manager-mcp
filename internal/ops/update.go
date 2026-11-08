@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 
 	"ssh-manager-mcp/internal/buildinfo"
-	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/updater"
 )
 
@@ -433,12 +432,7 @@ func (m *Manager) WriteUpdateAudit(source Source, entry UpdateAuditEntry) error 
 	if entry.Detail != "" {
 		summary["detail"] = entry.Detail
 	}
-	row := store.OwnerAuditRow(entry.Action, summary)
-	row.Source, row.SourceIP = source.AuditFields()
-	if entry.Result != "ok" {
-		row.Status = "error"
-	}
-	return m.st.WriteAudit(row)
+	return writeOwnerAudit(m.st, entry.Action, summary, entry.Result != "ok", source)
 }
 
 func nonEmpty(values ...string) []string {

@@ -2,8 +2,6 @@ package ops
 
 import (
 	"errors"
-
-	"ssh-manager-mcp/internal/store"
 )
 
 // ServiceRestarter 是系统服务管理器的最小操作面；生产实现来自现有的
@@ -54,12 +52,8 @@ func (m *Manager) WriteRestartAudit(source Source, entry RestartAuditEntry) erro
 	if entry.Detail != "" {
 		summary["detail"] = entry.Detail
 	}
-	row := store.OwnerAuditRow(entry.Action, summary)
-	row.Source, row.SourceIP = source.AuditFields()
-	if entry.Result == "error" || entry.Result == "failed" {
-		row.Status = "error"
-	}
-	return m.st.WriteAudit(row)
+	failed := entry.Result == "error" || entry.Result == "failed"
+	return writeOwnerAudit(m.st, entry.Action, summary, failed, source)
 }
 
 // Request 先同步写入「已发起」审计；写入失败时不登记任何动作，调用方

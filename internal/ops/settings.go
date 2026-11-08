@@ -350,8 +350,5 @@ func (m *Manager) writeSettingAudit(action, key, oldValue, newValue string, src 
 	summary := map[string]any{
 		"key": key, "old": oldValue, "new": newValue,
 	}
-	row := store.OwnerAuditRow(action, summary)
-	row.Source = src.kind
-	row.SourceIP = src.addr
-	return m.st.WriteAudit(row)
+	return writeOwnerAudit(m.st, action, summary, false, src)
 }
