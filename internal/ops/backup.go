@@ -15,6 +15,7 @@ import (
 
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/vaultio"
 )
 
 // 备份文件的固定前缀与计划任务名：与 `backup create` 的默认前缀、部署安
@@ -31,6 +32,119 @@ const (
 	BackupFailureCorrupt    = "corrupt"
 	BackupFailureIncomplete = "incomplete"
 )
+
+// BackupVerifyFailure 带上校验失败的类别；类别供备份页与状态命令展示，
+// 原始错误保留给调用方输出。
+type BackupVerifyFailure struct {
+	Kind string
+	Err  error
+}
+
+func (e *BackupVerifyFailure) Error() string { return e.Err.Error() }
+func (e *BackupVerifyFailure) Unwrap() error { return e.Err }
+
+// BackupVerifyFailureKind 从错误里取失败类别；不是备份校验失败时返回空串。
+func BackupVerifyFailureKind(err error) string {
+	var failure *BackupVerifyFailure
+	if errors.As(err, &failure) {
+		return failure.Kind
+	}
+	return ""
+}
+
+// VerifyEncryptedBackupBlob 对已读入的加密备份执行与 `backup verify` 相同
+// 的两道校验：口令必须能解密，明文必须能重新解析为 vault 快照。
+func VerifyEncryptedBackupBlob(file string, blob []byte, passphraseFile string) error {
+	if passphraseFile == "" {
+		return fmt.Errorf("%s is a passphrase-encrypted backup; --passphrase-file is required", filepath.Base(file))
+	}
+	passphrase, err := ReadPassphraseFile(passphraseFile)
+	if err != nil {
+		return err
+	}
+	plain, err := vaultio.Decrypt(passphrase, blob)
+	if err != nil {
+		return &BackupVerifyFailure{
+			Kind: classifyDecryptFailure(err),
+			Err:  fmt.Errorf("decrypt failed (wrong passphrase, or the file is corrupted): %w", err),
+		}
+	}
+	if err := json.Unmarshal(plain, &store.Snapshot{}); err != nil {
+		return &BackupVerifyFailure{
+			Kind: BackupFailureCorrupt,
+			Err:  fmt.Errorf("re-unmarshal failed: %w", err),
+		}
+	}
+	return nil
+}
+
+// classifyDecryptFailure 把解密错误映射到失败类别：内容过短是文件不完整，
+// 文件头不对是文件损坏；解密认证失败无法区分口令不符与篡改，按口令不符
+// 归类并在展示文案里同时提示两种可能。
+func classifyDecryptFailure(err error) string {
+	if errors.Is(err, vaultio.ErrTruncated) {
+		return BackupFailureIncomplete
+	}
+	if errors.Is(err, vaultio.ErrBadMagic) {
+		return BackupFailureCorrupt
+	}
+	return BackupFailurePassphrase
+}
+
+// BackupVerifyResult 是一键校验最新备份的返回值。
+type BackupVerifyResult struct {
+	File        string
+	OK          bool
+	FailureKind string
+}
+
+// VerifyLatestBackup 按 backup.json 自动找到最新备份与口令文件并校验，
+// 结果写入 backup.verify 审计行。
+func (m *Manager) VerifyLatestBackup(source Source) (BackupVerifyResult, error) {
+	cfg, err := m.loadBackupConfig()
+	if err != nil {
+		return BackupVerifyResult{}, err
+	}
+	latest, ok := LatestEncryptedBackup(cfg.Dir, backupPrefix)
+	if !ok {
+		return BackupVerifyResult{}, fmt.Errorf("no encrypted backup found in %s", cfg.Dir)
+	}
+	blob, err := os.ReadFile(latest.Path)
+	if err != nil {
+		return BackupVerifyResult{}, err
+	}
+	verifyErr := VerifyEncryptedBackupBlob(latest.Path, blob, cfg.PassphraseFile)
+	summary := map[string]any{"file": latest.Name, "result": "ok"}
+	if verifyErr != nil {
+		summary["result"] = "error"
+		if kind := BackupVerifyFailureKind(verifyErr); kind != "" {
+			summary["failure_kind"] = kind
+		}
+	}
+	auditErr := m.writeAudit("backup.verify", summary, verifyErr, source)
+	if verifyErr != nil {
+		return BackupVerifyResult{
+			File: latest.Name, FailureKind: BackupVerifyFailureKind(verifyErr),
+		}, verifyErr
+	}
+	return BackupVerifyResult{File: latest.Name, OK: true}, auditErr
+}
+
+// loadBackupConfig 从标准位置读取备份配置；配置缺失或有误时返回错误。
+func (m *Manager) loadBackupConfig() (*BackupConfig, error) {
+	path, err := m.backupConfigPath()
+	if err != nil {
+		return nil, fmt.Errorf("定位备份配置失败：%w", err)
+	}
+	cfg, err := LoadBackupConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return nil, errors.New("backup config path is empty")
+	}
+	return cfg, nil
+}
 
 // BackupConfig 是解析并通过校验的 backup.json：备份目录、保留份数与口令
 // 文件路径。

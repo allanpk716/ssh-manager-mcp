@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/vaultio"
 )
 
 // newBackupTestManager 返回接上了临时备份配置路径的运维模块与存储句柄；
@@ -272,5 +274,171 @@ func TestBackupStatusShowsVerifyFailureKind(t *testing.T) {
 	}
 	if status.Verify == nil || status.Verify.OK || status.Verify.FailureKind != BackupFailureCorrupt {
 		t.Fatalf("校验失败应带上失败类别：%+v", status.Verify)
+	}
+}
+
+// prepareVerifiedBackupEnv 准备一份合法备份配置、口令文件和一个加密备份
+// 文件，返回可覆盖的口令与备份文件路径。
+func prepareVerifiedBackupEnv(t *testing.T) (*Manager, *store.Store, string, string, string) {
+	t.Helper()
+	m, st, root := newBackupTestManager(t)
+	dir := filepath.Join(root, "backups")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	passFile := filepath.Join(root, "backup.pass")
+	if err := os.WriteFile(passFile, []byte("correct-passphrase"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "backup.json")
+	writeBackupJSON(t, configPath, dir, 7, passFile)
+	m.backupConfigPath = func() (string, error) { return configPath, nil }
+
+	blob, err := vaultio.Encrypt([]byte("correct-passphrase"), []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(dir, "vault-20260101-000000.sme")
+	if err := os.WriteFile(backupPath, blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return m, st, passFile, backupPath, dir
+}
+
+func TestVerifyLatestBackupSuccessWritesAudit(t *testing.T) {
+	m, st, passFile, _, _ := prepareVerifiedBackupEnv(t)
+
+	result, err := m.VerifyLatestBackup(WebUISource("192.0.2.23"))
+	if err != nil {
+		t.Fatalf("校验最新备份应成功：%v", err)
+	}
+	if !result.OK || result.File != "vault-20260101-000000.sme" || result.FailureKind != "" {
+		t.Fatalf("校验结果不符：%+v", result)
+	}
+
+	rows, err := st.AuditRows(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Action != "backup.verify" || rows[0].Status != "ok" ||
+		rows[0].Source != store.AuditSourceWebUI || rows[0].SourceIP != "192.0.2.23" {
+		t.Fatalf("校验应写 Web UI 来源的审计行：%+v", rows)
+	}
+	if !strings.Contains(rows[0].Command, "vault-20260101-000000.sme") || !strings.Contains(rows[0].Command, `"result":"ok"`) {
+		t.Fatalf("校验摘要应包含文件名与结果：%s", rows[0].Command)
+	}
+	if strings.Contains(rows[0].Command, "correct-passphrase") || strings.Contains(rows[0].Command, passFile) {
+		t.Fatalf("校验摘要不得包含口令内容或口令文件路径：%s", rows[0].Command)
+	}
+}
+
+func TestVerifyLatestBackupClassifiesFailures(t *testing.T) {
+	cases := []struct {
+		name string
+		mut  func(t *testing.T, passFile, backupPath string)
+		kind string
+	}{
+		{
+			name: "口令不符",
+			mut: func(t *testing.T, passFile, _ string) {
+				t.Helper()
+				if err := os.WriteFile(passFile, []byte("wrong-passphrase"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			kind: BackupFailurePassphrase,
+		},
+		{
+			name: "文件不完整",
+			mut: func(t *testing.T, _, backupPath string) {
+				t.Helper()
+				if err := os.WriteFile(backupPath, []byte("SSHMGRV1short"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			kind: BackupFailureIncomplete,
+		},
+		{
+			name: "文件损坏",
+			mut: func(t *testing.T, _, backupPath string) {
+				t.Helper()
+				if err := os.WriteFile(backupPath, []byte("this blob is long enough but has a wrong header"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			kind: BackupFailureCorrupt,
+		},
+		{
+			name: "解密后内容损坏",
+			mut: func(t *testing.T, _, backupPath string) {
+				t.Helper()
+				blob, err := vaultio.Encrypt([]byte("correct-passphrase"), []byte("not-json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(backupPath, blob, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			kind: BackupFailureCorrupt,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, passFile, backupPath, _ := prepareVerifiedBackupEnv(t)
+			tc.mut(t, passFile, backupPath)
+
+			result, err := m.VerifyLatestBackup(CLISource())
+			if err == nil {
+				t.Fatalf("%s 应返回错误", tc.name)
+			}
+			if result.OK || result.FailureKind != tc.kind {
+				t.Fatalf("%s 的失败类别应为 %s：%+v", tc.name, tc.kind, result)
+			}
+			rows, err := st.AuditRows(1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 || rows[0].Action != "backup.verify" || rows[0].Status != "error" ||
+				!strings.Contains(rows[0].Command, tc.kind) || rows[0].Source != store.AuditSourceCLI {
+				t.Fatalf("%s 的审计行应记录失败类别：%+v", tc.name, rows)
+			}
+
+			// 失败结果应反映到状态区。
+			status, err := m.BackupStatus()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.Verify == nil || status.Verify.OK || status.Verify.FailureKind != tc.kind {
+				t.Fatalf("%s 后状态应显示失败：%+v", tc.name, status.Verify)
+			}
+		})
+	}
+}
+
+func TestVerifyLatestBackupWithoutBackupsOrConfig(t *testing.T) {
+	m, st, root := newBackupTestManager(t)
+	dir := filepath.Join(root, "backups")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "backup.json")
+	writeBackupJSON(t, configPath, dir, 7, filepath.Join(root, "backup.pass"))
+	m.backupConfigPath = func() (string, error) { return configPath, nil }
+
+	if _, err := m.VerifyLatestBackup(CLISource()); err == nil {
+		t.Fatal("尚无备份时应返回错误")
+	}
+	rows, err := st.AuditRows(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("没有文件名可记时不应写校验审计：%+v", rows)
+	}
+
+	m.backupConfigPath = func() (string, error) { return filepath.Join(root, "missing.json"), nil }
+	if _, err := m.VerifyLatestBackup(CLISource()); err == nil {
+		t.Fatal("配置缺失时应返回错误")
 	}
 }
