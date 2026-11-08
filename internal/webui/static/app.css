@@ -790,6 +790,50 @@ h1 {
   margin: var(--space-medium) 0;
 }
 
+.client-status {
+  margin: var(--space-medium) 0;
+}
+
+.client-status dl,
+.client-instances {
+  display: grid;
+  gap: var(--space-medium);
+}
+
+.client-status dl {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin: 0;
+}
+
+.client-status dl div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-small);
+}
+
+.client-status dt {
+  color: var(--color-muted);
+}
+
+.client-status dd {
+  margin: 0;
+  padding: var(--space-small);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.client-status form button,
+.client-instances form button {
+  padding: var(--space-small) var(--space-large);
+  color: var(--color-text);
+  background: #274b8f;
+  border: 1px solid var(--color-accent);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
 .update-form button {
   padding: var(--space-small) var(--space-large);
   color: var(--color-text);
@@ -828,6 +872,15 @@ h1 {
   }
 
   .update-form button {
+    width: 100%;
+  }
+
+  .client-status dl {
+    grid-template-columns: 1fr;
+  }
+
+  .client-status form button,
+  .client-instances form button {
     width: 100%;
   }
 

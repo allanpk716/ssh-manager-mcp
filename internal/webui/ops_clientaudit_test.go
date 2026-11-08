@@ -78,8 +78,8 @@ func TestOpsClientAuditRoutesFollowRole(t *testing.T) {
 
 	root := doGetWithCookie(t, client, clientCookie, "/ui/ops/")
 	root.Body.Close()
-	if root.StatusCode != http.StatusSeeOther || root.Header.Get("Location") != "/ui/ops/client-audit" {
-		t.Fatalf("客户端运维入口应跳转本机审计页，状态码=%d 跳转=%q", root.StatusCode, root.Header.Get("Location"))
+	if root.StatusCode != http.StatusSeeOther || root.Header.Get("Location") != "/ui/ops/client" {
+		t.Fatalf("客户端运维入口应跳转客户端页，状态码=%d 跳转=%q", root.StatusCode, root.Header.Get("Location"))
 	}
 	for _, path := range []string{"/ui/ops/backup", "/ui/ops/settings"} {
 		resp := doGetWithCookie(t, client, clientCookie, path)
@@ -99,13 +99,15 @@ func TestOpsClientAuditRoutesFollowRole(t *testing.T) {
 	standaloneSession := exchangeStartupToken(t, standalone, standaloneStartup.URL("127.0.0.1:18080"))
 	standaloneCookie := standaloneSession.Cookies()[0]
 	standaloneSession.Body.Close()
-	standalonePage := doGetWithCookie(t, standalone, standaloneCookie, "/ui/ops/client-audit")
-	standaloneBody := readResponseBody(t, standalonePage)
-	if standalonePage.StatusCode != http.StatusNotFound {
-		t.Fatalf("单机不应注册客户端本机审计页，状态码=%d", standalonePage.StatusCode)
-	}
-	if strings.Contains(standaloneBody, "本机审计") {
-		t.Fatalf("单机导航不应显示本机审计入口：\n%s", standaloneBody)
+	for _, path := range []string{"/ui/ops/client", "/ui/ops/client/sync", "/ui/ops/client/instance"} {
+		standalonePage := doGetWithCookie(t, standalone, standaloneCookie, path)
+		standaloneBody := readResponseBody(t, standalonePage)
+		if standalonePage.StatusCode != http.StatusNotFound {
+			t.Fatalf("单机不应注册 %s，状态码=%d", path, standalonePage.StatusCode)
+		}
+		if strings.Contains(standaloneBody, "客户端页") {
+			t.Fatalf("单机导航不应显示客户端页入口：\n%s", standaloneBody)
+		}
 	}
 
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
@@ -117,9 +119,11 @@ func TestOpsClientAuditRoutesFollowRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	authorityCookie := authoritySuccessfulLogin(t, authority, "127.0.0.1:7879", "correct-password")
-	authorityPage := authorityGet(t, authority, "127.0.0.1:7879", "/ui/ops/client-audit", authorityCookie)
-	authorityPage.Body.Close()
-	if authorityPage.StatusCode != http.StatusNotFound {
-		t.Fatalf("权威端不应注册客户端本机审计页，状态码=%d", authorityPage.StatusCode)
+	for _, path := range []string{"/ui/ops/client", "/ui/ops/client/sync", "/ui/ops/client/instance"} {
+		authorityPage := authorityGet(t, authority, "127.0.0.1:7879", path, authorityCookie)
+		authorityPage.Body.Close()
+		if authorityPage.StatusCode != http.StatusNotFound {
+			t.Fatalf("权威端不应注册 %s，状态码=%d", path, authorityPage.StatusCode)
+		}
 	}
 }

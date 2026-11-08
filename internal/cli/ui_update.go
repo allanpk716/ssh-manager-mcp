@@ -16,16 +16,11 @@ import (
 )
 
 // uiUpdateService 构造回环 Web UI 进程内共享的升级服务。同一时间只允许一个
-// 升级，因此服务在 `sshmgr ui` 启动时创建一次；实例先按启动时解析的结果固
-// 定，会话内切换由后续票接入。
+// 升级，因此服务在 `sshmgr ui` 启动时创建一次；客户端实例按每次请求传入。
 func uiUpdateService(role webui.Role, startupInstance string) *ops.UpdateService {
 	return ops.NewUpdateService(ops.UpdateDependencies{
 		ClientState: func(requestedInstance string) (ops.UpdateClientState, error) {
-			instance := startupInstance
-			if requestedInstance != "" {
-				instance = requestedInstance
-			}
-			state, readErr := readClientVersionState(instance, io.Discard)
+			state, readErr := readClientVersionState(requestedInstance, io.Discard)
 			if readErr != nil && state.IsClient && errors.Is(readErr, errAmbiguousClientCacheInstance) {
 				return ops.UpdateClientState{IsClient: true}, &ops.InstanceAmbiguousError{Err: readErr}
 			}
@@ -35,7 +30,7 @@ func uiUpdateService(role webui.Role, startupInstance string) *ops.UpdateService
 			}
 			return ops.UpdateClientState{IsClient: state.IsClient, RecommendedVersion: recommended}, readErr
 		},
-		Audit: uiUpdateAudit(role, startupInstance),
+		Audit: uiUpdateAudit(role, ""),
 	})
 }
 
@@ -43,7 +38,13 @@ func uiUpdateService(role webui.Role, startupInstance string) *ops.UpdateService
 // 追加到该实例的审计日志文件（JSON 每行一条，与只读旁车文件同一形态）。
 func uiUpdateAudit(role webui.Role, instance string) func(source ops.Source, entry ops.UpdateAuditEntry) error {
 	if role == webui.RoleClient {
-		return writeClientUpdateAudit(instance)
+		return func(source ops.Source, entry ops.UpdateAuditEntry) error {
+			target := entry.Instance
+			if target == "" {
+				target = instance
+			}
+			return writeClientUpdateAudit(target)(source, entry)
+		}
 	}
 	return writeUpdateAudit
 }

@@ -24,7 +24,7 @@ type serveWebUIServerSource struct {
 	store *store.Store
 }
 
-func (s serveWebUIServerSource) Servers() ([]webui.ServerRow, error) {
+func (s serveWebUIServerSource) Servers(string) ([]webui.ServerRow, error) {
 	servers, err := s.store.ListServers()
 	if err != nil {
 		return nil, err

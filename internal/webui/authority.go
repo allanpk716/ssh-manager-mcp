@@ -139,7 +139,7 @@ func (h *handler) handleAuthorityRoot(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, loginPath, http.StatusSeeOther)
 		return
 	}
-	rows, err := h.cfg.Servers.Servers()
+	rows, err := h.cfg.Servers.Servers("")
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请稍后重试。")
 		return

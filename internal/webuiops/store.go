@@ -60,6 +60,7 @@ func FromOpener(open func() (*ops.Manager, func(), error)) webui.OpsStore {
 // 用；权威 vault 审计在客户端角色没有入口，调用时返回明确错误。
 type clientAuditStore struct {
 	updates *ops.UpdateService
+	pull    ops.ClientPullFunction
 }
 
 // ClientAuditStore 返回客户端角色的运维窄接口适配器。
@@ -71,6 +72,12 @@ func ClientAuditStore() webui.OpsStore {
 // 仍读实例审计日志文件，升级按进程内共享的服务执行。
 func ClientAuditStoreWithUpdates(updates *ops.UpdateService) webui.OpsStore {
 	return clientAuditStore{updates: updates}
+}
+
+// ClientPageStoreWithUpdates 在客户端适配器上接入客户端页与立即同步；pull 由
+// 命令行层注入，映射到 `cache pull` 共用的实现，避免包之间形成循环依赖。
+func ClientPageStoreWithUpdates(updates *ops.UpdateService, pull ops.ClientPullFunction) webui.OpsStore {
+	return clientAuditStore{updates: updates, pull: pull}
 }
 
 func (clientAuditStore) QueryAudit(query webui.OpsAuditQuery) ([]webui.OpsAuditRow, error) {

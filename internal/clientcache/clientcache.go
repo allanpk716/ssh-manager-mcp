@@ -102,6 +102,12 @@ func InstancesRoot() (string, error) {
 	return filepath.Join(base, "ssh-manager", "instances"), nil
 }
 
+// SingleSlotOverrideSet 判断是否设置了单缓存环境覆盖。这个覆盖会把所有实例名
+// 路由到同一个缓存目录，因此实例选择不能展示无法独立寻址的命名实例。
+func SingleSlotOverrideSet() bool {
+	return os.Getenv("SSHMGR_CACHE_DIR") != "" || os.Getenv("SSHMGR_CACHE_DEK") != ""
+}
+
 // ListInstanceSlots returns sorted named-instance directory names. A missing
 // root means no named instances.
 func ListInstanceSlots() ([]string, error) {
