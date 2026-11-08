@@ -1,0 +1,65 @@
+{{define "content"}}
+<section class="settings-page">
+<h1>设置</h1>
+<p class="page-intro">下面每个字段来自同一张已知设置项表；修改会写入设置存储并记录审计。</p>
+{{range .OpsSettings}}
+{{$setting := .}}
+<article class="setting-item{{if .Overridden}} setting-overridden{{end}}">
+<h2>{{.Key}}</h2>
+<dl class="setting-facts">
+<div><dt>当前值</dt><dd>{{if .CurrentValue}}{{.CurrentValue}}{{else}}自动推导{{end}}</dd></div>
+<div><dt>默认值</dt><dd>{{if .DefaultValue}}{{.DefaultValue}}{{else}}自动推导{{end}}</dd></div>
+<div><dt>取值来源</dt><dd>{{.SourceText}}</dd></div>
+<div><dt>生效时机</dt><dd>{{.Effect}}</dd></div>
+</dl>
+{{if .Overridden}}<p class="operation-warning">当前被覆盖，修改设置存储不会立即生效。</p>{{end}}
+{{if and $.OpsSettingForm.Key (eq $.OpsSettingForm.Key .Key)}}
+<p class="operation-refusal" role="alert">{{$.OpsSettingForm.Error}}</p>
+{{end}}
+<form class="setting-form" method="post" action="/ui/ops/settings">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="key" value="{{.Key}}">
+{{if eq .Type "switch"}}
+<label for="setting-{{.Key}}">设置存储值</label>
+<select id="setting-{{.Key}}" name="value">
+<option value="true"{{if eq .InputValue "true"}} selected{{end}}>true</option>
+<option value="false"{{if eq .InputValue "false"}} selected{{end}}>false</option>
+</select>
+{{else if eq .Type "profile"}}
+<label for="setting-{{.Key}}">设置存储值</label>
+<select id="setting-{{.Key}}" name="value">
+<option value=""{{if and $.OpsSettingForm.Key (eq $.OpsSettingForm.Key $setting.Key) (eq $.OpsSettingForm.Value "")}} selected{{else if and (not $.OpsSettingForm.Key) (eq $setting.InputValue "")}} selected{{end}}>不指定</option>
+{{range .Choices}}
+<option value="{{.Value}}"{{if and $.OpsSettingForm.Key (eq $.OpsSettingForm.Key $setting.Key) (eq $.OpsSettingForm.Value .Value)}} selected{{else if and (not $.OpsSettingForm.Key) (eq $setting.InputValue .Value)}} selected{{end}}>{{.Label}}</option>
+{{end}}
+</select>
+{{else if eq .Type "port"}}
+<label for="setting-{{.Key}}">设置存储值</label>
+<input type="number" min="1" max="65535" id="setting-{{.Key}}" name="value" value="{{if and $.OpsSettingForm.Key (eq $.OpsSettingForm.Key .Key)}}{{$.OpsSettingForm.Value}}{{else}}{{.InputValue}}{{end}}">
+{{else}}
+<label for="setting-{{.Key}}">设置存储值</label>
+<input type="text" id="setting-{{.Key}}" name="value" value="{{if and $.OpsSettingForm.Key (eq $.OpsSettingForm.Key .Key)}}{{$.OpsSettingForm.Value}}{{else}}{{.InputValue}}{{end}}">
+{{end}}
+<button type="submit">保存</button>
+</form>
+<form class="inline-form" method="post" action="/ui/ops/settings">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="key" value="{{.Key}}">
+<input type="hidden" name="action" value="restore_default">
+<button type="submit">恢复默认值</button>
+</form>
+</article>
+{{else}}
+<p class="empty-list">没有已知的设置项。</p>
+{{end}}
+<section class="role-view">
+<h2>本机角色</h2>
+<dl class="setting-facts">
+<div><dt>角色</dt><dd>{{.OpsRole.RoleText}}{{if .OpsRole.RoleName}}（{{.OpsRole.RoleName}}）{{end}}</dd></div>
+<div><dt>初始化向导</dt><dd>{{if .OpsRole.SetupComplete}}已完成{{else}}未完成{{end}}</dd></div>
+<div><dt>文件路径</dt><dd>{{.OpsRole.Path}}</dd></div>
+</dl>
+<p class="page-intro">本机角色文件只读展示；修改角色需要完整的转换流程，本页不提供写入入口。</p>
+</section>
+</section>
+{{end}}

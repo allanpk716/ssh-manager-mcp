@@ -8,7 +8,8 @@ import "ssh-manager-mcp/internal/store"
 // Manager 是运维模块的入口，内部只调用存储层与各领域服务的现有函数，不改
 // 变它们的语义。
 type Manager struct {
-	st *store.Store
+	st            *store.Store
+	settingInputs SettingInputs
 }
 
 // New 返回挂在一个已解锁存储上的运维模块。

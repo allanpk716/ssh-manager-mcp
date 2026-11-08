@@ -57,7 +57,7 @@ func standaloneUIOpsStore() webui.OpsStore {
 		if err != nil {
 			return nil, nil, err
 		}
-		return ops.New(st), func() { _ = st.Close() }, nil
+		return ops.NewWithSettingInputs(st, ops.SettingInputsFromEnv()), func() { _ = st.Close() }, nil
 	})
 }
 

@@ -28,6 +28,18 @@ func (s *stubOpsStore) QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error) {
 	return s.rows, nil
 }
 
+func (s *stubOpsStore) ListSettings() ([]OpsSetting, error) { return nil, nil }
+
+func (s *stubOpsStore) ValidateSetting(key, value string) error { return nil }
+
+func (s *stubOpsStore) SetSetting(key, value string, source OpsWriteSource) error { return nil }
+
+func (s *stubOpsStore) UnsetSetting(key string, source OpsWriteSource) error { return nil }
+
+func (s *stubOpsStore) ReadRole() (OpsRole, error) {
+	return OpsRole{}, nil
+}
+
 func testOpsRows(count int) []OpsAuditRow {
 	rows := make([]OpsAuditRow, 0, count)
 	for i := 0; i < count; i++ {

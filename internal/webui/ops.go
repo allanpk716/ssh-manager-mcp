@@ -91,6 +91,11 @@ func (r OpsAuditRow) CommandDisplay() string {
 // 实现；处理器测试用桩，本包不接触数据库结构和文件布局。
 type OpsStore interface {
 	QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error)
+	ListSettings() ([]OpsSetting, error)
+	ValidateSetting(key, value string) error
+	SetSetting(key, value string, source OpsWriteSource) error
+	UnsetSetting(key string, source OpsWriteSource) error
+	ReadRole() (OpsRole, error)
 	// QueryClientAudit 读取客户端实例目录中的本机审计日志文件。instance 空串
 	// 表示默认实例；后续客户端页会把这里改成按请求传入会话中的实例。
 	QueryClientAudit(instance string, limit int) ([]OpsAuditRow, error)
@@ -130,6 +135,9 @@ func (h *handler) registerOpsRoutes() {
 			h.mux.HandleFunc(opsClientAuditPath, h.handleOpsClientAudit)
 		}
 		return
+	}
+	if h.caps.CanManageSettings {
+		h.mux.HandleFunc(opsSettingsPath, h.handleOpsSettings)
 	}
 	if h.caps.CanQueryVaultAudit {
 		h.mux.HandleFunc(opsAuditPath, h.handleOpsAudit)
