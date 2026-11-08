@@ -275,6 +275,16 @@ func (s *Service) resolveTargets(raw []string) ([]resolvedTarget, error) {
 				target.port = server.Port
 			}
 		} else {
+			// 按服务器编号精确查找失败后，先做忽略大小写的匹配：唯一命中
+			// 时给出与起点相同的纠正提示，而不是落到设备名报错。
+			if canonical, found := s.serverIDByCase(base); found {
+				if s.GateServer != nil {
+					if err := s.GateServer(base); err != nil {
+						return nil, err
+					}
+				}
+				return nil, fmt.Errorf("服务器编号区分大小写，是否想写 %q", canonical)
+			}
 			device, deviceErr := s.Store.GetDevice(base)
 			if deviceErr != nil && !errors.Is(deviceErr, sql.ErrNoRows) && !errors.Is(deviceErr, store.ErrDeviceNotFound) {
 				return nil, deviceErr
@@ -321,6 +331,22 @@ func (s *Service) resolveTargets(raw []string) ([]resolvedTarget, error) {
 		return nil, fmt.Errorf("目标最多 %d 个（去重后），请分批调用", MaxTargets)
 	}
 	return out, nil
+}
+
+// serverIDByCase 在全部服务器条目里按编号做忽略大小写匹配；唯一命中时返
+// 回正确写法。
+func (s *Service) serverIDByCase(serverID string) (string, bool) {
+	servers, err := s.Store.ListServers()
+	if err != nil {
+		return "", false
+	}
+	canonical, hits := "", 0
+	for _, server := range servers {
+		if strings.EqualFold(server.ID, serverID) {
+			canonical, hits = server.ID, hits+1
+		}
+	}
+	return canonical, hits == 1
 }
 
 func (s *Service) probeLocal(ctx context.Context, report *Report, addressTimeout time.Duration) {

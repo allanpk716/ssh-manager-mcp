@@ -338,6 +338,43 @@ func TestServiceManagedDeviceTargetRequiresProfileGrant(t *testing.T) {
 	}
 }
 
+// TestServiceTargetServerIDCaseCorrectionHint: 目标服务器编号写错大小写
+// 时，与起点一样给出大小写纠正提示，而不是落到设备名报错。
+func TestServiceTargetServerIDCaseCorrectionHint(t *testing.T) {
+	fixture := newServiceFixture(t)
+	credentialID, err := fixture.store.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantedResult, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "NAS SSH", Host: "192.0.2.10", Port: 2202, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+	}, nil, nil, "NAS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongCase := strings.ToUpper(grantedResult.ServerID)
+	if wrongCase == grantedResult.ServerID {
+		t.Fatalf("server id %q has no case variant", grantedResult.ServerID)
+	}
+	service, _ := fixture.service((&fakeLocalDial{}).dial)
+	service.GateServer = func(serverID string) error {
+		if serverID == grantedResult.ServerID {
+			return nil
+		}
+		if strings.EqualFold(serverID, grantedResult.ServerID) {
+			return fmt.Errorf("server %s not in your profile (did you mean %q? server ids are case-sensitive)",
+				serverID, grantedResult.ServerID)
+		}
+		return fmt.Errorf("server %s not in your profile", serverID)
+	}
+
+	_, err = service.Probe(context.Background(), Request{From: "self", Targets: []string{wrongCase}})
+	if err == nil || !strings.Contains(err.Error(), "did you mean") || !strings.Contains(err.Error(), grantedResult.ServerID) {
+		t.Fatalf("wrong-case target must carry the case correction hint, got %v", err)
+	}
+}
+
 // TestServiceUsesAddressTimeoutSetting: 逐地址超时复用统一拨号入口的环境变
 // 量设置。
 func TestServiceUsesAddressTimeoutSetting(t *testing.T) {
