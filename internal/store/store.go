@@ -295,6 +295,14 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	// 规格 #141：审计行补「来源」与「来源 IP」。旧记录两列保持空值，
+	// 查询面继续按旧行为展示为未标记来源。
+	if err := addColumnIfMissing(db, "audit_log", "source", "TEXT"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "audit_log", "source_ip", "TEXT"); err != nil {
+		return err
+	}
 	rows, err := db.Query(`PRAGMA table_info(host_keys)`)
 	if err != nil {
 		return err
@@ -837,7 +845,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
   sudo INTEGER NOT NULL DEFAULT 0,
   status TEXT,
   exit_code INTEGER,
-  duration_ms INTEGER
+  duration_ms INTEGER,
+  source TEXT,
+  source_ip TEXT
 );
 CREATE TABLE IF NOT EXISTS host_keys (
   host_port TEXT PRIMARY KEY,

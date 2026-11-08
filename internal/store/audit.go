@@ -19,7 +19,18 @@ type AuditRow struct {
 	Status     string // "ok" / "error" / "timeout"
 	ExitCode   int
 	DurationMS int64
+	// Source 标记动作来自哪类入口：命令行、Web UI 或 agent。旧数据为空。
+	Source string
+	// SourceIP 是 Web UI 请求的客户端 IP；其他来源为空。
+	SourceIP string
 }
+
+// 审计来源的固定值。来源列面向所有入口，值保持英文以便过滤与导出。
+const (
+	AuditSourceCLI   = "cli"
+	AuditSourceWebUI = "web_ui"
+	AuditSourceAgent = "agent"
+)
 
 func (s *Store) WriteAudit(r AuditRow) error {
 	if s.readOnly {
@@ -61,10 +72,11 @@ func insertAuditRow(db dbtx, r AuditRow) error {
 		sudo = 1
 	}
 	_, err := db.Exec(
-		`INSERT INTO audit_log (ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO audit_log (ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		r.TS.Unix(), nullableString(r.ProjectID), nullableString(r.ServerID),
 		r.Action, r.Command, sudo, nullableString(r.Status), r.ExitCode, r.DurationMS,
+		nullableString(r.Source), nullableString(r.SourceIP),
 	)
 	return err
 }
@@ -76,7 +88,7 @@ func (s *Store) AuditRows(limit int) ([]AuditRow, error) {
 		limit = 1
 	}
 	rows, err := s.db.Query(
-		`SELECT ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms
+		`SELECT ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip
 		 FROM audit_log ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -131,7 +143,7 @@ func (s *Store) QueryAudit(f AuditFilter) ([]AuditRow, error) {
 	if f.OwnerOnly {
 		conds = append(conds, "(project_id IS NULL OR project_id = '')")
 	}
-	q := "SELECT ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms FROM audit_log"
+	q := "SELECT ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip FROM audit_log"
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -155,10 +167,10 @@ func scanAuditRows(rows *sql.Rows) ([]AuditRow, error) {
 	for rows.Next() {
 		var r AuditRow
 		var ts int64
-		var projectID, serverID, action, command, status sql.NullString
+		var projectID, serverID, action, command, status, source, sourceIP sql.NullString
 		var sudo int
 		var exitCode, durationMS sql.NullInt64
-		if err := rows.Scan(&ts, &projectID, &serverID, &action, &command, &sudo, &status, &exitCode, &durationMS); err != nil {
+		if err := rows.Scan(&ts, &projectID, &serverID, &action, &command, &sudo, &status, &exitCode, &durationMS, &source, &sourceIP); err != nil {
 			return nil, err
 		}
 		r.TS = time.Unix(ts, 0)
@@ -170,6 +182,8 @@ func scanAuditRows(rows *sql.Rows) ([]AuditRow, error) {
 		r.Status = status.String
 		r.ExitCode = int(exitCode.Int64)
 		r.DurationMS = durationMS.Int64
+		r.Source = source.String
+		r.SourceIP = sourceIP.String
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -191,5 +205,7 @@ func (r AuditRow) JSONMap() map[string]any {
 		"status":      r.Status,
 		"exit_code":   r.ExitCode,
 		"duration_ms": r.DurationMS,
+		"source":      r.Source,
+		"source_ip":   r.SourceIP,
 	}
 }
