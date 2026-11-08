@@ -8,18 +8,28 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
 )
 
 const backupMarkerName = ".ssh-manager-backup-marker"
+
+// validatePassphraseNotInDir 委托给运维模块的口令文件位置校验。
+func validatePassphraseNotInDir(dir, passphraseFile string) error {
+	return ops.ValidatePassphraseNotInDir(dir, passphraseFile)
+}
+
+// atomicWriteFile 委托给运维模块的原子写文件实现。
+func atomicWriteFile(dir, name string, data []byte) (string, error) {
+	return ops.AtomicWriteFile(dir, name, data)
+}
 
 // newBackupCmd builds the `backup` command tree (create + verify).
 func newBackupCmd() *cobra.Command {
@@ -477,40 +487,6 @@ func nextBackupName(dir, prefix string) (string, error) {
 			return "", fmt.Errorf("too many same-second collisions for %s", base)
 		}
 	}
-}
-
-// atomicWriteFile writes data to a temp file (0600), fsyncs, renames to final.
-// Cleans up the temp on any failure. fsyncs the parent dir on non-Windows.
-func atomicWriteFile(dir, name string, data []byte) (string, error) {
-	final := filepath.Join(dir, name)
-	tmp, err := os.CreateTemp(dir, "."+name+".tmp-*")
-	if err != nil {
-		return "", err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath) // no-op after successful rename
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return "", err
-	}
-	if err := tmp.Sync(); err != nil { // file fsync — all platforms
-		tmp.Close()
-		return "", err
-	}
-	if err := tmp.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Rename(tmpPath, final); err != nil {
-		return "", err
-	}
-	// parent dir fsync — Linux/macOS; Windows has no dir-sync semantics.
-	if runtime.GOOS != "windows" {
-		if d, err := os.Open(dir); err == nil {
-			_ = d.Sync() // best-effort
-			d.Close()
-		}
-	}
-	return final, nil
 }
 
 func writeSidecar(path, fileSHA string) error {

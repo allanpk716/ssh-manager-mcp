@@ -1,176 +1,28 @@
 package cli
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/tui"
 )
 
-// backupConfig is a parsed and validated backup.json — the single source of
-// truth for the backup target directory, retention count, and passphrase file
-// location, shared by the scheduled task, the TUI, and manual CLI runs.
-type backupConfig struct {
-	Dir            string
-	Keep           int
-	PassphraseFile string
-}
+// backupConfig 与运维模块共用同一个备份配置类型；命令行在这里保留薄包
+// 装，让既有调用点继续使用原名。
+type backupConfig = ops.BackupConfig
 
-// backupConfigFile mirrors the on-disk JSON with pointer fields so a MISSING
-// field stays distinguishable from a zero value (keep: 0 is legal — it means
-// "no rotation" — while an absent keep is a config defect).
-type backupConfigFile struct {
-	Dir            *string `json:"dir"`
-	Keep           *int    `json:"keep"`
-	PassphraseFile *string `json:"passphrase_file"`
-}
-
-// loadBackupConfig reads and validates a backup.json. An empty path means "no
-// --config given" and returns (nil, nil) — the caller keeps built-in defaults.
-// Every defect (file missing, bad JSON, a missing required field, a relative
-// path, the passphrase file inside the backup dir) is a hard error: fail
-// closed, nothing runs.
+// loadBackupConfig 委托给运维模块的备份配置读取与校验。
 func loadBackupConfig(path string) (*backupConfig, error) {
-	if path == "" {
-		return nil, nil
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("backup config: file not found: %s", path)
-		}
-		return nil, fmt.Errorf("backup config: reading %s: %w", path, err)
-	}
-	var cf backupConfigFile
-	if err := json.Unmarshal(raw, &cf); err != nil {
-		return nil, fmt.Errorf("backup config: %s is not valid JSON: %v", path, err)
-	}
-	var missing []string
-	if cf.Dir == nil {
-		missing = append(missing, `"dir"`)
-	}
-	if cf.Keep == nil {
-		missing = append(missing, `"keep"`)
-	}
-	if cf.PassphraseFile == nil {
-		missing = append(missing, `"passphrase_file"`)
-	}
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("backup config: missing required field(s) %s in %s",
-			strings.Join(missing, ", "), path)
-	}
-	if !filepath.IsAbs(*cf.Dir) {
-		return nil, fmt.Errorf("backup config: %q must be an absolute path, got %q in %s",
-			"dir", *cf.Dir, path)
-	}
-	if !filepath.IsAbs(*cf.PassphraseFile) {
-		return nil, fmt.Errorf("backup config: %q must be an absolute path, got %q in %s",
-			"passphrase_file", *cf.PassphraseFile, path)
-	}
-	if err := validatePassphraseNotInDir(*cf.Dir, *cf.PassphraseFile); err != nil {
-		return nil, fmt.Errorf("backup config: %w", err)
-	}
-	return &backupConfig{Dir: *cf.Dir, Keep: *cf.Keep, PassphraseFile: *cf.PassphraseFile}, nil
-}
-
-// validatePassphraseNotInDir enforces the passphrase-location invariant: the
-// passphrase file must never live inside the backup directory (or BE the
-// directory), otherwise the key would be synced alongside the very ciphertext
-// it unlocks.
-func validatePassphraseNotInDir(dir, passphraseFile string) error {
-	resolvedDir, err := resolvePathForComparison(dir)
-	if err != nil {
-		return fmt.Errorf("resolving backup dir %s: %w", dir, err)
-	}
-	resolvedPassphraseFile, err := resolvePathForComparison(passphraseFile)
-	if err != nil {
-		return fmt.Errorf("resolving passphrase_file %s: %w", passphraseFile, err)
-	}
-	if pathInsideDirTree(resolvedPassphraseFile, resolvedDir) {
-		return fmt.Errorf("passphrase_file %s must not be inside the backup dir %s — the passphrase file cannot live in the directory being backed up; move it outside the backup directory",
-			passphraseFile, dir)
-	}
-	return nil
-}
-
-// resolvePathForComparison resolves symbolic links so two spellings of the
-// same physical location compare equal. A path that does not exist yet is
-// resolved by following links in its nearest existing parent directory and
-// appending the missing path elements. Any other failure is returned to the
-// caller so validation stays closed.
-func resolvePathForComparison(path string) (string, error) {
-	absolutePath, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	current := filepath.Clean(absolutePath)
-	var missing []string
-	for {
-		resolved, err := filepath.EvalSymlinks(current)
-		if err == nil {
-			if len(missing) == 0 {
-				return resolved, nil
-			}
-			return filepath.Join(append([]string{resolved}, missing...)...), nil
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return "", err
-		}
-		// EvalSymlinks can report "not exist" for a broken symbolic link. The
-		// link itself exists, so fail rather than stripping it off as a missing
-		// path element and losing its target.
-		if _, statErr := os.Lstat(current); statErr == nil {
-			return "", err
-		} else if !errors.Is(statErr, fs.ErrNotExist) {
-			return "", statErr
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", err
-		}
-		missing = append([]string{filepath.Base(current)}, missing...)
-		current = parent
-	}
-}
-
-// pathInsideDirTree reports whether child is dir itself or lies anywhere under
-// it. Both sides are expected cleaned; the volume (drive letter / UNC share)
-// must match before the path-prefix test applies, and the comparison is
-// case-folded on Windows where paths are case-insensitive.
-func pathInsideDirTree(child, dir string) bool {
-	volChild, volDir := filepath.VolumeName(child), filepath.VolumeName(dir)
-	if !strings.EqualFold(volChild, volDir) {
-		return false
-	}
-	restChild := strings.TrimPrefix(child, volChild)
-	restDir := strings.TrimPrefix(dir, volDir)
-	if runtime.GOOS == "windows" {
-		restChild = strings.ToLower(restChild)
-		restDir = strings.ToLower(restDir)
-	}
-	if restChild == restDir {
-		return true // child IS the dir — counted as inside
-	}
-	if !strings.HasSuffix(restDir, string(filepath.Separator)) {
-		restDir += string(filepath.Separator)
-	}
-	return strings.HasPrefix(restChild, restDir)
+	return ops.LoadBackupConfig(path)
 }
 
 // ---------------------------------------------------------------------------
 // TUI bridge (Plan 49 票 03). The broker console's 备份 page must share this
-// file's validation and backup.go's create/verify chains byte-for-byte, but
-// internal/tui cannot import internal/cli (cli imports tui for the `tui`
-// command — import cycle), so the entry points are injected through
-// tui.SetBackupEntry — the same bridge pattern as tui.SetServeInstaller
-// (Plan 19 T4). The init here keeps the whole bridge inside this one file.
+// file's validation and the backup chain byte-for-byte, but internal/tui cannot
+// import internal/cli (cli imports tui for the `tui` command — import cycle),
+// so the entry points are injected through tui.SetBackupEntry — the same bridge
+// pattern as tui.SetServeInstaller (Plan 19 T4). The init here keeps the whole
+// bridge inside this one file.
 func init() {
 	tui.SetBackupEntry(tui.BackupEntry{
 		LoadConfig:     loadBackupConfigForTUI,
@@ -181,40 +33,29 @@ func init() {
 	})
 }
 
-// loadBackupConfigForTUI adapts loadBackupConfig to the console: the exact
+// loadBackupConfigForTUI adapts LoadBackupConfig to the console: the exact
 // same validation, surfaced through the exported view type.
 func loadBackupConfigForTUI(path string) (*tui.BackupConfig, error) {
-	cfg, err := loadBackupConfig(path)
+	cfg, err := ops.LoadBackupConfig(path)
 	if err != nil || cfg == nil {
 		return nil, err
 	}
 	return &tui.BackupConfig{Dir: cfg.Dir, Keep: cfg.Keep, PassphraseFile: cfg.PassphraseFile}, nil
 }
 
-// validateBackupConfigValuesForTUI applies loadBackupConfig's value rules to
+// validateBackupConfigValuesForTUI applies LoadBackupConfig's value rules to
 // in-memory form values — both paths absolute plus the passphrase-subtree
 // invariant — so the console's save gate IS the CLI's gate, not a
 // re-statement of it.
 func validateBackupConfigValuesForTUI(dir, passphraseFile string) error {
-	if !filepath.IsAbs(dir) {
-		return fmt.Errorf("backup config: %q must be an absolute path, got %q", "dir", dir)
-	}
-	if !filepath.IsAbs(passphraseFile) {
-		return fmt.Errorf("backup config: %q must be an absolute path, got %q", "passphrase_file", passphraseFile)
-	}
-	return validatePassphraseNotInDir(dir, passphraseFile)
+	return ops.ValidateBackupConfigValues(dir, passphraseFile)
 }
 
 // saveBackupConfigForTUI writes the three fields through the SAME on-disk
-// shape loadBackupConfig reads (backupConfigFile) and the same atomic write
-// the backups themselves use (temp + fsync + rename, 0600).
+// shape LoadBackupConfig reads and the same atomic write the backups themselves
+// use (temp + fsync + rename, 0600).
 func saveBackupConfigForTUI(configPath, dir string, keep int, passphraseFile string) error {
-	data, err := json.Marshal(backupConfigFile{Dir: &dir, Keep: &keep, PassphraseFile: &passphraseFile})
-	if err != nil {
-		return err
-	}
-	_, err = atomicWriteFile(filepath.Dir(configPath), filepath.Base(configPath), data)
-	return err
+	return ops.SaveBackupConfig(configPath, dir, keep, passphraseFile)
 }
 
 // runBackupCreateForTUI runs the exact `backup create --config <path>` chain
