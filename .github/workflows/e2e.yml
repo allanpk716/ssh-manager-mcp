@@ -1,0 +1,37 @@
+name: e2e
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "internal/webui/**"
+      - "internal/webuiaccess/**"
+      - "internal/access/**"
+      - "e2e/**"
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: 运行 Playwright 浏览器测试
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm test
