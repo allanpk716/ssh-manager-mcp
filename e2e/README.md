@@ -11,7 +11,7 @@ cd e2e
 npm install
 npx playwright install chromium
 npm test
-``+
+```
 
 测试会先编译仓库根目录的 `sshmgr`，然后每个用例都生成一个全新的临时加
 密库，以单机角色启动 `sshmgr ui`，从启动链接进入页面。桌面视口与手机视
