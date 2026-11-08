@@ -11,9 +11,21 @@ import (
 )
 
 type stubOpsStore struct {
-	query          OpsAuditQuery
-	rows           []OpsAuditRow
-	err            error
+	query OpsAuditQuery
+	rows  []OpsAuditRow
+	err   error
+	// 备份页测试桩：状态、立即备份与一键校验的结果和调用记录。
+	backupStatus OpsBackupStatus
+	statusErr    error
+	createResult OpsBackupCreateResult
+	createErr    error
+	createSource OpsWriteSource
+	createCalls  int
+	verifyResult OpsBackupVerifyResult
+	verifyErr    error
+	verifySource OpsWriteSource
+	verifyCalls  int
+	// 客户端本机审计测试桩。
 	clientRows     []OpsAuditRow
 	clientErr      error
 	clientInstance string
@@ -26,6 +38,31 @@ func (s *stubOpsStore) QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error) {
 		return nil, s.err
 	}
 	return s.rows, nil
+}
+
+func (s *stubOpsStore) BackupStatus() (OpsBackupStatus, error) {
+	if s.statusErr != nil {
+		return OpsBackupStatus{}, s.statusErr
+	}
+	return s.backupStatus, nil
+}
+
+func (s *stubOpsStore) CreateBackup(source OpsWriteSource) (OpsBackupCreateResult, error) {
+	s.createCalls++
+	s.createSource = source
+	if s.createErr != nil {
+		return OpsBackupCreateResult{}, s.createErr
+	}
+	return s.createResult, nil
+}
+
+func (s *stubOpsStore) VerifyLatestBackup(source OpsWriteSource) (OpsBackupVerifyResult, error) {
+	s.verifyCalls++
+	s.verifySource = source
+	if s.verifyErr != nil {
+		return OpsBackupVerifyResult{}, s.verifyErr
+	}
+	return s.verifyResult, nil
 }
 
 func (s *stubOpsStore) ListSettings() ([]OpsSetting, error) { return nil, nil }

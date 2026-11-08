@@ -91,13 +91,16 @@ func (r OpsAuditRow) CommandDisplay() string {
 // 实现；处理器测试用桩，本包不接触数据库结构和文件布局。
 type OpsStore interface {
 	QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error)
+	BackupStatus() (OpsBackupStatus, error)
+	CreateBackup(source OpsWriteSource) (OpsBackupCreateResult, error)
+	VerifyLatestBackup(source OpsWriteSource) (OpsBackupVerifyResult, error)
 	ListSettings() ([]OpsSetting, error)
 	ValidateSetting(key, value string) error
 	SetSetting(key, value string, source OpsWriteSource) error
 	UnsetSetting(key string, source OpsWriteSource) error
 	ReadRole() (OpsRole, error)
 	// QueryClientAudit 读取客户端实例目录中的本机审计日志文件。instance 空串
-	// 表示默认实例；后续客户端页会把这里改成按请求传入会话中的实例。
+	// 表示默认实例，处理器按当前浏览器会话传入。
 	QueryClientAudit(instance string, limit int) ([]OpsAuditRow, error)
 	// CheckUpdate 与 ApplyUpdate 的 instance 语义同上；升级服务按传入实例读
 	// 取推荐版本。
@@ -111,6 +114,47 @@ type OpsStore interface {
 	SwitchClientInstance(instance, sourceIP string) error
 	// SyncClient 立即同步指定客户端实例并写实例本机审计。
 	SyncClient(instance, sourceIP string) (OpsClientStatus, error)
+}
+
+// OpsBackupStatus 是备份页状态区的展示数据。ConfigError 非空且 ConfigDir
+// 为空串表示配置缺失；ConfigError 非空且 ConfigDir 非空表示配置有误。
+type OpsBackupStatus struct {
+	ConfigPath           string
+	ConfigError          string
+	ConfigMissing        bool
+	ConfigDir            string
+	ConfigKeep           int
+	ConfigPassphraseFile string
+	TaskInstalled        bool
+	TaskProbed           bool
+	TotalBackups         int
+	LatestBackup         string
+	LatestTime           time.Time
+	HasLatest            bool
+	Stale                bool
+	Verify               *OpsBackupVerifyState
+}
+
+// OpsBackupVerifyState 是针对当前最新文件的最近一次校验结果。
+type OpsBackupVerifyState struct {
+	File        string
+	OK          bool
+	FailureKind string
+	At          time.Time
+}
+
+// OpsBackupCreateResult 是立即备份的结果；Skipped 表示已有备份正在进行。
+type OpsBackupCreateResult struct {
+	File    string
+	Skipped bool
+}
+
+// OpsBackupVerifyResult 是一键校验最新备份的结果；失败时 FailureKind 为
+// 口令不符、文件损坏或文件不完整之一。
+type OpsBackupVerifyResult struct {
+	File        string
+	OK          bool
+	FailureKind string
 }
 
 // OpsAuditFilterView 保存过滤表单的当前值，服务器渲染时原样回填。
@@ -132,13 +176,14 @@ const (
 	opsAuditPage = 100
 )
 
-// registerOpsRoutes 按本机角色注册运维区域路由：单机与权威端注册权威 vault
-// 审计页，客户端只注册本机审计页；其余页面随后续票接入。
+// registerOpsRoutes 按本机角色注册运维区域路由：单机与权威端注册备份、设
+// 置与权威 vault 审计页；客户端注册客户端页、升级页与本机审计页。
 func (h *handler) registerOpsRoutes() {
 	h.mux.HandleFunc(opsRootPath, h.handleOpsRoot)
 	if h.cfg.Ops == nil {
 		h.caps.ShowOpsArea = false
 		h.caps.CanQueryVaultAudit = false
+		h.caps.CanManageBackups = false
 		h.caps.CanQueryClientAudit = false
 		h.caps.CanUpgradeBinary = false
 		h.caps.CanUseClientOps = false
@@ -158,6 +203,11 @@ func (h *handler) registerOpsRoutes() {
 			h.mux.HandleFunc(opsClientAuditPath, h.handleOpsClientAudit)
 		}
 		return
+	}
+	if h.caps.CanManageBackups {
+		h.mux.HandleFunc(opsBackupPath, h.handleOpsBackup)
+		h.mux.HandleFunc(opsBackupCreatePath, h.handleOpsBackupCreate)
+		h.mux.HandleFunc(opsBackupVerifyPath, h.handleOpsBackupVerify)
 	}
 	if h.caps.CanManageSettings {
 		h.mux.HandleFunc(opsSettingsPath, h.handleOpsSettings)

@@ -209,6 +209,7 @@ type session struct {
 	csrf           string
 	clientInstance string
 	accessFlash    *AccessFlash
+	opsBackupFlash *OpsBackupFlash
 	generation     int64
 	lastActive     time.Time
 	lastVerified   time.Time

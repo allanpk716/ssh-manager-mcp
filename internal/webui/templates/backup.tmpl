@@ -1,0 +1,73 @@
+{{define "content"}}
+<section class="backup-page">
+<h1>备份</h1>
+{{if .OpsBackupFlash}}
+{{if .OpsBackupFlash.OK}}
+<p class="flash-ok backup-flash">{{if eq .OpsBackupFlash.Action "create"}}已备份：{{.OpsBackupFlash.File}}{{else}}已校验：{{.OpsBackupFlash.File}}{{end}}</p>
+{{else if .OpsBackupFlash.Skipped}}
+<p class="flash-warn backup-flash">已有备份正在进行，本次没有写入新备份。</p>
+{{else}}
+<p class="flash-error backup-flash">{{if eq .OpsBackupFlash.Action "create"}}立即备份失败{{else}}校验失败{{end}}{{if .OpsBackupFlash.File}}：{{.OpsBackupFlash.File}}{{end}}{{if .OpsBackupFlash.Message}}（{{.OpsBackupFlash.Message}}）{{end}}</p>
+{{end}}
+{{end}}
+<div class="backup-status">
+<h2>状态</h2>
+{{if .OpsBackupStatus.ConfigError}}
+{{if .OpsBackupStatus.ConfigMissing}}
+<p class="backup-alert">尚未配置备份。备份配置文件不存在：{{.OpsBackupStatus.ConfigPath}}</p>
+{{else}}
+<p class="backup-alert">备份配置有误：{{.OpsBackupStatus.ConfigError}}</p>
+{{end}}
+<p class="backup-hint">处理建议：在下方的「备份配置」编辑入口填写备份目录、保留份数和口令文件路径。</p>
+{{else}}
+<dl class="backup-facts">
+<div><dt>备份目录</dt><dd>{{.OpsBackupStatus.ConfigDir}}</dd></div>
+<div><dt>保留份数</dt><dd>{{.OpsBackupStatus.ConfigKeep}}</dd></div>
+<div><dt>口令文件</dt><dd>{{.OpsBackupStatus.ConfigPassphraseFile}}</dd></div>
+<div><dt>计划任务</dt><dd>{{.OpsBackupStatus.TaskText}}</dd></div>
+</dl>
+{{if .OpsBackupStatus.TaskProbed}}{{if not .OpsBackupStatus.TaskInstalled}}
+<p class="backup-alert backup-task-missing">计划任务未安装：定时备份不会自动执行。</p>
+<p class="backup-hint">处理建议：检查计划任务安装情况；需要安装或修改时请在主机上按文档操作。</p>
+{{end}}{{end}}
+<dl class="backup-facts">
+<div><dt>备份总数</dt><dd>{{.OpsBackupStatus.TotalBackups}}</dd></div>
+<div><dt>最新备份</dt><dd>{{if .OpsBackupStatus.HasLatest}}{{.OpsBackupStatus.LatestBackup}}（生成时间 {{.OpsBackupStatus.LatestTime.Format "2006-01-02 15:04"}}）{{else}}尚无备份{{end}}</dd></div>
+</dl>
+{{if .OpsBackupStatus.HasLatest}}
+{{if .OpsBackupStatus.Stale}}
+<p class="backup-alert backup-stale">过期：最新备份生成已超过 25 小时。</p>
+<p class="backup-hint">处理建议：检查计划任务是否在运行；确认后可点击「立即备份」补一份。</p>
+{{end}}
+{{if .OpsBackupStatus.Verify}}
+{{if .OpsBackupStatus.Verify.OK}}
+<p class="backup-ok backup-verify-state">已校验：{{.OpsBackupStatus.Verify.File}}（{{.OpsBackupStatus.Verify.At.Format "2006-01-02 15:04"}}）</p>
+{{else}}
+<p class="backup-alert backup-verify-state">最新备份无法解密或已损坏：{{.OpsBackupStatus.Verify.FailureKindText}}。</p>
+<p class="backup-hint">处理建议：口令不符时先核对口令文件；仍失败时请重新备份，并检查备份目录所在的存储。</p>
+{{end}}
+{{else}}
+<p class="backup-warn backup-verify-state">最新备份尚未校验。</p>
+{{end}}
+{{else}}
+<p class="backup-warn backup-empty">尚无备份。</p>
+<p class="backup-hint">处理建议：点击「立即备份」写入第一份备份。</p>
+{{end}}
+{{end}}
+</div>
+<div class="backup-actions">
+<form method="post" action="/ui/ops/backup/create">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">立即备份</button>
+</form>
+<form method="post" action="/ui/ops/backup/verify">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">校验最新备份</button>
+</form>
+</div>
+<div id="backup-config" class="backup-config">
+<h2>备份配置</h2>
+<p>备份配置编辑入口将在此处提供，可修改备份目录、保留份数和口令文件路径。</p>
+</div>
+</section>
+{{end}}
