@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,12 @@ type WebAdminLoginState struct {
 	Locked        bool
 	LockRemaining time.Duration
 	Delay         time.Duration
+}
+
+// WebAdminLoginLock 是当前仍生效的来源 IP 锁定。
+type WebAdminLoginLock struct {
+	IP        string
+	Remaining time.Duration
 }
 
 // webAdminLoginState 是登录失败记录在 vault 里的持久形态。时间统一保存
@@ -110,6 +117,24 @@ func (s *Store) WebAdminLoginState(ip string, at time.Time) (WebAdminLoginState,
 	}
 	state := pruneWebAdminLoginState(row.LoginState, at)
 	return webAdminLoginStateView(state, ip, at), nil
+}
+
+// ListWebAdminLoginLocks 返回当前仍生效的登录锁定及剩余时间，按来源 IP
+// 排序，供权威端命令行展示。
+func (s *Store) ListWebAdminLoginLocks(at time.Time) ([]WebAdminLoginLock, error) {
+	row, err := readWebAdminAuthRow(s.db)
+	if err != nil {
+		return nil, err
+	}
+	state := pruneWebAdminLoginState(row.LoginState, at)
+	locks := make([]WebAdminLoginLock, 0, len(state.IPLocks))
+	for ip, until := range state.IPLocks {
+		if until > at.Unix() {
+			locks = append(locks, WebAdminLoginLock{IP: ip, Remaining: time.Duration(until-at.Unix()) * time.Second})
+		}
+	}
+	sort.Slice(locks, func(i, j int) bool { return locks[i].IP < locks[j].IP })
+	return locks, nil
 }
 
 // RecordWebAdminLoginFailure 记录一次失败，按 15 分钟窗口维护按 IP 锁定与

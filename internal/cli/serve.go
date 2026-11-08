@@ -120,7 +120,7 @@ directly in the foreground.`,
 	// parent command with its own RunE to also have subcommands.
 	// (`serve bind` retired with Plan 42 批1 T1: the tunnel-whitelist command
 	// only served the ②a MCP-over-HTTP agent surface, which is removed.)
-	c.AddCommand(newServeInstallCmd(), newServeUninstallCmd(), newServeStatusCmd(), newServeCertInfoCmd(), newServePairCmd())
+	c.AddCommand(newServeInstallCmd(), newServeUninstallCmd(), newServeStatusCmd(), newServeCertInfoCmd(), newServePairCmd(), newServeAdminCmd())
 	return c
 }
 

@@ -215,7 +215,7 @@ func TestUICommandBrowserOpenFailurePrintsURL(t *testing.T) {
 	}
 }
 
-func TestUICommandServerRoleRefusesWithoutListening(t *testing.T) {
+func TestUICommandServerRolePrintsServeListenerWithoutStartingServer(t *testing.T) {
 	createVaultStore(t)
 	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
 		t.Fatal(err)
@@ -223,17 +223,21 @@ func TestUICommandServerRoleRefusesWithoutListening(t *testing.T) {
 
 	urlCh, stdout, stderr, finish := startUICommand(t, nil)
 	err := finish(t)
-	if err == nil {
-		t.Fatal("权威端角色运行 ui 应以错误退出")
+	if err != nil {
+		t.Fatalf("权威端角色运行 ui 应成功退出：%v", err)
 	}
 	select {
 	case <-urlCh:
 		t.Fatal("权威端角色不应打开浏览器（不启动监听）")
 	default:
 	}
-	combined := stdout.String() + stderr.String() + err.Error()
-	if !strings.Contains(combined, "权威端") || !strings.Contains(combined, "serve") {
-		t.Fatalf("权威端拒绝说明应说明由 serve 的独立监听提供，实际：%s", combined)
+	combined := stdout.String() + stderr.String()
+	for _, want := range []string{
+		"权威端", "https://127.0.0.1:7879/ui/", "sha256:", "sshmgr serve admin set", "sshmgr ui",
+	} {
+		if !strings.Contains(combined, want) {
+			t.Fatalf("权威端 ui 输出应包含 %q，实际：%s", want, combined)
+		}
 	}
 }
 

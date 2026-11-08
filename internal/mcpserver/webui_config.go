@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/webui"
 )
 
 const (
@@ -36,4 +38,15 @@ func ReadWebUIConfig(st *store.Store) (int, string, error) {
 		manualListen = ""
 	}
 	return port, manualListen, nil
+}
+
+// ReadWebUIListenPlan 读取设置并按当前拓扑与本机网卡推导 Web UI 地址，供
+// serve 进程、`serve admin status` 与 `ui` 命令显示同一个结果。
+func ReadWebUIListenPlan(st *store.Store) (int, webui.ListenPlan, error) {
+	port, manualListen, err := ReadWebUIConfig(st)
+	if err != nil {
+		return 0, webui.ListenPlan{}, err
+	}
+	plan, err := webUIListenPlan(st, manualListen, time.Now())
+	return port, plan, err
 }

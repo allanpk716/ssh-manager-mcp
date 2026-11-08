@@ -121,3 +121,29 @@ func TestWebAdminLoginFailuresPersistLockAndGlobalDelay(t *testing.T) {
 		t.Fatalf("解除锁定只清除该 IP 锁定，15 分钟内失败仍应全局延迟：state=%+v", state)
 	}
 }
+
+func TestListWebAdminLoginLocksShowsRemainingTime(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	base := time.Unix(1800000000, 0)
+	for i := 0; i < 5; i++ {
+		if _, err := s.RecordWebAdminLoginFailure("192.0.2.10", base.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	locks, err := s.ListWebAdminLoginLocks(base.Add(5 * time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locks) != 1 || locks[0].IP != "192.0.2.10" || locks[0].Remaining != 14*time.Minute {
+		t.Fatalf("锁定列表 = %+v，应包含来源 IP 与 14 分钟剩余时间", locks)
+	}
+	locks, err = s.ListWebAdminLoginLocks(base.Add(21 * time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locks) != 0 {
+		t.Fatalf("过期锁定不应继续显示：%+v", locks)
+	}
+}
