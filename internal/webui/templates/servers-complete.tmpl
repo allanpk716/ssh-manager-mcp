@@ -1,0 +1,40 @@
+{{define "content"}}
+<section class="server-complete">
+<h1>补全 {{.ServerComplete.Detail.Name}}（第 {{addOne .ServerComplete.Position}} / {{len .ServerComplete.Queue}} 台）</h1>
+{{if .ServerComplete.Notice}}<div class="operation-refusal"><p>{{.ServerComplete.Notice}}</p></div>{{end}}
+<dl class="detail-list">
+<dt>连接</dt><dd>{{.ServerComplete.Detail.User}}@{{.ServerComplete.Detail.Host}}:{{.ServerComplete.Detail.Port}}</dd>
+<dt>注意原因</dt><dd>{{if .ServerComplete.Detail.AttentionReasons}}{{joinReasons .ServerComplete.Detail.AttentionReasons}}{{else}}无{{end}}</dd>
+</dl>
+<form method="post" action="/ui/servers/complete" class="server-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="queue" value="{{joinTags .ServerComplete.Queue}}">
+<input type="hidden" name="position" value="{{.ServerComplete.Position}}">
+<input type="hidden" name="imported" value="{{.ServerComplete.Imported}}">
+<input type="hidden" name="skipped" value="{{.ServerComplete.Skipped}}">
+<input type="hidden" name="failed" value="{{.ServerComplete.Failed}}">
+<fieldset><legend>服务器元数据</legend>
+<div class="form-field"><label for="c-description">说明</label><input id="c-description" name="description" value="{{.ServerComplete.Detail.Description}}"></div>
+<div class="form-field"><label for="c-location">位置</label><input id="c-location" name="location" value="{{.ServerComplete.Detail.Location}}"></div>
+<div class="form-field"><label for="c-hardware">硬件</label><input id="c-hardware" name="hardware" value="{{.ServerComplete.Detail.Hardware}}"></div>
+<div class="form-field"><label for="c-services">服务</label><input id="c-services" name="services" value="{{.ServerComplete.Detail.Services}}"></div>
+<div class="form-field"><label for="c-role">角色</label><input id="c-role" name="role" value="{{.ServerComplete.Detail.Role}}"></div>
+<div class="form-field"><label for="c-caveats">注意事项</label><input id="c-caveats" name="special_handling" value="{{.ServerComplete.Detail.Caveats}}"></div>
+</fieldset>
+<fieldset><legend>密码</legend>
+{{if .ServerComplete.NeedsReverify}}<p class="muted">重新验证后才能填写密码。</p>
+{{else}}
+<div class="form-field"><label for="c-sudo">sudo 密码（留空表示不变）</label><input id="c-sudo" name="sudo_password" type="password" autocomplete="new-password"></div>
+{{if .ServerComplete.ShowPassword}}<div class="form-field"><label for="c-password">密码（现在设置）</label><input id="c-password" name="password" type="password" autocomplete="new-password"></div>{{end}}
+{{if .ServerComplete.ShowKeyPassphrase}}<div class="form-field"><label for="c-key-pass">私钥口令（补全加密私钥）</label><input id="c-key-pass" name="key_passphrase" type="password" autocomplete="new-password">
+<p class="muted">共用这把私钥的服务器会一起去掉待补标记：{{joinTags .ServerComplete.SharedKeyServers}}</p></div>{{end}}
+{{end}}
+</fieldset>
+<div class="inline-form">
+<button type="submit" name="action" value="save">保存并继续</button>
+<button type="submit" name="action" value="skip" class="secondary">跳过这一台</button>
+<button type="submit" name="action" value="end" class="secondary">结束补全</button>
+</div>
+</form>
+</section>
+{{end}}

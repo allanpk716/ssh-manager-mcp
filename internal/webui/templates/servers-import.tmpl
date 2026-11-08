@@ -1,0 +1,10 @@
+{{define "content"}}
+<section class="server-import">
+<h1>导入 SSH 配置</h1>
+<form method="post" action="/ui/servers/import/plan" class="server-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<div class="form-field"><label for="import-path">SSH 配置路径</label><input id="import-path" name="path" value="{{defaultConfigPath}}"></div>
+<div class="inline-form"><button type="submit">查看候选</button></div>
+</form>
+</section>
+{{end}}

@@ -213,7 +213,7 @@ const (
 // registerOpsRoutes 按本机角色注册运维区域路由：单机与权威端注册备份、设
 // 置与权威 vault 审计页；客户端注册客户端页、升级页与本机审计页。
 func (h *handler) registerOpsRoutes() {
-	h.mux.HandleFunc(opsRootPath, h.handleOpsRoot)
+	h.mux.HandleFunc(opsRootPath, h.requireSession(h.handleOpsRoot))
 	if h.cfg.Ops == nil {
 		h.caps.ShowOpsArea = false
 		h.caps.CanQueryVaultAudit = false
@@ -225,36 +225,39 @@ func (h *handler) registerOpsRoutes() {
 	}
 	if h.caps.CanUpgradeBinary {
 		if h.cfg.Role == RoleServer {
-			h.mux.HandleFunc(opsUpdatePath, h.handleAuthorityOpsUpdate)
+			h.mux.HandleFunc(opsUpdatePath, h.requireSession(h.handleAuthorityOpsUpdate))
 		} else {
-			h.mux.HandleFunc(opsUpdatePath, h.handleOpsUpdate)
+			h.mux.HandleFunc(opsUpdatePath, h.requireSession(h.handleOpsUpdate))
 		}
 	}
 	if h.cfg.Role == RoleServer && h.caps.CanRestartService {
-		h.mux.HandleFunc(opsUpdateRestartPath, h.handleRestartAfterResponse(h.handleAuthorityOpsUpdateRestart))
+		h.mux.HandleFunc(
+			opsUpdateRestartPath,
+			h.requireSession(h.handleRestartAfterResponse(h.handleAuthorityOpsUpdateRestart)),
+		)
 	}
 	if h.cfg.Role == RoleClient {
 		if h.caps.CanUseClientOps {
-			h.mux.HandleFunc(opsClientPath, h.handleOpsClient)
-			h.mux.HandleFunc(opsClientSyncPath, h.handleOpsClientSync)
-			h.mux.HandleFunc(opsClientInstancePath, h.handleOpsClientInstance)
+			h.mux.HandleFunc(opsClientPath, h.requireSession(h.handleOpsClient))
+			h.mux.HandleFunc(opsClientSyncPath, h.requireSession(h.handleOpsClientSync))
+			h.mux.HandleFunc(opsClientInstancePath, h.requireSession(h.handleOpsClientInstance))
 		}
 		if h.caps.CanQueryClientAudit {
-			h.mux.HandleFunc(opsClientAuditPath, h.handleOpsClientAudit)
+			h.mux.HandleFunc(opsClientAuditPath, h.requireSession(h.handleOpsClientAudit))
 		}
 		return
 	}
 	if h.caps.CanManageBackups {
-		h.mux.HandleFunc(opsBackupPath, h.handleOpsBackup)
-		h.mux.HandleFunc(opsBackupConfigPath, h.handleOpsBackupConfig)
-		h.mux.HandleFunc(opsBackupCreatePath, h.handleOpsBackupCreate)
-		h.mux.HandleFunc(opsBackupVerifyPath, h.handleOpsBackupVerify)
+		h.mux.HandleFunc(opsBackupPath, h.requireSession(h.handleOpsBackup))
+		h.mux.HandleFunc(opsBackupConfigPath, h.requireSession(h.handleOpsBackupConfig))
+		h.mux.HandleFunc(opsBackupCreatePath, h.requireSession(h.handleOpsBackupCreate))
+		h.mux.HandleFunc(opsBackupVerifyPath, h.requireSession(h.handleOpsBackupVerify))
 	}
 	if h.caps.CanManageSettings {
-		h.mux.HandleFunc(opsSettingsPath, h.handleOpsSettings)
+		h.mux.HandleFunc(opsSettingsPath, h.requireSession(h.handleOpsSettings))
 	}
 	if h.caps.CanQueryVaultAudit {
-		h.mux.HandleFunc(opsAuditPath, h.handleOpsAudit)
+		h.mux.HandleFunc(opsAuditPath, h.requireSession(h.handleOpsAudit))
 	}
 }
 

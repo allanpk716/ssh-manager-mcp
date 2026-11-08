@@ -35,9 +35,9 @@ type AccessPairingForm struct {
 // registerPairingRoutes 只在权威端注册配对路由：配对请求由客户端经主监听
 // 写入队列表，owner 在权威端 Web UI 裁决。
 func (h *handler) registerPairingRoutes() {
-	h.mux.HandleFunc(accessPairingPath, h.handleAccessPairing)
-	h.mux.HandleFunc(accessPairingListPath, h.handleAccessPairingList)
-	h.mux.HandleFunc(accessPairingPrefix, h.handleAccessPairingAction)
+	h.mux.HandleFunc(accessPairingPath, h.requireSession(h.handleAccessPairing))
+	h.mux.HandleFunc(accessPairingListPath, h.requireSession(h.handleAccessPairingList))
+	h.mux.HandleFunc(accessPairingPrefix, h.requireSession(h.handleAccessPairingAction))
 }
 
 func (h *handler) handleAccessPairing(w http.ResponseWriter, r *http.Request) {

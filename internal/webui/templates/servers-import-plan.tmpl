@@ -1,0 +1,31 @@
+{{define "content"}}
+<section class="server-import-plan">
+<h1>导入候选</h1>
+{{if .ServerImportError}}<div class="operation-refusal"><p>{{.ServerImportError}}</p></div>{{end}}
+{{if .ServerImportPlan}}
+{{if .ServerImportPlan.MatchWarning}}<div class="operation-refusal"><p>配置含 Match 块：继承值按 Host 模式近似求值，可能与真 ssh 不一致。</p></div>{{end}}
+<form method="post" action="/ui/servers/import/run" class="server-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="path" value="{{.ServerImportPlan.Path}}">
+<div class="form-field"><label for="plan-profile">授权 profile（可选）</label>
+<select id="plan-profile" name="profile">
+<option value="">不授权</option>
+{{range .ServerImportPlan.Profiles}}<option value="{{.ID}}" {{if eq $.ServerImportPlan.ProfileID .ID}}selected{{end}}>{{.Name}}</option>{{end}}
+</select></div>
+<fieldset><legend>会导入（默认全选）</legend>
+{{range .ServerImportPlan.Candidates}}<div class="form-field choice"><label><input type="checkbox" name="candidate" value="{{.Name}}" checked> {{.Name}} — {{.User}}@{{.Host}}:{{.Port}}（{{.Note}}）</label></div>{{end}}
+</fieldset>
+<fieldset><legend>跳过</legend>
+{{range .ServerImportPlan.VaultSkipped}}<p class="muted">{{.Name}}：{{.Reason}}</p>{{end}}
+{{range .ServerImportPlan.ParseSkipped}}<p class="muted">{{.Name}}：{{.Reason}}</p>{{end}}
+{{if and (not .ServerImportPlan.VaultSkipped) (not .ServerImportPlan.ParseSkipped)}}<p class="muted">无</p>{{end}}
+</fieldset>
+<fieldset><legend>失败</legend>
+{{range .ServerImportPlan.Failed}}<p class="muted">{{.Name}}：{{.Reason}}</p>{{end}}
+{{if not .ServerImportPlan.Failed}}<p class="muted">失败 0：当前实现在执行阶段才知道单台导入是否失败，计划阶段无法提前判定。</p>{{end}}
+</fieldset>
+<div class="inline-form"><button type="submit">执行导入</button><a class="button-link" href="/ui/servers/import">返回</a></div>
+</form>
+{{end}}
+</section>
+{{end}}

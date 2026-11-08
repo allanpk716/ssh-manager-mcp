@@ -15,8 +15,16 @@ type recordingClientServerSource struct {
 }
 
 func (s *recordingClientServerSource) Servers(instance string) ([]ServerRow, error) {
-	s.instances = append(s.instances, instance)
 	return []ServerRow{{Name: "client-server-" + instance}}, nil
+}
+
+func (s *recordingClientServerSource) ServerList(instance string, _ bool) ([]ServerListEntry, error) {
+	s.instances = append(s.instances, instance)
+	return []ServerListEntry{{Name: "client-server-" + instance}}, nil
+}
+
+func (s *recordingClientServerSource) ServerDetail(string, string) (*ServerDetailView, error) {
+	return nil, nil
 }
 
 type stubClientOpsStore struct {

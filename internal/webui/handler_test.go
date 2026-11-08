@@ -16,6 +16,33 @@ type stubServerSource struct{ rows []ServerRow }
 
 func (s *stubServerSource) Servers(string) ([]ServerRow, error) { return s.rows, nil }
 
+func (s *stubServerSource) ServerList(_ string, attentionOnly bool) ([]ServerListEntry, error) {
+	rows := make([]ServerListEntry, 0, len(s.rows))
+	for _, row := range s.rows {
+		entry := ServerListEntry{ID: row.ID, Name: row.Name, User: row.User, Host: row.Host, Port: row.Port}
+		if row.NeedsAttention {
+			entry.AttentionReasons = []string{"需要注意"}
+		}
+		if attentionOnly && !row.NeedsAttention {
+			continue
+		}
+		rows = append(rows, entry)
+	}
+	return rows, nil
+}
+
+func (s *stubServerSource) ServerDetail(_ string, identifier string) (*ServerDetailView, error) {
+	for _, row := range s.rows {
+		if row.ID == identifier || row.Name == identifier {
+			return &ServerDetailView{
+				ID: row.ID, Name: row.Name, User: row.User, Host: row.Host, Port: row.Port,
+				Shell: "posix",
+			}, nil
+		}
+	}
+	return nil, nil
+}
+
 // newTestHandler 构造一个固定端口的测试 Handler。所有请求都带正确的回环
 // Host 头，与真实浏览器访问一致。
 func newTestHandler(t *testing.T, role Role, rows []ServerRow) (http.Handler, Startup) {

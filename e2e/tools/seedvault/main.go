@@ -64,7 +64,7 @@ func seed(dir string) error {
 		return err
 	}
 	webID, err := st.AddServer(&models.Server{
-		Name: "web-1", Host: "192.0.2.10", Port: 22, User: "owner",
+		Name: "web-1", Host: "192.0.2.10", Port: 22, User: "owner", Role: "运维网站",
 		AuthMethod: models.AuthPassword, CredentialID: credentialID,
 	})
 	if err != nil {
@@ -76,11 +76,19 @@ func seed(dir string) error {
 	}); err != nil {
 		return err
 	}
+	oldID, err := st.AddServerWithCredentials(&models.Server{
+		Name: "old-1", Host: "192.0.2.12", Port: 22, User: "owner", Role: "待删除",
+	}, &models.Credential{
+		Type: models.CredPassword, Secret: []byte("browser-test-old-password"),
+	}, nil)
+	if err != nil {
+		return err
+	}
 	profileID, err := st.AddProfile("运维")
 	if err != nil {
 		return err
 	}
-	if err := st.GrantServers(profileID, []string{webID}); err != nil {
+	if err := st.GrantServers(profileID, []string{webID, oldID}); err != nil {
 		return err
 	}
 	for i := 0; i < 120; i++ {

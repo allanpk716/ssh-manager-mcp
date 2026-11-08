@@ -3,6 +3,7 @@ package webui
 import (
 	"html"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
@@ -92,6 +93,68 @@ func (s *stubOpsStore) UnsetSetting(key string, source OpsWriteSource) error { r
 
 func (s *stubOpsStore) ReadRole() (OpsRole, error) {
 	return OpsRole{}, nil
+}
+
+// TestOpsPagesRequireSession 覆盖合并后的运维区域安全要求：单机与客户端
+// 未携带会话时返回 401，权威端跳转登录页；写入口也在路由包装层先被拒绝。
+func TestOpsPagesRequireSession(t *testing.T) {
+	commonTargets := []string{
+		"/ui/ops/", "/ui/ops/update",
+	}
+	roleTargets := map[Role][]string{
+		RoleStandalone: append([]string{
+			"/ui/ops/backup", "/ui/ops/backup/config", "/ui/ops/backup/create",
+			"/ui/ops/backup/verify", "/ui/ops/settings", "/ui/ops/audit",
+		}, commonTargets...),
+		RoleClient: append([]string{
+			"/ui/ops/client", "/ui/ops/client/sync", "/ui/ops/client/instance",
+			"/ui/ops/client-audit",
+		}, commonTargets...),
+	}
+	roleNames := map[Role]string{RoleStandalone: "单机", RoleClient: "客户端"}
+	for _, role := range []Role{RoleStandalone, RoleClient} {
+		handler, _, err := New(Config{
+			Role: role, Servers: &stubServerSource{}, Access: &stubAccessStore{},
+			Ops: &stubOpsStore{}, Port: 18080,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, target := range roleTargets[role] {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			req.Host = "127.0.0.1:18080"
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			body := readResponseBody(t, rec.Result())
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("%s 角色未登录访问 %s 状态码 = %d，应为 401：\n%s", roleNames[role], target, rec.Code, body)
+			}
+			if !strings.Contains(body, "需要启动会话") {
+				t.Fatalf("%s 角色未登录访问 %s 应显示会话错误页：\n%s", roleNames[role], target, body)
+			}
+		}
+	}
+
+	ops := &stubAuthorityOpsUpdateStore{stubOpsUpdateStore: newStubOpsUpdateStore()}
+	authority, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{},
+		Ops: ops, ServiceRestart: ops, Auth: &fakeAuthorityAuth{passwordSet: true},
+		AllowedHosts: []string{"127.0.0.1"}, Port: 7879,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range append([]string{
+		"/ui/ops/update/restart", "/ui/ops/backup", "/ui/ops/backup/config",
+		"/ui/ops/backup/create", "/ui/ops/backup/verify", "/ui/ops/settings",
+		"/ui/ops/audit",
+	}, commonTargets...) {
+		resp := authorityGetNoSession(t, authority, target)
+		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != loginPath {
+			t.Fatalf("权威端未登录访问 %s 应跳转登录页，状态码=%d 跳转=%s", target, resp.StatusCode, resp.Header.Get("Location"))
+		}
+		resp.Body.Close()
+	}
 }
 
 func testOpsRows(count int) []OpsAuditRow {

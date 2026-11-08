@@ -1,0 +1,10 @@
+{{define "content"}}
+<section class="server-complete-result">
+<h1>补全结果</h1>
+<div class="operation-result"><p>导入 {{.ImportedCount}} · 跳过 {{.SkippedCount}} · 失败 {{.FailedCount}} · 待补 {{.PendingCount}}</p></div>
+<div class="inline-form">
+<a class="button-link" href="/ui/?attention=1">查看需要注意的服务器</a>
+<a class="button-link" href="/ui/">返回服务器列表</a>
+</div>
+</section>
+{{end}}

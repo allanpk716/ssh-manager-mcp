@@ -215,6 +215,20 @@ func TestClientUIServerSourceHonorsInstance(t *testing.T) {
 	if len(got) != 1 || got[0].Name != "笔记本实例服务器" {
 		t.Fatalf("指定实例应读到自己的快照，实际：%+v", got)
 	}
+	list, err := clientUIServerSource{}.ServerList("laptop", false)
+	if err != nil {
+		t.Fatalf("读取指定实例服务器页列表失败：%v", err)
+	}
+	if len(list) != 1 || list[0].ID != "n" {
+		t.Fatalf("服务器页应读取指定实例快照，实际：%+v", list)
+	}
+	detail, err := clientUIServerSource{}.ServerDetail("laptop", "n")
+	if err != nil {
+		t.Fatalf("读取指定实例服务器详情失败：%v", err)
+	}
+	if detail == nil || detail.ID != "n" {
+		t.Fatalf("服务器详情应读取指定实例快照，实际：%+v", detail)
+	}
 }
 
 // TestUIVersionHintSourceReusesClientMismatchHint 验证版本提示来源复用客户端

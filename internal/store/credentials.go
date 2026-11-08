@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -63,4 +64,56 @@ func (s *Store) GetCredential(id string) (*models.Credential, error) {
 		c.Passphrase = pass
 	}
 	return c, nil
+}
+
+// CredentialSummary 返回凭据的非敏感摘要：类型与是否已存私钥口令。found 为
+// false 表示凭据行不存在。详情页与命令行输出用它，不解密也不返回凭据内容。
+func (s *Store) CredentialSummary(id string) (kind models.CredentialType, hasPassphrase, found bool, err error) {
+	if id == "" {
+		return "", false, false, nil
+	}
+	var typ string
+	var passRaw []byte
+	err = s.db.QueryRow(`SELECT type, passphrase_blob FROM credentials WHERE id=?`, id).Scan(&typ, &passRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, false, nil
+	}
+	if err != nil {
+		return "", false, false, err
+	}
+	return models.CredentialType(typ), passRaw != nil, true, nil
+}
+
+// ServersUsingCredential 返回把 credID 用作登录凭据的全部服务器条目，按名
+// 字排序。只匹配登录凭据列，不包含 sudo 凭据引用；供补私钥口令前列出受影
+// 响的服务器。
+func (s *Store) ServersUsingCredential(credID string) ([]*models.Server, error) {
+	if credID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`SELECT id FROM servers WHERE credential_id=? ORDER BY name`, credID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	servers := make([]*models.Server, 0, len(ids))
+	for _, id := range ids {
+		srv, err := s.GetServer(id)
+		if err != nil {
+			return nil, err
+		}
+		servers = append(servers, srv)
+	}
+	return servers, nil
 }

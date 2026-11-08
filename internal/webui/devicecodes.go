@@ -68,8 +68,8 @@ type AccessDeviceCodeResult struct {
 // registerDeviceCodeRoutes 只在权威端注册设备码路由：单机没有设备码，客
 // 户端的修改一律在权威端做。
 func (h *handler) registerDeviceCodeRoutes() {
-	h.mux.HandleFunc(accessDeviceCodesPath, h.handleAccessDeviceCodes)
-	h.mux.HandleFunc(accessDeviceCodesPrefix, h.handleAccessDeviceCodeRevoke)
+	h.mux.HandleFunc(accessDeviceCodesPath, h.requireSession(h.handleAccessDeviceCodes))
+	h.mux.HandleFunc(accessDeviceCodesPrefix, h.requireSession(h.handleAccessDeviceCodeRevoke))
 }
 
 func (h *handler) handleAccessDeviceCodes(w http.ResponseWriter, r *http.Request) {

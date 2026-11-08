@@ -43,10 +43,14 @@ type ServerRow struct {
 	NeedsAttention bool
 }
 
-// ServerSource 是 Web UI 读取服务器列表的唯一入口，由命令行按本机角色提供
-// 单机 vault 来源或客户端快照来源。
+// ServerSource 是 Web UI 读取服务器数据的唯一入口，由命令行按本机角色提供
+// 单机 vault 来源或客户端快照来源。instance 是客户端缓存实例名，空串表示
+// 默认实例；单机与权威端来源忽略它。Servers 供访问区域的授权表单复用基本
+// 行；ServerList 与 ServerDetail 供服务器页展示注意原因与详情。
 type ServerSource interface {
 	Servers(instance string) ([]ServerRow, error)
+	ServerList(instance string, attentionOnly bool) ([]ServerListEntry, error)
+	ServerDetail(instance, identifier string) (*ServerDetailView, error)
 }
 
 // Config 是 Web UI Handler 的构造参数。Port 同时用于会话 cookie 命名与
@@ -54,8 +58,11 @@ type ServerSource interface {
 type Config struct {
 	Role    Role
 	Servers ServerSource
-	Access  AccessStore
-	Ops     OpsStore
+	// ServerWriter 是服务器页写操作来源。单机与权威端必须提供；客户端不提
+	// 供，写路由不存在。
+	ServerWriter ServerWriter
+	Access       AccessStore
+	Ops          OpsStore
 	// ServiceRestart 是权威端显式注入的服务重启能力；不注入时不注册重启
 	// 路由，也不显示重启表单。
 	ServiceRestart OpsRestartStore
@@ -277,10 +284,28 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	}
 	h.mux.HandleFunc(startPath, h.handleStart)
 	h.mux.HandleFunc("/ui/assets/", h.handleAsset)
-	h.mux.HandleFunc(listPath, h.handleUIRoot)
+	h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
 	h.registerAccessRoutes()
+	h.registerServerRoutes()
 	h.registerOpsRoutes()
 	return h, Startup{token: token}, nil
+}
+
+// requireSession 是所有需要会话的页面的统一包装：未携带有效会话时，单机
+// 与客户端回环模式显示会话错误页，权威端跳转登录页；启动入口、静态资源、
+// 登录与注销等不需要会话的路径不使用这个包装。
+func (h *handler) requireSession(page http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.currentSession(r) == nil {
+			if h.cfg.Role == RoleServer {
+				http.Redirect(w, r, loginPath, http.StatusSeeOther)
+				return
+			}
+			h.renderSessionRequired(w, r)
+			return
+		}
+		page(w, r)
+	}
 }
 
 // ServeHTTP 让 handler 直接作为 http.Server 的根处理器使用。所有请求（包括
@@ -395,21 +420,11 @@ func (h *handler) handleStart(w http.ResponseWriter, r *http.Request) {
 // handleUIRoot 是 /ui/ 前缀的总入口：精确命中服务器列表页时要求有效会话，
 // 其余地址按会话状态返回 401 或中文 404 页。
 func (h *handler) handleUIRoot(w http.ResponseWriter, r *http.Request) {
-	sess := h.currentSession(r)
-	if sess == nil {
-		h.renderSessionRequired(w, r)
-		return
-	}
 	if r.URL.Path != listPath {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
-	rows, err := h.cfg.Servers.Servers(h.requestClientInstance(r))
-	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请重新运行 `sshmgr ui`。")
-		return
-	}
-	h.renderPage(w, r, http.StatusOK, "servers.tmpl", pageData{Title: "服务器", Servers: sortNeedsAttentionFirst(rows)})
+	h.handleServerList(w, r)
 }
 
 // requestClientInstance 返回当前浏览器会话选中的客户端实例；没有会话时退回

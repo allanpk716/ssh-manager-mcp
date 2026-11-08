@@ -24,6 +24,19 @@ type Candidate struct {
 	KeyPaths   []string // raw strings from config (resolution is a separate step)
 }
 
+// 解析阶段跳过原因代号：服务器管理模块、命令行与页面按代号换成各自的
+// 文案。
+const (
+	// SkipWildcardPattern 表示条目是通配符或取反的 Host 模式，不是一台确
+	// 定的服务器。
+	SkipWildcardPattern = "wildcard-pattern"
+	// SkipBadPort 表示条目的端口写错或超出范围。
+	SkipBadPort = "bad-port"
+	// SkipInternalDuplicate 表示同一批候选里后来的条目与前面的主机地址、
+	// 端口、用户三元组相同。
+	SkipInternalDuplicate = "internal-duplicate"
+)
+
 // Skipped records an alias excluded from the candidate list and why.
 // Reason is one of "wildcard-pattern", "bad-port", "internal-duplicate".
 type Skipped struct{ Alias, Reason string }
@@ -66,7 +79,7 @@ func Parse(configPath, fallbackUser string) (*Result, error) {
 		for _, pat := range host.Patterns {
 			alias := pat.String() // includes a leading "!" for negated patterns
 			if strings.ContainsAny(alias, "*?!") {
-				res.Skipped = append(res.Skipped, Skipped{alias, "wildcard-pattern"})
+				res.Skipped = append(res.Skipped, Skipped{alias, SkipWildcardPattern})
 				continue
 			}
 			if seenAlias[alias] {
@@ -84,7 +97,7 @@ func Parse(configPath, fallbackUser string) (*Result, error) {
 			if portStr != "" {
 				n, err := strconv.Atoi(portStr)
 				if err != nil || n < 1 || n > 65535 {
-					res.Skipped = append(res.Skipped, Skipped{alias, "bad-port"})
+					res.Skipped = append(res.Skipped, Skipped{alias, SkipBadPort})
 					continue
 				}
 				port = n
@@ -98,7 +111,7 @@ func Parse(configPath, fallbackUser string) (*Result, error) {
 			keys, _ := cfg.GetAll(alias, "IdentityFile")
 			dedup := fmt.Sprintf("%s:%d:%s", hostName, port, user)
 			if seen[dedup] {
-				res.Skipped = append(res.Skipped, Skipped{alias, "internal-duplicate"})
+				res.Skipped = append(res.Skipped, Skipped{alias, SkipInternalDuplicate})
 				continue
 			}
 			seen[dedup] = true

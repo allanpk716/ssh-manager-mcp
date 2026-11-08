@@ -1,0 +1,15 @@
+{{define "content"}}
+<section class="server-import-run">
+<h1>导入结果</h1>
+<div class="operation-result">
+<p>导入 {{.ServerImportRun.Imported}} · 跳过 {{.ServerImportRun.Skipped}} · 失败 {{.ServerImportRun.Failed}} · 待补 {{.ServerImportRun.Pending}}</p>
+<table class="server-table"><thead><tr><th scope="col">机器</th><th scope="col">状态</th></tr></thead><tbody>
+{{range .ServerImportRun.Entries}}<tr><td>{{.Name}}</td><td>{{.Status}}</td></tr>{{end}}
+</tbody></table>
+</div>
+<div class="inline-form">
+{{if .ServerCompleteQueue}}<a class="button-link" href="/ui/servers/complete?queue={{.ServerCompleteQueue}}&amp;position=0&amp;imported={{.ServerImportRun.Imported}}&amp;skipped={{.ServerImportRun.Skipped}}&amp;failed={{.ServerImportRun.Failed}}">开始逐台补全</a>{{end}}
+<a class="button-link" href="/ui/?attention=1">查看需要注意的服务器</a>
+</div>
+</section>
+{{end}}

@@ -1,8 +1,8 @@
 package cli
 
 import (
+	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +14,7 @@ import (
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/secrethint"
+	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/shellprobe"
 	"ssh-manager-mcp/internal/store"
 )
@@ -43,7 +44,7 @@ func writeOwnerAuditError(s *store.Store, action string, summary map[string]any)
 
 func newServersCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "servers", Short: "Manage SSH target servers"}
-	cmd.AddCommand(serversAddCmd(), serversListCmd(), serversRmCmd(), serversEditCmd(), serversImportCmd(), serversPinHostkeyCmd(), serversProbeShellCmd())
+	cmd.AddCommand(serversAddCmd(), serversListCmd(), serversShowCmd(), serversRmCmd(), serversEditCmd(), serversImportCmd(), serversCompleteCmd(), serversPinHostkeyCmd(), serversProbeShellCmd())
 	return cmd
 }
 
@@ -239,7 +240,8 @@ func probeAndReportShell(out, stderr io.Writer, st *store.Store, srv *models.Ser
 }
 
 func serversListCmd() *cobra.Command {
-	return &cobra.Command{
+	var attentionOnly bool
+	c := &cobra.Command{
 		Use:   "ls",
 		Short: "List servers",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -248,11 +250,12 @@ func serversListCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			servers, err := s.ListServers()
+			items, err := servermanage.New(s).List(attentionOnly)
 			if err != nil {
 				return err
 			}
-			for _, srv := range servers {
+			for _, item := range servermanage.SortNeedsAttentionFirst(items) {
+				srv := item.Server
 				sudo := "-"
 				if srv.SudoCredentialID != "" {
 					sudo = "sudo"
@@ -261,15 +264,21 @@ func serversListCmd() *cobra.Command {
 				if role == "" {
 					role = "-"
 				}
+				attention := "-"
+				if labels := servermanage.ReasonLabels(item.AttentionReasons); len(labels) > 0 {
+					attention = strings.Join(labels, "、")
+				}
 				// 命令策略(ticket #14):shell 类型是连接信息的一员,owner 在
 				// ls 里能看到标注(存储层已归一,空值不会到这里)。
-				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-20s %s@%s:%d [shell=%s] [%s] (%s) · %s\n",
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-20s %s@%s:%d [shell=%s] [%s] (%s) [%s] · %s\n",
 					srv.Name, srv.ID, srv.User, srv.Host, srv.Port,
-					string(models.NormalizeShellType(string(srv.ShellType))), sudo, role, truncate(srv.Caveats))
+					string(models.NormalizeShellType(string(srv.ShellType))), sudo, role, attention, truncate(srv.Caveats))
 			}
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&attentionOnly, "attention", false, "only list servers that need attention")
+	return c
 }
 
 // truncate clips a free-text field for the ls line (rune-safe; "" → "-").
@@ -284,10 +293,11 @@ func truncate(s string) string {
 }
 
 func serversRmCmd() *cobra.Command {
-	return &cobra.Command{
+	var yes bool
+	c := &cobra.Command{
 		Use:     "rm [name-or-id]",
-		Short:   "Remove a server",
-		Example: "  sshmgr servers rm web-01\n  sshmgr servers rm -- -AbC123xyz   # an older ID that starts with \"-\": put -- before it",
+		Short:   "Remove a server after reviewing the impact preview",
+		Example: "  sshmgr servers rm web-01\n  sshmgr servers rm --yes web-01   # non-interactive/script use\n  sshmgr servers rm -- -AbC123xyz   # an older ID that starts with \"-\": put -- before it",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openUnlockedStore()
@@ -295,36 +305,44 @@ func serversRmCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			srv, _ := s.GetServerByName(args[0])
-			if srv == nil {
-				// rm also takes an id: resolve it too, so the audit summary can
-				// name the entry that is actually about to be deleted.
-				srv, _ = s.GetServer(args[0])
+			manager := servermanage.New(s)
+			preview, err := manager.DeletePreview(args[0])
+			if err != nil {
+				return err
 			}
-			id := args[0]
-			if srv != nil {
-				id = srv.ID
+			if preview == nil {
+				// 与旧语义一致：目标不存在是安静的幂等空操作。
+				return nil
 			}
-			// Cascading: also drops credentials this server EXCLUSIVELY owned
-			// (shared credentials survive — two-column reference check).
-			if err := s.DeleteServerCascading(id); err != nil {
-				if srv != nil {
-					writeOwnerAuditError(s, "server.rm", rmSummary(srv))
+			writeServerDeletePreview(cmd.OutOrStdout(), preview)
+			if !yes {
+				if !serversStdinIsTTY() {
+					return errors.New("servers rm 需要交互确认；非交互终端请加 --yes")
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "确认删除 %s？输入 y 删除，其他输入取消：", preview.Server.Name)
+				line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+				if err != nil && line == "" {
+					return errors.New("未读取到确认输入，已取消删除")
+				}
+				if strings.TrimSpace(line) != "y" {
+					fmt.Fprintln(cmd.OutOrStdout(), "已取消删除")
+					return nil
+				}
+			}
+			fresh, err := manager.Delete(args[0], preview.Digest, servermanage.CLISource())
+			if err != nil {
+				if errors.Is(err, servermanage.ErrDeletePreviewChanged) {
+					fmt.Fprintln(cmd.OutOrStdout(), "删除预览已变化，未删除任何数据。新的预览：")
+					writeServerDeletePreview(cmd.OutOrStdout(), fresh)
 				}
 				return err
 			}
-			if srv == nil {
-				// Nothing matched name or id: DeleteServerCascading's idempotent
-				// no-op — a success that removed nothing, so no audit row
-				// (pin-clear precedent for absent targets).
-				return nil
-			}
-			if err := s.WriteOwnerAudit("server.rm", rmSummary(srv)); err != nil {
-				return err
-			}
+			fmt.Fprintf(cmd.OutOrStdout(), "deleted server %s\n", preview.Server.Name)
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&yes, "yes", false, "skip the interactive confirmation (required on non-interactive stdin)")
+	return c
 }
 
 // rmSummary is server.rm's whitelist summary: exactly name/host/port (the
@@ -333,10 +351,10 @@ func rmSummary(srv *models.Server) map[string]any {
 	return map[string]any{"name": srv.Name, "host": srv.Host, "port": srv.Port}
 }
 
-// serversEditCmd edits a server in place: only flags the operator passed are applied
-// (cobra Changed()), so the server id + profile bindings are preserved. Re-credential is
-// just --password/--key (mutually exclusive): it mints a new credential and repoints the
-// server's credential_id + auth_method.
+// serversEditCmd edits a server in place: only flags the operator passed are
+// applied (cobra Changed()), so the server id + profile bindings are preserved.
+// The write path lives in the server management module, shared with the Web UI;
+// audit rows carry the flag names this invocation passed (never values).
 func serversEditCmd() *cobra.Command {
 	var (
 		newName, host, user, password, keyPath, keyPass, sudoPassword, description string
@@ -357,167 +375,92 @@ func serversEditCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			// server.edit's failure rows: whitelist summary {name, changed} —
-			// "changed" carries the flag names this invocation passed (never
-			// values), so even a failed attempt is traceable field by field.
-			editAuditError := func(entryName string) {
-				writeOwnerAuditError(s, "server.edit", map[string]any{
-					"name": entryName, "changed": changedFlagNames(cmd),
-				})
+			fl := cmd.Flags()
+			req := servermanage.EditRequest{Identifier: args[0]}
+			if fl.Changed("name") {
+				req.Name = &newName
 			}
-			srv, _ := s.GetServerByName(args[0])
-			if srv == nil {
-				editAuditError(args[0])
-				return fmt.Errorf("server %q not found", args[0])
+			if fl.Changed("host") {
+				req.Host = &host
 			}
-			// The PERSISTED name, captured before any field edit below applies.
-			// --clear-credential is exclusive (early return, fields not saved),
-			// so its confirmation line must name the server as it lives in the
-			// store — printing the in-memory (possibly --name-edited) value
-			// would suggest a rename that never happened.
-			origName := srv.Name
-			if cmd.Flags().Changed("name") {
-				srv.Name = newName
+			if fl.Changed("port") {
+				req.Port = &port
 			}
-			if cmd.Flags().Changed("host") {
-				srv.Host = host
+			if fl.Changed("user") {
+				req.User = &user
 			}
-			if cmd.Flags().Changed("port") {
-				srv.Port = port
+			if fl.Changed("description") {
+				req.Description = &description
 			}
-			if cmd.Flags().Changed("user") {
-				srv.User = user
+			if fl.Changed("tags") {
+				req.Tags = &tags
 			}
-			if cmd.Flags().Changed("description") {
-				srv.Description = strings.TrimSpace(description)
+			if fl.Changed("location") {
+				req.Location = &location
 			}
-			if cmd.Flags().Changed("tags") {
-				srv.Tags = tags
+			if fl.Changed("hardware") {
+				req.Hardware = &hardware
 			}
-			if cmd.Flags().Changed("location") {
-				srv.Location = strings.TrimSpace(location)
+			if fl.Changed("services") {
+				req.Services = &services
 			}
-			if cmd.Flags().Changed("hardware") {
-				srv.Hardware = strings.TrimSpace(hardware)
+			if fl.Changed("role") {
+				req.Role = &role
 			}
-			if cmd.Flags().Changed("services") {
-				srv.Services = strings.TrimSpace(services)
+			if fl.Changed("special-handling") {
+				req.Caveats = &caveats
 			}
-			if cmd.Flags().Changed("role") {
-				srv.Role = strings.TrimSpace(role)
+			if fl.Changed("expose-host") {
+				req.ExposeHost = &exposeHost
 			}
-			if cmd.Flags().Changed("special-handling") {
-				srv.Caveats = strings.TrimSpace(caveats)
+			if fl.Changed("shell") {
+				req.Shell = &shell
 			}
-			if cmd.Flags().Changed("expose-host") {
-				srv.ExposeHost = exposeHost
+			if fl.Changed("password") {
+				req.Password = &password
 			}
-			// 命令策略(ticket #14):部分更新语义,与其他字段一致——只在显式
-			// 传入时改写;非法值在入口拒绝。
-			if cmd.Flags().Changed("shell") {
-				if _, err := models.ParseShellType(shell); err != nil {
-					editAuditError(origName)
-					return err
+			if fl.Changed("key") {
+				req.KeyPath = &keyPath
+			}
+			if fl.Changed("key-passphrase") {
+				req.KeyPassphrase = &keyPass
+			}
+			if fl.Changed("sudo-password") {
+				req.SudoPassword = &sudoPassword
+			}
+			req.ClearCredential = clearCred
+			manager := servermanage.New(s)
+			// 只补私钥口令会同时影响共用这把私钥的其他服务器：写入前列出名
+			// 单，让 owner 在提交前看到影响范围。
+			if fl.Changed("key-passphrase") && !fl.Changed("key") && !fl.Changed("password") && !clearCred {
+				if peers, err := manager.SharedCredentialServers(args[0]); err == nil && len(peers) > 1 {
+					fmt.Fprintf(cmd.OutOrStdout(), "补私钥口令会影响共用这把私钥的全部服务器：%s\n", strings.Join(peers, ","))
 				}
-				srv.ShellType = models.ShellType(shell)
 			}
-			// Re-credential (optional; mutually exclusive). nil cred/sudo keeps
-			// the existing rows; a swap runs in ONE transaction with the row
-			// update, dropping the replaced row when nothing else references
-			// it (two-column check) — no orphan rows, no stranded servers.
-			pwSet := cmd.Flags().Changed("password")
-			keySet := cmd.Flags().Changed("key")
-			if pwSet && keySet {
-				editAuditError(origName)
-				return fmt.Errorf("--password and --key are mutually exclusive; provide exactly one")
-			}
-			// --clear-credential is the reverse operation: reset the server to
-			// the credential-less form (Plan 21 A2). It is an EXCLUSIVE action —
-			// mutex with re-credential, and the early return means sudo is
-			// cleared along with the login credential rather than set, and any
-			// field flags passed in the same invocation are not applied.
-			if clearCred && (pwSet || keySet) {
-				editAuditError(origName)
-				return fmt.Errorf("--clear-credential is mutually exclusive with --password/--key")
-			}
-			if clearCred {
-				if err := s.ClearServerCredential(srv.ID); err != nil {
-					editAuditError(origName)
-					return err
+			result, err := manager.Edit(req, servermanage.CLISource())
+			if err != nil {
+				var conflict *servermanage.RevisionConflict
+				if errors.As(err, &conflict) {
+					return fmt.Errorf("%w", err)
 				}
-				// Exclusive action: flags passed alongside are by contract NOT
-				// applied, so "changed" records only the clear itself — listing
-				// the ignored flags would misstate the entry's new state.
-				if err := s.WriteOwnerAudit("server.edit", map[string]any{
-					"name": origName, "changed": []string{"clear-credential"},
-				}); err != nil {
-					return err
+				return err
+			}
+			if len(result.ChangedFields) == 1 && result.ChangedFields[0] == "clear-credential" {
+				origName := args[0]
+				if before, _ := s.GetServer(result.Server.ID); before != nil {
+					// clear 路径不应用其他字段；提示用条目当前名字。
+					origName = before.Name
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "cleared credentials for %s\n", origName)
 				return nil
 			}
-			// An explicitly-passed empty/whitespace value is a quoting or
-			// typo artifact, NOT a "clear my credential" request: minting an
-			// empty-secret row would brick exec with a confusing auth failure
-			// (Plan 22 T2). Clearing is --clear-credential's exclusive job.
-			if pwSet && strings.TrimSpace(password) == "" {
-				editAuditError(origName)
-				return fmt.Errorf("--password 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）")
+			// 成功保存后的疑似机密提示：只扫描本次显式提交的元数据字段，
+			// 值来自保存后的服务器条目。
+			printSecretHints(cmd, scanEditMetadata(cmd, result.Server))
+			fmt.Fprintf(cmd.OutOrStdout(), "updated server %s\n", result.Server.Name)
+			if len(result.AffectedServers) > 1 {
+				fmt.Fprintf(cmd.OutOrStdout(), "受影响服务器：%s\n", strings.Join(result.AffectedServers, ","))
 			}
-			if keySet && strings.TrimSpace(keyPath) == "" {
-				editAuditError(origName)
-				return fmt.Errorf("--key 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）")
-			}
-			if cmd.Flags().Changed("sudo-password") && strings.TrimSpace(sudoPassword) == "" {
-				editAuditError(origName)
-				return fmt.Errorf("--sudo-password 不能为空（更换凭据请给新值）")
-			}
-			var cred, sudoCred *models.Credential
-			switch {
-			case pwSet:
-				cred = &models.Credential{Type: models.CredPassword, Secret: []byte(password)}
-			case keySet:
-				keyBytes, err := readKeyFile(keyPath)
-				if err != nil {
-					editAuditError(origName)
-					return err
-				}
-				cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(keyPass)}
-			}
-			if pwSet || keySet {
-				// ANY successful re-credential resolves needs-passphrase (the
-				// tag the import flows write means "current credential lacks
-				// its passphrase"). Applied AFTER the --tags replacement above
-				// and strips from whatever srv.Tags holds then — an explicit
-				// --tags list passed alongside --key/--password loses the tag
-				// too: after re-credential the marker would be false.
-				srv.Tags = stripTag(srv.Tags, models.TagNeedsPassphrase)
-			}
-			if cmd.Flags().Changed("sudo-password") {
-				sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)}
-			}
-			// Suspected-secret hint (Plan 28 T2): partial-update semantics —
-			// scan ONLY the metadata fields this invocation actually passed
-			// (Changed()), in the final form this edit persists (post-TrimSpace
-			// / post-stripTag). Placed after the --clear-credential early
-			// return (that path applies no field flags) and right before the
-			// row update. Advisory and non-blocking: a hit never fails the
-			// edit and the warning never echoes field content.
-			printSecretHints(cmd, scanEditMetadata(cmd, srv))
-			if err := s.UpdateServerWithCredentials(srv, cred, sudoCred); err != nil {
-				editAuditError(origName)
-				return err
-			}
-			// Success row: "changed" is the flag-name set this invocation
-			// passed — on this path every passed flag IS applied. The row names
-			// the entry as persisted BEFORE the edit (a rename does not make
-			// the row point at a name that only exists after it).
-			if err := s.WriteOwnerAudit("server.edit", map[string]any{
-				"name": origName, "changed": changedFlagNames(cmd),
-			}); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "updated server %s\n", srv.Name)
 			return nil
 		},
 	}
@@ -534,7 +477,7 @@ func serversEditCmd() *cobra.Command {
 	c.Flags().StringSliceVar(&tags, "tags", nil, "tags (replaces existing)")
 	c.Flags().StringVar(&password, "password", "", "switch to / replace password auth")
 	c.Flags().StringVar(&keyPath, "key", "", "switch to / replace key auth (path to private key)")
-	c.Flags().StringVar(&keyPass, "key-passphrase", "", "passphrase for encrypted private key (use with --key)")
+	c.Flags().StringVar(&keyPass, "key-passphrase", "", "passphrase for the private key (with --key, or alone to supplement the stored key)")
 	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "set / replace sudo password")
 	c.Flags().BoolVar(&clearCred, "clear-credential", false, "remove the server's credentials (back to credential-less)")
 	c.Flags().BoolVar(&exposeHost, "expose-host", false, "return the plaintext host in list_servers (default: masked as \"hidden\")")
@@ -566,14 +509,6 @@ func printSecretHints(cmd *cobra.Command, findings []secrethint.Finding) {
 	for _, f := range findings {
 		fmt.Fprintln(cmd.ErrOrStderr(), secrethint.FormatWarning(f))
 	}
-}
-
-// tagsRawForScan renders tags exactly as the store persists them —
-// json.Marshal of the slice, the DB's tags TEXT (a JSON array string) — so
-// the scan sees the same bytes list_servers later hands to LLM providers.
-func tagsRawForScan(tags []string) string {
-	b, _ := json.Marshal(tags)
-	return string(b)
 }
 
 // scanEditMetadata returns suspected-secret findings for the metadata flags

@@ -1,15 +1,27 @@
 {{define "content"}}
 <section class="server-list">
 <h1>服务器</h1>
+<div class="inline-form server-actions">
+{{if .AttentionFilter}}<a class="button-link" href="/ui/">显示全部服务器</a>{{else}}<a class="button-link" href="/ui/?attention=1">只看需要注意</a>{{end}}
+{{if .Caps.CanWrite}}
+<a class="button-link" href="/ui/servers/import">导入 SSH 配置</a>
+<a class="button-link" href="/ui/servers/complete?{{completeQueue .ServerList}}&amp;position=0">逐台补全需要注意的服务器</a>
+{{end}}
+</div>
 <table class="server-table">
 <thead>
-<tr><th scope="col">名称</th><th scope="col">登录</th><th scope="col">端口</th></tr>
+<tr><th scope="col">名称</th><th scope="col">登录</th><th scope="col">端口</th><th scope="col">注意原因</th><th scope="col">操作</th></tr>
 </thead>
 <tbody>
-{{range .Servers}}<tr class="{{if .NeedsAttention}}needs-attention{{end}}">
-<td>{{if .NeedsAttention}}<strong class="attention-badge">需要注意</strong> {{end}}{{.Name}}</td>
+{{range .ServerList}}<tr class="{{if .AttentionReasons}}needs-attention{{end}}">
+<td>{{if .AttentionReasons}}<strong class="attention-badge">需要注意</strong> {{end}}<a href="/ui/servers/{{.ID}}">{{.Name}}</a></td>
 <td>{{.User}}@{{.Host}}</td>
 <td>{{.Port}}</td>
+<td>{{if .AttentionReasons}}{{joinReasons .AttentionReasons}}{{else}}-{{end}}</td>
+<td class="server-row-actions">
+<a href="/ui/servers/{{.ID}}">详情</a>
+{{if $.Caps.CanWrite}}<a href="/ui/servers/{{.ID}}/edit">编辑</a><a href="/ui/servers/{{.ID}}/delete">删除</a>{{end}}
+</td>
 </tr>{{end}}
 </tbody>
 </table>

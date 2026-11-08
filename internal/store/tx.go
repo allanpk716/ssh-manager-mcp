@@ -302,19 +302,6 @@ func deleteServerEntryTx(tx *sql.Tx, id string, auditAt time.Time) (*models.Serv
 	return srv, nil
 }
 
-// dropTagFrom returns tags minus every occurrence of tag (fresh slice, valid
-// empty when the list empties). The store-package twin of the TUI dropTag /
-// CLI stripTag helpers — kept unexported and local to the one call site.
-func dropTagFrom(tags []string, tag string) []string {
-	out := make([]string, 0, len(tags))
-	for _, t := range tags {
-		if t != tag {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
 // ClearServerCredential resets the server to the credential-less form in one
 // transaction: credential/sudo references cleared, the needs-passphrase tag
 // stripped (meaningless without a credential), and exclusively-owned credential
@@ -337,7 +324,7 @@ func (s *Store) ClearServerCredential(id string) error {
 	}
 	oldCred, oldSudo := srv.CredentialID, srv.SudoCredentialID
 	srv.CredentialID, srv.AuthMethod, srv.SudoCredentialID = "", "", ""
-	srv.Tags = dropTagFrom(srv.Tags, models.TagNeedsPassphrase)
+	srv.Tags = models.RemoveTag(srv.Tags, models.TagNeedsPassphrase)
 	if err := updateServerTx(tx, srv); err != nil {
 		return err
 	}
@@ -356,6 +343,65 @@ func (s *Store) ClearServerCredential(id string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// UpdateCredentialPassphrase 把私钥口令写进现有凭据行，并在同一事务里从所
+// 有以它作为登录凭据的服务器条目上移除待补私钥口令标签（每台修订号加一）。
+// 返回受影响的服务器条目。凭据行不存在时返回错误。
+func (s *Store) UpdateCredentialPassphrase(credID string, passphrase []byte) ([]*models.Server, error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
+	if credID == "" {
+		return nil, fmt.Errorf("凭据标识符为空，无法写入私钥口令")
+	}
+	passBlob, err := seal(s.masterKey, passphrase)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE credentials SET passphrase_blob=?, updated_at=? WHERE id=?`, passBlob, now(), credID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("凭据 %q 不存在，无法写入私钥口令", credID)
+	}
+	rows, err := tx.Query(`SELECT id FROM servers WHERE credential_id=? ORDER BY name`, credID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	updated := make([]*models.Server, 0, len(ids))
+	for _, id := range ids {
+		srv, err := getServerTx(tx, id)
+		if err != nil {
+			return nil, err
+		}
+		srv.Tags = models.RemoveTag(srv.Tags, models.TagNeedsPassphrase)
+		if err := updateServerTx(tx, srv); err != nil {
+			return nil, err
+		}
+		updated = append(updated, srv)
+	}
+	return updated, tx.Commit()
 }
 
 // CountOrphanCredentials counts credential rows referenced by NEITHER column.
