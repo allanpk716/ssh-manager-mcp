@@ -24,6 +24,7 @@ func newCSRFTestEnv(t *testing.T) *csrfTestEnv {
 	h, startup, err := New(Config{
 		Role:        RoleStandalone,
 		Servers:     &stubServerSource{},
+		Access:      &stubAccessStore{},
 		VersionHint: func() string { return "" },
 		Port:        18080,
 	})
@@ -157,6 +158,7 @@ func TestWriteRouteWithoutSessionRejected(t *testing.T) {
 	h, _, err := New(Config{
 		Role:        RoleStandalone,
 		Servers:     &stubServerSource{},
+		Access:      &stubAccessStore{},
 		VersionHint: func() string { return "" },
 		Port:        18080,
 	})

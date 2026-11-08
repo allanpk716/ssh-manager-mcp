@@ -23,6 +23,7 @@ func newTestHandler(t *testing.T, role Role, rows []ServerRow) (http.Handler, St
 	h, startup, err := New(Config{
 		Role:        role,
 		Servers:     &stubServerSource{rows: rows},
+		Access:      &stubAccessStore{},
 		VersionHint: func() string { return "" },
 		Port:        18080,
 	})
@@ -528,6 +529,7 @@ func loginAndGetList(t *testing.T, role Role, rows []ServerRow, versionHint stri
 	h, startup, err := New(Config{
 		Role:        role,
 		Servers:     &stubServerSource{rows: rows},
+		Access:      &stubAccessStore{},
 		VersionHint: func() string { return versionHint },
 		Port:        18080,
 	})

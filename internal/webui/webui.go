@@ -1,6 +1,6 @@
 // Package webui 提供 sshmgr 的 Web 管理界面。回环模式由命令行把一次性启动
-// 令牌换成进程内会话，再进入只读服务器列表；本包不直接读取 vault 或客户端
-// 快照，展示数据一律经配置注入的来源接口取得。
+// 令牌换成进程内会话，再进入服务器列表；本包不直接读写 vault 或客户端快
+// 照，页面数据与访问管理操作一律经配置注入的来源接口取得。
 package webui
 
 import (
@@ -35,6 +35,7 @@ const (
 
 // ServerRow 是服务器列表的展示行：名称、用户、主机、端口与「需要注意」标记。
 type ServerRow struct {
+	ID             string
 	Name           string
 	User           string
 	Host           string
@@ -53,6 +54,7 @@ type ServerSource interface {
 type Config struct {
 	Role                   Role
 	Servers                ServerSource
+	Access                 AccessStore
 	VersionHint            func() string
 	Port                   int
 	Now                    func() time.Time
@@ -69,6 +71,9 @@ func (c Config) validate() error {
 	}
 	if c.Servers == nil {
 		return errors.New("Web UI 必须提供服务器列表来源")
+	}
+	if c.Role != RoleClient && c.Access == nil {
+		return errors.New("可写角色的 Web UI 必须提供访问管理来源")
 	}
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("Web UI 监听端口非法：%d", c.Port)
@@ -120,21 +125,37 @@ type capabilities struct {
 	ReadOnlyNotice string
 	// ShowAuthorityActions 控制权威端页头的会话与口令入口。
 	ShowAuthorityActions bool
+	// ShowAccessArea 控制是否显示「访问」区域入口。三种角色都有入口；
+	// 客户端入口只显示权威端管理提示。
+	ShowAccessArea bool
+	// CanManageProfiles 控制是否显示 Profile 页入口与写操作。
+	CanManageProfiles bool
+	// HasPairingAndDeviceCodes 表示本机角色是否有配对与设备码能力，后续
+	// 页面接入时用它决定导航。
+	HasPairingAndDeviceCodes bool
 }
 
 // capabilitiesForRole 按构造时声明的本机角色推导页面能力开关。
 func capabilitiesForRole(role Role) capabilities {
 	if role == RoleClient {
 		return capabilities{
-			RoleLabel:      "客户端 · 只读",
-			CanWrite:       false,
-			ReadOnlyNotice: "这里只读，修改需到权威端 Web UI 去做。",
+			RoleLabel:         "客户端 · 只读",
+			CanWrite:          false,
+			ReadOnlyNotice:    "这里只读，修改需到权威端 Web UI 去做。",
+			ShowAccessArea:    true,
+			CanManageProfiles: false,
 		}
 	}
 	if role == RoleServer {
-		return capabilities{RoleLabel: "权威端", CanWrite: true, ShowAuthorityActions: true}
+		return capabilities{
+			RoleLabel: "权威端", CanWrite: true, ShowAuthorityActions: true,
+			ShowAccessArea: true, CanManageProfiles: true, HasPairingAndDeviceCodes: true,
+		}
 	}
-	return capabilities{RoleLabel: "单机", CanWrite: true}
+	return capabilities{
+		RoleLabel: "单机", CanWrite: true,
+		ShowAccessArea: true, CanManageProfiles: true,
+	}
 }
 
 // Startup 携带一次性启动令牌，并按监听地址拼出浏览器要打开的网址。
@@ -155,6 +176,7 @@ func (s Startup) URL(hostPort string) string {
 type session struct {
 	id           string
 	csrf         string
+	accessFlash  *AccessFlash
 	generation   int64
 	lastActive   time.Time
 	lastVerified time.Time
@@ -220,6 +242,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	h.mux.HandleFunc(startPath, h.handleStart)
 	h.mux.HandleFunc("/ui/assets/", h.handleAsset)
 	h.mux.HandleFunc(listPath, h.handleUIRoot)
+	h.registerAccessRoutes()
 	return h, Startup{token: token}, nil
 }
 

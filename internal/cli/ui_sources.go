@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"io"
 
+	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/updater"
 	"ssh-manager-mcp/internal/webui"
+	"ssh-manager-mcp/internal/webuiaccess"
 )
 
 // standaloneUIServerSource 是单机角色的 Web UI 服务器列表来源：每次请求重新
@@ -28,9 +30,21 @@ func (standaloneUIServerSource) Servers() ([]webui.ServerRow, error) {
 	}
 	rows := make([]webui.ServerRow, 0, len(servers))
 	for _, srv := range servers {
-		rows = append(rows, webUIServerRow(srv.Name, srv.User, srv.Host, srv.Port, srv.CredentialID, srv.Role, srv.Tags))
+		rows = append(rows, webUIServerRow(srv.ID, srv.Name, srv.User, srv.Host, srv.Port, srv.CredentialID, srv.Role, srv.Tags))
 	}
 	return rows, nil
+}
+
+// standaloneUIAccessStore 给单机 Web UI 提供访问管理入口。每次读写重新打开
+// 本机 vault，请求结束后关闭，不长期持有存储句柄。
+func standaloneUIAccessStore() webui.AccessStore {
+	return webuiaccess.FromOpener(func() (*access.Manager, func(), error) {
+		st, err := openUnlockedStore()
+		if err != nil {
+			return nil, nil, err
+		}
+		return access.New(st), func() { _ = st.Close() }, nil
+	})
 }
 
 // clientUIServerSource 是客户端角色的 Web UI 服务器列表来源：读取指定实例的
@@ -48,14 +62,15 @@ func (s clientUIServerSource) Servers() ([]webui.ServerRow, error) {
 	rows := make([]webui.ServerRow, 0, len(snap.Servers))
 	for i := range snap.Servers {
 		srv := &snap.Servers[i]
-		rows = append(rows, webUIServerRow(srv.Name, srv.User, srv.Host, srv.Port, srv.CredentialID, srv.Role, snapshotServerTags(srv.TagsRaw)))
+		rows = append(rows, webUIServerRow(srv.ID, srv.Name, srv.User, srv.Host, srv.Port, srv.CredentialID, srv.Role, snapshotServerTags(srv.TagsRaw)))
 	}
 	return rows, nil
 }
 
 // webUIServerRow 把服务器连接信息与标签转换成 Web UI 的展示行。
-func webUIServerRow(name, user, host string, port int, credentialID, role string, tags []string) webui.ServerRow {
+func webUIServerRow(id, name, user, host string, port int, credentialID, role string, tags []string) webui.ServerRow {
 	return webui.ServerRow{
+		ID:             id,
 		Name:           name,
 		User:           user,
 		Host:           host,

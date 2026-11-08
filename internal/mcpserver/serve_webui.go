@@ -8,10 +8,12 @@ import (
 	"os"
 	"time"
 
+	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 	"ssh-manager-mcp/internal/webui"
+	"ssh-manager-mcp/internal/webuiaccess"
 )
 
 // serveWebUIServerSource 直接读取权威端 vault 的服务器列表。
@@ -27,7 +29,7 @@ func (s serveWebUIServerSource) Servers() ([]webui.ServerRow, error) {
 	rows := make([]webui.ServerRow, 0, len(servers))
 	for _, srv := range servers {
 		rows = append(rows, webui.ServerRow{
-			Name: srv.Name, User: srv.User, Host: srv.Host, Port: srv.Port,
+			ID: srv.ID, Name: srv.Name, User: srv.User, Host: srv.Host, Port: srv.Port,
 			NeedsAttention: models.ServerNeedsAttention(srv.CredentialID, srv.Role, srv.Tags),
 		})
 	}
@@ -81,6 +83,7 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 	handler, control, err := webui.NewAuthority(webui.Config{
 		Role: webui.RoleServer, Port: port,
 		Servers:                serveWebUIServerSource{store: st},
+		Access:                 webuiaccess.FromManager(access.New(st)),
 		Auth:                   vault.NewWebUIAuthStore(st),
 		CertificateFingerprint: fingerprint,
 		AllowedHosts:           plan.Addresses,

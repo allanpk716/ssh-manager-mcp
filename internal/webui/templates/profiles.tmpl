@@ -1,0 +1,41 @@
+{{define "content"}}
+<section class="profile-list">
+<h1>Profile</h1>
+{{if .AccessFlash}}<div class="operation-result">已保存 {{.AccessFlash.ProfileName}} 的授权：新增授权：{{.AccessFlash.AddedNameList}}；撤销授权：{{.AccessFlash.RemovedNameList}}</div>{{end}}
+{{if .AccessDeleteRefusal}}
+<div class="operation-refusal">
+<strong>{{.AccessDeleteRefusal.ProfileName}} 仍被引用，不能删除。</strong>
+<p>项目令牌：{{range .AccessDeleteRefusal.Projects}}{{.}} {{end}}</p>
+<p>设备码：{{range .AccessDeleteRefusal.DeviceCodes}}{{.}} {{end}}</p>
+</div>
+{{end}}
+{{if .AccessDeleteReverifyID}}<div class="operation-refusal">删除 profile 前需要重新验证管理员口令；验证后本页会保留删除表单。</div>{{end}}
+<form method="post" action="/ui/access/profiles" class="inline-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label for="profile-name">新增 profile</label>
+<input type="text" id="profile-name" name="name" required>
+<button type="submit">新增</button>
+</form>
+<table class="server-table">
+<thead>
+<tr><th scope="col">名称</th><th scope="col">授权服务器</th><th scope="col">项目令牌</th><th scope="col">设备码</th><th scope="col">操作</th></tr>
+</thead>
+<tbody>
+{{range .AccessProfiles}}<tr>
+<td>{{.Name}}</td>
+<td>{{range .Servers}}{{.Name}} {{end}}</td>
+<td>{{len .Projects}}（{{range .Projects}}{{.Name}} {{end}}）</td>
+<td>{{len .DeviceCodes}}（{{range .DeviceCodes}}{{.Name}} {{end}}）</td>
+<td>
+<a href="/ui/access/profiles/{{.ID}}/grants">调整授权</a>
+<form method="post" action="/ui/access/profiles/delete" class="inline-form">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="profile_id" value="{{.ID}}">
+<button type="submit">删除</button>
+</form>
+</td>
+</tr>{{end}}
+</tbody>
+</table>
+</section>
+{{end}}

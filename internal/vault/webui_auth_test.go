@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/webui"
+	"ssh-manager-mcp/internal/webuiaccess"
 )
 
 func TestWebUIAuthStoreAdaptsVaultStateAndAudit(t *testing.T) {
@@ -96,6 +98,7 @@ func TestAuthorityHandlerUsesVaultAuthStore(t *testing.T) {
 	handler, _, err := webui.NewAuthority(webui.Config{
 		Role: webui.RoleServer, Port: 7879, Auth: auth,
 		Servers: fixedVaultUIRows{}, CertificateFingerprint: "sha256:0123456789abcdef",
+		Access:       webuiaccess.FromManager(access.New(st)),
 		AllowedHosts: []string{"127.0.0.1"}, Now: func() time.Time { return now },
 		Sleep: func(time.Duration) {},
 	})

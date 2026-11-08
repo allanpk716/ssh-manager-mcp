@@ -29,6 +29,12 @@ type pageData struct {
 	CSRFToken              string
 	Authenticated          bool
 	Servers                []ServerRow
+	AccessProfiles         []AccessProfileSummary
+	AccessDeleteRefusal    *AccessProfileInUse
+	AccessGrant            *AccessGrantView
+	AccessGrantNotice      string
+	AccessFlash            *AccessFlash
+	AccessDeleteReverifyID string
 	ErrorTitle             string
 	ErrorMessage           string
 	AdminPasswordSet       bool

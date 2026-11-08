@@ -10,6 +10,7 @@ func TestNewParsesPageTemplatesAtConstruction(t *testing.T) {
 	h, _, err := New(Config{
 		Role:        RoleStandalone,
 		Servers:     &stubServerSource{},
+		Access:      &stubAccessStore{},
 		VersionHint: func() string { return "" },
 		Port:        18080,
 	})
@@ -31,6 +32,7 @@ func TestRenderPageUsesTemplatesParsedAtConstruction(t *testing.T) {
 	h, _, err := New(Config{
 		Role:        RoleStandalone,
 		Servers:     &stubServerSource{},
+		Access:      &stubAccessStore{},
 		VersionHint: func() string { return "" },
 		Port:        18080,
 	})

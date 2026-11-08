@@ -59,6 +59,25 @@ main {
   color: var(--color-accent);
 }
 
+.main-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-medium);
+  padding: var(--space-small) var(--space-medium);
+  background: var(--color-panel);
+  border-bottom: 1px solid var(--color-panel-border);
+}
+
+.main-nav a {
+  color: var(--color-muted);
+  text-decoration: none;
+}
+
+.main-nav a:hover,
+.main-nav a:focus {
+  color: var(--color-text);
+}
+
 .header-actions {
   display: flex;
   flex-wrap: wrap;
@@ -126,6 +145,93 @@ h1 {
 .server-table th {
   color: var(--color-muted);
   font-weight: 600;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-small);
+  margin: var(--space-medium) 0;
+}
+
+.operation-refusal {
+  margin-top: var(--space-medium);
+  padding: var(--space-small) var(--space-medium);
+  border: 1px solid var(--color-warning-border);
+  border-radius: 8px;
+  background: var(--color-warning-background);
+  color: var(--color-warning-text);
+}
+
+.operation-result {
+  margin-top: var(--space-medium);
+  padding: var(--space-small) var(--space-medium);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  background: var(--color-panel);
+}
+
+.operation-refusal p {
+  margin: var(--space-small) 0 0;
+}
+
+.operation-refusal a {
+  color: var(--color-warning-text);
+}
+
+.grant-form {
+  padding: var(--space-large);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.grant-form fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-small);
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.grant-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-small);
+}
+
+.grant-form button {
+  margin-top: var(--space-medium);
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.inline-form label {
+  color: var(--color-muted);
+}
+
+.inline-form input[type="text"] {
+  min-width: 180px;
+  padding: var(--space-small);
+  color: var(--color-text);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.inline-form button {
+  padding: var(--space-small);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
 }
 
 .server-table tr.needs-attention {
