@@ -3,10 +3,10 @@ package cli
 // serve_pair.go — `sshmgr serve pair ls|approve|reject`(Plan 42 批1 T8,
 // spec §3.3-3):访问管理模块配对部分的命令行薄面。
 //
-// SAS 双屏比对(2026-09-01 裁决:恢复 spec rev4:68 冻结原文,撤销 rev4:69
+// 短认证码双屏比对(2026-09-01 裁决:恢复 spec rev4:68 冻结原文,撤销 rev4:69
 // 的降级勘误):serve 在 enroll 时即持有 X25519 私钥与请求里的 client_pub,
-// 当场派生 6 位 SAS 落行;本面输出三件套 `<name> @ <target_url> SAS <6位>`,
-// owner 与 client 屏逐位比对一致后才批准。行缺 SAS(版本错配/旧行)→ ⚠
+// 当场派生 6 位短认证码落行;本面按历史输出形状显示设备名、目标地址与短认证码,
+// owner 与 client 屏逐位比对一致后才批准。行缺短认证码(版本错配/旧行)→ ⚠
 // 警示并建议拒绝——绝不静默回退到抓不住 MITM 的 name/url 两件套对照。
 // 机械地址校验(ForeignTarget)在此复算:目标 ≠ 本机地址 → 无
 // --allow-foreign-url 拒绝并打 ⚠ 文案。
@@ -104,9 +104,10 @@ func servePairLsCmd() *cobra.Command {
 	}
 }
 
-// servePairSAS renders the row's SAS piece: the real 6-digit code (derived by
-// serve at enroll, landed in the row) or — for a row written by a pre-
-// 2026-09-01 serve — the no-SAS warning; a two-piece comparison cannot catch
+// servePairSAS renders the row's short authentication code: the real 6-digit
+// code (derived by serve at enroll, landed in the row) or — for a row written
+// by a pre-2026-09-01 serve — the missing-code warning; a two-piece
+// comparison cannot catch
 // a MITM, so the row is flagged as un-comparable rather than silently shown.
 func servePairSAS(p access.PairingRequest) string {
 	if s := strings.TrimSpace(p.ShortCode); s != "" {
