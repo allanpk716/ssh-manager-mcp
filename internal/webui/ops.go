@@ -166,11 +166,18 @@ const (
 // 本机审计页在后续票里接入；本票只注册单机与权威端的权威 vault 审计页。
 func (h *handler) registerOpsRoutes() {
 	h.mux.HandleFunc(opsRootPath, h.handleOpsRoot)
-	if h.cfg.Role == RoleClient || h.cfg.Ops == nil || !h.caps.CanQueryVaultAudit {
-		if h.cfg.Ops == nil {
-			h.caps.ShowOpsArea = false
-			h.caps.CanQueryVaultAudit = false
-		}
+	if h.cfg.Ops == nil {
+		h.caps.ShowOpsArea = false
+		h.caps.CanQueryVaultAudit = false
+		h.caps.CanManageBackups = false
+		return
+	}
+	if h.cfg.Role != RoleClient && h.caps.CanManageBackups {
+		h.mux.HandleFunc(opsBackupPath, h.handleOpsBackup)
+		h.mux.HandleFunc(opsBackupCreatePath, h.handleOpsBackupCreate)
+		h.mux.HandleFunc(opsBackupVerifyPath, h.handleOpsBackupVerify)
+	}
+	if h.cfg.Role == RoleClient || !h.caps.CanQueryVaultAudit {
 		return
 	}
 	h.mux.HandleFunc(opsAuditPath, h.handleOpsAudit)

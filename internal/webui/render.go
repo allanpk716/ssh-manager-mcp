@@ -53,6 +53,8 @@ type pageData struct {
 	OpsAuditFilter              OpsAuditFilterView
 	OpsAuditHasMore             bool
 	OpsAuditOlderPath           string
+	OpsBackupStatus             *OpsBackupStatus
+	OpsBackupFlash              *OpsBackupFlash
 	ErrorTitle                  string
 	ErrorMessage                string
 	AdminPasswordSet            bool
