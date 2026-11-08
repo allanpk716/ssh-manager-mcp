@@ -14,6 +14,7 @@ func TestStaticAssetsServedWithHashedURLsAndLongCache(t *testing.T) {
 	h, _, err := New(Config{
 		Role:        RoleStandalone,
 		Servers:     &stubServerSource{},
+		Access:      &stubAccessStore{},
 		VersionHint: func() string { return "" },
 		Port:        18080,
 	})
@@ -59,6 +60,7 @@ func TestPagesReferenceHashedAssetURLs(t *testing.T) {
 	h, _, err := New(Config{
 		Role:        RoleStandalone,
 		Servers:     &stubServerSource{},
+		Access:      &stubAccessStore{},
 		VersionHint: func() string { return "" },
 		Port:        18080,
 	})
@@ -88,6 +90,7 @@ func TestStaticAssetRejectsNonLoopbackHost(t *testing.T) {
 	h, _, err := New(Config{
 		Role:        RoleStandalone,
 		Servers:     &stubServerSource{},
+		Access:      &stubAccessStore{},
 		VersionHint: func() string { return "" },
 		Port:        18080,
 	})

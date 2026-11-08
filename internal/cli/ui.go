@@ -55,12 +55,14 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	var (
 		webRole          webui.Role
 		servers          webui.ServerSource
+		accessSource     webui.AccessStore
 		resolvedInstance string
 	)
 	switch {
 	case launch.Kind == roles.LaunchBroker && !launch.ResumeSetup && launch.Role == roles.RoleStandalone:
 		webRole = webui.RoleStandalone
 		servers = standaloneUIServerSource{}
+		accessSource = standaloneUIAccessStore()
 	case launch.Kind == roles.LaunchClient && !launch.ResumeSetup:
 		resolvedInstance, err = resolveClientCacheInstance(instance)
 		if err != nil {
@@ -96,6 +98,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		Servers:     servers,
 		VersionHint: versionHint,
 		Port:        port,
+		Access:      accessSource,
 	})
 	if err != nil {
 		_ = listener.Close()

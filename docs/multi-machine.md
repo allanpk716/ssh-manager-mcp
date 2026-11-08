@@ -174,7 +174,7 @@ service 默认账户：
 ```bash
 sshmgr pair --instance laptop
 # → 发现（或已提示用 --url 直指）→ 屏显三件套：laptop @ https://192.0.2.5:7878 SAS 482913
-# → owner 在 broker 机 TUI Pairing 页（或 serve pair approve laptop --profile team-a）
+# → owner 在权威端 Web UI 配对页（或 serve pair approve laptop --profile team-a）
 #   对照屏上「name @ url」与 client 屏 SAS 一致后批准
 # → 批准后 120 秒内 client 完成 finish → 凭据加密下发 → 首拉落盘
 # → 产物 pair.laptop.mcp.json（含真值 project token，0600）

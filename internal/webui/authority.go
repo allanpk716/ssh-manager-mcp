@@ -81,6 +81,8 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	h.mux.HandleFunc("/ui/password", h.handleAuthorityPassword)
 	h.mux.HandleFunc("/ui/reverify", h.handleAuthorityReverify)
 	h.mux.HandleFunc("/ui/", h.handleAuthorityRoot)
+	// 访问区域路由按权威端角色注册全部已实现的页面。
+	h.registerAccessRoutes()
 	return h, h, nil
 }
 

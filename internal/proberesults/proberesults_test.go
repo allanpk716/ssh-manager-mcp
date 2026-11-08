@@ -24,8 +24,9 @@ func observationAt(origin, target, network, address string, port int, ok bool, c
 func TestFileProbeResultsKeepsLatestPerKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "probe-results.json")
 	results := NewFileProbeResults(path)
-	first := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
-	second := time.Date(2026, 11, 1, 11, 0, 0, 0, time.UTC)
+	// 时间相对当前时刻，避免写死日期随 7 天清理过期。
+	second := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	first := second.Add(-time.Hour)
 	if err := results.Record(observationAt("device-self", "device-nas", "家A局域网", "192.0.2.10", 445, false, models.ProbeErrorTimeout, first, "probe")); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +64,7 @@ func TestFileProbeResultsKeepsLatestPerKey(t *testing.T) {
 // 可选再按目标设备过滤，供后续拓扑查询工具使用。
 func TestFileProbeResultsListFiltersByOriginAndTarget(t *testing.T) {
 	results := NewFileProbeResults(filepath.Join(t.TempDir(), "probe-results.json"))
-	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Add(-time.Hour)
 	records := []Observation{
 		observationAt("device-self", "device-nas", "家A局域网", "192.0.2.10", 445, true, models.ProbeErrorNone, now, "probe"),
 		observationAt("device-self", "device-workstation", "NetBird", "100.64.10.5", 22, false, models.ProbeErrorTimeout, now, "probe"),
@@ -97,8 +98,8 @@ func TestFileProbeResultsCleanupAndFileHygiene(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "probe-results.json")
 	results := NewFileProbeResults(path)
-	old := time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)
-	fresh := time.Date(2026, 11, 8, 8, 0, 0, 0, time.UTC)
+	fresh := time.Now().UTC().Add(-time.Hour)
+	old := fresh.Add(-ProbeResultRetention - 24*time.Hour)
 	if err := results.Record(observationAt("device-self", "device-nas", "家A局域网", "192.0.2.10", 445, true, models.ProbeErrorNone, old, "probe")); err != nil {
 		t.Fatal(err)
 	}

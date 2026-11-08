@@ -1,0 +1,38 @@
+{{define "content"}}
+<section class="project-list">
+<h1>项目令牌</h1>
+{{if .AccessProjectNotice}}<div class="operation-refusal">{{.AccessProjectNotice}}</div>{{end}}
+{{if .AccessProjectIncludeRevoked}}<a href="/ui/access/projects">隐藏已吊销</a>{{else}}<a href="/ui/access/projects?include_revoked=1">显示已吊销</a>{{end}}
+<form method="post" action="/ui/access/projects" class="inline-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label for="project-name">签发新项目令牌</label>
+<input type="text" id="project-name" name="name" value="{{.AccessProjectFormName}}" required>
+<label for="project-profile">绑定 profile</label>
+<select id="project-profile" name="profile_id" required>
+{{range .AccessProfiles}}<option value="{{.ID}}"{{if eq .ID $.AccessProjectFormProfileID}} selected{{end}}>{{.Name}}</option>{{end}}
+</select>
+<button type="submit">签发</button>
+</form>
+<table class="server-table">
+<thead>
+<tr><th scope="col">名称</th><th scope="col">令牌前缀</th><th scope="col">状态</th><th scope="col">Profile</th><th scope="col">创建时间</th><th scope="col">操作</th></tr>
+</thead>
+<tbody>
+{{range .AccessProjects}}<tr>
+<td>{{.Name}}</td>
+<td>{{.TokenPrefix}}</td>
+<td>{{.StatusText}}</td>
+<td>{{.ProfileDisplay}}</td>
+<td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+<td>
+{{if .CanRotate}}<form method="post" action="/ui/access/projects/rotate" class="inline-form"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="project_id" value="{{.ID}}"><button type="submit">轮换</button></form>{{end}}
+{{if .CanDisable}}<form method="post" action="/ui/access/projects/disable" class="inline-form"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="project_id" value="{{.ID}}"><button type="submit">停用</button></form>{{end}}
+{{if .CanEnable}}<form method="post" action="/ui/access/projects/enable" class="inline-form"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="project_id" value="{{.ID}}"><button type="submit">重新启用</button></form>{{end}}
+{{if .CanRevoke}}<form method="post" action="/ui/access/projects/revoke" class="inline-form confirm-form"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="project_id" value="{{.ID}}"><label class="confirm-choice"><input type="checkbox" name="confirm" value="1" required>确认永久吊销</label><button type="submit">吊销</button></form>{{end}}
+{{if .IsRevoked}}<form method="post" action="/ui/access/projects/delete" class="inline-form"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="project_id" value="{{.ID}}"><button type="submit">删除</button></form>{{end}}
+</td>
+</tr>{{end}}
+</tbody>
+</table>
+</section>
+{{end}}

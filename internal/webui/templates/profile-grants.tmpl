@@ -1,0 +1,21 @@
+{{define "content"}}
+<section class="grant-form">
+<h1>调整 {{.AccessGrant.ProfileName}} 的授权</h1>
+{{if .AccessGrantNotice}}<div class="operation-refusal">{{.AccessGrantNotice}}</div>{{end}}
+{{if .AccessGrant.NeedsReverify}}<div class="operation-refusal">新增授权前需要重新验证管理员口令。<a href="{{.AccessGrant.ReverifyPath}}">先重新验证</a></div>{{end}}
+<form method="post" action="/ui/access/profiles/{{.AccessGrant.ProfileID}}/grants">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+{{range .AccessGrant.ExpectedIDs}}<input type="hidden" name="expected" value="{{.}}">{{end}}
+<fieldset>
+<legend>服务器</legend>
+{{range .AccessGrant.Servers}}
+<label class="grant-choice">
+<input type="checkbox" name="server" value="{{.ID}}"{{if .Checked}} checked{{end}}>
+<span>{{.Name}}</span>
+</label>
+{{end}}
+</fieldset>
+<button type="submit">保存授权</button>
+</form>
+</section>
+{{end}}

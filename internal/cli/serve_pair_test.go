@@ -58,8 +58,9 @@ func TestServePairApprove_ThreePieceOutputAndOverride(t *testing.T) {
 	}
 
 	// foreign 无 flag → 拒绝并打 ⚠ 文案,行保持 pending。
-	if got := runCliErr(t, "serve", "pair", "approve", "laptop", "--profile", "team-a"); !strings.Contains(got, "⚠") {
-		t.Fatalf("foreign approve without --allow-foreign-url must fail with the ⚠ copy, got %q", got)
+	if got := runCliErr(t, "serve", "pair", "approve", "laptop", "--profile", "team-a"); !strings.Contains(got,
+		"⚠ 配对声明目标 ≠ 本机地址（https://127.0.0.1:7878）——疑似中继/假 discovery/错误网络；确属本机地址请加 --allow-foreign-url 重新执行") {
+		t.Fatalf("foreign approve without --allow-foreign-url must keep the command-line copy, got %q", got)
 	}
 
 	// --allow-foreign-url → 批准;输出行 = 冻结三件套 `<name> @ <target_url> SAS <6位>`(rev4:83)。
@@ -78,6 +79,29 @@ func TestServePairApprove_ThreePieceOutputAndOverride(t *testing.T) {
 	}
 	if got := runCliErr(t, "serve", "pair", "approve", "laptop", "--profile", "team-a", "--allow-foreign-url"); got == "" {
 		t.Fatal("double approve must error (row no longer pending)")
+	}
+}
+
+func TestServePairApprovalWritesCLIAuditSource(t *testing.T) {
+	path, mk := withCliStoreEnv(t)
+	runCli(t, "profiles", "add", "team-a")
+	row := seedPendingPairing(t, path, mk, "laptop", "https://127.0.0.1:7878", "314159")
+	runCli(t, "serve", "pair", "approve", hex.EncodeToString(row.ID), "--profile", "team-a", "--allow-foreign-url")
+
+	st, err := store.Open(path, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	rows, err := st.QueryAudit(store.AuditFilter{OwnerOnly: true, Actions: []string{"pair.approve"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Source != store.AuditSourceCLI || rows[0].SourceIP != "" {
+		t.Fatalf("命令行批准应写一条命令行来源的 pair.approve 审计行：%+v", rows)
+	}
+	if strings.Contains(rows[0].Command, "314159") {
+		t.Fatalf("pair.approve 摘要不应包含短认证码：%s", rows[0].Command)
 	}
 }
 
@@ -144,6 +168,14 @@ func TestServePairLs_StripsControlChars(t *testing.T) {
 	}
 	if !strings.Contains(ls, "evil[2Jdev") {
 		t.Fatalf("ls must still show the stripped name:\n%q", ls)
+	}
+
+	refusal := runCliErr(t, "serve", "pair", "approve", hex.EncodeToString(row.ID), "--profile", "team-a")
+	if strings.Contains(refusal, "\x1b") || strings.Contains(refusal, "\x07") {
+		t.Fatalf("foreign-target refusal must strip control characters:\n%q", refusal)
+	}
+	if !strings.Contains(refusal, "--allow-foreign-url") {
+		t.Fatalf("foreign-target refusal must keep the command-line remedy:\n%s", refusal)
 	}
 
 	// approve 输出行同样剥净(name 按原样匹配不到 → 走 idHex;127.0.0.1 是

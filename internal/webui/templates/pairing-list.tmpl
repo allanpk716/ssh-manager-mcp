@@ -1,0 +1,33 @@
+{{define "content"}}
+<div id="pairing-list" hx-get="/ui/access/pairing/list" hx-trigger="every 5s" hx-swap="outerHTML">
+{{template "pairingRows" .}}
+</div>
+{{end}}
+{{define "pairingRows"}}
+{{if .AccessPairings}}
+{{range .AccessPairings}}
+<article class="pairing-request{{if not .HasShortCode}} pairing-missing-code{{end}}">
+<h2>{{.Name}}</h2>
+<dl class="pairing-fields">
+<div><dt>客户端声明的目标地址</dt><dd>{{if .ForeignTarget}}<span class="attention-badge">目标地址异常</span>{{end}}{{.TargetURL}}</dd></div>
+<div><dt>短认证码</dt><dd>{{if .HasShortCode}}<code>{{.ShortCode}}</code>{{else}}行缺少短认证码，只能拒绝{{end}}</dd></div>
+<div><dt>来源地址</dt><dd>{{.SourceAddress}}</dd></div>
+<div><dt>profile 提示</dt><dd>{{if .ProfileHint}}{{.ProfileHint}}{{else}}未声明{{end}}</dd></div>
+<div><dt>替换同名设备</dt><dd>{{if .ReplaceInactive}}替换同名设备的未激活设备码{{else}}不替换{{end}}</dd></div>
+<div><dt>状态</dt><dd>{{if eq .State "pending"}}剩余 {{.RemainingSeconds}} 秒{{else if eq .State "approved"}}已批准，等待客户端完成（剩余 {{.RemainingSeconds}} 秒）{{else}}已完成{{end}}</dd></div>
+</dl>
+{{if eq .State "pending"}}
+<div class="pairing-actions">
+{{if .HasShortCode}}<a class="pairing-approve-link" href="/ui/access/pairing/{{.ID}}">批准</a>{{end}}
+<form method="post" action="/ui/access/pairing/{{.ID}}/reject" class="inline-form pairing-reject-form">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<button type="submit">拒绝</button>
+</form>
+</div>
+{{end}}
+</article>
+{{end}}
+{{else}}
+<p class="empty-list">没有待处理的配对请求。</p>
+{{end}}
+{{end}}

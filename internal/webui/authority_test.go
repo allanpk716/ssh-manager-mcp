@@ -104,6 +104,7 @@ func TestAuthorityWithoutPasswordShowsOnlySetupGuidance(t *testing.T) {
 	handler, _, err := NewAuthority(Config{
 		Role:                   RoleServer,
 		Servers:                &stubServerSource{},
+		Access:                 &stubAccessStore{},
 		Auth:                   &fakeAuthorityAuth{},
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1"},
@@ -150,6 +151,7 @@ func TestAuthorityLoginExchangesPasswordForSecureSession(t *testing.T) {
 	handler, _, err := NewAuthority(Config{
 		Role:                   RoleServer,
 		Servers:                &stubServerSource{rows: []ServerRow{{Name: "权威服务器"}}},
+		Access:                 &stubAccessStore{},
 		Auth:                   auth,
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1", "192.0.2.20"},
@@ -297,7 +299,7 @@ func TestAuthoritySessionSlidesAndGenerationInvalidates(t *testing.T) {
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
 	now := time.Unix(1800000000, 0)
 	handler, _, err := NewAuthority(Config{
-		Role: RoleServer, Servers: &stubServerSource{rows: []ServerRow{{Name: "服务器"}}}, Auth: auth,
+		Role: RoleServer, Servers: &stubServerSource{rows: []ServerRow{{Name: "服务器"}}}, Access: &stubAccessStore{}, Auth: auth,
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
 		Now: func() time.Time { return now },
@@ -338,7 +340,7 @@ func TestAuthoritySessionSlidesAndGenerationInvalidates(t *testing.T) {
 func TestAuthorityConcurrentRequestsUseOneSessionSafely(t *testing.T) {
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
 	handler, _, err := NewAuthority(Config{
-		Role: RoleServer, Servers: &stubServerSource{rows: []ServerRow{{Name: "服务器"}}}, Auth: auth,
+		Role: RoleServer, Servers: &stubServerSource{rows: []ServerRow{{Name: "服务器"}}}, Access: &stubAccessStore{}, Auth: auth,
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
 		Now: func() time.Time { return time.Unix(1800000000, 0) },
@@ -364,7 +366,7 @@ func TestAuthorityConcurrentRequestsUseOneSessionSafely(t *testing.T) {
 func TestAuthorityConcurrentFailuresCannotBypassLoginLimit(t *testing.T) {
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
 	handler, _, err := NewAuthority(Config{
-		Role: RoleServer, Servers: &stubServerSource{}, Auth: auth,
+		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{}, Auth: auth,
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
 		Now:   func() time.Time { return time.Unix(1800000000, 0) },
@@ -424,7 +426,7 @@ func TestAuthorityConcurrentFailuresCannotBypassLoginLimit(t *testing.T) {
 func TestAuthorityLoginCleanupDropsExpiredSessionsOnNewLogin(t *testing.T) {
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password", now: time.Unix(1800000000, 0)}
 	handler, _, err := NewAuthority(Config{
-		Role: RoleServer, Servers: &stubServerSource{}, Auth: auth,
+		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{}, Auth: auth,
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
 		Now: func() time.Time {
@@ -462,7 +464,7 @@ func TestAuthorityHeaderAndLogoutActions(t *testing.T) {
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
 	now := time.Unix(1800000000, 0)
 	handler, _, err := NewAuthority(Config{
-		Role: RoleServer, Servers: &stubServerSource{rows: []ServerRow{{Name: "服务器"}}}, Auth: auth,
+		Role: RoleServer, Servers: &stubServerSource{rows: []ServerRow{{Name: "服务器"}}}, Access: &stubAccessStore{}, Auth: auth,
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
 		Now: func() time.Time { return now },
@@ -554,7 +556,7 @@ func authorityPostForm(t *testing.T, handler http.Handler, host, target string, 
 func TestAuthorityHostOriginAndCSRFGuards(t *testing.T) {
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password", now: time.Unix(1800000000, 0)}
 	handler, control, err := NewAuthority(Config{
-		Role: RoleServer, Servers: &stubServerSource{}, Auth: auth,
+		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{}, Auth: auth,
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
 		Now:   func() time.Time { return auth.now },
@@ -632,7 +634,7 @@ func TestAuthorityHostOriginAndCSRFGuards(t *testing.T) {
 func TestAuthorityPasswordChangeRequiresRecentReverification(t *testing.T) {
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "old-password", now: time.Unix(1800000000, 0)}
 	handler, _, err := NewAuthority(Config{
-		Role: RoleServer, Servers: &stubServerSource{}, Auth: auth,
+		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{}, Auth: auth,
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
 		Now: func() time.Time { return auth.now },
@@ -720,6 +722,7 @@ func TestAuthorityLoginFailuresLockIPAndDelayAllRequests(t *testing.T) {
 	handler, _, err := NewAuthority(Config{
 		Role:                   RoleServer,
 		Servers:                &stubServerSource{},
+		Access:                 &stubAccessStore{},
 		Auth:                   auth,
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1"},
@@ -795,7 +798,7 @@ func TestAuthorityLoginGlobalDelayIsCappedAtTenSeconds(t *testing.T) {
 	}
 	var slept time.Duration
 	handler, _, err := NewAuthority(Config{
-		Role: RoleServer, Servers: &stubServerSource{}, Auth: auth,
+		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{}, Auth: auth,
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
 		Now:   func() time.Time { return auth.now },

@@ -7,7 +7,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +18,8 @@ import (
 
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/vault"
+	"ssh-manager-mcp/internal/webui"
 )
 
 func reserveLocalPort(t *testing.T) int {
@@ -205,4 +209,148 @@ func TestRunServeStartsWebUIOnlyForServerRole(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("RunServe 关闭超时")
 	}
+}
+
+func TestRunServeWebUIDeviceCodeIssueUsesServePortAndFingerprint(t *testing.T) {
+	st := prepareServeWebUITest(t, roles.RoleServer)
+	mainPort := reserveLocalPort(t)
+	webPort := reserveLocalPort(t)
+	if err := st.SetSetting(settingWebUIPort, strconv.Itoa(webPort)); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (vault.NewWebUIAuthStore(st)).SetAdminPasswordWithAudit(
+		[]byte("correct-password"),
+		webui.AuditEvent{Action: "admin.password_set", Status: "ok"},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- RunServe(ctx, st, "127.0.0.1:"+strconv.Itoa(mainPort), "", "", ServeOpts{}) }()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "https://127.0.0.1:" + strconv.Itoa(webPort)
+	client := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, // 测试只验证接线，不校对自签证书。
+		Jar:       jar,
+		Timeout:   2 * time.Second,
+		// 表单提交后的跳转不自动跟随：登录与签发的 303 是断言点，跟随会
+		// 把一次性页面误当成跳转目标的响应。
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+
+	var csrfToken string
+	for attempt := 0; attempt < 50; attempt++ {
+		resp, err := client.Get(base + "/ui/login")
+		if err == nil {
+			raw, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr == nil && resp.StatusCode == http.StatusOK {
+				csrfToken = hiddenCSRFValue(string(raw))
+				if csrfToken != "" {
+					break
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if csrfToken == "" {
+		t.Fatal("登录页没有返回防跨站请求伪造令牌")
+	}
+
+	loginForm := url.Values{"csrf_token": {csrfToken}, "password": {"correct-password"}}
+	loginResp, err := postAuthorityForm(client, base+"/ui/login", loginForm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginBody, _ := io.ReadAll(loginResp.Body)
+	loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("登录状态码 = %d，应为 303，页面：\n%s", loginResp.StatusCode, loginBody)
+	}
+
+	devicePage, err := client.Get(base + "/ui/access/device-codes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceBody, _ := io.ReadAll(devicePage.Body)
+	devicePage.Body.Close()
+	csrfToken = hiddenCSRFValue(string(deviceBody))
+	if devicePage.StatusCode != http.StatusOK || csrfToken == "" {
+		t.Fatalf("设备码页状态码 = %d，页面：\n%s", devicePage.StatusCode, deviceBody)
+	}
+
+	issueForm := url.Values{"csrf_token": {csrfToken}, "name": {"laptop"}, "profile": {profileID}}
+	issueResp, err := postAuthorityForm(client, base+"/ui/access/device-codes", issueForm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issueBody, _ := io.ReadAll(issueResp.Body)
+	issueResp.Body.Close()
+	if issueResp.StatusCode != http.StatusOK {
+		t.Fatalf("签发设备码状态码 = %d，应为 200，页面：\n%s", issueResp.StatusCode, issueBody)
+	}
+	wantURL := "cache pull --url https://127.0.0.1:" + strconv.Itoa(mainPort)
+	if !strings.Contains(string(issueBody), wantURL) {
+		t.Fatalf("拉取命令应带权威端主监听端口 %d：\n%s", mainPort, issueBody)
+	}
+	if !strings.Contains(string(issueBody), "sha256:") {
+		t.Fatalf("一次性页面应带证书公钥指纹：\n%s", issueBody)
+	}
+	if issueResp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("一次性页面应带 no-store，实际 %q", issueResp.Header.Get("Cache-Control"))
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunServe 关闭失败：%v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunServe 关闭超时")
+	}
+}
+
+// postAuthorityForm 提交带来源头的表单：权威端 Web UI 的写校验要求
+// Origin 与本次监听一致，与浏览器表单提交的请求形状保持相同。
+func postAuthorityForm(client *http.Client, target string, form url.Values) (*http.Response, error) {
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", parsed.Scheme+"://"+parsed.Host)
+	return client.Do(request)
+}
+
+func hiddenCSRFValue(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, `name="csrf_token"`) {
+			start := strings.Index(line, `value="`)
+			if start < 0 {
+				return ""
+			}
+			rest := line[start+len(`value="`):]
+			end := strings.Index(rest, `"`)
+			if end < 0 {
+				return ""
+			}
+			return rest[:end]
+		}
+	}
+	return ""
 }

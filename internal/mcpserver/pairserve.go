@@ -15,13 +15,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"ssh-manager-mcp/internal/instname"
+	"ssh-manager-mcp/internal/localaddr"
 	"ssh-manager-mcp/internal/pairing"
 	"ssh-manager-mcp/internal/store"
 )
@@ -664,26 +664,5 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 // local set (LocalNonLoopbackIPs excludes them) — a "pair with myself on
 // 127.0.0.1" target is exactly the shape the check should flag.
 func ForeignTarget(targetURL string) bool {
-	u, err := url.Parse(targetURL)
-	if err != nil {
-		return true
-	}
-	host := u.Hostname()
-	if host == "" {
-		return true
-	}
-	// IP literal? Compare numerically (normalizes IPv6 spellings).
-	if ip := net.ParseIP(host); ip != nil {
-		for _, local := range LocalNonLoopbackIPs() {
-			if local.Equal(ip) {
-				return false
-			}
-		}
-		return true
-	}
-	// Name form: hostname match (case-insensitive).
-	if h, err := os.Hostname(); err == nil && h != "" && strings.EqualFold(host, h) {
-		return false
-	}
-	return true
+	return localaddr.ForeignTarget(targetURL)
 }

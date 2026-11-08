@@ -62,7 +62,7 @@ sshmgr pair --instance laptop
 # → 同网段自动发现 broker（拿不到 offer 就 --url https://192.0.2.5:7878 直指，
 #   跨网段/防火墙挡 UDP 时的兜底；--url 不带 --pin 默认拒连，属预期——见下方安全策略）
 # → 屏显三件套：laptop @ https://192.0.2.5:7878 SAS 482913
-# → 去 broker 机批准：TUI Pairing 页选 profile（或 serve pair approve laptop --profile team-a）
+# → 去权威端批准：Web UI 配对页选 profile（或 serve pair approve laptop --profile team-a）
 #   批准面同屏显示三件套（含真 SAS）——与本机屏上的 SAS 逐位比对一致再批
 # → 批准后 120 秒内自动完成：凭据加密下发 → 首拉落盘 → 产物 pair.laptop.mcp.json
 ```

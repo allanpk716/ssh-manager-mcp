@@ -65,7 +65,7 @@ func addProjectTx(tx *sql.Tx, name, profileID string, pairGenerated bool) (strin
 func (s *Store) VerifyToken(token string) (*models.Project, error) {
 	prefix := tokenPrefix(token)
 	rows, err := s.db.Query(
-		`SELECT id,name,token_hash,token_salt,token_prefix,profile_id,status,pair_generated FROM projects WHERE token_prefix=? AND status='active'`,
+		`SELECT id,name,token_hash,token_salt,token_prefix,COALESCE(profile_id,''),status,pair_generated FROM projects WHERE token_prefix=? AND status='active'`,
 		prefix,
 	)
 	if err != nil {
@@ -95,7 +95,7 @@ func (s *Store) ListProjects() ([]*models.Project, error) {
 	// v0.8.5: created_at/updated_at join the select (were never read — the
 	// projects page rendered Go zero times). Same int64→time.Unix pattern as
 	// ListCacheTokens.
-	rows, err := s.db.Query(`SELECT id,name,token_prefix,profile_id,status,pair_generated,created_at,updated_at FROM projects ORDER BY name`)
+	rows, err := s.db.Query(`SELECT id,name,token_prefix,COALESCE(profile_id,''),status,pair_generated,created_at,updated_at FROM projects ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func (s *Store) ListProjects() ([]*models.Project, error) {
 // GetProjectByName resolves a project by name (returns nil, nil when absent).
 func (s *Store) GetProjectByName(name string) (*models.Project, error) {
 	return scanProjectRow(s.db.QueryRow(
-		`SELECT id,name,token_prefix,profile_id,status,pair_generated FROM projects WHERE name=?`, name,
+		`SELECT id,name,token_prefix,COALESCE(profile_id,''),status,pair_generated FROM projects WHERE name=?`, name,
 	))
 }
 
@@ -133,7 +133,7 @@ func (s *Store) GetProjectByName(name string) (*models.Project, error) {
 // HTTP path was removed with the ②a MCP-over-HTTP surface — Plan 42 批1.)
 func (s *Store) GetProject(id string) (*models.Project, error) {
 	return scanProjectRow(s.db.QueryRow(
-		`SELECT id,name,token_prefix,profile_id,status,pair_generated FROM projects WHERE id=?`, id,
+		`SELECT id,name,token_prefix,COALESCE(profile_id,''),status,pair_generated FROM projects WHERE id=?`, id,
 	))
 }
 

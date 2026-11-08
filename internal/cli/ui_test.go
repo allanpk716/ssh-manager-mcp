@@ -115,7 +115,10 @@ func TestUICommandStandaloneListensOnLoopbackRandomPort(t *testing.T) {
 		t.Fatalf("监听端口 = %d，应为随机非零端口", port)
 	}
 
-	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	noRedirect := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport:     &http.Transport{DisableKeepAlives: true},
+	}
 	resp, err := noRedirect.Get(u.String())
 	if err != nil {
 		t.Fatalf("访问启动网址失败：%v", err)
@@ -137,6 +140,40 @@ func TestUICommandStandaloneListensOnLoopbackRandomPort(t *testing.T) {
 
 	if _, err := http.Get("http://" + u.Host + "/ui/"); err == nil {
 		t.Fatal("命令退出后监听应关闭")
+	}
+}
+
+func TestUICommandStandaloneOpensAccessProfilePage(t *testing.T) {
+	createVaultStore(t)
+	urlCh, _, _, finish := startUICommand(t, nil)
+	u := waitUIStartupURL(t, urlCh)
+
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := noRedirect.Get(u.String())
+	if err != nil {
+		t.Fatalf("访问启动网址失败：%v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || len(resp.Cookies()) == 0 {
+		t.Fatalf("启动网址应换取会话，状态码=%d cookie=%d", resp.StatusCode, len(resp.Cookies()))
+	}
+	profileRequest, err := http.NewRequest(http.MethodGet, "http://"+u.Host+"/ui/access/profiles", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileRequest.AddCookie(resp.Cookies()[0])
+	profileResponse, err := noRedirect.Do(profileRequest)
+	if err != nil {
+		t.Fatalf("访问 Profile 页失败：%v", err)
+	}
+	body, _ := io.ReadAll(profileResponse.Body)
+	profileResponse.Body.Close()
+	if profileResponse.StatusCode != http.StatusOK || !strings.Contains(string(body), "Profile") {
+		t.Fatalf("单机 ui 应提供 Profile 页，状态码=%d 页面：\n%s", profileResponse.StatusCode, body)
+	}
+
+	if err := finish(t); err != nil {
+		t.Fatalf("ui 命令退出失败：%v", err)
 	}
 }
 

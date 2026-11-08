@@ -10,6 +10,7 @@
   --color-warning-background: #5c3a12;
   --color-warning-border: #a3742a;
   --color-warning-text: #ffd48a;
+  --color-danger-border: #e5484d;
   --space-small: 8px;
   --space-medium: 16px;
   --space-large: 24px;
@@ -57,6 +58,25 @@ main {
 .site-header .role {
   margin: 0;
   color: var(--color-accent);
+}
+
+.main-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-medium);
+  padding: var(--space-small) var(--space-medium);
+  background: var(--color-panel);
+  border-bottom: 1px solid var(--color-panel-border);
+}
+
+.main-nav a {
+  color: var(--color-muted);
+  text-decoration: none;
+}
+
+.main-nav a:hover,
+.main-nav a:focus {
+  color: var(--color-text);
 }
 
 .header-actions {
@@ -126,6 +146,149 @@ h1 {
 .server-table th {
   color: var(--color-muted);
   font-weight: 600;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-small);
+  margin: var(--space-medium) 0;
+}
+
+.operation-refusal {
+  margin-top: var(--space-medium);
+  padding: var(--space-small) var(--space-medium);
+  border: 1px solid var(--color-warning-border);
+  border-radius: 8px;
+  background: var(--color-warning-background);
+  color: var(--color-warning-text);
+}
+
+.operation-result {
+  margin-top: var(--space-medium);
+  padding: var(--space-small) var(--space-medium);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  background: var(--color-panel);
+}
+
+.operation-refusal p {
+  margin: var(--space-small) 0 0;
+}
+
+.operation-refusal a {
+  color: var(--color-warning-text);
+}
+
+.grant-form {
+  padding: var(--space-large);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.grant-form fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-small);
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.grant-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-small);
+}
+
+.grant-form button {
+  margin-top: var(--space-medium);
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.inline-form label {
+  color: var(--color-muted);
+}
+
+.inline-form input[type="text"] {
+  min-width: 180px;
+  padding: var(--space-small);
+  color: var(--color-text);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.inline-form button {
+  padding: var(--space-small);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.confirm-form {
+  /* 吊销确认的勾选与按钮在窄屏也保持可点，不用横向滚动。 */
+  align-items: flex-start;
+}
+
+.confirm-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-small);
+  color: var(--color-warning-text);
+}
+
+.token-block {
+  margin: var(--space-medium) 0;
+  padding: var(--space-medium);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  background: var(--color-panel);
+}
+
+.token-value {
+  display: block;
+  padding: var(--space-small);
+  border: 1px dashed var(--color-panel-border);
+  border-radius: 6px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.token-snippet {
+  margin: 0;
+  padding: var(--space-small);
+  border: 1px dashed var(--color-panel-border);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.token-snippet code {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.copy-button {
+  margin-top: var(--space-small);
+  padding: var(--space-small);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.token-warning {
+  color: var(--color-warning-text);
 }
 
 .server-table tr.needs-attention {
@@ -224,4 +387,180 @@ h1 {
   .server-table td + td {
     border-top: 1px dashed var(--color-panel-border);
   }
+}
+
+.device-issue-form select {
+  min-width: 180px;
+  padding: var(--space-small);
+  color: var(--color-text);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.server-table tr.revoked-row td {
+  color: var(--color-muted);
+}
+
+.one-time-result {
+  padding: var(--space-large);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.one-time-fields {
+  margin: var(--space-medium) 0;
+}
+
+.one-time-fields div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-small);
+  margin-bottom: var(--space-medium);
+}
+
+.one-time-fields dt {
+  color: var(--color-muted);
+}
+
+.one-time-fields dd {
+  margin: 0;
+  padding: var(--space-small);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.secret-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.one-time-result pre {
+  margin: var(--space-small) 0 var(--space-medium);
+  padding: var(--space-small) var(--space-medium);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.one-time-result pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.device-revoke-form form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-medium);
+  margin-top: var(--space-medium);
+}
+
+.device-revoke-form button {
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-warning-text);
+  background: transparent;
+  border: 1px solid var(--color-warning-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.device-revoke-form a {
+  color: var(--color-accent);
+}
+
+.pairing-request {
+  padding: var(--space-large);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.pairing-request h2 {
+  margin-top: 0;
+}
+
+.pairing-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-medium);
+  margin: 0;
+}
+
+.pairing-fields div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-small);
+}
+
+.pairing-fields dt {
+  color: var(--color-muted);
+}
+
+.pairing-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.pairing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-medium);
+  margin-top: var(--space-medium);
+}
+
+.pairing-actions .inline-form {
+  margin: 0;
+}
+
+.pairing-approve-link {
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-accent);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.pairing-missing-code {
+  border-color: var(--color-danger-border);
+}
+
+.pairing-form,
+.pairing-reject-form {
+  align-items: flex-start;
+}
+
+.pairing-form select,
+.pairing-form input[type="text"] {
+  min-width: 180px;
+  padding: var(--space-small);
+  color: var(--color-text);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.pairing-compare {
+  display: flex;
+  align-items: center;
+  gap: var(--space-small);
+}
+
+.pairing-form button,
+.pairing-reject-form button {
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pairing-reject-form button {
+  color: var(--color-warning-text);
+  border-color: var(--color-warning-border);
 }
