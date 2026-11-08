@@ -120,6 +120,19 @@ func TestDevicesProbeStandaloneWritesAuditAndResults(t *testing.T) {
 	if rows[0].Action != "probe-connectivity" || rows[0].Source != store.AuditSourceCLI || rows[0].Status != "ok" {
 		t.Fatalf("audit row = %+v", rows[0])
 	}
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
+		t.Fatalf("audit summary is not JSON: %q", rows[0].Command)
+	}
+	if summary["from"] != "self" || summary["from_device"] != "笔记本" {
+		t.Fatalf("audit summary = %+v", summary)
+	}
+	if targets, ok := summary["targets"].([]any); !ok || len(targets) != 1 || targets[0] != fmt.Sprintf("NAS:%d", openPort) {
+		t.Fatalf("audit summary targets = %#v", summary["targets"])
+	}
+	if strings.Contains(rows[0].Command, "127.0.0.1") || strings.Contains(rows[0].Command, "::1") {
+		t.Fatalf("audit summary must not expose addresses: %q", rows[0].Command)
+	}
 	observations, err := proberesults.NewFileProbeResults(filepath.Join(filepath.Dir(path), "probe-results.json")).List(laptopID, "")
 	if err != nil {
 		t.Fatal(err)

@@ -240,7 +240,7 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in ProbeConnectivityInput) (*mcp.CallToolResult, any, error) {
 			st := storeFromContext(ctx, storeFn)
-			text, _, _, err := ProbeConnectivityForProfile(ctx, st, projectID, profileID, in.From, in.Targets, toolHostKeyStoreFromContext(ctx))
+			text, err := ProbeConnectivityForProfile(ctx, st, projectID, profileID, in.From, in.Targets, toolHostKeyStoreFromContext(ctx))
 			if err != nil {
 				return &mcp.CallToolResult{
 					IsError: true,

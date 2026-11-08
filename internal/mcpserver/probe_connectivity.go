@@ -2,11 +2,11 @@ package mcpserver
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"ssh-manager-mcp/internal/probe"
 	"ssh-manager-mcp/internal/probeobserve"
-	"ssh-manager-mcp/internal/proberesults"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 )
@@ -18,16 +18,23 @@ type ProbeConnectivityInput struct {
 	Targets []string `json:"targets" jsonschema:"target list; each item is a server id or device name, optionally as name:port; at most 10 after deduplication"`
 }
 
+// bridgeCacheInstance 返回当前桥进程所属的缓存实例名。命令行启动
+// mcp --cache 时把解析好的实例名固定在 SSHMGR_MCP_INSTANCE（与固定实例目
+// 录的 SSHMGR_CACHE_DIR 同一处），桥内工具据此解析 self 设备与探测结果文
+// 件；默认槽与权威端为空字符串。
+func bridgeCacheInstance() string {
+	return os.Getenv("SSHMGR_MCP_INSTANCE")
+}
+
 // ProbeConnectivityForProfile 运行连通探测并写审计。起点或目标里的服务器
 // 编号必须在该授权范围内；只要工具正常返回，审计状态就是成功，单个目标
 // 不通不算失败。
-func ProbeConnectivityForProfile(ctx context.Context, st *store.Store, projectID, profileID, from string, targets []string, hk sshbroker.HostKeyStore) (text string, summary map[string]any, originServerID string, err error) {
+func ProbeConnectivityForProfile(ctx context.Context, st *store.Store, projectID, profileID, from string, targets []string, hk sshbroker.HostKeyStore) (string, error) {
 	start := time.Now()
 	status := "error"
+	var originServerID string
+	var summary map[string]any
 	defer func() {
-		if status == "" {
-			status = "error"
-		}
 		_ = st.WriteAudit(store.AuditRow{
 			TS: start, ProjectID: projectID, ServerID: originServerID,
 			Action: "probe-connectivity", Status: status,
@@ -36,28 +43,21 @@ func ProbeConnectivityForProfile(ctx context.Context, st *store.Store, projectID
 		})
 	}()
 
+	instance := bridgeCacheInstance()
 	service := &probe.Service{
 		Store:      st,
+		Instance:   instance,
 		GateServer: func(serverID string) error { return gateServer(st, profileID, serverID) },
 		HostKeys:   hk,
 	}
-	if path, ok, pathErr := probeobserve.PathFor(""); pathErr == nil && ok {
-		service.Results = proberesults.NewFileProbeResults(path)
+	if results, ok, pathErr := probeobserve.ResultsFor(instance); pathErr == nil && ok {
+		service.Results = results
 	}
 	report, probeErr := service.Probe(ctx, probe.Request{From: from, Targets: targets})
-	summary = map[string]any{"from": from, "targets": []string{}}
-	if report != nil {
-		summary["targets"] = report.TargetSummaries()
-		summary["from_device"] = report.FromDevice
-		if report.Remote {
-			summary["note"] = "固定命令，不经命令策略"
-			originServerID = from
-		}
-	}
+	summary, originServerID = probe.AuditSummary(from, report, probeErr)
 	if probeErr != nil {
-		summary["error"] = probeErr.Error()
-		return "", summary, originServerID, probeErr
+		return "", probeErr
 	}
 	status = "ok"
-	return report.Text(), summary, originServerID, nil
+	return report.Text(), nil
 }
