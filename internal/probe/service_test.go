@@ -322,6 +322,42 @@ func TestServiceConcurrencyAndTotalDeadline(t *testing.T) {
 	}
 }
 
+// TestServiceTotalDeadlineMarksDialingAddressIncomplete: 到总时限那一刻正
+// 在拨号或还没轮到的地址都记「探测未完成」，呈现不带相对时间，也不写进
+// 探测结果文件。
+func TestServiceTotalDeadlineMarksDialingAddressIncomplete(t *testing.T) {
+	fixture := newServiceFixture(t)
+	dial := &fakeLocalDial{}
+	service, results := fixture.service(dial.dial)
+	service.TotalDeadline = 80 * time.Millisecond
+	service.LocalDial = func(ctx context.Context, address string, port int, timeout time.Duration) (time.Duration, error) {
+		// 第一个地址一直拨到总时限，返回的正是总时限取消错误。
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+
+	report, err := service.Probe(context.Background(), Request{From: "self", Targets: []string{"NAS:445"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := report.Text()
+	if got := strings.Count(text, "✗探测未完成"); got != 2 {
+		t.Fatalf("both interrupted addresses must be incomplete:\n%s", text)
+	}
+	for _, unwanted := range []string{"探测未完成 刚刚", "探测未完成 旧", "连接超时"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("text must not contain %q:\n%s", unwanted, text)
+		}
+	}
+	observations, err := results.List(fixture.selfDevice.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 0 {
+		t.Fatalf("interrupted addresses must not be recorded: %+v", observations)
+	}
+}
+
 // TestServiceRemoteProbeUsesFixedCommandAndParsesOutput: 经服务器起点在一
 // 次 SSH 会话里执行一条固定命令，输出按序号回填到各目标；起点服务器连接
 // 失败时结果开头说明「无法连接起点服务器」。

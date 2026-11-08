@@ -332,6 +332,12 @@ func (s *Service) probeLocalTarget(ctx context.Context, report *Report, target *
 		duration, err := s.localDial()(ctx, line.address, target.Port, addressTimeout)
 		line.OK = err == nil
 		line.Category = sshbroker.ClassifyProbeDialError(err)
+		// 总时限取消打断了这次拨号：没有真实结论，不能照搬拨号错误当成
+		// 连接超时，也不写探测结果文件。
+		if err != nil && ctx.Err() != nil {
+			line.OK = false
+			line.Category = models.ProbeErrorIncomplete
+		}
 		line.Duration = duration
 		line.ObservedAt = s.now()
 		s.record(report, target, *line)
@@ -401,6 +407,9 @@ func markUnprobed(report *Report, note string) {
 }
 
 func (s *Service) record(report *Report, target *TargetReport, line AddressReport) {
+	if line.Category == models.ProbeErrorIncomplete {
+		return
+	}
 	if s.Results == nil || target.DeviceID == "" || line.NetworkName == "" || line.address == "" {
 		return
 	}

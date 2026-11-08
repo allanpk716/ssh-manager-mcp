@@ -71,6 +71,13 @@ func (r *Report) Text() string {
 						detail = fmt.Sprintf("%dms", line.Duration.Milliseconds())
 					}
 				}
+				if line.Category == models.ProbeErrorIncomplete {
+					// 被总时限打断的行没有观察时间，不显示「刚刚」或
+					//「旧」。
+					lines = append(lines, fmt.Sprintf("%s  %s 第%d个地址  %s%s", header,
+						line.NetworkName, line.Sequence, marker, detail))
+					continue
+				}
 				age := ObservationAgeLabel(now, line.ObservedAt)
 				lines = append(lines, fmt.Sprintf("%s  %s 第%d个地址  %s%s %s", header,
 					line.NetworkName, line.Sequence, marker, detail, age))
