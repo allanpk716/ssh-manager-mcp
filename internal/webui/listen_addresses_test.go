@@ -24,6 +24,10 @@ func TestDeriveListenAddresses(t *testing.T) {
 			interfaces: []string{"192.0.2.30"}, want: []string{"127.0.0.1"}, hint: true,
 		},
 		{
+			name: "物理局域网地址不在拓扑中时不被选中", topology: []string{"100.64.10.5"},
+			interfaces: []string{"192.168.1.10"}, want: []string{"127.0.0.1"}, hint: true,
+		},
+		{
 			name: "设置覆盖并合入回环", topology: []string{"100.64.10.5"},
 			interfaces: []string{"192.0.2.30"}, manual: "100.64.10.6",
 			want: []string{"100.64.10.6", "127.0.0.1"}, hint: false,

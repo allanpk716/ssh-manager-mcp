@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/webui"
@@ -47,6 +46,6 @@ func ReadWebUIListenPlan(st *store.Store) (int, webui.ListenPlan, error) {
 	if err != nil {
 		return 0, webui.ListenPlan{}, err
 	}
-	plan, err := webUIListenPlan(st, manualListen, time.Now())
+	plan, err := webUIListenPlan(st, manualListen)
 	return port, plan, err
 }

@@ -23,6 +23,7 @@ import (
 
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -686,11 +687,18 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 		fmt.Fprintf(os.Stderr, "sshmgr serve: /pair disabled: serve key unusable for pairing signatures: %v\n", err)
 	}
 
-	webUIListeners, err := startWebUIListenerManager(ctx, st, tlsCert, tlsKey, serveCertFingerprint)
-	if err != nil {
-		return fmt.Errorf("serve web UI: %w", err)
+	var webUIListeners *webUIListenerManager
+	if currentMachineIsServer() {
+		webUIListeners, err = startWebUIListenerManager(ctx, st, tlsCert, tlsKey, serveCertFingerprint)
+		if err != nil {
+			return fmt.Errorf("serve web UI: %w", err)
+		}
 	}
-	defer webUIListeners.Close()
+	defer func() {
+		if webUIListeners != nil {
+			_ = webUIListeners.Close()
+		}
+	}()
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -770,4 +778,13 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	case err := <-errCh:
 		return err
 	}
+}
+
+func currentMachineIsServer() bool {
+	state, err := roles.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: 读取本机角色失败，不启动 Web UI：%v\\n", err)
+		return false
+	}
+	return state != nil && state.Role == roles.RoleServer
 }

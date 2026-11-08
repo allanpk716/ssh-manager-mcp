@@ -36,7 +36,7 @@ func (s serveWebUIServerSource) Servers() ([]webui.ServerRow, error) {
 
 // webUIListenPlan 每次重算时读取拓扑虚拟局域网成员地址、本机网卡地址与
 // serve.ui_listen 设置，交给纯推导函数得出本次监听集合。
-func webUIListenPlan(st *store.Store, manualListen string, now time.Time) (webui.ListenPlan, error) {
+func webUIListenPlan(st *store.Store, manualListen string) (webui.ListenPlan, error) {
 	topologyAddresses, err := st.AllVirtualNetworkAddresses()
 	if err != nil {
 		return webui.ListenPlan{}, err
@@ -69,9 +69,14 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 	if err != nil {
 		return nil, err
 	}
-	plan, err := webUIListenPlan(st, manualListen, time.Now())
-	if err != nil {
-		return nil, err
+	loopbackPlan := webui.ListenPlan{Addresses: []string{"127.0.0.1"}, NeedsManualListen: true}
+	plan, planErr := webUIListenPlan(st, manualListen)
+	logStartup := func(format string, arguments ...any) {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: "+format+"\n", arguments...)
+	}
+	if planErr != nil {
+		logStartup("推导 Web UI 监听地址失败，先只监听 127.0.0.1：%v", planErr)
+		plan = loopbackPlan
 	}
 	handler, control, err := webui.NewAuthority(webui.Config{
 		Role: webui.RoleServer, Port: port,
@@ -83,23 +88,28 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 	if err != nil {
 		return nil, err
 	}
+	firstPlan := true
 	manager := NewWebUIListenerManager(WebUIListenerOptions{
 		Port: port,
-		Plan: func(now time.Time) (webui.ListenPlan, error) {
+		Plan: func() (webui.ListenPlan, error) {
 			_, currentManual, err := ReadWebUIConfig(st)
 			if err != nil {
 				return webui.ListenPlan{}, err
 			}
-			return webUIListenPlan(st, currentManual, now)
+			currentPlan, err := webUIListenPlan(st, currentManual)
+			if err != nil && firstPlan {
+				firstPlan = false
+				return loopbackPlan, nil
+			}
+			firstPlan = false
+			return currentPlan, err
 		},
 		Serve: func(listener net.Listener) error {
 			server := &http.Server{Handler: handler}
 			return server.ServeTLS(listener, tlsCert, tlsKey)
 		},
 		SetAllowedHosts: control.SetAllowedHosts,
-		Log: func(format string, arguments ...any) {
-			fmt.Fprintf(os.Stderr, format+"\n", arguments...)
-		},
+		Log:             logStartup,
 	})
 	if _, err := manager.Sync(time.Now()); err != nil {
 		_ = manager.Close()

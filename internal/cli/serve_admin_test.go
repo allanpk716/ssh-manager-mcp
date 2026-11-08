@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
@@ -41,6 +43,46 @@ func createVaultStoreAt(t *testing.T, path string, masterKey []byte) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestServeCommandDescriptionsUseEnglish(t *testing.T) {
+	root := NewRootCmd()
+	serve := findCommand(t, root.Command, "serve")
+	if serve.Short != "Run the authoritative vault server (/snapshot + /pair) for the multi-machine bridge posture" {
+		t.Fatalf("serve 命令 Short 应保持英文原文本：%q", serve.Short)
+	}
+	if !strings.Contains(serve.Long, "It serves exactly: the authenticated /snapshot endpoint") ||
+		!strings.Contains(serve.Long, "in a later release — the web admin UI") {
+		t.Fatalf("serve 命令 Long 应保持英文原文本：\n%s", serve.Long)
+	}
+
+	admin := newServeAdminCmd()
+	if admin.Short != "Manage the authoritative Web UI administrator password and sessions" {
+		t.Fatalf("serve admin 的 Short = %q", admin.Short)
+	}
+	wantShort := map[string]string{
+		"set":        "Set or reset the authoritative Web UI administrator password",
+		"unlock":     "Unlock a Web UI login lock; without an IP, list current locks",
+		"logout-all": "Log out all authoritative Web UI sessions",
+		"status":     "Show authoritative Web UI addresses and certificate fingerprint",
+	}
+	for name, want := range wantShort {
+		got := findCommand(t, admin, name).Short
+		if got != want {
+			t.Fatalf("serve admin %s 的 Short = %q，应为 %q", name, got, want)
+		}
+	}
+}
+
+func findCommand(t *testing.T, parent *cobra.Command, name string) *cobra.Command {
+	t.Helper()
+	for _, command := range parent.Commands() {
+		if command.Name() == name {
+			return command
+		}
+	}
+	t.Fatalf("找不到命令 %s", name)
+	return nil
 }
 
 func TestServeAdminSetWritesArgon2idAndAudit(t *testing.T) {

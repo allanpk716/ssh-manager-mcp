@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -32,6 +33,7 @@ func (a fakeAddr) String() string  { return string(a) }
 type listenerTest struct {
 	mu        sync.Mutex
 	plans     []webui.ListenPlan
+	planErrs  []error
 	bindCalls []string
 	bindFail  map[string]int
 	listeners []*fakeListener
@@ -40,15 +42,65 @@ type listenerTest struct {
 	served    []string
 }
 
-func (t *listenerTest) plan(time.Time) (webui.ListenPlan, error) {
+func (t *listenerTest) plan() (webui.ListenPlan, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if len(t.planErrs) > 0 {
+		err := t.planErrs[0]
+		t.planErrs = t.planErrs[1:]
+		return webui.ListenPlan{}, err
+	}
 	if len(t.plans) == 0 {
 		return webui.ListenPlan{}, errors.New("没有更多监听计划")
 	}
 	plan := t.plans[0]
 	t.plans = t.plans[1:]
 	return plan, nil
+}
+
+func TestWebUIListenerManagerRunContinuesAfterPlanError(t *testing.T) {
+	test := &listenerTest{
+		planErrs: []error{errors.New("读取拓扑失败")},
+		plans:    []webui.ListenPlan{{Addresses: []string{"127.0.0.1"}}},
+	}
+	manager := NewWebUIListenerManager(WebUIListenerOptions{
+		Port: 7879, Plan: test.plan, Bind: test.bind, Serve: test.serve,
+		SetAllowedHosts: test.setAllowedHosts, Log: test.log,
+		PollInterval: 10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- manager.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		test.mu.Lock()
+		bound := len(test.bindCalls)
+		test.mu.Unlock()
+		if bound == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("监听管理者退出错误 = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("监听管理者关闭超时")
+	}
+	test.mu.Lock()
+	bindCalls := append([]string(nil), test.bindCalls...)
+	logs := append([]string(nil), test.logs...)
+	test.mu.Unlock()
+	if len(bindCalls) != 1 || bindCalls[0] != "127.0.0.1:7879" {
+		t.Fatalf("推导恢复后应继续监听回环地址，绑定调用 = %v", bindCalls)
+	}
+	if len(logs) == 0 {
+		t.Fatal("推导失败应写日志")
+	}
 }
 
 func (t *listenerTest) bind(address string) (net.Listener, error) {

@@ -26,11 +26,12 @@ type WebUIListenerStatus struct {
 // 测试可以观察绑定与关闭，不需要真的处理 HTTPS 流量。
 type WebUIListenerOptions struct {
 	Port            int
-	Plan            func(time.Time) (webui.ListenPlan, error)
+	Plan            func() (webui.ListenPlan, error)
 	Bind            func(address string) (net.Listener, error)
 	Serve           func(net.Listener) error
 	SetAllowedHosts func([]string)
 	Log             func(format string, arguments ...any)
+	PollInterval    time.Duration
 }
 
 type webUIListenerManager struct {
@@ -60,7 +61,7 @@ func NewWebUIListenerManager(options WebUIListenerOptions) *webUIListenerManager
 // Sync 按当前推导结果整理监听：关闭不再需要的地址，打开新增地址，失败地址
 // 记录 30 秒后的重试时间，并把实际监听地址同步给 Web UI Handler。
 func (m *webUIListenerManager) Sync(now time.Time) (WebUIListenerStatus, error) {
-	plan, err := m.options.Plan(now)
+	plan, err := m.options.Plan()
 	if err != nil {
 		return WebUIListenerStatus{}, err
 	}
@@ -145,9 +146,13 @@ func (m *webUIListenerManager) Run(ctx context.Context) error {
 	default:
 	}
 	if _, err := m.Sync(time.Now()); err != nil {
-		return err
+		m.logSyncError(err)
 	}
-	ticker := time.NewTicker(5 * time.Second)
+	interval := m.options.PollInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -155,9 +160,15 @@ func (m *webUIListenerManager) Run(ctx context.Context) error {
 			return m.Close()
 		case <-ticker.C:
 			if _, err := m.Sync(time.Now()); err != nil {
-				return err
+				m.logSyncError(err)
 			}
 		}
+	}
+}
+
+func (m *webUIListenerManager) logSyncError(err error) {
+	if m.options.Log != nil {
+		m.options.Log("sshmgr serve: 重算 Web UI 监听地址失败，保留现有监听并继续重试：%v", err)
 	}
 }
 
