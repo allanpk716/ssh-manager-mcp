@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ssh-manager-mcp/internal/discoveryname"
 	"ssh-manager-mcp/internal/listenplan"
 	"ssh-manager-mcp/internal/offlinelimit"
 	"ssh-manager-mcp/internal/store"
@@ -44,6 +45,9 @@ type SettingInputs struct {
 	DiscoveryFlag    *bool
 	MetadataEditEnv  *bool
 	MetadataEditFlag *bool
+	// Hostname 是计算发现名称默认值时使用的主机名；空串表示读取操作系统
+	// 主机名。测试与不同运行环境可注入确定值。
+	Hostname string
 }
 
 // SettingChoice 是只能从有限集合里选择的设置项候选值。
@@ -119,6 +123,10 @@ func SettingInputsFromEnv() SettingInputs {
 func NewWithSettingInputs(st *store.Store, inputs SettingInputs) *Manager {
 	manager := newManager(st)
 	manager.settingInputs = cloneSettingInputs(inputs)
+	if inputs.Hostname != "" {
+		injectedHostname := inputs.Hostname
+		manager.hostname = func() string { return injectedHostname }
+	}
 	return manager
 }
 
@@ -178,6 +186,17 @@ func (m *Manager) resolveSetting(setting *Setting) {
 	case "serve.metadata_edit":
 		m.resolveSwitch(setting, m.settingInputs.MetadataEditEnv, m.settingInputs.MetadataEditFlag)
 	default:
+		if setting.Key == "serve.discovery_name" {
+			setting.DefaultValue = discoveryname.DisplayName("", m.hostname())
+			if setting.StoredValue != "" {
+				setting.Source = SettingSourceStore
+				setting.CurrentValue = discoveryname.DisplayName(setting.StoredValue, m.hostname())
+				return
+			}
+			setting.CurrentValue = setting.DefaultValue
+			setting.Source = SettingSourceDefault
+			return
+		}
 		if setting.StoredValue != "" {
 			setting.CurrentValue = setting.StoredValue
 			setting.Source = SettingSourceStore

@@ -48,6 +48,7 @@ func TestListSettingsBuildsKnownTableAndReadsRole(t *testing.T) {
 		PairingEnv:      settingBool(true),
 		DiscoveryFlag:   settingBool(true),
 		MetadataEditEnv: settingBool(false),
+		Hostname:        "MacBook_Pro 2.local",
 	})
 	settings, err := manager.ListSettings()
 	if err != nil {
@@ -90,7 +91,7 @@ func TestListSettingsBuildsKnownTableAndReadsRole(t *testing.T) {
 		t.Fatalf("Web 端口设置项不符：%+v", port)
 	}
 	name := byKey["serve.discovery_name"]
-	if name.Type != SettingTypeDiscoveryName || name.DefaultValue != "" ||
+	if name.Type != SettingTypeDiscoveryName || name.DefaultValue != "MacBook_Pro 2.local" ||
 		name.Effect != "重启服务后生效" || name.Source != SettingSourceDefault {
 		t.Fatalf("发现名称设置项不符：%+v", name)
 	}
@@ -113,4 +114,24 @@ func TestListSettingsBuildsKnownTableAndReadsRole(t *testing.T) {
 	if role.Role != roles.RoleStandalone || !role.SetupComplete || role.Path == "" {
 		t.Fatalf("本机角色文件内容不符：%+v", role)
 	}
+}
+
+func TestListSettingsShowsActualDiscoveryNameDefault(t *testing.T) {
+	st, _ := newSettingsTestStore(t)
+	manager := NewWithSettingInputs(st, SettingInputs{Hostname: "MacBook_Pro 2.local"})
+
+	settings, err := manager.ListSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range settings {
+		if setting.Key == "serve.discovery_name" {
+			if setting.DefaultValue != "MacBook_Pro 2.local" ||
+				setting.Source != SettingSourceDefault || setting.Overridden {
+				t.Fatalf("发现名称默认值应显示实际会使用的主机名：%+v", setting)
+			}
+			return
+		}
+	}
+	t.Fatal("设置项表缺少 serve.discovery_name")
 }
