@@ -97,3 +97,36 @@ func TestManagerAdapterBackupStatusCreateAndVerify(t *testing.T) {
 		t.Fatalf("备份后状态应显示新文件与校验结果：%+v", status)
 	}
 }
+
+func TestManagerAdapterReadsAndSavesBackupConfig(t *testing.T) {
+	adapter, st, backupDir := prepareBackupAdapter(t)
+	newPassFile := filepath.Join(filepath.Dir(backupDir), "new-backup.pass")
+
+	config, err := adapter.ReadBackupConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Dir != backupDir || config.Keep != 4 {
+		t.Fatalf("适配后的备份配置不符：%+v", config)
+	}
+	config.Keep = 6
+	config.PassphraseFile = newPassFile
+	if err := adapter.SaveBackupConfig(config, webui.OpsWriteSource{RemoteAddress: "192.0.2.9"}); err != nil {
+		t.Fatalf("适配器应保存备份配置：%v", err)
+	}
+	got, err := adapter.ReadBackupConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Keep != 6 || got.PassphraseFile != newPassFile {
+		t.Fatalf("保存后的备份配置不符：%+v", got)
+	}
+	rows, err := st.AuditRows(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Action != "backup.config" || rows[0].Source != store.AuditSourceWebUI ||
+		rows[0].SourceIP != "192.0.2.9" || !strings.Contains(rows[0].Command, `"keep":6`) {
+		t.Fatalf("保存配置的审计行来源与摘要不符：%+v", rows)
+	}
+}

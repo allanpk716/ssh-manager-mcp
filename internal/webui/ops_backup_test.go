@@ -380,7 +380,9 @@ func TestOpsBackupClientRoleGetsNotFound(t *testing.T) {
 	clientSession := exchangeStartupToken(t, client, clientStartup.URL("127.0.0.1:18080"))
 	clientCookie := clientSession.Cookies()[0]
 	clientSession.Body.Close()
-	for _, target := range []string{"/ui/ops/backup", "/ui/ops/backup/create", "/ui/ops/backup/verify"} {
+	for _, target := range []string{
+		"/ui/ops/backup", "/ui/ops/backup/config", "/ui/ops/backup/create", "/ui/ops/backup/verify",
+	} {
 		resp := doGetWithCookie(t, client, clientCookie, target)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusNotFound {

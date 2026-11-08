@@ -965,6 +965,45 @@ h1 {
   border-top: 1px dashed var(--color-panel-border);
 }
 
+.backup-config-form {
+  display: grid;
+  grid-template-columns: 8em minmax(0, 1fr);
+  gap: var(--space-small) var(--space-medium);
+  align-items: start;
+  margin: var(--space-medium) 0;
+}
+
+.backup-config-form label {
+  color: var(--color-muted);
+  line-height: 2.2;
+}
+
+.backup-config-form input {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-small);
+  color: var(--color-text);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+.backup-config-form .operation-refusal,
+.backup-config-form button {
+  grid-column: 2;
+}
+
+.backup-config-form button {
+  justify-self: start;
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
 @media (max-width: 720px) {
   .backup-facts {
     grid-template-columns: 1fr;
@@ -977,5 +1016,18 @@ h1 {
 
   .backup-actions button {
     width: 100%;
+  }
+
+  .backup-config-form {
+    grid-template-columns: 1fr;
+  }
+
+  .backup-config-form .operation-refusal,
+  .backup-config-form button {
+    grid-column: 1;
+  }
+
+  .backup-config-form button {
+    justify-self: stretch;
   }
 }

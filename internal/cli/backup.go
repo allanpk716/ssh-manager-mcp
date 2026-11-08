@@ -35,7 +35,7 @@ func newBackupCmd() *cobra.Command {
 		Use:   "backup",
 		Short: "Manage vault backups (plaintext NAS JSON and passphrase-encrypted .sme)",
 	}
-	c.AddCommand(newBackupCreateCmd(), newBackupVerifyCmd(), newBackupStatusCmd())
+	c.AddCommand(newBackupCreateCmd(), newBackupVerifyCmd(), newBackupStatusCmd(), newBackupConfigCmd())
 	return c
 }
 

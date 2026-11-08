@@ -92,6 +92,8 @@ func (r OpsAuditRow) CommandDisplay() string {
 type OpsStore interface {
 	QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error)
 	BackupStatus() (OpsBackupStatus, error)
+	ReadBackupConfig() (OpsBackupConfig, error)
+	SaveBackupConfig(config OpsBackupConfig, source OpsWriteSource) error
 	CreateBackup(source OpsWriteSource) (OpsBackupCreateResult, error)
 	VerifyLatestBackup(source OpsWriteSource) (OpsBackupVerifyResult, error)
 	ListSettings() ([]OpsSetting, error)
@@ -115,6 +117,22 @@ type OpsStore interface {
 	// SyncClient 立即同步指定客户端实例并写实例本机审计。
 	SyncClient(instance, sourceIP string) (OpsClientStatus, error)
 }
+
+// OpsBackupConfig 是备份配置表单的三个字段。
+type OpsBackupConfig struct {
+	Dir            string
+	Keep           int
+	PassphraseFile string
+}
+
+// OpsBackupConfigError 标明备份配置的哪个字段有误。
+type OpsBackupConfigError struct {
+	Field string
+	Err   error
+}
+
+func (e *OpsBackupConfigError) Error() string { return e.Err.Error() }
+func (e *OpsBackupConfigError) Unwrap() error { return e.Err }
 
 // OpsBackupStatus 是备份页状态区的展示数据。ConfigError 非空且 ConfigDir
 // 为空串表示配置缺失；ConfigError 非空且 ConfigDir 非空表示配置有误。
@@ -212,6 +230,7 @@ func (h *handler) registerOpsRoutes() {
 	}
 	if h.caps.CanManageBackups {
 		h.mux.HandleFunc(opsBackupPath, h.handleOpsBackup)
+		h.mux.HandleFunc(opsBackupConfigPath, h.handleOpsBackupConfig)
 		h.mux.HandleFunc(opsBackupCreatePath, h.handleOpsBackupCreate)
 		h.mux.HandleFunc(opsBackupVerifyPath, h.handleOpsBackupVerify)
 	}
