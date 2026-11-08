@@ -32,6 +32,8 @@ const (
 	BackupFailurePassphrase = "passphrase"
 	BackupFailureCorrupt    = "corrupt"
 	BackupFailureIncomplete = "incomplete"
+	BackupFailureConfig     = "config"
+	BackupFailureNoBackup   = "no_backup"
 )
 
 // BackupVerifyFailure 带上校验失败的类别；类别供备份页与状态命令展示，
@@ -104,14 +106,18 @@ type BackupVerifyResult struct {
 func (m *Manager) VerifyLatestBackup(source Source) (BackupVerifyResult, error) {
 	cfg, err := m.loadBackupConfig()
 	if err != nil {
+		_ = m.RecordBackupVerifyFailure(source, "", BackupFailureConfig, err)
 		return BackupVerifyResult{}, err
 	}
 	latest, ok := LatestEncryptedBackup(cfg.Dir, backupPrefix)
 	if !ok {
-		return BackupVerifyResult{}, fmt.Errorf("no encrypted backup found in %s", cfg.Dir)
+		err := fmt.Errorf("no encrypted backup found in %s", cfg.Dir)
+		_ = m.RecordBackupVerifyFailure(source, "", BackupFailureNoBackup, err)
+		return BackupVerifyResult{}, err
 	}
 	blob, err := os.ReadFile(latest.Path)
 	if err != nil {
+		_ = m.RecordBackupVerifyFailure(source, latest.Name, "", err)
 		return BackupVerifyResult{}, err
 	}
 	verifyErr := VerifyEncryptedBackupBlob(latest.Path, blob, cfg.PassphraseFile)
@@ -314,9 +320,11 @@ type BackupCreateResult struct {
 func (m *Manager) CreateBackup(source Source) (BackupCreateResult, error) {
 	cfg, err := m.loadBackupConfig()
 	if err != nil {
+		_ = m.RecordBackupCreateFailure(source, "", BackupFailureConfig, err)
 		return BackupCreateResult{}, err
 	}
 	if err := CheckBackupTargetDir(cfg.Dir); err != nil {
+		_ = m.RecordBackupCreate(source, "", "error", err)
 		return BackupCreateResult{}, err
 	}
 	outcome, err := CreateEncryptedBackup(EncryptedBackupRequest{
@@ -355,6 +363,37 @@ func (m *Manager) RecordBackupCreate(source Source, file, result string, opErr e
 		summary["file"] = file
 	}
 	return m.writeAudit("backup.create", summary, opErr, source)
+}
+
+// RecordBackupCreateFailure 记录尚未进入备份执行链的前置失败；kind 为空
+// 表示现有分类无法描述这次失败。
+func (m *Manager) RecordBackupCreateFailure(source Source, file, kind string, opErr error) error {
+	summary := map[string]any{"result": "error"}
+	if file != "" {
+		summary["file"] = file
+	}
+	if kind != "" {
+		summary["failure_kind"] = kind
+	}
+	return m.writeAudit("backup.create", summary, opErr, source)
+}
+
+// RecordBackupVerify 记录按路径校验备份的结果，命令行与最新备份校验共用。
+func (m *Manager) RecordBackupVerify(source Source, file, result, kind string, opErr error) error {
+	summary := map[string]any{"result": result}
+	if file != "" {
+		summary["file"] = file
+	}
+	if kind != "" {
+		summary["failure_kind"] = kind
+	}
+	return m.writeAudit("backup.verify", summary, opErr, source)
+}
+
+// RecordBackupVerifyFailure 记录按路径校验备份的失败；kind 为空表示现有分
+// 类无法描述这次失败。
+func (m *Manager) RecordBackupVerifyFailure(source Source, file, kind string, opErr error) error {
+	return m.RecordBackupVerify(source, file, "error", kind, opErr)
 }
 
 // BackupConfig 是解析并通过校验的 backup.json：备份目录、保留份数与口令

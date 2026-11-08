@@ -211,31 +211,35 @@ func runBackupVerifyLatest(cmd *cobra.Command) error {
 // re-unmarshal. (A --passphrase-file passed on a plaintext file is ignored,
 // mirroring `import`'s sniff semantics.)
 func runBackupVerify(cmd *cobra.Command, file, passphraseSrc string) error {
+	record := func(result, kind string, runErr error) {
+		recordBackupVerifyAudit(cmd, filepath.Base(file), result, kind, runErr)
+	}
 	blob, err := os.ReadFile(file)
 	if err != nil {
+		record("error", "", err)
 		return err
 	}
 	if vaultio.IsEncrypted(blob) {
-		return verifyEncryptedFile(cmd, file, blob, passphraseSrc)
+		if err := ops.VerifyEncryptedBackupBlob(file, blob, passphraseSrc); err != nil {
+			record("error", ops.BackupVerifyFailureKind(err), err)
+			return err
+		}
+		record("ok", "", nil)
+		fmt.Fprintf(cmd.OutOrStdout(), "ok: %s (decrypted and json structurally valid)\n", filepath.Base(file))
+		return nil
 	}
 	wantSHA, ok := parseSidecar(file + ".sha256")
 	if !ok {
-		return fmt.Errorf("missing or unreadable sidecar %s.sha256", file)
+		err := fmt.Errorf("missing or unreadable sidecar %s.sha256", file)
+		record("error", "", err)
+		return err
 	}
 	if err := verifyWritten(file, wantSHA); err != nil {
+		record("error", "", err)
 		return err
 	}
+	record("ok", "", nil)
 	fmt.Fprintf(cmd.OutOrStdout(), "ok: %s (sha256 verified, json structurally valid)\n", filepath.Base(file))
-	return nil
-}
-
-// verifyEncryptedFile runs the two verify gates on an encrypted backup: the
-// passphrase must decrypt it, and the plaintext must re-parse as a Snapshot.
-func verifyEncryptedFile(cmd *cobra.Command, file string, blob []byte, passphraseSrc string) error {
-	if err := ops.VerifyEncryptedBackupBlob(file, blob, passphraseSrc); err != nil {
-		return err
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "ok: %s (decrypted and json structurally valid)\n", filepath.Base(file))
 	return nil
 }
 
@@ -295,6 +299,7 @@ a mount-present guard, refuse a .git working tree, and take the same lock.`,
 func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, passphraseSrc string, configPath string) error {
 	cfg, err := loadBackupConfig(configPath)
 	if err != nil {
+		recordBackupCreateAuditFailure(cmd, "", ops.BackupFailureConfig, err)
 		return err
 	}
 	if cfg != nil {
@@ -311,10 +316,13 @@ func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, pa
 	// --dir carries no cobra required-annotation anymore (a config file can
 	// supply it), so the requirement is enforced here on the merged value.
 	if dir == "" {
-		return fmt.Errorf("--dir is required (pass --dir, or --config with a dir field)")
+		err := fmt.Errorf("--dir is required (pass --dir, or --config with a dir field)")
+		recordBackupCreateAuditFailure(cmd, "", ops.BackupFailureConfig, err)
+		return err
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
+		recordBackupCreateAuditFailure(cmd, "", "", err)
 		return err
 	}
 	dir = abs
@@ -326,9 +334,11 @@ func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, pa
 	if passphraseSrc != "" {
 		passAbs, err := filepath.Abs(passphraseSrc)
 		if err != nil {
+			recordBackupCreateAuditFailure(cmd, "", "", err)
 			return err
 		}
 		if err := validatePassphraseNotInDir(dir, passAbs); err != nil {
+			recordBackupCreateAuditFailure(cmd, "", "", err)
 			return err
 		}
 	}
@@ -336,6 +346,7 @@ func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, pa
 	// 1. marker (mount-present guard) + 2. .git guardrail (self only, no
 	// ancestor walk) — shared with the ops module's immediate-backup path.
 	if err := ops.CheckBackupTargetDir(dir); err != nil {
+		recordBackupCreateAuditFailure(cmd, "", "", err)
 		return err
 	}
 	// 3. encrypted mode: --passphrase-file present => passphrase-encrypted .sme
@@ -431,6 +442,34 @@ func recordBackupCreateAudit(cmd *cobra.Command, file, result string, runErr err
 	}
 	defer st.Close()
 	if err := ops.New(st).RecordBackupCreate(ops.CLISource(), file, result, runErr); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: backup audit write failed: %v\n", err)
+	}
+}
+
+// recordBackupCreateAuditFailure 记录尚未进入备份执行链的失败。vault 本身
+// 打不开时没有审计表可写，只能向标准错误提示，这种路径保持只报错。
+func recordBackupCreateAuditFailure(cmd *cobra.Command, file, kind string, runErr error) {
+	st, err := openUnlockedStore()
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: cannot open vault to write backup audit: %v\n", err)
+		return
+	}
+	defer st.Close()
+	if err := ops.New(st).RecordBackupCreateFailure(ops.CLISource(), file, kind, runErr); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: backup audit write failed: %v\n", err)
+	}
+}
+
+// recordBackupVerifyAudit 记录按路径校验的结果。vault 本身打不开时没有审
+// 计表可写，只能向标准错误提示，这种路径保持只报错。
+func recordBackupVerifyAudit(cmd *cobra.Command, file, result, kind string, runErr error) {
+	st, err := openUnlockedStore()
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: cannot open vault to write backup audit: %v\n", err)
+		return
+	}
+	defer st.Close()
+	if err := ops.New(st).RecordBackupVerify(ops.CLISource(), file, result, kind, runErr); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: backup audit write failed: %v\n", err)
 	}
 }

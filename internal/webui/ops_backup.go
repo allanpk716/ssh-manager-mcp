@@ -122,6 +122,10 @@ func (s OpsBackupVerifyState) FailureKindText() string {
 		return "文件损坏"
 	case "incomplete":
 		return "文件不完整"
+	case "config":
+		return "备份配置有误"
+	case "no_backup":
+		return "没有备份文件"
 	case "":
 		return "未知原因"
 	default:

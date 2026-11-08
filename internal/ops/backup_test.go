@@ -434,14 +434,62 @@ func TestVerifyLatestBackupWithoutBackupsOrConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 0 {
-		t.Fatalf("没有文件名可记时不应写校验审计：%+v", rows)
+	if len(rows) != 1 || rows[0].Action != "backup.verify" || rows[0].Status != "error" ||
+		!strings.Contains(rows[0].Command, `"failure_kind":"no_backup"`) {
+		t.Fatalf("无备份应写失败审计：%+v", rows)
 	}
 
 	m.backupConfigPath = func() (string, error) { return filepath.Join(root, "missing.json"), nil }
 	if _, err := m.VerifyLatestBackup(CLISource()); err == nil {
 		t.Fatal("配置缺失时应返回错误")
 	}
+}
+
+func TestVerifyLatestBackupPartialFailuresWriteAudit(t *testing.T) {
+	t.Run("配置错误", func(t *testing.T) {
+		m, st, root := newBackupTestManager(t)
+		if err := os.WriteFile(filepath.Join(root, "backup.json"), []byte(`{oops`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := m.VerifyLatestBackup(CLISource())
+		if err == nil {
+			t.Fatal("配置有误应返回错误")
+		}
+		rows, err := st.AuditRows(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].Action != "backup.verify" || rows[0].Status != "error" ||
+			!strings.Contains(rows[0].Command, `"result":"error"`) ||
+			!strings.Contains(rows[0].Command, `"failure_kind":"config"`) {
+			t.Fatalf("配置错误应写失败类别为 config 的审计：%+v", rows)
+		}
+	})
+
+	t.Run("无备份", func(t *testing.T) {
+		m, st, root := newBackupTestManager(t)
+		dir := filepath.Join(root, "backups")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeBackupJSON(t, filepath.Join(root, "backup.json"), dir, 7, filepath.Join(root, "backup.pass"))
+
+		_, err := m.VerifyLatestBackup(WebUISource("192.0.2.23"))
+		if err == nil {
+			t.Fatal("没有任何备份应返回错误")
+		}
+		rows, err := st.AuditRows(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].Action != "backup.verify" || rows[0].Status != "error" ||
+			rows[0].Source != store.AuditSourceWebUI || rows[0].SourceIP != "192.0.2.23" ||
+			!strings.Contains(rows[0].Command, `"result":"error"`) ||
+			!strings.Contains(rows[0].Command, `"failure_kind":"no_backup"`) {
+			t.Fatalf("无备份应写失败类别为 no_backup 的审计：%+v", rows)
+		}
+	})
 }
 
 // prepareCreateBackupEnv 准备带标记文件的备份目录、口令文件与备份配置。
@@ -515,6 +563,28 @@ func TestCreateBackupWritesEncryptedFileAndAudit(t *testing.T) {
 	// 立即备份写入时已回读校验，应算作一次成功校验。
 	if status.Verify == nil || !status.Verify.OK {
 		t.Fatalf("立即备份后状态应显示已校验：%+v", status.Verify)
+	}
+}
+
+func TestCreateBackupConfigFailureWritesAudit(t *testing.T) {
+	m, st, root := newBackupTestManager(t)
+	if err := os.WriteFile(filepath.Join(root, "backup.json"), []byte(`{oops`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := m.CreateBackup(WebUISource("192.0.2.23"))
+	if err == nil {
+		t.Fatal("配置有误应拒绝立即备份")
+	}
+	rows, err := st.AuditRows(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Action != "backup.create" || rows[0].Status != "error" ||
+		rows[0].Source != store.AuditSourceWebUI || rows[0].SourceIP != "192.0.2.23" ||
+		!strings.Contains(rows[0].Command, `"result":"error"`) ||
+		!strings.Contains(rows[0].Command, `"failure_kind":"config"`) {
+		t.Fatalf("配置错误应写失败类别为 config 的立即备份审计：%+v", rows)
 	}
 }
 
