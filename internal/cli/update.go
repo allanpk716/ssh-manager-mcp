@@ -3,9 +3,11 @@ package cli
 // sshmgr update — self-update command assembly (Plan 44 T8; spec
 // 2026-08-29-plan-44-self-update-rename §4.4/§4.5/§4.6). This file is the
 // single home of the command's interaction semantics, evidence lines and
-// exit codes; the mechanics live in internal/updater (T3–T7: version
+// exit codes. Steps 4–9 run in the interface-independent update service in
+// internal/ops (which itself consumes internal/updater verbatim: version
 // arithmetic, transport, discovery, download+checksums, extract, replace,
-// service awareness) and are consumed verbatim.
+// service awareness); this file injects output, confirmation, role and
+// version dependencies, and keeps the heal/service-gate/restart branches.
 //
 // Orchestration (spec §4 + §4.3 + §4.4, pinned order):
 //

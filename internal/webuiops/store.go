@@ -25,6 +25,9 @@ func FromManager(manager *ops.Manager) webui.OpsStore {
 	return managerStore{manager: manager}
 }
 
+// errUpdatesNotWired 表示适配器未挂升级服务；权威端升级页接入前不会走到。
+var errUpdatesNotWired = errors.New("升级服务未接线")
+
 // FromManagerWithUpdates 在运维模块上挂升级服务；升级服务由调用方在进程内
 // 共享，保证同一时间只允许一个升级。
 func FromManagerWithUpdates(manager *ops.Manager, updates *ops.UpdateService) webui.OpsStore {
@@ -97,6 +100,9 @@ func opsAuditQuery(query webui.OpsAuditQuery) ops.AuditQuery {
 }
 
 func (s managerStore) CheckUpdate(instance string) (webui.OpsUpdateStatus, error) {
+	if s.updates == nil {
+		return webui.OpsUpdateStatus{}, errUpdatesNotWired
+	}
 	status, err := s.updates.Check(context.Background(), instance)
 	if err != nil {
 		return webui.OpsUpdateStatus{}, err
@@ -105,6 +111,9 @@ func (s managerStore) CheckUpdate(instance string) (webui.OpsUpdateStatus, error
 }
 
 func (s managerStore) ApplyUpdate(instance, sourceIP string) (webui.OpsUpdateApplyResult, error) {
+	if s.updates == nil {
+		return webui.OpsUpdateApplyResult{}, errUpdatesNotWired
+	}
 	result, err := s.updates.Apply(context.Background(), ops.UpdateApplyRequest{
 		Instance: instance, Source: ops.WebUISource(sourceIP),
 	})
