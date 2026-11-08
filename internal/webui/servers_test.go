@@ -540,3 +540,214 @@ func TestStandaloneServerWritesNeedNoReverify(t *testing.T) {
 		t.Fatalf("单机删除状态码 = %d，应为 303", del.StatusCode)
 	}
 }
+
+// TestServerPagesRequireSession 覆盖安全要求：服务器页所有需要会话的页面
+// 在未携带会话时被拒绝，不能向未登录访问者泄露详情或预览。
+func TestServerPagesRequireSession(t *testing.T) {
+	store := newStubServerStore()
+	h, _ := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
+	targets := []string{
+		"/ui/servers/srv-fine",
+		"/ui/servers/srv-fine/edit",
+		"/ui/servers/srv-fine/delete",
+		"/ui/servers/import",
+		"/ui/servers/complete?queue=srv-bare&position=0",
+		"/ui/servers/complete/result?queue=srv-bare",
+	}
+	for _, target := range targets {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.Host = "127.0.0.1:18080"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		body := readResponseBody(t, rec.Result())
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("未登录访问 %s 状态码 = %d，应为 401：\n%s", target, rec.Code, body)
+		}
+		if !strings.Contains(body, "需要启动会话") {
+			t.Fatalf("未登录访问 %s 应显示会话错误页：\n%s", target, body)
+		}
+	}
+}
+
+// TestAccessPagesRequireSession 覆盖安全要求：访问区域页面未携带会话时被拒
+// 绝，单机回环返回会话错误页。
+func TestAccessPagesRequireSession(t *testing.T) {
+	store := newStubServerStore()
+	h, _ := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
+	for _, target := range []string{"/ui/access/", "/ui/access/profiles", "/ui/access/profiles/profile-1/grants", "/ui/access/projects"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.Host = "127.0.0.1:18080"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		body := readResponseBody(t, rec.Result())
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("未登录访问 %s 状态码 = %d，应为 401：\n%s", target, rec.Code, body)
+		}
+		if !strings.Contains(body, "需要启动会话") {
+			t.Fatalf("未登录访问 %s 应显示会话错误页：\n%s", target, body)
+		}
+	}
+}
+
+// TestAuthorityPagesRequireSession 覆盖安全要求：权威端所有需要会话的页面
+// 未登录时跳转登录页，而不是显示页面内容。
+func TestAuthorityPagesRequireSession(t *testing.T) {
+	store := newStubServerStore()
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: store, ServerWriter: &stubServerWriter{},
+		Access: &stubAccessStore{}, Auth: &fakeAuthorityAuth{passwordSet: true, password: "correct-password"},
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"},
+		Port:                   7879,
+		Now:                    func() time.Time { return time.Unix(1800000000, 0) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := []string{
+		"/ui/servers/srv-fine",
+		"/ui/servers/srv-fine/edit",
+		"/ui/servers/srv-fine/delete",
+		"/ui/servers/import",
+		"/ui/servers/complete?queue=srv-bare&position=0",
+		"/ui/servers/complete/result?queue=srv-bare",
+		"/ui/access/profiles",
+		"/ui/access/profiles/profile-1/grants",
+		"/ui/access/projects",
+		"/ui/access/device-codes",
+		"/ui/access/pairing/list",
+	}
+	for _, target := range targets {
+		resp := authorityGetNoSession(t, handler, target)
+		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != loginPath {
+			t.Fatalf("未登录访问 %s 应跳转登录页，状态码=%d 跳转=%s", target, resp.StatusCode, resp.Header.Get("Location"))
+		}
+		resp.Body.Close()
+	}
+}
+
+func authorityGetNoSession(t *testing.T, handler http.Handler, target string) *http.Response {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.Host = "127.0.0.1:7879"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec.Result()
+}
+
+// TestAuthorityImportWithProfileNeedsRecentVerify 授权 profile 属于扩大权
+// 限：权威端导入执行选了 profile 时，要求 5 分钟内重新验证过管理员口令。
+func TestAuthorityImportWithProfileNeedsRecentVerify(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{}
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
+	now := time.Unix(1800000000, 0)
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: store, ServerWriter: writer, Access: &stubAccessStore{}, Auth: auth,
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+	now = now.Add(6 * time.Minute)
+
+	planPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/import", cookie)
+	planCSRF := hiddenInputValue(t, readResponseBody(t, planPage), "csrf_token")
+	resp := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/import/run", url.Values{
+		"csrf_token": {planCSRF},
+		"path":       {"/home/owner/.ssh/config"}, "candidate": {"web"}, "profile": {"profile-1"},
+	}, cookie)
+	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "/ui/reverify") {
+		t.Fatalf("未验证的带 profile 导入应跳转重新验证，状态码=%d 跳转=%s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if len(writer.importRuns) != 0 {
+		t.Fatal("未验证时不得执行导入")
+	}
+
+	// 重新验证后回到候选页；再次提交通过。
+	next := resp.Header.Get("Location")
+	reverify := authorityGet(t, handler, "127.0.0.1:7879", next, cookie)
+	reverifyBody := readResponseBody(t, reverify)
+	verified := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/reverify", url.Values{
+		"csrf_token": {hiddenInputValue(t, reverifyBody, "csrf_token")},
+		"password":   {"correct-password"}, "next": {hiddenInputValue(t, reverifyBody, "next")},
+	}, cookie)
+	if verified.StatusCode != http.StatusSeeOther {
+		t.Fatalf("重新验证状态码 = %d", verified.StatusCode)
+	}
+	after := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/import/run", url.Values{
+		"csrf_token": {planCSRF},
+		"path":       {"/home/owner/.ssh/config"}, "candidate": {"web"}, "profile": {"profile-1"},
+	}, cookie)
+	if after.StatusCode != http.StatusOK || len(writer.importRuns) != 1 || writer.importRuns[0].profile != "profile-1" {
+		t.Fatalf("验证后的导入应执行，状态码=%d 提交记录=%+v", after.StatusCode, writer.importRuns)
+	}
+}
+
+// TestAuthorityClearCredentialNeedsRecentVerify 清除凭据同样是凭据写入：
+// 权威端未重新验证时被拒，验证后通过。
+func TestAuthorityClearCredentialNeedsRecentVerify(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{}
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
+	now := time.Unix(1800000000, 0)
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: store, ServerWriter: writer, Access: &stubAccessStore{}, Auth: auth,
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+	now = now.Add(6 * time.Minute)
+
+	editPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine/edit", cookie)
+	editCSRF := hiddenInputValue(t, readResponseBody(t, editPage), "csrf_token")
+	form := url.Values{
+		"csrf_token": {editCSRF},
+		"server_id":  {"srv-fine"}, "name": {"fine"}, "host": {"192.0.2.10"}, "port": {"22"},
+		"user":       {"root"}, "shell": {"posix"}, "revision": {"4"},
+		"credential_action": {"clear"},
+	}
+	resp := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine/edit", form, cookie)
+	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "/ui/reverify") {
+		t.Fatalf("未验证的清除凭据应跳转重新验证，状态码=%d 跳转=%s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if len(writer.edits) != 0 {
+		t.Fatal("未验证时不得清除凭据")
+	}
+}
+
+// TestAuthorityCompleteSudoPasswordNeedsRecentVerify 补全页的 sudo 密码输入
+// 同样受重新验证门控：未验证时不显示输入框。
+func TestAuthorityCompleteSudoPasswordNeedsRecentVerify(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{}
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
+	now := time.Unix(1800000000, 0)
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: store, ServerWriter: writer, Access: &stubAccessStore{}, Auth: auth,
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+	now = now.Add(6 * time.Minute)
+
+	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/complete?queue=srv-fine&position=0", cookie)
+	body := readResponseBody(t, page)
+	if !strings.Contains(body, "重新验证后才能填写密码") {
+		t.Fatalf("未验证的补全页应提示重新验证：\n%s", body)
+	}
+	if strings.Contains(body, `name="sudo_password"`) {
+		t.Fatalf("未验证的补全页不应显示 sudo 密码输入框：\n%s", body)
+	}
+}

@@ -252,10 +252,27 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	}
 	h.mux.HandleFunc(startPath, h.handleStart)
 	h.mux.HandleFunc("/ui/assets/", h.handleAsset)
-	h.mux.HandleFunc(listPath, h.handleUIRoot)
+	h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
 	h.registerAccessRoutes()
 	h.registerServerRoutes()
 	return h, Startup{token: token}, nil
+}
+
+// requireSession 是所有需要会话的页面的统一包装：未携带有效会话时，单机
+// 与客户端回环模式显示会话错误页，权威端跳转登录页；启动入口、静态资源、
+// 登录与注销等不需要会话的路径不使用这个包装。
+func (h *handler) requireSession(page http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.currentSession(r) == nil {
+			if h.cfg.Role == RoleServer {
+				http.Redirect(w, r, loginPath, http.StatusSeeOther)
+				return
+			}
+			h.renderSessionRequired(w, r)
+			return
+		}
+		page(w, r)
+	}
 }
 
 // ServeHTTP 让 handler 直接作为 http.Server 的根处理器使用。所有请求（包括
@@ -369,11 +386,6 @@ func (h *handler) handleStart(w http.ResponseWriter, r *http.Request) {
 // handleUIRoot 是 /ui/ 前缀的总入口：精确命中服务器列表页时要求有效会话，
 // 其余地址按会话状态返回 401 或中文 404 页。
 func (h *handler) handleUIRoot(w http.ResponseWriter, r *http.Request) {
-	sess := h.currentSession(r)
-	if sess == nil {
-		h.renderSessionRequired(w, r)
-		return
-	}
 	if r.URL.Path != listPath {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return

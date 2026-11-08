@@ -206,15 +206,15 @@ const (
 // registerServerRoutes 注册服务器页路由。列表与详情所有角色可用；写路由只
 // 在提供了写来源的角色注册，客户端的写路由不存在。
 func (h *handler) registerServerRoutes() {
-	h.mux.HandleFunc(serversPrefix, h.handleServerEntry)
+	h.mux.HandleFunc(serversPrefix, h.requireSession(h.handleServerEntry))
 	if h.cfg.ServerWriter == nil {
 		return
 	}
-	h.mux.HandleFunc(serversImportPath, h.handleServerImport)
-	h.mux.HandleFunc(serversPlanPath, h.handleServerImportPlan)
-	h.mux.HandleFunc(serversRunPath, h.handleServerImportRun)
-	h.mux.HandleFunc(serversCompletePath, h.handleServerComplete)
-	h.mux.HandleFunc(serversResultPath, h.handleServerCompleteResult)
+	h.mux.HandleFunc(serversImportPath, h.requireSession(h.handleServerImport))
+	h.mux.HandleFunc(serversPlanPath, h.requireSession(h.handleServerImportPlan))
+	h.mux.HandleFunc(serversRunPath, h.requireSession(h.handleServerImportRun))
+	h.mux.HandleFunc(serversCompletePath, h.requireSession(h.handleServerComplete))
+	h.mux.HandleFunc(serversResultPath, h.requireSession(h.handleServerCompleteResult))
 }
 
 // handleServerList 渲染服务器列表；attention=1 时只显示需要注意的服务器并
@@ -410,6 +410,8 @@ func serverFormWritesCredential(form ServerEditForm) bool {
 		return form.KeyContent != ""
 	case "key-passphrase":
 		return form.KeyPassphrase != ""
+	case "clear":
+		return true
 	}
 	return false
 }
@@ -475,18 +477,32 @@ func (h *handler) handleServerImport(w http.ResponseWriter, r *http.Request) {
 	h.renderPage(w, r, http.StatusOK, "servers-import.tmpl", pageData{Title: "导入 SSH 配置"})
 }
 
-// handleServerImportPlan 是导入第二步：候选清单，默认全选。
+// handleServerImportPlan 是导入第二步：候选清单，默认全选。POST 提交路径；
+// GET 携带路径与 profile 查询参数时恢复同一张候选页。
 func (h *handler) handleServerImportPlan(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "候选清单只接受 POST 请求。")
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		path := strings.TrimSpace(r.URL.Query().Get("path"))
+		if path == "" {
+			http.Redirect(w, r, serversImportPath, http.StatusSeeOther)
+			return
+		}
+		h.renderServerImportPlan(w, r, path, r.URL.Query().Get("profile"))
 		return
 	}
-	path := strings.TrimSpace(r.PostFormValue("path"))
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "候选清单只接受 GET 与 POST 请求。")
+		return
+	}
+	h.renderServerImportPlan(w, r, strings.TrimSpace(r.PostFormValue("path")), r.PostFormValue("profile"))
+}
+
+// renderServerImportPlan 解析 SSH 配置并渲染候选页；GET 用于重新验证后按原
+// 路径与 profile 恢复表单。
+func (h *handler) renderServerImportPlan(w http.ResponseWriter, r *http.Request, path, profile string) {
 	if path == "" {
 		h.renderError(w, r, http.StatusBadRequest, "读取 SSH 配置失败", "SSH 配置路径不能为空。")
 		return
 	}
-	profile := r.PostFormValue("profile")
 	plan, err := h.cfg.ServerWriter.ImportPlan(path, profile)
 	if err != nil {
 		h.renderPage(w, r, http.StatusBadRequest, "servers-import-plan.tmpl", pageData{
@@ -510,7 +526,13 @@ func (h *handler) handleServerImportRun(w http.ResponseWriter, r *http.Request) 
 		h.renderError(w, r, http.StatusBadRequest, "导入失败", "SSH 配置路径不能为空。")
 		return
 	}
-	run, err := h.cfg.ServerWriter.ImportRun(path, r.PostForm["candidate"], r.PostFormValue("profile"), ServerWriteSource{RemoteAddress: remoteIP(r)})
+	profile := r.PostFormValue("profile")
+	if profile != "" && h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+		resume := url.Values{"path": {path}, "profile": {profile}}
+		http.Redirect(w, r, reverifyPath(serversPlanPath+"?"+resume.Encode()), http.StatusSeeOther)
+		return
+	}
+	run, err := h.cfg.ServerWriter.ImportRun(path, r.PostForm["candidate"], profile, ServerWriteSource{RemoteAddress: remoteIP(r)})
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "导入失败", err.Error())
 		return
@@ -618,7 +640,7 @@ func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, que
 		// 共用凭据的机器清单由写来源在保存时返回；表单先按当前条目标注。
 		view.SharedKeyServers = []string{detail.Name}
 	}
-	if (view.ShowPassword || view.ShowKeyPassphrase) && h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
 		view.NeedsReverify = true
 		view.ReverifyPath = reverifyPath(completeResumePath(queue, position, counts))
 	}

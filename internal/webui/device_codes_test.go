@@ -204,11 +204,14 @@ func TestDeviceCodeRoutesMissingOnNonAuthorityRoles(t *testing.T) {
 	clientCookie := clientSession.Cookies()[0]
 	clientSession.Body.Close()
 
-	for _, handler := range []http.Handler{standalone, client} {
+	for _, item := range []struct {
+		handler http.Handler
+		cookie  *http.Cookie
+	}{{standalone, standaloneCookie}, {client, clientCookie}} {
 		for _, target := range []string{
 			"/ui/access/device-codes", "/ui/access/device-codes/device-1/revoke",
 		} {
-			resp := doGetWithCookie(t, handler, standaloneCookie, target)
+			resp := doGetWithCookie(t, item.handler, item.cookie, target)
 			resp.Body.Close()
 			if resp.StatusCode != http.StatusNotFound {
 				t.Fatalf("%s 不应存在，状态码=%d", target, resp.StatusCode)

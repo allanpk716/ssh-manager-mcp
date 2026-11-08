@@ -137,19 +137,19 @@ const (
 // registerAccessRoutes 按本机角色注册访问区域路由。客户端只保留区域提示
 // 页；后续配对、设备码、项目令牌页面在各自票据里接入这里的角色分支。
 func (h *handler) registerAccessRoutes() {
-	h.mux.HandleFunc(accessRootPath, h.handleAccessRoot)
+	h.mux.HandleFunc(accessRootPath, h.requireSession(h.handleAccessRoot))
 	if h.cfg.Role == RoleClient || h.cfg.Access == nil {
 		return
 	}
-	h.mux.HandleFunc(accessProfilesPath, h.handleAccessProfiles)
-	h.mux.HandleFunc(accessProfileDeletePath, h.handleAccessProfileDelete)
-	h.mux.HandleFunc(accessProfilesPrefix, h.handleAccessProfileGrants)
-	h.mux.HandleFunc(accessProjectsPath, h.handleAccessProjects)
-	h.mux.HandleFunc(projectRotatePath, h.handleAccessProjectRotate)
-	h.mux.HandleFunc(projectDisablePath, h.handleAccessProjectDisable)
-	h.mux.HandleFunc(projectEnablePath, h.handleAccessProjectEnable)
-	h.mux.HandleFunc(projectRevokePath, h.handleAccessProjectRevoke)
-	h.mux.HandleFunc(projectDeletePath, h.handleAccessProjectDelete)
+	h.mux.HandleFunc(accessProfilesPath, h.requireSession(h.handleAccessProfiles))
+	h.mux.HandleFunc(accessProfileDeletePath, h.requireSession(h.handleAccessProfileDelete))
+	h.mux.HandleFunc(accessProfilesPrefix, h.requireSession(h.handleAccessProfileGrants))
+	h.mux.HandleFunc(accessProjectsPath, h.requireSession(h.handleAccessProjects))
+	h.mux.HandleFunc(projectRotatePath, h.requireSession(h.handleAccessProjectRotate))
+	h.mux.HandleFunc(projectDisablePath, h.requireSession(h.handleAccessProjectDisable))
+	h.mux.HandleFunc(projectEnablePath, h.requireSession(h.handleAccessProjectEnable))
+	h.mux.HandleFunc(projectRevokePath, h.requireSession(h.handleAccessProjectRevoke))
+	h.mux.HandleFunc(projectDeletePath, h.requireSession(h.handleAccessProjectDelete))
 	if h.cfg.Role == RoleServer {
 		h.registerPairingRoutes()
 		h.registerDeviceCodeRoutes()

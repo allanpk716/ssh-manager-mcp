@@ -78,9 +78,9 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	h.mux.HandleFunc("/ui/login", h.handleAuthorityLogin)
 	h.mux.HandleFunc("/ui/logout", h.handleAuthorityLogout)
 	h.mux.HandleFunc("/ui/logout-all", h.handleAuthorityLogoutAll)
-	h.mux.HandleFunc("/ui/password", h.handleAuthorityPassword)
-	h.mux.HandleFunc("/ui/reverify", h.handleAuthorityReverify)
-	h.mux.HandleFunc("/ui/", h.handleAuthorityRoot)
+	h.mux.HandleFunc("/ui/password", h.requireSession(h.handleAuthorityPassword))
+	h.mux.HandleFunc("/ui/reverify", h.requireSession(h.handleAuthorityReverify))
+	h.mux.HandleFunc("/ui/", h.requireSession(h.handleAuthorityRoot))
 	// 访问区域路由按权威端角色注册全部已实现的页面。
 	h.registerAccessRoutes()
 	h.registerServerRoutes()
@@ -128,15 +128,7 @@ func (h *handler) handleAuthorityLoginPage(w http.ResponseWriter, r *http.Reques
 
 func (h *handler) handleAuthorityRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != listPath {
-		if h.currentAuthoritySession(r) == nil {
-			http.Redirect(w, r, loginPath, http.StatusSeeOther)
-			return
-		}
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
-		return
-	}
-	if h.currentAuthoritySession(r) == nil {
-		http.Redirect(w, r, loginPath, http.StatusSeeOther)
 		return
 	}
 	h.handleServerList(w, r)
@@ -322,10 +314,6 @@ func (h *handler) recentlyVerified(sess *session) bool {
 
 func (h *handler) handleAuthorityPassword(w http.ResponseWriter, r *http.Request) {
 	sess := h.currentAuthoritySession(r)
-	if sess == nil {
-		http.Redirect(w, r, loginPath, http.StatusSeeOther)
-		return
-	}
 	if !h.recentlyVerified(sess) {
 		http.Redirect(w, r, "/ui/reverify?next=/ui/password", http.StatusSeeOther)
 		return
@@ -359,10 +347,6 @@ func (h *handler) handleAuthorityPassword(w http.ResponseWriter, r *http.Request
 
 func (h *handler) handleAuthorityReverify(w http.ResponseWriter, r *http.Request) {
 	sess := h.currentAuthoritySession(r)
-	if sess == nil {
-		http.Redirect(w, r, loginPath, http.StatusSeeOther)
-		return
-	}
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		h.renderPage(w, r, http.StatusOK, "reverify.tmpl", pageData{
