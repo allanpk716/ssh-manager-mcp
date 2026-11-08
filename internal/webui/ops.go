@@ -103,6 +103,14 @@ type OpsStore interface {
 	// 取推荐版本。
 	CheckUpdate(instance string) (OpsUpdateStatus, error)
 	ApplyUpdate(instance, sourceIP string) (OpsUpdateApplyResult, error)
+	// ListClientInstances 返回本机客户端实例及材料是否齐全。
+	ListClientInstances() ([]OpsClientInstance, error)
+	// ClientStatus 读取指定客户端实例的连接状态与本地快照摘要。
+	ClientStatus(instance string) (OpsClientStatus, error)
+	// SwitchClientInstance 校验目标实例可切换并写实例本机审计。
+	SwitchClientInstance(instance, sourceIP string) error
+	// SyncClient 立即同步指定客户端实例并写实例本机审计。
+	SyncClient(instance, sourceIP string) (OpsClientStatus, error)
 }
 
 // OpsAuditFilterView 保存过滤表单的当前值，服务器渲染时原样回填。
@@ -133,6 +141,7 @@ func (h *handler) registerOpsRoutes() {
 		h.caps.CanQueryVaultAudit = false
 		h.caps.CanQueryClientAudit = false
 		h.caps.CanUpgradeBinary = false
+		h.caps.CanUseClientOps = false
 		return
 	}
 	// 回环升级页本票只接单机与客户端；权威端的两步升级由后续票接入。
@@ -140,6 +149,11 @@ func (h *handler) registerOpsRoutes() {
 		h.mux.HandleFunc(opsUpdatePath, h.handleOpsUpdate)
 	}
 	if h.cfg.Role == RoleClient {
+		if h.caps.CanUseClientOps {
+			h.mux.HandleFunc(opsClientPath, h.handleOpsClient)
+			h.mux.HandleFunc(opsClientSyncPath, h.handleOpsClientSync)
+			h.mux.HandleFunc(opsClientInstancePath, h.handleOpsClientInstance)
+		}
 		if h.caps.CanQueryClientAudit {
 			h.mux.HandleFunc(opsClientAuditPath, h.handleOpsClientAudit)
 		}
@@ -161,6 +175,8 @@ func (h *handler) handleOpsRoot(w http.ResponseWriter, r *http.Request) {
 	target := opsAuditPath
 	if h.cfg.Role == RoleClient {
 		switch {
+		case h.caps.CanUseClientOps:
+			target = opsClientPath
 		case h.caps.CanQueryClientAudit:
 			target = opsClientAuditPath
 		case h.caps.CanUpgradeBinary:

@@ -43,7 +43,7 @@ func TestStandaloneUIServerSourceReadsVault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := standaloneUIServerSource{}.Servers()
+	got, err := standaloneUIServerSource{}.Servers("")
 	if err != nil {
 		t.Fatalf("读取单机服务器列表失败：%v", err)
 	}
@@ -166,7 +166,7 @@ func TestClientUIServerSourceReadsSnapshot(t *testing.T) {
 	}}
 	seedClientCacheSnapshot(t, snap, "")
 
-	got, err := clientUIServerSource{}.Servers()
+	got, err := clientUIServerSource{}.Servers("")
 	if err != nil {
 		t.Fatalf("读取客户端服务器列表失败：%v", err)
 	}
@@ -208,7 +208,7 @@ func TestClientUIServerSourceHonorsInstance(t *testing.T) {
 		{ID: "n", Name: "笔记本实例服务器", User: "u", Host: "192.0.2.20", Port: 22, CredentialID: "c", Role: "r"},
 	}}, "laptop")
 
-	got, err := clientUIServerSource{instance: "laptop"}.Servers()
+	got, err := clientUIServerSource{}.Servers("laptop")
 	if err != nil {
 		t.Fatalf("读取指定实例服务器列表失败：%v", err)
 	}

@@ -46,7 +46,7 @@ type ServerRow struct {
 // ServerSource 是 Web UI 读取服务器列表的唯一入口，由命令行按本机角色提供
 // 单机 vault 来源或客户端快照来源。
 type ServerSource interface {
-	Servers() ([]ServerRow, error)
+	Servers(instance string) ([]ServerRow, error)
 }
 
 // Config 是 Web UI Handler 的构造参数。Port 同时用于会话 cookie 命名与
@@ -61,9 +61,8 @@ type Config struct {
 	// ServePort 是权威端主监听端口，设备码拉取命令按它拼地址；未提供时
 	// 按默认端口兜底。单机与客户端不使用这个字段。
 	ServePort int
-	// ClientInstance 是客户端角色本次启动读取的客户端缓存实例名；空串表示
-	// 默认实例。客户端升级页与本机审计页都先按它读取，会话内切换实例由后
-	// 续客户端页改为按请求传入。
+	// ClientInstance 是客户端角色启动时选定的客户端缓存实例名；空串表示默认
+	// 实例。浏览器会话以它为初始值，切换只保存在进程内会话里。
 	ClientInstance         string
 	Now                    func() time.Time
 	Auth                   AuthStore
@@ -154,8 +153,7 @@ type capabilities struct {
 	CanRestartService bool
 	// CanQueryVaultAudit 控制单机与权威端的权威 vault 审计页。
 	CanQueryVaultAudit bool
-	// CanUseClientOps 控制客户端页（连接状态、立即同步与实例切换），由后
-	// 续客户端页票接入。
+	// CanUseClientOps 控制客户端页（连接状态、立即同步与实例切换）。
 	CanUseClientOps bool
 	// CanQueryClientAudit 只对客户端开放，控制本机审计页。
 	CanQueryClientAudit bool
@@ -170,7 +168,8 @@ func capabilitiesForRole(role Role) capabilities {
 			ReadOnlyNotice:    "这里只读，修改需到权威端 Web UI 去做。",
 			ShowAccessArea:    true,
 			CanManageProfiles: false,
-			ShowOpsArea:       true, CanUpgradeBinary: true, CanQueryClientAudit: true,
+			ShowOpsArea:       true, CanUpgradeBinary: true, CanUseClientOps: true,
+			CanQueryClientAudit: true,
 		}
 	}
 	if role == RoleServer {
@@ -206,12 +205,13 @@ func (s Startup) URL(hostPort string) string {
 // session 是回环模式的进程内会话：标识与防跨站请求伪造令牌都只在内存里，
 // 进程退出即全部失效。
 type session struct {
-	id           string
-	csrf         string
-	accessFlash  *AccessFlash
-	generation   int64
-	lastActive   time.Time
-	lastVerified time.Time
+	id             string
+	csrf           string
+	clientInstance string
+	accessFlash    *AccessFlash
+	generation     int64
+	lastActive     time.Time
+	lastVerified   time.Time
 }
 
 // handler 是回环模式 Web UI 的根处理器，所有路由都在 /ui/ 前缀下。
@@ -370,6 +370,7 @@ func (h *handler) handleStart(w http.ResponseWriter, r *http.Request) {
 	valid := !h.startUsed && subtle.ConstantTimeCompare(digest[:], h.startDigest[:]) == 1
 	if valid {
 		h.startUsed = true
+		sess.clientInstance = h.cfg.ClientInstance
 		h.session = sess
 	}
 	h.mu.Unlock()
@@ -399,12 +400,36 @@ func (h *handler) handleUIRoot(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
-	rows, err := h.cfg.Servers.Servers()
+	rows, err := h.cfg.Servers.Servers(h.requestClientInstance(r))
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请重新运行 `sshmgr ui`。")
 		return
 	}
 	h.renderPage(w, r, http.StatusOK, "servers.tmpl", pageData{Title: "服务器", Servers: sortNeedsAttentionFirst(rows)})
+}
+
+// requestClientInstance 返回当前浏览器会话选中的客户端实例；没有会话时退回
+// `sshmgr ui` 启动时解析的实例。非客户端角色不使用这个值。
+func (h *handler) requestClientInstance(r *http.Request) string {
+	if h.cfg.Role != RoleClient {
+		return ""
+	}
+	if sess := h.currentSession(r); sess != nil {
+		h.mu.Lock()
+		instance := sess.clientInstance
+		h.mu.Unlock()
+		return instance
+	}
+	return h.cfg.ClientInstance
+}
+
+// setSessionClientInstance 更新当前浏览器会话中的客户端实例。
+func (h *handler) setSessionClientInstance(r *http.Request, instance string) {
+	if sess := h.currentSession(r); sess != nil {
+		h.mu.Lock()
+		sess.clientInstance = instance
+		h.mu.Unlock()
+	}
 }
 
 // renderSessionRequired 输出需要重新启动 Web UI 的会话错误页。

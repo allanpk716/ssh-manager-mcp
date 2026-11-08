@@ -259,6 +259,8 @@ type UpdateApplyResult struct {
 
 // UpdateAuditEntry 是升级动作写审计时使用的摘要字段；不含任何令牌。
 type UpdateAuditEntry struct {
+	// Instance 记录客户端升级动作应写入哪个实例的审计日志；单机为空串。
+	Instance   string
 	Action     string
 	OldVersion string
 	NewVersion string
@@ -362,7 +364,8 @@ func (s *UpdateService) Apply(ctx context.Context, req UpdateApplyRequest) (Upda
 		result.Warning = strings.Join(nonEmpty(result.Warning, warning), "；")
 	}
 	entry := UpdateAuditEntry{
-		Action: "update.apply", OldVersion: result.OldVersion, NewVersion: result.NewVersion,
+		Instance: req.Instance,
+		Action:   "update.apply", OldVersion: result.OldVersion, NewVersion: result.NewVersion,
 		Result: "ok", Detail: result.Warning,
 	}
 	s.writeAudit(req.Source, entry)

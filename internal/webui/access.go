@@ -263,7 +263,7 @@ func (h *handler) handleAccessProfileGrants(w http.ResponseWriter, r *http.Reque
 		h.renderError(w, r, http.StatusNotFound, "profile 不存在", "请求的 profile 不存在。")
 		return
 	}
-	servers, err := h.cfg.Servers.Servers()
+	servers, err := h.cfg.Servers.Servers("")
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请稍后重试。")
 		return
@@ -383,7 +383,7 @@ func (h *handler) takeAccessFlash(r *http.Request) *AccessFlash {
 }
 
 func (h *handler) renderGrantConflict(w http.ResponseWriter, r *http.Request, status int, profileID string, conflict *AccessGrantConflict) {
-	servers, err := h.cfg.Servers.Servers()
+	servers, err := h.cfg.Servers.Servers("")
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "授权冲突后读取服务器列表失败，请稍后重试。")
 		return
