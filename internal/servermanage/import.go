@@ -256,6 +256,11 @@ func (m *Manager) profileIDByName(name string) (string, error) {
 	return "", fmt.Errorf("profile %q not found（可先创建 profile 再导入）", name)
 }
 
+// Profiles 返回全部 profile，供导入计划页提供授权选项。
+func (m *Manager) Profiles() ([]*models.Profile, error) {
+	return m.st.ListProfiles()
+}
+
 // currentUserName 是 SSH 配置里 User 省略时的兜底用户名：先取操作系统当前
 // 用户，再退回环境变量。
 func currentUserName() string {

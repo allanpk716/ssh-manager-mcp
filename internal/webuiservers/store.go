@@ -328,6 +328,13 @@ func ImportPlanView(manager *servermanage.Manager, path, profile string) (*webui
 	view := &webui.ServerImportPlanView{
 		Path: plan.Path, MatchWarning: plan.MatchWarning, ProfileID: plan.ProfileID,
 	}
+	profiles, err := manager.Profiles()
+	if err != nil {
+		return nil, err
+	}
+	for _, profile := range profiles {
+		view.Profiles = append(view.Profiles, webui.ServerProfileOption{ID: profile.ID, Name: profile.Name})
+	}
 	for _, cand := range plan.Candidates {
 		view.Candidates = append(view.Candidates, webui.ServerImportCandidateView{
 			Name: cand.Name, User: cand.User, Host: cand.Host, Port: cand.Port, Note: noteLabel(cand.Note),
