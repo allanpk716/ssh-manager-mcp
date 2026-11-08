@@ -115,8 +115,13 @@ func TestOpsAuditRoutesFollowRole(t *testing.T) {
 	}
 
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
+	opsRows := []OpsAuditRow{
+		{ID: 3, Action: "admin.login", Status: "ok", Source: "web_ui", SourceIP: "198.51.100.9"},
+		{ID: 2, Action: "admin.login_fail", Status: "error", Source: "web_ui", SourceIP: "198.51.100.9"},
+		{ID: 1, Action: "admin.lockout", Status: "blocked", Source: "web_ui", SourceIP: "198.51.100.9"},
+	}
 	authority, _, err := NewAuthority(Config{
-		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{}, Ops: &stubOpsStore{},
+		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{}, Ops: &stubOpsStore{rows: opsRows},
 		Auth: auth, AllowedHosts: []string{"127.0.0.1"}, Port: 7879,
 	})
 	if err != nil {
@@ -130,6 +135,11 @@ func TestOpsAuditRoutesFollowRole(t *testing.T) {
 	}
 	if !strings.Contains(authorityBody, `aria-label="运维区域"`) {
 		t.Fatalf("权威端导航应显示运维区域：\n%s", authorityBody)
+	}
+	for _, action := range []string{"admin.login", "admin.login_fail", "admin.lockout"} {
+		if !strings.Contains(authorityBody, action) || !strings.Contains(authorityBody, "198.51.100.9") {
+			t.Fatalf("权威端审计页应显示 %s 与来源地址：\n%s", action, authorityBody)
+		}
 	}
 
 	client, clientStartup, err := New(Config{
