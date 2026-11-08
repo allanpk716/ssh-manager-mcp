@@ -12,8 +12,9 @@ import (
 )
 
 type managerStore struct {
-	manager *ops.Manager
-	updates *ops.UpdateService
+	manager  *ops.Manager
+	updates  *ops.UpdateService
+	restarts *ops.RestartService
 }
 
 type openerStore struct {
@@ -29,10 +30,19 @@ func FromManager(manager *ops.Manager) webui.OpsStore {
 // errUpdatesNotWired 表示适配器未挂升级服务；权威端升级页接入前不会走到。
 var errUpdatesNotWired = errors.New("升级服务未接线")
 
+// errRestartNotWired 表示权威端适配器未挂服务重启服务。
+var errRestartNotWired = errors.New("服务重启未接线")
+
 // FromManagerWithUpdates 在运维模块上挂升级服务；升级服务由调用方在进程内
 // 共享，保证同一时间只允许一个升级。
 func FromManagerWithUpdates(manager *ops.Manager, updates *ops.UpdateService) webui.OpsStore {
 	return managerStore{manager: manager, updates: updates}
+}
+
+// FromManagerWithAuthorityUpdates 同时挂上升级服务与服务重启服务，供权威
+// 端 Web UI 使用。
+func FromManagerWithAuthorityUpdates(manager *ops.Manager, updates *ops.UpdateService, restarts *ops.RestartService) webui.OpsStore {
+	return managerStore{manager: manager, updates: updates, restarts: restarts}
 }
 
 // FromOpenerWithUpdates 组合按请求打开存储的运维模块与进程内共享的升级服务。
@@ -50,6 +60,7 @@ func FromOpener(open func() (*ops.Manager, func(), error)) webui.OpsStore {
 // 用；权威 vault 审计在客户端角色没有入口，调用时返回明确错误。
 type clientAuditStore struct {
 	updates *ops.UpdateService
+	pull    ops.ClientPullFunction
 }
 
 // ClientAuditStore 返回客户端角色的运维窄接口适配器。
@@ -61,6 +72,12 @@ func ClientAuditStore() webui.OpsStore {
 // 仍读实例审计日志文件，升级按进程内共享的服务执行。
 func ClientAuditStoreWithUpdates(updates *ops.UpdateService) webui.OpsStore {
 	return clientAuditStore{updates: updates}
+}
+
+// ClientPageStoreWithUpdates 在客户端适配器上接入客户端页与立即同步；pull 由
+// 命令行层注入，映射到 `cache pull` 共用的实现，避免包之间形成循环依赖。
+func ClientPageStoreWithUpdates(updates *ops.UpdateService, pull ops.ClientPullFunction) webui.OpsStore {
+	return clientAuditStore{updates: updates, pull: pull}
 }
 
 func (clientAuditStore) QueryAudit(query webui.OpsAuditQuery) ([]webui.OpsAuditRow, error) {
@@ -443,6 +460,13 @@ func (s managerStore) ApplyUpdate(instance, sourceIP string) (webui.OpsUpdateApp
 	return webui.OpsUpdateApplyResult{
 		OldVersion: result.OldVersion, NewVersion: result.NewVersion, Warning: result.Warning,
 	}, nil
+}
+
+func (s managerStore) RequestServiceRestart(sourceIP string, afterResponse func(func())) error {
+	if s.restarts == nil {
+		return errRestartNotWired
+	}
+	return s.restarts.Request(ops.WebUISource(sourceIP), afterResponse)
 }
 
 func (s openerStore) CheckUpdate(instance string) (webui.OpsUpdateStatus, error) {

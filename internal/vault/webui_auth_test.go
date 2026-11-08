@@ -144,6 +144,6 @@ func TestAuthorityHandlerUsesVaultAuthStore(t *testing.T) {
 
 type fixedVaultUIRows struct{}
 
-func (fixedVaultUIRows) Servers() ([]webui.ServerRow, error) {
+func (fixedVaultUIRows) Servers(string) ([]webui.ServerRow, error) {
 	return []webui.ServerRow{{Name: "权威服务器"}}, nil
 }

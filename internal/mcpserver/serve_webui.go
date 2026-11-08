@@ -24,7 +24,7 @@ type serveWebUIServerSource struct {
 	store *store.Store
 }
 
-func (s serveWebUIServerSource) Servers() ([]webui.ServerRow, error) {
+func (s serveWebUIServerSource) Servers(string) ([]webui.ServerRow, error) {
 	servers, err := s.store.ListServers()
 	if err != nil {
 		return nil, err
@@ -97,13 +97,19 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		logStartup("推导 Web UI 监听地址失败，先只监听 127.0.0.1：%v", planErr)
 		plan = loopbackPlan
 	}
+	opsManager := ops.NewWithSettingInputs(st, webUISettingInputs(serveOpts))
+	updates := ops.NewUpdateService(ops.UpdateDependencies{Audit: opsManager.WriteUpdateAudit})
+	restarts := ops.NewRestartService(ops.RestartDependencies{
+		NewService: serveOpts.ServiceRestarterFactory,
+		Audit:      opsManager.WriteRestartAudit,
+	})
 	handler, control, err := webui.NewAuthority(webui.Config{
 		Role: webui.RoleServer, Port: port,
 		Servers: serveWebUIServerSource{store: st},
 		Access: webuiaccess.FromManager(access.New(st, access.WithServeCertFingerprint(func() (string, error) {
 			return fingerprint, nil
 		}))),
-		Ops:                    webuiops.FromManager(ops.NewWithSettingInputs(st, webUISettingInputs(serveOpts))),
+		Ops:                    webuiops.FromManagerWithAuthorityUpdates(opsManager, updates, restarts),
 		Auth:                   vault.NewWebUIAuthStore(st),
 		CertificateFingerprint: fingerprint,
 		AllowedHosts:           plan.Addresses,

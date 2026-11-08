@@ -20,7 +20,7 @@ import (
 type standaloneUIServerSource struct{}
 
 // Servers 读取本机 vault 中的全部服务器并转成 Web UI 展示行。
-func (standaloneUIServerSource) Servers() ([]webui.ServerRow, error) {
+func (standaloneUIServerSource) Servers(string) ([]webui.ServerRow, error) {
 	st, err := openUnlockedStore()
 	if err != nil {
 		return nil, err
@@ -61,15 +61,13 @@ func standaloneUIOpsStore() webui.OpsStore {
 	})
 }
 
-// clientUIServerSource 是客户端角色的 Web UI 服务器列表来源：读取指定实例的
-// 本地加密快照，实例由命令行按既有规则解析后传入。
-type clientUIServerSource struct {
-	instance string
-}
+// clientUIServerSource 是客户端角色的 Web UI 服务器列表来源：按每次请求传入
+// 的实例读取本地加密快照。
+type clientUIServerSource struct{}
 
 // Servers 读取当前实例本地快照中的服务器并转成 Web UI 展示行。
-func (s clientUIServerSource) Servers() ([]webui.ServerRow, error) {
-	snap, err := clientops.LoadCacheSnapshotFor(s.instance)
+func (clientUIServerSource) Servers(instance string) ([]webui.ServerRow, error) {
+	snap, err := clientops.LoadCacheSnapshotFor(instance)
 	if err != nil {
 		return nil, err
 	}

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/updater"
 )
 
@@ -259,6 +260,8 @@ type UpdateApplyResult struct {
 
 // UpdateAuditEntry 是升级动作写审计时使用的摘要字段；不含任何令牌。
 type UpdateAuditEntry struct {
+	// Instance 记录客户端升级动作应写入哪个实例的审计日志；单机为空串。
+	Instance   string
 	Action     string
 	OldVersion string
 	NewVersion string
@@ -362,7 +365,8 @@ func (s *UpdateService) Apply(ctx context.Context, req UpdateApplyRequest) (Upda
 		result.Warning = strings.Join(nonEmpty(result.Warning, warning), "；")
 	}
 	entry := UpdateAuditEntry{
-		Action: "update.apply", OldVersion: result.OldVersion, NewVersion: result.NewVersion,
+		Instance: req.Instance,
+		Action:   "update.apply", OldVersion: result.OldVersion, NewVersion: result.NewVersion,
 		Result: "ok", Detail: result.Warning,
 	}
 	s.writeAudit(req.Source, entry)
@@ -380,6 +384,22 @@ func (s *UpdateService) writeAudit(source Source, entry UpdateAuditEntry) error 
 		return nil
 	}
 	return s.deps.Audit(source, entry)
+}
+
+// WriteUpdateAudit 把替换二进制的结果写入权威 vault 审计表。
+func (m *Manager) WriteUpdateAudit(source Source, entry UpdateAuditEntry) error {
+	summary := map[string]any{
+		"old_version": entry.OldVersion, "new_version": entry.NewVersion, "result": entry.Result,
+	}
+	if entry.Detail != "" {
+		summary["detail"] = entry.Detail
+	}
+	row := store.OwnerAuditRow(entry.Action, summary)
+	row.Source, row.SourceIP = source.AuditFields()
+	if entry.Result != "ok" {
+		row.Status = "error"
+	}
+	return m.st.WriteAudit(row)
 }
 
 func nonEmpty(values ...string) []string {

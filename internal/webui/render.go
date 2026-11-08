@@ -61,9 +61,14 @@ type pageData struct {
 	OpsRole                     OpsRole
 	OpsClientAuditRows          []OpsAuditRow
 	OpsClientInstance           string
+	OpsClientStatus             *OpsClientStatus
+	OpsClientInstances          []OpsClientInstance
+	OpsClientNotice             string
+	OpsClientError              string
 	OpsUpdate                   *OpsUpdateStatus
 	OpsUpdateResult             *OpsUpdateApplyResult
 	OpsUpdateError              *OpsUpdateError
+	OpsUpdateRestarting         bool
 	ErrorTitle                  string
 	ErrorMessage                string
 	AdminPasswordSet            bool
