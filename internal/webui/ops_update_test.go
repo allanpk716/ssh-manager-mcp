@@ -246,20 +246,3 @@ func TestOpsUpdateClientPageUsesStartupInstance(t *testing.T) {
 		t.Fatalf("客户端运维导航应保留本机审计入口：\n%s", body)
 	}
 }
-
-func TestOpsUpdateAuthorityRouteNotInThisTicket(t *testing.T) {
-	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
-	authority, _, err := NewAuthority(Config{
-		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{},
-		Ops: newStubOpsUpdateStore(), Auth: auth, AllowedHosts: []string{"127.0.0.1"}, Port: 7879,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cookie := authoritySuccessfulLogin(t, authority, "127.0.0.1:7879", "correct-password")
-	response := authorityGet(t, authority, "127.0.0.1:7879", "/ui/ops/update", cookie)
-	response.Body.Close()
-	if response.StatusCode != http.StatusNotFound {
-		t.Fatalf("权威端两步升级属后续票，本票不应注册路由，实际 %d", response.StatusCode)
-	}
-}
