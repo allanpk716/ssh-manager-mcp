@@ -203,13 +203,16 @@ type authorityPasswordCheck struct {
 }
 
 func (h *handler) checkAuthorityPassword(ip, password string, now time.Time) (authorityPasswordCheck, error) {
+	// 全局延迟在串行锁外等待，否则其他设备排队的请求会把 owner 的登录拖到无限长。
+	if pending, err := h.cfg.Auth.LoginLimit(ip, now); err == nil {
+		h.loginSleep(pending.Delay)
+	}
 	h.loginMu.Lock()
 	defer h.loginMu.Unlock()
 	limit, err := h.cfg.Auth.LoginLimit(ip, now)
 	if err != nil {
 		return authorityPasswordCheck{}, err
 	}
-	h.loginSleep(limit.Delay)
 	if limit.Locked {
 		return authorityPasswordCheck{Limit: limit}, nil
 	}
