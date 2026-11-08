@@ -400,7 +400,8 @@ func TestAuthorityHostOriginAndCSRFGuards(t *testing.T) {
 		Role: RoleServer, Servers: &stubServerSource{}, Auth: auth,
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
-		Now: func() time.Time { return auth.now },
+		Now:   func() time.Time { return auth.now },
+		Sleep: func(time.Duration) {},
 	})
 	if err != nil {
 		t.Fatalf("构造权威端 Web UI 失败：%v", err)
@@ -456,6 +457,91 @@ func TestAuthorityHostOriginAndCSRFGuards(t *testing.T) {
 	}
 	if len(auth.audits) != 0 || len(auth.failures) != 0 {
 		t.Fatalf("写请求防护拒绝不应进入口令校验：%+v %+v", auth.audits, auth.failures)
+	}
+}
+
+func TestAuthorityPasswordChangeRequiresRecentReverification(t *testing.T) {
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "old-password", now: time.Unix(1800000000, 0)}
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: &stubServerSource{}, Auth: auth,
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time { return auth.now },
+	})
+	if err != nil {
+		t.Fatalf("构造权威端 Web UI 失败：%v", err)
+	}
+	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "old-password")
+
+	direct := authorityGet(t, handler, "127.0.0.1:7879", "/ui/password", cookie)
+	directBody, _ := io.ReadAll(direct.Body)
+	direct.Body.Close()
+	if direct.StatusCode != http.StatusOK || !strings.Contains(string(directBody), "新管理员口令") {
+		t.Fatalf("登录后 5 分钟内应直接显示修改口令表单，状态码=%d 页面：\n%s", direct.StatusCode, directBody)
+	}
+
+	auth.now = auth.now.Add(6 * time.Minute)
+	expired := authorityGet(t, handler, "127.0.0.1:7879", "/ui/password", cookie)
+	expired.Body.Close()
+	if expired.StatusCode != http.StatusSeeOther || expired.Header.Get("Location") != "/ui/reverify?next=/ui/password" {
+		t.Fatalf("超过 5 分钟应先重验，状态码=%d 跳转=%q", expired.StatusCode, expired.Header.Get("Location"))
+	}
+
+	reverifyPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/reverify?next=/ui/password", cookie)
+	reverifyBody, _ := io.ReadAll(reverifyPage.Body)
+	reverifyPage.Body.Close()
+	if reverifyPage.StatusCode != http.StatusOK || !strings.Contains(string(reverifyBody), "重新验证") {
+		t.Fatalf("重验页状态码=%d，页面：\n%s", reverifyPage.StatusCode, reverifyBody)
+	}
+	match := regexp.MustCompile(`<input type="hidden" name="csrf_token" value="([^"]+)"`).FindStringSubmatch(string(reverifyBody))
+	if match == nil {
+		t.Fatalf("重验表单缺少防跨站请求伪造令牌：\n%s", reverifyBody)
+	}
+	wrong := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/reverify", url.Values{
+		"password": {"wrong-password"}, "csrf_token": {match[1]}, "next": {"/ui/password"},
+	}, cookie)
+	wrong.Body.Close()
+	if wrong.StatusCode != http.StatusUnauthorized || auth.failures["198.51.100.9"] != 1 {
+		t.Fatalf("重验失败应计入登录失败，状态码=%d failures=%d", wrong.StatusCode, auth.failures["198.51.100.9"])
+	}
+	reverified := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/reverify", url.Values{
+		"password": {"old-password"}, "csrf_token": {match[1]}, "next": {"/ui/password"},
+	}, cookie)
+	reverified.Body.Close()
+	if reverified.StatusCode != http.StatusSeeOther || reverified.Header.Get("Location") != "/ui/password" {
+		t.Fatalf("重验成功应回到修改口令，状态码=%d 跳转=%q", reverified.StatusCode, reverified.Header.Get("Location"))
+	}
+
+	passwordPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/password", cookie)
+	passwordBody, _ := io.ReadAll(passwordPage.Body)
+	passwordPage.Body.Close()
+	match = regexp.MustCompile(`<input type="hidden" name="csrf_token" value="([^"]+)"`).FindStringSubmatch(string(passwordBody))
+	if match == nil {
+		t.Fatalf("修改口令表单缺少防跨站请求伪造令牌：\n%s", passwordBody)
+	}
+	changed := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/password", url.Values{
+		"new_password": {"new-password"}, "confirm_password": {"new-password"}, "csrf_token": {match[1]},
+	}, cookie)
+	changed.Body.Close()
+	if changed.StatusCode != http.StatusSeeOther || changed.Header.Get("Location") != loginPath {
+		t.Fatalf("修改口令后应回登录页，状态码=%d 跳转=%q", changed.StatusCode, changed.Header.Get("Location"))
+	}
+	if auth.password != "new-password" || auth.generation == 0 {
+		t.Fatalf("修改口令应写入新口令并推进会话代：%+v", auth)
+	}
+	oldPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+	oldPage.Body.Close()
+	if oldPage.StatusCode != http.StatusSeeOther {
+		t.Fatalf("修改口令后旧会话应失效，状态码=%d", oldPage.StatusCode)
+	}
+	foundChange := false
+	for _, event := range auth.audits {
+		if event.Action == "web.password.change" && event.SourceIP == "198.51.100.9" {
+			foundChange = true
+		}
+	}
+	if !foundChange {
+		t.Fatalf("修改口令应写入 Web 审计：%+v", auth.audits)
 	}
 }
 

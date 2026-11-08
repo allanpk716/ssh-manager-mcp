@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -77,6 +78,8 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	h.mux.HandleFunc("/ui/login", h.handleAuthorityLogin)
 	h.mux.HandleFunc("/ui/logout", h.handleAuthorityLogout)
 	h.mux.HandleFunc("/ui/logout-all", h.handleAuthorityLogoutAll)
+	h.mux.HandleFunc("/ui/password", h.handleAuthorityPassword)
+	h.mux.HandleFunc("/ui/reverify", h.handleAuthorityReverify)
 	h.mux.HandleFunc("/ui/", h.handleAuthorityRoot)
 	return h, h, nil
 }
@@ -286,6 +289,113 @@ func (h *handler) handleAuthorityLogoutAll(w http.ResponseWriter, r *http.Reques
 	h.clearAuthoritySessionCookie(w)
 	h.writeAuthorityAudit(remoteIP(r), "web.logout.all", "ok", nil)
 	http.Redirect(w, r, loginPath, http.StatusSeeOther)
+}
+
+func (h *handler) recentlyVerified(sess *session) bool {
+	return sess != nil && h.cfg.now().Sub(sess.lastVerified) <= 5*time.Minute
+}
+
+func (h *handler) handleAuthorityPassword(w http.ResponseWriter, r *http.Request) {
+	sess := h.currentAuthoritySession(r)
+	if sess == nil {
+		http.Redirect(w, r, loginPath, http.StatusSeeOther)
+		return
+	}
+	if !h.recentlyVerified(sess) {
+		http.Redirect(w, r, "/ui/reverify?next=/ui/password", http.StatusSeeOther)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		h.renderPage(w, r, http.StatusOK, "password.tmpl", pageData{Title: "修改管理员口令"})
+	case http.MethodPost:
+		newPassword := r.PostFormValue("new_password")
+		confirmPassword := r.PostFormValue("confirm_password")
+		if newPassword == "" || newPassword != confirmPassword {
+			h.renderPage(w, r, http.StatusBadRequest, "password.tmpl", pageData{
+				Title: "修改管理员口令", LoginError: "两次输入的新口令不一致或为空，请重试。",
+			})
+			return
+		}
+		if _, err := h.cfg.Auth.SetAdminPassword([]byte(newPassword)); err != nil {
+			h.renderError(w, r, http.StatusInternalServerError, "修改管理员口令失败", "修改管理员口令失败，请稍后重试。")
+			return
+		}
+		h.mu.Lock()
+		h.sessions = map[string]*session{}
+		h.mu.Unlock()
+		h.clearAuthoritySessionCookie(w)
+		h.writeAuthorityAudit(remoteIP(r), "web.password.change", "ok", nil)
+		http.Redirect(w, r, loginPath, http.StatusSeeOther)
+	default:
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "修改口令页面只接受 GET 与 POST 请求。")
+	}
+}
+
+func (h *handler) handleAuthorityReverify(w http.ResponseWriter, r *http.Request) {
+	sess := h.currentAuthoritySession(r)
+	if sess == nil {
+		http.Redirect(w, r, loginPath, http.StatusSeeOther)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		h.renderPage(w, r, http.StatusOK, "reverify.tmpl", pageData{
+			Title: "重新验证", NextPath: safeNextPath(r.URL.Query().Get("next")),
+		})
+	case http.MethodPost:
+		ip := remoteIP(r)
+		now := h.cfg.now()
+		limit, err := h.cfg.Auth.LoginLimit(ip, now)
+		if err != nil {
+			h.renderError(w, r, http.StatusInternalServerError, "读取登录限制失败", "读取登录限制失败，请稍后重试。")
+			return
+		}
+		h.loginSleep(limit.Delay)
+		if limit.Locked {
+			h.writeAuthorityAudit(ip, "web.login.locked", "blocked", nil)
+			h.renderPage(w, r, http.StatusForbidden, "reverify.tmpl", pageData{
+				Title: "重新验证", LoginError: "这个来源 IP 已被锁定，请等剩余时间结束后再试。",
+				LockRemaining: limit.LockRemaining,
+				NextPath:      safeNextPath(r.PostFormValue("next")),
+			})
+			return
+		}
+		valid, err := h.cfg.Auth.VerifyAdminPassword([]byte(r.PostFormValue("password")))
+		if err != nil {
+			h.renderError(w, r, http.StatusInternalServerError, "校验管理员口令失败", "校验管理员口令失败，请稍后重试。")
+			return
+		}
+		if !valid {
+			limit, err = h.cfg.Auth.RecordLoginFailure(ip, now)
+			if err != nil {
+				h.renderError(w, r, http.StatusInternalServerError, "记录登录失败失败", "记录登录失败失败，请稍后重试。")
+				return
+			}
+			h.writeAuthorityAudit(ip, "web.login.failed", "error", nil)
+			if limit.Locked {
+				h.writeAuthorityAudit(ip, "web.login.locked", "blocked", nil)
+			}
+			h.renderPage(w, r, http.StatusUnauthorized, "reverify.tmpl", pageData{
+				Title: "重新验证", LoginError: "管理员口令不正确，请重试。", LockRemaining: limit.LockRemaining,
+				NextPath: safeNextPath(r.PostFormValue("next")),
+			})
+			return
+		}
+		h.mu.Lock()
+		sess.lastVerified = now
+		h.mu.Unlock()
+		http.Redirect(w, r, safeNextPath(r.PostFormValue("next")), http.StatusSeeOther)
+	default:
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "重新验证页面只接受 GET 与 POST 请求。")
+	}
+}
+
+func safeNextPath(next string) string {
+	if strings.HasPrefix(next, "/ui/") && !strings.HasPrefix(next, "//") {
+		return next
+	}
+	return listPath
 }
 
 func remoteIP(r *http.Request) string {

@@ -35,6 +35,7 @@ type pageData struct {
 	CertificateFingerprint string
 	LoginError             string
 	LockRemaining          time.Duration
+	NextPath               string
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染
