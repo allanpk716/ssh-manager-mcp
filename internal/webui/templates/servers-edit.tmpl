@@ -1,0 +1,59 @@
+{{define "content"}}
+<section class="server-edit">
+<h1>编辑 {{.ServerEdit.Detail.Name}}</h1>
+{{if .ServerEdit.Notice}}<div class="operation-refusal"><p>{{.ServerEdit.Notice}}</p></div>{{end}}
+{{if .ServerEdit.NeedsReverify}}<div class="operation-refusal"><p>凭据区域：重新验证后才能填写。<a href="{{.ServerEdit.ReverifyPath}}">重新验证管理员口令</a>。</p></div>{{end}}
+<form method="post" action="/ui/servers/{{.ServerEdit.Detail.ID}}/edit" class="server-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="server_id" value="{{.ServerEdit.Detail.ID}}">
+<input type="hidden" name="revision" value="{{.ServerEdit.Detail.Revision}}">
+<fieldset>
+<legend>连接信息</legend>
+<div class="form-field"><label for="edit-name">名称</label><input id="edit-name" name="name" value="{{.ServerEdit.Detail.Name}}"></div>
+<div class="form-field"><label for="edit-host">主机地址</label><input id="edit-host" name="host" value="{{.ServerEdit.Detail.Host}}"></div>
+<div class="form-field"><label for="edit-port">端口</label><input id="edit-port" name="port" value="{{.ServerEdit.Detail.Port}}" inputmode="numeric"></div>
+<div class="form-field"><label for="edit-user">用户</label><input id="edit-user" name="user" value="{{.ServerEdit.Detail.User}}"></div>
+<div class="form-field"><label for="edit-shell">shell 类型</label>
+<select id="edit-shell" name="shell">
+<option value="posix" {{if eq .ServerEdit.Detail.Shell "posix"}}selected{{end}}>posix</option>
+<option value="powershell" {{if eq .ServerEdit.Detail.Shell "powershell"}}selected{{end}}>powershell</option>
+<option value="cmd" {{if eq .ServerEdit.Detail.Shell "cmd"}}selected{{end}}>cmd</option>
+</select></div>
+</fieldset>
+<fieldset>
+<legend>服务器元数据</legend>
+<div class="form-field"><label for="edit-description">说明</label><input id="edit-description" name="description" value="{{.ServerEdit.Detail.Description}}"></div>
+<div class="form-field"><label for="edit-location">位置</label><input id="edit-location" name="location" value="{{.ServerEdit.Detail.Location}}"></div>
+<div class="form-field"><label for="edit-hardware">硬件</label><input id="edit-hardware" name="hardware" value="{{.ServerEdit.Detail.Hardware}}"></div>
+<div class="form-field"><label for="edit-services">服务</label><input id="edit-services" name="services" value="{{.ServerEdit.Detail.Services}}"></div>
+<div class="form-field"><label for="edit-role">角色</label><input id="edit-role" name="role" value="{{.ServerEdit.Detail.Role}}"></div>
+<div class="form-field"><label for="edit-caveats">注意事项</label><input id="edit-caveats" name="special_handling" value="{{.ServerEdit.Detail.Caveats}}"></div>
+</fieldset>
+<fieldset>
+<legend>标签与主机可见性</legend>
+<div class="form-field"><label for="edit-tags">标签（逗号分隔）</label><input id="edit-tags" name="tags" value="{{joinTags .ServerEdit.Detail.Tags}}"></div>
+<div class="form-field choice"><label><input type="checkbox" name="expose_host" value="1" {{if .ServerEdit.Detail.ExposeHost}}checked{{end}}> 向 agent 展示主机地址</label></div>
+</fieldset>
+<fieldset>
+<legend>凭据</legend>
+{{if .ServerEdit.NeedsReverify}}
+<p class="muted">重新验证后才能填写凭据。</p>
+{{else}}
+<div class="form-field"><label for="edit-credential">登录凭据</label>
+<select id="edit-credential" name="credential_action">
+<option value="keep">保持不变</option>
+<option value="password">改用密码</option>
+<option value="key">粘贴私钥</option>
+<option value="key-passphrase">只补私钥口令</option>
+<option value="clear">清除凭据</option>
+</select></div>
+<div class="form-field"><label for="edit-password">密码</label><input id="edit-password" name="password" type="password" autocomplete="new-password"></div>
+<div class="form-field"><label for="edit-key">私钥内容</label><textarea id="edit-key" name="key" rows="5"></textarea></div>
+<div class="form-field"><label for="edit-key-pass">私钥口令</label><input id="edit-key-pass" name="key_passphrase" type="password" autocomplete="new-password"></div>
+<div class="form-field"><label for="edit-sudo">sudo 密码</label><input id="edit-sudo" name="sudo_password" type="password" autocomplete="new-password"></div>
+{{end}}
+</fieldset>
+<div class="inline-form"><button type="submit">保存</button><a class="button-link" href="/ui/servers/{{.ServerEdit.Detail.ID}}">取消</a></div>
+</form>
+</section>
+{{end}}

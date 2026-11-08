@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -29,6 +32,20 @@ type pageData struct {
 	CSRFToken                   string
 	Authenticated               bool
 	Servers                     []ServerRow
+	ServerList                  []ServerListEntry
+	AttentionFilter             bool
+	ServerDetail                *ServerDetailView
+	ServerEdit                  *serverEditView
+	ServerDeletePreview         *ServerDeletePreviewView
+	ServerImportError           string
+	ServerImportPlan            *ServerImportPlanView
+	ServerImportRun             *ServerImportRunView
+	ServerCompleteQueue         string
+	ServerComplete              *serverCompleteView
+	ImportedCount               int
+	SkippedCount                int
+	FailedCount                 int
+	PendingCount                int
 	AccessProfiles              []AccessProfileSummary
 	AccessProjects              []AccessProjectSummary
 	AccessProjectToken          *AccessProjectToken
@@ -95,6 +112,44 @@ func (h *handler) writePage(w http.ResponseWriter, r *http.Request, status int, 
 
 // loadPageTemplates 在构造 Handler 时解析全部页面模板；解析失败时 New 直接
 // 返回错误，请求过程不再读取或解析模板文件。
+// pageFuncs 是页面模板共用的小工具函数，只做展示层转换。
+var pageFuncs = template.FuncMap{
+	"joinReasons": func(items []string) string { return strings.Join(items, "、") },
+	"joinTags":    func(items []string) string { return strings.Join(items, ",") },
+	"addOne":      func(v int) int { return v + 1 },
+	"credentialLabel": func(kind string) string {
+		switch kind {
+		case "password":
+			return "密码"
+		case "private_key":
+			return "私钥"
+		case "":
+			return "未挂凭据"
+		default:
+			return kind
+		}
+	},
+	// defaultConfigPath 是导入路径表单的默认值：运行 Web UI 进程那台机器上
+	// 当前用户的 ~/.ssh/config。
+	"defaultConfigPath": func() string {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		return filepath.Join(home, ".ssh", "config")
+	},
+	// completeQueue 把当前列表里需要注意的服务器拼成补全队列参数。
+	"completeQueue": func(rows []ServerListEntry) string {
+		var ids []string
+		for _, row := range rows {
+			if len(row.AttentionReasons) > 0 {
+				ids = append(ids, row.ID)
+			}
+		}
+		return url.Values{"queue": {strings.Join(ids, ",")}}.Encode()
+	},
+}
+
 func loadPageTemplates() (map[string]parsedPage, error) {
 	entries, err := templateFS.ReadDir("templates")
 	if err != nil {
@@ -106,11 +161,11 @@ func loadPageTemplates() (map[string]parsedPage, error) {
 			continue
 		}
 		pagePath := "templates/" + entry.Name()
-		fragment, err := template.ParseFS(templateFS, pagePath)
+		fragment, err := template.New(filepath.Base(pagePath)).Funcs(pageFuncs).ParseFS(templateFS, pagePath)
 		if err != nil {
 			return nil, fmt.Errorf("解析页面片段模板 %s 失败：%w", entry.Name(), err)
 		}
-		full, err := template.ParseFS(templateFS, "templates/layout.tmpl", pagePath)
+		full, err := template.New("layout").Funcs(pageFuncs).ParseFS(templateFS, "templates/layout.tmpl", pagePath)
 		if err != nil {
 			return nil, fmt.Errorf("解析整页模板 %s 失败：%w", entry.Name(), err)
 		}

@@ -83,6 +83,7 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	h.mux.HandleFunc("/ui/", h.handleAuthorityRoot)
 	// 访问区域路由按权威端角色注册全部已实现的页面。
 	h.registerAccessRoutes()
+	h.registerServerRoutes()
 	return h, h, nil
 }
 
@@ -138,15 +139,7 @@ func (h *handler) handleAuthorityRoot(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, loginPath, http.StatusSeeOther)
 		return
 	}
-	rows, err := h.cfg.Servers.Servers()
-	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请稍后重试。")
-		return
-	}
-	h.renderPage(w, r, http.StatusOK, "servers.tmpl", pageData{
-		Title:   "服务器",
-		Servers: sortNeedsAttentionFirst(rows),
-	})
+	h.handleServerList(w, r)
 }
 
 func (h *handler) handleAuthorityLoginPost(w http.ResponseWriter, r *http.Request) {

@@ -11,10 +11,12 @@ import (
 
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
+	"ssh-manager-mcp/internal/webuiservers"
 )
 
 // serveWebUIServerSource 直接读取权威端 vault 的服务器列表。
@@ -35,6 +37,16 @@ func (s serveWebUIServerSource) Servers() ([]webui.ServerRow, error) {
 		})
 	}
 	return rows, nil
+}
+
+// ServerList 返回带注意原因的服务器列表，供权威端服务器页过滤视图使用。
+func (s serveWebUIServerSource) ServerList(attentionOnly bool) ([]webui.ServerListEntry, error) {
+	return webuiservers.ListEntries(servermanage.New(s.store), attentionOnly)
+}
+
+// ServerDetail 返回一台服务器的详情。
+func (s serveWebUIServerSource) ServerDetail(identifier string) (*webui.ServerDetailView, error) {
+	return webuiservers.DetailView(servermanage.New(s.store), identifier)
 }
 
 // webUIListenPlan 每次重算时读取拓扑虚拟局域网成员地址、本机网卡地址与
@@ -97,7 +109,8 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 	}
 	handler, control, err := webui.NewAuthority(webui.Config{
 		Role: webui.RoleServer, Port: port,
-		Servers: serveWebUIServerSource{store: st},
+		Servers:      serveWebUIServerSource{store: st},
+		ServerWriter: webuiservers.WriterFromManager(servermanage.New(st)),
 		Access: webuiaccess.FromManager(access.New(st, access.WithServeCertFingerprint(func() (string, error) {
 			return fingerprint, nil
 		}))),

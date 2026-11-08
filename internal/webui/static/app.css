@@ -564,3 +564,140 @@ h1 {
   color: var(--color-warning-text);
   border-color: var(--color-warning-border);
 }
+
+/* 服务器页：操作链接、长表单与详情在窄屏保持可用。 */
+.server-actions {
+  margin-top: var(--space-small);
+}
+
+.server-row-actions {
+  white-space: nowrap;
+}
+
+.server-row-actions a {
+  margin-right: var(--space-small);
+  color: var(--color-accent);
+}
+
+.button-link {
+  padding: 4px var(--space-small);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  text-decoration: none;
+}
+
+.button-link.danger {
+  color: #ff8589;
+  border-color: var(--color-danger-border);
+}
+
+.detail-list {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: var(--space-small) var(--space-medium);
+  margin: var(--space-medium) 0;
+  padding: var(--space-medium);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.detail-list dt {
+  color: var(--color-muted);
+}
+
+.detail-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.server-form {
+  display: block;
+  padding: var(--space-medium);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.server-form fieldset {
+  margin: 0 0 var(--space-medium);
+  padding: 0;
+  border: none;
+}
+
+.server-form legend {
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-small);
+  margin-bottom: var(--space-medium);
+}
+
+.form-field.choice {
+  flex-direction: row;
+  align-items: center;
+}
+
+.form-field label {
+  color: var(--color-muted);
+}
+
+.form-field input,
+.form-field select,
+.form-field textarea {
+  width: 100%;
+  padding: var(--space-small);
+  color: var(--color-text);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.form-field.choice input {
+  width: auto;
+}
+
+.form-field textarea {
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.server-form button,
+.confirm-form button {
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.server-form button.secondary {
+  color: var(--color-muted);
+}
+
+.muted {
+  color: var(--color-muted);
+}
+
+@media (max-width: 720px) {
+  .detail-list {
+    grid-template-columns: 1fr;
+  }
+
+  .server-row-actions {
+    white-space: normal;
+  }
+
+  .server-form,
+  .confirm-form {
+    padding: var(--space-small);
+  }
+}

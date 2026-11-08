@@ -1,0 +1,31 @@
+{{define "content"}}
+<section class="server-detail">
+<h1>{{.ServerDetail.Name}}</h1>
+<dl class="detail-list">
+<dt>标识符</dt><dd>{{.ServerDetail.ID}}</dd>
+<dt>连接</dt><dd>{{.ServerDetail.User}}@{{.ServerDetail.Host}}:{{.ServerDetail.Port}}</dd>
+<dt>shell 类型</dt><dd>{{.ServerDetail.Shell}}</dd>
+<dt>登录凭据</dt><dd>{{credentialLabel .ServerDetail.CredentialType}}</dd>
+{{if eq .ServerDetail.CredentialType "private_key"}}<dt>私钥口令</dt><dd>{{if .ServerDetail.HasKeyPassphrase}}已设置{{else}}未设置{{end}}</dd>{{end}}
+<dt>sudo 密码</dt><dd>{{if .ServerDetail.HasSudoPassword}}已设 sudo 密码{{else}}未设置{{end}}</dd>
+<dt>说明</dt><dd>{{or .ServerDetail.Description "-"}}</dd>
+<dt>位置</dt><dd>{{or .ServerDetail.Location "-"}}</dd>
+<dt>硬件</dt><dd>{{or .ServerDetail.Hardware "-"}}</dd>
+<dt>服务</dt><dd>{{or .ServerDetail.Services "-"}}</dd>
+<dt>角色</dt><dd>{{or .ServerDetail.Role "-"}}</dd>
+<dt>注意事项</dt><dd>{{or .ServerDetail.Caveats "-"}}</dd>
+<dt>标签</dt><dd>{{if .ServerDetail.Tags}}{{joinTags .ServerDetail.Tags}}{{else}}-{{end}}</dd>
+<dt>主机可见性</dt><dd>{{if .ServerDetail.ExposeHost}}向 agent 展示主机地址{{else}}对 agent 隐藏主机地址{{end}}</dd>
+<dt>所属设备</dt><dd>{{if .ServerDetail.HasDevice}}{{.ServerDetail.DeviceName}}{{else}}无{{end}}</dd>
+<dt>注意原因</dt><dd>{{if .ServerDetail.AttentionReasons}}{{joinReasons .ServerDetail.AttentionReasons}}{{else}}无{{end}}</dd>
+<dt>修订号</dt><dd>{{.ServerDetail.Revision}}</dd>
+</dl>
+<div class="inline-form server-actions">
+<a class="button-link" href="/ui/">返回服务器列表</a>
+{{if .Caps.CanWrite}}
+<a class="button-link" href="/ui/servers/{{.ServerDetail.ID}}/edit">编辑</a>
+<a class="button-link danger" href="/ui/servers/{{.ServerDetail.ID}}/delete">删除</a>
+{{end}}
+</div>
+</section>
+{{end}}

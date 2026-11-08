@@ -43,20 +43,26 @@ type ServerRow struct {
 	NeedsAttention bool
 }
 
-// ServerSource 是 Web UI 读取服务器列表的唯一入口，由命令行按本机角色提供
-// 单机 vault 来源或客户端快照来源。
+// ServerSource 是 Web UI 读取服务器数据的唯一入口，由命令行按本机角色提供
+// 单机 vault 来源或客户端快照来源。Servers 供访问区域的授权表单复用基本
+// 行；ServerList 与 ServerDetail 供服务器页展示注意原因与详情。
 type ServerSource interface {
 	Servers() ([]ServerRow, error)
+	ServerList(attentionOnly bool) ([]ServerListEntry, error)
+	ServerDetail(identifier string) (*ServerDetailView, error)
 }
 
 // Config 是 Web UI Handler 的构造参数。Port 同时用于会话 cookie 命名与
 // Host、Origin 校验；Now 是可选时钟，缺省使用标准时间。
 type Config struct {
-	Role        Role
-	Servers     ServerSource
-	Access      AccessStore
-	VersionHint func() string
-	Port        int
+	Role    Role
+	Servers ServerSource
+	// ServerWriter 是服务器页写操作来源。单机与权威端必须提供；客户端不提
+	// 供，写路由不存在。
+	ServerWriter ServerWriter
+	Access       AccessStore
+	VersionHint  func() string
+	Port         int
 	// ServePort 是权威端主监听端口，设备码拉取命令按它拼地址；未提供时
 	// 按默认端口兜底。单机与客户端不使用这个字段。
 	ServePort              int
@@ -248,6 +254,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	h.mux.HandleFunc("/ui/assets/", h.handleAsset)
 	h.mux.HandleFunc(listPath, h.handleUIRoot)
 	h.registerAccessRoutes()
+	h.registerServerRoutes()
 	return h, Startup{token: token}, nil
 }
 
@@ -371,12 +378,7 @@ func (h *handler) handleUIRoot(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
-	rows, err := h.cfg.Servers.Servers()
-	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请重新运行 `sshmgr ui`。")
-		return
-	}
-	h.renderPage(w, r, http.StatusOK, "servers.tmpl", pageData{Title: "服务器", Servers: sortNeedsAttentionFirst(rows)})
+	h.handleServerList(w, r)
 }
 
 // renderSessionRequired 输出需要重新启动 Web UI 的会话错误页。

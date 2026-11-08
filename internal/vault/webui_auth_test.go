@@ -147,3 +147,11 @@ type fixedVaultUIRows struct{}
 func (fixedVaultUIRows) Servers() ([]webui.ServerRow, error) {
 	return []webui.ServerRow{{Name: "权威服务器"}}, nil
 }
+
+func (fixedVaultUIRows) ServerList(bool) ([]webui.ServerListEntry, error) {
+	return []webui.ServerListEntry{{Name: "权威服务器"}}, nil
+}
+
+func (fixedVaultUIRows) ServerDetail(string) (*webui.ServerDetailView, error) {
+	return nil, nil
+}
