@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,12 +51,12 @@ func seedAuditStore(t *testing.T) []byte {
 	old := time.Now().Add(-3 * time.Hour)
 	fresh := time.Now()
 	for _, r := range []store.AuditRow{
-		{TS: old, ProjectID: pid, ServerID: srvID, Action: "exec", Command: "uptime", Status: "ok", ExitCode: 0, DurationMS: 4},
-		{TS: old, ProjectID: pid, ServerID: srvID, Action: "exec", Command: "whoami", Status: "error", ExitCode: 2, DurationMS: 6, Sudo: true},
-		{TS: old, ProjectID: pid, ServerID: "srv-gone", Action: "forward", Command: "127.0.0.1:5432 id=t1", Status: "ok", DurationMS: 100},
-		{TS: old, ProjectID: "", ServerID: "", Action: "project.revoke", Status: "ok"},
-		{TS: old, ProjectID: "proj-gone", ServerID: srvID, Action: "download", Command: "/etc/hostname", Status: "ok", DurationMS: 40},
-		{TS: fresh, ProjectID: pid, ServerID: srvID, Action: "exec", Command: nastyCmd, Status: "ok", DurationMS: 1},
+		{TS: old, ProjectID: pid, ServerID: srvID, Action: "exec", Command: "uptime", Status: "ok", ExitCode: 0, DurationMS: 4, Source: store.AuditSourceAgent},
+		{TS: old, ProjectID: pid, ServerID: srvID, Action: "exec", Command: "whoami", Status: "error", ExitCode: 2, DurationMS: 6, Sudo: true, Source: store.AuditSourceCLI},
+		{TS: old, ProjectID: pid, ServerID: "srv-gone", Action: "forward", Command: "127.0.0.1:5432 id=t1", Status: "ok", DurationMS: 100, Source: store.AuditSourceAgent},
+		{TS: old, ProjectID: "", ServerID: "", Action: "project.revoke", Status: "ok", Source: store.AuditSourceCLI},
+		{TS: old, ProjectID: "proj-gone", ServerID: srvID, Action: "download", Command: "/etc/hostname", Status: "ok", DurationMS: 40, Source: store.AuditSourceAgent},
+		{TS: fresh, ProjectID: pid, ServerID: srvID, Action: "exec", Command: nastyCmd, Status: "ok", DurationMS: 1, Source: store.AuditSourceWebUI, SourceIP: "192.0.2.23"},
 	} {
 		if err := st.WriteAudit(r); err != nil {
 			t.Fatal(err)
@@ -88,6 +89,58 @@ func auditLines(t *testing.T, out *bytes.Buffer) []string {
 		}
 	}
 	return ls
+}
+
+// TestAudit_SourceAddressCursorAndJSONID: 命令行新增来源、来源地址与编号
+// 游标过滤；JSON 输出带行编号，供脚本复用同一翻页口径。
+func TestAudit_SourceAddressCursorAndJSONID(t *testing.T) {
+	seedAuditStore(t)
+
+	out, err := runAudit(t, "--source", "web_ui", "--source-ip", "192.0.2.23")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := auditLines(t, out)
+	if len(lines) != 1 || !strings.Contains(lines[0], "来源=web_ui 来源IP=192.0.2.23") {
+		t.Fatalf("来源与来源地址过滤结果不符：%q", out.String())
+	}
+
+	out, err = runAudit(t, "--source", "cli", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cliLines := auditLines(t, out)
+	if len(cliLines) != 2 {
+		t.Fatalf("来源过滤后的 JSON 行数 = %d，应为 2：%q", len(cliLines), out.String())
+	}
+	var first map[string]any
+	if err := json.Unmarshal([]byte(cliLines[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	cursor, ok := first["id"].(float64)
+	if !ok || cursor <= 0 {
+		t.Fatalf("JSON 第一行没有正编号：%v", first)
+	}
+
+	out, err = runAudit(t, "--source", "cli", "--before", strconv.FormatInt(int64(cursor), 10), "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	olderLines := auditLines(t, out)
+	if len(olderLines) != 1 {
+		t.Fatalf("编号翻页后的 JSON 行数 = %d，应为 1：%q", len(olderLines), out.String())
+	}
+	var older map[string]any
+	if err := json.Unmarshal([]byte(olderLines[0]), &older); err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := older["id"].(float64); id >= cursor {
+		t.Fatalf("编号翻页返回了不早于游标的行：游标=%v 行=%v", cursor, older)
+	}
+
+	if _, err := runAudit(t, "--before", "0"); err == nil {
+		t.Fatal("编号游标必须大于 0")
+	}
 }
 
 // TestAudit_FiltersAndDefaults: 默认全量 newest-first + name 解析 + 组合 +
@@ -213,7 +266,7 @@ func TestAudit_EscapingAndRender(t *testing.T) {
 	}
 }
 
-// TestAudit_JSON: JSONL 可解析、九键恒在、owner 行零值非缺失、--json 无 stderr 提示。
+// TestAudit_JSON: JSONL 可解析、编号键恒在、owner 行零值非缺失、--json 无提示。
 func TestAudit_JSON(t *testing.T) {
 	seedAuditStore(t)
 
@@ -232,10 +285,10 @@ func TestAudit_JSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(ls[0]), &m); err != nil {
 		t.Fatalf("json line: %v", err)
 	}
-	if len(m) != 11 {
-		t.Fatalf("exactly eleven keys, got %d: %v", len(m), m)
+	if len(m) != 12 {
+		t.Fatalf("exactly twelve keys, got %d: %v", len(m), m)
 	}
-	for _, key := range []string{"source", "source_ip"} {
+	for _, key := range []string{"id", "source", "source_ip"} {
 		if _, ok := m[key]; !ok {
 			t.Fatalf("json line missing source field %q: %v", key, m)
 		}

@@ -25,6 +25,9 @@ func newAuditCmd() *cobra.Command {
 		owner    bool
 		actions  []string
 		statuses []string
+		source   string
+		sourceIP string
+		before   int64
 		limit    int
 		asJSON   bool
 	)
@@ -35,6 +38,7 @@ func newAuditCmd() *cobra.Command {
 			"Filters: --since (30m | 1.5h | 7d | 2w | RFC3339 | local datetime | date),\n" +
 			"--server/--project (name or id; unknown values simply match nothing),\n" +
 			"--owner (rows with no project = owner actions), --action/--status, --limit.\n" +
+			"--source/--source-ip narrow by entry origin; --before <id> pages older rows.\n" +
 			"--limit 0 = unlimited (audit_log has no auto-cleanup — mind big vaults).",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if owner && len(projects) > 0 {
@@ -42,6 +46,12 @@ func newAuditCmd() *cobra.Command {
 			}
 			if limit < 0 {
 				return fmt.Errorf("--limit must be >= 0")
+			}
+			if before < 0 {
+				return fmt.Errorf("--before must be >= 0")
+			}
+			if before == 0 && cmd.Flags().Changed("before") {
+				return fmt.Errorf("--before must be > 0")
 			}
 			var sinceUnix int64
 			if since != "" {
@@ -68,6 +78,9 @@ func newAuditCmd() *cobra.Command {
 				OwnerOnly:  owner,
 				Actions:    actions,
 				Statuses:   statuses,
+				Source:     source,
+				SourceIP:   sourceIP,
+				BeforeID:   before,
 				Limit:      probe,
 			})
 			if err != nil {
@@ -123,8 +136,11 @@ func newAuditCmd() *cobra.Command {
 	c.Flags().BoolVar(&owner, "owner", false, "only owner (non-agent) rows — rows with no project")
 	c.Flags().StringSliceVar(&actions, "action", nil, "filter by action (repeatable/comma; unknown values match nothing)")
 	c.Flags().StringSliceVar(&statuses, "status", nil, "filter by status (repeatable/comma; unknown values match nothing)")
+	c.Flags().StringVar(&source, "source", "", "filter by source: cli, web_ui, or agent")
+	c.Flags().StringVar(&sourceIP, "source-ip", "", "filter by Web UI source IP address")
+	c.Flags().Int64Var(&before, "before", 0, "only rows with an audit id lower than this value (0 = disabled)")
 	c.Flags().IntVar(&limit, "limit", 100, "max rows (default 100; 0 = unlimited — audit_log has no auto-cleanup, mind big vaults)")
-	c.Flags().BoolVar(&asJSON, "json", false, "JSONL output (same eleven fields as the offline sidecar)")
+	c.Flags().BoolVar(&asJSON, "json", false, "JSONL output (same fields as the offline sidecar, plus the audit id)")
 	return c
 }
 
