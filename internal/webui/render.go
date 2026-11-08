@@ -56,6 +56,8 @@ type pageData struct {
 	OpsSettings                 []OpsSetting
 	OpsSettingForm              OpsSettingForm
 	OpsRole                     OpsRole
+	OpsClientAuditRows          []OpsAuditRow
+	OpsClientInstance           string
 	ErrorTitle                  string
 	ErrorMessage                string
 	AdminPasswordSet            bool

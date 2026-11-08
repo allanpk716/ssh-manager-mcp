@@ -120,6 +120,8 @@ The owner path runs a **single non-interactive command** (connect + exec share o
 # Audit forensics — what every agent (and owner) did, newest first
 sshmgr audit --since 24h --project my-agent --status error
 sshmgr audit --json --limit 0 > audit.jsonl   # twelve fields, sidecar-compatible
+# On a client machine: the local audit sidecar next to one cache instance
+sshmgr cache audit --instance laptop           # newest first; --limit / --json
 ```
 
 Known filter values: `action` = `exec` / `download` / `upload` / `upload-content` / `forward` / `close-forward` / `exec-bg-start` / `exec-bg-end` / `relay-bg-start` / `relay-bg-end` / `exec-blocked` / `exec-confirm-required` / `exec-confirmed` / `exec-bg-blocked` / `exec-bg-confirm-required` / `exec-bg-confirmed` (command-policy verdicts on agent-issued commands) + owner-side `project.add` / `project.rotate` / `project.disable` / `project.enable` / `project.revoke` / `project.delete` / `policy-rule.add` / `policy-rule.rm` / `policy-rule.disable` / `policy-rule.enable`; `status` = `ok` / `error` / `timeout` / `cancelled` / `denied` / `auth_error` / `hostkey_mismatch` / `connect_error` / `no_credential` / `no_sudo` / `bind_denied` (command-policy rows `exec-blocked` / `exec-confirm-required` / `exec-confirmed` and their `exec-bg-*` twins carry the hit **rule id** in the `status` column instead). The sets evolve across versions; unknown filter values silently match nothing (empty result, never an error).
