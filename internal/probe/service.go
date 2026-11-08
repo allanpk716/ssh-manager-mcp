@@ -282,6 +282,26 @@ func (s *Service) resolveTargets(raw []string) ([]resolvedTarget, error) {
 			if device == nil {
 				return nil, fmt.Errorf("拓扑中没有这台设备：%s", base)
 			}
+			// 关联了服务器条目的设备是受管设备：按设备名当目标同样要过
+			// 服务器编号的授权检查，避免绕开范围限制。条目全部在范围外
+			// 时按第一个条目返回同样的越权错误；不受管设备与客户端实例
+			// 没有条目，照旧不受限。
+			if s.GateServer != nil {
+				entries, err := s.Store.ListServersForDevice(base)
+				if err != nil {
+					return nil, err
+				}
+				anyGranted := false
+				for _, entry := range entries {
+					if s.GateServer(entry.ID) == nil {
+						anyGranted = true
+						break
+					}
+				}
+				if !anyGranted && len(entries) > 0 {
+					return nil, s.GateServer(entries[0].ID)
+				}
+			}
 			target = resolvedTarget{label: base, device: device}
 			if !explicit {
 				target.port = 22

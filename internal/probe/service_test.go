@@ -278,6 +278,66 @@ func TestServiceSelfWithoutRegisteredDeviceFails(t *testing.T) {
 	}
 }
 
+// TestServiceManagedDeviceTargetRequiresProfileGrant: 关联了服务器条目的设
+// 备按设备名当目标时，同样要过授权检查；不受管设备与客户端实例设备不受
+// 授权范围限制。
+func TestServiceManagedDeviceTargetRequiresProfileGrant(t *testing.T) {
+	fixture := newServiceFixture(t)
+	credentialID, err := fixture.store.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantedResult, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "已授权条目", Host: "192.0.2.40", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+	}, nil, nil, "NAS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "范围外条目", Host: "192.0.2.41", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+	}, nil, nil, "笔记本"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddDevice("不受管设备", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := fixture.store.AddProfile("探测授权")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.store.AddCacheToken("client-instance", profileID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddDevice("客户端设备", "", "client-instance"); err != nil {
+		t.Fatal(err)
+	}
+	service, _ := fixture.service((&fakeLocalDial{}).dial)
+	service.GateServer = func(serverID string) error {
+		if serverID == grantedResult.ServerID {
+			return nil
+		}
+		return fmt.Errorf("server %s not in your profile", serverID)
+	}
+
+	// NAS 关联了已授权条目：设备名目标照常解析。
+	if _, err := service.Probe(context.Background(), Request{From: "self", Targets: []string{"NAS"}}); err != nil {
+		t.Fatalf("managed device with a granted entry must pass: %v", err)
+	}
+	// 笔记本关联的条目全部在范围外：设备名目标必须被拒绝。
+	_, err = service.Probe(context.Background(), Request{From: "self", Targets: []string{"笔记本"}})
+	if err == nil || !strings.Contains(err.Error(), "not in your profile") {
+		t.Fatalf("managed device without a granted entry must be rejected, got %v", err)
+	}
+	// 不受管设备与客户端实例不受授权范围限制。
+	for _, target := range []string{"不受管设备", "客户端设备"} {
+		if _, err := service.Probe(context.Background(), Request{From: "self", Targets: []string{target}}); err != nil {
+			t.Fatalf("target %s must not be gated: %v", target, err)
+		}
+	}
+}
+
 // TestServiceUsesAddressTimeoutSetting: 逐地址超时复用统一拨号入口的环境变
 // 量设置。
 func TestServiceUsesAddressTimeoutSetting(t *testing.T) {
