@@ -44,6 +44,7 @@ async function startStandaloneUI(): Promise<standaloneUI> {
     encoding: "utf8",
     env: {
       ...process.env,
+      SSHMGR_VAULT_ROOT: runDir,
       SSHMGR_STORE: path.join(runDir, "store.db"),
       SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
     },
@@ -62,6 +63,7 @@ async function startStandaloneUI(): Promise<standaloneUI> {
       APPDATA: runDir,
       XDG_CONFIG_HOME: runDir,
       SSHMGR_CONFIG_ROOT: runDir,
+      SSHMGR_VAULT_ROOT: runDir,
       SSHMGR_STORE: path.join(runDir, "store.db"),
       SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
       PATH: path.join(runDir, "empty-path"),

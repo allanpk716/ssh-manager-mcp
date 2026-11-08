@@ -29,6 +29,25 @@ func seed(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	vaultDir := filepath.Join(dir, "ssh-manager")
+	if err := os.MkdirAll(vaultDir, 0o700); err != nil {
+		return err
+	}
+	backupDir := filepath.Join(dir, "backups")
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(backupDir, ".ssh-manager-backup-marker"), nil, 0o600); err != nil {
+		return err
+	}
+	passPath := filepath.Join(dir, "backup.pass")
+	if err := os.WriteFile(passPath, []byte("browser-test-backup-pass"), 0o600); err != nil {
+		return err
+	}
+	configBody := fmt.Sprintf(`{"dir":%q,"keep":3,"passphrase_file":%q}`, backupDir, passPath)
+	if err := os.WriteFile(filepath.Join(vaultDir, "backup.json"), []byte(configBody), 0o600); err != nil {
+		return err
+	}
 	key, err := store.GenerateMasterKey()
 	if err != nil {
 		return err
