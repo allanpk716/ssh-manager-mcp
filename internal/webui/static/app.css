@@ -856,6 +856,11 @@ h1 {
   border-radius: 8px;
 }
 
+.restart-service.restart-required {
+  border-width: 2px;
+  background: #3b2a12;
+}
+
 .restart-form button {
   width: 100%;
   padding: var(--space-small) var(--space-large);

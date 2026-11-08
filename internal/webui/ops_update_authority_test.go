@@ -41,6 +41,39 @@ func TestAuthorityOpsUpdateRestartAuditFailureDoesNotRestart(t *testing.T) {
 	}
 }
 
+func TestAuthorityOpsUpdatePendingRestartSurvivesRefreshAndRejectsApply(t *testing.T) {
+	ops := &stubAuthorityOpsUpdateStore{stubOpsUpdateStore: newStubOpsUpdateStore()}
+	status := upgradeTestStatus()
+	status.CanUpgrade = false
+	status.PendingRestart = true
+	status.PendingRestartVersion = "v0.2.0"
+	ops.updateStatus = status
+	ops.updateResult = OpsUpdateApplyResult{OldVersion: "0.1.0", NewVersion: "v0.2.0"}
+	handler, _, cookie := newAuthorityOpsUpdateTestHandler(t, ops)
+
+	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/ops/update", cookie)
+	pageBody := readResponseBody(t, page)
+	if page.StatusCode != http.StatusOK ||
+		!strings.Contains(pageBody, "已替换为 v0.2.0，待重启服务") ||
+		strings.Contains(pageBody, "升级到 v0.2.0") ||
+		!strings.Contains(pageBody, `class="restart-service restart-required"`) {
+		t.Fatalf("刷新后的升级页应显示待重启并突出重启表单且隐藏升级按钮，状态码=%d 页面：\n%s",
+			page.StatusCode, pageBody)
+	}
+	csrf := hiddenInputValue(t, pageBody, "csrf_token")
+
+	rejected := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/ops/update", url.Values{
+		"csrf_token": {csrf},
+	}, cookie)
+	rejectedBody := readResponseBody(t, rejected)
+	if rejected.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(rejectedBody, "待重启服务") ||
+		ops.updateApplySourceIP != "" {
+		t.Fatalf("待重启时应拒绝再次升级且不调用替换，状态码=%d 来源=%q 页面：\n%s",
+			rejected.StatusCode, ops.updateApplySourceIP, rejectedBody)
+	}
+}
+
 func TestAuthorityOpsUpdateRestartRunsAfterCompleteResponse(t *testing.T) {
 	ops := &stubAuthorityOpsUpdateStore{stubOpsUpdateStore: newStubOpsUpdateStore()}
 	ops.updateStatus = upgradeTestStatus()

@@ -452,6 +452,43 @@ func TestUpdateServiceApplyReplacesBinaryWritesSignalAndAudit(t *testing.T) {
 	}
 }
 
+func TestUpdateServiceRemembersPendingRestartAndRejectsSecondApply(t *testing.T) {
+	site.baseURL(t)
+	site.addRelease(t, "v0.2.0", testBinaryPayload(t))
+	site.setLatest(t, "v0.2.0")
+	withStagedVersion(t, "0.2.0")
+	_, self, _ := writeFakeSelf(t)
+
+	replaceCalls := 0
+	service := NewUpdateService(UpdateDependencies{
+		SelfPath:       func() (string, error) { return self, nil },
+		CurrentVersion: func() string { return "0.1.0" },
+		ClientState:    func(string) (UpdateClientState, error) { return UpdateClientState{}, nil },
+		ReplaceBinary: func(staged, target string) error {
+			replaceCalls++
+			return updater.ReplaceBinary(staged, target)
+		},
+	})
+	if _, err := service.Apply(context.Background(), UpdateApplyRequest{Source: CLISource()}); err != nil {
+		t.Fatalf("第一次升级失败：%v", err)
+	}
+
+	status, err := service.Check(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.PendingRestart || status.PendingRestartVersion != "v0.2.0" ||
+		status.CanUpgrade || !strings.Contains(status.Reason, "待重启") {
+		t.Fatalf("替换后检查状态应显示待重启并禁止再次替换：%+v", status)
+	}
+
+	_, err = service.Apply(context.Background(), UpdateApplyRequest{Source: CLISource()})
+	var updateErr *UpdateError
+	if !errors.As(err, &updateErr) || updateErr.Step != UpdateStepCheck || replaceCalls != 1 {
+		t.Fatalf("待重启时再次升级应被拒绝且不替换二进制：错误=%v 替换次数=%d", err, replaceCalls)
+	}
+}
+
 func TestUpdateServiceApplyRejectsChecksumMismatchAndKeepsBinary(t *testing.T) {
 	site.baseURL(t)
 	site.addRelease(t, "v0.2.0", testBinaryPayload(t))

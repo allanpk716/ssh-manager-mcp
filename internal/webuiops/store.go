@@ -501,6 +501,7 @@ func webuiUpdateStatus(status ops.UpdateStatus) webui.OpsUpdateStatus {
 		TargetVersion: status.TargetVersion, AssetName: status.AssetName,
 		CanUpgrade: status.CanUpgrade, Reason: status.Reason, Downgrade: status.Downgrade,
 		NewerThanAuthority: status.NewerThanAuthority, IsClient: status.IsClient,
+		PendingRestart: status.PendingRestart, PendingRestartVersion: status.PendingRestartVersion,
 	}
 }
 

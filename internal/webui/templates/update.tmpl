@@ -20,6 +20,11 @@
 </div>
 {{end}}
 {{if .OpsUpdate}}
+{{if .OpsUpdate.PendingRestart}}
+<div class="notice notice-warning">
+<p>已替换为 {{.OpsUpdate.PendingRestartVersion}}，待重启服务；新版本会在服务重启后运行。</p>
+</div>
+{{end}}
 <dl class="update-versions">
 <div><dt>当前版本</dt><dd>{{.OpsUpdate.CurrentVersion}}</dd></div>
 <div><dt>推荐版本</dt><dd>{{.OpsUpdate.RecommendedDisplay}}</dd></div>
@@ -29,14 +34,14 @@
 {{if .OpsUpdate.NewerThanAuthority}}<p class="notice notice-warning">当前版本比权威端新，建议先升级权威端。</p>{{end}}
 {{if .OpsUpdate.Downgrade}}<p class="notice notice-warning">目标版本比当前版本旧，这次操作是回滚。</p>{{end}}
 {{if .OpsUpdate.Reason}}<p class="notice notice-info">{{.OpsUpdate.Reason}}</p>{{end}}
-{{if .OpsUpdate.CanUpgrade}}
+{{if and .OpsUpdate.CanUpgrade (not .OpsUpdate.PendingRestart)}}
 <form class="update-form" method="post" action="/ui/ops/update">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <button type="submit">升级到 {{.OpsUpdate.TargetVersion}}</button>
 </form>
 {{end}}
 {{if .Caps.CanRestartService}}
-<section class="restart-service">
+<section class="restart-service{{if .OpsUpdate.PendingRestart}} restart-required{{end}}">
 <h2>重启服务</h2>
 <p class="operation-warning">重启会断开活动隧道，待批准的配对请求会作废。请确认现在可以中断连接。</p>
 <form class="restart-form" method="post" action="/ui/ops/update/restart">

@@ -3,6 +3,7 @@ package webui
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -156,6 +157,17 @@ func (h *handler) handleAuthorityOpsUpdate(w http.ResponseWriter, r *http.Reques
 		h.renderPage(w, r, http.StatusOK, "update.tmpl", pageData{Title: "升级", OpsUpdate: &status})
 	case http.MethodPost:
 		if !h.requireRecentReverify(w, r, opsUpdatePath) {
+			return
+		}
+		currentStatus, currentErr := h.cfg.Ops.CheckUpdate("")
+		if currentErr == nil && currentStatus.PendingRestart {
+			currentStatus.CanUpgrade = false
+			data := pageData{Title: "升级", OpsUpdate: &currentStatus, OpsUpdateError: &OpsUpdateError{
+				Step: OpsUpdateStepCheck,
+				Message: fmt.Sprintf("已替换为 %s，待重启服务；请先重启服务。",
+					currentStatus.PendingRestartVersion),
+			}}
+			h.renderPage(w, r, http.StatusBadRequest, "update.tmpl", data)
 			return
 		}
 		result, err := h.cfg.Ops.ApplyUpdate("", remoteIP(r))

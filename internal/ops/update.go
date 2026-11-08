@@ -60,6 +60,10 @@ type UpdateStatus struct {
 	Downgrade          bool
 	NewerThanAuthority bool
 	IsClient           bool
+	// PendingRestart 表示本进程已把二进制替换为 PendingRestartVersion，
+	// 需要重启后新版本才会运行。
+	PendingRestart        bool
+	PendingRestartVersion string
 }
 
 // UpdateService 是一次进程内共享的升级服务；同一时间只允许一个升级在执行。
@@ -67,6 +71,10 @@ type UpdateService struct {
 	deps     UpdateDependencies
 	running  sync.Mutex
 	inFlight atomic.Int32
+	// pendingMu 保护进程内“已替换、待重启”状态。
+	pendingMu             sync.RWMutex
+	pendingRestart        bool
+	pendingRestartVersion string
 	// downloadPause 只给并发测试使用：下载开始前阻塞。
 	downloadPause func()
 }
@@ -115,6 +123,10 @@ func NewUpdateService(deps UpdateDependencies) *UpdateService {
 // 与原因；不下载任何内容。
 func (s *UpdateService) Check(ctx context.Context, instance string) (UpdateStatus, error) {
 	status := UpdateStatus{CurrentVersion: s.deps.CurrentVersion()}
+	s.pendingMu.RLock()
+	status.PendingRestart = s.pendingRestart
+	status.PendingRestartVersion = s.pendingRestartVersion
+	s.pendingMu.RUnlock()
 	state, err := s.deps.ClientState(instance)
 	if err != nil {
 		status.Reason = err.Error()
@@ -174,6 +186,10 @@ func (s *UpdateService) Check(ctx context.Context, instance string) (UpdateStatu
 		status.Downgrade = true
 		status.CanUpgrade = true
 		status.Reason = "目标版本比当前版本旧（回滚通道）"
+	}
+	if status.PendingRestart {
+		status.CanUpgrade = false
+		status.Reason = fmt.Sprintf("已替换为 %s，待重启服务", status.PendingRestartVersion)
 	}
 	return status, nil
 }
@@ -283,6 +299,15 @@ func (s *UpdateService) Apply(ctx context.Context, req UpdateApplyRequest) (Upda
 	defer s.running.Unlock()
 	s.inFlight.Add(1)
 	defer s.inFlight.Add(-1)
+	if s.isPendingRestart() {
+		status, _ := s.Check(ctx, req.Instance)
+		s.writeAudit(req.Source, UpdateAuditEntry{
+			Action: "update.apply", OldVersion: status.CurrentVersion,
+			NewVersion: status.PendingRestartVersion, Result: "error", Detail: "待重启服务",
+		})
+		return UpdateApplyResult{OldVersion: status.CurrentVersion, NewVersion: status.PendingRestartVersion},
+			&UpdateError{Step: UpdateStepCheck, Err: errors.New(status.Reason)}
+	}
 	if s.downloadPause != nil {
 		s.downloadPause()
 	}
@@ -360,6 +385,7 @@ func (s *UpdateService) Apply(ctx context.Context, req UpdateApplyRequest) (Upda
 	} else if replaceErr != nil {
 		return fail(UpdateStepReplace, replaceErr, status)
 	}
+	s.markPendingRestart(status.TargetVersion)
 	if _, werr := s.deps.WriteSignal(self, status.TargetVersion); werr != nil {
 		warning := fmt.Sprintf("写入代际信号失败（运行中的桥感知不到本次换版，下次升级会重写）：%v", werr)
 		result.Warning = strings.Join(nonEmpty(result.Warning, warning), "；")
@@ -371,6 +397,19 @@ func (s *UpdateService) Apply(ctx context.Context, req UpdateApplyRequest) (Upda
 	}
 	s.writeAudit(req.Source, entry)
 	return result, nil
+}
+
+func (s *UpdateService) isPendingRestart() bool {
+	s.pendingMu.RLock()
+	defer s.pendingMu.RUnlock()
+	return s.pendingRestart
+}
+
+func (s *UpdateService) markPendingRestart(version string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	s.pendingRestart = true
+	s.pendingRestartVersion = version
 }
 
 // UpgradeInProgress 报告当前是否已有一次升级在执行。

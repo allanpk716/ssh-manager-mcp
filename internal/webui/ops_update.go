@@ -6,17 +6,19 @@ import (
 
 // OpsUpdateStatus 是升级页展示的版本状态；字段含义与运维模块一致。
 type OpsUpdateStatus struct {
-	CurrentVersion     string
-	RecommendedVersion string
-	LatestVersion      string
-	LatestError        string
-	TargetVersion      string
-	AssetName          string
-	CanUpgrade         bool
-	Reason             string
-	Downgrade          bool
-	NewerThanAuthority bool
-	IsClient           bool
+	CurrentVersion        string
+	RecommendedVersion    string
+	LatestVersion         string
+	LatestError           string
+	TargetVersion         string
+	AssetName             string
+	CanUpgrade            bool
+	Reason                string
+	Downgrade             bool
+	NewerThanAuthority    bool
+	IsClient              bool
+	PendingRestart        bool
+	PendingRestartVersion string
 }
 
 // RecommendedDisplay 返回推荐版本展示值；空串显示为「读取不到」。
