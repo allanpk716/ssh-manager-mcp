@@ -35,6 +35,10 @@ type pageData struct {
 	AccessGrantNotice      string
 	AccessFlash            *AccessFlash
 	AccessDeleteReverifyID string
+	AccessDeviceCodes      []AccessDeviceCodeSummary
+	AccessDeviceIssue      *AccessDeviceIssueView
+	AccessDeviceIssued     *AccessDeviceCodeResult
+	AccessDeviceRevoke     *AccessDeviceCodeSummary
 	ErrorTitle             string
 	ErrorMessage           string
 	AdminPasswordSet       bool

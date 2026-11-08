@@ -1,0 +1,11 @@
+{{define "content"}}
+<section class="grant-form device-revoke-form">
+<h1>撤销设备码 {{.AccessDeviceRevoke.Name}}</h1>
+<div class="operation-refusal">撤销后该设备下一次拉取快照即被拒绝；需要时必须重新签发设备码。</div>
+<form method="post" action="/ui/access/device-codes/{{.AccessDeviceRevoke.ID}}/revoke">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">确认撤销</button>
+<a href="/ui/access/device-codes">返回设备码列表</a>
+</form>
+</section>
+{{end}}

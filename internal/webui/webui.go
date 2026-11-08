@@ -57,6 +57,7 @@ type Config struct {
 	Access                 AccessStore
 	VersionHint            func() string
 	Port                   int
+	ServePort              int
 	Now                    func() time.Time
 	Auth                   AuthStore
 	CertificateFingerprint string

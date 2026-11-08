@@ -1,0 +1,32 @@
+{{define "content"}}
+<section class="device-code-page">
+<h1>设备码</h1>
+{{if .AccessDeviceIssue.NeedsReverify}}<div class="operation-refusal">签发设备码前需要重新验证管理员口令。<a href="{{.AccessDeviceIssue.ReverifyPath}}">先重新验证</a></div>{{end}}
+<form method="post" action="/ui/access/device-codes" class="inline-form device-issue-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label for="device-name">签发设备码</label>
+<input type="text" id="device-name" name="name" required value="{{.AccessDeviceIssue.Name}}">
+<label for="device-profile">Profile</label>
+<select id="device-profile" name="profile" required>
+{{range .AccessProfiles}}<option value="{{.ID}}"{{if eq .ID $.AccessDeviceIssue.ProfileID}} selected{{end}}>{{.Name}}</option>{{end}}
+</select>
+<button type="submit">签发</button>
+</form>
+<table class="server-table">
+<thead>
+<tr><th scope="col">名称</th><th scope="col">令牌前缀</th><th scope="col">状态</th><th scope="col">Profile</th><th scope="col">最近拉取</th><th scope="col">最近客户端版本</th><th scope="col">操作</th></tr>
+</thead>
+<tbody>
+{{range .AccessDeviceCodes}}<tr{{if .Revoked}} class="revoked-row"{{end}}>
+<td>{{.Name}}</td>
+<td>{{.TokenPrefix}}…</td>
+<td>{{if .Revoked}}已撤销{{else}}活跃{{end}}</td>
+<td>{{if .ProfileName}}{{.ProfileName}}{{else}}未绑定{{end}}</td>
+<td>{{.LastPullText}}</td>
+<td>{{.ClientVersionText}}</td>
+<td>{{if .Revoked}}—{{else}}<a href="/ui/access/device-codes/{{.ID}}/revoke">撤销</a>{{end}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+</section>
+{{end}}

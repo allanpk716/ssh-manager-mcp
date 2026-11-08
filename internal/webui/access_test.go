@@ -26,6 +26,17 @@ type stubAccessStore struct {
 	grantResult    AccessGrantChange
 	grantConflict  *AccessGrantConflict
 	grantErr       error
+
+	deviceCodes      []AccessDeviceCodeSummary
+	addDeviceName    string
+	addDeviceProfile string
+	addDeviceURL     string
+	addDeviceSrc     AccessWriteSource
+	addDeviceResult  AccessDeviceCodeResult
+	addDeviceErr     error
+	revokeDeviceID   string
+	revokeDeviceSrc  AccessWriteSource
+	revokeDeviceErr  error
 }
 
 func (s *stubAccessStore) ListProfiles() ([]AccessProfileSummary, error) {
@@ -45,6 +56,27 @@ func (s *stubAccessStore) DeleteProfile(id string, source AccessWriteSource) (*A
 	s.deleteID = id
 	s.deleteSrc = source
 	return s.deleteInUse, s.deleteErr
+}
+
+func (s *stubAccessStore) ListDeviceCodes() ([]AccessDeviceCodeSummary, error) {
+	if s.deviceCodes == nil {
+		return nil, nil
+	}
+	return s.deviceCodes, nil
+}
+
+func (s *stubAccessStore) AddDeviceCode(name, profile, serveURL string, source AccessWriteSource) (AccessDeviceCodeResult, error) {
+	s.addDeviceName = name
+	s.addDeviceProfile = profile
+	s.addDeviceURL = serveURL
+	s.addDeviceSrc = source
+	return s.addDeviceResult, s.addDeviceErr
+}
+
+func (s *stubAccessStore) RevokeDeviceCode(id string, source AccessWriteSource) error {
+	s.revokeDeviceID = id
+	s.revokeDeviceSrc = source
+	return s.revokeDeviceErr
 }
 
 func (s *stubAccessStore) SetServerGrants(profileID string, expected, desired []string, source AccessWriteSource) (AccessGrantChange, *AccessGrantConflict, error) {
