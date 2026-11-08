@@ -60,9 +60,12 @@ type Config struct {
 	Port        int
 	// ServePort 是权威端主监听端口，设备码拉取命令按它拼地址；未提供时
 	// 按默认端口兜底。单机与客户端不使用这个字段。
-	ServePort              int
-	Now                    func() time.Time
-	Auth                   AuthStore
+	ServePort int
+	Now       func() time.Time
+	Auth      AuthStore
+	// OpsInstance 是本次启动绑定的运维实例名；客户端升级页先按 `sshmgr ui`
+	// 启动时解析的实例读取，会话内切换由后续票接入。
+	OpsInstance            string
 	CertificateFingerprint string
 	AllowedHosts           []string
 	Sleep                  func(time.Duration)
@@ -166,6 +169,8 @@ func capabilitiesForRole(role Role) capabilities {
 			ReadOnlyNotice:    "这里只读，修改需到权威端 Web UI 去做。",
 			ShowAccessArea:    true,
 			CanManageProfiles: false,
+			// 升级页本票接入；运维导航整体显示等客户端页与本机审计页就绪后打开。
+			CanUpgradeBinary: true,
 		}
 	}
 	if role == RoleServer {

@@ -53,6 +53,9 @@ type pageData struct {
 	OpsAuditFilter              OpsAuditFilterView
 	OpsAuditHasMore             bool
 	OpsAuditOlderPath           string
+	OpsUpdate                   *OpsUpdateStatus
+	OpsUpdateResult             *OpsUpdateApplyResult
+	OpsUpdateError              *OpsUpdateError
 	ErrorTitle                  string
 	ErrorMessage                string
 	AdminPasswordSet            bool

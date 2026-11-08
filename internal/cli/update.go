@@ -49,7 +49,6 @@ import (
 
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/ops"
-	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/updater"
 )
 
@@ -499,18 +498,10 @@ func writeUpdateAudit(source ops.Source, entry ops.UpdateAuditEntry) error {
 		return err
 	}
 	defer st.Close()
-	summary := map[string]any{
-		"old_version": entry.OldVersion, "new_version": entry.NewVersion, "result": entry.Result,
+	if err := st.WriteAudit(updateAuditRow(source, entry)); err != nil {
+		return err
 	}
-	if entry.Detail != "" {
-		summary["detail"] = entry.Detail
-	}
-	row := store.OwnerAuditRow(entry.Action, summary)
-	row.Source, row.SourceIP = source.AuditFields()
-	if entry.Result != "ok" {
-		row.Status = "error"
-	}
-	return st.WriteAudit(row)
+	return nil
 }
 
 // --- crash-window self-heal action -------------------------------------------

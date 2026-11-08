@@ -391,3 +391,9 @@ func nonEmpty(values ...string) []string {
 	}
 	return out
 }
+
+// SetDownloadPause 注入下载开始前的阻塞点；并发测试用它持有第一次升级，
+// 生产路径不要调用。传 nil 取消阻塞。
+func (s *UpdateService) SetDownloadPause(pause func()) {
+	s.downloadPause = pause
+}

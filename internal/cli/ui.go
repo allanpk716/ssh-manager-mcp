@@ -18,6 +18,7 @@ import (
 
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/webui"
+	"ssh-manager-mcp/internal/webuiops"
 )
 
 // uiOpenBrowser 是「用系统默认浏览器打开网址」的可替换依赖；测试注入替身，
@@ -64,7 +65,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		webRole = webui.RoleStandalone
 		servers = standaloneUIServerSource{}
 		accessSource = standaloneUIAccessStore()
-		opsSource = standaloneUIOpsStore()
+		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
 	case launch.Kind == roles.LaunchClient && !launch.ResumeSetup:
 		resolvedInstance, err = resolveClientCacheInstance(instance)
 		if err != nil {
@@ -72,6 +73,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		}
 		webRole = webui.RoleClient
 		servers = clientUIServerSource{instance: resolvedInstance}
+		opsSource = webuiops.UpdatesOnly(uiUpdateService(webui.RoleClient, resolvedInstance))
 	case launch.Kind == roles.LaunchBroker && launch.Role == roles.RoleServer:
 		st, err := openUnlockedStore()
 		if err != nil {
@@ -102,6 +104,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		Port:        port,
 		Access:      accessSource,
 		Ops:         opsSource,
+		OpsInstance: resolvedInstance,
 	})
 	if err != nil {
 		_ = listener.Close()

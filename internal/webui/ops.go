@@ -91,6 +91,8 @@ func (r OpsAuditRow) CommandDisplay() string {
 // 实现；处理器测试用桩，本包不接触数据库结构和文件布局。
 type OpsStore interface {
 	QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error)
+	CheckUpdate(instance string) (OpsUpdateStatus, error)
+	ApplyUpdate(instance, sourceIP string) (OpsUpdateApplyResult, error)
 }
 
 // OpsAuditFilterView 保存过滤表单的当前值，服务器渲染时原样回填。
@@ -116,23 +118,36 @@ const (
 // 本机审计页在后续票里接入；本票只注册单机与权威端的权威 vault 审计页。
 func (h *handler) registerOpsRoutes() {
 	h.mux.HandleFunc(opsRootPath, h.handleOpsRoot)
-	if h.cfg.Role == RoleClient || h.cfg.Ops == nil || !h.caps.CanQueryVaultAudit {
-		if h.cfg.Ops == nil {
-			h.caps.ShowOpsArea = false
-			h.caps.CanQueryVaultAudit = false
-		}
+	if h.cfg.Ops == nil {
+		h.caps.ShowOpsArea = false
+		h.caps.CanQueryVaultAudit = false
+		h.caps.CanUpgradeBinary = false
+		return
+	}
+	// 回环升级页本票只接单机与客户端；权威端的两步升级由后续票接入。
+	if h.caps.CanUpgradeBinary && h.cfg.Role != RoleServer {
+		h.mux.HandleFunc(opsUpdatePath, h.handleOpsUpdate)
+	}
+	if h.cfg.Role == RoleClient || !h.caps.CanQueryVaultAudit {
 		return
 	}
 	h.mux.HandleFunc(opsAuditPath, h.handleOpsAudit)
 }
 
 func (h *handler) handleOpsRoot(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != opsRootPath || h.cfg.Role == RoleClient || h.cfg.Ops == nil ||
-		!h.caps.CanQueryVaultAudit {
+	if r.URL.Path != opsRootPath || h.cfg.Ops == nil {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
-	http.Redirect(w, r, opsAuditPath, http.StatusSeeOther)
+	if h.caps.CanQueryVaultAudit {
+		http.Redirect(w, r, opsAuditPath, http.StatusSeeOther)
+		return
+	}
+	if h.caps.CanUpgradeBinary && h.cfg.Role != RoleServer {
+		http.Redirect(w, r, opsUpdatePath, http.StatusSeeOther)
+		return
+	}
+	h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 }
 
 func (h *handler) handleOpsAudit(w http.ResponseWriter, r *http.Request) {
