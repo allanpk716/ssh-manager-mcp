@@ -60,7 +60,10 @@ type Config struct {
 	Port        int
 	// ServePort 是权威端主监听端口，设备码拉取命令按它拼地址；未提供时
 	// 按默认端口兜底。单机与客户端不使用这个字段。
-	ServePort              int
+	ServePort int
+	// ClientInstance 是客户端角色本次启动读取的客户端缓存实例名；空串表示
+	// 默认实例。会话内切换实例由后续客户端页改为按请求传入。
+	ClientInstance         string
 	Now                    func() time.Time
 	Auth                   AuthStore
 	CertificateFingerprint string
@@ -138,8 +141,7 @@ type capabilities struct {
 	CanManageProjects bool
 	// HasPairingAndDeviceCodes 表示本机角色是否显示配对与设备码入口。
 	HasPairingAndDeviceCodes bool
-	// ShowOpsArea 控制是否显示「运维」区域入口。客户端的运维页面在后续
-	// 票里接入，接入前不显示空导航。
+	// ShowOpsArea 控制是否显示「运维」区域入口。
 	ShowOpsArea bool
 	// CanManageBackups 控制是否显示备份页入口与写操作。
 	CanManageBackups bool
@@ -151,9 +153,10 @@ type capabilities struct {
 	CanRestartService bool
 	// CanQueryVaultAudit 控制单机与权威端的权威 vault 审计页。
 	CanQueryVaultAudit bool
-	// CanUseClientOps 与 CanQueryClientAudit 是客户端专用能力，页面在
-	// 后续票里接入。
-	CanUseClientOps     bool
+	// CanUseClientOps 控制客户端页（连接状态、立即同步与实例切换），由后
+	// 续客户端页票接入。
+	CanUseClientOps bool
+	// CanQueryClientAudit 只对客户端开放，控制本机审计页。
 	CanQueryClientAudit bool
 }
 
@@ -166,6 +169,7 @@ func capabilitiesForRole(role Role) capabilities {
 			ReadOnlyNotice:    "这里只读，修改需到权威端 Web UI 去做。",
 			ShowAccessArea:    true,
 			CanManageProfiles: false,
+			ShowOpsArea:       true, CanQueryClientAudit: true,
 		}
 	}
 	if role == RoleServer {

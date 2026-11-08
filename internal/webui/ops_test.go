@@ -11,9 +11,13 @@ import (
 )
 
 type stubOpsStore struct {
-	query OpsAuditQuery
-	rows  []OpsAuditRow
-	err   error
+	query          OpsAuditQuery
+	rows           []OpsAuditRow
+	err            error
+	clientRows     []OpsAuditRow
+	clientErr      error
+	clientInstance string
+	clientLimit    int
 }
 
 func (s *stubOpsStore) QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error) {

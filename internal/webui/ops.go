@@ -91,6 +91,9 @@ func (r OpsAuditRow) CommandDisplay() string {
 // 实现；处理器测试用桩，本包不接触数据库结构和文件布局。
 type OpsStore interface {
 	QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error)
+	// QueryClientAudit 读取客户端实例旁边的本机审计日志文件。instance 空串
+	// 表示默认实例；后续客户端页会把这里改成按请求传入会话中的实例。
+	QueryClientAudit(instance string, limit int) ([]OpsAuditRow, error)
 }
 
 // OpsAuditFilterView 保存过滤表单的当前值，服务器渲染时原样回填。
@@ -112,27 +115,44 @@ const (
 	opsAuditPage = 100
 )
 
-// registerOpsRoutes 按本机角色注册运维区域路由。客户端的客户端页、升级页与
-// 本机审计页在后续票里接入；本票只注册单机与权威端的权威 vault 审计页。
+// registerOpsRoutes 按本机角色注册运维区域路由：单机与权威端注册权威 vault
+// 审计页，客户端只注册本机审计页；其余页面随后续票接入。
 func (h *handler) registerOpsRoutes() {
 	h.mux.HandleFunc(opsRootPath, h.handleOpsRoot)
-	if h.cfg.Role == RoleClient || h.cfg.Ops == nil || !h.caps.CanQueryVaultAudit {
-		if h.cfg.Ops == nil {
-			h.caps.ShowOpsArea = false
-			h.caps.CanQueryVaultAudit = false
+	if h.cfg.Ops == nil {
+		h.caps.ShowOpsArea = false
+		h.caps.CanQueryVaultAudit = false
+		h.caps.CanQueryClientAudit = false
+		return
+	}
+	if h.cfg.Role == RoleClient {
+		if h.caps.CanQueryClientAudit {
+			h.mux.HandleFunc(opsClientAuditPath, h.handleOpsClientAudit)
 		}
 		return
 	}
-	h.mux.HandleFunc(opsAuditPath, h.handleOpsAudit)
+	if h.caps.CanQueryVaultAudit {
+		h.mux.HandleFunc(opsAuditPath, h.handleOpsAudit)
+	}
 }
 
 func (h *handler) handleOpsRoot(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != opsRootPath || h.cfg.Role == RoleClient || h.cfg.Ops == nil ||
-		!h.caps.CanQueryVaultAudit {
+	if r.URL.Path != opsRootPath || h.cfg.Ops == nil {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
-	http.Redirect(w, r, opsAuditPath, http.StatusSeeOther)
+	target := opsAuditPath
+	if h.cfg.Role == RoleClient {
+		if !h.caps.CanQueryClientAudit {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
+		target = opsClientAuditPath
+	} else if !h.caps.CanQueryVaultAudit {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (h *handler) handleOpsAudit(w http.ResponseWriter, r *http.Request) {
