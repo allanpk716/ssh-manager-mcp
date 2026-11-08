@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -11,13 +10,8 @@ import (
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/probe"
 	"ssh-manager-mcp/internal/probeobserve"
-	"ssh-manager-mcp/internal/proberesults"
 	"ssh-manager-mcp/internal/store"
 )
-
-// errTopologyProbeNeedVault 与其他拓扑命令共用「本机既没有 vault 也没有
-// 客户端缓存」的引导。
-var errTopologyProbeNeedVault = errors.New("本机还没有 vault：请先运行初始化向导（直接执行 sshmgr）；客户端实例请先执行 cache pull")
 
 func devicesProbeCmd() *cobra.Command {
 	var from, instance string
@@ -67,24 +61,18 @@ func devicesProbeCmd() *cobra.Command {
 			}
 
 			service := &probe.Service{Store: st, Instance: instance}
-			if path, ok, pathErr := probeobserve.PathFor(instance); pathErr == nil && ok {
-				service.Results = proberesults.NewFileProbeResults(path)
+			if results, ok, pathErr := probeobserve.ResultsFor(instance); pathErr == nil && ok {
+				service.Results = results
 			}
 			start := time.Now()
 			report, probeErr := service.Probe(cmd.Context(), probe.Request{From: from, Targets: args})
-			summary := map[string]any{"from": from, "targets": []string{}}
+			summary, originServerID := probe.AuditSummary(from, report, probeErr)
 			status := "error"
-			if report != nil {
-				summary["targets"] = report.TargetSummaries()
-				summary["from_device"] = report.FromDevice
-			}
-			if probeErr != nil {
-				summary["error"] = probeErr.Error()
-			} else {
+			if probeErr == nil {
 				status = "ok"
 			}
 			if err := st.WriteAudit(store.AuditRow{
-				TS: start, Action: "probe-connectivity", Status: status,
+				TS: start, ServerID: originServerID, Action: "probe-connectivity", Status: status,
 				Source: store.AuditSourceCLI, Command: store.MarshalAuditSummary(summary),
 			}); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "sshmgr: 写审计失败: %v\n", err)

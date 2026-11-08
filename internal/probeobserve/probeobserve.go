@@ -81,3 +81,14 @@ func PathFor(instance string) (string, bool, error) {
 		return "", false, nil
 	}
 }
+
+// ResultsFor 返回按当前部署角色解析的本地探测结果文件集合。探测工具的
+// 两个调用面（MCP 工具与命令行子命令）都从这里取得结果文件；当前角色没
+// 有可写位置时返回 false。
+func ResultsFor(instance string) (*proberesults.FileProbeResults, bool, error) {
+	path, ok, err := PathFor(instance)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	return proberesults.NewFileProbeResults(path), true, nil
+}

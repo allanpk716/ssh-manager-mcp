@@ -132,12 +132,23 @@ func newMCPCmd() *cobra.Command {
 				if err := os.Setenv("SSHMGR_CACHE_DIR", cacheDir); err != nil {
 					return err
 				}
+				// 同处固定实例名：桥内工具（如连通探测）据此解析 self 设备
+				// 与本实例的探测结果文件，避免深处重新解析时落回默认槽。
+				previousMCPInstance := os.Getenv("SSHMGR_MCP_INSTANCE")
+				if err := os.Setenv("SSHMGR_MCP_INSTANCE", instance); err != nil {
+					return err
+				}
 				defer func() {
 					if previousCacheDir == "" {
 						_ = os.Unsetenv("SSHMGR_CACHE_DIR")
-						return
+					} else {
+						_ = os.Setenv("SSHMGR_CACHE_DIR", previousCacheDir)
 					}
-					_ = os.Setenv("SSHMGR_CACHE_DIR", previousCacheDir)
+					if previousMCPInstance == "" {
+						_ = os.Unsetenv("SSHMGR_MCP_INSTANCE")
+					} else {
+						_ = os.Setenv("SSHMGR_MCP_INSTANCE", previousMCPInstance)
+					}
 				}()
 				// 多机客户端的桥启动快照修订号后台轮询循环。间隔读实例配置
 				// (环境变量可临时覆盖);启动阶段发现非法值时写告警并退回默认

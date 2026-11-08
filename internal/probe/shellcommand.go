@@ -1,12 +1,15 @@
 package probe
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"net"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -56,19 +59,34 @@ func BuildShellProbeCommand(shell models.ShellType, items []ShellCommandItem) (s
 		return strings.Join([]string{powerShellProbeFunctions(), strings.Join(invocations, "\n")}, "\n"), nil
 	case models.ShellWindowsCmd:
 		script := strings.Join([]string{powerShellProbeFunctions(), strings.Join(invocations, "\n")}, "\n")
-		// PowerShell 函数只用单引号书写，cmd 命令行因此不需要在脚本里再
-		// 出现双引号转义。
-		return "powershell -NoProfile -NonInteractive -Command \"" + script + "\"", nil
+		// cmd 的命令行在换行处会截断，-Command 包装多行脚本不可靠；改用
+		// -EncodedCommand 传送按 UTF-16LE 编码的 Base64，彻底避开换行与
+		// 引号转义。
+		encoded := base64.StdEncoding.EncodeToString(utf16LE(script))
+		return "powershell -NoProfile -NonInteractive -EncodedCommand " + encoded, nil
 	default:
 		return "", fmt.Errorf("未知 shell 类型 %q", shell)
 	}
 }
 
+// utf16LE 把脚本按 PowerShell -EncodedCommand 要求的 UTF-16LE 小端字节
+// 编码。
+func utf16LE(script string) []byte {
+	units := utf16.Encode([]rune(script))
+	blob := make([]byte, len(units)*2)
+	for index, unit := range units {
+		binary.LittleEndian.PutUint16(blob[index*2:], unit)
+	}
+	return blob
+}
+
 func probeInvocationForShell(shell models.ShellType, index int, item ShellCommandItem) string {
 	switch models.NormalizeShellType(string(shell)) {
 	case models.ShellPOSIX:
-		seconds := item.Timeout.Seconds()
-		return fmt.Sprintf("sshmgr_probe_one %d %s %d %.3g", index, item.Address, item.Port, seconds)
+		// 不用 %g：超时超过 1000 秒时它会输出科学计数法，shell 工具无法
+		// 解析。
+		seconds := strconv.FormatFloat(item.Timeout.Seconds(), 'f', -1, 64)
+		return fmt.Sprintf("sshmgr_probe_one %d %s %d %s", index, item.Address, item.Port, seconds)
 	case models.ShellPowerShell, models.ShellWindowsCmd:
 		return fmt.Sprintf("probe-one %d %s %d %d", index, item.Address, item.Port, item.Timeout.Milliseconds())
 	default:
@@ -90,6 +108,11 @@ func validateProbeAddress(address string) error {
 	}
 	for _, label := range strings.Split(address, ".") {
 		if label == "" || len(label) > 63 {
+			return fmt.Errorf("探测地址 %q 不是合法的 IP 或主机名", address)
+		}
+		// 拒绝以连字符开头或结尾的标签：传给 nc 等命令行工具时，开头的连
+		// 字符会被当成选项前缀。
+		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
 			return fmt.Errorf("探测地址 %q 不是合法的 IP 或主机名", address)
 		}
 		for _, symbol := range label {
@@ -134,7 +157,7 @@ func ParseShellProbeOutput(output string, count int) []ShellProbeResult {
 				duration = time.Duration(milliseconds) * time.Millisecond
 			}
 		}
-		category := probeCategoryFromCode(categoryCode)
+		category := models.NormalizeProbeErrorCategory(categoryCode)
 		if fields[2] == "ok" {
 			results[index] = ShellProbeResult{OK: true, Category: models.ProbeErrorNone, Duration: duration}
 			continue
@@ -145,17 +168,6 @@ func ParseShellProbeOutput(output string, count int) []ShellProbeResult {
 		results[index] = ShellProbeResult{OK: false, Category: category, Duration: duration}
 	}
 	return results
-}
-
-func probeCategoryFromCode(code string) models.ProbeErrorCategory {
-	switch models.ProbeErrorCategory(code) {
-	case models.ProbeErrorConnectionRefused, models.ProbeErrorTimeout, models.ProbeErrorNoRoute,
-		models.ProbeErrorDNSFailure, models.ProbeErrorMissingTool, models.ProbeErrorNoResult,
-		models.ProbeErrorIncomplete, models.ProbeErrorOther:
-		return models.ProbeErrorCategory(code)
-	default:
-		return models.ProbeErrorOther
-	}
 }
 
 func posixProbeFunctions() string {

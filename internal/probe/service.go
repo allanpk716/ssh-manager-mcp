@@ -38,15 +38,15 @@ const (
 type Request struct {
 	From    string
 	Targets []string
-	// Source 写入探测结果文件的来源标记（固定为 probe）。
-	Source string
 }
 
-// LocalDialFunc 是本机 TCP 拨号接缝：按地址、端口与逐地址超时建连，返回
-// 建连耗时或错误。
+// LocalDialFunc 是本机 TCP 拨号的可替换注入点：按地址、端口与逐地址超时
+// 建连，返回建连耗时或错误。
 type LocalDialFunc func(ctx context.Context, address string, port int, timeout time.Duration) (time.Duration, error)
 
-// RemoteExecFunc 是在受管服务器上执行固定命令的接缝：返回标准输出或错误。
+// RemoteExecFunc 是在受管服务器上执行固定命令的可替换注入点：返回标准
+// 输出或错误。连接本身失败时返回 originConnectionError 包裹的错误；会话
+// 建立后的失败可以携带部分输出一起返回。
 type RemoteExecFunc func(ctx context.Context, server *models.Server, shell models.ShellType, command string) (string, error)
 
 // Service 是连通探测服务。测试可替换 LocalDial 与 RemoteExec；生产路径使
@@ -61,7 +61,7 @@ type Service struct {
 	Results *proberesults.FileProbeResults
 	// HostKeys 是经服务器探测时使用的主机密钥存储；空值使用存储本身。
 	HostKeys sshbroker.HostKeyStore
-	// LocalDial 与 RemoteExec 是可注入接缝；空值使用生产实现。
+	// LocalDial 与 RemoteExec 是可替换的注入点；空值使用生产实现。
 	LocalDial  LocalDialFunc
 	RemoteExec RemoteExecFunc
 	// TotalDeadline 覆盖整次调用总时限；零值使用规格默认值。
@@ -138,11 +138,8 @@ func (s *Service) Probe(parent context.Context, request Request) (*Report, error
 	if err != nil {
 		return nil, err
 	}
-	source := request.Source
-	if source == "" {
-		source = proberesults.SourceProbe
-	}
-	report := &Report{From: request.From, FromDevice: origin.device.Name, Remote: origin.remote, fromDeviceID: origin.device.ID, source: source}
+	report := &Report{From: request.From, FromDevice: origin.device.Name, Remote: origin.remote,
+		fromDeviceID: origin.device.ID, source: proberesults.SourceProbe}
 	originMemberships, err := s.Store.ListNetworkMembershipsByRegistration(origin.device.Name)
 	if err != nil {
 		return nil, err
@@ -275,12 +272,42 @@ func (s *Service) resolveTargets(raw []string) ([]resolvedTarget, error) {
 				target.port = server.Port
 			}
 		} else {
+			// 按服务器编号精确查找失败后，先做忽略大小写的匹配：唯一命中
+			// 时给出与起点相同的纠正提示，而不是落到设备名报错。
+			if canonical, found := s.serverIDByCase(base); found {
+				if s.GateServer != nil {
+					if err := s.GateServer(base); err != nil {
+						return nil, err
+					}
+				}
+				return nil, fmt.Errorf("服务器编号区分大小写，是否想写 %q", canonical)
+			}
 			device, deviceErr := s.Store.GetDevice(base)
 			if deviceErr != nil && !errors.Is(deviceErr, sql.ErrNoRows) && !errors.Is(deviceErr, store.ErrDeviceNotFound) {
 				return nil, deviceErr
 			}
 			if device == nil {
 				return nil, fmt.Errorf("拓扑中没有这台设备：%s", base)
+			}
+			// 关联了服务器条目的设备是受管设备：按设备名当目标同样要过
+			// 服务器编号的授权检查，避免绕开范围限制。条目全部在范围外
+			// 时按第一个条目返回同样的越权错误；不受管设备与客户端实例
+			// 没有条目，照旧不受限。
+			if s.GateServer != nil {
+				entries, err := s.Store.ListServersForDevice(base)
+				if err != nil {
+					return nil, err
+				}
+				anyGranted := false
+				for _, entry := range entries {
+					if s.GateServer(entry.ID) == nil {
+						anyGranted = true
+						break
+					}
+				}
+				if !anyGranted && len(entries) > 0 {
+					return nil, s.GateServer(entries[0].ID)
+				}
 			}
 			target = resolvedTarget{label: base, device: device}
 			if !explicit {
@@ -301,6 +328,22 @@ func (s *Service) resolveTargets(raw []string) ([]resolvedTarget, error) {
 		return nil, fmt.Errorf("目标最多 %d 个（去重后），请分批调用", MaxTargets)
 	}
 	return out, nil
+}
+
+// serverIDByCase 在全部服务器条目里按编号做忽略大小写匹配；唯一命中时返
+// 回正确写法。
+func (s *Service) serverIDByCase(serverID string) (string, bool) {
+	servers, err := s.Store.ListServers()
+	if err != nil {
+		return "", false
+	}
+	canonical, hits := "", 0
+	for _, server := range servers {
+		if strings.EqualFold(server.ID, serverID) {
+			canonical, hits = server.ID, hits+1
+		}
+	}
+	return canonical, hits == 1
 }
 
 func (s *Service) probeLocal(ctx context.Context, report *Report, addressTimeout time.Duration) {
@@ -332,6 +375,12 @@ func (s *Service) probeLocalTarget(ctx context.Context, report *Report, target *
 		duration, err := s.localDial()(ctx, line.address, target.Port, addressTimeout)
 		line.OK = err == nil
 		line.Category = sshbroker.ClassifyProbeDialError(err)
+		// 总时限取消打断了这次拨号：没有真实结论，不能照搬拨号错误当成
+		// 连接超时，也不写探测结果文件。
+		if err != nil && ctx.Err() != nil {
+			line.OK = false
+			line.Category = models.ProbeErrorIncomplete
+		}
 		line.Duration = duration
 		line.ObservedAt = s.now()
 		s.record(report, target, *line)
@@ -375,14 +424,22 @@ func (s *Service) probeRemote(ctx context.Context, server *models.Server, report
 	}
 	output, err := s.remoteExec()(ctx, server, shell, command)
 	if err != nil {
-		report.OriginError = err.Error()
-		markUnprobed(report, "未探测（无法连接起点服务器）")
-		return
+		var connectionErr *originConnectionError
+		if errors.As(err, &connectionErr) {
+			report.OriginError = err.Error()
+			markUnprobed(report, "未探测（无法连接起点服务器）")
+			return
+		}
+		// 会话建立后命令超时或被总时限打断：解析已经拿到的部分输出，
+		// 没有结果行的地址按「探测未完成」呈现。
 	}
 	results := ParseShellProbeOutput(output, len(items))
 	for index, result := range results {
 		item := mapping[index]
 		line := &report.Targets[item.targetIndex].Lines[item.lineIndex]
+		if err != nil && result.Category == models.ProbeErrorNoResult {
+			result.Category = models.ProbeErrorIncomplete
+		}
 		line.OK = result.OK
 		line.Category = result.Category
 		line.Duration = result.Duration
@@ -401,6 +458,9 @@ func markUnprobed(report *Report, note string) {
 }
 
 func (s *Service) record(report *Report, target *TargetReport, line AddressReport) {
+	if line.Category == models.ProbeErrorIncomplete {
+		return
+	}
 	if s.Results == nil || target.DeviceID == "" || line.NetworkName == "" || line.address == "" {
 		return
 	}
@@ -414,9 +474,6 @@ func (s *Service) record(report *Report, target *TargetReport, line AddressRepor
 
 // FromDeviceID 返回起点设备标识，供调用面写审计摘要。
 func (r *Report) FromDeviceID() string { return r.fromDeviceID }
-
-// SetFromDeviceID 由服务内部写入起点设备标识。
-func (r *Report) SetFromDeviceID(id string) { r.fromDeviceID = id }
 
 func (s *Service) localDial() LocalDialFunc {
 	if s.LocalDial != nil {
@@ -454,7 +511,7 @@ func realLocalDial(ctx context.Context, address string, port int, timeout time.D
 func (s *Service) defaultRemoteExec(ctx context.Context, server *models.Server, shell models.ShellType, command string) (string, error) {
 	auth, err := vault.AuthForServer(s.Store, server)
 	if err != nil {
-		return "", fmt.Errorf("resolve credential: %w", err)
+		return "", &originConnectionError{err: fmt.Errorf("resolve credential: %w", err)}
 	}
 	dialSource := dialplan.NewStoreSource(s.Store, s.Instance)
 	hostKeys := sshbroker.HostKeyStore(s.Store)
@@ -466,18 +523,29 @@ func (s *Service) defaultRemoteExec(ctx context.Context, server *models.Server, 
 		SuccessCache: dialSource, Topology: dialSource,
 	})
 	if err != nil {
-		return "", err
+		return "", &originConnectionError{err: err}
 	}
 	defer cli.Close()
 	result, err := cli.Exec(ctx, command, time.Until(ctxDeadline(ctx)), remoteProbeMaxOutput)
 	if err != nil {
-		return "", err
+		// 会话已建立：返回已收到的部分输出，由调用方继续解析。
+		return result.Stdout, err
 	}
 	if result.TimedOut {
 		return result.Stdout, fmt.Errorf("固定命令执行超时")
 	}
 	return result.Stdout, nil
 }
+
+// originConnectionError 标记固定命令会话没有建立（取凭据或连接失败），
+// 与会话建立后的命令超时区分开。
+type originConnectionError struct {
+	err error
+}
+
+func (e *originConnectionError) Error() string { return e.err.Error() }
+
+func (e *originConnectionError) Unwrap() error { return e.err }
 
 func ctxDeadline(ctx context.Context) time.Time {
 	if deadline, ok := ctx.Deadline(); ok {
@@ -519,6 +587,11 @@ func annotateTarget(target *TargetReport) {
 			incomplete = true
 			continue
 		}
+		// 缺少探测工具、没有结果行属于「没有测到连接」，不是登记与实际
+		// 不一致的证据。
+		if line.Category == models.ProbeErrorMissingTool || line.Category == models.ProbeErrorNoResult {
+			continue
+		}
 		summary, present := byNetwork[line.NetworkName]
 		if !present {
 			summary = &networkSummary{name: line.NetworkName, physical: line.physical, allFail: true}
@@ -537,7 +610,7 @@ func annotateTarget(target *TargetReport) {
 		summary := byNetwork[name]
 		if summary.physical && summary.allFail {
 			physicalAllFail = true
-			target.Notes = append(target.Notes, fmt.Sprintf("登记与实际不一致：%s（%s）", name, CategoryLabel(summary.reason)))
+			target.Notes = append(target.Notes, fmt.Sprintf("登记与实际不一致：%s（%s）", name, models.ProbeErrorCategoryLabel(summary.reason)))
 		}
 	}
 	if physicalAllFail {

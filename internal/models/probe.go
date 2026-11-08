@@ -26,8 +26,45 @@ const (
 	ProbeErrorOther ProbeErrorCategory = "other"
 )
 
-// ParseProbeErrorCategory 把存储或远端输出里的分类代号归一化为已知值；
-// 未知代号保留原样，呈现层负责按「其他」处理。
-func ParseProbeErrorCategory(value string) ProbeErrorCategory {
-	return ProbeErrorCategory(value)
+// probeErrorCategoryTable 是错误分类代号与呈现短语的单一对照表。呈现层
+// 用它查中文短语，输出解析用它识别已知代号；空分类（连接成功）不在表
+// 里，输入的空代号按「其他」处理。
+var probeErrorCategoryTable = []struct {
+	Category ProbeErrorCategory
+	Label    string
+}{
+	{ProbeErrorConnectionRefused, "连接被拒绝"},
+	{ProbeErrorTimeout, "连接超时"},
+	{ProbeErrorNoRoute, "无路由"},
+	{ProbeErrorDNSFailure, "名字解析失败"},
+	{ProbeErrorMissingTool, "服务器缺少探测工具"},
+	{ProbeErrorNoResult, "服务器未返回结果"},
+	{ProbeErrorIncomplete, "探测未完成"},
+	{ProbeErrorOther, "其他"},
+}
+
+// ProbeErrorCategoryLabel 返回错误分类的中文呈现短语；连接成功返回空字
+// 符串，未知分类按「其他」。
+func ProbeErrorCategoryLabel(category ProbeErrorCategory) string {
+	if category == ProbeErrorNone {
+		return ""
+	}
+	for _, item := range probeErrorCategoryTable {
+		if item.Category == category {
+			return item.Label
+		}
+	}
+	return ProbeErrorCategoryLabel(ProbeErrorOther)
+}
+
+// NormalizeProbeErrorCategory 把远端输出或存储里的分类代号归一化为已知
+// 值；未知代号（包括空字符串）归入「其他」。
+func NormalizeProbeErrorCategory(value string) ProbeErrorCategory {
+	category := ProbeErrorCategory(value)
+	for _, item := range probeErrorCategoryTable {
+		if item.Category == category {
+			return category
+		}
+	}
+	return ProbeErrorOther
 }

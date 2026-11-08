@@ -9,30 +9,6 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
-// CategoryLabel 把共用错误分类翻译成呈现用的中文短语。
-func CategoryLabel(category models.ProbeErrorCategory) string {
-	switch category {
-	case models.ProbeErrorNone:
-		return ""
-	case models.ProbeErrorConnectionRefused:
-		return "连接被拒绝"
-	case models.ProbeErrorTimeout:
-		return "连接超时"
-	case models.ProbeErrorNoRoute:
-		return "无路由"
-	case models.ProbeErrorDNSFailure:
-		return "名字解析失败"
-	case models.ProbeErrorMissingTool:
-		return "服务器缺少探测工具"
-	case models.ProbeErrorNoResult:
-		return "服务器未返回结果"
-	case models.ProbeErrorIncomplete:
-		return "探测未完成"
-	default:
-		return "其他"
-	}
-}
-
 // ObservationAgeLabel 是观察时间的相对呈现：超过 10 分钟加「旧」字样。本工
 // 具返回的都是新测结果；这个约定供读取接口与后续查询工具共用。
 func ObservationAgeLabel(now, observedAt time.Time) string {
@@ -63,13 +39,20 @@ func (r *Report) Text() string {
 		default:
 			for _, line := range target.Lines {
 				marker := "✗"
-				detail := CategoryLabel(line.Category)
+				detail := models.ProbeErrorCategoryLabel(line.Category)
 				if line.OK {
 					marker = "✓"
 					detail = ""
 					if line.Duration >= 0 {
 						detail = fmt.Sprintf("%dms", line.Duration.Milliseconds())
 					}
+				}
+				if line.Category == models.ProbeErrorIncomplete {
+					// 被总时限打断的行没有观察时间，不显示「刚刚」或
+					//「旧」。
+					lines = append(lines, fmt.Sprintf("%s  %s 第%d个地址  %s%s", header,
+						line.NetworkName, line.Sequence, marker, detail))
+					continue
 				}
 				age := ObservationAgeLabel(now, line.ObservedAt)
 				lines = append(lines, fmt.Sprintf("%s  %s 第%d个地址  %s%s %s", header,
@@ -90,19 +73,4 @@ func (r *Report) TargetSummaries() []string {
 		targets = append(targets, fmt.Sprintf("%s:%d", target.Label, target.Port))
 	}
 	return targets
-}
-
-// Summary 返回审计摘要：起点与「目标:端口」列表，只写服务器编号与设备
-// 名，不写地址。经服务器探测时额外注明固定命令不经命令策略。
-func (r *Report) Summary() string {
-	targets := r.TargetSummaries()
-	from := r.From
-	if r.FromDevice != "" {
-		from = r.From + "（" + r.FromDevice + "）"
-	}
-	summary := fmt.Sprintf("from=%s targets=%s", from, strings.Join(targets, ","))
-	if r.Remote {
-		summary += " 固定命令，不经命令策略"
-	}
-	return summary
 }

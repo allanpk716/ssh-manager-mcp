@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +19,7 @@ import (
 	"ssh-manager-mcp/internal/proberesults"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testsshd"
 )
 
 // serviceFixture 组装一台单机部署的测试存储：本机设备是「笔记本」，目标
@@ -149,7 +153,7 @@ func TestServiceSelfProbeGroupsResultsByText(t *testing.T) {
 	service, results := fixture.service(dial.dial)
 
 	report, err := service.Probe(context.Background(), Request{
-		From: "self", Targets: []string{"NAS:445"}, Source: proberesults.SourceProbe,
+		From: "self", Targets: []string{"NAS:445"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +209,7 @@ func TestServiceTargetParsingDefaultsAndLimits(t *testing.T) {
 	service, _ := fixture.service(dial.dial)
 
 	report, err := service.Probe(context.Background(), Request{
-		From: "self", Targets: []string{serverResult.ServerID, serverResult.ServerID, "NAS"}, Source: proberesults.SourceProbe,
+		From: "self", Targets: []string{serverResult.ServerID, serverResult.ServerID, "NAS"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +251,7 @@ func TestServiceNoCommonNetworkAndMismatchNotes(t *testing.T) {
 	service, _ := fixture.service(dial.dial)
 
 	report, err := service.Probe(context.Background(), Request{
-		From: "self", Targets: []string{"NAS:445", "云端机器:22"}, Source: proberesults.SourceProbe,
+		From: "self", Targets: []string{"NAS:445", "云端机器:22"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -275,6 +279,103 @@ func TestServiceSelfWithoutRegisteredDeviceFails(t *testing.T) {
 	if _, err := service.Probe(context.Background(), Request{From: "self", Targets: []string{"NAS"}}); err == nil ||
 		!strings.Contains(err.Error(), "本机未登记设备") {
 		t.Fatalf("self without a local device error = %v", err)
+	}
+}
+
+// TestServiceManagedDeviceTargetRequiresProfileGrant: 关联了服务器条目的设
+// 备按设备名当目标时，同样要过授权检查；不受管设备与客户端实例设备不受
+// 授权范围限制。
+func TestServiceManagedDeviceTargetRequiresProfileGrant(t *testing.T) {
+	fixture := newServiceFixture(t)
+	credentialID, err := fixture.store.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantedResult, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "已授权条目", Host: "192.0.2.40", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+	}, nil, nil, "NAS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "范围外条目", Host: "192.0.2.41", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+	}, nil, nil, "笔记本"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddDevice("不受管设备", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := fixture.store.AddProfile("探测授权")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.store.AddCacheToken("client-instance", profileID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddDevice("客户端设备", "", "client-instance"); err != nil {
+		t.Fatal(err)
+	}
+	service, _ := fixture.service((&fakeLocalDial{}).dial)
+	service.GateServer = func(serverID string) error {
+		if serverID == grantedResult.ServerID {
+			return nil
+		}
+		return fmt.Errorf("server %s not in your profile", serverID)
+	}
+
+	// NAS 关联了已授权条目：设备名目标照常解析。
+	if _, err := service.Probe(context.Background(), Request{From: "self", Targets: []string{"NAS"}}); err != nil {
+		t.Fatalf("managed device with a granted entry must pass: %v", err)
+	}
+	// 笔记本关联的条目全部在范围外：设备名目标必须被拒绝。
+	_, err = service.Probe(context.Background(), Request{From: "self", Targets: []string{"笔记本"}})
+	if err == nil || !strings.Contains(err.Error(), "not in your profile") {
+		t.Fatalf("managed device without a granted entry must be rejected, got %v", err)
+	}
+	// 不受管设备与客户端实例不受授权范围限制。
+	for _, target := range []string{"不受管设备", "客户端设备"} {
+		if _, err := service.Probe(context.Background(), Request{From: "self", Targets: []string{target}}); err != nil {
+			t.Fatalf("target %s must not be gated: %v", target, err)
+		}
+	}
+}
+
+// TestServiceTargetServerIDCaseCorrectionHint: 目标服务器编号写错大小写
+// 时，与起点一样给出大小写纠正提示，而不是落到设备名报错。
+func TestServiceTargetServerIDCaseCorrectionHint(t *testing.T) {
+	fixture := newServiceFixture(t)
+	credentialID, err := fixture.store.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantedResult, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "NAS SSH", Host: "192.0.2.10", Port: 2202, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+	}, nil, nil, "NAS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongCase := strings.ToUpper(grantedResult.ServerID)
+	if wrongCase == grantedResult.ServerID {
+		t.Fatalf("server id %q has no case variant", grantedResult.ServerID)
+	}
+	service, _ := fixture.service((&fakeLocalDial{}).dial)
+	service.GateServer = func(serverID string) error {
+		if serverID == grantedResult.ServerID {
+			return nil
+		}
+		if strings.EqualFold(serverID, grantedResult.ServerID) {
+			return fmt.Errorf("server %s not in your profile (did you mean %q? server ids are case-sensitive)",
+				serverID, grantedResult.ServerID)
+		}
+		return fmt.Errorf("server %s not in your profile", serverID)
+	}
+
+	_, err = service.Probe(context.Background(), Request{From: "self", Targets: []string{wrongCase}})
+	if err == nil || !strings.Contains(err.Error(), "did you mean") || !strings.Contains(err.Error(), grantedResult.ServerID) {
+		t.Fatalf("wrong-case target must carry the case correction hint, got %v", err)
 	}
 }
 
@@ -322,6 +423,42 @@ func TestServiceConcurrencyAndTotalDeadline(t *testing.T) {
 	}
 }
 
+// TestServiceTotalDeadlineMarksDialingAddressIncomplete: 到总时限那一刻正
+// 在拨号或还没轮到的地址都记「探测未完成」，呈现不带相对时间，也不写进
+// 探测结果文件。
+func TestServiceTotalDeadlineMarksDialingAddressIncomplete(t *testing.T) {
+	fixture := newServiceFixture(t)
+	dial := &fakeLocalDial{}
+	service, results := fixture.service(dial.dial)
+	service.TotalDeadline = 80 * time.Millisecond
+	service.LocalDial = func(ctx context.Context, address string, port int, timeout time.Duration) (time.Duration, error) {
+		// 第一个地址一直拨到总时限，返回的正是总时限取消错误。
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+
+	report, err := service.Probe(context.Background(), Request{From: "self", Targets: []string{"NAS:445"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := report.Text()
+	if got := strings.Count(text, "✗探测未完成"); got != 2 {
+		t.Fatalf("both interrupted addresses must be incomplete:\n%s", text)
+	}
+	for _, unwanted := range []string{"探测未完成 刚刚", "探测未完成 旧", "连接超时"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("text must not contain %q:\n%s", unwanted, text)
+		}
+	}
+	observations, err := results.List(fixture.selfDevice.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 0 {
+		t.Fatalf("interrupted addresses must not be recorded: %+v", observations)
+	}
+}
+
 // TestServiceRemoteProbeUsesFixedCommandAndParsesOutput: 经服务器起点在一
 // 次 SSH 会话里执行一条固定命令，输出按序号回填到各目标；起点服务器连接
 // 失败时结果开头说明「无法连接起点服务器」。
@@ -349,7 +486,7 @@ func TestServiceRemoteProbeUsesFixedCommandAndParsesOutput(t *testing.T) {
 	}
 
 	report, err := service.Probe(context.Background(), Request{
-		From: originResult.ServerID, Targets: []string{"NAS:445"}, Source: proberesults.SourceProbe,
+		From: originResult.ServerID, Targets: []string{"NAS:445"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -371,7 +508,7 @@ func TestServiceRemoteProbeUsesFixedCommandAndParsesOutput(t *testing.T) {
 	}
 
 	service.RemoteExec = func(context.Context, *models.Server, models.ShellType, string) (string, error) {
-		return "", errors.New("dial timeout")
+		return "", &originConnectionError{err: errors.New("dial timeout")}
 	}
 	failed, err := service.Probe(context.Background(), Request{
 		From: originResult.ServerID, Targets: []string{"NAS:445"},
@@ -381,6 +518,162 @@ func TestServiceRemoteProbeUsesFixedCommandAndParsesOutput(t *testing.T) {
 	}
 	if !strings.Contains(failed.Text(), "无法连接起点服务器") {
 		t.Fatalf("origin failure text =\n%s", failed.Text())
+	}
+}
+
+// TestServiceNonConnectionResultsDoNotTriggerMismatchNote: 服务器缺少探测
+// 工具、服务器未返回结果这类非连接结论不代表登记与实际不一致；物理局域
+// 网全是这类结果时不标注。
+func TestServiceNonConnectionResultsDoNotTriggerMismatchNote(t *testing.T) {
+	fixture := newServiceFixture(t)
+	credentialID, err := fixture.store.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originResult, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "笔记本 SSH", Host: "192.0.2.20", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: credentialID, ShellType: models.ShellPOSIX,
+	}, nil, nil, "笔记本")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, output := range []string{
+		// 家A局域网缺少探测工具，NetBird 没有返回结果行。
+		"SSHMGR-PROBE 0 fail 1 missing-tool\nSSHMGR-PROBE 1 fail 1 missing-tool\n",
+		"",
+	} {
+		service, _ := fixture.service((&fakeLocalDial{}).dial)
+		service.RemoteExec = func(context.Context, *models.Server, models.ShellType, string) (string, error) {
+			return output, nil
+		}
+		report, err := service.Probe(context.Background(), Request{
+			From: originResult.ServerID, Targets: []string{"NAS:445"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(report.Text(), "登记与实际不一致") {
+			t.Fatalf("non-connection results must not trigger the mismatch note:\n%s", report.Text())
+		}
+	}
+}
+
+// TestServiceRemoteCommandTimeoutKeepsPartialOutput: 会话建立后固定命令超
+// 时，不再误报「无法连接起点服务器」；已返回的结果行照常呈现，缺行记
+// 「探测未完成」且不写结果文件。
+func TestServiceRemoteCommandTimeoutKeepsPartialOutput(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SSHMGR_STORE", filepath.Join(dir, "store.db"))
+	if err := roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	masterKey, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(dir, "store.db"), masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if _, err := st.AddSite("家A", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "家A局域网", Type: models.NetworkPhysical, SiteName: "家A"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "NetBird", Type: models.NetworkVirtual}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("NAS", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	laptop, err := st.AddDevice("笔记本", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := roles.SetLocalDeviceID(laptop.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, membership := range []struct {
+		device, network, address string
+	}{
+		// 笔记本的登记地址就是进程内 SSH 服务器所在的回环地址，起点拨号
+		// 第一次尝试即建立会话。
+		{"笔记本", "家A局域网", "127.0.0.1"},
+		{"笔记本", "NetBird", "127.0.0.1"},
+		{"NAS", "家A局域网", "192.0.2.10"},
+		{"NAS", "NetBird", "100.64.10.5"},
+	} {
+		if _, err := st.AddNetworkMembership(membership.device, membership.network, membership.address); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	execServer, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		ExecStream: func(_ string, _ io.Reader, stdout, _ io.Writer) int {
+			_, _ = stdout.Write([]byte("SSHMGR-PROBE 0 fail 1 connection-refused\n"))
+			// 只输出第一行后挂住，等客户端执行超时后拆掉会话。
+			time.Sleep(5 * time.Second)
+			return 0
+		},
+	})
+	defer cleanup()
+	host, portText, err := net.SplitHostPort(execServer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originResult, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "笔记本 SSH", Host: host, Port: port, User: "u",
+		AuthMethod: models.AuthPassword, ShellType: models.ShellPowerShell,
+	}, &models.Credential{Type: models.CredPassword, Secret: []byte("pw")}, nil, "笔记本")
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, err := st.GetServer(originResult.ServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveEntryPin(origin, hostKey.Marshal()); err != nil {
+		t.Fatal(err)
+	}
+
+	results := proberesults.NewFileProbeResults(filepath.Join(dir, "probe-results.json"))
+	service := &Service{
+		Store: st, Results: results, TotalDeadline: 2 * time.Second,
+		Now: func() time.Time { return time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC) },
+	}
+	report, err := service.Probe(context.Background(), Request{
+		From: origin.ID, Targets: []string{"NAS:445"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := report.Text()
+	if strings.Contains(text, "无法连接起点服务器") || strings.Contains(text, "未探测") {
+		t.Fatalf("command timeout must not be reported as an origin failure:\n%s", text)
+	}
+	if !strings.Contains(text, "NAS:445  家A局域网 第1个地址  ✗连接被拒绝 刚刚") {
+		t.Fatalf("returned line must be presented:\n%s", text)
+	}
+	if !strings.Contains(text, "NAS:445  NetBird 第1个地址  ✗探测未完成") {
+		t.Fatalf("missing line must be incomplete:\n%s", text)
+	}
+	nasDevice, err := st.GetDevice("NAS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observations, err := results.List(laptop.ID, nasDevice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 1 || observations[0].Category != models.ProbeErrorConnectionRefused {
+		t.Fatalf("only the returned line must be recorded: %+v", observations)
 	}
 }
 
