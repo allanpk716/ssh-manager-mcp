@@ -1,6 +1,8 @@
 package servermanage
 
 import (
+	"sort"
+
 	"ssh-manager-mcp/internal/models"
 )
 
@@ -34,4 +36,36 @@ func (m *Manager) List(attentionOnly bool) ([]ListItem, error) {
 		out = append(out, ListItem{Server: srv, AttentionReasons: reasons})
 	}
 	return out, nil
+}
+
+// ReasonLabel 把注意原因代号换成界面文案；未知代号原样返回。
+func ReasonLabel(code string) string {
+	switch code {
+	case ReasonNoCredential:
+		return "未挂凭据"
+	case ReasonNoRole:
+		return "未设角色"
+	case ReasonNeedsPassphrase:
+		return "待补私钥口令"
+	default:
+		return code
+	}
+}
+
+// ReasonLabels 把一组注意原因代号换成界面文案。
+func ReasonLabels(codes []string) []string {
+	labels := make([]string, 0, len(codes))
+	for _, code := range codes {
+		labels = append(labels, ReasonLabel(code))
+	}
+	return labels
+}
+
+// SortNeedsAttentionFirst 稳定地把需要注意的服务器排到最前。
+func SortNeedsAttentionFirst(items []ListItem) []ListItem {
+	sorted := append([]ListItem(nil), items...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return len(sorted[i].AttentionReasons) > 0 && len(sorted[j].AttentionReasons) == 0
+	})
+	return sorted
 }

@@ -505,7 +505,7 @@ func TestSecretsServerRemoveCascade(t *testing.T) {
 	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--stdin")
 	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN,DB_PASSWORD", "--servers", "db1,web1")
 
-	mustSecretsCli(t, "", "servers", "rm", "db1")
+	mustSecretsCli(t, "", "servers", "rm", "--yes", "db1")
 	out := mustSecretsCli(t, "", "secrets", "list")
 	if strings.Contains(out, "db1") {
 		t.Fatalf("removed entry must disappear from every allow list:\n%s", out)

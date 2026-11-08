@@ -39,7 +39,7 @@ func TestServersRmLegacyIDStartingWithDash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runCli(t, "servers", "rm", "--", legacyID)
+	runCli(t, "servers", "rm", "--yes", "--", legacyID)
 
 	st, err = store.Open(dbPath, mk)
 	if err != nil {

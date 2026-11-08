@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"ssh-manager-mcp/internal/models"
@@ -41,12 +42,15 @@ type EditRequest struct {
 	Tags        *[]string
 	ExposeHost  *bool
 
-	Password        string
-	KeyPath         string
-	KeyBytes        []byte
-	KeyPassphrase   string
+	// 凭据字段用指针区分「未提交」与「提交了空值」：nil 表示不修改；非 nil
+	// 的空值会按更换凭据的校验规则报错。KeyContent 是界面粘贴的私钥内容，
+	// KeyPath 是文件路径，两者取先出现者。
+	Password        *string
+	KeyPath         *string
+	KeyContent      *string
+	KeyPassphrase   *string
 	ClearCredential bool
-	SudoPassword    string
+	SudoPassword    *string
 }
 
 // EditResult 是一次编辑的结果：保存后的服务器条目、实际写入的字段名，以及
@@ -122,14 +126,14 @@ func (m *Manager) Edit(req EditRequest, src Source) (*EditResult, error) {
 		apply("expose-host", func() { srv.ExposeHost = *req.ExposeHost })
 	}
 
-	passwordSet := req.Password != ""
-	keySet := req.KeyPath != "" || len(req.KeyBytes) > 0
+	passwordSet := req.Password != nil
+	keySet := req.KeyPath != nil || req.KeyContent != nil
 	if passwordSet && keySet {
-		err := errors.New("密码与私钥互斥，一次只能提供一种登录凭据")
+		err := errors.New("--password and --key are mutually exclusive; provide exactly one")
 		return nil, m.auditEditError(origName, attempted, err, src)
 	}
-	if req.ClearCredential && (passwordSet || keySet || req.KeyPassphrase != "") {
-		err := errors.New("清除凭据与登录凭据修改互斥")
+	if req.ClearCredential && (passwordSet || keySet || req.KeyPassphrase != nil) {
+		err := errors.New("--clear-credential is mutually exclusive with --password/--key")
 		return nil, m.auditEditError(origName, attempted, err, src)
 	}
 	if req.ClearCredential {
@@ -147,59 +151,60 @@ func (m *Manager) Edit(req EditRequest, src Source) (*EditResult, error) {
 		}
 		return &EditResult{Server: cleared, ChangedFields: []string{"clear-credential"}}, nil
 	}
-	if passwordSet && strings.TrimSpace(req.Password) == "" {
-		err := errors.New("密码不能为空（更换凭据请给新值；清除凭据请用清除凭据操作）")
+	if passwordSet && strings.TrimSpace(*req.Password) == "" {
+		err := errors.New("--password 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）")
 		return nil, m.auditEditError(origName, attempted, err, src)
 	}
-	if keySet && strings.TrimSpace(req.KeyPath) == "" && strings.TrimSpace(string(req.KeyBytes)) == "" {
-		err := errors.New("私钥不能为空（更换凭据请给新值；清除凭据请用清除凭据操作）")
+	if keySet && strings.TrimSpace(keyText(req)) == "" {
+		err := errors.New("--key 不能为空（更换凭据请给新值；清除凭据请用 --clear-credential）")
 		return nil, m.auditEditError(origName, attempted, err, src)
 	}
-	if strings.TrimSpace(req.SudoPassword) == "" && req.SudoPassword != "" {
-		err := errors.New("sudo 密码不能为空（更换凭据请给新值）")
+	if req.SudoPassword != nil && strings.TrimSpace(*req.SudoPassword) == "" {
+		err := errors.New("--sudo-password 不能为空（更换凭据请给新值）")
 		return nil, m.auditEditError(origName, attempted, err, src)
 	}
 
 	// 只补私钥口令：不重新粘贴私钥，直接校验并写入 vault 里已存私钥的口令。
-	if req.KeyPassphrase != "" && !keySet && !passwordSet {
-		if len(changed) > 0 || req.SudoPassword != "" {
+	if req.KeyPassphrase != nil && *req.KeyPassphrase != "" && !keySet && !passwordSet {
+		if len(changed) > 0 || req.SudoPassword != nil {
 			err := errors.New("只补私钥口令与其他字段编辑不能混在一次提交里")
 			return nil, m.auditEditError(origName, attempted, err, src)
 		}
-		return m.SupplementKeyPassphrase(srv.ID, req.KeyPassphrase, src)
+		return m.SupplementKeyPassphrase(srv.ID, *req.KeyPassphrase, src)
 	}
 
 	var cred, sudoCred *models.Credential
 	switch {
 	case passwordSet:
-		cred = &models.Credential{Type: models.CredPassword, Secret: []byte(req.Password)}
+		cred = &models.Credential{Type: models.CredPassword, Secret: []byte(*req.Password)}
 		changed = append(changed, "password")
 	case keySet:
-		keyBytes := req.KeyBytes
-		if keyBytes == nil {
-			keyBytes, err = os.ReadFile(req.KeyPath)
+		keyBytes := []byte(keyText(req))
+		if req.KeyPath != nil && *req.KeyPath != "" {
+			keyBytes, err = os.ReadFile(*req.KeyPath)
 			if err != nil {
 				return nil, m.auditEditError(origName, attempted, err, src)
 			}
 		}
-		cred = &models.Credential{
-			Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: []byte(req.KeyPassphrase),
-		}
-		changed = append(changed, "key")
-		if req.KeyPassphrase != "" {
+		var passphrase []byte
+		if req.KeyPassphrase != nil {
+			passphrase = []byte(*req.KeyPassphrase)
 			changed = append(changed, "key-passphrase")
 		}
+		cred = &models.Credential{Type: models.CredPrivateKey, Secret: keyBytes, Passphrase: passphrase}
+		changed = append(changed, "key")
 	}
 	if passwordSet || keySet {
 		srv.Tags = stripTag(srv.Tags, models.TagNeedsPassphrase)
 	}
-	if req.SudoPassword != "" {
-		sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(req.SudoPassword)}
+	if req.SudoPassword != nil {
+		sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(*req.SudoPassword)}
 		changed = append(changed, "sudo-password")
 	}
 	if err := m.st.UpdateServerWithCredentials(srv, cred, sudoCred); err != nil {
 		return nil, m.auditEditError(origName, attempted, err, src)
 	}
+	sort.Strings(changed)
 	if err := m.writeAudit("server.edit", map[string]any{
 		"name": origName, "changed": changed,
 	}, nil, src); err != nil {
@@ -233,11 +238,12 @@ func (r EditRequest) attemptedFields() []string {
 	add(r.Caveats != nil, "special-handling")
 	add(r.Tags != nil, "tags")
 	add(r.ExposeHost != nil, "expose-host")
-	add(r.Password != "", "password")
-	add(r.KeyPath != "" || len(r.KeyBytes) > 0, "key")
-	add(r.KeyPassphrase != "", "key-passphrase")
-	add(r.SudoPassword != "", "sudo-password")
+	add(r.Password != nil, "password")
+	add(r.KeyPath != nil || r.KeyContent != nil, "key")
+	add(r.KeyPassphrase != nil, "key-passphrase")
+	add(r.SudoPassword != nil, "sudo-password")
 	add(r.ClearCredential, "clear-credential")
+	sort.Strings(fields)
 	return fields
 }
 
@@ -257,4 +263,15 @@ func stripTag(tags []string, tag string) []string {
 		}
 	}
 	return out
+}
+
+// keyText 返回提交的私钥来源文字（文件路径或粘贴内容），用于空值校验。
+func keyText(req EditRequest) string {
+	if req.KeyContent != nil {
+		return *req.KeyContent
+	}
+	if req.KeyPath != nil {
+		return *req.KeyPath
+	}
+	return ""
 }

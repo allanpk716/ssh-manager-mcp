@@ -49,6 +49,8 @@ type ImportEntryStatus struct {
 	Name   string
 	Status string
 	Error  string
+	// Note 是这台候选的凭据注释代号（key / no-credential / needs-passphrase）。
+	Note string
 }
 
 // ImportResult 是一次导入执行的结构化结果：四类计数、逐台状态与导入成功的
@@ -60,6 +62,9 @@ type ImportResult struct {
 	Pending           int
 	Entries           []ImportEntryStatus
 	ImportedServerIDs []string
+	// ImportedServers 携带成功插入后的服务器条目，供调用方在保存点上做疑
+	// 似机密提示扫描；模块本身不展示内容。
+	ImportedServers []*models.Server
 }
 
 // PlanImport 解析 SSH 配置并与 vault 现有服务器做冲突规划。profile 非空时
@@ -185,7 +190,17 @@ func (m *Manager) RunImport(configPath string, selected []string, profile string
 		}
 		result.Imported++
 		result.ImportedServerIDs = append(result.ImportedServerIDs, id)
+		srv.ID = id
+		result.ImportedServers = append(result.ImportedServers, srv)
+		note := ImportNoteNoCredential
+		if pick.Cred != nil {
+			note = ImportNoteKey
+			if pick.NeedsPass {
+				note = ImportNoteNeedsPassphrase
+			}
+		}
 		status(cand.Name, "imported", nil)
+		result.Entries[len(result.Entries)-1].Note = note
 	}
 	if plan.ProfileID != "" && len(result.ImportedServerIDs) > 0 {
 		if err := m.st.GrantServers(plan.ProfileID, result.ImportedServerIDs); err != nil {

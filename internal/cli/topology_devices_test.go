@@ -233,7 +233,7 @@ func TestServersRemoveKeepsDevice(t *testing.T) {
 	runCli(t, "servers", "add", "--name", "deploy", "--host", "192.0.2.10",
 		"--user", "deploy", "--device", "机器")
 
-	runCli(t, "servers", "rm", "deploy")
+	runCli(t, "servers", "rm", "--yes", "deploy")
 	out := runCli(t, "devices", "show", "机器")
 	if !strings.Contains(out, "设备 机器") || !strings.Contains(out, "服务器条目：无") {
 		t.Fatalf("removing a server entry must keep its now-empty device:\n%s", out)

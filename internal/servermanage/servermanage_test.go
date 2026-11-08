@@ -225,7 +225,7 @@ func TestEditCredentialReplaceCleansTagAndOldCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := m.Edit(EditRequest{Identifier: "key-host", Password: "new-pass"}, CLISource()); err != nil {
+	if _, err := m.Edit(EditRequest{Identifier: "key-host", Password: strPtr("new-pass")}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	after, err := m.st.GetServer(id)
@@ -348,3 +348,5 @@ func serverRevision(t *testing.T, m *Manager, id string) int64 {
 	}
 	return srv.Revision
 }
+
+func strPtr(s string) *string { return &s }

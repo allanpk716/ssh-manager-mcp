@@ -113,8 +113,9 @@ func TestServersAuditAdd(t *testing.T) {
 	}
 }
 
-// TestServersAuditRm:按名删与按 id 删都留 server.rm 行,摘要是白名单三字段
-// name/host/port;目标不存在时是幂等空操作(与 pin-clear 先例一致:什么都没
+// TestServersAuditRm:按名删与按 id 删都留 server.delete 行(票 #77 起动作
+// 名从 server.rm 改为 server.delete,摘要仍是白名单三字段 name/host/port,
+// 来源为命令行);目标不存在时是幂等空操作(与 pin-clear 先例一致:什么都没
 // 删的成功不留行)。
 func TestServersAuditRm(t *testing.T) {
 	dbPath, mk, rowsFor := newServersAuditEnv(t)
@@ -135,10 +136,13 @@ func TestServersAuditRm(t *testing.T) {
 	}
 
 	// 按 id 删:行里记的是条目自己的 name/host/port。
-	runCli(t, "servers", "rm", web.ID)
-	rows := rowsFor(t, "server.rm")
+	runCli(t, "servers", "rm", "--yes", web.ID)
+	rows := rowsFor(t, "server.delete")
 	if len(rows) != 1 {
-		t.Fatalf("one rm must leave exactly one server.rm row, got %d", len(rows))
+		t.Fatalf("one rm must leave exactly one server.delete row, got %d", len(rows))
+	}
+	if rows[0].Source != store.AuditSourceCLI {
+		t.Fatalf("server.delete row must carry the cli source, got %q", rows[0].Source)
 	}
 	m := auditSummary(t, rows[0])
 	want := map[string]any{"name": "web", "host": "192.0.2.5", "port": float64(22)}
@@ -152,15 +156,15 @@ func TestServersAuditRm(t *testing.T) {
 	}
 
 	// 按名删:同形一行。
-	runCli(t, "servers", "rm", "db")
-	rows = rowsFor(t, "server.rm")
+	runCli(t, "servers", "rm", "--yes", "db")
+	rows = rowsFor(t, "server.delete")
 	if len(rows) != 2 || auditSummary(t, rows[0])["name"] != "db" {
 		t.Fatalf("rm by name must leave a row naming the entry, got %d rows: %v", len(rows), rows)
 	}
 
 	// 目标不存在:命令成功(幂等空操作),但不留行。
-	runCli(t, "servers", "rm", "no-such-entry")
-	if n := len(rowsFor(t, "server.rm")); n != 2 {
+	runCli(t, "servers", "rm", "--yes", "no-such-entry")
+	if n := len(rowsFor(t, "server.delete")); n != 2 {
 		t.Fatalf("rm of an unknown target is a no-op success and must leave no row, got %d", n)
 	}
 }

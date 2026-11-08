@@ -10,21 +10,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"ssh-manager-mcp/internal/importer"
 	"ssh-manager-mcp/internal/models"
-	"ssh-manager-mcp/internal/secrethint"
+	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
 )
 
 // serversImportCmd: `sshmgr servers import [--file] [--dry-run] [--profile]`.
-// Batch-imports literal-host aliases from an OpenSSH client config. Vault
-// conflicts are filtered by the pure importer.PlanImport (the same seam the
-// TUI import flow reuses); each server insert is one transaction
-// (AddServerWithCredentials); identical key files within one batch mint ONE
-// credential row (sha256 dedup); an encrypted key imports as-is with a
-// needs-passphrase warning AND tag (the same literal the TUI writes — the ⚠
-// sort + `!` filter key on it; fix later via TUI or servers edit, both of
-// which drop the tag on re-credential).
+// 解析、冲突规划与执行都在服务器管理模块里，命令行只负责排版输出与结尾的
+// 逐台补全衔接提示。
 func serversImportCmd() *cobra.Command {
 	var file, profile string
 	var dryRun bool
@@ -37,34 +30,107 @@ func serversImportCmd() *cobra.Command {
 				file = filepath.Join(home, ".ssh", "config")
 			}
 			file = expandTilde(file)
-			fallbackUser := currentUserName()
-			res, err := importer.Parse(file, fallbackUser)
-			if err != nil {
-				return err
-			}
 			s, err := openUnlockedStore()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
-			var profID string
-			if profile != "" { // precheck BEFORE anything (fail-fast; dry-run included)
-				p, err := profileByName(s, profile)
-				if err != nil {
-					return err
-				}
-				if p == nil {
-					return fmt.Errorf("profile %q not found (create it first: profiles add)", profile)
-				}
-				profID = p.ID
+			manager := servermanage.New(s)
+			plan, err := manager.PlanImport(file, profile)
+			if err != nil {
+				return err
 			}
-			return runImport(cmd.OutOrStdout(), cmd.ErrOrStderr(), s, res, filepath.Dir(file), dryRun, profID, profile)
+			out := cmd.OutOrStdout()
+			if plan.MatchWarning {
+				fmt.Fprintln(out, "⚠ config 含 Match 块：相关继承值由库按 Host 模式近似求值，可能与真 ssh 不一致")
+			}
+			selected := make([]string, 0, len(plan.Candidates))
+			for _, cand := range plan.Candidates {
+				selected = append(selected, cand.Name)
+			}
+			if dryRun {
+				for _, skipped := range plan.VaultSkipped {
+					fmt.Fprintf(out, "%-20s %s\n", skipped.Name, renderVaultSkip(skipped.Reason))
+				}
+				for _, cand := range plan.Candidates {
+					fmt.Fprintf(out, "%-20s will-import (%s)\n", cand.Name, candidateNote(cand.Note, false))
+				}
+				for _, skipped := range plan.ParseSkipped {
+					fmt.Fprintf(out, "%-20s skip: %s\n", skipped.Name, skipped.Reason)
+				}
+				if plan.ProfileID != "" {
+					fmt.Fprintf(out, "grant: %d server(s) -> %s (dry-run, not granted)\n", len(plan.Candidates), plan.ProfileName)
+				}
+				return nil
+			}
+			result, err := manager.RunImport(file, selected, profile, servermanage.CLISource())
+			if err != nil {
+				printImportEntries(out, result)
+				return err
+			}
+			printImportEntries(out, result)
+			var hints []importHint
+			for _, srv := range result.ImportedServers {
+				if findings := scanImportServer(srv); len(findings) > 0 {
+					hints = append(hints, importHint{name: srv.Name, findings: findings})
+				}
+			}
+			printImportHints(cmd.ErrOrStderr(), hints)
+			if plan.ProfileID != "" {
+				fmt.Fprintf(out, "granted %d server(s) -> %s\n", result.Imported, plan.ProfileName)
+			}
+			fmt.Fprintf(out, "统计：导入 %d · 跳过 %d · 失败 %d · 待补 %d\n",
+				result.Imported, result.Skipped, result.Failed, result.Pending)
+			fmt.Fprintln(out, "提示：原私钥文件仍在盘上（vault 另存一份）。")
+			if serversStdinIsTTY() {
+				fmt.Fprint(out, "现在逐台补全吗？可运行 `sshmgr servers complete` 继续。")
+			} else {
+				fmt.Fprintln(out, "逐台补全：sshmgr servers complete")
+			}
+			return nil
 		},
 	}
 	c.Flags().StringVar(&file, "file", "", "config file (default ~/.ssh/config)")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print what would happen; write nothing")
 	c.Flags().StringVar(&profile, "profile", "", "grant every imported server to this profile (must exist)")
 	return c
+}
+
+// printImportEntries 按配置顺序输出逐台导入状态，沿用既有报告行格式。
+func printImportEntries(out io.Writer, result *servermanage.ImportResult) {
+	if result == nil {
+		return
+	}
+	for _, entry := range result.Entries {
+		switch {
+		case entry.Status == "imported":
+			fmt.Fprintf(out, "%-20s imported %s\n", entry.Name, candidateNote(entry.Note, true))
+		case entry.Status == "failed":
+			fmt.Fprintf(out, "%-20s FAILED: %s\n", entry.Name, entry.Error)
+		case strings.HasPrefix(entry.Status, "skipped:"):
+			reason := strings.TrimPrefix(entry.Status, "skipped:")
+			if strings.HasPrefix(reason, "existing-") {
+				fmt.Fprintf(out, "%-20s %s\n", entry.Name, renderVaultSkip(reason))
+			} else {
+				fmt.Fprintf(out, "%-20s skip: %s\n", entry.Name, reason)
+			}
+		}
+	}
+}
+
+// candidateNote 把计划里的凭据注释代号换成既有提示文案；imported 为真时是
+// 执行结果行，否则是 dry-run 预览行。
+func candidateNote(note string, imported bool) string {
+	switch note {
+	case servermanage.ImportNoteNoCredential:
+		return "needs-credential"
+	case servermanage.ImportNoteNeedsPassphrase:
+		return "needs-passphrase ⚠（连接会失败；servers complete 或 servers edit --key-passphrase 补全）"
+	case servermanage.ImportNoteKey:
+		return "key"
+	default:
+		return note
+	}
 }
 
 // profileByName finds a profile row by name; nil (not an error) when absent —
@@ -82,169 +148,7 @@ func profileByName(s *store.Store, name string) (*models.Profile, error) {
 	return nil, nil
 }
 
-// importReport is one output line: the alias plus what happened to it.
-type importReport struct{ name, note string }
-
-// importHint pairs one imported server's scan findings with its alias — the
-// findings alone don't say WHICH server, and an import is a batch.
-type importHint struct {
-	name     string
-	findings []secrethint.Finding
-}
-
-// scanImportServer is the aggregate suspected-secret scan the import runs on
-// each server right before the insert (Plan 28 T3): the same
-// secrethint.ScanServer the T2 add path uses, over the metadata in the exact
-// form this import persists. Today the CLI import path carries ZERO
-// user-controlled metadata — importer.Candidate comes from ssh_config, which
-// supplies only HostName/Port/User/IdentityFile (internal/importer/importer.go),
-// and runImport fills Name/Host/Port/User plus at most the fixed
-// 待补口令标签; Description/Location/Hardware/Services/
-// Role/Caveats are always "". This scan is therefore DEFENSIVE: it can only
-// fire once the importer starts populating free-text fields. The real
-// metadata-carrying import leg is the TUI supplement form
-// (internal/tui/importflow.go submitSupplement), which runs its own scan at
-// its save point. The key file CONTENT importer.PickKey reads is a
-// credential, never metadata — deliberately not scanned.
-func scanImportServer(srv *models.Server) []secrethint.Finding {
-	return secrethint.ScanServer(
-		tagsRawForScan(srv.Tags),
-		srv.Description, srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats,
-	)
-}
-
-// printImportHints writes the aggregated per-server advisory warnings to the
-// warning stream (stderr). Advisory only: the import loop never branches on
-// it, and the warning never echoes field content.
-func printImportHints(w io.Writer, hints []importHint) {
-	for _, h := range hints {
-		for _, f := range h.findings {
-			fmt.Fprintf(w, "⚠ %s: %s\n", h.name, secrethint.FormatWarning(f))
-		}
-	}
-}
-
-// runImport walks the parsed candidates: vault-conflict filtering
-// (importer.PlanImport), first-readable-key resolution with batch-level
-// credential dedup and needs-passphrase detection, one transactional insert
-// per server, then the optional profile grant. dry-run computes and prints
-// everything but writes nothing. warn receives the aggregated Plan 28 T3
-// suspected-secret warnings (stderr in production); out stays the report
-// table.
-func runImport(out, warn io.Writer, s *store.Store, res *importer.Result, configDir string, dryRun bool, profID, profName string) error {
-	if res.MatchWarning {
-		fmt.Fprintln(out, "⚠ config 含 Match 块：相关继承值由库按 Host 模式近似求值，可能与真 ssh 不一致")
-	}
-	existing, err := s.ListServers()
-	if err != nil {
-		return err
-	}
-	ex := make([]importer.ExistingServer, len(existing))
-	for i, e := range existing {
-		ex[i] = importer.ExistingServer{Name: e.Name, Host: e.Host, Port: e.Port, User: e.User}
-	}
-	// Vault-conflict filtering is the pure PlanImport the TUI import flow
-	// reuses. runImport walks res.Candidates rather than PlanImport's
-	// toImport so skip-existing lines interleave with imports in config
-	// order; toImport is redundant here because the two outputs partition
-	// the candidate list.
-	_, vaultSkips := importer.PlanImport(res.Candidates, ex)
-	skipReason := make(map[string]string, len(vaultSkips))
-	for _, sk := range vaultSkips {
-		skipReason[sk.Alias] = sk.Reason
-	}
-	keyIDs := map[[32]byte]string{} // sha256(key content) -> credential id (batch dedup)
-	var report []importReport
-	var importedIDs []string
-	var hints []importHint // Plan 28 T3 suspected-secret findings, dumped after the report
-	wouldGrant := 0        // dry-run inserts nothing; the grant line still reports the would-grant count
-	for _, cand := range res.Candidates {
-		if reason, skip := skipReason[cand.Name]; skip {
-			report = append(report, importReport{cand.Name, renderVaultSkip(reason)})
-			continue
-		}
-		// First-readable-key resolution, batch dedup and needs-passphrase
-		// detection live in importer.PickKey — the seam shared with the TUI
-		// import flow (T10). The reuse path (cred.ID set) still reports
-		// NeedsPass: a second host sharing an encrypted key lacks the
-		// passphrase just as much as the first.
-		pick := importer.PickKey(cand, configDir, keyIDs)
-		cred := pick.Cred
-		note := "" // plain key: nothing to annotate
-		if cred == nil {
-			note = "needs-credential" // no IdentityFile resolved to a readable key
-		} else if pick.NeedsPass {
-			note = "needs-passphrase ⚠（连接会失败；TUI 补全或 servers edit --key-passphrase）"
-		}
-		if dryRun {
-			report = append(report, importReport{cand.Name, "will-import (" + noteOrCred(note, cred) + ")"})
-			wouldGrant++
-			continue
-		}
-		srv := &models.Server{
-			Name: cand.Name, Host: cand.Host, Port: cand.Port, User: cand.User,
-		}
-		if pick.NeedsPass {
-			// 终端图形界面导入流程写同一个标签：共享的「需要注意」规则
-			// （⚠ 排序、`!` 筛选）依赖它；补口令或换凭据后会移除它。
-			srv.Tags = []string{models.TagNeedsPassphrase}
-		}
-		// Plan 28 T3: advisory scan of the metadata this insert is about to
-		// persist — see scanImportServer for why it cannot fire today (the
-		// import carries no user free-text). Collected and printed after the
-		// report; the insert ALWAYS proceeds.
-		if fs := scanImportServer(srv); len(fs) > 0 {
-			hints = append(hints, importHint{name: cand.Name, findings: fs})
-		}
-		id, err := s.AddServerWithCredentials(srv, cred, nil)
-		if err != nil {
-			report = append(report, importReport{cand.Name, "FAILED: " + err.Error()})
-			continue
-		}
-		if pick.Minted && cred.ID != "" {
-			// insertCredentialTx backfilled cred.ID — later candidates whose
-			// key file hashes to pick.Sum reuse this row instead of minting.
-			keyIDs[pick.Sum] = cred.ID
-		}
-		importedIDs = append(importedIDs, id)
-		report = append(report, importReport{cand.Name, "imported " + noteOrCred(note, cred)})
-	}
-	// parse-phase skips (wildcard-pattern / bad-port / internal-duplicate)
-	for _, sk := range res.Skipped {
-		report = append(report, importReport{sk.Alias, "skip: " + sk.Reason})
-	}
-	for _, r := range report {
-		fmt.Fprintf(out, "%-20s %s\n", r.name, r.note)
-	}
-	// Aggregated advisory block (Plan 28 T3): suspected-secret metadata
-	// warnings go to the WARNING stream; the stdout report table and every
-	// exit path below are untouched.
-	printImportHints(warn, hints)
-	// --profile grant (dry-run only prints)
-	if profID != "" {
-		if dryRun || len(importedIDs) == 0 {
-			suffix := ""
-			n := len(importedIDs)
-			if dryRun {
-				suffix = " (dry-run, not granted)"
-				n = wouldGrant
-			}
-			fmt.Fprintf(out, "grant: %d server(s) -> %s%s\n", n, profName, suffix)
-			return nil
-		}
-		if err := s.GrantServers(profID, importedIDs); err != nil {
-			return fmt.Errorf("imported but grant failed: %w", err)
-		}
-		fmt.Fprintf(out, "granted %d server(s) -> %s\n", len(importedIDs), profName)
-	}
-	if dryRun {
-		return nil // the closing line describes post-import state; nothing was written
-	}
-	fmt.Fprintln(out, "提示：原私钥文件仍在盘上（vault 另存一份）；结构化字段可进 TUI 逐台补全或 servers edit。")
-	return nil
-}
-
-// renderVaultSkip maps a PlanImport skip reason to its report wording.
+// renderVaultSkip maps an import skip reason to its report wording.
 func renderVaultSkip(reason string) string {
 	switch reason {
 	case "existing-name":
@@ -254,18 +158,6 @@ func renderVaultSkip(reason string) string {
 	default:
 		return "skip-existing (" + reason + ")"
 	}
-}
-
-// noteOrCred renders the per-candidate credential annotation: a needs-*
-// note when present, else "key"/"no-key" for the import result lines.
-func noteOrCred(note string, cred *models.Credential) string {
-	if note != "" {
-		return note
-	}
-	if cred != nil {
-		return "key"
-	}
-	return "no-key"
 }
 
 // expandTilde expands a bare "~" or "~/"-prefixed path to the user home dir.
@@ -280,7 +172,7 @@ func expandTilde(p string) string {
 }
 
 // currentUserName is the ssh_config User fallback: the OS account name via
-// user.Current, with env fallbacks (USERNAME on Windows, USER on POSIX).
+// user.Current, with env fallbacks (USERNAME on POSIX, USER on Windows).
 func currentUserName() string {
 	if u, err := user.Current(); err == nil && u.Username != "" {
 		return u.Username
