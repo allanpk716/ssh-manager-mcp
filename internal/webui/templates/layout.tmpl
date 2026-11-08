@@ -31,6 +31,7 @@
 </nav>{{end}}
 {{if .Caps.ShowOpsArea}}<nav class="main-nav" aria-label="运维区域">
 <a href="/ui/ops/">运维</a>
+{{if .Caps.CanManageSettings}}<a href="/ui/ops/settings">设置</a>{{end}}
 {{if .Caps.CanQueryVaultAudit}}<a href="/ui/ops/audit">审计</a>{{end}}
 </nav>{{end}}
 {{if .VersionHint}}<p class="version-hint">{{.VersionHint}}</p>{{end}}

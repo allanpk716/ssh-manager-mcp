@@ -53,6 +53,9 @@ type pageData struct {
 	OpsAuditFilter              OpsAuditFilterView
 	OpsAuditHasMore             bool
 	OpsAuditOlderPath           string
+	OpsSettings                 []OpsSetting
+	OpsSettingForm              OpsSettingForm
+	OpsRole                     OpsRole
 	ErrorTitle                  string
 	ErrorMessage                string
 	AdminPasswordSet            bool

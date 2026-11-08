@@ -91,6 +91,11 @@ func (r OpsAuditRow) CommandDisplay() string {
 // 实现；处理器测试用桩，本包不接触数据库结构和文件布局。
 type OpsStore interface {
 	QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error)
+	ListSettings() ([]OpsSetting, error)
+	ValidateSetting(key, value string) error
+	SetSetting(key, value string, source OpsWriteSource) error
+	UnsetSetting(key string, source OpsWriteSource) error
+	ReadRole() (OpsRole, error)
 }
 
 // OpsAuditFilterView 保存过滤表单的当前值，服务器渲染时原样回填。
@@ -116,6 +121,9 @@ const (
 // 本机审计页在后续票里接入；本票只注册单机与权威端的权威 vault 审计页。
 func (h *handler) registerOpsRoutes() {
 	h.mux.HandleFunc(opsRootPath, h.handleOpsRoot)
+	if h.cfg.Role != RoleClient && h.cfg.Ops != nil && h.caps.CanManageSettings {
+		h.mux.HandleFunc(opsSettingsPath, h.handleOpsSettings)
+	}
 	if h.cfg.Role == RoleClient || h.cfg.Ops == nil || !h.caps.CanQueryVaultAudit {
 		if h.cfg.Ops == nil {
 			h.caps.ShowOpsArea = false

@@ -2,6 +2,7 @@ package ops
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -86,6 +87,32 @@ var settingDefinitions = []settingDefinition{
 }
 
 var discoveryNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,31}$`)
+
+// SettingInputsFromEnv 只把精确的 true/false 环境变量视为显式设置；空值与
+// 非法写法按现有 serve 开关规则继续看下一层。
+func SettingInputsFromEnv() SettingInputs {
+	parse := func(name string) *bool {
+		value, ok := os.LookupEnv(name)
+		if !ok {
+			return nil
+		}
+		switch switchstate.Parse(value) {
+		case switchstate.On:
+			result := true
+			return &result
+		case switchstate.Off:
+			result := false
+			return &result
+		default:
+			return nil
+		}
+	}
+	return SettingInputs{
+		PairingEnv:      parse("SSHMGR_SERVE_PAIRING"),
+		DiscoveryEnv:    parse("SSHMGR_SERVE_DISCOVERY"),
+		MetadataEditEnv: parse("SSHMGR_SERVE_METADATA_EDIT"),
+	}
+}
 
 // NewWithSettingInputs 返回带 serve 进程显式输入的运维模块，供权威端 Web
 // UI 判断设置项是否被环境变量或启动旗标覆盖。
@@ -205,6 +232,16 @@ func (m *Manager) SetSetting(key, value string, src Source) error {
 		return err
 	}
 	return m.writeSettingAudit("setting.set", key, oldValue, normalized, src)
+}
+
+// ValidateSetting 按同一张设置项表校验值，不写入设置存储。
+func (m *Manager) ValidateSetting(key, value string) error {
+	definition, err := settingDefinitionForKey(key)
+	if err != nil {
+		return err
+	}
+	_, err = m.validateSettingValue(definition, value)
+	return err
 }
 
 // UnsetSetting 从设置存储删除已知键，使它恢复默认值，并写 setting.unset
