@@ -3,18 +3,39 @@
 // 计写入。本文件只放模块构造与来源；具体操作按领域分文件。
 package ops
 
-import "ssh-manager-mcp/internal/store"
+import (
+	"time"
+
+	"ssh-manager-mcp/internal/store"
+)
 
 // Manager 是运维模块的入口，内部只调用存储层与各领域服务的现有函数，不改
 // 变它们的语义。
 type Manager struct {
-	st            *store.Store
+	st *store.Store
+	// settingInputs 是 serve 进程显式注入的环境变量与启动旗标，供设置
+	// 项判断是否被覆盖。
 	settingInputs SettingInputs
+	// 下面三个接缝供测试替换：备份配置位置、计划任务探测与时钟。
+	backupConfigPath    func() (string, error)
+	backupScheduleProbe func() (installed, probed bool)
+	now                 func() time.Time
 }
 
 // New 返回挂在一个已解锁存储上的运维模块。
 func New(st *store.Store) *Manager {
-	return &Manager{st: st}
+	return newManager(st)
+}
+
+// newManager 统一填好各领域的默认接缝；不同构造入口共享同一份默认值，
+// 新增接缝时不会漏掉某个入口。
+func newManager(st *store.Store) *Manager {
+	return &Manager{
+		st:                  st,
+		backupConfigPath:    defaultBackupConfigPath,
+		backupScheduleProbe: defaultBackupScheduleProbe,
+		now:                 time.Now,
+	}
 }
 
 // Source 描述一次运维写操作从哪里来：命令行，或 Web UI（附来源地址）。模
