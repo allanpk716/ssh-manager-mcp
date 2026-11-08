@@ -15,16 +15,22 @@ type stubOpsStore struct {
 	rows  []OpsAuditRow
 	err   error
 	// 备份页测试桩：状态、立即备份与一键校验的结果和调用记录。
-	backupStatus OpsBackupStatus
-	statusErr    error
-	createResult OpsBackupCreateResult
-	createErr    error
-	createSource OpsWriteSource
-	createCalls  int
-	verifyResult OpsBackupVerifyResult
-	verifyErr    error
-	verifySource OpsWriteSource
-	verifyCalls  int
+	backupStatus      OpsBackupStatus
+	statusErr         error
+	backupConfig      OpsBackupConfig
+	backupConfigErr   error
+	savedBackupConfig OpsBackupConfig
+	saveBackupSource  OpsWriteSource
+	saveBackupCalls   int
+	saveBackupErr     error
+	createResult      OpsBackupCreateResult
+	createErr         error
+	createSource      OpsWriteSource
+	createCalls       int
+	verifyResult      OpsBackupVerifyResult
+	verifyErr         error
+	verifySource      OpsWriteSource
+	verifyCalls       int
 	// 客户端本机审计测试桩。
 	clientRows     []OpsAuditRow
 	clientErr      error
@@ -45,6 +51,17 @@ func (s *stubOpsStore) BackupStatus() (OpsBackupStatus, error) {
 		return OpsBackupStatus{}, s.statusErr
 	}
 	return s.backupStatus, nil
+}
+
+func (s *stubOpsStore) ReadBackupConfig() (OpsBackupConfig, error) {
+	return s.backupConfig, s.backupConfigErr
+}
+
+func (s *stubOpsStore) SaveBackupConfig(config OpsBackupConfig, source OpsWriteSource) error {
+	s.saveBackupCalls++
+	s.savedBackupConfig = config
+	s.saveBackupSource = source
+	return s.saveBackupErr
 }
 
 func (s *stubOpsStore) CreateBackup(source OpsWriteSource) (OpsBackupCreateResult, error) {

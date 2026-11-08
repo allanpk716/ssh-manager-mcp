@@ -44,10 +44,6 @@ func seed(dir string) error {
 	if err := os.WriteFile(passPath, []byte("browser-test-backup-pass"), 0o600); err != nil {
 		return err
 	}
-	configBody := fmt.Sprintf(`{"dir":%q,"keep":3,"passphrase_file":%q}`, backupDir, passPath)
-	if err := os.WriteFile(filepath.Join(vaultDir, "backup.json"), []byte(configBody), 0o600); err != nil {
-		return err
-	}
 	key, err := store.GenerateMasterKey()
 	if err != nil {
 		return err

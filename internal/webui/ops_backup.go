@@ -35,9 +35,7 @@ func (h *handler) handleOpsBackup(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusInternalServerError, "读取备份状态失败", "读取备份状态失败，请稍后重试。")
 		return
 	}
-	h.renderPage(w, r, http.StatusOK, "backup.tmpl", pageData{
-		Title: "备份", OpsBackupStatus: &status, OpsBackupFlash: h.takeOpsBackupFlash(r),
-	})
+	h.renderOpsBackupPage(w, r, http.StatusOK, backupConfigFormFromStatus(status))
 }
 
 // handleOpsBackupCreate 处理「立即备份」。权威端要求最近 5 分钟内验证过

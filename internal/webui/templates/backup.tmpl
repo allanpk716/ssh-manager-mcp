@@ -3,7 +3,7 @@
 <h1>备份</h1>
 {{if .OpsBackupFlash}}
 {{if .OpsBackupFlash.OK}}
-<p class="flash-ok backup-flash">{{if eq .OpsBackupFlash.Action "create"}}已备份：{{.OpsBackupFlash.File}}{{else}}已校验：{{.OpsBackupFlash.File}}{{end}}</p>
+<p class="flash-ok backup-flash">{{if eq .OpsBackupFlash.Action "create"}}已备份：{{.OpsBackupFlash.File}}{{else if eq .OpsBackupFlash.Action "config"}}备份配置已保存。{{else}}已校验：{{.OpsBackupFlash.File}}{{end}}</p>
 {{else if .OpsBackupFlash.Skipped}}
 <p class="flash-warn backup-flash">已有备份正在进行，本次没有写入新备份。</p>
 {{else}}
@@ -18,7 +18,7 @@
 {{else}}
 <p class="backup-alert">备份配置有误：{{.OpsBackupStatus.ConfigError}}</p>
 {{end}}
-<p class="backup-hint">处理建议：在下方的「备份配置」编辑入口填写备份目录、保留份数和口令文件路径。</p>
+<p class="backup-hint">处理建议：在<a href="#backup-config">下方的「备份配置」表单</a>填写备份目录、保留份数和口令文件路径。</p>
 {{else}}
 <dl class="backup-facts">
 <div><dt>备份目录</dt><dd>{{.OpsBackupStatus.ConfigDir}}</dd></div>
@@ -67,7 +67,22 @@
 </div>
 <div id="backup-config" class="backup-config">
 <h2>备份配置</h2>
-<p>备份配置编辑入口将在此处提供，可修改备份目录、保留份数和口令文件路径。</p>
+<p class="backup-hint">配置文件：{{.OpsBackupStatus.ConfigPath}}。三个路径与数值保存前会统一校验；修改口令文件路径时会先试解现有最新备份。</p>
+{{$form := .OpsBackupConfigForm}}
+{{if $form.GeneralError}}<p class="operation-refusal" role="alert">{{$form.GeneralError}}</p>{{end}}
+<form class="backup-config-form" method="post" action="/ui/ops/backup/config">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label for="backup-config-dir">备份目录</label>
+<input id="backup-config-dir" name="dir" type="text" value="{{$form.Dir}}" aria-describedby="backup-config-dir-error" required>
+{{if $form.DirError}}<p id="backup-config-dir-error" class="operation-refusal" role="alert">{{$form.DirError}}</p>{{end}}
+<label for="backup-config-keep">保留份数</label>
+<input id="backup-config-keep" name="keep" type="number" min="0" value="{{$form.Keep}}" aria-describedby="backup-config-keep-error" required>
+{{if $form.KeepError}}<p id="backup-config-keep-error" class="operation-refusal" role="alert">{{$form.KeepError}}</p>{{end}}
+<label for="backup-config-passphrase-file">口令文件</label>
+<input id="backup-config-passphrase-file" name="passphrase_file" type="text" value="{{$form.PassphraseFile}}" aria-describedby="backup-config-passphrase-file-error" required>
+{{if $form.PassphraseFileError}}<p id="backup-config-passphrase-file-error" class="operation-refusal" role="alert">{{$form.PassphraseFileError}}</p>{{end}}
+<button type="submit">保存备份配置</button>
+</form>
 </div>
 </section>
 {{end}}

@@ -52,6 +52,14 @@ func TestClientAuditStoreRefusesVaultAudit(t *testing.T) {
 		!strings.Contains(err.Error(), "权威 vault 审计") {
 		t.Fatalf("客户端角色调用权威 vault 审计入口应返回明确错误，实际：%v", err)
 	}
+	if _, err := ClientAuditStore().ReadBackupConfig(); err == nil ||
+		!strings.Contains(err.Error(), "客户端角色没有备份管理入口") {
+		t.Fatalf("客户端角色读取备份配置应返回明确错误，实际：%v", err)
+	}
+	err := ClientAuditStore().SaveBackupConfig(webui.OpsBackupConfig{}, webui.OpsWriteSource{})
+	if err == nil || !strings.Contains(err.Error(), "客户端角色没有备份管理入口") {
+		t.Fatalf("客户端角色保存备份配置应返回明确错误，实际：%v", err)
+	}
 }
 
 func TestManagerAdapterReadsClientAudit(t *testing.T) {

@@ -121,6 +121,14 @@ func (clientAuditStore) BackupStatus() (webui.OpsBackupStatus, error) {
 	return webui.OpsBackupStatus{}, errors.New("客户端角色没有备份管理入口")
 }
 
+func (clientAuditStore) ReadBackupConfig() (webui.OpsBackupConfig, error) {
+	return webui.OpsBackupConfig{}, errors.New("客户端角色没有备份管理入口")
+}
+
+func (clientAuditStore) SaveBackupConfig(config webui.OpsBackupConfig, source webui.OpsWriteSource) error {
+	return errors.New("客户端角色没有备份管理入口")
+}
+
 func (clientAuditStore) CreateBackup(source webui.OpsWriteSource) (webui.OpsBackupCreateResult, error) {
 	return webui.OpsBackupCreateResult{}, errors.New("客户端角色没有备份管理入口")
 }
@@ -248,6 +256,55 @@ func (s openerStore) BackupStatus() (webui.OpsBackupStatus, error) {
 		return err
 	})
 	return status, err
+}
+
+func (s managerStore) ReadBackupConfig() (webui.OpsBackupConfig, error) {
+	config, _, err := s.manager.ReadBackupConfig()
+	return webuiOpsBackupConfig(config), err
+}
+
+func (s openerStore) ReadBackupConfig() (webui.OpsBackupConfig, error) {
+	var config webui.OpsBackupConfig
+	err := s.withManager(func(manager *ops.Manager) error {
+		got, err := managerStore{manager: manager}.ReadBackupConfig()
+		config = got
+		return err
+	})
+	return config, err
+}
+
+func (s managerStore) SaveBackupConfig(config webui.OpsBackupConfig, source webui.OpsWriteSource) error {
+	err := s.manager.SaveBackupConfig(opsBackupConfig(config), ops.WebUISource(source.RemoteAddress))
+	return webuiOpsBackupConfigError(err)
+}
+
+func (s openerStore) SaveBackupConfig(config webui.OpsBackupConfig, source webui.OpsWriteSource) error {
+	return s.withManager(func(manager *ops.Manager) error {
+		return managerStore{manager: manager}.SaveBackupConfig(config, source)
+	})
+}
+
+func webuiOpsBackupConfig(config ops.BackupConfig) webui.OpsBackupConfig {
+	return webui.OpsBackupConfig{
+		Dir: config.Dir, Keep: config.Keep, PassphraseFile: config.PassphraseFile,
+	}
+}
+
+func opsBackupConfig(config webui.OpsBackupConfig) ops.BackupConfig {
+	return ops.BackupConfig{
+		Dir: config.Dir, Keep: config.Keep, PassphraseFile: config.PassphraseFile,
+	}
+}
+
+func webuiOpsBackupConfigError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var configErr *ops.BackupConfigError
+	if errors.As(err, &configErr) {
+		return &webui.OpsBackupConfigError{Field: configErr.Field, Err: configErr.Err}
+	}
+	return err
 }
 
 func (s managerStore) CreateBackup(source webui.OpsWriteSource) (webui.OpsBackupCreateResult, error) {
