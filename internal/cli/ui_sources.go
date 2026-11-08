@@ -8,9 +8,11 @@ import (
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/updater"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
+	"ssh-manager-mcp/internal/webuiops"
 )
 
 // standaloneUIServerSource 是单机角色的 Web UI 服务器列表来源：每次请求重新
@@ -44,6 +46,18 @@ func standaloneUIAccessStore() webui.AccessStore {
 			return nil, nil, err
 		}
 		return access.New(st), func() { _ = st.Close() }, nil
+	})
+}
+
+// standaloneUIOpsStore 给单机 Web UI 提供运维入口。每次读取重新打开本机
+// vault，请求结束后关闭，不长期持有存储句柄。
+func standaloneUIOpsStore() webui.OpsStore {
+	return webuiops.FromOpener(func() (*ops.Manager, func(), error) {
+		st, err := openUnlockedStore()
+		if err != nil {
+			return nil, nil, err
+		}
+		return ops.New(st), func() { _ = st.Close() }, nil
 	})
 }
 

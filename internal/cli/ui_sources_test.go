@@ -13,6 +13,7 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/webui"
 )
 
 // TestStandaloneUIServerSourceReadsVault 是单机角色的服务器列表来源：从本机
@@ -73,6 +74,34 @@ func TestStandaloneUIServerSourceReadsVault(t *testing.T) {
 	}
 	if complete := byName["完整服务器"]; complete.user != "root" || complete.host != "192.0.2.10" || complete.port != 22 {
 		t.Fatalf("展示行连接信息不完整：%+v", complete)
+	}
+}
+
+// TestStandaloneUIOpsStoreQueriesAudit 是单机角色的运维来源：每次查询重新
+// 打开本机 vault，不长期持有存储句柄。
+func TestStandaloneUIOpsStoreQueriesAudit(t *testing.T) {
+	dbPath, mk := withCliStoreEnv(t)
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteAudit(store.AuditRow{
+		Action: "admin.login", Status: "ok", Source: store.AuditSourceCLI,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := standaloneUIOpsStore().QueryAudit(webui.OpsAuditQuery{
+		Actions: []string{"admin.login"}, Source: store.AuditSourceCLI,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Action != "admin.login" || rows[0].ID == 0 {
+		t.Fatalf("单机 Web UI 应能经运维窄接口读取审计：%+v", rows)
 	}
 }
 

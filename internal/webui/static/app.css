@@ -319,6 +319,61 @@ h1 {
   border-radius: 8px;
 }
 
+.audit-filter {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-medium);
+  align-items: end;
+  margin: var(--space-medium) 0;
+  padding: var(--space-medium);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.audit-filter div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-small);
+}
+
+.audit-filter label {
+  color: var(--color-muted);
+}
+
+.audit-filter input,
+.audit-filter select {
+  width: 100%;
+  padding: var(--space-small);
+  color: var(--color-text);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.audit-owner-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-small);
+}
+
+.audit-filter button {
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.audit-pagination {
+  margin-top: var(--space-medium);
+}
+
+.audit-pagination a {
+  color: var(--color-accent);
+}
+
 .login-page label,
 .password-page label,
 .reverify-page label {

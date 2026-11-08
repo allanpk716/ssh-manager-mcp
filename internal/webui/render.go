@@ -49,6 +49,10 @@ type pageData struct {
 	AccessPairing               *AccessPairingSummary
 	AccessPairingForm           AccessPairingForm
 	AccessPairingNotice         string
+	OpsAuditRows                []OpsAuditRow
+	OpsAuditFilter              OpsAuditFilterView
+	OpsAuditHasMore             bool
+	OpsAuditOlderPath           string
 	ErrorTitle                  string
 	ErrorMessage                string
 	AdminPasswordSet            bool

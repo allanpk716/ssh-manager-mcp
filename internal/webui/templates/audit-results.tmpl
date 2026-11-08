@@ -1,0 +1,30 @@
+{{define "content"}}
+<div id="audit-results">
+{{if .OpsAuditRows}}
+<table class="server-table audit-table">
+<thead>
+<tr><th scope="col">编号</th><th scope="col">时间</th><th scope="col">项目</th><th scope="col">服务器</th><th scope="col">动作</th><th scope="col">摘要</th><th scope="col">状态</th><th scope="col">来源</th><th scope="col">来源地址</th></tr>
+</thead>
+<tbody>
+{{range .OpsAuditRows}}
+<tr class="audit-row">
+<td>{{.ID}}</td>
+<td>{{.TS.Format "2006-01-02 15:04:05"}}</td>
+<td>{{.ProjectDisplay}}</td>
+<td>{{.ServerDisplay}}</td>
+<td>{{.Action}}</td>
+<td>{{.CommandDisplay}}</td>
+<td>{{.Status}}</td>
+<td>{{.SourceText}}</td>
+<td>{{if .SourceIP}}{{.SourceIP}}{{else}}—{{end}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="empty-list">没有符合条件的审计记录。</p>
+{{end}}
+{{if .OpsAuditHasMore}}
+<p class="audit-pagination"><a class="older-audit" href="{{.OpsAuditOlderPath}}" hx-get="{{.OpsAuditOlderPath}}" hx-target="#audit-results" hx-swap="outerHTML" hx-push-url="true">更早的记录</a></p>
+{{end}}
+</div>
+{{end}}
