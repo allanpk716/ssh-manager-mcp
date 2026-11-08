@@ -217,7 +217,7 @@ func (f *importFlow) startBatch() tea.Cmd {
 				Name: cand.Name, Host: cand.Host, Port: cand.Port, User: cand.User,
 			}
 			if pick.NeedsPass {
-				srv.Tags = []string{"needs-passphrase"} // supplement loop's passphrase step removes it
+				srv.Tags = []string{models.TagNeedsPassphrase} // supplement loop's passphrase step removes it
 			}
 			id, err := st.AddServerWithCredentials(srv, pick.Cred, nil)
 			if err != nil {
@@ -276,7 +276,7 @@ func (f *importFlow) openSupplement() tea.Cmd {
 	f.srv = f.supp[f.suppIdx]
 	f.d = prefill(f.srv)
 	f.condPass = f.srv.CredentialID == ""
-	f.condKey = hasTag(f.srv, "needs-passphrase")
+	f.condKey = models.ServerHasTag(f.srv.Tags, models.TagNeedsPassphrase)
 	f.state = stateSupplement
 	f.form = supplementForm(f.d, f.condPass, f.condKey)
 	return f.form.Init()
@@ -316,7 +316,7 @@ func (f *importFlow) submitSupplement() tea.Cmd {
 	clearTag := f.condKey && f.d.KeyPass != ""
 	tags := f.srv.Tags
 	if clearTag {
-		tags = dropTag(tags, "needs-passphrase")
+		tags = dropTag(tags, models.TagNeedsPassphrase)
 	}
 	srv := &models.Server{
 		ID:   f.srv.ID,
@@ -392,7 +392,7 @@ func (f *importFlow) finishResult() {
 func (f *importFlow) pendingCount() int {
 	n := 0
 	for _, s := range f.supp {
-		if serverNeedsAttention(s) {
+		if models.ServerNeedsAttention(s.CredentialID, s.Role, s.Tags) {
 			n++
 		}
 	}

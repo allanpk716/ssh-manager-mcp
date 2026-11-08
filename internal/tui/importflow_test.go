@@ -187,7 +187,7 @@ func TestImportFlowBatchImportAndQueue(t *testing.T) {
 	if gpu.CredentialID == "" || gpu.AuthMethod != models.AuthPrivateKey {
 		t.Fatalf("gpu must carry its key credential: %+v", gpu)
 	}
-	if !hasTag(gpu, "needs-passphrase") {
+	if !models.ServerHasTag(gpu.Tags, models.TagNeedsPassphrase) {
 		t.Fatalf("encrypted-key import must tag needs-passphrase: %+v", gpu)
 	}
 	if string(f.suppKeys["gpu"]) != string(encPEM) {
@@ -195,7 +195,7 @@ func TestImportFlowBatchImportAndQueue(t *testing.T) {
 	}
 	// bare: credential-less, no tag
 	bare, _ := st.GetServerByName("bare")
-	if bare.CredentialID != "" || hasTag(bare, "needs-passphrase") {
+	if bare.CredentialID != "" || models.ServerHasTag(bare.Tags, models.TagNeedsPassphrase) {
 		t.Fatalf("bare must be credential-less and untagged: %+v", bare)
 	}
 }
@@ -341,7 +341,7 @@ func TestImportFlowSupplementSubmitPassphrase(t *testing.T) {
 	if gpu.Role != "prod gpu box" {
 		t.Fatalf("structured fields not persisted: %+v", gpu)
 	}
-	if hasTag(gpu, "needs-passphrase") {
+	if models.ServerHasTag(gpu.Tags, models.TagNeedsPassphrase) {
 		t.Fatalf("passphrase supplied must drop the tag: %+v", gpu)
 	}
 	if gpu.CredentialID == "" || gpu.CredentialID == oldCred {
@@ -390,7 +390,7 @@ func TestSupplementCondKeyEmptyPassphraseKeepsTag(t *testing.T) {
 	if gpu.CredentialID != before.CredentialID {
 		t.Fatalf("empty passphrase must keep the existing credential (nil-cred path): old=%s new=%s", before.CredentialID, gpu.CredentialID)
 	}
-	if !hasTag(gpu, "needs-passphrase") {
+	if !models.ServerHasTag(gpu.Tags, models.TagNeedsPassphrase) {
 		t.Fatalf("needs-passphrase tag must stay — the missing-passphrase fact is unchanged: %+v", gpu)
 	}
 	if gpu.Role != "prod gpu box" {

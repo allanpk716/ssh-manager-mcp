@@ -99,7 +99,7 @@ type importHint struct {
 // user-controlled metadata — importer.Candidate comes from ssh_config, which
 // supplies only HostName/Port/User/IdentityFile (internal/importer/importer.go),
 // and runImport fills Name/Host/Port/User plus at most the fixed
-// "needs-passphrase" tag literal; Description/Location/Hardware/Services/
+// 待补口令标签; Description/Location/Hardware/Services/
 // Role/Caveats are always "". This scan is therefore DEFENSIVE: it can only
 // fire once the importer starts populating free-text fields. The real
 // metadata-carrying import leg is the TUI supplement form
@@ -185,10 +185,9 @@ func runImport(out, warn io.Writer, s *store.Store, res *importer.Result, config
 			Name: cand.Name, Host: cand.Host, Port: cand.Port, User: cand.User,
 		}
 		if pick.NeedsPass {
-			// Same tag the TUI import flow writes: serverNeedsAttention (⚠
-			// sort, `!` filter) keys on it, and every re-credential path
-			// (TUI edit, servers edit) drops it once the passphrase lands.
-			srv.Tags = []string{"needs-passphrase"}
+			// 终端图形界面导入流程写同一个标签：共享的「需要注意」规则
+			// （⚠ 排序、`!` 筛选）依赖它；补口令或换凭据后会移除它。
+			srv.Tags = []string{models.TagNeedsPassphrase}
 		}
 		// Plan 28 T3: advisory scan of the metadata this insert is about to
 		// persist — see scanImportServer for why it cannot fire today (the

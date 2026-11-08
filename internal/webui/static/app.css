@@ -1,0 +1,148 @@
+/* sshmgr Web UI 的手写样式：用自定义属性统一配色与间距，桌面优先，窄屏时
+   服务器列表折叠成卡片，不出现横向滚动。 */
+:root {
+  --color-background: #10141c;
+  --color-panel: #182031;
+  --color-panel-border: #2a3550;
+  --color-text: #e8edf7;
+  --color-muted: #98a5bd;
+  --color-accent: #6ea8fe;
+  --color-warning-background: #5c3a12;
+  --color-warning-border: #a3742a;
+  --color-warning-text: #ffd48a;
+  --space-small: 8px;
+  --space-medium: 16px;
+  --space-large: 24px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.6;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--space-large) var(--space-medium);
+}
+
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-small);
+  padding: var(--space-medium);
+  background: var(--color-panel);
+  border-bottom: 1px solid var(--color-panel-border);
+}
+
+.site-header .brand {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.site-header .role {
+  margin: 0;
+  color: var(--color-accent);
+}
+
+.version-hint,
+.readonly-notice {
+  max-width: 960px;
+  margin: var(--space-medium) auto 0;
+  padding: var(--space-small) var(--space-medium);
+  border: 1px solid var(--color-warning-border);
+  border-radius: 8px;
+  background: var(--color-warning-background);
+  color: var(--color-warning-text);
+}
+
+h1 {
+  font-size: 22px;
+}
+
+.server-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.server-table th,
+.server-table td {
+  padding: var(--space-small) var(--space-medium);
+  text-align: left;
+  border-bottom: 1px solid var(--color-panel-border);
+}
+
+.server-table th {
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.server-table tr.needs-attention {
+  background: rgba(163, 116, 42, 0.16);
+}
+
+.attention-badge {
+  margin-right: var(--space-small);
+  padding: 2px var(--space-small);
+  border-radius: 999px;
+  border: 1px solid var(--color-warning-border);
+  background: var(--color-warning-background);
+  color: var(--color-warning-text);
+  font-size: 12px;
+}
+
+.error-page p {
+  color: var(--color-muted);
+}
+
+@media (max-width: 720px) {
+  .site-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .server-table,
+  .server-table tbody,
+  .server-table tr,
+  .server-table th,
+  .server-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .server-table thead {
+    display: none;
+  }
+
+  .server-table tr {
+    margin: 0 0 var(--space-medium);
+    border: 1px solid var(--color-panel-border);
+    border-radius: 8px;
+  }
+
+  .server-table td {
+    border-bottom: none;
+  }
+
+  .server-table td + td {
+    border-top: 1px dashed var(--color-panel-border);
+  }
+}

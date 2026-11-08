@@ -491,7 +491,7 @@ func serversEditCmd() *cobra.Command {
 				// and strips from whatever srv.Tags holds then — an explicit
 				// --tags list passed alongside --key/--password loses the tag
 				// too: after re-credential the marker would be false.
-				srv.Tags = stripTag(srv.Tags, "needs-passphrase")
+				srv.Tags = stripTag(srv.Tags, models.TagNeedsPassphrase)
 			}
 			if cmd.Flags().Changed("sudo-password") {
 				sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)}

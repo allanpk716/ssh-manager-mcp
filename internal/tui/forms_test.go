@@ -130,7 +130,7 @@ func TestSubmitServer_EditRecredentialDropsNeedsPassphrase(t *testing.T) {
 		t.Fatal("edit without credential change must succeed")
 	}
 	got, _ := st.GetServerByName("enc")
-	if !hasTag(got, "needs-passphrase") || !hasTag(got, "gpu") {
+	if !models.ServerHasTag(got.Tags, models.TagNeedsPassphrase) || !models.ServerHasTag(got.Tags, "gpu") {
 		t.Fatalf("edit without re-credential must keep the tag: %+v", got.Tags)
 	}
 
@@ -141,7 +141,7 @@ func TestSubmitServer_EditRecredentialDropsNeedsPassphrase(t *testing.T) {
 		t.Fatal("edit with new password must succeed")
 	}
 	got, _ = st.GetServerByName("enc")
-	if hasTag(got, "needs-passphrase") || len(got.Tags) != 1 || got.Tags[0] != "gpu" {
+	if models.ServerHasTag(got.Tags, models.TagNeedsPassphrase) || len(got.Tags) != 1 || got.Tags[0] != "gpu" {
 		t.Fatalf("re-credential must drop needs-passphrase and keep other tags: %+v", got.Tags)
 	}
 
@@ -152,7 +152,7 @@ func TestSubmitServer_EditRecredentialDropsNeedsPassphrase(t *testing.T) {
 		t.Fatal("edit with new password must succeed")
 	}
 	got, _ = st.GetServerByName("solo")
-	if hasTag(got, "needs-passphrase") || len(got.Tags) != 0 {
+	if models.ServerHasTag(got.Tags, models.TagNeedsPassphrase) || len(got.Tags) != 0 {
 		t.Fatalf("tag-only list must store empty: %+v", got.Tags)
 	}
 }
@@ -178,7 +178,7 @@ func TestSubmitServer_EditClearCredential(t *testing.T) {
 	if got.CredentialID != "" || got.AuthMethod != "" || got.SudoCredentialID != "" {
 		t.Fatalf("server must be credential-less: %+v", got)
 	}
-	if hasTag(got, "needs-passphrase") || len(got.Tags) != 1 || got.Tags[0] != "gpu" {
+	if models.ServerHasTag(got.Tags, models.TagNeedsPassphrase) || len(got.Tags) != 1 || got.Tags[0] != "gpu" {
 		t.Fatalf("needs-passphrase must be stripped, gpu kept: %v", got.Tags)
 	}
 	if c, _ := st.GetCredential(cid); c != nil {
