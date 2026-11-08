@@ -10,6 +10,8 @@ import (
 
 // AuditRow is one auditable action.
 type AuditRow struct {
+	// ID 是数据库里的审计行编号；只读旁车文件没有数据库编号，值为 0。
+	ID         int64
 	TS         time.Time
 	ProjectID  string // empty for owner (non-agent) actions
 	ServerID   string
@@ -88,7 +90,7 @@ func (s *Store) AuditRows(limit int) ([]AuditRow, error) {
 		limit = 1
 	}
 	rows, err := s.db.Query(
-		`SELECT ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip
+		`SELECT id, ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip
 		 FROM audit_log ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -105,7 +107,10 @@ type AuditFilter struct {
 	OwnerOnly  bool // only rows with an empty project_id (owner actions)
 	Actions    []string
 	Statuses   []string
-	Limit      int // rows to return; 0 = unlimited; negative = error
+	Source     string // 空 表示不过滤来源
+	SourceIP   string // 空 表示不过滤来源地址
+	BeforeID   int64  // 0 表示不限制编号；正数只返回编号小于它的行
+	Limit      int    // rows to return; 0 = unlimited; negative = error
 }
 
 // QueryAudit returns audit rows newest-first (ORDER BY id DESC — the
@@ -143,7 +148,19 @@ func (s *Store) QueryAudit(f AuditFilter) ([]AuditRow, error) {
 	if f.OwnerOnly {
 		conds = append(conds, "(project_id IS NULL OR project_id = '')")
 	}
-	q := "SELECT ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip FROM audit_log"
+	if f.Source != "" {
+		conds = append(conds, "source = ?")
+		args = append(args, f.Source)
+	}
+	if f.SourceIP != "" {
+		conds = append(conds, "source_ip = ?")
+		args = append(args, f.SourceIP)
+	}
+	if f.BeforeID > 0 {
+		conds = append(conds, "id < ?")
+		args = append(args, f.BeforeID)
+	}
+	q := "SELECT id, ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip FROM audit_log"
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -170,7 +187,7 @@ func scanAuditRows(rows *sql.Rows) ([]AuditRow, error) {
 		var projectID, serverID, action, command, status, source, sourceIP sql.NullString
 		var sudo int
 		var exitCode, durationMS sql.NullInt64
-		if err := rows.Scan(&ts, &projectID, &serverID, &action, &command, &sudo, &status, &exitCode, &durationMS, &source, &sourceIP); err != nil {
+		if err := rows.Scan(&r.ID, &ts, &projectID, &serverID, &action, &command, &sudo, &status, &exitCode, &durationMS, &source, &sourceIP); err != nil {
 			return nil, err
 		}
 		r.TS = time.Unix(ts, 0)
@@ -196,6 +213,7 @@ func scanAuditRows(rows *sql.Rows) ([]AuditRow, error) {
 // as-is: no null, no omitempty (spec §3).
 func (r AuditRow) JSONMap() map[string]any {
 	return map[string]any{
+		"id":          r.ID,
 		"ts":          r.TS.Unix(),
 		"project_id":  r.ProjectID,
 		"server_id":   r.ServerID,
