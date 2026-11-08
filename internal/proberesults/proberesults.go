@@ -2,7 +2,7 @@
 // 自己发起的连通观察（探测工具与真实 SSH 连接顺带记录）保存在实例本地
 // 的独立 JSON 文件里，不回传权威端。键是「起点设备、目标设备、网络、
 // 地址、端口」，同一个键只保留最新一条观察，超过 7 天的观察在读写时被
-// 清理。
+// 清理。文件位置的按角色解析与生产观察者在 internal/probeobserve。
 package proberesults
 
 import (
@@ -17,9 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"ssh-manager-mcp/internal/clientcache"
 	"ssh-manager-mcp/internal/models"
-	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -87,35 +85,6 @@ type FileProbeResults struct {
 // NewFileProbeResults 返回使用指定 JSON 文件的探测结果集合。
 func NewFileProbeResults(path string) *FileProbeResults {
 	return &FileProbeResults{path: path}
-}
-
-// PathFor 按当前部署角色解析探测结果文件位置：客户端实例放实例目录，
-// 单机部署与权威端放本机状态目录（role.json 所在目录）。角色未初始化时
-// 返回 false，表示当前形态没有可写位置。
-func PathFor(instance string) (string, bool, error) {
-	state, err := roles.Load()
-	if err != nil {
-		return "", false, err
-	}
-	if state == nil {
-		return "", false, nil
-	}
-	switch state.Role {
-	case roles.RoleClient:
-		directory, err := clientcache.DirectoryFor(instance)
-		if err != nil {
-			return "", false, err
-		}
-		return filepath.Join(directory, "probe-results.json"), true, nil
-	case roles.RoleStandalone, roles.RoleServer:
-		statePath, err := roles.LocalDevicePath()
-		if err != nil {
-			return "", false, err
-		}
-		return filepath.Join(filepath.Dir(statePath), "probe-results.json"), true, nil
-	default:
-		return "", false, nil
-	}
 }
 
 // Record 保存一条观察并清理过期记录；同一个键只保留最新一条。

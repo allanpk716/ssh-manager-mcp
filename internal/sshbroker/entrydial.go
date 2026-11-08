@@ -278,6 +278,28 @@ type DialSuccessCacheResolver interface {
 	ResolveDialSuccessCache() (DialSuccessCacheSource, error)
 }
 
+// DialAttemptOutcome 是统一拨号入口对一个候选地址的观察结论。Category 使
+// 用连通探测的共用错误分类；连接成功时为空。Detail 附人可读说明（例如
+// 主机密钥不同）。
+type DialAttemptOutcome struct {
+	OK       bool
+	Category models.ProbeErrorCategory
+	Detail   string
+	Duration time.Duration
+}
+
+// DialAttemptObserver 接收统一拨号入口实际试过的每个拓扑候选地址的观察。
+// 兜底主机不属于任何登记网络，不会交给观察者；观察记录失败不影响连接。
+type DialAttemptObserver interface {
+	ObserveDialAttempt(server *models.Server, candidate DialAddress, outcome DialAttemptOutcome)
+}
+
+// DialObserverResolver lets a production topology source resolve its concrete
+// dial observer once per dial, mirroring DialSuccessCacheResolver.
+type DialObserverResolver interface {
+	ResolveDialObserver() (DialAttemptObserver, error)
+}
+
 // StaticDialTopology 是固定拓扑视图，供测试和调用方显式注入。
 type StaticDialTopology DialTopology
 
@@ -308,6 +330,10 @@ type ServerDialRequest struct {
 	Topology DialTopologySource
 	// SuccessCache 是本次拨号使用的成功地址缓存；nil 表示不使用。
 	SuccessCache DialSuccessCacheSource
+	// Observer 接收每个实际试过的拓扑候选地址的探测观察；nil 表示本次
+	// 拨号不记录。生产拓扑来源可以实现 DialObserverResolver，让入口自动
+	// 解析观察者。
+	Observer DialAttemptObserver
 }
 
 // lowLevelDial 是统一入口的低层连接函数：按「主机、端口」拨一个地址并完成
@@ -407,6 +433,17 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			plan = orderPlanWithDialSuccess(plan, records, time.Now())
 		}
 	}
+	observer := req.Observer
+	if observer == nil {
+		if resolver, ok := req.Topology.(DialObserverResolver); ok && resolver != nil {
+			resolved, err := resolver.ResolveDialObserver()
+			if err != nil {
+				warnDialObserverFailure(err)
+			} else {
+				observer = resolved
+			}
+		}
+	}
 	hostKeyCallback, err := HostKeyTOFU(req.HostKeys, req.Server)
 	if err != nil {
 		return nil, nil, err
@@ -439,6 +476,15 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			}
 		} else {
 			stopAddressTimeout()
+		}
+		if observer != nil && candidate.Source != DialAddressFallback {
+			outcome := DialAttemptOutcome{
+				OK: err == nil, Category: ClassifyProbeDialError(err), Duration: time.Since(attemptStarted),
+			}
+			if errors.Is(err, ErrHostKeyMismatch) {
+				outcome.Detail = "主机密钥不同"
+			}
+			observer.ObserveDialAttempt(req.Server, candidate, outcome)
 		}
 		if err == nil {
 			if successCache != nil {
@@ -476,6 +522,10 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 
 func warnDialSuccessCacheFailure(action string, err error) {
 	fmt.Fprintf(os.Stderr, "sshmgr: 成功地址缓存%s失败（继续拨号）: %v\n", action, err)
+}
+
+func warnDialObserverFailure(err error) {
+	fmt.Fprintf(os.Stderr, "sshmgr: 解析探测结果记录器失败（本次拨号不记录）: %v\n", err)
 }
 
 func fallbackOnlyDialPlan(plan DialAddressPlan) bool {
