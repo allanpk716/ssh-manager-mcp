@@ -55,6 +55,11 @@ type pageData struct {
 	OpsAuditOlderPath           string
 	OpsBackupStatus             *OpsBackupStatus
 	OpsBackupFlash              *OpsBackupFlash
+	OpsSettings                 []OpsSetting
+	OpsSettingForm              OpsSettingForm
+	OpsRole                     OpsRole
+	OpsClientAuditRows          []OpsAuditRow
+	OpsClientInstance           string
 	ErrorTitle                  string
 	ErrorMessage                string
 	AdminPasswordSet            bool

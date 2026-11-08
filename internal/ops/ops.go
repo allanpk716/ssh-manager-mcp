@@ -13,6 +13,9 @@ import (
 // 变它们的语义。
 type Manager struct {
 	st *store.Store
+	// settingInputs 是 serve 进程显式注入的环境变量与启动旗标，供设置
+	// 项判断是否被覆盖。
+	settingInputs SettingInputs
 	// 下面三个接缝供测试替换：备份配置位置、计划任务探测与时钟。
 	backupConfigPath    func() (string, error)
 	backupScheduleProbe func() (installed, probed bool)

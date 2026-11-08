@@ -83,7 +83,7 @@ func servePortFromAddr(addr string) int {
 
 // startWebUIListenerManager 构造权威端 Web UI Handler 与监听管理者，并同步
 // 执行第一次地址推导。绑定失败由管理者记录并重试，不阻断主监听。
-func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tlsKey, fingerprint, addr string) (*webUIListenerManager, error) {
+func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tlsKey, fingerprint, addr string, serveOpts ServeOpts) (*webUIListenerManager, error) {
 	port, manualListen, err := ReadWebUIConfig(st)
 	if err != nil {
 		return nil, err
@@ -103,7 +103,7 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		Access: webuiaccess.FromManager(access.New(st, access.WithServeCertFingerprint(func() (string, error) {
 			return fingerprint, nil
 		}))),
-		Ops:                    webuiops.FromManager(ops.New(st)),
+		Ops:                    webuiops.FromManager(ops.NewWithSettingInputs(st, webUISettingInputs(serveOpts))),
 		Auth:                   vault.NewWebUIAuthStore(st),
 		CertificateFingerprint: fingerprint,
 		AllowedHosts:           plan.Addresses,
@@ -147,4 +147,12 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		}
 	}()
 	return manager, nil
+}
+
+func webUISettingInputs(opts ServeOpts) ops.SettingInputs {
+	inputs := ops.SettingInputsFromEnv()
+	inputs.PairingFlag = opts.PairingFlag
+	inputs.DiscoveryFlag = opts.DiscoveryFlag
+	inputs.MetadataEditFlag = opts.MetadataEditFlag
+	return inputs
 }

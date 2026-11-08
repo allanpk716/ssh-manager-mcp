@@ -25,6 +25,11 @@ type stubOpsStore struct {
 	verifyErr    error
 	verifySource OpsWriteSource
 	verifyCalls  int
+	// 客户端本机审计测试桩。
+	clientRows     []OpsAuditRow
+	clientErr      error
+	clientInstance string
+	clientLimit    int
 }
 
 func (s *stubOpsStore) QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error) {
@@ -58,6 +63,18 @@ func (s *stubOpsStore) VerifyLatestBackup(source OpsWriteSource) (OpsBackupVerif
 		return OpsBackupVerifyResult{}, s.verifyErr
 	}
 	return s.verifyResult, nil
+}
+
+func (s *stubOpsStore) ListSettings() ([]OpsSetting, error) { return nil, nil }
+
+func (s *stubOpsStore) ValidateSetting(key, value string) error { return nil }
+
+func (s *stubOpsStore) SetSetting(key, value string, source OpsWriteSource) error { return nil }
+
+func (s *stubOpsStore) UnsetSetting(key string, source OpsWriteSource) error { return nil }
+
+func (s *stubOpsStore) ReadRole() (OpsRole, error) {
+	return OpsRole{}, nil
 }
 
 func testOpsRows(count int) []OpsAuditRow {

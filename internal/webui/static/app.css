@@ -468,6 +468,107 @@ h1 {
   margin: var(--space-medium) 0;
 }
 
+.settings-page {
+  display: grid;
+  gap: var(--space-medium);
+}
+
+.setting-item,
+.role-view {
+  padding: var(--space-medium);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.setting-item h2,
+.role-view h2 {
+  margin-top: 0;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.setting-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-small);
+  margin: 0;
+}
+
+.setting-facts div {
+  min-width: 0;
+}
+
+.setting-facts dt {
+  color: var(--color-muted);
+}
+
+.setting-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.operation-warning {
+  margin: var(--space-small) 0 0;
+  padding: var(--space-small);
+  border: 1px solid var(--color-warning-border);
+  border-radius: 8px;
+  background: var(--color-warning-background);
+  color: var(--color-warning-text);
+}
+
+.setting-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-small);
+  margin: var(--space-medium) 0;
+}
+
+.setting-form label {
+  color: var(--color-muted);
+}
+
+.setting-form input,
+.setting-form select {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: var(--space-small);
+  color: var(--color-text);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.setting-form button,
+.setting-item .inline-form button {
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .setting-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .setting-form,
+  .setting-item .inline-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .setting-form input,
+  .setting-form select,
+  .setting-form button,
+  .setting-item .inline-form button {
+    width: 100%;
+  }
+}
+
 .one-time-fields div {
   display: flex;
   flex-direction: column;
