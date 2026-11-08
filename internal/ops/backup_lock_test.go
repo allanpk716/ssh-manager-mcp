@@ -1,4 +1,4 @@
-package cli
+package ops
 
 import (
 	"os"
@@ -22,7 +22,7 @@ func writeStaleLock(t *testing.T, dir string, age time.Duration) {
 
 func TestAcquireBackupLock_Fresh(t *testing.T) {
 	dir := t.TempDir()
-	lk, err := acquireBackupLock(dir)
+	lk, err := AcquireBackupLock(dir)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -44,13 +44,13 @@ func TestAcquireBackupLock_Fresh(t *testing.T) {
 func TestAcquireBackupLock_ConcurrentSkip(t *testing.T) {
 	dir := t.TempDir()
 	// hold a fresh lock (start-ts = now)
-	lk1, err := acquireBackupLock(dir)
+	lk1, err := AcquireBackupLock(dir)
 	if err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
 	defer lk1.Release()
 	// second acquire should hit ErrConcurrentBackup (not stale — just created)
-	_, err = acquireBackupLock(dir)
+	_, err = AcquireBackupLock(dir)
 	if err != ErrConcurrentBackup {
 		t.Fatalf("second acquire err = %v, want ErrConcurrentBackup", err)
 	}
@@ -60,7 +60,7 @@ func TestAcquireBackupLock_StaleReclaim(t *testing.T) {
 	dir := t.TempDir()
 	// orphan lock from 10 min ago (> 5 min threshold)
 	writeStaleLock(t, dir, 10*time.Minute)
-	lk, err := acquireBackupLock(dir)
+	lk, err := AcquireBackupLock(dir)
 	if err != nil {
 		t.Fatalf("acquire should reclaim stale lock: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestAcquireBackupLock_NotYetStale(t *testing.T) {
 	dir := t.TempDir()
 	// lock from 1 min ago (< 5 min threshold) — still "running", must NOT reclaim
 	writeStaleLock(t, dir, time.Minute)
-	_, err := acquireBackupLock(dir)
+	_, err := AcquireBackupLock(dir)
 	if err != ErrConcurrentBackup {
 		t.Fatalf("err = %v, want ErrConcurrentBackup (lock not yet stale)", err)
 	}
@@ -79,7 +79,7 @@ func TestAcquireBackupLock_NotYetStale(t *testing.T) {
 
 func TestBackupLock_ReleaseRemovesFile(t *testing.T) {
 	dir := t.TempDir()
-	lk, err := acquireBackupLock(dir)
+	lk, err := AcquireBackupLock(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestBackupLock_ReleaseRemovesFile(t *testing.T) {
 
 // TestAcquireBackupLock_CorruptContent is the N2 test: a lock file whose
 // content is garbage (not a parseable unix ts) makes lockIsStale return a
-// parse error. acquireBackupLock must NOT panic, NOT get stuck, and either
+// parse error. AcquireBackupLock must NOT panic, NOT get stuck, and either
 // reclaim via retry-create or report ErrConcurrentBackup. Since the corrupt
 // lock file already exists, the retry O_EXCL create will fail with ErrExist,
 // so the expected outcome is ErrConcurrentBackup. This locks in lock.go's
@@ -105,7 +105,7 @@ func TestAcquireBackupLock_CorruptContent(t *testing.T) {
 		[]byte("not-a-number\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	lk, err := acquireBackupLock(dir)
+	lk, err := AcquireBackupLock(dir)
 	if err == nil {
 		// unexpected but not wrong (a racing second caller could have stolen it);
 		// just make sure to release.

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/vaultio"
 )
 
@@ -28,14 +28,7 @@ var passphraseConfirmPrompt = func() ([]byte, error) {
 // passphrasePrompt when this returns successfully — the whole point of the
 // flag is to avoid the TTY.
 func readPassphraseFile(path string) ([]byte, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read --passphrase-file: %w", err)
-	}
-	// strip exactly one trailing newline (CRLF or LF) so `echo`/`printf` both
-	// work; a passphrase that genuinely ends in \n is pathological and the
-	// truncation is the user's problem, not ours.
-	return []byte(strings.TrimSuffix(strings.TrimSuffix(string(raw), "\r\n"), "\n")), nil
+	return ops.ReadPassphraseFile(path)
 }
 
 func newExportCmd() *cobra.Command {

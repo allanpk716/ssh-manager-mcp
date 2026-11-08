@@ -813,3 +813,94 @@ h1 {
     width: 100%;
   }
 }
+
+/* 备份页：状态区、提示与操作按钮。 */
+.backup-page {
+  max-width: 760px;
+}
+
+.backup-status {
+  margin-top: var(--space-medium);
+  padding: var(--space-medium);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  background: var(--color-panel);
+}
+
+.backup-facts {
+  display: grid;
+  grid-template-columns: 8em minmax(0, 1fr);
+  gap: var(--space-small) var(--space-medium);
+  margin: var(--space-medium) 0;
+}
+
+.backup-facts dt {
+  color: var(--color-muted);
+}
+
+.backup-facts dd {
+  overflow-wrap: anywhere;
+}
+
+.backup-flash,
+.backup-alert {
+  margin-top: var(--space-medium);
+  padding: var(--space-small);
+  border-radius: 8px;
+}
+
+.flash-ok.backup-flash,
+.backup-ok {
+  border: 1px solid var(--color-accent);
+  color: var(--color-accent);
+}
+
+.flash-warn.backup-flash,
+.backup-warn {
+  border: 1px solid var(--color-warning-border);
+  background: var(--color-warning-background);
+  color: var(--color-warning-text);
+}
+
+.flash-error.backup-flash,
+.backup-alert {
+  border: 1px solid var(--color-danger-border);
+  color: var(--color-text);
+}
+
+.backup-hint {
+  margin-top: var(--space-small);
+  color: var(--color-muted);
+}
+
+.backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-medium);
+  margin-top: var(--space-medium);
+}
+
+.backup-actions form {
+  margin: 0;
+}
+
+.backup-config {
+  margin-top: var(--space-large);
+  padding-top: var(--space-medium);
+  border-top: 1px dashed var(--color-panel-border);
+}
+
+@media (max-width: 720px) {
+  .backup-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .backup-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .backup-actions button {
+    width: 100%;
+  }
+}

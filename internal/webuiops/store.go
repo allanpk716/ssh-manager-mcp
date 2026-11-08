@@ -117,6 +117,18 @@ func (s clientAuditStore) ApplyUpdate(instance, sourceIP string) (webui.OpsUpdat
 	}, nil
 }
 
+func (clientAuditStore) BackupStatus() (webui.OpsBackupStatus, error) {
+	return webui.OpsBackupStatus{}, errors.New("客户端角色没有备份管理入口")
+}
+
+func (clientAuditStore) CreateBackup(source webui.OpsWriteSource) (webui.OpsBackupCreateResult, error) {
+	return webui.OpsBackupCreateResult{}, errors.New("客户端角色没有备份管理入口")
+}
+
+func (clientAuditStore) VerifyLatestBackup(source webui.OpsWriteSource) (webui.OpsBackupVerifyResult, error) {
+	return webui.OpsBackupVerifyResult{}, errors.New("客户端角色没有备份管理入口")
+}
+
 func (s managerStore) QueryClientAudit(instance string, limit int) ([]webui.OpsAuditRow, error) {
 	return clientAuditRows(instance, limit)
 }
@@ -218,6 +230,78 @@ func (s openerStore) QueryAudit(query webui.OpsAuditQuery) ([]webui.OpsAuditRow,
 		return err
 	})
 	return rows, err
+}
+
+func (s managerStore) BackupStatus() (webui.OpsBackupStatus, error) {
+	status, err := s.manager.BackupStatus()
+	if err != nil {
+		return webui.OpsBackupStatus{}, err
+	}
+	return webuiOpsBackupStatus(status), nil
+}
+
+func (s openerStore) BackupStatus() (webui.OpsBackupStatus, error) {
+	var status webui.OpsBackupStatus
+	err := s.withManager(func(manager *ops.Manager) error {
+		got, err := managerStore{manager: manager}.BackupStatus()
+		status = got
+		return err
+	})
+	return status, err
+}
+
+func (s managerStore) CreateBackup(source webui.OpsWriteSource) (webui.OpsBackupCreateResult, error) {
+	result, err := s.manager.CreateBackup(ops.WebUISource(source.RemoteAddress))
+	return webui.OpsBackupCreateResult{File: result.File, Skipped: result.Skipped}, err
+}
+
+func (s openerStore) CreateBackup(source webui.OpsWriteSource) (webui.OpsBackupCreateResult, error) {
+	var result webui.OpsBackupCreateResult
+	err := s.withManager(func(manager *ops.Manager) error {
+		got, err := managerStore{manager: manager}.CreateBackup(source)
+		result = got
+		return err
+	})
+	return result, err
+}
+
+func (s managerStore) VerifyLatestBackup(source webui.OpsWriteSource) (webui.OpsBackupVerifyResult, error) {
+	result, err := s.manager.VerifyLatestBackup(ops.WebUISource(source.RemoteAddress))
+	return webui.OpsBackupVerifyResult{
+		File: result.File, OK: result.OK, FailureKind: result.FailureKind,
+	}, err
+}
+
+func (s openerStore) VerifyLatestBackup(source webui.OpsWriteSource) (webui.OpsBackupVerifyResult, error) {
+	var result webui.OpsBackupVerifyResult
+	err := s.withManager(func(manager *ops.Manager) error {
+		got, err := managerStore{manager: manager}.VerifyLatestBackup(source)
+		result = got
+		return err
+	})
+	return result, err
+}
+
+func webuiOpsBackupStatus(status ops.BackupStatus) webui.OpsBackupStatus {
+	out := webui.OpsBackupStatus{
+		ConfigPath: status.ConfigPath, ConfigError: status.ConfigError,
+		ConfigMissing: status.ConfigMissing,
+		TaskInstalled: status.TaskInstalled, TaskProbed: status.TaskProbed,
+		TotalBackups: status.Total, LatestBackup: status.LatestName,
+		LatestTime: status.LatestTime, HasLatest: status.HasLatest, Stale: status.Stale,
+	}
+	if status.Config != nil {
+		out.ConfigDir = status.Config.Dir
+		out.ConfigKeep = status.Config.Keep
+		out.ConfigPassphraseFile = status.Config.PassphraseFile
+	}
+	if status.Verify != nil {
+		out.Verify = &webui.OpsBackupVerifyState{
+			File: status.Verify.File, OK: status.Verify.OK,
+			FailureKind: status.Verify.FailureKind, At: status.Verify.At,
+		}
+	}
+	return out
 }
 
 func (s openerStore) ListSettings() ([]webui.OpsSetting, error) {

@@ -206,12 +206,13 @@ func (s Startup) URL(hostPort string) string {
 // session 是回环模式的进程内会话：标识与防跨站请求伪造令牌都只在内存里，
 // 进程退出即全部失效。
 type session struct {
-	id           string
-	csrf         string
-	accessFlash  *AccessFlash
-	generation   int64
-	lastActive   time.Time
-	lastVerified time.Time
+	id             string
+	csrf           string
+	accessFlash    *AccessFlash
+	opsBackupFlash *OpsBackupFlash
+	generation     int64
+	lastActive     time.Time
+	lastVerified   time.Time
 }
 
 // handler 是回环模式 Web UI 的根处理器，所有路由都在 /ui/ 前缀下。

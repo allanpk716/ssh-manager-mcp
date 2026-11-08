@@ -117,7 +117,9 @@ func SettingInputsFromEnv() SettingInputs {
 // NewWithSettingInputs 返回带 serve 进程显式输入的运维模块，供权威端 Web
 // UI 判断设置项是否被环境变量或启动旗标覆盖。
 func NewWithSettingInputs(st *store.Store, inputs SettingInputs) *Manager {
-	return &Manager{st: st, settingInputs: cloneSettingInputs(inputs)}
+	manager := newManager(st)
+	manager.settingInputs = cloneSettingInputs(inputs)
+	return manager
 }
 
 func cloneSettingInputs(inputs SettingInputs) SettingInputs {
