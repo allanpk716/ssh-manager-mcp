@@ -46,7 +46,9 @@ type Request struct {
 // 建连耗时或错误。
 type LocalDialFunc func(ctx context.Context, address string, port int, timeout time.Duration) (time.Duration, error)
 
-// RemoteExecFunc 是在受管服务器上执行固定命令的接缝：返回标准输出或错误。
+// RemoteExecFunc 是在受管服务器上执行固定命令的可替换注入点：返回标准
+// 输出或错误。连接本身失败时返回 originConnectionError 包裹的错误；会话
+// 建立后的失败可以携带部分输出一起返回。
 type RemoteExecFunc func(ctx context.Context, server *models.Server, shell models.ShellType, command string) (string, error)
 
 // Service 是连通探测服务。测试可替换 LocalDial 与 RemoteExec；生产路径使
@@ -427,14 +429,22 @@ func (s *Service) probeRemote(ctx context.Context, server *models.Server, report
 	}
 	output, err := s.remoteExec()(ctx, server, shell, command)
 	if err != nil {
-		report.OriginError = err.Error()
-		markUnprobed(report, "未探测（无法连接起点服务器）")
-		return
+		var connectionErr *originConnectionError
+		if errors.As(err, &connectionErr) {
+			report.OriginError = err.Error()
+			markUnprobed(report, "未探测（无法连接起点服务器）")
+			return
+		}
+		// 会话建立后命令超时或被总时限打断：解析已经拿到的部分输出，
+		// 没有结果行的地址按「探测未完成」呈现。
 	}
 	results := ParseShellProbeOutput(output, len(items))
 	for index, result := range results {
 		item := mapping[index]
 		line := &report.Targets[item.targetIndex].Lines[item.lineIndex]
+		if err != nil && result.Category == models.ProbeErrorNoResult {
+			result.Category = models.ProbeErrorIncomplete
+		}
 		line.OK = result.OK
 		line.Category = result.Category
 		line.Duration = result.Duration
@@ -509,7 +519,7 @@ func realLocalDial(ctx context.Context, address string, port int, timeout time.D
 func (s *Service) defaultRemoteExec(ctx context.Context, server *models.Server, shell models.ShellType, command string) (string, error) {
 	auth, err := vault.AuthForServer(s.Store, server)
 	if err != nil {
-		return "", fmt.Errorf("resolve credential: %w", err)
+		return "", &originConnectionError{err: fmt.Errorf("resolve credential: %w", err)}
 	}
 	dialSource := dialplan.NewStoreSource(s.Store, s.Instance)
 	hostKeys := sshbroker.HostKeyStore(s.Store)
@@ -521,18 +531,29 @@ func (s *Service) defaultRemoteExec(ctx context.Context, server *models.Server, 
 		SuccessCache: dialSource, Topology: dialSource,
 	})
 	if err != nil {
-		return "", err
+		return "", &originConnectionError{err: err}
 	}
 	defer cli.Close()
 	result, err := cli.Exec(ctx, command, time.Until(ctxDeadline(ctx)), remoteProbeMaxOutput)
 	if err != nil {
-		return "", err
+		// 会话已建立：返回已收到的部分输出，由调用方继续解析。
+		return result.Stdout, err
 	}
 	if result.TimedOut {
 		return result.Stdout, fmt.Errorf("固定命令执行超时")
 	}
 	return result.Stdout, nil
 }
+
+// originConnectionError 标记固定命令会话没有建立（取凭据或连接失败），
+// 与会话建立后的命令超时区分开。
+type originConnectionError struct {
+	err error
+}
+
+func (e *originConnectionError) Error() string { return e.err.Error() }
+
+func (e *originConnectionError) Unwrap() error { return e.err }
 
 func ctxDeadline(ctx context.Context) time.Time {
 	if deadline, ok := ctx.Deadline(); ok {
