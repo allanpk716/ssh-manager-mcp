@@ -55,6 +55,7 @@ type Config struct {
 	Role        Role
 	Servers     ServerSource
 	Access      AccessStore
+	Ops         OpsStore
 	VersionHint func() string
 	Port        int
 	// ServePort 是权威端主监听端口，设备码拉取命令按它拼地址；未提供时
@@ -137,6 +138,23 @@ type capabilities struct {
 	CanManageProjects bool
 	// HasPairingAndDeviceCodes 表示本机角色是否显示配对与设备码入口。
 	HasPairingAndDeviceCodes bool
+	// ShowOpsArea 控制是否显示「运维」区域入口。客户端的运维页面在后续
+	// 票里接入，接入前不显示空导航。
+	ShowOpsArea bool
+	// CanManageBackups 控制是否显示备份页入口与写操作。
+	CanManageBackups bool
+	// CanManageSettings 控制是否显示设置页入口与写操作。
+	CanManageSettings bool
+	// CanUpgradeBinary 控制是否显示升级页入口与替换二进制操作。
+	CanUpgradeBinary bool
+	// CanRestartService 只对权威端开放，控制升级后的重启服务操作。
+	CanRestartService bool
+	// CanQueryVaultAudit 控制单机与权威端的权威 vault 审计页。
+	CanQueryVaultAudit bool
+	// CanUseClientOps 与 CanQueryClientAudit 是客户端专用能力，页面在
+	// 后续票里接入。
+	CanUseClientOps     bool
+	CanQueryClientAudit bool
 }
 
 // capabilitiesForRole 按构造时声明的本机角色推导页面能力开关。
@@ -155,11 +173,15 @@ func capabilitiesForRole(role Role) capabilities {
 			RoleLabel: "权威端", CanWrite: true, ShowAuthorityActions: true,
 			ShowAccessArea: true, CanManageProfiles: true, CanManageProjects: true,
 			HasPairingAndDeviceCodes: true,
+			ShowOpsArea:              true, CanManageBackups: true, CanManageSettings: true,
+			CanUpgradeBinary: true, CanRestartService: true, CanQueryVaultAudit: true,
 		}
 	}
 	return capabilities{
 		RoleLabel: "单机", CanWrite: true,
 		ShowAccessArea: true, CanManageProfiles: true, CanManageProjects: true,
+		ShowOpsArea: true, CanManageBackups: true, CanManageSettings: true,
+		CanUpgradeBinary: true, CanQueryVaultAudit: true,
 	}
 }
 
@@ -248,6 +270,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	h.mux.HandleFunc("/ui/assets/", h.handleAsset)
 	h.mux.HandleFunc(listPath, h.handleUIRoot)
 	h.registerAccessRoutes()
+	h.registerOpsRoutes()
 	return h, Startup{token: token}, nil
 }
 

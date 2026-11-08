@@ -11,10 +11,12 @@ import (
 
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
+	"ssh-manager-mcp/internal/webuiops"
 )
 
 // serveWebUIServerSource 直接读取权威端 vault 的服务器列表。
@@ -101,6 +103,7 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		Access: webuiaccess.FromManager(access.New(st, access.WithServeCertFingerprint(func() (string, error) {
 			return fingerprint, nil
 		}))),
+		Ops:                    webuiops.FromManager(ops.New(st)),
 		Auth:                   vault.NewWebUIAuthStore(st),
 		CertificateFingerprint: fingerprint,
 		AllowedHosts:           plan.Addresses,
