@@ -17,9 +17,9 @@ type importHint struct {
 }
 
 // scanImportServer is the aggregate suspected-secret scan the import runs on
-// each server right after the insert (Plan 28 T3): the same
-// secrethint.ScanServer the add path uses, over the metadata in the exact form
-// this import persists. Today the import path carries ZERO user-controlled
+// each server right after the insert: the same secrethint.ScanServer the add
+// path uses, over the metadata in the exact form this import persists. Today
+// the import path carries ZERO user-controlled
 // metadata — importer.Candidate comes from ssh_config, which supplies only
 // HostName/Port/User/IdentityFile, and the server management module fills
 // Name/Host/Port/User plus at most the fixed 待补口令标签 — so this scan is

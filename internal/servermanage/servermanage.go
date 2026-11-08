@@ -8,8 +8,8 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// Manager 是服务器管理模块的入口，内部只调用存储层的现有函数与本票新增
-// 的预览函数，不改变它们的语义。
+// Manager 是服务器管理模块的入口，内部只调用存储层的函数，不改变它们的
+// 语义。
 type Manager struct {
 	st *store.Store
 	// insertServer 是测试接缝：模拟某台服务器插入失败，生产路径为 nil。

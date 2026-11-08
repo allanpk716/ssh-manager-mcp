@@ -29,8 +29,8 @@ type ServerDeleteCredential struct {
 	References int
 }
 
-// ServerDeletePreview 是服务器条目删除影响清单。共享存储与下发记录的分组
-// 由后续票据在同一结构里追加。
+// ServerDeletePreview 是服务器条目删除影响清单，只覆盖当前级联删除会动
+// 到的数据；共享存储与下发记录不属于这份清单。
 type ServerDeletePreview struct {
 	Server       *models.Server
 	Device       *models.Device

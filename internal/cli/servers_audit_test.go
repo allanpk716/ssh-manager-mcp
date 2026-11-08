@@ -113,8 +113,8 @@ func TestServersAuditAdd(t *testing.T) {
 	}
 }
 
-// TestServersAuditRm:按名删与按 id 删都留 server.delete 行(票 #77 起动作
-// 名从 server.rm 改为 server.delete,摘要仍是白名单三字段 name/host/port,
+// TestServersAuditRm:按名删与按 id 删都留 server.delete 行(删除服务器的
+// 审计动作名是 server.delete,摘要仍是白名单三字段 name/host/port,
 // 来源为命令行);目标不存在时是幂等空操作(与 pin-clear 先例一致:什么都没
 // 删的成功不留行)。
 func TestServersAuditRm(t *testing.T) {

@@ -111,8 +111,6 @@ func (h *handler) writePage(w http.ResponseWriter, r *http.Request, status int, 
 	}
 }
 
-// loadPageTemplates 在构造 Handler 时解析全部页面模板；解析失败时 New 直接
-// 返回错误，请求过程不再读取或解析模板文件。
 // pageFuncs 是页面模板共用的小工具函数，只做展示层转换。
 var pageFuncs = template.FuncMap{
 	"joinReasons": func(items []string) string { return strings.Join(items, "、") },
@@ -151,6 +149,8 @@ var pageFuncs = template.FuncMap{
 	},
 }
 
+// loadPageTemplates 在构造 Handler 时解析全部页面模板；解析失败时 New 直接
+// 返回错误，请求过程不再读取或解析模板文件。
 func loadPageTemplates() (map[string]parsedPage, error) {
 	entries, err := templateFS.ReadDir("templates")
 	if err != nil {
