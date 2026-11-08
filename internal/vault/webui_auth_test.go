@@ -36,7 +36,9 @@ func TestWebUIAuthStoreAdaptsVaultStateAndAudit(t *testing.T) {
 	if set {
 		t.Fatal("新 vault 不应已经设置管理员口令")
 	}
-	generation, err := auth.SetAdminPassword([]byte("correct-password"))
+	generation, err := auth.SetAdminPasswordWithAudit([]byte("correct-password"), webui.AuditEvent{
+		Action: "admin.password_change", SourceIP: "192.0.2.10",
+	})
 	if err != nil || generation != 1 {
 		t.Fatalf("设置管理员口令返回会话代 = %d，错误 = %v", generation, err)
 	}
@@ -58,7 +60,7 @@ func TestWebUIAuthStoreAdaptsVaultStateAndAudit(t *testing.T) {
 		t.Fatalf("适配器应返回锁定与延迟：%+v", limit)
 	}
 	if err := auth.WriteAudit(webui.AuditEvent{
-		Action: "web.login.success", Status: "ok", SourceIP: "192.0.2.10",
+		Action: "admin.login", Status: "ok", SourceIP: "192.0.2.10",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +69,7 @@ func TestWebUIAuthStoreAdaptsVaultStateAndAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 || rows[0].Source != store.AuditSourceWebUI ||
-		rows[0].SourceIP != "192.0.2.10" {
+		rows[0].SourceIP != "192.0.2.10" || rows[0].Action != "admin.login" {
 		t.Fatalf("适配器应写入 Web UI 审计：%+v", rows)
 	}
 }
@@ -85,7 +87,9 @@ func TestAuthorityHandlerUsesVaultAuthStore(t *testing.T) {
 	}
 	defer st.Close()
 	auth := NewWebUIAuthStore(st)
-	if _, err := auth.SetAdminPassword([]byte("vault-password")); err != nil {
+	if _, err := auth.SetAdminPasswordWithAudit([]byte("vault-password"), webui.AuditEvent{
+		Action: "admin.password_change",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Unix(1800000000, 0)

@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"ssh-manager-mcp/internal/mcpserver"
+	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
@@ -58,9 +59,37 @@ func writeAuthorityWebUIStatus(out io.Writer, st *store.Store) error {
 	if err != nil {
 		return err
 	}
-	_, _, fingerprint, err := mcpserver.LoadOrCreateServeCert()
+	certPath, err := paths.ServeCertPath()
 	if err != nil {
 		return err
+	}
+	var fingerprintLines []string
+	_, statErr := os.Stat(certPath)
+	if errors.Is(statErr, os.ErrNotExist) {
+		markerPath, markerErr := paths.ServeCertMarkerPath()
+		if markerErr != nil {
+			return markerErr
+		}
+		if _, markerStatErr := os.Stat(markerPath); markerStatErr == nil {
+			return errors.New("serve 证书缺失但初始化标记仍存在；请按证书恢复流程处理，不能自动生成")
+		} else if !errors.Is(markerStatErr, os.ErrNotExist) {
+			return markerStatErr
+		}
+		fingerprintLines = []string{
+			"证书：`serve` 尚未生成证书，先启动一次 `sshmgr serve`。",
+			fmt.Sprintf("证书路径：%s（默认证书路径；若 serve 使用 --tls-cert 指定其他证书，以登录页显示为准。）", certPath),
+		}
+	} else if statErr != nil {
+		return statErr
+	} else {
+		_, _, fingerprint, readErr := mcpserver.ReadServeCertFingerprint()
+		if readErr != nil {
+			return readErr
+		}
+		fingerprintLines = []string{
+			fmt.Sprintf("证书公钥 SHA-256 指纹：%s", fingerprint),
+			fmt.Sprintf("证书路径：%s（默认证书路径；若 serve 使用 --tls-cert 指定其他证书，以登录页显示为准。）", certPath),
+		}
 	}
 	passwordState := "未设置"
 	if passwordSet {
@@ -74,7 +103,9 @@ func writeAuthorityWebUIStatus(out io.Writer, st *store.Store) error {
 	if plan.NeedsManualListen {
 		fmt.Fprintln(out, "提示：未找到本机存在的虚拟局域网地址，当前只监听 127.0.0.1；可用设置项 serve.ui_listen 指定地址。")
 	}
-	fmt.Fprintf(out, "证书公钥 SHA-256 指纹：%s\n", fingerprint)
+	for _, line := range fingerprintLines {
+		fmt.Fprintln(out, line)
+	}
 	if !passwordSet {
 		fmt.Fprintln(out, "设置指引：在权威端运行 `sshmgr ui` 走向导，或运行 `sshmgr serve admin set` 设置管理员口令。")
 	}
@@ -106,11 +137,8 @@ func newServeAdminSetCmd() *cobra.Command {
 			if len(first) == 0 {
 				return NewExitCodeError(1, errors.New("管理员口令不能为空"))
 			}
-			generation, err := st.SetWebAdminPassword(first)
+			generation, err := st.SetWebAdminPasswordWithAudit(first, serveAdminAuditRow("admin.password_set", nil))
 			if err != nil {
-				return err
-			}
-			if err := writeServeAdminAudit(st, "cli.admin.password.set", nil); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "管理员口令已设置，全部 Web 会话已作废（会话代 %d）。\n", generation)
@@ -148,10 +176,8 @@ func newServeAdminUnlockCmd() *cobra.Command {
 			if ip == nil {
 				return NewExitCodeError(1, fmt.Errorf("%q 不是有效的 IP 地址", args[0]))
 			}
-			if err := st.ClearWebAdminLoginFailures(ip.String()); err != nil {
-				return err
-			}
-			if err := writeServeAdminAudit(st, "cli.admin.unlock", map[string]string{"ip": ip.String()}); err != nil {
+			detail := map[string]string{"ip": ip.String()}
+			if err := st.ClearWebAdminLoginFailuresWithAudit(ip.String(), serveAdminAuditRow("admin.unlock", detail)); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "来源 IP %s 的登录锁定已解除。\n", ip.String())
@@ -171,11 +197,8 @@ func newServeAdminLogoutAllCmd() *cobra.Command {
 				return err
 			}
 			defer st.Close()
-			generation, err := st.LogoutAllWebAdminSessions()
+			generation, err := st.LogoutAllWebAdminSessionsWithAudit(serveAdminAuditRow("admin.logout_all", nil))
 			if err != nil {
-				return err
-			}
-			if err := writeServeAdminAudit(st, "cli.admin.logout_all", nil); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "全部 Web 会话已注销（会话代 %d）。\n", generation)
@@ -200,13 +223,13 @@ func newServeAdminStatusCmd() *cobra.Command {
 	}
 }
 
-func writeServeAdminAudit(st *store.Store, action string, detail map[string]string) error {
+func serveAdminAuditRow(action string, detail map[string]string) store.AuditRow {
 	summary := make(map[string]any, len(detail))
 	for key, value := range detail {
 		summary[key] = value
 	}
-	return st.WriteAudit(store.AuditRow{
-		TS: time.Now(), Action: action, Status: "ok",
+	return store.AuditRow{
+		Action: action, Status: "ok",
 		Source: store.AuditSourceCLI, Command: store.MarshalAuditSummary(summary),
-	})
+	}
 }

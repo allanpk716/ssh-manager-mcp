@@ -233,7 +233,7 @@ func TestUICommandServerRolePrintsServeListenerWithoutStartingServer(t *testing.
 	}
 	combined := stdout.String() + stderr.String()
 	for _, want := range []string{
-		"权威端", "https://127.0.0.1:7879/ui/", "sha256:", "sshmgr serve admin set", "sshmgr ui",
+		"权威端", "https://127.0.0.1:7879/ui/", "尚未生成证书", "sshmgr serve admin set", "sshmgr ui",
 	} {
 		if !strings.Contains(combined, want) {
 			t.Fatalf("权威端 ui 输出应包含 %q，实际：%s", want, combined)

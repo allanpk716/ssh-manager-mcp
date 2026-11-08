@@ -36,10 +36,13 @@ func (s *fakeAuthorityAuth) VerifyAdminPassword(password []byte) (bool, error) {
 	return s.passwordSet && string(password) == s.password, nil
 }
 
-func (s *fakeAuthorityAuth) SetAdminPassword(password []byte) (int64, error) {
+func (s *fakeAuthorityAuth) SetAdminPasswordWithAudit(password []byte, event AuditEvent) (int64, error) {
 	s.passwordSet = true
 	s.password = string(password)
 	s.generation++
+	s.mu.Lock()
+	s.audits = append(s.audits, event)
+	s.mu.Unlock()
 	return s.generation, nil
 }
 
@@ -47,8 +50,11 @@ func (s *fakeAuthorityAuth) SessionGeneration() (int64, error) {
 	return s.generation, nil
 }
 
-func (s *fakeAuthorityAuth) LogoutAllSessions() (int64, error) {
+func (s *fakeAuthorityAuth) LogoutAllSessionsWithAudit(event AuditEvent) (int64, error) {
 	s.generation++
+	s.mu.Lock()
+	s.audits = append(s.audits, event)
+	s.mu.Unlock()
 	return s.generation, nil
 }
 

@@ -6,6 +6,99 @@ import (
 	"time"
 )
 
+func failWebAdminAuditInsert(t *testing.T, s *Store) {
+	t.Helper()
+	if _, err := s.db.Exec(`CREATE TRIGGER fail_web_admin_audit
+BEFORE INSERT ON audit_log
+BEGIN
+	SELECT RAISE(ABORT, 'audit failed');
+END`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWebAdminPasswordSetAndAuditCommitTogether(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	if _, err := s.SetWebAdminPassword([]byte("old-password")); err != nil {
+		t.Fatal(err)
+	}
+	failWebAdminAuditInsert(t, s)
+
+	_, err := s.SetWebAdminPasswordWithAudit([]byte("new-password"), AuditRow{
+		Action: "admin.password_set", Status: "ok", Source: AuditSourceCLI,
+	})
+	if err == nil || !strings.Contains(err.Error(), "audit failed") {
+		t.Fatalf("审计写入失败应让口令设置失败：%v", err)
+	}
+	ok, err := s.VerifyWebAdminPassword([]byte("old-password"))
+	if err != nil || !ok {
+		t.Fatalf("事务回滚后旧口令应仍有效：ok=%v err=%v", ok, err)
+	}
+	generation, err := s.WebAdminSessionGeneration()
+	if err != nil || generation != 1 {
+		t.Fatalf("事务回滚后会话代 = %d，应为 1，错误 = %v", generation, err)
+	}
+}
+
+func TestWebAdminLogoutAllAndAuditCommitTogether(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	if _, err := s.SetWebAdminPassword([]byte("old-password")); err != nil {
+		t.Fatal(err)
+	}
+	failWebAdminAuditInsert(t, s)
+
+	_, err := s.LogoutAllWebAdminSessionsWithAudit(AuditRow{
+		Action: "admin.logout_all", Status: "ok", Source: AuditSourceWebUI, SourceIP: "192.0.2.10",
+	})
+	if err == nil || !strings.Contains(err.Error(), "audit failed") {
+		t.Fatalf("审计写入失败应让注销全部会话失败：%v", err)
+	}
+	generation, err := s.WebAdminSessionGeneration()
+	if err != nil || generation != 1 {
+		t.Fatalf("事务回滚后会话代 = %d，应为 1，错误 = %v", generation, err)
+	}
+}
+
+func TestWebAdminUnlockAndAuditCommitTogether(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	base := time.Unix(1800000000, 0)
+	ip := "192.0.2.10"
+	for i := 0; i < 5; i++ {
+		if _, err := s.RecordWebAdminLoginFailure(ip, base.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failWebAdminAuditInsert(t, s)
+
+	err := s.ClearWebAdminLoginFailuresWithAudit(ip, AuditRow{
+		Action: "admin.unlock", Status: "ok", Source: AuditSourceCLI,
+	})
+	if err == nil || !strings.Contains(err.Error(), "audit failed") {
+		t.Fatalf("审计写入失败应让解除锁定失败：%v", err)
+	}
+	state, err := s.WebAdminLoginState(ip, base.Add(5*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Locked {
+		t.Fatalf("事务回滚后锁定应仍生效：%+v", state)
+	}
+}
+
+func TestVerifyWebAdminPasswordHashErrorOmitsHash(t *testing.T) {
+	encoded := "$argon2id$unsupported$not$hash"
+	_, err := verifyWebAdminPasswordHash([]byte("password"), encoded)
+	if err == nil {
+		t.Fatal("格式不支持的哈希应返回错误")
+	}
+	if strings.Contains(err.Error(), encoded) || strings.Contains(err.Error(), "not$hash") {
+		t.Fatalf("错误信息不应包含口令哈希：%v", err)
+	}
+}
+
 func TestWebAdminPasswordUsesArgon2idAndMovesSessionGeneration(t *testing.T) {
 	s := newTestStore(t)
 	defer s.Close()

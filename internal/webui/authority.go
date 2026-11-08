@@ -31,9 +31,9 @@ type AuditEvent struct {
 type AuthStore interface {
 	AdminPasswordIsSet() (bool, error)
 	VerifyAdminPassword(password []byte) (bool, error)
-	SetAdminPassword(password []byte) (int64, error)
+	SetAdminPasswordWithAudit(password []byte, event AuditEvent) (int64, error)
 	SessionGeneration() (int64, error)
-	LogoutAllSessions() (int64, error)
+	LogoutAllSessionsWithAudit(event AuditEvent) (int64, error)
 	LoginLimit(ip string, now time.Time) (LoginLimit, error)
 	RecordLoginFailure(ip string, now time.Time) (LoginLimit, error)
 	ClearLoginLock(ip string) error
@@ -303,13 +303,13 @@ func (h *handler) handleAuthorityLogoutAll(w http.ResponseWriter, r *http.Reques
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "注销全部会话只接受 POST 请求。")
 		return
 	}
-	if _, err := h.cfg.Auth.LogoutAllSessions(); err != nil {
+	logoutEvent := AuditEvent{Action: "admin.logout_all", Status: "ok", SourceIP: remoteIP(r)}
+	if _, err := h.cfg.Auth.LogoutAllSessionsWithAudit(logoutEvent); err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "注销全部会话失败", "注销全部会话失败，请稍后重试。")
 		return
 	}
 	h.clearAuthoritySessions()
 	h.clearAuthoritySessionCookie(w)
-	h.writeAuthorityAudit(remoteIP(r), "admin.logout_all", "ok", nil)
 	http.Redirect(w, r, loginPath, http.StatusSeeOther)
 }
 
@@ -344,13 +344,15 @@ func (h *handler) handleAuthorityPassword(w http.ResponseWriter, r *http.Request
 			})
 			return
 		}
-		if _, err := h.cfg.Auth.SetAdminPassword([]byte(newPassword)); err != nil {
+		changeEvent := AuditEvent{
+			Action: "admin.password_change", Status: "ok", SourceIP: remoteIP(r),
+		}
+		if _, err := h.cfg.Auth.SetAdminPasswordWithAudit([]byte(newPassword), changeEvent); err != nil {
 			h.renderError(w, r, http.StatusInternalServerError, "修改管理员口令失败", "修改管理员口令失败，请稍后重试。")
 			return
 		}
 		h.clearAuthoritySessions()
 		h.clearAuthoritySessionCookie(w)
-		h.writeAuthorityAudit(remoteIP(r), "admin.password_change", "ok", nil)
 		http.Redirect(w, r, loginPath, http.StatusSeeOther)
 	default:
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "修改口令页面只接受 GET 与 POST 请求。")

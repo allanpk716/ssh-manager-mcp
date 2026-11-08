@@ -31,9 +31,9 @@ type WebAdminLoginLock struct {
 	Remaining time.Duration
 }
 
-// webAdminLoginState 是登录失败记录在 vault 里的持久形态。时间统一保存
+// webAdminLoginRecord 是登录失败记录在 vault 里的持久形态。时间统一保存
 // Unix 秒；读取时按调用方传入的当前时间裁剪过期事件。
-type webAdminLoginState struct {
+type webAdminLoginRecord struct {
 	IPFailures     map[string][]int64 `json:"ip_failures"`
 	GlobalFailures []int64            `json:"global_failures"`
 	IPLocks        map[string]int64   `json:"ip_locks"`
@@ -91,6 +91,23 @@ func (s *Store) SetWebAdminPassword(password []byte) (int64, error) {
 	})
 }
 
+// SetWebAdminPasswordWithAudit 在同一个事务里保存新口令并写入审计行。
+func (s *Store) SetWebAdminPasswordWithAudit(password []byte, audit AuditRow) (int64, error) {
+	encoded, err := encodeWebAdminPassword(password)
+	if err != nil {
+		return 0, err
+	}
+	auditRow, err := s.prepareWebAdminAuditRow(audit)
+	if err != nil {
+		return 0, err
+	}
+	return s.updateWebAdminAuthWithAudit(func(current webAdminAuthRow) (webAdminAuthRow, error) {
+		current.PasswordHash = encoded
+		current.SessionGeneration++
+		return current, nil
+	}, &auditRow)
+}
+
 // WebAdminSessionGeneration 返回当前 Web 会话代。
 func (s *Store) WebAdminSessionGeneration() (int64, error) {
 	row, err := readWebAdminAuthRow(s.db)
@@ -109,6 +126,18 @@ func (s *Store) LogoutAllWebAdminSessions() (int64, error) {
 	})
 }
 
+// LogoutAllWebAdminSessionsWithAudit 在同一个事务里推进会话代并写入审计行。
+func (s *Store) LogoutAllWebAdminSessionsWithAudit(audit AuditRow) (int64, error) {
+	auditRow, err := s.prepareWebAdminAuditRow(audit)
+	if err != nil {
+		return 0, err
+	}
+	return s.updateWebAdminAuthWithAudit(func(current webAdminAuthRow) (webAdminAuthRow, error) {
+		current.SessionGeneration++
+		return current, nil
+	}, &auditRow)
+}
+
 // WebAdminLoginState 返回指定来源 IP 当前面临的锁定与全局延迟。
 func (s *Store) WebAdminLoginState(ip string, at time.Time) (WebAdminLoginState, error) {
 	row, err := readWebAdminAuthRow(s.db)
@@ -116,7 +145,7 @@ func (s *Store) WebAdminLoginState(ip string, at time.Time) (WebAdminLoginState,
 		return WebAdminLoginState{}, err
 	}
 	state := pruneWebAdminLoginState(row.LoginState, at)
-	return webAdminLoginStateView(state, ip, at), nil
+	return webAdminLoginRecordView(state, ip, at), nil
 }
 
 // ListWebAdminLoginLocks 返回当前仍生效的登录锁定及剩余时间，按来源 IP
@@ -149,7 +178,7 @@ func (s *Store) RecordWebAdminLoginFailure(ip string, at time.Time) (WebAdminLog
 			state.IPLocks[ip] = at.Add(webAdminLockDuration).Unix()
 		}
 		current.LoginState = state
-		view = webAdminLoginStateView(state, ip, at)
+		view = webAdminLoginRecordView(state, ip, at)
 		return current, nil
 	})
 	return view, err
@@ -159,7 +188,7 @@ func (s *Store) RecordWebAdminLoginFailure(ip string, at time.Time) (WebAdminLog
 // 主机上的管理员命令解除锁定。
 func (s *Store) ClearWebAdminLoginFailures(ip string) error {
 	_, err := s.updateWebAdminAuth(func(current webAdminAuthRow) (webAdminAuthRow, error) {
-		state := pruneWebAdminLoginState(current.LoginState, time.Now())
+		state := pruneWebAdminLoginState(current.LoginState, s.nowTime())
 		delete(state.IPFailures, ip)
 		delete(state.IPLocks, ip)
 		current.LoginState = state
@@ -168,15 +197,48 @@ func (s *Store) ClearWebAdminLoginFailures(ip string) error {
 	return err
 }
 
+// ClearWebAdminLoginFailuresWithAudit 在同一个事务里解除锁定并写入审计行。
+func (s *Store) ClearWebAdminLoginFailuresWithAudit(ip string, audit AuditRow) error {
+	auditRow, err := s.prepareWebAdminAuditRow(audit)
+	if err != nil {
+		return err
+	}
+	_, err = s.updateWebAdminAuthWithAudit(func(current webAdminAuthRow) (webAdminAuthRow, error) {
+		state := pruneWebAdminLoginState(current.LoginState, s.nowTime())
+		delete(state.IPFailures, ip)
+		delete(state.IPLocks, ip)
+		current.LoginState = state
+		return current, nil
+	}, &auditRow)
+	return err
+}
+
 type webAdminAuthRow struct {
 	PasswordHash      string
 	SessionGeneration int64
-	LoginState        webAdminLoginState
+	LoginState        webAdminLoginRecord
 }
 
-type webAdminAuthDB dbtx
-
 func (s *Store) updateWebAdminAuth(change func(webAdminAuthRow) (webAdminAuthRow, error)) (int64, error) {
+	return s.updateWebAdminAuthWithAudit(change, nil)
+}
+
+func (s *Store) prepareWebAdminAuditRow(audit AuditRow) (AuditRow, error) {
+	switch audit.Source {
+	case AuditSourceCLI, AuditSourceWebUI, AuditSourceAgent:
+	default:
+		return AuditRow{}, fmt.Errorf("Web 管理员审计来源为空或未知：%q", audit.Source)
+	}
+	if audit.TS.IsZero() {
+		audit.TS = s.nowTime()
+	}
+	if audit.Status == "" {
+		audit.Status = "ok"
+	}
+	return audit, nil
+}
+
+func (s *Store) updateWebAdminAuthWithAudit(change func(webAdminAuthRow) (webAdminAuthRow, error), audit *AuditRow) (int64, error) {
 	var generation int64
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -210,6 +272,11 @@ func (s *Store) updateWebAdminAuth(change func(webAdminAuthRow) (webAdminAuthRow
 			return err
 		}
 		generation = changed.SessionGeneration
+		if audit != nil {
+			if err := writeAuditTx(tx, *audit); err != nil {
+				return err
+			}
+		}
 		return nil
 	}()
 	if err != nil {
@@ -221,7 +288,7 @@ func (s *Store) updateWebAdminAuth(change func(webAdminAuthRow) (webAdminAuthRow
 	return generation, err
 }
 
-func readWebAdminAuthRow(db webAdminAuthDB) (webAdminAuthRow, error) {
+func readWebAdminAuthRow(db dbtx) (webAdminAuthRow, error) {
 	var row webAdminAuthRow
 	var encoded string
 	err := db.QueryRow(`SELECT password_hash,session_generation,login_state FROM web_admin_auth WHERE singleton=1`).
@@ -238,15 +305,15 @@ func readWebAdminAuthRow(db webAdminAuthDB) (webAdminAuthRow, error) {
 	return row, nil
 }
 
-func emptyWebAdminLoginState() webAdminLoginState {
-	return webAdminLoginState{
+func emptyWebAdminLoginState() webAdminLoginRecord {
+	return webAdminLoginRecord{
 		IPFailures:     map[string][]int64{},
 		GlobalFailures: []int64{},
 		IPLocks:        map[string]int64{},
 	}
 }
 
-func unmarshalWebAdminLoginState(encoded string, out *webAdminLoginState) error {
+func unmarshalWebAdminLoginState(encoded string, out *webAdminLoginRecord) error {
 	*out = emptyWebAdminLoginState()
 	if strings.TrimSpace(encoded) == "" {
 		return nil
@@ -266,7 +333,7 @@ func unmarshalWebAdminLoginState(encoded string, out *webAdminLoginState) error 
 	return nil
 }
 
-func marshalWebAdminLoginState(state webAdminLoginState) (string, error) {
+func marshalWebAdminLoginState(state webAdminLoginRecord) (string, error) {
 	if state.IPFailures == nil && state.GlobalFailures == nil && state.IPLocks == nil {
 		return "{}", nil
 	}
@@ -277,7 +344,7 @@ func marshalWebAdminLoginState(state webAdminLoginState) (string, error) {
 	return string(encoded), nil
 }
 
-func pruneWebAdminLoginState(state webAdminLoginState, now time.Time) webAdminLoginState {
+func pruneWebAdminLoginState(state webAdminLoginRecord, now time.Time) webAdminLoginRecord {
 	cutoff := now.Add(-webAdminFailureWindow).Unix()
 	for ip, times := range state.IPFailures {
 		kept := make([]int64, 0, len(times))
@@ -307,7 +374,7 @@ func pruneWebAdminLoginState(state webAdminLoginState, now time.Time) webAdminLo
 	return state
 }
 
-func webAdminLoginStateView(state webAdminLoginState, ip string, now time.Time) WebAdminLoginState {
+func webAdminLoginRecordView(state webAdminLoginRecord, ip string, now time.Time) WebAdminLoginState {
 	view := WebAdminLoginState{
 		Delay: time.Duration(len(state.GlobalFailures)) * time.Second,
 	}
@@ -346,21 +413,21 @@ func encodeWebAdminPassword(password []byte) (string, error) {
 func verifyWebAdminPasswordHash(password []byte, encoded string) (bool, error) {
 	fields := strings.Split(encoded, "$")
 	if len(fields) != 6 || fields[0] != "" || fields[1] != "argon2id" {
-		return false, fmt.Errorf("管理员口令哈希格式不支持：%q", encoded)
+		return false, errors.New("管理员口令哈希格式不支持")
 	}
 	if fields[2] != "v="+strconv.Itoa(argon2.Version) {
-		return false, fmt.Errorf("管理员口令哈希版本不支持：%q", fields[2])
+		return false, errors.New("管理员口令哈希版本不支持")
 	}
 	parameterText := strings.Split(fields[3], ",")
 	if len(parameterText) != 3 || !strings.HasPrefix(parameterText[0], "m=") ||
 		!strings.HasPrefix(parameterText[1], "t=") || !strings.HasPrefix(parameterText[2], "p=") {
-		return false, fmt.Errorf("管理员口令哈希参数格式不支持：%q", fields[3])
+		return false, errors.New("管理员口令哈希参数格式不支持")
 	}
 	values := make([]int, 3)
 	for i, text := range parameterText {
 		value, err := strconv.Atoi(text[2:])
 		if err != nil || value <= 0 {
-			return false, fmt.Errorf("管理员口令哈希参数非法：%q", text)
+			return false, errors.New("管理员口令哈希参数非法")
 		}
 		values[i] = value
 	}

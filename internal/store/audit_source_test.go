@@ -42,7 +42,7 @@ func TestAuditSourceColumnsMigrateAndPersist(t *testing.T) {
 
 	if err := s.WriteAudit(AuditRow{
 		TS:       time.Unix(2, 0),
-		Action:   "web.login.success",
+		Action:   "admin.login",
 		Status:   "ok",
 		Source:   AuditSourceWebUI,
 		SourceIP: "192.0.2.10",
@@ -63,5 +63,32 @@ func TestAuditSourceColumnsMigrateAndPersist(t *testing.T) {
 	old := rows[1]
 	if old.Source != "" || old.SourceIP != "" {
 		t.Fatalf("旧审计行来源应保持为空，实际 %q/%q", old.Source, old.SourceIP)
+	}
+}
+
+func TestAuditWritePreservesEmptySource(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	rows := []AuditRow{
+		{TS: time.Unix(1, 0), Action: "exec", ServerID: "server", Status: "ok"},
+		{TS: time.Unix(2, 0), Action: "exec", ProjectID: "project", Status: "ok"},
+	}
+	for _, row := range rows {
+		if err := s.WriteAudit(row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.AuditRows(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("审计行数量 = %d，应为 2", len(got))
+	}
+	for _, row := range got {
+		if row.Source != "" {
+			t.Fatalf("调用方未给来源时不应推断来源：%+v", row)
+		}
 	}
 }

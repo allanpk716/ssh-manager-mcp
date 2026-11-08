@@ -26,16 +26,16 @@ func (s WebUIAuthStore) VerifyAdminPassword(password []byte) (bool, error) {
 	return s.store.VerifyWebAdminPassword(password)
 }
 
-func (s WebUIAuthStore) SetAdminPassword(password []byte) (int64, error) {
-	return s.store.SetWebAdminPassword(password)
+func (s WebUIAuthStore) SetAdminPasswordWithAudit(password []byte, event webui.AuditEvent) (int64, error) {
+	return s.store.SetWebAdminPasswordWithAudit(password, webUIAuditRow(event))
 }
 
 func (s WebUIAuthStore) SessionGeneration() (int64, error) {
 	return s.store.WebAdminSessionGeneration()
 }
 
-func (s WebUIAuthStore) LogoutAllSessions() (int64, error) {
-	return s.store.LogoutAllWebAdminSessions()
+func (s WebUIAuthStore) LogoutAllSessionsWithAudit(event webui.AuditEvent) (int64, error) {
+	return s.store.LogoutAllWebAdminSessionsWithAudit(webUIAuditRow(event))
 }
 
 func (s WebUIAuthStore) LoginLimit(ip string, now time.Time) (webui.LoginLimit, error) {
@@ -57,6 +57,10 @@ func (s WebUIAuthStore) ClearLoginLock(ip string) error {
 }
 
 func (s WebUIAuthStore) WriteAudit(event webui.AuditEvent) error {
+	return s.store.WriteAudit(webUIAuditRow(event))
+}
+
+func webUIAuditRow(event webui.AuditEvent) store.AuditRow {
 	detail := make(map[string]any, len(event.Detail))
 	for key, value := range event.Detail {
 		detail[key] = value
@@ -65,9 +69,9 @@ func (s WebUIAuthStore) WriteAudit(event webui.AuditEvent) error {
 	if status == "" {
 		status = "ok"
 	}
-	return s.store.WriteAudit(store.AuditRow{
+	return store.AuditRow{
 		TS: time.Now(), Action: event.Action, Status: status,
 		Source: store.AuditSourceWebUI, SourceIP: event.SourceIP,
 		Command: store.MarshalAuditSummary(detail),
-	})
+	}
 }

@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
@@ -20,6 +22,34 @@ func prepareServerRoleVault(t *testing.T) (string, []byte) {
 		t.Fatal(err)
 	}
 	return path, masterKey
+}
+
+func TestAuthorityWebUIStatusWithoutCertDoesNotCreateCert(t *testing.T) {
+	prepareServerRoleVault(t)
+	st, err := openUnlockedStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	var output bytes.Buffer
+	if err := writeAuthorityWebUIStatus(&output, st); err != nil {
+		t.Fatalf("证书不存在时状态命令不应失败：%v", err)
+	}
+	got := output.String()
+	for _, want := range []string{"尚未生成证书", "先启动一次 `sshmgr serve`", "默认证书路径", "--tls-cert"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("状态输出应包含 %q：%s", want, got)
+		}
+	}
+	for _, path := range []string{os.Getenv("SSHMGR_SERVE_CERT"), os.Getenv("SSHMGR_SERVE_KEY"), os.Getenv("SSHMGR_SERVE_MARKER")} {
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("状态命令不应创建 %s：%v", path, err)
+		}
+	}
 }
 
 func TestServeAdminRejectsNonServerRoles(t *testing.T) {
@@ -120,7 +150,7 @@ func TestServeAdminSetWritesArgon2idAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].Action != "cli.admin.password.set" ||
+	if len(rows) != 1 || rows[0].Action != "admin.password_set" ||
 		rows[0].Source != store.AuditSourceCLI {
 		t.Fatalf("设置口令应写命令行审计：%+v", rows)
 	}
@@ -166,13 +196,16 @@ func TestServeAdminUnlockListsAndClearsLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].Action != "cli.admin.unlock" || rows[0].Source != store.AuditSourceCLI {
+	if len(rows) != 1 || rows[0].Action != "admin.unlock" || rows[0].Source != store.AuditSourceCLI {
 		t.Fatalf("解除锁定应写命令行审计：%+v", rows)
 	}
 }
 
 func TestServeAdminLogoutAllAndStatus(t *testing.T) {
 	path, masterKey := prepareServerRoleVault(t)
+	if _, _, _, err := mcpserver.LoadOrCreateServeCert(); err != nil {
+		t.Fatal(err)
+	}
 	st, err := store.Open(path, masterKey)
 	if err != nil {
 		t.Fatal(err)
