@@ -38,15 +38,3 @@ func Resolve(envValue string, flagSet bool, flagValue bool, storedValue string, 
 	}
 	return defaultValue
 }
-
-// ResolveInputs 解析已经读成可选布尔值的环境变量与旗标。指针为空表示那一
-// 层没有显式设置。
-func ResolveInputs(envValue, flagValue *bool, storedValue string, defaultValue bool) bool {
-	if envValue != nil {
-		return *envValue
-	}
-	if flagValue != nil {
-		return *flagValue
-	}
-	return Resolve("", false, false, storedValue, defaultValue)
-}
