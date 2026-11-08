@@ -5,9 +5,14 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 )
 
 const opsUpdateRestartPath = "/ui/ops/update/restart"
+
+// restartGraceDelay 给 net/http 一小段时间在处理器返回后补完协议层结束
+// 标记（尤其是 HTTP/2 的结束流），再触发会终止本进程的服务重启。
+const restartGraceDelay = 500 * time.Millisecond
 
 // OpsRestartStore 是权威端重启服务的窄接口。afterResponse 由处理器提供，
 // 只允许它在完整响应已经写出并刷新后触发传入的重启动作。
@@ -37,7 +42,11 @@ func (h *handler) handleRestartAfterResponse(page func(http.ResponseWriter, *htt
 			flusher.Flush()
 		}
 		if delayed.action != nil {
-			go delayed.action()
+			action := delayed.action
+			go func() {
+				time.Sleep(restartGraceDelay)
+				action()
+			}()
 		}
 	}
 }
