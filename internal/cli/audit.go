@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/ops"
 )
 
 // newAuditCmd: `sshmgr audit` — the owner's read path over the vault's
@@ -71,17 +71,17 @@ func newAuditCmd() *cobra.Command {
 			if probe > 0 {
 				probe++ // fetch one extra row to detect truncation (spec §1)
 			}
-			rows, err := s.QueryAudit(store.AuditFilter{
-				Since:      sinceUnix,
-				ServerIDs:  resolveServerIDs(s, servers),
-				ProjectIDs: resolveProjectIDs(s, projects),
-				OwnerOnly:  owner,
-				Actions:    actions,
-				Statuses:   statuses,
-				Source:     source,
-				SourceIP:   sourceIP,
-				BeforeID:   before,
-				Limit:      probe,
+			rows, err := ops.New(s).QueryAudit(ops.AuditQuery{
+				Since:     sinceUnix,
+				Servers:   servers,
+				Projects:  projects,
+				OwnerOnly: owner,
+				Actions:   actions,
+				Statuses:  statuses,
+				Source:    source,
+				SourceIP:  sourceIP,
+				BeforeID:  before,
+				Limit:     probe,
 			})
 			if err != nil {
 				return err
@@ -109,12 +109,11 @@ func newAuditCmd() *cobra.Command {
 				fmt.Fprintln(out, "no matching audit rows")
 				return nil
 			}
-			projNames, srvNames := auditNameMaps(s)
 			for _, r := range rows {
 				fmt.Fprintf(out, "%s  %s  %s  %s  %s  来源=%s 来源IP=%s exit=%d  %dms  %s%s\n",
 					r.TS.Local().Format("2006-01-02 15:04:05-07:00"),
-					escapeAuditText(displayAuditEntity(r.ServerID, srvNames)),
-					escapeAuditText(displayAuditProject(r.ProjectID, projNames)),
+					escapeAuditText(displayAuditEntity(r.ServerName, r.ServerID)),
+					escapeAuditText(displayAuditProject(r.ProjectName, r.ProjectID)),
 					escapeAuditText(r.Action),
 					escapeAuditText(r.Status),
 					escapeAuditText(r.Source),
@@ -175,58 +174,15 @@ func parseRelativeDuration(s string) (time.Duration, bool) {
 	return time.Duration(f * float64(d)), true
 }
 
-// resolveServerIDs / resolveProjectIDs: name-first, else the raw value as-is.
-// Zero existence checking (spec §1): filters only narrow the result set — a
-// value matching nothing yields an empty result, never an error, so history
-// rows of deleted entities stay reachable by their old ids. Name uniqueness is
-// schema-enforced (servers.name / projects.name are NOT NULL UNIQUE), so a
-// name hit is always at most one entity.
-func resolveServerIDs(s *store.Store, vals []string) []string {
-	out := make([]string, 0, len(vals))
-	for _, v := range vals {
-		if srv, _ := s.GetServerByName(v); srv != nil {
-			v = srv.ID
-		}
-		out = append(out, v)
-	}
-	return out
-}
-
-func resolveProjectIDs(s *store.Store, vals []string) []string {
-	out := make([]string, 0, len(vals))
-	for _, v := range vals {
-		if p, _ := s.GetProjectByName(v); p != nil {
-			v = p.ID
-		}
-		out = append(out, v)
-	}
-	return out
-}
-
-func auditNameMaps(s *store.Store) (proj, srv map[string]string) {
-	proj, srv = map[string]string{}, map[string]string{}
-	if ps, err := s.ListProjects(); err == nil {
-		for _, p := range ps {
-			proj[p.ID] = p.Name
-		}
-	}
-	if ss, err := s.ListServers(); err == nil {
-		for _, x := range ss {
-			srv[x.ID] = x.Name
-		}
-	}
-	return proj, srv
-}
-
 // displayAuditEntity: empty id → "(none)" (no server context, e.g. project-level
 // owner actions); unresolvable id → first 8 chars + "…(deleted)"; else the name.
 // Everything is escaped at the print site (spec §3).
-func displayAuditEntity(id string, names map[string]string) string {
+func displayAuditEntity(name, id string) string {
 	if id == "" {
 		return "(none)"
 	}
-	if n, ok := names[id]; ok && n != "" {
-		return n
+	if name != "" {
+		return name
 	}
 	if len(id) > 8 {
 		return id[:8] + "…(deleted)"
@@ -235,11 +191,11 @@ func displayAuditEntity(id string, names map[string]string) string {
 }
 
 // displayAuditProject: empty project_id → "(owner)"; else the entity rules.
-func displayAuditProject(id string, names map[string]string) string {
+func displayAuditProject(name, id string) string {
 	if id == "" {
 		return "(owner)"
 	}
-	return displayAuditEntity(id, names)
+	return displayAuditEntity(name, id)
 }
 
 // escapeAuditText (spec §3): applied to EVERY dynamic text field of the human
