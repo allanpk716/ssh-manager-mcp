@@ -203,7 +203,8 @@ func newPolicyRuleForm(d *policyRuleDraft) *huh.Form {
 					huh.NewOption("POSIX（Linux/macOS）", "posix"),
 					huh.NewOption("PowerShell（Windows）", "powershell"),
 					huh.NewOption("cmd（Windows）", "cmd"),
-				).Value(&d.Shells),
+				).Value(&d.Shells).
+				Height(multiSelectHeight(3)),
 			huh.NewInput().Title("命令名及别名（逗号分隔，可空=不限命令名）").Value(&d.CommandsStr),
 			huh.NewInput().Title("参数条件（逗号分隔，每个都须逐字出现在参数里）").Value(&d.ArgsStr),
 			huh.NewSelect[string]().Title("目标路径类别").

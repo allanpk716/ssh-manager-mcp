@@ -160,7 +160,8 @@ func newGrantForm(servers []*models.Server, chosen *[]string) *huh.Form {
 	return huh.NewForm(huh.NewGroup(
 		huh.NewMultiSelect[string]().
 			Title(fmt.Sprintf("授权服务器 · 共 %d 台（勾选=授权集；空格勾选，回车提交——取消勾选并提交将移除）", len(servers))).
-			Options(grantOptions(servers)...).Value(chosen),
+			Options(grantOptions(servers)...).Value(chosen).
+			Height(multiSelectHeight(len(servers))),
 	))
 }
 

@@ -178,7 +178,8 @@ func (f *importFlow) pickForm() *huh.Form {
 	}
 	return huh.NewForm(huh.NewGroup(
 		huh.NewMultiSelect[string]().Title("选择要导入的服务器（空格勾选，回车提交）").
-			Options(opts...).Value(&f.pick),
+			Options(opts...).Value(&f.pick).
+			Height(multiSelectHeight(len(opts))),
 	))
 }
 

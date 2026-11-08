@@ -79,9 +79,18 @@ func wizProfileGrantForm(profileName *string, servers []*models.Server, chosen *
 	if len(servers) > 0 {
 		fields = append(fields, huh.NewMultiSelect[string]().
 			Title("授权给这个 profile 的服务器（空格勾选，回车提交；未选=agent 暂时看不到任何服务器）").
-			Options(grantOptions(servers)...).Value(chosen))
+			Options(grantOptions(servers)...).Value(chosen).
+			Height(multiSelectHeight(len(servers))))
 	}
 	return huh.NewForm(huh.NewGroup(fields...))
+}
+
+// multiSelectHeight returns the rendered height needed for a multi-select:
+// one title line plus the visible option lines. Huh otherwise derives the
+// height from the surrounding form; in these form layouts that derivation
+// yields an empty option viewport.
+func multiSelectHeight(optionCount int) int {
+	return 1 + min(optionCount, 10)
 }
 
 // dedupeProfileName returns name, or name-2 / name-3 … when name is already
