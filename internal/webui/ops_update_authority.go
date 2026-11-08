@@ -59,8 +59,7 @@ func (h *handler) handleAuthorityOpsUpdateRestart(w http.ResponseWriter, r *http
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "重启服务只接受 POST 请求。")
 		return
 	}
-	if !h.recentlyVerified(h.currentAuthoritySession(r)) {
-		http.Redirect(w, r, reverifyPath(opsUpdateRestartPath), http.StatusSeeOther)
+	if !h.requireRecentReverify(w, r, opsUpdatePath) {
 		return
 	}
 	restarts, ok := h.cfg.Ops.(OpsRestartStore)
@@ -137,8 +136,7 @@ func (h *handler) handleAuthorityOpsUpdate(w http.ResponseWriter, r *http.Reques
 		}
 		h.renderPage(w, r, http.StatusOK, "update.tmpl", pageData{Title: "升级", OpsUpdate: &status})
 	case http.MethodPost:
-		if !h.recentlyVerified(h.currentAuthoritySession(r)) {
-			http.Redirect(w, r, reverifyPath(opsUpdatePath), http.StatusSeeOther)
+		if !h.requireRecentReverify(w, r, opsUpdatePath) {
 			return
 		}
 		result, err := h.cfg.Ops.ApplyUpdate("", remoteIP(r))

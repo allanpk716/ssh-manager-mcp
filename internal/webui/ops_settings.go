@@ -133,9 +133,8 @@ func (h *handler) handleOpsSettingsPost(w http.ResponseWriter, r *http.Request) 
 		h.renderError(w, r, http.StatusBadRequest, "保存设置失败", "缺少设置项键名。")
 		return
 	}
-	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		next := url.Values{"reverify": {"1"}, "key": {key}}
-		http.Redirect(w, r, reverifyPath(opsSettingsPath+"?"+next.Encode()), http.StatusSeeOther)
+	next := url.Values{"reverify": {"1"}, "key": {key}}
+	if !h.requireRecentReverify(w, r, opsSettingsPath+"?"+next.Encode()) {
 		return
 	}
 	source := OpsWriteSource{RemoteAddress: remoteIP(r)}

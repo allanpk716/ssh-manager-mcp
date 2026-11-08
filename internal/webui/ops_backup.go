@@ -45,8 +45,7 @@ func (h *handler) handleOpsBackupCreate(w http.ResponseWriter, r *http.Request) 
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "立即备份只接受 POST 请求。")
 		return
 	}
-	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		http.Redirect(w, r, reverifyPath(opsBackupPath), http.StatusSeeOther)
+	if !h.requireRecentReverify(w, r, opsBackupPath) {
 		return
 	}
 	result, err := h.cfg.Ops.CreateBackup(OpsWriteSource{RemoteAddress: remoteIP(r)})

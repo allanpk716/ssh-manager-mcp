@@ -328,6 +328,20 @@ func (h *handler) recentlyVerified(sess *session) bool {
 	return h.cfg.now().Sub(sess.lastVerified) <= 5*time.Minute
 }
 
+// requireRecentReverify 是运维写操作的统一重新验证守卫。单机与客户端的
+// 回环界面没有管理员口令，直接放行；权威端 5 分钟内未重新验证时跳到重
+// 新验证页，next 必须指向重新验证后可用 GET 打开的页面。
+func (h *handler) requireRecentReverify(w http.ResponseWriter, r *http.Request, next string) bool {
+	if h.cfg.Role != RoleServer {
+		return true
+	}
+	if h.recentlyVerified(h.currentAuthoritySession(r)) {
+		return true
+	}
+	http.Redirect(w, r, reverifyPath(next), http.StatusSeeOther)
+	return false
+}
+
 func (h *handler) handleAuthorityPassword(w http.ResponseWriter, r *http.Request) {
 	sess := h.currentAuthoritySession(r)
 	if sess == nil {

@@ -32,8 +32,7 @@ func (h *handler) handleOpsBackupConfig(w http.ResponseWriter, r *http.Request) 
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "保存备份配置只接受 POST 请求。")
 		return
 	}
-	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		http.Redirect(w, r, reverifyPath(opsBackupPath), http.StatusSeeOther)
+	if !h.requireRecentReverify(w, r, opsBackupPath) {
 		return
 	}
 	config, form := parseOpsBackupConfigForm(r)

@@ -93,7 +93,7 @@ func TestAuthorityOpsUpdateWritesRequireRecentReverification(t *testing.T) {
 	}, cookie)
 	restartBody := readResponseBody(t, restart)
 	if restart.StatusCode != http.StatusSeeOther || restart.Header.Get("Location") !=
-		"/ui/reverify?next=%2Fui%2Fops%2Fupdate%2Frestart" {
+		"/ui/reverify?next=%2Fui%2Fops%2Fupdate" {
 		t.Fatalf("未重新验证的重启应跳转重验页，状态码=%d 跳转=%q 页面：\n%s",
 			restart.StatusCode, restart.Header.Get("Location"), restartBody)
 	}
@@ -131,6 +131,26 @@ func TestAuthorityOpsUpdateWritesRequireRecentReverification(t *testing.T) {
 	}
 	if verifiedRestart.StatusCode != http.StatusOK || ops.restartSourceIP != "198.51.100.9" {
 		t.Fatalf("重新验证后重启应通过，状态码=%d 页面：\n%s", verifiedRestart.StatusCode, verifiedRestartBody)
+	}
+}
+
+func TestAuthorityOpsUpdateRestartReverifyReturnsToGetUpdatePage(t *testing.T) {
+	ops := &stubAuthorityOpsUpdateStore{stubOpsUpdateStore: newStubOpsUpdateStore()}
+	ops.updateStatus = upgradeTestStatus()
+	handler, auth, cookie := newAuthorityOpsUpdateTestHandler(t, ops)
+	auth.now = auth.now.Add(6 * time.Minute)
+	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/ops/update", cookie)
+	csrf := hiddenInputValue(t, readResponseBody(t, page), "csrf_token")
+
+	rejected := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/ops/update/restart", url.Values{
+		"csrf_token": {csrf},
+	}, cookie)
+	rejectedBody := readResponseBody(t, rejected)
+	wantRedirect := "/ui/reverify?next=" + url.QueryEscape("/ui/ops/update")
+	if rejected.StatusCode != http.StatusSeeOther || rejected.Header.Get("Location") != wantRedirect ||
+		ops.restartScheduled || ops.restarts != 0 {
+		t.Fatalf("未验证重启应回跳可 GET 的升级页且无副作用，状态码=%d 跳转=%q 已调度=%v 重启=%d 页面：\n%s",
+			rejected.StatusCode, rejected.Header.Get("Location"), ops.restartScheduled, ops.restarts, rejectedBody)
 	}
 }
 
