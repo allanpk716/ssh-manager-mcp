@@ -660,6 +660,7 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	// guaranteed non-empty (the auto-TLS error path returns). This means serve
 	// ALWAYS serves TLS — there is no plaintext path.
 	autoTLSFingerprint := ""
+	serveCertFingerprint := ""
 	if tlsCert == "" {
 		certPath, keyPath, fp, err := LoadOrCreateServeCert()
 		if err != nil {
@@ -667,6 +668,13 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 		}
 		tlsCert, tlsKey = certPath, keyPath
 		autoTLSFingerprint = fp
+		serveCertFingerprint = fp
+	} else {
+		fp, err := ServeCertificateFingerprint(tlsCert, tlsKey)
+		if err != nil {
+			return fmt.Errorf("serve TLS certificate: %w", err)
+		}
+		serveCertFingerprint = fp
 	}
 
 	// Pairing signature state (Plan 42 批1 T5): the serve cert's ed25519 key
@@ -677,6 +685,12 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	if err := runner.LoadPairingSigner(tlsCert, tlsKey); err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: /pair disabled: serve key unusable for pairing signatures: %v\n", err)
 	}
+
+	webUIListeners, err := startWebUIListenerManager(ctx, st, tlsCert, tlsKey, serveCertFingerprint)
+	if err != nil {
+		return fmt.Errorf("serve web UI: %w", err)
+	}
+	defer webUIListeners.Close()
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

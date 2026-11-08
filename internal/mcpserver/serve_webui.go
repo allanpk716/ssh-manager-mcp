@@ -1,0 +1,114 @@
+package mcpserver
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"time"
+
+	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/vault"
+	"ssh-manager-mcp/internal/webui"
+)
+
+// serveWebUIServerSource 直接读取权威端 vault 的服务器列表。
+type serveWebUIServerSource struct {
+	store *store.Store
+}
+
+func (s serveWebUIServerSource) Servers() ([]webui.ServerRow, error) {
+	servers, err := s.store.ListServers()
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]webui.ServerRow, 0, len(servers))
+	for _, srv := range servers {
+		rows = append(rows, webui.ServerRow{
+			Name: srv.Name, User: srv.User, Host: srv.Host, Port: srv.Port,
+			NeedsAttention: models.ServerNeedsAttention(srv.CredentialID, srv.Role, srv.Tags),
+		})
+	}
+	return rows, nil
+}
+
+// webUIListenPlan 每次重算时读取拓扑虚拟局域网成员地址、本机网卡地址与
+// serve.ui_listen 设置，交给纯推导函数得出本次监听集合。
+func webUIListenPlan(st *store.Store, manualListen string, now time.Time) (webui.ListenPlan, error) {
+	topologyAddresses, err := st.AllVirtualNetworkAddresses()
+	if err != nil {
+		return webui.ListenPlan{}, err
+	}
+	interfaceAddresses, err := localInterfaceAddresses()
+	if err != nil {
+		return webui.ListenPlan{}, err
+	}
+	return webui.DeriveListenAddresses(topologyAddresses, interfaceAddresses, manualListen)
+}
+
+func localInterfaceAddresses() ([]string, error) {
+	interfaces, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(interfaces))
+	for _, address := range interfaces {
+		if ipNet, ok := address.(*net.IPNet); ok && ipNet.IP != nil {
+			out = append(out, ipNet.IP.String())
+		}
+	}
+	return out, nil
+}
+
+// startWebUIListenerManager 构造权威端 Web UI Handler 与监听管理者，并同步
+// 执行第一次地址推导。绑定失败由管理者记录并重试，不阻断主监听。
+func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tlsKey, fingerprint string) (*webUIListenerManager, error) {
+	port, manualListen, err := ReadWebUIConfig(st)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := webUIListenPlan(st, manualListen, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	handler, control, err := webui.NewAuthority(webui.Config{
+		Role: webui.RoleServer, Port: port,
+		Servers:                serveWebUIServerSource{store: st},
+		Auth:                   vault.NewWebUIAuthStore(st),
+		CertificateFingerprint: fingerprint,
+		AllowedHosts:           plan.Addresses,
+	})
+	if err != nil {
+		return nil, err
+	}
+	manager := NewWebUIListenerManager(WebUIListenerOptions{
+		Port: port,
+		Plan: func(now time.Time) (webui.ListenPlan, error) {
+			_, currentManual, err := ReadWebUIConfig(st)
+			if err != nil {
+				return webui.ListenPlan{}, err
+			}
+			return webUIListenPlan(st, currentManual, now)
+		},
+		Serve: func(listener net.Listener) error {
+			server := &http.Server{Handler: handler}
+			return server.ServeTLS(listener, tlsCert, tlsKey)
+		},
+		SetAllowedHosts: control.SetAllowedHosts,
+		Log: func(format string, arguments ...any) {
+			fmt.Fprintf(os.Stderr, format+"\n", arguments...)
+		},
+	})
+	if _, err := manager.Sync(time.Now()); err != nil {
+		_ = manager.Close()
+		return nil, err
+	}
+	go func() {
+		if err := manager.Run(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "sshmgr serve: web UI listener manager: %v\n", err)
+		}
+	}()
+	return manager, nil
+}

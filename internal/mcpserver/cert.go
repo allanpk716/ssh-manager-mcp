@@ -129,6 +129,12 @@ func LoadOrCreateServeCert() (certPath, keyPath, fingerprint string, err error) 
 	return certPath, keyPath, fp, nil
 }
 
+// ServeCertificateFingerprint 读取指定证书与私钥，返回证书公钥的 SHA-256
+// 指纹。它与客户端钉死指纹使用同一算法和同一显示格式。
+func ServeCertificateFingerprint(certPath, keyPath string) (string, error) {
+	return loadServeCertFingerprint(certPath, keyPath)
+}
+
 // ReadServeCertFingerprint is the READ-ONLY twin of LoadOrCreateServeCert: the
 // same three-state semantics MINUS all generation. It NEVER writes — no
 // atomicWriteFile, no HardenACL, no marker — which is exactly what a
