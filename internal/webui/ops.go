@@ -41,6 +41,22 @@ type OpsAuditRow struct {
 	SourceIP    string
 }
 
+// 审计来源的存储取值固定不变；显示名与过滤校验共用这一份映射。
+const (
+	opsAuditSourceCLI   = "cli"
+	opsAuditSourceWebUI = "web_ui"
+	opsAuditSourceAgent = "agent"
+)
+
+var opsAuditSources = []struct {
+	Value string
+	Label string
+}{
+	{Value: opsAuditSourceCLI, Label: "命令行"},
+	{Value: opsAuditSourceWebUI, Label: "Web UI"},
+	{Value: opsAuditSourceAgent, Label: "agent"},
+}
+
 // ProjectDisplay 返回项目显示名；owner 行显示「owner」。
 func (r OpsAuditRow) ProjectDisplay() string {
 	if r.ProjectName != "" {
@@ -65,13 +81,12 @@ func (r OpsAuditRow) ServerDisplay() string {
 
 // SourceText 返回来源的中文显示名；旧数据没有来源时显示「未知」。
 func (r OpsAuditRow) SourceText() string {
+	for _, source := range opsAuditSources {
+		if r.Source == source.Value {
+			return source.Label
+		}
+	}
 	switch r.Source {
-	case "cli":
-		return "命令行"
-	case "web_ui":
-		return "Web UI"
-	case "agent":
-		return "agent"
 	case "":
 		return "未知"
 	default:
@@ -340,9 +355,14 @@ func parseOpsAuditFilter(values url.Values) (OpsAuditFilterView, OpsAuditQuery, 
 	if view.Status != "" {
 		query.Statuses = []string{view.Status}
 	}
-	switch query.Source {
-	case "", "cli", "web_ui", "agent":
-	default:
+	validSource := query.Source == ""
+	for _, source := range opsAuditSources {
+		if query.Source == source.Value {
+			validSource = true
+			break
+		}
+	}
+	if !validSource {
 		return view, query, errOpsAuditSource
 	}
 	before := strings.TrimSpace(values.Get("before"))
