@@ -68,8 +68,7 @@ func TestAuthorityPairingPageAndListFragment(t *testing.T) {
 		`<a href="/ui/access/pairing">配对</a>`,
 		`<div id="pairing-list" hx-get="/ui/access/pairing/list" hx-trigger="every 5s" hx-swap="outerHTML">`,
 		"笔记本", "https://127.0.0.1:7878", "314159", "192.0.2.9", "替换同名设备的未激活设备码",
-		"剩余 570 秒", `<option value="profile-ops" selected>运维</option>`,
-		"已与客户端屏幕上的短认证码逐位比对一致", `name="override"`,
+		"剩余 570 秒",
 		"旧客户端", "行缺少短认证码", "只能拒绝",
 		"已批准，等待客户端完成（剩余 96 秒）", "已完成",
 	} {
@@ -90,6 +89,103 @@ func TestAuthorityPairingPageAndListFragment(t *testing.T) {
 	}
 	if strings.Contains(fragment, "<html") || !strings.Contains(fragment, "笔记本") {
 		t.Fatalf("配对列表片段应是局部内容：\n%s", fragment)
+	}
+}
+
+func TestAuthorityPairingApprovalFormLivesOnDetailPage(t *testing.T) {
+	store := pairingTestStore()
+	handler, _ := newAuthorityForPairingTest(t, store)
+	cookie := authoritySuccessfulLogin(t, handler, "192.0.2.50:7879", "correct-password")
+
+	page := authorityGet(t, handler, "192.0.2.50:7879", "/ui/access/pairing", cookie)
+	body := readResponseBody(t, page)
+	if page.StatusCode != http.StatusOK {
+		t.Fatalf("配对页状态码=%d 页面：\n%s", page.StatusCode, body)
+	}
+	if !strings.Contains(body, `hx-trigger="every 5s"`) {
+		t.Fatalf("配对列表应自动刷新：\n%s", body)
+	}
+	if !strings.Contains(body, `<a class="pairing-approve-link" href="/ui/access/pairing/pair-1">批准</a>`) {
+		t.Fatalf("待批准请求应有批准链接：\n%s", body)
+	}
+	if strings.Contains(body, `name="compared"`) || strings.Contains(body, `name="override"`) {
+		t.Fatalf("自动刷新的列表不应包含批准表单：\n%s", body)
+	}
+
+	detail := authorityGet(t, handler, "192.0.2.50:7879", "/ui/access/pairing/pair-1", cookie)
+	detailBody := readResponseBody(t, detail)
+	if detail.StatusCode != http.StatusOK {
+		t.Fatalf("配对批准页状态码=%d 页面：\n%s", detail.StatusCode, detailBody)
+	}
+	if strings.Contains(detailBody, `hx-trigger="every 5s"`) {
+		t.Fatalf("配对批准页不应自动刷新：\n%s", detailBody)
+	}
+	for _, want := range []string{
+		`action="/ui/access/pairing/pair-1/approve"`, `name="profile"`,
+		`name="compared"`, `name="override"`,
+	} {
+		if !strings.Contains(detailBody, want) {
+			t.Fatalf("配对批准页应包含 %q：\n%s", want, detailBody)
+		}
+	}
+}
+
+func TestAuthorityPairingApprovalErrorKeepsSubmittedForm(t *testing.T) {
+	store := pairingTestStore()
+	store.approveErr = errors.New("目标地址异常，必须输入精确文本 OVERRIDE")
+	handler, _ := newAuthorityForPairingTest(t, store)
+	cookie := authoritySuccessfulLogin(t, handler, "192.0.2.50:7879", "correct-password")
+	page := authorityGet(t, handler, "192.0.2.50:7879", "/ui/access/pairing/pair-1", cookie)
+	body := readResponseBody(t, page)
+	csrfToken := hiddenInputValue(t, body, "csrf_token")
+
+	response := authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/access/pairing/pair-1/approve", url.Values{
+		"csrf_token": {csrfToken}, "profile": {"profile-dev"},
+		"compared": {"1"}, "override": {"KEEP_ME"},
+	}, cookie)
+	responseBody := readResponseBody(t, response)
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("批准失败应重新渲染批准页，状态码=%d 页面：\n%s", response.StatusCode, responseBody)
+	}
+	for _, want := range []string{
+		`value="profile-dev" selected`, `value="KEEP_ME"`, `checked`,
+		"目标地址异常，必须输入精确文本 OVERRIDE",
+	} {
+		if !strings.Contains(responseBody, want) {
+			t.Fatalf("失败后的批准表单应保留已填内容 %q：\n%s", want, responseBody)
+		}
+	}
+}
+
+func TestAuthorityPairingDetailForMissingRowShowsReturnLink(t *testing.T) {
+	store := pairingTestStore()
+	handler, _ := newAuthorityForPairingTest(t, store)
+	cookie := authoritySuccessfulLogin(t, handler, "192.0.2.50:7879", "correct-password")
+
+	response := authorityGet(t, handler, "192.0.2.50:7879", "/ui/access/pairing/pair-missing", cookie)
+	body := readResponseBody(t, response)
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("不可处理的请求应说明状态，状态码=%d 页面：\n%s", response.StatusCode, body)
+	}
+	if !strings.Contains(body, "配对请求已过期或已处理") ||
+		!strings.Contains(body, `<a href="/ui/access/pairing">返回配对列表</a>`) {
+		t.Fatalf("不可处理的请求应给提示与返回链接：\n%s", body)
+	}
+}
+
+func TestAuthorityPairingDetailForProcessedRowShowsReturnLink(t *testing.T) {
+	store := pairingTestStore()
+	handler, _ := newAuthorityForPairingTest(t, store)
+	cookie := authoritySuccessfulLogin(t, handler, "192.0.2.50:7879", "correct-password")
+
+	response := authorityGet(t, handler, "192.0.2.50:7879", "/ui/access/pairing/pair-3", cookie)
+	body := readResponseBody(t, response)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("已处理请求的详情页状态码=%d 页面：\n%s", response.StatusCode, body)
+	}
+	if !strings.Contains(body, "该配对请求已处理") ||
+		!strings.Contains(body, `<a href="/ui/access/pairing">返回配对列表</a>`) {
+		t.Fatalf("已处理请求应给提示与返回链接：\n%s", body)
 	}
 }
 

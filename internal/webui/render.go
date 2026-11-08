@@ -46,6 +46,8 @@ type pageData struct {
 	AccessDeviceIssued          *AccessDeviceCodeResult
 	AccessDeviceRevoke          *AccessDeviceCodeSummary
 	AccessPairings              []AccessPairingSummary
+	AccessPairing               *AccessPairingSummary
+	AccessPairingForm           AccessPairingForm
 	AccessPairingNotice         string
 	ErrorTitle                  string
 	ErrorMessage                string

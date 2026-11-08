@@ -135,8 +135,7 @@ type capabilities struct {
 	CanManageProfiles bool
 	// CanManageProjects 控制是否显示项目令牌页入口与写操作。
 	CanManageProjects bool
-	// HasPairingAndDeviceCodes 表示本机角色是否有配对与设备码能力，后续
-	// 页面接入时用它决定导航。
+	// HasPairingAndDeviceCodes 表示本机角色是否显示配对与设备码入口。
 	HasPairingAndDeviceCodes bool
 }
 

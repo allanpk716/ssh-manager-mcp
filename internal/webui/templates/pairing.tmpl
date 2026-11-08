@@ -21,24 +21,13 @@
 <div><dt>状态</dt><dd>{{if eq .State "pending"}}剩余 {{.RemainingSeconds}} 秒{{else if eq .State "approved"}}已批准，等待客户端完成（剩余 {{.RemainingSeconds}} 秒）{{else}}已完成{{end}}</dd></div>
 </dl>
 {{if eq .State "pending"}}
-{{if .HasShortCode}}
-<form method="post" action="/ui/access/pairing/{{.ID}}/approve" class="pairing-form">
-<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-<label for="pairing-profile-{{.ID}}">批准到 profile</label>
-<select id="pairing-profile-{{.ID}}" name="profile" required>
-{{$suggested := .SuggestedProfileID}}
-{{range $.AccessProfiles}}<option value="{{.ID}}"{{if eq .ID $suggested}} selected{{end}}>{{.Name}}</option>{{end}}
-</select>
-<label class="pairing-compare"><input type="checkbox" name="compared" value="1" required>已与客户端屏幕上的短认证码逐位比对一致</label>
-<label for="pairing-override-{{.ID}}">目标地址异常时的覆盖文字</label>
-<input type="text" id="pairing-override-{{.ID}}" name="override" placeholder="OVERRIDE">
-<button type="submit">批准</button>
-</form>
-{{end}}
+<div class="pairing-actions">
+{{if .HasShortCode}}<a class="pairing-approve-link" href="/ui/access/pairing/{{.ID}}">批准</a>{{end}}
 <form method="post" action="/ui/access/pairing/{{.ID}}/reject" class="inline-form pairing-reject-form">
 <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
 <button type="submit">拒绝</button>
 </form>
+</div>
 {{end}}
 </article>
 {{end}}
