@@ -110,6 +110,7 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 			return fingerprint, nil
 		}))),
 		Ops:                    webuiops.FromManagerWithAuthorityUpdates(opsManager, updates, restarts),
+		ServiceRestart:         webuiops.NewRestartStore(restarts),
 		Auth:                   vault.NewWebUIAuthStore(st),
 		CertificateFingerprint: fingerprint,
 		AllowedHosts:           plan.Addresses,

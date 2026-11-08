@@ -102,8 +102,9 @@ func (r OpsAuditRow) CommandDisplay() string {
 	return r.Command
 }
 
-// OpsStore 是 Web UI 读取运维能力的唯一入口。单机与权威端由运维模块适配
-// 实现；处理器测试用桩，本包不接触数据库结构和文件布局。
+// OpsStore 是 Web UI 读取页面运维能力的唯一入口。单机与权威端由运维模块
+// 适配实现；处理器测试用桩，本包不接触数据库结构和文件布局。权威端重启
+// 服务是单独的响应结束调度能力，通过 Config.ServiceRestart 显式注入。
 type OpsStore interface {
 	QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error)
 	BackupStatus() (OpsBackupStatus, error)

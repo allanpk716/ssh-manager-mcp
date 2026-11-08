@@ -45,6 +45,28 @@ func FromManagerWithAuthorityUpdates(manager *ops.Manager, updates *ops.UpdateSe
 	return managerStore{manager: manager, updates: updates, restarts: restarts}
 }
 
+// RestartStore 把服务重启服务显式适配成 Web UI 的重启能力。
+type RestartStore struct {
+	restarts *ops.RestartService
+}
+
+// NewRestartStore 返回权威端 Web UI 可直接注入的重启能力。
+func NewRestartStore(restarts *ops.RestartService) RestartStore {
+	return RestartStore{restarts: restarts}
+}
+
+func (s RestartStore) RequestServiceRestart(sourceIP string, afterResponse func(func())) error {
+	if s.restarts == nil {
+		return errRestartNotWired
+	}
+	err := s.restarts.Request(ops.WebUISource(sourceIP), afterResponse)
+	var auditErr *ops.RestartAuditWriteError
+	if errors.As(err, &auditErr) {
+		return &webui.OpsRestartAuditWriteError{Err: auditErr}
+	}
+	return err
+}
+
 // FromOpenerWithUpdates 组合按请求打开存储的运维模块与进程内共享的升级服务。
 func FromOpenerWithUpdates(open func() (*ops.Manager, func(), error), updates *ops.UpdateService) webui.OpsStore {
 	return openerStore{open: open, updates: updates}

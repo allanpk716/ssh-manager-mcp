@@ -69,16 +69,11 @@ func (h *handler) handleRestartAfterResponse(page func(http.ResponseWriter, *htt
 // 后的动作，再写出「正在重启」页面；真正构造服务管理器与调用重启由动作执行。
 func (h *handler) handleAuthorityOpsUpdateRestart(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != opsUpdateRestartPath || h.cfg.Role != RoleServer || h.cfg.Ops == nil ||
-		!h.caps.CanRestartService || r.Method != http.MethodPost {
+		h.cfg.ServiceRestart == nil || r.Method != http.MethodPost {
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "重启服务只接受 POST 请求。")
 		return
 	}
 	if !h.requireRecentReverify(w, r, opsUpdatePath) {
-		return
-	}
-	restarts, ok := h.cfg.Ops.(OpsRestartStore)
-	if !ok {
-		h.renderError(w, r, http.StatusInternalServerError, "重启服务失败", "服务管理器未接线，无法重启。")
 		return
 	}
 	delayed, ok := w.(*delayedRestartWriter)
@@ -87,7 +82,7 @@ func (h *handler) handleAuthorityOpsUpdateRestart(w http.ResponseWriter, r *http
 		return
 	}
 	var restart func()
-	if err := restarts.RequestServiceRestart(remoteIP(r), func(action func()) {
+	if err := h.cfg.ServiceRestart.RequestServiceRestart(remoteIP(r), func(action func()) {
 		restart = action
 	}); err != nil {
 		var auditErr *OpsRestartAuditWriteError

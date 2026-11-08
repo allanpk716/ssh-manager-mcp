@@ -74,6 +74,35 @@ func TestAuthorityOpsUpdatePendingRestartSurvivesRefreshAndRejectsApply(t *testi
 	}
 }
 
+func TestAuthorityOpsUpdateWithoutInjectedRestartCapabilityHidesRestart(t *testing.T) {
+	ops := &stubAuthorityOpsUpdateStore{stubOpsUpdateStore: newStubOpsUpdateStore()}
+	ops.updateStatus = upgradeTestStatus()
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password", now: time.Unix(1800000000, 0)}
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{},
+		Ops: ops, Auth: auth, AllowedHosts: []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time { return auth.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+
+	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/ops/update", cookie)
+	pageBody := readResponseBody(t, page)
+	if page.StatusCode != http.StatusOK || strings.Contains(pageBody, `action="/ui/ops/update/restart"`) {
+		t.Fatalf("未注入重启能力时不应显示重启表单，状态码=%d 页面：\n%s", page.StatusCode, pageBody)
+	}
+	csrf := hiddenInputValue(t, pageBody, "csrf_token")
+	response := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/ops/update/restart", url.Values{
+		"csrf_token": {csrf},
+	}, cookie)
+	response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("未注入重启能力时重启路由应不存在，状态码=%d", response.StatusCode)
+	}
+}
+
 func TestAuthorityOpsUpdateRestartRunsAfterCompleteResponse(t *testing.T) {
 	ops := &stubAuthorityOpsUpdateStore{stubOpsUpdateStore: newStubOpsUpdateStore()}
 	ops.updateStatus = upgradeTestStatus()
@@ -269,12 +298,12 @@ func (s *stubAuthorityOpsUpdateStore) RequestServiceRestart(sourceIP string, aft
 	return nil
 }
 
-func newAuthorityOpsUpdateTestHandler(t *testing.T, ops OpsStore) (http.Handler, *fakeAuthorityAuth, *http.Cookie) {
+func newAuthorityOpsUpdateTestHandler(t *testing.T, ops *stubAuthorityOpsUpdateStore) (http.Handler, *fakeAuthorityAuth, *http.Cookie) {
 	t.Helper()
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password", now: time.Unix(1800000000, 0)}
 	handler, _, err := NewAuthority(Config{
 		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{},
-		Ops: ops, Auth: auth, AllowedHosts: []string{"127.0.0.1"}, Port: 7879,
+		Ops: ops, ServiceRestart: ops, Auth: auth, AllowedHosts: []string{"127.0.0.1"}, Port: 7879,
 		Now: func() time.Time { return auth.now },
 	})
 	if err != nil {
