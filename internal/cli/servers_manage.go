@@ -268,78 +268,90 @@ func serversCompleteCmd() *cobra.Command {
 					queue = append(queue, detail.Server.ID)
 				}
 			}
-			out := cmd.OutOrStdout()
-			if len(queue) == 0 {
-				fmt.Fprintln(out, "没有需要注意的服务器。")
-				return nil
-			}
-			reader := bufio.NewReader(cmd.InOrStdin())
-			for i, id := range queue {
-				detail, err := manager.Detail(id)
-				if err != nil {
-					return err
-				}
-				if detail == nil {
-					continue
-				}
-				fmt.Fprintf(out, "== %s（第 %d/%d 台）==\n", detail.Server.Name, i+1, len(queue))
-				attention := strings.Join(servermanage.ReasonLabels(detail.AttentionReasons), "、")
-				if attention != "" {
-					fmt.Fprintf(out, "注意原因：%s\n", attention)
-				}
-				req := servermanage.CompleteRequest{Identifier: detail.Server.ID}
-				req.Description = readCompletionField(reader, out, "说明", detail.Server.Description)
-				req.Location = readCompletionField(reader, out, "位置", detail.Server.Location)
-				req.Hardware = readCompletionField(reader, out, "硬件", detail.Server.Hardware)
-				req.Services = readCompletionField(reader, out, "服务", detail.Server.Services)
-				req.Role = readCompletionField(reader, out, "角色", detail.Server.Role)
-				req.Caveats = readCompletionField(reader, out, "注意事项", detail.Server.Caveats)
-				if detail.Server.CredentialID == "" {
-					if value := readCompletionSecret(reader, out, "密码（现在设置，回车跳过）"); value != "" {
-						req.Password = value
-					}
-				}
-				if models.ServerHasTag(detail.Server.Tags, models.TagNeedsPassphrase) {
-					fmt.Fprintln(out, "补私钥口令会影响共用这把私钥的全部服务器。")
-					if value := readCompletionSecret(reader, out, "私钥口令（回车跳过）"); value != "" {
-						req.KeyPassphrase = value
-					}
-				}
-				if value := readCompletionSecret(reader, out, "sudo 密码（回车保持不变）"); value != "" {
-					req.SudoPassword = value
-				}
-				fmt.Fprint(out, "操作：s=保存并继续，k=跳过这一台，e=结束补全 [s]：")
-				action := strings.TrimSpace(readLine(reader))
-				switch action {
-				case "", "s":
-					result, err := manager.Complete(req, servermanage.CLISource())
-					if err != nil {
-						return err
-					}
-					if result.NoOp {
-						fmt.Fprintf(out, "%s：没有变化\n", detail.Server.Name)
-					} else {
-						fmt.Fprintf(out, "%s：已保存（%s）\n", detail.Server.Name,
-							strings.Join(result.ChangedFields, ","))
-					}
-					if len(result.AffectedServers) > 1 {
-						fmt.Fprintf(out, "补口令影响服务器：%s\n", strings.Join(result.AffectedServers, ","))
-					}
-				case "k":
-					fmt.Fprintf(out, "%s：已跳过，保留注意原因\n", detail.Server.Name)
-				case "e":
-					writeCompleteSummary(out, manager, len(queue))
-					fmt.Fprintln(out, "已结束补全。")
-					return nil
-				default:
-					return fmt.Errorf("未知操作 %q（可用：s 保存并继续，k 跳过，e 结束）", action)
-				}
-			}
-			writeCompleteSummary(out, manager, len(queue))
-			fmt.Fprintln(out, "补全队列已完成。")
-			return nil
+			return runServersComplete(cmd, queue)
 		},
 	}
+}
+
+// runServersComplete 逐台补全给定队列；`servers complete` 与导入结束后的询
+// 问共用这一段。
+func runServersComplete(cmd *cobra.Command, queue []string) error {
+	s, err := openUnlockedStore()
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	manager := servermanage.New(s)
+	out := cmd.OutOrStdout()
+	if len(queue) == 0 {
+		fmt.Fprintln(out, "没有需要注意的服务器。")
+		return nil
+	}
+	reader := bufio.NewReader(cmd.InOrStdin())
+	for i, id := range queue {
+		detail, err := manager.Detail(id)
+		if err != nil {
+			return err
+		}
+		if detail == nil {
+			continue
+		}
+		fmt.Fprintf(out, "== %s（第 %d/%d 台）==\n", detail.Server.Name, i+1, len(queue))
+		attention := strings.Join(servermanage.ReasonLabels(detail.AttentionReasons), "、")
+		if attention != "" {
+			fmt.Fprintf(out, "注意原因：%s\n", attention)
+		}
+		req := servermanage.CompleteRequest{Identifier: detail.Server.ID}
+		req.Description = readCompletionField(reader, out, "说明", detail.Server.Description)
+		req.Location = readCompletionField(reader, out, "位置", detail.Server.Location)
+		req.Hardware = readCompletionField(reader, out, "硬件", detail.Server.Hardware)
+		req.Services = readCompletionField(reader, out, "服务", detail.Server.Services)
+		req.Role = readCompletionField(reader, out, "角色", detail.Server.Role)
+		req.Caveats = readCompletionField(reader, out, "注意事项", detail.Server.Caveats)
+		if detail.Server.CredentialID == "" {
+			if value := readCompletionSecret(reader, out, "密码（现在设置，回车跳过）"); value != "" {
+				req.Password = value
+			}
+		}
+		if models.ServerHasTag(detail.Server.Tags, models.TagNeedsPassphrase) {
+			fmt.Fprintln(out, "补私钥口令会影响共用这把私钥的全部服务器。")
+			if value := readCompletionSecret(reader, out, "私钥口令（回车跳过）"); value != "" {
+				req.KeyPassphrase = value
+			}
+		}
+		if value := readCompletionSecret(reader, out, "sudo 密码（回车保持不变）"); value != "" {
+			req.SudoPassword = value
+		}
+		fmt.Fprint(out, "操作：s=保存并继续，k=跳过这一台，e=结束补全 [s]：")
+		action := strings.TrimSpace(readLine(reader))
+		switch action {
+		case "", "s":
+			result, err := manager.Complete(req, servermanage.CLISource())
+			if err != nil {
+				return err
+			}
+			if result.NoOp {
+				fmt.Fprintf(out, "%s：没有变化\n", detail.Server.Name)
+			} else {
+				fmt.Fprintf(out, "%s：已保存（%s）\n", detail.Server.Name,
+					strings.Join(result.ChangedFields, ","))
+			}
+			if len(result.AffectedServers) > 1 {
+				fmt.Fprintf(out, "补口令影响服务器：%s\n", strings.Join(result.AffectedServers, ","))
+			}
+		case "k":
+			fmt.Fprintf(out, "%s：已跳过，保留注意原因\n", detail.Server.Name)
+		case "e":
+			writeCompleteSummary(out, manager, len(queue))
+			fmt.Fprintln(out, "已结束补全。")
+			return nil
+		default:
+			return fmt.Errorf("未知操作 %q（可用：s 保存并继续，k 跳过，e 结束）", action)
+		}
+	}
+	writeCompleteSummary(out, manager, len(queue))
+	fmt.Fprintln(out, "补全队列已完成。")
+	return nil
 }
 
 func writeCompleteSummary(out io.Writer, manager *servermanage.Manager, total int) {

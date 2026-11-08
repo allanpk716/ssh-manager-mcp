@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -83,10 +84,15 @@ func serversImportCmd() *cobra.Command {
 				result.Imported, result.Skipped, result.Failed, result.Pending)
 			fmt.Fprintln(out, "提示：原私钥文件仍在盘上（vault 另存一份）。")
 			if serversStdinIsTTY() {
-				fmt.Fprint(out, "现在逐台补全吗？可运行 `sshmgr servers complete` 继续。")
-			} else {
-				fmt.Fprintln(out, "逐台补全：sshmgr servers complete")
+				fmt.Fprint(out, "现在逐台补全吗？（y=开始，其他输入结束）：")
+				answer := strings.TrimSpace(readLine(bufio.NewReader(cmd.InOrStdin())))
+				if answer == "y" || answer == "yes" {
+					return runServersComplete(cmd, result.ImportedServerIDs)
+				}
+				fmt.Fprintln(out, "稍后可运行 `sshmgr servers complete` 继续。")
+				return nil
 			}
+			fmt.Fprintln(out, "逐台补全：sshmgr servers complete")
 			return nil
 		},
 	}
