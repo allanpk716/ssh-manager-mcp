@@ -12,6 +12,7 @@ package cli
 // --allow-foreign-url 拒绝并打 ⚠ 文案。
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -142,9 +143,21 @@ func servePairApproveCmd() *cobra.Command {
 			}
 			override := ""
 			if allowForeign {
-				override = "OVERRIDE"
+				override = access.PairingOverrideText
 			}
+			// 命令行 owner 先用 `serve pair ls` 查看短认证码并逐位比对，再
+			// 显式执行 approve；这次显式执行就是比对确认，与 Web UI 的勾选
+			// 框等价，因此这里传入「已比对」。
+			// 目标地址异常的错误在这里翻回命令行原有提示；目标地址来自客
+			// 户端请求，输出前必须剥掉 C0/C1 控制字符。
 			if err := manager.ApprovePairing(row.ID, profile, true, override, access.CLISource()); err != nil {
+				var foreignTarget *access.PairingForeignTargetError
+				if errors.As(err, &foreignTarget) {
+					return fmt.Errorf(
+						"⚠ 配对声明目标 ≠ 本机地址（%s）——疑似中继/假 discovery/错误网络；确属本机地址请加 --allow-foreign-url 重新执行",
+						clientops.StripC0C1(foreignTarget.TargetURL),
+					)
+				}
 				return err
 			}
 			// 三件套行(spec rev4:83):approve 输出与 client 屏同一行,便于留痕比对。

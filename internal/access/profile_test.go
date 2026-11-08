@@ -152,6 +152,23 @@ func TestAddProfileWritesAudit(t *testing.T) {
 	assertAuditShape(t, rows[1], "profile.add", "ok", `{"name":"team-a"}`, store.AuditSourceCLI, "")
 }
 
+// TestResolveProfileNotFoundListsKnownNames 钉住 profile 名写错时的自纠错
+// 形态：错误同时给出输入名与已知名单，所有访问管理入口共用这个行为。
+func TestResolveProfileNotFoundListsKnownNames(t *testing.T) {
+	m, st := newTestManager(t)
+	if _, err := st.AddProfile("ops"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddProfile("dev"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := m.GrantServers("ghost", []string{"web1"}, CLISource())
+	if err == nil || err.Error() != `profile "ghost" not found (known: [dev ops])` {
+		t.Fatalf("未知 profile 应返回已知名单，实际 %v", err)
+	}
+}
+
 // TestGrantServersIdempotentAndAudited 授予是幂等追加：重复授予不新增授
 // 权行但仍写审计；服务器可按名字或标识符解析；profile 或服务器不存在时
 // 整体报错并写失败审计行。

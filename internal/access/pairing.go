@@ -2,6 +2,7 @@ package access
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,10 @@ import (
 	"ssh-manager-mcp/internal/localaddr"
 	"ssh-manager-mcp/internal/store"
 )
+
+// PairingOverrideText 是批准目标地址异常的配对请求时必须输入的精确覆盖
+// 文字。命令行与 Web UI 都以这个常量作为同一份业务规则。
+const PairingOverrideText = "OVERRIDE"
 
 // PairingRequest 是配对页的一行展示数据。短认证码只有在存在时返回；设备
 // 名、目标地址、来源地址与 profile 提示都来自客户端请求，调用方展示前需
@@ -36,13 +41,13 @@ func (e *PairingComparisonRequiredError) Error() string {
 }
 
 // PairingForeignTargetError 表示客户端声明的目标地址不属于本机，且没有带
-// 精确文本 OVERRIDE。
+// 精确的覆盖文字。
 type PairingForeignTargetError struct {
 	TargetURL string
 }
 
 func (e *PairingForeignTargetError) Error() string {
-	return fmt.Sprintf("⚠ 配对声明目标 ≠ 本机地址（%s），必须输入精确文本 OVERRIDE 才能批准", e.TargetURL)
+	return fmt.Sprintf("⚠ 配对声明目标 ≠ 本机地址（%s），必须输入精确文本 %s 才能批准", e.TargetURL, PairingOverrideText)
 }
 
 // PairingNotPendingError 表示请求已超时、已被批准或已被拒绝，不再是待批准
@@ -110,7 +115,7 @@ func (m *Manager) ApprovePairing(identifier, profile string, compared bool, addr
 		if !compared {
 			return &PairingComparisonRequiredError{}
 		}
-		if foreignPairingTarget(row.TargetURL) && addressOverride != "OVERRIDE" {
+		if foreignPairingTarget(row.TargetURL) && addressOverride != PairingOverrideText {
 			return &PairingForeignTargetError{TargetURL: row.TargetURL}
 		}
 		resolved, resolveErr := m.resolveProfile(profile)
@@ -128,7 +133,9 @@ func (m *Manager) ApprovePairing(identifier, profile string, compared bool, addr
 		return nil
 	}()
 	if err != nil {
-		_ = m.writeAudit("pair.approve", summary, err, src)
+		if auditErr := m.writeAudit("pair.approve", summary, err, src); auditErr != nil {
+			return errors.Join(err, auditErr)
+		}
 	}
 	return err
 }
@@ -155,7 +162,9 @@ func (m *Manager) RejectPairing(identifier string, src Source) error {
 		return nil
 	}()
 	if err != nil {
-		_ = m.writeAudit("pair.reject", summary, err, src)
+		if auditErr := m.writeAudit("pair.reject", summary, err, src); auditErr != nil {
+			return errors.Join(err, auditErr)
+		}
 	}
 	return err
 }

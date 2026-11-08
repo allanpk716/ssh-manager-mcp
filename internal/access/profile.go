@@ -105,7 +105,7 @@ func serverListSummary(names []string) string {
 }
 
 // resolveProfile 按 profile 名字或标识符解析（名字在存储里唯一，Web UI
-// 的表单与链接用标识符）。找不到时返回与既有命令一致的错误。
+// 的表单与链接用标识符）。找不到时返回已知名单，方便 owner 直接改正拼写。
 func (m *Manager) resolveProfile(identifier string) (*models.Profile, error) {
 	profiles, err := m.st.ListProfiles()
 	if err != nil {
@@ -116,7 +116,11 @@ func (m *Manager) resolveProfile(identifier string) (*models.Profile, error) {
 			return p, nil
 		}
 	}
-	return nil, fmt.Errorf("profile %q not found", identifier)
+	known := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		known = append(known, profile.Name)
+	}
+	return nil, fmt.Errorf("profile %q not found (known: %v)", identifier, known)
 }
 
 // resolveServers 把服务器名字或标识符逐个解析成存储里的服务器条目；任

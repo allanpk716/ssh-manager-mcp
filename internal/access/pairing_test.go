@@ -177,3 +177,41 @@ func TestPairingRequestTimeoutAndCompletedRows(t *testing.T) {
 		t.Fatalf("已完成请求应在现有过期规则内继续显示：%+v", rows)
 	}
 }
+
+// TestPairingFailureAuditWriteIsVisible 钉住失败审计本身写失败时的可见性：
+// 返回值必须同时携带原操作失败与审计失败，不能把审计错误静默丢掉。
+func TestPairingFailureAuditWriteIsVisible(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	m, st := newTestManager(t)
+	st.NowFn = func() time.Time { return now }
+	if _, err := st.AddProfile("ops"); err != nil {
+		t.Fatal(err)
+	}
+	approveID := seedPairingRequest(t, st, now, "laptop")
+	rejectID := seedPairingRequest(t, st, now, "tablet")
+
+	err := st.ExecForTest(`CREATE TRIGGER pairing_audit_unavailable
+BEFORE INSERT ON audit_log
+WHEN NEW.action IN ('pair.approve', 'pair.reject') AND NEW.status = 'error'
+BEGIN
+  SELECT RAISE(ABORT, 'pairing audit unavailable');
+END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	approveErr := m.ApprovePairing(approveID, "ops", false, "", WebUISource("198.51.100.7"))
+	if !strings.Contains(approveErr.Error(), "必须先与客户端屏幕上的短认证码逐位比对一致") ||
+		!strings.Contains(approveErr.Error(), "pairing audit unavailable") {
+		t.Fatalf("批准失败与审计失败都应可见，实际 %v", approveErr)
+	}
+
+	if err := m.RejectPairing(rejectID, WebUISource("198.51.100.7")); err != nil {
+		t.Fatalf("第一次拒绝应成功：%v", err)
+	}
+	rejectErr := m.RejectPairing(rejectID, WebUISource("198.51.100.7"))
+	if !strings.Contains(rejectErr.Error(), "该请求已不是待批准状态") ||
+		!strings.Contains(rejectErr.Error(), "pairing audit unavailable") {
+		t.Fatalf("重复拒绝失败与审计失败都应可见，实际 %v", rejectErr)
+	}
+}
