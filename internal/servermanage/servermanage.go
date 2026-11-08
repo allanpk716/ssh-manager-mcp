@@ -3,12 +3,17 @@
 // 里，命令行和 Web UI 共用同一套业务规则与审计写入。
 package servermanage
 
-import "ssh-manager-mcp/internal/store"
+import (
+	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
+)
 
 // Manager 是服务器管理模块的入口，内部只调用存储层的现有函数与本票新增
 // 的预览函数，不改变它们的语义。
 type Manager struct {
 	st *store.Store
+	// insertServer 是测试接缝：模拟某台服务器插入失败，生产路径为 nil。
+	insertServer func(srv *models.Server, cred, sudo *models.Credential) (string, error)
 }
 
 // New 返回挂在一个已解锁存储上的服务器管理模块。
@@ -44,4 +49,12 @@ func (m *Manager) writeAudit(action string, summary map[string]any, opErr error,
 		row.Status = "error"
 	}
 	return m.st.WriteAudit(row)
+}
+
+// insertServerRow 走测试接缝或生产事务插入一台服务器。
+func (m *Manager) insertServerRow(srv *models.Server, cred, sudo *models.Credential) (string, error) {
+	if m.insertServer != nil {
+		return m.insertServer(srv, cred, sudo)
+	}
+	return m.st.AddServerWithCredentials(srv, cred, sudo)
 }
