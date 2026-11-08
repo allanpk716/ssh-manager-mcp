@@ -83,12 +83,19 @@ sshmgr backup create --dir <备份目录> --passphrase-file <口令文件> [--ke
 
 # 校验（解密级）
 sshmgr backup verify <备份目录>\vault-<时间戳>.sme --passphrase-file <口令文件>
+
+# 一键校验最新备份（路径与口令文件都取自备份配置）
+sshmgr backup verify --latest
+
+# 查看备份状态（配置、计划任务探测、备份总数、最新文件、新鲜度、最近一次校验）
+sshmgr backup status [--json]
 ```
 
 - 产物：`vault-<UTC 时间戳>.sme`（前缀可用 `--prefix` 改）；同一秒内重跑会得到 `-2`/`-3` 后缀的新文件，**不覆盖**已有文件。
 - **不带口令文件 = 既有明文模式，行为逐字节不变**（见下文 Plan 13）。
 - 加密模式的口令只从文件读（`--passphrase-file`），**没有交互输口令的形态**——无人值守定时跑的要求使然。
 - `backup verify` 对 `.sme` 做解密级校验（解密 + JSON 重新解析，两关都过才报 `ok`），不带口令文件会明确报错要求提供；明文 `.json` 仍走 `.sha256` 边车校验，`--passphrase-file` 被忽略。
+- `backup create`（含计划任务无人值守执行）会写 `backup.create` 审计行；`backup verify --latest` 会写 `backup.verify` 审计行（含失败类别）。摘要只记文件名与结果，不含口令内容。
 
 ### 备份配置（backup.json）
 

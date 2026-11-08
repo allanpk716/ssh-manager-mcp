@@ -35,22 +35,172 @@ func newBackupCmd() *cobra.Command {
 		Use:   "backup",
 		Short: "Manage vault backups (plaintext NAS JSON and passphrase-encrypted .sme)",
 	}
-	c.AddCommand(newBackupCreateCmd(), newBackupVerifyCmd())
+	c.AddCommand(newBackupCreateCmd(), newBackupVerifyCmd(), newBackupStatusCmd())
 	return c
 }
 
 func newBackupVerifyCmd() *cobra.Command {
 	var passphraseSrc string
+	var latest bool
 	c := &cobra.Command{
-		Use:   "verify <file>",
+		Use:   "verify (<file> | --latest)",
 		Short: "Verify a backup file (plaintext: SHA256 sidecar + JSON; encrypted: decrypt + JSON)",
-		Args:  cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if latest {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if latest {
+				return runBackupVerifyLatest(cmd)
+			}
 			return runBackupVerify(cmd, args[0], passphraseSrc)
 		},
 	}
 	c.Flags().StringVar(&passphraseSrc, "passphrase-file", "", "passphrase file for encrypted (.sme) backups; ignored for plaintext JSON")
+	c.Flags().BoolVar(&latest, "latest", false, "verify the newest backup selected by backup.json (passphrase file comes from the config)")
 	return c
+}
+
+// newBackupStatusCmd 构建 `backup status`：输出与备份页相同的备份状态，
+// 支持 --json 供脚本与监控使用。
+func newBackupStatusCmd() *cobra.Command {
+	var jsonOut bool
+	c := &cobra.Command{
+		Use:   "status [--json]",
+		Short: "Show backup config, latest file, freshness and last verification",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBackupStatus(cmd, jsonOut)
+		},
+	}
+	c.Flags().BoolVar(&jsonOut, "json", false, "output machine-readable JSON")
+	return c
+}
+
+func runBackupStatus(cmd *cobra.Command, jsonOut bool) error {
+	st, err := openUnlockedStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	status, err := ops.New(st).BackupStatus()
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		data, err := json.MarshalIndent(backupStatusJSON(status), "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), string(data))
+		return nil
+	}
+	out := cmd.OutOrStdout()
+	switch {
+	case status.ConfigMissing:
+		fmt.Fprintf(out, "config: missing (%s)\n", status.ConfigError)
+	case status.Config == nil:
+		fmt.Fprintf(out, "config: error (%s)\n", status.ConfigError)
+	default:
+		fmt.Fprintln(out, "config: ok")
+		fmt.Fprintf(out, "dir: %s\n", status.Config.Dir)
+		fmt.Fprintf(out, "keep: %d\n", status.Config.Keep)
+		fmt.Fprintf(out, "passphrase_file: %s\n", status.Config.PassphraseFile)
+	}
+	fmt.Fprintf(out, "scheduled task: %s\n", backupStatusTaskText(status))
+	// 配置缺失或有误时备份目录未知，数量与最新文件显示为未知。
+	if status.Config == nil {
+		return nil
+	}
+	fmt.Fprintf(out, "backups: %d\n", status.Total)
+	if status.HasLatest {
+		fmt.Fprintf(out, "latest: %s (generated %s)\n",
+			status.LatestName, status.LatestTime.Format("2006-01-02 15:04:05"))
+		if status.Stale {
+			fmt.Fprintln(out, "freshness: stale (>25h since the newest backup)")
+		} else {
+			fmt.Fprintln(out, "freshness: ok")
+		}
+	} else {
+		fmt.Fprintln(out, "latest: none")
+		fmt.Fprintln(out, "freshness: n/a")
+	}
+	fmt.Fprintf(out, "verify: %s\n", backupStatusVerifyText(status))
+	return nil
+}
+
+func backupStatusTaskText(status ops.BackupStatus) string {
+	switch {
+	case !status.TaskProbed:
+		return "not probed (windows only)"
+	case status.TaskInstalled:
+		return "installed"
+	default:
+		return "not installed"
+	}
+}
+
+func backupStatusVerifyText(status ops.BackupStatus) string {
+	if status.Verify == nil {
+		return "not verified"
+	}
+	at := status.Verify.At.Format("2006-01-02 15:04:05")
+	if status.Verify.OK {
+		return "ok at " + at
+	}
+	kind := status.Verify.FailureKind
+	if kind == "" {
+		kind = "unknown"
+	}
+	return "failed (" + kind + ") at " + at
+}
+
+func backupStatusJSON(status ops.BackupStatus) map[string]any {
+	out := map[string]any{
+		"config_path":    status.ConfigPath,
+		"config_missing": status.ConfigMissing,
+		"config_error":   status.ConfigError,
+		"task_installed": status.TaskInstalled,
+		"task_probed":    status.TaskProbed,
+		"total":          status.Total,
+	}
+	if status.Config != nil {
+		out["config"] = map[string]any{
+			"dir":             status.Config.Dir,
+			"keep":            status.Config.Keep,
+			"passphrase_file": status.Config.PassphraseFile,
+		}
+	}
+	if status.HasLatest {
+		out["latest"] = status.LatestName
+		out["latest_time"] = status.LatestTime.Unix()
+		out["stale"] = status.Stale
+	}
+	if status.Verify != nil {
+		out["verify"] = map[string]any{
+			"file":         status.Verify.File,
+			"ok":           status.Verify.OK,
+			"failure_kind": status.Verify.FailureKind,
+			"at":           status.Verify.At.Unix(),
+		}
+	}
+	return out
+}
+
+func runBackupVerifyLatest(cmd *cobra.Command) error {
+	st, err := openUnlockedStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	result, err := ops.New(st).VerifyLatestBackup(ops.CLISource())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "ok: %s (decrypted and json structurally valid)\n", result.File)
+	return nil
 }
 
 // runBackupVerify verifies a backup file. Encrypted (.sme / SSHMGRV1) backups:
