@@ -73,7 +73,8 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		}
 		webRole = webui.RoleClient
 		servers = clientUIServerSource{instance: resolvedInstance}
-		opsSource = webuiops.UpdatesOnly(uiUpdateService(webui.RoleClient, resolvedInstance))
+		opsSource = webuiops.ClientAuditStoreWithUpdates(
+			uiUpdateService(webui.RoleClient, resolvedInstance))
 	case launch.Kind == roles.LaunchBroker && launch.Role == roles.RoleServer:
 		st, err := openUnlockedStore()
 		if err != nil {
@@ -98,13 +99,13 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	handler, startup, err := webui.New(webui.Config{
-		Role:        webRole,
-		Servers:     servers,
-		VersionHint: versionHint,
-		Port:        port,
-		Access:      accessSource,
-		Ops:         opsSource,
-		OpsInstance: resolvedInstance,
+		Role:           webRole,
+		Servers:        servers,
+		VersionHint:    versionHint,
+		Port:           port,
+		Access:         accessSource,
+		Ops:            opsSource,
+		ClientInstance: resolvedInstance,
 	})
 	if err != nil {
 		_ = listener.Close()

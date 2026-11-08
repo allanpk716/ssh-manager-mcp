@@ -104,7 +104,7 @@ func (h *handler) handleOpsUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
-		status, err := h.cfg.Ops.CheckUpdate(h.cfg.OpsInstance)
+		status, err := h.cfg.Ops.CheckUpdate(h.cfg.ClientInstance)
 		if err != nil {
 			h.renderError(w, r, http.StatusInternalServerError, "读取升级状态失败", "读取升级状态失败，请稍后重试。")
 			return
@@ -112,8 +112,8 @@ func (h *handler) handleOpsUpdate(w http.ResponseWriter, r *http.Request) {
 		h.renderPage(w, r, http.StatusOK, "update.tmpl", pageData{Title: "升级", OpsUpdate: &status})
 	case http.MethodPost:
 		sourceIP := remoteIP(r)
-		result, err := h.cfg.Ops.ApplyUpdate(h.cfg.OpsInstance, sourceIP)
-		status, statusErr := h.cfg.Ops.CheckUpdate(h.cfg.OpsInstance)
+		result, err := h.cfg.Ops.ApplyUpdate(h.cfg.ClientInstance, sourceIP)
+		status, statusErr := h.cfg.Ops.CheckUpdate(h.cfg.ClientInstance)
 		data := pageData{Title: "升级"}
 		if statusErr == nil {
 			data.OpsUpdate = &status

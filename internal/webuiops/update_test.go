@@ -27,7 +27,7 @@ func newTestUpdateService(t *testing.T) *ops.UpdateService {
 }
 
 func TestUpdatesOnlyAdapterPassesInstanceAndMapsCheckFailure(t *testing.T) {
-	adapter := UpdatesOnly(newTestUpdateService(t))
+	adapter := ClientAuditStoreWithUpdates(newTestUpdateService(t))
 
 	status, err := adapter.CheckUpdate("laptop")
 	if err != nil {
@@ -71,7 +71,7 @@ func TestUpdatesAdapterMapsInProgress(t *testing.T) {
 		},
 	})
 	svc.SetDownloadPause(func() { <-release })
-	adapter := UpdatesOnly(svc)
+	adapter := ClientAuditStoreWithUpdates(svc)
 
 	done := make(chan error, 1)
 	go func() {

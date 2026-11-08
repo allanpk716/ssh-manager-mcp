@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/switchstate"
 )
 
 // Switch is the tri-state vocabulary for a serve-side feature switch: unset
@@ -73,16 +74,7 @@ func parseSwitch(v string) Switch {
 // Flags().Changed); flagVal is only consulted when flagChanged. Pure — all
 // inputs passed in, trivially testable.
 func ResolveSwitch(envVal string, flagChanged bool, flagVal bool, storeVal string, def bool) bool {
-	if sw := parseSwitch(envVal); sw != SwitchUnset {
-		return sw == SwitchOn
-	}
-	if flagChanged {
-		return flagVal
-	}
-	if sw := parseSwitch(storeVal); sw != SwitchUnset {
-		return sw == SwitchOn
-	}
-	return def
+	return switchstate.Resolve(envVal, flagChanged, flagVal, storeVal, def)
 }
 
 // envSwitch resolves one env seam (SSHMGR_SERVE_PAIRING / SSHMGR_SERVE_DISCOVERY)

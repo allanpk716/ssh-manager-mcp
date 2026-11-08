@@ -222,7 +222,7 @@ func TestOpsUpdateClientPageUsesStartupInstance(t *testing.T) {
 		TargetVersion: "v0.2.0", CanUpgrade: true, IsClient: true,
 	}
 	client, startup, err := New(Config{
-		Role: RoleClient, Servers: &stubServerSource{}, Ops: ops, Port: 18080, OpsInstance: "laptop",
+		Role: RoleClient, Servers: &stubServerSource{}, Ops: ops, Port: 18080, ClientInstance: "laptop",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -239,8 +239,11 @@ func TestOpsUpdateClientPageUsesStartupInstance(t *testing.T) {
 	if ops.updateCheckInstance != "laptop" {
 		t.Fatalf("客户端升级页应按启动实例读取，实际 %q", ops.updateCheckInstance)
 	}
-	if strings.Contains(body, `aria-label="运维区域"`) {
-		t.Fatalf("客户端本票不应显示运维导航：\n%s", body)
+	if !strings.Contains(body, `aria-label="运维区域"`) || !strings.Contains(body, `href="/ui/ops/update"`) {
+		t.Fatalf("客户端运维导航应显示升级入口：\n%s", body)
+	}
+	if !strings.Contains(body, `href="/ui/ops/client-audit"`) {
+		t.Fatalf("客户端运维导航应保留本机审计入口：\n%s", body)
 	}
 }
 
