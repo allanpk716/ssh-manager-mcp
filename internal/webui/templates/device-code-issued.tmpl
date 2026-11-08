@@ -1,0 +1,14 @@
+{{define "content"}}
+<section class="one-time-result">
+<h1>设备码已签发</h1>
+<div class="operation-refusal">设备码只显示这一次，刷新或返回都不会再出现；请立即复制保存。</div>
+<dl class="one-time-fields">
+<div><dt>设备</dt><dd>{{.AccessDeviceIssued.Name}}</dd></div>
+<div><dt>设备码</dt><dd class="secret-value">{{.AccessDeviceIssued.Code}}</dd></div>
+<div><dt>权威端证书公钥指纹</dt><dd class="secret-value">{{.AccessDeviceIssued.Fingerprint}}</dd></div>
+</dl>
+<p>在工作机上执行：</p>
+<pre><code>{{.AccessDeviceIssued.PullCommand}}</code></pre>
+<p><a href="/ui/access/device-codes">返回设备码列表</a></p>
+</section>
+{{end}}

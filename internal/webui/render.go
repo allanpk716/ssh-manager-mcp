@@ -36,6 +36,10 @@ type pageData struct {
 	AccessProjectNotice         string
 	AccessProjectFormName       string
 	AccessProjectFormProfileID  string
+	AccessDeviceCodes           []AccessDeviceCodeSummary
+	AccessDeviceIssue           *AccessDeviceIssueView
+	AccessDeviceIssued          *AccessDeviceCodeResult
+	AccessDeviceRevoke          *AccessDeviceCodeSummary
 	AccessDeleteRefusal         *AccessProfileInUse
 	AccessGrant                 *AccessGrantView
 	AccessGrantNotice           string

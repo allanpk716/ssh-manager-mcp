@@ -26,6 +26,7 @@
 <a href="/ui/access/">访问</a>
 {{if .Caps.CanManageProfiles}}<a href="/ui/access/profiles">Profile</a>{{end}}
 {{if .Caps.CanManageProjects}}<a href="/ui/access/projects">项目令牌</a>{{end}}
+{{if .Caps.HasPairingAndDeviceCodes}}<a href="/ui/access/device-codes">设备码</a>{{end}}
 </nav>{{end}}
 {{if .VersionHint}}<p class="version-hint">{{.VersionHint}}</p>{{end}}
 {{if .Caps.ReadOnlyNotice}}<p class="readonly-notice">{{.Caps.ReadOnlyNotice}}</p>{{end}}

@@ -26,6 +26,17 @@ type stubAccessStore struct {
 	grantResult    AccessGrantChange
 	grantConflict  *AccessGrantConflict
 	grantErr       error
+
+	deviceCodes      []AccessDeviceCodeSummary
+	addDeviceName    string
+	addDeviceProfile string
+	addDeviceURL     string
+	addDeviceSrc     AccessWriteSource
+	addDeviceResult  AccessDeviceCodeResult
+	addDeviceErr     error
+	revokeDeviceID   string
+	revokeDeviceSrc  AccessWriteSource
+	revokeDeviceErr  error
 }
 
 func (s *stubAccessStore) ListProfiles() ([]AccessProfileSummary, error) {
@@ -45,6 +56,27 @@ func (s *stubAccessStore) DeleteProfile(id string, source AccessWriteSource) (*A
 	s.deleteID = id
 	s.deleteSrc = source
 	return s.deleteInUse, s.deleteErr
+}
+
+func (s *stubAccessStore) ListDeviceCodes() ([]AccessDeviceCodeSummary, error) {
+	if s.deviceCodes == nil {
+		return nil, nil
+	}
+	return s.deviceCodes, nil
+}
+
+func (s *stubAccessStore) AddDeviceCode(name, profile, serveURL string, source AccessWriteSource) (AccessDeviceCodeResult, error) {
+	s.addDeviceName = name
+	s.addDeviceProfile = profile
+	s.addDeviceURL = serveURL
+	s.addDeviceSrc = source
+	return s.addDeviceResult, s.addDeviceErr
+}
+
+func (s *stubAccessStore) RevokeDeviceCode(id string, source AccessWriteSource) error {
+	s.revokeDeviceID = id
+	s.revokeDeviceSrc = source
+	return s.revokeDeviceErr
 }
 
 func (s *stubAccessStore) SetServerGrants(profileID string, expected, desired []string, source AccessWriteSource) (AccessGrantChange, *AccessGrantConflict, error) {
@@ -614,6 +646,8 @@ func TestAccessWriteRoutesRequireOriginAndCSRFToken(t *testing.T) {
 		{"/ui/access/profiles", url.Values{"name": {"team-a"}}},
 		{"/ui/access/profiles/delete", url.Values{"profile_id": {"profile-1"}}},
 		{"/ui/access/profiles/profile-1/grants", url.Values{"expected": {"server-web"}, "server": {"server-db"}}},
+		{"/ui/access/device-codes", url.Values{"name": {"laptop"}, "profile": {"profile-1"}}},
+		{"/ui/access/device-codes/device-1/revoke", url.Values{}},
 	}
 	for _, route := range routes {
 		missing := postAccessWrite(t, handler, cookie, route.target, route.form, "http://127.0.0.1:18080", "")

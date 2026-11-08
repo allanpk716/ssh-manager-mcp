@@ -6,10 +6,18 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
+
+// loadServeCertFingerprint 适配访问管理模块的证书指纹注入协议：模块在产
+// 生设备码之前先调用它读取权威端证书公钥指纹，失败时不会留下设备码。
+func loadServeCertFingerprint() (string, error) {
+	_, _, fingerprint, err := mcpserver.LoadOrCreateServeCert()
+	return fingerprint, err
+}
 
 // writeCacheTokenAudit records the owner audit row for a cache-tokens
 // mutation: Status=ok, or Status=error when opErr is non-nil. The summary
@@ -52,30 +60,12 @@ func cacheTokensAddCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			summary := map[string]any{"name": name, "profile": profileName}
-			// One audit row when the command ends — success or any failure
-			// after the store opened (the defer sees the final err). A failed
-			// write only replaces a nil command error: the command's own
-			// failure is the primary signal.
-			defer func() {
-				if aerr := writeCacheTokenAudit(s, "cache-token.add", summary, err); aerr != nil && err == nil {
-					err = aerr
-				}
-			}()
-			profileID, err := profileIDByName(s, profileName)
+			result, err := access.New(s, access.WithServeCertFingerprint(loadServeCertFingerprint)).
+				AddDeviceCode(name, profileName, "https://<serve-host>:7878", access.CLISource())
 			if err != nil {
 				return err
 			}
-			// cert first: a failing cert load must not mint an orphan device code (Plan 20 A4)
-			_, _, fp, err := mcpserver.LoadOrCreateServeCert()
-			if err != nil {
-				return fmt.Errorf("load serve cert for fingerprint: %w (run `serve cert-info` to diagnose)", err)
-			}
-			_, code, err := s.AddCacheToken(name, profileID)
-			if err != nil {
-				return err
-			}
-			printCacheToken(cmd.OutOrStdout(), name, code, fp)
+			printCacheToken(cmd.OutOrStdout(), name, result.Code, result.Fingerprint)
 			return nil
 		},
 	}
@@ -96,13 +86,7 @@ func cacheTokensLsCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			tokens, err := s.ListCacheTokens()
-			if err != nil {
-				return err
-			}
-			// One profile-name query for the whole table (the per-token resolver
-			// used to re-read every profile row per device code — N+1).
-			pname, err := profileNameMap(s)
+			tokens, err := access.New(s).ListDeviceCodes()
 			if err != nil {
 				return err
 			}
@@ -115,8 +99,14 @@ func cacheTokensLsCmd() *cobra.Command {
 				if clientVersion == "" {
 					clientVersion = "旧版客户端:不支持机密项"
 				}
+				profile := ct.ProfileName
+				if ct.ProfileID == "" {
+					profile = "-"
+				} else if profile == "" {
+					profile = "?"
+				}
 				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %s prefix=%s… status=%s profile=%s last_pull=%s client_version=%s\n",
-					ct.Name, ct.ID, ct.TokenPrefix, ct.Status, profileNameFromMap(pname, ct.ProfileID), last, clientVersion)
+					ct.Name, ct.ID, ct.TokenPrefix, ct.Status, profile, last, clientVersion)
 			}
 			return nil
 		},
@@ -168,13 +158,7 @@ func cacheTokensRevokeCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			summary := map[string]any{"name": args[0]}
-			defer func() {
-				if aerr := writeCacheTokenAudit(s, "cache-token.revoke", summary, err); aerr != nil && err == nil {
-					err = aerr
-				}
-			}()
-			if err := s.RevokeCacheToken(args[0]); err != nil {
+			if err := access.New(s).RevokeDeviceCode(args[0], access.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "revoked cache token %s (status=%s)\n", args[0], models.CacheTokenRevoked)
@@ -202,7 +186,7 @@ func printCacheToken(out io.Writer, name, code, fingerprint string) {
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "On the work machine:")
 	if fingerprint != "" {
-		fmt.Fprintf(out, "  sshmgr cache pull --url https://<serve-host>:7878 --token '%s:%s'\n", code, fingerprint)
+		fmt.Fprintf(out, "  %s\n", access.DeviceCodePullCommand("https://<serve-host>:7878", code, fingerprint))
 		fmt.Fprintf(out, "  # (or) set SSHMGR_SERVE_PIN=%s and pass --token %s\n", fingerprint, code)
 	} else {
 		fmt.Fprintf(out, "  sshmgr cache pull --url https://<serve-host>:7878 --token %s\n", code)

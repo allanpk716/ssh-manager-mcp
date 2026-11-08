@@ -134,6 +134,35 @@ func (s openerStore) DeleteProject(id string, source webui.AccessWriteSource) er
 	})
 }
 
+func (s openerStore) ListDeviceCodes() ([]webui.AccessDeviceCodeSummary, error) {
+	var rows []webui.AccessDeviceCodeSummary
+	err := s.withManager(func(manager *access.Manager) error {
+		got, err := managerStore{manager: manager}.ListDeviceCodes()
+		if err != nil {
+			return err
+		}
+		rows = got
+		return nil
+	})
+	return rows, err
+}
+
+func (s openerStore) AddDeviceCode(name, profile, serveURL string, source webui.AccessWriteSource) (webui.AccessDeviceCodeResult, error) {
+	var result webui.AccessDeviceCodeResult
+	err := s.withManager(func(manager *access.Manager) error {
+		got, err := managerStore{manager: manager}.AddDeviceCode(name, profile, serveURL, source)
+		result = got
+		return err
+	})
+	return result, err
+}
+
+func (s openerStore) RevokeDeviceCode(id string, source webui.AccessWriteSource) error {
+	return s.withManager(func(manager *access.Manager) error {
+		return managerStore{manager: manager}.RevokeDeviceCode(id, source)
+	})
+}
+
 func (s managerStore) ListProfiles() ([]webui.AccessProfileSummary, error) {
 	profiles, err := s.manager.ListProfiles()
 	if err != nil {
@@ -207,6 +236,26 @@ func (s managerStore) ListProjects(includeRevoked bool) ([]webui.AccessProjectSu
 	return out, nil
 }
 
+func (s managerStore) ListDeviceCodes() ([]webui.AccessDeviceCodeSummary, error) {
+	rows, err := s.manager.ListDeviceCodes()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]webui.AccessDeviceCodeSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, webui.AccessDeviceCodeSummary{
+			ID:            row.ID,
+			Name:          row.Name,
+			TokenPrefix:   row.TokenPrefix,
+			Status:        string(row.Status),
+			ProfileName:   row.ProfileName,
+			LastPullAt:    row.LastPullAt,
+			ClientVersion: row.ClientVersion,
+		})
+	}
+	return out, nil
+}
+
 func (s managerStore) AddProject(name, profileID string, source webui.AccessWriteSource) (webui.AccessProjectToken, error) {
 	result, err := s.manager.AddProject(name, profileID, access.WebUISource(source.RemoteAddress))
 	if err != nil {
@@ -245,6 +294,23 @@ func projectToken(result access.ProjectTokenResult) webui.AccessProjectToken {
 	return webui.AccessProjectToken{
 		ID: result.ID, Name: result.Name, Token: result.Token, Snippet: result.Snippet,
 	}
+}
+
+func (s managerStore) AddDeviceCode(name, profile, serveURL string, source webui.AccessWriteSource) (webui.AccessDeviceCodeResult, error) {
+	result, err := s.manager.AddDeviceCode(name, profile, serveURL, access.WebUISource(source.RemoteAddress))
+	if err != nil {
+		return webui.AccessDeviceCodeResult{}, err
+	}
+	return webui.AccessDeviceCodeResult{
+		Name:        result.Name,
+		Code:        result.Code,
+		Fingerprint: result.Fingerprint,
+		PullCommand: result.PullCommand,
+	}, nil
+}
+
+func (s managerStore) RevokeDeviceCode(id string, source webui.AccessWriteSource) error {
+	return s.manager.RevokeDeviceCode(id, access.WebUISource(source.RemoteAddress))
 }
 
 func serverRefs(refs []access.ServerRef) []webui.AccessServerRef {

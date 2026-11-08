@@ -93,7 +93,8 @@ func accessServerNames(servers []AccessServerRef) string {
 }
 
 // AccessStore 是 Web UI 读取和修改访问管理的唯一入口。单机与权威端由
-// 访问管理模块适配实现；处理器测试用桩，本包不知道数据库结构。
+// 访问管理模块适配实现；处理器测试用桩，本包不知道数据库结构。设备码
+// 部分只在权威端注册路由，其余角色不需要实现。
 type AccessStore interface {
 	ListProfiles() ([]AccessProfileSummary, error)
 	AddProfile(name string, source AccessWriteSource) error
@@ -106,6 +107,9 @@ type AccessStore interface {
 	EnableProject(id string, source AccessWriteSource) error
 	RevokeProject(id string, source AccessWriteSource) error
 	DeleteProject(id string, source AccessWriteSource) error
+	ListDeviceCodes() ([]AccessDeviceCodeSummary, error)
+	AddDeviceCode(name, profile, serveURL string, source AccessWriteSource) (AccessDeviceCodeResult, error)
+	RevokeDeviceCode(id string, source AccessWriteSource) error
 }
 
 // AccessWriteSource 描述一次 Web UI 写请求的来源；访问管理适配器把它换算
@@ -120,6 +124,8 @@ const (
 	accessProfilesPath      = "/ui/access/profiles"
 	accessProfileDeletePath = "/ui/access/profiles/delete"
 	accessProfilesPrefix    = "/ui/access/profiles/"
+	accessDeviceCodesPath   = "/ui/access/device-codes"
+	accessDeviceCodesPrefix = "/ui/access/device-codes/"
 )
 
 // registerAccessRoutes 按本机角色注册访问区域路由。客户端只保留区域提示
@@ -138,6 +144,9 @@ func (h *handler) registerAccessRoutes() {
 	h.mux.HandleFunc(projectEnablePath, h.handleAccessProjectEnable)
 	h.mux.HandleFunc(projectRevokePath, h.handleAccessProjectRevoke)
 	h.mux.HandleFunc(projectDeletePath, h.handleAccessProjectDelete)
+	if h.cfg.Role == RoleServer {
+		h.registerDeviceCodeRoutes()
+	}
 }
 
 func (h *handler) handleAccessRoot(w http.ResponseWriter, r *http.Request) {
