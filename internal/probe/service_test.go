@@ -420,6 +420,43 @@ func TestServiceRemoteProbeUsesFixedCommandAndParsesOutput(t *testing.T) {
 	}
 }
 
+// TestServiceNonConnectionResultsDoNotTriggerMismatchNote: 服务器缺少探测
+// 工具、服务器未返回结果这类非连接结论不代表登记与实际不一致；物理局域
+// 网全是这类结果时不标注。
+func TestServiceNonConnectionResultsDoNotTriggerMismatchNote(t *testing.T) {
+	fixture := newServiceFixture(t)
+	credentialID, err := fixture.store.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originResult, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "笔记本 SSH", Host: "192.0.2.20", Port: 22, User: "u",
+		AuthMethod: models.AuthPassword, CredentialID: credentialID, ShellType: models.ShellPOSIX,
+	}, nil, nil, "笔记本")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, output := range []string{
+		// 家A局域网缺少探测工具，NetBird 没有返回结果行。
+		"SSHMGR-PROBE 0 fail 1 missing-tool\nSSHMGR-PROBE 1 fail 1 missing-tool\n",
+		"",
+	} {
+		service, _ := fixture.service((&fakeLocalDial{}).dial)
+		service.RemoteExec = func(context.Context, *models.Server, models.ShellType, string) (string, error) {
+			return output, nil
+		}
+		report, err := service.Probe(context.Background(), Request{
+			From: originResult.ServerID, Targets: []string{"NAS:445"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(report.Text(), "登记与实际不一致") {
+			t.Fatalf("non-connection results must not trigger the mismatch note:\n%s", report.Text())
+		}
+	}
+}
+
 // TestServiceRemoteOriginWithoutDeviceFails: 起点服务器条目没有关联拓扑设
 // 备时报错，提示 owner 补登记。
 func TestServiceRemoteOriginWithoutDeviceFails(t *testing.T) {

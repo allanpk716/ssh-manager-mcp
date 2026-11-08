@@ -528,6 +528,11 @@ func annotateTarget(target *TargetReport) {
 			incomplete = true
 			continue
 		}
+		// 缺少探测工具、没有结果行属于「没有测到连接」，不是登记与实际
+		// 不一致的证据。
+		if line.Category == models.ProbeErrorMissingTool || line.Category == models.ProbeErrorNoResult {
+			continue
+		}
 		summary, present := byNetwork[line.NetworkName]
 		if !present {
 			summary = &networkSummary{name: line.NetworkName, physical: line.physical, allFail: true}
