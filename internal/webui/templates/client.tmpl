@@ -1,0 +1,51 @@
+{{define "content"}}
+<section class="client-page">
+<h1>客户端</h1>
+{{if .OpsClientNotice}}<p class="notice notice-success">{{.OpsClientNotice}}</p>{{end}}
+{{if .OpsClientError}}<p class="notice notice-error">{{.OpsClientError}}</p>{{end}}
+{{if .OpsClientStatus}}
+<div class="client-status">
+<h2>连接状态</h2>
+{{if .OpsClientStatus.ReadError}}<p class="notice notice-warning">{{.OpsClientStatus.ReadError}}</p>{{end}}
+<dl>
+<div><dt>实例</dt><dd>{{.OpsClientStatus.InstanceDisplay}}</dd></div>
+<div><dt>权威端地址</dt><dd>{{if .OpsClientStatus.AuthorityURL}}{{.OpsClientStatus.AuthorityURL}}{{else}}—{{end}}</dd></div>
+<div><dt>证书公钥指纹</dt><dd>{{if .OpsClientStatus.CertificateFingerprint}}{{.OpsClientStatus.CertificateFingerprint}}{{else}}—{{end}}</dd></div>
+<div><dt>Profile</dt><dd>{{if .OpsClientStatus.Profile}}{{.OpsClientStatus.Profile}}{{else}}—{{end}}</dd></div>
+<div><dt>服务器数</dt><dd>{{.OpsClientStatus.ServerCount}}</dd></div>
+<div><dt>本地快照拉取时间</dt><dd>{{if .OpsClientStatus.PulledAt.IsZero}}—{{else}}{{.OpsClientStatus.PulledAt.Format "2006-01-02 15:04:05"}}{{end}}</dd></div>
+<div><dt>快照修订号</dt><dd>{{.OpsClientStatus.SnapshotRevision}}</dd></div>
+<div><dt>推荐版本</dt><dd>{{if .OpsClientStatus.RecommendedVersion}}{{.OpsClientStatus.RecommendedVersion}}{{else}}—{{end}}</dd></div>
+</dl>
+<form method="post" action="/ui/ops/client/sync">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">立即同步</button>
+</form>
+</div>
+{{end}}
+<div class="client-instances">
+<h2>实例</h2>
+<table class="server-table">
+<thead><tr><th scope="col">实例</th><th scope="col">快照年龄</th><th scope="col">材料</th><th scope="col">操作</th></tr></thead>
+<tbody>
+{{range .OpsClientInstances}}
+<tr>
+<td>{{.DisplayName}}</td>
+<td>{{.SnapshotAgeText}}</td>
+<td>{{if .Complete}}齐全{{else}}缺少{{.MissingMaterialsText}}{{end}}</td>
+<td>
+{{if .Complete}}
+<form method="post" action="/ui/ops/client/instance">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="instance" value="{{.Name}}">
+<button type="submit">切换</button>
+</form>
+{{else}}<span>不能切换</span>{{end}}
+</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+</section>
+{{end}}

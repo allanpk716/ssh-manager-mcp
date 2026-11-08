@@ -8,10 +8,12 @@ import (
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/updater"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
+	"ssh-manager-mcp/internal/webuiops"
 	"ssh-manager-mcp/internal/webuiservers"
 )
 
@@ -20,7 +22,7 @@ import (
 type standaloneUIServerSource struct{}
 
 // Servers 读取本机 vault 中的全部服务器并转成 Web UI 展示行。
-func (standaloneUIServerSource) Servers() ([]webui.ServerRow, error) {
+func (standaloneUIServerSource) Servers(string) ([]webui.ServerRow, error) {
 	st, err := openUnlockedStore()
 	if err != nil {
 		return nil, err
@@ -37,8 +39,9 @@ func (standaloneUIServerSource) Servers() ([]webui.ServerRow, error) {
 	return rows, nil
 }
 
-// ServerList 返回带注意原因的服务器列表；供过滤视图使用。
-func (standaloneUIServerSource) ServerList(attentionOnly bool) ([]webui.ServerListEntry, error) {
+// ServerList 返回带注意原因的服务器列表；供过滤视图使用。单机角色只有
+// 一个本机 vault，忽略客户端实例名。
+func (standaloneUIServerSource) ServerList(_ string, attentionOnly bool) ([]webui.ServerListEntry, error) {
 	st, err := openUnlockedStore()
 	if err != nil {
 		return nil, err
@@ -47,8 +50,8 @@ func (standaloneUIServerSource) ServerList(attentionOnly bool) ([]webui.ServerLi
 	return webuiservers.ListEntries(servermanage.New(st), attentionOnly)
 }
 
-// ServerDetail 返回一台服务器的详情。
-func (standaloneUIServerSource) ServerDetail(identifier string) (*webui.ServerDetailView, error) {
+// ServerDetail 返回一台服务器的详情；单机角色忽略客户端实例名。
+func (standaloneUIServerSource) ServerDetail(_ string, identifier string) (*webui.ServerDetailView, error) {
 	st, err := openUnlockedStore()
 	if err != nil {
 		return nil, err
@@ -81,15 +84,25 @@ func standaloneUIAccessStore() webui.AccessStore {
 	})
 }
 
-// clientUIServerSource 是客户端角色的 Web UI 服务器列表来源：读取指定实例的
-// 本地加密快照，实例由命令行按既有规则解析后传入。
-type clientUIServerSource struct {
-	instance string
+// standaloneUIOpsStore 给单机 Web UI 提供运维入口。每次读取重新打开本机
+// vault，请求结束后关闭，不长期持有存储句柄。
+func standaloneUIOpsStore() webui.OpsStore {
+	return webuiops.FromOpener(func() (*ops.Manager, func(), error) {
+		st, err := openUnlockedStore()
+		if err != nil {
+			return nil, nil, err
+		}
+		return ops.NewWithSettingInputs(st, ops.SettingInputsFromEnv()), func() { _ = st.Close() }, nil
+	})
 }
 
+// clientUIServerSource 是客户端角色的 Web UI 服务器列表来源：按每次请求传入
+// 的实例读取本地加密快照。
+type clientUIServerSource struct{}
+
 // Servers 读取当前实例本地快照中的服务器并转成 Web UI 展示行。
-func (s clientUIServerSource) Servers() ([]webui.ServerRow, error) {
-	snap, err := clientops.LoadCacheSnapshotFor(s.instance)
+func (clientUIServerSource) Servers(instance string) ([]webui.ServerRow, error) {
+	snap, err := clientops.LoadCacheSnapshotFor(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -126,9 +139,9 @@ func snapshotServerTags(raw string) []string {
 	return tags
 }
 
-// ServerList 按客户端本地快照返回带注意原因的服务器列表。
-func (s clientUIServerSource) ServerList(attentionOnly bool) ([]webui.ServerListEntry, error) {
-	snap, err := clientops.LoadCacheSnapshotFor(s.instance)
+// ServerList 按传入客户端实例的本地快照返回带注意原因的服务器列表。
+func (s clientUIServerSource) ServerList(instance string, attentionOnly bool) ([]webui.ServerListEntry, error) {
+	snap, err := clientops.LoadCacheSnapshotFor(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -148,10 +161,10 @@ func (s clientUIServerSource) ServerList(attentionOnly bool) ([]webui.ServerList
 	return rows, nil
 }
 
-// ServerDetail 按客户端本地快照返回一台服务器的详情；凭据状态也以快照内容
-// 为准，不显示任何凭据内容。
-func (s clientUIServerSource) ServerDetail(identifier string) (*webui.ServerDetailView, error) {
-	snap, err := clientops.LoadCacheSnapshotFor(s.instance)
+// ServerDetail 按传入客户端实例的本地快照返回一台服务器的详情；凭据状态
+// 也以快照内容为准，不显示任何凭据内容。
+func (s clientUIServerSource) ServerDetail(instance, identifier string) (*webui.ServerDetailView, error) {
+	snap, err := clientops.LoadCacheSnapshotFor(instance)
 	if err != nil {
 		return nil, err
 	}

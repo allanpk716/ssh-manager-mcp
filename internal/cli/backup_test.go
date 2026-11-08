@@ -126,20 +126,60 @@ func TestBackupCreate_WritesJSONAndSidecar(t *testing.T) {
 	}
 }
 
-func TestBackupCreate_SkipUnchanged(t *testing.T) {
+// TestBackupCreate_WritesAuditEachRun：每次 `backup create` 都写
+// backup.create 审计行；审计行本身进入 vault 快照，因此连续两次运行不再
+// 触发明文模式的「内容未变跳过」，而是写出第二份备份。跳过闸门本身仍按
+// 附带的 sha256 比对，见 TestBackupCreateSkipGateMatchesSidecar。
+func TestBackupCreate_WritesAuditEachRun(t *testing.T) {
 	seedVaultForBackup(t)
 	bdir := t.TempDir()
 	touchMarker(t, bdir)
 	if _, err := runCreate(t, bdir); err != nil {
 		t.Fatal(err)
 	}
-	// second create, vault unchanged (no audit written between) => skip, no new file
+	// 第二次 create：第一次运行写下的审计行改变了快照，应写出新文件。
 	if _, err := runCreate(t, bdir); err != nil {
 		t.Fatalf("second create: %v", err)
 	}
 	matches, _ := filepath.Glob(filepath.Join(bdir, "vault-*.json"))
-	if len(matches) != 1 {
-		t.Fatalf("skip should produce no new file; got %d", len(matches))
+	if len(matches) != 2 {
+		t.Fatalf("audit row changes the snapshot; expected 2 files, got %d", len(matches))
+	}
+	st, err := store.Open(os.Getenv("SSHMGR_STORE"), mustDecodeHex(t, os.Getenv("SSHMGR_MASTERKEY_HEX")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	rows, err := st.AuditRows(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].Action != "backup.create" || rows[1].Action != "backup.create" ||
+		rows[0].Source != store.AuditSourceCLI {
+		t.Fatalf("each create should write a cli backup.create audit row: %+v", rows)
+	}
+}
+
+// TestBackupCreateSkipGateMatchesSidecar pins the plaintext skip gate itself:
+// a sidecar hash match skips; a mismatch (or missing sidecar) writes.
+func TestBackupCreateSkipGateMatchesSidecar(t *testing.T) {
+	dir := t.TempDir()
+	name := "vault-20260101-000000.json"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeSidecar(filepath.Join(dir, name)+".sha256", "abc")
+	if !shouldSkip(dir, "vault", "abc") {
+		t.Fatal("matching sidecar hash should skip")
+	}
+	if shouldSkip(dir, "vault", "different") {
+		t.Fatal("mismatched hash should not skip")
+	}
+	if err := os.Remove(filepath.Join(dir, name) + ".sha256"); err != nil {
+		t.Fatal(err)
+	}
+	if shouldSkip(dir, "vault", "abc") {
+		t.Fatal("missing sidecar should fail open and write a new backup")
 	}
 }
 

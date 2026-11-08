@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"ssh-manager-mcp/internal/offlinelimit"
 )
 
 // cacheSkewTolerance is the design's frozen K (§5): ONE constant serving both
@@ -43,14 +45,7 @@ func cacheMaxOffline() (time.Duration, error) {
 // source-labeled error. The env path's text is byte-identical to the pre-T13
 // two-segment construction (TestCacheMaxOffline_Parsing pins it exactly).
 func parseMaxOffline(v, source string) (time.Duration, error) {
-	if v == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || (d != 0 && d < cacheSkewTolerance) {
-		return 0, fmt.Errorf("invalid %s %q: must be a Go duration >= 1h (e.g. 168h; unset/0 disables expiry)", source, v)
-	}
-	return d, nil
+	return offlinelimit.Parse(v, source)
 }
 
 // readCacheMeta loads+decodes cache.meta.json. Any read or parse failure is an

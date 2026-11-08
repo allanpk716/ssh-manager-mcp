@@ -46,7 +46,7 @@ func newStubServerStore() *stubServerStore {
 	}
 }
 
-func (s *stubServerStore) Servers() ([]ServerRow, error) {
+func (s *stubServerStore) Servers(_ string) ([]ServerRow, error) {
 	rows := make([]ServerRow, 0, len(s.rows))
 	for _, row := range s.rows {
 		rows = append(rows, ServerRow{ID: row.ID, Name: row.Name, User: row.User, Host: row.Host, Port: row.Port})
@@ -54,7 +54,7 @@ func (s *stubServerStore) Servers() ([]ServerRow, error) {
 	return rows, nil
 }
 
-func (s *stubServerStore) ServerList(attentionOnly bool) ([]ServerListEntry, error) {
+func (s *stubServerStore) ServerList(_ string, attentionOnly bool) ([]ServerListEntry, error) {
 	if !attentionOnly {
 		return s.rows, nil
 	}
@@ -67,7 +67,7 @@ func (s *stubServerStore) ServerList(attentionOnly bool) ([]ServerListEntry, err
 	return out, nil
 }
 
-func (s *stubServerStore) ServerDetail(identifier string) (*ServerDetailView, error) {
+func (s *stubServerStore) ServerDetail(_ string, identifier string) (*ServerDetailView, error) {
 	return s.details[identifier], nil
 }
 

@@ -44,12 +44,13 @@ type ServerRow struct {
 }
 
 // ServerSource 是 Web UI 读取服务器数据的唯一入口，由命令行按本机角色提供
-// 单机 vault 来源或客户端快照来源。Servers 供访问区域的授权表单复用基本
+// 单机 vault 来源或客户端快照来源。instance 是客户端缓存实例名，空串表示
+// 默认实例；单机与权威端来源忽略它。Servers 供访问区域的授权表单复用基本
 // 行；ServerList 与 ServerDetail 供服务器页展示注意原因与详情。
 type ServerSource interface {
-	Servers() ([]ServerRow, error)
-	ServerList(attentionOnly bool) ([]ServerListEntry, error)
-	ServerDetail(identifier string) (*ServerDetailView, error)
+	Servers(instance string) ([]ServerRow, error)
+	ServerList(instance string, attentionOnly bool) ([]ServerListEntry, error)
+	ServerDetail(instance, identifier string) (*ServerDetailView, error)
 }
 
 // Config 是 Web UI Handler 的构造参数。Port 同时用于会话 cookie 命名与
@@ -61,11 +62,18 @@ type Config struct {
 	// 供，写路由不存在。
 	ServerWriter ServerWriter
 	Access       AccessStore
-	VersionHint  func() string
-	Port         int
+	Ops          OpsStore
+	// ServiceRestart 是权威端显式注入的服务重启能力；不注入时不注册重启
+	// 路由，也不显示重启表单。
+	ServiceRestart OpsRestartStore
+	VersionHint    func() string
+	Port           int
 	// ServePort 是权威端主监听端口，设备码拉取命令按它拼地址；未提供时
 	// 按默认端口兜底。单机与客户端不使用这个字段。
-	ServePort              int
+	ServePort int
+	// ClientInstance 是客户端角色启动时选定的客户端缓存实例名；空串表示默认
+	// 实例。浏览器会话以它为初始值，切换只保存在进程内会话里。
+	ClientInstance         string
 	Now                    func() time.Time
 	Auth                   AuthStore
 	CertificateFingerprint string
@@ -143,6 +151,22 @@ type capabilities struct {
 	CanManageProjects bool
 	// HasPairingAndDeviceCodes 表示本机角色是否显示配对与设备码入口。
 	HasPairingAndDeviceCodes bool
+	// ShowOpsArea 控制是否显示「运维」区域入口。
+	ShowOpsArea bool
+	// CanManageBackups 控制是否显示备份页入口与写操作。
+	CanManageBackups bool
+	// CanManageSettings 控制是否显示设置页入口与写操作。
+	CanManageSettings bool
+	// CanUpgradeBinary 控制是否显示升级页入口与替换二进制操作。
+	CanUpgradeBinary bool
+	// CanRestartService 只对权威端开放，控制升级后的重启服务操作。
+	CanRestartService bool
+	// CanQueryVaultAudit 控制单机与权威端的权威 vault 审计页。
+	CanQueryVaultAudit bool
+	// CanUseClientOps 控制客户端页（连接状态、立即同步与实例切换）。
+	CanUseClientOps bool
+	// CanQueryClientAudit 只对客户端开放，控制本机审计页。
+	CanQueryClientAudit bool
 }
 
 // capabilitiesForRole 按构造时声明的本机角色推导页面能力开关。
@@ -154,6 +178,8 @@ func capabilitiesForRole(role Role) capabilities {
 			ReadOnlyNotice:    "这里只读，修改需到权威端 Web UI 去做。",
 			ShowAccessArea:    true,
 			CanManageProfiles: false,
+			ShowOpsArea:       true, CanUpgradeBinary: true, CanUseClientOps: true,
+			CanQueryClientAudit: true,
 		}
 	}
 	if role == RoleServer {
@@ -161,11 +187,15 @@ func capabilitiesForRole(role Role) capabilities {
 			RoleLabel: "权威端", CanWrite: true, ShowAuthorityActions: true,
 			ShowAccessArea: true, CanManageProfiles: true, CanManageProjects: true,
 			HasPairingAndDeviceCodes: true,
+			ShowOpsArea:              true, CanManageBackups: true, CanManageSettings: true,
+			CanUpgradeBinary: true, CanQueryVaultAudit: true,
 		}
 	}
 	return capabilities{
 		RoleLabel: "单机", CanWrite: true,
 		ShowAccessArea: true, CanManageProfiles: true, CanManageProjects: true,
+		ShowOpsArea: true, CanManageBackups: true, CanManageSettings: true,
+		CanUpgradeBinary: true, CanQueryVaultAudit: true,
 	}
 }
 
@@ -185,12 +215,14 @@ func (s Startup) URL(hostPort string) string {
 // session 是回环模式的进程内会话：标识与防跨站请求伪造令牌都只在内存里，
 // 进程退出即全部失效。
 type session struct {
-	id           string
-	csrf         string
-	accessFlash  *AccessFlash
-	generation   int64
-	lastActive   time.Time
-	lastVerified time.Time
+	id             string
+	csrf           string
+	clientInstance string
+	accessFlash    *AccessFlash
+	opsBackupFlash *OpsBackupFlash
+	generation     int64
+	lastActive     time.Time
+	lastVerified   time.Time
 }
 
 // handler 是回环模式 Web UI 的根处理器，所有路由都在 /ui/ 前缀下。
@@ -255,6 +287,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
 	h.registerAccessRoutes()
 	h.registerServerRoutes()
+	h.registerOpsRoutes()
 	return h, Startup{token: token}, nil
 }
 
@@ -366,6 +399,7 @@ func (h *handler) handleStart(w http.ResponseWriter, r *http.Request) {
 	valid := !h.startUsed && subtle.ConstantTimeCompare(digest[:], h.startDigest[:]) == 1
 	if valid {
 		h.startUsed = true
+		sess.clientInstance = h.cfg.ClientInstance
 		h.session = sess
 	}
 	h.mu.Unlock()
@@ -391,6 +425,30 @@ func (h *handler) handleUIRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.handleServerList(w, r)
+}
+
+// requestClientInstance 返回当前浏览器会话选中的客户端实例；没有会话时退回
+// `sshmgr ui` 启动时解析的实例。非客户端角色不使用这个值。
+func (h *handler) requestClientInstance(r *http.Request) string {
+	if h.cfg.Role != RoleClient {
+		return ""
+	}
+	if sess := h.currentSession(r); sess != nil {
+		h.mu.Lock()
+		instance := sess.clientInstance
+		h.mu.Unlock()
+		return instance
+	}
+	return h.cfg.ClientInstance
+}
+
+// setSessionClientInstance 更新当前浏览器会话中的客户端实例。
+func (h *handler) setSessionClientInstance(r *http.Request, instance string) {
+	if sess := h.currentSession(r); sess != nil {
+		h.mu.Lock()
+		sess.clientInstance = instance
+		h.mu.Unlock()
+	}
 }
 
 // renderSessionRequired 输出需要重新启动 Web UI 的会话错误页。

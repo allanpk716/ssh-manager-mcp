@@ -14,9 +14,9 @@ import (
 // stubServerSource 是测试用的服务器列表来源，返回固定展示行。
 type stubServerSource struct{ rows []ServerRow }
 
-func (s *stubServerSource) Servers() ([]ServerRow, error) { return s.rows, nil }
+func (s *stubServerSource) Servers(string) ([]ServerRow, error) { return s.rows, nil }
 
-func (s *stubServerSource) ServerList(attentionOnly bool) ([]ServerListEntry, error) {
+func (s *stubServerSource) ServerList(_ string, attentionOnly bool) ([]ServerListEntry, error) {
 	rows := make([]ServerListEntry, 0, len(s.rows))
 	for _, row := range s.rows {
 		entry := ServerListEntry{ID: row.ID, Name: row.Name, User: row.User, Host: row.Host, Port: row.Port}
@@ -31,7 +31,7 @@ func (s *stubServerSource) ServerList(attentionOnly bool) ([]ServerListEntry, er
 	return rows, nil
 }
 
-func (s *stubServerSource) ServerDetail(identifier string) (*ServerDetailView, error) {
+func (s *stubServerSource) ServerDetail(_ string, identifier string) (*ServerDetailView, error) {
 	for _, row := range s.rows {
 		if row.ID == identifier || row.Name == identifier {
 			return &ServerDetailView{

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
@@ -26,6 +27,21 @@ func main() {
 
 func seed(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	vaultDir := filepath.Join(dir, "ssh-manager")
+	if err := os.MkdirAll(vaultDir, 0o700); err != nil {
+		return err
+	}
+	backupDir := filepath.Join(dir, "backups")
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(backupDir, ".ssh-manager-backup-marker"), nil, 0o600); err != nil {
+		return err
+	}
+	passPath := filepath.Join(dir, "backup.pass")
+	if err := os.WriteFile(passPath, []byte("browser-test-backup-pass"), 0o600); err != nil {
 		return err
 	}
 	key, err := store.GenerateMasterKey()
@@ -74,6 +90,15 @@ func seed(dir string) error {
 	}
 	if err := st.GrantServers(profileID, []string{webID, oldID}); err != nil {
 		return err
+	}
+	for i := 0; i < 120; i++ {
+		if err := st.WriteAudit(store.AuditRow{
+			TS: time.Now().Add(-time.Duration(i) * time.Minute), Action: "e2e.audit",
+			Command: fmt.Sprintf("浏览器测试审计记录 %d", i+1), Status: "ok",
+			Source: store.AuditSourceCLI,
+		}); err != nil {
+			return err
+		}
 	}
 	return roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: true})
 }

@@ -11,11 +11,13 @@ import (
 
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
+	"ssh-manager-mcp/internal/webuiops"
 	"ssh-manager-mcp/internal/webuiservers"
 )
 
@@ -24,7 +26,7 @@ type serveWebUIServerSource struct {
 	store *store.Store
 }
 
-func (s serveWebUIServerSource) Servers() ([]webui.ServerRow, error) {
+func (s serveWebUIServerSource) Servers(string) ([]webui.ServerRow, error) {
 	servers, err := s.store.ListServers()
 	if err != nil {
 		return nil, err
@@ -39,13 +41,14 @@ func (s serveWebUIServerSource) Servers() ([]webui.ServerRow, error) {
 	return rows, nil
 }
 
-// ServerList 返回带注意原因的服务器列表，供权威端服务器页过滤视图使用。
-func (s serveWebUIServerSource) ServerList(attentionOnly bool) ([]webui.ServerListEntry, error) {
+// ServerList 返回带注意原因的服务器列表，供权威端服务器页过滤视图使用；
+// 权威端直接读取本机 vault，忽略客户端实例名。
+func (s serveWebUIServerSource) ServerList(_ string, attentionOnly bool) ([]webui.ServerListEntry, error) {
 	return webuiservers.ListEntries(servermanage.New(s.store), attentionOnly)
 }
 
-// ServerDetail 返回一台服务器的详情。
-func (s serveWebUIServerSource) ServerDetail(identifier string) (*webui.ServerDetailView, error) {
+// ServerDetail 返回一台服务器的详情；权威端忽略客户端实例名。
+func (s serveWebUIServerSource) ServerDetail(_ string, identifier string) (*webui.ServerDetailView, error) {
 	return webuiservers.DetailView(servermanage.New(s.store), identifier)
 }
 
@@ -93,7 +96,7 @@ func servePortFromAddr(addr string) int {
 
 // startWebUIListenerManager 构造权威端 Web UI Handler 与监听管理者，并同步
 // 执行第一次地址推导。绑定失败由管理者记录并重试，不阻断主监听。
-func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tlsKey, fingerprint, addr string) (*webUIListenerManager, error) {
+func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tlsKey, fingerprint, addr string, serveOpts ServeOpts) (*webUIListenerManager, error) {
 	port, manualListen, err := ReadWebUIConfig(st)
 	if err != nil {
 		return nil, err
@@ -107,6 +110,12 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		logStartup("推导 Web UI 监听地址失败，先只监听 127.0.0.1：%v", planErr)
 		plan = loopbackPlan
 	}
+	opsManager := ops.NewWithSettingInputs(st, webUISettingInputs(serveOpts))
+	updates := ops.NewUpdateService(ops.UpdateDependencies{Audit: opsManager.WriteUpdateAudit})
+	restarts := ops.NewRestartService(ops.RestartDependencies{
+		NewService: serveOpts.ServiceRestarterFactory,
+		Audit:      opsManager.WriteRestartAudit,
+	})
 	handler, control, err := webui.NewAuthority(webui.Config{
 		Role: webui.RoleServer, Port: port,
 		Servers:      serveWebUIServerSource{store: st},
@@ -114,6 +123,8 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		Access: webuiaccess.FromManager(access.New(st, access.WithServeCertFingerprint(func() (string, error) {
 			return fingerprint, nil
 		}))),
+		Ops:                    webuiops.FromManagerWithAuthorityUpdates(opsManager, updates, restarts),
+		ServiceRestart:         webuiops.NewRestartStore(restarts),
 		Auth:                   vault.NewWebUIAuthStore(st),
 		CertificateFingerprint: fingerprint,
 		AllowedHosts:           plan.Addresses,
@@ -157,4 +168,12 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		}
 	}()
 	return manager, nil
+}
+
+func webUISettingInputs(opts ServeOpts) ops.SettingInputs {
+	inputs := ops.SettingInputsFromEnv()
+	inputs.PairingFlag = opts.PairingFlag
+	inputs.DiscoveryFlag = opts.DiscoveryFlag
+	inputs.MetadataEditFlag = opts.MetadataEditFlag
+	return inputs
 }

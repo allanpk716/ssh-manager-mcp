@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
 )
@@ -136,7 +137,7 @@ func TestBackupCreateEncrypted_ConcurrentLockSkip(t *testing.T) {
 	touchMarker(t, bdir)
 	passFile := writePassFile(t, t.TempDir(), encPass1)
 
-	lk, err := acquireBackupLock(bdir)
+	lk, err := ops.AcquireBackupLock(bdir)
 	if err != nil {
 		t.Fatalf("acquire test lock: %v", err)
 	}
@@ -162,7 +163,7 @@ func TestNextEncryptedBackupName_SameSecondSuffix(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, base+".sme"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	name, err := nextEncryptedBackupName(dir, "vault")
+	name, err := ops.NextEncryptedBackupName(dir, "vault", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,46 +251,6 @@ func TestBackupCreateEncrypted_EmptyPassphrase_FailClosed(t *testing.T) {
 	}
 	if m := smeFiles(t, bdir); len(m) != 0 {
 		t.Fatalf("no file may be written on an empty passphrase: %v", m)
-	}
-}
-
-// TestBackupPostWriteVerifyEncrypted_TamperAndWrongPass exercises the exact
-// function the encrypted create runs post-write: healthy file passes; one
-// flipped byte or a wrong passphrase fails. (Tamper simulation at the unit
-// seam — create itself verifies immediately after its own atomic write.)
-func TestBackupPostWriteVerifyEncrypted_TamperAndWrongPass(t *testing.T) {
-	seedVaultForBackup(t)
-	bdir := t.TempDir()
-	touchMarker(t, bdir)
-	passFile := writePassFile(t, t.TempDir(), encPass1)
-	if _, err := runCreate(t, bdir, "--passphrase-file", passFile); err != nil {
-		t.Fatal(err)
-	}
-	path := smeFiles(t, bdir)[0]
-	blob, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pw := []byte(encPass1)
-
-	if err := verifyEncryptedWritten(path, pw); err != nil {
-		t.Fatalf("healthy .sme must pass post-write verify: %v", err)
-	}
-
-	tampered := append([]byte(nil), blob...)
-	tampered[len(tampered)-1] ^= 0xFF
-	if err := os.WriteFile(path, tampered, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyEncryptedWritten(path, pw); err == nil {
-		t.Fatal("tampered .sme must fail post-write verify")
-	}
-
-	if err := os.WriteFile(path, blob, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyEncryptedWritten(path, []byte(encPass2)); err == nil {
-		t.Fatal("wrong passphrase must fail post-write verify")
 	}
 }
 

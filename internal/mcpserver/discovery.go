@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"regexp"
 	"sync"
 	"time"
-	"unicode"
+
+	"ssh-manager-mcp/internal/discoveryname"
 )
 
 // UDP discovery responder (Plan 42 批1 T6, spec §3.4): a serve answers LAN
@@ -47,19 +47,11 @@ const (
 	// discoveryIOWindow is the per-op socket deadline: one slow or malicious
 	// peer must never stall the read loop longer than a single window.
 	discoveryIOWindow = time.Second
-	// discoveryNameFallback is the last-resort display name when neither the
-	// configured name nor the hostname can be sanitized into the whitelist.
-	discoveryNameFallback = "sshmgr"
 	// settingDiscoveryName is the frozen store key for the discovery display
 	// name (read by RunServe; written by the 批2 Settings surface like
 	// serve.pairing / serve.discovery).
 	settingDiscoveryName = "serve.discovery_name"
 )
-
-// discoveryNameRe is the frozen display-name whitelist: one letter or number,
-// then letters/numbers/space/dot/underscore/hyphen, ≤32 runes total. Anything
-// else falls back to the hostname (then to force-derivation).
-var discoveryNameRe = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,31}$`)
 
 // discProbe / discOffer are the frozen JSON payloads.
 type discProbe struct {
@@ -71,48 +63,6 @@ type discOffer struct {
 	Name string `json:"name"`
 	SPKI string `json:"spki"`
 	TCP  int    `json:"tcp"`
-}
-
-// sanitizeDiscoveryName maps the configured display name onto the whitelist:
-// valid name → as-is; else a whitelisted hostname; else the hostname
-// force-derived into the whitelist; else the constant fallback. Pure — the
-// caller injects os.Hostname() so the chain is unit-testable. Never returns an
-// empty string or a name outside the whitelist.
-func sanitizeDiscoveryName(name, hostname string) string {
-	if discoveryNameRe.MatchString(name) {
-		return name
-	}
-	if discoveryNameRe.MatchString(hostname) {
-		return hostname
-	}
-	return deriveDiscoveryName(hostname)
-}
-
-// deriveDiscoveryName force-fits a raw hostname into the whitelist: keep only
-// whitelisted runes, trim a leading non-alphanumeric run, cap at 32 runes;
-// nothing survives → the constant fallback.
-func deriveDiscoveryName(hostname string) string {
-	kept := make([]rune, 0, len(hostname))
-	for _, r := range hostname {
-		switch {
-		case unicode.IsLetter(r) || unicode.IsNumber(r):
-			kept = append(kept, r)
-		case r == ' ' || r == '.' || r == '_' || r == '-':
-			kept = append(kept, r)
-		}
-	}
-	i := 0
-	for i < len(kept) && !unicode.IsLetter(kept[i]) && !unicode.IsNumber(kept[i]) {
-		i++
-	}
-	kept = kept[i:]
-	if len(kept) > 32 {
-		kept = kept[:32]
-	}
-	if len(kept) == 0 {
-		return discoveryNameFallback
-	}
-	return string(kept)
 }
 
 // validProbe applies the frozen acceptance rule: magic prefix + JSON body
@@ -155,10 +105,9 @@ func StartDiscovery(ctx context.Context, name string, tcpPort int, spki string, 
 		return noop
 	}
 
-	host, _ := os.Hostname()
 	offerJSON, merr := json.Marshal(discOffer{
 		T:    "offer",
-		Name: sanitizeDiscoveryName(name, host),
+		Name: discoveryname.DisplayName(name, currentHostname()),
 		SPKI: spki,
 		TCP:  tcpPort,
 	})
@@ -201,4 +150,9 @@ func StartDiscovery(ctx context.Context, name string, tcpPort int, spki string, 
 		}
 	}()
 	return stopFn
+}
+
+func currentHostname() string {
+	host, _ := os.Hostname()
+	return host
 }

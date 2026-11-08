@@ -69,6 +69,26 @@ type pageData struct {
 	AccessPairing               *AccessPairingSummary
 	AccessPairingForm           AccessPairingForm
 	AccessPairingNotice         string
+	OpsAuditRows                []OpsAuditRow
+	OpsAuditFilter              OpsAuditFilterView
+	OpsAuditHasMore             bool
+	OpsAuditOlderPath           string
+	OpsBackupStatus             *OpsBackupStatus
+	OpsBackupFlash              *OpsBackupFlash
+	OpsBackupConfigForm         *OpsBackupConfigForm
+	OpsSettings                 []OpsSetting
+	OpsSettingForm              OpsSettingForm
+	OpsRole                     OpsRole
+	OpsClientAuditRows          []OpsAuditRow
+	OpsClientInstance           string
+	OpsClientStatus             *OpsClientStatus
+	OpsClientInstances          []OpsClientInstance
+	OpsClientNotice             string
+	OpsClientError              string
+	OpsUpdate                   *OpsUpdateStatus
+	OpsUpdateResult             *OpsUpdateApplyResult
+	OpsUpdateError              *OpsUpdateError
+	OpsUpdateRestarting         bool
 	ErrorTitle                  string
 	ErrorMessage                string
 	AdminPasswordSet            bool

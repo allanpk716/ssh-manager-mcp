@@ -64,9 +64,13 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	caps := capabilitiesForRole(cfg.Role)
+	if cfg.Role == RoleServer {
+		caps.CanRestartService = cfg.ServiceRestart != nil
+	}
 	h := &handler{
 		cfg:          cfg,
-		caps:         capabilitiesForRole(cfg.Role),
+		caps:         caps,
 		assets:       assets,
 		assetFiles:   assetFiles,
 		pages:        pages,
@@ -84,6 +88,7 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	// 访问区域路由按权威端角色注册全部已实现的页面。
 	h.registerAccessRoutes()
 	h.registerServerRoutes()
+	h.registerOpsRoutes()
 	return h, h, nil
 }
 
@@ -310,6 +315,20 @@ func (h *handler) recentlyVerified(sess *session) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.cfg.now().Sub(sess.lastVerified) <= 5*time.Minute
+}
+
+// requireRecentReverify 是运维写操作的统一重新验证守卫。单机与客户端的
+// 回环界面没有管理员口令，直接放行；权威端 5 分钟内未重新验证时跳到重
+// 新验证页，next 必须指向重新验证后可用 GET 打开的页面。
+func (h *handler) requireRecentReverify(w http.ResponseWriter, r *http.Request, next string) bool {
+	if h.cfg.Role != RoleServer {
+		return true
+	}
+	if h.recentlyVerified(h.currentAuthoritySession(r)) {
+		return true
+	}
+	http.Redirect(w, r, reverifyPath(next), http.StatusSeeOther)
+	return false
 }
 
 func (h *handler) handleAuthorityPassword(w http.ResponseWriter, r *http.Request) {

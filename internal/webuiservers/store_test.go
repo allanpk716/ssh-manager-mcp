@@ -37,7 +37,7 @@ func TestWriterAdapterEditsAndAuditsWebUISource(t *testing.T) {
 	}
 	writer := WriterFromManager(manager)
 
-	detail, err := FromManager(manager).ServerDetail("web")
+	detail, err := FromManager(manager).ServerDetail("", "web")
 	if err != nil || detail == nil || detail.ID != id {
 		t.Fatalf("详情适配不正确：%+v %v", detail, err)
 	}

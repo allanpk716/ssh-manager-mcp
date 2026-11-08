@@ -18,6 +18,7 @@ import (
 
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/webui"
+	"ssh-manager-mcp/internal/webuiops"
 )
 
 // uiOpenBrowser 是「用系统默认浏览器打开网址」的可替换依赖；测试注入替身，
@@ -57,6 +58,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		servers          webui.ServerSource
 		serverWriter     webui.ServerWriter
 		accessSource     webui.AccessStore
+		opsSource        webui.OpsStore
 		resolvedInstance string
 	)
 	switch {
@@ -65,13 +67,16 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		servers = standaloneUIServerSource{}
 		serverWriter = standaloneUIServerWriter()
 		accessSource = standaloneUIAccessStore()
+		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
 	case launch.Kind == roles.LaunchClient && !launch.ResumeSetup:
 		resolvedInstance, err = resolveClientCacheInstance(instance)
 		if err != nil {
 			return err
 		}
 		webRole = webui.RoleClient
-		servers = clientUIServerSource{instance: resolvedInstance}
+		servers = clientUIServerSource{}
+		opsSource = webuiops.ClientPageStoreWithUpdates(
+			uiUpdateService(webui.RoleClient, resolvedInstance), uiClientPull)
 	case launch.Kind == roles.LaunchBroker && launch.Role == roles.RoleServer:
 		st, err := openUnlockedStore()
 		if err != nil {
@@ -96,12 +101,14 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	handler, startup, err := webui.New(webui.Config{
-		Role:         webRole,
-		Servers:      servers,
-		ServerWriter: serverWriter,
-		VersionHint:  versionHint,
-		Port:         port,
-		Access:       accessSource,
+		Role:           webRole,
+		Servers:        servers,
+		ServerWriter:   serverWriter,
+		VersionHint:    versionHint,
+		Port:           port,
+		Access:         accessSource,
+		Ops:            opsSource,
+		ClientInstance: resolvedInstance,
 	})
 	if err != nil {
 		_ = listener.Close()

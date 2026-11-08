@@ -257,7 +257,7 @@ func (h *handler) registerServerRoutes() {
 // 置顶。
 func (h *handler) handleServerList(w http.ResponseWriter, r *http.Request) {
 	attentionOnly := r.URL.Query().Get("attention") == "1"
-	rows, err := h.cfg.Servers.ServerList(attentionOnly)
+	rows, err := h.cfg.Servers.ServerList(h.requestClientInstance(r), attentionOnly)
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请稍后重试。")
 		return
@@ -303,7 +303,7 @@ func (h *handler) handleServerEntry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id string) {
-	detail, err := h.cfg.Servers.ServerDetail(id)
+	detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), id)
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "读取服务器详情失败，请稍后重试。")
 		return
@@ -326,7 +326,7 @@ func (h *handler) handleServerEdit(w http.ResponseWriter, r *http.Request, id st
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "编辑页只接受 GET 与 POST 请求。")
 		return
 	}
-	detail, err := h.cfg.Servers.ServerDetail(id)
+	detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), id)
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "读取服务器详情失败，请稍后重试。")
 		return
@@ -364,7 +364,7 @@ func (h *handler) serverEditView(w http.ResponseWriter, r *http.Request, detail 
 }
 
 func (h *handler) handleServerEditPost(w http.ResponseWriter, r *http.Request, id string) {
-	detail, err := h.cfg.Servers.ServerDetail(id)
+	detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), id)
 	if err != nil || detail == nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "保存前读取服务器详情失败，请稍后重试。")
 		return
@@ -733,7 +733,7 @@ func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, que
 		http.Redirect(w, r, completeResultPath(queue, requestCounts(r)), http.StatusSeeOther)
 		return
 	}
-	detail, err := h.cfg.Servers.ServerDetail(queue[position])
+	detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), queue[position])
 	if err != nil || detail == nil {
 		h.renderError(w, r, http.StatusNotFound, "读取补全目标失败", "补全目标服务器不存在，请从服务器列表重新进入补全。")
 		return
@@ -828,7 +828,7 @@ func (h *handler) handleServerCompleteResult(w http.ResponseWriter, r *http.Requ
 	queue, _ := completeQueueFromRequest(r)
 	pending := 0
 	for _, id := range queue {
-		if detail, err := h.cfg.Servers.ServerDetail(id); err == nil && detail != nil && len(detail.AttentionReasons) > 0 {
+		if detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), id); err == nil && detail != nil && len(detail.AttentionReasons) > 0 {
 			pending++
 		}
 	}

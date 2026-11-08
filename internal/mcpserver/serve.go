@@ -23,6 +23,7 @@ import (
 
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
@@ -616,6 +617,9 @@ type ServeOpts struct {
 	PairingFlag   *bool
 	// MetadataEditFlag (Plan 51) gates POST /server-metadata the same way.
 	MetadataEditFlag *bool
+	// ServiceRestarterFactory 由命令行注入，复用现有系统服务抽象构造
+	// serve 服务的重启句柄；测试可以换成桩，不触碰本机服务管理器。
+	ServiceRestarterFactory func() (ops.ServiceRestarter, error)
 }
 
 // RunServe runs the serve HTTP server until ctx is cancelled (SIGINT/SIGTERM,
@@ -689,7 +693,7 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 
 	var webUIListeners *webUIListenerManager
 	if currentMachineIsServer() {
-		webUIListeners, err = startWebUIListenerManager(ctx, st, tlsCert, tlsKey, serveCertFingerprint, addr)
+		webUIListeners, err = startWebUIListenerManager(ctx, st, tlsCert, tlsKey, serveCertFingerprint, addr, opts)
 		if err != nil {
 			return fmt.Errorf("serve web UI: %w", err)
 		}

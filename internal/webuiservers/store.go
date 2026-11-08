@@ -60,7 +60,7 @@ type sourceAdapter struct {
 	open managerOpener
 }
 
-func (s sourceAdapter) Servers() ([]webui.ServerRow, error) {
+func (s sourceAdapter) Servers(_ string) ([]webui.ServerRow, error) {
 	var rows []webui.ServerRow
 	err := withManager(s.open, func(manager *servermanage.Manager) error {
 		items, err := manager.List(false)
@@ -79,7 +79,7 @@ func (s sourceAdapter) Servers() ([]webui.ServerRow, error) {
 	return rows, err
 }
 
-func (s sourceAdapter) ServerList(attentionOnly bool) ([]webui.ServerListEntry, error) {
+func (s sourceAdapter) ServerList(_ string, attentionOnly bool) ([]webui.ServerListEntry, error) {
 	var rows []webui.ServerListEntry
 	err := withManager(s.open, func(manager *servermanage.Manager) error {
 		var listErr error
@@ -89,7 +89,7 @@ func (s sourceAdapter) ServerList(attentionOnly bool) ([]webui.ServerListEntry, 
 	return rows, err
 }
 
-func (s sourceAdapter) ServerDetail(identifier string) (*webui.ServerDetailView, error) {
+func (s sourceAdapter) ServerDetail(_ string, identifier string) (*webui.ServerDetailView, error) {
 	var detail *webui.ServerDetailView
 	err := withManager(s.open, func(manager *servermanage.Manager) error {
 		var detailErr error
