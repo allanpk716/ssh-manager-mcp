@@ -24,6 +24,12 @@ type Manager struct {
 
 // New 返回挂在一个已解锁存储上的运维模块。
 func New(st *store.Store) *Manager {
+	return newManager(st)
+}
+
+// newManager 统一填好各领域的默认接缝；不同构造入口共享同一份默认值，
+// 新增接缝时不会漏掉某个入口。
+func newManager(st *store.Store) *Manager {
 	return &Manager{
 		st:                  st,
 		backupConfigPath:    defaultBackupConfigPath,

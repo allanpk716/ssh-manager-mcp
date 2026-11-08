@@ -640,3 +640,20 @@ func TestBackupPostWriteVerifyEncryptedTamperAndWrongPass(t *testing.T) {
 		t.Fatal("口令不符必须无法通过回读校验")
 	}
 }
+
+func TestBackupStatusWorksWithSettingInputsManager(t *testing.T) {
+	// 权威端与新版单机入口用 NewWithSettingInputs 构造运维模块；备份接缝
+	// 必须同样有默认值，不能只在 New 里填。
+	m, _, root := newBackupTestManager(t)
+	configured := NewWithSettingInputs(m.st, SettingInputs{})
+	configured.backupConfigPath = func() (string, error) {
+		return filepath.Join(root, "missing-backup.json"), nil
+	}
+	status, err := configured.BackupStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.ConfigMissing || status.ConfigPath == "" {
+		t.Fatalf("带设置输入的运维模块也应能读取备份状态：%+v", status)
+	}
+}
