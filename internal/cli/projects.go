@@ -2,14 +2,17 @@ package cli
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
+// newProjectsCmd 生成 projects 命令族：访问管理模块（internal/access）项
+// 目令牌部分的薄命令行面，解析参数、打印结果；生命周期规则与审计写入
+// 由模块统一处理。show 是只读的项目详情视图，仍直接读存储。
 func newProjectsCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "projects", Short: "Manage agent projects (each gets a token)"}
 	cmd.AddCommand(
@@ -17,17 +20,22 @@ func newProjectsCmd() *cobra.Command {
 		projectsLsCmd(),
 		projectsShowCmd(),
 		projectsRotateCmd(),
-		projectsStatusCmd("disable", "Disable a project's token (reversible via enable; Lazy — next mcp spawn rejects it)", models.ProjectDisabled, "project.disable"),
-		projectsStatusCmd("enable", "Re-enable a disabled project", models.ProjectActive, "project.enable"),
-		projectsStatusCmd("revoke", "Permanently revoke a project (token rejected; hidden from default ls)", models.ProjectRevoked, "project.revoke"),
+		projectsStatusCmd("disable", "Disable a project's token (reversible via enable; Lazy — next mcp spawn rejects it)", models.ProjectDisabled, func(m *access.Manager, project string) error {
+			return m.DisableProject(project, access.CLISource())
+		}),
+		projectsStatusCmd("enable", "Re-enable a disabled project", models.ProjectActive, func(m *access.Manager, project string) error {
+			return m.EnableProject(project, access.CLISource())
+		}),
+		projectsStatusCmd("revoke", "Permanently revoke a project (token rejected; hidden from default ls)", models.ProjectRevoked, func(m *access.Manager, project string) error {
+			return m.RevokeProject(project, access.CLISource())
+		}),
 		projectsRemoveCmd(),
 	)
 	return cmd
 }
 
-// projectsRemoveCmd hard-deletes a REVOKED project row (owner's v0.8.7
-// ruling: revoke first, then delete). Audited like the status commands —
-// the audit sidecar keeps the history the row deletion drops.
+// projectsRemoveCmd 删除已吊销的项目行：访问管理模块负责「先吊销再删
+// 除」的规则与 project.delete 审计；审计仍按项目标识符保留历史。
 func projectsRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove [name]",
@@ -39,20 +47,10 @@ func projectsRemoveCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			proj, err := s.GetProjectByName(args[0])
-			if err != nil {
+			if err := access.New(s).DeleteProject(args[0], access.CLISource()); err != nil {
 				return err
 			}
-			if proj == nil {
-				return fmt.Errorf("project %q not found", args[0])
-			}
-			if err := s.DeleteProject(proj.ID); err != nil {
-				return err
-			}
-			if err := s.WriteAudit(store.AuditRow{TS: time.Now(), ProjectID: proj.ID, Action: "project.delete", Status: "ok"}); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "deleted project %s\n", proj.Name)
+			fmt.Fprintf(cmd.OutOrStdout(), "deleted project %s\n", args[0])
 			return nil
 		},
 	}
@@ -70,15 +68,11 @@ func projectsAddCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			profileID, err := profileIDByName(s, profileName)
+			result, err := access.New(s).AddProject(args[0], profileName, access.CLISource())
 			if err != nil {
 				return err
 			}
-			_, token, err := s.AddProject(args[0], profileID)
-			if err != nil {
-				return err
-			}
-			printToken(cmd.OutOrStdout(), token)
+			printToken(cmd.OutOrStdout(), result.Token)
 			return nil
 		},
 	}
@@ -98,16 +92,12 @@ func projectsLsCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			projs, err := s.ListProjects()
+			projs, err := access.New(s).ListProjects(all)
 			if err != nil {
 				return err
 			}
-			pname, _ := profileNameMap(s)
 			for _, p := range projs {
-				if !all && p.Status == models.ProjectRevoked {
-					continue // revoked = "deleted" in the owner's model → hidden by default
-				}
-				pn := pname[p.ProfileID]
+				pn := p.ProfileName
 				if pn == "" {
 					pn = p.ProfileID
 				}
@@ -121,8 +111,7 @@ func projectsLsCmd() *cobra.Command {
 	return c
 }
 
-// projectsShowCmd prints the agent→profile→servers view. It reads NO secret bytes (the iron
-// rule holds on the owner side too).
+// projectsShowCmd 打印项目→profile→服务器的只读视图，不读任何密钥字节。
 func projectsShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show [name]",
@@ -170,8 +159,8 @@ func projectsShowCmd() *cobra.Command {
 	}
 }
 
-// projectsRotateCmd re-keys a project's token in place (same id/profile) and prints the new
-// token + .mcp.json snippet. The old token stops verifying immediately.
+// projectsRotateCmd 原地轮换项目令牌并打印新的一次性令牌与
+// `.mcp.json` 片段；旧令牌立刻失效。
 func projectsRotateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "rotate [name]",
@@ -183,28 +172,19 @@ func projectsRotateCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			proj, err := s.GetProjectByName(args[0])
+			result, err := access.New(s).RotateProject(args[0], access.CLISource())
 			if err != nil {
 				return err
 			}
-			if proj == nil {
-				return fmt.Errorf("project %q not found", args[0])
-			}
-			token, err := s.RotateProject(proj.ID)
-			if err != nil {
-				return err
-			}
-			if err := s.WriteAudit(store.AuditRow{TS: time.Now(), ProjectID: proj.ID, Action: "project.rotate", Status: "ok"}); err != nil {
-				return err
-			}
-			printToken(cmd.OutOrStdout(), token)
+			printToken(cmd.OutOrStdout(), result.Token)
 			return nil
 		},
 	}
 }
 
-// projectsStatusCmd builds disable/enable/revoke: set the status, audit it, confirm.
-func projectsStatusCmd(use, short string, status models.ProjectStatus, action string) *cobra.Command {
+// projectsStatusCmd 生成 disable/enable/revoke 三个子命令：apply 把命
+// 令分发到访问管理模块的对应方法，模块负责状态规则与审计写入。
+func projectsStatusCmd(use, short string, status models.ProjectStatus, apply func(m *access.Manager, project string) error) *cobra.Command {
 	return &cobra.Command{
 		Use:   use + " [name]",
 		Args:  cobra.ExactArgs(1),
@@ -215,20 +195,10 @@ func projectsStatusCmd(use, short string, status models.ProjectStatus, action st
 				return err
 			}
 			defer s.Close()
-			proj, err := s.GetProjectByName(args[0])
-			if err != nil {
+			if err := apply(access.New(s), args[0]); err != nil {
 				return err
 			}
-			if proj == nil {
-				return fmt.Errorf("project %q not found", args[0])
-			}
-			if err := s.SetProjectStatus(proj.ID, status); err != nil {
-				return err
-			}
-			if err := s.WriteAudit(store.AuditRow{TS: time.Now(), ProjectID: proj.ID, Action: action, Status: "ok"}); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s project %s (status=%s)\n", use, proj.Name, status)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s project %s (status=%s)\n", use, args[0], status)
 			return nil
 		},
 	}
@@ -280,9 +250,10 @@ func profileNameFromMap(pname map[string]string, id string) string {
 	return "?"
 }
 
-// printToken emits the one-time token + .mcp.json snippet (shared by add and rotate).
+// printToken 打印一次性令牌与 `.mcp.json` 片段（add 与 rotate 共用）。
+// 片段由访问管理模块的共用函数生成，Web UI 的签发与轮换页面用同一份。
 func printToken(out interface{ Write([]byte) (int, error) }, token string) {
 	fmt.Fprintf(out, "Token (shown once): %s\n\n", token)
 	fmt.Fprintln(out, ".mcp.json snippet:")
-	fmt.Fprintf(out, `{"mcpServers":{"ssh":{"command":"sshmgr","args":["mcp"],"env":{"SSHMGR_TOKEN":"%s"}}}}`+"\n", token)
+	fmt.Fprintln(out, access.ProjectTokenSnippet(token))
 }
