@@ -185,7 +185,7 @@ func TestAuthorityOpsSettingsWritesRequireReverify(t *testing.T) {
 		"csrf_token": {csrfToken}, "key": {"serve.pairing"}, "value": {"false"},
 	}, cookie)
 	rejectedBody := readResponseBody(t, rejected)
-	resume := "/ui/ops/settings?key=serve.pairing&reverify=1"
+	resume := "/ui/ops/settings?key=serve.pairing&reverify=1&value=false"
 	wantRedirect := "/ui/reverify?next=" + url.QueryEscape(resume)
 	if rejected.StatusCode != http.StatusSeeOther || rejected.Header.Get("Location") != wantRedirect ||
 		ops.validateKey != "" || ops.setKey != "" {
@@ -199,6 +199,13 @@ func TestAuthorityOpsSettingsWritesRequireReverify(t *testing.T) {
 	reverified.Body.Close()
 	if reverified.StatusCode != http.StatusSeeOther || reverified.Header.Get("Location") != resume {
 		t.Fatalf("重新验证后应回到设置页，状态码=%d 跳转=%q", reverified.StatusCode, reverified.Header.Get("Location"))
+	}
+	resumedPage := authorityGet(t, handler, "127.0.0.1:7879", resume, cookie)
+	resumedBody := readResponseBody(t, resumedPage)
+	if resumedPage.StatusCode != http.StatusOK ||
+		!strings.Contains(resumedBody, `value="false"`) {
+		t.Fatalf("重新验证回跳后应预填提交的设置值，状态码=%d 页面：\n%s",
+			resumedPage.StatusCode, resumedBody)
 	}
 	allowed := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/ops/settings", url.Values{
 		"csrf_token": {csrfToken}, "key": {"serve.pairing"}, "value": {"false"},

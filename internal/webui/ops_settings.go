@@ -124,7 +124,13 @@ func (h *handler) handleOpsSettings(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "设置页只接受 GET 与 POST 请求。")
 		return
 	}
-	h.renderOpsSettings(w, r, http.StatusOK, OpsSettingForm{})
+	form := OpsSettingForm{}
+	values := r.URL.Query()
+	if values.Get("reverify") == "1" {
+		form.Key = values.Get("key")
+		form.Value = values.Get("value")
+	}
+	h.renderOpsSettings(w, r, http.StatusOK, form)
 }
 
 func (h *handler) handleOpsSettingsPost(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +139,8 @@ func (h *handler) handleOpsSettingsPost(w http.ResponseWriter, r *http.Request) 
 		h.renderError(w, r, http.StatusBadRequest, "保存设置失败", "缺少设置项键名。")
 		return
 	}
-	next := url.Values{"reverify": {"1"}, "key": {key}}
+	value := r.PostFormValue("value")
+	next := url.Values{"reverify": {"1"}, "key": {key}, "value": {value}}
 	if !h.requireRecentReverify(w, r, opsSettingsPath+"?"+next.Encode()) {
 		return
 	}
@@ -148,7 +155,6 @@ func (h *handler) handleOpsSettingsPost(w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, opsSettingsPath, http.StatusSeeOther)
 		return
 	}
-	value := r.PostFormValue("value")
 	if err := h.cfg.Ops.ValidateSetting(key, value); err != nil {
 		h.renderOpsSettings(w, r, http.StatusBadRequest, OpsSettingForm{
 			Key: key, Value: value, Error: err.Error(),
