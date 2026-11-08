@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
@@ -66,6 +67,15 @@ func seed(dir string) error {
 	}
 	if err := st.GrantServers(profileID, []string{webID}); err != nil {
 		return err
+	}
+	for i := 0; i < 120; i++ {
+		if err := st.WriteAudit(store.AuditRow{
+			TS: time.Now().Add(-time.Duration(i) * time.Minute), Action: "e2e.audit",
+			Command: fmt.Sprintf("浏览器测试审计记录 %d", i+1), Status: "ok",
+			Source: store.AuditSourceCLI,
+		}); err != nil {
+			return err
+		}
 	}
 	return roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: true})
 }
