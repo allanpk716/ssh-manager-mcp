@@ -117,6 +117,8 @@ type capabilities struct {
 	CanWrite bool
 	// ReadOnlyNotice 非空时在页头下方显示只读指引；单机角色为空串。
 	ReadOnlyNotice string
+	// ShowAuthorityActions 控制权威端页头的会话与口令入口。
+	ShowAuthorityActions bool
 }
 
 // capabilitiesForRole 按构造时声明的本机角色推导页面能力开关。
@@ -129,7 +131,7 @@ func capabilitiesForRole(role Role) capabilities {
 		}
 	}
 	if role == RoleServer {
-		return capabilities{RoleLabel: "权威端", CanWrite: true}
+		return capabilities{RoleLabel: "权威端", CanWrite: true, ShowAuthorityActions: true}
 	}
 	return capabilities{RoleLabel: "单机", CanWrite: true}
 }

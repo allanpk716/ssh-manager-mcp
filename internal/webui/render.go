@@ -27,6 +27,7 @@ type pageData struct {
 	Caps                   capabilities
 	VersionHint            string
 	CSRFToken              string
+	Authenticated          bool
 	Servers                []ServerRow
 	ErrorTitle             string
 	ErrorMessage           string
@@ -45,6 +46,7 @@ func (h *handler) renderPage(w http.ResponseWriter, r *http.Request, status int,
 	data.VersionHint = h.cfg.versionHint()
 	if sess := h.currentSession(r); sess != nil {
 		data.CSRFToken = sess.csrf
+		data.Authenticated = true
 	}
 	h.writePage(w, r, status, page, data)
 }

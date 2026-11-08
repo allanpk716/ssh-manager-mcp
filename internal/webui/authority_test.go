@@ -228,6 +228,237 @@ func authorityLoginPage(t *testing.T, handler http.Handler, host string) *http.R
 	return rec.Result()
 }
 
+func authoritySuccessfulLogin(t *testing.T, handler http.Handler, host, password string) *http.Cookie {
+	t.Helper()
+	page := authorityLoginPage(t, handler, host)
+	cookies := page.Cookies()
+	page.Body.Close()
+	resp := authorityLoginPOST(t, handler, host, password, cookies...)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("登录状态码 = %d，应为 303", resp.StatusCode)
+	}
+	for _, cookie := range resp.Cookies() {
+		if cookie.Name == authoritySessionCookieName {
+			return cookie
+		}
+	}
+	t.Fatal("登录响应缺少会话 cookie")
+	return nil
+}
+
+func authorityGet(t *testing.T, handler http.Handler, host, target string, cookie *http.Cookie) *http.Response {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.Host = host
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec.Result()
+}
+
+func TestAuthoritySessionSlidesAndGenerationInvalidates(t *testing.T) {
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
+	now := time.Unix(1800000000, 0)
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: &stubServerSource{rows: []ServerRow{{Name: "服务器"}}}, Auth: auth,
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("构造权威端 Web UI 失败：%v", err)
+	}
+	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+
+	now = now.Add(11 * time.Hour)
+	resp := authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("11 小时后的会话状态码 = %d，应为 200", resp.StatusCode)
+	}
+	now = now.Add(11 * time.Hour)
+	resp = authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("滑动后续 11 小时后的会话状态码 = %d，应为 200", resp.StatusCode)
+	}
+	now = now.Add(12 * time.Hour)
+	resp = authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != loginPath {
+		t.Fatalf("超过 12 小时未活动应回登录页，状态码=%d 跳转=%q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	cookie = authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+	auth.generation++
+	resp = authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != loginPath {
+		t.Fatalf("会话代变化后既有会话应失效，状态码=%d 跳转=%q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+func TestAuthorityHeaderAndLogoutActions(t *testing.T) {
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
+	now := time.Unix(1800000000, 0)
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: &stubServerSource{rows: []ServerRow{{Name: "服务器"}}}, Auth: auth,
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("构造权威端 Web UI 失败：%v", err)
+	}
+	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+
+	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+	pageBody, _ := io.ReadAll(page.Body)
+	page.Body.Close()
+	for _, want := range []string{"权威端", "注销全部会话", "修改口令", "注销"} {
+		if !strings.Contains(string(pageBody), want) {
+			t.Fatalf("权威端页头应包含 %q：\n%s", want, pageBody)
+		}
+	}
+	match := regexp.MustCompile(`<meta name="csrf-token" content="([^"]+)"`).FindStringSubmatch(string(pageBody))
+	if match == nil {
+		t.Fatalf("服务器列表页应包含防跨站请求伪造令牌：\n%s", pageBody)
+	}
+
+	logout := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/logout", url.Values{
+		"csrf_token": {match[1]},
+	}, cookie)
+	logout.Body.Close()
+	if logout.StatusCode != http.StatusSeeOther || logout.Header.Get("Location") != loginPath {
+		t.Fatalf("注销状态码=%d 跳转=%q，应为 303 与登录页", logout.StatusCode, logout.Header.Get("Location"))
+	}
+	if len(logout.Cookies()) == 0 || logout.Cookies()[0].Value != "" {
+		t.Fatalf("注销应清除会话 cookie：%v", logout.Cookies())
+	}
+	afterLogout := authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+	afterLogout.Body.Close()
+	if afterLogout.StatusCode != http.StatusSeeOther {
+		t.Fatalf("注销后的会话状态码 = %d，应为 303", afterLogout.StatusCode)
+	}
+
+	cookie = authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+	otherCookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+	page = authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+	pageBody, _ = io.ReadAll(page.Body)
+	page.Body.Close()
+	match = regexp.MustCompile(`<meta name="csrf-token" content="([^"]+)"`).FindStringSubmatch(string(pageBody))
+	if match == nil {
+		t.Fatalf("服务器列表页应包含防跨站请求伪造令牌：\n%s", pageBody)
+	}
+	logoutAll := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/logout-all", url.Values{
+		"csrf_token": {match[1]},
+	}, cookie)
+	logoutAll.Body.Close()
+	if logoutAll.StatusCode != http.StatusSeeOther || logoutAll.Header.Get("Location") != loginPath {
+		t.Fatalf("注销全部会话状态码=%d 跳转=%q，应为 303 与登录页", logoutAll.StatusCode, logoutAll.Header.Get("Location"))
+	}
+	otherPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/", otherCookie)
+	otherPage.Body.Close()
+	if otherPage.StatusCode != http.StatusSeeOther {
+		t.Fatalf("另一个会话也应被注销，状态码=%d，应为 303", otherPage.StatusCode)
+	}
+	var logoutCount, logoutAllCount int
+	for _, event := range auth.audits {
+		switch event.Action {
+		case "web.logout":
+			logoutCount++
+		case "web.logout.all":
+			logoutAllCount++
+		}
+	}
+	if logoutCount != 1 || logoutAllCount != 1 {
+		t.Fatalf("注销审计数量不正确：单次=%d 全部=%d，应为 1 与 1", logoutCount, logoutAllCount)
+	}
+}
+
+func authorityPostForm(t *testing.T, handler http.Handler, host, target string, form url.Values, cookie *http.Cookie) *http.Response {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	req.Host = host
+	req.RemoteAddr = "198.51.100.9:45678"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://"+host)
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec.Result()
+}
+
+func TestAuthorityHostOriginAndCSRFGuards(t *testing.T) {
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password", now: time.Unix(1800000000, 0)}
+	handler, control, err := NewAuthority(Config{
+		Role: RoleServer, Servers: &stubServerSource{}, Auth: auth,
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time { return auth.now },
+	})
+	if err != nil {
+		t.Fatalf("构造权威端 Web UI 失败：%v", err)
+	}
+
+	allowed := authorityLoginPage(t, handler, "127.0.0.1:7879")
+	allowed.Body.Close()
+	if allowed.StatusCode != http.StatusOK {
+		t.Fatalf("允许的 Host 状态码 = %d，应为 200", allowed.StatusCode)
+	}
+	rejectedHost := authorityLoginPage(t, handler, "192.0.2.20:7879")
+	rejectedHost.Body.Close()
+	if rejectedHost.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("未监听地址的 Host 状态码 = %d，应为 421", rejectedHost.StatusCode)
+	}
+	control.SetAllowedHosts([]string{"192.0.2.20"})
+	allowed = authorityLoginPage(t, handler, "192.0.2.20:7879")
+	allowed.Body.Close()
+	if allowed.StatusCode != http.StatusOK {
+		t.Fatalf("监听管理者更新后的 Host 状态码 = %d，应为 200", allowed.StatusCode)
+	}
+	control.SetAllowedHosts([]string{"127.0.0.1"})
+
+	page := authorityLoginPage(t, handler, "127.0.0.1:7879")
+	cookies := page.Cookies()
+	page.Body.Close()
+	form := url.Values{"password": {"correct-password"}}
+	for _, cookie := range cookies {
+		if cookie.Name == authorityCSRFCookieName {
+			form.Set("csrf_token", cookie.Value)
+		}
+	}
+	missingOrigin := httptest.NewRequest(http.MethodPost, "/ui/login", strings.NewReader(form.Encode()))
+	missingOrigin.Host = "127.0.0.1:7879"
+	missingOrigin.RemoteAddr = "198.51.100.9:45678"
+	missingOrigin.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, cookie := range cookies {
+		missingOrigin.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, missingOrigin)
+	missingOriginResp := rec.Result()
+	missingOriginResp.Body.Close()
+	if missingOriginResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("缺少 Origin 的登录状态码 = %d，应为 403", missingOriginResp.StatusCode)
+	}
+
+	form.Del("csrf_token")
+	missingToken := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/login", form, nil)
+	missingToken.Body.Close()
+	if missingToken.StatusCode != http.StatusForbidden {
+		t.Fatalf("缺少防跨站请求伪造令牌的登录状态码 = %d，应为 403", missingToken.StatusCode)
+	}
+	if len(auth.audits) != 0 || len(auth.failures) != 0 {
+		t.Fatalf("写请求防护拒绝不应进入口令校验：%+v %+v", auth.audits, auth.failures)
+	}
+}
+
 func TestAuthorityLoginFailuresLockIPAndDelayAllRequests(t *testing.T) {
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password", now: time.Unix(1800000000, 0)}
 	var sleeps []time.Duration

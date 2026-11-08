@@ -75,6 +75,8 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	}
 	h.mux.HandleFunc("/ui/assets/", h.handleAsset)
 	h.mux.HandleFunc("/ui/login", h.handleAuthorityLogin)
+	h.mux.HandleFunc("/ui/logout", h.handleAuthorityLogout)
+	h.mux.HandleFunc("/ui/logout-all", h.handleAuthorityLogoutAll)
 	h.mux.HandleFunc("/ui/", h.handleAuthorityRoot)
 	return h, h, nil
 }
@@ -245,6 +247,45 @@ func (h *handler) renderLoginPageWithError(w http.ResponseWriter, r *http.Reques
 
 func (h *handler) writeAuthorityAudit(ip, action, status string, detail map[string]string) {
 	_ = h.cfg.Auth.WriteAudit(AuditEvent{Action: action, Status: status, SourceIP: ip, Detail: detail})
+}
+
+func (h *handler) clearAuthoritySessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name: authoritySessionCookieName, Value: "", Path: "/",
+		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1,
+	})
+}
+
+func (h *handler) handleAuthorityLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "注销只接受 POST 请求。")
+		return
+	}
+	if cookie, err := r.Cookie(authoritySessionCookieName); err == nil {
+		h.mu.Lock()
+		delete(h.sessions, cookie.Value)
+		h.mu.Unlock()
+	}
+	h.clearAuthoritySessionCookie(w)
+	h.writeAuthorityAudit(remoteIP(r), "web.logout", "ok", nil)
+	http.Redirect(w, r, loginPath, http.StatusSeeOther)
+}
+
+func (h *handler) handleAuthorityLogoutAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "注销全部会话只接受 POST 请求。")
+		return
+	}
+	if _, err := h.cfg.Auth.LogoutAllSessions(); err != nil {
+		h.renderError(w, r, http.StatusInternalServerError, "注销全部会话失败", "注销全部会话失败，请稍后重试。")
+		return
+	}
+	h.mu.Lock()
+	h.sessions = map[string]*session{}
+	h.mu.Unlock()
+	h.clearAuthoritySessionCookie(w)
+	h.writeAuthorityAudit(remoteIP(r), "web.logout.all", "ok", nil)
+	http.Redirect(w, r, loginPath, http.StatusSeeOther)
 }
 
 func remoteIP(r *http.Request) string {
