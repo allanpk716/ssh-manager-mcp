@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"ssh-manager-mcp/internal/access"
@@ -64,9 +65,23 @@ func localInterfaceAddresses() ([]string, error) {
 	return out, nil
 }
 
+// servePortFromAddr 从主监听地址里取端口；解析失败或端口为 0 时返回 0，
+// 由 Web UI 按默认端口兜底。
+func servePortFromAddr(addr string) int {
+	_, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port <= 0 || port > 65535 {
+		return 0
+	}
+	return port
+}
+
 // startWebUIListenerManager 构造权威端 Web UI Handler 与监听管理者，并同步
 // 执行第一次地址推导。绑定失败由管理者记录并重试，不阻断主监听。
-func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tlsKey, fingerprint string) (*webUIListenerManager, error) {
+func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tlsKey, fingerprint, addr string) (*webUIListenerManager, error) {
 	port, manualListen, err := ReadWebUIConfig(st)
 	if err != nil {
 		return nil, err
@@ -82,11 +97,16 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 	}
 	handler, control, err := webui.NewAuthority(webui.Config{
 		Role: webui.RoleServer, Port: port,
-		Servers:                serveWebUIServerSource{store: st},
-		Access:                 webuiaccess.FromManager(access.New(st)),
+		Servers: serveWebUIServerSource{store: st},
+		Access: webuiaccess.FromManager(access.New(st, access.WithServeCertFingerprint(func() (string, error) {
+			return fingerprint, nil
+		}))),
 		Auth:                   vault.NewWebUIAuthStore(st),
 		CertificateFingerprint: fingerprint,
 		AllowedHosts:           plan.Addresses,
+		// 设备码拉取命令要指向权威端主监听（浏览器访问的是 Web UI 自己
+		// 的端口），这里把主监听端口交给页面。
+		ServePort: servePortFromAddr(addr),
 	})
 	if err != nil {
 		return nil, err

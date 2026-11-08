@@ -689,7 +689,7 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 
 	var webUIListeners *webUIListenerManager
 	if currentMachineIsServer() {
-		webUIListeners, err = startWebUIListenerManager(ctx, st, tlsCert, tlsKey, serveCertFingerprint)
+		webUIListeners, err = startWebUIListenerManager(ctx, st, tlsCert, tlsKey, serveCertFingerprint, addr)
 		if err != nil {
 			return fmt.Errorf("serve web UI: %w", err)
 		}
