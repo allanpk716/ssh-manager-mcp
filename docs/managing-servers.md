@@ -310,10 +310,9 @@ sshmgr servers rm <name-or-id>
 - 删了就没了，且这操作**没有二次确认**——删前确认名字对。建议先 `servers ls` 看一眼。
 - 凭据字节（`credentials` 表里那条）不一定会被级联删掉，但它们仍是加密的、且已不被任何 server 引用——不影响安全。
 
-> 目前 **没有** “把某台 server 从某个 profile 单独摘掉”的 CLI（`profiles` 只有 `add` / `ls` / `grant`）。如果你需要“某 agent 不再能访问某台机器”，最干净的做法是：
-> - 要么把那台机器单独 grant 给一个新 profile，把 agent 换绑过去；
-> - 要么直接 `servers rm`（如果整台机器都不用了）；
-> - 要么对该 agent 的 project 做 `rotate` / `revoke`（见 [agent-access.md](./agent-access.md)）。
+要把某台 server 从某个 profile 单独摘掉，用 `profiles revoke`（见下一节）。其他可选做法：
+- 整台机器都不用了，直接 `servers rm`（授权关系会级联清理）；
+- 整个项目要换凭据或停用，对该 agent 的 project 做 `rotate` / `revoke`（见 [agent-access.md](./agent-access.md)）。
 
 ---
 
@@ -323,10 +322,13 @@ sshmgr servers rm <name-or-id>
 sshmgr profiles add <名字>                      # 建一个空 profile
 sshmgr profiles ls                              # 每个 profile 有几台 server
 sshmgr profiles grant <profile> <server1> [server2 ...]   # 把 server 加进 profile（可多个）
+sshmgr profiles revoke <profile> <server1> [server2 ...]  # 从 profile 摘掉 server（可多个）
 ```
 
 - `grant` 是**追加**且**幂等**（重复 grant 同一台不会报错，忽略）。
-- 授权一台不存在的 server 会 fail-closed（整批授权回滚）。
+- `revoke` 的 server 同样按 **name 或 id** 解析；本来就没授权的会提示「未授权，跳过」，不算错误，脚本可以放心重复跑。
+- 授权或撤销一台不存在的 server 都会 fail-closed（整批回滚）。
+- 授予写 `profile.grant`、撤销写 `profile.revoke` 审计行（摘要含 profile 名与 server 名）。
 
 典型编排（dev / staging / prod 三套，给三个不同 agent）：
 

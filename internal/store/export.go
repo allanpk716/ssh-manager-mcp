@@ -437,7 +437,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	// projects — RAW SQL for token_hash/salt (ListProjects/GetProject omit them)
-	rj, err := s.db.Query(`SELECT id,name,token_hash,token_salt,token_prefix,profile_id,status,created_at,updated_at FROM projects ORDER BY id`)
+	rj, err := s.db.Query(`SELECT id,name,token_hash,token_salt,token_prefix,COALESCE(profile_id,''),status,created_at,updated_at FROM projects ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1119,8 +1119,10 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 
 	// 5. projects — hash/salt/prefix VERBATIM (original plaintext token keeps validating)
 	for _, p := range snap.Projects {
+		// 空的 profile 绑定（profile 删除后留下的已吊销项目令牌）按
+		// NULL 落库；空字符串过不了外部键。
 		if _, err := tx.Exec(`INSERT INTO projects(id,name,token_hash,token_salt,token_prefix,profile_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-			p.ID, p.Name, p.TokenHash, p.TokenSalt, p.TokenPrefix, p.ProfileID, p.Status, p.CreatedAt, p.UpdatedAt); err != nil {
+			p.ID, p.Name, p.TokenHash, p.TokenSalt, p.TokenPrefix, nullableString(p.ProfileID), p.Status, p.CreatedAt, p.UpdatedAt); err != nil {
 			return fmt.Errorf("insert project %s: %w", p.ID, err)
 		}
 	}

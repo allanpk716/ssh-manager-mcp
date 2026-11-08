@@ -426,6 +426,31 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "servers", "revision", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	// 规格 #144（票 #145）：projects.profile_id 改为可空。删除 profile 时，
+	// 已吊销项目令牌的绑定和已吊销设备码一样只是惰性绑定：置空后随
+	// profile 一并退场，不再阻塞删除；未吊销项目令牌仍阻塞。SQLite 无法
+	// 原地放宽 NOT NULL，走与 servers.credential_id 相同的受守卫表重建。
+	projectsExists, err := tableExists(db, "projects")
+	if err != nil {
+		return err
+	}
+	if projectsExists {
+		profileIDPresent, err := columnPresent(db, "projects", "profile_id")
+		if err != nil {
+			return err
+		}
+		profileNullable := false
+		if profileIDPresent {
+			if profileNullable, err = columnNullable(db, "projects", "profile_id"); err != nil {
+				return err
+			}
+		}
+		if profileIDPresent && !profileNullable {
+			if err := rebuildProjectsProfileIDNullable(db); err != nil {
+				return err
+			}
+		}
+	}
 	// Plan 20 C0: servers.credential_id becomes nullable (credential-less
 	// servers — e.g. ssh-config imports of hosts without IdentityFile).
 	// SQLite can't relax NOT NULL in place, so this is a guarded table rebuild.
@@ -675,6 +700,75 @@ SELECT id,name,host,port,user,auth_method,credential_id,sudo_credential_id,tags,
 	return tx.Commit()
 }
 
+// columnPresent 报告 table.column 是否存在（columnNullable 把「列不存在」
+// 与「列存在但不可空」折叠成同一个返回值，重建迁移需要区分两者）。
+func columnPresent(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// rebuildProjectsProfileIDNullable 在一个事务里重建 projects 表，唯一变化
+// 是 profile_id 去掉 NOT NULL（规格 #144 票 #145：已吊销项目令牌的绑定可
+// 置空）。外部键关闭与恢复、连接固定等事项与 rebuildServersNullable 相
+// 同：DROP TABLE 的隐式删除在开启外部键时会触发子表级联或约束失败。
+func rebuildProjectsProfileIDNullable(db *sql.DB) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	defer func() { _, _ = conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`) }()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmts := []string{
+		`CREATE TABLE projects_new (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  token_hash BLOB NOT NULL,
+  token_salt BLOB NOT NULL,
+  token_prefix TEXT NOT NULL,
+  profile_id TEXT REFERENCES profiles(id),
+  status TEXT NOT NULL DEFAULT 'active',
+  pair_generated INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)`,
+		`INSERT INTO projects_new (id,name,token_hash,token_salt,token_prefix,profile_id,status,pair_generated,created_at,updated_at)
+SELECT id,name,token_hash,token_salt,token_prefix,profile_id,status,pair_generated,created_at,updated_at FROM projects`,
+		`DROP TABLE projects`,
+		`ALTER TABLE projects_new RENAME TO projects`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("rebuild projects: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
 // addColumnIfMissing adds a column to a table iff the table exists and lacks the column
 // (idempotent — safe to run every Open). On a fresh DB migrate() runs BEFORE initSchema,
 // so the table may not exist yet; in that case skip (initSchema will create it WITH the
@@ -816,7 +910,7 @@ CREATE TABLE IF NOT EXISTS projects (
   token_hash BLOB NOT NULL,
   token_salt BLOB NOT NULL,
   token_prefix TEXT NOT NULL,
-  profile_id TEXT NOT NULL REFERENCES profiles(id),
+  profile_id TEXT REFERENCES profiles(id),
   status TEXT NOT NULL DEFAULT 'active',
   pair_generated INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,

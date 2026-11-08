@@ -545,7 +545,7 @@ func (s *Store) MintPairingCredentials(tx *sql.Tx, name, profile string, replace
 // absent). Reuses the shared owner-facing scan — same column set as GetProjectByName.
 func lookupPairProjectTx(tx *sql.Tx, name string) (*models.Project, error) {
 	return scanProjectRow(tx.QueryRow(
-		`SELECT id,name,token_prefix,profile_id,status,pair_generated FROM projects WHERE name=?`, name,
+		`SELECT id,name,token_prefix,COALESCE(profile_id,''),status,pair_generated FROM projects WHERE name=?`, name,
 	))
 }
 
