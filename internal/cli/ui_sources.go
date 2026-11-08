@@ -8,9 +8,11 @@ import (
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/updater"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
+	"ssh-manager-mcp/internal/webuiops"
 )
 
 // standaloneUIServerSource 是单机角色的 Web UI 服务器列表来源：每次请求重新
@@ -18,7 +20,7 @@ import (
 type standaloneUIServerSource struct{}
 
 // Servers 读取本机 vault 中的全部服务器并转成 Web UI 展示行。
-func (standaloneUIServerSource) Servers() ([]webui.ServerRow, error) {
+func (standaloneUIServerSource) Servers(string) ([]webui.ServerRow, error) {
 	st, err := openUnlockedStore()
 	if err != nil {
 		return nil, err
@@ -47,15 +49,25 @@ func standaloneUIAccessStore() webui.AccessStore {
 	})
 }
 
-// clientUIServerSource 是客户端角色的 Web UI 服务器列表来源：读取指定实例的
-// 本地加密快照，实例由命令行按既有规则解析后传入。
-type clientUIServerSource struct {
-	instance string
+// standaloneUIOpsStore 给单机 Web UI 提供运维入口。每次读取重新打开本机
+// vault，请求结束后关闭，不长期持有存储句柄。
+func standaloneUIOpsStore() webui.OpsStore {
+	return webuiops.FromOpener(func() (*ops.Manager, func(), error) {
+		st, err := openUnlockedStore()
+		if err != nil {
+			return nil, nil, err
+		}
+		return ops.NewWithSettingInputs(st, ops.SettingInputsFromEnv()), func() { _ = st.Close() }, nil
+	})
 }
 
+// clientUIServerSource 是客户端角色的 Web UI 服务器列表来源：按每次请求传入
+// 的实例读取本地加密快照。
+type clientUIServerSource struct{}
+
 // Servers 读取当前实例本地快照中的服务器并转成 Web UI 展示行。
-func (s clientUIServerSource) Servers() ([]webui.ServerRow, error) {
-	snap, err := clientops.LoadCacheSnapshotFor(s.instance)
+func (clientUIServerSource) Servers(instance string) ([]webui.ServerRow, error) {
+	snap, err := clientops.LoadCacheSnapshotFor(instance)
 	if err != nil {
 		return nil, err
 	}

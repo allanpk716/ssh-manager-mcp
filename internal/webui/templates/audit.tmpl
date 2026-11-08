@@ -1,0 +1,73 @@
+{{define "content"}}
+<section class="audit-page">
+<h1>审计</h1>
+<form class="audit-filter" method="get" action="/ui/ops/audit" hx-get="/ui/ops/audit" hx-target="#audit-results" hx-swap="outerHTML" hx-push-url="true">
+<div>
+<label for="audit-since">时间下限</label>
+<input type="datetime-local" id="audit-since" name="since" value="{{.OpsAuditFilter.Since}}">
+</div>
+<div>
+<label for="audit-action">动作</label>
+<input type="text" id="audit-action" name="action" value="{{.OpsAuditFilter.Action}}">
+</div>
+<div>
+<label for="audit-server">服务器</label>
+<input type="text" id="audit-server" name="server" value="{{.OpsAuditFilter.Server}}">
+</div>
+<div>
+<label for="audit-project">项目</label>
+<input type="text" id="audit-project" name="project" value="{{.OpsAuditFilter.Project}}">
+</div>
+<div>
+<label for="audit-status">状态</label>
+<input type="text" id="audit-status" name="status" value="{{.OpsAuditFilter.Status}}">
+</div>
+<div>
+<label for="audit-source">来源</label>
+<select id="audit-source" name="source">
+<option value="">全部</option>
+<option value="cli"{{if eq .OpsAuditFilter.Source "cli"}} selected{{end}}>命令行</option>
+<option value="web_ui"{{if eq .OpsAuditFilter.Source "web_ui"}} selected{{end}}>Web UI</option>
+<option value="agent"{{if eq .OpsAuditFilter.Source "agent"}} selected{{end}}>agent</option>
+</select>
+</div>
+<div>
+<label for="audit-source-ip">来源地址</label>
+<input type="text" id="audit-source-ip" name="source_ip" value="{{.OpsAuditFilter.SourceIP}}">
+</div>
+<label class="audit-owner-choice"><input type="checkbox" name="owner" value="1"{{if .OpsAuditFilter.OwnerOnly}} checked{{end}}>仅 owner 动作</label>
+<button type="submit">查询</button>
+</form>
+<div id="audit-results">
+{{template "auditResults" .}}
+</div>
+</section>
+{{end}}
+{{define "auditResults"}}
+{{if .OpsAuditRows}}
+<table class="server-table audit-table">
+<thead>
+<tr><th scope="col">编号</th><th scope="col">时间</th><th scope="col">项目</th><th scope="col">服务器</th><th scope="col">动作</th><th scope="col">摘要</th><th scope="col">状态</th><th scope="col">来源</th><th scope="col">来源地址</th></tr>
+</thead>
+<tbody>
+{{range .OpsAuditRows}}
+<tr class="audit-row">
+<td>{{.ID}}</td>
+<td>{{.TS.Format "2006-01-02 15:04:05"}}</td>
+<td>{{.ProjectDisplay}}</td>
+<td>{{.ServerDisplay}}</td>
+<td>{{.Action}}</td>
+<td>{{.CommandDisplay}}</td>
+<td>{{.Status}}</td>
+<td>{{.SourceText}}</td>
+<td>{{if .SourceIP}}{{.SourceIP}}{{else}}—{{end}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="empty-list">没有符合条件的审计记录。</p>
+{{end}}
+{{if .OpsAuditHasMore}}
+<p class="audit-pagination"><a class="older-audit" href="{{.OpsAuditOlderPath}}" hx-get="{{.OpsAuditOlderPath}}" hx-target="#audit-results" hx-swap="outerHTML" hx-push-url="true">更早的记录</a></p>
+{{end}}
+{{end}}

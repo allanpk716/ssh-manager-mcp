@@ -95,6 +95,46 @@ func TestQueryAudit_LimitGate(t *testing.T) {
 	}
 }
 
+// TestQueryAudit_SourceAddressAndCursor: 来源、来源地址与编号游标共同支
+// 持 Web UI 审计页过滤和「更早的记录」翻页；返回编号供链接与 JSON 输出使用。
+func TestQueryAudit_SourceAddressAndCursor(t *testing.T) {
+	s := newTestStore(t)
+	writeAuditRows(t, s,
+		AuditRow{Action: "admin.login", Status: "ok", Source: AuditSourceWebUI, SourceIP: "192.0.2.10"},
+		AuditRow{Action: "profile.add", Status: "ok", Source: AuditSourceCLI},
+		AuditRow{Action: "exec", Status: "ok", Source: AuditSourceAgent},
+		AuditRow{Action: "admin.lockout", Status: "blocked", Source: AuditSourceWebUI, SourceIP: "198.51.100.20"},
+	)
+
+	rows, err := s.QueryAudit(AuditFilter{Source: AuditSourceWebUI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].Action != "admin.lockout" || rows[1].Action != "admin.login" {
+		t.Fatalf("来源过滤结果不符：%+v", rows)
+	}
+	cursor := rows[0].ID
+	rows, err = s.QueryAudit(AuditFilter{Source: AuditSourceWebUI, SourceIP: "192.0.2.10"})
+	if err != nil || len(rows) != 1 || rows[0].Action != "admin.login" {
+		t.Fatalf("来源与来源地址组合过滤结果不符：%v %+v", err, rows)
+	}
+	rows, err = s.QueryAudit(AuditFilter{BeforeID: cursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 || rows[0].Action != "exec" {
+		t.Fatalf("编号小于游标的翻页结果不符：%+v", rows)
+	}
+	for _, row := range rows {
+		if row.ID >= cursor {
+			t.Fatalf("翻页结果包含不低于游标的编号：%+v", row)
+		}
+	}
+	if got := rows[0].JSONMap()["id"]; got != rows[0].ID {
+		t.Fatalf("JSON 输出编号 = %v，应为 %d", got, rows[0].ID)
+	}
+}
+
 // TestAuditRow_JSONMap_GoldenWithSidecar: JSONMap 是 sidecar 与 `audit --json`
 // 的唯一构造(spec §3)——带着恶劣 payload 走 sidecar 路径,要求逐字节等于
 // json.Marshal(JSONMap)(spec §6 矩阵 7 的 store 侧)。

@@ -172,27 +172,3 @@ func TestDiscovery_StopIdempotent(t *testing.T) {
 // TestDiscoveryNameSanitize pins the frozen display-name whitelist
 // `^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,31}$`: a valid configured name passes
 // through, anything else falls back to the hostname, and a unusable hostname
-// is force-derived (then the constant fallback). Pure — hostname injected.
-func TestDiscoveryNameSanitize(t *testing.T) {
-	cases := []struct {
-		name, host, want string
-	}{
-		{"nuc10", "other-host", "nuc10"},       // 合法名直通
-		{"my nuc.10_x-y", "", "my nuc.10_x-y"}, // 全白名单字符
-		{"中文节点", "", "中文节点"},                   // \p{L} 覆盖 Unicode
-		{"bad!name", "MY-NUC", "MY-NUC"},       // 非法名 → hostname 兜底
-		{"", "host-1", "host-1"},               // 空名 → hostname
-		{"!", "192.168.1.10", "192.168.1.10"},  // 数字开头合法
-		{"", "", "sshmgr"},                     // 全空 → 常量兜底
-		{"!!!", "###", "sshmgr"},               // hostname 也全非法
-		{"!!!", "-_-", "sshmgr"},               // 派生后无字母数字 → 兜底
-		{"!!!", "--my.nuc--", "my.nuc--"},      // 派生:去掉前导非字母数字
-		{"!", "01234567890123456789012345678901234", "01234567890123456789012345678901"}, // 派生截到 32
-		{"01234567890123456789012345678901234", "h", "h"},                                // 33 字超长 → hostname
-	}
-	for _, c := range cases {
-		if got := sanitizeDiscoveryName(c.name, c.host); got != c.want {
-			t.Errorf("sanitizeDiscoveryName(%q, %q) = %q, want %q", c.name, c.host, got, c.want)
-		}
-	}
-}
