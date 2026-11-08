@@ -40,7 +40,7 @@ func DeviceCodePullCommand(serveURL, code, fingerprint string) string {
 }
 
 // ListDeviceCodes 按名字顺序列出全部设备码（含已撤销的），并解析各自绑定
-// 的 profile 名字；未绑定的旧设备码保留空标识符与空名字。
+// 的 profile 名字；未绑定的旧设备码 profile 名字为空。
 func (m *Manager) ListDeviceCodes() ([]DeviceCodeSummary, error) {
 	devices, err := m.st.ListCacheTokens()
 	if err != nil {

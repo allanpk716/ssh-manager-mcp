@@ -324,15 +324,16 @@ func TestRunServeWebUIDeviceCodeIssueUsesServePortAndFingerprint(t *testing.T) {
 // postAuthorityForm 提交带来源头的表单：权威端 Web UI 的写校验要求
 // Origin 与本次监听一致，与浏览器表单提交的请求形状保持相同。
 func postAuthorityForm(client *http.Client, target string, form url.Values) (*http.Response, error) {
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return nil, err
+	}
 	request, err := http.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	request.Header.Set("Origin", strings.TrimSuffix(target, "/ui/login"))
-	if strings.HasSuffix(target, "/ui/access/device-codes") {
-		request.Header.Set("Origin", target)
-	}
+	request.Header.Set("Origin", parsed.Scheme+"://"+parsed.Host)
 	return client.Do(request)
 }
 
