@@ -849,6 +849,12 @@ CREATE TABLE IF NOT EXISTS audit_log (
   source TEXT,
   source_ip TEXT
 );
+CREATE TABLE IF NOT EXISTS web_admin_auth (
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+  password_hash TEXT NOT NULL,
+  session_generation INTEGER NOT NULL,
+  login_state TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS host_keys (
   host_port TEXT PRIMARY KEY,
   key_blob BLOB NOT NULL,
