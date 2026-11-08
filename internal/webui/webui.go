@@ -62,7 +62,8 @@ type Config struct {
 	// 按默认端口兜底。单机与客户端不使用这个字段。
 	ServePort int
 	// ClientInstance 是客户端角色本次启动读取的客户端缓存实例名；空串表示
-	// 默认实例。会话内切换实例由后续客户端页改为按请求传入。
+	// 默认实例。客户端升级页与本机审计页都先按它读取，会话内切换实例由后
+	// 续客户端页改为按请求传入。
 	ClientInstance         string
 	Now                    func() time.Time
 	Auth                   AuthStore
@@ -169,7 +170,7 @@ func capabilitiesForRole(role Role) capabilities {
 			ReadOnlyNotice:    "这里只读，修改需到权威端 Web UI 去做。",
 			ShowAccessArea:    true,
 			CanManageProfiles: false,
-			ShowOpsArea:       true, CanQueryClientAudit: true,
+			ShowOpsArea:       true, CanUpgradeBinary: true, CanQueryClientAudit: true,
 		}
 	}
 	if role == RoleServer {

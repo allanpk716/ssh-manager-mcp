@@ -99,6 +99,10 @@ type OpsStore interface {
 	// QueryClientAudit 读取客户端实例目录中的本机审计日志文件。instance 空串
 	// 表示默认实例；后续客户端页会把这里改成按请求传入会话中的实例。
 	QueryClientAudit(instance string, limit int) ([]OpsAuditRow, error)
+	// CheckUpdate 与 ApplyUpdate 的 instance 语义同上；升级服务按传入实例读
+	// 取推荐版本。
+	CheckUpdate(instance string) (OpsUpdateStatus, error)
+	ApplyUpdate(instance, sourceIP string) (OpsUpdateApplyResult, error)
 }
 
 // OpsAuditFilterView 保存过滤表单的当前值，服务器渲染时原样回填。
@@ -128,7 +132,12 @@ func (h *handler) registerOpsRoutes() {
 		h.caps.ShowOpsArea = false
 		h.caps.CanQueryVaultAudit = false
 		h.caps.CanQueryClientAudit = false
+		h.caps.CanUpgradeBinary = false
 		return
+	}
+	// 回环升级页本票只接单机与客户端；权威端的两步升级由后续票接入。
+	if h.caps.CanUpgradeBinary && h.cfg.Role != RoleServer {
+		h.mux.HandleFunc(opsUpdatePath, h.handleOpsUpdate)
 	}
 	if h.cfg.Role == RoleClient {
 		if h.caps.CanQueryClientAudit {
@@ -151,12 +160,20 @@ func (h *handler) handleOpsRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	target := opsAuditPath
 	if h.cfg.Role == RoleClient {
-		if !h.caps.CanQueryClientAudit {
+		switch {
+		case h.caps.CanQueryClientAudit:
+			target = opsClientAuditPath
+		case h.caps.CanUpgradeBinary:
+			target = opsUpdatePath
+		default:
 			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 			return
 		}
-		target = opsClientAuditPath
 	} else if !h.caps.CanQueryVaultAudit {
+		if h.caps.CanUpgradeBinary && h.cfg.Role != RoleServer {
+			http.Redirect(w, r, opsUpdatePath, http.StatusSeeOther)
+			return
+		}
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}

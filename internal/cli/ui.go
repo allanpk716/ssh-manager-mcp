@@ -65,7 +65,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		webRole = webui.RoleStandalone
 		servers = standaloneUIServerSource{}
 		accessSource = standaloneUIAccessStore()
-		opsSource = standaloneUIOpsStore()
+		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
 	case launch.Kind == roles.LaunchClient && !launch.ResumeSetup:
 		resolvedInstance, err = resolveClientCacheInstance(instance)
 		if err != nil {
@@ -73,7 +73,8 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		}
 		webRole = webui.RoleClient
 		servers = clientUIServerSource{instance: resolvedInstance}
-		opsSource = webuiops.ClientAuditStore()
+		opsSource = webuiops.ClientAuditStoreWithUpdates(
+			uiUpdateService(webui.RoleClient, resolvedInstance))
 	case launch.Kind == roles.LaunchBroker && launch.Role == roles.RoleServer:
 		st, err := openUnlockedStore()
 		if err != nil {

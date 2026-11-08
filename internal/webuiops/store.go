@@ -3,6 +3,8 @@
 package webuiops
 
 import (
+	"context"
+
 	"errors"
 
 	"ssh-manager-mcp/internal/ops"
@@ -11,15 +13,31 @@ import (
 
 type managerStore struct {
 	manager *ops.Manager
+	updates *ops.UpdateService
 }
 
 type openerStore struct {
-	open func() (*ops.Manager, func(), error)
+	open    func() (*ops.Manager, func(), error)
+	updates *ops.UpdateService
 }
 
 // FromManager 把一个已挂在解锁存储上的运维模块适配给 Web UI。
 func FromManager(manager *ops.Manager) webui.OpsStore {
 	return managerStore{manager: manager}
+}
+
+// errUpdatesNotWired 表示适配器未挂升级服务；权威端升级页接入前不会走到。
+var errUpdatesNotWired = errors.New("升级服务未接线")
+
+// FromManagerWithUpdates 在运维模块上挂升级服务；升级服务由调用方在进程内
+// 共享，保证同一时间只允许一个升级。
+func FromManagerWithUpdates(manager *ops.Manager, updates *ops.UpdateService) webui.OpsStore {
+	return managerStore{manager: manager, updates: updates}
+}
+
+// FromOpenerWithUpdates 组合按请求打开存储的运维模块与进程内共享的升级服务。
+func FromOpenerWithUpdates(open func() (*ops.Manager, func(), error), updates *ops.UpdateService) webui.OpsStore {
+	return openerStore{open: open, updates: updates}
 }
 
 // FromOpener 每次页面请求重新打开存储并挂上运维模块，调用结束后关闭。单
@@ -30,11 +48,19 @@ func FromOpener(open func() (*ops.Manager, func(), error)) webui.OpsStore {
 
 // clientAuditStore 只提供客户端本机审计读取，给客户端角色的回环 Web UI 使
 // 用；权威 vault 审计在客户端角色没有入口，调用时返回明确错误。
-type clientAuditStore struct{}
+type clientAuditStore struct {
+	updates *ops.UpdateService
+}
 
 // ClientAuditStore 返回客户端角色的运维窄接口适配器。
 func ClientAuditStore() webui.OpsStore {
 	return clientAuditStore{}
+}
+
+// ClientAuditStoreWithUpdates 在客户端适配器上挂升级服务；客户端本机审计
+// 仍读实例审计日志文件，升级按进程内共享的服务执行。
+func ClientAuditStoreWithUpdates(updates *ops.UpdateService) webui.OpsStore {
+	return clientAuditStore{updates: updates}
 }
 
 func (clientAuditStore) QueryAudit(query webui.OpsAuditQuery) ([]webui.OpsAuditRow, error) {
@@ -63,6 +89,32 @@ func (clientAuditStore) UnsetSetting(key string, source webui.OpsWriteSource) er
 
 func (clientAuditStore) ReadRole() (webui.OpsRole, error) {
 	return webui.OpsRole{}, errors.New("客户端角色没有设置管理入口")
+}
+
+func (s clientAuditStore) CheckUpdate(instance string) (webui.OpsUpdateStatus, error) {
+	if s.updates == nil {
+		return webui.OpsUpdateStatus{}, errUpdatesNotWired
+	}
+	status, err := s.updates.Check(context.Background(), instance)
+	if err != nil {
+		return webui.OpsUpdateStatus{}, err
+	}
+	return webuiUpdateStatus(status), nil
+}
+
+func (s clientAuditStore) ApplyUpdate(instance, sourceIP string) (webui.OpsUpdateApplyResult, error) {
+	if s.updates == nil {
+		return webui.OpsUpdateApplyResult{}, errUpdatesNotWired
+	}
+	result, err := s.updates.Apply(context.Background(), ops.UpdateApplyRequest{
+		Instance: instance, Source: ops.WebUISource(sourceIP),
+	})
+	if err != nil {
+		return webui.OpsUpdateApplyResult{}, webuiUpdateError(err)
+	}
+	return webui.OpsUpdateApplyResult{
+		OldVersion: result.OldVersion, NewVersion: result.NewVersion, Warning: result.Warning,
+	}, nil
 }
 
 func (s managerStore) QueryClientAudit(instance string, limit int) ([]webui.OpsAuditRow, error) {
@@ -224,4 +276,72 @@ func opsAuditQuery(query webui.OpsAuditQuery) ops.AuditQuery {
 		Source: query.Source, SourceIP: query.SourceIP, BeforeID: query.BeforeID,
 		Limit: query.Limit,
 	}
+}
+
+func (s managerStore) CheckUpdate(instance string) (webui.OpsUpdateStatus, error) {
+	if s.updates == nil {
+		return webui.OpsUpdateStatus{}, errUpdatesNotWired
+	}
+	status, err := s.updates.Check(context.Background(), instance)
+	if err != nil {
+		return webui.OpsUpdateStatus{}, err
+	}
+	return webuiUpdateStatus(status), nil
+}
+
+func (s managerStore) ApplyUpdate(instance, sourceIP string) (webui.OpsUpdateApplyResult, error) {
+	if s.updates == nil {
+		return webui.OpsUpdateApplyResult{}, errUpdatesNotWired
+	}
+	result, err := s.updates.Apply(context.Background(), ops.UpdateApplyRequest{
+		Instance: instance, Source: ops.WebUISource(sourceIP),
+	})
+	if err != nil {
+		return webui.OpsUpdateApplyResult{}, webuiUpdateError(err)
+	}
+	return webui.OpsUpdateApplyResult{
+		OldVersion: result.OldVersion, NewVersion: result.NewVersion, Warning: result.Warning,
+	}, nil
+}
+
+func (s openerStore) CheckUpdate(instance string) (webui.OpsUpdateStatus, error) {
+	var status webui.OpsUpdateStatus
+	err := s.withManager(func(manager *ops.Manager) error {
+		got, err := managerStore{manager: manager, updates: s.updates}.CheckUpdate(instance)
+		status = got
+		return err
+	})
+	return status, err
+}
+
+func (s openerStore) ApplyUpdate(instance, sourceIP string) (webui.OpsUpdateApplyResult, error) {
+	var result webui.OpsUpdateApplyResult
+	err := s.withManager(func(manager *ops.Manager) error {
+		got, err := managerStore{manager: manager, updates: s.updates}.ApplyUpdate(instance, sourceIP)
+		result = got
+		return err
+	})
+	return result, err
+}
+
+func webuiUpdateStatus(status ops.UpdateStatus) webui.OpsUpdateStatus {
+	return webui.OpsUpdateStatus{
+		CurrentVersion: status.CurrentVersion, RecommendedVersion: status.RecommendedVersion,
+		LatestVersion: status.LatestVersion, LatestError: status.LatestError,
+		TargetVersion: status.TargetVersion, AssetName: status.AssetName,
+		CanUpgrade: status.CanUpgrade, Reason: status.Reason, Downgrade: status.Downgrade,
+		NewerThanAuthority: status.NewerThanAuthority, IsClient: status.IsClient,
+	}
+}
+
+// webuiUpdateError 把运维模块的升级错误换成 Web 窄接口的错误形态。
+func webuiUpdateError(err error) error {
+	if errors.Is(err, ops.ErrUpdateInProgress) {
+		return &webui.OpsUpdateError{Step: webui.OpsUpdateStepInProgress, Message: "升级正在进行，请等待当前升级完成后重试。"}
+	}
+	var updateErr *ops.UpdateError
+	if errors.As(err, &updateErr) {
+		return &webui.OpsUpdateError{Step: webui.OpsUpdateStep(updateErr.Step), Message: updateErr.Err.Error()}
+	}
+	return err
 }

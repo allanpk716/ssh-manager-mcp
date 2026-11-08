@@ -3,9 +3,11 @@ package cli
 // sshmgr update — self-update command assembly (Plan 44 T8; spec
 // 2026-08-29-plan-44-self-update-rename §4.4/§4.5/§4.6). This file is the
 // single home of the command's interaction semantics, evidence lines and
-// exit codes; the mechanics live in internal/updater (T3–T7: version
+// exit codes. Steps 4–9 run in the interface-independent update service in
+// internal/ops (which itself consumes internal/updater verbatim: version
 // arithmetic, transport, discovery, download+checksums, extract, replace,
-// service awareness) and are consumed verbatim.
+// service awareness); this file injects output, confirmation, role and
+// version dependencies, and keeps the heal/service-gate/restart branches.
 //
 // Orchestration (spec §4 + §4.3 + §4.4, pinned order):
 //
@@ -33,8 +35,6 @@ package cli
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -50,6 +50,7 @@ import (
 	"golang.org/x/term"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/updater"
 )
 
@@ -332,260 +333,39 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 		return fmt.Errorf("检测到旧版服务 %s 仍注册(任何态)——本次 update 中止", updater.LegacyServiceName)
 	}
 
-	// 三个目标来源共用同一种角色判定；客户端不能越过权威端已声明的版本
-	// 去装 GitHub 最新版。推荐版本只读本地加密缓存；这里不访问权威端，
-	// 断网时也能执行。
-	recommendedVersion := ""
-	clientRole := false
-	if o.file == "" && o.wantTag == "" {
-		state, readErr := readClientVersionState(o.instance, errw)
-		if readErr != nil && state.IsClient {
-			if errors.Is(readErr, errAmbiguousClientCacheInstance) {
-				return readErr
+	// --- 4-9. 版本发现、下载、校验、试运行、确认、替换与代际信号 -----------------
+	// 这条链已抽到运维模块的升级服务里；命令行只注入输出、确认、角色与版本
+	// 依赖，HTTPS、SHA-256 校验与回滚语义与抽离前完全一致。
+	updateService := ops.NewUpdateService(ops.UpdateDependencies{
+		SelfPath:       func() (string, error) { return self, nil },
+		CurrentVersion: currentVersionStr,
+		ClientState: func(instance string) (ops.UpdateClientState, error) {
+			state, readErr := readClientVersionState(instance, errw)
+			if readErr != nil && state.IsClient && errors.Is(readErr, errAmbiguousClientCacheInstance) {
+				return ops.UpdateClientState{IsClient: true}, &ops.InstanceAmbiguousError{Err: readErr}
 			}
-			return errors.New("无法确定推荐版本，请先升级权威端，或用 `--version` 指定")
-		}
-		clientRole = state.IsClient
-		if state.IsClient && state.Snapshot != nil {
-			recommendedVersion = state.Snapshot.RecommendedVersion
-		}
-		if clientRole && recommendedVersion == "" {
-			return errors.New("无法确定推荐版本，请先升级权威端，或用 `--version` 指定")
-		}
-	} else {
-		clientRole = isClientRole(errw)
-	}
-
-	// --- 4. version discovery + comparison ------------------------------------
-	curStr := currentVersionStr()
-	curVer, curErr := updater.ParseVersion(curStr)
-
-	var (
-		rel        *updater.Release // nil on the --file path
-		latestRel  *updater.Release // 客户端 --check 同时展示的 GitHub 最新版
-		targetVer  string           // "v…" tag, or the staged output (--file)
-		assetLabel string
-		downgrade  bool
-	)
-	targetSource := targetFromGitHubLatest
-	if o.wantTag != "" {
-		targetSource = targetFromSpecifiedVersion
-	} else if recommendedVersion != "" {
-		targetSource = targetFromRecommendedVersion
-	}
-
-	if o.file == "" {
-		var derr error
-		switch targetSource {
-		case targetFromSpecifiedVersion:
-			rel, derr = updater.ReleaseByTag(ctx, o.wantTag)
-		case targetFromRecommendedVersion:
-			rel, derr = updater.ReleaseByTag(ctx, recommendedVersion)
-			if derr == nil && o.check {
-				latestRel, derr = updater.LatestRelease(ctx)
+			recommended := ""
+			if state.Snapshot != nil {
+				recommended = state.Snapshot.RecommendedVersion
 			}
-		default:
-			rel, derr = updater.LatestRelease(ctx)
-		}
-		if derr != nil {
-			return derr
-		}
-		targetVer = rel.Tag
-		assetLabel = rel.AssetName
-
-		if curErr != nil {
-			if targetSource == targetFromGitHubLatest {
-				// dev / 本地构建:拒绝自动比较,要求显式 --version(spec §4.1)。
-				return fmt.Errorf("无法解析当前版本 %q(本地构建?):自动比较已拒绝;请用 --version 显式指定目标版本", curStr)
-			}
-			fmt.Fprintf(out, "警告: 无法判定升降级(当前版本 %q 无法解析);将按%s %s 继续\n", curStr, targetSource, rel.Tag)
-		} else {
-			tgt, terr := updater.ParseVersion(rel.Tag)
-			if terr != nil {
-				return fmt.Errorf("目标 tag %s 不是可比较的版本: %w", rel.Tag, terr)
-			}
-			switch updater.CompareVersions(tgt, curVer) {
-			case 0:
-				if targetSource == targetFromSpecifiedVersion {
-					return fmt.Errorf("已安装该版本(%s);如需重装请先卸载或选择其他版本", rel.Tag)
-				}
-				// 客户端 --check 仍要继续输出推荐版本与 GitHub 最新版本。
-				if o.check && targetSource == targetFromRecommendedVersion {
-					break
-				}
-				fmt.Fprintf(out, "已是最新(%s);无事可做\n", rel.Tag)
-				return nil
-			case -1:
-				downgrade = true
-			}
-		}
-
-		if o.check {
-			// 干跑:只报 当前/最新/资产名/update base,零下载零替换。
-			which := "最新版本"
-			if targetSource == targetFromSpecifiedVersion {
-				which = "目标版本"
-			}
-			if targetSource == targetFromRecommendedVersion {
-				fmt.Fprintf(out, "当前版本: %s\n推荐版本: %s\nGitHub 最新版本: %s\n",
-					curStr, recommendedVersion, latestRel.Tag)
-				fmt.Fprintf(out, "资产: %s\n干跑:未下载、未替换、未重启任何东西\n", rel.AssetName)
-				return nil
-			}
-			fmt.Fprintf(out, "当前版本: %s\n%s: %s\n资产: %s\n干跑:未下载、未替换、未重启任何东西\n",
-				curStr, which, rel.Tag, rel.AssetName)
-			return nil
-		}
-		fmt.Fprintf(out, "版本: %s → %s\n资产: %s\n", curStr, rel.Tag, rel.AssetName)
-	} else {
-		assetLabel = "--file " + o.file
-		if curErr != nil {
-			fmt.Fprintf(out, "警告: 无法判定升降级(当前版本 %q 无法解析);目标版本以 staged 输出为准\n", curStr)
-		}
-	}
-
-	// --- 5. download (--file: none) → extract → staged self-check --------------
-	tmpdir, err := os.MkdirTemp(filepath.Dir(self), ".sshmgr-update-tmp-*")
-	if err != nil {
-		// exe 目录不可写的确定性出错点(spec §4.3:明确报错提示 sudo/管理员,
-		// 不自动提权——给一条有出路的指引)。
-		return fmt.Errorf("在 exe 同目录创建临时目录(同卷保证 rename 原子): %w\n"+
-			"该目录不可写——用管理员/sudo 运行,或将二进制移至用户可写目录;update 不会自动提权", err)
-	}
-	defer os.RemoveAll(tmpdir) // 零残留:staged 成功时已被 rename 走,失败时整目录清理
-
-	var (
-		archivePath string
-		shaLabel    string
-	)
-	if o.file == "" {
-		// checksums.txt 自举(空 hash 仅限它),再以解析出的 hash 下资产(T4 硬约束)。
-		sumPath, derr := updater.DownloadAsset(ctx, rel.ChecksumsURL, "", tmpdir)
-		if derr != nil {
-			return derr
-		}
-		data, rerr := os.ReadFile(sumPath)
-		if rerr != nil {
-			return fmt.Errorf("读取 %s: %w", filepath.Base(sumPath), rerr)
-		}
-		want, perr := updater.ParseChecksums(data, rel.AssetName)
-		if perr != nil {
-			return perr
-		}
-		archivePath, derr = updater.DownloadAsset(ctx, rel.AssetURL, want, tmpdir)
-		if derr != nil {
-			return derr
-		}
-		shaLabel = "SHA256: 命中 " + want
-	} else {
-		// --sha256 在复制前就核对(尽早失败);--no-verify 打印未校验警告留档。
-		if o.sha256Hex != "" {
-			got, herr := fileSHA256(o.file)
-			if herr != nil {
-				return herr
-			}
-			if got != strings.ToLower(o.sha256Hex) {
-				return fmt.Errorf("--file sha256 不匹配: got %s want %s(目标文件零触碰)", got, o.sha256Hex)
-			}
-			shaLabel = "SHA256: 命中(--sha256) " + strings.ToLower(o.sha256Hex)
-		} else {
-			fmt.Fprintln(out, "警告: --file 未做任何完整性校验(--no-verify;owner 手供文件,信任=你下载的它)")
-			shaLabel = "SHA256: 未校验(--no-verify)"
-		}
-		// 复制进 exe 同目录的 tmpdir:ExtractBinary 把 staged 落在归档旁边,
-		// 不能在用户的包目录里写文件。
-		archivePath = filepath.Join(tmpdir, filepath.Base(o.file))
-		if cerr := copyFile(o.file, archivePath, 0o755); cerr != nil {
-			return fmt.Errorf("复制本地包到临时目录: %w", cerr)
-		}
-	}
-
-	staged, xerr := updater.ExtractBinary(archivePath, runtime.GOOS)
-	if xerr != nil {
-		return xerr
-	}
-
-	stagedReport := ""
-	if o.file == "" {
-		got, serr := updater.StagedVersionCheck(staged, targetVer)
-		if serr != nil {
-			return fmt.Errorf("staged 自检未通过(保留原文件,零变更): %w", serr)
-		}
-		stagedReport = got
-	} else {
-		// --file 路径:staged 输出本身即目标版本,没有先行可比的 want。
-		// 以 want="" 探测——StagedVersionCheck 契约保证:got=="" ⟺ staged
-		// 没能回答(无法执行/超时/超限/空输出),此时中止;got!="" 时的
-		// mismatch 错误是本路径的设计产物(目标在它回答之前不存在),取 got。
-		got, serr := updater.StagedVersionCheck(staged, "")
-		if got == "" {
-			return fmt.Errorf("staged 自检未通过(保留原文件,零变更): %w", serr)
-		}
-		targetVer = got
-		stagedReport = got
-
-		// "已装该版本"拒绝与降级判定以 staged 输出为基准(spec §4.2(5))。
-		if targetVer == curStr {
-			return fmt.Errorf("已装该版本(%s);--file 提供的包与当前版本相同", targetVer)
-		}
-		if curErr == nil {
-			if fv, ferr := updater.ParseVersion(targetVer); ferr == nil {
-				switch updater.CompareVersions(fv, curVer) {
-				case 0:
-					return fmt.Errorf("已装该版本(%s);--file 提供的包与当前版本相同", targetVer)
-				case -1:
-					downgrade = true
-				}
-			} else {
-				fmt.Fprintf(out, "警告: 无法判定升降级(staged 输出 %q 不是版本号);按 owner 指定继续\n", targetVer)
-			}
-		}
-		fmt.Fprintf(out, "版本: %s → %s(staged)\n资产: %s\n", curStr, targetVer, assetLabel)
-	}
-	fmt.Fprintf(out, "%s\nstaged 自检: OK (%s)\n", shaLabel, stagedReport)
-
-	// --- 6+7. confirm + downgrade line -----------------------------------------
-	if downgrade {
-		// 降级 = 回滚通道:即使 --yes 也打印醒目行(spec §4.4)。
-		fmt.Fprintf(out, "⚠ 降级至 %s(回滚通道)\n", targetVer)
-	}
+			return ops.UpdateClientState{IsClient: state.IsClient, RecommendedVersion: recommended}, readErr
+		},
+		Audit: writeUpdateAudit,
+	})
+	var confirm func(string) (bool, error)
 	if !o.yes {
-		action := "更新"
-		if downgrade {
-			action = "降级"
-		}
-		prompt := fmt.Sprintf("将%s sshmgr:%s → %s(资产 %s)。继续?[Y/n]", action, curStr, targetVer, assetLabel)
-		ok, cerr := askConfirm(errw, prompt)
-		if cerr != nil {
-			return cerr
-		}
-		if !ok {
-			fmt.Fprintln(out, "已取消(零变更)")
-			return nil
-		}
+		confirm = func(prompt string) (bool, error) { return askConfirm(errw, prompt) }
 	}
-
-	// --- 8. transactional replace ----------------------------------------------
-	if rerr := updater.ReplaceBinary(staged, self); rerr != nil {
-		var cwe *updater.CommittedWithError
-		if errors.As(rerr, &cwe) {
-			// committed-with-error:替换已生效,不回滚不掩饰,如实报告后继续。
-			fmt.Fprintf(out, "警告(已提交): %v\n", cwe)
-		} else {
-			// 含 ErrRollbackFailed(其消息自带平台手工恢复命令)与零变更失败。
-			return fmt.Errorf("替换失败: %w", rerr)
-		}
+	runResult, runErr := updateService.Run(ctx, ops.UpdateRunRequest{
+		CheckOnly: o.check, WantTag: o.wantTag, File: o.file, SHA256Hex: o.sha256Hex,
+		NoVerify: o.noVerify, Instance: o.instance, Source: ops.CLISource(),
+		Output:  func(format string, args ...any) { fmt.Fprintf(out, format, args...) },
+		Confirm: confirm,
+	})
+	if runErr != nil {
+		return runErr
 	}
-	fmt.Fprintf(out, "替换: %s\n", self)
-
-	// --- 9. generation signal ----------------------------------------------------
-	// 替换成功点(GitHub 与 --file 两条路在此汇合;CommittedWithError 同样落到
-	// 这里——盘上二进制确已换过)。在二进制同目录写代际信号(桥热升级实施
-	// 决策第 1 条),让在飞桥感知「盘上换了新代际」。信号写失败不推翻已提交
-	// 的替换:警告后继续(升级成败不由它决定)。
-	if _, werr := updater.WriteGenerationSignal(self, targetVer); werr != nil {
-		fmt.Fprintf(out, "警告: 写入代际信号失败(运行中的桥感知不到本次换版,下次 update 重写): %v\n", werr)
-	}
+	clientRole := runResult.ClientRole
 
 	// --- 10. service branch -------------------------------------------------------
 	if clientRole || prNew.State != updater.ProbeInstalled {
@@ -712,18 +492,18 @@ func manualServiceCommandFor(goos, op string) string {
 	}
 }
 
-// fileSHA256 returns the lowercase hex sha256 of the file at path.
-func fileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
+// writeUpdateAudit 把升级动作写进本机 vault 的审计表；写失败只返回错误，由升
+// 级服务以警告形式报告，不影响已经提交的替换结果。
+func writeUpdateAudit(source ops.Source, entry ops.UpdateAuditEntry) error {
+	st, err := openUnlockedStore()
 	if err != nil {
-		return "", fmt.Errorf("打开 --file %s: %w", path, err)
+		return err
 	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", fmt.Errorf("计算 --file %s 的 sha256: %w", path, err)
+	defer st.Close()
+	if err := st.WriteAudit(updateAuditRow(source, entry)); err != nil {
+		return err
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return nil
 }
 
 // --- crash-window self-heal action -------------------------------------------

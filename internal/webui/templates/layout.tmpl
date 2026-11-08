@@ -32,6 +32,7 @@
 {{if .Caps.ShowOpsArea}}<nav class="main-nav" aria-label="运维区域">
 <a href="/ui/ops/">运维</a>
 {{if .Caps.CanManageSettings}}<a href="/ui/ops/settings">设置</a>{{end}}
+{{if .Caps.CanUpgradeBinary}}<a href="/ui/ops/update">升级</a>{{end}}
 {{if .Caps.CanQueryVaultAudit}}<a href="/ui/ops/audit">审计</a>{{end}}
 {{if .Caps.CanQueryClientAudit}}<a href="/ui/ops/client-audit">本机审计</a>{{end}}
 </nav>{{end}}
