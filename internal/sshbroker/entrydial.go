@@ -120,10 +120,11 @@ func normalizeDialAddress(address string) string {
 	return store.NormalizeSSHHost(address)
 }
 
-// PlanServerDialAddresses 是按网络拓扑规划候选 SSH 地址的纯函数：只取拨号
-// 设备也是成员的网络里的目标地址，加上服务器条目的兜底主机；物理局域网
-// 优先于虚拟局域网，兜底主机最后，同级按网络成员登记序号。
-func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.NetworkMembership, fallbackHost string) DialAddressPlan {
+// PlanCommonNetworkAddresses 是共享的候选地址规划纯函数：只取拨号设备也
+// 是成员的网络里的目标地址，物理局域网优先于虚拟局域网，同级按网络成
+// 员登记序号；不追加任何兜底主机。按服务器条目拨号与连通探测共用它，
+// 保证两条路径的共同网络判定与排序不会漂移。
+func PlanCommonNetworkAddresses(targetMemberships, dialerMemberships []*models.NetworkMembership) DialAddressPlan {
 	dialerNetworks := make(map[string]bool, len(dialerMemberships))
 	for _, membership := range dialerMemberships {
 		if membership != nil {
@@ -167,10 +168,6 @@ func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.Netw
 			key: normalizeDialAddress(membership.Address), rank: dialAddressPriority(source),
 		})
 	}
-	prepared = append(prepared, preparedAddress{
-		item: DialAddress{Address: fallbackHost, Source: DialAddressFallback},
-		key:  normalizeDialAddress(fallbackHost), rank: dialAddressPriority(DialAddressFallback),
-	})
 	sort.SliceStable(prepared, func(i, j int) bool {
 		if prepared[i].rank != prepared[j].rank {
 			return prepared[i].rank < prepared[j].rank
@@ -204,6 +201,32 @@ func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.Netw
 		}
 	}
 	return DialAddressPlan{Candidates: out, HasTargetTopology: hasTopology, FallbackOnlyReason: reason}
+}
+
+// PlanServerDialAddresses 是按服务器条目拨号使用的候选地址规划纯函数：
+// 先取共享规划给出的共同网络地址，再追加服务器条目的兜底主机；物理局
+// 域网优先于虚拟局域网，兜底主机最后，同级按网络成员登记序号。
+func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.NetworkMembership, fallbackHost string) DialAddressPlan {
+	plan := PlanCommonNetworkAddresses(targetMemberships, dialerMemberships)
+	prepared := make([]DialAddress, 0, len(plan.Candidates)+1)
+	prepared = append(prepared, plan.Candidates...)
+	prepared = append(prepared, DialAddress{
+		Address: fallbackHost, Source: DialAddressFallback,
+	})
+	// 兜底主机排在共同网络地址之后；与拓扑地址重复时只保留优先级更高
+	// 的那份，与共享规划使用同一条等价地址去重规则。
+	out := make([]DialAddress, 0, len(prepared))
+	seen := make(map[string]bool, len(prepared))
+	for _, candidate := range prepared {
+		key := normalizeDialAddress(candidate.Address)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, candidate)
+	}
+	plan.Candidates = out
+	return plan
 }
 
 func networkSequencesByRegistration(memberships []*models.NetworkMembership) map[string]int {
