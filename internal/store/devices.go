@@ -504,6 +504,18 @@ func deviceByIDTx(q deviceQueryer, id string) (*models.Device, error) {
 	return device, nil
 }
 
+// GetDeviceByID 按内部标识符取设备，找不到时返回 (nil, nil)。
+func (s *Store) GetDeviceByID(id string) (*models.Device, error) {
+	if id == "" {
+		return nil, nil
+	}
+	device, err := deviceByIDTx(s.db, id)
+	if errors.Is(err, ErrDeviceNotFound) {
+		return nil, nil
+	}
+	return device, err
+}
+
 // scanDevice 把设备行扫描成对象；按名字与按内部标识符查询共用。
 func scanDevice(sc scanner) (*models.Device, error) {
 	var device models.Device

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -63,4 +64,22 @@ func (s *Store) GetCredential(id string) (*models.Credential, error) {
 		c.Passphrase = pass
 	}
 	return c, nil
+}
+
+// CredentialSummary 返回凭据的非敏感摘要：类型与是否已存私钥口令。found 为
+// false 表示凭据行不存在。详情页与命令行输出用它，不解密也不返回凭据内容。
+func (s *Store) CredentialSummary(id string) (kind models.CredentialType, hasPassphrase, found bool, err error) {
+	if id == "" {
+		return "", false, false, nil
+	}
+	var typ string
+	var passRaw []byte
+	err = s.db.QueryRow(`SELECT type, passphrase_blob FROM credentials WHERE id=?`, id).Scan(&typ, &passRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, false, nil
+	}
+	if err != nil {
+		return "", false, false, err
+	}
+	return models.CredentialType(typ), passRaw != nil, true, nil
 }
