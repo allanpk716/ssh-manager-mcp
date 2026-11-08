@@ -10,12 +10,29 @@ import (
 // Manager 是访问管理模块的入口，内部只调用存储层的现有函数，不改变它
 // 们的语义。
 type Manager struct {
-	st *store.Store
+	st                   *store.Store
+	serveCertFingerprint func() (string, error)
+}
+
+// Option 是访问管理模块的可选构造参数。
+type Option func(*Manager)
+
+// WithServeCertFingerprint 注入权威端证书公钥指纹来源。签发设备码前模块
+// 先读取指纹，读取失败时不产生设备码；命令行注入按需加载证书的函数，
+// serve 进程注入启动时已算好的指纹。
+func WithServeCertFingerprint(load func() (string, error)) Option {
+	return func(m *Manager) {
+		m.serveCertFingerprint = load
+	}
 }
 
 // New 返回挂在一个已解锁存储上的访问管理模块。
-func New(st *store.Store) *Manager {
-	return &Manager{st: st}
+func New(st *store.Store, opts ...Option) *Manager {
+	m := &Manager{st: st}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // Source 描述一次访问管理写操作从哪里来：命令行，或 Web UI（附来源地
