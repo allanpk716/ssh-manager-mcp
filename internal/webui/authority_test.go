@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -20,6 +21,8 @@ type fakeAuthorityAuth struct {
 	failures    map[string]int
 	sleeps      []time.Duration
 	now         time.Time
+	mu          sync.Mutex
+	verifyCalls int
 }
 
 func (s *fakeAuthorityAuth) AdminPasswordIsSet() (bool, error) {
@@ -27,6 +30,9 @@ func (s *fakeAuthorityAuth) AdminPasswordIsSet() (bool, error) {
 }
 
 func (s *fakeAuthorityAuth) VerifyAdminPassword(password []byte) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.verifyCalls++
 	return s.passwordSet && string(password) == s.password, nil
 }
 
@@ -47,6 +53,8 @@ func (s *fakeAuthorityAuth) LogoutAllSessions() (int64, error) {
 }
 
 func (s *fakeAuthorityAuth) LoginLimit(ip string, now time.Time) (LoginLimit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	total := 0
 	for _, count := range s.failures {
 		total += count
@@ -59,16 +67,29 @@ func (s *fakeAuthorityAuth) LoginLimit(ip string, now time.Time) (LoginLimit, er
 }
 
 func (s *fakeAuthorityAuth) RecordLoginFailure(ip string, now time.Time) (LoginLimit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.failures == nil {
 		s.failures = map[string]int{}
 	}
 	s.failures[ip]++
-	return s.LoginLimit(ip, now)
+	ipFailures := s.failures[ip]
+	total := 0
+	for _, count := range s.failures {
+		total += count
+	}
+	delay := time.Duration(total) * time.Second
+	if delay > 10*time.Second {
+		delay = 10 * time.Second
+	}
+	return LoginLimit{Locked: ipFailures >= 5, LockRemaining: 15 * time.Minute, Delay: delay}, nil
 }
 
 func (s *fakeAuthorityAuth) ClearLoginLock(ip string) error { return nil }
 
 func (s *fakeAuthorityAuth) WriteAudit(event AuditEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.audits = append(s.audits, event)
 	return nil
 }
@@ -183,7 +204,7 @@ func TestAuthorityLoginExchangesPasswordForSecureSession(t *testing.T) {
 		sessionCookie.SameSite != http.SameSiteStrictMode || sessionCookie.Domain != "" {
 		t.Fatalf("权威端会话 cookie 属性不正确：%+v", sessionCookie)
 	}
-	if len(auth.audits) != 1 || auth.audits[0].Action != "web.login.success" ||
+	if len(auth.audits) != 1 || auth.audits[0].Action != "admin.login" ||
 		auth.audits[0].SourceIP != "198.51.100.9" {
 		t.Fatalf("登录成功应写入来源 IP 的 Web 审计：%+v", auth.audits)
 	}
@@ -308,6 +329,129 @@ func TestAuthoritySessionSlidesAndGenerationInvalidates(t *testing.T) {
 	}
 }
 
+func TestAuthorityConcurrentRequestsUseOneSessionSafely(t *testing.T) {
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: &stubServerSource{rows: []ServerRow{{Name: "服务器"}}}, Auth: auth,
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time { return time.Unix(1800000000, 0) },
+	})
+	if err != nil {
+		t.Fatalf("构造权威端 Web UI 失败：%v", err)
+	}
+	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+
+	const requests = 32
+	var wait sync.WaitGroup
+	wait.Add(requests)
+	for i := 0; i < requests; i++ {
+		go func() {
+			defer wait.Done()
+			resp := authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+			resp.Body.Close()
+		}()
+	}
+	wait.Wait()
+}
+
+func TestAuthorityConcurrentFailuresCannotBypassLoginLimit(t *testing.T) {
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: &stubServerSource{}, Auth: auth,
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
+		Now:   func() time.Time { return time.Unix(1800000000, 0) },
+		Sleep: func(time.Duration) {},
+	})
+	if err != nil {
+		t.Fatalf("构造权威端 Web UI 失败：%v", err)
+	}
+	page := authorityLoginPage(t, handler, "127.0.0.1:7879")
+	var csrfCookie *http.Cookie
+	for _, cookie := range page.Cookies() {
+		if cookie.Name == authorityCSRFCookieName {
+			csrfCookie = cookie
+		}
+	}
+	page.Body.Close()
+	if csrfCookie == nil {
+		t.Fatal("登录页应签发防跨站请求伪造 cookie")
+	}
+
+	const requests = 12
+	start := make(chan struct{})
+	responses := make(chan *http.Response, requests)
+	var wait sync.WaitGroup
+	wait.Add(requests)
+	for i := 0; i < requests; i++ {
+		go func() {
+			defer wait.Done()
+			form := url.Values{"password": {"wrong-password"}, "csrf_token": {csrfCookie.Value}}
+			req := httptest.NewRequest(http.MethodPost, "/ui/login", strings.NewReader(form.Encode()))
+			req.Host = "127.0.0.1:7879"
+			req.RemoteAddr = "198.51.100.9:45678"
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Origin", "https://127.0.0.1:7879")
+			req.AddCookie(csrfCookie)
+			<-start
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			responses <- rec.Result()
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(responses)
+	for response := range responses {
+		response.Body.Close()
+	}
+
+	auth.mu.Lock()
+	verifyCalls := auth.verifyCalls
+	auth.mu.Unlock()
+	if verifyCalls > 5 {
+		t.Fatalf("并发错误口令实际进入校验 %d 次，不得超过 5 次", verifyCalls)
+	}
+}
+
+func TestAuthorityLoginCleanupDropsExpiredSessionsOnNewLogin(t *testing.T) {
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password", now: time.Unix(1800000000, 0)}
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: &stubServerSource{}, Auth: auth,
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time {
+			auth.mu.Lock()
+			defer auth.mu.Unlock()
+			return auth.now
+		},
+	})
+	if err != nil {
+		t.Fatalf("构造权威端 Web UI 失败：%v", err)
+	}
+	oldCookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+	base := time.Unix(1800000000, 0)
+	auth.mu.Lock()
+	auth.now = base.Add(12*time.Hour + time.Second)
+	auth.mu.Unlock()
+	newCookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+
+	auth.mu.Lock()
+	auth.now = base.Add(11 * time.Hour)
+	auth.mu.Unlock()
+	expired := authorityGet(t, handler, "127.0.0.1:7879", "/ui/", oldCookie)
+	expired.Body.Close()
+	if expired.StatusCode != http.StatusSeeOther || expired.Header.Get("Location") != loginPath {
+		t.Fatalf("新登录应顺带清理已过期会话，状态码=%d 跳转=%q", expired.StatusCode, expired.Header.Get("Location"))
+	}
+	fresh := authorityGet(t, handler, "127.0.0.1:7879", "/ui/", newCookie)
+	fresh.Body.Close()
+	if fresh.StatusCode != http.StatusOK {
+		t.Fatalf("新登录会话应仍有效，状态码=%d", fresh.StatusCode)
+	}
+}
+
 func TestAuthorityHeaderAndLogoutActions(t *testing.T) {
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
 	now := time.Unix(1800000000, 0)
@@ -375,9 +519,9 @@ func TestAuthorityHeaderAndLogoutActions(t *testing.T) {
 	var logoutCount, logoutAllCount int
 	for _, event := range auth.audits {
 		switch event.Action {
-		case "web.logout":
+		case "admin.logout":
 			logoutCount++
-		case "web.logout.all":
+		case "admin.logout_all":
 			logoutAllCount++
 		}
 	}
@@ -423,6 +567,18 @@ func TestAuthorityHostOriginAndCSRFGuards(t *testing.T) {
 	rejectedHost.Body.Close()
 	if rejectedHost.StatusCode != http.StatusMisdirectedRequest {
 		t.Fatalf("未监听地址的 Host 状态码 = %d，应为 421", rejectedHost.StatusCode)
+	}
+	for _, host := range []string{"127.0.0.1:18000", "localhost:18000", "[::1]:18000"} {
+		forwarded := authorityLoginPage(t, handler, host)
+		forwarded.Body.Close()
+		if forwarded.StatusCode != http.StatusOK {
+			t.Fatalf("回环地址经 SSH 端口转发应允许 Host %s，状态码 = %d", host, forwarded.StatusCode)
+		}
+	}
+	wrongPort := authorityLoginPage(t, handler, "192.0.2.20:18000")
+	wrongPort.Body.Close()
+	if wrongPort.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("非回环地址仍应校验配置端口，状态码 = %d", wrongPort.StatusCode)
 	}
 	control.SetAllowedHosts([]string{"192.0.2.20"})
 	allowed = authorityLoginPage(t, handler, "192.0.2.20:7879")
@@ -543,7 +699,7 @@ func TestAuthorityPasswordChangeRequiresRecentReverification(t *testing.T) {
 	}
 	foundChange := false
 	for _, event := range auth.audits {
-		if event.Action == "web.password.change" && event.SourceIP == "198.51.100.9" {
+		if event.Action == "admin.password_change" && event.SourceIP == "198.51.100.9" {
 			foundChange = true
 		}
 	}
@@ -610,18 +766,18 @@ func TestAuthorityLoginFailuresLockIPAndDelayAllRequests(t *testing.T) {
 
 	var failed, lockEvents int
 	for _, event := range auth.audits {
-		if event.Action == "web.login.failed" {
+		if event.Action == "admin.login_fail" {
 			failed++
 		}
-		if event.Action == "web.login.locked" {
+		if event.Action == "admin.lockout" {
 			lockEvents++
 		}
 		if event.Detail != nil {
 			t.Fatalf("登录失败审计不得携带摘要字段：%+v", event)
 		}
 	}
-	if failed != 5 || lockEvents < 1 {
-		t.Fatalf("审计失败行 = %d、锁定行 = %d，应为 5 与至少 1：%+v", failed, lockEvents, auth.audits)
+	if failed != 5 || lockEvents != 1 {
+		t.Fatalf("审计失败行 = %d、锁定行 = %d，应为 5 与 1：%+v", failed, lockEvents, auth.audits)
 	}
 }
 

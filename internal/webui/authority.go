@@ -70,7 +70,7 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 		assets:       assets,
 		assetFiles:   assetFiles,
 		pages:        pages,
-		allowedHosts: canonicalHosts(cfg.AllowedHosts),
+		allowedHosts: canonicalIPSet(cfg.AllowedHosts),
 		mux:          http.NewServeMux(),
 		sessions:     map[string]*session{},
 	}
@@ -86,20 +86,10 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 
 // SetAllowedHosts 由监听管理者在地址集合变化时调用，只接受新的集合。
 func (h *handler) SetAllowedHosts(addresses []string) {
-	hosts := canonicalHosts(addresses)
+	hosts := canonicalIPSet(addresses)
 	h.mu.Lock()
 	h.allowedHosts = hosts
 	h.mu.Unlock()
-}
-
-func canonicalHosts(addresses []string) map[string]struct{} {
-	hosts := make(map[string]struct{}, len(addresses))
-	for _, address := range addresses {
-		if ip := net.ParseIP(address); ip != nil {
-			hosts[ip.String()] = struct{}{}
-		}
-	}
-	return hosts
 }
 
 func (h *handler) handleAuthorityLogin(w http.ResponseWriter, r *http.Request) {
@@ -124,10 +114,7 @@ func (h *handler) handleAuthorityLoginPage(w http.ResponseWriter, r *http.Reques
 		h.renderError(w, r, http.StatusInternalServerError, "无法建立登录表单", "生成防跨站请求伪造令牌失败，请刷新页面重试。")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: authorityCSRFCookieName, Value: csrfToken, Path: "/",
-		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
-	})
+	setAuthorityCSRFCookie(w, csrfToken)
 	h.renderPage(w, r, http.StatusOK, "login.tmpl", pageData{
 		Title:                  "管理员登录",
 		AdminPasswordSet:       set,
@@ -172,36 +159,17 @@ func (h *handler) handleAuthorityLoginPost(w http.ResponseWriter, r *http.Reques
 	}
 	ip := remoteIP(r)
 	now := h.cfg.now()
-	limit, err := h.cfg.Auth.LoginLimit(ip, now)
+	check, err := h.checkAuthorityPassword(ip, r.PostFormValue("password"), now)
 	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取登录限制失败", "读取登录限制失败，请稍后重试。")
+		h.renderError(w, r, http.StatusInternalServerError, "处理登录请求失败", "读取或记录登录限制失败，请稍后重试。")
 		return
 	}
-	h.loginSleep(limit.Delay)
-	if limit.Locked {
-		h.writeAuthorityAudit(ip, "web.login.locked", "blocked", nil)
-		h.renderLoginPageWithError(w, r, http.StatusForbidden, "来源 IP 已锁定", "这个来源 IP 已被锁定，请等剩余时间结束后再试。", limit.LockRemaining)
+	if check.Limit.Locked {
+		h.renderLoginPageWithError(w, r, http.StatusForbidden, "来源 IP 已锁定", "这个来源 IP 已被锁定，请等剩余时间结束后再试。", check.Limit.LockRemaining)
 		return
 	}
-	password := r.PostFormValue("password")
-	valid, err := h.cfg.Auth.VerifyAdminPassword([]byte(password))
-	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "校验管理员口令失败", "校验管理员口令失败，请稍后重试。")
-		return
-	}
-	if !valid {
-		limit, err = h.cfg.Auth.RecordLoginFailure(ip, now)
-		if err != nil {
-			h.renderError(w, r, http.StatusInternalServerError, "记录登录失败失败", "记录登录失败失败，请稍后重试。")
-			return
-		}
-		h.writeAuthorityAudit(ip, "web.login.failed", "error", nil)
-		if limit.Locked {
-			h.writeAuthorityAudit(ip, "web.login.locked", "blocked", nil)
-			h.renderLoginPageWithError(w, r, http.StatusForbidden, "来源 IP 已锁定", "这个来源 IP 已被锁定，请等剩余时间结束后再试。", limit.LockRemaining)
-			return
-		}
-		h.renderLoginPageWithError(w, r, http.StatusUnauthorized, "口令不正确", "管理员口令不正确，请重试。", limit.LockRemaining)
+	if !check.Valid {
+		h.renderLoginPageWithError(w, r, http.StatusUnauthorized, "口令不正确", "管理员口令不正确，请重试。", check.Limit.LockRemaining)
 		return
 	}
 	generation, err := h.cfg.Auth.SessionGeneration()
@@ -218,14 +186,70 @@ func (h *handler) handleAuthorityLoginPost(w http.ResponseWriter, r *http.Reques
 	sess.lastActive = now
 	sess.lastVerified = now
 	h.mu.Lock()
+	h.clearExpiredAuthoritySessionsLocked(now)
 	h.sessions[sess.id] = sess
 	h.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{
 		Name: authoritySessionCookieName, Value: sess.id, Path: "/",
 		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
 	})
-	h.writeAuthorityAudit(ip, "web.login.success", "ok", nil)
+	h.writeAuthorityAudit(ip, "admin.login", "ok", nil)
 	http.Redirect(w, r, listPath, http.StatusSeeOther)
+}
+
+type authorityPasswordCheck struct {
+	Limit LoginLimit
+	Valid bool
+}
+
+func (h *handler) checkAuthorityPassword(ip, password string, now time.Time) (authorityPasswordCheck, error) {
+	h.loginMu.Lock()
+	defer h.loginMu.Unlock()
+	limit, err := h.cfg.Auth.LoginLimit(ip, now)
+	if err != nil {
+		return authorityPasswordCheck{}, err
+	}
+	h.loginSleep(limit.Delay)
+	if limit.Locked {
+		return authorityPasswordCheck{Limit: limit}, nil
+	}
+	valid, err := h.cfg.Auth.VerifyAdminPassword([]byte(password))
+	if err != nil {
+		return authorityPasswordCheck{}, err
+	}
+	if valid {
+		return authorityPasswordCheck{Limit: limit, Valid: true}, nil
+	}
+	limit, err = h.cfg.Auth.RecordLoginFailure(ip, now)
+	if err != nil {
+		return authorityPasswordCheck{}, err
+	}
+	h.writeAuthorityAudit(ip, "admin.login_fail", "error", nil)
+	if limit.Locked {
+		h.writeAuthorityAudit(ip, "admin.lockout", "blocked", nil)
+	}
+	return authorityPasswordCheck{Limit: limit}, nil
+}
+
+func (h *handler) clearExpiredAuthoritySessionsLocked(now time.Time) {
+	for id, sess := range h.sessions {
+		if now.Sub(sess.lastActive) >= 12*time.Hour {
+			delete(h.sessions, id)
+		}
+	}
+}
+
+func (h *handler) clearAuthoritySessions() {
+	h.mu.Lock()
+	h.sessions = map[string]*session{}
+	h.mu.Unlock()
+}
+
+func setAuthorityCSRFCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: authorityCSRFCookieName, Value: token, Path: "/",
+		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
+	})
 }
 
 func (h *handler) renderLoginPageWithError(w http.ResponseWriter, r *http.Request, status int, title, message string, remaining time.Duration) {
@@ -236,10 +260,7 @@ func (h *handler) renderLoginPageWithError(w http.ResponseWriter, r *http.Reques
 	}
 	csrfToken, tokenErr := generateSessionToken()
 	if tokenErr == nil {
-		http.SetCookie(w, &http.Cookie{
-			Name: authorityCSRFCookieName, Value: csrfToken, Path: "/",
-			Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
-		})
+		setAuthorityCSRFCookie(w, csrfToken)
 	}
 	h.renderPage(w, r, status, "login.tmpl", pageData{
 		Title: title, AdminPasswordSet: set,
@@ -249,7 +270,10 @@ func (h *handler) renderLoginPageWithError(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *handler) writeAuthorityAudit(ip, action, status string, detail map[string]string) {
-	_ = h.cfg.Auth.WriteAudit(AuditEvent{Action: action, Status: status, SourceIP: ip, Detail: detail})
+	err := h.cfg.Auth.WriteAudit(AuditEvent{Action: action, Status: status, SourceIP: ip, Detail: detail})
+	if err != nil && h.cfg.Log != nil {
+		h.cfg.Log("sshmgr serve: 写入 Web UI 审计失败 action=%s ip=%s: %v", action, ip, err)
+	}
 }
 
 func (h *handler) clearAuthoritySessionCookie(w http.ResponseWriter) {
@@ -270,7 +294,7 @@ func (h *handler) handleAuthorityLogout(w http.ResponseWriter, r *http.Request) 
 		h.mu.Unlock()
 	}
 	h.clearAuthoritySessionCookie(w)
-	h.writeAuthorityAudit(remoteIP(r), "web.logout", "ok", nil)
+	h.writeAuthorityAudit(remoteIP(r), "admin.logout", "ok", nil)
 	http.Redirect(w, r, loginPath, http.StatusSeeOther)
 }
 
@@ -283,16 +307,19 @@ func (h *handler) handleAuthorityLogoutAll(w http.ResponseWriter, r *http.Reques
 		h.renderError(w, r, http.StatusInternalServerError, "注销全部会话失败", "注销全部会话失败，请稍后重试。")
 		return
 	}
-	h.mu.Lock()
-	h.sessions = map[string]*session{}
-	h.mu.Unlock()
+	h.clearAuthoritySessions()
 	h.clearAuthoritySessionCookie(w)
-	h.writeAuthorityAudit(remoteIP(r), "web.logout.all", "ok", nil)
+	h.writeAuthorityAudit(remoteIP(r), "admin.logout_all", "ok", nil)
 	http.Redirect(w, r, loginPath, http.StatusSeeOther)
 }
 
 func (h *handler) recentlyVerified(sess *session) bool {
-	return sess != nil && h.cfg.now().Sub(sess.lastVerified) <= 5*time.Minute
+	if sess == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cfg.now().Sub(sess.lastVerified) <= 5*time.Minute
 }
 
 func (h *handler) handleAuthorityPassword(w http.ResponseWriter, r *http.Request) {
@@ -321,11 +348,9 @@ func (h *handler) handleAuthorityPassword(w http.ResponseWriter, r *http.Request
 			h.renderError(w, r, http.StatusInternalServerError, "修改管理员口令失败", "修改管理员口令失败，请稍后重试。")
 			return
 		}
-		h.mu.Lock()
-		h.sessions = map[string]*session{}
-		h.mu.Unlock()
+		h.clearAuthoritySessions()
 		h.clearAuthoritySessionCookie(w)
-		h.writeAuthorityAudit(remoteIP(r), "web.password.change", "ok", nil)
+		h.writeAuthorityAudit(remoteIP(r), "admin.password_change", "ok", nil)
 		http.Redirect(w, r, loginPath, http.StatusSeeOther)
 	default:
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "修改口令页面只接受 GET 与 POST 请求。")
@@ -346,38 +371,22 @@ func (h *handler) handleAuthorityReverify(w http.ResponseWriter, r *http.Request
 	case http.MethodPost:
 		ip := remoteIP(r)
 		now := h.cfg.now()
-		limit, err := h.cfg.Auth.LoginLimit(ip, now)
+		check, err := h.checkAuthorityPassword(ip, r.PostFormValue("password"), now)
 		if err != nil {
-			h.renderError(w, r, http.StatusInternalServerError, "读取登录限制失败", "读取登录限制失败，请稍后重试。")
+			h.renderError(w, r, http.StatusInternalServerError, "处理重新验证请求失败", "读取或记录登录限制失败，请稍后重试。")
 			return
 		}
-		h.loginSleep(limit.Delay)
-		if limit.Locked {
-			h.writeAuthorityAudit(ip, "web.login.locked", "blocked", nil)
+		if check.Limit.Locked {
 			h.renderPage(w, r, http.StatusForbidden, "reverify.tmpl", pageData{
 				Title: "重新验证", LoginError: "这个来源 IP 已被锁定，请等剩余时间结束后再试。",
-				LockRemaining: limit.LockRemaining,
+				LockRemaining: check.Limit.LockRemaining,
 				NextPath:      safeNextPath(r.PostFormValue("next")),
 			})
 			return
 		}
-		valid, err := h.cfg.Auth.VerifyAdminPassword([]byte(r.PostFormValue("password")))
-		if err != nil {
-			h.renderError(w, r, http.StatusInternalServerError, "校验管理员口令失败", "校验管理员口令失败，请稍后重试。")
-			return
-		}
-		if !valid {
-			limit, err = h.cfg.Auth.RecordLoginFailure(ip, now)
-			if err != nil {
-				h.renderError(w, r, http.StatusInternalServerError, "记录登录失败失败", "记录登录失败失败，请稍后重试。")
-				return
-			}
-			h.writeAuthorityAudit(ip, "web.login.failed", "error", nil)
-			if limit.Locked {
-				h.writeAuthorityAudit(ip, "web.login.locked", "blocked", nil)
-			}
+		if !check.Valid {
 			h.renderPage(w, r, http.StatusUnauthorized, "reverify.tmpl", pageData{
-				Title: "重新验证", LoginError: "管理员口令不正确，请重试。", LockRemaining: limit.LockRemaining,
+				Title: "重新验证", LoginError: "管理员口令不正确，请重试。", LockRemaining: check.Limit.LockRemaining,
 				NextPath: safeNextPath(r.PostFormValue("next")),
 			})
 			return
@@ -424,10 +433,18 @@ func (h *handler) currentAuthoritySession(r *http.Request) *session {
 	}
 	h.mu.Lock()
 	sess := h.sessions[cookie.Value]
-	h.mu.Unlock()
 	if sess == nil {
+		h.mu.Unlock()
 		return nil
 	}
+	now := h.cfg.now()
+	if now.Sub(sess.lastActive) >= 12*time.Hour {
+		delete(h.sessions, cookie.Value)
+		h.mu.Unlock()
+		return nil
+	}
+	sess.lastActive = now
+	h.mu.Unlock()
 	generation, err := h.cfg.Auth.SessionGeneration()
 	if err != nil || generation != sess.generation {
 		h.mu.Lock()
@@ -435,16 +452,6 @@ func (h *handler) currentAuthoritySession(r *http.Request) *session {
 		h.mu.Unlock()
 		return nil
 	}
-	now := h.cfg.now()
-	if now.Sub(sess.lastActive) >= 12*time.Hour {
-		h.mu.Lock()
-		delete(h.sessions, cookie.Value)
-		h.mu.Unlock()
-		return nil
-	}
-	h.mu.Lock()
-	sess.lastActive = now
-	h.mu.Unlock()
 	return sess
 }
 
@@ -486,10 +493,16 @@ func (h *handler) authorityWriteAllowed(w http.ResponseWriter, r *http.Request) 
 
 func (h *handler) authorityHostAllowed(host string) bool {
 	name, portText, err := net.SplitHostPort(host)
-	if err != nil || portText != strconv.Itoa(h.cfg.Port) {
+	if err != nil {
 		return false
 	}
 	ip := net.ParseIP(name)
+	if strings.EqualFold(name, "localhost") || (ip != nil && ip.IsLoopback()) {
+		return true
+	}
+	if portText != strconv.Itoa(h.cfg.Port) {
+		return false
+	}
 	if ip == nil {
 		return false
 	}

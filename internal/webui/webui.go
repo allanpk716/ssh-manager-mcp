@@ -60,6 +60,7 @@ type Config struct {
 	CertificateFingerprint string
 	AllowedHosts           []string
 	Sleep                  func(time.Duration)
+	Log                    func(format string, arguments ...any)
 }
 
 func (c Config) validate() error {
@@ -168,6 +169,7 @@ type handler struct {
 	pages        map[string]parsedPage
 	startDigest  [sha256.Size]byte
 	mu           sync.Mutex
+	loginMu      sync.Mutex
 	startUsed    bool
 	session      *session
 	sessions     map[string]*session
