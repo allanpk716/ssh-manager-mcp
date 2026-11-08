@@ -1,0 +1,24 @@
+{{define "content"}}
+<section class="login-page">
+<h1>管理员登录</h1>
+<p>证书公钥指纹：<code>{{.CertificateFingerprint}}</code></p>
+{{if not .AdminPasswordSet}}
+<div class="setup-guidance">
+<p>还没有设置管理员口令。请在权威端主机执行以下任一操作：</p>
+<ol>
+<li>运行 <code>sshmgr ui</code> 进入初始化指引。</li>
+<li>运行 <code>sshmgr serve admin set</code> 设置管理员口令。</li>
+</ol>
+</div>
+{{end}}
+{{if .AdminPasswordSet}}
+{{if .LoginError}}<p class="login-error">{{.LoginError}}{{if .LockRemaining}}（剩余 {{.LockRemaining}}）{{end}}</p>{{end}}
+<form method="post" action="/ui/login">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label for="password">管理员口令</label>
+<input type="password" id="password" name="password" autocomplete="current-password" required>
+<button type="submit">登录</button>
+</form>
+{{end}}
+</section>
+{{end}}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 )
 
 //go:embed templates/*.tmpl
@@ -21,14 +22,18 @@ type parsedPage struct {
 // pageData 是所有页面模板共享的渲染数据；新增页面时在这里扩展字段，
 // 不另建一套传递结构。
 type pageData struct {
-	Title        string
-	Assets       assetURLs
-	Caps         capabilities
-	VersionHint  string
-	CSRFToken    string
-	Servers      []ServerRow
-	ErrorTitle   string
-	ErrorMessage string
+	Title                  string
+	Assets                 assetURLs
+	Caps                   capabilities
+	VersionHint            string
+	CSRFToken              string
+	Servers                []ServerRow
+	ErrorTitle             string
+	ErrorMessage           string
+	AdminPasswordSet       bool
+	CertificateFingerprint string
+	LoginError             string
+	LockRemaining          time.Duration
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染
