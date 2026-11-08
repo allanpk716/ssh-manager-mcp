@@ -143,7 +143,7 @@ servers:
   - db               pguser@10.0.0.5:22
 ```
 
-所有生命周期动作都会写进**审计日志**（`project.rotate` / `project.disable` / …），和每次工具调用一起被记录。
+签发与所有生命周期动作都会写进**审计日志**（`project.add` / `project.rotate` / `project.disable` / `project.enable` / `project.revoke` / `project.delete`），和每次工具调用一起被记录；审计摘要只有项目名字和标识符，绝不写 token。
 
 ---
 
