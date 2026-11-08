@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -144,6 +145,216 @@ func (m *Manager) loadBackupConfig() (*BackupConfig, error) {
 		return nil, errors.New("backup config path is empty")
 	}
 	return cfg, nil
+}
+
+// CheckBackupTargetDir 执行备份目录的两道写前检查：标记文件必须存在（判
+// 断挂载是否就绪），目录里不能有 .git 工作树。
+func CheckBackupTargetDir(dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, backupMarkerName)); err != nil {
+		return fmt.Errorf("marker file %s not found in --dir %s — refusing to write (is the NAS mounted? create the marker ON the mounted share after mounting)",
+			backupMarkerName, dir)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return fmt.Errorf("--dir %s contains a .git directory — refusing to write credentials into a git working tree", dir)
+	}
+	return nil
+}
+
+// NextEncryptedBackupName 按 vault-<UTC 时间>.sme 选名，同秒冲突时追加
+// -2/-3。
+func NextEncryptedBackupName(dir, prefix string, now time.Time) (string, error) {
+	base := prefix + "-" + now.UTC().Format("20060102-150405")
+	name := base + ".sme"
+	for n := 2; ; n++ {
+		if _, err := os.Stat(filepath.Join(dir, name)); os.IsNotExist(err) {
+			return name, nil
+		} else if err != nil {
+			return "", err
+		}
+		name = fmt.Sprintf("%s-%d.sme", base, n)
+		if n > 99 {
+			return "", fmt.Errorf("too many same-second collisions for %s", base)
+		}
+	}
+}
+
+// checkEncryptedGeneration 写入前试解目录里最新的加密备份：当前口令必须
+// 能解开它，否则拒绝写入，避免备份谱系在口令变化或文件损坏后悄悄分叉。
+func checkEncryptedGeneration(dir, prefix string, passphrase []byte) error {
+	files := ListEncryptedBackups(dir, prefix)
+	if len(files) == 0 {
+		return nil
+	}
+	latest := files[0]
+	blob, err := os.ReadFile(latest.Path)
+	if err != nil {
+		return fmt.Errorf("generation check: reading the latest encrypted backup %s: %w", latest.Name, err)
+	}
+	if _, err := vaultio.Decrypt(passphrase, blob); err != nil {
+		return fmt.Errorf("generation check failed: cannot decrypt the latest encrypted backup %s with this passphrase (the passphrase changed, or the file is corrupted) — refusing to write a new encrypted backup", latest.Name)
+	}
+	return nil
+}
+
+// rotateEncryptedBackups 按文件名保留最新的 keep 份加密备份，其余删除；
+// 同目录的明文备份不受影响。
+func rotateEncryptedBackups(dir, prefix string, keep int) error {
+	matches, err := filepath.Glob(filepath.Join(dir, prefix+"-*.sme"))
+	if err != nil {
+		return err
+	}
+	if len(matches) <= keep {
+		return nil
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+	for _, path := range matches[keep:] {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			continue
+		}
+	}
+	return nil
+}
+
+// EncryptedBackupRequest 描述一次加密备份的写入参数。SnapshotJSON 由调用
+// 方提供，命令行与运维模块各自从已解锁的 vault 取快照。
+type EncryptedBackupRequest struct {
+	Dir            string
+	Prefix         string
+	Keep           int
+	PassphraseFile string
+	SnapshotJSON   func() ([]byte, error)
+	Now            func() time.Time
+}
+
+// EncryptedBackupResult 是加密备份引擎的返回值。RotationErr 非空表示备份
+// 文件已写入并通过回读校验，只是清理旧备份失败，调用方按警告处理。
+type EncryptedBackupResult struct {
+	Name        string
+	RotationErr error
+}
+
+// CreateEncryptedBackup 执行与 `backup create` 相同的加密备份链：读口令、
+// 加锁、口令试解、取快照、加密、原子写入、回读校验、按份数轮转。
+func CreateEncryptedBackup(request EncryptedBackupRequest) (EncryptedBackupResult, error) {
+	passphrase, err := ReadPassphraseFile(request.PassphraseFile)
+	if err != nil {
+		return EncryptedBackupResult{}, err
+	}
+	if len(passphrase) == 0 {
+		return EncryptedBackupResult{}, fmt.Errorf("passphrase must not be empty")
+	}
+	lock, err := AcquireBackupLock(request.Dir)
+	if err != nil {
+		return EncryptedBackupResult{}, err
+	}
+	defer lock.Release()
+
+	if err := checkEncryptedGeneration(request.Dir, request.Prefix, passphrase); err != nil {
+		return EncryptedBackupResult{}, err
+	}
+	data, err := request.SnapshotJSON()
+	if err != nil {
+		return EncryptedBackupResult{}, err
+	}
+	blob, err := vaultio.Encrypt(passphrase, data)
+	if err != nil {
+		return EncryptedBackupResult{}, err
+	}
+	now := request.Now
+	if now == nil {
+		now = time.Now
+	}
+	name, err := NextEncryptedBackupName(request.Dir, request.Prefix, now())
+	if err != nil {
+		return EncryptedBackupResult{}, err
+	}
+	finalPath, err := AtomicWriteFile(request.Dir, name, blob)
+	if err != nil {
+		return EncryptedBackupResult{}, err
+	}
+	if err := verifyEncryptedWritten(finalPath, passphrase); err != nil {
+		return EncryptedBackupResult{}, fmt.Errorf("post-write verification failed for %s: %w", finalPath, err)
+	}
+	result := EncryptedBackupResult{Name: filepath.Base(finalPath)}
+	if request.Keep > 0 {
+		if err := rotateEncryptedBackups(request.Dir, request.Prefix, request.Keep); err != nil {
+			result.RotationErr = fmt.Errorf("rotation error (backups left in place): %w", err)
+		}
+	}
+	return result, nil
+}
+
+// verifyEncryptedWritten 回读刚写入的备份，用同一口令解密并重新解析为
+// vault 快照。
+func verifyEncryptedWritten(path string, passphrase []byte) error {
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	plain, err := vaultio.Decrypt(passphrase, blob)
+	if err != nil {
+		return fmt.Errorf("decrypt failed: %w", err)
+	}
+	if err := json.Unmarshal(plain, &store.Snapshot{}); err != nil {
+		return fmt.Errorf("re-unmarshal failed: %w", err)
+	}
+	return nil
+}
+
+// BackupCreateResult 是立即备份的返回值；Skipped 表示已有备份正在进行，
+// 本次没有写入。
+type BackupCreateResult struct {
+	File    string
+	Skipped bool
+}
+
+// CreateBackup 按 backup.json 的参数立即执行一次加密备份，结果写入
+// backup.create 审计行。备份写入时已回读校验，成功行同时算作一次成功
+// 校验。
+func (m *Manager) CreateBackup(source Source) (BackupCreateResult, error) {
+	cfg, err := m.loadBackupConfig()
+	if err != nil {
+		return BackupCreateResult{}, err
+	}
+	if err := CheckBackupTargetDir(cfg.Dir); err != nil {
+		return BackupCreateResult{}, err
+	}
+	outcome, err := CreateEncryptedBackup(EncryptedBackupRequest{
+		Dir: cfg.Dir, Prefix: backupPrefix, Keep: cfg.Keep,
+		PassphraseFile: cfg.PassphraseFile, SnapshotJSON: m.snapshotJSON, Now: m.now,
+	})
+	if errors.Is(err, ErrConcurrentBackup) {
+		_ = m.RecordBackupCreate(source, "", "skipped", nil)
+		return BackupCreateResult{Skipped: true}, nil
+	}
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	auditErr := m.RecordBackupCreate(source, outcome.Name, result, err)
+	if err != nil {
+		return BackupCreateResult{}, err
+	}
+	return BackupCreateResult{File: outcome.Name}, auditErr
+}
+
+// snapshotJSON 从当前已解锁的 vault 导出快照，缩进与 export 命令一致。
+func (m *Manager) snapshotJSON() ([]byte, error) {
+	snapshot, err := m.st.ExportSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(snapshot, "", "  ")
+}
+
+// RecordBackupCreate 记录一次 backup.create 审计行；立即备份与命令行
+// backup create 共用，摘要只含文件名与结果。
+func (m *Manager) RecordBackupCreate(source Source, file, result string, opErr error) error {
+	summary := map[string]any{"result": result}
+	if file != "" {
+		summary["file"] = file
+	}
+	return m.writeAudit("backup.create", summary, opErr, source)
 }
 
 // BackupConfig 是解析并通过校验的 backup.json：备份目录、保留份数与口令
@@ -449,6 +660,89 @@ func (m *Manager) BackupStatus() (BackupStatus, error) {
 // backupAuditLookback 是查找校验结果时最多回看的审计行数。摘要按文件名
 // 匹配，没有专用的数据库索引，回看不足时状态退化为「尚未校验」。
 const backupAuditLookback = 500
+
+// staleLockDuration 是备份锁被视作遗留的最小时长。备份通常数秒完成；超
+// 过 5 分钟仍持有锁说明存储已挂起，后来者可以回收锁。
+const staleLockDuration = 300 * time.Second
+
+const backupLockName = ".ssh-manager-backup.lock"
+const backupMarkerName = ".ssh-manager-backup-marker"
+
+// ErrConcurrentBackup 表示已有一次备份正在进行。调用方按「跳过」处理，
+// 不视为错误。
+var ErrConcurrentBackup = errors.New("another backup in progress")
+
+// BackupLock 是防止并发备份的建议锁文件。独占创建不会在进程退出时自动
+// 释放，崩溃后由后来者按时间回收。
+type BackupLock struct {
+	path string
+}
+
+// AcquireBackupLock 创建独占锁文件并写入开始时间。锁已存在时读取其中
+// 的时间：超过回收时长则接管，否则返回 ErrConcurrentBackup。
+func AcquireBackupLock(dir string) (*BackupLock, error) {
+	path := filepath.Join(dir, backupLockName)
+	if lock, err := tryCreateBackupLock(path); err == nil {
+		return lock, nil
+	} else if !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+	stale, err := backupLockIsStale(path)
+	if err != nil {
+		// 锁内容不可读或已被人抢先删掉：再试一次创建，仍失败按并发处理。
+		if lock, retryErr := tryCreateBackupLock(path); retryErr == nil {
+			return lock, nil
+		}
+		return nil, ErrConcurrentBackup
+	}
+	if !stale {
+		return nil, ErrConcurrentBackup
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("reclaim stale lock %s: %w", path, err)
+	}
+	if lock, err := tryCreateBackupLock(path); err == nil {
+		return lock, nil
+	}
+	return nil, ErrConcurrentBackup
+}
+
+func tryCreateBackupLock(path string) (*BackupLock, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := file.WriteString(strconv.FormatInt(time.Now().Unix(), 10) + "\n"); err != nil {
+		file.Close()
+		os.Remove(path)
+		return nil, err
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(path)
+		return nil, err
+	}
+	return &BackupLock{path: path}, nil
+}
+
+func backupLockIsStale(path string) (bool, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	start, err := strconv.ParseInt(strings.TrimSpace(string(content)), 10, 64)
+	if err != nil {
+		return false, err
+	}
+	return time.Since(time.Unix(start, 0)) > staleLockDuration, nil
+}
+
+// Release 删除锁文件；已不存在时忽略。
+func (l *BackupLock) Release() {
+	if l == nil || l.path == "" {
+		return
+	}
+	os.Remove(l.path)
+}
 
 // latestVerifyState 在审计里查找针对某个文件的最近一次校验记录；立即备
 // 份的 backup.create 成功行也算一次成功校验。

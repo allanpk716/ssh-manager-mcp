@@ -19,8 +19,6 @@ import (
 	"ssh-manager-mcp/internal/vaultio"
 )
 
-const backupMarkerName = ".ssh-manager-backup-marker"
-
 // validatePassphraseNotInDir 委托给运维模块的口令文件位置校验。
 func validatePassphraseNotInDir(dir, passphraseFile string) error {
 	return ops.ValidatePassphraseNotInDir(dir, passphraseFile)
@@ -84,19 +82,8 @@ func runBackupVerify(cmd *cobra.Command, file, passphraseSrc string) error {
 // verifyEncryptedFile runs the two verify gates on an encrypted backup: the
 // passphrase must decrypt it, and the plaintext must re-parse as a Snapshot.
 func verifyEncryptedFile(cmd *cobra.Command, file string, blob []byte, passphraseSrc string) error {
-	if passphraseSrc == "" {
-		return fmt.Errorf("%s is a passphrase-encrypted backup; --passphrase-file is required", filepath.Base(file))
-	}
-	pw, err := readPassphraseFile(passphraseSrc)
-	if err != nil {
+	if err := ops.VerifyEncryptedBackupBlob(file, blob, passphraseSrc); err != nil {
 		return err
-	}
-	plain, err := vaultio.Decrypt(pw, blob)
-	if err != nil {
-		return fmt.Errorf("decrypt failed (wrong passphrase, or the file is corrupted): %w", err)
-	}
-	if err := jsonUnmarshalSnapshot(plain); err != nil {
-		return fmt.Errorf("re-unmarshal failed: %w", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "ok: %s (decrypted and json structurally valid)\n", filepath.Base(file))
 	return nil
@@ -196,26 +183,42 @@ func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, pa
 		}
 	}
 
-	// 1. marker (mount-present guard)
-	if !markerExists(dir) {
-		return fmt.Errorf("marker file %s not found in --dir %s — refusing to write (is the NAS mounted? create the marker ON the mounted share after mounting)",
-			backupMarkerName, dir)
-	}
-	// 2. .git guardrail (self only, no ancestor walk)
-	if dirContainsGit(dir) {
-		return fmt.Errorf("--dir %s contains a .git directory — refusing to write credentials into a git working tree", dir)
+	// 1. marker (mount-present guard) + 2. .git guardrail (self only, no
+	// ancestor walk) — shared with the ops module's immediate-backup path.
+	if err := ops.CheckBackupTargetDir(dir); err != nil {
+		return err
 	}
 	// 3. encrypted mode: --passphrase-file present => passphrase-encrypted .sme
 	if passphraseSrc != "" {
-		return runBackupCreateEncrypted(cmd, dir, prefix, keep, passphraseSrc)
+		outcome, err := ops.CreateEncryptedBackup(ops.EncryptedBackupRequest{
+			Dir: dir, Prefix: prefix, Keep: keep, PassphraseFile: passphraseSrc,
+			SnapshotJSON: computeSnapshotJSON,
+		})
+		switch {
+		case errors.Is(err, ops.ErrConcurrentBackup):
+			recordBackupCreateAudit(cmd, "", "skipped", nil)
+			fmt.Fprintln(cmd.OutOrStdout(), "another backup in progress; skipping")
+			return nil
+		case err != nil:
+			recordBackupCreateAudit(cmd, outcome.Name, "error", err)
+			return err
+		}
+		if outcome.RotationErr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", outcome.RotationErr)
+		}
+		recordBackupCreateAudit(cmd, outcome.Name, "ok", nil)
+		fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", outcome.Name)
+		return nil
 	}
 	// 4. lock
-	lk, err := acquireBackupLock(dir)
+	lk, err := ops.AcquireBackupLock(dir)
 	if err != nil {
-		if errors.Is(err, ErrConcurrentBackup) {
+		if errors.Is(err, ops.ErrConcurrentBackup) {
+			recordBackupCreateAudit(cmd, "", "skipped", nil)
 			fmt.Fprintln(cmd.OutOrStdout(), "another backup in progress; skipping")
 			return nil
 		}
+		recordBackupCreateAudit(cmd, "", "error", err)
 		return err
 	}
 	defer lk.Release()
@@ -223,6 +226,7 @@ func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, pa
 	// 4. snapshot + marshal + hash (reuse same []byte)
 	data, err := computeSnapshotJSON()
 	if err != nil {
+		recordBackupCreateAudit(cmd, "", "error", err)
 		return err
 	}
 	sum := sha256.Sum256(data)
@@ -230,6 +234,7 @@ func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, pa
 
 	// 5. skip check
 	if shouldSkip(dir, prefix, fileSHA) {
+		recordBackupCreateAudit(cmd, "", "skipped", nil)
 		fmt.Fprintln(cmd.OutOrStdout(), "vault unchanged; skipping")
 		return nil
 	}
@@ -237,10 +242,12 @@ func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, pa
 	// 6. atomic write
 	name, err := nextBackupName(dir, prefix)
 	if err != nil {
+		recordBackupCreateAudit(cmd, "", "error", err)
 		return err
 	}
 	finalPath, err := atomicWriteFile(dir, name, data)
 	if err != nil {
+		recordBackupCreateAudit(cmd, name, "error", err)
 		return err
 	}
 	// 7. sidecar
@@ -249,6 +256,7 @@ func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, pa
 	}
 	// 9. post-write verify (unmarshal + hash round-trip)
 	if err := verifyWritten(finalPath, fileSHA); err != nil {
+		recordBackupCreateAudit(cmd, name, "error", err)
 		return fmt.Errorf("post-write verification failed for %s: %w", finalPath, err)
 	}
 	// 10. rotation (incl. orphan sidecar sweep)
@@ -257,170 +265,24 @@ func runBackupCreate(cmd *cobra.Command, dir string, keep int, prefix string, pa
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: rotation error (backups left in place): %v\n", err)
 		}
 	}
+	recordBackupCreateAudit(cmd, filepath.Base(finalPath), "ok", nil)
 	fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", filepath.Base(finalPath))
 	return nil
 }
 
-// runBackupCreateEncrypted writes prefix-<UTC>.sme: the same full-vault
-// snapshot JSON as the plaintext path, sealed in the SSHMGRV1 passphrase
-// envelope (Argon2id + AES-256-GCM, vaultio.Encrypt — the same format `export`
-// writes and `import` reads). Marker/.git guards and the lock are shared with
-// the plaintext path; it differs in: no skip-unchanged (the ciphertext differs
-// every run), no .sha256 sidecar (the envelope is self-authenticating), a
-// pre-flight passphrase generation check against the newest existing .sme, a
-// post-write decrypt-verify, and rotation scoped to *.sme (a cohabiting
-// .json/.sha256 lineage is neither rotated nor touched).
-func runBackupCreateEncrypted(cmd *cobra.Command, dir, prefix string, keep int, passphraseSrc string) error {
-	// resolve the passphrase BEFORE anything else — an unreadable or empty
-	// passphrase must never produce (or clobber) a backup file.
-	pw, err := readPassphraseFile(passphraseSrc)
+// recordBackupCreateAudit 把 `backup create` 的结果写成 backup.create 审计
+// 行；计划任务无人值守执行时也经过这里，来源固定为命令行。审计只是附属
+// 记录，写入失败时提示而不改变备份命令本身的退出结果。
+func recordBackupCreateAudit(cmd *cobra.Command, file, result string, runErr error) {
+	st, err := openUnlockedStore()
 	if err != nil {
-		return err
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: cannot open vault to write backup audit: %v\n", err)
+		return
 	}
-	if len(pw) == 0 {
-		return fmt.Errorf("passphrase must not be empty")
+	defer st.Close()
+	if err := ops.New(st).RecordBackupCreate(ops.CLISource(), file, result, runErr); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: backup audit write failed: %v\n", err)
 	}
-
-	lk, err := acquireBackupLock(dir)
-	if err != nil {
-		if errors.Is(err, ErrConcurrentBackup) {
-			fmt.Fprintln(cmd.OutOrStdout(), "another backup in progress; skipping")
-			return nil
-		}
-		return err
-	}
-	defer lk.Release()
-
-	// pre-flight generation check: if this dir already holds encrypted backups
-	// and the CURRENT passphrase cannot decrypt the newest one, the passphrase
-	// has changed (or the newest file is corrupted) — fail closed rather than
-	// writing a backup that silently forks from an unreadable lineage.
-	if err := checkEncryptedGeneration(dir, prefix, pw); err != nil {
-		return err
-	}
-
-	// snapshot + seal (same snapshot bytes as the plaintext path)
-	data, err := computeSnapshotJSON()
-	if err != nil {
-		return err
-	}
-	blob, err := vaultio.Encrypt(pw, data)
-	if err != nil {
-		return err
-	}
-
-	name, err := nextEncryptedBackupName(dir, prefix)
-	if err != nil {
-		return err
-	}
-	finalPath, err := atomicWriteFile(dir, name, blob)
-	if err != nil {
-		return err
-	}
-	// post-write verification: re-read + decrypt + re-parse (the encrypted
-	// counterpart of verifyWritten's hash + re-parse)
-	if err := verifyEncryptedWritten(finalPath, pw); err != nil {
-		return fmt.Errorf("post-write verification failed for %s: %w", finalPath, err)
-	}
-	// rotation scoped to *.sme — .json backups sharing the dir are untouched
-	if keep > 0 {
-		if err := rotateEncryptedBackups(dir, prefix, keep); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: rotation error (backups left in place): %v\n", err)
-		}
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", filepath.Base(finalPath))
-	return nil
-}
-
-// latestEncryptedBackup returns the lexicographically-greatest <prefix>-*.sme
-// path — the same newest-first ordering rule the rotation uses.
-func latestEncryptedBackup(dir, prefix string) (string, bool) {
-	matches, err := filepath.Glob(filepath.Join(dir, prefix+"-*.sme"))
-	if err != nil || len(matches) == 0 {
-		return "", false
-	}
-	sort.Strings(matches)
-	return matches[len(matches)-1], true
-}
-
-// checkEncryptedGeneration implements the pre-flight passphrase generation
-// check: with existing *.sme files present, the current passphrase must decrypt
-// the newest one. No prior .sme => nothing to check, return nil.
-func checkEncryptedGeneration(dir, prefix string, pw []byte) error {
-	latest, ok := latestEncryptedBackup(dir, prefix)
-	if !ok {
-		return nil
-	}
-	blob, err := os.ReadFile(latest)
-	if err != nil {
-		return fmt.Errorf("generation check: reading the latest encrypted backup %s: %w", filepath.Base(latest), err)
-	}
-	// Decrypt cannot distinguish a wrong passphrase from a tampered blob (GCM
-	// auth failure) — name both causes, per spec.
-	if _, err := vaultio.Decrypt(pw, blob); err != nil {
-		return fmt.Errorf("generation check failed: cannot decrypt the latest encrypted backup %s with this passphrase (the passphrase changed, or the file is corrupted) — refusing to write a new encrypted backup", filepath.Base(latest))
-	}
-	return nil
-}
-
-// nextEncryptedBackupName picks vault-<UTC>.sme, appending -2/-3 on
-// same-second collision — the exact mechanism nextBackupName uses for .json.
-func nextEncryptedBackupName(dir, prefix string) (string, error) {
-	base := prefix + "-" + time.Now().UTC().Format("20060102-150405")
-	name := base + ".sme"
-	for n := 2; ; n++ {
-		if _, err := os.Stat(filepath.Join(dir, name)); os.IsNotExist(err) {
-			return name, nil
-		} else if err != nil {
-			return "", err
-		}
-		name = fmt.Sprintf("%s-%d.sme", base, n)
-		if n > 99 {
-			return "", fmt.Errorf("too many same-second collisions for %s", base)
-		}
-	}
-}
-
-// verifyEncryptedWritten re-reads the just-written .sme, decrypts it with pw,
-// and re-unmarshals the plaintext into store.Snapshot — catching truncation,
-// corruption, or a passphrase mismatch before the run reports success.
-func verifyEncryptedWritten(path string, pw []byte) error {
-	blob, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	plain, err := vaultio.Decrypt(pw, blob)
-	if err != nil {
-		return fmt.Errorf("decrypt failed: %w", err)
-	}
-	if err := jsonUnmarshalSnapshot(plain); err != nil {
-		return fmt.Errorf("re-unmarshal failed: %w", err)
-	}
-	return nil
-}
-
-// rotateEncryptedBackups keeps the `keep` lexicographically-greatest
-// <prefix>-*.sme and deletes the rest. Mirrors rotateBackups but scoped to the
-// .sme extension (no sidecars exist to sweep): .json/.sha256 backups sharing
-// the dir are neither rotated nor touched.
-func rotateEncryptedBackups(dir, prefix string, keep int) error {
-	matches, err := filepath.Glob(filepath.Join(dir, prefix+"-*.sme"))
-	if err != nil {
-		return err
-	}
-	if len(matches) <= keep {
-		return nil
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(matches))) // newest first
-	for _, p := range matches[keep:] {
-		// No sidecar pairing here: a failed remove (real error — e.g. EACCES,
-		// or another process holds an open handle on Windows) just leaves the
-		// .sme in place and moves on.
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-			continue
-		}
-	}
-	return nil
 }
 
 // computeSnapshotJSON opens the unlocked vault, exports, and marshals with the
@@ -436,16 +298,6 @@ func computeSnapshotJSON() ([]byte, error) {
 		return nil, err
 	}
 	return json.MarshalIndent(snap, "", "  ")
-}
-
-func markerExists(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, backupMarkerName))
-	return err == nil
-}
-
-func dirContainsGit(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, ".git"))
-	return err == nil
 }
 
 // shouldSkip reports whether the latest existing backup's sidecar matches fileSHA.

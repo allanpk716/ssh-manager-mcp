@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
 )
@@ -440,5 +441,202 @@ func TestVerifyLatestBackupWithoutBackupsOrConfig(t *testing.T) {
 	m.backupConfigPath = func() (string, error) { return filepath.Join(root, "missing.json"), nil }
 	if _, err := m.VerifyLatestBackup(CLISource()); err == nil {
 		t.Fatal("配置缺失时应返回错误")
+	}
+}
+
+// prepareCreateBackupEnv 准备带标记文件的备份目录、口令文件与备份配置。
+func prepareCreateBackupEnv(t *testing.T, keep int) (*Manager, *store.Store, string, string) {
+	t.Helper()
+	m, st, root := newBackupTestManager(t)
+	dir := filepath.Join(root, "backups")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".ssh-manager-backup-marker"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	passFile := filepath.Join(root, "backup.pass")
+	if err := os.WriteFile(passFile, []byte("correct-passphrase"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "backup.json")
+	writeBackupJSON(t, configPath, dir, keep, passFile)
+	m.backupConfigPath = func() (string, error) { return configPath, nil }
+	return m, st, dir, passFile
+}
+
+func TestCreateBackupWritesEncryptedFileAndAudit(t *testing.T) {
+	m, st, dir, passFile := prepareCreateBackupEnv(t, 7)
+	if _, err := st.AddServer(&models.Server{
+		Name: "web-1", Host: "192.0.2.10", Port: 22, User: "owner",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := m.CreateBackup(WebUISource("192.0.2.23"))
+	if err != nil {
+		t.Fatalf("立即备份应成功：%v", err)
+	}
+	if result.File == "" || result.Skipped {
+		t.Fatalf("备份结果应带文件名：%+v", result)
+	}
+	blob, err := os.ReadFile(filepath.Join(dir, result.File))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := vaultio.Decrypt([]byte("correct-passphrase"), blob)
+	if err != nil {
+		t.Fatalf("新备份应能用配置口令解密：%v", err)
+	}
+	if !strings.Contains(string(plain), "web-1") {
+		t.Fatalf("新备份应包含 vault 快照内容：%s", plain)
+	}
+
+	rows, err := st.AuditRows(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Action != "backup.create" || rows[0].Status != "ok" ||
+		rows[0].Source != store.AuditSourceWebUI || rows[0].SourceIP != "192.0.2.23" ||
+		!strings.Contains(rows[0].Command, result.File) {
+		t.Fatalf("立即备份应写审计行：%+v %s", rows, result.File)
+	}
+	if strings.Contains(rows[0].Command, "correct-passphrase") || strings.Contains(rows[0].Command, passFile) {
+		t.Fatalf("备份摘要不得包含口令内容或口令文件路径：%s", rows[0].Command)
+	}
+
+	status, err := m.BackupStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Total != 1 || status.LatestName != result.File {
+		t.Fatalf("状态应显示新备份：%+v", status)
+	}
+	// 立即备份写入时已回读校验，应算作一次成功校验。
+	if status.Verify == nil || !status.Verify.OK {
+		t.Fatalf("立即备份后状态应显示已校验：%+v", status.Verify)
+	}
+}
+
+func TestCreateBackupRotatesByKeep(t *testing.T) {
+	m, _, dir, _ := prepareCreateBackupEnv(t, 2)
+	now := time.Unix(1800000000, 0)
+	m.now = func() time.Time { return now }
+
+	for i := 0; i < 3; i++ {
+		if _, err := m.CreateBackup(CLISource()); err != nil {
+			t.Fatalf("第 %d 次备份失败：%v", i+1, err)
+		}
+		now = now.Add(2 * time.Second)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "vault-*.sme"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("keep=2 时应只保留两份备份：%v", matches)
+	}
+}
+
+func TestCreateBackupRefusesWrongPassphraseLineage(t *testing.T) {
+	m, st, dir, _ := prepareCreateBackupEnv(t, 7)
+	blob, err := vaultio.Encrypt([]byte("older-passphrase"), []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "vault-20251231-000000.sme"), blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := m.CreateBackup(CLISource())
+	if err == nil {
+		t.Fatal("口令试解失败时应拒绝写入")
+	}
+	if result.File != "" {
+		t.Fatalf("失败时不应报告文件名：%+v", result)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "vault-*.sme"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("失败时不应写入新备份：%v", matches)
+	}
+	rows, err := st.AuditRows(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Action != "backup.create" || rows[0].Status != "error" {
+		t.Fatalf("失败的立即备份也应写审计：%+v", rows)
+	}
+}
+
+func TestCreateBackupSkipsWhenConcurrent(t *testing.T) {
+	m, _, dir, _ := prepareCreateBackupEnv(t, 7)
+	lock, err := AcquireBackupLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+
+	result, err := m.CreateBackup(CLISource())
+	if err != nil {
+		t.Fatalf("并发备份应返回跳过而不是错误：%v", err)
+	}
+	if !result.Skipped || result.File != "" {
+		t.Fatalf("并发备份应标记跳过：%+v", result)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "vault-*.sme"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("并发跳过时不应写备份：%v", matches)
+	}
+}
+
+func TestCreateBackupRefusesWithoutMarker(t *testing.T) {
+	m, _, dir, _ := prepareCreateBackupEnv(t, 7)
+	if err := os.Remove(filepath.Join(dir, ".ssh-manager-backup-marker")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.CreateBackup(CLISource()); err == nil {
+		t.Fatal("缺少标记文件时应拒绝写入")
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "vault-*.sme"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("缺少标记文件时不应写备份：%v", matches)
+	}
+}
+
+func TestBackupPostWriteVerifyEncryptedTamperAndWrongPass(t *testing.T) {
+	blob, err := vaultio.Encrypt([]byte("pass-alpha"), []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "vault-20260101-000000.sme")
+	if err := os.WriteFile(path, blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := verifyEncryptedWritten(path, []byte("pass-alpha")); err != nil {
+		t.Fatalf("完好的备份应通过回读校验：%v", err)
+	}
+	tampered := append([]byte(nil), blob...)
+	tampered[len(tampered)-1] ^= 0xFF
+	if err := os.WriteFile(path, tampered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyEncryptedWritten(path, []byte("pass-alpha")); err == nil {
+		t.Fatal("被篡改的备份必须无法通过回读校验")
+	}
+	if err := os.WriteFile(path, blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyEncryptedWritten(path, []byte("pass-beta")); err == nil {
+		t.Fatal("口令不符必须无法通过回读校验")
 	}
 }
