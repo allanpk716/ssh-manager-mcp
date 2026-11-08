@@ -26,7 +26,7 @@ func newTestManager(t *testing.T) *Manager {
 
 func mustAddServer(t *testing.T, m *Manager, srv *models.Server) string {
 	t.Helper()
-	id, err := m.st.AddServerWithCredentials(srv, nil, nil)
+	id, err := m.st.AddServer(srv)
 	if err != nil {
 		t.Fatal(err)
 	}
