@@ -15,7 +15,7 @@ import (
 )
 
 // clientAuditRecord 是客户端本机审计日志文件一行的磁盘格式。字段名与
-// store.AuditRow.JSONMap 写入旁车日志时的字段保持一致；解析与写入分属两个
+// store.AuditRow.JSONMap 写入客户端本机审计日志文件时的字段保持一致；解析与写入分属两个
 // 结构，避免以后无意中改坏其中一侧。
 type clientAuditRecord struct {
 	ID         int64  `json:"id"`
@@ -32,7 +32,7 @@ type clientAuditRecord struct {
 	SourceIP   string `json:"source_ip"`
 }
 
-// ReadClientAudit 读取一个客户端实例旁边的本机审计日志文件，按记录时间顺序
+// ReadClientAudit 读取一个客户端实例目录中的本机审计日志文件，按记录时间顺序
 // 倒序返回（最新在前）。instance 空串表示默认实例；limit 为 0 表示不限条
 // 数，负数报错。文件不存在表示还没有本机审计记录，返回空结果；单行损坏只
 // 跳过该行，不影响其余记录。

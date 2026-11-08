@@ -91,7 +91,7 @@ func (r OpsAuditRow) CommandDisplay() string {
 // 实现；处理器测试用桩，本包不接触数据库结构和文件布局。
 type OpsStore interface {
 	QueryAudit(query OpsAuditQuery) ([]OpsAuditRow, error)
-	// QueryClientAudit 读取客户端实例旁边的本机审计日志文件。instance 空串
+	// QueryClientAudit 读取客户端实例目录中的本机审计日志文件。instance 空串
 	// 表示默认实例；后续客户端页会把这里改成按请求传入会话中的实例。
 	QueryClientAudit(instance string, limit int) ([]OpsAuditRow, error)
 }

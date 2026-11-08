@@ -9,7 +9,7 @@ import (
 	"ssh-manager-mcp/internal/ops"
 )
 
-// cacheAuditCmd 提供 `sshmgr cache audit`：读取一个客户端实例旁的本机审计
+// cacheAuditCmd 提供 `sshmgr cache audit`：读取一个客户端实例目录中的本机审计
 // 日志文件（JSON 按行追加），最新记录在前。客户端角色不打开权威 vault，因
 // 此不经过 openUnlockedStore。
 func cacheAuditCmd() *cobra.Command {
