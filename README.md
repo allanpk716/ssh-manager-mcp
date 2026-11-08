@@ -15,6 +15,7 @@ Single Go binary. Cross-platform (Windows / Linux / macOS). No daemon — the br
 | 我是…… | 看这篇 |
 |---|---|
 | **单机**用（一台操作机 + 一台目标服务器） | [`docs/quickstart-single-machine.md`](docs/quickstart-single-machine.md) |
+| **单机**用终端图形界面（带截图一步步跟做） | [`docs/tutorial-single-machine.md`](docs/tutorial-single-machine.md) |
 | **多机**用（多台机器共用一份 vault） | [`docs/quickstart-multi-machine.md`](docs/quickstart-multi-machine.md) |
 
 **详尽操作指南**（从零到跑通 / 全部可选项 / 排错 / 场景）：
@@ -23,6 +24,7 @@ Single Go binary. Cross-platform (Windows / Linux / macOS). No daemon — the br
 |---|---|
 | 一屏看全部署形态（单机 / 多机部署 + 管理面）怎么选 | [`docs/deployment-modes.md`](docs/deployment-modes.md) |
 | 从零到跑通（安装 / 解锁 / 第一台服务器 / 授权 Claude Code） | [`docs/getting-started.md`](docs/getting-started.md) |
+| 单机终端图形界面带截图教程（`sshmgr tui`） | [`docs/tutorial-single-machine.md`](docs/tutorial-single-machine.md) |
 | 新增 / 编辑 / 维护 / 删除服务器 | [`docs/managing-servers.md`](docs/managing-servers.md) |
 | 授权 Claude Code / Cursor / 其他 agent；token 轮换与吊销 | [`docs/agent-access.md`](docs/agent-access.md) |
 | 多台机器共用一份 vault（`pair` 一条龙入网 + 离线只读缓存） | [`docs/multi-machine.md`](docs/multi-machine.md) |

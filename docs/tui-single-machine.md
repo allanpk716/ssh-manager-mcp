@@ -1,5 +1,7 @@
 # TUI 教程 · 单机版（sshmgr tui）
 
+> 本文即将废弃，带截图的完整教程见 [tutorial-single-machine.md](./tutorial-single-machine.md)。
+
 > **读者**：拿到 sshmgr 单机版 exe、想全程用键盘点选（不想记 CLI 命令）的人。
 > 与 [quickstart-single-machine.md](./quickstart-single-machine.md)（CLI 速通）殊途同归——同一套
 > vault 操作的两个入口。概念模型图解见 [concepts.md](./concepts.md)。

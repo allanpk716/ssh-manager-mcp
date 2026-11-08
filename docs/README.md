@@ -25,6 +25,7 @@
 |---|---|
 | [deployment-modes.md](./deployment-modes.md) | **部署形态全景（选型总览）**：单机 / 多机部署 + 管理面——一共几种部署方案、各自优劣、怎么选。第一次选部署方式先看这篇。 |
 | [getting-started.md](./getting-started.md) | **从零到跑通**：装好 → 解锁 → 加第一台服务器 → 建 profile + project → 配进 Claude Code → 让 agent 跑第一个任务。第一次用先看这篇。 |
+| [tutorial-single-machine.md](./tutorial-single-machine.md) | **单机终端图形界面教程（带截图）**：用 `sshmgr tui` 从首跑向导一路走到 Claude Code 调用 `uname -a` 成功。 |
 | [managing-servers.md](./managing-servers.md) | **新增 / 编辑 / 维护 / 删除服务器**：`servers add` / `edit` / `ls` / `rm`、`import` 批量导入、`gc` 的全部用法，含换密钥、sudo、tags、备注（description）。 |
 | [agent-access.md](./agent-access.md) | **授权 AI agent**：project token 怎么生成、`.mcp.json` 怎么配进 Claude Code / Cursor、token 轮换 / 暂停 / 吊销的断连语义、多 agent 隔离、紧急处置。 |
 | [scenarios.md](./scenarios.md) | **应用场景与示例**：GPU 巡检装包、读 root-only 日志、上传部署、端口转发连数据库、拉日志排查、多环境隔离、token 泄露处置、owner 自己直连。 |
