@@ -16,6 +16,7 @@ import (
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/tui"
+	"ssh-manager-mcp/internal/webui"
 )
 
 // serversStdinIsTTY 判断标准输入是否为交互终端；非交互终端的确认类命令要
@@ -62,10 +63,8 @@ func credentialImpactLabel(kind, typ string) string {
 		kindLabel = "sudo 凭据"
 	}
 	switch typ {
-	case string(models.CredPassword):
-		return kindLabel + "（密码）"
-	case string(models.CredPrivateKey):
-		return kindLabel + "（私钥）"
+	case string(models.CredPassword), string(models.CredPrivateKey):
+		return kindLabel + "（" + webui.CredentialTypeLabel(typ) + "）"
 	default:
 		return kindLabel
 	}

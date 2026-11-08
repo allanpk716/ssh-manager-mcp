@@ -263,7 +263,7 @@ func (m *Manager) Edit(req EditRequest, src Source) (*EditResult, error) {
 		changed = append(changed, "key")
 	}
 	if passwordSet || keySet {
-		srv.Tags = stripTag(srv.Tags, models.TagNeedsPassphrase)
+		srv.Tags = models.RemoveTag(srv.Tags, models.TagNeedsPassphrase)
 	}
 	if req.SudoPassword != nil {
 		sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(*req.SudoPassword)}
@@ -321,16 +321,6 @@ func (m *Manager) auditEditError(name string, changed []string, opErr error, src
 	}
 	_ = m.writeAudit("server.edit", map[string]any{"name": name, "changed": changed}, opErr, src)
 	return opErr
-}
-
-func stripTag(tags []string, tag string) []string {
-	out := make([]string, 0, len(tags))
-	for _, t := range tags {
-		if t != tag {
-			out = append(out, t)
-		}
-	}
-	return out
 }
 
 // keyText 返回提交的私钥来源文字（文件路径或粘贴内容），用于空值校验。

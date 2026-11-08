@@ -47,3 +47,15 @@ func ServerHasTag(tags []string, tag string) bool {
 	}
 	return false
 }
+
+// RemoveTag 返回去掉某个标签后的新列表；原列表不变，列表为空时返回空列
+// 表。
+func RemoveTag(tags []string, tag string) []string {
+	out := make([]string, 0, len(tags))
+	for _, item := range tags {
+		if item != tag {
+			out = append(out, item)
+		}
+	}
+	return out
+}

@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 //go:embed templates/*.tmpl
@@ -113,21 +115,18 @@ func (h *handler) writePage(w http.ResponseWriter, r *http.Request, status int, 
 
 // pageFuncs 是页面模板共用的小工具函数，只做展示层转换。
 var pageFuncs = template.FuncMap{
-	"joinReasons": func(items []string) string { return strings.Join(items, "、") },
-	"joinTags":    func(items []string) string { return strings.Join(items, ",") },
-	"addOne":      func(v int) int { return v + 1 },
-	"credentialLabel": func(kind string) string {
-		switch kind {
-		case "password":
-			return "密码"
-		case "private_key":
-			return "私钥"
-		case "":
-			return "未挂凭据"
-		default:
-			return kind
+	// joinReasons 把注意原因代号换成中文文案后拼接；未知代号原样保留，
+	// 便于发现新的原因代号没有配文案。
+	"joinReasons": func(items []string) string {
+		labels := make([]string, 0, len(items))
+		for _, item := range items {
+			labels = append(labels, attentionReasonLabel(item))
 		}
+		return strings.Join(labels, "、")
 	},
+	"joinTags":        func(items []string) string { return strings.Join(items, ",") },
+	"addOne":          func(v int) int { return v + 1 },
+	"credentialLabel": CredentialTypeLabel,
 	// defaultConfigPath 是导入路径表单的默认值：运行 Web UI 进程那台机器上
 	// 当前用户的 ~/.ssh/config。
 	"defaultConfigPath": func() string {
@@ -173,6 +172,34 @@ func loadPageTemplates() (map[string]parsedPage, error) {
 		pages[entry.Name()] = parsedPage{full: full, fragment: fragment}
 	}
 	return pages, nil
+}
+
+// CredentialTypeLabel 把登录凭据类型代号换成页面文案；未知代号原样返回。
+func CredentialTypeLabel(kind string) string {
+	switch kind {
+	case "password":
+		return "密码"
+	case "private_key":
+		return "私钥"
+	case "":
+		return "未挂凭据"
+	default:
+		return kind
+	}
+}
+
+// attentionReasonLabel 把注意原因代号换成页面文案；未知代号原样返回。
+func attentionReasonLabel(code string) string {
+	switch code {
+	case models.ReasonNoCredential:
+		return "未挂凭据"
+	case models.ReasonNoRole:
+		return "未设角色"
+	case models.ReasonNeedsPassphrase:
+		return "待补私钥口令"
+	default:
+		return code
+	}
 }
 
 // isFragmentRequest 判断是否为 htmx 发起的局部刷新请求。

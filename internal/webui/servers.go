@@ -4,14 +4,16 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
 	"ssh-manager-mcp/internal/models"
 )
 
-// ServerListEntry 是服务器页列表与过滤视图的一行；注意原因已经是界面文
-// 案。
+// ServerListEntry 是服务器页列表与过滤视图的一行；AttentionReasons 携带注
+// 意原因代号（no-credential、no-role、needs-passphrase），模板负责换成人
+// 能读懂的文案。
 type ServerListEntry struct {
 	ID               string
 	Name             string
@@ -22,7 +24,7 @@ type ServerListEntry struct {
 }
 
 // ServerDetailView 是服务器详情页的展示数据，只含凭据状态，绝不含凭据内
-// 容。
+// 容；AttentionReasons 携带注意原因代号，模板负责换成文案。
 type ServerDetailView struct {
 	ID               string
 	Name             string
@@ -43,6 +45,8 @@ type ServerDetailView struct {
 	ExposeHost       bool
 	DeviceName       string
 	HasDevice        bool
+	// AttentionReasons 是注意原因代号列表，取值见 models 包的注意原因常
+	// 量；页面判断不得依赖界面文案。
 	AttentionReasons []string
 	Revision         int64
 }
@@ -67,8 +71,9 @@ type ServerEditForm struct {
 	Services    *string
 	Role        *string
 	Caveats     *string
-	Tags        *string
-	ExposeHost  *bool
+	// Tags 是解析后的标签列表；nil 表示这个字段没有变化。
+	Tags       []string
+	ExposeHost *bool
 
 	CredentialAction string
 	Password         string
@@ -265,11 +270,9 @@ func (h *handler) handleServerList(w http.ResponseWriter, r *http.Request) {
 // sortServerAttentionFirst 稳定地把需要注意的服务器排到最前。
 func sortServerAttentionFirst(rows []ServerListEntry) []ServerListEntry {
 	sorted := append([]ServerListEntry(nil), rows...)
-	for i := 1; i < len(sorted); i++ {
-		for j := i; j > 0 && len(sorted[j].AttentionReasons) > 0 && len(sorted[j-1].AttentionReasons) == 0; j-- {
-			sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
-		}
-	}
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return len(sorted[i].AttentionReasons) > 0 && len(sorted[j].AttentionReasons) == 0
+	})
 	return sorted
 }
 
@@ -460,7 +463,9 @@ func (h *handler) parseServerEditForm(r *http.Request, current *ServerDetailView
 	form.Services = changedString(r.PostFormValue("services"), current.Services)
 	form.Role = changedString(r.PostFormValue("role"), current.Role)
 	form.Caveats = changedString(r.PostFormValue("special_handling"), current.Caveats)
-	form.Tags = changedString(strings.Join(parseTags(r.PostFormValue("tags")), ","), strings.Join(current.Tags, ","))
+	if tags := parseTags(r.PostFormValue("tags")); strings.Join(tags, ",") != strings.Join(current.Tags, ",") {
+		form.Tags = tags
+	}
 	if port, err := strconv.Atoi(strings.TrimSpace(r.PostFormValue("port"))); err == nil && port > 0 && port != current.Port {
 		form.Port = &port
 	}
@@ -657,16 +662,23 @@ func (h *handler) handleServerComplete(w http.ResponseWriter, r *http.Request) {
 }
 
 func completeQueueFromRequest(r *http.Request) (queue []string, position int) {
-	for _, item := range strings.Split(r.URL.Query().Get("queue"), ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			queue = append(queue, item)
-		}
-	}
+	queue = parseCompleteQueue(r.URL.Query().Get("queue"))
 	position, _ = strconv.Atoi(r.URL.Query().Get("position"))
 	if position < 0 {
 		position = 0
 	}
 	return queue, position
+}
+
+// parseCompleteQueue 把链接或表单里的补全队列参数拆成服务器标识符列表。
+func parseCompleteQueue(raw string) []string {
+	var queue []string
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			queue = append(queue, item)
+		}
+	}
+	return queue
 }
 
 // completeCounts 是随补全队列一起传递的导入计数；「待补」始终按当前数据重
@@ -742,7 +754,7 @@ func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, que
 	view := &serverCompleteView{
 		Detail: detail, Queue: queue, Position: position, Notice: notice,
 		ShowPassword:      detail.CredentialType == "",
-		ShowKeyPassphrase: containsString(detail.AttentionReasons, "待补私钥口令"),
+		ShowKeyPassphrase: containsString(detail.AttentionReasons, models.ReasonNeedsPassphrase),
 		Imported:          counts.Imported, Skipped: counts.Skipped, Failed: counts.Failed,
 	}
 	if view.ShowKeyPassphrase {
@@ -763,12 +775,7 @@ func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, que
 }
 
 func (h *handler) handleServerCompletePost(w http.ResponseWriter, r *http.Request) {
-	var queue []string
-	for _, item := range strings.Split(r.PostFormValue("queue"), ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			queue = append(queue, item)
-		}
-	}
+	queue := parseCompleteQueue(r.PostFormValue("queue"))
 	position, _ := strconv.Atoi(r.PostFormValue("position"))
 	counts := requestCounts(r)
 	if position < 0 || position >= len(queue) {

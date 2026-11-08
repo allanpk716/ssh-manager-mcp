@@ -302,19 +302,6 @@ func deleteServerEntryTx(tx *sql.Tx, id string, auditAt time.Time) (*models.Serv
 	return srv, nil
 }
 
-// dropTagFrom returns tags minus every occurrence of tag (fresh slice, valid
-// empty when the list empties). The store-package twin of the TUI dropTag /
-// CLI stripTag helpers — kept unexported and local to the one call site.
-func dropTagFrom(tags []string, tag string) []string {
-	out := make([]string, 0, len(tags))
-	for _, t := range tags {
-		if t != tag {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
 // ClearServerCredential resets the server to the credential-less form in one
 // transaction: credential/sudo references cleared, the needs-passphrase tag
 // stripped (meaningless without a credential), and exclusively-owned credential
@@ -337,7 +324,7 @@ func (s *Store) ClearServerCredential(id string) error {
 	}
 	oldCred, oldSudo := srv.CredentialID, srv.SudoCredentialID
 	srv.CredentialID, srv.AuthMethod, srv.SudoCredentialID = "", "", ""
-	srv.Tags = dropTagFrom(srv.Tags, models.TagNeedsPassphrase)
+	srv.Tags = models.RemoveTag(srv.Tags, models.TagNeedsPassphrase)
 	if err := updateServerTx(tx, srv); err != nil {
 		return err
 	}
@@ -408,7 +395,7 @@ func (s *Store) UpdateCredentialPassphrase(credID string, passphrase []byte) ([]
 		if err != nil {
 			return nil, err
 		}
-		srv.Tags = dropTagFrom(srv.Tags, models.TagNeedsPassphrase)
+		srv.Tags = models.RemoveTag(srv.Tags, models.TagNeedsPassphrase)
 		if err := updateServerTx(tx, srv); err != nil {
 			return nil, err
 		}

@@ -5,44 +5,49 @@ package webuiservers
 import (
 	"errors"
 	"strconv"
-	"strings"
 
+	"ssh-manager-mcp/internal/importer"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/webui"
 )
 
-type managerSource struct {
-	manager *servermanage.Manager
-}
+// managerOpener 返回一个挂在解锁存储上的服务器管理模块和关闭函数。固定实
+// 例与按请求重开存储的来源都走这一个形状，适配器只有一套。
+type managerOpener func() (*servermanage.Manager, func(), error)
 
-type openerSource struct {
-	open func() (*servermanage.Manager, func(), error)
+// fixedManagerOpener 把固定实例包装成与按请求重开相同的形状。
+func fixedManagerOpener(manager *servermanage.Manager) managerOpener {
+	return func() (*servermanage.Manager, func(), error) {
+		return manager, func() {}, nil
+	}
 }
 
 // FromManager 把一个已挂在解锁存储上的服务器管理模块适配给 Web UI。
 func FromManager(manager *servermanage.Manager) webui.ServerSource {
-	return managerSource{manager: manager}
+	return sourceAdapter{open: fixedManagerOpener(manager)}
 }
 
 // FromOpener 每次页面请求重新打开存储并挂上服务器管理模块，调用结束后关
 // 闭。单机回环 Web UI 没有常驻进程持有存储句柄，用这个入口避免长期占用。
-func FromOpener(open func() (*servermanage.Manager, func(), error)) webui.ServerSource {
-	return openerSource{open: open}
+func FromOpener(open managerOpener) webui.ServerSource {
+	return sourceAdapter{open: open}
 }
 
 // WriterFromManager 返回写操作适配器。
 func WriterFromManager(manager *servermanage.Manager) webui.ServerWriter {
-	return writerStore{manager: manager}
+	return writerAdapter{open: fixedManagerOpener(manager)}
 }
 
 // WriterFromOpener 每次写请求重新打开存储。
-func WriterFromOpener(open func() (*servermanage.Manager, func(), error)) webui.ServerWriter {
-	return writerOpener{open: open}
+func WriterFromOpener(open managerOpener) webui.ServerWriter {
+	return writerAdapter{open: open}
 }
 
-func (s openerSource) withManager(operation func(*servermanage.Manager) error) error {
-	manager, closeStore, err := s.open()
+// withManager 打开服务器管理模块执行一次操作，结束后关闭存储。固定实例的
+// 关闭函数是空操作。
+func withManager(open managerOpener, operation func(*servermanage.Manager) error) error {
+	manager, closeStore, err := open()
 	if err != nil {
 		return err
 	}
@@ -50,9 +55,14 @@ func (s openerSource) withManager(operation func(*servermanage.Manager) error) e
 	return operation(manager)
 }
 
-func (s openerSource) Servers() ([]webui.ServerRow, error) {
+// sourceAdapter 是 Web UI 读取服务器数据的适配器。
+type sourceAdapter struct {
+	open managerOpener
+}
+
+func (s sourceAdapter) Servers() ([]webui.ServerRow, error) {
 	var rows []webui.ServerRow
-	err := s.withManager(func(manager *servermanage.Manager) error {
+	err := withManager(s.open, func(manager *servermanage.Manager) error {
 		items, err := manager.List(false)
 		if err != nil {
 			return err
@@ -69,9 +79,9 @@ func (s openerSource) Servers() ([]webui.ServerRow, error) {
 	return rows, err
 }
 
-func (s openerSource) ServerList(attentionOnly bool) ([]webui.ServerListEntry, error) {
+func (s sourceAdapter) ServerList(attentionOnly bool) ([]webui.ServerListEntry, error) {
 	var rows []webui.ServerListEntry
-	err := s.withManager(func(manager *servermanage.Manager) error {
+	err := withManager(s.open, func(manager *servermanage.Manager) error {
 		var listErr error
 		rows, listErr = ListEntries(manager, attentionOnly)
 		return listErr
@@ -79,38 +89,14 @@ func (s openerSource) ServerList(attentionOnly bool) ([]webui.ServerListEntry, e
 	return rows, err
 }
 
-func (s openerSource) ServerDetail(identifier string) (*webui.ServerDetailView, error) {
+func (s sourceAdapter) ServerDetail(identifier string) (*webui.ServerDetailView, error) {
 	var detail *webui.ServerDetailView
-	err := s.withManager(func(manager *servermanage.Manager) error {
+	err := withManager(s.open, func(manager *servermanage.Manager) error {
 		var detailErr error
 		detail, detailErr = DetailView(manager, identifier)
 		return detailErr
 	})
 	return detail, err
-}
-
-func (s managerSource) Servers() ([]webui.ServerRow, error) {
-	items, err := s.manager.List(false)
-	if err != nil {
-		return nil, err
-	}
-	rows := make([]webui.ServerRow, 0, len(items))
-	for _, item := range items {
-		rows = append(rows, webui.ServerRow{
-			ID: item.Server.ID, Name: item.Server.Name, User: item.Server.User,
-			Host: item.Server.Host, Port: item.Server.Port,
-			NeedsAttention: len(item.AttentionReasons) > 0,
-		})
-	}
-	return rows, nil
-}
-
-func (s managerSource) ServerList(attentionOnly bool) ([]webui.ServerListEntry, error) {
-	return ListEntries(s.manager, attentionOnly)
-}
-
-func (s managerSource) ServerDetail(identifier string) (*webui.ServerDetailView, error) {
-	return DetailView(s.manager, identifier)
 }
 
 // ListEntries 把模块列表换成 Web UI 展示行。
@@ -124,7 +110,7 @@ func ListEntries(manager *servermanage.Manager, attentionOnly bool) ([]webui.Ser
 		rows = append(rows, webui.ServerListEntry{
 			ID: item.Server.ID, Name: item.Server.Name, User: item.Server.User,
 			Host: item.Server.Host, Port: item.Server.Port,
-			AttentionReasons: servermanage.ReasonLabels(item.AttentionReasons),
+			AttentionReasons: item.AttentionReasons,
 		})
 	}
 	return rows, nil
@@ -146,35 +132,20 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 		Services: detail.Server.Services, Role: detail.Server.Role, Caveats: detail.Server.Caveats,
 		Tags: detail.Server.Tags, ExposeHost: detail.Server.ExposeHost,
 		DeviceName: detail.DeviceName, HasDevice: detail.HasDevice,
-		AttentionReasons: servermanage.ReasonLabels(detail.AttentionReasons),
+		AttentionReasons: detail.AttentionReasons,
 		Revision:         detail.Server.Revision,
 	}, nil
 }
 
-type writerStore struct{ manager *servermanage.Manager }
-
-type writerOpener struct {
-	open func() (*servermanage.Manager, func(), error)
+// writerAdapter 是 Web UI 修改服务器数据的适配器。
+type writerAdapter struct {
+	open managerOpener
 }
 
-func (w writerOpener) withManager(operation func(*servermanage.Manager) error) error {
-	manager, closeStore, err := w.open()
-	if err != nil {
-		return err
-	}
-	defer closeStore()
-	return operation(manager)
-}
-
-func (w writerStore) EditServer(id string, form webui.ServerEditForm, source webui.ServerWriteSource) (*webui.ServerEditResultView, *webui.ServerEditConflictView, error) {
-	result, conflict, err := EditServer(w.manager, id, form, source)
-	return result, conflict, err
-}
-
-func (w writerOpener) EditServer(id string, form webui.ServerEditForm, source webui.ServerWriteSource) (*webui.ServerEditResultView, *webui.ServerEditConflictView, error) {
+func (w writerAdapter) EditServer(id string, form webui.ServerEditForm, source webui.ServerWriteSource) (*webui.ServerEditResultView, *webui.ServerEditConflictView, error) {
 	var result *webui.ServerEditResultView
 	var conflict *webui.ServerEditConflictView
-	err := w.withManager(func(manager *servermanage.Manager) error {
+	err := withManager(w.open, func(manager *servermanage.Manager) error {
 		var editErr error
 		result, conflict, editErr = EditServer(manager, id, form, source)
 		return editErr
@@ -206,8 +177,7 @@ func EditServer(manager *servermanage.Manager, id string, form webui.ServerEditF
 		req.SudoPassword = nil
 	}
 	if form.Tags != nil {
-		tags := parseTagList(*form.Tags)
-		req.Tags = &tags
+		req.Tags = &form.Tags
 	}
 	result, err := manager.Edit(req, servermanage.WebUISource(source.RemoteAddress))
 	if err != nil {
@@ -242,13 +212,9 @@ func stringPointer(value string) *string {
 	return &value
 }
 
-func (w writerStore) DeleteServerPreview(identifier string) (*webui.ServerDeletePreviewView, error) {
-	return DeletePreviewView(w.manager, identifier)
-}
-
-func (w writerOpener) DeleteServerPreview(identifier string) (*webui.ServerDeletePreviewView, error) {
+func (w writerAdapter) DeleteServerPreview(identifier string) (*webui.ServerDeletePreviewView, error) {
 	var preview *webui.ServerDeletePreviewView
-	err := w.withManager(func(manager *servermanage.Manager) error {
+	err := withManager(w.open, func(manager *servermanage.Manager) error {
 		var previewErr error
 		preview, previewErr = DeletePreviewView(manager, identifier)
 		return previewErr
@@ -291,10 +257,8 @@ func credentialLabel(kind, typ string) string {
 		kindLabel = "sudo 凭据"
 	}
 	switch typ {
-	case string(models.CredPassword):
-		return kindLabel + "（密码）"
-	case string(models.CredPrivateKey):
-		return kindLabel + "（私钥）"
+	case string(models.CredPassword), string(models.CredPrivateKey):
+		return kindLabel + "（" + webui.CredentialTypeLabel(typ) + "）"
 	default:
 		return kindLabel
 	}
@@ -302,29 +266,18 @@ func credentialLabel(kind, typ string) string {
 
 func itoa(v int) string { return strconv.Itoa(v) }
 
-func (w writerStore) DeleteServer(identifier, digest string, source webui.ServerWriteSource) error {
-	return deleteServer(w.manager, identifier, digest, source)
-}
-
-func (w writerStore) SharedCredentialServers(identifier string) ([]string, error) {
-	return w.manager.SharedCredentialServers(identifier)
-}
-
-func (w writerOpener) DeleteServer(identifier, digest string, source webui.ServerWriteSource) error {
-	var err error
-	w.withManager(func(manager *servermanage.Manager) error {
-		err = deleteServer(manager, identifier, digest, source)
-		return nil
+func (w writerAdapter) DeleteServer(identifier, digest string, source webui.ServerWriteSource) error {
+	return withManager(w.open, func(manager *servermanage.Manager) error {
+		return deleteServer(manager, identifier, digest, source)
 	})
-	return err
 }
 
-func (w writerOpener) SharedCredentialServers(identifier string) ([]string, error) {
+func (w writerAdapter) SharedCredentialServers(identifier string) ([]string, error) {
 	var names []string
-	var err error
-	w.withManager(func(manager *servermanage.Manager) error {
-		names, err = manager.SharedCredentialServers(identifier)
-		return nil
+	err := withManager(w.open, func(manager *servermanage.Manager) error {
+		var nameErr error
+		names, nameErr = manager.SharedCredentialServers(identifier)
+		return nameErr
 	})
 	return names, err
 }
@@ -345,13 +298,9 @@ func deleteServer(manager *servermanage.Manager, identifier, digest string, sour
 	return nil
 }
 
-func (w writerStore) ImportPlan(path, profile string) (*webui.ServerImportPlanView, error) {
-	return ImportPlanView(w.manager, path, profile)
-}
-
-func (w writerOpener) ImportPlan(path, profile string) (*webui.ServerImportPlanView, error) {
+func (w writerAdapter) ImportPlan(path, profile string) (*webui.ServerImportPlanView, error) {
 	var plan *webui.ServerImportPlanView
-	err := w.withManager(func(manager *servermanage.Manager) error {
+	err := withManager(w.open, func(manager *servermanage.Manager) error {
 		var planErr error
 		plan, planErr = ImportPlanView(manager, path, profile)
 		return planErr
@@ -405,28 +354,26 @@ func noteLabel(note string) string {
 
 func skipReasonLabel(reason string) string {
 	switch reason {
-	case "existing-name":
+	case importer.SkipExistingName:
 		return "同名冲突"
-	case "existing-endpoint":
+	case importer.SkipExistingEndpoint:
 		return "相同主机地址、端口、用户"
-	case "wildcard-pattern":
+	case importer.SkipWildcardPattern:
 		return "通配符条目"
-	case "bad-port":
+	case importer.SkipBadPort:
 		return "端口错误"
-	case "internal-duplicate":
+	case importer.SkipInternalDuplicate:
 		return "批内重复主机地址"
+	case servermanage.ImportSkipUnselected:
+		return "未勾选执行"
 	default:
 		return reason
 	}
 }
 
-func (w writerStore) ImportRun(path string, selected []string, profile string, source webui.ServerWriteSource) (*webui.ServerImportRunView, error) {
-	return ImportRunView(w.manager, path, selected, profile, source)
-}
-
-func (w writerOpener) ImportRun(path string, selected []string, profile string, source webui.ServerWriteSource) (*webui.ServerImportRunView, error) {
+func (w writerAdapter) ImportRun(path string, selected []string, profile string, source webui.ServerWriteSource) (*webui.ServerImportRunView, error) {
 	var run *webui.ServerImportRunView
-	err := w.withManager(func(manager *servermanage.Manager) error {
+	err := withManager(w.open, func(manager *servermanage.Manager) error {
 		var runErr error
 		run, runErr = ImportRunView(manager, path, selected, profile, source)
 		return runErr
@@ -454,25 +401,20 @@ func ImportRunView(manager *servermanage.Manager, path string, selected []string
 }
 
 func entryStatusLabel(entry servermanage.ImportEntryStatus) string {
-	switch entry.Status {
-	case "imported":
+	switch entry.Outcome {
+	case servermanage.ImportEntryImported:
 		return "已导入（" + noteLabel(entry.Note) + "）"
-	case "failed":
+	case servermanage.ImportEntryFailed:
 		return "失败：" + entry.Error
+	case servermanage.ImportEntrySkipped:
+		return "跳过：" + skipReasonLabel(entry.SkipReason)
 	}
-	if reason, ok := strings.CutPrefix(entry.Status, "skipped:"); ok {
-		return "跳过：" + skipReasonLabel(reason)
-	}
-	return entry.Status
+	return entry.Outcome
 }
 
-func (w writerStore) CompleteServer(id string, form webui.ServerCompleteForm, source webui.ServerWriteSource) (*webui.ServerCompleteResultView, error) {
-	return CompleteServerView(w.manager, id, form, source)
-}
-
-func (w writerOpener) CompleteServer(id string, form webui.ServerCompleteForm, source webui.ServerWriteSource) (*webui.ServerCompleteResultView, error) {
+func (w writerAdapter) CompleteServer(id string, form webui.ServerCompleteForm, source webui.ServerWriteSource) (*webui.ServerCompleteResultView, error) {
 	var result *webui.ServerCompleteResultView
-	err := w.withManager(func(manager *servermanage.Manager) error {
+	err := withManager(w.open, func(manager *servermanage.Manager) error {
 		var completeErr error
 		result, completeErr = CompleteServerView(manager, id, form, source)
 		return completeErr
@@ -508,16 +450,4 @@ func CompleteServerView(manager *servermanage.Manager, id string, form webui.Ser
 		return nil, err
 	}
 	return &webui.ServerCompleteResultView{Detail: detail, AffectedServers: result.AffectedServers}, nil
-}
-
-// parseTagList 把逗号分隔的标签输入拆成列表；输入与当前标签串相同时由页面
-// 层负责不提交。
-func parseTagList(raw string) []string {
-	var tags []string
-	for _, item := range strings.Split(raw, ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			tags = append(tags, item)
-		}
-	}
-	return tags
 }

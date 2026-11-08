@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/importer"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
@@ -109,16 +110,15 @@ func printImportEntries(out io.Writer, result *servermanage.ImportResult) {
 	}
 	for _, entry := range result.Entries {
 		switch {
-		case entry.Status == "imported":
+		case entry.Outcome == servermanage.ImportEntryImported:
 			fmt.Fprintf(out, "%-20s imported %s\n", entry.Name, candidateNote(entry.Note, true))
-		case entry.Status == "failed":
+		case entry.Outcome == servermanage.ImportEntryFailed:
 			fmt.Fprintf(out, "%-20s FAILED: %s\n", entry.Name, entry.Error)
-		case strings.HasPrefix(entry.Status, "skipped:"):
-			reason := strings.TrimPrefix(entry.Status, "skipped:")
-			if strings.HasPrefix(reason, "existing-") {
-				fmt.Fprintf(out, "%-20s %s\n", entry.Name, renderVaultSkip(reason))
+		case entry.Outcome == servermanage.ImportEntrySkipped:
+			if strings.HasPrefix(entry.SkipReason, "existing-") {
+				fmt.Fprintf(out, "%-20s %s\n", entry.Name, renderVaultSkip(entry.SkipReason))
 			} else {
-				fmt.Fprintf(out, "%-20s skip: %s\n", entry.Name, reason)
+				fmt.Fprintf(out, "%-20s skip: %s\n", entry.Name, entry.SkipReason)
 			}
 		}
 	}
@@ -157,9 +157,9 @@ func profileByName(s *store.Store, name string) (*models.Profile, error) {
 // renderVaultSkip maps an import skip reason to its report wording.
 func renderVaultSkip(reason string) string {
 	switch reason {
-	case "existing-name":
+	case importer.SkipExistingName:
 		return "skip-existing (name)"
-	case "existing-endpoint":
+	case importer.SkipExistingEndpoint:
 		return "skip-existing (host:port:user)"
 	default:
 		return "skip-existing (" + reason + ")"

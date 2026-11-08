@@ -2,6 +2,15 @@ package importer
 
 import "fmt"
 
+// 跳过原因代号：服务器管理模块、命令行与页面按代号换成各自的文案。
+const (
+	// SkipExistingName 表示配置里的别名与 vault 里已有服务器同名。
+	SkipExistingName = "existing-name"
+	// SkipExistingEndpoint 表示主机地址、端口、用户三元组与 vault 里已
+	// 有服务器相同。
+	SkipExistingEndpoint = "existing-endpoint"
+)
+
 // ExistingServer is one server already in the vault, reduced to the fields
 // import conflicts are judged on. The CLI import (T8) and the TUI import flow
 // (T10) both feed this from store.ListServers.
@@ -38,9 +47,9 @@ func PlanImport(cands []Candidate, existing []ExistingServer) (toImport []Candid
 	for _, c := range cands {
 		switch {
 		case names[c.Name]:
-			skipped = append(skipped, SkippedReason{c.Name, "existing-name"})
+			skipped = append(skipped, SkippedReason{c.Name, SkipExistingName})
 		case occ[fmt.Sprintf("%s:%d:%s", c.Host, c.Port, c.User)]:
-			skipped = append(skipped, SkippedReason{c.Name, "existing-endpoint"})
+			skipped = append(skipped, SkippedReason{c.Name, SkipExistingEndpoint})
 		default:
 			toImport = append(toImport, c)
 		}

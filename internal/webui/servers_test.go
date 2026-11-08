@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 // stubServerStore 是服务器页测试用的来源桩：列表、详情与写操作都通过同一
@@ -843,7 +845,7 @@ func TestServersPagesListSharedCredentialServers(t *testing.T) {
 	store.details["srv-key"] = &ServerDetailView{
 		ID: "srv-key", Name: "key", User: "root", Host: "192.0.2.30", Port: 22,
 		Shell: "posix", CredentialType: "private_key", Role: "网站",
-		AttentionReasons: []string{"待补私钥口令"}, Revision: 2,
+		AttentionReasons: []string{models.ReasonNeedsPassphrase}, Revision: 2,
 	}
 	h, cookie := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
 

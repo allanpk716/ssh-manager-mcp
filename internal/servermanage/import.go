@@ -48,12 +48,26 @@ type ImportPlan struct {
 
 // ImportEntryStatus 是导入执行结果里的一台机器状态。
 type ImportEntryStatus struct {
-	Name   string
-	Status string
-	Error  string
+	Name string
+	// Outcome 是导入结果代号：imported（已导入）、skipped（跳过）、failed
+	// （失败），取值见导入结果代号常量。
+	Outcome string
+	// SkipReason 是跳过原因代号，只在 Outcome 为 skipped 时有值。
+	SkipReason string
+	Error      string
 	// Note 是这台候选的凭据注释代号（key / no-credential / needs-passphrase）。
 	Note string
 }
+
+// 导入执行结果的逐台结果代号。
+const (
+	ImportEntryImported = "imported"
+	ImportEntrySkipped  = "skipped"
+	ImportEntryFailed   = "failed"
+	// ImportSkipUnselected 表示候选没有勾选执行，是执行阶段独有的跳过原
+	// 因代号。
+	ImportSkipUnselected = "unselected"
+)
 
 // ImportResult 是一次导入执行的结构化结果：四类计数、逐台状态与导入成功的
 // 服务器标识符（补全队列直接使用）。
@@ -154,26 +168,26 @@ func (m *Manager) RunImport(configPath string, selected []string, profile string
 	for _, name := range selected {
 		selectedSet[name] = true
 	}
-	status := func(name, text string, failure error) {
-		entry := ImportEntryStatus{Name: name, Status: text}
+	status := func(name, outcome, skipReason string, failure error) {
+		entry := ImportEntryStatus{Name: name, Outcome: outcome, SkipReason: skipReason}
 		if failure != nil {
 			entry.Error = failure.Error()
 		}
 		result.Entries = append(result.Entries, entry)
 	}
 	for _, skipped := range plan.VaultSkipped {
-		status(skipped.Name, "skipped:"+skipped.Reason, nil)
+		status(skipped.Name, ImportEntrySkipped, skipped.Reason, nil)
 		result.Skipped++
 	}
 	for _, skipped := range plan.ParseSkipped {
-		status(skipped.Name, "skipped:"+skipped.Reason, nil)
+		status(skipped.Name, ImportEntrySkipped, skipped.Reason, nil)
 		result.Skipped++
 	}
 	configDir := filepath.Dir(configPath)
 	keyIDs := map[[32]byte]string{}
 	for _, cand := range candidates {
 		if !selectedSet[cand.Name] {
-			status(cand.Name, "skipped:unselected", nil)
+			status(cand.Name, ImportEntrySkipped, ImportSkipUnselected, nil)
 			result.Skipped++
 			continue
 		}
@@ -184,7 +198,7 @@ func (m *Manager) RunImport(configPath string, selected []string, profile string
 		}
 		id, err := m.insertServerRow(srv, pick.Cred, nil)
 		if err != nil {
-			status(cand.Name, "failed", err)
+			status(cand.Name, ImportEntryFailed, "", err)
 			result.Failed++
 			continue
 		}
@@ -202,7 +216,7 @@ func (m *Manager) RunImport(configPath string, selected []string, profile string
 				note = ImportNoteNeedsPassphrase
 			}
 		}
-		status(cand.Name, "imported", nil)
+		status(cand.Name, ImportEntryImported, "", nil)
 		result.Entries[len(result.Entries)-1].Note = note
 	}
 	result.Pending = m.pendingCount(result.ImportedServerIDs)
@@ -238,20 +252,10 @@ func accessSource(src Source) access.Source {
 	return access.CLISource()
 }
 
-// pendingCount 统计给定服务器里当前仍需要注意的数量；导入结果与补全结果页
+// pendingCount 统计给定服务器里当前仍需要注意的数量；判断逻辑与补全队列
 // 共用，数字始终按最新数据计算。
 func (m *Manager) pendingCount(ids []string) int {
-	count := 0
-	for _, id := range ids {
-		srv, err := m.st.GetServer(id)
-		if err != nil || srv == nil {
-			continue
-		}
-		if len(models.ServerAttentionReasons(srv.CredentialID, srv.Role, srv.Tags)) > 0 {
-			count++
-		}
-	}
-	return count
+	return len(m.AttentionPendingIDs(ids))
 }
 
 // AttentionPendingIDs 返回给定服务器里仍需要注意的标识符，供补全队列推进
