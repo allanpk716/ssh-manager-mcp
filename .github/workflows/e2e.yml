@@ -7,6 +7,8 @@ on:
       - "internal/webui/**"
       - "internal/webuiaccess/**"
       - "internal/access/**"
+      - "internal/servermanage/**"
+      - "internal/webuiservers/**"
       - "e2e/**"
 
 permissions:

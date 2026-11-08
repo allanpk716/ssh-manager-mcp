@@ -37,8 +37,9 @@ export type standaloneUI = {
 // `sshmgr ui`，并返回一次性启动链接。子进程的 PATH 指向不存在的目录，
 // 这样「自动打开系统浏览器」会失败并只打印链接，由 Playwright 自己使用
 // 这条一次性链接，避免真实浏览器抢先消耗它。
-async function startStandaloneUI(): Promise<standaloneUI> {
+async function startStandaloneUI(setup?: (runDir: string) => void): Promise<standaloneUI> {
   const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-"));
+  setup?.(runDir);
   const seed = spawnSync("go", ["run", "./e2e/tools/seedvault", runDir], {
     cwd: repoRoot,
     encoding: "utf8",
@@ -119,7 +120,7 @@ export const test = base.extend<standaloneUIFixture>({
   },
 });
 
-export { expect };
+export { expect, startStandaloneUI };
 
 // openStandaloneUI 用一次性启动链接进入 Web UI，并等待服务器列表出现。
 export async function openStandaloneUI(
