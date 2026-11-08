@@ -69,7 +69,13 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		webRole = webui.RoleClient
 		servers = clientUIServerSource{instance: resolvedInstance}
 	case launch.Kind == roles.LaunchBroker && launch.Role == roles.RoleServer:
-		return NewExitCodeError(1, errors.New("权威端不在 `sshmgr ui` 启动回环 Web UI：权威端的管理界面由 `serve` 进程内的独立监听提供，请使用 `sshmgr serve`"))
+		st, err := openUnlockedStore()
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		fmt.Fprintln(cmd.OutOrStdout(), "权威端 Web UI 由 `serve` 进程的独立监听提供：")
+		return writeAuthorityWebUIStatus(cmd.OutOrStdout(), st)
 	default:
 		return NewExitCodeError(1, errors.New("本机尚未完成初始化，无法启动 Web UI。请先运行 `sshmgr tui` 完成初始化"))
 	}

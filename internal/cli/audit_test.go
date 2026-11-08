@@ -232,8 +232,13 @@ func TestAudit_JSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(ls[0]), &m); err != nil {
 		t.Fatalf("json line: %v", err)
 	}
-	if len(m) != 9 {
-		t.Fatalf("exactly nine keys, got %d: %v", len(m), m)
+	if len(m) != 11 {
+		t.Fatalf("exactly eleven keys, got %d: %v", len(m), m)
+	}
+	for _, key := range []string{"source", "source_ip"} {
+		if _, ok := m[key]; !ok {
+			t.Fatalf("json line missing source field %q: %v", key, m)
+		}
 	}
 	// nasty command:JSON round-trip + json.Marshal 转义可见(< 转为 \u003c、ESC 转为 \u001b)
 	if m["command"] != nastyCmd {

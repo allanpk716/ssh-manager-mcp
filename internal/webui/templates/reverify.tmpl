@@ -1,0 +1,13 @@
+{{define "content"}}
+<section class="reverify-page">
+<h1>重新验证</h1>
+{{if .LoginError}}<p class="login-error">{{.LoginError}}{{if .LockRemaining}}（剩余 {{.LockRemaining}}）{{end}}</p>{{end}}
+<form method="post" action="/ui/reverify">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="next" value="{{.NextPath}}">
+<label for="password">管理员口令</label>
+<input type="password" id="password" name="password" autocomplete="current-password" required>
+<button type="submit">验证并继续</button>
+</form>
+</section>
+{{end}}

@@ -59,6 +59,39 @@ main {
   color: var(--color-accent);
 }
 
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-medium);
+}
+
+.header-actions form {
+  margin: 0;
+}
+
+.header-actions a,
+.header-actions button,
+.login-page button,
+.password-page button,
+.reverify-page button {
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  padding: 4px var(--space-small);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.header-actions button:hover,
+.login-page button:hover,
+.password-page button:hover,
+.reverify-page button:hover {
+  border-color: var(--color-accent);
+}
+
 .version-hint,
 .readonly-notice {
   max-width: 960px;
@@ -111,6 +144,52 @@ h1 {
 
 .error-page p {
   color: var(--color-muted);
+}
+
+.login-page,
+.password-page,
+.reverify-page {
+  max-width: 420px;
+  padding: var(--space-large);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.login-page label,
+.password-page label,
+.reverify-page label {
+  display: block;
+  margin-top: var(--space-medium);
+  color: var(--color-muted);
+}
+
+.login-page input,
+.password-page input,
+.reverify-page input {
+  width: 100%;
+  margin-top: var(--space-small);
+  padding: var(--space-small);
+  color: var(--color-text);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.login-page button,
+.password-page button,
+.reverify-page button {
+  margin-top: var(--space-medium);
+}
+
+.login-error,
+.setup-guidance {
+  margin-top: var(--space-medium);
+  padding: var(--space-small);
+  border: 1px solid var(--color-warning-border);
+  border-radius: 8px;
+  background: var(--color-warning-background);
+  color: var(--color-warning-text);
 }
 
 @media (max-width: 720px) {

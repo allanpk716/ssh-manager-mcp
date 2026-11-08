@@ -23,6 +23,7 @@ import (
 
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -660,6 +661,7 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	// guaranteed non-empty (the auto-TLS error path returns). This means serve
 	// ALWAYS serves TLS — there is no plaintext path.
 	autoTLSFingerprint := ""
+	serveCertFingerprint := ""
 	if tlsCert == "" {
 		certPath, keyPath, fp, err := LoadOrCreateServeCert()
 		if err != nil {
@@ -667,6 +669,13 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 		}
 		tlsCert, tlsKey = certPath, keyPath
 		autoTLSFingerprint = fp
+		serveCertFingerprint = fp
+	} else {
+		fp, err := ServeCertificateFingerprint(tlsCert, tlsKey)
+		if err != nil {
+			return fmt.Errorf("serve TLS certificate: %w", err)
+		}
+		serveCertFingerprint = fp
 	}
 
 	// Pairing signature state (Plan 42 批1 T5): the serve cert's ed25519 key
@@ -677,6 +686,19 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	if err := runner.LoadPairingSigner(tlsCert, tlsKey); err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: /pair disabled: serve key unusable for pairing signatures: %v\n", err)
 	}
+
+	var webUIListeners *webUIListenerManager
+	if currentMachineIsServer() {
+		webUIListeners, err = startWebUIListenerManager(ctx, st, tlsCert, tlsKey, serveCertFingerprint)
+		if err != nil {
+			return fmt.Errorf("serve web UI: %w", err)
+		}
+	}
+	defer func() {
+		if webUIListeners != nil {
+			_ = webUIListeners.Close()
+		}
+	}()
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -756,4 +778,13 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	case err := <-errCh:
 		return err
 	}
+}
+
+func currentMachineIsServer() bool {
+	state, err := roles.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: 读取本机角色失败，不启动 Web UI：%v\\n", err)
+		return false
+	}
+	return state != nil && state.Role == roles.RoleServer
 }

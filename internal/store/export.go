@@ -218,6 +218,8 @@ type SnapshotAudit struct {
 	Status     string `json:"status"`
 	ExitCode   int    `json:"exit_code"`
 	DurationMS int64  `json:"duration_ms"`
+	Source     string `json:"source,omitempty"`
+	SourceIP   string `json:"source_ip,omitempty"`
 }
 
 // SnapshotSecret 是快照里的机密项行。Value 与 PreviousValue 是解密后的原始
@@ -474,13 +476,13 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	// audit — RAW SQL (AuditRows clamps limit<=0 to 1; dump all)
-	ra, err := s.db.Query(`SELECT id,ts,COALESCE(project_id,''),COALESCE(server_id,''),action,COALESCE(command,''),sudo,COALESCE(status,''),COALESCE(exit_code,0),COALESCE(duration_ms,0) FROM audit_log ORDER BY id`)
+	ra, err := s.db.Query(`SELECT id,ts,COALESCE(project_id,''),COALESCE(server_id,''),action,COALESCE(command,''),sudo,COALESCE(status,''),COALESCE(exit_code,0),COALESCE(duration_ms,0),COALESCE(source,''),COALESCE(source_ip,'') FROM audit_log ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	for ra.Next() {
 		var a SnapshotAudit
-		if err := ra.Scan(&a.ID, &a.TS, &a.ProjectID, &a.ServerID, &a.Action, &a.Command, &a.Sudo, &a.Status, &a.ExitCode, &a.DurationMS); err != nil {
+		if err := ra.Scan(&a.ID, &a.TS, &a.ProjectID, &a.ServerID, &a.Action, &a.Command, &a.Sudo, &a.Status, &a.ExitCode, &a.DurationMS, &a.Source, &a.SourceIP); err != nil {
 			ra.Close()
 			return nil, err
 		}
@@ -1163,8 +1165,8 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 
 	// 8. audit (id autoincrement — insert without id, letting the target assign; ts preserved)
 	for _, a := range snap.Audit {
-		if _, err := tx.Exec(`INSERT INTO audit_log(ts,project_id,server_id,action,command,sudo,status,exit_code,duration_ms) VALUES(?,?,?,?,?,?,?,?,?)`,
-			a.TS, nullIfEmpty(a.ProjectID), nullIfEmpty(a.ServerID), a.Action, nullIfEmpty(a.Command), a.Sudo, nullIfEmpty(a.Status), a.ExitCode, a.DurationMS); err != nil {
+		if _, err := tx.Exec(`INSERT INTO audit_log(ts,project_id,server_id,action,command,sudo,status,exit_code,duration_ms,source,source_ip) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			a.TS, nullIfEmpty(a.ProjectID), nullIfEmpty(a.ServerID), a.Action, nullIfEmpty(a.Command), a.Sudo, nullIfEmpty(a.Status), a.ExitCode, a.DurationMS, nullIfEmpty(a.Source), nullIfEmpty(a.SourceIP)); err != nil {
 			return fmt.Errorf("insert audit: %w", err)
 		}
 	}

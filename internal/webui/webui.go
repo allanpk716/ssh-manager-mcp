@@ -29,6 +29,8 @@ const (
 	RoleStandalone Role = iota
 	// RoleClient 表示客户端角色：只读查看本地快照，修改入口一律不出现。
 	RoleClient
+	// RoleServer 表示权威端角色：由独立 HTTPS 监听提供全功能可写页面。
+	RoleServer
 )
 
 // ServerRow 是服务器列表的展示行：名称、用户、主机、端口与「需要注意」标记。
@@ -49,15 +51,20 @@ type ServerSource interface {
 // Config 是 Web UI Handler 的构造参数。Port 同时用于会话 cookie 命名与
 // Host、Origin 校验；Now 是可选时钟，缺省使用标准时间。
 type Config struct {
-	Role        Role
-	Servers     ServerSource
-	VersionHint func() string
-	Port        int
-	Now         func() time.Time
+	Role                   Role
+	Servers                ServerSource
+	VersionHint            func() string
+	Port                   int
+	Now                    func() time.Time
+	Auth                   AuthStore
+	CertificateFingerprint string
+	AllowedHosts           []string
+	Sleep                  func(time.Duration)
+	Log                    func(format string, arguments ...any)
 }
 
 func (c Config) validate() error {
-	if c.Role != RoleStandalone && c.Role != RoleClient {
+	if c.Role != RoleStandalone && c.Role != RoleClient && c.Role != RoleServer {
 		return fmt.Errorf("未知的 Web UI 角色：%d", c.Role)
 	}
 	if c.Servers == nil {
@@ -65,6 +72,14 @@ func (c Config) validate() error {
 	}
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("Web UI 监听端口非法：%d", c.Port)
+	}
+	if c.Role == RoleServer {
+		if c.Auth == nil {
+			return errors.New("权威端 Web UI 必须提供鉴权存储")
+		}
+		if len(c.AllowedHosts) == 0 {
+			return errors.New("权威端 Web UI 必须提供允许的 Host 集合")
+		}
 	}
 	return nil
 }
@@ -103,6 +118,8 @@ type capabilities struct {
 	CanWrite bool
 	// ReadOnlyNotice 非空时在页头下方显示只读指引；单机角色为空串。
 	ReadOnlyNotice string
+	// ShowAuthorityActions 控制权威端页头的会话与口令入口。
+	ShowAuthorityActions bool
 }
 
 // capabilitiesForRole 按构造时声明的本机角色推导页面能力开关。
@@ -113,6 +130,9 @@ func capabilitiesForRole(role Role) capabilities {
 			CanWrite:       false,
 			ReadOnlyNotice: "这里只读，修改需到权威端 Web UI 去做。",
 		}
+	}
+	if role == RoleServer {
+		return capabilities{RoleLabel: "权威端", CanWrite: true, ShowAuthorityActions: true}
 	}
 	return capabilities{RoleLabel: "单机", CanWrite: true}
 }
@@ -133,27 +153,34 @@ func (s Startup) URL(hostPort string) string {
 // session 是回环模式的进程内会话：标识与防跨站请求伪造令牌都只在内存里，
 // 进程退出即全部失效。
 type session struct {
-	id   string
-	csrf string
+	id           string
+	csrf         string
+	generation   int64
+	lastActive   time.Time
+	lastVerified time.Time
 }
 
 // handler 是回环模式 Web UI 的根处理器，所有路由都在 /ui/ 前缀下。
 type handler struct {
-	cfg         Config
-	caps        capabilities
-	assets      assetURLs
-	assetFiles  map[string]string
-	pages       map[string]parsedPage
-	startDigest [sha256.Size]byte
-	mu          sync.Mutex
-	startUsed   bool
-	session     *session
-	mux         *http.ServeMux
+	cfg          Config
+	caps         capabilities
+	assets       assetURLs
+	assetFiles   map[string]string
+	pages        map[string]parsedPage
+	startDigest  [sha256.Size]byte
+	mu           sync.Mutex
+	loginMu      sync.Mutex
+	startUsed    bool
+	session      *session
+	sessions     map[string]*session
+	allowedHosts map[string]struct{}
+	mux          *http.ServeMux
 }
 
 const (
 	startPath = "/ui/start"
 	listPath  = "/ui/"
+	loginPath = "/ui/login"
 
 	// contentSecurityPolicy 只允许同源脚本、样式、连接、图片与字体，禁止
 	// 内联脚本、内联事件属性、内联样式以及任何被嵌入、跳转的可能。
@@ -163,6 +190,9 @@ const (
 // New 构造 Web UI 的根处理器与一次性启动令牌。构造完成后令牌只在第一次
 // 有效使用时换取会话，之后立即作废。
 func New(cfg Config) (http.Handler, Startup, error) {
+	if cfg.Role == RoleServer {
+		return nil, Startup{}, errors.New("权威端 Web UI 必须使用 NewAuthority 构造")
+	}
 	if err := cfg.validate(); err != nil {
 		return nil, Startup{}, err
 	}
@@ -202,11 +232,23 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "no-store")
-	if !hostAllowed(r.Host, h.cfg.Port) {
-		h.renderError(w, r, http.StatusMisdirectedRequest, "请求来源不被接受", "Web UI 只允许从本机回环地址访问。请重新运行 `sshmgr ui`。")
+	hostOK := hostAllowed(r.Host, h.cfg.Port)
+	if h.cfg.Role == RoleServer {
+		hostOK = h.authorityHostAllowed(r.Host)
+	}
+	if !hostOK {
+		message := "Web UI 只允许从本机回环地址访问。请重新运行 `sshmgr ui`。"
+		if h.cfg.Role == RoleServer {
+			message = "Web UI 只允许从实际监听地址访问。请核对 `sshmgr serve admin status` 输出的地址。"
+		}
+		h.renderError(w, r, http.StatusMisdirectedRequest, "请求来源不被接受", message)
 		return
 	}
-	if !h.writeRequestAllowed(w, r) {
+	if h.cfg.Role == RoleServer {
+		if !h.authorityWriteAllowed(w, r) {
+			return
+		}
+	} else if !h.writeRequestAllowed(w, r) {
 		return
 	}
 	h.mux.ServeHTTP(w, r)
@@ -314,6 +356,9 @@ func (h *handler) renderSessionRequired(w http.ResponseWriter, r *http.Request) 
 // currentSession 校验请求携带的会话 cookie，返回当前会话；无会话、cookie
 // 缺失或值不符都返回 nil。
 func (h *handler) currentSession(r *http.Request) *session {
+	if h.cfg.Role == RoleServer {
+		return h.currentAuthoritySession(r)
+	}
 	c, err := r.Cookie(sessionCookieName(h.cfg.Port))
 	if err != nil || c.Value == "" {
 		return nil
