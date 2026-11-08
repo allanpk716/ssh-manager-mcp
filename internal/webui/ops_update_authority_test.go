@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,6 +19,26 @@ type stubAuthorityOpsUpdateStore struct {
 	restarts          int
 	restartAtSchedule func()
 	restartDone       chan struct{}
+}
+
+func TestAuthorityOpsUpdateRestartAuditFailureDoesNotRestart(t *testing.T) {
+	ops := &stubAuthorityOpsUpdateStore{stubOpsUpdateStore: newStubOpsUpdateStore()}
+	ops.updateStatus = upgradeTestStatus()
+	ops.restartErr = &OpsRestartAuditWriteError{Err: errors.New("audit storage unavailable")}
+	handler, _, cookie := newAuthorityOpsUpdateTestHandler(t, ops)
+	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/ops/update", cookie)
+	csrf := hiddenInputValue(t, readResponseBody(t, page), "csrf_token")
+
+	response := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/ops/update/restart", url.Values{
+		"csrf_token": {csrf},
+	}, cookie)
+	body := readResponseBody(t, response)
+	if response.StatusCode != http.StatusInternalServerError ||
+		!strings.Contains(body, "审计写入失败") || !strings.Contains(body, "未重启") ||
+		ops.restartScheduled || ops.restarts != 0 {
+		t.Fatalf("审计写失败应返回错误页且不重启，状态码=%d 已调度=%v 重启=%d 页面：\n%s",
+			response.StatusCode, ops.restartScheduled, ops.restarts, body)
+	}
 }
 
 func TestAuthorityOpsUpdateRestartRunsAfterCompleteResponse(t *testing.T) {

@@ -2,6 +2,7 @@ package webui
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"strconv"
 	"sync"
@@ -19,6 +20,18 @@ const restartGraceDelay = 500 * time.Millisecond
 type OpsRestartStore interface {
 	RequestServiceRestart(sourceIP string, afterResponse func(restart func())) error
 }
+
+// OpsRestartAuditWriteError 表示「已发起」审计没有写入；处理器必须提示未
+// 重启，而不是继续显示正在重启。
+type OpsRestartAuditWriteError struct {
+	Err error
+}
+
+func (e *OpsRestartAuditWriteError) Error() string {
+	return "写入重启审计失败：" + e.Err.Error()
+}
+
+func (e *OpsRestartAuditWriteError) Unwrap() error { return e.Err }
 
 // delayedRestartWriter 保存响应结束后才允许执行的动作。动作由外层处理器
 // 在页面处理器返回并刷新响应后异步触发，不在页面处理过程中执行。
@@ -76,6 +89,12 @@ func (h *handler) handleAuthorityOpsUpdateRestart(w http.ResponseWriter, r *http
 	if err := restarts.RequestServiceRestart(remoteIP(r), func(action func()) {
 		restart = action
 	}); err != nil {
+		var auditErr *OpsRestartAuditWriteError
+		if errors.As(err, &auditErr) {
+			h.renderError(w, r, http.StatusInternalServerError, "重启服务失败",
+				"service.restart 审计写入失败，未重启服务。请检查审计存储后重试。")
+			return
+		}
 		h.renderError(w, r, http.StatusInternalServerError, "重启服务失败", "无法安排服务重启，请稍后重试。")
 		return
 	}

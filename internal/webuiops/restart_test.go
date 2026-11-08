@@ -66,7 +66,7 @@ func TestAuthorityAdapterRestartsServiceAndWritesWebAudit(t *testing.T) {
 	}
 	row := rows[0]
 	if row.Source != store.AuditSourceWebUI || row.SourceIP != "198.51.100.9" ||
-		row.Status != "ok" || !strings.Contains(row.Command, `"result":"ok"`) {
+		row.Status != "ok" || !strings.Contains(row.Command, `"result":"requested"`) {
 		t.Fatalf("重启审计来源或结果不符：%+v", row)
 	}
 }

@@ -466,7 +466,12 @@ func (s managerStore) RequestServiceRestart(sourceIP string, afterResponse func(
 	if s.restarts == nil {
 		return errRestartNotWired
 	}
-	return s.restarts.Request(ops.WebUISource(sourceIP), afterResponse)
+	err := s.restarts.Request(ops.WebUISource(sourceIP), afterResponse)
+	var auditErr *ops.RestartAuditWriteError
+	if errors.As(err, &auditErr) {
+		return &webui.OpsRestartAuditWriteError{Err: auditErr}
+	}
+	return err
 }
 
 func (s openerStore) CheckUpdate(instance string) (webui.OpsUpdateStatus, error) {

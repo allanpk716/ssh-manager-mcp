@@ -19,6 +19,18 @@ type RestartAuditEntry struct {
 	Detail string
 }
 
+// RestartAuditWriteError 表示「已发起」审计没有写入。调用方必须把它当作
+// 未重启处理，不能再触发服务管理器。
+type RestartAuditWriteError struct {
+	Err error
+}
+
+func (e *RestartAuditWriteError) Error() string {
+	return "写入 service.restart 审计失败：" + e.Err.Error()
+}
+
+func (e *RestartAuditWriteError) Unwrap() error { return e.Err }
+
 // RestartDependencies 是重启服务的可注入依赖。
 type RestartDependencies struct {
 	NewService func() (ServiceRestarter, error)
@@ -44,44 +56,48 @@ func (m *Manager) WriteRestartAudit(source Source, entry RestartAuditEntry) erro
 	}
 	row := store.OwnerAuditRow(entry.Action, summary)
 	row.Source, row.SourceIP = source.AuditFields()
-	if entry.Result != "ok" {
+	if entry.Result == "error" || entry.Result == "failed" {
 		row.Status = "error"
 	}
 	return m.st.WriteAudit(row)
 }
 
-// Request 不直接重启；它把重启动作交回调用方传入的「响应结束后调度器」。
-// 调度器触发动作后，服务管理器才被构造和调用，重启结果写入审计。
+// Request 先同步写入「已发起」审计；写入失败时不登记任何动作，调用方
+// 必须返回错误页。写入成功后，它把真正重启交回调用方传入的「响应结束
+// 后调度器」，保证完整响应先到浏览器。
 func (s *RestartService) Request(source Source, afterResponse func(restart func())) error {
 	if afterResponse == nil {
 		return errors.New("缺少响应结束后的调度器")
+	}
+	if s.deps.Audit != nil {
+		err := s.deps.Audit(source, RestartAuditEntry{
+			Action: "service.restart", Result: "requested",
+		})
+		if err != nil {
+			return &RestartAuditWriteError{Err: err}
+		}
 	}
 	afterResponse(func() { s.restart(source) })
 	return nil
 }
 
 func (s *RestartService) restart(source Source) {
-	write := func(entry RestartAuditEntry) bool {
+	writeFailure := func(entry RestartAuditEntry) {
 		if s.deps.Audit == nil {
-			return true
+			return
 		}
-		return s.deps.Audit(source, entry) == nil
+		_ = s.deps.Audit(source, entry)
 	}
 	if s.deps.NewService == nil {
-		_ = write(RestartAuditEntry{Action: "service.restart", Result: "error", Detail: "服务管理器未接线"})
+		writeFailure(RestartAuditEntry{Action: "service.restart", Result: "failed", Detail: "服务管理器未接线"})
 		return
 	}
 	manager, err := s.deps.NewService()
 	if err != nil {
-		_ = write(RestartAuditEntry{Action: "service.restart", Result: "error", Detail: err.Error()})
-		return
-	}
-	// 成功审计先落盘再触发系统服务管理器，避免旧进程被重启终止后来不
-	// 及写审计；若管理器随后返回失败，再补一条失败结果。
-	if !write(RestartAuditEntry{Action: "service.restart", Result: "ok"}) {
+		writeFailure(RestartAuditEntry{Action: "service.restart", Result: "failed", Detail: err.Error()})
 		return
 	}
 	if restartErr := manager.Restart(); restartErr != nil {
-		_ = write(RestartAuditEntry{Action: "service.restart", Result: "error", Detail: restartErr.Error()})
+		writeFailure(RestartAuditEntry{Action: "service.restart", Result: "failed", Detail: restartErr.Error()})
 	}
 }
