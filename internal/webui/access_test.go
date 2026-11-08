@@ -646,6 +646,8 @@ func TestAccessWriteRoutesRequireOriginAndCSRFToken(t *testing.T) {
 		{"/ui/access/profiles", url.Values{"name": {"team-a"}}},
 		{"/ui/access/profiles/delete", url.Values{"profile_id": {"profile-1"}}},
 		{"/ui/access/profiles/profile-1/grants", url.Values{"expected": {"server-web"}, "server": {"server-db"}}},
+		{"/ui/access/device-codes", url.Values{"name": {"laptop"}, "profile": {"profile-1"}}},
+		{"/ui/access/device-codes/device-1/revoke", url.Values{}},
 	}
 	for _, route := range routes {
 		missing := postAccessWrite(t, handler, cookie, route.target, route.form, "http://127.0.0.1:18080", "")

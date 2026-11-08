@@ -52,11 +52,13 @@ type ServerSource interface {
 // Config 是 Web UI Handler 的构造参数。Port 同时用于会话 cookie 命名与
 // Host、Origin 校验；Now 是可选时钟，缺省使用标准时间。
 type Config struct {
-	Role                   Role
-	Servers                ServerSource
-	Access                 AccessStore
-	VersionHint            func() string
-	Port                   int
+	Role        Role
+	Servers     ServerSource
+	Access      AccessStore
+	VersionHint func() string
+	Port        int
+	// ServePort 是权威端主监听端口，设备码拉取命令按它拼地址；未提供时
+	// 按默认端口兜底。单机与客户端不使用这个字段。
 	ServePort              int
 	Now                    func() time.Time
 	Auth                   AuthStore
