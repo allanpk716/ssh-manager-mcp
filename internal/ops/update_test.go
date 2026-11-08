@@ -482,6 +482,15 @@ func TestUpdateServiceRemembersPendingRestartAndRejectsSecondApply(t *testing.T)
 		t.Fatalf("替换后检查状态应显示待重启并禁止再次替换：%+v", status)
 	}
 
+	site.setLatest(t, "")
+	status, err = service.Check(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.PendingRestart || status.CanUpgrade || !strings.Contains(status.Reason, "待重启") {
+		t.Fatalf("读取最新版本失败也不应丢失待重启状态：%+v", status)
+	}
+
 	_, err = service.Apply(context.Background(), UpdateApplyRequest{Source: CLISource()})
 	var updateErr *UpdateError
 	if !errors.As(err, &updateErr) || updateErr.Step != UpdateStepCheck || replaceCalls != 1 {

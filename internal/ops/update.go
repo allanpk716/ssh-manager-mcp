@@ -120,15 +120,21 @@ func NewUpdateService(deps UpdateDependencies) *UpdateService {
 
 // Check 汇总当前版本、推荐版本、GitHub 最新版本与目标版本，并给出能否升级
 // 与原因；不下载任何内容。
-func (s *UpdateService) Check(ctx context.Context, instance string) (UpdateStatus, error) {
-	status := UpdateStatus{CurrentVersion: s.deps.CurrentVersion()}
+func (s *UpdateService) Check(ctx context.Context, instance string) (status UpdateStatus, err error) {
+	status = UpdateStatus{CurrentVersion: s.deps.CurrentVersion()}
 	s.pendingMu.RLock()
 	status.PendingRestart = s.pendingRestart
 	status.PendingRestartVersion = s.pendingRestartVersion
 	s.pendingMu.RUnlock()
-	state, err := s.deps.ClientState(instance)
-	if err != nil {
-		status.Reason = err.Error()
+	defer func() {
+		if status.PendingRestart {
+			status.CanUpgrade = false
+			status.Reason = fmt.Sprintf("已替换为 %s，待重启服务", status.PendingRestartVersion)
+		}
+	}()
+	state, clientErr := s.deps.ClientState(instance)
+	if clientErr != nil {
+		status.Reason = clientErr.Error()
 		return status, nil
 	}
 	status.IsClient = state.IsClient
@@ -155,9 +161,9 @@ func (s *UpdateService) Check(ctx context.Context, instance string) (UpdateStatu
 			status.Reason = "读不到推荐版本，请先同步或先升级权威端"
 			return status, nil
 		}
-		byTag, byTagErr := s.deps.ReleaseByTag(ctx, state.RecommendedVersion)
-		if byTagErr != nil {
-			status.Reason = "读取推荐版本发布信息失败：" + byTagErr.Error()
+		byTag, err := s.deps.ReleaseByTag(ctx, state.RecommendedVersion)
+		if err != nil {
+			status.Reason = "读取推荐版本发布信息失败：" + err.Error()
 			return status, nil
 		}
 		target = byTag
@@ -185,10 +191,6 @@ func (s *UpdateService) Check(ctx context.Context, instance string) (UpdateStatu
 		status.Downgrade = true
 		status.CanUpgrade = true
 		status.Reason = "目标版本比当前版本旧（回滚通道）"
-	}
-	if status.PendingRestart {
-		status.CanUpgrade = false
-		status.Reason = fmt.Sprintf("已替换为 %s，待重启服务", status.PendingRestartVersion)
 	}
 	return status, nil
 }
