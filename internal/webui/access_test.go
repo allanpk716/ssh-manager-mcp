@@ -37,6 +37,17 @@ type stubAccessStore struct {
 	revokeDeviceID   string
 	revokeDeviceSrc  AccessWriteSource
 	revokeDeviceErr  error
+
+	pairings         []AccessPairingSummary
+	approvePairingID string
+	approveProfile   string
+	approveCompared  bool
+	approveOverride  string
+	approveSrc       AccessWriteSource
+	approveErr       error
+	rejectPairingID  string
+	rejectSrc        AccessWriteSource
+	rejectErr        error
 }
 
 func (s *stubAccessStore) ListProfiles() ([]AccessProfileSummary, error) {
@@ -85,6 +96,28 @@ func (s *stubAccessStore) SetServerGrants(profileID string, expected, desired []
 	s.grantDesired = append([]string(nil), desired...)
 	s.grantSrc = source
 	return s.grantResult, s.grantConflict, s.grantErr
+}
+
+func (s *stubAccessStore) ListPairingRequests() ([]AccessPairingSummary, error) {
+	if s.pairings == nil {
+		return nil, nil
+	}
+	return s.pairings, nil
+}
+
+func (s *stubAccessStore) ApprovePairing(id, profile string, compared bool, addressOverride string, source AccessWriteSource) error {
+	s.approvePairingID = id
+	s.approveProfile = profile
+	s.approveCompared = compared
+	s.approveOverride = addressOverride
+	s.approveSrc = source
+	return s.approveErr
+}
+
+func (s *stubAccessStore) RejectPairing(id string, source AccessWriteSource) error {
+	s.rejectPairingID = id
+	s.rejectSrc = source
+	return s.rejectErr
 }
 
 func TestAccessRoutesAndNoticeFollowRole(t *testing.T) {

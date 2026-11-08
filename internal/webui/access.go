@@ -93,8 +93,8 @@ func accessServerNames(servers []AccessServerRef) string {
 }
 
 // AccessStore 是 Web UI 读取和修改访问管理的唯一入口。单机与权威端由
-// 访问管理模块适配实现；处理器测试用桩，本包不知道数据库结构。设备码
-// 部分只在权威端注册路由，其余角色不需要实现。
+// 访问管理模块适配实现；处理器测试用桩，本包不知道数据库结构。配对与
+// 设备码部分只在权威端注册路由，其余角色不需要实现。
 type AccessStore interface {
 	ListProfiles() ([]AccessProfileSummary, error)
 	AddProfile(name string, source AccessWriteSource) error
@@ -103,6 +103,9 @@ type AccessStore interface {
 	ListDeviceCodes() ([]AccessDeviceCodeSummary, error)
 	AddDeviceCode(name, profile, serveURL string, source AccessWriteSource) (AccessDeviceCodeResult, error)
 	RevokeDeviceCode(id string, source AccessWriteSource) error
+	ListPairingRequests() ([]AccessPairingSummary, error)
+	ApprovePairing(id, profile string, compared bool, addressOverride string, source AccessWriteSource) error
+	RejectPairing(id string, source AccessWriteSource) error
 }
 
 // AccessWriteSource 描述一次 Web UI 写请求的来源；访问管理适配器把它换算
@@ -119,6 +122,9 @@ const (
 	accessProfilesPrefix    = "/ui/access/profiles/"
 	accessDeviceCodesPath   = "/ui/access/device-codes"
 	accessDeviceCodesPrefix = "/ui/access/device-codes/"
+	accessPairingPath       = "/ui/access/pairing"
+	accessPairingListPath   = "/ui/access/pairing/list"
+	accessPairingPrefix     = "/ui/access/pairing/"
 )
 
 // registerAccessRoutes 按本机角色注册访问区域路由。客户端只保留区域提示
@@ -132,6 +138,7 @@ func (h *handler) registerAccessRoutes() {
 	h.mux.HandleFunc(accessProfileDeletePath, h.handleAccessProfileDelete)
 	h.mux.HandleFunc(accessProfilesPrefix, h.handleAccessProfileGrants)
 	if h.cfg.Role == RoleServer {
+		h.registerPairingRoutes()
 		h.registerDeviceCodeRoutes()
 	}
 }

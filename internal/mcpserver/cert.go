@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/localaddr"
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/store"
 )
@@ -273,19 +274,7 @@ func generateServeCert(certPath, keyPath string) error {
 // exact same enumeration (the picked IP should be a cert SAN — that is what
 // makes the address clients will use actually covered by the self-signed cert).
 func LocalNonLoopbackIPs() []net.IP {
-	var out []net.IP
-	ifaces, err := net.InterfaceAddrs()
-	if err != nil {
-		return out
-	}
-	for _, a := range ifaces {
-		ipNet, ok := a.(*net.IPNet)
-		if !ok || ipNet.IP.IsLoopback() {
-			continue
-		}
-		out = append(out, ipNet.IP)
-	}
-	return out
+	return localaddr.NonLoopbackIPs()
 }
 
 // atomicWriteFile writes data to path via temp + fsync + chmod + rename, so a

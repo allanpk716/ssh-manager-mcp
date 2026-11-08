@@ -415,3 +415,76 @@ h1 {
 .device-revoke-form a {
   color: var(--color-accent);
 }
+
+.pairing-request {
+  padding: var(--space-large);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.pairing-request h2 {
+  margin-top: 0;
+}
+
+.pairing-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-medium);
+  margin: 0;
+}
+
+.pairing-fields div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-small);
+}
+
+.pairing-fields dt {
+  color: var(--color-muted);
+}
+
+.pairing-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.pairing-missing-code {
+  border-color: var(--color-warning-border);
+}
+
+.pairing-form,
+.pairing-reject-form {
+  align-items: flex-start;
+}
+
+.pairing-form select,
+.pairing-form input[type="text"] {
+  min-width: 180px;
+  padding: var(--space-small);
+  color: var(--color-text);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.pairing-compare {
+  display: flex;
+  align-items: center;
+  gap: var(--space-small);
+}
+
+.pairing-form button,
+.pairing-reject-form button {
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pairing-reject-form button {
+  color: var(--color-warning-text);
+  border-color: var(--color-warning-border);
+}

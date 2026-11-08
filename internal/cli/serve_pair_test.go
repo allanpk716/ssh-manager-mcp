@@ -81,6 +81,29 @@ func TestServePairApprove_ThreePieceOutputAndOverride(t *testing.T) {
 	}
 }
 
+func TestServePairApprovalWritesCLIAuditSource(t *testing.T) {
+	path, mk := withCliStoreEnv(t)
+	runCli(t, "profiles", "add", "team-a")
+	row := seedPendingPairing(t, path, mk, "laptop", "https://127.0.0.1:7878", "314159")
+	runCli(t, "serve", "pair", "approve", hex.EncodeToString(row.ID), "--profile", "team-a", "--allow-foreign-url")
+
+	st, err := store.Open(path, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	rows, err := st.QueryAudit(store.AuditFilter{OwnerOnly: true, Actions: []string{"pair.approve"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Source != store.AuditSourceCLI || rows[0].SourceIP != "" {
+		t.Fatalf("命令行批准应写一条命令行来源的 pair.approve 审计行：%+v", rows)
+	}
+	if strings.Contains(rows[0].Command, "314159") {
+		t.Fatalf("pair.approve 摘要不应包含短认证码：%s", rows[0].Command)
+	}
+}
+
 // TestServePairLs_MissingSASWarns:行缺 SAS(旧版 serve 写的/版本错配)→ ls 与
 // approve 都打 ⚠ 警示并建议拒绝——绝不静默回退到抓不住 MITM 的两件套对照,
 // 也绝不伪造一个码。

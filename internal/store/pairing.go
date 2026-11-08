@@ -216,6 +216,76 @@ func (s *Store) ListPendingPairing() ([]PendingPairing, error) {
 	return out, rows.Err()
 }
 
+// ListVisiblePairing 返回批准界面需要显示的行：仍可裁决的待批准与已批准
+// 行，加上仍在重放保留窗口内的已完成行。它先调用 ListPendingPairing，
+// 让既有的懒清理规则照常执行。
+func (s *Store) ListVisiblePairing() ([]PendingPairing, error) {
+	out, err := s.ListPendingPairing()
+	if err != nil {
+		return nil, err
+	}
+	now := s.nowUnix()
+	rows, err := s.db.Query(
+		`SELECT id,name,target_url,client_pub,cnonce,server_pub,snonce,sig,
+		        profile_hint,replace_inactive,state,profile,source_ip,
+		        enroll_deadline,approved_deadline,delivered_sealed,replay_count,sas
+		 FROM pairing_pending
+		 WHERE state='delivered' AND approved_deadline > ?
+		 ORDER BY enroll_deadline ASC, rowid ASC`, now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			p  PendingPairing
+			ri int
+		)
+		if err := rows.Scan(
+			&p.ID, &p.Name, &p.TargetURL, &p.ClientPub, &p.Cnonce, &p.ServerPub, &p.Snonce, &p.Sig,
+			&p.ProfileHint, &ri, &p.State, &p.Profile, &p.SourceIP,
+			&p.EnrollDeadline, &p.ApprovedDeadline, &p.DeliveredSealed, &p.ReplayCount, &p.SAS,
+		); err != nil {
+			return nil, err
+		}
+		p.ReplaceInactive = ri != 0
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// PairingByID 读取一条配对请求，不改变它的状态。批准入口用它区分已超
+// 时、已拒绝或其他非待批准的请求，与完全不存在的标识符。
+func (s *Store) PairingByID(id []byte) (*PendingPairing, error) {
+	if len(id) == 0 {
+		return nil, nil
+	}
+	row := s.db.QueryRow(
+		`SELECT id,name,target_url,client_pub,cnonce,server_pub,snonce,sig,
+		        profile_hint,replace_inactive,state,profile,source_ip,
+		        enroll_deadline,approved_deadline,delivered_sealed,replay_count,sas
+		 FROM pairing_pending WHERE id=?`, id,
+	)
+	var (
+		p  PendingPairing
+		ri int
+	)
+	err := row.Scan(
+		&p.ID, &p.Name, &p.TargetURL, &p.ClientPub, &p.Cnonce, &p.ServerPub, &p.Snonce, &p.Sig,
+		&p.ProfileHint, &ri, &p.State, &p.Profile, &p.SourceIP,
+		&p.EnrollDeadline, &p.ApprovedDeadline, &p.DeliveredSealed, &p.ReplayCount, &p.SAS,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	p.ReplaceInactive = ri != 0
+	return &p, nil
+}
+
 // ApprovePairing flips a pending row to approved via CAS + time predicate (spec
 // §3.3-3): `UPDATE ... SET state='approved' WHERE id=? AND state='pending' AND
 // enroll_deadline > now` — a stale (expired) or already-adjudicated row loses the
@@ -224,6 +294,17 @@ func (s *Store) ListPendingPairing() ([]PendingPairing, error) {
 // commits IN THE SAME transaction (§3.3-8). Approving never touches key material —
 // the approval surface is key-state-free by design.
 func (s *Store) ApprovePairing(id []byte, profile string) (bool, error) {
+	return s.approvePairing(id, profile, "", "")
+}
+
+// ApprovePairingWithSource 与 ApprovePairing 相同，但把访问管理模块传来的
+// 入口来源与来源地址写进同一条 pair.approve 审计行。状态与审计仍在同一
+// 个事务里提交。
+func (s *Store) ApprovePairingWithSource(id []byte, profile, source, sourceIP string) (bool, error) {
+	return s.approvePairing(id, profile, source, sourceIP)
+}
+
+func (s *Store) approvePairing(id []byte, profile, source, sourceIP string) (bool, error) {
 	if s.readOnly {
 		return false, ErrReadOnly
 	}
@@ -244,15 +325,16 @@ func (s *Store) ApprovePairing(id []byte, profile string) (bool, error) {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return false, nil // CAS miss: expired, non-pending, or unknown id
 	}
-	var name, sourceIP string
-	if err := tx.QueryRow(`SELECT name, source_ip FROM pairing_pending WHERE id=?`, id).Scan(&name, &sourceIP); err != nil {
+	var name, pairSourceIP string
+	if err := tx.QueryRow(`SELECT name, source_ip FROM pairing_pending WHERE id=?`, id).Scan(&name, &pairSourceIP); err != nil {
 		return false, err
 	}
 	if err := writeAuditTx(tx, AuditRow{
 		TS:      s.nowTime(),
 		Action:  "pair.approve",
-		Command: pairAuditJSON(map[string]string{"ip": sourceIP, "name": name, "profile": profile}),
+		Command: pairAuditJSON(map[string]string{"ip": pairSourceIP, "name": name, "profile": profile}),
 		Status:  "ok",
+		Source:  source, SourceIP: sourceIP,
 	}); err != nil {
 		return false, err
 	}
@@ -262,6 +344,16 @@ func (s *Store) ApprovePairing(id []byte, profile string) (bool, error) {
 // RejectPairing is ApprovePairing's sibling with the same CAS + time predicate;
 // the row lands in the terminal 'rejected' state and stops counting against quota.
 func (s *Store) RejectPairing(id []byte) (bool, error) {
+	return s.rejectPairing(id, "", "")
+}
+
+// RejectPairingWithSource 与 RejectPairing 相同，但把访问管理模块传来的
+// 入口来源与来源地址写进同一条 pair.reject 审计行。
+func (s *Store) RejectPairingWithSource(id []byte, source, sourceIP string) (bool, error) {
+	return s.rejectPairing(id, source, sourceIP)
+}
+
+func (s *Store) rejectPairing(id []byte, source, sourceIP string) (bool, error) {
 	if s.readOnly {
 		return false, ErrReadOnly
 	}
@@ -282,15 +374,16 @@ func (s *Store) RejectPairing(id []byte) (bool, error) {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return false, nil // same CAS contract as ApprovePairing
 	}
-	var name, sourceIP string
-	if err := tx.QueryRow(`SELECT name, source_ip FROM pairing_pending WHERE id=?`, id).Scan(&name, &sourceIP); err != nil {
+	var name, pairSourceIP string
+	if err := tx.QueryRow(`SELECT name, source_ip FROM pairing_pending WHERE id=?`, id).Scan(&name, &pairSourceIP); err != nil {
 		return false, err
 	}
 	if err := writeAuditTx(tx, AuditRow{
 		TS:      s.nowTime(),
 		Action:  "pair.reject",
-		Command: pairAuditJSON(map[string]string{"ip": sourceIP, "name": name}),
+		Command: pairAuditJSON(map[string]string{"ip": pairSourceIP, "name": name}),
 		Status:  "ok",
+		Source:  source, SourceIP: sourceIP,
 	}); err != nil {
 		return false, err
 	}

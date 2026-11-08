@@ -39,6 +39,8 @@ type pageData struct {
 	AccessDeviceIssue      *AccessDeviceIssueView
 	AccessDeviceIssued     *AccessDeviceCodeResult
 	AccessDeviceRevoke     *AccessDeviceCodeSummary
+	AccessPairings         []AccessPairingSummary
+	AccessPairingNotice    string
 	ErrorTitle             string
 	ErrorMessage           string
 	AdminPasswordSet       bool

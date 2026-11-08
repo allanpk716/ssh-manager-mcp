@@ -106,6 +106,31 @@ func (s openerStore) RevokeDeviceCode(id string, source webui.AccessWriteSource)
 	})
 }
 
+func (s openerStore) ListPairingRequests() ([]webui.AccessPairingSummary, error) {
+	var rows []webui.AccessPairingSummary
+	err := s.withManager(func(manager *access.Manager) error {
+		got, err := managerStore{manager: manager}.ListPairingRequests()
+		if err != nil {
+			return err
+		}
+		rows = got
+		return nil
+	})
+	return rows, err
+}
+
+func (s openerStore) ApprovePairing(id, profile string, compared bool, addressOverride string, source webui.AccessWriteSource) error {
+	return s.withManager(func(manager *access.Manager) error {
+		return managerStore{manager: manager}.ApprovePairing(id, profile, compared, addressOverride, source)
+	})
+}
+
+func (s openerStore) RejectPairing(id string, source webui.AccessWriteSource) error {
+	return s.withManager(func(manager *access.Manager) error {
+		return managerStore{manager: manager}.RejectPairing(id, source)
+	})
+}
+
 func (s managerStore) ListProfiles() ([]webui.AccessProfileSummary, error) {
 	profiles, err := s.manager.ListProfiles()
 	if err != nil {
@@ -194,6 +219,31 @@ func (s managerStore) AddDeviceCode(name, profile, serveURL string, source webui
 
 func (s managerStore) RevokeDeviceCode(id string, source webui.AccessWriteSource) error {
 	return s.manager.RevokeDeviceCode(id, access.WebUISource(source.RemoteAddress))
+}
+
+func (s managerStore) ListPairingRequests() ([]webui.AccessPairingSummary, error) {
+	rows, err := s.manager.ListPairingRequests()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]webui.AccessPairingSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, webui.AccessPairingSummary{
+			ID: row.ID, Name: row.Name, TargetURL: row.TargetURL, ShortCode: row.ShortCode,
+			SourceAddress: row.SourceAddress, ProfileHint: row.ProfileHint, ProfileName: row.ProfileName,
+			ReplaceInactive: row.ReplaceInactive, State: row.State, ForeignTarget: row.ForeignTarget,
+			RemainingSeconds: row.RemainingSeconds, HasShortCode: row.HasShortCode,
+		})
+	}
+	return out, nil
+}
+
+func (s managerStore) ApprovePairing(id, profile string, compared bool, addressOverride string, source webui.AccessWriteSource) error {
+	return s.manager.ApprovePairing(id, profile, compared, addressOverride, access.WebUISource(source.RemoteAddress))
+}
+
+func (s managerStore) RejectPairing(id string, source webui.AccessWriteSource) error {
+	return s.manager.RejectPairing(id, access.WebUISource(source.RemoteAddress))
 }
 
 func serverRefs(refs []access.ServerRef) []webui.AccessServerRef {

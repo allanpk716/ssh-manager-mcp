@@ -3,9 +3,7 @@
 // 务规则与审计写入。本文件只放模块的公共构造；具体操作按领域分文件。
 package access
 
-import (
-	"ssh-manager-mcp/internal/store"
-)
+import "ssh-manager-mcp/internal/store"
 
 // Manager 是访问管理模块的入口，内部只调用存储层的现有函数，不改变它
 // 们的语义。
