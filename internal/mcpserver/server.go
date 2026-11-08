@@ -64,6 +64,7 @@ var BrokerTools = []string{
 	"update_server_metadata", // [12] — partial edit of a server entry's six metadata fields via the broker (optimistic-lock revision; CACHE FACE ONLY — registered when the metadata forwarder is injected; Plan 51 §7)
 	hotswap.ToolReloadSelf,   // [13] — report this bridge's current/disk/latest versions and, when the disk holds a newer generation and the bridge is idle, hot-swap into it (bridge hot-upgrade; BRIDGE FACES ONLY — registered by run.go's stdio entries, see bridgeOnlyTools)
 	"list_secrets",           // [14] — discover secret names, notes, and granted writable servers without exposing secret values (READ-ONLY)
+	"probe_connectivity",     // [15] — probe TCP connectivity and connect duration from this instance or via an authorized managed server to registered devices (spec #142; results stored locally only)
 }
 
 // cacheOnlyTools names BrokerTools entries that ONLY the cache face registers
@@ -220,6 +221,26 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 		func(ctx context.Context, req *mcp.CallToolRequest, in ListSecretsInput) (*mcp.CallToolResult, any, error) {
 			st := storeFromContext(ctx, storeFn)
 			text, err := ListSecretsTextForProfile(st, profileID, in.Query, in.Server)
+			if err != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, nil, nil
+			}
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: text}},
+			}, nil, nil
+		},
+	)
+
+	addTrackedTool(srv, busy, storeFn, hkFn,
+		&mcp.Tool{
+			Name:        BrokerTools[15], // "probe_connectivity"
+			Description: "Probe TCP connectivity and connect duration from this instance (from=\"self\") or via an authorized managed server (from=<server id>) to registered devices. Each target is a server id or device name, optionally name:port; the default port is the server entry's port, or 22 for devices. TCP connect only (no bandwidth); only addresses in common registered networks are probed (the fallback host is never probed); at most 10 deduplicated targets, 5 probed concurrently, 1.5s per address (SSHMGR_SSH_ADDRESS_TIMEOUT), 30s total. Results are compact text grouped by target and are stored locally on this instance only — never sent back to the authority.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in ProbeConnectivityInput) (*mcp.CallToolResult, any, error) {
+			st := storeFromContext(ctx, storeFn)
+			text, _, _, err := ProbeConnectivityForProfile(ctx, st, projectID, profileID, in.From, in.Targets, toolHostKeyStoreFromContext(ctx))
 			if err != nil {
 				return &mcp.CallToolResult{
 					IsError: true,
