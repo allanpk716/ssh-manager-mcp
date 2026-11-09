@@ -1,0 +1,606 @@
+SSHMGR-INVENTORY BEGIN windows-v1
+SSHMGR-INVENTORY SECTION os
+ProductName	Windows 10 Pro
+DisplayVersion	22H2
+ReleaseId	2009
+CurrentBuild	19045
+UBR	2006
+EditionID	Professional
+InstallationType	Client
+arch	AMD64
+SSHMGR-INVENTORY STATUS os 0
+SSHMGR-INVENTORY SECTION installed
+64	Windows 驱动程序包 - Intel (MEIx64) System  (07/13/2016 11.6.0.1015)	07/13/2016 11.6.0.1015	Intel	6336348230A3A913CCC59BBAE4C8A0A6AE21B792
+64	Image Categorizer 0.0.12	0.0.12		6a20dd85-be9e-580d-83e5-337009f623da
+64	Beyond Compare 4.4.6	4.4.6.27483	Scooter Software	BeyondCompare4_is1
+64	Git	2.41.0	The Git Development Community	Git_is1
+64	HP LaserJet Professional P1100-P1560-P1600 Series			HP LaserJet Professional P1100-P1560-P1600 Series
+64	Listary version 6.1	6.1		Listary_is1
+64	Microsoft Help Viewer 1.0	1.0.30319	Microsoft Corporation	Microsoft Help Viewer 1.0
+64	Microsoft SQL Server 2022 (64-bit)			Microsoft SQL Server 16
+64	Microsoft SQL Server 2022 (64-bit)		Microsoft Corporation	Microsoft SQL Server SQL2022
+64	Microsoft Team Foundation Server 2010 Object Model - ENU	10.0.30319	Microsoft Corporation	Microsoft Team Foundation Server 2010 Object Model - ENU
+64	Microsoft Visual Studio 2008 远程调试器 - 简体中文		Microsoft Corporation	Microsoft Visual Studio 2008 Remote Debugger - CHS
+64	Microsoft Visual Studio 2010 Tools for Office Runtime (x64)	10.0.30319	Microsoft Corporation	Microsoft Visual Studio 2010 Tools for Office Runtime (x64)
+64	SQLite Expert Personal 5.5.4.615	5.5.4.615	Coral Creek Software	SQLite Expert Personal 5 - 64bit_is1
+64	Vulkan Run Time Libraries 1.0.33.0	1.0.33.0	LunarG, Inc.	VulkanRT1.0.33.0
+64	vs_minshellx64msi	17.6.33605	Microsoft Corporation	{00E21B2D-B69B-4D8A-AED3-5A5A3204DFCB}
+64	Intel(R) Chipset Device Software	10.1.1.45	Intel Corporation	{06D1C401-447A-4182-B861-37F86A1ECF48}
+64	Microsoft.NET.Workload.Mono.Toolchain.net6.Manifest (x64)	56.3.61636	Microsoft Corporation	{0AD4F716-EB67-4213-8D6E-7F5C03EF5512}
+64	SQL Server 2022 SQL Diagnostics	16.0.1000.6	Microsoft Corporation	{0CEFE958-E71A-4171-9DEF-77E9234A5613}
+64	Microsoft SQL Server Native Client	9.00.3042.00	Microsoft Corporation	{12430099-1413-49DA-8D98-6B36011393ED}
+64	SQL Server 2022 Shared Management Objects	16.0.1000.6	Microsoft Corporation	{12618131-AA9A-4DAE-9387-CE4417955B9F}
+64	NVIDIA Nsight Systems v2019.3.7	19.3.7.5	NVIDIA Corporation	{1431BD9D-EA3A-4379-BDB1-4C99F59BD137}
+64	SQL Server 2022 Database Engine Shared	16.0.1000.6	Microsoft Corporation	{161B8D12-C41B-4ACF-9BB5-E1FEE6788869}
+64	vs_minshellinteropx64msi	17.6.33605	Microsoft Corporation	{19EE681B-0930-4A7D-938F-D391D121CF89}
+64	Microsoft Team Foundation Server 2010 Object Model - ENU	10.0.30319	Microsoft Corporation	{1AB7EDC5-D891-34C5-9FF1-BE6A85ACC44B}
+64	Microsoft Windows Desktop Targeting Pack - 7.0.7 (x64)	56.31.61651	Microsoft Corporation	{1CD7C869-A8DC-4D57-8F53-4931ED0B036E}
+64	Python 3.11.9 pip Bootstrap (64-bit)	3.11.9150.0	Python Software Foundation	{1D653E80-09B2-40AB-9530-7DF12E632F8A}
+64	Go Programming Language amd64 go1.20.7	1.20.7	https://go.dev	{1D770D11-52A8-4349-B45A-01413B3AE1BE}
+64	Microsoft Visual C++ 2010  x64 Redistributable - 10.0.40219	10.0.40219	Microsoft Corporation	{1D8E6291-B0D5-35EC-8441-6616F567A0F7}
+64	Windows App Certification Kit Native Components	10.1.26100.7705	Microsoft Corporation	{20C01991-CCD1-2C06-7A9A-B10A9B4AF807}
+64	Python 3.11.9 Utility Scripts (64-bit)	3.11.9150.0	Python Software Foundation	{29CEC70F-9D96-472B-B6A1-AE7578376985}
+64	Microsoft .NET AppHost Pack - 7.0.7 (x64_arm64)	56.31.61636	Microsoft Corporation	{29E2EB45-D8A6-44CC-84BC-B8E4A6A57C82}
+64	Crystal Reports Basic Runtime for Visual Studio 2008 (x64)	10.5.0.0	Business Objects	{2BFA9B05-7418-4EDE-A6FC-620427BAAAA3}
+64	Application Verifier x64 External Package	10.1.22000.832	Microsoft	{2CBA883F-51A6-3D7D-DBB9-0527D39433CB}
+64	Microsoft .NET AppHost Pack - 6.0.18 (x64_x86)	48.75.61559	Microsoft Corporation	{2D9A38E6-52EF-45B8-A08A-8AF671E051F3}
+64	Python 3.12.3 Core Interpreter (64-bit)	3.12.3150.0	Python Software Foundation	{3519C7D0-70D4-46F5-A0A9-3A115D73E2EC}
+64	SQL Server 2022 Shared Management Objects Extensions	16.0.1000.6	Microsoft Corporation	{35EC6145-E333-42DB-BCB3-380DF6140C11}
+64	Typora 1.0	1.0.4	typora.io	{37771A20-7167-44C0-B322-FD3E54C56156}_is1
+64	vs_communityx64msi	17.14.36025	Microsoft Corporation	{3873679C-FA03-4101-97E9-107D67C568B8}
+64	Microsoft Visual Studio 2008 Performance Collection Tools - CHS	9.0.30729	Microsoft Corporation	{38A82881-626F-30A4-A1FA-E1B4831A11CF}
+64	Microsoft .NET AppHost Pack - 7.0.7 (x64_x86)	56.31.61636	Microsoft Corporation	{3C820E97-C3EF-4657-9EEB-4AD2C5E3C477}
+64	Microsoft System CLR Types for SQL Server 2019	15.0.2000.5	Microsoft Corporation	{3E5195F5-ED93-4406-B149-F9F66F35E851}
+64	Microsoft Visual C++ 2022 X64 Minimum Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{43B0D101-A022-48F4-9D04-BA404CEB1D53}
+64	Python 3.12.3 Executables (64-bit)	3.12.3150.0	Python Software Foundation	{474E5879-A9D5-4DF5-9385-ADF7E224CEC7}
+64	Microsoft SQL Server System CLR Types (x64)	10.50.1447.4	Microsoft Corporation	{4A8CE6D7-4D52-43B9-970B-03FC75FAD667}
+64	Microsoft .NET AppHost Pack - 6.0.18 (x64_arm)	48.75.61559	Microsoft Corporation	{4C616387-D549-48D4-9779-9D5B49CF043C}
+64	Microsoft .NET AppHost Pack - 7.0.7 (x64)	56.31.61636	Microsoft Corporation	{51590631-1957-476B-BE00-E65DA10A00E5}
+64	Microsoft.NET.Workload.Emscripten.net7.Manifest (x64)	56.35.61425	Microsoft Corporation	{537A04C0-B0BC-4588-87A6-15FB99D18488}
+64	Microsoft.NET.Sdk.Android.Manifest-7.0.100 (x64)	33.0.46	Microsoft Corporation	{565FC58A-8818-4E03-83EF-B2899FC3A8D2}
+64	Python 3.11.9 Tcl/Tk Support (64-bit)	3.11.9150.0	Python Software Foundation	{57AC2A86-EC99-4E9C-9FF9-15DAA88D1FAE}
+64	icecap_collection_x64	17.6.33605	Microsoft Corporation	{58CB2C38-D7D7-4198-A83F-DB023F0C6980}
+64	Microsoft Windows Desktop Runtime - 7.0.7 (x64)	56.31.61651	Microsoft Corporation	{593F16DC-C2D3-4740-ABD4-A171B4E32B06}
+64	SQL Server 2022 DMF	16.0.1000.6	Microsoft Corporation	{5AB77D4E-9E5F-4627-B78B-129A5EC2858A}
+64	Microsoft Visual Studio 2010 Tools for Office Runtime (x64)	10.0.30319	Microsoft Corporation	{5D068141-189F-39E2-A052-E40D4B561256}
+64	Microsoft Windows SDK for Visual Studio 2008 Headers and Libraries	6.1.5288.17011	Microsoft Corporation	{5DE154DF-A55E-4FA5-BE59-32E78FCACF3E}
+64	Microsoft ASP.NET Core 7.0.7 Shared Framework (x64)	7.0.7.23274	Microsoft Corporation	{5ECA54B7-62F2-39EE-9514-31F7DFFFC968}
+64	Microsoft ASP.NET Core 6.0.18 Shared Framework (x64)	6.0.18.23269	Microsoft Corporation	{5FC405D7-181B-37E7-B9BF-431A0D89592E}
+64	Application Verifier x64 External Package (OnecoreUAP)	10.1.26100.7705	Microsoft	{601DDF69-FCF4-F568-946A-C17046C946E4}
+64	Microsoft SQL Server 2022 RsFx Driver	16.0.1000.6	Microsoft Corporation	{629C8FC9-3763-4C58-8264-5288AE34AFEF}
+64	Microsoft .NET Host FX Resolver - 7.0.7 (x64)	56.31.61636	Microsoft Corporation	{62A9DE14-DB7A-41D9-9D7E-ED494E6FCBAF}
+64	Microsoft Windows SDK for Visual Studio 2008 SP1 Tools	6.1.5294.17011	Microsoft Corporation	{62EED300-E841-4083-A1D6-60B906271804}
+64	Crystal Reports Basic Runtime Simplified Chinese Language Pack for Visual Studio 2008 (x64)	10.5.0.0	Business Objects	{64D12BC6-E58C-4EB1-A6C9-4C6D1C56C25C}
+64	Microsoft.NET.Sdk.tvOS.Manifest-7.0.100 (x64)	16.4.7067	Microsoft Corporation	{660EA370-F384-4564-B357-C7B59EF0A04E}
+64	Visual Studio 2010 Prerequisites - English	10.0.30319	Microsoft Corporation	{662014D2-0450-37ED-ABAE-157C88127BEB}
+64	SQL Server 2022 Database Engine Services	16.0.1000.6	Microsoft Corporation	{6621C765-569C-4D46-A8E9-C69A47971357}
+64	X64 Debuggers And Tools	10.1.17763.132	Microsoft Corporation	{66B288E6-3354-AB0F-920D-909DDAA653FF}
+64	SQL Server 2022 Common Files	16.0.1000.6	Microsoft Corporation	{6A68D32C-4C0D-4847-B70C-58E6B4D76A12}
+64	Microsoft Windows Desktop Targeting Pack - 6.0.18 (x64)	48.75.61602	Microsoft Corporation	{6EE60642-F368-486B-8DC5-6F0C48F97955}
+64	Microsoft Visual Studio Installer	4.8.60.55523	Microsoft Corporation	{6F320B93-EE3C-4826-85E0-ADF79F8D4C61}
+64	SQL Server 2022 Shared Management Objects	16.0.1000.6	Microsoft Corporation	{6F8242AA-1B25-421C-8E45-FC5978D9AA3A}
+64	Microsoft .NET 7.0 Templates 7.0.304 (x64)	28.7.50681	Microsoft Corporation	{6FFF9225-4600-4B09-9606-7A492815E91C}
+64	Microsoft ODBC Driver 17 for SQL Server	17.4.1.1	Microsoft Corporation	{72AFAF21-33FB-45A5-9468-A9EC07427F82}
+64	Microsoft.NET.Sdk.macOS.Manifest-7.0.100 (x64)	13.3.7067	Microsoft Corporation	{76B7A8DF-F909-4469-99E5-721634BB909A}
+64	SQL Server 2022 Connection Info	16.0.1000.6	Microsoft Corporation	{770DA7F2-817B-4AA6-9160-08BB658ABDC6}
+64	Microsoft OLE DB Driver for SQL Server	18.2.4.0	Microsoft Corporation	{77E9E138-0D4C-495E-BE77-761E1797BA16}
+64	VS JIT Debugger	17.0.118.0	Microsoft Corporation	{7B8542BA-01E4-43EB-A172-1DA975AFD00B}
+64	SQL Server 2022 Batch Parser	16.0.1000.6	Microsoft Corporation	{7EFD8B19-A9E6-41CF-A96F-B9B6E30EC345}
+64	Microsoft Windows Desktop Runtime - 6.0.18 (x64)	48.75.61602	Microsoft Corporation	{81D7013F-AB4C-4DEF-8549-2AC6A3D612BB}
+64	CMake	3.27.2	Kitware	{82637A57-4AF0-4328-851A-BCEBC13B8A70}
+64	Python 3.12.3 pip Bootstrap (64-bit)	3.12.3150.0	Python Software Foundation	{837260D6-3959-452B-A557-666302BEA663}
+64	Microsoft Device Emulator (64 位) 3.0 版 - 简体中文	9.0.21022	Microsoft Corporation	{8438B84F-CFBB-3D66-A117-E6E54C922E3E}
+64	Microsoft Visual C++ 2022 X64 Additional Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{86AB2CC9-08BD-4643-B0F9-F82D006D72FF}
+64	SQL Server 2022 Common Files	16.0.1000.6	Microsoft Corporation	{8770AF64-BB4B-4404-BDD6-6AF8E4C461FC}
+64	Microsoft Visual Studio 2010 IntelliTrace Collection (x64)	10.0.30319	Microsoft Corporation	{88BAE373-00F4-3E33-828F-96E89E5E0CB9}
+64	Microsoft Update Health Tools	2.84.0.0	Microsoft Corporation	{8A6AB459-CB4B-4D09-8C1E-337FB59135C4}
+64	Microsoft .NET Runtime - 6.0.18 (x64)	48.75.61559	Microsoft Corporation	{8BBCB5E9-5775-4465-AABC-3E276EBBD496}
+64	Microsoft ASP.NET Core 7.0.7 Targeting Pack (x64)	7.0.7.23274	Microsoft Corporation	{8C8191FB-F216-3F9B-8AFC-69EDA4F26494}
+64	NVIDIA Nsight Visual Studio Edition 2019.3.0.19200	19.3.0.19200	NVIDIA Corporation	{8DD91892-32FB-4035-B011-AD7948EFD302}
+64	TortoiseGit 2.14.0.1 (64 bit)	2.14.0.1	TortoiseGit	{8E9851A6-6504-4D81-9AA4-60385F388AD9}
+64	Python 3.12.3 Development Libraries (64-bit)	3.12.3150.0	Python Software Foundation	{8EB1F259-1326-4583-B383-F5C3D7C93D7D}
+64	Python 3.12.3 Add to Path (64-bit)	3.12.3150.0	Python Software Foundation	{8FB3DEFF-4D86-4889-9B0A-0FE7AE90D7C9}
+64	Microsoft Visual Studio 2010 Performance Collection Tools - ENU	10.0.30319	Microsoft Corporation	{8FF0ACBD-17A5-3637-95F4-D7C69723E2BF}
+64	Microsoft Visual C++ 2013 x64 Additional Runtime - 12.0.21005	12.0.21005	Microsoft Corporation	{929FBD26-9020-399B-9A7A-751D61F0B942}
+64	SQL Server 2022 XEvent	16.0.1000.6	Microsoft Corporation	{94AEB0A0-365C-449B-B573-D2ECB353EB06}
+64	Microsoft Visual C++ 2010  x64 Runtime - 10.0.30319	10.0.30319	Microsoft Corporation	{94D70749-4281-39AC-AD90-B56A0E0A402E}
+64	Microsoft Windows SDK for Visual Studio 2008 SDK Reference Assemblies and IntelliSense	6.1.5288.17011	Microsoft Corporation	{9aa5f39c-a8de-46b0-919a-0248f8bc8490}
+64	Microsoft .NET Toolset 7.0.304 (x64)	28.7.34297	Microsoft Corporation	{9AEC379D-8C8E-4E57-AFA4-03059F55B4D6}
+64	Python 3.11.9 Standard Library (64-bit)	3.11.9150.0	Python Software Foundation	{9AFDC691-40E5-4B15-835F-9A524AC4672C}
+64	SQL Server 2022 Shared Management Objects Extensions	16.0.1000.6	Microsoft Corporation	{A0F7ACBA-075F-4BC7-A85A-5DC301FCEC74}
+64	vs_Graphics_Singletonx64	17.6.33606	Microsoft Corporation	{A157088B-79AB-4EC0-A143-39F4F9B1C858}
+64	Python 3.12.3 Standard Library (64-bit)	3.12.3150.0	Python Software Foundation	{A1839EB2-3C30-4BCD-AACF-04F6FF6C90CD}
+64	NVIDIA Nsight Compute 2019.4.0	19.4.0.0	NVIDIA Corporation	{A6F92647-E007-4C7F-8FDF-FB214E50E1F0}
+64	Microsoft .NET Standard Targeting Pack - 2.1.0 (x64)	24.0.28113	Microsoft Corporation	{A7036CFB-B403-4598-85FF-D397ABB88173}
+64	Microsoft Visual C++ 2013 x64 Minimum Runtime - 12.0.21005	12.0.21005	Microsoft Corporation	{A749D8E6-B613-3BE3-8F5F-045C84EBA29B}
+64	Microsoft .NET Targeting Pack - 7.0.7 (x64)	56.31.61636	Microsoft Corporation	{A94192EC-6F85-4EF7-8450-6F98F00DEC9C}
+64	Microsoft Windows SDK for Visual Studio 2008 SP1 Win32 Tools	6.1.5294.17011	Microsoft Corporation	{A992BBAA-723D-4574-A07F-983BF8FAA3E1}
+64	Microsoft .NET SDK 7.0.304 (x64) from Visual Studio	7.3.423.27513	Microsoft Corporation	{AB11ADFB-9E37-4DD5-813C-A52D7A1F5ACA}
+64	Microsoft VSS Writer for SQL Server 2022	16.0.1000.6	Microsoft Corporation	{AB5D8778-81F3-47E2-87A4-35E776CD664B}
+64	Python 3.11.9 Core Interpreter (64-bit)	3.11.9150.0	Python Software Foundation	{B074012B-9B85-4049-BA01-A58A8C4C2236}
+64	CUBLAS Runtime	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_cublas_10.1
+64	CUBLAS Development	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_cublas_dev_10.1
+64	NVIDIA CUDA Development 10.1	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_CUDADevelopment_10.1
+64	NVIDIA CUDA Documentation 10.1	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_CUDADocument_10.1
+64	CUDART Runtime	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_cudart_10.1
+64	NVIDIA CUDA Runtime 10.1	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_CUDARuntimes_10.1
+64	CUDA Toolkit	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_CUDAToolkit_10.1
+64	CUDA Version	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_CUDAVersion_10.1
+64	${{arpDisplayName}}	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_cufft_10.1
+64	CUFFT Development	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_cufft_dev_10.1
+64	cuobjdump	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_cuobjdump_10.1
+64	CUPTI	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_cupti_10.1
+64	CURAND Runtime	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_curand_10.1
+64	CURAND Development	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_curand_dev_10.1
+64	CUSOLVER Runtime	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_cusolver_10.1
+64	CUSOLVER Development	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_cusolver_dev_10.1
+64	CUSPARSE Runtime	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_cusparse_10.1
+64	CUSPARSE Development	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_cusparse_dev_10.1
+64	Demo Suite	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_demo_suite_10.1
+64	NVIDIA 图形驱动程序 610.47	610.47	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_Display.Driver
+64	NVIDIA App 11.0.7.247	11.0.7.247	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_Display.NvApp
+64	NVIDIA MessageBus 3 for NvApp	3.21	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_Display.NvApp.MessageBus
+64	NVIDIA Backend	11.0.7.247	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_Display.NvApp.NvBackend
+64	NvCpl	1.0	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_Display.NvApp.NvCPL
+64	NVIDIA RTX Desktop Manager 203.20	203.20	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_Display.NView
+64	NVIDIA PhysX 系统软件 9.23.1019	9.23.1019	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_Display.PhysX
+64	CUDA Documentation	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_documentation_10.1
+64	Fortran Examples	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_fortran_examples_10.1
+64	NVIDIA FrameView SDK 1.7.12227.37421622	1.7.12227.37421622	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_FrameViewSdk
+64	GPU Library Advisor	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_gpu_library_advisor_10.1
+64	NVIDIA HD 音频驱动程序 1.4.5.7	1.4.5.7	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_HDAudio.Driver
+64	NVIDIA Install Application	2.1002.461.0	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_installer
+64	MEMCHECK	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_memcheck_10.1
+64	NPP Runtime	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_npp_10.1
+64	NPP Development	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_npp_dev_10.1
+64	nvcc	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvcc_10.1
+64	NVIDIA Container	1.48	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_NvContainer
+64	NVIDIA AIUser Container	1.48	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_NvContainer.AIUser
+64	NVIDIA LocalSystem Container	1.48	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_NvContainer.LocalSystem
+64	NVIDIA Session Container	1.48	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_NvContainer.Session
+64	NVIDIA User Container	1.48	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_NvContainer.User
+64	Disassembler	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvdisasm_10.1
+64	NVIDIA NvDLISR	1.0	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_NvDLISR
+64	NVGRAPH Runtime	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvgraph_10.1
+64	NVGRAPH Development	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvgraph_dev_10.1
+64	NVJPEG Runtime	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvjpeg_10.1
+64	NVJPEG Development	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvjpeg_dev_10.1
+64	NVML Development	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvml_dev_10.1
+64	NVIDIA Watchdog Plugin for NvContainer	1.48	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_NvPlugin.Watchdog
+64	CUDA Profiler Tools	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvprof_10.1
+64	nvprune	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvprune_10.1
+64	NVRTC Runtime	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvrtc_10.1
+64	NVRTC Development	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvrtc_dev_10.1
+64	NVIDIA Telemetry Client	19.5.13.0	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_NvTelemetry
+64	NVTX Development	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_nvtx_10.1
+64	Occupancy Calculator	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_occupancy_calculator_10.1
+64	NVIDIA CUDA Samples 10.1	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_samples_10.1
+64	CUDA Sanitizer API	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_sanitizer_10.1
+64	NVIDIA ShadowPlay 11.0.7.0	11.0.7.0	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_ShadowPlay
+64	NVIDIA USBC Driver 1.52.831.832	1.52.831.832	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_USBC
+64	NVIDIA Virtual Audio 4.65.0.12	4.65.0.12	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_VirtualAudio.Driver
+64	Visual Profiler	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_visual_profiler_10.1
+64	NVIDIA CUDA Visual Studio Integration 10.1	10.1	NVIDIA Corporation	{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_visual_studio_integration_10.1
+64	NVIDIA Tools Extension SDK (NVTX) - 64 bit	1.00.00.00	NVIDIA Corporation	{B56D2F88-8865-40FD-B7AC-F074EE4D201D}
+64	Microsoft.NET.Sdk.iOS.Manifest-7.0.100 (x64)	16.4.7067	Microsoft Corporation	{B72C00E8-F28F-4EC8-95D8-565B73EC7FAE}
+64	Microsoft.NET.Sdk.Maui.Manifest-7.0.100 (x64)	7.0.86	Microsoft Corporation	{B9B9B64E-70F4-47C0-B57C-9269431912D8}
+64	Microsoft Visual Studio 2008 Remote Debugger - CHS	9.0.30729	Microsoft Corporation	{BA458007-1D1A-3125-8243-07C80EED211D}
+64	SQL Server 2022 XEvent	16.0.1000.6	Microsoft Corporation	{BD8B7339-7559-4FC3-95E6-264324D45235}
+64	Samsung NVM Express Driver 2.2.0.1703	2.2.0.1703	Samsung Electronics Co., Ltd	{BDFEC366-DB3C-4330-9459-C4934C8CB5F2}
+64	Microsoft SQL Server 2022 Setup (English)	16.0.1000.6	Microsoft Corporation	{BF4D8C4B-D931-4D62-A7ED-8A34B2FC0D1B}
+64	Python 3.11.9 Executables (64-bit)	3.11.9150.0	Python Software Foundation	{C038789C-DCB5-42D3-8C51-3BC9DDB26B90}
+64	Visual Studio .NET Prerequisites - English	9.0.30729	Microsoft Corporation	{C06D964F-48FA-3714-8803-0EEE5E0BA2C1}
+64	SQL Server 2022 Database Engine Services	16.0.1000.6	Microsoft Corporation	{C4CF167C-4739-4A3A-8D75-59C9C5F135CA}
+64	DiagnosticsHub_CollectionService	17.14.36412	Microsoft Corporation	{C762588C-06DE-496A-8ADF-EBDBD49E37B5}
+64	Universal CRT Tools x64	10.1.26100.7705	Microsoft Corporation	{C7F2EF85-ACD3-0480-6BC2-0C3B45A8F1C1}
+64	Microsoft .NET AppHost Pack - 7.0.7 (x64_arm)	56.31.61636	Microsoft Corporation	{C92E8E52-2EE9-48CF-B70F-92A02743FF98}
+64	Microsoft .NET 6.0 Templates 7.0.304 (x64)	24.6.34297	Microsoft Corporation	{CD42A163-2809-41DD-AE8D-494527D96D69}
+64	Python 3.11.9 Add to Path (64-bit)	3.11.9150.0	Python Software Foundation	{CD925D17-C20C-441B-AAE2-4FA5B78C978F}
+64	Python 3.11.9 Development Libraries (64-bit)	3.11.9150.0	Python Software Foundation	{CEE03ABD-D5F9-4104-BFA5-520711B8D71F}
+64	vs_devenx64vmsi	17.6.33605	Microsoft Corporation	{CF59ABFA-9F4D-4F28-80D4-A1C46BAFBA9D}
+64	Java(TM) SE Development Kit 20.0.2 (64-bit)	20.0.2.0	Oracle Corporation	{D2D0311F-1C55-57CC-95CC-F973FA7660D4}
+64	Microsoft SQL Server Compact 3.5 SP2 x64 ENU	3.5.8080.0	Microsoft Corporation	{D4AD39AD-091E-4D33-BB2B-59F6FCB8ADC3}
+64	Microsoft.NET.Workload.Mono.Toolchain.net7.Manifest (x64)	56.3.61636	Microsoft Corporation	{D52AF4B1-07C4-4E1B-B4BF-9BC2D06608F0}
+64	SQL Server 2022 Database Engine Shared	16.0.1000.6	Microsoft Corporation	{D6E82158-05B9-4A18-A624-EA135BC77766}
+64	Application Verifier x64 External Package (DesktopEditions)	10.1.26100.7705	Microsoft	{D75B3C63-F3BB-5EC1-45A7-15C00BBB9D3F}
+64	Microsoft SQL Server 2008 R2 Management Objects (x64)	10.50.1447.4	Microsoft Corporation	{DA67488A-2689-4F10-B90F-D2F6977509D6}
+64	SQL Server 2022 DMF	16.0.1000.6	Microsoft Corporation	{DCA0C2D6-83BF-41AE-B1AB-C4181002DE40}
+64	Microsoft Windows SDK for Visual Studio 2008 .NET Framework Tools - chs	3.5.21022	Microsoft Corporation	{DCD9A3D3-2512-3479-B785-85485232286C}
+64	Microsoft .NET AppHost Pack - 6.0.18 (x64_arm64)	48.75.61559	Microsoft Corporation	{E281BA87-30D0-44CD-BBA9-AB49EB23F204}
+64	Microsoft .NET AppHost Pack - 6.0.18 (x64)	48.75.61559	Microsoft Corporation	{E6EEBD7C-F575-4B6A-BE1B-19A73223CF53}
+64	Microsoft.NET.Sdk.MacCatalyst.Manifest-7.0.100 (x64)	16.4.7067	Microsoft Corporation	{E7C0A71C-82F5-4C6D-BA16-0055EEE21FDF}
+64	Microsoft .NET Host - 7.0.7 (x64)	56.31.61636	Microsoft Corporation	{E914E975-A0B1-49F7-AB71-28DACD495C44}
+64	SQL Server 2022 Connection Info	16.0.1000.6	Microsoft Corporation	{EAC54B82-7A37-4A9E-8953-474316BD40F6}
+64	Microsoft .NET Runtime - 7.0.7 (x64)	56.31.61636	Microsoft Corporation	{ECCA3DB0-6DEF-42CD-A21A-F2F7B918FB59}
+64	Microsoft ASP.NET Core 6.0.18 Targeting Pack (x64)	6.0.18.23269	Microsoft Corporation	{ECF19E74-74A7-307F-8A58-A767C849E0B0}
+64	Microsoft Visual C++ 2010  x64 Designtime - 10.0.30319	10.0.30319	Microsoft Corporation	{F5079164-1DB9-3BDA-853B-F78AF67CE071}
+64	VS Script Debugging Common	17.0.157.0	Microsoft Corporation	{F5796163-6EC6-488A-B2DE-E1E94477F6AD}
+64	Microsoft.NET.Workload.Emscripten.net6.Manifest (x64)	56.35.61425	Microsoft Corporation	{F57BB83D-BD42-4B13-83CE-444EC462CC59}
+64	IntelliTraceProfilerProxy	15.0.21225.01	Microsoft Corporation	{F8B9E8C8-61E8-4E9E-879D-F3F498AD0230}
+64	Microsoft .NET Targeting Pack - 6.0.18 (x64)	48.75.61559	Microsoft Corporation	{F999B212-4EAF-425B-A88B-F67F9CCC3994}
+64	Windows SDK DirectX x64 Remote	10.1.26100.7705	Microsoft Corporation	{FB7C4DC7-7641-04B7-6639-589757B86783}
+64	Microsoft Help Viewer 1.0	1.0.30319	Microsoft Corporation	{FCADA26A-5672-31DD-BF0E-BA76ECF9B02D}
+64	Microsoft Visual C++ 2022 X64 Debug Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{FE85AA49-3522-4663-9F52-9CD9E9837189}
+32	Visual Studio Community 2022	17.6.4	Microsoft Corporation	2b423749
+32	Visual Studio 生成工具 2022 (2)	17.14.33	Microsoft Corporation	78a7e7fc
+32	Google Chrome	156.0.8078.81	Google LLC	Google Chrome
+32	Microsoft Document Explorer 2008		Microsoft Corporation	Microsoft Document Explorer 2008
+32	Microsoft Document Explorer 2008 语言包 - 简体中文		Microsoft Corporation	Microsoft Document Explorer 2008 Language Pack - CHS
+32	Microsoft Edge	157.0.4341.42	Microsoft Corporation	Microsoft Edge
+32	Microsoft Edge WebView2 Runtime	157.0.4341.42	Microsoft Corporation	Microsoft EdgeWebView
+32	Visual Studio 2005 Tools for Office Second Edition Runtime		Microsoft Corporation	Microsoft Visual Studio 2005 Tools for Office Runtime
+32	Microsoft Visual Studio 2005 Tools for Office Runtime Language Pack		Microsoft Corporation	Microsoft Visual Studio 2005 Tools for Office Runtime Language Pack
+32	Microsoft Visual Studio 2010 Ultimate - ENU	10.0.30319	Microsoft Corporation	Microsoft Visual Studio 2010 Ultimate - ENU
+32	Microsoft Visual Studio Macro Tools	9.0.30729	Microsoft Corporation	Microsoft Visual Studio Macro Tools
+32	Microsoft Visual Studio Team System 2008 Team Suite - 简体中文		Microsoft Corporation	Microsoft Visual Studio Team System 2008 Team Suite - CHS
+32	Remote Desktop Organizer	1.4.6	Appmazing	Remote Desktop Organizer
+32	Visual Studio Tools for the Office system 3.0 Runtime		Microsoft Corporation	Visual Studio Tools for the Office system 3.0 Runtime
+32	Visual Studio Tools for the Office system 3.0 Runtime 语言包 - 简体中文		Microsoft Corporation	Visual Studio Tools for the Office system 3.0 Runtime Language Pack - CHS
+32	Microsoft Visual Studio Web Authoring Component	12.0.4518.1066	Microsoft Corporation	VisualWebDeveloper
+32	Windows SDK Desktop Tools x86	10.1.22000.832	Microsoft Corporation	{02594FB6-9905-CBB9-10E8-EFCFB7122D7C}
+32	Universal CRT Extension SDK	10.1.26100.7705	Microsoft Corporation	{0343A2EB-5CCA-79B9-18A4-ABD484A97924}
+32	Universal CRT Redistributable	10.0.26624	Microsoft Corporation	{0460C87B-7F4C-3170-FAC9-B7A6AE5CE4E9}
+32	MSI Development Tools	10.1.26100.7705	Microsoft Corporation	{06671634-35F4-43F1-1B57-68B7CE54E5B3}
+32	vs_clickoncebootstrappermsi	17.6.33606	Microsoft Corporation	{07C7A46C-48FC-4AF2-891B-22D0345C974E}
+32	WinRT Intellisense UAP - Other Languages	10.1.26100.7705	Microsoft Corporation	{099E916C-D17E-7E1A-0046-3AD1D042102F}
+32	Windows SDK Desktop Headers arm64	10.1.26100.7705	Microsoft Corporation	{0A1B70B0-DD98-1BCC-6958-D5AD8BBAF2B2}
+32	Microsoft Visual C++ 2015-2022 Redistributable (x86) - 14.44.35211	14.44.35211.0	Microsoft Corporation	{0b5169e3-39da-4313-808e-1f9c0407f3bf}
+32	VS Immersive Activate Helper	17.0.118.0	Microsoft Corporation	{0B826206-3626-4E96-A675-0BDE6B8711B6}
+32	Microsoft SQL Server 2008 R2 Data-Tier Application Framework	10.50.1447.4	Microsoft Corporation	{0DDCEC37-369C-484B-B16D-B4413FD42FB9}
+32	Visual C++ 2008 x64 Runtime - (v9.0.30729)	9.0.30729	Microsoft Corporation	{0DF3AE91-E533-3960-8516-B23737F8B7A2}
+32	Visual C++ 2008 x64 Runtime - v9.0.30729.01	9.0.30729.01	Microsoft Corporation	{0DF3AE91-E533-3960-8516-B23737F8B7A2}.vc_x64runtime_30729_01
+32	hppP1100P1560P1600SeriesLaserJetService	001.001.0.0	Hewlett-Packard	{0E448256-D515-4C3E-A5BE-0A7B76CED5D4}
+32	Microsoft Windows Desktop Runtime - 7.0.7 (x86)	56.31.61651	Microsoft Corporation	{0EEC265D-6126-433C-B735-1A821A0C0A3E}
+32	WinRT Intellisense Mobile - en-us	10.1.22000.832	Microsoft Corporation	{0F2D2736-F436-3F10-FB30-9D279F58305B}
+32	Windows SDK Signing Tools	10.1.22000.832	Microsoft Corporation	{0F5E7D7D-8969-DC1B-205D-024FB54A0417}
+32	vs_SQLClickOnceBootstrappermsi	17.6.33605	Microsoft Corporation	{0F6E6607-7BB5-40D9-8538-C8313D82AE0F}
+32	Visual Studio 2010 Tools for SQL Server Compact 3.5 SP2 ENU	4.0.8080.0	Microsoft Corporation	{112C23F2-C036-4D40-BED4-0CB47BF5555C}
+32	Windows SDK DirectX x86 Remote	10.1.26100.7705	Microsoft Corporation	{11C0EB4F-A1BA-2068-49A5-F7C242708BA2}
+32	Microsoft .NET CoreRuntime SDK	1.1.27004.0	Microsoft Corporation	{12702494-9E6A-3F5E-9441-2B7D258A639B}
+32	Windows SDK Desktop Libs x64	10.1.26100.7705	Microsoft Corporation	{12C6754C-2086-9BFC-1292-FA0BE54009E6}
+32	Microsoft .NET Compact Framework 2.0 SP2	2.0.7045	Microsoft Corporation	{13075FB4-D7AF-41E0-BDE4-4F9C00D72CFF}
+32	Windows Team Extension SDK	10.1.22000.832	Microsoft Corporation	{14705B25-5AC2-82AC-DB79-A35219016ABB}
+32	Visual C++ Library CRT ARM64 Appx Package	14.36.32532	Microsoft Corporation	{14D6457A-DF33-4E7C-8393-7A8158CA0899}
+32	Windows SDK AddOn	10.1.0.0	Microsoft Corporation	{15941C7F-810D-41DF-8C5A-8D0490277AFB}
+32	MarketResearch	130.0.374.000	Hewlett-Packard	{175F0111-2968-4935-8F70-33108C6A4DE3}
+32	Microsoft .NET Framework 4.7.2 Targeting Pack	4.7.03062	Microsoft Corporation	{1784A8CD-F7FE-47E2-A87D-1F31E7242D0D}
+32	windows_toolscorepkg	17.6.33605	Microsoft Corporation	{18752AC8-6F0F-4016-95D1-70731707CBF7}
+32	Windows SDK Desktop Libs x64	10.1.22000.832	Microsoft Corporation	{1A457607-6262-3949-63D4-E1F85A3D95FD}
+32	Microsoft Visual C++ 2013 Redistributable (x64) - 12.0.30501	12.0.30501.0	Microsoft Corporation	{1b103cea-f037-4504-81de-956057b442c3}
+32	Visual Studio Tools for the Office system 3.0 Runtime Language Pack - CHS	9.0.30729	Microsoft Corporation	{1CE4F85A-4B2A-3113-BC17-32D98656A4ED}
+32	Visual Studio Tools for the Office system 3.0 Runtime 语言包 - 简体中文 Service Pack 1 (KB949258)	1	Microsoft Corporation	{1CE4F85A-4B2A-3113-BC17-32D98656A4ED}.KB949258LP
+32	Windows Team Extension SDK	10.1.26100.7705	Microsoft Corporation	{1F507473-1077-3AB8-2E11-C839AE4E27B8}
+32	Windows IoT Extension SDK Contracts	10.1.22000.832	Microsoft Corporation	{1FF69612-5A91-3565-7EE3-0539A04E3B8D}
+32	Windows Mobile 5.0 SDK R2 for Smartphone	5.00.1700.5.14343.06	Microsoft Corporation	{208CEAED-29A9-4C67-B45C-4C8CCD8A44D7}
+32	icecap_collectionresourcesx64	17.6.33605	Microsoft Corporation	{21A4C6D9-5177-4FF4-AC69-EEB9BBD220E4}
+32	vs_communitymsires	17.14.36015	Microsoft Corporation	{21B097AB-E1D1-4791-9651-0AB1B7B08438}
+32	ClickOnce Bootstrapper Package for Microsoft .NET Framework	4.8.09037	Microsoft Corporation	{22E13608-4DB0-4977-A267-3AAFA09CD54A}
+32	Visual C++ 2008 IA64 Runtime - (v9.0.30729)	9.0.30729	Microsoft Corporation	{22E23C71-C27A-3F30-8849-BB6129E50679}
+32	Visual C++ 2008 IA64 Runtime - v9.0.30729.01	9.0.30729.01	Microsoft Corporation	{22E23C71-C27A-3F30-8849-BB6129E50679}.vc_i64runtime_30729_01
+32	vs_filehandler_amd64	17.14.36024	Microsoft Corporation	{22EE1419-B47E-44B8-A635-868746946079}
+32	Windows SDK Modern Non-Versioned Developer Tools	10.1.26100.7705	Microsoft Corporation	{26BD6DC6-3F0F-4C17-A78C-5D06459F39C0}
+32	vs_githubprotocolhandlermsi	17.14.36015	Microsoft Corporation	{29297AFE-9D24-4DFE-ACAF-D90090D905CF}
+32	Microsoft SQL Server System CLR Types	10.50.1447.4	Microsoft Corporation	{2A2F3AE8-246A-4252-BB26-1BEB45627074}
+32	vs_clickoncesigntoolmsi	17.6.33605	Microsoft Corporation	{2A387476-6041-4F52-9FFF-8806BE8C4FEF}
+32	Microsoft .NET Framework Cumulative Intellisense Pack for Visual Studio (简体中文)	4.8.09037	Microsoft Corporation	{2A6BCBDA-E80E-4A82-9262-70D23033419F}
+32	Windows SDK Desktop Libs arm64	10.1.26100.7705	Microsoft Corporation	{2C37C218-88FF-9E58-0151-1AF693535792}
+32	Windows SDK for Windows Store Apps Libs	10.1.26100.7705	Microsoft Corporation	{2CAA22A5-36FE-21B0-5A67-3BE172FEFF12}
+32	Microsoft ASP.NET Core 6.0.18 Shared Framework (x86)	6.0.18.23269	Microsoft Corporation	{2E447EA1-D88D-3F75-8856-DDBC22BC99CB}
+32	Windows SDK Desktop Headers arm64	10.1.22000.832	Microsoft Corporation	{30092A0E-1D50-8D66-E5EB-01F6AA8C1FFE}
+32	WinRT Intellisense IoT - Other Languages	10.1.26100.7705	Microsoft Corporation	{3120663A-4F7D-252C-2829-1B9DBEDFEEED}
+32	Windows SDK for Windows Store Apps DirectX x86 Remote	10.1.22000.832	Microsoft Corporation	{31A3EB09-E226-B0E5-FA70-FF4B3CAD2ECF}
+32	Windows SDK Facade Windows WinMD Versioned	10.1.22000.832	Microsoft Corporation	{31B6D021-BC97-82C5-9C42-16AB86C37215}
+32	Universal CRT Redistributable	10.1.26100.7705	Microsoft Corporation	{368E4D03-5983-1C2C-B42E-1C0C51A935A5}
+32	Microsoft Visual Studio 2005 Tools for Office Runtime	8.0.60940.0	Microsoft Corporation	{388E4B09-3E71-4649-8921-F44A3A2954A7}
+32	WinRT Intellisense IoT - Other Languages	10.1.22000.832	Microsoft Corporation	{3A8F388C-D0F7-0A66-0EDE-D477B1B1B2F4}
+32	Microsoft SQL Server Compact 3.5 SP2 ENU	3.5.8080.0	Microsoft Corporation	{3A9FC03D-C685-4831-94CF-4EDFD3749497}
+32	Microsoft Windows Desktop Targeting Pack - 7.0.7 (x86)	56.31.61651	Microsoft Corporation	{3B31B584-1479-44E6-9297-06A63F51CCAF}
+32	Microsoft .NET Host FX Resolver - 7.0.7 (x86)	56.31.61636	Microsoft Corporation	{3D332594-2B70-4C75-8965-00D0F98838D7}
+32	Microsoft Visual Studio Team System 2008 Team Suite - CHS	9.0.30729	Microsoft Corporation	{3D89E4F2-543C-3852-A874-850AA6422208}
+32	Microsoft Visual Studio Team System 2008 Team Suite - 简体中文 Service Pack 1 (KB945140)	1	Microsoft Corporation	{3D89E4F2-543C-3852-A874-850AA6422208}.KB945140
+32	WinRT Intellisense Mobile - en-us	10.1.26100.7705	Microsoft Corporation	{3EEF5F2A-A2A3-89FC-D7DF-CFE8DEFE4A8F}
+32	Windows Desktop Extension SDK	10.1.22000.832	Microsoft Corporation	{3F737DA8-C5B7-8740-6B07-BA73B5E62CDF}
+32	WinRT Intellisense UAP - en-us	10.1.22000.832	Microsoft Corporation	{4308116D-A763-144D-DC81-6243BE6B2ADF}
+32	Kits Configuration Installer	10.1.26100.7705	Microsoft	{43506B27-889E-2F0F-F8BE-4AEBE7CC9249}
+32	Microsoft .NET CoreRuntime For CoreCon	1.0.0.0	Microsoft Corporation	{48A8F171-52F2-372B-8414-EA50617708BE}
+32	Microsoft Visual Studio Setup WMI Provider	3.12.2140.44225	Microsoft Corporation	{49727420-70BA-4495-9405-31F8D711CB5A}
+32	Windows SDK for Windows Store Apps Tools	10.1.26100.7705	Microsoft Corporation	{4C150435-9153-456C-C0BE-497D89513B18}
+32	Windows SDK for Windows Store Managed Apps Libs	10.1.26100.7705	Microsoft Corporation	{4D8C14D7-C036-33F2-EFA7-C5CC5F73932B}
+32	Microsoft SQL Server 2008 R2 Management Objects	10.50.1447.4	Microsoft Corporation	{4E968D9C-21A7-4915-B698-F7AEB913541D}
+32	Windows SDK EULA	10.1.26100.7705	Microsoft Corporations	{5120ED0E-8B54-B212-15E6-EE404FE83E37}
+32	Python Launcher	3.12.3150.0	Python Software Foundation	{52ABF617-F7B4-40F9-8197-C7490DAA97A3}
+32	Microsoft ASP.NET Core 6.0.18 Targeting Pack (x86)	6.0.18.23269	Microsoft Corporation	{534F6A7E-2C2C-3258-B400-50763F2FA091}
+32	vs_minshellinteropsharedmsi	17.14.36015	Microsoft Corporation	{537F07C8-0EC6-41A5-BB91-750FA3CAA110}
+32	Windows SDK Desktop Tools arm64	10.1.22000.832	Microsoft Corporation	{54E5E684-132E-23D3-CBF6-962122E2C568}
+32	vs_CoreEditorFonts	17.6.33605	Microsoft Corporation	{56FB5923-1A95-4D55-BE78-CD42B50E67AD}
+32	WinRT Intellisense Desktop - en-us	10.1.26100.7705	Microsoft Corporation	{572C25BD-AB18-B702-9ED7-6F0CC6821847}
+32	Windows SDK ARM64 Desktop Tools	10.1.26100.7705	Microsoft Corporation	{575077AC-CCC1-9943-6F3C-EDB6149964E7}
+32	vs_vswebprotocolselectormsires	17.14.36323	Microsoft Corporation	{5AB1AD44-9DCC-4193-8FE2-249DE5567FC4}
+32	Windows IoT Extension SDK	10.1.22000.832	Microsoft Corporation	{5B64C01B-2798-A2F6-89C3-AC03906F8788}
+32	WinRT Intellisense UAP - en-us	10.1.26100.7705	Microsoft Corporation	{5C8B4DA5-62C6-8D4A-F21A-AD4D66FCA8D9}
+32	Microsoft .NET Framework 4.7.2 目标包(简体中文)	4.7.03062	Microsoft Corporation	{5CDF8B25-AD18-45A1-934C-C52BE6E28048}
+32	Microsoft Visual Studio 2005 Tools for Office Runtime Language Pack	8.0.50727.42	Microsoft Corporation	{5DB161C0-7C9C-41D7-8DA1-CB112F60946B}
+32	Windows Team Extension SDK Contracts	10.1.22000.832	Microsoft Corporation	{5F1D4DE5-BFF3-503B-D05F-40ED6927DE17}
+32	icecap_collection_neutral	17.6.33606	Microsoft Corporation	{602F7006-1F86-4B30-8996-C6FC44B9F87E}
+32	Windows SDK Desktop Libs arm	10.1.22000.832	Microsoft Corporation	{6221E085-FE37-1068-E6D7-9D08ABD32AE2}
+32	Microsoft Document Explorer 2008	9.0.21022	Microsoft Corporation	{6753B40C-0FBD-3BED-8A9D-0ACAC2DCD85D}
+32	Visual C++ Library CRT Appx Resource Package	14.36.32532	Microsoft Corporation	{680DF2BD-512C-46F4-BADE-A4BCDAC86A43}
+32	Visual C++ Library CRT Desktop Appx Package	14.36.32532	Microsoft Corporation	{68C89F7A-31DC-404A-922A-4124C5AF72AE}
+32	Windows SDK for Windows Store Apps Tools	10.1.22000.832	Microsoft Corporation	{68F11757-8C35-BEB6-2AED-6F7C6CC5B8C0}
+32	Microsoft Visual C++ 2010  x86 Runtime - 10.0.30319	10.0.30319	Microsoft Corporation	{6A86554B-8928-30E4-A53C-D7337689134D}
+32	vs_minshellmsi	17.14.36301	Microsoft Corporation	{6AAEB5DD-FFFE-4CA1-9FE2-38A44B6B4477}
+32	vs_filehandler_x86	17.14.36024	Microsoft Corporation	{6C7D0172-7367-4F0C-95DB-6021765B58EA}
+32	Microsoft .NET Targeting Pack - 7.0.7 (x86)	56.31.61636	Microsoft Corporation	{6CBD6706-CAE3-4E3A-8571-5D5567F292E0}
+32	Microsoft Visual Studio Macro Tools	9.0.30729	Microsoft Corporation	{6CDEAD7E-F8D8-37F7-AB6F-1E22716E30F3}
+32	Windows SDK Desktop Headers x86	10.1.22000.832	Microsoft Corporation	{6F1B1243-7C12-5398-F575-5102906569A6}
+32	vs_communitysharedmsi	17.14.36025	Microsoft Corporation	{71498EE6-F94E-4061-9DD5-55925CA8A74F}
+32	Microsoft Windows Desktop Targeting Pack - 6.0.18 (x86)	48.75.61602	Microsoft Corporation	{7339FB98-A116-44D5-8A18-419600485546}
+32	Microsoft NetStandard SDK	15.0.51105	Microsoft Corporation	{737FDDA7-B944-4CB5-92D9-3D56373BD301}
+32	Microsoft .NET Runtime - 6.0.18 (x86)	48.75.61559	Microsoft Corporation	{749D214E-E195-4980-AAED-D8C37DA0671C}
+32	Visual C++ Library CRT Desktop Appx Package	14.36.32532	Microsoft Corporation	{7539E358-316D-4E69-89FF-53BC9789269A}
+32	Microsoft SQL Server 2008 R2 Transact-SQL Language Service	10.50.1447.4	Microsoft Corporation	{78C3657E-742C-40B1-9F53-E5A921D40F17}
+32	HPSSupply	2.1.1.0000	Hewlett Packard Development Company L.P.	{7902E313-FF0F-4493-ACB1-A8147B78DCD0}
+32	Windows SDK for Windows Store Apps Metadata	10.1.22000.832	Microsoft Corporation	{7907F380-3CFD-247C-9DFC-A23CED2012F8}
+32	Visual C++ Library CRT Appx Package	14.36.32532	Microsoft Corporation	{7A7337A7-CDAB-4E3E-A001-486232533737}
+32	Windows SDK Desktop Tools arm64	10.1.26100.7705	Microsoft Corporation	{7C1561F8-C963-0AC7-21BD-EA4DD9633C50}
+32	Windows SDK Desktop Libs x86	10.1.22000.832	Microsoft Corporation	{7CAF3DA2-79F6-C0DB-6C56-2462C8C4914C}
+32	Universal CRT Headers Libraries and Sources	10.1.26100.7705	Microsoft Corporation	{7D4D186C-70F0-6990-1792-DAA557B1E010}
+32	Universal General MIDI DLS Extension SDK	10.1.26100.7705	Microsoft Corporation	{7E52FE9F-4D3E-9277-0E37-0014C83D4F5E}
+32	Windows SDK OnecoreUap Headers x64	10.1.26100.7705	Microsoft Corporation	{80F76A51-EAF7-DA8E-C732-B26C591BCC23}
+32	WinRT Intellisense IoT - en-us	10.1.22000.832	Microsoft Corporation	{823E92A6-7572-174D-0671-95A55785F991}
+32	Windows SDK Desktop Libs arm64	10.1.22000.832	Microsoft Corporation	{82931C8D-83CC-CF2E-F4FA-9AF0829BCA22}
+32	vcpp_crt.redist.clickonce	14.44.35211	Microsoft Corporation	{835B3C35-0A49-4A7B-9BFD-18E2C4C6A311}
+32	WinRT Intellisense Desktop - Other Languages	10.1.22000.832	Microsoft Corporation	{837DD890-14CE-9EB3-E8E1-F96A7EE5CFE5}
+32	Microsoft TestPlatform SDK Local Feed	17.0.0.5175695	Microsoft	{839C2D45-DDF6-432C-A6A2-C6AF2EF281BF}
+32	vs_clickoncebootstrappermsires	17.6.33605	Microsoft Corporation	{84D58147-66B1-466D-A65F-CED613109399}
+32	hppusgP1100P1560P1600Series	1.0.0.1	Hewlett-Packard	{853F464A-B2B8-404E-BA3E-B98FF6862C41}
+32	Windows SDK OnecoreUap Headers arm64	10.1.26100.7705	Microsoft Corporation	{85F3FF9F-CFBA-AD2F-85E2-90571032D412}
+32	Visual C++ Library CRT Desktop Appx Package	14.36.32532	Microsoft Corporation	{86478DF5-B177-4D98-87CA-32F269DDFDDB}
+32	Realtek Ethernet Controller Driver	10.31.828.2018	Realtek	{8833FFB6-5B0C-4764-81AA-06DFEED9A476}
+32	Microsoft .NET Framework 4.8 SDK (简体中文)	4.8.03761	Microsoft Corporation	{8864B27B-FEE3-4826-A827-B7FEC4912DA1}
+32	vs_Graphics_Singletonx86	17.6.33606	Microsoft Corporation	{8BB0A8FB-6892-4D27-85CD-2F38AC775443}
+32	Microsoft .NET Host - 7.0.7 (x86)	56.31.61636	Microsoft Corporation	{8C93FD6A-9535-483D-91D1-0B47CD0C7517}
+32	WinAppDeploy	10.1.22000.832	Microsoft Corporation	{8E3AB865-9E38-1E5F-7B49-C8E3A70C6303}
+32	Universal CRT Redistributable	10.1.22000.832	Microsoft Corporation	{8EC1DC78-0A65-B6AC-664D-DFB3AC8E9736}
+32	Windows Mobile Extension SDK Contracts	10.1.22000.832	Microsoft Corporation	{8EDE105B-885A-D173-50F8-F50F39C51CF9}
+32	Visual Studio Tools for the Office system 3.0 Runtime	9.0.30729	Microsoft Corporation	{8FB53850-246A-3507-8ADE-0060093FFEA6}
+32	Visual Studio Tools for the Office system 3.0 Runtime Service Pack 1 (KB949258)	1	Microsoft Corporation	{8FB53850-246A-3507-8ADE-0060093FFEA6}.KB949258
+32	Microsoft Office Visual Web Developer 2007	12.0.4518.1066	Microsoft Corporation	{90120000-0021-0000-0000-0000000FF1CE}
+32	Update for Microsoft Visual Studio Web Authoring Component (KB945140)		Microsoft	{90120000-0021-0000-0000-0000000FF1CE}_VisualWebDeveloper_{F9DE79A2-9049-4589-9787-815147371581}
+32	Hotfix for Office (KB950278)		Microsoft	{90120000-0021-0000-0000-0000000FF1CE}_VisualWebDeveloper_{FED55BA1-5A70-44B4-8EB1-E72274AED780}
+32	Microsoft Office Visual Web Developer MUI (Chinese (Simplified)) 2007	12.0.4518.1066	Microsoft Corporation	{90120000-0021-0804-0000-0000000FF1CE}
+32	Microsoft Office Shared MUI (Chinese (Simplified)) 2007	12.0.4518.1014	Microsoft Corporation	{90120000-006E-0804-0000-0000000FF1CE}
+32	Universal CRT Extension SDK	10.1.22000.832	Microsoft Corporation	{90AAE845-42CE-EC12-4041-8ADF7BE765E7}
+32	WinRT Intellisense PPI - en-us	10.1.26100.7705	Microsoft Corporation	{91306123-946D-452F-3206-A8AB9F8293D6}
+32	Microsoft Visual C++ 2022 X86 Minimum Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{922480B5-CAEB-4B1B-AAA4-9716EFDCE26B}
+32	Windows SDK EULA	10.1.22000.832	Microsoft Corporations	{93F9D7FA-F2FD-837D-E53F-D79767071E44}
+32	Microsoft .NET Framework 4.8 SDK	4.8.03928	Microsoft Corporation	{949C0535-171C-480F-9CF4-D25C9E60FE88}
+32	Microsoft .NET Framework 4.8 目标包(简体中文)	4.8.03761	Microsoft Corporation	{9511C34D-0C20-47C0-A199-7894BA2DABCA}
+32	Microsoft Application Error Reporting	12.0.6012.5000	Microsoft Corporation	{95120000-00B9-0409-0000-0000000FF1CE}
+32	MSI Development Tools	10.1.22000.832	Microsoft Corporation	{95A498A9-5E6E-5779-1523-876224F41F94}
+32	vcpp_crt.redist.clickonce	14.36.32532	Microsoft Corporation	{964DCAC0-2645-4EA3-9111-BF4754C71C48}
+32	Windows SDK Redistributables	10.1.26100.7705	Microsoft Corporation	{96B30005-C36E-07FF-DF27-EEB8199694CD}
+32	Universal CRT Headers Libraries and Sources	10.1.22000.832	Microsoft Corporation	{98D5C5AA-993C-1371-C7AF-8F8A0E8CAF86}
+32	Microsoft ASP.NET Core 7.0.7 Targeting Pack (x86)	7.0.7.23274	Microsoft Corporation	{992E635D-CC0C-3513-9AE3-E58793D7613A}
+32	Windows Team Extension SDK Contracts	10.1.26100.7705	Microsoft Corporation	{9A2FEE83-D2FB-A48E-52E0-15801042220F}
+32	Microsoft SQL Server Database Publishing Wizard 1.3	10.0.1600.22	Microsoft Corporation	{9A33B83D-FFC4-44CF-BEEF-632DECEF2FCD}
+32	Microsoft .NET Runtime - 7.0.7 (x86)	56.31.61636	Microsoft Corporation	{9B1FD351-30AA-4521-A8F4-7F92ECCD8372}
+32	WinRT Intellisense PPI - Other Languages	10.1.26100.7705	Microsoft Corporation	{9BA10CCD-7064-7FAB-B48B-C7B2CCFC60FB}
+32	Microsoft Document Explorer 2008 Language Pack - CHS	9.0.21022	Microsoft Corporation	{9C1DEB99-B87A-3581-ADCC-724D53399A86}
+32	vs_minshellmsires	17.14.36015	Microsoft Corporation	{9CCB930D-733F-4DB2-8874-979DBDA175DF}
+32	Windows SDK Desktop Libs x86	10.1.26100.7705	Microsoft Corporation	{9EE92E02-FA29-DF43-7E45-A256139DEBE4}
+32	Windows Mobile Extension SDK Contracts	10.1.26100.7705	Microsoft Corporation	{9FA1715F-2809-3C7D-B9BB-17574DA0AED9}
+32	Windows IoT Extension SDK	10.1.26100.7705	Microsoft Corporation	{A056CA2A-2AB1-EB1B-1B2E-D49E0C6C8E17}
+32	WinRT Intellisense PPI - Other Languages	10.1.22000.832	Microsoft Corporation	{A06212FE-3C20-31C7-F88A-46673EF72E83}
+32	Windows SDK for Windows Store Apps Headers	10.1.22000.832	Microsoft Corporation	{A1DA436A-2FA4-FDC2-9B0A-FBB40CF0499D}
+32	英特尔® 芯片组设备软件	10.1.1.45	Intel(R) Corporation	{a2167b7c-e567-4ae5-9c88-8e1349a01363}
+32	Windows SDK	10.1.26100.7705	Microsoft Corporation	{A224D569-B07A-8178-A1E4-75DC397C06B2}
+32	vs_minshellinteropmsi	17.14.36015	Microsoft Corporation	{A2FDDC26-4232-4287-8839-2F53A01E1E97}
+32	Microsoft ASP.NET Core 7.0.7 Shared Framework (x86)	7.0.7.23274	Microsoft Corporation	{A6899E25-54DD-31F6-A243-B8CFC3E1ECC3}
+32	Microsoft .NET Compact Framework 3.5	3.5.7283	Microsoft Corporation	{A79A3FF2-4B2C-48DB-961D-0EEDDC9340B4}
+32	X86 Debuggers And Tools	10.1.17763.132	Microsoft Corporation	{A80F4302-E354-EFCD-3802-3CB0572D4FD1}
+32	Windows SDK ARM Desktop Tools	10.1.22000.832	Microsoft Corporation	{A99B19D4-7F87-03E5-B4A8-80420ECD7F53}
+32	Windows IoT Extension SDK Contracts	10.1.26100.7705	Microsoft Corporation	{AA11F890-8A6F-D292-8A1D-D70710A87852}
+32	SDK ARM64 Redistributables	10.1.26100.7705	Microsoft Corporation	{AA86DFC1-17A2-6133-1D55-92818B9D3082}
+32	Microsoft SQL Server Database Publishing Wizard 1.4	10.1.2512.8	Microsoft Corporation	{ACE28263-76A4-4BF5-B6F4-8BD719595969}
+32	Windows SDK for Windows Store Apps Contracts	10.1.22000.832	Microsoft Corporation	{AD3B32A0-5F71-DE89-B55A-9E85964186D8}
+32	Windows SDK for Windows Store Apps Metadata	10.1.26100.7705	Microsoft Corporation	{AF0CF0ED-D9DA-DFDA-52DD-B3B0FE269640}
+32	Samsung NVM Express Driver	2.2.0.1703	Samsung Electronics	{b04488a2-b602-496c-bee1-c8b3f068dc11}
+32	Windows SDK for Windows Store Managed Apps Libs	10.1.22000.832	Microsoft Corporation	{B0CB401F-F1EF-E63C-8191-9A447FC24C58}
+32	CA-810C 全自动生化分析仪软件 V1.22.260516.B0001(Base V3.00)	V1.22.260516.B0001(Base V3.00)	桂林优利特医疗电子有限公司	{B2A02851-2D2F-4A7A-9721-26E0F273125E}_is1
+32	vs_BlendMsi	17.6.33605	Microsoft Corporation	{B34081FD-ADDF-4B89-A42F-5A68A379556C}
+32	vs_vswebprotocolselectormsi	17.14.36323	Microsoft Corporation	{B4B3AA16-E828-4577-A9F2-629E1A95FE4A}
+32	Windows SDK for Windows Store Apps Headers	10.1.26100.7705	Microsoft Corporation	{B5534577-4F61-73AC-FFCB-91B0B0674DA4}
+32	Entity Framework 6.2.0 Tools  for Visual Studio 2022	6.2.0.0	Microsoft Corporation	{B70A3366-717F-4E8B-BB41-4315489FC044}
+32	Windows App Certification Kit x64	10.1.26100.7705	Microsoft Corporation	{B7BC83B0-1A94-0290-4309-820859276E72}
+32	Microsoft Visual C++ 2008 Redistributable - x86 9.0.30729.4974	9.0.30729.4974	Microsoft Corporation	{B7E38540-E355-3503-AFD7-635B2F2F76E1}
+32	Windows App Certification Kit x64 (OnecoreUAP)	10.1.26100.7705	Microsoft Corporation	{B817BAD1-CC9F-940C-FFD8-7543D89B8EB7}
+32	Microsoft Visual Studio 2008 远程调试器 - 简体中文 Service Pack 1 (KB945140)	1	Microsoft Corporation	{BA458007-1D1A-3125-8243-07C80EED211D}.KB945140
+32	Microsoft .NET Framework 4.8 Targeting Pack	4.8.03761	Microsoft Corporation	{BAAF5851-0759-422D-A1E9-90061B597188}
+32	Microsoft Visual Studio 2010 Ultimate - ENU	10.0.30319	Microsoft Corporation	{BC0464FA-A0BA-3E38-85BF-DC5B3A401F48}
+32	Microsoft Visual C++ 2022 X86 Debug Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{BC104582-4691-4D4C-8922-C215D941A2EB}
+32	Windows Software Development Kit - Windows 10.0.26100.7705	10.1.26100.7705	Microsoft Corporation	{c0b93b80-d0a4-47fc-a4d1-21a4008a63ca}
+32	Microsoft Visual C++ 2022 X86 Additional Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{C18FB403-1E88-43C8-AD8A-CED50F23DE8B}
+32	Microsoft Windows Desktop Runtime - 6.0.18 (x86)	48.75.61602	Microsoft Corporation	{C476DB42-E1A1-46BC-97E9-F7287D4FB3B3}
+32	Windows SDK Desktop Headers x64	10.1.22000.832	Microsoft Corporation	{C47F0820-6424-AE53-6BAF-2D41E829C855}
+32	Microsoft UniversalWindowsPlatform SDK	15.9.16	Microsoft	{C756420B-C91C-4410-8092-F49C24CEF594}
+32	Windows SDK Desktop Headers arm	10.1.22000.832	Microsoft Corporation	{C7C68DA0-8501-16DD-1E6A-6C34AAA28F21}
+32	IntelliTraceProfilerProxy	15.0.21225.01	Microsoft Corporation	{C8891AD2-C223-45CD-A9BE-617A68923B61}
+32	Windows SDK for Windows Store Apps Libs	10.1.22000.832	Microsoft Corporation	{C8977C7D-F685-8282-3C78-6276E03E3B32}
+32	Crystal Reports Basic Simplified Chinese Language Pack for Visual Studio 2008	10.5.0.0	Business Objects	{CA3FD10A-8587-40E2-9B74-D6313D07183B}
+32	Windows SDK for Windows Store Apps Headers OnecoreUap	10.1.26100.7705	Microsoft Corporation	{CB91C4E7-9C14-6ABD-566B-DF4593456102}
+32	Windows SDK Desktop Headers x64	10.1.26100.7705	Microsoft Corporation	{CCEEC7A2-2179-C5D0-60E2-2651993A8AD5}
+32	Windows SDK for Windows Store Apps	10.1.26100.7705	Microsoft Corporation	{CEC6FB8C-1F94-F7F8-C9F7-EF55CC2A519F}
+32	Microsoft .NET Framework 4 Multi-Targeting Pack	4.0.30319	Microsoft Corporation	{CFEF48A8-BFB8-3EAC-8BA5-DE4F8AA267CE}
+32	WinAppDeploy	10.1.26100.7705	Microsoft Corporation	{CFEF5BD7-A03F-DEF3-1707-A31C813F6D14}
+32	Microsoft Visual Studio Setup Configuration	3.12.2140.44225	Microsoft Corporation	{D07657AA-968C-4629-BD6C-1B52AF825EA7}
+32	Windows SDK Desktop Headers x86	10.1.26100.7705	Microsoft Corporation	{D0772A8A-6AB2-E6E1-8BEF-29F59AB99893}
+32	WinRT Intellisense UAP - Other Languages	10.1.22000.832	Microsoft Corporation	{D307C8A5-7335-056E-6E64-E28544674EFD}
+32	vs_FileTracker_Singleton	17.14.36015	Microsoft Corporation	{D331F4E7-BC3B-47BE-BB56-5F33895F9347}
+32	hppLaserJetService	001.001.0.0	Hewlett-Packard	{D371F551-0DB9-4CEC-844B-4C90CE91EA0B}
+32	Windows Desktop Extension SDK Contracts	10.1.22000.832	Microsoft Corporation	{D54B24F7-43DE-C7BF-3A5C-83F9E8E0700D}
+32	Universal General MIDI DLS Extension SDK	10.1.22000.832	Microsoft Corporation	{D62BC488-4C4A-BF17-A0CE-21B4BF8F9B30}
+32	Windows Software Development Kit - Windows 10.0.22000.832	10.1.22000.832	Microsoft Corporation	{d6a76ead-c762-4d93-9c24-1fa3efa1e12d}
+32	Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211	14.44.35211.0	Microsoft Corporation	{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}
+32	vs_tipsmsi	17.6.33605	Microsoft Corporation	{D984791D-7FCE-4138-A23C-AC5432DB6458}
+32	icecap_collectionresources	17.6.33606	Microsoft Corporation	{D986970A-81DF-488B-AB03-70522EF3767C}
+32	Windows SDK Desktop Tools x86	10.1.26100.7705	Microsoft Corporation	{DB72537E-BD30-364B-6A72-09CE78DB8321}
+32	vs_devenvsharedmsi	17.6.33605	Microsoft Corporation	{DC2045F0-1E69-4E61-99FE-F6974B6231C1}
+32	Windows Mobile Extension SDK	10.1.22000.832	Microsoft Corporation	{DF2A6855-DB81-9047-3033-8D6AC6055AEF}
+32	Microsoft .NET Targeting Pack - 6.0.18 (x86)	48.75.61559	Microsoft Corporation	{DFC77F2F-5AD6-43FD-8D36-8AF3EEF7A899}
+32	Windows App Certification Kit SupportedApiList x86	10.1.26100.7705	Microsoft Corporation	{E43BDB72-464A-290B-A51D-537CBBE1CAC8}
+32	Windows SDK Desktop Tools x64	10.1.22000.832	Microsoft Corporation	{E5715C32-34B0-6F8E-81B8-13FB19B1B682}
+32	Microsoft SQL Server 2008 R2 Data-Tier Application Project	10.50.1447.4	Microsoft Corporation	{E5AE9031-79A5-4627-9641-BEFA82819B08}
+32	Windows SDK for Windows Store Apps Contracts	10.1.26100.7705	Microsoft Corporation	{E8BE09DF-D93B-AE40-FD63-05E5ABEFB6D9}
+32	Windows Mobile Extension SDK	10.1.26100.7705	Microsoft Corporation	{E901323A-7A02-50A8-F4E0-95C4AD8A098F}
+32	SDK ARM64 Additions	10.1.26100.7705	Microsoft Corporation	{E93670D9-924A-7B6F-5F55-AE8E3043BCB0}
+32	Windows SDK Modern Versioned Developer Tools	10.1.22000.832	Microsoft Corporation	{EA338ECA-C63F-4BD6-B66F-274433C75A49}
+32	WinRT Intellisense Desktop - Other Languages	10.1.26100.7705	Microsoft Corporation	{EA88E7B4-C204-CC0C-FC10-D13FC9C30800}
+32	Windows SDK Desktop Tools x64	10.1.26100.7705	Microsoft Corporation	{EB362CC9-F0B3-EDBC-82E8-91F6BBF36F6E}
+32	WinRT Intellisense IoT - en-us	10.1.26100.7705	Microsoft Corporation	{EB8B0E53-980A-E861-DC85-05240EFA888D}
+32	PL-2303 USB-to-Serial	1.1.0	Prolific Technology INC	{ECC3713C-08A4-40E3-95F1-7D0704F1CE5E}
+32	Microsoft .NET Native SDK	15.0.24211.07	Microsoft Corporation	{EF0C772D-F5E3-36D0-BDAB-FD378533CD40}
+32	Windows SDK OnecoreUap Headers x86	10.1.26100.7705	Microsoft Corporation	{EFF12E8F-5027-FE5D-6ABF-5F837F3B70F8}
+32	Microsoft Visual C++ 2010  x86 Redistributable - 10.0.40219	10.0.40219	Microsoft Corporation	{F0C3E5D1-1ADE-321E-8167-68EF0DE699A5}
+32	Intel(R) Processor Graphics	21.20.16.4627	Intel Corporation	{F0E3AD40-2BBD-4360-9C76-B9AC9A5886EA}
+32	Windows SDK Modern Versioned Developer Tools	10.1.26100.7705	Microsoft Corporation	{F251EBD6-9B8C-3876-A422-B4F677BF3766}
+32	Visual C++ 2008 x86 Runtime - (v9.0.30729)	9.0.30729	Microsoft Corporation	{F333A33D-125C-32A2-8DCE-5C5D14231E27}
+32	Visual C++ 2008 x86 Runtime - v9.0.30729.01	9.0.30729.01	Microsoft Corporation	{F333A33D-125C-32A2-8DCE-5C5D14231E27}.vc_x86runtime_30729_01
+32	Windows Desktop Extension SDK Contracts	10.1.26100.7705	Microsoft Corporation	{F4F63553-2774-41A6-C784-7FAC7DF4CAF3}
+32	vs_minshellsharedmsi	17.14.36024	Microsoft Corporation	{F6E69DD8-7652-4CC6-8A4F-485A16012B5B}
+32	Windows SDK for Windows Store Apps DirectX x86 Remote	10.1.26100.7705	Microsoft Corporation	{F738E2CC-E003-B601-F38B-4521ED842C98}
+32	Windows SDK Signing Tools	10.1.26100.7705	Microsoft Corporation	{F9DDDEF1-BCF0-275F-DE29-9332F1149B79}
+32	Windows Mobile 5.0 SDK R2 for Pocket PC	5.00.1700.5.14343.06	Microsoft Corporation	{FA96D76E-30C9-4DDD-947B-00B870AA6281}
+32	Windows SDK Facade Windows WinMD Versioned	10.1.26100.7705	Microsoft Corporation	{FB4D4A9B-9E8F-42CB-B08F-AE153FFA31AC}
+32	Visual C++ Library CRT Appx Package	14.36.32532	Microsoft Corporation	{FBA5C836-7D17-4B2E-B0FC-5D1F61A5EB1D}
+32	WinRT Intellisense Desktop - en-us	10.1.22000.832	Microsoft Corporation	{FBF034E1-563E-1F9D-DC45-491BB88E9B9E}
+32	Browser for SQL Server 2022	16.0.1000.6	Microsoft Corporation	{FDB357D5-CC78-480A-8D26-C15D1A877642}
+32	WinRT Intellisense PPI - en-us	10.1.22000.832	Microsoft Corporation	{FEAF2203-A2AC-080C-9D55-9F09623F38C3}
+32	Universal CRT Tools x86	10.1.26100.7705	Microsoft Corporation	{FEC52FA9-A866-C884-4AAA-0B15BE793610}
+32	Windows Desktop Extension SDK	10.1.26100.7705	Microsoft Corporation	{FED10190-CF54-E72D-7A92-E3F9CA9B7950}
+32	VC Runtimes MSI	9.0.21022	Microsoft	{FF29527A-44CD-3422-945E-981A13584000}
+SSHMGR-INVENTORY STATUS installed 0
+SSHMGR-INVENTORY SECTION listen-tcp
+::	50178	2340
+::	49678	856
+::1	49671	5616
+::	49669	4244
+::	49668	3032
+::	49667	1600
+::	49666	1540
+::	49665	784
+::	49664	864
+::	7680	3632
+::	5002	13440
+::	3389	1304
+::	445	4
+::	135	1076
+::	22	5952
+0.0.0.0	50178	2340
+0.0.0.0	49678	856
+0.0.0.0	49669	4244
+0.0.0.0	49668	3032
+0.0.0.0	49667	1600
+0.0.0.0	49666	1540
+0.0.0.0	49665	784
+0.0.0.0	49664	864
+0.0.0.0	5040	7040
+0.0.0.0	3389	1304
+198.51.100.236	139	4
+0.0.0.0	135	1076
+0.0.0.0	22	5952
+SSHMGR-INVENTORY STATUS listen-tcp 0
+SSHMGR-INVENTORY SECTION listen-udp
+::1	62819	3124
+fe80::bda1:e34b:3eae:1c62%23	62818	3124
+::	5355	3432
+::	5353	3432
+::	4500	5576
+::	3389	1304
+fe80::bda1:e34b:3eae:1c62%23	1900	3124
+::1	1900	3124
+::	1434	5912
+::	500	5576
+::	123	6492
+127.0.0.1	62821	3124
+198.51.100.236	62820	3124
+127.0.0.1	56717	5404
+127.0.0.1	49666	4172
+127.0.0.1	10020	5404
+0.0.0.0	5480	1520
+0.0.0.0	5355	3432
+0.0.0.0	5353	3432
+0.0.0.0	5050	7040
+0.0.0.0	4500	5576
+0.0.0.0	3389	1304
+198.51.100.236	1900	3124
+127.0.0.1	1900	3124
+0.0.0.0	1434	5912
+0.0.0.0	500	5576
+198.51.100.236	138	4
+198.51.100.236	137	4
+0.0.0.0	123	6492
+SSHMGR-INVENTORY STATUS listen-udp 0
+SSHMGR-INVENTORY SECTION processes
+4		
+784		
+856		
+864		
+1076		
+1304		
+1520		
+1540		
+1600		
+2340		
+3032		
+3124		
+3432		
+3632		
+4172		
+4244		
+5404		
+5576		
+5616		
+5912		
+5952		
+6492		
+7040		
+13440		
+SSHMGR-INVENTORY STATUS processes 0
+SSHMGR-INVENTORY SECTION services
+7040	CDPSvc	C:\WINDOWS\system32\svchost.exe -k LocalService -p
+3432	Dnscache	C:\WINDOWS\system32\svchost.exe -k NetworkService -p
+3632	DoSvc	C:\WINDOWS\System32\svchost.exe -k NetworkService -p
+864	EFS	C:\WINDOWS\System32\lsass.exe
+1540	EventLog	C:\WINDOWS\System32\svchost.exe -k LocalServiceNetworkRestricted -p
+5576	IKEEXT	C:\WINDOWS\system32\svchost.exe -k netsvcs -p
+4172	iphlpsvc	C:\WINDOWS\System32\svchost.exe -k NetSvcs -p
+5616	jhi_service	C:\WINDOWS\System32\DriverStore\FileRepository\dal.inf_amd64_5acc9ca73ae7cf4c\jhi_service.exe
+864	KeyIso	C:\WINDOWS\system32\lsass.exe
+2340	MSSQL$UTSQLSERVER2022	"C:\Program Files\Microsoft SQL Server\MSSQL16.UTSQLSERVER2022\MSSQL\Binn\sqlservr.exe" -sUTSQLSERVER2022
+1076	RpcEptMapper	C:\WINDOWS\system32\svchost.exe -k RPCSS -p
+1076	RpcSs	C:\WINDOWS\system32\svchost.exe -k rpcss -p
+864	SamSs	C:\WINDOWS\system32\lsass.exe
+1600	Schedule	C:\WINDOWS\system32\svchost.exe -k netsvcs -p
+3032	SessionEnv	C:\WINDOWS\System32\svchost.exe -k netsvcs -p
+4244	Spooler	C:\WINDOWS\System32\spoolsv.exe
+5912	SQLBrowser	"C:\Program Files (x86)\Microsoft SQL Server\90\Shared\sqlbrowser.exe"
+3124	SSDPSRV	C:\WINDOWS\system32\svchost.exe -k LocalServiceAndNoImpersonation -p
+5952	sshd	C:\WINDOWS\System32\OpenSSH\sshd.exe
+1304	TermService	C:\WINDOWS\System32\svchost.exe -k NetworkService
+864	VaultSvc	C:\WINDOWS\system32\lsass.exe
+6492	W32Time	C:\WINDOWS\system32\svchost.exe -k LocalService
+SSHMGR-INVENTORY STATUS services 0
+SSHMGR-INVENTORY SECTION firmware
+bios_vendor	AMI
+bios_version	F.20
+bios_date	01/27/2021 08:00:00
+board_vendor	HP
+board_name	877E
+sys_vendor	HP
+product_name	HP 288 Pro G6 Microtower PC
+SSHMGR-INVENTORY STATUS firmware 0
+SSHMGR-INVENTORY SECTION gpu-driver
+NVIDIA GeForce GTX 1660 SUPER	32.0.16.1047	05/19/2026 08:00:00
+SSHMGR-INVENTORY STATUS gpu-driver 0
+SSHMGR-INVENTORY END

@@ -127,7 +127,14 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	execResult, execErr := s.remoteExec()(ctx, chosen, shell, command, sudo)
-	collection, parseErr := parseLinuxInventoryOutput(execResult.Stdout)
+	var collection *ParsedCollection
+	var parseErr error
+	switch shell {
+	case models.ShellPowerShell, models.ShellWindowsCmd:
+		collection, parseErr = parseWindowsInventoryOutput(execResult.Stdout)
+	default:
+		collection, parseErr = parseLinuxInventoryOutput(execResult.Stdout)
+	}
 	if parseErr != nil {
 		reason := fmt.Sprintf("固定命令集输出无法解析：%v", parseErr)
 		if execErr != nil {
