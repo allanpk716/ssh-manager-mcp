@@ -16,7 +16,7 @@ func TestStandaloneOpsUpgradeServerRequiresConfirmationAndShutsDownAfterPage(t *
 		Servers:     &stubServerSource{rows: []ServerRow{{ID: "srv-1", Name: "web"}}},
 		Access:      &nextStepAccessStore{},
 		MachineInit: initializer,
-		RequestShutdown: func() {
+		RequestShutdown: func(ShutdownReason) {
 			shutdown <- struct{}{}
 		},
 		Port: 18080,

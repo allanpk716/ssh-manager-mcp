@@ -75,8 +75,8 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	uiShutdown := make(chan struct{})
 	var shutdownOnce sync.Once
 	serverWizard := destination.Kind == machineinit.UIDestinationServerWizard
-	requestShutdown := func() {
-		if !serverWizard && clientInitializationGuideNeeded() {
+	requestShutdown := func(reason webui.ShutdownReason) {
+		if reason == webui.ShutdownReasonClientGuide {
 			writeClientInitializationGuide(cmd.OutOrStdout())
 		}
 		shutdownOnce.Do(func() { close(uiShutdown) })
@@ -222,11 +222,6 @@ func writeClientInitializationGuide(output io.Writer) {
 	for _, line := range webui.ClientInitializationGuideLines() {
 		fmt.Fprintf(output, "  %s\n", line)
 	}
-}
-
-func clientInitializationGuideNeeded() bool {
-	snapshot, err := machineinit.ReadSnapshot()
-	return err == nil && snapshot.Role == nil && !snapshot.ClientCachePresent
 }
 
 // openURLInBrowser 用系统默认浏览器打开网址，按操作系统选择打开命令；无图形

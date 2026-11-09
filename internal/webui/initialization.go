@@ -86,6 +86,19 @@ type InitializationCompletion struct {
 	Addresses []string
 }
 
+// ShutdownReason 说明触发优雅关闭的页面。命令行适配器按它决定退出前要打印
+// 的终端内容，不再反推本机状态。
+type ShutdownReason int
+
+const (
+	// ShutdownReasonClientGuide 表示客户端入网指引页已完整返回。
+	ShutdownReasonClientGuide ShutdownReason = iota
+	// ShutdownReasonServerFinish 表示权威端初始化完成页已完整返回。
+	ShutdownReasonServerFinish
+	// ShutdownReasonStandaloneUpgrade 表示单机升级为权威端的成功页已完整返回。
+	ShutdownReasonStandaloneUpgrade
+)
+
 // InitializationServeAddressView 是完成页里的一条正式 Web UI 地址。
 type InitializationServeAddressView struct {
 	URL       string
@@ -119,17 +132,22 @@ type Initializer interface {
 // initializationWizard 先只服务向导路由；单机初始化完成后，把同一个进程内
 // 会话交给单机正式页面处理器，浏览器不需要重新获取启动令牌。
 type initializationWizard struct {
-	wizard      *handler
-	formal      *handler
-	initializer Initializer
-	completed   atomic.Bool
-	entryRole   InitializationRole
-	entryStep   InitializationStep
+	wizard            *handler
+	formal            *handler
+	initializer       Initializer
+	completed         atomic.Bool
+	shutdownScheduled atomic.Bool
+	entryRole         InitializationRole
+	entryStep         InitializationStep
 }
 
 // initializationClientShutdownDelay 给浏览器留出接收完整指引页的时间；页面
 // 先带 Content-Length 写出并刷新，随后才触发优雅关闭。
 const initializationClientShutdownDelay = 500 * time.Millisecond
+
+// initializationServerShutdownDelay 给浏览器留出接收权威端完成页的时间；
+// 页面先带 Content-Length 写出并刷新，随后才触发优雅关闭。
+const initializationServerShutdownDelay = 500 * time.Millisecond
 
 // NewInitializationWizard 构造回环初始化向导。cfg 是初始化完成后要切换到的
 // 单机正式页面配置；在切换前，路由表里只有向导页面。
@@ -485,18 +503,39 @@ func (w *initializationWizard) handleServerFinish(response http.ResponseWriter, 
 	if !w.writeCompleteServerFinishPage(response, request, data) {
 		return
 	}
+	if request.Method != http.MethodGet {
+		return
+	}
 	if w.wizard.cfg.InitializationComplete == nil && w.wizard.cfg.RequestShutdown == nil {
 		return
 	}
-	go func() {
-		time.Sleep(opsUpgradeShutdownDelay)
+	w.scheduleShutdown(func() {
+		w.sleep(initializationServerShutdownDelay)
 		if complete := w.wizard.cfg.InitializationComplete; complete != nil {
 			complete(InitializationCompletion{Port: probe.Port, Addresses: addresses})
 		}
 		if shutdown := w.wizard.cfg.RequestShutdown; shutdown != nil {
-			shutdown()
+			shutdown(ShutdownReasonServerFinish)
 		}
-	}()
+	})
+}
+
+// scheduleShutdown 只排程一次优雅关闭：完成页或指引页重复刷新时，第一个
+// 排程仍然有效，后续调用不再启动新的协程。
+func (w *initializationWizard) scheduleShutdown(action func()) {
+	if w.shutdownScheduled.CompareAndSwap(false, true) {
+		go action()
+	}
+}
+
+// sleep 经配置注入的睡眠函数等待，未注入时使用标准库；测试注入替身避免真实
+// 等待退出延迟。
+func (w *initializationWizard) sleep(duration time.Duration) {
+	if w.wizard.cfg.Sleep != nil {
+		w.wizard.cfg.Sleep(duration)
+		return
+	}
+	time.Sleep(duration)
 }
 
 func (w *initializationWizard) writeCompleteServerFinishPage(response http.ResponseWriter, request *http.Request, data pageData) bool {
@@ -550,16 +589,15 @@ func (w *initializationWizard) handleClientPairingGuide(response http.ResponseWr
 	if !w.writeCompleteClientPairingPage(response, request) {
 		return
 	}
+	if request.Method != http.MethodGet {
+		return
+	}
 	if w.wizard.cfg.RequestShutdown != nil {
 		shutdown := w.wizard.cfg.RequestShutdown
-		go func() {
-			if w.wizard.cfg.Sleep != nil {
-				w.wizard.cfg.Sleep(initializationClientShutdownDelay)
-			} else {
-				time.Sleep(initializationClientShutdownDelay)
-			}
-			shutdown()
-		}()
+		w.scheduleShutdown(func() {
+			w.sleep(initializationClientShutdownDelay)
+			shutdown(ShutdownReasonClientGuide)
+		})
 	}
 }
 

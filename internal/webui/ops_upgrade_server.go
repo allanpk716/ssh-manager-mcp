@@ -59,7 +59,7 @@ func (h *handler) handleOpsUpgradeServerConfirm(w http.ResponseWriter, r *http.R
 		shutdown := h.cfg.RequestShutdown
 		go func() {
 			time.Sleep(opsUpgradeShutdownDelay)
-			shutdown()
+			shutdown(ShutdownReasonStandaloneUpgrade)
 		}()
 	}
 }

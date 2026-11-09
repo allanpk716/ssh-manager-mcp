@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -537,7 +538,7 @@ func TestInitializationWizardPollsServeAndCompletesWithOrderedAddresses(t *testi
 		config.InitializationComplete = func(completion InitializationCompletion) {
 			completed <- completion
 		}
-		config.RequestShutdown = func() { shutdown <- struct{}{} }
+		config.RequestShutdown = func(ShutdownReason) { shutdown <- struct{}{} }
 	})
 	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
 	cookie := start.Cookies()[0]
@@ -579,6 +580,119 @@ func TestInitializationWizardPollsServeAndCompletesWithOrderedAddresses(t *testi
 	case <-shutdown:
 	case <-time.After(2 * time.Second):
 		t.Fatal("完成页写完后应触发优雅退出")
+	}
+}
+
+func TestInitializationWizardHeadRequestsDoNotScheduleShutdown(t *testing.T) {
+	shutdowns := make(chan struct{}, 2)
+	handler, startup := newInitializationWizardForTestWithConfig(t, &stubInitializer{
+		serveRunning:   true,
+		serveAddresses: []string{"127.0.0.1"},
+		servePort:      7879,
+	}, func(config *Config) {
+		config.RequestShutdown = func(ShutdownReason) { shutdowns <- struct{}{} }
+		config.Sleep = func(time.Duration) {}
+		config.InitializationComplete = func(InitializationCompletion) {}
+	})
+	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := start.Cookies()[0]
+	start.Body.Close()
+
+	for _, path := range []string{"/ui/init/server/finish", "/ui/init/client"} {
+		request := httptest.NewRequest(http.MethodHead, path, nil)
+		request.Host = "127.0.0.1:18080"
+		request.AddCookie(cookie)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		response := recorder.Result()
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("HEAD %s 应渲染页面，状态码=%d", path, response.StatusCode)
+		}
+	}
+	select {
+	case <-shutdowns:
+		t.Fatal("HEAD 请求只渲染页面，不应排程进程退出")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestInitializationWizardSchedulesShutdownAndCompletionOnlyOnce(t *testing.T) {
+	var completions, shutdowns atomic.Int32
+	delays := make(chan time.Duration, 4)
+	handler, startup := newInitializationWizardForTestWithConfig(t, &stubInitializer{
+		serveRunning:   true,
+		serveAddresses: []string{"127.0.0.1"},
+		servePort:      7879,
+	}, func(config *Config) {
+		config.InitializationComplete = func(InitializationCompletion) { completions.Add(1) }
+		config.RequestShutdown = func(ShutdownReason) { shutdowns.Add(1) }
+		config.Sleep = func(delay time.Duration) { delays <- delay }
+	})
+	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := start.Cookies()[0]
+	start.Body.Close()
+
+	for i := 0; i < 2; i++ {
+		response := wizardGet(t, handler, cookie, "/ui/init/server/finish")
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("第 %d 次打开完成页状态码=%d", i+1, response.StatusCode)
+		}
+	}
+	waitForShutdownCount(t, &shutdowns, 1)
+	select {
+	case delay := <-delays:
+		if delay <= 0 {
+			t.Fatalf("完成页退出延迟应经注入的睡眠函数传入正数，实际 %v", delay)
+		}
+	default:
+		t.Fatal("完成页退出延迟应经注入的睡眠函数传入，不应直接睡眠")
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got := completions.Load(); got != 1 {
+		t.Fatalf("重复刷新完成页只应通知一次完成回调，实际 %d 次", got)
+	}
+	if got := shutdowns.Load(); got != 1 {
+		t.Fatalf("重复刷新完成页只应排程一次退出，实际 %d 次", got)
+	}
+}
+
+func TestInitializationWizardClientGuideSchedulesShutdownOnlyOnce(t *testing.T) {
+	var shutdowns atomic.Int32
+	handler, startup := newInitializationWizardForTestWithConfig(t, &stubInitializer{}, func(config *Config) {
+		config.RequestShutdown = func(ShutdownReason) { shutdowns.Add(1) }
+		config.Sleep = func(time.Duration) {}
+	})
+	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := start.Cookies()[0]
+	start.Body.Close()
+
+	for i := 0; i < 2; i++ {
+		response := wizardGet(t, handler, cookie, "/ui/init/client")
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("第 %d 次打开客户端指引状态码=%d", i+1, response.StatusCode)
+		}
+	}
+	waitForShutdownCount(t, &shutdowns, 1)
+	time.Sleep(150 * time.Millisecond)
+	if got := shutdowns.Load(); got != 1 {
+		t.Fatalf("重复刷新客户端指引只应排程一次退出，实际 %d 次", got)
+	}
+}
+
+func waitForShutdownCount(t *testing.T, counter *atomic.Int32, want int32) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if counter.Load() >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("等待进程退出排程超时，实际 %d 次，应为 %d 次", counter.Load(), want)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -645,7 +759,7 @@ func TestInitializationWizardClientShowsPairingGuideAndRequestsShutdown(t *testi
 	initializer := &stubInitializer{}
 	shutdown := make(chan struct{}, 1)
 	handler, startup := newInitializationWizardForTest(t, initializer, func(config *Config) {
-		config.RequestShutdown = func() { shutdown <- struct{}{} }
+		config.RequestShutdown = func(ShutdownReason) { shutdown <- struct{}{} }
 		config.Sleep = func(time.Duration) {}
 	})
 	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
