@@ -64,7 +64,7 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	caps := capabilitiesForRole(cfg.Role)
+	caps := capabilitiesForConfig(cfg)
 	if cfg.Role == RoleServer {
 		caps.CanRestartService = cfg.ServiceRestart != nil
 	}
@@ -88,6 +88,7 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	// 访问区域路由按权威端角色注册全部已实现的页面。
 	h.registerAccessRoutes()
 	h.registerServerRoutes()
+	h.registerSecretRoutes()
 	h.registerOpsRoutes()
 	return h, h, nil
 }

@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="{{index .Assets "app.css"}}">
 <script src="{{index .Assets "htmx.min.js"}}" defer></script>
 <script src="{{index .Assets "app.js"}}" defer></script>
+<script src="{{index .Assets "secrets-matrix.js"}}" defer></script>
 </head>
 <body>
 <header class="site-header">
@@ -29,6 +30,7 @@
 {{if .Caps.CanManageProjects}}<a href="/ui/access/projects">项目令牌</a>{{end}}
 {{if .Caps.HasPairingAndDeviceCodes}}<a href="/ui/access/device-codes">设备码</a>{{end}}
 </nav>{{end}}
+{{if .Caps.ShowSecretsArea}}<nav class="main-nav" aria-label="机密项区域"><a href="/ui/secrets/">机密项</a></nav>{{end}}
 {{if .Caps.ShowOpsArea}}<nav class="main-nav" aria-label="运维区域">
 <a href="/ui/ops/">运维</a>
 {{if .Caps.CanManageBackups}}<a href="/ui/ops/backup">备份</a>{{end}}

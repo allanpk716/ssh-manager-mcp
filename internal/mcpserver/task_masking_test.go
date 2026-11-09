@@ -24,7 +24,7 @@ func TestBackgroundMaskingSourceRefreshesExternalStoreChangeAfterOneSecond(t *te
 		t.Fatal(err)
 	}
 	defer externalStore.Close()
-	if err := primaryStore.AddSecret("EXTERNAL_TOKEN", "", []byte(oldValue)); err != nil {
+	if err := primaryStore.AddSecret("EXTERNAL_TOKEN", "", []byte(oldValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	version := primaryStore.SecretValuesForMaskingVersion()
@@ -40,7 +40,7 @@ func TestBackgroundMaskingSourceRefreshesExternalStoreChangeAfterOneSecond(t *te
 		t.Fatalf("new value was masked before it existed: %q", got)
 	}
 
-	if err := externalStore.SetSecretValue("EXTERNAL_TOKEN", []byte(newValue)); err != nil {
+	if err := externalStore.SetSecretValue("EXTERNAL_TOKEN", []byte(newValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if got := primaryStore.SecretValuesForMaskingVersion(); got != version {

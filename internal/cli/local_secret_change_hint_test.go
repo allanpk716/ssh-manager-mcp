@@ -45,10 +45,10 @@ func TestLocalSecretChangeHintE2E_CommandLineSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("DB_PASSWORD", "数据库口令", []byte(oldValue)); err != nil {
+	if err := st.AddSecret("DB_PASSWORD", "数据库口令", []byte(oldValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AllowSecrets([]string{"DB_PASSWORD"}, []string{"local"}); err != nil {
+	if err := st.AllowSecrets([]string{"DB_PASSWORD"}, []string{"local"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {

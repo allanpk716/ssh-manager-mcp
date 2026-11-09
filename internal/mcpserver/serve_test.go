@@ -64,16 +64,16 @@ func TestServeRunner_ListSecrets(t *testing.T) {
 	if err := st.GrantServers(profileID, []string{alpha}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("REMOTE_TOKEN", "serve 面可见", []byte("remote-serve-secret-value")); err != nil {
+	if err := st.AddSecret("REMOTE_TOKEN", "serve 面可见", []byte("remote-serve-secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("BETA_ONLY", "范围外", []byte("beta-secret-value")); err != nil {
+	if err := st.AddSecret("BETA_ONLY", "范围外", []byte("beta-secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AllowSecrets([]string{"REMOTE_TOKEN"}, []string{"alpha", "beta"}); err != nil {
+	if err := st.AllowSecrets([]string{"REMOTE_TOKEN"}, []string{"alpha", "beta"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AllowSecrets([]string{"BETA_ONLY"}, []string{"beta"}); err != nil {
+	if err := st.AllowSecrets([]string{"BETA_ONLY"}, []string{"beta"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 

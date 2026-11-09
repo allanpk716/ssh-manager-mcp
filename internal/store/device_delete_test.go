@@ -90,10 +90,10 @@ func TestDeviceDeleteRollsBackWhenLayoutDeleteFails(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("rollback_secret", "", []byte("rollback-secret-value")); err != nil {
+	if err := st.AddSecret("rollback_secret", "", []byte("rollback-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AllowSecrets([]string{"rollback_secret"}, []string{"deploy"}); err != nil {
+	if err := st.AllowSecrets([]string{"rollback_secret"}, []string{"deploy"}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.AddSite("家A", ""); err != nil {

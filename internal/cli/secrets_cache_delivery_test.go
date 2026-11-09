@@ -32,19 +32,19 @@ func TestSecretsCacheDeliveryE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := fx.serve.AddSecretWithEnvironmentName("DELIVERED_TOKEN", "下发给客户端", []byte(deliverySecretPrevious), "HF_TOKEN"); err != nil {
+	if err := fx.serve.AddSecretWithEnvironmentName("DELIVERED_TOKEN", "下发给客户端", []byte(deliverySecretPrevious), "HF_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := fx.serve.SetSecretValue("DELIVERED_TOKEN", []byte(deliverySecretCurrent)); err != nil {
+	if err := fx.serve.SetSecretValue("DELIVERED_TOKEN", []byte(deliverySecretCurrent), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := fx.serve.AddSecret("OUTSIDE_ONLY", "只写给范围外服务器", []byte("outside-only-secret-value")); err != nil {
+	if err := fx.serve.AddSecret("OUTSIDE_ONLY", "只写给范围外服务器", []byte("outside-only-secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := fx.serve.AllowSecrets([]string{"DELIVERED_TOKEN"}, []string{"target", "outside"}); err != nil {
+	if err := fx.serve.AllowSecrets([]string{"DELIVERED_TOKEN"}, []string{"target", "outside"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := fx.serve.AllowSecrets([]string{"OUTSIDE_ONLY"}, []string{"outside"}); err != nil {
+	if err := fx.serve.AllowSecrets([]string{"OUTSIDE_ONLY"}, []string{"outside"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 

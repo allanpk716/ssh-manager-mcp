@@ -28,12 +28,35 @@ var (
 	ErrSecretEnvironmentNameInvalid  = errors.New("机密项环境变量名不合法：格式要求为字母或下划线开头，后续为字母、数字或下划线")
 	ErrSecretEnvironmentNameExists   = errors.New("机密项环境变量名已被其他机密项使用（大小写不同视为同一个）")
 	ErrSecretEnvironmentNameReserved = errors.New("机密项环境变量名在固定拒绝清单中")
+	ErrSecretValueEmpty              = errors.New("机密项值不能为空")
+	ErrSecretValueTooShort           = fmt.Errorf("机密项值太短：至少需要 %d 个字节；短值无法可靠参与后续的输出遮蔽", secretValueMinBytes)
+	ErrSecretValueTooLarge           = fmt.Errorf("机密项值太大：最多 %d 个字节", secretValueMaxBytes)
 )
+
+// IsSecretValidationError 判断错误是否属于机密项输入校验失败。这类错误
+// 的文本只描述规则本身，可以原样展示给操作者；其余错误可能带内部细节，
+// 调用方必须改用通用文案。
+func IsSecretValidationError(err error) bool {
+	switch {
+	case errors.Is(err, ErrSecretNameInvalid),
+		errors.Is(err, ErrSecretNameExists),
+		errors.Is(err, ErrSecretEnvironmentNameInvalid),
+		errors.Is(err, ErrSecretEnvironmentNameExists),
+		errors.Is(err, ErrSecretEnvironmentNameReserved),
+		errors.Is(err, ErrSecretValueEmpty),
+		errors.Is(err, ErrSecretValueTooShort),
+		errors.Is(err, ErrSecretValueTooLarge):
+		return true
+	default:
+		return false
+	}
+}
 
 // SecretView 是机密项的对外可见形态：只有名字、备注、环境变量名、可写入
 // 服务器条目名与两个时间。当前值、上一个值、值的哈希、长度与版本号都不
 // 进入这个结构，让「读不回值」成为类型层面的约束，而不只是界面的约束。
 type SecretView struct {
+	ID              string
 	Name            string
 	Note            string
 	EnvironmentName string
@@ -240,11 +263,11 @@ func ValidateSecretEnvironmentName(name string) error {
 func validateSecretValue(value []byte) error {
 	switch n := len(value); {
 	case n == 0:
-		return errors.New("机密项值不能为空")
+		return ErrSecretValueEmpty
 	case n < secretValueMinBytes:
-		return fmt.Errorf("机密项值太短：至少需要 %d 个字节；短值无法可靠参与后续的输出遮蔽", secretValueMinBytes)
+		return ErrSecretValueTooShort
 	case n > secretValueMaxBytes:
-		return fmt.Errorf("机密项值太大：最多 %d 个字节", secretValueMaxBytes)
+		return ErrSecretValueTooLarge
 	default:
 		return nil
 	}
@@ -263,13 +286,13 @@ func (s *Store) commitSecretChange(tx *sql.Tx) error {
 // AddSecret 新增一个机密项：值用 vault 主密钥加密，值版本号为 1，创建时间
 // 与值的最后更改时间相同。名字唯一性按小写形式检查。数据与审计行在同一
 // 事务提交。
-func (s *Store) AddSecret(name, note string, value []byte) error {
-	return s.AddSecretWithEnvironmentName(name, note, value, "")
+func (s *Store) AddSecret(name, note string, value []byte, source WriteSource) error {
+	return s.AddSecretWithEnvironmentName(name, note, value, "", source)
 }
 
 // AddSecretWithEnvironmentName 新增一个带环境变量名的机密项。名字、值与
 // 环境变量名全部校验通过后才落库，避免“机密项已新增但变量名失败”的半成品。
-func (s *Store) AddSecretWithEnvironmentName(name, note string, value []byte, environmentName string) error {
+func (s *Store) AddSecretWithEnvironmentName(name, note string, value []byte, environmentName string, source WriteSource) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -320,13 +343,13 @@ func (s *Store) AddSecretWithEnvironmentName(name, note string, value []byte, en
 		id, name, strings.ToLower(name), note, environmentName, strings.ToLower(environmentName), blob, nil, ts.Unix(), ts.Unix()); err != nil {
 		return err
 	}
-	if err := writeSecretAuditTx(tx, ts, "secret-add", map[string]any{"name": name}); err != nil {
+	if err := writeSecretAuditTx(tx, ts, "secret-add", map[string]any{"name": name}, source); err != nil {
 		return err
 	}
 	if environmentName != "" {
 		if err := writeSecretAuditTx(tx, ts, "secret-env", map[string]any{
 			"name": name, "before": "", "after": environmentName,
-		}); err != nil {
+		}, source); err != nil {
 			return err
 		}
 	}
@@ -338,7 +361,7 @@ func (s *Store) AddSecretWithEnvironmentName(name, note string, value []byte, en
 
 // SetSecretEnvironmentName 设置或清除一个机密项的环境变量名。空值表示清
 // 除；改名前会重新检查格式、拒绝清单与全库唯一性。
-func (s *Store) SetSecretEnvironmentName(secretName, environmentName string) error {
+func (s *Store) SetSecretEnvironmentName(secretName, environmentName string, source WriteSource) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -383,7 +406,7 @@ func (s *Store) SetSecretEnvironmentName(secretName, environmentName string) err
 	}
 	if err := writeSecretAuditTx(tx, s.nowTime(), "secret-env", map[string]any{
 		"name": secretName, "before": before, "after": environmentName,
-	}); err != nil {
+	}, source); err != nil {
 		return err
 	}
 	return s.commitSecretChange(tx)
@@ -391,7 +414,7 @@ func (s *Store) SetSecretEnvironmentName(secretName, environmentName string) err
 
 // EditSecretMetadata 在同一个事务里修改备注与环境变量名。任一字段失败时
 // 两者都保持原值；审计行为与单独修改保持一致，不记录备注原文或变量值。
-func (s *Store) EditSecretMetadata(secretName string, edit SecretMetadataEdit) error {
+func (s *Store) EditSecretMetadata(secretName string, edit SecretMetadataEdit, source WriteSource) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -472,7 +495,7 @@ func (s *Store) EditSecretMetadata(secretName string, edit SecretMetadataEdit) e
 	if edit.Note != nil {
 		if err := writeSecretAuditTx(tx, auditTime, "secret-edit", map[string]any{
 			"name": secretName, "change": "备注已更改",
-		}); err != nil {
+		}, source); err != nil {
 			return err
 		}
 	}
@@ -480,7 +503,7 @@ func (s *Store) EditSecretMetadata(secretName string, edit SecretMetadataEdit) e
 	if environmentNameChanged {
 		if err := writeSecretAuditTx(tx, auditTime, "secret-env", map[string]any{
 			"name": secretName, "before": beforeEnvironmentName, "after": desiredEnvironmentName,
-		}); err != nil {
+		}, source); err != nil {
 			return err
 		}
 		return s.commitSecretChange(tx)
@@ -497,7 +520,7 @@ func secretEnvironmentNameExistsError(existingSecret, environmentName string) er
 // SetSecretValue 覆盖机密项的值：旧值移入上一个值字段，值版本号加一，值的
 // 最后更改时间更新；备注与可写入服务器列表不变。数据与审计行在同一事务
 // 提交，审计摘要只写「值已更改」。
-func (s *Store) SetSecretValue(name string, value []byte) error {
+func (s *Store) SetSecretValue(name string, value []byte, source WriteSource) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -528,7 +551,7 @@ func (s *Store) SetSecretValue(name string, value []byte) error {
 		oldBlob, blob, version+1, ts.Unix(), name); err != nil {
 		return err
 	}
-	if err := writeSecretAuditTx(tx, ts, "secret-set", map[string]any{"name": name, "change": "值已更改"}); err != nil {
+	if err := writeSecretAuditTx(tx, ts, "secret-set", map[string]any{"name": name, "change": "值已更改"}, source); err != nil {
 		return err
 	}
 	if err := s.commitSecretChange(tx); err != nil {
@@ -538,7 +561,7 @@ func (s *Store) SetSecretValue(name string, value []byte) error {
 }
 
 // EditSecretNote 只改备注。数据与审计行在同一事务提交，审计不记录备注原文。
-func (s *Store) EditSecretNote(name, note string) error {
+func (s *Store) EditSecretNote(name, note string, source WriteSource) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -556,7 +579,7 @@ func (s *Store) EditSecretNote(name, note string) error {
 	} else if n == 0 {
 		return ErrSecretNotFound
 	}
-	if err := writeSecretAuditTx(tx, s.nowTime(), "secret-edit", map[string]any{"name": name, "change": "备注已更改"}); err != nil {
+	if err := writeSecretAuditTx(tx, s.nowTime(), "secret-edit", map[string]any{"name": name, "change": "备注已更改"}, source); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -564,7 +587,7 @@ func (s *Store) EditSecretNote(name, note string) error {
 
 // DeleteSecret 直接删除机密项行；关联的可写入服务器行由外键级联删除。数据
 // 与审计行在同一事务提交。
-func (s *Store) DeleteSecret(name string) error {
+func (s *Store) DeleteSecret(name string, source WriteSource) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -582,7 +605,7 @@ func (s *Store) DeleteSecret(name string) error {
 	} else if n == 0 {
 		return ErrSecretNotFound
 	}
-	if err := writeSecretAuditTx(tx, s.nowTime(), "secret-rm", map[string]any{"name": name}); err != nil {
+	if err := writeSecretAuditTx(tx, s.nowTime(), "secret-rm", map[string]any{"name": name}, source); err != nil {
 		return err
 	}
 	if err := s.commitSecretChange(tx); err != nil {
@@ -616,6 +639,7 @@ func (s *Store) ListSecretsInScope(scope SecretServerScope) ([]SecretView, error
 			return nil, err
 		}
 		row.secretID = secretID
+		row.view.ID = secretID
 		if serverID.Valid && serverName.Valid {
 			row.hasServer = true
 			row.serverID = serverID.String
@@ -743,6 +767,7 @@ func SecretViewsFromSnapshot(snapshot *Snapshot) []SecretView {
 		rows = append(rows, secretDisplayRow{
 			secretID: secret.ID,
 			view: SecretView{
+				ID:              secret.ID,
 				Name:            secret.Name,
 				Note:            secret.Note,
 				EnvironmentName: secret.EnvironmentName,
@@ -811,74 +836,14 @@ type secretAllowDeletion struct {
 // AllowSecrets 把若干服务器条目加入若干机密项的可写入列表。先校验全部名字，
 // 任何一个不存在就一次列出全部错误并整体不生效；校验通过后在一个事务内完成
 // 全部改动，并为每个发生变化的机密项写一条审计行。
-func (s *Store) AllowSecrets(secretNames, serverNames []string) error {
-	return s.changeSecretAllows(secretNames, serverNames, true)
+func (s *Store) AllowSecrets(secretNames, serverNames []string, source WriteSource) error {
+	return s.ChangeSecretAllowsForNames(secretNames, serverNames, true, source)
 }
 
 // DisallowSecrets 把若干服务器条目移出若干机密项的可写入列表。校验、事务
 // 与审计语义与 AllowSecrets 相同。
-func (s *Store) DisallowSecrets(secretNames, serverNames []string) error {
-	return s.changeSecretAllows(secretNames, serverNames, false)
-}
-
-// changeSecretAllows 是 allow / disallow 的共用主体。
-func (s *Store) changeSecretAllows(secretNames, serverNames []string, allow bool) error {
-	if s.readOnly {
-		return ErrReadOnly
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	secrets, secretMissing, err := resolveSecretAllowTargets(tx, `SELECT id, name FROM secrets WHERE name=?`, secretNames, "机密项")
-	if err != nil {
-		return err
-	}
-	servers, serverMissing, err := resolveSecretAllowTargets(tx, `SELECT id, name FROM servers WHERE name=?`, serverNames, "服务器条目")
-	if err != nil {
-		return err
-	}
-	if missing := append(secretMissing, serverMissing...); len(missing) > 0 {
-		return fmt.Errorf("以下名称不存在，整体未生效：\n%s", strings.Join(missing, "\n"))
-	}
-	action := "secret-allow"
-	stmt := `INSERT OR IGNORE INTO secret_server_allow(secret_id,server_id) VALUES(?,?)`
-	auditAt := s.nowTime()
-	if !allow {
-		action = "secret-disallow"
-		stmt = `DELETE FROM secret_server_allow WHERE secret_id=? AND server_id=?`
-	}
-	for _, secret := range secrets {
-		before, err := secretAllowServerNames(tx, secret.id)
-		if err != nil {
-			return err
-		}
-		for _, server := range servers {
-			if _, err := tx.Exec(stmt, secret.id, server.id); err != nil {
-				return err
-			}
-		}
-		after, err := secretAllowServerNames(tx, secret.id)
-		if err != nil {
-			return err
-		}
-		if strings.Join(before, ",") == strings.Join(after, ",") {
-			continue // 幂等重跑：数据没有变化，不写审计行。
-		}
-		summary := map[string]any{
-			"name":   secret.name,
-			"before": strings.Join(before, ","),
-			"after":  strings.Join(after, ","),
-		}
-		if err := writeSecretAuditTx(tx, auditAt, action, summary); err != nil {
-			return err
-		}
-	}
-	if err := s.commitSecretChange(tx); err != nil {
-		return err
-	}
-	return nil
+func (s *Store) DisallowSecrets(secretNames, serverNames []string, source WriteSource) error {
+	return s.ChangeSecretAllowsForNames(secretNames, serverNames, false, source)
 }
 
 // resolveSecretAllowTargets 按名字逐个解析目标，返回解析成功的目标与缺失名
@@ -976,7 +941,7 @@ func writeServerDeleteSecretAudits(tx *sql.Tx, affected []secretAllowDeletion, a
 			"before": secret.before,
 			"after":  strings.Join(after, ","),
 			"reason": "服务器条目已删除",
-		}); err != nil {
+		}, WriteSource{}); err != nil {
 			return err
 		}
 	}
@@ -985,11 +950,13 @@ func writeServerDeleteSecretAudits(tx *sql.Tx, affected []secretAllowDeletion, a
 
 // writeSecretAuditTx 在机密项数据改动的同一事务里写一条 owner 审计行。摘要
 // 只含调用方传入的白名单字段；任何路径都不得把值放进摘要。
-func writeSecretAuditTx(tx *sql.Tx, at time.Time, action string, summary map[string]any) error {
+func writeSecretAuditTx(tx *sql.Tx, at time.Time, action string, summary map[string]any, source WriteSource) error {
 	return writeAuditTx(tx, AuditRow{
-		TS:      at,
-		Action:  action,
-		Command: MarshalAuditSummary(summary),
-		Status:  "ok",
+		TS:       at,
+		Action:   action,
+		Command:  MarshalAuditSummary(summary),
+		Status:   "ok",
+		Source:   source.kind,
+		SourceIP: source.address,
 	})
 }

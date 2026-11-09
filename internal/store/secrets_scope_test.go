@@ -21,22 +21,22 @@ func TestExportSnapshotForProfile_ScopesSecrets(t *testing.T) {
 		t.Fatalf("取 profileB 授权的 srvB 失败：%v %+v", err, serverB)
 	}
 
-	if err := s.AddSecret("SHARED_TOKEN", "两个 profile 都能写", []byte("current-secret-value")); err != nil {
+	if err := s.AddSecret("SHARED_TOKEN", "两个 profile 都能写", []byte("current-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetSecretValue("SHARED_TOKEN", []byte("newer-secret-value")); err != nil {
+	if err := s.SetSecretValue("SHARED_TOKEN", []byte("newer-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecret("OTHER_PROFILE", "只有另一个 profile 能写", []byte("other-secret-value")); err != nil {
+	if err := s.AddSecret("OTHER_PROFILE", "只有另一个 profile 能写", []byte("other-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecret("EMPTY_LIST", "没有可写入服务器", []byte("unused-secret-value")); err != nil {
+	if err := s.AddSecret("EMPTY_LIST", "没有可写入服务器", []byte("unused-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AllowSecrets([]string{"SHARED_TOKEN"}, []string{"srvA", "srvB"}); err != nil {
+	if err := s.AllowSecrets([]string{"SHARED_TOKEN"}, []string{"srvA", "srvB"}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AllowSecrets([]string{"OTHER_PROFILE"}, []string{"srvB"}); err != nil {
+	if err := s.AllowSecrets([]string{"OTHER_PROFILE"}, []string{"srvB"}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -99,16 +99,16 @@ func TestListSecretsInScope(t *testing.T) {
 	if err != nil || serverB == nil {
 		t.Fatalf("取 srvB 失败：%v %+v", err, serverB)
 	}
-	if err := s.AddSecret("SHARED_TOKEN", "共享", []byte("shared-secret-value")); err != nil {
+	if err := s.AddSecret("SHARED_TOKEN", "共享", []byte("shared-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecret("A_ONLY_TOKEN", "仅 srvA", []byte("a-only-secret-value")); err != nil {
+	if err := s.AddSecret("A_ONLY_TOKEN", "仅 srvA", []byte("a-only-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AllowSecrets([]string{"SHARED_TOKEN"}, []string{"srvA", "srvB"}); err != nil {
+	if err := s.AllowSecrets([]string{"SHARED_TOKEN"}, []string{"srvA", "srvB"}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AllowSecrets([]string{"A_ONLY_TOKEN"}, []string{"srvA"}); err != nil {
+	if err := s.AllowSecrets([]string{"A_ONLY_TOKEN"}, []string{"srvA"}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,10 +173,10 @@ func TestListSecretsInScope(t *testing.T) {
 func TestExportSnapshotForProfile_SecretsFollowRevokedGrant(t *testing.T) {
 	s := newTestStore(t)
 	profileA := seedScopedVault(t, s)
-	if err := s.AddSecret("A_ONLY_TOKEN", "仅授权内服务器", []byte("a-only-secret-value")); err != nil {
+	if err := s.AddSecret("A_ONLY_TOKEN", "仅授权内服务器", []byte("a-only-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AllowSecrets([]string{"A_ONLY_TOKEN"}, []string{"srvA"}); err != nil {
+	if err := s.AllowSecrets([]string{"A_ONLY_TOKEN"}, []string{"srvA"}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.SyncServers(profileA, nil); err != nil {
@@ -206,16 +206,16 @@ func TestExportSnapshotForProfile_SecretsFollowServerDeletion(t *testing.T) {
 	if err != nil || serverNoCred == nil {
 		t.Fatalf("取 srvNoCred 失败：%v %+v", err, serverNoCred)
 	}
-	if err := s.AddSecret("A_ONLY_TOKEN", "只因 srvA 下发", []byte("a-only-secret-value")); err != nil {
+	if err := s.AddSecret("A_ONLY_TOKEN", "只因 srvA 下发", []byte("a-only-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecret("SHARED_TOKEN", "删掉 srvA 后仍有交集", []byte("shared-secret-value")); err != nil {
+	if err := s.AddSecret("SHARED_TOKEN", "删掉 srvA 后仍有交集", []byte("shared-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AllowSecrets([]string{"A_ONLY_TOKEN"}, []string{"srvA"}); err != nil {
+	if err := s.AllowSecrets([]string{"A_ONLY_TOKEN"}, []string{"srvA"}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AllowSecrets([]string{"SHARED_TOKEN"}, []string{"srvA", "srvNoCred"}); err != nil {
+	if err := s.AllowSecrets([]string{"SHARED_TOKEN"}, []string{"srvA", "srvNoCred"}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
 

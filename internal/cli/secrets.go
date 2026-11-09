@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"ssh-manager-mcp/internal/secretmanage"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/tui"
 )
@@ -95,7 +96,7 @@ func secretsAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := s.AddSecretWithEnvironmentName(args[0], note, value, environmentName); err != nil {
+			if err := secretmanage.New(s).AddSecret(args[0], note, environmentName, value, secretmanage.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "已登记机密项 %s\n", args[0])
@@ -139,7 +140,7 @@ func secretsSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := s.SetSecretValue(args[0], value); err != nil {
+			if err := secretmanage.New(s).SetSecretValue(args[0], value, secretmanage.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "已更换机密项 %s 的值\n", args[0])
@@ -182,7 +183,10 @@ func secretsEditCmd() *cobra.Command {
 			if changeEnvironmentName || clearEnvironmentNameSet {
 				metadataEdit.EnvironmentName = &environmentName
 			}
-			if err := s.EditSecretMetadata(args[0], metadataEdit); err != nil {
+			if err := secretmanage.New(s).EditMetadata(args[0], secretmanage.MetadataEdit{
+				Note:            metadataEdit.Note,
+				EnvironmentName: metadataEdit.EnvironmentName,
+			}, secretmanage.CLISource()); err != nil {
 				return err
 			}
 			switch {
@@ -213,7 +217,7 @@ func secretsRmCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			if err := s.DeleteSecret(args[0]); err != nil {
+			if err := secretmanage.New(s).DeleteSecret(args[0], secretmanage.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "已删除机密项 %s\n", args[0])
@@ -264,21 +268,8 @@ func loadSecretViews(errOut io.Writer, instance, server string) ([]store.SecretV
 			return nil, err
 		}
 		defer s.Close()
-		if server != "" {
-			srv, err := s.ResolveServer(server)
-			if err != nil {
-				return nil, err
-			}
-			if srv == nil {
-				return nil, fmt.Errorf("服务器条目 %q 不存在", server)
-			}
-			server = srv.Name
-		}
-		views, err := s.ListSecretsInScope(store.ScopeAllServers())
-		if err != nil {
-			return nil, err
-		}
-		return store.FilterSecretsByServer(views, server), nil
+		manager := secretmanage.New(s)
+		return manager.List(secretmanage.ListFilter{Server: server})
 	case policyRoleClient:
 		snapshot, err := loadPolicyClientSnapshot(errOut, instance, "listing secrets")
 		if err != nil {
@@ -336,11 +327,12 @@ func newSecretAllowChangeCmd(allow bool) *cobra.Command {
 				return err
 			}
 			defer s.Close()
+			manager := secretmanage.New(s)
 			if allow {
-				if err := s.AllowSecrets(secrets, servers); err != nil {
+				if err := manager.AllowSecrets(secrets, servers, secretmanage.CLISource()); err != nil {
 					return err
 				}
-			} else if err := s.DisallowSecrets(secrets, servers); err != nil {
+			} else if err := manager.DisallowSecrets(secrets, servers, secretmanage.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), done, len(secrets), len(servers))

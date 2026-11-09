@@ -9,11 +9,13 @@ import (
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/ops"
+	"ssh-manager-mcp/internal/secretmanage"
 	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/updater"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
 	"ssh-manager-mcp/internal/webuiops"
+	"ssh-manager-mcp/internal/webuisecrets"
 	"ssh-manager-mcp/internal/webuiservers"
 )
 
@@ -84,6 +86,26 @@ func standaloneUIAccessStore() webui.AccessStore {
 	})
 }
 
+// standaloneUISecretStore 给单机 Web UI 提供机密项读取来源。每次读取重新
+// 打开本机 vault，结束后关闭。
+func standaloneUISecretStore() webui.SecretSource {
+	return webuisecrets.FromOpener(openSecretManager)
+}
+
+// standaloneUISecretWriter 给单机 Web UI 提供机密项写入口。每次写操作重新
+// 打开本机 vault，请求结束后关闭。
+func standaloneUISecretWriter() webui.SecretWriter {
+	return webuisecrets.WriterFromOpener(openSecretManager)
+}
+
+func openSecretManager() (*secretmanage.Manager, func(), error) {
+	st, err := openUnlockedStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	return secretmanage.New(st), func() { _ = st.Close() }, nil
+}
+
 // standaloneUIOpsStore 给单机 Web UI 提供运维入口。每次读取重新打开本机
 // vault，请求结束后关闭，不长期持有存储句柄。
 func standaloneUIOpsStore() webui.OpsStore {
@@ -99,6 +121,10 @@ func standaloneUIOpsStore() webui.OpsStore {
 // clientUIServerSource 是客户端角色的 Web UI 服务器列表来源：按每次请求传入
 // 的实例读取本地加密快照。
 type clientUIServerSource struct{}
+
+// clientUISecretSource 是客户端角色的机密项读取来源：按每次请求传入的实
+// 例读取本地加密快照的无值视图。
+type clientUISecretSource struct{}
 
 // Servers 读取当前实例本地快照中的服务器并转成 Web UI 展示行。
 func (clientUIServerSource) Servers(instance string) ([]webui.ServerRow, error) {
@@ -197,6 +223,11 @@ func (s clientUIServerSource) ServerDetail(instance, identifier string) (*webui.
 		}, nil
 	}
 	return nil, nil
+}
+
+// ListSecrets 读取当前实例快照中的机密项可见字段；客户端没有写入口。
+func (clientUISecretSource) ListSecrets(instance, query, server string) ([]webui.SecretRow, error) {
+	return webuisecrets.SnapshotSource(clientops.LoadCacheSnapshotFor).ListSecrets(instance, query, server)
 }
 
 // uiVersionHintSource 给 Web UI 提供客户端版本提示文字，复用命令行结尾提示

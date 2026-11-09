@@ -59,6 +59,8 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		serverWriter     webui.ServerWriter
 		accessSource     webui.AccessStore
 		opsSource        webui.OpsStore
+		secretSource     webui.SecretSource
+		secretWriter     webui.SecretWriter
 		resolvedInstance string
 	)
 	switch {
@@ -67,6 +69,8 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		servers = standaloneUIServerSource{}
 		serverWriter = standaloneUIServerWriter()
 		accessSource = standaloneUIAccessStore()
+		secretSource = standaloneUISecretStore()
+		secretWriter = standaloneUISecretWriter()
 		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
 	case launch.Kind == roles.LaunchClient && !launch.ResumeSetup:
 		resolvedInstance, err = resolveClientCacheInstance(instance)
@@ -75,6 +79,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		}
 		webRole = webui.RoleClient
 		servers = clientUIServerSource{}
+		secretSource = clientUISecretSource{}
 		opsSource = webuiops.ClientPageStoreWithUpdates(
 			uiUpdateService(webui.RoleClient, resolvedInstance), uiClientPull)
 	case launch.Kind == roles.LaunchBroker && launch.Role == roles.RoleServer:
@@ -104,6 +109,8 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		Role:           webRole,
 		Servers:        servers,
 		ServerWriter:   serverWriter,
+		Secrets:        secretSource,
+		SecretsWriter:  secretWriter,
 		VersionHint:    versionHint,
 		Port:           port,
 		Access:         accessSource,

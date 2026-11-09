@@ -12,13 +12,13 @@ func TestSecretEnvironmentValuesForInjectionReportsPerVariableReadFailure(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecretWithEnvironmentName("GOOD_SECRET", "", []byte("good-secret-value"), "GOOD_TOKEN"); err != nil {
+	if err := s.AddSecretWithEnvironmentName("GOOD_SECRET", "", []byte("good-secret-value"), "GOOD_TOKEN", CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecretWithEnvironmentName("BAD_SECRET", "", []byte("bad-secret-value"), "BAD_TOKEN"); err != nil {
+	if err := s.AddSecretWithEnvironmentName("BAD_SECRET", "", []byte("bad-secret-value"), "BAD_TOKEN", CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AllowSecrets([]string{"GOOD_SECRET", "BAD_SECRET"}, []string{"target"}); err != nil {
+	if err := s.AllowSecrets([]string{"GOOD_SECRET", "BAD_SECRET"}, []string{"target"}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`UPDATE secrets SET value_blob=? WHERE name=?`, []byte("not-encrypted"), "BAD_SECRET"); err != nil {

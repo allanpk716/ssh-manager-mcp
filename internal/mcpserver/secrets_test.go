@@ -22,22 +22,22 @@ func TestListSecretsStandaloneTools(t *testing.T) {
 	if err := st.GrantServers(profileID, []string{alpha}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "Deploy token", []byte("api-secret-value"), "HF_TOKEN"); err != nil {
+	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "Deploy token", []byte("api-secret-value"), "HF_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("NOTE_MATCH", "maintenance phrase", []byte("note-secret-value")); err != nil {
+	if err := st.AddSecret("NOTE_MATCH", "maintenance phrase", []byte("note-secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("BETA_ONLY", "outside profile", []byte("beta-secret-value")); err != nil {
+	if err := st.AddSecret("BETA_ONLY", "outside profile", []byte("beta-secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AllowSecrets([]string{"API_TOKEN"}, []string{"alpha", "beta"}); err != nil {
+	if err := st.AllowSecrets([]string{"API_TOKEN"}, []string{"alpha", "beta"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AllowSecrets([]string{"NOTE_MATCH"}, []string{"alpha"}); err != nil {
+	if err := st.AllowSecrets([]string{"NOTE_MATCH"}, []string{"alpha"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AllowSecrets([]string{"BETA_ONLY"}, []string{"beta"}); err != nil {
+	if err := st.AllowSecrets([]string{"BETA_ONLY"}, []string{"beta"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -105,10 +105,10 @@ func TestListSecretsKeepsEachSecretOnOneLine(t *testing.T) {
 	if err := st.GrantServers(profileID, []string{alpha}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("MULTI_NOTE", "第一行\n第二行", []byte("multi-note-secret-value")); err != nil {
+	if err := st.AddSecret("MULTI_NOTE", "第一行\n第二行", []byte("multi-note-secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AllowSecrets([]string{"MULTI_NOTE"}, []string{"alpha"}); err != nil {
+	if err := st.AllowSecrets([]string{"MULTI_NOTE"}, []string{"alpha"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 

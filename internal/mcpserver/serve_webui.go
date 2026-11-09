@@ -12,12 +12,14 @@ import (
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/ops"
+	"ssh-manager-mcp/internal/secretmanage"
 	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
 	"ssh-manager-mcp/internal/webuiops"
+	"ssh-manager-mcp/internal/webuisecrets"
 	"ssh-manager-mcp/internal/webuiservers"
 )
 
@@ -118,8 +120,10 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 	})
 	handler, control, err := webui.NewAuthority(webui.Config{
 		Role: webui.RoleServer, Port: port,
-		Servers:      serveWebUIServerSource{store: st},
-		ServerWriter: webuiservers.WriterFromManager(servermanage.New(st)),
+		Servers:       serveWebUIServerSource{store: st},
+		ServerWriter:  webuiservers.WriterFromManager(servermanage.New(st)),
+		Secrets:       webuisecrets.FromManager(secretmanage.New(st)),
+		SecretsWriter: webuisecrets.WriterFromManager(secretmanage.New(st)),
 		Access: webuiaccess.FromManager(access.New(st, access.WithServeCertFingerprint(func() (string, error) {
 			return fingerprint, nil
 		}))),
