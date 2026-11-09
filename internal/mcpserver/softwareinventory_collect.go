@@ -26,7 +26,12 @@ type CollectSoftwareInventoryInput struct {
 // CollectSoftwareInventoryOutput 是工具的输出：这台设备的采集报告。
 type CollectSoftwareInventoryOutput struct {
 	MaskedOutput
-	Report *softwareinventory.CollectionReport `json:"report" jsonschema:"collection report for the device"`
+	DeviceName string `json:"device_name" jsonschema:"device the request targeted"`
+	// Requested 为 true 表示设备由客户端实例采集，这次只登记了立即采集
+	// 请求，等待该实例下一轮分派执行。
+	Requested bool                                `json:"requested" jsonschema:"true when only an immediate-collection request was registered for a client collector"`
+	Collector string                              `json:"collector,omitempty" jsonschema:"device code name of the registered client collector, present when requested is true"`
+	Report    *softwareinventory.CollectionReport `json:"report,omitempty" jsonschema:"collection report, present when this instance collected synchronously"`
 }
 
 // SoftwareInventoryCollector 是立即采集能力。权威面与单机注入本地适配
@@ -79,7 +84,7 @@ func (c localSoftwareInventoryCollector) CollectSoftwareInventory(
 	if err != nil {
 		return CollectSoftwareInventoryOutput{}, fmt.Errorf("读取 profile 授权失败: %w", err)
 	}
-	report, err := softwareinventory.New(st).CollectForScope(
+	outcome, err := softwareinventory.New(st).CollectForScope(
 		ctx, in.Device,
 		softwareinventory.DevicesVisibleThroughServers(granted...),
 		softwareInventoryCollectService(st),
@@ -88,10 +93,13 @@ func (c localSoftwareInventoryCollector) CollectSoftwareInventory(
 	if err != nil {
 		return CollectSoftwareInventoryOutput{}, err
 	}
-	if report.Notes == nil {
-		report.Notes = []string{}
+	if outcome.Report != nil && outcome.Report.Notes == nil {
+		outcome.Report.Notes = []string{}
 	}
-	return CollectSoftwareInventoryOutput{Report: report}, nil
+	return CollectSoftwareInventoryOutput{
+		DeviceName: outcome.DeviceName, Requested: outcome.Requested,
+		Collector: outcome.Collector, Report: outcome.Report,
+	}, nil
 }
 
 // registerSoftwareInventoryCollectionTool 注册 collect_software_inventory。

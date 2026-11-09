@@ -252,7 +252,7 @@ func TestDraftSoftwareDeclarationsCacheFaceFailsClosed(t *testing.T) {
 func TestCollectSoftwareInventoryAuthorityFace(t *testing.T) {
 	st, profileID := softwareInventoryFaceFixture(t)
 	fixture, err := os.ReadFile(filepath.Join(
-		"..", "softwareinventory", "testdata", "linux", "ubuntu2404-full.txt",
+		"..", "softwareinventory", "testdata", "posix", "ubuntu2404-full.txt",
 	))
 	if err != nil {
 		t.Fatal(err)
@@ -286,7 +286,7 @@ func TestCollectSoftwareInventoryAuthorityFace(t *testing.T) {
 		t.Fatalf("可见设备立即采集报错：%+v", result.Content)
 	}
 	text := toolResultText(result)
-	if !strings.Contains(text, "可见设备") || !strings.Contains(text, "linux-v1") {
+	if !strings.Contains(text, "可见设备") || !strings.Contains(text, "posix-v2") {
 		t.Fatalf("采集报告未透出：%s", text)
 	}
 	status, err := st.SoftwareCollectionStatusForDevice("可见设备")
@@ -320,5 +320,54 @@ func TestCollectSoftwareInventoryCacheFaceFailsClosed(t *testing.T) {
 	text := toolResultText(result)
 	if !result.IsError || !strings.Contains(text, "立即采集") {
 		t.Fatalf("客户端面未接采集能力时应固定报错：%q %v", text, result.IsError)
+	}
+}
+
+// TestCollectSoftwareInventoryClientCollectorRegistersRequest 采集执行者是
+// 客户端实例时，工具只登记立即采集请求并告知由谁执行。
+func TestCollectSoftwareInventoryClientCollectorRegistersRequest(t *testing.T) {
+	st, profileID := softwareInventoryFaceFixture(t)
+	visibleServer, err := st.GetServerByName("可见设备-ssh")
+	if err != nil || visibleServer == nil {
+		t.Fatalf("取可见设备服务器条目失败：%v %+v", err, visibleServer)
+	}
+	if _, _, err := st.AddCacheToken("mini6", profileID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSoftwareCollectionCollector(
+		"可见设备", "mini6", "", store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	srv, tunnels, tasks, err := newLocalVaultServer(st, profileID, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tunnels.CloseAll(); tasks.CloseAll() })
+	session := softwareInventorySession(t, srv)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "collect_software_inventory",
+		Arguments: map[string]any{"device": "可见设备"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("登记立即采集请求报错：%+v", result.Content)
+	}
+	text := toolResultText(result)
+	var output struct {
+		Requested bool   `json:"requested"`
+		Collector string `json:"collector"`
+	}
+	if err := json.Unmarshal([]byte(text), &output); err != nil {
+		t.Fatalf("解析输出失败：%v\n%s", err, text)
+	}
+	if !output.Requested || output.Collector != "mini6" {
+		t.Fatalf("客户端实例采集的设备只应登记请求：%s", text)
+	}
+	status, err := st.SoftwareCollectionStatusForDevice("可见设备")
+	if err != nil || !status.PendingImmediate {
+		t.Fatalf("立即采集请求应已登记：%+v %v", status, err)
 	}
 }
