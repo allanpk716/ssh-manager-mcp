@@ -53,6 +53,7 @@ func newInventoryCmd() *cobra.Command {
 		inventoryCollectCmd(), inventorySudoCmd(),
 		inventoryHistoryCmd(), inventoryStatusCmd(),
 		inventoryCollectAssignedCmd(),
+		inventoryDraftsCmd(), inventoryDraftConfirmCmd(), inventoryDraftRejectCmd(),
 	)
 	return cmd
 }
