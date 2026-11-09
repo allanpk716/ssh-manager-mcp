@@ -30,7 +30,7 @@ func TestBuildInventoryCommandIsFixedTemplate(t *testing.T) {
 }
 
 func TestBuildInventoryCommandRejectsUnsupportedShells(t *testing.T) {
-	for _, shell := range []models.ShellType{models.ShellPowerShell, models.ShellWindowsCmd} {
+	for _, shell := range []models.ShellType{models.ShellType("unknown")} {
 		if _, err := BuildInventoryCommand(shell); err == nil {
 			t.Fatalf("shell 类型 %s 的固定命令集尚未实现，应返回错误", shell)
 		}
