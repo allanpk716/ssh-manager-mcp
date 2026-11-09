@@ -228,6 +228,13 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 			softwareInventoryHandler.ServeHTTP(w, req)
 			return
 		}
+		// 票 #188：「提交声明草稿」是受审计转发写的新成员，同样挂在设
+		// 备码认证上；只写草稿，owner 确认后才生效。
+		softwareDeclarationDraftsHandler := cacheAuth(http.HandlerFunc(r.handleSoftwareDeclarationDrafts))
+		if req.URL.Path == "/software-declaration-drafts" {
+			softwareDeclarationDraftsHandler.ServeHTTP(w, req)
+			return
+		}
 		if strings.HasPrefix(req.URL.Path, "/pair/") {
 			r.handlePair(w, req) // unauthenticated SAS pairing surface (Plan 42 §3.3) — self-gated
 			return
