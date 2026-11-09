@@ -163,7 +163,7 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 		if !ok {
 			devices = append(devices, QueryDeviceResult{
 				DeviceID: row.DeviceID, DeviceName: row.DeviceName,
-				Collection: missingCollectionStatus(), Items: []QueryItem{},
+				Collection: m.collectionStatusFor(row.DeviceName), Items: []QueryItem{},
 			})
 			position = len(devices) - 1
 			index[row.DeviceID] = position
@@ -172,6 +172,37 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 	}
 	sort.Slice(devices, func(i, j int) bool { return devices[i].DeviceName < devices[j].DeviceName })
 	return QueryResult{Devices: devices}, nil
+}
+
+// collectionStatusFor 读取一台设备的采集状态；设备从未采集过（或采集状
+// 态读取失败）时保持「从未采集、清单过期」的显示。
+func (m *Manager) collectionStatusFor(deviceName string) CollectionStatus {
+	stored, err := m.st.SoftwareCollectionStatusForDevice(deviceName)
+	if err != nil || stored.LastSuccessAt.Unix() <= 0 {
+		return missingCollectionStatus()
+	}
+	status := CollectionStatus{
+		Collector: stored.Collector, ServerEntry: stored.LastServerName,
+		LastFailureReason: stored.LastFailureReason, Incomplete: stored.LastIncomplete,
+		CommandSetVersion: stored.CommandSetVersion,
+	}
+	successAt := stored.LastSuccessAt
+	status.LastSuccessAt = &successAt
+	if stored.LastFailureAt.Unix() > 0 {
+		failureAt := stored.LastFailureAt
+		status.LastFailureAt = &failureAt
+	}
+	// 清单过期不落库，每次读取时按「当前时间减上次成功时间超过 7 天」
+	// 计算；从未成功过的设备在上面已经按从未采集返回。
+	status.Stale = m.now().Sub(successAt) > 7*24*time.Hour
+	return status
+}
+
+func (m *Manager) now() time.Time {
+	if m.Now != nil {
+		return m.Now()
+	}
+	return time.Now()
 }
 
 // meetsMinimumExposure 判断一组监听端口里是否有至少一个达到最低暴露

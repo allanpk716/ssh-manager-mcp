@@ -4,6 +4,8 @@
 package softwareinventory
 
 import (
+	"time"
+
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
@@ -12,6 +14,9 @@ import (
 // 收在同一层，命令行和后续 Web UI 只做参数适配与展示。
 type Manager struct {
 	st *store.Store
+	// Now 提供查询侧的时间读数（清单过期按读取时刻计算）；空值使用真实
+	// 时钟，测试可以注入固定时钟。
+	Now func() time.Time
 }
 
 // New 返回挂在一个已解锁 vault 上的软件清单领域模块。

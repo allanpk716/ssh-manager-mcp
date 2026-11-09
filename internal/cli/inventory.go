@@ -45,7 +45,9 @@ func newInventoryCmd() *cobra.Command {
 	}
 	cmd.AddCommand(
 		inventoryAddCmd(), inventoryEditCmd(), inventoryRmCmd(),
-		inventoryViewCmd(), inventorySearchCmd(), inventoryExportCmd(),
+		inventoryViewCmd(), inventorySearchCmd(),
+		inventoryExportCmd(),
+		inventoryCollectCmd(), inventorySudoCmd(),
 	)
 	return cmd
 }
