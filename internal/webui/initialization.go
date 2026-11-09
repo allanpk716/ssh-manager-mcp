@@ -249,8 +249,8 @@ func (w *initializationWizard) handleClientPairingGuide(response http.ResponseWr
 func (w *initializationWizard) writeCompleteClientPairingPage(response http.ResponseWriter, request *http.Request) bool {
 	data := pageData{
 		Title: "客户端入网", Assets: w.wizard.assets, Caps: w.wizard.caps,
-		VersionHint:                    w.wizard.cfg.versionHint(),
-		InitializationClientGuideLines: ClientInitializationGuideLines(),
+		VersionHint:      w.wizard.cfg.versionHint(),
+		ClientGuideLines: ClientInitializationGuideLines(),
 	}
 	if session := w.wizard.currentSession(request); session != nil {
 		data.CSRFToken = session.csrf
