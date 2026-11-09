@@ -137,9 +137,31 @@ func (h *handler) handleSoftwareInventory(w http.ResponseWriter, r *http.Request
 		h.handleSoftwareInventoryRoot(w, r)
 	case "/ui/software-inventory/devices":
 		h.handleSoftwareInventoryDevice(w, r)
+	case "/ui/software-inventory/search":
+		h.handleSoftwareInventorySearch(w, r)
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}
+}
+
+// handleSoftwareInventorySearch 渲染跨设备搜索结果。空关键字只显示表单，
+// 不读取全部清单。
+func (h *handler) handleSoftwareInventorySearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "软件清单搜索页只接受 GET 请求。")
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	data := pageData{Title: "软件清单搜索", SoftwareInventoryQuery: query}
+	if query != "" {
+		rows, err := h.cfg.SoftwareInventory.SearchSoftwareInventory(query)
+		if err != nil {
+			h.renderError(w, r, http.StatusInternalServerError, "搜索软件清单失败", "搜索软件清单失败，请稍后重试。")
+			return
+		}
+		data.SoftwareInventorySearchRows = rows
+	}
+	h.renderPage(w, r, http.StatusOK, "softwareinventory-search.tmpl", data)
 }
 
 // handleSoftwareInventoryRoot 渲染设备列表。

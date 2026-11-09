@@ -53,8 +53,10 @@ func TestSoftwareInventoryNavFollowsCapability(t *testing.T) {
 }
 
 type stubSoftwareInventorySource struct {
-	device    *SoftwareInventoryDevice
-	deviceErr error
+	device      *SoftwareInventoryDevice
+	deviceErr   error
+	searchRows  []SoftwareInventorySearchRow
+	searchQuery string
 }
 
 func (s stubSoftwareInventorySource) SoftwareInventoryDevices() ([]SoftwareInventoryDeviceSummary, error) {
@@ -71,14 +73,47 @@ func (s stubSoftwareInventorySource) SoftwareInventoryDevice(deviceName string) 
 	return s.device, nil
 }
 
-func (s stubSoftwareInventorySource) SearchSoftwareInventory(string) ([]SoftwareInventorySearchRow, error) {
-	return nil, nil
+func (s stubSoftwareInventorySource) SearchSoftwareInventory(namePart string) ([]SoftwareInventorySearchRow, error) {
+	s.searchQuery = namePart
+	return s.searchRows, nil
 }
 
 func (s stubSoftwareInventorySource) RequestSoftwareInventoryCollection(
 	context.Context, string, SoftwareInventoryWriteSource,
 ) (SoftwareInventoryCollectionResult, error) {
 	return SoftwareInventoryCollectionResult{}, nil
+}
+
+// TestSoftwareInventorySearchListsDevices 覆盖跨设备搜索：按软件名返回每台
+// 设备上的精确版本、来源与暴露级别。
+func TestSoftwareInventorySearchListsDevices(t *testing.T) {
+	collectedAt := time.Date(2026, 11, 1, 10, 30, 0, 0, time.UTC)
+	source := stubSoftwareInventorySource{searchRows: []SoftwareInventorySearchRow{
+		{DeviceName: "工作站", Item: SoftwareInventoryItem{
+			Name: "OpenSSH", Version: "1:8.9p1-3ubuntu0.10", Source: "实测", CollectedAt: &collectedAt,
+			ListeningPorts: []SoftwareInventoryPort{{Address: "0.0.0.0", Port: 22, Protocol: "tcp", ExposureLabel: "监听所有地址"}},
+		}},
+		{DeviceName: "网络存储", Item: SoftwareInventoryItem{
+			Name: "OpenSSH", Version: "9.6p1-1", Source: "声明",
+			ListeningPorts: []SoftwareInventoryPort{{Address: "192.0.2.20", Port: 22, Protocol: "tcp", ExposureLabel: "局域网"}},
+		}},
+	}}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+
+	response := doGetWithCookie(t, handler, cookie, "/ui/software-inventory/search?query=opens")
+	body := readResponseBody(t, response)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("跨设备搜索页状态码 = %d，应为 200：\n%s", response.StatusCode, body)
+	}
+	for _, wanted := range []string{
+		"<h1>软件清单搜索</h1>", `name="query"`, "value=\"opens\"",
+		"工作站", "网络存储", "OpenSSH", "1:8.9p1-3ubuntu0.10", "9.6p1-1",
+		"实测", "声明", "0.0.0.0:22/tcp", "监听所有地址", "192.0.2.20:22/tcp", "局域网",
+	} {
+		if !strings.Contains(body, wanted) {
+			t.Fatalf("跨设备搜索页缺少 %q：\n%s", wanted, body)
+		}
+	}
 }
 
 func newSoftwareInventoryHandler(
