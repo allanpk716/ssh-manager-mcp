@@ -35,6 +35,13 @@ export type standaloneUI = {
   close: () => Promise<void>;
 };
 
+// clientUI 描述一次已启动的客户端 Web UI 进程。临时目录留给操作系统清理，
+// 测试助手不做递归删除。
+export type clientUI = {
+  startupURL: string;
+  close: () => Promise<void>;
+};
+
 // startStandaloneUI 为当前用例准备一个全新的临时加密库，以单机角色启动
 // `sshmgr ui`，并返回一次性启动链接。子进程的 PATH 指向不存在的目录，
 // 这样「自动打开系统浏览器」会失败并只打印链接，由 Playwright 自己使用
@@ -116,24 +123,113 @@ async function startStandaloneUI(setup?: (runDir: string) => void): Promise<stan
   };
 }
 
+// startClientUI 为当前用例生成一个客户端本地快照缓存，并以客户端角色启
+// 动 `sshmgr ui`。PATH 指向不存在目录，避免系统浏览器抢先消耗启动链接。
+async function startClientUI(): Promise<clientUI> {
+  const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-client-"));
+  const seed = spawnSync("go", ["run", "./e2e/tools/seedclient", runDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: runDir,
+      APPDATA: runDir,
+      XDG_CONFIG_HOME: runDir,
+      SSHMGR_CONFIG_ROOT: runDir,
+    },
+  });
+  if (seed.status !== 0) {
+    throw new Error(`准备客户端缓存失败：${seed.stdout}\n${seed.stderr}`);
+  }
+
+  const ui = spawn(binaryPath, ["ui"], {
+    cwd: repoRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      HOME: runDir,
+      APPDATA: runDir,
+      XDG_CONFIG_HOME: runDir,
+      SSHMGR_CONFIG_ROOT: runDir,
+      SSHMGR_VAULT_ROOT: runDir,
+      SSHMGR_STORE: path.join(runDir, "store.db"),
+      SSHMGR_CACHE_DIR: path.join(runDir, "cache"),
+      SSHMGR_CACHE_DEK: path.join(runDir, "cache-dek.key"),
+      PATH: path.join(runDir, "empty-path"),
+    },
+  });
+  let output = "";
+  ui.stdout.on("data", (chunk) => (output += chunk));
+  ui.stderr.on("data", (chunk) => (output += chunk));
+
+  const startupURL = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`等待客户端 Web UI 启动超时，输出：\n${output}`)),
+      15_000,
+    );
+    const poll = setInterval(() => {
+      const match = output.match(/https?:\/\/\S+/);
+      if (match) {
+        clearTimeout(timer);
+        clearInterval(poll);
+        resolve(match[0]);
+      }
+    }, 50);
+    ui.on("exit", (code) => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      reject(new Error(`客户端 Web UI 进程提前退出（${code}），输出：\n${output}`));
+    });
+  });
+
+  return {
+    startupURL,
+    close: async () => {
+      ui.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        if (ui.exitCode !== null) {
+          resolve();
+          return;
+        }
+        ui.on("exit", () => resolve());
+      });
+    },
+  };
+}
+
 // standaloneUIFixture 让每个用例拿到自己的 Web UI 进程；用例结束（无论成
 // 败）都会停止进程并删除临时加密库。
 type standaloneUIFixture = { standaloneUI: standaloneUI };
+type clientUIFixture = { clientUI: clientUI };
 
-export const test = base.extend<standaloneUIFixture>({
+export const test = base.extend<standaloneUIFixture & clientUIFixture>({
   standaloneUI: async ({}, use) => {
     const ui = await startStandaloneUI();
     await use(ui);
     await ui.close();
   },
+  clientUI: async ({}, use) => {
+    const ui = await startClientUI();
+    await use(ui);
+    await ui.close();
+  },
 });
 
-export { expect, startStandaloneUI };
+export { expect, startClientUI, startStandaloneUI };
 
 // openStandaloneUI 用一次性启动链接进入 Web UI，并等待服务器列表出现。
 export async function openStandaloneUI(
   page: import("@playwright/test").Page,
   ui: standaloneUI,
+): Promise<void> {
+  await page.goto(ui.startupURL);
+  await page.getByRole("heading", { name: "服务器" }).waitFor();
+}
+
+// openClientUI 用一次性启动链接进入客户端 Web UI，并等待服务器列表出现。
+export async function openClientUI(
+  page: import("@playwright/test").Page,
+  ui: clientUI,
 ): Promise<void> {
   await page.goto(ui.startupURL);
   await page.getByRole("heading", { name: "服务器" }).waitFor();
