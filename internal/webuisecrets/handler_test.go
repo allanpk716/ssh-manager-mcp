@@ -356,7 +356,7 @@ func TestSecretAddWritesValueWithoutEchoAndAuditsWebUISource(t *testing.T) {
 		t.Fatalf("校验失败页面不得回显值：\n%s", invalidBody)
 	}
 	if !strings.Contains(invalidBody, `<input type="password"`) ||
-		!strings.Contains(invalidBody, `autocomplete="new-password"`) {
+		!strings.Contains(invalidBody, `autocomplete="off"`) {
 		t.Fatalf("值输入应是关闭自动填充的隐藏输入框：\n%s", invalidBody)
 	}
 
@@ -415,7 +415,7 @@ func TestSecretDetailSupportsEditValueAndDelete(t *testing.T) {
 		t.Fatalf("换值页不得显示旧值，状态码=%d：\n%s", valuePage.StatusCode, valuePageBody)
 	}
 	if !strings.Contains(valuePageBody, "上一个值仍会参与输出遮蔽") ||
-		!strings.Contains(valuePageBody, `autocomplete="new-password"`) {
+		!strings.Contains(valuePageBody, `autocomplete="off"`) {
 		t.Fatalf("换值页应说明遮蔽并关闭自动填充：\n%s", valuePageBody)
 	}
 	invalidValue := h.do(http.MethodPost, detailTarget+"/value", url.Values{
@@ -423,7 +423,7 @@ func TestSecretDetailSupportsEditValueAndDelete(t *testing.T) {
 	})
 	invalidValueBody := body(t, invalidValue)
 	if invalidValue.StatusCode != http.StatusBadRequest || strings.Contains(invalidValueBody, "short") ||
-		!strings.Contains(invalidValueBody, `autocomplete="new-password"`) {
+		!strings.Contains(invalidValueBody, `autocomplete="off"`) {
 		t.Fatalf("换值校验失败应重新渲染空值框，状态码=%d：\n%s", invalidValue.StatusCode, invalidValueBody)
 	}
 	changed := h.do(http.MethodPost, detailTarget+"/value", url.Values{
