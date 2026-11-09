@@ -548,24 +548,6 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
-// stableKeyForObservedItem 计算实测条目的稳定键。声明认领实测时引用这个
-// 键，因此它在整体替换实测结果后仍指向同一款软件。
-func stableKeyForObservedItem(item *models.SoftwareObservedItem) string {
-	key := string(item.Category) + "\x1f" + strings.ToLower(item.Name) + "\x1f" + item.BelongsTo
-	if item.Category == models.SoftwareCategoryUnidentified {
-		protocol, port := "", ""
-		if len(item.ListeningPorts) > 0 {
-			protocol = item.ListeningPorts[0].Protocol
-			port = strconv.Itoa(item.ListeningPorts[0].Port)
-		}
-		key += "\x1f" + port + "\x1f" + protocol + "\x1f" + item.ExecutablePath
-	}
-	if item.Category == models.SoftwareCategoryContainerImage {
-		key += "\x1f" + item.ContainerTag + "\x1f" + item.ContainerDigest
-	}
-	return key
-}
-
 // sortObservedPortsByName 给监听端口一个稳定顺序，避免同一份数据两次采集
 // 因为端口顺序不同而被当成变化。
 func sortObservedPortsByName(ports []models.SoftwareListeningPort) {
