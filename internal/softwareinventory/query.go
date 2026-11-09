@@ -63,7 +63,11 @@ type QueryDeviceResult struct {
 // QueryResult 是一次软件清单查询的结果。设备按名字稳定排序；每台设备
 // 内的条目保持类别、名称、版本的顺序。
 type QueryResult struct {
-	Devices []QueryDeviceResult `json:"devices"`
+	// ProfileName 是这次查询使用的可见范围名称。本地 owner 查询填
+	// owner；在线查询由权威端按设备码绑定的 profile 填写，供导出文档头
+	// 使用。
+	ProfileName string              `json:"profile_name,omitempty"`
+	Devices     []QueryDeviceResult `json:"devices"`
 }
 
 // exposureRank 给六档暴露级别排出从低到高的顺序。这个顺序只用于「最低
