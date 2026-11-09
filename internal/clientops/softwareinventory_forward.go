@@ -7,6 +7,7 @@ package clientops
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/mcpserver"
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/softwareinventory"
 )
 
@@ -188,4 +190,152 @@ func (f *SoftwareInventoryForwarder) QuerySoftwareInventory(
 			unreachable: true,
 		}
 	}
+}
+
+// SoftwareInventoryCollectionUnreachableText 是采集分派与结果上交的固定不
+// 可达文本。它同时说明没有排队、没有本地状态，供命令行映射退出码 4。
+const SoftwareInventoryCollectionUnreachableText = "软件清单采集无法访问权威端：没有排队，也没有保存本地状态；请在权威端可达后重试"
+
+// softwareInventoryCollectionUnsupportedText 是旧权威端缺少采集接口时的
+// 固定文本。
+const softwareInventoryCollectionUnsupportedText = "权威端还不支持软件清单采集分派或结果上交；请升级权威端后重试"
+
+// softwareInventoryCollectionForbiddenPrefix 用于保留权威端 403 的核对原因。
+const softwareInventoryCollectionForbiddenPrefix = "权威端拒绝软件清单采集："
+
+type softwareInventoryAssignmentsResponse struct {
+	Devices []softwareInventoryAssignment `json:"devices"`
+}
+
+type softwareInventoryAssignment struct {
+	DeviceID         string `json:"device_id"`
+	DeviceName       string `json:"device_name"`
+	ServerID         string `json:"server_id"`
+	ServerName       string `json:"server_name"`
+	Sudo             bool   `json:"sudo"`
+	PendingImmediate bool   `json:"pending_immediate"`
+	LastSuccessAt    int64  `json:"last_success_at"`
+	Due              bool   `json:"due"`
+}
+
+func (a softwareInventoryAssignment) assignment() models.SoftwareCollectionAssignment {
+	return models.SoftwareCollectionAssignment{
+		DeviceID: a.DeviceID, DeviceName: a.DeviceName, ServerID: a.ServerID,
+		ServerName: a.ServerName, Sudo: a.Sudo,
+		PendingImmediate: a.PendingImmediate, LastSuccessAt: time.Unix(a.LastSuccessAt, 0),
+		Due: a.Due,
+	}
+}
+
+type softwareInventorySubmissionResponse struct {
+	Status string `json:"status"`
+}
+
+// SoftwareCollectionAssignments 在线取本设备码的采集分派。任何传输失败都
+// 直接返回不可达错误，不读客户端本地软件清单。
+func (f *SoftwareInventoryForwarder) SoftwareCollectionAssignments(ctx context.Context) ([]models.SoftwareCollectionAssignment, error) {
+	if !f.capable {
+		if f.noCred {
+			return nil, &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, unreachable: true}
+		}
+		return nil, &softwareInventoryError{text: softwareInventoryPlaintextText}
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		f.url+"/software-inventory/assignments", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return nil, &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
+	}
+	setAuthorityRequestHeaders(request, f.code)
+	response, err := f.client.Do(request)
+	if err != nil {
+		return nil, &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
+	}
+	defer response.Body.Close()
+	if err := softwareInventoryCollectionStatusError(response); err != nil {
+		return nil, err
+	}
+	var body softwareInventoryAssignmentsResponse
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&body); err != nil {
+		return nil, &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
+	}
+	out := make([]models.SoftwareCollectionAssignment, 0, len(body.Devices))
+	for _, assignment := range body.Devices {
+		out = append(out, assignment.assignment())
+	}
+	return out, nil
+}
+
+// SubmitSoftwareCollectionResult 把一台设备的采集结果在线交给权威端。失败
+// 直接返回，不在客户端排队或落状态。
+func (f *SoftwareInventoryForwarder) SubmitSoftwareCollectionResult(
+	ctx context.Context,
+	submission softwareinventory.CollectionSubmission,
+) error {
+	if !f.capable {
+		if f.noCred {
+			return &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, unreachable: true}
+		}
+		return &softwareInventoryError{text: softwareInventoryPlaintextText}
+	}
+	body, err := json.Marshal(submission)
+	if err != nil {
+		return &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		f.url+"/software-inventory/results", bytes.NewReader(body))
+	if err != nil {
+		return &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
+	}
+	setAuthorityRequestHeaders(request, f.code)
+	response, err := f.client.Do(request)
+	if err != nil {
+		return &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
+	}
+	defer response.Body.Close()
+	if err := softwareInventoryCollectionStatusError(response); err != nil {
+		return err
+	}
+	var result softwareInventorySubmissionResponse
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<10)).Decode(&result); err != nil {
+		return &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
+	}
+	return nil
+}
+
+func softwareInventoryCollectionStatusError(response *http.Response) error {
+	switch response.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusUnauthorized:
+		return &softwareInventoryError{text: softwareInventoryRejectedText}
+	case http.StatusForbidden:
+		reason := softwareInventoryResponseReason(response.Body)
+		if reason == "" {
+			reason = "设备码、采集执行者或 profile 授权核对失败"
+		}
+		return &softwareInventoryError{text: softwareInventoryCollectionForbiddenPrefix + reason}
+	case http.StatusNotFound:
+		return &softwareInventoryError{text: softwareInventoryCollectionUnsupportedText}
+	case http.StatusRequestEntityTooLarge:
+		return &softwareInventoryError{text: "权威端拒绝软件清单采集结果：请求体超过上限"}
+	default:
+		return &softwareInventoryError{
+			text: SoftwareInventoryCollectionUnreachableText,
+			err:  fmt.Errorf("authority returned %s", http.StatusText(response.StatusCode)), unreachable: true,
+		}
+	}
+}
+
+func softwareInventoryResponseReason(body io.Reader) string {
+	blob, err := io.ReadAll(io.LimitReader(body, 16<<10))
+	if err != nil || len(blob) == 0 {
+		return ""
+	}
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(blob, &payload) == nil && payload.Error != "" {
+		return payload.Error
+	}
+	return string(blob)
 }
