@@ -41,11 +41,12 @@ func newInventoryCmd() *cobra.Command {
 		Long: `管理与查询软件清单。写命令只在权威端与单机可用；查看（view）与搜索
 （search）在客户端上经设备码在线查询权威端，不会读取本地缓存数据。
 
-退出码：0 成功；1 一般错误；4 权威端不可达（仅客户端的查看与搜索）。`,
+退出码：0 成功；1 一般错误；4 权威端不可达（仅客户端的查看、搜索与导出）。`,
 	}
 	cmd.AddCommand(
 		inventoryAddCmd(), inventoryEditCmd(), inventoryRmCmd(),
 		inventoryViewCmd(), inventorySearchCmd(),
+		inventoryExportCmd(),
 		inventoryCollectCmd(), inventorySudoCmd(),
 		inventoryHistoryCmd(), inventoryStatusCmd(),
 	)
