@@ -182,6 +182,10 @@ func (s *Store) ReplaceSoftwareObservedItems(
 		serverName = server.Name
 	}
 	at := s.nowTime()
+	previous, err := softwareObservedItemsForDeviceTx(tx, device.ID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM software_observed_items WHERE device_id=?`, device.ID); err != nil {
 		return err
 	}
@@ -218,6 +222,11 @@ func (s *Store) ReplaceSoftwareObservedItems(
 				return err
 			}
 		}
+	}
+	if err := writeSoftwareChangeHistoryTx(tx, device.ID, softwareChangesBetween(
+		previous, write.Items, write.Incomplete, at,
+	), at); err != nil {
+		return err
 	}
 	result := "ok"
 	if write.Incomplete {
@@ -323,67 +332,7 @@ func (s *Store) SoftwareObservedItemsForDevice(deviceName string) ([]models.Soft
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(`
-		SELECT id,category,name,version,package_url,belongs_to,architecture,container_tag,
-		       container_digest,container_running,executable_path,process_name,process_id,stable_key,collected_at
-		FROM software_observed_items WHERE device_id=?
-		ORDER BY CASE category
-			WHEN 'operating_system' THEN 1
-			WHEN 'service_program' THEN 2
-			WHEN 'container_image' THEN 3
-			WHEN 'driver_firmware' THEN 4
-			WHEN 'system_package' THEN 5
-			WHEN 'unidentified_process' THEN 6 END,
-			name,version,stable_key`, device.ID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []models.SoftwareObservedItem{}
-	ids := []string{}
-	for rows.Next() {
-		var item models.SoftwareObservedItem
-		var id string
-		var collectedAt int64
-		if err := rows.Scan(
-			&id, &item.Category, &item.Name, &item.Version, &item.PackageURL,
-			&item.BelongsTo, &item.Architecture, &item.ContainerTag,
-			&item.ContainerDigest, &item.ContainerRunning, &item.ExecutablePath,
-			&item.ProcessName, &item.ProcessID, &item.StableKey, &collectedAt,
-		); err != nil {
-			return nil, err
-		}
-		item.CollectedAt = time.Unix(collectedAt, 0)
-		items = append(items, item)
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	for i := range items {
-		portRows, err := s.db.Query(`
-			SELECT address,port,protocol,exposure FROM software_observed_ports
-			WHERE item_id=? ORDER BY port,protocol,address`, ids[i])
-		if err != nil {
-			return nil, err
-		}
-		for portRows.Next() {
-			var port models.SoftwareListeningPort
-			if err := portRows.Scan(&port.Address, &port.Port, &port.Protocol, &port.Exposure); err != nil {
-				portRows.Close()
-				return nil, err
-			}
-			items[i].ListeningPorts = append(items[i].ListeningPorts, port)
-		}
-		if err := portRows.Err(); err != nil {
-			portRows.Close()
-			return nil, err
-		}
-		if err := portRows.Close(); err != nil {
-			return nil, err
-		}
-	}
-	return items, nil
+	return softwareObservedItemsForDeviceTx(s.db, device.ID)
 }
 
 // softwareCollectionSuccess 是一次成功采集要写进状态的新字段。
