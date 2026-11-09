@@ -1,6 +1,5 @@
-// Package softwareinventory 提供与界面无关的软件清单领域模块。第一张票
-// 只承担 owner 声明的写入与查询；固定命令采集、认领合成与变化历史会在
-// 后续票里扩展到同一组入口上。
+// Package softwareinventory 提供与界面无关的软件清单领域模块，承担声明
+// 写入、实测与声明的统一查询、认领合成、待办计算和固定命令采集。
 package softwareinventory
 
 import (
@@ -87,8 +86,8 @@ func DevicesVisibleThroughServers(serverIDs ...string) Visibility {
 	return store.SoftwareDevicesForServers(serverIDs...)
 }
 
-// Item 是查询结果里的一条软件条目。当前只有声明来源；后续合成条目继续
-// 使用这个输出形态。
+// Item 是按设备查看和跨设备搜索结果里的一条软件条目，来源可能是实测、
+// 声明或两者合成。
 type Item struct {
 	ID             string          `json:"id"`
 	DeviceID       string          `json:"device_id"`

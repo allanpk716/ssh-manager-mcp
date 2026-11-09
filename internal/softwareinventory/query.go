@@ -9,9 +9,7 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
-// CollectionStatus 描述一台设备的采集状态。采集状态表由另一张票实现；
-// 在那之前，查询结果的这个字段固定表示「从未采集」，字段本身先在这里
-// 定型，合并后由采集状态表填充。
+// CollectionStatus 描述一台设备的采集状态；清单是否过期按读取时刻计算。
 type CollectionStatus struct {
 	Collector         string     `json:"collector,omitempty"`
 	ServerEntry       string     `json:"server_entry,omitempty"`
@@ -51,7 +49,7 @@ type QueryItem struct {
 	Note           string          `json:"note,omitempty"`
 	Source         string          `json:"source"`
 	CollectedAt    *time.Time      `json:"collected_at,omitempty"`
-	// ObservedStableKey 供声明认领实测使用；声明-only 条目为空。
+	// ObservedStableKey 供声明认领实测使用；只有声明来源的条目为空。
 	ObservedStableKey string `json:"observed_stable_key,omitempty"`
 	DeclaredVersion   string `json:"declared_version,omitempty"`
 	VersionMismatch   bool   `json:"version_mismatch,omitempty"`
