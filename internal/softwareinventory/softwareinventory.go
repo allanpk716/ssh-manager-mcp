@@ -102,10 +102,14 @@ type Item struct {
 	Note           string          `json:"note,omitempty"`
 	Source         string          `json:"source"`
 	// ObservedStableKey 是认领实测时使用的稳定键，只在条目有实测来源时填。
-	ObservedStableKey string `json:"observed_stable_key,omitempty"`
-	DeclaredVersion   string `json:"declared_version,omitempty"`
-	VersionMismatch   bool   `json:"version_mismatch,omitempty"`
-	Mismatch          bool   `json:"mismatch,omitempty"`
+	ObservedStableKey string     `json:"observed_stable_key,omitempty"`
+	DeclaredVersion   string     `json:"declared_version,omitempty"`
+	VersionMismatch   bool       `json:"version_mismatch,omitempty"`
+	Mismatch          bool       `json:"mismatch,omitempty"`
+	ConfirmedAt       *time.Time `json:"confirmed_at,omitempty"`
+	ContainerTag      string     `json:"container_tag,omitempty"`
+	ContainerDigest   string     `json:"container_digest,omitempty"`
+	ContainerRunning  bool       `json:"container_running,omitempty"`
 }
 
 // ItemGroup 是按设备查看时的一个类别分组。系统包默认只返回数量；加参数
@@ -239,5 +243,7 @@ func queryItemAsItem(row QueryItem) Item {
 		BelongsTo: row.BelongsTo, Note: row.Note, Source: row.Source,
 		ObservedStableKey: row.ObservedStableKey, VersionMismatch: row.VersionMismatch,
 		DeclaredVersion: row.DeclaredVersion, Mismatch: row.Mismatch,
+		ConfirmedAt: row.ConfirmedAt, ContainerTag: row.ContainerTag,
+		ContainerDigest: row.ContainerDigest, ContainerRunning: row.ContainerRunning,
 	}
 }
