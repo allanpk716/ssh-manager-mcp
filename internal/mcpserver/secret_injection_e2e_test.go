@@ -154,6 +154,244 @@ func TestSecretEnvironmentInjectionExecCommand(t *testing.T) {
 	}
 }
 
+func TestSecretEnvironmentInjectionExecBackground(t *testing.T) {
+	const secretValue = "background-injected-secret-value"
+	const userCommand = `printf '%s\n' "$HF_TOKEN"`
+
+	st := newStore(t)
+	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "Deploy token", []byte(secretValue), "HF_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+
+	var commandMu sync.Mutex
+	var remoteCommand string
+	var remoteStdin []byte
+	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
+		Password: "pw",
+		ExecStream: func(command string, stdin io.Reader, stdout, stderr io.Writer) int {
+			stdinBytes, err := io.ReadAll(stdin)
+			if err != nil {
+				_, _ = stderr.Write([]byte("read standard input: " + err.Error()))
+				return 1
+			}
+			commandMu.Lock()
+			remoteCommand, remoteStdin = command, stdinBytes
+			commandMu.Unlock()
+
+			localShell := exec.Command("/bin/sh", "-c", command)
+			localShell.Stdin = bytes.NewReader(stdinBytes)
+			localShell.Stdout = stdout
+			localShell.Stderr = stderr
+			if err := localShell.Run(); err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					return exitErr.ExitCode()
+				}
+				_, _ = stderr.Write([]byte(err.Error()))
+				return 1
+			}
+			return 0
+		},
+	})
+	if err := st.AllowSecrets([]string{"API_TOKEN"}, []string{"real"}); err != nil {
+		t.Fatal(err)
+	}
+
+	start := callBackgroundTool(t, clientSession, serverID, userCommand, 5)
+	final := waitBackgroundTerminal(t, clientSession, start.TaskID)
+	if final.Status != bgStatusDone {
+		t.Fatalf("background task status = %q, want done", final.Status)
+	}
+	wantOutput := "{{sshmgr-secret:API_TOKEN}}\n"
+	if final.Stdout != wantOutput {
+		t.Fatalf("background stdout = %q, want %q", final.Stdout, wantOutput)
+	}
+	if len(final.Masked) != 1 || final.Masked[0] != "API_TOKEN" {
+		t.Fatalf("background masked names = %#v", final.Masked)
+	}
+
+	commandMu.Lock()
+	gotCommand, gotStdin := remoteCommand, remoteStdin
+	commandMu.Unlock()
+	if strings.Contains(gotCommand, secretValue) {
+		t.Fatalf("remote background command leaked secret value: %q", gotCommand)
+	}
+	if !strings.Contains(gotCommand, userCommand) {
+		t.Fatalf("remote background command does not retain the original command: %q", gotCommand)
+	}
+	if string(gotStdin) != secretValue {
+		t.Fatalf("remote background standard input = %q, want only the secret value", gotStdin)
+	}
+	auditRows, err := st.QueryAudit(store.AuditFilter{Actions: []string{"exec-bg-start"}, Statuses: []string{"ok"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditRows) != 1 {
+		t.Fatalf("successful background start audit rows = %d, want 1: %#v", len(auditRows), auditRows)
+	}
+	if len(auditRows[0].InjectedEnvironmentNames) != 1 || auditRows[0].InjectedEnvironmentNames[0] != "HF_TOKEN" {
+		t.Fatalf("background audit injected environment names = %#v", auditRows[0].InjectedEnvironmentNames)
+	}
+	if strings.Contains(strings.Join(auditRows[0].InjectedEnvironmentNames, "\n"), secretValue) {
+		t.Fatal("background audit injected environment names leaked secret value")
+	}
+}
+
+func TestSecretEnvironmentInjectionBackgroundWarnings(t *testing.T) {
+	st := newStore(t)
+	if err := st.AddSecretWithEnvironmentName("GOOD_TOKEN", "", []byte("background-good-secret"), "GOOD_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecretWithEnvironmentName("ZERO_TOKEN", "", []byte("background-zero-byte-value\x00"), "ZERO_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
+		Password: "pw",
+		ExecStream: func(_ string, stdin io.Reader, stdout, _ io.Writer) int {
+			_, _ = io.ReadAll(stdin)
+			_, _ = stdout.Write([]byte("ran"))
+			return 0
+		},
+	})
+	if err := st.AllowSecrets([]string{"GOOD_TOKEN", "ZERO_TOKEN"}, []string{"real"}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_background",
+		Arguments: map[string]any{"server_id": serverID, "command": "printf ran", "timeout_seconds": 5},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("exec_background failed: err=%v result=%+v", err, result.Content)
+	}
+	var start struct {
+		TaskID            string   `json:"task_id"`
+		Status            string   `json:"status"`
+		InjectionWarnings []string `json:"injection_warnings"`
+	}
+	unmarshalToolJSON(t, result, &start)
+	if start.TaskID == "" || start.Status != bgStatusRunning {
+		t.Fatalf("exec_background output = %+v", start)
+	}
+	wantWarnings := []string{"环境变量 ZERO_TOKEN 未注入：值含空字节"}
+	if len(start.InjectionWarnings) != 1 || start.InjectionWarnings[0] != wantWarnings[0] {
+		t.Fatalf("start injection warnings = %#v, want %#v", start.InjectionWarnings, wantWarnings)
+	}
+
+	final := waitBackgroundTerminal(t, clientSession, start.TaskID)
+	wantOutput := "ran\n环境变量 ZERO_TOKEN 未注入：值含空字节\n"
+	if final.Stdout != wantOutput {
+		t.Fatalf("background warning stdout = %q, want %q", final.Stdout, wantOutput)
+	}
+}
+
+func TestSecretEnvironmentInjectionBackgroundSurvivesStoreRevocation(t *testing.T) {
+	const secretValue = "background-revocation-secret-value"
+	const userCommand = `printf '%s\n' "$HF_TOKEN"`
+
+	storeA := newStore(t)
+	if err := storeA.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(secretValue), "HF_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var commandMu sync.Mutex
+	var commands []string
+	var standardInputs [][]byte
+	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		ExecStream: func(command string, stdin io.Reader, stdout, stderr io.Writer) int {
+			stdinBytes, err := io.ReadAll(stdin)
+			if err != nil {
+				_, _ = stderr.Write([]byte(err.Error()))
+				return 1
+			}
+			commandMu.Lock()
+			commands = append(commands, command)
+			standardInputs = append(standardInputs, stdinBytes)
+			callIndex := len(commands) - 1
+			commandMu.Unlock()
+
+			localShell := exec.Command("/bin/sh", "-c", command)
+			localShell.Stdin = bytes.NewReader(stdinBytes)
+			localShell.Stdout = stdout
+			localShell.Stderr = stderr
+			if err := localShell.Run(); err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					return exitErr.ExitCode()
+				}
+				_, _ = stderr.Write([]byte(err.Error()))
+				return 1
+			}
+			if callIndex == 0 {
+				close(firstStarted)
+				<-releaseFirst
+			}
+			return 0
+		},
+	})
+	defer cleanup()
+	serverID := seedRealServer(t, storeA, "real", addr, hostKey, "")
+	profileID, err := storeA.AddProfile("agent-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storeA.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeA.AllowSecrets([]string{"API_TOKEN"}, []string{"real"}); err != nil {
+		t.Fatal(err)
+	}
+
+	current := storeA
+	server, tunnels, tasks, err := NewServerFromSource(func() *store.Store { return current }, profileID, "project-test", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tunnels.CloseAll()
+	defer tasks.CloseAll()
+	clientSession := connectInMemoryMCPClient(t, server)
+
+	first := callBackgroundTool(t, clientSession, serverID, userCommand, 5)
+	<-firstStarted
+	if err := storeA.DisallowSecrets([]string{"API_TOKEN"}, []string{"real"}); err != nil {
+		t.Fatal(err)
+	}
+	revokedSnapshot, err := storeA.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokedStore := newStore(t)
+	if err := revokedStore.ImportSnapshot(revokedSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	current = revokedStore
+	close(releaseFirst)
+
+	firstFinal := waitBackgroundTerminal(t, clientSession, first.TaskID)
+	if firstFinal.Status != bgStatusDone || firstFinal.Stdout != "{{sshmgr-secret:API_TOKEN}}\n" {
+		t.Fatalf("started task after revocation: status=%q stdout=%q", firstFinal.Status, firstFinal.Stdout)
+	}
+
+	second := callBackgroundTool(t, clientSession, serverID, userCommand, 5)
+	secondFinal := waitBackgroundTerminal(t, clientSession, second.TaskID)
+	if secondFinal.Status != bgStatusDone || secondFinal.Stdout != "\n" {
+		t.Fatalf("new task after revocation: status=%q stdout=%q", secondFinal.Status, secondFinal.Stdout)
+	}
+
+	commandMu.Lock()
+	gotCommands, gotInputs := append([]string(nil), commands...), append([][]byte(nil), standardInputs...)
+	commandMu.Unlock()
+	if len(gotCommands) != 2 || len(gotInputs) != 2 {
+		t.Fatalf("background calls = %d commands, %d inputs, want 2: commands=%#v inputs=%#v", len(gotCommands), len(gotInputs), gotCommands, gotInputs)
+	}
+	if !strings.Contains(gotCommands[0], "HF_TOKEN") || strings.Contains(gotCommands[0], secretValue) || string(gotInputs[0]) != secretValue {
+		t.Fatalf("started task lost its fixed injection: command=%q stdin=%q", gotCommands[0], gotInputs[0])
+	}
+	if gotCommands[1] != userCommand || strings.Contains(gotCommands[1], secretValue) || len(gotInputs[1]) != 0 {
+		t.Fatalf("new task injected after revocation: command=%q stdin=%q", gotCommands[1], gotInputs[1])
+	}
+}
+
 func TestSecretEnvironmentInjectionScopeAndRevocation(t *testing.T) {
 	const secretValue = "authorized-secret-value"
 	st := newStore(t)

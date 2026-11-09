@@ -242,9 +242,10 @@ type ExecBackgroundInput struct {
 type BgStartOutput struct {
 	MaskedOutput
 	ConnectionNotesOutput
-	TaskID                  string `json:"task_id" jsonschema:"opaque task id; poll its output with exec_output, stop it with exec_stop"`
-	EffectiveTimeoutSeconds int    `json:"effective_timeout_seconds" jsonschema:"the clamped timeout actually in effect, in seconds (default and cap: 86400 = 24h)"`
-	Status                  string `json:"status" jsonschema:"task status right after start; running"`
+	TaskID                  string   `json:"task_id" jsonschema:"opaque task id; poll its output with exec_output, stop it with exec_stop"`
+	EffectiveTimeoutSeconds int      `json:"effective_timeout_seconds" jsonschema:"the clamped timeout actually in effect, in seconds (default and cap: 86400 = 24h)"`
+	Status                  string   `json:"status" jsonschema:"task status right after start; running"`
+	InjectionWarnings       []string `json:"injection_warnings,omitempty" jsonschema:"variables that could not be injected before this task; the same warning lines are appended to stdout when the task finishes"`
 }
 
 // ExecOutputInput is the exec_output tool input (Plan 32 T7). The numeric

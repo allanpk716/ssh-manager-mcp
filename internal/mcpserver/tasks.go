@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,6 +85,9 @@ type bgTask struct {
 	// metaBox 挂入 (exec 返回后已定值, 终态后只读; running 期间为 nil)。无秘密,
 	// 仅 outcome/attested uid/诊断摘录。
 	sudoMeta *sshbroker.SudoMeta
+	// injectionWarnings 是启动时固定下来的未注入警告，只含变量名与原因；
+	// 任务进入终态时追加到标准输出末尾。
+	injectionWarnings []string
 	// 代际广播（Task 5 用; 本任务先占位字段）
 	gen     uint64
 	waitCh  chan struct{}
@@ -97,6 +101,7 @@ type BgTaskSpec struct {
 	ProjectID, ServerID, Command string
 	Sudo                         bool
 	Timeout                      time.Duration                        // 已钳定
+	InjectionWarnings            []string                             // 启动时固定的未注入警告
 	Run                          func(ctx context.Context, t *bgTask) // T3 测试注 no-op; T4 接真引擎
 	PreFinished                  bool                                 // 白盒: 直接以终态插入
 	// AuditStart 回写 start(ok) 审计行 (ForProfile 传 st.WriteAudit 闭包, 闭包内
@@ -367,6 +372,7 @@ func (m *TaskManager) insertLocked(spec *BgTaskSpec, readKeys, writeKeys []strin
 		deadline:  now.Add(spec.Timeout),
 		waitCh:    make(chan struct{}), // T5: 代际广播初代通道 (notify 的 close+换新对象)
 	}
+	t.injectionWarnings = append([]string(nil), spec.InjectionWarnings...)
 	if len(readKeys)+len(writeKeys) > 0 {
 		t.relayKeys = make(map[string]struct{}, len(readKeys)+len(writeKeys))
 		for _, k := range readKeys {
@@ -747,6 +753,9 @@ func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Cli
 	default:
 		t.status, t.exitCode, t.finishedAt = bgStatusDone, code, m.now()
 	}
+	if !m.closed {
+		t.appendInjectionWarnings()
+	}
 	if sudoMetaBox != nil {
 		t.sudoMeta = sudoMetaBox // Plan 41 §2: 终态挂载 (exec 返回后值已定, 之后只读)
 	}
@@ -765,6 +774,24 @@ func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Cli
 	}
 }
 
+func (t *bgTask) appendInjectionWarnings() {
+	if len(t.injectionWarnings) == 0 {
+		return
+	}
+	var warnings strings.Builder
+	if total := t.stdout.Total(); total > 0 {
+		lastByte, _, _ := t.stdout.Snapshot(total - 1)
+		if len(lastByte) == 0 || lastByte[len(lastByte)-1] != '\n' {
+			warnings.WriteByte('\n')
+		}
+	}
+	for _, line := range t.injectionWarnings {
+		warnings.WriteString(line)
+		warnings.WriteByte('\n')
+	}
+	_, _ = t.stdout.Write([]byte(warnings.String()))
+}
+
 // BgStartSpec 是 Start 的入参 (Task 6 的 ForProfile 构造): profile 门与凭据
 // 已过, 主机密钥存储随服务器条目传入。SudoPass 瞬时传递——用完即弃, 不入 task
 // 记录 (spec §1: task 记录不持有任何秘密)。
@@ -773,11 +800,15 @@ type BgStartSpec struct {
 	Sudo                         bool
 	SudoPass                     string /*瞬时传递,用完即弃,不入 task 记录*/
 	TimeoutSec                   int
-	Server                       *models.Server
-	Auth                         ssh.AuthMethod
-	HostKeys                     sshbroker.HostKeyStore
-	DialTopology                 sshbroker.DialTopologySource
-	DialSuccessCache             sshbroker.DialSuccessCacheSource
+	// ExecOption 携带启动时固定下来的每条命令前注入步骤。
+	ExecOption               sshbroker.ExecOption
+	InjectedEnvironmentNames []string
+	InjectionWarnings        []string
+	Server                   *models.Server
+	Auth                     ssh.AuthMethod
+	HostKeys                 sshbroker.HostKeyStore
+	DialTopology             sshbroker.DialTopologySource
+	DialSuccessCache         sshbroker.DialSuccessCacheSource
 }
 
 // clampBgTimeout 钳定后台生效超时 (spec §3): 0/缺省 → cap (生产即 24h
@@ -807,11 +838,15 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 	t0 := time.Now()
 	effective := clampBgTimeout(spec.TimeoutSec, m.runCap)
 	auditStart := func(status string) {
-		_ = st.WriteAudit(store.AuditRow{
+		row := store.AuditRow{
 			TS: t0, ProjectID: spec.ProjectID, ServerID: spec.ServerID,
 			Action: "exec-bg-start", Command: spec.Command, Sudo: spec.Sudo,
 			Status: status, DurationMS: time.Since(t0).Milliseconds(),
-		})
+		}
+		if status == "ok" {
+			row.InjectedEnvironmentNames = append([]string(nil), spec.InjectedEnvironmentNames...)
+		}
+		_ = st.WriteAudit(row)
 	}
 	if err := m.Reserve(); err != nil {
 		return "", 0, nil, err
@@ -845,17 +880,18 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 			sudoMetaBox = sm
 			return code, timedOut, rerr
 		}
-		return cli.ExecWriters(ctx, spec.Command, 0, stdout, stderr)
+		return cli.ExecWriters(ctx, spec.Command, 0, stdout, stderr, spec.ExecOption)
 	}
 	tid, ierr := m.Insert(&BgTaskSpec{
-		ProjectID:  spec.ProjectID,
-		ServerID:   spec.ServerID,
-		Command:    spec.Command,
-		Sudo:       spec.Sudo,
-		Timeout:    effective,
-		AuditStart: func() { auditStart("ok") }, // Insert 持锁段内、goroutine 前调用
-		AuditEnd:   func(row store.AuditRow) error { return st.WriteAudit(row) },
-		Run:        func(ctx context.Context, t *bgTask) { m.runTask(ctx, t, cli, exec, &sudoMetaBox) },
+		ProjectID:         spec.ProjectID,
+		ServerID:          spec.ServerID,
+		Command:           spec.Command,
+		Sudo:              spec.Sudo,
+		Timeout:           effective,
+		InjectionWarnings: append([]string(nil), spec.InjectionWarnings...),
+		AuditStart:        func() { auditStart("ok") }, // Insert 持锁段内、goroutine 前调用
+		AuditEnd:          func(row store.AuditRow) error { return st.WriteAudit(row) },
+		Run:               func(ctx context.Context, t *bgTask) { m.runTask(ctx, t, cli, exec, &sudoMetaBox) },
 	})
 	if ierr != nil {
 		_ = cli.Close() // Insert 拒绝 (manager 已关): 锁外关, 零泄漏

@@ -66,16 +66,28 @@ func (p environmentInjectionPlan) execOption() sshbroker.ExecOption {
 }
 
 func (p environmentInjectionPlan) appendWarnings(stdout string) string {
-	if len(p.warnings) == 0 {
+	warnings := p.warningLines()
+	if len(warnings) == 0 {
 		return stdout
 	}
 	if stdout != "" && !strings.HasSuffix(stdout, "\n") {
 		stdout += "\n"
 	}
-	for _, warning := range p.warnings {
-		stdout += "环境变量 " + warning.EnvironmentName + " 未注入：" + warning.Reason + "\n"
+	for _, warning := range warnings {
+		stdout += warning + "\n"
 	}
 	return stdout
+}
+
+func (p environmentInjectionPlan) warningLines() []string {
+	if len(p.warnings) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(p.warnings))
+	for _, warning := range p.warnings {
+		lines = append(lines, "环境变量 "+warning.EnvironmentName+" 未注入："+warning.Reason)
+	}
+	return lines
 }
 
 func buildEnvironmentInjectionPlan(st *store.Store, server *models.Server, privileged bool) environmentInjectionPlan {
