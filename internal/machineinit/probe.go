@@ -13,8 +13,8 @@ import (
 )
 
 // ServeWebUIState 是 serve 独立 Web UI 的探测结果。Known 为 false 表示本
-// 机没有可打开的 vault，端口与地址无法推导；Running 只在 Known 为 true 时
-// 有意义。
+// 机没有可打开的 vault，监听地址无法推导；Running 仍表示默认端口是否有
+// 服务响应。
 type ServeWebUIState struct {
 	Known             bool
 	Port              int
@@ -23,9 +23,10 @@ type ServeWebUIState struct {
 	Running           bool
 }
 
-// ProbeServeWebUI 探测 serve 的独立 Web UI：读取 `serve.ui_port`（默认
-// 7879），按现有监听规划推导地址列表，再对本机回环地址上的端口发 HTTPS
-// 请求（跳过证书校验，只判断是否在运行）。
+// ProbeServeWebUI 探测 serve 的独立 Web UI：vault 已存在时读取
+// `serve.ui_port` 并按现有监听规划推导地址列表；vault 尚未存在时按默认端口
+// 探测。两种情况都对本机回环地址发 HTTPS 请求（跳过证书校验，只判断是否
+// 在运行）。
 func ProbeServeWebUI() (ServeWebUIState, error) {
 	if !roles.VaultExists() {
 		state := ServeWebUIState{Port: mcpserver.DefaultWebUIPort}
