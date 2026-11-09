@@ -547,6 +547,9 @@ func TestSecretEnvironmentInjectionPowerShell(t *testing.T) {
 	if !strings.Contains(gotCommand, userCommand) || !strings.Contains(gotCommand, "$env:HF_TOKEN") {
 		t.Fatalf("remote command does not retain the PowerShell user command: %q", gotCommand)
 	}
+	if strings.Contains(gotCommand, "[Console]::OutputEncoding") {
+		t.Fatalf("PowerShell injection must not change the user command output encoding: %q", gotCommand)
+	}
 	if string(gotStdin) != secretValue {
 		t.Fatalf("remote standard input = %q, want only the framed secret value", gotStdin)
 	}
@@ -648,6 +651,11 @@ func TestSecretEnvironmentInjectionWindowsCmd(t *testing.T) {
 	}
 	if !strings.Contains(gotCommand, userCommand) || !strings.Contains(gotCommand, "set /p HF_TOKEN=") {
 		t.Fatalf("remote command does not retain the cmd injection and user command: %q", gotCommand)
+	}
+	restore := strings.Index(gotCommand, "chcp %__sshmgr_original_code_page%")
+	userCommandStart := strings.Index(gotCommand, userCommand)
+	if restore < 0 || userCommandStart < restore {
+		t.Fatalf("cmd injection must restore the original code page before the user command: %q", gotCommand)
 	}
 	if wantStdin := secretValue + "\r\n"; string(gotStdin) != wantStdin {
 		t.Fatalf("remote standard input = %q, want the value followed by a line break", gotStdin)

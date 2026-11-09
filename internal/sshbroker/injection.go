@@ -191,11 +191,11 @@ func writePOSIXWrapper(wrapper *strings.Builder, environments []EnvironmentInjec
 }
 
 // writePowerShellWrapper 用严格 UTF-8 解码按长度读出的字节。值不进入远端
-// 命令文本，封装变量在用户命令开始前清理。
+// 命令文本，封装变量在用户命令开始前清理；读取标准输入字节流不要求改变
+// 用户命令的输出编码。
 func writePowerShellWrapper(wrapper *strings.Builder, environments []EnvironmentInjection) {
 	wrapper.WriteString("$__sshmgr_input_stream = [Console]::OpenStandardInput()\n")
 	wrapper.WriteString("$__sshmgr_utf8 = New-Object System.Text.UTF8Encoding($false, $true)\n")
-	wrapper.WriteString("[Console]::OutputEncoding = $__sshmgr_utf8\n")
 	wrapper.WriteString("$__sshmgr_read = 0\n")
 	wrapper.WriteString("$__sshmgr_count = 0\n")
 	for _, environment := range environments {
@@ -216,14 +216,18 @@ func writePowerShellWrapper(wrapper *strings.Builder, environments []Environment
 	wrapper.WriteString("Remove-Variable __sshmgr_count\n")
 }
 
-// writeWindowsCmdWrapper 先切到 UTF-8 代码页，再用 set /p 逐行读取值。
-// 每个值在标准输入末尾补回车换行；这个分隔符不进入环境变量。
+// writeWindowsCmdWrapper 只在读值期间切到 UTF-8 代码页，用 set /p 逐行读取
+// 值，读完先恢复原代码页再执行用户命令。每个值在标准输入末尾补回车换行；
+// 这个分隔符不进入环境变量。
 func writeWindowsCmdWrapper(wrapper *strings.Builder, environments []EnvironmentInjection) {
+	wrapper.WriteString(`for /f "tokens=2 delims=:" %A in ('chcp') do set "__sshmgr_original_code_page=%A"` + "\n")
 	wrapper.WriteString("chcp 65001 >NUL\n")
 	for _, environment := range environments {
 		fmt.Fprintf(wrapper, "set \"%s=\"\n", environment.EnvironmentName)
 		fmt.Fprintf(wrapper, "set /p %s=\n", environment.EnvironmentName)
 	}
+	wrapper.WriteString("chcp %__sshmgr_original_code_page% >NUL\n")
+	wrapper.WriteString("set \"__sshmgr_original_code_page=\"\n")
 }
 
 func validEnvironmentName(name string) bool {
