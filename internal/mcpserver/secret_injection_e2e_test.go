@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -29,7 +30,7 @@ import (
 // observes both the command text and the standard input seen by the target.
 func TestSecretEnvironmentInjectionExecCommand(t *testing.T) {
 	const secretValue = "injected-secret-%-backslash-\\-value\n"
-	const secondSecretValue = "second-injected-value\n"
+	const secondSecretValue = "second-injected-value-\xff\n"
 	const userCommand = `if IFS= read -r extra_stdin; then printf 'unexpected standard input'; fi; printf '%s\n' "$HF_TOKEN"; printf '%s\n' "$SECOND_TOKEN"`
 
 	st := newStore(t)
@@ -490,6 +491,289 @@ func TestSecretEnvironmentInjectionScopeAndRevocation(t *testing.T) {
 	}
 	if strings.Contains(gotCommands[2], "API_TOKEN") {
 		t.Fatalf("command after revocation still contains injection variable name: %q", gotCommands[2])
+	}
+}
+
+func TestSecretEnvironmentInjectionPowerShell(t *testing.T) {
+	const secretValue = "windows-secret-%-\\-\"中文\"\nsecond-line"
+	const userCommand = `Write-Output $env:HF_TOKEN`
+	st := newStore(t)
+	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(secretValue), "HF_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+
+	var commandMu sync.Mutex
+	var remoteCommand string
+	var remoteStdin []byte
+	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
+		Password: "pw",
+		Exec: func(command string, stdin io.Reader) (string, string, int) {
+			stdinBytes, err := io.ReadAll(stdin)
+			if err != nil {
+				return "", "read standard input: " + err.Error(), 1
+			}
+			commandMu.Lock()
+			remoteCommand, remoteStdin = command, stdinBytes
+			commandMu.Unlock()
+			return runRecordedPowerShellCommand(t, command, stdinBytes)
+		},
+	})
+	if err := st.AllowSecrets([]string{"API_TOKEN"}, []string{"real"}); err != nil {
+		t.Fatal(err)
+	}
+	setRealServerShell(t, st, serverID, models.ShellPowerShell)
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": serverID, "command": userCommand},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	var output struct {
+		Stdout string `json:"stdout"`
+	}
+	unmarshalToolJSON(t, result, &output)
+
+	commandMu.Lock()
+	gotCommand, gotStdin := remoteCommand, remoteStdin
+	commandMu.Unlock()
+	if strings.Contains(gotCommand, secretValue) {
+		t.Fatalf("remote command leaked secret value: %q", gotCommand)
+	}
+	if !strings.Contains(gotCommand, userCommand) || !strings.Contains(gotCommand, "$env:HF_TOKEN") {
+		t.Fatalf("remote command does not retain the PowerShell user command: %q", gotCommand)
+	}
+	if string(gotStdin) != secretValue {
+		t.Fatalf("remote standard input = %q, want only the framed secret value", gotStdin)
+	}
+	if output.Stdout != "{{sshmgr-secret:API_TOKEN}}\n" {
+		t.Fatalf("stdout = %q", output.Stdout)
+	}
+}
+
+func runRecordedPowerShellCommand(t *testing.T, command string, stdinBytes []byte) (string, string, int) {
+	t.Helper()
+	powerShellName := "pwsh"
+	if _, err := exec.LookPath(powerShellName); err != nil {
+		if runtime.GOOS != "windows" {
+			return "ran", "", 0
+		}
+		powerShellName = "powershell"
+		if _, err := exec.LookPath(powerShellName); err != nil {
+			return "ran", "", 0
+		}
+	}
+	script, err := os.CreateTemp("", "remote-command-*.ps1")
+	if err != nil {
+		return "", err.Error(), 1
+	}
+	if _, err := script.Write([]byte(command)); err != nil {
+		_ = script.Close()
+		_ = os.Remove(script.Name())
+		return "", err.Error(), 1
+	}
+	if err := script.Close(); err != nil {
+		_ = os.Remove(script.Name())
+		return "", err.Error(), 1
+	}
+	defer os.Remove(script.Name())
+	localShell := exec.Command(powerShellName, "-NoProfile", "-NonInteractive", "-File", script.Name())
+	localShell.Stdin = bytes.NewReader(stdinBytes)
+	output := &bytes.Buffer{}
+	errors := &bytes.Buffer{}
+	localShell.Stdout = output
+	localShell.Stderr = errors
+	if err := localShell.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return output.String(), errors.String(), exitErr.ExitCode()
+		}
+		return output.String(), errors.String() + err.Error(), 1
+	}
+	return output.String(), errors.String(), 0
+}
+
+func TestSecretEnvironmentInjectionWindowsCmd(t *testing.T) {
+	const secretValue = `cmd-secret-%-^&!-"中文"`
+	const userCommand = "set HF_TOKEN"
+	st := newStore(t)
+	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(secretValue), "HF_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+
+	var commandMu sync.Mutex
+	var remoteCommand string
+	var remoteStdin []byte
+	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
+		Password: "pw",
+		Exec: func(command string, stdin io.Reader) (string, string, int) {
+			stdinBytes, err := io.ReadAll(stdin)
+			if err != nil {
+				return "", "read standard input: " + err.Error(), 1
+			}
+			commandMu.Lock()
+			remoteCommand, remoteStdin = command, stdinBytes
+			commandMu.Unlock()
+			return runRecordedWindowsCmdCommand(t, command, stdinBytes)
+		},
+	})
+	if err := st.AllowSecrets([]string{"API_TOKEN"}, []string{"real"}); err != nil {
+		t.Fatal(err)
+	}
+	setRealServerShell(t, st, serverID, models.ShellWindowsCmd)
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": serverID, "command": userCommand},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	var output struct {
+		Stdout string `json:"stdout"`
+	}
+	unmarshalToolJSON(t, result, &output)
+
+	commandMu.Lock()
+	gotCommand, gotStdin := remoteCommand, remoteStdin
+	commandMu.Unlock()
+	if strings.Contains(gotCommand, secretValue) {
+		t.Fatalf("remote command leaked secret value: %q", gotCommand)
+	}
+	if !strings.Contains(gotCommand, userCommand) || !strings.Contains(gotCommand, "set /p HF_TOKEN=") {
+		t.Fatalf("remote command does not retain the cmd injection and user command: %q", gotCommand)
+	}
+	if wantStdin := secretValue + "\r\n"; string(gotStdin) != wantStdin {
+		t.Fatalf("remote standard input = %q, want the value followed by a line break", gotStdin)
+	}
+	if runtime.GOOS == "windows" {
+		if !strings.Contains(output.Stdout, "{{sshmgr-secret:API_TOKEN}}") || strings.Contains(output.Stdout, secretValue) {
+			t.Fatalf("stdout = %q", output.Stdout)
+		}
+	} else if output.Stdout != "ran" {
+		t.Fatalf("stdout = %q", output.Stdout)
+	}
+}
+
+func runRecordedWindowsCmdCommand(t *testing.T, command string, stdinBytes []byte) (string, string, int) {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return "ran", "", 0
+	}
+	localShell := exec.Command("cmd", "/d", "/c", command)
+	localShell.Stdin = bytes.NewReader(stdinBytes)
+	output := &bytes.Buffer{}
+	errors := &bytes.Buffer{}
+	localShell.Stdout = output
+	localShell.Stderr = errors
+	if err := localShell.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return output.String(), errors.String(), exitErr.ExitCode()
+		}
+		return output.String(), errors.String() + err.Error(), 1
+	}
+	return output.String(), errors.String(), 0
+}
+
+func TestSecretEnvironmentInjectionWindowsValueWarningsDoNotStopCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		shell    models.ShellType
+		value    []byte
+		wantWarn string
+	}{
+		{
+			name:     "PowerShell 值不是合法 UTF-8",
+			shell:    models.ShellPowerShell,
+			value:    []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+			wantWarn: "环境变量 WINDOWS_TOKEN 未注入：Windows 上值不是合法 UTF-8\n",
+		},
+		{
+			name:     "cmd 值不是合法 UTF-8",
+			shell:    models.ShellWindowsCmd,
+			value:    []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+			wantWarn: "环境变量 WINDOWS_TOKEN 未注入：Windows 上值不是合法 UTF-8\n",
+		},
+		{
+			name:     "cmd 值含换行",
+			shell:    models.ShellWindowsCmd,
+			value:    []byte("first\r\nsecond\n"),
+			wantWarn: "环境变量 WINDOWS_TOKEN 未注入：cmd 下值含换行\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			st := newStore(t)
+			if err := st.AddSecretWithEnvironmentName("WINDOWS_SECRET", "", test.value, "WINDOWS_TOKEN"); err != nil {
+				t.Fatal(err)
+			}
+			var commandMu sync.Mutex
+			var remoteCommand string
+			var remoteStdin []byte
+			clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
+				Password: "pw",
+				Exec: func(command string, stdin io.Reader) (string, string, int) {
+					stdinBytes, err := io.ReadAll(stdin)
+					if err != nil {
+						return "", "read standard input: " + err.Error(), 1
+					}
+					commandMu.Lock()
+					remoteCommand, remoteStdin = command, stdinBytes
+					commandMu.Unlock()
+					return "ran", "", 0
+				},
+			})
+			if err := st.AllowSecrets([]string{"WINDOWS_SECRET"}, []string{"real"}); err != nil {
+				t.Fatal(err)
+			}
+			setRealServerShell(t, st, serverID, test.shell)
+
+			result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+				Name:      "exec_command",
+				Arguments: map[string]any{"server_id": serverID, "command": "echo ok"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.IsError {
+				t.Fatalf("exec_command failed: %+v", result.Content)
+			}
+			var output struct {
+				Stdout string `json:"stdout"`
+			}
+			unmarshalToolJSON(t, result, &output)
+
+			commandMu.Lock()
+			gotCommand, gotStdin := remoteCommand, remoteStdin
+			commandMu.Unlock()
+			if want := "ran\n" + test.wantWarn; output.Stdout != want {
+				t.Fatalf("stdout = %q, want %q", output.Stdout, want)
+			}
+			if len(gotStdin) != 0 {
+				t.Fatalf("remote standard input = %q, want empty", gotStdin)
+			}
+			if gotCommand != "echo ok" {
+				t.Fatalf("remote command = %q, want only the original user command", gotCommand)
+			}
+		})
+	}
+}
+
+func setRealServerShell(t *testing.T, st *store.Store, serverID string, shell models.ShellType) {
+	t.Helper()
+	server, err := st.GetServer(serverID)
+	if err != nil || server == nil {
+		t.Fatalf("read server: %v %v", server, err)
+	}
+	server.ShellType = shell
+	if err := st.UpdateServer(server); err != nil {
+		t.Fatal(err)
 	}
 }
 
