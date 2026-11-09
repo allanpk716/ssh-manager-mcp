@@ -234,6 +234,7 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 		err = fmt.Errorf("server %s not found", serverID)
 		return
 	}
+	injectionPlan := buildEnvironmentInjectionPlan(st, srv, sudo)
 
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
@@ -312,5 +313,7 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 	status = "ok"
 	out = parseCtxOutput(res.Stdout, nonce, sudo)
 	out.ConnectionNotes = connectionNotes
+	out.InjectedEnvironmentNames = injectionPlan.injectedNames()
+	out.UninjectedEnvironmentVariables = injectionPlan.uninjectedVariables()
 	return
 }

@@ -106,6 +106,13 @@ type ExecContextInput struct {
 	Sudo     bool   `json:"sudo,omitempty" jsonschema:"true to capture the context of the PRIVILEGED exec channel (uid should be 0); false = the plain login-user channel. Requires has_sudo=true."`
 }
 
+// UninjectedEnvironmentVariable 是请求的执行层无法注入的一个环境变量及原因。
+// 它永不携带机密值。
+type UninjectedEnvironmentVariable struct {
+	EnvironmentName string `json:"environment_name" jsonschema:"environment variable name that will not be injected"`
+	Reason          string `json:"reason" jsonschema:"why this environment variable will not be injected; never includes the value"`
+}
+
 // ExecContextOutput is the exec_context tool output (Plan 41 §3): the true
 // execution context of the exec channel, captured in ONE round — the manual
 // alternative (hand-assembling `id; cat /proc/self/uid_map; …`) rides the
@@ -116,18 +123,20 @@ type ExecContextInput struct {
 type ExecContextOutput struct {
 	MaskedOutput
 	ConnectionNotesOutput
-	UID           int    `json:"uid" jsonschema:"real uid the channel runs as (0 on the sudo=true path if elevation succeeded)"`
-	GID           int    `json:"gid" jsonschema:"real gid"`
-	Groups        string `json:"groups" jsonschema:"supplementary groups (raw id(1) groups= segment)"`
-	TTY           string `json:"tty" jsonschema:"\"tty\" | \"no-tty\" (exec channels have no PTY — \"no-tty\" on the MCP path is expected, not an anomaly)"`
-	UIDMap        string `json:"uid_map" jsonschema:"user-namespace mapping (/proc/self/uid_map); \"0 0 4294967295\" = initial namespace (real root, not userns fakeroot)"`
-	LSMLabel      string `json:"lsm_label" jsonschema:"LSM confinement label (/proc/self/attr/current); \"unconfined\" under AppArmor; \"none\" when unreadable"`
-	SSHClient     string `json:"ssh_client" jsonschema:"client ip port serverport of the SSH connection (captured pre-elevation)"`
-	SSHConnection string `json:"ssh_connection" jsonschema:"client ip port serverip serverport (captured pre-elevation)"`
-	PID           int    `json:"pid" jsonschema:"shell pid on the remote side"`
-	PPID          int    `json:"ppid" jsonschema:"parent pid (the sshd-side process)"`
-	Comm          string `json:"comm" jsonschema:"shell executable name (bash on the sudo path)"`
-	Elevated      bool   `json:"elevated" jsonschema:"true iff captured via the sudo=true path"`
+	UID                            int                             `json:"uid" jsonschema:"real uid the channel runs as (0 on the sudo=true path if elevation succeeded)"`
+	GID                            int                             `json:"gid" jsonschema:"real gid"`
+	Groups                         string                          `json:"groups" jsonschema:"supplementary groups (raw id(1) groups= segment)"`
+	TTY                            string                          `json:"tty" jsonschema:"\"tty\" | \"no-tty\" (exec channels have no PTY — \"no-tty\" on the MCP path is expected, not an anomaly)"`
+	UIDMap                         string                          `json:"uid_map" jsonschema:"user-namespace mapping (/proc/self/uid_map); \"0 0 4294967295\" = initial namespace (real root, not userns fakeroot)"`
+	LSMLabel                       string                          `json:"lsm_label" jsonschema:"LSM confinement label (/proc/self/attr/current); \"unconfined\" under AppArmor; \"none\" when unreadable"`
+	SSHClient                      string                          `json:"ssh_client" jsonschema:"client ip port serverport of the SSH connection (captured pre-elevation)"`
+	SSHConnection                  string                          `json:"ssh_connection" jsonschema:"client ip port serverip serverport (captured pre-elevation)"`
+	PID                            int                             `json:"pid" jsonschema:"shell pid on the remote side"`
+	PPID                           int                             `json:"ppid" jsonschema:"parent pid (the sshd-side process)"`
+	Comm                           string                          `json:"comm" jsonschema:"shell executable name (bash on the sudo path)"`
+	Elevated                       bool                            `json:"elevated" jsonschema:"true iff captured via the sudo=true path"`
+	InjectedEnvironmentNames       []string                        `json:"injected_environment_names" jsonschema:"environment variable names this execution layer will inject; empty means none; values are never included"`
+	UninjectedEnvironmentVariables []UninjectedEnvironmentVariable `json:"uninjected_environment_variables" jsonschema:"environment variables this execution layer cannot inject, with reasons; empty means none"`
 }
 
 // DownloadInput is the download_file tool input.

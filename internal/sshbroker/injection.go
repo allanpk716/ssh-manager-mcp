@@ -7,13 +7,13 @@ import (
 )
 
 // ExecTargetLayer 表示注入发生在 SSH 会话的哪一层。普通层是登录 shell；
-// 提权层是 sudo 之后的 shell。后续提权注入实现复用同一组选项。
+// 提权层是 sudo 之后的 shell。
 type ExecTargetLayer string
 
 const (
-	// ExecLayerNormal 是当前已实现的普通层注入。
+	// ExecLayerNormal 表示在登录 shell 层注入。
 	ExecLayerNormal ExecTargetLayer = "normal"
-	// ExecLayerPrivileged 供提权层注入扩展使用。
+	// ExecLayerPrivileged 表示在 sudo 之后的 shell 层注入。
 	ExecLayerPrivileged ExecTargetLayer = "privileged"
 )
 
@@ -75,11 +75,19 @@ type preparedExec struct {
 }
 
 func prepareExec(command string, options ExecInjectionOptions) (preparedExec, error) {
+	return prepareExecForTargetLayer(command, options, ExecLayerNormal)
+}
+
+func preparePrivilegedExec(command string, options ExecInjectionOptions) (preparedExec, error) {
+	return prepareExecForTargetLayer(command, options, ExecLayerPrivileged)
+}
+
+func prepareExecForTargetLayer(command string, options ExecInjectionOptions, targetLayer ExecTargetLayer) (preparedExec, error) {
 	if len(options.Items) == 0 {
 		return preparedExec{command: command}, nil
 	}
-	if options.TargetLayer != ExecLayerNormal {
-		return preparedExec{}, fmt.Errorf("pre-command injection target layer %q is not supported", options.TargetLayer)
+	if options.TargetLayer != targetLayer {
+		return preparedExec{}, fmt.Errorf("pre-command injection target layer %q does not match %q", options.TargetLayer, targetLayer)
 	}
 	if options.ShellType != "" && options.ShellType != "posix" {
 		return preparedExec{}, fmt.Errorf("pre-command injection shell type %q is not supported", options.ShellType)
