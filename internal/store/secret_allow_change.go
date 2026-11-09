@@ -33,6 +33,21 @@ type SecretAllowState struct {
 	Allow      bool
 }
 
+// SecretAllowTargetMissingError 表示交叉格涉及的机密项或服务器条目已经被
+// 删除。确认授权时调用方可按冲突处理，再按剩余格子重新计算预览。
+type SecretAllowTargetMissingError struct {
+	SecretID string
+	ServerID string
+}
+
+// Error 返回可识别的缺失原因，只含标识符，不包含任何机密项值。
+func (e *SecretAllowTargetMissingError) Error() string {
+	if e.ServerID != "" {
+		return fmt.Sprintf("服务器条目 %q 不存在", e.ServerID)
+	}
+	return fmt.Sprintf("机密项 %q 不存在", e.SecretID)
+}
+
 // SecretAllowChangeResult 是一个发生变化 的机密项在授权变更后的结果，
 // AddedServers 与 RemovedServers 只含服务器条目名。
 type SecretAllowChangeResult struct {
@@ -113,14 +128,14 @@ func loadSecretAllowStates(tx *sql.Tx, cells []SecretAllowCell) ([]SecretAllowSt
 		state := SecretAllowState{SecretID: cell.SecretID, ServerID: cell.ServerID}
 		err := tx.QueryRow(`SELECT name FROM secrets WHERE id=?`, cell.SecretID).Scan(&state.SecretName)
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("机密项 %q 不存在", cell.SecretID)
+			return nil, &SecretAllowTargetMissingError{SecretID: cell.SecretID}
 		}
 		if err != nil {
 			return nil, err
 		}
 		err = tx.QueryRow(`SELECT name FROM servers WHERE id=?`, cell.ServerID).Scan(&state.ServerName)
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("服务器条目 %q 不存在", cell.ServerID)
+			return nil, &SecretAllowTargetMissingError{SecretID: cell.SecretID, ServerID: cell.ServerID}
 		}
 		if err != nil {
 			return nil, err

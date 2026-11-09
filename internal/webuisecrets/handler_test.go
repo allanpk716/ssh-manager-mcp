@@ -879,3 +879,88 @@ func TestSecretUploadExactlyAtLimitSucceedsOnNewAndValuePages(t *testing.T) {
 		t.Fatalf("上传解析不得把机密项值写进磁盘临时文件：%v", leftovers)
 	}
 }
+
+// TestSecretAuthorizationConfirmDeletedSecretReturnsConflictWithLatestPreview
+// 覆盖审查第 2 项：预览之后相关机密项被删除，确认页面应返回 409 并展示按
+// 剩余格子重新计算的最新预览，而不是 500。
+func TestSecretAuthorizationConfirmDeletedSecretReturnsConflictWithLatestPreview(t *testing.T) {
+	st := newIntegrationStore(t)
+	webID := mustServer(t, st, "web-1")
+	dbID := mustServer(t, st, "db-1")
+	manager := secretmanage.New(st)
+	for _, name := range []string{"WEB_TOKEN", "DB_TOKEN"} {
+		if err := manager.AddSecret(name, "", "", []byte(name+"-secret-value"), secretmanage.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	views, err := manager.List(secretmanage.ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretIDs := make(map[string]string, len(views))
+	for _, view := range views {
+		secretIDs[view.Name] = view.ID
+	}
+	h := newIntegrationHandler(t, st)
+	previewForm := url.Values{
+		"csrf_token": {csrfToken(t, h)},
+		"secret_id":  {secretIDs["WEB_TOKEN"], secretIDs["DB_TOKEN"]},
+		"server_id":  {webID, dbID},
+	}
+	previewForm.Set("cell__"+secretIDs["WEB_TOKEN"]+"__"+webID, "1")
+	previewForm.Set("cell__"+secretIDs["DB_TOKEN"]+"__"+dbID, "1")
+	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", previewForm)
+	previewBody := body(t, preview)
+	if preview.StatusCode != http.StatusOK {
+		t.Fatalf("授权预览状态码 = %d：\n%s", preview.StatusCode, previewBody)
+	}
+	summary := hiddenValue(t, previewBody, "summary")
+	targets := hiddenValues(t, previewBody, "target")
+
+	if err := manager.DeleteSecret("WEB_TOKEN", secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	confirmForm := url.Values{"csrf_token": {csrfToken(t, h)}, "summary": {summary}, "return_to": {"/ui/secrets/matrix"}}
+	for _, target := range targets {
+		confirmForm.Add("target", target)
+	}
+	conflict := h.do(http.MethodPost, "/ui/secrets/authorization/confirm", confirmForm)
+	conflictBody := body(t, conflict)
+	if conflict.StatusCode != http.StatusConflict {
+		t.Fatalf("机密项被删除后确认应返回 409，实际 %d：\n%s", conflict.StatusCode, conflictBody)
+	}
+	for _, want := range []string{"授权状态已被其他入口修改", "DB_TOKEN", "db-1"} {
+		if !strings.Contains(conflictBody, want) {
+			t.Fatalf("冲突页面缺少 %q：\n%s", want, conflictBody)
+		}
+	}
+	if strings.Contains(conflictBody, "WEB_TOKEN") {
+		t.Fatalf("最新预览不应再包含已删除的机密项：\n%s", conflictBody)
+	}
+	latestSummary := hiddenValue(t, conflictBody, "summary")
+	confirmForm.Set("summary", latestSummary)
+	confirmForm = pruneDeletedTargets(confirmForm, secretIDs["WEB_TOKEN"])
+	confirmed := h.do(http.MethodPost, "/ui/secrets/authorization/confirm", confirmForm)
+	confirmedBody := body(t, confirmed)
+	if confirmed.StatusCode != http.StatusOK || !strings.Contains(confirmedBody, "已保存授权变更") {
+		t.Fatalf("按剩余格子的最新摘要确认应成功，状态码=%d：\n%s", confirmed.StatusCode, confirmedBody)
+	}
+}
+
+// pruneDeletedTargets 从确认表单里去掉属于已删除机密项的目标，模拟操作者
+// 使用最新预览页面重新确认。
+func pruneDeletedTargets(form url.Values, deletedSecretID string) url.Values {
+	out := url.Values{}
+	for key, values := range form {
+		if key != "target" {
+			out[key] = values
+			continue
+		}
+		for _, value := range values {
+			if !strings.HasPrefix(value, deletedSecretID+" ") {
+				out.Add("target", value)
+			}
+		}
+	}
+	return out
+}

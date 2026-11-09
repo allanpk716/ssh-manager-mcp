@@ -83,6 +83,16 @@ func (m *Manager) ApplyAuthorizationChanges(
 ) (AuthorizationApplyResult, error) {
 	states, normalizedTarget, err := m.authorizationStates(target)
 	if err != nil {
+		var missing *store.SecretAllowTargetMissingError
+		if errors.As(err, &missing) {
+			latest, latestErr := m.latestPreviewWithoutMissingTarget(
+				dropMissingAuthorizationCells(target, missing),
+			)
+			if latestErr != nil {
+				return AuthorizationApplyResult{}, latestErr
+			}
+			return AuthorizationApplyResult{}, &AuthorizationConflictError{Latest: latest}
+		}
 		return AuthorizationApplyResult{}, err
 	}
 	preview := buildAuthorizationPreview(states, normalizedTarget)
@@ -107,9 +117,53 @@ func (m *Manager) ApplyAuthorizationChanges(
 			}
 			return AuthorizationApplyResult{}, &AuthorizationConflictError{Latest: latest}
 		}
+		var missing *store.SecretAllowTargetMissingError
+		if errors.As(err, &missing) {
+			latest, latestErr := m.latestPreviewWithoutMissingTarget(
+				dropMissingAuthorizationCells(target, missing),
+			)
+			if latestErr != nil {
+				return AuthorizationApplyResult{}, latestErr
+			}
+			return AuthorizationApplyResult{}, &AuthorizationConflictError{Latest: latest}
+		}
 		return AuthorizationApplyResult{}, err
 	}
 	return AuthorizationApplyResult{Preview: preview, Applied: true}, nil
+}
+
+// latestPreviewWithoutMissingTarget 按仍存在的交叉格重新计算最新预览。多
+// 个条目被删除时逐个剔除后再计算；全部被删除则得到空差异预览。
+func (m *Manager) latestPreviewWithoutMissingTarget(target []AuthorizationCell) (AuthorizationPreview, error) {
+	for {
+		states, normalized, err := m.authorizationStates(target)
+		if err == nil {
+			return buildAuthorizationPreview(states, normalized), nil
+		}
+		var missing *store.SecretAllowTargetMissingError
+		if !errors.As(err, &missing) {
+			return AuthorizationPreview{}, err
+		}
+		next := dropMissingAuthorizationCells(target, missing)
+		if len(next) == len(target) {
+			return AuthorizationPreview{}, err
+		}
+		target = next
+	}
+}
+
+// dropMissingAuthorizationCells 从目标集合里去掉已不存在的交叉格：机密项
+// 被删时去掉它的全部格子，服务器条目被删时只去掉对应格子。
+func dropMissingAuthorizationCells(target []AuthorizationCell, missing *store.SecretAllowTargetMissingError) []AuthorizationCell {
+	out := make([]AuthorizationCell, 0, len(target))
+	for _, cell := range target {
+		if cell.SecretID == missing.SecretID &&
+			(missing.ServerID == "" || cell.ServerID == missing.ServerID) {
+			continue
+		}
+		out = append(out, cell)
+	}
+	return out
 }
 
 // authorizationStates 读取目标格的当前状态，并把目标集合整理成确定的顺

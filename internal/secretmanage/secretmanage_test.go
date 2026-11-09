@@ -366,3 +366,72 @@ func TestAllowAndDisallowKeepMergedMissingErrors(t *testing.T) {
 		t.Fatal("测试误把服务器标识符当作机密项标识符")
 	}
 }
+
+// TestApplyAuthorizationTreatsDeletedCellEntriesAsConflict 覆盖审查第 2 项：
+// 预览之后机密项或服务器条目被删除，确认必须按冲突拒绝，并附按剩余格子重
+// 新计算的最新预览，而不是把内部错误暴露给界面。
+func TestApplyAuthorizationTreatsDeletedCellEntriesAsConflict(t *testing.T) {
+	m, st := newTestManager(t)
+	web1 := mustServer(t, st, "web1")
+	db1 := mustServer(t, st, "db1")
+	for _, name := range []string{"DEPLOY_TOKEN", "BACKUP_TOKEN"} {
+		if err := m.AddSecret(name, "", "", []byte(name+"-secret-value"), CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	views, err := m.List(ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make(map[string]string, len(views))
+	for _, view := range views {
+		ids[view.Name] = view.ID
+	}
+	target := []AuthorizationCell{
+		{SecretID: ids["DEPLOY_TOKEN"], ServerID: web1, Allow: true},
+		{SecretID: ids["BACKUP_TOKEN"], ServerID: db1, Allow: true},
+	}
+	preview, err := m.PreviewAuthorizationChanges(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.DeleteSecret("DEPLOY_TOKEN", CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	var conflict *AuthorizationConflictError
+	_, err = m.ApplyAuthorizationChanges(target, preview.Summary, CLISource())
+	if !errors.As(err, &conflict) {
+		t.Fatalf("机密项被删除后确认应返回冲突错误，实际 %v", err)
+	}
+	if len(conflict.Latest.Changes) != 1 || conflict.Latest.Changes[0].SecretName != "BACKUP_TOKEN" ||
+		conflict.Latest.TotalAdded != 1 {
+		t.Fatalf("冲突应附剩余格子的最新预览，实际 %+v", conflict.Latest)
+	}
+
+	remaining := []AuthorizationCell{{SecretID: ids["BACKUP_TOKEN"], ServerID: db1, Allow: true}}
+	latest, err := m.PreviewAuthorizationChanges(remaining)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteServer(db1); err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.ApplyAuthorizationChanges(remaining, latest.Summary, CLISource())
+	if !errors.As(err, &conflict) {
+		t.Fatalf("服务器条目被删除后确认应返回冲突错误，实际 %v", err)
+	}
+	if len(conflict.Latest.Changes) != 0 {
+		t.Fatalf("剩余格子为空时最新预览应为空差异，实际 %+v", conflict.Latest)
+	}
+	after, err := m.List(ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || len(after[0].AllowedServers) != 0 {
+		t.Fatalf("冲突后的数据应保持现状，实际 %+v", after)
+	}
+	if rows, _ := st.QueryAudit(store.AuditFilter{OwnerOnly: true, Actions: []string{"secret-allow-change"}}); len(rows) != 0 {
+		t.Fatalf("冲突不应写授权变更审计：%+v", rows)
+	}
+}
