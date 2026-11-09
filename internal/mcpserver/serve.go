@@ -699,7 +699,8 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	}
 
 	var webUIListeners *webUIListenerManager
-	if currentMachineIsServer() {
+	machineIsAuthority := currentMachineIsServer()
+	if machineIsAuthority {
 		webUIListeners, err = startWebUIListenerManager(ctx, st, tlsCert, tlsKey, serveCertFingerprint, addr, opts)
 		if err != nil {
 			return fmt.Errorf("serve web UI: %w", err)
@@ -747,6 +748,15 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	}
 	stopDiscovery := StartDiscovery(ctx, discName, tcpPort, runner.pairSPKI, runner.DiscoveryEnabled)
 	defer stopDiscovery()
+
+	// 软件清单采集调度（规格 #177「采集调度」）：权威端启动即执行一轮，
+	// 补上停机期间错过的，之后周期检查到期设备；单机由 owner 用系统计
+	// 划任务调用「采集分派给本实例的设备」子命令，serve 不启动。
+	if machineIsAuthority {
+		if stopScheduler := startSoftwareCollectionScheduler(ctx, st); stopScheduler != nil {
+			defer stopScheduler()
+		}
+	}
 
 	// Start heartbeat goroutine to keep the serve log fresh. Plan 16 T7 dropped
 	// the old serve.log marker-scan (vaultUnlockedFromLog was Windows-specific
