@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"ssh-manager-mcp/internal/machineinit"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
@@ -45,6 +46,21 @@ func requireServerRoleVault() (*store.Store, error) {
 		return nil, err
 	}
 	if launch.Kind != roles.LaunchBroker || launch.ResumeSetup || launch.Role != roles.RoleServer {
+		return nil, NewExitCodeError(1, errors.New("`serve admin` 只能在权威端主机执行；单机与客户端没有权威端 Web 管理员口令"))
+	}
+	return openUnlockedStore()
+}
+
+// requireServerRoleVaultForPasswordSet 是 `serve admin set` 的角色判定：
+// 只要本机角色是权威端且 vault 可打开就放行，不再因 setup_complete 为假
+// 而拒绝（该标记只保留「选了角色、还没建 vault」的续做含义；升级中的
+// 权威端也要能先设管理员口令）。
+func requireServerRoleVaultForPasswordSet() (*store.Store, error) {
+	launch, err := resolveMachineRole("")
+	if err != nil {
+		return nil, err
+	}
+	if launch.Kind != roles.LaunchBroker || launch.Role != roles.RoleServer {
 		return nil, NewExitCodeError(1, errors.New("`serve admin` 只能在权威端主机执行；单机与客户端没有权威端 Web 管理员口令"))
 	}
 	return openUnlockedStore()
@@ -118,11 +134,13 @@ func newServeAdminSetCmd() *cobra.Command {
 		Short: "Set or reset the authoritative Web UI administrator password",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := requireServerRoleVault()
+			st, err := requireServerRoleVaultForPasswordSet()
 			if err != nil {
 				return err
 			}
-			defer st.Close()
+			if err := st.Close(); err != nil {
+				return err
+			}
 			first, err := serveAdminPasswordPrompt()
 			if err != nil {
 				return fmt.Errorf("读取管理员口令失败：%w", err)
@@ -137,7 +155,7 @@ func newServeAdminSetCmd() *cobra.Command {
 			if len(first) == 0 {
 				return NewExitCodeError(1, errors.New("管理员口令不能为空"))
 			}
-			generation, err := st.SetWebAdminPasswordWithAudit(first, serveAdminAuditRow("admin.password_set", nil))
+			generation, err := machineinit.SetAdminPassword(first, serveAdminAuditRow("admin.password_set", nil))
 			if err != nil {
 				return err
 			}
