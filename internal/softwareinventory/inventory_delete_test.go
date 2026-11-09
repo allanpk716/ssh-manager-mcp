@@ -26,7 +26,7 @@ func TestDeviceDeleteIncludesObservedItemsAndHistory(t *testing.T) {
 			Category: models.SoftwareCategorySystemPackage, Name: "openssh-server",
 			Version: "1:9.6p1-1",
 		}},
-		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: server.ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestDeviceDeleteIncludesObservedItemsAndHistory(t *testing.T) {
 				Exposure: models.SoftwareExposureAllAddresses,
 			}},
 		}},
-		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: server.ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,9 @@
-SSHMGR-INVENTORY BEGIN linux-v1
+SSHMGR-INVENTORY BEGIN posix-v2
 SSHMGR-INVENTORY SECTION os
+kernel-name=Linux
+kernel=6.8.0-146-generic
+machine=x86_64
+file=/etc/os-release
 PRETTY_NAME="Ubuntu 24.04.4 LTS"
 NAME="Ubuntu"
 VERSION_ID="24.04"
@@ -13,8 +17,6 @@ BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
 PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
 UBUNTU_CODENAME=noble
 LOGO=ubuntu-logo
-kernel=6.8.0-146-generic
-machine=x86_64
 SSHMGR-INVENTORY STATUS os 0
 SSHMGR-INVENTORY SECTION packages
 7zip	23.01+dfsg-11	amd64	ii
@@ -1111,6 +1113,10 @@ tcp LISTEN 0      4096    127.0.0.53%lo:53    0.0.0.0:* users:(("systemd-resolve
 tcp LISTEN 0      4096             [::]:22       [::]:* users:(("sshd",pid=2300534,fd=4),("systemd",pid=1,fd=237))
 tcp LISTEN 0      511              [::]:80       [::]:* users:(("nginx",pid=2300573,fd=7),("nginx",pid=2300572,fd=7),("nginx",pid=2300571,fd=7),("nginx",pid=2300569,fd=7),("nginx",pid=2300568,fd=7),("nginx",pid=2300567,fd=7),("nginx",pid=2300566,fd=7),("nginx",pid=2300565,fd=7),("nginx",pid=2300564,fd=7),("nginx",pid=2300563,fd=7),("nginx",pid=2300560,fd=7),("nginx",pid=2300559,fd=7),("nginx",pid=2300556,fd=7),("nginx",pid=2300555,fd=7),("nginx",pid=2300554,fd=7),("nginx",pid=2300552,fd=7),("nginx",pid=2300551,fd=7),("nginx",pid=2300550,fd=7),("nginx",pid=2300549,fd=7),("nginx",pid=2300548,fd=7),("nginx",pid=2300547,fd=7),("nginx",pid=2300546,fd=7),("nginx",pid=2300545,fd=7),("nginx",pid=2300544,fd=7),("nginx",pid=2300543,fd=7))
 SSHMGR-INVENTORY STATUS listen 0
+SSHMGR-INVENTORY SECTION listen-netstat
+SSHMGR-INVENTORY ABSENT listen-netstat
+SSHMGR-INVENTORY SECTION listen-lsof
+SSHMGR-INVENTORY ABSENT listen-lsof
 SSHMGR-INVENTORY SECTION exe
 1	/usr/lib/systemd/systemd
 1063	/usr/bin/netbird
@@ -1164,6 +1170,12 @@ SSHMGR-INVENTORY SECTION exe-owner
 /usr/sbin/nginx	nginx
 /usr/sbin/sshd	openssh-server
 SSHMGR-INVENTORY STATUS exe-owner 0
+SSHMGR-INVENTORY SECTION apps
+SSHMGR-INVENTORY ABSENT apps
+SSHMGR-INVENTORY SECTION brew
+SSHMGR-INVENTORY ABSENT brew
+SSHMGR-INVENTORY SECTION synology-packages
+SSHMGR-INVENTORY ABSENT synology-packages
 SSHMGR-INVENTORY SECTION container-images
 qwen38-sglang-router	local	sha256:7b326c11b5d0bb588c556ce955d6531aaacb850e51cdd77d63a1d490da59b9c0	sha256:7b326c11b5d0bb588c556ce955d6531aaacb850e51cdd77d63a1d490da59b9c0
 ghcr.io/berriai/litellm	main-stable	<none>	sha256:c8756e7b9a61fe45df2ccb5b781d388c3b2f3a21ef9e4956630caef20f9f03aa

@@ -132,7 +132,7 @@ func TestSoftwareObservedItemsReplaceAndStatus(t *testing.T) {
 		},
 	}
 	if err := st.ReplaceSoftwareObservedItems("工作站", SoftwareObservedWrite{
-		Items: first, ServerID: server.ID, CommandSetVersion: "linux-v1",
+		Items: first, ServerID: server.ID, CommandSetVersion: "posix-v2",
 		SystemType: "ubuntu",
 	}, CLISource()); err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestSoftwareObservedItemsReplaceAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.LastSuccessAt != now || status.LastIncomplete || status.CommandSetVersion != "linux-v1" ||
+	if status.LastSuccessAt != now || status.LastIncomplete || status.CommandSetVersion != "posix-v2" ||
 		status.SystemType != "ubuntu" || status.LastServerID != server.ID || status.Collector != "authority" {
 		t.Fatalf("采集状态 = %+v", status)
 	}
@@ -159,7 +159,7 @@ func TestSoftwareObservedItemsReplaceAndStatus(t *testing.T) {
 		Items: []models.SoftwareObservedItem{{
 			Category: models.SoftwareCategorySystemPackage, Name: "nginx", Version: "1.24.0",
 		}},
-		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu", Incomplete: true,
+		ServerID: server.ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu", Incomplete: true,
 	}, CLISource()); err != nil {
 		t.Fatal(err)
 	}

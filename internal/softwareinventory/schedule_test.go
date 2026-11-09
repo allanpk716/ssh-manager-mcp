@@ -79,7 +79,7 @@ func collectSuccessAtTime(t *testing.T, st *store.Store, deviceName string, at t
 		t.Fatal(err)
 	}
 	if err := st.ReplaceSoftwareObservedItems(deviceName, store.SoftwareObservedWrite{
-		ServerID: servers[0].ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: servers[0].ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

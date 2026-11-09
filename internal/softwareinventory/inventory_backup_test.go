@@ -41,7 +41,7 @@ func TestSoftwareCollectionBackupProfileSnapshotAndRevision(t *testing.T) {
 				Exposure: models.SoftwareExposureAllAddresses,
 			}},
 		}},
-		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: server.ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestSoftwareCollectionBackupProfileSnapshotAndRevision(t *testing.T) {
 				Exposure: models.SoftwareExposureLocal,
 			}},
 		}},
-		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: server.ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 		Incomplete: true,
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestSoftwareCollectionBackupProfileSnapshotAndRevision(t *testing.T) {
 	if !status.Managed || status.LastServerID != server.ID ||
 		status.LastSuccessAt.Unix() != secondAt.Unix() ||
 		status.LastFailureReason != "连接超时" || !status.LastIncomplete ||
-		status.CommandSetVersion != "linux-v1" || status.SystemType != "ubuntu" {
+		status.CommandSetVersion != "posix-v2" || status.SystemType != "ubuntu" {
 		t.Fatalf("恢复后的采集状态 = %+v", status)
 	}
 	sudo, err := target.SoftwareCollectSudoEnabled()

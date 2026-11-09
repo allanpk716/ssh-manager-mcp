@@ -41,7 +41,7 @@ func TestInventoryCollectAssignedLocalRound(t *testing.T) {
 				DeviceName: "工作站",
 				Report: &softwareinventory.CollectionReport{
 					DeviceName: "工作站", ServerEntryName: "entry-a", Sudo: true,
-					CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+					CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 					ItemCounts: map[models.SoftwareCategory]int{
 						models.SoftwareCategorySystemPackage: 3,
 					},

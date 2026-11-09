@@ -34,7 +34,7 @@ func TestInventoryCollectAndSudoCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fixture, err := os.ReadFile(filepath.Join("..", "softwareinventory", "testdata", "linux", "ubuntu2404-full.txt"))
+	fixture, err := os.ReadFile(filepath.Join("..", "softwareinventory", "testdata", "posix", "ubuntu2404-full.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestInventoryCollectAndSudoCLI(t *testing.T) {
 	t.Cleanup(func() { inventoryCollectService = previous })
 
 	output := mustInventoryCli(t, "", "inventory", "collect", "--device", "工作站")
-	for _, want := range []string{"工作站", "entry-a", "linux-v1", "ubuntu", "系统包", "1041", "未识别进程", "3"} {
+	for _, want := range []string{"工作站", "entry-a", "posix-v2", "ubuntu", "系统包", "1041", "未识别进程", "3"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("采集输出缺少 %q：\n%s", want, output)
 		}
@@ -65,7 +65,7 @@ func TestInventoryCollectAndSudoCLI(t *testing.T) {
 		t.Fatalf("collect --json 应输出一行 JSON：%v\n%s", err, jsonOutput)
 	}
 	if report["device_name"] != "工作站" || report["server_entry_name"] != "entry-a" ||
-		report["system_type"] != "ubuntu" || report["command_set_version"] != "linux-v1" {
+		report["system_type"] != "ubuntu" || report["command_set_version"] != "posix-v2" {
 		t.Fatalf("collect JSON = %+v", report)
 	}
 
