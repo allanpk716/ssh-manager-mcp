@@ -68,6 +68,17 @@ func cacheMetaForwarderFor(instance string) (*clientops.MetadataForwarder, error
 	return clientops.NewMetadataForwarder(*cred)
 }
 
+// cacheSoftwareInventoryForwarderFor 解析实例的拉取凭据并构造软件清单在
+// 线查询转发器（票 #185）——cacheForwarderFor 的又一个同构：缺凭据得到
+// 固定报错的形态，硬性配置错误（固定证书配明文地址）在启动时报错。
+func cacheSoftwareInventoryForwarderFor(instance string) (*clientops.SoftwareInventoryForwarder, error) {
+	cred, err := clientops.ReadCacheCredFor(instance)
+	if err != nil || cred == nil {
+		return clientops.NewSoftwareInventoryForwarder(clientops.CacheCred{})
+	}
+	return clientops.NewSoftwareInventoryForwarder(*cred)
+}
+
 func newMCPCmd() *cobra.Command {
 	var token string
 	var useCache bool
@@ -178,6 +189,12 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				// 票 #185：软件清单查询转发器在同一处解析实例凭据。客户端
+				// 的清单查询永远在线，权威端不可达时按固定文本报错。
+				inventoryForwarder, err := cacheSoftwareInventoryForwarderFor(instance)
+				if err != nil {
+					return err
+				}
 				err = mcpserver.RunStdioCacheWithRefresher(token, snap, auditPath, rel.Check,
 					clientops.ForwardingHostKeys(fwd), cacheForwardDeviceFor(instance), mfwd,
 					func(refresher mcpserver.CacheRefresher) func() {
@@ -186,11 +203,12 @@ func newMCPCmd() *cobra.Command {
 							Interval:  pollInterval,
 							Refresher: refresher,
 						})
-					})
+					}, inventoryForwarder)
 				// Release the pinned transports' idle connections on shutdown
 				// (the forwarders have served their last call by now).
 				fwd.Close()
 				mfwd.Close()
+				inventoryForwarder.Close()
 				return err
 			}
 			// Residual-key guardrail: warn to STDERR only (stdout is the MCP channel).

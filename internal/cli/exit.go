@@ -11,7 +11,10 @@ import (
 // internal error (first real producer: #5 serve liveness probe), 3 = update:
 // binary replaced OK but the serve service restart is pending manual action
 // (scripts branch here to run the printed `sc stop/start` / `systemctl
-// restart` themselves; first real producer: `sshmgr update`).
+// restart` themselves; first real producer: `sshmgr update`), 4 = authority
+// unreachable — the client-side online-only operations report it so scripts
+// can tell a network failure from a data error without parsing text (first
+// real producer: ticket #185's software-inventory view/search).
 type ExitCodeError struct {
 	Code int
 	Err  error

@@ -83,6 +83,7 @@ func newLocalVaultServer(st *store.Store, profileID, projectID string) (*mcp.Ser
 		projectID,
 		nil,
 		nil,
+		nil,
 		hints.notices,
 	)
 }

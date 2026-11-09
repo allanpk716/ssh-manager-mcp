@@ -50,6 +50,7 @@ const (
 	CategoryContainerImage  = models.SoftwareCategoryContainerImage
 	CategoryDriverFirmware  = models.SoftwareCategoryDriverFirmware
 	CategorySystemPackage   = models.SoftwareCategorySystemPackage
+	CategoryUnidentified    = models.SoftwareCategoryUnidentified
 )
 
 // 暴露级别代号。
