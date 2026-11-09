@@ -1,6 +1,14 @@
 {{define "content"}}
 <section class="server-list">
 <h1>服务器</h1>
+{{if .NextSteps}}
+<section class="notice notice-info next-steps" aria-labelledby="next-steps-title">
+<h2 id="next-steps-title">下一步引导</h2>
+<ul>
+{{range .NextSteps}}<li><a href="{{.Href}}">{{.Title}}</a><p>{{.Description}}</p></li>{{end}}
+</ul>
+</section>
+{{end}}
 <div class="inline-form server-actions">
 {{if .AttentionFilter}}<a class="button-link" href="/ui/">显示全部服务器</a>{{else}}<a class="button-link" href="/ui/?attention=1">只看需要注意</a>{{end}}
 {{if .Caps.CanWrite}}

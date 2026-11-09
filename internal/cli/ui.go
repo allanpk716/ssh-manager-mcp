@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -62,7 +63,13 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource     webui.SecretSource
 		secretWriter     webui.SecretWriter
 		resolvedInstance string
+		machineInit      webui.MachineInitializer
 	)
+	uiShutdown := make(chan struct{})
+	var shutdownOnce sync.Once
+	requestShutdown := func() {
+		shutdownOnce.Do(func() { close(uiShutdown) })
+	}
 	switch {
 	case launch.Kind == roles.LaunchBroker && !launch.ResumeSetup && launch.Role == roles.RoleStandalone:
 		webRole = webui.RoleStandalone
@@ -72,6 +79,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource = standaloneUISecretStore()
 		secretWriter = standaloneUISecretWriter()
 		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
+		machineInit = standaloneMachineInitializer{}
 	case launch.Kind == roles.LaunchClient && !launch.ResumeSetup:
 		resolvedInstance, err = resolveClientCacheInstance(instance)
 		if err != nil {
@@ -106,16 +114,18 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	handler, startup, err := webui.New(webui.Config{
-		Role:           webRole,
-		Servers:        servers,
-		ServerWriter:   serverWriter,
-		Secrets:        secretSource,
-		SecretsWriter:  secretWriter,
-		VersionHint:    versionHint,
-		Port:           port,
-		Access:         accessSource,
-		Ops:            opsSource,
-		ClientInstance: resolvedInstance,
+		Role:            webRole,
+		Servers:         servers,
+		ServerWriter:    serverWriter,
+		Secrets:         secretSource,
+		SecretsWriter:   secretWriter,
+		VersionHint:     versionHint,
+		Port:            port,
+		Access:          accessSource,
+		Ops:             opsSource,
+		MachineInit:     machineInit,
+		RequestShutdown: requestShutdown,
+		ClientInstance:  resolvedInstance,
 	})
 	if err != nil {
 		_ = listener.Close()
@@ -145,6 +155,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	select {
 	case <-ctx.Done():
 	case <-stdinDone:
+	case <-uiShutdown:
 	case err := <-serveErr:
 		listenerErr = err
 	}

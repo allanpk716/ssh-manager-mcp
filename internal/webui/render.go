@@ -35,6 +35,7 @@ type pageData struct {
 	Authenticated               bool
 	Servers                     []ServerRow
 	ServerList                  []ServerListEntry
+	NextSteps                   []NextStep
 	AttentionFilter             bool
 	ServerDetail                *ServerDetailView
 	ServerEdit                  *serverEditView
@@ -104,6 +105,8 @@ type pageData struct {
 	OpsUpdateResult             *OpsUpdateApplyResult
 	OpsUpdateError              *OpsUpdateError
 	OpsUpdateRestarting         bool
+	OpsUpgradeServerError       string
+	OpsUpgradeServerSuccess     bool
 	ErrorTitle                  string
 	ErrorMessage                string
 	AdminPasswordSet            bool

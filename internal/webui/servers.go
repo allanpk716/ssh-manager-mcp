@@ -262,8 +262,14 @@ func (h *handler) handleServerList(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请稍后重试。")
 		return
 	}
+	nextSteps, err := h.standaloneNextSteps(r)
+	if err != nil {
+		h.renderError(w, r, http.StatusInternalServerError, "读取下一步引导失败", "读取服务器、Profile 与项目令牌失败，请稍后重试。")
+		return
+	}
 	h.renderPage(w, r, http.StatusOK, "servers.tmpl", pageData{
-		Title: "服务器", ServerList: sortServerAttentionFirst(rows), AttentionFilter: attentionOnly,
+		Title: "服务器", ServerList: sortServerAttentionFirst(rows), NextSteps: nextSteps,
+		AttentionFilter: attentionOnly,
 	})
 }
 
