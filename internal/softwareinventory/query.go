@@ -5,11 +5,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"ssh-manager-mcp/internal/models"
 )
 
-// CollectionStatus 描述一台设备的采集状态。采集状态表由另一张票实现；
-// 在那之前，查询结果的这个字段固定表示「从未采集」，字段本身先在这里
-// 定型，合并后由采集状态表填充。
+// CollectionStatus 描述一台设备的采集状态；清单是否过期按读取时刻计算。
 type CollectionStatus struct {
 	Collector         string     `json:"collector,omitempty"`
 	ServerEntry       string     `json:"server_entry,omitempty"`
@@ -49,6 +49,11 @@ type QueryItem struct {
 	Note           string          `json:"note,omitempty"`
 	Source         string          `json:"source"`
 	CollectedAt    *time.Time      `json:"collected_at,omitempty"`
+	// ObservedStableKey 供声明认领实测使用；只有声明来源的条目为空。
+	ObservedStableKey string `json:"observed_stable_key,omitempty"`
+	DeclaredVersion   string `json:"declared_version,omitempty"`
+	VersionMismatch   bool   `json:"version_mismatch,omitempty"`
+	Mismatch          bool   `json:"mismatch,omitempty"`
 }
 
 // QueryDeviceResult 是一台设备的查询结果：设备、采集状态与匹配的软件
@@ -91,18 +96,146 @@ func exposureRank(exposure Exposure) int {
 	}
 }
 
-// queryItemFromView 把一条声明视图转换成查询条目。
-func queryItemFromView(row SoftwareDeclarationView) QueryItem {
+// queryBundle 是统一查询在内存里合成前的一台设备数据。
+type queryBundle struct {
+	DeviceID     string
+	DeviceName   string
+	Managed      bool
+	Declarations []SoftwareDeclarationView
+	Observed     []models.SoftwareObservedItem
+}
+
+// queryItemFromView 把一条声明视图转换成查询条目。受管设备上的声明若没有
+// 认领到当前实测，就带着「对不上」标记显示。
+func queryItemFromView(row SoftwareDeclarationView, mismatch bool) QueryItem {
 	item := QueryItem{
 		ID: row.ID, DeviceID: row.DeviceID, Category: row.Category,
 		CategoryLabel: row.Category.Label(), Name: row.Name, Version: row.Version,
 		PackageURL: row.PackageURL, CPE: row.CPE, ListeningPorts: row.ListeningPorts,
 		BelongsTo: row.BelongsTo, Note: row.Note, Source: SourceDeclared,
+		Mismatch: mismatch,
 	}
 	if item.ListeningPorts == nil {
 		item.ListeningPorts = []ListeningPort{}
 	}
 	return item
+}
+
+// queryItemFromObserved 把一条未认领的实测条目转换成查询条目。
+func queryItemFromObserved(deviceID string, row models.SoftwareObservedItem) QueryItem {
+	collectedAt := row.CollectedAt
+	ports := append([]ListeningPort(nil), row.ListeningPorts...)
+	if ports == nil {
+		ports = []ListeningPort{}
+	}
+	return QueryItem{
+		DeviceID: deviceID, Category: row.Category, CategoryLabel: row.Category.Label(),
+		Name: row.Name, Version: row.Version, PackageURL: row.PackageURL,
+		ListeningPorts: ports, BelongsTo: row.BelongsTo, Source: SourceObserved,
+		CollectedAt: &collectedAt, ObservedStableKey: row.StableKey,
+	}
+}
+
+// combineObservedAndDeclared 按认领关系合成一台设备的条目。认领关系存在且
+// 实测仍存在时输出一条「两者合成」；其余声明保持声明来源，其余实测保持实
+// 测来源。
+func combineObservedAndDeclared(bundle queryBundle) []QueryItem {
+	observedByKey := make(map[string]models.SoftwareObservedItem, len(bundle.Observed))
+	for _, row := range bundle.Observed {
+		observedByKey[row.StableKey] = row
+	}
+	out := make([]QueryItem, 0, len(bundle.Declarations)+len(bundle.Observed))
+	for _, declaration := range bundle.Declarations {
+		observed, claimed := observedByKey[declaration.ClaimedObservedKey]
+		if declaration.ClaimedObservedKey == "" || !claimed {
+			out = append(out, queryItemFromView(declaration, bundle.Managed))
+			continue
+		}
+		delete(observedByKey, declaration.ClaimedObservedKey)
+		collectedAt := observed.CollectedAt
+		version := observed.Version
+		if version == "" {
+			version = declaration.Version
+		}
+		item := QueryItem{
+			ID: declaration.ID, DeviceID: bundle.DeviceID, Category: declaration.Category,
+			CategoryLabel: declaration.Category.Label(), Name: declaration.Name,
+			Version: version, PackageURL: declaration.PackageURL,
+			CPE: declaration.CPE, ListeningPorts: combinedPorts(observed.ListeningPorts, declaration.ListeningPorts),
+			BelongsTo: declaration.BelongsTo, Note: declaration.Note, Source: SourceCombined,
+			CollectedAt: &collectedAt, ObservedStableKey: observed.StableKey,
+			DeclaredVersion: declaration.Version,
+			VersionMismatch: declaration.Version != observed.Version && observed.Version != "",
+		}
+		if item.ListeningPorts == nil {
+			item.ListeningPorts = []ListeningPort{}
+		}
+		out = append(out, item)
+	}
+	for _, row := range bundle.Observed {
+		if _, claimed := observedByKey[row.StableKey]; !claimed {
+			continue
+		}
+		out = append(out, queryItemFromObserved(bundle.DeviceID, row))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Category != out[j].Category {
+			return categoryRank(out[i].Category) < categoryRank(out[j].Category)
+		}
+		if strings.ToLower(out[i].Name) != strings.ToLower(out[j].Name) {
+			return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+		}
+		if out[i].Version != out[j].Version {
+			return out[i].Version < out[j].Version
+		}
+		return out[i].ObservedStableKey+out[i].ID < out[j].ObservedStableKey+out[j].ID
+	})
+	return out
+}
+
+// combinedPorts 保留实测端口集合；声明对同一端口给出暴露级别时，用声明值
+// 替换实测的三档推导值。
+func combinedPorts(observed, declared []ListeningPort) []ListeningPort {
+	out := append([]ListeningPort(nil), observed...)
+	for i := range out {
+		replacement := ListeningPort{}
+		found := false
+		for _, port := range declared {
+			if port.Port != out[i].Port || port.Protocol != out[i].Protocol {
+				continue
+			}
+			if port.Address == out[i].Address {
+				replacement, found = port, true
+				break
+			}
+			if !found || port.Address == "" {
+				replacement, found = port, true
+			}
+		}
+		if found {
+			out[i].Exposure = replacement.Exposure
+		}
+	}
+	return out
+}
+
+func categoryRank(category Category) int {
+	switch category {
+	case CategoryOperatingSystem:
+		return 1
+	case CategoryServiceProgram:
+		return 2
+	case CategoryContainerImage:
+		return 3
+	case CategoryDriverFirmware:
+		return 4
+	case CategorySystemPackage:
+		return 5
+	case CategoryUnidentified:
+		return 6
+	default:
+		return 7
+	}
 }
 
 // missingCollectionStatus 返回采集数据源缺失时的采集状态：从未采集的受
@@ -128,47 +261,88 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 		return QueryResult{}, fmt.Errorf("暴露级别代号不合法：%q", options.MinimumExposure)
 	}
 
-	var rows []SoftwareDeclarationView
+	var bundles []queryBundle
 	if options.Device != "" {
+		overview, err := m.st.SoftwareDeviceOverviewForDevice(options.Device, options.Visibility)
+		if err != nil {
+			return QueryResult{}, err
+		}
 		stored, err := m.st.SoftwareDeclarationsForDevice(options.Device, options.Visibility)
 		if err != nil {
 			return QueryResult{}, err
 		}
-		rows = stored.Declarations
-	} else {
-		var err error
-		rows, err = m.st.SearchSoftwareDeclarations(options.Name, options.Visibility)
+		observed, err := m.st.SoftwareObservedItemsForDeviceInScope(options.Device, options.Visibility)
 		if err != nil {
 			return QueryResult{}, err
+		}
+		bundles = []queryBundle{{
+			DeviceID: overview.ID, DeviceName: overview.Name, Managed: overview.Managed,
+			Declarations: stored.Declarations, Observed: observed.Items,
+		}}
+	} else {
+		overviews, err := m.st.SoftwareDeviceOverviews(options.Visibility)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		index := make(map[string]int, len(overviews))
+		for _, overview := range overviews {
+			index[overview.ID] = len(bundles)
+			bundles = append(bundles, queryBundle{
+				DeviceID: overview.ID, DeviceName: overview.Name, Managed: overview.Managed,
+			})
+		}
+		rows, err := m.st.SearchSoftwareDeclarations("", options.Visibility)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		for _, row := range rows {
+			position, ok := index[row.DeviceID]
+			if !ok {
+				return QueryResult{}, ErrDeviceNotVisible
+			}
+			bundles[position].Declarations = append(bundles[position].Declarations, row)
+		}
+		observed, err := m.st.SoftwareObservedItemsForScope(options.Visibility)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		for _, inventory := range observed {
+			position, ok := index[inventory.DeviceID]
+			if !ok {
+				return QueryResult{}, ErrDeviceNotVisible
+			}
+			bundles[position].Observed = inventory.Items
 		}
 	}
 
 	devices := make([]QueryDeviceResult, 0)
-	index := map[string]int{}
-	for _, row := range rows {
-		if options.Category != "" && row.Category != options.Category {
+	for _, bundle := range bundles {
+		items := combineObservedAndDeclared(bundle)
+		filtered := make([]QueryItem, 0, len(items))
+		for _, item := range items {
+			if options.Category != "" && item.Category != options.Category {
+				continue
+			}
+			if options.Name != "" &&
+				!strings.Contains(strings.ToLower(item.Name), strings.ToLower(options.Name)) {
+				continue
+			}
+			if item.Category == CategorySystemPackage && !options.IncludeSystemPackages {
+				continue
+			}
+			if options.MinimumExposure != "" &&
+				!meetsMinimumExposure(item.ListeningPorts, options.MinimumExposure) {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		if len(filtered) == 0 {
 			continue
 		}
-		if options.Device == "" && options.Name != "" &&
-			!strings.Contains(strings.ToLower(row.Name), strings.ToLower(options.Name)) {
-			continue
-		}
-		if row.Category == CategorySystemPackage && !options.IncludeSystemPackages {
-			continue
-		}
-		if options.MinimumExposure != "" && !meetsMinimumExposure(row.ListeningPorts, options.MinimumExposure) {
-			continue
-		}
-		position, ok := index[row.DeviceID]
-		if !ok {
-			devices = append(devices, QueryDeviceResult{
-				DeviceID: row.DeviceID, DeviceName: row.DeviceName,
-				Collection: m.collectionStatusFor(row.DeviceName), Items: []QueryItem{},
-			})
-			position = len(devices) - 1
-			index[row.DeviceID] = position
-		}
-		devices[position].Items = append(devices[position].Items, queryItemFromView(row))
+		devices = append(devices, QueryDeviceResult{
+			DeviceID: bundle.DeviceID, DeviceName: bundle.DeviceName,
+			Collection: m.collectionStatusFor(bundle.DeviceName), Items: filtered,
+		})
 	}
 	sort.Slice(devices, func(i, j int) bool { return devices[i].DeviceName < devices[j].DeviceName })
 	return QueryResult{Devices: devices}, nil

@@ -217,6 +217,40 @@ func TestQuerySoftwareInventoryAuthorityFace(t *testing.T) {
 	}
 }
 
+// TestQuerySoftwareInventoryAuthorityFaceIncludesObservedOnlyDevices 钉住
+// 统一查询的缺口修复：没有任何声明的实测条目也必须能被 MCP 工具查到。
+func TestQuerySoftwareInventoryAuthorityFaceIncludesObservedOnlyDevices(t *testing.T) {
+	st, profileID := softwareInventoryFaceFixture(t)
+	observed := models.SoftwareObservedItem{
+		Category: softwareinventory.CategoryServiceProgram,
+		Name:     "observed-only", Version: "2.0",
+	}
+	if err := st.ReplaceSoftwareObservedItems("可见设备", store.SoftwareObservedWrite{
+		Items:             []models.SoftwareObservedItem{observed},
+		CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	srv, tunnels, tasks, err := newLocalVaultServer(st, profileID, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tunnels.CloseAll(); tasks.CloseAll() })
+	session := softwareInventorySession(t, srv)
+	text, isError := callSoftwareInventoryTool(t, session, map[string]any{"name": "observed-only"})
+	if isError {
+		t.Fatalf("查询只有实测的设备报错：%s", text)
+	}
+	var result softwareinventory.QueryResult
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("解析工具输出失败：%v\n%s", err, text)
+	}
+	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 1 ||
+		result.Devices[0].Items[0].Source != softwareinventory.SourceObserved {
+		t.Fatalf("只有实测的设备应出现在 MCP 查询里：%+v", result.Devices)
+	}
+}
+
 // TestQuerySoftwareInventoryCacheFaceUsesInjectedQuerier 客户端面必须把
 // 过滤条件原样交给注入的在线查询能力，不读本地快照。
 func TestQuerySoftwareInventoryCacheFaceUsesInjectedQuerier(t *testing.T) {

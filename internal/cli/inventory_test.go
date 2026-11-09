@@ -142,6 +142,8 @@ func TestInventoryClientWritesRefused(t *testing.T) {
 		{"inventory", "add", "网络存储", "--category", "service_program", "--name", "nginx", "--version", "1.0"},
 		{"inventory", "edit", "declaration-id", "--version", "1.1"},
 		{"inventory", "rm", "declaration-id", "--yes"},
+		{"inventory", "claim", "declaration-id", "--observed-key", "observed-key"},
+		{"inventory", "unclaim", "declaration-id"},
 	}
 	for _, args := range commands {
 		_, _, err := runInventoryRoot(t, "", args...)
