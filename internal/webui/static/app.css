@@ -1313,3 +1313,7 @@ h1 {
   gap: var(--space-small);
   max-width: 32rem;
 }
+
+.initialization-page .copy-button {
+  justify-self: start;
+}

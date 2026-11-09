@@ -2,6 +2,7 @@ package webui
 
 import (
 	"errors"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -59,13 +60,21 @@ func (s *stubInitializer) ProbeServeWebUI() (ServeWebUIProbe, error) {
 }
 
 func newInitializationWizardForTest(t *testing.T, initializer Initializer) (http.Handler, Startup) {
+	return newInitializationWizardForTestWithConfig(t, initializer, nil)
+}
+
+func newInitializationWizardForTestWithConfig(t *testing.T, initializer Initializer, change func(*Config)) (http.Handler, Startup) {
 	t.Helper()
-	handler, startup, err := NewInitializationWizard(Config{
+	config := Config{
 		Role:    RoleStandalone,
 		Servers: &stubServerSource{rows: []ServerRow{{Name: "正式服务器", User: "root", Host: "192.0.2.10", Port: 22}}},
 		Access:  &stubAccessStore{},
 		Port:    18080,
-	}, initializer)
+	}
+	if change != nil {
+		change(&config)
+	}
+	handler, startup, err := NewInitializationWizard(config, initializer)
 	if err != nil {
 		t.Fatalf("构造初始化向导失败：%v", err)
 	}
@@ -435,6 +444,65 @@ func TestInitializationWizardRefusesServerWritesWhenServeIsRunning(t *testing.T)
 			}
 			if initializer.initializedRole != "" || initializer.password != "" {
 				t.Fatalf("serve 已运行时不得写入：初始化=%q 口令=%q", initializer.initializedRole, initializer.password)
+			}
+		})
+	}
+}
+
+func TestInitializationWizardInstallPageRendersOperatingSystemCommand(t *testing.T) {
+	tests := []struct {
+		name            string
+		operatingSystem string
+		executablePath  string
+		wantCommand     string
+		wantNotice      string
+	}{
+		{
+			name:            "Linux 显示 sudo 命令",
+			operatingSystem: "linux",
+			executablePath:  "/usr/local/bin/sshmgr",
+			wantCommand:     "sudo '/usr/local/bin/sshmgr' serve install --addr 0.0.0.0:7878",
+			wantNotice:      "需要管理员权限",
+		},
+		{
+			name:            "macOS 显示 sudo 命令",
+			operatingSystem: "darwin",
+			executablePath:  "/usr/local/bin/sshmgr",
+			wantCommand:     "sudo '/usr/local/bin/sshmgr' serve install --addr 0.0.0.0:7878",
+			wantNotice:      "需要管理员权限",
+		},
+		{
+			name:            "Windows 显示管理员 PowerShell 命令",
+			operatingSystem: "windows",
+			executablePath:  `C:\Program Files\sshmgr.exe`,
+			wantCommand:     `& "C:\Program Files\sshmgr.exe" serve install --addr 0.0.0.0:7878`,
+			wantNotice:      "在管理员 PowerShell 中运行",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler, startup := newInitializationWizardForTestWithConfig(t, &stubInitializer{
+				snapshot: InitializationSnapshot{Role: InitializationRoleServer, Step: InitializationStepInstallServe},
+			}, func(config *Config) {
+				config.InitializationOperatingSystem = test.operatingSystem
+				config.InitializationExecutablePath = test.executablePath
+			})
+			start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+			cookie := start.Cookies()[0]
+			start.Body.Close()
+
+			page := html.UnescapeString(wizardPage(t, handler, cookie, "/ui/init/server/install"))
+			for _, want := range []string{
+				test.wantCommand, test.wantNotice,
+				`id="serve-install-command"`, `data-copy-target="serve-install-command"`,
+				`hx-get="/ui/init/server/probe"`, `hx-trigger="every 2s"`,
+			} {
+				if !strings.Contains(page, want) {
+					t.Fatalf("安装页应包含 %q：\n%s", want, page)
+				}
+			}
+			if test.operatingSystem == "windows" && strings.Contains(page, "sudo ") {
+				t.Fatalf("Windows 安装命令不应使用 sudo：\n%s", page)
 			}
 		})
 	}

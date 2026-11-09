@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"runtime"
+	"strings"
 	"sync/atomic"
 )
 
@@ -137,6 +140,7 @@ func NewInitializationWizard(cfg Config, initializer Initializer) (http.Handler,
 		h.mux.HandleFunc("/ui/init/server/password", h.requireSession(destination.handleServerPassword))
 		h.mux.HandleFunc("/ui/init/server/password/set", h.requireSession(destination.handleServerPasswordSet))
 		h.mux.HandleFunc("/ui/init/server/install", h.requireSession(destination.handleServerInstall))
+		h.mux.HandleFunc("/ui/init/server/probe", h.requireSession(destination.handleServerProbe))
 		h.mux.HandleFunc("/ui/init/client", h.requireSession(destination.handleClientPlaceholder))
 	})
 	if err != nil {
@@ -362,7 +366,7 @@ func (w *initializationWizard) handleServerInstall(response http.ResponseWriter,
 }
 
 func (w *initializationWizard) serverPageData(title string) pageData {
-	return pageData{
+	data := pageData{
 		Title: title,
 		InitializationSteps: []InitializationStepView{
 			{Label: "建 vault", Current: title == "建 vault", Done: title != "建 vault"},
@@ -370,6 +374,56 @@ func (w *initializationWizard) serverPageData(title string) pageData {
 			{Label: "安装 serve", Current: title == "安装 serve"},
 		},
 	}
+	if title == "安装 serve" {
+		notice, command := initializationInstallCommand(
+			w.wizard.cfg.InitializationOperatingSystem,
+			w.wizard.cfg.InitializationExecutablePath,
+		)
+		data.InitializationInstallNotice = notice
+		data.InitializationInstallCommand = command
+	}
+	return data
+}
+
+func initializationInstallCommand(operatingSystem, executablePath string) (string, string) {
+	if operatingSystem == "" {
+		operatingSystem = runtime.GOOS
+	}
+	if executablePath == "" {
+		if resolved, err := os.Executable(); err == nil {
+			executablePath = resolved
+		} else {
+			executablePath = "sshmgr"
+		}
+	}
+	if operatingSystem == "windows" {
+		quotedPath := strings.ReplaceAll(executablePath, `"`, `\"`)
+		return "在管理员 PowerShell 中运行", `& "` + quotedPath + `" serve install --addr 0.0.0.0:7878`
+	}
+	quotedPath := "'" + strings.ReplaceAll(executablePath, "'", `'\''`) + "'"
+	return "需要管理员权限", "sudo " + quotedPath + " serve install --addr 0.0.0.0:7878"
+}
+
+func (w *initializationWizard) handleServerProbe(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "serve 探测只接受 GET 请求。")
+		return
+	}
+	probe, err := w.initializer.ProbeServeWebUI()
+	if err != nil {
+		response.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	if !probe.Running {
+		response.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if request.Header.Get("HX-Request") == "true" {
+		response.Header().Set("HX-Redirect", "/ui/init/server/finish")
+		response.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(response, request, "/ui/init/server/finish", http.StatusSeeOther)
 }
 
 func (w *initializationWizard) handleClientPlaceholder(response http.ResponseWriter, request *http.Request) {

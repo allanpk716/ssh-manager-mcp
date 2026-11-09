@@ -106,6 +106,10 @@ type Config struct {
 	// RequestShutdown 在升级成功页完整写给浏览器后触发，由 `sshmgr ui`
 	// 的服务循环注入，用于优雅关闭本次回环 Web UI 进程。
 	RequestShutdown func()
+	// InitializationOperatingSystem 与 InitializationExecutablePath 只用于
+	// 权威端向导的安装页；命令行适配器注入当前操作系统与可执行文件绝对路径。
+	InitializationOperatingSystem string
+	InitializationExecutablePath  string
 	// ServiceRestart 是权威端显式注入的服务重启能力；不注入时不注册重启
 	// 路由，也不显示重启表单。
 	ServiceRestart OpsRestartStore
