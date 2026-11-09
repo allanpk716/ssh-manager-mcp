@@ -105,7 +105,7 @@ type pageData struct {
 	OpsUpdateResult                 *OpsUpdateApplyResult
 	OpsUpdateError                  *OpsUpdateError
 	OpsUpdateRestarting             bool
-	OpsUpgradeServerError           string
+	OpsUpgradeServerError           *InitializationErrorView
 	OpsUpgradeServerSuccess         bool
 	ErrorTitle                      string
 	ErrorMessage                    string
@@ -114,7 +114,7 @@ type pageData struct {
 	LoginError                      string
 	LockRemaining                   time.Duration
 	NextPath                        string
-	InitializationError             string
+	InitializationError             *InitializationErrorView
 	InitializationMasterKeyPath     string
 	InitializationRoleLabel         string
 	InitializationSteps             []InitializationStepView

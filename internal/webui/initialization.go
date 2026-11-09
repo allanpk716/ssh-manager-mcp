@@ -3,7 +3,6 @@ package webui
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -113,6 +112,32 @@ type InitializationStepView struct {
 	Label   string
 	Current bool
 	Done    bool
+}
+
+// InitializationErrorView 把错误说明与建议命令拆开：命令由模板用 code 元素
+// 渲染，错误文字不携带 HTML，避免反引号原样显示在浏览器里。
+type InitializationErrorView struct {
+	// Lead 是命令前的说明文字，自带结尾标点。
+	Lead string
+	// Command 是建议命令；空串表示这条错误没有建议命令。
+	Command string
+	// Tail 是命令后的说明文字，可为空串。
+	Tail string
+}
+
+// initializationErrorWithAdvice 返回带 `sshmgr doctor` 的错误展示数据。
+func initializationErrorWithAdvice(err error) *InitializationErrorView {
+	return &InitializationErrorView{
+		Lead:    err.Error() + "。可运行",
+		Command: "sshmgr doctor",
+		Tail:    " 检查本机 vault 与密钥文件；确认要重试时回到上一页。",
+	}
+}
+
+// initializationPlainError 返回不带建议命令的错误展示数据；说明文字自带
+// 结尾标点。
+func initializationPlainError(message string) *InitializationErrorView {
+	return &InitializationErrorView{Lead: message}
 }
 
 // Initializer 是初始化向导改动本机状态的唯一入口。生产实现由命令行适配
@@ -263,7 +288,7 @@ func (w *initializationWizard) handleRoleChoice(response http.ResponseWriter, re
 	case InitializationRoleClient:
 		http.Redirect(response, request, "/ui/init/client", http.StatusSeeOther)
 	default:
-		data.InitializationError = "请选择单机、权威端或客户端中的一个角色。"
+		data.InitializationError = initializationPlainError("请选择单机、权威端或客户端中的一个角色。")
 		w.render(response, request, http.StatusBadRequest, "initialization-role-choice.tmpl", data)
 	}
 }
@@ -367,7 +392,7 @@ func (w *initializationWizard) handleServerVaultCreate(response http.ResponseWri
 
 func (w *initializationWizard) handleServerPassword(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
-		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "设置管理员口令只接受提交表单。")
+		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "设置管理员口令页只接受 GET 请求。")
 		return
 	}
 	w.render(response, request, http.StatusOK, "initialization-server-password.tmpl", w.serverPageData("设置管理员口令"))
@@ -392,7 +417,7 @@ func (w *initializationWizard) handleServerPasswordSet(response http.ResponseWri
 		return
 	}
 	if err := w.initializer.ValidateAdminPassword(password, confirmation); err != nil {
-		data.InitializationError = err.Error()
+		data.InitializationError = initializationPlainError(err.Error() + "。")
 		w.render(response, request, http.StatusBadRequest, "initialization-server-password.tmpl", data)
 		return
 	}
@@ -416,7 +441,11 @@ func (w *initializationWizard) serveRunning() (bool, error) {
 
 func (w *initializationWizard) renderServeAlreadyRunning(response http.ResponseWriter, request *http.Request, page, title string) {
 	data := w.serverPageData(title)
-	data.InitializationError = "serve 已在运行，请到正式 Web UI 操作，或用 `sshmgr serve admin set`。"
+	data.InitializationError = &InitializationErrorView{
+		Lead:    "serve 已在运行，请到正式 Web UI 操作，或用",
+		Command: "sshmgr serve admin set",
+		Tail:    "。",
+	}
 	w.render(response, request, http.StatusConflict, page, data)
 }
 
@@ -645,6 +674,3 @@ func (w *initializationWizard) writeCompleteClientPairingPage(response http.Resp
 	return true
 }
 
-func initializationErrorWithAdvice(err error) string {
-	return fmt.Sprintf("%v。可运行 `sshmgr doctor` 检查本机 vault 与密钥文件；确认要重试时回到上一页。", err)
-}

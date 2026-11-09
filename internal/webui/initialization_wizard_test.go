@@ -300,10 +300,13 @@ func TestInitializationWizardShowsVaultCreationFailureAndAdvice(t *testing.T) {
 	if created.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("创建失败状态码 = %d，页面：\n%s", created.StatusCode, body)
 	}
-	for _, want := range []string{"磁盘没有写入权限", "sshmgr doctor", "创建 vault"} {
+	for _, want := range []string{"磁盘没有写入权限", "<code>sshmgr doctor</code>", "创建 vault"} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("创建失败页应包含 %q：\n%s", want, body)
 		}
+	}
+	if strings.Contains(string(body), "`") {
+		t.Fatalf("创建失败页不应把命令的反引号原样显示：\n%s", body)
 	}
 }
 
@@ -494,11 +497,14 @@ func TestInitializationWizardRefusesServerWritesWhenServeIsRunning(t *testing.T)
 				t.Fatalf("serve 已运行时应拒绝写入，状态码=%d 页面：\n%s", refused.StatusCode, body)
 			}
 			for _, want := range []string{
-				"serve 已在运行", "请到正式 Web UI 操作", "`sshmgr serve admin set`",
+				"serve 已在运行", "请到正式 Web UI 操作", "<code>sshmgr serve admin set</code>",
 			} {
 				if !strings.Contains(string(body), want) {
 					t.Fatalf("拒绝写入页应包含 %q：\n%s", want, body)
 				}
+			}
+			if strings.Contains(string(body), "`") {
+				t.Fatalf("拒绝写入页不应把命令的反引号原样显示：\n%s", body)
 			}
 			if initializer.initializedRole != "" || initializer.password != "" {
 				t.Fatalf("serve 已运行时不得写入：初始化=%q 口令=%q", initializer.initializedRole, initializer.password)
@@ -792,6 +798,24 @@ func wizardGet(t *testing.T, handler http.Handler, cookie *http.Cookie, path str
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	return recorder.Result()
+}
+
+func TestInitializationWizardServerPasswordPageRejectsPostWithPageWording(t *testing.T) {
+	handler, startup := newInitializationWizardForTest(t, &stubInitializer{})
+	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := start.Cookies()[0]
+	start.Body.Close()
+	choice := wizardPage(t, handler, cookie, "/ui/")
+
+	response := wizardPost(t, handler, cookie, "/ui/init/server/password", hiddenInputValue(t, choice, "csrf_token"), nil)
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("设口令页用 POST 访问状态码=%d，应为 405", response.StatusCode)
+	}
+	if !strings.Contains(string(body), "设置管理员口令页只接受 GET 请求。") {
+		t.Fatalf("设口令页的方法错误说明应说明只接受 GET，页面：\n%s", body)
+	}
 }
 
 func TestInitializationWizardClientShowsPairingGuideAndRequestsShutdown(t *testing.T) {

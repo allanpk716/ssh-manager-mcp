@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -56,7 +57,7 @@ func TestStandaloneOpsUpgradeServerRequiresConfirmationAndShutsDownAfterPage(t *
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("确认升级状态码 = %d，应为 200：\n%s", response.StatusCode, responseBody)
 	}
-	if !strings.Contains(responseBody, "`sshmgr ui` 即将退出，再次运行它进入权威端初始化向导") {
+	if !strings.Contains(responseBody, "<code>sshmgr ui</code> 即将退出，再次运行它进入权威端初始化向导") {
 		t.Fatalf("升级成功页应提示退出与下一步：\n%s", responseBody)
 	}
 	if initializer.calls != 1 {
@@ -67,6 +68,43 @@ func TestStandaloneOpsUpgradeServerRequiresConfirmationAndShutsDownAfterPage(t *
 	case <-shutdown:
 	case <-time.After(2 * time.Second):
 		t.Fatal("升级成功页返回后应触发 Web UI 退出")
+	}
+}
+
+func TestOpsUpgradeServerFailureShowsReasonAndAdvice(t *testing.T) {
+	initializer := &upgradeServerInitializer{err: errors.New("写入 role.json 失败：磁盘已满")}
+	handler, startup, err := New(Config{
+		Role:        RoleStandalone,
+		Servers:     &stubServerSource{},
+		Access:      &stubAccessStore{},
+		MachineInit: initializer,
+		Port:        18080,
+	})
+	if err != nil {
+		t.Fatalf("构造单机 Web UI 失败：%v", err)
+	}
+	session := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := session.Cookies()[0]
+	session.Body.Close()
+
+	pageBody := readResponseBody(t, doGetWithCookie(t, handler, cookie, opsUpgradeServerPath))
+	form := url.Values{
+		"csrf_token": {hiddenInputValue(t, pageBody, "csrf_token")},
+		"confirm":    {"1"},
+	}
+	response := postAccessWrite(t, handler, cookie, opsUpgradeServerConfirmPath, form, "http://127.0.0.1:18080", "")
+	responseBody := readResponseBody(t, response)
+	if response.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("升级失败状态码 = %d，应为 500：\n%s", response.StatusCode, responseBody)
+	}
+	if !strings.Contains(responseBody, "写入 role.json 失败：磁盘已满") {
+		t.Fatalf("升级失败页应显示具体失败原因：\n%s", responseBody)
+	}
+	if !strings.Contains(responseBody, "<code>sshmgr doctor</code>") {
+		t.Fatalf("升级失败页应显示建议命令：\n%s", responseBody)
+	}
+	if strings.Contains(responseBody, "`") {
+		t.Fatalf("升级失败页不应把命令的反引号原样显示：\n%s", responseBody)
 	}
 }
 

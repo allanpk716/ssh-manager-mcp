@@ -178,7 +178,7 @@ func TestUICommandUpgradeServerRewritesRoleAndPreservesVault(t *testing.T) {
 	confirmBody, _ := io.ReadAll(confirmResponse.Body)
 	confirmResponse.Body.Close()
 	if confirmResponse.StatusCode != http.StatusOK ||
-		!strings.Contains(string(confirmBody), "`sshmgr ui` 即将退出，再次运行它进入权威端初始化向导") {
+		!strings.Contains(string(confirmBody), "<code>sshmgr ui</code> 即将退出，再次运行它进入权威端初始化向导") {
 		t.Fatalf("确认升级应先返回成功页，状态码=%d 页面：\n%s", confirmResponse.StatusCode, confirmBody)
 	}
 

@@ -1,7 +1,7 @@
 {{define "content"}}
 <section class="initialization-page">
 <h1>选择本机角色</h1>
-{{if .InitializationError}}<div class="operation-refusal"><p>{{.InitializationError}}</p></div>{{end}}
+{{if .InitializationError}}<div class="operation-refusal"><p>{{.InitializationError.Lead}}{{if .InitializationError.Command}} <code>{{.InitializationError.Command}}</code>{{end}}{{.InitializationError.Tail}}</p></div>{{end}}
 <div class="initialization-choices">
 <form method="post" action="/ui/init/role">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">

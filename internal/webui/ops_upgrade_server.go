@@ -44,12 +44,12 @@ func (h *handler) handleOpsUpgradeServerConfirm(w http.ResponseWriter, r *http.R
 	}
 	if r.PostFormValue("confirm") != "1" {
 		h.renderPage(w, r, http.StatusBadRequest, "ops-upgrade-server.tmpl", pageData{
-			Title: "升级为权威端", OpsUpgradeServerError: "请先勾选确认，再升级为权威端。",
+			Title: "升级为权威端", OpsUpgradeServerError: initializationPlainError("请先勾选确认，再升级为权威端。"),
 		})
 		return
 	}
 	if err := h.cfg.MachineInit.InitializeServer(); err != nil {
-		h.renderUpgradeServerError(w, r)
+		h.renderUpgradeServerError(w, r, err)
 		return
 	}
 	if !h.writeCompleteUpgradeServerSuccessPage(w, r) {
@@ -64,10 +64,9 @@ func (h *handler) handleOpsUpgradeServerConfirm(w http.ResponseWriter, r *http.R
 	}
 }
 
-func (h *handler) renderUpgradeServerError(w http.ResponseWriter, r *http.Request) {
-	message := "升级失败，本机角色未确认改变。请稍后重试。"
+func (h *handler) renderUpgradeServerError(w http.ResponseWriter, r *http.Request, failure error) {
 	h.renderPage(w, r, http.StatusInternalServerError, "ops-upgrade-server.tmpl", pageData{
-		Title: "升级为权威端", OpsUpgradeServerError: message,
+		Title: "升级为权威端", OpsUpgradeServerError: initializationErrorWithAdvice(failure),
 	})
 }
 

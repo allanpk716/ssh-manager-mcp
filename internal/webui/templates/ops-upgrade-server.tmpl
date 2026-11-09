@@ -2,12 +2,12 @@
 <section class="ops-upgrade-server">
 <h1>升级为权威端</h1>
 {{if .OpsUpgradeServerError}}
-<div class="notice notice-error"><p>{{.OpsUpgradeServerError}}</p></div>
+<div class="notice notice-error"><p>{{.OpsUpgradeServerError.Lead}}{{if .OpsUpgradeServerError.Command}} <code>{{.OpsUpgradeServerError.Command}}</code>{{end}}{{.OpsUpgradeServerError.Tail}}</p></div>
 {{end}}
 {{if .OpsUpgradeServerSuccess}}
 <div class="notice notice-success">
 <p>本机已升级为权威端。已有服务器、Profile、项目令牌与机密项保持不变。</p>
-<p>`sshmgr ui` 即将退出，再次运行它进入权威端初始化向导。</p>
+<p><code>sshmgr ui</code> 即将退出，再次运行它进入权威端初始化向导。</p>
 </div>
 {{else}}
 <p>升级会把本机从单机改为权威端。已有服务器、Profile、项目令牌与机密项保持不变，vault 数据不迁移也不清空。</p>
