@@ -265,6 +265,50 @@ func TestInitializationWizardResumesAtVaultCreation(t *testing.T) {
 	}
 }
 
+func TestInitializationWizardChoosesServerAndStartsVaultStep(t *testing.T) {
+	initializer := &stubInitializer{}
+	handler, startup := newInitializationWizardForTest(t, initializer)
+	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := start.Cookies()[0]
+	start.Body.Close()
+
+	choice := wizardPage(t, handler, cookie, "/ui/")
+	selected := wizardPost(t, handler, cookie, "/ui/init/role", hiddenInputValue(t, choice, "csrf_token"), url.Values{"role": {"server"}})
+	selected.Body.Close()
+	if selected.StatusCode != http.StatusSeeOther || selected.Header.Get("Location") != "/ui/init/server/vault" {
+		t.Fatalf("选权威端应进入建 vault 步骤，状态码=%d 跳转=%q", selected.StatusCode, selected.Header.Get("Location"))
+	}
+	if initializer.selectedRole != InitializationRoleServer {
+		t.Fatalf("选权威端应先写入 setup_complete 为假的角色文件，实际 %q", initializer.selectedRole)
+	}
+
+	confirmation := wizardPage(t, handler, cookie, "/ui/init/server/vault")
+	for _, want := range []string{"建 vault", "设置管理员口令", "安装 serve"} {
+		if !strings.Contains(confirmation, want) {
+			t.Fatalf("权威端向导应显示三步步骤条，缺少 %q：\n%s", want, confirmation)
+		}
+	}
+}
+
+func TestInitializationWizardResumesServerAtVaultCreation(t *testing.T) {
+	initializer := &stubInitializer{
+		snapshot: InitializationSnapshot{Role: InitializationRoleServer, Step: InitializationStepCreateVault},
+	}
+	handler, startup := newInitializationWizardForTest(t, initializer)
+	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := start.Cookies()[0]
+	start.Body.Close()
+
+	root := wizardGet(t, handler, cookie, "/ui/")
+	root.Body.Close()
+	if root.StatusCode != http.StatusSeeOther || root.Header.Get("Location") != "/ui/init/server/vault" {
+		t.Fatalf("权威端续做应从建 vault 开始，状态码=%d 跳转=%q", root.StatusCode, root.Header.Get("Location"))
+	}
+	if initializer.selectedRole != "" {
+		t.Fatalf("权威端续做不应重写角色，实际调用了选角色：%q", initializer.selectedRole)
+	}
+}
+
 func wizardGet(t *testing.T, handler http.Handler, cookie *http.Cookie, path string) *http.Response {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodGet, path, nil)
@@ -275,7 +319,7 @@ func wizardGet(t *testing.T, handler http.Handler, cookie *http.Cookie, path str
 	return recorder.Result()
 }
 
-func TestInitializationWizardRolePlaceholdersDoNotChangeMachine(t *testing.T) {
+func TestInitializationWizardClientPlaceholderDoesNotChangeMachine(t *testing.T) {
 	initializer := &stubInitializer{}
 	handler, startup := newInitializationWizardForTest(t, initializer)
 	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
@@ -288,7 +332,6 @@ func TestInitializationWizardRolePlaceholdersDoNotChangeMachine(t *testing.T) {
 		path string
 		name string
 	}{
-		{role: "server", path: "/ui/init/server", name: "权威端"},
 		{role: "client", path: "/ui/init/client", name: "客户端"},
 	} {
 		selected := wizardPost(t, handler, cookie, "/ui/init/role", hiddenInputValue(t, choice, "csrf_token"), url.Values{"role": {testCase.role}})

@@ -29,6 +29,10 @@ const (
 	InitializationStepChooseRole InitializationStep = iota
 	// InitializationStepCreateVault 从「创建 vault」续做。
 	InitializationStepCreateVault
+	// InitializationStepSetAdminPassword 从「设置管理员口令」续做。
+	InitializationStepSetAdminPassword
+	// InitializationStepInstallServe 从「安装 serve」续做。
+	InitializationStepInstallServe
 )
 
 // InitializationSnapshot 是向导需要的本机状态快照。
@@ -41,6 +45,13 @@ type InitializationSnapshot struct {
 type InitializationResult struct {
 	// MasterKeyPath 是随机主密钥文件的位置。
 	MasterKeyPath string
+}
+
+// InitializationStepView 是步骤条中的一步。
+type InitializationStepView struct {
+	Label   string
+	Current bool
+	Done    bool
 }
 
 // Initializer 是初始化向导改动本机状态的唯一入口。生产实现由命令行适配
@@ -78,8 +89,9 @@ func NewInitializationWizard(cfg Config, initializer Initializer) (http.Handler,
 	if err != nil {
 		return nil, Startup{}, err
 	}
-	if snapshot.Step == InitializationStepCreateVault && snapshot.Role != InitializationRoleStandalone {
-		return nil, Startup{}, errors.New("只有单机初始化支持从「创建 vault」续做")
+	if snapshot.Step == InitializationStepCreateVault &&
+		snapshot.Role != InitializationRoleStandalone && snapshot.Role != InitializationRoleServer {
+		return nil, Startup{}, errors.New("只有单机或权威端初始化支持从「创建 vault」续做")
 	}
 
 	formalHandler, _, err := New(cfg)
@@ -95,7 +107,8 @@ func NewInitializationWizard(cfg Config, initializer Initializer) (http.Handler,
 		h.mux.HandleFunc("/ui/init/standalone", h.requireSession(destination.handleStandaloneConfirmation))
 		h.mux.HandleFunc("/ui/init/standalone/create", h.requireSession(destination.handleStandaloneCreate))
 		h.mux.HandleFunc("/ui/init/standalone/finish", h.requireSession(destination.handleStandaloneFinish))
-		h.mux.HandleFunc("/ui/init/server", h.requireSession(destination.handleServerPlaceholder))
+		h.mux.HandleFunc("/ui/init/server", h.requireSession(destination.handleServerEntry))
+		h.mux.HandleFunc("/ui/init/server/vault", h.requireSession(destination.handleServerVault))
 		h.mux.HandleFunc("/ui/init/client", h.requireSession(destination.handleClientPlaceholder))
 	})
 	if err != nil {
@@ -129,6 +142,10 @@ func (w *initializationWizard) handleRoot(response http.ResponseWriter, request 
 		return
 	}
 	if w.entryStep == InitializationStepCreateVault {
+		if w.entryRole == InitializationRoleServer {
+			http.Redirect(response, request, "/ui/init/server/vault", http.StatusSeeOther)
+			return
+		}
 		http.Redirect(response, request, "/ui/init/standalone", http.StatusSeeOther)
 		return
 	}
@@ -151,7 +168,12 @@ func (w *initializationWizard) handleRoleChoice(response http.ResponseWriter, re
 		}
 		http.Redirect(response, request, "/ui/init/standalone", http.StatusSeeOther)
 	case InitializationRoleServer:
-		http.Redirect(response, request, "/ui/init/server", http.StatusSeeOther)
+		if err := w.initializer.SelectRoleWithoutVault(role); err != nil {
+			data.InitializationError = initializationErrorWithAdvice(err)
+			w.render(response, request, http.StatusBadRequest, "initialization-role-choice.tmpl", data)
+			return
+		}
+		http.Redirect(response, request, "/ui/init/server/vault", http.StatusSeeOther)
 	case InitializationRoleClient:
 		http.Redirect(response, request, "/ui/init/client", http.StatusSeeOther)
 	default:
@@ -200,10 +222,27 @@ func (w *initializationWizard) handleStandaloneFinish(response http.ResponseWrit
 	http.Redirect(response, request, listPath, http.StatusSeeOther)
 }
 
-func (w *initializationWizard) handleServerPlaceholder(response http.ResponseWriter, request *http.Request) {
-	w.render(response, request, http.StatusOK, "initialization-placeholder.tmpl", pageData{
-		Title: "权威端初始化", InitializationRoleLabel: "权威端",
-	})
+func (w *initializationWizard) handleServerEntry(response http.ResponseWriter, request *http.Request) {
+	http.Redirect(response, request, "/ui/init/server/vault", http.StatusSeeOther)
+}
+
+func (w *initializationWizard) handleServerVault(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "建 vault 步骤只接受 GET 请求。")
+		return
+	}
+	w.render(response, request, http.StatusOK, "initialization-server-vault.tmpl", w.serverPageData("建 vault"))
+}
+
+func (w *initializationWizard) serverPageData(title string) pageData {
+	return pageData{
+		Title: title,
+		InitializationSteps: []InitializationStepView{
+			{Label: "建 vault", Current: title == "建 vault", Done: title != "建 vault"},
+			{Label: "设置管理员口令", Current: title == "设置管理员口令", Done: title == "安装 serve"},
+			{Label: "安装 serve", Current: title == "安装 serve"},
+		},
+	}
 }
 
 func (w *initializationWizard) handleClientPlaceholder(response http.ResponseWriter, request *http.Request) {

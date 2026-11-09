@@ -117,6 +117,7 @@ type pageData struct {
 	InitializationError         string
 	InitializationMasterKeyPath string
 	InitializationRoleLabel     string
+	InitializationSteps         []InitializationStepView
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染
