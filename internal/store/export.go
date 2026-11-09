@@ -45,7 +45,11 @@ type Snapshot struct {
 	// 明文字段携带值，靠外层加密保护；导入时用目标库的主密钥重新加密。
 	Secrets      []SnapshotSecret      `json:"secrets,omitempty"`
 	SecretAllows []SnapshotSecretAllow `json:"secret_allows,omitempty"`
-	Audit        []SnapshotAudit       `json:"audit"`
+	// SoftwareDeclarations / SoftwareDeclarationPorts 只进入 owner 的全量
+	// 导出与加密备份，绝不进入 profile 裁剪的客户端快照。
+	SoftwareDeclarations     []SnapshotSoftwareDeclaration     `json:"software_inventory,omitempty"`
+	SoftwareDeclarationPorts []SnapshotSoftwareDeclarationPort `json:"software_declaration_ports,omitempty"`
+	Audit                    []SnapshotAudit                   `json:"audit"`
 	// 命令策略段 (ticket #15):自定义规则与被停用
 	// 的默认规则编号。规则全局一套,两条导出路径都携带,不做 profile 裁剪。
 	// 旧快照(策略段尚不存在)解码为 nil 切片 → 导入零行 → 内置默认规则
@@ -78,6 +82,40 @@ type SnapshotCredential struct {
 	Passphrase []byte `json:"passphrase"` // DECRYPTED plaintext; nil/empty if none
 	CreatedAt  int64  `json:"created_at"`
 	UpdatedAt  int64  `json:"updated_at"`
+}
+
+// SnapshotSoftwareDeclaration 是全量备份里的软件声明行。字段按数据库原样
+// 恢复，版本不做任何规格化。
+type SnapshotSoftwareDeclaration struct {
+	ID                 string `json:"id"`
+	DeviceID           string `json:"device_id"`
+	Category           string `json:"category"`
+	Name               string `json:"name"`
+	Version            string `json:"version"`
+	PackageURL         string `json:"purl,omitempty"`
+	CPE                string `json:"cpe,omitempty"`
+	BelongsTo          string `json:"belongs_to,omitempty"`
+	Note               string `json:"note,omitempty"`
+	ClaimedObservedKey string `json:"claimed_observed_key,omitempty"`
+	Status             string `json:"status"`
+	ConfirmedAt        int64  `json:"confirmed_at"`
+	CreatedSource      string `json:"created_source,omitempty"`
+	LastSource         string `json:"last_source,omitempty"`
+	CreatedAt          int64  `json:"created_at"`
+	UpdatedAt          int64  `json:"updated_at"`
+}
+
+// SnapshotSoftwareDeclarationPort 是全量备份里的声明监听端口行。
+type SnapshotSoftwareDeclarationPort struct {
+	ID            string `json:"id"`
+	DeclarationID string `json:"declaration_id"`
+	DeviceID      string `json:"device_id"`
+	Address       string `json:"address"`
+	Port          int    `json:"port"`
+	Protocol      string `json:"protocol"`
+	Exposure      string `json:"exposure"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 // SnapshotSite 是全量快照里的站点段。
@@ -467,6 +505,10 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	// 机密项（票 #59）：当前值与上一个值都在这里解密，快照序列化后必须由
 	// 调用方整体加密。
 	if snap.Secrets, snap.SecretAllows, err = s.snapshotSecrets(); err != nil {
+		return nil, err
+	}
+	// 软件清单只走 owner 全量备份；profile 导出函数从不填充这两个字段。
+	if snap.SoftwareDeclarations, snap.SoftwareDeclarationPorts, err = s.snapshotSoftwareInventory(); err != nil {
 		return nil, err
 	}
 
@@ -1048,6 +1090,13 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 	}
 	if err := importDeviceLayoutCoordinatesTx(tx, snap.DeviceLayoutCoordinates); err != nil {
 		return err
+	}
+	// 软件清单只恢复到 owner 库。客户端缓存导入即使收到带清单段的旧文件
+	// 或异常文件，也显式跳过，保证客户端本地永远没有软件清单副本。
+	if generateMissingDevices {
+		if err := importSoftwareInventoryTx(tx, snap.SoftwareDeclarations, snap.SoftwareDeclarationPorts); err != nil {
+			return err
+		}
 	}
 
 	// 1. credentials (re-seal under THIS store's master key)

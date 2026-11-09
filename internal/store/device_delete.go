@@ -31,6 +31,11 @@ type DeviceDeletePreview struct {
 	SecretServerAllows []*DeviceDeleteSecretAllow
 	Memberships        []*models.NetworkMembership
 	LayoutCoordinates  []*models.DeviceLayoutCoordinate
+	// 软件清单相关数量。第一张清单票只有声明；SoftwareItemCount 保留给
+	// 后续实测与声明合成后的条目总数。
+	SoftwareItemCount          int
+	SoftwareDeclarationCount   int
+	SoftwareListeningPortCount int
 }
 
 // DeviceDeletePreview 按设备名字组装删除预览。预览只读数据库，不改变
@@ -119,10 +124,35 @@ func deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePreview, error
 	if err != nil {
 		return nil, err
 	}
+	softwareItemCount, softwareDeclarationCount, softwarePortCount, err := deviceSoftwareCountsTx(tx, device.ID)
+	if err != nil {
+		return nil, err
+	}
 	return &DeviceDeletePreview{
 		Device: device, Servers: servers, SecretServerAllows: secretAllows,
 		Memberships: memberships, LayoutCoordinates: coordinates,
+		SoftwareItemCount: softwareItemCount, SoftwareDeclarationCount: softwareDeclarationCount,
+		SoftwareListeningPortCount: softwarePortCount,
 	}, nil
+}
+
+// deviceSoftwareCountsTx 统计设备删除预览需要的软件清单数量。
+func deviceSoftwareCountsTx(tx *sql.Tx, deviceID string) (int, int, int, error) {
+	var declarationCount, portCount int
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_declarations WHERE device_id=? AND status='active'`,
+		deviceID,
+	).Scan(&declarationCount); err != nil {
+		return 0, 0, 0, err
+	}
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_declaration_ports WHERE device_id=?`, deviceID,
+	).Scan(&portCount); err != nil {
+		return 0, 0, 0, err
+	}
+	// 当前一条生效声明就是一条软件条目；后续实测与声明合成在同一数量上
+	// 继续扩展。
+	return declarationCount, declarationCount, portCount, nil
 }
 
 // deviceServersForDeviceTx 返回设备关联的服务器条目摘要及锚状态，详情与
@@ -205,7 +235,7 @@ func deviceDeleteAuditSummary(preview *DeviceDeletePreview) map[string]any {
 	for _, membership := range preview.Memberships {
 		memberSummaries = append(memberSummaries, membershipAuditSummary(membership))
 	}
-	return map[string]any{
+	summary := map[string]any{
 		"name":               preview.Device.Name,
 		"client":             preview.Device.ClientName,
 		"servers":            serverNames,
@@ -213,4 +243,16 @@ func deviceDeleteAuditSummary(preview *DeviceDeletePreview) map[string]any {
 		"members":            memberSummaries,
 		"layout-coordinates": len(preview.LayoutCoordinates),
 	}
+	// 软件清单尚为空的设备保持旧审计摘要形态；有清单时才追加数量，
+	// 避免无关设备删除的审计噪音。
+	if preview.SoftwareItemCount > 0 {
+		summary["software-items"] = preview.SoftwareItemCount
+	}
+	if preview.SoftwareDeclarationCount > 0 {
+		summary["software-declarations"] = preview.SoftwareDeclarationCount
+	}
+	if preview.SoftwareListeningPortCount > 0 {
+		summary["software-listening-ports"] = preview.SoftwareListeningPortCount
+	}
+	return summary
 }
