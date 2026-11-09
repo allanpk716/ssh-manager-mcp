@@ -47,6 +47,11 @@ type InitializationResult struct {
 	MasterKeyPath string
 }
 
+// InitializationWriteSource 描述初始化向导写操作的来源地址。
+type InitializationWriteSource struct {
+	RemoteAddress string
+}
+
 // InitializationStepView 是步骤条中的一步。
 type InitializationStepView struct {
 	Label   string
@@ -63,6 +68,10 @@ type Initializer interface {
 	SelectRoleWithoutVault(role InitializationRole) error
 	// Initialize 创建 vault 并把所选角色标记为完成初始化。
 	Initialize(role InitializationRole) (InitializationResult, error)
+	// ValidateAdminPassword 使用与命令行一致的管理员口令规则做提交前校验。
+	ValidateAdminPassword(password, confirmation []byte) error
+	// SetAdminPassword 设置权威端 Web UI 管理员口令。
+	SetAdminPassword(password, confirmation []byte, source InitializationWriteSource) (int64, error)
 }
 
 // initializationWizard 先只服务向导路由；单机初始化完成后，把同一个进程内
@@ -93,6 +102,10 @@ func NewInitializationWizard(cfg Config, initializer Initializer) (http.Handler,
 		snapshot.Role != InitializationRoleStandalone && snapshot.Role != InitializationRoleServer {
 		return nil, Startup{}, errors.New("只有单机或权威端初始化支持从「创建 vault」续做")
 	}
+	if (snapshot.Step == InitializationStepSetAdminPassword || snapshot.Step == InitializationStepInstallServe) &&
+		snapshot.Role != InitializationRoleServer {
+		return nil, Startup{}, errors.New("只有权威端初始化包含设置管理员口令与安装 serve 步骤")
+	}
 
 	formalHandler, _, err := New(cfg)
 	if err != nil {
@@ -109,6 +122,10 @@ func NewInitializationWizard(cfg Config, initializer Initializer) (http.Handler,
 		h.mux.HandleFunc("/ui/init/standalone/finish", h.requireSession(destination.handleStandaloneFinish))
 		h.mux.HandleFunc("/ui/init/server", h.requireSession(destination.handleServerEntry))
 		h.mux.HandleFunc("/ui/init/server/vault", h.requireSession(destination.handleServerVault))
+		h.mux.HandleFunc("/ui/init/server/vault/create", h.requireSession(destination.handleServerVaultCreate))
+		h.mux.HandleFunc("/ui/init/server/password", h.requireSession(destination.handleServerPassword))
+		h.mux.HandleFunc("/ui/init/server/password/set", h.requireSession(destination.handleServerPasswordSet))
+		h.mux.HandleFunc("/ui/init/server/install", h.requireSession(destination.handleServerInstall))
 		h.mux.HandleFunc("/ui/init/client", h.requireSession(destination.handleClientPlaceholder))
 	})
 	if err != nil {
@@ -141,11 +158,11 @@ func (w *initializationWizard) handleRoot(response http.ResponseWriter, request 
 		w.wizard.renderError(response, request, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
+	if w.entryRole == InitializationRoleServer && w.entryStep != InitializationStepChooseRole {
+		http.Redirect(response, request, w.serverEntryPath(), http.StatusSeeOther)
+		return
+	}
 	if w.entryStep == InitializationStepCreateVault {
-		if w.entryRole == InitializationRoleServer {
-			http.Redirect(response, request, "/ui/init/server/vault", http.StatusSeeOther)
-			return
-		}
 		http.Redirect(response, request, "/ui/init/standalone", http.StatusSeeOther)
 		return
 	}
@@ -226,12 +243,76 @@ func (w *initializationWizard) handleServerEntry(response http.ResponseWriter, r
 	http.Redirect(response, request, "/ui/init/server/vault", http.StatusSeeOther)
 }
 
+func (w *initializationWizard) serverEntryPath() string {
+	switch w.entryStep {
+	case InitializationStepSetAdminPassword:
+		return "/ui/init/server/password"
+	case InitializationStepInstallServe:
+		return "/ui/init/server/install"
+	default:
+		return "/ui/init/server/vault"
+	}
+}
+
 func (w *initializationWizard) handleServerVault(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "建 vault 步骤只接受 GET 请求。")
 		return
 	}
 	w.render(response, request, http.StatusOK, "initialization-server-vault.tmpl", w.serverPageData("建 vault"))
+}
+
+func (w *initializationWizard) handleServerVaultCreate(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "创建 vault 只接受提交表单。")
+		return
+	}
+	if _, err := w.initializer.Initialize(InitializationRoleServer); err != nil {
+		data := w.serverPageData("建 vault")
+		data.InitializationError = initializationErrorWithAdvice(err)
+		w.render(response, request, http.StatusInternalServerError, "initialization-server-vault.tmpl", data)
+		return
+	}
+	http.Redirect(response, request, "/ui/init/server/password", http.StatusSeeOther)
+}
+
+func (w *initializationWizard) handleServerPassword(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "设置管理员口令只接受提交表单。")
+		return
+	}
+	w.render(response, request, http.StatusOK, "initialization-server-password.tmpl", w.serverPageData("设置管理员口令"))
+}
+
+func (w *initializationWizard) handleServerPasswordSet(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "设置管理员口令只接受提交表单。")
+		return
+	}
+	password := []byte(request.PostFormValue("password"))
+	confirmation := []byte(request.PostFormValue("password_confirm"))
+	data := w.serverPageData("设置管理员口令")
+	if err := w.initializer.ValidateAdminPassword(password, confirmation); err != nil {
+		data.InitializationError = err.Error()
+		w.render(response, request, http.StatusBadRequest, "initialization-server-password.tmpl", data)
+		return
+	}
+	if _, err := w.initializer.SetAdminPassword(password, confirmation, InitializationWriteSource{
+		RemoteAddress: remoteIP(request),
+	}); err != nil {
+		data.InitializationError = initializationErrorWithAdvice(err)
+		w.render(response, request, http.StatusInternalServerError, "initialization-server-password.tmpl", data)
+		return
+	}
+	http.Redirect(response, request, "/ui/init/server/install", http.StatusSeeOther)
+}
+
+func (w *initializationWizard) handleServerInstall(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "安装 serve 步骤只接受 GET 请求。")
+		return
+	}
+	w.render(response, request, http.StatusOK, "initialization-server-install.tmpl", w.serverPageData("安装 serve"))
 }
 
 func (w *initializationWizard) serverPageData(title string) pageData {

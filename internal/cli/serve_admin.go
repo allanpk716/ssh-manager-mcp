@@ -149,11 +149,8 @@ func newServeAdminSetCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("读取第二次管理员口令失败：%w", err)
 			}
-			if string(first) != string(second) {
-				return NewExitCodeError(1, errors.New("两次输入的管理员口令不一致"))
-			}
-			if len(first) == 0 {
-				return NewExitCodeError(1, errors.New("管理员口令不能为空"))
+			if err := machineinit.ValidateAdminPassword(first, second); err != nil {
+				return NewExitCodeError(1, err)
 			}
 			generation, err := machineinit.SetAdminPassword(first, serveAdminAuditRow("admin.password_set", nil))
 			if err != nil {

@@ -46,6 +46,14 @@ func (machineInitializer) Initialize(role webui.InitializationRole) (webui.Initi
 	return webui.InitializationResult{MasterKeyPath: result.MasterKeyPath}, err
 }
 
+func (machineInitializer) ValidateAdminPassword(password, confirmation []byte) error {
+	return machineinit.ValidateAdminPassword(password, confirmation)
+}
+
+func (machineInitializer) SetAdminPassword(password, confirmation []byte, source webui.InitializationWriteSource) (int64, error) {
+	return machineinit.SetAdminPasswordForWebUI(password, confirmation, source.RemoteAddress)
+}
+
 func machineRole(role webui.InitializationRole) roles.Role {
 	return roles.Role(role)
 }

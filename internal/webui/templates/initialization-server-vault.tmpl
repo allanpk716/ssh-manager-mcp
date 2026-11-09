@@ -8,6 +8,10 @@
 </ol>
 <div class="operation-result">
 <p>将创建本机 vault，并生成一个随机主密钥文件用于加密 vault。创建后再设置管理员口令。</p>
+<form method="post" action="/ui/init/server/vault/create">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">创建 vault</button>
+</form>
 </div>
 </section>
 {{end}}

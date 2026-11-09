@@ -17,6 +17,9 @@ type stubInitializer struct {
 
 	selectedRole    InitializationRole
 	initializedRole InitializationRole
+	password        string
+	passwordConfirm string
+	passwordSource  InitializationWriteSource
 }
 
 func (s *stubInitializer) ReadSnapshot() (InitializationSnapshot, error) {
@@ -31,6 +34,23 @@ func (s *stubInitializer) SelectRoleWithoutVault(role InitializationRole) error 
 func (s *stubInitializer) Initialize(role InitializationRole) (InitializationResult, error) {
 	s.initializedRole = role
 	return s.result, s.initializeErr
+}
+
+func (s *stubInitializer) ValidateAdminPassword(password, confirmation []byte) error {
+	if string(password) != string(confirmation) {
+		return errors.New("两次输入的管理员口令不一致")
+	}
+	if len(password) == 0 {
+		return errors.New("管理员口令不能为空")
+	}
+	return nil
+}
+
+func (s *stubInitializer) SetAdminPassword(password, confirmation []byte, source InitializationWriteSource) (int64, error) {
+	s.password = string(password)
+	s.passwordConfirm = string(confirmation)
+	s.passwordSource = source
+	return 1, nil
 }
 
 func newInitializationWizardForTest(t *testing.T, initializer Initializer) (http.Handler, Startup) {
@@ -306,6 +326,106 @@ func TestInitializationWizardResumesServerAtVaultCreation(t *testing.T) {
 	}
 	if initializer.selectedRole != "" {
 		t.Fatalf("权威端续做不应重写角色，实际调用了选角色：%q", initializer.selectedRole)
+	}
+}
+
+func TestInitializationWizardServerCreatesVaultAndMovesToPasswordStep(t *testing.T) {
+	initializer := &stubInitializer{result: InitializationResult{MasterKeyPath: "/tmp/authority.key"}}
+	handler, startup := newInitializationWizardForTest(t, initializer)
+	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := start.Cookies()[0]
+	start.Body.Close()
+
+	vaultPage := wizardPage(t, handler, cookie, "/ui/init/server/vault")
+	created := wizardPost(t, handler, cookie, "/ui/init/server/vault/create", hiddenInputValue(t, vaultPage, "csrf_token"), nil)
+	created.Body.Close()
+	if created.StatusCode != http.StatusSeeOther || created.Header.Get("Location") != "/ui/init/server/password" {
+		t.Fatalf("权威端建 vault 后应进入设口令步骤，状态码=%d 跳转=%q", created.StatusCode, created.Header.Get("Location"))
+	}
+	if initializer.initializedRole != InitializationRoleServer {
+		t.Fatalf("应初始化为权威端，实际 %q", initializer.initializedRole)
+	}
+
+	passwordPage := wizardPage(t, handler, cookie, "/ui/init/server/password")
+	for _, want := range []string{"设置管理员口令", "输入管理员口令", "再输入一遍", "sshmgr serve admin set"} {
+		if !strings.Contains(passwordPage, want) {
+			t.Fatalf("设口令页应包含 %q：\n%s", want, passwordPage)
+		}
+	}
+}
+
+func TestInitializationWizardResumesServerAtLaterSteps(t *testing.T) {
+	tests := []struct {
+		name string
+		step InitializationStep
+		path string
+	}{
+		{
+			name: "缺管理员口令时从第二步续做",
+			step: InitializationStepSetAdminPassword,
+			path: "/ui/init/server/password",
+		},
+		{
+			name: "口令已设但 serve 未运行时从第三步续做",
+			step: InitializationStepInstallServe,
+			path: "/ui/init/server/install",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			initializer := &stubInitializer{
+				snapshot: InitializationSnapshot{Role: InitializationRoleServer, Step: test.step},
+			}
+			handler, startup := newInitializationWizardForTest(t, initializer)
+			start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+			cookie := start.Cookies()[0]
+			start.Body.Close()
+
+			root := wizardGet(t, handler, cookie, "/ui/")
+			root.Body.Close()
+			if root.StatusCode != http.StatusSeeOther || root.Header.Get("Location") != test.path {
+				t.Fatalf("权威端续做跳转错误，状态码=%d 地址=%q，应为 %q", root.StatusCode, root.Header.Get("Location"), test.path)
+			}
+			if initializer.selectedRole != "" || initializer.initializedRole != "" {
+				t.Fatalf("续做不得重写角色或 vault：选角色=%q 初始化=%q", initializer.selectedRole, initializer.initializedRole)
+			}
+		})
+	}
+}
+
+func TestInitializationWizardServerSetsAdminPasswordWithCommandLineRules(t *testing.T) {
+	initializer := &stubInitializer{}
+	handler, startup := newInitializationWizardForTest(t, initializer)
+	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := start.Cookies()[0]
+	start.Body.Close()
+
+	passwordPage := wizardPage(t, handler, cookie, "/ui/init/server/password")
+	mismatched := wizardPost(t, handler, cookie, "/ui/init/server/password/set", hiddenInputValue(t, passwordPage, "csrf_token"), url.Values{
+		"password": {"first-password"}, "password_confirm": {"second-password"},
+	})
+	mismatchedBody, _ := io.ReadAll(mismatched.Body)
+	mismatched.Body.Close()
+	if mismatched.StatusCode != http.StatusBadRequest || !strings.Contains(string(mismatchedBody), "两次输入的管理员口令不一致") {
+		t.Fatalf("两次输入不一致应沿用命令行规则，状态码=%d 页面：\n%s", mismatched.StatusCode, mismatchedBody)
+	}
+	if initializer.password != "" {
+		t.Fatalf("两次输入不一致时不应写入口令，实际调用：%q", initializer.password)
+	}
+
+	passwordPage = wizardPage(t, handler, cookie, "/ui/init/server/password")
+	set := wizardPost(t, handler, cookie, "/ui/init/server/password/set", hiddenInputValue(t, passwordPage, "csrf_token"), url.Values{
+		"password": {"authority-password"}, "password_confirm": {"authority-password"},
+	})
+	set.Body.Close()
+	if set.StatusCode != http.StatusSeeOther || set.Header.Get("Location") != "/ui/init/server/install" {
+		t.Fatalf("设置管理员口令后应进入安装步骤，状态码=%d 跳转=%q", set.StatusCode, set.Header.Get("Location"))
+	}
+	if initializer.password != "authority-password" || initializer.passwordConfirm != "authority-password" {
+		t.Fatalf("应把两次输入交给初始化模块，第一遍=%q 第二遍=%q", initializer.password, initializer.passwordConfirm)
+	}
+	if initializer.passwordSource.RemoteAddress == "" {
+		t.Fatal("写管理员口令应记录来源地址")
 	}
 }
 

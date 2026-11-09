@@ -1307,3 +1307,9 @@ h1 {
 .initialization-page code {
   overflow-wrap: anywhere;
 }
+
+.initialization-form {
+  display: grid;
+  gap: var(--space-small);
+  max-width: 32rem;
+}
