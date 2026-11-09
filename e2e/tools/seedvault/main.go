@@ -11,6 +11,7 @@ import (
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
+	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -63,8 +64,13 @@ func seed(dir string) error {
 	if err != nil {
 		return err
 	}
+	device, err := st.AddDevice("工作站", "浏览器测试设备", "")
+	if err != nil {
+		return err
+	}
 	webID, err := st.AddServer(&models.Server{
 		Name: "web-1", Host: "192.0.2.10", Port: 22, User: "owner", Role: "运维网站",
+		DeviceID:   device.ID,
 		AuthMethod: models.AuthPassword, CredentialID: credentialID,
 	})
 	if err != nil {
@@ -95,6 +101,16 @@ func seed(dir string) error {
 		return err
 	}
 	if err := st.AllowSecrets([]string{"MATRIX_TOKEN"}, []string{"db-1"}, store.CLISource()); err != nil {
+		return err
+	}
+	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{
+			{Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "24.04.1 LTS"},
+			{Category: models.SoftwareCategorySystemPackage, Name: "base-files", Version: "13.5ubuntu3"},
+			{Category: models.SoftwareCategorySystemPackage, Name: "zlib1g", Version: "1:1.3.dfsg-3.1ubuntu1"},
+		},
+		ServerID: webID, CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
 		return err
 	}
 	for i := 0; i < 120; i++ {

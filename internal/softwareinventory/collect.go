@@ -61,8 +61,9 @@ type Service struct {
 type CollectRequest struct {
 	DeviceName  string
 	ServerEntry string
-	// Source 是这次采集落库的审计来源；零值沿用命令行来源。
-	Source store.WriteSource
+	// Source 是这次采集的入口来源；零值按命令行来源处理，既有命令行调用
+	// 不需要改变。
+	Source Source
 }
 
 // CollectionReport 是一次采集的对外结论。
@@ -91,6 +92,10 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 		return nil, fmt.Errorf("设备名不能为空")
 	}
 	startedAt := s.now()
+	source := request.Source
+	if source.origin == (store.WriteSource{}) {
+		source = CLISource()
+	}
 	if _, err := s.Store.GetDevice(deviceName); err != nil {
 		return nil, err
 	}
@@ -112,13 +117,13 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 	sudo := sudoMap[chosen.ID]
 	if sudo && chosen.SudoCredentialID == "" {
 		failure := fmt.Errorf("服务器条目 %s 打开了 sudo 采集开关但没有配置 sudo 凭据", chosen.Name)
-		s.recordFailure(deviceName, failure.Error(), chosen.ID, sudo)
+		s.recordFailure(deviceName, failure.Error(), chosen.ID, sudo, source)
 		return nil, failure
 	}
 	shell := models.NormalizeShellType(string(chosen.ShellType))
 	command, err := BuildInventoryCommand(shell)
 	if err != nil {
-		s.recordFailure(deviceName, err.Error(), chosen.ID, sudo)
+		s.recordFailure(deviceName, err.Error(), chosen.ID, sudo, source)
 		return nil, err
 	}
 
@@ -142,7 +147,7 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 		if execErr != nil {
 			reason = fmt.Sprintf("固定命令执行失败：%v", execErr)
 		}
-		s.recordFailure(deviceName, reason, chosen.ID, sudo)
+		s.recordFailure(deviceName, reason, chosen.ID, sudo, source)
 		return nil, fmt.Errorf("%s", reason)
 	}
 	if execResult.TimedOut {
@@ -166,7 +171,7 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 		Items: collection.Items, ServerID: chosen.ID, Sudo: sudo,
 		CommandSetVersion: collection.CommandSetVersion, SystemType: collection.SystemType,
 		Incomplete: incomplete,
-	}, collectWriteSource(request.Source)); err != nil {
+	}, source.origin); err != nil {
 		return nil, err
 	}
 	return &CollectionReport{
@@ -176,15 +181,6 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 		ItemCounts: itemCounts(collection.Items),
 		StartedAt:  startedAt, EndedAt: s.now(),
 	}, nil
-}
-
-// collectWriteSource 返回采集落库使用的审计来源；未指定时按命令行立即采
-// 集处理。
-func collectWriteSource(source store.WriteSource) store.WriteSource {
-	if source.Kind() == "" {
-		return store.CLISource()
-	}
-	return source
 }
 
 // chooseServer 选择采集用的服务器条目：显式指定时必须在设备上；未指定时
@@ -214,8 +210,8 @@ func (s *Service) chooseServer(
 	return nil, fmt.Errorf("服务器条目 %q 不在这台设备上", request)
 }
 
-func (s *Service) recordFailure(deviceName, reason, serverID string, sudo bool) {
-	_ = s.Store.RecordSoftwareCollectionFailure(deviceName, reason, serverID, sudo, store.CLISource())
+func (s *Service) recordFailure(deviceName, reason, serverID string, sudo bool, source Source) {
+	_ = s.Store.RecordSoftwareCollectionFailure(deviceName, reason, serverID, sudo, source.origin)
 }
 
 func (s *Service) remoteExec() RemoteExecFunc {

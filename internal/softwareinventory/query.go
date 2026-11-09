@@ -34,7 +34,7 @@ type QueryOptions struct {
 }
 
 // QueryItem 是查询结果里的一条软件条目。CollectedAt 是实测采集时间；
-// 声明来源或采集数据缺失时为空。
+// ConfirmedAt 是声明确认时间；另一侧来源缺失时对应字段为空。
 type QueryItem struct {
 	ID             string          `json:"id,omitempty"`
 	DeviceID       string          `json:"device_id"`
@@ -49,11 +49,15 @@ type QueryItem struct {
 	Note           string          `json:"note,omitempty"`
 	Source         string          `json:"source"`
 	CollectedAt    *time.Time      `json:"collected_at,omitempty"`
+	ConfirmedAt    *time.Time      `json:"confirmed_at,omitempty"`
 	// ObservedStableKey 供声明认领实测使用；只有声明来源的条目为空。
 	ObservedStableKey string `json:"observed_stable_key,omitempty"`
 	DeclaredVersion   string `json:"declared_version,omitempty"`
 	VersionMismatch   bool   `json:"version_mismatch,omitempty"`
 	Mismatch          bool   `json:"mismatch,omitempty"`
+	ContainerTag      string `json:"container_tag,omitempty"`
+	ContainerDigest   string `json:"container_digest,omitempty"`
+	ContainerRunning  bool   `json:"container_running,omitempty"`
 }
 
 // QueryDeviceResult 是一台设备的查询结果：设备、采集状态与匹配的软件
@@ -118,6 +122,8 @@ func queryItemFromView(row SoftwareDeclarationView, mismatch bool) QueryItem {
 	if item.ListeningPorts == nil {
 		item.ListeningPorts = []ListeningPort{}
 	}
+	confirmedAt := row.ConfirmedAt
+	item.ConfirmedAt = &confirmedAt
 	return item
 }
 
@@ -133,6 +139,8 @@ func queryItemFromObserved(deviceID string, row models.SoftwareObservedItem) Que
 		Name: row.Name, Version: row.Version, PackageURL: row.PackageURL,
 		ListeningPorts: ports, BelongsTo: row.BelongsTo, Source: SourceObserved,
 		CollectedAt: &collectedAt, ObservedStableKey: row.StableKey,
+		ContainerTag: row.ContainerTag, ContainerDigest: row.ContainerDigest,
+		ContainerRunning: row.ContainerRunning,
 	}
 }
 
@@ -166,7 +174,11 @@ func combineObservedAndDeclared(bundle queryBundle) []QueryItem {
 			CollectedAt: &collectedAt, ObservedStableKey: observed.StableKey,
 			DeclaredVersion: declaration.Version,
 			VersionMismatch: declaration.Version != observed.Version && observed.Version != "",
+			ContainerTag:    observed.ContainerTag, ContainerDigest: observed.ContainerDigest,
+			ContainerRunning: observed.ContainerRunning,
 		}
+		confirmedAt := declaration.ConfirmedAt
+		item.ConfirmedAt = &confirmedAt
 		if item.ListeningPorts == nil {
 			item.ListeningPorts = []ListeningPort{}
 		}

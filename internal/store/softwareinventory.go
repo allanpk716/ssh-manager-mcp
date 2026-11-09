@@ -91,6 +91,7 @@ type SoftwareDeclarationView struct {
 	Note               string
 	ClaimedObservedKey string
 	Status             string
+	ConfirmedAt        time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 }
@@ -486,7 +487,8 @@ func softwareDeclarationsWhereTx(tx *sql.Tx, where string, args ...any) ([]Softw
 	rows, err := tx.Query(`
 		SELECT declaration.id,declaration.device_id,device.name,declaration.category,declaration.name,
 		       declaration.version,declaration.package_url,declaration.cpe,declaration.belongs_to,declaration.note,
-		       declaration.claimed_observed_key,declaration.status,declaration.created_at,declaration.updated_at
+		       declaration.claimed_observed_key,declaration.status,declaration.confirmed_at,
+		       declaration.created_at,declaration.updated_at
 		FROM software_declarations declaration
 		JOIN devices device ON device.id=declaration.device_id
 		WHERE declaration.status='active' AND `+where+`
@@ -505,15 +507,16 @@ func softwareDeclarationsWhereTx(tx *sql.Tx, where string, args ...any) ([]Softw
 	out := make([]SoftwareDeclarationView, 0)
 	for rows.Next() {
 		var view SoftwareDeclarationView
-		var createdAt, updatedAt int64
+		var confirmedAt, createdAt, updatedAt int64
 		if err := rows.Scan(
 			&view.ID, &view.DeviceID, &view.DeviceName, &view.Category, &view.Name,
 			&view.Version, &view.PackageURL, &view.CPE, &view.BelongsTo, &view.Note,
-			&view.ClaimedObservedKey, &view.Status, &createdAt, &updatedAt,
+			&view.ClaimedObservedKey, &view.Status, &confirmedAt, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, err
 		}
-		view.CreatedAt, view.UpdatedAt = time.Unix(createdAt, 0), time.Unix(updatedAt, 0)
+		view.ConfirmedAt, view.CreatedAt, view.UpdatedAt =
+			time.Unix(confirmedAt, 0), time.Unix(createdAt, 0), time.Unix(updatedAt, 0)
 		out = append(out, view)
 	}
 	if err := rows.Err(); err != nil {

@@ -60,6 +60,12 @@ type pageData struct {
 	SecretAuthorizationTargets  []SecretAuthorizationCell
 	SecretAuthorizationReturnTo string
 	SecretAuthorizationNotice   string
+	SoftwareInventoryDevices    []SoftwareInventoryDeviceSummary
+	SoftwareInventoryDevice     *SoftwareInventoryDevice
+	SoftwareInventorySearchRows []SoftwareInventorySearchRow
+	SoftwareInventoryQuery      string
+	SoftwareInventoryNotice     string
+	SoftwareInventoryError      string
 	ImportedCount               int
 	SkippedCount                int
 	FailedCount                 int
@@ -159,8 +165,15 @@ var pageFuncs = template.FuncMap{
 		}
 		return strings.Join(labels, "、")
 	},
-	"joinTags":        func(items []string) string { return strings.Join(items, ",") },
-	"formatUnixTime":  formatUnixTime,
+	"joinTags":       func(items []string) string { return strings.Join(items, ",") },
+	"formatUnixTime": formatUnixTime,
+	"formatTime":     func(value time.Time) string { return value.Format("2006-01-02 15:04:05 Z07:00") },
+	"formatOptionalTime": func(value *time.Time) string {
+		if value == nil {
+			return "-"
+		}
+		return value.Format("2006-01-02 15:04:05 Z07:00")
+	},
 	"addOne":          func(v int) int { return v + 1 },
 	"credentialLabel": CredentialTypeLabel,
 	// secretCellName 与 secretTargetValue 把授权格字段名、确认目标的编码

@@ -102,11 +102,16 @@ type Item struct {
 	BelongsTo      string          `json:"belongs_to,omitempty"`
 	Note           string          `json:"note,omitempty"`
 	Source         string          `json:"source"`
+	CollectedAt    *time.Time      `json:"collected_at,omitempty"`
 	// ObservedStableKey 是认领实测时使用的稳定键，只在条目有实测来源时填。
-	ObservedStableKey string `json:"observed_stable_key,omitempty"`
-	DeclaredVersion   string `json:"declared_version,omitempty"`
-	VersionMismatch   bool   `json:"version_mismatch,omitempty"`
-	Mismatch          bool   `json:"mismatch,omitempty"`
+	ObservedStableKey string     `json:"observed_stable_key,omitempty"`
+	DeclaredVersion   string     `json:"declared_version,omitempty"`
+	VersionMismatch   bool       `json:"version_mismatch,omitempty"`
+	Mismatch          bool       `json:"mismatch,omitempty"`
+	ConfirmedAt       *time.Time `json:"confirmed_at,omitempty"`
+	ContainerTag      string     `json:"container_tag,omitempty"`
+	ContainerDigest   string     `json:"container_digest,omitempty"`
+	ContainerRunning  bool       `json:"container_running,omitempty"`
 }
 
 // ItemGroup 是按设备查看时的一个类别分组。系统包默认只返回数量；加参数
@@ -154,6 +159,12 @@ func (m *Manager) EditDeclaration(id string, edit DeclarationEdit, source Source
 func (m *Manager) DeleteDeclaration(id string, source Source) error {
 	_, err := m.st.DeleteSoftwareDeclaration(id, source.origin)
 	return err
+}
+
+// RequestImmediateCollection 给一台设备登记待执行的立即采集请求。设备由
+// 客户端实例采集时，Web UI 只登记请求，等待客户端下一轮分派时优先执行。
+func (m *Manager) RequestImmediateCollection(deviceName string, source Source) error {
+	return m.st.RequestSoftwareImmediateCollection(deviceName, source.origin)
 }
 
 // ClaimDeclaration 用一条声明认领同一设备上的实测条目。observedStableKey
@@ -238,7 +249,10 @@ func queryItemAsItem(row QueryItem) Item {
 		CategoryLabel: row.CategoryLabel, Name: row.Name, Version: row.Version,
 		PackageURL: row.PackageURL, CPE: row.CPE, ListeningPorts: row.ListeningPorts,
 		BelongsTo: row.BelongsTo, Note: row.Note, Source: row.Source,
+		CollectedAt:       row.CollectedAt,
 		ObservedStableKey: row.ObservedStableKey, VersionMismatch: row.VersionMismatch,
 		DeclaredVersion: row.DeclaredVersion, Mismatch: row.Mismatch,
+		ConfirmedAt: row.ConfirmedAt, ContainerTag: row.ContainerTag,
+		ContainerDigest: row.ContainerDigest, ContainerRunning: row.ContainerRunning,
 	}
 }

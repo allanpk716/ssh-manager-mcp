@@ -54,14 +54,15 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	}
 
 	var (
-		webRole          webui.Role
-		servers          webui.ServerSource
-		serverWriter     webui.ServerWriter
-		accessSource     webui.AccessStore
-		opsSource        webui.OpsStore
-		secretSource     webui.SecretSource
-		secretWriter     webui.SecretWriter
-		resolvedInstance string
+		webRole                 webui.Role
+		servers                 webui.ServerSource
+		serverWriter            webui.ServerWriter
+		accessSource            webui.AccessStore
+		opsSource               webui.OpsStore
+		secretSource            webui.SecretSource
+		secretWriter            webui.SecretWriter
+		softwareInventorySource webui.SoftwareInventorySource
+		resolvedInstance        string
 	)
 	switch {
 	case launch.Kind == roles.LaunchBroker && !launch.ResumeSetup && launch.Role == roles.RoleStandalone:
@@ -71,6 +72,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		accessSource = standaloneUIAccessStore()
 		secretSource = standaloneUISecretStore()
 		secretWriter = standaloneUISecretWriter()
+		softwareInventorySource = standaloneUISoftwareInventoryStore()
 		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
 	case launch.Kind == roles.LaunchClient && !launch.ResumeSetup:
 		resolvedInstance, err = resolveClientCacheInstance(instance)
@@ -106,16 +108,17 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	handler, startup, err := webui.New(webui.Config{
-		Role:           webRole,
-		Servers:        servers,
-		ServerWriter:   serverWriter,
-		Secrets:        secretSource,
-		SecretsWriter:  secretWriter,
-		VersionHint:    versionHint,
-		Port:           port,
-		Access:         accessSource,
-		Ops:            opsSource,
-		ClientInstance: resolvedInstance,
+		Role:              webRole,
+		Servers:           servers,
+		ServerWriter:      serverWriter,
+		Secrets:           secretSource,
+		SecretsWriter:     secretWriter,
+		SoftwareInventory: softwareInventorySource,
+		VersionHint:       versionHint,
+		Port:              port,
+		Access:            accessSource,
+		Ops:               opsSource,
+		ClientInstance:    resolvedInstance,
 	})
 	if err != nil {
 		_ = listener.Close()

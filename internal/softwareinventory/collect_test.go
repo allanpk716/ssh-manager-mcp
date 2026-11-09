@@ -163,6 +163,30 @@ func TestCollectLinuxFullFixture(t *testing.T) {
 	}
 }
 
+// TestCollectUsesGivenWriteSource 验证 Web UI 发起的同步立即采集按页面
+// 来源写审计，而不是误写成命令行来源。
+func TestCollectUsesGivenWriteSource(t *testing.T) {
+	service, st := newCollectService(t)
+	addCollectDevice(t, st, "工作站", "entry-a")
+	service.RemoteExec = replayCollectExec(fixtureOutput(t, "ubuntu2404-full.txt"), &recordedExec{}, nil)
+
+	if _, err := service.Collect(context.Background(), CollectRequest{
+		DeviceName: "工作站", Source: WebUISource("198.51.100.9"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{
+		Actions: []string{"software-collect"}, Source: store.AuditSourceWebUI,
+		SourceIP: "198.51.100.9", Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("Web UI 采集应写一条带来源地址的审计：%+v", rows)
+	}
+}
+
 // TestCollectWindowsFullFixtureForEachShell 覆盖 PowerShell 与 cmd 两种条目
 // 的一次成功采集：命令按条目包装，Windows 输出解析后落库并写入采集状态。
 func TestCollectWindowsFullFixtureForEachShell(t *testing.T) {

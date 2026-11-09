@@ -3,6 +3,10 @@ package softwareinventory
 import (
 	"errors"
 	"testing"
+	"time"
+
+	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
 )
 
 // seedQueryFixture 造四台设备：受管甲、受管乙挂有服务器条目且都在 profile
@@ -62,6 +66,62 @@ func findQueryDevice(result QueryResult, name string) *QueryDeviceResult {
 		}
 	}
 	return nil
+}
+
+// TestQueryPreservesWebDisplayFields 覆盖 Web UI 需要但过滤条件不用的字
+// 段：声明确认时间，以及容器镜像的所属、标签、摘要与运行状态。
+func TestQueryPreservesWebDisplayFields(t *testing.T) {
+	manager, st := newTestManager(t)
+	mustDevice(t, st, "工作站", true)
+	confirmedAt := time.Unix(1770000600, 0)
+	st.NowFn = func() time.Time { return confirmedAt }
+	if _, err := manager.AddDeclaration(Declaration{
+		Device: "工作站", Category: CategoryServiceProgram,
+		Name: "自建网关", Version: "1.2.3+build.7",
+	}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	collectedAt := confirmedAt.Add(time.Hour)
+	st.NowFn = func() time.Time { return collectedAt }
+	server, err := st.GetServerByName("工作站-ssh")
+	if err != nil || server == nil {
+		t.Fatalf("取采集用服务器条目失败：%v %+v", err, server)
+	}
+	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{{
+			Category: models.SoftwareCategoryContainerImage, Name: "postgres", Version: "16.4",
+			BelongsTo: "Docker", ContainerTag: "16-alpine",
+			ContainerDigest: "sha256:abcdef", ContainerRunning: true,
+		}},
+		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := manager.Query(QueryOptions{
+		Device: "工作站", IncludeSystemPackages: true, Visibility: AllDevicesVisible(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := findQueryDevice(result, "工作站")
+	if device == nil || len(device.Items) != 2 {
+		t.Fatalf("按设备查询结果 = %+v", result.Devices)
+	}
+	byName := map[string]QueryItem{}
+	for _, item := range device.Items {
+		byName[item.Name] = item
+	}
+	declared := byName["自建网关"]
+	if declared.ConfirmedAt == nil || declared.ConfirmedAt.Unix() != confirmedAt.Unix() {
+		t.Fatalf("声明条目应带确认时间：%+v", declared)
+	}
+	container := byName["postgres"]
+	if container.CollectedAt == nil || container.CollectedAt.Unix() != collectedAt.Unix() ||
+		container.BelongsTo != "Docker" || container.ContainerTag != "16-alpine" ||
+		container.ContainerDigest != "sha256:abcdef" || !container.ContainerRunning {
+		t.Fatalf("容器镜像条目应保留 Web UI 展示字段：%+v", container)
+	}
 }
 
 // TestQueryFiltersAndCollectionStatus 覆盖查询工具的全部过滤条件与采集
