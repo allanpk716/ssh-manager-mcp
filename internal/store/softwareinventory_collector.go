@@ -191,3 +191,46 @@ func (s *Store) SoftwareCollectionAssignments(collector string, now time.Time) (
 	}
 	return out, nil
 }
+
+// RecordSoftwareCollectionFailureFromCollector 记录客户端实例上交的一次
+// 采集失败。条目保留不动，失败时间与原因写进权威端采集状态，并写一行采
+// 集审计；不改变这台设备登记的采集执行者。
+func (s *Store) RecordSoftwareCollectionFailureFromCollector(
+	deviceName, collector, reason, serverID string,
+	sudo bool,
+	source WriteSource,
+) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	device, err := deviceByNameTx(tx, deviceName)
+	if err != nil {
+		return err
+	}
+	serverName := ""
+	if serverID != "" {
+		server, err := serverByIDTx(tx, serverID)
+		if err != nil {
+			return err
+		}
+		serverName = server.Name
+	}
+	at := s.nowTime()
+	if err := writeSoftwareCollectionStatusTx(
+		tx, device.ID, serverID, collector, nil, softwareCollectionFailure{At: at, Reason: reason},
+	); err != nil {
+		return err
+	}
+	if err := writeSoftwareAuditTx(tx, at, "software-collect", map[string]any{
+		"device": device.Name, "server": serverName, "collector": collector,
+		"sudo": sudo, "result": "failed", "reason": reason,
+	}, source); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
