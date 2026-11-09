@@ -136,10 +136,13 @@ func TestInitializationWizardChoosesStandaloneAndSwitchesToFormalPage(t *testing
 	start.Body.Close()
 
 	choice := wizardPage(t, handler, cookie, "/ui/")
-	for _, want := range []string{"选择本机角色", "单机", "权威端", "客户端", "尚未实现"} {
+	for _, want := range []string{"选择本机角色", "单机", "权威端", "客户端"} {
 		if !strings.Contains(choice, want) {
 			t.Fatalf("选角色页应包含 %q：\n%s", want, choice)
 		}
+	}
+	if strings.Contains(choice, "权威端与客户端的后续步骤尚未实现") {
+		t.Fatalf("权威端初始化已提供后续步骤，选角色页不应再整体提示尚未实现：\n%s", choice)
 	}
 	if strings.Contains(choice, "正式服务器") {
 		t.Fatalf("向导模式不应显示正式页面服务器数据：\n%s", choice)

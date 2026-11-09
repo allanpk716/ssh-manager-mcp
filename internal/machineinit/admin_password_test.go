@@ -59,14 +59,20 @@ func TestSetAdminPassword(t *testing.T) {
 		t.Fatalf("应写入管理员口令审计行：%+v", rows)
 	}
 
-	generation, err = machineinit.SetAdminPassword([]byte("new-password"), store.AuditRow{
-		Action: "admin.password_set", Status: "ok",
-		Source: store.AuditSourceWebUI, Command: "{}",
-	})
+	generation, err = machineinit.SetAdminPasswordForWebUI(
+		[]byte("new-password"), []byte("new-password"), "127.0.0.1",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if generation != 2 {
 		t.Fatalf("重设口令后会话代 = %d，应为 2", generation)
+	}
+	rows, err = st.QueryAudit(store.AuditFilter{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Source != store.AuditSourceWebUI || rows[0].SourceIP != "127.0.0.1" {
+		t.Fatalf("初始化向导设口令应写入 Web UI 来源审计行：%+v", rows)
 	}
 }
