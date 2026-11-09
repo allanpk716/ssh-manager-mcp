@@ -964,3 +964,66 @@ func pruneDeletedTargets(form url.Values, deletedSecretID string) url.Values {
 	}
 	return out
 }
+
+// TestSecretMetadataEditWithoutChangeWritesNothing 覆盖审查第 3 项：Web 表
+// 单提交与当前值完全相同的备注与环境变量时，不写数据也不写审计，页面提示
+// 没有变化；只有确实变化的字段才进入修改。
+func TestSecretMetadataEditWithoutChangeWritesNothing(t *testing.T) {
+	st := newIntegrationStore(t)
+	manager := secretmanage.New(st)
+	if err := manager.AddSecret("API_TOKEN", "原备注", "API_TOKEN_FILE", []byte("api-secret-value"), secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	views, err := manager.List(secretmanage.ListFilter{})
+	if err != nil || len(views) != 1 {
+		t.Fatalf("准备机密项失败：%v %+v", err, views)
+	}
+	detailTarget := "/ui/secrets/" + views[0].ID
+	h := newIntegrationHandler(t, st)
+	csrf := csrfToken(t, h)
+
+	unchanged := h.do(http.MethodPost, detailTarget+"/edit", url.Values{
+		"csrf_token": {csrf}, "note": {"原备注"}, "environment_name": {"API_TOKEN_FILE"},
+	})
+	unchangedBody := body(t, unchanged)
+	if unchanged.StatusCode != http.StatusOK || !strings.Contains(unchangedBody, "没有变化，未写入数据或审计。") {
+		t.Fatalf("未变化的提交应停留在详情页并提示没有变化，状态码=%d：\n%s", unchanged.StatusCode, unchangedBody)
+	}
+	rows, err := webUISecretAuditRows(st, "secret-edit", "secret-env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("未变化的提交不应写审计：%+v", rows)
+	}
+
+	noteOnly := h.do(http.MethodPost, detailTarget+"/edit", url.Values{
+		"csrf_token": {csrf}, "note": {"新备注"}, "environment_name": {"API_TOKEN_FILE"},
+	})
+	if noteOnly.StatusCode != http.StatusSeeOther {
+		t.Fatalf("只改备注应正常保存，状态码=%d：%s", noteOnly.StatusCode, body(t, noteOnly))
+	}
+	envOnly := h.do(http.MethodPost, detailTarget+"/edit", url.Values{
+		"csrf_token": {csrf}, "note": {"新备注"}, "environment_name": {"API_TOKEN_FILE2"},
+	})
+	if envOnly.StatusCode != http.StatusSeeOther {
+		t.Fatalf("只改环境变量名应正常保存，状态码=%d：%s", envOnly.StatusCode, body(t, envOnly))
+	}
+	rows, err = webUISecretAuditRows(st, "secret-edit", "secret-env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("只有实际变化的字段才写审计，实际 %+v", rows)
+	}
+	after, err := manager.List(secretmanage.ListFilter{})
+	if err != nil || len(after) != 1 || after[0].Note != "新备注" || after[0].EnvironmentName != "API_TOKEN_FILE2" {
+		t.Fatalf("修改后的元数据不正确：%v %+v", err, after)
+	}
+}
+
+// webUISecretAuditRows 只取 Web UI 来源的机密项审计行，排除测试准备阶段
+// 命令行写入的审计。
+func webUISecretAuditRows(st *store.Store, actions ...string) ([]store.AuditRow, error) {
+	return st.QueryAudit(store.AuditFilter{OwnerOnly: true, Source: store.AuditSourceWebUI, Actions: actions})
+}

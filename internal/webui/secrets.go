@@ -76,6 +76,10 @@ type SecretApplyResult struct {
 	Applied bool
 }
 
+// ErrSecretMetadataNoChange 表示 Web 表单提交的备注与环境变量名都与当前
+// 值相同；适配层不写数据也不写审计，页面提示没有变化。
+var ErrSecretMetadataNoChange = errors.New("机密项备注与环境变量名都没有变化")
+
 // SecretDetailView 是机密项详情页展示数据。
 type SecretDetailView struct {
 	Row     SecretRow
@@ -578,6 +582,16 @@ func (h *handler) handleSecretMetadataEdit(w http.ResponseWriter, r *http.Reques
 	if err := h.cfg.SecretsWriter.EditSecretMetadata(
 		identifier, note, environmentName, SecretWriteSource{RemoteAddress: remoteIP(r)},
 	); err != nil {
+		if errors.Is(err, ErrSecretMetadataNoChange) {
+			detail, detailErr := h.secretDetail(identifier)
+			if detailErr == nil {
+				h.renderPage(w, r, http.StatusOK, "secret-detail.tmpl", pageData{
+					Title: "机密项 " + detail.Row.Name, SecretDetail: detail,
+					SecretDetailNotice: "没有变化，未写入数据或审计。",
+				})
+				return
+			}
+		}
 		detail, detailErr := h.secretDetail(identifier)
 		if detailErr == nil {
 			h.renderPage(w, r, http.StatusBadRequest, "secret-detail.tmpl", pageData{

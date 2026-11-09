@@ -52,6 +52,7 @@ type pageData struct {
 	SecretForm                  secretFormView
 	SecretDetail                *SecretDetailView
 	SecretDetailError           string
+	SecretDetailNotice          string
 	SecretDetailNote            string
 	SecretDetailEnvironmentName string
 	SecretMatrix                *SecretMatrixView

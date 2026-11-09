@@ -76,29 +76,37 @@ func (s managerStore) AddSecret(name, note, environmentName string, value []byte
 }
 
 func (s managerStore) SetSecretValue(identifier string, value []byte, source webui.SecretWriteSource) error {
-	secret, err := s.secretByIDOrName(identifier)
+	view, err := s.secretViewByIDOrName(identifier)
 	if err != nil {
 		return err
 	}
-	return s.manager.SetSecretValue(secret, value, secretmanage.WebUISource(source.RemoteAddress))
+	return s.manager.SetSecretValue(view.Name, value, secretmanage.WebUISource(source.RemoteAddress))
 }
 
 func (s managerStore) EditSecretMetadata(identifier, note, environmentName string, source webui.SecretWriteSource) error {
-	secret, err := s.secretByIDOrName(identifier)
+	view, err := s.secretViewByIDOrName(identifier)
 	if err != nil {
 		return err
 	}
-	return s.manager.EditMetadata(secret, secretmanage.MetadataEdit{
-		Note: &note, EnvironmentName: &environmentName,
-	}, secretmanage.WebUISource(source.RemoteAddress))
+	edit := secretmanage.MetadataEdit{}
+	if view.Note != note {
+		edit.Note = &note
+	}
+	if view.EnvironmentName != environmentName {
+		edit.EnvironmentName = &environmentName
+	}
+	if edit.Note == nil && edit.EnvironmentName == nil {
+		return webui.ErrSecretMetadataNoChange
+	}
+	return s.manager.EditMetadata(view.Name, edit, secretmanage.WebUISource(source.RemoteAddress))
 }
 
 func (s managerStore) DeleteSecret(identifier string, source webui.SecretWriteSource) error {
-	secret, err := s.secretByIDOrName(identifier)
+	view, err := s.secretViewByIDOrName(identifier)
 	if err != nil {
 		return err
 	}
-	return s.manager.DeleteSecret(secret, secretmanage.WebUISource(source.RemoteAddress))
+	return s.manager.DeleteSecret(view.Name, secretmanage.WebUISource(source.RemoteAddress))
 }
 
 func (s managerStore) PreviewAuthorization(target []webui.SecretAuthorizationCell) (webui.SecretAuthorizationPreview, error) {
@@ -127,17 +135,17 @@ func (s managerStore) ApplyAuthorization(target []webui.SecretAuthorizationCell,
 	}, nil, nil
 }
 
-func (s managerStore) secretByIDOrName(identifier string) (string, error) {
+func (s managerStore) secretViewByIDOrName(identifier string) (store.SecretView, error) {
 	views, err := s.manager.List(secretmanage.ListFilter{})
 	if err != nil {
-		return "", err
+		return store.SecretView{}, err
 	}
 	for _, view := range views {
 		if view.ID == identifier || view.Name == identifier {
-			return view.Name, nil
+			return view, nil
 		}
 	}
-	return "", errSecretNotFound(identifier)
+	return store.SecretView{}, errSecretNotFound(identifier)
 }
 
 type openerStore struct {
