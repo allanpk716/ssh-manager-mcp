@@ -71,7 +71,7 @@ const secretsValueInputHelp = `值没有任何命令参数入口，以免进入 
   4. 非交互终端且未给 --from-file / --stdin：报错，提示改用这两个参数。`
 
 func secretsAddCmd() *cobra.Command {
-	var note, fromFile string
+	var note, environmentName, fromFile string
 	var fromStdin bool
 	c := &cobra.Command{
 		Use:   "add NAME [--note 文本] [--from-file PATH | --stdin]",
@@ -95,7 +95,7 @@ func secretsAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := s.AddSecret(args[0], note, value); err != nil {
+			if err := s.AddSecretWithEnvironmentName(args[0], note, value, environmentName); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "已登记机密项 %s\n", args[0])
@@ -103,6 +103,7 @@ func secretsAddCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&note, "note", "", "备注（对 agent 可见，不要写敏感内容）")
+	c.Flags().StringVar(&environmentName, "env", "", "环境变量名（可选）")
 	registerSecretValueInputFlags(c, &fromFile, &fromStdin)
 	return c
 }
@@ -150,26 +151,54 @@ func secretsSetCmd() *cobra.Command {
 }
 
 func secretsEditCmd() *cobra.Command {
-	var note string
+	var note, environmentName string
+	var clearEnvironmentName bool
 	c := &cobra.Command{
-		Use:   "edit NAME --note 文本",
+		Use:   "edit NAME [--note 文本] [--env 变量名 | --clear-env]",
 		Args:  cobra.ExactArgs(1),
-		Short: "Change only a secret's note",
+		Short: "Change a secret's note or environment variable name",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			changeNote := cmd.Flags().Changed("note")
+			changeEnvironmentName := cmd.Flags().Changed("env")
+			clearEnvironmentNameSet := clearEnvironmentName
+			if changeEnvironmentName && clearEnvironmentNameSet {
+				return errors.New("--env 与 --clear-env 不能同时使用")
+			}
+			if changeEnvironmentName && environmentName == "" {
+				return errors.New("--env 不能为空；清除请使用 --clear-env")
+			}
+			if !changeNote && !changeEnvironmentName && !clearEnvironmentNameSet {
+				return errors.New("--note、--env、--clear-env 至少要给一个")
+			}
 			s, err := requireSecretsVault()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
-			if err := s.EditSecretNote(args[0], note); err != nil {
+			var metadataEdit store.SecretMetadataEdit
+			if changeNote {
+				metadataEdit.Note = &note
+			}
+			if changeEnvironmentName || clearEnvironmentNameSet {
+				metadataEdit.EnvironmentName = &environmentName
+			}
+			if err := s.EditSecretMetadata(args[0], metadataEdit); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "已更新机密项 %s 的备注\n", args[0])
+			switch {
+			case changeNote && (changeEnvironmentName || clearEnvironmentNameSet):
+				fmt.Fprintf(cmd.OutOrStdout(), "已更新机密项 %s 的备注与环境变量名\n", args[0])
+			case changeNote:
+				fmt.Fprintf(cmd.OutOrStdout(), "已更新机密项 %s 的备注\n", args[0])
+			default:
+				fmt.Fprintf(cmd.OutOrStdout(), "已更新机密项 %s 的环境变量名\n", args[0])
+			}
 			return nil
 		},
 	}
 	c.Flags().StringVar(&note, "note", "", "新的备注（对 agent 可见，不要写敏感内容）")
-	_ = c.MarkFlagRequired("note")
+	c.Flags().StringVar(&environmentName, "env", "", "新的环境变量名（与 --clear-env 互斥）")
+	c.Flags().BoolVar(&clearEnvironmentName, "clear-env", false, "清除环境变量名（与 --env 互斥）")
 	return c
 }
 
@@ -343,6 +372,11 @@ func secretAllowFlags(cmd *cobra.Command) ([]string, []string, error) {
 func printSecretView(out io.Writer, v store.SecretView) {
 	fmt.Fprintf(out, "%s\n", v.Name)
 	fmt.Fprintf(out, "  备注: %s\n", v.Note)
+	environmentName := v.EnvironmentName
+	if environmentName == "" {
+		environmentName = "（未设置）"
+	}
+	fmt.Fprintf(out, "  环境变量名: %s\n", environmentName)
 	servers := strings.Join(v.AllowedServers, ", ")
 	if servers == "" {
 		servers = "（无）"

@@ -220,19 +220,22 @@ type SnapshotAudit struct {
 	DurationMS int64  `json:"duration_ms"`
 	Source     string `json:"source,omitempty"`
 	SourceIP   string `json:"source_ip,omitempty"`
+	// InjectedEnvironmentNames 是命令执行审计行附带的环境变量名，不含值。
+	InjectedEnvironmentNames []string `json:"injected_environment_names,omitempty"`
 }
 
 // SnapshotSecret 是快照里的机密项行。Value 与 PreviousValue 是解密后的原始
 // 字节；序列化后的快照必须整体加密后才能落盘。
 type SnapshotSecret struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Note           string `json:"note"`
-	Value          []byte `json:"value"`
-	PreviousValue  []byte `json:"previous_value"`
-	ValueVersion   int64  `json:"value_version"`
-	CreatedAt      int64  `json:"created_at"`
-	ValueUpdatedAt int64  `json:"value_updated_at"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Note            string `json:"note"`
+	EnvironmentName string `json:"environment_name,omitempty"`
+	Value           []byte `json:"value"`
+	PreviousValue   []byte `json:"previous_value"`
+	ValueVersion    int64  `json:"value_version"`
+	CreatedAt       int64  `json:"created_at"`
+	ValueUpdatedAt  int64  `json:"value_updated_at"`
 }
 
 // SnapshotSecretAllow 是机密项与服务器条目的可写入关联，按双方的内部标识符
@@ -476,15 +479,24 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	// audit — RAW SQL (AuditRows clamps limit<=0 to 1; dump all)
-	ra, err := s.db.Query(`SELECT id,ts,COALESCE(project_id,''),COALESCE(server_id,''),action,COALESCE(command,''),sudo,COALESCE(status,''),COALESCE(exit_code,0),COALESCE(duration_ms,0),COALESCE(source,''),COALESCE(source_ip,'') FROM audit_log ORDER BY id`)
+	ra, err := s.db.Query(`SELECT id,ts,COALESCE(project_id,''),COALESCE(server_id,''),action,COALESCE(command,''),sudo,COALESCE(status,''),COALESCE(exit_code,0),COALESCE(duration_ms,0),COALESCE(source,''),COALESCE(source_ip,''),COALESCE(injected_environment_names,'') FROM audit_log ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	for ra.Next() {
 		var a SnapshotAudit
-		if err := ra.Scan(&a.ID, &a.TS, &a.ProjectID, &a.ServerID, &a.Action, &a.Command, &a.Sudo, &a.Status, &a.ExitCode, &a.DurationMS, &a.Source, &a.SourceIP); err != nil {
+		var injectedNames string
+		if err := ra.Scan(&a.ID, &a.TS, &a.ProjectID, &a.ServerID, &a.Action, &a.Command, &a.Sudo, &a.Status, &a.ExitCode, &a.DurationMS, &a.Source, &a.SourceIP, &injectedNames); err != nil {
 			ra.Close()
 			return nil, err
+		}
+		if injectedNames != "" {
+			names, err := decodeAuditInjectedEnvironmentNames(injectedNames)
+			if err != nil {
+				ra.Close()
+				return nil, fmt.Errorf("decode audit injected environment names: %w", err)
+			}
+			a.InjectedEnvironmentNames = names
 		}
 		snap.Audit = append(snap.Audit, a)
 	}
@@ -500,7 +512,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 // 按内部标识符排序，关联按双方标识符排序）。
 func (s *Store) snapshotSecrets() ([]SnapshotSecret, []SnapshotSecretAllow, error) {
 	rs, err := s.db.Query(`
-		SELECT id,name,note,value_blob,COALESCE(previous_value_blob,''),value_version,created_at,value_updated_at
+		SELECT id,name,note,env_name,value_blob,COALESCE(previous_value_blob,''),value_version,created_at,value_updated_at
 		FROM secrets ORDER BY id`)
 	if err != nil {
 		return nil, nil, err
@@ -509,7 +521,7 @@ func (s *Store) snapshotSecrets() ([]SnapshotSecret, []SnapshotSecretAllow, erro
 	for rs.Next() {
 		var row SnapshotSecret
 		var valueBlob, previousBlob []byte
-		if err := rs.Scan(&row.ID, &row.Name, &row.Note, &valueBlob, &previousBlob, &row.ValueVersion, &row.CreatedAt, &row.ValueUpdatedAt); err != nil {
+		if err := rs.Scan(&row.ID, &row.Name, &row.Note, &row.EnvironmentName, &valueBlob, &previousBlob, &row.ValueVersion, &row.CreatedAt, &row.ValueUpdatedAt); err != nil {
 			rs.Close()
 			return nil, nil, err
 		}
@@ -1106,8 +1118,8 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 			previousArg = previousBlob
 		}
 		if _, err := tx.Exec(
-			`INSERT INTO secrets(id,name,name_lower,note,value_blob,previous_value_blob,value_version,created_at,value_updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-			sec.ID, sec.Name, strings.ToLower(sec.Name), sec.Note, valueBlob, previousArg, sec.ValueVersion, sec.CreatedAt, sec.ValueUpdatedAt); err != nil {
+			`INSERT INTO secrets(id,name,name_lower,note,env_name,env_name_lower,value_blob,previous_value_blob,value_version,created_at,value_updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			sec.ID, sec.Name, strings.ToLower(sec.Name), sec.Note, sec.EnvironmentName, strings.ToLower(sec.EnvironmentName), valueBlob, previousArg, sec.ValueVersion, sec.CreatedAt, sec.ValueUpdatedAt); err != nil {
 			return fmt.Errorf("insert secret %s: %w", sec.ID, err)
 		}
 	}
@@ -1167,8 +1179,12 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 
 	// 8. audit (id autoincrement — insert without id, letting the target assign; ts preserved)
 	for _, a := range snap.Audit {
-		if _, err := tx.Exec(`INSERT INTO audit_log(ts,project_id,server_id,action,command,sudo,status,exit_code,duration_ms,source,source_ip) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-			a.TS, nullIfEmpty(a.ProjectID), nullIfEmpty(a.ServerID), a.Action, nullIfEmpty(a.Command), a.Sudo, nullIfEmpty(a.Status), a.ExitCode, a.DurationMS, nullIfEmpty(a.Source), nullIfEmpty(a.SourceIP)); err != nil {
+		injectedNames, err := encodeAuditInjectedEnvironmentNames(a.InjectedEnvironmentNames)
+		if err != nil {
+			return fmt.Errorf("encode audit injected environment names: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO audit_log(ts,project_id,server_id,action,command,sudo,status,exit_code,duration_ms,source,source_ip,injected_environment_names) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+			a.TS, nullIfEmpty(a.ProjectID), nullIfEmpty(a.ServerID), a.Action, nullIfEmpty(a.Command), a.Sudo, nullIfEmpty(a.Status), a.ExitCode, a.DurationMS, nullIfEmpty(a.Source), nullIfEmpty(a.SourceIP), injectedNames); err != nil {
 			return fmt.Errorf("insert audit: %w", err)
 		}
 	}

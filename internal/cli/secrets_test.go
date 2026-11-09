@@ -7,12 +7,15 @@ package cli
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/hex"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
@@ -317,6 +320,108 @@ func TestSecretsNameRules(t *testing.T) {
 	}
 }
 
+// TestSecretsEnvironmentNameCLI 覆盖 owner 命令行新增、修改、清除与列表显示
+// 环境变量名的完整路径；命令输出与审计都不回显机密值。
+func TestSecretsEnvironmentNameCLI(t *testing.T) {
+	dbPath, mk := newSecretsEnv(t)
+	seedSecretServers(t)
+
+	out := mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--env", "HF_TOKEN", "--stdin")
+	if strings.Contains(out, testSecretValueA) {
+		t.Fatalf("add output leaked the secret value:\n%s", out)
+	}
+	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN", "--servers", "db1")
+
+	out = mustSecretsCli(t, "", "secrets", "list")
+	if !strings.Contains(out, "环境变量名: HF_TOKEN") {
+		t.Fatalf("secrets list must show the environment name:\n%s", out)
+	}
+	out = mustSecretsCli(t, "", "secrets", "list", "--server", "db1")
+	if !strings.Contains(out, "环境变量名: HF_TOKEN") || strings.Contains(out, "（无）") {
+		t.Fatalf("server-filtered list must show the environment name:\n%s", out)
+	}
+
+	mustSecretsCli(t, "", "secrets", "edit", "API_TOKEN", "--env", "MODEL_TOKEN")
+	out = mustSecretsCli(t, "", "secrets", "list")
+	if !strings.Contains(out, "环境变量名: MODEL_TOKEN") || strings.Contains(out, "环境变量名: HF_TOKEN") {
+		t.Fatalf("secrets list must show the changed environment name:\n%s", out)
+	}
+	mustSecretsCli(t, "", "secrets", "edit", "API_TOKEN", "--note", "接口令牌已更新", "--env", "BUILD_TOKEN")
+	out = mustSecretsCli(t, "", "secrets", "list")
+	if !strings.Contains(out, "环境变量名: BUILD_TOKEN") || !strings.Contains(out, "接口令牌已更新") {
+		t.Fatalf("editing note and environment name together must keep both fields:\n%s", out)
+	}
+
+	mustSecretsCli(t, "", "secrets", "edit", "API_TOKEN", "--clear-env")
+	out = mustSecretsCli(t, "", "secrets", "list")
+	if !strings.Contains(out, "环境变量名: （未设置）") || strings.Contains(out, "BUILD_TOKEN") {
+		t.Fatalf("cleared environment name must display as unset:\n%s", out)
+	}
+
+	_, _, err := runSecretsRoot(t, "", "secrets", "edit", "API_TOKEN", "--env", "HF_TOKEN", "--clear-env")
+	if err == nil || !strings.Contains(err.Error(), "--env 与 --clear-env 不能同时使用") {
+		t.Fatalf("environment-name flags must be mutually exclusive, got %v", err)
+	}
+	_, _, err = runSecretsRoot(t, "", "secrets", "edit", "API_TOKEN", "--env", "")
+	if err == nil || !strings.Contains(err.Error(), "清除请使用 --clear-env") {
+		t.Fatalf("empty --env must point at --clear-env, got %v", err)
+	}
+	_, _, err = runSecretsRoot(t, testSecretValueA, "secrets", "add", "BAD_ENV", "--env", "PATH", "--stdin")
+	if err == nil || !strings.Contains(err.Error(), "固定拒绝清单") {
+		t.Fatalf("invalid environment name must be rejected by the shared storage rule, got %v", err)
+	}
+
+	snap := secretsSnapshot(t, dbPath, mk)
+	if got := secretSnapshotRow(t, snap, "API_TOKEN").EnvironmentName; got != "" {
+		t.Fatalf("cleared environment name persisted as %q, want empty", got)
+	}
+	for _, secret := range snap.Secrets {
+		if secret.Name == "BAD_ENV" {
+			t.Fatalf("rejected add must not leave a secret row: %+v", secret)
+		}
+	}
+
+	out = mustSecretsCli(t, "", "audit", "--owner", "--limit", "0")
+	if !strings.Contains(out, "secret-env") || !strings.Contains(out, `"before":"HF_TOKEN"`) {
+		t.Fatalf("owner audit must show environment-name changes without values:\n%s", out)
+	}
+	if strings.Contains(out, testSecretValueA) {
+		t.Fatalf("owner audit leaked the secret value:\n%s", out)
+	}
+}
+
+// TestSecretsEnvironmentNameEditIsAtomic 钉住备注与环境变量名同改的事务边
+// 界：第二项字段校验失败时，第一项字段也不能留下半成品改动。
+func TestSecretsEnvironmentNameEditIsAtomic(t *testing.T) {
+	dbPath, _ := newSecretsEnv(t)
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "旧备注", "--env", "HF_TOKEN", "--stdin")
+
+	triggerDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer triggerDB.Close()
+	_, err = triggerDB.Exec(`CREATE TRIGGER reject_secret_note_update
+BEFORE UPDATE OF note ON secrets
+WHEN NEW.note <> OLD.note
+BEGIN
+	SELECT RAISE(ABORT, '备注校验失败');
+END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = runSecretsRoot(t, "", "secrets", "edit", "API_TOKEN", "--note", "新备注", "--env", "MODEL_TOKEN")
+	if err == nil || !strings.Contains(err.Error(), "备注校验失败") {
+		t.Fatalf("note validation must reject the edit, got %v", err)
+	}
+	out := mustSecretsCli(t, "", "secrets", "list")
+	if !strings.Contains(out, "旧备注") || strings.Contains(out, "新备注") ||
+		!strings.Contains(out, "环境变量名: HF_TOKEN") {
+		t.Fatalf("failed edit must change neither note nor environment name:\n%s", out)
+	}
+}
+
 // seedSecretServers 登记三个服务器条目，供可写入列表与筛选用例使用。
 func seedSecretServers(t *testing.T) {
 	t.Helper()
@@ -538,13 +643,14 @@ func TestSecretsServerRemoveCascade(t *testing.T) {
 	}
 }
 
-// seedSecretVaultForExport 建一个带机密项的权威库：两个机密项，一个换过值
-// （因此有上一个值与版本号 2），并把两个服务器条目授权给其中一个。
+// seedSecretVaultForExport 建一个带机密项的权威库：两个机密项，一个带环境
+// 变量名并换过值（因此有上一个值与版本号 2），并把两个服务器条目授权给
+// 其中一个。
 func seedSecretVaultForExport(t *testing.T) (string, []byte) {
 	t.Helper()
 	dbPath, mk := newSecretsEnv(t)
 	seedSecretServers(t)
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--env", "HF_TOKEN", "--stdin")
 	mustSecretsCli(t, testSecretValueB, "secrets", "set", "API_TOKEN", "--stdin")
 	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "数据库口令", "--stdin")
 	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN", "--servers", "db1,web1")

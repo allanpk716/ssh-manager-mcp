@@ -40,7 +40,12 @@ type ExecResult struct {
 // connection does (verified against OpenSSH 9.6p1 on Ubuntu 24.04). The
 // connection-death errors this can produce (ExitMissingError, io.ErrClosedPipe)
 // are swallowed by the timeout/cancellation branches below.
-func (c *Client) runSession(ctx context.Context, cmd string, timeout time.Duration, stdout, stderr io.Writer) (exitCode int, timedOut bool, err error) {
+func (c *Client) runSession(ctx context.Context, cmd string, timeout time.Duration, stdout, stderr io.Writer, options ...ExecOption) (exitCode int, timedOut bool, err error) {
+	settings := applyExecOptions(options...)
+	prepared, err := prepareExec(cmd, settings.injection)
+	if err != nil {
+		return 0, false, err
+	}
 	sess, err := c.c.NewSession()
 	if err != nil {
 		return 0, false, err
@@ -64,7 +69,24 @@ func (c *Client) runSession(ctx context.Context, cmd string, timeout time.Durati
 	defer close(done)
 	go c.killWatchdog(ctx, sess, done)
 
-	err = sess.Run(cmd)
+	if len(prepared.frames) == 0 {
+		err = sess.Run(prepared.command)
+	} else {
+		stdin, stdinErr := sess.StdinPipe()
+		if stdinErr != nil {
+			return 0, false, stdinErr
+		}
+		if err = sess.Start(prepared.command); err != nil {
+			return 0, false, ctxErrOr(ctx, err)
+		}
+		if _, err = stdin.Write(prepared.frames); err != nil {
+			return 0, false, ctxErrOr(ctx, err)
+		}
+		if err = stdin.Close(); err != nil {
+			return 0, false, ctxErrOr(ctx, err)
+		}
+		err = sess.Wait()
+	}
 	switch ctx.Err() {
 	case context.DeadlineExceeded:
 		return 0, true, nil // timeout is a result, not an error
@@ -121,8 +143,8 @@ func (c *Client) killWatchdog(ctx context.Context, sess *ssh.Session, done <-cha
 // mcpserver.TaskManager 消费——调用方自带 io.Writer 收原始流)。分类三元组与
 // runSession 恒同。timeout 语义照旧 (>0 时叠加一层 deadline); 后台引擎传 0
 // (任务的 WithTimeout 已在 ctx 上)。
-func (c *Client) ExecWriters(ctx context.Context, cmd string, timeout time.Duration, stdout, stderr io.Writer) (exitCode int, timedOut bool, err error) {
-	return c.runSession(ctx, cmd, timeout, stdout, stderr)
+func (c *Client) ExecWriters(ctx context.Context, cmd string, timeout time.Duration, stdout, stderr io.Writer, options ...ExecOption) (exitCode int, timedOut bool, err error) {
+	return c.runSession(ctx, cmd, timeout, stdout, stderr, options...)
 }
 
 // Exec runs cmd on the remote host. ctx is honored: if the caller cancels ctx —
@@ -136,10 +158,10 @@ func (c *Client) ExecWriters(ctx context.Context, cmd string, timeout time.Durat
 //
 // Exec is a thin shell over runSession: it supplies cappedBuffer writers and
 // folds the kernel's (exitCode, timedOut, err) triple into ExecResult.
-func (c *Client) Exec(ctx context.Context, cmd string, timeout time.Duration, maxBytes int64) (ExecResult, error) {
+func (c *Client) Exec(ctx context.Context, cmd string, timeout time.Duration, maxBytes int64, options ...ExecOption) (ExecResult, error) {
 	stdout := &cappedBuffer{cap: maxBytes}
 	stderr := &cappedBuffer{cap: maxBytes}
-	exitCode, timedOut, err := c.runSession(ctx, cmd, timeout, stdout, stderr)
+	exitCode, timedOut, err := c.runSession(ctx, cmd, timeout, stdout, stderr, options...)
 	res := ExecResult{
 		Stdout:      stdout.buf.String(),
 		Stderr:      stderr.buf.String(),

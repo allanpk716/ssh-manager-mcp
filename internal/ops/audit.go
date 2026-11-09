@@ -39,6 +39,8 @@ type AuditRow struct {
 	DurationMS  int64
 	Source      string
 	SourceIP    string
+	// InjectedEnvironmentNames 是命令执行审计行附带的环境变量名，不含值。
+	InjectedEnvironmentNames []string
 }
 
 // QueryAudit 查询权威 vault 审计表，按编号从新到旧返回。
@@ -68,6 +70,7 @@ func (m *Manager) QueryAudit(query AuditQuery) ([]AuditRow, error) {
 			Action: row.Action, Command: row.Command, Sudo: row.Sudo,
 			Status: row.Status, ExitCode: row.ExitCode, DurationMS: row.DurationMS,
 			Source: row.Source, SourceIP: row.SourceIP,
+			InjectedEnvironmentNames: row.InjectedEnvironmentNames,
 		})
 	}
 	return out, nil
@@ -75,12 +78,16 @@ func (m *Manager) QueryAudit(query AuditQuery) ([]AuditRow, error) {
 
 // JSONMap 返回命令行 JSON 输出使用的审计行字段，字段含义与存储层一致。
 func (r AuditRow) JSONMap() map[string]any {
-	return map[string]any{
+	record := map[string]any{
 		"id": r.ID, "ts": r.TS.Unix(), "project_id": r.ProjectID,
 		"server_id": r.ServerID, "action": r.Action, "command": r.Command,
 		"sudo": r.Sudo, "status": r.Status, "exit_code": r.ExitCode,
 		"duration_ms": r.DurationMS, "source": r.Source, "source_ip": r.SourceIP,
 	}
+	if len(r.InjectedEnvironmentNames) > 0 {
+		record["injected_environment_names"] = r.InjectedEnvironmentNames
+	}
+	return record
 }
 
 // resolveServerIDs 把服务器名字换成标识符；解析失败时保留原串，供已删实体

@@ -34,8 +34,8 @@ func Default() *Comparer {
 }
 
 // Hint 比较新旧快照并返回变更提示;没有任何差异时返回空字符串。提示只
-// 含服务器名、机密项名字、修订号与固定的网络拓扑、命令策略说明,不含
-// 地址、凭据或机密项的值。
+// 含服务器名、机密项名字、机密项环境变量名、修订号与固定的网络拓扑、
+// 命令策略说明,不含地址、凭据或机密项的值。
 func (c *Comparer) Hint(old, fresh *store.Snapshot) string {
 	if c == nil || old == nil || fresh == nil {
 		return ""

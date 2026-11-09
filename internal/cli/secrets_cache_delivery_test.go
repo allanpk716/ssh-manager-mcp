@@ -32,7 +32,7 @@ func TestSecretsCacheDeliveryE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := fx.serve.AddSecret("DELIVERED_TOKEN", "下发给客户端", []byte(deliverySecretPrevious)); err != nil {
+	if err := fx.serve.AddSecretWithEnvironmentName("DELIVERED_TOKEN", "下发给客户端", []byte(deliverySecretPrevious), "HF_TOKEN"); err != nil {
 		t.Fatal(err)
 	}
 	if err := fx.serve.SetSecretValue("DELIVERED_TOKEN", []byte(deliverySecretCurrent)); err != nil {
@@ -127,10 +127,10 @@ func TestSecretsCacheDeliveryE2E(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{name: "all", args: map[string]any{}, want: "DELIVERED_TOKEN | 下发给客户端 | target"},
-		{name: "query", args: map[string]any{"query": "DELIVERED"}, want: "DELIVERED_TOKEN | 下发给客户端 | target"},
-		{name: "server", args: map[string]any{"server": "target"}, want: "DELIVERED_TOKEN | 下发给客户端 | target"},
-		{name: "query and server", args: map[string]any{"query": "delivered", "server": "target"}, want: "DELIVERED_TOKEN | 下发给客户端 | target"},
+		{name: "all", args: map[string]any{}, want: "DELIVERED_TOKEN | 下发给客户端 | HF_TOKEN | target"},
+		{name: "query", args: map[string]any{"query": "DELIVERED"}, want: "DELIVERED_TOKEN | 下发给客户端 | HF_TOKEN | target"},
+		{name: "server", args: map[string]any{"server": "target"}, want: "DELIVERED_TOKEN | 下发给客户端 | HF_TOKEN | target"},
+		{name: "query and server", args: map[string]any{"query": "delivered", "server": "target"}, want: "DELIVERED_TOKEN | 下发给客户端 | HF_TOKEN | target"},
 		// outside 在权威端库里真实存在，但不在本客户端的授权范围内：桥进程
 		// 的快照里没有它，输出必须与「missing」完全相同。
 		{name: "out-of-profile server", args: map[string]any{"server": "outside"}, want: "没有可用的机密项"},
@@ -182,7 +182,7 @@ func TestSecretsCacheDeliveryE2E(t *testing.T) {
 
 	fx.serveHTTP.Close()
 	offlineText, offlineErr := callTool(t, session, "list_secrets", map[string]any{})
-	if offlineErr || offlineText != "DELIVERED_TOKEN | 下发给客户端 | target" {
+	if offlineErr || offlineText != "DELIVERED_TOKEN | 下发给客户端 | HF_TOKEN | target" {
 		t.Fatalf("权威端停止后客户端桥进程应仍能从缓存列出机密项：\n%s\n错误结果：%v", offlineText, offlineErr)
 	}
 	out, errOut, err := runSecretsRoot(t, "", "secrets", "list")

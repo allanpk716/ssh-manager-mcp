@@ -1093,6 +1093,17 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 			},
 		},
 		{
+			name: "设置机密项环境变量名",
+			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
+				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-environment-secret")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
+				return s.SetSecretEnvironmentName("DEPLOY_TOKEN", "DEPLOY_TOKEN_NAME")
+			},
+		},
+		{
 			name: "删除机密项",
 			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
 				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-delete-secret")); err != nil {

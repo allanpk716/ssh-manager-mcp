@@ -20,7 +20,8 @@ type ListSecretsInput struct {
 
 // ListSecretsTextForProfile returns the agent-visible secret list. The server
 // scope is the profile's granted server set, and the text deliberately carries
-// only names, notes, and granted server names. serverIdentifier accepts a
+// only names, notes, environment variable names, and granted server names.
+// serverIdentifier accepts a
 // server id (exact match first) or a server name, resolved only within the
 // granted set; out-of-scope and unknown identifiers are indistinguishable.
 func ListSecretsTextForProfile(st *store.Store, profileID, query, serverIdentifier string) (string, error) {
@@ -49,7 +50,7 @@ func ListSecretsTextForProfile(st *store.Store, profileID, query, serverIdentifi
 	lines := make([]string, 0, len(views))
 	for _, view := range views {
 		note := secretNoteLineBreaks.Replace(view.Note)
-		lines = append(lines, view.Name+" | "+note+" | "+strings.Join(view.AllowedServers, ","))
+		lines = append(lines, view.Name+" | "+note+" | "+view.EnvironmentName+" | "+strings.Join(view.AllowedServers, ","))
 	}
 	if len(lines) == 0 {
 		return noAvailableSecretsText, nil

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 // 机密项的名字与值规则。名字从严（字母、数字、下划线，首字符不是数字），
@@ -20,20 +22,24 @@ const (
 // 机密项操作的错误。文本会直接出现在命令行报错里，因此自带完整原因，也
 // 不包含值本身。
 var (
-	ErrSecretNameInvalid = errors.New("机密项名字不合法：只能使用字母、数字、下划线，长度 1 到 64，且首字符不能是数字")
-	ErrSecretNameExists  = errors.New("机密项名字已存在（大小写不同的名字视为同一个）")
-	ErrSecretNotFound    = errors.New("机密项不存在")
+	ErrSecretNameInvalid             = errors.New("机密项名字不合法：只能使用字母、数字、下划线，长度 1 到 64，且首字符不能是数字")
+	ErrSecretNameExists              = errors.New("机密项名字已存在（大小写不同的名字视为同一个）")
+	ErrSecretNotFound                = errors.New("机密项不存在")
+	ErrSecretEnvironmentNameInvalid  = errors.New("机密项环境变量名不合法：格式要求为字母或下划线开头，后续为字母、数字或下划线")
+	ErrSecretEnvironmentNameExists   = errors.New("机密项环境变量名已被其他机密项使用（大小写不同视为同一个）")
+	ErrSecretEnvironmentNameReserved = errors.New("机密项环境变量名在固定拒绝清单中")
 )
 
-// SecretView 是机密项的对外可见形态：只有名字、备注、可写入服务器条目名与
-// 两个时间。当前值、上一个值、值的哈希、长度与版本号都不进入这个结构，
-// 让「读不回值」成为类型层面的约束，而不只是界面的约束。
+// SecretView 是机密项的对外可见形态：只有名字、备注、环境变量名、可写入
+// 服务器条目名与两个时间。当前值、上一个值、值的哈希、长度与版本号都不
+// 进入这个结构，让「读不回值」成为类型层面的约束，而不只是界面的约束。
 type SecretView struct {
-	Name           string
-	Note           string
-	AllowedServers []string
-	CreatedAt      int64
-	ValueUpdatedAt int64
+	Name            string
+	Note            string
+	EnvironmentName string
+	AllowedServers  []string
+	CreatedAt       int64
+	ValueUpdatedAt  int64
 }
 
 // SecretValuesForMasking 是只供进程内部输出遮蔽使用的机密项值集合。它包含
@@ -46,9 +52,17 @@ type SecretValuesForMasking struct {
 	WritableServerIDs []string
 }
 
+// SecretMetadataEdit 表示一次机密项元数据修改。指针为空表示不改这个字段；
+// 环境变量名指针指向空字符串表示清除环境变量名。
+type SecretMetadataEdit struct {
+	Note            *string
+	EnvironmentName *string
+}
+
 // SecretValuesForMasking 读取全部机密项的当前值、上一个值与可写入服务器
-// 条目标识符。该读取路径只服务本进程内的输出遮蔽；调用方不得把返回值
-// 序列化到工具结果、日志或审计。
+// 条目标识符。任何一个值无法解密都返回错误，让调用方拒绝放行未遮蔽输出；
+// 该读取路径只服务本进程内的输出遮蔽，调用方不得把返回值序列化到工具
+// 结果、日志或审计。
 func (s *Store) SecretValuesForMasking() ([]SecretValuesForMasking, error) {
 	rows, allows, err := s.snapshotSecrets()
 	if err != nil {
@@ -65,13 +79,71 @@ func (s *Store) SecretValuesForMasking() ([]SecretValuesForMasking, error) {
 		})
 	}
 	for _, allow := range allows {
-		index, exists := indexByID[allow.SecretID]
-		if !exists {
-			continue
+		secretID, serverID := allow.SecretID, allow.ServerID
+		if index, exists := indexByID[secretID]; exists {
+			values[index].WritableServerIDs = append(values[index].WritableServerIDs, serverID)
 		}
-		values[index].WritableServerIDs = append(values[index].WritableServerIDs, allow.ServerID)
 	}
 	return values, nil
+}
+
+// SecretValuesForCommandMasking 只供带环境变量注入计划的执行工具使用。这
+// 类工具按规格必须在一个变量读取失败时继续执行并返回未注入警告，因此这里
+// 跳过无法解密的值，让其他可用值继续参与输出遮蔽。其他调用方必须使用
+// SecretValuesForMasking 的失败即报错行为。
+func (s *Store) SecretValuesForCommandMasking() ([]SecretValuesForMasking, error) {
+	rows, err := s.db.Query(`
+		SELECT id, name, value_blob, COALESCE(previous_value_blob,'')
+		FROM secrets ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	indexByID := make(map[string]int)
+	values := make([]SecretValuesForMasking, 0)
+	for rows.Next() {
+		var id, name string
+		var currentBlob, previousBlob []byte
+		if err := rows.Scan(&id, &name, &currentBlob, &previousBlob); err != nil {
+			return nil, err
+		}
+		current, openErr := open(s.masterKey, currentBlob)
+		if openErr != nil {
+			continue
+		}
+		var previous []byte
+		if len(previousBlob) > 0 {
+			if previous, openErr = open(s.masterKey, previousBlob); openErr != nil {
+				previous = nil
+			}
+		}
+		indexByID[id] = len(values)
+		values = append(values, SecretValuesForMasking{
+			Name: name, Current: current, Previous: previous,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	allows, err := s.db.Query(`SELECT secret_id, server_id FROM secret_server_allow ORDER BY secret_id, server_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer allows.Close()
+	for allows.Next() {
+		var secretID, serverID string
+		if err := allows.Scan(&secretID, &serverID); err != nil {
+			return nil, err
+		}
+		if index, exists := indexByID[secretID]; exists {
+			values[index].WritableServerIDs = append(values[index].WritableServerIDs, serverID)
+		}
+	}
+	return values, allows.Err()
 }
 
 // SecretServerScope 是机密项可见列表的服务器范围：客户端为 profile 授予
@@ -123,6 +195,46 @@ func ValidateSecretName(name string) error {
 	return nil
 }
 
+// secretEnvironmentExactDenyList 是环境变量名的固定精确拒绝清单。这些名字
+// 会改变目标机命令环境的基础语义，因此任何机密项都不能使用。
+var secretEnvironmentExactDenyList = map[string]struct{}{
+	"PATH": {}, "HOME": {}, "USER": {}, "LOGNAME": {}, "SHELL": {}, "PWD": {},
+	"OLDPWD": {}, "IFS": {}, "ENV": {}, "BASH_ENV": {}, "CDPATH": {}, "PS1": {},
+	"PS2": {}, "PS3": {}, "PS4": {}, "PROMPT_COMMAND": {}, "TERM": {}, "LANG": {},
+	"TZ": {}, "TMPDIR": {}, "MAIL": {}, "HOSTNAME": {}, "PATHEXT": {}, "COMSPEC": {},
+	"SYSTEMROOT": {}, "SYSTEMDRIVE": {}, "WINDIR": {}, "USERPROFILE": {}, "USERNAME": {},
+	"USERDOMAIN": {}, "APPDATA": {}, "LOCALAPPDATA": {}, "PROGRAMDATA": {},
+	"PROGRAMFILES": {}, "TEMP": {}, "TMP": {}, "HOMEDRIVE": {}, "HOMEPATH": {},
+	"PSMODULEPATH": {}, "PROMPT": {}, "PROCESSOR_ARCHITECTURE": {},
+}
+
+// secretEnvironmentDenyPrefixes 是环境变量名的固定前缀拒绝清单。相关名字会
+// 影响动态链接、SSH、提权或 shell 函数等安全边界。
+var secretEnvironmentDenyPrefixes = []string{
+	"LD_", "DYLD_", "SSH_", "SSHMGR_", "SUDO_", "BASH_FUNC_", "LC_",
+}
+
+// ValidateSecretEnvironmentName 校验机密项环境变量名。空值表示清除，由专管
+// 方法单独接受；非空值必须符合格式规则且不在固定拒绝清单中。
+func ValidateSecretEnvironmentName(name string) error {
+	if name == "" {
+		return nil
+	}
+	if !models.EnvironmentVariableNameFormatIsValid(name) {
+		return fmt.Errorf("%w：%s", ErrSecretEnvironmentNameInvalid, name)
+	}
+	lower := strings.ToLower(name)
+	if _, exists := secretEnvironmentExactDenyList[strings.ToUpper(lower)]; exists {
+		return fmt.Errorf("%w：精确名 %s", ErrSecretEnvironmentNameReserved, name)
+	}
+	for _, prefix := range secretEnvironmentDenyPrefixes {
+		if strings.HasPrefix(lower, strings.ToLower(prefix)) {
+			return fmt.Errorf("%w：拒绝前缀 %s，变量名 %s", ErrSecretEnvironmentNameReserved, prefix, name)
+		}
+	}
+	return nil
+}
+
 // validateSecretValue 按原始字节校验值。空值、短于 8 个字节、超过 64 KiB
 // 都拒绝；末尾换行计入长度。
 func validateSecretValue(value []byte) error {
@@ -152,6 +264,12 @@ func (s *Store) commitSecretChange(tx *sql.Tx) error {
 // 与值的最后更改时间相同。名字唯一性按小写形式检查。数据与审计行在同一
 // 事务提交。
 func (s *Store) AddSecret(name, note string, value []byte) error {
+	return s.AddSecretWithEnvironmentName(name, note, value, "")
+}
+
+// AddSecretWithEnvironmentName 新增一个带环境变量名的机密项。名字、值与
+// 环境变量名全部校验通过后才落库，避免“机密项已新增但变量名失败”的半成品。
+func (s *Store) AddSecretWithEnvironmentName(name, note string, value []byte, environmentName string) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -159,6 +277,9 @@ func (s *Store) AddSecret(name, note string, value []byte) error {
 		return err
 	}
 	if err := validateSecretValue(value); err != nil {
+		return err
+	}
+	if err := ValidateSecretEnvironmentName(environmentName); err != nil {
 		return err
 	}
 	blob, err := seal(s.masterKey, value)
@@ -178,21 +299,199 @@ func (s *Store) AddSecret(name, note string, value []byte) error {
 	if err != sql.ErrNoRows {
 		return err
 	}
+	if environmentName != "" {
+		var existingSecret string
+		err = tx.QueryRow(
+			`SELECT name FROM secrets WHERE env_name_lower=?`,
+			strings.ToLower(environmentName),
+		).Scan(&existingSecret)
+		if err == nil {
+			return secretEnvironmentNameExistsError(existingSecret, environmentName)
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+	}
 	ts := s.nowTime()
 	id := newID()
 	if _, err := tx.Exec(
-		`INSERT INTO secrets (id,name,name_lower,note,value_blob,previous_value_blob,value_version,created_at,value_updated_at)
-		 VALUES (?,?,?,?,?,?,1,?,?)`,
-		id, name, strings.ToLower(name), note, blob, nil, ts.Unix(), ts.Unix()); err != nil {
+		`INSERT INTO secrets (id,name,name_lower,note,env_name,env_name_lower,value_blob,previous_value_blob,value_version,created_at,value_updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,1,?,?)`,
+		id, name, strings.ToLower(name), note, environmentName, strings.ToLower(environmentName), blob, nil, ts.Unix(), ts.Unix()); err != nil {
 		return err
 	}
 	if err := writeSecretAuditTx(tx, ts, "secret-add", map[string]any{"name": name}); err != nil {
 		return err
 	}
+	if environmentName != "" {
+		if err := writeSecretAuditTx(tx, ts, "secret-env", map[string]any{
+			"name": name, "before": "", "after": environmentName,
+		}); err != nil {
+			return err
+		}
+	}
 	if err := s.commitSecretChange(tx); err != nil {
 		return err
 	}
 	return nil
+}
+
+// SetSecretEnvironmentName 设置或清除一个机密项的环境变量名。空值表示清
+// 除；改名前会重新检查格式、拒绝清单与全库唯一性。
+func (s *Store) SetSecretEnvironmentName(secretName, environmentName string) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	if err := ValidateSecretEnvironmentName(environmentName); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var secretID, before string
+	err = tx.QueryRow(`SELECT id, COALESCE(env_name, '') FROM secrets WHERE name=?`, secretName).Scan(&secretID, &before)
+	if err == sql.ErrNoRows {
+		return ErrSecretNotFound
+	}
+	if err != nil {
+		return err
+	}
+	desiredLower := strings.ToLower(environmentName)
+	if desiredLower != "" {
+		var existingSecret string
+		err = tx.QueryRow(
+			`SELECT name FROM secrets WHERE env_name_lower=? AND id<>?`,
+			desiredLower, secretID,
+		).Scan(&existingSecret)
+		if err == nil {
+			return secretEnvironmentNameExistsError(existingSecret, environmentName)
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+	}
+	if environmentName == before {
+		return tx.Rollback()
+	}
+	if _, err := tx.Exec(
+		`UPDATE secrets SET env_name=?, env_name_lower=? WHERE id=?`,
+		environmentName, desiredLower, secretID,
+	); err != nil {
+		return err
+	}
+	if err := writeSecretAuditTx(tx, s.nowTime(), "secret-env", map[string]any{
+		"name": secretName, "before": before, "after": environmentName,
+	}); err != nil {
+		return err
+	}
+	return s.commitSecretChange(tx)
+}
+
+// EditSecretMetadata 在同一个事务里修改备注与环境变量名。任一字段失败时
+// 两者都保持原值；审计行为与单独修改保持一致，不记录备注原文或变量值。
+func (s *Store) EditSecretMetadata(secretName string, edit SecretMetadataEdit) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	if edit.Note == nil && edit.EnvironmentName == nil {
+		return nil
+	}
+	if edit.EnvironmentName != nil {
+		if err := ValidateSecretEnvironmentName(*edit.EnvironmentName); err != nil {
+			return err
+		}
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var secretID, beforeNote, beforeEnvironmentName string
+	err = tx.QueryRow(
+		`SELECT id, COALESCE(note,''), COALESCE(env_name,'') FROM secrets WHERE name=?`,
+		secretName,
+	).Scan(&secretID, &beforeNote, &beforeEnvironmentName)
+	if err == sql.ErrNoRows {
+		return ErrSecretNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	desiredNote := beforeNote
+	if edit.Note != nil {
+		desiredNote = *edit.Note
+	}
+	desiredEnvironmentName := beforeEnvironmentName
+	if edit.EnvironmentName != nil {
+		desiredEnvironmentName = *edit.EnvironmentName
+	}
+	if desiredEnvironmentName != "" {
+		desiredLower := strings.ToLower(desiredEnvironmentName)
+		var existingSecret string
+		err = tx.QueryRow(
+			`SELECT name FROM secrets WHERE env_name_lower=? AND id<>?`,
+			desiredLower, secretID,
+		).Scan(&existingSecret)
+		if err == nil {
+			return secretEnvironmentNameExistsError(existingSecret, desiredEnvironmentName)
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+	}
+
+	var result sql.Result
+	switch {
+	case edit.Note != nil && edit.EnvironmentName != nil:
+		result, err = tx.Exec(
+			`UPDATE secrets SET note=?, env_name=?, env_name_lower=? WHERE id=?`,
+			desiredNote, desiredEnvironmentName, strings.ToLower(desiredEnvironmentName), secretID,
+		)
+	case edit.Note != nil:
+		result, err = tx.Exec(`UPDATE secrets SET note=? WHERE id=?`, desiredNote, secretID)
+	default:
+		result, err = tx.Exec(
+			`UPDATE secrets SET env_name=?, env_name_lower=? WHERE id=?`,
+			desiredEnvironmentName, strings.ToLower(desiredEnvironmentName), secretID,
+		)
+	}
+	if err != nil {
+		return err
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if rows == 0 {
+		return ErrSecretNotFound
+	}
+
+	auditTime := s.nowTime()
+	if edit.Note != nil {
+		if err := writeSecretAuditTx(tx, auditTime, "secret-edit", map[string]any{
+			"name": secretName, "change": "备注已更改",
+		}); err != nil {
+			return err
+		}
+	}
+	environmentNameChanged := edit.EnvironmentName != nil && desiredEnvironmentName != beforeEnvironmentName
+	if environmentNameChanged {
+		if err := writeSecretAuditTx(tx, auditTime, "secret-env", map[string]any{
+			"name": secretName, "before": beforeEnvironmentName, "after": desiredEnvironmentName,
+		}); err != nil {
+			return err
+		}
+		return s.commitSecretChange(tx)
+	}
+	return tx.Commit()
+}
+
+// secretEnvironmentNameExistsError 生成环境变量名重名报错，指明已占用它的
+// 机密项，便于 owner 定位冲突对象。
+func secretEnvironmentNameExistsError(existingSecret, environmentName string) error {
+	return fmt.Errorf("%w：%s 使用 %s", ErrSecretEnvironmentNameExists, existingSecret, environmentName)
 }
 
 // SetSecretValue 覆盖机密项的值：旧值移入上一个值字段，值版本号加一，值的
@@ -297,7 +596,7 @@ func (s *Store) DeleteSecret(name string) error {
 // 配置可写入服务器的机密项。
 func (s *Store) ListSecretsInScope(scope SecretServerScope) ([]SecretView, error) {
 	rows, err := s.db.Query(`
-		SELECT sec.id, sec.name, sec.note, sec.created_at, sec.value_updated_at,
+		SELECT sec.id, sec.name, sec.note, sec.env_name, sec.created_at, sec.value_updated_at,
 		       srv.id, srv.name
 		FROM secrets sec
 		LEFT JOIN secret_server_allow allow ON allow.secret_id = sec.id
@@ -312,7 +611,7 @@ func (s *Store) ListSecretsInScope(scope SecretServerScope) ([]SecretView, error
 		var row secretDisplayRow
 		var secretID string
 		var serverID, serverName sql.NullString
-		if err := rows.Scan(&secretID, &row.view.Name, &row.view.Note, &row.view.CreatedAt, &row.view.ValueUpdatedAt,
+		if err := rows.Scan(&secretID, &row.view.Name, &row.view.Note, &row.view.EnvironmentName, &row.view.CreatedAt, &row.view.ValueUpdatedAt,
 			&serverID, &serverName); err != nil {
 			return nil, err
 		}
@@ -444,10 +743,11 @@ func SecretViewsFromSnapshot(snapshot *Snapshot) []SecretView {
 		rows = append(rows, secretDisplayRow{
 			secretID: secret.ID,
 			view: SecretView{
-				Name:           secret.Name,
-				Note:           secret.Note,
-				CreatedAt:      secret.CreatedAt,
-				ValueUpdatedAt: secret.ValueUpdatedAt,
+				Name:            secret.Name,
+				Note:            secret.Note,
+				EnvironmentName: secret.EnvironmentName,
+				CreatedAt:       secret.CreatedAt,
+				ValueUpdatedAt:  secret.ValueUpdatedAt,
 			},
 		})
 	}

@@ -46,6 +46,25 @@ func NormalizeShellType(s string) ShellType {
 	return ShellType(s)
 }
 
+// EnvironmentVariableNameFormatIsValid 只检查环境变量名的通用格式：字母或
+// 下划线开头，后续为字母、数字或下划线。空字符串与其他业务限制由调用方
+// 自行判断。
+func EnvironmentVariableNameFormatIsValid(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z'):
+		case i > 0 && '0' <= c && c <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // ParseShellType 把 CLI 标志或规则里的文字解析成 shell 类型;只接受三类已知值。
 func ParseShellType(s string) (ShellType, error) {
 	switch ShellType(s) {

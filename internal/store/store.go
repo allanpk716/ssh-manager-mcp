@@ -303,6 +303,9 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "audit_log", "source_ip", "TEXT"); err != nil {
 		return err
 	}
+	if err := addColumnIfMissing(db, "audit_log", "injected_environment_names", "TEXT"); err != nil {
+		return err
+	}
 	rows, err := db.Query(`PRAGMA table_info(host_keys)`)
 	if err != nil {
 		return err
@@ -396,6 +399,14 @@ func migrate(db *sql.DB) error {
 	// 票 #90：设备码表记录最近一次拉取快照声明的客户端版本。空值表示
 	// 没有声明版本；旧行迁移为空值，即按旧版客户端显示。
 	if err := addColumnIfMissing(db, "cache_tokens", "client_version", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// 票 #161：机密项增加可选环境变量名。原始大小写与用于大小写不敏感
+	// 唯一约束的比较值分开保存；空值表示不注入。
+	if err := addColumnIfMissing(db, "secrets", "env_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "secrets", "env_name_lower", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	// 2026-09-01 SAS 落行(撤销 rev4:69 降级勘误):serve 在 enroll 时算好 6 位
@@ -941,7 +952,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
   exit_code INTEGER,
   duration_ms INTEGER,
   source TEXT,
-  source_ip TEXT
+  source_ip TEXT,
+  injected_environment_names TEXT
 );
 CREATE TABLE IF NOT EXISTS web_admin_auth (
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -971,12 +983,16 @@ CREATE TABLE IF NOT EXISTS secrets (
   name TEXT NOT NULL,
   name_lower TEXT NOT NULL UNIQUE,
   note TEXT NOT NULL DEFAULT '',
+  env_name TEXT NOT NULL DEFAULT '',
+  env_name_lower TEXT NOT NULL DEFAULT '',
   value_blob BLOB NOT NULL,
   previous_value_blob BLOB,
   value_version INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
   value_updated_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS secrets_env_name_lower_unique
+  ON secrets(env_name_lower) WHERE env_name_lower <> '';
 CREATE TABLE IF NOT EXISTS secret_server_allow (
   secret_id TEXT NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,

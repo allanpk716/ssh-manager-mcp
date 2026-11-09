@@ -23,7 +23,7 @@ func TestReadClientAuditReturnsNewestFirstAndHonorsLimit(t *testing.T) {
 	directory := t.TempDir()
 	t.Setenv("SSHMGR_CACHE_DIR", directory)
 	writeClientAuditSidecar(t, directory,
-		`{"action":"exec","command":"uptime","duration_ms":12,"exit_code":3,"id":0,"project_id":"proj_1","server_id":"srv_1","source":"agent","status":"error","sudo":true,"ts":1800000000}`,
+		`{"action":"exec","command":"uptime","duration_ms":12,"exit_code":3,"id":0,"injected_environment_names":["HF_TOKEN"],"project_id":"proj_1","server_id":"srv_1","source":"agent","status":"error","sudo":true,"ts":1800000000}`,
 		`{"action":"cache.pull","command":"同步成功","duration_ms":0,"exit_code":0,"id":0,"project_id":"","server_id":"","source":"web_ui","source_ip":"127.0.0.1","status":"ok","sudo":false,"ts":1800000100}`,
 	)
 
@@ -43,6 +43,9 @@ func TestReadClientAuditReturnsNewestFirstAndHonorsLimit(t *testing.T) {
 	if oldest.Action != "exec" || oldest.ProjectID != "proj_1" || oldest.ServerID != "srv_1" ||
 		oldest.Source != store.AuditSourceAgent || oldest.ExitCode != 3 || oldest.DurationMS != 12 || !oldest.Sudo {
 		t.Fatalf("最早一行的字段解析不符：%+v", oldest)
+	}
+	if len(oldest.InjectedEnvironmentNames) != 1 || oldest.InjectedEnvironmentNames[0] != "HF_TOKEN" {
+		t.Fatalf("最早一行应保留注入的环境变量名：%+v", oldest.InjectedEnvironmentNames)
 	}
 
 	limited, err := ReadClientAudit("", 1)

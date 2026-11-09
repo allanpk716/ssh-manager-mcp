@@ -363,7 +363,7 @@ func ctxErrOr(ctx context.Context, err error) error {
 // timeout/ctx exactly like runSession. It imposes NO wrapper and NO stderr
 // processing: callers compose (runSudoSession adds the marker wrapper and the
 // stderr processor; ExecSudoWrapped passes a caller-prebuilt command through).
-func (c *Client) runSessionRaw(ctx context.Context, wrapped, pass string, timeout time.Duration, stdout, stderr io.Writer) (exitCode int, timedOut bool, err error) {
+func (c *Client) runSessionRaw(ctx context.Context, wrapped, pass string, timeout time.Duration, stdout, stderr io.Writer, frames ...[]byte) (exitCode int, timedOut bool, err error) {
 	sess, err := c.c.NewSession()
 	if err != nil {
 		return 0, false, err
@@ -401,6 +401,14 @@ func (c *Client) runSessionRaw(ctx context.Context, wrapped, pass string, timeou
 			return 0, false, ctxErrOr(ctx, err)
 		}
 	}
+	for _, frame := range frames {
+		if len(frame) == 0 {
+			continue
+		}
+		if _, err := stdin.Write(frame); err != nil {
+			return 0, false, ctxErrOr(ctx, err)
+		}
+	}
 	stdin.Close()
 
 	err = sess.Wait()
@@ -423,11 +431,16 @@ func (c *Client) runSessionRaw(ctx context.Context, wrapped, pass string, timeou
 // wrapped by sudoStderrProcessor, so callers only ever see the cleaned stream
 // and receive the parsed SudoMeta alongside the usual triple; ctx, timeout,
 // and the (exitCode, timedOut, err) classification are identical to runSession.
-func (c *Client) runSudoSession(ctx context.Context, cmd, pass string, timeout time.Duration, stdout, stderr io.Writer) (exitCode int, timedOut bool, err error, sudoMeta SudoMeta) {
+func (c *Client) runSudoSession(ctx context.Context, cmd, pass string, timeout time.Duration, stdout, stderr io.Writer, options ...ExecOption) (exitCode int, timedOut bool, err error, sudoMeta SudoMeta) {
+	settings := applyExecOptions(options...)
+	prepared, prepareErr := preparePrivilegedExec(cmd, settings.injection)
+	if prepareErr != nil {
+		return 0, false, prepareErr, SudoMeta{}
+	}
 	nonce := newSudoNonce()
 	proc := newSudoStderrProcessor(stderr, nonce)
-	wrapped := buildSudoWrapperWithMarker(cmd, nonce)
-	exitCode, timedOut, err = c.runSessionRaw(ctx, wrapped, pass, timeout, stdout, proc)
+	wrapped := buildSudoWrapperWithMarker(prepared.command, nonce)
+	exitCode, timedOut, err = c.runSessionRaw(ctx, wrapped, pass, timeout, stdout, proc, prepared.frames)
 	proc.flush()
 	return exitCode, timedOut, err, proc.classify()
 }
@@ -461,8 +474,8 @@ func (c *Client) ExecSudoWrapped(ctx context.Context, wrapped string, sudoPasswo
 // 引擎的特权变体——调用方自带 io.Writer, pass 喂入后即弃, 不落任何记录)。
 // 分类三元组与 runSudoSession 恒同; timeout 语义照旧 (引擎传 0)。批 2a
 // (Plan 41 §2) 起附带 SudoMeta——调用方(后台引擎)可据此记录提权结果。
-func (c *Client) ExecSudoWriters(ctx context.Context, cmd, pass string, timeout time.Duration, stdout, stderr io.Writer) (exitCode int, timedOut bool, err error, sudoMeta SudoMeta) {
-	return c.runSudoSession(ctx, cmd, pass, timeout, stdout, stderr)
+func (c *Client) ExecSudoWriters(ctx context.Context, cmd, pass string, timeout time.Duration, stdout, stderr io.Writer, options ...ExecOption) (exitCode int, timedOut bool, err error, sudoMeta SudoMeta) {
+	return c.runSudoSession(ctx, cmd, pass, timeout, stdout, stderr, options...)
 }
 
 // ExecSudo runs cmd with privilege escalation via `sudo -S`, feeding sudoPassword
@@ -475,10 +488,10 @@ func (c *Client) ExecSudoWriters(ctx context.Context, cmd, pass string, timeout 
 // and folds the kernel's (exitCode, timedOut, err, SudoMeta) into ExecResult —
 // Stderr is the CLEANED stream (marker/prompt stripped), Sudo carries the
 // five-state outcome with the marker-attested uid.
-func (c *Client) ExecSudo(ctx context.Context, cmd string, sudoPassword []byte, timeout time.Duration, maxBytes int64) (ExecResult, error) {
+func (c *Client) ExecSudo(ctx context.Context, cmd string, sudoPassword []byte, timeout time.Duration, maxBytes int64, options ...ExecOption) (ExecResult, error) {
 	stdout := &cappedBuffer{cap: maxBytes}
 	stderr := &cappedBuffer{cap: maxBytes}
-	exitCode, timedOut, err, meta := c.runSudoSession(ctx, cmd, string(sudoPassword), timeout, stdout, stderr)
+	exitCode, timedOut, err, meta := c.runSudoSession(ctx, cmd, string(sudoPassword), timeout, stdout, stderr, options...)
 	res := ExecResult{
 		Stdout:      stdout.buf.String(),
 		Stderr:      stderr.buf.String(),

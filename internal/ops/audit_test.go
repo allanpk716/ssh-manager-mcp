@@ -55,7 +55,7 @@ func TestQueryAuditFiltersByNameSourceAndCursor(t *testing.T) {
 	rows := []store.AuditRow{
 		{TS: now.Add(-3 * time.Hour), Action: "exec", Command: "uptime", Status: "ok", ServerID: server, ProjectID: project, Source: store.AuditSourceAgent},
 		{TS: now.Add(-2 * time.Hour), Action: "admin.login", Command: "登录成功", Status: "ok", Source: store.AuditSourceWebUI, SourceIP: "192.0.2.23"},
-		{TS: now.Add(-time.Hour), Action: "exec", Command: "whoami", Status: "error", ServerID: server, ProjectID: project, Source: store.AuditSourceWebUI, SourceIP: "192.0.2.23"},
+		{TS: now.Add(-time.Hour), Action: "exec", Command: "whoami", Status: "error", ServerID: server, ProjectID: project, Source: store.AuditSourceWebUI, SourceIP: "192.0.2.23", InjectedEnvironmentNames: []string{"HF_TOKEN"}},
 		{TS: now, Action: "exec", Command: "date", Status: "ok", ServerID: server, ProjectID: project, Source: store.AuditSourceCLI},
 	}
 	for _, row := range rows {
@@ -84,6 +84,12 @@ func TestQueryAuditFiltersByNameSourceAndCursor(t *testing.T) {
 	}
 	if row.ID <= 0 || row.TS.IsZero() || row.Source != store.AuditSourceWebUI || row.SourceIP != "192.0.2.23" {
 		t.Fatalf("审计行缺少编号、时间或来源信息：%+v", row)
+	}
+	if len(row.InjectedEnvironmentNames) != 1 || row.InjectedEnvironmentNames[0] != "HF_TOKEN" {
+		t.Fatalf("审计行缺少注入的环境变量名：%+v", row.InjectedEnvironmentNames)
+	}
+	if names, ok := row.JSONMap()["injected_environment_names"].([]string); !ok || len(names) != 1 || names[0] != "HF_TOKEN" {
+		t.Fatalf("审计 JSON 输出缺少注入的环境变量名：%+v", row.JSONMap())
 	}
 
 	cursor := row.ID

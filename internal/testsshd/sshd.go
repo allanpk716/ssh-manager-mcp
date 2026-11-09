@@ -26,6 +26,9 @@ type Options struct {
 	Password      string        // accept this password (empty = no password auth)
 	AuthorizedKey ssh.PublicKey // accept this client public key (nil = no key auth)
 	SudoPassword  string        // if set, Exec handler simulates sudo -S (reads pw from stdin)
+	// SudoDoesNotReadPassword 模拟免密 sudo：命令会提权执行，但不消费标准
+	// 输入里的密码行。
+	SudoDoesNotReadPassword bool
 	// HostKey, when non-nil, is presented as the server's host key instead of
 	// a freshly generated one — lets a test pin the exact key (or run several
 	// fixtures with known, distinct keys). Nil keeps the original behavior:
@@ -128,7 +131,7 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 			if opts.Connections != nil {
 				opts.Connections.Add(1)
 			}
-			go serve(conn, cfg, opts.SudoPassword, opts.SudoStartFailure, execFn, opts.ExecStream)
+			go serve(conn, cfg, opts.SudoPassword, opts.SudoDoesNotReadPassword, opts.SudoStartFailure, execFn, opts.ExecStream)
 		}
 	}()
 	cleanup := func() {
@@ -152,7 +155,7 @@ func bytesEqual(a, b []byte) bool {
 	return d == 0
 }
 
-func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int) {
+func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, sudoDoesNotReadPassword bool, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int) {
 	defer c.Close()
 	sc, chans, reqs, err := ssh.NewServerConn(c, cfg)
 	if err != nil {
@@ -163,7 +166,7 @@ func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw, sudoStartFailure string, e
 	for newChan := range chans {
 		switch newChan.ChannelType() {
 		case "session":
-			go handleSession(newChan, sudoPw, sudoStartFailure, execFn, execStreamFn)
+			go handleSession(newChan, sudoPw, sudoDoesNotReadPassword, sudoStartFailure, execFn, execStreamFn)
 		case "direct-tcpip":
 			// Direct TCP/IP forwarding (RFC 4254 §7.2) — the server-side of `ssh -L`.
 			// The broker's ForwardLocal opens this channel via (*ssh.Client).Dial; the
@@ -179,7 +182,7 @@ func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw, sudoStartFailure string, e
 	}
 }
 
-func handleSession(newChan ssh.NewChannel, sudoPw, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int) {
+func handleSession(newChan ssh.NewChannel, sudoPw string, sudoDoesNotReadPassword bool, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int) {
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		return
@@ -216,21 +219,23 @@ func handleSession(newChan ssh.NewChannel, sudoPw, sudoStartFailure string, exec
 			// consume the `bash -c '<quoted>'` wrapper, run the marker prologue
 			// the inner bash would run first (generic shape only).
 			if sudoIdx := strings.Index(cmd, "sudo -S -p '' --"); sudoIdx >= 0 && sudoPw != "" {
-				buf := make([]byte, 0, 256)
-				one := make([]byte, 1)
-				for {
-					if _, err := stdin.Read(one); err != nil {
-						break
+				if !sudoDoesNotReadPassword {
+					buf := make([]byte, 0, 256)
+					one := make([]byte, 1)
+					for {
+						if _, err := stdin.Read(one); err != nil {
+							break
+						}
+						if one[0] == '\n' {
+							break
+						}
+						buf = append(buf, one[0])
 					}
-					if one[0] == '\n' {
-						break
+					if string(buf) != sudoPw {
+						ch.Stderr().Write([]byte("[sudo] password for test: sudo: 1 incorrect password attempt\n"))
+						ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{1}))
+						return
 					}
-					buf = append(buf, one[0])
-				}
-				if string(buf) != sudoPw {
-					ch.Stderr().Write([]byte("[sudo] password for test: sudo: 1 incorrect password attempt\n"))
-					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{1}))
-					return
 				}
 				if sudoStartFailure != "" {
 					ch.Stderr().Write([]byte("[sudo] password for test: " + sudoStartFailure + "\n"))

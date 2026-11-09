@@ -78,7 +78,11 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	t.Helper()
 	addr, sshdKey, sshdCleanup := testsshd.Start(t, testsshd.Options{
 		Password: "pw",
-		Exec:     func(cmd string, _ io.Reader) (string, string, int) { return "PONG:" + cmd + "\n", "", 0 },
+		Exec: func(cmd string, stdin io.Reader) (string, string, int) {
+			// 模拟真实远端 shell：先排空这次会话的标准输入，再返回结果。
+			_, _ = io.ReadAll(stdin)
+			return "PONG:" + cmd + "\n", "", 0
+		},
 	})
 	t.Cleanup(sshdCleanup)
 	host := addr[:strings.Index(addr, ":")]

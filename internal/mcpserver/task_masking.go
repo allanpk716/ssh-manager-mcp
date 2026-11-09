@@ -52,7 +52,7 @@ func (s *backgroundMaskingSource) currentMasker() (secretmask.Masker, error) {
 	if cached := s.cache.Load(); s.cacheMatches(cached, st, version) {
 		return cached.masker, nil
 	}
-	masker, err := maskerFromStore(st)
+	masker, err := maskerFromStore(st, true)
 	if err != nil {
 		return secretmask.Masker{}, fmt.Errorf("read secret values for background masking: %w", err)
 	}
