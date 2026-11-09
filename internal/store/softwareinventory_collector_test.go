@@ -75,7 +75,7 @@ func TestSoftwareObservedWritePreservesClientCollector(t *testing.T) {
 	}
 	if err := st.ReplaceSoftwareObservedItems("工作站", SoftwareObservedWrite{
 		Collector: "laptop", ServerID: server.ID,
-		CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, CLISource()); err != nil {
 		t.Fatal(err)
 	}

@@ -78,7 +78,7 @@ func (s *Service) CollectForSubmission(
 	case models.ShellPowerShell, models.ShellWindowsCmd:
 		collection, parseErr = parseWindowsInventoryOutput(execResult.Stdout)
 	default:
-		collection, parseErr = parseLinuxInventoryOutput(execResult.Stdout)
+		collection, parseErr = parsePOSIXInventoryOutput(execResult.Stdout)
 	}
 	if parseErr != nil {
 		reason := fmt.Sprintf("固定命令集输出无法解析：%v", parseErr)

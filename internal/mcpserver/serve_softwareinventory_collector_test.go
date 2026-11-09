@@ -70,7 +70,7 @@ func TestSoftwareInventoryAssignmentsEndpoint(t *testing.T) {
 	fx.st.NowFn = func() time.Time { return fresh }
 	if err := fx.st.ReplaceSoftwareObservedItems("gpu-设备", store.SoftwareObservedWrite{
 		Collector: "collector", ServerID: gpu.ID,
-		CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func submissionBody(t *testing.T, fx *softwareInventoryFixture, gpu *models.Serv
 	}
 	blob, err := json.Marshal(map[string]any{
 		"device_id": device.ID, "device_name": device.Name, "server_id": gpu.ID,
-		"sudo": true, "command_set_version": "linux-v1", "system_type": "ubuntu",
+		"sudo": true, "command_set_version": "posix-v2", "system_type": "ubuntu",
 		"items": []models.SoftwareObservedItem{item}, "started_at": time.Now(), "ended_at": time.Now(),
 	})
 	if err != nil {
