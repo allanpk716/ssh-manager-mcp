@@ -17,6 +17,8 @@ type stubInitializer struct {
 	snapshot      InitializationSnapshot
 	result        InitializationResult
 	initializeErr error
+	currentRole   InitializationRole
+	vaultReady    bool
 
 	selectedRole    InitializationRole
 	initializedRole InitializationRole
@@ -30,16 +32,27 @@ type stubInitializer struct {
 }
 
 func (s *stubInitializer) ReadSnapshot() (InitializationSnapshot, error) {
-	return s.snapshot, nil
+	role := s.currentRole
+	if role == "" {
+		role = s.snapshot.Role
+	}
+	return InitializationSnapshot{
+		Role: role, Step: s.snapshot.Step, VaultReady: s.vaultReady,
+	}, nil
 }
 
 func (s *stubInitializer) SelectRoleWithoutVault(role InitializationRole) error {
 	s.selectedRole = role
+	s.currentRole = role
 	return nil
 }
 
 func (s *stubInitializer) Initialize(role InitializationRole) (InitializationResult, error) {
 	s.initializedRole = role
+	s.currentRole = role
+	if s.initializeErr == nil {
+		s.vaultReady = true
+	}
 	return s.result, s.initializeErr
 }
 
@@ -291,6 +304,32 @@ func TestInitializationWizardShowsVaultCreationFailureAndAdvice(t *testing.T) {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("创建失败页应包含 %q：\n%s", want, body)
 		}
+	}
+}
+
+func TestInitializationWizardStandaloneFinishRequiresCreatedVault(t *testing.T) {
+	initializer := &stubInitializer{}
+	handler, startup := newInitializationWizardForTest(t, initializer)
+	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := start.Cookies()[0]
+	start.Body.Close()
+
+	choice := wizardPage(t, handler, cookie, "/ui/")
+	finished := wizardPost(t, handler, cookie, "/ui/init/standalone/finish", hiddenInputValue(t, choice, "csrf_token"), nil)
+	finished.Body.Close()
+	if finished.StatusCode != http.StatusSeeOther || finished.Header.Get("Location") != "/ui/init/standalone" {
+		t.Fatalf("未建 vault 时提交完成应回到建 vault 步骤，状态码=%d 跳转=%q",
+			finished.StatusCode, finished.Header.Get("Location"))
+	}
+	if initializer.initializedRole != "" {
+		t.Fatalf("未建 vault 时不得切换正式页面，实际调用了初始化：%q", initializer.initializedRole)
+	}
+
+	root := wizardGet(t, handler, cookie, "/ui/")
+	rootBody, _ := io.ReadAll(root.Body)
+	root.Body.Close()
+	if !strings.Contains(string(rootBody), "选择本机角色") {
+		t.Fatalf("未建 vault 时应停留在向导，页面：\n%s", rootBody)
 	}
 }
 

@@ -46,6 +46,9 @@ const (
 type InitializationSnapshot struct {
 	Role InitializationRole
 	Step InitializationStep
+	// VaultReady 表示本机 vault 已存在且可以打开。单机完成页切换到正式页
+	// 面前重新读取它，防止跳过建 vault 步骤直接进入正式页面。
+	VaultReady bool
 }
 
 // InitializationResult 是初始化操作返回给页面的结果。
@@ -298,6 +301,15 @@ func (w *initializationWizard) handleStandaloneFinish(response http.ResponseWrit
 	session := w.wizard.currentSession(request)
 	if session == nil {
 		w.wizard.renderSessionRequired(response, request)
+		return
+	}
+	snapshot, err := w.initializer.ReadSnapshot()
+	if err != nil {
+		w.wizard.renderError(response, request, http.StatusInternalServerError, "进入正式页面失败", "读取本机初始化状态失败，请稍后重试。")
+		return
+	}
+	if snapshot.Role != InitializationRoleStandalone || !snapshot.VaultReady {
+		http.Redirect(response, request, "/ui/init/standalone", http.StatusSeeOther)
 		return
 	}
 	w.formal.adoptLoopbackSession(session)

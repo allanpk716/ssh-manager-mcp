@@ -20,6 +20,11 @@ func (machineInitializer) ReadSnapshot() (webui.InitializationSnapshot, error) {
 		return webui.InitializationSnapshot{}, err
 	}
 	out := webui.InitializationSnapshot{}
+	out.VaultReady = snapshot.VaultExists && snapshot.VaultOpenable
+	if destination.Kind == machineinit.UIDestinationStandaloneWebUI {
+		// 单机正式页面的去向不携带角色字段；它本身就说明本机角色是单机。
+		out.Role = webui.InitializationRoleStandalone
+	}
 	switch destination.Step {
 	case machineinit.WizardStepCreateVault:
 		out.Step = webui.InitializationStepCreateVault
