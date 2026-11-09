@@ -35,39 +35,21 @@ var inventoryCollectAssignedRunner = func(
 var inventoryCollectAssignedClient = func(
 	ctx context.Context, instance string,
 ) (*softwareinventory.SchedulerRoundReport, error) {
-	credential, err := clientops.ReadCacheCredFor(instance)
-	if err != nil {
-		return nil, err
-	}
-	if credential == nil {
-		credential = &clientops.CacheCred{}
-	}
-	forwarder, err := clientops.NewSoftwareInventoryForwarder(*credential)
-	if err != nil {
-		return nil, err
-	}
-	defer forwarder.Close()
-	snapshot, err := loadInventoryClientSnapshot(instance)
-	if err != nil {
-		return nil, err
-	}
-	temporary, err := store.OpenTemporaryClientCacheStore(snapshot, "sshmgr-inventory-collect-*.db")
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = temporary.Close() }()
-	collector := &clientops.SoftwareInventoryClientCollector{
-		Forwarder: forwarder,
-		OpenStore: func() (*store.Store, func(), error) {
-			return temporary.Store, func() {}, nil
-		},
-	}
-	return collector.CollectAssigned(ctx)
+	return clientops.CollectSoftwareInventoryForInstance(ctx, instance)
 }
 
 // runInventoryCollectAssignedClient 输出客户端采集报告并映射两个专门退
 // 出码：权威端不可达为 4，部分设备采集失败为 5。
 func runInventoryCollectAssignedClient(ctx context.Context, instance string, out io.Writer) error {
+	lockPath, err := clientops.SoftwareInventoryCollectionLockPath(instance)
+	if err != nil {
+		return err
+	}
+	lock, err := clientops.AcquireSoftwareInventoryCollectionLock(lockPath)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
 	report, err := inventoryCollectAssignedClient(ctx, instance)
 	if err != nil {
 		if clientops.IsSoftwareInventoryUnreachable(err) {
@@ -132,7 +114,7 @@ func inventoryCollectAssignedCmd() *cobra.Command {
   Windows 计划任务（每天 06:00）：
     schtasks /Create /TN sshmgr-inventory /SC DAILY /ST 06:00 /TR "sshmgr inventory collect-assigned"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			role, err := roleForVaultBackedCommand("", errInventoryNeedVault)
+			role, err := roleForVaultBackedCommand(instance, errInventoryNeedVault)
 			if err != nil {
 				return err
 			}

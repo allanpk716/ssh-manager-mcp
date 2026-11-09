@@ -139,3 +139,29 @@ func TestInventoryCollectAssignedClientBranch(t *testing.T) {
 		t.Fatalf("权威端不可达退出码 = %d，应为 4：%v", code, unreachable)
 	}
 }
+
+// TestInventoryCollectAssignedClientUsesLock 验证计划任务路径先拿本地锁文
+// 件；锁被 MCP 桥持有时直接失败，不并发执行。
+func TestInventoryCollectAssignedClientUsesLock(t *testing.T) {
+	newSecretsEnv(t)
+	t.Setenv("SSHMGR_CACHE_DIR", t.TempDir())
+	path, err := clientops.SoftwareInventoryCollectionLockPath("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := clientops.AcquireSoftwareInventoryCollectionLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+	previous := inventoryCollectAssignedClient
+	inventoryCollectAssignedClient = func(context.Context, string) (*softwareinventory.SchedulerRoundReport, error) {
+		t.Fatal("锁被持有时不应执行客户端采集")
+		return nil, nil
+	}
+	t.Cleanup(func() { inventoryCollectAssignedClient = previous })
+	err = runInventoryCollectAssignedClient(context.Background(), "", &strings.Builder{})
+	if err == nil || !strings.Contains(err.Error(), "另一份软件清单采集正在执行") {
+		t.Fatalf("锁忙时应直接失败：%v", err)
+	}
+}

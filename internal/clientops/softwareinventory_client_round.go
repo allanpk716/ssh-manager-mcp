@@ -109,3 +109,49 @@ func failedClientSubmission(
 		Error: reason, Items: []models.SoftwareObservedItem{},
 	}
 }
+
+// CollectSoftwareInventoryForInstance 是命令行计划任务与 MCP 桥顺手补采共
+// 用的入口：先拿实例锁文件，再在线取分派、导入本地缓存快照、逐台采集并
+// 上交。权威端不可达或锁忙时直接返回错误。
+func CollectSoftwareInventoryForInstance(
+	ctx context.Context, instance string,
+) (*softwareinventory.SchedulerRoundReport, error) {
+	lockPath, err := SoftwareInventoryCollectionLockPath(instance)
+	if err != nil {
+		return nil, err
+	}
+	lock, err := AcquireSoftwareInventoryCollectionLock(lockPath)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Unlock()
+
+	credential, err := ReadCacheCredFor(instance)
+	if err != nil {
+		return nil, err
+	}
+	if credential == nil {
+		credential = &CacheCred{}
+	}
+	forwarder, err := NewSoftwareInventoryForwarder(*credential)
+	if err != nil {
+		return nil, err
+	}
+	defer forwarder.Close()
+	snapshot, err := LoadCacheSnapshotFor(instance)
+	if err != nil {
+		return nil, err
+	}
+	temporary, err := store.OpenTemporaryClientCacheStore(snapshot, "sshmgr-inventory-collect-*.db")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = temporary.Close() }()
+	collector := &SoftwareInventoryClientCollector{
+		Forwarder: forwarder,
+		OpenStore: func() (*store.Store, func(), error) {
+			return temporary.Store, func() {}, nil
+		},
+	}
+	return collector.CollectAssigned(ctx)
+}

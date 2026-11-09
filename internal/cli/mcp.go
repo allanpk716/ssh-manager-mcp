@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -202,6 +203,12 @@ func newMCPCmd() *cobra.Command {
 							Instance:  instance,
 							Interval:  pollInterval,
 							Refresher: refresher,
+							SoftwareInventoryCollect: func() {
+								_, err := clientops.CollectSoftwareInventoryForInstance(context.Background(), instance)
+								if err != nil && !errors.Is(err, clientops.ErrSoftwareInventoryCollectionBusy) {
+									fmt.Fprintf(os.Stderr, "sshmgr: software inventory opportunistic collect: %v\n", err)
+								}
+							},
 						})
 					}, inventoryForwarder)
 				// Release the pinned transports' idle connections on shutdown
