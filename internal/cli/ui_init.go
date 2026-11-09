@@ -23,6 +23,10 @@ func (machineInitializer) ReadSnapshot() (webui.InitializationSnapshot, error) {
 	switch destination.Step {
 	case machineinit.WizardStepCreateVault:
 		out.Step = webui.InitializationStepCreateVault
+	case machineinit.WizardStepSetAdminPassword:
+		out.Step = webui.InitializationStepSetAdminPassword
+	case machineinit.WizardStepInstallServe:
+		out.Step = webui.InitializationStepInstallServe
 	default:
 		out.Step = webui.InitializationStepChooseRole
 	}
@@ -52,6 +56,17 @@ func (machineInitializer) ValidateAdminPassword(password, confirmation []byte) e
 
 func (machineInitializer) SetAdminPassword(password, confirmation []byte, source webui.InitializationWriteSource) (int64, error) {
 	return machineinit.SetAdminPasswordForWebUI(password, confirmation, source.RemoteAddress)
+}
+
+func (machineInitializer) ProbeServeWebUI() (webui.ServeWebUIProbe, error) {
+	state, err := machineinit.ProbeServeWebUI()
+	if err != nil {
+		return webui.ServeWebUIProbe{}, err
+	}
+	return webui.ServeWebUIProbe{
+		Known: state.Known, Port: state.Port, Addresses: state.Addresses,
+		NeedsManualListen: state.NeedsManualListen, Running: state.Running,
+	}, nil
 }
 
 func machineRole(role webui.InitializationRole) roles.Role {

@@ -52,6 +52,15 @@ type InitializationWriteSource struct {
 	RemoteAddress string
 }
 
+// ServeWebUIProbe 是 serve 独立 Web UI 的运行探测结果。
+type ServeWebUIProbe struct {
+	Known             bool
+	Port              int
+	Addresses         []string
+	NeedsManualListen bool
+	Running           bool
+}
+
 // InitializationStepView 是步骤条中的一步。
 type InitializationStepView struct {
 	Label   string
@@ -72,6 +81,8 @@ type Initializer interface {
 	ValidateAdminPassword(password, confirmation []byte) error
 	// SetAdminPassword 设置权威端 Web UI 管理员口令。
 	SetAdminPassword(password, confirmation []byte, source InitializationWriteSource) (int64, error)
+	// ProbeServeWebUI 重新探测 serve 的独立 Web UI 是否已在运行。
+	ProbeServeWebUI() (ServeWebUIProbe, error)
 }
 
 // initializationWizard 先只服务向导路由；单机初始化完成后，把同一个进程内
@@ -267,6 +278,17 @@ func (w *initializationWizard) handleServerVaultCreate(response http.ResponseWri
 		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "创建 vault 只接受提交表单。")
 		return
 	}
+	running, err := w.serveRunning()
+	if err != nil {
+		data := w.serverPageData("建 vault")
+		data.InitializationError = initializationErrorWithAdvice(err)
+		w.render(response, request, http.StatusInternalServerError, "initialization-server-vault.tmpl", data)
+		return
+	}
+	if running {
+		w.renderServeAlreadyRunning(response, request, "initialization-server-vault.tmpl", "建 vault")
+		return
+	}
 	if _, err := w.initializer.Initialize(InitializationRoleServer); err != nil {
 		data := w.serverPageData("建 vault")
 		data.InitializationError = initializationErrorWithAdvice(err)
@@ -292,6 +314,16 @@ func (w *initializationWizard) handleServerPasswordSet(response http.ResponseWri
 	password := []byte(request.PostFormValue("password"))
 	confirmation := []byte(request.PostFormValue("password_confirm"))
 	data := w.serverPageData("设置管理员口令")
+	running, err := w.serveRunning()
+	if err != nil {
+		data.InitializationError = initializationErrorWithAdvice(err)
+		w.render(response, request, http.StatusInternalServerError, "initialization-server-password.tmpl", data)
+		return
+	}
+	if running {
+		w.renderServeAlreadyRunning(response, request, "initialization-server-password.tmpl", "设置管理员口令")
+		return
+	}
 	if err := w.initializer.ValidateAdminPassword(password, confirmation); err != nil {
 		data.InitializationError = err.Error()
 		w.render(response, request, http.StatusBadRequest, "initialization-server-password.tmpl", data)
@@ -305,6 +337,20 @@ func (w *initializationWizard) handleServerPasswordSet(response http.ResponseWri
 		return
 	}
 	http.Redirect(response, request, "/ui/init/server/install", http.StatusSeeOther)
+}
+
+func (w *initializationWizard) serveRunning() (bool, error) {
+	probe, err := w.initializer.ProbeServeWebUI()
+	if err != nil {
+		return false, err
+	}
+	return probe.Running, nil
+}
+
+func (w *initializationWizard) renderServeAlreadyRunning(response http.ResponseWriter, request *http.Request, page, title string) {
+	data := w.serverPageData(title)
+	data.InitializationError = "serve 已在运行，请到正式 Web UI 操作，或用 `sshmgr serve admin set`。"
+	w.render(response, request, http.StatusConflict, page, data)
 }
 
 func (w *initializationWizard) handleServerInstall(response http.ResponseWriter, request *http.Request) {

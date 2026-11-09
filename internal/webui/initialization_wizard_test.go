@@ -20,6 +20,7 @@ type stubInitializer struct {
 	password        string
 	passwordConfirm string
 	passwordSource  InitializationWriteSource
+	serveRunning    bool
 }
 
 func (s *stubInitializer) ReadSnapshot() (InitializationSnapshot, error) {
@@ -51,6 +52,10 @@ func (s *stubInitializer) SetAdminPassword(password, confirmation []byte, source
 	s.passwordConfirm = string(confirmation)
 	s.passwordSource = source
 	return 1, nil
+}
+
+func (s *stubInitializer) ProbeServeWebUI() (ServeWebUIProbe, error) {
+	return ServeWebUIProbe{Known: true, Running: s.serveRunning}, nil
 }
 
 func newInitializationWizardForTest(t *testing.T, initializer Initializer) (http.Handler, Startup) {
@@ -388,6 +393,48 @@ func TestInitializationWizardResumesServerAtLaterSteps(t *testing.T) {
 			}
 			if initializer.selectedRole != "" || initializer.initializedRole != "" {
 				t.Fatalf("续做不得重写角色或 vault：选角色=%q 初始化=%q", initializer.selectedRole, initializer.initializedRole)
+			}
+		})
+	}
+}
+
+func TestInitializationWizardRefusesServerWritesWhenServeIsRunning(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "建 vault 前发现 serve 已运行", path: "/ui/init/server/vault/create"},
+		{name: "设置管理员口令前发现 serve 已运行", path: "/ui/init/server/password/set"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			initializer := &stubInitializer{serveRunning: true}
+			handler, startup := newInitializationWizardForTest(t, initializer)
+			start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+			cookie := start.Cookies()[0]
+			start.Body.Close()
+			pagePath := "/ui/init/server/vault"
+			if test.path == "/ui/init/server/password/set" {
+				pagePath = "/ui/init/server/password"
+			}
+			page := wizardPage(t, handler, cookie, pagePath)
+			refused := wizardPost(t, handler, cookie, test.path, hiddenInputValue(t, page, "csrf_token"), url.Values{
+				"password": {"authority-password"}, "password_confirm": {"authority-password"},
+			})
+			body, _ := io.ReadAll(refused.Body)
+			refused.Body.Close()
+			if refused.StatusCode != http.StatusConflict {
+				t.Fatalf("serve 已运行时应拒绝写入，状态码=%d 页面：\n%s", refused.StatusCode, body)
+			}
+			for _, want := range []string{
+				"serve 已在运行", "请到正式 Web UI 操作", "`sshmgr serve admin set`",
+			} {
+				if !strings.Contains(string(body), want) {
+					t.Fatalf("拒绝写入页应包含 %q：\n%s", want, body)
+				}
+			}
+			if initializer.initializedRole != "" || initializer.password != "" {
+				t.Fatalf("serve 已运行时不得写入：初始化=%q 口令=%q", initializer.initializedRole, initializer.password)
 			}
 		})
 	}
