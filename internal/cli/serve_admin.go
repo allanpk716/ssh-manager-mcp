@@ -123,7 +123,7 @@ func writeAuthorityWebUIStatus(out io.Writer, st *store.Store) error {
 		fmt.Fprintln(out, line)
 	}
 	if !passwordSet {
-		fmt.Fprintln(out, "设置指引：在权威端运行 `sshmgr ui` 走向导，或运行 `sshmgr serve admin set` 设置管理员口令。")
+		fmt.Fprintln(out, "设置指引：在权威端主机上运行 `sshmgr serve admin set` 设置管理员口令。")
 	}
 	return nil
 }

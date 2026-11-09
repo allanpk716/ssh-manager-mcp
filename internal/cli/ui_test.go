@@ -271,11 +271,15 @@ func TestUICommandServerRolePrintsServeListenerWithoutStartingServer(t *testing.
 	}
 	combined := stdout.String() + stderr.String()
 	for _, want := range []string{
-		"权威端", "https://127.0.0.1:7879/ui/", "尚未生成证书", "sshmgr serve admin set", "sshmgr ui",
+		"权威端", "https://127.0.0.1:7879/ui/", "尚未生成证书",
+		"设置指引：在权威端主机上运行 `sshmgr serve admin set` 设置管理员口令。",
 	} {
 		if !strings.Contains(combined, want) {
 			t.Fatalf("权威端 ui 输出应包含 %q，实际：%s", want, combined)
 		}
+	}
+	if strings.Contains(combined, "sshmgr ui") {
+		t.Fatalf("serve 已运行时未设口令的状态打印不应提示运行 `sshmgr ui`：%s", combined)
 	}
 }
 

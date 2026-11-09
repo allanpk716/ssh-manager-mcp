@@ -68,6 +68,75 @@ func TestDecideUIDestination(t *testing.T) {
 			},
 			want: machineinit.UIDestination{Kind: machineinit.UIDestinationStandaloneWebUI},
 		},
+		{
+			name: "权威端缺 vault 时从建 vault 续做",
+			snap: machineinit.StateSnapshot{
+				Role: roleState(roles.RoleServer, false),
+			},
+			want: machineinit.UIDestination{
+				Kind: machineinit.UIDestinationServerWizard,
+				Role: roles.RoleServer,
+				Step: machineinit.WizardStepCreateVault,
+			},
+		},
+		{
+			name: "权威端缺管理员口令时从设口令续做",
+			snap: machineinit.StateSnapshot{
+				Role:          roleState(roles.RoleServer, false),
+				VaultExists:   true,
+				VaultOpenable: true,
+			},
+			want: machineinit.UIDestination{
+				Kind: machineinit.UIDestinationServerWizard,
+				Role: roles.RoleServer,
+				Step: machineinit.WizardStepSetAdminPassword,
+			},
+		},
+		{
+			name: "权威端口令已设但 serve 未运行时直接安装 serve",
+			snap: machineinit.StateSnapshot{
+				Role:             roleState(roles.RoleServer, true),
+				VaultExists:      true,
+				VaultOpenable:    true,
+				AdminPasswordSet: true,
+			},
+			want: machineinit.UIDestination{
+				Kind: machineinit.UIDestinationServerWizard,
+				Role: roles.RoleServer,
+				Step: machineinit.WizardStepInstallServe,
+			},
+		},
+		{
+			name: "权威端 serve 已运行时只打印状态",
+			snap: machineinit.StateSnapshot{
+				Role:             roleState(roles.RoleServer, true),
+				VaultExists:      true,
+				VaultOpenable:    true,
+				AdminPasswordSet: true,
+				ServeWebUI: machineinit.ServeWebUIState{
+					Known:     true,
+					Port:      7879,
+					Addresses: []string{"127.0.0.1"},
+					Running:   true,
+				},
+			},
+			want: machineinit.UIDestination{Kind: machineinit.UIDestinationAuthorityStatus},
+		},
+		{
+			name: "权威端 serve 已运行且口令未设时仍只打印状态",
+			snap: machineinit.StateSnapshot{
+				Role:          roleState(roles.RoleServer, true),
+				VaultExists:   true,
+				VaultOpenable: true,
+				ServeWebUI: machineinit.ServeWebUIState{
+					Known:     true,
+					Port:      7879,
+					Addresses: []string{"127.0.0.1"},
+					Running:   true,
+				},
+			},
+			want: machineinit.UIDestination{Kind: machineinit.UIDestinationAuthorityStatus},
+		},
 	}
 
 	for _, test := range tests {
