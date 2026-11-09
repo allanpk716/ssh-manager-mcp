@@ -218,9 +218,6 @@ func TestBind_EquivalentValidationAndTransport(t *testing.T) {
 	if err := s2.Bind(Discovered{Name: "nuc10", Addr: "127.0.0.1", TCPPort: 7878, SPKI: validPin}); err != nil {
 		t.Fatalf("Bind with a well-formed offer must succeed: %v", err)
 	}
-	if s2.BrokerName() != "nuc10" {
-		t.Fatalf("BrokerName = %q, want nuc10", s2.BrokerName())
-	}
 }
 
 func TestForceCleanup_RequiresValidatedSession(t *testing.T) {
@@ -460,9 +457,6 @@ func TestPairSession_HappyPath(t *testing.T) {
 		}
 		if len(s.SAS()) != 6 {
 			t.Fatalf("SAS() = %q, want the 6-digit short auth string", s.SAS())
-		}
-		if !s.ApprovalDeadline().After(time.Now()) {
-			t.Fatalf("ApprovalDeadline() = %v, want an absolute future anchor", s.ApprovalDeadline())
 		}
 		if err := s.WaitApproval(ctx, nil); err != nil {
 			t.Fatalf("WaitApproval: %v", err)

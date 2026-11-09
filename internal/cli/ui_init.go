@@ -69,7 +69,7 @@ func (machineInitializer) ProbeServeWebUI() (webui.ServeWebUIProbe, error) {
 		return webui.ServeWebUIProbe{}, err
 	}
 	return webui.ServeWebUIProbe{
-		Known: state.Known, Port: state.Port, Addresses: state.Addresses,
+		Port: state.Port, Addresses: state.Addresses,
 		NeedsManualListen: state.NeedsManualListen, Running: state.Running,
 	}, nil
 }

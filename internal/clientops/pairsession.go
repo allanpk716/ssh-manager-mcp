@@ -91,8 +91,6 @@ type PairSession struct {
 	// brokerPin 是本次连接的生效 pin(opts.Pin 优先,缺省升格 discovery 的
 	// SPKI);TOFU 路径为空。Finish 用它与信封 SPKI 交叉核对。
 	brokerPin string
-	// brokerName 是 discovery offer 的显示名(URL 直连路径为空)。
-	brokerName string
 	// client 是校验完成后构建的 HTTP 客户端(pinning 或 TOFU transport,
 	// 3xx 永不跟随,单请求 15s 上限)。
 	client *http.Client
@@ -130,7 +128,7 @@ func NewPairSession(o PairOpts) (*PairSession, error) {
 	if o.URL == "" {
 		return s, nil
 	}
-	if err := s.applyTarget(o.URL, o.Pin, ""); err != nil {
+	if err := s.applyTarget(o.URL, o.Pin); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -139,7 +137,7 @@ func NewPairSession(o PairOpts) (*PairSession, error) {
 // applyTarget 执行与旧 RunPair 逐字等价的三步校验 + transport 构建(①pin
 // 分级 → ②URL 严格 parse → ①transport 分级),三步全过才置 validated。
 // New(URL 非空)与 Bind 共用同一实现 —— 单一来源,两条路径不可能漂移。
-func (s *PairSession) applyTarget(rawURL, pin, brokerName string) error {
+func (s *PairSession) applyTarget(rawURL, pin string) error {
 	// ① pin 分级:无 pin 且未显式 TOFU → 冻结文案拒绝(先于任何 IO)。
 	if pin == "" && !s.opts.AllowTOFU {
 		return errors.New("refusing TOFU pairing without --pin; pass --allow-tofu to accept an unanchored channel")
@@ -169,7 +167,6 @@ func (s *PairSession) applyTarget(rawURL, pin, brokerName string) error {
 	}
 	s.targetURL = targetURL
 	s.brokerPin = pin
-	s.brokerName = brokerName
 	s.client = &http.Client{
 		Transport:     transport,
 		Timeout:       pairHTTPTimeout,
@@ -188,7 +185,7 @@ func (s *PairSession) Bind(d Discovered) error {
 	if pin == "" {
 		pin = d.SPKI
 	}
-	return s.applyTarget(fmt.Sprintf("https://%s:%d", d.Addr, d.TCPPort), pin, d.Name)
+	return s.applyTarget(fmt.Sprintf("https://%s:%d", d.Addr, d.TCPPort), pin)
 }
 
 // ForceCleanup 删除实例的 enroll 态文件(cache.auth.json/cache.bin/cache.meta.json/
@@ -337,13 +334,6 @@ func (s *PairSession) Enroll(ctx context.Context) error {
 
 // SAS 返回 ③ 的 6 位短认证串(Enroll 成功后有效)。
 func (s *PairSession) SAS() string { return s.sas }
-
-// BrokerName 返回 discovery offer 的显示名;URL 直连路径为空串。
-func (s *PairSession) BrokerName() string { return s.brokerName }
-
-// ApprovalDeadline 返回绝对 approvalDeadline(= enroll 时刻 + pairPollMax):
-// 与 WaitApproval 共用同一锚,不复制常量。Enroll 前为零值。
-func (s *PairSession) ApprovalDeadline() time.Time { return s.deadline }
 
 // WaitApproval 执行 ④:2s 轮询 ≤ approvalDeadline;200 → 批准到达(nil);
 // 410 → ErrPairGone;deadline 尽 → ErrPairTimeout;ctx 取消 → context.Canceled

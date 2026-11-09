@@ -14,7 +14,7 @@ const (
 	UIDestinationInitializationWizard UIDestinationKind = iota
 	// UIDestinationStandaloneWebUI 表示启动单机正式 Web UI。
 	UIDestinationStandaloneWebUI
-	// UIDestinationServerWizard 表示权威端初始化向导；后续票会补全各步骤页面。
+	// UIDestinationServerWizard 表示权威端初始化向导。
 	UIDestinationServerWizard
 	// UIDestinationAuthorityStatus 表示不启动监听，只打印权威端 Web UI 状态。
 	UIDestinationAuthorityStatus

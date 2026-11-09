@@ -75,7 +75,6 @@ type InitializationWriteSource struct {
 
 // ServeWebUIProbe 是 serve 独立 Web UI 的运行探测结果。
 type ServeWebUIProbe struct {
-	Known             bool
 	Port              int
 	Addresses         []string
 	NeedsManualListen bool

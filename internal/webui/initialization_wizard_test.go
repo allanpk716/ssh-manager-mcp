@@ -75,7 +75,7 @@ func (s *stubInitializer) SetAdminPassword(password, confirmation []byte, source
 
 func (s *stubInitializer) ProbeServeWebUI() (ServeWebUIProbe, error) {
 	return ServeWebUIProbe{
-		Known: true, Running: s.serveRunning,
+		Running: s.serveRunning,
 		Addresses: s.serveAddresses, Port: s.servePort, NeedsManualListen: s.needsManual,
 	}, nil
 }

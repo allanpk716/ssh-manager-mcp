@@ -116,7 +116,6 @@ type pageData struct {
 	NextPath                        string
 	InitializationError             *InitializationErrorView
 	InitializationMasterKeyPath     string
-	InitializationRoleLabel         string
 	InitializationSteps             []InitializationStepView
 	InitializationInstallNotice     string
 	InitializationInstallCommand    string
