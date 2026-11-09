@@ -31,6 +31,10 @@ const softwareDeclarationDraftsForbiddenText = "权威端拒绝提交声明草�
 // 本。
 const softwareDeclarationDraftsUnsupportedText = "权威端还不支持声明草稿提交；请 owner 把权威端升级到支持该功能的版本后重试"
 
+// 编译期核对：同一个转发器满足软件清单查询与声明草稿提交两个注入接
+// 口，客户端桥只需要注入一次。
+var _ mcpserver.SoftwareDeclarationDrafter = (*SoftwareInventoryForwarder)(nil)
+
 // emptyDraftOutput 是失败分支的固定输出形态：草稿编号恒为数组。
 func emptyDraftOutput() mcpserver.DraftSoftwareDeclarationsOutput {
 	return mcpserver.DraftSoftwareDeclarationsOutput{DraftIDs: []string{}}
