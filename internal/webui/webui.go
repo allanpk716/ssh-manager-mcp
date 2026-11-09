@@ -182,6 +182,9 @@ type capabilities struct {
 	// ShowAccessArea 控制是否显示「访问」区域入口。三种角色都有入口；
 	// 客户端入口只显示权威端管理提示。
 	ShowAccessArea bool
+	// ShowSecretsArea 控制是否显示「机密项」区域入口；只有配置了机密项
+	// 读取来源时才显示。
+	ShowSecretsArea bool
 	// CanManageProfiles 控制是否显示 Profile 页入口与写操作。
 	CanManageProfiles bool
 	// CanManageProjects 控制是否显示项目令牌页入口与写操作。
@@ -206,6 +209,14 @@ type capabilities struct {
 	CanUseClientOps bool
 	// CanQueryClientAudit 只对客户端开放，控制本机审计页。
 	CanQueryClientAudit bool
+}
+
+// capabilitiesForConfig 按构造参数推导页面能力开关：先按本机角色确定基础
+// 能力，再按是否注入机密项读取来源决定机密项区域入口。
+func capabilitiesForConfig(cfg Config) capabilities {
+	caps := capabilitiesForRole(cfg.Role)
+	caps.ShowSecretsArea = cfg.Secrets != nil
+	return caps
 }
 
 // capabilitiesForRole 按构造时声明的本机角色推导页面能力开关。
@@ -317,7 +328,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	}
 	h := &handler{
 		cfg:         cfg,
-		caps:        capabilitiesForRole(cfg.Role),
+		caps:        capabilitiesForConfig(cfg),
 		assets:      assets,
 		assetFiles:  assetFiles,
 		pages:       pages,

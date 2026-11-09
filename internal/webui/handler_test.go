@@ -674,3 +674,50 @@ func TestUnknownUIPathReturnsChinese404WithSession(t *testing.T) {
 		t.Fatalf("未知地址应返回中文 404 页：%s", rec.Body.String())
 	}
 }
+
+// TestSecretsNavFollowsCapability 覆盖审查第 6 项：导航里的「机密项」入口
+// 必须受能力标志控制；未配置机密项读来源时不显示。
+func TestSecretsNavFollowsCapability(t *testing.T) {
+	withoutSecrets, startup := newTestHandler(t, RoleStandalone, nil)
+	resp := exchangeStartupToken(t, withoutSecrets, startup.URL("127.0.0.1:18080"))
+	cookies := resp.Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("应签发会话 cookie，实际 %d", len(cookies))
+	}
+	list := doGetWithCookie(t, withoutSecrets, cookies[0], "/ui/")
+	listBody := readResponseBody(t, list)
+	if strings.Contains(listBody, `aria-label="机密项区域"`) || strings.Contains(listBody, `href="/ui/secrets/"`) {
+		t.Fatalf("未配置机密项读来源时不应显示机密项导航：\n%s", listBody)
+	}
+
+	withSecrets, startupWithSecrets := newTestHandlerWithSecrets(t, RoleStandalone, nil)
+	respWithSecrets := exchangeStartupToken(t, withSecrets, startupWithSecrets.URL("127.0.0.1:18080"))
+	listWithSecrets := doGetWithCookie(t, withSecrets, respWithSecrets.Cookies()[0], "/ui/")
+	listBodyWithSecrets := readResponseBody(t, listWithSecrets)
+	if !strings.Contains(listBodyWithSecrets, `aria-label="机密项区域"`) ||
+		!strings.Contains(listBodyWithSecrets, `href="/ui/secrets/"`) {
+		t.Fatalf("配置机密项读来源后应显示机密项导航：\n%s", listBodyWithSecrets)
+	}
+}
+
+// stubSecretSource 是测试用的机密项读取来源，不返回任何值。
+type stubSecretSource struct{}
+
+func (stubSecretSource) ListSecrets(string, string, string) ([]SecretRow, error) { return nil, nil }
+
+// newTestHandlerWithSecrets 在测试 Handler 里注入机密项读取来源。
+func newTestHandlerWithSecrets(t *testing.T, role Role, rows []ServerRow) (http.Handler, Startup) {
+	t.Helper()
+	h, startup, err := New(Config{
+		Role:        role,
+		Servers:     &stubServerSource{rows: rows},
+		Access:      &stubAccessStore{},
+		Secrets:     stubSecretSource{},
+		VersionHint: func() string { return "" },
+		Port:        18080,
+	})
+	if err != nil {
+		t.Fatalf("构造 Web UI Handler 失败：%v", err)
+	}
+	return h, startup
+}

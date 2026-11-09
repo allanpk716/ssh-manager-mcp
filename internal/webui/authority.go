@@ -64,7 +64,7 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	caps := capabilitiesForRole(cfg.Role)
+	caps := capabilitiesForConfig(cfg)
 	if cfg.Role == RoleServer {
 		caps.CanRestartService = cfg.ServiceRestart != nil
 	}
