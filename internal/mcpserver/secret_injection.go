@@ -87,6 +87,11 @@ func (p environmentInjectionPlan) warningLines() []string {
 	}
 	lines := make([]string, 0, len(p.warnings))
 	for _, warning := range p.warnings {
+		// Windows 提权层本来就不在注入范围内；这个原因只供 exec_context
+		// 解释结构化名单，不追加到命令输出，避免改变既有命令行为。
+		if warning.Reason == injectionReasonPrivileged {
+			continue
+		}
 		lines = append(lines, "环境变量 "+warning.EnvironmentName+" 未注入："+warning.Reason)
 	}
 	return lines

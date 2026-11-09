@@ -168,3 +168,44 @@ func TestExecContextWindowsSudoDoesNotInjectEnvironment(t *testing.T) {
 		t.Fatalf("uninjected variables = %#v", output.UninjectedEnvironmentVariables)
 	}
 }
+
+func TestSecretEnvironmentInjectionWindowsSudoDoesNotAppendWarning(t *testing.T) {
+	st := newStore(t)
+	if err := st.AddSecretWithEnvironmentName("WINDOWS_EXEC_TOKEN", "", []byte("windows-sudo-exec-secret-value"), "WINDOWS_EXEC_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	clientSession, serverID := newMaskingSSHToolClientWithSudo(t, st, testsshd.Options{
+		Password:     "pw",
+		SudoPassword: "sudopw",
+		Exec: func(_ string, stdin io.Reader) (string, string, int) {
+			_, _ = io.ReadAll(stdin)
+			return "ran", "", 0
+		},
+	}, "sudopw")
+	if err := st.AllowSecrets([]string{"WINDOWS_EXEC_TOKEN"}, []string{"real"}); err != nil {
+		t.Fatal(err)
+	}
+	server, err := st.GetServer(serverID)
+	if err != nil || server == nil {
+		t.Fatalf("read server: %v %v", server, err)
+	}
+	server.ShellType = models.ShellPowerShell
+	if err := st.UpdateServer(server); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": serverID, "command": "Write-Output ran", "sudo": true},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("exec_command failed: err=%v result=%+v", err, result.Content)
+	}
+	var output struct {
+		Stdout string `json:"stdout"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if output.Stdout != "ran" {
+		t.Fatalf("stdout = %q, want no unsupported-privileged-layer warning", output.Stdout)
+	}
+}
