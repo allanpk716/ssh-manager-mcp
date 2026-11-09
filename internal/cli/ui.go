@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -41,9 +42,9 @@ func newUICmd() *cobra.Command {
 	return c
 }
 
-// runUICommand 组装 ui 命令：按本机状态快照判定去向；空机器与单机续做进入
-// 初始化向导，单机与客户端构造正式 Web UI 并监听回环随机端口，权威端只打印
-// serve 独立监听的状态。
+// runUICommand 组装 ui 命令：按本机状态快照判定去向；空机器、单机续做与
+// 未完成初始化的权威端进入初始化向导，单机与客户端构造正式 Web UI 并监听
+// 回环随机端口，已运行 serve 的权威端只打印独立监听的状态。
 func runUICommand(cmd *cobra.Command, instance string) error {
 	snapshot, err := machineinit.ReadSnapshot()
 	if err != nil {
@@ -76,9 +77,10 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	requestShutdown := func() {
 		shutdownOnce.Do(func() { close(uiShutdown) })
 	}
+	serverWizard := destination.Kind == machineinit.UIDestinationServerWizard
 	switch {
 	case destination.Kind == machineinit.UIDestinationInitializationWizard ||
-		destination.Kind == machineinit.UIDestinationStandaloneWebUI:
+		destination.Kind == machineinit.UIDestinationStandaloneWebUI || serverWizard:
 		initializing = true
 		webRole = webui.RoleStandalone
 		servers = standaloneUIServerSource{}
@@ -88,7 +90,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretWriter = standaloneUISecretWriter()
 		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
 		machineInit = standaloneMachineInitializer{}
-		initializing = destination.Kind == machineinit.UIDestinationInitializationWizard
+		initializing = destination.Kind == machineinit.UIDestinationInitializationWizard || serverWizard
 	case destination.Kind == machineinit.UIDestinationClientWebUI:
 		resolvedInstance, err = resolveClientCacheInstance(instance)
 		if err != nil {
@@ -100,8 +102,8 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		opsSource = webuiops.ClientPageStoreWithUpdates(
 			uiUpdateService(webui.RoleClient, resolvedInstance), uiClientPull)
 	default:
-		// 权威端正式页面由 serve 的独立监听提供。权威端向导在后续票补全；
-		// 当前保持既有行为：只打印独立监听状态，不另起回环监听。
+		// 权威端正式页面由 serve 的独立监听提供；这里只打印状态，不另起
+		// 回环监听。
 		st, err := openUnlockedStore()
 		if err != nil {
 			return err
@@ -135,6 +137,32 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		MachineInit:     machineInit,
 		RequestShutdown: requestShutdown,
 		ClientInstance:  resolvedInstance,
+	}
+	if serverWizard {
+		executablePath, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("读取 sshmgr 可执行文件绝对路径失败：%w", err)
+		}
+		config.InitializationOperatingSystem = runtime.GOOS
+		config.InitializationExecutablePath = executablePath
+		completions := make(chan webui.InitializationCompletion, 1)
+		config.InitializationComplete = func(completion webui.InitializationCompletion) {
+			completions <- completion
+		}
+		defer func() {
+			select {
+			case completion := <-completions:
+				fmt.Fprintln(cmd.OutOrStdout(), "权威端初始化完成，正式 Web UI 地址：")
+				for _, address := range completion.Addresses {
+					localOnly := ""
+					if net.ParseIP(address).IsLoopback() {
+						localOnly = "（仅本机）"
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "https://%s/ui/%s\n", net.JoinHostPort(address, strconv.Itoa(completion.Port)), localOnly)
+				}
+			default:
+			}
+		}()
 	}
 	var handler http.Handler
 	var startup webui.Startup

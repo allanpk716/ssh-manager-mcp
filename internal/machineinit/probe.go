@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"ssh-manager-mcp/internal/mcpserver"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 )
@@ -25,6 +27,11 @@ type ServeWebUIState struct {
 // 7879），按现有监听规划推导地址列表，再对本机回环地址上的端口发 HTTPS
 // 请求（跳过证书校验，只判断是否在运行）。
 func ProbeServeWebUI() (ServeWebUIState, error) {
+	if !roles.VaultExists() {
+		state := ServeWebUIState{Port: mcpserver.DefaultWebUIPort}
+		state.Running = loopbackHTTPSResponds(state.Port)
+		return state, nil
+	}
 	st, err := vault.OpenStore(store.FileKeyProvider{})
 	if err != nil {
 		return ServeWebUIState{}, err
