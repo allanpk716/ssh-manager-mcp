@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/store"
 )
@@ -27,14 +29,89 @@ var inventoryCollectAssignedRunner = func(
 	return softwareinventory.NewScheduler(st).ExecuteRound(ctx)
 }
 
-// inventoryCollectAssignedClient 是客户端实例的分支占位：客户端要先凭设
-// 备码在线向权威端取采集分派，再逐台采集上交，路径由后续票实现。
-var inventoryCollectAssignedClient = func(context.Context) error {
-	return errors.New("客户端实例的采集分派经权威端在线获取，此路径在后续版本提供")
+// inventoryCollectAssignedClient 执行客户端实例的一轮在线采集。测试替换
+// 这个变量注入报告；生产路径经设备码取分派、用本地 SSH 能力采集并逐台
+// 上交，客户端本地不保存软件清单。
+var inventoryCollectAssignedClient = func(
+	ctx context.Context, instance string,
+) (*softwareinventory.SchedulerRoundReport, error) {
+	credential, err := clientops.ReadCacheCredFor(instance)
+	if err != nil {
+		return nil, err
+	}
+	if credential == nil {
+		credential = &clientops.CacheCred{}
+	}
+	forwarder, err := clientops.NewSoftwareInventoryForwarder(*credential)
+	if err != nil {
+		return nil, err
+	}
+	defer forwarder.Close()
+	snapshot, err := loadInventoryClientSnapshot(instance)
+	if err != nil {
+		return nil, err
+	}
+	temporary, err := store.OpenTemporaryClientCacheStore(snapshot, "sshmgr-inventory-collect-*.db")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = temporary.Close() }()
+	collector := &clientops.SoftwareInventoryClientCollector{
+		Forwarder: forwarder,
+		OpenStore: func() (*store.Store, func(), error) {
+			return temporary.Store, func() {}, nil
+		},
+	}
+	return collector.CollectAssigned(ctx)
+}
+
+// runInventoryCollectAssignedClient 输出客户端采集报告并映射两个专门退
+// 出码：权威端不可达为 4，部分设备采集失败为 5。
+func runInventoryCollectAssignedClient(ctx context.Context, instance string, out io.Writer) error {
+	report, err := inventoryCollectAssignedClient(ctx, instance)
+	if err != nil {
+		if clientops.IsSoftwareInventoryUnreachable(err) {
+			return NewExitCodeError(exitCodeAuthorityUnreachable, err)
+		}
+		return err
+	}
+	if err := writeCollectAssignedReport(out, report, false); err != nil {
+		return err
+	}
+	if report.Failed > 0 {
+		return NewExitCodeError(exitCodePartialCollectFailure, errors.New(
+			"部分设备采集失败；失败设备与原因见上面的输出"))
+	}
+	return nil
+}
+
+// loadInventoryClientSnapshot 按客户端命令的实例选择规则读缓存快照；默认
+// 槽为空且存在命名实例时要求显式点名，绝不猜测。
+func loadInventoryClientSnapshot(instance string) (*store.Snapshot, error) {
+	if instance != "" {
+		snapshot, err := clientops.LoadCacheSnapshotFor(instance)
+		if err != nil {
+			return nil, fmt.Errorf("cache instance %q: %w", instance, err)
+		}
+		return snapshot, nil
+	}
+	if os.Getenv("SSHMGR_CACHE_DIR") == "" && !cachePresentFor("") {
+		if names, listErr := clientops.ListInstances(); listErr == nil && len(names) > 0 {
+			return nil, fmt.Errorf(
+				"默认缓存槽没有快照，但本机有 %d 个命名客户端实例：%s；请用 --instance 明确选择",
+				len(names), strings.Join(names, ", "))
+		}
+	}
+	snapshot, err := clientops.LoadCacheSnapshotFor("")
+	if err != nil {
+		return nil, fmt.Errorf("本机客户端缓存不可读：请先执行 cache pull，再采集软件清单（%w）", err)
+	}
+	return snapshot, nil
 }
 
 func inventoryCollectAssignedCmd() *cobra.Command {
 	var jsonOutput bool
+	var instance string
 	c := &cobra.Command{
 		Use:   "collect-assigned [--json]",
 		Short: "采集分派给本实例的设备（每天到期一轮）",
@@ -60,7 +137,7 @@ func inventoryCollectAssignedCmd() *cobra.Command {
 				return err
 			}
 			if role == policyRoleClient {
-				return inventoryCollectAssignedClient(cmd.Context())
+				return runInventoryCollectAssignedClient(cmd.Context(), instance, cmd.OutOrStdout())
 			}
 			st, err := openUnlockedStore()
 			if err != nil {
@@ -82,6 +159,7 @@ func inventoryCollectAssignedCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&jsonOutput, "json", false, "以一行 JSON 输出一轮报告")
+	c.Flags().StringVar(&instance, "instance", "", "在客户端上读取命名实例 instances/<名称> 的缓存；省略时读默认缓存槽")
 	return c
 }
 
