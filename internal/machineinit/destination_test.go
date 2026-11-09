@@ -23,8 +23,8 @@ func TestDecideUIDestination(t *testing.T) {
 		want machineinit.UIDestination
 	}{
 		{
-			name: "空机器进入向导选角色",
-			snap: machineinit.StateSnapshot{},
+			name: "没有角色文件且没有客户端缓存时进入向导选角色",
+			snap: machineinit.StateSnapshot{ClientCachePresent: false},
 			want: machineinit.UIDestination{
 				Kind: machineinit.UIDestinationInitializationWizard,
 				Step: machineinit.WizardStepChooseRole,
@@ -44,6 +44,14 @@ func TestDecideUIDestination(t *testing.T) {
 			name: "没有角色文件但有客户端缓存的旧机器进入客户端页面",
 			snap: machineinit.StateSnapshot{
 				DetectedRole:       roles.RoleClient,
+				ClientCachePresent: true,
+			},
+			want: machineinit.UIDestination{Kind: machineinit.UIDestinationClientWebUI},
+		},
+		{
+			name: "角色文件为客户端且有客户端缓存时进入客户端页面",
+			snap: machineinit.StateSnapshot{
+				Role:               roleState(roles.RoleClient, true),
 				ClientCachePresent: true,
 			},
 			want: machineinit.UIDestination{Kind: machineinit.UIDestinationClientWebUI},

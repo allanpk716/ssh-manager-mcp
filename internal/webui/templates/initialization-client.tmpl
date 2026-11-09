@@ -1,0 +1,11 @@
+{{define "content"}}
+<section class="initialization-page">
+<h1>客户端入网</h1>
+<div class="operation-result">
+<p>按下面的指引在另一个终端发起配对；本页只显示命令写法。</p>
+<pre class="initialization-command"><code>{{range .ClientGuideLines}}{{.}}
+{{end}}</code></pre>
+<p>配对完成后，再次运行 `sshmgr ui` 会进入客户端只读界面。</p>
+</div>
+</section>
+{{end}}

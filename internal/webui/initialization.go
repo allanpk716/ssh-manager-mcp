@@ -54,6 +54,18 @@ type InitializationResult struct {
 	MasterKeyPath string
 }
 
+// ClientInitializationGuideLines 返回客户端入网指引。页面与 `sshmgr ui`
+// 的终端输出共用同一组文字，保证两边给 owner 的下一步完全一致。
+func ClientInitializationGuideLines() []string {
+	return []string{
+		"sshmgr pair --instance <名字>",
+		"--url <权威端地址>：不使用自动发现，直接指定权威端地址。",
+		"--pin <证书公钥指纹>：校验权威端证书，防止连接被冒充。",
+		"--write-mcp <文件路径>：把配对生成的 MCP 配置文件另存到指定路径。",
+		"配对发起后，到权威端 Web UI 的配对页批准；本页不执行配对，也不会写入任何文件。",
+	}
+}
+
 // InitializationWriteSource 描述初始化向导写操作的来源地址。
 type InitializationWriteSource struct {
 	RemoteAddress string
@@ -115,6 +127,10 @@ type initializationWizard struct {
 	entryStep   InitializationStep
 }
 
+// initializationClientShutdownDelay 给浏览器留出接收完整指引页的时间；页面
+// 先带 Content-Length 写出并刷新，随后才触发优雅关闭。
+const initializationClientShutdownDelay = 500 * time.Millisecond
+
 // NewInitializationWizard 构造回环初始化向导。cfg 是初始化完成后要切换到的
 // 单机正式页面配置；在切换前，路由表里只有向导页面。
 func NewInitializationWizard(cfg Config, initializer Initializer) (http.Handler, Startup, error) {
@@ -158,7 +174,7 @@ func NewInitializationWizard(cfg Config, initializer Initializer) (http.Handler,
 		h.mux.HandleFunc("/ui/init/server/install", h.requireSession(destination.handleServerInstall))
 		h.mux.HandleFunc("/ui/init/server/probe", h.requireSession(destination.handleServerProbe))
 		h.mux.HandleFunc("/ui/init/server/finish", h.requireSession(destination.handleServerFinish))
-		h.mux.HandleFunc("/ui/init/client", h.requireSession(destination.handleClientPlaceholder))
+		h.mux.HandleFunc("/ui/init/client", h.requireSession(destination.handleClientPairingGuide))
 	})
 	if err != nil {
 		return nil, Startup{}, err
@@ -526,10 +542,57 @@ func orderedServeAddresses(values []string) []string {
 	return append(out, loopback...)
 }
 
-func (w *initializationWizard) handleClientPlaceholder(response http.ResponseWriter, request *http.Request) {
-	w.render(response, request, http.StatusOK, "initialization-placeholder.tmpl", pageData{
-		Title: "客户端入网", InitializationRoleLabel: "客户端",
-	})
+func (w *initializationWizard) handleClientPairingGuide(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "客户端配对指引只接受 GET 请求。")
+		return
+	}
+	if !w.writeCompleteClientPairingPage(response, request) {
+		return
+	}
+	if w.wizard.cfg.RequestShutdown != nil {
+		shutdown := w.wizard.cfg.RequestShutdown
+		go func() {
+			if w.wizard.cfg.Sleep != nil {
+				w.wizard.cfg.Sleep(initializationClientShutdownDelay)
+			} else {
+				time.Sleep(initializationClientShutdownDelay)
+			}
+			shutdown()
+		}()
+	}
+}
+
+func (w *initializationWizard) writeCompleteClientPairingPage(response http.ResponseWriter, request *http.Request) bool {
+	data := pageData{
+		Title: "客户端入网", Assets: w.wizard.assets, Caps: w.wizard.caps,
+		VersionHint:      w.wizard.cfg.versionHint(),
+		ClientGuideLines: ClientInitializationGuideLines(),
+	}
+	if session := w.wizard.currentSession(request); session != nil {
+		data.CSRFToken = session.csrf
+		data.Authenticated = true
+	}
+	parsed := w.wizard.pages["initialization-client.tmpl"]
+	if parsed.full == nil {
+		w.wizard.renderError(response, request, http.StatusInternalServerError, "客户端入网失败", "页面模板加载失败。")
+		return false
+	}
+	var body bytes.Buffer
+	if err := parsed.full.ExecuteTemplate(&body, "layout", data); err != nil {
+		w.wizard.renderError(response, request, http.StatusInternalServerError, "客户端入网失败", "页面渲染失败。")
+		return false
+	}
+	response.Header().Set("Content-Type", "text/html; charset=utf-8")
+	response.Header().Set("Content-Length", strconv.Itoa(body.Len()))
+	response.WriteHeader(http.StatusOK)
+	if _, err := response.Write(body.Bytes()); err != nil {
+		return false
+	}
+	if flusher, ok := response.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return true
 }
 
 func initializationErrorWithAdvice(err error) string {

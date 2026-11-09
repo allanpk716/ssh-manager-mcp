@@ -74,10 +74,13 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	initializing := false
 	uiShutdown := make(chan struct{})
 	var shutdownOnce sync.Once
+	serverWizard := destination.Kind == machineinit.UIDestinationServerWizard
 	requestShutdown := func() {
+		if !serverWizard && clientInitializationGuideNeeded() {
+			writeClientInitializationGuide(cmd.OutOrStdout())
+		}
 		shutdownOnce.Do(func() { close(uiShutdown) })
 	}
-	serverWizard := destination.Kind == machineinit.UIDestinationServerWizard
 	switch {
 	case destination.Kind == machineinit.UIDestinationInitializationWizard ||
 		destination.Kind == machineinit.UIDestinationStandaloneWebUI || serverWizard:
@@ -213,6 +216,18 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		return fmt.Errorf("关闭 Web UI 失败：%w", err)
 	}
 	return nil
+}
+
+func writeClientInitializationGuide(output io.Writer) {
+	fmt.Fprintln(output, "客户端入网指引：")
+	for _, line := range webui.ClientInitializationGuideLines() {
+		fmt.Fprintf(output, "  %s\n", line)
+	}
+}
+
+func clientInitializationGuideNeeded() bool {
+	snapshot, err := machineinit.ReadSnapshot()
+	return err == nil && snapshot.Role == nil && !snapshot.ClientCachePresent
 }
 
 // openURLInBrowser 用系统默认浏览器打开网址，按操作系统选择打开命令；无图形

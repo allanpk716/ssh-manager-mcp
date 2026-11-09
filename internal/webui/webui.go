@@ -103,8 +103,8 @@ type Config struct {
 	// MachineInit 是单机升级为权威端时调用的初始化模块适配器。适配器内部
 	// 调用 machineinit.Initialize 并把权威端作为目标角色；本包不写 role.json。
 	MachineInit MachineInitializer
-	// RequestShutdown 在升级成功页完整写给浏览器后触发，由 `sshmgr ui`
-	// 的服务循环注入，用于优雅关闭本次回环 Web UI 进程。
+	// RequestShutdown 在升级成功页或客户端配对指引页完整写给浏览器后触
+	// 发，由 `sshmgr ui` 的服务循环注入，用于优雅关闭本次回环 Web UI 进程。
 	RequestShutdown func()
 	// InitializationOperatingSystem 与 InitializationExecutablePath 只用于
 	// 权威端向导的安装页；命令行适配器注入当前操作系统与可执行文件绝对路径。

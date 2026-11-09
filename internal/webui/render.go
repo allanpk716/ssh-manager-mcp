@@ -122,6 +122,7 @@ type pageData struct {
 	InitializationInstallCommand    string
 	InitializationServeAddresses    []InitializationServeAddressView
 	InitializationNeedsManualListen bool
+	ClientGuideLines                []string
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染
