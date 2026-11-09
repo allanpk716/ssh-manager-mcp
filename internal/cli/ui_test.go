@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -278,12 +279,15 @@ func TestUICommandServerRolePrintsServeListenerWithoutStartingServer(t *testing.
 	}
 }
 
-func TestUICommandUninitializedRefusesWithGuidance(t *testing.T) {
+func TestUICommandUnopenableVaultKeepsExistingErrorGuidance(t *testing.T) {
 	prepareUninitializedUIEnv(t)
+	if err := os.WriteFile(os.Getenv("SSHMGR_STORE"), []byte("not a vault"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	urlCh, stdout, stderr, finish := startUICommand(t, nil)
 	err := finish(t)
 	if err == nil {
-		t.Fatal("未初始化机器运行 ui 应以错误退出")
+		t.Fatal("vault 打不开时 ui 应以错误退出")
 	}
 	select {
 	case <-urlCh:
@@ -291,7 +295,169 @@ func TestUICommandUninitializedRefusesWithGuidance(t *testing.T) {
 	default:
 	}
 	combined := stdout.String() + stderr.String() + err.Error()
-	if !strings.Contains(combined, "初始化") {
-		t.Fatalf("未初始化拒绝说明应指向初始化路径，实际：%s", combined)
+	for _, want := range []string{"vault", "sshmgr doctor"} {
+		if !strings.Contains(combined, want) {
+			t.Fatalf("vault 打不开说明应包含 %q，实际：%s", want, combined)
+		}
+	}
+	if strings.Contains(combined, "sshmgr tui") {
+		t.Fatalf("ui 错误不应再指向终端图形界面，实际：%s", combined)
+	}
+}
+
+func TestUICommandUninitializedRunsStandaloneWizard(t *testing.T) {
+	prepareUninitializedUIEnv(t)
+	urlCh, _, _, finish := startUICommand(t, nil)
+	startupURL := waitUIStartupURL(t, urlCh)
+
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport:     &http.Transport{DisableKeepAlives: true},
+	}
+	start, err := client.Get(startupURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	startBody, _ := io.ReadAll(start.Body)
+	start.Body.Close()
+	if start.StatusCode != http.StatusSeeOther || len(start.Cookies()) != 1 {
+		t.Fatalf("向导启动链接应换会话，状态码=%d cookie=%d 页面：\n%s", start.StatusCode, len(start.Cookies()), startBody)
+	}
+	cookie := start.Cookies()[0]
+
+	getPage := func(path string) (int, string) {
+		request, err := http.NewRequest(http.MethodGet, "http://"+startupURL.Host+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.AddCookie(cookie)
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		return response.StatusCode, string(body)
+	}
+	postForm := func(path, csrfToken, role string) *http.Response {
+		form := url.Values{"csrf_token": {csrfToken}}
+		if role != "" {
+			form.Set("role", role)
+		}
+		request, err := http.NewRequest(http.MethodPost, "http://"+startupURL.Host+path, strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.AddCookie(cookie)
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("Origin", "http://"+startupURL.Host)
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	status, choice := getPage("/ui/")
+	if status != http.StatusOK || !strings.Contains(choice, "选择本机角色") {
+		t.Fatalf("向导首页状态码=%d 页面：\n%s", status, choice)
+	}
+	csrfToken := hiddenInputValueForUITest(t, choice)
+	selected := postForm("/ui/init/role", csrfToken, "standalone")
+	selected.Body.Close()
+	if selected.StatusCode != http.StatusSeeOther || selected.Header.Get("Location") != "/ui/init/standalone" {
+		t.Fatalf("选单机应进入确认页，状态码=%d 跳转=%q", selected.StatusCode, selected.Header.Get("Location"))
+	}
+
+	state, err := roles.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Role != roles.RoleStandalone || state.SetupComplete {
+		t.Fatalf("选单机应先写 setup_complete 为假的角色文件：%+v", state)
+	}
+
+	status, confirmation := getPage("/ui/init/standalone")
+	if status != http.StatusOK || !strings.Contains(confirmation, "创建 vault") {
+		t.Fatalf("单机确认页状态码=%d 页面：\n%s", status, confirmation)
+	}
+	created := postForm("/ui/init/standalone/create", hiddenInputValueForUITest(t, confirmation), "")
+	createdBody, _ := io.ReadAll(created.Body)
+	created.Body.Close()
+	if created.StatusCode != http.StatusOK {
+		t.Fatalf("创建 vault 状态码=%d 页面：\n%s", created.StatusCode, createdBody)
+	}
+	for _, want := range []string{os.Getenv("SSHMGR_FILEKEY_PATH"), "请备份此文件"} {
+		if !strings.Contains(string(createdBody), want) {
+			t.Fatalf("创建完成页应包含 %q：\n%s", want, createdBody)
+		}
+	}
+
+	finished := postForm("/ui/init/standalone/finish", hiddenInputValueForUITest(t, string(createdBody)), "")
+	finished.Body.Close()
+	if finished.StatusCode != http.StatusSeeOther || finished.Header.Get("Location") != "/ui/" {
+		t.Fatalf("完成页应进入正式首页，状态码=%d 跳转=%q", finished.StatusCode, finished.Header.Get("Location"))
+	}
+	status, formal := getPage("/ui/")
+	if status != http.StatusOK || !strings.Contains(formal, "服务器") || strings.Contains(formal, "选择本机角色") {
+		t.Fatalf("完成初始化后应进入单机正式首页，状态码=%d 页面：\n%s", status, formal)
+	}
+
+	state, err = roles.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Role != roles.RoleStandalone || !state.SetupComplete {
+		t.Fatalf("建好 vault 后角色文件应完成初始化：%+v", state)
+	}
+	if err := finish(t); err != nil {
+		t.Fatalf("ui 命令退出失败：%v", err)
+	}
+}
+
+func hiddenInputValueForUITest(t *testing.T, page string) string {
+	t.Helper()
+	match := regexp.MustCompile(`<input type="hidden" name="csrf_token" value="([^"]+)"`).FindStringSubmatch(page)
+	if match == nil {
+		t.Fatalf("页面缺少防跨站请求伪造令牌：\n%s", page)
+	}
+	return match[1]
+}
+
+func TestUICommandStandaloneResumeStartsAtVaultCreation(t *testing.T) {
+	prepareUninitializedUIEnv(t)
+	if err := roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: false}); err != nil {
+		t.Fatal(err)
+	}
+	urlCh, _, _, finish := startUICommand(t, nil)
+	startupURL := waitUIStartupURL(t, urlCh)
+
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport:     &http.Transport{DisableKeepAlives: true},
+	}
+	start, err := client.Get(startupURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	startCookie := start.Cookies()[0]
+	start.Body.Close()
+	request, err := http.NewRequest(http.MethodGet, "http://"+startupURL.Host+"/ui/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.AddCookie(startCookie)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/ui/init/standalone" {
+		t.Fatalf("单机续做应从创建 vault 开始，状态码=%d 跳转=%q 页面：\n%s", response.StatusCode, response.Header.Get("Location"), body)
+	}
+
+	if err := finish(t); err != nil {
+		t.Fatalf("ui 命令退出失败：%v", err)
 	}
 }

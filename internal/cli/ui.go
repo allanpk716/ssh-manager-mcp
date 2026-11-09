@@ -16,7 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"ssh-manager-mcp/internal/roles"
+	"ssh-manager-mcp/internal/machineinit"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiops"
 )
@@ -40,16 +40,21 @@ func newUICmd() *cobra.Command {
 	return c
 }
 
-// runUICommand 组装 ui 命令：按既有角色判定入口解析本机角色，单机与客户端
-// 构造 Web UI Handler 并监听回环随机端口，权威端与未初始化角色直接拒绝且
-// 不启动任何监听。
+// runUICommand 组装 ui 命令：按本机状态快照判定去向；空机器与单机续做进入
+// 初始化向导，单机与客户端构造正式 Web UI 并监听回环随机端口，权威端只打印
+// serve 独立监听的状态。
 func runUICommand(cmd *cobra.Command, instance string) error {
-	launch, err := resolveMachineRole("")
+	snapshot, err := machineinit.ReadSnapshot()
 	if err != nil {
 		return err
 	}
-	if instance != "" && launch.Kind == roles.LaunchBroker &&
-		(launch.Role == roles.RoleStandalone || launch.Role == roles.RoleServer) {
+	destination, err := machineinit.DecideUIDestination(snapshot)
+	if err != nil {
+		return err
+	}
+	if instance != "" && (destination.Kind == machineinit.UIDestinationStandaloneWebUI ||
+		destination.Kind == machineinit.UIDestinationInitializationWizard ||
+		destination.Kind == machineinit.UIDestinationServerWizard) {
 		return NewExitCodeError(1, errors.New("`--instance` 只选择客户端缓存实例；本机自持 vault 的 Web UI 直接读取 vault，请去掉 `--instance`"))
 	}
 
@@ -63,8 +68,10 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretWriter     webui.SecretWriter
 		resolvedInstance string
 	)
+	initializing := false
 	switch {
-	case launch.Kind == roles.LaunchBroker && !launch.ResumeSetup && launch.Role == roles.RoleStandalone:
+	case destination.Kind == machineinit.UIDestinationInitializationWizard:
+		initializing = true
 		webRole = webui.RoleStandalone
 		servers = standaloneUIServerSource{}
 		serverWriter = standaloneUIServerWriter()
@@ -72,7 +79,15 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource = standaloneUISecretStore()
 		secretWriter = standaloneUISecretWriter()
 		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
-	case launch.Kind == roles.LaunchClient && !launch.ResumeSetup:
+	case destination.Kind == machineinit.UIDestinationStandaloneWebUI:
+		webRole = webui.RoleStandalone
+		servers = standaloneUIServerSource{}
+		serverWriter = standaloneUIServerWriter()
+		accessSource = standaloneUIAccessStore()
+		secretSource = standaloneUISecretStore()
+		secretWriter = standaloneUISecretWriter()
+		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
+	case destination.Kind == machineinit.UIDestinationClientWebUI:
 		resolvedInstance, err = resolveClientCacheInstance(instance)
 		if err != nil {
 			return err
@@ -82,7 +97,9 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource = clientUISecretSource{}
 		opsSource = webuiops.ClientPageStoreWithUpdates(
 			uiUpdateService(webui.RoleClient, resolvedInstance), uiClientPull)
-	case launch.Kind == roles.LaunchBroker && launch.Role == roles.RoleServer:
+	default:
+		// 权威端正式页面由 serve 的独立监听提供。权威端向导在后续票补全；
+		// 当前保持既有行为：只打印独立监听状态，不另起回环监听。
 		st, err := openUnlockedStore()
 		if err != nil {
 			return err
@@ -90,8 +107,6 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		defer st.Close()
 		fmt.Fprintln(cmd.OutOrStdout(), "权威端 Web UI 由 `serve` 进程的独立监听提供：")
 		return writeAuthorityWebUIStatus(cmd.OutOrStdout(), st)
-	default:
-		return NewExitCodeError(1, errors.New("本机尚未完成初始化，无法启动 Web UI。请先运行 `sshmgr tui` 完成初始化"))
 	}
 
 	versionHint := func() string { return "" }
@@ -105,7 +120,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		return fmt.Errorf("监听本机回环地址失败：%w", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	handler, startup, err := webui.New(webui.Config{
+	config := webui.Config{
 		Role:           webRole,
 		Servers:        servers,
 		ServerWriter:   serverWriter,
@@ -116,7 +131,14 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		Access:         accessSource,
 		Ops:            opsSource,
 		ClientInstance: resolvedInstance,
-	})
+	}
+	var handler http.Handler
+	var startup webui.Startup
+	if initializing {
+		handler, startup, err = webui.NewInitializationWizard(config, machineInitializer{})
+	} else {
+		handler, startup, err = webui.New(config)
+	}
 	if err != nil {
 		_ = listener.Close()
 		return err

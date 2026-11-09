@@ -35,30 +35,12 @@ export type standaloneUI = {
   close: () => Promise<void>;
 };
 
-// startStandaloneUI 为当前用例准备一个全新的临时加密库，以单机角色启动
-// `sshmgr ui`，并返回一次性启动链接。子进程的 PATH 指向不存在的目录，
-// 这样「自动打开系统浏览器」会失败并只打印链接，由 Playwright 自己使用
-// 这条一次性链接，避免真实浏览器抢先消耗它。
-async function startStandaloneUI(setup?: (runDir: string) => void): Promise<standaloneUI> {
-  const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-"));
-  setup?.(runDir);
-  const seed = spawnSync("go", ["run", "./e2e/tools/seedvault", runDir], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      SSHMGR_VAULT_ROOT: runDir,
-      SSHMGR_STORE: path.join(runDir, "store.db"),
-      SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
-    },
-  });
-  if (seed.status !== 0) {
-    await rm(runDir, { recursive: true, force: true });
-    throw new Error(`准备临时加密库失败：${seed.stdout}\n${seed.stderr}`);
-  }
+// startUIProcess 在给定临时目录里启动 `sshmgr ui`，并返回一次性启动链接。
+// 子进程的 PATH 指向不存在的目录，这样「自动打开系统浏览器」会失败并只打
+// 印链接，由 Playwright 自己使用这条一次性链接，避免真实浏览器抢先消耗它。
+async function startUIProcess(runDir: string): Promise<standaloneUI> {
   const backupDir = path.join(runDir, "backups");
   const passFile = path.join(runDir, "backup.pass");
-
   const ui = spawn(binaryPath, ["ui"], {
     cwd: repoRoot,
     stdio: ["pipe", "pipe", "pipe"],
@@ -116,6 +98,34 @@ async function startStandaloneUI(setup?: (runDir: string) => void): Promise<stan
   };
 }
 
+// startStandaloneUI 为当前用例准备一个全新的临时加密库，以单机角色启动
+// `sshmgr ui`，并返回一次性启动链接。
+async function startStandaloneUI(setup?: (runDir: string) => void): Promise<standaloneUI> {
+  const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-"));
+  setup?.(runDir);
+  const seed = spawnSync("go", ["run", "./e2e/tools/seedvault", runDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      SSHMGR_VAULT_ROOT: runDir,
+      SSHMGR_STORE: path.join(runDir, "store.db"),
+      SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
+    },
+  });
+  if (seed.status !== 0) {
+    await rm(runDir, { recursive: true, force: true });
+    throw new Error(`准备临时加密库失败：${seed.stdout}\n${seed.stderr}`);
+  }
+  return startUIProcess(runDir);
+}
+
+// startEmptyMachineUI 在空临时目录上启动 `sshmgr ui`，用于浏览器里的初始
+// 化向导测试。
+async function startEmptyMachineUI(): Promise<standaloneUI> {
+  return startUIProcess(mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-")));
+}
+
 // standaloneUIFixture 让每个用例拿到自己的 Web UI 进程；用例结束（无论成
 // 败）都会停止进程并删除临时加密库。
 type standaloneUIFixture = { standaloneUI: standaloneUI };
@@ -128,7 +138,7 @@ export const test = base.extend<standaloneUIFixture>({
   },
 });
 
-export { expect, startStandaloneUI };
+export { expect, startStandaloneUI, startEmptyMachineUI };
 
 // openStandaloneUI 用一次性启动链接进入 Web UI，并等待服务器列表出现。
 export async function openStandaloneUI(
