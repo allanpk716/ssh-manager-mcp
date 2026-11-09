@@ -79,6 +79,7 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 		err = fmt.Errorf("server %s not found", serverID)
 		return
 	}
+	injectionPlan := buildEnvironmentInjectionPlan(st, srv, sudo)
 
 	// 命令策略 (ticket #10/#11/#15 / ADR 0007):与前台镜像——拦截档命令在
 	// 取凭据、建连接之前拒绝,不建立 SSH 连接;需确认档同样在连接之前
@@ -133,6 +134,9 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 		Sudo: sudo, SudoPass: sudoPass, TimeoutSec: timeoutSec,
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
 		DialTopology: dialSource, DialSuccessCache: dialSource,
+		ExecOption:               injectionPlan.execOption(),
+		InjectedEnvironmentNames: injectionPlan.injectedNames(),
+		InjectionWarnings:        injectionPlan.warningLines(),
 	})
 	if stErr != nil {
 		switch {
@@ -156,6 +160,7 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 		EffectiveTimeoutSeconds: int(eff.Seconds()),
 		Status:                  bgStatusRunning,
 		ConnectionNotesOutput:   ConnectionNotesOutput{ConnectionNotes: connectionNotes},
+		InjectionWarnings:       injectionPlan.warningLines(),
 	}
 	return
 }
