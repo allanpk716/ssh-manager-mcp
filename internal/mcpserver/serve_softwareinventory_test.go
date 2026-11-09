@@ -197,6 +197,34 @@ func TestSoftwareInventoryEndpoint_OnlyProfileVisibleDevices(t *testing.T) {
 	}
 }
 
+// TestSoftwareInventoryEndpoint_IncludesObservedOnlyDevices 权威端只读接
+// 口与本地统一查询共用同一份实测加声明合成结果。
+func TestSoftwareInventoryEndpoint_IncludesObservedOnlyDevices(t *testing.T) {
+	fx := newSoftwareInventoryRunner(t)
+	observed := models.SoftwareObservedItem{
+		Category: softwareinventory.CategoryServiceProgram,
+		Name:     "observed-only", Version: "2.0",
+	}
+	if err := fx.st.ReplaceSoftwareObservedItems("gpu-设备", store.SoftwareObservedWrite{
+		Items:             []models.SoftwareObservedItem{observed},
+		CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	status, body := postSoftwareInventory(t, fx.srv, fx.laptopToken, `{"name":"observed-only"}`)
+	if status != http.StatusOK {
+		t.Fatalf("状态码 = %d；响应体：%s", status, body)
+	}
+	var result softwareinventory.QueryResult
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("解析响应体失败：%v\n%s", err, body)
+	}
+	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 1 ||
+		result.Devices[0].Items[0].Source != softwareinventory.SourceObserved {
+		t.Fatalf("只有实测、没有声明的条目应能从权威端接口查到：%+v", result.Devices)
+	}
+}
+
 // TestSoftwareInventoryEndpoint_FiltersAndErrors 过滤条件原样生效；范围外
 // 设备与非法参数各有明确的状态码。
 func TestSoftwareInventoryEndpoint_FiltersAndErrors(t *testing.T) {

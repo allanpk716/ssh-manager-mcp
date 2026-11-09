@@ -46,6 +46,7 @@ type (
 	ListeningPort           = models.SoftwareListeningPort
 	Visibility              = store.SoftwareDeviceScope
 	SoftwareDeclarationView = store.SoftwareDeclarationView
+	DeviceOverview          = store.SoftwareDeviceOverview
 )
 
 // 类别代号。
@@ -68,8 +69,12 @@ const (
 	ExposurePublicNetwork           = models.SoftwareExposurePublic
 )
 
-// SourceDeclared 表示当前条目只来自声明。后续实测与合成会在这里扩展。
-const SourceDeclared = "声明"
+// 条目来源的显示文本。
+const (
+	SourceDeclared = "声明"
+	SourceObserved = "实测"
+	SourceCombined = "两者合成"
+)
 
 // ErrDeviceNotVisible 表示请求的设备不在可见范围内。
 var ErrDeviceNotVisible = store.ErrSoftwareDeviceNotVisible
@@ -97,6 +102,11 @@ type Item struct {
 	BelongsTo      string          `json:"belongs_to,omitempty"`
 	Note           string          `json:"note,omitempty"`
 	Source         string          `json:"source"`
+	// ObservedStableKey 是认领实测时使用的稳定键，只在条目有实测来源时填。
+	ObservedStableKey string `json:"observed_stable_key,omitempty"`
+	DeclaredVersion   string `json:"declared_version,omitempty"`
+	VersionMismatch   bool   `json:"version_mismatch,omitempty"`
+	Mismatch          bool   `json:"mismatch,omitempty"`
 }
 
 // ItemGroup 是按设备查看时的一个类别分组。系统包默认只返回数量；加参数
@@ -146,25 +156,50 @@ func (m *Manager) DeleteDeclaration(id string, source Source) error {
 	return err
 }
 
-// ViewDevice 按可见设备范围查看一台设备的软件清单，并按类别分组。
+// ClaimDeclaration 用一条声明认领同一设备上的实测条目。observedStableKey
+// 是实测条目的稳定键，不是数据库行号。
+func (m *Manager) ClaimDeclaration(
+	declarationID, observedStableKey string,
+	source Source,
+) error {
+	_, err := m.st.ClaimSoftwareDeclaration(declarationID, observedStableKey, source.origin)
+	return err
+}
+
+// UnclaimDeclaration 取消一条声明的认领关系。
+func (m *Manager) UnclaimDeclaration(declarationID string, source Source) error {
+	_, err := m.st.UnclaimSoftwareDeclaration(declarationID, source.origin)
+	return err
+}
+
+// ViewDevice 按可见设备范围查看一台设备的软件清单，并按类别分组。它复用
+// 统一查询，因此实测、声明与两者合成的结果和查询工具保持一致。
 func (m *Manager) ViewDevice(
 	deviceName string,
 	visibility Visibility,
 	options DeviceViewOptions,
 ) (*DeviceInventory, error) {
-	stored, err := m.st.SoftwareDeclarationsForDevice(deviceName, visibility)
+	result, err := m.Query(QueryOptions{
+		Device:                deviceName,
+		IncludeSystemPackages: true,
+		Visibility:            visibility,
+	})
 	if err != nil {
 		return nil, err
 	}
-	inventory := &DeviceInventory{DeviceID: stored.DeviceID, DeviceName: stored.DeviceName}
-	for _, row := range stored.Declarations {
+	if len(result.Devices) == 0 {
+		return &DeviceInventory{}, nil
+	}
+	device := result.Devices[0]
+	inventory := &DeviceInventory{DeviceID: device.DeviceID, DeviceName: device.DeviceName}
+	for _, row := range device.Items {
 		if len(inventory.Groups) == 0 || inventory.Groups[len(inventory.Groups)-1].Category != row.Category {
 			inventory.Groups = append(inventory.Groups, ItemGroup{
-				Category: row.Category, CategoryLabel: row.Category.Label(), Items: []Item{},
+				Category: row.Category, CategoryLabel: row.CategoryLabel, Items: []Item{},
 			})
 		}
 		group := &inventory.Groups[len(inventory.Groups)-1]
-		item := itemFromView(row)
+		item := queryItemAsItem(row)
 		if row.Category == CategorySystemPackage && !options.IncludeSystemPackages {
 			group.SystemPackageCount++
 			group.SystemPackagesOmitted = true
@@ -175,26 +210,35 @@ func (m *Manager) ViewDevice(
 	return inventory, nil
 }
 
-// SearchSoftware 按软件名做大小写不敏感的跨设备搜索。
+// SearchSoftware 按软件名做大小写不敏感的跨设备搜索，结果同样来自实测与
+// 声明的统一合成。
 func (m *Manager) SearchSoftware(namePart string, visibility Visibility) ([]SearchResult, error) {
-	rows, err := m.st.SearchSoftwareDeclarations(namePart, visibility)
+	result, err := m.Query(QueryOptions{
+		Name: namePart, IncludeSystemPackages: true, Visibility: visibility,
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]SearchResult, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, SearchResult{
-			DeviceID: row.DeviceID, DeviceName: row.DeviceName, Item: itemFromView(row),
-		})
+	out := make([]SearchResult, 0)
+	for i := range result.Devices {
+		for _, row := range result.Devices[i].Items {
+			out = append(out, SearchResult{
+				DeviceID:   result.Devices[i].DeviceID,
+				DeviceName: result.Devices[i].DeviceName,
+				Item:       queryItemAsItem(row),
+			})
+		}
 	}
 	return out, nil
 }
 
-func itemFromView(row SoftwareDeclarationView) Item {
+func queryItemAsItem(row QueryItem) Item {
 	return Item{
 		ID: row.ID, DeviceID: row.DeviceID, Category: row.Category,
-		CategoryLabel: row.Category.Label(), Name: row.Name, Version: row.Version,
+		CategoryLabel: row.CategoryLabel, Name: row.Name, Version: row.Version,
 		PackageURL: row.PackageURL, CPE: row.CPE, ListeningPorts: row.ListeningPorts,
-		BelongsTo: row.BelongsTo, Note: row.Note, Source: SourceDeclared,
+		BelongsTo: row.BelongsTo, Note: row.Note, Source: row.Source,
+		ObservedStableKey: row.ObservedStableKey, VersionMismatch: row.VersionMismatch,
+		DeclaredVersion: row.DeclaredVersion, Mismatch: row.Mismatch,
 	}
 }
