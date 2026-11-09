@@ -129,17 +129,24 @@ func prepareExecForTargetLayer(command string, options ExecInjectionOptions, tar
 	})
 
 	var wrapper strings.Builder
+	stdinDelimiter := ""
 	if options.ShellType == "powershell" {
 		writePowerShellWrapper(&wrapper, environments)
 	} else if options.ShellType == "cmd" {
 		writeWindowsCmdWrapper(&wrapper, environments)
 	} else {
-		writePOSIXWrapper(&wrapper, environments)
+		if targetLayer == ExecLayerPrivileged {
+			stdinDelimiter = "__sshmgr_environment_frames_" + newSudoNonce()
+		}
+		writePOSIXWrapper(&wrapper, environments, stdinDelimiter)
 	}
 	wrapper.WriteString("\n")
 	wrapper.WriteString(command)
 
 	frames := buildEnvironmentFrames(options.ShellType, environments)
+	if stdinDelimiter != "" {
+		frames = append([]byte(stdinDelimiter+"\n"), frames...)
+	}
 	return preparedExec{command: wrapper.String(), frames: frames}, nil
 }
 
@@ -162,16 +169,25 @@ func buildEnvironmentFrames(shellType string, environments []EnvironmentInjectio
 
 // writePOSIXWrapper 只把变量名与字节长度写进远端命令；值由标准输入进入，
 // 以八进制转义还原，避免换行、引号等字节影响 shell 语法。
-func writePOSIXWrapper(wrapper *strings.Builder, environments []EnvironmentInjection) {
-	wrapper.WriteString("unset __sshmgr_format_0\n")
+func writePOSIXWrapper(wrapper *strings.Builder, environments []EnvironmentInjection, stdinDelimiter string) {
+	if stdinDelimiter != "" {
+		wrapper.WriteString("__sshmgr_frame_start_found=false\n")
+		wrapper.WriteString("__sshmgr_frame_delimiter=''\n")
+		wrapper.WriteString("while IFS= read -r __sshmgr_frame_delimiter; do\n")
+		fmt.Fprintf(wrapper, "  if [ \"$__sshmgr_frame_delimiter\" = '%s' ]; then __sshmgr_frame_start_found=true; break; fi\n", stdinDelimiter)
+		wrapper.WriteString("done\n")
+		wrapper.WriteString("if [ \"$__sshmgr_frame_start_found\" != true ]; then echo 'sshmgr environment injection frame delimiter was not found' >&2; exit 78; fi\n")
+		wrapper.WriteString("unset __sshmgr_frame_start_found __sshmgr_frame_delimiter\n")
+	}
+	wrapper.WriteString("unset __sshmgr_octal_bytes\n")
 	for _, environment := range environments {
-		fmt.Fprintf(wrapper, "__sshmgr_format_0=$(dd bs=1 count=%d 2>/dev/null | od -An -v -to1 | awk '{for(i=1;i<=NF;i++) printf \"\\\\%%03d\",$i}')\n", len(environment.Value))
-		fmt.Fprintf(wrapper, "eval \"%s=\\\"\\$(printf \\\"\\${__sshmgr_format_0}A\\\")\\\"\"\n", environment.EnvironmentName)
+		fmt.Fprintf(wrapper, "__sshmgr_octal_bytes=$(dd bs=1 count=%d 2>/dev/null | od -An -v -to1 | awk '{for(i=1;i<=NF;i++) printf \"\\\\%%03d\",$i}')\n", len(environment.Value))
+		fmt.Fprintf(wrapper, "eval \"%s=\\\"\\$(printf \\\"\\${__sshmgr_octal_bytes}A\\\")\\\"\"\n", environment.EnvironmentName)
 		fmt.Fprintf(wrapper, "%s=${%s%%A}\n", environment.EnvironmentName, environment.EnvironmentName)
 		fmt.Fprintf(wrapper, "export %s\n", environment.EnvironmentName)
-		wrapper.WriteString("unset __sshmgr_format_0\n")
+		wrapper.WriteString("unset __sshmgr_octal_bytes\n")
 	}
-	wrapper.WriteString("unset __sshmgr_format_0\n")
+	wrapper.WriteString("unset __sshmgr_octal_bytes\n")
 }
 
 // writePowerShellWrapper 用严格 UTF-8 解码按长度读出的字节。值不进入远端

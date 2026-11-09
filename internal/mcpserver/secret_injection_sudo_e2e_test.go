@@ -86,8 +86,10 @@ func TestSecretEnvironmentInjectionExecCommandSudo(t *testing.T) {
 	if !strings.Contains(gotCommand, userCommand) {
 		t.Fatalf("remote command does not retain the user command: %q", gotCommand)
 	}
-	if string(gotStdin) != secretValue {
-		t.Fatalf("standard input after the sudo password line = %q, want only the framed secret value", gotStdin)
+	delimiterLine, framedValue, foundLineBreak := bytes.Cut(gotStdin, []byte("\n"))
+	if !foundLineBreak || !bytes.HasPrefix(delimiterLine, []byte("__sshmgr_environment_frames_")) ||
+		!bytes.Contains([]byte(gotCommand), delimiterLine) || string(framedValue) != secretValue {
+		t.Fatalf("standard input after the sudo password line = %q, delimiter = %q", gotStdin, delimiterLine)
 	}
 
 	auditRows, err := st.QueryAudit(store.AuditFilter{Actions: []string{"exec"}, Statuses: []string{"ok"}})
@@ -100,6 +102,63 @@ func TestSecretEnvironmentInjectionExecCommandSudo(t *testing.T) {
 	audit := auditRows[0]
 	if !audit.Sudo || len(audit.InjectedEnvironmentNames) != 1 || audit.InjectedEnvironmentNames[0] != "ELEVATED_API_TOKEN" {
 		t.Fatalf("audit sudo and injected names = %v %#v", audit.Sudo, audit.InjectedEnvironmentNames)
+	}
+}
+
+func TestSecretEnvironmentInjectionSudoToleratesPasswordNotConsumed(t *testing.T) {
+	const sudoPassword = "sudopw-that-must-not-become-a-value"
+	const secretValue = "sudo-nopasswd-secret-value"
+	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
+
+	st := newStore(t)
+	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "", []byte(secretValue), "ELEVATED_API_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	clientSession, serverID := newMaskingSSHToolClientWithSudo(t, st, testsshd.Options{
+		Password:                "pw",
+		SudoPassword:            sudoPassword,
+		SudoDoesNotReadPassword: true,
+		Exec: func(command string, stdin io.Reader) (string, string, int) {
+			stdinBytes, err := io.ReadAll(stdin)
+			if err != nil {
+				return "", "read standard input: " + err.Error(), 1
+			}
+			localShell := exec.Command("/bin/sh", "-c", command)
+			localShell.Stdin = bytes.NewReader(stdinBytes)
+			output := &bytes.Buffer{}
+			errors := &bytes.Buffer{}
+			localShell.Stdout = output
+			localShell.Stderr = errors
+			if err := localShell.Run(); err != nil {
+				return output.String(), errors.String() + err.Error(), 1
+			}
+			return output.String(), errors.String(), 0
+		},
+	}, sudoPassword)
+	if err := st.AllowSecrets([]string{"ELEVATED_API_TOKEN"}, []string{"real"}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": serverID, "command": userCommand, "sudo": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	raw := toolResultText(result)
+	if strings.Contains(raw, sudoPassword) {
+		t.Fatalf("sudo password leaked when sudo did not consume it: %s", raw)
+	}
+	var output struct {
+		Stdout string `json:"stdout"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if output.Stdout != "{{sshmgr-secret:ELEVATED_API_TOKEN}}\n" {
+		t.Fatalf("stdout = %q", output.Stdout)
 	}
 }
 
