@@ -228,6 +228,17 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 			softwareInventoryHandler.ServeHTTP(w, req)
 			return
 		}
+		// 票 #187：采集分派与结果上交同样使用设备码认证。
+		softwareInventoryAssignmentHandler := cacheAuth(http.HandlerFunc(r.handleSoftwareInventoryAssignments))
+		if req.URL.Path == "/software-inventory/assignments" {
+			softwareInventoryAssignmentHandler.ServeHTTP(w, req)
+			return
+		}
+		softwareInventoryResultHandler := cacheAuth(http.HandlerFunc(r.handleSoftwareInventoryResults))
+		if req.URL.Path == "/software-inventory/results" {
+			softwareInventoryResultHandler.ServeHTTP(w, req)
+			return
+		}
 		if strings.HasPrefix(req.URL.Path, "/pair/") {
 			r.handlePair(w, req) // unauthenticated SAS pairing surface (Plan 42 §3.3) — self-gated
 			return

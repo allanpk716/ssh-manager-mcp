@@ -35,6 +35,17 @@ func inventoryCollectCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
+			status, err := s.SoftwareCollectionStatusForDevice(device)
+			if err != nil {
+				return err
+			}
+			if status.Collector != "" && status.Collector != "authority" {
+				if err := s.RequestSoftwareImmediateCollection(device, store.CLISource()); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "设备 %s 已请求立即采集，等待客户端实例 %s 执行。\n", device, status.Collector)
+				return nil
+			}
 			report, err := inventoryCollectService(s).Collect(cmd.Context(), softwareinventory.CollectRequest{
 				DeviceName: device, ServerEntry: entry,
 			})
