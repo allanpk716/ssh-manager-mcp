@@ -13,13 +13,13 @@ import (
 
 	"ssh-manager-mcp/internal/secretmanage"
 	"ssh-manager-mcp/internal/store"
-	"ssh-manager-mcp/internal/tui"
+	"ssh-manager-mcp/internal/termdetect"
 )
 
 // secretsStdinIsTTY 判断标准输入是不是交互终端，与 cache instances 的终端
 // 判定走同一个跨平台入口；测试通过替换这个函数构造交互/非交互两种形态。
 var secretsStdinIsTTY = func() bool {
-	return tui.IsTerminal(os.Stdin.Fd())
+	return termdetect.IsTerminal(os.Stdin.Fd())
 }
 
 // secretsReadHiddenLine 在交互终端里读一行且不回显。单独成函数是为了让测试
