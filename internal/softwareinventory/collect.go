@@ -16,9 +16,8 @@ import (
 
 // 固定限制来自规格：单次采集建议 5 分钟超时、16 MiB 输出上限。
 const (
-	DefaultCollectTimeout  = 5 * time.Minute
-	MaxCollectOutputBytes  = int64(16 << 20)
-	CollectorAuthorityName = "authority"
+	DefaultCollectTimeout = 5 * time.Minute
+	MaxCollectOutputBytes = int64(16 << 20)
 )
 
 // RemoteExecResult 是一次固定采集命令的执行结果。TimedOut 与 Truncated 都
@@ -100,11 +99,11 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 	if len(servers) == 0 {
 		return nil, fmt.Errorf("设备 %s 没有服务器条目，无法采集软件清单", deviceName)
 	}
-	chosen, err := s.chooseServer(servers, request.ServerEntry)
+	sudoMap, err := s.Store.SoftwareCollectSudoEnabled()
 	if err != nil {
 		return nil, err
 	}
-	sudoMap, err := s.Store.SoftwareCollectSudoEnabled()
+	chosen, err := s.chooseServer(servers, sudoMap, request.ServerEntry)
 	if err != nil {
 		return nil, err
 	}
@@ -168,15 +167,15 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 
 // chooseServer 选择采集用的服务器条目：显式指定时必须在设备上；未指定时
 // 优先用打开 sudo 采集开关的条目，否则名字排序第一个。
-func (s *Service) chooseServer(servers []*models.Server, requested string) (*models.Server, error) {
+func (s *Service) chooseServer(
+	servers []*models.Server,
+	sudoMap map[string]bool,
+	requested string,
+) (*models.Server, error) {
 	sorted := make([]*models.Server, len(servers))
 	copy(sorted, servers)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	if strings.TrimSpace(requested) == "" {
-		sudoMap, err := s.Store.SoftwareCollectSudoEnabled()
-		if err != nil {
-			return nil, err
-		}
 		for _, server := range sorted {
 			if sudoMap[server.ID] {
 				return server, nil

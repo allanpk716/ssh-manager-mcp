@@ -62,13 +62,16 @@ func parseLinuxInventoryOutput(output string) (*ParsedCollection, error) {
 		collection.Notes = append(collection.Notes, "缺少结尾标记")
 	}
 
+	osSection := sections["os"]
 	osInfo := parseLinuxOSSection(sectionOrEmpty(sections, "os").lines)
 	collection.SystemType = osInfo.systemType
 	if collection.SystemType == "" {
 		collection.Incomplete = true
 		collection.Notes = append(collection.Notes, "系统识别结果为空")
 	}
-	collection.Items = append(collection.Items, buildLinuxOSItems(osInfo)...)
+	if osSection != nil && osInfo.recognized {
+		collection.Items = append(collection.Items, buildLinuxOSItems(osInfo)...)
+	}
 	collection.Items = append(collection.Items,
 		buildLinuxPackageItems(sectionOrEmpty(sections, "packages"), osInfo.systemType)...)
 	collection.Items = append(collection.Items, buildLinuxListeningItems(
@@ -161,6 +164,7 @@ type linuxOSInfo struct {
 	systemType string
 	kernel     string
 	machine    string
+	recognized bool
 }
 
 func parseLinuxOSSection(lines []string) linuxOSInfo {
@@ -170,6 +174,7 @@ func parseLinuxOSSection(lines []string) linuxOSInfo {
 		if !present {
 			continue
 		}
+		info.recognized = true
 		value = strings.Trim(value, `"'`)
 		switch strings.TrimSpace(key) {
 		case "NAME":

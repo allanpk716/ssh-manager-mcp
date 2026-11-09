@@ -311,3 +311,30 @@ func TestParseLinuxProtocolEdges(t *testing.T) {
 		t.Fatal("没有开头标记的输出应无法解析")
 	}
 }
+
+// TestParseLinuxMissingOSSection 覆盖整节缺失的边界：os 节完全没出现时，
+// 不能凭空造出操作系统条目，只把结果标为不完整。
+func TestParseLinuxMissingOSSection(t *testing.T) {
+	output := "SSHMGR-INVENTORY BEGIN linux-v1\n" +
+		"SSHMGR-INVENTORY SECTION packages\n" +
+		"bash\t5.2.15-2+b7\tamd64\tii\n" +
+		"SSHMGR-INVENTORY STATUS packages 0\n" +
+		"SSHMGR-INVENTORY END\n"
+	collection, err := parseLinuxInventoryOutput(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !collection.Incomplete {
+		t.Fatal("缺少 os 节应标为不完整")
+	}
+	if collection.SystemType != "" {
+		t.Fatalf("系统类型 = %q", collection.SystemType)
+	}
+	if countObserved(collection.Items, models.SoftwareCategoryOperatingSystem) != 0 ||
+		countObserved(collection.Items, models.SoftwareCategoryDriverFirmware) != 0 {
+		t.Fatalf("os 节缺失时不应生成系统条目：%+v", collection.Items)
+	}
+	if countObserved(collection.Items, models.SoftwareCategorySystemPackage) != 1 {
+		t.Fatalf("其他节应照常解析：%+v", collection.Items)
+	}
+}
