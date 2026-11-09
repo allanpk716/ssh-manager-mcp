@@ -54,6 +54,11 @@ type pageData struct {
 	SecretDetailError           string
 	SecretDetailNote            string
 	SecretDetailEnvironmentName string
+	SecretMatrix                *SecretMatrixView
+	SecretAuthorizationPreview  SecretAuthorizationPreview
+	SecretAuthorizationTargets  []SecretAuthorizationCell
+	SecretAuthorizationReturnTo string
+	SecretAuthorizationNotice   string
 	ImportedCount               int
 	SkippedCount                int
 	FailedCount                 int

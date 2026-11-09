@@ -68,6 +68,21 @@ type SecretDetailView struct {
 	Servers []AccessGrantChoice
 }
 
+// SecretMatrixView 是机密项与服务器条目的授权矩阵。
+type SecretMatrixView struct {
+	Query       string
+	Server      string
+	Rows        []SecretMatrixRow
+	Servers     []ServerRow
+	HasOverride bool
+}
+
+// SecretMatrixRow 是一个机密项在矩阵中的整行。
+type SecretMatrixRow struct {
+	Secret SecretRow
+	Cells  []AccessGrantChoice
+}
+
 // SecretWriter 是机密项页写操作来源。接口只接受写入值，不提供任何读值
 // 方法。
 type SecretWriter interface {
@@ -252,15 +267,192 @@ func secretValueFromRequest(w http.ResponseWriter, r *http.Request) ([]byte, err
 }
 
 func (h *handler) handleSecretMatrix(w http.ResponseWriter, r *http.Request) {
-	h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	if r.URL.Path != secretsMatrixPath {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "授权矩阵只接受 GET 请求。")
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	serverFilter := strings.TrimSpace(r.URL.Query().Get("server"))
+	secrets, err := h.cfg.Secrets.ListSecrets("", query, "")
+	if err != nil {
+		h.renderError(w, r, http.StatusInternalServerError, "读取机密项失败", "读取机密项失败，请稍后重试。")
+		return
+	}
+	allServers, err := h.cfg.Servers.Servers("")
+	if err != nil {
+		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请稍后重试。")
+		return
+	}
+	servers := allServers
+	if serverFilter != "" {
+		servers = nil
+		for _, server := range allServers {
+			if server.ID == serverFilter || server.Name == serverFilter {
+				servers = append(servers, server)
+			}
+		}
+		if len(servers) == 0 {
+			h.renderError(w, r, http.StatusBadRequest, "服务器不存在", "服务器条目 "+serverFilter+" 不存在")
+			return
+		}
+	}
+	sort.SliceStable(allServers, func(i, j int) bool { return allServers[i].Name < allServers[j].Name })
+	rows := make([]SecretMatrixRow, 0, len(secrets))
+	override := r.URL.Query()
+	for _, secret := range secrets {
+		allowed := make(map[string]bool, len(secret.AllowedServers))
+		for _, name := range secret.AllowedServers {
+			allowed[name] = true
+		}
+		row := SecretMatrixRow{Secret: secret}
+		for _, server := range servers {
+			checked := allowed[server.Name]
+			if override.Get(secretCellName(secret.ID, server.ID)) != "" {
+				checked = override.Get(secretCellName(secret.ID, server.ID)) == "1"
+			}
+			row.Cells = append(row.Cells, AccessGrantChoice{ID: server.ID, Name: server.Name, Checked: checked})
+		}
+		rows = append(rows, row)
+	}
+	h.renderPage(w, r, http.StatusOK, "secret-matrix.tmpl", pageData{
+		Title: "机密项授权矩阵", SecretMatrix: &SecretMatrixView{
+			Query: query, Server: serverFilter, Rows: rows, Servers: servers,
+			HasOverride: len(override) > 0,
+		}, SecretServerOptions: allServers,
+	})
 }
 
 func (h *handler) handleSecretAuthorizationPreview(w http.ResponseWriter, r *http.Request) {
-	h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	if r.URL.Path != secretsPreviewPath {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
+	}
+	if r.Method == http.MethodPost {
+		target := secretTargetFromCells(r)
+		h.renderSecretPreview(w, r, target, safeSecretReturnPath(r.PostFormValue("return_to")), "")
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "授权预览只接受 GET 与 POST 请求。")
+		return
+	}
+	target, err := parseSecretTargets(r.URL.Query()["target"])
+	if err != nil {
+		h.renderError(w, r, http.StatusBadRequest, "授权预览失败", err.Error())
+		return
+	}
+	h.renderSecretPreview(w, r, target, safeSecretReturnPath(r.URL.Query().Get("return_to")), "")
 }
 
 func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *http.Request) {
-	h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	if r.URL.Path != secretsConfirmPath || r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
+	}
+	target, err := parseSecretTargets(r.PostForm["target"])
+	if err != nil {
+		h.renderError(w, r, http.StatusBadRequest, "确认授权失败", err.Error())
+		return
+	}
+	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+		next := url.Values{"return_to": {safeSecretReturnPath(r.PostFormValue("return_to"))}}
+		for _, cell := range target {
+			next.Add("target", encodeSecretTarget(cell))
+		}
+		http.Redirect(w, r, reverifyPath(secretsPreviewPath+"?"+next.Encode()), http.StatusSeeOther)
+		return
+	}
+	result, conflict, err := h.cfg.SecretsWriter.ApplyAuthorization(
+		target, r.PostFormValue("summary"), SecretWriteSource{RemoteAddress: remoteIP(r)},
+	)
+	if err != nil {
+		h.renderError(w, r, http.StatusInternalServerError, "确认授权失败", "确认授权失败，请稍后重试。")
+		return
+	}
+	if conflict != nil {
+		h.renderSecretPreviewPage(w, r, http.StatusConflict, conflict.Latest, target,
+			safeSecretReturnPath(r.PostFormValue("return_to")),
+			"机密项授权状态已被其他入口修改，请核对最新预览后再确认。")
+		return
+	}
+	notice := "没有变化，未写入数据或审计。"
+	if result.Applied {
+		notice = "已保存授权变更。"
+	}
+	h.renderSecretPreviewPage(w, r, http.StatusOK, result.Preview, target,
+		safeSecretReturnPath(r.PostFormValue("return_to")), notice)
+}
+
+func (h *handler) renderSecretPreview(w http.ResponseWriter, r *http.Request, target []SecretAuthorizationCell, returnTo, notice string) {
+	preview, err := h.cfg.SecretsWriter.PreviewAuthorization(target)
+	if err != nil {
+		h.renderError(w, r, http.StatusBadRequest, "生成授权预览失败", err.Error())
+		return
+	}
+	h.renderSecretPreviewPage(w, r, http.StatusOK, preview, target, returnTo, notice)
+}
+
+func (h *handler) renderSecretPreviewPage(
+	w http.ResponseWriter, r *http.Request, status int, preview SecretAuthorizationPreview,
+	target []SecretAuthorizationCell, returnTo, notice string,
+) {
+	h.renderPage(w, r, status, "secret-authorization-preview.tmpl", pageData{
+		Title: "机密项授权预览", SecretAuthorizationPreview: preview,
+		SecretAuthorizationTargets: target, SecretAuthorizationReturnTo: returnTo,
+		SecretAuthorizationNotice: notice,
+	})
+}
+
+func secretTargetFromCells(r *http.Request) []SecretAuthorizationCell {
+	secretIDs := r.PostForm["secret_id"]
+	serverIDs := r.PostForm["server_id"]
+	cells := make([]SecretAuthorizationCell, 0, len(secretIDs)*len(serverIDs))
+	for _, secretID := range secretIDs {
+		for _, serverID := range serverIDs {
+			cells = append(cells, SecretAuthorizationCell{
+				SecretID: secretID, ServerID: serverID,
+				Allow: r.PostFormValue(secretCellName(secretID, serverID)) == "1",
+			})
+		}
+	}
+	return cells
+}
+
+func secretCellName(secretID, serverID string) string {
+	return "cell__" + secretID + "__" + serverID
+}
+
+func encodeSecretTarget(cell SecretAuthorizationCell) string {
+	allow := "0"
+	if cell.Allow {
+		allow = "1"
+	}
+	return cell.SecretID + " " + cell.ServerID + " " + allow
+}
+
+func parseSecretTargets(values []string) ([]SecretAuthorizationCell, error) {
+	cells := make([]SecretAuthorizationCell, 0, len(values))
+	for _, value := range values {
+		parts := strings.Split(value, " ")
+		if len(parts) != 3 || (parts[2] != "0" && parts[2] != "1") || parts[0] == "" || parts[1] == "" {
+			return nil, errors.New("授权目标格式不正确")
+		}
+		cells = append(cells, SecretAuthorizationCell{
+			SecretID: parts[0], ServerID: parts[1], Allow: parts[2] == "1",
+		})
+	}
+	return cells, nil
+}
+
+func safeSecretReturnPath(path string) string {
+	if strings.HasPrefix(path, "/ui/") && !strings.HasPrefix(path, "//") {
+		return path
+	}
+	return secretsMatrixPath
 }
 
 func (h *handler) handleSecretDetailRoutes(w http.ResponseWriter, r *http.Request) {

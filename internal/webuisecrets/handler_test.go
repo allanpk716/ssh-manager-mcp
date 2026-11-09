@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -121,6 +122,26 @@ func csrfToken(t *testing.T, h sessionHandler) string {
 		t.Fatalf("页面令牌格式不正确：\n%s", page)
 	}
 	return page[start : start+end]
+}
+
+func hiddenValue(t *testing.T, page, name string) string {
+	t.Helper()
+	values := hiddenValues(t, page, name)
+	if len(values) != 1 {
+		t.Fatalf("页面应恰好有一个 %q 隐藏值，实际 %v：\n%s", name, values, page)
+	}
+	return values[0]
+}
+
+func hiddenValues(t *testing.T, page, name string) []string {
+	t.Helper()
+	pattern := regexp.MustCompile(`<input type="hidden" name="` + regexp.QuoteMeta(name) + `" value="([^"]*)"`)
+	matches := pattern.FindAllStringSubmatch(page, -1)
+	values := make([]string, 0, len(matches))
+	for _, match := range matches {
+		values = append(values, match[1])
+	}
+	return values
 }
 
 func TestSecretsPageListsFiltersAndNeverShowsValue(t *testing.T) {
@@ -314,5 +335,144 @@ func TestSecretDetailSupportsEditValueAndDelete(t *testing.T) {
 	views, err = manager.List(secretmanage.ListFilter{})
 	if err != nil || len(views) != 0 {
 		t.Fatalf("删除后的 vault 状态不正确：%v %+v", err, views)
+	}
+}
+
+func TestSecretAuthorizationMatrixPreviewsConfirmsAndDetectsConflict(t *testing.T) {
+	st := newIntegrationStore(t)
+	webID := mustServer(t, st, "web-1")
+	dbID := mustServer(t, st, "db-1")
+	manager := secretmanage.New(st)
+	if err := manager.AddSecret("WEB_TOKEN", "网站", "", []byte("web-secret-value"), secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AddSecret("DB_TOKEN", "数据库", "", []byte("db-secret-value"), secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AllowSecrets([]string{"WEB_TOKEN"}, []string{"web-1"}, secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	views, err := manager.List(secretmanage.ListFilter{})
+	if err != nil || len(views) != 2 {
+		t.Fatalf("准备机密项失败：%v %+v", err, views)
+	}
+	secretIDs := map[string]string{}
+	for _, view := range views {
+		secretIDs[view.Name] = view.ID
+	}
+	h := newIntegrationHandler(t, st)
+
+	matrix := h.do(http.MethodGet, "/ui/secrets/matrix", nil)
+	matrixBody := body(t, matrix)
+	if matrix.StatusCode != http.StatusOK {
+		t.Fatalf("授权矩阵状态码 = %d：\n%s", matrix.StatusCode, matrixBody)
+	}
+	for _, want := range []string{"WEB_TOKEN", "DB_TOKEN", "web-1", "db-1", "预览授权变更", "secrets-matrix."} {
+		if !strings.Contains(matrixBody, want) {
+			t.Fatalf("授权矩阵缺少 %q：\n%s", want, matrixBody)
+		}
+	}
+	if !regexp.MustCompile(`name="cell__` + regexp.QuoteMeta(secretIDs["WEB_TOKEN"]) + `__` + regexp.QuoteMeta(webID) + `" value="1" checked`).MatchString(matrixBody) {
+		t.Fatalf("授权矩阵应显示当前授权：\n%s", matrixBody)
+	}
+
+	previewForm := url.Values{
+		"csrf_token": {csrfToken(t, h)},
+		"secret_id":  {secretIDs["WEB_TOKEN"], secretIDs["DB_TOKEN"]},
+		"server_id":  {webID, dbID},
+	}
+	previewForm.Set("cell__"+secretIDs["WEB_TOKEN"]+"__"+webID, "1")
+	previewForm.Set("cell__"+secretIDs["WEB_TOKEN"]+"__"+dbID, "1")
+	previewForm.Set("cell__"+secretIDs["DB_TOKEN"]+"__"+webID, "1")
+	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", previewForm)
+	previewBody := body(t, preview)
+	if preview.StatusCode != http.StatusOK {
+		t.Fatalf("授权预览状态码 = %d：\n%s", preview.StatusCode, previewBody)
+	}
+	for _, want := range []string{"新增 2", "移除 0", "WEB_TOKEN", "db-1", "DB_TOKEN", "web-1", `name="summary"`} {
+		if !strings.Contains(previewBody, want) {
+			t.Fatalf("授权预览缺少 %q：\n%s", want, previewBody)
+		}
+	}
+	summary := hiddenValue(t, previewBody, "summary")
+	targets := hiddenValues(t, previewBody, "target")
+	if len(targets) != 4 || strings.Contains(previewBody, "web-secret-value") || strings.Contains(previewBody, "db-secret-value") {
+		t.Fatalf("授权预览目标或值泄露处理不正确：%v\n%s", targets, previewBody)
+	}
+
+	if err := manager.AllowSecrets([]string{"WEB_TOKEN"}, []string{"db-1"}, secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	confirmForm := url.Values{"csrf_token": {csrfToken(t, h)}, "summary": {summary}, "return_to": {"/ui/secrets/matrix"}}
+	for _, target := range targets {
+		confirmForm.Add("target", target)
+	}
+	conflict := h.do(http.MethodPost, "/ui/secrets/authorization/confirm", confirmForm)
+	conflictBody := body(t, conflict)
+	if conflict.StatusCode != http.StatusConflict || !strings.Contains(conflictBody, "授权状态已被其他入口修改") ||
+		!strings.Contains(conflictBody, "DB_TOKEN") || !strings.Contains(conflictBody, "web-1") {
+		t.Fatalf("并发修改应返回 409 并显示最新预览，状态码=%d：\n%s", conflict.StatusCode, conflictBody)
+	}
+	latestSummary := hiddenValue(t, conflictBody, "summary")
+	confirmForm.Set("summary", latestSummary)
+	confirmed := h.do(http.MethodPost, "/ui/secrets/authorization/confirm", confirmForm)
+	confirmedBody := body(t, confirmed)
+	if confirmed.StatusCode != http.StatusOK || !strings.Contains(confirmedBody, "已保存授权变更") {
+		t.Fatalf("最新摘要确认应显示结果，状态码=%d：\n%s", confirmed.StatusCode, confirmedBody)
+	}
+
+	views, err = manager.List(secretmanage.ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range views {
+		if view.Name == "WEB_TOKEN" && strings.Join(view.AllowedServers, ",") != "db-1,web-1" {
+			t.Fatalf("WEB_TOKEN 最终授权不正确：%+v", view)
+		}
+		if view.Name == "DB_TOKEN" && strings.Join(view.AllowedServers, ",") != "web-1" {
+			t.Fatalf("DB_TOKEN 最终授权不正确：%+v", view)
+		}
+	}
+}
+
+func TestSecretAuthorizationScopeCoversOnlyVisibleMatrixAndDetailCells(t *testing.T) {
+	st := newIntegrationStore(t)
+	webID := mustServer(t, st, "web-1")
+	dbID := mustServer(t, st, "db-1")
+	manager := secretmanage.New(st)
+	if err := manager.AddSecret("API_TOKEN", "", "", []byte("api-secret-value"), secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	views, err := manager.List(secretmanage.ListFilter{})
+	if err != nil || len(views) != 1 {
+		t.Fatalf("准备机密项失败：%v %+v", err, views)
+	}
+	secretID := views[0].ID
+	h := newIntegrationHandler(t, st)
+
+	filtered := h.do(http.MethodGet, "/ui/secrets/matrix?server=db-1", nil)
+	filteredBody := body(t, filtered)
+	if filtered.StatusCode != http.StatusOK {
+		t.Fatalf("筛选后的矩阵状态码 = %d：\n%s", filtered.StatusCode, filteredBody)
+	}
+	if strings.Contains(filteredBody, `name="server_id" value="`+webID+`"`) ||
+		!strings.Contains(filteredBody, `name="server_id" value="`+dbID+`"`) {
+		t.Fatalf("矩阵筛选后只应提交可见服务器列：\n%s", filteredBody)
+	}
+
+	detail := h.do(http.MethodGet, "/ui/secrets/"+secretID, nil)
+	detailBody := body(t, detail)
+	if !strings.Contains(detailBody, "可写入服务器勾选清单") ||
+		!strings.Contains(detailBody, `name="cell__`+secretID+`__`+dbID+`"`) {
+		t.Fatalf("详情页应有单个机密项的勾选清单：\n%s", detailBody)
+	}
+	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", url.Values{
+		"csrf_token": {csrfToken(t, h)}, "return_to": {"/ui/secrets/" + secretID},
+		"secret_id": {secretID}, "server_id": {webID, dbID},
+		"cell__" + secretID + "__" + webID: {"1"}, "cell__" + secretID + "__" + dbID: {"1"},
+	})
+	previewBody := body(t, preview)
+	if preview.StatusCode != http.StatusOK || !strings.Contains(previewBody, "新增 2") {
+		t.Fatalf("单个机密项勾选清单应能预览授权，状态码=%d：\n%s", preview.StatusCode, previewBody)
 	}
 }
