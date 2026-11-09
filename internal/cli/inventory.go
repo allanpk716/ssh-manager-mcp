@@ -38,6 +38,10 @@ func newInventoryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inventory",
 		Short: "Manage and query the software inventory",
+		Long: `管理与查询软件清单。写命令只在权威端与单机可用；查看（view）与搜索
+（search）在客户端上经设备码在线查询权威端，不会读取本地缓存数据。
+
+退出码：0 成功；1 一般错误；4 权威端不可达（仅客户端的查看与搜索）。`,
 	}
 	cmd.AddCommand(
 		inventoryAddCmd(), inventoryEditCmd(), inventoryRmCmd(),
@@ -215,20 +219,18 @@ func inventoryRmCmd() *cobra.Command {
 func inventoryViewCmd() *cobra.Command {
 	var jsonOutput bool
 	var allSystemPackages bool
+	var instance string
 	c := &cobra.Command{
 		Use:   "view DEVICE [--all-system-packages] [--json]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Show one device's software inventory by category",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := requireInventoryVault()
+			source, err := openInventoryQuerySource(instance)
 			if err != nil {
 				return err
 			}
-			defer s.Close()
-			inventory, err := softwareinventory.New(s).ViewDevice(
-				args[0], softwareinventory.AllDevicesVisible(), softwareinventory.DeviceViewOptions{
-					IncludeSystemPackages: allSystemPackages,
-				})
+			defer source.Close()
+			inventory, err := source.ViewDevice(args[0], allSystemPackages)
 			if err != nil {
 				return err
 			}
@@ -239,6 +241,7 @@ func inventoryViewCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&instance, "instance", "", "客户端的命名缓存实例（默认槽省略；与 SSHMGR_CACHE_DIR 互斥）")
 	c.Flags().BoolVar(&allSystemPackages, "all-system-packages", false, "列出全部系统包；默认只显示数量")
 	c.Flags().BoolVar(&jsonOutput, "json", false, "以 JSON Lines 输出；每个类别分组一行")
 	return c
@@ -246,18 +249,18 @@ func inventoryViewCmd() *cobra.Command {
 
 func inventorySearchCmd() *cobra.Command {
 	var jsonOutput bool
+	var instance string
 	c := &cobra.Command{
 		Use:   "search NAME [--json]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Search software by name across devices",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := requireInventoryVault()
+			source, err := openInventoryQuerySource(instance)
 			if err != nil {
 				return err
 			}
-			defer s.Close()
-			results, err := softwareinventory.New(s).SearchSoftware(
-				args[0], softwareinventory.AllDevicesVisible())
+			defer source.Close()
+			results, err := source.SearchSoftware(args[0])
 			if err != nil {
 				return err
 			}
@@ -282,6 +285,7 @@ func inventorySearchCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&instance, "instance", "", "客户端的命名缓存实例（默认槽省略；与 SSHMGR_CACHE_DIR 互斥）")
 	c.Flags().BoolVar(&jsonOutput, "json", false, "以 JSON Lines 输出；每条结果一行")
 	return c
 }

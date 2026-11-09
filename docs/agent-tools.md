@@ -219,6 +219,23 @@ JSON 转义、压缩、加密等变换后的值，也不防 agent 有意绕开�
 - 后续功能的引用写法是占位符 `{{sshmgr-secret:NAME}}`。当前版本还没有提供
   机密项填值能力；不要把它理解成可以写入机密项的值。
 
+### query_software_inventory
+
+只读查询软件清单（设备上装了什么软件、版本、监听端口与暴露级别）。
+
+- 五个参数全部可选：`device`（设备名）、`name`（软件名子串，不区分大小
+  写）、`minimum_exposure`（最低暴露级别）、`category`（类别）、
+  `include_system_packages`（默认 `false`——系统包动辄几千条，不显式要求
+  就不返回）。
+- 返回按设备分组：每台设备带采集状态（采集执行者、上次成功时间、上次
+  失败时间与原因、是否不完整、是否清单过期——超过 7 天没有成功结果或从
+  未采集都算过期）与匹配的软件条目；条目带精确版本、监听端口与暴露级
+  别、来源、采集时间。
+- 可见范围跟随你的 profile：只有「这台设备上至少有一个服务器条目在你
+  的授权里」的受管设备可见；不受管设备永远不出现。
+- 客户端缓存形态上这个工具在线向权威端查询；权威端不可达时直接报错，
+  不会读本地快照数据（软件清单本来就不随快照下发）。
+
 ### exec_command
 
 在服务器上跑一条 shell 命令。
@@ -693,5 +710,6 @@ HEAD，后续重构以符号名为准）：
 | 每次工具调用全程审计（project/server/action/status/命令/耗时） | `internal/mcpserver/core.go:81-89` 等；../README.md "What the agent gets" |
 | 命令策略门在取凭据、建 SSH 连接之前（拦截 / 需确认都不建连接，拦截零字节到服务器）；判定内核是纯函数，权威端与客户端同一条代码路径，离线用最后一次拉到的规则 | `internal/mcpserver/policygate.go`（policyJudge）；`internal/mcpserver/core.go`（ExecCommandForProfile 的 gate 段）；`internal/mcpserver/bgtools.go`（后台同款门）；`internal/policy/policy.go`（Evaluate） |
 | probe_connectivity：只测 TCP 建连与耗时、只探测登记过的共同网络组合（不测兜底主机）、结果只存发起实例本地；经服务器探测执行固定命令、不经命令策略但写审计 | 规格 #142；ADR 0007（命令策略是护栏不是安全边界） |
+| query_software_inventory：按 profile 可见范围查询软件清单（含监听端口、暴露级别、来源、采集时间与设备采集状态）；客户端在线查询权威端，不可达时固定报错、不回退本地数据 | 票 #185；`internal/mcpserver/softwareinventory.go`；`internal/mcpserver/serve_softwareinventory.go`；`internal/clientops/softwareinventory_forward.go` |
 | 确认码与「服务器编号 + 命令完整文本」的哈希绑定、5 分钟有效、单次作废、进程内存不持久化；约 6 位字母数字（字母表去 0/O、1/I/L） | `internal/mcpserver/confirmcode.go`（confirmationTTL / confirmBindingKey / issue / consume / confirmationCodeAlphabet） |
 | 命令策略审计动作：前台 exec-blocked / exec-confirm-required / exec-confirmed，后台 exec-bg-blocked / exec-bg-confirm-required / exec-bg-confirmed（Status 列存命中规则编号；带码执行行的 Command 列存「命令原文 + 确认理由」JSON 摘要） | `internal/mcpserver/core.go`；`internal/mcpserver/bgtools.go`；`internal/mcpserver/confirmcode.go`（gateExecConfirmation） |

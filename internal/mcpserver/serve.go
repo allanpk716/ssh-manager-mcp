@@ -221,6 +221,13 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 			metaHandler.ServeHTTP(w, req)
 			return
 		}
+		// 票 #185：/software-inventory 同样挂在同一个设备码认证上，只读查询
+		// 权威端的软件清单。
+		softwareInventoryHandler := cacheAuth(http.HandlerFunc(r.handleSoftwareInventory))
+		if req.URL.Path == "/software-inventory" {
+			softwareInventoryHandler.ServeHTTP(w, req)
+			return
+		}
 		if strings.HasPrefix(req.URL.Path, "/pair/") {
 			r.handlePair(w, req) // unauthenticated SAS pairing surface (Plan 42 §3.3) — self-gated
 			return
