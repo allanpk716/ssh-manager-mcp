@@ -18,9 +18,9 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// newInventoryClientFixture 造一个在内存里的权威端（含一台可见设备与一条
-// 声明）和一个客户端缓存目录（cache.auth.json 指向该权威端）。返回的关
-// 闭函数用于模拟权威端停机。
+// newInventoryClientFixture 造一个在内存里的权威端（含一台可见设备、一条
+// 服务声明与一条系统包声明）和一个客户端缓存目录（cache.auth.json 指向
+// 该权威端）。返回的关闭函数用于模拟权威端停机。
 func newInventoryClientFixture(t *testing.T) (stop func()) {
 	t.Helper()
 	vaultDirectory := t.TempDir()
@@ -63,6 +63,12 @@ func newInventoryClientFixture(t *testing.T) (stop func()) {
 			Address: "0.0.0.0", Port: 80, Protocol: "tcp",
 			Exposure: softwareinventory.ExposureAllAddresses,
 		}},
+	}, softwareinventory.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := softwareinventory.New(st).AddDeclaration(softwareinventory.Declaration{
+		Device: "gpu-设备", Category: softwareinventory.CategorySystemPackage,
+		Name: "libc6", Version: "2.39-0ubuntu8",
 	}, softwareinventory.CLISource()); err != nil {
 		t.Fatal(err)
 	}
