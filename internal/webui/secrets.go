@@ -19,10 +19,12 @@ const (
 	secretsPrefix      = "/ui/secrets/"
 	secretsValueSuffix = "/value"
 
-	// secretValueLimit 是机密项值本身的上限；请求体另留少量多部分表单
-	// 开销，超过即在读入值之前拒绝。
+	// secretValueLimit 是机密项值本身的上限。请求体另留多部分表单的边界、
+	// 其他字段与文件名开销，超过即在读入值之前拒绝。解析多部分表单时的
+	// 内存阈值使用同一个请求体上限，保证文件部分永远不写磁盘临时文件。
 	secretValueLimit           = 64 * 1024
-	secretUploadMaxRequestBody = secretValueLimit + 512
+	secretUploadFormOverhead   = 16 * 1024
+	secretUploadMaxRequestBody = secretValueLimit + secretUploadFormOverhead
 )
 
 func isSecretValueUpload(r *http.Request) bool {
@@ -258,7 +260,7 @@ func secretNewResumePath(form secretFormView) string {
 
 func secretValueFromRequest(r *http.Request) ([]byte, error) {
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
-		if err := r.ParseMultipartForm(secretValueLimit); err != nil {
+		if err := r.ParseMultipartForm(secretUploadMaxRequestBody); err != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
 				return nil, errSecretUploadTooLarge

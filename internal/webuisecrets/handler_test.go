@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -812,5 +813,69 @@ func TestSecretAuthorizationScopeCoversOnlyVisibleMatrixAndDetailCells(t *testin
 	previewBody := body(t, preview)
 	if preview.StatusCode != http.StatusOK || !strings.Contains(previewBody, "新增 2") {
 		t.Fatalf("单个机密项勾选清单应能预览授权，状态码=%d：\n%s", preview.StatusCode, previewBody)
+	}
+}
+
+// TestSecretUploadExactlyAtLimitSucceedsOnNewAndValuePages 覆盖审查第 1 项：
+// 恰好 64 KiB 的合法文件应能通过新增页与换值页保存，多部分表单本身的字段
+// 与文件名开销不能挤占值的上限；超过 1 个字节仍在读取值之前拒绝。
+func TestSecretUploadExactlyAtLimitSucceedsOnNewAndValuePages(t *testing.T) {
+	st := newIntegrationStore(t)
+	h := newIntegrationHandler(t, st)
+	tempWatch := t.TempDir()
+	t.Setenv("TMPDIR", tempWatch)
+	longFileName := "very-long-machine-generated-value-file-name.bin"
+
+	added := postMultipart(h, "/ui/secrets/new", map[string]string{
+		"csrf_token": csrfToken(t, h), "name": "LIMIT_TOKEN", "note": "恰好上限",
+		"environment_name": "LIMIT_TOKEN_FILE", "value": "",
+	}, "value_file", longFileName, 64*1024)
+	addedBody := body(t, added)
+	if added.StatusCode != http.StatusSeeOther || added.Header.Get("Location") != "/ui/secrets/" {
+		t.Fatalf("新增页上传恰好 64 KiB 应成功，状态码=%d 跳转=%q 页面：\n%s", added.StatusCode, added.Header.Get("Location"), addedBody)
+	}
+	manager := secretmanage.New(st)
+	views, err := manager.List(secretmanage.ListFilter{})
+	if err != nil || len(views) != 1 {
+		t.Fatalf("读取新增后的机密项失败：%v %+v", err, views)
+	}
+	secretID := views[0].ID
+	snapshot, err := st.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Secrets) != 1 || len(snapshot.Secrets[0].Value) != 64*1024 {
+		t.Fatalf("新增后应保存完整 64 KiB 值，实际长度=%d", len(snapshot.Secrets[0].Value))
+	}
+
+	replaced := postMultipart(h, "/ui/secrets/"+secretID+"/value", map[string]string{
+		"csrf_token": csrfToken(t, h), "value": "",
+	}, "value_file", longFileName, 64*1024)
+	replacedBody := body(t, replaced)
+	if replaced.StatusCode != http.StatusSeeOther || replaced.Header.Get("Location") != "/ui/secrets/"+secretID {
+		t.Fatalf("换值页上传恰好 64 KiB 应成功，状态码=%d 跳转=%q 页面：\n%s", replaced.StatusCode, replaced.Header.Get("Location"), replacedBody)
+	}
+	snapshot, err = st.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Secrets[0].Value) != 64*1024 || len(snapshot.Secrets[0].PreviousValue) != 64*1024 {
+		t.Fatalf("换值后应保存完整 64 KiB 值，实际长度=%d/%d",
+			len(snapshot.Secrets[0].Value), len(snapshot.Secrets[0].PreviousValue))
+	}
+
+	overLimit := postMultipart(h, "/ui/secrets/"+secretID+"/value", map[string]string{
+		"csrf_token": csrfToken(t, h), "value": "",
+	}, "value_file", longFileName, 64*1024+1)
+	overLimitBody := body(t, overLimit)
+	if overLimit.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("换值页上传超过 64 KiB 应返回 413，实际 %d：\n%s", overLimit.StatusCode, overLimitBody)
+	}
+	leftovers, err := os.ReadDir(tempWatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("上传解析不得把机密项值写进磁盘临时文件：%v", leftovers)
 	}
 }

@@ -405,18 +405,10 @@ func (h *handler) writeRequestAllowed(w http.ResponseWriter, r *http.Request) bo
 	}
 	token := r.Header.Get("X-CSRF-Token")
 	if token == "" {
-		if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
-			if err := r.ParseMultipartForm(secretValueLimit); err != nil {
-				var tooLarge *http.MaxBytesError
-				if errors.As(err, &tooLarge) {
-					h.renderError(w, r, http.StatusRequestEntityTooLarge, "上传内容过大", "机密项值上传的请求体超过限制，已拒绝。")
-					return false
-				}
-			}
-		}
-		if err := r.ParseForm(); err != nil {
+		parseErr := parseFormForCSRF(r)
+		if parseErr != nil {
 			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
+			if errors.As(parseErr, &tooLarge) {
 				h.renderError(w, r, http.StatusRequestEntityTooLarge, "上传内容过大", "机密项值上传的请求体超过限制，已拒绝。")
 				return false
 			}
@@ -428,6 +420,16 @@ func (h *handler) writeRequestAllowed(w http.ResponseWriter, r *http.Request) bo
 		return false
 	}
 	return true
+}
+
+// parseFormForCSRF 解析请求体以便读取表单里的防跨站请求伪造令牌。多部分
+// 表单的内存阈值与机密项上传的请求体上限一致，保证文件部分不落临时文件；
+// 非多部分表单沿用标准解析。
+func parseFormForCSRF(r *http.Request) error {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		return r.ParseMultipartForm(secretUploadMaxRequestBody)
+	}
+	return r.ParseForm()
 }
 
 // hostAllowed 判断 Host 是否为本次监听端口对应的回环地址：127.0.0.1、
