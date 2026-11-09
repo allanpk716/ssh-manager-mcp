@@ -45,18 +45,23 @@ sshmgr --help      # 列出所有子命令
 
 ---
 
-## Step 1：解锁保险柜（`unlock`）
+## Step 1：初始化本机（单机）
 
-保险柜（一个本地加密的 SQLite 文件）需要一个 **master key** 才能读写。第一次用，跑一次 `unlock`：
+**Web UI（推荐）**：空机器直接运行 `sshmgr ui`——终端打印带一次性启动令牌的本机网址并自动打开浏览器；初始化向导选**单机** → 确认 → 创建 vault，页面显示主密钥文件位置与「请备份此文件」提醒，然后进入单机正式页面（首页有「录服务器 / 建 Profile 并授权 / 建项目并取令牌」下一步引导）。
+
+**命令行等价命令**：
 
 ```bash
-sshmgr unlock
+sshmgr init --role standalone
 ```
+
+输出包含主密钥文件位置与备份提醒。
 
 **会发生什么**：
 
-- `unlock` 生成 32 字节随机 master key，**写入固定路径的裸文件**（`master.key.plain`，0600 权限 / Windows ACL 硬化——`SYSTEM` + `Administrators` + 当前用户，移除 `Users`/`Authenticated Users`/`Everyone`）。
-- 不再有 keychain / DPAPI tier（Plan 16 删干净）。**第一次跑 `unlock` 后，常态下不用再跑**——MCP server / serve 都能直接读这个文件。
+- 初始化生成 32 字节随机 master key，**写入固定路径的裸文件**（`master.key.plain`，0600 权限 / Windows ACL 硬化——`SYSTEM` + `Administrators` + 当前用户，移除 `Users`/`Authenticated Users`/`Everyone`），再创建加密 SQLite 库并写 `role.json`（本机角色 = 单机）。
+- 不再有 keychain / DPAPI tier（Plan 16 删干净）。**初始化跑一次后，常态下不用再跑**——MCP server / serve 都能直接读这个文件。
+- `sshmgr unlock` 仍保留：它负责解析 master key 并打印 `SSHMGR_MASTERKEY_HEX`（测试 / 脚本 / 临时迁移用），不再承担首次初始化。
 - 历史升级：从 v0.2.0（keychain）或 Plan 14/15（DPAPI）升级，见 [backup-restore.md 的迁移 Runbook](./backup-restore.md)。
 
 **保险柜文件在哪？**
@@ -79,7 +84,7 @@ sshmgr unlock
 
 ## Step 2：加第一台服务器
 
-> 💡 不想背命令行？**Step 2-4（加服务器/建 profile/发 token）都可以在 TUI 主控台里完成**：`sshmgr tui`（全屏界面，凭据掩码录入、token 一次性展示——见 [README「TUI 主控台」](../README.md#tui-主控台sshmgr-tui)；概念分不清时翻 [concepts.md](./concepts.md)）。
+> 💡 不想背命令行？**Step 2-4（加服务器/建 profile/发 token）都可以在 Web UI 里完成**：`sshmgr ui` 打开页面——服务器页导入并逐台补全 SSH 配置，访问页建 Profile、授权与签发项目令牌（token 一次性展示并带复制按钮；不在 `~/.ssh/config` 里的新机器用下面的 `servers add` 命令录入）。页面走查看 [README「Web 管理界面」](../README.md#web-管理界面sshmgr-ui) 与 [web-ui-single-machine.md](./web-ui-single-machine.md)；概念分不清时翻 [concepts.md](./concepts.md)。
 
 ```bash
 sshmgr servers add \
@@ -104,7 +109,7 @@ sshmgr servers add \
 
 验证：`sshmgr servers ls` 应能看到 `gpu`。
 
-> 💡 **手上已有一份 `~/.ssh/config`？不用逐台敲。** 一条命令批量导入（TUI 主控台服务器页按 `i` 也一样）：
+> 💡 **手上已有一份 `~/.ssh/config`？不用逐台敲。** 一条命令批量导入（Web UI 服务器页「导入 SSH 配置」也一样）：
 >
 > ```bash
 > sshmgr servers import --dry-run          # 先看会发生什么（什么都不写）
@@ -125,6 +130,8 @@ sshmgr profiles grant team-a gpu          # 可一次 grant 多台：... team-a 
 预期输出分别是 `created profile team-a id=...` 和 `granted 1 server(s) to team-a`。
 
 `sshmgr profiles ls` 能看到每个 profile 里 grant 了几台 server。
+
+**Web UI 等价**：`sshmgr ui` → 「访问」→「Profile」页：表单填名称「新增」，行内「调整授权」勾选服务器保存。
 
 > **为什么要有 profile？** 它是“一组服务器”。你给某个 agent 的门禁卡（project）绑一个 profile，它就只能碰这组里的机器。多 agent 隔离靠的就是“不同 agent 绑不同 profile”。详见 [agent-access.md](./agent-access.md)。
 
@@ -147,6 +154,8 @@ Token (shown once): eyJ...（一长串）
 
 - **马上把这段记下来**（密码管理器里）。token 之后再也查不到明文（库里只存它的 hash）。
 - 如果你弄丢了，别慌：`sshmgr projects rotate my-agent` 会换发一个新 token（旧 token 立刻失效），详见 [agent-access.md](./agent-access.md)。
+
+**Web UI 等价**：`sshmgr ui` → 「访问」→「项目令牌」页：填名称、选绑定 profile，「签发」后进入 token 一次性展示页（令牌与 `.mcp.json` 片段各带「复制」按钮）。
 
 ---
 

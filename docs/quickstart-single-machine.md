@@ -27,13 +27,19 @@ sshmgr version      # 验证：打印版本号
 
 ---
 
-## Step 2 — 解锁保险柜（一次性）
+## Step 2 — 初始化本机为单机（一次性）
+
+**Web UI（推荐）**：空机器直接运行 `sshmgr ui`——终端打印一个带一次性启动令牌的本机网址并自动打开浏览器；向导里选**单机** → 确认创建 → 建好 vault 后进入正式页面。
+
+**命令行等价命令**：
 
 ```bash
-sshmgr unlock
+sshmgr init --role standalone
+# 输出主密钥文件位置（Win C:\ProgramData\ssh-manager\master.key.plain /
+# Unix /var/lib/ssh-manager/，权限 0600 + ACL 硬化）与备份提醒
 ```
 
-生成 master key，写入固定路径裸文件（Win `C:\ProgramData\ssh-manager\master.key.plain` / Unix `/var/lib/ssh-manager/`，权限 0600 + ACL 硬化）。**跑一次即可**，之后不用再跑。
+**跑一次即可**，之后不用再跑。
 
 > 这是 **L1+ 威胁模型**：防同机非特权进程读，**不**防 admin/root 或离线拷盘。适用于单用户、机器可信的部署。详见 [`threat-model.md`](./threat-model.md)。
 
@@ -41,7 +47,7 @@ sshmgr unlock
 
 ## Step 3 — 录入一台服务器
 
-> 💡 Step 3-4 也可在 TUI 主控台里点点点完成：`sshmgr tui`（全键盘点选教程见 [tui-single-machine.md](./tui-single-machine.md)）。
+> 💡 Step 3-4 也可在 Web UI 里完成：`sshmgr ui` 打开单机页面，服务器页「导入 SSH 配置」、访问页建 Profile 与项目令牌（浏览器操作走查见 [web-ui-single-machine.md](./web-ui-single-machine.md)）。
 
 ```bash
 sshmgr servers add --name gpu \
@@ -97,7 +103,7 @@ sshmgr ssh gpu nvidia-smi         # 直接跑一条命令（不带命令会显�
 
 ## 常用维护命令
 
-日常管理推荐直接开 TUI 主控台 `sshmgr tui`（增删改查/授权/发码全键盘完成）；命令行 equivalents：
+日常管理推荐运行 `sshmgr ui` 打开 Web 页面（增删改查 / 授权 / 发码浏览器完成，每步页面与命令行等价）；命令行等价命令：
 
 ```bash
 sshmgr servers edit gpu --hardware "8x A100"   # 改服务器信息（id/profile 绑定不变）
@@ -115,5 +121,5 @@ sshmgr lock                                    # 锁回（删内存里的 key；
 - 服务器增删改查 → [`managing-servers.md`](./managing-servers.md)
 - token 生命周期（轮换 / 吊销）→ [`agent-access.md`](./agent-access.md)
 - 应用场景示例 → [`scenarios.md`](./scenarios.md)
-- TUI 全程点选教程 → [`tui-single-machine.md`](./tui-single-machine.md)；把 [agent-tools.md](./agent-tools.md) 的规则模板贴进 CLAUDE.md，agent 会更守规矩
+- Web UI 全程操作教程 → [`web-ui-single-machine.md`](./web-ui-single-machine.md)；把 [agent-tools.md](./agent-tools.md) 的规则模板贴进 CLAUDE.md，agent 会更守规矩
 - **多台机器共用一份 vault** → [`quickstart-multi-machine.md`](./quickstart-multi-machine.md)
