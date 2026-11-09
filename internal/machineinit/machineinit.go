@@ -90,6 +90,32 @@ func Initialize(target roles.Role) (Result, error) {
 	return result, nil
 }
 
+// SelectRoleWithoutVault 只写入向导第一步选出的角色，不创建 vault：
+// setup_complete 保持为假，供中途退出后的下一次 `sshmgr ui` 从「建 vault」
+// 这一步续做。客户端入网走命令行配对，不调用这个入口。
+func SelectRoleWithoutVault(target roles.Role) error {
+	switch target {
+	case roles.RoleStandalone, roles.RoleServer:
+	default:
+		return fmt.Errorf("向导只支持选择单机（standalone）或权威端（server），不支持 %q", string(target))
+	}
+	state, err := roles.Load()
+	if err != nil {
+		return err
+	}
+	current, err := currentRole(state)
+	if err != nil {
+		return err
+	}
+	if current == roles.RoleClient || roles.CachePresent() {
+		return errors.New("本机是客户端，不能进入单机或权威端初始化向导；如需重建，先运行 `sshmgr clear` 清除本机客户端数据")
+	}
+	if roles.VaultExists() {
+		return errors.New("本机已有 vault，不能再执行「只选角色」；请继续完成初始化，或运行 `sshmgr doctor` 检查")
+	}
+	return roles.Save(roles.State{Role: target, SetupComplete: false})
+}
+
 // currentRole 判定本机当前角色：role.json 存在时以它为准；不存在时沿用
 // 现有角色解析链推断（vault → serve 证书 → 客户端缓存 → 空机器），保证
 // 旧机器上的初始化与启动判定得到同一个结论。

@@ -367,3 +367,45 @@ func TestInitializeRefusesInvalidMachines(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectRoleWithoutVaultWritesIncompleteRole(t *testing.T) {
+	withMachineEnv(t)
+
+	if err := machineinit.SelectRoleWithoutVault(roles.RoleStandalone); err != nil {
+		t.Fatalf("选择单机不应失败：%v", err)
+	}
+
+	state, err := roles.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Role != roles.RoleStandalone || state.SetupComplete {
+		t.Fatalf("选单机后应写入 setup_complete 为假的 role.json：%+v", state)
+	}
+	if roles.VaultExists() {
+		t.Fatal("只选角色不应创建 vault")
+	}
+}
+
+func TestInitializeAfterSelectedRoleCompletesSetup(t *testing.T) {
+	withMachineEnv(t)
+	if err := machineinit.SelectRoleWithoutVault(roles.RoleStandalone); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := machineinit.Initialize(roles.RoleStandalone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Kind != machineinit.ResultCreated {
+		t.Fatalf("结果类型 = %v，应为新建 vault", result.Kind)
+	}
+
+	state, err := roles.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Role != roles.RoleStandalone || !state.SetupComplete {
+		t.Fatalf("建好 vault 后 setup_complete 应为真：%+v", state)
+	}
+}

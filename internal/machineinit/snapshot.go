@@ -12,6 +12,8 @@ import (
 type StateSnapshot struct {
 	// Role 是 role.json 的内容；文件不存在时为 nil。
 	Role *roles.State
+	// DetectedRole 是没有 role.json 的旧机器按现有规则推断出的角色。
+	DetectedRole roles.Role
 	// VaultExists 表示 vault 数据库文件是否存在。
 	VaultExists bool
 	// VaultOpenable 表示 vault 是否能打开；vault 不存在时为 false。
@@ -35,6 +37,11 @@ func ReadSnapshot() (StateSnapshot, error) {
 		return StateSnapshot{}, err
 	}
 	snapshot := StateSnapshot{Role: state, ClientCachePresent: roles.CachePresent()}
+	if state == nil {
+		if launch, resolveErr := roles.ResolveMode(""); resolveErr == nil {
+			snapshot.DetectedRole = launch.Role
+		}
+	}
 	snapshot.VaultExists = roles.VaultExists()
 	if snapshot.VaultExists {
 		snapshot.VaultOpenErr = roles.VaultOpenErr()
