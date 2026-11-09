@@ -1,0 +1,20 @@
+{{define "content"}}
+<section class="initialization-page">
+<h1>权威端初始化完成</h1>
+<ol class="initialization-steps">
+{{range .InitializationSteps}}
+<li class="done">{{.Label}}</li>
+{{end}}
+</ol>
+<div class="operation-result">
+<p>serve 已在运行。以下是正式 Web UI 的全部地址：</p>
+<ul>
+{{range .InitializationServeAddresses}}
+<li><a href="{{.URL}}">{{.URL}}</a>{{if .LocalOnly}}（仅本机）{{end}}</li>
+{{end}}
+</ul>
+{{if .InitializationNeedsManualListen}}<p>未找到本机存在的虚拟局域网地址；可用设置项 serve.ui_listen 指定地址。</p>{{end}}
+<p>`sshmgr ui` 即将退出。之后请从上面的地址打开正式 Web UI。</p>
+</div>
+</section>
+{{end}}

@@ -1,13 +1,17 @@
 package webui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // InitializationRole 是初始化向导里的本机角色取值。Web UI 包不导入角色解析
@@ -62,6 +66,18 @@ type ServeWebUIProbe struct {
 	Addresses         []string
 	NeedsManualListen bool
 	Running           bool
+}
+
+// InitializationCompletion 是权威端向导完成时交给命令行适配器的地址结果。
+type InitializationCompletion struct {
+	Port      int
+	Addresses []string
+}
+
+// InitializationServeAddressView 是完成页里的一条正式 Web UI 地址。
+type InitializationServeAddressView struct {
+	URL       string
+	LocalOnly bool
 }
 
 // InitializationStepView 是步骤条中的一步。
@@ -141,6 +157,7 @@ func NewInitializationWizard(cfg Config, initializer Initializer) (http.Handler,
 		h.mux.HandleFunc("/ui/init/server/password/set", h.requireSession(destination.handleServerPasswordSet))
 		h.mux.HandleFunc("/ui/init/server/install", h.requireSession(destination.handleServerInstall))
 		h.mux.HandleFunc("/ui/init/server/probe", h.requireSession(destination.handleServerProbe))
+		h.mux.HandleFunc("/ui/init/server/finish", h.requireSession(destination.handleServerFinish))
 		h.mux.HandleFunc("/ui/init/client", h.requireSession(destination.handleClientPlaceholder))
 	})
 	if err != nil {
@@ -424,6 +441,89 @@ func (w *initializationWizard) handleServerProbe(response http.ResponseWriter, r
 		return
 	}
 	http.Redirect(response, request, "/ui/init/server/finish", http.StatusSeeOther)
+}
+
+func (w *initializationWizard) handleServerFinish(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "完成页只接受 GET 请求。")
+		return
+	}
+	probe, err := w.initializer.ProbeServeWebUI()
+	if err != nil {
+		w.wizard.renderError(response, request, http.StatusServiceUnavailable, "探测 serve 失败", "探测 serve 的独立 Web UI 失败，请稍后重试。")
+		return
+	}
+	if !probe.Running {
+		http.Redirect(response, request, "/ui/init/server/install", http.StatusSeeOther)
+		return
+	}
+	addresses := orderedServeAddresses(probe.Addresses)
+	data := w.serverPageData("初始化完成")
+	for _, address := range addresses {
+		data.InitializationServeAddresses = append(data.InitializationServeAddresses, InitializationServeAddressView{
+			URL:       "https://" + net.JoinHostPort(address, strconv.Itoa(probe.Port)) + "/ui/",
+			LocalOnly: net.ParseIP(address).IsLoopback(),
+		})
+	}
+	data.InitializationNeedsManualListen = probe.NeedsManualListen
+	if !w.writeCompleteServerFinishPage(response, request, data) {
+		return
+	}
+	if w.wizard.cfg.InitializationComplete == nil && w.wizard.cfg.RequestShutdown == nil {
+		return
+	}
+	go func() {
+		time.Sleep(opsUpgradeShutdownDelay)
+		if complete := w.wizard.cfg.InitializationComplete; complete != nil {
+			complete(InitializationCompletion{Port: probe.Port, Addresses: addresses})
+		}
+		if shutdown := w.wizard.cfg.RequestShutdown; shutdown != nil {
+			shutdown()
+		}
+	}()
+}
+
+func (w *initializationWizard) writeCompleteServerFinishPage(response http.ResponseWriter, request *http.Request, data pageData) bool {
+	data.Title = "权威端初始化完成"
+	data.Assets = w.wizard.assets
+	data.Caps = w.wizard.caps
+	if session := w.wizard.currentSession(request); session != nil {
+		data.CSRFToken = session.csrf
+		data.Authenticated = true
+	}
+	parsed := w.wizard.pages["initialization-server-finish.tmpl"]
+	if parsed.full == nil {
+		w.wizard.renderError(response, request, http.StatusInternalServerError, "完成页渲染失败", "页面模板加载失败。")
+		return false
+	}
+	var body bytes.Buffer
+	if err := parsed.full.ExecuteTemplate(&body, "layout", data); err != nil {
+		w.wizard.renderError(response, request, http.StatusInternalServerError, "完成页渲染失败", "页面渲染失败。")
+		return false
+	}
+	response.Header().Set("Content-Type", "text/html; charset=utf-8")
+	response.Header().Set("Content-Length", strconv.Itoa(body.Len()))
+	response.WriteHeader(http.StatusOK)
+	if _, err := response.Write(body.Bytes()); err != nil {
+		return false
+	}
+	if flusher, ok := response.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return true
+}
+
+func orderedServeAddresses(values []string) []string {
+	out := make([]string, 0, len(values))
+	var loopback []string
+	for _, value := range values {
+		if ip := net.ParseIP(value); ip != nil && ip.IsLoopback() {
+			loopback = append(loopback, value)
+			continue
+		}
+		out = append(out, value)
+	}
+	return append(out, loopback...)
 }
 
 func (w *initializationWizard) handleClientPlaceholder(response http.ResponseWriter, request *http.Request) {

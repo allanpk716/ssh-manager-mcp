@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 type stubInitializer struct {
@@ -22,6 +23,9 @@ type stubInitializer struct {
 	passwordConfirm string
 	passwordSource  InitializationWriteSource
 	serveRunning    bool
+	serveAddresses  []string
+	servePort       int
+	needsManual     bool
 }
 
 func (s *stubInitializer) ReadSnapshot() (InitializationSnapshot, error) {
@@ -56,7 +60,10 @@ func (s *stubInitializer) SetAdminPassword(password, confirmation []byte, source
 }
 
 func (s *stubInitializer) ProbeServeWebUI() (ServeWebUIProbe, error) {
-	return ServeWebUIProbe{Known: true, Running: s.serveRunning}, nil
+	return ServeWebUIProbe{
+		Known: true, Running: s.serveRunning,
+		Addresses: s.serveAddresses, Port: s.servePort, NeedsManualListen: s.needsManual,
+	}, nil
 }
 
 func newInitializationWizardForTest(t *testing.T, initializer Initializer) (http.Handler, Startup) {
@@ -506,6 +513,75 @@ func TestInitializationWizardInstallPageRendersOperatingSystemCommand(t *testing
 			}
 		})
 	}
+}
+
+func TestInitializationWizardPollsServeAndCompletesWithOrderedAddresses(t *testing.T) {
+	completed := make(chan InitializationCompletion, 1)
+	shutdown := make(chan struct{}, 1)
+	initializer := &stubInitializer{
+		serveAddresses: []string{"127.0.0.1", "192.0.2.10"},
+		servePort:      7879,
+	}
+	handler, startup := newInitializationWizardForTestWithConfig(t, initializer, func(config *Config) {
+		config.InitializationComplete = func(completion InitializationCompletion) {
+			completed <- completion
+		}
+		config.RequestShutdown = func() { shutdown <- struct{}{} }
+	})
+	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := start.Cookies()[0]
+	start.Body.Close()
+
+	waiting := wizardProbe(t, handler, cookie, false)
+	waiting.Body.Close()
+	if waiting.StatusCode != http.StatusNoContent {
+		t.Fatalf("serve 未运行时轮询应保持页面，状态码=%d", waiting.StatusCode)
+	}
+
+	initializer.serveRunning = true
+	detected := wizardProbe(t, handler, cookie, true)
+	detected.Body.Close()
+	if detected.StatusCode != http.StatusOK || detected.Header.Get("HX-Redirect") != "/ui/init/server/finish" {
+		t.Fatalf("轮询发现 serve 后应进入完成页，状态码=%d 跳转=%q", detected.StatusCode, detected.Header.Get("HX-Redirect"))
+	}
+
+	finishPage := wizardPage(t, handler, cookie, "/ui/init/server/finish")
+	if strings.Index(finishPage, "https://192.0.2.10:7879/ui/") > strings.Index(finishPage, "https://127.0.0.1:7879/ui/") {
+		t.Fatalf("虚拟局域网地址应排在回环地址前：\n%s", finishPage)
+	}
+	if !strings.Contains(finishPage, "https://127.0.0.1:7879/ui/") || !strings.Contains(finishPage, "仅本机") {
+		t.Fatalf("完成页应列出回环地址并注明仅本机：\n%s", finishPage)
+	}
+
+	select {
+	case completion := <-completed:
+		if completion.Port != 7879 ||
+			len(completion.Addresses) != 2 ||
+			completion.Addresses[0] != "192.0.2.10" ||
+			completion.Addresses[1] != "127.0.0.1" {
+			t.Fatalf("完成事件地址排序错误：%+v", completion)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("完成页写完后应通知初始化完成")
+	}
+	select {
+	case <-shutdown:
+	case <-time.After(2 * time.Second):
+		t.Fatal("完成页写完后应触发优雅退出")
+	}
+}
+
+func wizardProbe(t *testing.T, handler http.Handler, cookie *http.Cookie, htmxRequest bool) *http.Response {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/ui/init/server/probe", nil)
+	request.Host = "127.0.0.1:18080"
+	request.AddCookie(cookie)
+	if htmxRequest {
+		request.Header.Set("HX-Request", "true")
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	return recorder.Result()
 }
 
 func TestInitializationWizardServerSetsAdminPasswordWithCommandLineRules(t *testing.T) {

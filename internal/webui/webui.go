@@ -110,6 +110,9 @@ type Config struct {
 	// 权威端向导的安装页；命令行适配器注入当前操作系统与可执行文件绝对路径。
 	InitializationOperatingSystem string
 	InitializationExecutablePath  string
+	// InitializationComplete 在权威端初始化完成页完整写给浏览器后触发；
+	// 命令行适配器用它打印正式地址并注入优雅退出。
+	InitializationComplete func(InitializationCompletion)
 	// ServiceRestart 是权威端显式注入的服务重启能力；不注入时不注册重启
 	// 路由，也不显示重启表单。
 	ServiceRestart OpsRestartStore
