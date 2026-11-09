@@ -52,7 +52,7 @@ func (m *Manager) CollectForScope(
 		service = &Service{Store: m.st, Now: m.Now}
 	}
 	report, err := service.Collect(ctx, CollectRequest{
-		DeviceName: deviceName, Source: source.origin,
+		DeviceName: deviceName, Source: source,
 	})
 	if err != nil {
 		return nil, err
