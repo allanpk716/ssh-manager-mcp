@@ -2,7 +2,9 @@ package webui
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -133,6 +135,8 @@ func (h *handler) handleSoftwareInventory(w http.ResponseWriter, r *http.Request
 	switch r.URL.Path {
 	case "/ui/software-inventory/":
 		h.handleSoftwareInventoryRoot(w, r)
+	case "/ui/software-inventory/devices":
+		h.handleSoftwareInventoryDevice(w, r)
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}
@@ -152,4 +156,36 @@ func (h *handler) handleSoftwareInventoryRoot(w http.ResponseWriter, r *http.Req
 	h.renderPage(w, r, http.StatusOK, "softwareinventory.tmpl", pageData{
 		Title: "软件清单", SoftwareInventoryDevices: devices,
 	})
+}
+
+// handleSoftwareInventoryDevice 渲染一台设备的软件清单、采集状态与变化
+// 历史。
+func (h *handler) handleSoftwareInventoryDevice(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "设备软件清单页只接受 GET 请求。")
+		return
+	}
+	deviceName := strings.TrimSpace(r.URL.Query().Get("device"))
+	if deviceName == "" {
+		http.Redirect(w, r, "/ui/software-inventory/", http.StatusSeeOther)
+		return
+	}
+	device, err := h.cfg.SoftwareInventory.SoftwareInventoryDevice(deviceName)
+	if err != nil {
+		var missing *SoftwareInventoryDeviceNotFoundError
+		if errors.As(err, &missing) {
+			h.renderError(w, r, http.StatusNotFound, "设备不存在", missing.Error())
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "读取设备软件清单失败", "读取设备软件清单失败，请稍后重试。")
+		return
+	}
+	data := pageData{Title: device.Name + " · 软件清单", SoftwareInventoryDevice: device}
+	switch r.URL.Query().Get("collect") {
+	case "done":
+		data.SoftwareInventoryNotice = "已采集完成。"
+	case "requested":
+		data.SoftwareInventoryNotice = "已请求，等待客户端执行。"
+	}
+	h.renderPage(w, r, http.StatusOK, "softwareinventory-device.tmpl", data)
 }
