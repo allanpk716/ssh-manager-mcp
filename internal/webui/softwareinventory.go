@@ -110,12 +110,52 @@ type SoftwareInventoryCollectionResult struct {
 	Requested bool
 }
 
+// SoftwareInventoryFormError 表示软件清单表单提交内容校验失败，Message 可
+// 直接展示给 owner。
+type SoftwareInventoryFormError struct {
+	Message string
+}
+
+func (e *SoftwareInventoryFormError) Error() string { return e.Message }
+
 // SoftwareInventorySource 是软件清单页读取与立即采集的唯一入口。单机与
 // 权威端由软件清单领域模块适配；客户端不提供。
 type SoftwareInventorySource interface {
 	SoftwareInventoryDevices() ([]SoftwareInventoryDeviceSummary, error)
 	SoftwareInventoryDevice(deviceName string) (*SoftwareInventoryDevice, error)
 	SearchSoftwareInventory(namePart string) ([]SoftwareInventorySearchRow, error)
+	SoftwareInventoryTodos() (SoftwareInventoryTodos, error)
+	SoftwareInventoryDeclaration(id string) (*SoftwareInventoryDeclaration, error)
+	SoftwareInventoryDeclarations() ([]SoftwareInventoryDeclaration, error)
+	AddSoftwareInventoryDeclaration(
+		form SoftwareInventoryDeclarationForm,
+		source SoftwareInventoryWriteSource,
+	) (string, error)
+	EditSoftwareInventoryDeclaration(
+		id string,
+		form SoftwareInventoryDeclarationForm,
+		source SoftwareInventoryWriteSource,
+	) error
+	ClaimSoftwareInventoryDeclaration(
+		id, observedStableKey string,
+		source SoftwareInventoryWriteSource,
+	) error
+	DeleteSoftwareInventoryDeclaration(id string, source SoftwareInventoryWriteSource) error
+	SoftwareInventoryDrafts() ([]SoftwareInventoryDraft, error)
+	ConfirmSoftwareInventoryDraft(
+		id string,
+		form *SoftwareInventoryDeclarationForm,
+		source SoftwareInventoryWriteSource,
+	) error
+	RejectSoftwareInventoryDraft(id string, source SoftwareInventoryWriteSource) error
+	SoftwareInventorySettings() (SoftwareInventorySettings, error)
+	SetSoftwareInventoryCollector(
+		form SoftwareInventoryCollectorForm,
+		source SoftwareInventoryWriteSource,
+	) error
+	SetSoftwareInventorySudo(
+		server string, enabled bool, source SoftwareInventoryWriteSource,
+	) error
 	RequestSoftwareInventoryCollection(
 		ctx context.Context,
 		deviceName string,
@@ -143,6 +183,28 @@ func (h *handler) handleSoftwareInventory(w http.ResponseWriter, r *http.Request
 		h.handleSoftwareInventorySearch(w, r)
 	case "/ui/software-inventory/collect":
 		h.handleSoftwareInventoryCollect(w, r)
+	case "/ui/software-inventory/todos":
+		h.handleSoftwareInventoryTodos(w, r)
+	case "/ui/software-inventory/declarations/new":
+		h.handleSoftwareInventoryDeclarationNew(w, r)
+	case "/ui/software-inventory/declarations":
+		h.handleSoftwareInventoryDeclarations(w, r)
+	case "/ui/software-inventory/declarations/edit":
+		h.handleSoftwareInventoryDeclarationEdit(w, r)
+	case "/ui/software-inventory/declarations/delete":
+		h.handleSoftwareInventoryDeclarationDelete(w, r)
+	case "/ui/software-inventory/drafts":
+		h.handleSoftwareInventoryDrafts(w, r)
+	case "/ui/software-inventory/drafts/confirm":
+		h.handleSoftwareInventoryDraftConfirm(w, r)
+	case "/ui/software-inventory/drafts/reject":
+		h.handleSoftwareInventoryDraftReject(w, r)
+	case "/ui/software-inventory/settings":
+		h.handleSoftwareInventorySettings(w, r)
+	case "/ui/software-inventory/settings/collector":
+		h.handleSoftwareInventoryCollector(w, r)
+	case "/ui/software-inventory/settings/sudo":
+		h.handleSoftwareInventorySudo(w, r)
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}

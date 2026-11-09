@@ -1,0 +1,45 @@
+{{define "content"}}
+<section class="software-inventory">
+<h1>软件清单采集设置</h1>
+{{if .SoftwareInventoryNotice}}<p class="form-success">{{.SoftwareInventoryNotice}}</p>{{end}}
+{{if .SoftwareInventoryResumeNotice}}<p class="form-success">{{.SoftwareInventoryResumeNotice}}</p>{{end}}
+
+<h2>采集执行者</h2>
+<table>
+<thead><tr><th scope="col">设备</th><th scope="col">当前采集状态</th></tr></thead>
+<tbody>{{range .SoftwareInventorySettings.Devices}}<tr><td>{{.Name}}</td><td>{{template "softwareInventoryStatus" .Status}}</td></tr>{{else}}<tr><td colspan="2">暂无设备。</td></tr>{{end}}</tbody>
+</table>
+{{if .SoftwareInventoryCollectorForm.Error}}<div class="operation-refusal">{{.SoftwareInventoryCollectorForm.Error}}</div>{{end}}
+<form method="post" action="/ui/software-inventory/settings/collector">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<div class="form-field"><label for="collector-device">设备</label><input id="collector-device" name="device" value="{{.SoftwareInventoryCollectorForm.Device}}" required></div>
+<div class="form-field"><label for="collector-client">客户端实例的设备码名</label>
+<input id="collector-client" name="collector" value="{{.SoftwareInventoryCollectorForm.Collector}}" list="software-inventory-clients" required>
+<datalist id="software-inventory-clients">{{range .SoftwareInventorySettings.ClientInstances}}<option value="{{.Name}}">{{.Name}}（profile：{{.ProfileName}}）</option>{{end}}</datalist></div>
+<div class="form-field"><label for="collector-entry">采集用服务器条目（可选）</label><input id="collector-entry" name="server_entry" value="{{.SoftwareInventoryCollectorForm.ServerEntry}}"></div>
+<p class="form-help">登记前校验设备码有效，以及它绑定的 profile 包含采集用服务器条目。</p>
+<button type="submit">登记采集执行者</button>
+</form>
+
+<h2>sudo 采集开关</h2>
+<table>
+<thead><tr><th scope="col">设备</th><th scope="col">服务器条目</th><th scope="col">当前状态</th></tr></thead>
+<tbody>{{range .SoftwareInventorySettings.Servers}}<tr><td>{{.DeviceName}}</td><td>{{.Name}}</td><td>{{if .SudoEnabled}}已打开{{else}}已关闭{{end}}</td></tr>{{else}}<tr><td colspan="3">暂无服务器条目。</td></tr>{{end}}</tbody>
+</table>
+<form method="post" action="/ui/software-inventory/settings/sudo">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<div class="form-field"><label for="sudo-entry">服务器条目</label>
+<select id="sudo-entry" name="server_entry">
+{{range .SoftwareInventorySettings.Servers}}<option value="{{.Name}}"{{if eq $.SoftwareInventorySudoServer .Name}} selected{{end}}>{{.DeviceName}} · {{.Name}}</option>{{end}}
+</select></div>
+<div class="form-field"><label for="sudo-enabled">允许用 sudo 采集</label>
+<input type="checkbox" id="sudo-enabled" name="sudo_enabled" value="1"{{if .SoftwareInventorySudoEnabled}} checked{{end}}></div>
+<p class="form-help">打开需要最近 5 分钟内重新验证管理员口令；关闭不需要。打开后复用该条目已有的 sudo 凭据。</p>
+<button type="submit">保存 sudo 采集开关</button>
+</form>
+</section>
+{{end}}
+
+{{define "softwareInventoryStatus"}}
+{{if .Managed}}{{.CollectorLabel}}{{else}}不受管设备，没有采集执行者{{end}}；上次成功 {{formatOptionalTime .LastSuccessAt}}；上次失败 {{formatOptionalTime .LastFailureAt}}{{if .LastFailureReason}}（{{.LastFailureReason}}）{{end}}；{{if .Stale}}清单已过期{{else}}清单未过期{{end}}
+{{end}}

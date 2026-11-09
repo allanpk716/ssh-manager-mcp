@@ -1,0 +1,46 @@
+{{define "content"}}
+<section class="software-inventory">
+<h1>软件清单待办</h1>
+{{if .SoftwareInventoryNotice}}<p class="form-success">{{.SoftwareInventoryNotice}}</p>{{end}}
+
+<h2>待确认暴露</h2>
+<table>
+<thead><tr><th scope="col">设备</th><th scope="col">监听端口与实测暴露级别</th><th scope="col">处理</th></tr></thead>
+<tbody>
+{{range .SoftwareInventoryTodos.PendingExposure}}
+{{$device := .}}
+<tr><td>{{.DeviceName}}</td><td>{{range .Ports}}<div>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}</div>{{end}}</td>
+<td>{{range .Ports}}<a href="{{declarationFormPath $device.DeviceName .ObservedStableKey .Address .Port .Protocol "all_addresses"}}">进入声明表单</a>{{end}}</td></tr>
+{{else}}<tr><td colspan="3">没有。</td></tr>{{end}}
+</tbody>
+</table>
+
+<h2>未识别进程</h2>
+<table>
+<thead><tr><th scope="col">设备</th><th scope="col">进程</th><th scope="col">监听端口</th><th scope="col">处理</th></tr></thead>
+<tbody>
+{{range .SoftwareInventoryTodos.UnidentifiedProcesses}}
+{{$process := .}}
+<tr><td>{{.DeviceName}}</td><td>{{if .ProcessName}}{{.ProcessName}}{{else}}{{.Name}}{{end}}<div>{{.ExecutablePath}}</div></td>
+<td>{{range .ListeningPorts}}{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}{{end}}</td>
+<td>{{range .ListeningPorts}}<a href="{{declarationFormPath $process.DeviceName $process.ObservedStableKey .Address .Port .Protocol "all_addresses"}}">认领</a>{{end}}</td></tr>
+{{else}}<tr><td colspan="4">没有。</td></tr>{{end}}
+</tbody>
+</table>
+
+<h2>对不上与清单过期</h2>
+<table>
+<thead><tr><th scope="col">类型</th><th scope="col">设备</th><th scope="col">内容</th><th scope="col">处理</th></tr></thead>
+<tbody>
+{{range .SoftwareInventoryTodos.Mismatches}}
+<tr><td>对不上</td><td>{{.DeviceName}}</td><td>{{.Name}}（{{.Reason}}）</td>
+<td><a href="/ui/software-inventory/declarations/edit?id={{.DeclarationID | urlquery}}">修改声明</a></td></tr>
+{{end}}
+{{range .SoftwareInventoryTodos.StaleDevices}}
+<tr><td>清单过期</td><td>{{.DeviceName}}</td><td>{{if .NeverCollected}}从未成功采集{{else}}上次成功采集 {{formatOptionalTime .LastSuccessAt}}{{end}}</td>
+<td><a href="/ui/software-inventory/devices?device={{.DeviceName | urlquery}}">查看设备清单</a></td></tr>
+{{else}}{{if not .SoftwareInventoryTodos.Mismatches}}<tr><td colspan="4">没有。</td></tr>{{end}}{{end}}
+</tbody>
+</table>
+</section>
+{{end}}

@@ -1,0 +1,47 @@
+{{define "content"}}
+<section class="software-inventory">
+<h1>声明草稿审阅</h1>
+{{if .SoftwareInventoryNotice}}<p class="form-success">{{.SoftwareInventoryNotice}}</p>{{end}}
+{{range .SoftwareInventoryDrafts}}
+<article class="draft-card">
+<h2>{{.Device}} · {{.Name}}</h2>
+<dl class="draft-summary">
+<dt>类别</dt><dd>{{.CategoryLabel}}</dd>
+<dt>精确版本</dt><dd>{{.Version}}</dd>
+<dt>软件包统一地址</dt><dd>{{if .PackageURL}}{{.PackageURL}}{{else}}-{{end}}</dd>
+<dt>美国国家漏洞库产品命名</dt><dd>{{if .CPE}}{{.CPE}}{{else}}-{{end}}</dd>
+<dt>所属</dt><dd>{{if .BelongsTo}}{{.BelongsTo}}{{else}}-{{end}}</dd>
+<dt>备注</dt><dd>{{if .Note}}{{.Note}}{{else}}-{{end}}</dd>
+<dt>认领的实测条目稳定键</dt><dd>{{if .ClaimedObservedKey}}{{.ClaimedObservedKey}}{{else}}-{{end}}</dd>
+<dt>监听端口与暴露级别</dt><dd>{{range .ListeningPorts}}{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}{{else}}未登记监听端口{{end}}</dd>
+</dl>
+<form method="post" action="/ui/software-inventory/drafts/confirm">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="draft_id" value="{{.ID}}">
+<input type="hidden" name="mode" value="original">
+<button type="submit">按草稿确认</button>
+</form>
+<form method="post" action="/ui/software-inventory/drafts/confirm">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="draft_id" value="{{.ID}}">
+<input type="hidden" name="mode" value="edited">
+<div class="form-field"><label for="draft-device-{{.ID}}">设备</label><input id="draft-device-{{.ID}}" name="device" value="{{.Device}}"></div>
+<div class="form-field"><label for="draft-category-{{.ID}}">类别代号</label><input id="draft-category-{{.ID}}" name="category" value="{{.Category}}"></div>
+<div class="form-field"><label for="draft-name-{{.ID}}">软件名</label><input id="draft-name-{{.ID}}" name="name" value="{{.Name}}"></div>
+<div class="form-field"><label for="draft-version-{{.ID}}">精确版本</label><input id="draft-version-{{.ID}}" name="version" value="{{.Version}}"></div>
+<div class="form-field"><label for="draft-purl-{{.ID}}">软件包统一地址</label><input id="draft-purl-{{.ID}}" name="purl" value="{{.PackageURL}}"></div>
+<div class="form-field"><label for="draft-cpe-{{.ID}}">美国国家漏洞库产品命名</label><input id="draft-cpe-{{.ID}}" name="cpe" value="{{.CPE}}"></div>
+<div class="form-field"><label for="draft-ports-{{.ID}}">监听端口（每行：监听地址,端口,协议,暴露级别代号）</label><textarea id="draft-ports-{{.ID}}" name="ports" rows="3">{{.ListeningPortsText}}</textarea></div>
+<div class="form-field"><label for="draft-belongs-to-{{.ID}}">所属</label><input id="draft-belongs-to-{{.ID}}" name="belongs_to" value="{{.BelongsTo}}"></div>
+<div class="form-field"><label for="draft-note-{{.ID}}">备注</label><input id="draft-note-{{.ID}}" name="note" value="{{.Note}}"></div>
+<button type="submit">修改后确认</button>
+</form>
+<form method="post" action="/ui/software-inventory/drafts/reject">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="draft_id" value="{{.ID}}">
+<button type="submit">驳回草稿</button>
+</form>
+</article>
+{{else}}<p>没有待审阅的声明草稿。</p>{{end}}
+</section>
+{{end}}
