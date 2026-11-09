@@ -50,6 +50,13 @@ type SecretValuesForMasking struct {
 	WritableServerIDs []string
 }
 
+// SecretMetadataEdit 表示一次机密项元数据修改。指针为空表示不改这个字段；
+// 环境变量名指针指向空字符串表示清除环境变量名。
+type SecretMetadataEdit struct {
+	Note            *string
+	EnvironmentName *string
+}
+
 // SecretValuesForMasking 读取全部机密项的当前值、上一个值与可写入服务器
 // 条目标识符。单个值无法解密时跳过该项，让可用值继续参与输出遮蔽；该
 // 读取路径只服务本进程内的输出遮蔽，调用方不得把返回值序列化到工具
@@ -359,6 +366,105 @@ func (s *Store) SetSecretEnvironmentName(secretName, environmentName string) err
 		return err
 	}
 	return s.commitSecretChange(tx)
+}
+
+// EditSecretMetadata 在同一个事务里修改备注与环境变量名。任一字段失败时
+// 两者都保持原值；审计行为与单独修改保持一致，不记录备注原文或变量值。
+func (s *Store) EditSecretMetadata(secretName string, edit SecretMetadataEdit) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	if edit.Note == nil && edit.EnvironmentName == nil {
+		return nil
+	}
+	if edit.EnvironmentName != nil {
+		if err := ValidateSecretEnvironmentName(*edit.EnvironmentName); err != nil {
+			return err
+		}
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var secretID, beforeNote, beforeEnvironmentName string
+	err = tx.QueryRow(
+		`SELECT id, COALESCE(note,''), COALESCE(env_name,'') FROM secrets WHERE name=?`,
+		secretName,
+	).Scan(&secretID, &beforeNote, &beforeEnvironmentName)
+	if err == sql.ErrNoRows {
+		return ErrSecretNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	desiredNote := beforeNote
+	if edit.Note != nil {
+		desiredNote = *edit.Note
+	}
+	desiredEnvironmentName := beforeEnvironmentName
+	if edit.EnvironmentName != nil {
+		desiredEnvironmentName = *edit.EnvironmentName
+	}
+	if desiredEnvironmentName != "" {
+		desiredLower := strings.ToLower(desiredEnvironmentName)
+		var existingSecret string
+		err = tx.QueryRow(
+			`SELECT name FROM secrets WHERE env_name_lower=? AND id<>?`,
+			desiredLower, secretID,
+		).Scan(&existingSecret)
+		if err == nil {
+			return secretEnvironmentNameExistsError(existingSecret, desiredEnvironmentName)
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+	}
+
+	var result sql.Result
+	switch {
+	case edit.Note != nil && edit.EnvironmentName != nil:
+		result, err = tx.Exec(
+			`UPDATE secrets SET note=?, env_name=?, env_name_lower=? WHERE id=?`,
+			desiredNote, desiredEnvironmentName, strings.ToLower(desiredEnvironmentName), secretID,
+		)
+	case edit.Note != nil:
+		result, err = tx.Exec(`UPDATE secrets SET note=? WHERE id=?`, desiredNote, secretID)
+	default:
+		result, err = tx.Exec(
+			`UPDATE secrets SET env_name=?, env_name_lower=? WHERE id=?`,
+			desiredEnvironmentName, strings.ToLower(desiredEnvironmentName), secretID,
+		)
+	}
+	if err != nil {
+		return err
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if rows == 0 {
+		return ErrSecretNotFound
+	}
+
+	auditTime := s.nowTime()
+	if edit.Note != nil {
+		if err := writeSecretAuditTx(tx, auditTime, "secret-edit", map[string]any{
+			"name": secretName, "change": "备注已更改",
+		}); err != nil {
+			return err
+		}
+	}
+	environmentNameChanged := edit.EnvironmentName != nil && desiredEnvironmentName != beforeEnvironmentName
+	if environmentNameChanged {
+		if err := writeSecretAuditTx(tx, auditTime, "secret-env", map[string]any{
+			"name": secretName, "before": beforeEnvironmentName, "after": desiredEnvironmentName,
+		}); err != nil {
+			return err
+		}
+		return s.commitSecretChange(tx)
+	}
+	return tx.Commit()
 }
 
 // secretEnvironmentNameExistsError 生成环境变量名重名报错，指明已占用它的

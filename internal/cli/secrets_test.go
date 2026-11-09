@@ -7,12 +7,15 @@ package cli
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/hex"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
@@ -388,14 +391,29 @@ func TestSecretsEnvironmentNameCLI(t *testing.T) {
 }
 
 // TestSecretsEnvironmentNameEditIsAtomic 钉住备注与环境变量名同改的事务边
-// 界：变量名不合法时，备注也不能留下半成品改动。
+// 界：第二项字段校验失败时，第一项字段也不能留下半成品改动。
 func TestSecretsEnvironmentNameEditIsAtomic(t *testing.T) {
-	newSecretsEnv(t)
+	dbPath, _ := newSecretsEnv(t)
 	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "旧备注", "--env", "HF_TOKEN", "--stdin")
 
-	_, _, err := runSecretsRoot(t, "", "secrets", "edit", "API_TOKEN", "--note", "新备注", "--env", "PATH")
-	if err == nil || !strings.Contains(err.Error(), "固定拒绝清单") {
-		t.Fatalf("reserved environment name must be rejected, got %v", err)
+	triggerDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer triggerDB.Close()
+	_, err = triggerDB.Exec(`CREATE TRIGGER reject_secret_note_update
+BEFORE UPDATE OF note ON secrets
+WHEN NEW.note <> OLD.note
+BEGIN
+	SELECT RAISE(ABORT, '备注校验失败');
+END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = runSecretsRoot(t, "", "secrets", "edit", "API_TOKEN", "--note", "新备注", "--env", "MODEL_TOKEN")
+	if err == nil || !strings.Contains(err.Error(), "备注校验失败") {
+		t.Fatalf("note validation must reject the edit, got %v", err)
 	}
 	out := mustSecretsCli(t, "", "secrets", "list")
 	if !strings.Contains(out, "旧备注") || strings.Contains(out, "新备注") ||

@@ -175,15 +175,15 @@ func secretsEditCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			if changeEnvironmentName || clearEnvironmentNameSet {
-				if err := s.SetSecretEnvironmentName(args[0], environmentName); err != nil {
-					return err
-				}
-			}
+			var metadataEdit store.SecretMetadataEdit
 			if changeNote {
-				if err := s.EditSecretNote(args[0], note); err != nil {
-					return err
-				}
+				metadataEdit.Note = &note
+			}
+			if changeEnvironmentName || clearEnvironmentNameSet {
+				metadataEdit.EnvironmentName = &environmentName
+			}
+			if err := s.EditSecretMetadata(args[0], metadataEdit); err != nil {
+				return err
 			}
 			switch {
 			case changeNote && (changeEnvironmentName || clearEnvironmentNameSet):
