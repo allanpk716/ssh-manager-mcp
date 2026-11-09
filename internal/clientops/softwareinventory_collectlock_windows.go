@@ -5,23 +5,19 @@ package clientops
 import (
 	"errors"
 	"os"
-	"syscall"
-)
 
-const (
-	softwareInventoryLockExclusive       = 0x00000002
-	softwareInventoryLockFailImmediately = 0x00000001
+	"golang.org/x/sys/windows"
 )
 
 func lockSoftwareInventoryFile(file *os.File) error {
-	var overlapped syscall.Overlapped
-	err := syscall.LockFileEx(
-		syscall.Handle(file.Fd()),
-		softwareInventoryLockExclusive|softwareInventoryLockFailImmediately,
+	var overlapped windows.Overlapped
+	err := windows.LockFileEx(
+		windows.Handle(file.Fd()),
+		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
 		0, 1, 0, &overlapped,
 	)
 	if err != nil {
-		if errors.Is(err, syscall.ERROR_LOCK_VIOLATION) {
+		if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
 			return ErrSoftwareInventoryCollectionBusy
 		}
 		return err
@@ -30,6 +26,6 @@ func lockSoftwareInventoryFile(file *os.File) error {
 }
 
 func unlockSoftwareInventoryFile(file *os.File) error {
-	var overlapped syscall.Overlapped
-	return syscall.UnlockFileEx(syscall.Handle(file.Fd()), 0, 1, 0, &overlapped)
+	var overlapped windows.Overlapped
+	return windows.UnlockFileEx(windows.Handle(file.Fd()), 0, 1, 0, &overlapped)
 }

@@ -112,7 +112,7 @@ func TestInventoryCollectAssignedClientBranch(t *testing.T) {
 	t.Cleanup(func() { inventoryCollectAssignedClient = previous })
 
 	var out strings.Builder
-	err := runInventoryCollectAssignedClient(context.Background(), "", &out)
+	err := runInventoryCollectAssignedClient(context.Background(), "", &out, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestInventoryCollectAssignedClientBranch(t *testing.T) {
 	}
 
 	out.Reset()
-	err = runInventoryCollectAssignedClient(context.Background(), "", &out)
+	err = runInventoryCollectAssignedClient(context.Background(), "", &out, false)
 	if ExitCodeFor(err) != exitCodePartialCollectFailure {
 		t.Fatalf("部分失败退出码 = %d，应为 5：%v", ExitCodeFor(err), err)
 	}
@@ -135,7 +135,7 @@ func TestInventoryCollectAssignedClientBranch(t *testing.T) {
 	inventoryCollectAssignedClient = func(context.Context, string) (*softwareinventory.SchedulerRoundReport, error) {
 		return nil, unreachable
 	}
-	if code := ExitCodeFor(runInventoryCollectAssignedClient(context.Background(), "", &out)); code != exitCodeAuthorityUnreachable {
+	if code := ExitCodeFor(runInventoryCollectAssignedClient(context.Background(), "", &out, false)); code != exitCodeAuthorityUnreachable {
 		t.Fatalf("权威端不可达退出码 = %d，应为 4：%v", code, unreachable)
 	}
 }
@@ -160,7 +160,7 @@ func TestInventoryCollectAssignedClientUsesLock(t *testing.T) {
 		return nil, nil
 	}
 	t.Cleanup(func() { inventoryCollectAssignedClient = previous })
-	err = runInventoryCollectAssignedClient(context.Background(), "", &strings.Builder{})
+	err = runInventoryCollectAssignedClient(context.Background(), "", &strings.Builder{}, false)
 	if err == nil || !strings.Contains(err.Error(), "另一份软件清单采集正在执行") {
 		t.Fatalf("锁忙时应直接失败：%v", err)
 	}

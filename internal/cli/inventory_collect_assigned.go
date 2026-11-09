@@ -35,12 +35,41 @@ var inventoryCollectAssignedRunner = func(
 var inventoryCollectAssignedClient = func(
 	ctx context.Context, instance string,
 ) (*softwareinventory.SchedulerRoundReport, error) {
-	return clientops.CollectSoftwareInventoryForInstance(ctx, instance)
+	// 外层 runInventoryCollectAssignedClient 已持有本地锁；这里不能再调用
+	// 带锁的公共入口，避免同一进程第二次抢同一把锁。
+	credential, err := clientops.ReadCacheCredFor(instance)
+	if err != nil {
+		return nil, err
+	}
+	if credential == nil {
+		credential = &clientops.CacheCred{}
+	}
+	forwarder, err := clientops.NewSoftwareInventoryForwarder(*credential)
+	if err != nil {
+		return nil, err
+	}
+	defer forwarder.Close()
+	snapshot, err := loadInventoryClientSnapshot(instance)
+	if err != nil {
+		return nil, err
+	}
+	temporary, err := store.OpenTemporaryClientCacheStore(snapshot, "sshmgr-inventory-collect-*.db")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = temporary.Close() }()
+	collector := &clientops.SoftwareInventoryClientCollector{
+		Forwarder: forwarder,
+		OpenStore: func() (*store.Store, func(), error) {
+			return temporary.Store, func() {}, nil
+		},
+	}
+	return collector.CollectAssigned(ctx)
 }
 
 // runInventoryCollectAssignedClient 输出客户端采集报告并映射两个专门退
 // 出码：权威端不可达为 4，部分设备采集失败为 5。
-func runInventoryCollectAssignedClient(ctx context.Context, instance string, out io.Writer) error {
+func runInventoryCollectAssignedClient(ctx context.Context, instance string, out io.Writer, jsonOutput bool) error {
 	lockPath, err := clientops.SoftwareInventoryCollectionLockPath(instance)
 	if err != nil {
 		return err
@@ -57,7 +86,7 @@ func runInventoryCollectAssignedClient(ctx context.Context, instance string, out
 		}
 		return err
 	}
-	if err := writeCollectAssignedReport(out, report, false); err != nil {
+	if err := writeCollectAssignedReport(out, report, jsonOutput); err != nil {
 		return err
 	}
 	if report.Failed > 0 {
@@ -119,7 +148,7 @@ func inventoryCollectAssignedCmd() *cobra.Command {
 				return err
 			}
 			if role == policyRoleClient {
-				return runInventoryCollectAssignedClient(cmd.Context(), instance, cmd.OutOrStdout())
+				return runInventoryCollectAssignedClient(cmd.Context(), instance, cmd.OutOrStdout(), jsonOutput)
 			}
 			st, err := openUnlockedStore()
 			if err != nil {
