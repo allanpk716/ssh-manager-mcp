@@ -62,6 +62,12 @@ type SecretApplyResult struct {
 	Applied bool
 }
 
+// SecretDetailView 是机密项详情页展示数据。
+type SecretDetailView struct {
+	Row     SecretRow
+	Servers []AccessGrantChoice
+}
+
 // SecretWriter 是机密项页写操作来源。接口只接受写入值，不提供任何读值
 // 方法。
 type SecretWriter interface {
@@ -262,7 +268,178 @@ func (h *handler) handleSecretDetailRoutes(w http.ResponseWriter, r *http.Reques
 		h.handleSecretsRoot(w, r)
 		return
 	}
-	h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	identifier := strings.TrimPrefix(r.URL.Path, secretsPrefix)
+	suffix := ""
+	if index := strings.LastIndex(identifier, "/"); index >= 0 {
+		suffix = identifier[index+1:]
+		identifier = identifier[:index]
+	}
+	if identifier == "" || strings.Contains(identifier, "/") {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
+	}
+	switch suffix {
+	case "":
+		h.handleSecretDetail(w, r, identifier)
+	case "edit":
+		h.handleSecretMetadataEdit(w, r, identifier)
+	case "value":
+		h.handleSecretValue(w, r, identifier)
+	case "delete":
+		h.handleSecretDelete(w, r, identifier)
+	default:
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	}
+}
+
+func (h *handler) secretDetail(identifier string) (*SecretDetailView, error) {
+	rows, err := h.cfg.Secrets.ListSecrets("", "", "")
+	if err != nil {
+		return nil, err
+	}
+	var row *SecretRow
+	for i := range rows {
+		if rows[i].ID == identifier || rows[i].Name == identifier {
+			row = &rows[i]
+			break
+		}
+	}
+	if row == nil {
+		return nil, &SecretNotFoundError{Identifier: identifier}
+	}
+	servers, err := h.cfg.Servers.Servers("")
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
+	allowed := make(map[string]bool, len(row.AllowedServers))
+	for _, name := range row.AllowedServers {
+		allowed[name] = true
+	}
+	choices := make([]AccessGrantChoice, 0, len(servers))
+	for _, server := range servers {
+		choices = append(choices, AccessGrantChoice{
+			ID: server.ID, Name: server.Name, Checked: allowed[server.Name],
+		})
+	}
+	return &SecretDetailView{Row: *row, Servers: choices}, nil
+}
+
+func (h *handler) handleSecretDetail(w http.ResponseWriter, r *http.Request, identifier string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "机密项详情只接受 GET 请求。")
+		return
+	}
+	detail, err := h.secretDetail(identifier)
+	if err != nil {
+		h.renderSecretReadError(w, r, err)
+		return
+	}
+	h.renderPage(w, r, http.StatusOK, "secret-detail.tmpl", pageData{
+		Title: "机密项 " + detail.Row.Name, SecretDetail: detail,
+	})
+}
+
+func (h *handler) renderSecretReadError(w http.ResponseWriter, r *http.Request, err error) {
+	var missing *SecretNotFoundError
+	if errors.As(err, &missing) {
+		h.renderError(w, r, http.StatusNotFound, "机密项不存在", err.Error())
+		return
+	}
+	h.renderError(w, r, http.StatusInternalServerError, "读取机密项失败", "读取机密项失败，请稍后重试。")
+}
+
+func (h *handler) handleSecretMetadataEdit(w http.ResponseWriter, r *http.Request, identifier string) {
+	target := secretsPrefix + identifier
+	if r.Method == http.MethodGet {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "修改元数据请从详情页进入。")
+		return
+	}
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "修改机密项元数据只接受 POST 请求。")
+		return
+	}
+	note := r.PostFormValue("note")
+	environmentName := strings.TrimSpace(r.PostFormValue("environment_name"))
+	if err := h.cfg.SecretsWriter.EditSecretMetadata(
+		identifier, note, environmentName, SecretWriteSource{RemoteAddress: remoteIP(r)},
+	); err != nil {
+		detail, detailErr := h.secretDetail(identifier)
+		if detailErr == nil {
+			h.renderPage(w, r, http.StatusBadRequest, "secret-detail.tmpl", pageData{
+				Title: "机密项 " + detail.Row.Name, SecretDetail: detail,
+				SecretDetailError: err.Error(), SecretDetailNote: note,
+				SecretDetailEnvironmentName: environmentName,
+			})
+			return
+		}
+		h.renderError(w, r, http.StatusBadRequest, "修改机密项失败", err.Error())
+		return
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+func (h *handler) handleSecretValue(w http.ResponseWriter, r *http.Request, identifier string) {
+	target := secretsPrefix + identifier
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		detail, err := h.secretDetail(identifier)
+		if err != nil {
+			h.renderSecretReadError(w, r, err)
+			return
+		}
+		h.renderPage(w, r, http.StatusOK, "secret-value.tmpl", pageData{
+			Title: "换值 " + detail.Row.Name, SecretDetail: detail,
+		})
+	case http.MethodPost:
+		value, valueErr := secretValueFromRequest(w, r)
+		if valueErr != nil {
+			h.renderError(w, r, http.StatusBadRequest, "换值失败", valueErr.Error())
+			return
+		}
+		if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+			http.Redirect(w, r, reverifyPath(target+"/value?resume=1"), http.StatusSeeOther)
+			return
+		}
+		if err := h.cfg.SecretsWriter.SetSecretValue(
+			identifier, value, SecretWriteSource{RemoteAddress: remoteIP(r)},
+		); err != nil {
+			h.renderError(w, r, http.StatusBadRequest, "换值失败", err.Error())
+			return
+		}
+		http.Redirect(w, r, target, http.StatusSeeOther)
+	default:
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "换值页只接受 GET 与 POST 请求。")
+	}
+}
+
+func (h *handler) handleSecretDelete(w http.ResponseWriter, r *http.Request, identifier string) {
+	target := secretsPrefix + identifier
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		detail, err := h.secretDetail(identifier)
+		if err != nil {
+			h.renderSecretReadError(w, r, err)
+			return
+		}
+		h.renderPage(w, r, http.StatusOK, "secret-delete.tmpl", pageData{
+			Title: "删除 " + detail.Row.Name, SecretDetail: detail,
+		})
+	case http.MethodPost:
+		if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+			http.Redirect(w, r, reverifyPath(target+"/delete?resume=1"), http.StatusSeeOther)
+			return
+		}
+		if err := h.cfg.SecretsWriter.DeleteSecret(
+			identifier, SecretWriteSource{RemoteAddress: remoteIP(r)},
+		); err != nil {
+			h.renderError(w, r, http.StatusBadRequest, "删除机密项失败", err.Error())
+			return
+		}
+		http.Redirect(w, r, secretsPath, http.StatusSeeOther)
+	default:
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "删除机密项页只接受 GET 与 POST 请求。")
+	}
 }
 
 func formatUnixTime(value int64) string {

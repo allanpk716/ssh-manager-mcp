@@ -228,3 +228,91 @@ func TestSecretAddWritesValueWithoutEchoAndAuditsWebUISource(t *testing.T) {
 		t.Fatalf("缺少防跨站请求伪造令牌应返回 403，实际 %d", denied.StatusCode)
 	}
 }
+
+func TestSecretDetailSupportsEditValueAndDelete(t *testing.T) {
+	st := newIntegrationStore(t)
+	mustServer(t, st, "web-1")
+	manager := secretmanage.New(st)
+	if err := manager.AddSecret("OLD_TOKEN", "旧备注", "OLD_TOKEN_FILE", []byte("old-secret-value"), secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AllowSecrets([]string{"OLD_TOKEN"}, []string{"web-1"}, secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	views, err := manager.List(secretmanage.ListFilter{})
+	if err != nil || len(views) != 1 {
+		t.Fatalf("准备机密项失败：%v %+v", err, views)
+	}
+	secretID := views[0].ID
+	h := newIntegrationHandler(t, st)
+	csrf := csrfToken(t, h)
+	detailTarget := "/ui/secrets/" + secretID
+
+	detail := h.do(http.MethodGet, detailTarget, nil)
+	detailBody := body(t, detail)
+	if detail.StatusCode != http.StatusOK {
+		t.Fatalf("详情页状态码 = %d：\n%s", detail.StatusCode, detailBody)
+	}
+	for _, want := range []string{"OLD_TOKEN", "旧备注", "OLD_TOKEN_FILE", "web-1", "修改元数据", "换值", "删除"} {
+		if !strings.Contains(detailBody, want) {
+			t.Fatalf("详情页缺少 %q：\n%s", want, detailBody)
+		}
+	}
+	if strings.Contains(detailBody, "old-secret-value") {
+		t.Fatalf("详情页不得显示值：\n%s", detailBody)
+	}
+
+	edited := h.do(http.MethodPost, detailTarget+"/edit", url.Values{
+		"csrf_token": {csrf}, "note": {"新备注"}, "environment_name": {"NEW_TOKEN_FILE"},
+	})
+	editedBody := body(t, edited)
+	if edited.StatusCode != http.StatusSeeOther || edited.Header.Get("Location") != detailTarget {
+		t.Fatalf("修改元数据应跳回详情，状态码=%d 跳转=%q 页面：\n%s", edited.StatusCode, edited.Header.Get("Location"), editedBody)
+	}
+
+	valuePage := h.do(http.MethodGet, detailTarget+"/value", nil)
+	valuePageBody := body(t, valuePage)
+	if valuePage.StatusCode != http.StatusOK || strings.Contains(valuePageBody, "old-secret-value") {
+		t.Fatalf("换值页不得显示旧值，状态码=%d：\n%s", valuePage.StatusCode, valuePageBody)
+	}
+	if !strings.Contains(valuePageBody, "上一个值仍会参与输出遮蔽") ||
+		!strings.Contains(valuePageBody, `autocomplete="new-password"`) {
+		t.Fatalf("换值页应说明遮蔽并关闭自动填充：\n%s", valuePageBody)
+	}
+	changed := h.do(http.MethodPost, detailTarget+"/value", url.Values{
+		"csrf_token": {csrf}, "value": {"new-secret-value"},
+	})
+	changedBody := body(t, changed)
+	if changed.StatusCode != http.StatusSeeOther || changed.Header.Get("Location") != detailTarget {
+		t.Fatalf("换值应跳回详情，状态码=%d 跳转=%q 页面：\n%s", changed.StatusCode, changed.Header.Get("Location"), changedBody)
+	}
+	snapshot, err := st.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(snapshot.Secrets[0].Value) != "new-secret-value" || string(snapshot.Secrets[0].PreviousValue) != "old-secret-value" {
+		t.Fatalf("换值后的 vault 状态不正确：%+v", snapshot.Secrets[0])
+	}
+
+	deletePage := h.do(http.MethodGet, detailTarget+"/delete", nil)
+	deletePageBody := body(t, deletePage)
+	if deletePage.StatusCode != http.StatusOK {
+		t.Fatalf("删除确认页状态码 = %d：\n%s", deletePage.StatusCode, deletePageBody)
+	}
+	for _, want := range []string{"OLD_TOKEN", "NEW_TOKEN_FILE", "web-1", "确认删除"} {
+		if !strings.Contains(deletePageBody, want) {
+			t.Fatalf("删除确认页缺少 %q：\n%s", want, deletePageBody)
+		}
+	}
+	deleted := h.do(http.MethodPost, detailTarget+"/delete", url.Values{
+		"csrf_token": {csrf}, "secret_id": {secretID},
+	})
+	deletedBody := body(t, deleted)
+	if deleted.StatusCode != http.StatusSeeOther || deleted.Header.Get("Location") != "/ui/secrets/" {
+		t.Fatalf("删除应跳回列表，状态码=%d 跳转=%q 页面：\n%s", deleted.StatusCode, deleted.Header.Get("Location"), deletedBody)
+	}
+	views, err = manager.List(secretmanage.ListFilter{})
+	if err != nil || len(views) != 0 {
+		t.Fatalf("删除后的 vault 状态不正确：%v %+v", err, views)
+	}
+}

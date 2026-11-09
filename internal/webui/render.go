@@ -50,6 +50,10 @@ type pageData struct {
 	SecretFilterServer          string
 	SecretServerOptions         []ServerRow
 	SecretForm                  secretFormView
+	SecretDetail                *SecretDetailView
+	SecretDetailError           string
+	SecretDetailNote            string
+	SecretDetailEnvironmentName string
 	ImportedCount               int
 	SkippedCount                int
 	FailedCount                 int
