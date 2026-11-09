@@ -479,8 +479,8 @@ func (c *Client) ExecSudoWrapped(ctx context.Context, wrapped string, sudoPasswo
 // 引擎的特权变体——调用方自带 io.Writer, pass 喂入后即弃, 不落任何记录)。
 // 分类三元组与 runSudoSession 恒同; timeout 语义照旧 (引擎传 0)。批 2a
 // (Plan 41 §2) 起附带 SudoMeta——调用方(后台引擎)可据此记录提权结果。
-func (c *Client) ExecSudoWriters(ctx context.Context, cmd, pass string, timeout time.Duration, stdout, stderr io.Writer) (exitCode int, timedOut bool, err error, sudoMeta SudoMeta) {
-	return c.runSudoSession(ctx, cmd, pass, timeout, stdout, stderr)
+func (c *Client) ExecSudoWriters(ctx context.Context, cmd, pass string, timeout time.Duration, stdout, stderr io.Writer, options ...ExecOption) (exitCode int, timedOut bool, err error, sudoMeta SudoMeta) {
+	return c.runSudoSession(ctx, cmd, pass, timeout, stdout, stderr, options...)
 }
 
 // ExecSudo runs cmd with privilege escalation via `sudo -S`, feeding sudoPassword

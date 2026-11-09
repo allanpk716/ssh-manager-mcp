@@ -876,7 +876,7 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 			// The fourth value must land in the OUTER sudoMetaBox (`=` on a
 			// fresh local would shadow it and the meta would never reach the
 			// task record).
-			code, timedOut, rerr, sm := cli.ExecSudoWriters(ctx, spec.Command, spec.SudoPass, 0, stdout, stderr)
+			code, timedOut, rerr, sm := cli.ExecSudoWriters(ctx, spec.Command, spec.SudoPass, 0, stdout, stderr, spec.ExecOption)
 			sudoMetaBox = sm
 			return code, timedOut, rerr
 		}

@@ -51,9 +51,9 @@ owner 可以给机密项设置一个环境变量名，并把这台服务器加�
 服务器列表。此后在 POSIX、PowerShell 与 cmd 服务器的普通层执行
 `exec_command` 或启动 `exec_background` 任务时，你可以直接在命令里引用这个
 环境变量（POSIX 写 `$环境变量名`，PowerShell 写 `$env:环境变量名`，cmd 写
-`%环境变量名%`）；POSIX 服务器的 `exec_command` 也支持在 `sudo=true` 的
-提权层引用 `$环境变量名`。不需要把值拼进命令文本，也不需要先在服务器上写
-配置文件。
+`%环境变量名%`）；POSIX 服务器的 `exec_command` 与 `exec_background` 都支持在
+`sudo=true` 的提权层引用 `$环境变量名`。不需要把值拼进命令文本，也不需要先
+在服务器上写配置文件。
 
 - 值只写入这次 SSH 会话的标准输入，由远端 shell 在执行你的命令前导出；
   封装命令里只有变量名，PowerShell 封装命令还带每个值的字节长度。PowerShell
@@ -70,8 +70,8 @@ owner 可以给机密项设置一个环境变量名，并把这台服务器加�
   文件传输（`upload_file`、`upload_content`、`download_file`、`relay_file`）
   与端口转发不经过这个步骤。
 - 当前版本覆盖 POSIX、PowerShell 与 cmd 服务器的普通层，以及 POSIX 服务器
-  `exec_command` 的 `sudo=true` 提权层。Windows 服务器的 `sudo=true` 仍维持
-  现有提权行为，不做环境变量注入。
+  `exec_command` 与 `exec_background` 的 `sudo=true` 提权层。Windows 服务器
+  的 `sudo=true` 仍维持现有提权行为，不做环境变量注入。
 - 无法注入时命令照常执行。`exec_command` 会在标准输出末尾为每个变量追加
   一行 `环境变量 <变量名> 未注入：<原因>`；`exec_background` 的启动结果会用
   `injection_warnings` 字段列出同样的警告行，任务结束后 `exec_output` 返回的
