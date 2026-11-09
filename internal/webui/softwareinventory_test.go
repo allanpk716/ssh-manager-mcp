@@ -162,7 +162,7 @@ func TestSoftwareInventoryDevicePageShowsRequiredColumns(t *testing.T) {
 	source := &stubSoftwareInventorySource{device: &SoftwareInventoryDevice{
 		Name: "工作站",
 		Status: SoftwareInventoryStatus{
-			CollectorLabel: "权威端", ServerEntry: "web-1",
+			Managed: true, CollectorLabel: "权威端", ServerEntry: "web-1",
 			LastSuccessAt:     &collectedAt,
 			LastFailureAt:     &confirmedAt,
 			LastFailureReason: "连接超时",
@@ -226,7 +226,7 @@ func TestSoftwareInventoryImmediateCollectionRequestedForClientCollector(t *test
 		device: &SoftwareInventoryDevice{
 			Name: "工作站",
 			Status: SoftwareInventoryStatus{
-				CollectorLabel: "笔记本客户端", PendingImmediate: false,
+				Managed: true, CollectorLabel: "笔记本客户端", PendingImmediate: false,
 			},
 		},
 		collectResult: SoftwareInventoryCollectionResult{Requested: true},

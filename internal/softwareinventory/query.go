@@ -34,7 +34,7 @@ type QueryOptions struct {
 }
 
 // QueryItem 是查询结果里的一条软件条目。CollectedAt 是实测采集时间；
-// 声明来源或采集数据缺失时为空。
+// ConfirmedAt 是声明确认时间；另一侧来源缺失时对应字段为空。
 type QueryItem struct {
 	ID             string          `json:"id,omitempty"`
 	DeviceID       string          `json:"device_id"`

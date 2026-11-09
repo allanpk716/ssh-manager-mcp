@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/webui"
@@ -166,7 +167,7 @@ func deviceError(deviceName string, err error) error {
 
 func statusView(status softwareinventory.CollectionStatusView) webui.SoftwareInventoryStatus {
 	return webui.SoftwareInventoryStatus{
-		CollectorLabel: status.CollectorLabel, ServerEntry: status.ServerEntry,
+		Managed: status.Managed, CollectorLabel: status.CollectorLabel, ServerEntry: status.ServerEntry,
 		LastSuccessAt: status.LastSuccessAt, LastFailureAt: status.LastFailureAt,
 		LastFailureReason: status.LastFailureReason, Incomplete: status.Incomplete,
 		NeverCollected: status.NeverCollected, Stale: status.Stale,
@@ -213,10 +214,15 @@ func itemView(item softwareinventory.QueryItem) webui.SoftwareInventoryItem {
 func changeViews(rows []softwareinventory.ChangeEntry) []webui.SoftwareInventoryChange {
 	out := make([]webui.SoftwareInventoryChange, 0, len(rows))
 	for _, row := range rows {
+		oldValue, newValue := row.OldValue, row.NewValue
+		if row.Kind == models.SoftwareChangeExposureChanged {
+			oldValue = models.SoftwareExposure(row.OldValue).Label()
+			newValue = models.SoftwareExposure(row.NewValue).Label()
+		}
 		out = append(out, webui.SoftwareInventoryChange{
 			OccurredAt: row.OccurredAt, KindLabel: row.Kind.Label(),
 			CategoryLabel: row.Category.Label(), Name: row.Name,
-			OldValue: row.OldValue, NewValue: row.NewValue,
+			OldValue: oldValue, NewValue: newValue,
 		})
 	}
 	return out

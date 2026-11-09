@@ -48,6 +48,7 @@ type SoftwareInventoryGroup struct {
 
 // SoftwareInventoryStatus 是一台设备的采集状态。
 type SoftwareInventoryStatus struct {
+	Managed           bool
 	CollectorLabel    string
 	ServerEntry       string
 	LastSuccessAt     *time.Time

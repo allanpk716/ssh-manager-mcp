@@ -101,8 +101,8 @@ type Config struct {
 	// SoftwareInventory 是软件清单页来源。单机与权威端提供；客户端不提
 	// 供，导航与路由都不出现。
 	SoftwareInventory SoftwareInventorySource
-	Access        AccessStore
-	Ops           OpsStore
+	Access            AccessStore
+	Ops               OpsStore
 	// ServiceRestart 是权威端显式注入的服务重启能力；不注入时不注册重启
 	// 路由，也不显示重启表单。
 	ServiceRestart OpsRestartStore

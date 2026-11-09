@@ -111,7 +111,7 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if device.Name != "工作站" || device.Status.CollectorLabel != "权威端" ||
+	if device.Name != "工作站" || !device.Status.Managed || device.Status.CollectorLabel != "权威端" ||
 		device.Status.LastSuccessAt == nil || device.Status.LastSuccessAt.Unix() != secondAt.Unix() {
 		t.Fatalf("设备页面数据或采集状态不符：%+v", device)
 	}
