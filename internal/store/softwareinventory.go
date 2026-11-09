@@ -625,6 +625,12 @@ func writeSoftwareAuditTx(
 	summary map[string]any,
 	source WriteSource,
 ) error {
+	if source.deviceCode != "" {
+		if summary == nil {
+			summary = map[string]any{}
+		}
+		summary["device_code"] = source.deviceCode
+	}
 	return writeAuditTx(tx, AuditRow{
 		TS: at, Action: action, Command: MarshalAuditSummary(summary),
 		Status: "ok", Source: source.kind, SourceIP: source.address,

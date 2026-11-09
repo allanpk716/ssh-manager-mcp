@@ -91,6 +91,15 @@ type SoftwareDeclaration struct {
 	Note           string                  `json:"note,omitempty"`
 }
 
+// SoftwareDeclarationDraft 是 agent 提交的一条声明草稿。它复用生效声明
+// 的字段，另带一个可选的实测条目稳定键：草稿确认时这条声明会认领该实
+// 测条目（认领实测、认领未识别进程与补充暴露级别都通过这个键表达）。
+// 草稿在 owner 确认之前不影响任何查询结果与待办。
+type SoftwareDeclarationDraft struct {
+	SoftwareDeclaration
+	ClaimedObservedKey string `json:"claimed_observed_key,omitempty"`
+}
+
 // SoftwareDeclarationEdit 的指针为空表示不修改字段；ListeningPorts 为空
 // 指针时不修改端口，指向空切片表示清除全部端口。
 type SoftwareDeclarationEdit struct {
