@@ -1,0 +1,22 @@
+{{define "content"}}
+<section class="software-inventory">
+<h1>软件清单</h1>
+<div class="inline-form">
+<a class="button-link" href="/ui/software-inventory/search">跨设备搜索</a>
+</div>
+{{if .SoftwareInventoryError}}<p class="form-error">{{.SoftwareInventoryError}}</p>{{end}}
+{{if .SoftwareInventoryNotice}}<p class="form-success">{{.SoftwareInventoryNotice}}</p>{{end}}
+<table>
+<thead><tr><th scope="col">设备</th><th scope="col">采集状态</th></tr></thead>
+<tbody>
+{{range .SoftwareInventoryDevices}}
+<tr><td><a href="/ui/software-inventory/devices?device={{.Name}}">{{.Name}}</a></td><td>{{template "softwareInventoryStatus" .Status}}</td></tr>
+{{else}}<tr><td colspan="2">暂无设备。</td></tr>{{end}}
+</tbody>
+</table>
+</section>
+{{end}}
+
+{{define "softwareInventoryStatus"}}
+{{.CollectorLabel}}；上次成功 {{formatOptionalTime .LastSuccessAt}}；上次失败 {{formatOptionalTime .LastFailureAt}}{{if .LastFailureReason}}（{{.LastFailureReason}}）{{end}}；{{if .Stale}}清单已过期{{else}}清单未过期{{end}}
+{{end}}

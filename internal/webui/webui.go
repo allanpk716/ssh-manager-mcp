@@ -98,6 +98,9 @@ type Config struct {
 	// SecretsWriter 是机密项写操作来源。单机与权威端必须提供；客户端不提
 	// 供，写路由不存在。
 	SecretsWriter SecretWriter
+	// SoftwareInventory 是软件清单页来源。单机与权威端提供；客户端不提
+	// 供，导航与路由都不出现。
+	SoftwareInventory SoftwareInventorySource
 	Access        AccessStore
 	Ops           OpsStore
 	// ServiceRestart 是权威端显式注入的服务重启能力；不注入时不注册重启
@@ -185,6 +188,9 @@ type capabilities struct {
 	// ShowSecretsArea 控制是否显示「机密项」区域入口；只有配置了机密项
 	// 读取来源时才显示。
 	ShowSecretsArea bool
+	// ShowSoftwareInventoryArea 控制是否显示「软件清单」区域入口；只有
+	// 单机或权威端配置软件清单来源时才显示。
+	ShowSoftwareInventoryArea bool
 	// CanManageProfiles 控制是否显示 Profile 页入口与写操作。
 	CanManageProfiles bool
 	// CanManageProjects 控制是否显示项目令牌页入口与写操作。
@@ -216,6 +222,7 @@ type capabilities struct {
 func capabilitiesForConfig(cfg Config) capabilities {
 	caps := capabilitiesForRole(cfg.Role)
 	caps.ShowSecretsArea = cfg.Secrets != nil
+	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
 	return caps
 }
 
@@ -341,6 +348,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	h.registerAccessRoutes()
 	h.registerServerRoutes()
 	h.registerSecretRoutes()
+	h.registerSoftwareInventoryRoutes()
 	h.registerOpsRoutes()
 	return h, Startup{token: token}, nil
 }
