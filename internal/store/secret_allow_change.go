@@ -48,7 +48,7 @@ func (e *SecretAllowTargetMissingError) Error() string {
 	return fmt.Sprintf("机密项 %q 不存在", e.SecretID)
 }
 
-// SecretAllowChangeResult 是一个发生变化 的机密项在授权变更后的结果，
+// SecretAllowChangeResult 是一个发生变化的机密项在授权变更后的结果，
 // AddedServers 与 RemovedServers 只含服务器条目名。
 type SecretAllowChangeResult struct {
 	SecretID       string
@@ -58,10 +58,8 @@ type SecretAllowChangeResult struct {
 }
 
 // SecretAllowConflictError 表示确认授权变更时，相关交叉格的现状与预览时
-// 不一致。Current 是这些交叉格的最新状态；调用方应重新计算预览后再确认。
-type SecretAllowConflictError struct {
-	Current []SecretAllowState
-}
+// 不一致；调用方应重新计算预览后再确认。
+type SecretAllowConflictError struct{}
 
 // Error 返回可识别的冲突原因，不包含任何机密项值。
 func (e *SecretAllowConflictError) Error() string {
@@ -89,9 +87,10 @@ func normalizeSecretAllowCells(cells []SecretAllowCell) []SecretAllowCell {
 	return out
 }
 
-// normalizeSecretAllowChanges 把目标状态按交叉格去重。同一格给出两个不同
-// 目标时直接报错，避免调用方把矛盾表单提交成半份改动。
-func normalizeSecretAllowChanges(changes []SecretAllowChange) ([]SecretAllowChange, error) {
+// NormalizeSecretAllowChanges 把目标状态按交叉格去重并排序。同一格给出两
+// 个不同目标时直接报错，避免调用方把矛盾表单提交成半份改动；机密项管理
+// 模块与存储层共用这一份实现。
+func NormalizeSecretAllowChanges(changes []SecretAllowChange) ([]SecretAllowChange, error) {
 	seenCell := make(map[SecretAllowCell]bool, len(changes))
 	seenTarget := make(map[SecretAllowChange]bool, len(changes))
 	out := make([]SecretAllowChange, 0, len(changes))
@@ -247,7 +246,7 @@ func (s *Store) changeSecretAllowsTx(
 	expected []SecretAllowState,
 	source WriteSource,
 ) ([]SecretAllowChangeResult, error) {
-	targets, err := normalizeSecretAllowChanges(changes)
+	targets, err := NormalizeSecretAllowChanges(changes)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +281,7 @@ func (s *Store) changeSecretAllowsTx(
 		for _, cell := range normalizeSecretAllowCells(expectedCells) {
 			state, exists := currentByKey[cell]
 			if !exists || state.Allow != expectedByKey[cell] {
-				return nil, &SecretAllowConflictError{Current: current}
+				return nil, &SecretAllowConflictError{}
 			}
 		}
 	}

@@ -78,37 +78,37 @@ func (s managerStore) AddSecret(name, note, environmentName string, value []byte
 }
 
 func (s managerStore) SetSecretValue(identifier string, value []byte, source webui.SecretWriteSource) error {
-	view, err := s.secretViewByIDOrName(identifier)
+	row, err := s.secretRowByIDOrName(identifier)
 	if err != nil {
 		return err
 	}
-	return secretFormError(s.manager.SetSecretValue(view.Name, value, secretmanage.WebUISource(source.RemoteAddress)))
+	return secretFormError(s.manager.SetSecretValue(row.Name, value, secretmanage.WebUISource(source.RemoteAddress)))
 }
 
 func (s managerStore) EditSecretMetadata(identifier, note, environmentName string, source webui.SecretWriteSource) error {
-	view, err := s.secretViewByIDOrName(identifier)
+	row, err := s.secretRowByIDOrName(identifier)
 	if err != nil {
 		return err
 	}
 	edit := secretmanage.MetadataEdit{}
-	if view.Note != note {
+	if row.Note != note {
 		edit.Note = &note
 	}
-	if view.EnvironmentName != environmentName {
+	if row.EnvironmentName != environmentName {
 		edit.EnvironmentName = &environmentName
 	}
 	if edit.Note == nil && edit.EnvironmentName == nil {
 		return webui.ErrSecretMetadataNoChange
 	}
-	return secretFormError(s.manager.EditMetadata(view.Name, edit, secretmanage.WebUISource(source.RemoteAddress)))
+	return secretFormError(s.manager.EditMetadata(row.Name, edit, secretmanage.WebUISource(source.RemoteAddress)))
 }
 
 func (s managerStore) DeleteSecret(identifier string, source webui.SecretWriteSource) error {
-	view, err := s.secretViewByIDOrName(identifier)
+	row, err := s.secretRowByIDOrName(identifier)
 	if err != nil {
 		return err
 	}
-	return s.manager.DeleteSecret(view.Name, secretmanage.WebUISource(source.RemoteAddress))
+	return s.manager.DeleteSecret(row.Name, secretmanage.WebUISource(source.RemoteAddress))
 }
 
 func (s managerStore) PreviewAuthorization(target []webui.SecretAuthorizationCell) (webui.SecretAuthorizationPreview, error) {
@@ -137,17 +137,15 @@ func (s managerStore) ApplyAuthorization(target []webui.SecretAuthorizationCell,
 	}, nil, nil
 }
 
-func (s managerStore) secretViewByIDOrName(identifier string) (store.SecretView, error) {
+func (s managerStore) secretRowByIDOrName(identifier string) (webui.SecretRow, error) {
 	views, err := s.manager.List(secretmanage.ListFilter{})
 	if err != nil {
-		return store.SecretView{}, err
+		return webui.SecretRow{}, err
 	}
-	for _, view := range views {
-		if view.ID == identifier || view.Name == identifier {
-			return view, nil
-		}
+	if row, ok := webui.FindSecretRow(secretRows(views), identifier); ok {
+		return row, nil
 	}
-	return store.SecretView{}, errSecretNotFound(identifier)
+	return webui.SecretRow{}, errSecretNotFound(identifier)
 }
 
 type openerStore struct {
@@ -160,11 +158,7 @@ func (s openerStore) ListSecrets(instance, query, server string) ([]webui.Secret
 		return nil, err
 	}
 	defer closeStore()
-	views, err := manager.List(secretmanage.ListFilter{Query: query, Server: server})
-	if err != nil {
-		return nil, err
-	}
-	return secretRows(views), nil
+	return managerStore{manager: manager}.ListSecrets(instance, query, server)
 }
 
 type writerOpenerStore struct {

@@ -452,7 +452,7 @@ func TestSecretDetailSupportsEditValueAndDelete(t *testing.T) {
 		}
 	}
 	deleted := h.do(http.MethodPost, detailTarget+"/delete", url.Values{
-		"csrf_token": {csrf}, "secret_id": {secretID},
+		"csrf_token": {csrf},
 	})
 	deletedBody := body(t, deleted)
 	if deleted.StatusCode != http.StatusSeeOther || deleted.Header.Get("Location") != "/ui/secrets/" {
@@ -520,7 +520,7 @@ func TestAuthoritySecretWritesRequireReverifyAndPreserveSubmittedState(t *testin
 		t.Fatalf("换值应先重新验证，状态码=%d 跳转=%q", valueRejected.StatusCode, valueRejected.Header.Get("Location"))
 	}
 	deleteRejected := h.do(http.MethodPost, "/ui/secrets/"+secretID+"/delete", url.Values{
-		"csrf_token": {csrf}, "secret_id": {secretID},
+		"csrf_token": {csrf},
 	})
 	if deleteRejected.StatusCode != http.StatusSeeOther || deleteRejected.Header.Get("Location") != "/ui/reverify?next="+url.QueryEscape("/ui/secrets/"+secretID+"/delete?resume=1") {
 		t.Fatalf("删除应先重新验证，状态码=%d 跳转=%q", deleteRejected.StatusCode, deleteRejected.Header.Get("Location"))

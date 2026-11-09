@@ -34,8 +34,9 @@ type AuthorizationChange struct {
 	Removed    []ServerRef
 }
 
-// AuthorizationPreview 是按当前授权状态算出的确认依据。Summary 是涉及交
-// 叉格的当前状态加目标集合的确定性哈希；确认时必须携带同一个值。
+// AuthorizationPreview 是按当前授权状态算出的确认依据。Summary 是涉及的
+// 每个授权格子（某个机密项与某个服务器条目交叉处的授权格子）的当前状态
+// 加目标集合的确定性哈希；确认时必须携带同一个值。
 type AuthorizationPreview struct {
 	Summary      string
 	Changes      []AuthorizationChange
@@ -102,13 +103,7 @@ func (m *Manager) ApplyAuthorizationChanges(
 	if len(preview.Changes) == 0 {
 		return AuthorizationApplyResult{Preview: preview}, nil
 	}
-	changes := make([]store.SecretAllowChange, 0, len(normalizedTarget))
-	for _, cell := range normalizedTarget {
-		changes = append(changes, store.SecretAllowChange{
-			SecretID: cell.SecretID, ServerID: cell.ServerID, Allow: cell.Allow,
-		})
-	}
-	if _, err := m.st.ChangeSecretAllows(changes, states, src.origin); err != nil {
+	if _, err := m.st.ChangeSecretAllows(authorizationAllowChanges(normalizedTarget), states, src.origin); err != nil {
 		var conflict *store.SecretAllowConflictError
 		if errors.As(err, &conflict) {
 			latest, latestErr := m.PreviewAuthorizationChanges(target)
@@ -169,36 +164,41 @@ func dropMissingAuthorizationCells(target []AuthorizationCell, missing *store.Se
 // authorizationStates 读取目标格的当前状态，并把目标集合整理成确定的顺
 // 序。存储层只返回授权关系与名字，不会读取机密项值。
 func (m *Manager) authorizationStates(target []AuthorizationCell) ([]store.SecretAllowState, []AuthorizationCell, error) {
-	seenCell := make(map[store.SecretAllowCell]bool, len(target))
-	seenTarget := make(map[AuthorizationCell]bool, len(target))
-	normalized := make([]AuthorizationCell, 0, len(target))
-	for _, cell := range target {
-		key := store.SecretAllowCell{SecretID: cell.SecretID, ServerID: cell.ServerID}
-		if key.SecretID == "" || key.ServerID == "" || seenTarget[cell] {
-			continue
-		}
-		if seenCell[key] {
-			return nil, nil, fmt.Errorf("机密项 %s 与服务器条目 %s 的目标状态重复且不一致", key.SecretID, key.ServerID)
-		}
-		seenCell[key] = true
-		seenTarget[cell] = true
-		normalized = append(normalized, cell)
+	normalizedChanges, err := store.NormalizeSecretAllowChanges(authorizationAllowChanges(target))
+	if err != nil {
+		return nil, nil, err
 	}
-	sort.Slice(normalized, func(i, j int) bool {
-		if normalized[i].SecretID != normalized[j].SecretID {
-			return normalized[i].SecretID < normalized[j].SecretID
-		}
-		return normalized[i].ServerID < normalized[j].ServerID
-	})
-	cells := make([]store.SecretAllowCell, 0, len(normalized))
-	for _, cell := range normalized {
-		cells = append(cells, store.SecretAllowCell{SecretID: cell.SecretID, ServerID: cell.ServerID})
+	cells := make([]store.SecretAllowCell, 0, len(normalizedChanges))
+	for _, change := range normalizedChanges {
+		cells = append(cells, store.SecretAllowCell{SecretID: change.SecretID, ServerID: change.ServerID})
 	}
 	states, err := m.st.SecretAllowStates(cells)
 	if err != nil {
 		return nil, nil, err
 	}
-	return states, normalized, nil
+	return states, authorizationCellsFromChanges(normalizedChanges), nil
+}
+
+// authorizationAllowChanges 把界面层的目标格转成存储层的目标状态。
+func authorizationAllowChanges(target []AuthorizationCell) []store.SecretAllowChange {
+	changes := make([]store.SecretAllowChange, 0, len(target))
+	for _, cell := range target {
+		changes = append(changes, store.SecretAllowChange{
+			SecretID: cell.SecretID, ServerID: cell.ServerID, Allow: cell.Allow,
+		})
+	}
+	return changes
+}
+
+// authorizationCellsFromChanges 把存储层排序后的目标状态转回界面层格子。
+func authorizationCellsFromChanges(changes []store.SecretAllowChange) []AuthorizationCell {
+	cells := make([]AuthorizationCell, 0, len(changes))
+	for _, change := range changes {
+		cells = append(cells, AuthorizationCell{
+			SecretID: change.SecretID, ServerID: change.ServerID, Allow: change.Allow,
+		})
+	}
+	return cells
 }
 
 // buildAuthorizationPreview 从当前状态与目标集合构造差异和确认摘要。摘要

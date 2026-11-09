@@ -16,7 +16,6 @@ const (
 	secretsMatrixPath  = "/ui/secrets/matrix"
 	secretsPreviewPath = "/ui/secrets/authorization/preview"
 	secretsConfirmPath = "/ui/secrets/authorization/confirm"
-	secretsPrefix      = "/ui/secrets/"
 	secretsValueSuffix = "/value"
 
 	// secretValueLimit 是机密项值本身的上限。请求体另留多部分表单的边界、
@@ -32,7 +31,7 @@ func isSecretValueUpload(r *http.Request) bool {
 		return false
 	}
 	return r.URL.Path == secretsNewPath ||
-		(strings.HasPrefix(r.URL.Path, secretsPrefix) && strings.HasSuffix(r.URL.Path, secretsValueSuffix))
+		(strings.HasPrefix(r.URL.Path, secretsPath) && strings.HasSuffix(r.URL.Path, secretsValueSuffix))
 }
 
 // SecretAuthorizationCell 是页面提交的一个目标授权格：可见范围内的一个机
@@ -136,14 +135,14 @@ func (h *handler) registerSecretRoutes() {
 		return
 	}
 	if h.cfg.SecretsWriter == nil {
-		h.mux.HandleFunc(secretsPrefix, h.requireSession(h.handleSecretReadRoutes))
+		h.mux.HandleFunc(secretsPath, h.requireSession(h.handleSecretReadRoutes))
 		return
 	}
 	h.mux.HandleFunc(secretsNewPath, h.requireSession(h.handleSecretNew))
 	h.mux.HandleFunc(secretsMatrixPath, h.requireSession(h.handleSecretMatrix))
 	h.mux.HandleFunc(secretsPreviewPath, h.requireSession(h.handleSecretAuthorizationPreview))
 	h.mux.HandleFunc(secretsConfirmPath, h.requireSession(h.handleSecretAuthorizationConfirm))
-	h.mux.HandleFunc(secretsPrefix, h.requireSession(h.handleSecretDetailRoutes))
+	h.mux.HandleFunc(secretsPath, h.requireSession(h.handleSecretDetailRoutes))
 }
 
 func (h *handler) handleSecretReadRoutes(w http.ResponseWriter, r *http.Request) {
@@ -253,8 +252,7 @@ func (h *handler) handleSecretNewPost(w http.ResponseWriter, r *http.Request) {
 		h.renderSecretNewForm(w, r, status, form)
 		return
 	}
-	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		http.Redirect(w, r, reverifyPath(secretNewResumePath(form)), http.StatusSeeOther)
+	if h.redirectSecretWriteToReverify(w, r, secretNewResumePath(form)) {
 		return
 	}
 	if err := h.cfg.SecretsWriter.AddSecret(
@@ -351,19 +349,13 @@ func (h *handler) handleSecretMatrix(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.SliceStable(allServers, func(i, j int) bool { return allServers[i].Name < allServers[j].Name })
 	rows := make([]SecretMatrixRow, 0, len(secrets))
-	override := r.URL.Query()
 	for _, secret := range secrets {
-		allowed := make(map[string]bool, len(secret.AllowedServers))
-		for _, name := range secret.AllowedServers {
-			allowed[name] = true
-		}
+		allowed := secretAllowedServerSet(secret)
 		row := SecretMatrixRow{Secret: secret}
 		for _, server := range servers {
-			checked := allowed[server.Name]
-			if override.Get(secretCellName(secret.ID, server.ID)) != "" {
-				checked = override.Get(secretCellName(secret.ID, server.ID)) == "1"
-			}
-			row.Cells = append(row.Cells, AccessGrantChoice{ID: server.ID, Name: server.Name, Checked: checked})
+			row.Cells = append(row.Cells, AccessGrantChoice{
+				ID: server.ID, Name: server.Name, Checked: allowed[server.Name],
+			})
 		}
 		rows = append(rows, row)
 	}
@@ -410,12 +402,7 @@ func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *htt
 		h.renderError(w, r, http.StatusBadRequest, "确认授权失败", err.Error())
 		return
 	}
-	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		next := url.Values{"return_to": {safeSecretReturnPath(r.PostFormValue("return_to"))}}
-		for _, cell := range target {
-			next.Add("target", encodeSecretTarget(cell))
-		}
-		http.Redirect(w, r, reverifyPath(secretsPreviewPath+"?"+next.Encode()), http.StatusSeeOther)
+	if h.redirectSecretWriteToReverify(w, r, secretAuthorizationResumePath(target, r.PostFormValue("return_to"))) {
 		return
 	}
 	result, conflict, err := h.cfg.SecretsWriter.ApplyAuthorization(
@@ -437,6 +424,26 @@ func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *htt
 	}
 	h.renderSecretPreviewPage(w, r, http.StatusOK, result.Preview, target,
 		safeSecretReturnPath(r.PostFormValue("return_to")), notice)
+}
+
+// redirectSecretWriteToReverify 在权威端且最近未重新验证时，把机密项写操作
+// 跳到重新验证入口并保留 resumePath 描述的提交状态；其他角色直接放行。
+func (h *handler) redirectSecretWriteToReverify(w http.ResponseWriter, r *http.Request, resumePath string) bool {
+	if h.cfg.Role != RoleServer || h.recentlyVerified(h.currentSession(r)) {
+		return false
+	}
+	http.Redirect(w, r, reverifyPath(resumePath), http.StatusSeeOther)
+	return true
+}
+
+// secretAuthorizationResumePath 构造确认授权跳转重新验证后要回到的预览地
+// 址，保留返回路径与全部目标授权格。
+func secretAuthorizationResumePath(target []SecretAuthorizationCell, returnTo string) string {
+	next := url.Values{"return_to": {safeSecretReturnPath(returnTo)}}
+	for _, cell := range target {
+		next.Add("target", encodeSecretTarget(cell))
+	}
+	return secretsPreviewPath + "?" + next.Encode()
 }
 
 func (h *handler) renderSecretPreview(w http.ResponseWriter, r *http.Request, target []SecretAuthorizationCell, returnTo, notice string) {
@@ -512,7 +519,7 @@ func (h *handler) handleSecretDetailRoutes(w http.ResponseWriter, r *http.Reques
 		h.handleSecretsRoot(w, r)
 		return
 	}
-	identifier := strings.TrimPrefix(r.URL.Path, secretsPrefix)
+	identifier := strings.TrimPrefix(r.URL.Path, secretsPath)
 	suffix := ""
 	if index := strings.LastIndex(identifier, "/"); index >= 0 {
 		suffix = identifier[index+1:]
@@ -536,19 +543,34 @@ func (h *handler) handleSecretDetailRoutes(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// FindSecretRow 按标识符或名字在机密项展示行里查找目标；两条入口（页面详
+// 情与 Web 写适配层）共用这一份匹配规则。
+func FindSecretRow(rows []SecretRow, identifier string) (SecretRow, bool) {
+	for i := range rows {
+		if rows[i].ID == identifier || rows[i].Name == identifier {
+			return rows[i], true
+		}
+	}
+	return SecretRow{}, false
+}
+
+// secretAllowedServerSet 把一个机密项的可写入服务器条目名转成集合，供矩
+// 阵与详情页勾选状态共用。
+func secretAllowedServerSet(row SecretRow) map[string]bool {
+	allowed := make(map[string]bool, len(row.AllowedServers))
+	for _, name := range row.AllowedServers {
+		allowed[name] = true
+	}
+	return allowed
+}
+
 func (h *handler) secretDetail(identifier string) (*SecretDetailView, error) {
 	rows, err := h.cfg.Secrets.ListSecrets("", "", "")
 	if err != nil {
 		return nil, err
 	}
-	var row *SecretRow
-	for i := range rows {
-		if rows[i].ID == identifier || rows[i].Name == identifier {
-			row = &rows[i]
-			break
-		}
-	}
-	if row == nil {
+	row, ok := FindSecretRow(rows, identifier)
+	if !ok {
 		return nil, &SecretNotFoundError{Identifier: identifier}
 	}
 	servers, err := h.cfg.Servers.Servers("")
@@ -556,17 +578,14 @@ func (h *handler) secretDetail(identifier string) (*SecretDetailView, error) {
 		return nil, err
 	}
 	sort.SliceStable(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
-	allowed := make(map[string]bool, len(row.AllowedServers))
-	for _, name := range row.AllowedServers {
-		allowed[name] = true
-	}
+	allowed := secretAllowedServerSet(row)
 	choices := make([]AccessGrantChoice, 0, len(servers))
 	for _, server := range servers {
 		choices = append(choices, AccessGrantChoice{
 			ID: server.ID, Name: server.Name, Checked: allowed[server.Name],
 		})
 	}
-	return &SecretDetailView{Row: *row, Servers: choices}, nil
+	return &SecretDetailView{Row: row, Servers: choices}, nil
 }
 
 func (h *handler) handleSecretDetail(w http.ResponseWriter, r *http.Request, identifier string) {
@@ -594,7 +613,7 @@ func (h *handler) renderSecretReadError(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *handler) handleSecretMetadataEdit(w http.ResponseWriter, r *http.Request, identifier string) {
-	target := secretsPrefix + identifier
+	target := secretsPath + identifier
 	if r.Method == http.MethodGet {
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "修改元数据请从详情页进入。")
 		return
@@ -638,7 +657,7 @@ func (h *handler) handleSecretMetadataEdit(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *handler) handleSecretValue(w http.ResponseWriter, r *http.Request, identifier string) {
-	target := secretsPrefix + identifier
+	target := secretsPath + identifier
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		detail, err := h.secretDetail(identifier)
@@ -655,8 +674,7 @@ func (h *handler) handleSecretValue(w http.ResponseWriter, r *http.Request, iden
 			h.renderSecretValueInputError(w, r, identifier, valueErr)
 			return
 		}
-		if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-			http.Redirect(w, r, reverifyPath(target+"/value?resume=1"), http.StatusSeeOther)
+		if h.redirectSecretWriteToReverify(w, r, target+"/value?resume=1") {
 			return
 		}
 		if err := h.cfg.SecretsWriter.SetSecretValue(
@@ -706,7 +724,7 @@ func (h *handler) renderSecretValueWriteError(w http.ResponseWriter, r *http.Req
 }
 
 func (h *handler) handleSecretDelete(w http.ResponseWriter, r *http.Request, identifier string) {
-	target := secretsPrefix + identifier
+	target := secretsPath + identifier
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		detail, err := h.secretDetail(identifier)
@@ -718,8 +736,7 @@ func (h *handler) handleSecretDelete(w http.ResponseWriter, r *http.Request, ide
 			Title: "删除 " + detail.Row.Name, SecretDetail: detail,
 		})
 	case http.MethodPost:
-		if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-			http.Redirect(w, r, reverifyPath(target+"/delete?resume=1"), http.StatusSeeOther)
+		if h.redirectSecretWriteToReverify(w, r, target+"/delete?resume=1") {
 			return
 		}
 		if err := h.cfg.SecretsWriter.DeleteSecret(
