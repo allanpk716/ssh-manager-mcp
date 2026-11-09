@@ -136,9 +136,10 @@ func (f *fakeLocalDial) observedTimeouts() []time.Duration {
 
 func (f *serviceFixture) service(dial LocalDialFunc) (*Service, *proberesults.FileProbeResults) {
 	results := proberesults.NewFileProbeResults(filepath.Join(f.resultsDir, "probe-results.json"))
+	now := time.Now().UTC()
 	return &Service{
 		Store: f.store, LocalDial: dial, Results: results,
-		Now: func() time.Time { return time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC) },
+		Now: func() time.Time { return now },
 	}, results
 }
 
@@ -646,7 +647,7 @@ func TestServiceRemoteCommandTimeoutKeepsPartialOutput(t *testing.T) {
 	results := proberesults.NewFileProbeResults(filepath.Join(dir, "probe-results.json"))
 	service := &Service{
 		Store: st, Results: results, TotalDeadline: 2 * time.Second,
-		Now: func() time.Time { return time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC) },
+		Now: func() time.Time { return time.Now().UTC() },
 	}
 	report, err := service.Probe(context.Background(), Request{
 		From: origin.ID, Targets: []string{"NAS:445"},
