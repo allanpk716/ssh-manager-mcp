@@ -84,7 +84,6 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	switch {
 	case destination.Kind == machineinit.UIDestinationInitializationWizard ||
 		destination.Kind == machineinit.UIDestinationStandaloneWebUI || serverWizard:
-		initializing = true
 		webRole = webui.RoleStandalone
 		servers = standaloneUIServerSource{}
 		serverWriter = standaloneUIServerWriter()
@@ -141,7 +140,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		RequestShutdown: requestShutdown,
 		ClientInstance:  resolvedInstance,
 	}
-	if serverWizard {
+	if initializing {
 		executablePath, err := os.Executable()
 		if err != nil {
 			return fmt.Errorf("读取 sshmgr 可执行文件绝对路径失败：%w", err)
