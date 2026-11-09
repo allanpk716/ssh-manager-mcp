@@ -83,7 +83,7 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 			},
 			{Category: models.SoftwareCategorySystemPackage, Name: "curl", Version: "8.8.0-1"},
 		},
-		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: server.ID, CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestSourceRequestsCollectionForClientCollector(t *testing.T) {
 	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
 		Items: []models.SoftwareObservedItem{{
 			Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "22.04.5",
-		}}, ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		}}, ServerID: server.ID, CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

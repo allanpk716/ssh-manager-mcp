@@ -11,6 +11,7 @@ import (
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
+	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -108,7 +109,7 @@ func seed(dir string) error {
 			{Category: models.SoftwareCategorySystemPackage, Name: "base-files", Version: "13.5ubuntu3"},
 			{Category: models.SoftwareCategorySystemPackage, Name: "zlib1g", Version: "1:1.3.dfsg-3.1ubuntu1"},
 		},
-		ServerID: webID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: webID, CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		return err
 	}
