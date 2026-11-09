@@ -101,7 +101,7 @@ func (s *inventoryQuerySource) SearchSoftware(namePart string) ([]softwareinvent
 			namePart, softwareinventory.AllDevicesVisible())
 	}
 	result, err := s.forwarder.QuerySoftwareInventory(mcpserver.QuerySoftwareInventoryInput{
-		Name: namePart,
+		Name: namePart, IncludeSystemPackages: true,
 	})
 	if err != nil {
 		return nil, s.mapError(err)

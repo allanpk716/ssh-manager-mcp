@@ -46,7 +46,9 @@ func newInventoryCmd() *cobra.Command {
 	}
 	cmd.AddCommand(
 		inventoryAddCmd(), inventoryEditCmd(), inventoryRmCmd(),
+		inventoryClaimCmd(), inventoryUnclaimCmd(),
 		inventoryViewCmd(), inventorySearchCmd(),
+		inventoryTodoCmd(),
 		inventoryExportCmd(),
 		inventoryCollectCmd(), inventorySudoCmd(),
 		inventoryHistoryCmd(), inventoryStatusCmd(),
@@ -359,6 +361,12 @@ func printDeviceInventory(w io.Writer, inventory *softwareinventory.DeviceInvent
 
 func printInventoryItem(w io.Writer, item softwareinventory.Item) {
 	fmt.Fprintf(w, "%s %s（来源：%s）\n", item.Name, item.Version, item.Source)
+	if item.VersionMismatch {
+		fmt.Fprintf(w, "  声明版本不一致：%s；已按实测版本显示\n", item.DeclaredVersion)
+	}
+	if item.Mismatch {
+		fmt.Fprintf(w, "  对不上：声明没有认领实测条目\n")
+	}
 	if item.PackageURL != "" {
 		fmt.Fprintf(w, "  软件包统一地址：%s\n", item.PackageURL)
 	}
