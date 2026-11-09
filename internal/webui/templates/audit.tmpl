@@ -1,6 +1,7 @@
 {{define "content"}}
 <section class="audit-page">
 <h1>审计</h1>
+{{if .Caps.CanUpgradeToServer}}<p class="operation-result"><a id="ops-upgrade-server-entry" href="/ui/ops/upgrade-server">升级为权威端</a></p>{{end}}
 <form class="audit-filter" method="get" action="/ui/ops/audit" hx-get="/ui/ops/audit" hx-target="#audit-results" hx-swap="outerHTML" hx-push-url="true">
 <div>
 <label for="audit-since">时间下限</label>

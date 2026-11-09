@@ -100,6 +100,12 @@ type Config struct {
 	SecretsWriter SecretWriter
 	Access        AccessStore
 	Ops           OpsStore
+	// MachineInit 是单机升级为权威端时调用的初始化模块适配器。适配器内部
+	// 调用 machineinit.Initialize 并把权威端作为目标角色；本包不写 role.json。
+	MachineInit MachineInitializer
+	// RequestShutdown 在升级成功页完整写给浏览器后触发，由 `sshmgr ui`
+	// 的服务循环注入，用于优雅关闭本次回环 Web UI 进程。
+	RequestShutdown func()
 	// ServiceRestart 是权威端显式注入的服务重启能力；不注入时不注册重启
 	// 路由，也不显示重启表单。
 	ServiceRestart OpsRestartStore
@@ -209,6 +215,9 @@ type capabilities struct {
 	CanUseClientOps bool
 	// CanQueryClientAudit 只对客户端开放，控制本机审计页。
 	CanQueryClientAudit bool
+	// CanUpgradeToServer 只对提供了初始化模块的单机开放，控制升级为权威
+	// 端的入口与路由。
+	CanUpgradeToServer bool
 }
 
 // capabilitiesForConfig 按构造参数推导页面能力开关：先按本机角色确定基础

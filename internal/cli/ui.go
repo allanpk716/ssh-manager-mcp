@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -67,10 +68,17 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource     webui.SecretSource
 		secretWriter     webui.SecretWriter
 		resolvedInstance string
+		machineInit      webui.MachineInitializer
 	)
 	initializing := false
+	uiShutdown := make(chan struct{})
+	var shutdownOnce sync.Once
+	requestShutdown := func() {
+		shutdownOnce.Do(func() { close(uiShutdown) })
+	}
 	switch {
-	case destination.Kind == machineinit.UIDestinationInitializationWizard:
+	case destination.Kind == machineinit.UIDestinationInitializationWizard ||
+		destination.Kind == machineinit.UIDestinationStandaloneWebUI:
 		initializing = true
 		webRole = webui.RoleStandalone
 		servers = standaloneUIServerSource{}
@@ -79,14 +87,8 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource = standaloneUISecretStore()
 		secretWriter = standaloneUISecretWriter()
 		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
-	case destination.Kind == machineinit.UIDestinationStandaloneWebUI:
-		webRole = webui.RoleStandalone
-		servers = standaloneUIServerSource{}
-		serverWriter = standaloneUIServerWriter()
-		accessSource = standaloneUIAccessStore()
-		secretSource = standaloneUISecretStore()
-		secretWriter = standaloneUISecretWriter()
-		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
+		machineInit = standaloneMachineInitializer{}
+		initializing = destination.Kind == machineinit.UIDestinationInitializationWizard
 	case destination.Kind == machineinit.UIDestinationClientWebUI:
 		resolvedInstance, err = resolveClientCacheInstance(instance)
 		if err != nil {
@@ -121,16 +123,18 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	config := webui.Config{
-		Role:           webRole,
-		Servers:        servers,
-		ServerWriter:   serverWriter,
-		Secrets:        secretSource,
-		SecretsWriter:  secretWriter,
-		VersionHint:    versionHint,
-		Port:           port,
-		Access:         accessSource,
-		Ops:            opsSource,
-		ClientInstance: resolvedInstance,
+		Role:            webRole,
+		Servers:         servers,
+		ServerWriter:    serverWriter,
+		Secrets:         secretSource,
+		SecretsWriter:   secretWriter,
+		VersionHint:     versionHint,
+		Port:            port,
+		Access:          accessSource,
+		Ops:             opsSource,
+		MachineInit:     machineInit,
+		RequestShutdown: requestShutdown,
+		ClientInstance:  resolvedInstance,
 	}
 	var handler http.Handler
 	var startup webui.Startup
@@ -167,6 +171,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	select {
 	case <-ctx.Done():
 	case <-stdinDone:
+	case <-uiShutdown:
 	case err := <-serveErr:
 		listenerErr = err
 	}

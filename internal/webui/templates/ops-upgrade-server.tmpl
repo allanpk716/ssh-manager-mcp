@@ -1,0 +1,22 @@
+{{define "content"}}
+<section class="ops-upgrade-server">
+<h1>升级为权威端</h1>
+{{if .OpsUpgradeServerError}}
+<div class="notice notice-error"><p>{{.OpsUpgradeServerError}}</p></div>
+{{end}}
+{{if .OpsUpgradeServerSuccess}}
+<div class="notice notice-success">
+<p>本机已升级为权威端。已有服务器、Profile、项目令牌与机密项保持不变。</p>
+<p>`sshmgr ui` 即将退出，再次运行它进入权威端初始化向导。</p>
+</div>
+{{else}}
+<p>升级会把本机从单机改为权威端。已有服务器、Profile、项目令牌与机密项保持不变，vault 数据不迁移也不清空。</p>
+<p>升级后还需要设置管理员口令、提权安装 serve；正式 Web UI 改由 serve 提供。</p>
+<form class="confirm-form" method="post" action="/ui/ops/upgrade-server/confirm">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label class="confirm-choice"><input type="checkbox" name="confirm" value="1" required>我确认现在把本机升级为权威端</label>
+<button type="submit">确认升级为权威端</button>
+</form>
+{{end}}
+</section>
+{{end}}

@@ -7,8 +7,10 @@ import (
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/machineinit"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/ops"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/secretmanage"
 	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/updater"
@@ -18,6 +20,15 @@ import (
 	"ssh-manager-mcp/internal/webuisecrets"
 	"ssh-manager-mcp/internal/webuiservers"
 )
+
+// standaloneMachineInitializer 把 Web UI 的「升级为权威端」动作接到初始化
+// 模块；Web UI 包只看到窄接口，不重写 role.json。
+type standaloneMachineInitializer struct{}
+
+func (standaloneMachineInitializer) InitializeServer() error {
+	_, err := machineinit.Initialize(roles.RoleServer)
+	return err
+}
 
 // standaloneUIServerSource 是单机角色的 Web UI 服务器列表来源：每次请求重新
 // 打开本机 vault 读取服务器条目，并按共享的「需要注意」规则标记。
