@@ -177,8 +177,8 @@ func (s *Store) SecretAllowStates(cells []SecretAllowCell) ([]SecretAllowState, 
 
 // ChangeSecretAllowsForNames 是命令行 allow / disallow 使用的授权变更入
 // 口：目标全部是授权或全部是取消授权，不做预览核对。名字缺失时先合并报
-// 出全部问题并整体不生效；名字齐全后仍由 ChangeSecretAllows 在一个事务里
-// 执行全部插入或删除，并为每个发生变化的机密项写审计。
+// 出全部问题并整体不生效；名字解析与执行共用同一个事务，期间其他入口
+// 删除相关条目不会把报错退回内部标识符，并为每个发生变化的机密项写审计。
 func (s *Store) ChangeSecretAllowsForNames(
 	secretNames, serverNames []string,
 	allow bool,
@@ -211,10 +211,7 @@ func (s *Store) ChangeSecretAllowsForNames(
 			})
 		}
 	}
-	if err := tx.Rollback(); err != nil {
-		return err
-	}
-	_, err = s.ChangeSecretAllows(changes, nil, source)
+	_, err = s.changeSecretAllowsTx(tx, changes, nil, source)
 	return err
 }
 
@@ -233,6 +230,23 @@ func (s *Store) ChangeSecretAllows(
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	return s.changeSecretAllowsTx(tx, changes, expected, source)
+}
+
+// changeSecretAllowsTx 在调用方已经开始的事务里按目标状态调整机密项授
+// 权，并在成功时提交事务。名字解析与执行共用一个事务时，中途被其他入口
+// 删除的条目不会造成一半生效。
+func (s *Store) changeSecretAllowsTx(
+	tx *sql.Tx,
+	changes []SecretAllowChange,
+	expected []SecretAllowState,
+	source WriteSource,
+) ([]SecretAllowChangeResult, error) {
 	targets, err := normalizeSecretAllowChanges(changes)
 	if err != nil {
 		return nil, err
@@ -252,11 +266,6 @@ func (s *Store) ChangeSecretAllows(
 		return nil, errors.New("授权变更的目标集合与预览集合不一致，整体未生效")
 	}
 
-	tx, err := s.db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
 	current, err := loadSecretAllowStates(tx, cells)
 	if err != nil {
 		return nil, err
