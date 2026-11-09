@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/store"
@@ -41,7 +42,7 @@ func TestInventoryCollectAssignedLocalRound(t *testing.T) {
 				DeviceName: "工作站",
 				Report: &softwareinventory.CollectionReport{
 					DeviceName: "工作站", ServerEntryName: "entry-a", Sudo: true,
-					CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+					CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 					ItemCounts: map[models.SoftwareCategory]int{
 						models.SoftwareCategorySystemPackage: 3,
 					},
@@ -87,11 +88,80 @@ func TestInventoryCollectAssignedLocalRound(t *testing.T) {
 	}
 }
 
-// TestInventoryCollectAssignedClientPlaceholder 验证客户端分支目前给出明
-// 确的后续版本提示；客户端在线取分派的路径由后续票实现。
-func TestInventoryCollectAssignedClientPlaceholder(t *testing.T) {
-	err := inventoryCollectAssignedClient(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "后续版本") {
-		t.Fatalf("客户端占位错误 = %v", err)
+// TestInventoryCollectAssignedClientBranch 覆盖客户端分支的命令行结论：输
+// 出一轮报告，部分失败用退出码 5，权威端不可达用退出码 4。
+func TestInventoryCollectAssignedClientBranch(t *testing.T) {
+	newSecretsEnv(t)
+	now := time.Unix(1770000000, 0)
+	reports := make(chan *softwareinventory.SchedulerRoundReport, 2)
+	reports <- &softwareinventory.SchedulerRoundReport{
+		Due: 1, Succeeded: 1,
+		Devices: []softwareinventory.SchedulerDeviceReport{{
+			DeviceName: "工作站",
+			Report: &softwareinventory.CollectionReport{
+				DeviceName: "工作站", ServerEntryName: "入口",
+				StartedAt: now, EndedAt: now,
+			},
+		}},
+	}
+	reports <- &softwareinventory.SchedulerRoundReport{Due: 1, Failed: 1}
+	previous := inventoryCollectAssignedClient
+	inventoryCollectAssignedClient = func(_ context.Context, _ string) (*softwareinventory.SchedulerRoundReport, error) {
+		return <-reports, nil
+	}
+	t.Cleanup(func() { inventoryCollectAssignedClient = previous })
+
+	var out strings.Builder
+	err := runInventoryCollectAssignedClient(context.Background(), "", &out, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "工作站") || !strings.Contains(out.String(), "入口") {
+		t.Fatalf("客户端采集输出：\n%s", out.String())
+	}
+
+	out.Reset()
+	err = runInventoryCollectAssignedClient(context.Background(), "", &out, false)
+	if ExitCodeFor(err) != exitCodePartialCollectFailure {
+		t.Fatalf("部分失败退出码 = %d，应为 5：%v", ExitCodeFor(err), err)
+	}
+
+	unreachableForwarder, uerr := clientops.NewSoftwareInventoryForwarder(clientops.CacheCred{})
+	if uerr != nil {
+		t.Fatal(uerr)
+	}
+	defer unreachableForwarder.Close()
+	_, unreachable := unreachableForwarder.SoftwareCollectionAssignments(context.Background())
+	inventoryCollectAssignedClient = func(context.Context, string) (*softwareinventory.SchedulerRoundReport, error) {
+		return nil, unreachable
+	}
+	if code := ExitCodeFor(runInventoryCollectAssignedClient(context.Background(), "", &out, false)); code != exitCodeAuthorityUnreachable {
+		t.Fatalf("权威端不可达退出码 = %d，应为 4：%v", code, unreachable)
+	}
+}
+
+// TestInventoryCollectAssignedClientUsesLock 验证计划任务路径先拿本地锁文
+// 件；锁被 MCP 桥持有时直接失败，不并发执行。
+func TestInventoryCollectAssignedClientUsesLock(t *testing.T) {
+	newSecretsEnv(t)
+	t.Setenv("SSHMGR_CACHE_DIR", t.TempDir())
+	path, err := clientops.SoftwareInventoryCollectionLockPath("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := clientops.AcquireSoftwareInventoryCollectionLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+	previous := inventoryCollectAssignedClient
+	inventoryCollectAssignedClient = func(context.Context, string) (*softwareinventory.SchedulerRoundReport, error) {
+		t.Fatal("锁被持有时不应执行客户端采集")
+		return nil, nil
+	}
+	t.Cleanup(func() { inventoryCollectAssignedClient = previous })
+	err = runInventoryCollectAssignedClient(context.Background(), "", &strings.Builder{}, false)
+	if err == nil || !strings.Contains(err.Error(), "另一份软件清单采集正在执行") {
+		t.Fatalf("锁忙时应直接失败：%v", err)
 	}
 }

@@ -21,7 +21,7 @@ func mustObservedItems(
 		items[i].CollectedAt = collectedAt
 	}
 	if err := st.ReplaceSoftwareObservedItems(deviceName, store.SoftwareObservedWrite{
-		Items: items, ServerID: "", CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		Items: items, ServerID: "", CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

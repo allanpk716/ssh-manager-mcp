@@ -10,10 +10,10 @@ import (
 )
 
 // fixtureOutput 读入一份真实机器录得的固定命令集输出。夹具来自
-// testdata/linux/README.md 描述的三台 Ubuntu 机器。
+// testdata/posix/README.md 描述的 POSIX 机器。
 func fixtureOutput(t *testing.T, name string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "linux", name))
+	data, err := os.ReadFile(filepath.Join("testdata", "posix", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,15 +78,15 @@ func countObserved(items []models.SoftwareObservedItem, category models.Software
 	return total
 }
 
-// TestParseLinuxFullFixture 用 Ubuntu 24.04 的完整真实输出覆盖：类别与精确
+// TestParsePOSIXUbuntuFullFixture 用 Ubuntu 24.04 的完整真实输出覆盖：类别与精确
 // 版本、软件包统一地址、监听端口反查到系统包、两种未识别进程、暴露级别
 // 三档推导、容器镜像的标签摘要与运行状态、BIOS 与显卡驱动。
-func TestParseLinuxFullFixture(t *testing.T) {
-	collection, err := parseLinuxInventoryOutput(fixtureOutput(t, "ubuntu2404-full.txt"))
+func TestParsePOSIXUbuntuFullFixture(t *testing.T) {
+	collection, err := parsePOSIXInventoryOutput(posixFixtureOutput(t, "ubuntu2404-full.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if collection.CommandSetVersion != LinuxCommandSetVersion {
+	if collection.CommandSetVersion != POSIXCommandSetVersion {
 		t.Fatalf("命令集版本 = %q", collection.CommandSetVersion)
 	}
 	if collection.SystemType != "ubuntu" {
@@ -194,8 +194,8 @@ func TestParseLinuxFullFixture(t *testing.T) {
 
 // TestParseLinuxNoProcessNamesFixture 用 Ubuntu 22.04 普通用户的真实输出覆
 // 盖权限不足的情况：大部分监听端口看不到进程名，只能生成未识别进程。
-func TestParseLinuxNoProcessNamesFixture(t *testing.T) {
-	collection, err := parseLinuxInventoryOutput(fixtureOutput(t, "ubuntu2204-no-process-names.txt"))
+func TestParsePOSIXUbuntuNoProcessNamesFixture(t *testing.T) {
+	collection, err := parsePOSIXInventoryOutput(posixFixtureOutput(t, "ubuntu2204-no-process-names.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,8 +238,8 @@ func TestParseLinuxNoProcessNamesFixture(t *testing.T) {
 
 // TestParseLinuxTruncatedFixture 覆盖输出中途被截断的情况：已解析的节保
 // 留，未出现的节与没有 STATUS 行的节都记为不完整。
-func TestParseLinuxTruncatedFixture(t *testing.T) {
-	collection, err := parseLinuxInventoryOutput(fixtureOutput(t, "ubuntu2404-truncated.txt"))
+func TestParsePOSIXUbuntuTruncatedFixture(t *testing.T) {
+	collection, err := parsePOSIXInventoryOutput(posixFixtureOutput(t, "ubuntu2404-truncated.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,12 +266,14 @@ func TestParseLinuxTruncatedFixture(t *testing.T) {
 	}
 }
 
-// TestParseLinuxProtocolEdges 用合成输出钉住输出协议的边界：工具不存在
+// TestParsePOSIXProtocolEdges 用合成输出钉住输出协议的边界：工具不存在
 // （ABSENT）不算不完整，非零退出码与缺 END 行都算不完整，完全没有开头标
 // 记则无法解析。
-func TestParseLinuxProtocolEdges(t *testing.T) {
-	output := "SSHMGR-INVENTORY BEGIN linux-v1\n" +
+func TestParsePOSIXProtocolEdges(t *testing.T) {
+	output := "SSHMGR-INVENTORY BEGIN posix-v2\n" +
 		"SSHMGR-INVENTORY SECTION os\n" +
+		"kernel-name=Linux\n" +
+		"file=/etc/os-release\n" +
 		"PRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n" +
 		"NAME=\"Debian GNU/Linux\"\n" +
 		"VERSION_ID=\"12\"\n" +
@@ -283,7 +285,17 @@ func TestParseLinuxProtocolEdges(t *testing.T) {
 		"SSHMGR-INVENTORY SECTION packages\n" +
 		"bash\t5.2.15-2+b7\tamd64\tii\n" +
 		"SSHMGR-INVENTORY STATUS packages 0\n"
-	collection, err := parseLinuxInventoryOutput(output)
+	output += "SSHMGR-INVENTORY ABSENT listen\n" +
+		"SSHMGR-INVENTORY ABSENT listen-netstat\n" +
+		"SSHMGR-INVENTORY ABSENT listen-lsof\n" +
+		"SSHMGR-INVENTORY ABSENT exe\n" +
+		"SSHMGR-INVENTORY ABSENT exe-owner\n" +
+		"SSHMGR-INVENTORY ABSENT apps\n" +
+		"SSHMGR-INVENTORY ABSENT brew\n" +
+		"SSHMGR-INVENTORY ABSENT synology-packages\n" +
+		"SSHMGR-INVENTORY ABSENT firmware\n" +
+		"SSHMGR-INVENTORY ABSENT gpu-driver\n"
+	collection, err := parsePOSIXInventoryOutput(output)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +314,7 @@ func TestParseLinuxProtocolEdges(t *testing.T) {
 	}
 
 	failed := strings.Replace(output, "STATUS packages 0", "STATUS packages 1", 1) + "SSHMGR-INVENTORY END\n"
-	collection, err = parseLinuxInventoryOutput(failed)
+	collection, err = parsePOSIXInventoryOutput(failed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,20 +322,20 @@ func TestParseLinuxProtocolEdges(t *testing.T) {
 		t.Fatal("非零退出码的节应标为不完整")
 	}
 
-	if _, err := parseLinuxInventoryOutput("SSHMGR-INVENTORY END\n"); err == nil {
+	if _, err := parsePOSIXInventoryOutput("SSHMGR-INVENTORY END\n"); err == nil {
 		t.Fatal("没有开头标记的输出应无法解析")
 	}
 }
 
-// TestParseLinuxMissingOSSection 覆盖整节缺失的边界：os 节完全没出现时，
+// TestParsePOSIXMissingOSSection 覆盖整节缺失的边界：os 节完全没出现时，
 // 不能凭空造出操作系统条目，只把结果标为不完整。
-func TestParseLinuxMissingOSSection(t *testing.T) {
-	output := "SSHMGR-INVENTORY BEGIN linux-v1\n" +
+func TestParsePOSIXMissingOSSection(t *testing.T) {
+	output := "SSHMGR-INVENTORY BEGIN posix-v2\n" +
 		"SSHMGR-INVENTORY SECTION packages\n" +
 		"bash\t5.2.15-2+b7\tamd64\tii\n" +
 		"SSHMGR-INVENTORY STATUS packages 0\n" +
 		"SSHMGR-INVENTORY END\n"
-	collection, err := parseLinuxInventoryOutput(output)
+	collection, err := parsePOSIXInventoryOutput(output)
 	if err != nil {
 		t.Fatal(err)
 	}

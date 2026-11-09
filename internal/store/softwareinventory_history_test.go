@@ -28,7 +28,7 @@ func historyKinds(rows []models.SoftwareChangeEntry) map[string]softwareHistoryC
 // observedWriteWithItems 组一次成功采集的落库输入。
 func observedWriteWithItems(serverID string, incomplete bool, items ...models.SoftwareObservedItem) SoftwareObservedWrite {
 	return SoftwareObservedWrite{
-		Items: items, ServerID: serverID, CommandSetVersion: "linux-v1",
+		Items: items, ServerID: serverID, CommandSetVersion: "posix-v2",
 		SystemType: "ubuntu", Incomplete: incomplete,
 	}
 }

@@ -228,6 +228,17 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 			softwareInventoryHandler.ServeHTTP(w, req)
 			return
 		}
+		// 票 #187：采集分派与结果上交同样使用设备码认证。
+		softwareInventoryAssignmentHandler := cacheAuth(http.HandlerFunc(r.handleSoftwareInventoryAssignments))
+		if req.URL.Path == "/software-inventory/assignments" {
+			softwareInventoryAssignmentHandler.ServeHTTP(w, req)
+			return
+		}
+		softwareInventoryResultHandler := cacheAuth(http.HandlerFunc(r.handleSoftwareInventoryResults))
+		if req.URL.Path == "/software-inventory/results" {
+			softwareInventoryResultHandler.ServeHTTP(w, req)
+			return
+		}
 		// 票 #188：「提交声明草稿」是受审计转发写的新成员，同样挂在设
 		// 备码认证上；只写草稿，owner 确认后才生效。
 		softwareDeclarationDraftsHandler := cacheAuth(http.HandlerFunc(r.handleSoftwareDeclarationDrafts))

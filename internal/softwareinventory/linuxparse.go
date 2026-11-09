@@ -36,57 +36,6 @@ type parsedSection struct {
 	lines   []string
 }
 
-// parseLinuxInventoryOutput 解析 Linux 固定命令集的输出。输出完全没有开
-// 头标记时返回错误（无法判定这是不是一次软件清单输出）；其余问题都记为
-// 不完整并尽量保留已解析的条目。
-func parseLinuxInventoryOutput(output string) (*ParsedCollection, error) {
-	sections, version, sawEnd, err := splitInventorySections(output)
-	if err != nil {
-		return nil, err
-	}
-	collection := &ParsedCollection{CommandSetVersion: version}
-	for _, name := range linuxV1Sections {
-		section, present := sections[name]
-		if !present {
-			collection.Incomplete = true
-			collection.Notes = append(collection.Notes, fmt.Sprintf("缺少 %s 节", name))
-			continue
-		}
-		if section.outcome == sectionIncomplete {
-			collection.Incomplete = true
-			collection.Notes = append(collection.Notes, fmt.Sprintf("%s 节未完成", name))
-		}
-	}
-	if !sawEnd {
-		collection.Incomplete = true
-		collection.Notes = append(collection.Notes, "缺少结尾标记")
-	}
-
-	osSection := sections["os"]
-	osInfo := parseLinuxOSSection(sectionOrEmpty(sections, "os").lines)
-	collection.SystemType = osInfo.systemType
-	if collection.SystemType == "" {
-		collection.Incomplete = true
-		collection.Notes = append(collection.Notes, "系统识别结果为空")
-	}
-	if osSection != nil && osInfo.recognized {
-		collection.Items = append(collection.Items, buildLinuxOSItems(osInfo)...)
-	}
-	collection.Items = append(collection.Items,
-		buildLinuxPackageItems(sectionOrEmpty(sections, "packages"), osInfo.systemType)...)
-	collection.Items = append(collection.Items, buildLinuxListeningItems(
-		sectionOrEmpty(sections, "listen"), sectionOrEmpty(sections, "exe"),
-		sectionOrEmpty(sections, "exe-owner"),
-		packageItemIndex(collection.Items))...)
-	collection.Items = append(collection.Items, buildLinuxContainerItems(
-		sectionOrEmpty(sections, "container-images"), sectionOrEmpty(sections, "containers"))...)
-	collection.Items = append(collection.Items,
-		buildLinuxFirmwareItems(sectionOrEmpty(sections, "firmware"))...)
-	collection.Items = append(collection.Items,
-		buildLinuxGPUDriverItems(sectionOrEmpty(sections, "gpu-driver"))...)
-	return collection, nil
-}
-
 // sectionOrEmpty 返回一节的值；节缺失时返回零值，让后续构造函数按“不完整
 // 的节”处理。
 func sectionOrEmpty(sections map[string]*parsedSection, name string) parsedSection {
@@ -156,68 +105,6 @@ func splitInventorySections(output string) (map[string]*parsedSection, string, b
 		return nil, "", false, fmt.Errorf("固定命令集输出缺少 %s BEGIN 开头标记", InventoryMarker)
 	}
 	return sections, version, sawEnd, nil
-}
-
-type linuxOSInfo struct {
-	name       string
-	version    string
-	systemType string
-	kernel     string
-	machine    string
-	recognized bool
-}
-
-func parseLinuxOSSection(lines []string) linuxOSInfo {
-	info := linuxOSInfo{}
-	for _, line := range lines {
-		key, value, present := strings.Cut(line, "=")
-		if !present {
-			continue
-		}
-		info.recognized = true
-		value = strings.Trim(value, `"'`)
-		switch strings.TrimSpace(key) {
-		case "NAME":
-			info.name = value
-		case "VERSION_ID":
-			info.version = value
-		case "ID":
-			info.systemType = value
-		case "ID_LIKE":
-			if info.systemType == "" {
-				info.systemType = strings.Fields(value)[0]
-			}
-		case "kernel":
-			info.kernel = value
-		case "machine":
-			info.machine = value
-		}
-	}
-	if info.name == "" {
-		info.name = firstNonEmptyString(info.systemType, "Linux")
-	}
-	if info.version == "" {
-		info.version = "unknown"
-	}
-	return info
-}
-
-func buildLinuxOSItems(info linuxOSInfo) []models.SoftwareObservedItem {
-	items := []models.SoftwareObservedItem{{
-		Category:     models.SoftwareCategoryOperatingSystem,
-		Name:         info.name,
-		Version:      info.version,
-		Architecture: info.machine,
-	}}
-	if info.kernel != "" {
-		items = append(items, models.SoftwareObservedItem{
-			Category:     models.SoftwareCategoryDriverFirmware,
-			Name:         "Linux 内核",
-			Version:      info.kernel,
-			Architecture: info.machine,
-		})
-	}
-	return items
 }
 
 func buildLinuxPackageItems(section parsedSection, systemType string) []models.SoftwareObservedItem {

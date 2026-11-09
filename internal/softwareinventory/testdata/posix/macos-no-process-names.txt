@@ -1,0 +1,342 @@
+SSHMGR-INVENTORY BEGIN posix-v2
+SSHMGR-INVENTORY SECTION os
+kernel-name=Darwin
+kernel=27.0.0
+machine=arm64
+file=sw_vers
+ProductName:		macOS
+ProductVersion:		27.0.1
+BuildVersion:		26A434
+SSHMGR-INVENTORY STATUS os 0
+SSHMGR-INVENTORY SECTION packages
+SSHMGR-INVENTORY ABSENT packages
+SSHMGR-INVENTORY SECTION listen
+SSHMGR-INVENTORY ABSENT listen
+SSHMGR-INVENTORY SECTION listen-netstat
+SSHMGR-INVENTORY ABSENT listen-netstat
+SSHMGR-INVENTORY SECTION listen-lsof
+p427
+crapportd
+f11
+tIPv4
+PTCP
+n*:49162
+f12
+tIPv6
+PTCP
+n*:49162
+p435
+cARDAgent
+f6
+tIPv6
+PUDP
+n*:3283
+f7
+tIPv4
+PUDP
+n*:3283
+f10
+tIPv6
+PTCP
+n*:3283
+p442
+cidentityservicesd
+f4
+tIPv4
+PUDP
+n*:*
+f15
+tIPv4
+PUDP
+n*:*
+f20
+tIPv4
+PUDP
+n*:*
+p456
+csharingd
+f4
+tIPv4
+PUDP
+n*:*
+p468
+cControlCenter
+f11
+tIPv4
+PTCP
+n*:7000
+f12
+tIPv6
+PTCP
+n*:7000
+f13
+tIPv4
+PTCP
+n*:5000
+f14
+tIPv6
+PTCP
+n*:5000
+p1026
+cferryman
+f5
+tIPv4
+PTCP
+n127.0.0.1:15900
+f7
+tIPv4
+PTCP
+n127.0.0.1:15700
+p1027
+cRustDesk
+f21
+tIPv4
+PUDP
+n*:65158
+f34
+tIPv4
+PUDP
+n*:21119
+f35
+tIPv6
+PTCP
+n*:21118
+p1092
+ccloud-drive-ui
+f48
+tIPv4
+PTCP
+n127.0.0.1:49199
+p1130
+ccloud-drive-connect
+f4
+tIPv4
+PTCP
+n127.0.0.1:49190
+p1181
+ccloud-drive-daemon
+f4
+tIPv4
+PTCP
+n127.0.0.1:49203
+f48
+tIPv4
+PTCP
+n127.0.0.1:49199
+p8772
+cFinderSync
+f5
+tIPv4
+PTCP
+n127.0.0.1:1025
+p16165
+cmockit
+f5
+tIPv6
+PTCP
+n*:8321
+p32919
+ccaddy-cf
+f8
+tIPv4
+PTCP
+n127.0.0.1:2019
+f9
+tIPv4
+PTCP
+n100.64.176.28:8443
+f10
+tIPv4
+PUDP
+n100.64.176.28:8443
+p33856
+creplicatord
+f9
+tIPv6
+PUDP
+n*:52222
+p58760
+cOrca
+f81
+tIPv4
+PTCP
+n127.0.0.1:62788
+f82
+tIPv4
+PTCP
+n*:6768
+p77896
+climactl
+f13
+tIPv4
+PTCP
+n127.0.0.1:55516
+f17
+tIPv4
+PUDP
+n198.51.100.137:63808->198.18.4.24:7844
+p77980
+climactl
+f8
+tIPv6
+PTCP
+n*:53
+p78008
+cssh
+f11
+tIPv4
+PTCP
+n127.0.0.1:5173
+f13
+tIPv4
+PTCP
+n127.0.0.1:3100
+f14
+tIPv4
+PTCP
+n127.0.0.1:32769
+p99755
+cnode
+f14
+tIPv4
+PTCP
+n127.0.0.1:8989
+SSHMGR-INVENTORY STATUS listen-lsof 0
+SSHMGR-INVENTORY SECTION exe
+427	/usr/libexec/rapportd
+435	/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent
+442	/System/Library/PrivateFrameworks/IDS.framework/identityservicesd.app/Contents/MacOS/identityservicesd
+456	/usr/libexec/sharingd
+468	/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter
+1026	/Users/user/orca/ferryman/ferryman
+1027	/Applications/RustDesk.app/Contents/MacOS/RustDesk
+1092	/Users/user/Library/Application Support/SynologyDrive/SynologyDrive.app/Contents/MacOS/cloud-drive-ui
+1130	/Users/user/Library/Application Support/SynologyDrive/SynologyDrive.app/Contents/MacOS/cloud-drive-connect
+1181	/Users/user/Library/Application Support/SynologyDrive/SynologyDrive.app/Contents/MacOS/cloud-drive-daemon
+8772	/Users/user/Library/Application Support/SynologyDrive/SynologyDrive.app/Contents/Resources/FinderHelper.app/Contents/PlugIns/FinderSync.appex/Contents/MacOS/FinderSync
+16165	/Users/user/.mockit/bin/mockit
+32919	/Users/user/ops/rakazo/bin/caddy-cf
+33856	/System/Library/PrivateFrameworks/ReplicatorCore.framework/Support/replicatord
+58760	/Applications/Orca.app/Contents/MacOS/Orca
+77896	/opt/homebrew/bin/limactl
+77980	/opt/homebrew/bin/limactl
+78008	ssh: /Users/user/.colima/_lima/colima/ssh.sock [mux]
+99755	node
+SSHMGR-INVENTORY STATUS exe 0
+SSHMGR-INVENTORY SECTION exe-owner
+SSHMGR-INVENTORY ABSENT exe-owner
+SSHMGR-INVENTORY SECTION apps
+/Applications/BetterDisplay.app	5.2.1	pro.betterdisplay.BetterDisplay
+/Applications/Bitwarden.app	2026.10.0	com.bitwarden.desktop
+/Applications/GarageBand.app	10.4.14	com.apple.garageband10
+/Applications/Keynote Creator Studio.app	15.3	com.apple.Keynote
+/Applications/Numbers Creator Studio.app	15.3	com.apple.Numbers
+/Applications/Orca.app	1.4.253	com.stablyai.orca
+/Applications/Pages Creator Studio.app	15.3	com.apple.Pages
+/Applications/RoamRun.app	0.9.0	io.github.mh-mobile.roamrun
+/Applications/RustDesk.app	1.5.0	com.carriez.rustdesk
+/Applications/Safari.app	27.0.1	com.apple.Safari
+/Applications/Synology Drive Client.app	8.0.3	com.synology.CloudStation
+/Applications/Xcode.app	27.1	com.apple.dt.Xcode
+/Applications/iMovie.app	10.4.4	com.apple.iMovieApp
+SSHMGR-INVENTORY STATUS apps 0
+SSHMGR-INVENTORY SECTION brew
+formula	abseil 20260817.0
+formula	acme.sh 3.1.6
+formula	ada-url 4.0.0_1
+formula	blueutil 2.14.0
+formula	brotli 1.2.1
+formula	c-ares 1.34.9
+formula	ca-certificates 2026-10-20
+formula	caddy 2.11.7
+formula	colima 0.10.3
+formula	dav1d 1.5.4
+formula	displayplacer 1.4.0
+formula	docker 29.9.2
+formula	docker-compose 5.6.1
+formula	dotnet 10.0.403
+formula	ffmpeg 9.0.2_1
+formula	fmt 12.2.0
+formula	gettext 1.0
+formula	gh 2.103.0
+formula	git 2.56.0_1
+formula	go 1.27.3
+formula	hdrhistogram_c 0.12.1
+formula	highway 1.4.0
+formula	icu4c@78 78.3
+formula	icu4c@79 79.1
+formula	json-c 0.19
+formula	lame 4.0
+formula	libevent 2.1.13_1
+formula	libffi 3.8.0
+formula	libnghttp2 1.70.0
+formula	libunistring 1.5
+formula	libuv 1.53.0
+formula	libvmaf 3.2.1
+formula	libvpx 1.17.0
+formula	libwebsockets 5.1.0
+formula	lima 2.2.1
+formula	llhttp 9.4.3
+formula	lz4 1.10.0
+formula	mas 7.0.0
+formula	merve 1.2.2_4
+formula	mpdecimal 4.0.1
+formula	mpg123 1.33.7
+formula	nbytes 0.1.4
+formula	node 26.13.0
+formula	openssl@3 3.5.9
+formula	openssl@4 4.1.0 4.0.3
+formula	opus 1.6.1
+formula	pcre2 10.49
+formula	powershell 7.6.9_1
+formula	python@3.12 3.12.16
+formula	readline 8.3.6
+formula	sdl2-compat 2.32.74
+formula	sdl3 3.4.20
+formula	simdjson 5.0.6 5.0.5
+formula	simdutf 9.3.3 9.3.2
+formula	sqlite 3.54.1
+formula	svt-av1 4.3.0
+formula	tailscale 1.104.2
+formula	ttyd 1.7.7_15
+formula	uv 0.13.5
+formula	uvwasi 0.0.23
+formula	vhs 0.12.1
+formula	wallpaper 2.3.4
+formula	x264 r3222
+formula	x265 4.3
+formula	xcodegen 2.46.0
+formula	xz 5.8.4
+formula	zstd 1.5.7_1
+cask	betterdisplay 5.2.1
+cask	obsidian 1.14.5
+cask	roamrun 0.9.0
+cask	rustdesk 1.5.0
+SSHMGR-INVENTORY STATUS brew 0
+SSHMGR-INVENTORY SECTION synology-packages
+SSHMGR-INVENTORY ABSENT synology-packages
+SSHMGR-INVENTORY SECTION container-images
+ghcr.io/elie222/rakazo/app	edge	sha256:fcc97ae07f8b41cce6ae4f08aa36670569e965fbe480bda9779a00ba89fdd8e3	sha256:fcc97ae07f8b41cce6ae4f08aa36670569e965fbe480bda9779a00ba89fdd8e3
+ghcr.io/elie222/rakazo/computer	edge	sha256:702ff322317e887049ff0a4c358cdf6ed75eedb9f96b3d5514cb93578fc3bf4b	sha256:702ff322317e887049ff0a4c358cdf6ed75eedb9f96b3d5514cb93578fc3bf4b
+lscr.io/linuxserver/openssh-server	latest	sha256:aa4e1b3916e8555f24e574e6108b0b89a1b20362b0a11800a71280b45999649e	sha256:aa4e1b3916e8555f24e574e6108b0b89a1b20362b0a11800a71280b45999649e
+curlimages/curl	latest	sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93	sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
+node	22-alpine	sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914	sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+golang	1.26-alpine	sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308	sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308
+alpine	3.22	sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f	sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
+postgres	<none>	sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5	sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+busybox	1	sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4	sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
+registry	2	sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373	sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+SSHMGR-INVENTORY STATUS container-images 0
+SSHMGR-INVENTORY SECTION containers
+c3745b3c6d48442bf946ffe87b0ba4380f0ec1c429c6295141ae3d11e024545c	ghcr.io/elie222/rakazo/app:edge	rakazo-worker-1	3100/tcp, 5173/tcp, 7091/tcp
+f57ae6e55daafdce47a4fdd80ed0580132eef24c27592550dc55443aef5157ae	ghcr.io/elie222/rakazo/app:edge	rakazo-api-1	5173/tcp, 127.0.0.1:3100->3100/tcp, 7091/tcp
+3baaa81558dba56a67ebcf354d02b330bcd23b62b59c0b22ae1250b48158377f	ghcr.io/elie222/rakazo/app:edge	rakazo-web-1	3100/tcp, 7091/tcp, 127.0.0.1:5173->5173/tcp
+808c0de3d3ca38bad3feb5401c53d7c024ea1e14230b54755a8f788bda3e0a27	ghcr.io/elie222/rakazo/app:edge	rakazo-supervisor-1	3100/tcp, 5173/tcp, 7091/tcp
+bbe1374331632f30eff84e8819ea8c3b99e1941607fed93c4af5fa3a8589bb55	sha256:06e79ba1324f5e104d2b2a7def4c56f7b1ec0648eb77ee82ad370b20ad0abb3e	rakazo-bot-team-dd9ab9713bf7fcedfdbb1036471a1ccd	6081-6095/tcp, 7070/tcp, 127.0.0.1:32769->6080/tcp
+23c1bd0534f55d7889271fd80d89d30c81a77be0cf45ed87e981d556cc6c4610	postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5	rakazo-postgres-1	5432/tcp
+SSHMGR-INVENTORY STATUS containers 0
+SSHMGR-INVENTORY SECTION firmware
+SSHMGR-INVENTORY ABSENT firmware
+SSHMGR-INVENTORY SECTION gpu-driver
+SSHMGR-INVENTORY ABSENT gpu-driver
+SSHMGR-INVENTORY END

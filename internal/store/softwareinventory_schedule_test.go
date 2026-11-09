@@ -24,7 +24,7 @@ func TestSoftwareCollectionStatusesForCollector(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.ReplaceSoftwareObservedItems("工作站", SoftwareObservedWrite{
-		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: server.ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestSoftwareImmediateCollectionRequest(t *testing.T) {
 	}
 
 	if err := st.ReplaceSoftwareObservedItems("工作站", SoftwareObservedWrite{
-		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: server.ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, CLISource()); err != nil {
 		t.Fatal(err)
 	}

@@ -69,7 +69,9 @@ CREATE TABLE IF NOT EXISTS software_collection_settings (
 
 // SoftwareObservedWrite 是一次成功采集要整体写入的数据。
 type SoftwareObservedWrite struct {
-	Items             []models.SoftwareObservedItem
+	Items []models.SoftwareObservedItem
+	// Collector 是这次结果的采集执行者；空值表示权威端。
+	Collector         string
 	ServerID          string
 	Sudo              bool
 	CommandSetVersion string
@@ -232,15 +234,16 @@ func (s *Store) ReplaceSoftwareObservedItems(
 	if write.Incomplete {
 		result = "incomplete"
 	}
-	if err := writeSoftwareCollectionStatusTx(tx, device.ID, write.ServerID, &softwareCollectionSuccess{
+	if err := writeSoftwareCollectionStatusTx(tx, device.ID, write.ServerID, write.Collector, &softwareCollectionSuccess{
 		CommandSetVersion: write.CommandSetVersion, SystemType: write.SystemType,
 		Incomplete: write.Incomplete, SuccessAt: at,
 	}, softwareCollectionFailure{}); err != nil {
 		return err
 	}
 	if err := writeSoftwareAuditTx(tx, at, "software-collect", map[string]any{
-		"device": device.Name, "server": serverName, "collector": "authority",
-		"sudo": write.Sudo, "result": result,
+		"device": device.Name, "server": serverName,
+		"collector": collectorValue(write.Collector),
+		"sudo":      write.Sudo, "result": result,
 	}, source); err != nil {
 		return err
 	}
@@ -275,14 +278,15 @@ func (s *Store) RecordSoftwareCollectionFailure(
 		serverName = server.Name
 	}
 	at := s.nowTime()
-	if err := writeSoftwareCollectionStatusTx(tx, device.ID, "", nil, softwareCollectionFailure{
+	if err := writeSoftwareCollectionStatusTx(tx, device.ID, "", "", nil, softwareCollectionFailure{
 		At: at, Reason: reason,
 	}); err != nil {
 		return err
 	}
 	if err := writeSoftwareAuditTx(tx, at, "software-collect", map[string]any{
-		"device": device.Name, "server": serverName, "collector": "authority",
-		"sudo": sudo, "result": "failed", "reason": reason,
+		"device": device.Name, "server": serverName,
+		"collector": collectorValue(""),
+		"sudo":      sudo, "result": "failed", "reason": reason,
 	}, source); err != nil {
 		return err
 	}
@@ -431,6 +435,13 @@ func (s *Store) SoftwareObservedItemsForDevice(deviceName string) ([]models.Soft
 	return softwareObservedItemsForDeviceTx(s.db, device.ID)
 }
 
+func collectorValue(collector string) string {
+	if strings.TrimSpace(collector) == "" {
+		return "authority"
+	}
+	return collector
+}
+
 // softwareCollectionSuccess 是一次成功采集要写进状态的新字段。
 type softwareCollectionSuccess struct {
 	CommandSetVersion string
@@ -449,7 +460,7 @@ type softwareCollectionFailure struct {
 // 盖自己的字段，保留对方的历史值。
 func writeSoftwareCollectionStatusTx(
 	tx *sql.Tx,
-	deviceID, lastServerID string,
+	deviceID, lastServerID, collector string,
 	success *softwareCollectionSuccess,
 	failure softwareCollectionFailure,
 ) error {
@@ -466,7 +477,7 @@ func writeSoftwareCollectionStatusTx(
 				command_set_version=excluded.command_set_version,
 				system_type=excluded.system_type,
 				pending_immediate=0`,
-			deviceID, "authority", lastServerID, success.SuccessAt.Unix(),
+			deviceID, collectorValue(collector), lastServerID, success.SuccessAt.Unix(),
 			success.Incomplete, success.CommandSetVersion, success.SystemType,
 		)
 		return err
@@ -479,7 +490,7 @@ func writeSoftwareCollectionStatusTx(
 			last_failure_at=excluded.last_failure_at,
 			last_failure_reason=excluded.last_failure_reason,
 			pending_immediate=0`,
-		deviceID, "authority", failure.At.Unix(), failure.Reason,
+		deviceID, collectorValue(collector), failure.At.Unix(), failure.Reason,
 	)
 	return err
 }

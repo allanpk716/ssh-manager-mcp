@@ -46,7 +46,7 @@ func TestInventoryClaimAndUnclaimCLI(t *testing.T) {
 	}
 	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
 		Items:             []models.SoftwareObservedItem{observed},
-		CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
