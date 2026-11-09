@@ -90,6 +90,7 @@ sshmgr update --file <包> [--sha256 <hex> | --no-verify]   # 本地包模式（
 vault、master key、agent 全在**同一台机**：`.mcp.json` 里 `command: sshmgr, args: ["mcp"]` + `env SSHMGR_TOKEN`，MCP 客户端按需 spawn 子进程直开 vault（可写）。
 
 - 入门：[getting-started.md](./getting-started.md) · 全程页面操作：[web-ui-single-machine.md](./web-ui-single-machine.md) · 快速版：[quickstart-single-machine.md](./quickstart-single-machine.md)
+- 首次初始化：`sshmgr ui` 向导选「单机」（命令行等价命令：`sshmgr init --role standalone`）。
 - headless / 无 keychain 环境用 `SSHMGR_MASTERKEY_HEX` 等 env 形态（见 getting-started 对应节）。
 
 ## ② 多机部署（唯一多机接入方式：权威 broker + 本地只读缓存）
