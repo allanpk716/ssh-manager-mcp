@@ -27,6 +27,7 @@ type CollectionStatusView struct {
 	CommandSetVersion string     `json:"command_set_version,omitempty"`
 	NeverCollected    bool       `json:"never_collected"`
 	Stale             bool       `json:"stale"`
+	PendingImmediate  bool       `json:"pending_immediate"`
 }
 
 // collectorLabel 把采集执行者代号翻译成显示名。客户端实例执行者登记在
@@ -45,6 +46,7 @@ func (m *Manager) collectionStatusView(stored models.SoftwareCollectionStatus) C
 		Collector: stored.Collector, CollectorLabel: collectorLabel(stored.Collector),
 		ServerEntry: stored.LastServerName, LastFailureReason: stored.LastFailureReason,
 		Incomplete: stored.LastIncomplete, CommandSetVersion: stored.CommandSetVersion,
+		PendingImmediate: stored.PendingImmediate,
 	}
 	if stored.LastSuccessAt.Unix() <= 0 {
 		view.NeverCollected = true

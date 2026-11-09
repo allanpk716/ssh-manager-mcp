@@ -21,6 +21,7 @@ import (
 	"ssh-manager-mcp/internal/webuiops"
 	"ssh-manager-mcp/internal/webuisecrets"
 	"ssh-manager-mcp/internal/webuiservers"
+	"ssh-manager-mcp/internal/webuisoftwareinventory"
 )
 
 // serveWebUIServerSource 直接读取权威端 vault 的服务器列表。
@@ -124,6 +125,9 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		ServerWriter:  webuiservers.WriterFromManager(servermanage.New(st)),
 		Secrets:       webuisecrets.FromManager(secretmanage.New(st)),
 		SecretsWriter: webuisecrets.WriterFromManager(secretmanage.New(st)),
+		SoftwareInventory: webuisoftwareinventory.FromOpener(func() (*store.Store, func(), error) {
+			return st, func() {}, nil
+		}),
 		Access: webuiaccess.FromManager(access.New(st, access.WithServeCertFingerprint(func() (string, error) {
 			return fingerprint, nil
 		}))),
