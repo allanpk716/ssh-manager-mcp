@@ -29,6 +29,7 @@ type SoftwareObservedItem struct {
 type SoftwareCollectionStatus struct {
 	DeviceID          string    `json:"device_id"`
 	DeviceName        string    `json:"device_name"`
+	Managed           bool      `json:"managed"`
 	Collector         string    `json:"collector"`
 	PreferredServerID string    `json:"preferred_server_id,omitempty"`
 	LastServerID      string    `json:"last_server_id,omitempty"`

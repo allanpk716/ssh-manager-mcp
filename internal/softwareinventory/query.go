@@ -105,10 +105,10 @@ func queryItemFromView(row SoftwareDeclarationView) QueryItem {
 	return item
 }
 
-// missingCollectionStatus 返回采集数据源缺失时的采集状态：从未采集，
-// 因此清单过期。
-func missingCollectionStatus() CollectionStatus {
-	return CollectionStatus{NeverCollected: true, Stale: true}
+// missingCollectionStatus 返回采集数据源缺失时的采集状态：从未采集的受
+// 管设备算过期；不受管设备没有采集执行者，不算过期。
+func missingCollectionStatus(managed bool) CollectionStatus {
+	return CollectionStatus{NeverCollected: true, Stale: managed}
 }
 
 // Query 按可见设备范围与过滤条件查询软件清单。指定设备但设备不在可见
@@ -179,7 +179,7 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 func (m *Manager) collectionStatusFor(deviceName string) CollectionStatus {
 	stored, err := m.st.SoftwareCollectionStatusForDevice(deviceName)
 	if err != nil || stored.LastSuccessAt.Unix() <= 0 {
-		return missingCollectionStatus()
+		return missingCollectionStatus(stored.Managed)
 	}
 	status := CollectionStatus{
 		Collector: stored.Collector, ServerEntry: stored.LastServerName,

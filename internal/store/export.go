@@ -46,10 +46,16 @@ type Snapshot struct {
 	Secrets      []SnapshotSecret      `json:"secrets,omitempty"`
 	SecretAllows []SnapshotSecretAllow `json:"secret_allows,omitempty"`
 	// SoftwareDeclarations / SoftwareDeclarationPorts 只进入 owner 的全量
-	// 导出与加密备份，绝不进入 profile 裁剪的客户端快照。
-	SoftwareDeclarations     []SnapshotSoftwareDeclaration     `json:"software_inventory,omitempty"`
-	SoftwareDeclarationPorts []SnapshotSoftwareDeclarationPort `json:"software_declaration_ports,omitempty"`
-	Audit                    []SnapshotAudit                   `json:"audit"`
+	// 导出与加密备份，绝不进入 profile 裁剪的客户端快照；实测条目、实测
+	// 监听端口、采集状态、sudo 开关与变化历史同样只走 owner 全量导出。
+	SoftwareDeclarations        []SnapshotSoftwareDeclaration        `json:"software_inventory,omitempty"`
+	SoftwareDeclarationPorts    []SnapshotSoftwareDeclarationPort    `json:"software_declaration_ports,omitempty"`
+	SoftwareObservedItems       []SnapshotSoftwareObservedItem       `json:"software_observed_items,omitempty"`
+	SoftwareObservedPorts       []SnapshotSoftwareObservedPort       `json:"software_observed_ports,omitempty"`
+	SoftwareCollectionStatuses  []SnapshotSoftwareCollectionStatus   `json:"software_collection_statuses,omitempty"`
+	SoftwareCollectSudoSettings []SnapshotSoftwareCollectSudoSetting `json:"software_collect_sudo_settings,omitempty"`
+	SoftwareChangeHistory       []SnapshotSoftwareChangeHistory      `json:"software_change_history,omitempty"`
+	Audit                       []SnapshotAudit                      `json:"audit"`
 	// 命令策略段 (ticket #15):自定义规则与被停用
 	// 的默认规则编号。规则全局一套,两条导出路径都携带,不做 profile 裁剪。
 	// 旧快照(策略段尚不存在)解码为 nil 切片 → 导入零行 → 内置默认规则
@@ -509,6 +515,13 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 	// 软件清单只走 owner 全量备份；profile 导出函数从不填充这两个字段。
 	if snap.SoftwareDeclarations, snap.SoftwareDeclarationPorts, err = s.snapshotSoftwareInventory(); err != nil {
+		return nil, err
+	}
+	// 实测与变化历史各表同样只进入 owner 全量备份。
+	snap.SoftwareObservedItems, snap.SoftwareObservedPorts,
+		snap.SoftwareCollectionStatuses, snap.SoftwareCollectSudoSettings,
+		snap.SoftwareChangeHistory, err = s.snapshotSoftwareCollectionBackup()
+	if err != nil {
 		return nil, err
 	}
 
@@ -1134,6 +1147,13 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,device_id,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, shellArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, nullIfEmpty(sv.DeviceID), sv.CreatedAt, sv.UpdatedAt, sv.Revision); err != nil {
 			return fmt.Errorf("insert server %s: %w", sv.ID, err)
+		}
+	}
+	// 软件清单的实测、采集状态、sudo 开关与变化历史在这里恢复：sudo 开
+	// 关引用服务器条目，必须等服务器条目写完；仍然只在 owner 全量导入。
+	if generateMissingDevices {
+		if err := importSoftwareCollectionBackupTx(tx, snap); err != nil {
+			return err
 		}
 	}
 
