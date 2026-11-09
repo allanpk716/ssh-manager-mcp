@@ -78,6 +78,16 @@ func (r *ServeRunner) handleSoftwareInventory(w http.ResponseWriter, req *http.R
 		http.Error(w, "device code not bound to a profile — owner: run `sshmgr cache-tokens bind "+ct.Name+" <profile>` on the server", http.StatusForbidden)
 		return
 	}
+	profile, err := r.st.GetProfile(ct.ProfileID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: software-inventory profile lookup %s: %v\n", ct.ProfileID, err)
+		http.Error(w, "profile lookup failed", http.StatusInternalServerError)
+		return
+	}
+	if profile == nil {
+		http.Error(w, "device code's profile no longer exists", http.StatusForbidden)
+		return
+	}
 
 	// profile 可见范围：这个设备码被授权的服务器条目所在的受管设备。
 	granted, err := r.st.ServersForProfile(ct.ProfileID)
@@ -94,6 +104,7 @@ func (r *ServeRunner) handleSoftwareInventory(w http.ResponseWriter, req *http.R
 		IncludeSystemPackages: in.IncludeSystemPackages,
 		Visibility:            softwareinventory.DevicesVisibleThroughServers(granted...),
 	})
+	result.ProfileName = profile.Name
 	switch {
 	case err == nil:
 		writeSoftwareInventoryJSON(w, http.StatusOK, result)
