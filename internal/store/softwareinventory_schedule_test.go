@@ -7,8 +7,8 @@ import (
 )
 
 // TestSoftwareCollectionStatusesForCollector 验证调度服务读到期设备的公开
-//入口：只返回挂了服务器条目的受管设备；从未采集的设备也返回零值状态；
-//采集执行者不是指定实例的设备不返回。
+// 入口：只返回挂了服务器条目的受管设备；从未采集的设备也返回零值状态；
+// 采集执行者不是指定实例的设备不返回。
 func TestSoftwareCollectionStatusesForCollector(t *testing.T) {
 	st := newCollectTestStore(t)
 	past := time.Unix(1769000000, 0)
@@ -54,8 +54,8 @@ func TestSoftwareCollectionStatusesForCollector(t *testing.T) {
 }
 
 // TestSoftwareImmediateCollectionRequest 验证立即采集请求的登记与清除：登
-//记后状态带待执行标记并写审计；成功或失败的采集落库都把请求当作已处
-//理。
+// 记后状态带待执行标记并写审计；成功或失败的采集落库都把请求当作已处
+// 理。
 func TestSoftwareImmediateCollectionRequest(t *testing.T) {
 	st := newCollectTestStore(t)
 	now := time.Unix(1770000000, 0)

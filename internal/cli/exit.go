@@ -14,7 +14,11 @@ import (
 // restart` themselves; first real producer: `sshmgr update`), 4 = authority
 // unreachable — the client-side online-only operations report it so scripts
 // can tell a network failure from a data error without parsing text (first
-// real producer: ticket #185's software-inventory view/search).
+// real producer: ticket #185's software-inventory view/search), 5 = partial
+// software-inventory collection failure — `sshmgr inventory collect-assigned`
+// finished its round but at least one device failed, so scheduled tasks can
+// distinguish a partial failure from a full success or command error (first
+// real producer: ticket #182's software-inventory scheduled collection).
 type ExitCodeError struct {
 	Code int
 	Err  error
