@@ -59,7 +59,14 @@ func seedInventoryHistoryVault(t *testing.T) {
 			}},
 		}},
 		ServerID: result.ServerID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		Incomplete: true,
 	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	st.NowFn = func() time.Time { return time.Now() }
+	if err := st.RecordSoftwareCollectionFailure(
+		"工作站", "连接超时", result.ServerID, false, store.CLISource(),
+	); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -106,7 +113,8 @@ func TestInventoryStatusCommand(t *testing.T) {
 	output := mustInventoryCli(t, "", "inventory", "status")
 	for _, want := range []string{
 		"工作站", "权威端", "工作站入口", "上次成功", "命令集版本 linux-v1", "未过期",
-		"网络存储", "从未采集", "不受管设备不算过期",
+		"上次失败：", "连接超时", "上次结果不完整",
+		"网络存储", "从未采集", "上次结果完整", "不受管设备不算过期",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("采集状态输出缺少 %q：\n%s", want, output)

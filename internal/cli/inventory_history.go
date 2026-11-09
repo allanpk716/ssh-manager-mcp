@@ -159,9 +159,13 @@ func printInventoryCollectionStatus(w io.Writer, status softwareinventory.Collec
 	if status.LastFailureAt != nil {
 		fmt.Fprintf(w, "  上次失败：%s：%s\n",
 			status.LastFailureAt.Format("2006-01-02 15:04:05"), status.LastFailureReason)
+	} else {
+		fmt.Fprintln(w, "  上次失败：无")
 	}
 	if status.Incomplete {
 		fmt.Fprintln(w, "  上次结果不完整")
+	} else {
+		fmt.Fprintln(w, "  上次结果完整")
 	}
 	if status.CommandSetVersion != "" {
 		fmt.Fprintf(w, "  命令集版本 %s\n", status.CommandSetVersion)
