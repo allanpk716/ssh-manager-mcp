@@ -273,6 +273,9 @@ func softwareObservedItemsForDeviceTx(q dbtx, deviceID string) ([]models.Softwar
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	for i := range items {
 		portRows, err := q.Query(`
 			SELECT address,port,protocol,exposure FROM software_observed_ports

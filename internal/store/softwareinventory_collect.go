@@ -299,6 +299,11 @@ func (s *Store) SoftwareCollectionStatusForDevice(deviceName string) (*models.So
 	status := &models.SoftwareCollectionStatus{
 		DeviceID: device.ID, DeviceName: device.Name, Collector: "authority",
 	}
+	if err := s.db.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM servers WHERE device_id=?)`, device.ID,
+	).Scan(&status.Managed); err != nil {
+		return nil, err
+	}
 	row := s.db.QueryRow(`
 		SELECT collector,COALESCE(preferred_server_id,''),COALESCE(last_server_id,''),
 		       last_success_at,last_failure_at,last_failure_reason,last_incomplete,
@@ -323,6 +328,97 @@ func (s *Store) SoftwareCollectionStatusForDevice(deviceName string) (*models.So
 		}
 	}
 	return status, nil
+}
+
+// SoftwareDeviceVisible 判断一台设备是否在软件清单的可见设备范围内。设
+// 备不存在时返回原错误；只是不可见时返回 false 且不报错。
+func (s *Store) SoftwareDeviceVisible(
+	deviceName string,
+	scope SoftwareDeviceScope,
+) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	device, err := deviceByNameTx(tx, deviceName)
+	if err != nil {
+		return false, err
+	}
+	if err := ensureSoftwareDeviceVisibleTx(tx, device.ID, scope); err != nil {
+		if err == ErrSoftwareDeviceNotVisible {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// SoftwareCollectionStatuses 返回全部设备（或 deviceName 非空时的一台设
+// 备）的采集状态，按设备名稳定排序。从未采集过的设备返回零值时间与默认
+// 采集执行者；Managed 表示设备是否有服务器条目，供清单过期判断使用。
+func (s *Store) SoftwareCollectionStatuses(deviceName string) ([]models.SoftwareCollectionStatus, error) {
+	query := `
+		SELECT device.id,device.name,
+		       EXISTS(SELECT 1 FROM servers WHERE servers.device_id=device.id),
+		       COALESCE(status.collector,'authority'),
+		       COALESCE(status.preferred_server_id,''),
+		       COALESCE(status.last_server_id,''),
+		       COALESCE(status.last_success_at,0),
+		       COALESCE(status.last_failure_at,0),
+		       COALESCE(status.last_failure_reason,''),
+		       COALESCE(status.last_incomplete,0),
+		       COALESCE(status.command_set_version,''),
+		       COALESCE(status.system_type,''),
+		       COALESCE(status.pending_immediate,0)
+		FROM devices device
+		LEFT JOIN software_collection_status status ON status.device_id=device.id`
+	args := []any{}
+	if name := strings.TrimSpace(deviceName); name != "" {
+		query += ` WHERE device.name=?`
+		args = append(args, name)
+	}
+	query += ` ORDER BY device.name,device.id`
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]models.SoftwareCollectionStatus, 0)
+	lastServerIDs := make([]string, 0)
+	for rows.Next() {
+		var status models.SoftwareCollectionStatus
+		var lastServerID string
+		var successAt, failureAt int64
+		if err := rows.Scan(
+			&status.DeviceID, &status.DeviceName, &status.Managed, &status.Collector,
+			&status.PreferredServerID, &lastServerID, &successAt, &failureAt,
+			&status.LastFailureReason, &status.LastIncomplete, &status.CommandSetVersion,
+			&status.SystemType, &status.PendingImmediate,
+		); err != nil {
+			return nil, err
+		}
+		status.LastSuccessAt, status.LastFailureAt = time.Unix(successAt, 0), time.Unix(failureAt, 0)
+		out = append(out, status)
+		lastServerIDs = append(lastServerIDs, lastServerID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	// 单连接 SQLite 下，外层结果集未关闭时不能再发查询；这里先收完全部
+	// 行，再补采集用条目名。
+	for i, lastServerID := range lastServerIDs {
+		if lastServerID == "" {
+			continue
+		}
+		if server, err := s.GetServer(lastServerID); err == nil {
+			out[i].LastServerID, out[i].LastServerName = server.ID, server.Name
+		}
+	}
+	return out, nil
 }
 
 // SoftwareObservedItemsForDevice 读回一台设备的全部实测条目与监听端口，
