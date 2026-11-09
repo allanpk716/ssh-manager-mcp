@@ -598,6 +598,9 @@ func TestSecretsAuditRows(t *testing.T) {
 		if rows[i].ProjectID != "" || rows[i].ServerID != "" {
 			t.Fatalf("owner row %d must carry no project/server: %+v", i, rows[i])
 		}
+		if rows[i].Source != store.AuditSourceCLI || rows[i].SourceIP != "" {
+			t.Fatalf("owner row %d source = %q/%q, want cli/empty", i, rows[i].Source, rows[i].SourceIP)
+		}
 	}
 }
 
