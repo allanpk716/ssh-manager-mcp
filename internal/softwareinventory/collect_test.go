@@ -393,6 +393,40 @@ func TestCollectValidation(t *testing.T) {
 	}
 }
 
+// TestQueryShowsCollectionStatus 验证 #185 的查询接口在采集状态表存在后
+// 填真实状态：采过的设备显示上次成功时间，未采过的设备仍显示从未采集。
+func TestQueryShowsCollectionStatus(t *testing.T) {
+	service, st := newCollectService(t)
+	addCollectDevice(t, st, "工作站", "entry-a")
+	var recorded recordedExec
+	service.RemoteExec = replayCollectExec(fixtureOutput(t, "ubuntu2404-full.txt"), &recorded, nil)
+	if _, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(st).AddDeclaration(Declaration{
+		Device: "工作站", Category: CategoryServiceProgram,
+		Name: "OpenSSH", Version: "1:9.6p1-3ubuntu13.20",
+	}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := New(st)
+	manager.Now = service.Now
+	result, err := manager.Query(QueryOptions{Device: "工作站", Visibility: AllDevicesVisible()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Devices) != 1 {
+		t.Fatalf("查询设备数量 = %d", len(result.Devices))
+	}
+	status := result.Devices[0].Collection
+	if status.NeverCollected || status.Stale || status.LastSuccessAt == nil ||
+		status.LastSuccessAt.Unix() != service.Now().Unix() ||
+		status.CommandSetVersion != LinuxCommandSetVersion || status.ServerEntry != "entry-a" {
+		t.Fatalf("查询里的采集状态 = %+v", status)
+	}
+}
+
 func firstLine(text string) string {
 	return strings.SplitN(text, "\n", 2)[0]
 }
