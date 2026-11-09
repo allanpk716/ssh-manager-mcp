@@ -18,18 +18,19 @@ import (
 // store.AuditRow.JSONMap 写入客户端本机审计日志文件时的字段保持一致；解析与写入分属两个
 // 结构，避免以后无意中改坏其中一侧。
 type clientAuditRecord struct {
-	ID         int64  `json:"id"`
-	TS         int64  `json:"ts"`
-	ProjectID  string `json:"project_id"`
-	ServerID   string `json:"server_id"`
-	Action     string `json:"action"`
-	Command    string `json:"command"`
-	Sudo       bool   `json:"sudo"`
-	Status     string `json:"status"`
-	ExitCode   int    `json:"exit_code"`
-	DurationMS int64  `json:"duration_ms"`
-	Source     string `json:"source"`
-	SourceIP   string `json:"source_ip"`
+	ID                       int64    `json:"id"`
+	TS                       int64    `json:"ts"`
+	ProjectID                string   `json:"project_id"`
+	ServerID                 string   `json:"server_id"`
+	Action                   string   `json:"action"`
+	Command                  string   `json:"command"`
+	Sudo                     bool     `json:"sudo"`
+	Status                   string   `json:"status"`
+	ExitCode                 int      `json:"exit_code"`
+	DurationMS               int64    `json:"duration_ms"`
+	Source                   string   `json:"source"`
+	SourceIP                 string   `json:"source_ip"`
+	InjectedEnvironmentNames []string `json:"injected_environment_names,omitempty"`
 }
 
 // ReadClientAudit 读取一个客户端实例目录中的本机审计日志文件，按记录时间顺序
@@ -73,6 +74,7 @@ func ReadClientAudit(instance string, limit int) ([]store.AuditRow, error) {
 			Action: record.Action, Command: record.Command, Sudo: record.Sudo,
 			Status: record.Status, ExitCode: record.ExitCode, DurationMS: record.DurationMS,
 			Source: record.Source, SourceIP: record.SourceIP,
+			InjectedEnvironmentNames: record.InjectedEnvironmentNames,
 		})
 	}
 	if err := scanner.Err(); err != nil {

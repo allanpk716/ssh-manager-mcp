@@ -303,6 +303,9 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "audit_log", "source_ip", "TEXT"); err != nil {
 		return err
 	}
+	if err := addColumnIfMissing(db, "audit_log", "injected_environment_names", "TEXT"); err != nil {
+		return err
+	}
 	rows, err := db.Query(`PRAGMA table_info(host_keys)`)
 	if err != nil {
 		return err
@@ -949,7 +952,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
   exit_code INTEGER,
   duration_ms INTEGER,
   source TEXT,
-  source_ip TEXT
+  source_ip TEXT,
+  injected_environment_names TEXT
 );
 CREATE TABLE IF NOT EXISTS web_admin_auth (
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),

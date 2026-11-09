@@ -144,6 +144,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	var status string
 	var action = "exec" // 命令策略换用新动作:拦截 exec-blocked / 需确认退回 exec-confirm-required (Status 存命中规则编号)
 	var exitCode int
+	var injectedEnvironmentNames []string
 	start := time.Now()
 	defer func() {
 		if status == "" {
@@ -152,6 +153,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		_ = st.WriteAudit(store.AuditRow{
 			TS: start, ProjectID: projectID, ServerID: serverID, Action: action,
 			Command: command, Sudo: sudo, Status: status, ExitCode: exitCode, DurationMS: time.Since(start).Milliseconds(),
+			InjectedEnvironmentNames: injectedEnvironmentNames,
 		})
 	}()
 
@@ -170,6 +172,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		err = fmt.Errorf("server %s not found", serverID)
 		return
 	}
+	injectionPlan := buildEnvironmentInjectionPlan(st, srv, sudo)
 
 	// 命令策略 (ticket #10/#11/#15 / ADR 0007):拦截档命令在取凭据、建连接之前
 	// 拒绝——不建立 SSH 连接,命令一个字节都不会送到服务器;需确认档同样
@@ -237,7 +240,8 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 		res, err = cli.ExecSudo(ctx, command, sudoCred.Secret, timeout, readLimit)
 	} else {
 		readLimit := readLimitForMasking(ctx, MaxOutputBytes)
-		res, err = cli.Exec(ctx, command, timeout, readLimit)
+		injectedEnvironmentNames = injectionPlan.injectedNames()
+		res, err = cli.Exec(ctx, command, timeout, readLimit, injectionPlan.execOption())
 	}
 	// sshbroker 按多读后的上限标记 Truncated；对 agent 仍按原 1 MiB 上限判定。
 	res.Truncated = res.StdoutBytes > MaxOutputBytes || res.StderrBytes > MaxOutputBytes
@@ -275,6 +279,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	if res.Sudo != nil {
 		out.Sudo = &SudoInfo{Outcome: res.Sudo.Outcome, UID: res.Sudo.UID}
 	}
+	out.Stdout = injectionPlan.appendWarnings(out.Stdout)
 	return
 }
 

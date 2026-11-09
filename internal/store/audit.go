@@ -25,6 +25,9 @@ type AuditRow struct {
 	Source string
 	// SourceIP 是 Web UI 请求的客户端 IP；其他来源为空。
 	SourceIP string
+	// InjectedEnvironmentNames 记录这次命令实际注入的环境变量名。这里只
+	// 允许出现变量名，绝不出现机密项值。
+	InjectedEnvironmentNames []string
 }
 
 // 审计来源的固定值。来源列面向所有入口，值保持英文以便过滤与导出。
@@ -73,12 +76,20 @@ func insertAuditRow(db dbtx, r AuditRow) error {
 	if r.Sudo {
 		sudo = 1
 	}
+	names := any(nil)
+	if len(r.InjectedEnvironmentNames) > 0 {
+		encoded, err := json.Marshal(r.InjectedEnvironmentNames)
+		if err != nil {
+			return err
+		}
+		names = string(encoded)
+	}
 	_, err := db.Exec(
-		`INSERT INTO audit_log (ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO audit_log (ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip, injected_environment_names)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.TS.Unix(), nullableString(r.ProjectID), nullableString(r.ServerID),
 		r.Action, r.Command, sudo, nullableString(r.Status), r.ExitCode, r.DurationMS,
-		nullableString(r.Source), nullableString(r.SourceIP),
+		nullableString(r.Source), nullableString(r.SourceIP), names,
 	)
 	return err
 }
@@ -90,7 +101,7 @@ func (s *Store) AuditRows(limit int) ([]AuditRow, error) {
 		limit = 1
 	}
 	rows, err := s.db.Query(
-		`SELECT id, ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip
+		`SELECT id, ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip, injected_environment_names
 		 FROM audit_log ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -160,7 +171,7 @@ func (s *Store) QueryAudit(f AuditFilter) ([]AuditRow, error) {
 		conds = append(conds, "id < ?")
 		args = append(args, f.BeforeID)
 	}
-	q := "SELECT id, ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip FROM audit_log"
+	q := "SELECT id, ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip, injected_environment_names FROM audit_log"
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -184,10 +195,10 @@ func scanAuditRows(rows *sql.Rows) ([]AuditRow, error) {
 	for rows.Next() {
 		var r AuditRow
 		var ts int64
-		var projectID, serverID, action, command, status, source, sourceIP sql.NullString
+		var projectID, serverID, action, command, status, source, sourceIP, injectedNames sql.NullString
 		var sudo int
 		var exitCode, durationMS sql.NullInt64
-		if err := rows.Scan(&r.ID, &ts, &projectID, &serverID, &action, &command, &sudo, &status, &exitCode, &durationMS, &source, &sourceIP); err != nil {
+		if err := rows.Scan(&r.ID, &ts, &projectID, &serverID, &action, &command, &sudo, &status, &exitCode, &durationMS, &source, &sourceIP, &injectedNames); err != nil {
 			return nil, err
 		}
 		r.TS = time.Unix(ts, 0)
@@ -201,18 +212,24 @@ func scanAuditRows(rows *sql.Rows) ([]AuditRow, error) {
 		r.DurationMS = durationMS.Int64
 		r.Source = source.String
 		r.SourceIP = sourceIP.String
+		if injectedNames.Valid && injectedNames.String != "" {
+			if err := json.Unmarshal([]byte(injectedNames.String), &r.InjectedEnvironmentNames); err != nil {
+				return nil, fmt.Errorf("decode injected environment names: %w", err)
+			}
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
-// JSONMap is the single nine-field map construction shared by the offline
-// sidecar (WriteAudit read-only branch) and the owner-facing `audit --json`
-// output — one construction, byte-identical encoding in both consumers
-// (json.Marshal key order for maps is lexicographic). Zero values are written
-// as-is: no null, no omitempty (spec §3).
+// JSONMap is the shared map construction used by the offline sidecar
+// (WriteAudit read-only branch) and the owner-facing `audit --json` output —
+// one construction, byte-identical encoding in both consumers (json.Marshal
+// key order for maps is lexicographic). Base fields are written as-is: no
+// null, no omitempty (spec §3). The optional injection-name list appears only
+// when a command actually injected environment variables.
 func (r AuditRow) JSONMap() map[string]any {
-	return map[string]any{
+	rec := map[string]any{
 		"id":          r.ID,
 		"ts":          r.TS.Unix(),
 		"project_id":  r.ProjectID,
@@ -226,4 +243,8 @@ func (r AuditRow) JSONMap() map[string]any {
 		"source":      r.Source,
 		"source_ip":   r.SourceIP,
 	}
+	if len(r.InjectedEnvironmentNames) > 0 {
+		rec["injected_environment_names"] = r.InjectedEnvironmentNames
+	}
+	return rec
 }

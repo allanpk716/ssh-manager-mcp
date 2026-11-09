@@ -51,31 +51,65 @@ type SecretValuesForMasking struct {
 }
 
 // SecretValuesForMasking 读取全部机密项的当前值、上一个值与可写入服务器
-// 条目标识符。该读取路径只服务本进程内的输出遮蔽；调用方不得把返回值
-// 序列化到工具结果、日志或审计。
+// 条目标识符。单个值无法解密时跳过该项，让可用值继续参与输出遮蔽；该
+// 读取路径只服务本进程内的输出遮蔽，调用方不得把返回值序列化到工具
+// 结果、日志或审计。
 func (s *Store) SecretValuesForMasking() ([]SecretValuesForMasking, error) {
-	rows, allows, err := s.snapshotSecrets()
+	rows, err := s.db.Query(`
+		SELECT id, name, value_blob, COALESCE(previous_value_blob,'')
+		FROM secrets ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
-	indexByID := make(map[string]int, len(rows))
-	values := make([]SecretValuesForMasking, 0, len(rows))
-	for _, row := range rows {
-		indexByID[row.ID] = len(values)
-		values = append(values, SecretValuesForMasking{
-			Name:     row.Name,
-			Current:  row.Value,
-			Previous: row.PreviousValue,
-		})
-	}
-	for _, allow := range allows {
-		index, exists := indexByID[allow.SecretID]
-		if !exists {
+	defer rows.Close()
+	indexByID := make(map[string]int)
+	values := make([]SecretValuesForMasking, 0)
+	for rows.Next() {
+		var id, name string
+		var currentBlob, previousBlob []byte
+		if err := rows.Scan(&id, &name, &currentBlob, &previousBlob); err != nil {
+			return nil, err
+		}
+		current, openErr := open(s.masterKey, currentBlob)
+		if openErr != nil {
 			continue
 		}
-		values[index].WritableServerIDs = append(values[index].WritableServerIDs, allow.ServerID)
+		var previous []byte
+		if len(previousBlob) > 0 {
+			previous, openErr = open(s.masterKey, previousBlob)
+			if openErr != nil {
+				previous = nil
+			}
+		}
+		indexByID[id] = len(values)
+		values = append(values, SecretValuesForMasking{
+			Name:     name,
+			Current:  current,
+			Previous: previous,
+		})
 	}
-	return values, nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	allows, err := s.db.Query(`SELECT secret_id, server_id FROM secret_server_allow ORDER BY secret_id, server_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer allows.Close()
+	for allows.Next() {
+		var secretID, serverID string
+		if err := allows.Scan(&secretID, &serverID); err != nil {
+			return nil, err
+		}
+		if index, exists := indexByID[secretID]; exists {
+			values[index].WritableServerIDs = append(values[index].WritableServerIDs, serverID)
+		}
+	}
+	return values, allows.Err()
 }
 
 // SecretServerScope 是机密项可见列表的服务器范围：客户端为 profile 授予
