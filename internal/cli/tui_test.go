@@ -40,6 +40,13 @@ func pinTUIMachineEnv(t *testing.T) {
 // （含旧的 --mode 取值、多余位置参数、未知参数），都只向标准错误打印迁移
 // 提示并以退出码 1 结束；不向标准输出写内容，也不读标准输入。
 func TestTUICmdPrintsMigrationNotice(t *testing.T) {
+	prevOpen := uiOpenBrowser
+	opened := false
+	uiOpenBrowser = func(string) error {
+		opened = true
+		return nil
+	}
+	t.Cleanup(func() { uiOpenBrowser = prevOpen })
 	cases := []struct {
 		name string
 		args []string
@@ -70,6 +77,9 @@ func TestTUICmdPrintsMigrationNotice(t *testing.T) {
 			}
 			if stdinLeft != len("标准输入不应被读取") {
 				t.Fatalf("命令不应读标准输入，剩余字节数 = %d", stdinLeft)
+			}
+			if opened {
+				t.Fatal("sshmgr tui 不是 sshmgr ui 的别名，不应打开浏览器")
 			}
 		})
 	}
