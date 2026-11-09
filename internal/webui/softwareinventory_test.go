@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -24,7 +25,7 @@ func TestSoftwareInventoryNavFollowsCapability(t *testing.T) {
 			cfg.Access = nil
 		}
 		if enabled {
-			cfg.SoftwareInventory = stubSoftwareInventorySource{}
+			cfg.SoftwareInventory = &stubSoftwareInventorySource{}
 		}
 		handler, startup, err := New(cfg)
 		if err != nil {
@@ -53,17 +54,22 @@ func TestSoftwareInventoryNavFollowsCapability(t *testing.T) {
 }
 
 type stubSoftwareInventorySource struct {
-	device      *SoftwareInventoryDevice
-	deviceErr   error
-	searchRows  []SoftwareInventorySearchRow
-	searchQuery string
+	device         *SoftwareInventoryDevice
+	deviceErr      error
+	searchRows     []SoftwareInventorySearchRow
+	searchQuery    string
+	collectResult  SoftwareInventoryCollectionResult
+	collectErr     error
+	collectDevice  string
+	collectAddress string
+	collectCalled  bool
 }
 
-func (s stubSoftwareInventorySource) SoftwareInventoryDevices() ([]SoftwareInventoryDeviceSummary, error) {
+func (s *stubSoftwareInventorySource) SoftwareInventoryDevices() ([]SoftwareInventoryDeviceSummary, error) {
 	return nil, nil
 }
 
-func (s stubSoftwareInventorySource) SoftwareInventoryDevice(deviceName string) (*SoftwareInventoryDevice, error) {
+func (s *stubSoftwareInventorySource) SoftwareInventoryDevice(deviceName string) (*SoftwareInventoryDevice, error) {
 	if s.deviceErr != nil {
 		return nil, s.deviceErr
 	}
@@ -73,22 +79,25 @@ func (s stubSoftwareInventorySource) SoftwareInventoryDevice(deviceName string) 
 	return s.device, nil
 }
 
-func (s stubSoftwareInventorySource) SearchSoftwareInventory(namePart string) ([]SoftwareInventorySearchRow, error) {
+func (s *stubSoftwareInventorySource) SearchSoftwareInventory(namePart string) ([]SoftwareInventorySearchRow, error) {
 	s.searchQuery = namePart
 	return s.searchRows, nil
 }
 
-func (s stubSoftwareInventorySource) RequestSoftwareInventoryCollection(
-	context.Context, string, SoftwareInventoryWriteSource,
+func (s *stubSoftwareInventorySource) RequestSoftwareInventoryCollection(
+	_ context.Context, deviceName string, source SoftwareInventoryWriteSource,
 ) (SoftwareInventoryCollectionResult, error) {
-	return SoftwareInventoryCollectionResult{}, nil
+	s.collectCalled = true
+	s.collectDevice = deviceName
+	s.collectAddress = source.RemoteAddress
+	return s.collectResult, s.collectErr
 }
 
 // TestSoftwareInventorySearchListsDevices 覆盖跨设备搜索：按软件名返回每台
 // 设备上的精确版本、来源与暴露级别。
 func TestSoftwareInventorySearchListsDevices(t *testing.T) {
 	collectedAt := time.Date(2026, 11, 1, 10, 30, 0, 0, time.UTC)
-	source := stubSoftwareInventorySource{searchRows: []SoftwareInventorySearchRow{
+	source := &stubSoftwareInventorySource{searchRows: []SoftwareInventorySearchRow{
 		{DeviceName: "工作站", Item: SoftwareInventoryItem{
 			Name: "OpenSSH", Version: "1:8.9p1-3ubuntu0.10", Source: "实测", CollectedAt: &collectedAt,
 			ListeningPorts: []SoftwareInventoryPort{{Address: "0.0.0.0", Port: 22, Protocol: "tcp", ExposureLabel: "监听所有地址"}},
@@ -150,7 +159,7 @@ func newSoftwareInventoryHandler(
 func TestSoftwareInventoryDevicePageShowsRequiredColumns(t *testing.T) {
 	collectedAt := time.Date(2026, 11, 1, 10, 30, 0, 0, time.UTC)
 	confirmedAt := time.Date(2026, 11, 2, 11, 0, 0, 0, time.UTC)
-	source := stubSoftwareInventorySource{device: &SoftwareInventoryDevice{
+	source := &stubSoftwareInventorySource{device: &SoftwareInventoryDevice{
 		Name: "工作站",
 		Status: SoftwareInventoryStatus{
 			CollectorLabel: "权威端", ServerEntry: "web-1",
@@ -208,4 +217,61 @@ func TestSoftwareInventoryDevicePageShowsRequiredColumns(t *testing.T) {
 			t.Fatalf("设备清单页缺少 %q：\n%s", wanted, body)
 		}
 	}
+}
+
+// TestSoftwareInventoryImmediateCollectionRequestedForClientCollector 覆盖
+// 客户端实例作为采集执行者时的立即采集行为：只登记请求，页面明确显示等待。
+func TestSoftwareInventoryImmediateCollectionRequestedForClientCollector(t *testing.T) {
+	source := &stubSoftwareInventorySource{
+		device: &SoftwareInventoryDevice{
+			Name: "工作站",
+			Status: SoftwareInventoryStatus{
+				CollectorLabel: "笔记本客户端", PendingImmediate: false,
+			},
+		},
+		collectResult: SoftwareInventoryCollectionResult{Requested: true},
+	}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+	page := doGetWithCookie(t, handler, cookie, "/ui/software-inventory/devices?device="+url.QueryEscape("工作站"))
+	csrf := hiddenInputMetaOrHiddenValue(t, readResponseBody(t, page))
+
+	response := postSoftwareInventoryForm(t, handler, cookie,
+		"/ui/software-inventory/collect?device="+url.QueryEscape("工作站"),
+		url.Values{"csrf_token": {csrf}},
+	)
+	responseBody := readResponseBody(t, response)
+	if response.StatusCode != http.StatusSeeOther {
+		t.Fatalf("登记立即采集请求应返回 303，实际 %d：\n%s", response.StatusCode, responseBody)
+	}
+	if location := response.Header.Get("Location"); location != "/ui/software-inventory/devices?collect=requested&device="+url.QueryEscape("工作站") {
+		t.Fatalf("登记立即采集请求后的跳转地址不符：%s", location)
+	}
+	if !source.collectCalled || source.collectDevice != "工作站" || source.collectAddress != "198.51.100.9" {
+		t.Fatalf("立即采集请求应把设备与来源地址交给来源接口：%+v", source)
+	}
+
+	resultPage := doGetWithCookie(t, handler, cookie, response.Header.Get("Location"))
+	resultBody := readResponseBody(t, resultPage)
+	if !strings.Contains(resultBody, "已请求，等待客户端执行。") {
+		t.Fatalf("客户端采集执行者登记请求后应显示等待提示：\n%s", resultBody)
+	}
+}
+
+func postSoftwareInventoryForm(
+	t *testing.T,
+	handler http.Handler,
+	cookie *http.Cookie,
+	target string,
+	form url.Values,
+) *http.Response {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	request.Host = "127.0.0.1:18080"
+	request.RemoteAddr = "198.51.100.9:45678"
+	request.AddCookie(cookie)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "http://127.0.0.1:18080")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	return recorder.Result()
 }

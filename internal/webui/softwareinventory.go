@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -139,9 +140,43 @@ func (h *handler) handleSoftwareInventory(w http.ResponseWriter, r *http.Request
 		h.handleSoftwareInventoryDevice(w, r)
 	case "/ui/software-inventory/search":
 		h.handleSoftwareInventorySearch(w, r)
+	case "/ui/software-inventory/collect":
+		h.handleSoftwareInventoryCollect(w, r)
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}
+}
+
+// handleSoftwareInventoryCollect 处理立即采集表单。本实例采集时同步执行；
+// 客户端实例作为采集执行者时，来源接口只登记请求并返回等待提示。
+func (h *handler) handleSoftwareInventoryCollect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "立即采集只接受 POST 请求。")
+		return
+	}
+	deviceName := strings.TrimSpace(r.URL.Query().Get("device"))
+	if deviceName == "" {
+		h.renderError(w, r, http.StatusBadRequest, "缺少设备名", "立即采集请求缺少设备名。")
+		return
+	}
+	result, err := h.cfg.SoftwareInventory.RequestSoftwareInventoryCollection(
+		r.Context(), deviceName, SoftwareInventoryWriteSource{RemoteAddress: remoteIP(r)},
+	)
+	if err != nil {
+		var missing *SoftwareInventoryDeviceNotFoundError
+		if errors.As(err, &missing) {
+			h.renderError(w, r, http.StatusNotFound, "设备不存在", missing.Error())
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "立即采集失败", "立即采集失败，请稍后重试。")
+		return
+	}
+	state := "done"
+	if result.Requested {
+		state = "requested"
+	}
+	target := url.Values{"device": {deviceName}, "collect": {state}}
+	http.Redirect(w, r, "/ui/software-inventory/devices?"+target.Encode(), http.StatusSeeOther)
 }
 
 // handleSoftwareInventorySearch 渲染跨设备搜索结果。空关键字只显示表单，
