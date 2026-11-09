@@ -1,11 +1,11 @@
 // Package clientops holds the client-side cache operations shared by the CLI
-// (`cache pull` / `cache status` / `mcp --cache`) and the upcoming TUI console:
+// (`cache pull` / `cache status` / `mcp --cache`):
 // path resolution, the pull credential (cache.auth.json), the snapshot pull
 // itself, lazy/backoff auto-refresh, and hot-reload change detection.
 //
 // Extracted verbatim from internal/cli (zero-behavior move, Stream B Task 1)
-// so internal/tui can consume it without importing internal/cli (import
-// cycle). internal/cli keeps only the thin cobra wrappers.
+// so the CLI can consume it without an import cycle. internal/cli keeps only
+// the thin cobra wrappers.
 package clientops
 
 import (
@@ -150,8 +150,8 @@ func CachePathsFor(instance string) (dir, bin, meta, audit string, err error) {
 	return clientcache.PathsFor(instance)
 }
 
-// CachePaths resolves the DEFAULT instance's paths (zero-change wrapper; every
-// pre-Plan-40 caller — TUI client page, doctor, clear — keeps this view).
+// CachePaths resolves the DEFAULT instance's paths (zero-change wrapper;
+// doctor and clear keep this view).
 func CachePaths() (dir, bin, meta, audit string, err error) {
 	return CachePathsFor("")
 }
@@ -612,7 +612,7 @@ func DoPull(url, token, pin string, o PullOpts) (PullResult, error) {
 	// this pull" — so recording it is gated on the SAFETY precondition
 	// (pin != "" — a pinned TLS response's Date is uninjectable), NOT on the
 	// pulling process's policy env. Production incident this closes: the env-less
-	// TUI sync pull overwrote server_anchored=false, and every env-carrying
+	// terminal-era sync pull overwrote server_anchored=false, and every env-carrying
 	// mcp --cache then refused to load (a self-inflicted loop — the third
 	// "env must be on both sides" trap). Post-P0 the never-anchors form is
 	// plaintext ONLY; the B-on plaintext refusal above stays policy-driven.

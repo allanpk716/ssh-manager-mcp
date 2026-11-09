@@ -490,8 +490,8 @@ func readKeyFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// stripTag returns tags minus every occurrence of tag (the CLI-side twin of
-// the TUI's dropTag; an all-matches list yields a valid empty slice).
+// stripTag returns tags minus every occurrence of tag; an all-matches list
+// yields a valid empty slice.
 func stripTag(tags []string, tag string) []string {
 	out := make([]string, 0, len(tags))
 	for _, t := range tags {

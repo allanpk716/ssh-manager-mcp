@@ -1,5 +1,5 @@
 // Package roles is the single authority for the machine's role state
-// (role.json) and the unified launch-resolution chain consumed by the CLI/TUI
+// (role.json) and the unified launch-resolution chain consumed by the CLI
 // entrypoint (Plan 19, spec §1.2): role.json first, anomaly checks
 // (invalid value / vault-role-without-vault → guide `clear`; client without
 // cache → normal), then the v0.6.0-era filesystem probe (locked vault
@@ -234,7 +234,8 @@ func atomicWriteUnique(path string, blob []byte) error {
 }
 
 // ---------------------------------------------------------------------------
-// Vault probes (migrated verbatim from internal/tui/mode.go — v0.6.0 behavior)
+// Vault probes (behavior carried over verbatim from the v0.6.0 terminal
+// interface)
 // ---------------------------------------------------------------------------
 
 // VaultExists reports whether a store.db file exists at the vault location.

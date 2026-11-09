@@ -23,7 +23,7 @@ import (
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/paths"
-	"ssh-manager-mcp/internal/tui"
+	"ssh-manager-mcp/internal/termdetect"
 )
 
 // cacheInstancesStdinIsTTY gates rm on an interactive stdin — the same
@@ -34,7 +34,7 @@ import (
 // (same semantics as update --yes): it short-circuits both this gate and
 // the typed-name confirm on TTY and non-TTY alike.
 var cacheInstancesStdinIsTTY = func() bool {
-	return tui.IsTerminal(os.Stdin.Fd())
+	return termdetect.IsTerminal(os.Stdin.Fd())
 }
 
 func newCacheInstancesCmd() *cobra.Command {
@@ -258,7 +258,7 @@ func cacheInstancesRmCmd() *cobra.Command {
 			fmt.Fprintln(out, "配套两件事本机 rm 无法代劳:")
 			fmt.Fprintf(out, "  1. broker 侧吊销该设备码(client 无权远程吊销):sshmgr cache-tokens revoke %s\n", name)
 			fmt.Fprintln(out, "  2. --write-mcp 写在槽外的 .mcp.json 副本不随 rm 清理——该目标路径不持久化(cache.config.json 仅存 max_offline),rm 无从得知其位置,请自行删除")
-			fmt.Fprintln(out, "提醒:若某 TUI/MCP 进程正使用该实例,重启对应进程后生效。")
+			fmt.Fprintln(out, "提醒:若某管理界面/MCP 进程正使用该实例,重启对应进程后生效。")
 			return nil
 		},
 	}

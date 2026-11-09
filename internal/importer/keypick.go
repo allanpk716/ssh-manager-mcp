@@ -41,8 +41,8 @@ type KeyPick struct {
 // otherwise a fresh private-key credential is proposed (Minted; the insert
 // backfills Cred.ID). An encrypted key is proposed as-is with NeedsPass set —
 // including on the reuse path, since a second server sharing an encrypted key
-// still lacks the passphrase. This is the ONE seam shared by the CLI import
-// (`servers import`) and the TUI import flow — do not re-implement it.
+// still lacks the passphrase. This is the ONE seam shared by every import
+// caller — do not re-implement it.
 func PickKey(cand Candidate, configDir string, seen map[[32]byte]string) KeyPick {
 	for _, kp := range ResolveKeyPaths(cand.KeyPaths, configDir) {
 		keyBytes, err := os.ReadFile(kp)

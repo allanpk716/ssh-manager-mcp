@@ -15,14 +15,14 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/servermanage"
-	"ssh-manager-mcp/internal/tui"
+	"ssh-manager-mcp/internal/termdetect"
 	"ssh-manager-mcp/internal/webui"
 )
 
 // serversStdinIsTTY 判断标准输入是否为交互终端；非交互终端的确认类命令要
 // 求显式 --yes。
 var serversStdinIsTTY = func() bool {
-	return tui.IsTerminal(os.Stdin.Fd())
+	return termdetect.IsTerminal(os.Stdin.Fd())
 }
 
 // writeServerDeletePreview 输出删除影响清单。清单由服务器管理模块组装，命

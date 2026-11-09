@@ -31,7 +31,7 @@ import (
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
-	"ssh-manager-mcp/internal/tui"
+	"ssh-manager-mcp/internal/termdetect"
 	"ssh-manager-mcp/internal/vaultio"
 )
 
@@ -42,12 +42,12 @@ import (
 // ---------------------------------------------------------------------------
 
 // clearStdinIsTTY gates clear on an interactive stdin via the shared
-// tui.IsTerminal console check (GetConsoleMode on Windows, char-device stat
+// termdetect.IsTerminal console check (GetConsoleMode on Windows, char-device stat
 // elsewhere). This closed the NUL hole the old inline stat check had
 // (Plan 20 A4: `clear < NUL` used to pass as a char device). The typed
 // DELETE + y ceremony remains the real guard; this is script-proofing only.
 var clearStdinIsTTY = func() bool {
-	return tui.IsTerminal(os.Stdin.Fd())
+	return termdetect.IsTerminal(os.Stdin.Fd())
 }
 
 // serveInstalledFn drives the ENUMERATION marker only. Execution ALWAYS
@@ -393,7 +393,7 @@ func runClear(cmd *cobra.Command, _ []string) error {
 	for _, t := range targets {
 		fmt.Fprintf(out, "  ▸ %s\n", t.desc)
 	}
-	fmt.Fprintln(out, "（exe 不会删除；clear 后本机回到首次向导状态）")
+	fmt.Fprintln(out, "（exe 不会删除；clear 后本机回到未初始化状态）")
 
 	// Prompt 1: typed DELETE. Wrong word / empty / EOF = cancel, zero changes.
 	fmt.Fprint(out, "输入 DELETE 确认：")
@@ -456,6 +456,6 @@ func runClear(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("删除 role.json 失败: %w（重跑 clear 将跳过已完成步骤）", err)
 	}
 
-	fmt.Fprintln(out, "已清理。下次 sshmgr tui 将重新进入首次向导。")
+	fmt.Fprintln(out, "已清理。下次 sshmgr ui 将重新进入初始化向导。")
 	return nil
 }

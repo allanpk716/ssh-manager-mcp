@@ -1,9 +1,8 @@
 // Package policymanage 是命令策略的管理层(owner 管理规则用的入口,
 // ticket #15):把权威 vault 里的自定义规则与停用记录组装成判定内核的
 // 生效规则集,并提供增、删、停用、恢复四个管理操作(各写 owner 审计)。
-// 它是 CLI(`sshmgr policy`)与后续 TUI 页(ticket #16,ADR 0003 的
-// CLI 与 TUI 对等)共用的可复用层——判定语义一律在 internal/policy,
-// 本层不做任何规则判定。
+// 它是 `sshmgr policy` 命令的可复用管理层(ADR 0003 的人工界面等价面
+// 约束)——判定语义一律在 internal/policy,本层不做任何规则判定。
 package policymanage
 
 import (
@@ -22,7 +21,7 @@ const (
 	actionRuleEnable  = "policy-rule.enable"
 )
 
-// RuleView 是列出命令(及后续 TUI 页)的一行:内置默认规则(带停用
+// RuleView 是列出命令的一行:内置默认规则(带停用
 // 标注)或存储的自定义规则(带全部结构化字段)。
 type RuleView struct {
 	Custom       bool // true = 自定义规则;false = 内置默认规则
@@ -139,7 +138,7 @@ func ListRules(st *store.Store) ([]RuleView, error) {
 	return buildRuleViews(src), nil
 }
 
-// ListRulesFromSnapshot 从快照段构造列出面(客户端只读面与后续 TUI 页
+// ListRulesFromSnapshot 从快照段构造列出面(客户端只读面与 Web UI 页
 // 共用):内置默认规则 + 停用标注 + 自定义规则。nil 快照 = 只列默认规则
 // (全部生效,旧快照形态)。
 func ListRulesFromSnapshot(snap *store.Snapshot) []RuleView {

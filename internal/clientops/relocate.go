@@ -30,8 +30,9 @@ func singleSlotOverrideEnvSet() bool {
 	return os.Getenv("SSHMGR_CACHE_DIR") != "" || os.Getenv("SSHMGR_CACHE_DEK") != ""
 }
 
-// DefaultSlotVacuum is the exported form for the TUI (auto-picker trigger uses
-// the SAME four-file judgment as relocation, spec §3.2).
+// DefaultSlotVacuum is the exported form for callers outside this package
+// (auto-picker trigger uses the SAME four-file judgment as relocation,
+// spec §3.2).
 func DefaultSlotVacuum() (bool, error) {
 	dir, _, _, _, err := CachePaths()
 	if err != nil {
@@ -40,6 +41,6 @@ func DefaultSlotVacuum() (bool, error) {
 	return defaultSlotVacuum(dir), nil
 }
 
-// SingleSlotOverrideEnvSet is the exported form for the TUI single-slot mode
+// SingleSlotOverrideEnvSet is the exported form for the single-slot mode
 // banner/disables (spec §3.5).
 func SingleSlotOverrideEnvSet() bool { return singleSlotOverrideEnvSet() }

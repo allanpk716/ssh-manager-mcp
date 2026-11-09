@@ -13,7 +13,7 @@ import (
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
-	"ssh-manager-mcp/internal/tui"
+	"ssh-manager-mcp/internal/termdetect"
 )
 
 // errTopologyNeedVault 是「本机既没有 vault 也没有客户端缓存」的统一引导。
@@ -22,7 +22,7 @@ var errTopologyNeedVault = errors.New("本机还没有 vault：网络拓扑随 v
 // topologyStdinIsInteractive 判断标准输入是不是交互终端。删除网络需要确认；脚本
 // 场景没有交互终端，必须显式给 --yes。
 var topologyStdinIsInteractive = func() bool {
-	return tui.IsTerminal(os.Stdin.Fd())
+	return termdetect.IsTerminal(os.Stdin.Fd())
 }
 
 // topologyRoleFor 沿用机密项命令的角色判定链：vault 优先，其次看客户端

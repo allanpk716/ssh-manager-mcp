@@ -175,7 +175,7 @@ func (s *Store) SetProjectStatus(id string, status models.ProjectStatus) error {
 		return err
 	}
 	if cur == string(models.ProjectRevoked) && status != models.ProjectRevoked {
-		return fmt.Errorf("project 已吊销:吊销不可逆,无法 enable/disable;需要时新建 project(TUI a / CLI projects add)")
+		return fmt.Errorf("project 已吊销:吊销不可逆,无法 enable/disable;需要时新建 project(Web UI 项目页或 CLI projects add)")
 	}
 	res, err := s.db.Exec(`UPDATE projects SET status=?, updated_at=? WHERE id=?`, string(status), now(), id)
 	if err != nil {
@@ -226,7 +226,7 @@ func rotateProjectTx(tx *sql.Tx, id string) (string, error) {
 		return "", err
 	}
 	if cur == string(models.ProjectRevoked) {
-		return "", fmt.Errorf("project 已吊销:吊销不可逆,无法 rotate;需要时新建 project(TUI a / CLI projects add)")
+		return "", fmt.Errorf("project 已吊销:吊销不可逆,无法 rotate;需要时新建 project(Web UI 项目页或 CLI projects add)")
 	}
 	token, err := GenerateToken()
 	if err != nil {
@@ -274,7 +274,7 @@ func (s *Store) DeleteProject(id string) error {
 		return err
 	}
 	if status != string(models.ProjectRevoked) {
-		return fmt.Errorf("project 仍为 %s:先吊销(TUI d / CLI projects revoke)再删除", status)
+		return fmt.Errorf("project 仍为 %s:先吊销(Web UI 项目页或 CLI projects revoke)再删除", status)
 	}
 	res, err := s.db.Exec(`DELETE FROM projects WHERE id=?`, id)
 	if err != nil {

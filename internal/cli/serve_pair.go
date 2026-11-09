@@ -25,7 +25,7 @@ import (
 func newServePairCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "pair",
-		Short: "Adjudicate pending SAS pairing requests (approve/reject; same queue as the broker TUI's Pairing page)",
+		Short: "Adjudicate pending SAS pairing requests (approve/reject; same queue as the Web UI pairing page)",
 	}
 	c.AddCommand(servePairLsCmd(), servePairApproveCmd(), servePairRejectCmd())
 	return c
@@ -215,7 +215,7 @@ func actionablePairingRows(rows []access.PairingRequest) []access.PairingRequest
 	return out
 }
 
-// orDashStr renders an empty display string as "-" (tui's orDash parity).
+// orDashStr renders an empty display string as "-".
 func orDashStr(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "-"
