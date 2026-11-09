@@ -307,10 +307,14 @@ func TestMaskingEmptyValueSetKeepsForegroundAndDownloadUnchanged(t *testing.T) {
 }
 
 func newMaskingSSHToolClient(t *testing.T, st *store.Store, options testsshd.Options) (*mcp.ClientSession, string) {
+	return newMaskingSSHToolClientWithSudo(t, st, options, "")
+}
+
+func newMaskingSSHToolClientWithSudo(t *testing.T, st *store.Store, options testsshd.Options, sudoPassword string) (*mcp.ClientSession, string) {
 	t.Helper()
 	addr, hostKey, cleanup := testsshd.Start(t, options)
 	t.Cleanup(cleanup)
-	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
+	serverID := seedRealServer(t, st, "real", addr, hostKey, sudoPassword)
 	profileID, err := st.AddProfile("agent-profile")
 	if err != nil {
 		t.Fatal(err)

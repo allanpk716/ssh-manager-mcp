@@ -237,7 +237,8 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 			return
 		}
 		readLimit := readLimitForMasking(ctx, MaxOutputBytes)
-		res, err = cli.ExecSudo(ctx, command, sudoCred.Secret, timeout, readLimit)
+		injectedEnvironmentNames = injectionPlan.injectedNames()
+		res, err = cli.ExecSudo(ctx, command, sudoCred.Secret, timeout, readLimit, injectionPlan.execOption())
 	} else {
 		readLimit := readLimitForMasking(ctx, MaxOutputBytes)
 		injectedEnvironmentNames = injectionPlan.injectedNames()

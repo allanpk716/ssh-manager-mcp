@@ -13,7 +13,7 @@ import (
 
 const (
 	injectionReasonUnknownShell = "服务器 shell 类型未知"
-	injectionReasonPrivileged   = "提权层暂不支持环境变量注入"
+	injectionReasonPrivileged   = "Windows 服务器的提权层暂不支持环境变量注入"
 	injectionReasonZeroByte     = "值含空字节"
 	injectionReasonReadFailed   = "读取机密值失败"
 	injectionReasonInvalidUTF8  = "Windows 上值不是合法 UTF-8"
@@ -26,9 +26,10 @@ type environmentInjectionWarning struct {
 }
 
 type environmentInjectionPlan struct {
-	shellType models.ShellType
-	items     []sshbroker.EnvironmentInjection
-	warnings  []environmentInjectionWarning
+	shellType  models.ShellType
+	privileged bool
+	items      []sshbroker.EnvironmentInjection
+	warnings   []environmentInjectionWarning
 }
 
 func (p environmentInjectionPlan) injectedNames() []string {
@@ -39,8 +40,22 @@ func (p environmentInjectionPlan) injectedNames() []string {
 	return names
 }
 
+func (p environmentInjectionPlan) uninjectedVariables() []UninjectedEnvironmentVariable {
+	variables := make([]UninjectedEnvironmentVariable, 0, len(p.warnings))
+	for _, warning := range p.warnings {
+		variables = append(variables, UninjectedEnvironmentVariable{
+			EnvironmentName: warning.EnvironmentName,
+			Reason:          warning.Reason,
+		})
+	}
+	return variables
+}
+
 func (p environmentInjectionPlan) execOption() sshbroker.ExecOption {
 	layer := sshbroker.ExecLayerNormal
+	if p.privileged {
+		layer = sshbroker.ExecLayerPrivileged
+	}
 	items := make([]sshbroker.ExecInjection, 0, len(p.items))
 	for _, item := range p.items {
 		items = append(items, item)
@@ -53,20 +68,32 @@ func (p environmentInjectionPlan) execOption() sshbroker.ExecOption {
 }
 
 func (p environmentInjectionPlan) appendWarnings(stdout string) string {
-	if len(p.warnings) == 0 {
+	warnings := p.warningLines()
+	if len(warnings) == 0 {
 		return stdout
 	}
 	if stdout != "" && !strings.HasSuffix(stdout, "\n") {
 		stdout += "\n"
 	}
-	for _, warning := range p.warnings {
-		stdout += "环境变量 " + warning.EnvironmentName + " 未注入：" + warning.Reason + "\n"
+	for _, warning := range warnings {
+		stdout += warning + "\n"
 	}
 	return stdout
 }
 
+func (p environmentInjectionPlan) warningLines() []string {
+	if len(p.warnings) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(p.warnings))
+	for _, warning := range p.warnings {
+		lines = append(lines, "环境变量 "+warning.EnvironmentName+" 未注入："+warning.Reason)
+	}
+	return lines
+}
+
 func buildEnvironmentInjectionPlan(st *store.Store, server *models.Server, privileged bool) environmentInjectionPlan {
-	plan := environmentInjectionPlan{shellType: server.ShellType}
+	plan := environmentInjectionPlan{shellType: server.ShellType, privileged: privileged}
 	values, failedValues, err := st.SecretEnvironmentValuesForInjection()
 	if err != nil {
 		plan.addReadFailures(st, server)
@@ -83,11 +110,11 @@ func buildEnvironmentInjectionPlan(st *store.Store, server *models.Server, privi
 			continue
 		}
 		switch {
-		case privileged:
-			plan.warn(value.EnvironmentName, injectionReasonPrivileged)
-			continue
 		case unknownShellType(server.ShellType):
 			plan.warn(value.EnvironmentName, injectionReasonUnknownShell)
+			continue
+		case privileged && models.NormalizeShellType(string(server.ShellType)) != models.ShellPOSIX:
+			plan.warn(value.EnvironmentName, injectionReasonPrivileged)
 			continue
 		case bytes.IndexByte(value.Value, 0) >= 0:
 			plan.warn(value.EnvironmentName, injectionReasonZeroByte)
