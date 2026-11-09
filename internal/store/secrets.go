@@ -815,73 +815,13 @@ type secretAllowDeletion struct {
 // 任何一个不存在就一次列出全部错误并整体不生效；校验通过后在一个事务内完成
 // 全部改动，并为每个发生变化的机密项写一条审计行。
 func (s *Store) AllowSecrets(secretNames, serverNames []string, source WriteSource) error {
-	return s.changeSecretAllows(secretNames, serverNames, true, source)
+	return s.ChangeSecretAllowsForNames(secretNames, serverNames, true, source)
 }
 
 // DisallowSecrets 把若干服务器条目移出若干机密项的可写入列表。校验、事务
 // 与审计语义与 AllowSecrets 相同。
 func (s *Store) DisallowSecrets(secretNames, serverNames []string, source WriteSource) error {
-	return s.changeSecretAllows(secretNames, serverNames, false, source)
-}
-
-// changeSecretAllows 是 allow / disallow 的共用主体。
-func (s *Store) changeSecretAllows(secretNames, serverNames []string, allow bool, source WriteSource) error {
-	if s.readOnly {
-		return ErrReadOnly
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	secrets, secretMissing, err := resolveSecretAllowTargets(tx, `SELECT id, name FROM secrets WHERE name=?`, secretNames, "机密项")
-	if err != nil {
-		return err
-	}
-	servers, serverMissing, err := resolveSecretAllowTargets(tx, `SELECT id, name FROM servers WHERE name=?`, serverNames, "服务器条目")
-	if err != nil {
-		return err
-	}
-	if missing := append(secretMissing, serverMissing...); len(missing) > 0 {
-		return fmt.Errorf("以下名称不存在，整体未生效：\n%s", strings.Join(missing, "\n"))
-	}
-	action := "secret-allow"
-	stmt := `INSERT OR IGNORE INTO secret_server_allow(secret_id,server_id) VALUES(?,?)`
-	auditAt := s.nowTime()
-	if !allow {
-		action = "secret-disallow"
-		stmt = `DELETE FROM secret_server_allow WHERE secret_id=? AND server_id=?`
-	}
-	for _, secret := range secrets {
-		before, err := secretAllowServerNames(tx, secret.id)
-		if err != nil {
-			return err
-		}
-		for _, server := range servers {
-			if _, err := tx.Exec(stmt, secret.id, server.id); err != nil {
-				return err
-			}
-		}
-		after, err := secretAllowServerNames(tx, secret.id)
-		if err != nil {
-			return err
-		}
-		if strings.Join(before, ",") == strings.Join(after, ",") {
-			continue // 幂等重跑：数据没有变化，不写审计行。
-		}
-		summary := map[string]any{
-			"name":   secret.name,
-			"before": strings.Join(before, ","),
-			"after":  strings.Join(after, ","),
-		}
-		if err := writeSecretAuditTx(tx, auditAt, action, summary, source); err != nil {
-			return err
-		}
-	}
-	if err := s.commitSecretChange(tx); err != nil {
-		return err
-	}
-	return nil
+	return s.ChangeSecretAllowsForNames(secretNames, serverNames, false, source)
 }
 
 // resolveSecretAllowTargets 按名字逐个解析目标，返回解析成功的目标与缺失名
