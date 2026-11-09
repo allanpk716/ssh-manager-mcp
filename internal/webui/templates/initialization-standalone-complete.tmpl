@@ -1,0 +1,13 @@
+{{define "content"}}
+<section class="initialization-page">
+<h1>vault 已创建</h1>
+<div class="operation-result">
+<p>主密钥文件位置：<code>{{.InitializationMasterKeyPath}}</code></p>
+<p><strong>请备份此文件。</strong>丢失它后将无法打开这个 vault。</p>
+<form method="post" action="/ui/init/standalone/finish">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">进入单机正式页面</button>
+</form>
+</div>
+</section>
+{{end}}

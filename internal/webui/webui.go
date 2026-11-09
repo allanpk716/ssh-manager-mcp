@@ -311,6 +311,22 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	if cfg.Role == RoleServer {
 		return nil, Startup{}, errors.New("权威端 Web UI 必须使用 NewAuthority 构造")
 	}
+	registerRoutes := func(h *handler) {
+		h.mux.HandleFunc(startPath, h.handleStart)
+		h.mux.HandleFunc("/ui/assets/", h.handleAsset)
+		h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
+		h.registerAccessRoutes()
+		h.registerServerRoutes()
+		h.registerSecretRoutes()
+		h.registerOpsRoutes()
+	}
+	return newLoopbackHandler(cfg, registerRoutes)
+}
+
+// newLoopbackHandler 构造回环模式处理器。registerRoutes 让正式页面与初始
+// 化向导复用同一套会话、Host、来源、防跨站请求伪造与安全头基础设施，同时
+// 保持两者对外注册的路由不同。
+func newLoopbackHandler(cfg Config, registerRoutes func(*handler)) (http.Handler, Startup, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, Startup{}, err
 	}
@@ -335,13 +351,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 		startDigest: sha256.Sum256([]byte(token)),
 		mux:         http.NewServeMux(),
 	}
-	h.mux.HandleFunc(startPath, h.handleStart)
-	h.mux.HandleFunc("/ui/assets/", h.handleAsset)
-	h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
-	h.registerAccessRoutes()
-	h.registerServerRoutes()
-	h.registerSecretRoutes()
-	h.registerOpsRoutes()
+	registerRoutes(h)
 	return h, Startup{token: token}, nil
 }
 
@@ -550,6 +560,14 @@ func (h *handler) currentSession(r *http.Request) *session {
 		return nil
 	}
 	return sess
+}
+
+// adoptLoopbackSession 让另一个回环处理器复用当前会话。两个处理器的监听
+// 端口一致，cookie 名与防跨站请求伪造令牌不需要变化。
+func (h *handler) adoptLoopbackSession(sess *session) {
+	h.mu.Lock()
+	h.session = sess
+	h.mu.Unlock()
 }
 
 // sessionCookieName 带上监听端口：浏览器的 cookie 不按端口隔离，同一台

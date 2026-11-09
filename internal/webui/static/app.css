@@ -1225,3 +1225,57 @@ h1 {
     justify-self: stretch;
   }
 }
+
+.initialization-page {
+  display: grid;
+  gap: var(--space-medium);
+}
+
+.initialization-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-medium);
+}
+
+.initialization-choices form,
+.initialization-note {
+  margin: 0;
+  padding: var(--space-medium);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.initialization-choices h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.initialization-choices p {
+  min-height: 3.2em;
+  color: var(--color-muted);
+}
+
+.initialization-choices button,
+.initialization-page button {
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.initialization-choices button:hover,
+.initialization-page button:hover {
+  border-color: var(--color-accent);
+}
+
+.initialization-note {
+  color: var(--color-muted);
+}
+
+.initialization-page code {
+  overflow-wrap: anywhere;
+}

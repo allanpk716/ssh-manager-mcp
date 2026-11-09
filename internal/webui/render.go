@@ -111,6 +111,9 @@ type pageData struct {
 	LoginError                  string
 	LockRemaining               time.Duration
 	NextPath                    string
+	InitializationError         string
+	InitializationMasterKeyPath string
+	InitializationRoleLabel     string
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染
