@@ -143,8 +143,14 @@ func withMaskOnlyOutputSchema(tool *mcp.Tool) {
 }
 
 // maskerFromStore 读取当前 store 的机密项值集合并构建遮蔽器。
-func maskerFromStore(st *store.Store) (secretmask.Masker, error) {
-	rows, err := st.SecretValuesForMasking()
+func maskerFromStore(st *store.Store, commandExecution bool) (secretmask.Masker, error) {
+	var rows []store.SecretValuesForMasking
+	var err error
+	if commandExecution {
+		rows, err = st.SecretValuesForCommandMasking()
+	} else {
+		rows, err = st.SecretValuesForMasking()
+	}
 	if err != nil {
 		return secretmask.Masker{}, err
 	}
@@ -161,7 +167,7 @@ func maskerFromStore(st *store.Store) (secretmask.Masker, error) {
 }
 
 func newMaskingCall(st *store.Store, input any) (maskingCall, error) {
-	masker, err := maskerFromStore(st)
+	masker, err := maskerFromStore(st, commandExecutionInput(input))
 	if err != nil {
 		return maskingCall{}, fmt.Errorf("read secret values for masking: %w", err)
 	}
@@ -169,6 +175,19 @@ func newMaskingCall(st *store.Store, input any) (maskingCall, error) {
 		masker:          masker,
 		currentServerID: currentServerIDForInput(st, input),
 	}, nil
+}
+
+func commandExecutionInput(input any) bool {
+	switch input.(type) {
+	case ExecCommandInput, *ExecCommandInput,
+		ExecBackgroundInput, *ExecBackgroundInput,
+		ExecContextInput, *ExecContextInput,
+		ExecOutputInput, *ExecOutputInput,
+		ExecStopInput, *ExecStopInput:
+		return true
+	default:
+		return false
+	}
 }
 
 func currentServerIDForInput(st *store.Store, input any) string {

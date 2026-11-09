@@ -58,10 +58,38 @@ type SecretMetadataEdit struct {
 }
 
 // SecretValuesForMasking 读取全部机密项的当前值、上一个值与可写入服务器
-// 条目标识符。单个值无法解密时跳过该项，让可用值继续参与输出遮蔽；该
-// 读取路径只服务本进程内的输出遮蔽，调用方不得把返回值序列化到工具
+// 条目标识符。任何一个值无法解密都返回错误，让调用方拒绝放行未遮蔽输出；
+// 该读取路径只服务本进程内的输出遮蔽，调用方不得把返回值序列化到工具
 // 结果、日志或审计。
 func (s *Store) SecretValuesForMasking() ([]SecretValuesForMasking, error) {
+	rows, allows, err := s.snapshotSecrets()
+	if err != nil {
+		return nil, err
+	}
+	indexByID := make(map[string]int, len(rows))
+	values := make([]SecretValuesForMasking, 0, len(rows))
+	for _, row := range rows {
+		indexByID[row.ID] = len(values)
+		values = append(values, SecretValuesForMasking{
+			Name:     row.Name,
+			Current:  row.Value,
+			Previous: row.PreviousValue,
+		})
+	}
+	for _, allow := range allows {
+		secretID, serverID := allow.SecretID, allow.ServerID
+		if index, exists := indexByID[secretID]; exists {
+			values[index].WritableServerIDs = append(values[index].WritableServerIDs, serverID)
+		}
+	}
+	return values, nil
+}
+
+// SecretValuesForCommandMasking 只供带环境变量注入计划的执行工具使用。这
+// 类工具按规格必须在一个变量读取失败时继续执行并返回未注入警告，因此这里
+// 跳过无法解密的值，让其他可用值继续参与输出遮蔽。其他调用方必须使用
+// SecretValuesForMasking 的失败即报错行为。
+func (s *Store) SecretValuesForCommandMasking() ([]SecretValuesForMasking, error) {
 	rows, err := s.db.Query(`
 		SELECT id, name, value_blob, COALESCE(previous_value_blob,'')
 		FROM secrets ORDER BY id`)
@@ -83,16 +111,13 @@ func (s *Store) SecretValuesForMasking() ([]SecretValuesForMasking, error) {
 		}
 		var previous []byte
 		if len(previousBlob) > 0 {
-			previous, openErr = open(s.masterKey, previousBlob)
-			if openErr != nil {
+			if previous, openErr = open(s.masterKey, previousBlob); openErr != nil {
 				previous = nil
 			}
 		}
 		indexByID[id] = len(values)
 		values = append(values, SecretValuesForMasking{
-			Name:     name,
-			Current:  current,
-			Previous: previous,
+			Name: name, Current: current, Previous: previous,
 		})
 	}
 	if err := rows.Err(); err != nil {
