@@ -22,7 +22,7 @@ func seedCollectedDevice(t *testing.T, manager *Manager, st *store.Store, device
 		Items: []models.SoftwareObservedItem{{
 			Category: models.SoftwareCategorySystemPackage, Name: "openssh-server", Version: "1:9.6p1-1",
 		}},
-		ServerID: servers[0].ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: servers[0].ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestCollectionStatusesShowFailureAndVisibility(t *testing.T) {
 	status := statuses[0]
 	if status.DeviceID == "" || !status.Managed || status.Collector != "authority" ||
 		status.ServerEntry != "受管甲-ssh" || status.LastSuccessAt == nil ||
-		status.LastSuccessAt.Unix() != collectedAt.Unix() || status.CommandSetVersion != "linux-v1" {
+		status.LastSuccessAt.Unix() != collectedAt.Unix() || status.CommandSetVersion != "posix-v2" {
 		t.Fatalf("受管甲的采集状态 = %+v", status)
 	}
 	if _, err := manager.CollectionStatuses(visibility, "受管乙"); err == nil {
@@ -148,7 +148,7 @@ func TestManagerChangeHistoryRespectsVisibility(t *testing.T) {
 		Items: []models.SoftwareObservedItem{{
 			Category: models.SoftwareCategorySystemPackage, Name: "nginx", Version: "1.24.0",
 		}},
-		ServerID: serversA[0].ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: serversA[0].ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

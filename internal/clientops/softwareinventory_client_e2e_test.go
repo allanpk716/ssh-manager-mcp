@@ -25,7 +25,7 @@ import (
 )
 
 func TestSoftwareInventoryClientCollectorEndToEndWithTestSSHServer(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "softwareinventory", "testdata", "linux", "ubuntu2404-full.txt"))
+	fixture, err := os.ReadFile(filepath.Join("..", "softwareinventory", "testdata", "posix", "ubuntu2404-full.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,176 @@
+SSHMGR-INVENTORY BEGIN posix-v2
+SSHMGR-INVENTORY SECTION os
+kernel-name=Linux
+kernel=4.4.59+
+machine=x86_64
+file=/etc.defaults/VERSION
+majorversion="6"
+minorversion="2"
+productversion="6.2.3"
+buildphase="GM"
+buildnumber="25426"
+smallfixnumber="0"
+builddate="2020/05/12"
+buildtime="06:14:27"
+SSHMGR-INVENTORY STATUS os 0
+SSHMGR-INVENTORY SECTION packages
+SSHMGR-INVENTORY ABSENT packages
+SSHMGR-INVENTORY SECTION listen
+SSHMGR-INVENTORY ABSENT listen
+SSHMGR-INVENTORY SECTION listen-netstat
+(No info could be read for "-p": geteuid()=1026 but you should be root.)
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        0      0 0.0.0.0:139             0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:111             0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:2642            0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:54581           0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:21              0.0.0.0:*               LISTEN      -
+tcp        0      0 127.0.0.1:5432          0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:443             0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:892             0.0.0.0:*               LISTEN      -
+tcp        0      0 127.0.0.1:4700          0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:445             0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:3262            0.0.0.0:*               LISTEN      -
+tcp        0      0 127.0.0.1:512           0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:2049            0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:6690            0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:38340           0.0.0.0:*               LISTEN      -
+tcp        0      0 10.0.65.214:3493      0.0.0.0:*               LISTEN      -
+tcp        0      0 169.254.177.120:3493    0.0.0.0:*               LISTEN      -
+tcp        0      0 127.0.0.1:3493          0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:5510            0.0.0.0:*               LISTEN      -
+tcp        0      0 10.0.65.214:2375      0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:5000            0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:5001            0.0.0.0:*               LISTEN      -
+tcp6       0      0 :::3306                 :::*                    LISTEN      -
+tcp6       0      0 :::139                  :::*                    LISTEN      -
+tcp6       0      0 :::2188                 :::*                    LISTEN      -
+tcp6       0      0 :::46156                :::*                    LISTEN      -
+tcp6       0      0 :::33071                :::*                    LISTEN      -
+tcp6       0      0 :::111                  :::*                    LISTEN      -
+tcp6       0      0 :::80                   :::*                    LISTEN      -
+tcp6       0      0 :::56562                :::*                    LISTEN      -
+tcp6       0      0 :::2642                 :::*                    LISTEN      -
+tcp6       0      0 :::21                   :::*                    LISTEN      -
+tcp6       0      0 :::1688                 :::*                    LISTEN      -
+tcp6       0      0 :::12345                :::*                    LISTEN      -
+tcp6       0      0 :::443                  :::*                    LISTEN      -
+tcp6       0      0 :::892                  :::*                    LISTEN      -
+tcp6       0      0 :::445                  :::*                    LISTEN      -
+tcp6       0      0 :::12381                :::*                    LISTEN      -
+tcp6       0      0 :::3261                 :::*                    LISTEN      -
+tcp6       0      0 :::53822                :::*                    LISTEN      -
+tcp6       0      0 :::3263                 :::*                    LISTEN      -
+tcp6       0      0 :::3264                 :::*                    LISTEN      -
+tcp6       0      0 :::2049                 :::*                    LISTEN      -
+tcp6       0      0 :::3265                 :::*                    LISTEN      -
+tcp6       0      0 :::6690                 :::*                    LISTEN      -
+tcp6       0      0 :::2180                 :::*                    LISTEN      -
+tcp6       0      0 :::548                  :::*                    LISTEN      -
+tcp6       0      0 fe80::211:32ff:fea:3493 :::*                    LISTEN      -
+tcp6       0      0 ::1:3493                :::*                    LISTEN      -
+tcp6       0      0 :::5510                 :::*                    LISTEN      -
+tcp6       0      0 :::15432                :::*                    LISTEN      -
+tcp6       0      0 :::9000                 :::*                    LISTEN      -
+tcp6       0      0 :::53800                :::*                    LISTEN      -
+tcp6       0      0 :::5000                 :::*                    LISTEN      -
+tcp6       0      0 :::5001                 :::*                    LISTEN      -
+udp        0      0 0.0.0.0:1900            0.0.0.0:*                           -
+udp        0      0 0.0.0.0:2049            0.0.0.0:*                           -
+udp        0      0 0.0.0.0:35028           0.0.0.0:*                           -
+udp        0      0 0.0.0.0:60978           0.0.0.0:*                           -
+udp        0      0 0.0.0.0:68              0.0.0.0:*                           -
+udp        0      0 0.0.0.0:111             0.0.0.0:*                           -
+udp        0      0 172.17.0.1:123          0.0.0.0:*                           -
+udp        0      0 172.24.0.1:123          0.0.0.0:*                           -
+udp        0      0 172.29.0.1:123          0.0.0.0:*                           -
+udp        0      0 172.21.0.1:123          0.0.0.0:*                           -
+udp        0      0 10.0.65.214:123       0.0.0.0:*                           -
+udp        0      0 127.0.0.1:123           0.0.0.0:*                           -
+udp        0      0 0.0.0.0:123             0.0.0.0:*                           -
+udp        0      0 10.0.65.255:137       0.0.0.0:*                           -
+udp        0      0 10.0.65.214:137       0.0.0.0:*                           -
+udp        0      0 0.0.0.0:137             0.0.0.0:*                           -
+udp        0      0 10.0.65.255:138       0.0.0.0:*                           -
+udp        0      0 10.0.65.214:138       0.0.0.0:*                           -
+udp        0      0 0.0.0.0:138             0.0.0.0:*                           -
+udp        0      0 127.0.0.1:161           0.0.0.0:*                           -
+udp        0      0 0.0.0.0:609             0.0.0.0:*                           -
+udp        0      0 127.0.0.1:670           0.0.0.0:*                           -
+udp        0      0 0.0.0.0:58203           0.0.0.0:*                           -
+udp        0      0 0.0.0.0:892             0.0.0.0:*                           -
+udp        0      0 0.0.0.0:5353            0.0.0.0:*                           -
+udp        0      0 0.0.0.0:46388           0.0.0.0:*                           -
+udp        0      0 0.0.0.0:42632           0.0.0.0:*                           -
+udp        0      0 0.0.0.0:9997            0.0.0.0:*                           -
+udp        0      0 0.0.0.0:9998            0.0.0.0:*                           -
+udp        0      0 0.0.0.0:9999            0.0.0.0:*                           -
+udp6       0      0 :::2049                 :::*                                -
+udp6       0      0 :::2180                 :::*                                -
+udp6       0      0 :::57436                :::*                                -
+udp6       0      0 :::111                  :::*                                -
+udp6       0      0 fe80::30a6:86ff:fee:123 :::*                                -
+udp6       0      0 fe80::cc8b:1aff:fe2:123 :::*                                -
+udp6       0      0 fe80::38a7:d6ff:fec:123 :::*                                -
+udp6       0      0 fe80::b076:bcff:fec:123 :::*                                -
+udp6       0      0 fe80::7865:47ff:fec:123 :::*                                -
+udp6       0      0 fe80::805c:8bff:fee:123 :::*                                -
+udp6       0      0 fe80::f496:e9ff:fe9:123 :::*                                -
+udp6       0      0 fe80::42:c2ff:fe2a::123 :::*                                -
+udp6       0      0 fe80::42:16ff:fe4f::123 :::*                                -
+udp6       0      0 fe80::42:cdff:fe5d::123 :::*                                -
+udp6       0      0 fe80::42:57ff:fe15::123 :::*                                -
+udp6       0      0 fe80::211:32ff:feae:123 :::*                                -
+udp6       0      0 ::1:123                 :::*                                -
+udp6       0      0 :::123                  :::*                                -
+udp6       0      0 :::49660                :::*                                -
+udp6       0      0 fe80::211:32ff:feae:546 :::*                                -
+udp6       0      0 :::609                  :::*                                -
+udp6       0      0 :::892                  :::*                                -
+udp6       0      0 :::5353                 :::*                                -
+udp6       0      0 :::50613                :::*                                -
+SSHMGR-INVENTORY STATUS listen-netstat 0
+SSHMGR-INVENTORY SECTION listen-lsof
+SSHMGR-INVENTORY ABSENT listen-lsof
+SSHMGR-INVENTORY SECTION exe
+SSHMGR-INVENTORY STATUS exe 0
+SSHMGR-INVENTORY SECTION exe-owner
+SSHMGR-INVENTORY ABSENT exe-owner
+SSHMGR-INVENTORY SECTION apps
+SSHMGR-INVENTORY ABSENT apps
+SSHMGR-INVENTORY SECTION brew
+SSHMGR-INVENTORY ABSENT brew
+SSHMGR-INVENTORY SECTION synology-packages
+Docker-18.09.0-0506: Docker is a lightweight virtualization application that gives you the ability to run thousands of containers created by developers from all over the world on DSM. The hugely popular built-in image repository, Docker Hub, allows you to find shared applications from other talented developers.
+LogCenter-1.1.8-0144: Log Center offers an easy solution for gathering and displaying log messages from network devices. It provides you with a centralized log management interface and the flexible search function to help you find the useful information efficiently.
+ActiveBackup-2.1.0-0993: Active Backup for Business is designed to provide a comprehensive while centralized data protection solution, helping you back up business PCs, VMs, physical servers, and file servers all alike.
+StorageAnalyzer-2.0.1-0199: Storage Analyzer allows you to have a quick glance at the overall usage trends of your Synology NAS, create and manage tasks to analyze storage spaces, and generate detailed reports on volume usage.
+FileStation-1.2.6-0282: File Station is the centralized file management tool for your Synology NAS. Through File Station, you can manage and search files/folders, view files of various types, share private files with external users, mount remote folders and virtual drives for access, and do much more!
+TextEditor-1.2.3-0029: Text Editor provides you with extensive editing features to handle plain text files, such as programming scripts and HTML files, directly in DSM.
+HyperBackup-2.2.9-1521: Hyper Backup helps you protect shared folder data, packages, and LUNs on your Synology NAS thoroughly, providing diverse backup destinations and multiple backup versions. Restoration is available with a straightforward version browsing interface.
+SynologyDrive-2.0.1-11061: Synology Drive Server is an all-round solution for file management, sharing and synchronization. Once the administrator has enabled Synology Drive Server, users can see Synology Drive as a file portal and access it from web browsers, desktop applications and mobile apps.
+SynoFinder-1.4.1-0282: Synology Universal Search is a powerful search tool for your Synology NAS. In one search, you can find matched items from photos to notes. You can also index folders to provide precise and prompt search results by filename or file content. With Synology Universal Search, everything on your Synology NAS is just a few clicks away.
+OAuthService-1.0.4-0030: OAuth Service is an open standard protocol for account authorization and authentication. It allows resource owners to authorize third-party access to their server resources without sharing their credentials. The package adopts OAuth 2.0 standard.
+Node.js_v8-8.9.4-0005: Built on Chrome's JavaScript runtime, Node.js has become a widely popular platform for users to easily build fast, scalable network applications.
+SynologyApplicationService-1.6.2-0431: Synology Application Service provides a framework to enrich features and services of Synology packages, including push notifications and profile settings. With Synology Application Service, coherent configurations can be shared across different packages.
+SSHMGR-INVENTORY STATUS synology-packages 0
+SSHMGR-INVENTORY SECTION container-images
+Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get http://%2Fvar%2Frun%2Fdocker.sock/v1.39/images/json: dial unix /var/run/docker.sock: connect: permission denied
+SSHMGR-INVENTORY STATUS container-images 1
+SSHMGR-INVENTORY SECTION containers
+Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get http://%2Fvar%2Frun%2Fdocker.sock/v1.39/containers/json: dial unix /var/run/docker.sock: connect: permission denied
+SSHMGR-INVENTORY STATUS containers 1
+SSHMGR-INVENTORY SECTION firmware
+bios_vendor	INSYDE Corp.
+bios_version	M.034
+bios_date	11/11/2019
+board_vendor	Synology
+board_name	DS918+
+sys_vendor	Synology
+product_name	DS918+
+SSHMGR-INVENTORY STATUS firmware 0
+SSHMGR-INVENTORY SECTION gpu-driver
+SSHMGR-INVENTORY ABSENT gpu-driver
+SSHMGR-INVENTORY END

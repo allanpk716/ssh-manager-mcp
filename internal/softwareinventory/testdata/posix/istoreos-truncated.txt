@@ -1,0 +1,45 @@
+SSHMGR-INVENTORY BEGIN posix-v2
+SSHMGR-INVENTORY SECTION os
+kernel-name=Linux
+kernel=6.6.119
+machine=x86_64
+file=/etc/os-release
+NAME="iStoreOS"
+VERSION="24.10.5"
+ID="istoreos"
+ID_LIKE="lede openwrt"
+PRETTY_NAME="iStoreOS 24.10.5"
+VERSION_ID="24.10.5"
+HOME_URL="https://github.com/istoreos"
+BUG_URL="https://github.com/istoreos/istoreos/issues"
+SUPPORT_URL="https://forum.openwrt.org/"
+BUILD_ID="2025123110"
+OPENWRT_BOARD="x86/64"
+OPENWRT_ARCH="x86_64"
+OPENWRT_TAINTS="busybox"
+OPENWRT_DEVICE_MANUFACTURER="OpenWrt"
+OPENWRT_DEVICE_MANUFACTURER_URL="https://openwrt.org/"
+OPENWRT_DEVICE_PRODUCT="Generic"
+OPENWRT_DEVICE_REVISION="v0"
+OPENWRT_RELEASE="iStoreOS 24.10.5 2025123110"
+OPENWRT_BUILD_DATE="1767108361"
+file=/etc/openwrt_release
+DISTRIB_ID='iStoreOS'
+DISTRIB_RELEASE='24.10.5'
+DISTRIB_REVISION='2025123110'
+DISTRIB_TARGET='x86/64'
+DISTRIB_ARCH='x86_64'
+DISTRIB_DESCRIPTION='iStoreOS 24.10.5 2025123110'
+DISTRIB_TAINTS='busybox'
+SSHMGR-INVENTORY STATUS os 0
+SSHMGR-INVENTORY SECTION packages
+SSHMGR-INVENTORY ABSENT packages
+SSHMGR-INVENTORY SECTION listen
+SSHMGR-INVENTORY ABSENT listen
+SSHMGR-INVENTORY SECTION listen-netstat
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        0      0 0.0.0.0:32780           0.0.0.0:*               LISTEN      10912/rpc.mountd
+tcp        0      0 0.0.0.0:32777           0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:32778           0.0.0.0:*               LISTEN      10911/rpc.statd
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      7803/uhttpd

@@ -1,5 +1,9 @@
-SSHMGR-INVENTORY BEGIN linux-v1
+SSHMGR-INVENTORY BEGIN posix-v2
 SSHMGR-INVENTORY SECTION os
+kernel-name=Linux
+kernel=5.15.0-202-generic
+machine=x86_64
+file=/etc/os-release
 PRETTY_NAME="Ubuntu 22.04.5 LTS"
 NAME="Ubuntu"
 VERSION_ID="22.04"
@@ -12,8 +16,6 @@ SUPPORT_URL="https://help.ubuntu.com/"
 BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
 PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
 UBUNTU_CODENAME=jammy
-kernel=5.15.0-202-generic
-machine=x86_64
 SSHMGR-INVENTORY STATUS os 0
 SSHMGR-INVENTORY SECTION packages
 adduser	3.118ubuntu5	all	ii
@@ -1360,12 +1362,22 @@ tcp LISTEN 0      4096            [::]:8824     [::]:*
 tcp LISTEN 0      4096            [::]:6006     [::]:*
 tcp LISTEN 0      128             [::]:22       [::]:*
 SSHMGR-INVENTORY STATUS listen 0
+SSHMGR-INVENTORY SECTION listen-netstat
+SSHMGR-INVENTORY ABSENT listen-netstat
+SSHMGR-INVENTORY SECTION listen-lsof
+SSHMGR-INVENTORY ABSENT listen-lsof
 SSHMGR-INVENTORY SECTION exe
 5641	/home/user/.vscode-server/code-2c33b50b16c472efe58357d1d2a8a5414bc23fbf
 SSHMGR-INVENTORY STATUS exe 0
 SSHMGR-INVENTORY SECTION exe-owner
 /home/user/.vscode-server/code-2c33b50b16c472efe58357d1d2a8a5414bc23fbf
 SSHMGR-INVENTORY STATUS exe-owner 0
+SSHMGR-INVENTORY SECTION apps
+SSHMGR-INVENTORY ABSENT apps
+SSHMGR-INVENTORY SECTION brew
+SSHMGR-INVENTORY ABSENT brew
+SSHMGR-INVENTORY SECTION synology-packages
+SSHMGR-INVENTORY ABSENT synology-packages
 SSHMGR-INVENTORY SECTION container-images
 unsamv2	v1.0.0	<none>	sha256:ee0b91a8b6e308ac5cebef4a79f624887c0d380cd4d6e5500dea8f1af55d8e93
 sl1000_image	v1	<none>	sha256:a5caa9663b70b435b2b9b9bb84d0030e19204b1dc2f169707c6959eefc176b29

@@ -68,7 +68,7 @@ func TestSoftwareInventoryCollectorForwarderContract(t *testing.T) {
 
 	submission := softwareinventory.CollectionSubmission{
 		DeviceID: "device-1", DeviceName: "工作站", ServerID: "server-1",
-		Sudo: true, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		Sudo: true, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 		Items: []models.SoftwareObservedItem{{
 			Category: models.SoftwareCategorySystemPackage, Name: "nginx", Version: "1.25",
 		}},

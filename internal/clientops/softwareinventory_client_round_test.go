@@ -67,7 +67,7 @@ func newClientCollectorFixture(t *testing.T, resultStatus int) (*SoftwareInvento
 		t.Fatal(err)
 	}
 	serverID = added.ServerID
-	fixture, err := os.ReadFile(filepath.Join("..", "softwareinventory", "testdata", "linux", "ubuntu2404-full.txt"))
+	fixture, err := os.ReadFile(filepath.Join("..", "softwareinventory", "testdata", "posix", "ubuntu2404-full.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}

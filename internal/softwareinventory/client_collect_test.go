@@ -29,7 +29,7 @@ func TestCollectForSubmissionDoesNotWriteLocalInventory(t *testing.T) {
 	}
 	if submission.DeviceName != "工作站" || submission.DeviceID != "device-id" ||
 		submission.ServerID != servers["甲入口"].ID || submission.Sudo ||
-		submission.CommandSetVersion != LinuxCommandSetVersion ||
+		submission.CommandSetVersion != POSIXCommandSetVersion ||
 		submission.SystemType != "ubuntu" || submission.Failed ||
 		len(submission.Items) <= 1041 {
 		t.Fatalf("客户端待上交结果 = %+v", submission)

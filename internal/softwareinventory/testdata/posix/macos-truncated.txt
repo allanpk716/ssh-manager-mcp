@@ -1,0 +1,467 @@
+SSHMGR-INVENTORY BEGIN posix-v2
+SSHMGR-INVENTORY SECTION os
+kernel-name=Darwin
+kernel=27.0.0
+machine=arm64
+file=sw_vers
+ProductName:		macOS
+ProductVersion:		27.0.1
+BuildVersion:		26A434
+SSHMGR-INVENTORY STATUS os 0
+SSHMGR-INVENTORY SECTION packages
+SSHMGR-INVENTORY ABSENT packages
+SSHMGR-INVENTORY SECTION listen
+SSHMGR-INVENTORY ABSENT listen
+SSHMGR-INVENTORY SECTION listen-netstat
+SSHMGR-INVENTORY ABSENT listen-netstat
+SSHMGR-INVENTORY SECTION listen-lsof
+p1
+claunchd
+f7
+tIPv6
+PTCP
+n*:22
+f8
+tIPv4
+PTCP
+n*:22
+f9
+tIPv6
+PTCP
+n*:22
+f10
+tIPv4
+PTCP
+n*:22
+f11
+tIPv6
+PTCP
+n*:3031
+f12
+tIPv4
+PTCP
+n*:3031
+f15
+tIPv6
+PTCP
+n*:3031
+f16
+tIPv4
+PTCP
+n*:3031
+f19
+tIPv6
+PTCP
+n*:5900
+f20
+tIPv4
+PTCP
+n*:5900
+f23
+tIPv6
+PTCP
+n*:5900
+f24
+tIPv4
+PTCP
+n*:5900
+f43
+tIPv4
+PUDP
+n*:138
+f44
+tIPv4
+PUDP
+n*:137
+p141
+csyslogd
+f13
+tIPv4
+PUDP
+n*:61461
+p158
+ckdc
+f4
+tIPv6
+PUDP
+n*:88
+f5
+tIPv6
+PTCP
+n*:88
+f6
+tIPv4
+PUDP
+n*:88
+f7
+tIPv4
+PTCP
+n*:88
+p230
+cmDNSResponder
+f6
+tIPv4
+PUDP
+n*:5353
+f7
+tIPv6
+PUDP
+n*:5353
+p245
+cairportd
+f3
+tIPv4
+PUDP
+n*:*
+f9
+tIPv6
+PUDP
+n*:*
+f11
+tIPv4
+PUDP
+n*:*
+f12
+tIPv4
+PUDP
+n*:*
+f13
+tIPv4
+PUDP
+n*:*
+f14
+tIPv4
+PUDP
+n*:*
+f17
+tIPv4
+PUDP
+n*:*
+f18
+tIPv4
+PUDP
+n*:*
+f19
+tIPv4
+PUDP
+n*:*
+f21
+tIPv4
+PUDP
+n*:*
+f22
+tIPv4
+PUDP
+n*:*
+f24
+tIPv4
+PUDP
+n*:*
+f25
+tIPv4
+PUDP
+n*:*
+f27
+tIPv4
+PUDP
+n*:*
+f29
+tIPv4
+PUDP
+n*:*
+f30
+tIPv4
+PUDP
+n*:*
+p246
+csymptomsd
+f4
+tIPv4
+PUDP
+n*:*
+p297
+cnetbird
+f16
+tIPv4
+PUDP
+n*:51820
+f20
+tIPv6
+PUDP
+n*:51820
+p427
+crapportd
+f11
+tIPv4
+PTCP
+n*:49162
+f12
+tIPv6
+PTCP
+n*:49162
+p435
+cARDAgent
+f6
+tIPv6
+PUDP
+n*:3283
+f7
+tIPv4
+PUDP
+n*:3283
+f10
+tIPv6
+PTCP
+n*:3283
+p442
+cidentityservicesd
+f4
+tIPv4
+PUDP
+n*:*
+f15
+tIPv4
+PUDP
+n*:*
+f20
+tIPv4
+PUDP
+n*:*
+p456
+csharingd
+f4
+tIPv4
+PUDP
+n*:*
+p468
+cControlCenter
+f11
+tIPv4
+PTCP
+n*:7000
+f12
+tIPv6
+PTCP
+n*:7000
+f13
+tIPv4
+PTCP
+n*:5000
+f14
+tIPv6
+PTCP
+n*:5000
+p594
+cnetbiosd
+f3
+tIPv4
+PUDP
+n*:137
+f4
+tIPv4
+PUDP
+n*:138
+p1026
+cferryman
+f5
+tIPv4
+PTCP
+n127.0.0.1:15900
+f7
+tIPv4
+PTCP
+n127.0.0.1:15700
+p1027
+cRustDesk
+f21
+tIPv4
+PUDP
+n*:65158
+f34
+tIPv4
+PUDP
+n*:21119
+f35
+tIPv6
+PTCP
+n*:21118
+p1092
+ccloud-drive-ui
+f48
+tIPv4
+PTCP
+n127.0.0.1:49199
+p1130
+ccloud-drive-connect
+f4
+tIPv4
+PTCP
+n127.0.0.1:49190
+p1181
+ccloud-drive-daemon
+f4
+tIPv4
+PTCP
+n127.0.0.1:49203
+f48
+tIPv4
+PTCP
+n127.0.0.1:49199
+p8772
+cFinderSync
+f5
+tIPv4
+PTCP
+n127.0.0.1:1025
+p16165
+cmockit
+f5
+tIPv6
+PTCP
+n*:8321
+p20545
+cwifivelocityd
+f3
+tIPv4
+PUDP
+n*:*
+p32919
+ccaddy-cf
+f8
+tIPv4
+PTCP
+n127.0.0.1:2019
+f9
+tIPv4
+PTCP
+n100.64.176.28:8443
+f10
+tIPv4
+PUDP
+n100.64.176.28:8443
+p33856
+creplicatord
+f9
+tIPv6
+PUDP
+n*:52222
+p58760
+cOrca
+f81
+tIPv4
+PTCP
+n127.0.0.1:62788
+f82
+tIPv4
+PTCP
+n*:6768
+p60846
+cwifip2pd
+f4
+tIPv4
+PUDP
+n*:*
+f6
+tIPv4
+PUDP
+n*:*
+f7
+tIPv4
+PUDP
+n*:*
+f8
+tIPv4
+PUDP
+n*:*
+p77896
+climactl
+f13
+tIPv4
+PTCP
+n127.0.0.1:55516
+f17
+tIPv4
+PUDP
+n198.51.100.137:63808->198.18.4.24:7844
+p77980
+climactl
+f8
+tIPv6
+PTCP
+n*:53
+p78008
+cssh
+f11
+tIPv4
+PTCP
+n127.0.0.1:5173
+f13
+tIPv4
+PTCP
+n127.0.0.1:3100
+f14
+tIPv4
+PTCP
+n127.0.0.1:32769
+p99426
+csshmgr
+f9
+tIPv6
+PTCP
+n*:7878
+f11
+tIPv6
+PUDP
+n*:7878
+p99755
+cnode
+f14
+tIPv4
+PTCP
+n127.0.0.1:8989
+SSHMGR-INVENTORY STATUS listen-lsof 0
+SSHMGR-INVENTORY SECTION exe
+1	/sbin/launchd
+141	/usr/sbin/syslogd
+158	/System/Library/PrivateFrameworks/Heimdal.framework/Helpers/kdc
+230	/usr/sbin/mDNSResponder
+245	/usr/libexec/airportd
+246	/usr/libexec/symptomsd
+297	/usr/local/bin/netbird
+427	/usr/libexec/rapportd
+435	/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent
+442	/System/Library/PrivateFrameworks/IDS.framework/identityservicesd.app/Contents/MacOS/identityservicesd
+456	/usr/libexec/sharingd
+468	/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter
+594	/usr/sbin/netbiosd
+1026	/Users/user/orca/ferryman/ferryman
+1027	/Applications/RustDesk.app/Contents/MacOS/RustDesk
+1092	/Users/user/Library/Application Support/SynologyDrive/SynologyDrive.app/Contents/MacOS/cloud-drive-ui
+1130	/Users/user/Library/Application Support/SynologyDrive/SynologyDrive.app/Contents/MacOS/cloud-drive-connect
+1181	/Users/user/Library/Application Support/SynologyDrive/SynologyDrive.app/Contents/MacOS/cloud-drive-daemon
+8772	/Users/user/Library/Application Support/SynologyDrive/SynologyDrive.app/Contents/Resources/FinderHelper.app/Contents/PlugIns/FinderSync.appex/Contents/MacOS/FinderSync
+16165	/Users/user/.mockit/bin/mockit
+20545	/usr/libexec/wifivelocityd
+32919	/Users/user/ops/rakazo/bin/caddy-cf
+33856	/System/Library/PrivateFrameworks/ReplicatorCore.framework/Support/replicatord
+58760	/Applications/Orca.app/Contents/MacOS/Orca
+60846	/usr/libexec/wifip2pd
+77896	/opt/homebrew/bin/limactl
+77980	/opt/homebrew/bin/limactl
+78008	ssh: /Users/user/.colima/_lima/colima/ssh.sock [mux]
+99426	/usr/local/bin/sshmgr
+99755	node
+SSHMGR-INVENTORY STATUS exe 0
+SSHMGR-INVENTORY SECTION exe-owner
+SSHMGR-INVENTORY ABSENT exe-owner
+SSHMGR-INVENTORY SECTION apps
+/Applications/BetterDisplay.app	5.2.1	pro.betterdisplay.BetterDisplay
+/Applications/Bitwarden.app	2026.10.0	com.bitwarden.desktop
+/Applications/GarageBand.app	10.4.14	com.apple.garageband10
+/Applications/Keynote Creator Studio.app	15.3	com.apple.Keynote
+/Applications/Numbers Creator Studio.app	15.3	com.apple.Numbers
+/Applications/Orca.app	1.4.253	com.stablyai.orca
+/Applications/Pages Creator Studio.app	15.3	com.apple.Pages
+/Applications/RoamRun.app	0.9.0	io.github.mh-mobile.roamrun
+/Applications/RustDesk.app	1.5.0	com.carriez.rustdesk
+/Applications/Safari.app	27.0.1	com.apple.Safari

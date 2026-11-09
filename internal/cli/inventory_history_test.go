@@ -44,7 +44,7 @@ func seedInventoryHistoryVault(t *testing.T) {
 				Exposure: models.SoftwareExposureAllAddresses,
 			}},
 		}},
-		ServerID: result.ServerID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: result.ServerID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func seedInventoryHistoryVault(t *testing.T) {
 				Exposure: models.SoftwareExposureLocal,
 			}},
 		}},
-		ServerID: result.ServerID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+		ServerID: result.ServerID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 		Incomplete: true,
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestInventoryStatusCommand(t *testing.T) {
 	seedInventoryHistoryVault(t)
 	output := mustInventoryCli(t, "", "inventory", "status")
 	for _, want := range []string{
-		"工作站", "权威端", "工作站入口", "上次成功", "命令集版本 linux-v1", "未过期",
+		"工作站", "权威端", "工作站入口", "上次成功", "命令集版本 posix-v2", "未过期",
 		"上次失败：", "连接超时", "上次结果不完整",
 		"网络存储", "从未采集", "上次结果完整", "不受管设备不算过期",
 	} {
