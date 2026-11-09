@@ -2,12 +2,14 @@ package webui
 
 import (
 	"errors"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 type stubInitializer struct {
@@ -33,14 +35,22 @@ func (s *stubInitializer) Initialize(role InitializationRole) (InitializationRes
 	return s.result, s.initializeErr
 }
 
-func newInitializationWizardForTest(t *testing.T, initializer Initializer) (http.Handler, Startup) {
+func newInitializationWizardForTest(
+	t *testing.T,
+	initializer Initializer,
+	configure ...func(*Config),
+) (http.Handler, Startup) {
 	t.Helper()
-	handler, startup, err := NewInitializationWizard(Config{
+	config := Config{
 		Role:    RoleStandalone,
 		Servers: &stubServerSource{rows: []ServerRow{{Name: "正式服务器", User: "root", Host: "192.0.2.10", Port: 22}}},
 		Access:  &stubAccessStore{},
 		Port:    18080,
-	}, initializer)
+	}
+	for _, configureConfig := range configure {
+		configureConfig(&config)
+	}
+	handler, startup, err := NewInitializationWizard(config, initializer)
 	if err != nil {
 		t.Fatalf("构造初始化向导失败：%v", err)
 	}
@@ -275,7 +285,7 @@ func wizardGet(t *testing.T, handler http.Handler, cookie *http.Cookie, path str
 	return recorder.Result()
 }
 
-func TestInitializationWizardRolePlaceholdersDoNotChangeMachine(t *testing.T) {
+func TestInitializationWizardServerPlaceholderDoesNotChangeMachine(t *testing.T) {
 	initializer := &stubInitializer{}
 	handler, startup := newInitializationWizardForTest(t, initializer)
 	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
@@ -283,26 +293,71 @@ func TestInitializationWizardRolePlaceholdersDoNotChangeMachine(t *testing.T) {
 	start.Body.Close()
 	choice := wizardPage(t, handler, cookie, "/ui/")
 
-	for _, testCase := range []struct {
-		role string
-		path string
-		name string
-	}{
-		{role: "server", path: "/ui/init/server", name: "权威端"},
-		{role: "client", path: "/ui/init/client", name: "客户端"},
-	} {
-		selected := wizardPost(t, handler, cookie, "/ui/init/role", hiddenInputValue(t, choice, "csrf_token"), url.Values{"role": {testCase.role}})
-		selected.Body.Close()
-		if selected.StatusCode != http.StatusSeeOther || selected.Header.Get("Location") != testCase.path {
-			t.Fatalf("%s 占位入口跳转错误，状态码=%d 地址=%q", testCase.name, selected.StatusCode, selected.Header.Get("Location"))
-		}
-		page := wizardPage(t, handler, cookie, testCase.path)
-		if !strings.Contains(page, testCase.name) || !strings.Contains(page, "尚未实现") {
-			t.Fatalf("%s 占位页应说明尚未实现：\n%s", testCase.name, page)
-		}
+	selected := wizardPost(t, handler, cookie, "/ui/init/role", hiddenInputValue(t, choice, "csrf_token"), url.Values{"role": {"server"}})
+	selected.Body.Close()
+	if selected.StatusCode != http.StatusSeeOther || selected.Header.Get("Location") != "/ui/init/server" {
+		t.Fatalf("权威端占位入口跳转错误，状态码=%d 地址=%q", selected.StatusCode, selected.Header.Get("Location"))
+	}
+	page := wizardPage(t, handler, cookie, "/ui/init/server")
+	if !strings.Contains(page, "权威端") || !strings.Contains(page, "尚未实现") {
+		t.Fatalf("权威端占位页应说明尚未实现：\n%s", page)
 	}
 
 	if initializer.selectedRole != "" || initializer.initializedRole != "" {
-		t.Fatalf("占位选项不得改写本机状态：选角色=%q 初始化=%q", initializer.selectedRole, initializer.initializedRole)
+		t.Fatalf("权威端占位选项不得改写本机状态：选角色=%q 初始化=%q", initializer.selectedRole, initializer.initializedRole)
+	}
+}
+
+func TestInitializationWizardClientShowsPairingGuideAndRequestsShutdown(t *testing.T) {
+	initializer := &stubInitializer{}
+	shutdown := make(chan struct{}, 1)
+	handler, startup := newInitializationWizardForTest(t, initializer, func(config *Config) {
+		config.RequestShutdown = func() { shutdown <- struct{}{} }
+		config.Sleep = func(time.Duration) {}
+	})
+	start := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookie := start.Cookies()[0]
+	start.Body.Close()
+	choice := wizardPage(t, handler, cookie, "/ui/")
+
+	selected := wizardPost(t, handler, cookie, "/ui/init/role", hiddenInputValue(t, choice, "csrf_token"), url.Values{"role": {"client"}})
+	selected.Body.Close()
+	if selected.StatusCode != http.StatusSeeOther || selected.Header.Get("Location") != "/ui/init/client" {
+		t.Fatalf("选客户端应进入配对指引页，状态码=%d 地址=%q", selected.StatusCode, selected.Header.Get("Location"))
+	}
+
+	response := wizardGet(t, handler, cookie, "/ui/init/client")
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("客户端配对指引状态码=%d，页面：\n%s", response.StatusCode, body)
+	}
+	if declared := response.Header.Get("Content-Length"); declared == "" {
+		t.Fatalf("客户端配对指引应声明完整页面长度，页面：\n%s", body)
+	}
+	page := html.UnescapeString(string(body))
+	for _, want := range []string{
+		"sshmgr pair --instance <名字>",
+		"--url <权威端地址>：不使用自动发现，直接指定权威端地址。",
+		"--pin <证书公钥指纹>：校验权威端证书，防止连接被冒充。",
+		"--write-mcp <文件路径>：把配对生成的 MCP 配置文件另存到指定路径。",
+		"到权威端 Web UI 的配对页批准",
+		"本页不执行配对，也不会写入任何文件",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("客户端配对指引应包含 %q：\n%s", want, page)
+		}
+	}
+	if initializer.selectedRole != "" || initializer.initializedRole != "" {
+		t.Fatalf("客户端指引不得改写本机状态：选角色=%q 初始化=%q", initializer.selectedRole, initializer.initializedRole)
+	}
+
+	select {
+	case <-shutdown:
+	case <-time.After(2 * time.Second):
+		t.Fatal("客户端配对指引完整返回后应触发 Web UI 退出")
 	}
 }
