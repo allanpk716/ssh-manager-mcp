@@ -244,10 +244,10 @@ func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	}
 
 	before := env.revision(t)
-	if err := env.fx.serve.AddSecret("DB_PASSWORD", "数据库口令", []byte(valueOne)); err != nil {
+	if err := env.fx.serve.AddSecret("DB_PASSWORD", "数据库口令", []byte(valueOne), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.fx.serve.AllowSecrets([]string{"DB_PASSWORD"}, []string{"target"}); err != nil {
+	if err := env.fx.serve.AllowSecrets([]string{"DB_PASSWORD"}, []string{"target"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	after := env.revision(t)
@@ -258,7 +258,7 @@ func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	}
 
 	before = env.revision(t)
-	if err := env.fx.serve.SetSecretValue("DB_PASSWORD", []byte(valueTwo)); err != nil {
+	if err := env.fx.serve.SetSecretValue("DB_PASSWORD", []byte(valueTwo), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	after = env.revision(t)
@@ -278,7 +278,7 @@ func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	if err := env.fx.serve.GrantServers(env.fx.profID, []string{extraID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.fx.serve.AllowSecrets([]string{"DB_PASSWORD"}, []string{"extra"}); err != nil {
+	if err := env.fx.serve.AllowSecrets([]string{"DB_PASSWORD"}, []string{"extra"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	after = env.revision(t)
@@ -292,7 +292,7 @@ func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	}
 
 	before = env.revision(t)
-	if err := env.fx.serve.DeleteSecret("DB_PASSWORD"); err != nil {
+	if err := env.fx.serve.DeleteSecret("DB_PASSWORD", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	after = env.revision(t)
@@ -307,10 +307,10 @@ func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.fx.serve.AddSecret("OUTSIDE_TOKEN", "范围外机密项", []byte(outsideVal)); err != nil {
+	if err := env.fx.serve.AddSecret("OUTSIDE_TOKEN", "范围外机密项", []byte(outsideVal), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.fx.serve.AllowSecrets([]string{"OUTSIDE_TOKEN"}, []string{"outside"}); err != nil {
+	if err := env.fx.serve.AllowSecrets([]string{"OUTSIDE_TOKEN"}, []string{"outside"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	env.pullNow()
@@ -320,10 +320,10 @@ func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	}
 
 	before = env.revision(t)
-	if err := env.fx.serve.AddSecret("DB_PASSWORD", "重新下发", []byte(valueThree)); err != nil {
+	if err := env.fx.serve.AddSecret("DB_PASSWORD", "重新下发", []byte(valueThree), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.fx.serve.AllowSecrets([]string{"DB_PASSWORD"}, []string{"target"}); err != nil {
+	if err := env.fx.serve.AllowSecrets([]string{"DB_PASSWORD"}, []string{"target"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	after = env.revision(t)
@@ -334,7 +334,7 @@ func TestCacheChangeHintE2E_SecretChanges(t *testing.T) {
 	}
 
 	before = env.revision(t)
-	if err := env.fx.serve.DisallowSecrets([]string{"DB_PASSWORD"}, []string{"target"}); err != nil {
+	if err := env.fx.serve.DisallowSecrets([]string{"DB_PASSWORD"}, []string{"target"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	after = env.revision(t)
@@ -364,10 +364,10 @@ func TestCacheChangeHintE2E_SecretDisappearsWhenServerLeavesProfile(t *testing.T
 	if err := env.fx.serve.GrantServers(env.fx.profID, []string{serverID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.fx.serve.AddSecret("PROFILE_ONLY_TOKEN", "只因这台服务器下发", []byte(secretValue)); err != nil {
+	if err := env.fx.serve.AddSecret("PROFILE_ONLY_TOKEN", "只因这台服务器下发", []byte(secretValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.fx.serve.AllowSecrets([]string{"PROFILE_ONLY_TOKEN"}, []string{"profile-only"}); err != nil {
+	if err := env.fx.serve.AllowSecrets([]string{"PROFILE_ONLY_TOKEN"}, []string{"profile-only"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	env.pullNow()

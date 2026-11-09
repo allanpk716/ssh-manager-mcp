@@ -95,7 +95,7 @@ func secretsAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := s.AddSecretWithEnvironmentName(args[0], note, value, environmentName); err != nil {
+			if err := s.AddSecretWithEnvironmentName(args[0], note, value, environmentName, store.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "已登记机密项 %s\n", args[0])
@@ -139,7 +139,7 @@ func secretsSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := s.SetSecretValue(args[0], value); err != nil {
+			if err := s.SetSecretValue(args[0], value, store.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "已更换机密项 %s 的值\n", args[0])
@@ -182,7 +182,7 @@ func secretsEditCmd() *cobra.Command {
 			if changeEnvironmentName || clearEnvironmentNameSet {
 				metadataEdit.EnvironmentName = &environmentName
 			}
-			if err := s.EditSecretMetadata(args[0], metadataEdit); err != nil {
+			if err := s.EditSecretMetadata(args[0], metadataEdit, store.CLISource()); err != nil {
 				return err
 			}
 			switch {
@@ -213,7 +213,7 @@ func secretsRmCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			if err := s.DeleteSecret(args[0]); err != nil {
+			if err := s.DeleteSecret(args[0], store.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "已删除机密项 %s\n", args[0])
@@ -337,10 +337,10 @@ func newSecretAllowChangeCmd(allow bool) *cobra.Command {
 			}
 			defer s.Close()
 			if allow {
-				if err := s.AllowSecrets(secrets, servers); err != nil {
+				if err := s.AllowSecrets(secrets, servers, store.CLISource()); err != nil {
 					return err
 				}
-			} else if err := s.DisallowSecrets(secrets, servers); err != nil {
+			} else if err := s.DisallowSecrets(secrets, servers, store.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), done, len(secrets), len(servers))

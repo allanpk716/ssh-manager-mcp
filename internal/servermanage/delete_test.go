@@ -36,10 +36,10 @@ func seedDeleteFixture(t *testing.T, m *Manager) (serverID, sharedCredID string)
 	}, &models.Credential{ID: sharedCredID, Type: models.CredPrivateKey}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.st.AddSecret("deploy_note", "", []byte("secret-value-123")); err != nil {
+	if err := m.st.AddSecret("deploy_note", "", []byte("secret-value-123"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.st.AllowSecrets([]string{"deploy_note"}, []string{"alpha"}); err != nil {
+	if err := m.st.AllowSecrets([]string{"deploy_note"}, []string{"alpha"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	profileID, err := m.st.AddProfile("运维")

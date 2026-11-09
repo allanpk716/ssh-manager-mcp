@@ -233,7 +233,7 @@ func TestMaskingBackgroundUsesNewValueOnlyForLaterWrites(t *testing.T) {
 	if first.Stdout != prefix+placeholder {
 		t.Fatalf("first read = %q, want %q", first.Stdout, prefix+placeholder)
 	}
-	if err := env.st.SetSecretValue(secretName, []byte(newValue)); err != nil {
+	if err := env.st.SetSecretValue(secretName, []byte(newValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -268,7 +268,7 @@ func TestMaskingBackgroundDeletionDoesNotRescanBufferedOutput(t *testing.T) {
 	if strings.Contains(first.Stdout, secretValue) {
 		t.Fatalf("first read leaked deleted value: %q", first.Stdout)
 	}
-	if err := env.st.DeleteSecret(secretName); err != nil {
+	if err := env.st.DeleteSecret(secretName, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -291,10 +291,10 @@ func TestMaskingBackgroundChangesStoreForLaterWrites(t *testing.T) {
 
 	storeA := newStore(t)
 	storeB := newStore(t)
-	if err := storeA.AddSecret("STORE_A", "", []byte(storeAValue)); err != nil {
+	if err := storeA.AddSecret("STORE_A", "", []byte(storeAValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := storeB.AddSecret("STORE_B", "", []byte(storeBValue)); err != nil {
+	if err := storeB.AddSecret("STORE_B", "", []byte(storeBValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
@@ -359,7 +359,7 @@ func newBackgroundMaskingEnv(t *testing.T, secretName, secretValue string, execS
 	t.Helper()
 	st := newStore(t)
 	if secretName != "" {
-		if err := st.AddSecret(secretName, "", []byte(secretValue)); err != nil {
+		if err := st.AddSecret(secretName, "", []byte(secretValue), store.CLISource()); err != nil {
 			t.Fatal(err)
 		}
 	}

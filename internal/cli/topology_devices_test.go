@@ -273,10 +273,10 @@ func seedDeviceDeleteFixture(t *testing.T, dbPath string, masterKey []byte) {
 	if err := source.GrantServers(profileID, []string{root.ServerID, deploy.ServerID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := source.AddSecret("deploy_secret", "", []byte("secret-value")); err != nil {
+	if err := source.AddSecret("deploy_secret", "", []byte("secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := source.AllowSecrets([]string{"deploy_secret"}, []string{"root", "deploy"}); err != nil {
+	if err := source.AllowSecrets([]string{"deploy_secret"}, []string{"root", "deploy"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	rootServer, err := source.GetServerByName("root")

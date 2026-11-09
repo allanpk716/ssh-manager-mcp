@@ -1067,57 +1067,57 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 		{
 			name: "新增机密项",
 			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
-				return s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-add-secret"))
+				return s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-add-secret"), CLISource())
 			},
 		},
 		{
 			name: "更换机密项值",
 			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
-				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-old-secret")); err != nil {
+				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-old-secret"), CLISource()); err != nil {
 					t.Fatal(err)
 				}
 			},
 			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
-				return s.SetSecretValue("DEPLOY_TOKEN", []byte("revision-new-secret"))
+				return s.SetSecretValue("DEPLOY_TOKEN", []byte("revision-new-secret"), CLISource())
 			},
 		},
 		{
 			name: "修改机密项备注",
 			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
-				if err := s.AddSecret("DEPLOY_TOKEN", "旧备注", []byte("revision-note-secret")); err != nil {
+				if err := s.AddSecret("DEPLOY_TOKEN", "旧备注", []byte("revision-note-secret"), CLISource()); err != nil {
 					t.Fatal(err)
 				}
 			},
 			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
-				return s.EditSecretNote("DEPLOY_TOKEN", "新备注")
+				return s.EditSecretNote("DEPLOY_TOKEN", "新备注", CLISource())
 			},
 		},
 		{
 			name: "设置机密项环境变量名",
 			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
-				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-environment-secret")); err != nil {
+				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-environment-secret"), CLISource()); err != nil {
 					t.Fatal(err)
 				}
 			},
 			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
-				return s.SetSecretEnvironmentName("DEPLOY_TOKEN", "DEPLOY_TOKEN_NAME")
+				return s.SetSecretEnvironmentName("DEPLOY_TOKEN", "DEPLOY_TOKEN_NAME", CLISource())
 			},
 		},
 		{
 			name: "删除机密项",
 			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
-				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-delete-secret")); err != nil {
+				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-delete-secret"), CLISource()); err != nil {
 					t.Fatal(err)
 				}
 			},
 			op: func(t *testing.T, s *Store, seed *snapshotSeed) error {
-				return s.DeleteSecret("DEPLOY_TOKEN")
+				return s.DeleteSecret("DEPLOY_TOKEN", CLISource())
 			},
 		},
 		{
 			name: "增加机密项可写入服务器",
 			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
-				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-allow-secret")); err != nil {
+				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-allow-secret"), CLISource()); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -1126,20 +1126,20 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				return s.AllowSecrets([]string{"DEPLOY_TOKEN"}, []string{srv.Name})
+				return s.AllowSecrets([]string{"DEPLOY_TOKEN"}, []string{srv.Name}, CLISource())
 			},
 		},
 		{
 			name: "减少机密项可写入服务器",
 			setup: func(t *testing.T, s *Store, seed *snapshotSeed) {
-				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-disallow-secret")); err != nil {
+				if err := s.AddSecret("DEPLOY_TOKEN", "部署令牌", []byte("revision-disallow-secret"), CLISource()); err != nil {
 					t.Fatal(err)
 				}
 				srv, err := s.GetServer(seed.serverID)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := s.AllowSecrets([]string{"DEPLOY_TOKEN"}, []string{srv.Name}); err != nil {
+				if err := s.AllowSecrets([]string{"DEPLOY_TOKEN"}, []string{srv.Name}, CLISource()); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -1148,7 +1148,7 @@ func TestSnapshotRevision_AdvancesOnEverySnapshotWrite(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				return s.DisallowSecrets([]string{"DEPLOY_TOKEN"}, []string{srv.Name})
+				return s.DisallowSecrets([]string{"DEPLOY_TOKEN"}, []string{srv.Name}, CLISource())
 			},
 		},
 		{

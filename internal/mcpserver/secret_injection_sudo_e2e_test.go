@@ -20,7 +20,7 @@ func TestSecretEnvironmentInjectionExecCommandSudo(t *testing.T) {
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
 
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "", []byte(secretValue), "ELEVATED_API_TOKEN"); err != nil {
+	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "", []byte(secretValue), "ELEVATED_API_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -51,7 +51,7 @@ func TestSecretEnvironmentInjectionExecCommandSudo(t *testing.T) {
 			return output.String(), errors.String(), 0
 		},
 	}, "sudopw")
-	if err := st.AllowSecrets([]string{"ELEVATED_API_TOKEN"}, []string{"real"}); err != nil {
+	if err := st.AllowSecrets([]string{"ELEVATED_API_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -111,7 +111,7 @@ func TestSecretEnvironmentInjectionSudoToleratesPasswordNotConsumed(t *testing.T
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
 
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "", []byte(secretValue), "ELEVATED_API_TOKEN"); err != nil {
+	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "", []byte(secretValue), "ELEVATED_API_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	clientSession, serverID := newMaskingSSHToolClientWithSudo(t, st, testsshd.Options{
@@ -135,7 +135,7 @@ func TestSecretEnvironmentInjectionSudoToleratesPasswordNotConsumed(t *testing.T
 			return output.String(), errors.String(), 0
 		},
 	}, sudoPassword)
-	if err := st.AllowSecrets([]string{"ELEVATED_API_TOKEN"}, []string{"real"}); err != nil {
+	if err := st.AllowSecrets([]string{"ELEVATED_API_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -167,7 +167,7 @@ func TestSecretEnvironmentInjectionExecBackgroundSudo(t *testing.T) {
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
 
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "", []byte(secretValue), "ELEVATED_API_TOKEN"); err != nil {
+	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "", []byte(secretValue), "ELEVATED_API_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,7 +201,7 @@ func TestSecretEnvironmentInjectionExecBackgroundSudo(t *testing.T) {
 			return 0
 		},
 	}, "sudopw")
-	if err := st.AllowSecrets([]string{"ELEVATED_API_TOKEN"}, []string{"real"}); err != nil {
+	if err := st.AllowSecrets([]string{"ELEVATED_API_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 

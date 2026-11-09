@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"io"
+	"ssh-manager-mcp/internal/store"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,10 +19,10 @@ func TestExecContextShowsEnvironmentInjectionPlanForEachLayer(t *testing.T) {
 	const secretValue = "context-injected-secret-value"
 	const zeroByteValue = "context-zero-byte-value\x00"
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("CONTEXT_TOKEN", "", []byte(secretValue), "CONTEXT_TOKEN"); err != nil {
+	if err := st.AddSecretWithEnvironmentName("CONTEXT_TOKEN", "", []byte(secretValue), "CONTEXT_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecretWithEnvironmentName("ZERO_CONTEXT_TOKEN", "", []byte(zeroByteValue), "ZERO_CONTEXT_TOKEN"); err != nil {
+	if err := st.AddSecretWithEnvironmentName("ZERO_CONTEXT_TOKEN", "", []byte(zeroByteValue), "ZERO_CONTEXT_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -46,7 +47,7 @@ func TestExecContextShowsEnvironmentInjectionPlanForEachLayer(t *testing.T) {
 			return "", "unknown context command: " + command + "\n", 1
 		},
 	}, "sudopw")
-	if err := st.AllowSecrets([]string{"CONTEXT_TOKEN", "ZERO_CONTEXT_TOKEN"}, []string{"real"}); err != nil {
+	if err := st.AllowSecrets([]string{"CONTEXT_TOKEN", "ZERO_CONTEXT_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	server, err := st.GetServer(serverID)
@@ -116,7 +117,7 @@ func TestExecContextShowsEnvironmentInjectionPlanForEachLayer(t *testing.T) {
 func TestExecContextWindowsSudoDoesNotInjectEnvironment(t *testing.T) {
 	const secretValue = "windows-sudo-context-secret-value"
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("WINDOWS_CONTEXT_TOKEN", "", []byte(secretValue), "WINDOWS_CONTEXT_TOKEN"); err != nil {
+	if err := st.AddSecretWithEnvironmentName("WINDOWS_CONTEXT_TOKEN", "", []byte(secretValue), "WINDOWS_CONTEXT_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	clientSession, serverID := newMaskingSSHToolClientWithSudo(t, st, testsshd.Options{
@@ -129,7 +130,7 @@ func TestExecContextWindowsSudoDoesNotInjectEnvironment(t *testing.T) {
 			return "", "unknown context command: " + command + "\n", 1
 		},
 	}, "sudopw")
-	if err := st.AllowSecrets([]string{"WINDOWS_CONTEXT_TOKEN"}, []string{"real"}); err != nil {
+	if err := st.AllowSecrets([]string{"WINDOWS_CONTEXT_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	server, err := st.GetServer(serverID)
@@ -171,7 +172,7 @@ func TestExecContextWindowsSudoDoesNotInjectEnvironment(t *testing.T) {
 
 func TestSecretEnvironmentInjectionWindowsSudoDoesNotAppendWarning(t *testing.T) {
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("WINDOWS_EXEC_TOKEN", "", []byte("windows-sudo-exec-secret-value"), "WINDOWS_EXEC_TOKEN"); err != nil {
+	if err := st.AddSecretWithEnvironmentName("WINDOWS_EXEC_TOKEN", "", []byte("windows-sudo-exec-secret-value"), "WINDOWS_EXEC_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	clientSession, serverID := newMaskingSSHToolClientWithSudo(t, st, testsshd.Options{
@@ -182,7 +183,7 @@ func TestSecretEnvironmentInjectionWindowsSudoDoesNotAppendWarning(t *testing.T)
 			return "ran", "", 0
 		},
 	}, "sudopw")
-	if err := st.AllowSecrets([]string{"WINDOWS_EXEC_TOKEN"}, []string{"real"}); err != nil {
+	if err := st.AllowSecrets([]string{"WINDOWS_EXEC_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	server, err := st.GetServer(serverID)
