@@ -30,12 +30,14 @@ var linuxV1Sections = []string{
 var linuxCommandSetV1 string
 
 // BuildInventoryCommand 按服务器条目的 shell 类型生成固定采集命令。命令
-// 集随二进制发布并带版本号；本票只实现 POSIX（Ubuntu / Debian），其他
-// shell 类型的命令集属于 Windows 票，未实现前明确报错。
+// 集随二进制发布并带版本号；当前实现 POSIX（Ubuntu / Debian）与
+// Windows，其他系统的命令集未实现前明确报错。
 func BuildInventoryCommand(shell models.ShellType) (string, error) {
 	switch models.NormalizeShellType(string(shell)) {
 	case models.ShellPOSIX:
 		return linuxCommandSetV1, nil
+	case models.ShellPowerShell, models.ShellWindowsCmd:
+		return buildWindowsInventoryCommand(shell), nil
 	default:
 		return "", fmt.Errorf("shell 类型 %q 的软件清单固定命令集尚未实现", shell)
 	}

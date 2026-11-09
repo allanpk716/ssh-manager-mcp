@@ -35,6 +35,17 @@ func newCollectService(t *testing.T) (*Service, *store.Store) {
 // 整条目的映射。
 func addCollectDevice(t *testing.T, st *store.Store, deviceName string, serverNames ...string) map[string]*models.Server {
 	t.Helper()
+	return addCollectDeviceWithShell(t, st, deviceName, models.ShellPOSIX, serverNames...)
+}
+
+func addCollectDeviceWithShell(
+	t *testing.T,
+	st *store.Store,
+	deviceName string,
+	shell models.ShellType,
+	serverNames ...string,
+) map[string]*models.Server {
+	t.Helper()
 	if _, err := st.AddDevice(deviceName, "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +53,7 @@ func addCollectDevice(t *testing.T, st *store.Store, deviceName string, serverNa
 	for _, serverName := range serverNames {
 		result, err := st.AddServerWithCredentialsToDevice(&models.Server{
 			Name: serverName, Host: "192.0.2.10", Port: 22, User: "owner",
-			ShellType: models.ShellPOSIX,
+			ShellType: shell,
 		}, &models.Credential{Type: models.CredPassword, Secret: []byte("password")}, nil, deviceName)
 		if err != nil {
 			t.Fatal(err)
@@ -149,6 +160,150 @@ func TestCollectLinuxFullFixture(t *testing.T) {
 	if summary["device"] != "工作站" || summary["server"] != "entry-a" ||
 		summary["collector"] != "authority" || summary["sudo"] != false || summary["result"] != "ok" {
 		t.Fatalf("采集审计摘要 = %v", summary)
+	}
+}
+
+// TestCollectWindowsFullFixtureForEachShell 覆盖 PowerShell 与 cmd 两种条目
+// 的一次成功采集：命令按条目包装，Windows 输出解析后落库并写入采集状态。
+func TestCollectWindowsFullFixtureForEachShell(t *testing.T) {
+	service, st := newCollectService(t)
+	addCollectDeviceWithShell(t, st, "工作站", models.ShellPowerShell, "powershell-entry")
+	addCollectDeviceWithShell(t, st, "命令行工作站", models.ShellWindowsCmd, "cmd-entry")
+	tests := []struct {
+		device      string
+		serverEntry string
+		shell       models.ShellType
+		fixture     string
+		itemCount   int
+	}{
+		{
+			device: "工作站", serverEntry: "powershell-entry", shell: models.ShellPowerShell,
+			fixture: "win10-powershell-full.txt", itemCount: 813,
+		},
+		{
+			device: "命令行工作站", serverEntry: "cmd-entry", shell: models.ShellWindowsCmd,
+			fixture: "win10-cmd-full.txt", itemCount: 203,
+		},
+	}
+	for _, test := range tests {
+		var recorded recordedExec
+		service.RemoteExec = replayCollectExec(windowsFixtureOutput(t, test.fixture), &recorded, nil)
+		report, err := service.Collect(context.Background(), CollectRequest{
+			DeviceName: test.device, ServerEntry: test.serverEntry,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		expectedCommand, err := BuildInventoryCommand(test.shell)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.SystemType != "windows" || report.CommandSetVersion != WindowsCommandSetVersion ||
+			report.Incomplete || recorded.shell != test.shell || recorded.command != expectedCommand {
+			t.Fatalf("shell %s 的采集报告或命令包装不正确：report=%+v shell=%s command=%s",
+				test.shell, report, recorded.shell, recorded.command)
+		}
+		items, err := st.SoftwareObservedItemsForDevice(test.device)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(items) != test.itemCount {
+			t.Fatalf("shell %s 落库条目数量 = %d，应为 %d", test.shell, len(items), test.itemCount)
+		}
+		status, err := st.SoftwareCollectionStatusForDevice(test.device)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.SystemType != "windows" || status.CommandSetVersion != WindowsCommandSetVersion ||
+			status.LastIncomplete || status.LastServerName != test.serverEntry {
+			t.Fatalf("shell %s 的采集状态 = %+v", test.shell, status)
+		}
+	}
+}
+
+// TestCollectWindowsNoProcessNamesFixture 覆盖权限不足的 Windows 输出：看
+// 不到进程名的监听端口落成未识别进程，采集本身仍算成功。
+func TestCollectWindowsNoProcessNamesFixture(t *testing.T) {
+	service, st := newCollectService(t)
+	addCollectDeviceWithShell(t, st, "工作站", models.ShellWindowsCmd, "entry-a")
+	var recorded recordedExec
+	service.RemoteExec = replayCollectExec(
+		windowsFixtureOutput(t, "win10-cmd-no-process-names-derived.txt"), &recorded, nil,
+	)
+
+	report, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Incomplete || report.SystemType != "windows" ||
+		report.ItemCounts[models.SoftwareCategoryUnidentified] != 36 {
+		t.Fatalf("权限不足输出的采集报告 = %+v", report)
+	}
+	items, err := st.SoftwareObservedItemsForDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknownWithEmptyProcess := 0
+	for _, item := range items {
+		if item.Category != models.SoftwareCategoryUnidentified {
+			continue
+		}
+		if item.ProcessName == "" && item.ExecutablePath == "" && len(item.ListeningPorts) > 0 {
+			unknownWithEmptyProcess++
+		}
+	}
+	if unknownWithEmptyProcess != 36 {
+		t.Fatalf("看不到进程名的未识别进程落库数量 = %d", unknownWithEmptyProcess)
+	}
+	status, err := st.SoftwareCollectionStatusForDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LastIncomplete || status.SystemType != "windows" {
+		t.Fatalf("权限不足但输出完整时采集状态不应失败：%+v", status)
+	}
+}
+
+// TestCollectWindowsTruncatedFixture 覆盖某一节中途截断并超时的输出：已解
+// 析条目保留，状态与报告都标为不完整。
+func TestCollectWindowsTruncatedFixture(t *testing.T) {
+	service, st := newCollectService(t)
+	addCollectDeviceWithShell(t, st, "工作站", models.ShellWindowsCmd, "entry-a")
+	service.RemoteExec = func(
+		ctx context.Context,
+		server *models.Server,
+		shell models.ShellType,
+		command string,
+		sudo bool,
+	) (RemoteExecResult, error) {
+		return RemoteExecResult{
+			Stdout: windowsFixtureOutput(t, "win10-cmd-truncated.txt"), TimedOut: true,
+		}, nil
+	}
+
+	report, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := strings.Join(report.Notes, "；")
+	if !report.Incomplete || !strings.Contains(notes, "listen-udp 节未完成") ||
+		!strings.Contains(notes, "固定命令执行超时") {
+		t.Fatalf("截断输出的采集报告 = %+v", report)
+	}
+	items, err := st.SoftwareObservedItemsForDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) == 0 {
+		t.Fatal("截断前已解析的条目应保留")
+	}
+	status, err := st.SoftwareCollectionStatusForDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.LastIncomplete || status.LastSuccessAt.IsZero() ||
+		status.CommandSetVersion != WindowsCommandSetVersion {
+		t.Fatalf("截断输出的采集状态 = %+v", status)
 	}
 }
 
