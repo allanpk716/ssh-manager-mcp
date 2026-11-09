@@ -21,6 +21,12 @@ test("空机器走完单机初始化向导并延续会话进入正式首页", as
     await page.getByRole("button", { name: "进入单机正式页面" }).click();
     await expect(page.getByRole("heading", { name: "服务器" })).toBeVisible();
     await expect(page).toHaveURL(/\/ui\/$/);
+
+    const nextSteps = page.locator(".next-steps");
+    await expect(nextSteps.getByRole("heading", { name: "下一步引导" })).toBeVisible();
+    await expect(nextSteps.getByRole("link", { name: "录服务器" })).toBeVisible();
+    await expect(nextSteps.getByRole("link", { name: "建 Profile 并授权" })).toBeVisible();
+    await expect(nextSteps.getByRole("link", { name: "建项目并取令牌" })).toBeVisible();
   } finally {
     await ui.close();
   }
