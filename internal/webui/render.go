@@ -45,6 +45,10 @@ type pageData struct {
 	ServerImportRun             *ServerImportRunView
 	ServerCompleteQueue         string
 	ServerComplete              *serverCompleteView
+	Secrets                     []SecretRow
+	SecretFilterQuery           string
+	SecretFilterServer          string
+	SecretServerOptions         []ServerRow
 	ImportedCount               int
 	SkippedCount                int
 	FailedCount                 int
@@ -145,6 +149,7 @@ var pageFuncs = template.FuncMap{
 		return strings.Join(labels, "、")
 	},
 	"joinTags":        func(items []string) string { return strings.Join(items, ",") },
+	"formatUnixTime":  formatUnixTime,
 	"addOne":          func(v int) int { return v + 1 },
 	"credentialLabel": CredentialTypeLabel,
 	// defaultConfigPath 是导入路径表单的默认值：运行 Web UI 进程那台机器上

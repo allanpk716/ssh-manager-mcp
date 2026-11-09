@@ -53,6 +53,38 @@ type ServerSource interface {
 	ServerDetail(instance, identifier string) (*ServerDetailView, error)
 }
 
+// SecretRow 是机密项页的一行展示数据。字段与命令行机密项列表一致，只含
+// 可见元数据，绝不包含值、值的哈希或长度。
+type SecretRow struct {
+	ID              string
+	Name            string
+	Note            string
+	EnvironmentName string
+	AllowedServers  []string
+	CreatedAt       int64
+	ValueUpdatedAt  int64
+}
+
+// SecretSource 是 Web UI 读取机密项可见数据的唯一入口。单机与权威端由机
+// 密项管理模块适配；客户端由本机加密快照适配。两条路径都不读取值。
+type SecretSource interface {
+	ListSecrets(instance, query, server string) ([]SecretRow, error)
+}
+
+// SecretWriteSource 描述一次机密项写请求的来源地址，适配层把它写进审计行。
+type SecretWriteSource struct {
+	RemoteAddress string
+}
+
+// SecretNotFoundError 表示路径里的机密项不存在。
+type SecretNotFoundError struct {
+	Identifier string
+}
+
+func (e *SecretNotFoundError) Error() string {
+	return "机密项 " + e.Identifier + " 不存在"
+}
+
 // Config 是 Web UI Handler 的构造参数。Port 同时用于会话 cookie 命名与
 // Host、Origin 校验；Now 是可选时钟，缺省使用标准时间。
 type Config struct {
@@ -61,8 +93,13 @@ type Config struct {
 	// ServerWriter 是服务器页写操作来源。单机与权威端必须提供；客户端不提
 	// 供，写路由不存在。
 	ServerWriter ServerWriter
-	Access       AccessStore
-	Ops          OpsStore
+	// Secrets 是机密项页读取来源；三种角色都必须提供。
+	Secrets SecretSource
+	// SecretsWriter 是机密项写操作来源。单机与权威端必须提供；客户端不提
+	// 供，写路由不存在。
+	SecretsWriter SecretWriter
+	Access        AccessStore
+	Ops           OpsStore
 	// ServiceRestart 是权威端显式注入的服务重启能力；不注入时不注册重启
 	// 路由，也不显示重启表单。
 	ServiceRestart OpsRestartStore
@@ -149,6 +186,8 @@ type capabilities struct {
 	CanManageProfiles bool
 	// CanManageProjects 控制是否显示项目令牌页入口与写操作。
 	CanManageProjects bool
+	// CanManageSecrets 控制机密项写操作；客户端只保留只读列表入口。
+	CanManageSecrets bool
 	// HasPairingAndDeviceCodes 表示本机角色是否显示配对与设备码入口。
 	HasPairingAndDeviceCodes bool
 	// ShowOpsArea 控制是否显示「运维」区域入口。
@@ -178,6 +217,7 @@ func capabilitiesForRole(role Role) capabilities {
 			ReadOnlyNotice:    "这里只读，修改需到权威端 Web UI 去做。",
 			ShowAccessArea:    true,
 			CanManageProfiles: false,
+			CanManageSecrets:  false,
 			ShowOpsArea:       true, CanUpgradeBinary: true, CanUseClientOps: true,
 			CanQueryClientAudit: true,
 		}
@@ -186,6 +226,7 @@ func capabilitiesForRole(role Role) capabilities {
 		return capabilities{
 			RoleLabel: "权威端", CanWrite: true, ShowAuthorityActions: true,
 			ShowAccessArea: true, CanManageProfiles: true, CanManageProjects: true,
+			CanManageSecrets:         true,
 			HasPairingAndDeviceCodes: true,
 			ShowOpsArea:              true, CanManageBackups: true, CanManageSettings: true,
 			CanUpgradeBinary: true, CanQueryVaultAudit: true,
@@ -194,7 +235,8 @@ func capabilitiesForRole(role Role) capabilities {
 	return capabilities{
 		RoleLabel: "单机", CanWrite: true,
 		ShowAccessArea: true, CanManageProfiles: true, CanManageProjects: true,
-		ShowOpsArea: true, CanManageBackups: true, CanManageSettings: true,
+		CanManageSecrets: true,
+		ShowOpsArea:      true, CanManageBackups: true, CanManageSettings: true,
 		CanUpgradeBinary: true, CanQueryVaultAudit: true,
 	}
 }
@@ -287,6 +329,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
 	h.registerAccessRoutes()
 	h.registerServerRoutes()
+	h.registerSecretRoutes()
 	h.registerOpsRoutes()
 	return h, Startup{token: token}, nil
 }
