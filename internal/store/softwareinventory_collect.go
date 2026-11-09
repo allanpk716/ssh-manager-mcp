@@ -419,7 +419,8 @@ func writeSoftwareCollectionStatusTx(
 				last_success_at=excluded.last_success_at,
 				last_incomplete=excluded.last_incomplete,
 				command_set_version=excluded.command_set_version,
-				system_type=excluded.system_type`,
+				system_type=excluded.system_type,
+				pending_immediate=0`,
 			deviceID, "authority", lastServerID, success.SuccessAt.Unix(),
 			success.Incomplete, success.CommandSetVersion, success.SystemType,
 		)
@@ -431,7 +432,8 @@ func writeSoftwareCollectionStatusTx(
 		) VALUES(?,?,?,?)
 		ON CONFLICT(device_id) DO UPDATE SET
 			last_failure_at=excluded.last_failure_at,
-			last_failure_reason=excluded.last_failure_reason`,
+			last_failure_reason=excluded.last_failure_reason,
+			pending_immediate=0`,
 		deviceID, "authority", failure.At.Unix(), failure.Reason,
 	)
 	return err
