@@ -61,7 +61,7 @@ func (p environmentInjectionPlan) execOption() sshbroker.ExecOption {
 		items = append(items, item)
 	}
 	return sshbroker.WithPreCommandInjection(sshbroker.ExecInjectionOptions{
-		ShellType:   string(models.NormalizeShellType(string(p.shellType))),
+		ShellType:   models.NormalizeShellType(string(p.shellType)),
 		TargetLayer: layer,
 		Items:       items,
 	})
@@ -105,13 +105,13 @@ func buildEnvironmentInjectionPlan(st *store.Store, server *models.Server, privi
 		return plan
 	}
 	for _, failed := range failedValues {
-		if serverWritable(failed.WritableServerIDs, server.ID) {
+		if secretWritableOnServer(failed.WritableServerIDs, server.ID) {
 			plan.warn(failed.EnvironmentName, injectionReasonReadFailed)
 		}
 	}
 
 	for _, value := range values {
-		if value.EnvironmentName == "" || !serverWritable(value.WritableServerIDs, server.ID) {
+		if value.EnvironmentName == "" || !secretWritableOnServer(value.WritableServerIDs, server.ID) {
 			continue
 		}
 		switch {
@@ -126,7 +126,7 @@ func buildEnvironmentInjectionPlan(st *store.Store, server *models.Server, privi
 			continue
 		}
 		normalizedShell := models.NormalizeShellType(string(server.ShellType))
-		if normalizedShell == models.ShellWindowsCmd && windowsCmdValueHasLineBreak(value.Value) {
+		if normalizedShell == models.ShellWindowsCmd && sshbroker.WindowsCmdValueHasLineBreak(value.Value) {
 			plan.warn(value.EnvironmentName, injectionReasonCmdNewline)
 			continue
 		}
@@ -146,10 +146,6 @@ func buildEnvironmentInjectionPlan(st *store.Store, server *models.Server, privi
 		return plan.warnings[i].EnvironmentName < plan.warnings[j].EnvironmentName
 	})
 	return plan
-}
-
-func windowsCmdValueHasLineBreak(value []byte) bool {
-	return bytes.IndexByte(value, '\r') >= 0 || bytes.IndexByte(value, '\n') >= 0
 }
 
 func (p *environmentInjectionPlan) warn(name, reason string) {
@@ -172,7 +168,7 @@ func (p *environmentInjectionPlan) addReadFailures(st *store.Store, server *mode
 	})
 }
 
-func serverWritable(serverIDs []string, serverID string) bool {
+func secretWritableOnServer(serverIDs []string, serverID string) bool {
 	return containsString(serverIDs, serverID)
 }
 

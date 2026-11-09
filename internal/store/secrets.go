@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 // 机密项的名字与值规则。名字从严（字母、数字、下划线，首字符不是数字），
@@ -218,14 +220,8 @@ func ValidateSecretEnvironmentName(name string) error {
 	if name == "" {
 		return nil
 	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		switch {
-		case c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z'):
-		case i > 0 && '0' <= c && c <= '9':
-		default:
-			return fmt.Errorf("%w：%s", ErrSecretEnvironmentNameInvalid, name)
-		}
+	if !models.EnvironmentVariableNameFormatIsValid(name) {
+		return fmt.Errorf("%w：%s", ErrSecretEnvironmentNameInvalid, name)
 	}
 	lower := strings.ToLower(name)
 	if _, exists := secretEnvironmentExactDenyList[strings.ToUpper(lower)]; exists {

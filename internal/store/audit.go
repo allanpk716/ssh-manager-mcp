@@ -78,11 +78,11 @@ func insertAuditRow(db dbtx, r AuditRow) error {
 	}
 	names := any(nil)
 	if len(r.InjectedEnvironmentNames) > 0 {
-		encoded, err := json.Marshal(r.InjectedEnvironmentNames)
+		value, err := encodeAuditInjectedEnvironmentNames(r.InjectedEnvironmentNames)
 		if err != nil {
 			return err
 		}
-		names = string(encoded)
+		names = value
 	}
 	_, err := db.Exec(
 		`INSERT INTO audit_log (ts, project_id, server_id, action, command, sudo, status, exit_code, duration_ms, source, source_ip, injected_environment_names)
@@ -92,6 +92,28 @@ func insertAuditRow(db dbtx, r AuditRow) error {
 		nullableString(r.Source), nullableString(r.SourceIP), names,
 	)
 	return err
+}
+
+func encodeAuditInjectedEnvironmentNames(names []string) (any, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(names)
+	if err != nil {
+		return nil, err
+	}
+	return string(encoded), nil
+}
+
+func decodeAuditInjectedEnvironmentNames(encoded string) ([]string, error) {
+	if encoded == "" {
+		return nil, nil
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(encoded), &names); err != nil {
+		return nil, err
+	}
+	return names, nil
 }
 
 // AuditRows returns the most recent audit rows (newest first), up to limit.
@@ -213,9 +235,11 @@ func scanAuditRows(rows *sql.Rows) ([]AuditRow, error) {
 		r.Source = source.String
 		r.SourceIP = sourceIP.String
 		if injectedNames.Valid && injectedNames.String != "" {
-			if err := json.Unmarshal([]byte(injectedNames.String), &r.InjectedEnvironmentNames); err != nil {
+			names, err := decodeAuditInjectedEnvironmentNames(injectedNames.String)
+			if err != nil {
 				return nil, fmt.Errorf("decode injected environment names: %w", err)
 			}
+			r.InjectedEnvironmentNames = names
 		}
 		out = append(out, r)
 	}

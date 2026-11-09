@@ -1,7 +1,6 @@
 package store
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -492,10 +491,12 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 			return nil, err
 		}
 		if injectedNames != "" {
-			if err := json.Unmarshal([]byte(injectedNames), &a.InjectedEnvironmentNames); err != nil {
+			names, err := decodeAuditInjectedEnvironmentNames(injectedNames)
+			if err != nil {
 				ra.Close()
 				return nil, fmt.Errorf("decode audit injected environment names: %w", err)
 			}
+			a.InjectedEnvironmentNames = names
 		}
 		snap.Audit = append(snap.Audit, a)
 	}
@@ -1178,13 +1179,9 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 
 	// 8. audit (id autoincrement — insert without id, letting the target assign; ts preserved)
 	for _, a := range snap.Audit {
-		injectedNames := any(nil)
-		if len(a.InjectedEnvironmentNames) > 0 {
-			encoded, err := json.Marshal(a.InjectedEnvironmentNames)
-			if err != nil {
-				return fmt.Errorf("encode audit injected environment names: %w", err)
-			}
-			injectedNames = string(encoded)
+		injectedNames, err := encodeAuditInjectedEnvironmentNames(a.InjectedEnvironmentNames)
+		if err != nil {
+			return fmt.Errorf("encode audit injected environment names: %w", err)
 		}
 		if _, err := tx.Exec(`INSERT INTO audit_log(ts,project_id,server_id,action,command,sudo,status,exit_code,duration_ms,source,source_ip,injected_environment_names) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 			a.TS, nullIfEmpty(a.ProjectID), nullIfEmpty(a.ServerID), a.Action, nullIfEmpty(a.Command), a.Sudo, nullIfEmpty(a.Status), a.ExitCode, a.DurationMS, nullIfEmpty(a.Source), nullIfEmpty(a.SourceIP), injectedNames); err != nil {

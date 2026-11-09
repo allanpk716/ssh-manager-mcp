@@ -432,12 +432,7 @@ func (c *Client) runSessionRaw(ctx context.Context, wrapped, pass string, timeou
 // and receive the parsed SudoMeta alongside the usual triple; ctx, timeout,
 // and the (exitCode, timedOut, err) classification are identical to runSession.
 func (c *Client) runSudoSession(ctx context.Context, cmd, pass string, timeout time.Duration, stdout, stderr io.Writer, options ...ExecOption) (exitCode int, timedOut bool, err error, sudoMeta SudoMeta) {
-	var settings execOptions
-	for _, option := range options {
-		if option != nil {
-			option(&settings)
-		}
-	}
+	settings := applyExecOptions(options...)
 	prepared, prepareErr := preparePrivilegedExec(cmd, settings.injection)
 	if prepareErr != nil {
 		return 0, false, prepareErr, SudoMeta{}

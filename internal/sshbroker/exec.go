@@ -41,12 +41,7 @@ type ExecResult struct {
 // connection-death errors this can produce (ExitMissingError, io.ErrClosedPipe)
 // are swallowed by the timeout/cancellation branches below.
 func (c *Client) runSession(ctx context.Context, cmd string, timeout time.Duration, stdout, stderr io.Writer, options ...ExecOption) (exitCode int, timedOut bool, err error) {
-	var settings execOptions
-	for _, option := range options {
-		if option != nil {
-			option(&settings)
-		}
-	}
+	settings := applyExecOptions(options...)
 	prepared, err := prepareExec(cmd, settings.injection)
 	if err != nil {
 		return 0, false, err

@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 // ExecTargetLayer 表示注入发生在 SSH 会话的哪一层。普通层是登录 shell；
@@ -48,7 +50,7 @@ func (EnvironmentInjection) injectionKind() ExecInjectionKind {
 // ExecInjectionOptions 携带 shell 类型、目标层与注入项列表，是前台命令
 // 与后台任务共用的执行选项。
 type ExecInjectionOptions struct {
-	ShellType   string
+	ShellType   models.ShellType
 	TargetLayer ExecTargetLayer
 	Items       []ExecInjection
 }
@@ -56,6 +58,16 @@ type ExecInjectionOptions struct {
 // execOptions 是当前执行路径解析后的选项。
 type execOptions struct {
 	injection ExecInjectionOptions
+}
+
+func applyExecOptions(options ...ExecOption) execOptions {
+	var settings execOptions
+	for _, option := range options {
+		if option != nil {
+			option(&settings)
+		}
+	}
+	return settings
 }
 
 // ExecOption 让现有 Exec / ExecWriters 接口保持兼容，同时允许调用方追加
@@ -91,10 +103,13 @@ func prepareExecForTargetLayer(command string, options ExecInjectionOptions, tar
 	if options.TargetLayer != targetLayer {
 		return preparedExec{}, fmt.Errorf("pre-command injection target layer %q does not match %q", options.TargetLayer, targetLayer)
 	}
-	if targetLayer == ExecLayerPrivileged && options.ShellType != "" && options.ShellType != "posix" {
+	if targetLayer == ExecLayerPrivileged && options.ShellType != "" && options.ShellType != models.ShellPOSIX {
 		return preparedExec{}, fmt.Errorf("privileged pre-command injection shell type %q is not supported", options.ShellType)
 	}
-	if options.ShellType != "" && options.ShellType != "posix" && options.ShellType != "powershell" && options.ShellType != "cmd" {
+	if options.ShellType != "" &&
+		options.ShellType != models.ShellPOSIX &&
+		options.ShellType != models.ShellPowerShell &&
+		options.ShellType != models.ShellWindowsCmd {
 		return preparedExec{}, fmt.Errorf("pre-command injection shell type %q is not supported", options.ShellType)
 	}
 
@@ -106,7 +121,7 @@ func prepareExecForTargetLayer(command string, options ExecInjectionOptions, tar
 		if !ok {
 			return preparedExec{}, fmt.Errorf("pre-command injection type %q is not supported", item.injectionKind())
 		}
-		if !validEnvironmentName(environment.EnvironmentName) {
+		if !models.EnvironmentVariableNameFormatIsValid(environment.EnvironmentName) {
 			return preparedExec{}, fmt.Errorf("environment variable name %q is invalid", environment.EnvironmentName)
 		}
 		if seen[environment.EnvironmentName] {
@@ -119,7 +134,7 @@ func prepareExecForTargetLayer(command string, options ExecInjectionOptions, tar
 		if isWindowsShellType(options.ShellType) && !utf8.Valid(environment.Value) {
 			return preparedExec{}, fmt.Errorf("environment variable %s has invalid UTF-8 on Windows", environment.EnvironmentName)
 		}
-		if options.ShellType == "cmd" && windowsCmdValueHasLineBreak(environment.Value) {
+		if options.ShellType == models.ShellWindowsCmd && WindowsCmdValueHasLineBreak(environment.Value) {
 			return preparedExec{}, fmt.Errorf("environment variable %s has a line break in cmd", environment.EnvironmentName)
 		}
 		environments = append(environments, environment)
@@ -130,9 +145,9 @@ func prepareExecForTargetLayer(command string, options ExecInjectionOptions, tar
 
 	var wrapper strings.Builder
 	stdinDelimiter := ""
-	if options.ShellType == "powershell" {
+	if options.ShellType == models.ShellPowerShell {
 		writePowerShellWrapper(&wrapper, environments)
-	} else if options.ShellType == "cmd" {
+	} else if options.ShellType == models.ShellWindowsCmd {
 		writeWindowsCmdWrapper(&wrapper, environments)
 	} else {
 		if targetLayer == ExecLayerPrivileged {
@@ -150,17 +165,17 @@ func prepareExecForTargetLayer(command string, options ExecInjectionOptions, tar
 	return preparedExec{command: wrapper.String(), frames: frames}, nil
 }
 
-func isWindowsShellType(shellType string) bool {
-	return shellType == "powershell" || shellType == "cmd"
+func isWindowsShellType(shellType models.ShellType) bool {
+	return shellType == models.ShellPowerShell || shellType == models.ShellWindowsCmd
 }
 
 // buildEnvironmentFrames 把注入值按封装脚本的读取顺序写进标准输入。cmd
 // 逐行读取，因此每个值后补一次行分隔。
-func buildEnvironmentFrames(shellType string, environments []EnvironmentInjection) []byte {
+func buildEnvironmentFrames(shellType models.ShellType, environments []EnvironmentInjection) []byte {
 	var frames []byte
 	for _, environment := range environments {
 		frames = append(frames, environment.Value...)
-		if shellType == "cmd" {
+		if shellType == models.ShellWindowsCmd {
 			frames = append(frames, '\r', '\n')
 		}
 	}
@@ -230,22 +245,6 @@ func writeWindowsCmdWrapper(wrapper *strings.Builder, environments []Environment
 	wrapper.WriteString("set \"__sshmgr_original_code_page=\"\n")
 }
 
-func validEnvironmentName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		switch {
-		case c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
-		case c >= '0' && c <= '9' && i > 0:
-		default:
-			return false
-		}
-	}
-	return true
-}
-
 func bytesContainZero(value []byte) bool {
 	for _, b := range value {
 		if b == 0 {
@@ -255,6 +254,8 @@ func bytesContainZero(value []byte) bool {
 	return false
 }
 
-func windowsCmdValueHasLineBreak(value []byte) bool {
+// WindowsCmdValueHasLineBreak 判断一个环境变量值是否含有 cmd 的 set /p
+// 无法完整读回的回车或换行字节。
+func WindowsCmdValueHasLineBreak(value []byte) bool {
 	return bytes.IndexByte(value, '\r') >= 0 || bytes.IndexByte(value, '\n') >= 0
 }
