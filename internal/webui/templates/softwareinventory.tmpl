@@ -18,5 +18,5 @@
 {{end}}
 
 {{define "softwareInventoryStatus"}}
-{{.CollectorLabel}}；上次成功 {{formatOptionalTime .LastSuccessAt}}；上次失败 {{formatOptionalTime .LastFailureAt}}{{if .LastFailureReason}}（{{.LastFailureReason}}）{{end}}；{{if .Stale}}清单已过期{{else}}清单未过期{{end}}
+{{if .Managed}}{{.CollectorLabel}}{{else}}不受管设备，没有采集执行者{{end}}；上次成功 {{formatOptionalTime .LastSuccessAt}}；上次失败 {{formatOptionalTime .LastFailureAt}}{{if .LastFailureReason}}（{{.LastFailureReason}}）{{end}}；{{if .Stale}}清单已过期{{else}}清单未过期{{end}}
 {{end}}

@@ -57,7 +57,7 @@
 {{if .CategoryLabel}}<div>类别：{{.CategoryLabel}}</div>{{end}}
 {{if eq .CategoryLabel "容器镜像"}}<div>运行状态：{{if eq .Source "声明"}}未确认{{else if .ContainerRunning}}运行中{{else}}未运行{{end}}</div>{{end}}
 {{if .PackageURL}}<div>软件包统一地址：{{.PackageURL}}</div>{{end}}
-{{if .CPE}}<div>平台枚举：{{.CPE}}</div>{{end}}
+{{if .CPE}}<div>常见平台枚举：{{.CPE}}</div>{{end}}
 {{if .Note}}<div>备注：{{.Note}}</div>{{end}}
 </td>
 </tr>{{else}}<tr><td colspan="6">暂无软件条目。</td></tr>{{end}}
