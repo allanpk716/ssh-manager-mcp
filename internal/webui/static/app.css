@@ -457,6 +457,58 @@ h1 {
   color: var(--color-muted);
 }
 
+.matrix-scroll {
+  overflow-x: auto;
+}
+
+.secret-matrix-table th {
+  white-space: nowrap;
+}
+
+.secret-matrix-table label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+}
+
+@media (max-width: 720px) {
+  .secret-matrix .server-table {
+    display: table;
+  }
+
+  .secret-matrix .server-table tbody {
+    display: table-row-group;
+  }
+
+  .secret-matrix .server-table tr {
+    display: table-row;
+  }
+
+  .secret-matrix .server-table th,
+  .secret-matrix .server-table td {
+    display: table-cell;
+    width: auto;
+  }
+
+  .secret-matrix .server-table {
+    width: max-content;
+    min-width: 100%;
+    margin: 0;
+    border: none;
+  }
+
+  .secret-matrix .server-table tbody,
+  .secret-matrix .server-table tr,
+  .secret-matrix .server-table th,
+  .secret-matrix .server-table td {
+    margin: 0;
+  }
+
+  .secret-matrix .server-table thead {
+    display: table-header-group;
+  }
+}
+
 .one-time-result {
   padding: var(--space-large);
   background: var(--color-panel);

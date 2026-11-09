@@ -417,6 +417,14 @@ func TestSecretDetailSupportsEditValueAndDelete(t *testing.T) {
 		!strings.Contains(valuePageBody, `autocomplete="new-password"`) {
 		t.Fatalf("换值页应说明遮蔽并关闭自动填充：\n%s", valuePageBody)
 	}
+	invalidValue := h.do(http.MethodPost, detailTarget+"/value", url.Values{
+		"csrf_token": {csrf}, "value": {"short"},
+	})
+	invalidValueBody := body(t, invalidValue)
+	if invalidValue.StatusCode != http.StatusBadRequest || strings.Contains(invalidValueBody, "short") ||
+		!strings.Contains(invalidValueBody, `autocomplete="new-password"`) {
+		t.Fatalf("换值校验失败应重新渲染空值框，状态码=%d：\n%s", invalidValue.StatusCode, invalidValueBody)
+	}
 	changed := h.do(http.MethodPost, detailTarget+"/value", url.Values{
 		"csrf_token": {csrf}, "value": {"new-secret-value"},
 	})

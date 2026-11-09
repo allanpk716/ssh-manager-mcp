@@ -105,6 +105,39 @@ func TestStandaloneUIOpsStoreQueriesAudit(t *testing.T) {
 	}
 }
 
+// TestStandaloneUISecretStoreReadsVault 是单机角色的机密项读取来源：每次读
+// 取重新打开本机 vault，并只返回可见元数据。
+func TestStandaloneUISecretStoreReadsVault(t *testing.T) {
+	dbPath, mk := withCliStoreEnv(t)
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverID, err := st.AddServer(&models.Server{Name: "web", Host: "192.0.2.10", Port: 22, User: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecretWithEnvironmentName("WEB_TOKEN", "网站", []byte("standalone-secret-value"), "WEB_TOKEN_FILE", store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"WEB_TOKEN"}, []string{"web"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := standaloneUISecretStore().ListSecrets("", "网站", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Name != "WEB_TOKEN" || rows[0].Note != "网站" ||
+		rows[0].EnvironmentName != "WEB_TOKEN_FILE" || len(rows[0].AllowedServers) != 1 ||
+		rows[0].AllowedServers[0] != "web" || rows[0].ID == "" || rows[0].ID == serverID {
+		t.Fatalf("单机机密项读取结果不正确：%+v", rows)
+	}
+}
+
 // seedClientCacheSnapshot 把指定快照拉成本地加密缓存（指定实例），供 Web UI
 // 的客户端来源与版本提示来源测试使用。
 func seedClientCacheSnapshot(t *testing.T, snap *store.Snapshot, instance string) {
@@ -228,6 +261,28 @@ func TestClientUIServerSourceHonorsInstance(t *testing.T) {
 	}
 	if detail == nil || detail.ID != "n" {
 		t.Fatalf("服务器详情应读取指定实例快照，实际：%+v", detail)
+	}
+}
+
+// TestClientUISecretSourceReadsSnapshot 是客户端角色的机密项读取来源：读取
+// 当前实例的本地快照，并只显示快照范围内的服务器。
+func TestClientUISecretSourceReadsSnapshot(t *testing.T) {
+	snap := &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
+		{ID: "s", Name: "快照服务器", User: "u", Host: "192.0.2.10", Port: 22, CredentialID: "c", Role: "r"},
+	}, Secrets: []store.SnapshotSecret{{
+		ID: "secret", Name: "CLIENT_TOKEN", Note: "客户端", EnvironmentName: "CLIENT_TOKEN_FILE",
+		Value: []byte("client-secret-value"), CreatedAt: 100, ValueUpdatedAt: 200,
+	}}, SecretAllows: []store.SnapshotSecretAllow{{SecretID: "secret", ServerID: "s"}}}
+	seedClientCacheSnapshot(t, snap, "")
+
+	rows, err := clientUISecretSource{}.ListSecrets("", "客户端", "快照服务器")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ID != "secret" || rows[0].Name != "CLIENT_TOKEN" ||
+		rows[0].Note != "客户端" || rows[0].EnvironmentName != "CLIENT_TOKEN_FILE" ||
+		len(rows[0].AllowedServers) != 1 || rows[0].AllowedServers[0] != "快照服务器" {
+		t.Fatalf("客户端机密项读取结果不正确：%+v", rows)
 	}
 }
 

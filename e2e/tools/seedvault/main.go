@@ -91,6 +91,12 @@ func seed(dir string) error {
 	if err := st.GrantServers(profileID, []string{webID, oldID}); err != nil {
 		return err
 	}
+	if err := st.AddSecretWithEnvironmentName("MATRIX_TOKEN", "浏览器测试机密项", []byte("browser-test-secret-value"), "MATRIX_TOKEN_FILE", store.CLISource()); err != nil {
+		return err
+	}
+	if err := st.AllowSecrets([]string{"MATRIX_TOKEN"}, []string{"db-1"}, store.CLISource()); err != nil {
+		return err
+	}
 	for i := 0; i < 120; i++ {
 		if err := st.WriteAudit(store.AuditRow{
 			TS: time.Now().Add(-time.Duration(i) * time.Minute), Action: "e2e.audit",

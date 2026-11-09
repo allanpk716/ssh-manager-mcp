@@ -11,14 +11,13 @@ import (
 )
 
 const (
-	secretsPath         = "/ui/secrets/"
-	secretsNewPath      = "/ui/secrets/new"
-	secretsMatrixPath   = "/ui/secrets/matrix"
-	secretsPreviewPath  = "/ui/secrets/authorization/preview"
-	secretsConfirmPath  = "/ui/secrets/authorization/confirm"
-	secretsPrefix       = "/ui/secrets/"
-	secretsValueSuffix  = "/value"
-	secretsDeleteSuffix = "/delete"
+	secretsPath        = "/ui/secrets/"
+	secretsNewPath     = "/ui/secrets/new"
+	secretsMatrixPath  = "/ui/secrets/matrix"
+	secretsPreviewPath = "/ui/secrets/authorization/preview"
+	secretsConfirmPath = "/ui/secrets/authorization/confirm"
+	secretsPrefix      = "/ui/secrets/"
+	secretsValueSuffix = "/value"
 
 	// secretValueLimit 是机密项值本身的上限；请求体另留少量多部分表单
 	// 开销，超过即在读入值之前拒绝。
@@ -30,7 +29,8 @@ func isSecretValueUpload(r *http.Request) bool {
 	if r.Method != http.MethodPost {
 		return false
 	}
-	return r.URL.Path == secretsNewPath || strings.HasSuffix(r.URL.Path, secretsValueSuffix)
+	return r.URL.Path == secretsNewPath ||
+		(strings.HasPrefix(r.URL.Path, secretsPrefix) && strings.HasSuffix(r.URL.Path, secretsValueSuffix))
 }
 
 // SecretAuthorizationCell 是页面提交的一个目标授权格：可见范围内的一个机
@@ -82,11 +82,10 @@ type SecretDetailView struct {
 
 // SecretMatrixView 是机密项与服务器条目的授权矩阵。
 type SecretMatrixView struct {
-	Query       string
-	Server      string
-	Rows        []SecretMatrixRow
-	Servers     []ServerRow
-	HasOverride bool
+	Query   string
+	Server  string
+	Rows    []SecretMatrixRow
+	Servers []ServerRow
 }
 
 // SecretMatrixRow 是一个机密项在矩阵中的整行。
@@ -216,7 +215,7 @@ type secretFormView struct {
 var errSecretUploadTooLarge = errors.New("上传文件超过 64 KiB")
 
 func (h *handler) handleSecretNewPost(w http.ResponseWriter, r *http.Request) {
-	value, valueErr := secretValueFromRequest(w, r)
+	value, valueErr := secretValueFromRequest(r)
 	form := secretFormView{
 		Name: strings.TrimSpace(r.PostFormValue("name")), Note: r.PostFormValue("note"),
 		EnvironmentName: strings.TrimSpace(r.PostFormValue("environment_name")),
@@ -257,7 +256,7 @@ func secretNewResumePath(form secretFormView) string {
 	return secretsNewPath + "?" + values.Encode()
 }
 
-func secretValueFromRequest(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+func secretValueFromRequest(r *http.Request) ([]byte, error) {
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
 		if err := r.ParseMultipartForm(secretValueLimit); err != nil {
 			var tooLarge *http.MaxBytesError
@@ -343,7 +342,6 @@ func (h *handler) handleSecretMatrix(w http.ResponseWriter, r *http.Request) {
 	h.renderPage(w, r, http.StatusOK, "secret-matrix.tmpl", pageData{
 		Title: "机密项授权矩阵", SecretMatrix: &SecretMatrixView{
 			Query: query, Server: serverFilter, Rows: rows, Servers: servers,
-			HasOverride: len(override) > 0,
 		}, SecretServerOptions: allServers,
 	})
 }
@@ -606,13 +604,9 @@ func (h *handler) handleSecretValue(w http.ResponseWriter, r *http.Request, iden
 			Title: "换值 " + detail.Row.Name, SecretDetail: detail,
 		})
 	case http.MethodPost:
-		value, valueErr := secretValueFromRequest(w, r)
+		value, valueErr := secretValueFromRequest(r)
 		if valueErr != nil {
-			status := http.StatusBadRequest
-			if valueErr == errSecretUploadTooLarge {
-				status = http.StatusRequestEntityTooLarge
-			}
-			h.renderError(w, r, status, "换值失败", valueErr.Error())
+			h.renderSecretValueError(w, r, identifier, valueErr)
 			return
 		}
 		if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
@@ -622,13 +616,28 @@ func (h *handler) handleSecretValue(w http.ResponseWriter, r *http.Request, iden
 		if err := h.cfg.SecretsWriter.SetSecretValue(
 			identifier, value, SecretWriteSource{RemoteAddress: remoteIP(r)},
 		); err != nil {
-			h.renderError(w, r, http.StatusBadRequest, "换值失败", err.Error())
+			h.renderSecretValueError(w, r, identifier, err)
 			return
 		}
 		http.Redirect(w, r, target, http.StatusSeeOther)
 	default:
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "换值页只接受 GET 与 POST 请求。")
 	}
+}
+
+func (h *handler) renderSecretValueError(w http.ResponseWriter, r *http.Request, identifier string, err error) {
+	detail, detailErr := h.secretDetail(identifier)
+	if detailErr != nil {
+		h.renderError(w, r, http.StatusBadRequest, "换值失败", err.Error())
+		return
+	}
+	status := http.StatusBadRequest
+	if err == errSecretUploadTooLarge {
+		status = http.StatusRequestEntityTooLarge
+	}
+	h.renderPage(w, r, status, "secret-value.tmpl", pageData{
+		Title: "换值 " + detail.Row.Name, SecretDetail: detail, SecretDetailError: err.Error(),
+	})
 }
 
 func (h *handler) handleSecretDelete(w http.ResponseWriter, r *http.Request, identifier string) {
