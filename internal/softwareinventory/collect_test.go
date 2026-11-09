@@ -57,15 +57,17 @@ func addCollectDevice(t *testing.T, st *store.Store, deviceName string, serverNa
 }
 
 type recordedExec struct {
-	server  *models.Server
-	shell   models.ShellType
-	command string
-	sudo    bool
+	server      *models.Server
+	shell       models.ShellType
+	command     string
+	sudo        bool
+	hasDeadline bool
 }
 
 func replayCollectExec(output string, recorded *recordedExec, resultErr error) RemoteExecFunc {
-	return func(_ context.Context, server *models.Server, shell models.ShellType, command string, sudo bool) (RemoteExecResult, error) {
-		*recorded = recordedExec{server: server, shell: shell, command: command, sudo: sudo}
+	return func(ctx context.Context, server *models.Server, shell models.ShellType, command string, sudo bool) (RemoteExecResult, error) {
+		_, hasDeadline := ctx.Deadline()
+		*recorded = recordedExec{server: server, shell: shell, command: command, sudo: sudo, hasDeadline: hasDeadline}
 		if resultErr != nil {
 			return RemoteExecResult{}, resultErr
 		}
@@ -106,6 +108,9 @@ func TestCollectLinuxFullFixture(t *testing.T) {
 	}
 	if strings.Contains(recorded.command, "sudo") {
 		t.Fatal("sudo 开关关闭时命令不得经 sudo 包装")
+	}
+	if !recorded.hasDeadline {
+		t.Fatal("单次采集必须带超时执行")
 	}
 
 	items, err := st.SoftwareObservedItemsForDevice("工作站")
@@ -194,6 +199,51 @@ func TestCollectTruncatedOutputKeepsParsedParts(t *testing.T) {
 	}
 	if !report.Incomplete {
 		t.Fatal("输出超限应标为不完整")
+	}
+}
+
+// TestCollectLinuxNoProcessNamesFixture 覆盖权限不足的真实输出：看不到进
+// 程名的监听端口全部落成未识别进程条目。
+func TestCollectLinuxNoProcessNamesFixture(t *testing.T) {
+	service, st := newCollectService(t)
+	addCollectDevice(t, st, "工作站", "entry-a")
+	var recorded recordedExec
+	service.RemoteExec = replayCollectExec(fixtureOutput(t, "ubuntu2204-no-process-names.txt"), &recorded, nil)
+
+	report, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Incomplete || report.SystemType != "ubuntu" ||
+		report.ItemCounts[models.SoftwareCategoryUnidentified] != 7 {
+		t.Fatalf("采集报告 = %+v", report)
+	}
+	items, err := st.SoftwareObservedItemsForDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unidentified, withProcess := 0, 0
+	for _, item := range items {
+		if item.Category != models.SoftwareCategoryUnidentified {
+			continue
+		}
+		unidentified++
+		if item.ProcessName != "" && item.ExecutablePath != "" {
+			withProcess++
+		}
+		if len(item.ListeningPorts) == 0 {
+			t.Fatalf("未识别进程必须保留监听端口：%+v", item)
+		}
+	}
+	if unidentified != 7 || withProcess != 1 {
+		t.Fatalf("未识别进程 %d 条（看得到进程的 %d 条）", unidentified, withProcess)
+	}
+	status, err := st.SoftwareCollectionStatusForDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LastIncomplete || status.SystemType != "ubuntu" {
+		t.Fatalf("采集状态 = %+v", status)
 	}
 }
 
