@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS software_observed_items (
   container_running INTEGER NOT NULL DEFAULT 0,
   executable_path TEXT NOT NULL DEFAULT '',
   process_name TEXT NOT NULL DEFAULT '',
+  process_id INTEGER NOT NULL DEFAULT 0,
   collected_at INTEGER NOT NULL,
   UNIQUE(device_id, stable_key)
 );
@@ -197,12 +198,12 @@ func (s *Store) ReplaceSoftwareObservedItems(
 			INSERT INTO software_observed_items(
 				id,device_id,stable_key,category,name,name_lower,version,package_url,belongs_to,
 				architecture,container_tag,container_digest,container_running,executable_path,
-				process_name,collected_at
-			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				process_name,process_id,collected_at
+			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			itemID, device.ID, item.StableKey, item.Category, item.Name, strings.ToLower(item.Name),
 			item.Version, item.PackageURL, item.BelongsTo, item.Architecture,
 			item.ContainerTag, item.ContainerDigest, item.ContainerRunning,
-			item.ExecutablePath, item.ProcessName, item.CollectedAt.Unix(),
+			item.ExecutablePath, item.ProcessName, item.ProcessID, item.CollectedAt.Unix(),
 		); err != nil {
 			return err
 		}
@@ -324,7 +325,7 @@ func (s *Store) SoftwareObservedItemsForDevice(deviceName string) ([]models.Soft
 	}
 	rows, err := s.db.Query(`
 		SELECT id,category,name,version,package_url,belongs_to,architecture,container_tag,
-		       container_digest,container_running,executable_path,process_name,stable_key,collected_at
+		       container_digest,container_running,executable_path,process_name,process_id,stable_key,collected_at
 		FROM software_observed_items WHERE device_id=?
 		ORDER BY CASE category
 			WHEN 'operating_system' THEN 1
@@ -348,7 +349,7 @@ func (s *Store) SoftwareObservedItemsForDevice(deviceName string) ([]models.Soft
 			&id, &item.Category, &item.Name, &item.Version, &item.PackageURL,
 			&item.BelongsTo, &item.Architecture, &item.ContainerTag,
 			&item.ContainerDigest, &item.ContainerRunning, &item.ExecutablePath,
-			&item.ProcessName, &item.StableKey, &collectedAt,
+			&item.ProcessName, &item.ProcessID, &item.StableKey, &collectedAt,
 		); err != nil {
 			return nil, err
 		}

@@ -383,6 +383,9 @@ func buildLinuxListeningItems(
 	unidentified := map[string]*models.SoftwareObservedItem{}
 	var order []string
 	appendPort := func(item *models.SoftwareObservedItem, line linuxListenLine) {
+		if item.ProcessID == 0 && line.processID != 0 {
+			item.ProcessID = line.processID
+		}
 		for _, existing := range item.ListeningPorts {
 			if existing.Address == line.address && existing.Port == line.port && existing.Protocol == line.protocol {
 				return
@@ -412,6 +415,7 @@ func buildLinuxListeningItems(
 			item = &models.SoftwareObservedItem{
 				Category: models.SoftwareCategoryUnidentified, Name: name,
 				ExecutablePath: executable, ProcessName: line.processName,
+				ProcessID: line.processID,
 			}
 			unidentified[key] = item
 			order = append(order, key)

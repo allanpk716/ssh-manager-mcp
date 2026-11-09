@@ -18,6 +18,7 @@ type SoftwareObservedItem struct {
 	ContainerRunning bool                    `json:"container_running,omitempty"`
 	ExecutablePath   string                  `json:"executable_path,omitempty"`
 	ProcessName      string                  `json:"process_name,omitempty"`
+	ProcessID        int                     `json:"process_id,omitempty"`
 	StableKey        string                  `json:"stable_key"`
 	ListeningPorts   []SoftwareListeningPort `json:"listening_ports,omitempty"`
 	CollectedAt      time.Time               `json:"collected_at"`

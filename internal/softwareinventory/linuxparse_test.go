@@ -140,6 +140,9 @@ func TestParseLinuxFullFixture(t *testing.T) {
 		miniconda.ProcessName != "python" || miniconda.Version != "" {
 		t.Fatalf("认不出的进程应为未识别进程：%+v", miniconda)
 	}
+	if miniconda.ProcessID != 2123656 {
+		t.Fatalf("监听进程的进程编号应保存：%+v", miniconda)
+	}
 	if port := findObservedPort(miniconda, "0.0.0.0", 8765, "tcp"); port == nil ||
 		port.Exposure != models.SoftwareExposureAllAddresses {
 		t.Fatalf("未识别 python 的端口 = %+v", miniconda.ListeningPorts)
