@@ -1,9 +1,7 @@
 package webui
 
 import (
-	"bytes"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -79,24 +77,5 @@ func (h *handler) writeCompleteUpgradeServerSuccessPage(w http.ResponseWriter, r
 		data.CSRFToken = session.csrf
 		data.Authenticated = true
 	}
-	parsed := h.pages["ops-upgrade-server.tmpl"]
-	if parsed.full == nil {
-		h.renderError(w, r, http.StatusInternalServerError, "升级为权威端失败", "页面模板加载失败。")
-		return false
-	}
-	var body bytes.Buffer
-	if err := parsed.full.ExecuteTemplate(&body, "layout", data); err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "升级为权威端失败", "页面渲染失败。")
-		return false
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Length", strconv.Itoa(body.Len()))
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(body.Bytes()); err != nil {
-		return false
-	}
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	return true
+	return h.writeCompletePage(w, r, "ops-upgrade-server.tmpl", data, "升级为权威端失败")
 }

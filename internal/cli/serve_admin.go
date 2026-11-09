@@ -40,27 +40,18 @@ func newServeAdminCmd() *cobra.Command {
 	return c
 }
 
-func requireServerRoleVault() (*store.Store, error) {
+// requireServerRoleVault 是 `serve admin` 子命令的角色判定：只能在权威端
+// 主机执行。allowSetupResume 为真时允许「已选权威端但还没建 vault」的续做
+// 状态——`serve admin set` 不再因 setup_complete 为假而拒绝（该标记只保留
+// 「选了角色、还没建 vault」的续做含义；升级中的权威端也要能先设管理员
+// 口令），其余子命令仍要求初始化已完成。
+func requireServerRoleVault(allowSetupResume bool) (*store.Store, error) {
 	launch, err := resolveMachineRole("")
 	if err != nil {
 		return nil, err
 	}
-	if launch.Kind != roles.LaunchBroker || launch.ResumeSetup || launch.Role != roles.RoleServer {
-		return nil, NewExitCodeError(1, errors.New("`serve admin` 只能在权威端主机执行；单机与客户端没有权威端 Web 管理员口令"))
-	}
-	return openUnlockedStore()
-}
-
-// requireServerRoleVaultForPasswordSet 是 `serve admin set` 的角色判定：
-// 只要本机角色是权威端且 vault 可打开就放行，不再因 setup_complete 为假
-// 而拒绝（该标记只保留「选了角色、还没建 vault」的续做含义；升级中的
-// 权威端也要能先设管理员口令）。
-func requireServerRoleVaultForPasswordSet() (*store.Store, error) {
-	launch, err := resolveMachineRole("")
-	if err != nil {
-		return nil, err
-	}
-	if launch.Kind != roles.LaunchBroker || launch.Role != roles.RoleServer {
+	if launch.Kind != roles.LaunchBroker || launch.Role != roles.RoleServer ||
+		(!allowSetupResume && launch.ResumeSetup) {
 		return nil, NewExitCodeError(1, errors.New("`serve admin` 只能在权威端主机执行；单机与客户端没有权威端 Web 管理员口令"))
 	}
 	return openUnlockedStore()
@@ -134,7 +125,7 @@ func newServeAdminSetCmd() *cobra.Command {
 		Short: "Set or reset the authoritative Web UI administrator password",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := requireServerRoleVaultForPasswordSet()
+			st, err := requireServerRoleVault(true)
 			if err != nil {
 				return err
 			}
@@ -168,7 +159,7 @@ func newServeAdminUnlockCmd() *cobra.Command {
 		Short: "Unlock a Web UI login lock; without an IP, list current locks",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := requireServerRoleVault()
+			st, err := requireServerRoleVault(false)
 			if err != nil {
 				return err
 			}
@@ -207,7 +198,7 @@ func newServeAdminLogoutAllCmd() *cobra.Command {
 		Short: "Log out all authoritative Web UI sessions",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := requireServerRoleVault()
+			st, err := requireServerRoleVault(false)
 			if err != nil {
 				return err
 			}
@@ -228,7 +219,7 @@ func newServeAdminStatusCmd() *cobra.Command {
 		Short: "Show authoritative Web UI addresses and certificate fingerprint",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := requireServerRoleVault()
+			st, err := requireServerRoleVault(false)
 			if err != nil {
 				return err
 			}

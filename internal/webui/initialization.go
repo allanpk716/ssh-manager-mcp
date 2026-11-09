@@ -113,6 +113,46 @@ type InitializationStepView struct {
 	Done    bool
 }
 
+// initializationServerStep 是权威端向导页面里的当前步骤；页面标题与步骤条
+// 状态由它推导，不比较标题文字。
+type initializationServerStep int
+
+const (
+	initializationServerStepCreateVault initializationServerStep = iota
+	initializationServerStepSetAdminPassword
+	initializationServerStepInstallServe
+	initializationServerStepComplete
+)
+
+// title 返回该步骤的页面标题。
+func (step initializationServerStep) title() string {
+	switch step {
+	case initializationServerStepCreateVault:
+		return "建 vault"
+	case initializationServerStepSetAdminPassword:
+		return "设置管理员口令"
+	case initializationServerStepInstallServe:
+		return "安装 serve"
+	default:
+		return "初始化完成"
+	}
+}
+
+// views 返回三步步骤条；完成步骤把三步全部标记为已完成。
+func (step initializationServerStep) views() []InitializationStepView {
+	labels := []string{"建 vault", "设置管理员口令", "安装 serve"}
+	views := make([]InitializationStepView, 0, len(labels))
+	currentIndex := int(step)
+	for index, label := range labels {
+		views = append(views, InitializationStepView{
+			Label:   label,
+			Current: index == currentIndex,
+			Done:    step == initializationServerStepComplete || index < currentIndex,
+		})
+	}
+	return views
+}
+
 // InitializationErrorView 把错误说明与建议命令拆开：命令由模板用 code 元素
 // 渲染，错误文字不携带 HTML，避免反引号原样显示在浏览器里。
 type InitializationErrorView struct {
@@ -176,11 +216,13 @@ const initializationClientShutdownDelay = 500 * time.Millisecond
 // 页面先带 Content-Length 写出并刷新，随后才触发优雅关闭。
 const initializationServerShutdownDelay = 500 * time.Millisecond
 
-// NewInitializationWizard 构造回环初始化向导。cfg 是初始化完成后要切换到的
-// 单机正式页面配置；在切换前，路由表里只有向导页面。
+// NewInitializationWizard 构造回环初始化向导。cfg 必须描述单机角色：向导页面
+// 的回环安全设施与「单机初始化完成后在同一进程内切换到的正式页面」都从它
+// 构造；权威端向导完成后进程退出、不切换正式页面，但同样使用这份配置里的
+// 回环安全参数。在切换到正式页面前，路由表里只有向导页面。
 func NewInitializationWizard(cfg Config, initializer Initializer) (http.Handler, Startup, error) {
 	if cfg.Role != RoleStandalone {
-		return nil, Startup{}, errors.New("初始化向导当前只支持切换到单机正式页面")
+		return nil, Startup{}, errors.New("初始化向导的配置必须是单机角色：单机初始化完成后要在同一进程内切换到单机正式页面")
 	}
 	if initializer == nil {
 		return nil, Startup{}, errors.New("初始化向导必须提供初始化接口")
@@ -270,20 +312,17 @@ func (w *initializationWizard) handleRoleChoice(response http.ResponseWriter, re
 	data := pageData{Title: "选择本机角色"}
 	role := InitializationRole(request.PostFormValue("role"))
 	switch role {
-	case InitializationRoleStandalone:
+	case InitializationRoleStandalone, InitializationRoleServer:
 		if err := w.initializer.SelectRoleWithoutVault(role); err != nil {
 			data.InitializationError = initializationErrorWithAdvice(err)
 			w.render(response, request, http.StatusBadRequest, "initialization-role-choice.tmpl", data)
 			return
 		}
-		http.Redirect(response, request, "/ui/init/standalone", http.StatusSeeOther)
-	case InitializationRoleServer:
-		if err := w.initializer.SelectRoleWithoutVault(role); err != nil {
-			data.InitializationError = initializationErrorWithAdvice(err)
-			w.render(response, request, http.StatusBadRequest, "initialization-role-choice.tmpl", data)
-			return
+		nextPath := "/ui/init/standalone"
+		if role == InitializationRoleServer {
+			nextPath = "/ui/init/server/vault"
 		}
-		http.Redirect(response, request, "/ui/init/server/vault", http.StatusSeeOther)
+		http.Redirect(response, request, nextPath, http.StatusSeeOther)
 	case InitializationRoleClient:
 		http.Redirect(response, request, "/ui/init/client", http.StatusSeeOther)
 	default:
@@ -361,7 +400,7 @@ func (w *initializationWizard) handleServerVault(response http.ResponseWriter, r
 		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "建 vault 步骤只接受 GET 请求。")
 		return
 	}
-	w.render(response, request, http.StatusOK, "initialization-server-vault.tmpl", w.serverPageData("建 vault"))
+	w.render(response, request, http.StatusOK, "initialization-server-vault.tmpl", w.serverPageData(initializationServerStepCreateVault))
 }
 
 func (w *initializationWizard) handleServerVaultCreate(response http.ResponseWriter, request *http.Request) {
@@ -371,17 +410,17 @@ func (w *initializationWizard) handleServerVaultCreate(response http.ResponseWri
 	}
 	running, err := w.serveRunning()
 	if err != nil {
-		data := w.serverPageData("建 vault")
+		data := w.serverPageData(initializationServerStepCreateVault)
 		data.InitializationError = initializationErrorWithAdvice(err)
 		w.render(response, request, http.StatusInternalServerError, "initialization-server-vault.tmpl", data)
 		return
 	}
 	if running {
-		w.renderServeAlreadyRunning(response, request, "initialization-server-vault.tmpl", "建 vault")
+		w.renderServeAlreadyRunning(response, request, "initialization-server-vault.tmpl", initializationServerStepCreateVault)
 		return
 	}
 	if _, err := w.initializer.Initialize(InitializationRoleServer); err != nil {
-		data := w.serverPageData("建 vault")
+		data := w.serverPageData(initializationServerStepCreateVault)
 		data.InitializationError = initializationErrorWithAdvice(err)
 		w.render(response, request, http.StatusInternalServerError, "initialization-server-vault.tmpl", data)
 		return
@@ -394,7 +433,7 @@ func (w *initializationWizard) handleServerPassword(response http.ResponseWriter
 		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "设置管理员口令页只接受 GET 请求。")
 		return
 	}
-	w.render(response, request, http.StatusOK, "initialization-server-password.tmpl", w.serverPageData("设置管理员口令"))
+	w.render(response, request, http.StatusOK, "initialization-server-password.tmpl", w.serverPageData(initializationServerStepSetAdminPassword))
 }
 
 func (w *initializationWizard) handleServerPasswordSet(response http.ResponseWriter, request *http.Request) {
@@ -404,7 +443,7 @@ func (w *initializationWizard) handleServerPasswordSet(response http.ResponseWri
 	}
 	password := []byte(request.PostFormValue("password"))
 	confirmation := []byte(request.PostFormValue("password_confirm"))
-	data := w.serverPageData("设置管理员口令")
+	data := w.serverPageData(initializationServerStepSetAdminPassword)
 	running, err := w.serveRunning()
 	if err != nil {
 		data.InitializationError = initializationErrorWithAdvice(err)
@@ -412,7 +451,7 @@ func (w *initializationWizard) handleServerPasswordSet(response http.ResponseWri
 		return
 	}
 	if running {
-		w.renderServeAlreadyRunning(response, request, "initialization-server-password.tmpl", "设置管理员口令")
+		w.renderServeAlreadyRunning(response, request, "initialization-server-password.tmpl", initializationServerStepSetAdminPassword)
 		return
 	}
 	if err := w.initializer.ValidateAdminPassword(password, confirmation); err != nil {
@@ -438,8 +477,8 @@ func (w *initializationWizard) serveRunning() (bool, error) {
 	return probe.Running, nil
 }
 
-func (w *initializationWizard) renderServeAlreadyRunning(response http.ResponseWriter, request *http.Request, page, title string) {
-	data := w.serverPageData(title)
+func (w *initializationWizard) renderServeAlreadyRunning(response http.ResponseWriter, request *http.Request, page string, step initializationServerStep) {
+	data := w.serverPageData(step)
 	data.InitializationError = &InitializationErrorView{
 		Lead:    "serve 已在运行，请到正式 Web UI 操作，或用",
 		Command: "sshmgr serve admin set",
@@ -453,19 +492,15 @@ func (w *initializationWizard) handleServerInstall(response http.ResponseWriter,
 		w.wizard.renderError(response, request, http.StatusMethodNotAllowed, "方法不允许", "安装 serve 步骤只接受 GET 请求。")
 		return
 	}
-	w.render(response, request, http.StatusOK, "initialization-server-install.tmpl", w.serverPageData("安装 serve"))
+	w.render(response, request, http.StatusOK, "initialization-server-install.tmpl", w.serverPageData(initializationServerStepInstallServe))
 }
 
-func (w *initializationWizard) serverPageData(title string) pageData {
+func (w *initializationWizard) serverPageData(step initializationServerStep) pageData {
 	data := pageData{
-		Title: title,
-		InitializationSteps: []InitializationStepView{
-			{Label: "建 vault", Current: title == "建 vault", Done: title != "建 vault"},
-			{Label: "设置管理员口令", Current: title == "设置管理员口令", Done: title == "安装 serve"},
-			{Label: "安装 serve", Current: title == "安装 serve"},
-		},
+		Title:               step.title(),
+		InitializationSteps: step.views(),
 	}
-	if title == "安装 serve" {
+	if step == initializationServerStepInstallServe {
 		notice, command := initializationInstallCommand(
 			w.wizard.cfg.InitializationOperatingSystem,
 			w.wizard.cfg.InitializationExecutablePath,
@@ -532,7 +567,7 @@ func (w *initializationWizard) handleServerFinish(response http.ResponseWriter, 
 		return
 	}
 	addresses := orderedServeAddresses(probe.Addresses)
-	data := w.serverPageData("初始化完成")
+	data := w.serverPageData(initializationServerStepComplete)
 	for _, address := range addresses {
 		data.InitializationServeAddresses = append(data.InitializationServeAddresses, InitializationServeAddressView{
 			URL:       "https://" + net.JoinHostPort(address, strconv.Itoa(probe.Port)) + "/ui/",
@@ -586,14 +621,20 @@ func (w *initializationWizard) writeCompleteServerFinishPage(response http.Respo
 		data.CSRFToken = session.csrf
 		data.Authenticated = true
 	}
-	parsed := w.wizard.pages["initialization-server-finish.tmpl"]
+	return w.wizard.writeCompletePage(response, request, "initialization-server-finish.tmpl", data, "完成页渲染失败")
+}
+
+// writeCompletePage 先把整页渲染进缓冲区，再带 Content-Length 写出并刷新，
+// 保证浏览器收到完整页面后才触发进程退出；渲染失败时输出错误页并返回假。
+func (h *handler) writeCompletePage(response http.ResponseWriter, request *http.Request, page string, data pageData, failureTitle string) bool {
+	parsed := h.pages[page]
 	if parsed.full == nil {
-		w.wizard.renderError(response, request, http.StatusInternalServerError, "完成页渲染失败", "页面模板加载失败。")
+		h.renderError(response, request, http.StatusInternalServerError, failureTitle, "页面模板加载失败。")
 		return false
 	}
 	var body bytes.Buffer
 	if err := parsed.full.ExecuteTemplate(&body, "layout", data); err != nil {
-		w.wizard.renderError(response, request, http.StatusInternalServerError, "完成页渲染失败", "页面渲染失败。")
+		h.renderError(response, request, http.StatusInternalServerError, failureTitle, "页面渲染失败。")
 		return false
 	}
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -651,25 +692,5 @@ func (w *initializationWizard) writeCompleteClientPairingPage(response http.Resp
 		data.CSRFToken = session.csrf
 		data.Authenticated = true
 	}
-	parsed := w.wizard.pages["initialization-client.tmpl"]
-	if parsed.full == nil {
-		w.wizard.renderError(response, request, http.StatusInternalServerError, "客户端入网失败", "页面模板加载失败。")
-		return false
-	}
-	var body bytes.Buffer
-	if err := parsed.full.ExecuteTemplate(&body, "layout", data); err != nil {
-		w.wizard.renderError(response, request, http.StatusInternalServerError, "客户端入网失败", "页面渲染失败。")
-		return false
-	}
-	response.Header().Set("Content-Type", "text/html; charset=utf-8")
-	response.Header().Set("Content-Length", strconv.Itoa(body.Len()))
-	response.WriteHeader(http.StatusOK)
-	if _, err := response.Write(body.Bytes()); err != nil {
-		return false
-	}
-	if flusher, ok := response.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	return true
+	return w.wizard.writeCompletePage(response, request, "initialization-client.tmpl", data, "客户端入网失败")
 }
-
