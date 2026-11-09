@@ -1,7 +1,9 @@
 package webuisecrets
 
 import (
+	"bytes"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,12 +11,14 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/secretmanage"
 	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/vault"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
 	"ssh-manager-mcp/internal/webuiservers"
@@ -56,12 +60,13 @@ func newIntegrationHandler(t *testing.T, st *store.Store) sessionHandler {
 	if len(cookies) != 1 {
 		t.Fatalf("应签发会话 cookie，实际 %d", len(cookies))
 	}
-	return sessionHandler{handler: handler, cookie: *cookies[0]}
+	return sessionHandler{handler: handler, cookie: *cookies[0], host: "127.0.0.1:18082"}
 }
 
 type sessionHandler struct {
 	handler http.Handler
 	cookie  http.Cookie
+	host    string
 }
 
 func (s sessionHandler) do(method, target string, form url.Values) *http.Response {
@@ -70,11 +75,11 @@ func (s sessionHandler) do(method, target string, form url.Values) *http.Respons
 		body = strings.NewReader(form.Encode())
 	}
 	req := httptest.NewRequest(method, target, body)
-	req.Host = "127.0.0.1:18082"
+	req.Host = s.host
 	req.AddCookie(&s.cookie)
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("Origin", "http://127.0.0.1:18082")
+		req.Header.Set("Origin", "http://"+s.host)
 	}
 	rec := httptest.NewRecorder()
 	s.handler.ServeHTTP(rec, req)
@@ -124,11 +129,123 @@ func csrfToken(t *testing.T, h sessionHandler) string {
 	return page[start : start+end]
 }
 
+func postMultipart(h sessionHandler, target string, fields map[string]string, fileField, fileName string, fileSize int) *http.Response {
+	var buffer bytes.Buffer
+	writer := multipart.NewWriter(&buffer)
+	for name, value := range fields {
+		_ = writer.WriteField(name, value)
+	}
+	if fileField != "" {
+		part, err := writer.CreateFormFile(fileField, fileName)
+		if err != nil {
+			panic(err)
+		}
+		_, _ = part.Write(bytes.Repeat([]byte("x"), fileSize))
+	}
+	_ = writer.Close()
+	req := httptest.NewRequest(http.MethodPost, target, &buffer)
+	req.Host = h.host
+	req.RemoteAddr = "192.0.2.1:45678"
+	req.AddCookie(&h.cookie)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Origin", "http://"+h.host)
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, req)
+	return rec.Result()
+}
+
+type authorityHandler struct {
+	handler http.Handler
+	cookie  *http.Cookie
+}
+
+func newAuthorityHandler(t *testing.T, st *store.Store, now *time.Time) authorityHandler {
+	t.Helper()
+	auth := vault.NewWebUIAuthStore(st)
+	if _, err := auth.SetAdminPasswordWithAudit([]byte("correct-password"), webui.AuditEvent{
+		Action: "admin.password_change", Status: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler, _, err := webui.NewAuthority(webui.Config{
+		Role: webui.RoleServer, Port: 18083,
+		Servers:                webuiservers.FromManager(servermanage.New(st)),
+		ServerWriter:           webuiservers.WriterFromManager(servermanage.New(st)),
+		Access:                 webuiaccess.FromManager(access.New(st)),
+		Secrets:                FromManager(secretmanage.New(st)),
+		SecretsWriter:          WriterFromManager(secretmanage.New(st)),
+		Auth:                   auth,
+		AllowedHosts:           []string{"127.0.0.1"},
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		Now:                    func() time.Time { return *now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginPage := authorityRawGet(handler, "/ui/login")
+	loginBody := body(t, loginPage)
+	csrf := hiddenValue(t, loginBody, "csrf_token")
+	var cookies []*http.Cookie
+	for _, cookie := range loginPage.Cookies() {
+		cookies = append(cookies, cookie)
+	}
+	form := url.Values{"csrf_token": {csrf}, "password": {"correct-password"}}
+	req := httptest.NewRequest(http.MethodPost, "/ui/login", strings.NewReader(form.Encode()))
+	req.Host = "127.0.0.1:18083"
+	req.RemoteAddr = "198.51.100.9:45678"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://127.0.0.1:18083")
+	for _, cookie := range cookies {
+		req.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	loggedIn := rec.Result()
+	_ = loggedIn.Body.Close()
+	if loggedIn.StatusCode != http.StatusSeeOther {
+		t.Fatalf("权威端登录失败，状态码=%d", loggedIn.StatusCode)
+	}
+	for _, cookie := range loggedIn.Cookies() {
+		if cookie.Name == "__Host-sshmgr_ui" {
+			return authorityHandler{handler: handler, cookie: cookie}
+		}
+	}
+	t.Fatal("权威端登录响应缺少会话 cookie")
+	return authorityHandler{}
+}
+
+func authorityRawGet(handler http.Handler, target string) *http.Response {
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.Host = "127.0.0.1:18083"
+	req.RemoteAddr = "198.51.100.9:45678"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec.Result()
+}
+
+func (h authorityHandler) do(method, target string, form url.Values) *http.Response {
+	reqBody := strings.NewReader("")
+	if form != nil {
+		reqBody = strings.NewReader(form.Encode())
+	}
+	req := httptest.NewRequest(method, target, reqBody)
+	req.Host = "127.0.0.1:18083"
+	req.RemoteAddr = "198.51.100.9:45678"
+	req.AddCookie(h.cookie)
+	if form != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", "https://127.0.0.1:18083")
+	}
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, req)
+	return rec.Result()
+}
+
 func hiddenValue(t *testing.T, page, name string) string {
 	t.Helper()
 	values := hiddenValues(t, page, name)
-	if len(values) != 1 {
-		t.Fatalf("页面应恰好有一个 %q 隐藏值，实际 %v：\n%s", name, values, page)
+	if len(values) == 0 {
+		t.Fatalf("页面缺少 %q 隐藏值：\n%s", name, page)
 	}
 	return values[0]
 }
@@ -336,6 +453,219 @@ func TestSecretDetailSupportsEditValueAndDelete(t *testing.T) {
 	if err != nil || len(views) != 0 {
 		t.Fatalf("删除后的 vault 状态不正确：%v %+v", err, views)
 	}
+}
+
+func TestSecretUploadOverLimitIsRejectedBeforeReadingValue(t *testing.T) {
+	st := newIntegrationStore(t)
+	mustServer(t, st, "web-1")
+	h := newIntegrationHandler(t, st)
+
+	resp := postMultipart(h, "/ui/secrets/new", map[string]string{
+		"csrf_token": csrfToken(t, h), "name": "BIG_TOKEN", "note": " oversized",
+	}, "value_file", "value.bin", 64*1024+1)
+	respBody := body(t, resp)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("上传超过 64 KiB 应提前返回 413，实际 %d：\n%s", resp.StatusCode, respBody)
+	}
+	if strings.Contains(respBody, "xxxx") {
+		t.Fatalf("超限错误页不得包含上传值：\n%s", respBody)
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{OwnerOnly: true, Actions: []string{"secret-add"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("超限上传不应写审计：%+v", rows)
+	}
+}
+
+func TestAuthoritySecretWritesRequireReverifyAndPreserveSubmittedState(t *testing.T) {
+	st := newIntegrationStore(t)
+	serverID := mustServer(t, st, "web-1")
+	manager := secretmanage.New(st)
+	if err := manager.AddSecret("AUTH_TOKEN", "权威端备注", "AUTH_TOKEN_FILE", []byte("authority-secret-value"), secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	views, err := manager.List(secretmanage.ListFilter{})
+	if err != nil || len(views) != 1 {
+		t.Fatalf("准备机密项失败：%v %+v", err, views)
+	}
+	secretID := views[0].ID
+	now := time.Now()
+	h := newAuthorityHandler(t, st, &now)
+	now = now.Add(6 * time.Minute)
+	csrf := hiddenValue(t, body(t, h.do(http.MethodGet, "/ui/secrets/", nil)), "csrf_token")
+
+	addResume := "/ui/secrets/new?environment_name=AUTH_TOKEN_FILE&name=NEW_TOKEN&note=%E6%9D%83%E5%A8%81%E7%AB%AF&resume=1"
+	addRejected := h.do(http.MethodPost, "/ui/secrets/new", url.Values{
+		"csrf_token": {csrf}, "name": {"NEW_TOKEN"}, "note": {"权威端"},
+		"environment_name": {"AUTH_TOKEN_FILE"}, "value": {"authority-new-secret"},
+	})
+	if addRejected.StatusCode != http.StatusSeeOther || addRejected.Header.Get("Location") != "/ui/reverify?next="+url.QueryEscape(addResume) {
+		t.Fatalf("新增应先重新验证，状态码=%d 跳转=%q", addRejected.StatusCode, addRejected.Header.Get("Location"))
+	}
+	valueRejected := h.do(http.MethodPost, "/ui/secrets/"+secretID+"/value", url.Values{
+		"csrf_token": {csrf}, "value": {"authority-replaced-secret"},
+	})
+	if valueRejected.StatusCode != http.StatusSeeOther || valueRejected.Header.Get("Location") != "/ui/reverify?next="+url.QueryEscape("/ui/secrets/"+secretID+"/value?resume=1") {
+		t.Fatalf("换值应先重新验证，状态码=%d 跳转=%q", valueRejected.StatusCode, valueRejected.Header.Get("Location"))
+	}
+	deleteRejected := h.do(http.MethodPost, "/ui/secrets/"+secretID+"/delete", url.Values{
+		"csrf_token": {csrf}, "secret_id": {secretID},
+	})
+	if deleteRejected.StatusCode != http.StatusSeeOther || deleteRejected.Header.Get("Location") != "/ui/reverify?next="+url.QueryEscape("/ui/secrets/"+secretID+"/delete?resume=1") {
+		t.Fatalf("删除应先重新验证，状态码=%d 跳转=%q", deleteRejected.StatusCode, deleteRejected.Header.Get("Location"))
+	}
+
+	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", url.Values{
+		"csrf_token": {csrf}, "return_to": {"/ui/secrets/matrix"},
+		"secret_id": {secretID}, "server_id": {serverID},
+		"cell__" + secretID + "__" + serverID: {"1"},
+	})
+	previewBody := body(t, preview)
+	summary := hiddenValue(t, previewBody, "summary")
+	confirmRejected := h.do(http.MethodPost, "/ui/secrets/authorization/confirm", url.Values{
+		"csrf_token": {csrf}, "summary": {summary}, "return_to": {"/ui/secrets/matrix"},
+		"target": {secretID + " " + serverID + " 1"},
+	})
+	confirmNext := "/ui/secrets/authorization/preview?return_to=%2Fui%2Fsecrets%2Fmatrix&target=" + url.QueryEscape(secretID+" "+serverID+" 1")
+	if confirmRejected.StatusCode != http.StatusSeeOther || confirmRejected.Header.Get("Location") != "/ui/reverify?next="+url.QueryEscape(confirmNext) {
+		t.Fatalf("确认授权应先重新验证，状态码=%d 跳转=%q", confirmRejected.StatusCode, confirmRejected.Header.Get("Location"))
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{OwnerOnly: true, Source: store.AuditSourceWebUI, Actions: []string{"secret-add", "secret-set", "secret-rm", "secret-allow-change"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("未重新验证前不应写机密项审计：%+v", rows)
+	}
+
+	reverifyPage := h.do(http.MethodGet, "/ui/reverify?next="+url.QueryEscape(confirmNext), nil)
+	reverifyCSRF := hiddenValue(t, body(t, reverifyPage), "csrf_token")
+	reverified := h.do(http.MethodPost, "/ui/reverify", url.Values{
+		"csrf_token": {reverifyCSRF}, "password": {"correct-password"}, "next": {confirmNext},
+	})
+	if reverified.StatusCode != http.StatusSeeOther || reverified.Header.Get("Location") != confirmNext {
+		t.Fatalf("重新验证后应回到授权预览，状态码=%d 跳转=%q", reverified.StatusCode, reverified.Header.Get("Location"))
+	}
+	resumedPreview := body(t, h.do(http.MethodGet, confirmNext, nil))
+	if hiddenValue(t, resumedPreview, "summary") != summary ||
+		len(hiddenValues(t, resumedPreview, "target")) != 1 ||
+		hiddenValues(t, resumedPreview, "target")[0] != secretID+" "+serverID+" 1" {
+		t.Fatalf("重新验证后的预览应保留目标授权集合：\n%s", resumedPreview)
+	}
+	confirmed := h.do(http.MethodPost, "/ui/secrets/authorization/confirm", url.Values{
+		"csrf_token": {csrf}, "summary": {summary}, "return_to": {"/ui/secrets/matrix"},
+		"target": {secretID + " " + serverID + " 1"},
+	})
+	confirmedBody := body(t, confirmed)
+	if confirmed.StatusCode != http.StatusOK || !strings.Contains(confirmedBody, "已保存授权变更") {
+		t.Fatalf("重新验证后应能确认授权，状态码=%d：\n%s", confirmed.StatusCode, confirmedBody)
+	}
+
+	addPage := body(t, h.do(http.MethodGet, addResume, nil))
+	for _, want := range []string{`value="NEW_TOKEN"`, `value="权威端"`, `value="AUTH_TOKEN_FILE"`} {
+		if !strings.Contains(addPage, want) {
+			t.Fatalf("新增回跳页应保留元数据 %q：\n%s", want, addPage)
+		}
+	}
+	added := h.do(http.MethodPost, "/ui/secrets/new", url.Values{
+		"csrf_token": {csrf}, "name": {"NEW_TOKEN"}, "note": {"权威端"},
+		"environment_name": {"AUTH_TOKEN_FILE2"}, "value": {"authority-new-secret"},
+	})
+	addedBody := body(t, added)
+	if added.StatusCode != http.StatusSeeOther {
+		t.Fatalf("重新验证后应能新增机密项，状态码=%d：\n%s", added.StatusCode, addedBody)
+	}
+	rows, err = st.QueryAudit(store.AuditFilter{OwnerOnly: true, Source: store.AuditSourceWebUI, Actions: []string{"secret-add", "secret-allow-change"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("权威端写入审计数量不正确：%+v", rows)
+	}
+	for _, row := range rows {
+		if row.Source != store.AuditSourceWebUI || row.SourceIP != "198.51.100.9" || strings.Contains(row.Command, "authority-new-secret") {
+			t.Fatalf("权威端审计来源不正确：%+v", row)
+		}
+	}
+}
+
+func TestClientSecretsPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testing.T) {
+	st := newIntegrationStore(t)
+	serverID := mustServer(t, st, "web-1")
+	manager := secretmanage.New(st)
+	if err := manager.AddSecret("CLIENT_TOKEN", "客户端备注", "CLIENT_TOKEN_FILE", []byte("client-secret-value"), secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AllowSecrets([]string{"CLIENT_TOKEN"}, []string{"web-1"}, secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := st.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, startup, err := webui.New(webui.Config{
+		Role: webui.RoleClient,
+		Servers: clientServerSource{
+			rows: []webui.ServerRow{{ID: serverID, Name: "web-1"}},
+		},
+		Secrets: SnapshotSource(func(string) (*store.Snapshot, error) {
+			return snapshot, nil
+		}),
+		Port: 18084,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, startup.URL("127.0.0.1:18084"), nil)
+	req.Host = "127.0.0.1:18084"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("应签发客户端会话 cookie，实际 %d", len(cookies))
+	}
+	h := sessionHandler{handler: handler, cookie: *cookies[0], host: "127.0.0.1:18084"}
+	page := body(t, h.do(http.MethodGet, "/ui/secrets/", nil))
+	for _, want := range []string{"CLIENT_TOKEN", "客户端备注", "CLIENT_TOKEN_FILE", "web-1", "只显示本客户端可用的部分，修改请到权威端。"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("客户端机密项页缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "client-secret-value") || strings.Contains(page, "创建时间") || strings.Contains(page, "值最后更改") ||
+		strings.Contains(page, "新增机密项") || strings.Contains(page, "授权矩阵") {
+		t.Fatalf("客户端页不得显示值、时间或写入口：\n%s", page)
+	}
+	csrf := csrfToken(t, h)
+	writeTargets := []string{
+		"/ui/secrets/new", "/ui/secrets/matrix",
+		"/ui/secrets/authorization/preview", "/ui/secrets/authorization/confirm",
+		"/ui/secrets/" + snapshot.Secrets[0].ID,
+	}
+	for _, target := range writeTargets {
+		resp := h.do(http.MethodPost, target, url.Values{"csrf_token": {csrf}})
+		respBody := body(t, resp)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("客户端写路由 %s 不应存在，状态码=%d：\n%s", target, resp.StatusCode, respBody)
+		}
+	}
+}
+
+type clientServerSource struct {
+	rows []webui.ServerRow
+}
+
+func (s clientServerSource) Servers(string) ([]webui.ServerRow, error) {
+	return s.rows, nil
+}
+
+func (s clientServerSource) ServerList(string, bool) ([]webui.ServerListEntry, error) {
+	return nil, nil
+}
+
+func (s clientServerSource) ServerDetail(string, string) (*webui.ServerDetailView, error) {
+	return nil, nil
 }
 
 func TestSecretAuthorizationMatrixPreviewsConfirmsAndDetectsConflict(t *testing.T) {

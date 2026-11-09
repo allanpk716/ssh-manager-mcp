@@ -363,6 +363,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 样不向跨源目标透露引用地址。
 	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("Cache-Control", "no-store")
+	if isSecretValueUpload(r) {
+		r.Body = http.MaxBytesReader(w, r.Body, secretUploadMaxRequestBody)
+	}
 	hostOK := hostAllowed(r.Host, h.cfg.Port)
 	if h.cfg.Role == RoleServer {
 		hostOK = h.authorityHostAllowed(r.Host)
@@ -402,7 +405,22 @@ func (h *handler) writeRequestAllowed(w http.ResponseWriter, r *http.Request) bo
 	}
 	token := r.Header.Get("X-CSRF-Token")
 	if token == "" {
-		_ = r.ParseForm()
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+			if err := r.ParseMultipartForm(secretValueLimit); err != nil {
+				var tooLarge *http.MaxBytesError
+				if errors.As(err, &tooLarge) {
+					h.renderError(w, r, http.StatusRequestEntityTooLarge, "上传内容过大", "机密项值上传的请求体超过限制，已拒绝。")
+					return false
+				}
+			}
+		}
+		if err := r.ParseForm(); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				h.renderError(w, r, http.StatusRequestEntityTooLarge, "上传内容过大", "机密项值上传的请求体超过限制，已拒绝。")
+				return false
+			}
+		}
 		token = r.PostFormValue("csrf_token")
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(sess.csrf)) != 1 {

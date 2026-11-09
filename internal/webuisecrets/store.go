@@ -4,6 +4,7 @@ package webuisecrets
 
 import (
 	"errors"
+	"fmt"
 
 	"ssh-manager-mcp/internal/secretmanage"
 	"ssh-manager-mcp/internal/store"
@@ -33,6 +34,33 @@ func FromOpener(open func() (*secretmanage.Manager, func(), error)) webui.Secret
 // WriterFromOpener 每次写请求重新打开存储。
 func WriterFromOpener(open func() (*secretmanage.Manager, func(), error)) webui.SecretWriter {
 	return writerOpenerStore{open: open}
+}
+
+// SnapshotSource 把客户端本地加密快照里的机密项可见视图适配给 Web UI。
+// loader 由命令行按当前客户端实例提供；这里不读取任何机密项值。
+func SnapshotSource(load func(instance string) (*store.Snapshot, error)) webui.SecretSource {
+	return snapshotSource{load: load}
+}
+
+type snapshotSource struct {
+	load func(instance string) (*store.Snapshot, error)
+}
+
+func (s snapshotSource) ListSecrets(instance, query, server string) ([]webui.SecretRow, error) {
+	snapshot, err := s.load(instance)
+	if err != nil {
+		return nil, err
+	}
+	serverName := server
+	if serverName != "" {
+		resolved := store.ResolveServerInSnapshot(snapshot, serverName)
+		if resolved == nil {
+			return nil, fmt.Errorf("服务器条目 %q 不存在", serverName)
+		}
+		serverName = resolved.Name
+	}
+	views := store.FilterSecretsByServer(store.SecretViewsFromSnapshot(snapshot), serverName)
+	return secretRows(store.FilterSecretsByQuery(views, query)), nil
 }
 
 func (s managerStore) ListSecrets(_, query, server string) ([]webui.SecretRow, error) {

@@ -19,7 +19,19 @@ const (
 	secretsPrefix       = "/ui/secrets/"
 	secretsValueSuffix  = "/value"
 	secretsDeleteSuffix = "/delete"
+
+	// secretValueLimit 是机密项值本身的上限；请求体另留少量多部分表单
+	// 开销，超过即在读入值之前拒绝。
+	secretValueLimit           = 64 * 1024
+	secretUploadMaxRequestBody = secretValueLimit + 512
 )
+
+func isSecretValueUpload(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	return r.URL.Path == secretsNewPath || strings.HasSuffix(r.URL.Path, secretsValueSuffix)
+}
 
 // SecretAuthorizationCell 是页面提交的一个目标授权格：可见范围内的一个机
 // 密项与一台服务器条目的最终状态。
@@ -201,6 +213,8 @@ type secretFormView struct {
 	ReverifyPath    string
 }
 
+var errSecretUploadTooLarge = errors.New("上传文件超过 64 KiB")
+
 func (h *handler) handleSecretNewPost(w http.ResponseWriter, r *http.Request) {
 	value, valueErr := secretValueFromRequest(w, r)
 	form := secretFormView{
@@ -209,7 +223,11 @@ func (h *handler) handleSecretNewPost(w http.ResponseWriter, r *http.Request) {
 	}
 	if valueErr != nil {
 		form.Error = valueErr.Error()
-		h.renderSecretNewForm(w, r, http.StatusBadRequest, form)
+		status := http.StatusBadRequest
+		if valueErr == errSecretUploadTooLarge {
+			status = http.StatusRequestEntityTooLarge
+		}
+		h.renderSecretNewForm(w, r, status, form)
 		return
 	}
 	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
@@ -241,7 +259,11 @@ func secretNewResumePath(form secretFormView) string {
 
 func secretValueFromRequest(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
-		if err := r.ParseMultipartForm(64 * 1024); err != nil {
+		if err := r.ParseMultipartForm(secretValueLimit); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				return nil, errSecretUploadTooLarge
+			}
 			return nil, errors.New("读取表单失败，请重试")
 		}
 		file, header, err := r.FormFile("value_file")
@@ -250,15 +272,15 @@ func secretValueFromRequest(w http.ResponseWriter, r *http.Request) ([]byte, err
 			if r.PostFormValue("value") != "" {
 				return nil, errors.New("隐藏输入框与上传文件不能同时提供")
 			}
-			if header.Size > 64*1024 {
-				return nil, errors.New("上传文件超过 64 KiB")
+			if header.Size > secretValueLimit {
+				return nil, errSecretUploadTooLarge
 			}
-			value, err := io.ReadAll(io.LimitReader(file, 64*1024+1))
+			value, err := io.ReadAll(io.LimitReader(file, secretValueLimit+1))
 			if err != nil {
 				return nil, errors.New("读取上传文件失败，请重试")
 			}
-			if len(value) > 64*1024 {
-				return nil, errors.New("上传文件超过 64 KiB")
+			if len(value) > secretValueLimit {
+				return nil, errSecretUploadTooLarge
 			}
 			return value, nil
 		}
@@ -586,7 +608,11 @@ func (h *handler) handleSecretValue(w http.ResponseWriter, r *http.Request, iden
 	case http.MethodPost:
 		value, valueErr := secretValueFromRequest(w, r)
 		if valueErr != nil {
-			h.renderError(w, r, http.StatusBadRequest, "换值失败", valueErr.Error())
+			status := http.StatusBadRequest
+			if valueErr == errSecretUploadTooLarge {
+				status = http.StatusRequestEntityTooLarge
+			}
+			h.renderError(w, r, status, "换值失败", valueErr.Error())
 			return
 		}
 		if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
