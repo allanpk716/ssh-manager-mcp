@@ -72,7 +72,9 @@ func (s managerStore) ListSecrets(_, query, server string) ([]webui.SecretRow, e
 }
 
 func (s managerStore) AddSecret(name, note, environmentName string, value []byte, source webui.SecretWriteSource) error {
-	return s.manager.AddSecret(name, note, environmentName, value, secretmanage.WebUISource(source.RemoteAddress))
+	return secretFormError(s.manager.AddSecret(
+		name, note, environmentName, value, secretmanage.WebUISource(source.RemoteAddress),
+	))
 }
 
 func (s managerStore) SetSecretValue(identifier string, value []byte, source webui.SecretWriteSource) error {
@@ -80,7 +82,7 @@ func (s managerStore) SetSecretValue(identifier string, value []byte, source web
 	if err != nil {
 		return err
 	}
-	return s.manager.SetSecretValue(view.Name, value, secretmanage.WebUISource(source.RemoteAddress))
+	return secretFormError(s.manager.SetSecretValue(view.Name, value, secretmanage.WebUISource(source.RemoteAddress)))
 }
 
 func (s managerStore) EditSecretMetadata(identifier, note, environmentName string, source webui.SecretWriteSource) error {
@@ -98,7 +100,7 @@ func (s managerStore) EditSecretMetadata(identifier, note, environmentName strin
 	if edit.Note == nil && edit.EnvironmentName == nil {
 		return webui.ErrSecretMetadataNoChange
 	}
-	return s.manager.EditMetadata(view.Name, edit, secretmanage.WebUISource(source.RemoteAddress))
+	return secretFormError(s.manager.EditMetadata(view.Name, edit, secretmanage.WebUISource(source.RemoteAddress)))
 }
 
 func (s managerStore) DeleteSecret(identifier string, source webui.SecretWriteSource) error {
@@ -269,4 +271,13 @@ func serverRefs(servers []secretmanage.ServerRef) []webui.SecretAuthorizationSer
 
 func errSecretNotFound(identifier string) error {
 	return &webui.SecretNotFoundError{Identifier: identifier}
+}
+
+// secretFormError 把存储层的机密项输入校验错误标成可直接展示的页面错误；
+// 其余错误原样返回，由页面改用通用文案，避免透出内部细节。
+func secretFormError(err error) error {
+	if store.IsSecretValidationError(err) {
+		return &webui.SecretFormError{Message: err.Error()}
+	}
+	return err
 }

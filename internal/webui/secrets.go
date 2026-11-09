@@ -80,6 +80,24 @@ type SecretApplyResult struct {
 // 值相同；适配层不写数据也不写审计，页面提示没有变化。
 var ErrSecretMetadataNoChange = errors.New("机密项备注与环境变量名都没有变化")
 
+// SecretFormError 表示机密项表单的提交内容校验失败。Message 是可直接展示
+// 的存储层校验文案；适配层负责把内部错误与本类型区分开。
+type SecretFormError struct {
+	Message string
+}
+
+func (e *SecretFormError) Error() string { return e.Message }
+
+// secretFormMessage 提取可直接展示的机密项校验文案。只有适配层标记过的表
+// 单错误保留原文；其余内部错误返回 false，调用方必须改用通用文案。
+func secretFormMessage(err error) (string, bool) {
+	var formErr *SecretFormError
+	if errors.As(err, &formErr) {
+		return formErr.Message, true
+	}
+	return "", false
+}
+
 // SecretDetailView 是机密项详情页展示数据。
 type SecretDetailView struct {
 	Row     SecretRow
@@ -149,7 +167,7 @@ func (h *handler) handleSecretsRoot(w http.ResponseWriter, r *http.Request) {
 	server := strings.TrimSpace(r.URL.Query().Get("server"))
 	rows, err := h.cfg.Secrets.ListSecrets(h.requestClientInstance(r), query, server)
 	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取机密项列表失败", err.Error())
+		h.renderError(w, r, http.StatusInternalServerError, "读取机密项列表失败", "读取机密项列表失败，请稍后重试。")
 		return
 	}
 	var servers []ServerRow
@@ -243,8 +261,12 @@ func (h *handler) handleSecretNewPost(w http.ResponseWriter, r *http.Request) {
 		form.Name, form.Note, form.EnvironmentName, value,
 		SecretWriteSource{RemoteAddress: remoteIP(r)},
 	); err != nil {
-		form.Error = err.Error()
-		h.renderSecretNewForm(w, r, http.StatusBadRequest, form)
+		if message, ok := secretFormMessage(err); ok {
+			form.Error = message
+			h.renderSecretNewForm(w, r, http.StatusBadRequest, form)
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "新增机密项失败", "新增机密项失败，请稍后重试。")
 		return
 	}
 	http.Redirect(w, r, secretsPath, http.StatusSeeOther)
@@ -375,8 +397,12 @@ func (h *handler) handleSecretAuthorizationPreview(w http.ResponseWriter, r *htt
 }
 
 func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != secretsConfirmPath || r.Method != http.MethodPost {
+	if r.URL.Path != secretsConfirmPath {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
+	}
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "确认授权只接受 POST 请求。")
 		return
 	}
 	target, err := parseSecretTargets(r.PostForm["target"])
@@ -593,15 +619,19 @@ func (h *handler) handleSecretMetadataEdit(w http.ResponseWriter, r *http.Reques
 			}
 		}
 		detail, detailErr := h.secretDetail(identifier)
-		if detailErr == nil {
+		if message, ok := secretFormMessage(err); ok && detailErr == nil {
 			h.renderPage(w, r, http.StatusBadRequest, "secret-detail.tmpl", pageData{
 				Title: "机密项 " + detail.Row.Name, SecretDetail: detail,
-				SecretDetailError: err.Error(), SecretDetailNote: note,
+				SecretDetailError: message, SecretDetailNote: note,
 				SecretDetailEnvironmentName: environmentName,
 			})
 			return
 		}
-		h.renderError(w, r, http.StatusBadRequest, "修改机密项失败", err.Error())
+		if detailErr != nil {
+			h.renderSecretReadError(w, r, detailErr)
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "修改机密项失败", "修改机密项失败，请稍后重试。")
 		return
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
@@ -622,7 +652,7 @@ func (h *handler) handleSecretValue(w http.ResponseWriter, r *http.Request, iden
 	case http.MethodPost:
 		value, valueErr := secretValueFromRequest(r)
 		if valueErr != nil {
-			h.renderSecretValueError(w, r, identifier, valueErr)
+			h.renderSecretValueInputError(w, r, identifier, valueErr)
 			return
 		}
 		if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
@@ -632,7 +662,7 @@ func (h *handler) handleSecretValue(w http.ResponseWriter, r *http.Request, iden
 		if err := h.cfg.SecretsWriter.SetSecretValue(
 			identifier, value, SecretWriteSource{RemoteAddress: remoteIP(r)},
 		); err != nil {
-			h.renderSecretValueError(w, r, identifier, err)
+			h.renderSecretValueWriteError(w, r, identifier, err)
 			return
 		}
 		http.Redirect(w, r, target, http.StatusSeeOther)
@@ -641,19 +671,38 @@ func (h *handler) handleSecretValue(w http.ResponseWriter, r *http.Request, iden
 	}
 }
 
-func (h *handler) renderSecretValueError(w http.ResponseWriter, r *http.Request, identifier string, err error) {
+// renderSecretValueInputError 渲染值录入本身的错误；这些文案由页面层构造，
+// 不包含内部细节，超限使用 413。
+func (h *handler) renderSecretValueInputError(w http.ResponseWriter, r *http.Request, identifier string, err error) {
 	detail, detailErr := h.secretDetail(identifier)
 	if detailErr != nil {
-		h.renderError(w, r, http.StatusBadRequest, "换值失败", err.Error())
+		h.renderSecretReadError(w, r, detailErr)
 		return
 	}
 	status := http.StatusBadRequest
-	if err == errSecretUploadTooLarge {
+	if errors.Is(err, errSecretUploadTooLarge) {
 		status = http.StatusRequestEntityTooLarge
 	}
 	h.renderPage(w, r, status, "secret-value.tmpl", pageData{
 		Title: "换值 " + detail.Row.Name, SecretDetail: detail, SecretDetailError: err.Error(),
 	})
+}
+
+// renderSecretValueWriteError 渲染换值写操作的错误；只有表单校验错误保留
+// 原文，其余内部错误使用通用文案。
+func (h *handler) renderSecretValueWriteError(w http.ResponseWriter, r *http.Request, identifier string, err error) {
+	detail, detailErr := h.secretDetail(identifier)
+	if detailErr != nil {
+		h.renderSecretReadError(w, r, detailErr)
+		return
+	}
+	if message, ok := secretFormMessage(err); ok {
+		h.renderPage(w, r, http.StatusBadRequest, "secret-value.tmpl", pageData{
+			Title: "换值 " + detail.Row.Name, SecretDetail: detail, SecretDetailError: message,
+		})
+		return
+	}
+	h.renderError(w, r, http.StatusInternalServerError, "换值失败", "换值失败，请稍后重试。")
 }
 
 func (h *handler) handleSecretDelete(w http.ResponseWriter, r *http.Request, identifier string) {
@@ -676,7 +725,16 @@ func (h *handler) handleSecretDelete(w http.ResponseWriter, r *http.Request, ide
 		if err := h.cfg.SecretsWriter.DeleteSecret(
 			identifier, SecretWriteSource{RemoteAddress: remoteIP(r)},
 		); err != nil {
-			h.renderError(w, r, http.StatusBadRequest, "删除机密项失败", err.Error())
+			var missing *SecretNotFoundError
+			if errors.As(err, &missing) {
+				h.renderSecretReadError(w, r, err)
+				return
+			}
+			if message, ok := secretFormMessage(err); ok {
+				h.renderError(w, r, http.StatusBadRequest, "删除机密项失败", message)
+				return
+			}
+			h.renderError(w, r, http.StatusInternalServerError, "删除机密项失败", "删除机密项失败，请稍后重试。")
 			return
 		}
 		http.Redirect(w, r, secretsPath, http.StatusSeeOther)

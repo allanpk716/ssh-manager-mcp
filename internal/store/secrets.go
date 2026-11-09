@@ -28,7 +28,29 @@ var (
 	ErrSecretEnvironmentNameInvalid  = errors.New("机密项环境变量名不合法：格式要求为字母或下划线开头，后续为字母、数字或下划线")
 	ErrSecretEnvironmentNameExists   = errors.New("机密项环境变量名已被其他机密项使用（大小写不同视为同一个）")
 	ErrSecretEnvironmentNameReserved = errors.New("机密项环境变量名在固定拒绝清单中")
+	ErrSecretValueEmpty              = errors.New("机密项值不能为空")
+	ErrSecretValueTooShort           = fmt.Errorf("机密项值太短：至少需要 %d 个字节；短值无法可靠参与后续的输出遮蔽", secretValueMinBytes)
+	ErrSecretValueTooLarge           = fmt.Errorf("机密项值太大：最多 %d 个字节", secretValueMaxBytes)
 )
+
+// IsSecretValidationError 判断错误是否属于机密项输入校验失败。这类错误
+// 的文本只描述规则本身，可以原样展示给操作者；其余错误可能带内部细节，
+// 调用方必须改用通用文案。
+func IsSecretValidationError(err error) bool {
+	switch {
+	case errors.Is(err, ErrSecretNameInvalid),
+		errors.Is(err, ErrSecretNameExists),
+		errors.Is(err, ErrSecretEnvironmentNameInvalid),
+		errors.Is(err, ErrSecretEnvironmentNameExists),
+		errors.Is(err, ErrSecretEnvironmentNameReserved),
+		errors.Is(err, ErrSecretValueEmpty),
+		errors.Is(err, ErrSecretValueTooShort),
+		errors.Is(err, ErrSecretValueTooLarge):
+		return true
+	default:
+		return false
+	}
+}
 
 // SecretView 是机密项的对外可见形态：只有名字、备注、环境变量名、可写入
 // 服务器条目名与两个时间。当前值、上一个值、值的哈希、长度与版本号都不
@@ -241,11 +263,11 @@ func ValidateSecretEnvironmentName(name string) error {
 func validateSecretValue(value []byte) error {
 	switch n := len(value); {
 	case n == 0:
-		return errors.New("机密项值不能为空")
+		return ErrSecretValueEmpty
 	case n < secretValueMinBytes:
-		return fmt.Errorf("机密项值太短：至少需要 %d 个字节；短值无法可靠参与后续的输出遮蔽", secretValueMinBytes)
+		return ErrSecretValueTooShort
 	case n > secretValueMaxBytes:
-		return fmt.Errorf("机密项值太大：最多 %d 个字节", secretValueMaxBytes)
+		return ErrSecretValueTooLarge
 	default:
 		return nil
 	}
