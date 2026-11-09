@@ -140,6 +140,10 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 		collection.Incomplete = true
 		collection.Notes = append(collection.Notes, "固定命令执行超时")
 	}
+	if execErr != nil {
+		collection.Incomplete = true
+		collection.Notes = append(collection.Notes, fmt.Sprintf("固定命令执行中断：%v", execErr))
+	}
 	if execResult.Truncated {
 		collection.Incomplete = true
 		collection.Notes = append(collection.Notes, "输出超过单次采集上限")

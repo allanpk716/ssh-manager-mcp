@@ -191,7 +191,7 @@ func TestCollectTruncatedOutputKeepsParsedParts(t *testing.T) {
 	}
 
 	service.RemoteExec = func(_ context.Context, _ *models.Server, _ models.ShellType, _ string, _ bool) (RemoteExecResult, error) {
-		return RemoteExecResult{Stdout: fixtureOutput(t, "ubuntu2404-full.txt"), Truncated: true}, nil
+		return RemoteExecResult{Stdout: fixtureOutput(t, "ubuntu2404-full.txt"), Truncated: true}, errors.New("会话中断")
 	}
 	report, err = service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"})
 	if err != nil {
@@ -199,6 +199,9 @@ func TestCollectTruncatedOutputKeepsParsedParts(t *testing.T) {
 	}
 	if !report.Incomplete {
 		t.Fatal("输出超限应标为不完整")
+	}
+	if !strings.Contains(strings.Join(report.Notes, "；"), "会话中断") {
+		t.Fatalf("执行中断应写进不完整原因：%v", report.Notes)
 	}
 }
 
