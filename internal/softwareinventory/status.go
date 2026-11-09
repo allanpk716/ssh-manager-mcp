@@ -30,13 +30,13 @@ type CollectionStatusView struct {
 	PendingImmediate  bool       `json:"pending_immediate"`
 }
 
-// collectorLabel 把采集执行者代号翻译成显示名。客户端实例执行者登记在
-// 后续票里实现，当前只识别权威端。
+// collectorLabel 把采集执行者代号翻译成显示名。客户端实例执行者使用活动
+// 设备码的名字登记。
 func collectorLabel(collector string) string {
 	if collector == "authority" || collector == "" {
 		return "权威端"
 	}
-	return collector
+	return "客户端实例 " + collector
 }
 
 // collectionStatusView 把存储层采集状态转换成显示形态并计算清单过期。

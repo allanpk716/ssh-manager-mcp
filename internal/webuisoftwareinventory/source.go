@@ -150,7 +150,8 @@ func (s openerSource) RequestSoftwareInventoryCollection(
 }
 
 // collectorIsClient 是「这台设备是否由客户端实例采集」的唯一判断点。客
-// 户端采集执行者的登记字段由后续票补齐时，只需要修改这里。
+// 户端实例执行者使用活动设备码的名字登记；合并采集执行者功能后仍只需
+// 要修改这里。
 func collectorIsClient(collector string) bool {
 	return collector != "" && collector != softwareinventory.CollectorAuthority
 }
