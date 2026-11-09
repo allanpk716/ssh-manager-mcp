@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sshbroker"
@@ -12,10 +13,11 @@ import (
 
 const (
 	injectionReasonUnknownShell = "服务器 shell 类型未知"
-	injectionReasonNotPOSIX     = "服务器 shell 类型不是 POSIX"
 	injectionReasonPrivileged   = "提权层暂不支持环境变量注入"
 	injectionReasonZeroByte     = "值含空字节"
 	injectionReasonReadFailed   = "读取机密值失败"
+	injectionReasonInvalidUTF8  = "Windows 上值不是合法 UTF-8"
+	injectionReasonCmdNewline   = "cmd 下值含换行"
 )
 
 type environmentInjectionWarning struct {
@@ -87,11 +89,17 @@ func buildEnvironmentInjectionPlan(st *store.Store, server *models.Server, privi
 		case unknownShellType(server.ShellType):
 			plan.warn(value.EnvironmentName, injectionReasonUnknownShell)
 			continue
-		case models.NormalizeShellType(string(server.ShellType)) != models.ShellPOSIX:
-			plan.warn(value.EnvironmentName, injectionReasonNotPOSIX)
-			continue
 		case bytes.IndexByte(value.Value, 0) >= 0:
 			plan.warn(value.EnvironmentName, injectionReasonZeroByte)
+			continue
+		}
+		normalizedShell := models.NormalizeShellType(string(server.ShellType))
+		if normalizedShell == models.ShellWindowsCmd && windowsCmdValueHasLineBreak(value.Value) {
+			plan.warn(value.EnvironmentName, injectionReasonCmdNewline)
+			continue
+		}
+		if normalizedShell != models.ShellPOSIX && !utf8.Valid(value.Value) {
+			plan.warn(value.EnvironmentName, injectionReasonInvalidUTF8)
 			continue
 		}
 		plan.items = append(plan.items, sshbroker.EnvironmentInjection{
@@ -106,6 +114,10 @@ func buildEnvironmentInjectionPlan(st *store.Store, server *models.Server, privi
 		return plan.warnings[i].EnvironmentName < plan.warnings[j].EnvironmentName
 	})
 	return plan
+}
+
+func windowsCmdValueHasLineBreak(value []byte) bool {
+	return bytes.IndexByte(value, '\r') >= 0 || bytes.IndexByte(value, '\n') >= 0
 }
 
 func (p *environmentInjectionPlan) warn(name, reason string) {
