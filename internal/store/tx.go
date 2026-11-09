@@ -43,7 +43,7 @@ func insertServerTx(db dbtx, srv *models.Server) (string, error) {
 	if err != nil {
 		// Localize the name-collision error — the raw driver text
 		// ("constraint failed: UNIQUE constraint failed: servers.name (2067)")
-		// leaks SQLite jargon into TUI/CLI surfaces.
+		// leaks SQLite jargon into management surfaces.
 		if strings.Contains(err.Error(), "UNIQUE constraint failed: servers.name") {
 			return "", fmt.Errorf("server name %q already exists", srv.Name)
 		}

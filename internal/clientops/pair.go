@@ -156,8 +156,8 @@ func buildPairTranscript(id []byte, name, targetURL string, clientPub, cnonce, s
 }
 
 // RunPair runs the whole pairing flow as the CLI DRIVER over PairSession
-// (Plan 45 T1):步骤已提升为导出状态机(pairsession.go,CLI 与 TUI 共用单一
-// 管线),本函数只保留 CLI 独占面 —— 冻结次序 ④⑤(enroll → 轮询 → SAS y/N
+// (Plan 45 T1):步骤已提升为导出状态机(pairsession.go),本函数只保留
+// CLI 独占面 —— 冻结次序 ④⑤(enroll → 轮询 → SAS y/N
 // 确认 → finish)与全部 frozen wordings 逐字不变;AssumeSAS 的 env 判定与终端
 // y/N 永驻本层,discovery/多 broker 选择在 internal/cli/pair.go。轮询瞬态提示
 // 经 WaitApproval 的 note 回调回流到既有 stderr 输出点(410/超时改为

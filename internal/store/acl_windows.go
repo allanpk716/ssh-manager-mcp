@@ -302,11 +302,11 @@ func aclWhitelist() ([]*windows.SID, error) {
 // CALLER's identity into the "current user" slot. On the multi-machine broker
 // the store is opened by BOTH identities: serve as LocalSystem (whose service
 // auto-start wins the post-reboot sidecar-creation race) and the interactive
-// user in CLI/TUI. A sidecar created by serve therefore carries no
+// user in the CLI. A sidecar created by serve therefore carries no
 // interactive-user grant; a non-elevated interactive process (UAC-filtered
 // token — Administrators is deny-only) then has zero access to the -shm index
 // SQLite requires EVERY connection to write, and store.Open fails with a
-// "readonly database"-class error that surfaced to TUI as
+// "readonly database"-class error that surfaced in the terminal era as
 // "本机 vault 存在但锁定或不可读" (NUC10 incident 2026-10-02..06). The same
 // hole opens in reverse (user-created sidecars, no grant for the service).
 //

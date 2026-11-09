@@ -330,7 +330,7 @@ func (r *ServeRunner) handlePairEnroll(w http.ResponseWriter, req *http.Request)
 
 	// SAS 落行(2026-09-01,撤销 spec rev4:69 的降级勘误):此刻 priv(刚生成)
 	// 与 clientPub(请求体)都在手,当场派生两侧一致的 6 位比对码随行落库,
-	// 批准面(TUI/CLI/批2 Web)经 pairing_pending 读真值做三件套双屏比对。
+	// 批准面(Web UI/CLI)经 pairing_pending 读真值做三件套双屏比对。
 	// 落库的只有 SAS 本身——priv/kAck/kCreds 仍只活在 serve 进程内存。
 	// 低阶/垃圾公钥在 ECDH 处即拒(400),不再拖到 finish 才暴露。
 	clientPK, err := ecdh.X25519().NewPublicKey(clientPub)

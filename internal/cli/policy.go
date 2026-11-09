@@ -18,7 +18,7 @@ import (
 
 // `sshmgr policy` 命令组(owner 管理命令策略的入口,ticket #15):列出、
 // 增加自定义规则、删除自定义规则、按编号停用/恢复默认规则、试算。
-// 管理操作经可复用层 internal/policymanage 落库并写审计(后续 TUI 页
+// 管理操作经可复用层 internal/policymanage 落库并写审计(Web UI 页接入时
 // 调同一层,ADR 0003);本层只做本机角色判定与命令行接线,不做规则判定。
 //
 // 本机角色(权威端 / 客户端):

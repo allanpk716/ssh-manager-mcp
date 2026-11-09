@@ -16,8 +16,9 @@ import (
 )
 
 // The pull/pin/cred/lazy/reload implementation moved to internal/clientops
-// (zero-behavior extraction, Stream B Task 1) so the upcoming TUI can reuse it
-// without importing internal/cli. This file keeps only the cobra wrappers.
+// (zero-behavior extraction, Stream B Task 1) so management surfaces can
+// reuse it without importing internal/cli. This file keeps only the cobra
+// wrappers.
 
 // cachePresentFor reports whether the given instance's cache.bin currently
 // exists (used by mcp --cache spawn logging to say "serving stale cache" only

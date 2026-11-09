@@ -12,8 +12,8 @@ const (
 )
 
 // ExistingServer is one server already in the vault, reduced to the fields
-// import conflicts are judged on. The CLI import (T8) and the TUI import flow
-// (T10) both feed this from store.ListServers.
+// import conflicts are judged on. The CLI import feeds this from
+// store.ListServers.
 type ExistingServer struct {
 	Name string
 	Host string

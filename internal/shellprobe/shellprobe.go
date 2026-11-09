@@ -1,8 +1,8 @@
 // Package shellprobe 探测服务器实际的 shell 类型(命令策略的诊断面,
 // ticket #17):向服务器发两条固定的无害探测命令,按输出判定
 // POSIX / PowerShell / cmd。判定是纯函数(Detect)——不做任何网络或
-// 磁盘读写;连接与执行的接线在 ProbeServer,owner 的 CLI 诊断命令与
-// TUI 服务器页共用它(ADR 0003 的对等要求)。
+// 磁盘读写;连接与执行的接线在 ProbeServer,owner 的 CLI 诊断命令直接
+// 用它(ADR 0003 的对等要求)。
 package shellprobe
 
 import (
@@ -85,8 +85,8 @@ const (
 // owner ssh 命令同一条路径(首次连接按既有 TOFU 策略记录主机密钥,与
 // 一切 owner 执行路径一致),在一条连接上依次跑两条探测命令,交给纯函
 // 数 Detect 判定。除此之外只读——不改服务器条目上的任何字段。detect
-// 为空串表示无法判定(见 Detect)。owner 的 CLI 诊断命令与 TUI 服务器
-// 页都调它,不各自接绕(ADR 0003)。
+// 为空串表示无法判定(见 Detect)。owner 的 CLI 诊断命令直接调它
+// (ADR 0003)。
 func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (models.ShellType, string, []string, error) {
 	auth, err := vault.AuthForServer(st, srv)
 	if err != nil {

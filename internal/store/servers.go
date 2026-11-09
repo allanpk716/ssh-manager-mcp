@@ -117,7 +117,7 @@ func (s *Store) ListServers() ([]*models.Server, error) {
 
 // DeleteServer removes ONLY the server row — any credentials it pointed at are
 // left in place (potential orphans; `gc` cleans those). Production callers
-// (CLI `servers rm`, TUI delete) now use DeleteServerCascading (tx.go), which
+// (CLI `servers rm`, Web UI delete) now use DeleteServerCascading (tx.go), which
 // also drops exclusively-owned credentials; this tx-less form remains for
 // tests/compat.
 func (s *Store) DeleteServer(id string) error {
