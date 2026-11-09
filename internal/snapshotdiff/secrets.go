@@ -7,8 +7,9 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// SecretSet 按名字比较当前快照里的机密项。新增、删除、换值与可写入服务
-// 器列表变化分别成句;提示只使用机密项名字和服务器名,不读取机密项值。
+// SecretSet 按名字比较当前快照里的机密项。新增、删除、换值、环境变量名
+// 变化与可写入服务器列表变化分别成句;提示只使用机密项名字、环境变量名
+// 和服务器名,不读取机密项值。
 type SecretSet struct{}
 
 // Describe 返回机密项差异的描述分句。profile 授权服务器与机密项可写入
@@ -18,8 +19,9 @@ func (SecretSet) Describe(old, fresh *store.Snapshot) []string {
 	oldIndex := newSecretIndex(old)
 	freshIndex := newSecretIndex(fresh)
 
-	var added, removed, changedValue, changedServers []string
+	var added, removed, changedValue, changedEnvironment, changedServers []string
 	changedServerDetails := make(map[string]string)
+	changedEnvironments := make(map[string]secretEnvironmentChange)
 	for name, freshSecret := range freshIndex.byName {
 		oldSecret, exists := oldIndex.byName[name]
 		if !exists {
@@ -28,6 +30,13 @@ func (SecretSet) Describe(old, fresh *store.Snapshot) []string {
 		}
 		if freshSecret.id != oldSecret.id || freshSecret.version != oldSecret.version {
 			changedValue = append(changedValue, name)
+		}
+		if oldSecret.environmentName != freshSecret.environmentName {
+			changedEnvironment = append(changedEnvironment, name)
+			changedEnvironments[name] = secretEnvironmentChange{
+				previousName: oldSecret.environmentName,
+				currentName:  freshSecret.environmentName,
+			}
 		}
 		addedServers, removedServers, difference := stringSetDiff(
 			oldIndex.serversByID[oldSecret.id], freshIndex.serversByID[freshSecret.id],
@@ -46,6 +55,7 @@ func (SecretSet) Describe(old, fresh *store.Snapshot) []string {
 	sort.Strings(added)
 	sort.Strings(removed)
 	sort.Strings(changedValue)
+	sort.Strings(changedEnvironment)
 	sort.Strings(changedServers)
 	var parts []string
 	if len(added) > 0 {
@@ -57,6 +67,16 @@ func (SecretSet) Describe(old, fresh *store.Snapshot) []string {
 	for _, name := range changedValue {
 		parts = append(parts, "机密项 "+name+" 的值已更改，用到它的文件需要重新部署")
 	}
+	for _, name := range changedEnvironment {
+		change := changedEnvironments[name]
+		if change.previousName == "" {
+			parts = append(parts, "机密项 "+name+" 的环境变量名设为 "+change.currentName)
+		} else if change.currentName == "" {
+			parts = append(parts, "机密项 "+name+" 不再注入环境变量 "+change.previousName)
+		} else {
+			parts = append(parts, "机密项 "+name+" 的环境变量名由 "+change.previousName+" 改为 "+change.currentName)
+		}
+	}
 	for _, name := range changedServers {
 		parts = append(parts, "机密项 "+name+" 的可写入服务器列表已变化："+changedServerDetails[name])
 	}
@@ -66,8 +86,14 @@ func (SecretSet) Describe(old, fresh *store.Snapshot) []string {
 // secretSummary 只保留比较需要的机密项信息,刻意不携带值,防止比较环节
 // 意外把值带进提示。
 type secretSummary struct {
-	id      string
-	version int64
+	id              string
+	version         int64
+	environmentName string
+}
+
+type secretEnvironmentChange struct {
+	previousName string // 变更前的环境变量名，空字符串表示原本没有设置。
+	currentName  string // 变更后的环境变量名，空字符串表示不再注入。
 }
 
 // secretIndex 是一份快照里的机密项索引,并预先解析每个机密项的可写入服
@@ -86,7 +112,11 @@ func newSecretIndex(snap *store.Snapshot) secretIndex {
 		serversByID: make(map[string][]string, len(snap.SecretAllows)),
 	}
 	for _, secret := range snap.Secrets {
-		out.byName[secret.Name] = secretSummary{id: secret.ID, version: secret.ValueVersion}
+		out.byName[secret.Name] = secretSummary{
+			id:              secret.ID,
+			version:         secret.ValueVersion,
+			environmentName: secret.EnvironmentName,
+		}
 	}
 	serverNames := make(map[string]string, len(snap.Servers))
 	for _, server := range snap.Servers {

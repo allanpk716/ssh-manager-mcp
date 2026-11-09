@@ -119,6 +119,59 @@ func TestDefaultHintUnrelatedSecretChangeProducesNoHint(t *testing.T) {
 	}
 }
 
+func TestDefaultHintSecretEnvironmentNameChanges(t *testing.T) {
+	const secretValue = "snapshot-diff-environment-secret-value"
+	snapshot := func(revision int64, environmentName string) *store.Snapshot {
+		return &store.Snapshot{
+			SnapshotRevision: revision,
+			Servers:          []store.SnapshotServer{{ID: "server-1", Name: "gpu"}},
+			Secrets: []store.SnapshotSecret{{
+				ID: "secret-1", Name: "DB_PASSWORD", Value: []byte(secretValue),
+				ValueVersion: 1, EnvironmentName: environmentName,
+			}},
+			SecretAllows: []store.SnapshotSecretAllow{{SecretID: "secret-1", ServerID: "server-1"}},
+		}
+	}
+
+	tests := []struct {
+		name         string
+		previousName string
+		currentName  string
+		wantSentence string
+	}{
+		{
+			name:         "设置环境变量名",
+			previousName: "",
+			currentName:  "HF_TOKEN",
+			wantSentence: "机密项 DB_PASSWORD 的环境变量名设为 HF_TOKEN",
+		},
+		{
+			name:         "修改环境变量名",
+			previousName: "MODEL_TOKEN",
+			currentName:  "HF_TOKEN",
+			wantSentence: "机密项 DB_PASSWORD 的环境变量名由 MODEL_TOKEN 改为 HF_TOKEN",
+		},
+		{
+			name:         "清除环境变量名",
+			previousName: "HF_TOKEN",
+			currentName:  "",
+			wantSentence: "机密项 DB_PASSWORD 不再注入环境变量 HF_TOKEN",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := Default().Hint(snapshot(10, test.previousName), snapshot(11, test.currentName))
+			want := "权威端配置已更新（修订号 10 → 11）：" + test.wantSentence
+			if got != want {
+				t.Fatalf("变更提示 = %q，应为 %q", got, want)
+			}
+			if strings.Contains(got, secretValue) {
+				t.Fatalf("变更提示绝不应包含机密项值：%q", got)
+			}
+		})
+	}
+}
+
 func TestDefaultHintSecretRecreatedWithSameNameAndVersionReportsValueChange(t *testing.T) {
 	const (
 		oldValue = "snapshot-diff-recreated-old-value"
