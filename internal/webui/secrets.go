@@ -1,7 +1,10 @@
 package webui
 
 import (
+	"errors"
+	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -144,7 +147,102 @@ func secretServersFromRows(rows []SecretRow) []ServerRow {
 }
 
 func (h *handler) handleSecretNew(w http.ResponseWriter, r *http.Request) {
-	h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	if r.URL.Path != secretsNewPath {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		view := secretFormView{
+			Name: r.URL.Query().Get("name"), Note: r.URL.Query().Get("note"),
+			EnvironmentName: r.URL.Query().Get("environment_name"),
+		}
+		if r.URL.Query().Get("resume") == "1" && h.cfg.Role == RoleServer {
+			view.NeedsReverify = !h.recentlyVerified(h.currentSession(r))
+			view.ReverifyPath = reverifyPath(secretNewResumePath(view))
+		}
+		h.renderPage(w, r, http.StatusOK, "secret-new.tmpl", pageData{
+			Title: "新增机密项", SecretForm: view,
+		})
+	case http.MethodPost:
+		h.handleSecretNewPost(w, r)
+	default:
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "新增机密项页只接受 GET 与 POST 请求。")
+	}
+}
+
+type secretFormView struct {
+	Name            string
+	Note            string
+	EnvironmentName string
+	Error           string
+	NeedsReverify   bool
+	ReverifyPath    string
+}
+
+func (h *handler) handleSecretNewPost(w http.ResponseWriter, r *http.Request) {
+	value, valueErr := secretValueFromRequest(w, r)
+	form := secretFormView{
+		Name: strings.TrimSpace(r.PostFormValue("name")), Note: r.PostFormValue("note"),
+		EnvironmentName: strings.TrimSpace(r.PostFormValue("environment_name")),
+	}
+	if valueErr != nil {
+		form.Error = valueErr.Error()
+		h.renderSecretNewForm(w, r, http.StatusBadRequest, form)
+		return
+	}
+	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+		http.Redirect(w, r, reverifyPath(secretNewResumePath(form)), http.StatusSeeOther)
+		return
+	}
+	if err := h.cfg.SecretsWriter.AddSecret(
+		form.Name, form.Note, form.EnvironmentName, value,
+		SecretWriteSource{RemoteAddress: remoteIP(r)},
+	); err != nil {
+		form.Error = err.Error()
+		h.renderSecretNewForm(w, r, http.StatusBadRequest, form)
+		return
+	}
+	http.Redirect(w, r, secretsPath, http.StatusSeeOther)
+}
+
+func (h *handler) renderSecretNewForm(w http.ResponseWriter, r *http.Request, status int, form secretFormView) {
+	h.renderPage(w, r, status, "secret-new.tmpl", pageData{Title: "新增机密项", SecretForm: form})
+}
+
+func secretNewResumePath(form secretFormView) string {
+	values := url.Values{
+		"name": {form.Name}, "note": {form.Note},
+		"environment_name": {form.EnvironmentName}, "resume": {"1"},
+	}
+	return secretsNewPath + "?" + values.Encode()
+}
+
+func secretValueFromRequest(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if err := r.ParseMultipartForm(64 * 1024); err != nil {
+			return nil, errors.New("读取表单失败，请重试")
+		}
+		file, header, err := r.FormFile("value_file")
+		if err == nil {
+			defer file.Close()
+			if r.PostFormValue("value") != "" {
+				return nil, errors.New("隐藏输入框与上传文件不能同时提供")
+			}
+			if header.Size > 64*1024 {
+				return nil, errors.New("上传文件超过 64 KiB")
+			}
+			value, err := io.ReadAll(io.LimitReader(file, 64*1024+1))
+			if err != nil {
+				return nil, errors.New("读取上传文件失败，请重试")
+			}
+			if len(value) > 64*1024 {
+				return nil, errors.New("上传文件超过 64 KiB")
+			}
+			return value, nil
+		}
+	}
+	return []byte(r.PostFormValue("value")), nil
 }
 
 func (h *handler) handleSecretMatrix(w http.ResponseWriter, r *http.Request) {

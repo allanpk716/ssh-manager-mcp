@@ -111,11 +111,11 @@ func mustServer(t *testing.T, st *store.Store, name string) string {
 func csrfToken(t *testing.T, h sessionHandler) string {
 	t.Helper()
 	page := body(t, h.do(http.MethodGet, "/ui/secrets/", nil))
-	start := strings.Index(page, `name="csrf_token" content="`)
+	start := strings.Index(page, `name="csrf-token" content="`)
 	if start < 0 {
 		t.Fatalf("页面缺少防跨站请求伪造令牌：\n%s", page)
 	}
-	start += len(`name="csrf_token" content="`)
+	start += len(`name="csrf-token" content="`)
 	end := strings.Index(page[start:], `"`)
 	if end < 0 {
 		t.Fatalf("页面令牌格式不正确：\n%s", page)
@@ -157,5 +157,74 @@ func TestSecretsPageListsFiltersAndNeverShowsValue(t *testing.T) {
 	}
 	if !strings.Contains(pageBody, `<a href="/ui/secrets/`) {
 		t.Fatalf("列表应提供机密项详情链接：\n%s", pageBody)
+	}
+}
+
+func TestSecretAddWritesValueWithoutEchoAndAuditsWebUISource(t *testing.T) {
+	st := newIntegrationStore(t)
+	mustServer(t, st, "web-1")
+	h := newIntegrationHandler(t, st)
+	csrf := csrfToken(t, h)
+
+	form := h.do(http.MethodPost, "/ui/secrets/new", url.Values{
+		"csrf_token": {csrf}, "name": {"API_TOKEN"},
+		"note": {"网站部署"}, "environment_name": {"API_TOKEN_FILE"},
+		"value": {"web-secret-value"},
+	})
+	formBody := body(t, form)
+	if form.StatusCode != http.StatusSeeOther || form.Header.Get("Location") != "/ui/secrets/" {
+		t.Fatalf("新增应跳回列表，状态码=%d 跳转=%q 页面：\n%s", form.StatusCode, form.Header.Get("Location"), formBody)
+	}
+	list := h.do(http.MethodGet, "/ui/secrets/", nil)
+	listBody := body(t, list)
+	if strings.Contains(listBody, "web-secret-value") {
+		t.Fatalf("新增后页面不得包含值：\n%s", listBody)
+	}
+
+	snapshot, err := st.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Secrets) != 1 || snapshot.Secrets[0].Value == nil || string(snapshot.Secrets[0].Value) != "web-secret-value" {
+		t.Fatalf("vault 最终状态不正确：%+v", snapshot.Secrets)
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{OwnerOnly: true, Actions: []string{"secret-add"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Source != store.AuditSourceWebUI || rows[0].SourceIP != "192.0.2.1" {
+		t.Fatalf("新增审计来源不正确：%+v", rows)
+	}
+	if strings.Contains(rows[0].Command, "web-secret-value") {
+		t.Fatalf("审计摘要包含值：%s", rows[0].Command)
+	}
+
+	invalid := h.do(http.MethodPost, "/ui/secrets/new", url.Values{
+		"csrf_token": {csrf}, "name": {"SHORT_TOKEN"},
+		"note": {"保留备注"}, "environment_name": {"SHORT_TOKEN_FILE"},
+		"value": {"short"},
+	})
+	invalidBody := body(t, invalid)
+	if invalid.StatusCode != http.StatusBadRequest {
+		t.Fatalf("校验失败状态码 = %d，页面：\n%s", invalid.StatusCode, invalidBody)
+	}
+	for _, want := range []string{"至少", `value="SHORT_TOKEN"`, `value="保留备注"`, `value="SHORT_TOKEN_FILE"`} {
+		if !strings.Contains(invalidBody, want) {
+			t.Fatalf("校验失败页面缺少 %q：\n%s", want, invalidBody)
+		}
+	}
+	if strings.Contains(invalidBody, "short") {
+		t.Fatalf("校验失败页面不得回显值：\n%s", invalidBody)
+	}
+	if !strings.Contains(invalidBody, `<input type="password"`) ||
+		!strings.Contains(invalidBody, `autocomplete="new-password"`) {
+		t.Fatalf("值输入应是关闭自动填充的隐藏输入框：\n%s", invalidBody)
+	}
+
+	denied := h.do(http.MethodPost, "/ui/secrets/new", url.Values{
+		"name": {"NO_TOKEN"}, "value": {"another-secret-value"},
+	})
+	if denied.StatusCode != http.StatusForbidden {
+		t.Fatalf("缺少防跨站请求伪造令牌应返回 403，实际 %d", denied.StatusCode)
 	}
 }

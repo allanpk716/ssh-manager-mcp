@@ -49,6 +49,7 @@ type pageData struct {
 	SecretFilterQuery           string
 	SecretFilterServer          string
 	SecretServerOptions         []ServerRow
+	SecretForm                  secretFormView
 	ImportedCount               int
 	SkippedCount                int
 	FailedCount                 int
