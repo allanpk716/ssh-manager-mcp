@@ -1,6 +1,7 @@
 package softwareinventory
 
 import (
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -29,22 +30,22 @@ func TestParseDarwinFullFixture(t *testing.T) {
 	if kernel.Version != "27.0.0" {
 		t.Fatalf("Darwin 内核条目 = %+v", kernel)
 	}
-	if apps := countObserved(collection.Items, models.SoftwareCategoryServiceProgram); apps != 13 {
+	if apps := countObservedCollectionApplications(collection.Items); apps != 13 {
 		t.Fatalf("应用数量 = %d", apps)
 	}
-	orca := findObservedItem(t, collection.Items, models.SoftwareCategoryServiceProgram, "Orca")
+	orca := findObservedItem(t, collection.Items, models.SoftwareCategorySystemPackage, "Orca")
 	if orca.Version != "1.4.253" || orca.PackageURL != "" {
 		t.Fatalf("Orca 应用条目 = %+v", orca)
 	}
-	rustDesk := findObservedItem(t, collection.Items, models.SoftwareCategoryServiceProgram, "RustDesk")
+	rustDesk := findObservedItem(t, collection.Items, models.SoftwareCategorySystemPackage, "RustDesk")
 	if rustDesk.Version != "1.5.0" ||
 		findObservedPort(rustDesk, "*", 21119, "udp") == nil ||
 		findObservedPort(rustDesk, "*", 65158, "udp") == nil {
 		t.Fatalf("RustDesk 应用监听端口 = %+v", rustDesk.ListeningPorts)
 	}
 
-	if packages := countObserved(collection.Items, models.SoftwareCategorySystemPackage); packages != 74 {
-		t.Fatalf("Homebrew 条目数量 = %d", packages)
+	if packages := countObserved(collection.Items, models.SoftwareCategorySystemPackage); packages != 87 {
+		t.Fatalf("应用与 Homebrew 条目数量 = %d", packages)
 	}
 	goPackage := findObservedItem(t, collection.Items, models.SoftwareCategorySystemPackage, "go")
 	if goPackage.Version != "1.27.3" || goPackage.PackageURL != "pkg:brew/go@1.27.3" {
@@ -82,11 +83,11 @@ func TestParseDarwinNoProcessNamesFixture(t *testing.T) {
 	if collection.Incomplete {
 		t.Fatalf("权限不足但命令成功的输出不应标为不完整：%v", collection.Notes)
 	}
-	if apps := countObserved(collection.Items, models.SoftwareCategoryServiceProgram); apps != 13 {
+	if apps := countObservedCollectionApplications(collection.Items); apps != 13 {
 		t.Fatalf("应用数量 = %d", apps)
 	}
-	if packages := countObserved(collection.Items, models.SoftwareCategorySystemPackage); packages != 74 {
-		t.Fatalf("Homebrew 条目数量 = %d", packages)
+	if packages := countObserved(collection.Items, models.SoftwareCategorySystemPackage); packages != 87 {
+		t.Fatalf("应用与 Homebrew 条目数量 = %d", packages)
 	}
 	for _, hidden := range []struct {
 		name string
@@ -125,10 +126,21 @@ func TestParseDarwinTruncatedFixture(t *testing.T) {
 	if findObservedPort(netbird, "*", 51820, "udp") == nil {
 		t.Fatalf("截断前的监听端口应保留：%+v", netbird)
 	}
-	if apps := countObserved(collection.Items, models.SoftwareCategoryServiceProgram); apps != 10 {
+	if apps := countObservedCollectionApplications(collection.Items); apps != 10 {
 		t.Fatalf("apps 节截断前已读到的 10 条应用应保留，得到 %d 条", apps)
 	}
-	if packages := countObserved(collection.Items, models.SoftwareCategorySystemPackage); packages != 0 {
+	if packages := countObserved(collection.Items, models.SoftwareCategorySystemPackage); packages != 10 {
 		t.Fatalf("未出现的 brew 节不应生成条目，得到 %d 条", packages)
 	}
+}
+
+func countObservedCollectionApplications(items []models.SoftwareObservedItem) int {
+	total := 0
+	for _, item := range items {
+		if item.Category == models.SoftwareCategorySystemPackage &&
+			item.BelongsTo != "" && !strings.HasPrefix(item.BelongsTo, "Homebrew ") {
+			total++
+		}
+	}
+	return total
 }

@@ -21,7 +21,7 @@ func buildDarwinApplicationItems(section parsedSection) []models.SoftwareObserve
 			continue
 		}
 		items = append(items, models.SoftwareObservedItem{
-			Category:       models.SoftwareCategoryServiceProgram,
+			Category:       models.SoftwareCategorySystemPackage,
 			Name:           strings.TrimSuffix(filepath.Base(fields[0]), ".app"),
 			Version:        fields[1],
 			BelongsTo:      fields[2],
@@ -221,7 +221,7 @@ func darwinItemForProcess(
 	executableBase := strings.ToLower(filepath.Base(executable))
 	for i := range items {
 		item := &items[i]
-		if item.Category == models.SoftwareCategoryServiceProgram && strings.HasPrefix(executable, "/Applications/") {
+		if item.Category == models.SoftwareCategorySystemPackage && strings.HasPrefix(executable, "/Applications/") {
 			if appDirectory := darwinApplicationDirectory(executable); appDirectory != "" &&
 				strings.TrimSuffix(filepath.Base(appDirectory), ".app") == item.Name {
 				return item
