@@ -107,7 +107,7 @@ func TestServeRunner_ListSecrets(t *testing.T) {
 	if isError {
 		t.Fatalf("serve 面的 list_secrets 失败：%s", got)
 	}
-	if want := "REMOTE_TOKEN | serve 面可见 | alpha"; got != want {
+	if want := "REMOTE_TOKEN | serve 面可见 |  | alpha"; got != want {
 		t.Fatalf("serve 面的 list_secrets = %q, want %q", got, want)
 	}
 	for _, leaked := range []string{"remote-serve-secret-value", "beta-secret-value", "beta", "BETA_ONLY"} {

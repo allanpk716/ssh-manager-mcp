@@ -398,6 +398,14 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "cache_tokens", "client_version", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// 票 #161：机密项增加可选环境变量名。原始大小写与用于大小写不敏感
+	// 唯一约束的比较值分开保存；空值表示不注入。
+	if err := addColumnIfMissing(db, "secrets", "env_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "secrets", "env_name_lower", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	// 2026-09-01 SAS 落行(撤销 rev4:69 降级勘误):serve 在 enroll 时算好 6 位
 	// SAS 写入本列,批准面(TUI/CLI/批2 Web)经同一张表读到真值做双屏比对。
 	// 落库的仅是 ~20bit 比对码(本就印在人眼屏幕上);priv/kAck/kCreds 仍只在
@@ -971,12 +979,16 @@ CREATE TABLE IF NOT EXISTS secrets (
   name TEXT NOT NULL,
   name_lower TEXT NOT NULL UNIQUE,
   note TEXT NOT NULL DEFAULT '',
+  env_name TEXT NOT NULL DEFAULT '',
+  env_name_lower TEXT NOT NULL DEFAULT '',
   value_blob BLOB NOT NULL,
   previous_value_blob BLOB,
   value_version INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
   value_updated_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS secrets_env_name_lower_unique
+  ON secrets(env_name_lower) WHERE env_name_lower <> '';
 CREATE TABLE IF NOT EXISTS secret_server_allow (
   secret_id TEXT NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
