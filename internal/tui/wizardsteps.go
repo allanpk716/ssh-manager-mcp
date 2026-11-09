@@ -14,46 +14,20 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
+	"ssh-manager-mcp/internal/machineinit"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
 
 // wizEnsureVault makes sure an UNLOCKED vault exists, creating one on first
-// run. Initialization mirrors cli's `unlock` (internal/cli/unlock.go): generate
-// a master key, persist via FileKeyProvider.Set (fixed path, ACL-hardened on
-// Windows), then store.Open (creates store.db + schema) + Close. Idempotent:
-// an existing unlocked vault is left untouched (roles.VaultExists /
-// VaultUnlocked are stat-first probes, no create-on-open side effect); an
-// existing LOCKED vault is an error guiding `unlock` — never a silent key
-// overwrite.
+// run. The behavior lives in the shared initialization module
+// (machineinit.EnsureVault) so the terminal wizard, `sshmgr init`, and the
+// upcoming Web UI wizard build the vault exactly the same way: an existing
+// unlocked vault is left untouched; an existing LOCKED vault is an error
+// guiding `unlock` — never a silent key overwrite.
 func wizEnsureVault() error {
-	if roles.VaultExists() {
-		if oerr := roles.VaultOpenErr(); oerr != nil {
-			return fmt.Errorf("本机 vault 已存在但锁定或不可读：%w — 先运行 `sshmgr unlock`（向导不会覆盖既有 vault）", oerr)
-		}
-		return nil
-	}
-	mk, err := store.GenerateMasterKey()
-	if err != nil {
-		return err
-	}
-	fp := store.FileKeyProvider{Path: os.Getenv("SSHMGR_FILEKEY_PATH")} // cli masterKeyProvider parity
-	if err := fp.Set(mk); err != nil {
-		return err
-	}
-	path := os.Getenv("SSHMGR_STORE")
-	if path == "" {
-		path, err = store.DefaultStorePath()
-		if err != nil {
-			return err
-		}
-	}
-	st, err := store.Open(path, mk)
-	if err != nil {
-		return err
-	}
-	return st.Close()
+	return machineinit.EnsureVault()
 }
 
 // wizServerLoopForm is the wizard's add-server entry: the Plan 18 add-mode
