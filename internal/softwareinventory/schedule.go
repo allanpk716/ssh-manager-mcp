@@ -151,6 +151,13 @@ func (s *Scheduler) ExecuteRound(ctx context.Context) (*SchedulerRoundReport, er
 	}
 	close(jobs)
 	wg.Wait()
+	// 没有被分派到的设备（上下文取消时停止发任务）在这里补上结论，避免
+	// 既无报告又无错误的空条目被误计为成功。
+	for i := range reports {
+		if reports[i].Report == nil && reports[i].Err == "" {
+			reports[i].Err = "本轮在执行前已停止"
+		}
+	}
 	for i := range reports {
 		if reports[i].Err == "" {
 			report.Succeeded++

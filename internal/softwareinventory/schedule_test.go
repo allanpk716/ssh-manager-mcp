@@ -215,6 +215,33 @@ func TestSchedulerExecuteRoundRecordsFailures(t *testing.T) {
 	}
 }
 
+// TestSchedulerExecuteRoundStopsCleanlyOnCanceledContext 验证执行前取消的
+// 一轮立即停止：不发起采集，未执行到的设备记为失败而不是成功。
+func TestSchedulerExecuteRoundStopsCleanlyOnCanceledContext(t *testing.T) {
+	now := time.Unix(1770000000, 0)
+	scheduler, _ := newScheduleFixture(t, now, "工作站", "备份机")
+	fake := &fakeCollect{}
+	scheduler.Collect = fake.fn()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	report, err := scheduler.ExecuteRound(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消的上下文应返回 context.Canceled，得到 %v", err)
+	}
+	if len(fake.names()) != 0 {
+		t.Fatalf("取消后不应发起采集，得到 %v", fake.names())
+	}
+	if report.Succeeded != 0 || report.Failed != 2 {
+		t.Fatalf("未执行到的设备应记为失败：统计 = %+v", report)
+	}
+	for _, device := range report.Devices {
+		if device.Err == "" {
+			t.Fatalf("未执行到的设备应有停止说明：%+v", device)
+		}
+	}
+}
+
 // TestSchedulerRunStartsImmediatelyAtStartup 验证 Run 启动即执行一轮，不等
 // 第一个周期，退出时干净返回。
 func TestSchedulerRunStartsImmediatelyAtStartup(t *testing.T) {
@@ -257,8 +284,7 @@ func TestSchedulerRunStartsImmediatelyAtStartup(t *testing.T) {
 	}
 }
 
-// TestSchedulerRunRepeatsPeriodically 验证 Run 按周期反复执行一轮，并统计
-// 每轮的成功与失败。
+// TestSchedulerRunRepeatsPeriodically 验证 Run 按周期反复执行一轮。
 func TestSchedulerRunRepeatsPeriodically(t *testing.T) {
 	now := time.Unix(1770000000, 0)
 	scheduler, _ := newScheduleFixture(t, now, "工作站", "备份机")
