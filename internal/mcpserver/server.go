@@ -68,6 +68,11 @@ var BrokerTools = []string{
 	// [16] — 软件清单查询（票 #185）：权威端与单机本地查询；客户端缓存面在线
 	// 转发到权威端，不可达时报错，绝不回退本地快照数据。
 	"query_software_inventory",
+	// [17] — 声明草稿提交（票 #188）：只写草稿，owner 确认后才生效；客户端
+	// 缓存面经受审计转发写「提交声明草稿」提交。
+	"draft_software_declarations",
+	// [18] — 软件清单立即采集（票 #188）：固定命令集，无可传命令的参数。
+	"collect_software_inventory",
 }
 
 // cacheOnlyTools names BrokerTools entries that ONLY the cache face registers
@@ -494,6 +499,11 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 	// inventory 为 nil 时走本地适配层；客户端缓存面注入在线转发器，未注
 	// 入时由保底能力固定报错（见 newCacheBroker）。
 	registerSoftwareInventoryTool(srv, busy, storeFn, hkFn, profileID, inventory)
+	// draft_software_declarations 与 collect_software_inventory（票 #188）
+	// 同样两个面都注册：本地面直接写 vault / 立即采集；客户端面复用同一
+	// 个注入能力，未实现对应方法时保底报错。
+	registerSoftwareDeclarationDraftTool(srv, busy, storeFn, hkFn, profileID, inventory)
+	registerSoftwareInventoryCollectionTool(srv, busy, storeFn, hkFn, profileID, inventory)
 
 	return srv, tunnels, tasks, nil
 }

@@ -32,3 +32,6 @@ func AgentSource() WriteSource {
 func ForwardedWriteSource(deviceCode string) WriteSource {
 	return WriteSource{kind: AuditSourceForward, deviceCode: deviceCode}
 }
+
+// Kind 返回来源类别；零值来源返回空字符串。
+func (s WriteSource) Kind() string { return s.kind }

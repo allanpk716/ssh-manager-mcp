@@ -61,6 +61,8 @@ type Service struct {
 type CollectRequest struct {
 	DeviceName  string
 	ServerEntry string
+	// Source 是这次采集落库的审计来源；零值沿用命令行来源。
+	Source store.WriteSource
 }
 
 // CollectionReport 是一次采集的对外结论。
@@ -164,7 +166,7 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 		Items: collection.Items, ServerID: chosen.ID, Sudo: sudo,
 		CommandSetVersion: collection.CommandSetVersion, SystemType: collection.SystemType,
 		Incomplete: incomplete,
-	}, store.CLISource()); err != nil {
+	}, collectWriteSource(request.Source)); err != nil {
 		return nil, err
 	}
 	return &CollectionReport{
@@ -174,6 +176,15 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 		ItemCounts: itemCounts(collection.Items),
 		StartedAt:  startedAt, EndedAt: s.now(),
 	}, nil
+}
+
+// collectWriteSource 返回采集落库使用的审计来源；未指定时按命令行立即采
+// 集处理。
+func collectWriteSource(source store.WriteSource) store.WriteSource {
+	if source.Kind() == "" {
+		return store.CLISource()
+	}
+	return source
 }
 
 // chooseServer 选择采集用的服务器条目：显式指定时必须在设备上；未指定时

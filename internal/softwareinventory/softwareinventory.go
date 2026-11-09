@@ -39,6 +39,7 @@ func WebUISource(address string) Source {
 // 重复定义后产生第二套字段语义。
 type (
 	Declaration             = models.SoftwareDeclaration
+	DeclarationDraft        = models.SoftwareDeclarationDraft
 	DeclarationEdit         = models.SoftwareDeclarationEdit
 	Category                = models.SoftwareCategory
 	Exposure                = models.SoftwareExposure
