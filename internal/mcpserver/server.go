@@ -74,8 +74,8 @@ var BrokerTools = []string{
 	"draft_software_declarations",
 	// [19] — 软件清单立即采集（票 #188）：固定命令集，无可传命令的参数。
 	"collect_software_inventory",
-	// [20] — 共享存储挂载（票 #199）：固定命令完成 Linux 首次挂载，不经过
-	// 命令策略，也不能卸载。
+	// [20] — 共享存储持久挂载（规格 #198）：固定命令完成 Linux 与 macOS
+	// 的首次挂载、按新快照更新与重新挂载，不经过命令策略，也不能卸载。
 	"mount_share",
 }
 
