@@ -89,6 +89,7 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	h.registerAccessRoutes()
 	h.registerServerRoutes()
 	h.registerSecretRoutes()
+	h.registerSoftwareInventoryRoutes()
 	h.registerOpsRoutes()
 	return h, h, nil
 }
@@ -315,7 +316,14 @@ func (h *handler) recentlyVerified(sess *session) bool {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.cfg.now().Sub(sess.lastVerified) <= 5*time.Minute
+	return h.cfg.now().Sub(sess.lastVerified) <= h.reverifyWindow()
+}
+
+func (h *handler) reverifyWindow() time.Duration {
+	if h.cfg.ReverifyWindow > 0 {
+		return h.cfg.ReverifyWindow
+	}
+	return 5 * time.Minute
 }
 
 // requireRecentReverify 是运维写操作的统一重新验证守卫。单机与客户端的

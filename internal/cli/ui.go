@@ -61,15 +61,16 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	}
 
 	var (
-		webRole          webui.Role
-		servers          webui.ServerSource
-		serverWriter     webui.ServerWriter
-		accessSource     webui.AccessStore
-		opsSource        webui.OpsStore
-		secretSource     webui.SecretSource
-		secretWriter     webui.SecretWriter
-		resolvedInstance string
-		machineInit      webui.MachineInitializer
+		webRole                 webui.Role
+		servers                 webui.ServerSource
+		serverWriter            webui.ServerWriter
+		accessSource            webui.AccessStore
+		opsSource               webui.OpsStore
+		secretSource            webui.SecretSource
+		secretWriter            webui.SecretWriter
+		softwareInventorySource webui.SoftwareInventorySource
+		resolvedInstance        string
+		machineInit             webui.MachineInitializer
 	)
 	initializing := false
 	uiShutdown := make(chan struct{})
@@ -90,6 +91,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		accessSource = standaloneUIAccessStore()
 		secretSource = standaloneUISecretStore()
 		secretWriter = standaloneUISecretWriter()
+		softwareInventorySource = standaloneUISoftwareInventoryStore()
 		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
 		machineInit = standaloneMachineInitializer{}
 		initializing = destination.Kind == machineinit.UIDestinationInitializationWizard || serverWizard
@@ -127,18 +129,19 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	config := webui.Config{
-		Role:            webRole,
-		Servers:         servers,
-		ServerWriter:    serverWriter,
-		Secrets:         secretSource,
-		SecretsWriter:   secretWriter,
-		VersionHint:     versionHint,
-		Port:            port,
-		Access:          accessSource,
-		Ops:             opsSource,
-		MachineInit:     machineInit,
-		RequestShutdown: requestShutdown,
-		ClientInstance:  resolvedInstance,
+		Role:              webRole,
+		Servers:           servers,
+		ServerWriter:      serverWriter,
+		Secrets:           secretSource,
+		SecretsWriter:     secretWriter,
+		SoftwareInventory: softwareInventorySource,
+		VersionHint:       versionHint,
+		Port:              port,
+		Access:            accessSource,
+		Ops:               opsSource,
+		MachineInit:       machineInit,
+		RequestShutdown:   requestShutdown,
+		ClientInstance:    resolvedInstance,
 	}
 	if initializing {
 		executablePath, err := os.Executable()

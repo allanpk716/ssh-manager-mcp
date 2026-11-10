@@ -1,0 +1,176 @@
+SSHMGR-INVENTORY BEGIN posix-v2
+SSHMGR-INVENTORY SECTION os
+kernel-name=Linux
+kernel=6.6.119
+machine=x86_64
+file=/etc/os-release
+NAME="iStoreOS"
+VERSION="24.10.5"
+ID="istoreos"
+ID_LIKE="lede openwrt"
+PRETTY_NAME="iStoreOS 24.10.5"
+VERSION_ID="24.10.5"
+HOME_URL="https://github.com/istoreos"
+BUG_URL="https://github.com/istoreos/istoreos/issues"
+SUPPORT_URL="https://forum.openwrt.org/"
+BUILD_ID="2025123110"
+OPENWRT_BOARD="x86/64"
+OPENWRT_ARCH="x86_64"
+OPENWRT_TAINTS="busybox"
+OPENWRT_DEVICE_MANUFACTURER="OpenWrt"
+OPENWRT_DEVICE_MANUFACTURER_URL="https://openwrt.org/"
+OPENWRT_DEVICE_PRODUCT="Generic"
+OPENWRT_DEVICE_REVISION="v0"
+OPENWRT_RELEASE="iStoreOS 24.10.5 2025123110"
+OPENWRT_BUILD_DATE="1767108361"
+file=/etc/openwrt_release
+DISTRIB_ID='iStoreOS'
+DISTRIB_RELEASE='24.10.5'
+DISTRIB_REVISION='2025123110'
+DISTRIB_TARGET='x86/64'
+DISTRIB_ARCH='x86_64'
+DISTRIB_DESCRIPTION='iStoreOS 24.10.5 2025123110'
+DISTRIB_TAINTS='busybox'
+SSHMGR-INVENTORY STATUS os 0
+SSHMGR-INVENTORY SECTION packages
+SSHMGR-INVENTORY ABSENT packages
+SSHMGR-INVENTORY SECTION listen
+SSHMGR-INVENTORY ABSENT listen
+SSHMGR-INVENTORY SECTION listen-netstat
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        0      0 0.0.0.0:32780           0.0.0.0:*               LISTEN      10912/rpc.mountd
+tcp        0      0 0.0.0.0:32777           0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:32778           0.0.0.0:*               LISTEN      10911/rpc.statd
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      7803/uhttpd
+tcp        0      0 0.0.0.0:111             0.0.0.0:*               LISTEN      4760/rpcbind
+tcp        0      0 0.0.0.0:443             0.0.0.0:*               LISTEN      7803/uhttpd
+tcp        0      0 127.0.0.1:3038          0.0.0.0:*               LISTEN      9076/quickstart
+tcp        0      0 0.0.0.0:5355            0.0.0.0:*               LISTEN      14429/wsdd2
+tcp        0      0 172.17.0.1:53           0.0.0.0:*               LISTEN      7329/dnsmasq
+tcp        0      0 203.0.113.11:445        0.0.0.0:*               LISTEN      10206/smbd
+tcp        0      0 0.0.0.0:2049            0.0.0.0:*               LISTEN      -
+tcp        0      0 203.0.113.11:139        0.0.0.0:*               LISTEN      10206/smbd
+tcp        0      0 203.0.113.11:53         0.0.0.0:*               LISTEN      7329/dnsmasq
+tcp        0      0 127.0.0.1:5037          0.0.0.0:*               LISTEN      10381/adb
+tcp        0      0 198.51.100.1:445       0.0.0.0:*               LISTEN      10206/smbd
+tcp        0      0 0.0.0.0:7681            0.0.0.0:*               LISTEN      13869/ttyd
+tcp        0      0 0.0.0.0:3702            0.0.0.0:*               LISTEN      14429/wsdd2
+tcp        0      0 198.51.100.1:53        0.0.0.0:*               LISTEN      7329/dnsmasq
+tcp        0      0 198.51.100.1:22        0.0.0.0:*               LISTEN      5845/dropbear
+tcp        0      0 198.51.100.1:139       0.0.0.0:*               LISTEN      10206/smbd
+tcp        0      0 127.0.0.1:53            0.0.0.0:*               LISTEN      7329/dnsmasq
+tcp        0      0 :::8897                 :::*                    LISTEN      10555/linkease
+tcp        0      0 :::9090                 :::*                    LISTEN      6842/clash
+tcp        0      0 :::32780                :::*                    LISTEN      10912/rpc.mountd
+tcp        0      0 :::32777                :::*                    LISTEN      -
+tcp        0      0 :::32778                :::*                    LISTEN      10911/rpc.statd
+tcp        0      0 :::80                   :::*                    LISTEN      7803/uhttpd
+tcp        0      0 :::111                  :::*                    LISTEN      4760/rpcbind
+tcp        0      0 :::443                  :::*                    LISTEN      7803/uhttpd
+tcp        0      0 :::5355                 :::*                    LISTEN      14429/wsdd2
+tcp        0      0 fe80::62be:b4ff:fe05:39:53 :::*                    LISTEN      7329/dnsmasq
+tcp        0      0 fe80::26cf:24ff:fe31:80f9:53 :::*                    LISTEN      7329/dnsmasq
+tcp        0      0 :::2049                 :::*                    LISTEN      -
+tcp        0      0 :::7892                 :::*                    LISTEN      6842/clash
+tcp        0      0 :::7893                 :::*                    LISTEN      6842/clash
+tcp        0      0 :::7895                 :::*                    LISTEN      6842/clash
+tcp        0      0 :::7890                 :::*                    LISTEN      6842/clash
+tcp        0      0 :::7891                 :::*                    LISTEN      6842/clash
+tcp        0      0 :::7874                 :::*                    LISTEN      6842/clash
+tcp        0      0 :::3702                 :::*                    LISTEN      14429/wsdd2
+tcp        0      0 ::1:53                  :::*                    LISTEN      7329/dnsmasq
+tcp        0      0 fd69:ab7b:83b::1:445    :::*                    LISTEN      10206/smbd
+tcp        0      0 fd69:ab7b:83b::1:139    :::*                    LISTEN      10206/smbd
+tcp        0      0 fd69:ab7b:83b::1:53     :::*                    LISTEN      7329/dnsmasq
+udp        0      0 0.0.0.0:3702            0.0.0.0:*                           14429/wsdd2
+udp        0      0 0.0.0.0:32777           0.0.0.0:*                           -
+udp        0      0 0.0.0.0:32778           0.0.0.0:*                           10911/rpc.statd
+udp        0      0 0.0.0.0:32780           0.0.0.0:*                           10912/rpc.mountd
+udp        0      0 127.0.0.1:53            0.0.0.0:*                           7329/dnsmasq
+udp        0      0 203.0.113.11:53         0.0.0.0:*                           7329/dnsmasq
+udp        0      0 198.51.100.1:53        0.0.0.0:*                           7329/dnsmasq
+udp        0      0 172.17.0.1:53           0.0.0.0:*                           7329/dnsmasq
+udp        0      0 0.0.0.0:67              0.0.0.0:*                           7329/dnsmasq
+udp        0      0 0.0.0.0:111             0.0.0.0:*                           4760/rpcbind
+udp        0      0 198.51.100.255:137     0.0.0.0:*                           10207/nmbd
+udp        0      0 198.51.100.1:137       0.0.0.0:*                           10207/nmbd
+udp        0      0 203.0.113.255:137       0.0.0.0:*                           10207/nmbd
+udp        0      0 203.0.113.11:137        0.0.0.0:*                           10207/nmbd
+udp        0      0 0.0.0.0:137             0.0.0.0:*                           10207/nmbd
+udp        0      0 198.51.100.255:138     0.0.0.0:*                           10207/nmbd
+udp        0      0 198.51.100.1:138       0.0.0.0:*                           10207/nmbd
+udp        0      0 203.0.113.255:138       0.0.0.0:*                           10207/nmbd
+udp        0      0 203.0.113.11:138        0.0.0.0:*                           10207/nmbd
+udp        0      0 0.0.0.0:138             0.0.0.0:*                           10207/nmbd
+udp        0      0 127.0.0.1:911           0.0.0.0:*                           10911/rpc.statd
+udp        0      0 0.0.0.0:54342           0.0.0.0:*                           4760/rpcbind
+udp        0      0 0.0.0.0:5353            0.0.0.0:*                           7957/avahi-daemon:
+udp        0      0 0.0.0.0:5355            0.0.0.0:*                           14429/wsdd2
+udp        0      0 0.0.0.0:1900            0.0.0.0:*                           10555/linkease
+udp        0      0 :::35277                :::*                                6842/clash
+udp        0      0 :::51819                :::*                                4824/unetd
+udp        0      0 :::39628                :::*                                6842/clash
+udp        0      0 :::56140                :::*                                4760/rpcbind
+udp        0      0 :::56631                :::*                                6842/clash
+udp        0      0 :::3702                 :::*                                14429/wsdd2
+udp        0      0 :::7874                 :::*                                6842/clash
+udp        0      0 :::7891                 :::*                                6842/clash
+udp        0      0 :::7892                 :::*                                6842/clash
+udp        0      0 :::7893                 :::*                                6842/clash
+udp        0      0 :::7895                 :::*                                6842/clash
+udp        0      0 :::32777                :::*                                -
+udp        0      0 :::32778                :::*                                10911/rpc.statd
+udp        0      0 :::32780                :::*                                10912/rpc.mountd
+udp        0      0 ::1:53                  :::*                                7329/dnsmasq
+udp        0      0 fe80::26cf:24ff:fe31:80f9:53 :::*                                7329/dnsmasq
+udp        0      0 fd69:ab7b:83b::1:53     :::*                                7329/dnsmasq
+udp        0      0 fe80::62be:b4ff:fe05:39:53 :::*                                7329/dnsmasq
+udp        0      0 :::111                  :::*                                4760/rpcbind
+udp        0      0 :::5353                 :::*                                7957/avahi-daemon:
+udp        0      0 :::5355                 :::*                                14429/wsdd2
+SSHMGR-INVENTORY STATUS listen-netstat 0
+SSHMGR-INVENTORY SECTION listen-lsof
+SSHMGR-INVENTORY ABSENT listen-lsof
+SSHMGR-INVENTORY SECTION exe
+4760	/usr/sbin/rpcbind
+4824	/usr/sbin/unetd
+5845	/usr/sbin/dropbear
+6842	/etc/openclash/core/clash_meta
+7329	/usr/sbin/dnsmasq
+7803	/usr/sbin/uhttpd
+7957	/usr/sbin/avahi-daemon
+9076	/usr/sbin/quickstart
+10206	/usr/sbin/smbd
+10207	/usr/sbin/nmbd
+10381	/usr/bin/adb
+10555	/usr/sbin/linkease
+10911	/usr/sbin/rpc.statd
+10912	/usr/sbin/rpc.mountd
+13869	/usr/bin/ttyd
+14429	/usr/bin/wsdd2
+SSHMGR-INVENTORY STATUS exe 0
+SSHMGR-INVENTORY SECTION exe-owner
+SSHMGR-INVENTORY ABSENT exe-owner
+SSHMGR-INVENTORY SECTION apps
+SSHMGR-INVENTORY ABSENT apps
+SSHMGR-INVENTORY SECTION brew
+SSHMGR-INVENTORY ABSENT brew
+SSHMGR-INVENTORY SECTION synology-packages
+SSHMGR-INVENTORY ABSENT synology-packages
+SSHMGR-INVENTORY SECTION container-images
+SSHMGR-INVENTORY STATUS container-images 0
+SSHMGR-INVENTORY SECTION containers
+SSHMGR-INVENTORY STATUS containers 0
+SSHMGR-INVENTORY SECTION firmware
+bios_vendor	American Megatrends Inc.
+bios_version	5.13
+bios_date	06/29/2022
+board_vendor	Default string
+board_name	Default string
+sys_vendor	CncTion
+product_name	J4125-4L-I225
+SSHMGR-INVENTORY STATUS firmware 0
+SSHMGR-INVENTORY SECTION gpu-driver
+SSHMGR-INVENTORY ABSENT gpu-driver
+SSHMGR-INVENTORY END

@@ -1,0 +1,17 @@
+{{define "content"}}
+<section class="software-inventory">
+<h1>生效软件声明</h1>
+{{if .SoftwareInventoryNotice}}<p class="form-success">{{.SoftwareInventoryNotice}}</p>{{end}}
+<table>
+<thead><tr><th scope="col">设备</th><th scope="col">类别</th><th scope="col">软件名</th><th scope="col">精确版本</th><th scope="col">监听端口</th><th scope="col">操作</th></tr></thead>
+<tbody>
+{{range .SoftwareInventoryDeclarations}}
+<tr><td>{{.Device}}</td><td>{{.CategoryLabel}}</td><td>{{.Name}}</td><td>{{.Version}}</td>
+<td>{{range .ListeningPorts}}{{.Address}}:{{.Port}}/{{.Protocol}}{{else}}未登记监听端口{{end}}</td>
+<td><a href="/ui/software-inventory/declarations/edit?id={{.ID | urlquery}}">修改</a> <a href="/ui/software-inventory/declarations/delete?id={{.ID | urlquery}}">删除</a></td></tr>
+{{else}}<tr><td colspan="6">暂无生效软件声明。</td></tr>{{end}}
+</tbody>
+</table>
+<p><a class="button-link" href="/ui/software-inventory/declarations/new">新增声明</a></p>
+</section>
+{{end}}

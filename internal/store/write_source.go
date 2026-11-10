@@ -6,6 +6,9 @@ package store
 type WriteSource struct {
 	kind    string
 	address string
+	// deviceCode 是受审计转发写的设备码编号；只进入审计摘要，让 owner 能
+	// 追查是哪台客户端实例提交的草稿。
+	deviceCode string
 }
 
 // CLISource 返回命令行来源。命令行来源没有来源地址。
@@ -17,3 +20,18 @@ func CLISource() WriteSource {
 func WebUISource(address string) WriteSource {
 	return WriteSource{kind: AuditSourceWebUI, address: address}
 }
+
+// AgentSource 返回 MCP 工具的来源。权威端与单机上的工具直接写 vault 时
+// 使用；客户端经转发写提交时改用 ForwardedWriteSource。
+func AgentSource() WriteSource {
+	return WriteSource{kind: AuditSourceAgent}
+}
+
+// ForwardedWriteSource 返回受审计转发写的来源。deviceCode 是发起这次转
+// 发写的设备码编号，会写进审计摘要。
+func ForwardedWriteSource(deviceCode string) WriteSource {
+	return WriteSource{kind: AuditSourceForward, deviceCode: deviceCode}
+}
+
+// Kind 返回来源类别；零值来源返回空字符串。
+func (s WriteSource) Kind() string { return s.kind }

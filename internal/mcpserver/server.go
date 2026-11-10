@@ -65,6 +65,14 @@ var BrokerTools = []string{
 	hotswap.ToolReloadSelf,   // [13] — report this bridge's current/disk/latest versions and, when the disk holds a newer generation and the bridge is idle, hot-swap into it (bridge hot-upgrade; BRIDGE FACES ONLY — registered by run.go's stdio entries, see bridgeOnlyTools)
 	"list_secrets",           // [14] — discover secret names, notes, and granted writable servers without exposing secret values (READ-ONLY)
 	"probe_connectivity",     // [15] — probe TCP connectivity and connect duration from this instance or via an authorized managed server to registered devices (spec #142; results stored locally only)
+	// [16] — 软件清单查询（票 #185）：权威端与单机本地查询；客户端缓存面在线
+	// 转发到权威端，不可达时报错，绝不回退本地快照数据。
+	"query_software_inventory",
+	// [17] — 声明草稿提交（票 #188）：只写草稿，owner 确认后才生效；客户端
+	// 缓存面经受审计转发写「提交声明草稿」提交。
+	"draft_software_declarations",
+	// [18] — 软件清单立即采集（票 #188）：固定命令集，无可传命令的参数。
+	"collect_software_inventory",
 }
 
 // cacheOnlyTools names BrokerTools entries that ONLY the cache face registers
@@ -121,12 +129,14 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *Tunn
 // 已取到的同一个 store。缓存模式传入稳定的转发包装器（见 run.go 与
 // hostkey_forward.go），它的读写会在回调内重新取当前快照 store。
 func NewServerFromSource(storeFn func() *store.Store, profileID, projectID string, hkFn func() sshbroker.HostKeyStore, meta MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, error) {
-	return NewServerFromSourceWithHints(storeFn, profileID, projectID, hkFn, meta)
+	return NewServerFromSourceWithHints(storeFn, profileID, projectID, hkFn, meta, nil)
 }
 
 // NewServerFromSourceWithHints 额外把会话提示来源挂到通用工具包装层。既有
-// 构造函数不传来源，单机与权威端的工具面保持不变。
-func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projectID string, hkFn func() sshbroker.HostKeyStore, meta MetadataEditor, sources ...SessionHintSource) (*mcp.Server, *TunnelManager, *TaskManager, error) {
+// 构造函数不传来源，单机与权威端的工具面保持不变。inventory 是软件清单
+// 查询能力：nil 表示权威端与单机的本地查询；客户端缓存面由 newCacheBroker
+// 注入在线转发器或保底报错能力。
+func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projectID string, hkFn func() sshbroker.HostKeyStore, meta MetadataEditor, inventory SoftwareInventoryQuerier, sources ...SessionHintSource) (*mcp.Server, *TunnelManager, *TaskManager, error) {
 	// Plan 47 T2 (spec §4, rev3 codex#6): the relay env seams resolve BEFORE
 	// any tunnels/tasks manager construction and any StartSweeper — an invalid
 	// value must fail construction with ZERO goroutines started (the earlier
@@ -484,6 +494,16 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 			},
 		)
 	}
+
+	// query_software_inventory（票 #185）：两个面都注册。权威端与单机在
+	// inventory 为 nil 时走本地适配层；客户端缓存面注入在线转发器，未注
+	// 入时由保底能力固定报错（见 newCacheBroker）。
+	registerSoftwareInventoryTool(srv, busy, storeFn, hkFn, profileID, inventory)
+	// draft_software_declarations 与 collect_software_inventory（票 #188）
+	// 同样两个面都注册：本地面直接写 vault / 立即采集；客户端面复用同一
+	// 个注入能力，未实现对应方法时保底报错。
+	registerSoftwareDeclarationDraftTool(srv, busy, storeFn, hkFn, profileID, inventory)
+	registerSoftwareInventoryCollectionTool(srv, busy, storeFn, hkFn, profileID, inventory)
 
 	return srv, tunnels, tasks, nil
 }

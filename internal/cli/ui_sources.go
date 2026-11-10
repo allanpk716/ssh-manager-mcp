@@ -13,12 +13,14 @@ import (
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/secretmanage"
 	"ssh-manager-mcp/internal/servermanage"
+	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/updater"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
 	"ssh-manager-mcp/internal/webuiops"
 	"ssh-manager-mcp/internal/webuisecrets"
 	"ssh-manager-mcp/internal/webuiservers"
+	"ssh-manager-mcp/internal/webuisoftwareinventory"
 )
 
 // standaloneMachineInitializer 把 Web UI 的「升级为权威端」动作接到初始化
@@ -107,6 +109,18 @@ func standaloneUISecretStore() webui.SecretSource {
 // 打开本机 vault，请求结束后关闭。
 func standaloneUISecretWriter() webui.SecretWriter {
 	return webuisecrets.WriterFromOpener(openSecretManager)
+}
+
+// standaloneUISoftwareInventoryStore 给单机 Web UI 提供软件清单页面与立
+// 即采集入口。每次读取重新打开本机 vault，结束后关闭。
+func standaloneUISoftwareInventoryStore() webui.SoftwareInventorySource {
+	return webuisoftwareinventory.FromOpener(func() (*store.Store, func(), error) {
+		st, err := openUnlockedStore()
+		if err != nil {
+			return nil, nil, err
+		}
+		return st, func() { _ = st.Close() }, nil
+	})
 }
 
 func openSecretManager() (*secretmanage.Manager, func(), error) {

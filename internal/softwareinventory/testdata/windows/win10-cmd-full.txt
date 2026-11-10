@@ -1,0 +1,350 @@
+SSHMGR-INVENTORY BEGIN windows-v1
+SSHMGR-INVENTORY SECTION os
+ProductName	Windows 10 Pro
+DisplayVersion	22H2
+ReleaseId	2009
+CurrentBuild	22621
+UBR	4317
+EditionID	Professional
+InstallationType	Client
+arch	AMD64
+SSHMGR-INVENTORY STATUS os 0
+SSHMGR-INVENTORY SECTION installed
+64	Docker Desktop	4.81.0	Docker Inc.	Docker Desktop
+64	Git	2.52.0	The Git Development Community	Git_is1
+64	OpenSSL 1.1.1w (64-bit)		OpenSSL Win64 Installer Team	OpenSSL (64-bit)_is1
+64	PawnIO	2.2.0.0	namazso	PawnIO
+64	RustDesk	1.4.5	RustDesk	RustDesk
+64	Synology Drive Client (remove only)	8.0.2.17889	Synology, Inc.	Synology Drive
+64	Microsoft .NET Host FX Resolver - 9.0.15 (x64)	72.60.50518	Microsoft Corporation	{04C98367-FC14-4376-8866-17AD112FB6B9}
+64	Microsoft Windows Desktop Runtime - 8.0.24 (x64)	64.96.47265	Microsoft Corporation	{0E6ACF40-9CC5-4B9E-96DE-AC039380D70D}
+64	Microsoft.NET.Sdk.Maui.Manifest-8.0.100 (x64)	8.0.3	Microsoft Corporation	{116EF6D0-AE8E-4E6D-B0D8-EFF145CD45DA}
+64	Python 3.14.2 Documentation (64-bit)	3.14.2150.0	Python Software Foundation	{123A1B2C-D913-4500-BF5B-37D6A9BEB108}
+64	Microsoft .NET AppHost Pack - 8.0.24 (x64_arm64)	64.96.47242	Microsoft Corporation	{16A59ADB-E8FA-4FA0-A51F-49E161A7C50B}
+64	Windows App Certification Kit Native Components	10.1.26100.7705	Microsoft Corporation	{20C01991-CCD1-2C06-7A9A-B10A9B4AF807}
+64	Python 3.14.2 Tcl/Tk Support (64-bit)	3.14.2150.0	Python Software Foundation	{24994863-C156-4E42-8FF6-F17D4773092E}
+64	Microsoft .NET AppHost Pack - 8.0.24 (x64)	64.96.47242	Microsoft Corporation	{335C72AE-2184-49CC-A589-8D40839A88AE}
+64	Windows Subsystem for Linux Update	5.10.16	Microsoft Corporation	{36EF257E-21D5-44F7-8451-07923A8C465E}
+64	Typora	1.14.10	typora.io	{37771A20-7167-44C0-B322-FD3E54C56156}_is1
+64	vs_communityx64msi	17.14.36025	Microsoft Corporation	{3873679C-FA03-4101-97E9-107D67C568B8}
+64	Microsoft Visual C++ 2022 X64 Minimum Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{43B0D101-A022-48F4-9D04-BA404CEB1D53}
+64	Python 3.14.2 Executables (64-bit)	3.14.2150.0	Python Software Foundation	{4827DB7C-EA57-4B8F-B5E8-80F2B368003D}
+64	Microsoft Windows Desktop Runtime - 9.0.15 (x64)	72.60.50530	Microsoft Corporation	{49C0C973-52B5-4F6D-AD4F-9B9DF928BAC6}
+64	Microsoft ASP.NET Core 8.0.24 Targeting Pack (x64)	8.0.24.26072	Microsoft Corporation	{4ACDE627-464A-30AC-8E09-C8ADE45F8DA2}
+64	Python 3.14.2 Add to Path (64-bit)	3.14.2150.0	Python Software Foundation	{4B91344F-511C-4064-90AC-D3A106A6A19F}
+64	GitHub CLI	2.102.0	GitHub, Inc.	{4EF7967E-A6AE-4EA6-80F8-448F03B4C0B4}
+64	Microsoft.NET.Sdk.tvOS.Manifest-8.0.100 (x64)	17.0.8478	Microsoft Corporation	{568F99E8-9F2D-48D7-A05D-D64C512B3AFD}
+64	Application Verifier x64 External Package (OnecoreUAP)	10.1.26100.7705	Microsoft	{601DDF69-FCF4-F568-946A-C17046C946E4}
+64	Microsoft.NET.Workload.Mono.Toolchain.net7.Manifest (x64)	64.96.47242	Microsoft Corporation	{618B27BD-07D4-40DD-98F2-D38496897738}
+64	Microsoft .NET Host FX Resolver - 8.0.24 (x64)	64.96.47242	Microsoft Corporation	{66D8D2C3-B7A9-4F32-8FE4-42FE64B8422D}
+64	Microsoft.NET.Sdk.iOS.Manifest-8.0.100 (x64)	17.0.8478	Microsoft Corporation	{6BF59E75-BE05-4C69-9C48-3532B6DE0EC5}
+64	Microsoft.NET.Workload.Mono.Toolchain.Current.Manifest (x64)	64.96.47242	Microsoft Corporation	{6DA2E9DA-9226-444A-8E5F-8885C299734B}
+64	Microsoft Visual Studio Installer	4.5.35.35368	Microsoft Corporation	{6F320B93-EE3C-4826-85E0-ADF79F8D4C61}
+64	Microsoft .NET Runtime - 8.0.24 (x64)	64.96.47242	Microsoft Corporation	{774E3EF4-74C6-460B-BEED-FC1D0E3014D7}
+64	Python 3.14.2 Development Libraries (64-bit)	3.14.2150.0	Python Software Foundation	{78EB2837-5DCC-42E9-913A-91D0775038C6}
+64	Microsoft .NET Toolset 8.0.418 (x64)	32.14.51843	Microsoft Corporation	{827D5A65-EB71-4479-8D47-3CC1F8617EBA}
+64	Go Programming Language amd64 go1.24.13	1.24.13	https://go.dev	{8359A719-F039-4062-A5C1-40750C5D375A}
+64	Microsoft.NET.Workload.Emscripten.net7.Manifest (x64)	64.96.47011	Microsoft Corporation	{84B0B464-42CC-4DB9-AD99-D26A8A74473F}
+64	Microsoft Visual C++ 2022 X64 Additional Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{86AB2CC9-08BD-4643-B0F9-F82D006D72FF}
+64	Microsoft.NET.Sdk.MacCatalyst.Manifest-8.0.100 (x64)	17.0.8478	Microsoft Corporation	{8B5384CA-D189-4CFE-8DF0-2D05B4EA8499}
+64	Notepad++	8.9.2	Notepad++ team	{8C373FC0-D07E-4A05-BD72-23307D8BB092}
+64	Microsoft .NET Runtime - 9.0.15 (x64)	72.60.50518	Microsoft Corporation	{97184660-56D3-4CCB-8919-34067AB40CD6}
+64	Microsoft.NET.Sdk.macOS.Manifest-8.0.100 (x64)	14.0.8478	Microsoft Corporation	{98927287-8779-447A-919E-73028D53F719}
+64	CMake	4.3.2	Kitware	{9BED56A6-9631-4BDF-BEAB-2B26C088C4C9}
+64	Microsoft .NET Targeting Pack - 8.0.24 (x64)	64.96.47242	Microsoft Corporation	{A6EFBA26-31BC-41F2-9666-3DE27B15D8FA}
+64	Microsoft .NET Standard Targeting Pack - 2.1.0 (x64)	24.0.28113	Microsoft Corporation	{A7036CFB-B403-4598-85FF-D397ABB88173}
+64	Microsoft .NET Host - 8.0.24 (x64)	64.96.47242	Microsoft Corporation	{A96D010F-E130-4929-B445-414E7AE4F04B}
+64	Microsoft.NET.Workload.Emscripten.Current.Manifest (x64)	64.96.47011	Microsoft Corporation	{ADEBB129-9F67-47EE-88E5-409076BE041F}
+64	Microsoft.NET.Sdk.Android.Manifest-8.0.100 (x64)	34.0.43	Microsoft Corporation	{B5A57BF9-FC7A-4FA6-BAEB-46E173986DF3}
+64	Python 3.14.2 pip Bootstrap (64-bit)	3.14.2150.0	Python Software Foundation	{B629CC25-B4E0-4A9E-99C9-216A14F4144A}
+64	Windows Subsystem for Linux	2.6.3.0	Microsoft Corporation	{B637A6A6-5591-4503-AFD8-776164EB837A}
+64	Microsoft .NET AppHost Pack - 8.0.24 (x64_x86)	64.96.47242	Microsoft Corporation	{B6C7F195-2A16-4A01-9F60-970EEDF8AC88}
+64	Microsoft.NET.Workload.Mono.Toolchain.net6.Manifest (x64)	64.96.47242	Microsoft Corporation	{C34A01C9-1080-4D2A-906C-76AC6C15E11D}
+64	Microsoft Update Health Tools	5.72.0.0	Microsoft Corporation	{C6FD611E-7EFE-488C-A0E0-974C09EF6473}
+64	DiagnosticsHub_CollectionService	17.14.36412	Microsoft Corporation	{C762588C-06DE-496A-8ADF-EBDBD49E37B5}
+64	Universal CRT Tools x64	10.1.26100.7705	Microsoft Corporation	{C7F2EF85-ACD3-0480-6BC2-0C3B45A8F1C1}
+64	Microsoft ASP.NET Core 8.0.24 Shared Framework (x64)	8.0.24.26072	Microsoft Corporation	{D0689588-DB89-3017-8900-D41198C1C3B2}
+64	Microsoft.NET.Workload.Emscripten.net6.Manifest (x64)	64.96.47011	Microsoft Corporation	{D348C3DB-2CD3-4E96-B2ED-68B4D8FABA86}
+64	Application Verifier x64 External Package (DesktopEditions)	10.1.26100.7705	Microsoft	{D75B3C63-F3BB-5EC1-45A7-15C00BBB9D3F}
+64	Microsoft .NET 8.0 Templates 8.0.418 (x64)	32.14.51843	Microsoft Corporation	{E05CDBA6-B357-4888-95C2-C45D0DA6C4AB}
+64	Microsoft Windows Desktop Targeting Pack - 8.0.24 (x64)	64.96.47265	Microsoft Corporation	{E7802D4F-44EF-482F-BD24-18C81F507AC7}
+64	PowerShell 7-x64	7.5.4.0	Microsoft Corporation	{E8159677-ACF8-4D64-9D36-5C36B8BBEA39}
+64	Python 3.14.2 Core Interpreter (64-bit)	3.14.2150.0	Python Software Foundation	{EF39D56D-D2F1-4D1E-87EF-6D3FC9EF4D5D}
+64	Python 3.14.2 Test Suite (64-bit)	3.14.2150.0	Python Software Foundation	{F2FCB28C-F751-4F4C-A9B4-E1A70DDDADCD}
+64	Microsoft.NET.Sdk.Aspire.Manifest-8.0.100 (x64)	64.0.5426	Microsoft Corporation	{F3AEB036-4B8A-4C25-B4D2-850944E909C4}
+64	Node.js	24.13.0	Node.js Foundation	{F4937DE9-DA3D-4B72-9930-F3028D671956}
+64	VS Script Debugging Common	17.0.157.0	Microsoft Corporation	{F5796163-6EC6-488A-B2DE-E1E94477F6AD}
+64	TortoiseGit 2.18.0.1 (64 bit)	2.18.0.1	TortoiseGit	{F7CC5B9C-115F-4D1B-AB7D-EC61BC32B79A}
+64	Windows SDK DirectX x64 Remote	10.1.26100.7705	Microsoft Corporation	{FB7C4DC7-7641-04B7-6639-589757B86783}
+64	Microsoft .NET Host - 9.0.15 (x64)	72.60.50518	Microsoft Corporation	{FCBBC2DC-2AD7-4F1F-A444-87A9FA94C6BA}
+64	Python 3.14.2 Standard Library (64-bit)	3.14.2150.0	Python Software Foundation	{FDF326B0-ECA5-42EC-9125-7F5ACD5995B8}
+64	Microsoft Visual C++ 2022 X64 Debug Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{FE85AA49-3522-4663-9F52-9CD9E9837189}
+32	Visual Studio 生成工具 2022	17.14.31	Microsoft Corporation	a0540f05
+32	Microsoft Edge	157.0.4341.42	Microsoft Corporation	Microsoft Edge
+32	Microsoft Edge WebView2 Runtime	157.0.4341.42	Microsoft Corporation	Microsoft EdgeWebView
+32	Netbird	0.66.2.22682877411	Netbird	Netbird
+32	Universal CRT Extension SDK	10.1.26100.7705	Microsoft Corporation	{0343A2EB-5CCA-79B9-18A4-ABD484A97924}
+32	Universal CRT Redistributable	10.0.26624	Microsoft Corporation	{0460C87B-7F4C-3170-FAC9-B7A6AE5CE4E9}
+32	MSI Development Tools	10.1.26100.7705	Microsoft Corporation	{06671634-35F4-43F1-1B57-68B7CE54E5B3}
+32	WinRT Intellisense UAP - Other Languages	10.1.26100.7705	Microsoft Corporation	{099E916C-D17E-7E1A-0046-3AD1D042102F}
+32	Windows SDK Desktop Headers arm64	10.1.26100.7705	Microsoft Corporation	{0A1B70B0-DD98-1BCC-6958-D5AD8BBAF2B2}
+32	Microsoft Visual C++ 2015-2022 Redistributable (x86) - 14.44.35211	14.44.35211.0	Microsoft Corporation	{0b5169e3-39da-4313-808e-1f9c0407f3bf}
+32	Windows SDK DirectX x86 Remote	10.1.26100.7705	Microsoft Corporation	{11C0EB4F-A1BA-2068-49A5-F7C242708BA2}
+32	Windows SDK Desktop Libs x64	10.1.26100.7705	Microsoft Corporation	{12C6754C-2086-9BFC-1292-FA0BE54009E6}
+32	Windows SDK AddOn	10.1.0.0	Microsoft Corporation	{13D2A7A2-1B42-4C03-8F0F-697991259AEE}
+32	FanControl	271	Remi Mercier Software Inc	{141A88F8-31AC-49EA-B428-2BE8C19DED83}_is1
+32	vs_CoreEditorFonts	17.7.40001	Microsoft Corporation	{1851460E-0E63-4117-B5BA-25A2F045801B}
+32	Windows Team Extension SDK	10.1.26100.7705	Microsoft Corporation	{1F507473-1077-3AB8-2E11-C839AE4E27B8}
+32	vs_communitymsires	17.14.36015	Microsoft Corporation	{21B097AB-E1D1-4791-9651-0AB1B7B08438}
+32	vs_filehandler_amd64	17.14.36024	Microsoft Corporation	{22EE1419-B47E-44B8-A635-868746946079}
+32	Windows SDK Modern Non-Versioned Developer Tools	10.1.26100.7705	Microsoft Corporation	{26BD6DC6-3F0F-4C17-A78C-5D06459F39C0}
+32	vs_githubprotocolhandlermsi	17.14.36015	Microsoft Corporation	{29297AFE-9D24-4DFE-ACAF-D90090D905CF}
+32	Windows SDK Desktop Libs arm64	10.1.26100.7705	Microsoft Corporation	{2C37C218-88FF-9E58-0151-1AF693535792}
+32	Windows SDK for Windows Store Apps Libs	10.1.26100.7705	Microsoft Corporation	{2CAA22A5-36FE-21B0-5A67-3BE172FEFF12}
+32	WinRT Intellisense IoT - Other Languages	10.1.26100.7705	Microsoft Corporation	{3120663A-4F7D-252C-2829-1B9DBEDFEEED}
+32	Universal CRT Redistributable	10.1.26100.7705	Microsoft Corporation	{368E4D03-5983-1C2C-B42E-1C0C51A935A5}
+32	WinRT Intellisense Mobile - en-us	10.1.26100.7705	Microsoft Corporation	{3EEF5F2A-A2A3-89FC-D7DF-CFE8DEFE4A8F}
+32	Kits Configuration Installer	10.1.26100.7705	Microsoft	{43506B27-889E-2F0F-F8BE-4AEBE7CC9249}
+32	Microsoft Visual Studio Setup WMI Provider	3.12.2140.44225	Microsoft Corporation	{49727420-70BA-4495-9405-31F8D711CB5A}
+32	Windows SDK for Windows Store Apps Tools	10.1.26100.7705	Microsoft Corporation	{4C150435-9153-456C-C0BE-497D89513B18}
+32	Windows SDK for Windows Store Managed Apps Libs	10.1.26100.7705	Microsoft Corporation	{4D8C14D7-C036-33F2-EFA7-C5CC5F73932B}
+32	Windows SDK EULA	10.1.26100.7705	Microsoft Corporations	{5120ED0E-8B54-B212-15E6-EE404FE83E37}
+32	vs_minshellinteropsharedmsi	17.14.36015	Microsoft Corporation	{537F07C8-0EC6-41A5-BB91-750FA3CAA110}
+32	WinRT Intellisense Desktop - en-us	10.1.26100.7705	Microsoft Corporation	{572C25BD-AB18-B702-9ED7-6F0CC6821847}
+32	Windows SDK ARM64 Desktop Tools	10.1.26100.7705	Microsoft Corporation	{575077AC-CCC1-9943-6F3C-EDB6149964E7}
+32	vs_vswebprotocolselectormsires	17.14.36323	Microsoft Corporation	{5AB1AD44-9DCC-4193-8FE2-249DE5567FC4}
+32	WinRT Intellisense UAP - en-us	10.1.26100.7705	Microsoft Corporation	{5C8B4DA5-62C6-8D4A-F21A-AD4D66FCA8D9}
+32	vs_minshellmsi	17.14.36301	Microsoft Corporation	{6AAEB5DD-FFFE-4CA1-9FE2-38A44B6B4477}
+32	vs_filehandler_x86	17.14.36024	Microsoft Corporation	{6C7D0172-7367-4F0C-95DB-6021765B58EA}
+32	vs_communitysharedmsi	17.14.36025	Microsoft Corporation	{71498EE6-F94E-4061-9DD5-55925CA8A74F}
+32	Windows SDK Desktop Tools arm64	10.1.26100.7705	Microsoft Corporation	{7C1561F8-C963-0AC7-21BD-EA4DD9633C50}
+32	Universal CRT Headers Libraries and Sources	10.1.26100.7705	Microsoft Corporation	{7D4D186C-70F0-6990-1792-DAA557B1E010}
+32	Universal General MIDI DLS Extension SDK	10.1.26100.7705	Microsoft Corporation	{7E52FE9F-4D3E-9277-0E37-0014C83D4F5E}
+32	Windows SDK OnecoreUap Headers x64	10.1.26100.7705	Microsoft Corporation	{80F76A51-EAF7-DA8E-C732-B26C591BCC23}
+32	vcpp_crt.redist.clickonce	14.44.35211	Microsoft Corporation	{835B3C35-0A49-4A7B-9BFD-18E2C4C6A311}
+32	Windows SDK OnecoreUap Headers arm64	10.1.26100.7705	Microsoft Corporation	{85F3FF9F-CFBA-AD2F-85E2-90571032D412}
+32	WinRT Intellisense PPI - en-us	10.1.26100.7705	Microsoft Corporation	{91306123-946D-452F-3206-A8AB9F8293D6}
+32	Microsoft Visual C++ 2022 X86 Minimum Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{922480B5-CAEB-4B1B-AAA4-9716EFDCE26B}
+32	Windows SDK Redistributables	10.1.26100.7705	Microsoft Corporation	{96B30005-C36E-07FF-DF27-EEB8199694CD}
+32	Windows Team Extension SDK Contracts	10.1.26100.7705	Microsoft Corporation	{9A2FEE83-D2FB-A48E-52E0-15801042220F}
+32	Python Launcher	3.14.2150.0	Python Software Foundation	{9B55B41C-B3DB-4778-B9ED-443EFF0D721A}
+32	WinRT Intellisense PPI - Other Languages	10.1.26100.7705	Microsoft Corporation	{9BA10CCD-7064-7FAB-B48B-C7B2CCFC60FB}
+32	vs_minshellmsires	17.14.36015	Microsoft Corporation	{9CCB930D-733F-4DB2-8874-979DBDA175DF}
+32	Windows SDK Desktop Libs x86	10.1.26100.7705	Microsoft Corporation	{9EE92E02-FA29-DF43-7E45-A256139DEBE4}
+32	Windows Mobile Extension SDK Contracts	10.1.26100.7705	Microsoft Corporation	{9FA1715F-2809-3C7D-B9BB-17574DA0AED9}
+32	Windows IoT Extension SDK	10.1.26100.7705	Microsoft Corporation	{A056CA2A-2AB1-EB1B-1B2E-D49E0C6C8E17}
+32	Windows SDK	10.1.26100.7705	Microsoft Corporation	{A224D569-B07A-8178-A1E4-75DC397C06B2}
+32	vs_minshellinteropmsi	17.14.36015	Microsoft Corporation	{A2FDDC26-4232-4287-8839-2F53A01E1E97}
+32	Windows IoT Extension SDK Contracts	10.1.26100.7705	Microsoft Corporation	{AA11F890-8A6F-D292-8A1D-D70710A87852}
+32	SDK ARM64 Redistributables	10.1.26100.7705	Microsoft Corporation	{AA86DFC1-17A2-6133-1D55-92818B9D3082}
+32	Windows SDK for Windows Store Apps Metadata	10.1.26100.7705	Microsoft Corporation	{AF0CF0ED-D9DA-DFDA-52DD-B3B0FE269640}
+32	vs_vswebprotocolselectormsi	17.14.36323	Microsoft Corporation	{B4B3AA16-E828-4577-A9F2-629E1A95FE4A}
+32	Windows SDK for Windows Store Apps Headers	10.1.26100.7705	Microsoft Corporation	{B5534577-4F61-73AC-FFCB-91B0B0674DA4}
+32	Windows App Certification Kit x64	10.1.26100.7705	Microsoft Corporation	{B7BC83B0-1A94-0290-4309-820859276E72}
+32	Windows App Certification Kit x64 (OnecoreUAP)	10.1.26100.7705	Microsoft Corporation	{B817BAD1-CC9F-940C-FFD8-7543D89B8EB7}
+32	Microsoft Visual C++ 2022 X86 Debug Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{BC104582-4691-4D4C-8922-C215D941A2EB}
+32	Windows Software Development Kit - Windows 10.0.26100.7705	10.1.26100.7705	Microsoft Corporation	{c0b93b80-d0a4-47fc-a4d1-21a4008a63ca}
+32	Microsoft Visual C++ 2022 X86 Additional Runtime - 14.44.35211	14.44.35211	Microsoft Corporation	{C18FB403-1E88-43C8-AD8A-CED50F23DE8B}
+32	Windows SDK for Windows Store Apps Headers OnecoreUap	10.1.26100.7705	Microsoft Corporation	{CB91C4E7-9C14-6ABD-566B-DF4593456102}
+32	Windows SDK Desktop Headers x64	10.1.26100.7705	Microsoft Corporation	{CCEEC7A2-2179-C5D0-60E2-2651993A8AD5}
+32	Windows SDK for Windows Store Apps	10.1.26100.7705	Microsoft Corporation	{CEC6FB8C-1F94-F7F8-C9F7-EF55CC2A519F}
+32	WinAppDeploy	10.1.26100.7705	Microsoft Corporation	{CFEF5BD7-A03F-DEF3-1707-A31C813F6D14}
+32	Microsoft Visual Studio Setup Configuration	3.12.2140.44225	Microsoft Corporation	{D07657AA-968C-4629-BD6C-1B52AF825EA7}
+32	Windows SDK Desktop Headers x86	10.1.26100.7705	Microsoft Corporation	{D0772A8A-6AB2-E6E1-8BEF-29F59AB99893}
+32	vs_FileTracker_Singleton	17.14.36015	Microsoft Corporation	{D331F4E7-BC3B-47BE-BB56-5F33895F9347}
+32	Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211	14.44.35211.0	Microsoft Corporation	{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}
+32	Windows SDK Desktop Tools x86	10.1.26100.7705	Microsoft Corporation	{DB72537E-BD30-364B-6A72-09CE78DB8321}
+32	Microsoft Windows Desktop Runtime - 9.0.15 (x64)	9.0.15.35926	Microsoft Corporation	{e29f6a15-9665-4b06-8024-06f270a032b8}
+32	Windows App Certification Kit SupportedApiList x86	10.1.26100.7705	Microsoft Corporation	{E43BDB72-464A-290B-A51D-537CBBE1CAC8}
+32	Windows SDK for Windows Store Apps Contracts	10.1.26100.7705	Microsoft Corporation	{E8BE09DF-D93B-AE40-FD63-05E5ABEFB6D9}
+32	Windows Mobile Extension SDK	10.1.26100.7705	Microsoft Corporation	{E901323A-7A02-50A8-F4E0-95C4AD8A098F}
+32	SDK ARM64 Additions	10.1.26100.7705	Microsoft Corporation	{E93670D9-924A-7B6F-5F55-AE8E3043BCB0}
+32	WinRT Intellisense Desktop - Other Languages	10.1.26100.7705	Microsoft Corporation	{EA88E7B4-C204-CC0C-FC10-D13FC9C30800}
+32	Windows SDK Desktop Tools x64	10.1.26100.7705	Microsoft Corporation	{EB362CC9-F0B3-EDBC-82E8-91F6BBF36F6E}
+32	WinRT Intellisense IoT - en-us	10.1.26100.7705	Microsoft Corporation	{EB8B0E53-980A-E861-DC85-05240EFA888D}
+32	Windows SDK OnecoreUap Headers x86	10.1.26100.7705	Microsoft Corporation	{EFF12E8F-5027-FE5D-6ABF-5F837F3B70F8}
+32	Windows SDK Modern Versioned Developer Tools	10.1.26100.7705	Microsoft Corporation	{F251EBD6-9B8C-3876-A422-B4F677BF3766}
+32	Microsoft .NET SDK 8.0.418 (x64)	8.4.1826.7203	Microsoft Corporation	{f2b700c7-5f35-437b-add4-c287bba85ea3}
+32	Windows Desktop Extension SDK Contracts	10.1.26100.7705	Microsoft Corporation	{F4F63553-2774-41A6-C784-7FAC7DF4CAF3}
+32	vs_minshellsharedmsi	17.14.36024	Microsoft Corporation	{F6E69DD8-7652-4CC6-8A4F-485A16012B5B}
+32	Windows SDK for Windows Store Apps DirectX x86 Remote	10.1.26100.7705	Microsoft Corporation	{F738E2CC-E003-B601-F38B-4521ED842C98}
+32	Windows SDK Signing Tools	10.1.26100.7705	Microsoft Corporation	{F9DDDEF1-BCF0-275F-DE29-9332F1149B79}
+32	Windows SDK Facade Windows WinMD Versioned	10.1.26100.7705	Microsoft Corporation	{FB4D4A9B-9E8F-42CB-B08F-AE153FFA31AC}
+32	Universal CRT Tools x86	10.1.26100.7705	Microsoft Corporation	{FEC52FA9-A866-C884-4AAA-0B15BE793610}
+32	Windows Desktop Extension SDK	10.1.26100.7705	Microsoft Corporation	{FED10190-CF54-E72D-7A92-E3F9CA9B7950}
+SSHMGR-INVENTORY STATUS installed 0
+SSHMGR-INVENTORY SECTION listen-tcp
+::	49690	4104
+::	49689	1168
+::1	49671	5088
+::	49670	4896
+::	49668	3556
+::	49667	3548
+::	49666	3312
+::	49665	1052
+::	49664	1224
+::	21118	2960
+::	5357	4
+::	3389	1708
+::	2179	3352
+::	808	4996
+::	445	4
+::	135	1540
+::	22	5296
+127.0.0.1	58957	16720
+127.0.0.1	55812	10328
+0.0.0.0	49690	4104
+0.0.0.0	49689	1168
+127.0.0.1	49672	5376
+0.0.0.0	49670	4896
+0.0.0.0	49668	3556
+0.0.0.0	49667	3548
+0.0.0.0	49666	3312
+0.0.0.0	49665	1052
+0.0.0.0	49664	1224
+127.0.0.1	49164	11084
+127.0.0.1	41731	5288
+127.0.0.1	15900	7420
+127.0.0.1	15722	7420
+127.0.0.1	15700	7420
+0.0.0.0	6768	16720
+0.0.0.0	5040	6884
+0.0.0.0	3389	1708
+0.0.0.0	2222	5096
+0.0.0.0	2179	3352
+0.0.0.0	808	4996
+198.51.100.235	139	4
+172.31.128.1	139	4
+172.24.240.1	139	4
+0.0.0.0	135	1540
+0.0.0.0	22	5296
+SSHMGR-INVENTORY STATUS listen-tcp 0
+SSHMGR-INVENTORY SECTION listen-udp
+::	63375	2340
+fe80::f9a1:579b:7a02:62f2%41	59937	13504
+fe80::e4f5:fd5:2b68:dd63%22	59936	13504
+::1	59935	13504
+fe80::3283:d76b:f03c:77dd%20	59934	13504
+::	59099	4020
+::	56136	2340
+::	55539	12848
+::	54075	4020
+::	53131	2340
+::	52785	5288
+::	5355	2340
+::	5353	2340
+::	4500	3896
+::	3702	12848
+::	3389	1708
+fe80::f9a1:579b:7a02:62f2%41	1900	13504
+fe80::e4f5:fd5:2b68:dd63%22	1900	13504
+fe80::3283:d76b:f03c:77dd%20	1900	13504
+::1	1900	13504
+::	500	3896
+172.24.240.1	59942	13504
+172.31.128.1	59941	13504
+127.0.0.1	59940	13504
+198.51.100.235	59939	13504
+100.64.212.206	59938	13504
+0.0.0.0	59098	4020
+127.0.0.1	57454	5096
+0.0.0.0	55538	12848
+0.0.0.0	54074	4020
+0.0.0.0	54073	4020
+0.0.0.0	52785	5288
+0.0.0.0	52119	2960
+0.0.0.0	21119	2960
+0.0.0.0	5355	2340
+0.0.0.0	5353	2340
+0.0.0.0	5050	6884
+0.0.0.0	4500	3896
+0.0.0.0	3702	12848
+0.0.0.0	3702	12848
+0.0.0.0	3389	1708
+198.51.100.235	1900	13504
+172.31.128.1	1900	13504
+172.24.240.1	1900	13504
+127.0.0.1	1900	13504
+100.64.212.206	1900	13504
+0.0.0.0	500	3896
+198.51.100.235	138	4
+172.31.128.1	138	4
+172.24.240.1	138	4
+198.51.100.235	137	4
+172.31.128.1	137	4
+172.24.240.1	137	4
+172.31.128.1	68	4020
+172.31.128.1	67	4020
+0.0.0.0	53	4020
+SSHMGR-INVENTORY STATUS listen-udp 0
+SSHMGR-INVENTORY SECTION processes
+4	System	
+1052	wininit	
+1168	services	
+1224	lsass	C:\Windows\system32\lsass.exe
+1540	svchost	C:\Windows\system32\svchost.exe
+1708	svchost	C:\Windows\System32\svchost.exe
+2340	svchost	C:\Windows\system32\svchost.exe
+2960	rustdesk	C:\Program Files\RustDesk\RustDesk.exe
+3312	svchost	C:\Windows\system32\svchost.exe
+3352	vmms	C:\Windows\system32\vmms.exe
+3548	svchost	C:\Windows\System32\svchost.exe
+3556	svchost	C:\Windows\System32\svchost.exe
+3896	svchost	C:\Windows\system32\svchost.exe
+4020	svchost	C:\Windows\System32\svchost.exe
+4104	svchost	C:\Windows\system32\svchost.exe
+4896	spoolsv	C:\Windows\System32\spoolsv.exe
+4996	OneApp.IGCC.WinService	C:\Windows\System32\DriverStore\FileRepository\igcc_dch.inf_amd64_54b736e5be5b50b2\OneApp.IGCC.WinService.exe
+5088	jhi_service	C:\Windows\System32\DriverStore\FileRepository\dal.inf_amd64_af50fdb80983f7bc\jhi_service.exe
+5096	svchost	C:\Windows\System32\svchost.exe
+5288	netbird	C:\Program Files\Netbird\Netbird.exe
+5296	sshd	C:\Program Files\OpenSSH\sshd.exe
+5376	vss-service-x64	C:\Program Files\Synology\SynologyDrive\bin\vss-service-x64.exe
+6884	svchost	C:\Windows\system32\svchost.exe
+7420	ferryman	C:\Users\user\orca\ferryman\ferryman.exe
+10328	taskboard-client	C:\Users\user\AppData\Local\Programs\taskboard-client\taskboard-client.exe
+11084	cloud-drive-connect	C:\Users\user\AppData\Local\SynologyDrive\SynologyDrive.app\bin\cloud-drive-connect.exe
+12848	svchost	C:\Windows\system32\svchost.exe
+13504	svchost	C:\Windows\system32\svchost.exe
+16720	Orca	C:\Users\user\AppData\Local\Programs\orca\Orca.exe
+SSHMGR-INVENTORY STATUS processes 0
+SSHMGR-INVENTORY SECTION services
+6884	CDPSvc	C:\Windows\system32\svchost.exe -k LocalService -p
+2340	Dnscache	C:\Windows\system32\svchost.exe -k NetworkService -p
+1224	EFS	C:\Windows\System32\lsass.exe
+3556	EventLog	C:\Windows\System32\svchost.exe -k LocalServiceNetworkRestricted -p
+12848	FDResPub	C:\Windows\system32\svchost.exe -k LocalServiceAndNoImpersonation -p
+4996	igccservice	C:\Windows\System32\DriverStore\FileRepository\igcc_dch.inf_amd64_54b736e5be5b50b2\OneApp.IGCC.WinService.exe
+3896	IKEEXT	C:\Windows\system32\svchost.exe -k netsvcs -p
+5096	iphlpsvc	C:\Windows\System32\svchost.exe -k NetSvcs -p
+5088	jhi_service	C:\Windows\System32\DriverStore\FileRepository\dal.inf_amd64_af50fdb80983f7bc\jhi_service.exe
+1224	KeyIso	C:\Windows\system32\lsass.exe
+5288	Netbird	"C:\Program Files\Netbird\Netbird.exe" service run --log-level info --daemon-addr tcp://127.0.0.1:41731 --log-file C:\ProgramData\Netbird\client.log
+4104	PolicyAgent	C:\Windows\system32\svchost.exe -k NetworkServiceNetworkRestricted -p
+1540	RpcEptMapper	C:\Windows\system32\svchost.exe -k RPCSS -p
+1540	RpcSs	C:\Windows\system32\svchost.exe -k rpcss -p
+1224	SamSs	C:\Windows\system32\lsass.exe
+3312	Schedule	C:\Windows\system32\svchost.exe -k netsvcs -p
+3548	SessionEnv	C:\Windows\System32\svchost.exe -k netsvcs -p
+4020	SharedAccess	C:\Windows\System32\svchost.exe -k netsvcs -p
+4896	Spooler	C:\Windows\System32\spoolsv.exe
+13504	SSDPSRV	C:\Windows\system32\svchost.exe -k LocalServiceAndNoImpersonation -p
+5296	sshd	"C:\Program Files\OpenSSH\sshd.exe"
+5376	Synology Drive VSS Service x64	"C:\Program Files\Synology\SynologyDrive\bin\vss-service-x64.exe"
+1708	TermService	C:\Windows\System32\svchost.exe -k NetworkService
+1224	VaultSvc	C:\Windows\system32\lsass.exe
+3352	vmms	C:\Windows\system32\vmms.exe
+SSHMGR-INVENTORY STATUS services 0
+SSHMGR-INVENTORY SECTION firmware
+bios_vendor	Intel Corp.
+bios_version	FNCML357.0046.2020.0928.1457
+bios_date	09/28/2020 08:00:00
+board_vendor	Intel Corporation
+board_name	NUC10i7FNB
+sys_vendor	Intel(R) Client Systems
+product_name	NUC10i7FNH
+SSHMGR-INVENTORY STATUS firmware 0
+SSHMGR-INVENTORY SECTION gpu-driver
+Intel(R) UHD Graphics	27.20.100.8681	09/05/2020 08:00:00
+SSHMGR-INVENTORY STATUS gpu-driver 0
+SSHMGR-INVENTORY END

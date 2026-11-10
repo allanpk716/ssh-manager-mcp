@@ -1,0 +1,43 @@
+SSHMGR-INVENTORY BEGIN posix-v2
+SSHMGR-INVENTORY SECTION os
+kernel-name=Linux
+kernel=6.1.12
+machine=armv7l
+file=/etc/os-release
+NAME="Embedded Linux"
+VERSION="1.2"
+ID="embedded"
+VERSION_ID="1.2"
+PRETTY_NAME="Embedded Linux 1.2"
+SSHMGR-INVENTORY STATUS os 0
+SSHMGR-INVENTORY SECTION packages
+SSHMGR-INVENTORY ABSENT packages
+SSHMGR-INVENTORY SECTION listen
+SSHMGR-INVENTORY ABSENT listen
+SSHMGR-INVENTORY SECTION listen-netstat
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      310/dropbear
+SSHMGR-INVENTORY STATUS listen-netstat 0
+SSHMGR-INVENTORY SECTION listen-lsof
+SSHMGR-INVENTORY ABSENT listen-lsof
+SSHMGR-INVENTORY SECTION exe
+310	/usr/sbin/dropbear
+SSHMGR-INVENTORY STATUS exe 0
+SSHMGR-INVENTORY SECTION exe-owner
+SSHMGR-INVENTORY ABSENT exe-owner
+SSHMGR-INVENTORY SECTION apps
+SSHMGR-INVENTORY ABSENT apps
+SSHMGR-INVENTORY SECTION brew
+SSHMGR-INVENTORY ABSENT brew
+SSHMGR-INVENTORY SECTION synology-packages
+SSHMGR-INVENTORY ABSENT synology-packages
+SSHMGR-INVENTORY SECTION container-images
+SSHMGR-INVENTORY ABSENT container-images
+SSHMGR-INVENTORY SECTION containers
+SSHMGR-INVENTORY ABSENT containers
+SSHMGR-INVENTORY SECTION firmware
+SSHMGR-INVENTORY ABSENT firmware
+SSHMGR-INVENTORY SECTION gpu-driver
+SSHMGR-INVENTORY ABSENT gpu-driver
+SSHMGR-INVENTORY END

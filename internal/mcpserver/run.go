@@ -283,8 +283,10 @@ func (h *cacheStoreHolder) versionHint() []string {
 // tools, gated by the SAME profile scoping (profileID from the verified project) and attributing
 // audit to the SAME project id. The only difference from RunStdio is that the store is read-only
 // (mutations refused) and audit is sidecar'd (per-machine, single-direction, zero-merge).
-func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) error {
-	return RunStdioCacheWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor, nil)
+// RunStdioCache 的最后一个可选参数注入软件清单在线查询能力；生产入口由
+// cli 层传入，测试可以省略（省略时工具固定报错，不读本地快照）。
+func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, inventoryQuerier ...SoftwareInventoryQuerier) error {
+	return RunStdioCacheWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor, nil, inventoryQuerier...)
 }
 
 // CacheRefresher 是桥统一换快照入口的触发器:后台轮询
@@ -300,13 +302,14 @@ type CacheRefresher interface {
 // RunStdioCacheWithRefresher 是 RunStdioCache 的扩展入口:桥装配完成后、开始
 // 服务前,把统一换快照入口的触发器交给 startBackground;其返回的停止函数在
 // 服务结束(宿主断开或热升级交割)后调用,先于桥的清理执行。startBackground
-// 为 nil 时行为与 RunStdioCache 完全一致。
-func RunStdioCacheWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, startBackground func(CacheRefresher) func()) error {
+// 为 nil 时行为与 RunStdioCache 完全一致。inventoryQuerier 是可选的软件清
+// 单在线查询能力（票 #185）。
+func RunStdioCacheWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, startBackground func(CacheRefresher) func(), inventoryQuerier ...SoftwareInventoryQuerier) error {
 	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor)
+	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor, inventoryQuerier)
 	if err != nil {
 		af.Close()
 		return err
@@ -333,8 +336,9 @@ func RunStdioCacheWithRefresher(token string, snap *store.Snapshot, auditPath st
 // sidecar handle exactly once; the caller SHOULD also defer tunnels.CloseAll /
 // tasks.CloseAll (MCP-shutdown teardown, as in RunStdio). Parameters carry the
 // same contract as RunStdioCache.
-func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, func(), error) {
-	srv, tunnels, tasks, _, cleanup, err := NewCacheBrokerWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor)
+// NewCacheBroker 的最后一个可选参数注入软件清单在线查询能力（票 #185）。
+func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, inventoryQuerier ...SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, func(), error) {
+	srv, tunnels, tasks, _, cleanup, err := NewCacheBrokerWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor, inventoryQuerier...)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -345,12 +349,14 @@ func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload
 // 统一换快照入口的触发器:端到端测试用它驱动后台轮询循环(短间隔注入),
 // `mcp --cache` 的生产路径则经 RunStdioCacheWithRefresher 拿到同一个触发器。
 // cleanup 的契约与 NewCacheBroker 相同。
-func NewCacheBrokerWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, CacheRefresher, func(), error) {
+// NewCacheBrokerWithRefresher 按 NewCacheBroker 的同一装配构建桥,并额外交出
+// 统一换快照入口的触发器。inventoryQuerier 是可选的软件清单在线查询能力。
+func NewCacheBrokerWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, inventoryQuerier ...SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, CacheRefresher, func(), error) {
 	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor)
+	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor, inventoryQuerier)
 	if err != nil {
 		af.Close()
 		return nil, nil, nil, nil, nil, err
@@ -363,7 +369,7 @@ func NewCacheBrokerWithRefresher(token string, snap *store.Snapshot, auditPath s
 // exported NewCacheBroker so the tested wiring cannot drift from the served
 // wiring. The binder is invoked once with the holder's Current; the resulting
 // wrapper is a process-lifetime value (it captures no store pointer).
-func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, *cacheStoreHolder, error) {
+func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, inventoryQuerier []SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, *cacheStoreHolder, error) {
 	h, project, err := newCacheStoreHolderFromSnapshot(token, snap, af, reload, device)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -375,7 +381,13 @@ func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func
 	}
 	// 变更提示来源注册在版本提示来源之前:两种提示同时出现时,变更
 	// 提示排在前面。
-	srv, tunnels, tasks, err := NewServerFromSourceWithHints(h.Current, project.ProfileID, project.ID, hkFn, metaEditor, h.changeHint, h.versionHint)
+	// 客户端缓存面必须在线查询软件清单：注入的转发器优先；没有时用保底
+	// 能力固定报错。两种情况都不读本地快照（快照里本来也没有清单数据）。
+	var inventory SoftwareInventoryQuerier = failClosedSoftwareInventoryQuerier{}
+	if len(inventoryQuerier) > 0 && inventoryQuerier[0] != nil {
+		inventory = inventoryQuerier[0]
+	}
+	srv, tunnels, tasks, err := NewServerFromSourceWithHints(h.Current, project.ProfileID, project.ID, hkFn, metaEditor, inventory, h.changeHint, h.versionHint)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}

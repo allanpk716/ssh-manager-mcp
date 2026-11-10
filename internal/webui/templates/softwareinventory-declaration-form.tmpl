@@ -1,0 +1,39 @@
+{{define "content"}}
+<section class="software-inventory form-page">
+<h1>{{.Title}}</h1>
+{{if .SoftwareInventoryDeclarationForm.Error}}<div class="operation-refusal">{{.SoftwareInventoryDeclarationForm.Error}}</div>{{end}}
+<form method="post" action="{{if .SoftwareInventoryDeclarationForm.ID}}/ui/software-inventory/declarations/edit{{else}}/ui/software-inventory/declarations/new{{end}}">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+{{if .SoftwareInventoryDeclarationForm.ID}}<input type="hidden" name="id" value="{{.SoftwareInventoryDeclarationForm.ID}}">{{end}}
+<input type="hidden" name="observed_key" value="{{.SoftwareInventoryDeclarationForm.ObservedStableKey}}">
+<div class="form-field"><label for="declaration-device">设备</label><input type="text" id="declaration-device" name="device" value="{{.SoftwareInventoryDeclarationForm.Device}}" required></div>
+<div class="form-field"><label for="declaration-category">类别</label>
+<select id="declaration-category" name="category">
+{{template "softwareInventoryCategoryOptions" .SoftwareInventoryDeclarationForm.Category}}
+</select></div>
+<div class="form-field"><label for="declaration-name">软件名</label><input type="text" id="declaration-name" name="name" value="{{.SoftwareInventoryDeclarationForm.Name}}" required></div>
+<div class="form-field"><label for="declaration-version">精确版本</label><input type="text" id="declaration-version" name="version" value="{{.SoftwareInventoryDeclarationForm.Version}}" required></div>
+<div class="form-field"><label for="declaration-purl">软件包统一地址（可选）</label><input type="text" id="declaration-purl" name="purl" value="{{.SoftwareInventoryDeclarationForm.PackageURL}}"></div>
+<div class="form-field"><label for="declaration-cpe">美国国家漏洞库产品命名（可选）</label><input type="text" id="declaration-cpe" name="cpe" value="{{.SoftwareInventoryDeclarationForm.CPE}}"></div>
+<div class="form-field"><label for="declaration-ports">监听端口（每行：监听地址,端口,协议,暴露级别代号）</label>
+<textarea id="declaration-ports" name="ports" rows="4">{{.SoftwareInventoryDeclarationForm.ListeningPortsText}}</textarea>
+<p class="form-help">暴露级别代号：local_machine、specific_address、all_addresses、local_area_network、virtual_local_area_network、public_network。</p></div>
+<div class="form-field"><label for="declaration-belongs-to">所属（可选）</label><input type="text" id="declaration-belongs-to" name="belongs_to" value="{{.SoftwareInventoryDeclarationForm.BelongsTo}}"></div>
+<div class="form-field"><label for="declaration-note">备注（可选）</label><input type="text" id="declaration-note" name="note" value="{{.SoftwareInventoryDeclarationForm.Note}}"></div>
+{{if .SoftwareInventoryDeclarationForm.ObservedStableKey}}<p class="form-help">提交后会认领这条实测条目。</p>{{end}}
+{{if .SoftwareInventoryDeclarationForm.ID}}
+<button type="submit" name="action" value="save">保存修改</button>
+<button type="submit" name="action" value="claim">保存并认领</button>
+{{else}}<button type="submit">保存声明</button>{{end}}
+<a class="button-link" href="/ui/software-inventory/todos">取消</a>
+</form>
+</section>
+{{end}}
+
+{{define "softwareInventoryCategoryOptions"}}
+<option value="operating_system"{{if eq . "operating_system"}} selected{{end}}>操作系统</option>
+<option value="service_program"{{if eq . "service_program"}} selected{{end}}>服务程序</option>
+<option value="container_image"{{if eq . "container_image"}} selected{{end}}>容器镜像</option>
+<option value="driver_firmware"{{if eq . "driver_firmware"}} selected{{end}}>驱动与固件</option>
+<option value="system_package"{{if eq . "system_package"}} selected{{end}}>系统包</option>
+{{end}}
