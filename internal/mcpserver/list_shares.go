@@ -35,6 +35,19 @@ const (
 	sharedStorageRemoteNewerNote = "远端配置版本比本进程快照新，请先同步快照再调用挂载工具"
 )
 
+// sharedStorageUnreachableNote 把现场检测失败原因映射为「不可达」的固定
+// 说明；未知原因按 SSH 连接失败呈现。
+func sharedStorageUnreachableNote(reason string) string {
+	switch reason {
+	case sharemount.CheckFailureSudo:
+		return "提权失败"
+	case sharemount.CheckFailureUnsupportedSystem:
+		return "系统不受支持"
+	default:
+		return "SSH 连接失败"
+	}
+}
+
 // errSharedStorageAuthorityTooOld 是新客户端连着旧权威端时的固定报错
 // （ADR 0014：快照没有推荐版本字段时，网络拓扑与共享存储工具整体降级）。
 var errSharedStorageAuthorityTooOld = errors.New(
@@ -237,6 +250,7 @@ func annotateSharedStorageMountChecks(
 
 	service := &sharemount.Service{Store: st, Instance: bridgeCacheInstance(), HostKeys: hk}
 	results := make([]*sharemount.CheckResult, len(order))
+	failures := make([]*sharemount.CheckFailure, len(order))
 	var wg sync.WaitGroup
 	for index, id := range order {
 		target := targets[id]
@@ -247,6 +261,10 @@ func annotateSharedStorageMountChecks(
 				Server: target.server, Shares: target.shares,
 			})
 			if err != nil {
+				var checkFailure *sharemount.CheckFailure
+				if errors.As(err, &checkFailure) {
+					failures[index] = checkFailure
+				}
 				fmt.Fprintf(os.Stderr, "sshmgr: list_shares 现场检测 %s 失败：%v\n",
 					target.server.Name, err)
 				return
@@ -264,6 +282,13 @@ func annotateSharedStorageMountChecks(
 				state = result.States[stateIndex]
 			}
 			status, notes := sharedStorageMountPresentation(views[ref.shareIndex].share, state, result)
+			if result == nil && status == shareMountStatusUnreachable {
+				note := sharedStorageUnreachableNote("")
+				if failures[index] != nil {
+					note = sharedStorageUnreachableNote(failures[index].Reason)
+				}
+				notes = []string{note}
+			}
 			entry := &out.Shares[ref.shareIndex].Servers[ref.entryIndex]
 			entry.MountStatus = status
 			entry.MountNotes = notes

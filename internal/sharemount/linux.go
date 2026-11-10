@@ -82,9 +82,11 @@ func buildLinuxMountCommand(share *models.SharedStorage, candidates []*Candidate
 	versionValue := sshbroker.POSIXShellQuote(strconv.FormatInt(share.Version, 10))
 
 	command := `set -eu
+sshmgr_exit_missing_cifs=` + strconv.Itoa(linuxExitMissingCIFS) + `
+sshmgr_exit_invalid_fstab=` + strconv.Itoa(linuxExitInvalidFstab) + `
 if ! command -v mount.cifs >/dev/null 2>&1; then
   echo ` + linuxMountMarker + ` missing-mount-cifs >&2
-  exit 83
+  exit "$sshmgr_exit_missing_cifs"
 fi
 install -d -m 700 ` + sshbroker.POSIXShellQuote(linuxCredentialRoot) + `
 install -d -m 755 ` + sshbroker.POSIXShellQuote(linuxMountRoot) + `
@@ -132,18 +134,18 @@ while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
   [ "$sshmgr_option_share" = "$sshmgr_expected_share" ] || continue
   case "$sshmgr_option_version" in ''|*[!0-9]*)
     echo ` + linuxMountMarker + ` invalid-fstab-marker >&2
-    exit 89
+    exit "$sshmgr_exit_invalid_fstab"
   esac
   sshmgr_managed_count=$((sshmgr_managed_count+1))
   if [ "$sshmgr_managed_count" -gt 1 ]; then
     echo ` + linuxMountMarker + ` duplicate-fstab-entry >&2
-    exit 89
+    exit "$sshmgr_exit_invalid_fstab"
   fi
   sshmgr_existing_line=$sshmgr_line
   sshmgr_remote_version=$sshmgr_option_version
   case "$sshmgr_option_vers" in 3.1.1|3.0|2.1|2.0) sshmgr_existing_version=$sshmgr_option_vers ;; *)
     echo ` + linuxMountMarker + ` invalid-fstab-entry >&2
-    exit 89
+    exit "$sshmgr_exit_invalid_fstab"
   esac
   sshmgr_existing_address=${1#//}
   sshmgr_existing_address=${sshmgr_existing_address%/*}

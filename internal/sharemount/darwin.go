@@ -64,9 +64,11 @@ func buildDarwinMountCommand(share *models.SharedStorage, candidates []*Candidat
 	versionValue := sshbroker.POSIXShellQuote(strconv.FormatInt(share.Version, 10))
 
 	return `set -eu
+sshmgr_exit_missing_command=` + strconv.Itoa(darwinExitMissingCommand) + `
+sshmgr_exit_invalid_config=` + strconv.Itoa(darwinExitInvalidConfig) + `
 if ! command -v automount >/dev/null 2>&1; then
   echo ` + darwinMountMarker + ` missing-automount >&2
-  exit 83
+  exit "$sshmgr_exit_missing_command"
 fi
 install -d -m 700 '/etc/sshmgr'
 ` + sharedStorageDirectoryLockScript(sharedStorageLockPath, 30, darwinExitLockTimeout, darwinMountMarker) + `
@@ -109,23 +111,23 @@ sshmgr_parse_marker() {
   sshmgr_marker_version=${sshmgr_marker_version#sshmgr-version=}
   case "$sshmgr_marker_version" in ''|*[!0-9]*)
     echo ` + darwinMountMarker + ` invalid-map-marker >&2
-    exit 89
+    exit "$sshmgr_exit_invalid_config"
   esac
   case "$sshmgr_marker_share" in
     ''|*","*|*";"*|*"="*|*"/"*|*" "*)
       echo ` + darwinMountMarker + ` invalid-map-marker >&2
-      exit 89
+      exit "$sshmgr_exit_invalid_config"
     ;;
   esac
   sshmgr_normalized_version=$((sshmgr_marker_version))
   if [ "$sshmgr_marker_version" != "$sshmgr_normalized_version" ]; then
     echo ` + darwinMountMarker + ` invalid-map-marker >&2
-    exit 89
+    exit "$sshmgr_exit_invalid_config"
   fi
   if [ -z "$sshmgr_marker_share" ] ||
      [ "$sshmgr_marker" != "sshmgr-share=$sshmgr_marker_share;sshmgr-version=$sshmgr_marker_version" ]; then
     echo ` + darwinMountMarker + ` invalid-map-marker >&2
-    exit 89
+    exit "$sshmgr_exit_invalid_config"
   fi
 }
 
@@ -135,13 +137,13 @@ sshmgr_parse_current_entry() {
   set +f
   if [ "$#" -ne 3 ] || [ "$1" != "$share_name" ] || [ "$2" != -fstype=smbfs ]; then
     echo ` + darwinMountMarker + ` invalid-map-entry >&2
-    exit 89
+    exit "$sshmgr_exit_invalid_config"
   fi
   sshmgr_location=$3
   sshmgr_location=${sshmgr_location#"://$mount_user:"}
   case "$sshmgr_location" in *@*/*) ;; *)
     echo ` + darwinMountMarker + ` invalid-map-entry >&2
-    exit 89
+    exit "$sshmgr_exit_invalid_config"
   esac
   sshmgr_encoded_password=${sshmgr_location%%@*}
   sshmgr_location_tail=${sshmgr_location#*@}
@@ -150,11 +152,11 @@ sshmgr_parse_current_entry() {
   if [ -z "$sshmgr_existing_address" ] || [ -z "$sshmgr_encoded_password" ] ||
      [ "$sshmgr_location_share" != "$share_name" ]; then
     echo ` + darwinMountMarker + ` invalid-map-entry >&2
-    exit 89
+    exit "$sshmgr_exit_invalid_config"
   fi
   case "$sshmgr_encoded_password" in *[!A-Za-z0-9_.~%-]*)
     echo ` + darwinMountMarker + ` invalid-map-entry >&2
-    exit 89
+    exit "$sshmgr_exit_invalid_config"
   esac
 }
 
@@ -173,7 +175,7 @@ while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
       sshmgr_managed_count=$((sshmgr_managed_count+1))
       if [ "$sshmgr_managed_count" -gt 1 ]; then
         echo ` + darwinMountMarker + ` duplicate-map-entry >&2
-        exit 89
+        exit "$sshmgr_exit_invalid_config"
       fi
       sshmgr_remote_version=$sshmgr_marker_version
       sshmgr_after_marker=2
@@ -190,7 +192,7 @@ while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
 done < ` + sshbroker.POSIXShellQuote(darwinMapFile) + `
 if [ "$sshmgr_after_marker" -ne 0 ]; then
   echo ` + darwinMountMarker + ` invalid-map-entry >&2
-  exit 89
+  exit "$sshmgr_exit_invalid_config"
 fi
 
 ` + remoteVersionGuardScript(darwinMountMarker, darwinExitRemoteNewer) + `
@@ -217,7 +219,7 @@ while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
       sshmgr_reference_present=1
     else
       echo ` + darwinMountMarker + ` invalid-auto-master >&2
-      exit 89
+      exit "$sshmgr_exit_invalid_config"
     fi
   fi
 done < ` + sshbroker.POSIXShellQuote(darwinAutoMaster) + `
@@ -250,13 +252,13 @@ sshmgr_write_map() {
     case "$sshmgr_line" in '# sshmgr-share='*)
       if [ "$sshmgr_skip_entry" -eq 1 ]; then
         echo ` + darwinMountMarker + ` invalid-map-entry >&2
-        exit 89
+        exit "$sshmgr_exit_invalid_config"
       fi
       sshmgr_parse_marker
       if [ "$sshmgr_marker_share" = "$sshmgr_expected_share" ]; then
         if [ "$sshmgr_replaced" -eq 1 ]; then
           echo ` + darwinMountMarker + ` duplicate-map-entry >&2
-          exit 89
+          exit "$sshmgr_exit_invalid_config"
         fi
         printf '# %s\n' "$sshmgr_share_marker" >> "$sshmgr_map_candidate"
         printf '%s\n' "$sshmgr_entry_line" >> "$sshmgr_map_candidate"
@@ -275,7 +277,7 @@ sshmgr_write_map() {
   done < ` + sshbroker.POSIXShellQuote(darwinMapFile) + `
   if [ "$sshmgr_skip_entry" -eq 1 ]; then
     echo ` + darwinMountMarker + ` invalid-map-entry >&2
-    exit 89
+    exit "$sshmgr_exit_invalid_config"
   fi
   if [ "$sshmgr_replaced" -eq 0 ]; then
     printf '# %s\n' "$sshmgr_share_marker" >> "$sshmgr_map_candidate"

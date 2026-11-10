@@ -76,7 +76,8 @@ func (s *Service) Check(parent context.Context, request CheckRequest) (*CheckRes
 
 	systemResult, err := s.exec(ctx, request.Server, RemoteExecRequest{Command: "uname -s"})
 	if err != nil {
-		return nil, fmt.Errorf("识别目标服务器操作系统失败：%w", sanitizedExecError(err))
+		return nil, &CheckFailure{Reason: CheckFailureSSHConnection, Err: fmt.Errorf(
+			"识别目标服务器操作系统失败：%w", sanitizedExecError(err))}
 	}
 	full := request.Server.SudoCredentialID != ""
 	switch strings.TrimSpace(systemResult.Stdout) {
@@ -87,7 +88,7 @@ func (s *Service) Check(parent context.Context, request CheckRequest) (*CheckRes
 		return s.runCheck(ctx, request, darwinCheckMarker, CheckSystemDarwin,
 			func(shares []*models.SharedStorage) string { return buildDarwinShareCheckCommand(shares) }, full)
 	default:
-		return nil, ErrUnsupportedSystem
+		return nil, &CheckFailure{Reason: CheckFailureUnsupportedSystem, Err: ErrUnsupportedSystem}
 	}
 }
 
@@ -103,10 +104,17 @@ func (s *Service) runCheck(
 		Command: command, Privileged: full,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("现场检测固定命令执行失败：%w", sanitizedExecError(err))
+		var sudoFailure *RemoteSudoFailure
+		if errors.As(err, &sudoFailure) {
+			return nil, &CheckFailure{Reason: CheckFailureSudo, Err: fmt.Errorf(
+				"现场检测固定命令执行失败：%w", err)}
+		}
+		return nil, &CheckFailure{Reason: CheckFailureSSHConnection, Err: fmt.Errorf(
+			"现场检测固定命令执行失败：%w", sanitizedExecError(err))}
 	}
 	if result.ExitCode != 0 {
-		return nil, fmt.Errorf("现场检测固定命令退出码 %d", result.ExitCode)
+		return nil, &CheckFailure{Reason: CheckFailureSSHConnection, Err: fmt.Errorf(
+			"现场检测固定命令退出码 %d", result.ExitCode)}
 	}
 	states, autoMaster, err := parseShareCheckOutput(result.Stdout, marker, request.Shares, full)
 	if err != nil {

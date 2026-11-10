@@ -33,6 +33,9 @@ type fakeShareCheckServer struct {
 	commands   []string
 }
 
+// sudoStartFailure 模拟 sudo 密码正确但提权启动失败；由需要它的夹具在
+// testsshd 选项上开启。
+
 func (f *fakeShareCheckServer) handler(command string, stdin io.Reader) (string, string, int) {
 	_, _ = io.ReadAll(stdin)
 	f.mu.Lock()
@@ -125,13 +128,14 @@ func newListSharesCheckFixture(t *testing.T) listSharesCheckFixture {
 		store: source, profileID: profileID,
 		fakes: map[string]*fakeShareCheckServer{}, serverIDs: map[string]string{},
 	}
-	addCheckedServer := func(name, system string, state fakeShareCheckState, autoMaster, sudo bool) {
+	addCheckedServer := func(name, system string, state fakeShareCheckState, autoMaster, sudo bool, sudoStartFailure string) {
 		fake := &fakeShareCheckServer{
 			system: system, autoMaster: autoMaster,
 			shares: map[string]fakeShareCheckState{"datasets": state},
 		}
 		addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
-			Password: "login-pw", SudoPassword: "sudo-pw", Exec: fake.handler,
+			Password: "login-pw", SudoPassword: "sudo-pw", SudoStartFailure: sudoStartFailure,
+			Exec: fake.handler,
 		})
 		t.Cleanup(cleanup)
 		loginCredential := &models.Credential{Type: models.CredPassword, Secret: []byte("login-pw")}
@@ -153,15 +157,18 @@ func newListSharesCheckFixture(t *testing.T) listSharesCheckFixture {
 		fixture.fakes[name] = fake
 		fixture.serverIDs[name] = added.ServerID
 	}
-	addCheckedServer("linux-mounted", "Linux", fakeShareCheckState{managed: true, version: 2, mounted: true}, false, true)
+	addCheckedServer("linux-mounted", "Linux", fakeShareCheckState{managed: true, version: 2, mounted: true}, false, true, "")
 	// 挂载点目录存在但挂载表里没有对应文件系统：现场检测必须判为未挂载。
-	addCheckedServer("linux-empty-dir", "Linux", fakeShareCheckState{managed: true, version: 2, mounted: false}, false, true)
-	addCheckedServer("linux-missing", "Linux", fakeShareCheckState{}, false, true)
-	addCheckedServer("linux-old", "Linux", fakeShareCheckState{managed: true, version: 1, mounted: true}, false, true)
-	addCheckedServer("darwin-mounted", "Darwin", fakeShareCheckState{managed: true, version: 2, mounted: true}, true, true)
-	addCheckedServer("darwin-empty-dir", "Darwin", fakeShareCheckState{managed: true, version: 2, mounted: false}, true, true)
-	addCheckedServer("darwin-reset", "Darwin", fakeShareCheckState{managed: true, version: 2, mounted: true}, false, true)
-	addCheckedServer("linux-nosudo", "Linux", fakeShareCheckState{mounted: true}, false, false)
+	addCheckedServer("linux-empty-dir", "Linux", fakeShareCheckState{managed: true, version: 2, mounted: false}, false, true, "")
+	addCheckedServer("linux-missing", "Linux", fakeShareCheckState{}, false, true, "")
+	addCheckedServer("linux-old", "Linux", fakeShareCheckState{managed: true, version: 1, mounted: true}, false, true, "")
+	addCheckedServer("darwin-mounted", "Darwin", fakeShareCheckState{managed: true, version: 2, mounted: true}, true, true, "")
+	addCheckedServer("darwin-empty-dir", "Darwin", fakeShareCheckState{managed: true, version: 2, mounted: false}, true, true, "")
+	addCheckedServer("darwin-reset", "Darwin", fakeShareCheckState{managed: true, version: 2, mounted: true}, false, true, "")
+	addCheckedServer("linux-nosudo", "Linux", fakeShareCheckState{mounted: true}, false, false, "")
+	addCheckedServer("freebsd", "FreeBSD", fakeShareCheckState{managed: true, version: 2, mounted: true}, false, true, "")
+	addCheckedServer("sudo-failed", "Linux", fakeShareCheckState{managed: true, version: 2, mounted: true}, false, true,
+		"sudo: 拒绝执行")
 
 	windowsCredential, err := source.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("login-pw")})
 	if err != nil {
@@ -290,6 +297,8 @@ func TestListSharesLiveCheckReportsEveryState(t *testing.T) {
 		"windows-web":    "not-checked",
 		"linux-nosudo":   "mounted",
 		"unreachable":    "unreachable",
+		"freebsd":        "unreachable",
+		"sudo-failed":    "unreachable",
 	} {
 		entry := listSharesServerEntry(t, output, serverName)
 		if entry.MountStatus != wantStatus {
@@ -305,7 +314,9 @@ func TestListSharesLiveCheckReportsEveryState(t *testing.T) {
 		"Windows 由每条命令前的会话内注入提供盘符")
 	assertListSharesNotes(t, listSharesServerEntry(t, output, "linux-nosudo"),
 		"服务器条目没有配置 sudo 凭据，只能确认挂载点是否可访问，未读取持久配置比较版本")
-	assertListSharesNotes(t, listSharesServerEntry(t, output, "unreachable"))
+	assertListSharesNotes(t, listSharesServerEntry(t, output, "unreachable"), "SSH 连接失败")
+	assertListSharesNotes(t, listSharesServerEntry(t, output, "freebsd"), "系统不受支持")
+	assertListSharesNotes(t, listSharesServerEntry(t, output, "sudo-failed"), "提权失败")
 
 	for _, leaked := range []string{mountShareTestPassword, "DATASETS_MOUNT_PASSWORD", "mount-user"} {
 		if strings.Contains(text, leaked) {

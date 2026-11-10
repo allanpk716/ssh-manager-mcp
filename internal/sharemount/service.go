@@ -385,8 +385,8 @@ func (s *Service) defaultRemoteExec(
 		sshbroker.WithSudoStandardInput(request.StandardInput),
 	)
 	if err == nil && result.Sudo != nil && result.Sudo.Outcome != sshbroker.SudoElevated {
-		return remoteResultFrom(result), fmt.Errorf(
-			"sudo 提权未完成（%s）：%s", result.Sudo.Outcome, result.Sudo.Diagnostic)
+		return remoteResultFrom(result), &RemoteSudoFailure{Diagnostic: fmt.Sprintf(
+			"sudo 提权未完成（%s）：%s", result.Sudo.Outcome, result.Sudo.Diagnostic)}
 	}
 	return remoteResultFrom(result), err
 }
