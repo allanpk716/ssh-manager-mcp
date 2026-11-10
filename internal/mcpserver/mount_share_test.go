@@ -20,6 +20,16 @@ import (
 )
 
 const mountShareTestPassword = `mount-P@$$ 'quotes' "double" \ end`
+const mountShareTestPasswordURLEncoded = `mount-P%40%24%24%20%27quotes%27%20%22double%22%20%5C%20end`
+
+type mountShareFakeServer interface {
+	handler(command string, stdin io.Reader) (string, string, int)
+	recorded() (commands []string, inputs [][]byte, credential string, configuration []string)
+	writeCounts() (credentialWrites int, configurationWrites int)
+	remountCount() int
+	setShareMetadata(shareID string)
+	setShareVersion(version int64)
+}
 
 type fakeLinuxMountServer struct {
 	mu sync.Mutex
@@ -171,11 +181,218 @@ func (f *fakeLinuxMountServer) remountCount() int {
 	return f.remounts
 }
 
+func (f *fakeLinuxMountServer) setShareVersion(version int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shareVersion = version
+}
+
+func (f *fakeLinuxMountServer) setShareMetadata(shareID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shareID = shareID
+}
+
 func (f *fakeLinuxMountServer) managedFstabLine(address, protocolVersion string, version int64) string {
 	return "//" + address + "/datasets /mnt/sshmgr/datasets cifs " +
 		"credentials=/etc/sshmgr/shares/" + f.shareID + ".credentials,vers=" + protocolVersion +
 		",sshmgr-share=datasets,sshmgr-version=" + fmt.Sprint(version) +
 		",_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0"
+}
+
+type fakeDarwinMountServer struct {
+	mu sync.Mutex
+
+	commands            []string
+	standardInputs      [][]byte
+	autoMasterLines     []string
+	mapLines            []string
+	mapOwner            string
+	mapMode             string
+	autoMasterWrites    int
+	mapWrites           int
+	automountRefreshes  int
+	mountPointAccesses  int
+	remounts            int
+	mounted             bool
+	reachableAddresses  map[string]bool
+	existingAddress     string
+	remoteVersion       int64
+	shareVersion        int64
+	shareID             string
+	missingAutomount    bool
+	lockHeld            bool
+	autoMasterReference bool
+}
+
+func (f *fakeDarwinMountServer) handler(command string, stdin io.Reader) (string, string, int) {
+	stdinBytes, err := io.ReadAll(stdin)
+	if err != nil {
+		return "", "read standard input: " + err.Error(), 1
+	}
+	f.mu.Lock()
+	f.commands = append(f.commands, command)
+	f.standardInputs = append(f.standardInputs, append([]byte(nil), stdinBytes...))
+	f.mu.Unlock()
+
+	switch {
+	case strings.TrimSpace(command) == "uname -s":
+		return "Darwin\n", "", 0
+	case strings.Contains(command, "sshmgr_probe_one "):
+		probeOutput := strings.Builder{}
+		for index, address := range []string{"192.0.2.10", "100.64.10.10"} {
+			if strings.Contains(command, "sshmgr_probe_one "+fmt.Sprint(index)+" "+address+" ") {
+				if f.reachableAddresses[address] {
+					probeOutput.WriteString(fmt.Sprintf("SSHMGR-PROBE %d ok 2 \n", index))
+				} else {
+					probeOutput.WriteString(fmt.Sprintf("SSHMGR-PROBE %d fail 2 no-route\n", index))
+				}
+			}
+		}
+		return probeOutput.String(), "", 0
+	case strings.Contains(command, "SSHMGR-DARWIN-MOUNT"):
+		if f.missingAutomount {
+			return "", "SSHMGR-DARWIN-MOUNT missing-automount", 83
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.lockHeld {
+			return "", "SSHMGR-DARWIN-MOUNT lock-timeout", 87
+		}
+		if f.remoteVersion > f.shareVersion {
+			return "", "SSHMGR-DARWIN-MOUNT remote-version-newer", 88
+		}
+		selectedAddress := "192.0.2.10"
+		selectedIndex := 1
+		if f.existingAddress == "100.64.10.10" && f.reachableAddresses[f.existingAddress] {
+			selectedAddress = "100.64.10.10"
+			if f.reachableAddresses["192.0.2.10"] {
+				selectedIndex = 2
+			}
+		} else if !f.reachableAddresses["192.0.2.10"] && f.reachableAddresses["100.64.10.10"] {
+			selectedAddress = "100.64.10.10"
+		}
+		wasExisting := f.existingAddress != ""
+		resetAutoMaster := !f.autoMasterReference
+		configurationMatches := wasExisting && f.remoteVersion == f.shareVersion &&
+			f.existingAddress == selectedAddress && f.mounted
+		if configurationMatches && !resetAutoMaster {
+			return fmt.Sprintf("SSHMGR-DARWIN-MOUNT result=no-change selected=%d\n", selectedIndex), "", 0
+		}
+		if !configurationMatches {
+			updatedMap := make([]string, 0, len(f.mapLines)+2)
+			currentMarker := fmt.Sprintf("# sshmgr-share=datasets;sshmgr-version=%d", f.shareVersion)
+			currentEntry := fmt.Sprintf("datasets -fstype=smbfs ://mount-user:%s@%s/datasets",
+				mountShareTestPasswordURLEncoded, selectedAddress)
+			replacedMarker := false
+			skipEntry := false
+			for _, line := range f.mapLines {
+				if skipEntry {
+					skipEntry = false
+					continue
+				}
+				if strings.HasPrefix(line, "# sshmgr-share=datasets;sshmgr-version=") {
+					updatedMap = append(updatedMap, currentMarker, currentEntry)
+					replacedMarker = true
+					skipEntry = true
+					continue
+				}
+				updatedMap = append(updatedMap, line)
+			}
+			if !replacedMarker {
+				updatedMap = append(updatedMap, currentMarker, currentEntry)
+			}
+			f.mapLines = updatedMap
+			f.mapOwner = "root"
+			f.mapMode = "600"
+			f.mapWrites++
+			f.existingAddress = selectedAddress
+			f.remoteVersion = f.shareVersion
+		}
+		if resetAutoMaster {
+			f.autoMasterReference = true
+			f.autoMasterLines = append(f.autoMasterLines, "/mnt/sshmgr /etc/sshmgr/auto_share")
+			f.autoMasterWrites++
+		}
+		f.automountRefreshes++
+		f.mountPointAccesses++
+		f.mounted = true
+		f.remounts++
+		action := "update-success"
+		if !wasExisting {
+			action = "first-mount-success"
+		} else if configurationMatches {
+			action = "remount-success"
+		}
+		return fmt.Sprintf("SSHMGR-DARWIN-MOUNT result=%s selected=%d reset=%s\n",
+			action, selectedIndex, boolString(resetAutoMaster)), "", 0
+	default:
+		return "", "unexpected command: " + command, 90
+	}
+}
+
+func boolString(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
+func (f *fakeDarwinMountServer) recorded() ([]string, [][]byte, string, []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	configuration := append(append([]string(nil), f.autoMasterLines...), f.mapLines...)
+	return append([]string(nil), f.commands...), append([][]byte(nil), f.standardInputs...), "", configuration
+}
+
+func (f *fakeDarwinMountServer) writeCounts() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mapWrites, f.autoMasterWrites
+}
+
+func (f *fakeDarwinMountServer) remountCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.remounts
+}
+
+func (f *fakeDarwinMountServer) setShareVersion(version int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shareVersion = version
+}
+
+func (f *fakeDarwinMountServer) setShareMetadata(shareID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shareID = shareID
+}
+
+func (f *fakeDarwinMountServer) recordedDarwin() (commands []string, inputs [][]byte, autoMaster []string, mapLines []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.commands...), append([][]byte(nil), f.standardInputs...),
+		append([]string(nil), f.autoMasterLines...), append([]string(nil), f.mapLines...)
+}
+
+func (f *fakeDarwinMountServer) resetAutoMasterReference() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.autoMasterReference = false
+	updated := make([]string, 0, len(f.autoMasterLines))
+	for _, line := range f.autoMasterLines {
+		if line != "/mnt/sshmgr /etc/sshmgr/auto_share" {
+			updated = append(updated, line)
+		}
+	}
+	f.autoMasterLines = updated
+}
+
+func (f *fakeDarwinMountServer) darwinState() (owner string, mode string, refreshes int, accesses int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mapOwner, f.mapMode, f.automountRefreshes, f.mountPointAccesses
 }
 
 type mountShareFixture struct {
@@ -184,7 +401,7 @@ type mountShareFixture struct {
 	targetID  string
 	shareID   string
 	session   *mcp.ClientSession
-	fake      *fakeLinuxMountServer
+	fake      mountShareFakeServer
 }
 
 func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)) mountShareFixture {
@@ -195,30 +412,55 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 	}
 	databasePath := filepath.Join(t.TempDir(), "mount-share-test.db")
 	storeForTest := newStoreAt(t, databasePath)
-	fake := &fakeLinuxMountServer{
-		missingMountCIFS: setup.missingMountCIFS, workingVersion: setup.workingVersion,
-		shareVersion: 1, remoteVersion: setup.remoteVersion, probeOutput: setup.probeOutput,
-		reachableAddresses: map[string]bool{"192.0.2.10": true},
-		existingAddress:    setup.existingAddress, existingProtocol: setup.existingProtocol,
-		ownerFstabLines: append([]string(nil), setup.ownerFstabLines...), lockHeld: setup.lockHeld,
-	}
-	if len(setup.reachable) != 0 {
-		fake.reachableAddresses = make(map[string]bool, len(setup.reachable))
-		for _, address := range setup.reachable {
-			fake.reachableAddresses[address] = true
+	var fake mountShareFakeServer
+	if setup.darwinTarget {
+		darwinFake := &fakeDarwinMountServer{
+			shareVersion: 1, remoteVersion: setup.darwinRemoteVersion,
+			reachableAddresses: map[string]bool{"192.0.2.10": true},
+			existingAddress:    setup.darwinExistingAddress,
+			missingAutomount:   setup.darwinMissingAutomount, lockHeld: setup.lockHeld,
+			autoMasterLines: []string{
+				"# Automounter master map",
+				"/System/Volumes/Data /System/Volumes/Data auto_databackup",
+			},
 		}
-	}
-	if strings.Contains(setup.probeOutput, "SSHMGR-PROBE 0 fail") {
-		fake.reachableAddresses["192.0.2.10"] = false
-	}
-	if strings.Contains(setup.probeOutput, "SSHMGR-PROBE 1 ok") {
-		fake.reachableAddresses["100.64.10.10"] = true
-	}
-	if fake.existingAddress != "" {
-		if fake.existingProtocol == "" {
-			fake.existingProtocol = "2.0"
+		if len(setup.reachable) != 0 {
+			darwinFake.reachableAddresses = make(map[string]bool, len(setup.reachable))
+			for _, address := range setup.reachable {
+				darwinFake.reachableAddresses[address] = true
+			}
 		}
-		fake.mounted = true
+		if darwinFake.existingAddress != "" {
+			darwinFake.mounted = true
+		}
+		fake = darwinFake
+	} else {
+		linuxFake := &fakeLinuxMountServer{
+			missingMountCIFS: setup.missingMountCIFS, workingVersion: setup.workingVersion,
+			shareVersion: 1, remoteVersion: setup.remoteVersion, probeOutput: setup.probeOutput,
+			reachableAddresses: map[string]bool{"192.0.2.10": true},
+			existingAddress:    setup.existingAddress, existingProtocol: setup.existingProtocol,
+			ownerFstabLines: append([]string(nil), setup.ownerFstabLines...), lockHeld: setup.lockHeld,
+		}
+		if len(setup.reachable) != 0 {
+			linuxFake.reachableAddresses = make(map[string]bool, len(setup.reachable))
+			for _, address := range setup.reachable {
+				linuxFake.reachableAddresses[address] = true
+			}
+		}
+		if strings.Contains(setup.probeOutput, "SSHMGR-PROBE 0 fail") {
+			linuxFake.reachableAddresses["192.0.2.10"] = false
+		}
+		if strings.Contains(setup.probeOutput, "SSHMGR-PROBE 1 ok") {
+			linuxFake.reachableAddresses["100.64.10.10"] = true
+		}
+		if linuxFake.existingAddress != "" {
+			if linuxFake.existingProtocol == "" {
+				linuxFake.existingProtocol = "2.0"
+			}
+			linuxFake.mounted = true
+		}
+		fake = linuxFake
 	}
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
 		Password: "login-pw", SudoPassword: "sudo-pw", Exec: fake.handler,
@@ -229,7 +471,15 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = storeForTest.AddDevice("linux-device", "挂载目标", "")
+	targetDeviceName := "linux-device"
+	if setup.darwinTarget {
+		targetDeviceName = "darwin-device"
+	}
+	targetServerName := "linux-web"
+	if setup.darwinTarget {
+		targetServerName = "darwin-web"
+	}
+	_, err = storeForTest.AddDevice(targetDeviceName, "挂载目标", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +512,7 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 		targetNetworks = []struct{ network, address string }{{"目标独立虚拟局域网", "198.51.100.20"}}
 	}
 	for _, membership := range targetNetworks {
-		if _, err := storeForTest.AddNetworkMembership("linux-device", membership.network, membership.address); err != nil {
+		if _, err := storeForTest.AddNetworkMembership(targetDeviceName, membership.network, membership.address); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -273,10 +523,10 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 		sudoCredential = &models.Credential{Type: models.CredPassword, Secret: []byte("sudo-pw")}
 	}
 	server := &models.Server{
-		Name: "linux-web", Host: addr[:strings.LastIndex(addr, ":")],
+		Name: targetServerName, Host: addr[:strings.LastIndex(addr, ":")],
 		Port: portOfAddr(addr), User: "deploy", ShellType: models.ShellPOSIX,
 	}
-	added, err := storeForTest.AddServerWithCredentialsToDevice(server, loginCredential, sudoCredential, "linux-device")
+	added, err := storeForTest.AddServerWithCredentialsToDevice(server, loginCredential, sudoCredential, targetDeviceName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +570,7 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 	if err := storeForTest.AddSecret("DATASETS_MOUNT_PASSWORD", "共享挂载密码", []byte(mountShareTestPassword), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	allowedTargets := []string{"linux-web"}
+	allowedTargets := []string{targetServerName}
 	if setup.notWritable {
 		allowedTargets = []string{"visible-peer"}
 	}
@@ -341,20 +591,32 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fake.shareID = addedShare.ID
-	if fake.existingAddress != "" {
-		fake.fstabLines = append([]string(nil), fake.ownerFstabLines...)
-		managedLine := fake.managedFstabLine(fake.existingAddress, fake.existingProtocol, fake.remoteVersion)
-		if len(fake.fstabLines) > 1 {
-			fake.fstabLines = append(fake.fstabLines[:1], append([]string{managedLine}, fake.fstabLines[1:]...)...)
+	fake.setShareMetadata(addedShare.ID)
+	if linuxFake, ok := fake.(*fakeLinuxMountServer); ok && linuxFake.existingAddress != "" {
+		linuxFake.fstabLines = append([]string(nil), linuxFake.ownerFstabLines...)
+		managedLine := linuxFake.managedFstabLine(
+			linuxFake.existingAddress, linuxFake.existingProtocol, linuxFake.remoteVersion,
+		)
+		if len(linuxFake.fstabLines) > 1 {
+			linuxFake.fstabLines = append(linuxFake.fstabLines[:1],
+				append([]string{managedLine}, linuxFake.fstabLines[1:]...)...)
 		} else {
-			fake.fstabLines = append(fake.fstabLines, managedLine)
+			linuxFake.fstabLines = append(linuxFake.fstabLines, managedLine)
 		}
-		fake.credentialFile = "username=mount-user\npassword=old-password\n"
+		linuxFake.credentialFile = "username=mount-user\npassword=old-password\n"
+	}
+	if darwinFake, ok := fake.(*fakeDarwinMountServer); ok && darwinFake.existingAddress != "" {
+		darwinFake.autoMasterReference = true
+		darwinFake.autoMasterLines = append(darwinFake.autoMasterLines, "/mnt/sshmgr /etc/sshmgr/auto_share")
+		darwinFake.mapLines = []string{
+			fmt.Sprintf("# sshmgr-share=datasets;sshmgr-version=%d", darwinFake.remoteVersion),
+			fmt.Sprintf("datasets -fstype=smbfs ://mount-user:old-password@%s/datasets",
+				darwinFake.existingAddress),
+		}
 	}
 	if setup.shareInvisible {
 		if err := storeForTest.DisallowSecrets(
-			[]string{"DATASETS_MOUNT_PASSWORD"}, []string{"linux-web"}, store.CLISource(),
+			[]string{"DATASETS_MOUNT_PASSWORD"}, []string{targetServerName}, store.CLISource(),
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -406,22 +668,26 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 }
 
 type mountShareFixtureSetup struct {
-	sudo                  bool
-	missingMountCIFS      bool
-	workingVersion        string
-	probeOutput           string
-	reachable             []string
-	existingAddress       string
-	existingProtocol      string
-	remoteVersion         int64
-	ownerFstabLines       []string
-	lockHeld              bool
-	notWritable           bool
-	targetOutOfProfile    bool
-	windowsTarget         bool
-	shareInvisible        bool
-	targetWithoutDevice   bool
-	targetNoCommonNetwork bool
+	sudo                   bool
+	missingMountCIFS       bool
+	workingVersion         string
+	probeOutput            string
+	reachable              []string
+	existingAddress        string
+	existingProtocol       string
+	remoteVersion          int64
+	ownerFstabLines        []string
+	lockHeld               bool
+	notWritable            bool
+	targetOutOfProfile     bool
+	windowsTarget          bool
+	shareInvisible         bool
+	targetWithoutDevice    bool
+	targetNoCommonNetwork  bool
+	darwinTarget           bool
+	darwinExistingAddress  string
+	darwinRemoteVersion    int64
+	darwinMissingAutomount bool
 }
 
 func TestMountShareTargetWithoutDeviceFailsWithoutProbe(t *testing.T) {
@@ -745,6 +1011,324 @@ func TestMountShareLinuxFirstMountSelectsPhysicalNetwork(t *testing.T) {
 	}
 }
 
+func TestMountShareDarwinFirstMountUsesIndirectAutomountMap(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+	})
+	if err := fixture.store.AddPolicyRule(policy.CustomRule{
+		ID:          "MOUNT-SHARE-DARWIN-POLICY-LEAK",
+		Shells:      []models.ShellType{models.ShellPOSIX},
+		Regex:       `SSHMGR-DARWIN-MOUNT|automount -cv`,
+		Disposition: policy.DispositionBlock,
+		Explanation: "测试规则：若 macOS 固定挂载命令进入命令策略，这次调用必须被拦截",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("macOS mount_share 失败：%s", text)
+	}
+	if output["result"] != "first-mount-success" || output["mount_point"] != "/mnt/sshmgr/datasets" ||
+		output["network_name"] != "办公物理局域网" || output["network_sequence"] != float64(1) {
+		t.Fatalf("macOS 首次挂载输出 = %#v", output)
+	}
+
+	darwinFake, ok := fixture.fake.(*fakeDarwinMountServer)
+	if !ok {
+		t.Fatalf("测试夹具没有使用 macOS 假服务器：%T", fixture.fake)
+	}
+	commands, inputs, autoMaster, mapLines := darwinFake.recordedDarwin()
+	if len(commands) != 3 {
+		t.Fatalf("macOS 远端命令数 = %d：%#v", len(commands), commands)
+	}
+	mountCommand := commands[2]
+	for _, want := range []string{
+		"printf '%s %s\\n' '/mnt/sshmgr' '/etc/sshmgr/auto_share'",
+		"/etc/sshmgr/auto_share",
+		"sshmgr-share=datasets;sshmgr-version=1",
+		"automount -cv",
+		`ls -A "$mount_point"`,
+		"SSHMGR-DARWIN-MOUNT",
+	} {
+		if !strings.Contains(mountCommand, want) {
+			t.Fatalf("macOS 固定命令缺少 %q：%s", want, mountCommand)
+		}
+	}
+	if strings.Contains(mountCommand, "LaunchDaemon") || strings.Contains(mountCommand, "launchd") {
+		t.Fatalf("macOS 固定命令不能使用 LaunchDaemon：%s", mountCommand)
+	}
+	if len(inputs) != 3 || string(inputs[2]) != mountShareTestPassword+"\n" {
+		t.Fatalf("macOS 提权命令标准输入 = %q，全部输入数 = %d", inputs, len(inputs))
+	}
+	wantMap := []string{
+		"# sshmgr-share=datasets;sshmgr-version=1",
+		"datasets -fstype=smbfs ://mount-user:" + mountShareTestPasswordURLEncoded + "@192.0.2.10/datasets",
+	}
+	if strings.Join(mapLines, "\n") != strings.Join(wantMap, "\n") {
+		t.Fatalf("macOS 间接映射文件 = %#v，期待 %#v", mapLines, wantMap)
+	}
+	foundReference := false
+	for _, line := range autoMaster {
+		if line == "/mnt/sshmgr /etc/sshmgr/auto_share" {
+			foundReference = true
+		}
+	}
+	if !foundReference {
+		t.Fatalf("autofs 主配置没有间接映射引用：%#v", autoMaster)
+	}
+	owner, mode, refreshes, accesses := darwinFake.darwinState()
+	if owner != "root" || mode != "600" || refreshes != 1 || accesses != 1 {
+		t.Fatalf("macOS 映射文件或验证状态错误：owner=%q mode=%q refreshes=%d accesses=%d",
+			owner, mode, refreshes, accesses)
+	}
+
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"mount-share"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != "ok" {
+		t.Fatalf("macOS mount-share 审计 = %+v", rows)
+	}
+	for _, leakText := range []string{text, mountCommand, rows[0].Command} {
+		if strings.Contains(leakText, mountShareTestPassword) ||
+			strings.Contains(leakText, mountShareTestPasswordURLEncoded) {
+			t.Fatalf("macOS 挂载密码泄漏：%s", leakText)
+		}
+	}
+}
+
+func TestMountShareDarwinRebuildsResetAutoMasterReference(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.darwinExistingAddress = "192.0.2.10"
+		setup.darwinRemoteVersion = 1
+	})
+	fixture.fake.(*fakeDarwinMountServer).resetAutoMasterReference()
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("主配置被重置后 macOS mount_share 失败：%s", text)
+	}
+	if output["result"] != "remount-success" {
+		t.Fatalf("主配置重建后的输出 = %#v", output)
+	}
+	notes, ok := output["mount_notes"].([]any)
+	if !ok || len(notes) != 1 || notes[0] != "系统配置被重置，已重建" {
+		t.Fatalf("主配置重建说明 = %#v", output["mount_notes"])
+	}
+
+	darwinFake := fixture.fake.(*fakeDarwinMountServer)
+	_, _, autoMaster, mapLines := darwinFake.recordedDarwin()
+	foundReference := false
+	for _, line := range autoMaster {
+		if line == "/mnt/sshmgr /etc/sshmgr/auto_share" {
+			foundReference = true
+		}
+	}
+	if !foundReference {
+		t.Fatalf("主配置重建后仍缺少间接映射引用：%#v", autoMaster)
+	}
+	if len(mapLines) != 2 || strings.Contains(strings.Join(mapLines, "\n"), "old-password") == false {
+		t.Fatalf("重建主配置不应改写间接映射：%#v", mapLines)
+	}
+	mapWrites, autoMasterWrites := darwinFake.writeCounts()
+	if mapWrites != 0 || autoMasterWrites != 1 {
+		t.Fatalf("重建主配置的写入错误：映射 %d 次，主配置 %d 次", mapWrites, autoMasterWrites)
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"mount-share"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0].Command, "系统配置被重置，已重建") {
+		t.Fatalf("主配置重建审计 = %+v", rows)
+	}
+}
+
+func TestMountShareDarwinRepeatReturnsNoChange(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+	})
+
+	first, firstText, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("第一次 macOS mount_share 失败：%s", firstText)
+	}
+	second, secondText, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("重复 macOS mount_share 失败：%s", secondText)
+	}
+	if first["result"] != "first-mount-success" || second["result"] != "no-change" {
+		t.Fatalf("两次 macOS 输出 = %#v %#v", first, second)
+	}
+	if notes, ok := second["mount_notes"].([]any); ok && len(notes) != 0 {
+		t.Fatalf("macOS 无需改动时不应给出提示：%#v", notes)
+	}
+
+	darwinFake := fixture.fake.(*fakeDarwinMountServer)
+	mapWrites, autoMasterWrites := darwinFake.writeCounts()
+	if mapWrites != 1 || autoMasterWrites != 1 || darwinFake.remountCount() != 1 {
+		t.Fatalf("重复调用不应改写 macOS 配置：映射 %d 次，主配置 %d 次，挂载刷新 %d 次",
+			mapWrites, autoMasterWrites, darwinFake.remountCount())
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"mount-share"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("macOS mount-share 审计行数 = %d", len(rows))
+	}
+	for _, row := range rows {
+		if strings.Contains(row.Command, mountShareTestPassword) ||
+			strings.Contains(row.Command, mountShareTestPasswordURLEncoded) {
+			t.Fatalf("macOS 审计泄漏挂载密码：%s", row.Command)
+		}
+	}
+}
+
+func TestMountShareDarwinUpdatesOnlyCurrentMarkerEntry(t *testing.T) {
+	ownerBefore := "owner-share -fstype=smbfs ://owner:secret@192.0.2.99/owner-share"
+	ownerAfter := "# owner comment"
+	otherMarker := "# sshmgr-share=archive;sshmgr-version=9"
+	otherEntry := "archive -fstype=smbfs ://mount-user:old-password@100.64.10.10/archive"
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.darwinExistingAddress = "100.64.10.10"
+		setup.darwinRemoteVersion = 0
+		setup.reachable = []string{"192.0.2.10", "100.64.10.10"}
+	})
+	darwinFake := fixture.fake.(*fakeDarwinMountServer)
+	darwinFake.mapLines = []string{
+		ownerBefore, otherMarker, otherEntry,
+		"# sshmgr-share=datasets;sshmgr-version=0",
+		"datasets -fstype=smbfs ://mount-user:old-password@100.64.10.10/datasets",
+		ownerAfter,
+	}
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("macOS 更新映射失败：%s", text)
+	}
+	if output["result"] != "update-success" || output["network_name"] != "办公虚拟局域网" ||
+		output["network_sequence"] != float64(1) {
+		t.Fatalf("macOS 更新输出 = %#v", output)
+	}
+	wantMap := []string{
+		ownerBefore,
+		otherMarker,
+		otherEntry,
+		"# sshmgr-share=datasets;sshmgr-version=1",
+		"datasets -fstype=smbfs ://mount-user:" + mountShareTestPasswordURLEncoded + "@100.64.10.10/datasets",
+		ownerAfter,
+	}
+	_, _, _, mapLines := darwinFake.recordedDarwin()
+	if strings.Join(mapLines, "\n") != strings.Join(wantMap, "\n") {
+		t.Fatalf("macOS 映射替换结果 =\n%#v\n期待\n%#v", mapLines, wantMap)
+	}
+}
+
+func TestMountShareDarwinReselectsWhenExistingAddressUnreachable(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.darwinExistingAddress = "100.64.10.10"
+		setup.darwinRemoteVersion = 1
+		setup.reachable = []string{"192.0.2.10"}
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("macOS 重新选址失败：%s", text)
+	}
+	if output["result"] != "update-success" || output["network_name"] != "办公物理局域网" {
+		t.Fatalf("macOS 重新选址输出 = %#v", output)
+	}
+	darwinFake := fixture.fake.(*fakeDarwinMountServer)
+	_, _, _, mapLines := darwinFake.recordedDarwin()
+	if len(mapLines) != 2 || !strings.Contains(mapLines[1], "@192.0.2.10/datasets") {
+		t.Fatalf("macOS 重新选址后的映射 = %#v", mapLines)
+	}
+}
+
+func TestMountShareDarwinMissingAutomountAndRemoteNewerVersionFail(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(*mountShareFixtureSetup)
+		wantErr string
+	}{
+		{
+			name: "缺少 automount",
+			setup: func(setup *mountShareFixtureSetup) {
+				setup.darwinTarget = true
+				setup.darwinMissingAutomount = true
+			},
+			wantErr: "目标服务器缺少 automount，请先由 owner 修复 macOS 系统组件；挂载工具不会自动安装",
+		},
+		{
+			name: "远端版本更新",
+			setup: func(setup *mountShareFixtureSetup) {
+				setup.darwinTarget = true
+				setup.darwinExistingAddress = "192.0.2.10"
+				setup.darwinRemoteVersion = 2
+			},
+			wantErr: "目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newMountShareFixture(t, testCase.setup)
+			output, text, isError := callMountShare(t, fixture.session, map[string]any{
+				"share": "datasets", "server_id": fixture.targetID,
+			})
+			if !isError || text != testCase.wantErr {
+				t.Fatalf("报错 = %q (%v)，期待 %q", text, output, testCase.wantErr)
+			}
+			darwinFake := fixture.fake.(*fakeDarwinMountServer)
+			mapWrites, autoMasterWrites := darwinFake.writeCounts()
+			if mapWrites != 0 || autoMasterWrites != 0 {
+				t.Fatalf("失败路径不应改写配置：映射 %d 次，主配置 %d 次", mapWrites, autoMasterWrites)
+			}
+			commands, _, _, _ := darwinFake.recordedDarwin()
+			for _, leakText := range []string{text, strings.Join(commands, "\n")} {
+				if strings.Contains(leakText, mountShareTestPassword) ||
+					strings.Contains(leakText, mountShareTestPasswordURLEncoded) {
+					t.Fatalf("失败路径泄漏挂载密码：%s", leakText)
+				}
+			}
+		})
+	}
+}
+
+func TestMountShareDarwinReportsLockTimeout(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.lockHeld = true
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if !isError || text != "另一个挂载正在进行，请稍后再试" {
+		t.Fatalf("macOS 文件锁超时报错 = %q (%v)", text, output)
+	}
+	darwinFake := fixture.fake.(*fakeDarwinMountServer)
+	mapWrites, autoMasterWrites := darwinFake.writeCounts()
+	if mapWrites != 0 || autoMasterWrites != 0 {
+		t.Fatalf("macOS 拿锁失败后不应改写配置：映射 %d 次，主配置 %d 次", mapWrites, autoMasterWrites)
+	}
+}
+
 func TestMountShareLinuxSMBVersionFallsBackTo20(t *testing.T) {
 	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
 		setup.workingVersion = "2.0"
@@ -982,7 +1566,7 @@ func TestMountShareLinuxUpdatesOlderRemoteVersionAndPassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.fake.shareVersion = updatedShare.Version
+	fixture.fake.setShareVersion(updatedShare.Version)
 
 	output, text, isError := callMountShare(t, fixture.session, map[string]any{
 		"share": "datasets", "server_id": fixture.targetID,

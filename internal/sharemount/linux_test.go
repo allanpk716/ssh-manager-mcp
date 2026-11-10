@@ -47,13 +47,13 @@ func TestLinuxMountCommandPassesPOSIXShellSyntaxCheck(t *testing.T) {
 	}
 }
 
-func TestSafeLinuxShareNameRejectsFstabFieldBreakers(t *testing.T) {
+func TestSafeMountShareNameRejectsConfigurationFieldBreakers(t *testing.T) {
 	for _, name := range []string{"", ".", "..", "data set", "data\tset", "data/set", `data\set`, "data\x00set"} {
-		if safeLinuxShareName(name) {
+		if safeMountShareName(name) {
 			t.Fatalf("共享名 %q 不能直接作为 fstab 字段使用", name)
 		}
 	}
-	if !safeLinuxShareName("datasets") {
+	if !safeMountShareName("datasets") {
 		t.Fatal("普通共享名应可用")
 	}
 }

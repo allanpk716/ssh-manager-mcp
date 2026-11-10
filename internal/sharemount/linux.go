@@ -349,7 +349,9 @@ echo ` + linuxMountMarker + ` result=$sshmgr_result selected=$sshmgr_selected_in
 	return command
 }
 
-func safeLinuxShareName(name string) bool {
+// safeMountShareName 保证共享名可以成为 Linux fstab 字段与 macOS autofs
+// 键名，不会被空白、斜杠或空字节拆开。
+func safeMountShareName(name string) bool {
 	return name != "" && name != "." && name != ".." &&
 		len(strings.Fields(name)) == 1 && !strings.ContainsAny(name, "/\\\x00")
 }

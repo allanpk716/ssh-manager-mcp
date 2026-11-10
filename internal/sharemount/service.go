@@ -28,12 +28,12 @@ const (
 )
 
 var (
-	ErrDarwinNotImplemented = errors.New("macOS 共享存储挂载尚未支持，请等待后续版本")
-	ErrUnsupportedSystem    = errors.New("目标服务器操作系统不支持共享存储挂载")
-	ErrNoSudo               = errors.New("服务器条目没有配置 sudo 凭据，请先由 owner 配置 sudo")
-	ErrTargetWithoutDevice  = errors.New("目标服务器未关联拓扑设备，请 owner 先把服务器归到设备上")
-	ErrNoCandidate          = errors.New("目标服务器与提供方设备没有可连通的共同网络候选地址")
-	ErrUnsafeShareName      = errors.New("共享名不能作为 Linux 挂载点使用")
+	ErrUnsupportedSystem   = errors.New("目标服务器操作系统不支持共享存储挂载")
+	ErrNoSudo              = errors.New("服务器条目没有配置 sudo 凭据，请先由 owner 配置 sudo")
+	ErrTargetWithoutDevice = errors.New("目标服务器未关联拓扑设备，请 owner 先把服务器归到设备上")
+	ErrNoCandidate         = errors.New("目标服务器与提供方设备没有可连通的共同网络候选地址")
+	ErrUnsafeShareName     = errors.New("共享名不能作为 Linux 挂载点使用")
+	ErrUnsafeDarwinName    = errors.New("共享名不能作为 macOS 挂载点使用")
 )
 
 // RemoteExecRequest 是一次固定命令执行请求。StandardInput 只会写在 sudo
@@ -112,7 +112,7 @@ type Service struct {
 }
 
 // Mount 在目标服务器上完成首次挂载、重复调用比较或按新快照更新。系统
-// 特定的固定命令由不同实现文件生成；macOS 挂载仍等待后续版本。
+// 特定的固定命令由不同实现文件生成。
 func (s *Service) Mount(parent context.Context, request Request) (*Result, error) {
 	if s == nil || s.Store == nil {
 		return nil, fmt.Errorf("共享存储挂载服务没有绑定存储")
@@ -138,14 +138,77 @@ func (s *Service) Mount(parent context.Context, request Request) (*Result, error
 	case "Linux":
 		return s.mountLinux(ctx, request)
 	case "Darwin":
-		return nil, ErrDarwinNotImplemented
+		return s.mountDarwin(ctx, request)
 	default:
 		return nil, ErrUnsupportedSystem
 	}
 }
 
+func (s *Service) mountDarwin(ctx context.Context, request Request) (*Result, error) {
+	if !safeMountShareName(request.Share.Name) {
+		return nil, ErrUnsafeDarwinName
+	}
+	selection, err := s.selectCandidate(ctx, request.Server, request.Share)
+	if err != nil {
+		return nil, err
+	}
+	candidates := selection.Reachable
+	command := buildDarwinMountCommand(request.Share, candidates)
+	standardInput := append([]byte(nil), request.Password...)
+	standardInput = append(standardInput, '\n')
+	result, execErr := s.exec(ctx, request.Server, RemoteExecRequest{
+		Command: command, Privileged: true, StandardInput: standardInput,
+	})
+	if execErr != nil {
+		return nil, fmt.Errorf("macOS 固定挂载命令执行失败：%w", sanitizedExecError(execErr))
+	}
+	switch result.ExitCode {
+	case 0:
+		action, selectedIndex, reset, parseErr := parseDarwinMountOutput(result.Stdout)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		if selectedIndex > len(candidates) {
+			return nil, errors.New("macOS 固定挂载命令返回了不存在的候选序号")
+		}
+		switch action {
+		case "first-mount-success", "update-success", "remount-success", "no-change":
+		default:
+			return nil, errors.New("macOS 固定挂载命令返回了未知结果")
+		}
+		selected := candidates[selectedIndex-1]
+		notices := []string{}
+		if reset {
+			notices = append(notices, "系统配置被重置，已重建")
+		}
+		for index := 0; index < selectedIndex-1; index++ {
+			if candidates[index].Physical {
+				notices = append(notices, "存在更靠前的物理局域网地址；挂载工具不会卸载现有挂载，如需切换请由 owner 手动切换")
+				break
+			}
+		}
+		return &Result{
+			MountPoint: darwinMountPoint(request.Share.Name), Network: selected.Network,
+			NetworkSequence: selected.Sequence, Action: action, Notices: notices,
+			Physical: selected.Physical, Attempts: selection.Attempts,
+		}, nil
+	case darwinExitMissingCommand:
+		return nil, errors.New("目标服务器缺少 automount，请先由 owner 修复 macOS 系统组件；挂载工具不会自动安装")
+	case darwinExitVerifyFailed:
+		return nil, errors.New("macOS 挂载点验证失败，不能确认共享已可用")
+	case darwinExitLockTimeout:
+		return nil, errors.New("另一个挂载正在进行，请稍后再试")
+	case darwinExitRemoteNewer:
+		return nil, errors.New("目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具")
+	case darwinExitInvalidConfig:
+		return nil, errors.New("目标服务器上的 sshmgr autofs 配置不合法，请 owner 检查后再试")
+	default:
+		return nil, fmt.Errorf("macOS 固定挂载命令失败（退出码 %d）", result.ExitCode)
+	}
+}
+
 func (s *Service) mountLinux(ctx context.Context, request Request) (*Result, error) {
-	if !safeLinuxShareName(request.Share.Name) {
+	if !safeMountShareName(request.Share.Name) {
 		return nil, ErrUnsafeShareName
 	}
 	selection, err := s.selectCandidate(ctx, request.Server, request.Share)
