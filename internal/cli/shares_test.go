@@ -187,6 +187,27 @@ func TestSharesRemoveRequiresConfirmationAndExplainsScope(t *testing.T) {
 	}
 }
 
+func TestSecretsRemoveRefusesSharedStoragePassword(t *testing.T) {
+	seedSharesCommandVault(t)
+	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+	runCli(t, "shares", "add", "scratch", "--device", "NAS", "--user", "mount-user",
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Y")
+
+	errText := runCliErr(t, "secrets", "rm", "NAS_MOUNT_PASSWORD")
+	for _, text := range []string{"仍被共享存储引用", "datasets", "scratch"} {
+		if !strings.Contains(errText, text) {
+			t.Fatalf("删除被共享存储引用的机密项应列出 %q：\n%s", text, errText)
+		}
+	}
+	if strings.Contains(errText, "FOREIGN KEY constraint failed") {
+		t.Fatalf("不应暴露数据库外键错误：\n%s", errText)
+	}
+	if out := runCli(t, "secrets", "list"); !strings.Contains(out, "NAS_MOUNT_PASSWORD") {
+		t.Fatalf("被共享存储引用的机密项不应被删除：\n%s", out)
+	}
+}
+
 func TestSharesClientRefusesWrites(t *testing.T) {
 	seedTopologyClientCacheFixture(t)
 	writes := [][]string{
