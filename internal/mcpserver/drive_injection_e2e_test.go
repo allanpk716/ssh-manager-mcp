@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -18,7 +21,9 @@ import (
 	"ssh-manager-mcp/internal/testsshd"
 )
 
-const networkDriveTestPassword = `drive-p@ss%'\"|中文`
+const networkDriveTestPassword = `drive-p@ss%'\"|()中文` + "\r\n"
+const networkDriveSecondTestPassword = `second-drive-p@ss!%()` + "\r\n"
+const networkDriveEnvironmentValue = `cmd-env-%-!中文`
 
 // fakePowerShellDriveServer 模拟登记为 PowerShell 的 Windows 目标机：按固定
 // 探测命令的输出协议回报 445 探测结果，按命令文本里带随机标记的状态行格
@@ -29,12 +34,15 @@ type fakePowerShellDriveServer struct {
 	commands       []string
 	standardInputs [][]byte
 	reachable      map[string]bool
-	// mapStatus 是映射状态行里回传的结果：ok、error-<编号> 或 timeout。
-	mapStatus string
+	// mapStatus 是第 0 个共享映射状态行里回传的结果；mapStatuses 按计划
+	// 中的共享序号区分多个共享。结果可为 ok、error-<编号> 或 timeout。
+	mapStatus   string
+	mapStatuses map[int]string
 }
 
 var driveProbeInvocationPattern = regexp.MustCompile(`probe-one (\d+) (\S+) 445 (\d+)`)
 var driveStatusMarkerPattern = regexp.MustCompile(`SSHMGR-SMBMAP:([0-9a-f]+):`)
+var driveEncodedStatusPattern = regexp.MustCompile(`SSHMGR-SMBMAP:([0-9a-f]+):(\d+):`)
 
 func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (string, string, int) {
 	stdinBytes, err := io.ReadAll(stdin)
@@ -46,11 +54,16 @@ func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (st
 	f.standardInputs = append(f.standardInputs, append([]byte(nil), stdinBytes...))
 	reachable := f.reachable
 	mapStatus := f.mapStatus
+	mapStatuses := f.mapStatuses
 	f.mu.Unlock()
 
-	if strings.Contains(command, "probe-one ") {
+	decodedCommand := command
+	if strings.Contains(command, "-EncodedCommand ") {
+		decodedCommand = strings.Join(encodedCommandScripts(command), "\n")
+	}
+	if strings.Contains(decodedCommand, "probe-one ") {
 		output := strings.Builder{}
-		for _, match := range driveProbeInvocationPattern.FindAllStringSubmatch(command, -1) {
+		for _, match := range driveProbeInvocationPattern.FindAllStringSubmatch(decodedCommand, -1) {
 			index, address := match[1], match[2]
 			if reachable[address] {
 				fmt.Fprintf(&output, "SSHMGR-PROBE %s ok 2 \n", index)
@@ -70,6 +83,26 @@ func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (st
 		}
 		return stdout + "user-command-output\n", "", 0
 	}
+	if strings.Contains(command, "-EncodedCommand ") {
+		stdout := strings.Builder{}
+		for _, script := range encodedCommandScripts(command) {
+			for _, match := range driveEncodedStatusPattern.FindAllStringSubmatch(script, -1) {
+				status := mapStatus
+				var index int
+				fmt.Sscanf(match[2], "%d", &index)
+				if status == "" {
+					status = "ok"
+				}
+				if configured, ok := mapStatuses[index]; ok {
+					status = configured
+				}
+				if status != "missing" {
+					fmt.Fprintf(&stdout, "SSHMGR-SMBMAP:%s:%s:%s\n", match[1], match[2], status)
+				}
+			}
+		}
+		return stdout.String() + "user-command-output\n", "", 0
+	}
 	return "plain-command-output\n", "", 0
 }
 
@@ -77,6 +110,31 @@ func (f *fakePowerShellDriveServer) recorded() (commands []string, inputs [][]by
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.commands...), append([][]byte(nil), f.standardInputs...)
+}
+
+func encodedCommandScripts(command string) []string {
+	const prefix = "powershell -NoProfile -NonInteractive -EncodedCommand "
+	var scripts []string
+	for _, line := range strings.Split(command, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		encoded, ok := strings.CutPrefix(line, prefix)
+		if !ok {
+			continue
+		}
+		blob, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			continue
+		}
+		if len(blob)%2 != 0 {
+			continue
+		}
+		units := make([]uint16, len(blob)/2)
+		for index := range units {
+			units[index] = binary.LittleEndian.Uint16(blob[index*2:])
+		}
+		scripts = append(scripts, string(utf16.Decode(units)))
+	}
+	return scripts
 }
 
 type networkDriveFixture struct {
@@ -87,8 +145,8 @@ type networkDriveFixture struct {
 }
 
 // seedNetworkDriveVault 建立网络盘符注入的端到端数据：提供方设备与目标设备
-// 有物理与虚拟两个共同网络、目标 PowerShell 服务器、挂载密码机密项与共享
-// 登记。变体通过 setup 调整可写名单、shell 类型或探测结论。
+// 有物理与虚拟两个共同网络、目标 Windows 服务器、挂载密码机密项与共享
+// 登记。变体通过 setup 调整可写名单、shell 类型、映射结果或探测结论。
 func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) networkDriveFixture {
 	t.Helper()
 	settings := networkDriveSeedSetup{
@@ -97,7 +155,10 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	if setup != nil {
 		setup(&settings)
 	}
-	fake := &fakePowerShellDriveServer{reachable: settings.reachable, mapStatus: settings.mapStatus}
+	fake := &fakePowerShellDriveServer{
+		reachable: settings.reachable, mapStatus: settings.mapStatus,
+		mapStatuses: settings.mapStatuses,
+	}
 	st := newStore(t)
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Exec: fake.handler})
 	t.Cleanup(cleanup)
@@ -136,6 +197,8 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	shellType := models.ShellPowerShell
 	if settings.posixTarget {
 		shellType = models.ShellPOSIX
+	} else if settings.cmdTarget {
+		shellType = models.ShellWindowsCmd
 	}
 	server := &models.Server{
 		Name: "windows-web", Host: addr[:strings.LastIndex(addr, ":")],
@@ -156,8 +219,22 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	if err := st.GrantServers(profileID, []string{added.ServerID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("DATASETS_MOUNT_PASSWORD", "共享挂载密码", []byte(networkDriveTestPassword), store.CLISource()); err != nil {
+	datasetPassword := []byte(networkDriveTestPassword)
+	if settings.invalidDatasetPassword {
+		datasetPassword = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+	}
+	if err := st.AddSecret("DATASETS_MOUNT_PASSWORD", "共享挂载密码", datasetPassword, store.CLISource()); err != nil {
 		t.Fatal(err)
+	}
+	if settings.secondShare {
+		if err := st.AddSecret("REPORTS_MOUNT_PASSWORD", "第二个共享挂载密码", []byte(networkDriveSecondTestPassword), store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if settings.environmentSecret {
+		if err := st.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(networkDriveEnvironmentValue), "HF_TOKEN", store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	allowedTargets := []string{"windows-web"}
 	if settings.notWritable {
@@ -169,7 +246,14 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 		}
 		allowedTargets = []string{"other-server"}
 	}
-	if err := st.AllowSecrets([]string{"DATASETS_MOUNT_PASSWORD"}, allowedTargets, store.CLISource()); err != nil {
+	secretNames := []string{"DATASETS_MOUNT_PASSWORD"}
+	if settings.secondShare {
+		secretNames = append(secretNames, "REPORTS_MOUNT_PASSWORD")
+	}
+	if settings.environmentSecret {
+		secretNames = append(secretNames, "API_TOKEN")
+	}
+	if err := st.AllowSecrets(secretNames, allowedTargets, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
@@ -177,6 +261,14 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 		PasswordSecret: "DATASETS_MOUNT_PASSWORD", Drive: "S",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
+	}
+	if settings.secondShare {
+		if _, err := st.AddSharedStorage(store.SharedStorageInput{
+			Name: "reports", Device: "NAS", User: "mount-user",
+			PasswordSecret: "REPORTS_MOUNT_PASSWORD", Drive: "T",
+		}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// 注入步骤是固定生成的命令，绝不能进入命令策略判定；这条规则同时拦
@@ -216,10 +308,15 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 }
 
 type networkDriveSeedSetup struct {
-	reachable   map[string]bool
-	mapStatus   string
-	notWritable bool
-	posixTarget bool
+	reachable              map[string]bool
+	mapStatus              string
+	mapStatuses            map[int]string
+	notWritable            bool
+	posixTarget            bool
+	cmdTarget              bool
+	secondShare            bool
+	invalidDatasetPassword bool
+	environmentSecret      bool
 }
 
 // TestNetworkDriveInjectionExecCommandPowerShell 覆盖贯通路径：可写名单内的
@@ -324,6 +421,361 @@ func TestNetworkDriveInjectionExecCommandPowerShell(t *testing.T) {
 		strings.Contains(string(encoded), "192.0.2.10") ||
 		strings.Contains(string(encoded), "mount-user") {
 		t.Fatalf("audit row leaked the address, account, or password: %s", encoded)
+	}
+}
+
+// TestNetworkDriveInjectionExecCommandWindowsCmd 覆盖 cmd 贯通路径：先选址，
+// 再由 cmd 启动 PowerShell 子进程映射盘符。cmd 在读取环境变量后先恢复原代
+// 码页；密码包含换行、引号、百分号、竖线与括号，仍只按长度经标准输入送
+// 达，不进入命令文本、返回或审计。
+func TestNetworkDriveInjectionExecCommandWindowsCmd(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.cmdTarget = true
+	})
+	const userCommand = `dir S:\datasets`
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": userCommand},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	var output struct {
+		Stdout                string `json:"stdout"`
+		Stderr                string `json:"stderr"`
+		InjectedNetworkDrives []struct {
+			Share string `json:"share"`
+			Drive string `json:"drive"`
+		} `json:"injected_network_drives"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if output.Stdout != "user-command-output\n" || output.Stderr != "" {
+		t.Fatalf("stdout=%q stderr=%q", output.Stdout, output.Stderr)
+	}
+	if len(output.InjectedNetworkDrives) != 1 ||
+		output.InjectedNetworkDrives[0].Share != "datasets" ||
+		output.InjectedNetworkDrives[0].Drive != "S" {
+		t.Fatalf("injected_network_drives = %#v", output.InjectedNetworkDrives)
+	}
+	if strings.Contains(toolResultText(result), networkDriveTestPassword) {
+		t.Fatal("tool result leaked the mount password")
+	}
+
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 2 {
+		t.Fatalf("remote commands = %#v, want one probe and one wrapped command", commands)
+	}
+	wrapped := commands[1]
+	scripts := encodedCommandScripts(wrapped)
+	if len(scripts) != 1 {
+		t.Fatalf("EncodedCommand scripts = %d, want one per share", len(scripts))
+	}
+	for _, want := range []string{
+		"New-SmbMapping",
+		`AddArgument('\\192.0.2.10\datasets')`,
+		"AddArgument('mount-user')",
+		"AddArgument('S:')",
+		"-Persistent $false",
+		fmt.Sprintf("New-Object byte[] %d", len(networkDriveTestPassword)),
+	} {
+		if !strings.Contains(scripts[0], want) {
+			t.Fatalf("EncodedCommand script missing %q:\n%s", want, scripts[0])
+		}
+	}
+	restore := strings.Index(wrapped, "chcp %__sshmgr_original_code_page%")
+	encodedStart := strings.Index(wrapped, "powershell -NoProfile -NonInteractive -EncodedCommand ")
+	userCommandStart := strings.Index(wrapped, userCommand)
+	if restore < 0 || encodedStart < restore || userCommandStart < encodedStart {
+		t.Fatalf("cmd wrapper must restore the code page before drive mapping and the user command:\n%s", wrapped)
+	}
+	for _, line := range strings.Split(wrapped, "\n") {
+		if strings.Contains(line, "-EncodedCommand ") && len(line) > 8191 {
+			t.Fatalf("EncodedCommand line is %d characters, above cmd limit", len(line))
+		}
+	}
+	if strings.Contains(wrapped, networkDriveTestPassword) ||
+		strings.Contains(scripts[0], networkDriveTestPassword) {
+		t.Fatal("wrapped command or EncodedCommand script leaked the mount password")
+	}
+	if string(inputs[1]) != networkDriveTestPassword {
+		t.Fatalf("wrapped command standard input = %q, want only the mount password", inputs[1])
+	}
+
+	auditRows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditRows) != 1 || auditRows[0].Command != userCommand ||
+		len(auditRows[0].InjectedShareNames) != 1 || auditRows[0].InjectedShareNames[0] != "datasets" {
+		t.Fatalf("audit rows = %#v", auditRows)
+	}
+	encoded, err := json.Marshal(auditRows[0].JSONMap())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), networkDriveTestPassword) {
+		t.Fatal("audit row leaked the mount password")
+	}
+}
+
+// TestNetworkDriveInjectionWindowsCmdMultipleSharesAreIndependent 覆盖多个共
+// 享同时注入：每个共享单独选址、单独启动 PowerShell 子进程、单独回传状态；
+// 一个共享盘符被占用不影响另一个共享映射成功。
+func TestNetworkDriveInjectionWindowsCmdMultipleSharesAreIndependent(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.cmdTarget = true
+		setup.secondShare = true
+		setup.mapStatuses = map[int]string{0: "error-85", 1: "ok"}
+	})
+	const userCommand = `dir S:\datasets T:\reports`
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": userCommand},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	var output struct {
+		Stdout                string `json:"stdout"`
+		InjectedNetworkDrives []struct {
+			Share string `json:"share"`
+			Drive string `json:"drive"`
+		} `json:"injected_network_drives"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	wantOutput := "user-command-output\n" +
+		"共享 datasets 的网络盘符 S: 未注入：盘符 S: 在这台服务器上已被占用\n"
+	if output.Stdout != wantOutput {
+		t.Fatalf("stdout = %q, want %q", output.Stdout, wantOutput)
+	}
+	if len(output.InjectedNetworkDrives) != 1 ||
+		output.InjectedNetworkDrives[0].Share != "reports" ||
+		output.InjectedNetworkDrives[0].Drive != "T" {
+		t.Fatalf("injected_network_drives = %#v", output.InjectedNetworkDrives)
+	}
+	if strings.Contains(toolResultText(result), networkDriveTestPassword) ||
+		strings.Contains(toolResultText(result), networkDriveSecondTestPassword) {
+		t.Fatal("tool result leaked a mount password")
+	}
+
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 3 {
+		t.Fatalf("remote commands = %d, want two probes and one wrapped command", len(commands))
+	}
+	wrapped := commands[len(commands)-1]
+	scripts := encodedCommandScripts(wrapped)
+	if len(scripts) != 2 {
+		t.Fatalf("EncodedCommand scripts = %d, want one per share", len(scripts))
+	}
+	if !strings.Contains(scripts[0], `AddArgument('\\192.0.2.10\datasets')`) ||
+		!strings.Contains(scripts[1], `AddArgument('\\192.0.2.10\reports')`) {
+		t.Fatalf("EncodedCommand scripts do not cover both shares in frame order:\n%s\n%s", scripts[0], scripts[1])
+	}
+	for index, script := range scripts {
+		if strings.Contains(script, networkDriveTestPassword) ||
+			strings.Contains(script, networkDriveSecondTestPassword) {
+			t.Fatalf("EncodedCommand script %d leaked a password:\n%s", index, script)
+		}
+	}
+	if strings.Contains(wrapped, networkDriveTestPassword) ||
+		strings.Contains(wrapped, networkDriveSecondTestPassword) {
+		t.Fatal("wrapped command leaked a mount password")
+	}
+	wantFrames := append([]byte{}, networkDriveTestPassword...)
+	wantFrames = append(wantFrames, networkDriveSecondTestPassword...)
+	if string(inputs[len(inputs)-1]) != string(wantFrames) {
+		t.Fatalf("standard input frames = %q, want both passwords in script order", inputs[len(inputs)-1])
+	}
+
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Command != userCommand ||
+		len(rows[0].InjectedShareNames) != 1 || rows[0].InjectedShareNames[0] != "reports" {
+		t.Fatalf("audit rows = %#v", rows)
+	}
+	encoded, err := json.Marshal(rows[0].JSONMap())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), networkDriveTestPassword) ||
+		strings.Contains(string(encoded), networkDriveSecondTestPassword) {
+		t.Fatal("audit row leaked a mount password")
+	}
+}
+
+// TestNetworkDriveInjectionWindowsCmdMixesEnvironmentInjection 钉住两类注入
+// 在同一条 cmd 命令里的标准输入帧顺序：环境变量值先带行分隔读取，网络盘
+// 密码随后按长度精确读取；两类注入都进入同一个封装并留下各自的审计名单。
+func TestNetworkDriveInjectionWindowsCmdMixesEnvironmentInjection(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.cmdTarget = true
+		setup.environmentSecret = true
+	})
+	const userCommand = `set HF_TOKEN`
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": userCommand},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	var output struct {
+		Stdout                string `json:"stdout"`
+		InjectedNetworkDrives []struct {
+			Share string `json:"share"`
+			Drive string `json:"drive"`
+		} `json:"injected_network_drives"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if output.Stdout != "user-command-output\n" {
+		t.Fatalf("stdout = %q", output.Stdout)
+	}
+	if len(output.InjectedNetworkDrives) != 1 ||
+		output.InjectedNetworkDrives[0].Share != "datasets" ||
+		output.InjectedNetworkDrives[0].Drive != "S" {
+		t.Fatalf("injected_network_drives = %#v", output.InjectedNetworkDrives)
+	}
+	if strings.Contains(toolResultText(result), networkDriveEnvironmentValue) ||
+		strings.Contains(toolResultText(result), networkDriveTestPassword) {
+		t.Fatal("tool result leaked an injected secret or mount password")
+	}
+
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 2 {
+		t.Fatalf("remote commands = %d, want one probe and one wrapped command", len(commands))
+	}
+	wrapped := commands[1]
+	envRead := strings.Index(wrapped, "set /p HF_TOKEN=")
+	restore := strings.Index(wrapped, "chcp %__sshmgr_original_code_page%")
+	encodedStart := strings.Index(wrapped, "powershell -NoProfile -NonInteractive -EncodedCommand ")
+	if envRead < 0 || restore < envRead || encodedStart < restore {
+		t.Fatalf("cmd wrapper must read the environment value before mapping the drive:\n%s", wrapped)
+	}
+	scripts := encodedCommandScripts(wrapped)
+	if len(scripts) != 1 || !strings.Contains(scripts[0], "New-SmbMapping") {
+		t.Fatalf("EncodedCommand scripts = %#v, want one network drive mapping script", scripts)
+	}
+	if strings.Contains(wrapped, networkDriveEnvironmentValue) ||
+		strings.Contains(wrapped, networkDriveTestPassword) ||
+		strings.Contains(scripts[0], networkDriveEnvironmentValue) ||
+		strings.Contains(scripts[0], networkDriveTestPassword) {
+		t.Fatal("wrapped command or EncodedCommand script leaked an injected value")
+	}
+	wantFrames := append([]byte{}, networkDriveEnvironmentValue...)
+	wantFrames = append(wantFrames, '\r', '\n')
+	wantFrames = append(wantFrames, networkDriveTestPassword...)
+	if string(inputs[1]) != string(wantFrames) {
+		t.Fatalf("standard input frames = %q, want environment value, line break, then mount password", inputs[1])
+	}
+
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Command != userCommand ||
+		len(rows[0].InjectedEnvironmentNames) != 1 || rows[0].InjectedEnvironmentNames[0] != "HF_TOKEN" ||
+		len(rows[0].InjectedShareNames) != 1 || rows[0].InjectedShareNames[0] != "datasets" {
+		t.Fatalf("audit rows = %#v", rows)
+	}
+	encoded, err := json.Marshal(rows[0].JSONMap())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), networkDriveEnvironmentValue) ||
+		strings.Contains(string(encoded), networkDriveTestPassword) {
+		t.Fatal("audit row leaked an injected value")
+	}
+}
+
+// TestNetworkDriveInjectionWindowsCmdRejectsInvalidUTF8Password 覆盖非法
+// UTF-8 挂载密码：该共享不选址、不映射、不进入标准输入，只附警告；另一个
+// 合法共享仍照常注入。
+func TestNetworkDriveInjectionWindowsCmdRejectsInvalidUTF8Password(t *testing.T) {
+	invalidPassword := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.cmdTarget = true
+		setup.secondShare = true
+		setup.invalidDatasetPassword = true
+	})
+	const userCommand = `dir T:\reports`
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": userCommand},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	var output struct {
+		Stdout                string `json:"stdout"`
+		InjectedNetworkDrives []struct {
+			Share string `json:"share"`
+			Drive string `json:"drive"`
+		} `json:"injected_network_drives"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	wantOutput := "user-command-output\n" +
+		"共享 datasets 的网络盘符 S: 未注入：挂载密码在 Windows 上不是合法 UTF-8\n"
+	if output.Stdout != wantOutput {
+		t.Fatalf("stdout = %q, want %q", output.Stdout, wantOutput)
+	}
+	if len(output.InjectedNetworkDrives) != 1 ||
+		output.InjectedNetworkDrives[0].Share != "reports" ||
+		output.InjectedNetworkDrives[0].Drive != "T" {
+		t.Fatalf("injected_network_drives = %#v", output.InjectedNetworkDrives)
+	}
+	if strings.Contains(toolResultText(result), string(invalidPassword)) {
+		t.Fatal("tool result leaked the invalid password bytes")
+	}
+
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 2 || len(inputs) != 2 {
+		t.Fatalf("remote commands and inputs = %#v %#v, want one probe and one wrapped command", commands, inputs)
+	}
+	for _, command := range commands {
+		if strings.Contains(command, "datasets") || strings.Contains(command, string(invalidPassword)) {
+			t.Fatalf("invalid-password share reached the target: %q", command)
+		}
+	}
+	if string(inputs[1]) != networkDriveSecondTestPassword {
+		t.Fatalf("wrapped command standard input = %q, want only the valid password", inputs[1])
+	}
+	scripts := encodedCommandScripts(commands[1])
+	if len(scripts) != 1 || !strings.Contains(scripts[0], `AddArgument('\\192.0.2.10\reports')`) {
+		t.Fatalf("EncodedCommand scripts = %#v, want only the reports share", scripts)
+	}
+
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Command != userCommand ||
+		len(rows[0].InjectedShareNames) != 1 || rows[0].InjectedShareNames[0] != "reports" {
+		t.Fatalf("audit rows = %#v", rows)
+	}
+	encoded, err := json.Marshal(rows[0].JSONMap())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), string(invalidPassword)) {
+		t.Fatal("audit row leaked the invalid password bytes")
 	}
 }
 
