@@ -62,6 +62,27 @@ func TestExportImport_CLIRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddProject A: %v", err)
 	}
+	if _, err := stA.AddDevice("NAS", "提供共享存储", ""); err != nil {
+		t.Fatalf("AddDevice A: %v", err)
+	}
+	if err := stA.AddSecret("NAS_MOUNT_PASSWORD", "共享存储挂载密码", []byte("mount-password"), store.CLISource()); err != nil {
+		t.Fatalf("AddSecret A: %v", err)
+	}
+	if err := stA.AllowSecrets([]string{"NAS_MOUNT_PASSWORD"}, []string{"gpu"}, store.CLISource()); err != nil {
+		t.Fatalf("AllowSecrets A: %v", err)
+	}
+	if _, err := stA.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Directories: []models.SharedStorageDirectory{{Purpose: "临时数据", Path: "tmp"}},
+	}, store.CLISource()); err != nil {
+		t.Fatalf("AddSharedStorage A: %v", err)
+	}
+	changeNote := "验证导出导入"
+	shared, err := stA.EditSharedStorage("datasets", store.SharedStorageChanges{ChangeNote: &changeNote}, store.CLISource())
+	if err != nil {
+		t.Fatalf("EditSharedStorage A: %v", err)
+	}
 	if err := stA.Close(); err != nil {
 		t.Fatalf("close A: %v", err)
 	}
@@ -124,6 +145,11 @@ func TestExportImport_CLIRoundTrip(t *testing.T) {
 	}
 	if pj, err := stB.VerifyToken(token); err != nil || pj == nil {
 		t.Fatalf("ORIGINAL TOKEN does not validate on B after CLI import: err=%v pj=%+v", err, pj)
+	}
+	restoredShared, err := stB.GetSharedStorage("datasets")
+	if err != nil || restoredShared.ID != shared.ID || restoredShared.Version != shared.Version ||
+		restoredShared.ChangeNote != changeNote || len(restoredShared.Directories) != 1 {
+		t.Fatalf("shared storage did not survive CLI export/import: err=%v shared=%+v", err, restoredShared)
 	}
 }
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -45,7 +46,10 @@ type Snapshot struct {
 	// 明文字段携带值，靠外层加密保护；导入时用目标库的主密钥重新加密。
 	Secrets      []SnapshotSecret      `json:"secrets,omitempty"`
 	SecretAllows []SnapshotSecretAllow `json:"secret_allows,omitempty"`
-	Audit        []SnapshotAudit       `json:"audit"`
+	// SharedStorages 是共享存储登记。可挂载范围不在这里重复携带；它由
+	// 机密项的可写入服务器关联推导。旧快照没有该段时导入零行。
+	SharedStorages []SnapshotSharedStorage `json:"shared_storages,omitempty"`
+	Audit          []SnapshotAudit         `json:"audit"`
 	// 命令策略段 (ticket #15):自定义规则与被停用
 	// 的默认规则编号。规则全局一套,两条导出路径都携带,不做 profile 裁剪。
 	// 旧快照(策略段尚不存在)解码为 nil 切片 → 导入零行 → 内置默认规则
@@ -243,6 +247,24 @@ type SnapshotSecret struct {
 type SnapshotSecretAllow struct {
 	SecretID string `json:"secret_id"`
 	ServerID string `json:"server_id"`
+}
+
+// SnapshotSharedStorage 是快照里的一处共享存储登记。提供方设备名字、
+// 机密项名字、候选访问地址与可挂载服务器都按标识符或关联表推导，不在
+// 这一行重复携带。
+type SnapshotSharedStorage struct {
+	ID               string                          `json:"id"`
+	Name             string                          `json:"name"`
+	DeviceID         string                          `json:"device_id"`
+	MountUser        string                          `json:"mount_user"`
+	PasswordSecretID string                          `json:"password_secret_id"`
+	Drive            string                          `json:"drive"`
+	Directories      []models.SharedStorageDirectory `json:"directories"`
+	Note             string                          `json:"note"`
+	Version          int64                           `json:"version"`
+	ChangeNote       string                          `json:"change_note"`
+	CreatedAt        int64                           `json:"created_at"`
+	UpdatedAt        int64                           `json:"updated_at"`
 }
 
 // normalizeSnapshotPinColumns 把旧快照缺失的锚格式与来源归一为默认值。
@@ -469,6 +491,9 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	if snap.Secrets, snap.SecretAllows, err = s.snapshotSecrets(); err != nil {
 		return nil, err
 	}
+	if snap.SharedStorages, err = s.snapshotSharedStorages(""); err != nil {
+		return nil, err
+	}
 
 	// policy (ticket #15): custom rules + disabled default-rule ids — global,
 	// no profile scoping (the rules are maintained once on the authoritative
@@ -557,6 +582,49 @@ func (s *Store) snapshotSecrets() ([]SnapshotSecret, []SnapshotSecretAllow, erro
 	}
 	ra.Close()
 	return secrets, allows, ra.Err()
+}
+
+// snapshotSharedStorages 读取共享存储登记。profileID 非空时按挂载密码
+// 机密项的可写入服务器列表与该 profile 授权服务器列表的交集裁剪。
+func (s *Store) snapshotSharedStorages(profileID string) ([]SnapshotSharedStorage, error) {
+	query := `
+		SELECT id,name,device_id,mount_user,password_secret_id,drive,note,directories,version,change_note,created_at,updated_at
+		FROM shared_storages`
+	arguments := make([]any, 0, 1)
+	if profileID != "" {
+		query += `
+			WHERE EXISTS (
+				SELECT 1
+				FROM secret_server_allow allow
+				JOIN profile_servers grant_row ON grant_row.server_id=allow.server_id
+				WHERE allow.secret_id=shared_storages.password_secret_id
+				  AND grant_row.profile_id=?)`
+		arguments = append(arguments, profileID)
+	}
+	query += ` ORDER BY name,id`
+	rows, err := s.db.Query(query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]SnapshotSharedStorage, 0)
+	for rows.Next() {
+		var row SnapshotSharedStorage
+		var directoriesJSON string
+		if err := rows.Scan(&row.ID, &row.Name, &row.DeviceID, &row.MountUser,
+			&row.PasswordSecretID, &row.Drive, &row.Note, &directoriesJSON,
+			&row.Version, &row.ChangeNote, &row.CreatedAt, &row.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(directoriesJSON), &row.Directories); err != nil {
+			return nil, fmt.Errorf("读取共享存储 %s 的目录约定失败: %w", row.Name, err)
+		}
+		if row.Directories == nil {
+			row.Directories = []models.SharedStorageDirectory{}
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 // ExportSnapshotForProfile returns the authorization-scoped Snapshot served to a
@@ -792,6 +860,9 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 		snap.Secrets = scopedSecrets
 		snap.SecretAllows = scopedAllows
 	}
+	if snap.SharedStorages, err = s.snapshotSharedStorages(profileID); err != nil {
+		return nil, err
+	}
 	return snap, nil
 }
 
@@ -806,8 +877,9 @@ type snapshotTopologySection struct {
 }
 
 // readSnapshotTopologySection 读取快照需要的五段网络拓扑数据。profileID
-// 非空时按该 profile 的授权范围裁剪设备，并把客户端实例关联只保留给发起
-// 拉取的客户端实例；为空时读取全量拓扑。站点与网络始终全部读取。
+// 非空时按该 profile 的授权范围裁剪设备，同时保留已下发共享存储的提供方
+// 设备，并把客户端实例关联只保留给发起拉取的客户端实例；为空时读取全量
+// 拓扑。站点与网络始终全部读取。
 func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID string) (snapshotTopologySection, error) {
 	cropToProfile := profileID != ""
 	var sites []SnapshotSite
@@ -854,7 +926,7 @@ func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID s
 		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
 		FROM devices
 		`
-	queryArguments := make([]any, 0, 3)
+	queryArguments := make([]any, 0, 4)
 	if cropToProfile {
 		deviceQuery += `WHERE id IN (
 			          SELECT COALESCE(server.device_id,'')
@@ -864,9 +936,18 @@ func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID s
 			   OR (
 			          NOT EXISTS(SELECT 1 FROM servers server WHERE server.device_id=devices.id)
 			          AND COALESCE(devices.client_token_id,'')='')
+				   OR id IN (
+				          SELECT share.device_id
+				          FROM shared_storages share
+				          WHERE EXISTS (
+				                SELECT 1
+				                FROM secret_server_allow allow
+				                JOIN profile_servers grant_row ON grant_row.server_id=allow.server_id
+				                WHERE allow.secret_id=share.password_secret_id
+				                  AND grant_row.profile_id=?))
 			   OR (?<>'' AND COALESCE(devices.client_token_id,'')=?)
 			`
-		queryArguments = append(queryArguments, profileID, initiatingClientTokenID, initiatingClientTokenID)
+		queryArguments = append(queryArguments, profileID, profileID, initiatingClientTokenID, initiatingClientTokenID)
 	}
 	deviceQuery += `ORDER BY id`
 	deviceRows, err := s.db.Query(deviceQuery, queryArguments...)
@@ -945,7 +1026,8 @@ var ErrVaultNotEmpty = errors.New("vault is not empty; import into a fresh/empty
 //   - credentials are RE-SEALED under this store's master key (master-key-independent file);
 //   - rows are inserted id-preserving in foreign-key order (sites -> networks ->
 //     devices -> network memberships -> layout coordinates -> credentials ->
-//     servers -> profiles -> grants -> projects -> host keys -> audit);
+//     servers -> profiles -> grants -> secrets -> shared storages -> projects ->
+//     host keys -> audit);
 //   - projects.token_hash/salt/prefix are written verbatim so the original plaintext token keeps validating.
 //
 // Refuses a non-empty target (any row in servers, sites, networks, devices,
@@ -963,7 +1045,7 @@ func (s *Store) ImportSnapshotForClientCache(snap *Snapshot) error {
 	return s.importSnapshot(snap, false)
 }
 
-func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) error {
+func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -1129,6 +1211,55 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 		}
 	}
 
+	// 未声明客户端版本的快照会保留共享存储、去掉全部机密项。客户端缓存
+	// 导入需要满足共享存储对机密项的外键引用；这里只给这个一次性查询库
+	// 补标识符占位行，不把它写回快照，也不让机密项查看入口看见。
+	if !ownerImport {
+		deliveredSecrets := make(map[string]bool, len(snap.Secrets))
+		for _, secret := range snap.Secrets {
+			deliveredSecrets[secret.ID] = true
+		}
+		for _, shared := range snap.SharedStorages {
+			if deliveredSecrets[shared.PasswordSecretID] {
+				continue
+			}
+			placeholderBlob, err := seal(s.masterKey, []byte{})
+			if err != nil {
+				return fmt.Errorf("seal placeholder for shared storage secret %s: %w", shared.PasswordSecretID, err)
+			}
+			if _, err := tx.Exec(`
+				INSERT INTO secrets(id,name,name_lower,note,env_name,env_name_lower,value_blob,value_version,created_at,value_updated_at)
+				VALUES(?,?,?,?,?,?,?,?,?,?)`,
+				shared.PasswordSecretID, shared.PasswordSecretID, strings.ToLower(shared.PasswordSecretID),
+				"", "", "", placeholderBlob, 1, shared.CreatedAt, shared.UpdatedAt); err != nil {
+				return fmt.Errorf("insert placeholder for shared storage secret %s: %w", shared.PasswordSecretID, err)
+			}
+			deliveredSecrets[shared.PasswordSecretID] = true
+		}
+	}
+
+	// 4b. 共享存储依赖设备与挂载密码机密项，放在两段之后导入。版本号
+	// 与变更说明原样恢复，导入不重算。
+	for _, shared := range snap.SharedStorages {
+		directories := shared.Directories
+		if directories == nil {
+			directories = []models.SharedStorageDirectory{}
+		}
+		directoriesJSON, err := json.Marshal(directories)
+		if err != nil {
+			return fmt.Errorf("encode shared storage %s directories: %w", shared.ID, err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO shared_storages(
+				id,name,name_lower,device_id,mount_user,password_secret_id,drive,note,directories,version,change_note,created_at,updated_at
+			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			shared.ID, shared.Name, strings.ToLower(shared.Name), shared.DeviceID, shared.MountUser,
+			shared.PasswordSecretID, shared.Drive, shared.Note, string(directoriesJSON),
+			shared.Version, shared.ChangeNote, shared.CreatedAt, shared.UpdatedAt); err != nil {
+			return fmt.Errorf("insert shared storage %s: %w", shared.ID, err)
+		}
+	}
+
 	// 5. projects — hash/salt/prefix VERBATIM (original plaintext token keeps validating)
 	for _, p := range snap.Projects {
 		// 空的 profile 绑定（profile 删除后留下的已吊销项目令牌）按
@@ -1199,7 +1330,7 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 	// 旧备份与旧导出没有设备段。owner 导入后强制执行与升级相同的设备生成
 	// 规则：目标库虽然是新库且打开时已写完成标记，这次恢复的数据仍来自旧
 	// 格式；客户端缓存导入显式关闭这条迁移。
-	if generateMissingDevices && len(snap.Devices) == 0 && len(snap.NetworkMemberships) == 0 {
+	if ownerImport && len(snap.Devices) == 0 && len(snap.NetworkMemberships) == 0 {
 		if err := migrateServerDevicesTx(tx, s.nowTime(), true); err != nil {
 			return fmt.Errorf("migrate server devices: %w", err)
 		}

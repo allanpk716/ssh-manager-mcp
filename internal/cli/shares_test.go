@@ -2,11 +2,16 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/vaultio"
 )
 
 func seedSharesCommandVault(t *testing.T) (string, []byte) {
@@ -38,6 +43,201 @@ func seedSharesCommandVault(t *testing.T) (string, []byte) {
 		t.Fatal(err)
 	}
 	return dbPath, masterKey
+}
+
+func seedSharesClientCache(t *testing.T, declaredClientVersion bool) string {
+	t.Helper()
+	cacheDir := t.TempDir()
+	sourceDir := t.TempDir()
+	masterKey, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.Open(filepath.Join(sourceDir, "source.db"), masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+
+	profileID, err := source.AddProfile("共享存储客户端")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTokenID, _, err := source.AddCacheToken("laptop", profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AddDevice("NAS", "提供共享存储", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AddSite("办公室", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AddNetwork(models.Network{
+		Name: "办公局域网", Type: models.NetworkPhysical, SiteName: "办公室",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AddNetworkMembership("NAS", "办公局域网", "192.0.2.10"); err != nil {
+		t.Fatal(err)
+	}
+	for _, server := range []models.Server{
+		{Name: "linux-web", Host: "192.0.2.20", Port: 22, User: "deploy", AuthMethod: models.AuthPassword},
+		{Name: "windows-web", Host: "192.0.2.21", Port: 22, User: "deploy", AuthMethod: models.AuthPassword, ShellType: models.ShellPowerShell},
+		{Name: "island", Host: "192.0.2.22", Port: 22, User: "deploy", AuthMethod: models.AuthPassword},
+	} {
+		if _, err := source.AddServer(&server); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linuxWeb, err := source.GetServerByName("linux-web")
+	if err != nil || linuxWeb == nil {
+		t.Fatalf("取 linux-web 失败：%v %+v", err, linuxWeb)
+	}
+	windowsWeb, err := source.GetServerByName("windows-web")
+	if err != nil || windowsWeb == nil {
+		t.Fatalf("取 windows-web 失败：%v %+v", err, windowsWeb)
+	}
+	if err := source.GrantServers(profileID, []string{linuxWeb.ID, windowsWeb.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.AddSecret("NAS_MOUNT_PASSWORD", "共享存储挂载密码", []byte("mount-password"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.AllowSecrets([]string{"NAS_MOUNT_PASSWORD"}, []string{"linux-web"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Directories: []models.SharedStorageDirectory{{Purpose: "临时数据", Path: "tmp"}},
+		Note:        "模型数据集",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.AddSecret("OTHER_MOUNT_PASSWORD", "范围外共享的密码", []byte("other-password"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.AllowSecrets([]string{"OTHER_MOUNT_PASSWORD"}, []string{"island"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AddSharedStorage(store.SharedStorageInput{
+		Name: "scratch", Device: "NAS", User: "other-user",
+		PasswordSecret: "OTHER_MOUNT_PASSWORD", Drive: "Y",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := source.ExportSnapshotForProfile(profileID, declaredClientVersion, clientTokenID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheKey, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := vaultio.EncryptWithKey(cacheKey, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "cache.bin"), blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	authBlob, err := json.Marshal(clientops.CacheCred{
+		URL: "https://serve.example.internal:7878", Token: "code-laptop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "cache.auth.json"), authBlob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	memoryKeychain := withDEK(t)
+	if err := memoryKeychain.Set(cacheKey); err != nil {
+		t.Fatal(err)
+	}
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         filepath.Join(t.TempDir(), "no-vault.db"),
+		"SSHMGR_CACHE_DIR":     cacheDir,
+		"SSHMGR_MASTERKEY_HEX": "",
+		"SSHMGR_FILEKEY_PATH":  filepath.Join(t.TempDir(), "no-such-master.key"),
+	})
+	return cacheDir
+}
+
+func TestSharesClientReadsUndeclaredVersionSnapshot(t *testing.T) {
+	seedSharesClientCache(t, false)
+
+	list := runCli(t, "shares", "list")
+	for _, text := range []string{"datasets", "NAS", "版本号 1", "可挂载服务器数量"} {
+		if !strings.Contains(list, text) {
+			t.Fatalf("未声明客户端版本的本地快照仍应能列出共享存储，期待包含 %q：\n%s", text, list)
+		}
+	}
+	if strings.Contains(list, "scratch") {
+		t.Fatalf("可挂载范围与授权服务器没有交集的共享存储不应进入客户端快照：\n%s", list)
+	}
+
+	shown := runCli(t, "shares", "show", "datasets")
+	for _, text := range []string{"共享存储 datasets", "提供方设备：NAS", "挂载账号用户名：mount-user",
+		"盘符：Z", "候选访问地址：192.0.2.10", "临时数据=tmp", "备注：模型数据集"} {
+		if !strings.Contains(shown, text) {
+			t.Fatalf("未声明客户端版本的共享存储详情应包含 %q：\n%s", text, shown)
+		}
+	}
+	if strings.Contains(shown, "mount-password") {
+		t.Fatalf("客户端查看输出不应包含挂载密码值：\n%s", shown)
+	}
+}
+
+func TestSharesClientShowsOnlyIntersectionAndSelectsInstance(t *testing.T) {
+	defaultCacheDir := seedSharesClientCache(t, true)
+	list := runCli(t, "shares", "list")
+	if !strings.Contains(list, "datasets") || strings.Contains(list, "scratch") {
+		t.Fatalf("客户端共享存储列表应只显示有交集的共享存储：\n%s", list)
+	}
+	shown := runCli(t, "shares", "show", "datasets")
+	for _, text := range []string{
+		"挂载密码机密项：NAS_MOUNT_PASSWORD", "候选访问地址：192.0.2.10",
+		"linux-web（挂载点 /mnt/sshmgr/datasets）", "版本号：1",
+	} {
+		if !strings.Contains(shown, text) {
+			t.Fatalf("客户端共享存储详情应包含 %q：\n%s", text, shown)
+		}
+	}
+	if strings.Contains(shown, "windows-web") || strings.Contains(shown, "Z:") {
+		t.Fatalf("客户端共享存储详情只应显示机密项可写入列表与授权范围的交集：\n%s", shown)
+	}
+
+	userDir := t.TempDir()
+	instanceDir := filepath.Join(userDir, "ssh-manager", "instances", "laptop")
+	if err := os.MkdirAll(instanceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, fileName := range []string{"cache.bin", "cache.auth.json"} {
+		if err := os.Rename(filepath.Join(defaultCacheDir, fileName), filepath.Join(instanceDir, fileName)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
+	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": "", "SSHMGR_CACHE_DEK": ""})
+
+	if _, err := runCLI(t, "shares", "list"); err == nil ||
+		!strings.Contains(err.Error(), "--instance") || !strings.Contains(err.Error(), "laptop") {
+		t.Fatalf("只有命名实例时不应该静默选择默认缓存槽，实际：%v", err)
+	}
+	if list := runCli(t, "shares", "list", "--instance", "laptop"); !strings.Contains(list, "datasets") {
+		t.Fatalf("--instance 应读取指定客户端实例的共享存储：\n%s", list)
+	}
+	if shown := runCli(t, "shares", "show", "datasets", "--instance", "laptop"); !strings.Contains(shown, "linux-web") {
+		t.Fatalf("--instance 的共享存储详情应读取指定客户端实例：\n%s", shown)
+	}
 }
 
 func TestSharesAddListAndShow(t *testing.T) {

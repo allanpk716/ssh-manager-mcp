@@ -452,6 +452,27 @@ func TestBackupEncrypted_RoundTrip_ImportEquivalent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddProject: %v", err)
 	}
+	if err := stA.AddSecret("NAS_MOUNT_PASSWORD", "共享存储挂载密码", []byte("mount-password"), store.CLISource()); err != nil {
+		t.Fatalf("AddSecret: %v", err)
+	}
+	if err := stA.AllowSecrets([]string{"NAS_MOUNT_PASSWORD"}, []string{"gpu"}, store.CLISource()); err != nil {
+		t.Fatalf("AllowSecrets: %v", err)
+	}
+	if _, err := stA.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "nas", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Directories: []models.SharedStorageDirectory{{Purpose: "临时数据", Path: "tmp"}},
+	}, store.CLISource()); err != nil {
+		t.Fatalf("AddSharedStorage: %v", err)
+	}
+	newNote := "加密备份中的共享存储"
+	changeNote := "验证备份往返"
+	shared, err := stA.EditSharedStorage("datasets", store.SharedStorageChanges{
+		Note: &newNote, ChangeNote: &changeNote,
+	}, store.CLISource())
+	if err != nil {
+		t.Fatalf("EditSharedStorage: %v", err)
+	}
 	snapA, err := stA.ExportSnapshot()
 	if err != nil {
 		t.Fatalf("ExportSnapshot A: %v", err)
@@ -512,10 +533,13 @@ func TestBackupEncrypted_RoundTrip_ImportEquivalent(t *testing.T) {
 	if revisionB <= revisionA {
 		t.Fatalf("round-trip snapshot revision = %d, must advance from %d", revisionB, revisionA)
 	}
-	// explicit count assertions (servers/credentials/profiles/projects/grants)
-	if len(snapB.Servers) != 2 || len(snapB.Credentials) != 2 || len(snapB.Profiles) != 1 || len(snapB.Projects) != 1 || len(snapB.Grants) != 1 {
-		t.Fatalf("round-trip counts wrong: servers=%d creds=%d profiles=%d projects=%d grants=%d",
-			len(snapB.Servers), len(snapB.Credentials), len(snapB.Profiles), len(snapB.Projects), len(snapB.Grants))
+	// explicit count assertions (servers/credentials/profiles/projects/grants/shared storages)
+	if len(snapB.Servers) != 2 || len(snapB.Credentials) != 2 || len(snapB.Profiles) != 1 || len(snapB.Projects) != 1 || len(snapB.Grants) != 1 || len(snapB.SharedStorages) != 1 {
+		t.Fatalf("round-trip counts wrong: servers=%d creds=%d profiles=%d projects=%d grants=%d sharedStorages=%d",
+			len(snapB.Servers), len(snapB.Credentials), len(snapB.Profiles), len(snapB.Projects), len(snapB.Grants), len(snapB.SharedStorages))
+	}
+	if restored := snapB.SharedStorages[0]; restored.Version != shared.Version || restored.ChangeNote != changeNote || restored.Note != newNote {
+		t.Fatalf("shared storage did not round-trip verbatim: %+v", restored)
 	}
 	// and the ORIGINAL token still validates on B (hash/salt preserved verbatim)
 	if pj, err := stB.VerifyToken(token); err != nil || pj == nil {
