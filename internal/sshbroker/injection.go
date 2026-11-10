@@ -313,8 +313,9 @@ const NetworkDriveMappingTimeout = 3 * time.Second
 // writePowerShellNetworkDrives 为每个共享写一段映射脚本：按长度从标准输
 // 入读出密码字节，经 PowerShell 异步调用执行 New-SmbMapping（密码只存在
 // 进程内变量里，不出现在任何进程命令行），用带随机标记的状态行回传结
-// 果，再继续执行后续注入与用户命令。任何映射失败都只体现在状态行里，
-// 不会中断用户命令。
+// 果，再继续执行后续注入与用户命令。超时时只发起异步停止，不等待它完
+// 成，也不同步释放管道。任何映射失败都只体现在状态行里，不会中断用户
+// 命令。
 func writePowerShellNetworkDrives(wrapper *strings.Builder, drives []NetworkDriveInjection) {
 	for index, drive := range drives {
 		length := len(drive.Password)
@@ -328,6 +329,7 @@ func writePowerShellNetworkDrives(wrapper *strings.Builder, drives []NetworkDriv
 		fmt.Fprintf(wrapper, "$__sshmgr_password = $__sshmgr_utf8.GetString($__sshmgr_bytes, 0, %d)\n", length)
 		wrapper.WriteString("Remove-Variable __sshmgr_bytes\n")
 		wrapper.WriteString("$__sshmgr_read = 0\n")
+		wrapper.WriteString("$__sshmgr_timed_out = $false\n")
 		wrapper.WriteString("$__sshmgr_pipeline = [PowerShell]::Create()\n")
 		wrapper.WriteString("$null = $__sshmgr_pipeline.AddScript('param($localPath,$remotePath,$userName,$password) New-SmbMapping -LocalPath $localPath -RemotePath $remotePath -UserName $userName -Password $password -Persistent $false')\n")
 		fmt.Fprintf(wrapper, "$null = $__sshmgr_pipeline.AddArgument(%s)\n", powerShellSingleQuote(drive.Drive+":"))
@@ -337,7 +339,8 @@ func writePowerShellNetworkDrives(wrapper *strings.Builder, drives []NetworkDriv
 		wrapper.WriteString("$__sshmgr_task = $__sshmgr_pipeline.BeginInvoke()\n")
 		fmt.Fprintf(wrapper, "if (-not $__sshmgr_task.Wait(%d)) {\n", NetworkDriveMappingTimeout.Milliseconds())
 		wrapper.WriteString("  $__sshmgr_status = 'timeout'\n")
-		wrapper.WriteString("  try { $null = $__sshmgr_pipeline.Stop() } catch { }\n")
+		wrapper.WriteString("  $__sshmgr_timed_out = $true\n")
+		wrapper.WriteString("  try { $null = $__sshmgr_pipeline.BeginStop($null, $null) } catch { }\n")
 		wrapper.WriteString("} else {\n")
 		wrapper.WriteString("  try {\n")
 		wrapper.WriteString("    $null = $__sshmgr_pipeline.EndInvoke($__sshmgr_task)\n")
@@ -360,9 +363,9 @@ func writePowerShellNetworkDrives(wrapper *strings.Builder, drives []NetworkDriv
 		wrapper.WriteString("  $__sshmgr_status = 'error-wrapper'\n")
 		wrapper.WriteString("}\n")
 		wrapper.WriteString("if ($null -ne $__sshmgr_password) { Remove-Variable __sshmgr_password }\n")
-		wrapper.WriteString("if ($null -ne $__sshmgr_pipeline) { $__sshmgr_pipeline.Dispose() }\n")
+		wrapper.WriteString("if ($null -ne $__sshmgr_pipeline -and -not $__sshmgr_timed_out) { $__sshmgr_pipeline.Dispose() }\n")
 		fmt.Fprintf(wrapper, "Write-Output ('SSHMGR-SMBMAP:%s:%d:' + $__sshmgr_status)\n", drive.StatusMarker, index)
-		wrapper.WriteString("Remove-Variable __sshmgr_pipeline,__sshmgr_task,__sshmgr_status,__sshmgr_count,__sshmgr_exception,__sshmgr_code -ErrorAction SilentlyContinue\n")
+		wrapper.WriteString("Remove-Variable __sshmgr_pipeline,__sshmgr_task,__sshmgr_status,__sshmgr_count,__sshmgr_exception,__sshmgr_code,__sshmgr_timed_out -ErrorAction SilentlyContinue\n")
 		wrapper.WriteString("$__sshmgr_read = 0\n")
 	}
 }

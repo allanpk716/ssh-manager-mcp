@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -36,6 +37,8 @@ const (
 	networkDriveReasonAllUnreachable   = "全部候选地址在目标服务器上探测失败"
 	networkDriveReasonStatusMissing    = "注入步骤没有返回状态行"
 	networkDriveReasonStatusUnreadable = "注入步骤没有返回可识别的结果"
+	networkDriveReasonAuthentication   = "共享密码认证失败，已暂停注入，请同步或检查机密项"
+	networkDriveHintNetwork            = "提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制"
 )
 
 // networkDriveWarning 是一个共享没有注入成功的说明，只包含共享名、盘符
@@ -44,6 +47,9 @@ type networkDriveWarning struct {
 	ShareName string
 	Drive     string
 	Reason    string
+	// Notice 是不需要再套「网络盘符未注入」格式的完整说明，用于认证失败
+	// 暂停期间的简短提示。
+	Notice string
 }
 
 // networkDriveInjectionPlan 是一次执行前求出的网络盘符注入计划，与环境变
@@ -54,9 +60,28 @@ type networkDriveInjectionPlan struct {
 	items    []sshbroker.NetworkDriveInjection
 	warnings []networkDriveWarning
 	statuses map[int]string
+	// shareIDs 与 shareVersions 把状态行序号对应回本地共享登记，只在注入
+	// 计划进程内使用，不进入远端命令文本。
+	shareIDs      map[int]string
+	shareVersions map[int]int64
 	// extraTimeout 是选址与映射步骤的耗时预算；执行用户命令时把它加在
 	// SSH 超时上，注入耗时就不占用用户命令的超时。
 	extraTimeout time.Duration
+}
+
+// networkDrivePlannedShare 同时保存远端注入项与共享登记的版本号；排序后
+// 再填入执行计划，保证状态行序号与本地元数据一致。
+type networkDrivePlannedShare struct {
+	injection sshbroker.NetworkDriveInjection
+	shareID   string
+	version   int64
+}
+
+// networkDriveAuthenticationPauseState 是进程内的「共享存储编号 → 暂停时的
+// 共享存储版本号」。它不落盘，也不发送到任何目标服务器。
+var networkDriveAuthenticationPauseState struct {
+	sync.Mutex
+	versions map[string]int64
 }
 
 // networkDriveProbeExecutor 是在目标服务器上执行固定探测命令的注入点；
@@ -101,9 +126,17 @@ func buildNetworkDriveInjectionPlan(
 		plan.warn(networkDriveWarning{Reason: networkDriveReasonStatusUnreadable})
 		return plan
 	}
+	plannedShares := make([]networkDrivePlannedShare, 0, len(shares))
 	probeElapsed := time.Duration(0)
 	for _, share := range shares {
 		if share == nil || !networkDriveShareVisible(share, visible, server.ID) {
+			continue
+		}
+		if networkDriveAuthenticationPaused(share.ID, share.Version) {
+			plan.warn(networkDriveWarning{
+				ShareName: share.Name, Drive: share.Drive,
+				Notice: "共享 " + share.Name + " 因认证失败已暂停注入",
+			})
 			continue
 		}
 		password, reason := networkDriveMountPassword(st, share)
@@ -122,14 +155,25 @@ func buildNetworkDriveInjectionPlan(
 			plan.warn(networkDriveWarning{ShareName: share.Name, Drive: share.Drive, Reason: reason})
 			continue
 		}
-		plan.items = append(plan.items, sshbroker.NetworkDriveInjection{
-			ShareName: share.Name, Drive: share.Drive, Address: address,
-			UserName: share.MountUser, Password: password, StatusMarker: marker,
+		plannedShares = append(plannedShares, networkDrivePlannedShare{
+			injection: sshbroker.NetworkDriveInjection{
+				ShareName: share.Name, Drive: share.Drive, Address: address,
+				UserName: share.MountUser, Password: password, StatusMarker: marker,
+			},
+			shareID: share.ID, version: share.Version,
 		})
 	}
-	sort.Slice(plan.items, func(i, j int) bool {
-		return plan.items[i].ShareName < plan.items[j].ShareName
+	sort.Slice(plannedShares, func(i, j int) bool {
+		return plannedShares[i].injection.ShareName < plannedShares[j].injection.ShareName
 	})
+	plan.items = make([]sshbroker.NetworkDriveInjection, 0, len(plannedShares))
+	plan.shareIDs = make(map[int]string, len(plannedShares))
+	plan.shareVersions = make(map[int]int64, len(plannedShares))
+	for index, planned := range plannedShares {
+		plan.items = append(plan.items, planned.injection)
+		plan.shareIDs[index] = planned.shareID
+		plan.shareVersions[index] = planned.version
+	}
 	sort.Slice(plan.warnings, func(i, j int) bool {
 		if plan.warnings[i].ShareName == plan.warnings[j].ShareName {
 			return plan.warnings[i].Reason < plan.warnings[j].Reason
@@ -138,6 +182,37 @@ func buildNetworkDriveInjectionPlan(
 	})
 	plan.extraTimeout = probeElapsed + sshbroker.NetworkDriveMappingTimeout*time.Duration(len(plan.items))
 	return plan
+}
+
+// networkDriveAuthenticationPaused 判断共享是否处于认证失败暂停；快照中的
+// 版本号已经变化时先解除暂停，让新登记自动恢复注入。
+func networkDriveAuthenticationPaused(shareID string, version int64) bool {
+	networkDriveAuthenticationPauseState.Lock()
+	defer networkDriveAuthenticationPauseState.Unlock()
+	pausedVersion, exists := networkDriveAuthenticationPauseState.versions[shareID]
+	if !exists {
+		return false
+	}
+	if pausedVersion != version {
+		delete(networkDriveAuthenticationPauseState.versions, shareID)
+		return false
+	}
+	return true
+}
+
+// pauseNetworkDriveAuthentication 记录认证失败时的共享存储版本号。之后同
+// 一进程对所有服务器都跳过该共享，直到快照带来不同版本号。
+func pauseNetworkDriveAuthentication(shareID string, version int64) {
+	networkDriveAuthenticationPauseState.Lock()
+	defer networkDriveAuthenticationPauseState.Unlock()
+	if networkDriveAuthenticationPauseState.versions == nil {
+		networkDriveAuthenticationPauseState.versions = map[string]int64{}
+	}
+	networkDriveAuthenticationPauseState.versions[shareID] = version
+}
+
+func networkDriveAuthenticationFailed(status string) bool {
+	return status == "error-86" || status == "error-1326"
 }
 
 func (p *networkDriveInjectionPlan) warn(warning networkDriveWarning) {
@@ -285,6 +360,9 @@ func (p *networkDriveInjectionPlan) consumeStatusLines(stdout, stderr string) (s
 		if status == "ok" {
 			continue
 		}
+		if networkDriveAuthenticationFailed(status) {
+			pauseNetworkDriveAuthentication(p.shareIDs[index], p.shareVersions[index])
+		}
 		p.warn(networkDriveWarning{
 			ShareName: item.ShareName, Drive: item.Drive,
 			Reason: networkDriveStatusReason(status, item.Drive),
@@ -331,23 +409,28 @@ func (p *networkDriveInjectionPlan) parseStatusLine(line string) (networkDrivePa
 }
 
 // networkDriveStatusReason 把远端回传的映射结果转成面向 agent 的原因。分
-// 类按 #206 真机结论：85 是盘符被占用；53、64、67 与超时是网络类；其余
-// 保留系统错误编号。
+// 类按 #206 真机结论：86 与 1326 是认证失败；85 是盘符被占用；53、64、67
+// 与超时是网络类；1219 表示同一服务器已有不同凭据的连接；其余保留系统错
+// 误编号。
 func networkDriveStatusReason(status, drive string) string {
 	switch status {
 	case "timeout":
-		return "映射超时（3 秒上限），按网络类失败处理"
+		return "映射超时（3 秒上限）：" + networkDriveHintNetwork
 	case "error-85":
 		return "盘符 " + drive + ": 在这台服务器上已被占用"
+	case "error-86", "error-1326":
+		return networkDriveReasonAuthentication
 	case "error-53", "error-64", "error-67":
 		code := strings.TrimPrefix(status, "error-")
-		return "网络类失败（系统错误 " + code + "）"
+		return "网络类失败（系统错误 " + code + "）：" + networkDriveHintNetwork
+	case "error-1219":
+		return "同一服务器已有不同凭据的连接（系统错误 1219）"
 	case "error-wrapper":
 		return "注入封装执行失败"
 	}
 	if code, ok := strings.CutPrefix(status, "error-"); ok {
 		if _, err := strconv.Atoi(code); err == nil {
-			return "系统错误 " + code
+			return "其他错误（系统错误 " + code + "）"
 		}
 	}
 	return networkDriveReasonStatusUnreadable
@@ -398,6 +481,10 @@ func (p networkDriveInjectionPlan) appendWarnings(stdout string) string {
 		stdout += "\n"
 	}
 	for _, warning := range p.warnings {
+		if warning.Notice != "" {
+			stdout += warning.Notice + "\n"
+			continue
+		}
 		line := "网络盘符未注入：" + warning.Reason
 		if warning.ShareName != "" {
 			line = fmt.Sprintf("共享 %s 的网络盘符 %s: 未注入：%s",

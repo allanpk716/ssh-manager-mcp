@@ -31,10 +31,14 @@ type fakePowerShellDriveServer struct {
 	reachable      map[string]bool
 	// mapStatus 是映射状态行里回传的结果：ok、error-<编号> 或 timeout。
 	mapStatus string
+	// statusesByDrive 按盘符区分多个共享的映射结果；未指定的盘符沿用
+	// mapStatus。
+	statusesByDrive map[string]string
 }
 
 var driveProbeInvocationPattern = regexp.MustCompile(`probe-one (\d+) (\S+) 445 (\d+)`)
 var driveStatusMarkerPattern = regexp.MustCompile(`SSHMGR-SMBMAP:([0-9a-f]+):`)
+var driveArgumentPattern = regexp.MustCompile(`AddArgument\('([A-Z]):'\)`)
 
 func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (string, string, int) {
 	stdinBytes, err := io.ReadAll(stdin)
@@ -46,6 +50,7 @@ func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (st
 	f.standardInputs = append(f.standardInputs, append([]byte(nil), stdinBytes...))
 	reachable := f.reachable
 	mapStatus := f.mapStatus
+	statusesByDrive := f.statusesByDrive
 	f.mu.Unlock()
 
 	if strings.Contains(command, "probe-one ") {
@@ -61,12 +66,18 @@ func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (st
 		return output.String(), "", 0
 	}
 	if markerMatch := driveStatusMarkerPattern.FindStringSubmatch(command); markerMatch != nil {
-		if mapStatus == "" {
-			mapStatus = "ok"
-		}
 		stdout := ""
-		if mapStatus != "missing" {
-			stdout = fmt.Sprintf("SSHMGR-SMBMAP:%s:0:%s\n", markerMatch[1], mapStatus)
+		for index, driveMatch := range driveArgumentPattern.FindAllStringSubmatch(command, -1) {
+			status := mapStatus
+			if statusesByDrive[driveMatch[1]] != "" {
+				status = statusesByDrive[driveMatch[1]]
+			}
+			if status == "" {
+				status = "ok"
+			}
+			if status != "missing" {
+				stdout += fmt.Sprintf("SSHMGR-SMBMAP:%s:%d:%s\n", markerMatch[1], index, status)
+			}
 		}
 		return stdout + "user-command-output\n", "", 0
 	}
@@ -79,11 +90,18 @@ func (f *fakePowerShellDriveServer) recorded() (commands []string, inputs [][]by
 	return append([]string(nil), f.commands...), append([][]byte(nil), f.standardInputs...)
 }
 
+func (f *fakePowerShellDriveServer) setStatusesByDrive(statuses map[string]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statusesByDrive = statuses
+}
+
 type networkDriveFixture struct {
-	clientSession *mcp.ClientSession
-	serverID      string
-	store         *store.Store
-	fake          *fakePowerShellDriveServer
+	clientSession  *mcp.ClientSession
+	serverID       string
+	secondServerID string
+	store          *store.Store
+	fake           *fakePowerShellDriveServer
 }
 
 // seedNetworkDriveVault 建立网络盘符注入的端到端数据：提供方设备与目标设备
@@ -97,8 +115,12 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	if setup != nil {
 		setup(&settings)
 	}
-	fake := &fakePowerShellDriveServer{reachable: settings.reachable, mapStatus: settings.mapStatus}
+	fake := &fakePowerShellDriveServer{
+		reachable: settings.reachable, mapStatus: settings.mapStatus,
+		statusesByDrive: settings.statusesByDrive,
+	}
 	st := newStore(t)
+	secondServerID := ""
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Exec: fake.handler})
 	t.Cleanup(cleanup)
 
@@ -153,13 +175,28 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.GrantServers(profileID, []string{added.ServerID}); err != nil {
+	grantedServers := []string{added.ServerID}
+	if settings.secondServer {
+		second, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: "windows-web-2", Host: server.Host, Port: server.Port,
+			User: "deploy", ShellType: models.ShellPowerShell,
+		}, &models.Credential{Type: models.CredPassword, Secret: []byte("pw")}, nil, "windows-device")
+		if err != nil {
+			t.Fatal(err)
+		}
+		grantedServers = append(grantedServers, second.ServerID)
+		secondServerID = second.ServerID
+	}
+	if err := st.GrantServers(profileID, grantedServers); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.AddSecret("DATASETS_MOUNT_PASSWORD", "共享挂载密码", []byte(networkDriveTestPassword), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	allowedTargets := []string{"windows-web"}
+	if settings.secondServer {
+		allowedTargets = append(allowedTargets, "windows-web-2")
+	}
 	if settings.notWritable {
 		if _, err := st.AddServer(&models.Server{
 			Name: "other-server", Host: "192.0.2.99", Port: 22, User: "deploy",
@@ -169,7 +206,14 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 		}
 		allowedTargets = []string{"other-server"}
 	}
-	if err := st.AllowSecrets([]string{"DATASETS_MOUNT_PASSWORD"}, allowedTargets, store.CLISource()); err != nil {
+	allowedSecrets := []string{"DATASETS_MOUNT_PASSWORD"}
+	if settings.secondShare {
+		if err := st.AddSecret("MODELS_MOUNT_PASSWORD", "第二个共享挂载密码", []byte(networkDriveTestPassword), store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+		allowedSecrets = append(allowedSecrets, "MODELS_MOUNT_PASSWORD")
+	}
+	if err := st.AllowSecrets(allowedSecrets, allowedTargets, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
@@ -189,6 +233,14 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 		Explanation: "test rule that catches an injection step leaked into policy",
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if settings.secondShare {
+		if _, err := st.AddSharedStorage(store.SharedStorageInput{
+			Name: "models", Device: "NAS", User: "mount-user",
+			PasswordSecret: "MODELS_MOUNT_PASSWORD", Drive: "T",
+		}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	serverFace, tunnels, tasks, err := NewServer(st, profileID, "project-test")
@@ -211,15 +263,19 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	t.Cleanup(func() { _ = clientSession.Close() })
 	return networkDriveFixture{
 		clientSession: clientSession, serverID: added.ServerID,
-		store: st, fake: fake,
+		secondServerID: secondServerID,
+		store:          st, fake: fake,
 	}
 }
 
 type networkDriveSeedSetup struct {
-	reachable   map[string]bool
-	mapStatus   string
-	notWritable bool
-	posixTarget bool
+	reachable       map[string]bool
+	mapStatus       string
+	statusesByDrive map[string]string
+	notWritable     bool
+	posixTarget     bool
+	secondShare     bool
+	secondServer    bool
 }
 
 // TestNetworkDriveInjectionExecCommandPowerShell 覆盖贯通路径：可写名单内的
@@ -432,7 +488,40 @@ func TestNetworkDriveInjectionMappingFailureWarnsWithoutBlocking(t *testing.T) {
 		{
 			name:       "mapping timeout",
 			mapStatus:  "timeout",
-			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：映射超时（3 秒上限），按网络类失败处理\n",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：映射超时（3 秒上限）：提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制\n",
+		},
+		{
+			name:      "network error 53",
+			mapStatus: "error-53",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：网络类失败（系统错误 53）：" +
+				"提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制\n",
+		},
+		{
+			name:      "network error 64",
+			mapStatus: "error-64",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：网络类失败（系统错误 64）：" +
+				"提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制\n",
+		},
+		{
+			name:      "network error 67",
+			mapStatus: "error-67",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：网络类失败（系统错误 67）：" +
+				"提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制\n",
+		},
+		{
+			name:       "different credentials already connected",
+			mapStatus:  "error-1219",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：同一服务器已有不同凭据的连接（系统错误 1219）\n",
+		},
+		{
+			name:       "authentication error 86",
+			mapStatus:  "error-86",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n",
+		},
+		{
+			name:       "authentication error 1326",
+			mapStatus:  "error-1326",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n",
 		},
 		{
 			name:       "missing status line",
@@ -485,5 +574,206 @@ func TestNetworkDriveInjectionMappingFailureWarnsWithoutBlocking(t *testing.T) {
 				t.Fatalf("audit rows = %#v", rows)
 			}
 		})
+	}
+}
+
+// TestNetworkDriveInjectionAuthenticationFailurePausesOnlyFailedShare 钉住
+// 认证失败暂停的进程内效果：失败的共享不再尝试映射，其他共享仍照常注入，
+// 且暂停期间的每条命令都会得到简短说明。
+func TestNetworkDriveInjectionAuthenticationFailurePausesOnlyFailedShare(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.secondShare = true
+		setup.statusesByDrive = map[string]string{"S": "error-86"}
+	})
+	call := func(command string) (string, []struct {
+		Share string `json:"share"`
+		Drive string `json:"drive"`
+	}, bool) {
+		t.Helper()
+		result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+			Name: "exec_command",
+			Arguments: map[string]any{
+				"server_id": fixture.serverID, "command": command,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.IsError {
+			t.Fatalf("exec_command failed: %+v", result.Content)
+		}
+		var output struct {
+			Stdout                string `json:"stdout"`
+			InjectedNetworkDrives []struct {
+				Share string `json:"share"`
+				Drive string `json:"drive"`
+			} `json:"injected_network_drives"`
+		}
+		unmarshalToolJSON(t, result, &output)
+		return output.Stdout, output.InjectedNetworkDrives, strings.Contains(toolResultText(result), networkDriveTestPassword)
+	}
+
+	stdout, injected, leaked := call("Get-ChildItem S:\\datasets")
+	if leaked {
+		t.Fatal("first tool result leaked the mount password")
+	}
+	wantFirst := "user-command-output\n" +
+		"共享 datasets 的网络盘符 S: 未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n"
+	if stdout != wantFirst {
+		t.Fatalf("first stdout = %q, want %q", stdout, wantFirst)
+	}
+	if len(injected) != 1 || injected[0].Share != "models" || injected[0].Drive != "T" {
+		t.Fatalf("first injected_network_drives = %#v, want only the other share", injected)
+	}
+
+	stdout, injected, leaked = call("Get-ChildItem T:\\models")
+	if leaked {
+		t.Fatal("second tool result leaked the mount password")
+	}
+	wantSecond := "user-command-output\n共享 datasets 因认证失败已暂停注入\n"
+	if stdout != wantSecond {
+		t.Fatalf("paused stdout = %q, want %q", stdout, wantSecond)
+	}
+	if len(injected) != 1 || injected[0].Share != "models" || injected[0].Drive != "T" {
+		t.Fatalf("paused injected_network_drives = %#v, want only the other share", injected)
+	}
+
+	commands, _ := fixture.fake.recorded()
+	if len(commands) != 5 {
+		t.Fatalf("remote commands = %#v, want two probes and two wrapped commands", commands)
+	}
+	wrappedCommands := make([]string, 0, 2)
+	for _, command := range commands {
+		if strings.Contains(command, "New-SmbMapping") {
+			wrappedCommands = append(wrappedCommands, command)
+		}
+	}
+	if len(wrappedCommands) != 2 {
+		t.Fatalf("wrapped commands = %#v", wrappedCommands)
+	}
+	if !strings.Contains(wrappedCommands[0], `AddArgument('\\192.0.2.10\datasets')`) {
+		t.Fatalf("first wrapped command omitted the failed share before it was paused:\n%s", wrappedCommands[0])
+	}
+	if strings.Contains(wrappedCommands[1], `AddArgument('\\192.0.2.10\datasets')`) {
+		t.Fatalf("paused share was mapped again:\n%s", wrappedCommands[1])
+	}
+	if !strings.Contains(wrappedCommands[1], `AddArgument('\\192.0.2.10\models')`) {
+		t.Fatalf("other share was not mapped after authentication failure:\n%s", wrappedCommands[1])
+	}
+}
+
+// TestNetworkDriveInjectionAuthenticationPauseCoversAllServers 钉住暂停范
+// 围：同一条共享的旧密码不能换另一台 Windows 服务器继续尝试。
+func TestNetworkDriveInjectionAuthenticationPauseCoversAllServers(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.secondServer = true
+		setup.mapStatus = "error-1326"
+	})
+	call := func(serverID string) string {
+		t.Helper()
+		result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+			Name: "exec_command",
+			Arguments: map[string]any{
+				"server_id": serverID, "command": "Get-ChildItem S:\\datasets",
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.IsError {
+			t.Fatalf("exec_command failed: %+v", result.Content)
+		}
+		var output struct {
+			Stdout string `json:"stdout"`
+		}
+		unmarshalToolJSON(t, result, &output)
+		return output.Stdout
+	}
+
+	first := call(fixture.serverID)
+	wantFirst := "user-command-output\n" +
+		"共享 datasets 的网络盘符 S: 未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n"
+	if first != wantFirst {
+		t.Fatalf("first server stdout = %q, want %q", first, wantFirst)
+	}
+	second := call(fixture.secondServerID)
+	wantSecond := "plain-command-output\n共享 datasets 因认证失败已暂停注入\n"
+	if second != wantSecond {
+		t.Fatalf("second server stdout = %q, want %q", second, wantSecond)
+	}
+
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 3 {
+		t.Fatalf("remote commands = %#v, want one probe and one mapping on the first server only", commands)
+	}
+	if strings.Contains(commands[2], "New-SmbMapping") || strings.Contains(commands[2], "probe-one") {
+		t.Fatalf("second server received the paused share mapping:\n%s", commands[2])
+	}
+	if len(inputs[2]) != 0 {
+		t.Fatalf("second server standard input = %q, want empty", inputs[2])
+	}
+}
+
+// TestNetworkDriveInjectionAuthenticationPauseRecoversAfterVersionChange 钉住
+// 自动恢复：共享存储版本号变化后，同一进程不再沿用旧的暂停记录。
+func TestNetworkDriveInjectionAuthenticationPauseRecoversAfterVersionChange(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.mapStatus = "error-86"
+	})
+	call := func() (string, []struct {
+		Share string `json:"share"`
+		Drive string `json:"drive"`
+	}) {
+		t.Helper()
+		result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+			Name: "exec_command",
+			Arguments: map[string]any{
+				"server_id": fixture.serverID, "command": "Get-ChildItem S:\\datasets",
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.IsError {
+			t.Fatalf("exec_command failed: %+v", result.Content)
+		}
+		var output struct {
+			Stdout                string `json:"stdout"`
+			InjectedNetworkDrives []struct {
+				Share string `json:"share"`
+				Drive string `json:"drive"`
+			} `json:"injected_network_drives"`
+		}
+		unmarshalToolJSON(t, result, &output)
+		return output.Stdout, output.InjectedNetworkDrives
+	}
+
+	failureOutput, injected := call()
+	if len(injected) != 0 || !strings.Contains(failureOutput, networkDriveReasonAuthentication) {
+		t.Fatalf("first output = %q, injected = %#v, want an authentication warning", failureOutput, injected)
+	}
+	pausedOutput, injected := call()
+	if len(injected) != 0 || pausedOutput != "plain-command-output\n共享 datasets 因认证失败已暂停注入\n" {
+		t.Fatalf("paused output = %q, injected = %#v", pausedOutput, injected)
+	}
+
+	note := "共享登记已更新，暂停应自动解除"
+	edited, err := fixture.store.EditSharedStorage("datasets", store.SharedStorageChanges{
+		Note: &note,
+	}, store.CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.Version == 1 {
+		t.Fatal("editing the shared storage did not bump its version")
+	}
+	fixture.fake.setStatusesByDrive(map[string]string{"S": "ok"})
+
+	recoveredOutput, injected := call()
+	if recoveredOutput != "user-command-output\n" {
+		t.Fatalf("recovered output = %q, want only the user command output", recoveredOutput)
+	}
+	if len(injected) != 1 || injected[0].Share != "datasets" || injected[0].Drive != "S" {
+		t.Fatalf("recovered injected_network_drives = %#v", injected)
 	}
 }
