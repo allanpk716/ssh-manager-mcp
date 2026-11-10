@@ -46,6 +46,7 @@ mount_point=%[6]s
 install -d -m 755 "$mount_point"
 {
   printf 'username=%%s\n' %[7]s
+  printf 'password='
   cat
   printf '\n'
 } > "$credential_file"

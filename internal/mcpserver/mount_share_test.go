@@ -56,7 +56,7 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.credentialFile = "username=mount-user\n" + string(stdinBytes)
+		f.credentialFile = "username=mount-user\npassword=" + string(stdinBytes)
 		if selectedVersion == "none" {
 			f.credentialFile = ""
 			return "", "SSHMGR-LINUX-MOUNT protocol-failed", 84
@@ -327,7 +327,7 @@ func TestMountShareLinuxFirstMountSelectsPhysicalNetwork(t *testing.T) {
 	if len(inputs) != 3 || string(inputs[2]) != mountShareTestPassword+"\n" {
 		t.Fatalf("提权命令标准输入 = %q，全部输入数 = %d", inputs, len(inputs))
 	}
-	if credential != "username=mount-user\n"+mountShareTestPassword+"\n" {
+	if credential != "username=mount-user\npassword="+mountShareTestPassword+"\n" {
 		t.Fatalf("最终凭据文件 = %q", credential)
 	}
 	if len(fstab) != 1 || !strings.Contains(fstab[0], "vers=3.1.1") {
