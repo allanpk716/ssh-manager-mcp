@@ -65,6 +65,7 @@ var BrokerTools = []string{
 	hotswap.ToolReloadSelf,   // [13] — report this bridge's current/disk/latest versions and, when the disk holds a newer generation and the bridge is idle, hot-swap into it (bridge hot-upgrade; BRIDGE FACES ONLY — registered by run.go's stdio entries, see bridgeOnlyTools)
 	"list_secrets",           // [14] — discover secret names, notes, and granted writable servers without exposing secret values (READ-ONLY)
 	"probe_connectivity",     // [15] — probe TCP connectivity and connect duration from this instance or via an authorized managed server to registered devices (spec #142; results stored locally only)
+	"list_shares",            // [16] — list registered SMB shared storages visible in this session with agreed per-server mount points (READ-ONLY; spec #196)
 }
 
 // cacheOnlyTools names BrokerTools entries that ONLY the cache face registers
@@ -250,6 +251,24 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{&mcp.TextContent{Text: text}},
 			}, nil, nil
+		},
+	)
+
+	addTrackedTool(srv, busy, storeFn, hkFn,
+		&mcp.Tool{
+			Name:        BrokerTools[16], // "list_shares"
+			Description: "Read-only list of the SMB shared storages visible in your session. Each share carries its name, the registered provider device name, owner note, directory agreements (purpose = subdirectory inside the share), Windows drive letter, registration version, owner change note, and the servers in your session scope that may mount it — each with the agreed mount point (PowerShell/cmd servers use <drive>:, others use /mnt/sshmgr/<share name>). Optional server takes a server id or name and narrows every share to that one server. Mount points are agreements only: this tool never checks whether anything is mounted and performs no network or SSH action. It never includes mount passwords or any credentials, and no agent tool can register or modify shared storages.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in ListSharesInput) (*mcp.CallToolResult, ListSharesOutput, error) {
+			st := storeFromContext(ctx, storeFn)
+			out, err := ListSharesForProfile(st, profileID, in.Server)
+			if err != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, emptyListSharesOutput(), nil
+			}
+			return nil, out, nil
 		},
 	)
 
