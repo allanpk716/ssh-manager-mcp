@@ -214,6 +214,11 @@ const (
 // 置与权威 vault 审计页；客户端注册客户端页、升级页与本机审计页。
 func (h *handler) registerOpsRoutes() {
 	h.mux.HandleFunc(opsRootPath, h.requireSession(h.handleOpsRoot))
+	if h.cfg.Role == RoleStandalone && h.cfg.MachineInit != nil {
+		h.caps.CanUpgradeToServer = true
+		h.mux.HandleFunc(opsUpgradeServerPath, h.requireSession(h.handleOpsUpgradeServer))
+		h.mux.HandleFunc(opsUpgradeServerConfirmPath, h.requireSession(h.handleOpsUpgradeServerConfirm))
+	}
 	if h.cfg.Ops == nil {
 		h.caps.ShowOpsArea = false
 		h.caps.CanQueryVaultAudit = false

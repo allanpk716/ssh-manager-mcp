@@ -1,5 +1,8 @@
 # 界面即视图:一切 TUI 能力必有命令行等价面;无人值守自动化走显式接口
 
+已由 ADR 0010 修订
+
+
 > **2026-10-30 改写**:TUI 将在 Web UI 首版发布的同一版本里删除(见 ADR 0010)。本约束的对象由 TUI 改为 **Web UI**:Web UI 的一切能力必有命令行等价面。TUI 现有的 7 处命令行缺口(撤销 profile 授权、服务器页 ⚠ 视图与过滤、备份页状态区、`backup.json` 编辑、校验最新备份须给路径、导入 ssh config 后逐台补全、`role.json` 与设置存储写入)必须在该版本里全部补齐。反向只有命令行的三项里,`audit` 与 `projects disable/enable` 进 Web UI,`cache-tokens bind` 只留命令行。下文中的「TUI」按「Web UI」读。
 
 > **2026-10-31 补充**:网络拓扑与共享存储的命令行等价面为 `sshmgr sites`、`sshmgr networks`、`sshmgr devices`、`sshmgr shares` 四个命令组,增删改与 Web UI 表单一一对应;拓扑图上拖动归类即修改网络成员,用 `sshmgr devices` 完成。唯一例外是拓扑图的布局坐标:纯排版,不提供命令行等价面(坐标随快照与备份保存,但变化不产生变更提示)。

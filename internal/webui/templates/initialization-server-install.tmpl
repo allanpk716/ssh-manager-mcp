@@ -1,0 +1,18 @@
+{{define "content"}}
+<section class="initialization-page">
+<h1>初始化权威端</h1>
+<ol class="initialization-steps">
+{{range .InitializationSteps}}
+<li{{if .Current}} class="current"{{else if .Done}} class="done"{{end}}>{{.Label}}</li>
+{{end}}
+</ol>
+<div class="operation-result">
+<p>{{.InitializationInstallNotice}}。向导不会替你提权；请在终端执行完整命令。</p>
+<p><code id="serve-install-command">{{.InitializationInstallCommand}}</code></p>
+<button type="button" class="copy-button" data-copy-target="serve-install-command">复制命令</button>
+<div id="serve-probe" hx-get="/ui/init/server/probe" hx-trigger="every 2s" hx-swap="outerHTML">
+<p>正在等待 serve 启动。本页每 2 秒自动检查一次。</p>
+</div>
+</div>
+</section>
+{{end}}

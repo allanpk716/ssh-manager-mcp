@@ -95,13 +95,13 @@ shown to the agent.
 
 > 🔎 **Suspected-secret warnings (non-blocking).** All four metadata write paths —
 > `servers add`, `servers edit`, `servers import` (per-machine supplement), and the
-> TUI add/edit + import-supplement save points — scan the free-text fields against
+> Web UI edit + import-supplement save points — scan the free-text fields against
 > 9 high-confidence rules: 8 token prefixes (`sk-`, `ghp_`, `gho_`, `github_pat_`,
 > `AKIA`, `xoxb-`, `xoxp-`, `eyJ`) plus a PEM rule tightened to require
 > `-----BEGIN` **and** `PRIVATE KEY` co-occurring (public certificates don't match);
 > high-entropy scoring was deliberately left out (measured 2.9% false positives on
 > legal metadata; the 9 rules pass a 0-false-positive corpus regression). A hit
-> prints one advisory line to stderr (CLI) / appended to the status or report line (TUI), e.g. `warning: server metadata may contain a
+> prints one advisory line to stderr (CLI) / appended to the status or report line (Web UI), e.g. `warning: server metadata may contain a
 > secret — field 'description' matched rule 'prefix:sk-' (content not shown; this
 > text would be sent to LLM providers on every list_servers — edit the server to
 > fix, or ignore if intentional)` — and nothing else changes: the write always
@@ -150,13 +150,13 @@ sshmgr servers import --file /path/to/config   # 指定别的配置文件
 | 每台机器的报告行 | 含义 | 后续动作 |
 |---|---|---|
 | `imported key` | 找到可读私钥，已入 vault | 无 |
-| `imported needs-passphrase ⚠（连接会失败；TUI 补全或 servers edit --key-passphrase）` | 私钥**有口令加密**，按原样导入（口令没有进 vault） | 补口令（见下） |
+| `imported needs-passphrase ⚠（连接会失败；Web UI 补全或 servers edit --key-passphrase）` | 私钥**有口令加密**，按原样导入（口令没有进 vault） | 补口令（见下） |
 | `imported needs-credential` | 没有任何可读的 IdentityFile → 导入成**无凭据服务器** | 补凭据（见「无凭据服务器」） |
 | `skip-existing ...` / `skip: ...` | 冲突或解析期跳过 | 无 |
 
 - **批内密钥去重**：同一批里多台机器引用**同一个私钥文件**（内容相同），vault 只存**一份**凭据行——不会因为 20 台机器共用一个 key 就存 20 份。
 - **needs-passphrase 的补法**（连接会一直失败，直到补上）：
-  - **TUI**：主控台服务器页 `i` 导入流程的补全表单里有「密钥口令（补全加密私钥）」一栏，当场补（不重读盘上文件）；事后也可以 `!` 过滤出 ⚠ 机器，`e` 编辑补。
+  - **Web UI**：服务器页「导入 SSH 配置」流程的补全表单里有「密钥口令（补全加密私钥）」一栏，当场补（不重读盘上文件）；事后也可以「只看需要注意」过滤出 ⚠ 机器，行内「编辑」补。
   - **CLI**：`sshmgr servers edit <名字> --key <私钥路径> --key-passphrase '<口令>'`（重发凭据，换掉那份没口令的）。
 - **原私钥文件不动**：import 只是把内容**复制**进 vault 加密存储，`~/.ssh` 下的原文件原样保留。
 
@@ -168,9 +168,9 @@ config 里含 `Match` 块时，命令开头会打一条 ⚠：库按 `Host` 模�
 
 IdentityFile 写**相对路径**时，本工具按 **config 文件所在目录**解析；真 OpenSSH 是按 `ssh` 进程的工作目录（CWD）解析的。**这是有意的偏离**——CWD 在"哪条命令、哪个目录跑的"下漂移不定，config 目录才是这份文件自带的稳定基准（`~` / `~/...` 照常展开成家目录；`~user/...` 不展开，读不到就落到 needs-credential）。不想踩差异就把 config 里的路径写成绝对路径或 `~/` 开头。
 
-### TUI 等价流程（服务器页 `i`）
+### Web UI 等价流程（服务器页「导入 SSH 配置」）
 
-主控台「服务器」页按 `i` 是同一套语义的可视化版：路径表单（预填 `~/.ssh/config`）→ 候选多选（vault 冲突已自动排除，全选预勾）→ 静默批量导入 → **逐台补全表单**（结构化字段 + sudo + 按需出现的密码 / 密钥口令栏；`Esc` 跳过这台保留 ⚠，`q` 结束补全循环）→ 结果页（导入 N / 跳过 N / 待补 N）。带口令的机器导入时会被打上 `needs-passphrase` 标签，补全表单里填了口令就自动摘掉。
+`sshmgr ui` 打开的服务器页里「导入 SSH 配置」是同一套语义的页面版：路径表单（预填默认 SSH 配置路径）→ 候选勾选（vault 冲突已自动排除，全选预勾；可选授权 profile）→ 批量导入 → **逐台补全表单**（结构化字段 + sudo + 按需出现的密码 / 密钥口令栏；「跳过这一台」保留 ⚠，「结束补全」退出循环，「保存并继续」进下一台）→ 结果页（导入 N / 跳过 N / 待补 N）。带口令的机器导入时会被打上 `needs-passphrase` 标签，补全表单里填了口令就自动摘掉。
 
 ---
 
@@ -179,9 +179,9 @@ IdentityFile 写**相对路径**时，本工具按 **config 文件所在目录**
 「先录机器、凭据后补」是合法状态：`servers add`（或 import 的 `needs-credential` 结果）可以**不带任何凭据**。要点：
 
 - **agent 一侧的语义**：对无凭据机器调 `exec_command` / 下载 / 上传 / 转发，会在**发起连接之前**被拒，错误信息自带补法——`server has no credential configured (set one with: sshmgr servers edit <name> --password ... / --key ...)`（审计里统一记 `no_credential`，不是 auth_error，agent 不会误判成密码错了）。
-- **TUI 一侧**：无凭据（以及未填 role、带 needs-passphrase 标签）的机器在列表里以 ⚠ 前缀**置顶**；按 `!` 只看这些待处理机器。
-- **补凭据**：`servers edit <名字> --password '<密码>'` 或 `--key <私钥路径> [--key-passphrase '<口令>']`（TUI 里 `e` 编辑，密码栏填新值）。补上即正常连接，server 的 id / name / profile 绑定全程不变。
-- **反向操作（退回无凭据态）**：`servers edit <名字> --clear-credential`——清除这台机器的登录 + sudo 凭据引用（独占动作、与 `--password` / `--key` 互斥，详见[编辑服务器](#编辑服务器servers-edit只改你传的字段)一节）；TUI 里是 `e` 编辑表单的「清除凭据」开关。
+- **Web UI 一侧**：无凭据（以及未填 role、带 needs-passphrase 标签）的机器在列表里以「需要注意」标记**置顶**；「只看需要注意」链接只显示这些待处理机器。
+- **补凭据**：`servers edit <名字> --password '<密码>'` 或 `--key <私钥路径> [--key-passphrase '<口令>']`（Web UI 行内「编辑」，凭据下拉选「改用密码 / 粘贴私钥 / 只补私钥口令」后填新值）。补上即正常连接，server 的 id / name / profile 绑定全程不变。
+- **反向操作（退回无凭据态）**：`servers edit <名字> --clear-credential`——清除这台机器的登录 + sudo 凭据引用（独占动作、与 `--password` / `--key` 互斥，详见[编辑服务器](#编辑服务器servers-edit只改你传的字段)一节）；Web UI 是编辑表单凭据下拉的「清除凭据」选项。
 
 ---
 
@@ -217,13 +217,13 @@ sshmgr servers edit <name> [flags...]
 
 > `--password` 和 `--key` 在 `edit` 里同样**互斥**。可以一次同时改多个无关字段（如 `--host` + `--description`）。
 
-### TUI 等价：服务器页 `e` 字段选择器编辑页
+### Web UI 等价：服务器页「编辑」表单
 
-服务器页 `e` 打开「编辑服务器」字段选择页：每行一个可编辑字段（末行是 `✓ 保存并退出` 哨兵项），页脚实时显示 `第 X/Y 页`；`↑↓` 移动光标、可跨页选到**每一个**字段（`←`/`→`/pgup/pgdn 直接翻页），`Enter` 进入该字段的单字段编辑，改完再 `Enter` 确认回列表。
+服务器页行内「编辑」打开同一张表单，字段分组为连接信息（名称 / 主机地址 / 端口 / 用户 / shell 类型）、服务器元数据（说明 / 位置 / 硬件 / 服务 / 角色 / 注意事项）、标签与主机可见性、凭据（下拉：保持不变 / 改用密码 / 粘贴私钥 / 只补私钥口令 / 清除凭据）。
 
-- **脏标记**：改过的字段行带 `●` 前缀 + 亮色 +「（已改）」并显示新值；未编辑字段原样显示原值（空值显示（空））；秘密字段（密码 / 密钥口令 / sudo 密码）的值预览只有状态文案（如 `已设（新值）`、`（留空=保持现有）`），全程不出明文。
-- **撤销**：单字段编辑里 `Esc` 放弃本字段（回到进入本字段时的值）；列表态 `Esc` 放弃整个编辑，一个字都不落库。
-- **保存**：末行 `✓ 保存并退出` 按 `Enter` 一次性提交全部改动——语义与 CLI 对齐（没动过的字段净效果不变、秘密留空=保持现有凭据；勾选「清除凭据」则走上面的独占清除路径）。
+- **秘密字段不出明文**：密码 / 私钥内容 / 私钥口令 / sudo 密码的输入框全程掩码，已设凭据只显示状态、从不回显旧值。
+- **撤销**：「取消」返回详情页，一个字都不落库。
+- **保存**：一次提交全部改动——语义与命令行对齐（没动过的字段净效果不变、秘密留空=保持现有凭据；凭据选「清除凭据」则走下面的独占清除路径）。表单带 `revision` 乐观锁，与别的会话互踩时报冲突并提示刷新。
 
 ### 清除凭据：`--clear-credential`（独占动作）
 
@@ -236,7 +236,7 @@ sshmgr servers edit gpu --clear-credential
 - **独占动作**：`--clear-credential` 不是字段编辑。传了它，这条命令就**只做清除这一件事**——同一条命令里传的其他字段 flag（如 `--host`、`--name`）**不会生效**（想改字段请清除后另跑一条 `edit`）。确认输出打印的是**当前库名**。
 - **互斥**：与 `--password` / `--key` 互斥，同传直接报错——「清除」和「换发凭据」是两个方向的操作，混在同一条命令里语义不清。
 - **清除的范围**：登录凭据 + sudo 凭据的引用一并解除、`auth_method` 清空、`needs-passphrase` 标签摘除（无凭据时这个标签没有意义）；只有这台机器**独占**的凭据行会被级联删除，被其他 server 共用的不动。
-- **TUI 对应**：服务器页 `e` 编辑表单里的「清除凭据（回到无凭据态）」确认开关，勾选提交即走同一条清除路径（也是同样的独占语义）。
+- **Web UI 对应**：服务器页「编辑」表单凭据下拉里的「清除凭据」选项，选定提交即走同一条清除路径（也是同样的独占语义）。
 - 清除后机器进入[无凭据服务器](#无凭据服务器)状态（列表 ⚠ 置顶、`!` 可过滤，agent 调用会收到带补法的 `no_credential` 提示）；server 的 id / name / profile 绑定**全程不变**，之后 `--password` / `--key` 随时可以补回。
 
 > 💡 传错了想清除却给了空值？`edit --password ""` 这类**显式空值会被拒绝**（报错文案会指回 `--clear-credential`）——空串是引号 / 笔误的常见形态，静默铸一条空凭据会让 agent 之后连接时莫名失败。清除只有 `--clear-credential` 这一条路，意图明确才动手。
@@ -276,7 +276,7 @@ sshmgr servers edit gpu --clear-credential
 
 ## Shell 类型标注与探测（命令策略）
 
-命令策略（agent 经执行工具下发的命令在执行前的严重后果兜底检查，规则全局一套、随快照下发）按服务器条目上标注的 shell 类型选择命令拆解语法：`posix`（Linux / macOS，默认）、`powershell`（Windows PowerShell）、`cmd`（Windows cmd）。标注属于连接信息——owner 在 `servers add --shell` / `servers edit --shell`（或 TUI 编辑页的 Shell 类型字段）设置，agent 的元数据编辑工具改不到它。
+命令策略（agent 经执行工具下发的命令在执行前的严重后果兜底检查，规则全局一套、随快照下发）按服务器条目上标注的 shell 类型选择命令拆解语法：`posix`（Linux / macOS，默认）、`powershell`（Windows PowerShell）、`cmd`（Windows cmd）。标注属于连接信息——owner 在 `servers add --shell` / `servers edit --shell`（或 Web UI 编辑页的「shell 类型」字段）设置，agent 的元数据编辑工具改不到它。
 
 标注错了不会静默放行（不认识的值按保守分支处理，偏向需确认），但拆解会不准。拿不准一台机器（尤其 Windows 机器）的实际 shell 时，用探测命令看真实情况：
 
@@ -291,7 +291,7 @@ sshmgr servers probe-shell [<name>...]   # 不给名字 = 探测全部服务器
 - 无法判定：如实说明并附判定依据，请人工确认；
 - 连不上：打失败行，命令以非零退出（诊断要诚实——连不上不装成「一致」）。
 
-TUI 等价：服务器页 `p` 探测光标所在服务器，结果在状态行报告（ADR 0003 的对等面）。
+探测在命令行逐台执行（`sshmgr servers probe-shell`）；Web UI 服务器页展示探测得到的 shell 标注，探测动作本身仍走命令行（ADR 0003 的等价面）。
 
 **从 v0.21.0 之前的版本升级上来后，建议跑一次全量探测。** 升级前已有的服务器，shell 类型一律被记为 `posix`（这是加列时的默认值，和明确标成 posix 的条目在库里没有区别，`doctor` 也就无从提醒）。Windows 服务器若保持这个错标，危险命令只会得到「需确认（标注不匹配）」的兜底结果，得不到准确判定。在有 vault 的机器上运行 `sshmgr servers probe-shell`，按提示逐台 `servers edit <名> --shell powershell` 或 `--shell cmd` 改正即可；连不上的机器先保持原标注，等能连上再探。
 

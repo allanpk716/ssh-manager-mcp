@@ -29,8 +29,8 @@ Single Go binary. Cross-platform (Windows / Linux / macOS). No daemon — the br
 | **在 broker（serve）主机上也跑 agent**（零距离 client 走桥 + 应急附录） | [`docs/broker-host-agent.md`](docs/broker-host-agent.md) |
 | 应用场景与示例（GPU 巡检、读 root 日志、部署、端口转发……） | [`docs/scenarios.md`](docs/scenarios.md) |
 | 备份 / 迁移整个 vault（export / import） | [`docs/backup-restore.md`](docs/backup-restore.md) |
-| **单机 TUI 教程**（全键盘点选，不想记命令） | [`docs/tui-single-machine.md`](docs/tui-single-machine.md) |
-| **联机 TUI 教程**（server 侧主控台 + client 面板 + Pairing 批准页） | [`docs/tui-multi-machine.md`](docs/tui-multi-machine.md) |
+| **单机 Web UI 教程**（浏览器表单操作，逐步附命令行等价命令） | [`docs/web-ui-single-machine.md`](docs/web-ui-single-machine.md) |
+| **联机 Web UI 教程**（权威端管理页面 + 客户端页面 + Pairing 批准页） | [`docs/web-ui-multi-machine.md`](docs/web-ui-multi-machine.md) |
 | **给 AI agent 的工具手册**（可贴进 CLAUDE.md 的规则模板在内） | [`docs/agent-tools.md`](docs/agent-tools.md) |
 
 ---
@@ -77,15 +77,17 @@ Every server-touching tool is **profile-gated** (the agent only reaches servers 
 
 > Fastest path: the two quickstart docs — **[single-machine](docs/quickstart-single-machine.md)** / **[multi-machine](docs/quickstart-multi-machine.md)**. The inline steps below are the single-machine stdio path.
 
-Build + configure once; then point your AI agent at it.
+Build once; then point your AI agent at it. Prefer a browser? `sshmgr ui` opens the
+first-run wizard (choose this machine's role, create the vault) and then the regular
+management pages — every wizard step has the command-line equivalent shown below.
 
 ```bash
 # 1. Build — or skip this: grab a prebuilt binary from Releases
 #          https://github.com/allanpk716/ssh-manager-mcp/releases
 go build -o sshmgr ./cmd/sshmgr        # or: go install ./cmd/sshmgr
 
-# 2. Unlock the vault (writes master key → fixed-path file `master.key.plain`; admin/root needed first time to create the vault dir + set ACL — see `unlock --help`)
-sshmgr unlock
+# 2. Initialize this machine as standalone (writes role.json + master key + vault; also reachable via `sshmgr ui` → 单机)
+sshmgr init --role standalone
 
 # 3. Add a server + its credential (one of --password / --key, mutually exclusive —
 #    or neither for a credential-less server; optional sudo)
@@ -132,7 +134,7 @@ Human-mode output notes: the server / project columns render four ways — the e
 
 ## Managing servers & projects (owner CLI)
 
-The owner CLI is how you record servers, group them, and grant an agent access. Each server carries structured metadata (`--role` / `--services` / `--location` / `--hardware` / `--special-handling`) plus free-text `--description` and `--tags` — **all shown to the agent** via `list_servers` so it can act on each box safely. ⚠️ Never put secrets in these fields: they enter the agent's context (and the upstream LLM provider) on every call. As a backstop, every metadata write path (add / edit / import / TUI) prints a **non-blocking advisory warning** when a field matches one of 9 known secret shapes (8 token prefixes like `sk-` / `ghp_` / `AKIA` + a tightened PEM rule) — a hint, not a verdict, and it never echoes the content. See [`docs/managing-servers.md`](docs/managing-servers.md).
+The owner CLI is how you record servers, group them, and grant an agent access. Each server carries structured metadata (`--role` / `--services` / `--location` / `--hardware` / `--special-handling`) plus free-text `--description` and `--tags` — **all shown to the agent** via `list_servers` so it can act on each box safely. ⚠️ Never put secrets in these fields: they enter the agent's context (and the upstream LLM provider) on every call. As a backstop, every metadata write path (add / edit / import / Web UI) prints a **non-blocking advisory warning** when a field matches one of 9 known secret shapes (8 token prefixes like `sk-` / `ghp_` / `AKIA` + a tightened PEM rule) — a hint, not a verdict, and it never echoes the content. See [`docs/managing-servers.md`](docs/managing-servers.md).
 
 ```bash
 # Edit a server in place: pass any subset of fields — the server id + profile bindings are preserved.
@@ -161,38 +163,50 @@ sshmgr projects ls [--all]           # status column; --all includes revoked
 
 ---
 
-## TUI 主控台（`sshmgr tui`）
+## Web 管理界面（`sshmgr ui`）
 
-一条命令的可视化管理台：在 **broker 机器**上管服务器 / profiles / projects / 设备码 / **配对批准**（Pairing 页，替代手敲 CLI），在 **client 工作机**上查看缓存状态 / 切换实例 / 手动同步 / **`[c]` 配对向导入网**（Plan 45）。同一个二进制，按本机状态自动选边。各页签 / 设备码 / token 谁是谁的**概念模型图解**（仓库隐喻，中文）：[`docs/concepts.md`](docs/concepts.md)。
+一条命令的浏览器管理界面：初始化向导、服务器 / 访问授权 / 机密项 / 运维页面、权威端**配对批准**都在里面。同一个二进制，按本机状态自动决定去向；每一步人工操作都有命令行等价面。各页面 / 设备码 / token 谁是谁的**概念模型图解**（仓库隐喻，中文）：[`docs/concepts.md`](docs/concepts.md)。
 
-空机器第一次运行 `tui` 会进入**角色向导**（单机 / server / client 三选，可中断续配；client 分支 = `sshmgr pair` 入网引导页——连接表单已随 ②a 退役，多机入网 = pair：CLI 或 client 面板 `[c]` 配对向导，Plan 45）；`sshmgr clear` 角色清理——**按实际存在枚举**删除（与 role.json 声明的角色无关）本机 vault / serve / 缓存残留（vault 角色先自动 export 备份 + 输入 `DELETE` 确认），机器回到首次向导状态。
-
-### 启动与模式判定
+### 首次初始化（空机器）
 
 ```bash
-sshmgr tui                # 自动判定
-sshmgr tui --mode client  # 强制 client 面板
+sshmgr ui
 ```
 
-> v0.7.0 起 `tui --mode broker` 移除（自动判定覆盖该场景；`--mode client` 保留）。
+空机器运行后，会在本机回环地址的随机端口启动**初始化向导**（终端打印带一次性启动令牌的网址并自动打开浏览器；只监听 `127.0.0.1`，命令退出即停）。第一步选角色：**单机**（一台机器自持 vault） / **权威端**（多机部署里常驻权威 vault） / **客户端**（只持本地只读快照）。
 
-自动判定规则：
+- 选**单机**：向导只建 vault（随机主密钥加密钥文件），显示主密钥文件位置与备份提醒，然后**直接进入单机正式页面**；首页给「录服务器 → 建 Profile 并授权 → 建项目并取令牌」下一步引导，全部完成后消失。
+- 选**权威端**：向导按「建 vault → 设管理员口令 → 安装 serve」三步走。安装页按本机操作系统显示**完整提权命令**（含 sshmgr 可执行文件绝对路径）和复制按钮；页面每 2 秒自动检查 serve，检测到运行后显示正式 Web UI 全部地址，`sshmgr ui` 随即退出并在终端打印这些地址。
+- 选**客户端**：页面显示 `sshmgr pair` 的命令写法与「到权威端 Web UI 的配对页批准」说明，随后 `sshmgr ui` 退出（不在向导里做配对、不写 `role.json`）。
 
-- 本机有**已解锁的 vault** → broker 主控台；
-- 本机有**缓存**（`cache.bin`）→ client 面板；
-- vault 存在但锁着 / 两者都没有 → **引导性报错**（告诉你该 `unlock` 还是 `--mode client`）——**绝不静默降级到 client**。
+每步的命令行等价命令（无显示器机器 / agent 用）：
 
-Broker 主控台（服务器 / Profiles / Projects / 设备码 / Pairing 5 个页签）与 client 面板（服务器列表只读、零远程写、`[s]` 同步 / `[i]` 实例切换+删除（Plan 46：行级四要素状态、★ 当前槽、`d` 删除）/ `[c]` 配对向导，Plan 45）的操作语义与 owner CLI 完全一致——TUI 只是同一套 vault 操作的另一个入口，做完的事在 `ls` / 审计里看到的一样。各页签键位与典型任务走查见 [docs/tui-single-machine.md](docs/tui-single-machine.md) / [docs/tui-multi-machine.md](docs/tui-multi-machine.md)。
+| 向导步骤 | 命令行 |
+|---|---|
+| 选角色并建 vault（单机 / 权威端；对已有 vault 的单机运行 `--role server` 即升级为权威端，vault 内容不动） | `sshmgr init --role standalone` / `sshmgr init --role server` |
+| 设管理员口令 | `sshmgr serve admin set` |
+| 安装 serve | Linux / macOS：`sudo <sshmgr 绝对路径> serve install --addr 0.0.0.0:7878`；Windows：在管理员 PowerShell 中运行 `& "<sshmgr 绝对路径>" serve install --addr 0.0.0.0:7878` |
+| 客户端入网 | `sshmgr pair --instance <名字>`（在权威端 Web UI 配对页批准） |
 
-### 终端要求（mintty 注意）
+中途关掉浏览器是安全暂停：再次运行 `sshmgr ui` 从未完成的步骤继续。单机正式页面的运维区另有「升级为权威端」入口（等价于 `sshmgr init --role server`，之后按提示设管理员口令并安装 serve）。
 
-Windows Terminal / cmd 原生可用。**mintty**（Git Bash 默认终端）不是 Windows 控制台，需 `winpty sshmgr tui`；在非 TTY 下启动时程序会**直接报错提示**，不会挂死或乱码。
+### 已初始化机器的去向
+
+- **单机 / 客户端**：`sshmgr ui` 在本机回环地址的随机端口启动正式页面（一次性启动令牌换取会话；命令退出即停）。单机全功能可写；客户端只读查看本地快照（含连接状态、快照修订号与推荐版本），外加立即同步、切换缓存实例，修改 vault 一律到权威端 Web UI 做。
+- **权威端**：正式 Web UI 由 `serve` 进程的独立 HTTPS 监听提供（管理员口令登录；尚未设口令时登录页提示在权威端主机运行 `sshmgr serve admin set`）。已初始化的权威端运行 `sshmgr ui` 不另起监听，只打印 Web UI 地址与状态。
+
+### 旧命令 `sshmgr tui`
+
+TUI 已删除。`sshmgr tui` 保留为隐藏命令：不论带什么参数，只打印「TUI 已删除，人工操作请用 `sshmgr ui`，命令行等价命令见 `sshmgr --help`」并以退出码 1 结束，不打开浏览器、不监听端口。
 
 ### 安全面
 
+- **回环模式只监听 `127.0.0.1`**：单机与客户端的页面（含初始化向导）不出本机，入口网址带一次性启动令牌，并沿用 Host 检查、来源检查与 CSRF 校验。
 - **凭据永不回显**：密码 / key / sudo 密码的输入框全程掩码；已设凭据只显示「已设置」，输入新值即更换，不为确认而回显旧值。
-- **token / 设备码一次性展示**：全屏显示一次，关闭后不可再查（与 CLI 的 shown-once 语义一致）。
-- **client 零远程写**：client 模式的任何按键都不会写 broker。
+- **token / 设备码一次性展示**：显示一次，关闭后不可再查（与 CLI 的 shown-once 语义一致）。
+- **客户端零远程写**：客户端页面的任何操作都不会写权威端。
+
+页面走查与典型任务见 [docs/web-ui-single-machine.md](docs/web-ui-single-machine.md) / [docs/web-ui-multi-machine.md](docs/web-ui-multi-machine.md)。
 
 ---
 
@@ -215,10 +229,10 @@ sshmgr pair --instance laptop
 # → done: agent runs from a local read-only cache
 ```
 
-- **The serve is narrowed to: authoritative vault + `/snapshot` + `/pair` + the Web UI.** There is **no remote MCP surface** (the old `"type": "http"` + bearer-header direct connection was **removed** in Plan 42 批1 — non-`/snapshot`//`/pair` paths answer 404). Work-machine agents always run **locally from a read-only cache** (`mcp --cache`) and dial target servers themselves; writes (add/edit servers, approvals) belong to the **management plane**: Web UI / `serve pair` command line / the existing terminal interface.
+- **The serve is narrowed to: authoritative vault + `/snapshot` + `/pair` + the Web UI.** There is **no remote MCP surface** (the old `"type": "http"` + bearer-header direct connection was **removed** in Plan 42 批1 — non-`/snapshot`//`/pair` paths answer 404). Work-machine agents always run **locally from a read-only cache** (`mcp --cache`) and dial target servers themselves; writes (add/edit servers, approvals) belong to the **management plane**: Web UI / `serve pair` command line.
 - **Auto-TLS + fingerprint pinning (no cert hassle).** On first start `serve` **auto-generates a self-signed ed25519 cert** and forces TLS from then on — no openssl, no CA distribution, no trust-store config. The cert's **SPKI fingerprint** rides the discovery offer and the sealed pairing envelope automatically; `cache pull` pins it too (first-connect verification, zero MITM window — the HPKP/Tailscale model). Pass `--tls-cert`/`--tls-key` only if you want your own cert.
 - **Pairing is human-gated.** The client shows `name @ url SAS <6 digits>`; the approver compares the client-screen SAS against the approval row's name@url in the Web UI Pairing page (or with `serve pair approve`), while the serve **mechanically verifies** that the client's declared target address is actually this machine (mismatch → ⚠ + explicit override required). A direct `--url` pairing without a pin **refuses by default** (`--allow-tofu` is the explicit, unanchored escape hatch — see threat-model R12). No-pin `cache pull` hard-fails the same way; `--allow-plaintext` is the debug-only opt-out.
-- **Several agents on ONE machine — named cache instances (Plan 40; lifecycle management Plan 46).** Each agent gets its own offline cache: enroll with `sshmgr pair --instance <name>` (one device code per agent). Inspect every slot with `sshmgr cache status` or `sshmgr cache instances ls` (per-row artifact/DEK existence + age, half-state and DEK-orphan slots flagged), switch slots inside the TUI client page with `[i]` (per-session), **remove an instance** with `sshmgr cache instances rm <name>` (double-root cleanup: slot dir + per-instance DEK; typed-name confirm; idempotent — the broker-side device code revoke stays a separate, manual step), and persist each instance's offline cap independently with `sshmgr cache config [--instance <name>] --max-offline 24h` (priority env > file > off). Instances live under `instances/<name>/` with a **per-instance DEK** — one instance's leaked material does not decrypt another's cache. Full guide (中文): [`docs/multi-machine.md`](docs/multi-machine.md) 「多实例（同机多 agent）」.
+- **Several agents on ONE machine — named cache instances (Plan 40; lifecycle management Plan 46).** Each agent gets its own offline cache: enroll with `sshmgr pair --instance <name>` (one device code per agent). Inspect every slot with `sshmgr cache status` or `sshmgr cache instances ls` (per-row artifact/DEK existence + age, half-state and DEK-orphan slots flagged), switch slots in the client Web UI (per session, `sshmgr ui --instance <name>`), **remove an instance** with `sshmgr cache instances rm <name>` (double-root cleanup: slot dir + per-instance DEK; typed-name confirm; idempotent — the broker-side device code revoke stays a separate, manual step), and persist each instance's offline cap independently with `sshmgr cache config [--instance <name>] --max-offline 24h` (priority env > file > off). Instances live under `instances/<name>/` with a **per-instance DEK** — one instance's leaked material does not decrypt another's cache. Full guide (中文): [`docs/multi-machine.md`](docs/multi-machine.md) 「多实例（同机多 agent）」.
 - **First trust for broker-unreachable targets (Plan 48).** A target only a work machine can reach (the broker has no route to it) no longer deadlocks on first connect: the cache client **forwards** the presented host key to the broker (`POST /pin-hostkey` — same device-code gate, insert-only, audited), the anchor lands in the authoritative vault, and the handshake completes on the first try. With the broker unreachable it fails closed with the presented fingerprint and two remedies (retry while online, or the owner pins out-of-band: `sshmgr servers pin-hostkey <name> --fingerprint SHA256:…`). Owner forensics: `servers pin-hostkey --list` (orphan anchors flagged) / `--clear` / `--clear --hostport`. Mixed-version note: an old (< v0.15.0) client reports a legitimate fingerprint anchor as "possible MITM" — upgrading fixes it. Full guide (中文): [`docs/multi-machine.md`](docs/multi-machine.md) 「主机密钥锚定」.
 - **Shutdown.** `Ctrl+C` (`SIGINT`) / `SIGTERM` → graceful drain.
 
@@ -270,9 +284,9 @@ Carry-forwards (deferred, non-blocking): `context.Context` cancellation threaded
 
 **v0.7.0 (Plan 20) — ssh-config import & hygiene hardening:**
 
-- **`servers import`** — bulk-import `~/.ssh/config` hosts (CLI `--file` / `--dry-run` / `--profile`; TUI server page `i`): vault-conflict skips make it idempotent, identical key files within one batch mint **one** credential row, encrypted keys import as-is with a needs-passphrase ⚠, and the TUI walks a per-server supplement loop after import. See [`docs/managing-servers.md`](docs/managing-servers.md#批量导入servers-import).
-- **Credential-less server model** — `servers add` / import may record a server with **no** credential (`--password` / `--key` optional, still mutually exclusive); `exec_command` on such a server fails **before** connecting with an error carrying the `servers edit` fix hint (audit `no_credential`); TUI flags them ⚠ (filter with `!`).
-- **`SSHMGR_TOKEN` env channel** — the project token can now ride the environment instead of argv (flag parity: `--token` still works); every `.mcp.json` generator (`projects add` / `rotate`, TUI, wizard) now emits the `env` form. **Snippet shape changed**: previously copied `--token`-in-`args` snippets keep working, but regenerate when you next rotate.
+- **`servers import`** — bulk-import `~/.ssh/config` hosts (CLI `--file` / `--dry-run` / `--profile`; Web UI 服务器页「导入 SSH 配置」): vault-conflict skips make it idempotent, identical key files within one batch mint **one** credential row, encrypted keys import as-is with a needs-passphrase ⚠, and the Web UI walks a per-server supplement loop after import. See [`docs/managing-servers.md`](docs/managing-servers.md#批量导入servers-import).
+- **Credential-less server model** — `servers add` / import may record a server with **no** credential (`--password` / `--key` optional, still mutually exclusive); `exec_command` on such a server fails **before** connecting with an error carrying the `servers edit` fix hint (audit `no_credential`); the Web UI flags them 「需要注意」 (filter with 「只看需要注意」).
+- **`SSHMGR_TOKEN` env channel** — the project token can now ride the environment instead of argv (flag parity: `--token` still works); every `.mcp.json` generator (`projects add` / `rotate`, Web UI, wizard) now emits the `env` form. **Snippet shape changed**: previously copied `--token`-in-`args` snippets keep working, but regenerate when you next rotate.
 - **`gc`** — find (and with `--apply`, delete) credential rows no server references via either column; dry-run by default; servers, host keys, and cache tokens are never touched.
 - **Tunnel half-close** — `forward_port` tunnels propagate a directional EOF (`CloseWrite`) instead of tearing down both directions, so half-closing protocols (e.g. `shutdown(SHUT_WR)`) no longer kill the peer's reply.
 - **`SSHMGR_SSH_HOST_KEY_ALGORITHMS` knob** — opt into legacy host-key algorithms (`ssh-rsa`, …) for old boxes; typo = fail-closed before any connect. See [`docs/managing-servers.md`](docs/managing-servers.md#连老机器需要-ssh-rsa).

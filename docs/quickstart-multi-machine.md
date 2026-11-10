@@ -4,13 +4,13 @@
 >
 > 全文只讲「最少要做什么」。架构 / 配对协议细节 / 多实例 / runbook 看详尽版 [`multi-machine.md`](./multi-machine.md)。
 >
-> **Plan 42 批1 起**：新机入网 = `sshmgr pair` 一条命令（不再跨机手抄设备码/token/指纹三串字符串；不想敲命令可用工作机 TUI 的 `[c]` 配对向导，Plan 45——见 [tui-multi-machine.md](./tui-multi-machine.md)）；agent 一律走本地只读缓存（多机 agent 只读 + 执行，写操作在管理面）。
+> **Plan 42 批1 起**：新机入网 = `sshmgr pair` 一条命令（不再跨机手抄设备码/token/指纹三串字符串；想看指引可在工作机 `sshmgr ui` 的初始化向导里选「客户端」），批准在权威端 Web UI 的配对页；agent 一律走本地只读缓存（多机 agent 只读 + 执行，写操作在管理面）。
 
 ---
 
 ## 架构一句话
 
-一台 **VLAN 服务器**跑 `sshmgr serve`（常驻，持有权威 vault；只做三件事：**权威 vault + `/snapshot` 拉取 + `/pair` 配对**，批2 再加 `/ui` 管理）；各工作机 `sshmgr pair` 一条龙入网，之后 agent 用**本地只读缓存**干活。**命令实际从工作机直拨目标服务器**，broker 不在命令路径上。
+一台 **VLAN 服务器**跑 `sshmgr serve`（常驻，持有权威 vault；只做三件事：**权威 vault + `/snapshot` 拉取 + `/pair` 配对**，另由 serve 进程的独立监听提供 Web UI）；各工作机 `sshmgr pair` 一条龙入网，之后 agent 用**本地只读缓存**干活。**命令实际从工作机直拨目标服务器**，broker 不在命令路径上。
 
 ```
  ┌──工作机（笔记本/台式机）──┐  pair 入网+保鲜拉取 ┌──VLAN 服务器──┐
@@ -33,23 +33,44 @@
 
 ## Step 1 — 服务器侧：建清单 + 启动 serve
 
-在将常驻 broker 的那台 VLAN 服务器上，像单机一样把服务器和 profile 建好（命令同 [`quickstart-single-machine.md`](./quickstart-single-machine.md) Step 2-4；**project 不用预建**——pair 批准时自动建 `pair-<设备名>`），然后：
+在将常驻 broker 的那台 VLAN 服务器上操作。
+
+**Web UI（推荐）**：运行 `sshmgr ui`，初始化向导选**权威端**，按「建 vault → 设管理员口令 → 安装 serve」三步走：
+
+1. 建 vault（随机主密钥文件加密）——命令行等价命令：`sshmgr init --role server`；
+2. 设管理员口令（两遍输入）——命令行等价命令：`sshmgr serve admin set`；
+3. 安装 serve——向导按操作系统显示完整提权命令与复制按钮：
+   - Linux / macOS：`sudo <sshmgr 绝对路径> serve install --addr 0.0.0.0:7878`
+   - Windows：在管理员 PowerShell 中运行 `& "<sshmgr 绝对路径>" serve install --addr 0.0.0.0:7878`
+
+   页面每 2 秒自动检查 serve；检测到运行后显示正式 Web UI 全部地址，`sshmgr ui` 退出。
+
+**纯命令行（无显示器机器）**：
 
 ```bash
-sshmgr unlock                       # 一次性（写 master.key.plain）
+sshmgr init --role server          # 选角色 + 建 vault（输出主密钥位置与备份提醒）
+sshmgr serve admin set             # 设管理员口令
+sudo <sshmgr 绝对路径> serve install --addr 0.0.0.0:7878   # 注册系统服务并启动
+```
 
+装好后打开正式 Web UI（serve 进程独立监听的 `https://<本机地址>/ui/`，管理员口令登录），像单机一样把服务器和 profile 建好（**project 不用预建**——pair 批准时自动建 `pair-<设备名>`）；命令行等价命令：
+
+```bash
 # 录入目标服务器（凭据只在这台机上）+ 分组授权：
 sshmgr servers add --name gpu --host 192.0.2.10 --user deploy --password '...'
 sshmgr profiles add team-a && sshmgr profiles grant team-a gpu
+```
 
-# 启动常驻 broker（自动自签证书 + 强制 TLS + UDP 发现 + 配对面，全默认开）：
+前台启动（自动自签证书 + 强制 TLS + UDP 发现 + 配对面，全默认开；已用上面的 `serve install` 注册系统服务时无需再跑）：
+
+```bash
 sshmgr serve --addr 0.0.0.0:7878
 # → listening on 0.0.0.0:7878 (tls=auto)
 # → auto-TLS cert (self-signed). client pin: sha256:abcd1234...
 # → sshmgr serve: discovery: udp/7878 (on)
 ```
 
-想让它开机自启：`sshmgr serve install`（kardianos 注册系统服务，三平台一条龙）。
+`serve install` 用 kardianos 注册系统服务并设开机自启，三平台一条龙。
 
 ---
 
@@ -67,7 +88,7 @@ sshmgr pair --instance laptop
 # → 批准后 120 秒内自动完成：凭据加密下发 → 首拉落盘 → 产物 pair.laptop.mcp.json
 ```
 
-> **TUI 等价路径（Plan 45）**：不想敲命令就在工作机 `sshmgr tui` 打开 client 面板按 **`[c]`**——同一个配对流程的向导形态（表单 → LAN 发现 → SAS 屏与 broker 批准面逐位对照 → 批准后 Enter 完成 → 自动写入首拉），逐屏走查见 [`tui-multi-machine.md`](./tui-multi-machine.md)。CI/无人值守仍走上面的 CLI（`SSHMGR_PAIR_ASSUME_SAS` 自动化跳比对仅 CLI 有，向导永远人闸比对）。
+> **指引页面**：工作机运行 `sshmgr ui`，初始化向导选「客户端」会显示上面的配对命令写法（含 `--url` / `--pin` / `--write-mcp` 的一句话说明）与「到权威端 Web UI 的配对页批准」——页面只展示指引，配对仍在终端执行。CI/无人值守直接用 CLI（`SSHMGR_PAIR_ASSUME_SAS` 自动化跳比对仅 CLI 有，人工配对永远逐位比对短认证码）。
 
 收尾一步——把产物里的片段抄进该机 `.mcp.json`（或 pair 时加 `--write-mcp <path>` 直接落位）：
 
@@ -85,7 +106,7 @@ sshmgr pair --instance laptop
 
 > 产物文件 `pair.laptop.mcp.json` 在实例目录里、含真值 token（0600）——终端只显示 `<project-token>` 占位符；首拉即使失败凭据也已在盘，重跑 `cache pull --instance laptop` 即补上缓存。
 
-重启 Claude Code → agent 用本地缓存跑命令（只读 + 已授权的 exec/传输/转发；断网照常，保鲜 ≤30min 需在线）。要加改删服务器（写操作），去 broker 机的 TUI——多机 agent 没有写权限是设计，不是缺陷。
+重启 Claude Code → agent 用本地缓存跑命令（只读 + 已授权的 exec/传输/转发；断网照常，保鲜 ≤30min 需在线）。要加改删服务器（写操作），去权威端 Web UI（或权威端命令行）——多机 agent 没有写权限是设计，不是缺陷。
 
 > 把 [agent-tools.md](./agent-tools.md) 的规则模板贴进 CLAUDE.md，agent 会更守规矩（含多机只读铁律与吊销三路径）
 
@@ -126,7 +147,7 @@ sshmgr pair --instance laptop
 > **何时用**：① 存量 ②a 机器在**旧 serve** 上的迁移（旧版没有 `/pair`）；② CI / 无人值守自动化。日常新机一律走上面的 pair。完整版见 [`multi-machine.md` 手工 enroll](./multi-machine.md#手工-enroll存量迁移官方路径--ci-场景)。
 
 ```bash
-# 服务器侧：发一张绑定 profile 的设备授权码（TUI 设备码页签 [a] 亦可）
+# 服务器侧：发一张绑定 profile 的设备授权码（Web UI「访问 → 设备码」页亦可）
 sshmgr cache-tokens add --name laptop --profile team-a
 # Authorization code for "laptop" (shown once): <设备码>
 # Server fingerprint (serve cert SPKI): sha256:abcd1234...

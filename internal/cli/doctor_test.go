@@ -81,7 +81,7 @@ func TestDoctorExitCodes(t *testing.T) {
 	}
 	for _, want := range []string{
 		"sshmgr doctor (", // header carries buildinfo.Version
-		"no role.json — fresh machine, run the wizard",
+		"no role.json — fresh machine, run the initialization wizard (`sshmgr ui`)",
 		"overall: 0 WARN, 0 FAIL",
 	} {
 		if !strings.Contains(out, want) {

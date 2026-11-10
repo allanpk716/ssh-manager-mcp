@@ -12,7 +12,10 @@ import (
 const (
 	settingWebUIPort   = "serve.ui_port"
 	settingWebUIListen = "serve.ui_listen"
-	defaultWebUIPort   = 7879
+	defaultWebUIPort   = DefaultWebUIPort
+	// DefaultWebUIPort 是 serve 独立 Web UI 的默认端口；初始化向导在
+	// vault 尚未创建时也需要探测这个端口。
+	DefaultWebUIPort = 7879
 )
 
 // ReadWebUIConfig 读取权威端 Web UI 的端口与手动监听地址设置。端口未设置时

@@ -309,8 +309,8 @@ only when all four pass.`,
 }
 
 // runServeInstall registers the kardianos service — a thin cobra shell over
-// installServeService (the programmatic core the Plan 19 role wizard calls via
-// tui.SetServeInstaller; tui cannot import cli — cli imports tui).
+// installServeService (the programmatic install core; `sshmgr serve install`
+// 与权威端初始化向导展示的命令是同一条).
 //
 // Precheck rationale (codex #2, FINDING B defense — retained in spirit):
 // master.key must exist and decrypt. The old Windows path additionally required

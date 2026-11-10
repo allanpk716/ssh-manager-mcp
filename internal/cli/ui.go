@@ -11,12 +11,14 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"ssh-manager-mcp/internal/roles"
+	"ssh-manager-mcp/internal/machineinit"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiops"
 )
@@ -40,16 +42,21 @@ func newUICmd() *cobra.Command {
 	return c
 }
 
-// runUICommand 组装 ui 命令：按既有角色判定入口解析本机角色，单机与客户端
-// 构造 Web UI Handler 并监听回环随机端口，权威端与未初始化角色直接拒绝且
-// 不启动任何监听。
+// runUICommand 组装 ui 命令：按本机状态快照判定去向；空机器、单机续做与
+// 未完成初始化的权威端进入初始化向导，单机与客户端构造正式 Web UI 并监听
+// 回环随机端口，已运行 serve 的权威端只打印独立监听的状态。
 func runUICommand(cmd *cobra.Command, instance string) error {
-	launch, err := resolveMachineRole("")
+	snapshot, err := machineinit.ReadSnapshot()
 	if err != nil {
 		return err
 	}
-	if instance != "" && launch.Kind == roles.LaunchBroker &&
-		(launch.Role == roles.RoleStandalone || launch.Role == roles.RoleServer) {
+	destination, err := machineinit.DecideUIDestination(snapshot)
+	if err != nil {
+		return err
+	}
+	if instance != "" && (destination.Kind == machineinit.UIDestinationStandaloneWebUI ||
+		destination.Kind == machineinit.UIDestinationInitializationWizard ||
+		destination.Kind == machineinit.UIDestinationServerWizard) {
 		return NewExitCodeError(1, errors.New("`--instance` 只选择客户端缓存实例；本机自持 vault 的 Web UI 直接读取 vault，请去掉 `--instance`"))
 	}
 
@@ -62,9 +69,21 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource     webui.SecretSource
 		secretWriter     webui.SecretWriter
 		resolvedInstance string
+		machineInit      webui.MachineInitializer
 	)
+	initializing := false
+	uiShutdown := make(chan struct{})
+	var shutdownOnce sync.Once
+	serverWizard := destination.Kind == machineinit.UIDestinationServerWizard
+	requestShutdown := func(reason webui.ShutdownReason) {
+		if reason == webui.ShutdownReasonClientGuide {
+			writeClientInitializationGuide(cmd.OutOrStdout())
+		}
+		shutdownOnce.Do(func() { close(uiShutdown) })
+	}
 	switch {
-	case launch.Kind == roles.LaunchBroker && !launch.ResumeSetup && launch.Role == roles.RoleStandalone:
+	case destination.Kind == machineinit.UIDestinationInitializationWizard ||
+		destination.Kind == machineinit.UIDestinationStandaloneWebUI || serverWizard:
 		webRole = webui.RoleStandalone
 		servers = standaloneUIServerSource{}
 		serverWriter = standaloneUIServerWriter()
@@ -72,7 +91,9 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource = standaloneUISecretStore()
 		secretWriter = standaloneUISecretWriter()
 		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
-	case launch.Kind == roles.LaunchClient && !launch.ResumeSetup:
+		machineInit = standaloneMachineInitializer{}
+		initializing = destination.Kind == machineinit.UIDestinationInitializationWizard || serverWizard
+	case destination.Kind == machineinit.UIDestinationClientWebUI:
 		resolvedInstance, err = resolveClientCacheInstance(instance)
 		if err != nil {
 			return err
@@ -82,7 +103,9 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource = clientUISecretSource{}
 		opsSource = webuiops.ClientPageStoreWithUpdates(
 			uiUpdateService(webui.RoleClient, resolvedInstance), uiClientPull)
-	case launch.Kind == roles.LaunchBroker && launch.Role == roles.RoleServer:
+	default:
+		// 权威端正式页面由 serve 的独立监听提供；这里只打印状态，不另起
+		// 回环监听。
 		st, err := openUnlockedStore()
 		if err != nil {
 			return err
@@ -90,8 +113,6 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		defer st.Close()
 		fmt.Fprintln(cmd.OutOrStdout(), "权威端 Web UI 由 `serve` 进程的独立监听提供：")
 		return writeAuthorityWebUIStatus(cmd.OutOrStdout(), st)
-	default:
-		return NewExitCodeError(1, errors.New("本机尚未完成初始化，无法启动 Web UI。请先运行 `sshmgr tui` 完成初始化"))
 	}
 
 	versionHint := func() string { return "" }
@@ -105,18 +126,53 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		return fmt.Errorf("监听本机回环地址失败：%w", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	handler, startup, err := webui.New(webui.Config{
-		Role:           webRole,
-		Servers:        servers,
-		ServerWriter:   serverWriter,
-		Secrets:        secretSource,
-		SecretsWriter:  secretWriter,
-		VersionHint:    versionHint,
-		Port:           port,
-		Access:         accessSource,
-		Ops:            opsSource,
-		ClientInstance: resolvedInstance,
-	})
+	config := webui.Config{
+		Role:            webRole,
+		Servers:         servers,
+		ServerWriter:    serverWriter,
+		Secrets:         secretSource,
+		SecretsWriter:   secretWriter,
+		VersionHint:     versionHint,
+		Port:            port,
+		Access:          accessSource,
+		Ops:             opsSource,
+		MachineInit:     machineInit,
+		RequestShutdown: requestShutdown,
+		ClientInstance:  resolvedInstance,
+	}
+	if initializing {
+		executablePath, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("读取 sshmgr 可执行文件绝对路径失败：%w", err)
+		}
+		config.InitializationOperatingSystem = runtime.GOOS
+		config.InitializationExecutablePath = executablePath
+		completions := make(chan webui.InitializationCompletion, 1)
+		config.InitializationComplete = func(completion webui.InitializationCompletion) {
+			completions <- completion
+		}
+		defer func() {
+			select {
+			case completion := <-completions:
+				fmt.Fprintln(cmd.OutOrStdout(), "权威端初始化完成，正式 Web UI 地址：")
+				for _, address := range completion.Addresses {
+					localOnly := ""
+					if net.ParseIP(address).IsLoopback() {
+						localOnly = "（仅本机）"
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "https://%s/ui/%s\n", net.JoinHostPort(address, strconv.Itoa(completion.Port)), localOnly)
+				}
+			default:
+			}
+		}()
+	}
+	var handler http.Handler
+	var startup webui.Startup
+	if initializing {
+		handler, startup, err = webui.NewInitializationWizard(config, machineInitializer{})
+	} else {
+		handler, startup, err = webui.New(config)
+	}
 	if err != nil {
 		_ = listener.Close()
 		return err
@@ -145,6 +201,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	select {
 	case <-ctx.Done():
 	case <-stdinDone:
+	case <-uiShutdown:
 	case err := <-serveErr:
 		listenerErr = err
 	}
@@ -158,6 +215,13 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		return fmt.Errorf("关闭 Web UI 失败：%w", err)
 	}
 	return nil
+}
+
+func writeClientInitializationGuide(output io.Writer) {
+	fmt.Fprintln(output, "客户端入网指引：")
+	for _, line := range webui.ClientInitializationGuideLines() {
+		fmt.Fprintf(output, "  %s\n", line)
+	}
 }
 
 // openURLInBrowser 用系统默认浏览器打开网址，按操作系统选择打开命令；无图形

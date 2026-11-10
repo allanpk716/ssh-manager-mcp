@@ -332,7 +332,7 @@ func TestClear_ServerFullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if !strings.Contains(out, "⚠") || !strings.Contains(out, "已清理") || !strings.Contains(out, "首次向导") {
+	if !strings.Contains(out, "⚠") || !strings.Contains(out, "已清理") || !strings.Contains(out, "下次 sshmgr ui 将重新进入初始化向导") {
 		t.Fatalf("missing ceremony output:\n%s", out)
 	}
 	if !uninstallCalled || !timerCalled {

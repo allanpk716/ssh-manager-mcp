@@ -156,6 +156,39 @@ func TestServeAdminSetWritesArgon2idAndAudit(t *testing.T) {
 	}
 }
 
+func TestServeAdminSetAllowsIncompleteSetupFlag(t *testing.T) {
+	path, masterKey := withCliStoreEnv(t)
+	createVaultStoreAt(t, path, masterKey)
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: false}); err != nil {
+		t.Fatal(err)
+	}
+	previous := serveAdminPasswordPrompt
+	values := []string{"new-password", "new-password"}
+	serveAdminPasswordPrompt = func() ([]byte, error) {
+		value := values[0]
+		values = values[1:]
+		return []byte(value), nil
+	}
+	t.Cleanup(func() { serveAdminPasswordPrompt = previous })
+
+	out := runCli(t, "serve", "admin", "set")
+	if !strings.Contains(out, "已设置") {
+		t.Fatalf("setup_complete 为假时也应能设置管理员口令：%s", out)
+	}
+	st, err := store.Open(path, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	passwordSet, err := st.WebAdminPasswordIsSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !passwordSet {
+		t.Fatal("管理员口令应已写入 vault")
+	}
+}
+
 func TestServeAdminUnlockListsAndClearsLock(t *testing.T) {
 	path, masterKey := prepareServerRoleVault(t)
 	st, err := store.Open(path, masterKey)

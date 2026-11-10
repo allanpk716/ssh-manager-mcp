@@ -1,0 +1,18 @@
+{{define "content"}}
+<section class="initialization-page">
+<h1>初始化权威端</h1>
+<ol class="initialization-steps">
+{{range .InitializationSteps}}
+<li{{if .Current}} class="current"{{else if .Done}} class="done"{{end}}>{{.Label}}</li>
+{{end}}
+</ol>
+{{if .InitializationError}}<div class="operation-refusal"><p>{{.InitializationError.Lead}}{{if .InitializationError.Command}} <code>{{.InitializationError.Command}}</code>{{end}}{{.InitializationError.Tail}}</p></div>{{end}}
+<div class="operation-result">
+<p>将创建本机 vault，并生成一个随机主密钥文件用于加密 vault。创建后再设置管理员口令。</p>
+<form method="post" action="/ui/init/server/vault/create">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">创建 vault</button>
+</form>
+</div>
+</section>
+{{end}}

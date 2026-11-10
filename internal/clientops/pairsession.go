@@ -1,5 +1,5 @@
 // Plan 45 T1 —— PairSession:把 RunPair 的内部步骤提升为导出分步状态机,
-// CLI(`sshmgr pair` 的 RunPair 驱动层)与 T2 的 TUI 向导共用同一条管线。
+// `sshmgr pair` 的 RunPair 驱动层跑在这条管线上。
 //
 // 驱动序(两条路径同一状态机,plan 冻结):
 //
@@ -8,7 +8,7 @@
 //	→ 驱动层调 IsEnrolled 做"已装判定"(--force 只过闸,Plan 46 零清理先行:
 //	Enroll 前不删任何旧槽文件) → Enroll(置 ID/SAS/密钥态/绝对
 //	approvalDeadline = enroll 时刻 + pairPollMax)→ WaitApproval(2s 轮询)
-//	→(驱动层人闸:CLI = 轮询到 approved 后 y/N;TUI = Finish 前按键)
+//	→(驱动层人闸:轮询到 approved 后 y/N)
 //	→ Finish(ack + 解密封信封)→ WriteAndPull(先落盘四件套 0600 →
 //	pairBeforePullTestHook → DoPull → 成功尾部清 quarantine/)。
 //
@@ -62,8 +62,8 @@ var (
 
 // pairNoteThrottle is the frozen transient-note cadence (30s): a 10-minute
 // poll loop against a rate-limited surface must not spam the consumer. The
-// throttle lives HERE (session side) so CLI and TUI get the same discipline;
-// the CLI driver additionally routes the note through noteTransient (its own
+// throttle lives HERE (session side); the CLI driver additionally routes the
+// note through noteTransient (its own
 // 30s gate, lockstep — output stays byte-identical to pre-Plan-45).
 const pairNoteThrottle = 30 * time.Second
 
@@ -91,8 +91,6 @@ type PairSession struct {
 	// brokerPin 是本次连接的生效 pin(opts.Pin 优先,缺省升格 discovery 的
 	// SPKI);TOFU 路径为空。Finish 用它与信封 SPKI 交叉核对。
 	brokerPin string
-	// brokerName 是 discovery offer 的显示名(URL 直连路径为空)。
-	brokerName string
 	// client 是校验完成后构建的 HTTP 客户端(pinning 或 TOFU transport,
 	// 3xx 永不跟随,单请求 15s 上限)。
 	client *http.Client
@@ -130,7 +128,7 @@ func NewPairSession(o PairOpts) (*PairSession, error) {
 	if o.URL == "" {
 		return s, nil
 	}
-	if err := s.applyTarget(o.URL, o.Pin, ""); err != nil {
+	if err := s.applyTarget(o.URL, o.Pin); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -139,7 +137,7 @@ func NewPairSession(o PairOpts) (*PairSession, error) {
 // applyTarget 执行与旧 RunPair 逐字等价的三步校验 + transport 构建(①pin
 // 分级 → ②URL 严格 parse → ①transport 分级),三步全过才置 validated。
 // New(URL 非空)与 Bind 共用同一实现 —— 单一来源,两条路径不可能漂移。
-func (s *PairSession) applyTarget(rawURL, pin, brokerName string) error {
+func (s *PairSession) applyTarget(rawURL, pin string) error {
 	// ① pin 分级:无 pin 且未显式 TOFU → 冻结文案拒绝(先于任何 IO)。
 	if pin == "" && !s.opts.AllowTOFU {
 		return errors.New("refusing TOFU pairing without --pin; pass --allow-tofu to accept an unanchored channel")
@@ -169,7 +167,6 @@ func (s *PairSession) applyTarget(rawURL, pin, brokerName string) error {
 	}
 	s.targetURL = targetURL
 	s.brokerPin = pin
-	s.brokerName = brokerName
 	s.client = &http.Client{
 		Transport:     transport,
 		Timeout:       pairHTTPTimeout,
@@ -188,11 +185,11 @@ func (s *PairSession) Bind(d Discovered) error {
 	if pin == "" {
 		pin = d.SPKI
 	}
-	return s.applyTarget(fmt.Sprintf("https://%s:%d", d.Addr, d.TCPPort), pin, d.Name)
+	return s.applyTarget(fmt.Sprintf("https://%s:%d", d.Addr, d.TCPPort), pin)
 }
 
 // ForceCleanup 删除实例的 enroll 态文件(cache.auth.json/cache.bin/cache.meta.json/
-// quarantine/,保留 cache.config.json)。Plan 46 起驱动层(CLI RunPair/TUI 向导)
+// quarantine/,保留 cache.config.json)。Plan 46 起驱动层(CLI RunPair)
 // **不再**于 Enroll 前调用它(force 零清理先行:旧材料直到 WriteAndPull 全部成功
 // 才被原子覆盖)——方法保留作显式清理入口,既有直接测试(TestForceCleanup_*)
 // 零改动。调用前提 = 会话已完成连接参数校验(New 带 URL 或 Bind 成功):
@@ -211,7 +208,7 @@ func (s *PairSession) ForceCleanup() error {
 
 // IsEnrolled 报告该实例的 cache.auth.json 是否已在(已 enroll 判定)。由驱动层
 // 在 New 之后调用:CLI 据此打印冻结文案 "instance already enrolled; pass
-// --force";TUI 表单侧即此判定。stat 出错(非 not-exist)如实上抛。
+// --force"。stat 出错(非 not-exist)如实上抛。
 func IsEnrolled(instance string) (bool, error) {
 	p, err := CacheCredPathFor(instance)
 	if err != nil {
@@ -328,7 +325,7 @@ func (s *PairSession) Enroll(ctx context.Context) error {
 	s.kAck = kAck
 	s.kCreds = kCreds
 	s.sas = pairing.SAS(transcript, kCreds)
-	// 绝对 approvalDeadline = enroll 时刻 + 窗口上限(TUI 倒计时与轮询共用
+	// 绝对 approvalDeadline = enroll 时刻 + 窗口上限(轮询倒计时与判定共用
 	// 同一锚,不复制常量)。
 	s.deadline = time.Now().Add(pairPollMax)
 	s.enrolled = true
@@ -337,13 +334,6 @@ func (s *PairSession) Enroll(ctx context.Context) error {
 
 // SAS 返回 ③ 的 6 位短认证串(Enroll 成功后有效)。
 func (s *PairSession) SAS() string { return s.sas }
-
-// BrokerName 返回 discovery offer 的显示名;URL 直连路径为空串。
-func (s *PairSession) BrokerName() string { return s.brokerName }
-
-// ApprovalDeadline 返回绝对 approvalDeadline(= enroll 时刻 + pairPollMax):
-// TUI 倒计时与 WaitApproval 共用同一锚,不复制常量。Enroll 前为零值。
-func (s *PairSession) ApprovalDeadline() time.Time { return s.deadline }
 
 // WaitApproval 执行 ④:2s 轮询 ≤ approvalDeadline;200 → 批准到达(nil);
 // 410 → ErrPairGone;deadline 尽 → ErrPairTimeout;ctx 取消 → context.Canceled
@@ -576,7 +566,7 @@ func (s *PairSession) WriteAndPull(ctx context.Context) (PullResult, error) {
 // (finish/首拉请求发出后的传输失败两态不可分辨;config 写失败是 WARNING+继续,
 // 可能已进首拉)——因此禁止任何"必定自愈"式确定性表述,统一双路径。
 func pairRecoverHint(instance string) string {
-	return fmt.Sprintf("恢复:直接重跑 `sshmgr pair --force`(或 TUI 重配);若重跑报设备名占用(419),请 owner 在 broker 侧执行 `sshmgr cache-tokens revoke %s` 后再重跑", instance)
+	return fmt.Sprintf("恢复:直接重跑 `sshmgr pair --force`;若重跑报设备名占用(419),请 owner 在 broker 侧执行 `sshmgr cache-tokens revoke %s` 后再重跑", instance)
 }
 
 // ArtifactPath 返回 pair.<name>.mcp.json 的实际落点(WriteAndPull 成功后有效;

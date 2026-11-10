@@ -1,0 +1,29 @@
+{{define "content"}}
+<section class="initialization-page">
+<h1>选择本机角色</h1>
+{{if .InitializationError}}<div class="operation-refusal"><p>{{.InitializationError.Lead}}{{if .InitializationError.Command}} <code>{{.InitializationError.Command}}</code>{{end}}{{.InitializationError.Tail}}</p></div>{{end}}
+<div class="initialization-choices">
+<form method="post" action="/ui/init/role">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="role" value="standalone">
+<h2>单机</h2>
+<p>一台机器自持 vault，适合只在当前电脑上使用 sshmgr。</p>
+<button type="submit">选择单机</button>
+</form>
+<form method="post" action="/ui/init/role">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="role" value="server">
+<h2>权威端</h2>
+<p>多机部署里常驻权威 vault，其余机器经配对入网。</p>
+<button type="submit">选择权威端</button>
+</form>
+<form method="post" action="/ui/init/role">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="role" value="client">
+<h2>客户端</h2>
+<p>只持本地只读快照，修改数据到权威端 Web UI 做。</p>
+<button type="submit">选择客户端</button>
+</form>
+</div>
+</section>
+{{end}}

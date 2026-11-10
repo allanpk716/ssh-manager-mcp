@@ -27,12 +27,12 @@ broker 主机上的 agent 就是**一台零距离的 client**——和任何工�
 全流程与 [multi-machine.md 的 pair 节](./multi-machine.md#配对入网sshmgr-pairplan-42)一模一样，只有两个零距离差异：
 
 1. **连接地址用本机 hostname 或 VLAN IP**（不是 `127.0.0.1`/`localhost`）——pair 的机械地址校验核对的是 `target_url` 是否属于本机**非环回**地址集合 + hostname（环回不在集合内，用 `https://127.0.0.1:7878` 配对会吃 ⚠ 并要求显式覆盖）。LAN 发现路径天然给你的是 VLAN IP，直接用即可。
-2. **批准就在本机**：broker 机自己开着 TUI（Pairing 页）或随手 `serve pair ls / approve`——对照 client 屏 SAS 与批准行 name@url 一致后批准，不用切机器。
+2. **批准就在本机**：本机打开权威端 Web UI（配对页）或随手 `serve pair ls / approve`——对照 client 屏 SAS 与批准行 name@url 一致后批准，不用切机器。
 
 ```bash
 sshmgr pair --instance server-local          # 发现会找到自己（VLAN IP）
 # 或显式：sshmgr pair --instance server-local --url https://<本机VLAN IP>:7878
-# → 批准（本机 TUI / serve pair）→ 首拉 → 产物 pair.server-local.mcp.json
+# → 批准（本机 Web UI / serve pair）→ 首拉 → 产物 pair.server-local.mcp.json
 ```
 
 `.mcp.json`（cache 形态，与工作机完全同构）：
@@ -54,7 +54,7 @@ sshmgr pair --instance server-local          # 发现会找到自己（VLAN IP�
 ### 走桥的语义
 
 - **TLS 零配置**：自家客户端纯 SPKI 指纹钉死（pair 自动交付 pin）——`127.0.0.1` 都不需要，更不需要信任库/证书分发。
-- **只读快照**：新 grant / 新加的 server，要等缓存保鲜（默认 ≤30min 自动，或手动 `cache pull`）才对 agent 可见。**写操作**（加改删服务器、发码、批准配对）走本机的 TUI / owner CLI——这正是管理面所在。
+- **只读快照**：新 grant / 新加的 server，要等缓存保鲜（默认 ≤30min 自动，或手动 `cache pull`）才对 agent 可见。**写操作**（加改删服务器、发码、批准配对）走本机的权威端 Web UI / owner 命令行——这正是管理面所在。
 - **吊销是两道闸**：`cache-tokens revoke` → 该机下次拉取收到 pinned 401，本地 cache 四件销毁（回连即生效）；project token 吊销 → 下次保鲜的新快照已无该 project，spawn 拒。**断干净要两样都处理**（吊销三路径见 [agent-tools.md](./agent-tools.md)）。
 - **后台任务表在 agent 子进程内存**：会话 / MCP 子进程重启即全死（agent 侧把在跑的活当全死重新安排）；serve 重启无影响。
 - broker 机上多一份 cache 副本（`cache.bin` + DEK）——同机威胁模型下无增量（vault 的 master key 文件本来就在这台机）。
