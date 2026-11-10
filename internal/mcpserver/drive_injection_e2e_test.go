@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf16"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -135,6 +136,14 @@ func (f *fakePowerShellDriveServer) setStatusesByDrive(statuses map[string]strin
 	f.statusesByDrive = statuses
 }
 
+// setMapStatus 让测试在同一条服务器连接上先回传网络类映射失败、再回传成
+// 功，模拟第一候选地址实际不可达而下一候选可用的场景。
+func (f *fakePowerShellDriveServer) setMapStatus(status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mapStatus = status
+}
+
 func encodedCommandScripts(command string) []string {
 	const prefix = "powershell -NoProfile -NonInteractive -EncodedCommand "
 	var scripts []string
@@ -166,6 +175,211 @@ type networkDriveFixture struct {
 	secondServerID string
 	store          *store.Store
 	fake           *fakePowerShellDriveServer
+}
+
+// manualNetworkDriveClock 是网络盘符选址缓存的测试时钟：时间只在测试明
+// 确拨动时前进，缓存过期不需要真实等待。
+type manualNetworkDriveClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newManualNetworkDriveClock() *manualNetworkDriveClock {
+	return &manualNetworkDriveClock{now: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)}
+}
+
+func (c *manualNetworkDriveClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *manualNetworkDriveClock) Advance(by time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(by)
+}
+
+// useManualNetworkDriveClock 给网络盘符选址缓存换上测试时钟，并在测试结
+// 束后恢复生产时钟与空缓存，避免影响其他测试。
+func useManualNetworkDriveClock(t *testing.T) *manualNetworkDriveClock {
+	t.Helper()
+	clock := newManualNetworkDriveClock()
+	previous := networkDriveAddressCache
+	networkDriveAddressCache = newNetworkDriveAddressCache(clock.Now)
+	t.Cleanup(func() { networkDriveAddressCache = previous })
+	return clock
+}
+
+func execNetworkDriveCommand(t *testing.T, fixture networkDriveFixture, command string) string {
+	t.Helper()
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": command},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	var output struct {
+		Stdout string `json:"stdout"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if strings.Contains(toolResultText(result), networkDriveTestPassword) {
+		t.Fatal("tool result leaked the mount password")
+	}
+	return output.Stdout
+}
+
+func countNetworkDriveProbeCommands(commands []string) int {
+	count := 0
+	for _, command := range commands {
+		if strings.Contains(command, "probe-one ") {
+			count++
+		}
+	}
+	return count
+}
+
+// TestNetworkDriveInjectionAddressCacheSkipsRepeatProbes 钉住选址缓存：同
+// 一服务器条目、共享与共享存储版本号在 10 分钟内的后续命令不再探测 445；
+// 缓存过期后重新探测。
+func TestNetworkDriveInjectionAddressCacheSkipsRepeatProbes(t *testing.T) {
+	clock := useManualNetworkDriveClock(t)
+	fixture := seedNetworkDriveVault(t, nil)
+
+	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+	commands, _ := fixture.fake.recorded()
+	if probes := countNetworkDriveProbeCommands(commands); probes != 1 {
+		t.Fatalf("probe commands within cache lifetime = %d, want 1: %#v", probes, commands)
+	}
+	if len(commands) != 3 {
+		t.Fatalf("remote commands = %d, want two wrapped commands and one probe: %#v", len(commands), commands)
+	}
+	for _, wrapped := range []string{commands[1], commands[2]} {
+		if !strings.Contains(wrapped, `AddArgument('\\192.0.2.10\datasets')`) {
+			t.Fatalf("wrapped command did not reuse the cached physical address: %q", wrapped)
+		}
+	}
+
+	clock.Advance(10*time.Minute + time.Second)
+	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+	commands, _ = fixture.fake.recorded()
+	if probes := countNetworkDriveProbeCommands(commands); probes != 2 {
+		t.Fatalf("probe commands after cache expiry = %d, want 2: %#v", probes, commands)
+	}
+}
+
+// TestNetworkDriveInjectionAddressCacheInvalidatedByShareVersion 钉住版本
+// 失效：共享存储登记被修改、版本号随之变化后，旧选址缓存立
+// 即失效，下一条命令重新探测。
+func TestNetworkDriveInjectionAddressCacheInvalidatedByShareVersion(t *testing.T) {
+	useManualNetworkDriveClock(t)
+	fixture := seedNetworkDriveVault(t, nil)
+
+	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+	note := "网络成员变化后的新登记说明"
+	if _, err := fixture.store.EditSharedStorage("datasets", store.SharedStorageChanges{
+		Note: &note,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+
+	commands, _ := fixture.fake.recorded()
+	if probes := countNetworkDriveProbeCommands(commands); probes != 2 {
+		t.Fatalf("probe commands after share version change = %d, want 2: %#v", probes, commands)
+	}
+}
+
+// TestNetworkDriveInjectionNetworkFailureSelectsNextCandidate 覆盖真机结论
+// #206 的选址修订：445 探测可能被透明代理误报连通，注入遇到网络类映射失
+// 败（64、53、67 或超时）后，该地址在进程内缓存里标为不可用，下一条命令
+// 改选下一个候选，不再探测已作废的地址。
+func TestNetworkDriveInjectionNetworkFailureSelectsNextCandidate(t *testing.T) {
+	useManualNetworkDriveClock(t)
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.mapStatus = "error-64"
+	})
+
+	stdout := execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+	if !strings.Contains(stdout, "网络类失败（系统错误 64）") {
+		t.Fatalf("first command missing network failure warning: %q", stdout)
+	}
+	fixture.fake.setMapStatus("ok")
+	stdout = execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+	want := "user-command-output\n共享 datasets 的网络盘符 S: 已使用虚拟局域网：办公虚拟局域网 第1个地址，性能可能下降；物理局域网地址不通：办公物理局域网 第1个地址（网络类映射失败）\n"
+	if stdout != want {
+		t.Fatalf("second command stdout = %q, want %q", stdout, want)
+	}
+
+	commands, _ := fixture.fake.recorded()
+	if probes := countNetworkDriveProbeCommands(commands); probes != 2 {
+		t.Fatalf("probe commands = %d, want one per failed selection round: %#v", probes, commands)
+	}
+	if strings.Contains(commands[2], "192.0.2.10") {
+		t.Fatalf("second probe still covered the marked-unavailable address: %q", commands[2])
+	}
+	if !strings.Contains(commands[2], "probe-one 0 100.64.10.10 445 ") {
+		t.Fatalf("second probe did not cover the next candidate: %q", commands[2])
+	}
+	if !strings.Contains(commands[3], `AddArgument('\\100.64.10.10\datasets')`) {
+		t.Fatalf("second mapping did not use the next candidate address: %q", commands[3])
+	}
+	for _, command := range commands {
+		if strings.Contains(command, networkDriveTestPassword) {
+			t.Fatalf("remote command leaked the mount password: %q", command)
+		}
+	}
+}
+
+// TestNetworkDriveInjectionAllCandidatesUnavailableWaitsForExpiry 钉住全量
+// 作废：每个候选都因网络类映射失败标为不可用后，后续命令不再探测，等缓
+// 存过期后才重新探测。
+func TestNetworkDriveInjectionAllCandidatesUnavailableWaitsForExpiry(t *testing.T) {
+	clock := useManualNetworkDriveClock(t)
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.mapStatus = "error-64"
+	})
+
+	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+	stdout := execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+	if !strings.Contains(stdout, "共享 datasets 的网络盘符 S: 未注入") {
+		t.Fatalf("waiting warning missing: %q", stdout)
+	}
+	for _, want := range []string{"办公物理局域网", "办公虚拟局域网", "缓存过期"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("waiting warning missing %q: %q", want, stdout)
+		}
+	}
+	for _, address := range []string{"192.0.2.10", "100.64.10.10", "192.0.2.20", "100.64.10.20"} {
+		if strings.Contains(stdout, address) {
+			t.Fatalf("waiting warning leaked address %s: %q", address, stdout)
+		}
+	}
+
+	commands, _ := fixture.fake.recorded()
+	if probes := countNetworkDriveProbeCommands(commands); probes != 2 {
+		t.Fatalf("probe commands before expiry = %d, want 2: %#v", probes, commands)
+	}
+	if len(commands) != 5 {
+		t.Fatalf("remote commands = %d, want two probe and mapping pairs plus one plain command: %#v",
+			len(commands), commands)
+	}
+	if strings.Contains(commands[4], "New-SmbMapping") {
+		t.Fatalf("command with all candidates unavailable still injected: %q", commands[4])
+	}
+
+	clock.Advance(10*time.Minute + time.Second)
+	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+	commands, _ = fixture.fake.recorded()
+	if probes := countNetworkDriveProbeCommands(commands); probes != 3 {
+		t.Fatalf("probe commands after cache expiry = %d, want 3: %#v", probes, commands)
+	}
 }
 
 // seedNetworkDriveVault 建立网络盘符注入的端到端数据：提供方设备与目标设备
@@ -212,12 +426,21 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 			t.Fatal(err)
 		}
 	}
-	for _, membership := range []struct{ network, address string }{
-		{"办公物理局域网", "192.0.2.20"},
-		{"办公虚拟局域网", "100.64.10.20"},
-	} {
-		if _, err := st.AddNetworkMembership("windows-device", membership.network, membership.address); err != nil {
+	if settings.disjointNetworks {
+		if _, err := st.AddNetwork(models.Network{Name: "办公管理网络", Type: models.NetworkPhysical, SiteName: "办公室"}); err != nil {
 			t.Fatal(err)
+		}
+		if _, err := st.AddNetworkMembership("windows-device", "办公管理网络", "192.0.2.30"); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		for _, membership := range []struct{ network, address string }{
+			{"办公物理局域网", "192.0.2.20"},
+			{"办公虚拟局域网", "100.64.10.20"},
+		} {
+			if _, err := st.AddNetworkMembership("windows-device", membership.network, membership.address); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	shellType := models.ShellPowerShell
@@ -230,8 +453,19 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 		Name: "windows-web", Host: addr[:strings.LastIndex(addr, ":")],
 		Port: portOfAddr(addr), User: "deploy", ShellType: shellType,
 	}
-	added, err := st.AddServerWithCredentialsToDevice(server,
-		&models.Credential{Type: models.CredPassword, Secret: []byte("pw")}, nil, "windows-device")
+	var added *store.AddServerDeviceResult
+	var err error
+	if settings.noDevice {
+		var serverID string
+		serverID, err = st.AddServer(&models.Server{
+			Name: "windows-web", Host: server.Host, Port: server.Port, User: server.User,
+			AuthMethod: models.AuthPassword, CredentialID: mustCred(t, st), ShellType: shellType,
+		})
+		added = &store.AddServerDeviceResult{ServerID: serverID}
+	} else {
+		added, err = st.AddServerWithCredentialsToDevice(server,
+			&models.Credential{Type: models.CredPassword, Secret: []byte("pw")}, nil, "windows-device")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,6 +602,8 @@ type networkDriveSeedSetup struct {
 	secondServer           bool
 	invalidDatasetPassword bool
 	environmentSecret      bool
+	disjointNetworks       bool
+	noDevice               bool
 }
 
 // TestNetworkDriveInjectionExecCommandPowerShell 覆盖贯通路径：可写名单内的
@@ -1089,8 +1325,8 @@ func TestNetworkDriveInjectionAuthenticationFailurePausesOnlyFailedShare(t *test
 	}
 
 	commands, _ := fixture.fake.recorded()
-	if len(commands) != 5 {
-		t.Fatalf("remote commands = %#v, want two probes and two wrapped commands", commands)
+	if len(commands) != 4 {
+		t.Fatalf("remote commands = %#v, want two first-command probes and two wrapped commands", commands)
 	}
 	wrappedCommands := make([]string, 0, 2)
 	for _, command := range commands {
@@ -1225,5 +1461,186 @@ func TestNetworkDriveInjectionAuthenticationPauseRecoversAfterVersionChange(t *t
 	}
 	if len(injected) != 1 || injected[0].Share != "datasets" || injected[0].Drive != "S" {
 		t.Fatalf("recovered injected_network_drives = %#v", injected)
+	}
+}
+
+// TestNetworkDriveInjectionNoCommonNetworkWarnsWithoutProbe 钉住拓扑缺口
+// 呈现：目标设备与提供方设备没有共同网络时不探测、不盲试全部地址，警告
+// 说明原因并列出双方各自所在的网络名。
+func TestNetworkDriveInjectionNoCommonNetworkWarnsWithoutProbe(t *testing.T) {
+	useManualNetworkDriveClock(t)
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.disjointNetworks = true
+	})
+
+	stdout := execNetworkDriveCommand(t, fixture, "Get-Location")
+	wantParts := []string{
+		"共享 datasets 的网络盘符 S: 未注入：目标服务器所属设备与共享存储提供方设备没有共同网络，未探测",
+		"共享存储提供方设备所在网络：办公物理局域网、办公虚拟局域网",
+		"目标服务器所属设备所在网络：办公管理网络",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q: %q", want, stdout)
+		}
+	}
+	for _, address := range []string{"192.0.2.10", "100.64.10.10", "192.0.2.30"} {
+		if strings.Contains(stdout, address) {
+			t.Fatalf("warning leaked address %s: %q", address, stdout)
+		}
+	}
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 1 || strings.Contains(commands[0], "probe-one") ||
+		strings.Contains(commands[0], "New-SmbMapping") {
+		t.Fatalf("disjoint topology must not probe or inject: %#v", commands)
+	}
+	if len(inputs[0]) != 0 {
+		t.Fatalf("standard input = %q, want empty", inputs[0])
+	}
+}
+
+// TestNetworkDriveInjectionNoDeviceWarnsWithoutProbe 钉住服务器没有关联设
+// 备时的呈现：不探测，警告列出提供方网络名，并说明目标侧没有拓扑登记。
+func TestNetworkDriveInjectionNoDeviceWarnsWithoutProbe(t *testing.T) {
+	useManualNetworkDriveClock(t)
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.noDevice = true
+	})
+
+	stdout := execNetworkDriveCommand(t, fixture, "Get-Location")
+	wantParts := []string{
+		"共享 datasets 的网络盘符 S: 未注入：目标服务器未关联拓扑设备，未探测",
+		"共享存储提供方设备所在网络：办公物理局域网、办公虚拟局域网",
+		"目标服务器所属设备所在网络：（无）",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q: %q", want, stdout)
+		}
+	}
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 1 || strings.Contains(commands[0], "probe-one") ||
+		strings.Contains(commands[0], "New-SmbMapping") {
+		t.Fatalf("server without a device must not probe or inject: %#v", commands)
+	}
+	if len(inputs[0]) != 0 {
+		t.Fatalf("standard input = %q, want empty", inputs[0])
+	}
+}
+
+// TestNetworkDriveInjectionAllCandidatesUnreachableWarnsSafely 钉住全部候选
+// 不通时的呈现：命令照常执行，警告沿用 mount_share 的逐地址格式，只含网
+// 络名、登记序号、错误分类与耗时，不含 IP 或域名。
+func TestNetworkDriveInjectionAllCandidatesUnreachableWarnsSafely(t *testing.T) {
+	useManualNetworkDriveClock(t)
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.reachable = map[string]bool{"192.0.2.10": false, "100.64.10.10": false}
+	})
+
+	stdout := execNetworkDriveCommand(t, fixture, "Get-Location")
+	wantParts := []string{
+		"全部候选地址在目标服务器上探测失败，登记与实际不一致：",
+		"办公物理局域网 第1个地址  ✗无路由 2ms",
+		"办公虚拟局域网 第1个地址  ✗无路由 2ms",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q: %q", want, stdout)
+		}
+	}
+	if !strings.HasPrefix(stdout, "plain-command-output\n") {
+		t.Fatalf("unreachable candidates blocked the user command: %q", stdout)
+	}
+	for _, address := range []string{"192.0.2.10", "100.64.10.10", "192.0.2.20", "100.64.10.20"} {
+		if strings.Contains(stdout, address) {
+			t.Fatalf("warning leaked address %s: %q", address, stdout)
+		}
+	}
+	commands, _ := fixture.fake.recorded()
+	if probes := countNetworkDriveProbeCommands(commands); probes != 1 {
+		t.Fatalf("probe commands = %d, want 1: %#v", probes, commands)
+	}
+	if strings.Contains(commands[1], "New-SmbMapping") {
+		t.Fatalf("all-unreachable selection still injected: %q", commands[1])
+	}
+}
+
+// TestNetworkDriveInjectionUsesVirtualNetworkWithNote 钉住降级呈现：物理局
+// 域网候选探测全部不通、改走虚拟局域网时注入照常成功，输出末尾说明走了
+// 虚拟局域网、性能可能下降。
+func TestNetworkDriveInjectionUsesVirtualNetworkWithNote(t *testing.T) {
+	useManualNetworkDriveClock(t)
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.reachable = map[string]bool{"192.0.2.10": false, "100.64.10.10": true}
+	})
+
+	stdout := execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
+	want := "user-command-output\n共享 datasets 的网络盘符 S: 已使用虚拟局域网：办公虚拟局域网 第1个地址，性能可能下降；物理局域网地址不通：办公物理局域网 第1个地址  ✗无路由 2ms\n"
+	if stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+	commands, _ := fixture.fake.recorded()
+	if !strings.Contains(commands[1], `AddArgument('\\100.64.10.10\datasets')`) {
+		t.Fatalf("wrapped command did not use the virtual network address: %q", commands[1])
+	}
+	if strings.Contains(commands[1], `AddArgument('\\192.0.2.10`) {
+		t.Fatalf("wrapped command used the unreachable physical address: %q", commands[1])
+	}
+}
+
+// TestNetworkDriveInjectionConcurrentCommandsStaySafe 钉住并发安全：多条
+// MCP 调用同时执行时共享同一份选址缓存，不破坏结果、不泄漏密码；探测至
+// 少发生一次，至多每条命令一次（本票不要求并发合并成一次探测）。
+func TestNetworkDriveInjectionConcurrentCommandsStaySafe(t *testing.T) {
+	useManualNetworkDriveClock(t)
+	fixture := seedNetworkDriveVault(t, nil)
+
+	const callers = 6
+	var waitGroup sync.WaitGroup
+	outputs := make([]string, callers)
+	errors := make([]error, callers)
+	for index := 0; index < callers; index++ {
+		waitGroup.Add(1)
+		go func(index int) {
+			defer waitGroup.Done()
+			outputs[index], errors[index] = func() (string, error) {
+				result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+					Name:      "exec_command",
+					Arguments: map[string]any{"server_id": fixture.serverID, "command": "Get-ChildItem S:\\"},
+				})
+				if err != nil {
+					return "", err
+				}
+				if result.IsError {
+					return "", fmt.Errorf("exec_command failed: %v", result.Content)
+				}
+				var output struct {
+					Stdout string `json:"stdout"`
+				}
+				unmarshalToolJSON(t, result, &output)
+				if strings.Contains(toolResultText(result), networkDriveTestPassword) {
+					return "", fmt.Errorf("tool result leaked the mount password")
+				}
+				return output.Stdout, nil
+			}()
+		}(index)
+	}
+	waitGroup.Wait()
+	for index, err := range errors {
+		if err != nil {
+			t.Fatalf("caller %d failed: %v", index, err)
+		}
+		if outputs[index] != "user-command-output\n" {
+			t.Fatalf("caller %d stdout = %q", index, outputs[index])
+		}
+	}
+	commands, _ := fixture.fake.recorded()
+	if probes := countNetworkDriveProbeCommands(commands); probes < 1 || probes > callers {
+		t.Fatalf("probe commands = %d, want between 1 and %d", probes, callers)
+	}
+	for _, command := range commands {
+		if strings.Contains(command, networkDriveTestPassword) {
+			t.Fatalf("remote command leaked the mount password: %q", command)
+		}
 	}
 }
