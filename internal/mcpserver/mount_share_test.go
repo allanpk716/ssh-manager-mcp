@@ -228,6 +228,8 @@ type fakeDarwinMountServer struct {
 	mountPointAccesses  int
 	remounts            int
 	mounted             bool
+	unmounts            int
+	unmountFails        bool
 	reachableAddresses  map[string]bool
 	existingAddress     string
 	remoteVersion       int64
@@ -304,6 +306,22 @@ func (f *fakeDarwinMountServer) handler(command string, stdin io.Reader) (string
 			f.existingAddress == selectedAddress && f.mounted
 		if configurationMatches && !resetAutoMaster {
 			return fmt.Sprintf("SSHMGR-DARWIN-MOUNT result=no-change selected=%d\n", selectedIndex), "", 0
+		}
+		mapRewritten := wasExisting && !configurationMatches
+		if mapRewritten && f.mounted {
+			for _, want := range []string{
+				`umount "$mount_point"`,
+				`diskutil unmount force "$mount_point"`,
+			} {
+				if !strings.Contains(command, want) {
+					return "", "macOS 固定命令缺少卸载旧挂载步骤 " + want, 91
+				}
+			}
+			if f.unmountFails {
+				return "", "SSHMGR-DARWIN-MOUNT unmount-failed", 85
+			}
+			f.unmounts++
+			f.mounted = false
 		}
 		if !configurationMatches {
 			updatedMap := make([]string, 0, len(f.mapLines)+2)
@@ -419,6 +437,12 @@ func (f *fakeDarwinMountServer) darwinState() (owner string, mode string, refres
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.mapOwner, f.mapMode, f.automountRefreshes, f.mountPointAccesses
+}
+
+func (f *fakeDarwinMountServer) unmountCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.unmounts
 }
 
 type mountShareFixture struct {
@@ -1396,6 +1420,59 @@ func TestMountShareDarwinRecoversExpiredStaleLock(t *testing.T) {
 	darwinFake := fixture.fake.(*fakeDarwinMountServer)
 	if mapWrites, autoMasterWrites := darwinFake.writeCounts(); mapWrites != 1 || autoMasterWrites != 1 {
 		t.Fatalf("macOS 过期锁回收后的写入错误：映射 %d 次，主配置 %d 次", mapWrites, autoMasterWrites)
+	}
+}
+
+func TestMountShareDarwinRemountsAfterMapRewrite(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.darwinExistingAddress = "192.0.2.10"
+		setup.darwinRemoteVersion = 0
+	})
+	darwinFake := fixture.fake.(*fakeDarwinMountServer)
+	if !darwinFake.mounted {
+		t.Fatal("改写场景应从已挂载状态开始")
+	}
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("macOS 映射改写后应重新挂载：%s", text)
+	}
+	if output["result"] != "update-success" {
+		t.Fatalf("macOS 映射改写后的输出 = %#v", output)
+	}
+	if unmounts := darwinFake.unmountCount(); unmounts != 1 {
+		t.Fatalf("映射改写后应卸载一次旧 smbfs 挂载，实际 %d 次", unmounts)
+	}
+	owner, mode, refreshes, accesses := darwinFake.darwinState()
+	if owner != "root" || mode != "600" || refreshes != 1 || accesses != 1 {
+		t.Fatalf("macOS 改写后的刷新状态错误：owner=%q mode=%q refreshes=%d accesses=%d",
+			owner, mode, refreshes, accesses)
+	}
+	if !darwinFake.mounted {
+		t.Fatal("macOS 改写后应完成重新挂载")
+	}
+}
+
+func TestMountShareDarwinRewriteUnmountFailureStops(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.darwinExistingAddress = "192.0.2.10"
+		setup.darwinRemoteVersion = 0
+	})
+	darwinFake := fixture.fake.(*fakeDarwinMountServer)
+	darwinFake.unmountFails = true
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if !isError || text != "macOS 卸载旧挂载失败，请 owner 手动检查后重试" {
+		t.Fatalf("卸载失败的报错 = %q (%v)", text, output)
+	}
+	if unmounts := darwinFake.unmountCount(); unmounts != 0 {
+		t.Fatalf("卸载失败时不应记录成功卸载：%d 次", unmounts)
 	}
 }
 

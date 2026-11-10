@@ -12,6 +12,7 @@ import (
 const (
 	darwinMountMarker        = "SSHMGR-DARWIN-MOUNT"
 	darwinExitMissingCommand = 83
+	darwinExitUnmountFailed  = 85
 	darwinExitVerifyFailed   = 86
 	darwinExitLockTimeout    = 87
 	darwinExitRemoteNewer    = 88
@@ -27,6 +28,8 @@ func darwinMountExitCodeError(exitCode int) error {
 	switch exitCode {
 	case darwinExitMissingCommand:
 		return errors.New("目标服务器缺少 automount，请先由 owner 修复 macOS 系统组件；挂载工具不会自动安装")
+	case darwinExitUnmountFailed:
+		return errors.New("macOS 卸载旧挂载失败，请 owner 手动检查后重试")
 	case darwinExitVerifyFailed:
 		return errors.New("macOS 挂载点验证失败，不能确认共享已可用")
 	case darwinExitLockTimeout:
@@ -286,6 +289,16 @@ if [ "$sshmgr_existing_configuration" = no ]; then
 fi
 if [ "$sshmgr_reset" = yes ]; then
   printf '%s %s\n' ` + sshbroker.POSIXShellQuote(darwinMountRoot) + ` ` + sshbroker.POSIXShellQuote(darwinMapFile) + ` >> ` + sshbroker.POSIXShellQuote(darwinAutoMaster) + `
+fi
+
+if [ "$sshmgr_managed_count" -gt 0 ] && [ "$sshmgr_existing_configuration" = no ] &&
+   mount | grep -qF " on $mount_point (smbfs"; then
+  if ! umount "$mount_point" >/dev/null 2>&1; then
+    if ! diskutil unmount force "$mount_point" >/dev/null 2>&1; then
+      echo ` + darwinMountMarker + ` unmount-failed >&2
+      exit ` + strconv.Itoa(darwinExitUnmountFailed) + `
+    fi
+  fi
 fi
 
 automount -cv
