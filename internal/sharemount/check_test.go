@@ -31,7 +31,7 @@ func TestShareCheckCommandsAreReadOnly(t *testing.T) {
 	}
 	for name, command := range commands {
 		for _, forbidden := range []string{
-			linuxLockPath, darwinLockPath, "install ", "mv ", "rm ", "touch ",
+			sharedStorageLockPath, "install ", "mv ", "rm ", "touch ",
 			"mkdir", "systemctl", "automount -cv", ">>",
 		} {
 			if strings.Contains(command, forbidden) {

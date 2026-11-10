@@ -48,6 +48,7 @@ type fakeLinuxMountServer struct {
 	remoteVersion       int64
 	ownerFstabLines     []string
 	lockHeld            bool
+	staleLock           bool
 
 	missingMountCIFS bool
 	workingVersion   string
@@ -94,6 +95,18 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if f.staleLock {
+			for _, want := range []string{
+				"sshmgr_lock_dir='/var/run/sshmgr-mount.lock'",
+				`date +%s > "$sshmgr_lock_owner"`,
+				`rm -f "$sshmgr_lock_owner"`,
+				`rmdir "$sshmgr_lock_dir"`,
+			} {
+				if !strings.Contains(command, want) {
+					return "", "过期锁回收片段缺少 " + want, 91
+				}
+			}
+		}
 		if selectedVersion == "none" {
 			f.credentialFile = ""
 			return "", "SSHMGR-LINUX-MOUNT protocol-failed", 84
@@ -222,6 +235,7 @@ type fakeDarwinMountServer struct {
 	shareID             string
 	missingAutomount    bool
 	lockHeld            bool
+	staleLock           bool
 	autoMasterReference bool
 }
 
@@ -256,6 +270,18 @@ func (f *fakeDarwinMountServer) handler(command string, stdin io.Reader) (string
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if f.staleLock {
+			for _, want := range []string{
+				"sshmgr_lock_dir='/var/run/sshmgr-mount.lock'",
+				`date +%s > "$sshmgr_lock_owner"`,
+				`rm -f "$sshmgr_lock_owner"`,
+				`rmdir "$sshmgr_lock_dir"`,
+			} {
+				if !strings.Contains(command, want) {
+					return "", "过期锁回收片段缺少 " + want, 91
+				}
+			}
+		}
 		if f.lockHeld {
 			return "", "SSHMGR-DARWIN-MOUNT lock-timeout", 87
 		}
@@ -426,6 +452,7 @@ func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup) mountShareS
 			reachableAddresses: map[string]bool{"192.0.2.10": true},
 			existingAddress:    setup.darwinExistingAddress,
 			missingAutomount:   setup.darwinMissingAutomount, lockHeld: setup.lockHeld,
+			staleLock: setup.staleLock,
 			autoMasterLines: []string{
 				"# Automounter master map",
 				"/System/Volumes/Data /System/Volumes/Data auto_databackup",
@@ -448,6 +475,7 @@ func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup) mountShareS
 			reachableAddresses: map[string]bool{"192.0.2.10": true},
 			existingAddress:    setup.existingAddress, existingProtocol: setup.existingProtocol,
 			ownerFstabLines: append([]string(nil), setup.ownerFstabLines...), lockHeld: setup.lockHeld,
+			staleLock: setup.staleLock,
 		}
 		if len(setup.reachable) != 0 {
 			linuxFake.reachableAddresses = make(map[string]bool, len(setup.reachable))
@@ -697,6 +725,7 @@ type mountShareFixtureSetup struct {
 	remoteVersion          int64
 	ownerFstabLines        []string
 	lockHeld               bool
+	staleLock              bool
 	notWritable            bool
 	targetOutOfProfile     bool
 	windowsTarget          bool
@@ -1349,6 +1378,27 @@ func TestMountShareDarwinReportsLockTimeout(t *testing.T) {
 	}
 }
 
+func TestMountShareDarwinRecoversExpiredStaleLock(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.staleLock = true
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("macOS 过期残留锁应被回收并完成挂载：%s", text)
+	}
+	if output["result"] != "first-mount-success" {
+		t.Fatalf("macOS 过期锁回收后的输出 = %#v", output)
+	}
+	darwinFake := fixture.fake.(*fakeDarwinMountServer)
+	if mapWrites, autoMasterWrites := darwinFake.writeCounts(); mapWrites != 1 || autoMasterWrites != 1 {
+		t.Fatalf("macOS 过期锁回收后的写入错误：映射 %d 次，主配置 %d 次", mapWrites, autoMasterWrites)
+	}
+}
+
 func TestMountShareLinuxSMBVersionFallsBackTo20(t *testing.T) {
 	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
 		setup.workingVersion = "2.0"
@@ -1445,9 +1495,12 @@ func TestMountShareLinuxCommandUsesLockAndMarker(t *testing.T) {
 	mountCommand := commands[2]
 	for _, want := range []string{
 		"sshmgr_share_marker='sshmgr-share=datasets;sshmgr-version=1'",
-		"sshmgr_lock_dir='/etc/sshmgr/mount.lock'",
+		"sshmgr_lock_dir='/var/run/sshmgr-mount.lock'",
+		`date +%s > "$sshmgr_lock_owner"`,
+		`rm -f "$sshmgr_lock_owner"`,
 		"mkdir \"$sshmgr_lock_dir\"",
 		"rmdir \"$sshmgr_lock_dir\"",
+		"trap sshmgr_release_shared_storage_lock EXIT HUP INT TERM",
 	} {
 		if !strings.Contains(mountCommand, want) {
 			t.Fatalf("远端固定命令缺少 %q：%s", want, mountCommand)
@@ -1635,6 +1688,26 @@ func TestMountShareLinuxReportsLockTimeout(t *testing.T) {
 	credentialWrites, configurationWrites := fixture.fake.writeCounts()
 	if credentialWrites != 0 || configurationWrites != 0 {
 		t.Fatalf("拿锁失败后不应改写：凭据 %d 次，配置 %d 次", credentialWrites, configurationWrites)
+	}
+}
+
+func TestMountShareLinuxRecoversExpiredStaleLock(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.staleLock = true
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("过期残留锁应被回收并完成挂载：%s", text)
+	}
+	if output["result"] != "first-mount-success" {
+		t.Fatalf("过期锁回收后的输出 = %#v", output)
+	}
+	credentialWrites, configurationWrites := fixture.fake.writeCounts()
+	if credentialWrites != 1 || configurationWrites != 1 {
+		t.Fatalf("过期锁回收后的写入次数错误：凭据 %d 次，配置 %d 次", credentialWrites, configurationWrites)
 	}
 }
 

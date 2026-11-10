@@ -19,7 +19,6 @@ const (
 	darwinAutoMaster         = "/etc/auto_master"
 	darwinMapFile            = "/etc/sshmgr/auto_share"
 	darwinMountRoot          = "/mnt/sshmgr"
-	darwinLockPath           = "/etc/sshmgr/mount.lock"
 )
 
 // darwinMountExitCodeError 把 macOS 固定挂载命令的已知退出码翻译为中文
@@ -61,7 +60,7 @@ if ! command -v automount >/dev/null 2>&1; then
   exit 83
 fi
 install -d -m 700 '/etc/sshmgr'
-` + sharedStorageDirectoryLockScript(darwinLockPath, 30, darwinExitLockTimeout, darwinMountMarker) + `
+` + sharedStorageDirectoryLockScript(sharedStorageLockPath, 30, darwinExitLockTimeout, darwinMountMarker) + `
 sshmgr_share_marker=` + marker + `
 sshmgr_expected_share=` + shareValue + `
 sshmgr_expected_version=` + versionValue + `
@@ -304,4 +303,3 @@ fi
 echo ` + darwinMountMarker + ` result=$sshmgr_result selected=$sshmgr_selected_index reset=$sshmgr_reset
 `
 }
-

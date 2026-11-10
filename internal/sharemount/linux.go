@@ -19,7 +19,6 @@ const (
 	linuxExitInvalidFstab   = 89
 	linuxCredentialRoot     = "/etc/sshmgr/shares"
 	linuxMountRoot          = "/mnt/sshmgr"
-	linuxLockPath           = "/etc/sshmgr/mount.lock"
 )
 
 // linuxMountExitCodeError 把 Linux 固定挂载命令的已知退出码翻译为中文
@@ -67,7 +66,7 @@ if ! command -v mount.cifs >/dev/null 2>&1; then
 fi
 install -d -m 700 ` + sshbroker.POSIXShellQuote(linuxCredentialRoot) + `
 install -d -m 755 ` + sshbroker.POSIXShellQuote(linuxMountRoot) + `
-` + sharedStorageDirectoryLockScript(linuxLockPath, 30, linuxExitLockTimeout, linuxMountMarker) + `
+` + sharedStorageDirectoryLockScript(sharedStorageLockPath, 30, linuxExitLockTimeout, linuxMountMarker) + `
 sshmgr_share_marker=` + marker + `
 sshmgr_fstab_marker=` + sshbroker.POSIXShellQuote(fstabMarker) + `
 sshmgr_expected_share=` + shareValue + `
@@ -265,4 +264,3 @@ func safeMountShareName(name string) bool {
 	return name != "" && name != "." && name != ".." &&
 		len(strings.Fields(name)) == 1 && !strings.ContainsAny(name, "/\\\x00")
 }
-
