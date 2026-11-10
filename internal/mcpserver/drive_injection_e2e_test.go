@@ -330,7 +330,7 @@ func TestNetworkDriveInjectionNetworkFailureSelectsNextCandidate(t *testing.T) {
 	}
 	fixture.fake.setMapStatus("ok")
 	stdout = execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
-	want := "user-command-output\n共享 datasets 的网络盘符 S: 已使用虚拟局域网：办公虚拟局域网 第1个地址，性能可能下降；物理局域网地址不通：办公物理局域网 第1个地址（网络类映射失败）\n"
+	want := "user-command-output\n共享 datasets 的网络盘符 S：已使用虚拟局域网：办公虚拟局域网 第1个地址，性能可能下降；物理局域网地址不通：办公物理局域网 第1个地址（网络类映射失败）\n"
 	if stdout != want {
 		t.Fatalf("second command stdout = %q, want %q", stdout, want)
 	}
@@ -367,7 +367,7 @@ func TestNetworkDriveInjectionAllCandidatesUnavailableWaitsForExpiry(t *testing.
 	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
 	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
 	stdout := execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
-	if !strings.Contains(stdout, "共享 datasets 的网络盘符 S: 未注入") {
+	if !strings.Contains(stdout, "共享 datasets 的网络盘符 S：未注入") {
 		t.Fatalf("waiting warning missing: %q", stdout)
 	}
 	for _, want := range []string{"办公物理局域网", "办公虚拟局域网", "缓存过期"} {
@@ -829,12 +829,12 @@ func TestNetworkDriveInjectionTotalBudgetSkippedShare(t *testing.T) {
 
 	stdout := execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\datasets")
 	want := "user-command-output\n" +
-		"共享 datasets 的网络盘符 S: 未注入：注入步骤总时长达到上限，未映射\n"
+		"共享 datasets 的网络盘符 S：未注入：注入步骤总时长达到上限，未映射\n"
 	if stdout != want {
 		t.Fatalf("stdout = %q, want %q", stdout, want)
 	}
 	stdout = execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\datasets")
-	if !strings.Contains(stdout, "共享 datasets 的网络盘符 S: 未注入：注入步骤总时长达到上限，未映射") {
+	if !strings.Contains(stdout, "共享 datasets 的网络盘符 S：未注入：注入步骤总时长达到上限，未映射") {
 		t.Fatalf("second command did not retry after skipped status: %q", stdout)
 	}
 	commands, inputs := fixture.fake.recorded()
@@ -1440,16 +1440,16 @@ func TestNetworkDriveToolDescriptionsExplainVisibility(t *testing.T) {
 		for _, want := range []string{
 			"Windows network drives are mapped before each command in that command's SSH session",
 			"the mapping password never appears in a target process command line",
-			"desktop sessions, Windows services, scheduled tasks, upload_file/download_file sessions, and processes that keep running after the command ends cannot see those drives",
+			"Desktop sessions, Windows services, scheduled tasks, upload_file, upload_content, download_file, and relay_file sessions, port forwarding, and processes that keep running after the command ends cannot see those drives",
 		} {
 			if !strings.Contains(descriptions[name], want) {
 				t.Fatalf("%s description missing %q: %s", name, want, descriptions[name])
 			}
 		}
 	}
-	for _, name := range []string{"upload_file", "download_file"} {
+	for _, name := range []string{"upload_file", "upload_content", "download_file", "relay_file"} {
 		if !strings.Contains(descriptions[name],
-			"This separate SFTP session cannot see Windows network drives mapped for exec_command or exec_background") {
+			"This separate file transfer session cannot see Windows network drives mapped for exec_command or exec_background") {
 			t.Fatalf("%s description missing the network-drive visibility limit: %s", name, descriptions[name])
 		}
 	}
@@ -1612,7 +1612,7 @@ func TestNetworkDriveInjectionWindowsCmdMultipleSharesAreIndependent(t *testing.
 	}
 	unmarshalToolJSON(t, result, &output)
 	wantOutput := "user-command-output\n" +
-		"共享 datasets 的网络盘符 S: 未注入：盘符 S: 在这台服务器上已被占用\n"
+		"共享 datasets 的网络盘符 S：未注入：盘符 S：在这台服务器上已被占用\n"
 	if output.Stdout != wantOutput {
 		t.Fatalf("stdout = %q, want %q", output.Stdout, wantOutput)
 	}
@@ -1793,7 +1793,7 @@ func TestNetworkDriveInjectionWindowsCmdRejectsInvalidUTF8Password(t *testing.T)
 	}
 	unmarshalToolJSON(t, result, &output)
 	wantOutput := "user-command-output\n" +
-		"共享 datasets 的网络盘符 S: 未注入：挂载密码在 Windows 上不是合法 UTF-8\n"
+		"共享 datasets 的网络盘符 S：未注入：挂载密码在 Windows 上不是合法 UTF-8\n"
 	if output.Stdout != wantOutput {
 		t.Fatalf("stdout = %q, want %q", output.Stdout, wantOutput)
 	}
@@ -1877,7 +1877,7 @@ func TestNetworkDriveInjectionUnsafeRegistrationWarnsButRunsCommand(t *testing.T
 	}
 	unmarshalToolJSON(t, result, &output)
 	want := "plain-command-output\n" +
-		"共享 datasets 的网络盘符 S: 未注入：" + networkDriveReasonUnsafeValue + "\n"
+		"共享 datasets 的网络盘符 S：未注入：" + networkDriveReasonUnsafeValue + "\n"
 	if output.Stdout != want {
 		t.Fatalf("stdout = %q, want %q", output.Stdout, want)
 	}
@@ -2014,50 +2014,50 @@ func TestNetworkDriveInjectionMappingFailureWarnsWithoutBlocking(t *testing.T) {
 		{
 			name:       "drive letter taken",
 			mapStatus:  "error-85",
-			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：盘符 S: 在这台服务器上已被占用\n",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S：未注入：盘符 S：在这台服务器上已被占用\n",
 		},
 		{
 			name:       "mapping timeout",
 			mapStatus:  "timeout",
-			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：映射超时（3 秒上限）：提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制\n",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S：未注入：映射超时（3 秒上限）：提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制\n",
 		},
 		{
 			name:      "network error 53",
 			mapStatus: "error-53",
-			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：网络类失败（系统错误 53）：" +
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S：未注入：网络类失败（系统错误 53）：" +
 				"提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制\n",
 		},
 		{
 			name:      "network error 64",
 			mapStatus: "error-64",
-			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：网络类失败（系统错误 64）：" +
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S：未注入：网络类失败（系统错误 64）：" +
 				"提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制\n",
 		},
 		{
 			name:      "network error 67",
 			mapStatus: "error-67",
-			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：网络类失败（系统错误 67）：" +
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S：未注入：网络类失败（系统错误 67）：" +
 				"提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制\n",
 		},
 		{
 			name:       "different credentials already connected",
 			mapStatus:  "error-1219",
-			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：同一服务器已有不同凭据的连接（系统错误 1219）\n",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S：未注入：同一服务器已有不同凭据的连接（系统错误 1219）\n",
 		},
 		{
 			name:       "authentication error 86",
 			mapStatus:  "error-86",
-			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S：未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n",
 		},
 		{
 			name:       "authentication error 1326",
 			mapStatus:  "error-1326",
-			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S：未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n",
 		},
 		{
 			name:       "missing status line",
 			mapStatus:  "missing",
-			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：注入步骤没有返回状态行\n",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S：未注入：注入步骤没有返回状态行\n",
 		},
 	}
 	for _, testCase := range cases {
@@ -2152,7 +2152,7 @@ func TestNetworkDriveInjectionAuthenticationFailurePausesOnlyFailedShare(t *test
 		t.Fatal("first tool result leaked a mount password")
 	}
 	wantFirst := "user-command-output\n" +
-		"共享 datasets 的网络盘符 S: 未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n"
+		"共享 datasets 的网络盘符 S：未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n"
 	if stdout != wantFirst {
 		t.Fatalf("first stdout = %q, want %q", stdout, wantFirst)
 	}
@@ -2226,7 +2226,7 @@ func TestNetworkDriveInjectionAuthenticationPauseCoversAllServers(t *testing.T) 
 
 	first := call(fixture.serverID)
 	wantFirst := "user-command-output\n" +
-		"共享 datasets 的网络盘符 S: 未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n"
+		"共享 datasets 的网络盘符 S：未注入：共享密码认证失败，已暂停注入，请同步或检查机密项\n"
 	if first != wantFirst {
 		t.Fatalf("first server stdout = %q, want %q", first, wantFirst)
 	}
@@ -2323,7 +2323,7 @@ func TestNetworkDriveInjectionNoCommonNetworkWarnsWithoutProbe(t *testing.T) {
 
 	stdout := execNetworkDriveCommand(t, fixture, "Get-Location")
 	wantParts := []string{
-		"共享 datasets 的网络盘符 S: 未注入：目标服务器所属设备与共享存储提供方设备没有共同网络，未探测",
+		"共享 datasets 的网络盘符 S：未注入：目标服务器所属设备与共享存储提供方设备没有共同网络，未探测",
 		"共享存储提供方设备所在网络：办公物理局域网、办公虚拟局域网",
 		"目标服务器所属设备所在网络：办公管理网络",
 	}
@@ -2357,7 +2357,7 @@ func TestNetworkDriveInjectionNoDeviceWarnsWithoutProbe(t *testing.T) {
 
 	stdout := execNetworkDriveCommand(t, fixture, "Get-Location")
 	wantParts := []string{
-		"共享 datasets 的网络盘符 S: 未注入：目标服务器未关联拓扑设备，未探测",
+		"共享 datasets 的网络盘符 S：未注入：目标服务器未关联拓扑设备，未探测",
 		"共享存储提供方设备所在网络：办公物理局域网、办公虚拟局域网",
 		"目标服务器所属设备所在网络：（无）",
 	}
@@ -2423,7 +2423,7 @@ func TestNetworkDriveInjectionUsesVirtualNetworkWithNote(t *testing.T) {
 	})
 
 	stdout := execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\")
-	want := "user-command-output\n共享 datasets 的网络盘符 S: 已使用虚拟局域网：办公虚拟局域网 第1个地址，性能可能下降；物理局域网地址不通：办公物理局域网 第1个地址  ✗无路由 2ms\n"
+	want := "user-command-output\n共享 datasets 的网络盘符 S：已使用虚拟局域网：办公虚拟局域网 第1个地址，性能可能下降；物理局域网地址不通：办公物理局域网 第1个地址  ✗无路由 2ms\n"
 	if stdout != want {
 		t.Fatalf("stdout = %q, want %q", stdout, want)
 	}

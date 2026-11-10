@@ -338,7 +338,7 @@ func buildNetworkDriveInjectionPlan(
 			continue
 		}
 		if selection.Note != "" {
-			plan.notes = append(plan.notes, fmt.Sprintf("共享 %s 的网络盘符 %s: %s",
+			plan.notes = append(plan.notes, fmt.Sprintf("共享 %s 的网络盘符 %s：%s",
 				share.Name, share.Drive, selection.Note))
 		}
 		plan.items = append(plan.items, item)
@@ -1034,7 +1034,7 @@ func networkDriveStatusReason(status, drive string) string {
 	case "timeout":
 		return "映射超时（3 秒上限）：" + networkDriveHintNetwork
 	case "error-85":
-		return "盘符 " + drive + ": 在这台服务器上已被占用"
+		return "盘符 " + drive + "：在这台服务器上已被占用"
 	case "error-86", "error-1326":
 		return networkDriveReasonAuthentication
 	case "error-53", "error-64", "error-67":
@@ -1106,7 +1106,7 @@ func networkDriveWarningLines(warnings []networkDriveWarning, notes []string) []
 		}
 		line := "网络盘符未注入：" + warning.Reason
 		if warning.ShareName != "" {
-			line = fmt.Sprintf("共享 %s 的网络盘符 %s: 未注入：%s",
+			line = fmt.Sprintf("共享 %s 的网络盘符 %s：未注入：%s",
 				warning.ShareName, warning.Drive, warning.Reason)
 		}
 		lines = append(lines, line)

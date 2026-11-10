@@ -21,7 +21,7 @@ func TestNetworkDriveStatusReason(t *testing.T) {
 			status: "timeout", drive: "S",
 			want: "映射超时（3 秒上限）：提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制",
 		},
-		{status: "error-85", drive: "S", want: "盘符 S: 在这台服务器上已被占用"},
+		{status: "error-85", drive: "S", want: "盘符 S：在这台服务器上已被占用"},
 		{
 			status: "error-53", drive: "S",
 			want: "网络类失败（系统错误 53）：提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制",
