@@ -86,7 +86,7 @@ func TestSharesAddListAndShow(t *testing.T) {
 	for _, text := range []string{
 		"共享存储 datasets", "提供方设备：NAS", "挂载账号用户名：mount-user",
 		"挂载密码机密项：NAS_MOUNT_PASSWORD", "盘符：Z", "候选访问地址：192.0.2.10",
-		"临时数据=tmp", "长期数据=datasets", "备注：模型数据集", "版本号：1",
+		"临时数据=tmp", "长期数据=datasets", "备注：模型数据集", "版本号：2",
 		"linux-web（挂载点 /mnt/sshmgr/datasets）", "windows-web（挂载点 Z:）",
 	} {
 		if !strings.Contains(shown, text) {
