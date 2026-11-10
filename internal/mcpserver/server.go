@@ -272,11 +272,11 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
 			Name:        BrokerTools[16], // "list_shares"
-			Description: "Read-only list of the SMB shared storages visible in your session. Each share carries its name, the registered provider device name, owner note, directory agreements (purpose = subdirectory inside the share), Windows drive letter, registration version, owner change note, and the servers in your session scope that may mount it — each with the agreed mount point (PowerShell/cmd servers use <drive>:, others use /mnt/sshmgr/<share name>). Optional server takes a server id or name and narrows every share to that one server. Mount points are agreements only: this tool never checks whether anything is mounted and performs no network or SSH action. It never includes mount passwords or any credentials, and no agent tool can register or modify shared storages.",
+			Description: "Read-only list of the SMB shared storages visible in your session. Each share carries its name, the registered provider device name, owner note, directory agreements (purpose = subdirectory inside the share), Windows drive letter, registration version, owner change note, and the servers in your session scope that may mount it — each with the agreed mount point (PowerShell/cmd servers use <drive>:, others use /mnt/sshmgr/<share name>). Optional server takes a server id or name and narrows every share to that one server. Optional live_check=true concurrently runs fixed read-only on-site mount checks on visible Linux and macOS servers (each server with its own timeout) and annotates each server entry with mounted / not-mounted / config-missing / unreachable, plus safe follow-up notes such as a stale configuration version or a macOS system-configuration reset; Windows entries are marked not-checked because their drive letter is injected before each command. Optional check_server (a server id or name; requires live_check) narrows the on-site check to that one server. Without live_check the tool performs no network or SSH action and mount points are agreements only. It never writes audit records for listing or checking and never includes mount passwords, addresses, or any credentials; no agent tool can register or modify shared storages.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in ListSharesInput) (*mcp.CallToolResult, ListSharesOutput, error) {
 			st := storeFromContext(ctx, storeFn)
-			out, err := ListSharesForProfile(st, profileID, in.Server)
+			out, err := ListSharesForProfile(ctx, st, profileID, in, toolHostKeyStoreFromContext(ctx))
 			if err != nil {
 				return &mcp.CallToolResult{
 					IsError: true,

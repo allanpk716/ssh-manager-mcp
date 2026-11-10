@@ -109,6 +109,8 @@ type Service struct {
 	// Timeout 与 MaxOutputBytes 主要供测试覆盖。
 	Timeout        time.Duration
 	MaxOutputBytes int64
+	// CheckTimeout 是单台服务器现场检测的固定超时，主要供测试覆盖。
+	CheckTimeout time.Duration
 }
 
 // Mount 在目标服务器上完成首次挂载、重复调用比较或按新快照更新。系统
