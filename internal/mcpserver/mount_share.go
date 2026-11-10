@@ -1,0 +1,168 @@
+package mcpserver
+
+import (
+	"context"
+	"errors"
+	"path"
+	"time"
+
+	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/sharemount"
+	"ssh-manager-mcp/internal/sshbroker"
+	"ssh-manager-mcp/internal/store"
+)
+
+var errMountShareNotFound = errors.New("共享存储或服务器不存在")
+
+// MountShareInput 是 mount_share 工具的输入。除共享名与服务器编号外没有
+// 任何命令或路径参数。
+type MountShareInput struct {
+	Share    string `json:"share" jsonschema:"share name from list_shares"`
+	ServerID string `json:"server_id" jsonschema:"stable server id from list_servers"`
+}
+
+// MountSharePath 是一条目录约定在目标服务器上的完整路径。
+type MountSharePath struct {
+	Purpose  string `json:"purpose" jsonschema:"owner-registered purpose of the subdirectory"`
+	Path     string `json:"path" jsonschema:"subdirectory path inside the SMB share"`
+	FullPath string `json:"full_path" jsonschema:"absolute path on the target server"`
+}
+
+// MountShareOutput 是 mount_share 的安全输出；不包含地址、挂载账号或密码。
+type MountShareOutput struct {
+	MaskedOutput
+	Share           string           `json:"share" jsonschema:"share name"`
+	ServerID        string           `json:"server_id" jsonschema:"stable server id"`
+	ServerName      string           `json:"server_name" jsonschema:"server entry name"`
+	MountPoint      string           `json:"mount_point" jsonschema:"mounted path on the target server"`
+	Version         int64            `json:"version" jsonschema:"shared storage registration version"`
+	NetworkName     string           `json:"network_name" jsonschema:"selected registered network name"`
+	NetworkSequence int              `json:"network_sequence" jsonschema:"address sequence within the selected network"`
+	Paths           []MountSharePath `json:"paths" jsonschema:"directory agreements translated to target-server paths"`
+}
+
+// emptyMountShareOutput 返回能通过输出结构校验的空结果；报错路径也需要
+// 数组而不是 JSON null。
+func emptyMountShareOutput() MountShareOutput {
+	return MountShareOutput{Paths: []MountSharePath{}}
+}
+
+// MountShareForProfile 按授权顺序检查共享与服务器，调用挂载领域服务，并
+// 为成败各写一条不含密码与地址的审计。
+func MountShareForProfile(
+	ctx context.Context, st *store.Store, projectID, profileID, shareName, serverIdentifier string,
+	hk sshbroker.HostKeyStore,
+) (*MountShareOutput, error) {
+	start := time.Now()
+	status := "error"
+	var share *models.SharedStorage
+	var server *models.Server
+	var mountResult *sharemount.Result
+	defer func() {
+		summary := map[string]any{"share": shareName, "version": int64(0), "result": "error"}
+		var serverID, networkName string
+		sequence := 0
+		if share != nil {
+			summary["version"] = share.Version
+		}
+		if server != nil {
+			serverID = server.ID
+		}
+		if mountResult != nil {
+			networkName = mountResult.Network
+			sequence = mountResult.NetworkSequence
+			summary["result"] = "first-mount-success"
+		}
+		if networkName != "" {
+			summary["network_name"] = networkName
+			summary["network_sequence"] = sequence
+		}
+		_ = st.WriteAudit(store.AuditRow{
+			TS: start, ProjectID: projectID, ServerID: serverID, Action: "mount-share",
+			Status: status, Source: store.AuditSourceAgent,
+			Command: store.MarshalAuditSummary(summary),
+		})
+	}()
+
+	if st.IsReadOnly() && st.CacheRecommendedVersion() == "" {
+		return nil, errSharedStorageAuthorityTooOld
+	}
+	found, err := st.GetSharedStorage(shareName)
+	if err != nil {
+		if errors.Is(err, store.ErrSharedStorageNotFound) {
+			return nil, errMountShareNotFound
+		}
+		return nil, err
+	}
+	profileServerIDs, err := st.ServersForProfile(profileID)
+	if err != nil {
+		return nil, err
+	}
+	visible := make(map[string]bool, len(profileServerIDs))
+	for _, serverID := range profileServerIDs {
+		visible[serverID] = true
+	}
+	shareVisible := false
+	mountable := make(map[string]bool, len(found.MountableServers))
+	for _, candidate := range found.MountableServers {
+		mountable[candidate.ID] = true
+		if visible[candidate.ID] {
+			shareVisible = true
+		}
+	}
+	if !shareVisible {
+		return nil, errMountShareNotFound
+	}
+
+	server, err = st.ResolveGrantedServer(profileID, serverIdentifier)
+	if err != nil || server == nil {
+		return nil, errMountShareNotFound
+	}
+	if !mountable[server.ID] {
+		return nil, errors.New("服务器不在挂载密码机密项的可写入服务器列表内，请先由 owner 把服务器加入该机密项的可写入服务器列表")
+	}
+	if models.NormalizeShellType(string(server.ShellType)).IsWindows() {
+		return nil, errors.New("Windows 服务器不能持久挂载共享存储；网络盘符由每条命令执行前的会话内注入提供，不需要 mount_share")
+	}
+
+	secretValue, err := st.SecretValueForSharedStorageMount(found.PasswordSecretID)
+	if err != nil {
+		return nil, errors.New("读取挂载密码机密项失败")
+	}
+	password := secretValue.Value
+	writable := false
+	for _, serverID := range secretValue.WritableServerIDs {
+		if serverID == server.ID {
+			writable = true
+			break
+		}
+	}
+	if !writable || len(password) == 0 {
+		return nil, errors.New("服务器不在挂载密码机密项的可写入服务器列表内，请先由 owner 把服务器加入该机密项的可写入服务器列表")
+	}
+
+	service := &sharemount.Service{
+		Store: st, Instance: bridgeCacheInstance(), HostKeys: hk,
+	}
+	share = found
+	mountResult, err = service.Mount(ctx, sharemount.Request{
+		Share: found, Server: server, Password: append([]byte(nil), password...),
+	})
+	if err != nil {
+		return nil, err
+	}
+	status = "ok"
+	output := &MountShareOutput{
+		Share: found.Name, ServerID: server.ID, ServerName: server.Name,
+		MountPoint: mountResult.MountPoint, Version: found.Version,
+		NetworkName: mountResult.Network, NetworkSequence: mountResult.NetworkSequence,
+		Paths: []MountSharePath{},
+	}
+	for _, directory := range found.Directories {
+		output.Paths = append(output.Paths, MountSharePath{
+			Purpose: directory.Purpose, Path: directory.Path,
+			FullPath: path.Join(mountResult.MountPoint, directory.Path),
+		})
+	}
+	return output, nil
+}

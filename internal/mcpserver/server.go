@@ -74,6 +74,9 @@ var BrokerTools = []string{
 	"draft_software_declarations",
 	// [19] — 软件清单立即采集（票 #188）：固定命令集，无可传命令的参数。
 	"collect_software_inventory",
+	// [20] — 共享存储挂载（票 #199）：固定命令完成 Linux 首次挂载，不经过
+	// 命令策略，也不能卸载。
+	"mount_share",
 }
 
 // cacheOnlyTools names BrokerTools entries that ONLY the cache face registers
@@ -297,6 +300,24 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 				}, DownloadOutput{}, nil
 			}
 			return nil, out, nil
+		},
+	)
+
+	addTrackedTool(srv, busy, storeFn, hkFn,
+		&mcp.Tool{
+			Name:        BrokerTools[20], // "mount_share"
+			Description: "Mount an SMB shared storage on a Linux server by fixed commands. Input is only a share name from list_shares and a server id from list_servers; no command or path can be supplied. The broker selects a registered common-network address from the target server, writes the persistent Linux configuration and root-only credential file, makes it effective, and verifies the mount point can list content. The operation is intended to be idempotent and safe to call again after share changes, but this tool cannot unmount or roll back a mount. Windows servers do not need it: their fixed drive letter is injected into each command session. Mount passwords are never included in command text, results, or audit records.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in MountShareInput) (*mcp.CallToolResult, MountShareOutput, error) {
+			st := storeFromContext(ctx, storeFn)
+			out, err := MountShareForProfile(ctx, st, projectID, profileID, in.Share, in.ServerID, toolHostKeyStoreFromContext(ctx))
+			if err != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, emptyMountShareOutput(), nil
+			}
+			return nil, *out, nil
 		},
 	)
 
