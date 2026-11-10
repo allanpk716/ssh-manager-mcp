@@ -79,6 +79,26 @@ func TestInitServerOnEmptyMachine(t *testing.T) {
 func TestInitServerOnStandaloneUpgradesWithoutTouchingVault(t *testing.T) {
 	withInitMachineEnv(t)
 	masterKey := seedInitVault(t, "gpu-box", "team-profile", "nightly-project")
+	st, err := store.Open(os.Getenv("SSHMGR_STORE"), masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("NAS", "提供共享存储", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("NAS_MOUNT_PASSWORD", "共享存储挂载密码", []byte("mount-password"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	shared, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+	}, store.CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	output := runCli(t, "init", "--role", "server")
 
@@ -94,7 +114,7 @@ func TestInitServerOnStandaloneUpgradesWithoutTouchingVault(t *testing.T) {
 	if state == nil || state.Role != roles.RoleServer || !state.SetupComplete {
 		t.Fatalf("role.json 应改为权威端且 setup_complete 为真：%+v", state)
 	}
-	st, err := store.Open(os.Getenv("SSHMGR_STORE"), masterKey)
+	st, err = store.Open(os.Getenv("SSHMGR_STORE"), masterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,6 +139,10 @@ func TestInitServerOnStandaloneUpgradesWithoutTouchingVault(t *testing.T) {
 	}
 	if len(projects) != 1 || projects[0].Name != "nightly-project" {
 		t.Fatalf("升级不应改动 project 数据：%+v", projects)
+	}
+	restoredShared, err := st.GetSharedStorage("datasets")
+	if err != nil || restoredShared.ID != shared.ID || restoredShared.Version != shared.Version {
+		t.Fatalf("升级不应改动共享存储：%v %+v", err, restoredShared)
 	}
 }
 
