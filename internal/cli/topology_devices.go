@@ -141,6 +141,28 @@ func printDeviceDeletePreview(w io.Writer, preview *store.DeviceDeletePreview) {
 		}
 		fmt.Fprintf(w, "  %s（用户 %s，端口 %d，%s）\n", server.Name, server.User, server.Port, anchor)
 	}
+	fmt.Fprintln(w, "共享存储：")
+	if len(preview.SharedStorages) == 0 {
+		fmt.Fprintln(w, "  无")
+	}
+	for _, share := range preview.SharedStorages {
+		fmt.Fprintf(w, "  %s\n", share.Name)
+		fmt.Fprintln(w, "    可挂载服务器：")
+		if len(share.MountableServers) == 0 {
+			fmt.Fprintln(w, "      无")
+		}
+		for _, server := range share.MountableServers {
+			deviceName := server.DeviceName
+			if deviceName == "" {
+				deviceName = "未关联设备"
+			}
+			fmt.Fprintf(w, "      %s（所属设备 %s，系统类型 %s）\n",
+				server.Name, deviceName, sharedStorageOperatingSystemText(server.ShellType))
+		}
+	}
+	if len(preview.SharedStorages) > 0 {
+		fmt.Fprintln(w, "删除这些共享存储登记不会去服务器上卸载。")
+	}
 	fmt.Fprintln(w, "会从以下机密项的可写入服务器列表移出：")
 	if len(preview.SecretServerAllows) == 0 {
 		fmt.Fprintln(w, "  无")
@@ -167,6 +189,15 @@ func printDeviceDeletePreview(w io.Writer, preview *store.DeviceDeletePreview) {
 		client = "无"
 	}
 	fmt.Fprintf(w, "会被解除关联的客户端实例：%s\n", client)
+}
+
+func sharedStorageOperatingSystemText(shellType models.ShellType) string {
+	switch models.NormalizeShellType(string(shellType)) {
+	case models.ShellPowerShell, models.ShellWindowsCmd:
+		return "Windows"
+	default:
+		return "Linux 或 macOS"
+	}
 }
 
 func devicesMoveServerCmd() *cobra.Command {

@@ -22,15 +22,16 @@ const (
 // 机密项操作的错误。文本会直接出现在命令行报错里，因此自带完整原因，也
 // 不包含值本身。
 var (
-	ErrSecretNameInvalid             = errors.New("机密项名字不合法：只能使用字母、数字、下划线，长度 1 到 64，且首字符不能是数字")
-	ErrSecretNameExists              = errors.New("机密项名字已存在（大小写不同的名字视为同一个）")
-	ErrSecretNotFound                = errors.New("机密项不存在")
-	ErrSecretEnvironmentNameInvalid  = errors.New("机密项环境变量名不合法：格式要求为字母或下划线开头，后续为字母、数字或下划线")
-	ErrSecretEnvironmentNameExists   = errors.New("机密项环境变量名已被其他机密项使用（大小写不同视为同一个）")
-	ErrSecretEnvironmentNameReserved = errors.New("机密项环境变量名在固定拒绝清单中")
-	ErrSecretValueEmpty              = errors.New("机密项值不能为空")
-	ErrSecretValueTooShort           = fmt.Errorf("机密项值太短：至少需要 %d 个字节；短值无法可靠参与后续的输出遮蔽", secretValueMinBytes)
-	ErrSecretValueTooLarge           = fmt.Errorf("机密项值太大：最多 %d 个字节", secretValueMaxBytes)
+	ErrSecretNameInvalid               = errors.New("机密项名字不合法：只能使用字母、数字、下划线，长度 1 到 64，且首字符不能是数字")
+	ErrSecretNameExists                = errors.New("机密项名字已存在（大小写不同的名字视为同一个）")
+	ErrSecretNotFound                  = errors.New("机密项不存在")
+	ErrSecretEnvironmentNameInvalid    = errors.New("机密项环境变量名不合法：格式要求为字母或下划线开头，后续为字母、数字或下划线")
+	ErrSecretEnvironmentNameExists     = errors.New("机密项环境变量名已被其他机密项使用（大小写不同视为同一个）")
+	ErrSecretEnvironmentNameReserved   = errors.New("机密项环境变量名在固定拒绝清单中")
+	ErrSecretReferencedBySharedStorage = errors.New("机密项仍被共享存储引用")
+	ErrSecretValueEmpty                = errors.New("机密项值不能为空")
+	ErrSecretValueTooShort             = fmt.Errorf("机密项值太短：至少需要 %d 个字节；短值无法可靠参与后续的输出遮蔽", secretValueMinBytes)
+	ErrSecretValueTooLarge             = fmt.Errorf("机密项值太大：最多 %d 个字节", secretValueMaxBytes)
 )
 
 // IsSecretValidationError 判断错误是否属于机密项输入校验失败。这类错误
@@ -596,6 +597,14 @@ func (s *Store) DeleteSecret(name string, source WriteSource) error {
 		return err
 	}
 	defer tx.Rollback()
+	shareNames, err := sharedStorageNamesForSecretTx(tx, name)
+	if err != nil {
+		return err
+	}
+	if len(shareNames) > 0 {
+		return fmt.Errorf("%w：%s；请先删除这些共享存储，或把它们的挂载密码改成其他机密项",
+			ErrSecretReferencedBySharedStorage, strings.Join(shareNames, "、"))
+	}
 	res, err := tx.Exec(`DELETE FROM secrets WHERE name=?`, name)
 	if err != nil {
 		return err
@@ -612,6 +621,30 @@ func (s *Store) DeleteSecret(name string, source WriteSource) error {
 		return err
 	}
 	return nil
+}
+
+// sharedStorageNamesForSecretTx 列出仍把某个机密项当挂载密码使用的共享
+// 存储名字。删除机密项前先做这项检查，把数据库外键错误转换成 owner 可以
+// 直接处理的说明。
+func sharedStorageNamesForSecretTx(tx *sql.Tx, secretName string) ([]string, error) {
+	rows, err := tx.Query(`
+		SELECT share.name
+		FROM shared_storages share
+		JOIN secrets secret ON secret.id=share.password_secret_id
+		WHERE secret.name=? ORDER BY share.name,share.id`, secretName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	names := make([]string, 0)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
 }
 
 // ListSecretsInScope 列出服务器范围内的机密项可见列表。指定集合时只返回
