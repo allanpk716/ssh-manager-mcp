@@ -85,7 +85,10 @@ func seedListSharesVault(t *testing.T) listSharesFixture {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err != nil {
+	if _, err = source.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "nas-provider", Host: "192.0.2.25", Port: 22, User: "deploy",
+		AuthMethod: models.AuthPassword,
+	}, nil, nil, "NAS"); err != nil {
 		t.Fatal(err)
 	}
 	if err := source.GrantServers(profileID, []string{linuxWebID, windowsWebID, windowsCmdID}); err != nil {
@@ -291,6 +294,14 @@ func TestListSharesSurvivesProfileSnapshotRoundTrip(t *testing.T) {
 	}
 	if len(snapshot.SharedStorages) != 1 || snapshot.SharedStorages[0].Name != "datasets" {
 		t.Fatalf("客户端快照的共享段 = %+v，应只含与授权范围有交集的 datasets", snapshot.SharedStorages)
+	}
+	if snapshot.SharedStorages[0].DeviceName != "NAS" {
+		t.Fatalf("客户端快照应携带提供方设备名：%+v", snapshot.SharedStorages[0])
+	}
+	for _, device := range snapshot.Devices {
+		if device.Name == "NAS" {
+			t.Fatalf("profile 看不到的提供方设备不应进入客户端快照：%+v", snapshot.Devices)
+		}
 	}
 	broker := newListSharesCacheBroker(t, snapshot, fixture.projectToken)
 	session := connectListSharesClient(t, broker)

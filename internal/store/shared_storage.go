@@ -160,7 +160,7 @@ func (s *Store) AddSharedStorage(input SharedStorageInput, source WriteSource) (
 	}, source); err != nil {
 		return nil, err
 	}
-	loaded, err := sharedStorageByIDTx(tx, share.ID)
+	loaded, err := s.sharedStorageByIDTx(tx, share.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func (s *Store) GetSharedStorage(name string) (*models.SharedStorage, error) {
 		}
 		return nil, err
 	}
-	return sharedStorageByIDTx(s.db, id)
+	return s.sharedStorageByNameTx(s.db, name)
 }
 
 // ListSharedStorages 返回共享存储，可按提供方设备或可挂载服务器筛选。
@@ -186,7 +186,7 @@ func (s *Store) ListSharedStorages(filter SharedStorageFilter) ([]*models.Shared
 	query := `
 		SELECT share.id
 		FROM shared_storages share
-		JOIN devices device ON device.id=share.device_id`
+		LEFT JOIN devices device ON device.id=share.device_id`
 	conditions := make([]string, 0, 2)
 	arguments := make([]any, 0, 2)
 	if filter.Device != "" {
@@ -224,7 +224,7 @@ func (s *Store) ListSharedStorages(filter SharedStorageFilter) ([]*models.Shared
 	}
 	out := make([]*models.SharedStorage, 0, len(ids))
 	for _, id := range ids {
-		share, err := sharedStorageByIDTx(s.db, id)
+		share, err := s.sharedStorageByIDTx(s.db, id)
 		if err != nil {
 			return nil, err
 		}
@@ -250,7 +250,7 @@ func (s *Store) EditSharedStorage(name string, changes SharedStorageChanges, sou
 		return nil, err
 	}
 	defer tx.Rollback()
-	share, err := sharedStorageByNameTx(tx, name)
+	share, err := s.sharedStorageByNameTx(tx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +341,7 @@ func (s *Store) EditSharedStorage(name string, changes SharedStorageChanges, sou
 	}, source); err != nil {
 		return nil, err
 	}
-	loaded, err := sharedStorageByIDTx(tx, share.ID)
+	loaded, err := s.sharedStorageByIDTx(tx, share.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +359,7 @@ func (s *Store) DeleteSharedStorage(name string, source WriteSource) (*models.Sh
 		return nil, err
 	}
 	defer tx.Rollback()
-	share, err := sharedStorageByNameTx(tx, name)
+	share, err := s.sharedStorageByNameTx(tx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -376,20 +376,22 @@ func (s *Store) DeleteSharedStorage(name string, source WriteSource) (*models.Sh
 }
 
 // sharedStorageByIDTx 读取一条共享存储，并补齐候选访问地址、目录约定与
-// 可挂载服务器。db 可以是普通连接或写事务。
-func sharedStorageByIDTx(db dbtx, id string) (*models.SharedStorage, error) {
+// 可挂载服务器。db 可以是普通连接或写事务。客户端缓存允许设备行缺失，
+// 此时使用快照带来的提供方设备名。
+func (s *Store) sharedStorageByIDTx(db dbtx, id string) (*models.SharedStorage, error) {
 	share := &models.SharedStorage{}
 	var directoriesJSON string
 	var createdAt, updatedAt int64
+	var deviceName sql.NullString
 	err := db.QueryRow(`
 		SELECT share.id,share.name,share.device_id,device.name,share.mount_user,
 		       share.password_secret_id,secret.name,share.drive,share.note,share.directories,
 		       share.version,share.change_note,share.created_at,share.updated_at
 		FROM shared_storages share
-		JOIN devices device ON device.id=share.device_id
+		LEFT JOIN devices device ON device.id=share.device_id
 		JOIN secrets secret ON secret.id=share.password_secret_id
 		WHERE share.id=?`, id,
-	).Scan(&share.ID, &share.Name, &share.DeviceID, &share.DeviceName, &share.MountUser,
+	).Scan(&share.ID, &share.Name, &share.DeviceID, &deviceName, &share.MountUser,
 		&share.PasswordSecretID, &share.PasswordSecretName, &share.Drive, &share.Note,
 		&directoriesJSON, &share.Version, &share.ChangeNote, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -397,6 +399,10 @@ func sharedStorageByIDTx(db dbtx, id string) (*models.SharedStorage, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	share.DeviceName = deviceName.String
+	if share.DeviceName == "" {
+		share.DeviceName = s.sharedStorageDeviceNames[share.ID]
 	}
 	share.CreatedAt, share.UpdatedAt = time.Unix(createdAt, 0), time.Unix(updatedAt, 0)
 	if err := json.Unmarshal([]byte(directoriesJSON), &share.Directories); err != nil {
@@ -411,7 +417,7 @@ func sharedStorageByIDTx(db dbtx, id string) (*models.SharedStorage, error) {
 	return share, nil
 }
 
-func sharedStorageByNameTx(db dbtx, name string) (*models.SharedStorage, error) {
+func (s *Store) sharedStorageByNameTx(db dbtx, name string) (*models.SharedStorage, error) {
 	var id string
 	if err := db.QueryRow(
 		`SELECT id FROM shared_storages WHERE name_lower=?`, strings.ToLower(strings.TrimSpace(name)),
@@ -421,7 +427,7 @@ func sharedStorageByNameTx(db dbtx, name string) (*models.SharedStorage, error) 
 		}
 		return nil, err
 	}
-	return sharedStorageByIDTx(db, id)
+	return s.sharedStorageByIDTx(db, id)
 }
 
 func loadSharedStorageDetails(db dbtx, share *models.SharedStorage) error {

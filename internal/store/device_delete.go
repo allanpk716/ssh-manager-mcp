@@ -42,7 +42,7 @@ func (s *Store) DeviceDeletePreview(name string) (*DeviceDeletePreview, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	return deviceDeletePreviewTx(tx, name)
+	return s.deviceDeletePreviewTx(tx, name)
 }
 
 // DeleteDeviceCascading 在同一个事务里删除设备的全部服务器条目、网络成
@@ -62,7 +62,7 @@ func (s *Store) DeleteDeviceCascading(name string, confirmed *DeviceDeletePrevie
 		return nil, err
 	}
 	defer tx.Rollback()
-	preview, err := deviceDeletePreviewTx(tx, name)
+	preview, err := s.deviceDeletePreviewTx(tx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +99,7 @@ func (s *Store) DeleteDeviceCascading(name string, confirmed *DeviceDeletePrevie
 
 // deviceDeletePreviewTx 在一个数据库事务里读取全部级联影响，保证预览与
 // 删除主体使用同一套查询。
-func deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePreview, error) {
+func (s *Store) deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePreview, error) {
 	device, err := deviceByNameTx(tx, name)
 	if err != nil {
 		return nil, err
@@ -108,7 +108,7 @@ func deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePreview, error
 	if err != nil {
 		return nil, err
 	}
-	sharedStorages, err := sharedStoragesForDeviceTx(tx, device.ID)
+	sharedStorages, err := s.sharedStoragesForDeviceTx(tx, device.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +186,7 @@ func deviceSecretServerAllowsTx(tx *sql.Tx, deviceID string) ([]*DeviceDeleteSec
 
 // sharedStoragesForDeviceTx 列出设备提供的全部共享存储，并补齐每个共享的
 // 可挂载服务器，供删除预览与删除前复核使用。
-func sharedStoragesForDeviceTx(tx *sql.Tx, deviceID string) ([]*models.SharedStorage, error) {
+func (s *Store) sharedStoragesForDeviceTx(tx *sql.Tx, deviceID string) ([]*models.SharedStorage, error) {
 	rows, err := tx.Query(
 		`SELECT id FROM shared_storages WHERE device_id=? ORDER BY name,id`, deviceID)
 	if err != nil {
@@ -206,7 +206,7 @@ func sharedStoragesForDeviceTx(tx *sql.Tx, deviceID string) ([]*models.SharedSto
 	}
 	out := make([]*models.SharedStorage, 0, len(ids))
 	for _, id := range ids {
-		share, err := sharedStorageByIDTx(tx, id)
+		share, err := s.sharedStorageByIDTx(tx, id)
 		if err != nil {
 			return nil, err
 		}

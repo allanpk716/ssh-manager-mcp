@@ -250,12 +250,14 @@ type SnapshotSecretAllow struct {
 }
 
 // SnapshotSharedStorage 是快照里的一处共享存储登记。提供方设备名字、
-// 机密项名字、候选访问地址与可挂载服务器都按标识符或关联表推导，不在
-// 这一行重复携带。
+// 机密项名字、候选访问地址与可挂载服务器都按标识符或关联表推导；例外
+// 是按 profile 裁剪时设备行可能不下发，因此这里携带提供方设备名供客户端
+// 查看使用。
 type SnapshotSharedStorage struct {
 	ID               string                          `json:"id"`
 	Name             string                          `json:"name"`
 	DeviceID         string                          `json:"device_id"`
+	DeviceName       string                          `json:"device_name,omitempty"`
 	MountUser        string                          `json:"mount_user"`
 	PasswordSecretID string                          `json:"password_secret_id"`
 	Drive            string                          `json:"drive"`
@@ -588,8 +590,11 @@ func (s *Store) snapshotSecrets() ([]SnapshotSecret, []SnapshotSecretAllow, erro
 // 机密项的可写入服务器列表与该 profile 授权服务器列表的交集裁剪。
 func (s *Store) snapshotSharedStorages(profileID string) ([]SnapshotSharedStorage, error) {
 	query := `
-		SELECT id,name,device_id,mount_user,password_secret_id,drive,note,directories,version,change_note,created_at,updated_at
-		FROM shared_storages`
+		SELECT shared.id,shared.name,shared.device_id,COALESCE(device.name,''),shared.mount_user,
+		       shared.password_secret_id,shared.drive,shared.note,shared.directories,
+		       shared.version,shared.change_note,shared.created_at,shared.updated_at
+		FROM shared_storages shared
+		LEFT JOIN devices device ON device.id=shared.device_id`
 	arguments := make([]any, 0, 1)
 	if profileID != "" {
 		query += `
@@ -597,11 +602,11 @@ func (s *Store) snapshotSharedStorages(profileID string) ([]SnapshotSharedStorag
 				SELECT 1
 				FROM secret_server_allow allow
 				JOIN profile_servers grant_row ON grant_row.server_id=allow.server_id
-				WHERE allow.secret_id=shared_storages.password_secret_id
+					WHERE allow.secret_id=shared.password_secret_id
 				  AND grant_row.profile_id=?)`
 		arguments = append(arguments, profileID)
 	}
-	query += ` ORDER BY name,id`
+	query += ` ORDER BY shared.name,shared.id`
 	rows, err := s.db.Query(query, arguments...)
 	if err != nil {
 		return nil, err
@@ -611,10 +616,13 @@ func (s *Store) snapshotSharedStorages(profileID string) ([]SnapshotSharedStorag
 	for rows.Next() {
 		var row SnapshotSharedStorage
 		var directoriesJSON string
-		if err := rows.Scan(&row.ID, &row.Name, &row.DeviceID, &row.MountUser,
+		if err := rows.Scan(&row.ID, &row.Name, &row.DeviceID, &row.DeviceName, &row.MountUser,
 			&row.PasswordSecretID, &row.Drive, &row.Note, &directoriesJSON,
 			&row.Version, &row.ChangeNote, &row.CreatedAt, &row.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if row.DeviceName == "" {
+			row.DeviceName = s.sharedStorageDeviceNames[row.ID]
 		}
 		if err := json.Unmarshal([]byte(directoriesJSON), &row.Directories); err != nil {
 			return nil, fmt.Errorf("读取共享存储 %s 的目录约定失败: %w", row.Name, err)
@@ -877,9 +885,8 @@ type snapshotTopologySection struct {
 }
 
 // readSnapshotTopologySection 读取快照需要的五段网络拓扑数据。profileID
-// 非空时按该 profile 的授权范围裁剪设备，同时保留已下发共享存储的提供方
-// 设备，并把客户端实例关联只保留给发起拉取的客户端实例；为空时读取全量
-// 拓扑。站点与网络始终全部读取。
+// 非空时按该 profile 的授权范围裁剪设备，并把客户端实例关联只保留给发起
+// 拉取的客户端实例；为空时读取全量拓扑。站点与网络始终全部读取。
 func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID string) (snapshotTopologySection, error) {
 	cropToProfile := profileID != ""
 	var sites []SnapshotSite
@@ -936,18 +943,9 @@ func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID s
 			   OR (
 			          NOT EXISTS(SELECT 1 FROM servers server WHERE server.device_id=devices.id)
 			          AND COALESCE(devices.client_token_id,'')='')
-				   OR id IN (
-				          SELECT share.device_id
-				          FROM shared_storages share
-				          WHERE EXISTS (
-				                SELECT 1
-				                FROM secret_server_allow allow
-				                JOIN profile_servers grant_row ON grant_row.server_id=allow.server_id
-				                WHERE allow.secret_id=share.password_secret_id
-				                  AND grant_row.profile_id=?))
 			   OR (?<>'' AND COALESCE(devices.client_token_id,'')=?)
 			`
-		queryArguments = append(queryArguments, profileID, profileID, initiatingClientTokenID, initiatingClientTokenID)
+		queryArguments = append(queryArguments, profileID, initiatingClientTokenID, initiatingClientTokenID)
 	}
 	deviceQuery += `ORDER BY id`
 	deviceRows, err := s.db.Query(deviceQuery, queryArguments...)
@@ -1042,7 +1040,25 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 // 务器条目的所属设备引用按外键顺序原样写回；本入口永不执行设备生成迁
 // 移，也不产生迁移审计。
 func (s *Store) ImportSnapshotForClientCache(snap *Snapshot) error {
+	if err := s.setForeignKeysEnabled(false); err != nil {
+		return err
+	}
+	defer func() { _ = s.setForeignKeysEnabled(true) }()
 	return s.importSnapshot(snap, false)
+}
+
+// setForeignKeysEnabled 只在同一个数据库连接上切换 SQLite 的外键检查。
+// 客户端缓存允许共享存储引用已被 profile 裁剪掉的提供方设备；权威端与
+// 单机部署仍保持外键检查开启。
+func (s *Store) setForeignKeysEnabled(enabled bool) error {
+	setting := "ON"
+	if !enabled {
+		setting = "OFF"
+	}
+	if _, err := s.db.Exec("PRAGMA foreign_keys=" + setting); err != nil {
+		return fmt.Errorf("set foreign_keys=%s: %w", setting, err)
+	}
+	return nil
 }
 
 func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
@@ -1240,7 +1256,20 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 
 	// 4b. 共享存储依赖设备与挂载密码机密项，放在两段之后导入。版本号
 	// 与变更说明原样恢复，导入不重算。
+	deliveredDevices := make(map[string]bool, len(snap.Devices))
+	for _, device := range snap.Devices {
+		deliveredDevices[device.ID] = true
+	}
 	for _, shared := range snap.SharedStorages {
+		if !ownerImport && !deliveredDevices[shared.DeviceID] {
+			if shared.DeviceName == "" {
+				return fmt.Errorf("客户端快照的共享存储 %s 缺少提供方设备名", shared.Name)
+			}
+			if s.sharedStorageDeviceNames == nil {
+				s.sharedStorageDeviceNames = make(map[string]string)
+			}
+			s.sharedStorageDeviceNames[shared.ID] = shared.DeviceName
+		}
 		directories := shared.Directories
 		if directories == nil {
 			directories = []models.SharedStorageDirectory{}

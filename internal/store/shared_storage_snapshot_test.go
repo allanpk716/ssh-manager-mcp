@@ -130,17 +130,43 @@ func TestExportSnapshotForProfileScopesSharedStorages(t *testing.T) {
 	if len(declared.SharedStorages) != 2 || !sharedIDs[datasets.ID] || !sharedIDs[managedShare.ID] {
 		t.Fatalf("客户端快照应只带可挂载范围与授权服务器有交集的共享存储：%+v", declared.SharedStorages)
 	}
-	if !snapshotHasDevice(declared, "文件服务器") {
-		t.Fatalf("客户端快照应携带已下发共享存储的提供方设备：%+v", declared.Devices)
+	if snapshotHasDevice(declared, "文件服务器") {
+		t.Fatalf("profile 看不到的提供方设备不应进入客户端快照：%+v", declared.Devices)
 	}
-	foundProviderAddress := false
 	for _, membership := range declared.NetworkMemberships {
 		if membership.DeviceID == managedShare.DeviceID && membership.Address == "192.0.2.30" {
-			foundProviderAddress = true
+			t.Fatalf("profile 看不到的提供方设备不应携带网络成员地址：%+v", declared.NetworkMemberships)
 		}
 	}
-	if !foundProviderAddress {
-		t.Fatalf("客户端快照应携带共享存储提供方设备的网络成员：%+v", declared.NetworkMemberships)
+	var snapshotManagedShare SnapshotSharedStorage
+	for _, shared := range declared.SharedStorages {
+		if shared.ID == managedShare.ID {
+			snapshotManagedShare = shared
+		}
+	}
+	if snapshotManagedShare.DeviceName != "文件服务器" {
+		t.Fatalf("客户端快照的共享段应携带提供方设备名：%+v", snapshotManagedShare)
+	}
+	clientCache := newTestStore(t)
+	if err := clientCache.ImportSnapshotForClientCache(declared); err != nil {
+		t.Fatalf("导入设备行缺失的客户端快照失败：%v", err)
+	}
+	clientShares, err := clientCache.ListSharedStorages(SharedStorageFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundClientShare := false
+	for _, share := range clientShares {
+		if share.ID != managedShare.ID {
+			continue
+		}
+		foundClientShare = true
+		if share.DeviceName != "文件服务器" || len(share.CandidateAddresses) != 0 {
+			t.Fatalf("客户端缓存应保留共享并显示提供方设备名，但不显示其地址：%+v", share)
+		}
+	}
+	if !foundClientShare {
+		t.Fatalf("客户端缓存导入后应能列出设备行缺失的共享存储：%+v", clientShares)
 	}
 	if len(declared.SecretAllows) != 1 || declared.SecretAllows[0].ServerID != linuxWeb.ID {
 		t.Fatalf("共享存储依赖的机密项关联应只保留交集内服务器：%+v", declared.SecretAllows)

@@ -62,6 +62,9 @@ type Store struct {
 	// 缓存导入路径随只读模式一起设置；空串表示快照来自不写推荐版本的旧
 	// 权威端，需要按 ADR 0014 降级的工具据此报错。
 	cacheRecommendedVersion string
+	// sharedStorageDeviceNames 保存客户端缓存里设备行被 profile 裁剪掉的
+	// 共享存储提供方名字。权威端与单机部署的设备行总是存在，不使用这张表。
+	sharedStorageDeviceNames map[string]string
 	// NowFn 是可注入时钟，供配对时间判断与机密项时间戳使用。取值为空时
 	// 使用真实时钟；生产代码不设置它，测试可以注入固定时钟。其余时间戳
 	// 继续使用包内的 now 辅助函数。

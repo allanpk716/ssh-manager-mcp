@@ -90,6 +90,12 @@ func seedSharesClientCache(t *testing.T, declaredClientVersion bool) string {
 			t.Fatal(err)
 		}
 	}
+	if _, err := source.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "nas-provider", Host: "192.0.2.30", Port: 22, User: "deploy",
+		AuthMethod: models.AuthPassword,
+	}, nil, nil, "NAS"); err != nil {
+		t.Fatal(err)
+	}
 	linuxWeb, err := source.GetServerByName("linux-web")
 	if err != nil || linuxWeb == nil {
 		t.Fatalf("取 linux-web 失败：%v %+v", err, linuxWeb)
@@ -181,10 +187,14 @@ func TestSharesClientReadsUndeclaredVersionSnapshot(t *testing.T) {
 	if strings.Contains(list, "scratch") {
 		t.Fatalf("可挂载范围与授权服务器没有交集的共享存储不应进入客户端快照：\n%s", list)
 	}
+	devices := runCli(t, "devices", "list")
+	if strings.Contains(devices, "NAS") || strings.Contains(devices, "192.0.2.10") {
+		t.Fatalf("profile 看不到的提供方设备与其地址不应出现在拓扑视图：\n%s", devices)
+	}
 
 	shown := runCli(t, "shares", "show", "datasets")
 	for _, text := range []string{"共享存储 datasets", "提供方设备：NAS", "挂载账号用户名：mount-user",
-		"盘符：Z", "候选访问地址：192.0.2.10", "临时数据=tmp", "备注：模型数据集"} {
+		"盘符：Z", "候选访问地址：无", "临时数据=tmp", "备注：模型数据集"} {
 		if !strings.Contains(shown, text) {
 			t.Fatalf("未声明客户端版本的共享存储详情应包含 %q：\n%s", text, shown)
 		}
@@ -202,7 +212,7 @@ func TestSharesClientShowsOnlyIntersectionAndSelectsInstance(t *testing.T) {
 	}
 	shown := runCli(t, "shares", "show", "datasets")
 	for _, text := range []string{
-		"挂载密码机密项：NAS_MOUNT_PASSWORD", "候选访问地址：192.0.2.10",
+		"挂载密码机密项：NAS_MOUNT_PASSWORD", "候选访问地址：无",
 		"linux-web（挂载点 /mnt/sshmgr/datasets）", "版本号：1",
 	} {
 		if !strings.Contains(shown, text) {
