@@ -9,28 +9,6 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
-func TestLinuxFstabLineContainsMachineReadableMarker(t *testing.T) {
-	share := &models.SharedStorage{ID: "share-001", Name: "datasets"}
-	line := buildLinuxFstabLine(share, "192.0.2.10", "2.1", sharedStorageMarkerOptions("datasets", 7))
-
-	want := "//192.0.2.10/datasets /mnt/sshmgr/datasets cifs " +
-		"credentials=/etc/sshmgr/shares/share-001.credentials,vers=2.1," +
-		"sshmgr-share=datasets,sshmgr-version=7," +
-		"_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0"
-	if line != want {
-		t.Fatalf("fstab 配置行 =\n%s\n期待\n%s", line, want)
-	}
-
-	entry, err := parseLinuxFstabLine(line)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if entry.Address != "192.0.2.10" || entry.ProtocolVersion != "2.1" ||
-		entry.Marker.Share != "datasets" || entry.Marker.Version != 7 {
-		t.Fatalf("解析后的 fstab 配置 = %+v", entry)
-	}
-}
-
 func TestLinuxMountCommandPassesPOSIXShellSyntaxCheck(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows 没有 POSIX shell 解释器")

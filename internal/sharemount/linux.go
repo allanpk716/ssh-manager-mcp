@@ -2,7 +2,6 @@ package sharemount
 
 import (
 	"errors"
-	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -23,15 +22,21 @@ const (
 	linuxLockPath           = "/etc/sshmgr/mount.lock"
 )
 
-// ErrLinuxFstabEntryNotManaged 表示 fstab 配置行没有完整的 sshmgr 标记。
-var ErrLinuxFstabEntryNotManaged = errors.New("fstab 配置行不是 sshmgr 管理的条目")
-
-// LinuxFstabEntry 是一条 sshmgr 管理的 Linux fstab 配置的可比较结论。
-type LinuxFstabEntry struct {
-	Address         string
-	MountPoint      string
-	ProtocolVersion string
-	Marker          SharedStorageMarker
+// linuxMountExitCodeError 把 Linux 固定挂载命令的已知退出码翻译为中文
+// 说明；不在表内的退出码返回 nil，由共用流程给出带退出码的兜底文本。
+func linuxMountExitCodeError(exitCode int) error {
+	switch exitCode {
+	case linuxExitMissingCIFS:
+		return errors.New("目标服务器缺少 mount.cifs，请先由 owner 安装 cifs-utils；挂载工具不会自动安装")
+	case linuxExitProtocolFailed:
+		return errors.New("SMB 协议版本 3.1.1、3.0、2.1、2.0 全部试挂失败，未写入 fstab 配置")
+	case linuxExitLockTimeout:
+		return errors.New("另一个挂载正在进行，请稍后再试")
+	case linuxExitRemoteNewer:
+		return errors.New("目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具")
+	default:
+		return nil
+	}
 }
 
 func linuxMountPoint(shareName string) string {
@@ -40,65 +45,6 @@ func linuxMountPoint(shareName string) string {
 
 func linuxCredentialPath(shareID string) string {
 	return linuxCredentialRoot + "/" + shareID + ".credentials"
-}
-
-// buildLinuxFstabLine 拼装一条 Linux fstab 配置行。标记文本来自跨操作系
-// 统的 sharedStorageMarkerOptions；这里把分号换成 fstab 选项之间的逗号，
-// 形成两个相邻选项：sshmgr-share 与 sshmgr-version。
-func buildLinuxFstabLine(
-	share *models.SharedStorage, address, protocolVersion, marker string,
-) string {
-	options := strings.Join([]string{
-		"credentials=" + linuxCredentialPath(share.ID),
-		"vers=" + protocolVersion,
-		strings.ReplaceAll(marker, ";", ","),
-		"_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10",
-	}, ",")
-	return strings.Join([]string{
-		"//" + address + "/" + share.Name,
-		linuxMountPoint(share.Name),
-		"cifs", options, "0", "0",
-	}, " ")
-}
-
-// parseLinuxFstabLine 解析 sshmgr 管理的 fstab 配置行，供进程内测试与后
-// 续现场检测复用。owner 手写行没有完整标记，返回
-// ErrLinuxFstabEntryNotManaged；标记存在但不合法时返回
-// ErrInvalidSharedStorageMarker，调用方必须停止改写。
-func parseLinuxFstabLine(line string) (LinuxFstabEntry, error) {
-	fields := strings.Fields(line)
-	if len(fields) != 6 || fields[2] != "cifs" || !strings.HasPrefix(fields[0], "//") {
-		return LinuxFstabEntry{}, ErrLinuxFstabEntryNotManaged
-	}
-	source := strings.TrimPrefix(fields[0], "//")
-	shareSeparator := strings.LastIndex(source, "/")
-	if shareSeparator <= 0 {
-		return LinuxFstabEntry{}, ErrLinuxFstabEntryNotManaged
-	}
-	address := source[:shareSeparator]
-	protocolVersion := ""
-	shareOption := ""
-	versionOption := ""
-	for _, option := range strings.Split(fields[3], ",") {
-		switch {
-		case strings.HasPrefix(option, "vers="):
-			protocolVersion = strings.TrimPrefix(option, "vers=")
-		case strings.HasPrefix(option, "sshmgr-share="):
-			shareOption = option
-		case strings.HasPrefix(option, "sshmgr-version="):
-			versionOption = option
-		}
-	}
-	if protocolVersion == "" || shareOption == "" || versionOption == "" {
-		return LinuxFstabEntry{}, ErrLinuxFstabEntryNotManaged
-	}
-	marker, err := parseSharedStorageMarkerOptions(shareOption + ";" + versionOption)
-	if err != nil {
-		return LinuxFstabEntry{}, err
-	}
-	return LinuxFstabEntry{
-		Address: address, MountPoint: fields[1], ProtocolVersion: protocolVersion, Marker: marker,
-	}, nil
 }
 
 // buildLinuxMountCommand 生成 Linux 挂载固定命令。命令会在同一把服务器
@@ -113,16 +59,6 @@ func buildLinuxMountCommand(share *models.SharedStorage, candidates []*Candidate
 	fstabMarker := strings.ReplaceAll(sharedStorageMarkerOptions(share.Name, share.Version), ";", ",")
 	shareValue := sshbroker.POSIXShellQuote(url.PathEscape(share.Name))
 	versionValue := sshbroker.POSIXShellQuote(strconv.FormatInt(share.Version, 10))
-
-	candidateVariables := strings.Builder{}
-	candidateCases := strings.Builder{}
-	candidateSelections := strings.Builder{}
-	for index, candidate := range candidates {
-		number := index + 1
-		fmt.Fprintf(&candidateVariables, "candidate_%d_address=%s\n", number, sshbroker.POSIXShellQuote(candidate.Address))
-		fmt.Fprintf(&candidateCases, "%d) sshmgr_selected_address=$candidate_%d_address ;;\n", number, number)
-		fmt.Fprintf(&candidateSelections, "if [ \"$candidate_%d_address\" = \"$sshmgr_existing_address\" ]; then sshmgr_selected_index=%d; fi\n", number, number)
-	}
 
 	command := `set -eu
 if ! command -v mount.cifs >/dev/null 2>&1; then
@@ -140,7 +76,7 @@ share_name=` + shareName + `
 credential_file=` + credential + `
 mount_point=` + mountPoint + `
 candidate_count=` + strconv.Itoa(len(candidates)) + `
-` + candidateVariables.String() + `
+` + candidateAddressVariablesScript(candidates) + `
 install -d -m 755 "$mount_point"
 
 sshmgr_credential_candidate=''
@@ -152,24 +88,7 @@ sshmgr_cleanup() {
 }
 trap sshmgr_cleanup EXIT HUP INT TERM
 
-sshmgr_parse_options() {
-  sshmgr_option_share=''
-  sshmgr_option_version=''
-  sshmgr_option_vers=''
-  sshmgr_saved_ifs=$IFS
-  IFS=,
-  set -f
-  set -- $1
-  set +f
-  IFS=$sshmgr_saved_ifs
-  for sshmgr_option in "$@"; do
-    case "$sshmgr_option" in
-      sshmgr-share=*) sshmgr_option_share=${sshmgr_option#sshmgr-share=} ;;
-      sshmgr-version=*) sshmgr_option_version=${sshmgr_option#sshmgr-version=} ;;
-      vers=*) sshmgr_option_vers=${sshmgr_option#vers=} ;;
-    esac
-  done
-}
+` + linuxFstabOptionParserScript() + `
 
 sshmgr_managed_count=0
 sshmgr_existing_line=''
@@ -207,17 +126,8 @@ while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
   sshmgr_existing_address=${sshmgr_existing_address%/*}
 done < /etc/fstab
 
-if [ -n "$sshmgr_remote_version" ] && [ "$sshmgr_remote_version" -gt "$sshmgr_expected_version" ]; then
-  echo ` + linuxMountMarker + ` remote-version-newer >&2
-  exit 88
-fi
-
-sshmgr_selected_index=0
-` + candidateSelections.String() + `if [ "$sshmgr_selected_index" -eq 0 ]; then
-  sshmgr_selected_index=1
-fi
-case "$sshmgr_selected_index" in
-` + candidateCases.String() + `esac
+` + remoteVersionGuardScript(linuxMountMarker, linuxExitRemoteNewer) + `
+` + candidateAddressSelectionScript(candidates) + `
 
 sshmgr_selected_version=''
 if [ "$sshmgr_selected_address" = "$sshmgr_existing_address" ]; then
@@ -356,30 +266,3 @@ func safeMountShareName(name string) bool {
 		len(strings.Fields(name)) == 1 && !strings.ContainsAny(name, "/\\\x00")
 }
 
-// parseLinuxMountOutput 解析远端固定命令的安全输出。输出只包含动作与候
-// 选序号，不回传地址、协议版本或任何机密。
-func parseLinuxMountOutput(stdout string) (action string, selectedIndex int, err error) {
-	for _, line := range strings.Split(stdout, "\n") {
-		fields := strings.Fields(strings.TrimRight(line, "\r"))
-		if len(fields) == 0 || fields[0] != linuxMountMarker {
-			continue
-		}
-		for _, field := range fields[1:] {
-			if strings.HasPrefix(field, "result=") {
-				action = strings.TrimPrefix(field, "result=")
-			}
-			if strings.HasPrefix(field, "selected=") {
-				value := strings.TrimPrefix(field, "selected=")
-				parsed, parseErr := strconv.Atoi(value)
-				if parseErr != nil || parsed < 1 {
-					return "", 0, errors.New("Linux 固定挂载命令返回了非法候选序号")
-				}
-				selectedIndex = parsed
-			}
-		}
-	}
-	if action == "" || selectedIndex == 0 {
-		return "", 0, errors.New("Linux 固定挂载命令没有返回成功标记")
-	}
-	return action, selectedIndex, nil
-}

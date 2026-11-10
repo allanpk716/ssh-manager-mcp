@@ -76,10 +76,10 @@ type Candidate struct {
 	RegistrationOrder int64
 }
 
-// Selection 是一次候选地址探测的安全结论。Selected 只在存在连通地址时非
-// 空；Attempts 保留逐地址探测结论，供成功降级与整体失败呈现使用。
+// Selection 是一次候选地址探测的安全结论。Reachable 保持共同网络规划里
+// 的连通顺序；Attempts 保留逐地址探测结论，供成功降级与整体失败呈现使
+// 用。
 type Selection struct {
-	Selected *Candidate
 	// Reachable 保持共同网络规划里的连通顺序。重复挂载要把全部连通地址
 	// 交给远端固定命令，才能在锁内优先保留现有地址。
 	Reachable []*Candidate
@@ -147,126 +147,104 @@ func (s *Service) Mount(parent context.Context, request Request) (*Result, error
 }
 
 func (s *Service) mountDarwin(ctx context.Context, request Request) (*Result, error) {
-	if !safeMountShareName(request.Share.Name) {
-		return nil, ErrUnsafeDarwinName
-	}
-	selection, err := s.selectCandidate(ctx, request.Server, request.Share)
-	if err != nil {
-		return nil, err
-	}
-	candidates := selection.Reachable
-	command := buildDarwinMountCommand(request.Share, candidates)
-	standardInput := append([]byte(nil), request.Password...)
-	standardInput = append(standardInput, '\n')
-	result, execErr := s.exec(ctx, request.Server, RemoteExecRequest{
-		Command: command, Privileged: true, StandardInput: standardInput,
-	})
-	if execErr != nil {
-		return nil, fmt.Errorf("macOS 固定挂载命令执行失败：%w", sanitizedExecError(execErr))
-	}
-	switch result.ExitCode {
-	case 0:
-		action, selectedIndex, reset, parseErr := parseDarwinMountOutput(result.Stdout)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		if selectedIndex > len(candidates) {
-			return nil, errors.New("macOS 固定挂载命令返回了不存在的候选序号")
-		}
-		switch action {
-		case "first-mount-success", "update-success", "remount-success", "no-change":
-		default:
-			return nil, errors.New("macOS 固定挂载命令返回了未知结果")
-		}
-		selected := candidates[selectedIndex-1]
-		notices := []string{}
-		if reset {
-			notices = append(notices, "系统配置被重置，已重建")
-		}
-		for index := 0; index < selectedIndex-1; index++ {
-			if candidates[index].Physical {
-				notices = append(notices, "存在更靠前的物理局域网地址；挂载工具不会卸载现有挂载，如需切换请由 owner 手动切换")
-				break
-			}
-		}
-		return &Result{
-			MountPoint: darwinMountPoint(request.Share.Name), Network: selected.Network,
-			NetworkSequence: selected.Sequence, Action: action, Notices: notices,
-			Physical: selected.Physical, Attempts: selection.Attempts,
-		}, nil
-	case darwinExitMissingCommand:
-		return nil, errors.New("目标服务器缺少 automount，请先由 owner 修复 macOS 系统组件；挂载工具不会自动安装")
-	case darwinExitVerifyFailed:
-		return nil, errors.New("macOS 挂载点验证失败，不能确认共享已可用")
-	case darwinExitLockTimeout:
-		return nil, errors.New("另一个挂载正在进行，请稍后再试")
-	case darwinExitRemoteNewer:
-		return nil, errors.New("目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具")
-	case darwinExitInvalidConfig:
-		return nil, errors.New("目标服务器上的 sshmgr autofs 配置不合法，请 owner 检查后再试")
-	default:
-		return nil, fmt.Errorf("macOS 固定挂载命令失败（退出码 %d）", result.ExitCode)
-	}
+	return s.mountWithSystem(ctx, request, darwinMountFlow)
 }
 
 func (s *Service) mountLinux(ctx context.Context, request Request) (*Result, error) {
+	return s.mountWithSystem(ctx, request, linuxMountFlow)
+}
+
+// systemMountFlow 汇总 Linux 与 macOS 挂载固定命令的系统差异：命令生
+// 成、输出解析与退出码说明。其余流程（校验共享名、选地址、传密码、解
+// 释输出）两个系统完全共用。
+type systemMountFlow struct {
+	systemName      string
+	unsafeNameError error
+	buildCommand    func(share *models.SharedStorage, candidates []*Candidate) string
+	parseOutput     func(stdout string) (action string, selectedIndex int, reset bool, err error)
+	mountPoint      func(shareName string) string
+	exitCodeError   func(exitCode int) error
+}
+
+var darwinMountFlow = systemMountFlow{
+	systemName:      "macOS",
+	unsafeNameError: ErrUnsafeDarwinName,
+	buildCommand:    buildDarwinMountCommand,
+	parseOutput: func(stdout string) (string, int, bool, error) {
+		return parseMountCommandOutput(stdout, darwinMountMarker, "macOS")
+	},
+	mountPoint:    darwinMountPoint,
+	exitCodeError: darwinMountExitCodeError,
+}
+
+var linuxMountFlow = systemMountFlow{
+	systemName:      "Linux",
+	unsafeNameError: ErrUnsafeShareName,
+	buildCommand:    buildLinuxMountCommand,
+	parseOutput: func(stdout string) (string, int, bool, error) {
+		return parseMountCommandOutput(stdout, linuxMountMarker, "Linux")
+	},
+	mountPoint:    linuxMountPoint,
+	exitCodeError: linuxMountExitCodeError,
+}
+
+// mountWithSystem 是两个系统共用的挂载流程。挂载密码只作为提权会话标准
+// 输入传递，绝不拼进命令文本；这里对 standardInput 的补写只补凭据文件
+// 所需的行尾。
+func (s *Service) mountWithSystem(
+	ctx context.Context, request Request, flow systemMountFlow,
+) (*Result, error) {
 	if !safeMountShareName(request.Share.Name) {
-		return nil, ErrUnsafeShareName
+		return nil, flow.unsafeNameError
 	}
 	selection, err := s.selectCandidate(ctx, request.Server, request.Share)
 	if err != nil {
 		return nil, err
 	}
 	candidates := selection.Reachable
-	command := buildLinuxMountCommand(request.Share, candidates)
-	// 护栏：挂载密码只作为提权会话标准输入传递。不要把它拼进 command、
-	// 错误文本或审计；这里的 append 只补凭据文件所需的行尾。
+	command := flow.buildCommand(request.Share, candidates)
 	standardInput := append([]byte(nil), request.Password...)
 	standardInput = append(standardInput, '\n')
 	result, execErr := s.exec(ctx, request.Server, RemoteExecRequest{
 		Command: command, Privileged: true, StandardInput: standardInput,
 	})
 	if execErr != nil {
-		return nil, fmt.Errorf("Linux 固定挂载命令执行失败：%w", sanitizedExecError(execErr))
+		return nil, fmt.Errorf("%s 固定挂载命令执行失败：%w", flow.systemName, sanitizedExecError(execErr))
 	}
-	switch result.ExitCode {
-	case 0:
-		action, selectedIndex, parseErr := parseLinuxMountOutput(result.Stdout)
-		if parseErr != nil {
-			return nil, parseErr
+	if result.ExitCode != 0 {
+		if exitErr := flow.exitCodeError(result.ExitCode); exitErr != nil {
+			return nil, exitErr
 		}
-		if selectedIndex > len(candidates) {
-			return nil, errors.New("Linux 固定挂载命令返回了不存在的候选序号")
-		}
-		switch action {
-		case "first-mount-success", "update-success", "remount-success", "no-change":
-		default:
-			return nil, errors.New("Linux 固定挂载命令返回了未知结果")
-		}
-		selected := candidates[selectedIndex-1]
-		notices := []string{}
-		for index := 0; index < selectedIndex-1; index++ {
-			if candidates[index].Physical {
-				notices = append(notices, "存在更靠前的物理局域网地址；挂载工具不会卸载现有挂载，如需切换请由 owner 手动切换")
-				break
-			}
-		}
-		return &Result{
-			MountPoint: linuxMountPoint(request.Share.Name), Network: selected.Network,
-			NetworkSequence: selected.Sequence, Action: action, Notices: notices,
-			Physical: selected.Physical, Attempts: selection.Attempts,
-		}, nil
-	case linuxExitMissingCIFS:
-		return nil, errors.New("目标服务器缺少 mount.cifs，请先由 owner 安装 cifs-utils；挂载工具不会自动安装")
-	case linuxExitProtocolFailed:
-		return nil, errors.New("SMB 协议版本 3.1.1、3.0、2.1、2.0 全部试挂失败，未写入 fstab 配置")
-	case linuxExitLockTimeout:
-		return nil, errors.New("另一个挂载正在进行，请稍后再试")
-	case linuxExitRemoteNewer:
-		return nil, errors.New("目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具")
+		return nil, fmt.Errorf("%s 固定挂载命令失败（退出码 %d）", flow.systemName, result.ExitCode)
+	}
+	action, selectedIndex, reset, parseErr := flow.parseOutput(result.Stdout)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if selectedIndex > len(candidates) {
+		return nil, fmt.Errorf("%s 固定挂载命令返回了不存在的候选序号", flow.systemName)
+	}
+	switch action {
+	case "first-mount-success", "update-success", "remount-success", "no-change":
 	default:
-		return nil, fmt.Errorf("Linux 固定挂载命令失败（退出码 %d）", result.ExitCode)
+		return nil, mountOutputUnknownAction(flow.systemName)
 	}
+	selected := candidates[selectedIndex-1]
+	notices := []string{}
+	if reset {
+		notices = append(notices, "系统配置被重置，已重建")
+	}
+	for index := 0; index < selectedIndex-1; index++ {
+		if candidates[index].Physical {
+			notices = append(notices, "存在更靠前的物理局域网地址；挂载工具不会卸载现有挂载，如需切换请由 owner 手动切换")
+			break
+		}
+	}
+	return &Result{
+		MountPoint: flow.mountPoint(request.Share.Name), Network: selected.Network,
+		NetworkSequence: selected.Sequence, Action: action, Notices: notices,
+		Physical: selected.Physical, Attempts: selection.Attempts,
+	}, nil
 }
 
 func (s *Service) selectCandidate(
@@ -341,7 +319,7 @@ func (s *Service) selectCandidate(
 	if len(reachable) == 0 {
 		return nil, &SelectionFailure{Reason: SelectionErrorAllCandidatesFailed, Attempts: attempts}
 	}
-	return &Selection{Selected: reachable[0], Reachable: reachable, Attempts: attempts}, nil
+	return &Selection{Reachable: reachable, Attempts: attempts}, nil
 }
 
 func (s *Service) exec(

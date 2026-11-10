@@ -123,6 +123,7 @@ func (s *Service) runCheck(
 func buildLinuxShareCheckCommand(shares []*models.SharedStorage) string {
 	var command strings.Builder
 	command.WriteString("set -eu\necho '" + linuxCheckMarker + " mode=full'\n")
+	command.WriteString(linuxFstabOptionParserScript())
 	for index, share := range shares {
 		fmt.Fprintf(&command, linuxShareCheckBlock,
 			sshbroker.POSIXShellQuote(url.PathEscape(share.Name)),
@@ -144,20 +145,7 @@ if [ -f /etc/fstab ]; then
     set +f
     [ "$#" -eq 6 ] || continue
     [ "$1" = "//"* ] && [ "$3" = cifs ] || continue
-    sshmgr_option_share=''
-    sshmgr_option_version=''
-    sshmgr_saved_ifs=$IFS
-    IFS=,
-    set -f
-    set -- $4
-    set +f
-    IFS=$sshmgr_saved_ifs
-    for sshmgr_option in "$@"; do
-      case "$sshmgr_option" in
-        sshmgr-share=*) sshmgr_option_share=${sshmgr_option#sshmgr-share=} ;;
-        sshmgr-version=*) sshmgr_option_version=${sshmgr_option#sshmgr-version=} ;;
-      esac
-    done
+    sshmgr_parse_options "$4"
     [ "$sshmgr_option_share" = %s ] || continue
     sshmgr_managed=yes
     sshmgr_share=$sshmgr_option_share
@@ -191,7 +179,7 @@ func buildDarwinShareCheckCommand(shares []*models.SharedStorage) string {
 const darwinShareCheckBlock = `sshmgr_managed=no
 sshmgr_share=''
 sshmgr_version=''
-if [ -f '/etc/sshmgr/auto_share' ]; then
+if [ -f '` + darwinMapFile + `'; then
   while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
     case "$sshmgr_line" in '# sshmgr-share='*) ;; *) continue ;; esac
     sshmgr_marker=${sshmgr_line#"# "}
@@ -203,7 +191,7 @@ if [ -f '/etc/sshmgr/auto_share' ]; then
     sshmgr_managed=yes
     sshmgr_share=$sshmgr_marker_share
     sshmgr_version=$sshmgr_marker_version
-  done < '/etc/sshmgr/auto_share'
+  done < '` + darwinMapFile + `'
 fi
 sshmgr_mounted=no
 if ls -A %s >/dev/null 2>&1; then
@@ -215,16 +203,16 @@ echo "` + darwinCheckMarker + ` index=%d managed=$sshmgr_managed share=$sshmgr_s
 // darwinAutoMasterCheckBlock 检查 /etc/auto_master 是否仍引用 sshmgr 的
 // 间接映射文件；系统升级重置主配置后这里会给出 no。
 const darwinAutoMasterCheckBlock = `sshmgr_auto_master=no
-if [ -f '/etc/auto_master' ]; then
+if [ -f '` + darwinAutoMaster + `'; then
   while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
     set -f
     set -- $sshmgr_line
     set +f
-    if [ "$#" -ge 2 ] && [ "$1" = '/mnt/sshmgr' ] &&
-       [ "$2" = '/etc/sshmgr/auto_share' ]; then
+    if [ "$#" -ge 2 ] && [ "$1" = '` + darwinMountRoot + `' ] &&
+       [ "$2" = '` + darwinMapFile + `' ]; then
       sshmgr_auto_master=yes
     fi
-  done < '/etc/auto_master'
+  done < '` + darwinAutoMaster + `'
 fi
 echo "` + darwinCheckMarker + ` auto-master=$sshmgr_auto_master"
 `

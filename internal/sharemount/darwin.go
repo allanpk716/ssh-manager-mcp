@@ -2,10 +2,8 @@ package sharemount
 
 import (
 	"errors"
-	"fmt"
 	"net/url"
 	"strconv"
-	"strings"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sshbroker"
@@ -24,41 +22,27 @@ const (
 	darwinLockPath           = "/etc/sshmgr/mount.lock"
 )
 
+// darwinMountExitCodeError 把 macOS 固定挂载命令的已知退出码翻译为中文
+// 说明；不在表内的退出码返回 nil，由共用流程给出带退出码的兜底文本。
+func darwinMountExitCodeError(exitCode int) error {
+	switch exitCode {
+	case darwinExitMissingCommand:
+		return errors.New("目标服务器缺少 automount，请先由 owner 修复 macOS 系统组件；挂载工具不会自动安装")
+	case darwinExitVerifyFailed:
+		return errors.New("macOS 挂载点验证失败，不能确认共享已可用")
+	case darwinExitLockTimeout:
+		return errors.New("另一个挂载正在进行，请稍后再试")
+	case darwinExitRemoteNewer:
+		return errors.New("目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具")
+	case darwinExitInvalidConfig:
+		return errors.New("目标服务器上的 sshmgr autofs 配置不合法，请 owner 检查后再试")
+	default:
+		return nil
+	}
+}
+
 func darwinMountPoint(shareName string) string {
 	return darwinMountRoot + "/" + shareName
-}
-
-// escapeDarwinPassword 按网址用户信息里的百分号编码规则编码密码。这里不
-// 使用查询串编码，因为查询串会把空格写成加号，而 autofs 会把加号当作密码
-// 本身；非保留字节保持原样，其余字节逐个写成两个十六进制位。
-func escapeDarwinPassword(password []byte) string {
-	var encoded strings.Builder
-	const hexadecimal = "0123456789ABCDEF"
-	for _, value := range password {
-		switch {
-		case value >= 'a' && value <= 'z', value >= 'A' && value <= 'Z',
-			value >= '0' && value <= '9', value == '-', value == '_', value == '.', value == '~':
-			encoded.WriteByte(value)
-		default:
-			encoded.WriteByte('%')
-			encoded.WriteByte(hexadecimal[value>>4])
-			encoded.WriteByte(hexadecimal[value&0x0f])
-		}
-	}
-	return encoded.String()
-}
-
-// buildDarwinAutomountEntry 生成映射条目与它的独立标记行。标记行是注释，
-// autofs 不把它当挂载选项；真正触发挂载的每个共享仍是一行。
-func buildDarwinAutomountEntry(
-	share *models.SharedStorage, address, encodedPassword string,
-) (markerLine string, entryLine string) {
-	markerLine = "# " + sharedStorageMarkerOptions(share.Name, share.Version)
-	entryLine = fmt.Sprintf(
-		"%s -fstype=smbfs ://%s:%s@%s/%s",
-		share.Name, share.MountUser, encodedPassword, address, share.Name,
-	)
-	return markerLine, entryLine
 }
 
 // buildDarwinMountCommand 生成 macOS autofs 固定命令。密码只经提权会话的
@@ -70,19 +54,6 @@ func buildDarwinMountCommand(share *models.SharedStorage, candidates []*Candidat
 	marker := sshbroker.POSIXShellQuote(sharedStorageMarkerOptions(share.Name, share.Version))
 	shareValue := sshbroker.POSIXShellQuote(url.PathEscape(share.Name))
 	versionValue := sshbroker.POSIXShellQuote(strconv.FormatInt(share.Version, 10))
-
-	candidateVariables := strings.Builder{}
-	candidateCases := strings.Builder{}
-	candidateSelections := strings.Builder{}
-	for index, candidate := range candidates {
-		number := index + 1
-		fmt.Fprintf(&candidateVariables, "candidate_%d_address=%s\n",
-			number, sshbroker.POSIXShellQuote(candidate.Address))
-		fmt.Fprintf(&candidateCases, "%d) sshmgr_selected_address=$candidate_%d_address ;;\n", number, number)
-		fmt.Fprintf(&candidateSelections,
-			"if [ \"$candidate_%d_address\" = \"$sshmgr_existing_address\" ]; then sshmgr_selected_index=%d; fi\n",
-			number, number)
-	}
 
 	return `set -eu
 if ! command -v automount >/dev/null 2>&1; then
@@ -97,7 +68,7 @@ sshmgr_expected_version=` + versionValue + `
 share_name=` + shareName + `
 mount_user=` + mountUser + `
 mount_point=` + mountPoint + `
-` + candidateVariables.String() + `
+` + candidateAddressVariablesScript(candidates) + `
 sshmgr_map_candidate=''
 sshmgr_cleanup() {
   if [ -n "$sshmgr_map_candidate" ]; then rm -f "$sshmgr_map_candidate"; fi
@@ -214,17 +185,8 @@ if [ "$sshmgr_after_marker" -ne 0 ]; then
   exit 89
 fi
 
-if [ -n "$sshmgr_remote_version" ] && [ "$sshmgr_remote_version" -gt "$sshmgr_expected_version" ]; then
-  echo ` + darwinMountMarker + ` remote-version-newer >&2
-  exit 88
-fi
-
-sshmgr_selected_index=0
-` + candidateSelections.String() + `if [ "$sshmgr_selected_index" -eq 0 ]; then
-  sshmgr_selected_index=1
-fi
-case "$sshmgr_selected_index" in
-` + candidateCases.String() + `esac
+` + remoteVersionGuardScript(darwinMountMarker, darwinExitRemoteNewer) + `
+` + candidateAddressSelectionScript(candidates) + `
 
 sshmgr_existing_configuration=no
 if [ "$sshmgr_managed_count" -eq 1 ] &&
@@ -343,31 +305,3 @@ echo ` + darwinMountMarker + ` result=$sshmgr_result selected=$sshmgr_selected_i
 `
 }
 
-// parseDarwinMountOutput 只解析安全结果字段，不接受地址、账号或密码。
-func parseDarwinMountOutput(stdout string) (action string, selectedIndex int, reset bool, err error) {
-	for _, line := range strings.Split(stdout, "\n") {
-		fields := strings.Fields(strings.TrimRight(line, "\r"))
-		if len(fields) == 0 || fields[0] != darwinMountMarker {
-			continue
-		}
-		for _, field := range fields[1:] {
-			switch {
-			case strings.HasPrefix(field, "result="):
-				action = strings.TrimPrefix(field, "result=")
-			case strings.HasPrefix(field, "selected="):
-				value := strings.TrimPrefix(field, "selected=")
-				parsed, parseErr := strconv.Atoi(value)
-				if parseErr != nil || parsed < 1 {
-					return "", 0, false, errors.New("macOS 固定挂载命令返回了非法候选序号")
-				}
-				selectedIndex = parsed
-			case field == "reset=yes":
-				reset = true
-			}
-		}
-	}
-	if action == "" || selectedIndex == 0 {
-		return "", 0, false, errors.New("macOS 固定挂载命令没有返回成功标记")
-	}
-	return action, selectedIndex, reset, nil
-}

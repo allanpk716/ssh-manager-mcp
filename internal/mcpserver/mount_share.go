@@ -17,6 +17,11 @@ import (
 
 var errMountShareNotFound = errors.New("共享存储或服务器不存在")
 
+// errMountShareNotWritable 是目标服务器不在挂载密码机密项可写入服务器
+// 列表内时的固定报错。
+var errMountShareNotWritable = errors.New(
+	"服务器不在挂载密码机密项的可写入服务器列表内，请先由 owner 把服务器加入该机密项的可写入服务器列表")
+
 // MountShareSnapshotSyncer 是客户端缓存面注入的挂载前快照保鲜能力：向
 // 权威端查询快照修订号，本地落后就先同步。具体实现由客户端操作包提供
 // （那里才有权威端请求入口）；nil 表示单机与权威端，挂载前没有这一步。
@@ -94,7 +99,6 @@ func MountShareForProfile(
 		if mountResult != nil {
 			networkName = mountResult.Network
 			sequence = mountResult.NetworkSequence
-			summary["result"] = mountResult.Action
 			notes := mountShareResultNotes(mountResult)
 			selectionNotes := mountShareSelectionNotes(mountResult)
 			if len(notes) > 0 {
@@ -136,13 +140,9 @@ func MountShareForProfile(
 		}
 		return nil, err
 	}
-	profileServerIDs, err := st.ServersForProfile(profileID)
+	visible, err := sessionVisibleServerIDs(st, profileID, "")
 	if err != nil {
 		return nil, err
-	}
-	visible := make(map[string]bool, len(profileServerIDs))
-	for _, serverID := range profileServerIDs {
-		visible[serverID] = true
 	}
 	shareVisible := false
 	mountable := make(map[string]bool, len(found.MountableServers))
@@ -161,7 +161,7 @@ func MountShareForProfile(
 		return nil, errMountShareNotFound
 	}
 	if !mountable[server.ID] {
-		return nil, errors.New("服务器不在挂载密码机密项的可写入服务器列表内，请先由 owner 把服务器加入该机密项的可写入服务器列表")
+		return nil, errMountShareNotWritable
 	}
 	if models.NormalizeShellType(string(server.ShellType)).IsWindows() {
 		return nil, errors.New("Windows 服务器不能持久挂载共享存储；网络盘符由每条命令执行前的会话内注入提供，不需要 mount_share")
@@ -180,7 +180,7 @@ func MountShareForProfile(
 		}
 	}
 	if !writable || len(password) == 0 {
-		return nil, errors.New("服务器不在挂载密码机密项的可写入服务器列表内，请先由 owner 把服务器加入该机密项的可写入服务器列表")
+		return nil, errMountShareNotWritable
 	}
 
 	service := &sharemount.Service{
