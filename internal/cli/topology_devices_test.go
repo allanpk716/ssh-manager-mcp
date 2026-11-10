@@ -420,6 +420,7 @@ func TestDevicesRemovePreviewsAndCascadesServerEntries(t *testing.T) {
 		"anchors":            []any{"root"},
 		"members":            []any{map[string]any{"device": "工作站", "network": "家A局域网", "address": "192.168.1.20"}},
 		"layout-coordinates": float64(1),
+		"shared-storages":    []any{},
 	}
 	if !reflect.DeepEqual(gotSummary, wantSummary) {
 		t.Fatalf("device.rm summary = %#v, want %#v", gotSummary, wantSummary)
@@ -430,6 +431,91 @@ func TestDevicesRemovePreviewsAndCascadesServerEntries(t *testing.T) {
 		if rows := topologyAuditRows(t, dbPath, masterKey, action); len(rows) != want {
 			t.Fatalf("action %s must leave %d audit rows, got %d", action, want, len(rows))
 		}
+	}
+}
+
+func TestDevicesRemovePreviewsAndCascadesSharedStorages(t *testing.T) {
+	dbPath, masterKey := seedSharesCommandVault(t)
+	setup, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setup.AddDevice("Web 主机", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setup.MoveServerToDevice("linux-web", "Web 主机"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setup.MoveServerToDevice("windows-web", "Web 主机"); err != nil {
+		t.Fatal(err)
+	}
+	if err := setup.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+
+	before, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisionBefore, err := before.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := before.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runCli(t, "devices", "rm", "NAS", "--yes")
+	groups := []string{
+		"共享存储：\n  datasets",
+		"linux-web（所属设备 Web 主机，系统类型 Linux 或 macOS）",
+		"windows-web（所属设备 Web 主机，系统类型 Windows）",
+		"不会去服务器上卸载",
+	}
+	position := -1
+	for _, want := range groups {
+		next := strings.Index(out, want)
+		if next < 0 {
+			t.Fatalf("设备删除预览应包含 %q：\n%s", want, out)
+		}
+		if next < position {
+			t.Fatalf("设备删除预览的共享存储内容顺序不正确：\n%s", out)
+		}
+		position = next
+	}
+	if !strings.Contains(out, "已删除设备 NAS") {
+		t.Fatalf("设备删除应报告成功：\n%s", out)
+	}
+
+	verification, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer verification.Close()
+	shares, err := verification.ListSharedStorages(store.SharedStorageFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shares) != 0 {
+		t.Fatalf("设备删除应一并删除它提供的共享存储：%+v", shares)
+	}
+	revisionAfter, err := verification.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revisionAfter <= revisionBefore {
+		t.Fatalf("删除共享存储后快照修订号应前进：before=%d after=%d", revisionBefore, revisionAfter)
+	}
+
+	rows := topologyAuditRows(t, dbPath, masterKey, "device.rm")
+	if len(rows) != 1 {
+		t.Fatalf("设备删除应写一条 device.rm 审计行，实际 %d 条", len(rows))
+	}
+	summary := topologyAuditSummary(t, rows[0])
+	if !reflect.DeepEqual(summary["shared-storages"], []any{"datasets"}) {
+		t.Fatalf("device.rm 审计摘要应记录一并删除的共享存储：%#v", summary)
 	}
 }
 
