@@ -145,6 +145,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	var action = "exec" // 命令策略换用新动作:拦截 exec-blocked / 需确认退回 exec-confirm-required (Status 存命中规则编号)
 	var exitCode int
 	var injectedEnvironmentNames []string
+	var injectedShareNames []string
 	start := time.Now()
 	defer func() {
 		if status == "" {
@@ -154,6 +155,7 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 			TS: start, ProjectID: projectID, ServerID: serverID, Action: action,
 			Command: command, Sudo: sudo, Status: status, ExitCode: exitCode, DurationMS: time.Since(start).Milliseconds(),
 			InjectedEnvironmentNames: injectedEnvironmentNames,
+			InjectedShareNames:       injectedShareNames,
 		})
 	}()
 
@@ -222,6 +224,16 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	defer cli.Close()
 
 	timeout = clampExecTimeout(timeout) // <=0 → defaultTimeout; cap at MaxExecTimeout
+	// 网络盘符注入计划需要先在目标服务器上探测 445，因此在连接建立后求
+	// 出；探测与注入步骤都是固定生成的命令，不经命令策略。
+	drivePlan := buildNetworkDriveInjectionPlan(ctx, st, profileID, srv, sudo, cli)
+	injectionItems := injectionPlan.execItems()
+	injectionItems = append(injectionItems, drivePlan.injectionItems()...)
+	preCommandInjection := sshbroker.WithPreCommandInjection(sshbroker.ExecInjectionOptions{
+		ShellType:   models.NormalizeShellType(string(srv.ShellType)),
+		TargetLayer: sshbroker.ExecLayerNormal,
+		Items:       injectionItems,
+	})
 
 	var res sshbroker.ExecResult
 	if sudo {
@@ -242,8 +254,13 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	} else {
 		readLimit := readLimitForMasking(ctx, MaxOutputBytes)
 		injectedEnvironmentNames = injectionPlan.injectedNames()
-		res, err = cli.Exec(ctx, command, timeout, readLimit, injectionPlan.execOption())
+		// 选址与映射步骤的耗时预算加在 SSH 超时上，注入不占用用户命令的
+		// 超时。
+		res, err = cli.Exec(ctx, command, timeout+drivePlan.extraTimeout, readLimit, preCommandInjection)
 	}
+	// 状态行在输出遮蔽前剔除；映射失败只转成警告，不改变命令结论。
+	res.Stdout, res.Stderr = drivePlan.consumeStatusLines(res.Stdout, res.Stderr)
+	injectedShareNames = drivePlan.injectedShareNames()
 	// sshbroker 按多读后的上限标记 Truncated；对 agent 仍按原 1 MiB 上限判定。
 	res.Truncated = res.StdoutBytes > MaxOutputBytes || res.StderrBytes > MaxOutputBytes
 	maskedStdout, stdoutNames := maskCappedContent(ctx, res.Stdout, MaxOutputBytes)
@@ -280,7 +297,9 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	if res.Sudo != nil {
 		out.Sudo = &SudoInfo{Outcome: res.Sudo.Outcome, UID: res.Sudo.UID}
 	}
+	out.InjectedNetworkDrives = drivePlan.injectedDrives()
 	out.Stdout = injectionPlan.appendWarnings(out.Stdout)
+	out.Stdout = drivePlan.appendWarnings(out.Stdout)
 	return
 }
 

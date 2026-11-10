@@ -90,6 +90,9 @@ type ExecOutput struct {
 	Sudo *SudoInfo `json:"sudo,omitempty" jsonschema:"present iff sudo=true: privilege-elevation metadata. outcome: elevated = marker-attested (uid carries the attested uid; 0 = root, a REAL attestation); auth-failed / sudo-start-failed / wrap-failed = the command did NOT run (bad credential / sudo could not start it e.g. sudoers policy / the wrapped shell rejected it e.g. syntax error) and the call is an error; unverified = no marker — treat the identity as unproven"`
 	// EffectiveTimeoutSeconds 恒存在 (no omitempty): clamp 后实际生效秒数。
 	EffectiveTimeoutSeconds int `json:"effective_timeout_seconds" jsonschema:"the timeout actually in effect, in seconds: timeout_seconds <= 0 means the 120s default and anything over 300 is capped at 300 — echoed instead of silently clamped; anything longer belongs in exec_background"`
+	// InjectedNetworkDrives 是本次命令前映射成功的 Windows 网络盘符；只含
+	// 共享名与盘符，绝不包含地址、挂载账号或密码。空表示没有映射。
+	InjectedNetworkDrives []InjectedNetworkDrive `json:"injected_network_drives,omitempty" jsonschema:"network drives mapped before this command; each entry has the share name and drive letter only — never an address, mount account, or password; empty means none"`
 }
 
 // SudoInfo is the privilege-elevation metadata of one sudo exec (Plan 41 §2).
@@ -98,6 +101,12 @@ type ExecOutput struct {
 type SudoInfo struct {
 	Outcome string `json:"outcome" jsonschema:"elevated | auth-failed | sudo-start-failed | wrap-failed | unverified"`
 	UID     *int   `json:"uid" jsonschema:"the marker-attested uid; absent = unattested, 0 = root (a real attestation, not an omission)"`
+}
+
+// InjectedNetworkDrive 是一条映射成功的网络盘符。
+type InjectedNetworkDrive struct {
+	Share string `json:"share" jsonschema:"share name whose network drive was mapped before this command"`
+	Drive string `json:"drive" jsonschema:"drive letter mapped before this command, for example S"`
 }
 
 // ExecContextInput is the exec_context tool input (Plan 41 §3).
