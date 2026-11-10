@@ -14,12 +14,14 @@ const (
 	linuxMountMarker        = "SSHMGR-LINUX-MOUNT"
 	linuxExitMissingCIFS    = 83
 	linuxExitProtocolFailed = 84
-	linuxExitVerifyFailed   = 86
-	linuxExitLockTimeout    = 87
-	linuxExitRemoteNewer    = 88
-	linuxExitInvalidFstab   = 89
-	linuxCredentialRoot     = "/etc/sshmgr/shares"
-	linuxMountRoot          = "/mnt/sshmgr"
+	// linuxExitTrialUnmountFailed 表示临时挂载点试挂成功后的卸载失败。
+	linuxExitTrialUnmountFailed = 85
+	linuxExitVerifyFailed       = 86
+	linuxExitLockTimeout        = 87
+	linuxExitRemoteNewer        = 88
+	linuxExitInvalidFstab       = 89
+	linuxCredentialRoot         = "/etc/sshmgr/shares"
+	linuxMountRoot              = "/mnt/sshmgr"
 )
 
 // linuxMountExitCodeError 把 Linux 固定挂载命令的已知退出码翻译为中文
@@ -47,6 +49,12 @@ func linuxMountPoint(shareName string) string {
 
 func linuxCredentialPath(shareID string) string {
 	return linuxCredentialRoot + "/" + shareID + ".credentials"
+}
+
+// linuxTrialMountPoint 是变更路径的临时试挂挂载点，位于 /var/run 下的临
+// 时文件系统；共享名已禁止空白与斜杠，可直接拼接。
+func linuxTrialMountPoint(shareName string) string {
+	return "/var/run/sshmgr-trial-" + shareName
 }
 
 // buildLinuxMountCommand 生成 Linux 挂载固定命令。命令会在同一把服务器
@@ -83,9 +91,11 @@ install -d -m 755 "$mount_point"
 
 sshmgr_credential_candidate=''
 sshmgr_fstab_candidate=''
+sshmgr_trial_point=''
 sshmgr_cleanup() {
   if [ -n "$sshmgr_credential_candidate" ]; then rm -f "$sshmgr_credential_candidate"; fi
   if [ -n "$sshmgr_fstab_candidate" ]; then rm -f "$sshmgr_fstab_candidate"; fi
+  if [ -n "$sshmgr_trial_point" ]; then rmdir "$sshmgr_trial_point" 2>/dev/null || true; fi
   sshmgr_release_shared_storage_lock
 }
 trap sshmgr_cleanup EXIT HUP INT TERM
@@ -170,39 +180,38 @@ sshmgr_write_credentials() {
   chmod 600 "$sshmgr_credential_candidate"
 }
 
-sshmgr_prepare_remount
-if [ ! -f "$credential_file" ] || [ -z "$sshmgr_remote_version" ] ||
-   [ "$sshmgr_remote_version" != "$sshmgr_expected_version" ]; then
-  sshmgr_write_credentials
-fi
-if [ -n "$sshmgr_credential_candidate" ]; then
-  sshmgr_trial_credential=$sshmgr_credential_candidate
+sshmgr_trial_point=` + sshbroker.POSIXShellQuote(linuxTrialMountPoint(share.Name)) + `
+install -d -m 755 "$sshmgr_trial_point"
+sshmgr_write_credentials
+sshmgr_trial_mounted=no
+if [ -n "$sshmgr_selected_version" ] &&
+   mount -t cifs "//${sshmgr_selected_address}/${share_name}" "$sshmgr_trial_point" -o "vers=$sshmgr_selected_version,credentials=$sshmgr_credential_candidate"; then
+  sshmgr_trial_mounted=yes
 else
-  sshmgr_trial_credential=$credential_file
-fi
-
-if [ -z "$sshmgr_selected_version" ]; then
+  sshmgr_selected_version=''
   for sshmgr_version in 3.1.1 3.0 2.1 2.0; do
-    if mount -t cifs "//${sshmgr_selected_address}/${share_name}" "$mount_point" -o "vers=$sshmgr_version,credentials=$sshmgr_trial_credential"; then
+    if mount -t cifs "//${sshmgr_selected_address}/${share_name}" "$sshmgr_trial_point" -o "vers=$sshmgr_version,credentials=$sshmgr_credential_candidate"; then
       sshmgr_selected_version=$sshmgr_version
+      sshmgr_trial_mounted=yes
       break
     fi
   done
-else
-  mount -t cifs "//${sshmgr_selected_address}/${share_name}" "$mount_point" -o "vers=$sshmgr_selected_version,credentials=$sshmgr_trial_credential"
 fi
-if [ -z "$sshmgr_selected_version" ]; then
+if [ "$sshmgr_trial_mounted" = no ]; then
   echo ` + linuxMountMarker + ` protocol-failed >&2
-  exit 84
+  exit ` + strconv.Itoa(linuxExitProtocolFailed) + `
 fi
-if ! umount "$mount_point"; then
+if ! umount "$sshmgr_trial_point"; then
   echo ` + linuxMountMarker + ` trial-unmount-failed >&2
-  exit 85
+  exit ` + strconv.Itoa(linuxExitTrialUnmountFailed) + `
 fi
-if [ -n "$sshmgr_credential_candidate" ]; then
-  mv "$sshmgr_credential_candidate" "$credential_file"
-  sshmgr_credential_candidate=''
-fi
+rmdir "$sshmgr_trial_point" 2>/dev/null || true
+sshmgr_trial_point=''
+
+# 试挂成功后才停 automount、卸载旧挂载并原子替换凭据文件。
+sshmgr_prepare_remount
+mv "$sshmgr_credential_candidate" "$credential_file"
+sshmgr_credential_candidate=''
 sshmgr_build_fstab_line
 
 if [ "$sshmgr_existing_line" != "$sshmgr_fstab_line" ]; then

@@ -110,8 +110,16 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 				}
 			}
 		}
+		// 变更路径必须先在临时挂载点上试挂；全部协议失败时要在触碰
+		// 正式挂载点之前退出。
+		trialExit := strings.Index(command, "protocol-failed")
+		realUnmount := strings.Index(command, "\nsshmgr_prepare_remount\n")
+		if !strings.Contains(command, "/var/run/sshmgr-trial-datasets") ||
+			!strings.Contains(command, `umount "$sshmgr_trial_point"`) ||
+			trialExit < 0 || realUnmount < 0 || trialExit > realUnmount {
+			return "", "Linux 固定命令必须先在临时挂载点试挂，全部失败时不得触碰正式挂载点", 91
+		}
 		if selectedVersion == "none" {
-			f.credentialFile = ""
 			return "", "SSHMGR-LINUX-MOUNT protocol-failed", 84
 		}
 		if f.mountTableMissing && !strings.Contains(command, "/proc/mounts") {
@@ -142,10 +150,9 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 		if !needsChange && len(f.fstabLines) > 0 {
 			return fmt.Sprintf("SSHMGR-LINUX-MOUNT result=no-change selected=%d\n", selectedIndex), "", 0
 		}
-		if f.existingAddress == "" || f.remoteVersion != f.shareVersion || f.credentialFile == "" {
-			f.credentialFile = "username=mount-user\npassword=" + string(stdinBytes)
-			f.credentialWrites++
-		}
+		// 变更路径总是先写临时凭据试挂，试挂成功后原子替换正式凭据文件。
+		f.credentialFile = "username=mount-user\npassword=" + string(stdinBytes)
+		f.credentialWrites++
 		if selectedAddress != f.existingAddress {
 			selectedVersion = f.workingVersion
 			if selectedVersion == "" {
@@ -153,6 +160,10 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 			}
 		} else {
 			selectedVersion = f.existingProtocol
+			if f.workingVersion != "" && f.workingVersion != f.existingProtocol {
+				// 旧协议在临时挂载点试挂失败后，按协议版本序列降级。
+				selectedVersion = f.workingVersion
+			}
 		}
 		f.configurationWrites++
 		f.remounts++
@@ -1690,8 +1701,8 @@ func TestMountShareLinuxReselectsWhenExistingAddressIsUnreachable(t *testing.T) 
 		!strings.Contains(fstab[0], "vers=3.1.1") {
 		t.Fatalf("重选后的 fstab = %#v", fstab)
 	}
-	if credential != "username=mount-user\npassword=old-password\n" {
-		t.Fatalf("同版本换地址不应改写挂载密码：%q", credential)
+	if credential != "username=mount-user\npassword="+mountShareTestPassword+"\n" {
+		t.Fatalf("换地址应按试挂流程原子替换凭据文件：%q", credential)
 	}
 	for _, input := range inputs {
 		if strings.Contains(string(input), "old-password") {
@@ -1699,7 +1710,7 @@ func TestMountShareLinuxReselectsWhenExistingAddressIsUnreachable(t *testing.T) 
 		}
 	}
 	credentialWrites, configurationWrites := fixture.fake.writeCounts()
-	if credentialWrites != 0 || configurationWrites != 1 {
+	if credentialWrites != 1 || configurationWrites != 1 {
 		t.Fatalf("重选地址后的写入次数错误：凭据 %d，配置 %d", credentialWrites, configurationWrites)
 	}
 }
@@ -1834,6 +1845,55 @@ func TestMountShareLinuxEmptyDirectoryFailsMountTableVerification(t *testing.T) 
 	})
 	if !isError || text != "Linux 挂载点验证失败，不能确认共享已可用" {
 		t.Fatalf("空目录且挂载表没有条目时的报错 = %q (%v)", text, output)
+	}
+}
+
+func TestMountShareLinuxUpdateKeepsOriginalsWhenAllTrialsFail(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.existingAddress = "192.0.2.10"
+		setup.existingProtocol = "2.0"
+		setup.remoteVersion = 0
+		setup.workingVersion = "none"
+	})
+	_, _, credentialBefore, fstabBefore := fixture.fake.recorded()
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if !isError || text != "SMB 协议版本 3.1.1、3.0、2.1、2.0 全部试挂失败，未写入 fstab 配置" {
+		t.Fatalf("改写时试挂全败的报错 = %q (%v)", text, output)
+	}
+	_, _, credentialAfter, fstabAfter := fixture.fake.recorded()
+	if credentialAfter != credentialBefore || strings.Join(fstabAfter, "\n") != strings.Join(fstabBefore, "\n") {
+		t.Fatalf("试挂全败后原配置被破坏：\ncredential %q -> %q\nfstab %#v -> %#v",
+			credentialBefore, credentialAfter, fstabBefore, fstabAfter)
+	}
+	credentialWrites, configurationWrites := fixture.fake.writeCounts()
+	if credentialWrites != 0 || configurationWrites != 0 {
+		t.Fatalf("试挂全败后不应改写正式配置：凭据 %d 次，配置 %d 次", credentialWrites, configurationWrites)
+	}
+}
+
+func TestMountShareLinuxFallsBackWhenExistingProtocolFails(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.existingAddress = "192.0.2.10"
+		setup.existingProtocol = "3.1.1"
+		setup.remoteVersion = 0
+		setup.workingVersion = "2.0"
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("旧协议失效后应按序列降级试挂：%s", text)
+	}
+	if output["result"] != "update-success" {
+		t.Fatalf("协议降级更新的输出 = %#v", output)
+	}
+	_, _, _, fstab := fixture.fake.recorded()
+	if len(fstab) != 1 || !strings.Contains(fstab[0], "vers=2.0") {
+		t.Fatalf("协议降级后的 fstab = %#v", fstab)
 	}
 }
 
