@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -35,6 +37,9 @@ type fakePowerShellDriveServer struct {
 	commands       []string
 	standardInputs [][]byte
 	reachable      map[string]bool
+	// streamExec 非空时用实时输出回调模拟映射后仍长时间运行的任务，让测
+	// 试能在任务未结束时读取中间输出。
+	streamExec func(command string, stdin io.Reader, stdout, stderr io.Writer) int
 	// mapStatus 是第 0 个共享映射状态行里回传的结果；mapStatuses 按计划
 	// 中的共享序号区分多个共享。结果可为 ok、error-<编号> 或 timeout。
 	mapStatus       string
@@ -108,6 +113,13 @@ func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (st
 		return stdout.String() + "user-command-output\n", "", 0
 	}
 	return "plain-command-output\n", "", 0
+}
+
+func (f *fakePowerShellDriveServer) streamHandler(command string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if f.streamExec == nil {
+		return 0
+	}
+	return f.streamExec(command, stdin, stdout, stderr)
 }
 
 func fakeNetworkDriveStatus(fallback, statusByIndex, statusByDrive string) string {
@@ -397,10 +409,20 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 		reachable: settings.reachable, mapStatus: settings.mapStatus,
 		mapStatuses:     settings.mapStatuses,
 		statusesByDrive: settings.statusesByDrive,
+		streamExec:      settings.streamExec,
 	}
 	st := newStore(t)
 	secondServerID := ""
-	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Exec: fake.handler})
+	serverOptions := testsshd.Options{Password: "pw"}
+	if settings.sudoTarget {
+		serverOptions.SudoPassword = "sudopw"
+	}
+	if fake.streamExec != nil {
+		serverOptions.ExecStream = fake.streamHandler
+	} else {
+		serverOptions.Exec = fake.handler
+	}
+	addr, hostKey, cleanup := testsshd.Start(t, serverOptions)
 	t.Cleanup(cleanup)
 
 	if _, err := st.AddDevice("NAS", "共享存储提供方", ""); err != nil {
@@ -468,6 +490,22 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	}
 	if err != nil {
 		t.Fatal(err)
+	}
+	if settings.sudoTarget {
+		sudoCredentialID, err := st.SetCredential(&models.Credential{
+			Type: models.CredPassword, Secret: []byte("sudopw"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		serverRow, err := st.GetServer(added.ServerID)
+		if err != nil || serverRow == nil {
+			t.Fatalf("read server for sudo credential: %v %v", serverRow, err)
+		}
+		serverRow.SudoCredentialID = sudoCredentialID
+		if err := st.UpdateServer(serverRow); err != nil {
+			t.Fatal(err)
+		}
 	}
 	grantedServers := []string{added.ServerID}
 	if settings.secondServer {
@@ -595,6 +633,7 @@ type networkDriveSeedSetup struct {
 	mapStatus              string
 	mapStatuses            map[int]string
 	statusesByDrive        map[string]string
+	streamExec             func(command string, stdin io.Reader, stdout, stderr io.Writer) int
 	notWritable            bool
 	posixTarget            bool
 	cmdTarget              bool
@@ -604,6 +643,7 @@ type networkDriveSeedSetup struct {
 	environmentSecret      bool
 	disjointNetworks       bool
 	noDevice               bool
+	sudoTarget             bool
 }
 
 // TestNetworkDriveInjectionExecCommandPowerShell 覆盖贯通路径：可写名单内的
@@ -708,6 +748,616 @@ func TestNetworkDriveInjectionExecCommandPowerShell(t *testing.T) {
 		strings.Contains(string(encoded), "192.0.2.10") ||
 		strings.Contains(string(encoded), "mount-user") {
 		t.Fatalf("audit row leaked the address, account, or password: %s", encoded)
+	}
+}
+
+// TestNetworkDriveInjectionBackgroundStreamingRemovesStatusLines 覆盖后台注
+// 入与最关键的安全属性：状态行是流式输出的，任务仍在运行、agent 已经能读
+// 到中间输出时，内部状态行标记也绝不能进入任务日志或 exec_output。
+func TestNetworkDriveInjectionBackgroundStreamingRemovesStatusLines(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var commandMu sync.Mutex
+	var commands []string
+	var standardInputs [][]byte
+	runningOutput := strings.Repeat("running-output-", 32)
+
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.streamExec = func(command string, stdin io.Reader, stdout, stderr io.Writer) int {
+			stdinBytes, err := io.ReadAll(stdin)
+			if err != nil {
+				_, _ = stderr.Write([]byte("read standard input: " + err.Error()))
+				return 1
+			}
+			commandMu.Lock()
+			commands = append(commands, command)
+			standardInputs = append(standardInputs, append([]byte(nil), stdinBytes...))
+			commandMu.Unlock()
+
+			if strings.Contains(command, "probe-one ") {
+				for _, match := range driveProbeInvocationPattern.FindAllStringSubmatch(command, -1) {
+					_, _ = fmt.Fprintf(stdout, "SSHMGR-PROBE %s ok 2 \n", match[1])
+				}
+				return 0
+			}
+			markerMatch := driveStatusMarkerPattern.FindStringSubmatch(command)
+			if markerMatch == nil {
+				_, _ = stdout.Write([]byte("unexpected command\n"))
+				return 1
+			}
+			_, _ = fmt.Fprintf(stdout, "SSHMGR-SMBMAP:%s:0:ok\n", markerMatch[1])
+			_, _ = stdout.Write([]byte(runningOutput + "\n"))
+			close(started)
+			<-release
+			_, _ = stdout.Write([]byte("final-output\n"))
+			return 0
+		}
+	})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_background",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": "Get-ChildItem S:\\datasets", "timeout_seconds": 10},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("exec_background failed: err=%v result=%+v", err, result.Content)
+	}
+	var start struct {
+		TaskID            string   `json:"task_id"`
+		Status            string   `json:"status"`
+		InjectionWarnings []string `json:"injection_warnings"`
+	}
+	unmarshalToolJSON(t, result, &start)
+	if start.TaskID == "" || start.Status != bgStatusRunning || len(start.InjectionWarnings) != 0 {
+		t.Fatalf("exec_background output = %+v", start)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background command did not start")
+	}
+	var intermediate BgReadOutput
+	intermediate.Status = bgStatusRunning
+	deadline := time.Now().Add(5 * time.Second)
+	for intermediate.Status == bgStatusRunning && time.Now().Before(deadline) {
+		intermediate = readBackgroundOutput(t, fixture.clientSession, start.TaskID, 0, 0, "text")
+		if strings.Contains(intermediate.Stdout, "running-output") {
+			break
+		}
+	}
+	if !strings.Contains(intermediate.Stdout, "running-output-") {
+		t.Fatalf("running output was not visible before task completion: %+v", intermediate)
+	}
+	if strings.Contains(intermediate.Stdout, networkDriveStatusPrefix) ||
+		strings.Contains(toolResultText(result), networkDriveStatusPrefix) {
+		t.Fatalf("running output leaked a status line marker: %q", intermediate.Stdout)
+	}
+	if strings.Contains(intermediate.Stdout, networkDriveTestPassword) {
+		t.Fatalf("running output leaked the mount password: %q", intermediate.Stdout)
+	}
+
+	close(release)
+	final := waitBackgroundTerminal(t, fixture.clientSession, start.TaskID)
+	if final.Status != bgStatusDone {
+		t.Fatalf("background status = %q, want done", final.Status)
+	}
+	wantOutput := runningOutput + "\nfinal-output\n"
+	if final.Stdout != wantOutput {
+		t.Fatalf("background stdout = %q", final.Stdout)
+	}
+	if strings.Contains(final.Stdout, networkDriveStatusPrefix) {
+		t.Fatalf("background stdout leaked a status line marker: %q", final.Stdout)
+	}
+
+	commandMu.Lock()
+	gotCommands, gotInputs := append([]string(nil), commands...), append([][]byte(nil), standardInputs...)
+	commandMu.Unlock()
+	if len(gotCommands) != 2 || !strings.Contains(gotCommands[0], "probe-one ") ||
+		!strings.Contains(gotCommands[1], "New-SmbMapping") {
+		t.Fatalf("background commands = %#v, want one probe and one wrapped command", gotCommands)
+	}
+	if len(gotInputs[1]) != len(networkDriveTestPassword) || string(gotInputs[1]) != networkDriveTestPassword {
+		t.Fatalf("background standard input = %q, want only the mount password", gotInputs[1])
+	}
+	for _, command := range gotCommands {
+		if strings.Contains(command, networkDriveTestPassword) {
+			t.Fatalf("background command leaked the mount password: %q", command)
+		}
+	}
+
+	endRows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec-bg-end"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(endRows) != 1 ||
+		len(endRows[0].InjectedShareNames) != 1 || endRows[0].InjectedShareNames[0] != "datasets" {
+		t.Fatalf("background end audit injected share names = %#v", endRows)
+	}
+}
+
+// TestNetworkDriveInjectionContextPreviewDoesNotProbe 覆盖执行前预览：未缓
+// 存地址只说明执行时探测，预览本身不触发 445 探测，也不改动进程内缓存。
+func TestNetworkDriveInjectionContextPreviewDoesNotProbe(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, nil)
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_context",
+		Arguments: map[string]any{"server_id": fixture.serverID},
+	})
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("exec_context failed: err=%v result=%+v", err, result)
+	}
+	var output struct {
+		PlannedNetworkDrives []struct {
+			Share       string `json:"share"`
+			Drive       string `json:"drive"`
+			AddressPlan string `json:"address_plan"`
+		} `json:"planned_network_drives"`
+		UninjectedNetworkDrives []struct {
+			Share  string `json:"share"`
+			Drive  string `json:"drive"`
+			Reason string `json:"reason"`
+		} `json:"uninjected_network_drives"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if len(output.PlannedNetworkDrives) != 1 ||
+		output.PlannedNetworkDrives[0].Share != "datasets" ||
+		output.PlannedNetworkDrives[0].Drive != "S" ||
+		output.PlannedNetworkDrives[0].AddressPlan != "执行时探测" {
+		t.Fatalf("planned network drives = %#v", output.PlannedNetworkDrives)
+	}
+	if len(output.UninjectedNetworkDrives) != 0 {
+		t.Fatalf("uninjected network drives = %#v", output.UninjectedNetworkDrives)
+	}
+	if strings.Contains(toolResultText(result), networkDriveTestPassword) ||
+		strings.Contains(toolResultText(result), "192.0.2.10") {
+		t.Fatal("exec_context preview leaked the mount password or address")
+	}
+
+	commands, _ := fixture.fake.recorded()
+	if len(commands) != 1 || strings.Contains(commands[0], "probe-one ") {
+		t.Fatalf("preview commands = %#v, want only the context command", commands)
+	}
+
+	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\datasets")
+	commands, _ = fixture.fake.recorded()
+	if probes := countNetworkDriveProbeCommands(commands); probes != 1 {
+		t.Fatalf("probe commands after preview and execution = %d, want 1: %#v", probes, commands)
+	}
+
+	result, err = fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_context",
+		Arguments: map[string]any{"server_id": fixture.serverID},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("second exec_context failed: err=%v result=%+v", err, result.Content)
+	}
+	unmarshalToolJSON(t, result, &output)
+	if len(output.PlannedNetworkDrives) != 1 ||
+		output.PlannedNetworkDrives[0].AddressPlan != "已缓存地址" {
+		t.Fatalf("cached planned network drives = %#v", output.PlannedNetworkDrives)
+	}
+}
+
+// TestNetworkDriveInjectionContextPreviewReasons 覆盖执行前预览里的未注入
+// 原因：认证失败暂停、读不到合法密码、没有共同网络。
+func TestNetworkDriveInjectionContextPreviewReasons(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*networkDriveSeedSetup)
+		wantShare string
+		wantDrive string
+		wantTexts []string
+	}{
+		{
+			name:      "invalid password",
+			setup:     func(setup *networkDriveSeedSetup) { setup.invalidDatasetPassword = true },
+			wantShare: "datasets",
+			wantDrive: "S",
+			wantTexts: []string{"挂载密码在 Windows 上不是合法 UTF-8"},
+		},
+		{
+			name:      "no common network",
+			setup:     func(setup *networkDriveSeedSetup) { setup.disjointNetworks = true },
+			wantShare: "datasets",
+			wantDrive: "S",
+			wantTexts: []string{"没有共同网络", "未探测"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := seedNetworkDriveVault(t, test.setup)
+			result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+				Name:      "exec_context",
+				Arguments: map[string]any{"server_id": fixture.serverID},
+			})
+			if err != nil || result.IsError {
+				t.Fatalf("exec_context failed: err=%v result=%+v", err, result)
+			}
+			var output struct {
+				PlannedNetworkDrives    []PlannedNetworkDrive    `json:"planned_network_drives"`
+				UninjectedNetworkDrives []UninjectedNetworkDrive `json:"uninjected_network_drives"`
+			}
+			unmarshalToolJSON(t, result, &output)
+			if len(output.PlannedNetworkDrives) != 0 {
+				t.Fatalf("planned drives = %#v, want none", output.PlannedNetworkDrives)
+			}
+			if len(output.UninjectedNetworkDrives) != 1 ||
+				output.UninjectedNetworkDrives[0].Share != test.wantShare ||
+				output.UninjectedNetworkDrives[0].Drive != test.wantDrive {
+				t.Fatalf("uninjected drives = %#v", output.UninjectedNetworkDrives)
+			}
+			reason := output.UninjectedNetworkDrives[0].Reason
+			for _, want := range test.wantTexts {
+				if !strings.Contains(reason, want) {
+					t.Fatalf("reason %q missing %q", reason, want)
+				}
+			}
+		})
+	}
+}
+
+// TestNetworkDriveInjectionContextPreviewKeepsAuthenticationPause 证明预览只
+// 读暂停状态：多次 exec_context 既显示暂停，也不清理它，后续执行仍不注入。
+func TestNetworkDriveInjectionContextPreviewKeepsAuthenticationPause(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.mapStatus = "error-1326"
+	})
+	stdout := execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\datasets")
+	if !strings.Contains(stdout, networkDriveReasonAuthentication) {
+		t.Fatalf("first command did not report authentication failure: %q", stdout)
+	}
+
+	for range 2 {
+		result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+			Name:      "exec_context",
+			Arguments: map[string]any{"server_id": fixture.serverID},
+		})
+		if err != nil || result.IsError {
+			t.Fatalf("exec_context failed: err=%v result=%+v", err, result)
+		}
+		var output struct {
+			UninjectedNetworkDrives []UninjectedNetworkDrive `json:"uninjected_network_drives"`
+		}
+		unmarshalToolJSON(t, result, &output)
+		if len(output.UninjectedNetworkDrives) != 1 ||
+			output.UninjectedNetworkDrives[0].Share != "datasets" ||
+			output.UninjectedNetworkDrives[0].Reason != networkDriveReasonPausedPreview {
+			t.Fatalf("paused preview = %#v", output.UninjectedNetworkDrives)
+		}
+	}
+
+	stdout = execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\datasets")
+	if !strings.Contains(stdout, "共享 datasets 因认证失败已暂停注入") {
+		t.Fatalf("pause was cleared by preview: %q", stdout)
+	}
+	commands, _ := fixture.fake.recorded()
+	if probes := countNetworkDriveProbeCommands(commands); probes != 1 {
+		t.Fatalf("probe commands = %d, want only the initial probe: %#v", probes, commands)
+	}
+}
+
+// TestNetworkDriveInjectionWindowsSudoDoesNotInject 覆盖前台、后台与执行上
+// 下文预览：Windows 提权层不注入网络盘符，并给出固定说明。
+func TestNetworkDriveInjectionWindowsSudoDoesNotInject(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.sudoTarget = true
+	})
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": "Write-Output ran", "sudo": true},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("exec_command(sudo) failed: err=%v result=%+v", err, result)
+	}
+	var output struct {
+		Stdout                string                 `json:"stdout"`
+		InjectedNetworkDrives []InjectedNetworkDrive `json:"injected_network_drives"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if output.Stdout != "plain-command-output\n"+networkDriveReasonPrivileged+"\n" {
+		t.Fatalf("exec_command(sudo) stdout = %q", output.Stdout)
+	}
+	if len(output.InjectedNetworkDrives) != 0 {
+		t.Fatalf("exec_command(sudo) injected drives = %#v", output.InjectedNetworkDrives)
+	}
+
+	contextResult, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_context",
+		Arguments: map[string]any{"server_id": fixture.serverID, "sudo": true},
+	})
+	if err != nil || contextResult.IsError {
+		t.Fatalf("exec_context(sudo) failed: err=%v result=%+v", err, contextResult)
+	}
+	var contextOutput struct {
+		UninjectedNetworkDrives []UninjectedNetworkDrive `json:"uninjected_network_drives"`
+	}
+	unmarshalToolJSON(t, contextResult, &contextOutput)
+	if len(contextOutput.UninjectedNetworkDrives) != 1 ||
+		contextOutput.UninjectedNetworkDrives[0].Reason != networkDriveReasonPrivileged {
+		t.Fatalf("exec_context(sudo) uninjected drives = %#v", contextOutput.UninjectedNetworkDrives)
+	}
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 2 || strings.Contains(commands[0], "New-SmbMapping") ||
+		strings.Contains(commands[1], "New-SmbMapping") {
+		t.Fatalf("sudo commands unexpectedly injected a network drive: %#v", commands)
+	}
+	for _, input := range inputs {
+		if strings.Contains(string(input), networkDriveTestPassword) {
+			t.Fatal("sudo execution sent the mount password")
+		}
+	}
+
+	backgroundFixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.sudoTarget = true
+	})
+	startResult, err := backgroundFixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_background",
+		Arguments: map[string]any{"server_id": backgroundFixture.serverID, "command": "Write-Output ran", "sudo": true, "timeout_seconds": 5},
+	})
+	if err != nil || startResult.IsError {
+		t.Fatalf("exec_background(sudo) failed: err=%v result=%+v", err, startResult)
+	}
+	var start struct {
+		TaskID            string   `json:"task_id"`
+		InjectionWarnings []string `json:"injection_warnings"`
+	}
+	unmarshalToolJSON(t, startResult, &start)
+	if len(start.InjectionWarnings) != 1 || start.InjectionWarnings[0] != networkDriveReasonPrivileged {
+		t.Fatalf("exec_background(sudo) start warnings = %#v", start.InjectionWarnings)
+	}
+	final := waitBackgroundTerminal(t, backgroundFixture.clientSession, start.TaskID)
+	if final.Stdout != "plain-command-output\n"+networkDriveReasonPrivileged+"\n" {
+		t.Fatalf("exec_background(sudo) stdout = %q", final.Stdout)
+	}
+	commands, _ = backgroundFixture.fake.recorded()
+	if len(commands) != 1 || strings.Contains(commands[0], "New-SmbMapping") {
+		t.Fatalf("background sudo commands unexpectedly injected a network drive: %#v", commands)
+	}
+}
+
+// TestNetworkDriveInjectionBackgroundAuthenticationFailurePauses 后台的认证
+// 失败与前台使用同一份进程内暂停状态：下一条后台命令不再发送挂载密码。
+func TestNetworkDriveInjectionBackgroundAuthenticationFailurePauses(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.mapStatus = "error-86"
+	})
+
+	startBackground := func() BgStartOutput {
+		t.Helper()
+		result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+			Name:      "exec_background",
+			Arguments: map[string]any{"server_id": fixture.serverID, "command": "Get-ChildItem S:\\datasets", "timeout_seconds": 5},
+		})
+		if err != nil || result.IsError {
+			t.Fatalf("exec_background failed: err=%v result=%+v", err, result)
+		}
+		if strings.Contains(toolResultText(result), networkDriveTestPassword) {
+			t.Fatal("background start result leaked the mount password")
+		}
+		var start BgStartOutput
+		unmarshalToolJSON(t, result, &start)
+		if start.TaskID == "" {
+			t.Fatalf("background start output = %+v", start)
+		}
+		return start
+	}
+
+	first := startBackground()
+	firstFinal := waitBackgroundTerminal(t, fixture.clientSession, first.TaskID)
+	if !strings.Contains(firstFinal.Stdout, networkDriveReasonAuthentication) {
+		t.Fatalf("first background stdout missing authentication warning: %q", firstFinal.Stdout)
+	}
+	second := startBackground()
+	secondFinal := waitBackgroundTerminal(t, fixture.clientSession, second.TaskID)
+	if !strings.Contains(secondFinal.Stdout, "共享 datasets 因认证失败已暂停注入") {
+		t.Fatalf("second background stdout missing pause notice: %q", secondFinal.Stdout)
+	}
+
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 3 {
+		t.Fatalf("commands = %#v, want probe/mapping then one plain paused command", commands)
+	}
+	if strings.Contains(commands[2], "New-SmbMapping") || len(inputs) != 3 || len(inputs[2]) != 0 {
+		t.Fatalf("paused background command still injected: command=%q standard input=%q", commands[2], inputs[2])
+	}
+	for _, command := range commands {
+		if strings.Contains(command, networkDriveTestPassword) {
+			t.Fatal("background command leaked the mount password")
+		}
+	}
+}
+
+// TestNetworkDriveInjectionBackgroundNetworkFailureUpdatesAddressCache 后台的
+// 网络类映射失败同样作废缓存地址，下一条后台命令重新探测并改选下一候选。
+func TestNetworkDriveInjectionBackgroundNetworkFailureUpdatesAddressCache(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.mapStatus = "error-64"
+	})
+
+	startBackground := func() BgStartOutput {
+		t.Helper()
+		result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+			Name:      "exec_background",
+			Arguments: map[string]any{"server_id": fixture.serverID, "command": "Get-ChildItem S:\\datasets", "timeout_seconds": 5},
+		})
+		if err != nil || result.IsError {
+			t.Fatalf("exec_background failed: err=%v result=%+v", err, result)
+		}
+		var start BgStartOutput
+		unmarshalToolJSON(t, result, &start)
+		if start.TaskID == "" {
+			t.Fatalf("background start output = %+v", start)
+		}
+		return start
+	}
+
+	first := startBackground()
+	firstFinal := waitBackgroundTerminal(t, fixture.clientSession, first.TaskID)
+	if !strings.Contains(firstFinal.Stdout, "网络类失败（系统错误 64）") ||
+		!strings.Contains(firstFinal.Stdout, networkDriveHintNetwork) {
+		t.Fatalf("first background stdout missing network warning: %q", firstFinal.Stdout)
+	}
+	fixture.fake.setMapStatus("ok")
+	second := startBackground()
+	secondFinal := waitBackgroundTerminal(t, fixture.clientSession, second.TaskID)
+	if strings.Contains(secondFinal.Stdout, "网络盘符未注入") {
+		t.Fatalf("second background stdout unexpectedly warned: %q", secondFinal.Stdout)
+	}
+
+	commands, _ := fixture.fake.recorded()
+	if len(commands) != 4 || countNetworkDriveProbeCommands(commands) != 2 {
+		t.Fatalf("commands = %#v, want two probe and mapping pairs", commands)
+	}
+	if !strings.Contains(commands[1], `\\192.0.2.10\datasets`) {
+		t.Fatalf("first mapping did not use the physical address: %q", commands[1])
+	}
+	if !strings.Contains(commands[3], `\\100.64.10.10\datasets`) {
+		t.Fatalf("second mapping did not use the next address: %q", commands[3])
+	}
+	endRows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec-bg-end"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditByTask := map[string]store.AuditRow{}
+	for _, row := range endRows {
+		auditByTask[row.Command] = row
+	}
+	if len(endRows) != 2 || len(auditByTask[first.TaskID].InjectedShareNames) != 0 ||
+		len(auditByTask[second.TaskID].InjectedShareNames) != 1 ||
+		auditByTask[second.TaskID].InjectedShareNames[0] != "datasets" {
+		t.Fatalf("background end audit rows = %#v", endRows)
+	}
+}
+
+// TestNetworkDriveFileTransferAndForwardingDoNotInject 文件传输与端口转发走
+// 独立 SSH 会话，不触发网络盘符注入或 445 探测。
+func TestNetworkDriveFileTransferAndForwardingDoNotInject(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, nil)
+	localPath := filepath.Join(t.TempDir(), "source.txt")
+	remotePath := filepath.Join(t.TempDir(), "uploaded.txt")
+	if err := os.WriteFile(localPath, []byte("transfer-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	uploadResult, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "upload_file",
+		Arguments: map[string]any{"server_id": fixture.serverID, "local_path": localPath, "remote_path": remotePath},
+	})
+	if err != nil || uploadResult.IsError {
+		t.Fatalf("upload_file failed: err=%v result=%+v", err, uploadResult)
+	}
+	downloadResult, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "download_file",
+		Arguments: map[string]any{"server_id": fixture.serverID, "path": remotePath},
+	})
+	if err != nil || downloadResult.IsError {
+		t.Fatalf("download_file failed: err=%v result=%+v", err, downloadResult)
+	}
+	var download struct {
+		Content string `json:"content"`
+	}
+	unmarshalToolJSON(t, downloadResult, &download)
+	if download.Content != "transfer-content" {
+		t.Fatalf("downloaded content = %q", download.Content)
+	}
+
+	forwardResult, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "forward_port",
+		Arguments: map[string]any{"server_id": fixture.serverID, "remote_host": "127.0.0.1", "remote_port": 22},
+	})
+	if err != nil || forwardResult.IsError {
+		t.Fatalf("forward_port failed: err=%v result=%+v", err, forwardResult)
+	}
+	var forward struct {
+		TunnelID string `json:"tunnel_id"`
+	}
+	unmarshalToolJSON(t, forwardResult, &forward)
+	closeResult, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "close_port",
+		Arguments: map[string]any{"tunnel_id": forward.TunnelID},
+	})
+	if err != nil || closeResult.IsError {
+		t.Fatalf("close_port failed: err=%v result=%+v", err, closeResult)
+	}
+
+	commands, _ := fixture.fake.recorded()
+	if len(commands) != 0 {
+		t.Fatalf("file transfer or forwarding executed commands: %#v", commands)
+	}
+	if strings.Contains(toolResultText(uploadResult), networkDriveTestPassword) ||
+		strings.Contains(toolResultText(downloadResult), networkDriveTestPassword) ||
+		strings.Contains(toolResultText(forwardResult), networkDriveTestPassword) {
+		t.Fatal("file transfer or forwarding leaked the mount password")
+	}
+}
+
+// TestNetworkDriveToolDescriptionsExplainVisibility 钉住工具说明：说明网络
+// 盘符只在命令会话内可见、密码不出现在目标机进程命令行，并提醒文件传输
+// 会话看不到盘符。
+func TestNetworkDriveToolDescriptionsExplainVisibility(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, nil)
+	toolList, err := fixture.clientSession.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptions := map[string]string{}
+	for _, tool := range toolList.Tools {
+		descriptions[tool.Name] = tool.Description
+	}
+	for _, name := range []string{"exec_command", "exec_background"} {
+		for _, want := range []string{
+			"Windows network drives are mapped before each command in that command's SSH session",
+			"the mapping password never appears in a target process command line",
+			"desktop sessions, Windows services, scheduled tasks, upload_file/download_file sessions, and processes that keep running after the command ends cannot see those drives",
+		} {
+			if !strings.Contains(descriptions[name], want) {
+				t.Fatalf("%s description missing %q: %s", name, want, descriptions[name])
+			}
+		}
+	}
+	for _, name := range []string{"upload_file", "download_file"} {
+		if !strings.Contains(descriptions[name],
+			"This separate SFTP session cannot see Windows network drives mapped for exec_command or exec_background") {
+			t.Fatalf("%s description missing the network-drive visibility limit: %s", name, descriptions[name])
+		}
+	}
+	if !strings.Contains(descriptions["list_shares"],
+		"For Windows servers the fixed drive letter is mapped before each exec_command or exec_background command in that command's SSH session") ||
+		!strings.Contains(descriptions["list_shares"], "desktop sessions, Windows services, scheduled tasks, file transfers, and processes that outlive the command cannot see it") {
+		t.Fatalf("list_shares description missing Windows drive usage: %s", descriptions["list_shares"])
+	}
+	if !strings.Contains(descriptions["exec_context"], "planned_network_drives") ||
+		!strings.Contains(descriptions["exec_context"], "uninjected_network_drives") {
+		t.Fatalf("exec_context description missing drive preview fields: %s", descriptions["exec_context"])
+	}
+
+	listResult, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "list_shares",
+		Arguments: map[string]any{"server": fixture.serverID, "live_check": true},
+	})
+	if err != nil || listResult.IsError {
+		t.Fatalf("list_shares failed: err=%v result=%+v", err, listResult)
+	}
+	var listOutput ListSharesOutput
+	unmarshalToolJSON(t, listResult, &listOutput)
+	if len(listOutput.Shares) != 1 || len(listOutput.Shares[0].Servers) != 1 ||
+		len(listOutput.Shares[0].Servers[0].MountNotes) != 1 {
+		t.Fatalf("list_shares output = %+v", listOutput)
+	}
+	note := listOutput.Shares[0].Servers[0].MountNotes[0]
+	for _, want := range []string{"会话内注入", "文件传输", "密码不出现在目标机进程命令行中"} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("list_shares Windows note %q missing %q", note, want)
+		}
 	}
 }
 

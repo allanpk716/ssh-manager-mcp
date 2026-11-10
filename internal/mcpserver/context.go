@@ -235,6 +235,7 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 		return
 	}
 	injectionPlan := buildEnvironmentInjectionPlan(st, srv, sudo)
+	plannedDrives, uninjectedDrives := previewNetworkDriveInjection(st, profileID, srv, sudo)
 
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
@@ -315,5 +316,7 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 	out.ConnectionNotes = connectionNotes
 	out.InjectedEnvironmentNames = injectionPlan.injectedNames()
 	out.UninjectedEnvironmentVariables = injectionPlan.uninjectedVariables()
+	out.PlannedNetworkDrives = plannedDrives
+	out.UninjectedNetworkDrives = uninjectedDrives
 	return
 }

@@ -60,6 +60,10 @@ func (p environmentInjectionPlan) execItems() []sshbroker.ExecInjection {
 }
 
 func (p environmentInjectionPlan) execOption() sshbroker.ExecOption {
+	return p.execOptionWithItems(p.execItems())
+}
+
+func (p environmentInjectionPlan) execOptionWithItems(items []sshbroker.ExecInjection) sshbroker.ExecOption {
 	layer := sshbroker.ExecLayerNormal
 	if p.privileged {
 		layer = sshbroker.ExecLayerPrivileged
@@ -67,7 +71,7 @@ func (p environmentInjectionPlan) execOption() sshbroker.ExecOption {
 	return sshbroker.WithPreCommandInjection(sshbroker.ExecInjectionOptions{
 		ShellType:   models.NormalizeShellType(string(p.shellType)),
 		TargetLayer: layer,
-		Items:       p.execItems(),
+		Items:       items,
 	})
 }
 

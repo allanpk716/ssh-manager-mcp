@@ -122,6 +122,21 @@ type UninjectedEnvironmentVariable struct {
 	Reason          string `json:"reason" jsonschema:"why this environment variable will not be injected; never includes the value"`
 }
 
+// PlannedNetworkDrive 是 exec_context 预估的一条 Windows 网络盘符。地址只
+// 用执行方式描述，绝不返回 IP 或域名。
+type PlannedNetworkDrive struct {
+	Share       string `json:"share" jsonschema:"share name sshmgr plans to map before a normal-layer command"`
+	Drive       string `json:"drive" jsonschema:"drive letter sshmgr plans to map, for example S"`
+	AddressPlan string `json:"address_plan" jsonschema:"cached address, or address selection deferred until execution; never an IP address or domain name"`
+}
+
+// UninjectedNetworkDrive 是执行层不会注入的一条 Windows 网络盘符及原因。
+type UninjectedNetworkDrive struct {
+	Share  string `json:"share" jsonschema:"share name whose network drive will not be injected"`
+	Drive  string `json:"drive" jsonschema:"registered drive letter that will not be injected"`
+	Reason string `json:"reason" jsonschema:"why the network drive will not be injected; never an address, mount account, or password"`
+}
+
 // ExecContextOutput is the exec_context tool output (Plan 41 §3): the true
 // execution context of the exec channel, captured in ONE round — the manual
 // alternative (hand-assembling `id; cat /proc/self/uid_map; …`) rides the
@@ -146,6 +161,8 @@ type ExecContextOutput struct {
 	Elevated                       bool                            `json:"elevated" jsonschema:"true iff captured via the sudo=true path"`
 	InjectedEnvironmentNames       []string                        `json:"injected_environment_names" jsonschema:"environment variable names this execution layer will inject; empty means none; values are never included"`
 	UninjectedEnvironmentVariables []UninjectedEnvironmentVariable `json:"uninjected_environment_variables" jsonschema:"environment variables this execution layer cannot inject, with reasons; empty means none"`
+	PlannedNetworkDrives           []PlannedNetworkDrive           `json:"planned_network_drives" jsonschema:"Windows network drives a normal-layer command is planned to map; empty means none"`
+	UninjectedNetworkDrives        []UninjectedNetworkDrive        `json:"uninjected_network_drives" jsonschema:"Windows network drives this execution layer will not inject, with reasons; empty means none"`
 }
 
 // DownloadInput is the download_file tool input.
@@ -254,7 +271,7 @@ type BgStartOutput struct {
 	TaskID                  string   `json:"task_id" jsonschema:"opaque task id; poll its output with exec_output, stop it with exec_stop"`
 	EffectiveTimeoutSeconds int      `json:"effective_timeout_seconds" jsonschema:"the clamped timeout actually in effect, in seconds (default and cap: 86400 = 24h)"`
 	Status                  string   `json:"status" jsonschema:"task status right after start; running"`
-	InjectionWarnings       []string `json:"injection_warnings,omitempty" jsonschema:"variables that could not be injected before this task; the same warning lines are appended to stdout when the task finishes"`
+	InjectionWarnings       []string `json:"injection_warnings,omitempty" jsonschema:"startup injection warnings (for example an environment variable or Windows network drive that could not be planned); the same warning lines are appended to stdout when the task finishes, and mapping-result warnings are appended only after the task finishes"`
 }
 
 // ExecOutputInput is the exec_output tool input (Plan 32 T7). The numeric

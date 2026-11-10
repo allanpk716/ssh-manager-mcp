@@ -30,6 +30,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"sync"
 	"time"
 
 	"ssh-manager-mcp/internal/dialplan"
@@ -129,12 +131,56 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 	// 超限行归本层) → 按服务器条目拨号的统一入口 (connect 三态行由 Start 落) → Insert
 	// (start(ok) 行在持锁段内、goroutine 启动前) → runTask goroutine。
 	dialSource := dialplan.NewStoreSource(st, "")
+	var driveWarningLines []string
+	prepareExec := func(ctx context.Context, cli *sshbroker.Client, _ sshbroker.ExecOption) BgExecPreparation {
+		drivePlan := buildNetworkDriveInjectionPlan(ctx, st, profileID, srv, sudo, cli)
+		driveWarningLines = drivePlan.warningLines()
+		initialWarningCount := len(drivePlan.warnings)
+		injectionItems := injectionPlan.execItems()
+		injectionItems = append(injectionItems, drivePlan.injectionItems()...)
+		statusMutex := &sync.Mutex{}
+		var stdoutFilter, stderrFilter *networkDriveStatusFilter
+		wrapStdout := func(writer io.Writer) io.Writer {
+			stdoutFilter = newNetworkDriveStatusFilter(&drivePlan, writer, statusMutex)
+			return stdoutFilter
+		}
+		wrapStderr := func(writer io.Writer) io.Writer {
+			stderrFilter = newNetworkDriveStatusFilter(&drivePlan, writer, statusMutex)
+			return stderrFilter
+		}
+		var wrapStdoutOption, wrapStderrOption func(io.Writer) io.Writer
+		if len(drivePlan.items) > 0 {
+			wrapStdoutOption, wrapStderrOption = wrapStdout, wrapStderr
+		}
+		finish := func() BgExecOutcome {
+			if stdoutFilter != nil {
+				_ = stdoutFilter.Flush()
+			}
+			if stderrFilter != nil {
+				_ = stderrFilter.Flush()
+			}
+			_, _ = drivePlan.consumeStatusLines("", "")
+			return BgExecOutcome{
+				InjectionWarnings:  networkDriveWarningLines(drivePlan.warnings[initialWarningCount:], nil),
+				InjectedShareNames: drivePlan.injectedShareNames(),
+			}
+		}
+		return BgExecPreparation{
+			ExecOption:        injectionPlan.execOptionWithItems(injectionItems),
+			ExtraTimeout:      drivePlan.extraTimeout,
+			InjectionWarnings: driveWarningLines,
+			WrapStdout:        wrapStdoutOption,
+			WrapStderr:        wrapStderrOption,
+			Finish:            finish,
+		}
+	}
 	tid, eff, connectionNotes, stErr := mgr.Start(ctx, st, BgStartSpec{
 		ProjectID: projectID, ServerID: serverID, Command: command,
 		Sudo: sudo, SudoPass: sudoPass, TimeoutSec: timeoutSec,
 		Server: srv, Auth: auth, HostKeys: hostKeyStoreFor(st, hk),
 		DialTopology: dialSource, DialSuccessCache: dialSource,
 		ExecOption:               injectionPlan.execOption(),
+		PrepareExec:              prepareExec,
 		InjectedEnvironmentNames: injectionPlan.injectedNames(),
 		InjectionWarnings:        injectionPlan.warningLines(),
 	})
@@ -160,7 +206,7 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 		EffectiveTimeoutSeconds: int(eff.Seconds()),
 		Status:                  bgStatusRunning,
 		ConnectionNotesOutput:   ConnectionNotesOutput{ConnectionNotes: connectionNotes},
-		InjectionWarnings:       injectionPlan.warningLines(),
+		InjectionWarnings:       append(append([]string(nil), injectionPlan.warningLines()...), driveWarningLines...),
 	}
 	return
 }

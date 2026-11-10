@@ -1,10 +1,12 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +44,10 @@ const (
 	networkDriveReasonStatusUnreadable = "注入步骤没有返回可识别的结果"
 	networkDriveReasonAuthentication   = "共享密码认证失败，已暂停注入，请同步或检查机密项"
 	networkDriveHintNetwork            = "提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制"
+	networkDriveReasonPrivileged       = "Windows 提权层不注入网络盘符"
+	networkDriveAddressPlanCached      = "已缓存地址"
+	networkDriveAddressPlanDeferred    = "执行时探测"
+	networkDriveReasonPausedPreview    = "共享因认证失败已暂停注入"
 )
 
 // networkDriveWarning 是一个共享没有注入成功的说明，只包含共享名、盘符
@@ -176,6 +182,33 @@ func (c *networkDriveAddressSelectionCache) view(key networkDriveAddressCacheKey
 	}
 }
 
+// peek 与 view 给出同一份缓存结论，但绝不删除过期项或旧版本项。exec_context
+// 只是预览，不能改动选址缓存或认证失败暂停状态。
+func (c *networkDriveAddressSelectionCache) peek(key networkDriveAddressCacheKey) networkDriveAddressCacheView {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || !c.now().Before(entry.expiresAt) {
+		return networkDriveAddressCacheView{}
+	}
+	if entry.address != "" && !entry.unavailable[entry.address] {
+		return networkDriveAddressCacheView{ready: true, address: entry.address, note: entry.note}
+	}
+	probeList := make([]networkDriveAddressCandidate, 0, len(entry.candidates))
+	unavailable := make(map[string]bool, len(entry.unavailable))
+	for address, marked := range entry.unavailable {
+		unavailable[address] = marked
+	}
+	for _, candidate := range entry.candidates {
+		if !entry.unavailable[candidate.Address] {
+			probeList = append(probeList, candidate)
+		}
+	}
+	return networkDriveAddressCacheView{
+		waiting: len(probeList) == 0, probeList: probeList, unavailable: unavailable,
+	}
+}
+
 // record 写入一次选址结论。如果是在作废地址后的重选，保留原来的过期时间
 // 与作废标记；全新选址则按当前时间重新计算 10 分钟存活期。
 func (c *networkDriveAddressSelectionCache) record(
@@ -236,7 +269,7 @@ func buildNetworkDriveInjectionPlan(
 	server *models.Server, privileged bool, executor networkDriveProbeExecutor,
 ) networkDriveInjectionPlan {
 	plan := networkDriveInjectionPlan{statuses: map[int]string{}}
-	if st == nil || server == nil || privileged || executor == nil {
+	if st == nil || server == nil || executor == nil {
 		return plan
 	}
 	shellType := models.NormalizeShellType(string(server.ShellType))
@@ -249,6 +282,10 @@ func buildNetworkDriveInjectionPlan(
 		return plan
 	}
 	if len(shares) == 0 {
+		return plan
+	}
+	if privileged {
+		plan.warn(networkDriveWarning{Notice: networkDriveReasonPrivileged})
 		return plan
 	}
 	visible, err := sessionVisibleServerIDs(st, profileID, "")
@@ -328,6 +365,85 @@ func buildNetworkDriveInjectionPlan(
 	return plan
 }
 
+// previewNetworkDriveInjection 为 exec_context 求执行层预览。它只读登记、
+// 挂载密码是否可读与进程内缓存快照，绝不在目标服务器上探测 445，也绝不
+// 改动选址缓存或认证失败暂停状态。
+func previewNetworkDriveInjection(
+	st *store.Store, profileID string, server *models.Server, privileged bool,
+) (planned []PlannedNetworkDrive, uninjected []UninjectedNetworkDrive) {
+	if st == nil || server == nil {
+		return []PlannedNetworkDrive{}, []UninjectedNetworkDrive{}
+	}
+	shellType := models.NormalizeShellType(string(server.ShellType))
+	if shellType != models.ShellPowerShell && shellType != models.ShellWindowsCmd {
+		return []PlannedNetworkDrive{}, []UninjectedNetworkDrive{}
+	}
+	shares, err := st.ListSharedStorages(store.SharedStorageFilter{Server: server.ID})
+	if err != nil {
+		return []PlannedNetworkDrive{}, []UninjectedNetworkDrive{{Reason: networkDriveReasonListFailed}}
+	}
+	if len(shares) == 0 {
+		return []PlannedNetworkDrive{}, []UninjectedNetworkDrive{}
+	}
+	visible, err := sessionVisibleServerIDs(st, profileID, "")
+	if err != nil {
+		return []PlannedNetworkDrive{}, []UninjectedNetworkDrive{{Reason: networkDriveReasonVisibleFailed}}
+	}
+	planned = []PlannedNetworkDrive{}
+	uninjected = []UninjectedNetworkDrive{}
+	for _, share := range shares {
+		if share == nil || !networkDriveShareVisible(share, visible, server.ID) {
+			continue
+		}
+		uninject := func(reason string) {
+			uninjected = append(uninjected, UninjectedNetworkDrive{
+				Share: share.Name, Drive: share.Drive, Reason: reason,
+			})
+		}
+		if privileged {
+			uninject(networkDriveReasonPrivileged)
+			continue
+		}
+		if networkDriveAuthenticationPauseMatches(share.ID, share.Version) {
+			uninject(networkDriveReasonPausedPreview)
+			continue
+		}
+		if _, reason := networkDriveMountPassword(st, share); reason != "" {
+			uninject(reason)
+			continue
+		}
+		if !networkDriveScriptValuesSafe(share) {
+			uninject(networkDriveReasonUnsafeValue)
+			continue
+		}
+		candidatePlan := networkDrivePlanAddressCandidates(st, server, share)
+		if candidatePlan.Reason != "" {
+			uninject(candidatePlan.Reason)
+			continue
+		}
+		key := networkDriveAddressCacheKey{ServerID: server.ID, Share: share.Name, Version: share.Version}
+		view := networkDriveAddressCache.peek(key)
+		addressPlan := networkDriveAddressPlanDeferred
+		if view.ready {
+			addressPlan = networkDriveAddressPlanCached
+		} else if view.waiting {
+			uninject(networkDriveWaitingReason(candidatePlan.Candidates))
+			continue
+		}
+		planned = append(planned, PlannedNetworkDrive{
+			Share: share.Name, Drive: share.Drive, AddressPlan: addressPlan,
+		})
+	}
+	sort.Slice(planned, func(i, j int) bool { return planned[i].Share < planned[j].Share })
+	sort.Slice(uninjected, func(i, j int) bool {
+		if uninjected[i].Share == uninjected[j].Share {
+			return uninjected[i].Reason < uninjected[j].Reason
+		}
+		return uninjected[i].Share < uninjected[j].Share
+	})
+	return planned, uninjected
+}
+
 // networkDriveAuthenticationPaused 判断共享是否处于认证失败暂停；快照中的
 // 版本号已经变化时先解除暂停，让新登记自动恢复注入。
 func networkDriveAuthenticationPaused(shareID string, version int64) bool {
@@ -342,6 +458,15 @@ func networkDriveAuthenticationPaused(shareID string, version int64) bool {
 		return false
 	}
 	return true
+}
+
+// networkDriveAuthenticationPauseMatches 只读地判断版本号是否仍处于暂停。
+// exec_context 预览调用它，不能像执行路径那样清理已经过期的暂停记录。
+func networkDriveAuthenticationPauseMatches(shareID string, version int64) bool {
+	networkDriveAuthenticationPauseState.Lock()
+	defer networkDriveAuthenticationPauseState.Unlock()
+	pausedVersion, exists := networkDriveAuthenticationPauseState.versions[shareID]
+	return exists && pausedVersion == version
 }
 
 // pauseNetworkDriveAuthentication 记录认证失败时的共享存储版本号。之后同
@@ -475,32 +600,34 @@ type networkDriveAddressSelection struct {
 	Note    string
 }
 
-// networkDriveSelectAddress 复用 mount_share 的共同网络候选规划与连通探测
-// 固定命令，在目标服务器上经一次独立 SSH 执行探测 445，取排序最靠前的连
-// 通地址。选中地址按（服务器条目、共享、共享存储版本号）在进程内缓存
-// 10 分钟；网络类映射失败作废的地址不再进入后续探测。
-func networkDriveSelectAddress(
-	ctx context.Context, st *store.Store, server *models.Server,
-	share *models.SharedStorage, executor networkDriveProbeExecutor,
-) networkDriveAddressSelection {
+// networkDriveAddressCandidatePlan 是共同网络候选规划的纯结果：失败时给出
+// 不含地址的原因，成功时给出候选地址元数据。
+type networkDriveAddressCandidatePlan struct {
+	Candidates []networkDriveAddressCandidate
+	Reason     string
+}
+
+func networkDrivePlanAddressCandidates(
+	st *store.Store, server *models.Server, share *models.SharedStorage,
+) networkDriveAddressCandidatePlan {
 	providerMemberships, providerErr := st.ListNetworkMembershipsByRegistration(share.DeviceName)
 	if server.DeviceID == "" {
-		return networkDriveAddressSelection{Reason: networkDriveNoDeviceReason(providerMemberships, providerErr)}
+		return networkDriveAddressCandidatePlan{Reason: networkDriveNoDeviceReason(providerMemberships, providerErr)}
 	}
 	targetDevice, err := st.GetDeviceByID(server.DeviceID)
 	if err != nil || targetDevice == nil {
-		return networkDriveAddressSelection{Reason: networkDriveNoDeviceReason(providerMemberships, providerErr)}
+		return networkDriveAddressCandidatePlan{Reason: networkDriveNoDeviceReason(providerMemberships, providerErr)}
 	}
 	targetMemberships, err := st.ListNetworkMembershipsByRegistration(targetDevice.Name)
 	if err != nil {
-		return networkDriveAddressSelection{Reason: networkDriveReasonProbeFailed}
+		return networkDriveAddressCandidatePlan{Reason: networkDriveReasonProbeFailed}
 	}
 	if providerErr != nil {
-		return networkDriveAddressSelection{Reason: networkDriveReasonProbeFailed}
+		return networkDriveAddressCandidatePlan{Reason: networkDriveReasonProbeFailed}
 	}
 	addressPlan := sshbroker.PlanCommonNetworkAddresses(providerMemberships, targetMemberships)
 	if len(addressPlan.Candidates) == 0 {
-		return networkDriveAddressSelection{Reason: networkDriveNoCommonNetworkReason(
+		return networkDriveAddressCandidatePlan{Reason: networkDriveNoCommonNetworkReason(
 			providerMemberships, targetMemberships)}
 	}
 	candidates := make([]networkDriveAddressCandidate, 0, len(addressPlan.Candidates))
@@ -511,6 +638,22 @@ func networkDriveSelectAddress(
 			Physical: candidate.Source == sshbroker.DialAddressPhysical,
 		})
 	}
+	return networkDriveAddressCandidatePlan{Candidates: candidates}
+}
+
+// networkDriveSelectAddress 复用 mount_share 的共同网络候选规划与连通探测
+// 固定命令，在目标服务器上经一次独立 SSH 执行探测 445，取排序最靠前的连
+// 通地址。选中地址按（服务器条目、共享、共享存储版本号）在进程内缓存
+// 10 分钟；网络类映射失败作废的地址不再进入后续探测。
+func networkDriveSelectAddress(
+	ctx context.Context, st *store.Store, server *models.Server,
+	share *models.SharedStorage, executor networkDriveProbeExecutor,
+) networkDriveAddressSelection {
+	candidatePlan := networkDrivePlanAddressCandidates(st, server, share)
+	if candidatePlan.Reason != "" {
+		return networkDriveAddressSelection{Reason: candidatePlan.Reason}
+	}
+	candidates := candidatePlan.Candidates
 	cacheKey := networkDriveAddressCacheKey{ServerID: server.ID, Share: share.Name, Version: share.Version}
 	view := networkDriveAddressCache.view(cacheKey)
 	if view.ready {
@@ -635,6 +778,150 @@ func newNetworkDriveStatusMarker() (string, error) {
 	return hex.EncodeToString(buffer), nil
 }
 
+// networkDriveStatusFilter 是后台任务专用的流式状态行过滤器。它包在任务
+// 日志写入器外面：远端字节进入日志与输出遮蔽器之前，带本次随机标记的状
+// 态行已经被识别并丢弃。因此任务仍在运行、exec_output 正在读取中间输出
+// 时，内部标记也不会短暂出现在日志里。
+type networkDriveStatusFilter struct {
+	plan        *networkDriveInjectionPlan
+	underlying  io.Writer
+	statusMu    *sync.Mutex
+	pending     []byte
+	passThrough bool
+}
+
+func newNetworkDriveStatusFilter(plan *networkDriveInjectionPlan, underlying io.Writer, statusMu *sync.Mutex) *networkDriveStatusFilter {
+	return &networkDriveStatusFilter{plan: plan, underlying: underlying, statusMu: statusMu}
+}
+
+func (w *networkDriveStatusFilter) Write(input []byte) (int, error) {
+	originalLength := len(input)
+	for len(input) > 0 {
+		if w.passThrough {
+			newline := bytes.IndexByte(input, '\n')
+			if newline < 0 {
+				if _, err := w.underlying.Write(input); err != nil {
+					return 0, err
+				}
+				input = nil
+				break
+			}
+			if _, err := w.underlying.Write(input[:newline+1]); err != nil {
+				return 0, err
+			}
+			input = input[newline+1:]
+			w.passThrough = false
+			continue
+		}
+
+		newline := bytes.IndexByte(input, '\n')
+		if newline >= 0 {
+			line := make([]byte, 0, len(w.pending)+newline)
+			line = append(line, w.pending...)
+			line = append(line, input[:newline]...)
+			input = input[newline+1:]
+			w.pending = nil
+			if err := w.writeCompletedLine(line); err != nil {
+				return 0, err
+			}
+			continue
+		}
+
+		candidate := make([]byte, 0, len(w.pending)+len(input))
+		candidate = append(candidate, w.pending...)
+		candidate = append(candidate, input...)
+		if w.plan.mayBeStatusLine(candidate) {
+			w.pending = candidate
+			input = nil
+			break
+		}
+		if _, err := w.underlying.Write(w.pending); err != nil {
+			return 0, err
+		}
+		w.pending = nil
+		if _, err := w.underlying.Write(input); err != nil {
+			return 0, err
+		}
+		input = nil
+		w.passThrough = true
+	}
+	return originalLength, nil
+}
+
+// Flush 处理没有换行结尾的最后一段输出：内部状态行仍被剔除，普通输出原
+// 样交给任务日志。
+func (w *networkDriveStatusFilter) Flush() error {
+	if len(w.pending) == 0 {
+		return nil
+	}
+	pending := w.pending
+	w.pending = nil
+	w.statusMu.Lock()
+	line := strings.TrimSuffix(string(pending), "\r")
+	status, ok := w.plan.parseStatusLine(line)
+	if !ok {
+		index, marked := w.plan.markUnreadableStatus(line)
+		ok = marked
+		status = networkDriveParsedStatus{index: index, status: "unreadable"}
+	}
+	if ok {
+		w.plan.statuses[status.index] = status.status
+	}
+	w.statusMu.Unlock()
+	if ok {
+		return nil
+	}
+	_, err := w.underlying.Write(pending)
+	return err
+}
+
+func (w *networkDriveStatusFilter) writeCompletedLine(line []byte) error {
+	w.statusMu.Lock()
+	trimmedLine := strings.TrimSuffix(string(line), "\r")
+	status, ok := w.plan.parseStatusLine(trimmedLine)
+	if !ok {
+		index, marked := w.plan.markUnreadableStatus(trimmedLine)
+		ok = marked
+		status = networkDriveParsedStatus{index: index, status: "unreadable"}
+	}
+	if ok {
+		w.plan.statuses[status.index] = status.status
+	}
+	w.statusMu.Unlock()
+	if ok {
+		return nil
+	}
+	if _, err := w.underlying.Write(line); err != nil {
+		return err
+	}
+	_, err := w.underlying.Write([]byte{'\n'})
+	return err
+}
+
+func (p *networkDriveInjectionPlan) mayBeStatusLine(line []byte) bool {
+	for index := range p.items {
+		prefix := []byte(fmt.Sprintf("%s%s:%d:", networkDriveStatusPrefix,
+			p.items[index].StatusMarker, index))
+		if bytes.HasPrefix(prefix, line) || bytes.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// markUnreadableStatus 识别「前缀确实是本次状态行，但结果部分不可识别」
+// 的行。这类行同样不能进入任务日志；记录 unreadable 让执行结束后生成警告。
+func (p *networkDriveInjectionPlan) markUnreadableStatus(line string) (int, bool) {
+	for index := range p.items {
+		prefix := fmt.Sprintf("%s%s:%d:", networkDriveStatusPrefix,
+			p.items[index].StatusMarker, index)
+		if strings.HasPrefix(line, prefix) {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
 // consumeStatusLines 从执行输出里剔除带本次随机标记的状态行，解析每个共
 // 享的映射结果；缺失或不可识别的结果转成警告。状态行必须在输出遮蔽前
 // 剔除，内部标记绝不返回给 agent。
@@ -685,6 +972,10 @@ func (p *networkDriveInjectionPlan) stripStatusLines(output string) string {
 		status, ok := p.parseStatusLine(trimmed)
 		if ok {
 			p.statuses[status.index] = status.status
+			continue
+		}
+		if index, marked := p.markUnreadableStatus(trimmed); marked {
+			p.statuses[index] = "unreadable"
 			continue
 		}
 		kept = append(kept, line)
@@ -775,8 +1066,35 @@ func (p networkDriveInjectionPlan) injectionItems() []sshbroker.ExecInjection {
 	return items
 }
 
-// networkDriveStatusIsNetworkFailure 判断映射结果是否属于网络类失败。判
-// 定只服务于选址缓存作废；完整的警告分类与认证失败暂停属于后续票。
+// warningLines 返回需要附在输出末尾的警告与说明。后台任务在启动返回中使
+// 用同一份文本，任务终态时再把它追加到任务日志。
+func (p networkDriveInjectionPlan) warningLines() []string {
+	return networkDriveWarningLines(p.warnings, p.notes)
+}
+
+func networkDriveWarningLines(warnings []networkDriveWarning, notes []string) []string {
+	if len(warnings) == 0 && len(notes) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(warnings)+len(notes))
+	for _, warning := range warnings {
+		if warning.Notice != "" {
+			lines = append(lines, warning.Notice)
+			continue
+		}
+		line := "网络盘符未注入：" + warning.Reason
+		if warning.ShareName != "" {
+			line = fmt.Sprintf("共享 %s 的网络盘符 %s: 未注入：%s",
+				warning.ShareName, warning.Drive, warning.Reason)
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, notes...)
+	return lines
+}
+
+// networkDriveStatusIsNetworkFailure 判断映射结果是否属于网络类失败。这类
+// 失败说明探测结论不可信，需要作废选址缓存里的当前地址。
 func networkDriveStatusIsNetworkFailure(status string) bool {
 	switch status {
 	case "timeout", "error-53", "error-64", "error-67":
@@ -788,26 +1106,15 @@ func networkDriveStatusIsNetworkFailure(status string) bool {
 // appendWarnings 沿用环境变量注入的警告机制：警告与说明附在标准输出末
 // 尾，不影响退出码，也不计入输出截断。
 func (p networkDriveInjectionPlan) appendWarnings(stdout string) string {
-	if len(p.warnings) == 0 && len(p.notes) == 0 {
+	warnings := p.warningLines()
+	if len(warnings) == 0 {
 		return stdout
 	}
 	if stdout != "" && !strings.HasSuffix(stdout, "\n") {
 		stdout += "\n"
 	}
-	for _, warning := range p.warnings {
-		if warning.Notice != "" {
-			stdout += warning.Notice + "\n"
-			continue
-		}
-		line := "网络盘符未注入：" + warning.Reason
-		if warning.ShareName != "" {
-			line = fmt.Sprintf("共享 %s 的网络盘符 %s: 未注入：%s",
-				warning.ShareName, warning.Drive, warning.Reason)
-		}
-		stdout += line + "\n"
-	}
-	for _, note := range p.notes {
-		stdout += note + "\n"
+	for _, warning := range warnings {
+		stdout += warning + "\n"
 	}
 	return stdout
 }
