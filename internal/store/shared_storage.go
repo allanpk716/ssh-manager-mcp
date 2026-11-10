@@ -316,7 +316,7 @@ func (s *Store) EditSharedStorage(name string, changes SharedStorageChanges, sou
 	changeNote := ""
 	if changes.ChangeNote != nil {
 		changeNote = strings.TrimSpace(*changes.ChangeNote)
-		editedFields["change-note"] = "已更新"
+		editedFields["change-note"] = changeNote
 	}
 	share.ChangeNote = changeNote
 	directoriesJSON, err := json.Marshal(share.Directories)

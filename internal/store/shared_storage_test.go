@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -281,6 +282,14 @@ func TestSharedStorageEditDeleteVersionAuditAndRevision(t *testing.T) {
 	}
 	if len(editRows) != 3 {
 		t.Fatalf("修改审计应记录字段变化与命令行来源：%+v", editRows)
+	}
+	var firstEditSummary map[string]any
+	if err := json.Unmarshal([]byte(editRows[2].Command), &firstEditSummary); err != nil {
+		t.Fatalf("解析第一条修改审计失败：%v\n%s", err, editRows[2].Command)
+	}
+	firstEditChanges, ok := firstEditSummary["changes"].(map[string]any)
+	if !ok || firstEditChanges["change-note"] != changeNote {
+		t.Fatalf("修改审计应记录新的变更说明：%+v", firstEditSummary)
 	}
 	if after, err := s.SnapshotRevision(); err != nil || after != revisionBefore+4 {
 		t.Fatalf("删除共享存储后的快照修订号 = %d，应为 %d：%v", after, revisionBefore+4, err)
