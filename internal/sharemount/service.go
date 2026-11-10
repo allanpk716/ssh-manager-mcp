@@ -31,6 +31,7 @@ var (
 	ErrDarwinNotImplemented = errors.New("macOS 共享存储挂载尚未支持，请等待后续版本")
 	ErrUnsupportedSystem    = errors.New("目标服务器操作系统不支持共享存储挂载")
 	ErrNoSudo               = errors.New("服务器条目没有配置 sudo 凭据，请先由 owner 配置 sudo")
+	ErrTargetWithoutDevice  = errors.New("目标服务器未关联拓扑设备，请 owner 先把服务器归到设备上")
 	ErrNoCandidate          = errors.New("目标服务器与提供方设备没有可连通的共同网络候选地址")
 	ErrUnsafeShareName      = errors.New("共享名不能作为 Linux 挂载点使用")
 )
@@ -75,6 +76,16 @@ type Candidate struct {
 	RegistrationOrder int64
 }
 
+// Selection 是一次候选地址探测的安全结论。Selected 只在存在连通地址时非
+// 空；Attempts 保留逐地址探测结论，供成功降级与整体失败呈现使用。
+type Selection struct {
+	Selected *Candidate
+	// Reachable 保持共同网络规划里的连通顺序。重复挂载要把全部连通地址
+	// 交给远端固定命令，才能在锁内优先保留现有地址。
+	Reachable []*Candidate
+	Attempts  []ProbeAttempt
+}
+
 // Result 是挂载成功后的安全结论，不包含地址与协议版本。
 type Result struct {
 	MountPoint      string
@@ -82,6 +93,8 @@ type Result struct {
 	NetworkSequence int
 	Action          string
 	Notices         []string
+	Physical        bool
+	Attempts        []ProbeAttempt
 }
 
 // Service 是共享存储挂载服务。生产路径复用统一拨号入口与软件清单的 sudo
@@ -135,10 +148,11 @@ func (s *Service) mountLinux(ctx context.Context, request Request) (*Result, err
 	if !safeLinuxShareName(request.Share.Name) {
 		return nil, ErrUnsafeShareName
 	}
-	candidates, err := s.selectCandidates(ctx, request.Server, request.Share)
+	selection, err := s.selectCandidate(ctx, request.Server, request.Share)
 	if err != nil {
 		return nil, err
 	}
+	candidates := selection.Reachable
 	command := buildLinuxMountCommand(request.Share, candidates)
 	// 护栏：挂载密码只作为提权会话标准输入传递。不要把它拼进 command、
 	// 错误文本或审计；这里的 append 只补凭据文件所需的行尾。
@@ -175,6 +189,7 @@ func (s *Service) mountLinux(ctx context.Context, request Request) (*Result, err
 		return &Result{
 			MountPoint: linuxMountPoint(request.Share.Name), Network: selected.Network,
 			NetworkSequence: selected.Sequence, Action: action, Notices: notices,
+			Physical: selected.Physical, Attempts: selection.Attempts,
 		}, nil
 	case linuxExitMissingCIFS:
 		return nil, errors.New("目标服务器缺少 mount.cifs，请先由 owner 安装 cifs-utils；挂载工具不会自动安装")
@@ -189,15 +204,18 @@ func (s *Service) mountLinux(ctx context.Context, request Request) (*Result, err
 	}
 }
 
-func (s *Service) selectCandidates(
+func (s *Service) selectCandidate(
 	ctx context.Context, server *models.Server, share *models.SharedStorage,
-) ([]*Candidate, error) {
+) (*Selection, error) {
+	if server.DeviceID == "" {
+		return nil, ErrTargetWithoutDevice
+	}
 	targetDevice, err := s.Store.GetDeviceByID(server.DeviceID)
 	if err != nil {
 		return nil, err
 	}
 	if targetDevice == nil {
-		return nil, ErrNoCandidate
+		return nil, &SelectionFailure{Reason: SelectionErrorNoCommonNetwork, Attempts: []ProbeAttempt{}}
 	}
 	targetMemberships, err := s.Store.ListNetworkMembershipsByRegistration(targetDevice.Name)
 	if err != nil {
@@ -209,7 +227,12 @@ func (s *Service) selectCandidates(
 	}
 	plan := sshbroker.PlanCommonNetworkAddresses(providerMemberships, targetMemberships)
 	if len(plan.Candidates) == 0 {
-		return nil, ErrNoCandidate
+		return nil, &SelectionFailure{
+			Reason:           SelectionErrorNoCommonNetwork,
+			ProviderNetworks: networkNames(providerMemberships),
+			TargetNetworks:   networkNames(targetMemberships),
+			Attempts:         []ProbeAttempt{},
+		}
 	}
 	addressTimeout, err := sshbroker.ResolveAddressTimeout()
 	if err != nil {
@@ -231,7 +254,16 @@ func (s *Service) selectCandidates(
 	}
 	results := probe.ParseShellProbeOutput(result.Stdout, len(items))
 	reachable := make([]*Candidate, 0, len(results))
+	attempts := make([]ProbeAttempt, 0, len(results))
 	for index, probeResult := range results {
+		attempts = append(attempts, ProbeAttempt{
+			NetworkName:     plan.Candidates[index].NetworkName,
+			NetworkSequence: plan.Candidates[index].NetworkSequence,
+			Physical:        plan.Candidates[index].Source == sshbroker.DialAddressPhysical,
+			OK:              probeResult.OK,
+			ErrorCategory:   probeResult.Category,
+			DurationMilli:   probeResult.Duration.Milliseconds(),
+		})
 		if probeResult.OK {
 			candidate := plan.Candidates[index]
 			reachable = append(reachable, &Candidate{
@@ -242,9 +274,9 @@ func (s *Service) selectCandidates(
 		}
 	}
 	if len(reachable) == 0 {
-		return nil, ErrNoCandidate
+		return nil, &SelectionFailure{Reason: SelectionErrorAllCandidatesFailed, Attempts: attempts}
 	}
-	return reachable, nil
+	return &Selection{Selected: reachable[0], Reachable: reachable, Attempts: attempts}, nil
 }
 
 func (s *Service) exec(

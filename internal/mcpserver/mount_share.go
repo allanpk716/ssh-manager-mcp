@@ -3,7 +3,9 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path"
+	"strings"
 	"time"
 
 	"ssh-manager-mcp/internal/models"
@@ -39,14 +41,14 @@ type MountShareOutput struct {
 	NetworkName     string           `json:"network_name" jsonschema:"selected registered network name"`
 	NetworkSequence int              `json:"network_sequence" jsonschema:"address sequence within the selected network"`
 	Result          string           `json:"result" jsonschema:"first-mount-success, update-success, remount-success, or no-change"`
-	Notices         []string         `json:"notices" jsonschema:"safe follow-up hints; never contain addresses or secrets"`
+	MountNotes      []string         `json:"mount_notes,omitempty" jsonschema:"safe follow-up notes; network names, registration sequence, probe error categories and durations only, never an IP address, domain name, or secret"`
 	Paths           []MountSharePath `json:"paths" jsonschema:"directory agreements translated to target-server paths"`
 }
 
 // emptyMountShareOutput 返回能通过输出结构校验的空结果；报错路径也需要
 // 数组而不是 JSON null。
 func emptyMountShareOutput() MountShareOutput {
-	return MountShareOutput{Notices: []string{}, Paths: []MountSharePath{}}
+	return MountShareOutput{Paths: []MountSharePath{}}
 }
 
 // MountShareForProfile 按授权顺序检查共享与服务器，调用挂载领域服务，并
@@ -60,6 +62,7 @@ func MountShareForProfile(
 	var share *models.SharedStorage
 	var server *models.Server
 	var mountResult *sharemount.Result
+	var mountErr error
 	defer func() {
 		summary := map[string]any{"share": shareName, "version": int64(0), "result": "error"}
 		var serverID, networkName string
@@ -74,6 +77,24 @@ func MountShareForProfile(
 			networkName = mountResult.Network
 			sequence = mountResult.NetworkSequence
 			summary["result"] = mountResult.Action
+			notes := mountShareResultNotes(mountResult)
+			selectionNotes := mountShareSelectionNotes(mountResult)
+			if len(notes) > 0 {
+				summary["mount_notes"] = notes
+			}
+			if mountResult.Action == "first-mount-success" && len(selectionNotes) > 0 {
+				summary["result"] = "virtual-network-fallback"
+			} else {
+				summary["result"] = mountResult.Action
+			}
+		}
+		var selectionFailure *sharemount.SelectionFailure
+		if errors.As(mountErr, &selectionFailure) {
+			summary["result"] = "address-selection-error"
+			summary["selection_error"] = selectionFailure.Reason
+			summary["provider_networks"] = selectionFailure.ProviderNetworks
+			summary["target_networks"] = selectionFailure.TargetNetworks
+			summary["attempts"] = selectionFailure.Attempts
 		}
 		if networkName != "" {
 			summary["network_name"] = networkName
@@ -151,6 +172,7 @@ func MountShareForProfile(
 		Share: found, Server: server, Password: append([]byte(nil), password...),
 	})
 	if err != nil {
+		mountErr = err
 		return nil, err
 	}
 	status = "ok"
@@ -158,7 +180,7 @@ func MountShareForProfile(
 		Share: found.Name, ServerID: server.ID, ServerName: server.Name,
 		MountPoint: mountResult.MountPoint, Version: found.Version,
 		NetworkName: mountResult.Network, NetworkSequence: mountResult.NetworkSequence,
-		Result: mountResult.Action, Notices: mountResult.Notices,
+		Result: mountResult.Action, MountNotes: mountShareResultNotes(mountResult),
 		Paths: []MountSharePath{},
 	}
 	for _, directory := range found.Directories {
@@ -168,4 +190,38 @@ func MountShareForProfile(
 		})
 	}
 	return output, nil
+}
+
+// mountShareResultNotes 合并选地址降级说明与重复挂载的安全提示，审计与
+// 工具输出使用同一份文本。
+func mountShareResultNotes(result *sharemount.Result) []string {
+	notes := mountShareSelectionNotes(result)
+	return append(notes, result.Notices...)
+}
+
+// mountShareSelectionNotes 渲染成功但放弃物理局域网时的说明。它沿用连通
+// 探测的逐地址格式，只使用网络名、登记序号、错误分类和耗时。
+func mountShareSelectionNotes(result *sharemount.Result) []string {
+	if result == nil || result.Physical {
+		return nil
+	}
+	physicalFailures := make([]string, 0)
+	for _, attempt := range result.Attempts {
+		if !attempt.Physical || attempt.OK {
+			continue
+		}
+		line := fmt.Sprintf("%s 第%d个地址  ✗%s", attempt.NetworkName,
+			attempt.NetworkSequence, models.ProbeErrorCategoryLabel(attempt.ErrorCategory))
+		if attempt.DurationMilli >= 0 {
+			line += fmt.Sprintf(" %dms", attempt.DurationMilli)
+		}
+		physicalFailures = append(physicalFailures, line)
+	}
+	if len(physicalFailures) == 0 {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("已使用虚拟局域网：%s 第%d个地址", result.Network, result.NetworkSequence),
+		"物理局域网地址不通：" + strings.Join(physicalFailures, "；"),
+	}
 }
