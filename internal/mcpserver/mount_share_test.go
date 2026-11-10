@@ -2,8 +2,11 @@ package mcpserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +32,7 @@ type fakeLinuxMountServer struct {
 	missingMountCIFS bool
 	workingVersion   string
 	shareID          string
+	probeOutput      string
 }
 
 func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string, string, int) {
@@ -45,6 +49,9 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 	case strings.TrimSpace(command) == "uname -s":
 		return "Linux\n", "", 0
 	case strings.Contains(command, "sshmgr_probe_one "):
+		if f.probeOutput != "" {
+			return f.probeOutput, "", 0
+		}
 		return "SSHMGR-PROBE 0 ok 2 \n", "", 0
 	case strings.Contains(command, "SSHMGR-LINUX-MOUNT"):
 		if f.missingMountCIFS {
@@ -61,7 +68,11 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 			f.credentialFile = ""
 			return "", "SSHMGR-LINUX-MOUNT protocol-failed", 84
 		}
-		f.fstabLines = append(f.fstabLines, "//192.0.2.10/datasets /mnt/sshmgr/datasets cifs "+
+		selectedAddress := "192.0.2.10"
+		if strings.Contains(command, "100.64.10.10") {
+			selectedAddress = "100.64.10.10"
+		}
+		f.fstabLines = append(f.fstabLines, "//"+selectedAddress+"/datasets /mnt/sshmgr/datasets cifs "+
 			"credentials=/etc/sshmgr/shares/"+f.shareID+".credentials,vers="+selectedVersion+
 			",_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0")
 		return "SSHMGR-LINUX-MOUNT ok\n", "", 0
@@ -96,9 +107,14 @@ type mountShareSeed struct {
 // seedMountShareVault 建立共享存储挂载测试共用的权威端数据：提供方与目标
 // 设备、两个共同网络、目标服务器条目与凭据、挂载密码机密项、共享登记和
 // 授权。单机工具面与客户端缓存面都在这份种子上继续装配。
-func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup, fake *fakeLinuxMountServer) mountShareSeed {
+func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup) mountShareSeed {
 	t.Helper()
-	storeForTest := newStore(t)
+	databasePath := filepath.Join(t.TempDir(), "mount-share-test.db")
+	storeForTest := newStoreAt(t, databasePath)
+	fake := &fakeLinuxMountServer{
+		missingMountCIFS: setup.missingMountCIFS, workingVersion: setup.workingVersion,
+		probeOutput: setup.probeOutput,
+	}
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
 		Password: "login-pw", SudoPassword: "sudo-pw", Exec: fake.handler,
 	})
@@ -121,17 +137,27 @@ func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup, fake *fakeL
 	if _, err := storeForTest.AddNetwork(models.Network{Name: "办公虚拟局域网", Type: models.NetworkVirtual}); err != nil {
 		t.Fatal(err)
 	}
-	for _, membership := range []struct {
-		device  string
-		network string
-		address string
-	}{
-		{"NAS", "办公物理局域网", "192.0.2.10"},
-		{"NAS", "办公虚拟局域网", "100.64.10.10"},
-		{"linux-device", "办公物理局域网", "192.0.2.20"},
-		{"linux-device", "办公虚拟局域网", "100.64.10.20"},
+	if setup.targetNoCommonNetwork {
+		if _, err := storeForTest.AddNetwork(models.Network{Name: "目标独立虚拟局域网", Type: models.NetworkVirtual}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, membership := range []struct{ network, address string }{
+		{"办公物理局域网", "192.0.2.10"},
+		{"办公虚拟局域网", "100.64.10.10"},
 	} {
-		if _, err := storeForTest.AddNetworkMembership(membership.device, membership.network, membership.address); err != nil {
+		if _, err := storeForTest.AddNetworkMembership("NAS", membership.network, membership.address); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetNetworks := []struct{ network, address string }{
+		{"办公物理局域网", "192.0.2.20"}, {"办公虚拟局域网", "100.64.10.20"},
+	}
+	if setup.targetNoCommonNetwork {
+		targetNetworks = []struct{ network, address string }{{"目标独立虚拟局域网", "198.51.100.20"}}
+	}
+	for _, membership := range targetNetworks {
+		if _, err := storeForTest.AddNetworkMembership("linux-device", membership.network, membership.address); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -149,10 +175,21 @@ func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup, fake *fakeL
 	if err != nil {
 		t.Fatal(err)
 	}
+	targetID := added.ServerID
+	if setup.targetWithoutDevice {
+		rawDatabase, err := sql.Open("sqlite", databasePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, unlinkErr := rawDatabase.Exec(`UPDATE servers SET device_id=NULL WHERE id=?`, targetID)
+		closeErr := rawDatabase.Close()
+		if unlinkErr != nil || closeErr != nil {
+			t.Fatalf("解除服务器设备关联失败：unlink=%v close=%v", unlinkErr, closeErr)
+		}
+	}
 	if err := storeForTest.SaveEntryPin(serverByAddr(storeForTest, server.Host, server.Port), hostKey.Marshal()); err != nil {
 		t.Fatal(err)
 	}
-	targetID := added.ServerID
 
 	profileID, err := storeForTest.AddProfile("共享挂载 profile")
 	if err != nil {
@@ -240,8 +277,7 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 	for _, option := range options {
 		option(&setup)
 	}
-	fake := &fakeLinuxMountServer{missingMountCIFS: setup.missingMountCIFS, workingVersion: setup.workingVersion}
-	seed := seedMountShareVault(t, setup, fake)
+	seed := seedMountShareVault(t, setup)
 	serverFace, tunnels, tasks, err := NewServer(seed.store, seed.profileID, "project-test")
 	if err != nil {
 		t.Fatal(err)
@@ -267,14 +303,212 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 }
 
 type mountShareFixtureSetup struct {
-	sudo                 bool
-	missingMountCIFS     bool
-	workingVersion       string
-	notWritable          bool
-	targetOutOfProfile   bool
-	windowsTarget        bool
-	shareInvisible       bool
-	oldAuthoritySnapshot bool
+	sudo                  bool
+	missingMountCIFS      bool
+	workingVersion        string
+	probeOutput           string
+	notWritable           bool
+	targetOutOfProfile    bool
+	windowsTarget         bool
+	shareInvisible        bool
+	targetWithoutDevice   bool
+	targetNoCommonNetwork bool
+	oldAuthoritySnapshot  bool
+}
+
+func TestMountShareTargetWithoutDeviceFailsWithoutProbe(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.targetWithoutDevice = true
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	want := "目标服务器未关联拓扑设备，请 owner 先把服务器归到设备上"
+	if !isError || text != want {
+		t.Fatalf("报错 = %q (%v)，期待 %q", text, output, want)
+	}
+	commands, _, credential, fstab := fixture.fake.recorded()
+	if len(commands) != 1 || strings.TrimSpace(commands[0]) != "uname -s" ||
+		credential != "" || len(fstab) != 0 {
+		t.Fatalf("缺少设备关联时只应识别系统，不应探测地址：%v %q %v", commands, credential, fstab)
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"mount-share"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != "error" || rows[0].ServerID != fixture.targetID ||
+		strings.Contains(rows[0].Command, mountShareTestPassword) ||
+		strings.Contains(rows[0].Command, "192.0.2.10") ||
+		strings.Contains(rows[0].Command, "100.64.10.10") {
+		t.Fatalf("失败审计 = %+v", rows)
+	}
+}
+
+func TestMountShareNoCommonNetworkListsBothSides(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.targetNoCommonNetwork = true
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	want := "目标服务器所属设备与共享存储提供方设备没有共同网络，未探测\n" +
+		"共享存储提供方设备所在网络：办公物理局域网、办公虚拟局域网\n" +
+		"目标服务器所属设备所在网络：目标独立虚拟局域网\n" +
+		"请 owner 先补齐网络拓扑登记"
+	if !isError || text != want {
+		t.Fatalf("报错 = %q (%v)，期待 %q", text, output, want)
+	}
+	commands, _, credential, fstab := fixture.fake.recorded()
+	if len(commands) != 1 || strings.TrimSpace(commands[0]) != "uname -s" {
+		t.Fatalf("没有共同网络时只应识别系统，不应探测地址：%v", commands)
+	}
+	if credential != "" || len(fstab) != 0 {
+		t.Fatalf("没有共同网络时不应写配置：credential=%q fstab=%v", credential, fstab)
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"mount-share"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != "error" || rows[0].ServerID != fixture.targetID {
+		t.Fatalf("失败审计 = %+v", rows)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary["result"] != "address-selection-error" ||
+		summary["selection_error"] != "no-common-network" ||
+		fmt.Sprintf("%v", summary["provider_networks"]) != "[办公物理局域网 办公虚拟局域网]" ||
+		fmt.Sprintf("%v", summary["target_networks"]) != "[目标独立虚拟局域网]" {
+		t.Fatalf("选地址失败审计摘要 = %#v", summary)
+	}
+	for _, address := range []string{"192.0.2.10", "100.64.10.10", "198.51.100.20"} {
+		if strings.Contains(text, address) || strings.Contains(rows[0].Command, address) {
+			t.Fatalf("选地址失败泄漏地址 %s：%s\n%s", address, text, rows[0].Command)
+		}
+	}
+}
+
+func TestMountShareAllCandidatesFailListsEveryAttempt(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.probeOutput = "SSHMGR-PROBE 0 fail 12 connection-refused\n" +
+			"SSHMGR-PROBE 1 fail 15 timeout\n"
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	want := "全部候选地址在目标服务器上探测失败，登记与实际不一致：\n" +
+		"办公物理局域网 第1个地址  ✗连接被拒绝 12ms\n" +
+		"办公虚拟局域网 第1个地址  ✗连接超时 15ms\n" +
+		"未写入任何挂载配置"
+	if !isError || text != want {
+		t.Fatalf("报错 = %q (%v)，期待 %q", text, output, want)
+	}
+	commands, _, credential, fstab := fixture.fake.recorded()
+	if len(commands) != 2 || !strings.Contains(commands[1], "192.0.2.10") ||
+		!strings.Contains(commands[1], "100.64.10.10") {
+		t.Fatalf("全部失败前仍应一次探测所有候选：%v", commands)
+	}
+	if credential != "" || len(fstab) != 0 {
+		t.Fatalf("全部候选失败后不应写配置：credential=%q fstab=%v", credential, fstab)
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"mount-share"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != "error" || rows[0].ServerID != fixture.targetID {
+		t.Fatalf("失败审计 = %+v", rows)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary["result"] != "address-selection-error" ||
+		summary["selection_error"] != "all-candidates-failed" {
+		t.Fatalf("选地址失败审计摘要 = %#v", summary)
+	}
+	attempts, ok := summary["attempts"].([]any)
+	if !ok || len(attempts) != 2 {
+		t.Fatalf("逐地址审计 = %#v", summary["attempts"])
+	}
+	first := attempts[0].(map[string]any)
+	second := attempts[1].(map[string]any)
+	if first["network_name"] != "办公物理局域网" || first["network_sequence"] != float64(1) ||
+		first["error_category"] != "connection-refused" || first["duration_ms"] != float64(12) ||
+		second["network_name"] != "办公虚拟局域网" || second["network_sequence"] != float64(1) ||
+		second["error_category"] != "timeout" || second["duration_ms"] != float64(15) {
+		t.Fatalf("逐地址审计 = %#v", attempts)
+	}
+	for _, leakText := range []string{text, rows[0].Command} {
+		for _, address := range []string{"192.0.2.10", "100.64.10.10"} {
+			if strings.Contains(leakText, address) {
+				t.Fatalf("选地址失败泄漏地址 %s：%s", address, leakText)
+			}
+		}
+		if strings.Contains(leakText, mountShareTestPassword) {
+			t.Fatalf("选地址失败泄漏挂载密码：%s", leakText)
+		}
+	}
+}
+
+func TestMountSharePhysicalFailuresFallBackToVirtualNetwork(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.probeOutput = "SSHMGR-PROBE 0 fail 12 connection-refused\n" +
+			"SSHMGR-PROBE 1 ok 18 \n"
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("物理地址失败但虚拟地址可用时应成功：%s", text)
+	}
+	if output["network_name"] != "办公虚拟局域网" || output["network_sequence"] != float64(1) {
+		t.Fatalf("降级输出 = %#v", output)
+	}
+	notes, ok := output["mount_notes"].([]any)
+	if !ok || len(notes) != 2 ||
+		notes[0] != "已使用虚拟局域网：办公虚拟局域网 第1个地址" ||
+		notes[1] != "物理局域网地址不通：办公物理局域网 第1个地址  ✗连接被拒绝 12ms" {
+		t.Fatalf("降级说明 = %#v", output["mount_notes"])
+	}
+	commands, _, credential, fstab := fixture.fake.recorded()
+	if len(commands) != 3 || strings.Contains(commands[2], "192.0.2.10") ||
+		!strings.Contains(commands[2], "100.64.10.10") {
+		t.Fatalf("降级后固定挂载命令应只使用虚拟地址：%v", commands)
+	}
+	if credential == "" || len(fstab) != 1 || !strings.Contains(fstab[0], "//100.64.10.10/datasets") {
+		t.Fatalf("降级后的远端配置 = %q %#v", credential, fstab)
+	}
+	for _, address := range []string{"192.0.2.10", "100.64.10.10"} {
+		if strings.Contains(text, address) {
+			t.Fatalf("降级成功泄漏地址 %s：%s", address, text)
+		}
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"mount-share"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != "ok" {
+		t.Fatalf("降级成功审计 = %+v", rows)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary["result"] != "virtual-network-fallback" ||
+		summary["network_name"] != "办公虚拟局域网" ||
+		fmt.Sprintf("%v", summary["mount_notes"]) != fmt.Sprintf("%v", output["mount_notes"]) {
+		t.Fatalf("降级成功审计摘要 = %#v", summary)
+	}
+	if strings.Contains(rows[0].Command, "192.0.2.10") ||
+		strings.Contains(rows[0].Command, "100.64.10.10") ||
+		strings.Contains(rows[0].Command, mountShareTestPassword) {
+		t.Fatalf("降级成功审计泄漏敏感信息：%s", rows[0].Command)
+	}
 }
 
 func callMountShare(t *testing.T, session *mcp.ClientSession, arguments map[string]any) (map[string]any, string, bool) {

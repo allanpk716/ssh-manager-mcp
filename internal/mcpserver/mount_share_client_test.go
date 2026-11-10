@@ -108,8 +108,7 @@ func newMountShareClientFixture(t *testing.T, options ...func(*mountShareFixture
 	for _, option := range options {
 		option(&setup)
 	}
-	fake := &fakeLinuxMountServer{missingMountCIFS: setup.missingMountCIFS, workingVersion: setup.workingVersion}
-	seed := seedMountShareVault(t, setup, fake)
+	seed := seedMountShareVault(t, setup)
 	_, projectToken, err := seed.store.AddProject("共享挂载项目", seed.profileID)
 	if err != nil {
 		t.Fatal(err)
