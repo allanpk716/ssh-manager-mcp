@@ -85,14 +85,20 @@ type mountShareFixture struct {
 	fake      *fakeLinuxMountServer
 }
 
-func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)) mountShareFixture {
+type mountShareSeed struct {
+	store     *store.Store
+	profileID string
+	targetID  string
+	shareID   string
+	fake      *fakeLinuxMountServer
+}
+
+// seedMountShareVault 建立共享存储挂载测试共用的权威端数据：提供方与目标
+// 设备、两个共同网络、目标服务器条目与凭据、挂载密码机密项、共享登记和
+// 授权。单机工具面与客户端缓存面都在这份种子上继续装配。
+func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup, fake *fakeLinuxMountServer) mountShareSeed {
 	t.Helper()
-	setup := mountShareFixtureSetup{sudo: true}
-	for _, option := range options {
-		option(&setup)
-	}
 	storeForTest := newStore(t)
-	fake := &fakeLinuxMountServer{missingMountCIFS: setup.missingMountCIFS, workingVersion: setup.workingVersion}
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
 		Password: "login-pw", SudoPassword: "sudo-pw", Exec: fake.handler,
 	})
@@ -222,8 +228,21 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 		}
 		targetID = windowsID
 	}
+	return mountShareSeed{
+		store: storeForTest, profileID: profileID, targetID: targetID,
+		shareID: addedShare.ID, fake: fake,
+	}
+}
 
-	serverFace, tunnels, tasks, err := NewServer(storeForTest, profileID, "project-test")
+func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)) mountShareFixture {
+	t.Helper()
+	setup := mountShareFixtureSetup{sudo: true}
+	for _, option := range options {
+		option(&setup)
+	}
+	fake := &fakeLinuxMountServer{missingMountCIFS: setup.missingMountCIFS, workingVersion: setup.workingVersion}
+	seed := seedMountShareVault(t, setup, fake)
+	serverFace, tunnels, tasks, err := NewServer(seed.store, seed.profileID, "project-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,19 +261,20 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 	}
 	t.Cleanup(func() { _ = clientSession.Close() })
 	return mountShareFixture{
-		store: storeForTest, profileID: profileID, targetID: targetID,
-		shareID: addedShare.ID, session: clientSession, fake: fake,
+		store: seed.store, profileID: seed.profileID, targetID: seed.targetID,
+		shareID: seed.shareID, session: clientSession, fake: seed.fake,
 	}
 }
 
 type mountShareFixtureSetup struct {
-	sudo               bool
-	missingMountCIFS   bool
-	workingVersion     string
-	notWritable        bool
-	targetOutOfProfile bool
-	windowsTarget      bool
-	shareInvisible     bool
+	sudo                 bool
+	missingMountCIFS     bool
+	workingVersion       string
+	notWritable          bool
+	targetOutOfProfile   bool
+	windowsTarget        bool
+	shareInvisible       bool
+	oldAuthoritySnapshot bool
 }
 
 func callMountShare(t *testing.T, session *mcp.ClientSession, arguments map[string]any) (map[string]any, string, bool) {

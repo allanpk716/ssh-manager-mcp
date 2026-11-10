@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path"
 	"time"
 
@@ -13,6 +15,16 @@ import (
 )
 
 var errMountShareNotFound = errors.New("共享存储或服务器不存在")
+
+// MountShareSnapshotSyncer 是客户端缓存面注入的挂载前快照保鲜能力：向
+// 权威端查询快照修订号，本地落后就先同步。具体实现由客户端操作包提供
+// （那里才有权威端请求入口）；nil 表示单机与权威端，挂载前没有这一步。
+type MountShareSnapshotSyncer interface {
+	// SyncBeforeMount 返回权威端当前的快照修订号；返回 nil 错误表示本地
+	// 缓存已经达到该修订号（本来就一致，或刚完成同步）。返回错误表示无
+	// 法确认或同步失败，调用方继续使用本地快照。
+	SyncBeforeMount(ctx context.Context) (int64, error)
+}
 
 // MountShareInput 是 mount_share 工具的输入。除共享名与服务器编号外没有
 // 任何命令或路径参数。
@@ -48,17 +60,24 @@ func emptyMountShareOutput() MountShareOutput {
 }
 
 // MountShareForProfile 按授权顺序检查共享与服务器，调用挂载领域服务，并
-// 为成败各写一条不含密码与地址的审计。
+// 为成败各写一条不含密码与地址的审计。snapshotSyncer 非空且存储只读（客
+// 户端缓存面）时，先做挂载前快照保鲜，再从同步后的存储继续；storeSource
+// 是统一换快照入口的重新解析函数，保鲜成功后用它取到热加载后的存储。
 func MountShareForProfile(
 	ctx context.Context, st *store.Store, projectID, profileID, shareName, serverIdentifier string,
 	hk sshbroker.HostKeyStore,
-) (*MountShareOutput, error) {
+	snapshotSyncer MountShareSnapshotSyncer, storeSource func() *store.Store,
+) (output *MountShareOutput, err error) {
 	start := time.Now()
 	status := "error"
 	var share *models.SharedStorage
 	var server *models.Server
 	var mountResult *sharemount.Result
+	snapshotMayBeStale := false
 	defer func() {
+		if err != nil && snapshotMayBeStale {
+			err = fmt.Errorf("%w；挂载前未能同步权威端快照，本地快照可能过期，请确认权威端可达后重试", err)
+		}
 		summary := map[string]any{"share": shareName, "version": int64(0), "result": "error"}
 		var serverID, networkName string
 		sequence := 0
@@ -87,6 +106,7 @@ func MountShareForProfile(
 	if st.IsReadOnly() && st.CacheRecommendedVersion() == "" {
 		return nil, errSharedStorageAuthorityTooOld
 	}
+	st, snapshotMayBeStale = ensureMountShareSnapshotFresh(ctx, st, snapshotSyncer, storeSource)
 	found, err := st.GetSharedStorage(shareName)
 	if err != nil {
 		if errors.Is(err, store.ErrSharedStorageNotFound) {
@@ -152,7 +172,7 @@ func MountShareForProfile(
 		return nil, err
 	}
 	status = "ok"
-	output := &MountShareOutput{
+	output = &MountShareOutput{
 		Share: found.Name, ServerID: server.ID, ServerName: server.Name,
 		MountPoint: mountResult.MountPoint, Version: found.Version,
 		NetworkName: mountResult.Network, NetworkSequence: mountResult.NetworkSequence,
@@ -165,4 +185,36 @@ func MountShareForProfile(
 		})
 	}
 	return output, nil
+}
+
+// ensureMountShareSnapshotFresh 在客户端上执行挂载前的快照保鲜：先让同步
+// 器确认本地缓存没有落后于权威端，再经统一换快照入口重新解析当前存储，
+// 让这次挂载（含共享登记、授权与挂载密码）全部来自同步后的快照。返回的
+// 第二个值表示是否无法确认本地快照仍与权威端一致；单机、权威端与同步失
+// 败的客户端都继续使用传入的本地快照。
+func ensureMountShareSnapshotFresh(
+	ctx context.Context, st *store.Store,
+	syncer MountShareSnapshotSyncer, resolveStore func() *store.Store,
+) (*store.Store, bool) {
+	if syncer == nil || st == nil || !st.IsReadOnly() {
+		return st, false
+	}
+	remoteRevision, err := syncer.SyncBeforeMount(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sshmgr: mount_share 快照保鲜失败（继续使用本地快照）：%v\n", err)
+		return st, true
+	}
+	if resolveStore == nil {
+		return st, true
+	}
+	next := resolveStore()
+	if next == nil {
+		return st, true
+	}
+	revision, err := next.SnapshotRevision()
+	if err != nil || revision < remoteRevision {
+		fmt.Fprintf(os.Stderr, "sshmgr: mount_share 同步后的快照尚未装入内存（继续使用当前快照）：%v\n", err)
+		return st, true
+	}
+	return next, false
 }
