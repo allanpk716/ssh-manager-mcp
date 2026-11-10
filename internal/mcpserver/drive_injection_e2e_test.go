@@ -293,6 +293,11 @@ func TestNetworkDriveInjectionExecCommandPowerShell(t *testing.T) {
 	if strings.Contains(wrapped, networkDriveTestPassword) {
 		t.Fatalf("wrapped command leaked the mount password")
 	}
+	for _, command := range commands {
+		if strings.Contains(command, networkDriveTestPassword) {
+			t.Fatalf("remote command leaked the mount password: %q", command)
+		}
+	}
 	if len(inputs[1]) != len(networkDriveTestPassword) || string(inputs[1]) != networkDriveTestPassword {
 		t.Fatalf("wrapped command standard input = %q, want only the mount password", inputs[1])
 	}
