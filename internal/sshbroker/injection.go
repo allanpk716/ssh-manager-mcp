@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"ssh-manager-mcp/internal/models"
@@ -21,13 +22,15 @@ const (
 	ExecLayerPrivileged ExecTargetLayer = "privileged"
 )
 
-// ExecInjectionKind 是注入项类型。当前只有环境变量；后续 Windows 网络
-// 盘符注入可以在同一列表中增加新类型。
+// ExecInjectionKind 是注入项类型。当前有环境变量与 Windows 网络盘符。
 type ExecInjectionKind string
 
 const (
 	// ExecInjectionEnvironment 把值导出为同名环境变量。
 	ExecInjectionEnvironment ExecInjectionKind = "environment"
+	// ExecInjectionNetworkDrive 在用户命令前把 SMB 共享映射成 Windows
+	// 网络盘符。
+	ExecInjectionNetworkDrive ExecInjectionKind = "network-drive"
 )
 
 // ExecInjection 是一条会在用户命令前生效的注入项。新注入形态在
@@ -45,6 +48,25 @@ type EnvironmentInjection struct {
 
 func (EnvironmentInjection) injectionKind() ExecInjectionKind {
 	return ExecInjectionEnvironment
+}
+
+// NetworkDriveInjection 是一条 Windows 网络盘符注入项。Drive 是单个大写
+// 盘符字母；Address、ShareName 与 UserName 允许进入远端命令文本；Password
+// 只按长度帧写入 SSH 会话标准输入，绝不进入命令文本，也绝不进入目标机任
+// 何进程的命令行（映射在 PowerShell 进程内经异步调用执行）。StatusMarker
+// 是本次执行随机生成的十六进制标记：远端封装用它回传每个共享的注入结
+// 果状态行，调用方解析后必须把状态行从输出里剔除。
+type NetworkDriveInjection struct {
+	ShareName    string
+	Drive        string
+	Address      string
+	UserName     string
+	Password     []byte
+	StatusMarker string
+}
+
+func (NetworkDriveInjection) injectionKind() ExecInjectionKind {
+	return ExecInjectionNetworkDrive
 }
 
 // ExecInjectionOptions 携带 shell 类型、目标层与注入项列表，是前台命令
@@ -125,41 +147,61 @@ func prepareExecForTargetLayer(command string, options ExecInjectionOptions, tar
 
 	items := append([]ExecInjection(nil), options.Items...)
 	environments := make([]EnvironmentInjection, 0, len(items))
+	drives := make([]NetworkDriveInjection, 0)
 	seen := make(map[string]bool, len(items))
 	for _, item := range items {
-		environment, ok := item.(EnvironmentInjection)
-		if !ok {
+		switch injection := item.(type) {
+		case EnvironmentInjection:
+			environment := injection
+			if !models.EnvironmentVariableNameFormatIsValid(environment.EnvironmentName) {
+				return preparedExec{}, fmt.Errorf("environment variable name %q is invalid", environment.EnvironmentName)
+			}
+			if seen[environment.EnvironmentName] {
+				return preparedExec{}, fmt.Errorf("environment variable name %q is repeated", environment.EnvironmentName)
+			}
+			seen[environment.EnvironmentName] = true
+			if bytesContainZero(environment.Value) {
+				return preparedExec{}, fmt.Errorf("environment variable %s has a zero byte", environment.EnvironmentName)
+			}
+			if isWindowsShellType(options.ShellType) && !utf8.Valid(environment.Value) {
+				return preparedExec{}, fmt.Errorf("environment variable %s has invalid UTF-8 on Windows", environment.EnvironmentName)
+			}
+			if options.ShellType == models.ShellWindowsCmd && WindowsCmdValueHasLineBreak(environment.Value) {
+				return preparedExec{}, fmt.Errorf("environment variable %s has a line break in cmd", environment.EnvironmentName)
+			}
+			environments = append(environments, environment)
+		case NetworkDriveInjection:
+			drive := injection
+			if err := validateNetworkDriveInjection(drive, options.ShellType, targetLayer); err != nil {
+				return preparedExec{}, err
+			}
+			drives = append(drives, drive)
+		default:
 			return preparedExec{}, fmt.Errorf("pre-command injection type %q is not supported", item.injectionKind())
 		}
-		if !models.EnvironmentVariableNameFormatIsValid(environment.EnvironmentName) {
-			return preparedExec{}, fmt.Errorf("environment variable name %q is invalid", environment.EnvironmentName)
-		}
-		if seen[environment.EnvironmentName] {
-			return preparedExec{}, fmt.Errorf("environment variable name %q is repeated", environment.EnvironmentName)
-		}
-		seen[environment.EnvironmentName] = true
-		if bytesContainZero(environment.Value) {
-			return preparedExec{}, fmt.Errorf("environment variable %s has a zero byte", environment.EnvironmentName)
-		}
-		if isWindowsShellType(options.ShellType) && !utf8.Valid(environment.Value) {
-			return preparedExec{}, fmt.Errorf("environment variable %s has invalid UTF-8 on Windows", environment.EnvironmentName)
-		}
-		if options.ShellType == models.ShellWindowsCmd && WindowsCmdValueHasLineBreak(environment.Value) {
-			return preparedExec{}, fmt.Errorf("environment variable %s has a line break in cmd", environment.EnvironmentName)
-		}
-		environments = append(environments, environment)
 	}
 	sort.Slice(environments, func(i, j int) bool {
 		return environments[i].EnvironmentName < environments[j].EnvironmentName
+	})
+	sort.Slice(drives, func(i, j int) bool {
+		return drives[i].ShareName < drives[j].ShareName
 	})
 
 	var wrapper strings.Builder
 	stdinDelimiter := ""
 	if options.ShellType == models.ShellPowerShell {
-		writePowerShellWrapper(&wrapper, environments)
+		writePowerShellWrapper(&wrapper, environments, drives)
 	} else if options.ShellType == models.ShellWindowsCmd {
+		if len(drives) > 0 {
+			// cmd 由 PowerShell 子进程执行映射；当前票只贯通 PowerShell
+			// 服务器，cmd 的拼装由后续票补齐，这里先拒绝以免生成半成品。
+			return preparedExec{}, fmt.Errorf("network drive injection is not supported in cmd yet")
+		}
 		writeWindowsCmdWrapper(&wrapper, environments)
 	} else {
+		if len(drives) > 0 {
+			return preparedExec{}, fmt.Errorf("network drive injection requires a Windows shell type")
+		}
 		if targetLayer == ExecLayerPrivileged {
 			stdinDelimiter = "__sshmgr_environment_frames_" + newSudoNonce()
 		}
@@ -168,20 +210,82 @@ func prepareExecForTargetLayer(command string, options ExecInjectionOptions, tar
 	wrapper.WriteString("\n")
 	wrapper.WriteString(command)
 
-	frames := buildEnvironmentFrames(options.ShellType, environments)
+	frames := buildInjectionFrames(options.ShellType, environments, drives)
 	if stdinDelimiter != "" {
 		frames = append([]byte(stdinDelimiter+"\n"), frames...)
 	}
 	return preparedExec{command: wrapper.String(), frames: frames}, nil
 }
 
+// validateNetworkDriveInjection 是网络盘符注入项的最后防线。注入计划层
+// 已经做过可恢复的校验（失败只警告、不挡命令）；这里只拦截会破坏封装脚
+// 本的值，属于不应出现的进程内错误。
+func validateNetworkDriveInjection(drive NetworkDriveInjection, shellType models.ShellType, targetLayer ExecTargetLayer) error {
+	if targetLayer != ExecLayerNormal || !isWindowsShellType(shellType) {
+		return fmt.Errorf("network drive injection requires the normal layer of a Windows shell")
+	}
+	if shellType != models.ShellPowerShell {
+		return fmt.Errorf("network drive injection shell type %q is not supported yet", shellType)
+	}
+	if len(drive.Drive) != 1 || drive.Drive < "D" || drive.Drive > "Z" {
+		return fmt.Errorf("network drive letter %q is invalid", drive.Drive)
+	}
+	if err := validateNetworkDriveScriptValue("share name", drive.ShareName); err != nil {
+		return err
+	}
+	if err := validateNetworkDriveScriptValue("address", drive.Address); err != nil {
+		return err
+	}
+	if err := validateNetworkDriveScriptValue("user name", drive.UserName); err != nil {
+		return err
+	}
+	if len(drive.Password) == 0 || bytesContainZero(drive.Password) || !utf8.Valid(drive.Password) {
+		return fmt.Errorf("network drive password for share %s is empty or not valid UTF-8", drive.ShareName)
+	}
+	if err := validateNetworkDriveMarker(drive.StatusMarker); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateNetworkDriveScriptValue 拒绝会让封装脚本变形的值。值进入
+// PowerShell 单引号字符串（内部单引号会双写），但双引号会被 Windows
+// OpenSSH 从命令文本里剥掉，换行与控制字符会破坏脚本行结构。
+func validateNetworkDriveScriptValue(field, value string) error {
+	if value == "" {
+		return fmt.Errorf("network drive %s is empty", field)
+	}
+	if strings.ContainsAny(value, "\"\r\n") {
+		return fmt.Errorf("network drive %s contains a double quote or line break", field)
+	}
+	for _, symbol := range value {
+		if symbol < 0x20 || symbol == 0x7f {
+			return fmt.Errorf("network drive %s contains a control character", field)
+		}
+	}
+	return nil
+}
+
+func validateNetworkDriveMarker(marker string) error {
+	if len(marker) < 16 {
+		return fmt.Errorf("network drive status marker is too short")
+	}
+	for _, symbol := range marker {
+		if (symbol < '0' || symbol > '9') && (symbol < 'a' || symbol > 'f') {
+			return fmt.Errorf("network drive status marker %q is not lowercase hexadecimal", marker)
+		}
+	}
+	return nil
+}
+
 func isWindowsShellType(shellType models.ShellType) bool {
 	return shellType == models.ShellPowerShell || shellType == models.ShellWindowsCmd
 }
 
-// buildEnvironmentFrames 把注入值按封装脚本的读取顺序写进标准输入。cmd
-// 逐行读取，因此每个值后补一次行分隔。
-func buildEnvironmentFrames(shellType models.ShellType, environments []EnvironmentInjection) []byte {
+// buildInjectionFrames 把注入值按封装脚本的读取顺序写进标准输入：先是
+// 环境变量值（cmd 逐行读取，因此每个值后补一次行分隔），再是各共享的挂
+// 载密码（PowerShell 按长度精确读取，不补分隔）。
+func buildInjectionFrames(shellType models.ShellType, environments []EnvironmentInjection, drives []NetworkDriveInjection) []byte {
 	var frames []byte
 	for _, environment := range environments {
 		frames = append(frames, environment.Value...)
@@ -189,7 +293,78 @@ func buildEnvironmentFrames(shellType models.ShellType, environments []Environme
 			frames = append(frames, '\r', '\n')
 		}
 	}
+	for _, drive := range drives {
+		frames = append(frames, drive.Password...)
+	}
 	return frames
+}
+
+// powerShellSingleQuote 把值安全嵌入 PowerShell 单引号字符串；单引号本身
+// 双写转义，其余字符原样保留。
+func powerShellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+// NetworkDriveMappingTimeout 是远端 New-SmbMapping 异步调用的等待上限。
+// 地址不可达时该调用可能要约 10 秒才失败，3 秒上限保证注入步骤不会拖垮
+// 用户命令（#206 真机结论）。
+const NetworkDriveMappingTimeout = 3 * time.Second
+
+// writePowerShellNetworkDrives 为每个共享写一段映射脚本：按长度从标准输
+// 入读出密码字节，经 PowerShell 异步调用执行 New-SmbMapping（密码只存在
+// 进程内变量里，不出现在任何进程命令行），用带随机标记的状态行回传结
+// 果，再继续执行后续注入与用户命令。任何映射失败都只体现在状态行里，
+// 不会中断用户命令。
+func writePowerShellNetworkDrives(wrapper *strings.Builder, drives []NetworkDriveInjection) {
+	for index, drive := range drives {
+		length := len(drive.Password)
+		wrapper.WriteString("try {\n")
+		fmt.Fprintf(wrapper, "$__sshmgr_bytes = New-Object byte[] %d\n", length)
+		fmt.Fprintf(wrapper, "while ($__sshmgr_read -lt %d) {\n", length)
+		fmt.Fprintf(wrapper, "  $__sshmgr_count = $__sshmgr_input_stream.Read($__sshmgr_bytes, $__sshmgr_read, %d - $__sshmgr_read)\n", length)
+		wrapper.WriteString("  if ($__sshmgr_count -le 0) { throw 'sshmgr network drive injection frame ended early' }\n")
+		wrapper.WriteString("  $__sshmgr_read += $__sshmgr_count\n")
+		wrapper.WriteString("}\n")
+		fmt.Fprintf(wrapper, "$__sshmgr_password = $__sshmgr_utf8.GetString($__sshmgr_bytes, 0, %d)\n", length)
+		wrapper.WriteString("Remove-Variable __sshmgr_bytes\n")
+		wrapper.WriteString("$__sshmgr_read = 0\n")
+		wrapper.WriteString("$__sshmgr_pipeline = [PowerShell]::Create()\n")
+		wrapper.WriteString("$null = $__sshmgr_pipeline.AddScript('param($localPath,$remotePath,$userName,$password) New-SmbMapping -LocalPath $localPath -RemotePath $remotePath -UserName $userName -Password $password -Persistent $false')\n")
+		fmt.Fprintf(wrapper, "$null = $__sshmgr_pipeline.AddArgument(%s)\n", powerShellSingleQuote(drive.Drive+":"))
+		fmt.Fprintf(wrapper, "$null = $__sshmgr_pipeline.AddArgument(%s)\n", powerShellSingleQuote(`\\`+drive.Address+`\`+drive.ShareName))
+		fmt.Fprintf(wrapper, "$null = $__sshmgr_pipeline.AddArgument(%s)\n", powerShellSingleQuote(drive.UserName))
+		wrapper.WriteString("$null = $__sshmgr_pipeline.AddArgument($__sshmgr_password)\n")
+		wrapper.WriteString("$__sshmgr_task = $__sshmgr_pipeline.BeginInvoke()\n")
+		fmt.Fprintf(wrapper, "if (-not $__sshmgr_task.Wait(%d)) {\n", NetworkDriveMappingTimeout.Milliseconds())
+		wrapper.WriteString("  $__sshmgr_status = 'timeout'\n")
+		wrapper.WriteString("  try { $null = $__sshmgr_pipeline.Stop() } catch { }\n")
+		wrapper.WriteString("} else {\n")
+		wrapper.WriteString("  try {\n")
+		wrapper.WriteString("    $null = $__sshmgr_pipeline.EndInvoke($__sshmgr_task)\n")
+		wrapper.WriteString("    $__sshmgr_status = 'ok'\n")
+		wrapper.WriteString("  } catch {\n")
+		wrapper.WriteString("    $__sshmgr_exception = $_.Exception\n")
+		wrapper.WriteString("    $__sshmgr_code = ''\n")
+		wrapper.WriteString("    while ($null -ne $__sshmgr_exception) {\n")
+		wrapper.WriteString("      if ($null -ne $__sshmgr_exception.ErrorData) {\n")
+		wrapper.WriteString("        $__sshmgr_code = [string]$__sshmgr_exception.ErrorData.error_Code\n")
+		wrapper.WriteString("        break\n")
+		wrapper.WriteString("      }\n")
+		wrapper.WriteString("      $__sshmgr_exception = $__sshmgr_exception.InnerException\n")
+		wrapper.WriteString("    }\n")
+		wrapper.WriteString("    if ($__sshmgr_code -eq '') { $__sshmgr_code = 'unknown' }\n")
+		wrapper.WriteString("    $__sshmgr_status = 'error-' + $__sshmgr_code\n")
+		wrapper.WriteString("  }\n")
+		wrapper.WriteString("}\n")
+		wrapper.WriteString("} catch {\n")
+		wrapper.WriteString("  $__sshmgr_status = 'error-wrapper'\n")
+		wrapper.WriteString("}\n")
+		wrapper.WriteString("if ($null -ne $__sshmgr_password) { Remove-Variable __sshmgr_password }\n")
+		wrapper.WriteString("if ($null -ne $__sshmgr_pipeline) { $__sshmgr_pipeline.Dispose() }\n")
+		fmt.Fprintf(wrapper, "Write-Output ('SSHMGR-SMBMAP:%s:%d:' + $__sshmgr_status)\n", drive.StatusMarker, index)
+		wrapper.WriteString("Remove-Variable __sshmgr_pipeline,__sshmgr_task,__sshmgr_status,__sshmgr_count,__sshmgr_exception,__sshmgr_code -ErrorAction SilentlyContinue\n")
+		wrapper.WriteString("$__sshmgr_read = 0\n")
+	}
 }
 
 // writePOSIXWrapper 只把变量名与字节长度写进远端命令；值由标准输入进入，
@@ -215,10 +390,10 @@ func writePOSIXWrapper(wrapper *strings.Builder, environments []EnvironmentInjec
 	wrapper.WriteString("unset __sshmgr_octal_bytes\n")
 }
 
-// writePowerShellWrapper 用严格 UTF-8 解码按长度读出的字节。值不进入远端
-// 命令文本，封装变量在用户命令开始前清理；读取标准输入字节流不要求改变
-// 用户命令的输出编码。
-func writePowerShellWrapper(wrapper *strings.Builder, environments []EnvironmentInjection) {
+// writePowerShellWrapper 用严格 UTF-8 解码按长度读出的字节。环境变量值与
+// 网络盘符挂载密码都不进入远端命令文本，封装变量在用户命令开始前清理；
+// 读取标准输入字节流不要求改变用户命令的输出编码。
+func writePowerShellWrapper(wrapper *strings.Builder, environments []EnvironmentInjection, drives []NetworkDriveInjection) {
 	wrapper.WriteString("$__sshmgr_input_stream = [Console]::OpenStandardInput()\n")
 	wrapper.WriteString("$__sshmgr_utf8 = New-Object System.Text.UTF8Encoding($false, $true)\n")
 	wrapper.WriteString("$__sshmgr_read = 0\n")
@@ -235,6 +410,7 @@ func writePowerShellWrapper(wrapper *strings.Builder, environments []Environment
 		wrapper.WriteString("Remove-Variable __sshmgr_bytes\n")
 		wrapper.WriteString("$__sshmgr_read = 0\n")
 	}
+	writePowerShellNetworkDrives(wrapper, drives)
 	wrapper.WriteString("Remove-Variable __sshmgr_input_stream\n")
 	wrapper.WriteString("Remove-Variable __sshmgr_utf8\n")
 	wrapper.WriteString("Remove-Variable __sshmgr_read\n")
