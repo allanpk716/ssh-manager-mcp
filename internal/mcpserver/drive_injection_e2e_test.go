@@ -1289,6 +1289,27 @@ func TestNetworkDriveFileTransferAndForwardingDoNotInject(t *testing.T) {
 		t.Fatalf("close_port failed: err=%v result=%+v", err, closeResult)
 	}
 
+	relaySource := filepath.Join(t.TempDir(), "relay-source.txt")
+	relayDestination := filepath.Join(t.TempDir(), "relay-destination.txt")
+	if err := os.WriteFile(relaySource, []byte("relay-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	relayResult, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_path": relaySource, "to_server_id": fixture.serverID, "to_path": relayDestination,
+		},
+	})
+	if err != nil || relayResult.IsError {
+		t.Fatalf("relay_file failed: err=%v result=%+v", err, relayResult)
+	}
+	var relay RelayOutput
+	unmarshalToolJSON(t, relayResult, &relay)
+	relayFinal := waitBackgroundTerminal(t, fixture.clientSession, relay.TaskID)
+	if relayFinal.Status != bgStatusDone {
+		t.Fatalf("relay task status = %q, error=%q", relayFinal.Status, relayFinal.Error)
+	}
+
 	commands, _ := fixture.fake.recorded()
 	if len(commands) != 0 {
 		t.Fatalf("file transfer or forwarding executed commands: %#v", commands)
