@@ -14,6 +14,7 @@ const (
 	linuxMountMarker        = "SSHMGR-LINUX-MOUNT"
 	linuxExitMissingCIFS    = 83
 	linuxExitProtocolFailed = 84
+	linuxExitVerifyFailed   = 86
 	linuxExitLockTimeout    = 87
 	linuxExitRemoteNewer    = 88
 	linuxExitInvalidFstab   = 89
@@ -29,6 +30,8 @@ func linuxMountExitCodeError(exitCode int) error {
 		return errors.New("目标服务器缺少 mount.cifs，请先由 owner 安装 cifs-utils；挂载工具不会自动安装")
 	case linuxExitProtocolFailed:
 		return errors.New("SMB 协议版本 3.1.1、3.0、2.1、2.0 全部试挂失败，未写入 fstab 配置")
+	case linuxExitVerifyFailed:
+		return errors.New("Linux 挂载点验证失败，不能确认共享已可用")
 	case linuxExitLockTimeout:
 		return errors.New("另一个挂载正在进行，请稍后再试")
 	case linuxExitRemoteNewer:
@@ -134,13 +137,7 @@ if [ "$sshmgr_selected_address" = "$sshmgr_existing_address" ]; then
 fi
 
 sshmgr_is_mounted() {
-  if command -v mountpoint >/dev/null 2>&1; then
-    mountpoint -q "$mount_point"
-  elif [ -r /proc/mounts ]; then
-    grep -qF " $mount_point cifs " /proc/mounts
-  else
-    mount | grep -qF " on $mount_point type cifs "
-  fi
+` + mountTableCheckScript(CheckSystemLinux) + `  [ "$sshmgr_mounted" = yes ]
 }
 
 sshmgr_build_fstab_line() {
@@ -243,9 +240,9 @@ fi
 systemctl daemon-reload
 sshmgr_automount_unit=$(systemd-escape -p --suffix=automount "$mount_point")
 systemctl restart "$sshmgr_automount_unit"
-if ! ls -A "$mount_point" >/dev/null 2>&1; then
+` + mountTableCheckScript(CheckSystemLinux) + `if [ "$sshmgr_mounted" != yes ]; then
   echo ` + linuxMountMarker + ` verify-failed >&2
-  exit 86
+  exit ` + strconv.Itoa(linuxExitVerifyFailed) + `
 fi
 if [ "$sshmgr_managed_count" -eq 0 ]; then
   sshmgr_result=first-mount-success

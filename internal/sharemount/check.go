@@ -97,7 +97,7 @@ func (s *Service) runCheck(
 ) (*CheckResult, error) {
 	command := fullCommand(request.Shares)
 	if !full {
-		command = buildLimitedShareCheckCommand(marker, request.Shares)
+		command = buildLimitedShareCheckCommand(system, request.Shares)
 	}
 	result, err := s.exec(ctx, request.Server, RemoteExecRequest{
 		Command: command, Privileged: full,
@@ -118,23 +118,26 @@ func (s *Service) runCheck(
 }
 
 // buildLinuxShareCheckCommand 生成 Linux 全量检测命令：逐个共享在
-// /etc/fstab 里找 sshmgr 标记条目，并用 ls 验证挂载点是否可列出内容。
-// 命令只读，不拿锁，也不输出地址或挂载账号。
+// /etc/fstab 里找 sshmgr 标记条目，并按挂载表核验挂载点。命令只读，
+// 不拿锁，也不输出地址或挂载账号。
 func buildLinuxShareCheckCommand(shares []*models.SharedStorage) string {
 	var command strings.Builder
 	command.WriteString("set -eu\necho '" + linuxCheckMarker + " mode=full'\n")
 	command.WriteString(linuxFstabOptionParserScript())
 	for index, share := range shares {
-		fmt.Fprintf(&command, linuxShareCheckBlock,
-			sshbroker.POSIXShellQuote(url.PathEscape(share.Name)),
-			sshbroker.POSIXShellQuote(linuxMountPoint(share.Name)), index+1)
+		fmt.Fprintf(&command, linuxShareFstabScanBlock,
+			sshbroker.POSIXShellQuote(url.PathEscape(share.Name)))
+		fmt.Fprintf(&command, "mount_point=%s\n", sshbroker.POSIXShellQuote(linuxMountPoint(share.Name)))
+		command.WriteString(mountTableCheckScript(CheckSystemLinux))
+		fmt.Fprintf(&command, "echo \"%s index=%d managed=$sshmgr_managed share=$sshmgr_share version=$sshmgr_version mounted=$sshmgr_mounted\"\n",
+			linuxCheckMarker, index+1)
 	}
 	return command.String()
 }
 
-// linuxShareCheckBlock 是单个共享的 Linux 检测块。共享名匹配值使用标记
-// 的百分号编码，必须作为格式化参数传入，不能拼进格式串。
-const linuxShareCheckBlock = `sshmgr_managed=no
+// linuxShareFstabScanBlock 是单个共享的 Linux fstab 扫描块。共享名匹配值
+// 使用标记的百分号编码，必须作为格式化参数传入，不能拼进格式串。
+const linuxShareFstabScanBlock = `sshmgr_managed=no
 sshmgr_share=''
 sshmgr_version=''
 if [ -f /etc/fstab ]; then
@@ -152,11 +155,6 @@ if [ -f /etc/fstab ]; then
     sshmgr_version=$sshmgr_option_version
   done < /etc/fstab
 fi
-sshmgr_mounted=no
-if ls -A %s >/dev/null 2>&1; then
-  sshmgr_mounted=yes
-fi
-echo "` + linuxCheckMarker + ` index=%d managed=$sshmgr_managed share=$sshmgr_share version=$sshmgr_version mounted=$sshmgr_mounted"
 `
 
 // buildDarwinShareCheckCommand 生成 macOS 全量检测命令：逐个共享在
@@ -166,17 +164,20 @@ func buildDarwinShareCheckCommand(shares []*models.SharedStorage) string {
 	var command strings.Builder
 	command.WriteString("set -eu\necho '" + darwinCheckMarker + " mode=full'\n")
 	for index, share := range shares {
-		fmt.Fprintf(&command, darwinShareCheckBlock,
-			sshbroker.POSIXShellQuote(url.PathEscape(share.Name)),
-			sshbroker.POSIXShellQuote(darwinMountPoint(share.Name)), index+1)
+		fmt.Fprintf(&command, darwinShareMapScanBlock,
+			sshbroker.POSIXShellQuote(url.PathEscape(share.Name)))
+		fmt.Fprintf(&command, "mount_point=%s\n", sshbroker.POSIXShellQuote(darwinMountPoint(share.Name)))
+		command.WriteString(mountTableCheckScript(CheckSystemDarwin))
+		fmt.Fprintf(&command, "echo \"%s index=%d managed=$sshmgr_managed share=$sshmgr_share version=$sshmgr_version mounted=$sshmgr_mounted\"\n",
+			darwinCheckMarker, index+1)
 	}
 	command.WriteString(darwinAutoMasterCheckBlock)
 	return command.String()
 }
 
-// darwinShareCheckBlock 是单个共享的 macOS 检测块；共享名匹配值同样按
-// 标记编码后作为格式化参数传入。
-const darwinShareCheckBlock = `sshmgr_managed=no
+// darwinShareMapScanBlock 是单个共享的 macOS 间接映射扫描块；共享名匹配
+// 值同样按标记编码后作为格式化参数传入。
+const darwinShareMapScanBlock = `sshmgr_managed=no
 sshmgr_share=''
 sshmgr_version=''
 if [ -f '` + darwinMapFile + `'; then
@@ -193,11 +194,6 @@ if [ -f '` + darwinMapFile + `'; then
     sshmgr_version=$sshmgr_marker_version
   done < '` + darwinMapFile + `'
 fi
-sshmgr_mounted=no
-if ls -A %s >/dev/null 2>&1; then
-  sshmgr_mounted=yes
-fi
-echo "` + darwinCheckMarker + ` index=%d managed=$sshmgr_managed share=$sshmgr_share version=$sshmgr_version mounted=$sshmgr_mounted"
 `
 
 // darwinAutoMasterCheckBlock 检查 /etc/auto_master 是否仍引用 sshmgr 的
@@ -218,21 +214,23 @@ echo "` + darwinCheckMarker + ` auto-master=$sshmgr_auto_master"
 `
 
 // buildLimitedShareCheckCommand 生成没有 sudo 凭据时的受限检测命令：只能
-// 验证每个挂载点是否可以列出内容，不能读取 root 才能读的持久配置。
-func buildLimitedShareCheckCommand(marker string, shares []*models.SharedStorage) string {
+// 按挂载表核验每个挂载点，不能读取 root 才能读的持久配置。
+func buildLimitedShareCheckCommand(system string, shares []*models.SharedStorage) string {
+	marker := linuxCheckMarker
+	if system == CheckSystemDarwin {
+		marker = darwinCheckMarker
+	}
 	var command strings.Builder
 	command.WriteString("set -eu\necho '" + marker + " mode=limited'\n")
 	for index, share := range shares {
-		mountPoint := sshbroker.POSIXShellQuote(linuxMountPoint(share.Name))
-		if marker == darwinCheckMarker {
-			mountPoint = sshbroker.POSIXShellQuote(darwinMountPoint(share.Name))
+		mountPoint := linuxMountPoint(share.Name)
+		if system == CheckSystemDarwin {
+			mountPoint = darwinMountPoint(share.Name)
 		}
-		fmt.Fprintf(&command, `sshmgr_mounted=no
-if ls -A %s >/dev/null 2>&1; then
-  sshmgr_mounted=yes
-fi
-echo "%s index=%d mounted=$sshmgr_mounted"
-`, mountPoint, marker, index+1)
+		fmt.Fprintf(&command, "mount_point=%s\n", sshbroker.POSIXShellQuote(mountPoint))
+		command.WriteString(mountTableCheckScript(system))
+		fmt.Fprintf(&command, `echo "%s index=%d mounted=$sshmgr_mounted"
+`, marker, index+1)
 	}
 	return command.String()
 }

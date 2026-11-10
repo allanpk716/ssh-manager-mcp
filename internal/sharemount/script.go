@@ -104,7 +104,47 @@ func linuxFstabOptionParserScript() string {
     esac
   done
 }
+
 `
+}
+
+// mountTableCheckScript 生成「已挂载」核验片段：先访问挂载点触发自动挂
+// 载，再查挂载表确认挂载点上确有对应文件系统，结论写入
+// sshmgr_mounted（yes/no）。Linux 读 /proc/mounts，确认挂载点那一列等于
+// 挂载点且类型为 cifs（/proc/mounts 把路径里的空格写成 \040；共享名已禁
+// 止空白，无需解码），读不到时退回 mount 输出；macOS 用 mount 输出确认
+// 存在「on <挂载点> (smbfs」的行。挂载工具的最终验证与现场检测共用这一
+// 判断，空目录不再被误判成已挂载。
+func mountTableCheckScript(system string) string {
+	switch system {
+	case CheckSystemLinux:
+		return `ls -A "$mount_point" >/dev/null 2>&1 || true
+sshmgr_mounted=no
+if [ -r /proc/mounts ]; then
+  while IFS= read -r sshmgr_mount_entry || [ -n "$sshmgr_mount_entry" ]; do
+    set -f
+    set -- $sshmgr_mount_entry
+    set +f
+    if [ "$#" -ge 3 ] && [ "$2" = "$mount_point" ] && [ "$3" = cifs ]; then
+      sshmgr_mounted=yes
+      break
+    fi
+  done < /proc/mounts
+else
+  if mount | grep -qF " on $mount_point type cifs "; then
+    sshmgr_mounted=yes
+  fi
+fi
+`
+	case CheckSystemDarwin:
+		return `ls -A "$mount_point" >/dev/null 2>&1 || true
+sshmgr_mounted=no
+if mount | grep -qF " on $mount_point (smbfs"; then
+  sshmgr_mounted=yes
+fi
+`
+	}
+	return ""
 }
 
 // mountOutputUnknownAction 是固定挂载命令返回未知动作时的统一错误构造。

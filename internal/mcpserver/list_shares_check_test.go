@@ -51,8 +51,14 @@ func (f *fakeShareCheckServer) handler(command string, stdin io.Reader) (string,
 		return system + "\n", "", 0
 	case strings.Contains(command, "SSHMGR-LINUX-CHECK"):
 		marker = "SSHMGR-LINUX-CHECK"
+		if !strings.Contains(command, "/proc/mounts") {
+			return "", "Linux 检测命令必须核验 /proc/mounts 挂载表", 91
+		}
 	case strings.Contains(command, "SSHMGR-DARWIN-CHECK"):
 		marker = "SSHMGR-DARWIN-CHECK"
+		if !strings.Contains(command, `(smbfs`) {
+			return "", "macOS 检测命令必须核验 mount 输出挂载表", 91
+		}
 	default:
 		return "", "unexpected command: " + command, 90
 	}
@@ -148,9 +154,12 @@ func newListSharesCheckFixture(t *testing.T) listSharesCheckFixture {
 		fixture.serverIDs[name] = added.ServerID
 	}
 	addCheckedServer("linux-mounted", "Linux", fakeShareCheckState{managed: true, version: 2, mounted: true}, false, true)
+	// 挂载点目录存在但挂载表里没有对应文件系统：现场检测必须判为未挂载。
+	addCheckedServer("linux-empty-dir", "Linux", fakeShareCheckState{managed: true, version: 2, mounted: false}, false, true)
 	addCheckedServer("linux-missing", "Linux", fakeShareCheckState{}, false, true)
 	addCheckedServer("linux-old", "Linux", fakeShareCheckState{managed: true, version: 1, mounted: true}, false, true)
 	addCheckedServer("darwin-mounted", "Darwin", fakeShareCheckState{managed: true, version: 2, mounted: true}, true, true)
+	addCheckedServer("darwin-empty-dir", "Darwin", fakeShareCheckState{managed: true, version: 2, mounted: false}, true, true)
 	addCheckedServer("darwin-reset", "Darwin", fakeShareCheckState{managed: true, version: 2, mounted: true}, false, true)
 	addCheckedServer("linux-nosudo", "Linux", fakeShareCheckState{mounted: true}, false, false)
 
@@ -305,6 +314,27 @@ func TestListSharesLiveCheckReportsEveryState(t *testing.T) {
 	}
 	if after := auditCount(t, fixture.store); after != auditBefore {
 		t.Fatalf("现场检测不应写审计：%d 行新增", after-auditBefore)
+	}
+}
+
+func TestListSharesLiveCheckTreatsEmptyDirectoryAsNotMounted(t *testing.T) {
+	fixture := newListSharesCheckFixture(t)
+
+	output, text, isError := callListShares(t, fixture.session, map[string]any{"live_check": true})
+	if isError {
+		t.Fatalf("现场检测失败：%s", text)
+	}
+	for serverName, wantStatus := range map[string]string{
+		"linux-empty-dir":  "not-mounted",
+		"darwin-empty-dir": "not-mounted",
+	} {
+		entry := listSharesServerEntry(t, output, serverName)
+		if entry.MountStatus != wantStatus {
+			t.Fatalf("服务器 %s 的状态 = %q，期待 %q", serverName, entry.MountStatus, wantStatus)
+		}
+		if len(entry.MountNotes) != 0 {
+			t.Fatalf("服务器 %s 不应给出多余说明：%#v", serverName, entry.MountNotes)
+		}
 	}
 }
 

@@ -45,6 +45,42 @@ func TestShareCheckCommandsAreReadOnly(t *testing.T) {
 	}
 }
 
+func TestShareCheckCommandsUseMountTable(t *testing.T) {
+	commands := []struct {
+		name    string
+		command string
+		wants   []string
+	}{
+		{
+			name:    "linux 全量",
+			command: buildLinuxShareCheckCommand(checkTestShares()),
+			wants:   []string{"/proc/mounts", `[ "$2" = "$mount_point" ] && [ "$3" = cifs ]`},
+		},
+		{
+			name:    "darwin 全量",
+			command: buildDarwinShareCheckCommand(checkTestShares()),
+			wants:   []string{`grep -qF " on $mount_point (smbfs"`},
+		},
+		{
+			name:    "linux 受限",
+			command: buildLimitedShareCheckCommand(CheckSystemLinux, checkTestShares()),
+			wants:   []string{"/proc/mounts", `[ "$2" = "$mount_point" ] && [ "$3" = cifs ]`},
+		},
+		{
+			name:    "darwin 受限",
+			command: buildLimitedShareCheckCommand(CheckSystemDarwin, checkTestShares()),
+			wants:   []string{`grep -qF " on $mount_point (smbfs"`},
+		},
+	}
+	for _, testCase := range commands {
+		for _, want := range testCase.wants {
+			if !strings.Contains(testCase.command, want) {
+				t.Fatalf("%s 检测命令缺少挂载表核验 %q：\n%s", testCase.name, want, testCase.command)
+			}
+		}
+	}
+}
+
 // TestShareCheckCommandMatchesEncodedMarkerName 检查命令按跨操作系统标记
 // 的共享名编码匹配远端条目，特殊字符共享名不会被误配。
 func TestShareCheckCommandMatchesEncodedMarkerName(t *testing.T) {

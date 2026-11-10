@@ -220,10 +220,7 @@ if [ "$sshmgr_reference_present" -eq 0 ]; then
   sshmgr_reset=yes
 fi
 
-sshmgr_mounted=no
-if ls -A "$mount_point" >/dev/null 2>&1; then
-  sshmgr_mounted=yes
-fi
+` + mountTableCheckScript(CheckSystemDarwin) + `
 if [ "$sshmgr_existing_configuration" = yes ] && [ "$sshmgr_reset" = no ] &&
    [ "$sshmgr_mounted" = yes ]; then
   echo ` + darwinMountMarker + ` result=no-change selected=$sshmgr_selected_index reset=no
@@ -291,20 +288,21 @@ if [ "$sshmgr_reset" = yes ]; then
   printf '%s %s\n' ` + sshbroker.POSIXShellQuote(darwinMountRoot) + ` ` + sshbroker.POSIXShellQuote(darwinMapFile) + ` >> ` + sshbroker.POSIXShellQuote(darwinAutoMaster) + `
 fi
 
-if [ "$sshmgr_managed_count" -gt 0 ] && [ "$sshmgr_existing_configuration" = no ] &&
-   mount | grep -qF " on $mount_point (smbfs"; then
-  if ! umount "$mount_point" >/dev/null 2>&1; then
-    if ! diskutil unmount force "$mount_point" >/dev/null 2>&1; then
-      echo ` + darwinMountMarker + ` unmount-failed >&2
-      exit ` + strconv.Itoa(darwinExitUnmountFailed) + `
+if [ "$sshmgr_managed_count" -gt 0 ] && [ "$sshmgr_existing_configuration" = no ]; then
+  ` + mountTableCheckScript(CheckSystemDarwin) + `  if [ "$sshmgr_mounted" = yes ]; then
+    if ! umount "$mount_point" >/dev/null 2>&1; then
+      if ! diskutil unmount force "$mount_point" >/dev/null 2>&1; then
+        echo ` + darwinMountMarker + ` unmount-failed >&2
+        exit ` + strconv.Itoa(darwinExitUnmountFailed) + `
+      fi
     fi
   fi
 fi
 
 automount -cv
-if ! ls -A "$mount_point" >/dev/null 2>&1; then
+` + mountTableCheckScript(CheckSystemDarwin) + `if [ "$sshmgr_mounted" != yes ]; then
   echo ` + darwinMountMarker + ` verify-failed >&2
-  exit 86
+  exit ` + strconv.Itoa(darwinExitVerifyFailed) + `
 fi
 if [ "$sshmgr_managed_count" -eq 0 ]; then
   sshmgr_result=first-mount-success

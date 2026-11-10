@@ -42,13 +42,16 @@ type fakeLinuxMountServer struct {
 	configurationWrites int
 	remounts            int
 	mounted             bool
-	reachableAddresses  map[string]bool
-	existingAddress     string
-	existingProtocol    string
-	remoteVersion       int64
-	ownerFstabLines     []string
-	lockHeld            bool
-	staleLock           bool
+	// mountTableMissing 模拟挂载点目录可以列出、但挂载表里没有对应
+	// cifs 文件系统：挂载工具的最终验证必须失败。
+	mountTableMissing  bool
+	reachableAddresses map[string]bool
+	existingAddress    string
+	existingProtocol   string
+	remoteVersion      int64
+	ownerFstabLines    []string
+	lockHeld           bool
+	staleLock          bool
 
 	missingMountCIFS bool
 	workingVersion   string
@@ -111,6 +114,12 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 			f.credentialFile = ""
 			return "", "SSHMGR-LINUX-MOUNT protocol-failed", 84
 		}
+		if f.mountTableMissing && !strings.Contains(command, "/proc/mounts") {
+			return "", "Linux 固定命令的最终验证必须核验 /proc/mounts 挂载表", 91
+		}
+		if f.mountTableMissing && !strings.Contains(command, "/proc/mounts") {
+			return "", "Linux 固定命令的最终验证必须核验 /proc/mounts 挂载表", 91
+		}
 		if f.lockHeld {
 			return "", "SSHMGR-LINUX-MOUNT lock-timeout", 87
 		}
@@ -147,6 +156,9 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 		}
 		f.configurationWrites++
 		f.remounts++
+		if f.mountTableMissing {
+			return "", "SSHMGR-LINUX-MOUNT verify-failed", 86
+		}
 		f.existingAddress = selectedAddress
 		f.existingProtocol = selectedVersion
 		f.remoteVersion = f.shareVersion
@@ -216,18 +228,21 @@ func (f *fakeLinuxMountServer) managedFstabLine(address, protocolVersion string,
 type fakeDarwinMountServer struct {
 	mu sync.Mutex
 
-	commands            []string
-	standardInputs      [][]byte
-	autoMasterLines     []string
-	mapLines            []string
-	mapOwner            string
-	mapMode             string
-	autoMasterWrites    int
-	mapWrites           int
-	automountRefreshes  int
-	mountPointAccesses  int
-	remounts            int
-	mounted             bool
+	commands           []string
+	standardInputs     [][]byte
+	autoMasterLines    []string
+	mapLines           []string
+	mapOwner           string
+	mapMode            string
+	autoMasterWrites   int
+	mapWrites          int
+	automountRefreshes int
+	mountPointAccesses int
+	remounts           int
+	mounted            bool
+	// mountTableMissing 模拟挂载点目录可以列出、但挂载表里没有对应
+	// cifs 文件系统：挂载工具的最终验证必须失败。
+	mountTableMissing   bool
 	unmounts            int
 	unmountFails        bool
 	reachableAddresses  map[string]bool
@@ -289,6 +304,9 @@ func (f *fakeDarwinMountServer) handler(command string, stdin io.Reader) (string
 		}
 		if f.remoteVersion > f.shareVersion {
 			return "", "SSHMGR-DARWIN-MOUNT remote-version-newer", 88
+		}
+		if f.mountTableMissing && !strings.Contains(command, `(smbfs`) {
+			return "", "macOS 固定命令的最终验证必须核验 mount 输出挂载表", 91
 		}
 		selectedAddress := "192.0.2.10"
 		selectedIndex := 1
@@ -360,6 +378,9 @@ func (f *fakeDarwinMountServer) handler(command string, stdin io.Reader) (string
 		}
 		f.automountRefreshes++
 		f.mountPointAccesses++
+		if f.mountTableMissing {
+			return "", "SSHMGR-DARWIN-MOUNT verify-failed", 86
+		}
 		f.mounted = true
 		f.remounts++
 		action := "update-success"
@@ -476,7 +497,7 @@ func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup) mountShareS
 			reachableAddresses: map[string]bool{"192.0.2.10": true},
 			existingAddress:    setup.darwinExistingAddress,
 			missingAutomount:   setup.darwinMissingAutomount, lockHeld: setup.lockHeld,
-			staleLock: setup.staleLock,
+			staleLock: setup.staleLock, mountTableMissing: setup.mountTableMissing,
 			autoMasterLines: []string{
 				"# Automounter master map",
 				"/System/Volumes/Data /System/Volumes/Data auto_databackup",
@@ -499,7 +520,7 @@ func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup) mountShareS
 			reachableAddresses: map[string]bool{"192.0.2.10": true},
 			existingAddress:    setup.existingAddress, existingProtocol: setup.existingProtocol,
 			ownerFstabLines: append([]string(nil), setup.ownerFstabLines...), lockHeld: setup.lockHeld,
-			staleLock: setup.staleLock,
+			staleLock: setup.staleLock, mountTableMissing: setup.mountTableMissing,
 		}
 		if len(setup.reachable) != 0 {
 			linuxFake.reachableAddresses = make(map[string]bool, len(setup.reachable))
@@ -750,6 +771,7 @@ type mountShareFixtureSetup struct {
 	ownerFstabLines        []string
 	lockHeld               bool
 	staleLock              bool
+	mountTableMissing      bool
 	notWritable            bool
 	targetOutOfProfile     bool
 	windowsTarget          bool
@@ -1476,6 +1498,20 @@ func TestMountShareDarwinRewriteUnmountFailureStops(t *testing.T) {
 	}
 }
 
+func TestMountShareDarwinEmptyDirectoryFailsMountTableVerification(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.mountTableMissing = true
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if !isError || text != "macOS 挂载点验证失败，不能确认共享已可用" {
+		t.Fatalf("macOS 空目录且挂载表没有条目时的报错 = %q (%v)", text, output)
+	}
+}
+
 func TestMountShareLinuxSMBVersionFallsBackTo20(t *testing.T) {
 	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
 		setup.workingVersion = "2.0"
@@ -1785,6 +1821,19 @@ func TestMountShareLinuxRecoversExpiredStaleLock(t *testing.T) {
 	credentialWrites, configurationWrites := fixture.fake.writeCounts()
 	if credentialWrites != 1 || configurationWrites != 1 {
 		t.Fatalf("过期锁回收后的写入次数错误：凭据 %d 次，配置 %d 次", credentialWrites, configurationWrites)
+	}
+}
+
+func TestMountShareLinuxEmptyDirectoryFailsMountTableVerification(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.mountTableMissing = true
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if !isError || text != "Linux 挂载点验证失败，不能确认共享已可用" {
+		t.Fatalf("空目录且挂载表没有条目时的报错 = %q (%v)", text, output)
 	}
 }
 
