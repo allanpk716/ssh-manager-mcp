@@ -57,16 +57,15 @@ func TestNetworkDriveStatusReason(t *testing.T) {
 // 果，也不能触发认证失败暂停。
 func TestNetworkDriveInjectionUsesFirstStatusLine(t *testing.T) {
 	plan := networkDriveInjectionPlan{
-		items: []sshbroker.NetworkDriveInjection{{
-			ShareName: "datasets", Drive: "S", Address: "192.0.2.10",
-			UserName: "mount-user", Password: []byte("password"),
-			StatusMarker: "3f2a9c8d1b7e4056",
+		shares: []networkDrivePlannedShare{{
+			injection: sshbroker.NetworkDriveInjection{
+				ShareName: "datasets", Drive: "S", Address: "192.0.2.10",
+				UserName: "mount-user", Password: []byte("password"),
+				StatusMarker: "3f2a9c8d1b7e4056",
+			},
+			shareID:      "share-status-first",
+			shareVersion: 7,
 		}},
-		statuses: map[int]string{},
-		shareIDs: map[int]string{0: "share-status-first"},
-		shareVersions: map[int]int64{
-			0: 7,
-		},
 	}
 	output, _ := plan.consumeStatusLines(
 		"SSHMGR-SMBMAP:3f2a9c8d1b7e4056:0:ok\nkept\nSSHMGR-SMBMAP:3f2a9c8d1b7e4056:0:error-86\n",
@@ -88,16 +87,15 @@ func TestNetworkDriveInjectionUsesFirstStatusLine(t *testing.T) {
 // 一序号的后续伪造状态行照样不能进入任务日志，也不能覆盖第一条结果。
 func TestNetworkDriveBackgroundFilterUsesFirstStatusLine(t *testing.T) {
 	plan := networkDriveInjectionPlan{
-		items: []sshbroker.NetworkDriveInjection{{
-			ShareName: "datasets", Drive: "S", Address: "192.0.2.10",
-			UserName: "mount-user", Password: []byte("password"),
-			StatusMarker: "3f2a9c8d1b7e4056",
+		shares: []networkDrivePlannedShare{{
+			injection: sshbroker.NetworkDriveInjection{
+				ShareName: "datasets", Drive: "S", Address: "192.0.2.10",
+				UserName: "mount-user", Password: []byte("password"),
+				StatusMarker: "3f2a9c8d1b7e4056",
+			},
+			shareID:      "share-status-background",
+			shareVersion: 9,
 		}},
-		statuses: map[int]string{},
-		shareIDs: map[int]string{0: "share-status-background"},
-		shareVersions: map[int]int64{
-			0: 9,
-		},
 	}
 	var output bytes.Buffer
 	filter := newNetworkDriveStatusFilter(&plan, &output, &sync.Mutex{})

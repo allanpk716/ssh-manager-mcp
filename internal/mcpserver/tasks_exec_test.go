@@ -133,7 +133,7 @@ func startBg(t *testing.T, m *TaskManager, st *store.Store, addr string, hk ssh.
 		t.Fatal(err)
 	}
 	port, _ := strconv.Atoi(portStr)
-	id, eff, _, serr := m.Start(context.Background(), st, BgStartSpec{
+	started, serr := m.Start(context.Background(), st, BgStartSpec{
 		ProjectID: "proj", ServerID: "srv", Command: command,
 		TimeoutSec: timeoutSec,
 		Server:     &models.Server{Host: host, Port: port, User: "u"},
@@ -143,7 +143,7 @@ func startBg(t *testing.T, m *TaskManager, st *store.Store, addr string, hk ssh.
 	if serr != nil {
 		t.Fatalf("start %q: %v", command, serr)
 	}
-	return id, eff
+	return started.TaskID, started.EffectiveTimeout
 }
 
 // gatedExec 构造可门控的 testsshd Exec handler: 命中 gatedCmds 之一时, 该命令
@@ -580,7 +580,7 @@ func TestBackgroundSudoLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	port, _ := strconv.Atoi(portStr)
-	id, _, _, serr := m.Start(context.Background(), st, BgStartSpec{
+	started, serr := m.Start(context.Background(), st, BgStartSpec{
 		ProjectID: "proj", ServerID: "srv", Command: "whoami",
 		Sudo: true, SudoPass: "sp", TimeoutSec: 60,
 		Server:   &models.Server{Host: host, Port: port, User: "u"},
@@ -590,6 +590,7 @@ func TestBackgroundSudoLifecycle(t *testing.T) {
 	if serr != nil {
 		t.Fatalf("start sudo task: %v", serr)
 	}
+	id := started.TaskID
 
 	// 生产观察路径: Output 轮询至终态 (每轮 1s 预算), 断言输出与退出码。
 	var v BgView

@@ -851,6 +851,16 @@ type BgStartSpec struct {
 	DialSuccessCache         sshbroker.DialSuccessCacheSource
 }
 
+// BgStartExecution 是 Start 成功后的显式返回值。InjectionWarnings 只包含
+// 连接成功后由 PrepareExec 求出的补充警告，不重复 BgStartSpec 里启动前已
+// 知的环境变量注入警告。
+type BgStartExecution struct {
+	TaskID            string
+	EffectiveTimeout  time.Duration
+	ConnectionNotes   []string
+	InjectionWarnings []string
+}
+
 // clampBgTimeout 钳定后台生效超时 (spec §3): 0/缺省 → cap (生产即 24h
 // runCap); > cap → cap; 中值直通。负值本应 schema 层拒 (spec §4)——此处
 // 防御性按缺省处理。
@@ -874,7 +884,7 @@ func clampBgTimeout(sec int, cap time.Duration) time.Duration {
 // goroutine 启动前——end 行必晚于 start 行）→ runTask goroutine（Insert 的
 // wg 票）。Insert 失败 (manager 已关): 锁外关 client + 归还预约, 零泄漏。
 // 成功返回 taskID、钳定后的生效超时与统一拨号入口的连接说明。
-func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSpec) (taskID string, effectiveTimeout time.Duration, connectionNotes []string, err error) {
+func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSpec) (BgStartExecution, error) {
 	t0 := time.Now()
 	effective := clampBgTimeout(spec.TimeoutSec, m.runCap)
 	auditStart := func(status string) {
@@ -889,7 +899,7 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 		_ = st.WriteAudit(row)
 	}
 	if err := m.Reserve(); err != nil {
-		return "", 0, nil, err
+		return BgStartExecution{}, err
 	}
 	cli, connectionNotes, cerr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
 		Server: spec.Server, Auth: spec.Auth, HostKeys: spec.HostKeys, KeepAlive: true,
@@ -905,13 +915,12 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 		}
 		auditStart(status)
 		m.ReleaseReservation()
-		return "", 0, nil, cerr
+		return BgStartExecution{}, cerr
 	}
 	preparation := BgExecPreparation{ExecOption: spec.ExecOption}
 	if spec.PrepareExec != nil {
 		preparation = spec.PrepareExec(ctx, cli, spec.ExecOption)
 	}
-	taskTimeout := effective
 	// sudoMetaBox (Plan 41 §2): exec 闭包的第四返回值落点。闭包在 runTask 内
 	// 执行, 返回后值已定; runTask 终态段持锁把它挂上 bgTask——happens-before
 	// 由 exec 调用返回保证。
@@ -945,7 +954,7 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 		ServerID:          spec.ServerID,
 		Command:           spec.Command,
 		Sudo:              spec.Sudo,
-		Timeout:           taskTimeout,
+		Timeout:           effective,
 		InjectionWarnings: append(append([]string(nil), spec.InjectionWarnings...), preparation.InjectionWarnings...),
 		FinishExec:        func() BgExecOutcome { return execOutcome },
 		AuditStart:        func() { auditStart("ok") }, // Insert 持锁段内、goroutine 前调用
@@ -955,7 +964,12 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 	if ierr != nil {
 		_ = cli.Close() // Insert 拒绝 (manager 已关): 锁外关, 零泄漏
 		m.ReleaseReservation()
-		return "", 0, nil, ierr
+		return BgStartExecution{}, ierr
 	}
-	return tid, effective, connectionNotes, nil
+	return BgStartExecution{
+		TaskID:            tid,
+		EffectiveTimeout:  effective,
+		ConnectionNotes:   connectionNotes,
+		InjectionWarnings: append([]string(nil), preparation.InjectionWarnings...),
+	}, nil
 }

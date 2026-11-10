@@ -303,12 +303,7 @@ func mountShareSelectionNotes(result *sharemount.Result) []string {
 		if !attempt.Physical || attempt.OK {
 			continue
 		}
-		line := fmt.Sprintf("%s 第%d个地址  ✗%s", attempt.NetworkName,
-			attempt.NetworkSequence, models.ProbeErrorCategoryLabel(attempt.ErrorCategory))
-		if attempt.DurationMilli >= 0 {
-			line += fmt.Sprintf(" %dms", attempt.DurationMilli)
-		}
-		physicalFailures = append(physicalFailures, line)
+		physicalFailures = append(physicalFailures, sharemount.FormatProbeAttemptFailure(attempt))
 	}
 	if len(physicalFailures) == 0 {
 		return nil

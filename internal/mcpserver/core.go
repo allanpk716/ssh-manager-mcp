@@ -226,14 +226,9 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	timeout = clampExecTimeout(timeout) // <=0 → defaultTimeout; cap at MaxExecTimeout
 	// 网络盘符注入计划需要先在目标服务器上探测 445，因此在连接建立后求
 	// 出；探测与注入步骤都是固定生成的命令，不经命令策略。
-	drivePlan := buildNetworkDriveInjectionPlan(ctx, st, profileID, srv, sudo, cli)
-	injectionItems := injectionPlan.execItems()
-	injectionItems = append(injectionItems, drivePlan.injectionItems()...)
-	preCommandInjection := sshbroker.WithPreCommandInjection(sshbroker.ExecInjectionOptions{
-		ShellType:   models.NormalizeShellType(string(srv.ShellType)),
-		TargetLayer: sshbroker.ExecLayerNormal,
-		Items:       injectionItems,
-	})
+	driveExecution := prepareNetworkDriveExecution(ctx, st, profileID, srv, sudo, cli, injectionPlan)
+	drivePlan := driveExecution.plan
+	preCommandInjection := driveExecution.execOption
 
 	var res sshbroker.ExecResult
 	if sudo {

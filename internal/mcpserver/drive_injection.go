@@ -30,25 +30,25 @@ const networkDriveStatusPrefix = "SSHMGR-SMBMAP:"
 const networkDriveAddressCacheLifetime = 10 * time.Minute
 
 const (
-	networkDriveReasonListFailed       = "读取共享存储登记失败"
-	networkDriveReasonVisibleFailed    = "读取当前 profile 的服务器可见范围失败"
-	networkDriveReasonPasswordFailed   = "读取挂载密码机密项失败"
-	networkDriveReasonPasswordEmpty    = "挂载密码为空"
-	networkDriveReasonPasswordZero     = "挂载密码含空字节"
-	networkDriveReasonPasswordUTF8     = "挂载密码在 Windows 上不是合法 UTF-8"
-	networkDriveReasonUnsafeValue      = "共享登记的共享名、地址或挂载账号包含无法注入的字符"
-	networkDriveReasonNoDevice         = "目标服务器未关联拓扑设备"
-	networkDriveReasonNoCommonNetwork  = "目标服务器所属设备与共享存储提供方设备没有共同网络"
-	networkDriveReasonProbeFailed      = "候选地址探测失败"
-	networkDriveReasonStatusMissing    = "注入步骤没有返回状态行"
-	networkDriveReasonStatusUnreadable = "注入步骤没有返回可识别的结果"
-	networkDriveReasonAuthentication   = "共享密码认证失败，已暂停注入，请同步或检查机密项"
-	networkDriveHintNetwork            = "提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制"
-	networkDriveReasonPrivileged       = "Windows 提权层不注入网络盘符"
-	networkDriveReasonTotalTimeout     = "注入步骤总时长达到上限，未映射"
-	networkDriveAddressPlanCached      = "已缓存地址"
-	networkDriveAddressPlanDeferred    = "执行时探测"
-	networkDriveReasonPausedPreview    = "共享因认证失败已暂停注入"
+	networkDriveReasonListFailed          = "读取共享存储登记失败"
+	networkDriveReasonVisibleFailed       = "读取当前 profile 的服务器可见范围失败"
+	networkDriveReasonPasswordFailed      = "读取挂载密码机密项失败"
+	networkDriveReasonPasswordEmpty       = "挂载密码为空"
+	networkDriveReasonPasswordHasNullByte = "挂载密码含空字节"
+	networkDriveReasonPasswordUTF8        = "挂载密码在 Windows 上不是合法 UTF-8"
+	networkDriveReasonUnsafeValue         = "共享登记的共享名、地址或挂载账号包含无法注入的字符"
+	networkDriveReasonNoDevice            = "目标服务器未关联拓扑设备"
+	networkDriveReasonNoCommonNetwork     = "目标服务器所属设备与共享存储提供方设备没有共同网络"
+	networkDriveReasonProbeFailed         = "候选地址探测失败"
+	networkDriveReasonStatusMissing       = "注入步骤没有返回状态行"
+	networkDriveReasonStatusUnreadable    = "注入步骤没有返回可识别的结果"
+	networkDriveReasonAuthentication      = "共享密码认证失败，已暂停注入，请同步或检查机密项"
+	networkDriveHintNetwork               = "提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制"
+	networkDriveReasonPrivileged          = "Windows 提权层不注入网络盘符"
+	networkDriveReasonTotalTimeout        = "注入步骤总时长达到上限，未映射"
+	networkDriveAddressPlanCached         = "已缓存地址"
+	networkDriveAddressPlanDeferred       = "执行时探测"
+	networkDriveReasonPausedPreview       = "共享因认证失败已暂停注入"
 )
 
 // networkDriveWarning 是一个共享没有注入成功的说明，只包含共享名、盘符
@@ -62,21 +62,26 @@ type networkDriveWarning struct {
 	Notice string
 }
 
+// networkDrivePlannedShare 把一次注入中同一个共享的全部按序号对应的状
+// 态放在同一条记录里：远端注入项、选址缓存键、共享登记编号与版本、以
+// 及执行后回传的第一条状态。
+type networkDrivePlannedShare struct {
+	injection    sshbroker.NetworkDriveInjection
+	cacheKey     networkDriveAddressCacheKey
+	shareID      string
+	shareVersion int64
+	status       string
+	statusSeen   bool
+}
+
 // networkDriveInjectionPlan 是一次执行前求出的网络盘符注入计划，与环境变
-// 量注入计划并列。items 只包含已经拿到候选地址与密码的共享；warnings 说
-// 明每个没有进入 items 的共享及原因。远端结果状态行在执行后由
+// 量注入计划并列。shares 只包含已经拿到候选地址与密码的共享；warnings
+// 说明每个没有进入 shares 的共享及原因。远端结果状态行在执行后由
 // consumeStatusLines 解析并从输出中剔除。
 type networkDriveInjectionPlan struct {
-	items      []sshbroker.NetworkDriveInjection
-	warnings   []networkDriveWarning
-	notes      []string
-	statuses   map[int]string
-	statusSeen map[int]bool
-	cacheKeys  []networkDriveAddressCacheKey
-	// shareIDs 与 shareVersions 把状态行序号对应回本地共享登记，只在注入
-	// 计划进程内使用，不进入远端命令文本。
-	shareIDs      map[int]string
-	shareVersions map[int]int64
+	shares   []networkDrivePlannedShare
+	warnings []networkDriveWarning
+	notes    []string
 }
 
 // networkDriveAuthenticationPauseState 是进程内的「共享存储编号 → 暂停时的
@@ -267,10 +272,7 @@ func buildNetworkDriveInjectionPlan(
 	ctx context.Context, st *store.Store, profileID string,
 	server *models.Server, privileged bool, executor networkDriveProbeExecutor,
 ) networkDriveInjectionPlan {
-	plan := networkDriveInjectionPlan{
-		statuses:   map[int]string{},
-		statusSeen: map[int]bool{},
-	}
+	plan := networkDriveInjectionPlan{}
 	if st == nil || server == nil || executor == nil {
 		return plan
 	}
@@ -306,8 +308,6 @@ func buildNetworkDriveInjectionPlan(
 		plan.warn(networkDriveWarning{Reason: networkDriveReasonStatusUnreadable})
 		return plan
 	}
-	shareIDsByName := make(map[string]string, len(shares))
-	shareVersionsByName := make(map[string]int64, len(shares))
 	for _, share := range shares {
 		if share == nil || !networkDriveShareVisible(share, visible, server.ID) {
 			continue
@@ -341,25 +341,16 @@ func buildNetworkDriveInjectionPlan(
 			plan.notes = append(plan.notes, fmt.Sprintf("共享 %s 的网络盘符 %s：%s",
 				share.Name, share.Drive, selection.Note))
 		}
-		plan.items = append(plan.items, item)
-		shareIDsByName[share.Name] = share.ID
-		shareVersionsByName[share.Name] = share.Version
-		plan.cacheKeys = append(plan.cacheKeys, networkDriveAddressCacheKey{
-			ServerID: server.ID, Share: share.Name, Version: share.Version,
+		plan.shares = append(plan.shares, networkDrivePlannedShare{
+			injection:    item,
+			cacheKey:     networkDriveAddressCacheKey{ServerID: server.ID, Share: share.Name, Version: share.Version},
+			shareID:      share.ID,
+			shareVersion: share.Version,
 		})
 	}
-	sort.Slice(plan.items, func(i, j int) bool {
-		return plan.items[i].ShareName < plan.items[j].ShareName
+	sort.Slice(plan.shares, func(i, j int) bool {
+		return plan.shares[i].injection.ShareName < plan.shares[j].injection.ShareName
 	})
-	sort.Slice(plan.cacheKeys, func(i, j int) bool {
-		return plan.cacheKeys[i].Share < plan.cacheKeys[j].Share
-	})
-	plan.shareIDs = make(map[int]string, len(plan.items))
-	plan.shareVersions = make(map[int]int64, len(plan.items))
-	for index, item := range plan.items {
-		plan.shareIDs[index] = shareIDsByName[item.ShareName]
-		plan.shareVersions[index] = shareVersionsByName[item.ShareName]
-	}
 	sort.Slice(plan.warnings, func(i, j int) bool {
 		if plan.warnings[i].ShareName == plan.warnings[j].ShareName {
 			return plan.warnings[i].Reason < plan.warnings[j].Reason
@@ -367,6 +358,30 @@ func buildNetworkDriveInjectionPlan(
 		return plan.warnings[i].ShareName < plan.warnings[j].ShareName
 	})
 	return plan
+}
+
+// networkDriveExecution 把网络盘符注入计划与环境变量注入项合并后的执行
+// 选项放在同一个返回值里，前台命令与后台任务共用这一段组装逻辑。
+type networkDriveExecution struct {
+	plan       networkDriveInjectionPlan
+	execOption sshbroker.ExecOption
+	// initialWarningCount 是执行前已有的警告数量；远端状态行转成的警告
+	// 追加在它后面，任务结束时只返回新增部分。
+	initialWarningCount int
+}
+
+func prepareNetworkDriveExecution(
+	ctx context.Context, st *store.Store, profileID string, server *models.Server,
+	privileged bool, executor networkDriveProbeExecutor, environments environmentInjectionPlan,
+) networkDriveExecution {
+	plan := buildNetworkDriveInjectionPlan(ctx, st, profileID, server, privileged, executor)
+	items := environments.execItems()
+	items = append(items, plan.injectionItems()...)
+	return networkDriveExecution{
+		plan:                plan,
+		execOption:          environments.execOptionWithItems(items),
+		initialWarningCount: len(plan.warnings),
+	}
 }
 
 // previewNetworkDriveInjection 为 exec_context 求执行层预览。它只读登记、
@@ -519,7 +534,7 @@ func networkDriveMountPassword(st *store.Store, share *models.SharedStorage) ([]
 		return nil, networkDriveReasonPasswordEmpty
 	}
 	if strings.ContainsRune(string(secretValue.Value), 0) {
-		return nil, networkDriveReasonPasswordZero
+		return nil, networkDriveReasonPasswordHasNullByte
 	}
 	if !utf8.Valid(secretValue.Value) {
 		return nil, networkDriveReasonPasswordUTF8
@@ -726,12 +741,7 @@ func networkDriveAllUnreachableReason(attempts []sharemount.ProbeAttempt) string
 	lines := make([]string, 0, len(attempts)+1)
 	lines = append(lines, "全部候选地址在目标服务器上探测失败，登记与实际不一致：")
 	for _, attempt := range attempts {
-		line := fmt.Sprintf("%s 第%d个地址  ✗%s", attempt.NetworkName,
-			attempt.NetworkSequence, models.ProbeErrorCategoryLabel(attempt.ErrorCategory))
-		if attempt.DurationMilli >= 0 {
-			line += fmt.Sprintf(" %dms", attempt.DurationMilli)
-		}
-		lines = append(lines, line)
+		lines = append(lines, sharemount.FormatProbeAttemptFailure(attempt))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -758,12 +768,7 @@ func networkDriveVirtualNetworkNote(
 		for _, attempt := range attempts {
 			if attempt.NetworkName == candidate.NetworkName &&
 				attempt.NetworkSequence == candidate.Sequence && !attempt.OK {
-				line := fmt.Sprintf("%s 第%d个地址  ✗%s", attempt.NetworkName,
-					attempt.NetworkSequence, models.ProbeErrorCategoryLabel(attempt.ErrorCategory))
-				if attempt.DurationMilli >= 0 {
-					line += fmt.Sprintf(" %dms", attempt.DurationMilli)
-				}
-				physicalFailures = append(physicalFailures, line)
+				physicalFailures = append(physicalFailures, sharemount.FormatProbeAttemptFailure(attempt))
 			}
 		}
 	}
@@ -903,9 +908,8 @@ func (w *networkDriveStatusFilter) writeCompletedLine(line []byte) error {
 }
 
 func (p *networkDriveInjectionPlan) mayBeStatusLine(line []byte) bool {
-	for index := range p.items {
-		prefix := []byte(fmt.Sprintf("%s%s:%d:", networkDriveStatusPrefix,
-			p.items[index].StatusMarker, index))
+	for index := range p.shares {
+		prefix := []byte(networkDriveStatusLinePrefix(p.shares[index].injection.StatusMarker, index))
 		if bytes.HasPrefix(prefix, line) || bytes.HasPrefix(line, prefix) {
 			return true
 		}
@@ -916,9 +920,8 @@ func (p *networkDriveInjectionPlan) mayBeStatusLine(line []byte) bool {
 // markUnreadableStatus 识别「前缀确实是本次状态行，但结果部分不可识别」
 // 的行。这类行同样不能进入任务日志；记录 unreadable 让执行结束后生成警告。
 func (p *networkDriveInjectionPlan) markUnreadableStatus(line string) (int, bool) {
-	for index := range p.items {
-		prefix := fmt.Sprintf("%s%s:%d:", networkDriveStatusPrefix,
-			p.items[index].StatusMarker, index)
+	for index := range p.shares {
+		prefix := networkDriveStatusLinePrefix(p.shares[index].injection.StatusMarker, index)
 		if strings.HasPrefix(line, prefix) {
 			return index, true
 		}
@@ -930,16 +933,16 @@ func (p *networkDriveInjectionPlan) markUnreadableStatus(line string) (int, bool
 // 享的映射结果；缺失或不可识别的结果转成警告。状态行必须在输出遮蔽前
 // 剔除，内部标记绝不返回给 agent。
 func (p *networkDriveInjectionPlan) consumeStatusLines(stdout, stderr string) (string, string) {
-	if p == nil || len(p.items) == 0 {
+	if p == nil || len(p.shares) == 0 {
 		return stdout, stderr
-	}
-	if p.statuses == nil {
-		p.statuses = map[int]string{}
 	}
 	stdout = p.stripStatusLines(stdout)
 	stderr = p.stripStatusLines(stderr)
-	for index, item := range p.items {
-		status, ok := p.statuses[index]
+	for index := range p.shares {
+		share := &p.shares[index]
+		item := share.injection
+		status := share.status
+		ok := share.statusSeen
 		if !ok {
 			p.warn(networkDriveWarning{
 				ShareName: item.ShareName, Drive: item.Drive,
@@ -951,12 +954,12 @@ func (p *networkDriveInjectionPlan) consumeStatusLines(stdout, stderr string) (s
 			continue
 		}
 		if networkDriveAuthenticationFailed(status) {
-			pauseNetworkDriveAuthentication(p.shareIDs[index], p.shareVersions[index])
+			pauseNetworkDriveAuthentication(share.shareID, share.shareVersion)
 		}
 		// 网络类映射失败说明探测结论不可信（透明代理可能误报连通），把该
 		// 地址在进程内缓存里作废，下一条命令改选下一个候选。
-		if networkDriveStatusIsNetworkFailure(status) && index < len(p.cacheKeys) {
-			networkDriveAddressCache.markUnavailable(p.cacheKeys[index], item.Address)
+		if networkDriveStatusIsNetworkFailure(status) {
+			networkDriveAddressCache.markUnavailable(share.cacheKey, item.Address)
 		}
 		p.warn(networkDriveWarning{
 			ShareName: item.ShareName, Drive: item.Drive,
@@ -992,25 +995,26 @@ type networkDriveParsedStatus struct {
 	status string
 }
 
+func networkDriveStatusLinePrefix(marker string, index int) string {
+	return fmt.Sprintf("%s%s:%d:", networkDriveStatusPrefix, marker, index)
+}
+
 // recordStatus 只接受同一共享的第一条状态行。后续同序号的行仍会被调用方
 // 剔除，但用户命令可以打印任意状态行，不能覆盖注入封装的真实结果。
 func (p *networkDriveInjectionPlan) recordStatus(index int, status string) {
-	if p.statusSeen == nil {
-		p.statusSeen = map[int]bool{}
-	}
-	if p.statusSeen[index] {
+	if index < 0 || index >= len(p.shares) {
 		return
 	}
-	p.statusSeen[index] = true
-	if p.statuses == nil {
-		p.statuses = map[int]string{}
+	if p.shares[index].statusSeen {
+		return
 	}
-	p.statuses[index] = status
+	p.shares[index].statusSeen = true
+	p.shares[index].status = status
 }
 
 func (p *networkDriveInjectionPlan) parseStatusLine(line string) (networkDriveParsedStatus, bool) {
-	for index := range p.items {
-		prefix := fmt.Sprintf("%s%s:%d:", networkDriveStatusPrefix, p.items[index].StatusMarker, index)
+	for index := range p.shares {
+		prefix := networkDriveStatusLinePrefix(p.shares[index].injection.StatusMarker, index)
 		if !strings.HasPrefix(line, prefix) {
 			continue
 		}
@@ -1055,11 +1059,12 @@ func networkDriveStatusReason(status, drive string) string {
 
 // injectedDrives 返回映射成功的共享与盘符；映射失败的共享只出现在警告里。
 func (p networkDriveInjectionPlan) injectedDrives() []InjectedNetworkDrive {
-	drives := make([]InjectedNetworkDrive, 0, len(p.items))
-	for index, item := range p.items {
-		if p.statuses[index] != "ok" {
+	drives := make([]InjectedNetworkDrive, 0, len(p.shares))
+	for _, share := range p.shares {
+		if share.status != "ok" {
 			continue
 		}
+		item := share.injection
 		drives = append(drives, InjectedNetworkDrive{Share: item.ShareName, Drive: item.Drive})
 	}
 	if len(drives) == 0 {
@@ -1081,9 +1086,9 @@ func (p networkDriveInjectionPlan) injectedShareNames() []string {
 }
 
 func (p networkDriveInjectionPlan) injectionItems() []sshbroker.ExecInjection {
-	items := make([]sshbroker.ExecInjection, 0, len(p.items))
-	for _, item := range p.items {
-		items = append(items, item)
+	items := make([]sshbroker.ExecInjection, 0, len(p.shares))
+	for _, share := range p.shares {
+		items = append(items, share.injection)
 	}
 	return items
 }
