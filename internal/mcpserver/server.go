@@ -133,14 +133,16 @@ func NewServer(st *store.Store, profileID, projectID string) (*mcp.Server, *Tunn
 // 已取到的同一个 store。缓存模式传入稳定的转发包装器（见 run.go 与
 // hostkey_forward.go），它的读写会在回调内重新取当前快照 store。
 func NewServerFromSource(storeFn func() *store.Store, profileID, projectID string, hkFn func() sshbroker.HostKeyStore, meta MetadataEditor) (*mcp.Server, *TunnelManager, *TaskManager, error) {
-	return NewServerFromSourceWithHints(storeFn, profileID, projectID, hkFn, meta, nil)
+	return NewServerFromSourceWithHints(storeFn, profileID, projectID, hkFn, meta, nil, nil)
 }
 
 // NewServerFromSourceWithHints 额外把会话提示来源挂到通用工具包装层。既有
 // 构造函数不传来源，单机与权威端的工具面保持不变。inventory 是软件清单
 // 查询能力：nil 表示权威端与单机的本地查询；客户端缓存面由 newCacheBroker
-// 注入在线转发器或保底报错能力。
-func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projectID string, hkFn func() sshbroker.HostKeyStore, meta MetadataEditor, inventory SoftwareInventoryQuerier, sources ...SessionHintSource) (*mcp.Server, *TunnelManager, *TaskManager, error) {
+// 注入在线转发器或保底报错能力。mountSnapshotSyncer 是挂载前的快照保鲜
+// 能力：nil 表示单机与权威端没有这一步，客户端缓存面由 newCacheBroker
+// 注入（票 #203）。
+func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projectID string, hkFn func() sshbroker.HostKeyStore, meta MetadataEditor, inventory SoftwareInventoryQuerier, mountSnapshotSyncer MountShareSnapshotSyncer, sources ...SessionHintSource) (*mcp.Server, *TunnelManager, *TaskManager, error) {
 	// Plan 47 T2 (spec §4, rev3 codex#6): the relay env seams resolve BEFORE
 	// any tunnels/tasks manager construction and any StartSweeper — an invalid
 	// value must fail construction with ZERO goroutines started (the earlier
@@ -310,7 +312,10 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in MountShareInput) (*mcp.CallToolResult, MountShareOutput, error) {
 			st := storeFromContext(ctx, storeFn)
-			out, err := MountShareForProfile(ctx, st, projectID, profileID, in.Share, in.ServerID, toolHostKeyStoreFromContext(ctx))
+			out, err := MountShareForProfile(
+				ctx, st, projectID, profileID, in.Share, in.ServerID,
+				toolHostKeyStoreFromContext(ctx), mountSnapshotSyncer, storeFn,
+			)
 			if err != nil {
 				return &mcp.CallToolResult{
 					IsError: true,
