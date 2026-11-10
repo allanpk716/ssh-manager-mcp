@@ -110,7 +110,7 @@ func (fx *cacheFwdFixture) newBrokerWithRefresher(t *testing.T, snap *store.Snap
 	t.Helper()
 	srv, tunnels, tasks, refresher, cleanup, err := mcpserver.NewCacheBrokerWithRefresher(
 		fx.projToken, snap, filepath.Join(t.TempDir(), "audit.log"), reload,
-		clientops.ForwardingHostKeys(mustForwarder(t, fx.cred)), "laptop", nil)
+		clientops.ForwardingHostKeys(mustForwarder(t, fx.cred)), "laptop", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

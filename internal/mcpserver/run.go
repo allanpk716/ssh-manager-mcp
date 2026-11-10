@@ -289,7 +289,7 @@ func (h *cacheStoreHolder) versionHint() []string {
 // RunStdioCache 的最后一个可选参数注入软件清单在线查询能力；生产入口由
 // cli 层传入，测试可以省略（省略时工具固定报错，不读本地快照）。
 func RunStdioCache(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, inventoryQuerier ...SoftwareInventoryQuerier) error {
-	return RunStdioCacheWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor, nil, inventoryQuerier...)
+	return RunStdioCacheWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor, nil, nil, inventoryQuerier...)
 }
 
 // CacheRefresher 是桥统一换快照入口的触发器:后台轮询
@@ -307,12 +307,14 @@ type CacheRefresher interface {
 // 服务结束(宿主断开或热升级交割)后调用,先于桥的清理执行。startBackground
 // 为 nil 时行为与 RunStdioCache 完全一致。inventoryQuerier 是可选的软件清
 // 单在线查询能力（票 #185）。
-func RunStdioCacheWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, startBackground func(CacheRefresher) func(), inventoryQuerier ...SoftwareInventoryQuerier) error {
+// mountSnapshotSyncer 是挂载共享存储前的快照保鲜能力（票 #203）；单机与
+// 权威端不传。
+func RunStdioCacheWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, mountSnapshotSyncer MountShareSnapshotSyncer, startBackground func(CacheRefresher) func(), inventoryQuerier ...SoftwareInventoryQuerier) error {
 	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor, inventoryQuerier)
+	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor, mountSnapshotSyncer, inventoryQuerier)
 	if err != nil {
 		af.Close()
 		return err
@@ -341,7 +343,7 @@ func RunStdioCacheWithRefresher(token string, snap *store.Snapshot, auditPath st
 // same contract as RunStdioCache.
 // NewCacheBroker 的最后一个可选参数注入软件清单在线查询能力（票 #185）。
 func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, inventoryQuerier ...SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, func(), error) {
-	srv, tunnels, tasks, _, cleanup, err := NewCacheBrokerWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor, inventoryQuerier...)
+	srv, tunnels, tasks, _, cleanup, err := NewCacheBrokerWithRefresher(token, snap, auditPath, reload, fwdBinder, device, metaEditor, nil, inventoryQuerier...)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -351,15 +353,14 @@ func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload
 // NewCacheBrokerWithRefresher 按 NewCacheBroker 的同一装配构建桥,并额外交出
 // 统一换快照入口的触发器:端到端测试用它驱动后台轮询循环(短间隔注入),
 // `mcp --cache` 的生产路径则经 RunStdioCacheWithRefresher 拿到同一个触发器。
-// cleanup 的契约与 NewCacheBroker 相同。
-// NewCacheBrokerWithRefresher 按 NewCacheBroker 的同一装配构建桥,并额外交出
-// 统一换快照入口的触发器。inventoryQuerier 是可选的软件清单在线查询能力。
-func NewCacheBrokerWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, inventoryQuerier ...SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, CacheRefresher, func(), error) {
+// cleanup 的契约与 NewCacheBroker 相同。mountSnapshotSyncer 是挂载前快照
+// 保鲜能力;生产装配由 cli 层传入,测试可省略。
+func NewCacheBrokerWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, mountSnapshotSyncer MountShareSnapshotSyncer, inventoryQuerier ...SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, CacheRefresher, func(), error) {
 	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor, inventoryQuerier)
+	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor, mountSnapshotSyncer, inventoryQuerier)
 	if err != nil {
 		af.Close()
 		return nil, nil, nil, nil, nil, err
@@ -372,7 +373,7 @@ func NewCacheBrokerWithRefresher(token string, snap *store.Snapshot, auditPath s
 // exported NewCacheBroker so the tested wiring cannot drift from the served
 // wiring. The binder is invoked once with the holder's Current; the resulting
 // wrapper is a process-lifetime value (it captures no store pointer).
-func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, inventoryQuerier []SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, *cacheStoreHolder, error) {
+func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, mountSnapshotSyncer MountShareSnapshotSyncer, inventoryQuerier []SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, *cacheStoreHolder, error) {
 	h, project, err := newCacheStoreHolderFromSnapshot(token, snap, af, reload, device)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -390,7 +391,7 @@ func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func
 	if len(inventoryQuerier) > 0 && inventoryQuerier[0] != nil {
 		inventory = inventoryQuerier[0]
 	}
-	srv, tunnels, tasks, err := NewServerFromSourceWithHints(h.Current, project.ProfileID, project.ID, hkFn, metaEditor, inventory, h.changeHint, h.versionHint)
+	srv, tunnels, tasks, err := NewServerFromSourceWithHints(h.Current, project.ProfileID, project.ID, hkFn, metaEditor, inventory, mountSnapshotSyncer, h.changeHint, h.versionHint)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}

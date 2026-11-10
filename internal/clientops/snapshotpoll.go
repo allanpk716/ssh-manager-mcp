@@ -18,6 +18,7 @@ package clientops
 // 返回 404 时,这个桥停止轮询,到期检查回到原来的按有效期全量拉取。
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -143,7 +144,7 @@ func (p *snapshotPoller) round() bool {
 		return true
 	}
 
-	remoteRevision, _, err := querySnapshotVersion(cred.URL, code, pin, LazyPullTimeout)
+	remoteRevision, _, err := querySnapshotVersion(context.Background(), cred.URL, code, pin, LazyPullTimeout)
 	switch {
 	case errors.Is(err, errSnapshotVersionNotFound):
 		// 旧权威端没有修订号接口:这个桥停止轮询,到期检查回到原来的按

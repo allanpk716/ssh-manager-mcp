@@ -196,8 +196,14 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				// 票 #203：客户端的挂载工具在挂载前先做快照保鲜。缺凭据时
+				// 同步器在调用时报错，挂载继续用本地快照并按失败结果提示。
+				mountSnapshotSyncer, err := clientops.NewMountShareSnapshotSyncerFor(instance)
+				if err != nil {
+					return err
+				}
 				err = mcpserver.RunStdioCacheWithRefresher(token, snap, auditPath, rel.Check,
-					clientops.ForwardingHostKeys(fwd), cacheForwardDeviceFor(instance), mfwd,
+					clientops.ForwardingHostKeys(fwd), cacheForwardDeviceFor(instance), mfwd, mountSnapshotSyncer,
 					func(refresher mcpserver.CacheRefresher) func() {
 						return clientops.StartSnapshotPoller(clientops.SnapshotPollerConfig{
 							Instance:  instance,
