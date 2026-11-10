@@ -107,7 +107,7 @@ func MaybeLazyPullFor(instance string, maxAge time.Duration) error {
 		return fmt.Errorf("cache.auth.json has no pin; refusing plaintext auto-pull")
 	}
 	if cachedRevision, present, rerr := cachedSnapshotRevision(instance); rerr == nil && present {
-		remoteRevision, serverTime, verr := querySnapshotVersion(cred.URL, code, pin, LazyPullTimeout)
+		remoteRevision, serverTime, verr := querySnapshotVersion(context.Background(), cred.URL, code, pin, LazyPullTimeout)
 		switch {
 		case errors.Is(verr, errSnapshotVersionNotFound):
 			// 旧权威端没有修订号接口:保持原有行为,下面直接全量拉取。

@@ -39,7 +39,7 @@ func deviceCodeAndPin(cred CacheCred) (string, string) {
 // querySnapshotVersion 调用权威端的 GET /snapshot/version,返回当前快照
 // 修订号与响应里的权威端时间。请求头复用统一的设备码与客户端版本设置
 // 函数。pin 必须非空:自动保鲜只走锚定 TLS 连接。
-func querySnapshotVersion(baseURL, deviceCode, pin string, timeout time.Duration) (int64, time.Time, error) {
+func querySnapshotVersion(ctx context.Context, baseURL, deviceCode, pin string, timeout time.Duration) (int64, time.Time, error) {
 	if pin == "" {
 		return 0, time.Time{}, fmt.Errorf("snapshot version query has no server pin; refusing plaintext query")
 	}
@@ -58,7 +58,7 @@ func querySnapshotVersion(baseURL, deviceCode, pin string, timeout time.Duration
 		client.Timeout = timeout
 	}
 	defer client.CloseIdleConnections()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, baseURL+"/snapshot/version", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/snapshot/version", nil)
 	if err != nil {
 		return 0, time.Time{}, err
 	}

@@ -236,9 +236,17 @@ JSON 转义、压缩、加密等变换后的值，也不防 agent 有意绕开�
 | `servers` | 当前会话可见且被授权可挂载这处共享的服务器，每项是 `{server_id, name, mount_point}` |
 
 - **挂载点是约定路径**：PowerShell 与 cmd 服务器为 `<盘符>:`（如 `Z:`），
-  其余为 `/mnt/sshmgr/<共享名>`。结果里的 `notice` 固定说明「挂载点
-  是约定路径，本工具不检测是否已挂载」——本工具不做任何网络、SSH 或
-  文件系统检测。
+  其余为 `/mnt/sshmgr/<共享名>`。不带现场检测参数时，结果里的 `notice`
+  固定说明「挂载点是约定路径，本工具不检测是否已挂载」——此时只读登记，
+  不做任何网络、SSH 或文件系统检测。
+- 可选 `live_check` 为 `true` 时开启现场检测：对可见的 Linux 与 macOS
+  可挂载服务器并发执行只读固定命令，每台服务器在 `mount_status` 里报告
+  四种状态之一——`mounted`（已挂载）、`not-mounted`（未挂载）、
+  `config-missing`（配置缺失）、`unreachable`（不可达，附「SSH 连接失
+  败 / 提权失败 / 系统不受支持」的原因说明）。`mount_notes` 会标注配置
+  版本落后、macOS 系统配置被重置等情况；Windows 服务器标为不检测。
+  可选 `check_server`（服务器编号或名字）把检测收窄到一台，必须同时开
+  启 `live_check`。检测命令只读、不写审计，结果不含密码与地址。
 - 可选 `server` 填服务器编号或名字；给出时只返回这台服务器能挂载的共享，
   每个共享的 `servers` 只带这一台。服务器不在你的授权范围内时报
   `server is not in your profile`（见错误对照表）。
@@ -247,6 +255,40 @@ JSON 转义、压缩、加密等变换后的值，也不防 agent 有意绕开�
 - 结果永不包含挂载密码、挂载账号用户名或候选访问地址。没有任何 agent
   工具能登记、修改或删除共享存储——这些只能由 owner 在命令行或
   管理界面完成。
+
+### mount_share
+
+把一处 SMB 共享存储持久挂载到一台 Linux 或 macOS 服务器上。你只给共享
+名和服务器编号；选择候选地址、写持久配置、写入挂载密码、让挂载生效并验
+证，全部由固定命令在目标服务器上完成，不经过命令策略。输入与输出：
+
+| 字段 | 含义 |
+|---|---|
+| `share` | 共享名，来自 `list_shares` |
+| `server_id` | 服务器编号，来自 `list_servers` |
+| `mount_point` | 挂载点，固定为 `/mnt/sshmgr/<共享名>` |
+| `version` | 本次使用的共享存储版本号 |
+| `network_name` / `network_sequence` | 选中的共同网络名与该网络内的地址序号；不包含地址本身 |
+| `result` | `first-mount-success`、`update-success`、`remount-success` 或 `no-change` |
+| `mount_notes` | 选地址降级、macOS 系统配置重建等安全提示 |
+| `paths` | 各条目录约定在目标服务器上的完整路径 |
+
+- **幂等**：已挂载且配置一致时，重复调用直接成功并返回 `no-change`，
+  不做任何改动。共享登记或挂载密码变化后，对提示中的服务器逐台再调用
+  即可完成更新；目标服务器上的版本更新时会拒绝改写并提示先同步快照。
+- **不能卸载**：卸载、撤销、重选地址只归 owner；这个工具只负责挂载与更
+  新。同一服务器上的并发挂载由远端文件锁串行化，锁残留会按持有时间自动
+  回收。
+- **Windows 不需要**：Windows 服务器的网络盘符由每条命令执行前的会话内
+  注入提供，对 Windows 服务器调用会直接报错说明不需要。
+- **可挂载范围**：目标服务器必须同时在挂载密码机密项的可写入服务器列表
+  与当前会话可见范围内；列表内的服务器不需要逐次确认。目标服务器需要
+  配置 sudo 凭据，并已安装对应系统组件（Linux 需要 mount.cifs，macOS
+  需要 automount）。
+- **密码不经 agent**：挂载密码从机密项取值后只在 sshmgr 进程内传递，经
+  提权会话的标准输入写进目标服务器上仅 root 才能读的文件（Linux 凭据文
+  件、macOS 映射文件）；密码绝不出现在命令文本、工具返回、错误文本或审
+  计里。
 
 ### query_software_inventory
 
@@ -763,7 +805,8 @@ HEAD，后续重构以符号名为准）：
 | 每次工具调用全程审计（project/server/action/status/命令/耗时） | `internal/mcpserver/core.go:81-89` 等；../README.md "What the agent gets" |
 | 命令策略门在取凭据、建 SSH 连接之前（拦截 / 需确认都不建连接，拦截零字节到服务器）；判定内核是纯函数，权威端与客户端同一条代码路径，离线用最后一次拉到的规则 | `internal/mcpserver/policygate.go`（policyJudge）；`internal/mcpserver/core.go`（ExecCommandForProfile 的 gate 段）；`internal/mcpserver/bgtools.go`（后台同款门）；`internal/policy/policy.go`（Evaluate） |
 | probe_connectivity：只测 TCP 建连与耗时、只探测登记过的共同网络组合（不测兜底主机）、结果只存发起实例本地；经服务器探测执行固定命令、不经命令策略但写审计 | 规格 #142；ADR 0007（命令策略是护栏不是安全边界） |
-| list_shares：只读登记与挂载点约定、不做任何现场检测；可挂载范围是挂载密码机密项可写入列表与会话可见服务器取交集，交集为空不返回；旧权威端快照按 ADR 0014 报错 | `internal/mcpserver/list_shares.go`（ListSharesForProfile / sessionVisibleServerIDs）；`internal/store/shared_storage.go`（SharedStorageMountPoint）；`internal/mcpserver/run.go`（hydrateCacheStore 设置快照推荐版本） |
+| list_shares：默认只读登记与挂载点约定、不做任何现场检测；可选现场检测参数对可见 Linux 与 macOS 可挂载服务器并发只读检测，报告已挂载、未挂载、配置缺失、不可达（附原因说明）四种状态；可挂载范围是挂载密码机密项可写入列表与会话可见服务器取交集，交集为空不返回；旧权威端快照按 ADR 0014 报错 | `internal/mcpserver/list_shares.go`（ListSharesForProfile / annotateSharedStorageMountChecks）；`internal/sharemount/check.go`（固定检测命令）；`internal/store/shared_storage.go`（SharedStorageMountPoint）；`internal/mcpserver/run.go`（hydrateCacheStore 设置快照推荐版本） |
+| mount_share：共享存储持久挂载（Linux 写 fstab 与仅 root 可读凭据文件，macOS 写 autofs 间接映射）；服务器级目录锁带 owner 文件与过期回收；Linux 先在 /var/run 临时挂载点试挂成功才改写正式配置；macOS 映射改写后先卸载旧 smbfs 挂载再刷新；已挂载且一致时幂等 no-change；密码只经提权会话标准输入写入，结果与审计不含地址；不提供卸载 | 规格 #198；`internal/sharemount/`（service.go / linux.go / darwin.go / lock.go / check.go）；`internal/mcpserver/mount_share.go` |
 | query_software_inventory：按 profile 可见范围查询软件清单（含监听端口、暴露级别、来源、采集时间与设备采集状态）；客户端在线查询权威端，不可达时固定报错、不回退本地数据 | 票 #185；`internal/mcpserver/softwareinventory.go`；`internal/mcpserver/serve_softwareinventory.go`；`internal/clientops/softwareinventory_forward.go` |
 | draft_software_declarations：提交软件声明草稿；客户端经受审计转发写提交，草稿确认前不影响查询与待办 | 票 #188；`internal/mcpserver/softwareinventory_draft.go`；`internal/mcpserver/serve_softwareinventory_draft.go`；`internal/clientops/softwareinventory_draft_forward.go` |
 | collect_software_inventory：请求立即采集；本地面同步执行或登记客户端请求，客户端经权威端转发 | 票 #188；`internal/mcpserver/softwareinventory_collect.go`；`internal/mcpserver/serve_softwareinventory_collect_forward.go`；`internal/clientops/softwareinventory_collect_forward.go` |

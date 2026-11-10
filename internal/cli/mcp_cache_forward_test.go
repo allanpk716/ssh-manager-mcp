@@ -954,6 +954,7 @@ func TestCacheVersionE2E_MultipleHintsKeepSourceOrder(t *testing.T) {
 		func() *store.Store { return fx.serve },
 		project.ProfileID, project.ID, nil, nil,
 		nil,
+		nil,
 		func() []string { return []string{"变更提示"} },
 		func() []string { return []string{"版本提示"} },
 	)

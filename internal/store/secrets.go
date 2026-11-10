@@ -76,6 +76,14 @@ type SecretValuesForMasking struct {
 	WritableServerIDs []string
 }
 
+// SecretValueForSharedStorageMount 是共享存储挂载专用的机密项当前值。值与
+// 可写入服务器列表只允许在 sshmgr 进程内使用：绝不能进入工具结果、日志
+// 或审计，也不能拼进远端命令文本。
+type SecretValueForSharedStorageMount struct {
+	Value             []byte
+	WritableServerIDs []string
+}
+
 // SecretMetadataEdit 表示一次机密项元数据修改。指针为空表示不改这个字段；
 // 环境变量名指针指向空字符串表示清除环境变量名。
 type SecretMetadataEdit struct {
@@ -109,6 +117,42 @@ func (s *Store) SecretValuesForMasking() ([]SecretValuesForMasking, error) {
 		}
 	}
 	return values, nil
+}
+
+// SecretValueForSharedStorageMount 按机密项标识符读取当前值。它与机密项
+// 环境变量注入同源：只解密当前值，并单独读取可写入服务器列表；读不到时
+// 机密值不会进入错误文本。
+func (s *Store) SecretValueForSharedStorageMount(
+	secretID string,
+) (SecretValueForSharedStorageMount, error) {
+	var encrypted []byte
+	err := s.db.QueryRow(`SELECT value_blob FROM secrets WHERE id=?`, secretID).Scan(&encrypted)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SecretValueForSharedStorageMount{}, ErrSecretNotFound
+	}
+	if err != nil {
+		return SecretValueForSharedStorageMount{}, err
+	}
+	value, err := open(s.masterKey, encrypted)
+	if err != nil {
+		return SecretValueForSharedStorageMount{}, err
+	}
+	out := SecretValueForSharedStorageMount{Value: value}
+	rows, err := s.db.Query(
+		`SELECT server_id FROM secret_server_allow WHERE secret_id=? ORDER BY server_id`, secretID,
+	)
+	if err != nil {
+		return SecretValueForSharedStorageMount{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var serverID string
+		if err := rows.Scan(&serverID); err != nil {
+			return SecretValueForSharedStorageMount{}, err
+		}
+		out.WritableServerIDs = append(out.WritableServerIDs, serverID)
+	}
+	return out, rows.Err()
 }
 
 // SecretValuesForCommandMasking 只供带环境变量注入计划的执行工具使用。这

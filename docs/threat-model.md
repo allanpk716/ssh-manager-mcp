@@ -98,6 +98,11 @@ L1+ 模型下**未消除**的威胁：
 - **承诺**：sshmgr 的 MCP 接口默认不披露 vault 内 host:port 与凭据——`list_servers` 默认回 `"hidden"`（owner 可按服务器 `expose_host=true` 显式放开，host:port 组合口径——孤立端口号不构成披露）；工具错误文本不含 host / IP 字面量 / host:port 组合。
 - **后台任务三件套（v0.10，Plan 32）不新增披露面**：任务表是 broker 进程内状态（与隧道同类），无任何持久化；`sudo` 密码仅在启动时瞬时传递给会话内核、不进任务记录；failed 态回给 agent 的错误文本过与连接错误同一条地址清洗链。
 - **`forward_port` 的 `listen_host` 越权拒绝文本不披露白名单内容**（Plan 35）：`listen_host` 是 agent 自己提供的输入（host 不由 broker 回填）；拒绝只说「不在 owner 预批白名单」，不枚举表内条目——不构成新披露面。
+- **`mount_share` 会把挂载密码写到目标服务器上**：密码从机密项取值后只在
+  sshmgr 进程内传递，经提权会话的标准输入写进目标服务器上 root 才能读的
+  文件（Linux 凭据文件、macOS autofs 映射文件），密码与候选地址绝不出现在
+  agent 可见的命令文本、返回、错误或审计里；能对哪些服务器执行由挂载密码
+  机密项的可写入服务器列表决定。
 - **audit 行永不入 agent 面（Plan 36）**：`sshmgr audit` 是 owner 侧读路径（master-key 闸的 CLI，**永不注册为 MCP 工具**）——审计行含各 agent 的完整命令文本、可能含 secret，刻意做成 agent 面不可达。
 - **不算违约**：agent 在服务器上主动执行 `ip addr` / `hostname` 等命令探出的地址。
 - **明确不防的运行时逃逸**：agent 调用本机 sshmgr owner CLI（`projects show` / `servers ls` 明文打印 `user@host:port`）；agent 读到离线 client 上的 cache.bin（整仓快照，设计上含全部 host 明文）——这两类属「agent 宿主已被完全信任」范畴，见 [backlog.md](./backlog.md) 的 (d) 类定级。

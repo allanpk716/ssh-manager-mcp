@@ -24,6 +24,12 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// POSIXShellQuote 是 POSIX shell 单引号安全包装的唯一公开入口。固定命
+// 令需要携带 owner 登记值时必须经这里转义；调用方不得另行手写拼接。
+func POSIXShellQuote(s string) string {
+	return shellQuote(s)
+}
+
 // buildSudoWrapper renders the batch-1 elevated wrapper for cmd (Plan 41 rev3
 // §1.1): the WHOLE command — every `;` / `&&` / `|` segment — must execute
 // inside the sudo domain. `--` alone cannot span shell separators, so cmd
@@ -440,7 +446,8 @@ func (c *Client) runSudoSession(ctx context.Context, cmd, pass string, timeout t
 	nonce := newSudoNonce()
 	proc := newSudoStderrProcessor(stderr, nonce)
 	wrapped := buildSudoWrapperWithMarker(prepared.command, nonce)
-	exitCode, timedOut, err = c.runSessionRaw(ctx, wrapped, pass, timeout, stdout, proc, prepared.frames)
+	frames := [][]byte{prepared.frames, settings.standardInput}
+	exitCode, timedOut, err = c.runSessionRaw(ctx, wrapped, pass, timeout, stdout, proc, frames...)
 	proc.flush()
 	return exitCode, timedOut, err, proc.classify()
 }
