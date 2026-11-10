@@ -4,6 +4,7 @@ package store
 // 网络成员、布局坐标与审计都不能留下半删除状态。
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -154,5 +155,61 @@ func TestDeviceDeleteRollsBackWhenLayoutDeleteFails(t *testing.T) {
 		if len(rows) != 0 {
 			t.Fatalf("failed deletion must not leave %s audit rows: %+v", action, rows)
 		}
+	}
+}
+
+func TestDeviceDeleteWritesSharedStorageAuditAndRollsBackTogether(t *testing.T) {
+	s := seedSharedStorageVault(t)
+	defer s.Close()
+	if _, err := s.AddSharedStorage(SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+	}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`
+		CREATE TRIGGER shared_storage_test_reject_cascade_audit
+		BEFORE INSERT ON audit_log WHEN NEW.action='share-rm'
+		BEGIN SELECT RAISE(ABORT, 'injected share audit failure'); END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := s.DeviceDeletePreview("NAS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteDeviceCascading("NAS", preview); err == nil ||
+		!strings.Contains(err.Error(), "injected share audit failure") {
+		t.Fatalf("共享存储审计写入失败应让设备删除整体回滚，实际：%v", err)
+	}
+	if _, err := s.GetDevice("NAS"); err != nil {
+		t.Fatalf("整体回滚后设备应保留：%v", err)
+	}
+	if _, err := s.GetSharedStorage("datasets"); err != nil {
+		t.Fatalf("整体回滚后共享存储应保留：%v", err)
+	}
+	if _, err := s.db.Exec(`DROP TRIGGER shared_storage_test_reject_cascade_audit`); err != nil {
+		t.Fatal(err)
+	}
+	preview, err = s.DeviceDeletePreview("NAS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteDeviceCascading("NAS", preview); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.QueryAudit(AuditFilter{OwnerOnly: true, Actions: []string{"share-rm"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("设备级联删除共享存储应写一条 share-rm 审计行，实际 %d 条：%+v", len(rows), rows)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
+		t.Fatalf("解析共享存储删除审计失败：%v\n%s", err, rows[0].Command)
+	}
+	if summary["name"] != "datasets" || summary["reason"] != "随设备删除而删除" {
+		t.Fatalf("共享存储级联删除审计摘要不正确：%+v", summary)
 	}
 }

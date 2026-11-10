@@ -82,6 +82,18 @@ func (s *Store) DeleteDeviceCascading(name string, confirmed *DeviceDeletePrevie
 			return nil, err
 		}
 	}
+	for _, share := range preview.SharedStorages {
+		if err := writeAuditTx(tx, AuditRow{
+			TS: auditAt, Action: "share-rm",
+			Command: MarshalAuditSummary(map[string]any{
+				"name": share.Name, "device": share.DeviceName,
+				"reason": "随设备删除而删除",
+			}),
+			Status: "ok",
+		}); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := tx.Exec(`DELETE FROM network_memberships WHERE device_id=?`, preview.Device.ID); err != nil {
 		return nil, err
 	}
