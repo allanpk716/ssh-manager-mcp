@@ -1,0 +1,12 @@
+{{define "content"}}
+<section class="software-inventory form-page">
+<h1>删除软件声明</h1>
+<p>将删除 {{.SoftwareInventoryDeclaration.Device}} 上的「{{.SoftwareInventoryDeclaration.Name}}」（版本 {{.SoftwareInventoryDeclaration.Version}}，类别 {{.SoftwareInventoryDeclaration.CategoryLabel}}）。</p>
+<form method="post" action="/ui/software-inventory/declarations/delete">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="id" value="{{.SoftwareInventoryDeclaration.ID}}">
+<button type="submit">确认删除</button>
+<a class="button-link" href="/ui/software-inventory/declarations">取消</a>
+</form>
+</section>
+{{end}}

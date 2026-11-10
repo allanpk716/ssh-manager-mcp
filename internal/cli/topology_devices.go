@@ -184,6 +184,9 @@ func printDeviceDeletePreview(w io.Writer, preview *store.DeviceDeletePreview) {
 	for _, coordinate := range preview.LayoutCoordinates {
 		fmt.Fprintf(w, "  %s：(%g, %g)\n", coordinate.ViewKey, coordinate.X, coordinate.Y)
 	}
+	fmt.Fprintf(w, "软件清单：软件条目 %d 条、声明 %d 条、采集执行者登记 %d 条、监听端口 %d 个\n",
+		preview.SoftwareItemCount, preview.SoftwareDeclarationCount,
+		preview.SoftwareCollectorCount, preview.SoftwareListeningPortCount)
 	client := preview.Device.ClientName
 	if client == "" {
 		client = "无"

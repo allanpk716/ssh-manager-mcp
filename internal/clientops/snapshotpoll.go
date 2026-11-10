@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ssh-manager-mcp/internal/mcpserver"
@@ -39,6 +40,9 @@ type SnapshotPollerConfig struct {
 	Refresher mcpserver.CacheRefresher
 	// LogOutput 是诊断日志出口;为空时写到标准错误流。
 	LogOutput io.Writer
+	// SoftwareInventoryCollect 是快照新鲜度轮询每轮结束后触发的软件清单
+	// 顺手补采。它自己负责取本地锁文件;这里只保证一个桥同时只有一份。
+	SoftwareInventoryCollect func()
 }
 
 type snapshotPoller struct {
@@ -47,6 +51,9 @@ type snapshotPoller struct {
 	stopC chan struct{}
 	wg    sync.WaitGroup
 	once  sync.Once
+	// collectWG 与 collectRunning 保证顺手补采不与本轮、下一轮重叠。
+	collectWG      sync.WaitGroup
+	collectRunning atomic.Bool
 	// missingCredLogged 避免缺少拉取凭据时每轮刷一条相同的日志(凭据可能
 	// 之后由别的进程写入,循环继续等待)。只在循环 goroutine 里读写。
 	missingCredLogged bool
@@ -99,9 +106,22 @@ func (p *snapshotPoller) loop() {
 	}
 }
 
+func (p *snapshotPoller) startSoftwareInventoryCollect() {
+	if p.cfg.SoftwareInventoryCollect == nil || !p.collectRunning.CompareAndSwap(false, true) {
+		return
+	}
+	p.collectWG.Add(1)
+	go func() {
+		defer p.collectWG.Done()
+		defer p.collectRunning.Store(false)
+		p.cfg.SoftwareInventoryCollect()
+	}()
+}
+
 // round 执行一轮轮询,返回是否继续。所有失败都只写日志:权威端不可达时继续
 // 用当前快照,下一轮再试。
 func (p *snapshotPoller) round() bool {
+	defer p.startSoftwareInventoryCollect()
 	cred, err := ReadCacheCredFor(p.cfg.Instance)
 	if err != nil {
 		p.logf("read pull credential: %v", err)

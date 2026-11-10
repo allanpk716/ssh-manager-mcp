@@ -49,7 +49,17 @@ type Snapshot struct {
 	// SharedStorages 是共享存储登记。可挂载范围不在这里重复携带；它由
 	// 机密项的可写入服务器关联推导。旧快照没有该段时导入零行。
 	SharedStorages []SnapshotSharedStorage `json:"shared_storages,omitempty"`
-	Audit          []SnapshotAudit         `json:"audit"`
+	// SoftwareDeclarations / SoftwareDeclarationPorts 只进入 owner 的全量
+	// 导出与加密备份，绝不进入 profile 裁剪的客户端快照；实测条目、实测
+	// 监听端口、采集状态、sudo 开关与变化历史同样只走 owner 全量导出。
+	SoftwareDeclarations        []SnapshotSoftwareDeclaration        `json:"software_inventory,omitempty"`
+	SoftwareDeclarationPorts    []SnapshotSoftwareDeclarationPort    `json:"software_declaration_ports,omitempty"`
+	SoftwareObservedItems       []SnapshotSoftwareObservedItem       `json:"software_observed_items,omitempty"`
+	SoftwareObservedPorts       []SnapshotSoftwareObservedPort       `json:"software_observed_ports,omitempty"`
+	SoftwareCollectionStatuses  []SnapshotSoftwareCollectionStatus   `json:"software_collection_statuses,omitempty"`
+	SoftwareCollectSudoSettings []SnapshotSoftwareCollectSudoSetting `json:"software_collect_sudo_settings,omitempty"`
+	SoftwareChangeHistory       []SnapshotSoftwareChangeHistory      `json:"software_change_history,omitempty"`
+	Audit                       []SnapshotAudit                      `json:"audit"`
 	// 命令策略段 (ticket #15):自定义规则与被停用
 	// 的默认规则编号。规则全局一套,两条导出路径都携带,不做 profile 裁剪。
 	// 旧快照(策略段尚不存在)解码为 nil 切片 → 导入零行 → 内置默认规则
@@ -82,6 +92,40 @@ type SnapshotCredential struct {
 	Passphrase []byte `json:"passphrase"` // DECRYPTED plaintext; nil/empty if none
 	CreatedAt  int64  `json:"created_at"`
 	UpdatedAt  int64  `json:"updated_at"`
+}
+
+// SnapshotSoftwareDeclaration 是全量备份里的软件声明行。字段按数据库原样
+// 恢复，版本不做任何规格化。
+type SnapshotSoftwareDeclaration struct {
+	ID                 string `json:"id"`
+	DeviceID           string `json:"device_id"`
+	Category           string `json:"category"`
+	Name               string `json:"name"`
+	Version            string `json:"version"`
+	PackageURL         string `json:"purl,omitempty"`
+	CPE                string `json:"cpe,omitempty"`
+	BelongsTo          string `json:"belongs_to,omitempty"`
+	Note               string `json:"note,omitempty"`
+	ClaimedObservedKey string `json:"claimed_observed_key,omitempty"`
+	Status             string `json:"status"`
+	ConfirmedAt        int64  `json:"confirmed_at"`
+	CreatedSource      string `json:"created_source,omitempty"`
+	LastSource         string `json:"last_source,omitempty"`
+	CreatedAt          int64  `json:"created_at"`
+	UpdatedAt          int64  `json:"updated_at"`
+}
+
+// SnapshotSoftwareDeclarationPort 是全量备份里的声明监听端口行。
+type SnapshotSoftwareDeclarationPort struct {
+	ID            string `json:"id"`
+	DeclarationID string `json:"declaration_id"`
+	DeviceID      string `json:"device_id"`
+	Address       string `json:"address"`
+	Port          int    `json:"port"`
+	Protocol      string `json:"protocol"`
+	Exposure      string `json:"exposure"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 // SnapshotSite 是全量快照里的站点段。
@@ -494,6 +538,17 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 		return nil, err
 	}
 	if snap.SharedStorages, err = s.snapshotSharedStorages(""); err != nil {
+		return nil, err
+	}
+	// 软件清单只走 owner 全量备份；profile 导出函数从不填充这两个字段。
+	if snap.SoftwareDeclarations, snap.SoftwareDeclarationPorts, err = s.snapshotSoftwareInventory(); err != nil {
+		return nil, err
+	}
+	// 实测与变化历史各表同样只进入 owner 全量备份。
+	snap.SoftwareObservedItems, snap.SoftwareObservedPorts,
+		snap.SoftwareCollectionStatuses, snap.SoftwareCollectSudoSettings,
+		snap.SoftwareChangeHistory, err = s.snapshotSoftwareCollectionBackup()
+	if err != nil {
 		return nil, err
 	}
 
@@ -1146,6 +1201,13 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 	if err := importDeviceLayoutCoordinatesTx(tx, snap.DeviceLayoutCoordinates); err != nil {
 		return err
 	}
+	// 软件清单只恢复到 owner 库。客户端缓存导入即使收到带清单段的旧文件
+	// 或异常文件，也显式跳过，保证客户端本地永远没有软件清单副本。
+	if ownerImport {
+		if err := importSoftwareInventoryTx(tx, snap.SoftwareDeclarations, snap.SoftwareDeclarationPorts); err != nil {
+			return err
+		}
+	}
 
 	// 1. credentials (re-seal under THIS store's master key)
 	for _, c := range snap.Credentials {
@@ -1182,6 +1244,13 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,device_id,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, shellArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, nullIfEmpty(sv.DeviceID), sv.CreatedAt, sv.UpdatedAt, sv.Revision); err != nil {
 			return fmt.Errorf("insert server %s: %w", sv.ID, err)
+		}
+	}
+	// 软件清单的实测、采集状态、sudo 开关与变化历史在这里恢复：sudo 开
+	// 关引用服务器条目，必须等服务器条目写完；仍然只在 owner 全量导入。
+	if ownerImport {
+		if err := importSoftwareCollectionBackupTx(tx, snap); err != nil {
+			return err
 		}
 	}
 

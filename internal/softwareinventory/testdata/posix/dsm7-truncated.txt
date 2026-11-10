@@ -1,0 +1,292 @@
+SSHMGR-INVENTORY BEGIN posix-v2
+SSHMGR-INVENTORY SECTION os
+kernel-name=Linux
+kernel=4.4.180+
+machine=x86_64
+file=/etc.defaults/VERSION
+majorversion="7"
+minorversion="1"
+major="7"
+minor="1"
+micro="1"
+productversion="7.1.1"
+buildphase="GM"
+buildnumber="42962"
+smallfixnumber="6"
+nano="6"
+base="42962"
+builddate="2023/05/29"
+buildtime="20:01:57"
+SSHMGR-INVENTORY STATUS os 0
+SSHMGR-INVENTORY SECTION packages
+SSHMGR-INVENTORY ABSENT packages
+SSHMGR-INVENTORY SECTION listen
+SSHMGR-INVENTORY ABSENT listen
+SSHMGR-INVENTORY SECTION listen-netstat
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        0      0 0.0.0.0:1688            0.0.0.0:*               LISTEN      3025/docker-proxy
+tcp        0      0 127.0.0.1:5432          0.0.0.0:*               LISTEN      25983/postgres
+tcp        0      0 0.0.0.0:443             0.0.0.0:*               LISTEN      19387/nginx: master
+tcp        0      0 100.64.254.22:3260     0.0.0.0:*               LISTEN      -
+tcp        0      0 192.0.2.252:3260     0.0.0.0:*               LISTEN      -
+tcp        0      0 127.0.0.1:30300         0.0.0.0:*               LISTEN      32652/synovncrelayd
+tcp        0      0 127.0.0.1:16509         0.0.0.0:*               LISTEN      32367/libvirtd
+tcp        0      0 0.0.0.0:445             0.0.0.0:*               LISTEN      10427/smbd
+tcp        0      0 127.0.0.1:512           0.0.0.0:*               LISTEN      14298/termd
+tcp        0      0 0.0.0.0:8000            0.0.0.0:*               LISTEN      3183/docker-proxy
+tcp        0      0 127.0.0.1:161           0.0.0.0:*               LISTEN      10020/snmpd
+tcp        0      0 0.0.0.0:6690            0.0.0.0:*               LISTEN      6419/syncd
+tcp        0      0 0.0.0.0:9443            0.0.0.0:*               LISTEN      19387/nginx: master
+tcp        0      0 0.0.0.0:52100           0.0.0.0:*               LISTEN      25726/python3
+tcp        0      0 0.0.0.0:3493            0.0.0.0:*               LISTEN      10528/upsd
+tcp        0      0 0.0.0.0:5510            0.0.0.0:*               LISTEN      26104/abk-agent-ser
+tcp        0      0 0.0.0.0:8071            0.0.0.0:*               LISTEN      12196/docker-proxy
+tcp        0      0 192.0.2.252:2375     0.0.0.0:*               LISTEN      24560/dockerd
+tcp        0      0 0.0.0.0:9000            0.0.0.0:*               LISTEN      3163/docker-proxy
+tcp        0      0 0.0.0.0:5000            0.0.0.0:*               LISTEN      19387/nginx: master
+tcp        0      0 0.0.0.0:5001            0.0.0.0:*               LISTEN      19387/nginx: master
+tcp        0      0 0.0.0.0:2283            0.0.0.0:*               LISTEN      30285/docker-proxy
+tcp        0      0 0.0.0.0:139             0.0.0.0:*               LISTEN      10427/smbd
+tcp        0      0 127.0.0.1:5900          0.0.0.0:*               LISTEN      2153/qemu-system-x8
+tcp        0      0 127.0.0.1:2380          0.0.0.0:*               LISTEN      26263/etcd
+tcp        0      0 0.0.0.0:5357            0.0.0.0:*               LISTEN      19387/nginx: master
+tcp        0      0 0.0.0.0:5455            0.0.0.0:*               LISTEN      3452/docker-proxy
+tcp        0      0 0.0.0.0:8080            0.0.0.0:*               LISTEN      25343/docker-proxy
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      19387/nginx: master
+tcp        0      0 192.0.2.252:50001    0.0.0.0:*               LISTEN      32212/dms
+tcp        0      0 0.0.0.0:16881           0.0.0.0:*               LISTEN      25370/docker-proxy
+tcp        0      0 0.0.0.0:58001           0.0.0.0:*               LISTEN      8588/docker-proxy
+tcp        0      0 127.0.0.1:2385          0.0.0.0:*               LISTEN      32436/redis-server
+tcp        0      0 192.0.2.252:50002    0.0.0.0:*               LISTEN      32271/lighttpd
+tcp        0      0 192.0.2.252:49170    0.0.0.0:*               LISTEN      27667/synoaudiod
+tcp        0      0 0.0.0.0:2642            0.0.0.0:*               LISTEN      10201/sshd: /usr/bi
+tcp        0      0 127.0.0.1:33300         0.0.0.0:*               LISTEN      17307/python3
+tcp6       0      0 :::3000                 :::*                    LISTEN      24560/dockerd
+tcp6       0      0 :::443                  :::*                    LISTEN      19387/nginx: master
+tcp6       0      0 :::3261                 :::*                    LISTEN      -
+tcp6       0      0 :::445                  :::*                    LISTEN      10427/smbd
+tcp6       0      0 :::222                  :::*                    LISTEN      24560/dockerd
+tcp6       0      0 :::5566                 :::*                    LISTEN      22605/synobtrfsrepl
+tcp6       0      0 :::3263                 :::*                    LISTEN      -
+tcp6       0      0 :::8096                 :::*                    LISTEN      24080/EmbyServer
+tcp6       0      0 :::8384                 :::*                    LISTEN      13277/syncthing
+tcp6       0      0 :::3264                 :::*                    LISTEN      -
+tcp6       0      0 :::3265                 :::*                    LISTEN      19922/scsi_plugin_s
+tcp6       0      0 :::6690                 :::*                    LISTEN      6419/syncd
+tcp6       0      0 :::9443                 :::*                    LISTEN      19387/nginx: master
+tcp6       0      0 :::8998                 :::*                    LISTEN      24560/dockerd
+tcp6       0      0 :::5510                 :::*                    LISTEN      26104/abk-agent-ser
+tcp6       0      0 :::5000                 :::*                    LISTEN      19387/nginx: master
+tcp6       0      0 :::2377                 :::*                    LISTEN      24560/dockerd
+tcp6       0      0 :::5001                 :::*                    LISTEN      19387/nginx: master
+tcp6       0      0 :::7946                 :::*                    LISTEN      24560/dockerd
+tcp6       0      0 :::139                  :::*                    LISTEN      10427/smbd
+tcp6       0      0 :::5357                 :::*                    LISTEN      19387/nginx: master
+tcp6       0      0 :::22000                :::*                    LISTEN      13277/syncthing
+tcp6       0      0 :::80                   :::*                    LISTEN      19387/nginx: master
+tcp6       0      0 :::81                   :::*                    LISTEN      10109/AdGuardHome
+tcp6       0      0 :::2642                 :::*                    LISTEN      10201/sshd: /usr/bi
+tcp6       0      0 :::4533                 :::*                    LISTEN      24560/dockerd
+tcp6       0      0 :::53                   :::*                    LISTEN      10109/AdGuardHome
+udp        0      0 127.0.0.1:46254         0.0.0.0:*                           24080/EmbyServer
+udp        0      0 127.0.0.1:34002         0.0.0.0:*                           32212/dms
+udp        0      0 192.0.2.252:1701     0.0.0.0:*                           23977/xl2tpd
+udp        0      0 0.0.0.0:9997            0.0.0.0:*                           10215/findhostd
+udp        0      0 0.0.0.0:9998            0.0.0.0:*                           10215/findhostd
+udp        0      0 0.0.0.0:9999            0.0.0.0:*                           10215/findhostd
+udp        0      0 0.0.0.0:1900            0.0.0.0:*                           30299/minissdpd
+udp        0      0 0.0.0.0:1900            0.0.0.0:*                           32212/dms
+udp        0      0 0.0.0.0:1900            0.0.0.0:*                           24080/EmbyServer
+udp        0      0 0.0.0.0:1900            0.0.0.0:*                           27667/synoaudiod
+udp        0      0 127.0.0.1:31067         0.0.0.0:*                           24497/vpnauthd
+udp        0      0 127.0.0.1:31068         0.0.0.0:*                           24497/vpnauthd
+udp        0      0 192.0.2.252:55900    0.0.0.0:*                           27667/synoaudiod
+udp        0      0 192.0.2.252:55901    0.0.0.0:*                           32212/dms
+udp        0      0 0.0.0.0:56700           0.0.0.0:*                           24080/EmbyServer
+udp        0      0 0.0.0.0:3702            0.0.0.0:*                           30342/synowsdiscove
+udp        0      0 172.20.0.1:123          0.0.0.0:*                           10196/ntpd
+udp        0      0 100.64.254.22:123      0.0.0.0:*                           10196/ntpd
+udp        0      0 172.19.0.1:123          0.0.0.0:*                           10196/ntpd
+udp        0      0 198.51.16.1:123        0.0.0.0:*                           10196/ntpd
+udp        0      0 172.17.0.1:123          0.0.0.0:*                           10196/ntpd
+udp        0      0 192.0.2.252:123      0.0.0.0:*                           10196/ntpd
+udp        0      0 127.0.0.1:123           0.0.0.0:*                           10196/ntpd
+udp        0      0 0.0.0.0:123             0.0.0.0:*                           10196/ntpd
+udp        0      0 192.0.2.255:137      0.0.0.0:*                           29547/nmbd
+udp        0      0 192.0.2.252:137      0.0.0.0:*                           29547/nmbd
+udp        0      0 0.0.0.0:137             0.0.0.0:*                           29547/nmbd
+udp        0      0 192.0.2.255:138      0.0.0.0:*                           29547/nmbd
+udp        0      0 192.0.2.252:138      0.0.0.0:*                           29547/nmbd
+udp        0      0 0.0.0.0:138             0.0.0.0:*                           29547/nmbd
+udp        0      0 127.0.0.1:161           0.0.0.0:*                           10020/snmpd
+udp        0      0 0.0.0.0:32981           0.0.0.0:*                           19608/synorelayd
+udp        0      0 0.0.0.0:41185           0.0.0.0:*                           31837/netbird
+udp        0      0 127.0.0.1:37104         0.0.0.0:*                           27667/synoaudiod
+udp        0      0 0.0.0.0:8472            0.0.0.0:*                           -
+udp        0      0 192.0.2.252:4500     0.0.0.0:*                           23909/pluto
+udp        0      0 0.0.0.0:16881           0.0.0.0:*                           25402/docker-proxy
+udp        0      0 192.0.2.252:500      0.0.0.0:*                           23909/pluto
+udp        0      0 0.0.0.0:21027           0.0.0.0:*                           13277/syncthing
+udp        0      0 192.0.2.252:49819    0.0.0.0:*                           24080/EmbyServer
+udp        0      0 0.0.0.0:50062           0.0.0.0:*                           13277/syncthing
+udp6       0      0 :::22000                :::*                                13277/syncthing
+udp6       0      0 :::47211                :::*                                13277/syncthing
+udp6       0      0 :::7359                 :::*                                24080/EmbyServer
+udp6       0      0 :::3702                 :::*                                30342/synowsdiscove
+udp6       0      0 :::7946                 :::*                                24560/dockerd
+udp6       0      0 :::53                   :::*                                10109/AdGuardHome
+udp6       0      0 fe80::8c2b:d2ff:fec:123 :::*                                10196/ntpd
+udp6       0      0 fe80::c422:b0ff:fe1:123 :::*                                10196/ntpd
+udp6       0      0 fe80::5cd4:3cff:fec:123 :::*                                10196/ntpd
+udp6       0      0 fe80::4cfc:29ff:fe6:123 :::*                                10196/ntpd
+udp6       0      0 fe80::a449:74ff:fe5:123 :::*                                10196/ntpd
+udp6       0      0 fe80::9cc6:faff:fe4:123 :::*                                10196/ntpd
+udp6       0      0 fe80::fc06:d0ff:fea:123 :::*                                10196/ntpd
+udp6       0      0 fe80::5cdc:beff:fe3:123 :::*                                10196/ntpd
+udp6       0      0 fe80::42:d6ff:fe82::123 :::*                                10196/ntpd
+udp6       0      0 fe80::f4d9:7fff:fe6:123 :::*                                10196/ntpd
+udp6       0      0 fe80::9825:9dff:fe8:123 :::*                                10196/ntpd
+udp6       0      0 fe80::42:61ff:fe79::123 :::*                                10196/ntpd
+udp6       0      0 fe80::7c:7bff:feb5::123 :::*                                10196/ntpd
+udp6       0      0 fe80::5400:f5ff:fec:123 :::*                                10196/ntpd
+udp6       0      0 fe80::a4bc:20ff:feb:123 :::*                                10196/ntpd
+udp6       0      0 fe80::42:8fff:fe32::123 :::*                                10196/ntpd
+udp6       0      0 fe80::1c43:a6ff:fec:123 :::*                                10196/ntpd
+udp6       0      0 fe80::84f6:8bff:fe8:123 :::*                                10196/ntpd
+udp6       0      0 fe80::42:19ff:fe1a::123 :::*                                10196/ntpd
+udp6       0      0 ::1:123                 :::*                                10196/ntpd
+udp6       0      0 :::123                  :::*                                10196/ntpd
+udp6       0      0 :::41185                :::*                                31837/netbird
+udp6       0      0 :::21027                :::*                                13277/syncthing
+SSHMGR-INVENTORY STATUS listen-netstat 0
+SSHMGR-INVENTORY SECTION listen-lsof
+SSHMGR-INVENTORY ABSENT listen-lsof
+SSHMGR-INVENTORY SECTION exe
+2153	/volume1/@appstore/Virtualization/bin/qemu-system-x86_64
+3025	/volume1/@appstore/Docker/usr/bin/docker-proxy
+3163	/volume1/@appstore/Docker/usr/bin/docker-proxy
+3183	/volume1/@appstore/Docker/usr/bin/docker-proxy
+3452	/volume1/@appstore/Docker/usr/bin/docker-proxy
+6419	/volume1/@appstore/SynologyDrive/sbin/syncd
+8588	/volume1/@appstore/Docker/usr/bin/docker-proxy
+10020	/usr/bin/snmpd
+10109	/opt/adguardhome/AdGuardHome
+10196	/usr/sbin/ntpd
+10201	/usr/bin/sshd
+10215	/usr/syno/bin/findhostd
+10427	/usr/local/packages/@appstore/SMBService/usr/sbin/smbd
+10528	/usr/sbin/upsd
+12196	/volume1/@appstore/Docker/usr/bin/docker-proxy
+13277	/bin/syncthing
+14298	/volume1/@appstore/Docker/termd/termd
+17307	/usr/bin/python3.8
+19387	/usr/bin/nginx
+19608	/usr/syno/sbin/synorelayd
+19922	/usr/local/packages/@appstore/ScsiTarget/bin/scsi_plugin_server
+22605	/usr/local/packages/@appstore/ReplicationService/sbin/synobtrfsreplicad
+23909	/usr/syno/ipsec/libexec/pluto
+23977	/usr/sbin/xl2tpd
+24080	/system/EmbyServer
+24497	/volume1/@appstore/VPNCenter/sbin/vpnauthd
+24560	/volume1/@appstore/Docker/usr/bin/dockerd
+25343	/volume1/@appstore/Docker/usr/bin/docker-proxy
+25370	/volume1/@appstore/Docker/usr/bin/docker-proxy
+25402	/volume1/@appstore/Docker/usr/bin/docker-proxy
+25726	/usr/bin/python3.8
+25983	/usr/bin/postgres
+26104	/volume1/@appstore/ActiveBackup/bin/abk-agent-server
+26263	/volume1/@appstore/Virtualization/bin/etcd
+27667	/volume1/@appstore/AudioStation/sbin/synoaudiod
+29547	/usr/local/packages/@appstore/SMBService/usr/sbin/nmbd
+30285	/volume1/@appstore/Docker/usr/bin/docker-proxy
+30299	/usr/bin/minissdpd
+30342	/usr/local/packages/@appstore/SMBService/usr/syno/bin/synowsdiscoveryd
+31837	/usr/local/bin/netbird
+32212	/volume1/@appstore/MediaServer/sbin/dms
+32271	/volume1/@appstore/MediaServer/sbin/lighttpd
+32367	/volume1/@appstore/Virtualization/usr/local/bin/libvirtd
+32436	/volume1/@appstore/Virtualization/bin/redis-server
+32652	/volume1/@appstore/Virtualization/bin/synovncrelayd
+SSHMGR-INVENTORY STATUS exe 0
+SSHMGR-INVENTORY SECTION exe-owner
+SSHMGR-INVENTORY ABSENT exe-owner
+SSHMGR-INVENTORY SECTION apps
+SSHMGR-INVENTORY ABSENT apps
+SSHMGR-INVENTORY SECTION brew
+SSHMGR-INVENTORY ABSENT brew
+SSHMGR-INVENTORY SECTION synology-packages
+SynoFinder-1.6.1-0542: Synology Universal Search is a powerful search tool for your Synology NAS. In one search, you can find matched items from photos to notes. You can also index folders to provide precise and prompt search results by filename or file content. With Synology Universal Search, everything on your Synology NAS is just a few clicks away.
+exFAT-Free-7.1.0-0301: Microsoft exFAT (Extended File Allocation Table) technology is a file system optimized for flash storage devices. With exFAT installed, you can access external storage devices with a file system formatted as exFAT on your NAS. Unlike FAT32, exFAT supports a single file larger than 4 GB and can be used on both Windows and Mac operating systems. In response to Microsoft's announcement to integrate exFAT into the Linux kernel in 2019, Synology users can install exFAT free of charge by updating DSM to version 7.0 or above.
+USBCopy-2.2.1-1103: USB Copy helps you copy files between your Synology NAS and external USB/SD storage devices. File copy can start right after an external storage device is plugged in to the Synology NAS, without any need to open the DSM web console. USB Copy comes with multiple copy and file organization strategies to ensure efficient storage usage and easy location of files.
+Node.js_v12-12.22.12-2031: Built on Chrome's JavaScript runtime, Node.js has become a widely popular platform for users to easily build fast, scalable network applications.
+ReplicationService-1.2.2-0353: Replication Service is a core service that offers the ability to replicate taken snapshots from the source to the destination. This package cannot run alone and depends on core packages that offer snapshot features.
+TextEditor-1.2.4-0245: Text Editor provides you with extensive editing features to handle plain text files, such as programming scripts and HTML files, directly in DSM.
+PHP7.0-7.0.33-0131: PHP is an open source scripting language which aims to help web developers write dynamically generated web pages efficiently. This language is suitable for web development in that it can be easily embedded into HTML.
+Node.js_v18-18.18.2-0011: Built on Chrome's JavaScript runtime, Node.js has become a widely popular platform for users to easily build fast, scalable network applications.
+SynologyApplicationService-1.7.5-10610: Synology Application Service provides a framework to enrich features and services of Synology packages, including push notifications and profile settings. With Synology Application Service, coherent configurations can be shared across different packages.
+HybridShare-1.3.1-0904: Hybrid Share connects on-premises Synology NAS with C2 Storage, providing low-latency access to the active files that are cached locally.
+OAuthService-1.1.2-0071: OAuth Service is an open standard protocol for account authorization and authentication. It allows resource owners to authorize third-party access to their server resources without sharing their credentials. The package adopts OAuth 2.0 standard.
+ScsiTarget-1.0.6-0266: SAN Manager helps you to manage and monitor your iSCSI and Fibre Channel services easily. Both iSCSI and Fibre Channel are storage area network (SAN) services that provide access to consolidated and block-level data storage. Clients can access storage space over storage network as if the space were local disks.
+HyperBackup-3.0.2-2531: Hyper Backup helps you protect shared folder data, packages, and LUNs on your Synology NAS thoroughly, providing diverse backup destinations and multiple backup versions. Restoration is available with a straightforward version browsing interface.
+ActiveInsight-2.1.3-2606: Active Insight is a cloud service that provides better technical support experience with faster troubleshooting. When enabled on multiple of your Synology hosts, it allows you to manage them across locations with a performance monitoring and automated warning system.
+Perl-5.34.1-0234: Perl is an object-oriented programming language which can be used for CGI scripts, system administration, network programming and other applications. It has features that can ease the task of programming, including regular expressions and strong string manipulation.
+CloudSync-2.7.1-2407: With Cloud Sync, you can seamlessly sync and share files among your Synology NAS and multiple public clouds, such as Dropbox, Baidu Cloud and Google Drive.
+ActiveBackup-2.7.0-13221: Active Backup for Business is designed to provide a comprehensive while centralized data protection solution, helping you back up business PCs, VMs, physical servers, and file servers all alike.
+StorageAnalyzer-2.1.0-0421: Storage Analyzer allows you to have a quick glance at the overall usage trends of your Synology NAS, create and manage tasks to analyze storage spaces, and generate detailed reports on volume usage.
+LogCenter-1.2.3-0290: Log Center offers an easy solution for gathering and displaying log messages from network devices. It provides you with a centralized log management interface and the flexible search function to help you find the useful information efficiently.
+Docker-20.10.3-1308: Docker is a lightweight virtualization application that gives you the ability to run thousands of containers created by developers from all over the world on DSM. The hugely popular built-in image repository, Docker Hub, allows you to find shared applications from other talented developers.
+SynologyPhotos-1.3.4-0340: Synology Photos provides a series of smart and flexible features, allowing both photography lovers and home users to manage photos with ease.
+AudioStation-7.0.3-5401: With Audio Station and its mobile app DS audio, you can enjoy high-quality playback, listen to radios, manage your music collection, create personal playlist, and share with friends anywhere.
+FileStation-1.3.4-1404: File Station is the centralized file management tool for your Synology NAS. Through File Station, you can manage and search files/folders, view files of various types, share private files with external users, mount remote folders and virtual drives for access, and do much more!
+NoteStation-2.6.2-2517: Note Station helps you fully enjoy writing, viewing, managing, and sharing content-rich notes. It is very easy to create content with rich text editing, media embedding, attachments, and much more. Manage your notes by using tags and grouping notes into Notebooks. When you are ready, Note Station makes sharing your content via social networking platforms simple and quick. Create, share, and enjoy!
+UniversalViewer-1.0.1-0070: Universal Viewer allows you to view different file formats directly on the Synology Drive without having to open each application. Certain packages require Universal Viewer to function fully.
+SMBService-4.15.9-0642: SMB Service is an easy-to-use file service management tool, allowing you to manage general settings related to the SMB/CIFS file sharing service. Through SMB Service, Windows, macOS, and Linux users can access your Synology NAS from the network once you have enabled the SMB service option in Control Panel.
+MediaServer-2.0.5-3152: Media Server provides a multimedia service for you to browse and play the multimedia contents on Synology NAS via DLNA/UPnP home devices. With Media Server, you can easily connect those devices such as TV sets and stereo systems to your home network, and stream multimedia files stored on Synology NAS to the devices to enjoy music, photos, and videos.
+SecureSignIn-1.0.8-0197: Secure SignIn Service provides enhanced account security for your DSM. It allows passwordless logins and offers sign-in options in addition to basic 2-factor authentication methods.
+SynologyDrive-3.2.1-23280: Synology Drive Server is a comprehensive solution for file storage, management, sharing, and synchronization. It is equipped with Synology Drive Admin Console for centralized management and monitoring, Synology Drive for file access via web portal, and Synology Drive ShareSync for synchronization across Synology NAS devices.
+VPNCenter-1.4.7-2901: VPN Server offers an easy VPN solution that turns your Synology product into a VPN server, providing a secure method to connect to a private LAN at a remote location. All PPTP, OpenVPN, and L2TP/IPSec services are supported.
+Python2-2.7.18-1004: Python is an interpreted, interactive, and object-oriented programming language suitable for distributed application development, scripting, numeric computing and system testing. With Python, you can develop or integrate your systems more quickly and effectively.
+Virtualization-2.6.1-12139: Virtual Machine Manager integrates various virtualization solutions in a centralized and refined interface, allowing you to easily create, run, and manage multiple virtual machines on your Synology NAS. With Virtual Machine Manager, you can allocate hardware resources more flexibly, build a virtualization environment for the purpose of the enterprise-level deployment and maintenance, migrate your virtual machines among hosts without disruption and provide a full range fault tolerance protection.
+SSHMGR-INVENTORY STATUS synology-packages 0
+SSHMGR-INVENTORY SECTION container-images
+ghcr.nju.edu.cn/immich-app/immich-server	v3	sha256:485d546a2e31d6a8b4db8423fcba5c109de8c218d93410af115fd1ccfc4352a6	sha256:fb31598c03fbb3d68f6409548ab7b18148ee651bf7d6b40e1d907308edbf0dc2
+ghcr.nju.edu.cn/immich-app/immich-machine-learning	v3	sha256:5b28c9352c8374b8a1ed96fbdd8d6755fea6e43510ec43fdf6538aa02ea40f56	sha256:fc548ba30a5025dfdd4a5ada9a227b557fbadc95786b6cd52f5ad3cd3f198268
+superng6/qbittorrentee	latest	sha256:9e102f0baf6b48a94950cee5d89555f0fde28b5bb90d091be9e650052a7be32b	sha256:faed7224b7c549f3cce49fb6759e7dc08e907df493a6790eb7183c3d37f1b8d8
+deluan/navidrome	latest	sha256:38dc2727bfcfd5ede290f8ada114fc90368146f265ae4701ddddbcbe2a44ee52	sha256:3fa63c3ddc32d31c79970194d2d83143ac316b0bcef78695d1d9ab4c5a4f84b9
+valkey/valkey	<none>	sha256:c123e3715db63d06d4ad6964884037aa0d5d4d703939b9929954112889708e1d	sha256:c439a6b7b7dfe74b25d78f9e5d27fbaeb761f676de82eb1a154c5b719a8cfb3e
+superng6/qbittorrentee	<none>	sha256:dde44700ea102a416bdce17ca9cfc1ce7535e94b198c580b80a6f44e8a7ae9f2	sha256:b8b1fa6014362ff331426d5b72f76ccc7e871ee8c3648618ab647e5ba7448709
+superng6/qbittorrentee	<none>	sha256:fce933369db571d3390105eafd648f860d8bb078dbf15c9058c48aa4d8f37431	sha256:a773f3ec5f2c1b74a322a8a30d0c8cdecad77da53edeb22f2327fca75adf5cbe
+hello-world	latest	sha256:11a3eb1597e864c51b3f56733cb2e8a90bf0c284bfc05f9444d81c558bc848aa	sha256:e2ac70e7319a02c5a477f5825259bd118b94e8b02c279c67afa63adab6d8685b
+superng6/qbittorrentee	<none>	sha256:f55cb8ec1a15a2e146819ee2f95b701b263c9eabc1918dd76515badd86d17470	sha256:9fab05812ce71b17db7e5642c48af05c4df8ae156ab0a19235b7c66aee13f6c6
+mzz2017/v2raya	latest	sha256:dbbeb8dc90f2949d82b34f1ea800f0ff0caf864214a1f77bb409b3aec88f0ab0	sha256:1dab7f7b9447e7251ce8ce1c1a81a26175f46dae3b4866d2b7e3d1042aa9bd9f
+mzz2017/v2raya	<none>	sha256:0da703431d652384ac8fdf8ae50696402d329842a02d6df309062371de1569b7	sha256:80b906059d0e0e9e2513e801ab4385c678880f30f142fc8fc6e10d12b4fc0a6b
+mzz2017/v2raya	<none>	sha256:bd1cf60da303c610e71c56e172baf0b689b44ab76c67d8ca69a7032e6317ee73	sha256:8d2986a86353f6e59e876b7de4f929d54d2338602d2a43a22b2045433f82d15d
+ghcr.nju.edu.cn/immich-app/postgres	<none>	sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23	sha256:178719aeb38df6f0ce8edc1d8320008379fcf04eb3444e76419cc98d9861e331
+mzz2017/v2raya	<none>	sha256:feb8b34ee6d9951f88637d7df1295657b20ae836593ca10c7947dd9795f2af0d	sha256:49e5c22ab49a3aa9f6c580fefcd75487325b9b1119bd33e5af01a62abc835fd8
+ghcr.io/go-shiori/shiori	latest	sha256:d3bdfc1b68b8f267a04cf74d73b8a0e1d99ac71c3a9047375e97202f079eb1f6	sha256:c9c1979e3f0ab1552b3cbb02d19060a2f0191539871caabe9fe0c7a952441811
+linuxserver/sonarr	latest	sha256:bb50bac26881613af15deb4df891e4a7cb09e3333aec20a0522cb188fb22b11d	sha256:5cf2e5bc9d7531b98247939670871285625c8f2cac1ca2a668f6ec51ab29ab10
+linuxserver/prowlarr	latest	sha256:856c93bab72a6a41a23ff60bab48554135c044a456f40909307011dea8ddeafb	sha256:43f484219c27d211b54f5e24ec91cfa42c4d1c35a4bbbbc8830aa2932c6f1986
+linuxserver/sonarr	<none>	sha256:e00e87e0e7c24fdc992093756f120a6ab292790b6a637ff3641bf813091cd726	sha256:d9ac41274e3f4a1adfbab390f75bf90beae24d5ca720939feb5905cfbbe15210
+mzz2017/v2raya	<none>	sha256:a1453d7ca873efa887281a0a239c9893f220da1c47d761fab2158154e66c4143	sha256:928fd9e707c658726da70a3e36b9cd1a3bfbf59ec05c1a203236849a24938cd0
+mzz2017/v2raya	<none>	sha256:e69288eabdb9f818951ab41987a96399371f823cfe42b6bba739f1d99be66c76	sha256:b160eb901a75e13809c53849133c93b46b72f0165d9cc7767e0a1ae8c7169af3
+linuxserver/prowlarr	<none>	sha256:4f2a6d597845b2f3e19284b1d982b3e0b4bd7c22472c2979c956aa198b83f472	sha256:2147928a1b0d95b9597ecdd453ab48e33eb01ce0507712814c88c2462b5b8c8a
+linuxserver/sonarr	<none>	sha256:1a90192952c30f9420994b2e2171083ea8cae100357de5e9eb25890efa90a6ce	sha256:cc77388de4b84d4126bb74b796b89a0fd22cc34ddff3221eec5aaf784784bcf2
+linuxserver/prowlarr	<none>	sha256:25d21c04c7cc39a706217abb77bb60b283d9eaaf16acf539c930e3c797e21f25	sha256:9f72fd6fb903de8e89863a3fc62e6095d501b3502bb9de2d668c76ab53c964fc
+linuxserver/sonarr	<none>	sha256:c0836f49c20000e603170dc95d74c2527e690d50309977d94fc171eaa49351a4	sha256:b315103da2941990e58ff3b8cb46d8000724b874b3799ce08b85819d0baa2547
+linuxserver/prowlarr	<none>	sha256:d2462d470891c70073e31d158657a9b247b317c90238c40534d8be8f98671057	sha256:88fd6b7b015b6fe8b580f5fea2e872a1b3e3b6876d329756b008724d1bd98614
+linuxserver/prowlarr	<none>	sha256:89eac63d2099477094df8c2329a6a750b8b5e382f8975dd18e7861678b55cca4	sha256:1165f4fdcb7173ca10d4d6e19df7aa867766ec993216440816ef663283357361
+linuxserver/sonarr	<none>	sha256:b0ac15772c04f329964ed79cb446ab23fd1ee28f33b58b10f0264feac17d33cd	sha256:d1bba52251a4f731fd60dd49e1274939d35cdf02d808a4d9b7e6f6f9e91a6df2
+superng6/qbittorrentee	<none>	sha256:3b93143af92cd5aa619c851b0c212f79be559def0345feef523996f8c0990fab	sha256:3194ebeb877ec27e4742094a31443b34c022cc33fa5e3ef91b7bbfc464d86a47
+linuxserver/prowlarr	<none>	sha256:b6583aeaa0fe637da09b5d8e498a3f6dcb9eef96aa59d4c455bf021c9f914119	sha256:9d4184e1b15017b407ba55ab9886e48d6688103f9a39f520242742ee333714aa
+linuxserver/sonarr	<none>	sha256:4afcb099e40ef263a7327f1ee9a870a510a516f872ae79b863c11b94d0b9ebb7	sha256:e66a933d0e45ae96132bf7ddd0bdab45af227dfbaf61fdb40b7afade14958e6b
+superng6/qbittorrentee	<none>	sha256:0674daad62ed4063c9070cb6186c3febc7d75438faf3897bf7775edcc64bbe50	sha256:85133a0be4278306867404614d6db75b7e1a99dbde4c26e96a9b40537bacf14f
+neilpang/acme.sh	latest	sha256:fea9894f56e9d28bdf33f9f569022b5bf077c42b47a17c738fade2bf433f5696	sha256:1939b32c687f4843c9a944a9948fadcf78799c859dcbeb1889d4fe6eb0dc7188
+linuxserver/sonarr	<none>	sha256:1156329d544b38bd1483add75c9b72c559f20e1ca043fd2d6376c2589d38951f	sha256:143f1714496bd530073550abbb37c2ea3d64f739c2d3eded1a421576d16568e7
+linuxserver/sonarr	<none>	sha256:de67e5b682fedcc4ac34f28a5697931c680c959ea65f8111b0cce17bc698c0b2	sha256:83d012526cd89eef0be5e4511384cda624e231102e0a7fdc8434bcfe88d67fe3
+linuxserver/prowlarr	<none>	sha256:b058be8a4e083e0cba238f03759994617a559abe0c89e5ed66454b44395da6a9	sha256:ccb4861ff634964abd3c74f836a64519e40664389e090e3d5d9de6315fa0cbc0
+linuxserver/prowlarr	<none>	sha256:68d16fa1a692ec26c4340a23f50b5980899c5630ce881fd0015dac849cbb9b53	sha256:c6befe21722a36be65cbb2738fea6acca26ca345ef258177753be1968a101c6e
+deluan/navidrome	<none>	sha256:d8dcacba4cf48b4caa81f231f20ebba719e642b0f86a46b1b5c24bb4f27edddc	sha256:fbae0fc28cf860f1a095dc44257c4778cf7776bff456ca53ab47bce9520158da
+linuxserver/radarr	latest	sha256:36e43720c130ec2d3ed80726d2134af3c6644729f4750abc830fdda7fa71d1e1	sha256:f2a730c154ec1ccef8b3253b4bf3c97c516df4eca2f42a94b03e6ec076dfbc94
+linuxserver/radarr	<none>	sha256:d51c77a4e8fb4af0776ec032d103a84f816e65d09010fc72025ddd309d4c2424	sha256:c11a2d7f62188abc1ad7bc4c253c32c72e6dbcc185b615a6fad2dac99b4fc421
+linuxserver/prowlarr	<none>	sha256:1a6cdd0cc2350f8527dab39bc8467c9a2553bbbcf75a2c66f882fc53d73d5deb	sha256:fe791200175ca026a9422728306d8b51a5400f366adefe67f19181e0ce5e5b24

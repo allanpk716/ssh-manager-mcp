@@ -11,6 +11,7 @@ export default defineConfig({
   reporter: [["list"]],
   use: {
     trace: "retain-on-failure",
+    ignoreHTTPSErrors: true,
   },
   projects: [
     {

@@ -98,8 +98,11 @@ type Config struct {
 	// SecretsWriter 是机密项写操作来源。单机与权威端必须提供；客户端不提
 	// 供，写路由不存在。
 	SecretsWriter SecretWriter
-	Access        AccessStore
-	Ops           OpsStore
+	// SoftwareInventory 是软件清单页来源。单机与权威端提供；客户端不提
+	// 供，导航与路由都不出现。
+	SoftwareInventory SoftwareInventorySource
+	Access            AccessStore
+	Ops               OpsStore
 	// MachineInit 是单机升级为权威端时调用的初始化模块适配器。适配器内部
 	// 调用 machineinit.Initialize 并把权威端作为目标角色；本包不写 role.json。
 	MachineInit MachineInitializer
@@ -124,8 +127,11 @@ type Config struct {
 	ServePort int
 	// ClientInstance 是客户端角色启动时选定的客户端缓存实例名；空串表示默认
 	// 实例。浏览器会话以它为初始值，切换只保存在进程内会话里。
-	ClientInstance         string
-	Now                    func() time.Time
+	ClientInstance string
+	Now            func() time.Time
+	// ReverifyWindow 是权威端敏感写操作要求重新验证管理员口令的窗口；
+	// 零值使用默认 5 分钟。端到端浏览器测试可用环境开关把它缩短。
+	ReverifyWindow         time.Duration
 	Auth                   AuthStore
 	CertificateFingerprint string
 	AllowedHosts           []string
@@ -199,6 +205,9 @@ type capabilities struct {
 	// ShowSecretsArea 控制是否显示「机密项」区域入口；只有配置了机密项
 	// 读取来源时才显示。
 	ShowSecretsArea bool
+	// ShowSoftwareInventoryArea 控制是否显示「软件清单」区域入口；只有
+	// 单机或权威端配置软件清单来源时才显示。
+	ShowSoftwareInventoryArea bool
 	// CanManageProfiles 控制是否显示 Profile 页入口与写操作。
 	CanManageProfiles bool
 	// CanManageProjects 控制是否显示项目令牌页入口与写操作。
@@ -233,6 +242,7 @@ type capabilities struct {
 func capabilitiesForConfig(cfg Config) capabilities {
 	caps := capabilitiesForRole(cfg.Role)
 	caps.ShowSecretsArea = cfg.Secrets != nil
+	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
 	return caps
 }
 
@@ -335,6 +345,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 		h.registerAccessRoutes()
 		h.registerServerRoutes()
 		h.registerSecretRoutes()
+		h.registerSoftwareInventoryRoutes()
 		h.registerOpsRoutes()
 	}
 	return newLoopbackHandler(cfg, registerRoutes)

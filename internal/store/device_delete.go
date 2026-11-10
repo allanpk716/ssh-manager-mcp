@@ -32,6 +32,14 @@ type DeviceDeletePreview struct {
 	SecretServerAllows []*DeviceDeleteSecretAllow
 	Memberships        []*models.NetworkMembership
 	LayoutCoordinates  []*models.DeviceLayoutCoordinate
+	// 软件清单相关数量。SoftwareItemCount 是实测与生效声明合成后的条目
+	// 总数；声明数包含草稿；其余对象各自计数。
+	SoftwareItemCount          int
+	SoftwareDeclarationCount   int
+	SoftwareCollectorCount     int
+	SoftwareListeningPortCount int
+	SoftwareObservedItemCount  int
+	SoftwareChangeHistoryCount int
 }
 
 // DeviceDeletePreview 按设备名字组装删除预览。预览只读数据库，不改变
@@ -136,11 +144,87 @@ func (s *Store) deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePre
 	if err != nil {
 		return nil, err
 	}
+	softwareCounts, err := deviceSoftwareCountsTx(tx, device.ID)
+	if err != nil {
+		return nil, err
+	}
 	return &DeviceDeletePreview{
 		Device: device, Servers: servers, SharedStorages: sharedStorages,
 		SecretServerAllows: secretAllows,
 		Memberships:        memberships, LayoutCoordinates: coordinates,
+		SoftwareItemCount: softwareCounts.Items, SoftwareDeclarationCount: softwareCounts.Declarations,
+		SoftwareCollectorCount:     softwareCounts.Collectors,
+		SoftwareListeningPortCount: softwareCounts.ListeningPorts,
+		SoftwareObservedItemCount:  softwareCounts.ObservedItems,
+		SoftwareChangeHistoryCount: softwareCounts.ChangeHistory,
 	}, nil
+}
+
+// deviceSoftwareCounts 统计设备删除预览需要的软件清单数量。
+type deviceSoftwareCounts struct {
+	Items          int
+	Declarations   int
+	Collectors     int
+	ListeningPorts int
+	ObservedItems  int
+	ChangeHistory  int
+}
+
+// deviceSoftwareCountsTx 统计设备删除预览需要的软件清单数量。合成条目数与
+// 统一查询一致：生效声明各一条，未被生效声明认领的实测条目各一条；草稿
+// 计入声明数，但还不是清单条目。
+func deviceSoftwareCountsTx(tx *sql.Tx, deviceID string) (deviceSoftwareCounts, error) {
+	var counts deviceSoftwareCounts
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_collection_status WHERE device_id=?`,
+		deviceID,
+	).Scan(&counts.Collectors); err != nil {
+		return counts, err
+	}
+	var activeDeclarations int
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_declarations WHERE device_id=? AND status='active'`,
+		deviceID,
+	).Scan(&activeDeclarations); err != nil {
+		return counts, err
+	}
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_declarations WHERE device_id=?`,
+		deviceID,
+	).Scan(&counts.Declarations); err != nil {
+		return counts, err
+	}
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_declaration_ports WHERE device_id=?`, deviceID,
+	).Scan(&counts.ListeningPorts); err != nil {
+		return counts, err
+	}
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_observed_items WHERE device_id=?`,
+		deviceID,
+	).Scan(&counts.ObservedItems); err != nil {
+		return counts, err
+	}
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_observed_items observed
+		WHERE observed.device_id=?
+		  AND NOT EXISTS (
+			SELECT 1 FROM software_declarations declaration
+			WHERE declaration.device_id=observed.device_id
+			  AND declaration.claimed_observed_key=observed.stable_key
+			  AND declaration.status='active')`,
+		deviceID,
+	).Scan(&counts.Items); err != nil {
+		return counts, err
+	}
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_change_history WHERE device_id=?`,
+		deviceID,
+	).Scan(&counts.ChangeHistory); err != nil {
+		return counts, err
+	}
+	counts.Items += activeDeclarations
+	return counts, nil
 }
 
 // deviceServersForDeviceTx 返回设备关联的服务器条目摘要及锚状态，详情与
@@ -238,7 +322,7 @@ func deviceDeleteAuditSummary(preview *DeviceDeletePreview) map[string]any {
 	for _, share := range preview.SharedStorages {
 		sharedStorageNames = append(sharedStorageNames, share.Name)
 	}
-	return map[string]any{
+	summary := map[string]any{
 		"name":               preview.Device.Name,
 		"client":             preview.Device.ClientName,
 		"servers":            serverNames,
@@ -247,4 +331,25 @@ func deviceDeleteAuditSummary(preview *DeviceDeletePreview) map[string]any {
 		"layout-coordinates": len(preview.LayoutCoordinates),
 		"shared-storages":    sharedStorageNames,
 	}
+	// 软件清单尚为空的设备保持旧审计摘要形态；有清单时才追加数量，
+	// 避免无关设备删除的审计噪音。
+	if preview.SoftwareItemCount > 0 {
+		summary["software-items"] = preview.SoftwareItemCount
+	}
+	if preview.SoftwareDeclarationCount > 0 {
+		summary["software-declarations"] = preview.SoftwareDeclarationCount
+	}
+	if preview.SoftwareCollectorCount > 0 {
+		summary["software-collectors"] = preview.SoftwareCollectorCount
+	}
+	if preview.SoftwareListeningPortCount > 0 {
+		summary["software-listening-ports"] = preview.SoftwareListeningPortCount
+	}
+	if preview.SoftwareObservedItemCount > 0 {
+		summary["software-observed-items"] = preview.SoftwareObservedItemCount
+	}
+	if preview.SoftwareChangeHistoryCount > 0 {
+		summary["software-change-history"] = preview.SoftwareChangeHistoryCount
+	}
+	return summary
 }

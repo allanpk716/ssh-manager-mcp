@@ -32,9 +32,10 @@ type AuditRow struct {
 
 // 审计来源的固定值。来源列面向所有入口，值保持英文以便过滤与导出。
 const (
-	AuditSourceCLI   = "cli"
-	AuditSourceWebUI = "web_ui"
-	AuditSourceAgent = "agent"
+	AuditSourceCLI     = "cli"
+	AuditSourceWebUI   = "web_ui"
+	AuditSourceAgent   = "agent"
+	AuditSourceForward = "forward"
 )
 
 func (s *Store) WriteAudit(r AuditRow) error {

@@ -1,0 +1,66 @@
+{{define "content"}}
+<section class="software-inventory">
+<p><a href="/ui/software-inventory/">返回软件清单</a></p>
+<h1>{{.SoftwareInventoryDevice.Name}} · 软件清单</h1>
+{{if .SoftwareInventoryNotice}}<p class="form-success">{{.SoftwareInventoryNotice}}</p>{{end}}
+{{if .SoftwareInventoryError}}<p class="form-error">{{.SoftwareInventoryError}}</p>{{end}}
+
+<h2>采集状态</h2>
+<dl class="software-status">
+<dt>采集执行者</dt><dd>{{if .SoftwareInventoryDevice.Status.Managed}}{{.SoftwareInventoryDevice.Status.CollectorLabel}}{{else}}不受管设备，没有采集执行者{{end}}</dd>
+<dt>上次成功</dt><dd>{{formatOptionalTime .SoftwareInventoryDevice.Status.LastSuccessAt}}</dd>
+<dt>上次失败</dt><dd>{{formatOptionalTime .SoftwareInventoryDevice.Status.LastFailureAt}}{{if .SoftwareInventoryDevice.Status.LastFailureReason}}（{{.SoftwareInventoryDevice.Status.LastFailureReason}}）{{end}}</dd>
+<dt>清单是否过期</dt><dd>{{if .SoftwareInventoryDevice.Status.Stale}}清单已过期{{else}}清单未过期{{end}}</dd>
+<dt>采集用服务器条目</dt><dd>{{if .SoftwareInventoryDevice.Status.ServerEntry}}{{.SoftwareInventoryDevice.Status.ServerEntry}}{{else}}-{{end}}</dd>
+</dl>
+{{if .SoftwareInventoryDevice.Status.Managed}}<form method="post" action="/ui/software-inventory/collect?device={{.SoftwareInventoryDevice.Name | urlquery}}">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">立即采集</button>
+</form>{{end}}
+
+{{range .SoftwareInventoryDevice.Groups}}
+<h2>{{if .SystemPackages}}{{.CategoryLabel}}（{{.SystemPackageCount}} 条，默认折叠）{{else}}{{.CategoryLabel}}{{end}}</h2>
+{{if .SystemPackages}}
+<details>
+<summary>展开系统包</summary>
+{{template "softwareInventoryItems" .Items}}
+</details>
+{{else}}{{template "softwareInventoryItems" .Items}}{{end}}
+{{end}}
+
+<h2>变化历史</h2>
+<table>
+<thead><tr><th scope="col">时间</th><th scope="col">变化</th><th scope="col">类别</th><th scope="col">名称</th><th scope="col">旧值</th><th scope="col">新值</th></tr></thead>
+<tbody>
+{{range .SoftwareInventoryDevice.History}}<tr>
+<td>{{formatTime .OccurredAt}}</td><td>{{.KindLabel}}</td><td>{{.CategoryLabel}}</td><td>{{.Name}}</td><td>{{if .OldValue}}{{.OldValue}}{{else}}-{{end}}</td><td>{{if .NewValue}}{{.NewValue}}{{else}}-{{end}}</td>
+</tr>{{else}}<tr><td colspan="6">暂无变化历史。</td></tr>{{end}}
+</tbody>
+</table>
+</section>
+{{end}}
+
+{{define "softwareInventoryItems"}}
+<table>
+<thead><tr><th scope="col">名称</th><th scope="col">精确版本</th><th scope="col">来源</th><th scope="col">采集或确认时间</th><th scope="col">监听端口与暴露级别</th><th scope="col">其他信息</th></tr></thead>
+<tbody>
+{{range .}}<tr>
+<td>{{.Name}}</td>
+<td>{{.Version}}</td>
+<td>{{.Source}}</td>
+<td>{{if .CollectedAt}}采集：{{formatOptionalTime .CollectedAt}}{{else if .ConfirmedAt}}确认：{{formatOptionalTime .ConfirmedAt}}{{else}}-{{end}}</td>
+<td>{{if .ListeningPorts}}{{range .ListeningPorts}}<div>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}</div>{{end}}{{else}}未登记监听端口{{end}}</td>
+<td>
+{{if .BelongsTo}}<div>所属：{{.BelongsTo}}</div>{{end}}
+{{if .ContainerTag}}<div>标签：{{.ContainerTag}}</div>{{end}}
+{{if .ContainerDigest}}<div>摘要：{{.ContainerDigest}}</div>{{end}}
+{{if .CategoryLabel}}<div>类别：{{.CategoryLabel}}</div>{{end}}
+{{if eq .CategoryLabel "容器镜像"}}<div>运行状态：{{if eq .Source "声明"}}未确认{{else if .ContainerRunning}}运行中{{else}}未运行{{end}}</div>{{end}}
+{{if .PackageURL}}<div>软件包统一地址：{{.PackageURL}}</div>{{end}}
+{{if .CPE}}<div>常见平台枚举：{{.CPE}}</div>{{end}}
+{{if .Note}}<div>备注：{{.Note}}</div>{{end}}
+</td>
+</tr>{{else}}<tr><td colspan="6">暂无软件条目。</td></tr>{{end}}
+</tbody>
+</table>
+{{end}}
