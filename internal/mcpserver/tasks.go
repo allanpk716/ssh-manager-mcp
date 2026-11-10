@@ -113,7 +113,6 @@ type BgExecOutcome struct {
 // 时它的状态行必须在进入任务日志前流式剔除。
 type BgExecPreparation struct {
 	ExecOption        sshbroker.ExecOption
-	ExtraTimeout      time.Duration
 	InjectionWarnings []string
 	WrapStdout        func(io.Writer) io.Writer
 	WrapStderr        func(io.Writer) io.Writer
@@ -912,7 +911,7 @@ func (m *TaskManager) Start(ctx context.Context, st *store.Store, spec BgStartSp
 	if spec.PrepareExec != nil {
 		preparation = spec.PrepareExec(ctx, cli, spec.ExecOption)
 	}
-	taskTimeout := effective + preparation.ExtraTimeout
+	taskTimeout := effective
 	// sudoMetaBox (Plan 41 §2): exec 闭包的第四返回值落点。闭包在 runTask 内
 	// 执行, 返回后值已定; runTask 终态段持锁把它挂上 bgTask——happens-before
 	// 由 exec 调用返回保证。

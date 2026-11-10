@@ -254,9 +254,9 @@ func ExecCommandForProfile(ctx context.Context, st *store.Store, projectID, prof
 	} else {
 		readLimit := readLimitForMasking(ctx, MaxOutputBytes)
 		injectedEnvironmentNames = injectionPlan.injectedNames()
-		// 选址与映射步骤的耗时预算加在 SSH 超时上，注入不占用用户命令的
-		// 超时。
-		res, err = cli.Exec(ctx, command, timeout+drivePlan.extraTimeout, readLimit, preCommandInjection)
+		// 选址与映射都在同一条 SSH 会话里完成；它们的耗时属于用户命令
+		// 超时的一部分，SSH 会话超时不再额外追加。
+		res, err = cli.Exec(ctx, command, timeout, readLimit, preCommandInjection)
 	}
 	// 状态行在输出遮蔽前剔除；映射失败只转成警告，不改变命令结论。
 	res.Stdout, res.Stderr = drivePlan.consumeStatusLines(res.Stdout, res.Stderr)

@@ -45,6 +45,7 @@ const (
 	networkDriveReasonAuthentication   = "共享密码认证失败，已暂停注入，请同步或检查机密项"
 	networkDriveHintNetwork            = "提供方可能不在线，或提供方开启了「禁止同一 IP 多个连接」限制"
 	networkDriveReasonPrivileged       = "Windows 提权层不注入网络盘符"
+	networkDriveReasonTotalTimeout     = "注入步骤总时长达到上限，未映射"
 	networkDriveAddressPlanCached      = "已缓存地址"
 	networkDriveAddressPlanDeferred    = "执行时探测"
 	networkDriveReasonPausedPreview    = "共享因认证失败已暂停注入"
@@ -75,9 +76,6 @@ type networkDriveInjectionPlan struct {
 	// 计划进程内使用，不进入远端命令文本。
 	shareIDs      map[int]string
 	shareVersions map[int]int64
-	// extraTimeout 是选址与映射步骤的耗时预算；执行用户命令时把它加在
-	// SSH 超时上，注入耗时就不占用用户命令的超时。
-	extraTimeout time.Duration
 }
 
 // networkDriveAuthenticationPauseState 是进程内的「共享存储编号 → 暂停时的
@@ -299,7 +297,6 @@ func buildNetworkDriveInjectionPlan(
 		plan.warn(networkDriveWarning{Reason: networkDriveReasonStatusUnreadable})
 		return plan
 	}
-	probeElapsed := time.Duration(0)
 	shareIDsByName := make(map[string]string, len(shares))
 	shareVersionsByName := make(map[string]int64, len(shares))
 	for _, share := range shares {
@@ -322,9 +319,7 @@ func buildNetworkDriveInjectionPlan(
 			plan.warn(networkDriveWarning{ShareName: share.Name, Drive: share.Drive, Reason: networkDriveReasonUnsafeValue})
 			continue
 		}
-		probeBegin := time.Now()
 		selection := networkDriveSelectAddress(ctx, st, server, share, executor)
-		probeElapsed += time.Since(probeBegin)
 		if selection.Reason != "" {
 			plan.warn(networkDriveWarning{ShareName: share.Name, Drive: share.Drive, Reason: selection.Reason})
 			continue
@@ -361,7 +356,6 @@ func buildNetworkDriveInjectionPlan(
 		}
 		return plan.warnings[i].ShareName < plan.warnings[j].ShareName
 	})
-	plan.extraTimeout = probeElapsed + sshbroker.NetworkDriveMappingTimeout*time.Duration(len(plan.items))
 	return plan
 }
 
@@ -1009,6 +1003,8 @@ func (p *networkDriveInjectionPlan) parseStatusLine(line string) (networkDrivePa
 // 误编号。
 func networkDriveStatusReason(status, drive string) string {
 	switch status {
+	case "skipped":
+		return networkDriveReasonTotalTimeout
 	case "timeout":
 		return "映射超时（3 秒上限）：" + networkDriveHintNetwork
 	case "error-85":

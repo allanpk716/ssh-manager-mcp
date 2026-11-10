@@ -45,6 +45,7 @@ type fakePowerShellDriveServer struct {
 	mapStatus       string
 	mapStatuses     map[int]string
 	statusesByDrive map[string]string
+	commandDelay    time.Duration
 }
 
 var driveProbeInvocationPattern = regexp.MustCompile(`probe-one (\d+) (\S+) 445 (\d+)`)
@@ -83,6 +84,9 @@ func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (st
 		return output.String(), "", 0
 	}
 	if markerMatch := driveStatusMarkerPattern.FindStringSubmatch(command); markerMatch != nil {
+		if f.commandDelay > 0 {
+			time.Sleep(f.commandDelay)
+		}
 		stdout := ""
 		for index, driveMatch := range driveArgumentPattern.FindAllStringSubmatch(decodedCommand, -1) {
 			status := fakeNetworkDriveStatus(mapStatus, mapStatuses[index], statusesByDrive[driveMatch[1]])
@@ -93,6 +97,9 @@ func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (st
 		return stdout + "user-command-output\n", "", 0
 	}
 	if strings.Contains(command, "-EncodedCommand ") {
+		if f.commandDelay > 0 {
+			time.Sleep(f.commandDelay)
+		}
 		stdout := strings.Builder{}
 		for _, script := range encodedCommandScripts(command) {
 			for _, match := range driveEncodedStatusPattern.FindAllStringSubmatch(script, -1) {
@@ -410,6 +417,7 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 		mapStatuses:     settings.mapStatuses,
 		statusesByDrive: settings.statusesByDrive,
 		streamExec:      settings.streamExec,
+		commandDelay:    settings.commandDelay,
 	}
 	st := newStore(t)
 	secondServerID := ""
@@ -641,6 +649,7 @@ type networkDriveSeedSetup struct {
 	secondServer           bool
 	invalidDatasetPassword bool
 	environmentSecret      bool
+	commandDelay           time.Duration
 	disjointNetworks       bool
 	noDevice               bool
 	sudoTarget             bool
@@ -748,6 +757,89 @@ func TestNetworkDriveInjectionExecCommandPowerShell(t *testing.T) {
 		strings.Contains(string(encoded), "192.0.2.10") ||
 		strings.Contains(string(encoded), "mount-user") {
 		t.Fatalf("audit row leaked the address, account, or password: %s", encoded)
+	}
+}
+
+// TestNetworkDriveInjectionTimeoutExcludesInjectionBudget 钉住前台与后台
+// 的 SSH 会话超时：返回的生效秒数就是传给 SSH 会话的秒数，选址探测另用
+// 固定超时，注入步骤不得再给用户命令超时追加时间。
+func TestNetworkDriveInjectionTimeoutExcludesInjectionBudget(t *testing.T) {
+	t.Setenv("SSHMGR_EXEC_KILL_GRACE", "100ms")
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.commandDelay = 1200 * time.Millisecond
+	})
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "exec_command",
+		Arguments: map[string]any{
+			"server_id": fixture.serverID, "command": "Get-ChildItem S:\\datasets",
+			"timeout_seconds": 1,
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("exec_command failed: err=%v result=%+v", err, result)
+	}
+	var foreground struct {
+		TimedOut                bool `json:"timed_out"`
+		EffectiveTimeoutSeconds int  `json:"effective_timeout_seconds"`
+	}
+	unmarshalToolJSON(t, result, &foreground)
+	if foreground.EffectiveTimeoutSeconds != 1 || !foreground.TimedOut {
+		t.Fatalf("foreground timeout output = %+v, want effective timeout 1 and timed_out=true", foreground)
+	}
+
+	backgroundResult, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "exec_background",
+		Arguments: map[string]any{
+			"server_id": fixture.serverID, "command": "Get-ChildItem S:\\datasets",
+			"timeout_seconds": 1,
+		},
+	})
+	if err != nil || backgroundResult.IsError {
+		t.Fatalf("exec_background failed: err=%v result=%+v", err, backgroundResult)
+	}
+	var start BgStartOutput
+	unmarshalToolJSON(t, backgroundResult, &start)
+	if start.EffectiveTimeoutSeconds != 1 {
+		t.Fatalf("background effective timeout = %d, want 1", start.EffectiveTimeoutSeconds)
+	}
+	final := waitBackgroundTerminal(t, fixture.clientSession, start.TaskID)
+	if final.Status != bgStatusTimeout {
+		t.Fatalf("background status = %q, want timeout", final.Status)
+	}
+}
+
+// TestNetworkDriveInjectionTotalBudgetSkippedShare 钉住远端 skipped 状态：
+// 注入步骤总时长达到上限时只警告、不映射；它不是网络失败，也不触发认证
+// 失败暂停，下一条命令仍会发送密码重试。
+func TestNetworkDriveInjectionTotalBudgetSkippedShare(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.statusesByDrive = map[string]string{"S": "skipped"}
+	})
+
+	stdout := execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\datasets")
+	want := "user-command-output\n" +
+		"共享 datasets 的网络盘符 S: 未注入：注入步骤总时长达到上限，未映射\n"
+	if stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+	stdout = execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\datasets")
+	if !strings.Contains(stdout, "共享 datasets 的网络盘符 S: 未注入：注入步骤总时长达到上限，未映射") {
+		t.Fatalf("second command did not retry after skipped status: %q", stdout)
+	}
+	commands, inputs := fixture.fake.recorded()
+	probeCount := countNetworkDriveProbeCommands(commands)
+	mapCount := 0
+	for _, command := range commands {
+		if strings.Contains(command, "New-SmbMapping") {
+			mapCount++
+		}
+	}
+	if probeCount != 1 || mapCount != 2 {
+		t.Fatalf("probe count=%d map count=%d; skipped must keep the address cache and retry the share", probeCount, mapCount)
+	}
+	if len(inputs) < 2 || !strings.Contains(string(inputs[len(inputs)-1]), networkDriveTestPassword) {
+		t.Fatal("second command did not send the mount password after skipped status")
 	}
 }
 
@@ -1447,8 +1539,8 @@ func TestNetworkDriveInjectionExecCommandWindowsCmd(t *testing.T) {
 	restore := strings.Index(wrapped, "chcp %__sshmgr_original_code_page%")
 	encodedStart := strings.Index(wrapped, "powershell -NoProfile -NonInteractive -EncodedCommand ")
 	userCommandStart := strings.Index(wrapped, userCommand)
-	if restore < 0 || encodedStart < restore || userCommandStart < encodedStart {
-		t.Fatalf("cmd wrapper must restore the code page before drive mapping and the user command:\n%s", wrapped)
+	if encodedStart < 0 || restore < encodedStart || userCommandStart < restore {
+		t.Fatalf("cmd wrapper must map drives before reading environment values and running the user command:\n%s", wrapped)
 	}
 	for _, line := range strings.Split(wrapped, "\n") {
 		if strings.Contains(line, "-EncodedCommand ") && len(line) > 8191 {
@@ -1572,8 +1664,9 @@ func TestNetworkDriveInjectionWindowsCmdMultipleSharesAreIndependent(t *testing.
 }
 
 // TestNetworkDriveInjectionWindowsCmdMixesEnvironmentInjection 钉住两类注入
-// 在同一条 cmd 命令里的标准输入帧顺序：环境变量值先带行分隔读取，网络盘
-// 密码随后按长度精确读取；两类注入都进入同一个封装并留下各自的审计名单。
+// 在同一条 cmd 命令里的标准输入帧顺序：网络盘密码先按长度精确读取，环
+// 境变量值随后带行分隔读取；两类注入都进入同一个封装并留下各自的审计名
+// 单。
 func TestNetworkDriveInjectionWindowsCmdMixesEnvironmentInjection(t *testing.T) {
 	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
 		setup.cmdTarget = true
@@ -1620,8 +1713,8 @@ func TestNetworkDriveInjectionWindowsCmdMixesEnvironmentInjection(t *testing.T) 
 	envRead := strings.Index(wrapped, "set /p HF_TOKEN=")
 	restore := strings.Index(wrapped, "chcp %__sshmgr_original_code_page%")
 	encodedStart := strings.Index(wrapped, "powershell -NoProfile -NonInteractive -EncodedCommand ")
-	if envRead < 0 || restore < envRead || encodedStart < restore {
-		t.Fatalf("cmd wrapper must read the environment value before mapping the drive:\n%s", wrapped)
+	if encodedStart < 0 || envRead < encodedStart || restore < envRead {
+		t.Fatalf("cmd wrapper must map the drive before reading the environment value:\n%s", wrapped)
 	}
 	scripts := encodedCommandScripts(wrapped)
 	if len(scripts) != 1 || !strings.Contains(scripts[0], "New-SmbMapping") {
@@ -1633,11 +1726,11 @@ func TestNetworkDriveInjectionWindowsCmdMixesEnvironmentInjection(t *testing.T) 
 		strings.Contains(scripts[0], networkDriveTestPassword) {
 		t.Fatal("wrapped command or EncodedCommand script leaked an injected value")
 	}
-	wantFrames := append([]byte{}, networkDriveEnvironmentValue...)
+	wantFrames := append([]byte{}, networkDriveTestPassword...)
+	wantFrames = append(wantFrames, networkDriveEnvironmentValue...)
 	wantFrames = append(wantFrames, '\r', '\n')
-	wantFrames = append(wantFrames, networkDriveTestPassword...)
 	if string(inputs[1]) != string(wantFrames) {
-		t.Fatalf("standard input frames = %q, want environment value, line break, then mount password", inputs[1])
+		t.Fatalf("standard input frames = %q, want mount password, then environment value and line break", inputs[1])
 	}
 
 	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})

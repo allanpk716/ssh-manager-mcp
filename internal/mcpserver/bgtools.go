@@ -167,7 +167,6 @@ func ExecBackgroundForProfile(ctx context.Context, st *store.Store, projectID, p
 		}
 		return BgExecPreparation{
 			ExecOption:        injectionPlan.execOptionWithItems(injectionItems),
-			ExtraTimeout:      drivePlan.extraTimeout,
 			InjectionWarnings: driveWarningLines,
 			WrapStdout:        wrapStdoutOption,
 			WrapStderr:        wrapStderrOption,

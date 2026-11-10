@@ -32,10 +32,10 @@ func TestPrepareExecNetworkDrivePowerShellAssembly(t *testing.T) {
 	command := prepared.command
 	for _, want := range []string{
 		"New-SmbMapping",
-		"-LocalPath $localPath",
-		"-RemotePath $remotePath",
-		"-UserName $userName",
-		"-Password $password",
+		"-LocalPath $a",
+		"-RemotePath $b",
+		"-UserName $c",
+		"-Password $d",
 		"-Persistent $false",
 		"BeginInvoke",
 		"Wait(3000)",
@@ -68,11 +68,7 @@ func TestPrepareExecNetworkDriveTimeoutStopIsAsynchronous(t *testing.T) {
 	prepared, err := prepareExec("Get-ChildItem S:\\", ExecInjectionOptions{
 		ShellType:   models.ShellPowerShell,
 		TargetLayer: ExecLayerNormal,
-		Items: []ExecInjection{NetworkDriveInjection{
-			ShareName: "datasets", Drive: "S", Address: "192.0.2.10",
-			UserName: "mount-user", Password: []byte("drive-password"),
-			StatusMarker: "3f2a9c8d1b7e4056",
-		}},
+		Items:       []ExecInjection{newNetworkDriveInjection()},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -92,11 +88,44 @@ func TestPrepareExecNetworkDriveTimeoutStopIsAsynchronous(t *testing.T) {
 	}
 }
 
+func newNetworkDriveInjection() NetworkDriveInjection {
+	return NetworkDriveInjection{
+		ShareName: "datasets", Drive: "S", Address: "192.0.2.10",
+		UserName: "mount-user", Password: []byte("drive-password"),
+		StatusMarker: "3f2a9c8d1b7e4056",
+	}
+}
+
+// TestPrepareExecNetworkDrivePowerShellTotalBudget 钉住注入步骤的固定总时
+// 长上限：脚本记录开始时间，轮到一个共享时若「已用时间 + 3 秒」会超过
+// 10 秒，就不再发起映射并回传 skipped。
+func TestPrepareExecNetworkDrivePowerShellTotalBudget(t *testing.T) {
+	prepared, err := prepareExec("Get-ChildItem S:\\", ExecInjectionOptions{
+		ShellType:   models.ShellPowerShell,
+		TargetLayer: ExecLayerNormal,
+		Items:       []ExecInjection{newNetworkDriveInjection()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"$__sshmgr_injection_started = [DateTime]::UtcNow.Ticks",
+		"$__sshmgr_elapsed = ([DateTime]::UtcNow.Ticks - $__sshmgr_started_ticks) / [TimeSpan]::TicksPerMillisecond",
+		"$__sshmgr_can_map = ($__sshmgr_elapsed + 3000) -le 10000",
+		"$__sshmgr_status = 'skipped'",
+	} {
+		if !strings.Contains(prepared.command, want) {
+			t.Fatalf("wrapped command missing %q:\n%s", want, prepared.command)
+		}
+	}
+}
+
 // TestPrepareExecNetworkDriveWindowsCmdAssembly 钉住 cmd 服务器上网络盘符
 // 注入的拼装形态：映射由独立的 PowerShell 子进程用 -EncodedCommand 执行，
-// 密码只按长度走标准输入；环境变量值先读，网络盘符密码后读，帧顺序与封
-// 装脚本读取顺序一致。每个共享单独一个子进程，避免多个 -EncodedCommand
-// 合并后超过 cmd 单行命令长度上限。
+// 密码只按长度走标准输入；网络盘符密码先读，环境变量值后读，帧顺序与封
+// 装脚本读取顺序一致。cmd 的 set /p 可能一次读走整行之后的字节，因此它
+// 必须排在精确读帧的映射步骤之后。每个共享单独一个子进程，避免多个
+// -EncodedCommand 合并后超过 cmd 单行命令长度上限。
 func TestPrepareExecNetworkDriveWindowsCmdAssembly(t *testing.T) {
 	environmentValue := []byte("cmd-value-%-^&!-中文")
 	password := []byte("drive-p@ss%'\"|()中文\r\n")
@@ -135,9 +164,10 @@ func TestPrepareExecNetworkDriveWindowsCmdAssembly(t *testing.T) {
 	}
 	restore := strings.Index(command, "chcp %__sshmgr_original_code_page%")
 	firstEncoded := strings.Index(command, "powershell -NoProfile -NonInteractive -EncodedCommand ")
+	environmentRead := strings.Index(command, "set /p HF_TOKEN=")
 	userStart := strings.Index(command, userCommand)
-	if restore < 0 || firstEncoded < restore || userStart < firstEncoded {
-		t.Fatalf("cmd command must read environment values, map drives, then run the user command:\n%s", command)
+	if firstEncoded < 0 || environmentRead < firstEncoded || restore < environmentRead || userStart < restore {
+		t.Fatalf("cmd command must map drives, read environment values, then run the user command:\n%s", command)
 	}
 
 	encodedPayloads := windowsCmdEncodedPayloads(t, command)
@@ -150,6 +180,11 @@ func TestPrepareExecNetworkDriveWindowsCmdAssembly(t *testing.T) {
 			if !strings.Contains(script, want) {
 				t.Fatalf("EncodedCommand script %d missing %q:\n%s", index, want, script)
 			}
+		}
+		if !strings.Contains(script, "$__sshmgr_started_ticks = [Int64]$env:__sshmgr_drive_started") ||
+			!strings.Contains(script, "$__sshmgr_can_map = ($__sshmgr_elapsed + 3000) -le 10000") ||
+			!strings.Contains(script, "$__sshmgr_status = 'skipped'") {
+			t.Fatalf("EncodedCommand script %d missing the total injection budget:\n%s", index, script)
 		}
 		if bytes.Contains([]byte(script), password) || bytes.Contains([]byte(script), secondPassword) {
 			t.Fatalf("EncodedCommand script %d leaked a password:\n%s", index, script)
@@ -169,12 +204,12 @@ func TestPrepareExecNetworkDriveWindowsCmdAssembly(t *testing.T) {
 		}
 	}
 
-	wantFrames := append([]byte{}, environmentValue...)
-	wantFrames = append(wantFrames, '\r', '\n')
-	wantFrames = append(wantFrames, password...)
+	wantFrames := append([]byte{}, password...)
 	wantFrames = append(wantFrames, secondPassword...)
+	wantFrames = append(wantFrames, environmentValue...)
+	wantFrames = append(wantFrames, '\r', '\n')
 	if !bytes.Equal(prepared.frames, wantFrames) {
-		t.Fatalf("standard input frames = %q, want environment value, line break, then both passwords", prepared.frames)
+		t.Fatalf("standard input frames = %q, want both passwords, then environment value and line break", prepared.frames)
 	}
 	if bytes.Contains([]byte(command), password) || bytes.Contains([]byte(command), secondPassword) {
 		t.Fatalf("wrapped cmd command leaked a password:\n%s", command)
