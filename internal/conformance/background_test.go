@@ -79,13 +79,14 @@ func TestBackgroundLifecycleRealSSH(t *testing.T) {
 	// The script paces one "line N" per second for ~5s, so long-polls observe
 	// genuinely incremental chunks while the task is still running.
 	const loopCmd = `for i in 1 2 3 4 5; do echo "line $i"; sleep 1; done`
-	loopID, _, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
+	loopStart, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
 		ProjectID: "conformance", ServerID: "srv-conf", Command: loopCmd,
 		TimeoutSec: 60, Server: server, Auth: auth, HostKeys: hostKeys,
 	})
 	if err != nil {
 		t.Fatalf("start loop task: %v", err)
 	}
+	loopID := loopStart.TaskID
 
 	var collected strings.Builder
 	var offsets []int64
@@ -155,13 +156,14 @@ func TestBackgroundLifecycleRealSSH(t *testing.T) {
 	}
 
 	// ---- Phase 2: stop path → terminal stopped ----
-	sleepID, _, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
+	sleepStart, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
 		ProjectID: "conformance", ServerID: "srv-conf", Command: "sleep 300",
 		Server: server, Auth: auth, HostKeys: hostKeys,
 	})
 	if err != nil {
 		t.Fatalf("start sleep task: %v", err)
 	}
+	sleepID := sleepStart.TaskID
 	// Immediate snapshot (wait=0): the just-started task is running.
 	snap, ok, oerr := mgr.Output(sleepID, 0, 0, 0, ctx)
 	if oerr != nil || !ok {
@@ -235,7 +237,7 @@ func TestBackgroundKeepAliveRealSSH(t *testing.T) {
 
 	server := &models.Server{Host: host, Port: port, User: "sshuser"}
 	ctx := context.Background()
-	id, _, _, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
+	started, err := mgr.Start(ctx, st, mcpserver.BgStartSpec{
 		ProjectID: "conformance", ServerID: "srv-conf", Command: "sleep 90",
 		TimeoutSec: 300, Server: server,
 		Auth: mustPrivAuth(t, privPath, ""), HostKeys: fixedHostKeys(hostKey),
@@ -243,6 +245,7 @@ func TestBackgroundKeepAliveRealSSH(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start sleep 90: %v", err)
 	}
+	id := started.TaskID
 
 	// Three 30s polls over an idle stream: each returns at budget expiry with
 	// the task STILL running (no bytes ever arrive; if keepalive had killed

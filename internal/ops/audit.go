@@ -41,6 +41,9 @@ type AuditRow struct {
 	SourceIP    string
 	// InjectedEnvironmentNames 是命令执行审计行附带的环境变量名，不含值。
 	InjectedEnvironmentNames []string
+	// InjectedShareNames 是命令执行审计行附带的网络盘符共享名，不含地
+	// 址、挂载账号或密码。
+	InjectedShareNames []string
 }
 
 // QueryAudit 查询权威 vault 审计表，按编号从新到旧返回。
@@ -71,6 +74,7 @@ func (m *Manager) QueryAudit(query AuditQuery) ([]AuditRow, error) {
 			Status: row.Status, ExitCode: row.ExitCode, DurationMS: row.DurationMS,
 			Source: row.Source, SourceIP: row.SourceIP,
 			InjectedEnvironmentNames: row.InjectedEnvironmentNames,
+			InjectedShareNames:       row.InjectedShareNames,
 		})
 	}
 	return out, nil
@@ -86,6 +90,9 @@ func (r AuditRow) JSONMap() map[string]any {
 	}
 	if len(r.InjectedEnvironmentNames) > 0 {
 		record["injected_environment_names"] = r.InjectedEnvironmentNames
+	}
+	if len(r.InjectedShareNames) > 0 {
+		record["injected_share_names"] = r.InjectedShareNames
 	}
 	return record
 }

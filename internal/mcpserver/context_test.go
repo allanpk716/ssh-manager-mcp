@@ -172,7 +172,7 @@ func TestBgSudoMetaInOutput(t *testing.T) {
 
 	host, portStr, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(portStr)
-	id, _, _, serr := m.Start(context.Background(), st, BgStartSpec{
+	started, serr := m.Start(context.Background(), st, BgStartSpec{
 		ProjectID: "proj", ServerID: "srv", Command: "whoami",
 		Sudo: true, SudoPass: "sp", TimeoutSec: 60,
 		Server:   &models.Server{Host: host, Port: port, User: "u"},
@@ -182,6 +182,7 @@ func TestBgSudoMetaInOutput(t *testing.T) {
 	if serr != nil {
 		t.Fatalf("start: %v", serr)
 	}
+	id := started.TaskID
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {

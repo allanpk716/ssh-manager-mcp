@@ -29,7 +29,7 @@ const (
 
 // 现场检测的安全说明文本，不包含密码、地址或挂载账号。
 const (
-	sharedStorageWindowsNote     = "Windows 由每条命令前的会话内注入提供盘符"
+	sharedStorageWindowsNote     = "Windows 不做持久挂载；固定盘符由每条 exec_command 或 exec_background 命令前的会话内注入提供，桌面会话、Windows 服务、计划任务、文件传输和命令结束后仍在运行的进程看不到；密码不出现在目标机进程命令行中"
 	sharedStorageDarwinResetNote = "系统配置被重置，再调用挂载工具即可恢复"
 	sharedStorageRestrictedNote  = "服务器条目没有配置 sudo 凭据，只能确认挂载点是否可访问，未读取持久配置比较版本"
 	sharedStorageRemoteNewerNote = "远端配置版本比本进程快照新，请先同步快照再调用挂载工具"

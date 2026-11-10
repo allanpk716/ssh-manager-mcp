@@ -311,7 +311,7 @@ func TestListSharesLiveCheckReportsEveryState(t *testing.T) {
 	assertListSharesNotes(t, listSharesServerEntry(t, output, "darwin-reset"),
 		"系统配置被重置，再调用挂载工具即可恢复")
 	assertListSharesNotes(t, listSharesServerEntry(t, output, "windows-web"),
-		"Windows 由每条命令前的会话内注入提供盘符")
+		sharedStorageWindowsNote)
 	assertListSharesNotes(t, listSharesServerEntry(t, output, "linux-nosudo"),
 		"服务器条目没有配置 sudo 凭据，只能确认挂载点是否可访问，未读取持久配置比较版本")
 	assertListSharesNotes(t, listSharesServerEntry(t, output, "unreachable"), "SSH 连接失败")

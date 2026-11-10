@@ -51,14 +51,22 @@ func (p environmentInjectionPlan) uninjectedVariables() []UninjectedEnvironmentV
 	return variables
 }
 
-func (p environmentInjectionPlan) execOption() sshbroker.ExecOption {
-	layer := sshbroker.ExecLayerNormal
-	if p.privileged {
-		layer = sshbroker.ExecLayerPrivileged
-	}
+func (p environmentInjectionPlan) execItems() []sshbroker.ExecInjection {
 	items := make([]sshbroker.ExecInjection, 0, len(p.items))
 	for _, item := range p.items {
 		items = append(items, item)
+	}
+	return items
+}
+
+func (p environmentInjectionPlan) execOption() sshbroker.ExecOption {
+	return p.execOptionWithItems(p.execItems())
+}
+
+func (p environmentInjectionPlan) execOptionWithItems(items []sshbroker.ExecInjection) sshbroker.ExecOption {
+	layer := sshbroker.ExecLayerNormal
+	if p.privileged {
+		layer = sshbroker.ExecLayerPrivileged
 	}
 	return sshbroker.WithPreCommandInjection(sshbroker.ExecInjectionOptions{
 		ShellType:   models.NormalizeShellType(string(p.shellType)),

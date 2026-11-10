@@ -35,6 +35,17 @@ type SelectionFailure struct {
 	Attempts         []ProbeAttempt
 }
 
+// FormatProbeAttemptFailure 渲染一个候选地址的探测失败行。挂载、注入与
+// 错误呈现共用这一份格式，避免同一行文案在各处漂移。
+func FormatProbeAttemptFailure(attempt ProbeAttempt) string {
+	line := fmt.Sprintf("%s 第%d个地址  ✗%s", attempt.NetworkName,
+		attempt.NetworkSequence, models.ProbeErrorCategoryLabel(attempt.ErrorCategory))
+	if attempt.DurationMilli >= 0 {
+		line += fmt.Sprintf(" %dms", attempt.DurationMilli)
+	}
+	return line
+}
+
 func (e *SelectionFailure) Error() string {
 	switch e.Reason {
 	case SelectionErrorNoCommonNetwork:
@@ -47,12 +58,7 @@ func (e *SelectionFailure) Error() string {
 	case SelectionErrorAllCandidatesFailed:
 		lines := []string{"全部候选地址在目标服务器上探测失败，登记与实际不一致："}
 		for _, attempt := range e.Attempts {
-			line := fmt.Sprintf("%s 第%d个地址  ✗%s", attempt.NetworkName,
-				attempt.NetworkSequence, models.ProbeErrorCategoryLabel(attempt.ErrorCategory))
-			if attempt.DurationMilli >= 0 {
-				line += fmt.Sprintf(" %dms", attempt.DurationMilli)
-			}
-			lines = append(lines, line)
+			lines = append(lines, FormatProbeAttemptFailure(attempt))
 		}
 		lines = append(lines, "未写入任何挂载配置")
 		return strings.Join(lines, "\n")

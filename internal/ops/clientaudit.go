@@ -31,6 +31,7 @@ type clientAuditRecord struct {
 	Source                   string   `json:"source"`
 	SourceIP                 string   `json:"source_ip"`
 	InjectedEnvironmentNames []string `json:"injected_environment_names,omitempty"`
+	InjectedShareNames       []string `json:"injected_share_names,omitempty"`
 }
 
 // ReadClientAudit 读取一个客户端实例目录中的本机审计日志文件，按记录时间顺序
@@ -75,6 +76,7 @@ func ReadClientAudit(instance string, limit int) ([]store.AuditRow, error) {
 			Status: record.Status, ExitCode: record.ExitCode, DurationMS: record.DurationMS,
 			Source: record.Source, SourceIP: record.SourceIP,
 			InjectedEnvironmentNames: record.InjectedEnvironmentNames,
+			InjectedShareNames:       record.InjectedShareNames,
 		})
 	}
 	if err := scanner.Err(); err != nil {

@@ -270,6 +270,9 @@ type SnapshotAudit struct {
 	SourceIP   string `json:"source_ip,omitempty"`
 	// InjectedEnvironmentNames 是命令执行审计行附带的环境变量名，不含值。
 	InjectedEnvironmentNames []string `json:"injected_environment_names,omitempty"`
+	// InjectedShareNames 是命令执行审计行附带的网络盘符共享名，不含地址、
+	// 挂载账号或密码。
+	InjectedShareNames []string `json:"injected_share_names,omitempty"`
 }
 
 // SnapshotSecret 是快照里的机密项行。Value 与 PreviousValue 是解密后的原始
@@ -561,14 +564,15 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	}
 
 	// audit — RAW SQL (AuditRows clamps limit<=0 to 1; dump all)
-	ra, err := s.db.Query(`SELECT id,ts,COALESCE(project_id,''),COALESCE(server_id,''),action,COALESCE(command,''),sudo,COALESCE(status,''),COALESCE(exit_code,0),COALESCE(duration_ms,0),COALESCE(source,''),COALESCE(source_ip,''),COALESCE(injected_environment_names,'') FROM audit_log ORDER BY id`)
+	ra, err := s.db.Query(`SELECT id,ts,COALESCE(project_id,''),COALESCE(server_id,''),action,COALESCE(command,''),sudo,COALESCE(status,''),COALESCE(exit_code,0),COALESCE(duration_ms,0),COALESCE(source,''),COALESCE(source_ip,''),COALESCE(injected_environment_names,''),COALESCE(injected_share_names,'') FROM audit_log ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	for ra.Next() {
 		var a SnapshotAudit
 		var injectedNames string
-		if err := ra.Scan(&a.ID, &a.TS, &a.ProjectID, &a.ServerID, &a.Action, &a.Command, &a.Sudo, &a.Status, &a.ExitCode, &a.DurationMS, &a.Source, &a.SourceIP, &injectedNames); err != nil {
+		var injectedShares string
+		if err := ra.Scan(&a.ID, &a.TS, &a.ProjectID, &a.ServerID, &a.Action, &a.Command, &a.Sudo, &a.Status, &a.ExitCode, &a.DurationMS, &a.Source, &a.SourceIP, &injectedNames, &injectedShares); err != nil {
 			ra.Close()
 			return nil, err
 		}
@@ -579,6 +583,14 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 				return nil, fmt.Errorf("decode audit injected environment names: %w", err)
 			}
 			a.InjectedEnvironmentNames = names
+		}
+		if injectedShares != "" {
+			names, err := decodeAuditStringList(injectedShares)
+			if err != nil {
+				ra.Close()
+				return nil, fmt.Errorf("decode audit injected share names: %w", err)
+			}
+			a.InjectedShareNames = names
 		}
 		snap.Audit = append(snap.Audit, a)
 	}
@@ -1411,8 +1423,12 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 		if err != nil {
 			return fmt.Errorf("encode audit injected environment names: %w", err)
 		}
-		if _, err := tx.Exec(`INSERT INTO audit_log(ts,project_id,server_id,action,command,sudo,status,exit_code,duration_ms,source,source_ip,injected_environment_names) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-			a.TS, nullIfEmpty(a.ProjectID), nullIfEmpty(a.ServerID), a.Action, nullIfEmpty(a.Command), a.Sudo, nullIfEmpty(a.Status), a.ExitCode, a.DurationMS, nullIfEmpty(a.Source), nullIfEmpty(a.SourceIP), injectedNames); err != nil {
+		injectedShares, err := encodeAuditStringList(a.InjectedShareNames)
+		if err != nil {
+			return fmt.Errorf("encode audit injected share names: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO audit_log(ts,project_id,server_id,action,command,sudo,status,exit_code,duration_ms,source,source_ip,injected_environment_names,injected_share_names) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			a.TS, nullIfEmpty(a.ProjectID), nullIfEmpty(a.ServerID), a.Action, nullIfEmpty(a.Command), a.Sudo, nullIfEmpty(a.Status), a.ExitCode, a.DurationMS, nullIfEmpty(a.Source), nullIfEmpty(a.SourceIP), injectedNames, injectedShares); err != nil {
 			return fmt.Errorf("insert audit: %w", err)
 		}
 	}
