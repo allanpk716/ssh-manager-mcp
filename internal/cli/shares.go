@@ -96,7 +96,7 @@ func sharesListCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		Short: "List registered shared storage",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeStore, err := openSharesViewStore(instance)
+			s, closeStore, err := openTopologyViewStore(instance)
 			if err != nil {
 				return err
 			}
@@ -199,7 +199,7 @@ func sharesShowCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		Short: "Show one registered shared storage",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeStore, err := openSharesViewStore(instance)
+			s, closeStore, err := openTopologyViewStore(instance)
 			if err != nil {
 				return err
 			}
@@ -235,13 +235,7 @@ func sharesRmCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "将删除共享存储 %s。\n", share.Name)
 			fmt.Fprintln(out, "可挂载服务器：")
-			if len(share.MountableServers) == 0 {
-				fmt.Fprintln(out, "  无")
-			} else {
-				for _, server := range share.MountableServers {
-					fmt.Fprintf(out, "  %s（挂载点 %s）\n", server.Name, server.MountPoint)
-				}
-			}
+			printSharedStorageServers(out, share.MountableServers, "  ")
 			fmt.Fprintln(out, "本命令只删除登记，不会去服务器上卸载。")
 			if !yes {
 				if !sharesStdinIsInteractive() {
@@ -267,12 +261,6 @@ func sharesRmCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&yes, "yes", false, "跳过删除确认；非交互终端必须显式给出")
 	return c
-}
-
-// openSharesViewStore 与拓扑查看命令共用数据源：本机持有 vault 时读
-// vault；客户端读本地快照生成的一次性只读库。
-func openSharesViewStore(instance string) (*store.Store, func(), error) {
-	return openTopologyViewStore(instance)
 }
 
 func parseSharedStorageDirectories(values []string) ([]models.SharedStorageDirectory, error) {
@@ -322,11 +310,15 @@ func printSharedStorageDetail(out io.Writer, share *models.SharedStorage) {
 		fmt.Fprintf(out, "  变更说明：%s\n", share.ChangeNote)
 	}
 	fmt.Fprintln(out, "  可挂载服务器：")
-	if len(share.MountableServers) == 0 {
-		fmt.Fprintln(out, "    无")
-	} else {
-		for _, server := range share.MountableServers {
-			fmt.Fprintf(out, "    %s（挂载点 %s）\n", server.Name, server.MountPoint)
-		}
+	printSharedStorageServers(out, share.MountableServers, "    ")
+}
+
+func printSharedStorageServers(out io.Writer, servers []models.SharedStorageServer, indent string) {
+	if len(servers) == 0 {
+		fmt.Fprintln(out, indent+"无")
+		return
+	}
+	for _, server := range servers {
+		fmt.Fprintf(out, "%s%s（挂载点 %s）\n", indent, server.Name, server.MountPoint)
 	}
 }

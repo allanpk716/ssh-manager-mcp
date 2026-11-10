@@ -624,12 +624,11 @@ func (s *Store) snapshotSharedStorages(profileID string) ([]SnapshotSharedStorag
 		if row.DeviceName == "" {
 			row.DeviceName = s.sharedStorageDeviceNames[row.ID]
 		}
-		if err := json.Unmarshal([]byte(directoriesJSON), &row.Directories); err != nil {
+		directories, err := decodeSharedStorageDirectories(directoriesJSON)
+		if err != nil {
 			return nil, fmt.Errorf("读取共享存储 %s 的目录约定失败: %w", row.Name, err)
 		}
-		if row.Directories == nil {
-			row.Directories = []models.SharedStorageDirectory{}
-		}
+		row.Directories = directories
 		out = append(out, row)
 	}
 	return out, rows.Err()

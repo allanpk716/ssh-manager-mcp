@@ -199,32 +199,12 @@ func deviceSecretServerAllowsTx(tx *sql.Tx, deviceID string) ([]*DeviceDeleteSec
 // sharedStoragesForDeviceTx 列出设备提供的全部共享存储，并补齐每个共享的
 // 可挂载服务器，供删除预览与删除前复核使用。
 func (s *Store) sharedStoragesForDeviceTx(tx *sql.Tx, deviceID string) ([]*models.SharedStorage, error) {
-	rows, err := tx.Query(
+	ids, err := sharedStorageIDsByQuery(tx,
 		`SELECT id FROM shared_storages WHERE device_id=? ORDER BY name,id`, deviceID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	ids := make([]string, 0)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	out := make([]*models.SharedStorage, 0, len(ids))
-	for _, id := range ids {
-		share, err := s.sharedStorageByIDTx(tx, id)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, share)
-	}
-	return out, nil
+	return s.sharedStoragesByIDs(tx, ids)
 }
 
 // writeServerRemoveAuditTx 写设备级联里的服务器条目删除审计，摘要与单独

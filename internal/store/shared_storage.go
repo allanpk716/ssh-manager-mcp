@@ -206,7 +206,17 @@ func (s *Store) ListSharedStorages(filter SharedStorageFilter) ([]*models.Shared
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 	query += " ORDER BY share.name,share.id"
-	rows, err := s.db.Query(query, arguments...)
+	ids, err := sharedStorageIDsByQuery(s.db, query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	return s.sharedStoragesByIDs(s.db, ids)
+}
+
+// sharedStorageIDsByQuery 执行只返回共享存储编号的查询。列表查询与设备
+// 删除预览共用它，避免两处各自维护结果集循环。
+func sharedStorageIDsByQuery(db dbtx, query string, arguments ...any) ([]string, error) {
+	rows, err := db.Query(query, arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -219,12 +229,14 @@ func (s *Store) ListSharedStorages(filter SharedStorageFilter) ([]*models.Shared
 		}
 		ids = append(ids, id)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
+	return ids, rows.Err()
+}
+
+// sharedStoragesByIDs 按编号逐个读取完整共享存储，保持查询给出的顺序。
+func (s *Store) sharedStoragesByIDs(db dbtx, ids []string) ([]*models.SharedStorage, error) {
 	out := make([]*models.SharedStorage, 0, len(ids))
 	for _, id := range ids {
-		share, err := s.sharedStorageByIDTx(s.db, id)
+		share, err := s.sharedStorageByIDTx(db, id)
 		if err != nil {
 			return nil, err
 		}
@@ -405,12 +417,11 @@ func (s *Store) sharedStorageByIDTx(db dbtx, id string) (*models.SharedStorage, 
 		share.DeviceName = s.sharedStorageDeviceNames[share.ID]
 	}
 	share.CreatedAt, share.UpdatedAt = time.Unix(createdAt, 0), time.Unix(updatedAt, 0)
-	if err := json.Unmarshal([]byte(directoriesJSON), &share.Directories); err != nil {
+	directories, err := decodeSharedStorageDirectories(directoriesJSON)
+	if err != nil {
 		return nil, fmt.Errorf("读取共享存储 %s 的目录约定失败: %w", share.Name, err)
 	}
-	if share.Directories == nil {
-		share.Directories = []models.SharedStorageDirectory{}
-	}
+	share.Directories = directories
 	if err := loadSharedStorageDetails(db, share); err != nil {
 		return nil, err
 	}
@@ -436,7 +447,7 @@ func loadSharedStorageDetails(db dbtx, share *models.SharedStorage) error {
 		return err
 	}
 	share.CandidateAddresses = addresses
-	servers, err := sharedStorageMountableServers(db, share.PasswordSecretID, share.Name, share.Drive)
+	servers, err := sharedStorageMountableServers(db, share)
 	if err != nil {
 		return err
 	}
@@ -466,14 +477,14 @@ func sharedStorageCandidateAddresses(db dbtx, deviceID string) ([]string, error)
 	return addresses, rows.Err()
 }
 
-func sharedStorageMountableServers(db dbtx, secretID, shareName, drive string) ([]models.SharedStorageServer, error) {
+func sharedStorageMountableServers(db dbtx, share *models.SharedStorage) ([]models.SharedStorageServer, error) {
 	rows, err := db.Query(`
 		SELECT server.id,server.name,server.shell_type,COALESCE(device.name,'')
 		FROM secret_server_allow allow
 		JOIN servers server ON server.id=allow.server_id
 		LEFT JOIN devices device ON device.id=server.device_id
 		WHERE allow.secret_id=?
-		ORDER BY server.name,server.id`, secretID)
+		ORDER BY server.name,server.id`, share.PasswordSecretID)
 	if err != nil {
 		return nil, err
 	}
@@ -486,7 +497,7 @@ func sharedStorageMountableServers(db dbtx, secretID, shareName, drive string) (
 			return nil, err
 		}
 		server.ShellType = models.NormalizeShellType(shellType)
-		server.MountPoint = SharedStorageMountPoint(drive, shareName, server.ShellType)
+		server.MountPoint = SharedStorageMountPoint(share.Drive, share.Name, server.ShellType)
 		servers = append(servers, server)
 	}
 	return servers, rows.Err()
@@ -495,10 +506,23 @@ func sharedStorageMountableServers(db dbtx, secretID, shareName, drive string) (
 // SharedStorageMountPoint 按服务器系统类型推算挂载点约定。这里只做登记
 // 与查看，不做任何现场检测。
 func SharedStorageMountPoint(drive, shareName string, shellType models.ShellType) string {
-	if shellType == models.ShellPowerShell || shellType == models.ShellWindowsCmd {
+	if shellType.IsWindows() {
 		return drive + ":"
 	}
 	return "/mnt/sshmgr/" + shareName
+}
+
+// decodeSharedStorageDirectories 解码存储层保存的目录约定数组，并把缺失
+// 数组统一成空数组。
+func decodeSharedStorageDirectories(directoriesJSON string) ([]models.SharedStorageDirectory, error) {
+	var directories []models.SharedStorageDirectory
+	if err := json.Unmarshal([]byte(directoriesJSON), &directories); err != nil {
+		return nil, err
+	}
+	if directories == nil {
+		return []models.SharedStorageDirectory{}, nil
+	}
+	return directories, nil
 }
 
 func sharedStorageDeviceTx(tx *sql.Tx, name string) (*models.Device, error) {

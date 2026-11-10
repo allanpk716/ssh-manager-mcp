@@ -192,12 +192,10 @@ func printDeviceDeletePreview(w io.Writer, preview *store.DeviceDeletePreview) {
 }
 
 func sharedStorageOperatingSystemText(shellType models.ShellType) string {
-	switch models.NormalizeShellType(string(shellType)) {
-	case models.ShellPowerShell, models.ShellWindowsCmd:
+	if shellType.IsWindows() {
 		return "Windows"
-	default:
-		return "Linux 或 macOS"
 	}
+	return "Linux 或 macOS"
 }
 
 func devicesMoveServerCmd() *cobra.Command {
