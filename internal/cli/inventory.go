@@ -14,7 +14,7 @@ import (
 
 	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/store"
-	"ssh-manager-mcp/internal/tui"
+	"ssh-manager-mcp/internal/termdetect"
 )
 
 var (
@@ -25,7 +25,7 @@ var (
 // inventoryStdinIsInteractive 判断进程标准输入是不是交互终端。测试可以替
 // 换它来驱动交互与非交互两种删除确认路径。
 var inventoryStdinIsInteractive = func() bool {
-	return tui.IsTerminal(os.Stdin.Fd())
+	return termdetect.IsTerminal(os.Stdin.Fd())
 }
 
 // requireInventoryVault 断言软件清单命令能写权威端或单机 vault。客户端没有

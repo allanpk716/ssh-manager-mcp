@@ -196,8 +196,8 @@ func TestServersAddWarnsOnSuspectedSecretTag(t *testing.T) {
 // hit, and the test pins the two halves of the wiring runImport performs per
 // server right before each insert instead: scanImportServer (the aggregate
 // scan over the exact persisted form) and printImportHints (the aggregated
-// stderr block). The metadata-carrying import leg is the TUI supplement form,
-// covered in internal/tui.
+// stderr block). The metadata-carrying import leg retired with the terminal
+// interface; the config-file import persists no free-text metadata today.
 
 // TestImportWarnsOnSuspectedSecret: a server in the exact shape the import
 // persists but carrying a secret-shaped tag (simulating the day the importer

@@ -4,7 +4,7 @@
 >
 > **单台机器不需要本篇**——直接用默认的 stdio 模式（见 [getting-started.md](./getting-started.md)）。多机形态是给"多机共用"这个场景的可选项。
 >
-> **Plan 42 批1 起的形态**（随下个发版）：serve 收窄为**权威 vault + `/snapshot` 拉取 + `/pair` 配对**（+批2 `/ui` 管理）——远程 MCP-over-HTTP（旧 ②a）已**移除**（根路径 404）。工作机 agent 一律走**本地只读缓存**（`mcp --cache`，只读 + 执行）；新机入网 = `sshmgr pair` 一条龙。多机 agent **只读 + 执行**，写操作只在管理面（broker TUI / `serve pair` CLI / 批2 Web UI）。
+> **Plan 42 批1 起的形态**（随下个发版）：serve 收窄为**权威 vault + `/snapshot` 拉取 + `/pair` 配对**（另由 serve 进程的独立监听提供 Web UI 管理）——远程 MCP-over-HTTP（旧 ②a）已**移除**（根路径 404）。工作机 agent 一律走**本地只读缓存**（`mcp --cache`，只读 + 执行）；新机入网 = `sshmgr pair` 一条龙。多机 agent **只读 + 执行**，写操作只在管理面（权威端 Web UI / `serve pair` 命令行）。
 
 ---
 
@@ -180,7 +180,7 @@ sshmgr pair --instance laptop
 # → 产物 pair.laptop.mcp.json（含真值 project token，0600）
 ```
 
-> TUI 形态：工作机 `sshmgr tui` → client 面板 `[c]` 配对向导（Plan 45）——同一流程的点选版，见[配对入网节](#配对入网sshmgr-pairplan-42)的 TUI 等价路径注。
+> 指引页面：工作机 `sshmgr ui` 初始化向导选「客户端」会显示 `sshmgr pair` 的命令写法与「到权威端 Web UI 的配对页批准」——页面只展示指引，配对仍在终端执行（见[配对入网节](#配对入网sshmgr-pairplan-42)）。
 
 把产物里的片段抄进该机的 `.mcp.json`（或 pair 时用 `--write-mcp <path>` 直接落位）：
 
@@ -213,7 +213,7 @@ sshmgr pair --instance laptop
 一台常开的家用服务器 / NUC / 软路由 + 笔记本 + 台式机，都在同一个 VLAN。
 
 - **服务器**：常驻 `sshmgr serve`（systemd 托管 + 自动 TLS）。所有服务器清单建在它上面。
-- **笔记本 / 台式机**：各跑一条 `sshmgr pair --instance <名>`，owner 在 broker TUI 批准即入网。任意一台上的 agent 都能用**同一份**清单的**自己的只读快照**。
+- **笔记本 / 台式机**：各跑一条 `sshmgr pair --instance <名>`，owner 在权威端 Web UI 配对页批准即入网。任意一台上的 agent 都能用**同一份**清单的**自己的只读快照**。
 - **授权范围（一机一码一 profile）**：pair 批准时 owner 选 profile——该机拉到的就是、且只是这个 profile 授权的服务器。要让某台机只看部分服务器，建一个专用 profile 授权那几台，批准时选它。
 
 > serve 的授权是**按设备码 → profile 裁剪快照**（Plan 39）+ **project token → 本地 spawn 闸**两道独立闸路由的：一台 serve 同时服务多台工作机，互不串扰。
@@ -237,7 +237,7 @@ sshmgr pair --instance laptop
 
 ## 限制（如实，必读）
 
-1. **多机 agent 只读**：agent 的活动面 = 本地只读快照——能 exec / 传输 / 转发，**任何写都被拒**（`ErrReadOnly`）。加改删服务器 / 发码 / 批准配对去**管理面**（broker TUI / `serve pair` / 批2 Web UI）。没有"在线可写"的多机 agent 模式（②a 已移除，Plan 42 批1 起根路径 404）。唯一例外（Plan 48）：未知目标的首次信任走**锚定转发**——握手时把看到的主机密钥送 broker 落库（权威侧、带审计），不是本地可写层（见[「主机密钥锚定」](#主机密钥锚定锚定转发与带外锚定plan-48)节）。
+1. **多机 agent 只读**：agent 的活动面 = 本地只读快照——能 exec / 传输 / 转发，**任何写都被拒**（`ErrReadOnly`）。加改删服务器 / 发码 / 批准配对去**管理面**（权威端 Web UI / `serve pair` 命令行）。没有"在线可写"的多机 agent 模式（②a 已移除，Plan 42 批1 起根路径 404）。唯一例外（Plan 48）：未知目标的首次信任走**锚定转发**——握手时把看到的主机密钥送 broker 落库（权威侧、带审计），不是本地可写层（见[「主机密钥锚定」](#主机密钥锚定锚定转发与带外锚定plan-48)节）。
 2. **保鲜需在线**：缓存自动保鲜（≤30min TTL）要能连上 serve——服务器挂了 / VLAN 断了 / 笔记本带出门 = 停在旧快照上继续干活（功能不受影响，新授权/改动看不到）；重新连上后下次懒检查自动追平。
 3. **服务器是单点**：服务器挂了 = 没人能入网/保鲜，存量缓存照常干活，直到它恢复。**自动备份 / 灾难恢复已落地**——[Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)（NAS 定时明文备份）+ [export/import](./backup-restore.md)（Plan 11，便携加密备份）。恢复手段：从 NAS 拷最新快照或 export 文件，在新机 `sshmgr import`（[见 backup-restore 的灾难恢复](./backup-restore.md#场景-③-灾难恢复)）。
 4. **单 owner 设计**：多个人共用同一个 vault、按人隔离访问——**不在范围**。本方案是"一个人、多台机"。多人场景需要 per-user ACL + 审计隔离，是另一个量级的功能。
@@ -257,10 +257,10 @@ sshmgr pair --instance laptop
 | Plan 13 · 群晖自动备份 | 服务器定时出明文快照到 NAS，灾难恢复 | ✅ 已做（[backup-restore.md Plan 13](./backup-restore.md#plan-13--nas-定时明文备份backup-create--verify)） |
 | Plan 14/15 · Windows 生产部署 | DPAPI master key + `serve install` Task Scheduler | ⚠️ 已 Superseded by Plan 16 |
 | Plan 16 · 固定路径 + FileKeyProvider | 三平台固定路径 + 裸文件 master key（L1+）+ kardianos 跨平台 `serve install` + `migrate-path` | ✅ 已做（本篇 + [threat-model.md](./threat-model.md) + [getting-started 第三方服务包](./getting-started.md#第三方服务包可选给不想用内置-install-的进阶用户)） |
-| Plan 40 · 多实例（批1 + 批2） | 同机 N agent 各授权各 profile 的独立 cache 实例（目录 + per-instance DEK + `--instance` + MAX_OFFLINE 持久化）；批2 = 首次 enroll **自动归位** + TUI `[i]` 实例切换 / 向导接入卡 + `cache config` 子命令 | ✅ 已做（本篇[「多实例（同机多 agent）」](#多实例同机多-agent-plan-40-第一批)节；doctor 感知命名实例已另行落地，见下[「边界」](#边界如实批2-更新)节） |
+| Plan 40 · 多实例（批1 + 批2） | 同机 N agent 各授权各 profile 的独立 cache 实例（目录 + per-instance DEK + `--instance` + MAX_OFFLINE 持久化）；批2 = 首次 enroll **自动归位** + 客户端 Web UI 实例切换 / 初始化向导指引 + `cache config` 子命令 | ✅ 已做（本篇[「多实例（同机多 agent）」](#多实例同机多-agent-plan-40-第一批)节；doctor 感知命名实例已另行落地，见下[「边界」](#边界如实批2-更新)节） |
 | Plan 42 · 模式缩减 + 发现配对 | 4→2 模式收敛（②a 移除）；UDP 发现 + SAS 配对一条龙（`sshmgr pair`）；批2 = Web 管理 UI（手机优先，`/ui`） | ✅ 批1 已做（本篇）· 🔜 批2 |
 
-**现在：多机 = 经桥接入（权威 vault 常驻 serve + 工作机 pair 一条龙入网 + 本地只读缓存干活）；备份 / 迁移已可（export/import + Plan 13 NAS + Plan 16 `migrate-path`）；写操作收敛到管理面（broker TUI / `serve pair`，批2 上手机 Web）。**
+**现在：多机 = 经桥接入（权威 vault 常驻 serve + 工作机 pair 一条龙入网 + 本地只读缓存干活）；备份 / 迁移已可（export/import + Plan 13 NAS + Plan 16 `migrate-path`）；写操作收敛到管理面（权威端 Web UI / `serve pair` 命令行）。**
 
 ---
 
@@ -315,16 +315,16 @@ sshmgr pair --instance laptop
 
 > **一句话**：新工作机从「装好二进制」到「agent 可用」= 一条 `sshmgr pair --instance <名>`——LAN 广播发现 broker → SAS 三件套人闸比对 → owner 批准 → 设备码 + project token + 指纹 + 时效上限**自动加密下发** → 首拉落盘 → `.mcp.json` 产物落盘。不再跨机手抄三串字符串。
 >
-> **TUI 等价路径（Plan 45）**：以上流程在工作机上也可以全键盘点完——`sshmgr tui` client 面板 **`[c]` 配对向导**（表单 → LAN 发现 → SAS 大字常显等待、与 broker 批准面逐位对照 → 批准后 Enter 完成 → 写入首拉；**重配** = 实例 picker 具名行 `p`（Plan 46 起，完整/残缺行均可——force 确认屏按槽状态分档提示 419）；**被拒/过期** = 结果屏 `r` 重新申请；Esc 全链可退，写入期除外）。逐屏走查见 [tui-multi-machine.md](./tui-multi-machine.md)；`SSHMGR_PAIR_ASSUME_SAS` 自动化跳比对仍 **CLI-only**（向导不读该 env）。
+> **指引页面**：以上流程的命令写法可在工作机 `sshmgr ui` 初始化向导选「客户端」时看到（含 `--url` / `--pin` / `--write-mcp` 的一句话说明与「到权威端 Web UI 的配对页批准」）；页面不执行配对。**重配** = 重跑 `sshmgr pair --force`（撞 419 设备名占用时，先由 owner 在权威端 `cache-tokens revoke` 旧码）；**被拒/过期** = 以相同参数重新申请。页面走查见 [web-ui-multi-machine.md](./web-ui-multi-machine.md)；`SSHMGR_PAIR_ASSUME_SAS` 自动化跳比对是**命令行专属**（页面永远提示人工逐位比对短认证码）。
 
 ### 全流程
 
 1. **发现**（可跳过）：client 对本机所有非环回 IPv4 接口广播 UDP 7878 probe；serve **只单播回请求源**一条 offer（`name` + SPKI 指纹 + TCP 端口——零敏感字段）。多台 serve 同时在网时列清单供选（含 name@addr:port 与指纹前 16 字符）。拿不到 offer（防火墙挡 UDP/跨网段）就走 `--url` 直指。
 2. **连接（pin 分级）**：pin 已知（discovery offer 自带 / `--pin` 显式）→ 全程 TLS 层 SPKI 硬校验（不匹配即中止，主防线）；`--url` 直连且无 `--pin` → **默认拒绝**，显式 `--allow-tofu` 才接受无锚通道（TOFU 逃生门，见 [threat-model.md](./threat-model.md) R12）。
 3. **enroll → SAS 三件套**：client 生成临时密钥对 + 随机 id，`POST /pair/enroll`；serve 应答后 client **立即算出并在本屏显示**同一行三件套：`<name> @ <target_url> SAS <6位数字>`。**SAS 绑定整条 transcript 与密钥材料**——pin 已知通道（discovery / `--pin`）下，换钥型 MITM 在 TLS 握手期即被指纹校验拒断；TOFU 逃生通道（`--allow-tofu`）无此防护，仅受三件套人核与机械地址校验约束——受控环境专用（[threat-model.md](./threat-model.md) R12）。pending 队列存 store 表（跨进程共享，serve 重启即作废 in-flight）。
-4. **批准（人闸 + 机械校验）**：owner 在 **broker TUI 的 Pairing 页**（或 **`serve pair ls / approve / reject`** CLI 兜底）看到待批准行。**批准面同屏显示三件套 `<name> @ <target_url> SAS <6位>`**——serve 在 enroll 时就算好 SAS 落入行内（`pairing_pending.sas`，跨进程共享），批准面直读真值；owner 将批准行的 SAS 与 **client 屏的 SAS** **逐位比对一致后才批准**。行缺 SAS（serve 版本错配/旧行）→ ⚠ 警示并建议拒绝（绝不静默回退到对 MITM 无感的 name/url 两件对照——name/url 是未认证的 enroll 输入，MITM 转发时天然一致）。**机械地址校验**：serve 核对 client 声明的 `target_url` 是否为本机地址（非环回 IP 集 + hostname）——不符（疑似中继/假 discovery/错误网络）→ 大字 ⚠ 且拒绝常规批准，仅显式覆盖可用（CLI `serve pair approve --allow-foreign-url`；TUI 键入大写 `OVERRIDE`）。owner 选 profile（`pair.default_profile` 预选）→ CAS 批准，开 **120 秒** finish 窗口（enroll 后 **10 分钟**内不批准即过期作废）。
+4. **批准（人闸 + 机械校验）**：owner 在**权威端 Web UI 的配对页**（或用 **`serve pair ls / approve / reject`** 命令行）看到待批准行。**批准面同屏显示三件套 `<name> @ <target_url> SAS <6位>`**——serve 在 enroll 时就算好 SAS 落入行内（`pairing_pending.sas`，跨进程共享），批准面直读真值；owner 将批准行的 SAS 与 **client 屏的 SAS** **逐位比对一致后才批准**。行缺 SAS（serve 版本错配/旧行）→ ⚠ 警示并建议拒绝（绝不静默回退到对 MITM 无感的 name/url 两件对照——name/url 是未认证的 enroll 输入，MITM 转发时天然一致）。**机械地址校验**：serve 核对 client 声明的 `target_url` 是否为本机地址（非环回 IP 集 + hostname）——不符（疑似中继/假 discovery/错误网络）→ 大字 ⚠ 且拒绝常规批准，仅显式覆盖可用（命令行 `serve pair approve --allow-foreign-url`；Web UI 批准表单输入 `OVERRIDE` 覆盖文字）。owner 选 profile（`pair.default_profile` 预选）→ CAS 批准，开 **120 秒** finish 窗口（enroll 后 **10 分钟**内不批准即过期作废）。
 5. **finish（凭据自动下发）**：client 2s 轮询到 approved 后确认 finish（120s 内）；serve 在**单个事务**里铸设备码 + 建/复用 project（`pair-<名>`）+ 签 token + 落审计行，以 AES-256-GCM 信封返回 `{spki, profile, device_code, project_token, max_offline}`。
-6. **先落盘，后首拉**：client 把 `cache.auth.json`（url+设备码+pin）+ `cache.config.json`（`max_offline`，缺省 24h）+ **`pair.<名>.mcp.json`**（完整 `.mcp.json` 片段，env.SSHMGR_TOKEN = 真值，0600）全部落盘**之后**才首拉——落盘走临时文件+rename **原子写**（Plan 46：pair 产物与 `--write-mcp` 副本同改，失败不留半文件）。**首拉失败零丢失**：凭据已在盘，修复后重跑 `cache pull --instance <名>` 即补缓存；终端报错统一尾缀**双路径恢复指引**（Plan 46，如实——client 无法可靠分辨 serve 端状态）：直接重跑 `sshmgr pair --force`（或 TUI 重配）；若重跑报设备名占用（419），owner 在 broker 侧执行 `sshmgr cache-tokens revoke <实例名>` 后再重跑。`.mcp.json` 从产物文件抄（或当初用 `--write-mcp <path>` 已直落）。终端**零完整凭据**（打印片段用 `<project-token>` 占位符，真值只在产物文件里）。
+6. **先落盘，后首拉**：client 把 `cache.auth.json`（url+设备码+pin）+ `cache.config.json`（`max_offline`，缺省 24h）+ **`pair.<名>.mcp.json`**（完整 `.mcp.json` 片段，env.SSHMGR_TOKEN = 真值，0600）全部落盘**之后**才首拉——落盘走临时文件+rename **原子写**（Plan 46：pair 产物与 `--write-mcp` 副本同改，失败不留半文件）。**首拉失败零丢失**：凭据已在盘，修复后重跑 `cache pull --instance <名>` 即补缓存；终端报错统一尾缀**双路径恢复指引**（Plan 46，如实——client 无法可靠分辨 serve 端状态）：直接重跑 `sshmgr pair --force`；若重跑报设备名占用（419），owner 在权威端执行 `sshmgr cache-tokens revoke <实例名>` 后再重跑。`.mcp.json` 从产物文件抄（或当初用 `--write-mcp <path>` 已直落）。终端**零完整凭据**（打印片段用 `<project-token>` 占位符，真值只在产物文件里）。
 7. **收尾**：产物片段抄进 agent 的 `.mcp.json`（形态 = 下面「手工 enroll」Step 2 的 cache 形态；`--write-mcp` 则已就位），重启 Claude Code 即用。
 
 ### 命令速查
@@ -344,7 +344,7 @@ serve pair reject laptop                        # 拒绝（终态，该请求永
 ```
 
 - **`--instance` 必填** = 设备名 = 本地实例槽（Plan 40 三位一体：设备码 name = 实例名 = profile 授权单元）；命名纪律建议 `机器-实例`。
-- **自动化免比对**：env `SSHMGR_PAIR_ASSUME_SAS=1` 跳过终端 SAS 确认（**STUB 大字警告**——无人值守 CI 专用，放弃人闸；机械地址校验与 TLS pin 仍在；**CLI 专属**——TUI 配对向导不读该 env，永远人闸比对）。
+- **自动化免比对**：env `SSHMGR_PAIR_ASSUME_SAS=1` 跳过终端 SAS 确认（**STUB 大字警告**——无人值守 CI 专用，放弃人闸；机械地址校验与 TLS pin 仍在；**命令行专属**——Web UI 的配对指引页不读该 env，人工配对永远逐位比对短认证码）。
 - **同名覆盖**：目标实例已有 `cache.auth.json` → 默认拒绝；`--force` 走 Plan 46 零清理先行时序——校验/确认屏/enroll 阶段失败旧槽一字不动，成功后新凭据原子覆盖（`cache.config.json` 不动，时效策略原地继承；`quarantine/` 于成功尾部清理，失败仅警告下次重清）。
 - 全部 flags 以 `sshmgr pair --help` 为准；审计（enroll/批准/finish/拒绝）与状态变更**同事务**落权威 vault 的 `audit_log`，字段走脱敏白名单（永不落凭据值/token/设备码/pin/SAS/密文）。
 
@@ -352,7 +352,7 @@ serve pair reject laptop                        # 拒绝（终态，该请求永
 
 ## 手工 enroll（存量迁移官方路径 + CI 场景）
 
-> **何时走手工**：① **存量 ②a 机器迁移**（serve 升 Plan 42 版本前的过渡，见 [compat-matrix.md](./compat-matrix.md) 三步迁移——旧 serve 上没有 `/pair`，只能手工）；② **CI / 无人值守自动化**（要把 enroll 做成可脚本化的两步，而非交互式 SAS 比对）。日常新机一律 `sshmgr pair`（或 TUI `[c]` 向导）。
+> **何时走手工**：① **存量 ②a 机器迁移**（serve 升 Plan 42 版本前的过渡，见 [compat-matrix.md](./compat-matrix.md) 三步迁移——旧 serve 上没有 `/pair`，只能手工）；② **CI / 无人值守自动化**（要把 enroll 做成可脚本化的两步，而非交互式 SAS 比对）。日常新机一律 `sshmgr pair`（工作机初始化向导的「客户端」分支只显示这条命令的指引）。
 >
 > 🧭 各页签 / 设备码 / token / 指纹谁是谁，一页图解见 [concepts.md](./concepts.md)（概念模型：仓库 · 货架 · 装箱单 · 钥匙 · 水管 · 防伪封条）。
 
@@ -371,7 +371,7 @@ sshmgr cache-tokens add --name laptop --profile team-a
 #   # (or) set SSHMGR_SERVE_PIN=sha256:abcd1234... and pass --token <设备码>
 ```
 
-> 也可在 broker 上用 `sshmgr tui` 的「设备码」页签发——表单里选绑定 profile，设备码 + 指纹 + `cache pull` 示例命令一次性全屏显示（见 [README 的 TUI 主控台](../README.md#tui-主控台sshmgr-tui)）。
+> 也可在权威端 Web UI 的「设备码」页签发——表单里选绑定 profile，设备码 + 指纹 + `cache pull` 示例命令一次性显示（见 [README 的 Web 管理界面](../README.md#web-管理界面sshmgr-ui)）。
 
 - **`--profile` 必填（Plan 39）**：设备码绑定一个 profile，**该设备拉到的就是、且只是这个 profile 授权的服务器（含凭据）**——未授权服务器及其凭据不出服务器。一台机 = 一个码 = 一个 profile；要让某台机只看部分服务器，建一个专用 profile 授权那几台再绑它。
 - **存量未绑码**（Plan 39 之前签发的）：拉取被拒（**403，不毁本地缓存**），owner 跑 `sshmgr cache-tokens bind <name> <profile>` 原地补绑（保留名字/状态/拉取历史）即可恢复。
@@ -414,7 +414,7 @@ sshmgr cache status
 
 > **缓存目录**：`cache.bin` / `cache.meta.json` / `cache-audit.log` 进 `SSHMGR_CACHE_DIR`（默认 `os.UserConfigDir()/ssh-manager/`，即 Linux `~/.config/ssh-manager/`、macOS `~/Library/Application Support/ssh-manager/`、Windows `%AppData%\ssh-manager\`）。**DEK** 存在 vault 固定路径下的 `cache-dek.key` 裸文件（Win `C:\ProgramData\ssh-manager\cache-dek.key` / Unix `/var/lib/ssh-manager/cache-dek.key`，Plan 16 T4 从 OS keychain/DPAPI 迁来）。
 >
-> 💡 工作机上也可用 `sshmgr tui --mode client` 打开 client 面板：查看连接摘要 / 缓存年龄 / 实例切换（`[i]`）并手动触发同步（`[s]`）；连接编辑已退役——新机入网/换码 = `sshmgr pair`（Plan 45 起 client 面板 `[c]` 配对向导与实例 picker `p` 为同一流程的 TUI 等价路径，见 [tui-multi-machine.md](./tui-multi-machine.md)）。
+> 💡 工作机也可运行 `sshmgr ui` 打开客户端页面（只读）：查看连接状态（权威端地址 / 指纹 / profile / 服务器数 / 拉取时间）、手动「立即同步」（等价 `cache pull`）与实例切换（等价按 `--instance` 路由）；新机入网/换码 = `sshmgr pair`（走查见 [web-ui-multi-machine.md](./web-ui-multi-machine.md)）。
 >
 > ⚠️ **已知不一致**（Plan 16 T4 只迁了 DEK，未迁 `cache.bin` 路径）：`cache.bin` 在 `UserConfigDir`、`cache-dek.key` 在 vault 固定路径——两份不在同一目录。功能正常（DEK 文件能读、cache 能解），但离线拷盘需同时拿到两处。后续清理工作会收敛到同一目录。**威胁模型**：cache.bin + cache-dek.key 同机不同目录 → 同盘 → 离线拷盘可解 cache；cache 是只读快照非完整凭据，与 master.key 同等级（L1+，见 [threat-model.md](./threat-model.md)）。
 
@@ -432,9 +432,9 @@ sshmgr cache status
 }
 ```
 
-> 多机 agent 只读 + 执行；写操作去管理面（broker TUI / `serve pair` / 批2 Web UI）。旧的「在线为主（`.mcp.json` 指 serve URL + Bearer）」形态已随 ②a 移除（Plan 42 批1 起根路径 404）——存量 `"type": "http"` 配置请按 [compat-matrix.md](./compat-matrix.md) 三步迁移改写。
+> 多机 agent 只读 + 执行；写操作去管理面（权威端 Web UI / `serve pair` 命令行）。旧的「在线为主（`.mcp.json` 指 serve URL + Bearer）」形态已随 ②a 移除（Plan 42 批1 起根路径 404）——存量 `"type": "http"` 配置请按 [compat-matrix.md](./compat-matrix.md) 三步迁移改写。
 >
-> 片段权威源 = 代码渲染器 + golden 测试（internal/tui/wizardsteps*.go）；文档片段如与之不符以代码为准。TUI 操作教程见 [tui-multi-machine.md](./tui-multi-machine.md)。
+> 片段权威源 = 代码渲染器 + golden 测试（随生成该片段的命令输出守护）；文档片段如与之不符以代码为准。Web UI 操作教程见 [web-ui-multi-machine.md](./web-ui-multi-machine.md)。
 
 ### Step 3（工作机）：缓存自动保鲜（内置，默认无需 OS 调度器）
 
@@ -561,7 +561,7 @@ launchctl load -w ~/Library/LaunchAgents/com.ssh-manager.cache-refresh.plist
 | `query_software_inventory` | ✅（在线向权威端查询软件清单，范围按设备码绑定的 profile 计算；权威端不可达时报固定错误，不读本地数据——软件清单不随快照下发） |
 | `draft_software_declarations` | ✅（经受审计转发写向权威端提交软件声明草稿；草稿待 owner 确认，权威端不可达时直接失败，不写本地状态） |
 | `collect_software_inventory` | ✅（经受审计转发写请求立即采集；权威端按设备码可见范围同步采集或登记客户端采集请求，权威端不可达时直接失败） |
-| 加 / 改 / 删 server / profile / project / 凭据 | ❌ `ErrReadOnly`——写只在**管理面**（broker TUI / `serve pair` / 批2 Web UI） |
+| 加 / 改 / 删 server / profile / project / 凭据 | ❌ `ErrReadOnly`——写只在**管理面**（权威端 Web UI / `serve pair` 命令行） |
 | 未知目标机 host key | ⚠️ broker 可达 = 自动**锚定转发**（首连一次成功，锚落权威 vault 带审计）；broker 不可达 = **fail-closed**（错误文案带呈现指纹 + 两条补救路径）——见[「主机密钥锚定」](#主机密钥锚定锚定转发与带外锚定plan-48)节 |
 
 **铁律 + profile scoping 不变**：project token 的鉴权（验 token → 解析 project → profile → 只放行 `serverID ∈ profileID` 的命令）对快照内数据与对真实 vault 是**同一套**。多机形态只是把数据源换成本地只读副本，agent 的活动范围（profile）和能做的操作（只读 + 已授权的 exec / 传输 / 转发）与单机一致，唯独写操作被拒。
@@ -792,7 +792,7 @@ host key for <host>:<port> is unknown and cannot be pinned here (presented finge
   此工具）：探完一台服务器，把验证过的发现记回去。语义=部分更新：省略字段=
   保持原值、空串=清空；`expected_revision` 取自 `list_servers` 输出的
   `revision`。
-- **owner**：NUC10 上照旧 TUI/CLI 编辑；两边的写共用同一把 revision 锁，互相
+- **owner**：NUC10 上照旧 Web UI / 命令行编辑；两边的写共用同一把 revision 锁，互相
   踩踏会得到明确的 409 而不是静默覆盖。
 
 ### 服务端形态
@@ -896,7 +896,7 @@ sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指纹>' -
 
 | # | 条件 | 反例 |
 |---|---|---|
-| 1 | 无显式路由（不带 `--instance`；TUI 向导首拉同享此路径） | 显式路由已是命名实例 |
+| 1 | 无显式路由（不带 `--instance`；pair 首拉同享此路径） | 显式路由已是命名实例 |
 | 2 | pinned TLS 且 serve 下发设备码 name 响应头（`X-Sshmgr-Device-Name`，serve ≥v0.11.0）且 name 过白名单校验（非法 → **拒写盘**，owner 改名重发） | plaintext 与老 serve 无头 |
 | 3 | 默认槽 `cache.bin`、`cache.auth.json`、`cache.meta.json`、`cache.config.json` **四个文件均不存在** | meta/config 任一在场 = 该槽"曾有材料/曾配置"的**意图标记** |
 | 4 | `SSHMGR_CACHE_DIR` 与 `SSHMGR_CACHE_DEK` 均**未设置** | 任一在场 = 单槽完全覆盖语义 |
@@ -929,11 +929,11 @@ sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指纹>' -
 
 ### enroll 双 agent 全程形态（批2 picker · Plan 42 后口径）
 
-同机双 agent 的 TUI 少走命令形态（批2 的 `[i]` picker 保留；Plan 42 曾退役 client 连接编辑表单，Plan 45 起 `[c]` 以 SAS 配对向导复活——入网 = `sshmgr pair` 或 TUI 向导，两条等价路径）：
+同机双 agent 的少走命令形态（客户端 Web UI 可查看与切换实例；入网/换码 = `sshmgr pair`）：
 
 1. **agentA**：`sshmgr pair --instance laptop-agentA`（批准时选 profile-a）→ 首拉自动归位进 `instances/laptop-agentA/`；产物 `pair.laptop-agentA.mcp.json` 的 `args` 自动带 `"--instance", "laptop-agentA"` 及注释行（`本机 cache 位于实例槽 instances/laptop-agentA/——args 必须带 --instance laptop-agentA。`），照抄即可。
 2. **agentB**：再跑一条 `sshmgr pair --instance laptop-agentB`（批准时选 profile-b）→ 归位进自己的实例槽、产物各带各的 `--instance`。
-3. `sshmgr tui`（client 面板）`[i]` 打开实例 picker 可随时在两实例间切换查看——会话内有效，不跨进程记忆；`[s]` 同步只作用于当前选中槽。
+3. `sshmgr ui` 打开客户端页面可随时在两实例间切换查看（「运维 → 客户端」实例表行内「切换」；命令行用 `--instance`）；「立即同步」只作用于当前选中实例。
 
 ### `--instance` 用法一览
 
@@ -951,7 +951,7 @@ sshmgr cache pull --url https://192.0.2.5:7878 --token '<设备码B>:<指纹>' -
 
 ### 边界（如实·批2 更新）
 
-- **TUI 多实例现状（批2 落地 · Plan 42 收窄 · Plan 45 复活 [c] · Plan 46 picker 重做+实例删除）**：`[i]` 实例 picker 会话内切换、单槽 override env 互斥（禁用而非适配）保留；连接编辑表单随 ②a 退役删除（Plan 42 批1，不会回来），Plan 45 起 `[c]` 复活为 **SAS 配对向导**——入网/换码 = `sshmgr pair`（`--force` 承接换码语义——Plan 46 起零清理先行，失败旧槽完好）或 client 面板 `[c]` 向导 / picker 具名行 `p`；实例删除 = CLI `cache instances rm` 或 picker 行 `d`（见下「实例删除」节）。无人值守的批量刷新仍推荐计划任务 wrapper：每实例一条任务 + 各自的 env 文件（设备码是 per-instance 的；TUI 面板 `[s]` 只管当前选中槽）。
+- **多实例现状（TUI 删除后）**：客户端 Web UI 的实例表做会话内切换（材料齐全的实例才能切换）；`SSHMGR_CACHE_DIR` / `SSHMGR_CACHE_DEK` 单槽覆盖环境变量的语义仍只在缓存加载层生效；入网/换码 = `sshmgr pair`（`--force` 承接换码语义——Plan 46 起零清理先行，失败旧槽完好）；实例删除 = 命令行 `cache instances rm`（见下「实例删除」节——TUI 时代的 picker 删除入口已随 TUI 删除）。无人值守的批量刷新仍推荐计划任务 wrapper：每实例一条任务 + 各自的 env 文件（设备码是 per-instance 的；客户端页面的「立即同步」只管当前选中实例）。
 - **自动归位只作用于真空机首次 enroll**：存量默认槽机器**永不自动迁移**（意图标记 meta/config 在场即不归位）——要进实例形态显式 `--instance` 重新 enroll，或按下方 runbook v2 清三件套后裸拉归位。
 - **doctor 已感知命名实例**（2026-08-27 实现、2026-09-15 抢救合并，随下版发版生效）：`doctor` 枚举 `instances/<name>/` 逐实例诊断（行名 `client-cache[<name>]`，sidecar 矩阵与默认行同源：DEK 缺 → FAIL / auth 缺 → WARN / 超离线 cap → WARN「下次使用即自毁」/ 空 slot → INFO）。只有命名实例的机器，默认 `client-cache` 行不再误报"cache 缺失"——降级为 INFO 并指向下方实例行（全空机器仍 FAIL）。`SSHMGR_CACHE_DIR` / `SSHMGR_CACHE_DEK` 单槽覆盖生效时整组跳过（一行 INFO 可闻）。
 - 存量单实例机器**零迁移**：无 flag 的 pull/mcp/status 行为与旧版一致（门禁对存量空 `device_name` 走补记分支）。
@@ -1018,16 +1018,16 @@ sshmgr cache instances rm laptop-agentA    # 删一个命名实例:槽目录 + D
 - **`ls` 是纯 stat（永不解密）**：每行 = 实例名 / 槽产物存在性 / DEK 存在性 / 缓存年龄，形态 `instance: <名>  auth=有 bin=有 meta=有 config=有 dek=有  age=12m3s`（缺件标 `缺`）；**DEK 孤儿**（DEK 文件在、槽目录已不在——崩溃残迹形态，行附 rm 命令）与**半态槽**（目录在、材料有缺，行附 `⚠ 半态槽(缺 …)`）显式标注；默认槽恒有一行（`(默认实例)`，无 rm 提示）；单槽覆盖 env（`SSHMGR_CACHE_DIR`/`SSHMGR_CACHE_DEK`）在场时拒绝执行。
 - **`rm` = 双根清理**：`instances/<名>/` 整目录（bin/auth/meta/config/配对产物/quarantine 全在内）+ `<VaultDir>/cache-dek-<名>.key`。确认屏列出两根**真实落点**，**输入实例名**才执行；stdin 非 TTY 直接拒绝（防脚本误删）。实例名过白名单校验（traversal `../x` / 分隔符 / Windows 保留名 / 绝对路径全拒），用户参数绝不直拼删除。
 - **幂等可重试**：任一根清理失败 → 报错含**残留物清单**；重跑同一条 `rm` 即可清完（已不存在 = 幂等成功）。
-- **rm ≠ 吊销（两件事，别混）**：rm 只删**本机**材料；broker 侧设备码原封不动（client 无权远程吊销）。成功输出两件配套提示：① broker 侧执行 `sshmgr cache-tokens revoke <名>`（正式切断该设备的拉取权——见上「吊销」节）；② `--write-mcp` 写在**槽外**的 `.mcp.json` 副本**不随 rm 清理**——原因明说：该目标路径不持久化（`cache.config.json` 仅存 `max_offline`），rm 无从得知其位置，请自行删除。输出另附提醒：若有 TUI / MCP 进程正使用该实例，重启对应进程后生效。
-- **默认槽不可 rm**（它没有名字）——整机清空用 `sshmgr clear`。TUI 等价入口：client 面板 picker 具名行 `d`（确认 overlay 同语义；删当前槽成功 → 自动回落默认槽并清内存态，失败错误含残留清单、不回落）——见 [tui-multi-machine.md](./tui-multi-machine.md)。
+- **rm ≠ 吊销（两件事，别混）**：rm 只删**本机**材料；broker 侧设备码原封不动（client 无权远程吊销）。成功输出两件配套提示：① broker 侧执行 `sshmgr cache-tokens revoke <名>`（正式切断该设备的拉取权——见上「吊销」节）；② `--write-mcp` 写在**槽外**的 `.mcp.json` 副本**不随 rm 清理**——原因明说：该目标路径不持久化（`cache.config.json` 仅存 `max_offline`），rm 无从得知其位置，请自行删除。输出另附提醒：若有 Web UI / MCP 进程正使用该实例，重启对应进程后生效。
+- **默认槽不可 rm**（它没有名字）——整机清空用 `sshmgr clear`。TUI 时代 picker 行 `d` 的删除入口已随 TUI 删除，删除一律走命令行 `sshmgr cache instances rm <名>`（见 [web-ui-multi-machine.md](./web-ui-multi-machine.md)）。
 - **进程内互斥（如实）**：rm / force 清理进行中，同进程并发的 pull / pair 写盘**被拒绝**（明确报错——拒绝而非排队、不交错）；**跨进程**并发不由任何文件锁拦截，由原子写（临时文件+rename）+ rm 幂等可重跑兜底。
 
 ### 过渡期纪律（直到双端都 ≥v0.11.0）
 
-本批同船的 P0 锚修复（pinned pull 恒记服务器锚——无 env 的 pull 进程不再抹掉 `server_anchored`，TUI `[s]` 同步致 `mcp --cache` 瘫痪的 bug 根治）**部署完之前**（两端任一还是 v0.10.0 时）：
+本批同船的 P0 锚修复（pinned pull 恒记服务器锚——无 env 的 pull 进程不再抹掉 `server_anchored`，旧 TUI `[s]` 同步致 `mcp --cache` 瘫痪的 bug 根治）**部署完之前**（两端任一还是 v0.10.0 时）：
 
 - 恢复只跑**带 env 的** pull 通道（计划任务 wrapper / 显式设了 `SSHMGR_CACHE_MAX_OFFLINE` 的 shell）；
-- **禁用 TUI `[s]` 同步与裸 CLI pull**（无 env 的 pull 会再抹一次锚 → `mcp --cache` 的 provenance 闸拒载 → 该机 agent 的 SSH 工具全消失）。
+- **禁用任何手动 pull**（Web UI「立即同步」与裸命令行 pull 都算——无 env 的 pull 会再抹一次锚 → `mcp --cache` 的 provenance 闸拒载 → 该机 agent 的 SSH 工具全消失）。
 
 双端都升到 ≥v0.11.0 后此纪律作废（任何 pinned pull 都记锚）。
 

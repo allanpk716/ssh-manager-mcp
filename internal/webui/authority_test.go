@@ -128,11 +128,14 @@ func TestAuthorityWithoutPasswordShowsOnlySetupGuidance(t *testing.T) {
 		t.Fatalf("未设口令的登录页状态码 = %d，应为 200，页面：\n%s", resp.StatusCode, page)
 	}
 	for _, want := range []string{
-		"sshmgr ui", "sshmgr serve admin set", "sha256:0123456789abcdef",
+		"在权威端主机上运行", "sshmgr serve admin set", "设置管理员口令", "sha256:0123456789abcdef",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("未设口令页面应包含 %q：\n%s", want, page)
 		}
+	}
+	if strings.Contains(page, "sshmgr ui") {
+		t.Fatalf("serve 已运行时未设口令页面不应提示运行 `sshmgr ui`：\n%s", page)
 	}
 	if strings.Contains(page, "<form") {
 		t.Fatalf("未设口令页面不应提供表单或操作入口：\n%s", page)

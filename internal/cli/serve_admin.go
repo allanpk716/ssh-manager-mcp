@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"ssh-manager-mcp/internal/machineinit"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
@@ -39,12 +40,18 @@ func newServeAdminCmd() *cobra.Command {
 	return c
 }
 
-func requireServerRoleVault() (*store.Store, error) {
+// requireServerRoleVault 是 `serve admin` 子命令的角色判定：只能在权威端
+// 主机执行。allowSetupResume 为真时允许「已选权威端但还没建 vault」的续做
+// 状态——`serve admin set` 不再因 setup_complete 为假而拒绝（该标记只保留
+// 「选了角色、还没建 vault」的续做含义；升级中的权威端也要能先设管理员
+// 口令），其余子命令仍要求初始化已完成。
+func requireServerRoleVault(allowSetupResume bool) (*store.Store, error) {
 	launch, err := resolveMachineRole("")
 	if err != nil {
 		return nil, err
 	}
-	if launch.Kind != roles.LaunchBroker || launch.ResumeSetup || launch.Role != roles.RoleServer {
+	if launch.Kind != roles.LaunchBroker || launch.Role != roles.RoleServer ||
+		(!allowSetupResume && launch.ResumeSetup) {
 		return nil, NewExitCodeError(1, errors.New("`serve admin` 只能在权威端主机执行；单机与客户端没有权威端 Web 管理员口令"))
 	}
 	return openUnlockedStore()
@@ -107,7 +114,7 @@ func writeAuthorityWebUIStatus(out io.Writer, st *store.Store) error {
 		fmt.Fprintln(out, line)
 	}
 	if !passwordSet {
-		fmt.Fprintln(out, "设置指引：在权威端运行 `sshmgr ui` 走向导，或运行 `sshmgr serve admin set` 设置管理员口令。")
+		fmt.Fprintln(out, "设置指引：在权威端主机上运行 `sshmgr serve admin set` 设置管理员口令。")
 	}
 	return nil
 }
@@ -118,11 +125,13 @@ func newServeAdminSetCmd() *cobra.Command {
 		Short: "Set or reset the authoritative Web UI administrator password",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := requireServerRoleVault()
+			st, err := requireServerRoleVault(true)
 			if err != nil {
 				return err
 			}
-			defer st.Close()
+			if err := st.Close(); err != nil {
+				return err
+			}
 			first, err := serveAdminPasswordPrompt()
 			if err != nil {
 				return fmt.Errorf("读取管理员口令失败：%w", err)
@@ -131,13 +140,10 @@ func newServeAdminSetCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("读取第二次管理员口令失败：%w", err)
 			}
-			if string(first) != string(second) {
-				return NewExitCodeError(1, errors.New("两次输入的管理员口令不一致"))
+			if err := machineinit.ValidateAdminPassword(first, second); err != nil {
+				return NewExitCodeError(1, err)
 			}
-			if len(first) == 0 {
-				return NewExitCodeError(1, errors.New("管理员口令不能为空"))
-			}
-			generation, err := st.SetWebAdminPasswordWithAudit(first, serveAdminAuditRow("admin.password_set", nil))
+			generation, err := machineinit.SetAdminPassword(first, serveAdminAuditRow("admin.password_set", nil))
 			if err != nil {
 				return err
 			}
@@ -153,7 +159,7 @@ func newServeAdminUnlockCmd() *cobra.Command {
 		Short: "Unlock a Web UI login lock; without an IP, list current locks",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := requireServerRoleVault()
+			st, err := requireServerRoleVault(false)
 			if err != nil {
 				return err
 			}
@@ -192,7 +198,7 @@ func newServeAdminLogoutAllCmd() *cobra.Command {
 		Short: "Log out all authoritative Web UI sessions",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := requireServerRoleVault()
+			st, err := requireServerRoleVault(false)
 			if err != nil {
 				return err
 			}
@@ -213,7 +219,7 @@ func newServeAdminStatusCmd() *cobra.Command {
 		Short: "Show authoritative Web UI addresses and certificate fingerprint",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := requireServerRoleVault()
+			st, err := requireServerRoleVault(false)
 			if err != nil {
 				return err
 			}

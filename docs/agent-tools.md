@@ -435,7 +435,7 @@ JSON 转义、压缩、加密等变换后的值，也不防 agent 有意绕开�
 （`role` / `services` / `location` / `hardware` / `caveats` / `description`）
 写回共享 vault：agent 探明一台服务器后（查了硬件、发现了部署了什么服务），当场
 记回去，后续所有会话的 `list_servers` 都受益。**仅缓存脸**：权威端本机的
-agent 面没有这个工具（owner 用 TUI/CLI 编辑）。
+agent 面没有这个工具（owner 用 Web UI / 命令行编辑）。
 
 - 参数：`server_id` + `expected_revision`（你在 `list_servers` 里读到的
   `revision` 值——乐观锁令牌）+ 六个字段各可选。
@@ -637,7 +637,7 @@ broker 有两种部署形态，核心工具面一致（含 `list_secrets`，同 
 
 **多机只读铁律**：多机形态下 agent **只读 + 执行**——加改删 server / profile /
 project / 凭据、发码、批准配对等一切写操作都被拒（`ErrReadOnly`），写操作只属于
-owner 的**管理面**（broker TUI / `serve pair` / 批2 Web UI）。这不是临时限制，
+owner 的**管理面**（权威端 Web UI / `serve pair` 命令行）。这不是临时限制，
 是设计：工作机上的快照可被吊销、可自毁、范围仅限授权 profile，而权威 vault 只在
 一台机器上被一个写者（serve/管理面）修改。
 

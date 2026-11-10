@@ -278,19 +278,9 @@ func TestRelocate_RePullSameCode_Idempotent(t *testing.T) {
 	}
 }
 
-// TestRelocate_ExportedJudgments pins the TUI-facing exports: the SAME
-// four-file vacuum judgment and the two-env override detector.
-func TestRelocate_ExportedJudgments(t *testing.T) {
-	userDir, _ := newRelocateEnv(t)
-	v, err := DefaultSlotVacuum()
-	if err != nil || !v {
-		t.Fatalf("fresh machine must report vacuum: (%v, %v)", v, err)
-	}
-	seedDefaultMarker(t, userDir, "cache.meta.json", "{}")
-	v, err = DefaultSlotVacuum()
-	if err != nil || v {
-		t.Fatalf("a present marker must clear vacuum: (%v, %v)", v, err)
-	}
+// TestRelocate_SingleSlotOverrideEnvSetExported pins the exported two-env
+// override detector used by the CLI banners.
+func TestRelocate_SingleSlotOverrideEnvSetExported(t *testing.T) {
 	if SingleSlotOverrideEnvSet() {
 		t.Fatal("no override env set yet")
 	}

@@ -64,9 +64,9 @@ vault 损坏 / 丢失：删掉坏的 `store.db`（或把 `SSHMGR_STORE` 指向�
 
 ## Plan 49 — 口令加密定时备份（本地目录）
 
-> 设计 spec：`docs/superpowers/specs/2026-09-29-plan-49-encrypted-backup-tui-design.md`（rev0，行为以实现为准）；架构决策记录：[ADR 0004](./adr/0004-encrypted-local-dir-backup-owner-managed-replication.md)。
+> 设计 spec：`docs/superpowers/specs/` 目录下 2026-09-29 的 Plan 49 加密备份设计文档（文件名含已删除的终端图形界面旧称，属历史文档；行为以实现为准）；架构决策记录：[ADR 0004](./adr/0004-encrypted-local-dir-backup-owner-managed-replication.md)。
 
-`backup create` 新增**加密模式**：命令带上口令文件（直连旗标，或经备份配置文件）时，备份产物不再是明文 JSON，而是**口令加密的 `.sme` 文件**——和 `export` 完全同一种文件。一条命令，三个入口共用：**计划任务**（每天定时自动跑）、**TUI 备份页**（一键立即备份）、**手工命令行**。备份目录、保留份数、口令文件路径写在一份**备份配置**（`backup.json`）里，是三个入口共用的唯一事实源。
+`backup create` 新增**加密模式**：命令带上口令文件（直连旗标，或经备份配置文件）时，备份产物不再是明文 JSON，而是**口令加密的 `.sme` 文件**——和 `export` 完全同一种文件。一条命令，三个入口共用：**计划任务**（每天定时自动跑）、**Web UI 备份页**（一键立即备份）、**手工命令行**。备份目录、保留份数、口令文件路径写在一份**备份配置**（`backup.json`）里，是三个入口共用的唯一事实源。
 
 **与下面 Plan 13（NAS 定时明文备份）的边界**：本节是**加密路线**——备份文件在同步链路（例如 owner 自管的群晖同步）上流动的始终是密文，备份目录和同步链路本身**不需要被信任**，因此没有 Plan 13 那些「远端必须锁死」的部署硬约束。Plan 13 的明文路线保留给满足其「部署硬约束」的部署；两种模式的文件可在同一目录并存、互不干扰（见下「不变式」的轮转按扩展名一条）。
 
@@ -146,9 +146,9 @@ sshmgr backup config set --dir <备份目录> --keep N --passphrase-file <口令
 - 口令丢了 = 备份**无法恢复**（无后门，找不回）。
 - 程序不生成口令、不装 / 卸计划任务、不碰同步链路——三者都是部署期一次性的人工动作（见 runbook）。
 
-### TUI 备份页
+### Web UI 备份页
 
-权威端角色（单机 / 多机 broker）的 TUI 新增第 6 页「备份」：查看备份配置摘要、备份文件列表与新鲜度（最新一份超过 25 小时即警示——调度没跑一眼可见）、计划任务装没装的只读探测；提供立即备份、校验最新、编辑配置三个动作——立即备份与校验在程序内跑的就是同一条 create / verify 逻辑（同锁、同轮转、同验证），改配置与命令行走同一套校验。具体键位以页面内提示为准（见 [tui-single-machine.md](./tui-single-machine.md)）。客户端角色没有这一页。
+权威端角色（单机 / 多机 broker）的 Web UI「运维 → 备份」页：查看备份配置摘要、备份文件列表与新鲜度（最新一份超过 25 小时即警示——调度没跑一眼可见）、计划任务装没装的只读探测；提供立即备份、校验最新、编辑配置三个动作——立即备份与校验在程序内跑的就是同一条 create / verify 逻辑（同锁、同轮转、同验证），改配置与命令行走同一套校验（见 [web-ui-single-machine.md](./web-ui-single-machine.md)）。客户端角色没有这一页。
 
 ### 恢复路径
 
@@ -195,14 +195,14 @@ icacls "C:\ProgramData\ssh-manager\backup.pass" /inheritance:r /grant "SYSTEM:(F
 icacls "C:\ProgramData\ssh-manager\backup.json" /inheritance:r /grant "SYSTEM:(F)" /grant "Administrators:(F)" /grant "<你的用户名>:(M)"
 ```
 
-> backup.json 给当前用户 **(M)（修改，含删除）**而非 (R,W)：TUI 改配置保存时会整体替换这个文件（新临时文件改名顶替），Windows 上替换目标文件需要对它有删除权限——(R,W) 会让保存报拒绝访问。backup.pass 保持 (R,W)（程序从不重写它）。backup.json 内容只有路径与份数、无密钥，(M) 不扩大实质暴露。
+> backup.json 给当前用户 **(M)（修改，含删除）**而非 (R,W)：Web UI 改配置保存时会整体替换这个文件（新临时文件改名顶替），Windows 上替换目标文件需要对它有删除权限——(R,W) 会让保存报拒绝访问。backup.pass 保持 (R,W)（程序从不重写它）。backup.json 内容只有路径与份数、无密钥，(M) 不扩大实质暴露。
 
 验收记录要求：
 
 - 每条命令输出「已成功处理 1 个文件」；
 - 再用 `icacls <文件路径>` 复核，权限恰为三条（顺序无关）：`SYSTEM:(F)`、`Administrators:(F)`（或 `BUILTIN\Administrators:(F)`）、当前用户一条——`backup.pass` 为 `:(R,W)`、`backup.json` 为 `:(M)`——且无继承条目；
-- 为什么显式设而不是靠目录继承：目录继承在真机上被证伪过，不可依赖。设完的效果：SYSTEM（计划任务）可读写，当前用户（TUI / 手工命令）可读写，其他任何人都读不到；
-- 注意：TUI 改配置会整体重写 `backup.json`，重写后该文件回到目录继承的权限（仍是 SYSTEM + Administrators + 当前用户三员，但当前用户变回完全控制）。需要严格显式权限时，重跑上面对 `backup.json` 的那一条即可。
+- 为什么显式设而不是靠目录继承：目录继承在真机上被证伪过，不可依赖。设完的效果：SYSTEM（计划任务）可读写，当前用户（Web UI / 手工命令）可读写，其他任何人都读不到；
+- 注意：Web UI 改配置会整体重写 `backup.json`，重写后该文件回到目录继承的权限（仍是 SYSTEM + Administrators + 当前用户三员，但当前用户变回完全控制）。需要严格显式权限时，重跑上面对 `backup.json` 的那一条即可。
 
 **5. 注册 SYSTEM 计划任务（每天 03:30）**
 
@@ -228,10 +228,10 @@ $f.RegisterTask('sshmgr-backup', $xml, 2, $null, $null, 3, $null) | Out-Null
 
 - `-Execute` 用 sshmgr.exe 的**完整路径**（NUC10 现状是 `C:\Users\<你的用户名>\sshmgr.exe`，与 `update` 自更新替换的路径一致）。只写 `sshmgr.exe` 也可以，前提是其所在目录在**系统级** PATH 里——SYSTEM 账户只看机器 PATH，不看用户 PATH。
 - **SYSTEM 账户**：无人登录也照跑；master key 走固定路径裸文件 `C:\ProgramData\ssh-manager\master.key.plain`，服务账户直接读文件即可，无需 keychain（同 Plan 13 的说明）。
-- **注册后那段「删除重建」必做**：SYSTEM 任务默认权限表只有 SYSTEM 与 Administrators——普通（非管理员）终端里 Administrators 组不生效，TUI 备份页的调度探测会一直误报「未安装」（2026-09-29 首部署实测踩中）。**就地修补不生效**（对任务文件 icacls 加权限、或带权限参数原地更新注册，服务端访问检查都不认）；唯一验证有效的方法是**删除后以权限描述符内嵌 XML 的方式全新创建**——权限表照抄 Windows 自家 SYSTEM 任务的可读模式（Authenticated Users / Local Users 只读 + 当前账户只读），普通终端即可查询。只授权查询/查看，不给运行或修改权。
+- **注册后那段「删除重建」必做**：SYSTEM 任务默认权限表只有 SYSTEM 与 Administrators——普通（非管理员）终端里 Administrators 组不生效，Web UI 备份页的调度探测会一直误报「未安装」（2026-09-29 首部署实测踩中）。**就地修补不生效**（对任务文件 icacls 加权限、或带权限参数原地更新注册，服务端访问检查都不认）；唯一验证有效的方法是**删除后以权限描述符内嵌 XML 的方式全新创建**——权限表照抄 Windows 自家 SYSTEM 任务的可读模式（Authenticated Users / Local Users 只读 + 当前账户只读），普通终端即可查询。只授权查询/查看，不给运行或修改权。
 - **`-StartWhenAvailable`**：03:30 关机 / 睡着错过 → 机器下次可用时补跑（默认不会为跑备份唤醒机器）。
 - **`-ExecutionTimeLimit` 10 分钟**：超时强停——磁盘 / 同步挂起的当场兜底（陈旧锁 5 分钟自动超时只救下次运行，任务层硬超时是另一道防线）。
-- 程序与 TUI 都不提供装 / 卸。卸载 = `Unregister-ScheduledTask -TaskName "sshmgr-backup" -Confirm:$false`。
+- 程序与 Web UI 都不提供装 / 卸。卸载 = `Unregister-ScheduledTask -TaskName "sshmgr-backup" -Confirm:$false`。
 
 **6. 手工验收 A1–A6，次日 A8**（A4 的真终端观感与 A7 是 owner 人工保留面）
 
@@ -240,8 +240,8 @@ $f.RegisterTask('sshmgr-backup', $xml, 2, $null, $null, 3, $null) | Out-Null
 | A1 | 手工 `sshmgr backup create --config C:\ProgramData\ssh-manager\backup.json`；并把第 4 步两条 icacls 输出核对记册 | 写出 `vault-*.sme`；stdout 报 `wrote`；退出码 0；DACL 三员与第 4 步要求一致 |
 | A2 | `sshmgr backup verify <最新 .sme> --passphrase-file C:\ProgramData\ssh-manager\backup.pass` | 报 `ok: ... (decrypted and json structurally valid)` |
 | A3 | 连跑 `keep+2` 次 A1 的命令 | 目录中 `.sme` 恒 ≤ keep 份，最旧的被删 |
-| A4 | TUI 备份页目验（真终端走一遍） | 配置摘要 / 文件列表 / 新鲜度 / 计划任务探测如实显示（owner 人工） |
-| A5 | TUI 立即备份 + 校验最新 | 新文件出现在列表；校验报完好 |
+| A4 | Web UI 备份页目验（真浏览器走一遍） | 配置摘要 / 文件列表 / 新鲜度 / 计划任务探测如实显示（owner 人工） |
+| A5 | Web UI 立即备份 + 校验最新 | 新文件出现在列表；校验报完好 |
 | A6 | 恢复演练（命令见下） | 临时 vault import 成功，条数与生产一致；抽凭据解密通过；生产库零接触；临时目录清理完成 |
 | A7 | 口令离机保管 | owner 确认口令已存入 1Password，验收册记一行（owner 人工） |
 | A8 | 次日 03:30 之后核对 | `Get-ScheduledTaskInfo -TaskName sshmgr-backup` 的 `LastTaskResult` 为 0（即任务历史里的最后运行退出码 0）；备份目录出现当日新 `.sme`。群晖侧当日副本 = owner 自管同步链路的独立观察项，不进本表判定 |

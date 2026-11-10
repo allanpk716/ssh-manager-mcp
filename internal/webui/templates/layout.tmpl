@@ -37,6 +37,7 @@
 {{if .Caps.CanManageBackups}}<a href="/ui/ops/backup">备份</a>{{end}}
 {{if .Caps.CanManageSettings}}<a href="/ui/ops/settings">设置</a>{{end}}
 {{if .Caps.CanUpgradeBinary}}<a href="/ui/ops/update">升级</a>{{end}}
+{{if .Caps.CanUpgradeToServer}}<a href="/ui/ops/upgrade-server">升级为权威端</a>{{end}}
 {{if .Caps.CanUseClientOps}}<a href="/ui/ops/client">客户端</a>{{end}}
 {{if .Caps.CanQueryVaultAudit}}<a href="/ui/ops/audit">审计</a>{{end}}
 {{if .Caps.CanQueryClientAudit}}<a href="/ui/ops/client-audit">本机审计</a>{{end}}

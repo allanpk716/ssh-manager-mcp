@@ -30,4 +30,4 @@
 ## 遗留(不阻塞)
 
 - A3/A4 的真机形态(断 serve / 翻开关)owner 可选补跑;A6 跨设备核验待第二台工作机升级。
-- 批 2(客户端 CLI/TUI 表单 + Settings 开关写入面)backlog 已登记。
+- 批 2(客户端命令行表单 + Settings 开关写入面;原 TUI 表单已随 TUI 删除)backlog 已登记。

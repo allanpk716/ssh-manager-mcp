@@ -75,7 +75,7 @@ func ScanServer(tags, description, location, hardware, services, role, caveats s
 	return findings
 }
 
-// FormatWarning renders one Finding as a single-line warning for CLI/TUI
+// FormatWarning renders one Finding as a single-line warning for CLI
 // output. It is templated off the Finding only and never includes field
 // content. No trailing newline — callers add it.
 func FormatWarning(f Finding) string {

@@ -31,8 +31,8 @@
 | [multi-machine.md](./multi-machine.md) | **多机部署 + 离线只读缓存（Plan 12）+ 配对入网（Plan 42）+ 主机密钥锚定（Plan 48）**：多台机器共用一份服务器清单——一台 VLAN 服务器常驻权威 vault，工作机 `sshmgr pair` 一条龙入网（UDP 发现 → SAS 批准 → 凭据下发）、agent 用本地只读缓存干活（只读 + 执行）；「仅缓存客户端可达」目标的首次信任走锚定转发 / 带外锚定。架构 / 配置 / 多实例 / runbook。 |
 | [broker-host-agent.md](./broker-host-agent.md) | **在 broker（serve）主机上也跑 agent**：零距离 client 走桥（pair 入网 / 手工路径）+ 应急附录（stdio 直开 vault，不推荐）。 |
 | [backup-restore.md](./backup-restore.md) | **备份与迁移（export / import）**：把整个 vault 导出成口令加密的便携文件（跨机、可恢复）——备份 / 迁移 / 灾难恢复；安全模型（KeePass 式）、限制、与复制 store.db 的对比。**定时加密备份（本地目录）+ NUC10 部署 runbook（Plan 49）**：`backup create` 加密模式、`backup.json` 三字段、计划任务安装与 A1–A8 验收表；与 Plan 13 NAS 明文备份两条路线并列、边界写清。 |
-| [tui-single-machine.md](./tui-single-machine.md) | **单机 TUI 教程**（全键盘点选，不想记命令）：首跑向导走查、页签参考、典型任务与排错。 |
-| [tui-multi-machine.md](./tui-multi-machine.md) | **联机 TUI 教程**（server 侧主控台 + 工作机 client 面板）：Pairing 批准页、`[c]` 配对向导（Plan 45）、实例切换、典型任务。 |
+| [web-ui-single-machine.md](./web-ui-single-machine.md) | **单机 Web UI 教程**（浏览器表单操作，逐步附命令行等价命令）：初始化向导走查、页面参考、典型任务与排错。 |
+| [web-ui-multi-machine.md](./web-ui-multi-machine.md) | **联机 Web UI 教程**（权威端管理页面 + 工作机客户端页面）：初始化向导、配对批准页、实例切换、典型任务。 |
 | [agent-tools.md](./agent-tools.md) | **给 AI agent 的工具手册**（可贴进 CLAUDE.md 的规则模板在内）：铁律、逐工具语义、错误对照、部署形态与吊销三路径、行为依据表。 |
 | [compat-matrix.md](./compat-matrix.md) | **client↔serve 版本兼容矩阵**：已验证组合 / 破坏性变更 / 升级顺序铁律（含 Plan 42 批1 三步迁移 + v0.13.0 四项 breaking 面/迁移总册）。升级任何一端之前先看这篇。 |
 | [backlog.md](./backlog.md) | **欠账清单（活跃面 = P2 四条 + 测试自助化 + 明确不做留痕；已销项条目归档在后）**：后续 plan 的取货架。2026-08-21 grilling 缺口分析排期的 P0/P1 已全数销项归档。 |
@@ -54,7 +54,7 @@
 
 ## 需要帮忙？
 
-- 命令记不全：每个子命令都支持 `--help`，例如 `sshmgr servers add --help`、`sshmgr projects --help`。
+- 命令记不全：每个子命令都支持 `--help`，例如 `sshmgr servers add --help`、`sshmgr projects --help`；不想记命令就运行 `sshmgr ui` 用浏览器页面操作。
 - 报错“vault locked”：回到 [getting-started.md](./getting-started.md) 的“Step 1：解锁保险柜”一节。
 - 机器重启后还要做什么吗？：**不用启动任何东西**——它不是 daemon，MCP 客户端（Claude Code / Cursor）会在你需要时自动 spawn 它。见 [getting-started.md](./getting-started.md) 的“重启 / 关机后”一节。
 - agent 报“server is not in your profile”：说明你让它操作的 server 不在它 project 绑定的 profile 里，见 [agent-access.md](./agent-access.md) 的“隔离与排错”。

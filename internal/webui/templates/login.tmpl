@@ -4,11 +4,7 @@
 <p>证书公钥指纹：<code>{{.CertificateFingerprint}}</code></p>
 {{if not .AdminPasswordSet}}
 <div class="setup-guidance">
-<p>还没有设置管理员口令。请在权威端主机执行以下任一操作：</p>
-<ol>
-<li>运行 <code>sshmgr ui</code> 进入初始化指引。</li>
-<li>运行 <code>sshmgr serve admin set</code> 设置管理员口令。</li>
-</ol>
+<p>还没有设置管理员口令。在权威端主机上运行 <code>sshmgr serve admin set</code> 设置管理员口令。</p>
 </div>
 {{end}}
 {{if .AdminPasswordSet}}

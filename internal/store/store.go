@@ -231,9 +231,10 @@ func (s *Store) EnsureSidecarACL() error {
 // CURRENT process identity into the "current user" slot. The broker's store
 // is opened by two identities — serve as LocalSystem (whose service
 // auto-start wins the post-reboot sidecar-creation race) and the interactive
-// user (CLI/TUI, non-elevated). Whichever identity HardenACL ran under, the
+// user (CLI, non-elevated). Whichever identity HardenACL ran under, the
 // OTHER was locked out of the -shm index SQLite requires every connection to
-// write → "attempt to write a readonly database" → surfaced to TUI as
+// write → "attempt to write a readonly database" → surfaced in the terminal
+// era as
 // "本机 vault 存在但锁定或不可读" (NUC10 incident 2026-10-02..06). store.db's
 // DACL — frozen at creation, never rewritten (Plan 16 F1) — already names
 // BOTH principals; mirroring it is identity-independent.
@@ -410,7 +411,7 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	// 2026-09-01 SAS 落行(撤销 rev4:69 降级勘误):serve 在 enroll 时算好 6 位
-	// SAS 写入本列,批准面(TUI/CLI/批2 Web)经同一张表读到真值做双屏比对。
+	// SAS 写入本列,批准面(Web UI/CLI)经同一张表读到真值做双屏比对。
 	// 落库的仅是 ~20bit 比对码(本就印在人眼屏幕上);priv/kAck/kCreds 仍只在
 	// serve 进程内存。旧行迁移为 ''(旧 serve 写的行——批准面按无 SAS 警示处理)。
 	if err := addColumnIfMissing(db, "pairing_pending", "sas", "TEXT NOT NULL DEFAULT ''"); err != nil {

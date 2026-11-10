@@ -156,8 +156,8 @@ func buildPairTranscript(id []byte, name, targetURL string, clientPub, cnonce, s
 }
 
 // RunPair runs the whole pairing flow as the CLI DRIVER over PairSession
-// (Plan 45 T1):步骤已提升为导出状态机(pairsession.go,CLI 与 TUI 共用单一
-// 管线),本函数只保留 CLI 独占面 —— 冻结次序 ④⑤(enroll → 轮询 → SAS y/N
+// (Plan 45 T1):步骤已提升为导出状态机(pairsession.go),本函数只保留
+// CLI 独占面 —— 冻结次序 ④⑤(enroll → 轮询 → SAS y/N
 // 确认 → finish)与全部 frozen wordings 逐字不变;AssumeSAS 的 env 判定与终端
 // y/N 永驻本层,discovery/多 broker 选择在 internal/cli/pair.go。轮询瞬态提示
 // 经 WaitApproval 的 note 回调回流到既有 stderr 输出点(410/超时改为
@@ -208,7 +208,7 @@ func RunPair(o PairOpts) error {
 	fmt.Fprintf(out, "%s @ %s SAS %s\n", o.Instance, targetURL, s.SAS())
 	fmt.Fprintf(out, "与 broker 审批面上显示的 SAS 逐位比对,一致才继续。\n")
 
-	// ④ poll 2s 循环 ≤10min(ApprovalDeadline 锚);410 → ErrPairGone(合并
+	// ④ poll 2s 循环 ≤10min(批准截止时间锚);410 → ErrPairGone(合并
 	// 语义),deadline 尽 → ErrPairTimeout,ctx 取消三者可区分;瞬态(429/5xx/
 	// 网络)backoff note 回流到既有 stderr 输出点(30s 节流,session 与
 	// noteTransient 同步推进,输出逐字节不变)。

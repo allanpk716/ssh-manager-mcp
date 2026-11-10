@@ -8,10 +8,10 @@
 
 ```
 ┌──服务器机（server · 唯一的仓库，vault 只在这一台）──────────────────┐
-│  sshmgr tui（broker 主控台 · 四个页签）                        │
+│  权威端 Web UI（浏览器 · 管理页面）                            │
 │                                                                    │
 │  ┌──────────┐   ┌───────────┐   ┌──────────┐   ┌──────────┐      │
-│  │ 服务器页   │   │ Profiles  │   │ Projects │   │ 设备码页  │      │
+│  │ 服务器页   │   │ Profile   │   │ 项目令牌  │   │ 设备码页  │      │
 │  │ = 货架     │   │ 页=装箱单  │   │ 页=钥匙   │   │ = 水管钥匙 │      │
 │  └────┬─────┘   └─────┬─────┘   └────┬─────┘   └────┬─────┘      │
 │       │ grant 进箱子        │ 绑定一个箱子   │            │              │
@@ -46,10 +46,10 @@
 
 | 概念 | 类比 | 说明 |
 |---|---|---|
-| 服务器机（server） | **仓库** | vault 只在这一台机；所有凭据、所有页签操作都在这 |
-| TUI「服务器」页 | **货架** | 所有 SSH 目标机（连凭据）摆在架子上 |
-| TUI「Profiles」页 | **装箱单** | 把若干服务器打包进一个 profile（箱子） |
-| TUI「Projects」页 | **钥匙** | 每把钥匙（token）只开一个箱子（绑定的 profile） |
+| 服务器机（server） | **仓库** | vault 只在这一台机；所有凭据、所有页面操作都在这 |
+| Web UI「服务器」页 | **货架** | 所有 SSH 目标机（连凭据）摆在架子上 |
+| Web UI「Profile」页 | **装箱单** | 把若干服务器打包进一个 profile（箱子） |
+| Web UI「项目令牌」页 | **钥匙** | 每把钥匙（token）只开一个箱子（绑定的 profile） |
 | **设备码** | **水管钥匙（限一辆车）** | 允许一台 client 机通过"水管"拉走**它绑定 profile 的那份**加密快照（cache.bin，Plan 39 起按授权裁剪——未授权服务器及其凭据不出服务器）；一台 client 一枚、绑一个 profile，吊销粒度=单机——吊销后该机**回连即销毁**本地 cache（≤30min 内撞上，四件全毁+隔离痕迹），永离线失窃根治仍=轮换服务器凭据 |
 | **project token** | **阀门** | 决定 agent 实际能用什么——只放行自己 profile 箱内的服务器，铁律逐条命令检查 |
 | **服务器指纹（pin）** | **防伪封条** | server 自签证书的 SPKI 指纹；client 首次连接必须核对（钉死），不符即拒——防冒充的 server / 中间人 |
@@ -82,25 +82,22 @@ project token 背后的 agent 通过 `list_servers` 看到：服务器元数据�
 1. **分开给**：`--token <裸码>` + `--pin sha256:...`（或环境变量 `SSHMGR_SERVE_PIN`）。
 2. **合并串**：只填一个 `<码>:<指纹>` 字符串（如 `cache pull --token 'abc123:sha256:abcd...'`），程序自动拆开。
 
-> 注意：**向导 / client 面板的表单是分开的三个必填栏**（地址 / 设备码 / 指纹），不接受合并串——指纹栏必须单独填 `sha256:...`。
+> 注意：客户端入网现在走 `sshmgr pair` 一条龙（见下），不再有手填「地址 / 设备码 / 指纹」三栏的表单；`cache pull` 的手工路径仍接受上面两种等价填法。
 
 ⚠️ 指纹三处（合并串 / `--pin` / 环境变量）一处都没有 → **默认拒连**（hard-fail），不会静默明文。
 
 ## 第二台 client 机的完整接入链
 
-1. **server 机 TUI「设备码」页按 `a`** 签发设备码（一台 client 一枚；**不推荐复用**——复用则失窃时只能全吊，一枚一机吊销才精准）。
-2. **server 机 TUI「Projects」页按 `a`** 新建 project（绑定想给它看的 profile）→ **token 一次性展示**（丢失可在此页重发）。
-3. **client 机**跑 `sshmgr tui` 进向导（表单分三栏填：server 地址 / 设备码 / 指纹）或直接：
-   ```bash
-   sshmgr cache pull --url https://<server>:7878 --token '<码>:sha256:<指纹>'
-   ```
-4. client 机 `.mcp.json` 配 `mcp --cache` + env `SSHMGR_TOKEN=<project token>`（离线兜底）或指向 serve URL（在线）。
+1. **client 机**运行 `sshmgr pair --instance <名字>`（同网段自动发现权威端；跨网段/防火墙挡 UDP 时加 `--url https://<server>:7878`），屏幕显示「名字 @ 地址 短认证码」。
+2. **server 机（或任意浏览器）**打开权威端 Web UI 的**配对页**：核对批准行与 client 屏幕的短认证码逐位一致，选要绑定的 profile，「批准」。设备码与 `pair-<名字>` project 在批准一刻自动签发（命令行等价面：`serve pair approve <名字> --profile <profile>`）。
+3. 批准后 client 自动完成：凭据加密下发 → 首拉落盘（cache.bin）→ 产物 `pair.<名字>.mcp.json`。
+4. client 机 `.mcp.json` 配 `mcp --cache` + env `SSHMGR_TOKEN=<project token>`（pair 产物即为该形态，可 `--write-mcp` 直落）。
 
-project/token 按 agent 项目粒度自由建（每台机每项目一个都行）；设备码按**机器**粒度发。
+project/token 按 agent 项目粒度自由建（每台机每项目一个都行）；设备码按**机器**粒度发（手工路径见 [multi-machine.md](./multi-machine.md)「手工 enroll」——`cache-tokens add` 与 `projects add`）。
 
 ## 三种角色与首次向导（一段话版）
 
-本机角色由 `role.json` 唯一确定：**standalone**（单机，凭据只在本机）、**server**（仓库机）、**client**（只连仓库的工作机）。空机器第一次跑 `sshmgr tui` 进**首次向导**：首屏两问（这台机保管凭据吗？agent 要连别的机吗？）后果导向地选角色，**选定的瞬间即落盘 role.json**——中途 Esc / 崩溃都是安全暂停，重开 `tui` 自动续配。standalone 之后可无损升级为 server（主控台按 `[u]`，vault 数据原样保留）；**vault 角色（standalone/server）转 client 必须先 `clear`**（真删数据，见下）。
+本机角色由 `role.json` 唯一确定：**standalone**（单机，凭据只在本机）、**server**（仓库机）、**client**（只连仓库的工作机）。空机器第一次跑 `sshmgr ui` 进**首次向导**：第一步选角色（单机 / 权威端 / 客户端，各附一句适用场景），选定后建 vault 并写 role.json——中途关掉浏览器是安全暂停，重开 `sshmgr ui` 从未完成的步骤续配（命令行等价面：`sshmgr init --role standalone|server`；客户端分支只显示 `sshmgr pair` 指引，不写 role.json）。standalone 之后可无损升级为 server（单机 Web UI 运维页「升级为权威端」，或 `sshmgr init --role server`，vault 数据原样保留）；**vault 角色（standalone/server）转 client 必须先 `clear`**（真删数据，见下）。
 
 ## `sshmgr clear`（角色清理，一段话版）
 

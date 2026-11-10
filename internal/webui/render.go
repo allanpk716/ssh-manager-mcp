@@ -35,6 +35,7 @@ type pageData struct {
 	Authenticated                    bool
 	Servers                          []ServerRow
 	ServerList                       []ServerListEntry
+	NextSteps                        []NextStep
 	AttentionFilter                  bool
 	ServerDetail                     *ServerDetailView
 	ServerEdit                       *serverEditView
@@ -120,6 +121,8 @@ type pageData struct {
 	OpsUpdateResult                  *OpsUpdateApplyResult
 	OpsUpdateError                   *OpsUpdateError
 	OpsUpdateRestarting              bool
+	OpsUpgradeServerError            *InitializationErrorView
+	OpsUpgradeServerSuccess          bool
 	ErrorTitle                       string
 	ErrorMessage                     string
 	AdminPasswordSet                 bool
@@ -127,6 +130,14 @@ type pageData struct {
 	LoginError                       string
 	LockRemaining                    time.Duration
 	NextPath                         string
+	InitializationError              *InitializationErrorView
+	InitializationMasterKeyPath      string
+	InitializationSteps              []InitializationStepView
+	InitializationInstallNotice      string
+	InitializationInstallCommand     string
+	InitializationServeAddresses     []InitializationServeAddressView
+	InitializationNeedsManualListen  bool
+	ClientGuideLines                 []string
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染

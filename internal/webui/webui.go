@@ -103,6 +103,20 @@ type Config struct {
 	SoftwareInventory SoftwareInventorySource
 	Access            AccessStore
 	Ops               OpsStore
+	// MachineInit 是单机升级为权威端时调用的初始化模块适配器。适配器内部
+	// 调用 machineinit.Initialize 并把权威端作为目标角色；本包不写 role.json。
+	MachineInit MachineInitializer
+	// RequestShutdown 在升级成功页、客户端配对指引页或权威端完成页完整写
+	// 给浏览器后触发，由 `sshmgr ui` 的服务循环注入，用于优雅关闭本次回环
+	// Web UI 进程。参数说明触发关闭的页面，命令行适配器按它决定终端输出。
+	RequestShutdown func(ShutdownReason)
+	// InitializationOperatingSystem 与 InitializationExecutablePath 只用于
+	// 权威端向导的安装页；命令行适配器注入当前操作系统与可执行文件绝对路径。
+	InitializationOperatingSystem string
+	InitializationExecutablePath  string
+	// InitializationComplete 在权威端初始化完成页完整写给浏览器后触发；
+	// 命令行适配器用它打印正式地址并注入优雅退出。
+	InitializationComplete func(InitializationCompletion)
 	// ServiceRestart 是权威端显式注入的服务重启能力；不注入时不注册重启
 	// 路由，也不显示重启表单。
 	ServiceRestart OpsRestartStore
@@ -218,6 +232,9 @@ type capabilities struct {
 	CanUseClientOps bool
 	// CanQueryClientAudit 只对客户端开放，控制本机审计页。
 	CanQueryClientAudit bool
+	// CanUpgradeToServer 只对提供了初始化模块的单机开放，控制升级为权威
+	// 端的入口与路由。
+	CanUpgradeToServer bool
 }
 
 // capabilitiesForConfig 按构造参数推导页面能力开关：先按本机角色确定基础
@@ -321,6 +338,23 @@ func New(cfg Config) (http.Handler, Startup, error) {
 	if cfg.Role == RoleServer {
 		return nil, Startup{}, errors.New("权威端 Web UI 必须使用 NewAuthority 构造")
 	}
+	registerRoutes := func(h *handler) {
+		h.mux.HandleFunc(startPath, h.handleStart)
+		h.mux.HandleFunc("/ui/assets/", h.handleAsset)
+		h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
+		h.registerAccessRoutes()
+		h.registerServerRoutes()
+		h.registerSecretRoutes()
+		h.registerSoftwareInventoryRoutes()
+		h.registerOpsRoutes()
+	}
+	return newLoopbackHandler(cfg, registerRoutes)
+}
+
+// newLoopbackHandler 构造回环模式处理器。registerRoutes 让正式页面与初始
+// 化向导复用同一套会话、Host、来源、防跨站请求伪造与安全头基础设施，同时
+// 保持两者对外注册的路由不同。
+func newLoopbackHandler(cfg Config, registerRoutes func(*handler)) (http.Handler, Startup, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, Startup{}, err
 	}
@@ -345,14 +379,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 		startDigest: sha256.Sum256([]byte(token)),
 		mux:         http.NewServeMux(),
 	}
-	h.mux.HandleFunc(startPath, h.handleStart)
-	h.mux.HandleFunc("/ui/assets/", h.handleAsset)
-	h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
-	h.registerAccessRoutes()
-	h.registerServerRoutes()
-	h.registerSecretRoutes()
-	h.registerSoftwareInventoryRoutes()
-	h.registerOpsRoutes()
+	registerRoutes(h)
 	return h, Startup{token: token}, nil
 }
 
@@ -561,6 +588,14 @@ func (h *handler) currentSession(r *http.Request) *session {
 		return nil
 	}
 	return sess
+}
+
+// adoptLoopbackSession 让另一个回环处理器复用当前会话。两个处理器的监听
+// 端口一致，cookie 名与防跨站请求伪造令牌不需要变化。
+func (h *handler) adoptLoopbackSession(sess *session) {
+	h.mu.Lock()
+	h.session = sess
+	h.mu.Unlock()
 }
 
 // sessionCookieName 带上监听端口：浏览器的 cookie 不按端口隔离，同一台

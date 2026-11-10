@@ -153,18 +153,18 @@ func checkRole() []doctorCheck {
 	case err != nil:
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("role.json unreadable: %v", err)
-		c.Fix = "run `sshmgr clear` (writes a vault safety-net backup first), then re-run the wizard (`sshmgr tui`)"
+		c.Fix = "run `sshmgr clear` (writes a vault safety-net backup first), then re-run the wizard (`sshmgr ui`)"
 	case st == nil:
 		c.Status = statusInfo
-		c.Detail = "no role.json — fresh machine, run the wizard"
+		c.Detail = "no role.json — fresh machine, run the initialization wizard (`sshmgr ui`)"
 	case vaultPresent && clientPresent:
 		c.Status = statusWarn
 		c.Detail = fmt.Sprintf("dual-role residue: role.json at BOTH the vault dir and the user config dir — loaded role=%s setup_complete=%t", st.Role, st.SetupComplete)
-		c.Fix = "keep the location for the current role and remove the other, or run `sshmgr clear` and re-run the wizard"
+		c.Fix = "keep the location for the current role and remove the other, or run `sshmgr clear` and re-run the wizard (`sshmgr ui`)"
 	case !st.SetupComplete:
 		c.Status = statusWarn
 		c.Detail = fmt.Sprintf("role=%s but wizard incomplete (setup_complete=false) — re-run to finish setup", st.Role)
-		c.Fix = "run `sshmgr tui` to resume the wizard"
+		c.Fix = "run `sshmgr ui` to resume the wizard"
 	default:
 		c.Status = statusPass
 		c.Detail = fmt.Sprintf("role=%s setup_complete=true", st.Role)
@@ -530,7 +530,8 @@ var sidecarACLGap = store.SidecarACLGap
 // proof runs on a COPY that deliberately excludes the sidecars, so a sidecar
 // the interactive user cannot write (born under serve-as-LocalSystem after a
 // reboot, before the Plan 50 parity fix) left every doctor row green while
-// `tui` / `servers` failed on the live database (NUC10 incident
+// the then-terminal console / `servers` failed on the live database
+// (NUC10 incident
 // 2026-10-02..06). Each EXISTING sidecar's write-grantors are compared
 // against store.db's — a missing principal is FAIL with the exact elevated
 // repair. Absent sidecars are a PASS (clean checkpointed state), and
@@ -787,7 +788,7 @@ func cacheSidecarMatrix(c *doctorCheck, dir, dekP, instance string, age time.Dur
 	if !dekOK {
 		c.Status = statusFail
 		c.Detail = fmt.Sprintf("%scache.bin present (age %s) but its cache DEK is missing — cache undecryptable", label, age)
-		c.Fix = fmt.Sprintf("re-run the client wizard (`sshmgr tui`) and `cache pull%s` again to re-establish a decryptable cache", pullFlag)
+		c.Fix = fmt.Sprintf("re-run `sshmgr pair --force` and `cache pull%s` again to re-establish a decryptable cache", pullFlag)
 		return
 	}
 	authOK, aok := fileExists(filepath.Join(dir, "cache.auth.json"))

@@ -22,7 +22,7 @@ func (s *Store) AddProfile(name string) (string, error) {
 	)
 	if err != nil {
 		// Localize the name-collision error — the raw driver text leaks SQLite
-		// jargon into TUI/CLI surfaces (same wrap as AddServer).
+		// jargon into management surfaces (same wrap as AddServer).
 		if strings.Contains(err.Error(), "UNIQUE constraint failed: profiles.name") {
 			return "", fmt.Errorf("profile name %q already exists", name)
 		}
@@ -38,7 +38,7 @@ func (s *Store) GetProfile(id string) (*models.Profile, error) {
 		updated int64
 	)
 	// v0.8.5: created_at/updated_at WERE never selected — every profile
-	// rendered 0001-01-01 (Go zero time) in the TUI. Unix-epoch int64 scan,
+	// rendered 0001-01-01 (Go zero time) on listing. Unix-epoch int64 scan,
 	// the same pattern ListCacheTokens uses.
 	err := s.db.QueryRow(
 		`SELECT id,name,created_at,updated_at FROM profiles WHERE id=?`, id,
@@ -104,7 +104,7 @@ func (s *Store) ListProfiles() ([]*models.Profile, error) {
 // constraint stays as the fail-closed backstop behind the precheck.
 // v0.8.6: an ACTUAL insert (not an ignored duplicate) bumps
 // profiles.updated_at in the same tx — the grant set IS profile state, and
-// the TUI's 更新 column must reflect grant changes.
+// listing surfaces' 更新 column must reflect grant changes.
 func (s *Store) GrantServers(profileID string, serverIDs []string) error {
 	if s.readOnly {
 		return ErrReadOnly
