@@ -3,7 +3,9 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path"
+	"strings"
 	"time"
 
 	"ssh-manager-mcp/internal/models"
@@ -38,6 +40,7 @@ type MountShareOutput struct {
 	Version         int64            `json:"version" jsonschema:"shared storage registration version"`
 	NetworkName     string           `json:"network_name" jsonschema:"selected registered network name"`
 	NetworkSequence int              `json:"network_sequence" jsonschema:"address sequence within the selected network"`
+	MountNotes      []string         `json:"mount_notes,omitempty" jsonschema:"slow-network fallback explanation; network names, registration sequence, probe error categories and durations only, never an IP address or domain name"`
 	Paths           []MountSharePath `json:"paths" jsonschema:"directory agreements translated to target-server paths"`
 }
 
@@ -58,6 +61,7 @@ func MountShareForProfile(
 	var share *models.SharedStorage
 	var server *models.Server
 	var mountResult *sharemount.Result
+	var mountErr error
 	defer func() {
 		summary := map[string]any{"share": shareName, "version": int64(0), "result": "error"}
 		var serverID, networkName string
@@ -72,6 +76,19 @@ func MountShareForProfile(
 			networkName = mountResult.Network
 			sequence = mountResult.NetworkSequence
 			summary["result"] = "first-mount-success"
+			notes := mountShareSelectionNotes(mountResult)
+			if len(notes) > 0 {
+				summary["result"] = "virtual-network-fallback"
+				summary["mount_notes"] = notes
+			}
+		}
+		var selectionFailure *sharemount.SelectionFailure
+		if errors.As(mountErr, &selectionFailure) {
+			summary["result"] = "address-selection-error"
+			summary["selection_error"] = selectionFailure.Reason
+			summary["provider_networks"] = selectionFailure.ProviderNetworks
+			summary["target_networks"] = selectionFailure.TargetNetworks
+			summary["attempts"] = selectionFailure.Attempts
 		}
 		if networkName != "" {
 			summary["network_name"] = networkName
@@ -149,6 +166,7 @@ func MountShareForProfile(
 		Share: found, Server: server, Password: append([]byte(nil), password...),
 	})
 	if err != nil {
+		mountErr = err
 		return nil, err
 	}
 	status = "ok"
@@ -156,7 +174,8 @@ func MountShareForProfile(
 		Share: found.Name, ServerID: server.ID, ServerName: server.Name,
 		MountPoint: mountResult.MountPoint, Version: found.Version,
 		NetworkName: mountResult.Network, NetworkSequence: mountResult.NetworkSequence,
-		Paths: []MountSharePath{},
+		MountNotes: mountShareSelectionNotes(mountResult),
+		Paths:      []MountSharePath{},
 	}
 	for _, directory := range found.Directories {
 		output.Paths = append(output.Paths, MountSharePath{
@@ -165,4 +184,31 @@ func MountShareForProfile(
 		})
 	}
 	return output, nil
+}
+
+// mountShareSelectionNotes 渲染成功但放弃物理局域网时的说明。它沿用连通
+// 探测的逐地址格式，只使用网络名、登记序号、错误分类和耗时。
+func mountShareSelectionNotes(result *sharemount.Result) []string {
+	if result == nil || result.Physical {
+		return nil
+	}
+	physicalFailures := make([]string, 0)
+	for _, attempt := range result.Attempts {
+		if !attempt.Physical || attempt.OK {
+			continue
+		}
+		line := fmt.Sprintf("%s 第%d个地址  ✗%s", attempt.NetworkName,
+			attempt.NetworkSequence, models.ProbeErrorCategoryLabel(attempt.ErrorCategory))
+		if attempt.DurationMilli >= 0 {
+			line += fmt.Sprintf(" %dms", attempt.DurationMilli)
+		}
+		physicalFailures = append(physicalFailures, line)
+	}
+	if len(physicalFailures) == 0 {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("已使用虚拟局域网：%s 第%d个地址", result.Network, result.NetworkSequence),
+		"物理局域网地址不通：" + strings.Join(physicalFailures, "；"),
+	}
 }
