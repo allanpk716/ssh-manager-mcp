@@ -7,7 +7,7 @@ import (
 
 // migrateNetworkMembershipRegistrationOrder 给旧库补网络成员登记序号，并按
 // 创建时间、行标识符的顺序为存量成员赋值。赋值只是结构升级，不代表拓扑
-// 内容变化；临时移除更新触发器，避免它把快照修订号推进。
+// 内容变化；临时移除会响应成员更新的触发器，避免结构迁移被当成配置变化。
 func migrateNetworkMembershipRegistrationOrder(db *sql.DB) error {
 	exists, err := tableExists(db, "network_memberships")
 	if err != nil || !exists {
@@ -35,6 +35,15 @@ func migrateNetworkMembershipRegistrationOrder(db *sql.DB) error {
 	defer tx.Rollback()
 	if _, err := tx.Exec(`DROP TRIGGER IF EXISTS snapshot_revision_network_memberships_update`); err != nil {
 		return fmt.Errorf("remove network membership revision trigger for migration: %w", err)
+	}
+	for _, trigger := range []string{
+		"shared_storage_version_member_add",
+		"shared_storage_version_member_edit",
+		"shared_storage_version_member_remove",
+	} {
+		if _, err := tx.Exec(`DROP TRIGGER IF EXISTS ` + trigger); err != nil {
+			return fmt.Errorf("remove shared storage version trigger for migration: %w", err)
+		}
 	}
 	if _, err := tx.Exec(`
 		WITH missing AS (

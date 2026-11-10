@@ -286,3 +286,271 @@ func TestSharedStorageEditDeleteVersionAuditAndRevision(t *testing.T) {
 		t.Fatalf("删除共享存储后的快照修订号 = %d，应为 %d：%v", after, revisionBefore+4, err)
 	}
 }
+
+func TestSharedStorageSecretValueChangeBumpsReferencingShares(t *testing.T) {
+	s := seedSharedStorageVault(t)
+	_, err := s.AddSharedStorage(SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+	}, CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.AddSharedStorage(SharedStorageInput{
+		Name: "scratch", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y",
+	}, CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	changeNote := "owner 已经更新挂载密码"
+	for _, name := range []string{"datasets", "scratch"} {
+		if _, err := s.EditSharedStorage(name, SharedStorageChanges{
+			ChangeNote: &changeNote,
+		}, CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := s.SetSecretValue("NAS_MOUNT_PASSWORD", []byte("second-password"), CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"datasets", "scratch"} {
+		share, err := s.GetSharedStorage(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if share.Version != 3 || share.ChangeNote != "" {
+			t.Fatalf("机密项换值后共享 %s 的版本号与变更说明不正确：%+v", name, share)
+		}
+	}
+}
+
+func TestSharedStorageProviderNetworkMembershipChangesBumpShares(t *testing.T) {
+	s := seedSharedStorageVault(t)
+	for _, input := range []SharedStorageInput{
+		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z"},
+		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y"},
+	} {
+		if _, err := s.AddSharedStorage(input, CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changeNote := "这个说明应随网络成员变化清空"
+	for _, name := range []string{"datasets", "scratch"} {
+		if _, err := s.EditSharedStorage(name, SharedStorageChanges{
+			ChangeNote: &changeNote,
+		}, CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.AddDevice("第二NAS", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddSecret("SECOND_MOUNT_PASSWORD", "", []byte("second-password"), CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	_, err = s.AddSharedStorage(SharedStorageInput{
+		Name: "other", Device: "第二NAS", User: "mount-user",
+		PasswordSecret: "SECOND_MOUNT_PASSWORD", Drive: "X",
+	}, CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddNetwork(models.Network{
+		Name: "备份局域网", Type: models.NetworkPhysical, SiteName: "办公室",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertNASVersion := func(want int64) {
+		t.Helper()
+		for _, name := range []string{"datasets", "scratch"} {
+			share, err := s.GetSharedStorage(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if share.Version != want {
+				t.Fatalf("网络成员变化后共享 %s 的版本号 = %d，应为 %d", name, share.Version, want)
+			}
+			if share.ChangeNote != "" {
+				t.Fatalf("网络成员变化后共享 %s 的变更说明应清空：%+v", name, share)
+			}
+		}
+	}
+	if _, err := s.AddNetworkMembership("NAS", "备份局域网", "192.0.2.11"); err != nil {
+		t.Fatal(err)
+	}
+	assertNASVersion(3)
+	if _, err := s.EditNetworkMembership("NAS", "备份局域网", "192.0.2.12"); err != nil {
+		t.Fatal(err)
+	}
+	assertNASVersion(4)
+	if _, err := s.RemoveNetworkMembership("NAS", "备份局域网"); err != nil {
+		t.Fatal(err)
+	}
+	assertNASVersion(5)
+
+	other, err := s.GetSharedStorage("other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Version != 1 {
+		t.Fatalf("其他设备的共享存储版本号不应变化：%+v", other)
+	}
+}
+
+func TestSharedStorageSecretAllowChangesBumpShares(t *testing.T) {
+	s := seedSharedStorageVault(t)
+	for _, input := range []SharedStorageInput{
+		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z"},
+		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y"},
+	} {
+		if _, err := s.AddSharedStorage(input, CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changeNote := "owner 已经调整过共享登记"
+	for _, name := range []string{"datasets", "scratch"} {
+		if _, err := s.EditSharedStorage(name, SharedStorageChanges{
+			ChangeNote: &changeNote,
+		}, CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	thirdServer, err := s.AddServer(&models.Server{
+		Name: "linux-worker", Host: "192.0.2.22", Port: 22,
+		User: "deploy", AuthMethod: models.AuthPassword,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertVersion := func(want int64, wantChangeNote string) {
+		t.Helper()
+		for _, name := range []string{"datasets", "scratch"} {
+			share, err := s.GetSharedStorage(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if share.Version != want || share.ChangeNote != wantChangeNote {
+				t.Fatalf("可写入服务器变化后共享 %s 不正确：%+v", name, share)
+			}
+		}
+	}
+
+	if err := s.AllowSecrets(
+		[]string{"NAS_MOUNT_PASSWORD"}, []string{"linux-worker"}, CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertVersion(3, "")
+	if err := s.DisallowSecrets(
+		[]string{"NAS_MOUNT_PASSWORD"}, []string{"linux-worker"}, CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertVersion(4, "")
+
+	linuxWeb, err := s.GetServerByName("linux-web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := s.ServerDeletePreview(linuxWeb.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteServerCascadingConfirmed(linuxWeb.ID, preview.Digest()); err != nil {
+		t.Fatal(err)
+	}
+	assertVersion(5, "")
+	if _, err := s.GetServer(thirdServer); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSharedStorageSecretMetadataChangesDoNotBumpShares(t *testing.T) {
+	s := seedSharedStorageVault(t)
+	if _, err := s.AddSharedStorage(SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+	}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	changeNote := "这个说明应保留"
+	if _, err := s.EditSharedStorage("datasets", SharedStorageChanges{
+		ChangeNote: &changeNote,
+	}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.EditSecretNote("NAS_MOUNT_PASSWORD", "新备注", CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSecretEnvironmentName(
+		"NAS_MOUNT_PASSWORD", "NAS_MOUNT_PASSWORD_NAME", CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`
+		UPDATE secrets SET name='RENAMED_MOUNT_PASSWORD', name_lower='renamed_mount_password'
+		WHERE name='NAS_MOUNT_PASSWORD'
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	share, err := s.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if share.Version != 2 || share.ChangeNote != changeNote || share.PasswordSecretName != "RENAMED_MOUNT_PASSWORD" {
+		t.Fatalf("只改机密项备注、环境变量名或名字时共享版本号不应变化：%+v", share)
+	}
+}
+
+func TestSharedStorageLinkedVersionRollsBackWithFailedWrite(t *testing.T) {
+	s := seedSharedStorageVault(t)
+	if _, err := s.AddSharedStorage(SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+	}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	changeNote := "失败回滚后应保留这个说明"
+	if _, err := s.EditSharedStorage("datasets", SharedStorageChanges{
+		ChangeNote: &changeNote,
+	}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	revisionBefore, err := s.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`
+		CREATE TRIGGER shared_storage_test_reject_secret_set_audit
+		BEFORE INSERT ON audit_log WHEN NEW.action='secret-set'
+		BEGIN SELECT RAISE(ABORT, 'injected secret audit failure'); END
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.SetSecretValue("NAS_MOUNT_PASSWORD", []byte("second-password"), CLISource())
+	if err == nil || !strings.Contains(err.Error(), "injected secret audit failure") {
+		t.Fatalf("测试应注入机密项写入失败，实际：%v", err)
+	}
+	share, err := s.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if share.Version != 2 || share.ChangeNote != changeNote {
+		t.Fatalf("写入失败回滚后共享版本号与变更说明不正确：%+v", share)
+	}
+	revisionAfter, err := s.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revisionAfter != revisionBefore {
+		t.Fatalf("写入失败回滚后快照修订号 = %d，应保持 %d", revisionAfter, revisionBefore)
+	}
+}

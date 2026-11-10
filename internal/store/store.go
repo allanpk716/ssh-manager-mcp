@@ -1014,6 +1014,54 @@ CREATE TABLE IF NOT EXISTS shared_storages (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_secret_value
+AFTER UPDATE OF value_version ON secrets
+FOR EACH ROW WHEN OLD.value_version IS NOT NEW.value_version
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='', updated_at=NEW.value_updated_at
+   WHERE password_secret_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_member_add
+AFTER INSERT ON network_memberships
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='', updated_at=NEW.updated_at
+   WHERE device_id=NEW.device_id;
+END;
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_member_edit
+AFTER UPDATE ON network_memberships
+FOR EACH ROW WHEN
+  OLD.device_id IS NOT NEW.device_id OR OLD.network_id IS NOT NEW.network_id OR
+  OLD.address IS NOT NEW.address OR OLD.address_lower IS NOT NEW.address_lower
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='', updated_at=NEW.updated_at
+   WHERE device_id IN (OLD.device_id, NEW.device_id);
+END;
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_member_remove
+AFTER DELETE ON network_memberships
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='', updated_at=OLD.updated_at
+   WHERE device_id=OLD.device_id;
+END;
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_secret_allow_add
+AFTER INSERT ON secret_server_allow
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='',
+         updated_at=CAST(strftime('%s','now') AS INTEGER)
+   WHERE password_secret_id=NEW.secret_id;
+END;
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_secret_allow_remove
+AFTER DELETE ON secret_server_allow
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='',
+         updated_at=CAST(strftime('%s','now') AS INTEGER)
+   WHERE password_secret_id=OLD.secret_id;
+END;
 CREATE TABLE IF NOT EXISTS forward_bind_hosts (
   ip         TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL
