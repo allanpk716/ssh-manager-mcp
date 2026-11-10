@@ -999,6 +999,21 @@ CREATE TABLE IF NOT EXISTS secret_server_allow (
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   PRIMARY KEY (secret_id, server_id)
 );
+CREATE TABLE IF NOT EXISTS shared_storages (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL UNIQUE,
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  mount_user TEXT NOT NULL,
+  password_secret_id TEXT NOT NULL REFERENCES secrets(id),
+  drive TEXT NOT NULL UNIQUE,
+  note TEXT NOT NULL DEFAULT '',
+  directories TEXT NOT NULL DEFAULT '[]',
+  version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
+  change_note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS forward_bind_hosts (
   ip         TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL

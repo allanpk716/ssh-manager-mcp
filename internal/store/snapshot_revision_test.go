@@ -54,6 +54,48 @@ func TestSnapshotRevisionServerUpdateTriggerCoversAllExportedColumns(t *testing.
 	}
 }
 
+func TestSnapshotRevisionSharedStorageUpdateTriggerCoversAllColumns(t *testing.T) {
+	s := seedSharedStorageVault(t)
+	if _, err := s.AddSharedStorage(SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+	}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	columns, err := s.db.Query(`PRAGMA table_info(shared_storages)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer columns.Close()
+	var checked []string
+	for columns.Next() {
+		var columnIndex int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := columns.Scan(&columnIndex, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		checked = append(checked, name)
+	}
+	if err := columns.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(checked) == 0 {
+		t.Fatal("shared_storages table has no columns to check")
+	}
+
+	triggerSQL := triggerDefinition(t, s.db, "snapshot_revision_shared_storages_update")
+	for _, column := range checked {
+		comparison := regexp.MustCompile(
+			`OLD\.` + regexp.QuoteMeta(column) + `\s+IS NOT NEW\.` + regexp.QuoteMeta(column),
+		)
+		if !comparison.MatchString(triggerSQL) {
+			t.Fatalf("snapshot revision update trigger must compare shared_storages column %s", column)
+		}
+	}
+}
+
 func triggerExists(t *testing.T, db *sql.DB, name string) bool {
 	t.Helper()
 	var exists bool
