@@ -73,7 +73,7 @@ func sharedStorageVersionText(
 }
 
 // sharedStorageMountableServers 返回这份快照里某处共享存储可挂载的服务器
-// 名：挂载密码机密项的可写入服务器列表 ∩ 当前快照可见的服务器。
+// 名：挂载密码机密项的可写入服务器列表与当前快照可见的服务器取交集。
 func sharedStorageMountableServers(snap *store.Snapshot, share sharedStorageSummary) []string {
 	if snap == nil || share.passwordSecretID == "" {
 		return nil
