@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
+	"ssh-manager-mcp/internal/sharemount"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/testsshd"
 )
@@ -412,6 +414,27 @@ func boolString(value bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// assertMountShareAuditResult 断言最近一条 mount-share 审计的固定结果
+// 分类；分类不由错误文本推导，便于审查失败原因。
+func assertMountShareAuditResult(t *testing.T, st *store.Store, wantResult string) map[string]any {
+	t.Helper()
+	rows, err := st.QueryAudit(store.AuditFilter{Actions: []string{"mount-share"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 {
+		t.Fatalf("没有 mount-share 审计行，期待分类 %q", wantResult)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(rows[len(rows)-1].Command), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary["result"] != wantResult {
+		t.Fatalf("mount-share 审计分类 = %v，期待 %q（摘要 %#v）", summary["result"], wantResult, summary)
+	}
+	return summary
 }
 
 func (f *fakeDarwinMountServer) recorded() ([]string, [][]byte, string, []string) {
@@ -823,6 +846,51 @@ func TestMountShareTargetWithoutDeviceFailsWithoutProbe(t *testing.T) {
 		strings.Contains(rows[0].Command, "100.64.10.10") {
 		t.Fatalf("失败审计 = %+v", rows)
 	}
+	assertMountShareAuditResult(t, fixture.store, "no-device")
+}
+
+func TestMountShareAuditResultClassification(t *testing.T) {
+	type classificationCase struct {
+		name   string
+		err    error
+		result *sharemount.Result
+		want   string
+	}
+	tests := []classificationCase{
+		{name: "首次挂载成功", result: &sharemount.Result{Action: "first-mount-success"}, want: "success"},
+		{name: "改写成功", result: &sharemount.Result{Action: "update-success"}, want: "success"},
+		{name: "重新挂载成功", result: &sharemount.Result{Action: "remount-success"}, want: "success"},
+		{name: "无需改动", result: &sharemount.Result{Action: "no-change"}, want: "no-change"},
+		{name: "共享不存在", err: errMountShareNotFound, want: "not-found"},
+		{name: "不在可写入列表", err: errMountShareNotWritable, want: "not-in-writable-servers"},
+		{name: "Windows 服务器", err: errMountShareWindowsUnsupported, want: "windows-unsupported"},
+		{name: "没有结果与错误", want: "error"},
+		{name: "兜底错误", err: errors.New("其他失败"), want: "error"},
+		{name: "没有共同网络", err: &sharemount.SelectionFailure{
+			Reason: sharemount.SelectionErrorNoCommonNetwork,
+		}, want: "no-common-network"},
+		{name: "全部候选不可达", err: &sharemount.SelectionFailure{
+			Reason: sharemount.SelectionErrorAllCandidatesFailed,
+		}, want: "all-candidates-unreachable"},
+	}
+	for _, class := range []string{
+		sharemount.MountClassUnsupportedSystem, sharemount.MountClassMissingSudo,
+		sharemount.MountClassMissingSoftware, sharemount.MountClassLockTimeout,
+		sharemount.MountClassRemoteVersionNewer, sharemount.MountClassProtocolFailed,
+		sharemount.MountClassVerifyFailed, sharemount.MountClassUnmountFailed,
+		sharemount.MountClassNoDevice, sharemount.MountClassSSHError, sharemount.MountClassError,
+	} {
+		tests = append(tests, classificationCase{
+			name: "领域失败 " + class, err: &sharemount.MountFailure{Class: class}, want: class,
+		})
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := mountShareAuditResult(testCase.err, testCase.result); got != testCase.want {
+				t.Fatalf("审计分类 = %q，期待 %q", got, testCase.want)
+			}
+		})
+	}
 }
 
 func TestMountShareNoCommonNetworkListsBothSides(t *testing.T) {
@@ -858,7 +926,7 @@ func TestMountShareNoCommonNetworkListsBothSides(t *testing.T) {
 	if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
 		t.Fatal(err)
 	}
-	if summary["result"] != "address-selection-error" ||
+	if summary["result"] != "no-common-network" ||
 		summary["selection_error"] != "no-common-network" ||
 		fmt.Sprintf("%v", summary["provider_networks"]) != "[办公物理局域网 办公虚拟局域网]" ||
 		fmt.Sprintf("%v", summary["target_networks"]) != "[目标独立虚拟局域网]" {
@@ -906,7 +974,7 @@ func TestMountShareAllCandidatesFailListsEveryAttempt(t *testing.T) {
 	if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
 		t.Fatal(err)
 	}
-	if summary["result"] != "address-selection-error" ||
+	if summary["result"] != "all-candidates-unreachable" ||
 		summary["selection_error"] != "all-candidates-failed" {
 		t.Fatalf("选地址失败审计摘要 = %#v", summary)
 	}
@@ -979,7 +1047,8 @@ func TestMountSharePhysicalFailuresFallBackToVirtualNetwork(t *testing.T) {
 	if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
 		t.Fatal(err)
 	}
-	if summary["result"] != "virtual-network-fallback" ||
+	if summary["result"] != "success" || summary["action"] != "first-mount-success" ||
+		summary["network_fallback"] != "virtual-network" ||
 		summary["network_name"] != "办公虚拟局域网" ||
 		fmt.Sprintf("%v", summary["mount_notes"]) != fmt.Sprintf("%v", output["mount_notes"]) {
 		t.Fatalf("降级成功审计摘要 = %#v", summary)
@@ -1091,7 +1160,7 @@ func TestMountShareLinuxFirstMountSelectsPhysicalNetwork(t *testing.T) {
 	}
 	if summary["share"] != "datasets" || summary["version"] != float64(1) ||
 		summary["network_name"] != "办公物理局域网" || summary["network_sequence"] != float64(1) ||
-		summary["result"] != "first-mount-success" {
+		summary["result"] != "success" || summary["action"] != "first-mount-success" {
 		t.Fatalf("mount-share 审计摘要 = %#v", summary)
 	}
 	if strings.Contains(rows[0].Command, mountShareTestPassword) ||
@@ -1369,12 +1438,13 @@ func TestMountShareDarwinReselectsWhenExistingAddressUnreachable(t *testing.T) {
 
 func TestMountShareDarwinMissingAutomountAndRemoteNewerVersionFail(t *testing.T) {
 	tests := []struct {
-		name    string
-		setup   func(*mountShareFixtureSetup)
-		wantErr string
+		name       string
+		setup      func(*mountShareFixtureSetup)
+		wantErr    string
+		wantResult string
 	}{
 		{
-			name: "缺少 automount",
+			name: "缺少 automount", wantResult: "missing-software",
 			setup: func(setup *mountShareFixtureSetup) {
 				setup.darwinTarget = true
 				setup.darwinMissingAutomount = true
@@ -1382,7 +1452,7 @@ func TestMountShareDarwinMissingAutomountAndRemoteNewerVersionFail(t *testing.T)
 			wantErr: "目标服务器缺少 automount，请先由 owner 修复 macOS 系统组件；挂载工具不会自动安装",
 		},
 		{
-			name: "远端版本更新",
+			name: "远端版本更新", wantResult: "remote-version-newer",
 			setup: func(setup *mountShareFixtureSetup) {
 				setup.darwinTarget = true
 				setup.darwinExistingAddress = "192.0.2.10"
@@ -1412,6 +1482,7 @@ func TestMountShareDarwinMissingAutomountAndRemoteNewerVersionFail(t *testing.T)
 					t.Fatalf("失败路径泄漏挂载密码：%s", leakText)
 				}
 			}
+			assertMountShareAuditResult(t, fixture.store, testCase.wantResult)
 		})
 	}
 }
@@ -1433,6 +1504,7 @@ func TestMountShareDarwinReportsLockTimeout(t *testing.T) {
 	if mapWrites != 0 || autoMasterWrites != 0 {
 		t.Fatalf("macOS 拿锁失败后不应改写配置：映射 %d 次，主配置 %d 次", mapWrites, autoMasterWrites)
 	}
+	assertMountShareAuditResult(t, fixture.store, "lock-timeout")
 }
 
 func TestMountShareDarwinRecoversExpiredStaleLock(t *testing.T) {
@@ -1739,6 +1811,7 @@ func TestMountShareLinuxRejectsRemoteNewerVersion(t *testing.T) {
 		credential != "username=mount-user\npassword=old-password\n" {
 		t.Fatalf("远端配置被误改：credential=%q fstab=%#v", credential, fstab)
 	}
+	assertMountShareAuditResult(t, fixture.store, "remote-version-newer")
 }
 
 func TestMountShareLinuxUpdatesOlderRemoteVersionAndPassword(t *testing.T) {
@@ -1813,6 +1886,7 @@ func TestMountShareLinuxReportsLockTimeout(t *testing.T) {
 	if credentialWrites != 0 || configurationWrites != 0 {
 		t.Fatalf("拿锁失败后不应改写：凭据 %d 次，配置 %d 次", credentialWrites, configurationWrites)
 	}
+	assertMountShareAuditResult(t, fixture.store, "lock-timeout")
 }
 
 func TestMountShareLinuxRecoversExpiredStaleLock(t *testing.T) {
@@ -1943,19 +2017,22 @@ func TestMountShareLinuxAllSMBVersionsFailWritesNoFstab(t *testing.T) {
 
 func TestMountShareLinuxMissingSudoAndMountCIFS(t *testing.T) {
 	tests := []struct {
-		name    string
-		setup   func(*mountShareFixtureSetup)
-		wantErr string
+		name       string
+		setup      func(*mountShareFixtureSetup)
+		wantErr    string
+		wantResult string
 	}{
 		{
-			name:    "缺少 sudo 凭据",
-			setup:   func(setup *mountShareFixtureSetup) { setup.sudo = false },
-			wantErr: "服务器条目没有配置 sudo 凭据，请先由 owner 配置 sudo",
+			name:       "缺少 sudo 凭据",
+			setup:      func(setup *mountShareFixtureSetup) { setup.sudo = false },
+			wantErr:    "服务器条目没有配置 sudo 凭据，请先由 owner 配置 sudo",
+			wantResult: "missing-sudo",
 		},
 		{
-			name:    "缺少 mount.cifs",
-			setup:   func(setup *mountShareFixtureSetup) { setup.missingMountCIFS = true },
-			wantErr: "目标服务器缺少 mount.cifs，请先由 owner 安装 cifs-utils；挂载工具不会自动安装",
+			name:       "缺少 mount.cifs",
+			setup:      func(setup *mountShareFixtureSetup) { setup.missingMountCIFS = true },
+			wantErr:    "目标服务器缺少 mount.cifs，请先由 owner 安装 cifs-utils；挂载工具不会自动安装",
+			wantResult: "missing-software",
 		},
 	}
 	for _, testCase := range tests {
@@ -1987,48 +2064,61 @@ func TestMountShareLinuxMissingSudoAndMountCIFS(t *testing.T) {
 			if len(rows) != 1 || rows[0].Status != "error" {
 				t.Fatalf("失败审计 = %+v", rows)
 			}
+			var summary map[string]any
+			if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
+				t.Fatal(err)
+			}
+			if summary["result"] != testCase.wantResult {
+				t.Fatalf("%s 的审计分类 = %v，期待 %q（摘要 %#v）",
+					testCase.name, summary["result"], testCase.wantResult, summary)
+			}
 		})
 	}
 }
 
 func TestMountShareAuthorizationFailures(t *testing.T) {
 	tests := []struct {
-		name    string
-		setup   func(*mountShareFixtureSetup)
-		share   string
-		wantErr string
+		name       string
+		setup      func(*mountShareFixtureSetup)
+		share      string
+		wantErr    string
+		wantResult string
+		// wantNoVersion 表示共享不可见时审计摘要不应携带版本字段。
+		wantNoVersion bool
 	}{
 		{
-			name:  "服务器不在 profile 内",
-			share: "datasets",
+			name: "服务器不在 profile 内", share: "datasets",
 			setup: func(setup *mountShareFixtureSetup) {
 				setup.targetOutOfProfile = true
 			},
-			wantErr: "共享存储或服务器不存在",
+			wantErr:    "共享存储或服务器不存在",
+			wantResult: "not-found",
+			// 服务器不在 profile 内时共享本身可见，版本号仍记录真实值。
 		},
 		{
-			name:  "共享对 profile 不可见",
-			share: "datasets",
+			name: "共享对 profile 不可见", share: "datasets",
 			setup: func(setup *mountShareFixtureSetup) {
 				setup.shareInvisible = true
 			},
-			wantErr: "共享存储或服务器不存在",
+			wantErr:       "共享存储或服务器不存在",
+			wantResult:    "not-found",
+			wantNoVersion: true,
 		},
 		{
-			name:  "服务器不在可写入列表内",
-			share: "datasets",
+			name: "服务器不在可写入列表内", share: "datasets",
 			setup: func(setup *mountShareFixtureSetup) {
 				setup.notWritable = true
 			},
-			wantErr: "服务器不在挂载密码机密项的可写入服务器列表内，请先由 owner 把服务器加入该机密项的可写入服务器列表",
+			wantErr:    "服务器不在挂载密码机密项的可写入服务器列表内，请先由 owner 把服务器加入该机密项的可写入服务器列表",
+			wantResult: "not-in-writable-servers",
 		},
 		{
-			name:  "Windows 服务器",
-			share: "datasets",
+			name: "Windows 服务器", share: "datasets",
 			setup: func(setup *mountShareFixtureSetup) {
 				setup.windowsTarget = true
 			},
-			wantErr: "Windows 服务器不能持久挂载共享存储；网络盘符由每条命令执行前的会话内注入提供，不需要 mount_share",
+			wantErr:    "Windows 服务器不能持久挂载共享存储；网络盘符由每条命令执行前的会话内注入提供，不需要 mount_share",
+			wantResult: "windows-unsupported",
 		},
 	}
 	for _, testCase := range tests {
@@ -2051,6 +2141,17 @@ func TestMountShareAuthorizationFailures(t *testing.T) {
 			if len(rows) != 1 || rows[0].Status != "error" ||
 				strings.Contains(rows[0].Command, mountShareTestPassword) {
 				t.Fatalf("失败审计 = %+v", rows)
+			}
+			var summary map[string]any
+			if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
+				t.Fatal(err)
+			}
+			if summary["result"] != testCase.wantResult {
+				t.Fatalf("%s 的审计分类 = %v，期待 %q（摘要 %#v）",
+					testCase.name, summary["result"], testCase.wantResult, summary)
+			}
+			if _, hasVersion := summary["version"]; testCase.wantNoVersion && hasVersion {
+				t.Fatalf("%s 共享不可见时审计不应携带版本字段：%#v", testCase.name, summary)
 			}
 		})
 	}

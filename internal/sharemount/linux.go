@@ -29,15 +29,26 @@ const (
 func linuxMountExitCodeError(exitCode int) error {
 	switch exitCode {
 	case linuxExitMissingCIFS:
-		return errors.New("目标服务器缺少 mount.cifs，请先由 owner 安装 cifs-utils；挂载工具不会自动安装")
+		return mountFailure(MountClassMissingSoftware, errors.New(
+			"目标服务器缺少 mount.cifs，请先由 owner 安装 cifs-utils；挂载工具不会自动安装"))
 	case linuxExitProtocolFailed:
-		return errors.New("SMB 协议版本 3.1.1、3.0、2.1、2.0 全部试挂失败，未写入 fstab 配置")
+		return mountFailure(MountClassProtocolFailed, errors.New(
+			"SMB 协议版本 3.1.1、3.0、2.1、2.0 全部试挂失败，未写入 fstab 配置"))
+	case linuxExitTrialUnmountFailed:
+		return mountFailure(MountClassUnmountFailed, errors.New(
+			"临时挂载点卸载失败，未改写任何正式挂载配置"))
 	case linuxExitVerifyFailed:
-		return errors.New("Linux 挂载点验证失败，不能确认共享已可用")
+		return mountFailure(MountClassVerifyFailed, errors.New(
+			"Linux 挂载点验证失败，不能确认共享已可用"))
 	case linuxExitLockTimeout:
-		return errors.New("另一个挂载正在进行，请稍后再试")
+		return mountFailure(MountClassLockTimeout, errors.New(
+			"另一个挂载正在进行，请稍后再试"))
 	case linuxExitRemoteNewer:
-		return errors.New("目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具")
+		return mountFailure(MountClassRemoteVersionNewer, errors.New(
+			"目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具"))
+	case linuxExitInvalidFstab:
+		return mountFailure(MountClassError, errors.New(
+			"目标服务器上的 sshmgr fstab 条目无法解析，请 owner 检查后再试"))
 	default:
 		return nil
 	}

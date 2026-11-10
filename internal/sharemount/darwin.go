@@ -27,17 +27,23 @@ const (
 func darwinMountExitCodeError(exitCode int) error {
 	switch exitCode {
 	case darwinExitMissingCommand:
-		return errors.New("目标服务器缺少 automount，请先由 owner 修复 macOS 系统组件；挂载工具不会自动安装")
+		return mountFailure(MountClassMissingSoftware, errors.New(
+			"目标服务器缺少 automount，请先由 owner 修复 macOS 系统组件；挂载工具不会自动安装"))
 	case darwinExitUnmountFailed:
-		return errors.New("macOS 卸载旧挂载失败，请 owner 手动检查后重试")
+		return mountFailure(MountClassUnmountFailed, errors.New(
+			"macOS 卸载旧挂载失败，请 owner 手动检查后重试"))
 	case darwinExitVerifyFailed:
-		return errors.New("macOS 挂载点验证失败，不能确认共享已可用")
+		return mountFailure(MountClassVerifyFailed, errors.New(
+			"macOS 挂载点验证失败，不能确认共享已可用"))
 	case darwinExitLockTimeout:
-		return errors.New("另一个挂载正在进行，请稍后再试")
+		return mountFailure(MountClassLockTimeout, errors.New(
+			"另一个挂载正在进行，请稍后再试"))
 	case darwinExitRemoteNewer:
-		return errors.New("目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具")
+		return mountFailure(MountClassRemoteVersionNewer, errors.New(
+			"目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具"))
 	case darwinExitInvalidConfig:
-		return errors.New("目标服务器上的 sshmgr autofs 配置不合法，请 owner 检查后再试")
+		return mountFailure(MountClassError, errors.New(
+			"目标服务器上的 sshmgr autofs 配置无法解析，请 owner 检查后再试"))
 	default:
 		return nil
 	}

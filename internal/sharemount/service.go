@@ -131,10 +131,11 @@ func (s *Service) Mount(parent context.Context, request Request) (*Result, error
 
 	systemResult, err := s.exec(ctx, request.Server, RemoteExecRequest{Command: "uname -s"})
 	if err != nil {
-		return nil, fmt.Errorf("识别目标服务器操作系统失败：%w", sanitizedExecError(err))
+		return nil, mountFailure(MountClassSSHError, fmt.Errorf(
+			"识别目标服务器操作系统失败：%w", sanitizedExecError(err)))
 	}
 	if request.Server.SudoCredentialID == "" {
-		return nil, ErrNoSudo
+		return nil, mountFailure(MountClassMissingSudo, ErrNoSudo)
 	}
 	switch strings.TrimSpace(systemResult.Stdout) {
 	case "Linux":
@@ -142,7 +143,7 @@ func (s *Service) Mount(parent context.Context, request Request) (*Result, error
 	case "Darwin":
 		return s.mountDarwin(ctx, request)
 	default:
-		return nil, ErrUnsupportedSystem
+		return nil, mountFailure(MountClassUnsupportedSystem, ErrUnsupportedSystem)
 	}
 }
 
@@ -195,7 +196,7 @@ func (s *Service) mountWithSystem(
 	ctx context.Context, request Request, flow systemMountFlow,
 ) (*Result, error) {
 	if !safeMountShareName(request.Share.Name) {
-		return nil, flow.unsafeNameError
+		return nil, mountFailure(MountClassError, flow.unsafeNameError)
 	}
 	selection, err := s.selectCandidate(ctx, request.Server, request.Share)
 	if err != nil {
@@ -209,7 +210,8 @@ func (s *Service) mountWithSystem(
 		Command: command, Privileged: true, StandardInput: standardInput,
 	})
 	if execErr != nil {
-		return nil, fmt.Errorf("%s 固定挂载命令执行失败：%w", flow.systemName, sanitizedExecError(execErr))
+		return nil, mountFailure(MountClassSSHError, fmt.Errorf(
+			"%s 固定挂载命令执行失败：%w", flow.systemName, sanitizedExecError(execErr)))
 	}
 	if result.ExitCode != 0 {
 		if exitErr := flow.exitCodeError(result.ExitCode); exitErr != nil {
@@ -251,7 +253,7 @@ func (s *Service) selectCandidate(
 	ctx context.Context, server *models.Server, share *models.SharedStorage,
 ) (*Selection, error) {
 	if server.DeviceID == "" {
-		return nil, ErrTargetWithoutDevice
+		return nil, mountFailure(MountClassNoDevice, ErrTargetWithoutDevice)
 	}
 	targetDevice, err := s.Store.GetDeviceByID(server.DeviceID)
 	if err != nil {
@@ -293,7 +295,8 @@ func (s *Service) selectCandidate(
 	}
 	result, execErr := s.exec(ctx, server, RemoteExecRequest{Command: command})
 	if execErr != nil {
-		return nil, fmt.Errorf("候选地址探测失败：%w", sanitizedExecError(execErr))
+		return nil, mountFailure(MountClassSSHError, fmt.Errorf(
+			"候选地址探测失败：%w", sanitizedExecError(execErr)))
 	}
 	results := probe.ParseShellProbeOutput(result.Stdout, len(items))
 	reachable := make([]*Candidate, 0, len(results))

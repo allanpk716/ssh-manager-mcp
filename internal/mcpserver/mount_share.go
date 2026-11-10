@@ -22,6 +22,10 @@ var errMountShareNotFound = errors.New("共享存储或服务器不存在")
 var errMountShareNotWritable = errors.New(
 	"服务器不在挂载密码机密项的可写入服务器列表内，请先由 owner 把服务器加入该机密项的可写入服务器列表")
 
+// errMountShareWindowsUnsupported 是目标服务器为 Windows 时的固定报错。
+var errMountShareWindowsUnsupported = errors.New(
+	"Windows 服务器不能持久挂载共享存储；网络盘符由每条命令执行前的会话内注入提供，不需要 mount_share")
+
 // MountShareSnapshotSyncer 是客户端缓存面注入的挂载前快照保鲜能力：向
 // 权威端查询快照修订号，本地落后就先同步。具体实现由客户端操作包提供
 // （那里才有权威端请求入口）；nil 表示单机与权威端，挂载前没有这一步。
@@ -82,12 +86,13 @@ func MountShareForProfile(
 	var server *models.Server
 	var mountResult *sharemount.Result
 	snapshotMayBeStale := false
-	var mountErr error
 	defer func() {
 		if err != nil && snapshotMayBeStale {
 			err = fmt.Errorf("%w；挂载前未能同步权威端快照，本地快照可能过期，请确认权威端可达后重试", err)
 		}
-		summary := map[string]any{"share": shareName, "version": int64(0), "result": "error"}
+		summary := map[string]any{
+			"share": shareName, "result": mountShareAuditResult(err, mountResult),
+		}
 		var serverID, networkName string
 		sequence := 0
 		if share != nil {
@@ -99,20 +104,20 @@ func MountShareForProfile(
 		if mountResult != nil {
 			networkName = mountResult.Network
 			sequence = mountResult.NetworkSequence
+			if summary["result"] == "success" {
+				summary["action"] = mountResult.Action
+			}
 			notes := mountShareResultNotes(mountResult)
 			selectionNotes := mountShareSelectionNotes(mountResult)
 			if len(notes) > 0 {
 				summary["mount_notes"] = notes
 			}
 			if mountResult.Action == "first-mount-success" && len(selectionNotes) > 0 {
-				summary["result"] = "virtual-network-fallback"
-			} else {
-				summary["result"] = mountResult.Action
+				summary["network_fallback"] = "virtual-network"
 			}
 		}
 		var selectionFailure *sharemount.SelectionFailure
-		if errors.As(mountErr, &selectionFailure) {
-			summary["result"] = "address-selection-error"
+		if errors.As(err, &selectionFailure) {
 			summary["selection_error"] = selectionFailure.Reason
 			summary["provider_networks"] = selectionFailure.ProviderNetworks
 			summary["target_networks"] = selectionFailure.TargetNetworks
@@ -155,6 +160,7 @@ func MountShareForProfile(
 	if !shareVisible {
 		return nil, errMountShareNotFound
 	}
+	share = found
 
 	server, err = st.ResolveGrantedServer(profileID, serverIdentifier)
 	if err != nil || server == nil {
@@ -164,7 +170,7 @@ func MountShareForProfile(
 		return nil, errMountShareNotWritable
 	}
 	if models.NormalizeShellType(string(server.ShellType)).IsWindows() {
-		return nil, errors.New("Windows 服务器不能持久挂载共享存储；网络盘符由每条命令执行前的会话内注入提供，不需要 mount_share")
+		return nil, errMountShareWindowsUnsupported
 	}
 
 	secretValue, err := st.SecretValueForSharedStorageMount(found.PasswordSecretID)
@@ -186,12 +192,10 @@ func MountShareForProfile(
 	service := &sharemount.Service{
 		Store: st, Instance: bridgeCacheInstance(), HostKeys: hk,
 	}
-	share = found
 	mountResult, err = service.Mount(ctx, sharemount.Request{
 		Share: found, Server: server, Password: append([]byte(nil), password...),
 	})
 	if err != nil {
-		mountErr = err
 		return nil, err
 	}
 	status = "ok"
@@ -216,6 +220,44 @@ func MountShareForProfile(
 func mountShareResultNotes(result *sharemount.Result) []string {
 	notes := mountShareSelectionNotes(result)
 	return append(notes, result.Notices...)
+}
+
+// mountShareAuditResult 返回 mount-share 审计的固定结果分类。分类只由类
+// 型化错误与成功结论推导，不匹配错误文本；成功时的具体动作（首次、改
+// 写、重新挂载）另记在 action 字段，无需改动单独成类。
+func mountShareAuditResult(err error, result *sharemount.Result) string {
+	if result != nil {
+		if result.Action == "no-change" {
+			return "no-change"
+		}
+		return "success"
+	}
+	if err == nil {
+		return "error"
+	}
+	if errors.Is(err, errMountShareNotFound) {
+		return "not-found"
+	}
+	if errors.Is(err, errMountShareNotWritable) {
+		return "not-in-writable-servers"
+	}
+	if errors.Is(err, errMountShareWindowsUnsupported) {
+		return "windows-unsupported"
+	}
+	var selectionFailure *sharemount.SelectionFailure
+	if errors.As(err, &selectionFailure) {
+		switch selectionFailure.Reason {
+		case sharemount.SelectionErrorNoCommonNetwork:
+			return "no-common-network"
+		case sharemount.SelectionErrorAllCandidatesFailed:
+			return "all-candidates-unreachable"
+		}
+	}
+	var mountFailure *sharemount.MountFailure
+	if errors.As(err, &mountFailure) {
+		return mountFailure.Class
+	}
+	return "error"
 }
 
 // ensureMountShareSnapshotFresh 在客户端上执行挂载前的快照保鲜：先让同步
