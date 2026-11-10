@@ -64,7 +64,10 @@ func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (st
 		if mapStatus == "" {
 			mapStatus = "ok"
 		}
-		stdout := fmt.Sprintf("SSHMGR-SMBMAP:%s:0:%s\n", markerMatch[1], mapStatus)
+		stdout := ""
+		if mapStatus != "missing" {
+			stdout = fmt.Sprintf("SSHMGR-SMBMAP:%s:0:%s\n", markerMatch[1], mapStatus)
+		}
 		return stdout + "user-command-output\n", "", 0
 	}
 	return "plain-command-output\n", "", 0
@@ -316,5 +319,166 @@ func TestNetworkDriveInjectionExecCommandPowerShell(t *testing.T) {
 		strings.Contains(string(encoded), "192.0.2.10") ||
 		strings.Contains(string(encoded), "mount-user") {
 		t.Fatalf("audit row leaked the address, account, or password: %s", encoded)
+	}
+}
+
+// TestNetworkDriveInjectionSkipsServerOutsideWritableList 钉住授权边界：不
+// 在挂载密码机密项可写入服务器列表内的 Windows 服务器不探测、不映射、行
+// 为与没有共享登记时完全一致。
+func TestNetworkDriveInjectionSkipsServerOutsideWritableList(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.notWritable = true
+	})
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": "Get-Location"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	var output struct {
+		Stdout                string `json:"stdout"`
+		InjectedNetworkDrives []any  `json:"injected_network_drives"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if output.Stdout != "plain-command-output\n" {
+		t.Fatalf("stdout = %q", output.Stdout)
+	}
+	if len(output.InjectedNetworkDrives) != 0 {
+		t.Fatalf("injected_network_drives = %#v", output.InjectedNetworkDrives)
+	}
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 1 {
+		t.Fatalf("remote commands = %#v, want only the user command", commands)
+	}
+	if strings.Contains(commands[0], "New-SmbMapping") || strings.Contains(commands[0], "probe-one") {
+		t.Fatalf("server outside the writable list received an injection step: %q", commands[0])
+	}
+	if len(inputs[0]) != 0 {
+		t.Fatalf("standard input = %q, want empty", inputs[0])
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || len(rows[0].InjectedShareNames) != 0 {
+		t.Fatalf("audit rows = %#v", rows)
+	}
+}
+
+// TestNetworkDriveInjectionLeavesPosixServerUnchanged 钉住非 Windows 服务器
+// 的行为边界：即使在可写名单内也不探测、不映射、不改变命令与输出。
+func TestNetworkDriveInjectionLeavesPosixServerUnchanged(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.posixTarget = true
+	})
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": "ls /mnt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command failed: %+v", result.Content)
+	}
+	var output struct {
+		Stdout                string `json:"stdout"`
+		InjectedNetworkDrives []any  `json:"injected_network_drives"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if output.Stdout != "plain-command-output\n" {
+		t.Fatalf("stdout = %q", output.Stdout)
+	}
+	if len(output.InjectedNetworkDrives) != 0 {
+		t.Fatalf("injected_network_drives = %#v", output.InjectedNetworkDrives)
+	}
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 1 {
+		t.Fatalf("remote commands = %#v, want only the user command", commands)
+	}
+	if strings.Contains(commands[0], "New-SmbMapping") || strings.Contains(commands[0], "probe-one") {
+		t.Fatalf("POSIX server received a Windows injection step: %q", commands[0])
+	}
+	if len(inputs[0]) != 0 {
+		t.Fatalf("standard input = %q, want empty", inputs[0])
+	}
+}
+
+// TestNetworkDriveInjectionMappingFailureWarnsWithoutBlocking 覆盖映射失败：
+// 用户命令照常执行、退出码不变，警告按原因区分并附在标准输出末尾，状态
+// 行标记与密码都不出现在任何返回里。
+func TestNetworkDriveInjectionMappingFailureWarnsWithoutBlocking(t *testing.T) {
+	cases := []struct {
+		name       string
+		mapStatus  string
+		wantOutput string
+	}{
+		{
+			name:       "drive letter taken",
+			mapStatus:  "error-85",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：盘符 S: 在这台服务器上已被占用\n",
+		},
+		{
+			name:       "mapping timeout",
+			mapStatus:  "timeout",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：映射超时（3 秒上限），按网络类失败处理\n",
+		},
+		{
+			name:       "missing status line",
+			mapStatus:  "missing",
+			wantOutput: "user-command-output\n共享 datasets 的网络盘符 S: 未注入：注入步骤没有返回状态行\n",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+				setup.mapStatus = testCase.mapStatus
+			})
+			result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+				Name:      "exec_command",
+				Arguments: map[string]any{"server_id": fixture.serverID, "command": "Get-ChildItem S:\\"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.IsError {
+				t.Fatalf("exec_command failed: %+v", result.Content)
+			}
+			var output struct {
+				Stdout                string `json:"stdout"`
+				Stderr                string `json:"stderr"`
+				ExitCode              int    `json:"exit_code"`
+				InjectedNetworkDrives []any  `json:"injected_network_drives"`
+			}
+			unmarshalToolJSON(t, result, &output)
+			if output.Stdout != testCase.wantOutput {
+				t.Fatalf("stdout = %q, want %q", output.Stdout, testCase.wantOutput)
+			}
+			if output.Stderr != "" || output.ExitCode != 0 {
+				t.Fatalf("mapping failure changed the command outcome: stderr=%q exit=%d", output.Stderr, output.ExitCode)
+			}
+			if len(output.InjectedNetworkDrives) != 0 {
+				t.Fatalf("injected_network_drives = %#v", output.InjectedNetworkDrives)
+			}
+			if strings.Contains(toolResultText(result), networkDriveTestPassword) {
+				t.Fatal("tool result leaked the mount password")
+			}
+			if markerMatch := driveStatusMarkerPattern.FindString(output.Stdout + output.Stderr); markerMatch != "" {
+				t.Fatalf("output leaked a status marker: %q", markerMatch)
+			}
+			rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 || len(rows[0].InjectedShareNames) != 0 {
+				t.Fatalf("audit rows = %#v", rows)
+			}
+		})
 	}
 }

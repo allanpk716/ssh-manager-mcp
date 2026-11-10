@@ -234,7 +234,8 @@ func networkDriveSelectAddress(
 			Address: candidate.Address, Port: sharemount.SMBPort, Timeout: addressTimeout,
 		})
 	}
-	command, err := probe.BuildShellProbeCommand(models.ShellPowerShell, items)
+	command, err := probe.BuildShellProbeCommand(
+		models.NormalizeShellType(string(server.ShellType)), items)
 	if err != nil {
 		return "", networkDriveReasonProbeFailed
 	}
