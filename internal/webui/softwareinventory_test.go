@@ -96,6 +96,7 @@ type stubSoftwareInventorySource struct {
 	collectorCall  bool
 	sudoServer     string
 	sudoEnabled    bool
+	sudoErr        error
 	sudoAddress    string
 	sudoCalled     bool
 }
@@ -224,7 +225,7 @@ func (s *stubSoftwareInventorySource) SetSoftwareInventorySudo(
 	s.sudoServer = server
 	s.sudoEnabled = enabled
 	s.sudoAddress = source.RemoteAddress
-	return nil
+	return s.sudoErr
 }
 
 // TestSoftwareInventorySearchListsDevices 覆盖跨设备搜索：按软件名返回每台
@@ -616,6 +617,33 @@ func TestSoftwareInventorySettingsShowsCollectorValidationError(t *testing.T) {
 	}
 	if !source.collectorCall || source.collectorAddr != "198.51.100.9" {
 		t.Fatalf("采集执行者登记应交给来源接口：%+v", source)
+	}
+}
+
+// TestSoftwareInventorySudoValidationErrorRendersForm 验证不存在的服务器条
+// 目返回表单错误，而不是内部错误页。
+func TestSoftwareInventorySudoValidationErrorRendersForm(t *testing.T) {
+	source := &stubSoftwareInventorySource{settings: SoftwareInventorySettings{
+		Servers: []SoftwareInventorySettingsServer{{Name: "web-1", DeviceName: "工作站"}},
+	}, sudoErr: &SoftwareInventoryFormError{Message: "服务器条目 \"missing\" 不存在"}}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+	page := doGetWithCookie(t, handler, cookie, "/ui/software-inventory/settings")
+	pageBody := readResponseBody(t, page)
+	csrf := hiddenInputMetaOrHiddenValue(t, pageBody)
+
+	response := postSoftwareInventoryForm(t, handler, cookie, "/ui/software-inventory/settings/sudo", url.Values{
+		"csrf_token": {csrf}, "server_entry": {"missing"}, "sudo_enabled": {"0"},
+	})
+	responseBody := readResponseBody(t, response)
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("sudo 表单校验失败应返回 400，实际 %d：\n%s", response.StatusCode, responseBody)
+	}
+	if !strings.Contains(responseBody, "软件清单采集设置") ||
+		!strings.Contains(responseBody, "服务器条目 &#34;missing&#34; 不存在") {
+		t.Fatalf("sudo 表单错误页缺少设置页与原因：\n%s", responseBody)
+	}
+	if !source.sudoCalled || source.sudoServer != "missing" {
+		t.Fatalf("sudo 设置应交给来源接口：%+v", source)
 	}
 }
 

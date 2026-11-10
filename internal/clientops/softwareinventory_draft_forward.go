@@ -5,9 +5,8 @@ package clientops
 // 不可达时固定报错，不排队、不留本地状态。
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 
@@ -62,54 +61,45 @@ func (f *SoftwareInventoryForwarder) DraftSoftwareDeclarations(
 	if err != nil {
 		return emptyDraftOutput(), draftUnreachableError(err)
 	}
-	request, err := http.NewRequest(
-		http.MethodPost, f.url+"/software-declaration-drafts", bytes.NewReader(body),
+	response, err := softwareInventoryForwardRequest(
+		context.Background(), f.client, f.url, f.code,
+		"/software-declaration-drafts", body,
+		SoftwareDeclarationDraftsUnreachableText,
+		func(response *http.Response) error {
+			switch response.StatusCode {
+			case http.StatusOK:
+				return nil
+			case http.StatusBadRequest:
+				reason := softwareInventoryResponseReason(response.Body)
+				if reason == "" {
+					reason = "权威端拒绝了这批声明草稿"
+				}
+				return &softwareInventoryError{
+					text: reason, err: httpStatusError(response.StatusCode),
+				}
+			case http.StatusUnauthorized:
+				return &softwareInventoryError{text: softwareDeclarationDraftsRejectedText}
+			case http.StatusForbidden:
+				return &softwareInventoryError{text: softwareDeclarationDraftsForbiddenText}
+			case http.StatusNotFound:
+				return &softwareInventoryError{text: softwareDeclarationDraftsUnsupportedText}
+			default:
+				return softwareInventoryHTTPUnreachable(response, SoftwareDeclarationDraftsUnreachableText)
+			}
+		},
 	)
 	if err != nil {
-		return emptyDraftOutput(), draftUnreachableError(err)
-	}
-	setAuthorityRequestHeaders(request, f.code)
-	response, err := f.client.Do(request)
-	if err != nil {
-		return emptyDraftOutput(), draftUnreachableError(err)
+		return emptyDraftOutput(), err
 	}
 	defer response.Body.Close()
-	switch response.StatusCode {
-	case http.StatusOK:
-		var payload struct {
-			DraftIDs []string `json:"draft_ids"`
-		}
-		if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload); err != nil {
-			return emptyDraftOutput(), draftUnreachableError(err)
-		}
-		if payload.DraftIDs == nil {
-			payload.DraftIDs = []string{}
-		}
-		return mcpserver.DraftSoftwareDeclarationsOutput{DraftIDs: payload.DraftIDs}, nil
-	case http.StatusBadRequest:
-		var payload struct {
-			Error string `json:"error"`
-		}
-		_ = json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&payload)
-		text := payload.Error
-		if text == "" {
-			text = "权威端拒绝了这批声明草稿"
-		}
-		return emptyDraftOutput(), &softwareInventoryError{
-			text: text,
-			err:  fmt.Errorf("authority returned %s", http.StatusText(response.StatusCode)),
-		}
-	case http.StatusUnauthorized:
-		return emptyDraftOutput(), &softwareInventoryError{text: softwareDeclarationDraftsRejectedText}
-	case http.StatusForbidden:
-		return emptyDraftOutput(), &softwareInventoryError{text: softwareDeclarationDraftsForbiddenText}
-	case http.StatusNotFound:
-		return emptyDraftOutput(), &softwareInventoryError{text: softwareDeclarationDraftsUnsupportedText}
-	default:
-		return emptyDraftOutput(), &softwareInventoryError{
-			text:        SoftwareDeclarationDraftsUnreachableText,
-			err:         fmt.Errorf("authority returned %s", http.StatusText(response.StatusCode)),
-			unreachable: true,
-		}
+	var payload struct {
+		DraftIDs []string `json:"draft_ids"`
 	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload); err != nil {
+		return emptyDraftOutput(), draftUnreachableError(err)
+	}
+	if payload.DraftIDs == nil {
+		payload.DraftIDs = []string{}
+	}
+	return mcpserver.DraftSoftwareDeclarationsOutput{DraftIDs: payload.DraftIDs}, nil
 }

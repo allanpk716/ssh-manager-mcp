@@ -76,7 +76,7 @@ func (r *ServeRunner) handleSoftwareInventoryAssignments(w http.ResponseWriter, 
 	for _, id := range granted {
 		grantedSet[id] = true
 	}
-	assignments, err := r.st.SoftwareCollectionAssignments(ct.Name, time.Now())
+	assignments, err := r.st.SoftwareCollectionAssignments(models.ClientCollector(ct.ID), time.Now())
 	if err != nil {
 		http.Error(w, "assignment lookup failed", http.StatusInternalServerError)
 		return
@@ -161,7 +161,7 @@ func (r *ServeRunner) handleSoftwareInventoryResults(w http.ResponseWriter, req 
 		http.Error(w, "collection status lookup failed", http.StatusInternalServerError)
 		return
 	}
-	if status.Collector != ct.Name {
+	if !status.Collector.IsClient() || status.Collector.CacheTokenID != ct.ID {
 		http.Error(w, "设备码 "+ct.Name+" 不是这台设备登记的采集执行者", http.StatusForbidden)
 		return
 	}
@@ -176,7 +176,8 @@ func (r *ServeRunner) handleSoftwareInventoryResults(w http.ResponseWriter, req 
 	}
 	if in.Failed {
 		if err := r.st.RecordSoftwareCollectionFailureFromCollector(
-			device.Name, ct.Name, in.Error, server.ID, in.Sudo, store.CLISource(),
+			device.Name, models.ClientCollector(ct.ID), in.Error, server.ID, in.Sudo,
+			store.ForwardedWriteSource(ct.ID),
 		); err != nil {
 			http.Error(w, "collection failure landing failed", http.StatusInternalServerError)
 			return
@@ -185,10 +186,10 @@ func (r *ServeRunner) handleSoftwareInventoryResults(w http.ResponseWriter, req 
 		return
 	}
 	if err := r.st.ReplaceSoftwareObservedItems(device.Name, store.SoftwareObservedWrite{
-		Collector: ct.Name, Items: nonNilItems(in.Items), ServerID: server.ID,
+		Collector: models.ClientCollector(ct.ID), Items: nonNilItems(in.Items), ServerID: server.ID,
 		Sudo: in.Sudo, CommandSetVersion: in.CommandSetVersion,
 		SystemType: in.SystemType, Incomplete: in.Incomplete,
-	}, store.CLISource()); err != nil {
+	}, store.ForwardedWriteSource(ct.ID)); err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: software-inventory result landing %s: %v\n", device.Name, err)
 		http.Error(w, "collection result landing failed", http.StatusInternalServerError)
 		return

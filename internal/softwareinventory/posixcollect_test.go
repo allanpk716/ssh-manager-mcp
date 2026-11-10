@@ -46,7 +46,7 @@ func TestCollectPOSIXSystemsThroughSQLite(t *testing.T) {
 			posixFixtureOutput(t, test.fixture), &recorded, nil,
 		)
 
-		report, err := service.Collect(context.Background(), CollectRequest{DeviceName: test.device})
+		report, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: test.device})
 		if err != nil {
 			t.Fatalf("%s 采集失败：%v", test.device, err)
 		}

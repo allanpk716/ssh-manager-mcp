@@ -30,8 +30,10 @@ type SoftwareInventorySettings struct {
 type SoftwareInventoryCollectorForm struct {
 	Device      string
 	Collector   string
+	Authority   bool
 	ServerEntry string
 	Error       string
+	SudoError   string
 }
 
 func (h *handler) handleSoftwareInventorySettings(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +58,18 @@ func (h *handler) handleSoftwareInventoryCollector(w http.ResponseWriter, r *htt
 	form := SoftwareInventoryCollectorForm{
 		Device:      strings.TrimSpace(r.PostFormValue("device")),
 		Collector:   strings.TrimSpace(r.PostFormValue("collector")),
+		Authority:   r.PostFormValue("collector_authority") == "1",
 		ServerEntry: strings.TrimSpace(r.PostFormValue("server_entry")),
+	}
+	if form.Authority && form.Collector != "" {
+		form.Error = "不能同时选择权威端和客户端实例，请只保留一种采集执行者。"
+		h.renderSoftwareInventorySettings(w, r, http.StatusBadRequest, form, "", false, false)
+		return
+	}
+	if !form.Authority && form.Collector == "" {
+		form.Error = "请选择权威端，或填写客户端实例的设备码名。"
+		h.renderSoftwareInventorySettings(w, r, http.StatusBadRequest, form, "", false, false)
+		return
 	}
 	if err := h.cfg.SoftwareInventory.SetSoftwareInventoryCollector(
 		form, SoftwareInventoryWriteSource{RemoteAddress: remoteIP(r)},
@@ -90,6 +103,14 @@ func (h *handler) handleSoftwareInventorySudo(w http.ResponseWriter, r *http.Req
 	if err := h.cfg.SoftwareInventory.SetSoftwareInventorySudo(
 		server, enabled, SoftwareInventoryWriteSource{RemoteAddress: remoteIP(r)},
 	); err != nil {
+		if message, ok := softwareInventoryFormMessage(err); ok {
+			form := SoftwareInventoryCollectorForm{SudoError: message}
+			h.renderSoftwareInventorySettings(
+				w, r, http.StatusBadRequest, form,
+				server, enabled, false,
+			)
+			return
+		}
 		h.renderError(w, r, http.StatusInternalServerError, "设置 sudo 采集开关失败", "设置 sudo 采集开关失败，请稍后重试。")
 		return
 	}

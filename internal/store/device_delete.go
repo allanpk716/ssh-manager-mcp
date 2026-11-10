@@ -31,10 +31,11 @@ type DeviceDeletePreview struct {
 	SecretServerAllows []*DeviceDeleteSecretAllow
 	Memberships        []*models.NetworkMembership
 	LayoutCoordinates  []*models.DeviceLayoutCoordinate
-	// 软件清单相关数量。第一张清单票只有声明；SoftwareItemCount 保留给
-	// 后续实测与声明合成后的条目总数；实测条目与变化历史各自计数。
+	// 软件清单相关数量。SoftwareItemCount 是实测与生效声明合成后的条目
+	// 总数；声明数包含草稿；其余对象各自计数。
 	SoftwareItemCount          int
 	SoftwareDeclarationCount   int
+	SoftwareCollectorCount     int
 	SoftwareListeningPortCount int
 	SoftwareObservedItemCount  int
 	SoftwareChangeHistoryCount int
@@ -126,50 +127,86 @@ func deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePreview, error
 	if err != nil {
 		return nil, err
 	}
-	softwareItemCount, softwareDeclarationCount, softwarePortCount,
-		softwareObservedCount, softwareHistoryCount, err := deviceSoftwareCountsTx(tx, device.ID)
+	softwareCounts, err := deviceSoftwareCountsTx(tx, device.ID)
 	if err != nil {
 		return nil, err
 	}
 	return &DeviceDeletePreview{
 		Device: device, Servers: servers, SecretServerAllows: secretAllows,
 		Memberships: memberships, LayoutCoordinates: coordinates,
-		SoftwareItemCount: softwareItemCount, SoftwareDeclarationCount: softwareDeclarationCount,
-		SoftwareListeningPortCount: softwarePortCount,
-		SoftwareObservedItemCount:  softwareObservedCount,
-		SoftwareChangeHistoryCount: softwareHistoryCount,
+		SoftwareItemCount: softwareCounts.Items, SoftwareDeclarationCount: softwareCounts.Declarations,
+		SoftwareCollectorCount:     softwareCounts.Collectors,
+		SoftwareListeningPortCount: softwareCounts.ListeningPorts,
+		SoftwareObservedItemCount:  softwareCounts.ObservedItems,
+		SoftwareChangeHistoryCount: softwareCounts.ChangeHistory,
 	}, nil
 }
 
-// deviceSoftwareCountsTx 统计设备删除预览需要的软件清单数量。
-func deviceSoftwareCountsTx(tx *sql.Tx, deviceID string) (int, int, int, int, int, error) {
-	var declarationCount, portCount int
+// deviceSoftwareCounts 统计设备删除预览需要的软件清单数量。
+type deviceSoftwareCounts struct {
+	Items          int
+	Declarations   int
+	Collectors     int
+	ListeningPorts int
+	ObservedItems  int
+	ChangeHistory  int
+}
+
+// deviceSoftwareCountsTx 统计设备删除预览需要的软件清单数量。合成条目数与
+// 统一查询一致：生效声明各一条，未被生效声明认领的实测条目各一条；草稿
+// 计入声明数，但还不是清单条目。
+func deviceSoftwareCountsTx(tx *sql.Tx, deviceID string) (deviceSoftwareCounts, error) {
+	var counts deviceSoftwareCounts
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_collection_status WHERE device_id=?`,
+		deviceID,
+	).Scan(&counts.Collectors); err != nil {
+		return counts, err
+	}
+	var activeDeclarations int
 	if err := tx.QueryRow(`
 		SELECT COUNT(*) FROM software_declarations WHERE device_id=? AND status='active'`,
 		deviceID,
-	).Scan(&declarationCount); err != nil {
-		return 0, 0, 0, 0, 0, err
+	).Scan(&activeDeclarations); err != nil {
+		return counts, err
+	}
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_declarations WHERE device_id=?`,
+		deviceID,
+	).Scan(&counts.Declarations); err != nil {
+		return counts, err
 	}
 	if err := tx.QueryRow(`
 		SELECT COUNT(*) FROM software_declaration_ports WHERE device_id=?`, deviceID,
-	).Scan(&portCount); err != nil {
-		return 0, 0, 0, 0, 0, err
+	).Scan(&counts.ListeningPorts); err != nil {
+		return counts, err
 	}
-	var observedCount int
 	if err := tx.QueryRow(`
-		SELECT COUNT(*) FROM software_observed_items WHERE device_id=?`, deviceID,
-	).Scan(&observedCount); err != nil {
-		return 0, 0, 0, 0, 0, err
+		SELECT COUNT(*) FROM software_observed_items WHERE device_id=?`,
+		deviceID,
+	).Scan(&counts.ObservedItems); err != nil {
+		return counts, err
 	}
-	var historyCount int
 	if err := tx.QueryRow(`
-		SELECT COUNT(*) FROM software_change_history WHERE device_id=?`, deviceID,
-	).Scan(&historyCount); err != nil {
-		return 0, 0, 0, 0, 0, err
+		SELECT COUNT(*) FROM software_observed_items observed
+		WHERE observed.device_id=?
+		  AND NOT EXISTS (
+			SELECT 1 FROM software_declarations declaration
+			WHERE declaration.device_id=observed.device_id
+			  AND declaration.claimed_observed_key=observed.stable_key
+			  AND declaration.status='active')`,
+		deviceID,
+	).Scan(&counts.Items); err != nil {
+		return counts, err
 	}
-	// 当前一条生效声明就是一条软件条目；后续实测与声明合成在同一数量上
-	// 继续扩展。
-	return declarationCount, declarationCount, portCount, observedCount, historyCount, nil
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM software_change_history WHERE device_id=?`,
+		deviceID,
+	).Scan(&counts.ChangeHistory); err != nil {
+		return counts, err
+	}
+	counts.Items += activeDeclarations
+	return counts, nil
 }
 
 // deviceServersForDeviceTx 返回设备关联的服务器条目摘要及锚状态，详情与
@@ -267,6 +304,9 @@ func deviceDeleteAuditSummary(preview *DeviceDeletePreview) map[string]any {
 	}
 	if preview.SoftwareDeclarationCount > 0 {
 		summary["software-declarations"] = preview.SoftwareDeclarationCount
+	}
+	if preview.SoftwareCollectorCount > 0 {
+		summary["software-collectors"] = preview.SoftwareCollectorCount
 	}
 	if preview.SoftwareListeningPortCount > 0 {
 		summary["software-listening-ports"] = preview.SoftwareListeningPortCount

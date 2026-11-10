@@ -376,12 +376,19 @@ func (s openerSource) SetSoftwareInventoryCollector(
 	}
 	defer done()
 	if err := st.SetSoftwareCollectionCollector(
-		form.Device, form.Collector, form.ServerEntry,
+		form.Device, collectorValueForSettings(form), form.ServerEntry,
 		store.WebUISource(source.RemoteAddress),
 	); err != nil {
 		return &webui.SoftwareInventoryFormError{Message: err.Error()}
 	}
 	return nil
+}
+
+func collectorValueForSettings(form webui.SoftwareInventoryCollectorForm) string {
+	if form.Authority {
+		return ""
+	}
+	return form.Collector
 }
 
 func (s openerSource) SetSoftwareInventorySudo(
@@ -392,9 +399,12 @@ func (s openerSource) SetSoftwareInventorySudo(
 		return err
 	}
 	defer done()
-	return st.SetSoftwareCollectSudo(
+	if err := st.SetSoftwareCollectSudo(
 		server, enabled, store.WebUISource(source.RemoteAddress),
-	)
+	); err != nil {
+		return &webui.SoftwareInventoryFormError{Message: err.Error()}
+	}
+	return nil
 }
 
 func searchItemAsQueryItem(item softwareinventory.Item) softwareinventory.QueryItem {
@@ -521,34 +531,18 @@ func (s openerSource) RequestSoftwareInventoryCollection(
 	}
 	defer done()
 	manager := softwareinventory.New(st)
-	statuses, err := manager.CollectionStatuses(softwareinventory.AllDevicesVisible(), deviceName)
-	if err != nil || len(statuses) != 1 {
-		if err == nil {
-			err = &webui.SoftwareInventoryDeviceNotFoundError{DeviceName: deviceName}
-		}
+	domainSource := softwareinventory.WebUISource(source.RemoteAddress)
+	outcome, err := manager.CollectForScope(
+		ctx, deviceName, softwareinventory.AllDevicesVisible(),
+		&softwareinventory.Service{Store: st}, domainSource,
+	)
+	if err != nil {
 		return webui.SoftwareInventoryCollectionResult{}, deviceError(deviceName, err)
 	}
-	domainSource := softwareinventory.WebUISource(source.RemoteAddress)
-	if collectorIsClient(statuses[0].Collector) {
-		if err := manager.RequestImmediateCollection(deviceName, domainSource); err != nil {
-			return webui.SoftwareInventoryCollectionResult{}, deviceError(deviceName, err)
-		}
+	if outcome.Requested {
 		return webui.SoftwareInventoryCollectionResult{Requested: true}, nil
 	}
-	service := &softwareinventory.Service{Store: st}
-	if _, err := service.Collect(ctx, softwareinventory.CollectRequest{
-		DeviceName: deviceName, Source: domainSource,
-	}); err != nil {
-		return webui.SoftwareInventoryCollectionResult{}, deviceError(deviceName, err)
-	}
 	return webui.SoftwareInventoryCollectionResult{}, nil
-}
-
-// collectorIsClient 是「这台设备是否由客户端实例采集」的唯一判断点。客
-// 户端实例执行者使用活动设备码的名字登记；合并采集执行者功能后仍只需
-// 要修改这里。
-func collectorIsClient(collector string) bool {
-	return collector != "" && collector != softwareinventory.CollectorAuthority
 }
 
 func deviceError(deviceName string, err error) error {

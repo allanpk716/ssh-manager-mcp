@@ -331,7 +331,8 @@ func TestCollectSoftwareInventoryClientCollectorRegistersRequest(t *testing.T) {
 	if err != nil || visibleServer == nil {
 		t.Fatalf("取可见设备服务器条目失败：%v %+v", err, visibleServer)
 	}
-	if _, _, err := st.AddCacheToken("mini6", profileID); err != nil {
+	mini6ID, _, err := st.AddCacheToken("mini6", profileID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetSoftwareCollectionCollector(
@@ -363,7 +364,7 @@ func TestCollectSoftwareInventoryClientCollectorRegistersRequest(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &output); err != nil {
 		t.Fatalf("解析输出失败：%v\n%s", err, text)
 	}
-	if !output.Requested || output.Collector != "mini6" {
+	if !output.Requested || output.Collector != mini6ID {
 		t.Fatalf("客户端实例采集的设备只应登记请求：%s", text)
 	}
 	status, err := st.SoftwareCollectionStatusForDevice("可见设备")

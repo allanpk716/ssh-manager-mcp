@@ -38,7 +38,7 @@ test("声明草稿确认后进入生效清单", async ({ page, standaloneUI }) =
   await page.getByRole("link", { name: "软件清单" }).click();
   await page.getByRole("link", { name: "工作站" }).click();
   await expect(page.getByRole("heading", { name: "工作站 · 软件清单" })).toBeVisible();
-  await expect(page.getByText("业务网关")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "业务网关" }).first()).toBeVisible();
 });
 
 test("声明草稿驳回后消失", async ({ page, standaloneUI }) => {
@@ -55,7 +55,7 @@ test("声明草稿驳回后消失", async ({ page, standaloneUI }) => {
 
 test("打开 sudo 采集开关要求重新验证并保留表单状态", async ({ page, authorityUI }) => {
   test.skip(test.info().project.name !== "desktop-chromium", "只在桌面浏览器等待重新验证时效");
-  test.setTimeout(310_000);
+  test.setTimeout(30_000);
   await openAuthorityUI(page, authorityUI, "browser-test-password");
 
   await page.getByRole("link", { name: "软件清单" }).click();
@@ -63,8 +63,8 @@ test("打开 sudo 采集开关要求重新验证并保留表单状态", async ({
   await page.getByLabel("服务器条目", { exact: true }).selectOption("web-1");
   await page.getByLabel("允许用 sudo 采集").check();
 
-  // 权威端登录也算最近验证过；等过 5 分钟后再提交，才会走到重新验证页。
-  await page.waitForTimeout(301_000);
+  // 端到端测试把重新验证窗口缩短到 100 毫秒；等它过期后再提交。
+  await page.waitForTimeout(1_000);
   await page.getByRole("button", { name: "保存 sudo 采集开关" }).click();
   await expect(page.getByRole("heading", { name: "重新验证" })).toBeVisible();
   await page.getByLabel("管理员口令").fill("browser-test-password");

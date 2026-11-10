@@ -167,6 +167,11 @@ func (s *Store) ConfirmSoftwareDeclarationDraft(
 			return nil, err
 		}
 	}
+	if err := writeSoftwareChangeHistoryTx(tx, targetDevice.ID, []models.SoftwareChangeEntry{
+		softwareDeclarationHistoryEntry(before.ID, desired, at),
+	}, at); err != nil {
+		return nil, err
+	}
 	action := "software-declaration-confirm"
 	summary := map[string]any{
 		"device": targetDevice.Name, "category": desired.Category.Label(),

@@ -94,7 +94,7 @@ func TestCollectLinuxFullFixture(t *testing.T) {
 	var recorded recordedExec
 	service.RemoteExec = replayCollectExec(fixtureOutput(t, "ubuntu2404-full.txt"), &recorded, nil)
 
-	report, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"})
+	report, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestCollectLinuxFullFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.LastSuccessAt != service.Now() || status.LastIncomplete || status.Collector != "authority" ||
+	if status.LastSuccessAt != service.Now() || status.LastIncomplete || status.Collector.IsClient() ||
 		status.LastServerName != "entry-a" || status.SystemType != "ubuntu" {
 		t.Fatalf("采集状态 = %+v", status)
 	}
@@ -158,7 +158,7 @@ func TestCollectLinuxFullFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	if summary["device"] != "工作站" || summary["server"] != "entry-a" ||
-		summary["collector"] != "authority" || summary["sudo"] != false || summary["result"] != "ok" {
+		summary["collector"] != "" || summary["sudo"] != false || summary["result"] != "ok" {
 		t.Fatalf("采集审计摘要 = %v", summary)
 	}
 }
@@ -213,6 +213,7 @@ func TestCollectWindowsFullFixtureForEachShell(t *testing.T) {
 		var recorded recordedExec
 		service.RemoteExec = replayCollectExec(windowsFixtureOutput(t, test.fixture), &recorded, nil)
 		report, err := service.Collect(context.Background(), CollectRequest{
+			Source:     CLISource(),
 			DeviceName: test.device, ServerEntry: test.serverEntry,
 		})
 		if err != nil {
@@ -255,7 +256,7 @@ func TestCollectWindowsNoProcessNamesFixture(t *testing.T) {
 		windowsFixtureOutput(t, "win10-cmd-no-process-names-derived.txt"), &recorded, nil,
 	)
 
-	report, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"})
+	report, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +306,7 @@ func TestCollectWindowsTruncatedFixture(t *testing.T) {
 		}, nil
 	}
 
-	report, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"})
+	report, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +340,7 @@ func TestCollectTruncatedOutputKeepsParsedParts(t *testing.T) {
 	addCollectDevice(t, st, "工作站", "entry-a")
 	var recorded recordedExec
 	service.RemoteExec = replayCollectExec(fixtureOutput(t, "ubuntu2404-full.txt"), &recorded, nil)
-	if _, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"}); err != nil {
+	if _, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -347,7 +348,7 @@ func TestCollectTruncatedOutputKeepsParsedParts(t *testing.T) {
 		recorded = recordedExec{server: server, shell: shell, command: command, sudo: sudo}
 		return RemoteExecResult{Stdout: fixtureOutput(t, "ubuntu2404-truncated.txt"), TimedOut: true}, nil
 	}
-	report, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"})
+	report, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +373,7 @@ func TestCollectTruncatedOutputKeepsParsedParts(t *testing.T) {
 	service.RemoteExec = func(_ context.Context, _ *models.Server, _ models.ShellType, _ string, _ bool) (RemoteExecResult, error) {
 		return RemoteExecResult{Stdout: fixtureOutput(t, "ubuntu2404-full.txt"), Truncated: true}, errors.New("会话中断")
 	}
-	report, err = service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"})
+	report, err = service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +393,7 @@ func TestCollectLinuxNoProcessNamesFixture(t *testing.T) {
 	var recorded recordedExec
 	service.RemoteExec = replayCollectExec(fixtureOutput(t, "ubuntu2204-no-process-names.txt"), &recorded, nil)
 
-	report, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"})
+	report, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,13 +437,13 @@ func TestCollectFailureKeepsPreviousResult(t *testing.T) {
 	addCollectDevice(t, st, "工作站", "entry-a")
 	var recorded recordedExec
 	service.RemoteExec = replayCollectExec(fixtureOutput(t, "ubuntu2404-full.txt"), &recorded, nil)
-	if _, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"}); err != nil {
+	if _, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"}); err != nil {
 		t.Fatal(err)
 	}
 
 	connectionFailure := errors.New("dial timeout")
 	service.RemoteExec = replayCollectExec("", &recorded, connectionFailure)
-	if _, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"}); err == nil {
+	if _, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"}); err == nil {
 		t.Fatal("采集失败应返回错误")
 	}
 	items, err := st.SoftwareObservedItemsForDevice("工作站")
@@ -497,7 +498,7 @@ func TestCollectEntrySelectionAndSudo(t *testing.T) {
 	service.RemoteExec = replayCollectExec(fixtureOutput(t, "ubuntu2204-no-process-names.txt"), &recorded, nil)
 
 	// 未打开任何开关：名字排序第一个（ASCII 名字，避免中文排序歧义）。
-	if _, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"}); err != nil {
+	if _, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"}); err != nil {
 		t.Fatal(err)
 	}
 	if recorded.server.Name != "alpha" || recorded.sudo {
@@ -508,7 +509,7 @@ func TestCollectEntrySelectionAndSudo(t *testing.T) {
 	if err := st.SetSoftwareCollectSudo("beta", true, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"}); err != nil {
+	if _, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"}); err != nil {
 		t.Fatal(err)
 	}
 	if recorded.server.Name != "beta" || !recorded.sudo {
@@ -520,6 +521,7 @@ func TestCollectEntrySelectionAndSudo(t *testing.T) {
 
 	// 显式指定 gamma 时优先于默认规则；gamma 没开 sudo，按普通用户执行。
 	if _, err := service.Collect(context.Background(), CollectRequest{
+		Source:     CLISource(),
 		DeviceName: "工作站", ServerEntry: "gamma",
 	}); err != nil {
 		t.Fatal(err)
@@ -531,11 +533,13 @@ func TestCollectEntrySelectionAndSudo(t *testing.T) {
 	// 指定不在这台设备上的条目应报错；beta 打开 sudo 但没有 sudo 凭据也
 	// 应明确失败并记录原因。
 	if _, err := service.Collect(context.Background(), CollectRequest{
+		Source:     CLISource(),
 		DeviceName: "工作站", ServerEntry: servers["alpha"].ID,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.Collect(context.Background(), CollectRequest{
+		Source:     CLISource(),
 		DeviceName: "工作站", ServerEntry: "别的设备条目",
 	}); err == nil {
 		t.Fatal("指定不属于这台设备的条目应报错")
@@ -546,7 +550,7 @@ func TestCollectEntrySelectionAndSudo(t *testing.T) {
 	if err := st.SetSoftwareCollectSudo("gamma", true, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.Collect(context.Background(), CollectRequest{DeviceName: "工作站", ServerEntry: "gamma"})
+	_, err = service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站", ServerEntry: "gamma"})
 	if err == nil || !strings.Contains(err.Error(), "sudo 凭据") {
 		t.Fatalf("sudo 开关打开但缺少 sudo 凭据应明确失败：%v", err)
 	}
@@ -563,14 +567,14 @@ func TestCollectEntrySelectionAndSudo(t *testing.T) {
 func TestCollectValidation(t *testing.T) {
 	service, st := newCollectService(t)
 	addCollectDevice(t, st, "工作站", "entry-a")
-	_, err := service.Collect(context.Background(), CollectRequest{DeviceName: "不存在的设备"})
+	_, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "不存在的设备"})
 	if err == nil {
 		t.Fatal("设备不存在应报错")
 	}
 	if _, err := st.AddDevice("无条目设备", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Collect(context.Background(), CollectRequest{DeviceName: "无条目设备"}); err == nil {
+	if _, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "无条目设备"}); err == nil {
 		t.Fatal("设备没有服务器条目应报错")
 	}
 }
@@ -582,7 +586,7 @@ func TestQueryShowsCollectionStatus(t *testing.T) {
 	addCollectDevice(t, st, "工作站", "entry-a")
 	var recorded recordedExec
 	service.RemoteExec = replayCollectExec(fixtureOutput(t, "ubuntu2404-full.txt"), &recorded, nil)
-	if _, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"}); err != nil {
+	if _, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := New(st).AddDeclaration(Declaration{

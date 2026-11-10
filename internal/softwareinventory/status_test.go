@@ -108,7 +108,7 @@ func TestCollectionStatusesShowFailureAndVisibility(t *testing.T) {
 		t.Fatalf("profile 范围只能看到授权设备：%+v", statuses)
 	}
 	status := statuses[0]
-	if status.DeviceID == "" || !status.Managed || status.Collector != "authority" ||
+	if status.DeviceID == "" || !status.Managed || status.Collector != "" ||
 		status.ServerEntry != "受管甲-ssh" || status.LastSuccessAt == nil ||
 		status.LastSuccessAt.Unix() != collectedAt.Unix() || status.CommandSetVersion != "posix-v2" {
 		t.Fatalf("受管甲的采集状态 = %+v", status)

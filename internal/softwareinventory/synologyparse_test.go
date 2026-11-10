@@ -94,6 +94,19 @@ func TestParseSynologyNoProcessNamesFixture(t *testing.T) {
 	}
 }
 
+// TestNetstatListenSectionDropsInvalidPorts 验证端口 0 与 65536 都被丢弃，
+// 不能因为解析函数漏返回错误而被收进清单。
+func TestNetstatListenSectionDropsInvalidPorts(t *testing.T) {
+	lines := parseNetstatListenSection(parsedSection{lines: []string{
+		"tcp 0 0 0.0.0.0:22 0.0.0.0:* LISTEN 100/sshd",
+		"tcp 0 0 0.0.0.0:0 0.0.0.0:* LISTEN 101/bad-zero",
+		"tcp 0 0 0.0.0.0:65536 0.0.0.0:* LISTEN 102/bad-large",
+	}})
+	if len(lines) != 1 || lines[0].port != 22 {
+		t.Fatalf("越界端口应丢弃，合法端口应保留：%+v", lines)
+	}
+}
+
 // TestParseSynologyTruncatedFixture 覆盖 container-images 节中途截断：系
 // 统、监听、套件与 exe 节保留，容器条目不生成并标为不完整。
 func TestParseSynologyTruncatedFixture(t *testing.T) {

@@ -1,6 +1,7 @@
 package softwareinventory
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -31,9 +32,9 @@ func buildDarwinApplicationItems(section parsedSection) []models.SoftwareObserve
 	return items
 }
 
-// buildDarwinBrewItems 解析 Homebrew 的 formula 与 cask。一行里可能有多个
-// 版本；每个版本是一条实测条目，稳定键因此额外包含版本，避免同名多版本
-// 在同一台设备上冲突。
+// buildDarwinBrewItems 解析 Homebrew 的 formula 与 cask。稳定键默认不带版
+// 本，软件包升级时保持不变；同一批输出里同名包确实有多个版本时才追加版
+// 本区分。
 func buildDarwinBrewItems(section parsedSection) []models.SoftwareObservedItem {
 	if section.outcome == sectionAbsent {
 		return nil
@@ -57,12 +58,25 @@ func buildDarwinBrewItems(section parsedSection) []models.SoftwareObservedItem {
 				PackageURL: fmt.Sprintf("pkg:brew/%s@%s", parts[0], version),
 				StableKey: strings.Join([]string{
 					string(models.SoftwareCategorySystemPackage),
-					strings.ToLower(parts[0]), "Homebrew " + fields[0], version,
+					strings.ToLower(parts[0]), "Homebrew " + fields[0],
 				}, "\x1f"),
 			})
 		}
 	}
+	disambiguateStableKeysByVersion(items)
 	return items
+}
+
+func disambiguateStableKeysByVersion(items []models.SoftwareObservedItem) {
+	counts := make(map[string]int, len(items))
+	for _, item := range items {
+		counts[item.StableKey]++
+	}
+	for i := range items {
+		if counts[items[i].StableKey] > 1 {
+			items[i].StableKey += "\x1f" + items[i].Version
+		}
+	}
 }
 
 type darwinListenLine struct {
@@ -196,7 +210,7 @@ func buildDarwinListeningItems(
 		if !present {
 			item = &models.SoftwareObservedItem{
 				Category:    models.SoftwareCategoryUnidentified,
-				Name:        firstNonEmptyString(line.processName, "未识别进程"),
+				Name:        cmp.Or(line.processName, "未识别进程"),
 				ProcessName: line.processName, ExecutablePath: executable,
 				ProcessID: line.processID,
 			}

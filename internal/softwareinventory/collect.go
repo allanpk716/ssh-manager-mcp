@@ -61,23 +61,22 @@ type Service struct {
 type CollectRequest struct {
 	DeviceName  string
 	ServerEntry string
-	// Source 是这次采集的入口来源；零值按命令行来源处理，既有命令行调用
-	// 不需要改变。
+	// Source 是这次采集的入口来源；调用方必须显式提供，零值会被拒绝。
 	Source Source
 }
 
 // CollectionReport 是一次采集的对外结论。
 type CollectionReport struct {
-	DeviceName        string
-	ServerEntryName   string
-	Sudo              bool
-	CommandSetVersion string
-	SystemType        string
-	Incomplete        bool
-	Notes             []string
-	ItemCounts        map[models.SoftwareCategory]int
-	StartedAt         time.Time
-	EndedAt           time.Time
+	DeviceName        string                          `json:"device_name"`
+	ServerEntryName   string                          `json:"server_entry_name"`
+	Sudo              bool                            `json:"sudo"`
+	CommandSetVersion string                          `json:"command_set_version"`
+	SystemType        string                          `json:"system_type"`
+	Incomplete        bool                            `json:"incomplete"`
+	Notes             []string                        `json:"notes,omitempty"`
+	ItemCounts        map[models.SoftwareCategory]int `json:"item_counts"`
+	StartedAt         time.Time                       `json:"started_at"`
+	EndedAt           time.Time                       `json:"ended_at"`
 }
 
 // Collect 对一台设备立即采集一次：选择服务器条目、生成固定命令、执行、
@@ -94,7 +93,7 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 	startedAt := s.now()
 	source := request.Source
 	if source.origin == (store.WriteSource{}) {
-		source = CLISource()
+		return nil, fmt.Errorf("软件清单采集必须显式提供入口来源")
 	}
 	if _, err := s.Store.GetDevice(deviceName); err != nil {
 		return nil, err

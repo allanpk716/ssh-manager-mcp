@@ -94,6 +94,52 @@ func TestDeclarationDraftsHiddenFromQueriesAndTodos(t *testing.T) {
 	}
 }
 
+// TestDeclarationEffectiveWritesChangeHistory 验证 owner 新增声明与确认草稿
+// 都会在同一个事务里写变化历史，不受管设备也有历史。
+func TestDeclarationEffectiveWritesChangeHistory(t *testing.T) {
+	manager, st := newTestManager(t)
+	mustDevice(t, st, "网络存储", false)
+	if _, err := manager.AddDeclaration(Declaration{
+		Device: "网络存储", Category: CategoryOperatingSystem,
+		Name: "NAS 系统", Version: "7.2.1",
+	}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	history, err := manager.ChangeHistory("网络存储", AllDevicesVisible())
+	if err != nil || len(history) != 1 {
+		t.Fatalf("新增生效声明应写一条历史：%v %+v", err, history)
+	}
+	if history[0].Kind != models.SoftwareChangeAdded ||
+		history[0].Name != "NAS 系统" || history[0].NewValue != "7.2.1" {
+		t.Fatalf("声明生效历史 = %+v", history[0])
+	}
+
+	ids, err := manager.SubmitDeclarationDrafts([]DeclarationDraft{{
+		SoftwareDeclaration: models.SoftwareDeclaration{
+			Device: "网络存储", Category: CategoryServiceProgram,
+			Name: "媒体服务", Version: "1.4",
+		},
+	}}, AllDevicesVisible(), AgentSource())
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("提交声明草稿失败：%v %+v", err, ids)
+	}
+	if err := manager.ConfirmDeclarationDraft(ids[0], nil, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	history, err = manager.ChangeHistory("网络存储", AllDevicesVisible())
+	if err != nil || len(history) != 2 {
+		t.Fatalf("确认草稿也应写变化历史：%v %+v", err, history)
+	}
+	found := false
+	for _, row := range history {
+		found = found || (row.Kind == models.SoftwareChangeAdded &&
+			row.Name == "媒体服务" && row.NewValue == "1.4")
+	}
+	if !found {
+		t.Fatalf("草稿确认历史 = %+v", history)
+	}
+}
+
 // TestDeclarationDraftVisibilityAndReject 覆盖领域模块对可见范围的核对与
 // 驳回语义。
 func TestDeclarationDraftVisibilityAndReject(t *testing.T) {

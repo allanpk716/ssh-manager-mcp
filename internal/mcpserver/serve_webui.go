@@ -138,7 +138,8 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		AllowedHosts:           plan.Addresses,
 		// 设备码拉取命令要指向权威端主监听（浏览器访问的是 Web UI 自己
 		// 的端口），这里把主监听端口交给页面。
-		ServePort: servePortFromAddr(addr),
+		ServePort:      servePortFromAddr(addr),
+		ReverifyWindow: endToEndReverifyWindow(),
 	})
 	if err != nil {
 		return nil, err

@@ -113,8 +113,11 @@ type Config struct {
 	ServePort int
 	// ClientInstance 是客户端角色启动时选定的客户端缓存实例名；空串表示默认
 	// 实例。浏览器会话以它为初始值，切换只保存在进程内会话里。
-	ClientInstance         string
-	Now                    func() time.Time
+	ClientInstance string
+	Now            func() time.Time
+	// ReverifyWindow 是权威端敏感写操作要求重新验证管理员口令的窗口；
+	// 零值使用默认 5 分钟。端到端浏览器测试可用环境开关把它缩短。
+	ReverifyWindow         time.Duration
 	Auth                   AuthStore
 	CertificateFingerprint string
 	AllowedHosts           []string

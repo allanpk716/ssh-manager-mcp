@@ -1,7 +1,7 @@
 package softwareinventory
 
 import (
-	"net"
+	"cmp"
 	"strconv"
 	"strings"
 
@@ -67,7 +67,7 @@ func parseNetstatListenSection(section parsedSection) []netstatListenLine {
 		if protocol == "tcp6" || protocol == "udp6" {
 			protocol = protocol[:3]
 		}
-		address, port, err := splitNetstatListenAddress(fields[3])
+		address, port, err := splitListenAddress(fields[3])
 		if err != nil {
 			continue
 		}
@@ -78,23 +78,6 @@ func parseNetstatListenSection(section parsedSection) []netstatListenLine {
 		})
 	}
 	return lines
-}
-
-// splitNetstatListenAddress 解析本地地址列，并把 IPv6 地址统一写成带方
-// 括号的形式。
-func splitNetstatListenAddress(field string) (string, int, error) {
-	address, portText, err := net.SplitHostPort(field)
-	if err != nil {
-		return "", 0, err
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 {
-		return "", 0, err
-	}
-	if strings.Contains(address, ":") {
-		address = "[" + address + "]"
-	}
-	return address, port, nil
 }
 
 func parseNetstatProcess(field string) (string, int) {
@@ -156,7 +139,7 @@ func buildNetstatListeningItems(
 		if !present {
 			item = &models.SoftwareObservedItem{
 				Category:    models.SoftwareCategoryUnidentified,
-				Name:        firstNonEmptyString(line.processName, "未识别进程"),
+				Name:        cmp.Or(line.processName, "未识别进程"),
 				ProcessName: line.processName, ExecutablePath: executablePath,
 				ProcessID: line.processID,
 			}

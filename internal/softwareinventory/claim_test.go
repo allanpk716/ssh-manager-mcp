@@ -74,6 +74,7 @@ func TestClaimCombinesObservedAndDeclaredItems(t *testing.T) {
 	item := result.Devices[0].Items[0]
 	if item.Source != SourceCombined || item.Name != "Nginx 网站服务" ||
 		item.Version != "1.25.3" || item.CPE != "cpe:2.3:a:f5:nginx:1.25.0:*:*:*:*:*:*:*" ||
+		item.PackageURL != "pkg:deb/ubuntu/nginx@1.25.3" ||
 		item.Note != "对外网站入口" || item.ObservedStableKey != storedObserved[0].StableKey ||
 		item.CollectedAt == nil || !item.CollectedAt.Equal(collectedAt) {
 		t.Fatalf("认领后的合成条目 = %+v", item)
@@ -110,5 +111,62 @@ func TestClaimCombinesObservedAndDeclaredItems(t *testing.T) {
 	}
 	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 2 {
 		t.Fatalf("取消认领后应重新显示声明与实测两条：%+v", result.Devices)
+	}
+}
+
+// TestClaimSurvivesCollectorPackageUpgrade 用 Homebrew 解析器的真实稳定键验
+// 证软件包升级：变化历史只记版本变化，声明认领关系不断开。
+func TestClaimSurvivesCollectorPackageUpgrade(t *testing.T) {
+	manager, st := newTestManager(t)
+	mustDevice(t, st, "Mac 工作站", true)
+	oldItems := buildDarwinBrewItems(parsedSection{lines: []string{
+		"formula\topenssh 9.9p1",
+	}})
+	newItems := buildDarwinBrewItems(parsedSection{lines: []string{
+		"formula\topenssh 10.0p1",
+	}})
+	mustObservedItems(t, st, "Mac 工作站", oldItems...)
+	observed, err := st.SoftwareObservedItemsForDevice("Mac 工作站")
+	if err != nil || len(observed) != 1 {
+		t.Fatalf("读取旧版本实测条目失败：%v %+v", err, observed)
+	}
+	declarationID, err := manager.AddDeclaration(Declaration{
+		Device: "Mac 工作站", Category: CategorySystemPackage,
+		Name: "OpenSSH", Version: "9.9p1",
+	}, CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ClaimDeclaration(declarationID, observed[0].StableKey, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	mustObservedItems(t, st, "Mac 工作站", newItems...)
+	history, err := manager.ChangeHistory("Mac 工作站", AllDevicesVisible())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 {
+		t.Fatalf("升级应产生实测基线、版本变化与声明生效历史：%+v", history)
+	}
+	byKind := map[models.SoftwareChangeKind]models.SoftwareChangeEntry{}
+	for _, row := range history {
+		byKind[row.Kind] = row
+	}
+	if byKind[models.SoftwareChangeVersionChanged].OldValue != "9.9p1" ||
+		byKind[models.SoftwareChangeVersionChanged].NewValue != "10.0p1" ||
+		byKind[models.SoftwareChangeVersionChanged].StableKey != observed[0].StableKey {
+		t.Fatalf("升级历史 = %+v", byKind[models.SoftwareChangeVersionChanged])
+	}
+	result, err := manager.Query(QueryOptions{
+		Device: "Mac 工作站", IncludeSystemPackages: true, Visibility: AllDevicesVisible(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 1 ||
+		result.Devices[0].Items[0].Source != SourceCombined ||
+		result.Devices[0].Items[0].Version != "10.0p1" {
+		t.Fatalf("升级后认领关系应保持：%+v", result.Devices)
 	}
 }

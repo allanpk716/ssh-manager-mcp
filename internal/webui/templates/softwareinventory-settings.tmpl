@@ -10,11 +10,14 @@
 <tbody>{{range .SoftwareInventorySettings.Devices}}<tr><td>{{.Name}}</td><td>{{template "softwareInventoryStatus" .Status}}</td></tr>{{else}}<tr><td colspan="2">暂无设备。</td></tr>{{end}}</tbody>
 </table>
 {{if .SoftwareInventoryCollectorForm.Error}}<div class="operation-refusal">{{.SoftwareInventoryCollectorForm.Error}}</div>{{end}}
+{{if .SoftwareInventoryCollectorForm.SudoError}}<div class="operation-refusal">{{.SoftwareInventoryCollectorForm.SudoError}}</div>{{end}}
 <form method="post" action="/ui/software-inventory/settings/collector">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <div class="form-field"><label for="collector-device">设备</label><input id="collector-device" name="device" value="{{.SoftwareInventoryCollectorForm.Device}}" required></div>
+<div class="form-field"><label for="collector-authority">由权威端采集</label>
+<input type="checkbox" id="collector-authority" name="collector_authority" value="1"{{if .SoftwareInventoryCollectorForm.Authority}} checked{{end}}></div>
 <div class="form-field"><label for="collector-client">客户端实例的设备码名</label>
-<input id="collector-client" name="collector" value="{{.SoftwareInventoryCollectorForm.Collector}}" list="software-inventory-clients" required>
+<input id="collector-client" name="collector" value="{{.SoftwareInventoryCollectorForm.Collector}}" list="software-inventory-clients">
 <datalist id="software-inventory-clients">{{range .SoftwareInventorySettings.ClientInstances}}<option value="{{.Name}}">{{.Name}}（profile：{{.ProfileName}}）</option>{{end}}</datalist></div>
 <div class="form-field"><label for="collector-entry">采集用服务器条目（可选）</label><input id="collector-entry" name="server_entry" value="{{.SoftwareInventoryCollectorForm.ServerEntry}}"></div>
 <p class="form-help">登记前校验设备码有效，以及它绑定的 profile 包含采集用服务器条目。</p>

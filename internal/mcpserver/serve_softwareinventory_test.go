@@ -24,6 +24,7 @@ import (
 type softwareInventoryFixture struct {
 	srv         *httptest.Server
 	st          *store.Store
+	laptopID    string
 	laptopToken string
 	phoneToken  string
 }
@@ -107,7 +108,7 @@ func newSoftwareInventoryRunner(t *testing.T) *softwareInventoryFixture {
 	t.Cleanup(r.Close)
 	srv := httptest.NewServer(r.HTTPHandler())
 	t.Cleanup(srv.Close)
-	_, laptopToken, err := st.AddCacheToken("laptop", laptopProfile)
+	laptopID, laptopToken, err := st.AddCacheToken("laptop", laptopProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,9 @@ func newSoftwareInventoryRunner(t *testing.T) *softwareInventoryFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &softwareInventoryFixture{srv: srv, st: st, laptopToken: laptopToken, phoneToken: phoneToken}
+	return &softwareInventoryFixture{
+		srv: srv, st: st, laptopID: laptopID, laptopToken: laptopToken, phoneToken: phoneToken,
+	}
 }
 
 // postSoftwareInventory 发起一次 POST /software-inventory，返回状态码与

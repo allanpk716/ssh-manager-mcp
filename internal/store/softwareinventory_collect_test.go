@@ -150,7 +150,7 @@ func TestSoftwareObservedItemsReplaceAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	if status.LastSuccessAt != now || status.LastIncomplete || status.CommandSetVersion != "posix-v2" ||
-		status.SystemType != "ubuntu" || status.LastServerID != server.ID || status.Collector != "authority" {
+		status.SystemType != "ubuntu" || status.LastServerID != server.ID || status.Collector.IsClient() {
 		t.Fatalf("采集状态 = %+v", status)
 	}
 
@@ -212,7 +212,7 @@ func TestSoftwareObservedItemsReplaceAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	if summary["device"] != "工作站" || summary["server"] != "工作站入口" ||
-		summary["collector"] != "authority" || summary["result"] != "failed" {
+		summary["collector"] != "" || summary["result"] != "failed" {
 		t.Fatalf("采集审计摘要 = %v", summary)
 	}
 }

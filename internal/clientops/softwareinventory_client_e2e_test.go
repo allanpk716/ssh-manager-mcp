@@ -133,7 +133,8 @@ func TestSoftwareInventoryClientCollectorEndToEndWithTestSSHServer(t *testing.T)
 	if err := json.Unmarshal([]byte(audit[0].Command), &summary); err != nil {
 		t.Fatal(err)
 	}
-	if summary["collector"] != "laptop" || summary["result"] != "ok" {
+	if summary["collector"] != tokenID || summary["device_code"] != tokenID ||
+		summary["result"] != "ok" {
 		t.Fatalf("权威端采集审计 = %v", summary)
 	}
 	if len(snapshot.SoftwareObservedItems) != 0 || len(snapshot.SoftwareCollectionStatuses) != 0 {

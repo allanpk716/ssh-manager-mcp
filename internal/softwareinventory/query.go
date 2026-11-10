@@ -1,6 +1,7 @@
 package softwareinventory
 
 import (
+	"cmp"
 	"fmt"
 	"sort"
 	"strings"
@@ -12,6 +13,8 @@ import (
 // CollectionStatus 描述一台设备的采集状态；清单是否过期按读取时刻计算。
 type CollectionStatus struct {
 	Collector         string     `json:"collector,omitempty"`
+	CollectorName     string     `json:"collector_name,omitempty"`
+	CollectorRevoked  bool       `json:"collector_revoked,omitempty"`
 	ServerEntry       string     `json:"server_entry,omitempty"`
 	LastSuccessAt     *time.Time `json:"last_success_at,omitempty"`
 	LastFailureAt     *time.Time `json:"last_failure_at,omitempty"`
@@ -20,6 +23,7 @@ type CollectionStatus struct {
 	CommandSetVersion string     `json:"command_set_version,omitempty"`
 	NeverCollected    bool       `json:"never_collected"`
 	Stale             bool       `json:"stale"`
+	PendingImmediate  bool       `json:"pending_immediate"`
 }
 
 // QueryOptions 是软件清单查询的全部过滤条件。所有条件都可选；空值表示
@@ -168,7 +172,7 @@ func combineObservedAndDeclared(bundle queryBundle) []QueryItem {
 		item := QueryItem{
 			ID: declaration.ID, DeviceID: bundle.DeviceID, Category: declaration.Category,
 			CategoryLabel: declaration.Category.Label(), Name: declaration.Name,
-			Version: version, PackageURL: declaration.PackageURL,
+			Version: version, PackageURL: cmp.Or(declaration.PackageURL, observed.PackageURL),
 			CPE: declaration.CPE, ListeningPorts: combinedPorts(observed.ListeningPorts, declaration.ListeningPorts),
 			BelongsTo: declaration.BelongsTo, Note: declaration.Note, Source: SourceCombined,
 			CollectedAt: &collectedAt, ObservedStableKey: observed.StableKey,
@@ -348,8 +352,12 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 			}
 			filtered = append(filtered, item)
 		}
+		hasItemFilter := options.Name != "" || options.Category != "" || options.MinimumExposure != ""
 		if len(filtered) == 0 {
-			continue
+			if hasItemFilter {
+				continue
+			}
+			filtered = []QueryItem{}
 		}
 		devices = append(devices, QueryDeviceResult{
 			DeviceID: bundle.DeviceID, DeviceName: bundle.DeviceName,
@@ -360,28 +368,14 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 	return QueryResult{Devices: devices}, nil
 }
 
-// collectionStatusFor 读取一台设备的采集状态；设备从未采集过（或采集状
-// 态读取失败）时保持「从未采集、清单过期」的显示。
+// collectionStatusFor 读取一台设备的采集状态；状态推导与命令行 status、
+// Web UI 共用，从未成功过的设备也保留最近失败原因。
 func (m *Manager) collectionStatusFor(deviceName string) CollectionStatus {
 	stored, err := m.st.SoftwareCollectionStatusForDevice(deviceName)
-	if err != nil || stored.LastSuccessAt.Unix() <= 0 {
+	if err != nil {
 		return missingCollectionStatus(stored.Managed)
 	}
-	status := CollectionStatus{
-		Collector: stored.Collector, ServerEntry: stored.LastServerName,
-		LastFailureReason: stored.LastFailureReason, Incomplete: stored.LastIncomplete,
-		CommandSetVersion: stored.CommandSetVersion,
-	}
-	successAt := stored.LastSuccessAt
-	status.LastSuccessAt = &successAt
-	if stored.LastFailureAt.Unix() > 0 {
-		failureAt := stored.LastFailureAt
-		status.LastFailureAt = &failureAt
-	}
-	// 清单过期不落库，每次读取时按「当前时间减上次成功时间超过 7 天」
-	// 计算；从未成功过的设备在上面已经按从未采集返回。
-	status.Stale = m.now().Sub(successAt) > 7*24*time.Hour
-	return status
+	return collectionStatusCore(*stored, m.now())
 }
 
 func (m *Manager) now() time.Time {

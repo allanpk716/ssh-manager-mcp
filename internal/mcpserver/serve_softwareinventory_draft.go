@@ -93,7 +93,7 @@ func (r *ServeRunner) handleSoftwareDeclarationDrafts(w http.ResponseWriter, req
 	ids, err := softwareinventory.New(r.st).SubmitDeclarationDrafts(
 		in.Declarations,
 		softwareinventory.DevicesVisibleThroughServers(granted...),
-		softwareinventory.ForwardedSource(ct.Name),
+		softwareinventory.ForwardedSource(ct.ID),
 	)
 	switch {
 	case err == nil:

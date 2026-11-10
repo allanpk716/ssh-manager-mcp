@@ -1,6 +1,7 @@
 package softwareinventory
 
 import (
+	"cmp"
 	"fmt"
 	"strconv"
 	"strings"
@@ -112,11 +113,11 @@ func parseWindowsOSSection(lines []string) windowsOSInfo {
 }
 
 func buildWindowsOSItem(info windowsOSInfo) models.SoftwareObservedItem {
-	version := firstNonEmptyString(info.displayVersion, info.releaseVersion, info.currentBuild)
+	version := cmp.Or(info.displayVersion, info.releaseVersion, info.currentBuild)
 	if version == "" {
 		version = "unknown"
 	}
-	name := firstNonEmptyString(info.productName, "Windows")
+	name := cmp.Or(info.productName, "Windows")
 	return models.SoftwareObservedItem{
 		Category:     models.SoftwareCategoryOperatingSystem,
 		Name:         name,
@@ -132,6 +133,7 @@ func buildWindowsInstalledItems(
 		return nil, map[string]int{}
 	}
 	items := make([]models.SoftwareObservedItem, 0, len(section.lines))
+	registryKeys := make([]string, 0, len(section.lines))
 	indexes := map[string]int{}
 	for _, line := range section.lines {
 		fields := strings.Split(line, "\t")
@@ -146,11 +148,12 @@ func buildWindowsInstalledItems(
 			BelongsTo:    publisher,
 			Architecture: view,
 			StableKey: strings.Join([]string{
-				string(models.SoftwareCategorySystemPackage), "windows-registry",
-				view, name, registryKey,
+				string(models.SoftwareCategorySystemPackage), strings.ToLower(name),
+				publisher, view,
 			}, "\x1f"),
 		}
 		items = append(items, item)
+		registryKeys = append(registryKeys, registryKey)
 		index := len(items) - 1
 		for _, matchName := range []string{name, registryKey} {
 			key := normalizeWindowsSoftwareName(matchName)
@@ -159,7 +162,20 @@ func buildWindowsInstalledItems(
 			}
 		}
 	}
+	disambiguateWindowsStableKeysByRegistryKey(items, registryKeys)
 	return items, indexes
+}
+
+func disambiguateWindowsStableKeysByRegistryKey(items []models.SoftwareObservedItem, registryKeys []string) {
+	counts := make(map[string]int, len(items))
+	for _, item := range items {
+		counts[item.StableKey]++
+	}
+	for i := range items {
+		if counts[items[i].StableKey] > 1 {
+			items[i].StableKey += "\x1f" + registryKeys[i]
+		}
+	}
 }
 
 type windowsProcess struct {
@@ -336,7 +352,7 @@ func appendWindowsUnidentifiedItem(
 	if !present {
 		item = &models.SoftwareObservedItem{
 			Category:       models.SoftwareCategoryUnidentified,
-			Name:           firstNonEmptyString(process.name, "未识别进程"),
+			Name:           cmp.Or(process.name, "未识别进程"),
 			ProcessName:    process.name,
 			ExecutablePath: process.path,
 			ProcessID:      line.processID,

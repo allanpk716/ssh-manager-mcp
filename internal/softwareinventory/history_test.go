@@ -72,7 +72,7 @@ func TestCollectWritesChangeHistoryAcrossRuns(t *testing.T) {
 		"openssh-server\t1:9.6p1-1\tamd64\tii",
 		"python3\t3.12.3-1\tamd64\tii",
 	}, "0.0.0.0"), &recorded, nil)
-	if _, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"}); err != nil {
+	if _, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -81,7 +81,7 @@ func TestCollectWritesChangeHistoryAcrossRuns(t *testing.T) {
 		"openssh-server\t1:9.9p1-1\tamd64\tii",
 		"nginx\t1.24.0\tamd64\tii",
 	}, "127.0.0.1"), &recorded, nil)
-	if _, err := service.Collect(context.Background(), CollectRequest{DeviceName: "工作站"}); err != nil {
+	if _, err := service.Collect(context.Background(), CollectRequest{Source: CLISource(), DeviceName: "工作站"}); err != nil {
 		t.Fatal(err)
 	}
 

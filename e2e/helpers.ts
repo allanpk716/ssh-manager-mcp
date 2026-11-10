@@ -261,6 +261,7 @@ async function startAuthorityUI(password: string): Promise<authorityUI> {
       SSHMGR_VAULT_ROOT: runDir,
       SSHMGR_STORE: path.join(runDir, "store.db"),
       SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
+      SSHMGR_E2E_REVERIFY_WINDOW: "100ms",
     },
   });
   let output = "";

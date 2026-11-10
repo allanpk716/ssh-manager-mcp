@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS software_observed_ports (
 );
 CREATE TABLE IF NOT EXISTS software_collection_status (
   device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
-  collector TEXT NOT NULL DEFAULT 'authority',
+  collector TEXT NOT NULL DEFAULT '',
   preferred_server_id TEXT NOT NULL DEFAULT '',
   last_server_id TEXT NOT NULL DEFAULT '',
   last_success_at INTEGER NOT NULL DEFAULT 0,
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS software_collection_settings (
 type SoftwareObservedWrite struct {
 	Items []models.SoftwareObservedItem
 	// Collector 是这次结果的采集执行者；空值表示权威端。
-	Collector         string
+	Collector         models.Collector
 	ServerID          string
 	Sudo              bool
 	CommandSetVersion string
@@ -242,7 +242,7 @@ func (s *Store) ReplaceSoftwareObservedItems(
 	}
 	if err := writeSoftwareAuditTx(tx, at, "software-collect", map[string]any{
 		"device": device.Name, "server": serverName,
-		"collector": collectorValue(write.Collector),
+		"collector": write.Collector.CacheTokenID,
 		"sudo":      write.Sudo, "result": result,
 	}, source); err != nil {
 		return err
@@ -278,14 +278,14 @@ func (s *Store) RecordSoftwareCollectionFailure(
 		serverName = server.Name
 	}
 	at := s.nowTime()
-	if err := writeSoftwareCollectionStatusTx(tx, device.ID, "", "", nil, softwareCollectionFailure{
+	if err := writeSoftwareCollectionStatusTx(tx, device.ID, "", models.AuthorityCollector(), nil, softwareCollectionFailure{
 		At: at, Reason: reason,
 	}); err != nil {
 		return err
 	}
 	if err := writeSoftwareAuditTx(tx, at, "software-collect", map[string]any{
 		"device": device.Name, "server": serverName,
-		"collector": collectorValue(""),
+		"collector": "",
 		"sudo":      sudo, "result": "failed", "reason": reason,
 	}, source); err != nil {
 		return err
@@ -301,7 +301,7 @@ func (s *Store) SoftwareCollectionStatusForDevice(deviceName string) (*models.So
 		return nil, err
 	}
 	status := &models.SoftwareCollectionStatus{
-		DeviceID: device.ID, DeviceName: device.Name, Collector: "authority",
+		DeviceID: device.ID, DeviceName: device.Name, Collector: models.AuthorityCollector(),
 	}
 	if err := s.db.QueryRow(
 		`SELECT EXISTS(SELECT 1 FROM servers WHERE device_id=?)`, device.ID,
@@ -309,14 +309,20 @@ func (s *Store) SoftwareCollectionStatusForDevice(deviceName string) (*models.So
 		return nil, err
 	}
 	row := s.db.QueryRow(`
-		SELECT collector,COALESCE(preferred_server_id,''),COALESCE(last_server_id,''),
+		SELECT COALESCE(status.collector,''),COALESCE(token.name,''),
+		       EXISTS(SELECT 1 FROM cache_tokens revoked
+		              WHERE revoked.id=status.collector AND revoked.status='revoked'),
+		       COALESCE(status.preferred_server_id,''),COALESCE(status.last_server_id,''),
 		       last_success_at,last_failure_at,last_failure_reason,last_incomplete,
 		       command_set_version,system_type,pending_immediate
-		FROM software_collection_status WHERE device_id=?`, device.ID)
+		FROM software_collection_status status
+		LEFT JOIN cache_tokens token ON token.id=status.collector
+		WHERE status.device_id=?`, device.ID)
 	var lastServerID string
 	var successAt, failureAt int64
 	if err := row.Scan(
-		&status.Collector, &status.PreferredServerID, &lastServerID,
+		&status.Collector.CacheTokenID, &status.CollectorName, &status.CollectorRevoked,
+		&status.PreferredServerID, &lastServerID,
 		&successAt, &failureAt, &status.LastFailureReason, &status.LastIncomplete,
 		&status.CommandSetVersion, &status.SystemType, &status.PendingImmediate,
 	); err != nil {
@@ -365,7 +371,9 @@ func (s *Store) SoftwareCollectionStatuses(deviceName string) ([]models.Software
 	query := `
 		SELECT device.id,device.name,
 		       EXISTS(SELECT 1 FROM servers WHERE servers.device_id=device.id),
-		       COALESCE(status.collector,'authority'),
+		       COALESCE(status.collector,''),COALESCE(token.name,''),
+		       EXISTS(SELECT 1 FROM cache_tokens revoked
+		              WHERE revoked.id=status.collector AND revoked.status='revoked'),
 		       COALESCE(status.preferred_server_id,''),
 		       COALESCE(status.last_server_id,''),
 		       COALESCE(status.last_success_at,0),
@@ -376,7 +384,8 @@ func (s *Store) SoftwareCollectionStatuses(deviceName string) ([]models.Software
 		       COALESCE(status.system_type,''),
 		       COALESCE(status.pending_immediate,0)
 		FROM devices device
-		LEFT JOIN software_collection_status status ON status.device_id=device.id`
+		LEFT JOIN software_collection_status status ON status.device_id=device.id
+		LEFT JOIN cache_tokens token ON token.id=status.collector`
 	args := []any{}
 	if name := strings.TrimSpace(deviceName); name != "" {
 		query += ` WHERE device.name=?`
@@ -396,6 +405,7 @@ func (s *Store) SoftwareCollectionStatuses(deviceName string) ([]models.Software
 		var successAt, failureAt int64
 		if err := rows.Scan(
 			&status.DeviceID, &status.DeviceName, &status.Managed, &status.Collector,
+			&status.CollectorName, &status.CollectorRevoked,
 			&status.PreferredServerID, &lastServerID, &successAt, &failureAt,
 			&status.LastFailureReason, &status.LastIncomplete, &status.CommandSetVersion,
 			&status.SystemType, &status.PendingImmediate,
@@ -435,13 +445,6 @@ func (s *Store) SoftwareObservedItemsForDevice(deviceName string) ([]models.Soft
 	return softwareObservedItemsForDeviceTx(s.db, device.ID)
 }
 
-func collectorValue(collector string) string {
-	if strings.TrimSpace(collector) == "" {
-		return "authority"
-	}
-	return collector
-}
-
 // softwareCollectionSuccess 是一次成功采集要写进状态的新字段。
 type softwareCollectionSuccess struct {
 	CommandSetVersion string
@@ -460,7 +463,8 @@ type softwareCollectionFailure struct {
 // 盖自己的字段，保留对方的历史值。
 func writeSoftwareCollectionStatusTx(
 	tx *sql.Tx,
-	deviceID, lastServerID, collector string,
+	deviceID, lastServerID string,
+	collector models.Collector,
 	success *softwareCollectionSuccess,
 	failure softwareCollectionFailure,
 ) error {
@@ -477,7 +481,7 @@ func writeSoftwareCollectionStatusTx(
 				command_set_version=excluded.command_set_version,
 				system_type=excluded.system_type,
 				pending_immediate=0`,
-			deviceID, collectorValue(collector), lastServerID, success.SuccessAt.Unix(),
+			deviceID, collector.CacheTokenID, lastServerID, success.SuccessAt.Unix(),
 			success.Incomplete, success.CommandSetVersion, success.SystemType,
 		)
 		return err
@@ -490,7 +494,7 @@ func writeSoftwareCollectionStatusTx(
 			last_failure_at=excluded.last_failure_at,
 			last_failure_reason=excluded.last_failure_reason,
 			pending_immediate=0`,
-		deviceID, collectorValue(collector), failure.At.Unix(), failure.Reason,
+		deviceID, collector.CacheTokenID, failure.At.Unix(), failure.Reason,
 	)
 	return err
 }

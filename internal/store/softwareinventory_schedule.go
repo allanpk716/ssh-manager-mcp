@@ -10,9 +10,11 @@ import (
 // 设备的采集状态，按设备名排序。只返回挂了服务器条目的设备（采集必须经
 // 过某个服务器条目的登录链路）；从未采集的设备返回零值状态。调度服务与
 // 「采集分派给本实例的设备」子命令用它计算到期设备。
-func (s *Store) SoftwareCollectionStatusesForCollector(collector string) ([]models.SoftwareCollectionStatus, error) {
+func (s *Store) SoftwareCollectionStatusesForCollector(collector models.Collector) ([]models.SoftwareCollectionStatus, error) {
 	rows, err := s.db.Query(`
-		SELECT devices.id,devices.name,COALESCE(status.collector,'authority'),
+		SELECT devices.id,devices.name,COALESCE(status.collector,''),COALESCE(token.name,''),
+		       EXISTS(SELECT 1 FROM cache_tokens revoked
+		              WHERE revoked.id=status.collector AND revoked.status='revoked'),
 		       COALESCE(status.preferred_server_id,''),COALESCE(status.last_server_id,''),
 		       COALESCE(last_server.name,''),
 		       COALESCE(status.last_success_at,0),COALESCE(status.last_failure_at,0),
@@ -21,10 +23,11 @@ func (s *Store) SoftwareCollectionStatusesForCollector(collector string) ([]mode
 		       COALESCE(status.pending_immediate,0)
 		FROM devices
 		LEFT JOIN software_collection_status status ON status.device_id=devices.id
+			LEFT JOIN cache_tokens token ON token.id=status.collector
 		LEFT JOIN servers last_server ON last_server.id=status.last_server_id
-		WHERE COALESCE(status.collector,'authority')=? AND EXISTS (
+			WHERE COALESCE(status.collector,'')=? AND EXISTS (
 			SELECT 1 FROM servers WHERE servers.device_id=devices.id)
-		ORDER BY devices.name,devices.id`, collector)
+			ORDER BY devices.name,devices.id`, collector.CacheTokenID)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +37,8 @@ func (s *Store) SoftwareCollectionStatusesForCollector(collector string) ([]mode
 		var status models.SoftwareCollectionStatus
 		var successAt, failureAt int64
 		if err := rows.Scan(
-			&status.DeviceID, &status.DeviceName, &status.Collector,
+			&status.DeviceID, &status.DeviceName, &status.Collector.CacheTokenID,
+			&status.CollectorName, &status.CollectorRevoked,
 			&status.PreferredServerID, &status.LastServerID, &status.LastServerName,
 			&successAt, &failureAt, &status.LastFailureReason, &status.LastIncomplete,
 			&status.CommandSetVersion, &status.SystemType, &status.PendingImmediate,
@@ -65,7 +69,7 @@ func (s *Store) RequestSoftwareImmediateCollection(deviceName string, source Wri
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO software_collection_status(device_id,collector,pending_immediate)
-		VALUES(?,'authority',1)
+		VALUES(?,'',1)
 		ON CONFLICT(device_id) DO UPDATE SET pending_immediate=1`, device.ID); err != nil {
 		return err
 	}

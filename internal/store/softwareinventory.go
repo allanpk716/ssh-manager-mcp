@@ -132,6 +132,11 @@ func (s *Store) AddSoftwareDeclaration(
 	if err := insertSoftwareDeclarationTx(tx, id, device.ID, declaration, "active", at, at, source); err != nil {
 		return "", err
 	}
+	if err := writeSoftwareChangeHistoryTx(tx, device.ID, []models.SoftwareChangeEntry{
+		softwareDeclarationHistoryEntry(id, declaration, at),
+	}, at); err != nil {
+		return "", err
+	}
 	if err := writeSoftwareAuditTx(tx, at, "software-declaration-add", map[string]any{
 		"device": device.Name, "category": declaration.Category.Label(),
 		"name": declaration.Name,

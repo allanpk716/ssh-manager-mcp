@@ -75,7 +75,7 @@ func TestCollectForScopeRegistersClientCollector(t *testing.T) {
 	if err := st.GrantServers(profileID, []string{server.ID}); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = st.AddCacheToken("mini6", profileID)
+	mini6ID, _, err := st.AddCacheToken("mini6", profileID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestCollectForScopeRegistersClientCollector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !outcome.Requested || outcome.Collector != "mini6" || outcome.Report != nil || executed {
+	if !outcome.Requested || outcome.Collector != mini6ID || outcome.Report != nil || executed {
 		t.Fatalf("客户端实例采集的设备只应登记请求：%+v", outcome)
 	}
 	status, err := st.SoftwareCollectionStatusForDevice("客户端采集设备")

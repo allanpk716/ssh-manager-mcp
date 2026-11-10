@@ -159,6 +159,20 @@ func softwareChangeEntry(
 	}
 }
 
+// softwareDeclarationHistoryEntry 生成一条声明生效时的历史。声明没有实测
+// 稳定键，使用声明标识符保证后续编辑与删除仍能对准同一行语义。
+func softwareDeclarationHistoryEntry(
+	id string,
+	declaration models.SoftwareDeclaration,
+	at time.Time,
+) models.SoftwareChangeEntry {
+	return models.SoftwareChangeEntry{
+		OccurredAt: at, Kind: models.SoftwareChangeAdded,
+		Category: declaration.Category, Name: declaration.Name,
+		StableKey: "declaration\x1f" + id, NewValue: declaration.Version,
+	}
+}
+
 // softwareExposureChanges 比对同一个条目上同一个监听端点（端口加协议）
 // 的暴露级别。地址变化导致推导档位变化时同样记录；同一端点有多个地址
 // 时取暴露级别最高的一档，避免把同一端口拆成多条噪声历史。

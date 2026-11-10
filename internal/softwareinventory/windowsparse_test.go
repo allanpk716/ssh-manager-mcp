@@ -141,6 +141,33 @@ func TestParseWindowsNoProcessNamesFixture(t *testing.T) {
 	}
 }
 
+// TestWindowsInstalledStableKeyIgnoresRegistryKey 验证注册表卸载项升级后
+// 仍使用同一个稳定键；显示名称与发布者冲突时才用注册表键名区分。
+func TestWindowsInstalledStableKeyIgnoresRegistryKey(t *testing.T) {
+	base := parsedSection{lines: []string{
+		"64bit\tOpenSSH\t9.9p1\tOpenSSH\tHKLM\\old",
+	}}
+	oldItems, _ := buildWindowsInstalledItems(base)
+	upgraded, _ := buildWindowsInstalledItems(parsedSection{lines: []string{
+		"64bit\tOpenSSH\t10.0p1\tOpenSSH\tHKLM\\new",
+	}})
+	if len(oldItems) != 1 || len(upgraded) != 1 {
+		t.Fatalf("注册表卸载项数量异常：%+v %+v", oldItems, upgraded)
+	}
+	if oldItems[0].StableKey != upgraded[0].StableKey {
+		t.Fatalf("同一软件升级并迁移注册表键名后稳定键变化：%q -> %q",
+			oldItems[0].StableKey, upgraded[0].StableKey)
+	}
+
+	conflict, _ := buildWindowsInstalledItems(parsedSection{lines: []string{
+		"64bit\tOpenSSH\t9.9p1\tOpenSSH\tHKLM\\one",
+		"64bit\tOpenSSH\t10.0p1\tOpenSSH\tHKLM\\two",
+	}})
+	if len(conflict) != 2 || conflict[0].StableKey == conflict[1].StableKey {
+		t.Fatalf("显示名称、位数、发布者都相同时必须用注册表键名区分：%+v", conflict)
+	}
+}
+
 // TestParseWindowsTruncatedFixture 覆盖 listen-udp 节中途截断的输出：已完
 // 成节与截断前已收到的行保留，整体标为不完整。
 func TestParseWindowsTruncatedFixture(t *testing.T) {

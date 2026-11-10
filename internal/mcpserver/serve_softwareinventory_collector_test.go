@@ -69,7 +69,7 @@ func TestSoftwareInventoryAssignmentsEndpoint(t *testing.T) {
 	fresh := time.Now()
 	fx.st.NowFn = func() time.Time { return fresh }
 	if err := fx.st.ReplaceSoftwareObservedItems("gpu-设备", store.SoftwareObservedWrite{
-		Collector: "collector", ServerID: gpu.ID,
+		Collector: models.ClientCollector(fx.laptopID), ServerID: gpu.ID,
 		CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
@@ -201,7 +201,7 @@ func TestSoftwareInventorySubmissionEndpointLandsResult(t *testing.T) {
 	now := time.Now()
 	fx.st.NowFn = func() time.Time { return oldAt }
 	if err := fx.st.ReplaceSoftwareObservedItems("gpu-设备", store.SoftwareObservedWrite{
-		Collector: "laptop", ServerID: gpu.ID,
+		Collector: models.ClientCollector(fx.laptopID), ServerID: gpu.ID,
 		Items: []models.SoftwareObservedItem{{
 			Category: models.SoftwareCategorySystemPackage, Name: "python3", Version: "3.11",
 		}},
@@ -243,11 +243,13 @@ func TestSoftwareInventorySubmissionEndpointLandsResult(t *testing.T) {
 	if err := json.Unmarshal([]byte(audit[0].Command), &summary); err != nil {
 		t.Fatal(err)
 	}
-	if summary["collector"] != "laptop" || summary["server"] != "gpu" || summary["sudo"] != true {
+	if summary["collector"] != fx.laptopID || summary["device_code"] != fx.laptopID ||
+		summary["server"] != "gpu" || summary["sudo"] != true {
 		t.Fatalf("上交审计摘要 = %v", summary)
 	}
 	collected, err := fx.st.SoftwareCollectionStatusForDevice("gpu-设备")
-	if err != nil || collected.Collector != "laptop" || collected.PendingImmediate || collected.LastSuccessAt.IsZero() {
+	if err != nil || collected.Collector.CacheTokenID != fx.laptopID ||
+		collected.PendingImmediate || collected.LastSuccessAt.IsZero() {
 		t.Fatalf("上交后的采集状态 = %+v err=%v", collected, err)
 	}
 }

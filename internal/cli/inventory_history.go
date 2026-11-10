@@ -145,7 +145,7 @@ func printInventoryCollectionStatus(w io.Writer, status softwareinventory.Collec
 		managedText = "受管"
 	}
 	fmt.Fprintf(w, "%s（%s）\n", status.DeviceName, managedText)
-	if status.Collector != "" {
+	{
 		fmt.Fprintf(w, "  采集执行者：%s\n", status.CollectorLabel)
 	}
 	if status.ServerEntry != "" {

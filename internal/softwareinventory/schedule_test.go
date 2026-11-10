@@ -10,6 +10,7 @@ import (
 
 	"strings"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -114,7 +115,7 @@ func TestSchedulerExecuteRoundDueDevices(t *testing.T) {
 	}
 
 	otherCollector := &Scheduler{
-		Store: st, Collector: "cache-token-9", Now: scheduler.Now, Collect: fake.fn(),
+		Store: st, Collector: models.ClientCollector("cache-token-9"), Now: scheduler.Now, Collect: fake.fn(),
 	}
 	report, err = otherCollector.ExecuteRound(context.Background())
 	if err != nil {

@@ -29,9 +29,10 @@ type CollectSoftwareInventoryOutput struct {
 	DeviceName string `json:"device_name" jsonschema:"device the request targeted"`
 	// Requested 为 true 表示设备由客户端实例采集，这次只登记了立即采集
 	// 请求，等待该实例下一轮分派执行。
-	Requested bool                                `json:"requested" jsonschema:"true when only an immediate-collection request was registered for a client collector"`
-	Collector string                              `json:"collector,omitempty" jsonschema:"device code name of the registered client collector, present when requested is true"`
-	Report    *softwareinventory.CollectionReport `json:"report,omitempty" jsonschema:"collection report, present when this instance collected synchronously"`
+	Requested     bool                                `json:"requested" jsonschema:"true when only an immediate-collection request was registered for a client collector"`
+	Collector     string                              `json:"collector,omitempty" jsonschema:"device code id of the registered client collector, present when requested is true"`
+	CollectorName string                              `json:"collector_name,omitempty" jsonschema:"current device code name of the registered client collector, present when requested is true"`
+	Report        *softwareinventory.CollectionReport `json:"report,omitempty" jsonschema:"collection report, present when this instance collected synchronously"`
 }
 
 // SoftwareInventoryCollector 是立即采集能力。权威面与单机注入本地适配
@@ -98,7 +99,8 @@ func (c localSoftwareInventoryCollector) CollectSoftwareInventory(
 	}
 	return CollectSoftwareInventoryOutput{
 		DeviceName: outcome.DeviceName, Requested: outcome.Requested,
-		Collector: outcome.Collector, Report: outcome.Report,
+		Collector: outcome.Collector, CollectorName: outcome.CollectorName,
+		Report: outcome.Report,
 	}, nil
 }
 

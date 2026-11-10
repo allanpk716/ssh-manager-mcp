@@ -14,9 +14,6 @@ import (
 // 采集调度的固定限制来自规格：每天保持新鲜，因此距上次成功已满一天就到
 // 期；周期检查建议每小时一轮；并发上限建议 4。
 const (
-	// CollectorAuthority 表示权威端（或单机）自己就是采集执行者。存储
-	// 层 software_collection_status.collector 的默认值使用同一个字符串。
-	CollectorAuthority = "authority"
 	// CollectDueAfter 是设备到期阈值：距上次成功采集达到这个时长后，下
 	// 一轮重新采集；从未成功采集过的设备始终到期。
 	CollectDueAfter = 24 * time.Hour
@@ -35,8 +32,8 @@ type SchedulerCollectFunc func(ctx context.Context, request CollectRequest) (*Co
 // 时钟、间隔与采集函数都可注入；serve 只负责启动与收尾。
 type Scheduler struct {
 	Store *store.Store
-	// Collector 是本实例的采集执行者身份；空值表示权威端。
-	Collector string
+	// Collector 是本实例的采集执行者身份；零值表示权威端或单机。
+	Collector models.Collector
 	// Collect 为空时复用绑定同一存储的单台采集服务。
 	Collect SchedulerCollectFunc
 	// Now 提供到期判断用的时钟；空值使用真实时钟。
@@ -130,6 +127,7 @@ func (s *Scheduler) ExecuteRound(ctx context.Context) (*SchedulerRoundReport, er
 				result, err := s.collect()(ctx, CollectRequest{
 					DeviceName:  due[index].DeviceName,
 					ServerEntry: due[index].PreferredServerID,
+					Source:      CLISource(),
 				})
 				if err != nil {
 					device.Err = err.Error()
@@ -202,12 +200,7 @@ func (s *Scheduler) roundLogged(ctx context.Context) {
 		report.Due, report.Succeeded, report.Failed, report.SkippedNotDue)
 }
 
-func (s *Scheduler) collector() string {
-	if s.Collector == "" {
-		return CollectorAuthority
-	}
-	return s.Collector
-}
+func (s *Scheduler) collector() models.Collector { return s.Collector }
 
 func (s *Scheduler) concurrency() int {
 	if s.Concurrency < 1 {

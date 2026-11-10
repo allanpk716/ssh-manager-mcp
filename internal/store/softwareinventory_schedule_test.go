@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 // TestSoftwareCollectionStatusesForCollector 验证调度服务读到期设备的公开
@@ -29,7 +31,7 @@ func TestSoftwareCollectionStatusesForCollector(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, err := st.SoftwareCollectionStatusesForCollector("authority")
+	rows, err := st.SoftwareCollectionStatusesForCollector(models.AuthorityCollector())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,11 +42,11 @@ func TestSoftwareCollectionStatusesForCollector(t *testing.T) {
 		t.Fatalf("从未采集的备用机应排在前面且上次成功时间为零：%+v", rows[0])
 	}
 	if rows[1].DeviceName != "工作站" || rows[1].LastSuccessAt != past ||
-		rows[1].LastServerName != "工作站入口" || rows[1].Collector != "authority" {
+		rows[1].LastServerName != "工作站入口" || rows[1].Collector.IsClient() {
 		t.Fatalf("工作站状态 = %+v", rows[1])
 	}
 
-	clientRows, err := st.SoftwareCollectionStatusesForCollector("cache-token-9")
+	clientRows, err := st.SoftwareCollectionStatusesForCollector(models.ClientCollector("cache-token-9"))
 	if err != nil {
 		t.Fatal(err)
 	}

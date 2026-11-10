@@ -68,6 +68,82 @@ func findQueryDevice(result QueryResult, name string) *QueryDeviceResult {
 	return nil
 }
 
+// TestQueryKeepsDevicesWithoutItemsAndFailureReason 验证没有条目过滤时，没
+// 有条目的受管设备仍返回；从未成功但失败过的设备保留执行者、失败时间与原
+// 因，CycloneDX 导出也标出从未采集。
+func TestQueryKeepsDevicesWithoutItemsAndFailureReason(t *testing.T) {
+	manager, st := newTestManager(t)
+	mustDevice(t, st, "空清单工作站", true)
+	mustDevice(t, st, "失败工作站", true)
+	mustDevice(t, st, "范围外设备", true)
+	emptyServer, err := st.GetServerByName("空清单工作站-ssh")
+	if err != nil || emptyServer == nil {
+		t.Fatal(err)
+	}
+	failedServer, err := st.GetServerByName("失败工作站-ssh")
+	if err != nil || failedServer == nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AddDeclaration(Declaration{
+		Device: "范围外设备", Category: CategoryServiceProgram, Name: "Redis", Version: "7.2",
+	}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := st.AddProfile("空设备 profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profile, []string{emptyServer.ID, failedServer.ID}); err != nil {
+		t.Fatal(err)
+	}
+	visibility := DevicesVisibleThroughServers(emptyServer.ID, failedServer.ID)
+	failureAt := time.Unix(1770001200, 0)
+	st.NowFn = func() time.Time { return failureAt }
+	if err := st.RecordSoftwareCollectionFailureFromCollector(
+		"失败工作站", models.ClientCollector("cache-token-failed"), "SSH 连接超时", failedServer.ID, false,
+		store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := manager.Query(QueryOptions{Visibility: visibility})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Devices) != 2 {
+		t.Fatalf("没有条目过滤时应返回范围内全部两台设备：%+v", result.Devices)
+	}
+	empty := findQueryDevice(result, "空清单工作站")
+	failed := findQueryDevice(result, "失败工作站")
+	if empty == nil || len(empty.Items) != 0 || !empty.Collection.NeverCollected || !empty.Collection.Stale {
+		t.Fatalf("空清单设备 = %+v", empty)
+	}
+	if failed == nil || !failed.Collection.NeverCollected || !failed.Collection.Stale ||
+		failed.Collection.Collector != "cache-token-failed" ||
+		failed.Collection.LastFailureAt == nil || failed.Collection.LastFailureAt.Unix() != failureAt.Unix() ||
+		failed.Collection.LastFailureReason != "SSH 连接超时" {
+		t.Fatalf("从未成功设备的失败状态 = %+v", failed.Collection)
+	}
+
+	document, err := MarshalCycloneDX(result, CycloneDXExportOptions{
+		GeneratedAt: failureAt.Add(time.Minute), SSHManagerVersion: "test", ProfileName: "profile",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := decodeCycloneDX(t, document)
+	if len(anySlice(t, value["components"], "components")) != 2 {
+		t.Fatalf("导出应包含范围内所有设备：%v", value)
+	}
+	for _, rawDevice := range anySlice(t, value["components"], "components") {
+		device := nestedMap(t, rawDevice, "设备组件")
+		properties := propertiesByName(t, device)
+		if properties["sshmgr:never-collected"] != "true" || properties["sshmgr:inventory-stale"] != "true" {
+			t.Fatalf("从未采集的设备必须在导出中标出：%+v", device)
+		}
+	}
+}
+
 // TestQueryPreservesWebDisplayFields 覆盖 Web UI 需要但过滤条件不用的字
 // 段：声明确认时间，以及容器镜像的所属、标签、摘要与运行状态。
 func TestQueryPreservesWebDisplayFields(t *testing.T) {

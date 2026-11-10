@@ -14,59 +14,70 @@ type ChangeEntry = models.SoftwareChangeEntry
 // CollectionStatusView 是命令行与后续 Web UI 显示的一台设备采集状态。
 // Stale 不落库，每次读取时按「当前时间减上次成功时间超过 7 天」计算。
 type CollectionStatusView struct {
-	DeviceID          string     `json:"device_id"`
-	DeviceName        string     `json:"device_name"`
-	Managed           bool       `json:"managed"`
-	Collector         string     `json:"collector,omitempty"`
-	CollectorLabel    string     `json:"collector_label,omitempty"`
-	ServerEntry       string     `json:"server_entry,omitempty"`
-	LastSuccessAt     *time.Time `json:"last_success_at,omitempty"`
-	LastFailureAt     *time.Time `json:"last_failure_at,omitempty"`
-	LastFailureReason string     `json:"last_failure_reason,omitempty"`
-	Incomplete        bool       `json:"incomplete,omitempty"`
-	CommandSetVersion string     `json:"command_set_version,omitempty"`
-	NeverCollected    bool       `json:"never_collected"`
-	Stale             bool       `json:"stale"`
-	PendingImmediate  bool       `json:"pending_immediate"`
+	DeviceID       string `json:"device_id"`
+	DeviceName     string `json:"device_name"`
+	Managed        bool   `json:"managed"`
+	CollectorLabel string `json:"collector_label,omitempty"`
+	CollectionStatus
 }
 
-// collectorLabel 把采集执行者代号翻译成显示名。客户端实例执行者使用活动
-// 设备码的名字登记。
-func collectorLabel(collector string) string {
-	if collector == "authority" || collector == "" {
+// collectorLabel 把采集执行者翻译成显示名。客户端实例执行者用设备码当前
+// 名字显示；设备码已吊销或找不到名字时显示编号并说明已吊销。
+func collectorLabel(collector string, name string, revoked bool) string {
+	if collector == "" {
 		return "权威端"
 	}
-	return "客户端实例 " + collector
+	if name == "" {
+		name = collector
+	}
+	label := "客户端实例 " + name
+	if revoked {
+		label += "（设备码已吊销）"
+	}
+	return label
 }
 
 // collectionStatusView 把存储层采集状态转换成显示形态并计算清单过期。
 func (m *Manager) collectionStatusView(stored models.SoftwareCollectionStatus) CollectionStatusView {
 	view := CollectionStatusView{
 		DeviceID: stored.DeviceID, DeviceName: stored.DeviceName, Managed: stored.Managed,
-		Collector: stored.Collector, CollectorLabel: collectorLabel(stored.Collector),
-		ServerEntry: stored.LastServerName, LastFailureReason: stored.LastFailureReason,
+		CollectorLabel: collectorLabel(
+			stored.Collector.CacheTokenID, stored.CollectorName, stored.CollectorRevoked,
+		),
+		CollectionStatus: collectionStatusCore(stored, m.now()),
+	}
+	return view
+}
+
+// collectionStatusCore 是统一查询、命令行 status 与 Web UI 共用的采集状
+// 态推导。清单是否过期不落库，每次读取时计算。
+func collectionStatusCore(stored models.SoftwareCollectionStatus, now time.Time) CollectionStatus {
+	status := CollectionStatus{
+		Collector: stored.Collector.CacheTokenID, CollectorName: stored.CollectorName,
+		CollectorRevoked: stored.CollectorRevoked,
+		ServerEntry:      stored.LastServerName, LastFailureReason: stored.LastFailureReason,
 		Incomplete: stored.LastIncomplete, CommandSetVersion: stored.CommandSetVersion,
 		PendingImmediate: stored.PendingImmediate,
 	}
 	if stored.LastSuccessAt.Unix() <= 0 {
-		view.NeverCollected = true
+		status.NeverCollected = true
 		// 从未成功采集过的受管设备算过期；不受管设备没有采集执行者，
 		// 不算过期。
-		view.Stale = stored.Managed
+		status.Stale = stored.Managed
 		if stored.LastFailureAt.Unix() > 0 {
 			failureAt := stored.LastFailureAt
-			view.LastFailureAt = &failureAt
+			status.LastFailureAt = &failureAt
 		}
-		return view
+		return status
 	}
 	successAt := stored.LastSuccessAt
-	view.LastSuccessAt = &successAt
+	status.LastSuccessAt = &successAt
 	if stored.LastFailureAt.Unix() > 0 {
 		failureAt := stored.LastFailureAt
-		view.LastFailureAt = &failureAt
+		status.LastFailureAt = &failureAt
 	}
-	view.Stale = m.now().Sub(successAt) > 7*24*time.Hour
-	return view
+	status.Stale = now.Sub(successAt) > 7*24*time.Hour
+	return status
 }
 
 // CollectionStatuses 列出采集状态。deviceName 为空时列出可见范围内的全

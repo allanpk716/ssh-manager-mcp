@@ -6,7 +6,6 @@ package clientops
 // 不可达时返回固定错误文本，绝不回退本地数据。
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -151,45 +150,38 @@ func (f *SoftwareInventoryForwarder) QuerySoftwareInventory(
 			text: SoftwareInventoryUnreachableText, err: err, unreachable: true,
 		}
 	}
-	request, err := http.NewRequest(http.MethodPost, f.url+"/software-inventory", bytes.NewReader(body))
+	response, err := softwareInventoryForwardRequest(
+		context.Background(), f.client, f.url, f.code, "/software-inventory", body,
+		SoftwareInventoryUnreachableText,
+		func(response *http.Response) error {
+			switch response.StatusCode {
+			case http.StatusOK:
+				return nil
+			case http.StatusUnauthorized:
+				return &softwareInventoryError{text: softwareInventoryRejectedText}
+			case http.StatusForbidden:
+				return &softwareInventoryError{text: softwareInventoryForbiddenText}
+			case http.StatusNotFound:
+				return &softwareInventoryError{text: softwareInventoryUnsupportedText}
+			default:
+				return softwareInventoryHTTPUnreachable(response, SoftwareInventoryUnreachableText)
+			}
+		},
+	)
 	if err != nil {
-		return softwareinventory.QueryResult{}, &softwareInventoryError{
-			text: SoftwareInventoryUnreachableText, err: err, unreachable: true,
-		}
-	}
-	setAuthorityRequestHeaders(request, f.code)
-	response, err := f.client.Do(request)
-	if err != nil {
-		return softwareinventory.QueryResult{}, &softwareInventoryError{
-			text: SoftwareInventoryUnreachableText, err: err, unreachable: true,
-		}
+		return softwareinventory.QueryResult{}, err
 	}
 	defer response.Body.Close()
-	switch response.StatusCode {
-	case http.StatusOK:
-		var result softwareinventory.QueryResult
-		if err := json.NewDecoder(io.LimitReader(response.Body, 16<<20)).Decode(&result); err != nil {
-			return softwareinventory.QueryResult{}, &softwareInventoryError{
-				text: SoftwareInventoryUnreachableText, err: err, unreachable: true,
-			}
-		}
-		if result.Devices == nil {
-			result.Devices = []softwareinventory.QueryDeviceResult{}
-		}
-		return result, nil
-	case http.StatusUnauthorized:
-		return softwareinventory.QueryResult{}, &softwareInventoryError{text: softwareInventoryRejectedText}
-	case http.StatusForbidden:
-		return softwareinventory.QueryResult{}, &softwareInventoryError{text: softwareInventoryForbiddenText}
-	case http.StatusNotFound:
-		return softwareinventory.QueryResult{}, &softwareInventoryError{text: softwareInventoryUnsupportedText}
-	default:
+	var result softwareinventory.QueryResult
+	if err := json.NewDecoder(io.LimitReader(response.Body, 16<<20)).Decode(&result); err != nil {
 		return softwareinventory.QueryResult{}, &softwareInventoryError{
-			text:        SoftwareInventoryUnreachableText,
-			err:         fmt.Errorf("authority returned %s", http.StatusText(response.StatusCode)),
-			unreachable: true,
+			text: SoftwareInventoryUnreachableText, err: err, unreachable: true,
 		}
 	}
+	if result.Devices == nil {
+		result.Devices = []softwareinventory.QueryDeviceResult{}
+	}
+	return result, nil
 }
 
 // SoftwareInventoryCollectionUnreachableText 是采集分派与结果上交的固定不
@@ -240,20 +232,14 @@ func (f *SoftwareInventoryForwarder) SoftwareCollectionAssignments(ctx context.C
 		}
 		return nil, &softwareInventoryError{text: softwareInventoryPlaintextText}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		f.url+"/software-inventory/assignments", bytes.NewReader([]byte("{}")))
+	response, err := softwareInventoryForwardRequest(
+		ctx, f.client, f.url, f.code, "/software-inventory/assignments", []byte("{}"),
+		SoftwareInventoryCollectionUnreachableText, softwareInventoryCollectionStatusError,
+	)
 	if err != nil {
-		return nil, &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
-	}
-	setAuthorityRequestHeaders(request, f.code)
-	response, err := f.client.Do(request)
-	if err != nil {
-		return nil, &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
-	}
-	defer response.Body.Close()
-	if err := softwareInventoryCollectionStatusError(response); err != nil {
 		return nil, err
 	}
+	defer response.Body.Close()
 	var body softwareInventoryAssignmentsResponse
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&body); err != nil {
 		return nil, &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
@@ -281,20 +267,14 @@ func (f *SoftwareInventoryForwarder) SubmitSoftwareCollectionResult(
 	if err != nil {
 		return &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		f.url+"/software-inventory/results", bytes.NewReader(body))
+	response, err := softwareInventoryForwardRequest(
+		ctx, f.client, f.url, f.code, "/software-inventory/results", body,
+		SoftwareInventoryCollectionUnreachableText, softwareInventoryCollectionStatusError,
+	)
 	if err != nil {
-		return &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
-	}
-	setAuthorityRequestHeaders(request, f.code)
-	response, err := f.client.Do(request)
-	if err != nil {
-		return &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
-	}
-	defer response.Body.Close()
-	if err := softwareInventoryCollectionStatusError(response); err != nil {
 		return err
 	}
+	defer response.Body.Close()
 	var result softwareInventorySubmissionResponse
 	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<10)).Decode(&result); err != nil {
 		return &softwareInventoryError{text: SoftwareInventoryCollectionUnreachableText, err: err, unreachable: true}
@@ -321,7 +301,7 @@ func softwareInventoryCollectionStatusError(response *http.Response) error {
 	default:
 		return &softwareInventoryError{
 			text: SoftwareInventoryCollectionUnreachableText,
-			err:  fmt.Errorf("authority returned %s", http.StatusText(response.StatusCode)), unreachable: true,
+			err:  httpStatusError(response.StatusCode), unreachable: true,
 		}
 	}
 }

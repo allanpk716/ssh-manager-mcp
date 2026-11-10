@@ -41,7 +41,7 @@ func TestCollectForSubmissionDoesNotWriteLocalInventory(t *testing.T) {
 		t.Fatalf("客户端本地不应保存实测条目：items=%d err=%v", len(items), err)
 	}
 	if status, err := st.SoftwareCollectionStatusForDevice("工作站"); err != nil ||
-		!status.LastSuccessAt.IsZero() || status.Collector != "authority" {
+		!status.LastSuccessAt.IsZero() || status.Collector.IsClient() {
 		t.Fatalf("客户端本地不应保存采集状态：%+v err=%v", status, err)
 	}
 }

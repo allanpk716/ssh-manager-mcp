@@ -1,6 +1,7 @@
 package softwareinventory
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 
@@ -225,14 +226,14 @@ func buildPOSIXOSItems(info posixOSInfo) []models.SoftwareObservedItem {
 	name, version := posixOSNameAndVersion(info)
 	items := []models.SoftwareObservedItem{{
 		Category:     models.SoftwareCategoryOperatingSystem,
-		Name:         firstNonEmptyString(name, "Unknown"),
-		Version:      firstNonEmptyString(version, "unknown"),
+		Name:         cmp.Or(name, "Unknown"),
+		Version:      cmp.Or(version, "unknown"),
 		Architecture: info.machine,
 	}}
 	if info.kernel != "" && info.systemType != "istoreos" && info.systemType != "openwrt" && info.systemType != "linux" {
 		items = append(items, models.SoftwareObservedItem{
 			Category:     models.SoftwareCategoryDriverFirmware,
-			Name:         firstNonEmptyString(info.kernelName+" 内核", "Linux 内核"),
+			Name:         cmp.Or(info.kernelName+" 内核", "Linux 内核"),
 			Version:      info.kernel,
 			Architecture: info.machine,
 		})
@@ -244,15 +245,15 @@ func buildPOSIXOSItems(info posixOSInfo) []models.SoftwareObservedItem {
 func posixOSNameAndVersion(info posixOSInfo) (string, string) {
 	switch info.systemType {
 	case "darwin":
-		return info.darwin["ProductName"], firstNonEmptyString(
+		return info.darwin["ProductName"], cmp.Or(
 			info.darwin["ProductVersion"], info.darwin["BuildVersion"])
 	case "synology-dsm":
-		return "Synology DSM", firstNonEmptyString(
+		return "Synology DSM", cmp.Or(
 			info.synology["productversion"], strings.Join(nonEmptyStrings(
 				info.synology["majorversion"], info.synology["minorversion"]), "."))
 	case "istoreos", "openwrt":
-		return firstNonEmptyString(info.osRelease["NAME"], info.openwrt["DISTRIB_ID"]),
-			firstNonEmptyString(info.osRelease["VERSION_ID"], info.openwrt["DISTRIB_RELEASE"])
+		return cmp.Or(info.osRelease["NAME"], info.openwrt["DISTRIB_ID"]),
+			cmp.Or(info.osRelease["VERSION_ID"], info.openwrt["DISTRIB_RELEASE"])
 	default:
 		return info.osRelease["NAME"], info.osRelease["VERSION_ID"]
 	}

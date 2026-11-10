@@ -159,7 +159,7 @@ func TestSoftwareDeclarationDraftsEndpoint_WritesDraftsOnly(t *testing.T) {
 		if err := json.Unmarshal([]byte(row.Command), &summary); err != nil {
 			t.Fatal(err)
 		}
-		if summary["device_code"] != "laptop" || row.Source != store.AuditSourceForward {
+		if summary["device_code"] != fx.laptopID || row.Source != store.AuditSourceForward {
 			t.Fatalf("草稿提交审计应记录设备码编号：%v %s", summary, row.Source)
 		}
 	}

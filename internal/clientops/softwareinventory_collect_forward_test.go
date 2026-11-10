@@ -106,4 +106,60 @@ func TestSoftwareInventoryCollectorForwarderUnreachable(t *testing.T) {
 	}
 }
 
+// TestSoftwareInventoryForwarderCollectSoftwareInventory 钉住客户端立即采集
+// 工具的转发请求与响应结构；范围外设备保留权威端拒绝，不可达走固定分支。
+func TestSoftwareInventoryForwarderCollectSoftwareInventory(t *testing.T) {
+	var gotPath, gotMethod, gotAuth string
+	var gotBody map[string]any
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod, gotAuth = r.URL.Path, r.Method, r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"device_name":"工作站","requested":false,`+
+			`"report":{"device_name":"工作站","server_entry_name":"入口","sudo":false,`+
+			`"command_set_version":"posix-v2","system_type":"ubuntu","incomplete":false,`+
+			`"notes":[],"item_counts":{}}}`)
+	}))
+	defer srv.Close()
+	forwarder := newTestSoftwareInventoryForwarder(t, srv)
+	defer forwarder.Close()
+
+	output, err := forwarder.CollectSoftwareInventory(context.Background(), mcpserver.CollectSoftwareInventoryInput{
+		Device: "工作站",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/software-inventory/collect" ||
+		gotAuth != "Bearer devcode-1" || gotBody["device"] != "工作站" {
+		t.Fatalf("请求形状不对：method=%s path=%s auth=%q body=%+v",
+			gotMethod, gotPath, gotAuth, gotBody)
+	}
+	if output.DeviceName != "工作站" || output.Requested || output.Report == nil ||
+		output.Report.CommandSetVersion != softwareinventory.POSIXCommandSetVersion {
+		t.Fatalf("立即采集输出 = %+v report=%+v", output, *output.Report)
+	}
+}
+
+// TestSoftwareInventoryForwarderCollectRejected 保留范围外设备与旧权威端的
+// 固定错误文本。
+func TestSoftwareInventoryForwarderCollectRejected(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/software-inventory/collect" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "device is not visible to this device code's profile", http.StatusForbidden)
+	}))
+	defer srv.Close()
+	forwarder := newTestSoftwareInventoryForwarder(t, srv)
+	defer forwarder.Close()
+	_, err := forwarder.CollectSoftwareInventory(context.Background(), mcpserver.CollectSoftwareInventoryInput{
+		Device: "范围外设备",
+	})
+	if err == nil || !strings.Contains(err.Error(), "不在本设备码绑定 profile 的可见范围内") {
+		t.Fatalf("范围外设备错误 = %v", err)
+	}
+}
+
 var testUnavailablePin = "sha256:" + strings.Repeat("a", 64)

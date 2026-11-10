@@ -10,11 +10,12 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
-// SetSoftwareCollectionCollector 登记一台设备由哪个客户端实例采集，并可选
-// 指定采集用服务器条目。collectorRef 是设备码的名字；serverRef 可用服务
-// 器条目名或标识符，为空时沿用采集服务的默认选择规则。登记前校验设备码
-// 有效，且采集用服务器条目既在这台设备上，也在该设备码绑定 profile 的授
-// 权范围内；登记与审计在同一个事务里提交。
+// SetSoftwareCollectionCollector 登记一台设备的采集执行者，并可选指定采集
+// 用服务器条目。collectorRef 是设备码的名字，空值表示权威端或单机；实际
+// 存储使用设备码编号。serverRef 可用服务器条目名或标识符，为空表示每次
+// 采集时再按默认规则选择。客户端实例登记前校验设备码有效、已绑定
+// profile，且显式指定的采集用服务器条目既在这台设备上，也在该设备码绑
+// 定 profile 的授权范围内；登记与审计在同一个事务里提交。
 func (s *Store) SetSoftwareCollectionCollector(
 	deviceRef, collectorRef, serverRef string,
 	source WriteSource,
@@ -32,47 +33,70 @@ func (s *Store) SetSoftwareCollectionCollector(
 		return err
 	}
 	collectorRef = strings.TrimSpace(collectorRef)
-	var tokenID, profileID string
-	err = tx.QueryRow(`
-		SELECT id,COALESCE(profile_id,'') FROM cache_tokens
-		WHERE name=? AND status='active'`, collectorRef,
-	).Scan(&tokenID, &profileID)
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("客户端实例 %q 不是有效的活动设备码", collectorRef)
-	}
-	if err != nil {
-		return err
-	}
-	if profileID == "" {
-		return fmt.Errorf("客户端实例 %q 的设备码没有绑定 profile，请先在权威端绑定", collectorRef)
+	collector := models.AuthorityCollector()
+	var profileID string
+	if collectorRef != "" {
+		err = tx.QueryRow(`
+			SELECT id,COALESCE(profile_id,'') FROM cache_tokens
+			WHERE name=? AND status='active'`, collectorRef,
+		).Scan(&collector.CacheTokenID, &profileID)
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("客户端实例 %q 不是有效的活动设备码", collectorRef)
+		}
+		if err != nil {
+			return err
+		}
+		if profileID == "" {
+			return fmt.Errorf("客户端实例 %q 的设备码没有绑定 profile，请先在权威端绑定", collectorRef)
+		}
 	}
 	servers, err := serversForDeviceTx(tx, device.ID)
 	if err != nil {
 		return err
 	}
-	if len(servers) == 0 {
-		return fmt.Errorf("设备 %s 没有服务器条目，无法登记采集执行者", device.Name)
-	}
 	sudoEnabled, err := softwareCollectSudoEnabledTx(tx)
 	if err != nil {
 		return err
 	}
-	chosen, err := chooseSoftwareCollectServer(servers, sudoEnabled, serverRef)
-	if err != nil {
-		return err
+	chosen := (*models.Server)(nil)
+	if serverRef != "" {
+		chosen, err = chooseSoftwareCollectServer(servers, sudoEnabled, serverRef)
+		if err != nil {
+			return err
+		}
 	}
-	var granted int
-	if err := tx.QueryRow(`
-		SELECT COUNT(*) FROM profile_servers WHERE profile_id=? AND server_id=?`,
-		profileID, chosen.ID,
-	).Scan(&granted); err != nil {
-		return err
-	}
-	if granted == 0 {
-		return fmt.Errorf(
-			"客户端实例 %q 绑定的 profile 不包含采集用服务器条目 %s，不能把它登记为这台设备的采集执行者",
-			collectorRef, chosen.Name,
-		)
+	if collector.IsClient() {
+		var granted int
+		if chosen == nil {
+			err = tx.QueryRow(`
+				SELECT COUNT(*)
+				FROM profile_servers grant
+				JOIN servers server ON server.id=grant.server_id
+				WHERE grant.profile_id=? AND server.device_id=?`,
+				profileID, device.ID,
+			).Scan(&granted)
+		} else {
+			err = tx.QueryRow(`
+				SELECT COUNT(*) FROM profile_servers WHERE profile_id=? AND server_id=?`,
+				profileID, chosen.ID,
+			).Scan(&granted)
+		}
+		if err != nil {
+			return err
+		}
+		if granted == 0 {
+			serverName := preferredServerName(chosen)
+			if serverName == "" {
+				return fmt.Errorf(
+					"客户端实例 %q 绑定的 profile 不包含这台设备的任何服务器条目，不能把它登记为这台设备的采集执行者",
+					collectorRef,
+				)
+			}
+			return fmt.Errorf(
+				"客户端实例 %q 绑定的 profile 不包含采集用服务器条目 %s，不能把它登记为这台设备的采集执行者",
+				collectorRef, serverName,
+			)
+		}
 	}
 	at := s.nowTime()
 	if _, err := tx.Exec(`
@@ -81,16 +105,31 @@ func (s *Store) SetSoftwareCollectionCollector(
 		ON CONFLICT(device_id) DO UPDATE SET
 			collector=excluded.collector,
 			preferred_server_id=excluded.preferred_server_id`,
-		device.ID, collectorRef, chosen.ID,
+		device.ID, collector.CacheTokenID, preferredServerID(chosen),
 	); err != nil {
 		return err
 	}
 	if err := writeSoftwareAuditTx(tx, at, "software-collect-collector", map[string]any{
-		"device": device.Name, "collector": collectorRef, "server": chosen.Name,
+		"device": device.Name, "collector": collectorRef,
+		"collector_id": collector.CacheTokenID, "server": preferredServerName(chosen),
 	}, source); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func preferredServerID(server *models.Server) string {
+	if server == nil {
+		return ""
+	}
+	return server.ID
+}
+
+func preferredServerName(server *models.Server) string {
+	if server == nil {
+		return ""
+	}
+	return server.Name
 }
 
 func serversForDeviceTx(tx *sql.Tx, deviceID string) ([]*models.Server, error) {
@@ -161,22 +200,59 @@ func chooseSoftwareCollectServer(
 
 // SoftwareCollectionAssignments 列出一个客户端实例名下需要执行的采集分派。
 // preferredServerID 为空属于旧数据，读取时按默认规则补齐为第一个条目。
-func (s *Store) SoftwareCollectionAssignments(collector string, now time.Time) ([]models.SoftwareCollectionAssignment, error) {
+func (s *Store) SoftwareCollectionAssignments(collector models.Collector, now time.Time) ([]models.SoftwareCollectionAssignment, error) {
 	statuses, err := s.SoftwareCollectionStatusesForCollector(collector)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]models.SoftwareCollectionAssignment, 0, len(statuses))
+	var profileID string
+	if err := s.db.QueryRow(
+		`SELECT COALESCE(profile_id,'') FROM cache_tokens WHERE id=?`,
+		collector.CacheTokenID,
+	).Scan(&profileID); err != nil {
+		return nil, err
+	}
+	granted := map[string]bool{}
+	if profileID != "" {
+		rows, err := s.db.Query(
+			`SELECT server_id FROM profile_servers WHERE profile_id=?`, profileID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var serverID string
+			if err := rows.Scan(&serverID); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			granted[serverID] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
 	for _, status := range statuses {
 		servers, err := s.FullServersForDevice(status.DeviceName)
 		if err != nil {
 			return nil, err
 		}
+		visibleServers := make([]*models.Server, 0, len(servers))
+		for _, server := range servers {
+			if granted[server.ID] {
+				visibleServers = append(visibleServers, server)
+			}
+		}
 		sudoEnabled, err := s.SoftwareCollectSudoEnabled()
 		if err != nil {
 			return nil, err
 		}
-		chosen, err := chooseSoftwareCollectServer(servers, sudoEnabled, status.PreferredServerID)
+		chosen, err := chooseSoftwareCollectServer(visibleServers, sudoEnabled, status.PreferredServerID)
 		if err != nil {
 			return nil, fmt.Errorf("设备 %s：%w", status.DeviceName, err)
 		}
@@ -196,7 +272,9 @@ func (s *Store) SoftwareCollectionAssignments(collector string, now time.Time) (
 // 采集失败。条目保留不动，失败时间与原因写进权威端采集状态，并写一行采
 // 集审计；不改变这台设备登记的采集执行者。
 func (s *Store) RecordSoftwareCollectionFailureFromCollector(
-	deviceName, collector, reason, serverID string,
+	deviceName string,
+	collector models.Collector,
+	reason, serverID string,
 	sudo bool,
 	source WriteSource,
 ) error {
@@ -227,7 +305,7 @@ func (s *Store) RecordSoftwareCollectionFailureFromCollector(
 		return err
 	}
 	if err := writeSoftwareAuditTx(tx, at, "software-collect", map[string]any{
-		"device": device.Name, "server": serverName, "collector": collector,
+		"device": device.Name, "server": serverName, "collector": collector.CacheTokenID,
 		"sudo": sudo, "result": "failed", "reason": reason,
 	}, source); err != nil {
 		return err

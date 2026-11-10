@@ -106,6 +106,31 @@ func TestParseDarwinNoProcessNamesFixture(t *testing.T) {
 	}
 }
 
+// TestDarwinBrewStableKeyIgnoresVersion 验证 Homebrew 软件包升级后仍使用
+// 同一个稳定键；同名多版本只在这一批输出里冲突时才追加版本。
+func TestDarwinBrewStableKeyIgnoresVersion(t *testing.T) {
+	oneVersion := buildDarwinBrewItems(parsedSection{lines: []string{
+		"formula\topenssh 9.9p1",
+	}})
+	upgraded := buildDarwinBrewItems(parsedSection{lines: []string{
+		"formula\topenssh 10.0p1",
+	}})
+	if len(oneVersion) != 1 || len(upgraded) != 1 {
+		t.Fatalf("Homebrew 条目数量异常：%+v %+v", oneVersion, upgraded)
+	}
+	if oneVersion[0].StableKey != upgraded[0].StableKey {
+		t.Fatalf("同一软件包升级后稳定键变化：%q -> %q",
+			oneVersion[0].StableKey, upgraded[0].StableKey)
+	}
+
+	multiVersion := buildDarwinBrewItems(parsedSection{lines: []string{
+		"formula\tpython 3.12 3.13",
+	}})
+	if len(multiVersion) != 2 || multiVersion[0].StableKey == multiVersion[1].StableKey {
+		t.Fatalf("同名多版本必须用版本区分：%+v", multiVersion)
+	}
+}
+
 // TestParseDarwinTruncatedFixture 覆盖 apps 节中途截断：系统、监听进程与
 // exe 节保留，应用及后续节不生成，整体标为不完整。
 func TestParseDarwinTruncatedFixture(t *testing.T) {

@@ -15,6 +15,21 @@ const (
 	SoftwareCategoryUnidentified    SoftwareCategory = "unidentified_process"
 )
 
+// SoftwareCategories 按展示顺序列出全部软件类别。
+var SoftwareCategories = []SoftwareCategory{
+	SoftwareCategoryOperatingSystem,
+	SoftwareCategoryServiceProgram,
+	SoftwareCategoryContainerImage,
+	SoftwareCategoryDriverFirmware,
+	SoftwareCategorySystemPackage,
+	SoftwareCategoryUnidentified,
+}
+
+// AllSoftwareCategories 返回软件类别的固定展示顺序副本。
+func AllSoftwareCategories() []SoftwareCategory {
+	return append([]SoftwareCategory(nil), SoftwareCategories...)
+}
+
 // Label 返回软件类别的中文显示名。
 func (c SoftwareCategory) Label() string {
 	switch c {

@@ -101,6 +101,7 @@ func MarshalCycloneDX(result QueryResult, options CycloneDXExportOptions) ([]byt
 			Properties: []cycloneDXProperty{
 				{Name: "sshmgr:collection-incomplete", Value: booleanText(device.Collection.Incomplete)},
 				{Name: "sshmgr:inventory-stale", Value: booleanText(device.Collection.Stale)},
+				{Name: "sshmgr:never-collected", Value: booleanText(device.Collection.NeverCollected)},
 			},
 		}
 		for _, item := range items {

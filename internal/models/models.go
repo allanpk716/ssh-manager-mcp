@@ -172,18 +172,6 @@ type Project struct {
 
 // CacheTokenStatus is the lifecycle state of a device-auth-code (for offline cache pull).
 // Only active admits its token at VerifyCacheToken. Lazy: status takes effect on the next pull.
-// SoftwareCollectionAssignment 是权威端下发给一个客户端实例的采集分派。
-type SoftwareCollectionAssignment struct {
-	DeviceID         string    `json:"device_id"`
-	DeviceName       string    `json:"device_name"`
-	ServerID         string    `json:"server_id"`
-	ServerName       string    `json:"server_name"`
-	Sudo             bool      `json:"sudo"`
-	PendingImmediate bool      `json:"pending_immediate"`
-	LastSuccessAt    time.Time `json:"last_success_at"`
-	Due              bool      `json:"due"`
-}
-
 type CacheTokenStatus string
 
 const (

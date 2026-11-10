@@ -47,14 +47,40 @@ func TestDeviceDeleteIncludesObservedItemsAndHistory(t *testing.T) {
 	if err := st.SetSoftwareCollectSudo(server.ID, true, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
+	observedItems, err := st.SoftwareObservedItemsForDevice("工作站")
+	if err != nil || len(observedItems) != 1 {
+		t.Fatalf("读取实测条目失败：%v %+v", err, observedItems)
+	}
+	manager := New(st)
+	declarationID, err := manager.AddDeclaration(Declaration{
+		Device: "工作站", Category: CategorySystemPackage, Name: "OpenSSH 服务",
+		Version: "1:9.9p1-1",
+	}, CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ClaimDeclaration(
+		declarationID, observedItems[0].StableKey, CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSoftwareDeclarationDrafts([]models.SoftwareDeclarationDraft{{
+		SoftwareDeclaration: models.SoftwareDeclaration{
+			Device: "工作站", Category: CategoryServiceProgram,
+			Name: "业务网关", Version: "1.0",
+		},
+	}}, store.AllSoftwareDevices(), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
 
 	preview, err := st.DeviceDeletePreview("工作站")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.SoftwareObservedItemCount != 1 || preview.SoftwareChangeHistoryCount < 2 {
-		t.Fatalf("设备删除预览缺少实测与历史数量：实测 %d、历史 %d",
-			preview.SoftwareObservedItemCount, preview.SoftwareChangeHistoryCount)
+	if preview.SoftwareObservedItemCount != 1 || preview.SoftwareItemCount != 1 ||
+		preview.SoftwareDeclarationCount != 2 || preview.SoftwareCollectorCount != 1 ||
+		preview.SoftwareChangeHistoryCount < 2 {
+		t.Fatalf("设备删除预览数量 = %+v", preview)
 	}
 	if _, err := st.DeleteDeviceCascading("工作站", preview); err != nil {
 		t.Fatal(err)
