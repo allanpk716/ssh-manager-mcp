@@ -31,7 +31,7 @@ func (f *cacheLinuxMountServer) handler(command string, stdin io.Reader) (string
 		return "SSHMGR-PROBE 0 ok 2 \n", "", 0
 	case strings.Contains(command, "SSHMGR-LINUX-MOUNT"):
 		f.credentialFmt = "username=mount-user\npassword=" + string(stdinBytes)
-		return "SSHMGR-LINUX-MOUNT ok\n", "", 0
+		return "SSHMGR-LINUX-MOUNT result=first-mount-success selected=1\n", "", 0
 	default:
 		return "", "unexpected command: " + command, 90
 	}
