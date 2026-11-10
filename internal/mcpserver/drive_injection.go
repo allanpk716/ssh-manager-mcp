@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -22,6 +23,10 @@ import (
 // 本次执行的随机标记、共享序号与结果。
 const networkDriveStatusPrefix = "SSHMGR-SMBMAP:"
 
+// networkDriveAddressCacheLifetime 是选址缓存的存活时间：连续命令在 10 分钟内
+// 复用同一选中地址，不再重复探测 445 端口。
+const networkDriveAddressCacheLifetime = 10 * time.Minute
+
 const (
 	networkDriveReasonListFailed       = "读取共享存储登记失败"
 	networkDriveReasonVisibleFailed    = "读取当前 profile 的服务器可见范围失败"
@@ -33,7 +38,6 @@ const (
 	networkDriveReasonNoDevice         = "目标服务器未关联拓扑设备"
 	networkDriveReasonNoCommonNetwork  = "目标服务器所属设备与共享存储提供方设备没有共同网络"
 	networkDriveReasonProbeFailed      = "候选地址探测失败"
-	networkDriveReasonAllUnreachable   = "全部候选地址在目标服务器上探测失败"
 	networkDriveReasonStatusMissing    = "注入步骤没有返回状态行"
 	networkDriveReasonStatusUnreadable = "注入步骤没有返回可识别的结果"
 )
@@ -51,12 +55,151 @@ type networkDriveWarning struct {
 // 明每个没有进入 items 的共享及原因。远端结果状态行在执行后由
 // consumeStatusLines 解析并从输出中剔除。
 type networkDriveInjectionPlan struct {
-	items    []sshbroker.NetworkDriveInjection
-	warnings []networkDriveWarning
-	statuses map[int]string
+	items     []sshbroker.NetworkDriveInjection
+	warnings  []networkDriveWarning
+	notes     []string
+	statuses  map[int]string
+	cacheKeys []networkDriveAddressCacheKey
 	// extraTimeout 是选址与映射步骤的耗时预算；执行用户命令时把它加在
 	// SSH 超时上，注入耗时就不占用用户命令的超时。
 	extraTimeout time.Duration
+}
+
+// networkDriveAddressCacheKey 唯一确定一份选址缓存：同一服务器条目上的同
+// 一个共享，且共享存储登记版本号一致。版本号变化后旧缓存自然失效。
+type networkDriveAddressCacheKey struct {
+	ServerID string
+	Share    string
+	Version  int64
+}
+
+// networkDriveAddressCandidate 是缓存里保留的候选地址元数据。address 只
+// 在进程内用于生成注入命令；呈现给 agent 的说明只使用网络名与登记序号。
+type networkDriveAddressCandidate struct {
+	Address     string
+	NetworkName string
+	Sequence    int
+	Physical    bool
+}
+
+// networkDriveAddressSelectionEntry 是一次选址留在进程内存里的缓存项：
+// 全部候选、因网络类映射失败作废的地址、当前选中的地址，以及改走虚拟局
+// 域网时的安全说明。缓存不落盘、不同步给权威端。
+type networkDriveAddressSelectionEntry struct {
+	candidates  []networkDriveAddressCandidate
+	unavailable map[string]bool
+	address     string
+	note        string
+	expiresAt   time.Time
+}
+
+// networkDriveAddressCacheView 是选址前从缓存读到的一次快照。ready 表示
+// 可以直接复用；waiting 表示全部候选都已作废，应等缓存过期；probeList 是
+// 这次仍要探测的候选。
+type networkDriveAddressCacheView struct {
+	ready       bool
+	waiting     bool
+	address     string
+	note        string
+	probeList   []networkDriveAddressCandidate
+	unavailable map[string]bool
+}
+
+// networkDriveAddressSelectionCache 是网络盘符注入的进程内选址缓存。并发
+// 调用 exec_command 时可能同时选址，全部读写都在互斥锁内完成。
+type networkDriveAddressSelectionCache struct {
+	mu      sync.Mutex
+	now     func() time.Time
+	entries map[networkDriveAddressCacheKey]*networkDriveAddressSelectionEntry
+}
+
+// networkDriveAddressCache 是进程级缓存：同一个 sshmgr 进程里的后续命令
+// 共享选址结论。
+var networkDriveAddressCache = newNetworkDriveAddressCache(time.Now)
+
+func newNetworkDriveAddressCache(now func() time.Time) *networkDriveAddressSelectionCache {
+	return &networkDriveAddressSelectionCache{
+		now:     now,
+		entries: map[networkDriveAddressCacheKey]*networkDriveAddressSelectionEntry{},
+	}
+}
+
+// view 返回一份缓存快照。缓存过期或版本变化后视为没有缓存；选中地址已
+// 被作废时给出待探测候选，全部候选都被作废时给出等待结论。
+func (c *networkDriveAddressSelectionCache) view(key networkDriveAddressCacheKey) networkDriveAddressCacheView {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for cached := range c.entries {
+		if cached.ServerID == key.ServerID && cached.Share == key.Share && cached.Version != key.Version {
+			delete(c.entries, cached)
+		}
+	}
+	entry, ok := c.entries[key]
+	if !ok {
+		return networkDriveAddressCacheView{}
+	}
+	if !c.now().Before(entry.expiresAt) {
+		delete(c.entries, key)
+		return networkDriveAddressCacheView{}
+	}
+	if entry.address != "" && !entry.unavailable[entry.address] {
+		return networkDriveAddressCacheView{ready: true, address: entry.address, note: entry.note}
+	}
+	probeList := make([]networkDriveAddressCandidate, 0, len(entry.candidates))
+	unavailable := make(map[string]bool, len(entry.unavailable))
+	for address, marked := range entry.unavailable {
+		unavailable[address] = marked
+	}
+	for _, candidate := range entry.candidates {
+		if !entry.unavailable[candidate.Address] {
+			probeList = append(probeList, candidate)
+		}
+	}
+	return networkDriveAddressCacheView{
+		waiting: len(probeList) == 0, probeList: probeList, unavailable: unavailable,
+	}
+}
+
+// record 写入一次选址结论。如果是在作废地址后的重选，保留原来的过期时间
+// 与作废标记；全新选址则按当前时间重新计算 10 分钟存活期。
+func (c *networkDriveAddressSelectionCache) record(
+	key networkDriveAddressCacheKey,
+	candidates []networkDriveAddressCandidate, selected networkDriveAddressCandidate, note string,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for cached := range c.entries {
+		if cached.ServerID == key.ServerID && cached.Share == key.Share && cached.Version != key.Version {
+			delete(c.entries, cached)
+		}
+	}
+	entry := c.entries[key]
+	if entry == nil || !c.now().Before(entry.expiresAt) {
+		entry = &networkDriveAddressSelectionEntry{
+			candidates:  candidates,
+			unavailable: map[string]bool{},
+			expiresAt:   c.now().Add(networkDriveAddressCacheLifetime),
+		}
+		c.entries[key] = entry
+	}
+	entry.candidates = candidates
+	entry.address = selected.Address
+	entry.note = note
+}
+
+// markUnavailable 在注入遇到网络类映射失败后作废缓存里的地址：下一条命
+// 令改选下一个候选，全部候选作废后等缓存过期再重新探测。
+func (c *networkDriveAddressSelectionCache) markUnavailable(key networkDriveAddressCacheKey, address string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || entry.unavailable[address] {
+		return
+	}
+	entry.unavailable[address] = true
+	if entry.address == address {
+		entry.address, entry.note = "", ""
+	}
 }
 
 // networkDriveProbeExecutor 是在目标服务器上执行固定探测命令的注入点；
@@ -116,19 +259,29 @@ func buildNetworkDriveInjectionPlan(
 			continue
 		}
 		probeBegin := time.Now()
-		address, reason := networkDriveSelectAddress(ctx, st, server, share, executor)
+		selection := networkDriveSelectAddress(ctx, st, server, share, executor)
 		probeElapsed += time.Since(probeBegin)
-		if reason != "" {
-			plan.warn(networkDriveWarning{ShareName: share.Name, Drive: share.Drive, Reason: reason})
+		if selection.Reason != "" {
+			plan.warn(networkDriveWarning{ShareName: share.Name, Drive: share.Drive, Reason: selection.Reason})
 			continue
 		}
+		if selection.Note != "" {
+			plan.notes = append(plan.notes, fmt.Sprintf("共享 %s 的网络盘符 %s: %s",
+				share.Name, share.Drive, selection.Note))
+		}
+		plan.cacheKeys = append(plan.cacheKeys, networkDriveAddressCacheKey{
+			ServerID: server.ID, Share: share.Name, Version: share.Version,
+		})
 		plan.items = append(plan.items, sshbroker.NetworkDriveInjection{
-			ShareName: share.Name, Drive: share.Drive, Address: address,
+			ShareName: share.Name, Drive: share.Drive, Address: selection.Address,
 			UserName: share.MountUser, Password: password, StatusMarker: marker,
 		})
 	}
 	sort.Slice(plan.items, func(i, j int) bool {
 		return plan.items[i].ShareName < plan.items[j].ShareName
+	})
+	sort.Slice(plan.cacheKeys, func(i, j int) bool {
+		return plan.cacheKeys[i].Share < plan.cacheKeys[j].Share
 	})
 	sort.Slice(plan.warnings, func(i, j int) bool {
 		if plan.warnings[i].ShareName == plan.warnings[j].ShareName {
@@ -198,38 +351,118 @@ func networkDriveScriptValuesSafe(share *models.SharedStorage) bool {
 	return true
 }
 
+// networkDriveNetworkNames 按登记顺序返回设备所在的网络名并去掉重复名
+// 字。警告只用网络名呈现拓扑，不出现地址。
+func networkDriveNetworkNames(memberships []*models.NetworkMembership) []string {
+	names := make([]string, 0, len(memberships))
+	seen := make(map[string]bool, len(memberships))
+	for _, membership := range memberships {
+		if membership == nil || membership.NetworkName == "" || seen[membership.NetworkName] {
+			continue
+		}
+		seen[membership.NetworkName] = true
+		names = append(names, membership.NetworkName)
+	}
+	return names
+}
+
+func networkDriveNetworkNamesLabel(names []string) string {
+	if len(names) == 0 {
+		return "（无）"
+	}
+	return strings.Join(names, "、")
+}
+
+// networkDriveNoDeviceReason 渲染目标服务器没有关联设备时的警告，列出提
+// 供方与目标两侧的网络名，呈现约定与 mount_share 一致。
+func networkDriveNoDeviceReason(
+	providerMemberships []*models.NetworkMembership, providerErr error,
+) string {
+	reason := networkDriveReasonNoDevice + "，未探测"
+	if providerErr != nil {
+		return reason
+	}
+	return strings.Join([]string{
+		reason,
+		"共享存储提供方设备所在网络：" + networkDriveNetworkNamesLabel(networkDriveNetworkNames(providerMemberships)),
+		"目标服务器所属设备所在网络：（无）",
+		"请 owner 先补齐网络拓扑登记",
+	}, "\n")
+}
+
+// networkDriveNoCommonNetworkReason 渲染没有共同网络时的警告，逐侧列出网
+// 络名，说明没有做任何探测。
+func networkDriveNoCommonNetworkReason(providerMemberships, targetMemberships []*models.NetworkMembership) string {
+	return strings.Join([]string{
+		networkDriveReasonNoCommonNetwork + "，未探测",
+		"共享存储提供方设备所在网络：" + networkDriveNetworkNamesLabel(networkDriveNetworkNames(providerMemberships)),
+		"目标服务器所属设备所在网络：" + networkDriveNetworkNamesLabel(networkDriveNetworkNames(targetMemberships)),
+		"请 owner 先补齐网络拓扑登记",
+	}, "\n")
+}
+
+// networkDriveAddressSelection 是一次选址的结果：成功时给出地址与可选的
+// 虚拟局域网说明，失败时给出不含地址、挂载账号或密码的原因。
+type networkDriveAddressSelection struct {
+	Address string
+	Reason  string
+	Note    string
+}
+
 // networkDriveSelectAddress 复用 mount_share 的共同网络候选规划与连通探测
 // 固定命令，在目标服务器上经一次独立 SSH 执行探测 445，取排序最靠前的连
-// 通地址。本票不做缓存。
+// 通地址。选中地址按（服务器条目、共享、共享存储版本号）在进程内缓存
+// 10 分钟；网络类映射失败作废的地址不再进入后续探测。
 func networkDriveSelectAddress(
 	ctx context.Context, st *store.Store, server *models.Server,
 	share *models.SharedStorage, executor networkDriveProbeExecutor,
-) (string, string) {
+) networkDriveAddressSelection {
+	providerMemberships, providerErr := st.ListNetworkMembershipsByRegistration(share.DeviceName)
 	if server.DeviceID == "" {
-		return "", networkDriveReasonNoDevice
+		return networkDriveAddressSelection{Reason: networkDriveNoDeviceReason(providerMemberships, providerErr)}
 	}
 	targetDevice, err := st.GetDeviceByID(server.DeviceID)
 	if err != nil || targetDevice == nil {
-		return "", networkDriveReasonNoDevice
+		return networkDriveAddressSelection{Reason: networkDriveNoDeviceReason(providerMemberships, providerErr)}
 	}
 	targetMemberships, err := st.ListNetworkMembershipsByRegistration(targetDevice.Name)
 	if err != nil {
-		return "", networkDriveReasonProbeFailed
+		return networkDriveAddressSelection{Reason: networkDriveReasonProbeFailed}
 	}
-	providerMemberships, err := st.ListNetworkMembershipsByRegistration(share.DeviceName)
-	if err != nil {
-		return "", networkDriveReasonProbeFailed
+	if providerErr != nil {
+		return networkDriveAddressSelection{Reason: networkDriveReasonProbeFailed}
 	}
 	addressPlan := sshbroker.PlanCommonNetworkAddresses(providerMemberships, targetMemberships)
 	if len(addressPlan.Candidates) == 0 {
-		return "", networkDriveReasonNoCommonNetwork
+		return networkDriveAddressSelection{Reason: networkDriveNoCommonNetworkReason(
+			providerMemberships, targetMemberships)}
+	}
+	candidates := make([]networkDriveAddressCandidate, 0, len(addressPlan.Candidates))
+	for _, candidate := range addressPlan.Candidates {
+		candidates = append(candidates, networkDriveAddressCandidate{
+			Address: candidate.Address, NetworkName: candidate.NetworkName,
+			Sequence: candidate.NetworkSequence,
+			Physical: candidate.Source == sshbroker.DialAddressPhysical,
+		})
+	}
+	cacheKey := networkDriveAddressCacheKey{ServerID: server.ID, Share: share.Name, Version: share.Version}
+	view := networkDriveAddressCache.view(cacheKey)
+	if view.ready {
+		return networkDriveAddressSelection{Address: view.address, Note: view.note}
+	}
+	if view.waiting {
+		return networkDriveAddressSelection{Reason: networkDriveWaitingReason(candidates)}
+	}
+	probeList := candidates
+	if view.probeList != nil {
+		probeList = view.probeList
 	}
 	addressTimeout, err := sshbroker.ResolveAddressTimeout()
 	if err != nil {
-		return "", networkDriveReasonProbeFailed
+		return networkDriveAddressSelection{Reason: networkDriveReasonProbeFailed}
 	}
-	items := make([]probe.ShellCommandItem, 0, len(addressPlan.Candidates))
-	for _, candidate := range addressPlan.Candidates {
+	items := make([]probe.ShellCommandItem, 0, len(probeList))
+	for _, candidate := range probeList {
 		items = append(items, probe.ShellCommandItem{
 			Address: candidate.Address, Port: sharemount.SMBPort, Timeout: addressTimeout,
 		})
@@ -237,20 +470,95 @@ func networkDriveSelectAddress(
 	command, err := probe.BuildShellProbeCommand(
 		models.NormalizeShellType(string(server.ShellType)), items)
 	if err != nil {
-		return "", networkDriveReasonProbeFailed
+		return networkDriveAddressSelection{Reason: networkDriveReasonProbeFailed}
 	}
 	result, err := executor.Exec(ctx, command,
 		addressTimeout*time.Duration(len(items))+10*time.Second, 64*1024)
 	if err != nil {
-		return "", networkDriveReasonProbeFailed
+		return networkDriveAddressSelection{Reason: networkDriveReasonProbeFailed}
 	}
 	results := probe.ParseShellProbeOutput(result.Stdout, len(items))
+	attempts := make([]sharemount.ProbeAttempt, 0, len(items))
 	for index, probeResult := range results {
+		attempts = append(attempts, sharemount.ProbeAttempt{
+			NetworkName:     probeList[index].NetworkName,
+			NetworkSequence: probeList[index].Sequence,
+			Physical:        probeList[index].Physical, OK: probeResult.OK,
+			ErrorCategory: probeResult.Category, DurationMilli: probeResult.Duration.Milliseconds(),
+		})
 		if probeResult.OK {
-			return addressPlan.Candidates[index].Address, ""
+			selected := probeList[index]
+			note := networkDriveVirtualNetworkNote(selected, candidates, attempts, view.unavailable)
+			networkDriveAddressCache.record(cacheKey, candidates, selected, note)
+			return networkDriveAddressSelection{Address: selected.Address, Note: note}
 		}
 	}
-	return "", networkDriveReasonAllUnreachable
+	return networkDriveAddressSelection{Reason: networkDriveAllUnreachableReason(attempts)}
+}
+
+// networkDriveWaitingReason 渲染全部候选都已作废时的等待说明，只使用网络
+// 名与登记序号，不出现 IP 或域名。
+func networkDriveWaitingReason(candidates []networkDriveAddressCandidate) string {
+	entries := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		entries = append(entries, fmt.Sprintf("%s 第%d个地址", candidate.NetworkName, candidate.Sequence))
+	}
+	return "全部候选地址均已因网络类映射失败标记为不可用，等待缓存过期后重新探测：" +
+		strings.Join(entries, "、")
+}
+
+// networkDriveAllUnreachableReason 沿用 mount_share 选址失败的呈现约定：逐
+// 个列出网络名、登记序号、错误分类与耗时，不出现 IP 或域名。
+func networkDriveAllUnreachableReason(attempts []sharemount.ProbeAttempt) string {
+	lines := make([]string, 0, len(attempts)+1)
+	lines = append(lines, "全部候选地址在目标服务器上探测失败，登记与实际不一致：")
+	for _, attempt := range attempts {
+		line := fmt.Sprintf("%s 第%d个地址  ✗%s", attempt.NetworkName,
+			attempt.NetworkSequence, models.ProbeErrorCategoryLabel(attempt.ErrorCategory))
+		if attempt.DurationMilli >= 0 {
+			line += fmt.Sprintf(" %dms", attempt.DurationMilli)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// networkDriveVirtualNetworkNote 在物理局域网候选不可用、改走虚拟局域网时
+// 生成附在输出末尾的安全说明，呈现约定与 mount_share 一致。
+func networkDriveVirtualNetworkNote(
+	selected networkDriveAddressCandidate, candidates []networkDriveAddressCandidate,
+	attempts []sharemount.ProbeAttempt, unavailable map[string]bool,
+) string {
+	if selected.Physical {
+		return ""
+	}
+	physicalFailures := make([]string, 0)
+	for _, candidate := range candidates {
+		if !candidate.Physical || candidate.Address == selected.Address {
+			continue
+		}
+		if unavailable[candidate.Address] {
+			physicalFailures = append(physicalFailures,
+				fmt.Sprintf("%s 第%d个地址（网络类映射失败）", candidate.NetworkName, candidate.Sequence))
+			continue
+		}
+		for _, attempt := range attempts {
+			if attempt.NetworkName == candidate.NetworkName &&
+				attempt.NetworkSequence == candidate.Sequence && !attempt.OK {
+				line := fmt.Sprintf("%s 第%d个地址  ✗%s", attempt.NetworkName,
+					attempt.NetworkSequence, models.ProbeErrorCategoryLabel(attempt.ErrorCategory))
+				if attempt.DurationMilli >= 0 {
+					line += fmt.Sprintf(" %dms", attempt.DurationMilli)
+				}
+				physicalFailures = append(physicalFailures, line)
+			}
+		}
+	}
+	if len(physicalFailures) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("已使用虚拟局域网：%s 第%d个地址，性能可能下降；物理局域网地址不通：%s",
+		selected.NetworkName, selected.Sequence, strings.Join(physicalFailures, "；"))
 }
 
 func newNetworkDriveStatusMarker() (string, error) {
@@ -284,6 +592,11 @@ func (p *networkDriveInjectionPlan) consumeStatusLines(stdout, stderr string) (s
 		}
 		if status == "ok" {
 			continue
+		}
+		// 网络类映射失败说明探测结论不可信（透明代理可能误报连通），把该
+		// 地址在进程内缓存里作废，下一条命令改选下一个候选。
+		if networkDriveStatusIsNetworkFailure(status) && index < len(p.cacheKeys) {
+			networkDriveAddressCache.markUnavailable(p.cacheKeys[index], item.Address)
 		}
 		p.warn(networkDriveWarning{
 			ShareName: item.ShareName, Drive: item.Drive,
@@ -388,10 +701,20 @@ func (p networkDriveInjectionPlan) injectionItems() []sshbroker.ExecInjection {
 	return items
 }
 
-// appendWarnings 沿用环境变量注入的警告机制：警告附在标准输出末尾，不影
-// 响退出码，也不计入输出截断。
+// networkDriveStatusIsNetworkFailure 判断映射结果是否属于网络类失败。判
+// 定只服务于选址缓存作废；完整的警告分类与认证失败暂停属于后续票。
+func networkDriveStatusIsNetworkFailure(status string) bool {
+	switch status {
+	case "timeout", "error-53", "error-64", "error-67":
+		return true
+	}
+	return false
+}
+
+// appendWarnings 沿用环境变量注入的警告机制：警告与说明附在标准输出末
+// 尾，不影响退出码，也不计入输出截断。
 func (p networkDriveInjectionPlan) appendWarnings(stdout string) string {
-	if len(p.warnings) == 0 {
+	if len(p.warnings) == 0 && len(p.notes) == 0 {
 		return stdout
 	}
 	if stdout != "" && !strings.HasSuffix(stdout, "\n") {
@@ -404,6 +727,9 @@ func (p networkDriveInjectionPlan) appendWarnings(stdout string) string {
 				warning.ShareName, warning.Drive, warning.Reason)
 		}
 		stdout += line + "\n"
+	}
+	for _, note := range p.notes {
+		stdout += note + "\n"
 	}
 	return stdout
 }
