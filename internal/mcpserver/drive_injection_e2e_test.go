@@ -448,8 +448,12 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	if _, err := st.AddNetwork(models.Network{Name: "办公虚拟局域网", Type: models.NetworkVirtual}); err != nil {
 		t.Fatal(err)
 	}
+	providerPhysicalAddress := "192.0.2.10"
+	if settings.unsafeProviderAddress {
+		providerPhysicalAddress = `bad"address`
+	}
 	for _, membership := range []struct{ network, address string }{
-		{"办公物理局域网", "192.0.2.10"},
+		{"办公物理局域网", providerPhysicalAddress},
 		{"办公虚拟局域网", "100.64.10.10"},
 	} {
 		if _, err := st.AddNetworkMembership("NAS", membership.network, membership.address); err != nil {
@@ -584,8 +588,12 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	if err := st.AllowSecrets(secretNames, allowedTargets, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
+	mountUser := "mount-user"
+	if settings.unsafeMountUser {
+		mountUser = `mount"user`
+	}
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
-		Name: "datasets", Device: "NAS", User: "mount-user",
+		Name: "datasets", Device: "NAS", User: mountUser,
 		PasswordSecret: "DATASETS_MOUNT_PASSWORD", Drive: "S",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
@@ -649,6 +657,8 @@ type networkDriveSeedSetup struct {
 	secondServer           bool
 	invalidDatasetPassword bool
 	environmentSecret      bool
+	unsafeMountUser        bool
+	unsafeProviderAddress  bool
 	commandDelay           time.Duration
 	disjointNetworks       bool
 	noDevice               bool
@@ -1827,6 +1837,80 @@ func TestNetworkDriveInjectionWindowsCmdRejectsInvalidUTF8Password(t *testing.T)
 	}
 	if strings.Contains(string(encoded), string(invalidPassword)) {
 		t.Fatal("audit row leaked the invalid password bytes")
+	}
+}
+
+// TestNetworkDriveInjectionUnsafeRegistrationWarnsButRunsCommand 钉住登记
+// 值的失败边界：地址含会让封装脚本变形的字符时，只跳过这个共享并警告，
+// 不能让 sshbroker 的最后防线挡住整条用户命令。
+func TestNetworkDriveInjectionUnsafeRegistrationWarnsButRunsCommand(t *testing.T) {
+	useManualNetworkDriveClock(t)
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.unsafeProviderAddress = true
+	})
+	server, err := fixture.store.GetServer(fixture.serverID)
+	if err != nil || server == nil {
+		t.Fatalf("read server: %v %v", server, err)
+	}
+	shares, err := fixture.store.ListSharedStorages(store.SharedStorageFilter{Server: fixture.serverID})
+	if err != nil || len(shares) != 1 {
+		t.Fatalf("read shares: %v %#v", err, shares)
+	}
+	candidatePlan := networkDrivePlanAddressCandidates(fixture.store, server, shares[0])
+	if candidatePlan.Reason != "" || len(candidatePlan.Candidates) == 0 {
+		t.Fatalf("unsafe address candidates = %+v", candidatePlan)
+	}
+	networkDriveAddressCache.record(
+		networkDriveAddressCacheKey{ServerID: server.ID, Share: shares[0].Name, Version: shares[0].Version},
+		candidatePlan.Candidates, candidatePlan.Candidates[0], "",
+	)
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": "Get-Location"},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("exec_command failed: err=%v result=%+v", err, result)
+	}
+	var output struct {
+		Stdout string `json:"stdout"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	want := "plain-command-output\n" +
+		"共享 datasets 的网络盘符 S: 未注入：" + networkDriveReasonUnsafeValue + "\n"
+	if output.Stdout != want {
+		t.Fatalf("stdout = %q, want %q", output.Stdout, want)
+	}
+	commands, _ := fixture.fake.recorded()
+	if len(commands) != 1 || strings.Contains(commands[0], "New-SmbMapping") {
+		t.Fatalf("unsafe registration reached the mapping wrapper: %#v", commands)
+	}
+}
+
+// TestNetworkDriveInjectionSudoOutsideWritableListStaysQuiet 钉住提权层说
+// 明的泄露边界：普通层本来就没有可注入共享时，提权执行不能额外暴露这台
+// 服务器登记过共享存储的信息。
+func TestNetworkDriveInjectionSudoOutsideWritableListStaysQuiet(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
+		setup.sudoTarget = true
+		setup.notWritable = true
+	})
+
+	result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "exec_command",
+		Arguments: map[string]any{
+			"server_id": fixture.serverID, "command": "whoami", "sudo": true,
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("exec_command(sudo) failed: err=%v result=%+v", err, result)
+	}
+	var output struct {
+		Stdout string `json:"stdout"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if output.Stdout != "plain-command-output\n" {
+		t.Fatalf("sudo output leaked the storage registration: %q", output.Stdout)
 	}
 }
 

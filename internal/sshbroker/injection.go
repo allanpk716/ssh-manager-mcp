@@ -226,16 +226,7 @@ func validateNetworkDriveInjection(drive NetworkDriveInjection, shellType models
 		models.NormalizeShellType(string(shellType)) != models.ShellWindowsCmd {
 		return fmt.Errorf("network drive injection shell type %q is not supported yet", shellType)
 	}
-	if len(drive.Drive) != 1 || drive.Drive < "D" || drive.Drive > "Z" {
-		return fmt.Errorf("network drive letter %q is invalid", drive.Drive)
-	}
-	if err := validateNetworkDriveScriptValue("share name", drive.ShareName); err != nil {
-		return err
-	}
-	if err := validateNetworkDriveScriptValue("address", drive.Address); err != nil {
-		return err
-	}
-	if err := validateNetworkDriveScriptValue("user name", drive.UserName); err != nil {
+	if err := ValidateNetworkDriveInjectionValues(drive); err != nil {
 		return err
 	}
 	if len(drive.Password) == 0 || bytesContainZero(drive.Password) || !utf8.Valid(drive.Password) {
@@ -245,6 +236,22 @@ func validateNetworkDriveInjection(drive NetworkDriveInjection, shellType models
 		return err
 	}
 	return nil
+}
+
+// ValidateNetworkDriveInjectionValues 校验会进入远端封装脚本的登记值：盘
+// 符、共享名、地址与挂载账号。注入计划层复用这份规则，把单个共享降级为
+// 警告；这里仍作为 sshbroker 内部拼装前的防线。
+func ValidateNetworkDriveInjectionValues(drive NetworkDriveInjection) error {
+	if len(drive.Drive) != 1 || drive.Drive < "D" || drive.Drive > "Z" {
+		return fmt.Errorf("network drive letter %q is invalid", drive.Drive)
+	}
+	if err := validateNetworkDriveScriptValue("share name", drive.ShareName); err != nil {
+		return err
+	}
+	if err := validateNetworkDriveScriptValue("address", drive.Address); err != nil {
+		return err
+	}
+	return validateNetworkDriveScriptValue("user name", drive.UserName)
 }
 
 // validateNetworkDriveScriptValue 拒绝会让封装脚本变形的值。值进入

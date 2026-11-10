@@ -67,11 +67,12 @@ type networkDriveWarning struct {
 // 明每个没有进入 items 的共享及原因。远端结果状态行在执行后由
 // consumeStatusLines 解析并从输出中剔除。
 type networkDriveInjectionPlan struct {
-	items     []sshbroker.NetworkDriveInjection
-	warnings  []networkDriveWarning
-	notes     []string
-	statuses  map[int]string
-	cacheKeys []networkDriveAddressCacheKey
+	items      []sshbroker.NetworkDriveInjection
+	warnings   []networkDriveWarning
+	notes      []string
+	statuses   map[int]string
+	statusSeen map[int]bool
+	cacheKeys  []networkDriveAddressCacheKey
 	// shareIDs 与 shareVersions 把状态行序号对应回本地共享登记，只在注入
 	// 计划进程内使用，不进入远端命令文本。
 	shareIDs      map[int]string
@@ -266,7 +267,10 @@ func buildNetworkDriveInjectionPlan(
 	ctx context.Context, st *store.Store, profileID string,
 	server *models.Server, privileged bool, executor networkDriveProbeExecutor,
 ) networkDriveInjectionPlan {
-	plan := networkDriveInjectionPlan{statuses: map[int]string{}}
+	plan := networkDriveInjectionPlan{
+		statuses:   map[int]string{},
+		statusSeen: map[int]bool{},
+	}
 	if st == nil || server == nil || executor == nil {
 		return plan
 	}
@@ -282,13 +286,18 @@ func buildNetworkDriveInjectionPlan(
 	if len(shares) == 0 {
 		return plan
 	}
-	if privileged {
-		plan.warn(networkDriveWarning{Notice: networkDriveReasonPrivileged})
-		return plan
-	}
 	visible, err := sessionVisibleServerIDs(st, profileID, "")
 	if err != nil {
 		plan.warn(networkDriveWarning{Reason: networkDriveReasonVisibleFailed})
+		return plan
+	}
+	if privileged {
+		for _, share := range shares {
+			if share != nil && networkDriveShareVisible(share, visible, server.ID) {
+				plan.warn(networkDriveWarning{Notice: networkDriveReasonPrivileged})
+				break
+			}
+		}
 		return plan
 	}
 
@@ -315,27 +324,28 @@ func buildNetworkDriveInjectionPlan(
 			plan.warn(networkDriveWarning{ShareName: share.Name, Drive: share.Drive, Reason: reason})
 			continue
 		}
-		if !networkDriveScriptValuesSafe(share) {
-			plan.warn(networkDriveWarning{ShareName: share.Name, Drive: share.Drive, Reason: networkDriveReasonUnsafeValue})
-			continue
-		}
 		selection := networkDriveSelectAddress(ctx, st, server, share, executor)
 		if selection.Reason != "" {
 			plan.warn(networkDriveWarning{ShareName: share.Name, Drive: share.Drive, Reason: selection.Reason})
 			continue
 		}
-		shareIDsByName[share.Name] = share.ID
-		shareVersionsByName[share.Name] = share.Version
+		item := sshbroker.NetworkDriveInjection{
+			ShareName: share.Name, Drive: share.Drive, Address: selection.Address,
+			UserName: share.MountUser, Password: password, StatusMarker: marker,
+		}
+		if err := sshbroker.ValidateNetworkDriveInjectionValues(item); err != nil {
+			plan.warn(networkDriveWarning{ShareName: share.Name, Drive: share.Drive, Reason: networkDriveReasonUnsafeValue})
+			continue
+		}
 		if selection.Note != "" {
 			plan.notes = append(plan.notes, fmt.Sprintf("共享 %s 的网络盘符 %s: %s",
 				share.Name, share.Drive, selection.Note))
 		}
+		plan.items = append(plan.items, item)
+		shareIDsByName[share.Name] = share.ID
+		shareVersionsByName[share.Name] = share.Version
 		plan.cacheKeys = append(plan.cacheKeys, networkDriveAddressCacheKey{
 			ServerID: server.ID, Share: share.Name, Version: share.Version,
-		})
-		plan.items = append(plan.items, sshbroker.NetworkDriveInjection{
-			ShareName: share.Name, Drive: share.Drive, Address: selection.Address,
-			UserName: share.MountUser, Password: password, StatusMarker: marker,
 		})
 	}
 	sort.Slice(plan.items, func(i, j int) bool {
@@ -859,7 +869,7 @@ func (w *networkDriveStatusFilter) Flush() error {
 		status = networkDriveParsedStatus{index: index, status: "unreadable"}
 	}
 	if ok {
-		w.plan.statuses[status.index] = status.status
+		w.plan.recordStatus(status.index, status.status)
 	}
 	w.statusMu.Unlock()
 	if ok {
@@ -879,7 +889,7 @@ func (w *networkDriveStatusFilter) writeCompletedLine(line []byte) error {
 		status = networkDriveParsedStatus{index: index, status: "unreadable"}
 	}
 	if ok {
-		w.plan.statuses[status.index] = status.status
+		w.plan.recordStatus(status.index, status.status)
 	}
 	w.statusMu.Unlock()
 	if ok {
@@ -965,11 +975,11 @@ func (p *networkDriveInjectionPlan) stripStatusLines(output string) string {
 		trimmed := strings.TrimSuffix(line, "\r")
 		status, ok := p.parseStatusLine(trimmed)
 		if ok {
-			p.statuses[status.index] = status.status
+			p.recordStatus(status.index, status.status)
 			continue
 		}
 		if index, marked := p.markUnreadableStatus(trimmed); marked {
-			p.statuses[index] = "unreadable"
+			p.recordStatus(index, "unreadable")
 			continue
 		}
 		kept = append(kept, line)
@@ -980,6 +990,22 @@ func (p *networkDriveInjectionPlan) stripStatusLines(output string) string {
 type networkDriveParsedStatus struct {
 	index  int
 	status string
+}
+
+// recordStatus 只接受同一共享的第一条状态行。后续同序号的行仍会被调用方
+// 剔除，但用户命令可以打印任意状态行，不能覆盖注入封装的真实结果。
+func (p *networkDriveInjectionPlan) recordStatus(index int, status string) {
+	if p.statusSeen == nil {
+		p.statusSeen = map[int]bool{}
+	}
+	if p.statusSeen[index] {
+		return
+	}
+	p.statusSeen[index] = true
+	if p.statuses == nil {
+		p.statuses = map[int]string{}
+	}
+	p.statuses[index] = status
 }
 
 func (p *networkDriveInjectionPlan) parseStatusLine(line string) (networkDriveParsedStatus, bool) {
