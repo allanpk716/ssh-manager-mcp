@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -21,13 +22,24 @@ const mountShareTestPassword = `mount-P@$$ 'quotes' "double" \ end`
 type fakeLinuxMountServer struct {
 	mu sync.Mutex
 
-	commands       []string
-	standardInputs [][]byte
-	credentialFile string
-	fstabLines     []string
+	commands            []string
+	standardInputs      [][]byte
+	credentialFile      string
+	fstabLines          []string
+	credentialWrites    int
+	configurationWrites int
+	remounts            int
+	mounted             bool
+	reachableAddresses  map[string]bool
+	existingAddress     string
+	existingProtocol    string
+	remoteVersion       int64
+	ownerFstabLines     []string
+	lockHeld            bool
 
 	missingMountCIFS bool
 	workingVersion   string
+	shareVersion     int64
 	shareID          string
 }
 
@@ -45,7 +57,17 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 	case strings.TrimSpace(command) == "uname -s":
 		return "Linux\n", "", 0
 	case strings.Contains(command, "sshmgr_probe_one "):
-		return "SSHMGR-PROBE 0 ok 2 \n", "", 0
+		probeOutput := strings.Builder{}
+		for index, address := range []string{"192.0.2.10", "100.64.10.10"} {
+			if strings.Contains(command, "sshmgr_probe_one "+fmt.Sprint(index)+" "+address+" ") {
+				if f.reachableAddresses[address] {
+					probeOutput.WriteString(fmt.Sprintf("SSHMGR-PROBE %d ok 2 \n", index))
+				} else {
+					probeOutput.WriteString(fmt.Sprintf("SSHMGR-PROBE %d fail 2 no-route\n", index))
+				}
+			}
+		}
+		return probeOutput.String(), "", 0
 	case strings.Contains(command, "SSHMGR-LINUX-MOUNT"):
 		if f.missingMountCIFS {
 			return "", "sshmgr: mount.cifs not found", 83
@@ -56,15 +78,65 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.credentialFile = "username=mount-user\npassword=" + string(stdinBytes)
 		if selectedVersion == "none" {
 			f.credentialFile = ""
 			return "", "SSHMGR-LINUX-MOUNT protocol-failed", 84
 		}
-		f.fstabLines = append(f.fstabLines, "//192.0.2.10/datasets /mnt/sshmgr/datasets cifs "+
-			"credentials=/etc/sshmgr/shares/"+f.shareID+".credentials,vers="+selectedVersion+
-			",_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0")
-		return "SSHMGR-LINUX-MOUNT ok\n", "", 0
+		if f.lockHeld {
+			return "", "SSHMGR-LINUX-MOUNT lock-timeout", 87
+		}
+		if f.remoteVersion > f.shareVersion {
+			return "", "SSHMGR-LINUX-MOUNT remote-version-newer", 88
+		}
+		wasExisting := f.existingAddress != ""
+		selectedAddress := "192.0.2.10"
+		selectedIndex := 1
+		if f.existingAddress == "100.64.10.10" && f.reachableAddresses[f.existingAddress] {
+			selectedAddress = "100.64.10.10"
+			selectedIndex = 2
+		}
+		needsChange := f.existingAddress != selectedAddress || f.remoteVersion != f.shareVersion || !f.mounted
+		if !needsChange && len(f.fstabLines) > 0 {
+			return fmt.Sprintf("SSHMGR-LINUX-MOUNT result=no-change selected=%d\n", selectedIndex), "", 0
+		}
+		if f.existingAddress == "" || f.remoteVersion != f.shareVersion || f.credentialFile == "" {
+			f.credentialFile = "username=mount-user\npassword=" + string(stdinBytes)
+			f.credentialWrites++
+		}
+		if selectedAddress != f.existingAddress {
+			selectedVersion = f.workingVersion
+			if selectedVersion == "" {
+				selectedVersion = "3.1.1"
+			}
+		} else {
+			selectedVersion = f.existingProtocol
+		}
+		f.configurationWrites++
+		f.remounts++
+		f.existingAddress = selectedAddress
+		f.existingProtocol = selectedVersion
+		f.remoteVersion = f.shareVersion
+		f.mounted = true
+		updatedLines := make([]string, 0, len(f.fstabLines))
+		replacedManagedLine := false
+		managedLine := f.managedFstabLine(selectedAddress, selectedVersion, f.shareVersion)
+		for _, line := range f.fstabLines {
+			if !strings.Contains(line, "sshmgr-share=datasets,") {
+				updatedLines = append(updatedLines, line)
+			} else if !replacedManagedLine {
+				updatedLines = append(updatedLines, managedLine)
+				replacedManagedLine = true
+			}
+		}
+		if !replacedManagedLine {
+			updatedLines = append(updatedLines, managedLine)
+		}
+		f.fstabLines = updatedLines
+		action := "update-success"
+		if !wasExisting {
+			action = "first-mount-success"
+		}
+		return fmt.Sprintf("SSHMGR-LINUX-MOUNT result=%s selected=%d\n", action, selectedIndex), "", 0
 	default:
 		return "", "unexpected command: " + command, 90
 	}
@@ -74,6 +146,25 @@ func (f *fakeLinuxMountServer) recorded() (commands []string, inputs [][]byte, c
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.commands...), append([][]byte(nil), f.standardInputs...), f.credentialFile, append([]string(nil), f.fstabLines...)
+}
+
+func (f *fakeLinuxMountServer) writeCounts() (credentialWrites int, configurationWrites int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.credentialWrites, f.configurationWrites
+}
+
+func (f *fakeLinuxMountServer) remountCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.remounts
+}
+
+func (f *fakeLinuxMountServer) managedFstabLine(address, protocolVersion string, version int64) string {
+	return "//" + address + "/datasets /mnt/sshmgr/datasets cifs " +
+		"credentials=/etc/sshmgr/shares/" + f.shareID + ".credentials,vers=" + protocolVersion +
+		",sshmgr-share=datasets,sshmgr-version=" + fmt.Sprint(version) +
+		",_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0"
 }
 
 type mountShareFixture struct {
@@ -92,7 +183,25 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 		option(&setup)
 	}
 	storeForTest := newStore(t)
-	fake := &fakeLinuxMountServer{missingMountCIFS: setup.missingMountCIFS, workingVersion: setup.workingVersion}
+	fake := &fakeLinuxMountServer{
+		missingMountCIFS: setup.missingMountCIFS, workingVersion: setup.workingVersion,
+		shareVersion: 1, remoteVersion: setup.remoteVersion,
+		reachableAddresses: map[string]bool{"192.0.2.10": true},
+		existingAddress:    setup.existingAddress, existingProtocol: setup.existingProtocol,
+		ownerFstabLines: append([]string(nil), setup.ownerFstabLines...), lockHeld: setup.lockHeld,
+	}
+	if len(setup.reachable) != 0 {
+		fake.reachableAddresses = make(map[string]bool, len(setup.reachable))
+		for _, address := range setup.reachable {
+			fake.reachableAddresses[address] = true
+		}
+	}
+	if fake.existingAddress != "" {
+		if fake.existingProtocol == "" {
+			fake.existingProtocol = "2.0"
+		}
+		fake.mounted = true
+	}
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
 		Password: "login-pw", SudoPassword: "sudo-pw", Exec: fake.handler,
 	})
@@ -194,6 +303,16 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 		t.Fatal(err)
 	}
 	fake.shareID = addedShare.ID
+	if fake.existingAddress != "" {
+		fake.fstabLines = append([]string(nil), fake.ownerFstabLines...)
+		managedLine := fake.managedFstabLine(fake.existingAddress, fake.existingProtocol, fake.remoteVersion)
+		if len(fake.fstabLines) > 1 {
+			fake.fstabLines = append(fake.fstabLines[:1], append([]string{managedLine}, fake.fstabLines[1:]...)...)
+		} else {
+			fake.fstabLines = append(fake.fstabLines, managedLine)
+		}
+		fake.credentialFile = "username=mount-user\npassword=old-password\n"
+	}
 	if setup.shareInvisible {
 		if err := storeForTest.DisallowSecrets(
 			[]string{"DATASETS_MOUNT_PASSWORD"}, []string{"linux-web"}, store.CLISource(),
@@ -251,6 +370,12 @@ type mountShareFixtureSetup struct {
 	sudo               bool
 	missingMountCIFS   bool
 	workingVersion     string
+	reachable          []string
+	existingAddress    string
+	existingProtocol   string
+	remoteVersion      int64
+	ownerFstabLines    []string
+	lockHeld           bool
 	notWritable        bool
 	targetOutOfProfile bool
 	windowsTarget      bool
@@ -407,6 +532,295 @@ func TestMountShareLinuxSMBVersionFallsBackTo20(t *testing.T) {
 	}
 	if strings.Contains(text, "2.0") {
 		t.Fatalf("试出的 SMB 协议版本不应回传：%s", text)
+	}
+}
+
+func TestMountShareLinuxRepeatReturnsNoChange(t *testing.T) {
+	fixture := newMountShareFixture(t)
+
+	first, firstText, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("第一次 mount_share 失败：%s", firstText)
+	}
+	second, secondText, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("重复 mount_share 失败：%s", secondText)
+	}
+	if first["result"] != "first-mount-success" || second["result"] != "no-change" {
+		t.Fatalf("两次输出 = %#v %#v", first, second)
+	}
+	if len(second["notices"].([]any)) != 0 {
+		t.Fatalf("无需改动时不应给出切换提示：%#v", second["notices"])
+	}
+
+	credentialWrites, configurationWrites := fixture.fake.writeCounts()
+	if credentialWrites != 1 || configurationWrites != 1 {
+		t.Fatalf("重复调用不应改写配置：凭据写入 %d 次，配置写入 %d 次", credentialWrites, configurationWrites)
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"mount-share"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("mount-share 审计行数 = %d", len(rows))
+	}
+	foundNoChangeAudit := false
+	for _, row := range rows {
+		var summary map[string]any
+		if err := json.Unmarshal([]byte(row.Command), &summary); err != nil {
+			t.Fatal(err)
+		}
+		if summary["result"] == "no-change" {
+			foundNoChangeAudit = true
+			break
+		}
+	}
+	if !foundNoChangeAudit {
+		t.Fatalf("没有找到无需改动审计：%+v", rows)
+	}
+}
+
+func TestMountShareLinuxCommandUsesLockAndMarker(t *testing.T) {
+	fixture := newMountShareFixture(t)
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("mount_share 失败：%s", text)
+	}
+	if output["result"] != "first-mount-success" {
+		t.Fatalf("首次挂载输出 = %#v", output)
+	}
+
+	commands, _, _, fstab := fixture.fake.recorded()
+	if len(commands) != 3 {
+		t.Fatalf("远端命令 = %#v", commands)
+	}
+	mountCommand := commands[2]
+	for _, want := range []string{
+		"sshmgr_share_marker='sshmgr-share=datasets;sshmgr-version=1'",
+		"sshmgr_lock_dir='/etc/sshmgr/mount.lock'",
+		"mkdir \"$sshmgr_lock_dir\"",
+		"rmdir \"$sshmgr_lock_dir\"",
+	} {
+		if !strings.Contains(mountCommand, want) {
+			t.Fatalf("远端固定命令缺少 %q：%s", want, mountCommand)
+		}
+	}
+	if strings.Contains(mountCommand, "rm -rf") {
+		t.Fatalf("远端固定命令不能递归删除目录：%s", mountCommand)
+	}
+	if len(fstab) != 1 || !strings.Contains(fstab[0], "sshmgr-share=datasets,sshmgr-version=1") {
+		t.Fatalf("带标记的 fstab = %#v", fstab)
+	}
+}
+
+func TestMountShareLinuxKeepsWorkingExistingAddress(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.reachable = []string{"192.0.2.10", "100.64.10.10"}
+		setup.existingAddress = "100.64.10.10"
+		setup.existingProtocol = "2.0"
+		setup.remoteVersion = 1
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("现有地址可用时 mount_share 失败：%s", text)
+	}
+	if output["result"] != "no-change" || output["network_name"] != "办公虚拟局域网" ||
+		output["network_sequence"] != float64(1) {
+		t.Fatalf("保留现有地址的输出 = %#v", output)
+	}
+	notices, ok := output["notices"].([]any)
+	if !ok || len(notices) != 1 || !strings.Contains(notices[0].(string), "存在更靠前的物理局域网地址") ||
+		!strings.Contains(notices[0].(string), "由 owner 手动切换") {
+		t.Fatalf("切换提示 = %#v", output["notices"])
+	}
+
+	commands, _, credential, fstab := fixture.fake.recorded()
+	if len(commands) != 3 || !strings.Contains(commands[2], "192.0.2.10") ||
+		!strings.Contains(commands[2], "100.64.10.10") {
+		t.Fatalf("固定命令应携带全部可连通候选：%s", commands[2])
+	}
+	if credential != "username=mount-user\npassword=old-password\n" ||
+		len(fstab) != 1 || !strings.Contains(fstab[0], "//100.64.10.10/datasets") ||
+		!strings.Contains(fstab[0], "vers=2.0") {
+		t.Fatalf("现有配置被改写：credential=%q fstab=%#v", credential, fstab)
+	}
+	credentialWrites, configurationWrites := fixture.fake.writeCounts()
+	if credentialWrites != 0 || configurationWrites != 0 {
+		t.Fatalf("现有配置无需改写：凭据写入 %d 次，配置写入 %d 次", credentialWrites, configurationWrites)
+	}
+}
+
+func TestMountShareLinuxReselectsWhenExistingAddressIsUnreachable(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.reachable = []string{"192.0.2.10"}
+		setup.existingAddress = "100.64.10.10"
+		setup.existingProtocol = "2.0"
+		setup.remoteVersion = 1
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("现有地址不通时 mount_share 失败：%s", text)
+	}
+	if output["result"] != "update-success" || output["network_name"] != "办公物理局域网" {
+		t.Fatalf("重选地址后的输出 = %#v", output)
+	}
+
+	_, inputs, credential, fstab := fixture.fake.recorded()
+	if len(fstab) != 1 || !strings.Contains(fstab[0], "//192.0.2.10/datasets") ||
+		!strings.Contains(fstab[0], "vers=3.1.1") {
+		t.Fatalf("重选后的 fstab = %#v", fstab)
+	}
+	if credential != "username=mount-user\npassword=old-password\n" {
+		t.Fatalf("同版本换地址不应改写挂载密码：%q", credential)
+	}
+	for _, input := range inputs {
+		if strings.Contains(string(input), "old-password") {
+			t.Fatalf("旧密码不应进入本次标准输入：%q", input)
+		}
+	}
+	credentialWrites, configurationWrites := fixture.fake.writeCounts()
+	if credentialWrites != 0 || configurationWrites != 1 {
+		t.Fatalf("重选地址后的写入次数错误：凭据 %d，配置 %d", credentialWrites, configurationWrites)
+	}
+}
+
+func TestMountShareLinuxRejectsRemoteNewerVersion(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.existingAddress = "192.0.2.10"
+		setup.existingProtocol = "3.1.1"
+		setup.remoteVersion = 2
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if !isError || text != "目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具" {
+		t.Fatalf("远端版本更新的报错 = %q (%v)", text, output)
+	}
+	credentialWrites, configurationWrites := fixture.fake.writeCounts()
+	if credentialWrites != 0 || configurationWrites != 0 {
+		t.Fatalf("远端版本更新时不应改写：凭据 %d 次，配置 %d 次", credentialWrites, configurationWrites)
+	}
+	if credential, fstab := func() (string, []string) {
+		_, _, credential, fstab := fixture.fake.recorded()
+		return credential, fstab
+	}(); len(fstab) != 1 || !strings.Contains(fstab[0], "sshmgr-version=2") ||
+		credential != "username=mount-user\npassword=old-password\n" {
+		t.Fatalf("远端配置被误改：credential=%q fstab=%#v", credential, fstab)
+	}
+}
+
+func TestMountShareLinuxUpdatesOlderRemoteVersionAndPassword(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.existingAddress = "192.0.2.10"
+		setup.existingProtocol = "2.0"
+		setup.remoteVersion = 1
+	})
+	newPassword := `new-P@$$ 'quotes' "double" \ end`
+	if err := fixture.store.SetSecretValue(
+		"DATASETS_MOUNT_PASSWORD", []byte(newPassword), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	changeNote := "更换挂载密码"
+	if _, err := fixture.store.EditSharedStorage("datasets", store.SharedStorageChanges{
+		ChangeNote: &changeNote,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	updatedShare, err := fixture.store.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.fake.shareVersion = updatedShare.Version
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("远端版本较旧时 mount_share 失败：%s", text)
+	}
+	if output["result"] != "update-success" || output["version"] != float64(updatedShare.Version) {
+		t.Fatalf("更新后的输出 = %#v", output)
+	}
+
+	commands, inputs, credential, fstab := fixture.fake.recorded()
+	if len(inputs) != 3 || string(inputs[2]) != newPassword+"\n" {
+		t.Fatalf("新密码标准输入 = %q", inputs)
+	}
+	if credential != "username=mount-user\npassword="+newPassword+"\n" {
+		t.Fatalf("新凭据文件 = %q", credential)
+	}
+	if len(fstab) != 1 || !strings.Contains(fstab[0], fmt.Sprintf("sshmgr-version=%d", updatedShare.Version)) ||
+		!strings.Contains(fstab[0], "//192.0.2.10/datasets") ||
+		!strings.Contains(fstab[0], "vers=2.0") {
+		t.Fatalf("更新后的 fstab = %#v", fstab)
+	}
+	if !strings.Contains(commands[2], fmt.Sprintf("sshmgr-share=datasets;sshmgr-version=%d", updatedShare.Version)) ||
+		strings.Contains(commands[2], newPassword) {
+		t.Fatalf("远端命令标记或密码传递错误：%s", commands[2])
+	}
+	credentialWrites, configurationWrites := fixture.fake.writeCounts()
+	if credentialWrites != 1 || configurationWrites != 1 || fixture.fake.remountCount() != 1 {
+		t.Fatalf("更新写入或重挂次数错误：凭据 %d，配置 %d，重挂 %d",
+			credentialWrites, configurationWrites, fixture.fake.remountCount())
+	}
+}
+
+func TestMountShareLinuxReportsLockTimeout(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.lockHeld = true
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if !isError || text != "另一个挂载正在进行，请稍后再试" {
+		t.Fatalf("文件锁超时报错 = %q (%v)", text, output)
+	}
+	credentialWrites, configurationWrites := fixture.fake.writeCounts()
+	if credentialWrites != 0 || configurationWrites != 0 {
+		t.Fatalf("拿锁失败后不应改写：凭据 %d 次，配置 %d 次", credentialWrites, configurationWrites)
+	}
+}
+
+func TestMountShareLinuxPreservesOwnerFstabEntries(t *testing.T) {
+	ownerBefore := "UUID=11111111-2222-3333-4444-555555555555 /backup ext4 defaults 0 2"
+	ownerAfter := "//owner.example/archive /owner-archive cifs credentials=/etc/owner.credentials 0 0"
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.existingAddress = "192.0.2.10"
+		setup.existingProtocol = "2.0"
+		setup.remoteVersion = 0
+		setup.ownerFstabLines = []string{ownerBefore, ownerAfter}
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("更新 sshmgr 条目失败：%s", text)
+	}
+	if output["result"] != "update-success" {
+		t.Fatalf("更新输出 = %#v", output)
+	}
+
+	_, _, _, fstab := fixture.fake.recorded()
+	if len(fstab) != 3 || fstab[0] != ownerBefore || fstab[2] != ownerAfter ||
+		!strings.Contains(fstab[1], "sshmgr-share=datasets,sshmgr-version=1") {
+		t.Fatalf("owner 手写条目没有保持原位：%#v", fstab)
 	}
 }
 

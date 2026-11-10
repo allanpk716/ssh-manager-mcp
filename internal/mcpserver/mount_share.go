@@ -38,13 +38,15 @@ type MountShareOutput struct {
 	Version         int64            `json:"version" jsonschema:"shared storage registration version"`
 	NetworkName     string           `json:"network_name" jsonschema:"selected registered network name"`
 	NetworkSequence int              `json:"network_sequence" jsonschema:"address sequence within the selected network"`
+	Result          string           `json:"result" jsonschema:"first-mount-success, update-success, remount-success, or no-change"`
+	Notices         []string         `json:"notices" jsonschema:"safe follow-up hints; never contain addresses or secrets"`
 	Paths           []MountSharePath `json:"paths" jsonschema:"directory agreements translated to target-server paths"`
 }
 
 // emptyMountShareOutput 返回能通过输出结构校验的空结果；报错路径也需要
 // 数组而不是 JSON null。
 func emptyMountShareOutput() MountShareOutput {
-	return MountShareOutput{Paths: []MountSharePath{}}
+	return MountShareOutput{Notices: []string{}, Paths: []MountSharePath{}}
 }
 
 // MountShareForProfile 按授权顺序检查共享与服务器，调用挂载领域服务，并
@@ -71,7 +73,7 @@ func MountShareForProfile(
 		if mountResult != nil {
 			networkName = mountResult.Network
 			sequence = mountResult.NetworkSequence
-			summary["result"] = "first-mount-success"
+			summary["result"] = mountResult.Action
 		}
 		if networkName != "" {
 			summary["network_name"] = networkName
@@ -156,6 +158,7 @@ func MountShareForProfile(
 		Share: found.Name, ServerID: server.ID, ServerName: server.Name,
 		MountPoint: mountResult.MountPoint, Version: found.Version,
 		NetworkName: mountResult.Network, NetworkSequence: mountResult.NetworkSequence,
+		Result: mountResult.Action, Notices: mountResult.Notices,
 		Paths: []MountSharePath{},
 	}
 	for _, directory := range found.Directories {

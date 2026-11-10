@@ -80,6 +80,8 @@ type Result struct {
 	MountPoint      string
 	Network         string
 	NetworkSequence int
+	Action          string
+	Notices         []string
 }
 
 // Service 是共享存储挂载服务。生产路径复用统一拨号入口与软件清单的 sudo
@@ -96,8 +98,8 @@ type Service struct {
 	MaxOutputBytes int64
 }
 
-// Mount 在目标服务器上完成一次首次挂载。重复调用的配置比较、文件锁和
-// 版本保护属于后续票；本函数只实现当前票的 Linux 首次挂载路径。
+// Mount 在目标服务器上完成首次挂载、重复调用比较或按新快照更新。系统
+// 特定的固定命令由不同实现文件生成；macOS 挂载仍等待后续版本。
 func (s *Service) Mount(parent context.Context, request Request) (*Result, error) {
 	if s == nil || s.Store == nil {
 		return nil, fmt.Errorf("共享存储挂载服务没有绑定存储")
@@ -133,11 +135,11 @@ func (s *Service) mountLinux(ctx context.Context, request Request) (*Result, err
 	if !safeLinuxShareName(request.Share.Name) {
 		return nil, ErrUnsafeShareName
 	}
-	candidate, err := s.selectCandidate(ctx, request.Server, request.Share)
+	candidates, err := s.selectCandidates(ctx, request.Server, request.Share)
 	if err != nil {
 		return nil, err
 	}
-	command := buildLinuxMountCommand(request.Share, candidate.Address)
+	command := buildLinuxMountCommand(request.Share, candidates)
 	// 护栏：挂载密码只作为提权会话标准输入传递。不要把它拼进 command、
 	// 错误文本或审计；这里的 append 只补凭据文件所需的行尾。
 	standardInput := append([]byte(nil), request.Password...)
@@ -150,25 +152,46 @@ func (s *Service) mountLinux(ctx context.Context, request Request) (*Result, err
 	}
 	switch result.ExitCode {
 	case 0:
-		if !strings.Contains(result.Stdout, linuxMountMarker+" ok") {
-			return nil, errors.New("Linux 固定挂载命令没有返回成功标记")
+		action, selectedIndex, parseErr := parseLinuxMountOutput(result.Stdout)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		if selectedIndex > len(candidates) {
+			return nil, errors.New("Linux 固定挂载命令返回了不存在的候选序号")
+		}
+		switch action {
+		case "first-mount-success", "update-success", "remount-success", "no-change":
+		default:
+			return nil, errors.New("Linux 固定挂载命令返回了未知结果")
+		}
+		selected := candidates[selectedIndex-1]
+		notices := []string{}
+		for index := 0; index < selectedIndex-1; index++ {
+			if candidates[index].Physical {
+				notices = append(notices, "存在更靠前的物理局域网地址；挂载工具不会卸载现有挂载，如需切换请由 owner 手动切换")
+				break
+			}
 		}
 		return &Result{
-			MountPoint: linuxMountPoint(request.Share.Name), Network: candidate.Network,
-			NetworkSequence: candidate.Sequence,
+			MountPoint: linuxMountPoint(request.Share.Name), Network: selected.Network,
+			NetworkSequence: selected.Sequence, Action: action, Notices: notices,
 		}, nil
 	case linuxExitMissingCIFS:
 		return nil, errors.New("目标服务器缺少 mount.cifs，请先由 owner 安装 cifs-utils；挂载工具不会自动安装")
 	case linuxExitProtocolFailed:
 		return nil, errors.New("SMB 协议版本 3.1.1、3.0、2.1、2.0 全部试挂失败，未写入 fstab 配置")
+	case linuxExitLockTimeout:
+		return nil, errors.New("另一个挂载正在进行，请稍后再试")
+	case linuxExitRemoteNewer:
+		return nil, errors.New("目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具")
 	default:
 		return nil, fmt.Errorf("Linux 固定挂载命令失败（退出码 %d）", result.ExitCode)
 	}
 }
 
-func (s *Service) selectCandidate(
+func (s *Service) selectCandidates(
 	ctx context.Context, server *models.Server, share *models.SharedStorage,
-) (*Candidate, error) {
+) ([]*Candidate, error) {
 	targetDevice, err := s.Store.GetDeviceByID(server.DeviceID)
 	if err != nil {
 		return nil, err
@@ -207,17 +230,21 @@ func (s *Service) selectCandidate(
 		return nil, fmt.Errorf("候选地址探测失败：%w", sanitizedExecError(execErr))
 	}
 	results := probe.ParseShellProbeOutput(result.Stdout, len(items))
+	reachable := make([]*Candidate, 0, len(results))
 	for index, probeResult := range results {
 		if probeResult.OK {
 			candidate := plan.Candidates[index]
-			return &Candidate{
+			reachable = append(reachable, &Candidate{
 				Address: candidate.Address, Network: candidate.NetworkName,
 				Sequence: candidate.NetworkSequence, Physical: candidate.Source == sshbroker.DialAddressPhysical,
 				RegistrationOrder: candidate.RegistrationOrder,
-			}, nil
+			})
 		}
 	}
-	return nil, ErrNoCandidate
+	if len(reachable) == 0 {
+		return nil, ErrNoCandidate
+	}
+	return reachable, nil
 }
 
 func (s *Service) exec(
