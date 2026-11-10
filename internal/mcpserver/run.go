@@ -69,6 +69,9 @@ func hydrateCacheStore(token string, snap *store.Snapshot, auditFile *os.File, d
 	}
 	temporary.Store.SetReadOnly(auditFile)   // 必须在导入快照后再设只读
 	temporary.Store.SetForwardDevice(device) // Plan 48 §2.3：本地转发锚元数据
+	// 快照推荐版本只挂在进程内元数据上：网络拓扑与共享存储工具用它识别
+	// 旧权威端快照并按 ADR 0014 报错。
+	temporary.Store.SetCacheRecommendedVersion(snap.RecommendedVersion)
 	project, err := temporary.Store.VerifyToken(token)
 	if err != nil {
 		_ = temporary.Close()

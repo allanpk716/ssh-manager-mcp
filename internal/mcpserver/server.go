@@ -65,13 +65,14 @@ var BrokerTools = []string{
 	hotswap.ToolReloadSelf,   // [13] — report this bridge's current/disk/latest versions and, when the disk holds a newer generation and the bridge is idle, hot-swap into it (bridge hot-upgrade; BRIDGE FACES ONLY — registered by run.go's stdio entries, see bridgeOnlyTools)
 	"list_secrets",           // [14] — discover secret names, notes, and granted writable servers without exposing secret values (READ-ONLY)
 	"probe_connectivity",     // [15] — probe TCP connectivity and connect duration from this instance or via an authorized managed server to registered devices (spec #142; results stored locally only)
-	// [16] — 软件清单查询（票 #185）：权威端与单机本地查询；客户端缓存面在线
+	"list_shares",            // [16] — list registered SMB shared storages visible in this session with agreed per-server mount points (READ-ONLY; spec #196)
+	// [17] — 软件清单查询（票 #185）：权威端与单机本地查询；客户端缓存面在线
 	// 转发到权威端，不可达时报错，绝不回退本地快照数据。
 	"query_software_inventory",
-	// [17] — 声明草稿提交（票 #188）：只写草稿，owner 确认后才生效；客户端
+	// [18] — 声明草稿提交（票 #188）：只写草稿，owner 确认后才生效；客户端
 	// 缓存面经受审计转发写「提交声明草稿」提交。
 	"draft_software_declarations",
-	// [18] — 软件清单立即采集（票 #188）：固定命令集，无可传命令的参数。
+	// [19] — 软件清单立即采集（票 #188）：固定命令集，无可传命令的参数。
 	"collect_software_inventory",
 }
 
@@ -260,6 +261,24 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{&mcp.TextContent{Text: text}},
 			}, nil, nil
+		},
+	)
+
+	addTrackedTool(srv, busy, storeFn, hkFn,
+		&mcp.Tool{
+			Name:        BrokerTools[16], // "list_shares"
+			Description: "Read-only list of the SMB shared storages visible in your session. Each share carries its name, the registered provider device name, owner note, directory agreements (purpose = subdirectory inside the share), Windows drive letter, registration version, owner change note, and the servers in your session scope that may mount it — each with the agreed mount point (PowerShell/cmd servers use <drive>:, others use /mnt/sshmgr/<share name>). Optional server takes a server id or name and narrows every share to that one server. Mount points are agreements only: this tool never checks whether anything is mounted and performs no network or SSH action. It never includes mount passwords or any credentials, and no agent tool can register or modify shared storages.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, in ListSharesInput) (*mcp.CallToolResult, ListSharesOutput, error) {
+			st := storeFromContext(ctx, storeFn)
+			out, err := ListSharesForProfile(st, profileID, in.Server)
+			if err != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, emptyListSharesOutput(), nil
+			}
+			return nil, out, nil
 		},
 	)
 

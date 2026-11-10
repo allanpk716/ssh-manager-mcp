@@ -554,6 +554,9 @@ func TestSecretsImportOldSnapshotKeepsSecretsEmpty(t *testing.T) {
 	if strings.TrimSpace(out) != "" {
 		t.Fatalf("old snapshot must import zero secrets, got:\n%s", out)
 	}
+	if out := runCli(t, "shares", "list"); !strings.Contains(out, "没有匹配的共享存储") {
+		t.Fatalf("old snapshot without shared storage must import zero shared storages, got:\n%s", out)
+	}
 	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--stdin")
 }
 

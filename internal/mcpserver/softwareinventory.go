@@ -95,7 +95,7 @@ func registerSoftwareInventoryTool(
 	}
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
-			Name:        BrokerTools[16], // "query_software_inventory"（票 #185）
+			Name:        BrokerTools[17], // "query_software_inventory"（票 #185）
 			Description: "Query the software inventory (devices' installed software with precise versions, listening ports with exposure levels, source, collection time, and each device's collection status including whether its inventory is stale). All five filters are optional: device (name), name (case-insensitive substring), minimum_exposure, category, include_system_packages (default false — package lists can be huge). Visibility follows YOUR profile: only managed devices with at least one server entry you may use; unmanaged devices never appear. On a cache client this tool queries the authority online — if the authority is unreachable it fails with a fixed error and never falls back to local data.",
 		},
 		func(_ context.Context, _ *mcp.CallToolRequest, in QuerySoftwareInventoryInput) (*mcp.CallToolResult, QuerySoftwareInventoryOutput, error) {

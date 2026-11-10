@@ -28,6 +28,7 @@ var snapshotRevisionTables = []string{
 	"policy_disabled_defaults",
 	"secrets",
 	"secret_server_allow",
+	"shared_storages",
 }
 
 // snapshotRevisionRetiredTriggers 列出旧版本为不再导出的表建立的修订号
@@ -58,12 +59,16 @@ INSERT OR IGNORE INTO snapshot_revision(id, revision) VALUES (1, 1);
 		if table == "servers" {
 			events = []string{"insert", "delete"}
 		}
+		if table == "shared_storages" {
+			events = []string{"insert", "delete"}
+		}
 		for _, event := range events {
 			fmt.Fprintf(&b, "CREATE TRIGGER IF NOT EXISTS snapshot_revision_%s_%s\nAFTER %s ON %s BEGIN\n  UPDATE snapshot_revision SET revision = revision + 1;\nEND;\n",
 				table, event, strings.ToUpper(event), table)
 		}
 	}
 	b.WriteString(snapshotRevisionServerUpdateTrigger())
+	b.WriteString(snapshotRevisionSharedStoragesUpdateTrigger())
 	// 改绑设备码会改变这个设备码下一次拉到的 profile 快照,但普通设备码
 	// 维护(记录最后拉取时间、客户端版本、吊销)不改变任何快照内容。因此
 	// 这里只对 profile 绑定列建更新触发器,并且只在绑定真正变化时加一。
@@ -76,6 +81,26 @@ BEGIN
 END;
 `)
 	return b.String()
+}
+
+// snapshotRevisionSharedStoragesUpdateTrigger 生成共享存储表的快照修订号
+// 更新触发器。全部列都会随快照下发，因此逐列比较；后续给表加列时必须
+// 同步补进比较清单，结构测试会逐列核对。
+func snapshotRevisionSharedStoragesUpdateTrigger() string {
+	return `
+CREATE TRIGGER IF NOT EXISTS snapshot_revision_shared_storages_update
+AFTER UPDATE ON shared_storages
+FOR EACH ROW WHEN
+  OLD.id IS NOT NEW.id OR OLD.name IS NOT NEW.name OR OLD.name_lower IS NOT NEW.name_lower OR
+  OLD.device_id IS NOT NEW.device_id OR OLD.mount_user IS NOT NEW.mount_user OR
+  OLD.password_secret_id IS NOT NEW.password_secret_id OR OLD.drive IS NOT NEW.drive OR
+  OLD.note IS NOT NEW.note OR OLD.directories IS NOT NEW.directories OR
+  OLD.version IS NOT NEW.version OR OLD.change_note IS NOT NEW.change_note OR
+  OLD.created_at IS NOT NEW.created_at OR OLD.updated_at IS NOT NEW.updated_at
+BEGIN
+  UPDATE snapshot_revision SET revision = revision + 1;
+END;
+`
 }
 
 // snapshotRevisionServerUpdateTrigger 生成服务器条目表的快照修订号更新触

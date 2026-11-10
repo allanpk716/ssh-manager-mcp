@@ -28,6 +28,7 @@ type DeviceDeleteSecretAllow struct {
 type DeviceDeletePreview struct {
 	Device             *models.Device
 	Servers            []*models.DeviceServer
+	SharedStorages     []*models.SharedStorage
 	SecretServerAllows []*DeviceDeleteSecretAllow
 	Memberships        []*models.NetworkMembership
 	LayoutCoordinates  []*models.DeviceLayoutCoordinate
@@ -49,7 +50,7 @@ func (s *Store) DeviceDeletePreview(name string) (*DeviceDeletePreview, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	return deviceDeletePreviewTx(tx, name)
+	return s.deviceDeletePreviewTx(tx, name)
 }
 
 // DeleteDeviceCascading 在同一个事务里删除设备的全部服务器条目、网络成
@@ -69,7 +70,7 @@ func (s *Store) DeleteDeviceCascading(name string, confirmed *DeviceDeletePrevie
 		return nil, err
 	}
 	defer tx.Rollback()
-	preview, err := deviceDeletePreviewTx(tx, name)
+	preview, err := s.deviceDeletePreviewTx(tx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +87,18 @@ func (s *Store) DeleteDeviceCascading(name string, confirmed *DeviceDeletePrevie
 			return nil, fmt.Errorf("设备删除预览与数据库状态不一致：服务器条目 %s 已不存在", server.Name)
 		}
 		if err := writeServerRemoveAuditTx(tx, deleted, auditAt); err != nil {
+			return nil, err
+		}
+	}
+	for _, share := range preview.SharedStorages {
+		if err := writeAuditTx(tx, AuditRow{
+			TS: auditAt, Action: "share-rm",
+			Command: MarshalAuditSummary(map[string]any{
+				"name": share.Name, "device": share.DeviceName,
+				"reason": "随设备删除而删除",
+			}),
+			Status: "ok",
+		}); err != nil {
 			return nil, err
 		}
 	}
@@ -106,12 +119,16 @@ func (s *Store) DeleteDeviceCascading(name string, confirmed *DeviceDeletePrevie
 
 // deviceDeletePreviewTx 在一个数据库事务里读取全部级联影响，保证预览与
 // 删除主体使用同一套查询。
-func deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePreview, error) {
+func (s *Store) deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePreview, error) {
 	device, err := deviceByNameTx(tx, name)
 	if err != nil {
 		return nil, err
 	}
 	servers, err := deviceServersForDeviceTx(tx, device.ID)
+	if err != nil {
+		return nil, err
+	}
+	sharedStorages, err := s.sharedStoragesForDeviceTx(tx, device.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -132,8 +149,9 @@ func deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePreview, error
 		return nil, err
 	}
 	return &DeviceDeletePreview{
-		Device: device, Servers: servers, SecretServerAllows: secretAllows,
-		Memberships: memberships, LayoutCoordinates: coordinates,
+		Device: device, Servers: servers, SharedStorages: sharedStorages,
+		SecretServerAllows: secretAllows,
+		Memberships:        memberships, LayoutCoordinates: coordinates,
 		SoftwareItemCount: softwareCounts.Items, SoftwareDeclarationCount: softwareCounts.Declarations,
 		SoftwareCollectorCount:     softwareCounts.Collectors,
 		SoftwareListeningPortCount: softwareCounts.ListeningPorts,
@@ -262,6 +280,17 @@ func deviceSecretServerAllowsTx(tx *sql.Tx, deviceID string) ([]*DeviceDeleteSec
 	return out, rows.Err()
 }
 
+// sharedStoragesForDeviceTx 列出设备提供的全部共享存储，并补齐每个共享的
+// 可挂载服务器，供删除预览与删除前复核使用。
+func (s *Store) sharedStoragesForDeviceTx(tx *sql.Tx, deviceID string) ([]*models.SharedStorage, error) {
+	ids, err := sharedStorageIDsByQuery(tx,
+		`SELECT id FROM shared_storages WHERE device_id=? ORDER BY name,id`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return s.sharedStoragesByIDs(tx, ids)
+}
+
 // writeServerRemoveAuditTx 写设备级联里的服务器条目删除审计，摘要与单独
 // 执行服务器条目删除时保持一致。
 func writeServerRemoveAuditTx(tx *sql.Tx, server *models.Server, at time.Time) error {
@@ -289,6 +318,10 @@ func deviceDeleteAuditSummary(preview *DeviceDeletePreview) map[string]any {
 	for _, membership := range preview.Memberships {
 		memberSummaries = append(memberSummaries, membershipAuditSummary(membership))
 	}
+	sharedStorageNames := make([]string, 0, len(preview.SharedStorages))
+	for _, share := range preview.SharedStorages {
+		sharedStorageNames = append(sharedStorageNames, share.Name)
+	}
 	summary := map[string]any{
 		"name":               preview.Device.Name,
 		"client":             preview.Device.ClientName,
@@ -296,6 +329,7 @@ func deviceDeleteAuditSummary(preview *DeviceDeletePreview) map[string]any {
 		"anchors":            anchorNames,
 		"members":            memberSummaries,
 		"layout-coordinates": len(preview.LayoutCoordinates),
+		"shared-storages":    sharedStorageNames,
 	}
 	// 软件清单尚为空的设备保持旧审计摘要形态；有清单时才追加数量，
 	// 避免无关设备删除的审计噪音。

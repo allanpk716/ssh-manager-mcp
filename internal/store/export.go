@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -45,6 +46,9 @@ type Snapshot struct {
 	// 明文字段携带值，靠外层加密保护；导入时用目标库的主密钥重新加密。
 	Secrets      []SnapshotSecret      `json:"secrets,omitempty"`
 	SecretAllows []SnapshotSecretAllow `json:"secret_allows,omitempty"`
+	// SharedStorages 是共享存储登记。可挂载范围不在这里重复携带；它由
+	// 机密项的可写入服务器关联推导。旧快照没有该段时导入零行。
+	SharedStorages []SnapshotSharedStorage `json:"shared_storages,omitempty"`
 	// SoftwareDeclarations / SoftwareDeclarationPorts 只进入 owner 的全量
 	// 导出与加密备份，绝不进入 profile 裁剪的客户端快照；实测条目、实测
 	// 监听端口、采集状态、sudo 开关与变化历史同样只走 owner 全量导出。
@@ -289,6 +293,26 @@ type SnapshotSecretAllow struct {
 	ServerID string `json:"server_id"`
 }
 
+// SnapshotSharedStorage 是快照里的一处共享存储登记。提供方设备名字、
+// 机密项名字、候选访问地址与可挂载服务器都按标识符或关联表推导；例外
+// 是按 profile 裁剪时设备行可能不下发，因此这里携带提供方设备名供客户端
+// 查看使用。
+type SnapshotSharedStorage struct {
+	ID               string                          `json:"id"`
+	Name             string                          `json:"name"`
+	DeviceID         string                          `json:"device_id"`
+	DeviceName       string                          `json:"device_name,omitempty"`
+	MountUser        string                          `json:"mount_user"`
+	PasswordSecretID string                          `json:"password_secret_id"`
+	Drive            string                          `json:"drive"`
+	Directories      []models.SharedStorageDirectory `json:"directories"`
+	Note             string                          `json:"note"`
+	Version          int64                           `json:"version"`
+	ChangeNote       string                          `json:"change_note"`
+	CreatedAt        int64                           `json:"created_at"`
+	UpdatedAt        int64                           `json:"updated_at"`
+}
+
 // normalizeSnapshotPinColumns 把旧快照缺失的锚格式与来源归一为默认值。
 func normalizeSnapshotPinColumns(format, source string) (string, string) {
 	if format == "" {
@@ -513,6 +537,9 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	if snap.Secrets, snap.SecretAllows, err = s.snapshotSecrets(); err != nil {
 		return nil, err
 	}
+	if snap.SharedStorages, err = s.snapshotSharedStorages(""); err != nil {
+		return nil, err
+	}
 	// 软件清单只走 owner 全量备份；profile 导出函数从不填充这两个字段。
 	if snap.SoftwareDeclarations, snap.SoftwareDeclarationPorts, err = s.snapshotSoftwareInventory(); err != nil {
 		return nil, err
@@ -612,6 +639,54 @@ func (s *Store) snapshotSecrets() ([]SnapshotSecret, []SnapshotSecretAllow, erro
 	}
 	ra.Close()
 	return secrets, allows, ra.Err()
+}
+
+// snapshotSharedStorages 读取共享存储登记。profileID 非空时按挂载密码
+// 机密项的可写入服务器列表与该 profile 授权服务器列表的交集裁剪。
+func (s *Store) snapshotSharedStorages(profileID string) ([]SnapshotSharedStorage, error) {
+	query := `
+		SELECT shared.id,shared.name,shared.device_id,COALESCE(device.name,''),shared.mount_user,
+		       shared.password_secret_id,shared.drive,shared.note,shared.directories,
+		       shared.version,shared.change_note,shared.created_at,shared.updated_at
+		FROM shared_storages shared
+		LEFT JOIN devices device ON device.id=shared.device_id`
+	arguments := make([]any, 0, 1)
+	if profileID != "" {
+		query += `
+			WHERE EXISTS (
+				SELECT 1
+				FROM secret_server_allow allow
+				JOIN profile_servers grant_row ON grant_row.server_id=allow.server_id
+					WHERE allow.secret_id=shared.password_secret_id
+				  AND grant_row.profile_id=?)`
+		arguments = append(arguments, profileID)
+	}
+	query += ` ORDER BY shared.name,shared.id`
+	rows, err := s.db.Query(query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]SnapshotSharedStorage, 0)
+	for rows.Next() {
+		var row SnapshotSharedStorage
+		var directoriesJSON string
+		if err := rows.Scan(&row.ID, &row.Name, &row.DeviceID, &row.DeviceName, &row.MountUser,
+			&row.PasswordSecretID, &row.Drive, &row.Note, &directoriesJSON,
+			&row.Version, &row.ChangeNote, &row.CreatedAt, &row.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if row.DeviceName == "" {
+			row.DeviceName = s.sharedStorageDeviceNames[row.ID]
+		}
+		directories, err := decodeSharedStorageDirectories(directoriesJSON)
+		if err != nil {
+			return nil, fmt.Errorf("读取共享存储 %s 的目录约定失败: %w", row.Name, err)
+		}
+		row.Directories = directories
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 // ExportSnapshotForProfile returns the authorization-scoped Snapshot served to a
@@ -847,6 +922,9 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 		snap.Secrets = scopedSecrets
 		snap.SecretAllows = scopedAllows
 	}
+	if snap.SharedStorages, err = s.snapshotSharedStorages(profileID); err != nil {
+		return nil, err
+	}
 	return snap, nil
 }
 
@@ -909,7 +987,7 @@ func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID s
 		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
 		FROM devices
 		`
-	queryArguments := make([]any, 0, 3)
+	queryArguments := make([]any, 0, 4)
 	if cropToProfile {
 		deviceQuery += `WHERE id IN (
 			          SELECT COALESCE(server.device_id,'')
@@ -1000,7 +1078,8 @@ var ErrVaultNotEmpty = errors.New("vault is not empty; import into a fresh/empty
 //   - credentials are RE-SEALED under this store's master key (master-key-independent file);
 //   - rows are inserted id-preserving in foreign-key order (sites -> networks ->
 //     devices -> network memberships -> layout coordinates -> credentials ->
-//     servers -> profiles -> grants -> projects -> host keys -> audit);
+//     servers -> profiles -> grants -> secrets -> shared storages -> projects ->
+//     host keys -> audit);
 //   - projects.token_hash/salt/prefix are written verbatim so the original plaintext token keeps validating.
 //
 // Refuses a non-empty target (any row in servers, sites, networks, devices,
@@ -1015,10 +1094,28 @@ func (s *Store) ImportSnapshot(snap *Snapshot) error {
 // 务器条目的所属设备引用按外键顺序原样写回；本入口永不执行设备生成迁
 // 移，也不产生迁移审计。
 func (s *Store) ImportSnapshotForClientCache(snap *Snapshot) error {
+	if err := s.setForeignKeysEnabled(false); err != nil {
+		return err
+	}
+	defer func() { _ = s.setForeignKeysEnabled(true) }()
 	return s.importSnapshot(snap, false)
 }
 
-func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) error {
+// setForeignKeysEnabled 只在同一个数据库连接上切换 SQLite 的外键检查。
+// 客户端缓存允许共享存储引用已被 profile 裁剪掉的提供方设备；权威端与
+// 单机部署仍保持外键检查开启。
+func (s *Store) setForeignKeysEnabled(enabled bool) error {
+	setting := "ON"
+	if !enabled {
+		setting = "OFF"
+	}
+	if _, err := s.db.Exec("PRAGMA foreign_keys=" + setting); err != nil {
+		return fmt.Errorf("set foreign_keys=%s: %w", setting, err)
+	}
+	return nil
+}
+
+func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -1106,7 +1203,7 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 	}
 	// 软件清单只恢复到 owner 库。客户端缓存导入即使收到带清单段的旧文件
 	// 或异常文件，也显式跳过，保证客户端本地永远没有软件清单副本。
-	if generateMissingDevices {
+	if ownerImport {
 		if err := importSoftwareInventoryTx(tx, snap.SoftwareDeclarations, snap.SoftwareDeclarationPorts); err != nil {
 			return err
 		}
@@ -1151,7 +1248,7 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 	}
 	// 软件清单的实测、采集状态、sudo 开关与变化历史在这里恢复：sudo 开
 	// 关引用服务器条目，必须等服务器条目写完；仍然只在 owner 全量导入。
-	if generateMissingDevices {
+	if ownerImport {
 		if err := importSoftwareCollectionBackupTx(tx, snap); err != nil {
 			return err
 		}
@@ -1195,6 +1292,68 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 	for _, a := range snap.SecretAllows {
 		if _, err := tx.Exec(`INSERT INTO secret_server_allow(secret_id,server_id) VALUES(?,?)`, a.SecretID, a.ServerID); err != nil {
 			return fmt.Errorf("insert secret allow %s/%s: %w", a.SecretID, a.ServerID, err)
+		}
+	}
+
+	// 未声明客户端版本的快照会保留共享存储、去掉全部机密项。客户端缓存
+	// 导入需要满足共享存储对机密项的外键引用；这里只给这个一次性查询库
+	// 补标识符占位行，不把它写回快照，也不让机密项查看入口看见。
+	if !ownerImport {
+		deliveredSecrets := make(map[string]bool, len(snap.Secrets))
+		for _, secret := range snap.Secrets {
+			deliveredSecrets[secret.ID] = true
+		}
+		for _, shared := range snap.SharedStorages {
+			if deliveredSecrets[shared.PasswordSecretID] {
+				continue
+			}
+			placeholderBlob, err := seal(s.masterKey, []byte{})
+			if err != nil {
+				return fmt.Errorf("seal placeholder for shared storage secret %s: %w", shared.PasswordSecretID, err)
+			}
+			if _, err := tx.Exec(`
+				INSERT INTO secrets(id,name,name_lower,note,env_name,env_name_lower,value_blob,value_version,created_at,value_updated_at)
+				VALUES(?,?,?,?,?,?,?,?,?,?)`,
+				shared.PasswordSecretID, shared.PasswordSecretID, strings.ToLower(shared.PasswordSecretID),
+				"", "", "", placeholderBlob, 1, shared.CreatedAt, shared.UpdatedAt); err != nil {
+				return fmt.Errorf("insert placeholder for shared storage secret %s: %w", shared.PasswordSecretID, err)
+			}
+			deliveredSecrets[shared.PasswordSecretID] = true
+		}
+	}
+
+	// 4b. 共享存储依赖设备与挂载密码机密项，放在两段之后导入。版本号
+	// 与变更说明原样恢复，导入不重算。
+	deliveredDevices := make(map[string]bool, len(snap.Devices))
+	for _, device := range snap.Devices {
+		deliveredDevices[device.ID] = true
+	}
+	for _, shared := range snap.SharedStorages {
+		if !ownerImport && !deliveredDevices[shared.DeviceID] {
+			if shared.DeviceName == "" {
+				return fmt.Errorf("客户端快照的共享存储 %s 缺少提供方设备名", shared.Name)
+			}
+			if s.sharedStorageDeviceNames == nil {
+				s.sharedStorageDeviceNames = make(map[string]string)
+			}
+			s.sharedStorageDeviceNames[shared.ID] = shared.DeviceName
+		}
+		directories := shared.Directories
+		if directories == nil {
+			directories = []models.SharedStorageDirectory{}
+		}
+		directoriesJSON, err := json.Marshal(directories)
+		if err != nil {
+			return fmt.Errorf("encode shared storage %s directories: %w", shared.ID, err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO shared_storages(
+				id,name,name_lower,device_id,mount_user,password_secret_id,drive,note,directories,version,change_note,created_at,updated_at
+			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			shared.ID, shared.Name, strings.ToLower(shared.Name), shared.DeviceID, shared.MountUser,
+			shared.PasswordSecretID, shared.Drive, shared.Note, string(directoriesJSON),
+			shared.Version, shared.ChangeNote, shared.CreatedAt, shared.UpdatedAt); err != nil {
+			return fmt.Errorf("insert shared storage %s: %w", shared.ID, err)
 		}
 	}
 
@@ -1268,7 +1427,7 @@ func (s *Store) importSnapshot(snap *Snapshot, generateMissingDevices bool) erro
 	// 旧备份与旧导出没有设备段。owner 导入后强制执行与升级相同的设备生成
 	// 规则：目标库虽然是新库且打开时已写完成标记，这次恢复的数据仍来自旧
 	// 格式；客户端缓存导入显式关闭这条迁移。
-	if generateMissingDevices && len(snap.Devices) == 0 && len(snap.NetworkMemberships) == 0 {
+	if ownerImport && len(snap.Devices) == 0 && len(snap.NetworkMemberships) == 0 {
 		if err := migrateServerDevicesTx(tx, s.nowTime(), true); err != nil {
 			return fmt.Errorf("migrate server devices: %w", err)
 		}

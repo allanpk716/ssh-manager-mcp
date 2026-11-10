@@ -46,6 +46,17 @@ func NormalizeShellType(s string) ShellType {
 	return ShellType(s)
 }
 
+// IsWindows 判断这个 shell 类型是否运行在 Windows 上。空值先按默认的
+// POSIX 处理；无法识别的值同样返回 false，由调用方保持保守展示。
+func (shellType ShellType) IsWindows() bool {
+	switch NormalizeShellType(string(shellType)) {
+	case ShellPowerShell, ShellWindowsCmd:
+		return true
+	default:
+		return false
+	}
+}
+
 // EnvironmentVariableNameFormatIsValid 只检查环境变量名的通用格式：字母或
 // 下划线开头，后续为字母、数字或下划线。空字符串与其他业务限制由调用方
 // 自行判断。

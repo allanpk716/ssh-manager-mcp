@@ -100,7 +100,7 @@ func registerSoftwareDeclarationDraftTool(
 	}
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
-			Name:        BrokerTools[17], // "draft_software_declarations"（票 #188）
+			Name:        BrokerTools[18], // "draft_software_declarations"（票 #188）
 			Description: "Submit software declaration drafts (new declarations, claims of observed items or unidentified processes via claimed_observed_key, and declaration-only exposure levels). Multiple drafts can be submitted at once; the reply returns one draft id per input. Drafts do NOT affect query results or follow-ups until the owner confirms them — there is deliberately no tool to confirm, reject, or edit effective declarations.",
 		},
 		func(_ context.Context, _ *mcp.CallToolRequest, in DraftSoftwareDeclarationsInput) (*mcp.CallToolResult, DraftSoftwareDeclarationsOutput, error) {

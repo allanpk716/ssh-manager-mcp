@@ -58,6 +58,13 @@ type Store struct {
 	// metadata as the broker's authoritative row (Plan 48 §2.3). Set once by
 	// the cache hydration path alongside SetReadOnly; empty on server stores.
 	forwardDevice string
+	// cacheRecommendedVersion 是客户端缓存快照携带的权威端推荐版本。只在
+	// 缓存导入路径随只读模式一起设置；空串表示快照来自不写推荐版本的旧
+	// 权威端，需要按 ADR 0014 降级的工具据此报错。
+	cacheRecommendedVersion string
+	// sharedStorageDeviceNames 保存客户端缓存里设备行被 profile 裁剪掉的
+	// 共享存储提供方名字。权威端与单机部署的设备行总是存在，不使用这张表。
+	sharedStorageDeviceNames map[string]string
 	// NowFn 是可注入时钟，供配对时间判断与机密项时间戳使用。取值为空时
 	// 使用真实时钟；生产代码不设置它，测试可以注入固定时钟。其余时间戳
 	// 继续使用包内的 now 辅助函数。
@@ -107,6 +114,17 @@ func (s *Store) IsReadOnly() bool { return s.readOnly }
 // is intentionally NOT gated by read-only mode: the cache hydration path sets
 // it on the temp store right after SetReadOnly.
 func (s *Store) SetForwardDevice(name string) { s.forwardDevice = name }
+
+// SetCacheRecommendedVersion 记录客户端缓存快照携带的权威端推荐版本。
+// 与 SetForwardDevice 一样只写进程内元数据，不触数据库行，缓存导入路径
+// 在设只读模式后调用。
+func (s *Store) SetCacheRecommendedVersion(version string) {
+	s.cacheRecommendedVersion = version
+}
+
+// CacheRecommendedVersion 返回客户端缓存快照携带的权威端推荐版本；非
+// 缓存形态与旧权威端快照都返回空串。
+func (s *Store) CacheRecommendedVersion() string { return s.cacheRecommendedVersion }
 
 // DefaultStorePath returns the on-disk vault location (program-fixed, spec §3.1/§5.1).
 // SSHMGR_STORE overrides (test/migrate). Falls back to paths pkg (Win
@@ -999,6 +1017,69 @@ CREATE TABLE IF NOT EXISTS secret_server_allow (
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   PRIMARY KEY (secret_id, server_id)
 );
+CREATE TABLE IF NOT EXISTS shared_storages (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL UNIQUE,
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  mount_user TEXT NOT NULL,
+  password_secret_id TEXT NOT NULL REFERENCES secrets(id),
+  drive TEXT NOT NULL UNIQUE,
+  note TEXT NOT NULL DEFAULT '',
+  directories TEXT NOT NULL DEFAULT '[]',
+  version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
+  change_note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_secret_value
+AFTER UPDATE OF value_version ON secrets
+FOR EACH ROW WHEN OLD.value_version IS NOT NEW.value_version
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='', updated_at=NEW.value_updated_at
+   WHERE password_secret_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_member_add
+AFTER INSERT ON network_memberships
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='', updated_at=NEW.updated_at
+   WHERE device_id=NEW.device_id;
+END;
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_member_edit
+AFTER UPDATE ON network_memberships
+FOR EACH ROW WHEN
+  OLD.device_id IS NOT NEW.device_id OR OLD.network_id IS NOT NEW.network_id OR
+  OLD.address IS NOT NEW.address OR OLD.address_lower IS NOT NEW.address_lower
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='', updated_at=NEW.updated_at
+   WHERE device_id IN (OLD.device_id, NEW.device_id);
+END;
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_member_remove
+AFTER DELETE ON network_memberships
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='', updated_at=OLD.updated_at
+   WHERE device_id=OLD.device_id;
+END;
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_secret_allow_add
+AFTER INSERT ON secret_server_allow
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='',
+         updated_at=CAST(strftime('%s','now') AS INTEGER)
+   WHERE password_secret_id=NEW.secret_id;
+END;
+CREATE TRIGGER IF NOT EXISTS shared_storage_version_secret_allow_remove
+AFTER DELETE ON secret_server_allow
+BEGIN
+  UPDATE shared_storages
+     SET version=version+1, change_note='',
+         updated_at=CAST(strftime('%s','now') AS INTEGER)
+   WHERE password_secret_id=OLD.secret_id;
+END;
 CREATE TABLE IF NOT EXISTS forward_bind_hosts (
   ip         TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL

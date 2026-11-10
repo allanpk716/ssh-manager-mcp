@@ -124,7 +124,7 @@ func registerSoftwareInventoryCollectionTool(
 	}
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
-			Name:        BrokerTools[18], // "collect_software_inventory"（票 #188）
+			Name:        BrokerTools[19], // "collect_software_inventory"（票 #188）
 			Description: "Request an immediate software inventory collection for one visible device. The command set is fixed and shipped with sshmgr — this tool accepts no command parameters, only the device name.",
 		},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in CollectSoftwareInventoryInput) (*mcp.CallToolResult, CollectSoftwareInventoryOutput, error) {

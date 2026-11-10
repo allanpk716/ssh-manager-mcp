@@ -219,6 +219,35 @@ JSON 转义、压缩、加密等变换后的值，也不防 agent 有意绕开�
 - 后续功能的引用写法是占位符 `{{sshmgr-secret:NAME}}`。当前版本还没有提供
   机密项填值能力；不要把它理解成可以写入机密项的值。
 
+### list_shares
+
+只读列出这个会话里能看到的 SMB 网络共享登记，以及每台受管服务器上约定
+的挂载点。结构与字段：
+
+| 字段 | 含义 |
+|---|---|
+| `name` | 共享名，同一 vault 内唯一（不区分大小写） |
+| `provider_device` | 提供这处共享的设备名（owner 在网络拓扑里登记的设备） |
+| `note` | owner 备注的自由文本 |
+| `directories` | 目录约定数组，每项是 `{purpose, path}`：用途对应共享内部的子路径 |
+| `drive` | Windows 固定盘符（D 到 Z 的单个字母） |
+| `version` | 共享存储版本号，只增不减；owner 修改登记、换挂载密码、提供方设备网络成员变化或可写入服务器列表变化都会加一 |
+| `change_note` | 当前版本对应的 owner 变更说明，可以为空 |
+| `servers` | 当前会话可见且被授权可挂载这处共享的服务器，每项是 `{server_id, name, mount_point}` |
+
+- **挂载点是约定路径**：PowerShell 与 cmd 服务器为 `<盘符>:`（如 `Z:`），
+  其余为 `/mnt/sshmgr/<共享名>`。结果里的 `notice` 固定说明「挂载点
+  是约定路径，本工具不检测是否已挂载」——本工具不做任何网络、SSH 或
+  文件系统检测。
+- 可选 `server` 填服务器编号或名字；给出时只返回这台服务器能挂载的共享，
+  每个共享的 `servers` 只带这一台。服务器不在你的授权范围内时报
+  `server is not in your profile`（见错误对照表）。
+- 可挂载范围来自挂载密码机密项的可写入服务器列表，再与你的会话可见
+  服务器取交集；交集为空的共享不会出现在结果里。
+- 结果永不包含挂载密码、挂载账号用户名或候选访问地址。没有任何 agent
+  工具能登记、修改或删除共享存储——这些只能由 owner 在命令行或
+  管理界面完成。
+
 ### query_software_inventory
 
 只读查询软件清单（设备上装了什么软件、版本、监听端口与暴露级别）。
@@ -602,6 +631,7 @@ v0.20.0+)。无参数。**平时你不需要调它**——owner 更新磁盘二�
 |---|---|---|
 | `invalid or unknown token`（stdio：broker 起不来；多机缓存：spawn 即拒） | token 错了 / 被 owner `rotate` 换发 / project 被 disable/revoke | **报告 owner**；别反复重试。owner 会核 status、必要时换发并更新 `.mcp.json`（见 [agent-access.md](./agent-access.md)「Project 生命周期」） |
 | `server is not in your profile — call list_servers ...` | id 不在授权清单（用错 id、拿 name 当 id、或它不在你 profile） | **重新 `list_servers` 核对 id**；还不在就是 owner 没授权，报告 owner，别试别的 id |
+| `权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端` | 多机客户端拿到的快照来自不写推荐版本的旧权威端，网络拓扑与共享存储工具整体降级 | **报告 owner** 先升级权威端，客户端随后同步缓存；重试无效 |
 | `server has no credential configured (set one with: ...)`（`no_credential`） | owner 建了服务器但没配登录凭据——连接前就被拒 | **报告 owner** 按错误里的提示配凭据；重试无意义 |
 | 结果里 `timed_out: true`（不是报错） | 前台命令超过 timeout（默认 120s、硬顶 5 分钟）到点——broker 发出 SIGKILL 请求并断开连接，按时返回 | **拆小命令**：分页/分文件；长活改走 `exec_background` + `exec_output` 轮询（前台永远只有 5 分钟）；少数服务器断连后远端进程残留，用 `ps`/`pgrep` 自查、必要时报告 owner 清理 |
 | 结果里 `truncated: true`（不是报错） | 输出超每通道 1 MiB（download 是文件超 1 MiB），你只有前缀 | **refine**：`tail -n` / `head -n` / `grep` 取目标段重跑；看 `*_bytes` 判断真实体量；别硬拉全量 |
@@ -733,6 +763,7 @@ HEAD，后续重构以符号名为准）：
 | 每次工具调用全程审计（project/server/action/status/命令/耗时） | `internal/mcpserver/core.go:81-89` 等；../README.md "What the agent gets" |
 | 命令策略门在取凭据、建 SSH 连接之前（拦截 / 需确认都不建连接，拦截零字节到服务器）；判定内核是纯函数，权威端与客户端同一条代码路径，离线用最后一次拉到的规则 | `internal/mcpserver/policygate.go`（policyJudge）；`internal/mcpserver/core.go`（ExecCommandForProfile 的 gate 段）；`internal/mcpserver/bgtools.go`（后台同款门）；`internal/policy/policy.go`（Evaluate） |
 | probe_connectivity：只测 TCP 建连与耗时、只探测登记过的共同网络组合（不测兜底主机）、结果只存发起实例本地；经服务器探测执行固定命令、不经命令策略但写审计 | 规格 #142；ADR 0007（命令策略是护栏不是安全边界） |
+| list_shares：只读登记与挂载点约定、不做任何现场检测；可挂载范围是挂载密码机密项可写入列表与会话可见服务器取交集，交集为空不返回；旧权威端快照按 ADR 0014 报错 | `internal/mcpserver/list_shares.go`（ListSharesForProfile / sessionVisibleServerIDs）；`internal/store/shared_storage.go`（SharedStorageMountPoint）；`internal/mcpserver/run.go`（hydrateCacheStore 设置快照推荐版本） |
 | query_software_inventory：按 profile 可见范围查询软件清单（含监听端口、暴露级别、来源、采集时间与设备采集状态）；客户端在线查询权威端，不可达时固定报错、不回退本地数据 | 票 #185；`internal/mcpserver/softwareinventory.go`；`internal/mcpserver/serve_softwareinventory.go`；`internal/clientops/softwareinventory_forward.go` |
 | draft_software_declarations：提交软件声明草稿；客户端经受审计转发写提交，草稿确认前不影响查询与待办 | 票 #188；`internal/mcpserver/softwareinventory_draft.go`；`internal/mcpserver/serve_softwareinventory_draft.go`；`internal/clientops/softwareinventory_draft_forward.go` |
 | collect_software_inventory：请求立即采集；本地面同步执行或登记客户端请求，客户端经权威端转发 | 票 #188；`internal/mcpserver/softwareinventory_collect.go`；`internal/mcpserver/serve_softwareinventory_collect_forward.go`；`internal/clientops/softwareinventory_collect_forward.go` |

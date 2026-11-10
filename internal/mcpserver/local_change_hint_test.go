@@ -285,6 +285,84 @@ func TestLocalVaultChangeHint_OtherProfileOnlyChangeDoesNotHint(t *testing.T) {
 	}
 }
 
+// TestLocalVaultChangeHint_SharedStorageVersionChanged: owner 修改共享存储
+// 登记并写变更说明后，单机部署的下一次工具调用开头提示版本号变化与可能
+// 需要更新的服务器；同一会话不重复，提示不含挂载账号用户名与密码。
+func TestLocalVaultChangeHint_SharedStorageVersionChanged(t *testing.T) {
+	const (
+		mountUser       = "nas-mount-user"
+		oldPassword     = "shared-storage-old-password"
+		providerAddress = "192.0.2.10"
+	)
+	st := newStore(t)
+	serverID, err := st.AddServer(&models.Server{
+		Name: "gpu", Host: providerAddress, Port: 22, User: "u", AuthMethod: models.AuthPassword,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("NAS", "共享存储提供方", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("NAS_MOUNT_PASSWORD", "共享存储挂载密码", []byte(oldPassword), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"NAS_MOUNT_PASSWORD"}, []string{"gpu"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: mountUser,
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "z",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	session := localChangeHintSession(t, st, profileID)
+
+	if texts := localChangeHintTexts(t, session); len(texts) != 1 || !strings.HasPrefix(texts[0], `{"servers":`) {
+		t.Fatalf("第一次工具调用不应有提示，实际为 %#v", texts)
+	}
+	before, err := st.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	changeNote := "调整目录约定"
+	if _, err := st.EditSharedStorage("datasets", store.SharedStorageChanges{
+		ChangeNote: &changeNote,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := st.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := fmt.Sprintf(
+		"权威端配置已更新（修订号 %d → %d）：共享存储 datasets 版本 1 → 2，说明：调整目录约定；以下服务器上的挂载可能需要更新：gpu",
+		before, after,
+	)
+	texts := localChangeHintTexts(t, session)
+	if len(texts) != 2 || texts[0] != want || !strings.HasPrefix(texts[1], `{"servers":`) {
+		t.Fatalf("共享存储版本变化后的工具结果 = %#v，开头应为 %q 再接原结果", texts, want)
+	}
+	for _, leak := range []string{mountUser, oldPassword, providerAddress} {
+		if strings.Contains(texts[0], leak) {
+			t.Fatalf("共享存储变更提示不应包含挂载账号用户名、地址或密码：%q 含 %q", texts[0], leak)
+		}
+	}
+
+	third := localChangeHintTexts(t, session)
+	if len(third) != 1 || !strings.HasPrefix(third[0], `{"servers":`) {
+		t.Fatalf("同一会话里共享存储变更提示只应出现一次，实际为 %#v", third)
+	}
+}
+
 // TestLocalVaultChangeHint_AttachedToFailedToolResult: 工具本身失败时，
 // 变更提示仍附在失败结果最前面，不会被失败路径吞掉。
 func TestLocalVaultChangeHint_AttachedToFailedToolResult(t *testing.T) {

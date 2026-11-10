@@ -63,8 +63,8 @@ func (f *fakeSoftwareInventoryCollector) CollectSoftwareInventory(
 // TestSoftwareInventoryAgentToolSurface 钉住工具清单：新增草稿与立即采集两
 // 个工具；不提供任何确认草稿或修改生效声明的 MCP 工具。
 func TestSoftwareInventoryAgentToolSurface(t *testing.T) {
-	if BrokerTools[17] != "draft_software_declarations" ||
-		BrokerTools[18] != "collect_software_inventory" {
+	if BrokerTools[18] != "draft_software_declarations" ||
+		BrokerTools[19] != "collect_software_inventory" {
 		t.Fatalf("BrokerTools 应包含两个新工具：%v", BrokerTools)
 	}
 	st, profileID := softwareInventoryFaceFixture(t)
