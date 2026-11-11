@@ -329,9 +329,6 @@ type RelayInput struct {
 	ToShareAddress   string `json:"to_share_address,omitempty" jsonschema:"one SMB shared address (\\\\host\\share\\subpath or smb://host/share/subpath) as the destination endpoint; mutually exclusive with to_server_id and to_path"`
 	Via              string `json:"via,omitempty" jsonschema:"optional stable server id overriding automatic selection of the actually mounted Linux or macOS endpoint that exposes a shared address to the streaming relay; it is rejected for a local copy and must identify a visible, mountable, actually mounted server"`
 	Fresh            bool   `json:"fresh,omitempty" jsonschema:"for streaming_relay, discard any existing partial/manifest at the destination and restart from byte 0; local_copy always restarts from byte 0"`
-	// relayShareFallback 只在共享地址被翻译成已挂载服务器上的路径后由内部
-	// 调用填充；它让既有流式中继在输出与审计里说明本次选择，不参与工具输入。
-	relayShareFallback *relayShareFallbackMetadata
 }
 
 // RelayOutput is the relay_file tool output (Plan 47; spec §1.1 schema

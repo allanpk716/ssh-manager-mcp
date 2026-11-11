@@ -189,7 +189,6 @@ func relayLocalCopyForProfile(
 				resolved.Share, resolved.Address.SubPath, true)
 		}
 		relayInput := in
-		relayInput.relayShareFallback = metadata
 		relayInput.Via = ""
 		if sourceShareAddress != "" {
 			relayInput.FromShareAddress = ""
@@ -203,7 +202,7 @@ func relayLocalCopyForProfile(
 		// 递归进入既有流式中继后，启动与终态审计由那条路径完整记录；
 		// 这里不能再落一条共享地址预处理的启动审计。
 		startOwned = true
-		return RelayForProfile(ctx, st, tm, projectID, profileID, relayInput, chunkBytes, hk...)
+		return relayForProfile(ctx, st, tm, projectID, profileID, relayInput, metadata, chunkBytes, hk...)
 	}
 	windowsLocalCopy := server.ShellType.IsWindows()
 	if windowsLocalCopy {
@@ -276,7 +275,7 @@ func relayLocalCopyForProfile(
 		spaceCheck = "unavailable"
 	} else {
 		checkService := &sharemount.Service{
-			RemoteExec: relayLocalCopyCheckExec(client, st, server),
+			RemoteExec: sharemount.RemoteExecOverClient(client, st, server, sharemount.MaxOutputBytes),
 		}
 		checkResult, checkErr := checkService.Check(ctx, sharemount.CheckRequest{
 			Server: server, Shares: []*models.SharedStorage{resolved.Share},
@@ -542,7 +541,7 @@ func relayShareActuallyMounted(
 		return false, connectErr
 	}
 	defer client.Close()
-	checkService := &sharemount.Service{RemoteExec: relayLocalCopyCheckExec(client, st, server)}
+	checkService := &sharemount.Service{RemoteExec: sharemount.RemoteExecOverClient(client, st, server, sharemount.MaxOutputBytes)}
 	checkResult, checkErr := checkService.Check(ctx, sharemount.CheckRequest{
 		Server: server, Shares: []*models.SharedStorage{share},
 	})
@@ -587,46 +586,6 @@ func relayLocalCopyInspect(
 		return size, nil
 	default:
 		return 0, fmt.Errorf("检查本地拷贝源文件与目标路径失败，退出码 %d", result.ExitCode)
-	}
-}
-
-func relayLocalCopyCheckExec(
-	client *sshbroker.Client, st *store.Store, server *models.Server,
-) sharemount.RemoteExecFunc {
-	return func(ctx context.Context, _ *models.Server, request sharemount.RemoteExecRequest) (sharemount.RemoteExecResult, error) {
-		deadline, hasDeadline := ctx.Deadline()
-		if !hasDeadline {
-			deadline = time.Now().Add(sharemount.DefaultTimeout)
-		}
-		if !request.Privileged {
-			result, err := client.Exec(ctx, request.Command, time.Until(deadline), sharemount.MaxOutputBytes)
-			return sharemount.RemoteExecResult{
-				Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: result.ExitCode,
-				TimedOut: result.TimedOut, Truncated: result.Truncated,
-			}, err
-		}
-		if server.SudoCredentialID == "" {
-			return sharemount.RemoteExecResult{}, sharemount.ErrNoSudo
-		}
-		credential, err := st.GetCredential(server.SudoCredentialID)
-		if err != nil {
-			return sharemount.RemoteExecResult{}, fmt.Errorf("读取 sudo 凭据失败：%w", err)
-		}
-		if credential == nil {
-			return sharemount.RemoteExecResult{}, fmt.Errorf("服务器条目 %s 的 sudo 凭据不存在", server.Name)
-		}
-		result, err := client.ExecSudo(ctx, request.Command, credential.Secret,
-			time.Until(deadline), sharemount.MaxOutputBytes,
-			sshbroker.WithSudoStandardInput(request.StandardInput))
-		mapped := sharemount.RemoteExecResult{
-			Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: result.ExitCode,
-			TimedOut: result.TimedOut, Truncated: result.Truncated,
-		}
-		if err == nil && result.Sudo != nil && result.Sudo.Outcome != sshbroker.SudoElevated {
-			return mapped, &sharemount.RemoteSudoFailure{Diagnostic: fmt.Sprintf(
-				"sudo 提权未完成（%s）：%s", result.Sudo.Outcome, result.Sudo.Diagnostic)}
-		}
-		return mapped, err
 	}
 }
 
