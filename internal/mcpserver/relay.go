@@ -55,6 +55,9 @@ const (
 // 计划元数据 (exec_background 同款形态)。chunkBytes 来自构造期 env seam
 // (SSHMGR_TRANSFER_CHUNK, T2); 测试直传小值。执行序 ①–⑨ 逐字落 spec §2。
 func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, projectID, profileID string, in RelayInput, chunkBytes int64, hk ...sshbroker.HostKeyStore) (out RelayOutput, err error) {
+	if in.FromShareAddress != "" || in.ToShareAddress != "" || in.Via != "" {
+		return relayLocalCopyForProfile(ctx, st, tm, projectID, profileID, in, hk...)
+	}
 	var status string
 	var startOwned bool             // start(ok) 行已由 AuditStart 闭包 (持锁段) 落笔——本层不再落
 	var auditServer = in.ToServerID // 审计行归因端点: 随 ②③④ 阶段切到当下在判的一端
@@ -494,12 +497,9 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 	connectionNotes := srcConnectionNotes
 	connectionNotes = append(connectionNotes, dstConnectionNotes...)
 	out = RelayOutput{
-		TaskID:        taskID,
-		BytesTotal:    size,
-		ChunksTotal:   int(chunks),
-		ResumedChunks: int(resumed),
-		ChunkBytes:    chunkBytes,
-		SpaceCheck:    spaceCheck,
+		TaskID: taskID, Mode: "streaming_relay", RestartAfterInterruption: false,
+		BytesTotal: size, ChunksTotal: int(chunks), ResumedChunks: int(resumed),
+		ChunkBytes: chunkBytes, SpaceCheck: spaceCheck,
 		ConnectionNotesOutput: ConnectionNotesOutput{
 			ConnectionNotes: connectionNotes,
 		},

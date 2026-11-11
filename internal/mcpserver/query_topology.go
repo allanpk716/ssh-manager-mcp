@@ -159,22 +159,9 @@ func translateQueryTopologyShareAddress(
 	if origin.Server == nil {
 		return "", errors.New("共享地址翻译的 from 必须是授权范围内的服务器标识符")
 	}
-	visible, err := sessionVisibleServerIDs(st, profileID, "")
+	visibleShares, err := sharedStoragesVisibleInSession(st, profileID)
 	if err != nil {
 		return "", err
-	}
-	allShares, err := st.ListSharedStorages(store.SharedStorageFilter{})
-	if err != nil {
-		return "", err
-	}
-	visibleShares := make([]*models.SharedStorage, 0, len(allShares))
-	for _, share := range allShares {
-		for _, mountable := range share.MountableServers {
-			if visible[mountable.ID] {
-				visibleShares = append(visibleShares, share)
-				break
-			}
-		}
 	}
 	resolved, err := shareaddress.Resolve(rawAddress, visibleShares)
 	if err != nil {
