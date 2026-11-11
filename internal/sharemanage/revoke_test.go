@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sharemanage"
 	"ssh-manager-mcp/internal/sharemount"
 	"ssh-manager-mcp/internal/sharemounttest"
@@ -73,7 +74,8 @@ func TestRevokeLinuxWithoutUnmountDeletesConfigurationAndKeepsMount(t *testing.T
 		t.Fatal(err)
 	}
 	if summary["share"] != "datasets" || summary["server"] != "linux-web" ||
-		summary["version"] != float64(2) || summary["unmount"] != false {
+		summary["version"] != float64(2) || summary["unmount"] != false ||
+		summary["password_changed"] != false {
 		t.Fatalf("共享撤销审计摘要 = %#v", summary)
 	}
 	if strings.Contains(rows[0].Command, "mount-password") ||
@@ -122,6 +124,60 @@ func TestRevokeLinuxWithUnmountForceCleansRemoteAndRecordsFlags(t *testing.T) {
 	}
 	if summary["unmount"] != true || summary["force"] != true {
 		t.Fatalf("共享撤销审计应记录实际选项：%#v", summary)
+	}
+}
+
+func TestRevokeWithNewPasswordRecordsRemainingServersAndKeepsRemoteClean(t *testing.T) {
+	fixture := newUnmountFixture(t, false)
+	if _, err := fixture.store.AddServer(&models.Server{
+		Name: "linux-worker", Host: "192.0.2.11", Port: 22, User: "deploy",
+		AuthMethod: models.AuthPassword,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.AllowSecrets(
+		[]string{"DATASETS_MOUNT_PASSWORD"}, []string{"linux-worker"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := fixture.manager.Revoke(context.Background(), sharemanage.RevokeRequest{
+		Share: "datasets", Server: "linux-web", NewPassword: []byte("second-mount-password"),
+	})
+	if err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if !result.PasswordChanged || result.Version != 3 {
+		t.Fatalf("撤销加换密码结果 = %+v", result)
+	}
+	if len(result.RemainingMountServers) != 1 ||
+		result.RemainingMountServers[0] != "linux-worker" {
+		t.Fatalf("仍可挂载的 Linux 与 macOS 服务器 = %v", result.RemainingMountServers)
+	}
+	if !containsText(result.Notices, "桌面上手动添加的共享连接也需要更换密码") {
+		t.Fatalf("缺少桌面连接提醒：%+v", result)
+	}
+	state := fixture.linux.State()
+	if strings.Contains(state.RevokedMarker, "second-mount-password") ||
+		strings.Contains(strings.Join(state.Commands, "\n"), "second-mount-password") {
+		t.Fatalf("远端撤销标记或命令泄露新密码：%+v", state)
+	}
+
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-revoke"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || strings.Contains(rows[0].Command, "second-mount-password") {
+		t.Fatalf("共享撤销审计应只记录是否换密码：%+v", rows)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary["password_changed"] != true {
+		t.Fatalf("共享撤销审计摘要应记录换密码：%#v", summary)
 	}
 }
 
