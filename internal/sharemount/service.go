@@ -334,6 +334,14 @@ func (s *Service) exec(
 	return s.defaultRemoteExec(ctx, server, request)
 }
 
+// Exec 在共享存储挂载领域服务之外执行同一个固定命令注入点。共享存储
+// owner 管理模块复用这里的统一拨号与提权路径，不另建远程执行通道。
+func (s *Service) Exec(
+	ctx context.Context, server *models.Server, request RemoteExecRequest,
+) (RemoteExecResult, error) {
+	return s.exec(ctx, server, request)
+}
+
 // defaultRemoteExec 按服务器条目解析凭据、经统一入口拨号并执行固定命令。
 // 提权路径与软件清单共用 ExecSudo 的标记行证实；标准输入只在 sudo 密码行
 // 后追加。
