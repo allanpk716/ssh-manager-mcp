@@ -300,6 +300,13 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 // On any failure the remote may hold a partially-written file and/or the
 // created parent dir — cleanup is the caller's job (scp parity).
 func (c *Client) WriteFile(ctx context.Context, remotePath string, r io.Reader) error {
+	return c.WriteFileWithCreateMode(ctx, remotePath, r, 0)
+}
+
+// WriteFileWithCreateMode 把 r 写入 remotePath。createMode 为 0 时保持既有
+// 写入行为；非 0 时先查看目标是否已存在，只有新建文件才设置权限，覆盖
+// 已有文件保留原权限。
+func (c *Client) WriteFileWithCreateMode(ctx context.Context, remotePath string, r io.Reader, createMode os.FileMode) error {
 	sc, err := sftp.NewClient(c.c)
 	if err != nil {
 		return fmt.Errorf("sftp client: %w", err)
@@ -319,7 +326,22 @@ func (c *Client) WriteFile(ctx context.Context, remotePath string, r io.Reader) 
 	if err := sc.MkdirAll(path.Dir(remotePath)); err != nil {
 		return fmt.Errorf("mkdir parent: %w", err)
 	}
-	out, err := sc.Create(remotePath)
+	var out *sftp.File
+	if createMode == 0 {
+		out, err = sc.Create(remotePath)
+	} else {
+		_, statErr := sc.Stat(remotePath)
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return statErr
+		}
+		if out, err = sc.Create(remotePath); err == nil && statErr != nil {
+			err = out.Chmod(createMode)
+			if err != nil {
+				_ = out.Close()
+				return err
+			}
+		}
+	}
 	if err != nil {
 		return err
 	}
