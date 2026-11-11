@@ -151,6 +151,11 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		relayKeyOf(in.ToServerID, toCanon+relayManifestSuffix),
 		relayKeyOf(in.ToServerID, toCanon+relayManifestSuffix+".tmp"),
 	}
+	// 共享地址作为目标端时，除端点服务器上的路径键外，还要登记共享级
+	// 冲突键：两台服务器经各自挂载点写同一个共享文件也必须互斥。
+	if in.relayShareFallback != nil {
+		writeKeys = append(writeKeys, in.relayShareFallback.ShareTargetKeys...)
+	}
 	if !localSource {
 		readKey := relayKeyOf(in.FromServerID, fromCanon)
 		for _, wk := range writeKeys {

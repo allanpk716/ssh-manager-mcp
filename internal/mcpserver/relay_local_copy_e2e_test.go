@@ -410,6 +410,76 @@ func TestRelayFileLocalCopyRunningTargetConflict(t *testing.T) {
 	}
 }
 
+// TestRelayFileShareTargetConflictAcrossServers 钉住共享地址作为目标端的
+// 冲突键：两台不同服务器经各自挂载点写同一个共享文件也算同目标冲突，
+// 第二个任务被拒绝，不能并行破坏同一个文件。
+func TestRelayFileShareTargetConflictAcrossServers(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, true)
+	session := environment.openSession(t)
+	linuxSource := "/mnt/sshmgr/datasets/ordinary/linux.bin"
+	windowsSource := "C:/Users/Public/windows.bin"
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(linuxSource)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(linuxSource), []byte("linux payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(windowsSource)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(windowsSource), []byte("windows payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	blockCopy := make(chan struct{})
+	environment.fake.blockCopy = blockCopy
+	environment.fake.keepPartial = true
+	targetShareAddress := `\\192.0.2.10\datasets\Reports\Shared-Target.bin`
+
+	first, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_server_id":   environment.serverID,
+			"from_path":        linuxSource,
+			"to_share_address": targetShareAddress,
+		},
+	})
+	if err != nil || first.IsError {
+		t.Fatalf("第一个任务：err=%v 失败=%s", err, toolResultText(first))
+	}
+	var firstOutput RelayOutput
+	unmarshalToolJSON(t, first, &firstOutput)
+	relayE2EWaitLine(t, session, firstOutput.TaskID, "cp -- ", 30*time.Second)
+
+	// 第二次用等价的 smb:// 写法与不同大小写，指称同一个共享文件；冲突
+	// 判定按共享存储标识符与规范化子路径进行，不能被写法差异绕过。
+	second, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_server_id":   environment.windowsID,
+			"from_path":        windowsSource,
+			"to_share_address": `smb://192.0.2.10/Datasets/reports/shared-target.BIN`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("第二个任务调用：%v", err)
+	}
+	if !second.IsError || !strings.Contains(toolResultText(second), "relay conflict") ||
+		!strings.Contains(toolResultText(second), firstOutput.TaskID) {
+		t.Fatalf("跨服务器同共享目标应报冲突：%s", toolResultText(second))
+	}
+
+	stopResult, stopErr := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "exec_stop", Arguments: map[string]any{"task_id": firstOutput.TaskID},
+	})
+	if stopErr != nil || stopResult.IsError {
+		t.Fatalf("exec_stop：err=%v result=%+v", stopErr, stopResult.Content)
+	}
+	close(blockCopy)
+	if _, status, _ := relayE2EPoll(t, session, firstOutput.TaskID, 30*time.Second); status != bgStatusStopped {
+		t.Fatalf("第一个任务终态 = %q，期待 stopped", status)
+	}
+}
+
 // TestRelayFileLocalCopyRejectsDirectory 保证共享地址指到目录时沿用常规文
 // 件限制与目录指引。
 func TestRelayFileLocalCopyRejectsDirectory(t *testing.T) {

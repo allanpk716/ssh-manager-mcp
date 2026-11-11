@@ -28,6 +28,9 @@ type relayShareFallbackMetadata struct {
 	ShareName          string
 	EndpointServerID   string
 	EndpointServerName string
+	// ShareTargetKeys 在共享地址作为目标端时携带共享级写冲突键；流式中
+	// 继的既有路径把它与按服务器路径构造的键一起登记。
+	ShareTargetKeys []string
 }
 
 func relayShareFallbackEndpointID(metadata *relayShareFallbackMetadata) string {
@@ -44,6 +47,25 @@ func relayShareFallbackNotice(metadata *relayShareFallbackMetadata) string {
 	return fmt.Sprintf(
 		"流式转发：共享地址由服务器 %s（%s）暴露；中断、停止或失败后按目标端块清单续传",
 		metadata.EndpointServerName, metadata.EndpointServerID)
+}
+
+// relayShareTargetConflictKeys 构造共享地址作为目标端时的附加写冲突键。
+// 键包含共享存储标识符与规范化子路径（子路径按共享地址解析的等价规则统
+// 一分隔符后不区分大小写），因此两台服务器经各自挂载点写同一个共享文件
+// 也会被判为同目标冲突。
+func relayShareTargetConflictKeys(
+	share *models.SharedStorage, resolvedSubPath string, streaming bool,
+) []string {
+	base := "shared-storage\x00" + share.ID + "\x00" + strings.ToLower(resolvedSubPath)
+	suffixes := []string{"", relayPartialSuffix}
+	if streaming {
+		suffixes = append(suffixes, relayManifestSuffix, relayManifestSuffix+".tmp")
+	}
+	keys := make([]string, 0, len(suffixes))
+	for _, suffix := range suffixes {
+		keys = append(keys, base+suffix)
+	}
+	return keys
 }
 
 // RelayForProfile 的共享地址分支：另一端可挂载时，在这台服务器上启动固定
@@ -158,6 +180,10 @@ func relayLocalCopyForProfile(
 		metadata := &relayShareFallbackMetadata{
 			ShareName: resolved.Share.Name, EndpointServerID: endpoint.ID,
 			EndpointServerName: endpoint.Name,
+		}
+		if targetShareAddress != "" {
+			metadata.ShareTargetKeys = relayShareTargetConflictKeys(
+				resolved.Share, resolved.Address.SubPath, true)
 		}
 		relayInput := in
 		relayInput.relayShareFallback = metadata
@@ -286,6 +312,10 @@ func relayLocalCopyForProfile(
 	writeKeys := []string{
 		relayKeyOf(serverID, targetPath),
 		relayKeyOf(serverID, targetPath+relayPartialSuffix),
+	}
+	if targetShareAddress != "" {
+		writeKeys = append(writeKeys, relayShareTargetConflictKeys(
+			resolved.Share, resolved.Address.SubPath, false)...)
 	}
 	spec := BgTaskSpec{
 		ProjectID: projectID, ServerID: serverID, Command: summary(), Timeout: relayRunCap,
