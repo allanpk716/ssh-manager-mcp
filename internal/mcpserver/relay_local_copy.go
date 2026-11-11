@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -92,27 +93,46 @@ func relayLocalCopyForProfile(
 		serverID = in.ToServerID
 		ordinaryPath = in.ToPath
 	}
-	if serverID == "" || ordinaryPath == "" {
+	// 目标端是共享地址、源端省略服务器编号时，另一端是执行实例本地文件。
+	// 本地端不是受管服务器，不能做本地拷贝，只能按共享端点选择规则回退到
+	// 本地源流式中继；其绝对路径语义由流式中继按执行实例操作系统校验。
+	localOtherEnd := targetShareAddress != "" && serverID == ""
+	if sourceShareAddress != "" && (serverID == "" || ordinaryPath == "") {
+		return RelayOutput{}, errors.New(strings.Join([]string{
+			"源端是共享地址时，目标端必须是受管服务器上的常规文件路径",
+			"relay_file 不能把文件中继到执行实例本地路径",
+		}, "；"))
+	}
+	if !localOtherEnd && (serverID == "" || ordinaryPath == "") {
 		return RelayOutput{}, errors.New("共享地址端点的另一端必须是受管服务器上的常规文件路径")
 	}
-	if !isAbsRemotePath(ordinaryPath) {
-		return RelayOutput{}, fmt.Errorf(
-			"共享地址另一端的路径 %q 必须是以 / 开头的绝对路径（或 Windows 盘符根 C:/）", ordinaryPath)
+	if localOtherEnd && ordinaryPath == "" {
+		return RelayOutput{}, errors.New("目标端是共享地址时，源端必须给出执行实例本地文件路径或服务器路径")
 	}
-	ordinaryPath = path.Clean(ordinaryPath)
-	auditServer = serverID
+	var server *models.Server
+	if localOtherEnd {
+		ordinaryPath = filepath.Clean(ordinaryPath)
+		auditServer = ""
+	} else {
+		if !isAbsRemotePath(ordinaryPath) {
+			return RelayOutput{}, fmt.Errorf(
+				"共享地址另一端的路径 %q 必须是以 / 开头的绝对路径（或 Windows 盘符根 C:/）", ordinaryPath)
+		}
+		ordinaryPath = path.Clean(ordinaryPath)
+		auditServer = serverID
 
-	allowed, err := st.ServersForProfile(profileID)
-	if err != nil {
-		return RelayOutput{}, err
-	}
-	if gateErr := gateServerIn(allowed, serverID); gateErr != nil {
-		status = "denied"
-		return RelayOutput{}, gateErr
-	}
-	server, err := st.GetServer(serverID)
-	if err != nil || server == nil {
-		return RelayOutput{}, fmt.Errorf("server %s not found", serverID)
+		allowed, err := st.ServersForProfile(profileID)
+		if err != nil {
+			return RelayOutput{}, err
+		}
+		if gateErr := gateServerIn(allowed, serverID); gateErr != nil {
+			status = "denied"
+			return RelayOutput{}, gateErr
+		}
+		server, err = st.GetServer(serverID)
+		if err != nil || server == nil {
+			return RelayOutput{}, fmt.Errorf("server %s not found", serverID)
+		}
 	}
 
 	shares, err := sharedStoragesVisibleInSession(st, profileID)
@@ -128,7 +148,7 @@ func relayLocalCopyForProfile(
 		return RelayOutput{}, err
 	}
 	shareName = resolved.Share.Name
-	if !sharedStorageMountableOnServer(resolved.Share, serverID) {
+	if localOtherEnd || !sharedStorageMountableOnServer(resolved.Share, serverID) {
 		endpoint, fallbackErr := selectRelayShareFallbackEndpoint(
 			ctx, st, profileID, resolved.Share, in.Via, hk...)
 		if fallbackErr != nil {
