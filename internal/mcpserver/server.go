@@ -174,7 +174,7 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 
 	// 桥热升级 (spec 实施决策第 2 条): 统一忙判据 —— 隧道/任务两路计数源挂上
 	// 两个管理器 (各自持锁现读), 在飞一路由下面 addTrackedTool 的包装层进出
-	// 计数。reload_self 工具与自动换手 (后续票) 以 busy.Report() 判忙; 发起
+	// 计数。reload_self 工具与自动换手功能以 busy.Report() 判忙; 发起
 	// 换手的 reload_self 注册时走 wrapInflight 豁免自身 (不计入在飞, 否则工具
 	// 触发永远自拒)。busy 的进程内出口是 serverRuntimes 登记表 (签名不动:
 	// NewServerFromSource 的返回形状被 serve.go 等既有调用方依赖), stdio
@@ -308,7 +308,7 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
 			Name:        BrokerTools[20], // "mount_share"
-			Description: "Mount an SMB shared storage on a Linux or macOS server by fixed commands. Input is only a share name from list_shares and a server id from list_servers; no command or path can be supplied. The broker selects a registered common-network address from the target server, writes the persistent Linux or macOS configuration and the root-only mount secret, makes it effective, and verifies the mount point can list content. The operation is intended to be idempotent and safe to call again after share changes, but this tool cannot unmount or roll back a mount. Windows servers do not need it: their fixed drive letter is injected into each command session. Mount passwords are never included in command text, results, or audit records.",
+			Description: "Mount an SMB shared storage on a Linux or macOS server by fixed commands. Input is only a share name from list_shares and a server id from list_servers; no command or path can be supplied. The broker selects a registered common-network address from the target server, writes the persistent Linux or macOS configuration and the root-only mount secret, makes it effective, and verifies the mount point can list content. The operation is intended to be idempotent and safe to call again after share changes, but this tool cannot unmount or roll back a mount. A matching owner revocation marker rejects the call until a newer shared-storage authorization is synced. Windows servers do not need it: their fixed drive letter is injected into each command session. Mount passwords are never included in command text, results, or audit records.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in MountShareInput) (*mcp.CallToolResult, MountShareOutput, error) {
 			st := storeFromContext(ctx, storeFn)

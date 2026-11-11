@@ -17,6 +17,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
@@ -523,6 +524,62 @@ func TestSecretsHelpMentionsNewlineAndNoteRisk(t *testing.T) {
 	out := mustSecretsCli(t, "", "secrets", "add", "--help")
 	if !strings.Contains(out, "备注对 agent 可见，不要写敏感内容") {
 		t.Fatalf("add help must warn about notes being visible to agents:\n%s", out)
+	}
+}
+
+// seedSharedStorageSecretVault 建一个带共享存储登记的机密项环境：
+// NAS_MOUNT_PASSWORD 是共享 datasets 的挂载密码，API_TOKEN 与共享无关。
+func seedSharedStorageSecretVault(t *testing.T) (string, []byte) {
+	t.Helper()
+	dbPath, mk := newSecretsEnv(t)
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	if _, err := st.AddDevice("NAS", "共享存储提供方", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServer(&models.Server{
+		Name: "web1", Host: "192.0.2.10", Port: 22, User: "deploy", AuthMethod: models.AuthPassword,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"NAS_MOUNT_PASSWORD", "API_TOKEN"} {
+		if err := st.AddSecret(name, "", []byte(testSecretValueA), store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.AllowSecrets([]string{name}, []string{"web1"}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	return dbPath, mk
+}
+
+// TestSecretsDisallowMountPasswordHint 钉住撤销入口的提示边界：机密项是某
+// 个共享存储的挂载密码时，取消授权额外说明远端配置未被改动并指向 shares
+// revoke 与 shares residue；与共享无关的机密项保持原输出。
+func TestSecretsDisallowMountPasswordHint(t *testing.T) {
+	seedSharedStorageSecretVault(t)
+
+	out := mustSecretsCli(t, "", "secrets", "disallow",
+		"--secrets", "NAS_MOUNT_PASSWORD,API_TOKEN", "--servers", "web1")
+	want := "已取消 2 个机密项写入 1 个服务器条目\n" +
+		"机密项 NAS_MOUNT_PASSWORD 是共享存储 datasets 的挂载密码：本次只改登记，服务器上的挂载配置未被改动；撤销用 shares revoke，残留检查用 shares residue。\n"
+	if out != want {
+		t.Fatalf("disallow output = %q, want %q", out, want)
+	}
+
+	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "NAS_MOUNT_PASSWORD,API_TOKEN", "--servers", "web1")
+	out = mustSecretsCli(t, "", "secrets", "disallow", "--secrets", "API_TOKEN", "--servers", "web1")
+	if out != "已取消 1 个机密项写入 1 个服务器条目\n" {
+		t.Fatalf("unrelated secret must keep the plain output, got %q", out)
 	}
 }
 

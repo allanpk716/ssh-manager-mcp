@@ -103,6 +103,11 @@ L1+ 模型下**未消除**的威胁：
   文件（Linux 凭据文件、macOS autofs 映射文件），密码与候选地址绝不出现在
   agent 可见的命令文本、返回、错误或审计里；能对哪些服务器执行由挂载密码
   机密项的可写入服务器列表决定。
+- **共享存储撤销标记不含秘密**：owner 撤销后，Linux 与 macOS 服务器上
+  留下的标记内容固定为
+  `sshmgr-share=<百分号编码的共享名>;sshmgr-version=<十进制共享存储版本号>;sshmgr-state=revoked`，
+  文件权限为仅 root 可读；不含共享地址、挂载账号或密码，也不进入 agent
+  可见的返回与错误。
 - **audit 行永不入 agent 面（Plan 36）**：`sshmgr audit` 是 owner 侧读路径（master-key 闸的 CLI，**永不注册为 MCP 工具**）——审计行含各 agent 的完整命令文本、可能含 secret，刻意做成 agent 面不可达。
 - **不算违约**：agent 在服务器上主动执行 `ip addr` / `hostname` 等命令探出的地址。
 - **明确不防的运行时逃逸**：agent 调用本机 sshmgr owner CLI（`projects show` / `servers ls` 明文打印 `user@host:port`）；agent 读到离线 client 上的 cache.bin（整仓快照，设计上含全部 host 明文）——这两类属「agent 宿主已被完全信任」范畴，见 [backlog.md](./backlog.md) 的 (d) 类定级。
@@ -141,6 +146,27 @@ L1+ 模型下**未消除**的威胁：
 - **R13.3 `--no-verify`**：owner 显式声明信任本地文件；打印未校验警告留档。
 - **R13.4 staged 自检执行面**：替换前以当前用户执行 staged 二进制的 `version` 自检（已过 checksum，但 checksum 信任链 = GitHub；`--file --no-verify` 下更是**零校验执行**——比「只落盘不执行」多一个执行面）；缓解 = 超时 10s + 有限输出缓冲，执行后即删。
 - **R13.5 服务 exe 在用户可写目录（NUC10 现状）= same-user→SYSTEM 提权面**：**owner 拍板维持**（v0.10.0 既有做法；单用户威胁模型 M1 下 master.key 机器域可解，same-user 妥协 ≈ 全丢，SYSTEM 增量小；update 免提权是本 plan 核心易用性诉求）。残余在此登记；可选加固 = 迁 `C:\Program Files\sshmgr\` + ACL（加固后 update 的文件替换亦需提权）——给指引不做默认。
+
+---
+
+## 3.9 共享存储撤销边界（规格 #212）
+
+- **撤销标记挡的是旧 sshmgr 快照，不是服务器上的 root**：标记让仍持旧
+  快照的 `mount_share` 拒绝回写配置；重新授权后的快照版本号更大时，挂载
+  成功会删除标记。目标服务器上的 root 本来就能读、删配置或使用既有挂载，
+  所以怀疑服务器被入侵时，撤销与清理只是止损，真正的撤销手段是更换共享
+  存储挂载密码。
+- **删除提供方设备不导出 vault**：删除事务不会为事后连接服务器而导出临
+  时加密数据库。仍保留登记的服务器照常级联撤销；服务器条目本身随设备删
+  除的那部分只标为「未清理」，预览提示 owner 需要清理时先运行
+  `shares unmount <共享名> <服务器>` 再删除设备。
+- **Windows 停止注入是护栏，不是安全边界**：owner 撤销后，Windows 服务
+  器本身不留 sshmgr 配置，各客户端同步快照后不再注入网络盘符；但在线客
+  户端默认要等下一次快照刷新（5 分钟内），正在执行的命令保留本次会话已
+  注入的盘符直到命令结束，长期离线客户端在同步前仍会按旧快照注入。owner
+  或其他用户在 Windows 桌面、服务与计划任务里手动添加过的共享连接也不受
+  sshmgr 控制。要切断旧密码，必须更换共享存储挂载密码，并同步更新仍在范
+  围内的 Linux / macOS 服务器与桌面上的手动连接。
 
 ---
 

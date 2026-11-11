@@ -17,9 +17,11 @@ const (
 	darwinExitLockTimeout    = 87
 	darwinExitRemoteNewer    = 88
 	darwinExitInvalidConfig  = 89
-	darwinAutoMaster         = "/etc/auto_master"
-	darwinMapFile            = "/etc/sshmgr/auto_share"
-	darwinMountRoot          = "/mnt/sshmgr"
+	// darwinExitShareRevoked 表示目标服务器上的撤销标记仍对本次快照生效。
+	darwinExitShareRevoked = 90
+	darwinAutoMaster       = "/etc/auto_master"
+	darwinMapFile          = "/etc/sshmgr/auto_share"
+	darwinMountRoot        = "/mnt/sshmgr"
 )
 
 // darwinMountExitCodeError 把 macOS 固定挂载命令的已知退出码翻译为中文
@@ -44,6 +46,9 @@ func darwinMountExitCodeError(exitCode int) error {
 	case darwinExitInvalidConfig:
 		return mountFailure(MountClassError, errors.New(
 			"目标服务器上的 sshmgr autofs 配置无法解析，请 owner 检查后再试"))
+	case darwinExitShareRevoked:
+		return mountFailure(MountClassShareRevoked, errors.New(
+			"共享存储已从这台服务器撤销，不能重新挂载；如 owner 已重新授权，请先同步快照后再试"))
 	default:
 		return nil
 	}
@@ -56,12 +61,22 @@ func darwinMountPoint(shareName string) string {
 // buildDarwinMountCommand 生成 macOS autofs 固定命令。密码只经提权会话的
 // 标准输入进入远端脚本，再由脚本按字节百分号编码；它绝不进入命令文本。
 func buildDarwinMountCommand(share *models.SharedStorage, candidates []*Candidate) string {
+	return buildDarwinMountCommandWithOptions(share, candidates, mountCommandOptions{})
+}
+
+func buildDarwinMountCommandWithOptions(
+	share *models.SharedStorage, candidates []*Candidate, options mountCommandOptions,
+) string {
 	shareName := sshbroker.POSIXShellQuote(share.Name)
 	mountUser := sshbroker.POSIXShellQuote(share.MountUser)
 	mountPoint := sshbroker.POSIXShellQuote(darwinMountPoint(share.Name))
 	marker := sshbroker.POSIXShellQuote(sharedStorageMarkerOptions(share.Name, share.Version))
 	shareValue := sshbroker.POSIXShellQuote(url.PathEscape(share.Name))
 	versionValue := sshbroker.POSIXShellQuote(strconv.FormatInt(share.Version, 10))
+	forceValue := "no"
+	if options.Force {
+		forceValue = "yes"
+	}
 
 	return `set -eu
 sshmgr_exit_missing_command=` + strconv.Itoa(darwinExitMissingCommand) + `
@@ -78,6 +93,7 @@ sshmgr_expected_version=` + versionValue + `
 share_name=` + shareName + `
 mount_user=` + mountUser + `
 mount_point=` + mountPoint + `
+sshmgr_force=` + forceValue + `
 ` + candidateAddressVariablesScript(candidates) + `
 sshmgr_map_candidate=''
 sshmgr_cleanup() {
@@ -196,7 +212,11 @@ if [ "$sshmgr_after_marker" -ne 0 ]; then
 fi
 
 ` + remoteVersionGuardScript(darwinMountMarker, darwinExitRemoteNewer) + `
-` + candidateAddressSelectionScript(candidates) + `
+` + revokedMarkerGuardScript(
+		"/etc/sshmgr/"+url.PathEscape(share.Name)+".revoked",
+		darwinMountMarker, darwinExitShareRevoked, darwinExitInvalidConfig,
+	) + `
+` + candidateAddressSelectionScript(candidates, !options.PreferFirstCandidate) + `
 
 sshmgr_existing_configuration=no
 if [ "$sshmgr_managed_count" -eq 1 ] &&
@@ -231,10 +251,12 @@ fi
 ` + mountTableCheckScript(CheckSystemDarwin) + `
 if [ "$sshmgr_existing_configuration" = yes ] && [ "$sshmgr_reset" = no ] &&
    [ "$sshmgr_mounted" = yes ]; then
+  rm -f "$sshmgr_revoked_marker"
   echo ` + darwinMountMarker + ` result=no-change selected=$sshmgr_selected_index reset=no
   exit 0
 fi
 
+` + darwinReselectBusyScript(options) + `
 sshmgr_build_entry_line() {
   sshmgr_entry_line=$(printf '%s -fstype=smbfs ://%s:%s@%s/%s\n' \
     "$share_name" "$mount_user" "$sshmgr_encoded_password" \
@@ -296,16 +318,7 @@ if [ "$sshmgr_reset" = yes ]; then
   printf '%s %s\n' ` + sshbroker.POSIXShellQuote(darwinMountRoot) + ` ` + sshbroker.POSIXShellQuote(darwinMapFile) + ` >> ` + sshbroker.POSIXShellQuote(darwinAutoMaster) + `
 fi
 
-if [ "$sshmgr_managed_count" -gt 0 ] && [ "$sshmgr_existing_configuration" = no ]; then
-  ` + mountTableCheckScript(CheckSystemDarwin) + `  if [ "$sshmgr_mounted" = yes ]; then
-    if ! umount "$mount_point" >/dev/null 2>&1; then
-      if ! diskutil unmount force "$mount_point" >/dev/null 2>&1; then
-        echo ` + darwinMountMarker + ` unmount-failed >&2
-        exit ` + strconv.Itoa(darwinExitUnmountFailed) + `
-      fi
-    fi
-  fi
-fi
+` + darwinReselectUnmountScript(options) + `
 
 automount -cv
 ` + mountTableCheckScript(CheckSystemDarwin) + `if [ "$sshmgr_mounted" != yes ]; then
@@ -319,6 +332,7 @@ elif [ "$sshmgr_existing_configuration" = yes ]; then
 else
   sshmgr_result=update-success
 fi
+rm -f "$sshmgr_revoked_marker"
 echo ` + darwinMountMarker + ` result=$sshmgr_result selected=$sshmgr_selected_index reset=$sshmgr_reset
 `
 }

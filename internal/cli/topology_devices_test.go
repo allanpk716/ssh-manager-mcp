@@ -241,7 +241,7 @@ func TestServersRemoveKeepsDevice(t *testing.T) {
 }
 
 // seedDeviceDeleteFixture 通过“导出、追加布局坐标、导入”构造一个完整设备
-// 删除现场。布局坐标本票没有命令行写入入口，这是规格允许的测试构造方式。
+// 删除现场。布局坐标目前没有命令行写入入口。
 func seedDeviceDeleteFixture(t *testing.T, dbPath string, masterKey []byte) {
 	t.Helper()
 	sourcePath := filepath.Join(t.TempDir(), "fixture.db")
@@ -470,9 +470,10 @@ func TestDevicesRemovePreviewsAndCascadesSharedStorages(t *testing.T) {
 	out := runCli(t, "devices", "rm", "NAS", "--yes")
 	groups := []string{
 		"共享存储：\n  datasets",
+		"Linux 与 macOS 服务器（将删除配置并卸载）：",
 		"linux-web（所属设备 Web 主机，系统类型 Linux 或 macOS）",
+		"Windows 服务器（将随快照同步停止注入）：",
 		"windows-web（所属设备 Web 主机，系统类型 Windows）",
-		"不会去服务器上卸载",
 	}
 	position := -1
 	for _, want := range groups {
@@ -718,7 +719,7 @@ func TestTopologyNamesTrimSurroundingWhitespace(t *testing.T) {
 }
 
 // TestDevicesRemoveCleansCurrentRelations 覆盖设备删除确认、删除网络成员、
-// 解除客户端实例关联；本票设备还不能关联服务器条目。
+// 解除客户端实例关联。
 func TestDevicesRemoveCleansCurrentRelations(t *testing.T) {
 	dbPath, masterKey := withCliStoreEnv(t)
 	seedTopologyClient(t, dbPath, masterKey, "laptop")

@@ -24,7 +24,26 @@ func candidateAddressVariablesScript(candidates []*Candidate) string {
 // candidateAddressSelectionScript 生成「优先保留现有地址」的公共片段：
 // 现有地址仍出现在候选里就沿用它的序号，否则退回第一个候选。远端固定
 // 命令在锁内执行这段逻辑，避免并发改写时换错地址。
-func candidateAddressSelectionScript(candidates []*Candidate) string {
+// mountCommandOptions 区分 agent 的普通挂载与 owner 的重选地址。普通挂
+// 载优先保留仍可连通的现有地址；重选地址总是采用候选列表中的第一个可达
+// 地址，并在改写配置前处理占用。
+type mountCommandOptions struct {
+	PreferFirstCandidate bool
+	Reselect             bool
+	Force                bool
+}
+
+func candidateAddressSelectionScript(
+	candidates []*Candidate, preserveExisting bool,
+) string {
+	if !preserveExisting {
+		firstCase := ""
+		if len(candidates) > 0 {
+			firstCase = "  1) sshmgr_selected_address=$candidate_1_address ;;\n"
+		}
+		return "sshmgr_selected_index=1\ncase \"$sshmgr_selected_index\" in\n" +
+			firstCase + "esac\n"
+	}
 	selections := strings.Builder{}
 	cases := strings.Builder{}
 	for index := range candidates {

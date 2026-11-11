@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/sharemanage"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/termdetect"
 )
@@ -32,7 +33,9 @@ func requireSharesVault() (*store.Store, error) {
 
 func newSharesCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "shares", Short: "Manage registered shared storage"}
-	cmd.AddCommand(sharesAddCmd(), sharesEditCmd(), sharesRmCmd(), sharesListCmd(), sharesShowCmd())
+	cmd.AddCommand(sharesAddCmd(), sharesEditCmd(), sharesRmCmd(), sharesListCmd(),
+		sharesShowCmd(), sharesUnmountCmd(), sharesRevokeCmd(), sharesReselectCmd(),
+		sharesResidueCmd())
 	return cmd
 }
 
@@ -260,6 +263,68 @@ func sharesRmCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&yes, "yes", false, "跳过删除确认；非交互终端必须显式给出")
+	return c
+}
+
+func sharesUnmountCmd() *cobra.Command {
+	var force, yes bool
+	c := &cobra.Command{
+		Use:   "unmount SHARE SERVER [--force] [--yes]",
+		Args:  cobra.ExactArgs(2),
+		Short: "Remove one shared storage mount from a Linux or macOS server",
+		Long: `在一台 Linux 或 macOS 服务器上删除共享存储的持久挂载配置，再卸载挂载点。
+
+服务器仍在可挂载范围内时，agent 之后仍可能重新挂载；彻底撤下授权请使用 shares revoke。
+服务器已移出范围或共享登记已删除时，命令会留下不含机密的撤销标记。`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := requireSharesVault()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "将卸载共享存储 %s 在服务器 %s 上的配置与挂载。\n", args[0], args[1])
+			if force {
+				fmt.Fprintln(out, "被占用时将强制卸载。")
+			}
+			if !yes {
+				if !sharesStdinIsInteractive() {
+					return errors.New("非交互终端不能确认共享存储卸载；请加 --yes 后重跑")
+				}
+				fmt.Fprint(out, "输入 y 确认共享存储卸载：")
+				line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+				if err != nil && line == "" {
+					return fmt.Errorf("读取共享存储卸载确认失败: %w", err)
+				}
+				if strings.ToLower(strings.TrimSpace(line)) != "y" {
+					fmt.Fprintln(out, "\n已取消，未卸载共享存储。")
+					return nil
+				}
+			}
+			result, err := sharemanage.New(s).Unmount(cmd.Context(), sharemanage.UnmountRequest{
+				Share: args[0], Server: args[1], Force: force,
+			})
+			if err != nil {
+				return err
+			}
+			if result.Result == "success" {
+				fmt.Fprintf(out, "共享存储 %s 已从服务器 %s 卸载；版本号：%d\n",
+					result.ShareName, result.ServerName, result.Version)
+			} else {
+				fmt.Fprintf(out, "共享存储 %s 的配置已删除，但服务器 %s 上挂载被占用并保留；结果：%s；版本号：%d\n",
+					result.ShareName, result.ServerName, result.Result, result.Version)
+			}
+			for _, notice := range result.Notices {
+				fmt.Fprintf(out, "提示：%s\n", notice)
+			}
+			for _, process := range result.BusyProcesses {
+				fmt.Fprintf(out, "占用进程：%s %s %s\n", process.ProcessID, process.User, process.Command)
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&force, "force", false, "被占用时强制卸载")
+	c.Flags().BoolVar(&yes, "yes", false, "跳过共享存储卸载确认；非交互终端必须显式给出")
 	return c
 }
 
