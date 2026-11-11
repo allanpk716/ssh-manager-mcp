@@ -253,6 +253,13 @@ func (r *ServeRunner) HTTPHandler() http.Handler {
 			softwareDeclarationDraftsHandler.ServeHTTP(w, req)
 			return
 		}
+		// 票 #232：下发记录登记同样挂在同一个设备码认证上；权威端在单个
+		// 事务里完成授权校验、落库与审计。
+		secretDeliveryHandler := cacheAuth(http.HandlerFunc(r.handleSecretDeliveryRecord))
+		if req.URL.Path == "/secret-delivery-records" {
+			secretDeliveryHandler.ServeHTTP(w, req)
+			return
+		}
 		if strings.HasPrefix(req.URL.Path, "/pair/") {
 			r.handlePair(w, req) // unauthenticated SAS pairing surface (Plan 42 §3.3) — self-gated
 			return
