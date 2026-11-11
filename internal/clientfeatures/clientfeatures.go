@@ -8,15 +8,18 @@ import (
 	"ssh-manager-mcp/internal/updater"
 )
 
-// Feature 描述一项客户端功能与第一个支持它的正式发布版本。
-type Feature struct {
+// oldClientLabelPrefix 是所有旧版客户端标签的固定开头。
+const oldClientLabelPrefix = "旧版客户端:不支持"
+
+// feature 描述一项客户端功能与第一个支持它的正式发布版本。
+type feature struct {
 	Name         string
 	SinceVersion string
 }
 
-// DefaultFeatures 是功能起始支持版本的集中配置点。列表顺序就是旧版标签
+// defaultFeatures 是功能起始支持版本的集中配置点。列表顺序就是旧版标签
 // 里的功能展示顺序；后续新功能只在这里追加一行。
-var DefaultFeatures = []Feature{
+var defaultFeatures = []feature{
 	{Name: "机密项", SinceVersion: "v0.22.0"},
 	{Name: "网络拓扑", SinceVersion: "v0.22.0"},
 	{Name: "共享存储", SinceVersion: "v0.22.0"},
@@ -24,12 +27,12 @@ var DefaultFeatures = []Feature{
 
 // ClientVersionLabel 返回设备码列表使用的客户端版本展示文字。
 func ClientVersionLabel(clientVersion string) string {
-	return ClientVersionLabelWithFeatures(clientVersion, DefaultFeatures)
+	return clientVersionLabelWithFeatures(clientVersion, defaultFeatures)
 }
 
-// ClientVersionLabelWithFeatures 用调用方传入的功能表推算展示文字，测试
-// 可以用不同起始版本覆盖边界；生产展示必须使用 DefaultFeatures。
-func ClientVersionLabelWithFeatures(clientVersion string, features []Feature) string {
+// clientVersionLabelWithFeatures 用调用方传入的功能表推算展示文字，测试
+// 可以用不同起始版本覆盖边界；生产展示必须使用 defaultFeatures。
+func clientVersionLabelWithFeatures(clientVersion string, features []feature) string {
 	if clientVersion == "" {
 		return oldClientLabel(features)
 	}
@@ -50,13 +53,13 @@ func ClientVersionLabelWithFeatures(clientVersion string, features []Feature) st
 	if len(missing) == 0 {
 		return clientVersion
 	}
-	return clientVersion + "（旧版客户端:不支持" + strings.Join(missing, "、") + "）"
+	return clientVersion + "（" + oldClientLabelPrefix + strings.Join(missing, "、") + "）"
 }
 
-func oldClientLabel(features []Feature) string {
+func oldClientLabel(features []feature) string {
 	names := make([]string, 0, len(features))
 	for _, feature := range features {
 		names = append(names, feature.Name)
 	}
-	return "旧版客户端:不支持" + strings.Join(names, "、")
+	return oldClientLabelPrefix + strings.Join(names, "、")
 }

@@ -3,7 +3,7 @@ package clientfeatures
 import "testing"
 
 func TestClientVersionLabel(t *testing.T) {
-	injected := []Feature{
+	injected := []feature{
 		{Name: "机密项", SinceVersion: "v2.0.0"},
 		{Name: "网络拓扑", SinceVersion: "v3.0.0"},
 		{Name: "共享存储", SinceVersion: "v4.0.0"},
@@ -11,7 +11,7 @@ func TestClientVersionLabel(t *testing.T) {
 	tests := []struct {
 		name          string
 		clientVersion string
-		features      []Feature
+		features      []feature
 		want          string
 	}{
 		{
@@ -59,7 +59,7 @@ func TestClientVersionLabel(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := ClientVersionLabelWithFeatures(test.clientVersion, test.features)
+			got := clientVersionLabelWithFeatures(test.clientVersion, test.features)
 			if got != test.want {
 				t.Fatalf("展示文字 = %q，期待 %q", got, test.want)
 			}
@@ -68,17 +68,17 @@ func TestClientVersionLabel(t *testing.T) {
 }
 
 func TestDefaultFeaturesAreCentralOrderedConfiguration(t *testing.T) {
-	want := []Feature{
+	want := []feature{
 		{Name: "机密项", SinceVersion: "v0.22.0"},
 		{Name: "网络拓扑", SinceVersion: "v0.22.0"},
 		{Name: "共享存储", SinceVersion: "v0.22.0"},
 	}
-	if len(DefaultFeatures) != len(want) {
-		t.Fatalf("默认功能表 = %#v，期待 %#v", DefaultFeatures, want)
+	if len(defaultFeatures) != len(want) {
+		t.Fatalf("默认功能表 = %#v，期待 %#v", defaultFeatures, want)
 	}
 	for i := range want {
-		if DefaultFeatures[i] != want[i] {
-			t.Fatalf("默认功能表第 %d 项 = %#v，期待 %#v", i, DefaultFeatures[i], want[i])
+		if defaultFeatures[i] != want[i] {
+			t.Fatalf("默认功能表第 %d 项 = %#v，期待 %#v", i, defaultFeatures[i], want[i])
 		}
 	}
 	if got := ClientVersionLabel(""); got != "旧版客户端:不支持机密项、网络拓扑、共享存储" {

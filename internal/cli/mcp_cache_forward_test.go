@@ -61,6 +61,7 @@ type cacheFwdFixture struct {
 	dbPath          string
 	serveHTTP       *httptest.Server // TLS, /pin-hostkey POST-counted
 	posts           *int32
+	targetCommands  *int32       // 目标测试 SSH 服务执行的命令次数
 	versionGets     *int32       // GET /snapshot/version 的请求次数
 	snapshotGets    *int32       // GET /snapshot 的请求次数
 	versionNotFound *atomic.Bool // 打开后,/snapshot/version 返回 404(模拟旧权威端)
@@ -76,11 +77,13 @@ type cacheFwdFixture struct {
 // /pin-hostkey, so "zero second forward" is readable as a stable count.
 func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	t.Helper()
+	var targetCommands int32
 	addr, sshdKey, sshdCleanup := testsshd.Start(t, testsshd.Options{
 		Password: "pw",
 		Exec: func(cmd string, stdin io.Reader) (string, string, int) {
 			// 模拟真实远端 shell：先排空这次会话的标准输入，再返回结果。
 			_, _ = io.ReadAll(stdin)
+			atomic.AddInt32(&targetCommands, 1)
 			return "PONG:" + cmd + "\n", "", 0
 		},
 	})
@@ -141,6 +144,7 @@ func newCacheFwdFixture(t *testing.T) *cacheFwdFixture {
 	fx := &cacheFwdFixture{
 		versionMu: versionMu, versions: versions,
 		posts: &posts, versionGets: &versionGets, snapshotGets: &snapshotGets,
+		targetCommands:  &targetCommands,
 		versionNotFound: versionNotFound,
 	}
 	mux := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -194,6 +198,10 @@ func (fx *cacheFwdFixture) host() string { return fx.sshdAddr[:strings.Index(fx.
 func (fx *cacheFwdFixture) port() int    { return portFromAddr(fx.sshdAddr) }
 func (fx *cacheFwdFixture) postCount() int {
 	return int(atomic.LoadInt32(fx.posts))
+}
+
+func (fx *cacheFwdFixture) targetCommandCount() int {
+	return int(atomic.LoadInt32(fx.targetCommands))
 }
 
 func (fx *cacheFwdFixture) versionCount() int  { return int(atomic.LoadInt32(fx.versionGets)) }
@@ -829,31 +837,68 @@ func TestCacheVersionE2E_ToolHintComparesVersions(t *testing.T) {
 	}
 }
 
+// recordingMountSyncer 记录 mount_share 的挂载前快照保鲜调用。测试不检查
+// 它的返回值，只检查旧权威端拒绝是否发生在保鲜之前。
+type recordingMountSyncer struct {
+	calls int32
+}
+
+func (s *recordingMountSyncer) SyncBeforeMount(context.Context) (int64, error) {
+	atomic.AddInt32(&s.calls, 1)
+	return 0, nil
+}
+
+func (s *recordingMountSyncer) count() int {
+	return int(atomic.LoadInt32(&s.calls))
+}
+
 // TestCacheVersionE2E_OldAuthorityDegradesTopologyTools 覆盖新客户端连旧
-// 权威端：拓扑与共享存储工具直接返回固定文案；通用执行命令照常走兜底
-// 地址；执行上下文的盘符预览说明原因。
+// 权威端：拓扑与共享存储工具直接返回固定文案，不连目标服务器、不做挂载
+// 前快照保鲜；通用执行命令照常走兜底地址；执行上下文的盘符预览说明原因。
 func TestCacheVersionE2E_OldAuthorityDegradesTopologyTools(t *testing.T) {
 	fx := newCacheFwdFixture(t)
-	fx.snap.RecommendedVersion = ""
+	mountTargetID, _ := seedCacheMountTarget(t, fx)
+	snap, err := fx.serve.ExportSnapshotForProfile(fx.profID, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.RecommendedVersion = ""
+	fx.snap = snap
 	fx.versionNotFound.Store(true)
 	t.Setenv("SSHMGR_TEST_VERSION", "dev")
 	beforeVersions, beforeSnapshots := fx.versionCount(), fx.snapshotCount()
-	sess := fx.newBroker(t, nil, fx.cred)
+	beforeTargetCommands := fx.targetCommandCount()
+	syncer := &recordingMountSyncer{}
+	broker, tunnels, tasks, _, cleanupBroker, err := mcpserver.NewCacheBrokerWithRefresher(
+		fx.projToken, fx.snap, filepath.Join(t.TempDir(), "audit.log"), nil,
+		clientops.ForwardingHostKeys(mustForwarder(t, fx.cred)), "laptop", nil, syncer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanupBroker)
+	t.Cleanup(func() { tunnels.CloseAll(); tasks.CloseAll() })
+	sess := attachMCPClient(t, broker)
 	want := "权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端"
 
 	for _, call := range []struct {
 		tool string
 		args map[string]any
 	}{
-		{tool: "probe_connectivity", args: map[string]any{"from": "self", "targets": []string{"missing:1"}}},
+		{tool: "probe_connectivity", args: map[string]any{
+			"from": mountTargetID, "targets": []string{"NAS:22"},
+		}},
 		{tool: "query_topology", args: map[string]any{"from": "self"}},
 		{tool: "list_shares", args: map[string]any{}},
-		{tool: "mount_share", args: map[string]any{"share": "datasets", "server_id": fx.targetID}},
+		{tool: "mount_share", args: map[string]any{"share": "datasets", "server_id": mountTargetID}},
 	} {
 		text, isError := callTool(t, sess, call.tool, call.args)
 		if !isError || text != want {
 			t.Fatalf("%s 旧权威端结果 = %q error=%v，期待 %q", call.tool, text, isError, want)
 		}
+	}
+	if got := fx.targetCommandCount() - beforeTargetCommands; got != 0 {
+		t.Fatalf("旧权威端降级工具不应连接目标服务器执行命令，实际新增 %d 次", got)
 	}
 
 	execText, execError := callTool(t, sess, "exec_command", map[string]any{
@@ -877,6 +922,71 @@ func TestCacheVersionE2E_OldAuthorityDegradesTopologyTools(t *testing.T) {
 	}
 	if got := fx.snapshotCount() - beforeSnapshots; got != 0 {
 		t.Fatalf("旧权威端降级不应触发快照拉取，实际新增 %d 次", got)
+	}
+	if got := syncer.count(); got != 0 {
+		t.Fatalf("旧权威端 mount_share 应在挂载前快照保鲜之前拒绝，实际保鲜 %d 次", got)
+	}
+}
+
+// TestCacheVersionE2E_SameVersionTopologyToolsReturnData：同版本快照是旧
+// 权威端用例的对照：连通探测与共享存储查询正常返回数据，执行上下文没有
+// 旧权威端降级说明，三者都不附带版本升级提示。
+func TestCacheVersionE2E_SameVersionTopologyToolsReturnData(t *testing.T) {
+	fx := newCacheFwdFixture(t)
+	targetID, _ := seedCacheMountTarget(t, fx)
+	snap, err := fx.serve.ExportSnapshotForProfile(fx.profID, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSHMGR_TEST_VERSION", "1.1.0")
+	snap.RecommendedVersion = "1.1.0"
+	sess := fx.newBrokerSnap(t, snap, nil, fx.cred)
+	refusal := "权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端"
+	versionHint := "客户端比权威端新，建议先升级权威端"
+
+	probeTexts, probeError, _ := callToolResultTexts(t, sess, "probe_connectivity", map[string]any{
+		"from": targetID, "targets": []string{"NAS:22"},
+	})
+	if probeError || len(probeTexts) != 1 || !strings.Contains(probeTexts[0], "NAS:22") ||
+		!strings.Contains(probeTexts[0], "✓") {
+		t.Fatalf("同版本下 probe_connectivity 应正常返回可连接结果 error=%v：%#v", probeError, probeTexts)
+	}
+	if strings.Contains(probeTexts[0], refusal) || strings.Contains(probeTexts[0], versionHint) {
+		t.Fatalf("同版本下 probe_connectivity 不应有降级或升级提示：%#v", probeTexts)
+	}
+
+	listTexts, listError, _ := callToolResultTexts(t, sess, "list_shares", map[string]any{})
+	if listError || len(listTexts) != 1 {
+		t.Fatalf("同版本下 list_shares 应正常返回 error=%v：%#v", listError, listTexts)
+	}
+	var listOutput struct {
+		Shares []struct {
+			Name string `json:"name"`
+		} `json:"shares"`
+	}
+	if err := json.Unmarshal([]byte(listTexts[0]), &listOutput); err != nil {
+		t.Fatalf("解析 list_shares 输出失败：%v\n%s", err, listTexts[0])
+	}
+	if len(listOutput.Shares) != 1 || listOutput.Shares[0].Name != "datasets" {
+		t.Fatalf("同版本下 list_shares 应返回 datasets，实际：%#v 原文 %s", listOutput.Shares, listTexts[0])
+	}
+	if strings.Contains(listTexts[0], refusal) || strings.Contains(listTexts[0], versionHint) {
+		t.Fatalf("同版本下 list_shares 不应有降级或升级提示：%#v", listTexts)
+	}
+
+	contextTexts, contextError, structured := callToolResultTexts(t, sess, "exec_context", map[string]any{
+		"server_id": targetID,
+	})
+	if contextError || len(contextTexts) != 1 {
+		t.Fatalf("同版本下 exec_context 应正常返回 error=%v：%#v", contextError, contextTexts)
+	}
+	fields, ok := structured.(map[string]any)
+	if !ok || fields["comm"] != "bash" || fields["network_drive_preview_note"] != nil {
+		t.Fatalf("同版本下 exec_context 应返回执行上下文且没有降级说明：%#v", structured)
+	}
+	if strings.Contains(strings.Join(contextTexts, "\n"), refusal) ||
+		strings.Contains(strings.Join(contextTexts, "\n"), versionHint) {
+		t.Fatalf("同版本下 exec_context 不应有降级或升级提示：%#v", contextTexts)
 	}
 }
 

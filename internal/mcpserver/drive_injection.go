@@ -390,10 +390,7 @@ func prepareNetworkDriveExecution(
 func previewNetworkDriveInjection(
 	st *store.Store, profileID string, server *models.Server, privileged bool,
 ) (planned []PlannedNetworkDrive, uninjected []UninjectedNetworkDrive) {
-	if st == nil || server == nil {
-		return []PlannedNetworkDrive{}, []UninjectedNetworkDrive{}
-	}
-	if st.CacheAuthorityTooOld() {
+	if st == nil || server == nil || st.CacheAuthorityTooOld() {
 		return []PlannedNetworkDrive{}, []UninjectedNetworkDrive{}
 	}
 	shellType := models.NormalizeShellType(string(server.ShellType))

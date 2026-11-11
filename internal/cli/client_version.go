@@ -26,8 +26,9 @@ type clientVersionState struct {
 	Snapshot *store.Snapshot
 }
 
-// AuthorityTooOld 使用客户端兼容判断的唯一入口，供版本提示与诊断展示共
-// 用；非客户端或缓存不可读时恒为否。
+// AuthorityTooOld 封装命令行版本提示与诊断展示共用的旧权威端判断；非客
+// 户端或缓存不可读时恒为否。条件本身定义在
+// clientfeatures.AuthorityTooOld。
 func (s clientVersionState) AuthorityTooOld() bool {
 	return s.IsClient && s.Snapshot != nil && clientfeatures.AuthorityTooOld(s.Snapshot.RecommendedVersion)
 }
