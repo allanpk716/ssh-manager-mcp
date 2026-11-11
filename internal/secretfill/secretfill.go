@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 var (
@@ -46,9 +48,12 @@ type Source interface {
 type ProblemKind int
 
 const (
+	// ProblemInvalidFormat 表示内容中出现了以机密项占位符前缀开头、但不
+	// 符合严格语法的原文片段。
+	ProblemInvalidFormat ProblemKind = iota
 	// ProblemMissingOrNotAllowed 合并表示名字不存在与目标服务器不在可写
 	// 入列表内，避免泄露快照裁剪边界。
-	ProblemMissingOrNotAllowed ProblemKind = iota
+	ProblemMissingOrNotAllowed
 	// ProblemReadFailed 表示机密项值读取或解密失败。
 	ProblemReadFailed
 )
@@ -59,17 +64,21 @@ type Problem struct {
 	Kind    ProblemKind
 	Name    string
 	Offset  int
+	Line    int
+	Snippet string
 	Message string
 }
 
 func (p Problem) Error() string { return p.Message }
 
 // Result 是填值结果。Names 按首次出现顺序去重；有 Problem 时 Content 为
-// 空，调用方不得把任何部分写出或返回。
+// 空，调用方不得把任何部分写出或返回。ProjectedContent 只供调用方做连
+// 接前的大小预检：有未解析占位符时保留原文，已读到的值只留在进程内。
 type Result struct {
-	Content  []byte
-	Names    []string
-	Problems []Problem
+	Content          []byte
+	Names            []string
+	Problems         []Problem
+	ProjectedContent []byte
 }
 
 // Err 把全部问题合成一个错误；错误文本只来自 Problem.Message。
@@ -85,17 +94,24 @@ func (r Result) Err() error {
 }
 
 type reference struct {
-	name   string
-	offset int
+	name    string
+	offset  int
+	snippet []byte
 }
 
 // Fill 解析 content 中严格匹配的机密项占位符，向取值来源取得当前值，并
 // 判断 target 是否在每个被引用机密项的可写入服务器列表内。
 func Fill(ctx context.Context, content []byte, target ServerRef, source Source) Result {
-	references := validReferences(content)
+	references, invalidReferences := scanReferences(content)
 	result := Result{Names: referenceNames(references)}
+	result.ProjectedContent = append([]byte(nil), content...)
+	for _, item := range invalidReferences {
+		result.Problems = append(result.Problems, invalidFormat(content, item))
+	}
 	if len(references) == 0 {
-		result.Content = append([]byte(nil), content...)
+		if len(result.Problems) == 0 {
+			result.Content = append([]byte(nil), content...)
+		}
 		return result
 	}
 	if source == nil {
@@ -130,71 +146,83 @@ func Fill(ctx context.Context, content []byte, target ServerRef, source Source) 
 		}
 		secret, exists := sourceResult.Secrets[item.name]
 		if !exists || !serverAllowed(secret.WritableServers, target.ID) {
-			result.Problems = append(result.Problems, missingOrNotAllowed(item, target))
+			result.Problems = append(result.Problems, missingOrNotAllowed(item, target, secret, exists))
 		}
 	}
+
+	result.ProjectedContent = substituteAvailableValues(content, references, sourceResult.Secrets, readFailed)
 	if len(result.Problems) > 0 {
 		return result
 	}
 
-	filled := make([]byte, 0, len(content))
-	for offset := 0; offset < len(content); {
-		relative := bytes.Index(content[offset:], placeholderPrefix)
-		if relative < 0 {
-			filled = append(filled, content[offset:]...)
-			break
-		}
-		start := offset + relative
-		filled = append(filled, content[offset:start]...)
-		name, end, valid := placeholderAt(content, start)
-		if !valid {
-			// 非严格占位符保持原样；格式问题的整体拒绝由后续票补齐。
-			if end <= start+len(placeholderPrefix) {
-				filled = append(filled, placeholderPrefix...)
-				offset = end
-				continue
-			}
-			filled = append(filled, content[start:end]...)
-			offset = end
-			continue
-		}
-		filled = append(filled, sourceResult.Secrets[name].Value...)
-		offset = end
-	}
-	result.Content = filled
+	result.Content = append([]byte(nil), result.ProjectedContent...)
 	return result
 }
 
-func validReferences(content []byte) []reference {
-	var references []reference
+func substituteAvailableValues(content []byte, references []reference, secrets map[string]Secret, readFailed map[string]bool) []byte {
+	projected := make([]byte, 0, len(content))
+	offset := 0
+	for _, item := range references {
+		projected = append(projected, content[offset:item.offset]...)
+		secret, exists := secrets[item.name]
+		if exists && !readFailed[item.name] {
+			projected = append(projected, secret.Value...)
+		} else {
+			projected = append(projected, item.snippet...)
+		}
+		offset = placeholderEnd(item)
+	}
+	projected = append(projected, content[offset:]...)
+	return projected
+}
+
+func placeholderEnd(item reference) int {
+	return item.offset + len(placeholderPrefix) + len(item.name) + len(placeholderSuffix)
+}
+
+func scanReferences(content []byte) ([]reference, []reference) {
+	var references, invalidReferences []reference
 	for offset := 0; offset < len(content); {
 		relative := bytes.Index(content[offset:], placeholderPrefix)
 		if relative < 0 {
 			break
 		}
 		start := offset + relative
-		name, end, valid := placeholderAt(content, start)
-		if !valid {
-			offset = start + len(placeholderPrefix)
+		afterPrefix := content[start+len(placeholderPrefix):]
+		suffixRelative := bytes.Index(afterPrefix, placeholderSuffix)
+		nextPrefixRelative := bytes.Index(afterPrefix, placeholderPrefix)
+		if suffixRelative >= 0 && (nextPrefixRelative < 0 || suffixRelative < nextPrefixRelative) {
+			nameEnd := start + len(placeholderPrefix) + suffixRelative
+			end := nameEnd + len(placeholderSuffix)
+			name := string(content[start+len(placeholderPrefix) : nameEnd])
+			item := reference{name: name, offset: start, snippet: append([]byte(nil), content[start:end]...)}
+			if ValidName(name) {
+				references = append(references, item)
+			} else {
+				invalidReferences = append(invalidReferences, item)
+			}
+			offset = end
 			continue
 		}
-		references = append(references, reference{name: name, offset: start})
-		offset = end
-	}
-	return references
-}
 
-func placeholderAt(content []byte, start int) (string, int, bool) {
-	afterPrefix := content[start+len(placeholderPrefix):]
-	end := bytes.Index(afterPrefix, placeholderSuffix)
-	if end < 0 {
-		return "", start + len(placeholderPrefix), false
+		boundary := len(content)
+		if nextPrefixRelative >= 0 {
+			boundary = start + len(placeholderPrefix) + nextPrefixRelative
+		}
+		snippetEnd := boundary
+		if newlineRelative := bytes.IndexByte(afterPrefix, '\n'); newlineRelative >= 0 {
+			newlineAbsolute := start + len(placeholderPrefix) + newlineRelative
+			if newlineAbsolute < snippetEnd {
+				snippetEnd = newlineAbsolute
+			}
+		}
+		invalidReferences = append(invalidReferences, reference{
+			offset:  start,
+			snippet: append([]byte(nil), content[start:snippetEnd]...),
+		})
+		offset = boundary
 	}
-	name := string(afterPrefix[:end])
-	if !ValidName(name) {
-		return name, start + len(placeholderPrefix) + len(name) + len(placeholderSuffix), false
-	}
-	return name, start + len(placeholderPrefix) + len(name) + len(placeholderSuffix), true
+	return references, invalidReferences
 }
 
 // ValidName 按规格校验占位符名字：大小写字母、数字、点、下划线、连字符。
@@ -244,13 +272,44 @@ func targetLabel(target ServerRef) string {
 	return target.ID
 }
 
-func missingOrNotAllowed(item reference, target ServerRef) Problem {
+func invalidFormat(content []byte, item reference) Problem {
+	line := 1 + bytes.Count(content[:item.offset], []byte{'\n'})
+	return Problem{
+		Kind:    ProblemInvalidFormat,
+		Offset:  item.offset,
+		Line:    line,
+		Snippet: string(item.snippet),
+		Message: fmt.Sprintf(
+			"第%d行字节偏移%d：机密项占位符格式错误；原文片段：%q",
+			line, item.offset, item.snippet,
+		),
+	}
+}
+
+func missingOrNotAllowed(item reference, target ServerRef, secret Secret, exists bool) Problem {
+	message := fmt.Sprintf("机密项 %s 不存在，或不允许写入服务器 %s", item.name, targetLabel(target))
+	if exists {
+		message += "；" + writableServersHint(secret, target)
+	}
 	return Problem{
 		Kind:    ProblemMissingOrNotAllowed,
 		Name:    item.name,
 		Offset:  item.offset,
-		Message: fmt.Sprintf("机密项 %s 不存在，或不允许写入服务器 %s", item.name, targetLabel(target)),
+		Message: message,
 	}
+}
+
+func writableServersHint(secret Secret, target ServerRef) string {
+	if len(secret.WritableServers) == 0 {
+		return fmt.Sprintf("它当前没有可写入服务器。请 owner 到权威端把 %s 加入该机密项的可写入服务器列表", targetLabel(target))
+	}
+	labels := make([]string, 0, len(secret.WritableServers))
+	for _, server := range secret.WritableServers {
+		labels = append(labels, targetLabel(server))
+	}
+	sort.Strings(labels)
+	return fmt.Sprintf("它当前可写入服务器：%s。请 owner 到权威端把 %s 加入该机密项的可写入服务器列表",
+		strings.Join(labels, "、"), targetLabel(target))
 }
 
 func readFailure(item reference, target ServerRef) Problem {

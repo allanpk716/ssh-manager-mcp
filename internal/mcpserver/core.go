@@ -587,7 +587,11 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	}
 
 	// ② iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
-	if gerr := gateServer(st, profileID, serverID); gerr != nil {
+	profileServerIDs, gerr := st.ServersForProfile(profileID)
+	if gerr != nil {
+		return UploadContentOutput{}, gerr
+	}
+	if gerr := gateServerIn(profileServerIDs, serverID); gerr != nil {
 		if errors.Is(gerr, ErrNotInProfile) {
 			status = "denied"
 		}
@@ -601,11 +605,6 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	var contentBytes []byte
 	switch encoding {
 	case "text":
-		byteCount = int64(len(content))
-		if byteCount > cap {
-			status = "error"
-			return UploadContentOutput{}, fmt.Errorf("content (%d bytes) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
-		}
 		contentBytes = []byte(content)
 	default: // base64
 		padCount := int64(0)
@@ -639,23 +638,30 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		err = fmt.Errorf("server %s not found", serverID)
 		return
 	}
-	filled := secretfill.Fill(ctx, contentBytes, secretfill.ServerRef{ID: srv.ID, Name: srv.Name}, secretfill.NewStoreSource(st))
+	filled := secretfill.Fill(ctx, contentBytes, secretfill.ServerRef{ID: srv.ID, Name: srv.Name}, secretfill.NewStoreSource(st, profileServerIDs))
 	filledSecretNames = filled.Names
-	if fillErr := filled.Err(); fillErr != nil {
+	byteCount = int64(len(filled.ProjectedContent))
+	fillErr := filled.Err()
+	if byteCount > cap {
+		sizeErr := fmt.Errorf("content (%d bytes) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
+		if fillErr == nil {
+			err = sizeErr
+		} else {
+			err = errors.Join(fillErr, sizeErr)
+		}
+	} else {
+		err = fillErr
+	}
+	if err != nil {
 		for _, problem := range filled.Problems {
-			if problem.Kind == secretfill.ProblemMissingOrNotAllowed {
+			if problem.Kind == secretfill.ProblemInvalidFormat ||
+				problem.Kind == secretfill.ProblemMissingOrNotAllowed {
 				status = "denied"
 			}
 		}
-		err = fillErr
 		return
 	}
 	contentBytes = filled.Content
-	byteCount = int64(len(contentBytes))
-	if byteCount > cap {
-		status = "error"
-		return UploadContentOutput{}, fmt.Errorf("content (%d bytes) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
-	}
 	r := bytes.NewReader(contentBytes)
 
 	// ⑤ server + credential + host key + connect — the same chain every broker

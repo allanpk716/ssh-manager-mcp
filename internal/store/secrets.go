@@ -155,9 +155,9 @@ func (s *Store) SecretValueForSharedStorageMount(
 	return out, rows.Err()
 }
 
-// SecretValuesForCommandMasking 只供带环境变量注入计划的执行工具使用。这
-// 类工具按规格必须在一个变量读取失败时继续执行并返回未注入警告，因此这里
-// 跳过无法解密的值，让其他可用值继续参与输出遮蔽。其他调用方必须使用
+// SecretValuesForCommandMasking 只供会逐项报告机密项读取失败的工具使用：
+// 执行工具把它用于未注入警告，上传内容工具把它用于连接前拒绝。这里跳过
+// 无法解密的值，让其他可用值继续参与输出遮蔽。其他调用方必须使用
 // SecretValuesForMasking 的失败即报错行为。
 func (s *Store) SecretValuesForCommandMasking() ([]SecretValuesForMasking, error) {
 	rows, err := s.db.Query(`
