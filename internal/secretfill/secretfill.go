@@ -16,6 +16,10 @@ var (
 	placeholderSuffix = []byte("}}")
 )
 
+// ErrAuthorityTooOld 表示客户端缓存来自不支持下发机密项的旧权威端；调用
+// 方不得继续把它误报成机密项名字不存在。
+var ErrAuthorityTooOld = errors.New("权威端版本过旧，不支持机密项，请先升级权威端")
+
 // ServerRef 是授权判定需要的服务器条目标识。Name 只用于生成不含机密值的
 // 诊断文本，可以为空；ID 必须是 vault 或缓存快照里的服务器条目标识。
 type ServerRef struct {

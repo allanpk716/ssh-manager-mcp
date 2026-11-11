@@ -304,6 +304,233 @@ func TestUploadContentSecretFillFullFlow(t *testing.T) {
 	assertUploadContentResultHasNoSecretValue(t, windowsResult, databasePassword, interfaceToken)
 }
 
+func TestUploadContentClientCacheFillsOfflineAndUsesRefreshedValue(t *testing.T) {
+	const oldValue = "offline-old-secret-25df70"
+	const newValue = "offline-new-secret-97ba31"
+	authority := newStore(t)
+	var connections atomic.Int64
+	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Connections: &connections})
+	t.Cleanup(cleanup)
+	serverID := seedRealServer(t, authority, "real", addr, hostKey, "")
+	if err := authority.AddSecret("OFFLINE_TOKEN", "", []byte(oldValue), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.AllowSecrets([]string{"OFFLINE_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := authority.AddProfile("agent-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	_, projectToken, err := authority.AddProject("客户端项目", profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := authority.ExportSnapshotForProfile(profileID, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentRevision := snapshot.SnapshotRevision
+	reload := func() (*store.Snapshot, bool, error) {
+		fresh, err := authority.ExportSnapshotForProfile(profileID, true, "")
+		if err != nil {
+			return nil, false, err
+		}
+		if fresh.SnapshotRevision == currentRevision {
+			return nil, false, nil
+		}
+		currentRevision = fresh.SnapshotRevision
+		return fresh, true, nil
+	}
+	auditPath := filepath.Join(t.TempDir(), "upload-content-audit.jsonl")
+	broker, tunnels, tasks, _, brokerCleanup, err := NewCacheBrokerWithRefresher(
+		projectToken, snapshot, auditPath, reload, nil, "laptop", nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(brokerCleanup)
+	t.Cleanup(tunnels.CloseAll)
+	t.Cleanup(tasks.CloseAll)
+	clientSession := connectInMemoryMCPClient(t, broker)
+
+	firstTarget := toSlash(filepath.Join(t.TempDir(), "first.yaml"))
+	firstResult, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "upload_content",
+		Arguments: map[string]any{
+			"server_id":   serverID,
+			"content":     "token: {{sshmgr-secret:OFFLINE_TOKEN}}\n",
+			"remote_path": firstTarget,
+		},
+	})
+	if err != nil || firstResult.IsError {
+		t.Fatalf("离线客户端第一次填值上传失败：err=%v result=%q", err, toolResultText(firstResult))
+	}
+	firstBytes, err := os.ReadFile(filepath.FromSlash(firstTarget))
+	if err != nil || string(firstBytes) != "token: "+oldValue+"\n" {
+		t.Fatalf("第一次客户端缓存写入 = %q, %v", firstBytes, err)
+	}
+	assertUploadContentResultHasNoSecretValue(t, firstResult, oldValue, newValue)
+
+	if err := authority.SetSecretValue("OFFLINE_TOKEN", []byte(newValue), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	secondTarget := toSlash(filepath.Join(t.TempDir(), "second.yaml"))
+	secondResult, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "upload_content",
+		Arguments: map[string]any{
+			"server_id":   serverID,
+			"content":     "token: {{sshmgr-secret:OFFLINE_TOKEN}}\n",
+			"remote_path": secondTarget,
+		},
+	})
+	if err != nil || secondResult.IsError {
+		t.Fatalf("快照刷新后的客户端填值上传失败：err=%v result=%q", err, toolResultText(secondResult))
+	}
+	secondBytes, err := os.ReadFile(filepath.FromSlash(secondTarget))
+	if err != nil || string(secondBytes) != "token: "+newValue+"\n" {
+		t.Fatalf("快照刷新后的客户端缓存写入 = %q, %v", secondBytes, err)
+	}
+	assertUploadContentResultHasNoSecretValue(t, secondResult, oldValue, newValue)
+	if connections.Load() != 2 {
+		t.Fatalf("目标服务器连接次数 = %d，应为 2", connections.Load())
+	}
+
+	auditText, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(auditText, []byte(oldValue)) || bytes.Contains(auditText, []byte(newValue)) {
+		t.Fatalf("客户端离线审计泄露机密值：%s", auditText)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(auditText)), "\n") {
+		var row map[string]any
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("解析客户端审计行失败：%v（%s）", err, line)
+		}
+		if row["action"] != "upload-content" || row["status"] != "ok" ||
+			!strings.Contains(fmt.Sprint(row["command"]), "secrets=OFFLINE_TOKEN") {
+			t.Fatalf("客户端填值上传审计行 = %#v", row)
+		}
+	}
+}
+
+func TestUploadContentOldAuthoritySnapshotRefusesPlaceholdersBeforeConnect(t *testing.T) {
+	const cachedValue = "old-authority-secret-61c94b"
+	authority := newStore(t)
+	var connections atomic.Int64
+	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Connections: &connections})
+	t.Cleanup(cleanup)
+	serverID := seedRealServer(t, authority, "real", addr, hostKey, "")
+	if err := authority.AddSecret("CACHED_TOKEN", "", []byte(cachedValue), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.AllowSecrets([]string{"CACHED_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := authority.AddProfile("agent-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	_, projectToken, err := authority.AddProject("客户端项目", profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := authority.ExportSnapshotForProfile(profileID, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.RecommendedVersion = ""
+	auditPath := filepath.Join(t.TempDir(), "upload-content-audit.jsonl")
+	broker, tunnels, tasks, _, brokerCleanup, err := NewCacheBrokerWithRefresher(
+		projectToken, snapshot, auditPath, nil, nil, "laptop", nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(brokerCleanup)
+	t.Cleanup(tunnels.CloseAll)
+	t.Cleanup(tasks.CloseAll)
+	clientSession := connectInMemoryMCPClient(t, broker)
+
+	upload := func(content, target string) (string, bool) {
+		t.Helper()
+		result, callErr := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+			Name: "upload_content",
+			Arguments: map[string]any{
+				"server_id": serverID, "content": content, "remote_path": target,
+			},
+		})
+		if callErr != nil {
+			t.Fatal(callErr)
+		}
+		assertUploadContentResultHasNoSecretValue(t, result, cachedValue)
+		return toolResultText(result), result.IsError
+	}
+	want := "权威端版本过旧，不支持机密项，请先升级权威端"
+	rejectedDirectory := t.TempDir()
+	legalTarget := toSlash(filepath.Join(rejectedDirectory, "legal.yaml"))
+	legalText, legalFailed := upload("token: {{sshmgr-secret:CACHED_TOKEN}}\n", legalTarget)
+	if !legalFailed || legalText != want {
+		t.Fatalf("合法占位符在旧权威端快照下的结果 = %q, failed=%v", legalText, legalFailed)
+	}
+	invalidTarget := toSlash(filepath.Join(rejectedDirectory, "invalid.yaml"))
+	invalidText, invalidFailed := upload("broken {{sshmgr-secret:BAD NAME}}\n", invalidTarget)
+	if !invalidFailed || invalidText != want {
+		t.Fatalf("非法占位符前缀在旧权威端快照下的结果 = %q, failed=%v", invalidText, invalidFailed)
+	}
+	if _, statErr := os.Stat(filepath.FromSlash(legalTarget)); !os.IsNotExist(statErr) {
+		t.Fatalf("旧权威端拒绝不应创建目标文件；stat error=%v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.FromSlash(invalidTarget)); !os.IsNotExist(statErr) {
+		t.Fatalf("旧权威端拒绝不应创建非法占位符目标文件；stat error=%v", statErr)
+	}
+
+	plainTarget := toSlash(filepath.Join(t.TempDir(), "plain.txt"))
+	plainText, plainFailed := upload("plain content\n", plainTarget)
+	if plainFailed {
+		t.Fatalf("不含占位符的内容在旧权威端快照下应照常上传，实际报错：%q", plainText)
+	}
+	plainBytes, err := os.ReadFile(filepath.FromSlash(plainTarget))
+	if err != nil || string(plainBytes) != "plain content\n" {
+		t.Fatalf("普通上传目标内容 = %q, %v", plainBytes, err)
+	}
+	if connections.Load() != 1 {
+		t.Fatalf("目标服务器连接次数 = %d，两次拒绝后应只有普通上传连接 1 次", connections.Load())
+	}
+
+	auditText, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(auditText, []byte(cachedValue)) {
+		t.Fatalf("客户端离线审计泄露机密值：%s", auditText)
+	}
+	auditLines := strings.Split(strings.TrimSpace(string(auditText)), "\n")
+	if len(auditLines) != 3 {
+		t.Fatalf("客户端离线审计行数 = %d，应为 3：%q", len(auditLines), auditText)
+	}
+	wantStatuses := []string{"denied", "denied", "ok"}
+	for index, line := range auditLines {
+		var row map[string]any
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("解析客户端审计第 %d 行失败：%v（%s）", index+1, err, line)
+		}
+		if row["action"] != "upload-content" || row["status"] != wantStatuses[index] {
+			t.Fatalf("客户端审计第 %d 行 = %#v，期待 action=upload-content 且 status=%s", index+1, row, wantStatuses[index])
+		}
+		if index == 0 && !strings.Contains(fmt.Sprint(row["command"]), "secrets=CACHED_TOKEN") {
+			t.Fatalf("合法占位符的拒绝审计应记录名字：%#v", row)
+		}
+	}
+}
+
 func TestUploadFileAndRelayFileKeepSecretPlaceholdersLiteral(t *testing.T) {
 	const secretValue = "literal-transfer-secret-2c81e6"
 	t.Setenv("SSHMGR_TRANSFER_CHUNK", "16777216")
@@ -490,6 +717,14 @@ func TestUploadContentSecretAuthorizationRejectsBeforeConnectAndAuditsNames(t *t
 	if err := clientCache.ImportSnapshotForClientCache(snapshot); err != nil {
 		t.Fatal(err)
 	}
+	cacheAuditPath := filepath.Join(t.TempDir(), "upload-content-audit.jsonl")
+	cacheAuditFile, err := os.OpenFile(cacheAuditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cacheAuditFile.Close() })
+	clientCache.SetReadOnly(cacheAuditFile)
+	clientCache.SetCacheRecommendedVersion(snapshot.RecommendedVersion)
 	cacheServer, cacheTunnels, cacheTasks, err := NewServer(clientCache, profileID, "project-cache")
 	if err != nil {
 		t.Fatal(err)
@@ -540,23 +775,38 @@ func TestUploadContentSecretAuthorizationRejectsBeforeConnectAndAuditsNames(t *t
 		!strings.Contains(rows[0].Command, "secrets=EMPTY_LIST,OUTSIDE_LIST") {
 		t.Fatalf("local denied audit row = %+v", rows)
 	}
-	cacheRows, err := clientCache.AuditRows(1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cacheRows) != 1 || cacheRows[0].Action != "upload-content" || cacheRows[0].Status != "denied" ||
-		!strings.Contains(cacheRows[0].Command, "secrets=HIDDEN_SECRET") {
-		t.Fatalf("cache denied audit row = %+v", cacheRows)
-	}
-	for _, row := range append(rows, cacheRows...) {
-		auditText, err := json.Marshal(row)
+	for _, row := range rows {
+		localAuditText, err := json.Marshal(row)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(auditText, []byte(emptyListValue)) || bytes.Contains(auditText, []byte(visibleValue)) ||
-			bytes.Contains(auditText, []byte(hiddenValue)) || bytes.Contains(auditText, []byte("empty: {{sshmgr-secret:")) {
-			t.Fatalf("denied audit leaks value or template: %s", auditText)
+		if bytes.Contains(localAuditText, []byte(emptyListValue)) || bytes.Contains(localAuditText, []byte(visibleValue)) ||
+			bytes.Contains(localAuditText, []byte(hiddenValue)) || bytes.Contains(localAuditText, []byte("empty: {{sshmgr-secret:")) {
+			t.Fatalf("本地拒绝审计泄露值或模板：%s", localAuditText)
 		}
+	}
+	cacheAuditText, err := os.ReadFile(cacheAuditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(cacheAuditText, []byte(emptyListValue)) || bytes.Contains(cacheAuditText, []byte(visibleValue)) ||
+		bytes.Contains(cacheAuditText, []byte(hiddenValue)) || bytes.Contains(cacheAuditText, []byte("empty: {{sshmgr-secret:")) {
+		t.Fatalf("客户端离线拒绝审计泄露值或模板：%s", cacheAuditText)
+	}
+	cacheAuditLines := strings.Split(strings.TrimSpace(string(cacheAuditText)), "\n")
+	if len(cacheAuditLines) != 1 {
+		t.Fatalf("客户端离线拒绝审计行数 = %d，应为 1：%q", len(cacheAuditLines), cacheAuditText)
+	}
+	var cacheAuditRow map[string]any
+	if err := json.Unmarshal([]byte(cacheAuditLines[0]), &cacheAuditRow); err != nil {
+		t.Fatalf("解析客户端离线拒绝审计失败：%v（%s）", err, cacheAuditLines[0])
+	}
+	if cacheAuditRow["action"] != "upload-content" || cacheAuditRow["status"] != "denied" ||
+		!strings.Contains(fmt.Sprint(cacheAuditRow["command"]), "secrets=HIDDEN_SECRET") {
+		t.Fatalf("客户端离线拒绝审计行 = %#v", cacheAuditRow)
+	}
+	if cacheRows, err := clientCache.AuditRows(10); err != nil || len(cacheRows) != 0 {
+		t.Fatalf("客户端缓存数据库审计行 = %d (err=%v)，应为 0", len(cacheRows), err)
 	}
 }
 

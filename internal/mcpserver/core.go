@@ -642,6 +642,11 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	filledSecretNames = filled.Names
 	byteCount = int64(len(filled.ProjectedContent))
 	fillErr := filled.Err()
+	if store.AuthorityTooOld(st) && secretFillResultUsesPlaceholder(filled) {
+		status = "denied"
+		err = secretfill.ErrAuthorityTooOld
+		return
+	}
 	if byteCount > cap {
 		sizeErr := fmt.Errorf("content (%d bytes) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
 		if fillErr == nil {
@@ -725,6 +730,20 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
 	}
 	return
+}
+
+// secretFillResultUsesPlaceholder 判断内容是否包含合法机密项占位符，或以
+// 机密项占位符前缀开头的非法片段。旧权威端判断只对这类内容生效。
+func secretFillResultUsesPlaceholder(result secretfill.Result) bool {
+	if len(result.Names) > 0 {
+		return true
+	}
+	for _, problem := range result.Problems {
+		if problem.Kind == secretfill.ProblemInvalidFormat {
+			return true
+		}
+	}
+	return false
 }
 
 // isAbsRemotePath reports whether remotePath is absolute in the TARGET's path
