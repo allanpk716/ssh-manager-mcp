@@ -293,11 +293,15 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
 			Name:        BrokerTools[21], // "query_topology"
-			Description: "只读查询一个出发点的邻居分组。from 可传 self（当前 sshmgr 实例所在设备）或 list_servers 里的服务器标识符；工具只读取网络拓扑登记和本实例本地保存的探测结果，不主动探测、不建立 SSH 连接。需要现场连通结论时，请调用 probe_connectivity。",
+			Description: "只读查询一个出发点的邻居分组，或在传入 to 目标列表时返回逐对连通详情。from 可传 self（当前 sshmgr 实例所在设备）或 list_servers 里的服务器标识符；to 里关联设备的条目用服务器标识符，不受管设备与客户端实例用设备名；detail=true 展开地址、网络标称带宽、是否按流量计费与设备角色。工具只读取网络拓扑登记、成功地址缓存和本实例本地保存的探测结果，不主动探测、不建立 SSH 连接。需要现场连通结论时，请调用 probe_connectivity。",
 		},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in QueryTopologyInput) (*mcp.CallToolResult, any, error) {
 			st := storeFromContext(ctx, storeFn)
-			text, err := QueryTopologyForProfile(st, profileID, in.From)
+			var to []string
+			if in.To != nil {
+				to = *in.To
+			}
+			text, err := QueryTopologyForProfile(st, profileID, in.From, to, in.Detail)
 			if err != nil {
 				return &mcp.CallToolResult{
 					IsError: true,

@@ -15,6 +15,7 @@ import (
 	"ssh-manager-mcp/internal/probeobserve"
 	"ssh-manager-mcp/internal/proberesults"
 	"ssh-manager-mcp/internal/roles"
+	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -388,6 +389,286 @@ func TestQueryTopologyRepeatedVirtualNetworks(t *testing.T) {
 	}, "\n")
 	if !strings.Contains(text, want) {
 		t.Fatalf("多个虚拟局域网分组不符\n得到：\n%s\n期待片段：\n%s", text, want)
+	}
+}
+
+// TestQueryTopologyPairDetailsDefault 覆盖多目标逐对输出：服务器目标换算
+// 到设备并列出全部共同网络，不受管目标按设备名解析；无共同网络与未关联
+// 设备分别给出明确结论，且不再输出全局邻居分组。
+func TestQueryTopologyPairDetailsDefault(t *testing.T) {
+	fixture := newQueryTopologyFixture(t)
+	workServer, err := fixture.store.GetServerByName("入口一")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.recordObservation(t, "工作设备", "家A物理", "192.0.2.200", 4*time.Minute, true)
+	fixture.recordObservation(t, "NAS", "虚拟A", "192.0.2.200", 2*time.Hour, true)
+	observationPath, found, err := probeobserve.PathFor("")
+	if err != nil || !found {
+		t.Fatalf("解析本地探测结果文件：%v found=%v", err, found)
+	}
+	observationBefore, err := os.ReadFile(observationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := fixture.store.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditBefore, err := fixture.store.AuditRows(1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text, isError := fixture.callQuery(t, map[string]any{
+		"from": "self",
+		"to":   []string{workServer.ID, "NAS", "隔离设备", fixture.unregisteredID},
+	})
+	if isError {
+		t.Fatalf("query_topology 失败：%s", text)
+	}
+	want := strings.Join([]string{
+		"出发点：笔记本",
+		"目标：工作设备 [入口一、入口二]",
+		"  家A物理（实际会选） ✓4ms 4m前",
+		"  虚拟A",
+		"目标：NAS",
+		"  虚拟A ✓4ms 2h前 旧",
+		"目标：隔离设备",
+		"  无共同网络，不可达",
+		"目标：" + fixture.unregisteredID + "（未登记入口）",
+		"  服务器未关联拓扑设备，未登记",
+		"本工具不主动探测；需要现场结论请调用 probe_connectivity。",
+		"",
+	}, "\n")
+	if text != want {
+		t.Fatalf("逐对输出不符\n得到：\n%s\n期待：\n%s", text, want)
+	}
+	observationAfter, err := os.ReadFile(observationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(observationAfter) != string(observationBefore) {
+		t.Fatal("逐对查询不应清理或改写本地探测结果文件")
+	}
+	revisionAfter, err := fixture.store.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revisionAfter != revision {
+		t.Fatalf("快照修订号从 %d 变为 %d", revision, revisionAfter)
+	}
+	auditAfter, err := fixture.store.AuditRows(1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditAfter) != len(auditBefore) {
+		t.Fatalf("逐对查询不应写审计：查询前 %d 行，查询后 %d 行", len(auditBefore), len(auditAfter))
+	}
+}
+
+// TestQueryTopologyPairActualSelectionUsesDialSuccessCache 确认服务器目标
+// 的「实际会选」沿用统一拨号候选规划：同级网络里仍有效的成功地址会排到
+// 登记顺序之前；查询本身不改变成功地址缓存。
+func TestQueryTopologyPairActualSelectionUsesDialSuccessCache(t *testing.T) {
+	fixture := newQueryTopologyFixture(t)
+	if _, err := fixture.store.AddSite("家B", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddNetwork(models.Network{
+		Name: "家B物理", Type: models.NetworkPhysical, SiteName: "家B",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, membership := range []struct{ device, address string }{
+		{"笔记本", "192.0.2.11"},
+		{"工作设备", "192.0.2.12"},
+	} {
+		if _, err := fixture.store.AddNetworkMembership(
+			membership.device, "家B物理", membership.address,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workServer, err := fixture.store.GetServerByName("入口一")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localDevicePath, err := roles.LocalDevicePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cachePath := filepath.Join(filepath.Dir(localDevicePath), "ssh-dial-successes.json")
+	cache := sshbroker.NewFileDialSuccessCache(cachePath)
+	if err := cache.Record(workServer, sshbroker.DialSuccessRecord{
+		Address: "192.0.2.12", SucceededAt: time.Now(),
+		Duration: 20 * time.Millisecond,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text, isError := fixture.callQuery(t, map[string]any{
+		"from": "self", "to": []string{workServer.ID},
+	})
+	if isError {
+		t.Fatalf("query_topology 失败：%s", text)
+	}
+	if !strings.Contains(text, "家B物理（实际会选）") || strings.Contains(text, "家A物理（实际会选）") {
+		t.Fatalf("成功地址缓存应让同级网络家B物理排在前面：\n%s", text)
+	}
+	after, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("query_topology 不应改写成功地址缓存")
+	}
+}
+
+// TestQueryTopologyPairDetail 覆盖展开档：设备角色、网络成员地址、标称带
+// 宽与是否按流量计费；服务器条目的 ExposeHost 决定地址明文或隐藏，不受
+// 管设备地址始终隐藏，网段不进入输出。
+func TestQueryTopologyPairDetail(t *testing.T) {
+	fixture := newQueryTopologyFixture(t)
+	physicalBandwidth := int64(1000)
+	physicalMetered := false
+	if _, err := fixture.store.EditNetwork("家A物理", store.NetworkChanges{
+		BandwidthMbps: &physicalBandwidth, Metered: &physicalMetered,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	virtualBandwidth := int64(0)
+	virtualMetered := true
+	if _, err := fixture.store.EditNetwork("虚拟A", store.NetworkChanges{
+		BandwidthMbps: &virtualBandwidth, Metered: &virtualMetered,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddDevice("可见设备", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddNetworkMembership("可见设备", "家A物理", "192.0.2.21"); err != nil {
+		t.Fatal(err)
+	}
+	visibleResult, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "可见入口", Host: "192.0.2.121", Port: 22, User: "deploy",
+		AuthMethod: models.AuthPassword, ExposeHost: true,
+	}, nil, nil, "可见设备")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.GrantServers(fixture.profileID, []string{visibleResult.ServerID}); err != nil {
+		t.Fatal(err)
+	}
+	workServer, err := fixture.store.GetServerByName("入口一")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text, isError := fixture.callQuery(t, map[string]any{
+		"from": "self", "detail": true,
+		"to": []string{workServer.ID, visibleResult.ServerID, "NAS"},
+	})
+	if isError {
+		t.Fatalf("query_topology 失败：%s", text)
+	}
+	for _, wanted := range []string{
+		"角色：受管设备（入口一、入口二）",
+		"家A物理（实际会选） 地址：隐藏；标称带宽：1000 Mbit/s；不按流量计费",
+		"虚拟A 地址：隐藏；标称带宽：未登记；按流量计费",
+		"角色：不受管设备",
+		"家A物理（实际会选） 地址：192.0.2.21；标称带宽：1000 Mbit/s；不按流量计费",
+	} {
+		if !strings.Contains(text, wanted) {
+			t.Fatalf("展开档缺少 %q：\n%s", wanted, text)
+		}
+	}
+	for _, forbidden := range []string{"192.0.2.2\n", "100.64.0.", "网段："} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("展开档不应包含 %q：\n%s", forbidden, text)
+		}
+	}
+}
+
+// TestQueryTopologyGroupDetailExposeHostCombination 覆盖分组展开档：同一
+// 设备多个已授权条目里任一条目开启 ExposeHost 就显示地址，全部关闭则隐
+// 藏；不受管设备地址始终隐藏。
+func TestQueryTopologyGroupDetailExposeHostCombination(t *testing.T) {
+	fixture := newQueryTopologyFixture(t)
+	second, err := fixture.store.GetServerByName("入口二")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text, isError := fixture.callQuery(t, map[string]any{"from": "self", "detail": true})
+	if isError {
+		t.Fatalf("query_topology 失败：%s", text)
+	}
+	if !strings.Contains(text, "工作设备 [入口一、入口二] 角色：受管设备（入口一、入口二） 家A物理 地址：隐藏") ||
+		!strings.Contains(text, "NAS 角色：不受管设备 虚拟A 地址：隐藏") {
+		t.Fatalf("全部条目关闭 ExposeHost 时分组地址应隐藏：\n%s", text)
+	}
+
+	second.ExposeHost = true
+	if err := fixture.store.UpdateServer(second); err != nil {
+		t.Fatal(err)
+	}
+	text, isError = fixture.callQuery(t, map[string]any{"from": "self", "detail": true})
+	if isError {
+		t.Fatalf("query_topology 失败：%s", text)
+	}
+	if !strings.Contains(text, "工作设备 [入口一、入口二] 角色：受管设备（入口一、入口二） 家A物理 地址：192.0.2.2；标称带宽：未登记；不按流量计费") ||
+		!strings.Contains(text, "NAS 角色：不受管设备 虚拟A 地址：隐藏；标称带宽：未登记；不按流量计费") {
+		t.Fatalf("任一条目开启 ExposeHost 时分组地址显示不正确：\n%s", text)
+	}
+}
+
+// TestQueryTopologyPairTargetRejections 覆盖目标拒绝与去重习惯：未知、授权
+// 范围外服务器编号、按设备名指称的授权外受管设备都返回同一种错误，不泄
+// 露条目或设备存在；重复目标只呈现一次。
+func TestQueryTopologyPairTargetRejections(t *testing.T) {
+	fixture := newQueryTopologyFixture(t)
+	external, err := fixture.store.GetServerByName("外部入口")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workServer, err := fixture.store.GetServerByName("入口一")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var firstError string
+	for _, target := range []string{external.ID, "not-a-target", "授权外设备"} {
+		text, isError := fixture.callQuery(t, map[string]any{
+			"from": "self", "to": []string{workServer.ID, target},
+		})
+		if !isError {
+			t.Fatalf("目标 %s 应返回工具错误，实际：%q", target, text)
+		}
+		if strings.Contains(text, "外部入口") || strings.Contains(text, "授权外设备") || strings.Contains(text, "192.0.2.5") {
+			t.Fatalf("目标 %s 的错误泄露了范围外对象：%s", target, text)
+		}
+		if firstError == "" {
+			firstError = text
+			continue
+		}
+		if text != firstError {
+			t.Fatalf("未知与授权范围外目标应返回一致错误：%q != %q", text, firstError)
+		}
+	}
+
+	text, isError := fixture.callQuery(t, map[string]any{
+		"from": "self", "to": []string{workServer.ID, workServer.ID},
+	})
+	if isError {
+		t.Fatalf("query_topology 失败：%s", text)
+	}
+	if strings.Count(text, "目标：工作设备 [入口一、入口二]") != 1 {
+		t.Fatalf("重复目标应去重后只呈现一次：\n%s", text)
 	}
 }
 

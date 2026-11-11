@@ -229,6 +229,29 @@ func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.Netw
 	return plan
 }
 
+// PlanServerDialAddressesWithSuccess 返回带成功地址缓存重排后的服务器条
+// 目候选计划。只读调用方与统一拨号入口共用同一条规划与同级排序规则，且
+// 不建立连接、不写缓存。
+func PlanServerDialAddressesWithSuccess(
+	targetMemberships, dialerMemberships []*models.NetworkMembership,
+	fallbackHost string, records []DialSuccessRecord, now time.Time,
+) DialAddressPlan {
+	plan := PlanServerDialAddresses(targetMemberships, dialerMemberships, fallbackHost)
+	return OrderServerDialPlanWithSuccess(plan, records, now)
+}
+
+// OrderServerDialPlanWithSuccess 只按成功地址缓存重排已有候选计划的同级地
+// 址。统一拨号入口在首次锚定过滤等调整之后调用它，保证只读预览与真实拨
+// 号使用同一条排序规则。
+func OrderServerDialPlanWithSuccess(
+	plan DialAddressPlan, records []DialSuccessRecord, now time.Time,
+) DialAddressPlan {
+	if fallbackOnlyDialPlan(plan) {
+		return plan
+	}
+	return orderPlanWithDialSuccess(plan, records, now)
+}
+
 func networkSequencesByRegistration(memberships []*models.NetworkMembership) map[string]int {
 	ordered := make([]*models.NetworkMembership, 0, len(memberships))
 	for _, membership := range memberships {
@@ -376,12 +399,13 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 	}
 	plan := PlanServerDialAddresses(nil, nil, req.Server.Host)
 	var targetMemberships []*models.NetworkMembership
+	var dialerMemberships []*models.NetworkMembership
 	if req.Topology != nil {
 		topology, err := req.Topology.ServerDialTopology(req.Server)
 		if err != nil {
 			return nil, nil, err
 		}
-		dialerMemberships := topology.DialerMemberships
+		dialerMemberships = topology.DialerMemberships
 		if !topology.DialerKnown {
 			dialerMemberships = nil
 		}
@@ -430,7 +454,7 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			warnDialSuccessCacheFailure("读取", err)
 		}
 		if present {
-			plan = orderPlanWithDialSuccess(plan, records, time.Now())
+			plan = OrderServerDialPlanWithSuccess(plan, records, time.Now())
 		}
 	}
 	observer := req.Observer
