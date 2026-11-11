@@ -336,11 +336,45 @@ func newSecretAllowChangeCmd(allow bool) *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), done, len(secrets), len(servers))
+			if !allow {
+				if err := printSecretDisallowSharedStorageHints(cmd.OutOrStdout(), s, secrets); err != nil {
+					return err
+				}
+			}
 			return nil
 		},
 	}
 	registerSecretAllowFlags(c)
 	return c
+}
+
+// printSecretDisallowSharedStorageHints 为挂载密码机密项补一条撤销提示：
+// 取消授权只改登记，服务器上的挂载配置不会被这条命令改动。清理要走
+// shares revoke，事后核查用 shares residue；与共享无关的机密项不提示。
+func printSecretDisallowSharedStorageHints(out io.Writer, s *store.Store, secretNames []string) error {
+	shares, err := s.ListSharedStorages(store.SharedStorageFilter{})
+	if err != nil {
+		return err
+	}
+	shareNamesBySecret := make(map[string][]string)
+	for _, share := range shares {
+		shareNamesBySecret[share.PasswordSecretName] = append(shareNamesBySecret[share.PasswordSecretName], share.Name)
+	}
+	seen := make(map[string]struct{}, len(secretNames))
+	for _, name := range secretNames {
+		if _, duplicate := seen[name]; duplicate {
+			continue
+		}
+		seen[name] = struct{}{}
+		shareNames := shareNamesBySecret[name]
+		if len(shareNames) == 0 {
+			continue
+		}
+		fmt.Fprintf(out,
+			"机密项 %s 是共享存储 %s 的挂载密码：本次只改登记，服务器上的挂载配置未被改动；撤销用 shares revoke，残留检查用 shares residue。\n",
+			name, strings.Join(shareNames, "、"))
+	}
+	return nil
 }
 
 // registerSecretAllowFlags 注册授权与取消授权共用的两个多值参数。
