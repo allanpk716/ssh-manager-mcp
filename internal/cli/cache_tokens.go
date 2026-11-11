@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"ssh-manager-mcp/internal/access"
+	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -95,10 +96,7 @@ func cacheTokensLsCmd() *cobra.Command {
 				if !ct.LastPullAt.IsZero() {
 					last = ct.LastPullAt.Format("2006-01-02 15:04:05")
 				}
-				clientVersion := ct.ClientVersion
-				if clientVersion == "" {
-					clientVersion = "旧版客户端:不支持机密项"
-				}
+				clientVersion := clientfeatures.ClientVersionLabel(ct.ClientVersion)
 				profile := ct.ProfileName
 				if ct.ProfileID == "" {
 					profile = "-"

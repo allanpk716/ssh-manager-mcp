@@ -38,6 +38,18 @@ func deviceCodeTestStore() *stubAccessStore {
 				ID: "device-2", Name: "台式机", TokenPrefix: "wxyz9876", Status: "revoked",
 				ProfileName: "开发",
 			},
+			{
+				ID: "device-3", Name: "工作站", TokenPrefix: "efgh5678", Status: "active",
+				ProfileName: "运维", LastPullAt: time.Unix(1799990000, 0), ClientVersion: "v0.21.1",
+			},
+			{
+				ID: "device-4", Name: "测试机", TokenPrefix: "ijkl9012", Status: "active",
+				ProfileName: "运维", LastPullAt: time.Unix(1799990000, 0), ClientVersion: "v0.22.0",
+			},
+			{
+				ID: "device-5", Name: "开发构建机", TokenPrefix: "mnop3456", Status: "active",
+				ProfileName: "运维", LastPullAt: time.Unix(1799990000, 0), ClientVersion: "dev",
+			},
 		},
 	}
 }
@@ -56,6 +68,9 @@ func TestAuthorityDeviceCodePageListsRowsAndIssueForm(t *testing.T) {
 		`<a href="/ui/access/device-codes">设备码</a>`,
 		"笔记本", "abcd1234", "活跃", "运维", "v1.2.3",
 		"台式机", "wxyz9876", "已撤销", "开发",
+		"工作站", "v0.21.1（旧版客户端:不支持机密项、网络拓扑、共享存储）",
+		"测试机", "v0.22.0", "开发构建机", "dev",
+		"旧版客户端:不支持机密项、网络拓扑、共享存储",
 		`<option value="profile-1">运维</option>`,
 		`<option value="profile-2">开发</option>`,
 		`name="name"`, `name="profile"`,
