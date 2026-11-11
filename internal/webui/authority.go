@@ -85,7 +85,8 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	h.mux.HandleFunc("/ui/password", h.requireSession(h.handleAuthorityPassword))
 	h.mux.HandleFunc("/ui/reverify", h.requireSession(h.handleAuthorityReverify))
 	h.mux.HandleFunc("/ui/", h.requireSession(h.handleAuthorityRoot))
-	// 访问区域路由按权威端角色注册全部已实现的页面。
+	// 拓扑图页面与访问区域路由按权威端角色注册全部已实现的页面。
+	h.registerTopologyRoutes()
 	h.registerAccessRoutes()
 	h.registerServerRoutes()
 	h.registerSecretRoutes()
@@ -472,7 +473,7 @@ func (h *handler) authorityWriteAllowed(w http.ResponseWriter, r *http.Request) 
 		return true
 	}
 	if !h.authorityOriginAllowed(r.Header.Get("Origin")) {
-		h.renderError(w, r, http.StatusForbidden, "请求来源校验失败", "请求来源不是本次监听的 Web UI，已拒绝。")
+		h.writeRequestError(w, r, http.StatusForbidden, "请求来源校验失败", "请求来源不是本次监听的 Web UI，已拒绝。")
 		return false
 	}
 	if r.URL.Path == loginPath {
@@ -488,7 +489,7 @@ func (h *handler) authorityWriteAllowed(w http.ResponseWriter, r *http.Request) 
 	}
 	sess := h.currentAuthoritySession(r)
 	if sess == nil {
-		h.renderError(w, r, http.StatusUnauthorized, "需要登录", "本页需要有效会话。请重新登录。")
+		h.writeRequestError(w, r, http.StatusUnauthorized, "需要登录", "本页需要有效会话。请重新登录。")
 		return false
 	}
 	token := r.Header.Get("X-CSRF-Token")
@@ -497,7 +498,7 @@ func (h *handler) authorityWriteAllowed(w http.ResponseWriter, r *http.Request) 
 		token = r.PostFormValue("csrf_token")
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(sess.csrf)) != 1 {
-		h.renderError(w, r, http.StatusForbidden, "防跨站请求伪造校验失败", "防跨站请求伪造令牌缺失或无效，已拒绝。请刷新页面后重试。")
+		h.writeRequestError(w, r, http.StatusForbidden, "防跨站请求伪造校验失败", "防跨站请求伪造令牌缺失或无效，已拒绝。请刷新页面后重试。")
 		return false
 	}
 	return true

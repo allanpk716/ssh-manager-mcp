@@ -143,6 +143,107 @@ async function startEmptyMachineUI(): Promise<standaloneUI> {
   return startUIProcess(mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-")));
 }
 
+// startStandaloneUIWithTopology 用带拓扑数据的种子库启动单机 Web UI，供网
+// 络拓扑浏览器测试使用；其它用例的种子数据保持不变。probePort 提供时，种
+// 子库给探测目标登记该端口，用例在本地监听它完成真实触发探测。
+export async function startStandaloneUIWithTopology(probePort?: number): Promise<standaloneUI> {
+  const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-topology-"));
+  const seedEnv: Record<string, string> = {
+    SSHMGR_E2E_TOPOLOGY: "1",
+    SSHMGR_VAULT_ROOT: runDir,
+    SSHMGR_STORE: path.join(runDir, "store.db"),
+    SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
+  };
+  if (probePort !== undefined) {
+    seedEnv.SSHMGR_E2E_PROBE_PORT = String(probePort);
+  }
+  const seed = spawnSync("go", ["run", "./e2e/tools/seedvault", runDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...seedEnv,
+    },
+  });
+  if (seed.status !== 0) {
+    await rm(runDir, { recursive: true, force: true });
+    throw new Error(`准备拓扑临时加密库失败：${seed.stdout}\n${seed.stderr}`);
+  }
+  return startUIProcess(runDir);
+}
+
+// startClientUIWithTopology 用带拓扑数据的本地快照启动客户端 Web UI，供网
+// 络拓扑浏览器测试验证只读视图与按快照裁剪的呈现。
+export async function startClientUIWithTopology(): Promise<clientUI> {
+  const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-topology-client-"));
+  const seed = spawnSync("go", ["run", "./e2e/tools/seedclient", runDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      SSHMGR_E2E_TOPOLOGY: "1",
+      HOME: runDir,
+      APPDATA: runDir,
+      XDG_CONFIG_HOME: runDir,
+      SSHMGR_CONFIG_ROOT: runDir,
+    },
+  });
+  if (seed.status !== 0) {
+    throw new Error(`准备拓扑客户端缓存失败：${seed.stdout}\n${seed.stderr}`);
+  }
+  const ui = spawn(binaryPath, ["ui"], {
+    cwd: repoRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      HOME: runDir,
+      APPDATA: runDir,
+      XDG_CONFIG_HOME: runDir,
+      SSHMGR_CONFIG_ROOT: runDir,
+      SSHMGR_VAULT_ROOT: runDir,
+      SSHMGR_STORE: path.join(runDir, "store.db"),
+      SSHMGR_CACHE_DIR: path.join(runDir, "cache"),
+      SSHMGR_CACHE_DEK: path.join(runDir, "cache-dek.key"),
+      PATH: path.join(runDir, "empty-path"),
+    },
+  });
+  let output = "";
+  ui.stdout.on("data", (chunk) => (output += chunk));
+  ui.stderr.on("data", (chunk) => (output += chunk));
+  const startupURL = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`等待拓扑客户端 Web UI 启动超时，输出：\n${output}`)),
+      15_000,
+    );
+    const poll = setInterval(() => {
+      const match = output.match(/https?:\/\/\S+/);
+      if (match) {
+        clearTimeout(timer);
+        clearInterval(poll);
+        resolve(match[0]);
+      }
+    }, 50);
+    ui.on("exit", (code) => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      reject(new Error(`拓扑客户端 Web UI 进程提前退出（${code}），输出：\n${output}`));
+    });
+  });
+  return {
+    startupURL,
+    close: async () => {
+      ui.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        if (ui.exitCode !== null) {
+          resolve();
+          return;
+        }
+        ui.on("exit", () => resolve());
+      });
+    },
+  };
+}
+
 // startClientUI 为当前用例生成一个客户端本地快照缓存，并以客户端角色启
 // 动 `sshmgr ui`。PATH 指向不存在目录，避免系统浏览器抢先消耗启动链接。
 async function startClientUI(): Promise<clientUI> {

@@ -15,10 +15,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/probeobserve"
+	"ssh-manager-mcp/internal/proberesults"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/store"
@@ -157,6 +160,9 @@ func seed(dir string) error {
 			return err
 		}
 	}
+	if err := seedTopology(st); err != nil {
+		return err
+	}
 	role := roles.RoleStandalone
 	if os.Getenv("SSHMGR_E2E_ROLE") == "server" {
 		role = roles.RoleServer
@@ -208,4 +214,144 @@ func writeBrowserTestCertificate(dir string) error {
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 	return os.WriteFile(filepath.Join(dir, "browser-test-key.pem"), keyPEM, 0o600)
+}
+
+// seedTopology 为网络拓扑浏览器测试补充拓扑数据。只在设置
+// SSHMGR_E2E_TOPOLOGY 时启用，避免改变其它用例看到的列表与详情。
+func seedTopology(st *store.Store) error {
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_TOPOLOGY")) != "1" {
+		return nil
+	}
+	if _, err := st.AddSite("家A", "物理场所"); err != nil {
+		return err
+	}
+	if _, err := st.AddSite("机房", ""); err != nil {
+		return err
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "家A局域网", Type: models.NetworkPhysical, SiteName: "家A", Note: "家里的网络",
+		NetworkRange: "192.168.1.0/24", BandwidthMbps: 1000, Metered: true,
+	}); err != nil {
+		return err
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "机房局域网", Type: models.NetworkPhysical, SiteName: "机房",
+	}); err != nil {
+		return err
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual, Note: "跨站点"}); err != nil {
+		return err
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "虚拟网B", Type: models.NetworkVirtual}); err != nil {
+		return err
+	}
+	if _, err := st.MoveServerToDevice("db-1", "工作站"); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20"); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("工作站", "虚拟网", "100.64.0.20"); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("工作站", "虚拟网B", "100.65.0.20"); err != nil {
+		return err
+	}
+	if _, err := st.AddDevice("NAS", "照片与备份", ""); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("NAS", "家A局域网", "192.168.1.30"); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("NAS", "虚拟网", "100.64.0.30"); err != nil {
+		return err
+	}
+	if _, err := st.AddDevice("机房机器", "", ""); err != nil {
+		return err
+	}
+	if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "gpu-1", Host: "203.0.113.5", Port: 22, User: "deploy",
+	}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, "机房机器"); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("机房机器", "机房局域网", "10.0.0.5"); err != nil {
+		return err
+	}
+	if _, err := st.AddDevice("笔记本", "", "laptop-client"); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("笔记本", "虚拟网", "100.64.0.9"); err != nil {
+		return err
+	}
+	if _, err := st.AddDevice("探测机", "浏览器测试探测目标", ""); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("探测机", "家A局域网", "127.0.0.1"); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("探测机", "虚拟网", "127.0.0.2"); err != nil {
+		return err
+	}
+	if port := strings.TrimSpace(os.Getenv("SSHMGR_E2E_PROBE_PORT")); port != "" {
+		probePort, err := strconv.Atoi(port)
+		if err != nil {
+			return fmt.Errorf("SSHMGR_E2E_PROBE_PORT 不是端口号：%w", err)
+		}
+		if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: "probe-target", Host: "127.0.0.1", Port: probePort, User: "owner",
+		}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, "探测机"); err != nil {
+			return err
+		}
+	}
+	if err := st.AddSecretWithEnvironmentName("NAS_PASSWORD", "NAS 登录密码", []byte("nas-login-secret"), "", store.CLISource()); err != nil {
+		return err
+	}
+	if _, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "家NAS共享", Device: "NAS", User: "backup", PasswordSecret: "NAS_PASSWORD", Drive: "N",
+	}, store.CLISource()); err != nil {
+		return err
+	}
+	workstation, err := st.GetDevice("工作站")
+	if err != nil {
+		return err
+	}
+	if err := roles.SetLocalDeviceID(workstation.ID); err != nil {
+		return err
+	}
+	return seedProbeResults(st, workstation.ID)
+}
+
+// seedProbeResults 为浏览器测试写一份本机起点的本地探测结果：NAS 家A局域
+// 网成功、虚拟局域网超时；其余设备留空，用于呈现未探测与无共同网络。
+func seedProbeResults(st *store.Store, originDeviceID string) error {
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_TOPOLOGY")) != "1" {
+		return nil
+	}
+	nas, err := st.GetDevice("NAS")
+	if err != nil {
+		return err
+	}
+	path, ok, err := probeobserve.PathFor("")
+	if err != nil || !ok {
+		return err
+	}
+	results := proberesults.NewFileProbeResults(path)
+	observedAt := time.Now().Add(-10 * time.Second)
+	for _, observation := range []proberesults.Observation{
+		{
+			OriginDeviceID: originDeviceID, TargetDeviceID: nas.ID, Network: "家A局域网",
+			Address: "192.168.1.30", Port: 22, OK: true, Duration: 3 * time.Millisecond,
+			ObservedAt: observedAt, Source: proberesults.SourceProbe,
+		},
+		{
+			OriginDeviceID: originDeviceID, TargetDeviceID: nas.ID, Network: "虚拟网",
+			Address: "100.64.0.30", Port: 22, Category: models.ProbeErrorTimeout,
+			Duration: 1500 * time.Millisecond, ObservedAt: observedAt, Source: proberesults.SourceProbe,
+		},
+	} {
+		if err := results.Record(observation); err != nil {
+			return err
+		}
+	}
+	return nil
 }

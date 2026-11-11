@@ -73,6 +73,10 @@ func TestDefaultHintTopologyChanges(t *testing.T) {
 					ViewKey: "主视图", DeviceID: "device-1", X: 12.5, Y: -3,
 					CreatedAt: 1000, UpdatedAt: 1001,
 				}}
+				snap.ContainerLayoutCoordinates = []store.SnapshotContainerLayoutCoordinate{
+					{ViewKey: "主视图", EntityType: "site", EntityID: "site-1", X: 20, Y: 30},
+					{ViewKey: "主视图", EntityType: "network", EntityID: "network-1", X: 40, Y: 50},
+				}
 			},
 		},
 		{

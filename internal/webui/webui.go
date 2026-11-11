@@ -101,8 +101,17 @@ type Config struct {
 	// SoftwareInventory 是软件清单页来源。单机与权威端提供；客户端不提
 	// 供，导航与路由都不出现。
 	SoftwareInventory SoftwareInventorySource
-	Access            AccessStore
-	Ops               OpsStore
+	// Topology 是网络拓扑页来源。三种角色都提供；初始化向导等没有拓扑
+	// 数据的构造不提供，导航与路由都不出现。
+	Topology TopologySource
+	// TopologyWriter 是网络拓扑页写操作来源：布局保存与重置、拖动归类与
+	// 网络成员编辑。单机与权威端提供；客户端不提供，写路由也不注册。
+	TopologyWriter TopologyWriter
+	// TopologyProbe 是网络拓扑页按需触发连通探测与读取本地探测结果的来
+	// 源。三种角色都提供；客户端适配层固定本机起点。
+	TopologyProbe TopologyProbe
+	Access        AccessStore
+	Ops           OpsStore
 	// MachineInit 是单机升级为权威端时调用的初始化模块适配器。适配器内部
 	// 调用 machineinit.Initialize 并把权威端作为目标角色；本包不写 role.json。
 	MachineInit MachineInitializer
@@ -208,6 +217,18 @@ type capabilities struct {
 	// ShowSoftwareInventoryArea 控制是否显示「软件清单」区域入口；只有
 	// 单机或权威端配置软件清单来源时才显示。
 	ShowSoftwareInventoryArea bool
+	// ShowTopologyArea 控制是否显示「网络拓扑」区域入口；三种角色只要提
+	// 供拓扑来源就显示，客户端入口同样可见但页面只读。
+	ShowTopologyArea bool
+	// CanEditTopology 控制拓扑页的拖动归类入口与网络成员编辑表单；只有
+	// 提供拓扑写来源的角色为真。
+	CanEditTopology bool
+	// ShowTopologyProbe 控制拓扑页的探测起点选择与叠加入口；只有提供探测
+	// 来源时显示。
+	ShowTopologyProbe bool
+	// CanChooseProbeServerOrigin 控制拓扑页能否选择受管服务器作为探测起
+	// 点；客户端固定本机。
+	CanChooseProbeServerOrigin bool
 	// CanManageProfiles 控制是否显示 Profile 页入口与写操作。
 	CanManageProfiles bool
 	// CanManageProjects 控制是否显示项目令牌页入口与写操作。
@@ -243,6 +264,10 @@ func capabilitiesForConfig(cfg Config) capabilities {
 	caps := capabilitiesForRole(cfg.Role)
 	caps.ShowSecretsArea = cfg.Secrets != nil
 	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
+	caps.ShowTopologyArea = cfg.Topology != nil
+	caps.CanEditTopology = cfg.Topology != nil && cfg.TopologyWriter != nil
+	caps.ShowTopologyProbe = cfg.Topology != nil && cfg.TopologyProbe != nil
+	caps.CanChooseProbeServerOrigin = caps.ShowTopologyProbe && cfg.Role != RoleClient
 	return caps
 }
 
@@ -342,6 +367,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 		h.mux.HandleFunc(startPath, h.handleStart)
 		h.mux.HandleFunc("/ui/assets/", h.handleAsset)
 		h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
+		h.registerTopologyRoutes()
 		h.registerAccessRoutes()
 		h.registerServerRoutes()
 		h.registerSecretRoutes()
@@ -389,6 +415,14 @@ func newLoopbackHandler(cfg Config, registerRoutes func(*handler)) (http.Handler
 func (h *handler) requireSession(page http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if h.currentSession(r) == nil {
+			if isTopologyAPIRequest(r) {
+				message := "本页需要有效会话。请重新登录。"
+				if h.cfg.Role != RoleServer {
+					message = "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。"
+				}
+				h.writeTopologyJSONError(w, http.StatusUnauthorized, message)
+				return
+			}
 			if h.cfg.Role == RoleServer {
 				http.Redirect(w, r, loginPath, http.StatusSeeOther)
 				return
@@ -444,12 +478,16 @@ func (h *handler) writeRequestAllowed(w http.ResponseWriter, r *http.Request) bo
 		return true
 	}
 	if !originAllowed(r.Header.Get("Origin"), h.cfg.Port) {
-		h.renderError(w, r, http.StatusForbidden, "请求来源校验失败", "请求来源不是本次启动的 Web UI，已拒绝。")
+		h.writeRequestError(w, r, http.StatusForbidden, "请求来源校验失败", "请求来源不是本次启动的 Web UI，已拒绝。")
 		return false
 	}
 	sess := h.currentSession(r)
 	if sess == nil {
-		h.renderSessionRequired(w, r)
+		if isTopologyAPIRequest(r) {
+			h.writeTopologyJSONError(w, http.StatusUnauthorized, "本页需要有效会话。请重新运行 `sshmgr ui` 获取新的启动链接。")
+		} else {
+			h.renderSessionRequired(w, r)
+		}
 		return false
 	}
 	token := r.Header.Get("X-CSRF-Token")
@@ -465,10 +503,33 @@ func (h *handler) writeRequestAllowed(w http.ResponseWriter, r *http.Request) bo
 		token = r.PostFormValue("csrf_token")
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(sess.csrf)) != 1 {
-		h.renderError(w, r, http.StatusForbidden, "防跨站请求伪造校验失败", "防跨站请求伪造令牌缺失或无效，已拒绝。请刷新页面后重试。")
+		h.writeRequestError(w, r, http.StatusForbidden, "防跨站请求伪造校验失败", "防跨站请求伪造令牌缺失或无效，已拒绝。请刷新页面后重试。")
 		return false
 	}
 	return true
+}
+
+// isTopologyAPIRequest 判断请求是否访问拓扑图页面的内部 JSON 接口。
+func isTopologyAPIRequest(r *http.Request) bool {
+	return r != nil && (r.URL.Path == topologyAPIPath || strings.HasPrefix(r.URL.Path, topologyAPIPath+"/"))
+}
+
+// writeRequestError 给普通页面渲染错误页；拓扑内部 JSON 接口始终得到 JSON
+// 错误体，浏览器脚本才能显示其中的中文提示。
+func (h *handler) writeRequestError(w http.ResponseWriter, r *http.Request, status int, title, message string) {
+	if isTopologyAPIRequest(r) {
+		h.writeTopologyJSONError(w, status, message)
+		return
+	}
+	h.renderError(w, r, status, title, message)
+}
+
+// logError 记录处理器没有透出的底层错误，方便排查服务器侧故障。
+func (h *handler) logError(r *http.Request, context string, err error) {
+	if h.cfg.Log == nil || err == nil {
+		return
+	}
+	h.cfg.Log("sshmgr web ui: %s method=%s path=%s remote=%s: %v", context, r.Method, r.URL.Path, remoteIP(r), err)
 }
 
 // parseFormForCSRF 解析请求体以便读取表单里的防跨站请求伪造令牌。多部分
