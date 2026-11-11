@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -61,6 +62,9 @@ const (
 	// ProblemReadFailed 表示机密项值读取或解密失败。
 	ProblemReadFailed
 )
+
+// maxInvalidSnippetBytes 限制格式错误诊断保留的原文片段长度；省略号另计。
+const maxInvalidSnippetBytes = 64
 
 // Problem 是一条不携带机密值的填值问题。Offset 是占位符在原始内容中的
 // 字节位置，后续格式校验可以复用同一输出形态。
@@ -278,16 +282,30 @@ func targetLabel(target ServerRef) string {
 
 func invalidFormat(content []byte, item reference) Problem {
 	line := 1 + bytes.Count(content[:item.offset], []byte{'\n'})
+	snippet := boundedSnippet(item.snippet)
 	return Problem{
 		Kind:    ProblemInvalidFormat,
 		Offset:  item.offset,
 		Line:    line,
-		Snippet: string(item.snippet),
+		Snippet: string(snippet),
 		Message: fmt.Sprintf(
 			"第%d行字节偏移%d：机密项占位符格式错误；原文片段：%q",
-			line, item.offset, item.snippet,
+			line, item.offset, snippet,
 		),
 	}
+}
+
+func boundedSnippet(snippet []byte) []byte {
+	if len(snippet) <= maxInvalidSnippetBytes {
+		return snippet
+	}
+	end := maxInvalidSnippetBytes
+	for end > 0 && !utf8.RuneStart(snippet[end]) {
+		end--
+	}
+	bounded := make([]byte, 0, end+len("..."))
+	bounded = append(bounded, snippet[:end]...)
+	return append(bounded, "..."...)
 }
 
 func missingOrNotAllowed(item reference, target ServerRef, secret Secret, exists bool) Problem {

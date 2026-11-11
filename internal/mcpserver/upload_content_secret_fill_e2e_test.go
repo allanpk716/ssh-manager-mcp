@@ -78,6 +78,53 @@ func TestUploadContentSecretPlaceholderRejectsEveryFormatErrorBeforeConnect(t *t
 	}
 }
 
+func TestUploadContentSecretFormatSnippetIsBoundedAndUtf8Safe(t *testing.T) {
+	st := newStore(t)
+	var connections atomic.Int64
+	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Connections: &connections})
+	t.Cleanup(cleanup)
+	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
+	profileID, err := st.AddProfile("agent-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	server, tunnels, tasks, err := NewServer(st, profileID, "project-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tunnels.CloseAll)
+	t.Cleanup(tasks.CloseAll)
+	clientSession := connectInMemoryMCPClient(t, server)
+
+	target := toSlash(filepath.Join(t.TempDir(), "config", "invalid.yaml"))
+	template := "{{sshmgr-secret:" + strings.Repeat("密", 40) + "\n"
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "upload_content",
+		Arguments: map[string]any{
+			"server_id":   serverID,
+			"content":     template,
+			"remote_path": target,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatalf("upload_content unexpectedly succeeded: %+v", result.Content)
+	}
+	wantSnippet := "{{sshmgr-secret:" + strings.Repeat("密", 16) + "..."
+	errorText := toolResultText(result)
+	if !strings.Contains(errorText, fmt.Sprintf("原文片段：%q", wantSnippet)) {
+		t.Fatalf("bounded UTF-8 snippet missing; error=%q want=%q", errorText, wantSnippet)
+	}
+	if connections.Load() != 0 {
+		t.Fatalf("rejected upload connected to target %d times", connections.Load())
+	}
+}
+
 func TestUploadContentSecretFillFullFlow(t *testing.T) {
 	const databasePassword = "database-password-7f31a9"
 	const interfaceToken = "interface-token-c50d82"
