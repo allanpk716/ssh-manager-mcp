@@ -15,17 +15,19 @@ import (
 	"ssh-manager-mcp/internal/probe"
 	"ssh-manager-mcp/internal/probeobserve"
 	"ssh-manager-mcp/internal/proberesults"
+	"ssh-manager-mcp/internal/shareaddress"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 )
 
 // QueryTopologyInput 是 query_topology 工具的输入。From 是出发点：self 表
 // 示当前 sshmgr 实例所在设备，服务器标识符表示该服务器条目所属设备。
-// To 为空表示输出邻居分组；非空表示只输出出发点到这些目标的连通详情。
+// To 为空表示输出邻居分组；非空表示只输出出发点到这些目标的连通详情；
+// 唯一例外是 To 只有一个共享地址时，输出在 From 服务器上的实际路径。
 // Detail 为真时展开地址、网络属性与设备角色。
 type QueryTopologyInput struct {
 	From   string    `json:"from" jsonschema:"origin: \"self\" (this sshmgr instance) or a server id from list_servers"`
-	To     *[]string `json:"to,omitempty" jsonschema:"optional target list; each item is a server id for a managed device, or a device name for an unmanaged device or client instance"`
+	To     *[]string `json:"to,omitempty" jsonschema:"optional target list; each item is a server id for a managed device, or a device name for an unmanaged device or client instance; alternatively, when from is a server id, put exactly one SMB shared address here to translate it to that server's local path"`
 	Detail bool      `json:"detail,omitempty" jsonschema:"optional; when true, expand addresses, network bandwidth, metering, and device roles"`
 }
 
@@ -48,13 +50,23 @@ func QueryTopologyForProfile(st *store.Store, profileID, from string, to []strin
 		return "", err
 	}
 	if to != nil {
-		view, err := buildQueryTopologyPairView(st, profileID, origin, to, detail)
+		shareAddress, ordinaryTargetCount, err := queryTopologyShareAddressTarget(to)
+		if err != nil {
+			return "", err
+		}
+		if shareAddress != "" {
+			if ordinaryTargetCount != 0 {
+				return "", errors.New("to 不能同时包含共享地址与普通目标")
+			}
+			return translateQueryTopologyShareAddress(st, profileID, origin, shareAddress)
+		}
+		view, err := buildQueryTopologyPairView(st, profileID, origin.Device, to, detail)
 		if err != nil {
 			return "", err
 		}
 		return renderQueryTopologyPairView(view), nil
 	}
-	view, err := buildQueryTopologyView(st, profileID, origin, detail)
+	view, err := buildQueryTopologyView(st, profileID, origin.Device, detail)
 	if err != nil {
 		return "", err
 	}
@@ -106,14 +118,81 @@ type queryTopologyPairView struct {
 	detail                      bool
 }
 
-func resolveQueryTopologyOrigin(st *store.Store, profileID, from string) (*models.Device, error) {
+func resolveQueryTopologyOrigin(st *store.Store, profileID, from string) (*dialdevice.ResolvedOrigin, error) {
 	origin, err := dialdevice.ResolveOrigin(st, bridgeCacheInstance(), from, func(serverID string) error {
 		return gateServer(st, profileID, serverID)
 	})
 	if err != nil {
 		return nil, err
 	}
-	return origin.Device, nil
+	return origin, nil
+}
+
+// queryTopologyShareAddressTarget 从 to 中取出唯一的共享地址。返回值还
+// 带有非共享目标数量，供调用方拒绝共享地址与普通目标混用。
+func queryTopologyShareAddressTarget(targets []string) (string, int, error) {
+	shareAddress := ""
+	shareCount, ordinaryCount := 0, 0
+	for _, target := range targets {
+		if !queryTopologyLooksLikeShareAddress(target) {
+			ordinaryCount++
+			continue
+		}
+		shareCount++
+		shareAddress = strings.TrimSpace(target)
+	}
+	if shareCount > 1 {
+		return "", 0, errors.New("to 一次只能查询一个共享地址")
+	}
+	return shareAddress, ordinaryCount, nil
+}
+
+func queryTopologyLooksLikeShareAddress(target string) bool {
+	value := strings.TrimSpace(target)
+	return strings.HasPrefix(value, `\\`) ||
+		strings.HasPrefix(strings.ToLower(value), "smb://")
+}
+
+func translateQueryTopologyShareAddress(
+	st *store.Store, profileID string, origin *dialdevice.ResolvedOrigin, rawAddress string,
+) (string, error) {
+	if origin.Server == nil {
+		return "", errors.New("共享地址翻译的 from 必须是授权范围内的服务器标识符")
+	}
+	visible, err := sessionVisibleServerIDs(st, profileID, "")
+	if err != nil {
+		return "", err
+	}
+	allShares, err := st.ListSharedStorages(store.SharedStorageFilter{})
+	if err != nil {
+		return "", err
+	}
+	visibleShares := make([]*models.SharedStorage, 0, len(allShares))
+	for _, share := range allShares {
+		for _, mountable := range share.MountableServers {
+			if visible[mountable.ID] {
+				visibleShares = append(visibleShares, share)
+				break
+			}
+		}
+	}
+	resolved, err := shareaddress.Resolve(rawAddress, visibleShares)
+	if err != nil {
+		return "", err
+	}
+	for _, mountable := range resolved.Share.MountableServers {
+		if mountable.ID != origin.Server.ID {
+			continue
+		}
+		return strings.Join([]string{
+			"服务器：" + origin.Server.Name,
+			"共享存储：" + resolved.Share.Name + "（提供方设备：" + resolved.Share.DeviceName + "）",
+			"可挂载：是",
+			"实际路径：" + resolved.PathOnServer(origin.Server.ShellType),
+			"本翻译只读登记数据；是否已现场挂载请用 list_shares 的现场检测确认。",
+		}, "\n"), nil
+	}
+	return "", fmt.Errorf("服务器 %s 不在共享存储 %s 的可挂载范围内", origin.Server.Name, resolved.Share.Name)
 }
 
 func buildQueryTopologyPairView(st *store.Store, profileID string, origin *models.Device, rawTargets []string, detail bool) (*queryTopologyPairView, error) {

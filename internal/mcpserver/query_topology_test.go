@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,18 +49,25 @@ func TestQueryTopologyToolRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	descriptions := map[string]string{}
 	for _, tool := range toolList.Tools {
-		if tool.Name != "query_topology" {
-			continue
+		descriptions[tool.Name] = tool.Description
+	}
+	for toolName, wantedParts := range map[string][]string{
+		"query_topology":  {"Read-only", "never probes", "probe_connectivity", "shared address", "may mount the shared storage"},
+		"exec_command":    {"does not rewrite", "query_topology", "shared address"},
+		"exec_background": {"does not rewrite", "query_topology", "shared address"},
+	} {
+		description, exists := descriptions[toolName]
+		if !exists {
+			t.Fatalf("工具清单缺少 %s", toolName)
 		}
-		for _, wanted := range []string{"Read-only", "never probes", "probe_connectivity"} {
-			if !strings.Contains(tool.Description, wanted) {
-				t.Fatalf("query_topology 说明缺少 %q：%s", wanted, tool.Description)
+		for _, wanted := range wantedParts {
+			if !strings.Contains(description, wanted) {
+				t.Fatalf("%s 说明缺少 %q：%s", toolName, wanted, description)
 			}
 		}
-		return
 	}
-	t.Fatalf("工具清单缺少 query_topology：%+v", toolList.Tools)
 }
 
 // queryTopologyFixture 是 query_topology 的单机部署进程内夹具：本机设备
@@ -479,6 +487,178 @@ func TestQueryTopologyPairDetailsDefault(t *testing.T) {
 	}
 	if len(auditAfter) != len(auditBefore) {
 		t.Fatalf("逐对查询不应写审计：查询前 %d 行，查询后 %d 行", len(auditBefore), len(auditAfter))
+	}
+}
+
+// TestQueryTopologyTranslatesShareAddress 覆盖共享地址翻译：按提供方设
+// 备的网络成员地址识别共享存储，按目标服务器系统类型输出实际路径；查询
+// 本身不探测、不写审计、不改快照修订号与本地观察。
+func TestQueryTopologyTranslatesShareAddress(t *testing.T) {
+	fixture := newQueryTopologyFixture(t)
+	linuxServer, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "共享翻译Linux", Host: "192.0.2.110", Port: 22, User: "deploy",
+	}, nil, nil, "工作设备")
+	if err != nil {
+		t.Fatal(err)
+	}
+	windowsServer, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "共享翻译Windows", Host: "192.0.2.111", Port: 22, User: "deploy",
+		ShellType: models.ShellPowerShell,
+	}, nil, nil, "工作设备")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.GrantServers(fixture.profileID, []string{
+		linuxServer.ServerID, windowsServer.ServerID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.AddSecret(
+		"SHARE_TRANSLATION_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.AllowSecrets(
+		[]string{"SHARE_TRANSLATION_PASSWORD"},
+		[]string{"共享翻译Linux", "共享翻译Windows"},
+		store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "SHARE_TRANSLATION_PASSWORD", Drive: "Z",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := fixture.store.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditRowsBefore, err := fixture.store.AuditRows(1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observationPath, found, err := probeobserve.PathFor("")
+	if err != nil || !found {
+		t.Fatalf("解析本地探测结果文件：%v found=%v", err, found)
+	}
+	observationBefore, err := os.ReadFile(observationPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+
+	text, isError := fixture.callQuery(t, map[string]any{
+		"from": linuxServer.ServerID,
+		"to":   []string{`\\100.64.0.3\datasets\Reports\2026.bin`},
+	})
+	if isError {
+		t.Fatalf("共享地址翻译失败：%s", text)
+	}
+	wantLinux := strings.Join([]string{
+		"服务器：共享翻译Linux",
+		"共享存储：datasets（提供方设备：NAS）",
+		"可挂载：是",
+		"实际路径：/mnt/sshmgr/datasets/Reports/2026.bin",
+		"本翻译只读登记数据；是否已现场挂载请用 list_shares 的现场检测确认。",
+	}, "\n")
+	if text != wantLinux {
+		t.Fatalf("Linux 共享地址翻译输出不符\n得到：\n%s\n期待：\n%s", text, wantLinux)
+	}
+
+	text, isError = fixture.callQuery(t, map[string]any{
+		"from": windowsServer.ServerID,
+		"to":   []string{"smb://100.64.0.3/datasets/Reports/2026.bin"},
+	})
+	if isError {
+		t.Fatalf("Windows 共享地址翻译失败：%s", text)
+	}
+	if !strings.Contains(text, "可挂载：是") ||
+		!strings.Contains(text, `实际路径：Z:\Reports\2026.bin`) {
+		t.Fatalf("Windows 共享地址翻译输出不符：%s", text)
+	}
+
+	revisionAfter, err := fixture.store.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revisionAfter != revision {
+		t.Fatalf("共享地址翻译不应推进快照修订号：%d -> %d", revision, revisionAfter)
+	}
+	auditRowsAfter, err := fixture.store.AuditRows(1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditRowsAfter) != len(auditRowsBefore) {
+		t.Fatalf("共享地址翻译不应写审计：查询前 %d 行，查询后 %d 行", len(auditRowsBefore), len(auditRowsAfter))
+	}
+	observationAfter, err := os.ReadFile(observationPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if string(observationAfter) != string(observationBefore) {
+		t.Fatal("共享地址翻译不应清理或改写本地探测结果文件")
+	}
+}
+
+// TestQueryTopologyShareAddressRejections 覆盖授权范围、可挂载范围与目标
+// 列表规则；授权外查询不泄露共享存储详情。
+func TestQueryTopologyShareAddressRejections(t *testing.T) {
+	fixture := newQueryTopologyFixture(t)
+	if err := fixture.store.AddSecret(
+		"SHARE_QUERY_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.AllowSecrets(
+		[]string{"SHARE_QUERY_PASSWORD"}, []string{"入口一"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "SHARE_QUERY_PASSWORD", Drive: "Z",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	external, err := fixture.store.GetServerByName("外部入口")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinaryTarget, err := fixture.store.GetServerByName("入口二")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shareAddress := `\\100.64.0.3\datasets\Reports\2026.bin`
+
+	text, isError := fixture.callQuery(t, map[string]any{
+		"from": external.ID, "to": []string{shareAddress},
+	})
+	if !isError || !strings.Contains(text, "server is not in your profile") ||
+		strings.Contains(text, "datasets") || strings.Contains(text, "NAS") ||
+		strings.Contains(text, "Z:") {
+		t.Fatalf("授权外共享地址翻译错误 = %q error=%v", text, isError)
+	}
+
+	text, isError = fixture.callQuery(t, map[string]any{
+		"from": ordinaryTarget.ID, "to": []string{shareAddress},
+	})
+	if !isError || !strings.Contains(text, "不在共享存储 datasets 的可挂载范围内") {
+		t.Fatalf("不可挂载服务器的错误 = %q error=%v", text, isError)
+	}
+
+	text, isError = fixture.callQuery(t, map[string]any{
+		"from": ordinaryTarget.ID, "to": []string{shareAddress, "NAS"},
+	})
+	if !isError || !strings.Contains(text, "不能同时包含共享地址与普通目标") {
+		t.Fatalf("共享地址与普通目标混用的错误 = %q error=%v", text, isError)
+	}
+
+	text, isError = fixture.callQuery(t, map[string]any{
+		"from": ordinaryTarget.ID, "to": []string{shareAddress, shareAddress},
+	})
+	if !isError || !strings.Contains(text, "一次只能查询一个共享地址") {
+		t.Fatalf("多个共享地址的错误 = %q error=%v", text, isError)
 	}
 }
 
@@ -903,6 +1083,22 @@ func TestQueryTopologyIgnoresExpiredObservationWithoutRewrite(t *testing.T) {
 // 例未记录本机设备两个拒绝分支。
 func TestQueryTopologyClientCacheAndOldAuthority(t *testing.T) {
 	source := newQueryTopologyFixture(t)
+	if err := source.store.AddSecret(
+		"SHARE_QUERY_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.store.AllowSecrets(
+		[]string{"SHARE_QUERY_PASSWORD"}, []string{"入口一"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.store.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "SHARE_QUERY_PASSWORD", Drive: "Z",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
 	_, projectToken, err := source.store.AddProject("拓扑查询项目", source.profileID)
 	if err != nil {
 		t.Fatal(err)
@@ -983,6 +1179,23 @@ func TestQueryTopologyClientCacheAndOldAuthority(t *testing.T) {
 	}
 	if len(auditBlob) != 0 {
 		t.Fatalf("客户端查询不应写审计：%s", auditBlob)
+	}
+
+	workServer, err := source.store.GetServerByName("入口一")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, isError = call(map[string]any{
+		"from": workServer.ID,
+		"to":   []string{`\\100.64.0.3\datasets\Reports\2026.bin`},
+	})
+	if isError || !strings.Contains(text, "服务器：入口一") ||
+		!strings.Contains(text, "可挂载：是") ||
+		!strings.Contains(text, "实际路径：/mnt/sshmgr/datasets/Reports/2026.bin") {
+		t.Fatalf("客户端共享地址翻译结果 = %q error=%v", text, isError)
+	}
+	if strings.Contains(text, "100.64.0.3") || strings.Contains(text, "mount-password") {
+		t.Fatalf("客户端共享地址翻译泄露敏感信息：%s", text)
 	}
 
 	emptyMeta, err := json.Marshal(map[string]string{})
