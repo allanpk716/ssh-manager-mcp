@@ -1385,6 +1385,50 @@ func TestRelayFileWindowsLocalCopyEscapesCurlyQuoteCharacters(t *testing.T) {
 	}
 }
 
+// TestRelayFileWindowsLocalCopyDriveRootDirectories 钉住盘符根目录的写法：
+// 源文件或目标文件位于盘符根时，robocopy 的目录参数必须补成「C:\」，不能
+// 留成会被解释为该盘当前目录的「C:」。
+func TestRelayFileWindowsLocalCopyDriveRootDirectories(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, false)
+	session := environment.openSession(t)
+	sourceRemote := `Z:\f.bin`
+	targetRemote := "C:/t.bin"
+	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("drive root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_share_address": `\\192.0.2.10\datasets\f.bin`,
+			"to_server_id":       environment.windowsID,
+			"to_path":            targetRemote,
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("relay_file：err=%v 失败=%s", err, toolResultText(result))
+	}
+	var output RelayOutput
+	unmarshalToolJSON(t, result, &output)
+	if _, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second); status != bgStatusDone ||
+		errorText != "" {
+		t.Fatalf("盘符根路径的 Windows 本地拷贝失败：%s", errorText)
+	}
+	commands := environment.fake.recordedCommands()
+	scripts := encodedCommandScripts(commands[len(commands)-1])
+	copyScript := scripts[len(scripts)-1]
+	if !strings.Contains(copyScript, "$__sshmgr_robocopy_source_directory = 'Z:\\'") {
+		t.Fatalf("robocopy 源目录应补成盘符根 Z:\\：%s", copyScript)
+	}
+	if !strings.Contains(copyScript, "robocopy 'Z:\\' 'C:\\t.bin.sshmgr-partial' 'f.bin'") {
+		t.Fatalf("robocopy 参数应使用盘符根目录：%s", copyScript)
+	}
+	if content, err := os.ReadFile(environment.hostPath(targetRemote)); err != nil ||
+		string(content) != "drive root" {
+		t.Fatalf("盘符根源文件的目标内容 = %q err=%v", content, err)
+	}
+}
+
 // TestRelayFileLocalCopyRejectsInvalidVia 钉住另一端可直接挂载时的 via 约
 // 束：这时在另一端本地拷贝，不能再指定共享地址端点。
 func TestRelayFileLocalCopyRejectsInvalidVia(t *testing.T) {

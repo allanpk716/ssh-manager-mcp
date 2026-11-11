@@ -636,9 +636,9 @@ func windowsRemotePath(remotePath string) string {
 func buildRelayWindowsLocalCopyCommand(sourcePath, targetPath string) string {
 	source := windowsRemotePath(sourcePath)
 	target := windowsRemotePath(targetPath)
-	sourceDirectory := windowsRemotePath(path.Dir(sourcePath))
+	sourceDirectory := windowsDriveRootDirectory(windowsRemotePath(path.Dir(sourcePath)))
 	sourceName := path.Base(sourcePath)
-	partialDirectory := target + relayPartialSuffix
+	partialDirectory := windowsDriveRootDirectory(target + relayPartialSuffix)
 	script := strings.Join([]string{
 		"$ErrorActionPreference = 'Stop'",
 		"$__sshmgr_source = " + sshbroker.PowerShellSingleQuote(source),
@@ -672,6 +672,17 @@ func buildRelayWindowsLocalCopyCommand(sourcePath, targetPath string) string {
 		"exit 0",
 	}, "\n")
 	return sshbroker.PowerShellEncodedCommand(script)
+}
+
+// windowsDriveRootDirectory 把 robocopy 的目录参数从裸盘符补成盘符根。
+// 「C:」会被 Windows 解释为该盘的当前目录，只有「C:\」才是盘符根本身。
+func windowsDriveRootDirectory(directory string) string {
+	if len(directory) == 2 && directory[1] == ':' &&
+		((directory[0] >= 'A' && directory[0] <= 'Z') ||
+			(directory[0] >= 'a' && directory[0] <= 'z')) {
+		return directory + `\`
+	}
+	return directory
 }
 
 func runRelayWindowsLocalCopyTask(
