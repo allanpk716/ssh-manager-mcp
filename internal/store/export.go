@@ -33,11 +33,14 @@ type Snapshot struct {
 	Devices                 []SnapshotDevice                 `json:"devices,omitempty"`
 	NetworkMemberships      []SnapshotNetworkMembership      `json:"network_memberships,omitempty"`
 	DeviceLayoutCoordinates []SnapshotDeviceLayoutCoordinate `json:"device_layout_coordinates,omitempty"`
-	Servers                 []SnapshotServer                 `json:"servers"`
-	Profiles                []SnapshotProfile                `json:"profiles"`
-	Grants                  []SnapshotGrant                  `json:"grants"`
-	Projects                []SnapshotProject                `json:"projects"`
-	HostKeys                []SnapshotHostKey                `json:"host_keys"`
+	// ContainerLayoutCoordinates 是站点区域与网络分组框在各视图里的坐标。
+	// 全量快照与 profile 裁剪快照都携带；旧快照没有该段时导入零行。
+	ContainerLayoutCoordinates []SnapshotContainerLayoutCoordinate `json:"container_layout_coordinates,omitempty"`
+	Servers                    []SnapshotServer                    `json:"servers"`
+	Profiles                   []SnapshotProfile                   `json:"profiles"`
+	Grants                     []SnapshotGrant                     `json:"grants"`
+	Projects                   []SnapshotProject                   `json:"projects"`
+	HostKeys                   []SnapshotHostKey                   `json:"host_keys"`
 	// EntryHostKeys（票 #58）是按服务器条目存放的锚；HostKeys 仍为兜底地址
 	// 推导出的旧格式行，旧客户端靠它继续校验。旧快照解码时本字段为空。
 	EntryHostKeys []SnapshotEntryHostKey `json:"entry_host_keys,omitempty"`
@@ -473,6 +476,7 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	snap.Devices = topology.Devices
 	snap.NetworkMemberships = topology.NetworkMemberships
 	snap.DeviceLayoutCoordinates = topology.DeviceLayoutCoordinates
+	snap.ContainerLayoutCoordinates = topology.ContainerLayoutCoordinates
 
 	// profiles
 	rp, err := s.db.Query(`SELECT id,name,created_at,updated_at FROM profiles ORDER BY id`)
@@ -806,6 +810,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	snap.Devices = topology.Devices
 	snap.NetworkMemberships = topology.NetworkMemberships
 	snap.DeviceLayoutCoordinates = topology.DeviceLayoutCoordinates
+	snap.ContainerLayoutCoordinates = topology.ContainerLayoutCoordinates
 
 	// ONLY the referenced credentials (decrypted under s.masterKey). The IN
 	// clause is built from collected ids — a granted set is small (tens), and
@@ -940,17 +945,18 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	return snap, nil
 }
 
-// snapshotTopologySection 是快照里的五段网络拓扑数据。全量快照与按 profile
+// snapshotTopologySection 是快照里的六段网络拓扑数据。全量快照与按 profile
 // 裁剪的快照都用这个结构承载，避免两类导出的字段读取方式漂移。
 type snapshotTopologySection struct {
-	Sites                   []SnapshotSite
-	Networks                []SnapshotNetwork
-	Devices                 []SnapshotDevice
-	NetworkMemberships      []SnapshotNetworkMembership
-	DeviceLayoutCoordinates []SnapshotDeviceLayoutCoordinate
+	Sites                      []SnapshotSite
+	Networks                   []SnapshotNetwork
+	Devices                    []SnapshotDevice
+	NetworkMemberships         []SnapshotNetworkMembership
+	DeviceLayoutCoordinates    []SnapshotDeviceLayoutCoordinate
+	ContainerLayoutCoordinates []SnapshotContainerLayoutCoordinate
 }
 
-// readSnapshotTopologySection 读取快照需要的五段网络拓扑数据。profileID
+// readSnapshotTopologySection 读取快照需要的六段网络拓扑数据。profileID
 // 非空时按该 profile 的授权范围裁剪设备，并把客户端实例关联只保留给发起
 // 拉取的客户端实例；为空时读取全量拓扑。站点与网络始终全部读取。
 func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID string) (snapshotTopologySection, error) {
@@ -1071,12 +1077,19 @@ func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID s
 			coordinates = append(coordinates, coordinate)
 		}
 	}
+	// 站点与网络在裁剪快照里始终全部下发，它们的坐标也全部携带；引用已
+	// 删除实体的坐标由删除路径清理，这里不再逐行裁剪。
+	containerCoordinates, err := s.snapshotContainerLayoutCoordinates()
+	if err != nil {
+		return snapshotTopologySection{}, err
+	}
 	return snapshotTopologySection{
-		Sites:                   sites,
-		Networks:                networks,
-		Devices:                 devices,
-		NetworkMemberships:      memberships,
-		DeviceLayoutCoordinates: coordinates,
+		Sites:                      sites,
+		Networks:                   networks,
+		Devices:                    devices,
+		NetworkMemberships:         memberships,
+		DeviceLayoutCoordinates:    coordinates,
+		ContainerLayoutCoordinates: containerCoordinates,
 	}, nil
 }
 
@@ -1139,7 +1152,8 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 		  (SELECT COUNT(*) FROM networks) +
 		  (SELECT COUNT(*) FROM devices) +
 		  (SELECT COUNT(*) FROM network_memberships) +
-		  (SELECT COUNT(*) FROM device_layout_coordinates)
+		  (SELECT COUNT(*) FROM device_layout_coordinates) +
+		  (SELECT COUNT(*) FROM container_layout_coordinates)
 	`).Scan(&existingRows); err != nil {
 		return err
 	}
@@ -1211,6 +1225,9 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 		}
 	}
 	if err := importDeviceLayoutCoordinatesTx(tx, snap.DeviceLayoutCoordinates); err != nil {
+		return err
+	}
+	if err := importContainerLayoutCoordinatesTx(tx, snap.ContainerLayoutCoordinates); err != nil {
 		return err
 	}
 	// 软件清单只恢复到 owner 库。客户端缓存导入即使收到带清单段的旧文件

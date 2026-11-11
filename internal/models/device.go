@@ -50,3 +50,16 @@ type DeviceLayoutCoordinate struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// ContainerLayoutCoordinate 是拓扑图某个视图里一个站点区域或网络分组框的
+// 坐标。EntityType 是 site（站点区域）或 network（网络分组框）；坐标由拓
+// 扑图页面写入。
+type ContainerLayoutCoordinate struct {
+	ViewKey    string
+	EntityType string
+	EntityID   string
+	X          float64
+	Y          float64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}

@@ -69,6 +69,10 @@ func (s storeSource) Topology(string) (*webui.TopologyData, error) {
 	if err != nil {
 		return nil, err
 	}
+	containerCoordinates, err := st.ListContainerLayoutCoordinates()
+	if err != nil {
+		return nil, err
+	}
 	local, err := dialdevice.Current(st, "")
 	if err != nil {
 		return nil, err
@@ -80,7 +84,9 @@ func (s storeSource) Topology(string) (*webui.TopologyData, error) {
 		Devices:           make([]webui.TopologyDevice, 0, len(devices)),
 		Memberships:       make([]webui.TopologyMembership, 0),
 		LayoutCoordinates: make([]webui.TopologyLayoutCoordinate, 0, len(coordinates)),
-		LocalDevice:       localDeviceView(local),
+		ContainerLayoutCoordinates: make(
+			[]webui.TopologyContainerLayoutCoordinate, 0, len(containerCoordinates)),
+		LocalDevice: localDeviceView(local),
 	}
 	for _, site := range sites {
 		data.Sites = append(data.Sites, webui.TopologySite{ID: site.ID, Name: site.Name, Note: site.Note})
@@ -134,6 +140,12 @@ func (s storeSource) Topology(string) (*webui.TopologyData, error) {
 			ViewKey: coordinate.ViewKey, DeviceID: coordinate.DeviceID, X: coordinate.X, Y: coordinate.Y,
 		})
 	}
+	for _, coordinate := range containerCoordinates {
+		data.ContainerLayoutCoordinates = append(data.ContainerLayoutCoordinates, webui.TopologyContainerLayoutCoordinate{
+			ViewKey: coordinate.ViewKey, EntityType: coordinate.EntityType,
+			EntityID: coordinate.EntityID, X: coordinate.X, Y: coordinate.Y,
+		})
+	}
 	return data, nil
 }
 
@@ -159,6 +171,8 @@ func (s snapshotSource) Topology(instance string) (*webui.TopologyData, error) {
 		Devices:           make([]webui.TopologyDevice, 0, len(snapshot.Devices)),
 		Memberships:       make([]webui.TopologyMembership, 0, len(snapshot.NetworkMemberships)),
 		LayoutCoordinates: make([]webui.TopologyLayoutCoordinate, 0, len(snapshot.DeviceLayoutCoordinates)),
+		ContainerLayoutCoordinates: make(
+			[]webui.TopologyContainerLayoutCoordinate, 0, len(snapshot.ContainerLayoutCoordinates)),
 	}
 	for _, site := range snapshot.Sites {
 		data.Sites = append(data.Sites, webui.TopologySite{ID: site.ID, Name: site.Name, Note: site.Note})
@@ -251,6 +265,12 @@ func (s snapshotSource) Topology(instance string) (*webui.TopologyData, error) {
 	for _, coordinate := range snapshot.DeviceLayoutCoordinates {
 		data.LayoutCoordinates = append(data.LayoutCoordinates, webui.TopologyLayoutCoordinate{
 			ViewKey: coordinate.ViewKey, DeviceID: coordinate.DeviceID, X: coordinate.X, Y: coordinate.Y,
+		})
+	}
+	for _, coordinate := range snapshot.ContainerLayoutCoordinates {
+		data.ContainerLayoutCoordinates = append(data.ContainerLayoutCoordinates, webui.TopologyContainerLayoutCoordinate{
+			ViewKey: coordinate.ViewKey, EntityType: coordinate.EntityType,
+			EntityID: coordinate.EntityID, X: coordinate.X, Y: coordinate.Y,
 		})
 	}
 	return data, nil
