@@ -43,7 +43,7 @@ type ReselectResult struct {
 // Reselect 让仍在可挂载范围内的 Linux 或 macOS 服务器重新选择共享地址。
 func (m *Manager) Reselect(ctx context.Context, request ReselectRequest) (*ReselectResult, error) {
 	if m == nil || m.store == nil {
-		return nil, errors.New("共享存储管理模块没有绑定存储")
+		return nil, errManagerWithoutStore
 	}
 	server, err := m.store.ResolveServer(request.Server)
 	if err != nil {
@@ -56,13 +56,7 @@ func (m *Manager) Reselect(ctx context.Context, request ReselectRequest) (*Resel
 	if err != nil {
 		return nil, err
 	}
-	inRange := false
-	for _, candidate := range share.MountableServers {
-		if candidate.ID == server.ID {
-			inRange = true
-			break
-		}
-	}
+	inRange := sharedStorageHasMountableServer(share, server.ID)
 	if !inRange {
 		_ = m.writeReselectAudit(server.Name, share.Name, share.Version,
 			request.Force, "outside-mountable-range", true)

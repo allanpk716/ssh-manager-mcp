@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 )
 
 const (
+	LinuxMountMarker     = "SSHMGR-LINUX-MOUNT"
 	LinuxUnmountMarker   = "SSHMGR-LINUX-UNMOUNT"
 	LinuxReselectMarker  = "SSHMGR-LINUX-RESELECT"
 	LinuxEnumerateMarker = "SSHMGR-LINUX-ENUM"
@@ -74,6 +74,11 @@ func (s *LinuxServer) Handler(command string, stdin io.Reader) (string, string, 
 		return "Linux\n", "", 0
 	case strings.Contains(command, "sshmgr_probe_one"):
 		return probeOutput(command, s.ReachableAddresses), "", 0
+	case strings.Contains(command, LinuxMountMarker):
+		if s.RevokedMarker != "" {
+			return "", LinuxMountMarker + " share-revoked", 90
+		}
+		return "", LinuxMountMarker + " unexpected-state", 90
 	case strings.Contains(command, LinuxReselectMarker):
 		return s.reselect(command, input)
 	case strings.Contains(command, LinuxEnumerateMarker):
@@ -82,10 +87,17 @@ func (s *LinuxServer) Handler(command string, stdin io.Reader) (string, string, 
 		if s.LockHeld {
 			return "", LinuxUnmountMarker + " lock-timeout", 87
 		}
-		if !s.hasManagedFstabEntry() {
+		hasConfiguration := s.hasManagedFstabEntry()
+		if !hasConfiguration && s.Credential == "" && !s.Mounted {
+			if strings.Contains(command, "sshmgr_write_revoked_marker=yes") {
+				s.writeRevokedMarker(command)
+				if strings.Contains(command, "sshmgr_allow_missing_configuration=yes") {
+					return s.unmountOutput("success"), "", 0
+				}
+			}
 			return "", LinuxUnmountMarker + " not-managed", 89
 		}
-		if strings.Contains(command, "sshmgr_reject_remote_version_newer=yes") &&
+		if hasConfiguration && strings.Contains(command, "sshmgr_reject_remote_version_newer=yes") &&
 			s.ShareVersion > requestedVersion(command) {
 			return "", LinuxUnmountMarker + " remote-version-newer", 91
 		}
@@ -188,17 +200,6 @@ func (s *LinuxServer) enumerateOutput() string {
 	return out.String()
 }
 
-func requestedVersion(command string) int64 {
-	for _, field := range strings.Fields(command) {
-		if value, found := strings.CutPrefix(field, "sshmgr_version="); found {
-			if parsed, err := strconv.ParseInt(strings.Trim(value, "'"), 10, 64); err == nil {
-				return parsed
-			}
-		}
-	}
-	return 0
-}
-
 func (s *LinuxServer) State() LinuxServerState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -251,20 +252,11 @@ func (s *LinuxServer) deleteConfiguration() {
 }
 
 func (s *LinuxServer) writeRevokedMarker(command string) {
-	version := s.ShareVersion
-	for _, field := range strings.Fields(command) {
-		if value, found := strings.CutPrefix(field, "sshmgr_version="); found {
-			if parsed, err := strconv.ParseInt(strings.Trim(value, "'"), 10, 64); err == nil {
-				version = parsed
-			}
-		}
-	}
-	if version == 0 {
-		version = s.ShareVersion + 1
-	}
-	s.RevokedMarker = fmt.Sprintf("sshmgr-share=%s;sshmgr-version=%d;sshmgr-state=revoked",
-		url.PathEscape(s.ShareName), version)
-	s.RevokedMarkerPath = "/etc/sshmgr/shares/" + url.PathEscape(s.ShareName) + ".revoked"
+	content, path, version := revokedMarker(
+		s.ShareName, s.ShareVersion, command, "/etc/sshmgr/shares",
+	)
+	s.RevokedMarker = content
+	s.RevokedMarkerPath = path
 	s.ShareVersion = version
 	s.History = append(s.History, "write-revoked-marker")
 }

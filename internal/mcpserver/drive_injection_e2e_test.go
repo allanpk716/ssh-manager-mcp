@@ -2510,7 +2510,7 @@ func TestNetworkDriveInjectionUsesVirtualNetworkWithNote(t *testing.T) {
 
 // TestNetworkDriveInjectionConcurrentCommandsStaySafe 钉住并发安全：多条
 // MCP 调用同时执行时共享同一份选址缓存，不破坏结果、不泄漏密码；探测至
-// 少发生一次，至多每条命令一次（本票不要求并发合并成一次探测）。
+// 少发生一次，至多每条命令一次，不要求并发合并探测。
 func TestNetworkDriveInjectionConcurrentCommandsStaySafe(t *testing.T) {
 	useManualNetworkDriveClock(t)
 	fixture := seedNetworkDriveVault(t, nil)

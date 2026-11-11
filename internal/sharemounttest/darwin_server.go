@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 )
 
 const (
+	DarwinMountMarker     = "SSHMGR-DARWIN-MOUNT"
 	DarwinUnmountMarker   = "SSHMGR-DARWIN-UNMOUNT"
 	DarwinReselectMarker  = "SSHMGR-DARWIN-RESELECT"
 	DarwinEnumerateMarker = "SSHMGR-DARWIN-ENUM"
@@ -64,6 +64,11 @@ func (s *DarwinServer) Handler(command string, stdin io.Reader) (string, string,
 		return "Darwin\n", "", 0
 	case strings.Contains(command, "sshmgr_probe_one"):
 		return probeOutput(command, s.ReachableAddresses), "", 0
+	case strings.Contains(command, DarwinMountMarker):
+		if s.RevokedMarker != "" {
+			return "", DarwinMountMarker + " share-revoked", 90
+		}
+		return "", DarwinMountMarker + " unexpected-state", 90
 	case strings.Contains(command, DarwinReselectMarker):
 		return s.reselect(command, input)
 	case strings.Contains(command, DarwinEnumerateMarker):
@@ -72,24 +77,30 @@ func (s *DarwinServer) Handler(command string, stdin io.Reader) (string, string,
 		if s.LockHeld {
 			return "", DarwinUnmountMarker + " lock-timeout", 87
 		}
-		if !s.hasManagedMapEntry() {
+		hasConfiguration := s.hasManagedMapEntry()
+		if !hasConfiguration && !s.Mounted {
+			if strings.Contains(command, "sshmgr_write_revoked_marker=yes") {
+				s.writeRevokedMarker(command)
+				if strings.Contains(command, "sshmgr_allow_missing_configuration=yes") {
+					return s.unmountOutput("success"), "", 0
+				}
+			}
 			return "", DarwinUnmountMarker + " not-managed", 89
 		}
-		if strings.Contains(command, "sshmgr_reject_remote_version_newer=yes") &&
+		if hasConfiguration && strings.Contains(command, "sshmgr_reject_remote_version_newer=yes") &&
 			s.ShareVersion > requestedVersion(command) {
 			return "", DarwinUnmountMarker + " remote-version-newer", 91
 		}
 		s.deleteConfiguration()
+		s.reloadAutomount()
 		force := strings.Contains(command, "sshmgr_force=yes")
 		if strings.Contains(command, "sshmgr_write_revoked_marker=yes") {
 			s.writeRevokedMarker(command)
 		}
 		if strings.Contains(command, "sshmgr_skip_unmount=yes") {
-			s.reloadAutomount()
 			return s.unmountOutput("success"), "", 0
 		}
 		if !s.Mounted {
-			s.reloadAutomount()
 			return s.unmountOutput("success"), "", 0
 		}
 		if len(s.BusyProcesses) > 0 && !force {
@@ -104,7 +115,6 @@ func (s *DarwinServer) Handler(command string, stdin io.Reader) (string, string,
 			return "", DarwinUnmountMarker + " force-unmount-failed", 85
 		}
 		s.unmount()
-		s.reloadAutomount()
 		return s.unmountOutput("success"), "", 0
 	default:
 		return "", "unexpected command: " + command, 90
@@ -239,20 +249,11 @@ func (s *DarwinServer) deleteConfiguration() {
 }
 
 func (s *DarwinServer) writeRevokedMarker(command string) {
-	version := s.ShareVersion
-	for _, field := range strings.Fields(command) {
-		if value, found := strings.CutPrefix(field, "sshmgr_version="); found {
-			if parsed, err := strconv.ParseInt(strings.Trim(value, "'"), 10, 64); err == nil {
-				version = parsed
-			}
-		}
-	}
-	if version == 0 {
-		version = s.ShareVersion + 1
-	}
-	s.RevokedMarker = fmt.Sprintf("sshmgr-share=%s;sshmgr-version=%d;sshmgr-state=revoked",
-		url.PathEscape(s.ShareName), version)
-	s.RevokedMarkerPath = "/etc/sshmgr/" + url.PathEscape(s.ShareName) + ".revoked"
+	content, path, version := revokedMarker(
+		s.ShareName, s.ShareVersion, command, "/etc/sshmgr",
+	)
+	s.RevokedMarker = content
+	s.RevokedMarkerPath = path
 	s.ShareVersion = version
 	s.History = append(s.History, "write-revoked-marker")
 }

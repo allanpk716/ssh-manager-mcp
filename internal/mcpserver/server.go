@@ -174,7 +174,7 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 
 	// 桥热升级 (spec 实施决策第 2 条): 统一忙判据 —— 隧道/任务两路计数源挂上
 	// 两个管理器 (各自持锁现读), 在飞一路由下面 addTrackedTool 的包装层进出
-	// 计数。reload_self 工具与自动换手 (后续票) 以 busy.Report() 判忙; 发起
+	// 计数。reload_self 工具与自动换手功能以 busy.Report() 判忙; 发起
 	// 换手的 reload_self 注册时走 wrapInflight 豁免自身 (不计入在飞, 否则工具
 	// 触发永远自拒)。busy 的进程内出口是 serverRuntimes 登记表 (签名不动:
 	// NewServerFromSource 的返回形状被 serve.go 等既有调用方依赖), stdio

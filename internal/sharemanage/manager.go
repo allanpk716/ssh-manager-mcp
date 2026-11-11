@@ -17,8 +17,8 @@ import (
 var ErrWindowsUnmountUnsupported = errors.New(
 	"Windows 服务器不能执行共享存储卸载：sshmgr 不在其上留下任何持久改动")
 
-// Manager 是共享存储 owner 管理模块的入口。当前提供卸载与重选地址；撤
-// 销与残留检查在后续票里继续挂到同一个入口下。
+// Manager 是共享存储 owner 管理模块的入口，提供卸载、撤销、重选地址与
+// 残留检查四个操作。
 type Manager struct {
 	store   *store.Store
 	mounter *sharemount.Service
@@ -52,7 +52,7 @@ type UnmountResult struct {
 // 点。服务器不在可挂载范围或共享登记已删除时，远端会留下撤销标记。
 func (m *Manager) Unmount(ctx context.Context, request UnmountRequest) (*UnmountResult, error) {
 	if m == nil || m.store == nil {
-		return nil, errors.New("共享存储管理模块没有绑定存储")
+		return nil, errManagerWithoutStore
 	}
 	server, err := m.store.ResolveServer(request.Server)
 	if err != nil {
@@ -71,21 +71,20 @@ func (m *Manager) Unmount(ctx context.Context, request UnmountRequest) (*Unmount
 	if share != nil {
 		shareName = share.Name
 		version = share.Version
-		for _, candidate := range share.MountableServers {
-			if candidate.ID == server.ID {
-				inRange = true
-				break
-			}
-		}
+		inRange = sharedStorageHasMountableServer(share, server.ID)
 	}
 	if models.NormalizeShellType(string(server.ShellType)).IsWindows() {
 		_ = m.writeUnmountAudit(server.Name, shareName, version, request.Force,
 			"windows-unsupported", true)
 		return nil, ErrWindowsUnmountUnsupported
 	}
+	shareID := ""
+	if share != nil {
+		shareID = share.ID
+	}
 
 	remote, remoteErr := m.mounter.Unmount(ctx, sharemount.UnmountRequest{
-		Server: server, ShareName: shareName, Version: version,
+		Server: server, ShareName: shareName, ShareID: shareID, Version: version,
 		Force: request.Force, WriteRevokedMarker: share == nil || !inRange,
 	})
 	result := &UnmountResult{
@@ -111,6 +110,15 @@ func (m *Manager) Unmount(ctx context.Context, request UnmountRequest) (*Unmount
 		return nil, err
 	}
 	return result, nil
+}
+
+func sharedStorageHasMountableServer(share *models.SharedStorage, serverID string) bool {
+	for _, candidate := range share.MountableServers {
+		if candidate.ID == serverID {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) writeUnmountAudit(
@@ -148,6 +156,8 @@ func unmountAuditResult(err error, remote *sharemount.UnmountResult) string {
 		return "unmount-failed"
 	case errors.Is(err, sharemount.ErrUnmountOutputInvalid):
 		return "output-invalid"
+	case errors.Is(err, sharemount.ErrUnmountRemoteVersionNewer):
+		return "remote-version-newer"
 	case remote != nil && remote.Result != "":
 		return remote.Result
 	default:

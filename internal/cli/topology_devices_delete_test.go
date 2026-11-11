@@ -11,16 +11,27 @@ import (
 func TestDevicesRemovePreviewSeparatesRemoteUnmountAndWindowsSnapshotSync(t *testing.T) {
 	dbPath, masterKey := withCliStoreEnv(t)
 	seedDeviceDeleteSharedStorage(t, dbPath, masterKey)
+	st, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.MoveServerToDevice("linux-web", "NAS"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	out := runCli(t, "devices", "rm", "NAS", "--yes")
 	for _, want := range []string{
 		"共享存储：",
 		"datasets",
 		"Linux 与 macOS 服务器（将删除配置并卸载）：",
-		"linux-web（所属设备 linux-device，系统类型 Linux 或 macOS）",
+		"linux-web（所属设备 NAS，系统类型 Linux 或 macOS）",
+		"随设备一起删除，本次不会清理；如需清理，先运行 shares unmount datasets linux-web",
 		"Windows 服务器（将随快照同步停止注入）：",
 		"windows-web（所属设备 windows-device，系统类型 Windows）",
-		"datasets / linux-web：连不上；请用 shares residue 检查残留",
+		"datasets / linux-web：未清理；服务器条目随设备一起删除，删除后无法再连接",
 		"已删除设备 NAS",
 	} {
 		if !strings.Contains(out, want) {

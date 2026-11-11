@@ -2,6 +2,7 @@ package sharemanage_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"path/filepath"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sharemanage"
+	"ssh-manager-mcp/internal/sharemount"
 	"ssh-manager-mcp/internal/sharemounttest"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/testsshd"
@@ -40,11 +42,11 @@ func TestDeleteDeviceCascadingRevokesLinuxAndDarwinServers(t *testing.T) {
 
 	linuxResult := deviceDeleteResultFor(t, result, "linux-web")
 	darwinResult := deviceDeleteResultFor(t, result, "darwin-web")
-	if linuxResult.Result != "success" || linuxResult.System != "Linux" ||
+	if linuxResult.Result != "success" || linuxResult.System != sharemount.CheckSystemLinux ||
 		linuxResult.Version != fixture.shareVersion+1 {
 		t.Fatalf("Linux 删除设备级联结果 = %+v", linuxResult)
 	}
-	if darwinResult.Result != "success" || darwinResult.System != "Darwin" ||
+	if darwinResult.Result != "success" || darwinResult.System != sharemount.CheckSystemDarwin ||
 		darwinResult.Version != fixture.shareVersion+1 {
 		t.Fatalf("macOS 删除设备级联结果 = %+v", darwinResult)
 	}
@@ -60,6 +62,31 @@ func TestDeleteDeviceCascadingRevokesLinuxAndDarwinServers(t *testing.T) {
 	if len(darwinState.MapLines) != 0 || len(darwinState.AutoMasterLines) != 0 ||
 		darwinState.Mounted || darwinState.RevokedMarker != wantMarker {
 		t.Fatalf("删除设备后的 macOS 状态 = %+v，期待撤销标记 %q", darwinState, wantMarker)
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-revoke-remote"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("删除设备级联远端审计行数 = %d：%+v", len(rows), rows)
+	}
+	audits := map[string]map[string]any{}
+	for _, row := range rows {
+		var summary map[string]any
+		if err := json.Unmarshal([]byte(row.Command), &summary); err != nil {
+			t.Fatal(err)
+		}
+		audits[summary["server"].(string)] = summary
+	}
+	for _, serverName := range []string{"linux-web", "darwin-web"} {
+		summary := audits[serverName]
+		if summary == nil || summary["share"] != "datasets" ||
+			summary["result"] != "success" ||
+			summary["version"] != float64(fixture.shareVersion+1) {
+			t.Fatalf("%s 的删除设备级联远端审计 = %#v", serverName, summary)
+		}
 	}
 }
 
@@ -117,11 +144,12 @@ func TestDeleteDeviceCascadingReportsBusyAndUnavailableServersWithoutRollback(t 
 	}
 }
 
-func TestDeleteDeviceCascadingStillDialsServerEntryDeletedWithDevice(t *testing.T) {
+func TestDeleteDeviceCascadingSkipsServerEntryDeletedWithDevice(t *testing.T) {
 	fixture := newDeviceDeleteFixture(t)
 	if _, err := fixture.store.MoveServerToDevice("linux-web", "NAS"); err != nil {
 		t.Fatal(err)
 	}
+	before := fixture.linux.State()
 	preview, err := fixture.store.DeviceDeletePreview("NAS")
 	if err != nil {
 		t.Fatal(err)
@@ -134,11 +162,39 @@ func TestDeleteDeviceCascadingStillDialsServerEntryDeletedWithDevice(t *testing.
 		t.Fatal(err)
 	}
 	linuxResult := deviceDeleteResultFor(t, result, "linux-web")
-	if linuxResult.Result != "success" || linuxResult.System != "Linux" {
-		t.Fatalf("随设备删除的服务器条目也应完成远端撤销：%+v", linuxResult)
+	if linuxResult.Result != "not-cleaned" || !containsText([]string{linuxResult.Error},
+		"服务器条目随设备一起删除，删除后无法再连接") {
+		t.Fatalf("随设备删除的服务器条目应标为未清理：%+v", linuxResult)
 	}
-	if state := fixture.linux.State(); state.Mounted || state.Credential != "" {
-		t.Fatalf("随设备删除的服务器条目远端状态 = %+v", state)
+	after := fixture.linux.State()
+	if len(after.Commands) != len(before.Commands) || after.Mounted != before.Mounted ||
+		after.Credential != before.Credential || after.RevokedMarker != before.RevokedMarker {
+		t.Fatalf("随设备删除的服务器条目不应被远端连接：before=%+v after=%+v", before, after)
+	}
+	darwinResult := deviceDeleteResultFor(t, result, "darwin-web")
+	if darwinResult.Result != "success" {
+		t.Fatalf("其余服务器的级联撤销应保持不变：%+v", darwinResult)
+	}
+	if !containsText(result.Notices, "如需清理，先运行 shares unmount datasets linux-web") {
+		t.Fatalf("删除结果应提示先清理再删除设备：%+v", result.Notices)
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-revoke-remote"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	audits := map[string]map[string]any{}
+	for _, row := range rows {
+		var summary map[string]any
+		if err := json.Unmarshal([]byte(row.Command), &summary); err != nil {
+			t.Fatal(err)
+		}
+		audits[summary["server"].(string)] = summary
+	}
+	if audits["linux-web"] == nil || audits["linux-web"]["result"] != "not-cleaned" ||
+		audits["darwin-web"] == nil || audits["darwin-web"]["result"] != "success" {
+		t.Fatalf("删除设备级联远端审计 = %#v", audits)
 	}
 }
 

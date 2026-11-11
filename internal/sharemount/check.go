@@ -23,8 +23,9 @@ const (
 
 // 检测结论里的操作系统标识。
 const (
-	CheckSystemLinux  = "linux"
-	CheckSystemDarwin = "darwin"
+	CheckSystemLinux   = "linux"
+	CheckSystemDarwin  = "darwin"
+	CheckSystemWindows = "windows"
 )
 
 // ErrCheckOutputInvalid 表示远端固定检测命令的输出不符合协议。调用方应

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -85,6 +86,98 @@ func TestRevokeLinuxWithoutUnmountDeletesConfigurationAndKeepsMount(t *testing.T
 	}
 }
 
+func TestRevokeNeverMountedServerWritesMarkerAndBlocksMountShare(t *testing.T) {
+	tests := []struct {
+		name   string
+		system string
+		server string
+	}{
+		{name: "Linux", system: "linux", server: "linux-web"},
+		{name: "macOS", system: "darwin", server: "darwin-web"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newSystemUnmountFixture(t, testCase.system, false)
+			targetDeviceName := "linux-device"
+			if testCase.system == "darwin" {
+				targetDeviceName = "darwin-device"
+			}
+			if _, err := fixture.store.AddSite("办公室", ""); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fixture.store.AddNetwork(models.Network{
+				Name: "办公物理局域网", Type: models.NetworkPhysical, SiteName: "办公室",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for deviceName, address := range map[string]string{
+				"NAS": "192.0.2.10", targetDeviceName: "192.0.2.20",
+			} {
+				if _, err := fixture.store.AddNetworkMembership(
+					deviceName, "办公物理局域网", address,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+			shareBefore, err := fixture.store.GetSharedStorage("datasets")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if testCase.system == "darwin" {
+				fixture.darwin.MapLines = nil
+				fixture.darwin.AutoMasterLines = nil
+				fixture.darwin.Mounted = false
+				fixture.darwin.ReachableAddresses = []string{"192.0.2.10"}
+			} else {
+				fixture.linux.FstabLines = nil
+				fixture.linux.Credential = ""
+				fixture.linux.Mounted = false
+				fixture.linux.ReachableAddresses = []string{"192.0.2.10"}
+			}
+
+			result, err := fixture.manager.Revoke(context.Background(), sharemanage.RevokeRequest{
+				Share: "datasets", Server: testCase.server,
+			})
+			if err != nil {
+				t.Fatalf("从未挂载的服务器撤销不应失败：%v", err)
+			}
+			if result.Result != "success" || result.Version != shareBefore.Version+1 {
+				t.Fatalf("从未挂载的服务器撤销结果 = %+v", result)
+			}
+			var stateMarker string
+			if testCase.system == "darwin" {
+				stateMarker = fixture.darwin.State().RevokedMarker
+			} else {
+				stateMarker = fixture.linux.State().RevokedMarker
+			}
+			wantMarker := fmt.Sprintf(
+				"sshmgr-share=datasets;sshmgr-version=%d;sshmgr-state=revoked",
+				shareBefore.Version+1,
+			)
+			if stateMarker != wantMarker {
+				t.Fatalf("撤销标记 = %q，期待 %q", stateMarker, wantMarker)
+			}
+
+			share, err := fixture.store.GetSharedStorage("datasets")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server, err := fixture.store.ResolveServer(testCase.server)
+			if err != nil || server == nil {
+				t.Fatalf("解析服务器失败：%v %+v", err, server)
+			}
+			_, mountErr := (&sharemount.Service{Store: fixture.store}).Mount(context.Background(), sharemount.Request{
+				Share: share, Server: server, Password: []byte("mount-password"),
+			})
+			var mountFailure *sharemount.MountFailure
+			if !errors.As(mountErr, &mountFailure) ||
+				mountFailure.Class != sharemount.MountClassShareRevoked {
+				t.Fatalf("撤销后 mount_share 错误 = %v", mountErr)
+			}
+		})
+	}
+}
+
 func TestRevokeLinuxWithUnmountForceCleansRemoteAndRecordsFlags(t *testing.T) {
 	fixture := newUnmountFixture(t, false)
 	fixture.linux.BusyProcesses = []sharemounttest.BusyProcess{
@@ -125,6 +218,63 @@ func TestRevokeLinuxWithUnmountForceCleansRemoteAndRecordsFlags(t *testing.T) {
 	if summary["unmount"] != true || summary["force"] != true {
 		t.Fatalf("共享撤销审计应记录实际选项：%#v", summary)
 	}
+}
+
+func TestRevokeWritesRemoteResultAudit(t *testing.T) {
+	t.Run("远端成功", func(t *testing.T) {
+		fixture := newUnmountFixture(t, false)
+		if _, err := fixture.manager.Revoke(context.Background(), sharemanage.RevokeRequest{
+			Share: "datasets", Server: "linux-web", Unmount: true,
+		}); err != nil {
+			t.Fatalf("Revoke: %v", err)
+		}
+		rows, err := fixture.store.QueryAudit(store.AuditFilter{
+			OwnerOnly: true, Actions: []string{"share-revoke-remote"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].Status != "ok" {
+			t.Fatalf("远端撤销 owner 审计 = %+v", rows)
+		}
+		var summary map[string]any
+		if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
+			t.Fatal(err)
+		}
+		if summary["share"] != "datasets" || summary["server"] != "linux-web" ||
+			summary["result"] != "success" || summary["version"] != float64(2) ||
+			summary["unmount"] != true {
+			t.Fatalf("远端撤销审计摘要 = %#v", summary)
+		}
+		if strings.Contains(rows[0].Command, "mount-password") ||
+			strings.Contains(rows[0].Command, "mount-user") ||
+			strings.Contains(rows[0].Command, "192.0.2.10") {
+			t.Fatalf("远端撤销审计泄露敏感信息：%s", rows[0].Command)
+		}
+	})
+	t.Run("远端失败", func(t *testing.T) {
+		fixture := newUnmountFixture(t, false)
+		fixture.closeServer()
+		_, _ = fixture.manager.Revoke(context.Background(), sharemanage.RevokeRequest{
+			Share: "datasets", Server: "linux-web",
+		})
+		rows, err := fixture.store.QueryAudit(store.AuditFilter{
+			OwnerOnly: true, Actions: []string{"share-revoke-remote"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].Status != "error" {
+			t.Fatalf("远端失败的 owner 审计 = %+v", rows)
+		}
+		var summary map[string]any
+		if err := json.Unmarshal([]byte(rows[0].Command), &summary); err != nil {
+			t.Fatal(err)
+		}
+		if summary["result"] != "ssh-error" || summary["version"] != float64(2) {
+			t.Fatalf("远端失败审计摘要 = %#v", summary)
+		}
+	})
 }
 
 func TestRevokeWithNewPasswordRecordsRemainingServersAndKeepsRemoteClean(t *testing.T) {
@@ -189,8 +339,16 @@ func TestRevokeUnavailableServerKeepsRegistrationAndPointsToResidue(t *testing.T
 	result, err := fixture.manager.Revoke(context.Background(), sharemanage.RevokeRequest{
 		Share: "datasets", Server: "linux-web",
 	})
-	if err == nil || result != nil {
-		t.Fatalf("服务器连不上时应立即失败，结果 = %+v，错误 = %v", result, err)
+	if err == nil || result == nil {
+		t.Fatalf("服务器连不上时应返回结构化失败结果，结果 = %+v，错误 = %v", result, err)
+	}
+	if result.Result != "ssh-error" {
+		t.Fatalf("远端失败分类 = %q", result.Result)
+	}
+	if !containsText(result.Notices, "登记变更已保留") ||
+		!containsText(result.Notices, "shares residue") ||
+		!containsText(result.Notices, "shares unmount") {
+		t.Fatalf("远端失败提示 = %+v", result.Notices)
 	}
 	if !strings.Contains(err.Error(), "shares residue") ||
 		!strings.Contains(err.Error(), "登记变更已保留") {

@@ -224,6 +224,23 @@ func TestResidueWritesSafeOwnerAudit(t *testing.T) {
 	if !sawResidue || !sawUnchecked || !sawSkipped {
 		t.Fatalf("审计摘要应包含逐台固定分类：%#v", summary)
 	}
+	sharesByServer := map[string][]map[string]any{}
+	for _, result := range results {
+		items, _ := result["shares"].([]any)
+		for _, item := range items {
+			share, _ := item.(map[string]any)
+			if share == nil || share["version"] == nil {
+				t.Fatalf("逐台共享发现应记录共享名和版本号：%#v", result)
+			}
+			serverName, _ := result["server"].(string)
+			sharesByServer[serverName] = append(sharesByServer[serverName], share)
+		}
+	}
+	out := sharesByServer["linux-out"]
+	if len(out) != 1 || out[0]["share"] != "datasets" ||
+		out[0]["version"] != float64(fixture.out.ShareVersion) {
+		t.Fatalf("linux-out 的共享发现审计 = %#v", out)
+	}
 	auditText := rows[0].Command
 	for _, secret := range []string{
 		"datasets-password", "archive-password", "media-password",

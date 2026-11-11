@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -119,6 +120,62 @@ func TestSharesRevokeNewPasswordFromStdinListsRemainingServers(t *testing.T) {
 	}
 	if summary["password_changed"] != true {
 		t.Fatalf("共享撤销审计摘要应记录换密码：%#v", summary)
+	}
+}
+
+func TestSharesRevokeRemoteFailureStillPrintsPasswordReminder(t *testing.T) {
+	databasePath, masterKey := seedSharesCommandVault(t)
+	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+	s, err := store.Open(databasePath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.AddServer(&models.Server{
+		Name: "linux-worker", Host: "192.0.2.22", Port: 22, User: "deploy",
+		AuthMethod: models.AuthPassword,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AllowSecrets(
+		[]string{"NAS_MOUNT_PASSWORD"}, []string{"linux-worker"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	passwordPath := filepath.Join(t.TempDir(), "new-password")
+	if err := os.WriteFile(passwordPath, []byte("second-mount-password"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	root := NewRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetArgs([]string{
+		"shares", "revoke", "datasets", "linux-web", "--yes",
+		"--new-password-from-file", passwordPath,
+	})
+	executeErr := root.ExecuteContext(context.Background())
+	if executeErr == nil {
+		t.Fatalf("远端未完成时命令应返回非零退出码：\n%s", out.String())
+	}
+	output := out.String()
+	for _, want := range []string{
+		"已撤销共享存储 datasets 在服务器 linux-web 上的可挂载范围",
+		"结果：ssh-error",
+		"登记变更已保留",
+		"shares residue",
+		"shares unmount",
+		"已更换共享存储挂载密码",
+		"仍可挂载的 Linux 与 macOS 服务器：linux-worker",
+		"桌面上手动添加的共享连接也需要更换密码",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("远端失败输出应包含 %q：\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "second-mount-password") {
+		t.Fatalf("远端失败输出泄露新挂载密码：\n%s", output)
 	}
 }
 

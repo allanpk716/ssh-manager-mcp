@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"ssh-manager-mcp/internal/sharemanage"
+	"ssh-manager-mcp/internal/sharemount"
 )
 
 func sharesResidueCmd() *cobra.Command {
@@ -78,11 +79,11 @@ func printResidueReport(out io.Writer, filter string, report *sharemanage.Residu
 
 func residueSystemLabel(system string) string {
 	switch system {
-	case "linux":
+	case sharemount.CheckSystemLinux:
 		return "Linux"
-	case "darwin":
+	case sharemount.CheckSystemDarwin:
 		return "macOS"
-	case "windows":
+	case sharemount.CheckSystemWindows:
 		return "Windows"
 	default:
 		return "系统未知"

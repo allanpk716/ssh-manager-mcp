@@ -2,10 +2,8 @@ package sharemanage
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"strings"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sharemount"
@@ -49,16 +47,10 @@ func (m *Manager) DeleteDeviceCascading(
 	if m == nil || m.store == nil {
 		return nil, errManagerWithoutStore
 	}
-	targets, err := m.deviceDeleteRemoteTargets(request.Confirmed)
+	deletedServerIDs := deviceDeleteDeletedServerIDs(request.Confirmed)
+	targets, err := m.deviceDeleteRemoteTargets(request.Confirmed, deletedServerIDs)
 	if err != nil {
 		return nil, err
-	}
-	remoteManager, closeRemoteStore, err := m.deviceDeleteRemoteManager(request.Confirmed)
-	if err != nil {
-		return nil, err
-	}
-	if closeRemoteStore != nil {
-		defer closeRemoteStore()
 	}
 	deleted, err := m.store.DeleteDeviceCascading(request.Device, request.Confirmed)
 	if err != nil {
@@ -66,6 +58,7 @@ func (m *Manager) DeleteDeviceCascading(
 	}
 
 	result := &DeviceDeleteCascadingResult{DeviceName: deleted.Device.Name}
+	skippedCleanupCommands := make([]string, 0)
 	for _, share := range deleted.SharedStorages {
 		for _, mountable := range share.MountableServers {
 			if models.NormalizeShellType(string(mountable.ShellType)).IsWindows() {
@@ -76,8 +69,19 @@ func (m *Manager) DeleteDeviceCascading(
 				ShareName: share.Name, ServerID: mountable.ID,
 				ServerName: mountable.Name, Version: share.Version + 1,
 			}
-			remote, remoteErr := remoteManager.RevokeRemote(ctx, RevokeRemoteRequest{
-				Server: server, ShareName: share.Name,
+			if deletedServerIDs[mountable.ID] {
+				item.Result = "not-cleaned"
+				item.Failed = true
+				item.Error = "服务器条目随设备一起删除，删除后无法再连接"
+				skippedCleanupCommands = append(skippedCleanupCommands,
+					fmt.Sprintf("shares unmount %s %s", share.Name, mountable.Name))
+				_ = m.writeRevokeRemoteAudit(mountable.Name, share.Name, item.Version,
+					true, false, item.Result, true)
+				result.Results = append(result.Results, item)
+				continue
+			}
+			remote, remoteErr := m.RevokeRemote(ctx, RevokeRemoteRequest{
+				Server: server, ShareName: share.Name, ShareID: share.ID,
 				Version: share.Version + 1, Unmount: true,
 			})
 			if remote != nil {
@@ -90,14 +94,21 @@ func (m *Manager) DeleteDeviceCascading(
 			}
 			if remoteErr != nil {
 				item.Failed = true
-				item.Result = deviceDeleteRemoteResult(remoteErr, remote)
+				item.Result = unmountAuditResult(remoteErr, remote)
 				item.Error = remoteErr.Error()
 			}
 			if item.Result == "busy" {
 				item.Failed = true
 			}
+			_ = m.writeRevokeRemoteAudit(mountable.Name, share.Name, item.Version,
+				true, false, item.Result, item.Failed)
 			result.Results = append(result.Results, item)
 		}
+	}
+	if len(skippedCleanupCommands) > 0 {
+		result.Notices = append(result.Notices,
+			"有服务器条目随设备一起删除，本次未做远端清理；如需清理，先运行 "+
+				strings.Join(skippedCleanupCommands, "、")+" 再删除设备")
 	}
 	if deviceDeleteHasRemoteFailure(result) {
 		result.Notices = append(result.Notices,
@@ -106,69 +117,19 @@ func (m *Manager) DeleteDeviceCascading(
 	return result, nil
 }
 
-func (m *Manager) deviceDeleteRemoteManager(
-	preview *store.DeviceDeletePreview,
-) (*Manager, func(), error) {
-	if preview == nil || !deviceDeleteNeedsAccessSnapshot(preview) {
-		return m, nil, nil
+func deviceDeleteDeletedServerIDs(preview *store.DeviceDeletePreview) map[string]bool {
+	deletedIDs := make(map[string]bool)
+	if preview == nil {
+		return deletedIDs
 	}
-	// 待清理的服务器条目也可能属于被删除的提供方设备。登记删除事务会
-	// 同时删除这类条目的登录凭据、提权凭据与主机密钥锚；先做一份只在
-	// 进程内保存主密钥的临时加密存储副本，事务提交后仍用原统一拨号路径。
-	snapshot, err := m.store.ExportSnapshot()
-	if err != nil {
-		return nil, nil, err
-	}
-	masterKey, err := store.GenerateMasterKey()
-	if err != nil {
-		return nil, nil, err
-	}
-	directory, err := os.MkdirTemp("", "sshmgr-device-delete-")
-	if err != nil {
-		return nil, nil, err
-	}
-	databasePath := filepath.Join(directory, "remote-access.db")
-	remoteStore, err := store.Open(databasePath, masterKey)
-	if err != nil {
-		_ = os.Remove(databasePath)
-		_ = os.Remove(directory)
-		return nil, nil, err
-	}
-	if err := remoteStore.ImportSnapshot(snapshot); err != nil {
-		_ = remoteStore.Close()
-		_ = os.Remove(databasePath)
-		_ = os.Remove(directory)
-		return nil, nil, err
-	}
-	cleanup := func() {
-		_ = remoteStore.Close()
-		_ = os.Remove(databasePath)
-		_ = os.Remove(databasePath + "-wal")
-		_ = os.Remove(databasePath + "-shm")
-		_ = os.Remove(databasePath + "-journal")
-		_ = os.Remove(directory)
-	}
-	return New(remoteStore), cleanup, nil
-}
-
-func deviceDeleteNeedsAccessSnapshot(preview *store.DeviceDeletePreview) bool {
-	deletedIDs := make(map[string]bool, len(preview.Servers))
 	for _, server := range preview.Servers {
 		deletedIDs[server.ID] = true
 	}
-	for _, share := range preview.SharedStorages {
-		for _, mountable := range share.MountableServers {
-			if deletedIDs[mountable.ID] &&
-				!models.NormalizeShellType(string(mountable.ShellType)).IsWindows() {
-				return true
-			}
-		}
-	}
-	return false
+	return deletedIDs
 }
 
 func (m *Manager) deviceDeleteRemoteTargets(
-	preview *store.DeviceDeletePreview,
+	preview *store.DeviceDeletePreview, deletedServerIDs map[string]bool,
 ) (map[string]*models.Server, error) {
 	targets := make(map[string]*models.Server)
 	if preview == nil {
@@ -177,6 +138,7 @@ func (m *Manager) deviceDeleteRemoteTargets(
 	for _, share := range preview.SharedStorages {
 		for _, mountable := range share.MountableServers {
 			if models.NormalizeShellType(string(mountable.ShellType)).IsWindows() ||
+				deletedServerIDs[mountable.ID] ||
 				targets[mountable.ID] != nil {
 				continue
 			}
@@ -192,33 +154,6 @@ func (m *Manager) deviceDeleteRemoteTargets(
 		}
 	}
 	return targets, nil
-}
-
-func deviceDeleteRemoteResult(
-	err error, remote *sharemount.UnmountResult,
-) string {
-	switch {
-	case errors.Is(err, sharemount.ErrUnmountSSH):
-		return "ssh-error"
-	case errors.Is(err, sharemount.ErrNoSudo):
-		return "missing-sudo"
-	case errors.Is(err, sharemount.ErrUnmountUnsupportedSystem):
-		return "unsupported-system"
-	case errors.Is(err, sharemount.ErrUnmountNotManaged):
-		return "not-managed"
-	case errors.Is(err, sharemount.ErrUnmountLockTimeout):
-		return "lock-timeout"
-	case errors.Is(err, sharemount.ErrUnmountFailed):
-		return "unmount-failed"
-	case errors.Is(err, sharemount.ErrUnmountOutputInvalid):
-		return "output-invalid"
-	case errors.Is(err, sharemount.ErrUnmountRemoteVersionNewer):
-		return "remote-version-newer"
-	case remote != nil && remote.Result != "":
-		return remote.Result
-	default:
-		return "error"
-	}
 }
 
 func deviceDeleteHasRemoteFailure(result *DeviceDeleteCascadingResult) bool {

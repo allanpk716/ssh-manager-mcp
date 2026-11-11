@@ -71,10 +71,10 @@ type ResidueReport struct {
 
 // Residue 逐台只读检测 vault 里的 Linux 与 macOS 服务器，找出不在可挂载
 // 范围内却仍留有凭据文件、挂载配置或挂载的共享。连不上的服务器列为未检
-// 检；Windows 服务器跳过，因为 sshmgr 不在其上留下任何东西。
+// 查；Windows 服务器跳过，因为 sshmgr 不在其上留下任何东西。
 func (m *Manager) Residue(ctx context.Context, request ResidueRequest) (*ResidueReport, error) {
 	if m == nil || m.store == nil {
-		return nil, errors.New("共享存储管理模块没有绑定存储")
+		return nil, errManagerWithoutStore
 	}
 	servers, err := m.store.ListServers()
 	if err != nil {
@@ -97,7 +97,7 @@ func (m *Manager) Residue(ctx context.Context, request ResidueRequest) (*Residue
 		if models.NormalizeShellType(string(server.ShellType)).IsWindows() {
 			results[index] = ResidueServerResult{
 				ServerID: server.ID, ServerName: server.Name,
-				System: "windows", Status: ResidueStatusSkipped,
+				System: sharemount.CheckSystemWindows, Status: ResidueStatusSkipped,
 				Notice: "跳过 Windows 服务器：sshmgr 不在其上留下任何东西，无需残留检查",
 			}
 			continue
@@ -168,12 +168,8 @@ func residueFinding(
 		}
 	}
 	share := sharesByName[strings.ToLower(state.Share)]
-	if share != nil {
-		for _, candidate := range share.MountableServers {
-			if candidate.ID == server.ID {
-				return nil
-			}
-		}
+	if share != nil && sharedStorageHasMountableServer(share, server.ID) {
+		return nil
 	}
 	finding := &ResidueFinding{
 		ShareName: state.Share, Version: state.Version,
@@ -224,11 +220,13 @@ func (m *Manager) writeResidueAudit(filterName string, results []ResidueServerRe
 	for _, result := range results {
 		item := map[string]any{"server": result.ServerName, "result": result.Status}
 		if len(result.Findings) > 0 {
-			names := make([]string, 0, len(result.Findings))
+			shares := make([]map[string]any, 0, len(result.Findings))
 			for _, finding := range result.Findings {
-				names = append(names, finding.ShareName)
+				shares = append(shares, map[string]any{
+					"share": finding.ShareName, "version": finding.Version,
+				})
 			}
-			item["shares"] = names
+			item["shares"] = shares
 		}
 		if result.Reason != "" {
 			item["reason"] = result.Reason

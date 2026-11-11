@@ -137,6 +137,75 @@ func TestUnmountBusyLinuxWithoutForceKeepsMountAndListsProcesses(t *testing.T) {
 	}
 }
 
+func TestUnmountCleansResidueAfterRevokeWithoutUnmount(t *testing.T) {
+	fixture := newUnmountFixture(t, false)
+	if _, err := fixture.manager.Revoke(context.Background(), sharemanage.RevokeRequest{
+		Share: "datasets", Server: "linux-web",
+	}); err != nil {
+		t.Fatalf("撤销: %v", err)
+	}
+
+	report, err := fixture.manager.Residue(context.Background(), sharemanage.ResidueRequest{})
+	if err != nil {
+		t.Fatalf("第一次残留检查: %v", err)
+	}
+	row := residueResultFor(report, "linux-web")
+	if row == nil || row.Status != sharemanage.ResidueStatusResidue ||
+		len(row.Findings) != 1 || !row.Findings[0].HasMount ||
+		row.Findings[0].HasConfigEntry || row.Findings[0].HasCredentialFile {
+		t.Fatalf("撤销但保留挂载后的残留检查 = %+v", row)
+	}
+
+	unmount, err := fixture.manager.Unmount(context.Background(), sharemanage.UnmountRequest{
+		Share: "datasets", Server: "linux-web",
+	})
+	if err != nil {
+		t.Fatalf("清理保留挂载: %v", err)
+	}
+	if unmount.Result != "success" || fixture.linux.State().Mounted {
+		t.Fatalf("清理结果 = %+v，服务器状态 = %+v", unmount, fixture.linux.State())
+	}
+
+	report, err = fixture.manager.Residue(context.Background(), sharemanage.ResidueRequest{})
+	if err != nil {
+		t.Fatalf("第二次残留检查: %v", err)
+	}
+	row = residueResultFor(report, "linux-web")
+	if row == nil || row.Status != sharemanage.ResidueStatusMarkerOnly ||
+		len(row.Findings) != 1 || row.Findings[0].HasMount {
+		t.Fatalf("清理后的残留检查应只剩撤销标记：%+v", row)
+	}
+
+	_, err = fixture.manager.Unmount(context.Background(), sharemanage.UnmountRequest{
+		Share: "datasets", Server: "linux-web",
+	})
+	if !errors.Is(err, sharemount.ErrUnmountNotManaged) {
+		t.Fatalf("没有可清理内容时的卸载错误 = %v", err)
+	}
+}
+
+func TestUnmountCleansLinuxCredentialFileWithoutConfiguration(t *testing.T) {
+	fixture := newUnmountFixture(t, false)
+	if _, err := fixture.manager.Revoke(context.Background(), sharemanage.RevokeRequest{
+		Share: "datasets", Server: "linux-web",
+	}); err != nil {
+		t.Fatalf("撤销: %v", err)
+	}
+	fixture.linux.Credential = "username=mount-user\npassword=mount-password\n"
+	fixture.linux.Mounted = false
+
+	result, err := fixture.manager.Unmount(context.Background(), sharemanage.UnmountRequest{
+		Share: "datasets", Server: "linux-web",
+	})
+	if err != nil {
+		t.Fatalf("只剩凭据文件时卸载: %v", err)
+	}
+	state := fixture.linux.State()
+	if result.Result != "success" || state.Credential != "" || state.Mounted {
+		t.Fatalf("只剩凭据文件时的结果 = %+v，服务器状态 = %+v", result, state)
+	}
+}
+
 func TestUnmountBusyLinuxWithForceUnmounts(t *testing.T) {
 	fixture := newUnmountFixture(t, false)
 	fixture.linux.BusyProcesses = []sharemounttest.BusyProcess{{ProcessID: "1234", User: "worker", Command: "python"}}
@@ -164,8 +233,8 @@ func TestUnmountUnavailableServerFailsImmediatelyWithoutStateChange(t *testing.T
 	if err == nil || result != nil {
 		t.Fatalf("服务器连不上时立即失败，结果 = %+v，错误 = %v", result, err)
 	}
-	if !containsText([]string{err.Error()}, "连接服务器失败") {
-		t.Fatalf("错误应说明连接失败：%v", err)
+	if !containsText([]string{err.Error()}, "SSH 会话执行失败") {
+		t.Fatalf("错误应使用不含远端内容的连接失败说明：%v", err)
 	}
 	after := fixture.linux.State()
 	if len(after.Commands) != len(before.Commands) || after.Mounted != before.Mounted ||
@@ -249,9 +318,9 @@ func TestUnmountRemovesDarwinConfigurationBeforeUnmount(t *testing.T) {
 	deleteIndex := historyIndex(state.History, "delete-configuration")
 	unmountIndex := historyIndex(state.History, "unmount")
 	reloadIndex := historyIndex(state.History, "reload-automount")
-	if deleteIndex < 0 || unmountIndex < 0 || reloadIndex < 0 ||
-		deleteIndex > unmountIndex || unmountIndex > reloadIndex {
-		t.Fatalf("状态变化历史应先删配置再卸载并重载 autofs：%v", state.History)
+	if deleteIndex < 0 || reloadIndex < 0 || unmountIndex < 0 ||
+		deleteIndex > reloadIndex || reloadIndex > unmountIndex {
+		t.Fatalf("状态变化历史应先删配置、重载 autofs、再卸载：%v", state.History)
 	}
 }
 
@@ -326,6 +395,30 @@ func TestUnmountBusyDarwinWithAndWithoutForce(t *testing.T) {
 			t.Fatalf("macOS 强制卸载结果 = %+v，状态 = %+v", result, fixture.darwin.State())
 		}
 	})
+}
+
+func TestUnmountDarwinReloadsAutomountBeforeBusyUnmountAttempt(t *testing.T) {
+	fixture := newDarwinUnmountFixture(t, false)
+	fixture.darwin.BusyProcesses = []sharemounttest.BusyProcess{
+		{ProcessID: "1234", User: "worker", Command: "python"},
+	}
+
+	result, err := fixture.manager.Unmount(context.Background(), sharemanage.UnmountRequest{
+		Share: "datasets", Server: "darwin-web",
+	})
+	if err != nil {
+		t.Fatalf("Unmount: %v", err)
+	}
+	if result.Result != "busy" || !fixture.darwin.State().Mounted {
+		t.Fatalf("被占用时的结果 = %+v，服务器状态 = %+v", result, fixture.darwin.State())
+	}
+	state := fixture.darwin.State()
+	deleteIndex := historyIndex(state.History, "delete-configuration")
+	reloadIndex := historyIndex(state.History, "reload-automount")
+	unmountIndex := historyIndex(state.History, "unmount")
+	if deleteIndex < 0 || reloadIndex < 0 || reloadIndex < deleteIndex || unmountIndex >= 0 {
+		t.Fatalf("macOS 状态变化历史应先删映射、再重载 autofs、后尝试卸载：%v", state.History)
+	}
 }
 
 func TestUnmountWaitsForSharedStorageLock(t *testing.T) {

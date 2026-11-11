@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"ssh-manager-mcp/internal/sharemanage"
+	"ssh-manager-mcp/internal/sharemount"
 )
 
 func sharesRevokeCmd() *cobra.Command {
@@ -74,20 +75,24 @@ Windows 服务器不留持久配置，命令只改登记并说明盘符注入的
 				NewPassword: newPassword,
 			})
 			if err != nil {
-				return err
+				if result == nil {
+					return err
+				}
 			}
 			fmt.Fprintf(out, "已撤销共享存储 %s 在服务器 %s 上的可挂载范围；版本号：%d\n",
 				result.ShareName, result.ServerName, result.Version)
 			if result.Result == "success" {
-				if result.System == "Windows" {
+				if result.System == sharemount.CheckSystemWindows {
 					fmt.Fprintln(out, "未连接 Windows 服务器；各客户端同步快照后停止注入。")
 				} else if result.Unmount {
 					fmt.Fprintln(out, "远端持久配置已删除，挂载已卸载。")
 				} else {
 					fmt.Fprintln(out, "远端持久配置已删除，现有挂载保留。")
 				}
-			} else {
+			} else if result.Result == "busy" {
 				fmt.Fprintf(out, "远端持久配置已删除，挂载被占用并保留；结果：%s\n", result.Result)
+			} else {
+				fmt.Fprintf(out, "远端清理未完成；结果：%s\n", result.Result)
 			}
 			for _, notice := range result.Notices {
 				fmt.Fprintf(out, "提示：%s\n", notice)
@@ -103,6 +108,9 @@ Windows 服务器不留持久配置，命令只改登记并说明盘符注入的
 			}
 			for _, process := range result.BusyProcesses {
 				fmt.Fprintf(out, "占用进程：%s %s %s\n", process.ProcessID, process.User, process.Command)
+			}
+			if err != nil {
+				return err
 			}
 			return nil
 		},

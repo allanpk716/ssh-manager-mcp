@@ -18,7 +18,7 @@ const (
 )
 
 var (
-	ErrUnmountUnsupportedSystem  = errors.New("目标服务器操作系统不支持共享存储卸载")
+	ErrUnmountUnsupportedSystem  = ErrUnsupportedSystem
 	ErrUnmountSSH                = errors.New("连接目标服务器或执行固定卸载命令失败")
 	ErrUnmountNotManaged         = errors.New("目标服务器上没有这个共享名的 sshmgr 挂载配置")
 	ErrUnmountLockTimeout        = errors.New("另一个共享存储操作正在进行，请稍后再试")
@@ -30,13 +30,15 @@ var (
 // UnmountRequest 是一次 owner 卸载调用的远端目标。WriteRevokedMarker 由
 // 管理模块按登记与可挂载范围判定；这里只负责在目标服务器上执行固定命令。
 type UnmountRequest struct {
-	Server                   *models.Server
-	ShareName                string
-	Version                  int64
-	Force                    bool
-	WriteRevokedMarker       bool
-	SkipUnmount              bool
-	RejectRemoteVersionNewer bool
+	Server                    *models.Server
+	ShareName                 string
+	ShareID                   string
+	Version                   int64
+	Force                     bool
+	WriteRevokedMarker        bool
+	AllowMissingConfiguration bool
+	SkipUnmount               bool
+	RejectRemoteVersionNewer  bool
 }
 
 // BusyProcess 是占用挂载点的进程。命令名来自远端固定命令输出，不包含
@@ -72,7 +74,8 @@ func (s *Service) Unmount(parent context.Context, request UnmountRequest) (*Unmo
 
 	systemResult, err := s.Exec(ctx, request.Server, RemoteExecRequest{Command: "uname -s"})
 	if err != nil {
-		return nil, fmt.Errorf("%w：识别目标服务器操作系统失败：%w", ErrUnmountSSH, err)
+		return nil, fmt.Errorf("%w：识别目标服务器操作系统失败：%w",
+			ErrUnmountSSH, sanitizedExecError(err))
 	}
 	if request.Server.SudoCredentialID == "" {
 		return nil, ErrNoSudo
@@ -98,7 +101,7 @@ func (s *Service) unmountDarwin(ctx context.Context, request UnmountRequest) (*U
 	if result.ExitCode != 0 {
 		return nil, darwinUnmountExitCodeError(result.ExitCode)
 	}
-	return parseUnmountOutput(result.Stdout, darwinUnmountMarker, "Darwin")
+	return parseUnmountOutput(result.Stdout, darwinUnmountMarker, CheckSystemDarwin)
 }
 
 func (s *Service) unmountLinux(ctx context.Context, request UnmountRequest) (*UnmountResult, error) {
@@ -112,7 +115,7 @@ func (s *Service) unmountLinux(ctx context.Context, request UnmountRequest) (*Un
 	if result.ExitCode != 0 {
 		return nil, linuxUnmountExitCodeError(result.ExitCode)
 	}
-	return parseUnmountOutput(result.Stdout, linuxUnmountMarker, "Linux")
+	return parseUnmountOutput(result.Stdout, linuxUnmountMarker, CheckSystemLinux)
 }
 
 func linuxUnmountExitCodeError(exitCode int) error {
@@ -169,6 +172,10 @@ func buildLinuxUnmountCommand(request UnmountRequest) string {
 	revokedMarker := sshbroker.POSIXShellQuote(
 		linuxCredentialRoot + "/" + url.PathEscape(request.ShareName) + ".revoked")
 	force, skipUnmount, rejectRemoteVersionNewer := unmountModeFlags(request)
+	allowMissingConfiguration := "no"
+	if request.AllowMissingConfiguration {
+		allowMissingConfiguration = "yes"
+	}
 	writeMarker := "no"
 	if request.WriteRevokedMarker {
 		writeMarker = "yes"
@@ -183,6 +190,8 @@ sshmgr_force=` + force + `
 sshmgr_skip_unmount=` + skipUnmount + `
 sshmgr_reject_remote_version_newer=` + rejectRemoteVersionNewer + `
 sshmgr_write_revoked_marker=` + writeMarker + `
+sshmgr_allow_missing_configuration=` + allowMissingConfiguration + `
+sshmgr_expected_credential=` + sshbroker.POSIXShellQuote(linuxCredentialPath(request.ShareID)) + `
 sshmgr_fstab_candidate=''
 sshmgr_cleanup() {
   if [ -n "$sshmgr_fstab_candidate" ]; then rm -f "$sshmgr_fstab_candidate"; fi
@@ -226,7 +235,31 @@ while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
     case "$sshmgr_option" in credentials=*) sshmgr_credential_file=${sshmgr_option#credentials=} ;; esac
   done
 done < /etc/fstab
-if [ "$sshmgr_managed_count" -eq 0 ]; then
+if [ "$sshmgr_managed_count" -eq 0 ] && [ "$sshmgr_credential_file" = '' ] &&
+   [ -f "$sshmgr_expected_credential" ]; then
+  sshmgr_credential_file=$sshmgr_expected_credential
+fi
+if [ "$sshmgr_managed_count" -eq 0 ] && [ "$sshmgr_credential_file" = '' ]; then
+` + mountTableCheckScript(CheckSystemLinux) + `else
+  sshmgr_mounted=no
+fi
+if [ "$sshmgr_managed_count" -eq 0 ] &&
+   [ "$sshmgr_credential_file" = '' ] && [ "$sshmgr_mounted" = no ]; then
+  if [ "$sshmgr_write_revoked_marker" = yes ]; then
+    sshmgr_write_version=$sshmgr_version
+    if [ "$sshmgr_write_version" -eq 0 ]; then
+      sshmgr_write_version=1
+    fi
+    install -d -m 700 ` + sshbroker.POSIXShellQuote(linuxCredentialRoot) + `
+    printf 'sshmgr-share=%s;sshmgr-version=%s;sshmgr-state=revoked\n' \
+      "$sshmgr_expected_share" "$sshmgr_write_version" > ` + revokedMarker + `
+    chown root:root ` + revokedMarker + `
+    chmod 400 ` + revokedMarker + `
+    if [ "$sshmgr_allow_missing_configuration" = yes ]; then
+      echo ` + linuxUnmountMarker + ` result=success version=$sshmgr_write_version
+      exit 0
+    fi
+  fi
   echo ` + linuxUnmountMarker + ` not-managed >&2
   exit 89
 fi
@@ -279,7 +312,7 @@ fi
 
 sshmgr_automount_unit=$(systemd-escape -p --suffix=automount "$mount_point")
 systemctl stop "$sshmgr_automount_unit" >/dev/null 2>&1 || true
-` + linuxProcessListScript() + mountTableCheckScript(CheckSystemLinux) + `if [ "$sshmgr_mounted" = yes ]; then
+` + mountTableCheckScript(CheckSystemLinux) + linuxProcessListScript() + `if [ "$sshmgr_mounted" = yes ]; then
   sshmgr_processes=$(sshmgr_list_processes || true)
   if [ -n "$sshmgr_processes" ] && [ "$sshmgr_force" = no ]; then
     echo ` + linuxUnmountMarker + ` result=busy version=$sshmgr_write_version
@@ -336,6 +369,10 @@ func buildDarwinUnmountCommand(request UnmountRequest) string {
 		"/etc/sshmgr/" + url.PathEscape(request.ShareName) + ".revoked")
 	version := sshbroker.POSIXShellQuote(strconv.FormatInt(request.Version, 10))
 	force, skipUnmount, rejectRemoteVersionNewer := unmountModeFlags(request)
+	allowMissingConfiguration := "no"
+	if request.AllowMissingConfiguration {
+		allowMissingConfiguration = "yes"
+	}
 	writeMarker := "no"
 	if request.WriteRevokedMarker {
 		writeMarker = "yes"
@@ -350,6 +387,7 @@ sshmgr_force=` + force + `
 sshmgr_skip_unmount=` + skipUnmount + `
 sshmgr_reject_remote_version_newer=` + rejectRemoteVersionNewer + `
 sshmgr_write_revoked_marker=` + writeMarker + `
+sshmgr_allow_missing_configuration=` + allowMissingConfiguration + `
 sshmgr_map_candidate=''
 sshmgr_auto_candidate=''
 sshmgr_cleanup() {
@@ -360,8 +398,8 @@ sshmgr_cleanup() {
 trap sshmgr_cleanup EXIT HUP INT TERM
 
 if [ ! -f /etc/sshmgr/auto_share ]; then
-  echo ` + darwinUnmountMarker + ` not-managed >&2
-  exit 89
+  install -d -m 700 /etc/sshmgr
+  : > /etc/sshmgr/auto_share
 fi
 sshmgr_managed_count=0
 sshmgr_remote_version=0
@@ -386,6 +424,23 @@ while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
   esac
 done < /etc/sshmgr/auto_share
 if [ "$sshmgr_managed_count" -eq 0 ]; then
+` + mountTableCheckScript(CheckSystemDarwin) + `else
+  sshmgr_mounted=no
+fi
+if [ "$sshmgr_managed_count" -eq 0 ] && [ "$sshmgr_mounted" = no ]; then
+  if [ "$sshmgr_write_revoked_marker" = yes ]; then
+    sshmgr_write_version=$sshmgr_version
+    if [ "$sshmgr_write_version" -eq 0 ]; then
+      sshmgr_write_version=1
+    fi
+    printf 'sshmgr-share=%s;sshmgr-version=%s;sshmgr-state=revoked\n' \
+      "$sshmgr_expected_share" "$sshmgr_write_version" > ` + revokedMarker + `
+    chmod 400 ` + revokedMarker + `
+    if [ "$sshmgr_allow_missing_configuration" = yes ]; then
+      echo ` + darwinUnmountMarker + ` result=success version=$sshmgr_write_version
+      exit 0
+    fi
+  fi
   echo ` + darwinUnmountMarker + ` not-managed >&2
   exit 89
 fi
@@ -440,13 +495,13 @@ if ! grep -q '^# sshmgr-share=' /etc/sshmgr/auto_share; then
   mv "$sshmgr_auto_candidate" /etc/auto_master
   sshmgr_auto_candidate=''
 fi
+automount -cv >/dev/null 2>&1
 if [ "$sshmgr_skip_unmount" = yes ]; then
-  automount -cv >/dev/null 2>&1
   echo ` + darwinUnmountMarker + ` result=success version=$sshmgr_write_version
   exit 0
 fi
 
-` + darwinProcessListScript() + mountTableCheckScript(CheckSystemDarwin) + `if [ "$sshmgr_mounted" = yes ]; then
+` + mountTableCheckScript(CheckSystemDarwin) + darwinProcessListScript() + `if [ "$sshmgr_mounted" = yes ]; then
   sshmgr_processes=$(sshmgr_list_processes || true)
   if [ -n "$sshmgr_processes" ] && [ "$sshmgr_force" = no ]; then
     echo ` + darwinUnmountMarker + ` result=busy version=$sshmgr_write_version
@@ -465,7 +520,6 @@ fi
     fi
   fi
 fi
-automount -cv >/dev/null 2>&1
 echo ` + darwinUnmountMarker + ` result=success version=$sshmgr_write_version
 `
 }
@@ -511,19 +565,7 @@ func parseUnmountOutput(stdout, marker, system string) (*UnmountResult, error) {
 		if fields[0] != "SSHMGR-PROCESS" {
 			continue
 		}
-		process := BusyProcess{}
-		for _, field := range fields[1:] {
-			key, value, _ := strings.Cut(field, "=")
-			switch key {
-			case "pid":
-				process.ProcessID = value
-			case "user":
-				process.User = value
-			case "command":
-				process.Command = value
-			}
-		}
-		result.BusyProcesses = append(result.BusyProcesses, process)
+		result.BusyProcesses = append(result.BusyProcesses, parseBusyProcess(fields))
 	}
 	if result.Result == "" {
 		return nil, fmt.Errorf("%w：%s 固定卸载命令缺少结果行",
@@ -538,4 +580,20 @@ func parseUnmountOutput(stdout, marker, system string) (*UnmountResult, error) {
 			ErrUnmountOutputInvalid, system)
 	}
 	return result, nil
+}
+
+func parseBusyProcess(fields []string) BusyProcess {
+	process := BusyProcess{}
+	for _, field := range fields[1:] {
+		key, value, _ := strings.Cut(field, "=")
+		switch key {
+		case "pid":
+			process.ProcessID = value
+		case "user":
+			process.User = value
+		case "command":
+			process.Command = value
+		}
+	}
+	return process
 }

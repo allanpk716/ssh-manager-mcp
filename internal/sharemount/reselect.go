@@ -16,8 +16,8 @@ const (
 
 var (
 	ErrReselectSSH           = errors.New("连接目标服务器或执行固定重选地址命令失败")
-	ErrReselectNotManaged    = errors.New("目标服务器上没有这个共享名的 sshmgr 挂载配置")
-	ErrReselectLockTimeout   = errors.New("另一个共享存储操作正在进行，请稍后再试")
+	ErrReselectNotManaged    = ErrUnmountNotManaged
+	ErrReselectLockTimeout   = ErrUnmountLockTimeout
 	ErrReselectUnmountFailed = errors.New("卸载共享存储挂载点失败，已保留旧配置")
 	ErrReselectOutputInvalid = errors.New("共享存储固定重选地址命令返回了不合法结论")
 )
@@ -86,9 +86,9 @@ func (s *Service) Reselect(parent context.Context, request ReselectRequest) (*Re
 	var command string
 	switch strings.TrimSpace(systemResult.Stdout) {
 	case "Linux":
-		systemName = "Linux"
+		systemName = CheckSystemLinux
 	case "Darwin":
-		systemName = "macOS"
+		systemName = CheckSystemDarwin
 	default:
 		return nil, ErrUnsupportedSystem
 	}
@@ -97,10 +97,10 @@ func (s *Service) Reselect(parent context.Context, request ReselectRequest) (*Re
 		return nil, selectionErr
 	}
 	switch systemName {
-	case "Linux":
+	case CheckSystemLinux:
 		marker = linuxReselectMarker
 		command = buildLinuxReselectCommand(request.Share, selection.Reachable, request.Force)
-	case "macOS":
+	case CheckSystemDarwin:
 		marker = darwinReselectMarker
 		command = buildDarwinReselectCommand(request.Share, selection.Reachable, request.Force)
 	}
@@ -165,19 +165,7 @@ func parseReselectOutput(stdout, marker, systemName string) (*ReselectResult, er
 		if fields[0] != "SSHMGR-PROCESS" {
 			continue
 		}
-		process := BusyProcess{}
-		for _, field := range fields[1:] {
-			key, value, _ := strings.Cut(field, "=")
-			switch key {
-			case "pid":
-				process.ProcessID = value
-			case "user":
-				process.User = value
-			case "command":
-				process.Command = value
-			}
-		}
-		result.BusyProcesses = append(result.BusyProcesses, process)
+		result.BusyProcesses = append(result.BusyProcesses, parseBusyProcess(fields))
 	}
 	if result.Result == "" {
 		return nil, fmt.Errorf("%w：%s 固定重选地址命令缺少结果行",
