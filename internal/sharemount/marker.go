@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"ssh-manager-mcp/internal/sshbroker"
 )
 
 // ErrInvalidSharedStorageMarker 表示远端配置里的 sshmgr 标记缺失或格式不
@@ -52,4 +54,36 @@ func parseSharedStorageMarkerOptions(marker string) (SharedStorageMarker, error)
 		return SharedStorageMarker{}, fmt.Errorf("%w：%q", ErrInvalidSharedStorageMarker, marker)
 	}
 	return SharedStorageMarker{Share: shareName, Version: version}, nil
+}
+
+// revokedMarkerGuardScript 生成撤销标记检查片段。固定挂载命令必须在同一
+// 把服务器级挂载锁内读取标记；标记版本号不低于本次共享存储版本号时拒
+// 绝。标记不合法同样拒绝，避免把无法识别的撤销状态误当成可覆盖。
+func revokedMarkerGuardScript(markerPath, outputMarker string, revokedExitCode, invalidExitCode int) string {
+	return fmt.Sprintf(`sshmgr_revoked_marker=%s
+sshmgr_revoked_version=0
+if [ -r "$sshmgr_revoked_marker" ]; then
+  IFS= read -r sshmgr_revoked_content < "$sshmgr_revoked_marker"
+  sshmgr_revoked_prefix="sshmgr-share=${sshmgr_expected_share};sshmgr-version="
+  case "$sshmgr_revoked_content" in
+    "$sshmgr_revoked_prefix"*) ;;
+    *)
+      echo `+outputMarker+` invalid-revoked-marker >&2
+      exit `+strconv.Itoa(invalidExitCode)+`
+      ;;
+  esac
+  sshmgr_revoked_version=${sshmgr_revoked_content#"$sshmgr_revoked_prefix"}
+  sshmgr_revoked_version=${sshmgr_revoked_version%;sshmgr-state=revoked}
+  case "$sshmgr_revoked_version" in
+    ''|*[!0-9]*)
+      echo `+outputMarker+` invalid-revoked-marker >&2
+      exit `+strconv.Itoa(invalidExitCode)+`
+      ;;
+  esac
+fi
+if [ "$sshmgr_revoked_version" -gt 0 ] && [ "$sshmgr_revoked_version" -ge "$sshmgr_expected_version" ]; then
+  echo `+outputMarker+` share-revoked >&2
+  exit `+strconv.Itoa(revokedExitCode)+`
+fi
+`, sshbroker.POSIXShellQuote(markerPath))
 }
