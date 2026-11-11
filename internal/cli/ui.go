@@ -73,6 +73,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretWriter            webui.SecretWriter
 		softwareInventorySource webui.SoftwareInventorySource
 		topologySource          webui.TopologySource
+		topologyWriter          webui.TopologyWriter
 		resolvedInstance        string
 		machineInit             webui.MachineInitializer
 	)
@@ -97,6 +98,13 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretWriter = standaloneUISecretWriter()
 		softwareInventorySource = standaloneUISoftwareInventoryStore()
 		topologySource = webuitopology.FromStoreOpener(func() (*store.Store, func(), error) {
+			st, err := openUnlockedStore()
+			if err != nil {
+				return nil, nil, err
+			}
+			return st, func() { _ = st.Close() }, nil
+		})
+		topologyWriter = webuitopology.WriterFromOpener(func() (*store.Store, func(), error) {
 			st, err := openUnlockedStore()
 			if err != nil {
 				return nil, nil, err
@@ -148,6 +156,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		SecretsWriter:     secretWriter,
 		SoftwareInventory: softwareInventorySource,
 		Topology:          topologySource,
+		TopologyWriter:    topologyWriter,
 		VersionHint:       versionHint,
 		Port:              port,
 		Access:            accessSource,
