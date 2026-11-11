@@ -274,6 +274,7 @@ func (environment *relayLocalCopyEnv) serveRobocopyScript(
 	}
 	sourceHost := environment.hostPath(source)
 	targetHost := environment.hostPath(target)
+	partialHost := environment.hostPath(target + relayPartialSuffix)
 	sourceInfo, err := os.Stat(sourceHost)
 	if err != nil || sourceInfo.IsDir() {
 		stdout.Write([]byte("source-not-regular\n"))
@@ -283,26 +284,21 @@ func (environment *relayLocalCopyEnv) serveRobocopyScript(
 		stdout.Write([]byte("target-directory\n"))
 		return 4
 	}
-	partialHost := environment.hostPath(target + relayPartialSuffix)
+	if partialInfo, err := os.Lstat(partialHost); err == nil && !partialInfo.IsDir() {
+		fmt.Fprintf(stdout, "Windows 本地拷贝的半成品暂存位置 %s 不是目录；请先处理这个文件后重试\n",
+			target+relayPartialSuffix)
+		return 5
+	}
 	if err := os.MkdirAll(partialHost, 0o755); err != nil {
 		fmt.Fprintf(stderr, "创建 Windows 半成品目录失败：%v\n", err)
 		return 1
 	}
-	partialEntries, err := os.ReadDir(partialHost)
-	if err != nil {
-		fmt.Fprintf(stderr, "清理 Windows 半成品目录失败：%v\n", err)
-		return 1
-	}
-	for _, entry := range partialEntries {
-		if !entry.IsDir() {
-			if err := os.Remove(filepath.Join(partialHost, entry.Name())); err != nil {
-				fmt.Fprintf(stderr, "清理 Windows 旧半成品失败：%v\n", err)
-				return 1
-			}
-		}
-	}
 	sourceName := filepath.Base(strings.ReplaceAll(source, `\`, `/`))
 	partialFileHost := filepath.Join(partialHost, sourceName)
+	if err := os.Remove(partialFileHost); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(stderr, "清理 Windows 旧半成品失败：%v\n", err)
+		return 1
+	}
 	content, err := os.ReadFile(sourceHost)
 	if err != nil {
 		fmt.Fprintf(stderr, "读取 Windows 源文件失败：%v\n", err)
@@ -330,9 +326,19 @@ func (environment *relayLocalCopyEnv) serveRobocopyScript(
 		fmt.Fprintf(stderr, "移动 Windows 半成品失败：%v\n", err)
 		return 1
 	}
-	if err := os.Remove(partialHost); err != nil {
-		fmt.Fprintf(stderr, "删除空的 Windows 半成品目录失败：%v\n", err)
+	remaining, err := os.ReadDir(partialHost)
+	if err != nil {
+		fmt.Fprintf(stderr, "检查 Windows 半成品目录失败：%v\n", err)
 		return 1
+	}
+	if len(remaining) == 0 {
+		if err := os.Remove(partialHost); err != nil {
+			fmt.Fprintf(stderr, "删除空的 Windows 半成品目录失败：%v\n", err)
+			return 1
+		}
+	} else {
+		fmt.Fprintf(stdout, "Windows 半成品暂存目录 %s 不是空的，已保留；sshmgr 只清理与源文件同名的半成品\n",
+			target+relayPartialSuffix)
 	}
 	return 0
 }

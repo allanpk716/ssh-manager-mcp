@@ -814,8 +814,16 @@ func TestRelayFileWindowsLocalCopyStopAndRerun(t *testing.T) {
 		string(content) != "second complete run" {
 		t.Fatalf("Windows 重跑目标 = %q err=%v", content, err)
 	}
-	if _, err := os.Stat(partialDirectory); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Windows 重跑成功后半成品目录应移除：stat err=%v", err)
+	// 重跑换用了另一个源文件名；旧半成品不是本次的半成品，按清理边界
+	// 保留，任务仍成功并输出保留提示。
+	if _, err := os.Stat(partialDirectory); err != nil {
+		t.Fatalf("换源重跑后暂存目录应保留：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(partialDirectory, "first-source.bin")); err != nil {
+		t.Fatalf("旧半成品文件不应被删除：stat err=%v", err)
+	}
+	if !strings.Contains(stdout, "不是空的，已保留") {
+		t.Fatalf("暂存目录不空时任务输出应给出一行提示：\n%s", stdout)
 	}
 }
 
@@ -882,6 +890,131 @@ func TestRelayFileWindowsLocalCopyRobocopyExitCodes(t *testing.T) {
 			t.Fatalf("失败退出码不应产生真名目标：stat err=%v", err)
 		}
 	})
+}
+
+// TestRelayFileWindowsLocalCopyOnlyCleansOwnPartialFile 钉住 Windows 暂存
+// 目录的清理边界：重跑只删除与源文件同名的旧半成品文件，不动其他内容；
+// 成功改名后暂存目录不空就保留并输出提示，任务仍算成功。
+func TestRelayFileWindowsLocalCopyOnlyCleansOwnPartialFile(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, false)
+	session := environment.openSession(t)
+	sourceRemote := `Z:\Reports\dataset.bin`
+	targetRemote := "C:/Users/Public/target.bin"
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("new payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	partialDirectory := environment.hostPath(targetRemote + relayPartialSuffix)
+	if err := os.MkdirAll(partialDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(partialDirectory, "dataset.bin"), []byte("old partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(partialDirectory, "user file.txt"), []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_share_address": `\\192.0.2.10\datasets\Reports\dataset.bin`,
+			"to_server_id":       environment.windowsID,
+			"to_path":            targetRemote,
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("relay_file：err=%v 失败=%s", err, toolResultText(result))
+	}
+	var output RelayOutput
+	unmarshalToolJSON(t, result, &output)
+	stdout, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second)
+	if status != bgStatusDone || errorText != "" {
+		t.Fatalf("暂存目录不空的成功拷贝终态 = %q 错误 = %q 输出 =\n%s", status, errorText, stdout)
+	}
+	if !strings.Contains(stdout, "暂存目录") || !strings.Contains(stdout, "保留") {
+		t.Fatalf("任务输出应说明暂存目录不空被保留：\n%s", stdout)
+	}
+	if content, err := os.ReadFile(environment.hostPath(targetRemote)); err != nil ||
+		string(content) != "new payload" {
+		t.Fatalf("目标文件内容 = %q err=%v", content, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(partialDirectory, "user file.txt")); err != nil ||
+		string(content) != "user data" {
+		t.Fatalf("暂存目录里的其他文件被改动：内容 = %q err=%v", content, err)
+	}
+	commands := environment.fake.recordedCommands()
+	scripts := encodedCommandScripts(commands[len(commands)-1])
+	copyScript := scripts[len(scripts)-1]
+	if strings.Contains(copyScript, "Get-ChildItem -LiteralPath $__sshmgr_partial_directory -Force | Where-Object") {
+		t.Fatalf("固定脚本不应删除暂存目录里的全部文件：%s", copyScript)
+	}
+	if !strings.Contains(copyScript, "Join-Path $__sshmgr_partial_directory $__sshmgr_source_name") {
+		t.Fatalf("固定脚本应只清理与源文件同名的半成品：%s", copyScript)
+	}
+}
+
+// TestRelayFileWindowsLocalCopyRejectsPartialFile 钉住半成品位置被普通文件
+// 占用时的防误删保护：任务失败并给出清楚提示，不会删除占用者，也不会
+// 产生目标文件。
+func TestRelayFileWindowsLocalCopyRejectsPartialFile(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, false)
+	session := environment.openSession(t)
+	sourceRemote := `Z:\Reports\dataset.bin`
+	targetRemote := "C:/Users/Public/target.bin"
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	partialPath := environment.hostPath(targetRemote + relayPartialSuffix)
+	if err := os.MkdirAll(filepath.Dir(partialPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(partialPath, []byte("user file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_share_address": `\\192.0.2.10\datasets\Reports\dataset.bin`,
+			"to_server_id":       environment.windowsID,
+			"to_path":            targetRemote,
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("relay_file：err=%v 失败=%s", err, toolResultText(result))
+	}
+	var output RelayOutput
+	unmarshalToolJSON(t, result, &output)
+	stdout, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second)
+	if status != bgStatusFailed {
+		t.Fatalf("半成品位置被文件占用的终态 = %q 错误 = %q 输出 =\n%s", status, errorText, stdout)
+	}
+	partialRemote := `C:\Users\Public\target.bin` + relayPartialSuffix
+	if !strings.Contains(stdout, "不是目录") || !strings.Contains(stdout, partialRemote) {
+		t.Fatalf("占用提示不完整：\n%s", stdout)
+	}
+	if !strings.Contains(errorText, "不是目录") {
+		t.Fatalf("任务终态错误应说明半成品位置不是目录：%q", errorText)
+	}
+	if content, err := os.ReadFile(partialPath); err != nil || string(content) != "user file" {
+		t.Fatalf("占用半成品位置的文件被改动：内容 = %q err=%v", content, err)
+	}
+	if _, err := os.Stat(environment.hostPath(targetRemote)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("失败任务不应产生目标文件：stat err=%v", err)
+	}
+	commands := environment.fake.recordedCommands()
+	scripts := encodedCommandScripts(commands[len(commands)-1])
+	copyScript := scripts[len(scripts)-1]
+	if !strings.Contains(copyScript, "$__sshmgr_partial_directory -PathType Leaf") ||
+		strings.Contains(copyScript, "if (Test-Path -LiteralPath $__sshmgr_partial_directory -PathType Leaf) { Remove-Item") {
+		t.Fatalf("固定脚本应先拒绝而不是删除占用半成品位置的文件：%s", copyScript)
+	}
 }
 
 // TestRelayFileWindowsLocalCopyRejectsDirectory 钉住共享地址无论作为源端
