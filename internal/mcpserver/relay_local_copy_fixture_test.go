@@ -267,8 +267,6 @@ func (environment *relayLocalCopyEnv) serveCopyCommand(
 	targetRemote := strings.TrimSuffix(partialRemote, ".sshmgr-partial")
 	partial := environment.hostPath(partialRemote)
 	target := environment.hostPath(targetRemote)
-	fmt.Fprintln(stdout, "本地拷贝模式：中断、停止或失败后不能续传，重跑会从文件开头覆盖旧半成品")
-	fmt.Fprintf(stdout, "cp -- '%s' '%s'\n", sourceRemote, partialRemote)
 	if err := os.MkdirAll(filepath.Dir(partial), 0o755); err != nil {
 		fmt.Fprintf(stderr, "创建目标目录失败：%v\n", err)
 		return 1
@@ -282,6 +280,8 @@ func (environment *relayLocalCopyEnv) serveCopyCommand(
 		fmt.Fprintf(stderr, "写入半成品失败：%v\n", err)
 		return 1
 	}
+	fmt.Fprintln(stdout, "本地拷贝模式：中断、停止或失败后不能续传，重跑会从文件开头覆盖旧半成品")
+	fmt.Fprintf(stdout, "cp -- '%s' '%s'\n", sourceRemote, partialRemote)
 	if environment.fake.blockCopy != nil {
 		<-environment.fake.blockCopy
 		environment.fake.blockCopy = nil

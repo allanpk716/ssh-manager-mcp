@@ -56,7 +56,7 @@ const (
 // (SSHMGR_TRANSFER_CHUNK, T2); 测试直传小值。执行序 ①–⑨ 逐字落 spec §2。
 func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, projectID, profileID string, in RelayInput, chunkBytes int64, hk ...sshbroker.HostKeyStore) (out RelayOutput, err error) {
 	if in.FromShareAddress != "" || in.ToShareAddress != "" || in.Via != "" {
-		return relayLocalCopyForProfile(ctx, st, tm, projectID, profileID, in, hk...)
+		return relayLocalCopyForProfile(ctx, st, tm, projectID, profileID, in, chunkBytes, hk...)
 	}
 	var status string
 	var startOwned bool             // start(ok) 行已由 AuditStart 闭包 (持锁段) 落笔——本层不再落
@@ -76,8 +76,14 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		if tc == "" {
 			tc = in.ToPath
 		}
-		return fmt.Sprintf("relay %s:%s -> %s:%s (%d bytes, %d chunks, resumed %d)",
+		summary := fmt.Sprintf("relay %s:%s -> %s:%s (%d bytes, %d chunks, resumed %d)",
 			fs, fc, in.ToServerID, tc, size, chunks, resumed)
+		if in.relayShareFallback != nil {
+			summary = fmt.Sprintf(
+				"relay mode=streaming_relay shared_storage=%s shared_address_endpoint_server=%s %s",
+				in.relayShareFallback.ShareName, in.relayShareFallback.EndpointServerID, summary)
+		}
+		return summary
 	}
 	defer func() {
 		if startOwned {
@@ -460,6 +466,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		Size: size, Mtime: mtime, ChunkBytes: chunkBytes, ChunksTotal: chunks,
 		Fresh: in.Fresh, Resumed: int(resumed), Manifest: manifest6,
 		SrcCli: srcCli, DstCli: dstCli,
+		ProgressNotice: relayShareFallbackNotice(in.relayShareFallback),
 	}
 	spec := BgTaskSpec{
 		ProjectID: projectID,
@@ -500,6 +507,7 @@ func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		TaskID: taskID, Mode: "streaming_relay", RestartAfterInterruption: false,
 		BytesTotal: size, ChunksTotal: int(chunks), ResumedChunks: int(resumed),
 		ChunkBytes: chunkBytes, SpaceCheck: spaceCheck,
+		ShareEndpointServerID: relayShareFallbackEndpointID(in.relayShareFallback),
 		ConnectionNotesOutput: ConnectionNotesOutput{
 			ConnectionNotes: connectionNotes,
 		},
@@ -695,6 +703,9 @@ type RelayTaskSpec struct {
 	// SrcCli/DstCli 是 ⑧ 移交的两条连接 (本机源 SrcCli=nil)。引擎入场挂任务槽
 	// (client=DstCli, auxClient=SrcCli), 终态即关 / CloseAll 可达即关 (runTask 双槽)。
 	SrcCli, DstCli *sshbroker.Client
+	// ProgressNotice 非空时作为任务第一条输出；共享地址回退用它说明模式、
+	// 端点与续传语义。普通流式中继保持原有第一行不变。
+	ProgressNotice string
 }
 
 // runRelay 是 relay 任务的 BgTaskSpec.Run 闭包体 (T3 终态纪律零复制): 挂双连接
@@ -732,6 +743,9 @@ func relayEngineRun(ctx context.Context, spec *RelayTaskSpec, out io.Writer) (in
 
 	toPath, fromPath := spec.ToPath, spec.FromPath
 	partialPath, manifestPath := toPath+relayPartialSuffix, toPath+relayManifestSuffix
+	if spec.ProgressNotice != "" {
+		progress("%s", spec.ProgressNotice)
+	}
 	progress("relay plan: %d bytes, %d chunks (resumed %d), chunk=%d", spec.Size, spec.ChunksTotal, spec.Resumed, spec.ChunkBytes)
 
 	// 引擎自建 sftp 客户端 (preflight 的同类句柄已随其 defer 关闭); 连接本体是
