@@ -268,6 +268,8 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
 日志里，也不出现在目标机任何进程的命令行参数中。
 `relay_file` 的 Windows 共享地址本地拷贝会创建同一种注入命令会话；这不是
 独立文件传输会话。
+历史上实现票 #74 写的 `net use` 已被规格 #205 的真机结论取代：实际映射
+由 PowerShell 的 `New-SmbMapping` 完成。
 
 - 命令里可以直接使用 `S:\目录` 这类固定盘符路径；PowerShell 与 cmd 服务
   器都支持。映射失败不阻止原命令执行，只在输出末尾追加警告，说明共享
@@ -527,7 +529,10 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
   机留下持久映射。两种系统都先保留
   `<目标路径>.sshmgr-partial` 这个半成品对象（Windows 因 robocopy 的参数
   形态是暂存目录，Linux 与 macOS 是半成品文件），成功后才让目标真名出现；它不
-  生成块清单、不续传，中断、停止、失败或重跑都从文件开头覆盖旧半成品。本地
+  生成块清单、不续传，中断、停止、失败或重跑都从文件开头覆盖旧半成品。
+  Windows 重跑只删除暂存目录里与源文件同名的旧半成品文件，不动其他内容；
+  成功后暂存目录为空才删除，不空则保留并在任务输出里提示，任务仍算成功。
+  本地
   拷贝与流式中继共用同一目标路径和半成品的运行中冲突保护；本地拷贝路径不能
   给 `via`。两端都是共享地址仍会明确报错。
 - **共享地址流式回退**：另一端不在共享存储的可挂载范围内时，`mode` 回到
@@ -575,9 +580,13 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
   **无害但占盘**——`exec rm <to_path>.sshmgr-partial <to_path>.sshmgr-manifest.json`
   清掉。例外：真名已在 + manifest 残留 = 提交成功后的无害碎片，随手删 manifest
   即可。
-- **本地拷贝的残留清理**：不打算重跑时，目标端只剩
-  `<目标路径>.sshmgr-partial`，用 `exec rm <目标路径>.sshmgr-partial` 清掉；
-  本地拷贝不会生成 manifest。
+- **本地拷贝的残留清理**：不打算重跑时，Linux 与 macOS 上只剩
+  `<目标路径>.sshmgr-partial` 半成品文件，用
+  `exec rm <目标路径>.sshmgr-partial` 清掉。Windows 上
+  `<目标路径>.sshmgr-partial` 是暂存目录，半成品文件是目录里与源文件同名
+  的那个文件；清理时删除暂存目录中的这个文件（例如
+  `Remove-Item -LiteralPath '<目标路径>.sshmgr-partial\<源文件名>'`），
+  不要把整个目录连同目录里其他内容一起删。本地拷贝不会生成 manifest。
 
 ### update_server_metadata
 
@@ -955,6 +964,7 @@ HEAD，后续重构以符号名为准）：
 | stdio 模式 token 无效 → broker 进程起不来（stderr `invalid or unknown token` 后退出） | `internal/mcpserver/run.go:29-35`；`internal/cli/mcp.go:70-73` |
 | 工具报错形态 = IsError=true + 错误文本（非传输层错误） | `internal/mcpserver/server.go:83-89` |
 | relay_file 三件套/零上下文：工具描述即口径（task_id 立返；结果/exec_output 只有元数据零文件内容）；第 12 个工具单源注册 | `internal/mcpserver/server.go:298`（描述模板 `%d`=构造期块大小）；`internal/mcpserver/relay.go:55`（RelayForProfile preflight ①–⑨） |
+| relay_file 共享地址端点：一端给共享地址、另一端服务器可挂载该共享时在该服务器上本地拷贝——Linux 与 macOS 用固定 `cp` 命令（要求已实际挂载），Windows 在同一条 SSH 命令会话里用 `New-SmbMapping` 注入盘符后执行固定 `robocopy` 命令（退出码 0 到 7 视为成功）；另一端不可挂载（含执行实例本地源）时按物理局域网优先、名字排序、`via` 覆盖选择已实际挂载的 Linux 或 macOS 端点并复用流式中继；目标端是共享地址时冲突判定额外登记共享存储标识符与规范化子路径 | 规格 #235、票 #244、#245、#246；`internal/mcpserver/relay_local_copy.go`（RelayForProfile 共享地址分支）；`internal/shareaddress/address.go`（共享地址解析与挂载点翻译）；`internal/sshbroker/injection.go`（盘符注入与 PowerShell 转义） |
 | relay 块大小 env seam：缺省 256 MiB、[16 MiB, 1 GiB] 之外构造失败（fail-closed）；`SSHMGR_TRANSFER_PARALLEL` v1 只接受 1 | `internal/mcpserver/relayenv.go:30,53`（resolveRelayChunk / resolveRelayParallel） |
 | relay 单任务 72h 常量上限（非 env）；块数闸 16384（超出 refusal + 指引 raise SSHMGR_TRANSFER_CHUNK） | `internal/mcpserver/relayenv.go:69,76`（relayRunCap / relayMaxChunks）；`internal/mcpserver/relay.go:524` |
 | relay 续传进度行（`relay plan: … (resumed N)` / `chunk i/n ok` / `relay done: root=… [file_sha256=…]`）经任务 stdout → exec_output 可见；file_sha256 仅 byte0→EOF 全程任务有，续传任务只有块 merkle 根 | `internal/mcpserver/relay.go:726,966-968` |
