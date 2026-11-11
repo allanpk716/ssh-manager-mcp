@@ -138,6 +138,9 @@ type pageData struct {
 	InitializationServeAddresses     []InitializationServeAddressView
 	InitializationNeedsManualListen  bool
 	ClientGuideLines                 []string
+	// TopologyPage 控制页面外壳是否加载拓扑图专用的脚本与样式；只有
+	// 网络拓扑页为真。
+	TopologyPage bool
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染

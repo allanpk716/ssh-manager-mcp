@@ -1,0 +1,623 @@
+/* 网络拓扑页面专用样式。画布用 Cytoscape.js 渲染，页面元素只承载工具
+   栏、未归类设备托盘与详情面板。 */
+.topology-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: calc(100vh - 210px);
+}
+
+.topology-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.topology-toolbar h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.topology-views {
+  display: inline-flex;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.topology-view {
+  border: 0;
+  background: transparent;
+  padding: 6px 12px;
+}
+
+.topology-view.active {
+  background: var(--accent, #2f6fed);
+  color: #fff;
+}
+
+.topology-hint {
+  margin: 0;
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-readonly {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--warning-border, #b58105);
+  border-radius: 6px;
+  background: var(--warning-bg, #fff7e6);
+}
+
+.topology-probe {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: var(--surface, #f8fafc);
+}
+
+.topology-probe-origin-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.topology-probe-origin-label select {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.topology-probe-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted, #667085);
+}
+
+.topology-probe-status[data-probe-state="running"] {
+  color: var(--accent, #2f6fed);
+}
+
+.topology-probe-status[data-probe-state="error"] {
+  color: var(--danger, #b42318);
+}
+
+.topology-probe-status[data-probe-state="done"] {
+  color: var(--success, #067647);
+}
+
+.topology-body {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px 320px;
+  gap: 12px;
+  flex: 1;
+  min-height: 480px;
+}
+
+.topology-body.detail-open {
+  grid-template-columns: minmax(0, 1fr) 240px;
+}
+
+.topology-canvas-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 480px;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f6f7f9;
+}
+
+.topology-canvas {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+}
+
+.topology-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--danger, #b42318);
+  white-space: pre-wrap;
+}
+
+.topology-tray {
+  border: 1px dashed var(--border, #c8ccd4);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow: auto;
+}
+
+.topology-tray h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.topology-tray-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.topology-tray-item {
+  width: 100%;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: #fff;
+  padding: 6px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.topology-tray-item:hover {
+  border-color: var(--accent, #2f6fed);
+}
+
+.topology-tray-item .tray-kind {
+  display: block;
+  font-size: 12px;
+  color: var(--muted, #667085);
+}
+
+.topology-tray-empty {
+  margin: 4px 0 0;
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-detail {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px 16px;
+  overflow: auto;
+}
+
+.topology-detail[hidden] {
+  display: none;
+}
+
+.topology-detail h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.topology-detail h3 {
+  margin: 16px 0 6px;
+  font-size: 14px;
+}
+
+.topology-detail dl,
+.topology-detail ul {
+  margin: 0;
+  padding: 0;
+}
+
+.topology-detail ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.topology-detail dt {
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-detail dd {
+  margin: 0 0 6px;
+}
+
+.topology-detail .detail-close {
+  float: right;
+}
+
+.topology-detail .local-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--accent-soft, #e5efff);
+  color: var(--accent-strong, #1746a2);
+  font-size: 12px;
+}
+
+.topology-detail .candidate-source {
+  color: var(--muted, #667085);
+  font-size: 12px;
+}
+
+.topology-detail .candidate-notice {
+  color: var(--warning-text, #8a5a00);
+}
+
+@media (max-width: 980px) {
+  .topology-body,
+  .topology-body.detail-open {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .topology-canvas-wrap {
+    min-height: 420px;
+    flex: 1;
+  }
+
+  .topology-tray {
+    max-height: 160px;
+  }
+
+  .topology-detail {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 55vh;
+    border-radius: 12px 12px 0 0;
+    box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.16);
+    z-index: 20;
+  }
+}
+
+/* Cytoscape.js 3.35 给内部画布层写内联样式；内容安全策略只允许同源样式，
+   所以这里按该版本固定的层结构预先给出同样的规则。升级 Cytoscape.js 时
+   需要一并核对这些选择器。 */
+.topology-canvas > div {
+  position: relative;
+  z-index: 0;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+.topology-canvas > div > canvas {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+  outline-style: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+.topology-canvas > div > canvas[data-id="layer0"] { z-index: 3; }
+.topology-canvas > div > canvas[data-id="layer1"] { z-index: 2; }
+.topology-canvas > div > canvas[data-id="layer2"] { z-index: 1; }
+.topology-canvas > div > canvas[data-id="layer3"] { z-index: 0; }
+
+/* 上一段的补充：Cytoscape.js 给画布外层元素加这个类名并要求相对定位；页面脚
+   本会用同名标记节点阻止它插入内联样式表。 */
+.topology-canvas.__________cytoscape_container {
+  position: absolute;
+}
+
+/* 拖动归类与网络成员编辑（票 #249）。写操作都走内部 JSON 接口；对话框用
+   原生 dialog 元素呈现，样式不经内联样式表，保持内容安全策略。 */
+.topology-notice {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--ok-border, #2e7d32);
+  border-radius: 6px;
+  background: var(--ok-bg, #ecf7ee);
+  color: var(--ok-text, #20531f);
+}
+
+body.topology-dragging {
+  cursor: grabbing;
+}
+
+.topology-tray[data-draggable="true"] .topology-tray-item.draggable::before {
+  content: "⠿ ";
+  color: var(--muted, #667085);
+}
+
+.topology-tray-item.drag-source {
+  border-color: var(--accent, #2f6fed);
+  background: var(--accent-soft, #e5efff);
+}
+
+dialog.topology-dialog {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 10px;
+  padding: 0;
+  max-width: 480px;
+  width: calc(100vw - 48px);
+}
+
+dialog.topology-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.topology-dialog .dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px;
+}
+
+.topology-dialog .dialog-form h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.topology-dialog .dialog-context {
+  margin: 0;
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-dialog .dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.topology-dialog input[type="text"],
+.topology-dialog input:not([type]),
+.topology-dialog select {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 14px;
+}
+
+.topology-dialog fieldset {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.topology-dialog legend {
+  font-size: 13px;
+  color: var(--muted, #667085);
+}
+
+.topology-dialog fieldset label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.topology-dialog .new-network-name {
+  display: none;
+}
+
+.topology-dialog .new-network-name.visible {
+  display: flex;
+}
+
+.topology-dialog .dialog-error {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--error-bg, #fdecea);
+  color: var(--error-text, #8f1d18);
+  font-size: 13px;
+}
+
+.topology-dialog .dialog-error[hidden] {
+  display: none;
+}
+
+.topology-dialog .dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.topology-dialog .dialog-actions button {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: #fff;
+  padding: 6px 14px;
+}
+
+.topology-dialog .dialog-actions button[type="submit"] {
+  border-color: var(--accent, #2f6fed);
+  background: var(--accent, #2f6fed);
+  color: #fff;
+}
+
+.topology-detail .detail-operation-error {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--error-bg, #fdecea);
+  color: var(--error-text, #8f1d18);
+  font-size: 13px;
+}
+
+.topology-detail .detail-operation-error[hidden] {
+  display: none;
+}
+
+.topology-detail .detail-empty {
+  margin: 0;
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-list {
+  gap: 8px;
+}
+
+.topology-detail .detail-member-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.topology-detail .detail-member-form .member-network {
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-form input {
+  flex: 1;
+  min-width: 120px;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-form button {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: #fff;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-form .member-save {
+  border-color: var(--accent, #2f6fed);
+  color: var(--accent, #2f6fed);
+}
+
+.topology-detail .detail-member-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.topology-detail .detail-member-add h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-add label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-add input,
+.topology-detail .detail-member-add select {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-add button {
+  align-self: flex-start;
+  border: 1px solid var(--accent, #2f6fed);
+  border-radius: 6px;
+  background: var(--accent, #2f6fed);
+  color: #fff;
+  padding: 5px 12px;
+}
+
+.topology-detail .detail-probe {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: var(--surface, #f8fafc);
+}
+
+.topology-detail .detail-probe h3 {
+  margin: 0;
+}
+
+.topology-detail .probe-notice,
+.topology-detail .probe-note {
+  margin: 0;
+  font-size: 13px;
+}
+
+.topology-detail .probe-note {
+  color: var(--danger, #b42318);
+  font-weight: 600;
+}
+
+.topology-detail .detail-probe-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.topology-detail .probe-trigger {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.topology-detail .probe-trigger label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.topology-detail .probe-trigger select {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.topology-detail .probe-trigger .probe-start {
+  border: 1px solid var(--accent, #2f6fed);
+  border-radius: 6px;
+  background: var(--accent, #2f6fed);
+  color: #fff;
+  padding: 5px 12px;
+}
+
+.topology-detail .probe-trigger .probe-start:disabled {
+  opacity: 0.6;
+}
+/* 布局保存与重置（票 #248）。 */
+.topology-layout-status {
+  margin: 0;
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-layout-status.error {
+  color: var(--danger, #b42318);
+}
+
+.topology-reset {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: transparent;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.topology-reset:hover {
+  background: var(--accent-soft, #eef3ff);
+}

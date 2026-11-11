@@ -18,6 +18,14 @@ var (
 	ErrNetworkNameTaken = errors.New("网络名字已存在")
 )
 
+// TopologyValidationError 表示调用方传入的拓扑内容不合法；错误文字可直接
+// 展示给 owner。
+type TopologyValidationError struct {
+	Message string
+}
+
+func (e *TopologyValidationError) Error() string { return e.Message }
+
 // SiteChanges 表示站点的一次部分更新。指针为空代表这个字段保持不变；
 // 备注传空字符串代表清空备注。
 type SiteChanges struct {
@@ -46,7 +54,7 @@ type NetworkFilter struct {
 // 的字符；调用方负责先去掉首尾空白，名字唯一性另按小写形式检查。
 func validateTopologyName(objectType, name string) error {
 	if strings.TrimSpace(name) == "" {
-		return fmt.Errorf("%s名字不能为空", objectType)
+		return &TopologyValidationError{Message: fmt.Sprintf("%s名字不能为空", objectType)}
 	}
 	return nil
 }
@@ -157,7 +165,7 @@ func (s *Store) AddNetwork(input models.Network) (*models.Network, error) {
 		return nil, err
 	}
 	if input.BandwidthMbps < 0 {
-		return nil, errors.New("标称带宽不能小于 0 Mbit/s")
+		return nil, &TopologyValidationError{Message: "标称带宽不能小于 0 Mbit/s"}
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -292,6 +300,12 @@ func (s *Store) DeleteNetwork(name string) ([]string, error) {
 	if _, err := tx.Exec(`DELETE FROM network_memberships WHERE network_id=?`, network.ID); err != nil {
 		return nil, err
 	}
+	if _, err := tx.Exec(
+		`DELETE FROM container_layout_coordinates WHERE entity_type=? AND entity_id=?`,
+		LayoutEntityNetwork, network.ID,
+	); err != nil {
+		return nil, err
+	}
 	if _, err := tx.Exec(`DELETE FROM networks WHERE id=?`, network.ID); err != nil {
 		return nil, err
 	}
@@ -391,6 +405,12 @@ func (s *Store) DeleteSite(name string) error {
 	if len(networkNames) > 0 {
 		return fmt.Errorf("站点 %s 下还有物理局域网：%s；请先删除或改归属这些网络", site.Name, strings.Join(networkNames, "、"))
 	}
+	if _, err := tx.Exec(
+		`DELETE FROM container_layout_coordinates WHERE entity_type=? AND entity_id=?`,
+		LayoutEntitySite, site.ID,
+	); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM sites WHERE id=?`, site.ID); err != nil {
 		return err
 	}
@@ -457,7 +477,7 @@ func networkSiteForTypeTx(tx *sql.Tx, networkType models.NetworkType, siteName s
 	switch networkType {
 	case models.NetworkPhysical:
 		if strings.TrimSpace(siteName) == "" {
-			return "", "", errors.New("物理局域网必须归属一个站点；请用 --site 指定")
+			return "", "", &TopologyValidationError{Message: "物理局域网必须归属一个站点；请用 --site 指定"}
 		}
 		site, err := siteByNameTx(tx, siteName)
 		if err != nil {
@@ -466,7 +486,7 @@ func networkSiteForTypeTx(tx *sql.Tx, networkType models.NetworkType, siteName s
 		return site.ID, site.Name, nil
 	case models.NetworkVirtual:
 		if strings.TrimSpace(siteName) != "" {
-			return "", "", errors.New("虚拟局域网不属于站点；请去掉 --site")
+			return "", "", &TopologyValidationError{Message: "虚拟局域网不属于站点；请去掉 --site"}
 		}
 		return "", "", nil
 	default:

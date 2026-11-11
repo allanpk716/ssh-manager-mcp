@@ -8,6 +8,15 @@
       "license": "BSD-2-Clause",
       "license_url": "https://github.com/bigskysoftware/htmx/blob/v2.0.7/LICENSE",
       "sha256": "60231ae6ba9db3825eb15a261122d5f55921c4d53b66bf637dc18b4ee27c79f9"
+    },
+    {
+      "file": "cytoscape.min.js",
+      "name": "Cytoscape.js",
+      "version": "3.35.0",
+      "source_url": "https://registry.npmjs.org/cytoscape/-/cytoscape-3.35.0.tgz",
+      "license": "MIT",
+      "license_url": "https://github.com/cytoscape/cytoscape.js/blob/v3.35.0/LICENSE",
+      "sha256": "71fa9ebec21a7ca2c40cff6aacc30d1f6464e363662ad4b2c197e1adc770cd94"
     }
   ]
 }
