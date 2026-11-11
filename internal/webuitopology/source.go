@@ -4,6 +4,7 @@ package webuitopology
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -30,13 +31,13 @@ func FromStoreOpener(open func() (*store.Store, func(), error)) webui.TopologySo
 
 // Topology 读取本机 vault 的全部拓扑数据。instance 是客户端实例名；单机
 // 与权威端来源忽略它。
-func (s openerSource) Topology(instance string) (*webui.TopologyData, error) {
+func (s openerSource) Topology(instance, from string) (*webui.TopologyData, error) {
 	st, closeStore, err := s.open()
 	if err != nil {
 		return nil, err
 	}
 	defer closeStore()
-	return FromStore(st).Topology(instance)
+	return FromStore(st).Topology(instance, from)
 }
 
 // storeSource 直接读取一个已打开的 vault，供 serve 进程复用长期存储句柄。
@@ -51,7 +52,7 @@ func FromStore(st *store.Store) webui.TopologySource {
 
 // Topology 读取 vault 里的站点、网络、设备、网络成员、服务器条目摘要、共
 // 享存储、既有布局坐标，并按运行时状态解析本机设备。
-func (s storeSource) Topology(string) (*webui.TopologyData, error) {
+func (s storeSource) Topology(_, from string) (*webui.TopologyData, error) {
 	st := s.store
 	sites, err := st.ListSites()
 	if err != nil {
@@ -76,6 +77,14 @@ func (s storeSource) Topology(string) (*webui.TopologyData, error) {
 	local, err := dialdevice.Current(st, "")
 	if err != nil {
 		return nil, err
+	}
+	dialer := local
+	if from != "" && from != webui.TopologyProbeOriginSelf {
+		remote, err := remoteDialDevice(st, devices, from)
+		if err != nil {
+			return nil, err
+		}
+		dialer = remote
 	}
 
 	data := &webui.TopologyData{
@@ -120,7 +129,7 @@ func (s storeSource) Topology(string) (*webui.TopologyData, error) {
 		for _, item := range shared {
 			sharedViews = append(sharedViews, webui.TopologySharedStorage{ID: item.ID, Name: item.Name})
 		}
-		candidates, notice := candidatesView(device.Memberships, local, serverViews)
+		candidates, notice := candidatesView(device.Memberships, dialer, serverViews, from)
 		data.Devices = append(data.Devices, webui.TopologyDevice{
 			ID: device.ID, Name: device.Name, Note: device.Note,
 			Kind: deviceKind(len(serverViews), device.ClientName), ClientName: device.ClientName,
@@ -160,7 +169,10 @@ func FromClientSnapshot(load func(instance string) (*store.Snapshot, error)) web
 }
 
 // Topology 把客户端快照里的拓扑段整理成与权威端一致的展示数据。
-func (s snapshotSource) Topology(instance string) (*webui.TopologyData, error) {
+func (s snapshotSource) Topology(instance, from string) (*webui.TopologyData, error) {
+	if from != "" && from != webui.TopologyProbeOriginSelf {
+		return nil, errors.New("客户端只能以本机为起点查看网络拓扑。")
+	}
 	snapshot, err := s.load(instance)
 	if err != nil {
 		return nil, err
@@ -250,7 +262,7 @@ func (s snapshotSource) Topology(instance string) (*webui.TopologyData, error) {
 			}
 		}
 		sort.Slice(sharedViews, func(i, j int) bool { return sharedViews[i].Name < sharedViews[j].Name })
-		candidates, notice := candidatesView(membershipsByDevice[device.ID], local, serverViews)
+		candidates, notice := candidatesView(membershipsByDevice[device.ID], local, serverViews, from)
 		data.Devices = append(data.Devices, webui.TopologyDevice{
 			ID: device.ID, Name: device.Name, Note: device.Note,
 			Kind: deviceKind(len(serverViews), device.ClientName), ClientName: device.ClientName,
@@ -309,6 +321,31 @@ func localDeviceView(local dialdevice.Result) webui.TopologyLocalDevice {
 	return webui.TopologyLocalDevice{
 		Known: true, DeviceID: local.Device.ID, DeviceName: local.Device.Name,
 	}
+}
+
+// remoteDialDevice 按服务器条目标识找到它所属的设备，用该设备的网络成员
+// 关系计算候选 SSH 地址；这与经服务器执行探测时的起点解析保持一致。
+func remoteDialDevice(st *store.Store, devices []*models.Device, from string) (dialdevice.Result, error) {
+	servers, err := st.ListServers()
+	if err != nil {
+		return dialdevice.Result{}, err
+	}
+	deviceID := ""
+	for _, server := range servers {
+		if server.ID == from {
+			deviceID = server.DeviceID
+			break
+		}
+	}
+	if deviceID == "" {
+		return dialdevice.Result{Known: false}, nil
+	}
+	for _, device := range devices {
+		if device.ID == deviceID {
+			return dialdevice.Result{Known: true, Device: device}, nil
+		}
+	}
+	return dialdevice.Result{Known: false}, nil
 }
 
 // localDeviceFromSnapshot 解析客户端本机设备：优先读实例 cache.meta.json 记
@@ -370,12 +407,25 @@ func cacheDeviceID(instance string) string {
 // 域网其次、服务器条目兜底主机最后。返回的提示在人无法按共同网络排序时说
 // 明原因。
 func candidatesView(
-	targetMemberships []*models.NetworkMembership, dialer dialdevice.Result, servers []webui.TopologyDeviceServer,
+	targetMemberships []*models.NetworkMembership,
+	dialer dialdevice.Result,
+	servers []webui.TopologyDeviceServer,
+	from string,
 ) ([]webui.TopologyCandidate, string) {
+	originLabel := "本机"
+	if from != "" && from != webui.TopologyProbeOriginSelf {
+		originLabel = "起点服务器 " + from
+		if dialer.Known && dialer.Device != nil {
+			originLabel = "起点设备 " + dialer.Device.Name
+		}
+	}
 	candidates := make([]webui.TopologyCandidate, 0)
 	if !dialer.Known || dialer.Device == nil {
 		for _, server := range servers {
 			candidates = append(candidates, fallbackCandidate(server))
+		}
+		if from != "" && from != webui.TopologyProbeOriginSelf {
+			return candidates, "找不到起点服务器 " + from + "，或它还未关联拓扑设备；无法按共同网络排序，以下只列出兜底主机。"
 		}
 		return candidates, unknownDialerNotice(dialer.Reason, len(targetMemberships))
 	}
@@ -405,7 +455,7 @@ func candidatesView(
 	notice := ""
 	switch plan.FallbackOnlyReason {
 	case sshbroker.FallbackOnlyNoCommonNetwork:
-		notice = "本机与这台设备没有共同网络，只能使用兜底主机；建议补登记共同网络。"
+		notice = originLabel + "与这台设备没有共同网络，只能使用兜底主机；建议补登记共同网络。"
 	case sshbroker.FallbackOnlyDialerUnknown:
 		notice = unknownDialerNotice(dialer.Reason, len(targetMemberships))
 	}

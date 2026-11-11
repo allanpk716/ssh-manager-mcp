@@ -21,7 +21,7 @@ func (s *Store) AddNetworkMembership(deviceName, networkName, address string) (*
 	}
 	address = strings.TrimSpace(address)
 	if address == "" {
-		return nil, errors.New("网络成员地址不能为空")
+		return nil, &TopologyValidationError{Message: "网络成员地址不能为空"}
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -44,7 +44,8 @@ func (s *Store) AddNetworkMembership(deviceName, networkName, address string) (*
 		network.ID, strings.ToLower(address),
 	).Scan(&existingDevice)
 	if err == nil {
-		return nil, fmt.Errorf("网络 %s 的地址 %s 已被设备 %s 占用", network.Name, address, existingDevice)
+		return nil, &TopologyValidationError{Message: fmt.Sprintf(
+			"网络 %s 的地址 %s 已被设备 %s 占用", network.Name, address, existingDevice)}
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
@@ -57,7 +58,8 @@ func (s *Store) AddNetworkMembership(deviceName, networkName, address string) (*
 		return nil, err
 	}
 	if count > 0 {
-		return nil, fmt.Errorf("同一设备 %s 在网络 %s 里已有网络成员；请用 devices member edit 修改地址", device.Name, network.Name)
+		return nil, &TopologyValidationError{Message: fmt.Sprintf(
+			"同一设备 %s 在网络 %s 里已有网络成员；请用 devices member edit 修改地址", device.Name, network.Name)}
 	}
 	// 登记序号按全表单调递增：同一台设备的新成员保持新增顺序，删除成员
 	// 后也不回收已经用过的序号。
@@ -120,7 +122,7 @@ func (s *Store) EditNetworkMembership(deviceName, networkName, address string) (
 	}
 	address = strings.TrimSpace(address)
 	if address == "" {
-		return nil, errors.New("网络成员地址不能为空")
+		return nil, &TopologyValidationError{Message: "网络成员地址不能为空"}
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -160,7 +162,7 @@ func (s *Store) MoveNetworkMembership(deviceName, fromNetworkName, toNetworkName
 	}
 	address = strings.TrimSpace(address)
 	if address == "" {
-		return nil, errors.New("网络成员地址不能为空")
+		return nil, &TopologyValidationError{Message: "网络成员地址不能为空"}
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -183,10 +185,12 @@ func (s *Store) MoveNetworkMembership(deviceName, fromNetworkName, toNetworkName
 		return nil, err
 	}
 	if count > 0 {
-		return nil, fmt.Errorf("同一设备 %s 在网络 %s 里已有网络成员；请用 devices member edit 修改地址", membership.DeviceName, target.Name)
+		return nil, &TopologyValidationError{Message: fmt.Sprintf(
+			"同一设备 %s 在网络 %s 里已有网络成员；请用 devices member edit 修改地址", membership.DeviceName, target.Name)}
 	}
 	if target.Type != membership.NetworkType {
-		return nil, fmt.Errorf("不能把网络成员从类型 %s 的网络移动到类型 %s 的网络", membership.NetworkType, target.Type)
+		return nil, &TopologyValidationError{Message: fmt.Sprintf(
+			"不能把网络成员从类型 %s 的网络移动到类型 %s 的网络", membership.NetworkType, target.Type)}
 	}
 	moved := &models.NetworkMembership{
 		DeviceID: membership.DeviceID, DeviceName: membership.DeviceName,
@@ -477,7 +481,8 @@ func ensureMembershipAddressAvailableTx(tx *sql.Tx, membership *models.NetworkMe
 	if err != nil {
 		return err
 	}
-	return fmt.Errorf("网络 %s 的地址 %s 已被设备 %s 占用", membership.NetworkName, membership.Address, existingDevice)
+	return &TopologyValidationError{Message: fmt.Sprintf(
+		"网络 %s 的地址 %s 已被设备 %s 占用", membership.NetworkName, membership.Address, existingDevice)}
 }
 
 // scanNetworkMembership 把数据库行转换成网络成员对象。

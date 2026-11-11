@@ -81,6 +81,13 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	initializing := false
 	uiShutdown := make(chan struct{})
 	var shutdownOnce sync.Once
+	openStoreForUI := func() (*store.Store, func(), error) {
+		st, err := openUnlockedStore()
+		if err != nil {
+			return nil, nil, err
+		}
+		return st, func() { _ = st.Close() }, nil
+	}
 	serverWizard := destination.Kind == machineinit.UIDestinationServerWizard
 	requestShutdown := func(reason webui.ShutdownReason) {
 		if reason == webui.ShutdownReasonClientGuide {
@@ -98,27 +105,9 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource = standaloneUISecretStore()
 		secretWriter = standaloneUISecretWriter()
 		softwareInventorySource = standaloneUISoftwareInventoryStore()
-		topologySource = webuitopology.FromStoreOpener(func() (*store.Store, func(), error) {
-			st, err := openUnlockedStore()
-			if err != nil {
-				return nil, nil, err
-			}
-			return st, func() { _ = st.Close() }, nil
-		})
-		topologyWriter = webuitopology.WriterFromOpener(func() (*store.Store, func(), error) {
-			st, err := openUnlockedStore()
-			if err != nil {
-				return nil, nil, err
-			}
-			return st, func() { _ = st.Close() }, nil
-		})
-		topologyProbe = webuitopology.ProbeFromStoreOpener(func() (*store.Store, func(), error) {
-			st, err := openUnlockedStore()
-			if err != nil {
-				return nil, nil, err
-			}
-			return st, func() { _ = st.Close() }, nil
-		}, topologySource)
+		topologySource = webuitopology.FromStoreOpener(openStoreForUI)
+		topologyWriter = webuitopology.WriterFromOpener(openStoreForUI)
+		topologyProbe = webuitopology.ProbeFromStoreOpener(openStoreForUI, topologySource)
 		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
 		machineInit = standaloneMachineInitializer{}
 		initializing = destination.Kind == machineinit.UIDestinationInitializationWizard || serverWizard

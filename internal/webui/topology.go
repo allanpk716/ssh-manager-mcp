@@ -3,10 +3,11 @@ package webui
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
+
+	"ssh-manager-mcp/internal/store"
 )
 
 // 拓扑图页面与内部 JSON 接口的路径。JSON 接口只供拓扑图页面使用，不对外、
@@ -36,6 +37,13 @@ const (
 	// topologyLayoutMaxBytes 限制一次布局保存的请求体大小；三种视图的坐标
 	// 数量以拓扑实体数量为上限，远小于这个值。
 	topologyLayoutMaxBytes = 1 << 20
+
+	topologyViewPhysical = store.LayoutViewPhysical
+	topologyViewVirtual  = store.LayoutViewVirtual
+	topologyViewOverlay  = store.LayoutViewOverlay
+
+	// TopologyProbeOriginSelf 表示以本机设备作为探测或候选地址起点。
+	TopologyProbeOriginSelf = "self"
 )
 
 // TopologySite 是拓扑图里的一个站点，只携带只读呈现需要的字段。
@@ -153,7 +161,7 @@ type TopologyData struct {
 // TopologySource 是 Web UI 读取拓扑数据的唯一入口。instance 是客户端缓存
 // 实例名，空串表示默认实例；单机与权威端来源忽略它。
 type TopologySource interface {
-	Topology(instance string) (*TopologyData, error)
+	Topology(instance, from string) (*TopologyData, error)
 }
 
 // TopologyNameNotFoundError 表示写请求里的设备、网络或站点不存在；接口
@@ -163,6 +171,14 @@ type TopologyNameNotFoundError struct {
 }
 
 func (e *TopologyNameNotFoundError) Error() string { return e.Message }
+
+// TopologyInvalidInputError 表示用户输入或请求内容不合法；接口按 400 返回
+// 其中的中文提示。
+type TopologyInvalidInputError struct {
+	Message string
+}
+
+func (e *TopologyInvalidInputError) Error() string { return e.Message }
 
 // TopologyWriteSource 描述一次拓扑图写请求的来源地址，适配层把它写进审计行。
 type TopologyWriteSource struct {
@@ -234,7 +250,15 @@ func (h *handler) handleTopologyData(w http.ResponseWriter, r *http.Request) {
 		h.writeTopologyJSONError(w, http.StatusMethodNotAllowed, "拓扑数据接口只接受 GET 请求。")
 		return
 	}
-	data, err := h.cfg.Topology.Topology(h.requestClientInstance(r))
+	from := strings.TrimSpace(r.URL.Query().Get("from"))
+	if from == "" {
+		from = TopologyProbeOriginSelf
+	}
+	if h.cfg.Role == RoleClient && from != TopologyProbeOriginSelf {
+		h.writeTopologyJSONError(w, http.StatusBadRequest, "客户端只能以本机为起点查看网络拓扑。")
+		return
+	}
+	data, err := h.cfg.Topology.Topology(h.requestClientInstance(r), from)
 	if err != nil {
 		h.writeTopologyJSONError(w, http.StatusInternalServerError, "读取网络拓扑失败，请稍后重试。")
 		return
@@ -251,8 +275,8 @@ func (h *handler) writeTopologyJSONError(w http.ResponseWriter, status int, mess
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
-// topologyWriteRequest 是写接口的请求体；字段全部必填，由各处理器按自己
-// 的路径裁剪需要哪些。
+// topologyWriteRequest 是网络成员与网络写接口共用的一组可选字段；各处理
+// 器只校验并使用自己路径需要的字段。
 type topologyWriteRequest struct {
 	Device      string `json:"device"`
 	Network     string `json:"network"`
@@ -263,18 +287,44 @@ type topologyWriteRequest struct {
 	Site        string `json:"site"`
 }
 
+var (
+	errTopologyBodyRead       = errors.New("读取请求内容失败。")
+	errTopologyBodyInvalid    = errors.New("请求内容不是合法的 JSON 对象。")
+	errTopologyBodyTooLarge   = errors.New("请求内容过大")
+	errTopologyLayoutInvalid  = errors.New("请求体不是合法的布局 JSON")
+	errTopologyLayoutTooLarge = errors.New("布局请求内容过大")
+)
+
+// decodeTopologyJSONBody 读取并解析受长度限制的拓扑 JSON 请求体。
+func decodeTopologyJSONBody(r *http.Request, maxBytes int, payload any) error {
+	body, err := io.ReadAll(io.LimitReader(r.Body, int64(maxBytes)+1))
+	if err != nil {
+		return errTopologyBodyRead
+	}
+	if len(body) > maxBytes {
+		return errTopologyBodyTooLarge
+	}
+	if err := json.Unmarshal(body, payload); err != nil {
+		return errTopologyBodyInvalid
+	}
+	return nil
+}
+
+// writeTopologyWriteJSONRequestError 把成员、网络与探测写请求的解析错误映
+// 射为状态码；请求超过限制时统一返回 413。
+func (h *handler) writeTopologyWriteJSONRequestError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errTopologyBodyTooLarge) {
+		h.writeTopologyJSONError(w, http.StatusRequestEntityTooLarge, err.Error())
+		return
+	}
+	h.writeTopologyJSONError(w, http.StatusBadRequest, err.Error())
+}
+
 // decodeTopologyWriteRequest 解析写请求体并去掉各字段前后的空白。
 func decodeTopologyWriteRequest(r *http.Request) (*topologyWriteRequest, error) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, topologyWriteMaxRequestBody+1))
-	if err != nil {
-		return nil, fmt.Errorf("读取请求内容失败：%w", err)
-	}
-	if len(body) > topologyWriteMaxRequestBody {
-		return nil, errors.New("请求内容过大")
-	}
 	var request topologyWriteRequest
-	if err := json.Unmarshal(body, &request); err != nil {
-		return nil, errors.New("请求内容不是合法的 JSON 对象。")
+	if err := decodeTopologyJSONBody(r, topologyWriteMaxRequestBody, &request); err != nil {
+		return nil, err
 	}
 	request.Device = strings.TrimSpace(request.Device)
 	request.Network = strings.TrimSpace(request.Network)
@@ -287,16 +337,20 @@ func decodeTopologyWriteRequest(r *http.Request) (*topologyWriteRequest, error) 
 }
 
 // writeTopologyResult 执行一次写操作并把结果换成 JSON；名称不存在按 404，
-// 其余校验错误按 400，成功返回写来源给出的中文提示。
-func (h *handler) writeTopologyResult(w http.ResponseWriter, run func() (string, error)) {
+// 用户输入错误按 400，其余错误按 500 并写日志。
+func (h *handler) writeTopologyResult(w http.ResponseWriter, r *http.Request, run func() (string, error)) {
 	message, err := run()
 	if err != nil {
 		var notFound *TopologyNameNotFoundError
+		var invalid *TopologyInvalidInputError
 		switch {
 		case errors.As(err, &notFound):
 			h.writeTopologyJSONError(w, http.StatusNotFound, notFound.Message)
+		case errors.As(err, &invalid):
+			h.writeTopologyJSONError(w, http.StatusBadRequest, invalid.Message)
 		default:
-			h.writeTopologyJSONError(w, http.StatusBadRequest, err.Error())
+			h.logError(r, "保存网络拓扑失败", err)
+			h.writeTopologyJSONError(w, http.StatusInternalServerError, "保存网络拓扑失败，请稍后重试。")
 		}
 		return
 	}
@@ -304,131 +358,123 @@ func (h *handler) writeTopologyResult(w http.ResponseWriter, run func() (string,
 	_ = json.NewEncoder(w).Encode(map[string]string{"message": message})
 }
 
-// handleTopologyMembershipAdd 把设备加入网络并登记地址。
-func (h *handler) handleTopologyMembershipAdd(w http.ResponseWriter, r *http.Request) {
+// topologyWriteOperation 描述一个网络成员或网络写接口的差异部分；方法、
+// 请求体解析与错误形态由公共处理器统一处理。
+type topologyWriteOperation struct {
+	methodNotAllowed string
+	missingFields    string
+	hasFields        func(request *topologyWriteRequest) bool
+	run              func(request *topologyWriteRequest) (string, error)
+}
+
+// handleTopologyWriteOperation 是六个成员与网络写接口的公共骨架。
+func (h *handler) handleTopologyWriteOperation(
+	w http.ResponseWriter, r *http.Request, operation topologyWriteOperation,
+) {
 	if r.Method != http.MethodPost {
-		h.writeTopologyJSONError(w, http.StatusMethodNotAllowed, "网络成员新增接口只接受 POST 请求。")
+		h.writeTopologyJSONError(w, http.StatusMethodNotAllowed, operation.methodNotAllowed)
 		return
 	}
 	request, err := decodeTopologyWriteRequest(r)
 	if err != nil {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, err.Error())
+		h.writeTopologyWriteJSONRequestError(w, err)
 		return
 	}
-	if request.Device == "" || request.Network == "" || request.Address == "" {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, "设备、网络与地址都不能为空。")
+	if !operation.hasFields(request) {
+		h.writeTopologyJSONError(w, http.StatusBadRequest, operation.missingFields)
 		return
 	}
-	h.writeTopologyResult(w, func() (string, error) {
-		return h.cfg.TopologyWriter.AddNetworkMembership(request.Device, request.Network, request.Address)
+	h.writeTopologyResult(w, r, func() (string, error) { return operation.run(request) })
+}
+
+// handleTopologyMembershipAdd 把设备加入网络并登记地址。
+func (h *handler) handleTopologyMembershipAdd(w http.ResponseWriter, r *http.Request) {
+	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
+		methodNotAllowed: "网络成员新增接口只接受 POST 请求。",
+		missingFields:    "设备、网络与地址都不能为空。",
+		hasFields: func(request *topologyWriteRequest) bool {
+			return request.Device != "" && request.Network != "" && request.Address != ""
+		},
+		run: func(request *topologyWriteRequest) (string, error) {
+			return h.cfg.TopologyWriter.AddNetworkMembership(request.Device, request.Network, request.Address)
+		},
 	})
 }
 
 // handleTopologyMembershipEdit 修改设备在一个网络里的地址。
 func (h *handler) handleTopologyMembershipEdit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		h.writeTopologyJSONError(w, http.StatusMethodNotAllowed, "网络成员地址修改接口只接受 POST 请求。")
-		return
-	}
-	request, err := decodeTopologyWriteRequest(r)
-	if err != nil {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if request.Device == "" || request.Network == "" || request.Address == "" {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, "设备、网络与地址都不能为空。")
-		return
-	}
-	h.writeTopologyResult(w, func() (string, error) {
-		return h.cfg.TopologyWriter.EditNetworkMembership(request.Device, request.Network, request.Address)
+	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
+		methodNotAllowed: "网络成员地址修改接口只接受 POST 请求。",
+		missingFields:    "设备、网络与地址都不能为空。",
+		hasFields: func(request *topologyWriteRequest) bool {
+			return request.Device != "" && request.Network != "" && request.Address != ""
+		},
+		run: func(request *topologyWriteRequest) (string, error) {
+			return h.cfg.TopologyWriter.EditNetworkMembership(request.Device, request.Network, request.Address)
+		},
 	})
 }
 
 // handleTopologyMembershipRemove 把设备移出一个网络。
 func (h *handler) handleTopologyMembershipRemove(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		h.writeTopologyJSONError(w, http.StatusMethodNotAllowed, "网络成员退出接口只接受 POST 请求。")
-		return
-	}
-	request, err := decodeTopologyWriteRequest(r)
-	if err != nil {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if request.Device == "" || request.Network == "" {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, "设备与网络都不能为空。")
-		return
-	}
-	h.writeTopologyResult(w, func() (string, error) {
-		return h.cfg.TopologyWriter.RemoveNetworkMembership(request.Device, request.Network)
+	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
+		methodNotAllowed: "网络成员退出接口只接受 POST 请求。",
+		missingFields:    "设备与网络都不能为空。",
+		hasFields: func(request *topologyWriteRequest) bool {
+			return request.Device != "" && request.Network != ""
+		},
+		run: func(request *topologyWriteRequest) (string, error) {
+			return h.cfg.TopologyWriter.RemoveNetworkMembership(request.Device, request.Network)
+		},
 	})
 }
 
 // handleTopologyMembershipMove 把设备的网络成员从一个网络移动到另一个网
 // 络并登记新地址；「同时加入」走新增接口，不经过这里。
 func (h *handler) handleTopologyMembershipMove(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		h.writeTopologyJSONError(w, http.StatusMethodNotAllowed, "网络成员移动接口只接受 POST 请求。")
-		return
-	}
-	request, err := decodeTopologyWriteRequest(r)
-	if err != nil {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if request.Device == "" || request.FromNetwork == "" || request.ToNetwork == "" || request.Address == "" {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, "设备、原网络、目标网络与地址都不能为空。")
-		return
-	}
-	h.writeTopologyResult(w, func() (string, error) {
-		return h.cfg.TopologyWriter.MoveNetworkMembership(request.Device, request.FromNetwork, request.ToNetwork, request.Address)
+	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
+		methodNotAllowed: "网络成员移动接口只接受 POST 请求。",
+		missingFields:    "设备、原网络、目标网络与地址都不能为空。",
+		hasFields: func(request *topologyWriteRequest) bool {
+			return request.Device != "" && request.FromNetwork != "" && request.ToNetwork != "" && request.Address != ""
+		},
+		run: func(request *topologyWriteRequest) (string, error) {
+			return h.cfg.TopologyWriter.MoveNetworkMembership(
+				request.Device, request.FromNetwork, request.ToNetwork, request.Address)
+		},
 	})
 }
 
 // handleTopologyMembershipRemovePhysical 删除设备的全部物理局域网成员；
 // 虚拟局域网成员保留。
 func (h *handler) handleTopologyMembershipRemovePhysical(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		h.writeTopologyJSONError(w, http.StatusMethodNotAllowed, "物理局域网成员删除接口只接受 POST 请求。")
-		return
-	}
-	request, err := decodeTopologyWriteRequest(r)
-	if err != nil {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if request.Device == "" {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, "设备不能为空。")
-		return
-	}
-	h.writeTopologyResult(w, func() (string, error) {
-		return h.cfg.TopologyWriter.RemovePhysicalNetworkMemberships(request.Device)
+	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
+		methodNotAllowed: "物理局域网成员删除接口只接受 POST 请求。",
+		missingFields:    "设备不能为空。",
+		hasFields:        func(request *topologyWriteRequest) bool { return request.Device != "" },
+		run: func(request *topologyWriteRequest) (string, error) {
+			return h.cfg.TopologyWriter.RemovePhysicalNetworkMemberships(request.Device)
+		},
 	})
 }
 
 // handleTopologyNetworkAdd 在拖动归类流程里新建一个物理局域网；只需要网
 // 络名与所属站点，其余网络属性仍走命令行。
 func (h *handler) handleTopologyNetworkAdd(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		h.writeTopologyJSONError(w, http.StatusMethodNotAllowed, "物理局域网新建接口只接受 POST 请求。")
-		return
-	}
-	request, err := decodeTopologyWriteRequest(r)
-	if err != nil {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if request.Name == "" || request.Site == "" {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, "网络名与所属站点都不能为空。")
-		return
-	}
-	h.writeTopologyResult(w, func() (string, error) {
-		return h.cfg.TopologyWriter.AddPhysicalNetwork(request.Name, request.Site)
+	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
+		methodNotAllowed: "物理局域网新建接口只接受 POST 请求。",
+		missingFields:    "网络名与所属站点都不能为空。",
+		hasFields: func(request *topologyWriteRequest) bool {
+			return request.Name != "" && request.Site != ""
+		},
+		run: func(request *topologyWriteRequest) (string, error) {
+			return h.cfg.TopologyWriter.AddPhysicalNetwork(request.Name, request.Site)
+		},
 	})
 }
 
-// TopologyLayoutSave 是一次布局保存请求的载荷：一个视图的全部设备与容器
-// 坐标，保存时整体替换该视图。
+// TopologyLayoutSave 是一次布局保存请求的载荷：一个视图的全部设备坐标与
+// 站点区域或网络分组框坐标，保存时整体替换该视图。
 type TopologyLayoutSave struct {
 	ViewKey    string                              `json:"view"`
 	Devices    []TopologyLayoutCoordinate          `json:"devices,omitempty"`
@@ -442,29 +488,24 @@ type topologyLayoutResetRequest struct {
 
 // validTopologyView 判断视图键是否属于拓扑图页面的三种视图。
 func validTopologyView(view string) bool {
-	return view == "physical" || view == "virtual" || view == "overlay"
+	return view == topologyViewPhysical || view == topologyViewVirtual || view == topologyViewOverlay
 }
 
 // decodeTopologyLayoutBody 解析并做处理器层校验。引用是否存在由写来源在存
 // 储事务里判断。
 func decodeTopologyLayoutBody(r *http.Request, payload any) error {
-	body, err := io.ReadAll(io.LimitReader(r.Body, topologyLayoutMaxBytes+1))
-	if err != nil {
-		return errTopologyLayoutBadRequest
-	}
-	if len(body) > topologyLayoutMaxBytes {
-		return errTopologyLayoutTooLarge
-	}
-	if err := json.Unmarshal(body, payload); err != nil {
-		return errTopologyLayoutBadRequest
+	if err := decodeTopologyJSONBody(r, topologyLayoutMaxBytes, payload); err != nil {
+		switch {
+		case errors.Is(err, errTopologyBodyTooLarge):
+			return errTopologyLayoutTooLarge
+		case errors.Is(err, errTopologyBodyRead), errors.Is(err, errTopologyBodyInvalid):
+			return errTopologyLayoutInvalid
+		default:
+			return err
+		}
 	}
 	return nil
 }
-
-var (
-	errTopologyLayoutBadRequest = errors.New("请求体不是合法的布局 JSON")
-	errTopologyLayoutTooLarge   = errors.New("布局请求内容过大")
-)
 
 // topologyLayoutSaveRequest 是布局保存请求的线上形态。横纵坐标用指针区
 // 分「没给」与「值为 0」，两者都是非法请求与合法坐标的区别。
@@ -522,16 +563,16 @@ func (h *handler) handleTopologyLayoutSave(w http.ResponseWriter, r *http.Reques
 		})
 	}
 	for _, coordinate := range request.Containers {
-		if coordinate.EntityType != "site" && coordinate.EntityType != "network" {
-			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的容器坐标只能是站点或网络。")
+		if coordinate.EntityType != store.LayoutEntitySite && coordinate.EntityType != store.LayoutEntityNetwork {
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的站点区域或网络分组框坐标只能是站点或网络。")
 			return
 		}
 		if strings.TrimSpace(coordinate.EntityID) == "" {
-			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的容器坐标缺少站点或网络标识。")
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的站点区域或网络分组框坐标缺少站点或网络标识。")
 			return
 		}
 		if coordinate.X == nil || coordinate.Y == nil {
-			h.writeTopologyJSONError(w, http.StatusBadRequest, "布局里的容器坐标必须同时给出横坐标与纵坐标。")
+			h.writeTopologyJSONError(w, http.StatusBadRequest, "布局里的站点区域或网络分组框坐标必须同时给出横坐标与纵坐标。")
 			return
 		}
 		save.Containers = append(save.Containers, TopologyContainerLayoutCoordinate{
@@ -587,5 +628,5 @@ func (h *handler) writeTopologyLayoutJSONRequestError(w http.ResponseWriter, err
 		h.writeTopologyJSONError(w, http.StatusRequestEntityTooLarge, err.Error())
 		return
 	}
-	h.writeTopologyJSONError(w, http.StatusBadRequest, err.Error())
+	h.writeTopologyWriteJSONRequestError(w, err)
 }

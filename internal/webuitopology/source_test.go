@@ -190,7 +190,7 @@ func TestStoreSourceReturnsTopologyForWritableRole(t *testing.T) {
 	st, _, _, _ := seedVault(t)
 	source := FromStore(st)
 
-	data, err := source.Topology("")
+	data, err := source.Topology("", "self")
 	if err != nil {
 		t.Fatalf("read topology: %v", err)
 	}
@@ -277,6 +277,44 @@ func TestStoreSourceReturnsTopologyForWritableRole(t *testing.T) {
 	}
 }
 
+func TestStoreSourceOrdersCandidatesBySelectedServerOrigin(t *testing.T) {
+	st, _, _, _ := seedVault(t)
+	servers, err := st.ListServers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbServerID := ""
+	for _, server := range servers {
+		if server.Name == "db-1" {
+			dbServerID = server.ID
+		}
+	}
+	if dbServerID == "" {
+		t.Fatal("种子库里找不到 db-1 服务器条目")
+	}
+
+	data, err := FromStore(st).Topology("", dbServerID)
+	if err != nil {
+		t.Fatalf("按服务器起点读取拓扑失败：%v", err)
+	}
+	workstation := deviceByName(t, data, "工作站")
+	if len(workstation.Candidates) != 3 ||
+		workstation.Candidates[0].Source != "virtual" ||
+		workstation.Candidates[1].Source != "fallback" ||
+		workstation.Candidates[2].Source != "fallback" {
+		t.Fatalf("服务器起点应按起点的设备网络成员排序候选地址：%+v", workstation.Candidates)
+	}
+	nas := deviceByName(t, data, "NAS")
+	if len(nas.Candidates) != 1 || nas.Candidates[0].Source != "virtual" ||
+		nas.Candidates[0].NetworkName != "虚拟网" {
+		t.Fatalf("服务器起点与 NAS 的共同虚拟局域网应排在候选地址里：%+v", nas.Candidates)
+	}
+	cloud := deviceByName(t, data, "云主机")
+	if len(cloud.Candidates) != 0 || !strings.Contains(cloud.CandidateNotice, "机房机器") {
+		t.Fatalf("服务器起点没有共同网络时应给面向该起点的提示：%+v", cloud)
+	}
+}
+
 func TestClientSnapshotSourceCropsToAuthorizedDevices(t *testing.T) {
 	st, _, profileID, tokenID := seedVault(t)
 	snapshot, err := st.ExportSnapshotForProfile(profileID, false, tokenID)
@@ -304,7 +342,7 @@ func TestClientSnapshotSourceCropsToAuthorizedDevices(t *testing.T) {
 		gotInstance = instance
 		return snapshot, nil
 	})
-	data, err := source.Topology("lab")
+	data, err := source.Topology("lab", "self")
 	if err != nil {
 		t.Fatalf("read client topology: %v", err)
 	}
@@ -354,7 +392,7 @@ func TestStoreSourceReportsUnknownLocalDevice(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "local-device.json")); err != nil {
 		t.Fatalf("remove local device setting: %v", err)
 	}
-	data, err := FromStore(st).Topology("")
+	data, err := FromStore(st).Topology("", "self")
 	if err != nil {
 		t.Fatalf("read topology: %v", err)
 	}
@@ -388,15 +426,15 @@ func TestSourcesReturnContainerLayoutCoordinates(t *testing.T) {
 		},
 	}
 	if err := st.SaveViewLayout("virtual", layout, "127.0.0.1"); err != nil {
-		t.Fatalf("保存容器布局失败：%v", err)
+		t.Fatalf("保存站点区域与网络分组框布局失败：%v", err)
 	}
 
-	data, err := FromStore(st).Topology("")
+	data, err := FromStore(st).Topology("", "self")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(data.ContainerLayoutCoordinates) != 2 {
-		t.Fatalf("权威端来源应返回容器坐标：%+v", data.ContainerLayoutCoordinates)
+		t.Fatalf("权威端来源应返回站点区域或网络分组框坐标：%+v", data.ContainerLayoutCoordinates)
 	}
 	byKey := make(map[string]webui.TopologyContainerLayoutCoordinate, 2)
 	for _, coordinate := range data.ContainerLayoutCoordinates {
@@ -404,7 +442,7 @@ func TestSourcesReturnContainerLayoutCoordinates(t *testing.T) {
 	}
 	if byKey["site/"+siteID].X != 21 || byKey["site/"+siteID].Y != 31 ||
 		byKey["network/"+networkID].X != 41 || byKey["network/"+networkID].Y != 51 {
-		t.Fatalf("权威端来源的容器坐标错误：%+v", data.ContainerLayoutCoordinates)
+		t.Fatalf("权威端来源的站点区域或网络分组框坐标错误：%+v", data.ContainerLayoutCoordinates)
 	}
 
 	snapshot, err := st.ExportSnapshotForProfile(profileID, false, tokenID)
@@ -413,12 +451,12 @@ func TestSourcesReturnContainerLayoutCoordinates(t *testing.T) {
 	}
 	clientData, err := FromClientSnapshot(func(string) (*store.Snapshot, error) {
 		return snapshot, nil
-	}).Topology("")
+	}).Topology("", "self")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(clientData.ContainerLayoutCoordinates) != 2 {
-		t.Fatalf("客户端来源应返回快照里的容器坐标：%+v", clientData.ContainerLayoutCoordinates)
+		t.Fatalf("客户端来源应返回快照里的站点区域或网络分组框坐标：%+v", clientData.ContainerLayoutCoordinates)
 	}
 }
 
@@ -454,7 +492,7 @@ func TestTopologyWriterSavesAndResetsLayout(t *testing.T) {
 		t.Fatalf("适配层保存后的设备坐标错误：%+v", deviceRows)
 	}
 	if len(containerRows) != 1 || containerRows[0].EntityType != "site" || containerRows[0].X != 100 {
-		t.Fatalf("适配层保存后的容器坐标错误：%+v", containerRows)
+		t.Fatalf("适配层保存后的站点区域或网络分组框坐标错误：%+v", containerRows)
 	}
 	audits := layoutAuditRows(t, st)
 	if len(audits) != 1 || audits[0].Action != "topology.layout.save" ||

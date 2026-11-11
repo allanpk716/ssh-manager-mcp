@@ -6,7 +6,6 @@ package webui
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,12 +17,14 @@ import (
 // 定数据。
 type stubTopologySource struct {
 	instance string
+	from     string
 	data     *TopologyData
 	err      error
 }
 
-func (s *stubTopologySource) Topology(instance string) (*TopologyData, error) {
+func (s *stubTopologySource) Topology(instance, from string) (*TopologyData, error) {
 	s.instance = instance
+	s.from = from
 	return s.data, s.err
 }
 
@@ -228,6 +229,15 @@ func TestTopologyDataEndpointReturnsSourceJSON(t *testing.T) {
 	if !got.LocalDevice.Known || got.LocalDevice.DeviceName != "工作站" {
 		t.Fatalf("本机设备数据错误：%+v", got.LocalDevice)
 	}
+	if source.from != "self" {
+		t.Fatalf("未选择起点时应按本机起点读取，实际 %q", source.from)
+	}
+
+	remote := authorityGet(t, handler, "127.0.0.1:18080", "/ui/api/topology?from=server-1", cookies[0])
+	remote.Body.Close()
+	if remote.StatusCode != http.StatusOK || source.from != "server-1" {
+		t.Fatalf("拓扑数据接口应转发所选起点，状态码=%d 起点=%q", remote.StatusCode, source.from)
+	}
 }
 
 func TestAuthorityTopologyDataEndpointRequiresLoginThenReturnsJSON(t *testing.T) {
@@ -280,10 +290,51 @@ func TestTopologyEndpointsRequireSession(t *testing.T) {
 
 	authorityHandler, _ := newTopologyTestHandler(t, RoleServer, &stubTopologySource{data: &TopologyData{}}, "")
 	redirect := authorityGet(t, authorityHandler, "127.0.0.1:7879", "/ui/api/topology", nil)
-	redirect.Body.Close()
-	if redirect.StatusCode != http.StatusSeeOther || redirect.Header.Get("Location") != loginPath {
-		t.Fatalf("无会话访问权威端拓扑数据应跳转登录，状态码=%d 跳转=%q",
-			redirect.StatusCode, redirect.Header.Get("Location"))
+	defer redirect.Body.Close()
+	if redirect.StatusCode != http.StatusUnauthorized ||
+		redirect.Header.Get("Content-Type") != "application/json; charset=utf-8" {
+		t.Fatalf("无会话访问权威端拓扑数据应返回 JSON 错误，状态码=%d 内容类型=%q",
+			redirect.StatusCode, redirect.Header.Get("Content-Type"))
+	}
+	var payload map[string]string
+	if err := json.NewDecoder(redirect.Body).Decode(&payload); err != nil || payload["error"] == "" {
+		t.Fatalf("无会话访问权威端拓扑数据的错误不是 JSON：%v %v", err, payload)
+	}
+}
+
+func TestTopologyAPIAuthenticationAndCSRFErrorsReturnJSON(t *testing.T) {
+	handler, startup := newTopologyTestHandler(
+		t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", &stubTopologyWriter{},
+	)
+	resp := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookies := resp.Cookies()
+	resp.Body.Close()
+
+	missingSession := httptest.NewRequest(http.MethodGet, "/ui/api/topology", nil)
+	missingSession.Host = "127.0.0.1:18080"
+	missingSession.Header.Set("Accept", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, missingSession)
+	sessionResponse := recorder.Result()
+	defer sessionResponse.Body.Close()
+	if sessionResponse.StatusCode != http.StatusUnauthorized ||
+		sessionResponse.Header.Get("Content-Type") != "application/json; charset=utf-8" {
+		t.Fatalf("无会话的拓扑接口应返回 JSON 错误：%d %s", sessionResponse.StatusCode, sessionResponse.Header.Get("Content-Type"))
+	}
+	var sessionPayload map[string]string
+	if err := json.NewDecoder(sessionResponse.Body).Decode(&sessionPayload); err != nil || sessionPayload["error"] == "" {
+		t.Fatalf("无会话的拓扑接口错误不是 JSON：%v %v", err, sessionPayload)
+	}
+
+	badCSRF := postTopologyJSON(t, handler, cookies[0], "", topologyMembershipAddPath, `{"device":"NAS"}`)
+	defer badCSRF.Body.Close()
+	if badCSRF.StatusCode != http.StatusForbidden ||
+		badCSRF.Header.Get("Content-Type") != "application/json; charset=utf-8" {
+		t.Fatalf("防跨站请求伪造失败的拓扑接口应返回 JSON 错误：%d %s", badCSRF.StatusCode, badCSRF.Header.Get("Content-Type"))
+	}
+	var csrfPayload map[string]string
+	if err := json.NewDecoder(badCSRF.Body).Decode(&csrfPayload); err != nil || csrfPayload["error"] == "" {
+		t.Fatalf("防跨站请求伪造失败的拓扑接口错误不是 JSON：%v %v", err, csrfPayload)
 	}
 }
 
@@ -561,7 +612,55 @@ func TestTopologyWriteEndpointErrors(t *testing.T) {
 	}
 }
 
-var errTopologyTestDuplicate = fmt.Errorf("网络 家A局域网 的地址 192.168.1.20 已被设备 工作站 占用")
+var errTopologyTestDuplicate = &TopologyInvalidInputError{
+	Message: "网络 家A局域网 的地址 192.168.1.20 已被设备 工作站 占用",
+}
+
+func TestTopologyWriteEndpointSeparatesValidationAndInternalErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		writer  *stubTopologyWriter
+		status  int
+		message string
+	}{
+		{
+			name:    "用户输入非法返回400并保留提示",
+			writer:  &stubTopologyWriter{nextPlainError: &TopologyInvalidInputError{Message: "网络成员地址不能为空"}},
+			status:  http.StatusBadRequest,
+			message: "网络成员地址不能为空",
+		},
+		{
+			name:    "内部错误返回500与统一提示",
+			writer:  &stubTopologyWriter{nextPlainError: errors.New("数据库连接已断开")},
+			status:  http.StatusInternalServerError,
+			message: "保存网络拓扑失败，请稍后重试。",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", tc.writer)
+			resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
+			cookies := resp.Cookies()
+			resp.Body.Close()
+			csrf := sessionCSRFTokenForTopology(t, uiHandler)
+			response := postTopologyJSON(t, uiHandler, cookies[0], csrf, topologyMembershipAddPath,
+				`{"device":"笔记本","network":"家A局域网","address":"192.168.1.9"}`)
+			defer response.Body.Close()
+			if response.StatusCode != tc.status {
+				t.Fatalf("状态码 = %d，应为 %d", response.StatusCode, tc.status)
+			}
+			var payload struct {
+				Error string `json:"error"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Error != tc.message {
+				t.Fatalf("错误提示 = %q，应为 %q", payload.Error, tc.message)
+			}
+		})
+	}
+}
 
 func TestTopologyWriteEndpointsRejectMissingFieldsAndBadJSON(t *testing.T) {
 	writer := &stubTopologyWriter{}
@@ -588,6 +687,36 @@ func TestTopologyWriteEndpointsRejectMissingFieldsAndBadJSON(t *testing.T) {
 	}
 	if len(writer.addCalls) != 0 {
 		t.Fatalf("校验失败不应调用写来源：%+v", writer.addCalls)
+	}
+}
+
+func TestTopologyWriteAndLayoutEndpointsRejectOversizedJSON(t *testing.T) {
+	writer := &stubTopologyWriter{}
+	uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", writer)
+	resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
+	cookies := resp.Cookies()
+	resp.Body.Close()
+	csrf := sessionCSRFTokenForTopology(t, uiHandler)
+
+	writeBody := `{"address":"` + strings.Repeat("x", topologyWriteMaxRequestBody) + `"}`
+	rejected := postTopologyJSON(t, uiHandler, cookies[0], csrf, topologyMembershipAddPath, writeBody)
+	defer rejected.Body.Close()
+	if rejected.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("网络成员写请求超限状态码 = %d，应为 413", rejected.StatusCode)
+	}
+	var payload map[string]string
+	if err := json.NewDecoder(rejected.Body).Decode(&payload); err != nil || payload["error"] == "" {
+		t.Fatalf("网络成员写请求超限应返回 JSON 中文错误：%v %v", err, payload)
+	}
+
+	layoutBody := `{"view":"physical","devices":[` + strings.Repeat(" ", topologyLayoutMaxBytes) + `]}`
+	layoutRejected := postTopologyJSON(t, uiHandler, cookies[0], csrf, topologyLayoutPath, layoutBody)
+	defer layoutRejected.Body.Close()
+	if layoutRejected.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("布局保存请求超限状态码 = %d，应为 413", layoutRejected.StatusCode)
+	}
+	if writer.addCalls != nil || writer.saveCalls != 0 {
+		t.Fatalf("超限请求不应调用写来源：%+v", writer)
 	}
 }
 
@@ -706,7 +835,7 @@ func TestTopologyLayoutSaveEndpointValidatesAndCallsWriter(t *testing.T) {
 	if len(writer.saveLayout.Containers) != 1 || writer.saveLayout.Containers[0].EntityType != "site" ||
 		writer.saveLayout.Containers[0].EntityID != "site-1" ||
 		writer.saveLayout.Containers[0].X != 20 || writer.saveLayout.Containers[0].Y != 30 {
-		t.Fatalf("保存的容器坐标错误：%+v", writer.saveLayout.Containers)
+		t.Fatalf("保存的站点区域或网络分组框坐标错误：%+v", writer.saveLayout.Containers)
 	}
 	if writer.saveSource.RemoteAddress != "192.0.2.1" {
 		t.Fatalf("保存请求来源地址错误：%+v", writer.saveSource)

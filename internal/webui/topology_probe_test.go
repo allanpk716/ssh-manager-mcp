@@ -20,6 +20,7 @@ type stubTopologyProbe struct {
 	startInstance   string
 	startFrom       string
 	startTargets    []string
+	startCalls      int
 	nextStartID     string
 	nextStartErr    error
 	nextOverlay     *TopologyProbeOverlay
@@ -42,6 +43,7 @@ func (s *stubTopologyProbe) Overlay(instance, from string) (*TopologyProbeOverla
 }
 
 func (s *stubTopologyProbe) StartProbe(instance, from string, targets []string) (string, error) {
+	s.startCalls++
 	s.startInstance = instance
 	s.startFrom = from
 	s.startTargets = append([]string(nil), targets...)
@@ -172,13 +174,79 @@ func TestTopologyProbeStartValidationAndConflicts(t *testing.T) {
 		t.Fatalf("重复触发提示错误：%v", message)
 	}
 
-	probeStub.nextStartErr = errors.New("起点服务器不存在")
+	probeStub.nextStartErr = &TopologyInvalidInputError{Message: "起点服务器不存在"}
 	failed := postTopologyJSON(t, handler, cookie, csrf, "/ui/api/topology/probe/start", `{"from":"missing","targets":["NAS"]}`)
 	if failed.StatusCode != http.StatusBadRequest {
 		t.Fatalf("适配层错误状态码 = %d，应为 400", failed.StatusCode)
 	}
 	if message := probeJSON(t, failed)["error"]; message != "起点服务器不存在" {
 		t.Fatalf("适配层错误应原样显示：%v", message)
+	}
+}
+
+func TestTopologyProbeStartRejectsOversizedJSON(t *testing.T) {
+	probeStub := &stubTopologyProbe{}
+	handler, startup := newProbeTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", probeStub)
+	cookie := probeSession(t, handler, startup)
+	csrf := probeCSRF(t, handler)
+
+	body := `{"targets":["` + strings.Repeat("x", topologyWriteMaxRequestBody) + `"]}`
+	response := postTopologyJSON(t, handler, cookie, csrf, topologyProbeStartPath, body)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("探测启动请求超限状态码 = %d，应为 413", response.StatusCode)
+	}
+	var payload map[string]string
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil || payload["error"] == "" {
+		t.Fatalf("探测启动请求超限应返回 JSON 中文错误：%v %v", err, payload)
+	}
+	if probeStub.startCalls != 0 {
+		t.Fatalf("超限请求不应启动探测任务，实际调用 %d 次", probeStub.startCalls)
+	}
+}
+
+func TestTopologyProbeStartSeparatesValidationAndInternalErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		error   error
+		status  int
+		message string
+	}{
+		{
+			name:    "起点不存在返回400并保留提示",
+			error:   &TopologyInvalidInputError{Message: "起点服务器不存在"},
+			status:  http.StatusBadRequest,
+			message: "起点服务器不存在",
+		},
+		{
+			name:    "内部错误返回500与统一提示",
+			error:   errors.New("打开拓扑数据失败：数据库连接已断开"),
+			status:  http.StatusInternalServerError,
+			message: "启动连通探测失败，请稍后重试。",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			probeStub := &stubTopologyProbe{nextStartErr: tc.error}
+			handler, startup := newProbeTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", probeStub)
+			cookie := probeSession(t, handler, startup)
+			csrf := probeCSRF(t, handler)
+			response := postTopologyJSON(t, handler, cookie, csrf, topologyProbeStartPath,
+				`{"from":"missing","targets":["NAS"]}`)
+			defer response.Body.Close()
+			if response.StatusCode != tc.status {
+				t.Fatalf("状态码 = %d，应为 %d", response.StatusCode, tc.status)
+			}
+			var payload struct {
+				Error string `json:"error"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Error != tc.message {
+				t.Fatalf("错误提示 = %q，应为 %q", payload.Error, tc.message)
+			}
+		})
 	}
 }
 

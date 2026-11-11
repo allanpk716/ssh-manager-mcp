@@ -306,7 +306,7 @@
 .topology-canvas > div > canvas[data-id="layer2"] { z-index: 1; }
 .topology-canvas > div > canvas[data-id="layer3"] { z-index: 0; }
 
-/* 上一段的补充：Cytoscape.js 给画布容器加这个类名并要求相对定位；页面脚
+/* 上一段的补充：Cytoscape.js 给画布外层元素加这个类名并要求相对定位；页面脚
    本会用同名标记节点阻止它插入内联样式表。 */
 .topology-canvas.__________cytoscape_container {
   position: absolute;

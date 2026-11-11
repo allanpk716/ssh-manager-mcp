@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -97,12 +96,12 @@ func ProbeFromStore(st *store.Store) webui.TopologyProbe {
 // 析失败时返回带可读提示的空叠加，页面不中断。
 func (r *probeRunner) Overlay(instance, from string) (*webui.TopologyProbeOverlay, error) {
 	if from == "" {
-		from = "self"
+		from = webui.TopologyProbeOriginSelf
 	}
-	if !r.deps.AllowRemoteOrigin && from != "self" {
-		return nil, errors.New("客户端只能以本机为起点查看探测结果。")
+	if !r.deps.AllowRemoteOrigin && from != webui.TopologyProbeOriginSelf {
+		return nil, &webui.TopologyInvalidInputError{Message: "客户端只能以本机为起点查看探测结果。"}
 	}
-	data, err := r.deps.Topology.Topology(instance)
+	data, err := r.deps.Topology.Topology(instance, from)
 	if err != nil {
 		return nil, err
 	}
@@ -160,13 +159,13 @@ func (r *probeRunner) Overlay(instance, from string) (*webui.TopologyProbeOverla
 // StartProbe 启动一次后台连通探测；进行中重复触发返回 ErrProbeTaskRunning。
 func (r *probeRunner) StartProbe(instance, from string, targets []string) (string, error) {
 	if from == "" {
-		from = "self"
+		from = webui.TopologyProbeOriginSelf
 	}
-	if !r.deps.AllowRemoteOrigin && from != "self" {
-		return "", errors.New("客户端只能以本机为起点触发探测。")
+	if !r.deps.AllowRemoteOrigin && from != webui.TopologyProbeOriginSelf {
+		return "", &webui.TopologyInvalidInputError{Message: "客户端只能以本机为起点触发探测。"}
 	}
 	if len(targets) == 0 {
-		return "", errors.New("探测目标不能为空。")
+		return "", &webui.TopologyInvalidInputError{Message: "探测目标不能为空。"}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -244,7 +243,7 @@ func (r *probeRunner) runProbe(instance string, task *webui.TopologyProbeTaskSta
 
 // probeOriginView 从拓扑数据解析探测起点；解析失败返回可读提示。
 func probeOriginView(data *webui.TopologyData, from string) (webui.TopologyProbeOrigin, string) {
-	if from == "self" {
+	if from == webui.TopologyProbeOriginSelf {
 		origin := webui.TopologyProbeOrigin{From: from}
 		if data.LocalDevice.Known {
 			origin.Known = true
@@ -301,7 +300,7 @@ func probeDeviceSummary(
 	if len(device.Servers) > 0 {
 		defaultPort = device.Servers[0].Port
 	}
-	var physicalFailure string
+	var commonNetworkFailure string
 	anyObserved := false
 	anyOK := false
 	for _, candidate := range plan.Candidates {
@@ -332,11 +331,12 @@ func probeDeviceSummary(
 		} else {
 			anyObserved = true
 		}
-		if candidate.Source == sshbroker.DialAddressPhysical && networkObserved && !networkOK &&
-			physicalFailure == "" {
-			physicalFailure = candidate.NetworkName
+		if (candidate.Source == sshbroker.DialAddressPhysical ||
+			candidate.Source == sshbroker.DialAddressVirtual) &&
+			networkObserved && !networkOK && commonNetworkFailure == "" {
+			commonNetworkFailure = candidate.NetworkName
 			for _, observation := range observations {
-				if observation.Network == candidate.NetworkName && !observation.OK && physicalCategory(observation.Category) {
+				if observation.Network == candidate.NetworkName && !observation.OK && failedProbeCategory(observation.Category) {
 					summary.Note = fmt.Sprintf("登记与探测不一致：%s（%s）",
 						candidate.NetworkName, models.ProbeErrorCategoryLabel(observation.Category))
 					summary.Inconsistent = true
@@ -357,9 +357,9 @@ func probeDeviceSummary(
 	return summary
 }
 
-// physicalCategory 判断一个失败分类能否作为「登记与探测不一致」的证据；
+// failedProbeCategory 判断一个失败分类能否作为「登记与探测不一致」的证据；
 // 探测未完成、缺少工具与没有结果行说明「没有测到连接」，不算不一致。
-func physicalCategory(category models.ProbeErrorCategory) bool {
+func failedProbeCategory(category models.ProbeErrorCategory) bool {
 	switch category {
 	case models.ProbeErrorIncomplete, models.ProbeErrorMissingTool, models.ProbeErrorNoResult, models.ProbeErrorNone:
 		return false

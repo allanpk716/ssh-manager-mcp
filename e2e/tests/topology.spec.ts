@@ -244,6 +244,62 @@ test("桌面端切换三视图并查看托盘、角标与详情", async ({ page,
   }
 });
 
+test("视图切换有平滑过渡并尊重减少动态效果设置", async ({ page, isMobile }) => {
+  test.skip(isMobile, "过渡效果用例只在桌面视口运行");
+  const ui = await startStandaloneUIWithTopology();
+  try {
+    await openTopologyPage(page, ui);
+    const canvas = page.locator("#topology-canvas");
+    await waitForCanvasSettled(page);
+
+    await page.getByRole("button", { name: "虚拟视图" }).click();
+    await expect(canvas).toHaveAttribute("data-view", "virtual");
+    await expect(canvas).toHaveAttribute("data-transition", "running");
+    await expect(canvas).toHaveAttribute("data-transition", "idle");
+
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.getByRole("button", { name: "叠加视图" }).click();
+    await expect(canvas).toHaveAttribute("data-view", "overlay");
+    await expect(canvas).toHaveAttribute("data-transition", "idle");
+  } finally {
+    await ui.close();
+  }
+});
+
+test("叠加视图拖动设备到网络框时提示切换视图归类", async ({ page, isMobile }) => {
+  test.skip(isMobile, "拖动归类用例只在桌面视口运行");
+  const ui = await startStandaloneUIWithTopology();
+  try {
+    await openTopologyPage(page, ui);
+    await page.getByRole("button", { name: "叠加视图" }).click();
+    await waitForCanvasSettled(page);
+
+    const nas = await canvasNodeBox(page, "device", "NAS");
+    const virtualNetwork = await canvasNodeBox(page, "network", "虚拟网B");
+    await dragByMouse(page, nas, virtualNetwork);
+    await expect(page.locator(".topology-notice")).toHaveText(
+      "归类请切到物理视图或虚拟视图。",
+    );
+    await expect(page.locator("dialog.topology-dialog")).toBeHidden();
+  } finally {
+    await ui.close();
+  }
+});
+
+test.describe("桌面触屏视口", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 1280, height: 800 } });
+  test("仍可编辑拓扑布局", async ({ page }) => {
+    const ui = await startStandaloneUIWithTopology();
+    try {
+      await openTopologyPage(page, ui);
+      await expect(page.locator("#topology-canvas")).toHaveAttribute("data-grabbable", "true");
+      await expect(page.getByRole("button", { name: "重置布局" })).toBeVisible();
+    } finally {
+      await ui.close();
+    }
+  });
+});
+
 test("手机视口整幅查看并可从底部打开详情", async ({ page, isMobile }) => {
   test.skip(!isMobile, "手机视口用例只在手机视口运行");
   const ui = await startStandaloneUIWithTopology();
@@ -338,6 +394,7 @@ test("桌面端叠加探测结果、切换起点并按需触发", async ({ page,
     const origin = page.getByLabel("探测起点");
     await origin.selectOption({ label: "gpu-1（机房机器）" });
     await expect(canvas).toHaveAttribute("data-probe-summary", /NAS：无共同网络/);
+    await expect(detail).toContainText("候选 SSH 地址（当前起点：gpu-1（机房机器））");
     await expect(detail).toContainText("无共同网络，未探测");
 
     await origin.selectOption({ label: "本机（工作站）" });
@@ -506,6 +563,9 @@ test("虚拟视图拖动加入与退出虚拟局域网", async ({ page, isMobile
     const dialog = page.locator("dialog.topology-dialog");
     const detail = page.getByRole("complementary", { name: "拓扑详情" });
 
+    // 等待视图切换动画结束，再读取设备与目标分组框的坐标。
+    await waitForCanvasSettled(page);
+
     // 拖出虚拟局域网框等于退出，需先确认。
     const nasBox = await canvasNodeBox(page, "device", "NAS");
     const empty = await emptyCanvasPoint(page);
@@ -633,7 +693,7 @@ async function moveTopologyEntity(
 async function waitForCanvasSettled(
   page: import("@playwright/test").Page,
 ): Promise<void> {
-  await page.waitForTimeout(500);
+  await expect(page.locator("#topology-canvas")).toHaveAttribute("data-transition", "idle");
 }
 
 async function currentCanvasLayout(
@@ -738,7 +798,7 @@ test("桌面端布局按视图保存、刷新后保持并可重置", async ({ pa
   }
 });
 
-test("容器区域明显重叠时提示并还原本次移动", async ({ page, isMobile }) => {
+test("站点区域或网络分组框区域明显重叠时提示并还原本次移动", async ({ page, isMobile }) => {
   test.skip(isMobile, "桌面交互用例只在桌面视口运行");
   const ui = await startStandaloneUIWithTopology();
   try {

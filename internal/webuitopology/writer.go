@@ -86,50 +86,11 @@ func (w openerWriter) AddPhysicalNetwork(name, site string) (string, error) {
 	})
 }
 
-// storeWriter 直接写一个已打开的 vault，供 serve 进程复用长期存储句柄。
-type storeWriter struct {
-	store *store.Store
-}
-
 // WriterFromStore 返回绑定指定存储的拓扑写入口。
 func WriterFromStore(st *store.Store) webui.TopologyWriter {
-	return storeWriter{store: st}
-}
-
-func (w storeWriter) AddNetworkMembership(device, network, address string) (string, error) {
 	return openerWriter{open: func() (*store.Store, func(), error) {
-		return w.store, func() {}, nil
-	}}.AddNetworkMembership(device, network, address)
-}
-
-func (w storeWriter) EditNetworkMembership(device, network, address string) (string, error) {
-	return openerWriter{open: func() (*store.Store, func(), error) {
-		return w.store, func() {}, nil
-	}}.EditNetworkMembership(device, network, address)
-}
-
-func (w storeWriter) RemoveNetworkMembership(device, network string) (string, error) {
-	return openerWriter{open: func() (*store.Store, func(), error) {
-		return w.store, func() {}, nil
-	}}.RemoveNetworkMembership(device, network)
-}
-
-func (w storeWriter) MoveNetworkMembership(device, fromNetwork, toNetwork, address string) (string, error) {
-	return openerWriter{open: func() (*store.Store, func(), error) {
-		return w.store, func() {}, nil
-	}}.MoveNetworkMembership(device, fromNetwork, toNetwork, address)
-}
-
-func (w storeWriter) RemovePhysicalNetworkMemberships(device string) (string, error) {
-	return openerWriter{open: func() (*store.Store, func(), error) {
-		return w.store, func() {}, nil
-	}}.RemovePhysicalNetworkMemberships(device)
-}
-
-func (w storeWriter) AddPhysicalNetwork(name, site string) (string, error) {
-	return openerWriter{open: func() (*store.Store, func(), error) {
-		return w.store, func() {}, nil
-	}}.AddPhysicalNetwork(name, site)
+		return st, func() {}, nil
+	}}
 }
 
 // SaveTopologyLayout 保存一个视图的完整布局，并写一条来源为 Web UI 的审计。
@@ -170,20 +131,6 @@ func (w openerWriter) ResetTopologyLayout(view string, source webui.TopologyWrit
 	return err
 }
 
-// SaveTopologyLayout 在已打开的存储上保存一个视图的完整布局。
-func (w storeWriter) SaveTopologyLayout(save webui.TopologyLayoutSave, source webui.TopologyWriteSource) error {
-	return openerWriter{open: func() (*store.Store, func(), error) {
-		return w.store, func() {}, nil
-	}}.SaveTopologyLayout(save, source)
-}
-
-// ResetTopologyLayout 在已打开的存储上清空一个视图保存的全部坐标。
-func (w storeWriter) ResetTopologyLayout(view string, source webui.TopologyWriteSource) error {
-	return openerWriter{open: func() (*store.Store, func(), error) {
-		return w.store, func() {}, nil
-	}}.ResetTopologyLayout(view, source)
-}
-
 // mapLayoutError 把存储层的布局校验错误换算成 Web UI 的内容非法错误；其
 // 它错误原样返回，让处理器按服务器错误处理。
 func mapLayoutError(err error) error {
@@ -216,12 +163,17 @@ func withStoreWriter(open func() (*store.Store, func(), error), run func(*store.
 }
 
 func topologyWriteError(err error) error {
+	var validation *store.TopologyValidationError
 	switch {
 	case errors.Is(err, store.ErrDeviceNotFound),
 		errors.Is(err, store.ErrNetworkNotFound),
 		errors.Is(err, store.ErrSiteNotFound),
 		errors.Is(err, store.ErrNetworkMembershipNotFound):
 		return &webui.TopologyNameNotFoundError{Message: err.Error()}
+	case errors.As(err, &validation):
+		return &webui.TopologyInvalidInputError{Message: validation.Message}
+	case errors.Is(err, store.ErrNetworkNameTaken), errors.Is(err, store.ErrSiteNameExists):
+		return &webui.TopologyInvalidInputError{Message: err.Error()}
 	default:
 		return err
 	}

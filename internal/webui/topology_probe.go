@@ -3,7 +3,6 @@ package webui
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -100,9 +99,9 @@ func (h *handler) handleTopologyProbeOverlay(w http.ResponseWriter, r *http.Requ
 	}
 	from := strings.TrimSpace(r.URL.Query().Get("from"))
 	if from == "" {
-		from = "self"
+		from = TopologyProbeOriginSelf
 	}
-	if h.cfg.Role == RoleClient && from != "self" {
+	if h.cfg.Role == RoleClient && from != TopologyProbeOriginSelf {
 		h.writeTopologyJSONError(w, http.StatusBadRequest, "客户端只能以本机为起点查看探测结果。")
 		return
 	}
@@ -122,23 +121,14 @@ func (h *handler) handleTopologyProbeStart(w http.ResponseWriter, r *http.Reques
 		h.writeTopologyJSONError(w, http.StatusMethodNotAllowed, "探测启动接口只接受 POST 请求。")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, topologyWriteMaxRequestBody+1))
-	if err != nil {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, "读取请求内容失败。")
-		return
-	}
-	if len(body) > topologyWriteMaxRequestBody {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, "请求内容过大")
-		return
-	}
 	var request topologyProbeStartRequest
-	if err := json.Unmarshal(body, &request); err != nil {
-		h.writeTopologyJSONError(w, http.StatusBadRequest, "请求内容不是合法的 JSON 对象。")
+	if err := decodeTopologyJSONBody(r, topologyWriteMaxRequestBody, &request); err != nil {
+		h.writeTopologyWriteJSONRequestError(w, err)
 		return
 	}
 	from := strings.TrimSpace(request.From)
 	if from == "" {
-		from = "self"
+		from = TopologyProbeOriginSelf
 	}
 	targets := make([]string, 0, len(request.Targets))
 	for _, target := range request.Targets {
@@ -147,7 +137,7 @@ func (h *handler) handleTopologyProbeStart(w http.ResponseWriter, r *http.Reques
 			targets = append(targets, target)
 		}
 	}
-	if h.cfg.Role == RoleClient && from != "self" {
+	if h.cfg.Role == RoleClient && from != TopologyProbeOriginSelf {
 		h.writeTopologyJSONError(w, http.StatusBadRequest, "客户端只能以本机为起点触发探测。")
 		return
 	}
@@ -156,11 +146,15 @@ func (h *handler) handleTopologyProbeStart(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	taskID, err := h.cfg.TopologyProbe.StartProbe(h.requestClientInstance(r), from, targets)
+	var invalid *TopologyInvalidInputError
 	switch {
 	case errors.Is(err, ErrProbeTaskRunning):
 		h.writeTopologyJSONError(w, http.StatusConflict, err.Error())
+	case errors.As(err, &invalid):
+		h.writeTopologyJSONError(w, http.StatusBadRequest, invalid.Message)
 	case err != nil:
-		h.writeTopologyJSONError(w, http.StatusBadRequest, err.Error())
+		h.logError(r, "启动连通探测失败", err)
+		h.writeTopologyJSONError(w, http.StatusInternalServerError, "启动连通探测失败，请稍后重试。")
 	default:
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(map[string]string{"task_id": taskID})

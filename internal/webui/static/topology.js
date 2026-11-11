@@ -27,8 +27,14 @@
     probe: { origin: "self", overlay: null, taskID: null, taskState: "idle" },
     savedBeforeDrag: null,
     saving: false,
+    transitioning: false,
+    transitionSequence: 0,
+    selectedDetailDevice: null,
   };
-  var coarsePointer = window.matchMedia("(pointer: coarse)");
+  // 手机判定与页面样式使用同一宽度分界：窄屏且主指针是触屏才算手机；
+  // 保持桌面宽度的触屏电脑仍可拖动。
+  var phoneInput = window.matchMedia("(max-width: 980px) and (pointer: coarse)");
+  var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   // canEdit 表示当前角色提供拓扑写接口；拖动归类还要求精确指针（手机不开放）。
   var canEdit = page !== null && page.getAttribute("data-editable") === "true";
   var canChooseRemoteProbeOrigin = probePanel !== null && probePanel.getAttribute("data-remote-origin") !== "false";
@@ -81,7 +87,7 @@
   // canEditLayout 判断当前角色与指针类型是否允许改布局：客户端只读，手机
   // 不能拖动；重置按钮同样遵循这两个限制。
   function canEditLayout() {
-    return canEdit && !coarsePointer.matches;
+    return canEdit && !phoneInput.matches && !state.transitioning;
   }
 
   function showLayoutStatus(message, isError) {
@@ -562,42 +568,100 @@
     ];
   }
 
-  function applyView(view) {
+  function devicePositionsBeforeSwitch() {
+    var positions = {};
+    if (state.cy === null) {
+      return positions;
+    }
+    state.cy.nodes().forEach(function (node) {
+      var deviceID = node.data("device");
+      if (deviceID !== undefined && !node.hasClass("clone")) {
+        var position = node.position();
+        positions[deviceID] = { x: position.x, y: position.y };
+      }
+    });
+    return positions;
+  }
+
+  function finishViewTransition(sequence) {
+    if (state.transitionSequence !== sequence) {
+      return;
+    }
+    state.transitioning = false;
+    container.setAttribute("data-transition", "idle");
+    state.cy.fit(undefined, 48);
+    updateGrabbable();
+    updateLayoutAttribute();
+  }
+
+  function applyView(view, animateTransition) {
     state.view = view;
+    state.transitionSequence += 1;
     container.setAttribute("data-view", view);
     viewButtons.forEach(function (button) {
       button.classList.toggle("active", button.getAttribute("data-view") === view);
     });
     if (state.cy === null) {
+      container.setAttribute("data-transition", "idle");
       updateLayoutAttribute();
       return;
     }
     var index = indexData(state.data);
     var elements = elementsForView(index, view);
+    var previousDevices = animateTransition === true ? devicePositionsBeforeSwitch() : {};
+    state.cy.nodes().forEach(function (node) {
+      node.stop();
+    });
     // 每个视图的坐标各自保存；切换时不携带上一个视图的位置。
     state.cy.json({ elements: [] });
     state.cy.add(elements);
     var positions = targetPositions(index, elements, view);
-    // 每个视图的坐标各自保存；切换视图时直接落位到本视图的保存坐标或自动
-    // 排布。Cytoscape.js 的集合动画不支持按元素返回位置的函数，逐节点动画
-    // 又会让坐标在过渡期间随时间变化，拖动归类与布局保存都无法依赖，因此
-    // 这里保持即时落位。
+    var sequence = state.transitionSequence;
+    var animations = [];
+    var animate = animateTransition === true && !reducedMotion.matches;
+    state.transitioning = animate;
+    container.setAttribute("data-transition", animate ? "running" : "idle");
     state.cy.nodes().forEach(function (node) {
+      var target = positions[node.id()] || { x: 0, y: 0 };
       if (node.data("placeholder") || node.isParent()) {
         return;
       }
-      var target = positions[node.id()] || { x: 0, y: 0 };
       node.position(target);
+      var deviceID = node.data("device");
+      if (animate && deviceID !== undefined && !node.hasClass("clone") && previousDevices[deviceID] !== undefined) {
+        var start = previousDevices[deviceID];
+        node.position(start);
+        if (start.x !== target.x || start.y !== target.y) {
+          animations.push(node.animation(
+            { position: { x: target.x, y: target.y } },
+            { duration: 360, easing: "ease-in-out" }
+          ));
+        }
+      }
     });
-    state.cy.fit(undefined, 48);
+    updateGrabbable();
+    if (!animate || animations.length === 0) {
+      finishViewTransition(sequence);
+    } else {
+      state.cy.fit(undefined, 48);
+      animations.forEach(function (animation) {
+        animation.play();
+      });
+      Promise.all(animations.map(function (animation) {
+        return animation.promise();
+      })).then(function () {
+        finishViewTransition(sequence);
+      }, function () {
+        finishViewTransition(sequence);
+      });
+    }
     updateCanvasSummary();
-    updateLayoutAttribute();
     if (probeEnabled()) {
       updateProbePresentation();
     }
   }
 
-  // currentLayout 把当前视图里可见的设备与容器坐标整理成一次保存载荷。
+  // currentLayout 把当前视图里可见的设备坐标与站点区域或网络分组框坐标整理成一次保存载荷。
   // 分身不保存：同一台设备的本体节点是这个视图里的唯一坐标来源。
   function currentLayout() {
     var devices = [];
@@ -614,7 +678,7 @@
           return;
         }
         if (data.site !== undefined) {
-          // 复合容器渲染出的框由子节点决定；保存框的中心而不是节点内部
+          // 复合节点形式的站点区域或网络分组框渲染出的框由子节点决定；保存框的中心而不是节点内部
           // 的存储坐标，避免子节点移动后留下过期值。
           var box = node.boundingBox();
           containers.push({
@@ -772,7 +836,7 @@
           (node.id().indexOf("network:") === 0 || node.id().indexOf("vnet:") === 0)));
   }
 
-  // overlappingContainer 返回与指定容器明显重叠的另一个容器节点；交叠面积
+  // overlappingContainer 返回与指定站点区域或网络分组框明显重叠的另一个站点区域或网络分组框节点；交叠面积
   // 超过较小框面积的四分之一视为明显重叠。嵌套关系不算重叠：网络分组框
   // 本来就画在所属站点区域里。
   function overlappingContainer(node) {
@@ -812,14 +876,14 @@
   }
 
   // restorePositions 把整幅画布恢复到拖动前的坐标；站点或网络拖动时子节点
-  // 会一起移动，只还原容器本身不够。
+  // 会一起移动，只还原站点区域或网络分组框本身不够。
   function restorePositions(positions) {
     if (state.cy === null || positions === null) {
       return;
     }
     state.cy.nodes().forEach(function (node) {
       var target = positions[node.id()];
-      // 只还原子节点：复合容器的框由子节点决定，直接设置父节点会把子
+      // 只还原子节点：复合节点形式的站点区域或网络分组框的框由子节点决定，直接设置父节点会把子
       // 树再平移一次。先停掉未完成的过渡动画，避免动画把还原结果改掉。
       if (target !== undefined && !node.data("placeholder") && !node.isParent()) {
         node.stop();
@@ -874,12 +938,12 @@
     node.stop();
     state.savedBeforeDrag = snapshotPositions();
     if (node.isParent()) {
-      // 复合容器的框由子节点决定：把整个子树平移，让框中心落在目标坐
-      // 标，与手动拖动容器时的整体移动一致。
+      // 复合节点形式的站点区域或网络分组框的框由子节点决定：把整个子树平移，让框中心落在目标坐
+      // 标，与手动拖动站点区域或网络分组框时的整体移动一致。
       var box = node.boundingBox();
       var deltaX = x - (box.x1 + box.x2) / 2;
       var deltaY = y - (box.y1 + box.y2) / 2;
-      // 给复合容器设置坐标会把整个子树平移同样的差值。
+      // 给复合节点形式的站点区域或网络分组框设置坐标会把整个子树平移同样的差值。
       var stored = node.position();
       node.position({ x: stored.x + deltaX, y: stored.y + deltaY });
     } else {
@@ -919,7 +983,7 @@
     });
     container.setAttribute("data-node-count", String(deviceCount));
     container.setAttribute("data-clone-count", String(cloneCount));
-    var summary = labels.length === 0 ? "画布暂无节点" : labels.join("；");
+    var summary = labels.length === 0 ? "画布暂无设备" : labels.join("；");
     container.setAttribute("data-node-summary", summary);
     container.setAttribute("aria-label", "网络拓扑画布，当前" + state.view + "视图：" + summary);
   }
@@ -979,14 +1043,14 @@
       if (node.data("placeholder") || target === undefined) {
         return;
       }
-      // 复合容器的框由子节点决定，子节点的保存坐标已经还原了整个子树的
+      // 复合节点形式的站点区域或网络分组框的框由子节点决定，子节点的保存坐标已经还原了整个子树的
       // 位置；单独定位父节点会把子树再推一次。
       if (!node.isParent()) {
         node.position(target);
       }
     });
     updateGrabbable();
-    coarsePointer.addEventListener === undefined ? null : coarsePointer.addEventListener("change", updateGrabbable);
+    phoneInput.addEventListener === undefined ? null : phoneInput.addEventListener("change", updateGrabbable);
     state.cy.on("tap", "node", function (event) {
       var node = event.target;
       var deviceID = node.data("device");
@@ -1015,7 +1079,7 @@
         classifyCanvasDrop(event.target, state.dragBoxes);
       }
     });
-    // 拖动开始先记下整幅画布坐标：容器明显重叠时要整体还原，设备拖动失
+    // 拖动开始先记下整幅画布坐标：站点区域或网络分组框明显重叠时要整体还原，设备拖动失
     // 败时也不丢其它节点的位置。
     state.cy.on("grab", "node", function () {
       state.savedBeforeDrag = snapshotPositions();
@@ -1094,6 +1158,7 @@
   }
 
   function hideDetail() {
+    state.selectedDetailDevice = null;
     detailOpen(false);
   }
 
@@ -1213,6 +1278,40 @@
           setProbeStatus("error", "读取探测结果失败，请稍后重试。");
         }
       );
+  }
+
+  function fetchTopologyData() {
+    var origin = state.probe.origin;
+    return fetch("/ui/api/topology?from=" + encodeURIComponent(origin), {
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+    })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error("读取网络拓扑失败（" + response.status + "）。");
+        }
+        return response.json();
+      })
+      .then(function (data) {
+        if (state.probe.origin !== origin) {
+          return null;
+        }
+        state.data = data;
+        buildProbeOriginOptions(data);
+        return data;
+      });
+  }
+
+  function loadProbeOriginData() {
+    var origin = state.probe.origin;
+    return Promise.all([fetchTopologyData(), fetchProbeOverlay()]).then(function () {
+      if (state.probe.origin !== origin || state.selectedDetailDevice === null) {
+        return;
+      }
+      showDeviceDetail(state.selectedDetailDevice);
+    }, function () {
+      setProbeStatus("error", "切换探测起点失败，请稍后重试。");
+    });
   }
 
   function updateProbePresentation() {
@@ -1460,6 +1559,7 @@
   }
 
   function showDeviceDetail(deviceID) {
+    state.selectedDetailDevice = deviceID;
     var index = indexData(state.data);
     var device = index.devices[deviceID];
     if (device === undefined) {
@@ -1567,7 +1667,7 @@
     });
     html += "</ul>";
 
-    html += "<h3>候选 SSH 地址（本机起点）</h3>";
+    html += "<h3>候选 SSH 地址（当前起点：" + escapeHTML(probeOriginLabel()) + "）</h3>";
     if (device.candidate_notice !== "") {
       html += '<p class="candidate-notice">' + escapeHTML(device.candidate_notice) + "</p>";
     }
@@ -1719,13 +1819,7 @@
   // reloadTopology 写成功后重新读取数据并按自动排布重画；归类结果以服务端
   // 数据为准，浏览器不自行拼装状态。
   function reloadTopology(notice, deviceID) {
-    return fetch("/ui/api/topology", { headers: { Accept: "application/json" }, credentials: "same-origin" })
-      .then(function (response) {
-        if (!response.ok) {
-          throw new Error("读取网络拓扑失败（" + response.status + "）。");
-        }
-        return response.json();
-      })
+    return fetchTopologyData()
       .then(function (data) {
         state.data = data;
         applyView(state.view);
@@ -2175,7 +2269,7 @@
   // virtualBox 分别是命中到的物理/虚拟网络框，siteBox 是站点区域；拖到托
   // 盘或空白画布按「移回托盘」处理。
   function classifyCanvasDrop(node, boxes) {
-    if (!canEdit || coarsePointer.matches || state.cy === null) {
+    if (!canEdit || phoneInput.matches || state.cy === null) {
       return;
     }
     var index = indexData(state.data);
@@ -2220,6 +2314,10 @@
       return;
     }
     if (state.view !== "physical") {
+      if (innermostBoxAt(boxes, point.x, point.y, "network") !== null) {
+        showNotice("归类请切到物理视图或虚拟视图。");
+      }
+      restoreAfterDrag();
       return;
     }
     var networkBox = innermostBoxAt(boxes, point.x, point.y, "network");
@@ -2301,7 +2399,7 @@
   // ---- 从托盘拖到画布 ---------------------------------------------------
 
   function trayDragAllowed() {
-    return canEdit && !coarsePointer.matches && state.cy !== null;
+    return canEdit && !phoneInput.matches && state.cy !== null;
   }
 
   function handleTrayPointerDown(event) {
@@ -2374,6 +2472,9 @@
       }
     }
     if (state.view !== "physical") {
+      if (networkBox !== null) {
+        showNotice("归类请切到物理视图或虚拟视图。");
+      }
       return;
     }
     var siteBox = innermostBoxAt(drag.boxes, event.clientX, event.clientY, "site");
@@ -2393,7 +2494,7 @@
   function bindUI() {
     viewButtons.forEach(function (button) {
       button.addEventListener("click", function () {
-        applyView(button.getAttribute("data-view"));
+        applyView(button.getAttribute("data-view"), true);
       });
     });
     if (probeOriginSelect !== null) {
@@ -2401,7 +2502,7 @@
         state.probe.origin = probeOriginSelect.value || "self";
         state.probe.overlay = null;
         updateProbePresentation();
-        fetchProbeOverlay();
+        loadProbeOriginData();
       });
     }
     if (page !== null) {
@@ -2543,14 +2644,11 @@
   }
 
   function load() {
-    fetch("/ui/api/topology", { headers: { Accept: "application/json" }, credentials: "same-origin" })
-      .then(function (response) {
-        if (!response.ok) {
-          throw new Error("读取网络拓扑失败（" + response.status + "）。");
-        }
-        return response.json();
-      })
+    fetchTopologyData()
       .then(function (data) {
+        if (data === null) {
+          return;
+        }
         initGraph(data);
         renderTray(indexData(data));
         applyView(state.view);

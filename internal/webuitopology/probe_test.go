@@ -202,6 +202,36 @@ func TestProbeOverlayMarksRegistrationMismatch(t *testing.T) {
 	}
 }
 
+func TestProbeOverlayMarksVirtualNetworkRegistrationMismatch(t *testing.T) {
+	fixture := newProbeFixture(t)
+	workstation, err := fixture.store.GetDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nas, err := fixture.store.GetDevice("NAS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.record(t, proberesults.Observation{
+		OriginDeviceID: workstation.ID, TargetDeviceID: nas.ID,
+		Network: "虚拟网", Address: "100.64.0.30", Port: 22,
+		Category: models.ProbeErrorTimeout, Duration: time.Millisecond,
+		ObservedAt: time.Now().UTC(), Source: proberesults.SourceProbe,
+	})
+
+	overlay, err := fixture.runner.Overlay("", "self")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nasSummary := probeDeviceByID(t, overlay, nas.ID)
+	if nasSummary.Status != "fail" || !nasSummary.Inconsistent {
+		t.Fatalf("共同虚拟局域网探测不通也应标记登记与探测不一致：%+v", nasSummary)
+	}
+	if nasSummary.Note != "登记与探测不一致：虚拟网（连接超时）" {
+		t.Fatalf("虚拟局域网不一致提示错误：%q", nasSummary.Note)
+	}
+}
+
 // TestProbeOverlayRemoteOriginAndReadableNotices: 经服务器起点按该服务器的
 // 设备视角叠加；本机设备未登记或起点服务器找不到时返回可读提示。
 func TestProbeOverlayRemoteOriginAndReadableNotices(t *testing.T) {
@@ -264,7 +294,7 @@ type stubTopologySource struct {
 	data *webui.TopologyData
 }
 
-func (s stubTopologySource) Topology(string) (*webui.TopologyData, error) {
+func (s stubTopologySource) Topology(_, _ string) (*webui.TopologyData, error) {
 	return s.data, nil
 }
 
