@@ -776,8 +776,14 @@ func TestCacheVersionE2E_ToolHintComparesVersions(t *testing.T) {
 			wantNoHint: true,
 		},
 		{
-			name:       "推荐版本为空",
-			client:     "1.1.0",
+			name:      "推荐版本为空的旧权威端",
+			client:    "1.1.0",
+			recommend: "",
+			wantHint:  "客户端比权威端新，建议先升级权威端",
+		},
+		{
+			name:       "开发版本连旧权威端",
+			client:     "dev",
 			recommend:  "",
 			wantNoHint: true,
 		},
@@ -820,6 +826,57 @@ func TestCacheVersionE2E_ToolHintComparesVersions(t *testing.T) {
 				t.Fatalf("结构化输出被改动：%#v", res.StructuredContent)
 			}
 		})
+	}
+}
+
+// TestCacheVersionE2E_OldAuthorityDegradesTopologyTools 覆盖新客户端连旧
+// 权威端：拓扑与共享存储工具直接返回固定文案；通用执行命令照常走兜底
+// 地址；执行上下文的盘符预览说明原因。
+func TestCacheVersionE2E_OldAuthorityDegradesTopologyTools(t *testing.T) {
+	fx := newCacheFwdFixture(t)
+	fx.snap.RecommendedVersion = ""
+	fx.versionNotFound.Store(true)
+	t.Setenv("SSHMGR_TEST_VERSION", "dev")
+	beforeVersions, beforeSnapshots := fx.versionCount(), fx.snapshotCount()
+	sess := fx.newBroker(t, nil, fx.cred)
+	want := "权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端"
+
+	for _, call := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{tool: "probe_connectivity", args: map[string]any{"from": "self", "targets": []string{"missing:1"}}},
+		{tool: "query_topology", args: map[string]any{"from": "self"}},
+		{tool: "list_shares", args: map[string]any{}},
+		{tool: "mount_share", args: map[string]any{"share": "datasets", "server_id": fx.targetID}},
+	} {
+		text, isError := callTool(t, sess, call.tool, call.args)
+		if !isError || text != want {
+			t.Fatalf("%s 旧权威端结果 = %q error=%v，期待 %q", call.tool, text, isError, want)
+		}
+	}
+
+	execText, execError := callTool(t, sess, "exec_command", map[string]any{
+		"server_id": fx.targetID, "command": "true",
+	})
+	if execError || !strings.Contains(execText, "PONG:true") || strings.Contains(execText, want) {
+		t.Fatalf("旧权威端下 exec_command 应照常执行且不附带降级说明，实际 error=%v：%s", execError, execText)
+	}
+	_, contextError, structured := callToolResultTexts(t, sess, "exec_context", map[string]any{
+		"server_id": fx.targetID,
+	})
+	if contextError {
+		t.Fatalf("旧权威端下 exec_context 应照常执行：%v", structured)
+	}
+	fields, ok := structured.(map[string]any)
+	if !ok || fields["network_drive_preview_note"] != want {
+		t.Fatalf("旧权威端下 exec_context 盘符预览说明 = %#v，期待 %q", structured, want)
+	}
+	if got := fx.versionCount() - beforeVersions; got != 0 {
+		t.Fatalf("旧权威端降级不应触发版本号查询，实际新增 %d 次", got)
+	}
+	if got := fx.snapshotCount() - beforeSnapshots; got != 0 {
+		t.Fatalf("旧权威端降级不应触发快照拉取，实际新增 %d 次", got)
 	}
 }
 

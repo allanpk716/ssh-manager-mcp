@@ -262,5 +262,7 @@ func uiVersionHintSource(instance string) string {
 	if err != nil || !state.IsClient || state.Snapshot == nil {
 		return ""
 	}
-	return updater.VersionMismatchHint(buildinfo.Version, state.Snapshot.RecommendedVersion)
+	return updater.VersionMismatchHint(
+		buildinfo.Version, state.Snapshot.RecommendedVersion, state.AuthorityTooOld(),
+	)
 }

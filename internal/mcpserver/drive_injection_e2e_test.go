@@ -192,6 +192,7 @@ type networkDriveFixture struct {
 	clientSession  *mcp.ClientSession
 	serverID       string
 	secondServerID string
+	profileID      string
 	store          *store.Store
 	fake           *fakePowerShellDriveServer
 }
@@ -260,6 +261,87 @@ func countNetworkDriveProbeCommands(commands []string) int {
 		}
 	}
 	return count
+}
+
+// TestNetworkDriveInjectionSkipsSilentlyWhenAuthorityTooOld 覆盖新客户端连
+// 旧权威端：即使缓存里确有共享存储，执行命令也照常走兜底地址，不探测、
+// 不注入、不追加任何警告；执行上下文只在盘符预览里说明原因。
+func TestNetworkDriveInjectionSkipsSilentlyWhenAuthorityTooOld(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, nil)
+	_, projectToken, err := fixture.store.AddProject("旧权威端项目", fixture.profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := fixture.store.ExportSnapshotForProfile(fixture.profileID, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.RecommendedVersion = ""
+	broker, tunnels, tasks, cleanup, err := NewCacheBroker(
+		projectToken, snapshot, filepath.Join(t.TempDir(), "audit.log"),
+		nil, nil, "laptop", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	t.Cleanup(tunnels.CloseAll)
+	t.Cleanup(tasks.CloseAll)
+	session := connectListSharesClient(t, broker)
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_command",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": "Write-Output ran"},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("旧权威端下 exec_command 失败：err=%v result=%+v", err, result)
+	}
+	var output struct {
+		Stdout                string                 `json:"stdout"`
+		InjectedNetworkDrives []InjectedNetworkDrive `json:"injected_network_drives"`
+	}
+	unmarshalToolJSON(t, result, &output)
+	if output.Stdout != "plain-command-output\n" || len(output.InjectedNetworkDrives) != 0 {
+		t.Fatalf("旧权威端下 exec_command 应静默跳过网络盘符：%q %#v", output.Stdout, output.InjectedNetworkDrives)
+	}
+
+	contextResult, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "exec_context", Arguments: map[string]any{"server_id": fixture.serverID},
+	})
+	if err != nil || contextResult.IsError {
+		t.Fatalf("旧权威端下 exec_context 失败：err=%v result=%+v", err, contextResult)
+	}
+	var contextOutput struct {
+		UninjectedNetworkDrives []UninjectedNetworkDrive `json:"uninjected_network_drives"`
+		NetworkDrivePreviewNote string                   `json:"network_drive_preview_note"`
+	}
+	unmarshalToolJSON(t, contextResult, &contextOutput)
+	wantNote := "权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端"
+	if len(contextOutput.UninjectedNetworkDrives) != 0 || contextOutput.NetworkDrivePreviewNote != wantNote {
+		t.Fatalf("旧权威端盘符预览 = %#v，说明 = %q", contextOutput.UninjectedNetworkDrives, contextOutput.NetworkDrivePreviewNote)
+	}
+
+	backgroundResult, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "exec_background",
+		Arguments: map[string]any{"server_id": fixture.serverID, "command": "Write-Output background", "timeout_seconds": 10},
+	})
+	if err != nil || backgroundResult.IsError {
+		t.Fatalf("旧权威端下 exec_background 失败：err=%v result=%+v", err, backgroundResult)
+	}
+	var start struct {
+		TaskID            string   `json:"task_id"`
+		InjectionWarnings []string `json:"injection_warnings"`
+	}
+	unmarshalToolJSON(t, backgroundResult, &start)
+	finalBackground := waitBackgroundTerminal(t, session, start.TaskID)
+	if finalBackground.Stdout != "plain-command-output\n" || len(start.InjectionWarnings) != 0 {
+		t.Fatalf("旧权威端下 exec_background 应静默跳过网络盘符：start=%+v final=%+v", start, finalBackground)
+	}
+
+	commands, _ := fixture.fake.recorded()
+	if len(commands) != 3 || countNetworkDriveProbeCommands(commands) != 0 {
+		t.Fatalf("旧权威端不应探测或注入网络盘符：%#v", commands)
+	}
 }
 
 // TestNetworkDriveInjectionAddressCacheSkipsRepeatProbes 钉住选址缓存：同
@@ -640,7 +722,7 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	return networkDriveFixture{
 		clientSession: clientSession, serverID: added.ServerID,
 		secondServerID: secondServerID,
-		store:          st, fake: fake,
+		profileID:      profileID, store: st, fake: fake,
 	}
 }
 

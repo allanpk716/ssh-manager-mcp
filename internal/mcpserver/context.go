@@ -34,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
@@ -236,6 +237,10 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 	}
 	injectionPlan := buildEnvironmentInjectionPlan(st, srv, sudo)
 	plannedDrives, uninjectedDrives := previewNetworkDriveInjection(st, profileID, srv, sudo)
+	networkDrivePreviewNote := ""
+	if st.CacheAuthorityTooOld() {
+		networkDrivePreviewNote = clientfeatures.ErrTopologyAndSharedStorageAuthorityTooOld.Error()
+	}
 
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
@@ -318,5 +323,6 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 	out.UninjectedEnvironmentVariables = injectionPlan.uninjectedVariables()
 	out.PlannedNetworkDrives = plannedDrives
 	out.UninjectedNetworkDrives = uninjectedDrives
+	out.NetworkDrivePreviewNote = networkDrivePreviewNote
 	return
 }

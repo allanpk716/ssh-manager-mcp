@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
@@ -23,6 +24,12 @@ var errAmbiguousClientCacheInstance = errors.New("无法确定唯一实例，请
 type clientVersionState struct {
 	IsClient bool
 	Snapshot *store.Snapshot
+}
+
+// AuthorityTooOld 使用客户端兼容判断的唯一入口，供版本提示与诊断展示共
+// 用；非客户端或缓存不可读时恒为否。
+func (s clientVersionState) AuthorityTooOld() bool {
+	return s.IsClient && s.Snapshot != nil && clientfeatures.AuthorityTooOld(s.Snapshot.RecommendedVersion)
 }
 
 // readClientVersionState 统一三处客户端推荐版本的读取口径：先判定本机角色，

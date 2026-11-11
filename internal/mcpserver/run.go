@@ -12,6 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/mcpserver/hotswap"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/snapshotdiff"
@@ -248,7 +249,11 @@ func (h *cacheStoreHolder) versionHint() []string {
 	if h.lastSnap == nil {
 		return nil
 	}
-	if text := updater.VersionMismatchHint(hotswap.BridgeVersion(), h.lastSnap.RecommendedVersion); text != "" {
+	if text := updater.VersionMismatchHint(
+		hotswap.BridgeVersion(),
+		h.lastSnap.RecommendedVersion,
+		clientfeatures.AuthorityTooOld(h.lastSnap.RecommendedVersion),
+	); text != "" {
 		return []string{text}
 	}
 	return nil

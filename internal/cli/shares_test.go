@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vaultio"
 )
@@ -46,6 +48,10 @@ func seedSharesCommandVault(t *testing.T) (string, []byte) {
 }
 
 func seedSharesClientCache(t *testing.T, declaredClientVersion bool) string {
+	return seedSharesClientCacheWithRecommendedVersion(t, declaredClientVersion, "")
+}
+
+func seedSharesClientCacheWithRecommendedVersion(t *testing.T, declaredClientVersion bool, recommendedVersion string) string {
 	t.Helper()
 	cacheDir := t.TempDir()
 	sourceDir := t.TempDir()
@@ -81,14 +87,31 @@ func seedSharesClientCache(t *testing.T, declaredClientVersion bool) string {
 	if _, err := source.AddNetworkMembership("NAS", "办公局域网", "192.0.2.10"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := source.AddDevice("工作站", "授权服务器所在设备", ""); err != nil {
+		t.Fatal(err)
+	}
+	laptop, err := source.AddDevice("笔记本", "发起拉取的客户端", "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AddNetworkMembership("工作站", "办公局域网", "192.0.2.20"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AddNetworkMembership("笔记本", "办公局域网", "192.0.2.30"); err != nil {
+		t.Fatal(err)
+	}
 	for _, server := range []models.Server{
-		{Name: "linux-web", Host: "192.0.2.20", Port: 22, User: "deploy", AuthMethod: models.AuthPassword},
 		{Name: "windows-web", Host: "192.0.2.21", Port: 22, User: "deploy", AuthMethod: models.AuthPassword, ShellType: models.ShellPowerShell},
 		{Name: "island", Host: "192.0.2.22", Port: 22, User: "deploy", AuthMethod: models.AuthPassword},
 	} {
 		if _, err := source.AddServer(&server); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := source.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "linux-web", Host: "192.0.2.20", Port: 22, User: "deploy", AuthMethod: models.AuthPassword,
+	}, nil, nil, "工作站"); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := source.AddServerWithCredentialsToDevice(&models.Server{
 		Name: "nas-provider", Host: "192.0.2.30", Port: 22, User: "deploy",
@@ -138,6 +161,14 @@ func seedSharesClientCache(t *testing.T, declaredClientVersion bool) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshot.RecommendedVersion = recommendedVersion
+	metaBlob, err := json.Marshal(map[string]string{"device_id": laptop.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "cache.meta.json"), metaBlob, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	plaintext, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +197,13 @@ func seedSharesClientCache(t *testing.T, declaredClientVersion bool) string {
 	if err := memoryKeychain.Set(cacheKey); err != nil {
 		t.Fatal(err)
 	}
+	configRoot := t.TempDir()
+	t.Setenv("APPDATA", configRoot)
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	t.Setenv("SSHMGR_CONFIG_ROOT", configRoot)
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
 	withEnv(t, map[string]string{
 		"SSHMGR_STORE":         filepath.Join(t.TempDir(), "no-vault.db"),
 		"SSHMGR_CACHE_DIR":     cacheDir,
@@ -176,7 +214,7 @@ func seedSharesClientCache(t *testing.T, declaredClientVersion bool) string {
 }
 
 func TestSharesClientReadsUndeclaredVersionSnapshot(t *testing.T) {
-	seedSharesClientCache(t, false)
+	seedSharesClientCacheWithRecommendedVersion(t, false, "v0.22.0")
 
 	list := runCli(t, "shares", "list")
 	for _, text := range []string{"datasets", "NAS", "版本号 1", "可挂载服务器数量"} {
@@ -204,8 +242,56 @@ func TestSharesClientReadsUndeclaredVersionSnapshot(t *testing.T) {
 	}
 }
 
+func TestTopologyAndShareQueriesRefuseOldAuthority(t *testing.T) {
+	seedSharesClientCache(t, true)
+	want := "权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端"
+	commands := [][]string{
+		{"shares", "list"},
+		{"shares", "show", "datasets"},
+		{"sites", "list"},
+		{"networks", "list"},
+		{"devices", "list"},
+		{"devices", "show", "工作站"},
+		{"devices", "probe", "--from", "self", "NAS:22"},
+	}
+	for _, args := range commands {
+		got := runCliErr(t, args...)
+		if !strings.Contains(got, want) {
+			t.Fatalf("%v 在旧权威端下应报固定文案，实际：\n%s", args, got)
+		}
+	}
+}
+
+func TestTopologyAndShareQueriesReadSameVersionAuthority(t *testing.T) {
+	seedSharesClientCacheWithRecommendedVersion(t, true, "v0.22.0")
+	refusal := "权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端"
+	commands := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"shares", "list"}, "datasets"},
+		{[]string{"shares", "show", "datasets"}, "共享存储 datasets"},
+		{[]string{"sites", "list"}, "办公室"},
+		{[]string{"networks", "list"}, "办公局域网"},
+		{[]string{"devices", "list"}, "工作站"},
+		{[]string{"devices", "show", "工作站"}, "linux-web"},
+	}
+	for _, command := range commands {
+		got := runCli(t, command.args...)
+		if !strings.Contains(got, command.want) || strings.Contains(got, refusal) {
+			t.Fatalf("%v 在同版本权威端下应返回数据，实际：\n%s", command.args, got)
+		}
+	}
+
+	probeOut, probeErr := runCLI(t, "devices", "probe", "--from", "self", "工作站:22")
+	combined := probeOut.String() + "\n" + fmt.Sprint(probeErr)
+	if strings.Contains(combined, refusal) || !strings.Contains(combined, "工作站:22") {
+		t.Fatalf("同版本权威端的客户端探测应正常执行，实际：\n%s\n%v", probeOut.String(), probeErr)
+	}
+}
+
 func TestSharesClientShowsOnlyIntersectionAndSelectsInstance(t *testing.T) {
-	defaultCacheDir := seedSharesClientCache(t, true)
+	defaultCacheDir := seedSharesClientCacheWithRecommendedVersion(t, true, "v0.22.0")
 	list := runCli(t, "shares", "list")
 	if !strings.Contains(list, "datasets") || strings.Contains(list, "scratch") {
 		t.Fatalf("客户端共享存储列表应只显示有交集的共享存储：\n%s", list)

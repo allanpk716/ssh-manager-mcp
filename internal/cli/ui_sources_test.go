@@ -2,9 +2,11 @@ package cli
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/buildinfo"
@@ -307,5 +309,45 @@ func TestUIVersionHintSourceReusesClientMismatchHint(t *testing.T) {
 	buildinfo.Version = "1.1.0"
 	if hint := uiVersionHintSource(""); hint != "" {
 		t.Fatalf("版本一致时不应提示，实际 %q", hint)
+	}
+}
+
+func TestClientWebUIShowsNewerClientHintForOldAuthority(t *testing.T) {
+	saved := buildinfo.Version
+	buildinfo.Version = "1.0.0"
+	t.Cleanup(func() { buildinfo.Version = saved })
+	seedClientCacheSnapshot(t, &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
+		{ID: "s", Name: "服务器", User: "u", Host: "192.0.2.10", Port: 22, CredentialID: "c", Role: "r"},
+	}}, "")
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	handler, startup, err := webui.New(webui.Config{
+		Role:        webui.RoleClient,
+		Servers:     clientUIServerSource{},
+		VersionHint: func() string { return uiVersionHintSource("") },
+		Port:        18080,
+	})
+	if err != nil {
+		t.Fatalf("构造客户端 Web UI Handler 失败：%v", err)
+	}
+	start := httptest.NewRequest(http.MethodGet, "/ui/start?token="+startup.Token(), nil)
+	start.Host = "127.0.0.1:18080"
+	startRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(startRecorder, start)
+	if startRecorder.Code != http.StatusSeeOther || len(startRecorder.Result().Cookies()) != 1 {
+		t.Fatalf("启动链接应换取会话，状态码 = %d cookie = %v", startRecorder.Code, startRecorder.Result().Cookies())
+	}
+
+	pageRequest := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	pageRequest.Host = "127.0.0.1:18080"
+	pageRequest.AddCookie(startRecorder.Result().Cookies()[0])
+	pageRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(pageRecorder, pageRequest)
+	page, _ := io.ReadAll(pageRecorder.Result().Body)
+	want := "客户端比权威端新，建议先升级权威端"
+	if pageRecorder.Code != http.StatusOK || !strings.Contains(string(page), want) {
+		t.Fatalf("客户端 Web UI 应显示 %q，状态码 = %d 页面：\n%s", want, pageRecorder.Code, page)
 	}
 }

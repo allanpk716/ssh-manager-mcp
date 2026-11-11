@@ -122,6 +122,47 @@ func TestRootCommandWritesVersionHintAfterCommandFailure(t *testing.T) {
 	}
 }
 
+func TestRootCommandWritesNewerClientHintForOldAuthority(t *testing.T) {
+	saved := buildinfo.Version
+	buildinfo.Version = "1.0.0"
+	t.Cleanup(func() { buildinfo.Version = saved })
+	_ = seedRootVersionCache(t, "")
+
+	root := NewRootCmd()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"version"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := "客户端比权威端新，建议先升级权威端\n"
+	if stderr.String() != want {
+		t.Fatalf("标准错误输出 = %q，应为 %q", stderr.String(), want)
+	}
+}
+
+func TestRootCommandDoesNotHintForDevClientAndOldAuthority(t *testing.T) {
+	saved := buildinfo.Version
+	buildinfo.Version = "dev"
+	t.Cleanup(func() { buildinfo.Version = saved })
+	_ = seedRootVersionCache(t, "")
+
+	root := NewRootCmd()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"version"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("开发构建连旧权威端不应提示，实际 %q", stderr.String())
+	}
+}
+
 func TestRootCommandReadsOnlyNamedCacheInstance(t *testing.T) {
 	saved := buildinfo.Version
 	buildinfo.Version = "1.0.0"
@@ -205,6 +246,35 @@ func TestDoctorListsOnlyNamedCacheInstanceVersion(t *testing.T) {
 	}
 	if stderr.String() != "" {
 		t.Fatalf("doctor 不应输出根命令提示：%q", stderr.String())
+	}
+}
+
+func TestDoctorShowsOldAuthorityRecommendedVersion(t *testing.T) {
+	saved := buildinfo.Version
+	buildinfo.Version = "1.0.0"
+	t.Cleanup(func() { buildinfo.Version = saved })
+	withDoctorDirs(t)
+	dek := seedRootVersionCache(t, "")
+	if err := os.WriteFile(os.Getenv("SSHMGR_CACHE_DEK"), dek, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubServeServiceState(t, "NOT INSTALLED")
+
+	root := NewRootCmd()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"doctor"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("doctor: %v\n%s", err, stdout.String())
+	}
+	want := "客户端版本 1.0.0；推荐版本 权威端过旧，未提供推荐版本；客户端比权威端新，建议先升级权威端"
+	if !bytes.Contains(stdout.Bytes(), []byte(want)) {
+		t.Fatalf("doctor 输出缺少 %q：\n%s", want, stdout.String())
+	}
+	if stderr.String() != "" {
+		t.Fatalf("doctor 不应在标准错误输出重复根命令提示：%q", stderr.String())
 	}
 }
 

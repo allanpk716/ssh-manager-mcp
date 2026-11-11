@@ -273,7 +273,7 @@ func buildNetworkDriveInjectionPlan(
 	server *models.Server, privileged bool, executor networkDriveProbeExecutor,
 ) networkDriveInjectionPlan {
 	plan := networkDriveInjectionPlan{}
-	if st == nil || server == nil || executor == nil {
+	if st == nil || server == nil || executor == nil || st.CacheAuthorityTooOld() {
 		return plan
 	}
 	shellType := models.NormalizeShellType(string(server.ShellType))
@@ -391,6 +391,9 @@ func previewNetworkDriveInjection(
 	st *store.Store, profileID string, server *models.Server, privileged bool,
 ) (planned []PlannedNetworkDrive, uninjected []UninjectedNetworkDrive) {
 	if st == nil || server == nil {
+		return []PlannedNetworkDrive{}, []UninjectedNetworkDrive{}
+	}
+	if st.CacheAuthorityTooOld() {
 		return []PlannedNetworkDrive{}, []UninjectedNetworkDrive{}
 	}
 	shellType := models.NormalizeShellType(string(server.ShellType))

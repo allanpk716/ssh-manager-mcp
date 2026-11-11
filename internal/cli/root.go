@@ -92,7 +92,9 @@ func writeClientVersionHint(cmd *cobra.Command) {
 		return
 	}
 	snap := state.Snapshot
-	if hint := updater.VersionMismatchHint(buildinfo.Version, snap.RecommendedVersion); hint != "" {
+	if hint := updater.VersionMismatchHint(
+		buildinfo.Version, snap.RecommendedVersion, state.AuthorityTooOld(),
+	); hint != "" {
 		fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", hint)
 	}
 }

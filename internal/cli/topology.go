@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -29,6 +30,15 @@ var topologyStdinIsInteractive = func() bool {
 // 缓存登记；两者都没有时给出初始化引导。
 func topologyRoleFor(instance string) (policyRole, error) {
 	return roleForVaultBackedCommand(instance, errTopologyNeedVault)
+}
+
+// refuseWhenClientCacheAuthorityTooOld 是命令行拓扑与共享存储查询的统一
+// 旧权威端降级入口。
+func refuseWhenClientCacheAuthorityTooOld(s *store.Store) error {
+	if s.CacheAuthorityTooOld() {
+		return clientfeatures.ErrTopologyAndSharedStorageAuthorityTooOld
+	}
+	return nil
 }
 
 // requireTopologyVault 断言本机持有 vault 并返回已解锁的存储。客户端上的
@@ -65,6 +75,7 @@ func openTopologyViewStore(instance string) (*store.Store, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	temporary.Store.SetCacheRecommendedVersion(snapshot.RecommendedVersion)
 	temporary.Store.SetReadOnly(nil)
 	return temporary.Store, func() { _ = temporary.Close() }, nil
 }
@@ -193,6 +204,9 @@ func sitesListCmd() *cobra.Command {
 				return err
 			}
 			defer closeStore()
+			if err := refuseWhenClientCacheAuthorityTooOld(s); err != nil {
+				return err
+			}
 			sites, err := s.ListSites()
 			if err != nil {
 				return err
@@ -412,6 +426,9 @@ func networksListCmd() *cobra.Command {
 				return err
 			}
 			defer closeStore()
+			if err := refuseWhenClientCacheAuthorityTooOld(s); err != nil {
+				return err
+			}
 			parsedType := models.NetworkType(networkType)
 			if parsedType != "" {
 				parsedType, err = models.ParseNetworkType(networkType)

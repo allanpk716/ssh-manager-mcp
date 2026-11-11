@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 
+	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sharemount"
 	"ssh-manager-mcp/internal/sshbroker"
@@ -47,13 +48,6 @@ func sharedStorageUnreachableNote(reason string) string {
 		return "SSH 连接失败"
 	}
 }
-
-// errTopologyAndSharedStorageAuthorityTooOld 是新客户端连着旧权威端时的固
-// 定报错（ADR 0014：快照没有推荐版本字段时，网络拓扑与共享存储工具整体
-// 降级）。
-var errTopologyAndSharedStorageAuthorityTooOld = errors.New(
-	"权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端",
-)
 
 // emptyListSharesOutput 返回能通过输出结构校验的空结果。报错路径也需要
 // 它：零值里的空指针数组会被序列化成 JSON null，工具输出校验要求的是
@@ -115,8 +109,8 @@ func ListSharesForProfile(
 	ctx context.Context, st *store.Store, profileID string, input ListSharesInput,
 	hk sshbroker.HostKeyStore,
 ) (ListSharesOutput, error) {
-	if st.IsReadOnly() && st.CacheRecommendedVersion() == "" {
-		return emptyListSharesOutput(), errTopologyAndSharedStorageAuthorityTooOld
+	if st.CacheAuthorityTooOld() {
+		return emptyListSharesOutput(), clientfeatures.ErrTopologyAndSharedStorageAuthorityTooOld
 	}
 	if input.CheckServer != "" && !input.LiveCheck {
 		return emptyListSharesOutput(), errors.New("只检测指定服务器时必须开启现场检测，请同时设置 live_check 为 true")
