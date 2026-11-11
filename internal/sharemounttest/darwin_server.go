@@ -62,10 +62,18 @@ func (s *DarwinServer) Handler(command string, stdin io.Reader) (string, string,
 		if !s.hasManagedMapEntry() {
 			return "", DarwinUnmountMarker + " not-managed", 89
 		}
+		if strings.Contains(command, "sshmgr_reject_remote_version_newer=yes") &&
+			s.ShareVersion > requestedVersion(command) {
+			return "", DarwinUnmountMarker + " remote-version-newer", 91
+		}
 		s.deleteConfiguration()
 		force := strings.Contains(command, "sshmgr_force=yes")
 		if strings.Contains(command, "sshmgr_write_revoked_marker=yes") {
 			s.writeRevokedMarker(command)
+		}
+		if strings.Contains(command, "sshmgr_skip_unmount=yes") {
+			s.reloadAutomount()
+			return s.unmountOutput("success"), "", 0
 		}
 		if !s.Mounted {
 			s.reloadAutomount()

@@ -72,10 +72,17 @@ func (s *LinuxServer) Handler(command string, stdin io.Reader) (string, string, 
 		if !s.hasManagedFstabEntry() {
 			return "", LinuxUnmountMarker + " not-managed", 89
 		}
+		if strings.Contains(command, "sshmgr_reject_remote_version_newer=yes") &&
+			s.ShareVersion > requestedVersion(command) {
+			return "", LinuxUnmountMarker + " remote-version-newer", 91
+		}
 		s.deleteConfiguration()
 		force := strings.Contains(command, "sshmgr_force=yes")
 		if strings.Contains(command, "sshmgr_write_revoked_marker=yes") {
 			s.writeRevokedMarker(command)
+		}
+		if strings.Contains(command, "sshmgr_skip_unmount=yes") {
+			return s.unmountOutput("success"), "", 0
 		}
 		if !s.Mounted {
 			return s.unmountOutput("success"), "", 0
@@ -96,6 +103,17 @@ func (s *LinuxServer) Handler(command string, stdin io.Reader) (string, string, 
 	default:
 		return "", "unexpected command: " + command, 90
 	}
+}
+
+func requestedVersion(command string) int64 {
+	for _, field := range strings.Fields(command) {
+		if value, found := strings.CutPrefix(field, "sshmgr_version="); found {
+			if parsed, err := strconv.ParseInt(strings.Trim(value, "'"), 10, 64); err == nil {
+				return parsed
+			}
+		}
+	}
+	return 0
 }
 
 func (s *LinuxServer) State() LinuxServerState {

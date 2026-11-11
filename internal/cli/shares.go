@@ -34,7 +34,7 @@ func requireSharesVault() (*store.Store, error) {
 func newSharesCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "shares", Short: "Manage registered shared storage"}
 	cmd.AddCommand(sharesAddCmd(), sharesEditCmd(), sharesRmCmd(), sharesListCmd(),
-		sharesShowCmd(), sharesUnmountCmd())
+		sharesShowCmd(), sharesUnmountCmd(), sharesRevokeCmd())
 	return cmd
 }
 
