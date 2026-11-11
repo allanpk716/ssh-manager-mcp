@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/pkg/sftp"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -990,6 +992,151 @@ func TestUploadContentBase64SizeChecksFilledContent(t *testing.T) {
 		!strings.Contains(errorText, "content (34 bytes) exceeds upload-content cap 20") {
 		t.Fatalf("Base64 rejection must list format and filled-size errors together: %q", errorText)
 	}
+}
+
+func TestUploadContentSecretOverwriteWinsCreateModeRace(t *testing.T) {
+	const secretValue = "12345678"
+	st := newStore(t)
+	if err := st.AddSecret("RACE_SECRET", "", []byte(secretValue), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	target := toSlash(filepath.Join(t.TempDir(), "config", "race.yaml"))
+	if err := os.MkdirAll(filepath.Dir(filepath.FromSlash(target)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handlers := &createModeRaceHandlers{}
+	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		SFTPHandlers: sftp.Handlers{
+			FileGet:  handlers,
+			FilePut:  handlers,
+			FileCmd:  handlers,
+			FileList: handlers,
+		},
+	})
+	t.Cleanup(cleanup)
+	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
+	profileID, err := st.AddProfile("agent-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"RACE_SECRET"}, []string{"real"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	server, tunnels, tasks, err := NewServer(st, profileID, "project-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tunnels.CloseAll)
+	t.Cleanup(tasks.CloseAll)
+	clientSession := connectInMemoryMCPClient(t, server)
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "upload_content",
+		Arguments: map[string]any{
+			"server_id":   serverID,
+			"content":     "token: {{sshmgr-secret:RACE_SECRET}}\n",
+			"remote_path": target,
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("upload after simulated create race failed: err=%v result=%q", err, toolResultText(result))
+	}
+	got, err := os.ReadFile(filepath.FromSlash(target))
+	if err != nil || string(got) != "token: "+secretValue+"\n" {
+		t.Fatalf("target after simulated create race = %q, %v", got, err)
+	}
+	info, err := os.Stat(filepath.FromSlash(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("target mode after simulated create race = %v, want retained 0640", info.Mode().Perm())
+	}
+	assertUploadContentResultHasNoSecretValue(t, result, secretValue)
+}
+
+// createModeRaceHandlers 在第一次看到独占创建请求时，模拟另一个写入者刚
+// 创建出目标文件；随后的覆盖写入必须保留这个已存在文件的权限。
+type createModeRaceHandlers struct {
+	injected bool
+}
+
+func (h *createModeRaceHandlers) Fileread(*sftp.Request) (io.ReaderAt, error) {
+	return nil, os.ErrPermission
+}
+
+func (h *createModeRaceHandlers) Filewrite(request *sftp.Request) (io.WriterAt, error) {
+	if request.Pflags().Excl && !h.injected {
+		file, err := os.OpenFile(filepath.FromSlash(request.Filepath), os.O_CREATE|os.O_WRONLY, 0o640)
+		if err != nil {
+			return nil, err
+		}
+		if err := file.Close(); err != nil {
+			return nil, err
+		}
+		h.injected = true
+		return nil, os.ErrExist
+	}
+	openFlags := request.Pflags()
+	flags := os.O_WRONLY
+	if openFlags.Read {
+		flags = os.O_RDWR
+	}
+	if openFlags.Creat {
+		flags |= os.O_CREATE
+	}
+	if openFlags.Trunc {
+		flags |= os.O_TRUNC
+	}
+	if openFlags.Excl {
+		flags |= os.O_EXCL
+	}
+	return os.OpenFile(filepath.FromSlash(request.Filepath), flags, 0o666)
+}
+
+func (h *createModeRaceHandlers) Filecmd(request *sftp.Request) error {
+	switch request.Method {
+	case "Mkdir":
+		return os.MkdirAll(filepath.FromSlash(request.Filepath), 0o755)
+	case "Setstat":
+		if request.AttrFlags().Permissions {
+			return os.Chmod(filepath.FromSlash(request.Filepath), request.Attributes().FileMode())
+		}
+		return nil
+	default:
+		return os.ErrInvalid
+	}
+}
+
+func (h *createModeRaceHandlers) Filelist(request *sftp.Request) (sftp.ListerAt, error) {
+	path := filepath.FromSlash(request.Filepath)
+	var info os.FileInfo
+	var err error
+	if request.Method == "Lstat" {
+		info, err = os.Lstat(path)
+	} else {
+		info, err = os.Stat(path)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &fileInfoLister{info: info}, nil
+}
+
+type fileInfoLister struct {
+	info os.FileInfo
+}
+
+func (l *fileInfoLister) ListAt(out []os.FileInfo, offset int64) (int, error) {
+	if offset != 0 {
+		return 0, io.EOF
+	}
+	out[0] = l.info
+	return 1, nil
 }
 
 func TestUploadContentSecretReadFailureRejectsBeforeConnectAndAuditsError(t *testing.T) {

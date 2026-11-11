@@ -304,8 +304,11 @@ func (c *Client) WriteFile(ctx context.Context, remotePath string, r io.Reader) 
 }
 
 // WriteFileWithCreateMode 把 r 写入 remotePath。createMode 为 0 时保持既有
-// 写入行为；非 0 时先查看目标是否已存在，只有新建文件才设置权限，覆盖
-// 已有文件保留原权限。
+// 写入行为；非 0 时只有新建文件才设置权限，覆盖已有文件保留原权限。
+// 使用的 github.com/pkg/sftp 客户端没有公开“创建文件时携带权限”的接口，
+// 因此先用独占创建判断文件是否新建：独占创建成功后、写入任何字节前设置
+// 权限；因文件已存在而失败时改走覆盖打开。仍有一个残留窗口：远端服务器
+// 刚创建出的空文件会短暂使用服务器默认权限，之后才被收紧。
 func (c *Client) WriteFileWithCreateMode(ctx context.Context, remotePath string, r io.Reader, createMode os.FileMode) error {
 	sc, err := sftp.NewClient(c.c)
 	if err != nil {
@@ -330,16 +333,19 @@ func (c *Client) WriteFileWithCreateMode(ctx context.Context, remotePath string,
 	if createMode == 0 {
 		out, err = sc.Create(remotePath)
 	} else {
-		_, statErr := sc.Stat(remotePath)
-		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-			return statErr
-		}
-		if out, err = sc.Create(remotePath); err == nil && statErr != nil {
+		out, err = sc.OpenFile(remotePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+		switch {
+		case err == nil:
 			err = out.Chmod(createMode)
 			if err != nil {
 				_ = out.Close()
 				return err
 			}
+		default:
+			// SFTP 版本 3 没有单独的“文件已存在”状态码；独占创建因已
+			// 存在而失败时通常表现为普通失败。这里改试覆盖打开，若目标确
+			// 实不能打开，第二次调用会返回真实错误。
+			out, err = sc.OpenFile(remotePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
 		}
 	}
 	if err != nil {
