@@ -21,6 +21,9 @@ const (
 	topologyMembershipMovePath           = "/ui/api/topology/membership/move"
 	topologyMembershipRemovePhysicalPath = "/ui/api/topology/membership/remove-physical"
 	topologyNetworkAddPath               = "/ui/api/topology/network/add"
+	topologyProbeOverlayPath             = "/ui/api/topology/probe/overlay"
+	topologyProbeStartPath               = "/ui/api/topology/probe/start"
+	topologyProbeStatusPath              = "/ui/api/topology/probe/status"
 
 	// topologyWriteMaxRequestBody 限制拓扑写请求的请求体；这里只有设备名、
 	// 网络名与地址，不需要更大的内容。
@@ -163,6 +166,11 @@ func (h *handler) registerTopologyRoutes() {
 	}
 	h.mux.HandleFunc(topologyPath, h.requireSession(h.handleTopologyPage))
 	h.mux.HandleFunc(topologyAPIPath, h.requireSession(h.handleTopologyData))
+	if h.cfg.TopologyProbe != nil {
+		h.mux.HandleFunc(topologyProbeOverlayPath, h.requireSession(h.handleTopologyProbeOverlay))
+		h.mux.HandleFunc(topologyProbeStartPath, h.requireSession(h.handleTopologyProbeStart))
+		h.mux.HandleFunc(topologyProbeStatusPath, h.requireSession(h.handleTopologyProbeStatus))
+	}
 	if h.cfg.TopologyWriter == nil {
 		return
 	}

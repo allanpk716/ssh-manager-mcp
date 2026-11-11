@@ -15,10 +15,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/probeobserve"
+	"ssh-manager-mcp/internal/proberesults"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/store"
@@ -280,6 +283,26 @@ func seedTopology(st *store.Store) error {
 	if _, err := st.AddNetworkMembership("笔记本", "虚拟网", "100.64.0.9"); err != nil {
 		return err
 	}
+	if _, err := st.AddDevice("探测机", "浏览器测试探测目标", ""); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("探测机", "家A局域网", "127.0.0.1"); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("探测机", "虚拟网", "127.0.0.2"); err != nil {
+		return err
+	}
+	if port := strings.TrimSpace(os.Getenv("SSHMGR_E2E_PROBE_PORT")); port != "" {
+		probePort, err := strconv.Atoi(port)
+		if err != nil {
+			return fmt.Errorf("SSHMGR_E2E_PROBE_PORT 不是端口号：%w", err)
+		}
+		if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: "probe-target", Host: "127.0.0.1", Port: probePort, User: "owner",
+		}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, "探测机"); err != nil {
+			return err
+		}
+	}
 	if err := st.AddSecretWithEnvironmentName("NAS_PASSWORD", "NAS 登录密码", []byte("nas-login-secret"), "", store.CLISource()); err != nil {
 		return err
 	}
@@ -292,5 +315,43 @@ func seedTopology(st *store.Store) error {
 	if err != nil {
 		return err
 	}
-	return roles.SetLocalDeviceID(workstation.ID)
+	if err := roles.SetLocalDeviceID(workstation.ID); err != nil {
+		return err
+	}
+	return seedProbeResults(st, workstation.ID)
+}
+
+// seedProbeResults 为浏览器测试写一份本机起点的本地探测结果：NAS 家A局域
+// 网成功、虚拟局域网超时；其余设备留空，用于呈现未探测与无共同网络。
+func seedProbeResults(st *store.Store, originDeviceID string) error {
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_TOPOLOGY")) != "1" {
+		return nil
+	}
+	nas, err := st.GetDevice("NAS")
+	if err != nil {
+		return err
+	}
+	path, ok, err := probeobserve.PathFor("")
+	if err != nil || !ok {
+		return err
+	}
+	results := proberesults.NewFileProbeResults(path)
+	observedAt := time.Now().Add(-10 * time.Second)
+	for _, observation := range []proberesults.Observation{
+		{
+			OriginDeviceID: originDeviceID, TargetDeviceID: nas.ID, Network: "家A局域网",
+			Address: "192.168.1.30", Port: 22, OK: true, Duration: 3 * time.Millisecond,
+			ObservedAt: observedAt, Source: proberesults.SourceProbe,
+		},
+		{
+			OriginDeviceID: originDeviceID, TargetDeviceID: nas.ID, Network: "虚拟网",
+			Address: "100.64.0.30", Port: 22, Category: models.ProbeErrorTimeout,
+			Duration: 1500 * time.Millisecond, ObservedAt: observedAt, Source: proberesults.SourceProbe,
+		},
+	} {
+		if err := results.Record(observation); err != nil {
+			return err
+		}
+	}
+	return nil
 }

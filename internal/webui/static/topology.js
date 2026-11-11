@@ -13,11 +13,20 @@
   var trayList = page === null ? null : page.querySelector(".topology-tray-list");
   var trayEmpty = page === null ? null : page.querySelector(".topology-tray-empty");
   var viewButtons = page === null ? [] : Array.prototype.slice.call(page.querySelectorAll(".topology-view"));
+  var probePanel = page === null ? null : page.querySelector(".topology-probe");
+  var probeOriginSelect = probePanel === null ? null : probePanel.querySelector(".topology-probe-origin");
+  var probeStatusArea = probePanel === null ? null : probePanel.querySelector(".topology-probe-status");
 
-  var state = { data: null, cy: null, view: "physical" };
+  var state = {
+    data: null,
+    cy: null,
+    view: "physical",
+    probe: { origin: "self", overlay: null, taskID: null, taskState: "idle" },
+  };
   var coarsePointer = window.matchMedia("(pointer: coarse)");
   // canEdit 表示当前角色提供拓扑写接口；拖动归类还要求精确指针（手机不开放）。
   var canEdit = page !== null && page.getAttribute("data-editable") === "true";
+  var canChooseRemoteProbeOrigin = probePanel !== null && probePanel.getAttribute("data-remote-origin") !== "false";
   var trayElement = page === null ? null : page.querySelector(".topology-tray");
   var dialogRestoresView = false;
   var trayDrag = null;
@@ -141,12 +150,22 @@
       classes = classes.concat(extraClasses);
     }
     var label = kindGlyph(device.kind) + device.name;
+    var probeSummary = probeSummaryFor(device.id);
+    if (probeSummary !== null) {
+      classes.push(probeStatusClass(probeSummary.status));
+      if (probeSummary.inconsistent) {
+        classes.push("probe-inconsistent");
+      }
+    }
     var addresses = addressText(index, device);
     if (addresses !== "") {
       label += "\n" + addresses;
     }
     if (device.servers.length > 1) {
       label += "\n×" + device.servers.length;
+    }
+    if (probeSummary !== null) {
+      label += "\n" + probeBadgeText(probeSummary);
     }
     return {
       group: "nodes",
@@ -475,6 +494,11 @@
       { selector: ".device-unmanaged", style: { shape: "hexagon", "border-color": "#7a5af8" } },
       { selector: ".local", style: { "border-color": "#f79009", "border-width": 4 } },
       { selector: ".clone", style: { "border-style": "dashed", opacity: 0.9 } },
+      { selector: ".probe-ok", style: { "border-color": "#12b76a", "border-width": 3 } },
+      { selector: ".probe-fail", style: { "border-color": "#d92d20", "border-width": 3, "background-color": "#fff1f0" } },
+      { selector: ".probe-unprobed", style: { "border-style": "dashed" } },
+      { selector: ".probe-none", style: { "border-style": "dotted", "border-color": "#98a2b3" } },
+      { selector: ".probe-inconsistent", style: { "border-color": "#d92d20", "border-width": 4 } },
       { selector: ".placeholder", style: { shape: "round-rectangle", "background-color": "#f9fafb", "border-color": "#d0d5dd", "border-style": "dashed", color: "#667085", width: 110, height: 40 } },
       { selector: "edge", style: { width: 2, "line-color": "#98a2b3" } },
       { selector: ".clone-edge", style: { "line-style": "dashed", "line-color": "#a685e8" } },
@@ -526,6 +550,9 @@
     state.cy.fit(undefined, 48);
     updateGrabbable();
     updateCanvasSummary();
+    if (probeEnabled()) {
+      updateProbePresentation();
+    }
   }
 
   // updateCanvasSummary 把画布当前可见的节点摘要写进 data 属性与无障碍标
@@ -695,6 +722,360 @@
     detailOpen(false);
   }
 
+  // ---- 探测结果叠加与按需触发 -------------------------------------------
+
+  function probeEnabled() {
+    return probePanel !== null;
+  }
+
+  function probeSummaryFor(deviceID) {
+    if (!probeEnabled() || state.probe.overlay === null) {
+      return null;
+    }
+    var devices = state.probe.overlay.devices || [];
+    for (var i = 0; i < devices.length; i += 1) {
+      if (devices[i].device_id === deviceID) {
+        return devices[i];
+      }
+    }
+    return null;
+  }
+
+  function probeStatusClass(status) {
+    if (status === "no_common_network") {
+      return "probe-none";
+    }
+    return "probe-" + status;
+  }
+
+  function probeBadgeText(summary) {
+    var text = "";
+    if (summary.status === "ok") {
+      text = summary.fastest_ms >= 1 ? "✓" + summary.fastest_ms + "ms" : "✓<1ms";
+    } else if (summary.status === "fail") {
+      text = "不通";
+    } else if (summary.status === "no_common_network") {
+      text = "无共同网络";
+    } else {
+      text = "未探测";
+    }
+    if (summary.inconsistent) {
+      text += "·不一致";
+    }
+    return text;
+  }
+
+  function probeOriginLabel() {
+    if (state.probe.overlay === null || state.probe.overlay.origin === undefined) {
+      return "本机";
+    }
+    var origin = state.probe.overlay.origin;
+    if (!origin.known) {
+      return "无法识别";
+    }
+    if (origin.server_name !== undefined && origin.server_name !== "") {
+      return origin.server_name + "（" + origin.device_name + "）";
+    }
+    if (origin.device_name !== undefined && origin.device_name !== "") {
+      return "本机 " + origin.device_name;
+    }
+    return "本机";
+  }
+
+  function buildProbeOriginOptions(data) {
+    if (!probeEnabled() || probeOriginSelect === null) {
+      return;
+    }
+    probeOriginSelect.textContent = "";
+    var selfOption = document.createElement("option");
+    selfOption.value = "self";
+    selfOption.textContent = data.local_device.known ? "本机（" + data.local_device.device_name + "）" : "本机（未登记）";
+    probeOriginSelect.appendChild(selfOption);
+    if (canChooseRemoteProbeOrigin) {
+      data.devices.forEach(function (device) {
+        device.servers.forEach(function (server) {
+          var option = document.createElement("option");
+          option.value = server.id;
+          option.textContent = server.name + "（" + device.name + "）";
+          probeOriginSelect.appendChild(option);
+        });
+      });
+    } else {
+      probeOriginSelect.disabled = true;
+    }
+    probeOriginSelect.value = state.probe.origin;
+  }
+
+  function fetchProbeOverlay() {
+    if (!probeEnabled()) {
+      return Promise.resolve();
+    }
+    var origin = state.probe.origin;
+    return fetch("/ui/api/topology/probe/overlay?from=" + encodeURIComponent(origin), {
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+    })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error("读取探测结果失败（" + response.status + "）。");
+        }
+        return response.json();
+      })
+      .then(
+        function (overlay) {
+          if (state.probe.origin !== origin) {
+            return;
+          }
+          state.probe.overlay = overlay;
+          updateProbePresentation();
+        },
+        function () {
+          if (state.probe.origin !== origin) {
+            return;
+          }
+          state.probe.overlay = null;
+          updateProbePresentation();
+          setProbeStatus("error", "读取探测结果失败，请稍后重试。");
+        }
+      );
+  }
+
+  function updateProbePresentation() {
+    if (!probeEnabled()) {
+      return;
+    }
+    if (state.cy !== null) {
+      state.cy.nodes().forEach(function (node) {
+        var deviceID = node.data("device");
+        if (deviceID === undefined) {
+          return;
+        }
+        var summary = probeSummaryFor(deviceID);
+        ["probe-ok", "probe-fail", "probe-unprobed", "probe-none", "probe-inconsistent"].forEach(function (name) {
+          node.removeClass(name);
+        });
+        if (!node.hasClass("clone")) {
+          var base = String(node.data("label") || "").split("\n");
+          while (base.length > 1 && /^(✓|不通|未探测|无共同网络)/.test(base[base.length - 1])) {
+            base.pop();
+          }
+          if (summary !== null) {
+            base.push(probeBadgeText(summary));
+          }
+          node.data("label", base.join("\n"));
+        }
+        if (summary === null) {
+          return;
+        }
+        node.addClass(probeStatusClass(summary.status));
+        if (summary.inconsistent) {
+          node.addClass("probe-inconsistent");
+        }
+      });
+      updateCanvasSummary();
+    }
+    container.setAttribute("data-probe-origin", state.probe.origin);
+    container.setAttribute("data-probe-summary", probeCanvasSummary());
+    refreshDetailProbe();
+  }
+
+  function probeCanvasSummary() {
+    if (state.probe.overlay === null) {
+      return "未读取";
+    }
+    if (state.probe.overlay.notice !== "" && (state.probe.overlay.devices || []).length === 0) {
+      return state.probe.overlay.notice;
+    }
+    var index = state.data === null ? null : indexData(state.data);
+    var parts = (state.probe.overlay.devices || []).map(function (item) {
+      var deviceName = item.device_id;
+      if (index !== null && index.devices[item.device_id] !== undefined) {
+        deviceName = index.devices[item.device_id].name;
+      }
+      return deviceName + "：" + probeBadgeText(item);
+    });
+    return parts.length === 0 ? "暂无设备" : parts.join("；");
+  }
+
+  function ageLabel(observedAt) {
+    var observed = Date.parse(observedAt);
+    if (isNaN(observed)) {
+      return "时间未知";
+    }
+    var seconds = Math.max(0, Math.floor((Date.now() - observed) / 1000));
+    if (seconds < 60) {
+      return "刚刚";
+    }
+    if (seconds < 3600) {
+      return Math.floor(seconds / 60) + " 分钟前";
+    }
+    if (seconds < 86400) {
+      return Math.floor(seconds / 3600) + " 小时前";
+    }
+    return Math.floor(seconds / 86400) + " 天前";
+  }
+
+  function probeLineText(line) {
+    var outcome = "未探测";
+    if (line.observed) {
+      if (line.ok) {
+        outcome = "通（" + line.duration_ms + " 毫秒，" + ageLabel(line.observed_at) + "）";
+      } else {
+        outcome = "不通（" + (line.category_label || "其他错误") + "，" + ageLabel(line.observed_at) + "）";
+      }
+    }
+    return line.network_name + " · " + line.address + ":" + line.port + " · " + outcome;
+  }
+
+  function probeDetailHTML(device) {
+    if (!probeEnabled()) {
+      return "";
+    }
+    var html = '<section class="detail-probe" data-device="' + escapeHTML(device.id) + '">';
+    html += "<h3>探测结果（当前起点：" + escapeHTML(probeOriginLabel()) + "）</h3>";
+    var overlay = state.probe.overlay;
+    if (overlay !== null && overlay.notice !== "" && (overlay.devices || []).length === 0) {
+      html += '<p class="probe-notice">' + escapeHTML(overlay.notice) + "</p>";
+    }
+    var summary = probeSummaryFor(device.id);
+    if (summary === null) {
+      html += '<p class="probe-notice">当前起点没有这台设备的探测数据。</p>';
+    } else {
+      if (summary.note !== "") {
+        html += '<p class="probe-note">' + escapeHTML(summary.note) + "</p>";
+      }
+      html += '<ul class="detail-probe-list">';
+      if (summary.status === "no_common_network") {
+        html += "<li>无共同网络，未探测</li>";
+      } else {
+        (summary.lines || []).forEach(function (line) {
+          html += "<li>" + escapeHTML(probeLineText(line)) + "</li>";
+        });
+      }
+      html += "</ul>";
+    }
+    html += '<form class="probe-trigger" data-device="' + escapeHTML(device.id) + '">';
+    html += '<label>探测目标<select name="target" aria-label="探测目标">';
+    html += '<option value="' + escapeHTML(device.name) + '">设备 ' + escapeHTML(device.name) + "（端口 22）</option>";
+    device.servers.forEach(function (server) {
+      html +=
+        '<option value="' +
+        escapeHTML(server.id) +
+        '">服务器 ' +
+        escapeHTML(server.name) +
+        "（端口 " +
+        escapeHTML(server.port) +
+        "）</option>";
+    });
+    html += "</select></label>";
+    html += '<button type="submit" class="probe-start"' + (state.probe.taskState === "running" ? " disabled" : "") + ">开始探测</button>";
+    html += "</form></section>";
+    return html;
+  }
+
+  function refreshDetailProbe() {
+    if (detailPanel === null || detailPanel.hidden) {
+      return;
+    }
+    var section = detailPanel.querySelector(".detail-probe");
+    if (section === null) {
+      return;
+    }
+    var deviceID = section.getAttribute("data-device");
+    var index = state.data === null ? null : indexData(state.data);
+    var device = index === null ? null : index.devices[deviceID];
+    if (device === undefined || device === null) {
+      return;
+    }
+    var template = document.createElement("div");
+    template.innerHTML = probeDetailHTML(device);
+    var replacement = template.querySelector(".detail-probe");
+    if (replacement !== null) {
+      section.innerHTML = replacement.innerHTML;
+    }
+  }
+
+  function setProbeStatus(probeState, message) {
+    state.probe.taskState = probeState;
+    if (probeStatusArea !== null) {
+      probeStatusArea.setAttribute("data-probe-state", probeState);
+      probeStatusArea.textContent = message;
+    }
+    if (detailPanel !== null) {
+      detailPanel.querySelectorAll(".probe-start").forEach(function (button) {
+        button.disabled = probeState === "running";
+      });
+    }
+  }
+
+  function startProbeTask(target) {
+    if (state.probe.taskState === "running") {
+      setProbeStatus("running", "已有连通探测任务正在进行，请等它完成后再触发。");
+      return;
+    }
+    setProbeStatus("running", "探测中…");
+    fetch("/ui/api/topology/probe/start", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken(),
+      },
+      body: JSON.stringify({ from: state.probe.origin, targets: [target] }),
+    })
+      .then(function (response) {
+        return response
+          .json()
+          .catch(function () {
+            return {};
+          })
+          .then(function (body) {
+            if (!response.ok) {
+              throw new Error(body.error || "启动探测失败（" + response.status + "）。");
+            }
+            return body;
+          });
+      })
+      .then(
+        function (body) {
+          state.probe.taskID = body.task_id || null;
+          pollProbeTask();
+        },
+        function (error) {
+          setProbeStatus("idle", error.message);
+        }
+      );
+  }
+
+  function pollProbeTask() {
+    if (state.probe.taskID !== null && state.probe.taskState === "running") {
+      fetch("/ui/api/topology/probe/status?task=" + encodeURIComponent(state.probe.taskID), {
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error("任务不存在或已过期。");
+          }
+          return response.json();
+        })
+        .then(
+          function (status) {
+            if (status.state === "running") {
+              window.setTimeout(pollProbeTask, 800);
+              return;
+            }
+            setProbeStatus(status.state === "error" ? "error" : "done", status.message || "探测结束。");
+            fetchProbeOverlay();
+          },
+          function () {
+            setProbeStatus("error", "读取探测任务状态失败，请刷新页面后重试。");
+          }
+        );
+    }
+  }
+
   function showDetailHTML(html) {
     if (detailPanel === null) {
       return;
@@ -831,6 +1212,7 @@
         "<li>" + escapeHTML(candidate.address) + ' <span class="candidate-source">' + escapeHTML(source) + "</span></li>";
     });
     html += "</ul>";
+    html += probeDetailHTML(device);
 
     if (device.shared_storages.length > 0) {
       html += "<h3>提供的共享存储</h3><ul>";
@@ -973,6 +1355,10 @@
         state.data = data;
         applyView(state.view);
         renderTray(indexData(data));
+        if (probeEnabled()) {
+          buildProbeOriginOptions(data);
+          fetchProbeOverlay();
+        }
         var index = indexData(data);
         if (deviceID !== undefined && index.devices[deviceID] !== undefined && !detailPanel.hidden) {
           showDeviceDetail(deviceID);
@@ -1635,6 +2021,14 @@
         applyView(button.getAttribute("data-view"));
       });
     });
+    if (probeOriginSelect !== null) {
+      probeOriginSelect.addEventListener("change", function () {
+        state.probe.origin = probeOriginSelect.value || "self";
+        state.probe.overlay = null;
+        updateProbePresentation();
+        fetchProbeOverlay();
+      });
+    }
     if (page !== null) {
       // 拓扑图数据在画布里，页面外的脚本或测试可以用这三个事件请求打开
       // 详情面板，与在画布里点节点等价。
@@ -1712,6 +2106,14 @@
         if (errorArea !== null) {
           errorArea.hidden = true;
         }
+        if (form.classList.contains("probe-trigger")) {
+          if (state.probe.taskState === "running") {
+            showErrorArea("已有连通探测任务正在进行，请等它完成后再触发。");
+            return;
+          }
+          startProbeTask(form.elements.target.value.trim());
+          return;
+        }
         if (form.classList.contains("detail-member-form")) {
           var device = index.devices[form.getAttribute("data-device")];
           var network = index.networks[form.getAttribute("data-network")];
@@ -1766,6 +2168,10 @@
         initGraph(data);
         renderTray(indexData(data));
         applyView(state.view);
+        if (probeEnabled()) {
+          buildProbeOriginOptions(data);
+          fetchProbeOverlay();
+        }
       })
       .catch(function () {
         showError("读取网络拓扑失败。请刷新页面重试。");

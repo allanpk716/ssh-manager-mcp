@@ -144,18 +144,25 @@ async function startEmptyMachineUI(): Promise<standaloneUI> {
 }
 
 // startStandaloneUIWithTopology 用带拓扑数据的种子库启动单机 Web UI，供网
-// 络拓扑浏览器测试使用；其它用例的种子数据保持不变。
-export async function startStandaloneUIWithTopology(): Promise<standaloneUI> {
+// 络拓扑浏览器测试使用；其它用例的种子数据保持不变。probePort 提供时，种
+// 子库给探测目标登记该端口，用例在本地监听它完成真实触发探测。
+export async function startStandaloneUIWithTopology(probePort?: number): Promise<standaloneUI> {
   const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-topology-"));
+  const seedEnv: Record<string, string> = {
+    SSHMGR_E2E_TOPOLOGY: "1",
+    SSHMGR_VAULT_ROOT: runDir,
+    SSHMGR_STORE: path.join(runDir, "store.db"),
+    SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
+  };
+  if (probePort !== undefined) {
+    seedEnv.SSHMGR_E2E_PROBE_PORT = String(probePort);
+  }
   const seed = spawnSync("go", ["run", "./e2e/tools/seedvault", runDir], {
     cwd: repoRoot,
     encoding: "utf8",
     env: {
       ...process.env,
-      SSHMGR_E2E_TOPOLOGY: "1",
-      SSHMGR_VAULT_ROOT: runDir,
-      SSHMGR_STORE: path.join(runDir, "store.db"),
-      SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
+      ...seedEnv,
     },
   });
   if (seed.status !== 0) {

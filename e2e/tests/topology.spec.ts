@@ -1,4 +1,5 @@
 import { expect, test } from "../helpers";
+import * as net from "node:net";
 import {
   openClientUI,
   startClientUIWithTopology,
@@ -13,6 +14,12 @@ async function openTopologyPage(
   await page.getByRole("heading", { name: "服务器" }).waitFor();
   await page.getByRole("link", { name: "网络拓扑" }).click();
   await page.getByRole("heading", { name: "网络拓扑" }).waitFor();
+}
+
+async function startLocalProbeTarget(): Promise<net.Server> {
+  const server = net.createServer((socket) => socket.end());
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  return server;
 }
 
 async function selectTopologyEntity(
@@ -229,7 +236,8 @@ test("桌面端切换三视图并查看托盘、角标与详情", async ({ page,
     await expect(detail).toContainText("按流量计费是");
 
     await selectTopologyEntity(page, "topology:select-site", "家A");
-    await expect(detail).toContainText("家A局域网 · 2 台成员设备");
+    // 探测叠加用例给家A局域网补了一台「探测机」，成员数随之增加。
+    await expect(detail).toContainText("家A局域网 · 3 台成员设备");
     expect(consoleErrors).toEqual([]);
   } finally {
     await ui.close();
@@ -293,7 +301,59 @@ test("客户端只读查看本地快照拓扑", async ({ page }) => {
     await expect(detail).toContainText("兜底主机");
     await expect(detail).toContainText("192.0.2.30");
     await expect(detail.getByRole("button", { name: "编辑" })).toHaveCount(0);
+
+    const origin = page.getByLabel("探测起点");
+    await expect(origin).toBeDisabled();
+    await expect(origin.locator("option")).toHaveCount(1);
   } finally {
+    await ui.close();
+  }
+});
+
+test("桌面端叠加探测结果、切换起点并按需触发", async ({ page, isMobile }) => {
+  test.skip(isMobile, "桌面交互用例只在桌面视口运行");
+  const probeServer = await startLocalProbeTarget();
+  const probePort = (probeServer.address() as net.AddressInfo).port;
+  const ui = await startStandaloneUIWithTopology(probePort);
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      consoleErrors.push(message.text());
+    }
+  });
+  try {
+    await openTopologyPage(page, ui);
+    const canvas = page.locator("#topology-canvas");
+    await expect(canvas).toHaveAttribute("data-probe-summary", /NAS：✓3ms/);
+    const initialSummary = await canvas.getAttribute("data-probe-summary");
+    expect(initialSummary).toContain("未探测");
+    expect(initialSummary).toContain("无共同网络");
+
+    const detail = page.getByRole("complementary", { name: "拓扑详情" });
+    await selectTopologyEntity(page, "topology:select-device", "NAS");
+    await expect(detail).toContainText("探测结果（当前起点：本机 工作站）");
+    await expect(detail).toContainText("家A局域网 · 192.168.1.30:22 · 通（3 毫秒，刚刚）");
+    await expect(detail).toContainText("虚拟网 · 100.64.0.30:22 · 不通（连接超时，刚刚）");
+
+    const origin = page.getByLabel("探测起点");
+    await origin.selectOption({ label: "gpu-1（机房机器）" });
+    await expect(canvas).toHaveAttribute("data-probe-summary", /NAS：无共同网络/);
+    await expect(detail).toContainText("无共同网络，未探测");
+
+    await origin.selectOption({ label: "本机（工作站）" });
+    await expect(canvas).toHaveAttribute("data-probe-summary", /NAS：✓3ms/);
+
+    await selectTopologyEntity(page, "topology:select-device", "探测机");
+    await detail.getByLabel("探测目标").selectOption({ label: `服务器 probe-target（端口 ${probePort}）` });
+    await detail.getByRole("button", { name: "开始探测" }).click();
+    const status = page.getByRole("status");
+    await expect(status).toContainText("探测完成", { timeout: 15_000 });
+    await expect(canvas).toHaveAttribute("data-probe-summary", /探测机：✓(\d+ms|<1ms)/);
+    await expect(detail).toContainText(`127.0.0.1:${probePort} · 通（`);
+    await expect(detail).toContainText(`127.0.0.2:${probePort} · 不通（`);
+    expect(consoleErrors).toEqual([]);
+  } finally {
+    probeServer.close();
     await ui.close();
   }
 });

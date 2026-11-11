@@ -51,6 +51,49 @@
   background: var(--warning-bg, #fff7e6);
 }
 
+.topology-probe {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: var(--surface, #f8fafc);
+}
+
+.topology-probe-origin-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.topology-probe-origin-label select {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.topology-probe-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted, #667085);
+}
+
+.topology-probe-status[data-probe-state="running"] {
+  color: var(--accent, #2f6fed);
+}
+
+.topology-probe-status[data-probe-state="error"] {
+  color: var(--danger, #b42318);
+}
+
+.topology-probe-status[data-probe-state="done"] {
+  color: var(--success, #067647);
+}
+
 .topology-body {
   position: relative;
   display: grid;
@@ -491,4 +534,68 @@ dialog.topology-dialog::backdrop {
   background: var(--accent, #2f6fed);
   color: #fff;
   padding: 5px 12px;
+}
+
+.topology-detail .detail-probe {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: var(--surface, #f8fafc);
+}
+
+.topology-detail .detail-probe h3 {
+  margin: 0;
+}
+
+.topology-detail .probe-notice,
+.topology-detail .probe-note {
+  margin: 0;
+  font-size: 13px;
+}
+
+.topology-detail .probe-note {
+  color: var(--danger, #b42318);
+  font-weight: 600;
+}
+
+.topology-detail .detail-probe-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.topology-detail .probe-trigger {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.topology-detail .probe-trigger label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.topology-detail .probe-trigger select {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.topology-detail .probe-trigger .probe-start {
+  border: 1px solid var(--accent, #2f6fed);
+  border-radius: 6px;
+  background: var(--accent, #2f6fed);
+  color: #fff;
+  padding: 5px 12px;
+}
+
+.topology-detail .probe-trigger .probe-start:disabled {
+  opacity: 0.6;
 }

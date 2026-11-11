@@ -29,28 +29,14 @@ func devicesProbeCmd() *cobra.Command {
 			}
 			var st *store.Store
 			if role == policyRoleClient {
-				snapshot, err := loadTopologyClientSnapshot(instance)
-				if err != nil {
-					return err
-				}
-				_, _, _, auditPath, err := clientops.CachePathsFor(instance)
-				if err != nil {
-					return err
-				}
-				auditFile, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-				if err != nil {
-					return err
-				}
-				defer auditFile.Close()
-				temporary, err := store.OpenTemporaryClientCacheStore(snapshot, "sshmgr-probe-*.db")
+				probeStore, closeProbeStore, err := openClientProbeStore(instance)
 				if err != nil {
 					return err
 				}
 				// 与拓扑查看命令不同：探测是诊断动作，客户端实例的审计写
 				// 进旁车审计文件，而不是不写审计的只读库设置。
-				temporary.Store.SetReadOnly(auditFile)
-				defer func() { _ = temporary.Close() }()
-				st = temporary.Store
+				defer closeProbeStore()
+				st = probeStore
 			} else {
 				opened, err := openUnlockedStore()
 				if err != nil {
@@ -88,4 +74,32 @@ func devicesProbeCmd() *cobra.Command {
 	_ = c.MarkFlagRequired("from")
 	c.Flags().StringVar(&instance, "instance", "", topologyInstanceFlagHelp)
 	return c
+}
+
+// openClientProbeStore 为客户端上的一次连通探测打开数据源：把本地快照导
+// 入一次性临时库，并把审计写进实例的旁车审计文件。命令行探测与 Web UI 的
+// 按需触发共用这一份打开逻辑。
+func openClientProbeStore(instance string) (*store.Store, func(), error) {
+	snapshot, err := loadTopologyClientSnapshot(instance)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, _, _, auditPath, err := clientops.CachePathsFor(instance)
+	if err != nil {
+		return nil, nil, err
+	}
+	auditFile, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, nil, err
+	}
+	temporary, err := store.OpenTemporaryClientCacheStore(snapshot, "sshmgr-probe-*.db")
+	if err != nil {
+		_ = auditFile.Close()
+		return nil, nil, err
+	}
+	temporary.Store.SetReadOnly(auditFile)
+	return temporary.Store, func() {
+		_ = temporary.Close()
+		_ = auditFile.Close()
+	}, nil
 }

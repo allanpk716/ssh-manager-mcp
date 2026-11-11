@@ -131,6 +131,7 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		}),
 		Topology:       webuitopology.FromStore(st),
 		TopologyWriter: webuitopology.WriterFromStore(st),
+		TopologyProbe:  webuitopology.ProbeFromStore(st),
 		Access: webuiaccess.FromManager(access.New(st, access.WithServeCertFingerprint(func() (string, error) {
 			return fingerprint, nil
 		}))),

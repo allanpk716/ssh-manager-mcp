@@ -107,8 +107,11 @@ type Config struct {
 	// TopologyWriter 是网络拓扑页写操作来源。单机与权威端提供；客户端不
 	// 提供，拖动归类与网络成员编辑接口不注册。
 	TopologyWriter TopologyWriter
-	Access         AccessStore
-	Ops            OpsStore
+	// TopologyProbe 是网络拓扑页按需触发连通探测与读取本地探测结果的来
+	// 源。三种角色都提供；客户端适配层固定本机起点。
+	TopologyProbe TopologyProbe
+	Access        AccessStore
+	Ops           OpsStore
 	// MachineInit 是单机升级为权威端时调用的初始化模块适配器。适配器内部
 	// 调用 machineinit.Initialize 并把权威端作为目标角色；本包不写 role.json。
 	MachineInit MachineInitializer
@@ -220,6 +223,12 @@ type capabilities struct {
 	// CanEditTopology 控制拓扑页的拖动归类入口与网络成员编辑表单；只有
 	// 提供拓扑写来源的角色为真。
 	CanEditTopology bool
+	// ShowTopologyProbe 控制拓扑页的探测起点选择与叠加入口；只有提供探测
+	// 来源时显示。
+	ShowTopologyProbe bool
+	// CanChooseProbeServerOrigin 控制拓扑页能否选择受管服务器作为探测起
+	// 点；客户端固定本机。
+	CanChooseProbeServerOrigin bool
 	// CanManageProfiles 控制是否显示 Profile 页入口与写操作。
 	CanManageProfiles bool
 	// CanManageProjects 控制是否显示项目令牌页入口与写操作。
@@ -257,6 +266,8 @@ func capabilitiesForConfig(cfg Config) capabilities {
 	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
 	caps.ShowTopologyArea = cfg.Topology != nil
 	caps.CanEditTopology = cfg.Topology != nil && cfg.TopologyWriter != nil
+	caps.ShowTopologyProbe = cfg.Topology != nil && cfg.TopologyProbe != nil
+	caps.CanChooseProbeServerOrigin = caps.ShowTopologyProbe && cfg.Role != RoleClient
 	return caps
 }
 

@@ -74,6 +74,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		softwareInventorySource webui.SoftwareInventorySource
 		topologySource          webui.TopologySource
 		topologyWriter          webui.TopologyWriter
+		topologyProbe           webui.TopologyProbe
 		resolvedInstance        string
 		machineInit             webui.MachineInitializer
 	)
@@ -111,6 +112,13 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 			}
 			return st, func() { _ = st.Close() }, nil
 		})
+		topologyProbe = webuitopology.ProbeFromStoreOpener(func() (*store.Store, func(), error) {
+			st, err := openUnlockedStore()
+			if err != nil {
+				return nil, nil, err
+			}
+			return st, func() { _ = st.Close() }, nil
+		}, topologySource)
 		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
 		machineInit = standaloneMachineInitializer{}
 		initializing = destination.Kind == machineinit.UIDestinationInitializationWizard || serverWizard
@@ -122,6 +130,13 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		webRole = webui.RoleClient
 		servers = clientUIServerSource{}
 		topologySource = webuitopology.FromClientSnapshot(clientops.LoadCacheSnapshotFor)
+		topologyProbe = webuitopology.NewProbeRunner(webuitopology.ProbeRunnerDeps{
+			Topology: topologySource,
+			OpenStore: func(instance string) (*store.Store, func(), error) {
+				return openClientProbeStore(instance)
+			},
+			AllowRemoteOrigin: false,
+		})
 		secretSource = clientUISecretSource{}
 		opsSource = webuiops.ClientPageStoreWithUpdates(
 			uiUpdateService(webui.RoleClient, resolvedInstance), uiClientPull)
@@ -157,6 +172,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		SoftwareInventory: softwareInventorySource,
 		Topology:          topologySource,
 		TopologyWriter:    topologyWriter,
+		TopologyProbe:     topologyProbe,
 		VersionHint:       versionHint,
 		Port:              port,
 		Access:            accessSource,
