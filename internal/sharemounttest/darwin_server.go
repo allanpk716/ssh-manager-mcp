@@ -10,7 +10,10 @@ import (
 	"sync"
 )
 
-const DarwinUnmountMarker = "SSHMGR-DARWIN-UNMOUNT"
+const (
+	DarwinUnmountMarker   = "SSHMGR-DARWIN-UNMOUNT"
+	DarwinEnumerateMarker = "SSHMGR-DARWIN-ENUM"
+)
 
 type DarwinServer struct {
 	mu sync.Mutex
@@ -55,6 +58,8 @@ func (s *DarwinServer) Handler(command string, stdin io.Reader) (string, string,
 	switch {
 	case strings.TrimSpace(command) == "uname -s":
 		return "Darwin\n", "", 0
+	case strings.Contains(command, DarwinEnumerateMarker):
+		return s.enumerateOutput(), "", 0
 	case strings.Contains(command, DarwinUnmountMarker):
 		if s.LockHeld {
 			return "", DarwinUnmountMarker + " lock-timeout", 87
@@ -96,6 +101,24 @@ func (s *DarwinServer) Handler(command string, stdin io.Reader) (string, string,
 	default:
 		return "", "unexpected command: " + command, 90
 	}
+}
+
+// enumerateOutput 按固定枚举协议汇报当前状态。枚举是只读操作：不改任何
+// 字段，也不写状态变化历史。
+func (s *DarwinServer) enumerateOutput() string {
+	var out strings.Builder
+	if s.hasManagedMapEntry() {
+		fmt.Fprintf(&out, "%s entry=%s version=%d\n",
+			DarwinEnumerateMarker, url.PathEscape(s.ShareName), s.ShareVersion)
+	}
+	if s.RevokedMarker != "" {
+		fmt.Fprintf(&out, "%s revoked=%s version=%d\n",
+			DarwinEnumerateMarker, url.PathEscape(s.ShareName), s.ShareVersion)
+	}
+	if s.Mounted {
+		fmt.Fprintf(&out, "%s mount=%s\n", DarwinEnumerateMarker, s.ShareName)
+	}
+	return out.String()
 }
 
 func (s *DarwinServer) State() DarwinServerState {
