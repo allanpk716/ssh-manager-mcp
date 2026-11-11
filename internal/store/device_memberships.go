@@ -149,6 +149,84 @@ func (s *Store) EditNetworkMembership(deviceName, networkName, address string) (
 	return membership, tx.Commit()
 }
 
+// MoveNetworkMembership 把设备在 fromNetworkName 里的成员移动到
+// toNetworkName 并登记新地址。两条数据行与两条审计行（沿用 member-rm 与
+// member-add 动作）在同一个事务里提交，目标地址冲突或目标网络已有成员时
+// 不改变任何数据。命令行等价面是先执行 devices member rm 再执行
+// devices member add。
+func (s *Store) MoveNetworkMembership(deviceName, fromNetworkName, toNetworkName, address string) (*models.NetworkMembership, error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return nil, errors.New("网络成员地址不能为空")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	membership, err := networkMembershipTx(tx, deviceName, fromNetworkName)
+	if err != nil {
+		return nil, err
+	}
+	target, err := networkByNameTx(tx, toNetworkName)
+	if err != nil {
+		return nil, err
+	}
+	var count int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM network_memberships WHERE device_id=? AND network_id=?`,
+		membership.DeviceID, target.ID,
+	).Scan(&count); err != nil {
+		return nil, err
+	}
+	if count > 0 {
+		return nil, fmt.Errorf("同一设备 %s 在网络 %s 里已有网络成员；请用 devices member edit 修改地址", membership.DeviceName, target.Name)
+	}
+	if target.Type != membership.NetworkType {
+		return nil, fmt.Errorf("不能把网络成员从类型 %s 的网络移动到类型 %s 的网络", membership.NetworkType, target.Type)
+	}
+	moved := &models.NetworkMembership{
+		DeviceID: membership.DeviceID, DeviceName: membership.DeviceName,
+		NetworkID: target.ID, NetworkName: target.Name,
+		NetworkType: target.Type, SiteName: target.SiteName, Address: address,
+	}
+	if err := ensureMembershipAddressAvailableTx(tx, moved); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM network_memberships WHERE device_id=? AND network_id=?`,
+		membership.DeviceID, membership.NetworkID,
+	); err != nil {
+		return nil, err
+	}
+	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.member-rm", membershipAuditSummary(membership)); err != nil {
+		return nil, err
+	}
+	var registrationOrder int64
+	if err := tx.QueryRow(
+		`SELECT COALESCE(MAX(registration_order),0)+1 FROM network_memberships`,
+	).Scan(&registrationOrder); err != nil {
+		return nil, err
+	}
+	moved.RegistrationOrder = registrationOrder
+	moved.CreatedAt, moved.UpdatedAt = time.Unix(now(), 0), time.Unix(now(), 0)
+	if _, err := tx.Exec(
+		`INSERT INTO network_memberships(device_id,network_id,address,address_lower,registration_order,created_at,updated_at)
+		 VALUES(?,?,?,?,?,?,?)`,
+		moved.DeviceID, moved.NetworkID, moved.Address, strings.ToLower(moved.Address),
+		moved.RegistrationOrder, moved.CreatedAt.Unix(), moved.UpdatedAt.Unix(),
+	); err != nil {
+		return nil, err
+	}
+	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.member-add", membershipAuditSummary(moved)); err != nil {
+		return nil, err
+	}
+	return moved, tx.Commit()
+}
+
 // RemoveNetworkMembership 删除设备在指定网络里的成员。数据行与审计行在
 // 同一个事务里提交。
 func (s *Store) RemoveNetworkMembership(deviceName, networkName string) (*models.NetworkMembership, error) {
@@ -174,6 +252,63 @@ func (s *Store) RemoveNetworkMembership(deviceName, networkName string) (*models
 		return nil, err
 	}
 	return membership, tx.Commit()
+}
+
+// RemovePhysicalNetworkMemberships 删除设备的全部物理局域网成员，虚拟局
+// 域网成员保留。全部数据行与审计行（沿用 member-rm 动作）在同一个事务
+// 里提交；返回被删除的成员，供调用方给出与命令行一致的提示。
+func (s *Store) RemovePhysicalNetworkMemberships(deviceName string) ([]*models.NetworkMembership, error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	device, err := deviceByNameTx(tx, deviceName)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(`
+		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
+		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
+		FROM network_memberships member
+		JOIN devices device ON device.id=member.device_id
+		JOIN networks network ON network.id=member.network_id
+		LEFT JOIN sites site ON site.id=network.site_id
+		WHERE member.device_id=? AND network.type=?
+		ORDER BY member.registration_order`, device.ID, string(models.NetworkPhysical))
+	if err != nil {
+		return nil, err
+	}
+	removed := make([]*models.NetworkMembership, 0)
+	for rows.Next() {
+		membership, err := scanNetworkMembership(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		removed = append(removed, membership)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	auditAt := s.nowTime()
+	for _, membership := range removed {
+		if _, err := tx.Exec(
+			`DELETE FROM network_memberships WHERE device_id=? AND network_id=?`,
+			membership.DeviceID, membership.NetworkID,
+		); err != nil {
+			return nil, err
+		}
+		if err := writeTopologyAuditTx(tx, auditAt, "device.member-rm", membershipAuditSummary(membership)); err != nil {
+			return nil, err
+		}
+	}
+	return removed, tx.Commit()
 }
 
 // ListNetworkMemberships 返回一台设备的全部网络成员，按网络名字排序。

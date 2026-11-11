@@ -1,5 +1,6 @@
-// 网络拓扑页面脚本：读取内部只读 JSON 接口，用 Cytoscape.js 呈现物理视
-// 图、虚拟视图与叠加视图。本票只读，拖动只影响本次浏览，不保存布局。
+// 网络拓扑页面脚本：读取内部 JSON 接口，用 Cytoscape.js 呈现物理视图、
+// 虚拟视图与叠加视图。可编辑角色可拖动归类并编辑网络成员；写操作全部走
+// /ui/api/topology/ 下的内部接口。
 (function () {
   "use strict";
 
@@ -15,6 +16,11 @@
 
   var state = { data: null, cy: null, view: "physical" };
   var coarsePointer = window.matchMedia("(pointer: coarse)");
+  // canEdit 表示当前角色提供拓扑写接口；拖动归类还要求精确指针（手机不开放）。
+  var canEdit = page !== null && page.getAttribute("data-editable") === "true";
+  var trayElement = page === null ? null : page.querySelector(".topology-tray");
+  var dialogRestoresView = false;
+  var trayDrag = null;
 
   function escapeHTML(value) {
     return String(value === null || value === undefined ? "" : value)
@@ -518,6 +524,7 @@
         { duration: 320, easing: "ease-in-out-cubic" }
       );
     state.cy.fit(undefined, 48);
+    updateGrabbable();
     updateCanvasSummary();
   }
 
@@ -553,8 +560,12 @@
     if (state.cy === null) {
       return;
     }
-    var canGrab = !coarsePointer.matches;
+    // 只读角色与手机都不能拖动设备；拖动是归类入口，不是单纯的位置调整。
+    var canGrab = !coarsePointer.matches && canEdit;
     container.setAttribute("data-grabbable", canGrab ? "true" : "false");
+    if (trayElement !== null) {
+      trayElement.setAttribute("data-draggable", canGrab ? "true" : "false");
+    }
     state.cy.nodes().forEach(function (node) {
       node.grabbable(canGrab && !node.data("placeholder"));
     });
@@ -614,7 +625,21 @@
         hideDetail();
       }
     });
+    state.cy.on("grab", "node", function (event) {
+      if (event.target.data("device") !== undefined) {
+        state.dragBoxes = snapshotDropBoxes();
+      }
+    });
+    state.cy.on("dragfree", "node", function (event) {
+      if (event.target.data("device") !== undefined) {
+        classifyCanvasDrop(event.target, state.dragBoxes);
+      }
+    });
     state.cy.fit(undefined, 48);
+    if (page !== null) {
+      // 供浏览器测试换算画布节点坐标；不承载页面逻辑。
+      page.sshmgrTopology = state.cy;
+    }
   }
 
   function renderTray(index) {
@@ -628,6 +653,7 @@
     });
     if (tray !== null) {
       tray.setAttribute("data-count", String(unassigned.length));
+      tray.setAttribute("data-draggable", trayDragAllowed() ? "true" : "false");
     }
     trayEmpty.hidden = unassigned.length !== 0;
     unassigned.forEach(function (device) {
@@ -636,6 +662,9 @@
       button.type = "button";
       button.className = "topology-tray-item";
       button.setAttribute("data-device", device.id);
+      if (trayDragAllowed()) {
+        button.classList.add("draggable");
+      }
       var name = document.createElement("strong");
       name.textContent = device.name;
       var kind = document.createElement("span");
@@ -697,23 +726,70 @@
     }
     html += "</dl>";
 
-    html += "<h3>网络成员</h3><ul>";
     var memberships = index.membershipsByDevice[device.id] || [];
-    if (memberships.length === 0) {
-      html += "<li>尚未加入任何网络。</li>";
-    }
-    memberships.forEach(function (membership) {
-      var network = index.networks[membership.network_id];
+    if (!canEdit) {
+      html += "<h3>网络成员</h3><ul>";
+      if (memberships.length === 0) {
+        html += "<li>尚未加入任何网络。</li>";
+      }
+      memberships.forEach(function (membership) {
+        var network = index.networks[membership.network_id];
+        html +=
+          "<li>" +
+          escapeHTML(network.name) +
+          "（" +
+          escapeHTML(typeLabel(network.type)) +
+          "）· " +
+          escapeHTML(membership.address) +
+          "</li>";
+      });
+      html += "</ul>";
+    } else {
+      html += '<p class="detail-operation-error" hidden></p>';
+      html += "<h3>网络成员</h3>";
+      if (memberships.length === 0) {
+        html += '<p class="detail-empty">尚未加入任何网络。</p>';
+      } else {
+        html += '<ul class="detail-member-list">';
+        memberships.forEach(function (membership) {
+          var network = index.networks[membership.network_id];
+          html +=
+            '<li><form class="detail-member-form" data-device="' +
+            escapeHTML(device.id) +
+            '" data-network="' +
+            escapeHTML(membership.network_id) +
+            '"><span class="member-network">' +
+            escapeHTML(network.name) +
+            "（" +
+            escapeHTML(typeLabel(network.type)) +
+            "）</span>" +
+            '<input name="address" value="' +
+            escapeHTML(membership.address) +
+            '" aria-label="' +
+            escapeHTML(device.name + " 在 " + network.name + " 的地址") +
+            '" required>' +
+            '<button type="submit" class="member-save">保存地址</button>' +
+            '<button type="button" class="member-exit" data-device="' +
+            escapeHTML(device.id) +
+            '" data-network="' +
+            escapeHTML(membership.network_id) +
+            '">退出</button></form></li>';
+        });
+        html += "</ul>";
+      }
       html +=
-        "<li>" +
-        escapeHTML(network.name) +
-        "（" +
-        escapeHTML(typeLabel(network.type)) +
-        "）· " +
-        escapeHTML(membership.address) +
-        "</li>";
-    });
-    html += "</ul>";
+        '<form class="detail-member-add" data-device="' +
+        escapeHTML(device.id) +
+        '"><h4>加入网络</h4>' +
+        '<label>网络<select name="network" aria-label="要加入的网络">';
+      state.data.networks.forEach(function (network) {
+        html += '<option value="' + escapeHTML(network.name) + '">' + escapeHTML(network.name) + "（" + typeLabel(network.type) + "）</option>";
+      });
+      html +=
+        "</select></label>" +
+        '<label>地址（IP 或域名）<input name="address" required></label>' +
+        '<button type="submit">加入网络</button></form>';
+    }
 
     html += "<h3>服务器条目</h3><ul>";
     if (device.servers.length === 0) {
@@ -832,6 +908,727 @@
     showDetailHTML(html);
   }
 
+  // ---- 写接口与归类流程 -------------------------------------------------
+
+  function csrfToken() {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    return meta === null ? "" : meta.getAttribute("content");
+  }
+
+  // topologyPost 调用内部写接口；成功返回提示文字，失败抛出带服务端中文
+  // 提示的错误。
+  function topologyPost(path, payload) {
+    return fetch(path, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken(),
+      },
+      body: JSON.stringify(payload),
+    }).then(function (response) {
+      return response
+        .json()
+        .catch(function () {
+          return {};
+        })
+        .then(function (body) {
+          if (!response.ok) {
+            throw new Error(body.error || "写入失败（" + response.status + "）。");
+          }
+          return body.message || "已保存。";
+        });
+    });
+  }
+
+  function showNotice(message) {
+    var existing = page === null ? null : page.querySelector(".topology-notice");
+    if (existing !== null) {
+      existing.remove();
+    }
+    var element = document.createElement("p");
+    element.className = "topology-notice";
+    element.setAttribute("role", "status");
+    element.textContent = message;
+    if (container.parentNode !== null) {
+      container.parentNode.appendChild(element);
+    }
+    window.setTimeout(function () {
+      element.remove();
+    }, 6000);
+  }
+
+  // reloadTopology 写成功后重新读取数据并按自动排布重画；归类结果以服务端
+  // 数据为准，浏览器不自行拼装状态。
+  function reloadTopology(notice, deviceID) {
+    return fetch("/ui/api/topology", { headers: { Accept: "application/json" }, credentials: "same-origin" })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error("读取网络拓扑失败（" + response.status + "）。");
+        }
+        return response.json();
+      })
+      .then(function (data) {
+        state.data = data;
+        applyView(state.view);
+        renderTray(indexData(data));
+        var index = indexData(data);
+        if (deviceID !== undefined && index.devices[deviceID] !== undefined && !detailPanel.hidden) {
+          showDeviceDetail(deviceID);
+        }
+        if (notice !== undefined && notice !== "") {
+          showNotice(notice);
+        }
+      })
+      .catch(function () {
+        showError("写入已成功，但刷新画布失败。请刷新页面查看最新归类。");
+      });
+  }
+
+  function ensureDialog() {
+    if (page === null) {
+      return null;
+    }
+    var dialog = page.querySelector("dialog.topology-dialog");
+    if (dialog === null) {
+      dialog = document.createElement("dialog");
+      dialog.className = "topology-dialog";
+      dialog.addEventListener("cancel", function () {
+        // Esc 键关闭与点「取消」一致：撤销拖动造成的位移。
+        window.setTimeout(function () {
+          restoreAfterDialog();
+        }, 0);
+      });
+      page.appendChild(dialog);
+    }
+    return dialog;
+  }
+
+  function showDialog(html, options) {
+    var dialog = ensureDialog();
+    if (dialog === null) {
+      return null;
+    }
+    options = options || {};
+    dialogRestoresView = options.restoreView === true;
+    dialog.innerHTML = html;
+    var cancel = dialog.querySelector('[data-action="cancel"]');
+    if (cancel !== null) {
+      cancel.addEventListener("click", function () {
+        dialog.close();
+        restoreAfterDialog();
+      });
+    }
+    var focusTarget = dialog.querySelector("input, select, button");
+    if (dialog.open !== true) {
+      dialog.showModal();
+    }
+    if (focusTarget !== null) {
+      focusTarget.focus();
+    }
+    return dialog;
+  }
+
+  function restoreAfterDialog() {
+    if (dialogRestoresView && state.cy !== null) {
+      dialogRestoresView = false;
+      applyView(state.view);
+    }
+  }
+
+  function showDialogError(dialog, message) {
+    var area = dialog.querySelector(".dialog-error");
+    if (area === null) {
+      return;
+    }
+    area.textContent = message;
+    area.hidden = false;
+  }
+
+  function modeChoicesHTML(deviceHasOtherPhysical, currentNetworkName) {
+    if (!deviceHasOtherPhysical) {
+      return "";
+    }
+    return (
+      '<fieldset class="dialog-modes"><legend>归类方式</legend>' +
+      '<label><input type="radio" name="mode" value="move" checked> 移动：删除「' +
+      escapeHTML(currentNetworkName) +
+      '」里的原成员，在目标网络登记新地址</label>' +
+      '<label><input type="radio" name="mode" value="join"> 同时加入：保留原成员，在目标网络新增地址</label>' +
+      "</fieldset>"
+    );
+  }
+
+  // openMembershipDialog 处理拖进网络框：没有其它物理成员时是纯新增；有
+  // 其它物理成员时让 owner 选「移动」或「同时加入」。
+  function openMembershipDialog(device, network, sourceNetworkName) {
+    var hasOtherPhysical =
+      sourceNetworkName !== undefined &&
+      sourceNetworkName !== "" &&
+      sourceNetworkName !== network.name;
+    var html =
+      '<form class="dialog-form">' +
+      "<h2>把设备加入网络</h2>" +
+      '<p class="dialog-context">设备：<strong>' +
+      escapeHTML(device.name) +
+      "</strong> · 网络：<strong>" +
+      escapeHTML(network.name) +
+      "</strong></p>" +
+      '<label class="dialog-field">地址（IP 或域名）' +
+      '<input name="address" autocomplete="off" required></label>' +
+      modeChoicesHTML(hasOtherPhysical, sourceNetworkName) +
+      '<p class="dialog-error" hidden></p>' +
+      '<div class="dialog-actions">' +
+      '<button type="button" data-action="cancel">取消</button>' +
+      '<button type="submit">' +
+      (hasOtherPhysical ? "保存归类" : "加入网络") +
+      "</button></div></form>";
+    var dialog = showDialog(html, { restoreView: true });
+    if (dialog === null) {
+      return;
+    }
+    var form = dialog.querySelector("form");
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var address = form.elements.address.value.trim();
+      if (address === "") {
+        showDialogError(dialog, "地址不能为空。");
+        return;
+      }
+      var mode = hasOtherPhysical ? form.elements.mode.value : "join";
+      var request =
+        mode === "move"
+          ? topologyPost("/ui/api/topology/membership/move", {
+              device: device.name,
+              from_network: sourceNetworkName,
+              to_network: network.name,
+              address: address,
+            })
+          : topologyPost("/ui/api/topology/membership/add", {
+              device: device.name,
+              network: network.name,
+              address: address,
+            });
+      request.then(
+        function (message) {
+          dialogRestoresView = false;
+          dialog.close();
+          reloadTopology(message, device.id);
+        },
+        function (error) {
+          showDialogError(dialog, error.message);
+        }
+      );
+    });
+  }
+
+  // openSitePickDialog 处理拖到站点区域但不在任何物理局域网框里的情况：
+  // 选择该站点既有网络或新建（新建只需要网络名）。
+  function openSitePickDialog(device, site, sourceNetworkName) {
+    var index = indexData(state.data);
+    var networks = index.physicalBySite[site.id] || [];
+    var hasOtherPhysical = sourceNetworkName !== undefined && sourceNetworkName !== "";
+    var html =
+      '<form class="dialog-form">' +
+      "<h2>为设备选择物理局域网</h2>" +
+      '<p class="dialog-context">设备：<strong>' +
+      escapeHTML(device.name) +
+      "</strong> · 站点：<strong>" +
+      escapeHTML(site.name) +
+      "</strong></p>" +
+      '<fieldset class="dialog-choices"><legend>目标网络</legend>';
+    networks.forEach(function (candidate, offset) {
+      html +=
+        '<label><input type="radio" name="choice" value="network:' +
+        escapeHTML(candidate.name) +
+        '"' +
+        (offset === 0 ? " checked" : "") +
+        "> " +
+        escapeHTML(candidate.name) +
+        "</label>";
+    });
+    html +=
+      '<label><input type="radio" name="choice" value="new"' +
+      (networks.length === 0 ? " checked" : "") +
+      "> 新建物理局域网</label>" +
+      '<label class="dialog-field new-network-name">新网络名' +
+      '<input name="new_name" autocomplete="off"></label>' +
+      "</fieldset>" +
+      '<label class="dialog-field">地址（IP 或域名）' +
+      '<input name="address" autocomplete="off" required></label>' +
+      modeChoicesHTML(hasOtherPhysical, sourceNetworkName) +
+      '<p class="dialog-error" hidden></p>' +
+      '<div class="dialog-actions">' +
+      '<button type="button" data-action="cancel">取消</button>' +
+      '<button type="submit">保存归类</button></div></form>';
+    var dialog = showDialog(html, { restoreView: true });
+    if (dialog === null) {
+      return;
+    }
+    var form = dialog.querySelector("form");
+    var nameField = form.querySelector(".new-network-name");
+    form.querySelectorAll('input[name="choice"]').forEach(function (radio) {
+      radio.addEventListener("change", function () {
+        nameField.classList.toggle("visible", form.elements.choice.value === "new");
+      });
+    });
+    nameField.classList.toggle("visible", form.elements.choice.value === "new");
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var address = form.elements.address.value.trim();
+      if (address === "") {
+        showDialogError(dialog, "地址不能为空。");
+        return;
+      }
+      var choice = form.elements.choice.value;
+      var mode = hasOtherPhysical ? form.elements.mode.value : "join";
+      var finish = function (networkName) {
+        var request =
+          mode === "move"
+            ? topologyPost("/ui/api/topology/membership/move", {
+                device: device.name,
+                from_network: sourceNetworkName,
+                to_network: networkName,
+                address: address,
+              })
+            : topologyPost("/ui/api/topology/membership/add", {
+                device: device.name,
+                network: networkName,
+                address: address,
+              });
+        request.then(
+          function (message) {
+            dialogRestoresView = false;
+            dialog.close();
+            reloadTopology(message, device.id);
+          },
+          function (error) {
+            showDialogError(dialog, error.message);
+          }
+        );
+      };
+      if (choice === "new") {
+        var newName = form.elements.new_name.value.trim();
+        if (newName === "") {
+          showDialogError(dialog, "新网络名不能为空。");
+          return;
+        }
+        topologyPost("/ui/api/topology/network/add", { name: newName, site: site.name }).then(
+          function () {
+            finish(newName);
+          },
+          function (error) {
+            showDialogError(dialog, error.message);
+          }
+        );
+        return;
+      }
+      finish(choice.slice("network:".length));
+    });
+  }
+
+  function openTrayConfirmDialog(device, memberships) {
+    var summary = memberships
+      .map(function (membership) {
+        var network = indexData(state.data).networks[membership.network_id];
+        var name = network === undefined ? membership.network_id : network.name;
+        return name + " · " + membership.address;
+      })
+      .join("；");
+    var html =
+      '<form class="dialog-form">' +
+      "<h2>移回未归类托盘</h2>" +
+      "<p>将删除设备 <strong>" +
+      escapeHTML(device.name) +
+      "</strong> 的全部物理局域网成员（" +
+      escapeHTML(summary) +
+      "）；虚拟局域网成员保留。</p>" +
+      '<p class="dialog-error" hidden></p>' +
+      '<div class="dialog-actions">' +
+      '<button type="button" data-action="cancel">取消</button>' +
+      '<button type="submit">确认移回</button></div></form>';
+    var dialog = showDialog(html, { restoreView: true });
+    if (dialog === null) {
+      return;
+    }
+    dialog.querySelector("form").addEventListener("submit", function (event) {
+      event.preventDefault();
+      topologyPost("/ui/api/topology/membership/remove-physical", { device: device.name }).then(
+        function (message) {
+          dialogRestoresView = false;
+          dialog.close();
+          reloadTopology(message, device.id);
+        },
+        function (error) {
+          showDialogError(dialog, error.message);
+        }
+      );
+    });
+  }
+
+  function openExitConfirmDialog(device, network) {
+    var index = indexData(state.data);
+    var address = "";
+    (index.membershipsByDevice[device.id] || []).forEach(function (membership) {
+      if (membership.network_id === network.id) {
+        address = membership.address;
+      }
+    });
+    var html =
+      '<form class="dialog-form">' +
+      "<h2>退出网络</h2>" +
+      "<p>将删除设备 <strong>" +
+      escapeHTML(device.name) +
+      "</strong> 在网络 <strong>" +
+      escapeHTML(network.name) +
+      "</strong> 的成员（" +
+      escapeHTML(address) +
+      "）。</p>" +
+      '<p class="dialog-error" hidden></p>' +
+      '<div class="dialog-actions">' +
+      '<button type="button" data-action="cancel">取消</button>' +
+      '<button type="submit">确认退出</button></div></form>';
+    var dialog = showDialog(html, { restoreView: true });
+    if (dialog === null) {
+      return;
+    }
+    dialog.querySelector("form").addEventListener("submit", function (event) {
+      event.preventDefault();
+      topologyPost("/ui/api/topology/membership/remove", {
+        device: device.name,
+        network: network.name,
+      }).then(
+        function (message) {
+          dialogRestoresView = false;
+          dialog.close();
+          reloadTopology(message, device.id);
+        },
+        function (error) {
+          showDialogError(dialog, error.message);
+        }
+      );
+    });
+  }
+
+  function openNoticeDialog(title, message) {
+    var html =
+      '<form class="dialog-form">' +
+      "<h2>" +
+      escapeHTML(title) +
+      "</h2><p>" +
+      escapeHTML(message) +
+      "</p>" +
+      '<div class="dialog-actions">' +
+      '<button type="button" data-action="cancel">关闭</button></div></form>';
+    showDialog(html, { restoreView: true });
+  }
+
+  // ---- 拖动命中检测 -----------------------------------------------------
+
+  // snapshotDropBoxes 在拖动开始时记录网络框与站点区域的页面坐标；拖动过
+  // 程中复合节点的包围盒会跟随被拖设备扩张，不能作为投放区。
+  function snapshotDropBoxes() {
+    var boxes = [];
+    if (state.cy === null) {
+      return boxes;
+    }
+    var offset = container.getBoundingClientRect();
+    state.cy.nodes().forEach(function (node) {
+      if (node.data("placeholder") !== undefined) {
+        return;
+      }
+      var kind = node.data("network") !== undefined ? "network" : node.data("site") !== undefined ? "site" : null;
+      if (kind === null) {
+        return;
+      }
+      var box = node.renderedBoundingBox({ includeLabels: true, includeOverlays: false });
+      boxes.push({
+        kind: kind,
+        networkID: node.data("network"),
+        siteID: node.data("site"),
+        x1: offset.left + box.x1,
+        y1: offset.top + box.y1,
+        x2: offset.left + box.x2,
+        y2: offset.top + box.y2,
+      });
+    });
+    return boxes;
+  }
+
+  function rectToBox(rect) {
+    return { x1: rect.left, y1: rect.top, x2: rect.right, y2: rect.bottom };
+  }
+
+  function pointInBox(x, y, box) {
+    return x >= box.x1 && x <= box.x2 && y >= box.y1 && y <= box.y2;
+  }
+
+  function innermostBoxAt(boxes, x, y, kind) {
+    var best = null;
+    boxes.forEach(function (box) {
+      if (kind !== undefined && box.kind !== kind) {
+        return;
+      }
+      if (!pointInBox(x, y, box)) {
+        return;
+      }
+      if (best === null) {
+        best = box;
+        return;
+      }
+      var area = (box.x2 - box.x1) * (box.y2 - box.y1);
+      var bestArea = (best.x2 - best.x1) * (best.y2 - best.y1);
+      if (area < bestArea) {
+        best = box;
+      }
+    });
+    return best;
+  }
+
+  function nodePagePosition(node) {
+    var offset = container.getBoundingClientRect();
+    var position = node.renderedPosition();
+    return { x: offset.left + position.x, y: offset.top + position.y };
+  }
+
+  function modelPositionFromPage(x, y) {
+    var offset = container.getBoundingClientRect();
+    var pan = state.cy.pan();
+    var zoom = state.cy.zoom();
+    return { x: (x - offset.left - pan.x) / zoom, y: (y - offset.top - pan.y) / zoom };
+  }
+
+  function membershipNetworkIDs(index, deviceID, type) {
+    var ids = {};
+    (index.membershipsByDevice[deviceID] || []).forEach(function (membership) {
+      var network = index.networks[membership.network_id];
+      if (network !== undefined && (type === undefined || network.type === type)) {
+        ids[membership.network_id] = true;
+      }
+    });
+    return ids;
+  }
+
+  // classifyCanvasDrop 处理画布里设备节点的拖动释放。physicalBox 与
+  // virtualBox 分别是命中到的物理/虚拟网络框，siteBox 是站点区域；拖到托
+  // 盘或空白画布按「移回托盘」处理。
+  function classifyCanvasDrop(node, boxes) {
+    if (!canEdit || coarsePointer.matches || state.cy === null) {
+      return;
+    }
+    var index = indexData(state.data);
+    var device = index.devices[node.data("device")];
+    if (device === undefined) {
+      restoreAfterDrag();
+      return;
+    }
+    if (boxes === undefined || boxes === null) {
+      boxes = snapshotDropBoxes();
+    }
+    var point = nodePagePosition(node);
+    if (state.view === "virtual") {
+      var virtualBox = innermostBoxAt(boxes, point.x, point.y, "network");
+      var sourceNetworkID = dropSourceNetworkID(node);
+      if (virtualBox !== null) {
+        var network = index.networks[virtualBox.networkID];
+        if (network === undefined || network.type !== "virtual") {
+          restoreAfterDrag();
+          return;
+        }
+        var memberVirtual = membershipNetworkIDs(index, device.id, "virtual");
+        if (memberVirtual[network.id]) {
+          if (network.id !== sourceNetworkID) {
+            openNoticeDialog(
+              "无法归类",
+              "同一设备 " + device.name + " 在网络 " + network.name + " 里已有网络成员；请在设备详情里编辑地址。"
+            );
+          } else {
+            restoreAfterDrag();
+          }
+          return;
+        }
+        openMembershipDialog(device, network);
+        return;
+      }
+      if (sourceNetworkID !== null && index.networks[sourceNetworkID] !== undefined) {
+        openExitConfirmDialog(device, index.networks[sourceNetworkID]);
+        return;
+      }
+      restoreAfterDrag();
+      return;
+    }
+    if (state.view !== "physical") {
+      return;
+    }
+    var networkBox = innermostBoxAt(boxes, point.x, point.y, "network");
+    if (networkBox !== null) {
+      var target = index.networks[networkBox.networkID];
+      if (target === undefined || target.type !== "physical") {
+        restoreAfterDrag();
+        return;
+      }
+      var memberPhysical = membershipNetworkIDs(index, device.id, "physical");
+      if (memberPhysical[target.id]) {
+        var firstPhysical = physicalMembership(index, device.id)[0];
+        if (firstPhysical !== undefined && firstPhysical.network_id === target.id) {
+          restoreAfterDrag();
+        } else {
+          openNoticeDialog(
+            "无法归类",
+            "同一设备 " + device.name + " 在网络 " + target.name + " 里已有网络成员；请在设备详情里编辑地址。"
+          );
+        }
+        return;
+      }
+      var sourceID = dropSourceNetworkID(node);
+      var currentName = sourceID !== null && index.networks[sourceID] !== undefined ? index.networks[sourceID].name : undefined;
+      openMembershipDialog(device, target, currentName);
+      return;
+    }
+    var siteBox = innermostBoxAt(boxes, point.x, point.y, "site");
+    if (siteBox !== null) {
+      var site;
+      state.data.sites.forEach(function (candidate) {
+        if (candidate.id === siteBox.siteID) {
+          site = candidate;
+        }
+      });
+      if (site !== undefined) {
+        var siteSourceID = dropSourceNetworkID(node);
+        var existingName =
+          siteSourceID !== null && index.networks[siteSourceID] !== undefined
+            ? index.networks[siteSourceID].name
+            : undefined;
+        openSitePickDialog(device, site, existingName);
+        return;
+      }
+    }
+    // 拖到托盘或空白画布：有物理成员时按「移回托盘」确认，否则回到原位。
+    if (trayElement !== null) {
+      var trayBox = rectToBox(trayElement.getBoundingClientRect());
+      var physical = physicalMembership(index, device.id);
+      if (physical.length > 0 && pointInBox(point.x, point.y, trayBox)) {
+        openTrayConfirmDialog(device, physical);
+        return;
+      }
+    }
+    restoreAfterDrag();
+  }
+
+  function restoreAfterDrag() {
+    if (state.cy !== null) {
+      applyView(state.view);
+    }
+  }
+
+  // dropSourceNetworkID 返回虚拟视图里这个节点释放前所属的网络；分身节
+  // 点从节点标识解析，本体节点看父节点。
+  function dropSourceNetworkID(node) {
+    var id = node.id();
+    if (id.indexOf("clone:") === 0) {
+      var parts = id.split(":");
+      return parts.length >= 3 ? parts[1] : null;
+    }
+    var parent = node.parent();
+    if (parent.nonempty() && parent.id().indexOf("network:") === 0) {
+      return parent.id().slice("network:".length);
+    }
+    return null;
+  }
+
+  // ---- 从托盘拖到画布 ---------------------------------------------------
+
+  function trayDragAllowed() {
+    return canEdit && !coarsePointer.matches && state.cy !== null;
+  }
+
+  function handleTrayPointerDown(event) {
+    if (event.button !== 0 || !trayDragAllowed() || !(event.target instanceof Element)) {
+      return;
+    }
+    var button = event.target.closest(".topology-tray-item");
+    if (button === null) {
+      return;
+    }
+    trayDrag = {
+      deviceID: button.getAttribute("data-device"),
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      boxes: snapshotDropBoxes(),
+    };
+    button.classList.add("drag-source");
+    document.body.classList.add("topology-dragging");
+    event.preventDefault();
+  }
+
+  function handleTrayPointerMove(event) {
+    if (trayDrag === null) {
+      return;
+    }
+    if (
+      !trayDrag.moved &&
+      (Math.abs(event.clientX - trayDrag.startX) > 3 || Math.abs(event.clientY - trayDrag.startY) > 3)
+    ) {
+      trayDrag.moved = true;
+    }
+  }
+
+  function handleTrayPointerUp(event) {
+    if (trayDrag === null) {
+      return;
+    }
+    var drag = trayDrag;
+    trayDrag = null;
+    document.body.classList.remove("topology-dragging");
+    var source = page === null ? null : page.querySelector(".topology-tray-item.drag-source");
+    if (source !== null) {
+      source.classList.remove("drag-source");
+    }
+    if (!drag.moved) {
+      return;
+    }
+    var canvasBox = container.getBoundingClientRect();
+    if (
+      event.clientX < canvasBox.left ||
+      event.clientX > canvasBox.right ||
+      event.clientY < canvasBox.top ||
+      event.clientY > canvasBox.bottom
+    ) {
+      return;
+    }
+    var index = indexData(state.data);
+    var device = index.devices[drag.deviceID];
+    if (device === undefined) {
+      return;
+    }
+    var networkBox = innermostBoxAt(drag.boxes, event.clientX, event.clientY, "network");
+    if (networkBox !== null) {
+      var network = index.networks[networkBox.networkID];
+      var wantedType = state.view === "virtual" ? "virtual" : "physical";
+      if (network !== undefined && network.type === wantedType) {
+        openMembershipDialog(device, network);
+        return;
+      }
+    }
+    if (state.view !== "physical") {
+      return;
+    }
+    var siteBox = innermostBoxAt(drag.boxes, event.clientX, event.clientY, "site");
+    if (siteBox !== null) {
+      var site;
+      state.data.sites.forEach(function (candidate) {
+        if (candidate.id === siteBox.siteID) {
+          site = candidate;
+        }
+      });
+      if (site !== undefined) {
+        openSitePickDialog(device, site);
+      }
+    }
+  }
+
   function bindUI() {
     viewButtons.forEach(function (button) {
       button.addEventListener("click", function () {
@@ -876,6 +1673,82 @@
         var trayButton = target instanceof Element ? target.closest(".topology-tray-item") : null;
         if (trayButton !== null) {
           showDeviceDetail(trayButton.getAttribute("data-device"));
+        }
+      });
+      page.addEventListener("mousedown", handleTrayPointerDown);
+      page.addEventListener("click", function (event) {
+        if (!(event.target instanceof Element)) {
+          return;
+        }
+        var exit = event.target.closest(".member-exit");
+        if (exit === null) {
+          return;
+        }
+        var index = indexData(state.data);
+        var device = index.devices[exit.getAttribute("data-device")];
+        var network = index.networks[exit.getAttribute("data-network")];
+        if (device !== undefined && network !== undefined) {
+          openExitConfirmDialog(device, network);
+        }
+      });
+    }
+    document.addEventListener("mousemove", handleTrayPointerMove);
+    document.addEventListener("mouseup", handleTrayPointerUp);
+    if (detailPanel !== null) {
+      detailPanel.addEventListener("submit", function (event) {
+        if (!(event.target instanceof HTMLFormElement)) {
+          return;
+        }
+        var form = event.target;
+        event.preventDefault();
+        var index = indexData(state.data);
+        var errorArea = detailPanel.querySelector(".detail-operation-error");
+        var showErrorArea = function (message) {
+          if (errorArea !== null) {
+            errorArea.textContent = message;
+            errorArea.hidden = false;
+          }
+        };
+        if (errorArea !== null) {
+          errorArea.hidden = true;
+        }
+        if (form.classList.contains("detail-member-form")) {
+          var device = index.devices[form.getAttribute("data-device")];
+          var network = index.networks[form.getAttribute("data-network")];
+          if (device === undefined || network === undefined) {
+            return;
+          }
+          topologyPost("/ui/api/topology/membership/edit", {
+            device: device.name,
+            network: network.name,
+            address: form.elements.address.value.trim(),
+          }).then(
+            function (message) {
+              reloadTopology(message, device.id);
+            },
+            function (error) {
+              showErrorArea(error.message);
+            }
+          );
+          return;
+        }
+        if (form.classList.contains("detail-member-add")) {
+          var addDevice = index.devices[form.getAttribute("data-device")];
+          if (addDevice === undefined) {
+            return;
+          }
+          topologyPost("/ui/api/topology/membership/add", {
+            device: addDevice.name,
+            network: form.elements.network.value,
+            address: form.elements.address.value.trim(),
+          }).then(
+            function (message) {
+              reloadTopology(message, addDevice.id);
+            },
+            function (error) {
+              showErrorArea(error.message);
+            }
+          );
         }
       });
     }
