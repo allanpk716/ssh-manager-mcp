@@ -337,8 +337,9 @@ func (c *Client) WriteFileWithCreateMode(ctx context.Context, remotePath string,
 		default:
 			// SFTP 版本 3 没有单独的“文件已存在”状态码；独占创建因已
 			// 存在而失败时通常表现为普通失败。这里改试覆盖打开，若目标确
-			// 实不能打开，第二次调用会返回真实错误。
-			out, err = sc.OpenFile(remotePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+			// 实不能打开，第二次调用会返回真实错误。覆盖打开不带创建标志：
+			// 独占创建若因其他原因失败，不能在这里以默认权限新建文件。
+			out, err = sc.OpenFile(remotePath, os.O_WRONLY|os.O_TRUNC)
 		}
 	}
 	if err != nil {
