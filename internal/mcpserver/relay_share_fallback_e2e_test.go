@@ -346,6 +346,80 @@ func TestRelayFileShareFallbackPrefersPhysicalThenName(t *testing.T) {
 	}
 }
 
+// TestRelayFileLocalSourceToShareFallsBackToStreaming 覆盖源端是执行实例本
+// 地文件、目标端是共享地址的回退：另一端不是受管服务器，不能本地拷贝，
+// 按同一规则选择已挂载端点后复用本地源到服务器的流式中继。
+func TestRelayFileLocalSourceToShareFallsBackToStreaming(t *testing.T) {
+	environment := newRelayShareFallbackEnv(t)
+	session := environment.openSession(t)
+	localFile := filepath.Join(t.TempDir(), "local-source.bin")
+	if err := os.WriteFile(localFile, []byte("local source payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetRemote := "/mnt/sshmgr/datasets/Reports/local-out.bin"
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_path":        localFile,
+			"to_share_address": `smb://192.0.2.10/datasets/Reports/local-out.bin`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("调用 relay_file：%v", err)
+	}
+	if result.IsError {
+		t.Fatalf("relay_file 失败：%s", toolResultText(result))
+	}
+	var output RelayOutput
+	unmarshalToolJSON(t, result, &output)
+	if output.Mode != "streaming_relay" || output.RestartAfterInterruption ||
+		output.ShareEndpointServerID != environment.physicalAID {
+		t.Fatalf("启动结果 = %+v，期待选择 A 物理端点并走本地源流式中继", output)
+	}
+	stdout, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second)
+	if status != bgStatusDone || errorText != "" {
+		t.Fatalf("终态 = %q 错误 = %q 输出 =\n%s", status, errorText, stdout)
+	}
+	if !strings.Contains(stdout, "流式转发") ||
+		!strings.Contains(stdout, environment.physicalAID) {
+		t.Fatalf("任务输出没有写明流式转发与端点：\n%s", stdout)
+	}
+	if content, err := os.ReadFile(environment.hostPath(targetRemote)); err != nil ||
+		string(content) != "local source payload" {
+		t.Fatalf("共享目标文件内容 = %q err=%v", content, err)
+	}
+}
+
+// TestRelayFileShareSourceToLocalTargetRejected 钉住共享地址作为源端时不能
+// 把文件中继到执行实例本地路径；报错文字准确说明方向限制。
+func TestRelayFileShareSourceToLocalTargetRejected(t *testing.T) {
+	environment := newRelayShareFallbackEnv(t)
+	session := environment.openSession(t)
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_share_address": `smb://192.0.2.10/datasets/Reports/source.bin`,
+			"to_path":            filepath.Join(t.TempDir(), "out.bin"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("调用 relay_file：%v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("共享源端加本地目标应报错：%+v", result.Content)
+	}
+	text := toolResultText(result)
+	if !strings.Contains(text, "源端是共享地址时，目标端必须是受管服务器上的常规文件路径") ||
+		!strings.Contains(text, "不能把文件中继到执行实例本地路径") {
+		t.Fatalf("报错 = %q", text)
+	}
+	if commands := environment.physicalAFake.recordedCommands(); len(commands) != 0 {
+		t.Fatalf("拒绝路径不应连接端点服务器：%#v", commands)
+	}
+}
+
 // TestRelayFileShareFallbackViaOverridesTargetEndpoint 覆盖 `via` 覆盖自动
 // 选择，以及共享地址在目标端时的方向对称性。
 func TestRelayFileShareFallbackViaOverridesTargetEndpoint(t *testing.T) {

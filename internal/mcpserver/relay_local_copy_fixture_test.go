@@ -274,35 +274,35 @@ func (environment *relayLocalCopyEnv) serveRobocopyScript(
 	}
 	sourceHost := environment.hostPath(source)
 	targetHost := environment.hostPath(target)
+	partialHost := environment.hostPath(target + relayPartialSuffix)
 	sourceInfo, err := os.Stat(sourceHost)
-	if err != nil || sourceInfo.IsDir() {
-		stdout.Write([]byte("source-not-regular\n"))
+	if err != nil {
+		fmt.Fprintf(stdout, "源路径 %s 不是常规文件；relay_file 只支持常规文件\n", source)
 		return 3
 	}
+	if sourceInfo.IsDir() {
+		fmt.Fprintf(stdout, "源路径 %s 是目录；relay_file 只支持常规文件，请先把目录打包成一个文件\n", source)
+		return 2
+	}
 	if targetInfo, err := os.Stat(targetHost); err == nil && targetInfo.IsDir() {
-		stdout.Write([]byte("target-directory\n"))
+		fmt.Fprintf(stdout, "目标路径 %s 是目录；relay_file 只支持常规文件，请先打包目录再传输\n", target)
 		return 4
 	}
-	partialHost := environment.hostPath(target + relayPartialSuffix)
+	if partialInfo, err := os.Lstat(partialHost); err == nil && !partialInfo.IsDir() {
+		fmt.Fprintf(stdout, "Windows 本地拷贝的半成品暂存位置 %s 不是目录；请先处理这个文件后重试\n",
+			target+relayPartialSuffix)
+		return 5
+	}
 	if err := os.MkdirAll(partialHost, 0o755); err != nil {
 		fmt.Fprintf(stderr, "创建 Windows 半成品目录失败：%v\n", err)
 		return 1
 	}
-	partialEntries, err := os.ReadDir(partialHost)
-	if err != nil {
-		fmt.Fprintf(stderr, "清理 Windows 半成品目录失败：%v\n", err)
-		return 1
-	}
-	for _, entry := range partialEntries {
-		if !entry.IsDir() {
-			if err := os.Remove(filepath.Join(partialHost, entry.Name())); err != nil {
-				fmt.Fprintf(stderr, "清理 Windows 旧半成品失败：%v\n", err)
-				return 1
-			}
-		}
-	}
 	sourceName := filepath.Base(strings.ReplaceAll(source, `\`, `/`))
 	partialFileHost := filepath.Join(partialHost, sourceName)
+	if err := os.Remove(partialFileHost); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(stderr, "清理 Windows 旧半成品失败：%v\n", err)
+		return 1
+	}
 	content, err := os.ReadFile(sourceHost)
 	if err != nil {
 		fmt.Fprintf(stderr, "读取 Windows 源文件失败：%v\n", err)
@@ -330,9 +330,19 @@ func (environment *relayLocalCopyEnv) serveRobocopyScript(
 		fmt.Fprintf(stderr, "移动 Windows 半成品失败：%v\n", err)
 		return 1
 	}
-	if err := os.Remove(partialHost); err != nil {
-		fmt.Fprintf(stderr, "删除空的 Windows 半成品目录失败：%v\n", err)
+	remaining, err := os.ReadDir(partialHost)
+	if err != nil {
+		fmt.Fprintf(stderr, "检查 Windows 半成品目录失败：%v\n", err)
 		return 1
+	}
+	if len(remaining) == 0 {
+		if err := os.Remove(partialHost); err != nil {
+			fmt.Fprintf(stderr, "删除空的 Windows 半成品目录失败：%v\n", err)
+			return 1
+		}
+	} else {
+		fmt.Fprintf(stdout, "Windows 半成品暂存目录 %s 不是空的，已保留；sshmgr 只清理与源文件同名的半成品\n",
+			target+relayPartialSuffix)
 	}
 	return 0
 }
@@ -343,7 +353,20 @@ func relayWindowsScriptString(script, variable string) string {
 	if match == nil {
 		return ""
 	}
-	return strings.ReplaceAll(match[1], "''", "'")
+	return unescapePowerShellSingleQuotes(match[1])
+}
+
+// unescapePowerShellSingleQuotes 按 PowerShell 的单引号转义规则还原脚本里的
+// 字符串值：ASCII 单引号与四个弯单引号写成两次都表示一个字面量字符。
+func unescapePowerShellSingleQuotes(value string) string {
+	replacer := strings.NewReplacer(
+		"''", "'",
+		"‘‘", "‘",
+		"’’", "’",
+		"‚‚", "‚",
+		"‛‛", "‛",
+	)
+	return replacer.Replace(value)
 }
 
 func (environment *relayLocalCopyEnv) serveInspectCommand(command string, stdout io.Writer) int {
@@ -390,6 +413,30 @@ func (environment *relayLocalCopyEnv) serveCopyCommand(
 	command string, stdout, stderr io.Writer,
 ) int {
 	words := splitPOSIXShellWords(command)
+	partialRemote := ""
+	for index, word := range words {
+		if word == "rm" && index+3 < len(words) &&
+			words[index+1] == "-f" && words[index+2] == "--" {
+			partialRemote = words[index+3]
+			break
+		}
+	}
+	if partialRemote == "" {
+		stderr.Write([]byte("固定命令缺少半成品清理步骤\n"))
+		return 1
+	}
+	partial := environment.hostPath(partialRemote)
+	if partialInfo, err := os.Lstat(partial); err == nil {
+		if partialInfo.IsDir() && partialInfo.Mode()&os.ModeSymlink == 0 {
+			fmt.Fprintf(stdout, "半成品路径 %s 是目录；relay_file 的半成品文件不能覆盖目录，请先处理后再重试\n",
+				partialRemote)
+			return 5
+		}
+		if err := os.Remove(partial); err != nil {
+			fmt.Fprintf(stderr, "删除旧半成品失败：%v\n", err)
+			return 1
+		}
+	}
 	cpIndex := -1
 	for index, word := range words {
 		if word == "cp" && index+3 < len(words) && words[index+1] == "--" {
@@ -403,9 +450,8 @@ func (environment *relayLocalCopyEnv) serveCopyCommand(
 	}
 	source := environment.hostPath(words[cpIndex+2])
 	sourceRemote := words[cpIndex+2]
-	partialRemote := words[cpIndex+3]
+	partialRemote = words[cpIndex+3]
 	targetRemote := strings.TrimSuffix(partialRemote, ".sshmgr-partial")
-	partial := environment.hostPath(partialRemote)
 	target := environment.hostPath(targetRemote)
 	if err := os.MkdirAll(filepath.Dir(partial), 0o755); err != nil {
 		fmt.Fprintf(stderr, "创建目标目录失败：%v\n", err)

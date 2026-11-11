@@ -45,7 +45,7 @@ _Avoid_: block、part、segment、分片
 _Avoid_: checkpoint、resume file、断点文件
 
 **Partial File(半成品文件)**:
-传输进行中接收端以 `<target>.sshmgr-partial` 名义存在的目标文件;全部 Chunk 完成并根校验通过后才 rename 成真名。真名即"传完"的可见保证。
+传输进行中接收端以 `<target>.sshmgr-partial` 名义存在的目标文件;全部 Chunk 完成并根校验通过后才 rename 成真名。真名即"传完"的可见保证。Windows 本地拷贝例外:robocopy 只接受「源目录 + 目标目录 + 文件名」,不能直接指定目标文件名,因此 `<target>.sshmgr-partial` 是 sshmgr 专用的半成品暂存目录,文件先写进目录、成功后再移动成目标文件;重跑只删除目录里与源文件同名的旧半成品,其他内容一概不动,目录只在变空后才删除。
 _Avoid_: temp file、临时文件
 
 **Transfer Task(传输任务)**:
