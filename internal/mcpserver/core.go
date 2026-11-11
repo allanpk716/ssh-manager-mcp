@@ -598,34 +598,16 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return UploadContentOutput{}, gerr
 	}
 
-	// ③ cap pre-check + decode (connect-free). base64's est is EXACT for every
-	// decoder-accepted input (single line is pinned by ①), so the fine check
-	// below is defensive-only — unreachable from public input, kept per spec
-	// rev3 §2.1.
+	// ③ Base64 解码。大小上限在下一步按占位符填值后的内容检查。
 	var contentBytes []byte
 	switch encoding {
 	case "text":
 		contentBytes = []byte(content)
 	default: // base64
-		padCount := int64(0)
-		for i := len(content) - 1; i >= 0 && content[i] == '=' && padCount < 2; i-- {
-			padCount++
-		}
-		est := int64(len(content))/4*3 - padCount
-		if est > cap {
-			byteCount = est
-			status = "error"
-			return UploadContentOutput{}, fmt.Errorf("content (%d bytes decoded) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
-		}
 		decoded, derr := base64.StdEncoding.DecodeString(content)
 		if derr != nil {
 			byteCount = 0
 			return UploadContentOutput{}, fmt.Errorf("invalid base64 content: %v", derr)
-		}
-		byteCount = int64(len(decoded))
-		if byteCount > cap { // defensive fine check — see comment above
-			status = "error"
-			return UploadContentOutput{}, fmt.Errorf("content (%d bytes decoded) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
 		}
 		contentBytes = decoded
 	}

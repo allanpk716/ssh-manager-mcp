@@ -921,6 +921,76 @@ func TestUploadContentSecretFillSizeChecksAfterSubstitution(t *testing.T) {
 	}
 }
 
+func TestUploadContentBase64SizeChecksFilledContent(t *testing.T) {
+	const secretValue = "12345678"
+	st := newStore(t)
+	if err := st.AddSecret("LONG_NAME", "", []byte(secretValue), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	t.Cleanup(cleanup)
+	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
+	profileID, err := st.AddProfile("agent-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"LONG_NAME"}, []string{"real"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSHMGR_UPLOAD_CONTENT_MAX", "20")
+	server, tunnels, tasks, err := NewServer(st, profileID, "project-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tunnels.CloseAll)
+	t.Cleanup(tasks.CloseAll)
+	clientSession := connectInMemoryMCPClient(t, server)
+
+	shortTemplate := []byte("x: {{sshmgr-secret:LONG_NAME}}")
+	target := toSlash(filepath.Join(t.TempDir(), "config", "filled.yaml"))
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "upload_content",
+		Arguments: map[string]any{
+			"server_id":   serverID,
+			"content":     base64.StdEncoding.EncodeToString(shortTemplate),
+			"remote_path": target,
+			"encoding":    "base64",
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("filled Base64 content under cap failed: err=%v result=%q", err, toolResultText(result))
+	}
+	got, err := os.ReadFile(filepath.FromSlash(target))
+	if err != nil || string(got) != "x: "+secretValue {
+		t.Fatalf("filled Base64 target = %q, %v", got, err)
+	}
+
+	invalidTemplate := []byte("{{sshmgr-secret:LONG_NAME}}{{sshmgr-secret:BAD NAME}}")
+	rejected, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "upload_content",
+		Arguments: map[string]any{
+			"server_id":   serverID,
+			"content":     base64.StdEncoding.EncodeToString(invalidTemplate),
+			"remote_path": toSlash(filepath.Join(t.TempDir(), "config", "rejected.yaml")),
+			"encoding":    "base64",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rejected.IsError {
+		t.Fatalf("over-cap Base64 content unexpectedly succeeded: %+v", rejected.Content)
+	}
+	errorText := toolResultText(rejected)
+	if !strings.Contains(errorText, "机密项占位符格式错误") ||
+		!strings.Contains(errorText, "content (34 bytes) exceeds upload-content cap 20") {
+		t.Fatalf("Base64 rejection must list format and filled-size errors together: %q", errorText)
+	}
+}
+
 func TestUploadContentSecretReadFailureRejectsBeforeConnectAndAuditsError(t *testing.T) {
 	const corruptedValue = "corrupted-secret-a41d68"
 	dbPath := filepath.Join(t.TempDir(), "vault.db")

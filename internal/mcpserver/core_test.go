@@ -1428,19 +1428,19 @@ func TestUploadContentForProfileRefusals(t *testing.T) {
 		t.Fatalf("text over: remote file must be absent, stat err=%v", serr)
 	}
 
-	// base64 over cap (coarse est) → "(9 bytes decoded)" + zero remote file.
-	nine := base64.StdEncoding.EncodeToString(make([]byte, 9)) // 12 chars, est = 9
+	// Base64 超过上限时先解码，再按填值后的内容检查；这里没有占位符，
+	// 填值后仍是 9 字节。
+	nine := base64.StdEncoding.EncodeToString(make([]byte, 9))
 	p2 := root + "/ref/bin.bin"
 	_, err = UploadContentForProfile(ctx, st, "proj-test", pid, srvID, nine, p2, "base64", 8)
-	if err == nil || !strings.Contains(err.Error(), "content (9 bytes decoded) exceeds upload-content cap 8") {
+	if err == nil || !strings.Contains(err.Error(), "content (9 bytes) exceeds upload-content cap 8") {
 		t.Fatalf("base64 over: err=%v", err)
 	}
 	if _, serr := os.Stat(filepath.FromSlash(p2)); !os.IsNotExist(serr) {
 		t.Fatalf("base64 over: remote file must be absent, stat err=%v", serr)
 	}
 
-	// audit %d value table (spec rev3 §5): text-refusal row carries len(content),
-	// base64 coarse-refusal row carries est.
+	// 审计拒绝行记录触发大小检查的内容长度；两种编码都是填值后的长度。
 	rows, _ := st.AuditRows(10)
 	wantRows := map[string]bool{"inline 9 bytes -> " + p1: false, "inline 9 bytes -> " + p2: false}
 	for _, r := range rows {
