@@ -308,6 +308,9 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
 - **幂等**：已挂载且配置一致时，重复调用直接成功并返回 `no-change`，
   不做任何改动。共享登记或挂载密码变化后，对提示中的服务器逐台再调用
   即可完成更新；目标服务器上的版本更新时会拒绝改写并提示先同步快照。
+  owner 撤销后，服务器上会留下不含密码的撤销标记；标记版本号不低于本
+  次快照里的共享存储版本号时，`mount_share` 会拒绝重新挂载。快照里的
+  共享存储版本号更大时，挂载成功后会删除撤销标记，重新授权随之生效。
 - **不能卸载**：卸载、撤销、重选地址只归 owner；这个工具只负责挂载与更
   新。同一服务器上的并发挂载由远端文件锁串行化，锁残留会按持有时间自动
   回收。
@@ -838,7 +841,7 @@ HEAD，后续重构以符号名为准）：
 | 命令策略门在取凭据、建 SSH 连接之前（拦截 / 需确认都不建连接，拦截零字节到服务器）；判定内核是纯函数，权威端与客户端同一条代码路径，离线用最后一次拉到的规则 | `internal/mcpserver/policygate.go`（policyJudge）；`internal/mcpserver/core.go`（ExecCommandForProfile 的 gate 段）；`internal/mcpserver/bgtools.go`（后台同款门）；`internal/policy/policy.go`（Evaluate） |
 | probe_connectivity：只测 TCP 建连与耗时、只探测登记过的共同网络组合（不测兜底主机）、结果只存发起实例本地；经服务器探测执行固定命令、不经命令策略但写审计 | 规格 #142；ADR 0007（命令策略是护栏不是安全边界） |
 | list_shares：默认只读登记与挂载点约定、不做任何现场检测；可选现场检测参数对可见 Linux 与 macOS 可挂载服务器并发只读检测，报告已挂载、未挂载、配置缺失、不可达（附原因说明）四种状态；可挂载范围是挂载密码机密项可写入列表与会话可见服务器取交集，交集为空不返回；旧权威端快照按 ADR 0014 报错 | `internal/mcpserver/list_shares.go`（ListSharesForProfile / annotateSharedStorageMountChecks）；`internal/sharemount/check.go`（固定检测命令）；`internal/store/shared_storage.go`（SharedStorageMountPoint）；`internal/mcpserver/run.go`（hydrateCacheStore 设置快照推荐版本） |
-| mount_share：共享存储持久挂载（Linux 写 fstab 与仅 root 可读凭据文件，macOS 写 autofs 间接映射）；服务器级目录锁带 owner 文件与过期回收；Linux 先在 /var/run 临时挂载点试挂成功才改写正式配置；macOS 映射改写后先卸载旧 smbfs 挂载再刷新；已挂载且一致时幂等 no-change；密码只经提权会话标准输入写入，结果与审计不含地址；不提供卸载 | 规格 #198；`internal/sharemount/`（service.go / linux.go / darwin.go / lock.go / check.go）；`internal/mcpserver/mount_share.go` |
+| mount_share：共享存储持久挂载（Linux 写 fstab 与仅 root 可读凭据文件，macOS 写 autofs 间接映射）；服务器级目录锁带 owner 文件与过期回收；撤销标记版本号不低于快照版本号时拒绝；Linux 先在 /var/run 临时挂载点试挂成功才改写正式配置；macOS 映射改写后先卸载旧 smbfs 挂载再刷新；已挂载且一致时幂等 no-change；密码只经提权会话标准输入写入，结果与审计不含地址；不提供卸载 | 规格 #198、#212；`internal/sharemount/`（service.go / linux.go / darwin.go / marker.go / lock.go / check.go）；`internal/mcpserver/mount_share.go` |
 | query_software_inventory：按 profile 可见范围查询软件清单（含监听端口、暴露级别、来源、采集时间与设备采集状态）；客户端在线查询权威端，不可达时固定报错、不回退本地数据 | 票 #185；`internal/mcpserver/softwareinventory.go`；`internal/mcpserver/serve_softwareinventory.go`；`internal/clientops/softwareinventory_forward.go` |
 | draft_software_declarations：提交软件声明草稿；客户端经受审计转发写提交，草稿确认前不影响查询与待办 | 票 #188；`internal/mcpserver/softwareinventory_draft.go`；`internal/mcpserver/serve_softwareinventory_draft.go`；`internal/clientops/softwareinventory_draft_forward.go` |
 | collect_software_inventory：请求立即采集；本地面同步执行或登记客户端请求，客户端经权威端转发 | 票 #188；`internal/mcpserver/softwareinventory_collect.go`；`internal/mcpserver/serve_softwareinventory_collect_forward.go`；`internal/clientops/softwareinventory_collect_forward.go` |

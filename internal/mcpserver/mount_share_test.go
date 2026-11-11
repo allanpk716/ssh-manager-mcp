@@ -54,6 +54,9 @@ type fakeLinuxMountServer struct {
 	ownerFstabLines    []string
 	lockHeld           bool
 	staleLock          bool
+	// revokedMarkerVersion 为 0 表示没有撤销标记；非 0 表示服务器上存在
+	// 这个版本的撤销标记。
+	revokedMarkerVersion int64
 
 	missingMountCIFS bool
 	workingVersion   string
@@ -135,6 +138,19 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 		}
 		if f.remoteVersion > f.shareVersion {
 			return "", "SSHMGR-LINUX-MOUNT remote-version-newer", 88
+		}
+		if f.revokedMarkerVersion != 0 {
+			if !strings.Contains(command, "sshmgr_revoked_marker='/etc/sshmgr/shares/datasets.revoked'") ||
+				!strings.Contains(command, `-ge "$sshmgr_expected_version"`) {
+				return "", "Linux 固定挂载命令必须在持锁后读取撤销标记", 91
+			}
+			if f.revokedMarkerVersion >= f.shareVersion {
+				return "", "SSHMGR-LINUX-MOUNT share-revoked", 90
+			}
+			if !strings.Contains(command, `rm -f "$sshmgr_revoked_marker"`) {
+				return "", "Linux 固定挂载命令成功后必须删除旧撤销标记", 91
+			}
+			f.revokedMarkerVersion = 0
 		}
 		wasExisting := f.existingAddress != ""
 		selectedAddress := "192.0.2.10"
@@ -267,6 +283,9 @@ type fakeDarwinMountServer struct {
 	lockHeld            bool
 	staleLock           bool
 	autoMasterReference bool
+	// revokedMarkerVersion 为 0 表示没有撤销标记；非 0 表示服务器上存在
+	// 这个版本的撤销标记。
+	revokedMarkerVersion int64
 }
 
 func (f *fakeDarwinMountServer) handler(command string, stdin io.Reader) (string, string, int) {
@@ -317,6 +336,19 @@ func (f *fakeDarwinMountServer) handler(command string, stdin io.Reader) (string
 		}
 		if f.remoteVersion > f.shareVersion {
 			return "", "SSHMGR-DARWIN-MOUNT remote-version-newer", 88
+		}
+		if f.revokedMarkerVersion != 0 {
+			if !strings.Contains(command, "sshmgr_revoked_marker='/etc/sshmgr/datasets.revoked'") ||
+				!strings.Contains(command, `-ge "$sshmgr_expected_version"`) {
+				return "", "macOS 固定挂载命令必须在持锁后读取撤销标记", 91
+			}
+			if f.revokedMarkerVersion >= f.shareVersion {
+				return "", "SSHMGR-DARWIN-MOUNT share-revoked", 90
+			}
+			if !strings.Contains(command, `rm -f "$sshmgr_revoked_marker"`) {
+				return "", "macOS 固定挂载命令成功后必须删除旧撤销标记", 91
+			}
+			f.revokedMarkerVersion = 0
 		}
 		if f.mountTableMissing && !strings.Contains(command, `(smbfs`) {
 			return "", "macOS 固定命令的最终验证必须核验 mount 输出挂载表", 91
@@ -1179,7 +1211,10 @@ func TestMountShareLinuxFirstMountSelectsPhysicalNetwork(t *testing.T) {
 			description = tool.Description
 		}
 	}
-	for _, want := range []string{"idempotent", "cannot unmount", "Windows servers do not need it"} {
+	for _, want := range []string{
+		"idempotent", "cannot unmount", "revocation marker",
+		"until a newer shared-storage authorization is synced", "Windows servers do not need it",
+	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("mount_share 描述缺少 %q：%s", want, description)
 		}
@@ -1484,6 +1519,82 @@ func TestMountShareDarwinMissingAutomountAndRemoteNewerVersionFail(t *testing.T)
 			}
 			assertMountShareAuditResult(t, fixture.store, testCase.wantResult)
 		})
+	}
+}
+
+func TestMountShareDarwinRejectsRevokedShare(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.darwinExistingAddress = "192.0.2.10"
+		setup.darwinRemoteVersion = 1
+	})
+	darwinFake, ok := fixture.fake.(*fakeDarwinMountServer)
+	if !ok {
+		t.Fatalf("测试夹具没有使用 macOS 假服务器：%T", fixture.fake)
+	}
+	darwinFake.revokedMarkerVersion = darwinFake.shareVersion
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	want := "共享存储已从这台服务器撤销，不能重新挂载；如 owner 已重新授权，请先同步快照后再试"
+	if !isError || text != want {
+		t.Fatalf("已撤销报错 = %q (%v)，期待 %q", text, output, want)
+	}
+	if mapWrites, autoMasterWrites := darwinFake.writeCounts(); mapWrites != 0 || autoMasterWrites != 0 {
+		t.Fatalf("已撤销时不应改写：映射 %d 次，主配置 %d 次", mapWrites, autoMasterWrites)
+	}
+	_, _, _, mapLines := darwinFake.recordedDarwin()
+	if len(mapLines) != 2 || !strings.Contains(mapLines[0], "sshmgr-version=1") ||
+		!strings.Contains(mapLines[1], "@192.0.2.10/datasets") {
+		t.Fatalf("已撤销时 macOS 映射被误改：%#v", mapLines)
+	}
+	assertMountShareAuditResult(t, fixture.store, "share-revoked")
+}
+
+func TestMountShareDarwinNewerAuthorizationRemovesRevokedMarker(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.darwinExistingAddress = "192.0.2.10"
+		setup.darwinRemoteVersion = 1
+	})
+	changeNote := "重新授权共享存储"
+	if _, err := fixture.store.EditSharedStorage("datasets", store.SharedStorageChanges{
+		ChangeNote: &changeNote,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	updatedShare, err := fixture.store.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	darwinFake, ok := fixture.fake.(*fakeDarwinMountServer)
+	if !ok {
+		t.Fatalf("测试夹具没有使用 macOS 假服务器：%T", fixture.fake)
+	}
+	darwinFake.setShareVersion(updatedShare.Version)
+	darwinFake.revokedMarkerVersion = 1
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("快照版本更新后 mount_share 失败：%s", text)
+	}
+	if output["result"] != "update-success" || output["version"] != float64(updatedShare.Version) {
+		t.Fatalf("重新授权后的输出 = %#v", output)
+	}
+	if darwinFake.revokedMarkerVersion != 0 {
+		t.Fatalf("挂载成功后撤销标记仍存在，版本号 = %d", darwinFake.revokedMarkerVersion)
+	}
+	if mapWrites, autoMasterWrites := darwinFake.writeCounts(); mapWrites != 1 || autoMasterWrites != 0 {
+		t.Fatalf("重新授权后的写入次数错误：映射 %d，主配置 %d", mapWrites, autoMasterWrites)
+	}
+	_, _, _, mapLines := darwinFake.recordedDarwin()
+	if len(mapLines) != 2 ||
+		!strings.Contains(mapLines[0], fmt.Sprintf("sshmgr-version=%d", updatedShare.Version)) ||
+		!strings.Contains(mapLines[1], mountShareTestPasswordURLEncoded+"@192.0.2.10/datasets") {
+		t.Fatalf("重新授权后的 macOS 映射错误：%#v", mapLines)
 	}
 }
 
@@ -1812,6 +1923,84 @@ func TestMountShareLinuxRejectsRemoteNewerVersion(t *testing.T) {
 		t.Fatalf("远端配置被误改：credential=%q fstab=%#v", credential, fstab)
 	}
 	assertMountShareAuditResult(t, fixture.store, "remote-version-newer")
+}
+
+func TestMountShareLinuxRejectsRevokedShare(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.existingAddress = "192.0.2.10"
+		setup.existingProtocol = "3.1.1"
+		setup.remoteVersion = 1
+	})
+	linuxFake, ok := fixture.fake.(*fakeLinuxMountServer)
+	if !ok {
+		t.Fatalf("测试夹具没有使用 Linux 假服务器：%T", fixture.fake)
+	}
+	linuxFake.revokedMarkerVersion = linuxFake.shareVersion
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	want := "共享存储已从这台服务器撤销，不能重新挂载；如 owner 已重新授权，请先同步快照后再试"
+	if !isError || text != want {
+		t.Fatalf("已撤销报错 = %q (%v)，期待 %q", text, output, want)
+	}
+	if text == "目标服务器上的共享存储版本更新，请先同步快照后再调用挂载工具" {
+		t.Fatal("已撤销不能伪装成远端版本更新")
+	}
+	if credentialWrites, configurationWrites := linuxFake.writeCounts(); credentialWrites != 0 || configurationWrites != 0 {
+		t.Fatalf("已撤销时不应改写：凭据 %d 次，配置 %d 次", credentialWrites, configurationWrites)
+	}
+	_, _, credential, fstab := linuxFake.recorded()
+	if credential != "username=mount-user\npassword=old-password\n" ||
+		len(fstab) != 1 || !strings.Contains(fstab[0], "sshmgr-version=1") {
+		t.Fatalf("已撤销时远端配置被误改：credential=%q fstab=%#v", credential, fstab)
+	}
+	assertMountShareAuditResult(t, fixture.store, "share-revoked")
+}
+
+func TestMountShareLinuxNewerAuthorizationRemovesRevokedMarker(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.existingAddress = "192.0.2.10"
+		setup.existingProtocol = "3.1.1"
+		setup.remoteVersion = 1
+	})
+	changeNote := "重新授权共享存储"
+	if _, err := fixture.store.EditSharedStorage("datasets", store.SharedStorageChanges{
+		ChangeNote: &changeNote,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	updatedShare, err := fixture.store.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	linuxFake, ok := fixture.fake.(*fakeLinuxMountServer)
+	if !ok {
+		t.Fatalf("测试夹具没有使用 Linux 假服务器：%T", fixture.fake)
+	}
+	linuxFake.setShareVersion(updatedShare.Version)
+	linuxFake.revokedMarkerVersion = 1
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("快照版本更新后 mount_share 失败：%s", text)
+	}
+	if output["result"] != "update-success" || output["version"] != float64(updatedShare.Version) {
+		t.Fatalf("重新授权后的输出 = %#v", output)
+	}
+	if linuxFake.revokedMarkerVersion != 0 {
+		t.Fatalf("挂载成功后撤销标记仍存在，版本号 = %d", linuxFake.revokedMarkerVersion)
+	}
+	if credentialWrites, configurationWrites := linuxFake.writeCounts(); credentialWrites != 1 || configurationWrites != 1 {
+		t.Fatalf("重新授权后的写入次数错误：凭据 %d，配置 %d", credentialWrites, configurationWrites)
+	}
+	_, _, credential, fstab := linuxFake.recorded()
+	if credential != "username=mount-user\npassword="+mountShareTestPassword+"\n" ||
+		len(fstab) != 1 || !strings.Contains(fstab[0], fmt.Sprintf("sshmgr-version=%d", updatedShare.Version)) {
+		t.Fatalf("重新授权后的配置错误：credential=%q fstab=%#v", credential, fstab)
+	}
 }
 
 func TestMountShareLinuxUpdatesOlderRemoteVersionAndPassword(t *testing.T) {

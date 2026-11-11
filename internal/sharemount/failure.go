@@ -8,6 +8,7 @@ const (
 	MountClassMissingSoftware    = "missing-software"
 	MountClassLockTimeout        = "lock-timeout"
 	MountClassRemoteVersionNewer = "remote-version-newer"
+	MountClassShareRevoked       = "share-revoked"
 	MountClassProtocolFailed     = "protocol-failed"
 	MountClassVerifyFailed       = "verify-failed"
 	MountClassUnmountFailed      = "unmount-failed"
