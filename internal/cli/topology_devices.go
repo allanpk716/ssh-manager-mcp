@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/sharemanage"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -114,11 +115,16 @@ func devicesRmCmd() *cobra.Command {
 					return nil
 				}
 			}
-			result, err := s.DeleteDeviceCascading(args[0], preview)
+			result, err := sharemanage.New(s).DeleteDeviceCascading(
+				cmd.Context(), sharemanage.DeviceDeleteCascadingRequest{
+					Device: args[0], Confirmed: preview,
+				},
+			)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "已删除设备 %s\n", result.Device.Name)
+			fmt.Fprintf(out, "已删除设备 %s\n", result.DeviceName)
+			printDeviceDeleteRemoteResults(out, result)
 			return nil
 		},
 	}
@@ -147,21 +153,14 @@ func printDeviceDeletePreview(w io.Writer, preview *store.DeviceDeletePreview) {
 	}
 	for _, share := range preview.SharedStorages {
 		fmt.Fprintf(w, "  %s\n", share.Name)
-		fmt.Fprintln(w, "    可挂载服务器：")
-		if len(share.MountableServers) == 0 {
+		fmt.Fprintln(w, "    Linux 与 macOS 服务器（将删除配置并卸载）：")
+		if printDeviceDeleteMountableServers(w, share.MountableServers, false) == 0 {
 			fmt.Fprintln(w, "      无")
 		}
-		for _, server := range share.MountableServers {
-			deviceName := server.DeviceName
-			if deviceName == "" {
-				deviceName = "未关联设备"
-			}
-			fmt.Fprintf(w, "      %s（所属设备 %s，系统类型 %s）\n",
-				server.Name, deviceName, sharedStorageOperatingSystemText(server.ShellType))
+		fmt.Fprintln(w, "    Windows 服务器（将随快照同步停止注入）：")
+		if printDeviceDeleteMountableServers(w, share.MountableServers, true) == 0 {
+			fmt.Fprintln(w, "      无")
 		}
-	}
-	if len(preview.SharedStorages) > 0 {
-		fmt.Fprintln(w, "删除这些共享存储登记不会去服务器上卸载。")
 	}
 	fmt.Fprintln(w, "会从以下机密项的可写入服务器列表移出：")
 	if len(preview.SecretServerAllows) == 0 {
@@ -192,6 +191,62 @@ func printDeviceDeletePreview(w io.Writer, preview *store.DeviceDeletePreview) {
 		client = "无"
 	}
 	fmt.Fprintf(w, "会被解除关联的客户端实例：%s\n", client)
+}
+
+func printDeviceDeleteMountableServers(
+	w io.Writer, servers []models.SharedStorageServer, windows bool,
+) int {
+	count := 0
+	for _, server := range servers {
+		if models.NormalizeShellType(string(server.ShellType)).IsWindows() != windows {
+			continue
+		}
+		count++
+		deviceName := server.DeviceName
+		if deviceName == "" {
+			deviceName = "未关联设备"
+		}
+		fmt.Fprintf(w, "      %s（所属设备 %s，系统类型 %s）\n",
+			server.Name, deviceName, sharedStorageOperatingSystemText(server.ShellType))
+	}
+	return count
+}
+
+func printDeviceDeleteRemoteResults(
+	w io.Writer, result *sharemanage.DeviceDeleteCascadingResult,
+) {
+	if len(result.Results) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "共享存储远端清理：")
+	for _, item := range result.Results {
+		var conclusion string
+		switch item.Result {
+		case "success":
+			conclusion = "已清理，配置已删除并已卸载"
+		case "busy":
+			conclusion = "被占用而保留挂载；请用 shares unmount --force"
+		case "ssh-error":
+			conclusion = "连不上；请用 shares residue 检查残留"
+		default:
+			conclusion = "清理失败（" + item.Result + "）"
+			if item.Error != "" {
+				conclusion += "：" + item.Error
+			}
+		}
+		target := item.ShareName + " / " + item.ServerName
+		if item.System != "" {
+			target += "（" + item.System + "）"
+		}
+		fmt.Fprintf(w, "  %s：%s；版本号：%d\n", target, conclusion, item.Version)
+		for _, process := range item.BusyProcesses {
+			fmt.Fprintf(w, "    占用进程：%s %s %s\n",
+				process.ProcessID, process.User, process.Command)
+		}
+	}
+	for _, notice := range result.Notices {
+		fmt.Fprintf(w, "提示：%s\n", notice)
+	}
 }
 
 func sharedStorageOperatingSystemText(shellType models.ShellType) string {
