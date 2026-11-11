@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -9,7 +11,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf16"
 
 	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
@@ -44,10 +48,10 @@ func relayShareFallbackNotice(metadata *relayShareFallbackMetadata) string {
 		metadata.EndpointServerName, metadata.EndpointServerID)
 }
 
-// RelayForProfile 的共享地址分支：另一端可挂载时，在一个已实际挂载共享的
-// Linux 或 macOS 端点上启动固定本地拷贝命令；另一端不可挂载时，选择已挂载
-// 端点后递归复用既有流式中继。任务仍使用后台任务表与中继的运行中工件冲
-// 突键，不建立第二套任务面。
+// RelayForProfile 的共享地址分支：另一端可挂载时，在这台服务器上启动固定
+// 本地拷贝命令——Linux 与 macOS 要求共享已实际挂载，Windows 在同一命令会话
+// 内注入固定网络盘符；另一端不可挂载时，选择已挂载端点后递归复用既有流式
+// 中继。任务仍使用后台任务表与中继的运行中工件冲突键，不建立第二套任务面。
 func relayLocalCopyForProfile(
 	ctx context.Context, st *store.Store, tm *TaskManager, projectID, profileID string,
 	in RelayInput, chunkBytes int64, hk ...sshbroker.HostKeyStore,
@@ -155,10 +159,13 @@ func relayLocalCopyForProfile(
 		startOwned = true
 		return RelayForProfile(ctx, st, tm, projectID, profileID, relayInput, chunkBytes, hk...)
 	}
-	if server.ShellType.IsWindows() {
-		return RelayOutput{}, errors.New("Windows 服务器的共享地址本地拷贝尚未支持")
-	}
-	if !strings.HasPrefix(ordinaryPath, "/") {
+	windowsLocalCopy := server.ShellType.IsWindows()
+	if windowsLocalCopy {
+		if !isWindowsDrivePath(ordinaryPath) {
+			return RelayOutput{}, fmt.Errorf(
+				"共享地址另一端的路径 %q 在 Windows 服务器上必须是盘符根路径（例如 C:/）", ordinaryPath)
+		}
+	} else if !strings.HasPrefix(ordinaryPath, "/") {
 		return RelayOutput{}, fmt.Errorf(
 			"共享地址另一端的路径 %q 在 Linux 或 macOS 服务器上必须是以 / 开头的绝对路径", ordinaryPath)
 	}
@@ -166,6 +173,10 @@ func relayLocalCopyForProfile(
 		return RelayOutput{}, errors.New("另一端可挂载共享时直接在另一端执行本地拷贝，不能再用 via 指定共享地址端点")
 	}
 	sharedPath := path.Clean(resolved.PathOnServer(server.ShellType))
+	if windowsLocalCopy {
+		sharedPath = canonicalWindowsRemotePath(sharedPath)
+		ordinaryPath = canonicalWindowsRemotePath(ordinaryPath)
+	}
 	if sourceShareAddress != "" {
 		sourcePath = sharedPath
 		targetPath = ordinaryPath
@@ -211,38 +222,46 @@ func relayLocalCopyForProfile(
 		return RelayOutput{}, connectErr
 	}
 
-	checkService := &sharemount.Service{
-		RemoteExec: relayLocalCopyCheckExec(client, st, server),
-	}
-	checkResult, checkErr := checkService.Check(ctx, sharemount.CheckRequest{
-		Server: server, Shares: []*models.SharedStorage{resolved.Share},
-	})
-	if checkErr != nil {
-		return RelayOutput{}, fmt.Errorf("共享存储 %s 的挂载现场检查失败：%w", shareName, checkErr)
-	}
-	if len(checkResult.States) != 1 || !checkResult.States[0].Mounted {
-		return RelayOutput{}, fmt.Errorf(
-			"共享存储 %s 在服务器 %s 上尚未实际挂载；请先调用幂等的 mount_share 工具，再重试 relay_file",
-			shareName, server.Name)
-	}
-
-	sourceSize, inspectErr := relayLocalCopyInspect(ctx, client, sourcePath, targetPath)
-	if inspectErr != nil {
-		return RelayOutput{}, inspectErr
-	}
-
+	var sourceSize int64
 	spaceCheck := "ok"
-	sftpClient, sftpErr := client.RelaySFTP()
-	if sftpErr != nil {
+	command := buildRelayLocalCopyCommand(sourcePath, targetPath)
+	if windowsLocalCopy {
+		command = buildRelayWindowsLocalCopyCommand(sourcePath, targetPath)
 		spaceCheck = "unavailable"
 	} else {
-		defer sftpClient.Close()
-		available, availableOK, spaceErr := client.RelayAvailable(sftpClient, path.Dir(targetPath))
-		if spaceErr != nil || !availableOK {
-			spaceCheck = "unavailable"
-		} else if available < sourceSize {
+		checkService := &sharemount.Service{
+			RemoteExec: relayLocalCopyCheckExec(client, st, server),
+		}
+		checkResult, checkErr := checkService.Check(ctx, sharemount.CheckRequest{
+			Server: server, Shares: []*models.SharedStorage{resolved.Share},
+		})
+		if checkErr != nil {
+			return RelayOutput{}, fmt.Errorf("共享存储 %s 的挂载现场检查失败：%w", shareName, checkErr)
+		}
+		if len(checkResult.States) != 1 || !checkResult.States[0].Mounted {
 			return RelayOutput{}, fmt.Errorf(
-				"目标可用空间 %d 字节，小于源文件 %d 字节；请先清理目标空间再重试", available, sourceSize)
+				"共享存储 %s 在服务器 %s 上尚未实际挂载；请先调用幂等的 mount_share 工具，再重试 relay_file",
+				shareName, server.Name)
+		}
+
+		var inspectErr error
+		sourceSize, inspectErr = relayLocalCopyInspect(ctx, client, sourcePath, targetPath)
+		if inspectErr != nil {
+			return RelayOutput{}, inspectErr
+		}
+
+		sftpClient, sftpErr := client.RelaySFTP()
+		if sftpErr != nil {
+			spaceCheck = "unavailable"
+		} else {
+			defer sftpClient.Close()
+			available, availableOK, spaceErr := client.RelayAvailable(sftpClient, path.Dir(targetPath))
+			if spaceErr != nil || !availableOK {
+				spaceCheck = "unavailable"
+			} else if available < sourceSize {
+				return RelayOutput{}, fmt.Errorf(
+					"目标可用空间 %d 字节，小于源文件 %d 字节；请先清理目标空间再重试", available, sourceSize)
+			}
 		}
 	}
 
@@ -251,7 +270,6 @@ func relayLocalCopyForProfile(
 		relayKeyOf(serverID, targetPath),
 		relayKeyOf(serverID, targetPath+relayPartialSuffix),
 	}
-	command := buildRelayLocalCopyCommand(sourcePath, targetPath)
 	spec := BgTaskSpec{
 		ProjectID: projectID, ServerID: serverID, Command: summary(), Timeout: relayRunCap,
 		AuditStart: func() {
@@ -264,11 +282,14 @@ func relayLocalCopyForProfile(
 		AuditAction: "relay-bg-end",
 		AuditEnd:    func(row store.AuditRow) error { return st.WriteAudit(row) },
 		Run: func(taskContext context.Context, task *bgTask) {
-			taskManager := tm
-			taskManager.mu.Lock()
+			if windowsLocalCopy {
+				runRelayWindowsLocalCopyTask(taskContext, tm, task, st, profileID, server, client, command)
+				return
+			}
+			tm.mu.Lock()
 			task.client = client
-			taskManager.mu.Unlock()
-			taskManager.runTask(taskContext, task, client,
+			tm.mu.Unlock()
+			tm.runTask(taskContext, task, client,
 				func(execContext context.Context, stdout, stderr io.Writer) (int, bool, error) {
 					return client.ExecWriters(execContext, command, 0, stdout, stderr)
 				}, nil)
@@ -567,4 +588,139 @@ func buildRelayLocalCopyCommand(sourcePath, targetPath string) string {
 			"mv -- %s %s", sshbroker.POSIXShellQuote(partialPath), sshbroker.POSIXShellQuote(targetPath))),
 		fmt.Sprintf("mv -- %s %s", sshbroker.POSIXShellQuote(partialPath), sshbroker.POSIXShellQuote(targetPath)),
 	}, "\n")
+}
+
+func isWindowsDrivePath(remotePath string) bool {
+	return len(remotePath) >= 3 &&
+		((remotePath[0] >= 'A' && remotePath[0] <= 'Z') ||
+			(remotePath[0] >= 'a' && remotePath[0] <= 'z')) &&
+		remotePath[1] == ':' && remotePath[2] == '/'
+}
+
+func canonicalWindowsRemotePath(remotePath string) string {
+	return strings.ReplaceAll(remotePath, `\`, `/`)
+}
+
+func windowsRemotePath(remotePath string) string {
+	return strings.ReplaceAll(remotePath, `/`, `\`)
+}
+
+func powerShellRemoteSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+// buildRelayWindowsLocalCopyCommand 生成跨 PowerShell 与 cmd 都可执行的
+// PowerShell 拷贝脚本。robocopy 只接受“源目录 + 目标目录 + 文件名”，因此
+// `<目标>.sshmgr-partial` 用作半成品暂存目录；成功后把其中的文件移动成目标
+// 文件，再删除已空的暂存目录。重跑前只清理这个暂存目录里的直接文件，不做
+// 递归删除。
+func buildRelayWindowsLocalCopyCommand(sourcePath, targetPath string) string {
+	source := windowsRemotePath(sourcePath)
+	target := windowsRemotePath(targetPath)
+	sourceDirectory := windowsRemotePath(path.Dir(sourcePath))
+	sourceName := path.Base(sourcePath)
+	partialDirectory := target + relayPartialSuffix
+	script := strings.Join([]string{
+		"$ErrorActionPreference = 'Stop'",
+		"$__sshmgr_source = " + powerShellRemoteSingleQuote(source),
+		"$__sshmgr_target = " + powerShellRemoteSingleQuote(target),
+		"$__sshmgr_robocopy_source_directory = " + powerShellRemoteSingleQuote(sourceDirectory),
+		"$__sshmgr_source_name = " + powerShellRemoteSingleQuote(sourceName),
+		"if (-not (Test-Path -LiteralPath $__sshmgr_source -PathType Leaf)) { [Console]::Out.WriteLine('source-not-regular'); exit 3 }",
+		"$__sshmgr_source_item = Get-Item -LiteralPath $__sshmgr_source -Force",
+		"if ($null -eq $__sshmgr_source_item -or -not ($__sshmgr_source_item -is [System.IO.FileInfo]) -or (($__sshmgr_source_item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) { [Console]::Out.WriteLine('source-not-regular'); exit 3 }",
+		"if (Test-Path -LiteralPath $__sshmgr_target -PathType Container) { [Console]::Out.WriteLine('target-directory'); exit 4 }",
+		"$__sshmgr_partial_directory = " + powerShellRemoteSingleQuote(partialDirectory),
+		"if (Test-Path -LiteralPath $__sshmgr_partial_directory -PathType Leaf) { Remove-Item -LiteralPath $__sshmgr_partial_directory -Force }",
+		"New-Item -ItemType Directory -Path $__sshmgr_partial_directory -Force | Out-Null",
+		"Get-ChildItem -LiteralPath $__sshmgr_partial_directory -Force | Where-Object { -not $_.PSIsContainer } | Remove-Item -Force",
+		"[Console]::Out.WriteLine('本地拷贝模式：中断、停止或失败后不能续传，重跑会从文件开头覆盖旧半成品')",
+		"[Console]::Out.WriteLine('robocopy ' + $__sshmgr_robocopy_source_directory + ' ' + $__sshmgr_partial_directory + ' ' + $__sshmgr_source_name)",
+		"& robocopy " + strings.Join([]string{
+			powerShellRemoteSingleQuote(sourceDirectory),
+			powerShellRemoteSingleQuote(partialDirectory),
+			powerShellRemoteSingleQuote(sourceName),
+			"'/NFL'", "'/NDL'", "'/NJH'", "'/NJS'", "'/NP'", "'/R:1'", "'/W:1'",
+		}, " "),
+		"$__sshmgr_robocopy_exit = $LASTEXITCODE",
+		"if ($__sshmgr_robocopy_exit -ge 8) { exit $__sshmgr_robocopy_exit }",
+		"Move-Item -LiteralPath (Join-Path $__sshmgr_partial_directory $__sshmgr_source_name) -Destination $__sshmgr_target -Force",
+		"Remove-Item -LiteralPath $__sshmgr_partial_directory",
+		"exit 0",
+	}, "\n")
+	return "powershell -NoProfile -NonInteractive -EncodedCommand " +
+		base64.StdEncoding.EncodeToString(powerShellUTF16LERemote(script))
+}
+
+func powerShellUTF16LERemote(script string) []byte {
+	units := utf16.Encode([]rune(script))
+	blob := make([]byte, len(units)*2)
+	for index, unit := range units {
+		binary.LittleEndian.PutUint16(blob[index*2:], unit)
+	}
+	return blob
+}
+
+func runRelayWindowsLocalCopyTask(
+	ctx context.Context, tm *TaskManager, task *bgTask, st *store.Store,
+	profileID string, server *models.Server, client *sshbroker.Client, command string,
+) {
+	tm.mu.Lock()
+	task.client = client
+	tm.mu.Unlock()
+
+	driveExecution := prepareNetworkDriveExecution(
+		ctx, st, profileID, server, false, client,
+		environmentInjectionPlan{shellType: server.ShellType},
+	)
+	drivePlan := driveExecution.plan
+	statusMutex := &sync.Mutex{}
+	var stdoutFilter, stderrFilter *networkDriveStatusFilter
+	wrapStdout := func(writer io.Writer) io.Writer {
+		stdoutFilter = newNetworkDriveStatusFilter(&drivePlan, writer, statusMutex)
+		return stdoutFilter
+	}
+	wrapStderr := func(writer io.Writer) io.Writer {
+		stderrFilter = newNetworkDriveStatusFilter(&drivePlan, writer, statusMutex)
+		return stderrFilter
+	}
+	var stdoutWrapper, stderrWrapper func(io.Writer) io.Writer
+	if len(drivePlan.shares) > 0 {
+		stdoutWrapper, stderrWrapper = wrapStdout, wrapStderr
+	}
+	exec := func(execContext context.Context, stdout, stderr io.Writer) (int, bool, error) {
+		commandStdout, commandStderr := stdout, stderr
+		if stdoutWrapper != nil {
+			commandStdout = stdoutWrapper(stdout)
+		}
+		if stderrWrapper != nil {
+			commandStderr = stderrWrapper(stderr)
+		}
+		code, timedOut, err := client.ExecWriters(
+			execContext, command, 0, commandStdout, commandStderr, driveExecution.execOption,
+		)
+		if stdoutFilter != nil {
+			_ = stdoutFilter.Flush()
+		}
+		if stderrFilter != nil {
+			_ = stderrFilter.Flush()
+		}
+		_, _ = drivePlan.consumeStatusLines("", "")
+		if err == nil && code != 0 {
+			err = fmt.Errorf("Windows 本地拷贝命令失败，退出码 %d；详见任务输出", code)
+		}
+		return code, timedOut, err
+	}
+	finish := func() BgExecOutcome {
+		return BgExecOutcome{
+			InjectionWarnings: networkDriveWarningLines(
+				drivePlan.warnings[driveExecution.initialWarningCount:], nil),
+			InjectedShareNames: drivePlan.injectedShareNames(),
+		}
+	}
+	tm.mu.Lock()
+	task.injectionWarnings = append(task.injectionWarnings, drivePlan.warningLines()...)
+	task.finishExec = finish
+	tm.mu.Unlock()
+	tm.runTask(ctx, task, client, exec, nil)
 }

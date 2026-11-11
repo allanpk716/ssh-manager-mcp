@@ -346,7 +346,7 @@ type RelayOutput struct {
 	ChunksTotal              int    `json:"chunks_total" jsonschema:"total chunk count for streaming_relay; always 0 for local_copy"`
 	ResumedChunks            int    `json:"resumed_chunks" jsonschema:"chunks already complete per the streaming manifest; always 0 for local_copy"`
 	ChunkBytes               int64  `json:"chunk_bytes" jsonschema:"the streaming chunk size in bytes (from SSHMGR_TRANSFER_CHUNK at server construction); 0 for local_copy"`
-	SpaceCheck               string `json:"space_check" jsonschema:"destination free-space pre-flight: 'ok' or 'unavailable' (for streaming_relay, unavailable means proceeding is safe because a full disk stops at a chunk boundary and can resume later; for local_copy, unavailable means cp may fail and require a restart)"`
+	SpaceCheck               string `json:"space_check" jsonschema:"destination free-space pre-flight: 'ok' or 'unavailable' (for streaming_relay, unavailable means proceeding is safe because a full disk stops at a chunk boundary and can resume later; for local_copy, unavailable means the local copy command may fail on a full disk and require a restart from byte 0)"`
 	ShareEndpointServerID    string `json:"share_endpoint_server_id,omitempty" jsonschema:"server id selected to expose the shared address to the streaming relay; empty for ordinary streaming relays and local copies"`
 }
 
