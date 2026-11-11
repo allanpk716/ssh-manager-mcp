@@ -30,6 +30,7 @@
       overlaysByOrigin: {},
       taskID: null,
       taskState: "idle",
+      dataSequence: 0,
     },
     savedBeforeDrag: null,
     saving: false,
@@ -1257,6 +1258,7 @@
       return Promise.resolve();
     }
     var origin = state.probe.origin;
+    var sequence = state.probe.dataSequence;
     return fetch("/ui/api/topology/probe/overlay?from=" + encodeURIComponent(origin), {
       headers: { Accept: "application/json" },
       credentials: "same-origin",
@@ -1272,12 +1274,15 @@
           if (state.probe.origin !== origin) {
             return;
           }
+          if (state.probe.dataSequence !== sequence) {
+            return;
+          }
           state.probe.overlaysByOrigin[origin] = overlay;
           state.probe.overlay = overlay;
           updateProbePresentation();
         },
         function () {
-          if (state.probe.origin !== origin) {
+          if (state.probe.origin !== origin || state.probe.dataSequence !== sequence) {
             return;
           }
           state.probe.overlay = null;
@@ -1289,6 +1294,7 @@
 
   function fetchTopologyData() {
     var origin = state.probe.origin;
+    var sequence = state.probe.dataSequence;
     return fetch("/ui/api/topology?from=" + encodeURIComponent(origin), {
       headers: { Accept: "application/json" },
       credentials: "same-origin",
@@ -1300,7 +1306,7 @@
         return response.json();
       })
       .then(function (data) {
-        if (state.probe.origin !== origin) {
+        if (state.probe.origin !== origin || state.probe.dataSequence !== sequence) {
           return null;
         }
         state.data = data;
@@ -1311,16 +1317,23 @@
 
   function loadProbeOriginData() {
     var origin = state.probe.origin;
-    return Promise.all([fetchTopologyData(), fetchProbeOverlay()]).then(function () {
-      if (state.probe.origin !== origin || state.selectedDetailDevice === null) {
-        return;
-      }
-      showDeviceDetail(state.selectedDetailDevice);
-    }, function () {
-      if (state.probe.origin === origin) {
-        setProbeStatus("error", "切换探测起点失败，请稍后重试。");
-      }
-    });
+    var sequence = state.probe.dataSequence;
+    // 拓扑数据与探测叠加都会打开本机 vault；串行读取，避免两个请求在数据
+    // 库短暂加锁时互相失败。
+    return fetchTopologyData()
+      .then(function () {
+        return fetchProbeOverlay();
+      })
+      .then(function () {
+        if (state.probe.origin !== origin || state.probe.dataSequence !== sequence || state.selectedDetailDevice === null) {
+          return;
+        }
+        refreshDetailCandidates();
+      }, function () {
+        if (state.probe.origin === origin && state.probe.dataSequence === sequence) {
+          setProbeStatus("error", "切换探测起点失败，请稍后重试。");
+        }
+      });
   }
 
   function updateProbePresentation() {
@@ -1439,12 +1452,21 @@
     }
     html += '<form class="probe-trigger" data-device="' + escapeHTML(device.id) + '">';
     html += '<label>探测目标<select name="target" aria-label="探测目标">';
-    html += '<option value="' + escapeHTML(device.name) + '">设备 ' + escapeHTML(device.name) + "（端口 22）</option>";
+    var currentTarget = null;
+    if (detailPanel !== null) {
+      var currentSelect = detailPanel.querySelector(".probe-trigger select[name=\"target\"]");
+      if (currentSelect !== null) {
+        currentTarget = currentSelect.value;
+      }
+    }
+    var deviceValue = device.name;
+    html += '<option value="' + escapeHTML(deviceValue) + '"' +
+      (currentTarget === deviceValue ? " selected" : "") + ">设备 " + escapeHTML(device.name) + "（端口 22）</option>";
     device.servers.forEach(function (server) {
+      var serverValue = server.id;
       html +=
-        '<option value="' +
-        escapeHTML(server.id) +
-        '">服务器 ' +
+        '<option value="' + escapeHTML(serverValue) + '"' +
+        (currentTarget === serverValue ? " selected" : "") + ">服务器 " +
         escapeHTML(server.name) +
         "（端口 " +
         escapeHTML(server.port) +
@@ -1497,6 +1519,7 @@
       return;
     }
     setProbeStatus("running", "探测中…");
+    state.probe.dataSequence += 1;
     fetch("/ui/api/topology/probe/start", {
       method: "POST",
       credentials: "same-origin",
@@ -1565,6 +1588,51 @@
     }
     detailPanel.innerHTML = html;
     detailOpen(true);
+  }
+
+  function candidateDetailHTML(device) {
+    var html = '<section class="detail-candidates" data-device="' + escapeHTML(device.id) + '">';
+    html += "<h3>候选 SSH 地址（当前起点：" + escapeHTML(probeOriginLabel()) + "）</h3>";
+    if (device.candidate_notice !== "") {
+      html += '<p class="candidate-notice">' + escapeHTML(device.candidate_notice) + "</p>";
+    }
+    html += "<ul>";
+    if (device.candidates.length === 0) {
+      html += "<li>没有可显示的候选地址。</li>";
+    }
+    device.candidates.forEach(function (candidate) {
+      var source = networkLabel(candidate.source);
+      if (candidate.network_name !== undefined && candidate.network_name !== "") {
+        source += "：" + candidate.network_name;
+      }
+      if (candidate.server_name !== undefined && candidate.server_name !== "") {
+        source += "：" + candidate.server_name;
+      }
+      html +=
+        "<li>" + escapeHTML(candidate.address) + ' <span class="candidate-source">' + escapeHTML(source) + "</span></li>";
+    });
+    return html + "</ul></section>";
+  }
+
+  function refreshDetailCandidates() {
+    if (detailPanel === null || detailPanel.hidden || state.data === null) {
+      return;
+    }
+    var section = detailPanel.querySelector(".detail-candidates");
+    if (section === null) {
+      return;
+    }
+    var index = indexData(state.data);
+    var device = index.devices[section.getAttribute("data-device")];
+    if (device === undefined) {
+      return;
+    }
+    var template = document.createElement("div");
+    template.innerHTML = candidateDetailHTML(device);
+    var replacement = template.querySelector(".detail-candidates");
+    if (replacement !== null) {
+      section.innerHTML = replacement.innerHTML;
+    }
   }
 
   function showDeviceDetail(deviceID) {
@@ -1676,26 +1744,7 @@
     });
     html += "</ul>";
 
-    html += "<h3>候选 SSH 地址（当前起点：" + escapeHTML(probeOriginLabel()) + "）</h3>";
-    if (device.candidate_notice !== "") {
-      html += '<p class="candidate-notice">' + escapeHTML(device.candidate_notice) + "</p>";
-    }
-    html += "<ul>";
-    if (device.candidates.length === 0) {
-      html += "<li>没有可显示的候选地址。</li>";
-    }
-    device.candidates.forEach(function (candidate) {
-      var source = networkLabel(candidate.source);
-      if (candidate.network_name !== undefined && candidate.network_name !== "") {
-        source += "：" + candidate.network_name;
-      }
-      if (candidate.server_name !== undefined && candidate.server_name !== "") {
-        source += "：" + candidate.server_name;
-      }
-      html +=
-        "<li>" + escapeHTML(candidate.address) + ' <span class="candidate-source">' + escapeHTML(source) + "</span></li>";
-    });
-    html += "</ul>";
+    html += candidateDetailHTML(device);
     html += probeDetailHTML(device);
 
     if (device.shared_storages.length > 0) {
