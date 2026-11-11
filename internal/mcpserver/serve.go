@@ -82,10 +82,19 @@ type ServeRunner struct {
 	pairLimits        pairLimits
 	pairPendingPerIP  int
 	pairPendingGlobal int
+	// uploadContentCap is the effective upload_content cap resolved once when
+	// the authoritative process starts. Secret delivery registration reuses it
+	// so template validation and the request-body ceiling cannot drift apart.
+	uploadContentCap           int64
+	secretDeliveryMaxBodyBytes int64
 }
 
 // NewServeRunner constructs a runner over an already-open store. The caller owns st.Close().
 func NewServeRunner(st *store.Store) (*ServeRunner, error) {
+	uploadContentCap, err := resolveUploadContentCap()
+	if err != nil {
+		return nil, err
+	}
 	// Plan 47 T2 (spec §4): serve-side startup VALIDATION of the relay env
 	// seams — fail-fast before RunServe binds. Per-project scoped servers
 	// re-resolve at their own construction time (NewServerFromSource, the
@@ -105,7 +114,11 @@ func NewServeRunner(st *store.Store) (*ServeRunner, error) {
 	} else if len(anomalies) > 0 {
 		return nil, formatNameAnomalies(anomalies)
 	}
-	r := &ServeRunner{st: st, cache: make(map[string]*scopedServer), pairKeys: make(map[[32]byte]pairKeyEntry)}
+	r := &ServeRunner{
+		st: st, cache: make(map[string]*scopedServer), pairKeys: make(map[[32]byte]pairKeyEntry),
+		uploadContentCap:           uploadContentCap,
+		secretDeliveryMaxBodyBytes: uploadContentCap + uploadContentCap/3 + 64<<10,
+	}
 	r.pairLimits, r.pairPendingPerIP, r.pairPendingGlobal = pairLimitsFromEnv()
 	return r, nil
 }

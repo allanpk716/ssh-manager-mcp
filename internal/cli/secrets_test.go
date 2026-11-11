@@ -942,13 +942,29 @@ func seedSecretDeliveryReference(t *testing.T) (string, []byte) {
 		ServerID: web1.ID, Path: "/etc/app/config.yml",
 		Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
 		FileSHA256: strings.Repeat("4", 64), WrittenAt: time.Unix(1760000800, 0),
-		Secrets:              []store.SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 1}},
+		Secrets:              []store.SecretDeliverySecret{{Name: "api_token", ValueVersion: 1}},
 		InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
 		AuthorizationProfileID: profileID,
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	return dbPath, mk
+}
+
+// TestSecretsRecordsQueryIsCaseInsensitive 覆盖登记与查询使用不同大小写：
+// 引用行保存 vault 里的规范名字，查询按小写形式匹配。
+func TestSecretsRecordsQueryIsCaseInsensitive(t *testing.T) {
+	seedSecretDeliveryReference(t)
+
+	out := mustSecretsCli(t, "", "secrets", "records", "api_token")
+	for _, want := range []string{"服务器条目：web1", "路径：/etc/app/config.yml", "API_TOKEN=1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("按不同大小写查询下发记录输出缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, testSecretValueA) {
+		t.Fatalf("下发记录输出不得出现机密项值：\n%s", out)
+	}
 }
 
 // TestSecretsRmListsDeliveryRecordsBeforeDelete `secrets rm` 删除前列出引用

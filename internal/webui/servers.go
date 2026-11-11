@@ -127,12 +127,12 @@ type ServerDeletePreviewView struct {
 	SecretNames        []string
 	DeletedCredentials []string
 	KeptCredentials    []string
-	DeliveryRecords    []ServerDeleteDeliveryRecordView
+	DeliveryRecords    []DeliveryRecordImpactView
 	Digest             string
 }
 
-// ServerDeleteDeliveryRecordView 是删除影响清单里的一条机密项下发记录。
-type ServerDeleteDeliveryRecordView struct {
+// DeliveryRecordImpactView 是删除影响清单里的一条机密项下发记录。
+type DeliveryRecordImpactView struct {
 	ServerName  string
 	Path        string
 	SecretNames []string

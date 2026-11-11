@@ -72,7 +72,7 @@ func (s managerStore) ListSecrets(_, query, server string) ([]webui.SecretRow, e
 }
 
 func (s managerStore) SecretDeliveryRecords(secretName string) ([]webui.SecretDeliveryRecordRow, error) {
-	records, err := s.manager.SecretDeliveryRecords(secretName)
+	records, err := s.manager.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{SecretName: secretName})
 	if err != nil {
 		return nil, err
 	}

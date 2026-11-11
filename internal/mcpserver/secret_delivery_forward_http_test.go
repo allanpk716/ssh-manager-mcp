@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -400,6 +401,33 @@ func TestSecretDeliveryForwarderRejectsTemplateOverLimit(t *testing.T) {
 	}
 	if len(records) != 0 {
 		t.Fatalf("超限模板不应留下下发记录，实际：%+v", records)
+	}
+}
+
+func TestSecretDeliveryForwarderUsesConfiguredUploadContentLimit(t *testing.T) {
+	largerLimit := store.UploadContentDefaultLimitBytes + 1024*1024
+	t.Setenv("SSHMGR_UPLOAD_CONTENT_MAX", strconv.FormatInt(largerLimit, 10))
+	fixture := newSecretDeliveryForwardFixture(t)
+
+	input := secretDeliveryRecord(fixture.grantedID)
+	input.Template = bytes.Repeat([]byte("x"), int(store.UploadContentDefaultLimitBytes)+1)
+	result, err := fixture.forwarder.RecordSecretDelivery(context.Background(), input)
+	if err != nil || result.Status != clientops.SecretDeliveryRecorded {
+		t.Fatalf("更大的上传内容上限内应允许登记：result=%+v err=%v", result, err)
+	}
+
+	input.Template = bytes.Repeat([]byte("y"), int(largerLimit)+1)
+	result, err = fixture.forwarder.RecordSecretDelivery(context.Background(), input)
+	if err == nil || result.Status != clientops.SecretDeliveryRefused ||
+		!strings.Contains(result.Message, "exceeds the upload content limit") {
+		t.Fatalf("超过生效上限应返回可呈现的拒绝原因：result=%+v err=%v", result, err)
+	}
+	records, err := fixture.store.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || len(records[0].Template) != int(store.UploadContentDefaultLimitBytes)+1 {
+		t.Fatalf("权威端应只保留生效上限内的模板，实际：%d 条", len(records))
 	}
 }
 

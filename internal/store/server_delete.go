@@ -30,10 +30,10 @@ type ServerDeleteCredential struct {
 	References int
 }
 
-// ServerDeleteDeliveryRecord 是删除预览里的一条机密项下发记录：哪个服务
+// DeliveryRecordImpact 是删除预览里的一条机密项下发记录：哪个服务
 // 器条目的哪个路径曾由 sshmgr 填值。引用的机密项即使已删除也按原名字列
 // 出，供 owner 核对随条目一起消失的线索。
-type ServerDeleteDeliveryRecord struct {
+type DeliveryRecordImpact struct {
 	ServerName  string
 	Path        string
 	FileSHA256  string
@@ -42,7 +42,7 @@ type ServerDeleteDeliveryRecord struct {
 }
 
 // ServerDeletePreview 是服务器条目删除影响清单，只覆盖当前级联删除会动
-// 到的数据；共享存储与下发记录不属于这份清单。
+// 到的数据，包含会随条目一起消失的下发记录。
 type ServerDeletePreview struct {
 	Server       *models.Server
 	Device       *models.Device
@@ -52,7 +52,7 @@ type ServerDeletePreview struct {
 	SecretNames  []string
 	Credentials  []ServerDeleteCredential
 	// DeliveryRecords 是会随条目一起删除的机密项下发记录。
-	DeliveryRecords []ServerDeleteDeliveryRecord
+	DeliveryRecords []DeliveryRecordImpact
 	digest          string
 }
 
@@ -149,7 +149,7 @@ func serverDeletePreviewTx(tx *sql.Tx, id string) (*ServerDeletePreview, error) 
 		return nil, err
 	}
 	preview.Credentials = impacts
-	deliveries, err := serverDeleteDeliveryRecordsTx(tx, srv.ID)
+	deliveries, err := deleteDeliveryRecordsTx(tx, false, srv.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,21 +158,28 @@ func serverDeletePreviewTx(tx *sql.Tx, id string) (*ServerDeletePreview, error) 
 	return preview, nil
 }
 
-// serverDeleteDeliveryRecordsTx 列出随服务器条目删除的下发记录，按路径排
-// 序；每条记录引用的机密项名字按字母顺序聚合。
-func serverDeleteDeliveryRecordsTx(tx *sql.Tx, serverID string) ([]ServerDeleteDeliveryRecord, error) {
+// deleteDeliveryRecordsTx 列出会随服务器条目或设备一起删除的下发记录。
+// byDevice 为真时按设备筛选，并先按服务器条目名排序；否则按服务器条目筛
+// 选并直接按路径排序。每条记录引用的机密项名字按字母顺序聚合。
+func deleteDeliveryRecordsTx(tx *sql.Tx, byDevice bool, id string) ([]DeliveryRecordImpact, error) {
+	predicate := "record.server_id=?"
+	orderBy := "record.path,record.id"
+	if byDevice {
+		predicate = "server.device_id=?"
+		orderBy = "server.name,record.path,record.id"
+	}
 	rows, err := tx.Query(`
 		SELECT server.name,record.path,record.file_sha256,record.written_at,record.id
 		FROM secret_delivery_records record
 		JOIN servers server ON server.id=record.server_id
-		WHERE record.server_id=? ORDER BY record.path,record.id`, serverID)
+		WHERE `+predicate+` ORDER BY `+orderBy, id)
 	if err != nil {
 		return nil, err
 	}
-	records := make([]ServerDeleteDeliveryRecord, 0)
+	records := make([]DeliveryRecordImpact, 0)
 	ids := make([]string, 0)
 	for rows.Next() {
-		var record ServerDeleteDeliveryRecord
+		var record DeliveryRecordImpact
 		var recordID string
 		var writtenAt int64
 		if err := rows.Scan(&record.ServerName, &record.Path, &record.FileSHA256, &writtenAt, &recordID); err != nil {
@@ -187,38 +194,15 @@ func serverDeleteDeliveryRecordsTx(tx *sql.Tx, serverID string) ([]ServerDeleteD
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(ids) == 0 {
-		return records, nil
-	}
-	return attachDeliveryRecordSecretNamesTx(tx, records, ids)
-}
-
-// attachDeliveryRecordSecretNamesTx 把每条下发记录引用的机密项名字按字母
-// 顺序填回删除预览条目；服务器条目删除与设备删除共用。
-func attachDeliveryRecordSecretNamesTx(
-	tx *sql.Tx, records []ServerDeleteDeliveryRecord, ids []string,
-) ([]ServerDeleteDeliveryRecord, error) {
-	refRows, err := tx.Query(`
-		SELECT record_id,secret_name FROM secret_delivery_record_secrets
-		WHERE record_id IN (`+strings.Repeat("?,", len(ids)-1)+`?)
-		ORDER BY record_id,secret_name`, stringIDsToAny(ids)...)
+	err = attachSecretDeliveryReferences(tx, records, ids, func(index int, refs []secretDeliveryReference) {
+		names := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			names = append(names, ref.SecretName)
+		}
+		records[index].SecretNames = names
+	})
 	if err != nil {
 		return nil, err
-	}
-	defer refRows.Close()
-	byRecord := make(map[string][]string, len(records))
-	for refRows.Next() {
-		var recordID, name string
-		if err := refRows.Scan(&recordID, &name); err != nil {
-			return nil, err
-		}
-		byRecord[recordID] = append(byRecord[recordID], name)
-	}
-	if err := refRows.Err(); err != nil {
-		return nil, err
-	}
-	for i := range records {
-		records[i].SecretNames = byRecord[ids[i]]
 	}
 	return records, nil
 }

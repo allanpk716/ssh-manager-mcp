@@ -17,11 +17,6 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// secretDeliveryMaxBodyBytes 允许模板原文按 JSON 的 Base64 编码到达默认上
-// 限，并给其余字段与 JSON 包装留出余量；模板本身仍由登记事务按同一上限
-// 复核。
-const secretDeliveryMaxBodyBytes = store.UploadContentDefaultLimitBytes*4/3 + 64<<10
-
 // secretDeliveryRequest 是 POST /secret-delivery-records 的请求体。设备、
 // 实例与授权 profile 字段会随请求发送，但权威端一律从设备码认证结果推导。
 type secretDeliveryRequest struct {
@@ -66,12 +61,12 @@ func (r *ServeRunner) handleSecretDeliveryRecord(w http.ResponseWriter, req *htt
 		http.Error(w, "method not allowed", status)
 		return
 	}
-	if req.ContentLength > secretDeliveryMaxBodyBytes {
+	if req.ContentLength > r.secretDeliveryMaxBodyBytes {
 		status = http.StatusRequestEntityTooLarge
 		http.Error(w, "request body too large", status)
 		return
 	}
-	req.Body = http.MaxBytesReader(w, req.Body, secretDeliveryMaxBodyBytes)
+	req.Body = http.MaxBytesReader(w, req.Body, r.secretDeliveryMaxBodyBytes)
 	var input secretDeliveryRequest
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		var tooLarge *http.MaxBytesError
@@ -123,9 +118,10 @@ func (r *ServeRunner) handleSecretDeliveryRecord(w http.ResponseWriter, req *htt
 		InitiatingDeviceName:   input.InitiatingDeviceName,
 		InitiatingInstanceName: input.InitiatingInstanceName,
 		AuthorizationProfileID: input.AuthorizationProfileID,
+		TemplateLimitBytes:     r.uploadContentCap,
 	}, store.ForwardedWriteSource(cacheToken.ID))
 	var refusal *store.SecretDeliveryRefusalError
-	var tooLarge *store.ErrSecretDeliveryTemplateTooLarge
+	var tooLarge *store.SecretDeliveryTemplateTooLargeError
 	switch {
 	case err == nil:
 		status = http.StatusOK
@@ -138,8 +134,7 @@ func (r *ServeRunner) handleSecretDeliveryRecord(w http.ResponseWriter, req *htt
 	case errors.As(err, &tooLarge):
 		status = http.StatusRequestEntityTooLarge
 		writeSecretDeliveryJSON(w, status, secretDeliveryErrorResponse{Error: tooLarge.Error()})
-	case errors.Is(err, store.ErrSecretDeliveryInvalidPath),
-		errors.Is(err, store.ErrSecretDeliveryTemplateContainsValue):
+	case errors.Is(err, store.ErrSecretDeliveryInvalidPath):
 		status = http.StatusBadRequest
 		writeSecretDeliveryJSON(w, status, secretDeliveryErrorResponse{Error: err.Error()})
 	default:

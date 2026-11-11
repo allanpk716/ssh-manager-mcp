@@ -115,7 +115,7 @@ func (w *stubServerWriter) DeleteServerPreview(identifier string) (*ServerDelete
 		AnchorCount: 1, ProfileNames: []string{"运维"}, SecretNames: []string{"deploy_note"},
 		DeletedCredentials: []string{"登录凭据（密码）"},
 		KeptCredentials:    []string{"sudo 凭据（密码）（仍被 1 台服务器引用）"},
-		DeliveryRecords: []ServerDeleteDeliveryRecordView{{
+		DeliveryRecords: []DeliveryRecordImpactView{{
 			ServerName: "fine", Path: "/etc/app/token.yml", SecretNames: []string{"API_TOKEN"},
 		}},
 		Digest: "digest-1",

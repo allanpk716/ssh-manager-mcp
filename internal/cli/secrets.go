@@ -218,10 +218,11 @@ func secretsRmCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			if err := printSecretDeliveryReferences(cmd.OutOrStdout(), s, args[0]); err != nil {
+			manager := secretmanage.New(s)
+			if err := printSecretDeliveryReferences(cmd.OutOrStdout(), manager, args[0]); err != nil {
 				return err
 			}
-			if err := secretmanage.New(s).DeleteSecret(args[0], secretmanage.CLISource()); err != nil {
+			if err := manager.DeleteSecret(args[0], secretmanage.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "已删除机密项 %s\n", args[0])
@@ -232,8 +233,8 @@ func secretsRmCmd() *cobra.Command {
 
 // printSecretDeliveryReferences 在删除机密项前列出引用它的全部下发记录。
 // 删除机密项不会删除记录，这里只提示服务器条目与路径，不显示模板与值。
-func printSecretDeliveryReferences(out io.Writer, s *store.Store, name string) error {
-	records, err := s.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{SecretName: name})
+func printSecretDeliveryReferences(out io.Writer, manager *secretmanage.Manager, name string) error {
+	records, err := manager.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{SecretName: name})
 	if err != nil {
 		return err
 	}
@@ -295,6 +296,7 @@ func secretsRecordsCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
+			manager := secretmanage.New(s)
 
 			filter := store.SecretDeliveryRecordFilter{SecretName: name}
 			if server != "" {
@@ -307,7 +309,7 @@ func secretsRecordsCmd() *cobra.Command {
 				}
 				filter.ServerID = resolved.ID
 			}
-			records, err := s.SecretDeliveryRecords(filter)
+			records, err := manager.SecretDeliveryRecords(filter)
 			if err != nil {
 				return err
 			}

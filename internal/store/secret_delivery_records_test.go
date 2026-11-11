@@ -2,7 +2,6 @@ package store
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"reflect"
 	"strings"
@@ -120,7 +119,7 @@ func TestRecordSecretDeliveryRejectsTemplateOverUploadContentLimit(t *testing.T)
 		InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
 		AuthorizationProfileID: profileID,
 	}, CLISource())
-	var tooLarge *ErrSecretDeliveryTemplateTooLarge
+	var tooLarge *SecretDeliveryTemplateTooLargeError
 	if !errors.As(err, &tooLarge) || tooLarge.Limit != UploadContentDefaultLimitBytes ||
 		tooLarge.Size != int64(len(template)) {
 		t.Fatalf("超限模板应返回带大小的拒绝错误，实际：%v", err)
@@ -134,31 +133,64 @@ func TestRecordSecretDeliveryRejectsTemplateOverUploadContentLimit(t *testing.T)
 	}
 }
 
-func TestRecordSecretDeliveryRejectsTemplateContainingSecretValue(t *testing.T) {
+func TestRecordSecretDeliveryUsesCallerProvidedTemplateLimit(t *testing.T) {
 	s, serverID, profileID := seedSecretDeliveryVault(t)
-	if err := s.SetSecretValue("API_TOKEN", []byte("new-secret-value-must-not-leak"), CLISource()); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := s.RecordSecretDelivery(SecretDeliveryRecordInput{
+	input := SecretDeliveryRecordInput{
 		ServerID: serverID, Path: "/etc/app/config.yml",
-		Template:   []byte("token: secret-value-must-not-leak"),
-		FileSHA256: strings.Repeat("c", 64), WrittenAt: time.Unix(1760000800, 0),
+		FileSHA256: strings.Repeat("d", 64), WrittenAt: time.Unix(1760000600, 0),
 		Secrets: []SecretDeliverySecret{{
 			Name: "API_TOKEN", ValueVersion: 1,
 		}},
 		InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
 		AuthorizationProfileID: profileID,
+		TemplateLimitBytes:     UploadContentDefaultLimitBytes + 1024,
+	}
+	input.Template = bytes.Repeat([]byte("x"), int(UploadContentDefaultLimitBytes)+1)
+	if _, err := s.RecordSecretDelivery(input, CLISource()); err != nil {
+		t.Fatalf("调用方给定的更大上限内应允许登记：%v", err)
+	}
+
+	input.Template = bytes.Repeat([]byte("y"), int(input.TemplateLimitBytes)+1)
+	_, err := s.RecordSecretDelivery(input, CLISource())
+	var tooLarge *SecretDeliveryTemplateTooLargeError
+	if !errors.As(err, &tooLarge) || tooLarge.Limit != input.TemplateLimitBytes ||
+		tooLarge.Size != int64(len(input.Template)) {
+		t.Fatalf("超过调用方给定上限应返回带大小与上限的错误，实际：%v", err)
+	}
+}
+
+func TestRecordSecretDeliveryAllowsTemplateContainingSecretValueText(t *testing.T) {
+	s, serverID, profileID := seedSecretDeliveryVault(t)
+	if err := s.SetSecretValue("API_TOKEN", []byte("new-secret-value-must-not-leak"), CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddSecret("PORT_TOKEN", "端口机密项", []byte("80808080"), CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AllowSecrets([]string{"PORT_TOKEN"}, []string{"web-1"}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.RecordSecretDelivery(SecretDeliveryRecordInput{
+		ServerID: serverID, Path: "/etc/app/config.yml",
+		Template:   []byte("port: 80808080\ntoken: {{sshmgr-secret:API_TOKEN}}"),
+		FileSHA256: strings.Repeat("c", 64), WrittenAt: time.Unix(1760000800, 0),
+		Secrets: []SecretDeliverySecret{
+			{Name: "API_TOKEN", ValueVersion: 2},
+			{Name: "PORT_TOKEN", ValueVersion: 1},
+		},
+		InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+		AuthorizationProfileID: profileID,
 	}, CLISource())
-	if !errors.Is(err, ErrSecretDeliveryTemplateContainsValue) {
-		t.Fatalf("模板含机密项值应拒绝登记，实际：%v", err)
+	if err != nil {
+		t.Fatalf("模板是否包含机密项值由调用方保证，登记口不应解密 vault：%v", err)
 	}
 	records, err := s.SecretDeliveryRecords(SecretDeliveryRecordFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 0 {
-		t.Fatalf("含值模板不应落库，实际：%+v", records)
+	if len(records) != 1 || string(records[0].Template) != "port: 80808080\ntoken: {{sshmgr-secret:API_TOKEN}}" {
+		t.Fatalf("模板文本包含机密项值也不应阻止登记，实际：%+v", records)
 	}
 }
 
@@ -447,8 +479,8 @@ func TestRecordSecretDeliveryReplacesSamePathAndNormalizesPathKey(t *testing.T) 
 			strings.Contains(row.Command, "new-secret-value-must-not-leak") {
 			t.Fatalf("审计泄露机密项值：%s", row.Command)
 		}
-		oldTemplate := base64.StdEncoding.EncodeToString([]byte("first: {{sshmgr-secret:API_TOKEN}}"))
-		if row.Action == "secret-delivery-replace" && strings.Contains(row.Command, oldTemplate) {
+		if row.Action == "secret-delivery-replace" &&
+			strings.Contains(row.Command, `"previous_template":"first: {{sshmgr-secret:API_TOKEN}}"`) {
 			sawReplacementHistory = true
 		}
 		if row.Action == "secret-delivery-replace" &&
@@ -663,10 +695,10 @@ func TestServerDeletePreviewListsAndCascadesDeliveryRecords(t *testing.T) {
 	}
 }
 
-// TestServerDeleteDeliveryRecordsDoNotAdvanceRevision 把「下发记录本身的删
+// TestDeliveryRecordImpactsDoNotAdvanceRevision 把「下发记录本身的删
 // 除不推动快照修订号」钉在存储层：结构完全相同、唯一差别是是否登记过下发
 // 记录的两个库，删除服务器条目后的修订号增量必须相同。
-func TestServerDeleteDeliveryRecordsDoNotAdvanceRevision(t *testing.T) {
+func TestDeliveryRecordImpactsDoNotAdvanceRevision(t *testing.T) {
 	withRecord, serverID, profileID := seedSecretDeliveryVault(t)
 	record := SecretDeliveryRecordInput{
 		ServerID: serverID, Path: "/etc/app/config.yml",

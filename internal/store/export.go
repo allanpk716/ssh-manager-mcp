@@ -719,32 +719,16 @@ func (s *Store) snapshotSecretDeliveryRecords() ([]SnapshotSecretDeliveryRecord,
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(ids) == 0 {
-		return records, nil
-	}
-	refRows, err := s.db.Query(`
-		SELECT record_id,secret_id,secret_name,value_version
-		FROM secret_delivery_record_secrets
-		WHERE record_id IN (`+strings.Repeat("?,", len(ids)-1)+`?)
-		ORDER BY record_id,secret_name`, stringIDsToAny(ids)...)
+	err = attachSecretDeliveryReferences(s.db, records, ids, func(index int, refs []secretDeliveryReference) {
+		records[index].Secrets = make([]SnapshotSecretDeliverySecretRef, 0, len(refs))
+		for _, ref := range refs {
+			records[index].Secrets = append(records[index].Secrets, SnapshotSecretDeliverySecretRef{
+				SecretID: ref.SecretID, SecretName: ref.SecretName, ValueVersion: ref.ValueVersion,
+			})
+		}
+	})
 	if err != nil {
 		return nil, err
-	}
-	defer refRows.Close()
-	byRecord := make(map[string][]SnapshotSecretDeliverySecretRef, len(records))
-	for refRows.Next() {
-		var recordID string
-		var ref SnapshotSecretDeliverySecretRef
-		if err := refRows.Scan(&recordID, &ref.SecretID, &ref.SecretName, &ref.ValueVersion); err != nil {
-			return nil, err
-		}
-		byRecord[recordID] = append(byRecord[recordID], ref)
-	}
-	if err := refRows.Err(); err != nil {
-		return nil, err
-	}
-	for i := range records {
-		records[i].Secrets = byRecord[records[i].ID]
 	}
 	return records, nil
 }

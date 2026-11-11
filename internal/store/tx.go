@@ -291,7 +291,7 @@ func deleteServerEntryTx(tx *sql.Tx, id string, auditAt time.Time) (*models.Serv
 	}
 	// 票 #230：条目删除会让它的下发记录一起消失。删除前读出记录，删除后
 	// 为每条写一行审计；审计摘要只含服务器名、路径与机密项名字。
-	deliveryRecords, err := serverDeleteDeliveryRecordsTx(tx, id)
+	deliveryRecords, err := deleteDeliveryRecordsTx(tx, false, id)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +314,7 @@ func deleteServerEntryTx(tx *sql.Tx, id string, auditAt time.Time) (*models.Serv
 // writeServerDeleteDeliveryAudits 为随服务器条目删除的下发记录各写一行审
 // 计。摘要按白名单只写服务器名、路径、机密项名字与原因。
 func writeServerDeleteDeliveryAudits(
-	tx *sql.Tx, serverName string, records []ServerDeleteDeliveryRecord, at time.Time,
+	tx *sql.Tx, serverName string, records []DeliveryRecordImpact, at time.Time,
 ) error {
 	for _, record := range records {
 		if err := writeSecretAuditTx(tx, at, "secret-delivery-rm", map[string]any{

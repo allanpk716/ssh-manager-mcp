@@ -181,7 +181,7 @@ func printDeviceDeletePreview(w io.Writer, preview *store.DeviceDeletePreview) {
 	}
 	for _, record := range preview.DeliveryRecords {
 		fmt.Fprintf(w, "  %s：%s（机密项 %s）\n",
-			record.ServerName, record.Path, strings.Join(record.SecretNames, "、"))
+			record.ServerName, record.Path, joinOrNone(record.SecretNames))
 	}
 	fmt.Fprintln(w, "网络成员：")
 	if len(preview.Memberships) == 0 {

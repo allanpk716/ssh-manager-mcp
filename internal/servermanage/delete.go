@@ -14,7 +14,7 @@ var ErrDeletePreviewChanged = store.ErrServerDeletePreviewChanged
 type CredentialImpact = store.ServerDeleteCredential
 
 // DeliveryRecordImpact 是删除预览里的一条机密项下发记录。
-type DeliveryRecordImpact = store.ServerDeleteDeliveryRecord
+type DeliveryRecordImpact = store.DeliveryRecordImpact
 
 // DeletePreview 是与界面无关的删除影响清单加可比对摘要。设备在删除服务器
 // 条目时保留。

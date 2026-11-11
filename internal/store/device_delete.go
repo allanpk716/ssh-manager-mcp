@@ -32,7 +32,7 @@ type DeviceDeletePreview struct {
 	SecretServerAllows []*DeviceDeleteSecretAllow
 	// DeliveryRecords 是该设备全部服务器条目的机密项下发记录，随条目一起
 	// 删除。
-	DeliveryRecords   []ServerDeleteDeliveryRecord
+	DeliveryRecords   []DeliveryRecordImpact
 	Memberships       []*models.NetworkMembership
 	LayoutCoordinates []*models.DeviceLayoutCoordinate
 	// 软件清单相关数量。SoftwareItemCount 是实测与生效声明合成后的条目
@@ -151,7 +151,7 @@ func (s *Store) deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePre
 	if err != nil {
 		return nil, err
 	}
-	deliveryRecords, err := deviceDeleteDeliveryRecordsTx(tx, device.ID)
+	deliveryRecords, err := deleteDeliveryRecordsTx(tx, true, device.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -166,41 +166,6 @@ func (s *Store) deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePre
 		SoftwareObservedItemCount:  softwareCounts.ObservedItems,
 		SoftwareChangeHistoryCount: softwareCounts.ChangeHistory,
 	}, nil
-}
-
-// deviceDeleteDeliveryRecordsTx 列出该设备全部服务器条目的下发记录，按服
-// 务器条目名与路径排序；机密项名字按字母顺序聚合。
-func deviceDeleteDeliveryRecordsTx(tx *sql.Tx, deviceID string) ([]ServerDeleteDeliveryRecord, error) {
-	rows, err := tx.Query(`
-		SELECT server.name,record.path,record.file_sha256,record.written_at,record.id
-		FROM secret_delivery_records record
-		JOIN servers server ON server.id=record.server_id
-		WHERE server.device_id=? ORDER BY server.name,record.path,record.id`, deviceID)
-	if err != nil {
-		return nil, err
-	}
-	records := make([]ServerDeleteDeliveryRecord, 0)
-	ids := make([]string, 0)
-	for rows.Next() {
-		var record ServerDeleteDeliveryRecord
-		var recordID string
-		var writtenAt int64
-		if err := rows.Scan(&record.ServerName, &record.Path, &record.FileSHA256, &writtenAt, &recordID); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		record.WrittenAt = time.Unix(writtenAt, 0)
-		records = append(records, record)
-		ids = append(ids, recordID)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(ids) == 0 {
-		return records, nil
-	}
-	return attachDeliveryRecordSecretNamesTx(tx, records, ids)
 }
 
 // deviceSoftwareCounts 统计设备删除预览需要的软件清单数量。

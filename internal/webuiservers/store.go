@@ -240,7 +240,7 @@ func deletePreviewView(preview *servermanage.DeletePreview) *webui.ServerDeleteP
 		SecretNames: preview.SecretNames, Digest: preview.Digest,
 	}
 	for _, record := range preview.DeliveryRecords {
-		view.DeliveryRecords = append(view.DeliveryRecords, webui.ServerDeleteDeliveryRecordView{
+		view.DeliveryRecords = append(view.DeliveryRecords, webui.DeliveryRecordImpactView{
 			ServerName: record.ServerName, Path: record.Path, SecretNames: record.SecretNames,
 		})
 	}

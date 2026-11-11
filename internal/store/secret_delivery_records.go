@@ -1,7 +1,6 @@
 package store
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -15,8 +14,8 @@ import (
 )
 
 // UploadContentDefaultLimitBytes 是 upload_content 未设置环境变量时使用的
-// 解码后内容上限。下发记录模板原文复用同一个默认上限；环境变量只影响
-// 工具入口的当次请求大小，不改变权威 vault 的这条防线。
+// 解码后内容上限。下发记录模板原文默认使用同一个上限；调用方解析出不同的
+// 生效上限时，必须在登记请求里显式传入。
 const UploadContentDefaultLimitBytes int64 = 8 << 20 // 8 MiB
 
 // SecretDeliverySecret 是登记请求里一个机密项的名字与当时写入的值版本号。
@@ -25,9 +24,9 @@ type SecretDeliverySecret struct {
 	ValueVersion int64
 }
 
-// ErrSecretDeliveryTemplateTooLarge 表示带占位符的模板原文超过 upload_content
-// 的默认内容上限。
-type ErrSecretDeliveryTemplateTooLarge struct {
+// SecretDeliveryTemplateTooLargeError 表示带占位符的模板原文超过调用方
+// 传入的 upload_content 生效上限。
+type SecretDeliveryTemplateTooLargeError struct {
 	Size  int64
 	Limit int64
 }
@@ -35,16 +34,12 @@ type ErrSecretDeliveryTemplateTooLarge struct {
 // ErrSecretDeliveryInvalidPath 表示登记路径不是目标操作系统上的绝对路径。
 var ErrSecretDeliveryInvalidPath = errors.New("delivery path must be absolute")
 
-// ErrSecretDeliveryTemplateContainsValue 表示模板原文包含了可解密取得的机
-// 密项当前值或上一个值；这样的模板绝不能进入下发记录或审计。
-var ErrSecretDeliveryTemplateContainsValue = errors.New("delivery template contains a secret value")
-
-func (e *ErrSecretDeliveryTemplateTooLarge) Error() string {
+func (e *SecretDeliveryTemplateTooLargeError) Error() string {
 	return fmt.Sprintf("template (%d bytes) exceeds the upload content limit (%d bytes)", e.Size, e.Limit)
 }
 
-// SecretDeliveryRecordInput 是下发记录登记口的完整输入。模板原文只允许含
-// 占位符，不允许携带机密项值；授权范围使用发起客户端绑定或本机会话所属
+// SecretDeliveryRecordInput 是下发记录登记口的完整输入。调用方保证模板
+// 原文不携带解密后的机密项值；授权范围使用发起客户端绑定或本机会话所属
 // 的 profile 编号。
 type SecretDeliveryRecordInput struct {
 	ServerID               string
@@ -56,6 +51,10 @@ type SecretDeliveryRecordInput struct {
 	InitiatingDeviceName   string
 	InitiatingInstanceName string
 	AuthorizationProfileID string
+	// TemplateLimitBytes 是调用方解析出的 upload_content 生效上限；空值或
+	// 非正数表示使用默认上限。存储层不读取环境变量，避免同一进程内两处
+	// 解析结果不一致。
+	TemplateLimitBytes int64
 }
 
 // SecretDeliverySecretRecord 是查询结果里的机密项引用。SecretID 只用于后
@@ -150,8 +149,9 @@ func (s *Store) RecordSecretDelivery(input SecretDeliveryRecordInput, source Wri
 	if err != nil {
 		return SecretDeliveryRecordResult{}, err
 	}
-	path, pathKey := normalizeSecretDeliveryPath(input.Path, models.NormalizeShellType(shellType).IsWindows())
-	if !secretDeliveryPathIsAbsolute(path, models.NormalizeShellType(shellType).IsWindows()) {
+	targetIsWindows := models.NormalizeShellType(shellType).IsWindows()
+	path, pathKey := normalizeSecretDeliveryPath(input.Path, targetIsWindows)
+	if !secretDeliveryPathIsAbsolute(path, targetIsWindows) {
 		return SecretDeliveryRecordResult{}, ErrSecretDeliveryInvalidPath
 	}
 	authorizationProfileID := input.AuthorizationProfileID
@@ -191,10 +191,10 @@ func (s *Store) RecordSecretDelivery(input SecretDeliveryRecordInput, source Wri
 
 	refs := make([]SecretDeliverySecretRecord, 0, len(input.Secrets))
 	for _, secret := range input.Secrets {
-		var secretID string
+		var secretID, canonicalName string
 		err = tx.QueryRow(
-			`SELECT id FROM secrets WHERE name_lower=?`, strings.ToLower(secret.Name),
-		).Scan(&secretID)
+			`SELECT id,name FROM secrets WHERE name_lower=?`, strings.ToLower(secret.Name),
+		).Scan(&secretID, &canonicalName)
 		if errors.Is(err, sql.ErrNoRows) {
 			return s.refuseSecretDeliveryTx(tx, input, serverName, path, secret.Name, SecretDeliveryRefusalSecretNotWritable, source)
 		}
@@ -213,13 +213,10 @@ func (s *Store) RecordSecretDelivery(input SecretDeliveryRecordInput, source Wri
 			return SecretDeliveryRecordResult{}, err
 		}
 		refs = append(refs, SecretDeliverySecretRecord{
-			SecretID: secretID, Name: secret.Name, ValueVersion: secret.ValueVersion,
+			SecretID: secretID, Name: canonicalName, ValueVersion: secret.ValueVersion,
 		})
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
-	if err := s.ensureSecretDeliveryTemplateHasNoValuesTx(tx, input.Template); err != nil {
-		return SecretDeliveryRecordResult{}, err
-	}
 
 	var existingID string
 	var oldPath string
@@ -292,7 +289,10 @@ func (s *Store) RecordSecretDelivery(input SecretDeliveryRecordInput, source Wri
 	}
 	action := "secret-delivery-record"
 	summary := map[string]any{
-		"server": serverName, "path": path, "secrets": secretDeliveryAuditNames(refs),
+		"server": serverName, "path": path,
+		"secrets": secretDeliveryJoinedNames(refs, func(ref SecretDeliverySecretRecord) string {
+			return ref.Name
+		}),
 		"device": input.InitiatingDeviceName, "instance": input.InitiatingInstanceName,
 	}
 	if source.kind == AuditSourceForward {
@@ -302,7 +302,7 @@ func (s *Store) RecordSecretDelivery(input SecretDeliveryRecordInput, source Wri
 		action = "secret-delivery-replace"
 		summary["previous_path"] = oldPath
 		summary["previous_sha256"] = oldDigest
-		summary["previous_template"] = append([]byte(nil), oldTemplate...)
+		summary["previous_template"] = string(oldTemplate)
 		summary["previous_secrets"] = secretDeliveryAuditReferences(oldRefs)
 		summary["previous_written_at"] = oldWrittenAt
 		summary["previous_device"] = oldDevice
@@ -327,8 +327,10 @@ func (s *Store) refuseSecretDeliveryTx(
 ) (SecretDeliveryRecordResult, error) {
 	summary := map[string]any{
 		"reason": string(reason), "server": serverName, "path": path,
-		"secrets": secretDeliveryInputNames(input.Secrets),
-		"device":  input.InitiatingDeviceName, "instance": input.InitiatingInstanceName,
+		"secrets": secretDeliveryJoinedNames(input.Secrets, func(secret SecretDeliverySecret) string {
+			return secret.Name
+		}),
+		"device": input.InitiatingDeviceName, "instance": input.InitiatingInstanceName,
 	}
 	if secretName != "" {
 		summary["refused_secret"] = secretName
@@ -386,9 +388,13 @@ func validateSecretDeliveryInput(input SecretDeliveryRecordInput, source WriteSo
 	if input.WrittenAt.IsZero() {
 		return errors.New("written-at time is required")
 	}
-	if int64(len(input.Template)) > UploadContentDefaultLimitBytes {
-		return &ErrSecretDeliveryTemplateTooLarge{
-			Size: int64(len(input.Template)), Limit: UploadContentDefaultLimitBytes,
+	limit := input.TemplateLimitBytes
+	if limit <= 0 {
+		limit = UploadContentDefaultLimitBytes
+	}
+	if int64(len(input.Template)) > limit {
+		return &SecretDeliveryTemplateTooLargeError{
+			Size: int64(len(input.Template)), Limit: limit,
 		}
 	}
 	if _, err := hex.DecodeString(input.FileSHA256); err != nil || len(input.FileSHA256) != sha256.Size*2 {
@@ -397,10 +403,10 @@ func validateSecretDeliveryInput(input SecretDeliveryRecordInput, source WriteSo
 	return nil
 }
 
-func secretDeliveryInputNames(secrets []SecretDeliverySecret) string {
-	names := make([]string, 0, len(secrets))
-	for _, secret := range secrets {
-		names = append(names, secret.Name)
+func secretDeliveryJoinedNames[T any](items []T, name func(T) string) string {
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		names = append(names, name(item))
 	}
 	return strings.Join(names, ",")
 }
@@ -422,55 +428,12 @@ func secretDeliveryPathIsAbsolute(path string, windows bool) bool {
 		path[1] == ':' && path[2] == '/'
 }
 
-func secretDeliveryAuditNames(refs []SecretDeliverySecretRecord) string {
-	names := make([]string, 0, len(refs))
-	for _, ref := range refs {
-		names = append(names, ref.Name)
-	}
-	return strings.Join(names, ",")
-}
-
 func secretDeliveryAuditReferences(refs []SecretDeliverySecretRecord) string {
 	parts := make([]string, 0, len(refs))
 	for _, ref := range refs {
 		parts = append(parts, fmt.Sprintf("%s@%d", ref.Name, ref.ValueVersion))
 	}
 	return strings.Join(parts, ",")
-}
-
-func (s *Store) ensureSecretDeliveryTemplateHasNoValuesTx(
-	tx *sql.Tx,
-	template []byte,
-) error {
-	rows, err := tx.Query(`SELECT value_blob,previous_value_blob FROM secrets`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var currentBlob, previousBlob []byte
-		if err := rows.Scan(&currentBlob, &previousBlob); err != nil {
-			return err
-		}
-		current, err := open(s.masterKey, currentBlob)
-		if err != nil {
-			return err
-		}
-		if len(current) > 0 && bytes.Contains(template, current) {
-			return ErrSecretDeliveryTemplateContainsValue
-		}
-		if len(previousBlob) == 0 {
-			continue
-		}
-		previous, err := open(s.masterKey, previousBlob)
-		if err != nil {
-			return err
-		}
-		if len(previous) > 0 && bytes.Contains(template, previous) {
-			return ErrSecretDeliveryTemplateContainsValue
-		}
-	}
-	return rows.Err()
 }
 
 func secretDeliverySecretsTx(tx *sql.Tx, recordID string) ([]SecretDeliverySecretRecord, error) {
@@ -505,7 +468,7 @@ func (s *Store) SecretDeliveryRecords(filter SecretDeliveryRecordFilter) ([]Secr
 		WHERE (?='' OR record.server_id=?)
 		  AND (?='' OR EXISTS (
 		      SELECT 1 FROM secret_delivery_record_secrets ref
-		      WHERE ref.record_id=record.id AND ref.secret_name=?
+		      WHERE ref.record_id=record.id AND lower(ref.secret_name)=lower(?)
 		  ))
 		ORDER BY server.name,record.path`, filter.ServerID, filter.ServerID, filter.SecretName, filter.SecretName)
 	if err != nil {
@@ -533,42 +496,69 @@ func (s *Store) SecretDeliveryRecords(filter SecretDeliveryRecordFilter) ([]Secr
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if err := s.attachSecretDeliverySecrets(records, ids); err != nil {
+	err = attachSecretDeliveryReferences(s.db, records, ids, func(index int, refs []secretDeliveryReference) {
+		records[index].Secrets = make([]SecretDeliverySecretRecord, 0, len(refs))
+		for _, ref := range refs {
+			records[index].Secrets = append(records[index].Secrets, SecretDeliverySecretRecord{
+				SecretID: ref.SecretID, Name: ref.SecretName, ValueVersion: ref.ValueVersion,
+				Deleted: !ref.Exists,
+			})
+		}
+	})
+	if err != nil {
 		return nil, err
 	}
 	return records, nil
 }
 
-func (s *Store) attachSecretDeliverySecrets(records []SecretDeliveryRecord, ids []string) error {
-	if len(records) == 0 {
+// secretDeliveryReference 是关联表里一条下发记录机密项引用；Exists 供展示
+// 层把已删除的机密项标出来。
+type secretDeliveryReference struct {
+	RecordID     string
+	SecretID     string
+	SecretName   string
+	ValueVersion int64
+	Exists       bool
+}
+
+// attachSecretDeliveryReferences 查出一批记录引用的机密项并挂回调用方给出
+// 的记录切片。ids 与 records 按下标一一对应；assign 在公共查询和挂回循环
+// 里是唯一适配不同记录形状的位置。
+func attachSecretDeliveryReferences[T any](
+	db dbtx, records []T, ids []string, assign func(index int, refs []secretDeliveryReference),
+) error {
+	if len(records) == 0 && len(ids) == 0 {
 		return nil
 	}
-	rows, err := s.db.Query(`
+	if len(records) != len(ids) {
+		return fmt.Errorf("delivery records and ids are misaligned: %d != %d", len(records), len(ids))
+	}
+	rows, err := db.Query(`
 		SELECT ref.record_id,ref.secret_id,ref.secret_name,ref.value_version,
 		       EXISTS(SELECT 1 FROM secrets secret WHERE secret.id=ref.secret_id)
 		FROM secret_delivery_record_secrets ref
 		WHERE ref.record_id IN (`+strings.Repeat("?,", len(ids)-1)+`?)
-		ORDER BY ref.secret_name`, stringIDsToAny(ids)...)
+		ORDER BY ref.record_id,ref.secret_name`, stringIDsToAny(ids)...)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	byRecord := make(map[string][]SecretDeliverySecretRecord, len(records))
+	byRecord := make(map[string][]secretDeliveryReference, len(records))
 	for rows.Next() {
 		var recordID string
-		var ref SecretDeliverySecretRecord
-		var exists bool
-		if err := rows.Scan(&recordID, &ref.SecretID, &ref.Name, &ref.ValueVersion, &exists); err != nil {
+		var ref secretDeliveryReference
+		if err := rows.Scan(
+			&recordID, &ref.SecretID, &ref.SecretName, &ref.ValueVersion, &ref.Exists,
+		); err != nil {
 			return err
 		}
-		ref.Deleted = !exists
 		byRecord[recordID] = append(byRecord[recordID], ref)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for i := range records {
-		records[i].Secrets = byRecord[ids[i]]
+	for index := range records {
+		assign(index, byRecord[ids[index]])
 	}
 	return nil
 }
