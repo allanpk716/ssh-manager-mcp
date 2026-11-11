@@ -290,7 +290,11 @@ func relayLocalCopyForProfile(
 			tm.mu.Unlock()
 			tm.runTask(taskContext, task, client,
 				func(execContext context.Context, stdout, stderr io.Writer) (int, bool, error) {
-					return client.ExecWriters(execContext, command, 0, stdout, stderr)
+					code, timedOut, err := client.ExecWriters(execContext, command, 0, stdout, stderr)
+					if err == nil && code != 0 {
+						err = errors.New(relayLocalCopyExitMessage(code, targetPath))
+					}
+					return code, timedOut, err
 				}, nil)
 		},
 	}
@@ -576,10 +580,16 @@ func relayLocalCopyCheckExec(
 func buildRelayLocalCopyCommand(sourcePath, targetPath string) string {
 	partialPath := targetPath + relayPartialSuffix
 	localCopyNotice := "本地拷贝模式：中断、停止或失败后不能续传，重跑会从文件开头覆盖旧半成品"
+	partialDirectoryNotice := fmt.Sprintf(
+		"半成品路径 %s 是目录；relay_file 的半成品文件不能覆盖目录，请先处理后再重试", partialPath)
 	return strings.Join([]string{
 		"set -eu",
 		"printf '%s\\n' " + sshbroker.POSIXShellQuote(localCopyNotice),
 		fmt.Sprintf("mkdir -p -- %s", sshbroker.POSIXShellQuote(path.Dir(targetPath))),
+		fmt.Sprintf("if [ -d %s ] && [ ! -L %s ]; then printf '%%s\\n' %s; exit 5; fi",
+			sshbroker.POSIXShellQuote(partialPath), sshbroker.POSIXShellQuote(partialPath),
+			sshbroker.POSIXShellQuote(partialDirectoryNotice)),
+		fmt.Sprintf("rm -f -- %s", sshbroker.POSIXShellQuote(partialPath)),
 		"printf '%s\\n' " + sshbroker.POSIXShellQuote(fmt.Sprintf(
 			"cp -- %s %s", sshbroker.POSIXShellQuote(sourcePath), sshbroker.POSIXShellQuote(partialPath))),
 		fmt.Sprintf("cp -- %s %s", sshbroker.POSIXShellQuote(sourcePath), sshbroker.POSIXShellQuote(partialPath)),
@@ -587,6 +597,19 @@ func buildRelayLocalCopyCommand(sourcePath, targetPath string) string {
 			"mv -- %s %s", sshbroker.POSIXShellQuote(partialPath), sshbroker.POSIXShellQuote(targetPath))),
 		fmt.Sprintf("mv -- %s %s", sshbroker.POSIXShellQuote(partialPath), sshbroker.POSIXShellQuote(targetPath)),
 	}, "\n")
+}
+
+// relayLocalCopyExitMessage 把固定拷贝命令的可识别退出码翻译成操作提
+// 示；未知退出码按通用失败呈现，细节仍在任务输出里。
+func relayLocalCopyExitMessage(code int, targetPath string) string {
+	switch code {
+	case 5:
+		return fmt.Sprintf(
+			"半成品路径 %s 是目录；relay_file 的半成品文件不能覆盖目录，请先处理后再重试",
+			targetPath+relayPartialSuffix)
+	default:
+		return fmt.Sprintf("本地拷贝命令失败，退出码 %d；详见任务输出", code)
+	}
 }
 
 func isWindowsDrivePath(remotePath string) bool {

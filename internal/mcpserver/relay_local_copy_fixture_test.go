@@ -409,6 +409,30 @@ func (environment *relayLocalCopyEnv) serveCopyCommand(
 	command string, stdout, stderr io.Writer,
 ) int {
 	words := splitPOSIXShellWords(command)
+	partialRemote := ""
+	for index, word := range words {
+		if word == "rm" && index+3 < len(words) &&
+			words[index+1] == "-f" && words[index+2] == "--" {
+			partialRemote = words[index+3]
+			break
+		}
+	}
+	if partialRemote == "" {
+		stderr.Write([]byte("固定命令缺少半成品清理步骤\n"))
+		return 1
+	}
+	partial := environment.hostPath(partialRemote)
+	if partialInfo, err := os.Lstat(partial); err == nil {
+		if partialInfo.IsDir() && partialInfo.Mode()&os.ModeSymlink == 0 {
+			fmt.Fprintf(stdout, "半成品路径 %s 是目录；relay_file 的半成品文件不能覆盖目录，请先处理后再重试\n",
+				partialRemote)
+			return 5
+		}
+		if err := os.Remove(partial); err != nil {
+			fmt.Fprintf(stderr, "删除旧半成品失败：%v\n", err)
+			return 1
+		}
+	}
 	cpIndex := -1
 	for index, word := range words {
 		if word == "cp" && index+3 < len(words) && words[index+1] == "--" {
@@ -422,9 +446,8 @@ func (environment *relayLocalCopyEnv) serveCopyCommand(
 	}
 	source := environment.hostPath(words[cpIndex+2])
 	sourceRemote := words[cpIndex+2]
-	partialRemote := words[cpIndex+3]
+	partialRemote = words[cpIndex+3]
 	targetRemote := strings.TrimSuffix(partialRemote, ".sshmgr-partial")
-	partial := environment.hostPath(partialRemote)
 	target := environment.hostPath(targetRemote)
 	if err := os.MkdirAll(filepath.Dir(partial), 0o755); err != nil {
 		fmt.Fprintf(stderr, "创建目标目录失败：%v\n", err)

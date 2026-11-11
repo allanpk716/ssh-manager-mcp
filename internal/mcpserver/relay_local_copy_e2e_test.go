@@ -498,6 +498,119 @@ func TestRelayFileLocalCopyEscapesQuoteCharacters(t *testing.T) {
 	}
 }
 
+// TestRelayFileLocalCopyRejectsPartialDirectory 钉住半成品位置是目录时的
+// 防误删保护：固定命令在 cp 前失败并给出清楚提示，不把目录改名成目标。
+func TestRelayFileLocalCopyRejectsPartialDirectory(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, true)
+	session := environment.openSession(t)
+	sourceRemote := "/mnt/sshmgr/datasets/ordinary/source.bin"
+	targetRemote := "/mnt/sshmgr/datasets/Reports/target.bin"
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	partialDirectory := environment.hostPath(targetRemote + relayPartialSuffix)
+	if err := os.MkdirAll(partialDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(partialDirectory, "user file.txt"), []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_server_id":   environment.serverID,
+			"from_path":        sourceRemote,
+			"to_share_address": `\\192.0.2.10\datasets\Reports\target.bin`,
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("relay_file：err=%v 失败=%s", err, toolResultText(result))
+	}
+	var output RelayOutput
+	unmarshalToolJSON(t, result, &output)
+	stdout, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second)
+	if status != bgStatusFailed {
+		t.Fatalf("半成品位置是目录的终态 = %q 错误 = %q 输出 =\n%s", status, errorText, stdout)
+	}
+	if !strings.Contains(stdout, "半成品路径 "+targetRemote+relayPartialSuffix+" 是目录") {
+		t.Fatalf("任务输出应说明半成品路径是目录：\n%s", stdout)
+	}
+	if content, err := os.ReadFile(filepath.Join(partialDirectory, "user file.txt")); err != nil ||
+		string(content) != "user data" {
+		t.Fatalf("半成品目录内容被改动：内容 = %q err=%v", content, err)
+	}
+	if _, err := os.Stat(environment.hostPath(targetRemote)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("目录不应被改名成目标文件：stat err=%v", err)
+	}
+	copyCommand := environment.fake.recordedCommands()[len(environment.fake.recordedCommands())-1]
+	if !strings.Contains(copyCommand, "[ -d ") || !strings.Contains(copyCommand, "[ ! -L ") {
+		t.Fatalf("固定命令应在 cp 前检查半成品是不是目录：%s", copyCommand)
+	}
+}
+
+// TestRelayFileLocalCopyRemovesPartialSymlinkItself 钉住半成品位置是符号
+// 链接时的处理：固定命令删除链接本身而不是跟随链接，随后正常写新半成品。
+func TestRelayFileLocalCopyRemovesPartialSymlinkItself(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, true)
+	session := environment.openSession(t)
+	sourceRemote := "/mnt/sshmgr/datasets/ordinary/source.bin"
+	targetRemote := "/mnt/sshmgr/datasets/Reports/target.bin"
+	innocentRemote := "/mnt/sshmgr/datasets/ordinary/innocent.bin"
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(innocentRemote), []byte("innocent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	partialPath := environment.hostPath(targetRemote + relayPartialSuffix)
+	if err := os.MkdirAll(filepath.Dir(partialPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(environment.hostPath(innocentRemote), partialPath); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_server_id":   environment.serverID,
+			"from_path":        sourceRemote,
+			"to_share_address": `\\192.0.2.10\datasets\Reports\target.bin`,
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("relay_file：err=%v 失败=%s", err, toolResultText(result))
+	}
+	var output RelayOutput
+	unmarshalToolJSON(t, result, &output)
+	if _, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second); status != bgStatusDone ||
+		errorText != "" {
+		t.Fatalf("半成品是符号链接的拷贝终态异常：%s", errorText)
+	}
+	if content, err := os.ReadFile(environment.hostPath(targetRemote)); err != nil ||
+		string(content) != "payload" {
+		t.Fatalf("目标文件内容 = %q err=%v", content, err)
+	}
+	if content, err := os.ReadFile(environment.hostPath(innocentRemote)); err != nil ||
+		string(content) != "innocent" {
+		t.Fatalf("符号链接指向的文件被改动：内容 = %q err=%v", content, err)
+	}
+	if info, err := os.Lstat(partialPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("半成品位置的符号链接应被删除：%v", info.Mode())
+	}
+	copyCommand := environment.fake.recordedCommands()[len(environment.fake.recordedCommands())-1]
+	if !strings.Contains(copyCommand, "rm -f -- ") {
+		t.Fatalf("固定命令应在 cp 前删除半成品普通文件或符号链接：%s", copyCommand)
+	}
+}
+
 // TestRelayFileDarwinLocalCopySuccess 钉住 macOS 现场检查与同一固定本地拷
 // 贝命令同样可用。
 func TestRelayFileDarwinLocalCopySuccess(t *testing.T) {
