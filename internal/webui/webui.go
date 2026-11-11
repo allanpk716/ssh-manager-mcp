@@ -104,8 +104,8 @@ type Config struct {
 	// Topology 是网络拓扑页来源。三种角色都提供；初始化向导等没有拓扑
 	// 数据的构造不提供，导航与路由都不出现。
 	Topology TopologySource
-	// TopologyWriter 是拓扑布局保存与重置入口。单机与权威端提供；客户端
-	// 不提供，布局写路由不存在。
+	// TopologyWriter 是网络拓扑页写操作来源：布局保存与重置、拖动归类与
+	// 网络成员编辑。单机与权威端提供；客户端不提供，写路由也不注册。
 	TopologyWriter TopologyWriter
 	Access         AccessStore
 	Ops            OpsStore
@@ -217,6 +217,9 @@ type capabilities struct {
 	// ShowTopologyArea 控制是否显示「网络拓扑」区域入口；三种角色只要提
 	// 供拓扑来源就显示，客户端入口同样可见但页面只读。
 	ShowTopologyArea bool
+	// CanEditTopology 控制拓扑页的拖动归类入口与网络成员编辑表单；只有
+	// 提供拓扑写来源的角色为真。
+	CanEditTopology bool
 	// CanManageProfiles 控制是否显示 Profile 页入口与写操作。
 	CanManageProfiles bool
 	// CanManageProjects 控制是否显示项目令牌页入口与写操作。
@@ -253,6 +256,7 @@ func capabilitiesForConfig(cfg Config) capabilities {
 	caps.ShowSecretsArea = cfg.Secrets != nil
 	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
 	caps.ShowTopologyArea = cfg.Topology != nil
+	caps.CanEditTopology = cfg.Topology != nil && cfg.TopologyWriter != nil
 	return caps
 }
 

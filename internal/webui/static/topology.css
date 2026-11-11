@@ -269,6 +269,231 @@
   position: absolute;
 }
 
+/* 拖动归类与网络成员编辑（票 #249）。写操作都走内部 JSON 接口；对话框用
+   原生 dialog 元素呈现，样式不经内联样式表，保持内容安全策略。 */
+.topology-notice {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--ok-border, #2e7d32);
+  border-radius: 6px;
+  background: var(--ok-bg, #ecf7ee);
+  color: var(--ok-text, #20531f);
+}
+
+body.topology-dragging {
+  cursor: grabbing;
+}
+
+.topology-tray[data-draggable="true"] .topology-tray-item.draggable::before {
+  content: "⠿ ";
+  color: var(--muted, #667085);
+}
+
+.topology-tray-item.drag-source {
+  border-color: var(--accent, #2f6fed);
+  background: var(--accent-soft, #e5efff);
+}
+
+dialog.topology-dialog {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 10px;
+  padding: 0;
+  max-width: 480px;
+  width: calc(100vw - 48px);
+}
+
+dialog.topology-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.topology-dialog .dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px;
+}
+
+.topology-dialog .dialog-form h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.topology-dialog .dialog-context {
+  margin: 0;
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-dialog .dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.topology-dialog input[type="text"],
+.topology-dialog input:not([type]),
+.topology-dialog select {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 14px;
+}
+
+.topology-dialog fieldset {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.topology-dialog legend {
+  font-size: 13px;
+  color: var(--muted, #667085);
+}
+
+.topology-dialog fieldset label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.topology-dialog .new-network-name {
+  display: none;
+}
+
+.topology-dialog .new-network-name.visible {
+  display: flex;
+}
+
+.topology-dialog .dialog-error {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--error-bg, #fdecea);
+  color: var(--error-text, #8f1d18);
+  font-size: 13px;
+}
+
+.topology-dialog .dialog-error[hidden] {
+  display: none;
+}
+
+.topology-dialog .dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.topology-dialog .dialog-actions button {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: #fff;
+  padding: 6px 14px;
+}
+
+.topology-dialog .dialog-actions button[type="submit"] {
+  border-color: var(--accent, #2f6fed);
+  background: var(--accent, #2f6fed);
+  color: #fff;
+}
+
+.topology-detail .detail-operation-error {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--error-bg, #fdecea);
+  color: var(--error-text, #8f1d18);
+  font-size: 13px;
+}
+
+.topology-detail .detail-operation-error[hidden] {
+  display: none;
+}
+
+.topology-detail .detail-empty {
+  margin: 0;
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-list {
+  gap: 8px;
+}
+
+.topology-detail .detail-member-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.topology-detail .detail-member-form .member-network {
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-form input {
+  flex: 1;
+  min-width: 120px;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-form button {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: #fff;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-form .member-save {
+  border-color: var(--accent, #2f6fed);
+  color: var(--accent, #2f6fed);
+}
+
+.topology-detail .detail-member-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.topology-detail .detail-member-add h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-add label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-add input,
+.topology-detail .detail-member-add select {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.topology-detail .detail-member-add button {
+  align-self: flex-start;
+  border: 1px solid var(--accent, #2f6fed);
+  border-radius: 6px;
+  background: var(--accent, #2f6fed);
+  color: #fff;
+  padding: 5px 12px;
+}
+
+/* 布局保存与重置（票 #248）。 */
 .topology-layout-status {
   margin: 0;
   color: var(--muted, #667085);

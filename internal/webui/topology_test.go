@@ -6,6 +6,7 @@ package webui
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -50,17 +51,24 @@ func topologyFixture() *TopologyData {
 			{DeviceID: "device-1", NetworkID: "net-1", Address: "192.168.1.20", RegistrationOrder: 1},
 		},
 		LayoutCoordinates: []TopologyLayoutCoordinate{{ViewKey: "physical", DeviceID: "device-1", X: 12.5, Y: -3}},
-		LocalDevice:       TopologyLocalDevice{Known: true, DeviceID: "device-1", DeviceName: "工作站"},
+		ContainerLayoutCoordinates: []TopologyContainerLayoutCoordinate{{
+			ViewKey: "physical", EntityType: "site", EntityID: "site-1", X: 120, Y: 80,
+		}},
+		LocalDevice: TopologyLocalDevice{Known: true, DeviceID: "device-1", DeviceName: "工作站"},
 	}
 }
 
-func newTopologyTestHandler(t *testing.T, role Role, source TopologySource, clientInstance string) (http.Handler, Startup) {
+func newTopologyTestHandler(t *testing.T, role Role, source TopologySource, clientInstance string, writer ...TopologyWriter) (http.Handler, Startup) {
 	t.Helper()
+	var topologyWriter TopologyWriter
+	if len(writer) > 0 {
+		topologyWriter = writer[0]
+	}
 	if role == RoleServer {
 		handler, _, err := NewAuthority(Config{
 			Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{},
 			Auth:     &fakeAuthorityAuth{passwordSet: true, password: "correct-password"},
-			Topology: source, AllowedHosts: []string{"127.0.0.1"}, Port: 7879,
+			Topology: source, TopologyWriter: topologyWriter, AllowedHosts: []string{"127.0.0.1"}, Port: 7879,
 		})
 		if err != nil {
 			t.Fatalf("构造权威端 Web UI 失败：%v", err)
@@ -69,35 +77,7 @@ func newTopologyTestHandler(t *testing.T, role Role, source TopologySource, clie
 	}
 	handler, startup, err := New(Config{
 		Role: role, Servers: &stubServerSource{}, Access: &stubAccessStore{},
-		Topology: source, ClientInstance: clientInstance,
-		VersionHint: func() string { return "" }, Port: 18080,
-	})
-	if err != nil {
-		t.Fatalf("构造 Web UI 失败：%v", err)
-	}
-	return handler, startup
-}
-
-// newTopologyWritableTestHandler 在可写角色上额外注入布局写来源。
-func newTopologyWritableTestHandler(t *testing.T, role Role, source TopologySource, writer TopologyWriter) (http.Handler, Startup) {
-	t.Helper()
-	if role == RoleServer {
-		handler, _, err := NewAuthority(Config{
-			Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{},
-			Auth:           &fakeAuthorityAuth{passwordSet: true, password: "correct-password"},
-			Topology:       source,
-			TopologyWriter: writer,
-			AllowedHosts:   []string{"127.0.0.1"},
-			Port:           7879,
-		})
-		if err != nil {
-			t.Fatalf("构造权威端 Web UI 失败：%v", err)
-		}
-		return handler, Startup{}
-	}
-	handler, startup, err := New(Config{
-		Role: role, Servers: &stubServerSource{}, Access: &stubAccessStore{},
-		Topology: source, TopologyWriter: writer,
+		Topology: source, TopologyWriter: topologyWriter, ClientInstance: clientInstance,
 		VersionHint: func() string { return "" }, Port: 18080,
 	})
 	if err != nil {
@@ -345,18 +325,57 @@ func TestTopologyRoutesAreReadOnly(t *testing.T) {
 	}
 }
 
-// stubTopologyWriter 记录布局写请求，供处理器测试断言接口行为。
+// stubTopologyWriter 记录收到的写请求并返回固定成功提示，供处理器测试断
+// 言接口行为；存储语义由 webuitopology 适配器测试覆盖。
 type stubTopologyWriter struct {
-	saveView   string
-	saveLayout TopologyLayoutSave
-	saveSource TopologyWriteSource
-	saveErr    error
-	saveCalls  int
+	addCalls          [][3]string
+	editCalls         [][3]string
+	removeCalls       [][2]string
+	moveCalls         [][4]string
+	removePhysical    []string
+	networkAddCalls   [][2]string
+	nextNotFoundError bool
+	nextPlainError    error
 
+	saveView    string
+	saveLayout  TopologyLayoutSave
+	saveSource  TopologyWriteSource
+	saveErr     error
+	saveCalls   int
 	resetView   string
 	resetSource TopologyWriteSource
 	resetErr    error
 	resetCalls  int
+}
+
+func (w *stubTopologyWriter) AddNetworkMembership(device, network, address string) (string, error) {
+	w.addCalls = append(w.addCalls, [3]string{device, network, address})
+	return "已把设备加入网络", w.nextError()
+}
+
+func (w *stubTopologyWriter) EditNetworkMembership(device, network, address string) (string, error) {
+	w.editCalls = append(w.editCalls, [3]string{device, network, address})
+	return "已修改网络成员地址", w.nextError()
+}
+
+func (w *stubTopologyWriter) RemoveNetworkMembership(device, network string) (string, error) {
+	w.removeCalls = append(w.removeCalls, [2]string{device, network})
+	return "已把设备移出网络", w.nextError()
+}
+
+func (w *stubTopologyWriter) MoveNetworkMembership(device, fromNetwork, toNetwork, address string) (string, error) {
+	w.moveCalls = append(w.moveCalls, [4]string{device, fromNetwork, toNetwork, address})
+	return "已移动网络成员", w.nextError()
+}
+
+func (w *stubTopologyWriter) RemovePhysicalNetworkMemberships(device string) (string, error) {
+	w.removePhysical = append(w.removePhysical, device)
+	return "已删除全部物理局域网成员", w.nextError()
+}
+
+func (w *stubTopologyWriter) AddPhysicalNetwork(name, site string) (string, error) {
+	w.networkAddCalls = append(w.networkAddCalls, [2]string{name, site})
+	return "已登记网络", w.nextError()
 }
 
 func (w *stubTopologyWriter) SaveTopologyLayout(save TopologyLayoutSave, source TopologyWriteSource) error {
@@ -371,26 +390,288 @@ func (w *stubTopologyWriter) ResetTopologyLayout(view string, source TopologyWri
 	return w.resetErr
 }
 
-// postTopologyJSON 发起一次带会话、同源来源与防跨站请求伪造令牌的 JSON 写
-// 请求，返回响应与处理器内部的令牌。
-func postTopologyJSON(t *testing.T, handler http.Handler, host, path, csrfToken string, cookie *http.Cookie, body string) *http.Response {
+func (w *stubTopologyWriter) nextError() error {
+	if w.nextNotFoundError {
+		w.nextNotFoundError = false
+		return &TopologyNameNotFoundError{Message: "设备不存在：没有这台设备"}
+	}
+	if w.nextPlainError != nil {
+		err := w.nextPlainError
+		w.nextPlainError = nil
+		return err
+	}
+	return nil
+}
+
+func postTopologyJSON(t *testing.T, h http.Handler, cookie *http.Cookie, csrf, path, body string) *http.Response {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-	request.Host = host
+	request.Host = "127.0.0.1:18080"
+	request.Header.Set("Origin", "http://127.0.0.1:18080")
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Origin", "http://"+host)
-	if csrfToken != "" {
-		request.Header.Set("X-CSRF-Token", csrfToken)
-	}
+	request.Header.Set("X-CSRF-Token", csrf)
 	if cookie != nil {
 		request.AddCookie(cookie)
 	}
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, request)
+	h.ServeHTTP(recorder, request)
 	return recorder.Result()
 }
 
-func sessionCSRFToken(t *testing.T, uiHandler http.Handler) string {
+func TestTopologyWriteEndpointsDelegateToWriter(t *testing.T) {
+	writer := &stubTopologyWriter{}
+	uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", writer)
+	resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
+	cookies := resp.Cookies()
+	resp.Body.Close()
+	root := uiHandler.(*handler)
+	root.mu.Lock()
+	csrf := root.session.csrf
+	root.mu.Unlock()
+
+	cases := []struct {
+		path     string
+		body     string
+		message  string
+		validate func()
+	}{
+		{
+			path: "/ui/api/topology/membership/add", body: `{"device":"笔记本","network":"家A局域网","address":"192.168.1.9"}`,
+			message: "已把设备加入网络",
+			validate: func() {
+				if len(writer.addCalls) != 1 || writer.addCalls[0] != [3]string{"笔记本", "家A局域网", "192.168.1.9"} {
+					t.Fatalf("新增网络成员参数错误：%+v", writer.addCalls)
+				}
+			},
+		},
+		{
+			path: "/ui/api/topology/membership/edit", body: `{"device":"工作站","network":"家A局域网","address":"192.168.1.21"}`,
+			message: "已修改网络成员地址",
+			validate: func() {
+				if len(writer.editCalls) != 1 || writer.editCalls[0] != [3]string{"工作站", "家A局域网", "192.168.1.21"} {
+					t.Fatalf("修改网络成员地址参数错误：%+v", writer.editCalls)
+				}
+			},
+		},
+		{
+			path: "/ui/api/topology/membership/remove", body: `{"device":"工作站","network":"虚拟网"}`,
+			message: "已把设备移出网络",
+			validate: func() {
+				if len(writer.removeCalls) != 1 || writer.removeCalls[0] != [2]string{"工作站", "虚拟网"} {
+					t.Fatalf("退出网络成员参数错误：%+v", writer.removeCalls)
+				}
+			},
+		},
+		{
+			path: "/ui/api/topology/membership/move", body: `{"device":"工作站","from_network":"家A局域网","to_network":"机房局域网","address":"10.0.0.9"}`,
+			message: "已移动网络成员",
+			validate: func() {
+				if len(writer.moveCalls) != 1 || writer.moveCalls[0] != [4]string{"工作站", "家A局域网", "机房局域网", "10.0.0.9"} {
+					t.Fatalf("移动网络成员参数错误：%+v", writer.moveCalls)
+				}
+			},
+		},
+		{
+			path: "/ui/api/topology/membership/remove-physical", body: `{"device":"工作站"}`,
+			message: "已删除全部物理局域网成员",
+			validate: func() {
+				if len(writer.removePhysical) != 1 || writer.removePhysical[0] != "工作站" {
+					t.Fatalf("删除全部物理局域网成员参数错误：%+v", writer.removePhysical)
+				}
+			},
+		},
+		{
+			path: "/ui/api/topology/network/add", body: `{"name":"新局域网","site":"家A"}`,
+			message: "已登记网络",
+			validate: func() {
+				if len(writer.networkAddCalls) != 1 || writer.networkAddCalls[0] != [2]string{"新局域网", "家A"} {
+					t.Fatalf("新建物理局域网参数错误：%+v", writer.networkAddCalls)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		response := postTopologyJSON(t, uiHandler, cookies[0], csrf, tc.path, tc.body)
+		payload, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("%s 状态码 = %d，响应：%s", tc.path, response.StatusCode, payload)
+		}
+		var got struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(payload, &got); err != nil {
+			t.Fatalf("%s 响应不是合法 JSON：%v\n%s", tc.path, err, payload)
+		}
+		if got.Message != tc.message {
+			t.Fatalf("%s 响应提示 = %q，应为 %q", tc.path, got.Message, tc.message)
+		}
+		tc.validate()
+	}
+}
+
+func TestTopologyWriteEndpointErrors(t *testing.T) {
+	cases := []struct {
+		name     string
+		writer   *stubTopologyWriter
+		status   int
+		message  string
+		readonly bool
+	}{
+		{
+			name:    "名称不存在返回404",
+			writer:  &stubTopologyWriter{nextNotFoundError: true},
+			status:  http.StatusNotFound,
+			message: "设备不存在：没有这台设备",
+		},
+		{
+			name:    "地址重复返回400",
+			writer:  &stubTopologyWriter{nextPlainError: errTopologyTestDuplicate},
+			status:  http.StatusBadRequest,
+			message: "网络 家A局域网 的地址 192.168.1.20 已被设备 工作站 占用",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", tc.writer)
+			resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
+			cookies := resp.Cookies()
+			resp.Body.Close()
+			root := uiHandler.(*handler)
+			root.mu.Lock()
+			csrf := root.session.csrf
+			root.mu.Unlock()
+			response := postTopologyJSON(t, uiHandler, cookies[0], csrf, "/ui/api/topology/membership/add",
+				`{"device":"笔记本","network":"家A局域网","address":"192.168.1.20"}`)
+			payload, _ := io.ReadAll(response.Body)
+			response.Body.Close()
+			if response.StatusCode != tc.status {
+				t.Fatalf("状态码 = %d，应为 %d，响应：%s", response.StatusCode, tc.status, payload)
+			}
+			var got struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(payload, &got); err != nil {
+				t.Fatalf("错误响应不是合法 JSON：%v\n%s", err, payload)
+			}
+			if got.Error != tc.message {
+				t.Fatalf("错误提示 = %q，应为 %q", got.Error, tc.message)
+			}
+		})
+	}
+}
+
+var errTopologyTestDuplicate = fmt.Errorf("网络 家A局域网 的地址 192.168.1.20 已被设备 工作站 占用")
+
+func TestTopologyWriteEndpointsRejectMissingFieldsAndBadJSON(t *testing.T) {
+	writer := &stubTopologyWriter{}
+	uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", writer)
+	resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
+	cookies := resp.Cookies()
+	resp.Body.Close()
+	root := uiHandler.(*handler)
+	root.mu.Lock()
+	csrf := root.session.csrf
+	root.mu.Unlock()
+
+	missing := postTopologyJSON(t, uiHandler, cookies[0], csrf, "/ui/api/topology/membership/add", `{"device":"笔记本"}`)
+	missingBody, _ := io.ReadAll(missing.Body)
+	missing.Body.Close()
+	if missing.StatusCode != http.StatusBadRequest || !strings.Contains(string(missingBody), "网络") {
+		t.Fatalf("缺少字段状态码 = %d，响应：%s", missing.StatusCode, missingBody)
+	}
+	broken := postTopologyJSON(t, uiHandler, cookies[0], csrf, "/ui/api/topology/membership/add", `{not-json`)
+	brokenBody, _ := io.ReadAll(broken.Body)
+	broken.Body.Close()
+	if broken.StatusCode != http.StatusBadRequest || !strings.Contains(string(brokenBody), "请求内容") {
+		t.Fatalf("非法 JSON 状态码 = %d，响应：%s", broken.StatusCode, brokenBody)
+	}
+	if len(writer.addCalls) != 0 {
+		t.Fatalf("校验失败不应调用写来源：%+v", writer.addCalls)
+	}
+}
+
+func TestTopologyWriteRoutesOnlyExistForWritableRole(t *testing.T) {
+	// 客户端不注入写来源：即便携带有效会话与令牌，写路径也不存在。
+	client, startup := newTopologyTestHandler(t, RoleClient, &stubTopologySource{data: &TopologyData{}}, "")
+	resp := exchangeStartupToken(t, client, startup.URL("127.0.0.1:18080"))
+	cookies := resp.Cookies()
+	resp.Body.Close()
+	clientRoot := client.(*handler)
+	clientRoot.mu.Lock()
+	csrf := clientRoot.session.csrf
+	clientRoot.mu.Unlock()
+	response := postTopologyJSON(t, client, cookies[0], csrf, "/ui/api/topology/membership/add",
+		`{"device":"工作站","network":"家A局域网","address":"192.168.1.20"}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("客户端写接口状态码 = %d，应为 404", response.StatusCode)
+	}
+
+	// 单机注入写来源后，缺少防跨站请求伪造令牌的写请求在进入处理器前被拒。
+	standalone, standaloneStartup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: &TopologyData{}}, "", &stubTopologyWriter{})
+	session := exchangeStartupToken(t, standalone, standaloneStartup.URL("127.0.0.1:18080"))
+	standaloneCookies := session.Cookies()
+	session.Body.Close()
+	noCSRF := postTopologyJSON(t, standalone, standaloneCookies[0], "wrong-token",
+		"/ui/api/topology/membership/add", `{"device":"工作站","network":"家A局域网","address":"192.168.1.20"}`)
+	noCSRF.Body.Close()
+	if noCSRF.StatusCode != http.StatusForbidden {
+		t.Fatalf("缺少令牌的写请求状态码 = %d，应为 403", noCSRF.StatusCode)
+	}
+
+	anonymous := postTopologyJSON(t, standalone, nil, "", "/ui/api/topology/membership/add", `{}`)
+	anonymous.Body.Close()
+	if anonymous.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("无会话写请求状态码 = %d，应为 401", anonymous.StatusCode)
+	}
+}
+
+func TestTopologyPageEditableFlagFollowsWriterInjection(t *testing.T) {
+	cases := []struct {
+		name     string
+		role     Role
+		writer   TopologyWriter
+		editable bool
+	}{
+		{name: "单机注入写来源后可编辑", role: RoleStandalone, writer: &stubTopologyWriter{}, editable: true},
+		{name: "权威端注入写来源后可编辑", role: RoleServer, writer: &stubTopologyWriter{}, editable: true},
+		{name: "客户端不可编辑", role: RoleClient},
+		{name: "没有写来源的构造不可编辑", role: RoleStandalone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var writer TopologyWriter
+			if tc.writer != nil {
+				writer = tc.writer
+			}
+			uiHandler, startup := newTopologyTestHandler(t, tc.role, &stubTopologySource{data: topologyFixture()}, "", writer)
+			var cookie *http.Cookie
+			host := "127.0.0.1:18080"
+			if tc.role == RoleServer {
+				cookie = authoritySuccessfulLogin(t, uiHandler, "127.0.0.1:7879", "correct-password")
+				host = "127.0.0.1:7879"
+			} else {
+				resp := exchangeStartupToken(t, uiHandler, startup.URL(host))
+				cookies := resp.Cookies()
+				resp.Body.Close()
+				cookie = cookies[0]
+			}
+			page := authorityGet(t, uiHandler, host, "/ui/topology/", cookie)
+			body, _ := io.ReadAll(page.Body)
+			page.Body.Close()
+			content := string(body)
+			if tc.editable && !strings.Contains(content, `data-editable="true"`) {
+				t.Fatalf("可编辑角色的拓扑页应带可编辑标记：\n%s", content)
+			}
+			if !tc.editable && strings.Contains(content, "data-editable") {
+				t.Fatalf("只读角色的拓扑页不得出现可编辑标记：\n%s", content)
+			}
+		})
+	}
+}
+
+func sessionCSRFTokenForTopology(t *testing.T, uiHandler http.Handler) string {
 	t.Helper()
 	root := uiHandler.(*handler)
 	root.mu.Lock()
@@ -403,14 +684,14 @@ func sessionCSRFToken(t *testing.T, uiHandler http.Handler) string {
 
 func TestTopologyLayoutSaveEndpointValidatesAndCallsWriter(t *testing.T) {
 	writer := &stubTopologyWriter{}
-	handler, startup := newTopologyWritableTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, writer)
-	resp := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", writer)
+	resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
 	cookies := resp.Cookies()
 	resp.Body.Close()
-	csrf := sessionCSRFToken(t, handler)
+	csrf := sessionCSRFTokenForTopology(t, uiHandler)
 
 	body := `{"view":"physical","devices":[{"device_id":"device-1","x":12.5,"y":-3}],"containers":[{"entity_type":"site","entity_id":"site-1","x":20,"y":30}]}`
-	saved := postTopologyJSON(t, handler, "127.0.0.1:18080", topologyLayoutPath, csrf, cookies[0], body)
+	saved := postTopologyJSON(t, uiHandler, cookies[0], csrf, topologyLayoutPath, body)
 	saved.Body.Close()
 	if saved.StatusCode != http.StatusNoContent {
 		t.Fatalf("布局保存状态码 = %d，应为 204", saved.StatusCode)
@@ -448,7 +729,7 @@ func TestTopologyLayoutSaveEndpointValidatesAndCallsWriter(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			response := postTopologyJSON(t, handler, "127.0.0.1:18080", tc.path, csrf, cookies[0], tc.body)
+			response := postTopologyJSON(t, uiHandler, cookies[0], csrf, tc.path, tc.body)
 			defer response.Body.Close()
 			if response.StatusCode != tc.status {
 				t.Fatalf("状态码 = %d，应为 %d", response.StatusCode, tc.status)
@@ -463,13 +744,13 @@ func TestTopologyLayoutSaveEndpointValidatesAndCallsWriter(t *testing.T) {
 
 func TestTopologyLayoutResetEndpointCallsWriter(t *testing.T) {
 	writer := &stubTopologyWriter{}
-	handler, startup := newTopologyWritableTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, writer)
-	resp := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", writer)
+	resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
 	cookies := resp.Cookies()
 	resp.Body.Close()
-	csrf := sessionCSRFToken(t, handler)
+	csrf := sessionCSRFTokenForTopology(t, uiHandler)
 
-	response := postTopologyJSON(t, handler, "127.0.0.1:18080", topologyLayoutResetPath, csrf, cookies[0], `{"view":"virtual"}`)
+	response := postTopologyJSON(t, uiHandler, cookies[0], csrf, topologyLayoutResetPath, `{"view":"virtual"}`)
 	response.Body.Close()
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatalf("布局重置状态码 = %d，应为 204", response.StatusCode)
@@ -481,13 +762,13 @@ func TestTopologyLayoutResetEndpointCallsWriter(t *testing.T) {
 
 func TestTopologyLayoutWriteRequiresCSRFAndWritableRole(t *testing.T) {
 	// 客户端角色不注册布局写路由。
-	clientHandler, clientStartup := newTopologyTestHandler(t, RoleClient, &stubTopologySource{data: &TopologyData{}}, "")
-	resp := exchangeStartupToken(t, clientHandler, clientStartup.URL("127.0.0.1:18080"))
+	client, clientStartup := newTopologyTestHandler(t, RoleClient, &stubTopologySource{data: &TopologyData{}}, "")
+	resp := exchangeStartupToken(t, client, clientStartup.URL("127.0.0.1:18080"))
 	cookies := resp.Cookies()
 	resp.Body.Close()
-	clientCSRF := sessionCSRFToken(t, clientHandler)
+	clientCSRF := sessionCSRFTokenForTopology(t, client)
 	for _, path := range []string{topologyLayoutPath, topologyLayoutResetPath} {
-		notFound := postTopologyJSON(t, clientHandler, "127.0.0.1:18080", path, clientCSRF, cookies[0], `{"view":"physical"}`)
+		notFound := postTopologyJSON(t, client, cookies[0], clientCSRF, path, `{"view":"physical"}`)
 		notFound.Body.Close()
 		if notFound.StatusCode != http.StatusNotFound {
 			t.Fatalf("客户端布局写路由 %s 状态码 = %d，应为 404", path, notFound.StatusCode)
@@ -495,11 +776,11 @@ func TestTopologyLayoutWriteRequiresCSRFAndWritableRole(t *testing.T) {
 	}
 
 	// 可写角色缺防跨站请求伪造令牌时拒绝。
-	writeHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: &TopologyData{}}, "")
-	resp = exchangeStartupToken(t, writeHandler, startup.URL("127.0.0.1:18080"))
+	writeHandler, writeStartup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: &TopologyData{}}, "", &stubTopologyWriter{})
+	resp = exchangeStartupToken(t, writeHandler, writeStartup.URL("127.0.0.1:18080"))
 	cookies = resp.Cookies()
 	resp.Body.Close()
-	forbidden := postTopologyJSON(t, writeHandler, "127.0.0.1:18080", topologyLayoutPath, "", cookies[0], `{"view":"physical"}`)
+	forbidden := postTopologyJSON(t, writeHandler, cookies[0], "", topologyLayoutPath, `{"view":"physical"}`)
 	forbidden.Body.Close()
 	if forbidden.StatusCode != http.StatusForbidden {
 		t.Fatalf("缺防跨站请求伪造令牌的布局保存状态码 = %d，应为 403", forbidden.StatusCode)
@@ -508,20 +789,21 @@ func TestTopologyLayoutWriteRequiresCSRFAndWritableRole(t *testing.T) {
 
 func TestTopologyLayoutWriterErrorsMapToClientErrors(t *testing.T) {
 	writer := &stubTopologyWriter{saveErr: ErrTopologyLayoutInvalid}
-	handler, startup := newTopologyWritableTestHandler(t, RoleStandalone, &stubTopologySource{data: &TopologyData{}}, writer)
-	resp := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: &TopologyData{}}, "", writer)
+	resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
 	cookies := resp.Cookies()
 	resp.Body.Close()
-	csrf := sessionCSRFToken(t, handler)
+	csrf := sessionCSRFTokenForTopology(t, uiHandler)
 
-	rejected := postTopologyJSON(t, handler, "127.0.0.1:18080", topologyLayoutPath, csrf, cookies[0], `{"view":"physical","devices":[{"device_id":"missing","x":1,"y":2}]}`)
-	defer rejected.Body.Close()
+	rejected := postTopologyJSON(t, uiHandler, cookies[0], csrf, topologyLayoutPath,
+		`{"view":"physical","devices":[{"device_id":"missing","x":1,"y":2}]}`)
+	rejected.Body.Close()
 	if rejected.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("内容非法的保存状态码 = %d，应为 422", rejected.StatusCode)
 	}
 
 	writer.saveErr = errors.New("数据库不可用")
-	failed := postTopologyJSON(t, handler, "127.0.0.1:18080", topologyLayoutPath, csrf, cookies[0], `{"view":"physical"}`)
+	failed := postTopologyJSON(t, uiHandler, cookies[0], csrf, topologyLayoutPath, `{"view":"physical"}`)
 	failed.Body.Close()
 	if failed.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("写来源失败的状态码 = %d，应为 500", failed.StatusCode)

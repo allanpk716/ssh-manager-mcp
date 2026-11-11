@@ -1,5 +1,5 @@
 {{define "content"}}
-<section class="topology-page" data-topology-page data-layout-editable="{{if .Caps.CanWrite}}true{{else}}false{{end}}">
+<section class="topology-page" data-topology-page data-layout-editable="{{if .Caps.CanWrite}}true{{else}}false{{end}}"{{if .Caps.CanEditTopology}} data-editable="true"{{end}}>
 <header class="topology-toolbar">
 <h1>网络拓扑</h1>
 <div class="topology-views" role="group" aria-label="拓扑视图切换">
@@ -7,7 +7,7 @@
 <button type="button" class="topology-view" data-view="virtual">虚拟视图</button>
 <button type="button" class="topology-view" data-view="overlay">叠加视图</button>
 </div>
-<p class="topology-hint">画布支持平移与缩放；点设备、站点或网络查看详情。</p>
+<p class="topology-hint">画布支持平移与缩放；点设备、站点或网络查看详情。{{if .Caps.CanEditTopology}}可把设备拖进网络框归类、拖回托盘取消归类。{{end}}</p>
 <p class="topology-layout-status" data-topology-status role="status" hidden></p>
 {{if .Caps.CanWrite}}<button type="button" class="topology-reset" data-topology-reset hidden>重置布局</button>{{end}}
 </header>

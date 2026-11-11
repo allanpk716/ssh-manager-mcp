@@ -4,8 +4,6 @@ package webuitopology
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,37 +26,6 @@ type openerSource struct {
 // 配层使用。
 func FromStoreOpener(open func() (*store.Store, func(), error)) webui.TopologySource {
 	return openerSource{open: open}
-}
-
-// WriterFromOpener 返回按请求打开权威 vault 的布局写入口，供单机适配层使
-// 用。
-func WriterFromOpener(open func() (*store.Store, func(), error)) webui.TopologyWriter {
-	return openerWriter{open: open}
-}
-
-// openerWriter 每次写请求重新打开 vault，写入后关闭。
-type openerWriter struct {
-	open func() (*store.Store, func(), error)
-}
-
-// SaveTopologyLayout 保存一个视图的完整布局。
-func (w openerWriter) SaveTopologyLayout(save webui.TopologyLayoutSave, source webui.TopologyWriteSource) error {
-	st, closeStore, err := w.open()
-	if err != nil {
-		return err
-	}
-	defer closeStore()
-	return WriterFromStore(st).SaveTopologyLayout(save, source)
-}
-
-// ResetTopologyLayout 清空一个视图保存的全部坐标。
-func (w openerWriter) ResetTopologyLayout(view string, source webui.TopologyWriteSource) error {
-	st, closeStore, err := w.open()
-	if err != nil {
-		return err
-	}
-	defer closeStore()
-	return WriterFromStore(st).ResetTopologyLayout(view, source)
 }
 
 // Topology 读取本机 vault 的全部拓扑数据。instance 是客户端实例名；单机
@@ -180,64 +147,6 @@ func (s storeSource) Topology(string) (*webui.TopologyData, error) {
 		})
 	}
 	return data, nil
-}
-
-// WriterFromStore 返回绑定指定存储的布局写入口。
-func WriterFromStore(st *store.Store) webui.TopologyWriter {
-	return storeWriter{store: st}
-}
-
-// storeWriter 把 Web UI 的布局写请求换算成存储层调用。
-type storeWriter struct {
-	store *store.Store
-}
-
-// SaveTopologyLayout 保存一个视图的完整布局，并把存储层的内容错误换算成
-// Web UI 的内容非法错误。
-func (w storeWriter) SaveTopologyLayout(save webui.TopologyLayoutSave, source webui.TopologyWriteSource) error {
-	input := store.ViewLayoutInput{
-		Devices:    make([]store.DeviceLayoutInput, 0, len(save.Devices)),
-		Containers: make([]store.ContainerLayoutInput, 0, len(save.Containers)),
-	}
-	for _, coordinate := range save.Devices {
-		input.Devices = append(input.Devices, store.DeviceLayoutInput{
-			DeviceID: coordinate.DeviceID, X: coordinate.X, Y: coordinate.Y,
-		})
-	}
-	for _, coordinate := range save.Containers {
-		input.Containers = append(input.Containers, store.ContainerLayoutInput{
-			EntityType: coordinate.EntityType, EntityID: coordinate.EntityID,
-			X: coordinate.X, Y: coordinate.Y,
-		})
-	}
-	if err := w.store.SaveViewLayout(save.ViewKey, input, source.RemoteAddress); err != nil {
-		return mapLayoutError(err)
-	}
-	return nil
-}
-
-// ResetTopologyLayout 清空一个视图保存的全部坐标。
-func (w storeWriter) ResetTopologyLayout(view string, source webui.TopologyWriteSource) error {
-	if err := w.store.ResetViewLayout(view, source.RemoteAddress); err != nil {
-		return mapLayoutError(err)
-	}
-	return nil
-}
-
-// mapLayoutError 把存储层的布局校验错误换算成 Web UI 的内容非法错误；其它
-// 错误原样返回，让处理器按服务器错误处理。
-func mapLayoutError(err error) error {
-	switch {
-	case errors.Is(err, store.ErrLayoutViewInvalid),
-		errors.Is(err, store.ErrLayoutEntityInvalid),
-		errors.Is(err, store.ErrLayoutEntityDuplicate),
-		errors.Is(err, store.ErrLayoutCoordinateInvalid),
-		errors.Is(err, store.ErrLayoutEntityMissing),
-		errors.Is(err, store.ErrLayoutIdentifierInvalid):
-		return fmt.Errorf("%w：%v", webui.ErrTopologyLayoutInvalid, err)
-	default:
-		return err
-	}
 }
 
 // snapshotSource 读取客户端本地快照，按快照里的授权裁剪结果呈现。
