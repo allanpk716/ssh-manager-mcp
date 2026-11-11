@@ -702,7 +702,11 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	defer cli.Close()
 
 	// ⑥ write (parent creation + checked Close live inside WriteFile).
-	if werr := cli.WriteFile(ctx, remotePath, r); werr != nil {
+	var createMode os.FileMode
+	if len(filledSecretNames) > 0 && !srv.ShellType.IsWindows() {
+		createMode = 0o600
+	}
+	if werr := cli.WriteFileWithCreateMode(ctx, remotePath, r, createMode); werr != nil {
 		if errors.Is(werr, context.Canceled) {
 			status = "cancelled"
 		} else {
