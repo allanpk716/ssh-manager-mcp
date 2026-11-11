@@ -333,6 +333,9 @@ func TestE2ERelayFileFullFlow(t *testing.T) {
 	if out.TaskID == "" {
 		t.Fatal("TaskID empty")
 	}
+	if out.Mode != "streaming_relay" || out.RestartAfterInterruption {
+		t.Fatalf("常规路径应保持流式中继语义： %+v", out)
+	}
 	if out.BytesTotal != int64(len(srcData)) || out.ChunksTotal != 3 || out.ResumedChunks != 0 || out.ChunkBytes != relayBigChunk {
 		t.Fatalf("RelayOutput = %+v, want 48MiB/3 chunks/0 resumed/16MiB grid", out)
 	}

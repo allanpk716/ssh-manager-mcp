@@ -1,0 +1,373 @@
+package mcpserver
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"path"
+	"strconv"
+	"strings"
+	"time"
+
+	"ssh-manager-mcp/internal/dialplan"
+	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/shareaddress"
+	"ssh-manager-mcp/internal/sharemount"
+	"ssh-manager-mcp/internal/sshbroker"
+	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/vault"
+)
+
+const relayLocalCopyMode = "local_copy"
+
+// RelayForProfile 的共享地址分支：在一个已实际挂载共享的 Linux 或 macOS
+// 端点上启动固定本地拷贝命令。任务仍使用后台任务表与中继的运行中工件
+// 冲突键，不建立第二套任务面。
+func relayLocalCopyForProfile(
+	ctx context.Context, st *store.Store, tm *TaskManager, projectID, profileID string,
+	in RelayInput, hk ...sshbroker.HostKeyStore,
+) (RelayOutput, error) {
+	if in.FromShareAddress != "" && (in.FromServerID != "" || in.FromPath != "") {
+		return RelayOutput{}, errors.New("from_share_address、from_server_id 与 from_path 不能同时作为源端使用")
+	}
+	if in.ToShareAddress != "" && (in.ToServerID != "" || in.ToPath != "") {
+		return RelayOutput{}, errors.New("to_share_address、to_server_id 与 to_path 不能同时作为目标端使用")
+	}
+	if in.FromShareAddress != "" && in.ToShareAddress != "" {
+		return RelayOutput{}, errors.New("源端和目标端不能都是共享地址；请先用 query_topology 查询实际路径，再在可挂载共享的服务器上用 exec_command 拷贝")
+	}
+	if st.IsReadOnly() && st.CacheRecommendedVersion() == "" {
+		return RelayOutput{}, errTopologyAndSharedStorageAuthorityTooOld
+	}
+	start := time.Now()
+	status := "error"
+	startOwned := false
+	auditServer := ""
+	shareName := ""
+	var sourcePath, targetPath string
+	summary := func() string {
+		return fmt.Sprintf("relay local-copy share=%s %s -> %s", shareName, sourcePath, targetPath)
+	}
+	defer func() {
+		if startOwned {
+			return
+		}
+		_ = st.WriteAudit(store.AuditRow{
+			TS: start, ProjectID: projectID, ServerID: auditServer,
+			Action: "relay-bg-start", Command: summary(), Status: status,
+			DurationMS: time.Since(start).Milliseconds(),
+		})
+	}()
+
+	if in.Via != "" {
+		return RelayOutput{}, errors.New("via 指定共享地址端点服务器的流式回退尚未支持")
+	}
+	sourceShareAddress, targetShareAddress := in.FromShareAddress, in.ToShareAddress
+	serverID := in.FromServerID
+	ordinaryPath := in.FromPath
+	if sourceShareAddress != "" {
+		serverID = in.ToServerID
+		ordinaryPath = in.ToPath
+	}
+	if serverID == "" || ordinaryPath == "" {
+		return RelayOutput{}, errors.New("共享地址端点的另一端必须是受管服务器上的常规文件路径")
+	}
+	if !isAbsRemotePath(ordinaryPath) {
+		return RelayOutput{}, fmt.Errorf(
+			"共享地址另一端的路径 %q 必须是以 / 开头的绝对路径（或 Windows 盘符根 C:/）", ordinaryPath)
+	}
+	ordinaryPath = path.Clean(ordinaryPath)
+	auditServer = serverID
+
+	allowed, err := st.ServersForProfile(profileID)
+	if err != nil {
+		return RelayOutput{}, err
+	}
+	if gateErr := gateServerIn(allowed, serverID); gateErr != nil {
+		status = "denied"
+		return RelayOutput{}, gateErr
+	}
+	server, err := st.GetServer(serverID)
+	if err != nil || server == nil {
+		return RelayOutput{}, fmt.Errorf("server %s not found", serverID)
+	}
+
+	shares, err := sharedStoragesVisibleInSession(st, profileID)
+	if err != nil {
+		return RelayOutput{}, err
+	}
+	rawShareAddress := sourceShareAddress
+	if targetShareAddress != "" {
+		rawShareAddress = targetShareAddress
+	}
+	resolved, err := shareaddress.Resolve(rawShareAddress, shares)
+	if err != nil {
+		return RelayOutput{}, err
+	}
+	shareName = resolved.Share.Name
+	if !sharedStorageMountableOnServer(resolved.Share, serverID) {
+		return RelayOutput{}, fmt.Errorf(
+			"服务器 %s 不在共享存储 %s 的可挂载范围内；另一端不可挂载时的流式回退尚未支持",
+			server.Name, shareName)
+	}
+	if server.ShellType.IsWindows() {
+		return RelayOutput{}, errors.New("Windows 服务器的共享地址本地拷贝尚未支持")
+	}
+	if !strings.HasPrefix(ordinaryPath, "/") {
+		return RelayOutput{}, fmt.Errorf(
+			"共享地址另一端的路径 %q 在 Linux 或 macOS 服务器上必须是以 / 开头的绝对路径", ordinaryPath)
+	}
+	sharedPath := path.Clean(resolved.PathOnServer(server.ShellType))
+	if sourceShareAddress != "" {
+		sourcePath = sharedPath
+		targetPath = ordinaryPath
+	} else {
+		sourcePath = ordinaryPath
+		targetPath = sharedPath
+	}
+	if sourcePath == targetPath {
+		return RelayOutput{}, fmt.Errorf(
+			"源路径与目标路径相同：%s；本地拷贝不能覆盖自己的源文件", sourcePath)
+	}
+
+	auth, err := vault.AuthForServer(st, server)
+	if err != nil {
+		if errors.Is(err, vault.ErrNoCredential) {
+			status = "no_credential"
+		} else {
+			status = "auth_error"
+		}
+		return RelayOutput{}, err
+	}
+	dialSource := dialplan.NewStoreSource(st, "")
+	var client *sshbroker.Client
+	client, connectionNotes, connectErr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: server, Auth: auth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true,
+		SuccessCache: dialSource, Topology: dialSource,
+	})
+	transferred := false
+	defer func() {
+		if !transferred && client != nil {
+			_ = client.Close()
+		}
+	}()
+	if connectErr != nil {
+		switch {
+		case errors.Is(connectErr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(connectErr, sshbroker.ErrHostKeyMismatch):
+			status = "hostkey_mismatch"
+		default:
+			status = "connect_error"
+		}
+		return RelayOutput{}, connectErr
+	}
+
+	checkService := &sharemount.Service{
+		RemoteExec: relayLocalCopyCheckExec(client, st, server),
+	}
+	checkResult, checkErr := checkService.Check(ctx, sharemount.CheckRequest{
+		Server: server, Shares: []*models.SharedStorage{resolved.Share},
+	})
+	if checkErr != nil {
+		return RelayOutput{}, fmt.Errorf("共享存储 %s 的挂载现场检查失败：%w", shareName, checkErr)
+	}
+	if len(checkResult.States) != 1 || !checkResult.States[0].Mounted {
+		return RelayOutput{}, fmt.Errorf(
+			"共享存储 %s 在服务器 %s 上尚未实际挂载；请先调用幂等的 mount_share 工具，再重试 relay_file",
+			shareName, server.Name)
+	}
+
+	sourceSize, inspectErr := relayLocalCopyInspect(ctx, client, sourcePath, targetPath)
+	if inspectErr != nil {
+		return RelayOutput{}, inspectErr
+	}
+
+	spaceCheck := "ok"
+	sftpClient, sftpErr := client.RelaySFTP()
+	if sftpErr != nil {
+		spaceCheck = "unavailable"
+	} else {
+		defer sftpClient.Close()
+		available, availableOK, spaceErr := client.RelayAvailable(sftpClient, path.Dir(targetPath))
+		if spaceErr != nil || !availableOK {
+			spaceCheck = "unavailable"
+		} else if available < sourceSize {
+			return RelayOutput{}, fmt.Errorf(
+				"目标可用空间 %d 字节，小于源文件 %d 字节；请先清理目标空间再重试", available, sourceSize)
+		}
+	}
+
+	readKeys := []string{relayKeyOf(serverID, sourcePath)}
+	writeKeys := []string{
+		relayKeyOf(serverID, targetPath),
+		relayKeyOf(serverID, targetPath+relayPartialSuffix),
+	}
+	command := buildRelayLocalCopyCommand(sourcePath, targetPath)
+	spec := BgTaskSpec{
+		ProjectID: projectID, ServerID: serverID, Command: summary(), Timeout: relayRunCap,
+		AuditStart: func() {
+			_ = st.WriteAudit(store.AuditRow{
+				TS: start, ProjectID: projectID, ServerID: serverID,
+				Action: "relay-bg-start", Command: summary(), Status: "ok",
+				DurationMS: time.Since(start).Milliseconds(),
+			})
+		},
+		AuditAction: "relay-bg-end",
+		AuditEnd:    func(row store.AuditRow) error { return st.WriteAudit(row) },
+		Run: func(taskContext context.Context, task *bgTask) {
+			taskManager := tm
+			taskManager.mu.Lock()
+			task.client = client
+			taskManager.mu.Unlock()
+			taskManager.runTask(taskContext, task, client,
+				func(execContext context.Context, stdout, stderr io.Writer) (int, bool, error) {
+					return client.ExecWriters(execContext, command, 0, stdout, stderr)
+				}, nil)
+		},
+	}
+	taskID, _, reserveErr := tm.ReserveRelay(spec, readKeys, writeKeys)
+	if reserveErr != nil {
+		return RelayOutput{}, reserveErr
+	}
+	transferred = true
+	startOwned = true
+	return RelayOutput{
+		TaskID: taskID, Mode: relayLocalCopyMode, RestartAfterInterruption: true,
+		BytesTotal: sourceSize, SpaceCheck: spaceCheck,
+		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
+	}, nil
+}
+
+// sharedStoragesVisibleInSession 返回至少有一个可挂载服务器进入当前授权
+// 范围的共享存储；这是共享地址识别共用的授权裁剪口径。
+func sharedStoragesVisibleInSession(st *store.Store, profileID string) ([]*models.SharedStorage, error) {
+	visible, err := sessionVisibleServerIDs(st, profileID, "")
+	if err != nil {
+		return nil, err
+	}
+	allShares, err := st.ListSharedStorages(store.SharedStorageFilter{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.SharedStorage, 0, len(allShares))
+	for _, share := range allShares {
+		if sharedStorageHasVisibleServer(share, visible) {
+			out = append(out, share)
+		}
+	}
+	return out, nil
+}
+
+func sharedStorageHasVisibleServer(share *models.SharedStorage, visible map[string]bool) bool {
+	for _, mountable := range share.MountableServers {
+		if visible[mountable.ID] {
+			return true
+		}
+	}
+	return false
+}
+
+func sharedStorageMountableOnServer(share *models.SharedStorage, serverID string) bool {
+	for _, mountable := range share.MountableServers {
+		if mountable.ID == serverID {
+			return true
+		}
+	}
+	return false
+}
+
+func relayLocalCopyInspect(
+	ctx context.Context, client *sshbroker.Client, sourcePath, targetPath string,
+) (int64, error) {
+	command := strings.Join([]string{
+		"set -eu",
+		fmt.Sprintf("if [ -d %s ]; then echo source-directory; exit 2; fi",
+			sshbroker.POSIXShellQuote(sourcePath)),
+		fmt.Sprintf("if [ ! -f %s ] || [ -L %s ]; then echo source-not-regular; exit 3; fi",
+			sshbroker.POSIXShellQuote(sourcePath), sshbroker.POSIXShellQuote(sourcePath)),
+		fmt.Sprintf("if [ -d %s ]; then echo target-directory; exit 4; fi",
+			sshbroker.POSIXShellQuote(targetPath)),
+		fmt.Sprintf("printf 'size='; wc -c < %s", sshbroker.POSIXShellQuote(sourcePath)),
+	}, "\n")
+	result, err := client.Exec(ctx, command, 30*time.Second, sharemount.MaxOutputBytes)
+	if err != nil {
+		return 0, fmt.Errorf("检查本地拷贝源文件与目标路径失败：%w", err)
+	}
+	switch result.ExitCode {
+	case 2:
+		return 0, fmt.Errorf(
+			"源路径 %s 是目录；relay_file 只支持常规文件，请先把目录打包成一个文件", sourcePath)
+	case 3:
+		return 0, fmt.Errorf("源路径 %s 不是常规文件；relay_file 只支持常规文件", sourcePath)
+	case 4:
+		return 0, fmt.Errorf(
+			"目标路径 %s 是目录；relay_file 只支持常规文件，请先打包目录再传输", targetPath)
+	case 0:
+		size, parseErr := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(
+			strings.TrimSpace(result.Stdout), "size=")), 10, 64)
+		if parseErr != nil || size < 0 {
+			return 0, fmt.Errorf("本地拷贝源文件大小输出不合法：%q", result.Stdout)
+		}
+		return size, nil
+	default:
+		return 0, fmt.Errorf("检查本地拷贝源文件与目标路径失败，退出码 %d", result.ExitCode)
+	}
+}
+
+func relayLocalCopyCheckExec(
+	client *sshbroker.Client, st *store.Store, server *models.Server,
+) sharemount.RemoteExecFunc {
+	return func(ctx context.Context, _ *models.Server, request sharemount.RemoteExecRequest) (sharemount.RemoteExecResult, error) {
+		deadline, hasDeadline := ctx.Deadline()
+		if !hasDeadline {
+			deadline = time.Now().Add(sharemount.DefaultTimeout)
+		}
+		if !request.Privileged {
+			result, err := client.Exec(ctx, request.Command, time.Until(deadline), sharemount.MaxOutputBytes)
+			return sharemount.RemoteExecResult{
+				Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: result.ExitCode,
+				TimedOut: result.TimedOut, Truncated: result.Truncated,
+			}, err
+		}
+		if server.SudoCredentialID == "" {
+			return sharemount.RemoteExecResult{}, sharemount.ErrNoSudo
+		}
+		credential, err := st.GetCredential(server.SudoCredentialID)
+		if err != nil {
+			return sharemount.RemoteExecResult{}, fmt.Errorf("读取 sudo 凭据失败：%w", err)
+		}
+		if credential == nil {
+			return sharemount.RemoteExecResult{}, fmt.Errorf("服务器条目 %s 的 sudo 凭据不存在", server.Name)
+		}
+		result, err := client.ExecSudo(ctx, request.Command, credential.Secret,
+			time.Until(deadline), sharemount.MaxOutputBytes,
+			sshbroker.WithSudoStandardInput(request.StandardInput))
+		mapped := sharemount.RemoteExecResult{
+			Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: result.ExitCode,
+			TimedOut: result.TimedOut, Truncated: result.Truncated,
+		}
+		if err == nil && result.Sudo != nil && result.Sudo.Outcome != sshbroker.SudoElevated {
+			return mapped, &sharemount.RemoteSudoFailure{Diagnostic: fmt.Sprintf(
+				"sudo 提权未完成（%s）：%s", result.Sudo.Outcome, result.Sudo.Diagnostic)}
+		}
+		return mapped, err
+	}
+}
+
+func buildRelayLocalCopyCommand(sourcePath, targetPath string) string {
+	partialPath := targetPath + relayPartialSuffix
+	localCopyNotice := "本地拷贝模式：中断、停止或失败后不能续传，重跑会从文件开头覆盖旧半成品"
+	return strings.Join([]string{
+		"set -eu",
+		"printf '%s\\n' " + sshbroker.POSIXShellQuote(localCopyNotice),
+		fmt.Sprintf("mkdir -p -- %s", sshbroker.POSIXShellQuote(path.Dir(targetPath))),
+		"printf '%s\\n' " + sshbroker.POSIXShellQuote(fmt.Sprintf(
+			"cp -- %s %s", sshbroker.POSIXShellQuote(sourcePath), sshbroker.POSIXShellQuote(partialPath))),
+		fmt.Sprintf("cp -- %s %s", sshbroker.POSIXShellQuote(sourcePath), sshbroker.POSIXShellQuote(partialPath)),
+		"printf '%s\\n' " + sshbroker.POSIXShellQuote(fmt.Sprintf(
+			"mv -- %s %s", sshbroker.POSIXShellQuote(partialPath), sshbroker.POSIXShellQuote(targetPath))),
+		fmt.Sprintf("mv -- %s %s", sshbroker.POSIXShellQuote(partialPath), sshbroker.POSIXShellQuote(targetPath)),
+	}, "\n")
+}

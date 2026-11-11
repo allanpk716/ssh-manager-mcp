@@ -488,36 +488,51 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
 
 ### relay_file
 
-把**大文件**从一台服务器**经 broker 中继**到另一台——源也可以是 **broker 本机
-盘**（`from_server_id` 省略/留空）。**零上下文大文件通道**：文件字节只在 broker
-持有的两条 SSH 连接间分块流式转发，**工具结果、`exec_output`、审计里都只有
-元数据**（task_id / 块数 / 进度 / 摘要），文件内容永远不进你的上下文。适用：
+把**大文件**从一台服务器传到另一台——源也可以是 **broker 本机盘**
+（`from_server_id` 省略/留空），或一端直接给共享地址。常规路径走 **经 broker
+的中继**；一端是共享地址、另一端是已实际挂载这处共享的 Linux 或 macOS 服务
+器时，走这台服务器上的本地拷贝。**零上下文大文件通道**：工具结果、
+`exec_output`、审计里都只有元数据（task_id / 模式 / 块数 / 进度 / 摘要），
+文件内容永远不进你的上下文。适用：
 文件超过 `upload_file` 的 1 MiB 单文件帽（模型权重、GB 级产物），或文件在一台
 机上、必须落到另一台机（在线机下载好 → 送真空离线机）。**无 ssh 二进制直接
 对应物**：`scp serverA:file serverB:` 形似，但那是两端直连、两端都要操作者的
 凭据；relay 是 broker 代理、凭据不出 vault——属 Broker-specific 能力。
 
-- **参数**：`to_server_id` + `to_path`（绝对路径，目标恒为远程服务器）+ 源二选一：
+- **参数**：`to_server_id` + `to_path`（绝对路径，目标恒为远程服务器）+ 源三选一：
   `from_server_id` + `from_path`（该机上的绝对路径），或只给 `from_path`
-  （**broker 所在机器**上的绝对路径）。路径 `/` 开头或 Windows 盘符形 `C:/`。
+  （**broker 所在机器**上的绝对路径），或 `from_share_address`（一个共享地
+  址）。目标也可以把 `to_server_id` + `to_path` 换成 `to_share_address`。共享
+  地址写成 `\\<主机>\<共享名>\<子路径>` 或
+  `smb://<主机>/<共享名>/<子路径>`；一次最多一端是共享地址，且不能与同一
+  端的普通路径字段同给。常规路径 `/` 开头或 Windows 盘符形 `C:/`。
   目标父目录不存在会自动创建；完成后**原子替换**目标路径上已存在的文件
   （真名出现 = 传完的可见保证）。同源同径（from==to 同机同路径）会被拒
   （自我覆盖 no-op）。
 - **三件套用法**：调用立即返回 `task_id`（`exec_background` 同款形态）——
   `exec_output(task_id)` 轮询逐块进度与最终摘要，`exec_stop(task_id)` 中途停。
   relay 任务占**同一张后台任务表**（每 project 32 上限、任务表纯进程内
-  **broker 重启即失**——但进度不丢：重跑 relay_file 同参数即续传，断点锚在
-  目标端盘上）。单任务时长上限 **72 小时**（常量；到点 = 可续传的 timeout 终态）。
-- **续传语义（核心）**：中断 / 停止 / 失败都会在目标端留下
+  **broker 重启即失**）。启动结果的 `mode` 区分 `streaming_relay` 与
+  `local_copy`；`restart_after_interruption` 写明中断后是否必须从头重跑。
+  单任务时长上限 **72 小时**。
+- **共享地址本地拷贝**：`mode="local_copy"`。sshmgr 先用挂载工具同款的只读
+  现场检查确认另一端服务器已实际挂载这处共享，再在这台 Linux 或 macOS 服
+  务器的一条 SSH 连接上执行固定 `cp` 命令：先写
+  `<目标路径>.sshmgr-partial`，成功后改名成目标路径。它不生成块清单、不续
+  传；中断、停止、失败或重跑都从文件开头覆盖旧半成品。尚未挂载时报错并提
+  示先调用幂等的 `mount_share`，不会自动挂载。Windows 本地拷贝、两端都是共
+  享地址、另一端不在可挂载范围内当前明确报「尚未支持」。本地拷贝与
+  流式中继共用同一目标路径和半成品的运行中冲突保护。
+- **流式中继的续传语义（核心）**：中断 / 停止 / 失败都会在目标端留下
   `<to_path>.sshmgr-partial` + `<to_path>.sshmgr-manifest.json`（已完成块清单
   ——**续传唯一事实源**，落在目标盘、不随 broker 死）。**重跑 relay_file 同参数
   = 只补缺失块**；返回里的 `resumed_chunks` 就是接上的已完成块数。块大小来自
   broker 构造期 env `SSHMGR_TRANSFER_CHUNK`（缺省 256 MiB，越界 broker 拒启动）
   ——**续传两端块网格必须一致**，改过 env 的重跑会被拒（错误指引还原 env 或
   `fresh=true`）。
-- **`fresh=true`**：丢弃目标端 partial + manifest，从 byte 0 重传。只在该放弃
+- **流式中继的 `fresh=true`**：丢弃目标端 partial + manifest，从 byte 0 重传。只在该放弃
   进度时用——清单不符 / 非常态残留的错误文本都会明示 "pass fresh=true"。
-- **双摘要验证配方（重要）**：最后一行进度带摘要，按任务形态二选一：
+- **流式中继的双摘要验证配方（重要）**：最后一行进度带摘要，按任务形态二选一：
   - 本任务**从 byte 0 连续流到 EOF**（fresh 起步或空清单自愈）→ 报
     `file_sha256`——直接 `exec sha256sum <to_path>` 比对即可；
   - **续传了已完成块**的任务报**块 merkle 根**（`root=sha256:…`）——每块写盘时
@@ -532,7 +547,7 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
 - **`space_check` 字段**：`"unavailable"` = 目标端报告不了剩余空间（部分
   Windows 目标）——**知情继续是安全的**：盘真满只是停在某块边界，腾空间后续传。
   空间**已知不足**则是 refusal（错误带 avail/need 证据，零字节移动）。
-- **posix-rename 硬依赖**：目标端 SFTP 服务端必须支持
+- **流式中继的 posix-rename 硬依赖**：目标端 SFTP 服务端必须支持
   `posix-rename@openssh.com`（OpenSSH 全系含 Win32 端口都支持；非 OpenSSH 系
   sftp 目标出局）——不支持的任务启动即 failed，错误明示 "lacks posix-rename"，
   无参数可绕。
@@ -540,6 +555,9 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
   **无害但占盘**——`exec rm <to_path>.sshmgr-partial <to_path>.sshmgr-manifest.json`
   清掉。例外：真名已在 + manifest 残留 = 提交成功后的无害碎片，随手删 manifest
   即可。
+- **本地拷贝的残留清理**：不打算重跑时，目标端只剩
+  `<目标路径>.sshmgr-partial`，用 `exec rm <目标路径>.sshmgr-partial` 清掉；
+  本地拷贝不会生成 manifest。
 
 ### update_server_metadata
 
@@ -789,6 +807,8 @@ agent 披露这台服务器条目的主机地址），地址被隐藏时显示 `
 - 共享地址不能与普通目标混用，一次也只能查询一个共享地址。
 - 翻译只读登记数据，不主动探测、不建立 SSH 连接、不改变远端状态，也不
   证明共享当时已经挂载。
+- `relay_file` 也接受共享地址作为源端或目标端；它会另行做只读挂载现场检查，
+  不使用这个查询工具的翻译结果。
 
 ## 错误对照表（每条给"你该做什么"）
 
