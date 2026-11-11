@@ -13,17 +13,21 @@ var ErrDeletePreviewChanged = store.ErrServerDeletePreviewChanged
 // CredentialImpact 是删除预览里的一份凭据影响。
 type CredentialImpact = store.ServerDeleteCredential
 
+// DeliveryRecordImpact 是删除预览里的一条机密项下发记录。
+type DeliveryRecordImpact = store.ServerDeleteDeliveryRecord
+
 // DeletePreview 是与界面无关的删除影响清单加可比对摘要。设备在删除服务器
 // 条目时保留。
 type DeletePreview struct {
-	Server       *models.Server
-	DeviceName   string
-	HasDevice    bool
-	Anchors      []store.PinMeta
-	ProfileNames []string
-	SecretNames  []string
-	Credentials  []CredentialImpact
-	Digest       string
+	Server          *models.Server
+	DeviceName      string
+	HasDevice       bool
+	Anchors         []store.PinMeta
+	ProfileNames    []string
+	SecretNames     []string
+	Credentials     []CredentialImpact
+	DeliveryRecords []DeliveryRecordImpact
+	Digest          string
 }
 
 // DeletePreview 按名字或标识符返回删除影响清单；找不到时返回 (nil, nil)。
@@ -45,7 +49,7 @@ func deletePreview(preview *store.ServerDeletePreview) *DeletePreview {
 		Server: preview.Server, HasDevice: preview.HasDevice,
 		Anchors: preview.Anchors, ProfileNames: preview.ProfileNames,
 		SecretNames: preview.SecretNames, Credentials: preview.Credentials,
-		Digest: preview.Digest(),
+		DeliveryRecords: preview.DeliveryRecords, Digest: preview.Digest(),
 	}
 	if preview.Device != nil {
 		out.DeviceName = preview.Device.Name

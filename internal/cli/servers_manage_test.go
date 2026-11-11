@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
@@ -368,5 +369,64 @@ func TestServersListSharedCredentialBeforeWrite(t *testing.T) {
 	editOut := runCli(t, "servers", "edit", "enc", "--key-passphrase", "secret-pass")
 	if !strings.Contains(editOut, "补私钥口令会影响共用这把私钥的全部服务器：enc,peer") {
 		t.Fatalf("edit 应在写入前列出共用服务器：\n%s", editOut)
+	}
+}
+
+// TestServersRmPreviewListsDeliveryRecords `servers rm` 的删除影响预览列出
+// 会随条目删除的下发记录；确认删除后记录消失，输出不含机密项值。
+func TestServersRmPreviewListsDeliveryRecords(t *testing.T) {
+	dbPath, mk := newVaultEnvNoRun(t)
+	st := openInspect(t, dbPath, mk)
+	webID, err := st.AddServer(&models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "root", Role: "应用服务器",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("API_TOKEN", "接口令牌", []byte("login-secret-value-9f21"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{webID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"API_TOKEN"}, []string{"web"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
+		ServerID: webID, Path: "/etc/app/config.yml",
+		Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+		FileSHA256: strings.Repeat("4", 64), WrittenAt: time.Unix(1760000900, 0),
+		Secrets:              []store.SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 1}},
+		InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+		AuthorizationProfileID: profileID,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runCli(t, "servers", "rm", "--yes", "web")
+	for _, want := range []string{
+		"会随之删除的下发记录", "web：/etc/app/config.yml", "API_TOKEN",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("servers rm 预览缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "login-secret-value-9f21") {
+		t.Fatalf("servers rm 输出不得出现机密项值：\n%s", out)
+	}
+	after := openInspect(t, dbPath, mk)
+	records, err := after.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("确认删除后下发记录应随服务器条目删除：%+v", records)
 	}
 }

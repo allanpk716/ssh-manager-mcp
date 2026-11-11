@@ -239,6 +239,11 @@ func deletePreviewView(preview *servermanage.DeletePreview) *webui.ServerDeleteP
 		AnchorCount: len(preview.Anchors), ProfileNames: preview.ProfileNames,
 		SecretNames: preview.SecretNames, Digest: preview.Digest,
 	}
+	for _, record := range preview.DeliveryRecords {
+		view.DeliveryRecords = append(view.DeliveryRecords, webui.ServerDeleteDeliveryRecordView{
+			ServerName: record.ServerName, Path: record.Path, SecretNames: record.SecretNames,
+		})
+	}
 	for _, impact := range preview.Credentials {
 		label := credentialLabel(impact.Kind, impact.Type)
 		if impact.Deleted {

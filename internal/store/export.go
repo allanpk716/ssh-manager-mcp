@@ -49,6 +49,11 @@ type Snapshot struct {
 	// 明文字段携带值，靠外层加密保护；导入时用目标库的主密钥重新加密。
 	Secrets      []SnapshotSecret      `json:"secrets,omitempty"`
 	SecretAllows []SnapshotSecretAllow `json:"secret_allows,omitempty"`
+	// SecretDeliveryRecords 是机密项下发记录（哪个机密项写到了哪台服务器
+	// 条目的哪个路径）。只进入 owner 的全量导出与加密备份，绝不进入
+	// profile 裁剪的客户端快照；机密项已删除的引用按原名字与标识符携带，
+	// 导入后由目标库重新推导删除标注。
+	SecretDeliveryRecords []SnapshotSecretDeliveryRecord `json:"secret_delivery_records,omitempty"`
 	// SharedStorages 是共享存储登记。可挂载范围不在这里重复携带；它由
 	// 机密项的可写入服务器关联推导。旧快照没有该段时导入零行。
 	SharedStorages []SnapshotSharedStorage `json:"shared_storages,omitempty"`
@@ -299,6 +304,30 @@ type SnapshotSecretAllow struct {
 	ServerID string `json:"server_id"`
 }
 
+// SnapshotSecretDeliveryRecord 是全量快照里的一条下发记录。引用的机密项
+// 可能已在源库删除，因此引用行按内部标识符与原名字原样携带，不依赖目标
+// 库里仍存在该机密项。
+type SnapshotSecretDeliveryRecord struct {
+	ID                     string                            `json:"id"`
+	ServerID               string                            `json:"server_id"`
+	Path                   string                            `json:"path"`
+	PathKey                string                            `json:"path_key"`
+	Template               []byte                            `json:"template"`
+	FileSHA256             string                            `json:"file_sha256"`
+	WrittenAt              int64                             `json:"written_at"`
+	InitiatingDeviceName   string                            `json:"initiating_device_name"`
+	InitiatingInstanceName string                            `json:"initiating_instance_name"`
+	RecordedAt             int64                             `json:"recorded_at"`
+	Secrets                []SnapshotSecretDeliverySecretRef `json:"secrets,omitempty"`
+}
+
+// SnapshotSecretDeliverySecretRef 是快照下发记录里的一个机密项引用。
+type SnapshotSecretDeliverySecretRef struct {
+	SecretID     string `json:"secret_id"`
+	SecretName   string `json:"secret_name"`
+	ValueVersion int64  `json:"value_version"`
+}
+
 // SnapshotSharedStorage 是快照里的一处共享存储登记。提供方设备名字、
 // 机密项名字、候选访问地址与可挂载服务器都按标识符或关联表推导；例外
 // 是按 profile 裁剪时设备行可能不下发，因此这里携带提供方设备名供客户端
@@ -544,6 +573,10 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 	if snap.Secrets, snap.SecretAllows, err = s.snapshotSecrets(); err != nil {
 		return nil, err
 	}
+	// 下发记录只随 owner 全量备份走；profile 导出函数从不填充这一段。
+	if snap.SecretDeliveryRecords, err = s.snapshotSecretDeliveryRecords(); err != nil {
+		return nil, err
+	}
 	if snap.SharedStorages, err = s.snapshotSharedStorages(""); err != nil {
 		return nil, err
 	}
@@ -655,6 +688,65 @@ func (s *Store) snapshotSecrets() ([]SnapshotSecret, []SnapshotSecretAllow, erro
 	}
 	ra.Close()
 	return secrets, allows, ra.Err()
+}
+
+// snapshotSecretDeliveryRecords 读取全部下发记录及其机密项引用。引用按记
+// 录内部标识符加机密项名字排序，导出结果稳定。
+func (s *Store) snapshotSecretDeliveryRecords() ([]SnapshotSecretDeliveryRecord, error) {
+	rows, err := s.db.Query(`
+		SELECT id,server_id,path,path_key,template,file_sha256,written_at,
+		       initiating_device_name,initiating_instance_name,recorded_at
+		FROM secret_delivery_records ORDER BY server_id,path_key,id`)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]SnapshotSecretDeliveryRecord, 0)
+	ids := make([]string, 0)
+	for rows.Next() {
+		var record SnapshotSecretDeliveryRecord
+		if err := rows.Scan(
+			&record.ID, &record.ServerID, &record.Path, &record.PathKey, &record.Template,
+			&record.FileSHA256, &record.WrittenAt, &record.InitiatingDeviceName,
+			&record.InitiatingInstanceName, &record.RecordedAt,
+		); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		records = append(records, record)
+		ids = append(ids, record.ID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return records, nil
+	}
+	refRows, err := s.db.Query(`
+		SELECT record_id,secret_id,secret_name,value_version
+		FROM secret_delivery_record_secrets
+		WHERE record_id IN (`+strings.Repeat("?,", len(ids)-1)+`?)
+		ORDER BY record_id,secret_name`, stringIDsToAny(ids)...)
+	if err != nil {
+		return nil, err
+	}
+	defer refRows.Close()
+	byRecord := make(map[string][]SnapshotSecretDeliverySecretRef, len(records))
+	for refRows.Next() {
+		var recordID string
+		var ref SnapshotSecretDeliverySecretRef
+		if err := refRows.Scan(&recordID, &ref.SecretID, &ref.SecretName, &ref.ValueVersion); err != nil {
+			return nil, err
+		}
+		byRecord[recordID] = append(byRecord[recordID], ref)
+	}
+	if err := refRows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range records {
+		records[i].Secrets = byRecord[records[i].ID]
+	}
+	return records, nil
 }
 
 // snapshotSharedStorages 读取共享存储登记。profileID 非空时按挂载密码
@@ -1321,6 +1413,35 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 	for _, a := range snap.SecretAllows {
 		if _, err := tx.Exec(`INSERT INTO secret_server_allow(secret_id,server_id) VALUES(?,?)`, a.SecretID, a.ServerID); err != nil {
 			return fmt.Errorf("insert secret allow %s/%s: %w", a.SecretID, a.ServerID, err)
+		}
+	}
+
+	// 4a-2. 下发记录（票 #230）：只恢复到 owner 库。引用行按原机密项标识
+	// 符与名字落库，源库里已删除的机密项在目标库同样显示为已删除；客户端
+	// 缓存导入即使收到异常带记录的文件也显式跳过。
+	if ownerImport {
+		for _, record := range snap.SecretDeliveryRecords {
+			if _, err := tx.Exec(`
+				INSERT INTO secret_delivery_records(
+					id,server_id,path,path_key,template,file_sha256,written_at,
+					initiating_device_name,initiating_instance_name,recorded_at
+				) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+				record.ID, record.ServerID, record.Path, record.PathKey, record.Template,
+				record.FileSHA256, record.WrittenAt, record.InitiatingDeviceName,
+				record.InitiatingInstanceName, record.RecordedAt,
+			); err != nil {
+				return fmt.Errorf("insert secret delivery record %s/%s: %w", record.ServerID, record.Path, err)
+			}
+			for _, ref := range record.Secrets {
+				if _, err := tx.Exec(`
+					INSERT INTO secret_delivery_record_secrets(
+						record_id,secret_id,secret_name,value_version
+					) VALUES(?,?,?,?)`,
+					record.ID, ref.SecretID, ref.SecretName, ref.ValueVersion,
+				); err != nil {
+					return fmt.Errorf("insert secret delivery record reference %s/%s: %w", record.ID, ref.SecretName, err)
+				}
+			}
 		}
 	}
 

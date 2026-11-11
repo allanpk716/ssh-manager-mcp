@@ -217,6 +217,9 @@ func secretsRmCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
+			if err := printSecretDeliveryReferences(cmd.OutOrStdout(), s, args[0]); err != nil {
+				return err
+			}
 			if err := secretmanage.New(s).DeleteSecret(args[0], secretmanage.CLISource()); err != nil {
 				return err
 			}
@@ -224,6 +227,23 @@ func secretsRmCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// printSecretDeliveryReferences 在删除机密项前列出引用它的全部下发记录。
+// 删除机密项不会删除记录，这里只提示服务器条目与路径，不显示模板与值。
+func printSecretDeliveryReferences(out io.Writer, s *store.Store, name string) error {
+	records, err := s.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{SecretName: name})
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	fmt.Fprintln(out, "引用该机密项的下发记录（删除机密项后记录保留并标注已删除）：")
+	for _, record := range records {
+		fmt.Fprintf(out, "  %s：%s\n", record.ServerName, record.Path)
+	}
+	return nil
 }
 
 func secretsListCmd() *cobra.Command {

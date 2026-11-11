@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -717,7 +718,40 @@ func seedSecretVaultForExport(t *testing.T) (string, []byte) {
 	mustSecretsCli(t, testSecretValueB, "secrets", "set", "API_TOKEN", "--stdin")
 	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "数据库口令", "--stdin")
 	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN", "--servers", "db1,web1")
+	seedDeliveryRecordForExport(t, dbPath, mk)
 	return dbPath, mk
+}
+
+// seedDeliveryRecordForExport 在导出测试库里登记一条引用 API_TOKEN 的下发
+// 记录，覆盖备份与导出必须携带下发记录的要求。
+func seedDeliveryRecordForExport(t *testing.T, dbPath string, mk []byte) {
+	t.Helper()
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db1, err := st.GetServerByName("db1")
+	if err != nil || db1 == nil {
+		t.Fatalf("找不到种子服务器条目 db1：%v", err)
+	}
+	if err := st.GrantServers(profileID, []string{db1.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
+		ServerID: db1.ID, Path: "/etc/app/config.yml",
+		Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+		FileSHA256: strings.Repeat("4", 64), WrittenAt: time.Unix(1760001100, 0),
+		Secrets:              []store.SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 2}},
+		InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+		AuthorizationProfileID: profileID,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // assertSecretSnapshotSegments 比较两个快照的机密项段：字段原样恢复，包括
@@ -729,6 +763,10 @@ func assertSecretSnapshotSegments(t *testing.T, want, got *store.Snapshot) {
 	}
 	if !reflect.DeepEqual(want.SecretAllows, got.SecretAllows) {
 		t.Fatalf("secret allow snapshot rows differ:\nwant %+v\ngot  %+v", want.SecretAllows, got.SecretAllows)
+	}
+	if !reflect.DeepEqual(want.SecretDeliveryRecords, got.SecretDeliveryRecords) {
+		t.Fatalf("secret delivery record snapshot rows differ:\nwant %+v\ngot  %+v",
+			want.SecretDeliveryRecords, got.SecretDeliveryRecords)
 	}
 }
 
@@ -873,4 +911,89 @@ func TestSecretsValueNeverVisible(t *testing.T) {
 	if !strings.Contains(got, "secret-set") || !strings.Contains(got, "值已更改") {
 		t.Fatalf("audit output must show secret actions without values:\n%s", got)
 	}
+}
+
+// seedSecretDeliveryReference 建一个带服务器条目、可写授权与一条下发记录的
+// 权威库，返回库路径与主密钥。记录引用 API_TOKEN，写入 web-1 的固定路径。
+func seedSecretDeliveryReference(t *testing.T) (string, []byte) {
+	t.Helper()
+	dbPath, mk := newSecretsEnv(t)
+	seedSecretServers(t)
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
+	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN", "--servers", "web1")
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web1, err := st.GetServerByName("web1")
+	if err != nil || web1 == nil {
+		t.Fatalf("找不到种子服务器条目 web1：%v", err)
+	}
+	if err := st.GrantServers(profileID, []string{web1.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
+		ServerID: web1.ID, Path: "/etc/app/config.yml",
+		Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+		FileSHA256: strings.Repeat("4", 64), WrittenAt: time.Unix(1760000800, 0),
+		Secrets:              []store.SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 1}},
+		InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+		AuthorizationProfileID: profileID,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	return dbPath, mk
+}
+
+// TestSecretsRmListsDeliveryRecordsBeforeDelete `secrets rm` 删除前列出引用
+// 该机密项的下发记录；删除沿用直接删除语义，记录保留并标注机密项已删除，
+// 任何输出都不出现机密项值。
+func TestSecretsRmListsDeliveryRecordsBeforeDelete(t *testing.T) {
+	dbPath, mk := seedSecretDeliveryReference(t)
+
+	out := mustSecretsCli(t, "", "secrets", "rm", "API_TOKEN")
+	for _, want := range []string{
+		"引用该机密项的下发记录", "web1：/etc/app/config.yml", "已删除机密项 API_TOKEN",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("secrets rm 输出缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, testSecretValueA) {
+		t.Fatalf("secrets rm 输出不得出现机密项值：\n%s", out)
+	}
+
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for name, filter := range map[string]store.SecretDeliveryRecordFilter{
+		"按机密项": {SecretName: "API_TOKEN"},
+		"按服务器": {ServerID: mustServerID(t, st, "web1")},
+	} {
+		records, err := st.SecretDeliveryRecords(filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(records) != 1 || len(records[0].Secrets) != 1 ||
+			records[0].Secrets[0].Name != "API_TOKEN" || !records[0].Secrets[0].Deleted {
+			t.Fatalf("删除机密项后%s查询应保留记录并标注已删除：%+v", name, records)
+		}
+	}
+}
+
+// mustServerID 按名字取服务器条目标识符，找不到时终止测试。
+func mustServerID(t *testing.T, st *store.Store, name string) string {
+	t.Helper()
+	srv, err := st.GetServerByName(name)
+	if err != nil || srv == nil {
+		t.Fatalf("找不到服务器条目 %s：%v", name, err)
+	}
+	return srv.ID
 }

@@ -127,7 +127,15 @@ type ServerDeletePreviewView struct {
 	SecretNames        []string
 	DeletedCredentials []string
 	KeptCredentials    []string
+	DeliveryRecords    []ServerDeleteDeliveryRecordView
 	Digest             string
+}
+
+// ServerDeleteDeliveryRecordView 是删除影响清单里的一条机密项下发记录。
+type ServerDeleteDeliveryRecordView struct {
+	ServerName  string
+	Path        string
+	SecretNames []string
 }
 
 // ErrServerNotFound 表示要操作的服务器条目不存在，页面按 404 处理。

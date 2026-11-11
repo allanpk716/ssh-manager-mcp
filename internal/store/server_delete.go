@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -29,6 +30,17 @@ type ServerDeleteCredential struct {
 	References int
 }
 
+// ServerDeleteDeliveryRecord 是删除预览里的一条机密项下发记录：哪个服务
+// 器条目的哪个路径曾由 sshmgr 填值。引用的机密项即使已删除也按原名字列
+// 出，供 owner 核对随条目一起消失的线索。
+type ServerDeleteDeliveryRecord struct {
+	ServerName  string
+	Path        string
+	FileSHA256  string
+	SecretNames []string
+	WrittenAt   time.Time
+}
+
 // ServerDeletePreview 是服务器条目删除影响清单，只覆盖当前级联删除会动
 // 到的数据；共享存储与下发记录不属于这份清单。
 type ServerDeletePreview struct {
@@ -39,7 +51,9 @@ type ServerDeletePreview struct {
 	ProfileNames []string
 	SecretNames  []string
 	Credentials  []ServerDeleteCredential
-	digest       string
+	// DeliveryRecords 是会随条目一起删除的机密项下发记录。
+	DeliveryRecords []ServerDeleteDeliveryRecord
+	digest          string
 }
 
 // Digest 返回可比对的预览摘要。摘要覆盖预览全部内容与服务器条目修订号：
@@ -135,8 +149,78 @@ func serverDeletePreviewTx(tx *sql.Tx, id string) (*ServerDeletePreview, error) 
 		return nil, err
 	}
 	preview.Credentials = impacts
+	deliveries, err := serverDeleteDeliveryRecordsTx(tx, srv.ID)
+	if err != nil {
+		return nil, err
+	}
+	preview.DeliveryRecords = deliveries
 	preview.digest = previewDigest(preview)
 	return preview, nil
+}
+
+// serverDeleteDeliveryRecordsTx 列出随服务器条目删除的下发记录，按路径排
+// 序；每条记录引用的机密项名字按字母顺序聚合。
+func serverDeleteDeliveryRecordsTx(tx *sql.Tx, serverID string) ([]ServerDeleteDeliveryRecord, error) {
+	rows, err := tx.Query(`
+		SELECT server.name,record.path,record.file_sha256,record.written_at,record.id
+		FROM secret_delivery_records record
+		JOIN servers server ON server.id=record.server_id
+		WHERE record.server_id=? ORDER BY record.path,record.id`, serverID)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]ServerDeleteDeliveryRecord, 0)
+	ids := make([]string, 0)
+	for rows.Next() {
+		var record ServerDeleteDeliveryRecord
+		var recordID string
+		var writtenAt int64
+		if err := rows.Scan(&record.ServerName, &record.Path, &record.FileSHA256, &writtenAt, &recordID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		record.WrittenAt = time.Unix(writtenAt, 0)
+		records = append(records, record)
+		ids = append(ids, recordID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return records, nil
+	}
+	return attachDeliveryRecordSecretNamesTx(tx, records, ids)
+}
+
+// attachDeliveryRecordSecretNamesTx 把每条下发记录引用的机密项名字按字母
+// 顺序填回删除预览条目；服务器条目删除与设备删除共用。
+func attachDeliveryRecordSecretNamesTx(
+	tx *sql.Tx, records []ServerDeleteDeliveryRecord, ids []string,
+) ([]ServerDeleteDeliveryRecord, error) {
+	refRows, err := tx.Query(`
+		SELECT record_id,secret_name FROM secret_delivery_record_secrets
+		WHERE record_id IN (`+strings.Repeat("?,", len(ids)-1)+`?)
+		ORDER BY record_id,secret_name`, stringIDsToAny(ids)...)
+	if err != nil {
+		return nil, err
+	}
+	defer refRows.Close()
+	byRecord := make(map[string][]string, len(records))
+	for refRows.Next() {
+		var recordID, name string
+		if err := refRows.Scan(&recordID, &name); err != nil {
+			return nil, err
+		}
+		byRecord[recordID] = append(byRecord[recordID], name)
+	}
+	if err := refRows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range records {
+		records[i].SecretNames = byRecord[ids[i]]
+	}
+	return records, nil
 }
 
 func serverDeleteProfileNamesTx(tx *sql.Tx, serverID string) ([]string, error) {
@@ -226,6 +310,11 @@ func previewDigest(p *ServerDeletePreview) string {
 	fmt.Fprint(&b, "|credentials=")
 	for _, cred := range p.Credentials {
 		fmt.Fprintf(&b, "%s:%s:%s:%t:%d;", cred.ID, cred.Kind, cred.Type, cred.Deleted, cred.References)
+	}
+	fmt.Fprint(&b, "|deliveries=")
+	for _, record := range p.DeliveryRecords {
+		fmt.Fprintf(&b, "%s:%s:%s:%s:%d;", record.ServerName, record.Path,
+			record.FileSHA256, strings.Join(record.SecretNames, ","), record.WrittenAt.Unix())
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])

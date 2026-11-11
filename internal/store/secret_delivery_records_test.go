@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -501,5 +502,308 @@ func TestRecordSecretDeliveryStoresQueryableRecord(t *testing.T) {
 	if len(got.Secrets) != 1 || got.Secrets[0].Name != "API_TOKEN" ||
 		got.Secrets[0].ValueVersion != 1 || got.Secrets[0].Deleted {
 		t.Fatalf("机密项引用不正确：%+v", got.Secrets)
+	}
+}
+
+// TestSecretDeliveryRecordsSurviveSnapshotExportImport 覆盖 owner 全量导出与
+// 加密备份共用的快照路径：下发记录逐字段恢复到新 vault，机密项已删除的标
+// 注也保持不变；profile 裁剪的客户端快照不携带记录。
+func TestSecretDeliveryRecordsSurviveSnapshotExportImport(t *testing.T) {
+	a, serverID, profileID := seedSecretDeliveryVault(t)
+	if err := a.AddSecret("DB_PASSWORD", "数据库密码", []byte("database-secret-must-not-leak"), CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AllowSecrets([]string{"API_TOKEN", "DB_PASSWORD"}, []string{"web-1"}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	input := func(path string, names []SecretDeliverySecret, digest string) SecretDeliveryRecordInput {
+		return SecretDeliveryRecordInput{
+			ServerID: serverID, Path: path,
+			Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+			FileSHA256: digest, WrittenAt: time.Unix(1760000400, 0),
+			Secrets: names, InitiatingDeviceName: "office-laptop",
+			InitiatingInstanceName: "agent-a", AuthorizationProfileID: profileID,
+		}
+	}
+	if _, err := a.RecordSecretDelivery(input(
+		"/etc/app/token.yml",
+		[]SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 1}},
+		strings.Repeat("7", 64),
+	), CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.RecordSecretDelivery(input(
+		"/etc/app/database.yml",
+		[]SecretDeliverySecret{{Name: "DB_PASSWORD", ValueVersion: 1}},
+		strings.Repeat("8", 64),
+	), CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.DeleteSecret("API_TOKEN", CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	want, err := a.SecretDeliveryRecords(SecretDeliveryRecordFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(want) != 2 || want[0].Path != "/etc/app/database.yml" || want[0].Secrets[0].Deleted ||
+		want[1].Path != "/etc/app/token.yml" || !want[1].Secrets[0].Deleted {
+		t.Fatalf("删除 API_TOKEN 后两条记录应分别带删除标注与不带标注：%+v", want)
+	}
+
+	snap, err := a.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.SecretDeliveryRecords) != 2 {
+		t.Fatalf("全量导出应携带全部下发记录，实际：%+v", snap.SecretDeliveryRecords)
+	}
+	profileSnap, err := a.ExportSnapshotForProfile(profileID, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profileSnap.SecretDeliveryRecords) != 0 {
+		t.Fatalf("profile 裁剪快照不应携带下发记录，实际：%+v", profileSnap.SecretDeliveryRecords)
+	}
+
+	b := newTestStore(t)
+	if err := b.ImportSnapshot(snap); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.SecretDeliveryRecords(SecretDeliveryRecordFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("导入新 vault 后下发记录内容变化：\nwant %+v\ngot  %+v", want, got)
+	}
+}
+
+// TestServerDeletePreviewListsAndCascadesDeliveryRecords 覆盖服务器条目删除
+// 的三件事：预览列出将删除的下发记录；预览摘要覆盖记录，确认后新增记录要
+// 求重新确认；确认删除后记录随条目删除并写不含机密项值的审计行。
+func TestServerDeletePreviewListsAndCascadesDeliveryRecords(t *testing.T) {
+	s, serverID, profileID := seedSecretDeliveryVault(t)
+	writtenAt := time.Unix(1760000500, 0)
+	recordInput := func(path string) SecretDeliveryRecordInput {
+		return SecretDeliveryRecordInput{
+			ServerID: serverID, Path: path,
+			Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+			FileSHA256: strings.Repeat("9", 64), WrittenAt: writtenAt,
+			Secrets:              []SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 1}},
+			InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+			AuthorizationProfileID: profileID,
+		}
+	}
+	revisionBeforeRecord, err := s.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordSecretDelivery(recordInput("/etc/app/config.yml"), CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	revisionAfterRecord, err := s.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revisionAfterRecord != revisionBeforeRecord {
+		t.Fatalf("登记下发记录不应推动快照修订号：%d -> %d", revisionBeforeRecord, revisionAfterRecord)
+	}
+
+	preview, err := s.ServerDeletePreview(serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.DeliveryRecords) != 1 {
+		t.Fatalf("删除预览应列出下发记录：%+v", preview.DeliveryRecords)
+	}
+	got := preview.DeliveryRecords[0]
+	if got.ServerName != "web-1" || got.Path != "/etc/app/config.yml" ||
+		len(got.SecretNames) != 1 || got.SecretNames[0] != "API_TOKEN" ||
+		!got.WrittenAt.Equal(writtenAt) {
+		t.Fatalf("预览里的下发记录字段不正确：%+v", got)
+	}
+
+	// 确认与执行之间新增另一条下发记录：旧摘要必须被拒绝。
+	if _, err := s.RecordSecretDelivery(recordInput("/etc/app/other.yml"), CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.DeleteServerCascadingConfirmed(serverID, preview.Digest())
+	if !errors.Is(err, ErrServerDeletePreviewChanged) {
+		t.Fatalf("预览变化后应整体中止，实际：%v", err)
+	}
+	if records, _ := s.SecretDeliveryRecords(SecretDeliveryRecordFilter{ServerID: serverID}); len(records) != 2 {
+		t.Fatalf("中止删除时不得删除下发记录：%+v", records)
+	}
+
+	fresh, err := s.ServerDeletePreview(serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteServerCascadingConfirmed(serverID, fresh.Digest()); err != nil {
+		t.Fatal(err)
+	}
+	if records, _ := s.SecretDeliveryRecords(SecretDeliveryRecordFilter{}); len(records) != 0 {
+		t.Fatalf("确认删除后下发记录应随服务器条目删除：%+v", records)
+	}
+	auditRows, err := s.QueryAudit(AuditFilter{Actions: []string{"secret-delivery-rm"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditRows) != 2 {
+		t.Fatalf("两条下发记录的删除应各写一行审计，实际 %d 行：%+v", len(auditRows), auditRows)
+	}
+	for _, row := range auditRows {
+		if !strings.Contains(row.Command, "/etc/app/") || !strings.Contains(row.Command, "API_TOKEN") {
+			t.Fatalf("下发记录删除审计应含路径与机密项名字：%s", row.Command)
+		}
+		if strings.Contains(row.Command, "secret-value-must-not-leak") {
+			t.Fatalf("下发记录删除审计不得出现机密项值：%s", row.Command)
+		}
+	}
+}
+
+// TestServerDeleteDeliveryRecordsDoNotAdvanceRevision 把「下发记录本身的删
+// 除不推动快照修订号」钉在存储层：结构完全相同、唯一差别是是否登记过下发
+// 记录的两个库，删除服务器条目后的修订号增量必须相同。
+func TestServerDeleteDeliveryRecordsDoNotAdvanceRevision(t *testing.T) {
+	withRecord, serverID, profileID := seedSecretDeliveryVault(t)
+	record := SecretDeliveryRecordInput{
+		ServerID: serverID, Path: "/etc/app/config.yml",
+		Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+		FileSHA256: strings.Repeat("2", 64), WrittenAt: time.Unix(1760000600, 0),
+		Secrets:              []SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 1}},
+		InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+		AuthorizationProfileID: profileID,
+	}
+	if _, err := withRecord.RecordSecretDelivery(record, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	withoutRecord, bareID, _ := seedSecretDeliveryVault(t)
+
+	withBefore, err := withRecord.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutBefore, err := withoutRecord.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for store, id := range map[*Store]string{withRecord: serverID, withoutRecord: bareID} {
+		preview, err := store.ServerDeletePreview(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.DeleteServerCascadingConfirmed(id, preview.Digest()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withAfter, err := withRecord.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutAfter, err := withoutRecord.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withAfter-withBefore != withoutAfter-withoutBefore {
+		t.Fatalf("下发记录的删除不应额外推动快照修订号：有记录库 %d -> %d，无记录库 %d -> %d",
+			withBefore, withAfter, withoutBefore, withoutAfter)
+	}
+}
+
+// TestDeviceDeletePreviewCoversAllServerDeliveryRecords 设备删除预览必须列
+// 出该设备全部服务器条目的下发记录；确认后记录随条目删除并写审计，其他
+// 设备的记录不受影响。
+func TestDeviceDeletePreviewCoversAllServerDeliveryRecords(t *testing.T) {
+	s, _, profileID := seedSecretDeliveryVault(t)
+	if _, err := s.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddDevice("别的设备", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	addServerToDevice := func(name, device string) string {
+		t.Helper()
+		added, err := s.AddServerWithCredentialsToDevice(&models.Server{
+			Name: name, Host: "192.0.2.20", Port: 22, User: "deploy",
+		}, nil, nil, device)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return added.ServerID
+	}
+	workA := addServerToDevice("work-a", "工作站")
+	workB := addServerToDevice("work-b", "工作站")
+	other := addServerToDevice("other-host", "别的设备")
+	if err := s.GrantServers(profileID, []string{workA, workB, other}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AllowSecrets([]string{"API_TOKEN"}, []string{"work-a", "work-b", "other-host"}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	record := func(serverID, path string) SecretDeliveryRecordInput {
+		return SecretDeliveryRecordInput{
+			ServerID: serverID, Path: path,
+			Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+			FileSHA256: strings.Repeat("3", 64), WrittenAt: time.Unix(1760000700, 0),
+			Secrets:              []SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 1}},
+			InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+			AuthorizationProfileID: profileID,
+		}
+	}
+	for _, input := range []SecretDeliveryRecordInput{
+		record(workA, "/etc/app/a.yml"), record(workB, "/etc/app/b.yml"), record(other, "/etc/app/other.yml"),
+	} {
+		if _, err := s.RecordSecretDelivery(input, CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	preview, err := s.DeviceDeletePreview("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.DeliveryRecords) != 2 {
+		t.Fatalf("设备删除预览应列出该设备全部服务器条目的下发记录：%+v", preview.DeliveryRecords)
+	}
+	if preview.DeliveryRecords[0].ServerName != "work-a" || preview.DeliveryRecords[0].Path != "/etc/app/a.yml" ||
+		preview.DeliveryRecords[1].ServerName != "work-b" || preview.DeliveryRecords[1].Path != "/etc/app/b.yml" {
+		t.Fatalf("设备删除预览的下发记录不正确：%+v", preview.DeliveryRecords)
+	}
+
+	// 确认后又给该设备的服务器登记记录：旧预览必须整体中止。
+	if _, err := s.RecordSecretDelivery(record(workA, "/etc/app/late.yml"), CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteDeviceCascading("工作站", preview); !errors.Is(err, ErrDeviceDeletePreviewChanged) {
+		t.Fatalf("设备删除预览变化后应整体中止，实际：%v", err)
+	}
+
+	fresh, err := s.DeviceDeletePreview("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteDeviceCascading("工作站", fresh); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := s.SecretDeliveryRecords(SecretDeliveryRecordFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 1 || remaining[0].ServerName != "other-host" {
+		t.Fatalf("设备删除后只应保留其他设备的下发记录：%+v", remaining)
+	}
+	for _, record := range remaining {
+		if record.ServerName == "work-a" || record.ServerName == "work-b" {
+			t.Fatalf("设备的服务器条目记录应随设备删除：%+v", record)
+		}
+	}
+	auditRows, err := s.QueryAudit(AuditFilter{Actions: []string{"secret-delivery-rm"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditRows) != 3 {
+		t.Fatalf("随设备删除的三条下发记录应各写一行审计，实际 %d 行", len(auditRows))
 	}
 }
