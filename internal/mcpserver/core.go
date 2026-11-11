@@ -539,24 +539,25 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 
 // UploadContentForProfile 把调用方直接提交的内容写入远端文件；目标服务
 // 器必须已在 profile 授权集合内。执行顺序固定：① 参数校验；② profile
-// 授权检查；③ 大小预检与 Base64 解码；④ 读取本地服务器条目、填入机密
-// 项占位符并按填值后的字节复查大小；⑤ 取凭据并连接目标服务器；⑥ 写
-// 入文件；⑦ 写审计。前四步都不访问目标服务器。
+// 授权检查；③ 读取文本字节或解码 Base64；④ 读取本地服务器条目、填入
+// 机密项占位符并按填值后的字节数检查大小上限；⑤ 取凭据并连接目标服务
+// 器；⑥ 写入文件；⑦ 写审计。前四步都不访问目标服务器。
 //
-// cap arrives from the NewServerFromSource-resolved env seam
-// (SSHMGR_UPLOAD_CONTENT_MAX); tests pass small caps directly.
+// 大小上限由 NewServerFromSource 从环境变量 SSHMGR_UPLOAD_CONTENT_MAX
+// 解析；测试直接传入较小的上限。
 //
 // 审计状态沿用上传工具：profile 或机密项授权拒绝为 denied；缺凭据为
 // no_credential；主机密钥不匹配、连接失败和取消各有固定值；参数错误、
 // 大小超限、Base64 错误、机密项读取失败和写入失败为 error。
 //
-// 审计里的字节数在成功时等于填值后的实际写入字节数；超限拒绝等于触发
-// 拒绝的那次大小检查值；参数和解码失败为 0。
+// 审计里的字节数在成功时等于填值后的实际写入字节数；已完成文本字节读
+// 取或 Base64 解码后的拒绝为填值前模板字节数，避免间接暴露机密值长度；
+// 更早失败为 0。
 func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64, hk ...sshbroker.HostKeyStore) (out UploadContentOutput, err error) {
 	if encoding == "" {
 		encoding = "text"
 	}
-	byteCount := int64(0) // feeds the refusal error AND the audit Command (see table above)
+	byteCount := int64(0) // 只供审计使用；成功后改为实际写入字节数
 	var status string
 	var filledSecretNames []string
 	start := time.Now()
@@ -575,7 +576,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		})
 	}()
 
-	// ① param-level validation (before the gate — caller's own input only).
+	// ① 参数校验只依赖调用方自己提交的输入，先于 profile 授权检查执行。
 	if encoding != "text" && encoding != "base64" {
 		return UploadContentOutput{}, fmt.Errorf("encoding must be \"text\" or \"base64\", got %q", encoding)
 	}
@@ -586,7 +587,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return UploadContentOutput{}, fmt.Errorf("base64 content must be single-line standard base64 with padding — join lines and resend")
 	}
 
-	// ② iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
+	// ② 目标服务器必须属于 profile 授权集合；先检查，再读取凭据或连接。
 	profileServerIDs, gerr := st.ServersForProfile(profileID)
 	if gerr != nil {
 		return UploadContentOutput{}, gerr
@@ -652,14 +653,13 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	contentBytes = filled.Content
 	r := bytes.NewReader(contentBytes)
 
-	// ⑤ server + credential + host key + connect — the same chain every broker
-	// tool walks (DownloadForProfile verbatim; Plan 31 redaction lives in
-	// sshbroker.ConnectServerEntry at the source).
+	// ⑤ 取凭据、校验主机密钥并连接目标服务器；目标主机明文在连接层生成
+	// 错误时统一遮蔽。
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
 		if errors.Is(aerr, vault.ErrNoCredential) {
-			// Credential-less server (Plan 20 C0): refused BEFORE any connect —
-			// the error carries the configure-a-credential hint for the agent.
+			// 没有登记凭据的服务器在任何连接前拒绝；错误文本包含配置凭据
+			// 的提示。
 			status = "no_credential"
 			err = aerr
 			return
@@ -689,7 +689,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	}
 	defer cli.Close()
 
-	// ⑥ write (parent creation + checked Close live inside WriteFile).
+	// ⑥ 写入文件；父目录创建和关闭结果检查都在写入函数内完成。
 	var createMode os.FileMode
 	if len(filledSecretNames) > 0 && !srv.ShellType.IsWindows() {
 		createMode = 0o600
