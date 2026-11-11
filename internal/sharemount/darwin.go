@@ -17,9 +17,11 @@ const (
 	darwinExitLockTimeout    = 87
 	darwinExitRemoteNewer    = 88
 	darwinExitInvalidConfig  = 89
-	darwinAutoMaster         = "/etc/auto_master"
-	darwinMapFile            = "/etc/sshmgr/auto_share"
-	darwinMountRoot          = "/mnt/sshmgr"
+	// darwinExitShareRevoked 表示目标服务器上的撤销标记仍对本次快照生效。
+	darwinExitShareRevoked = 90
+	darwinAutoMaster       = "/etc/auto_master"
+	darwinMapFile          = "/etc/sshmgr/auto_share"
+	darwinMountRoot        = "/mnt/sshmgr"
 )
 
 // darwinMountExitCodeError 把 macOS 固定挂载命令的已知退出码翻译为中文
@@ -44,6 +46,9 @@ func darwinMountExitCodeError(exitCode int) error {
 	case darwinExitInvalidConfig:
 		return mountFailure(MountClassError, errors.New(
 			"目标服务器上的 sshmgr autofs 配置无法解析，请 owner 检查后再试"))
+	case darwinExitShareRevoked:
+		return mountFailure(MountClassShareRevoked, errors.New(
+			"共享存储已从这台服务器撤销，不能重新挂载；如 owner 已重新授权，请先同步快照后再试"))
 	default:
 		return nil
 	}
@@ -207,6 +212,10 @@ if [ "$sshmgr_after_marker" -ne 0 ]; then
 fi
 
 ` + remoteVersionGuardScript(darwinMountMarker, darwinExitRemoteNewer) + `
+` + revokedMarkerGuardScript(
+		"/etc/sshmgr/"+url.PathEscape(share.Name)+".revoked",
+		darwinMountMarker, darwinExitShareRevoked, darwinExitInvalidConfig,
+	) + `
 ` + candidateAddressSelectionScript(candidates, !options.PreferFirstCandidate) + `
 
 sshmgr_existing_configuration=no
@@ -242,6 +251,7 @@ fi
 ` + mountTableCheckScript(CheckSystemDarwin) + `
 if [ "$sshmgr_existing_configuration" = yes ] && [ "$sshmgr_reset" = no ] &&
    [ "$sshmgr_mounted" = yes ]; then
+  rm -f "$sshmgr_revoked_marker"
   echo ` + darwinMountMarker + ` result=no-change selected=$sshmgr_selected_index reset=no
   exit 0
 fi
@@ -322,6 +332,7 @@ elif [ "$sshmgr_existing_configuration" = yes ]; then
 else
   sshmgr_result=update-success
 fi
+rm -f "$sshmgr_revoked_marker"
 echo ` + darwinMountMarker + ` result=$sshmgr_result selected=$sshmgr_selected_index reset=$sshmgr_reset
 `
 }

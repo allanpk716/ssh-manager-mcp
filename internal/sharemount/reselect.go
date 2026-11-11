@@ -128,6 +128,12 @@ func (s *Service) Reselect(parent context.Context, request ReselectRequest) (*Re
 }
 
 func reselectExitCodeError(systemName string, exitCode int) error {
+	if exitCode == 90 {
+		if systemName == "Linux" {
+			return linuxMountExitCodeError(exitCode)
+		}
+		return darwinMountExitCodeError(exitCode)
+	}
 	switch exitCode {
 	case 85:
 		return ErrReselectUnmountFailed

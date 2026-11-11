@@ -20,8 +20,10 @@ const (
 	linuxExitLockTimeout        = 87
 	linuxExitRemoteNewer        = 88
 	linuxExitInvalidFstab       = 89
-	linuxCredentialRoot         = "/etc/sshmgr/shares"
-	linuxMountRoot              = "/mnt/sshmgr"
+	// linuxExitShareRevoked 表示目标服务器上的撤销标记仍对本次快照生效。
+	linuxExitShareRevoked = 90
+	linuxCredentialRoot   = "/etc/sshmgr/shares"
+	linuxMountRoot        = "/mnt/sshmgr"
 )
 
 // linuxMountExitCodeError 把 Linux 固定挂载命令的已知退出码翻译为中文
@@ -49,6 +51,9 @@ func linuxMountExitCodeError(exitCode int) error {
 	case linuxExitInvalidFstab:
 		return mountFailure(MountClassError, errors.New(
 			"目标服务器上的 sshmgr fstab 条目无法解析，请 owner 检查后再试"))
+	case linuxExitShareRevoked:
+		return mountFailure(MountClassShareRevoked, errors.New(
+			"共享存储已从这台服务器撤销，不能重新挂载；如 owner 已重新授权，请先同步快照后再试"))
 	default:
 		return nil
 	}
@@ -163,6 +168,10 @@ while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
 done < /etc/fstab
 
 ` + remoteVersionGuardScript(linuxMountMarker, linuxExitRemoteNewer) + `
+` + revokedMarkerGuardScript(
+		linuxCredentialRoot+"/"+url.PathEscape(share.Name)+".revoked",
+		linuxMountMarker, linuxExitShareRevoked, linuxExitInvalidFstab,
+	) + `
 ` + candidateAddressSelectionScript(candidates, !options.PreferFirstCandidate) + `
 
 sshmgr_selected_version=''
@@ -181,6 +190,7 @@ sshmgr_build_fstab_line
 
 if [ "$sshmgr_existing_line" = "$sshmgr_fstab_line" ] && [ -n "$sshmgr_remote_version" ] &&
    [ "$sshmgr_remote_version" = "$sshmgr_expected_version" ] && sshmgr_is_mounted; then
+  rm -f "$sshmgr_revoked_marker"
   echo ` + linuxMountMarker + ` result=no-change selected=$sshmgr_selected_index
   exit 0
 fi
@@ -285,6 +295,7 @@ elif [ "$sshmgr_existing_line" = "$sshmgr_fstab_line" ]; then
 else
   sshmgr_result=update-success
 fi
+rm -f "$sshmgr_revoked_marker"
 echo ` + linuxMountMarker + ` result=$sshmgr_result selected=$sshmgr_selected_index`
 	return command
 }

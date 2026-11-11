@@ -148,6 +148,10 @@ func reselectAuditResult(err error) string {
 		if errors.As(err, &selection) {
 			return "selection-failed"
 		}
+		var mountFailure *sharemount.MountFailure
+		if errors.As(err, &mountFailure) {
+			return mountFailure.Class
+		}
 		return "error"
 	}
 }
