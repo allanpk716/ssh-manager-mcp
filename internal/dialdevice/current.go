@@ -74,7 +74,7 @@ func Current(st *store.Store, instance string) (Result, error) {
 		return unknown(ReasonRoleUnknown), nil
 	}
 
-	device, err := deviceByID(st, deviceID)
+	device, err := ByID(st, deviceID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -103,7 +103,7 @@ func CurrentForClientCache(st *store.Store) (Result, error) {
 		return Current(st, "")
 	}
 	if deviceID := cacheDeviceIDFor(""); deviceID != "" {
-		device, err := deviceByID(st, deviceID)
+		device, err := ByID(st, deviceID)
 		if err != nil {
 			return Result{}, err
 		}
@@ -132,7 +132,8 @@ func unknown(reason Reason) Result {
 	return Result{Known: false, Reason: reason}
 }
 
-func deviceByID(st *store.Store, id string) (*models.Device, error) {
+// ByID 从完整设备列表里按内部标识符取设备；完整列表带有网络成员。
+func ByID(st *store.Store, id string) (*models.Device, error) {
 	devices, err := st.ListDevices(store.DeviceFilter{})
 	if err != nil {
 		return nil, err

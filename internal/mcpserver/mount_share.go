@@ -135,7 +135,7 @@ func MountShareForProfile(
 	}()
 
 	if st.IsReadOnly() && st.CacheRecommendedVersion() == "" {
-		return nil, errSharedStorageAuthorityTooOld
+		return nil, errTopologyAndSharedStorageAuthorityTooOld
 	}
 	st, snapshotMayBeStale = ensureMountShareSnapshotFresh(ctx, st, snapshotSyncer, storeSource)
 	found, err := st.GetSharedStorage(shareName)

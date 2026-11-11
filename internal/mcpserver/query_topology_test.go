@@ -52,7 +52,7 @@ func TestQueryTopologyToolRegistration(t *testing.T) {
 		if tool.Name != "query_topology" {
 			continue
 		}
-		for _, wanted := range []string{"只读", "不主动探测", "probe_connectivity"} {
+		for _, wanted := range []string{"Read-only", "never probes", "probe_connectivity"} {
 			if !strings.Contains(tool.Description, wanted) {
 				t.Fatalf("query_topology 说明缺少 %q：%s", wanted, tool.Description)
 			}
@@ -267,12 +267,13 @@ func TestQueryTopologySelfGroups(t *testing.T) {
 		"所属网络：家A物理（物理局域网，站点：家A）、虚拟A（虚拟局域网）",
 		"同在物理局域网：",
 		"  家A物理",
-		"    工作设备 [入口一、入口二] ✓4ms 4m前",
+		"    工作设备 [入口一、入口二] ✓4ms 刚刚",
+		"    授权外设备",
 		"    无观察设备",
-		"    旧观察设备 ✓4ms 3d前 旧",
+		"    旧观察设备 ✓4ms 旧",
 		"只能经虚拟局域网到达：",
 		"  虚拟A",
-		"    NAS ✓4ms 2h前 旧",
+		"    NAS ✓4ms 旧",
 		"无共同网络不可达：隔离设备",
 		"未登记服务器：" + fixture.unregisteredID + "（未登记入口）",
 		"本工具不主动探测；需要现场结论请调用 probe_connectivity。",
@@ -281,7 +282,7 @@ func TestQueryTopologySelfGroups(t *testing.T) {
 	if text != want {
 		t.Fatalf("分组输出不符\n得到：\n%s\n期待：\n%s", text, want)
 	}
-	for _, forbidden := range []string{"外部入口", "授权外设备", "192.0.2", "100.64"} {
+	for _, forbidden := range []string{"外部入口", "192.0.2", "100.64"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("分组输出不应包含 %q：%s", forbidden, text)
 		}
@@ -311,7 +312,7 @@ func TestQueryTopologySelfGroups(t *testing.T) {
 
 // TestQueryTopologyOriginRejections 覆盖 from 必填、服务器标识符先授权检
 // 查再换算设备、未知或授权范围外出发点拒绝，以及 self 找不到本机设备时
-// 提示 owner 补登记。
+// 按原因提示 owner 补登记。
 func TestQueryTopologyOriginRejections(t *testing.T) {
 	fixture := newQueryTopologyFixture(t)
 
@@ -351,8 +352,18 @@ func TestQueryTopologyOriginRejections(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, isError = fixture.callQuery(t, map[string]any{"from": "self"})
-	if !isError || !strings.Contains(text, "本机未登记设备，请 owner 补登记") {
-		t.Fatalf("self 找不到设备时的错误 = %q error=%v", text, isError)
+	if !isError || !strings.Contains(text, "本机未设定设备") ||
+		!strings.Contains(text, "sshmgr devices local set") {
+		t.Fatalf("self 未设定本机设备时的错误 = %q error=%v", text, isError)
+	}
+
+	if err := roles.SetLocalDeviceID("device-that-was-deleted"); err != nil {
+		t.Fatal(err)
+	}
+	text, isError = fixture.callQuery(t, map[string]any{"from": "self"})
+	if !isError || !strings.Contains(text, "本机设备设定指向的设备已不存在") ||
+		!strings.Contains(text, "sshmgr devices local set") {
+		t.Fatalf("self 指向已删除设备时的错误 = %q error=%v", text, isError)
 	}
 }
 
@@ -401,6 +412,9 @@ func TestQueryTopologyPairDetailsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := fixture.store.SaveEntryPin(workServer, []byte("anchor")); err != nil {
+		t.Fatal(err)
+	}
 	fixture.recordObservation(t, "工作设备", "家A物理", "192.0.2.200", 4*time.Minute, true)
 	fixture.recordObservation(t, "NAS", "虚拟A", "192.0.2.200", 2*time.Hour, true)
 	observationPath, found, err := probeobserve.PathFor("")
@@ -430,10 +444,11 @@ func TestQueryTopologyPairDetailsDefault(t *testing.T) {
 	want := strings.Join([]string{
 		"出发点：笔记本",
 		"目标：工作设备 [入口一、入口二]",
-		"  家A物理（实际会选） ✓4ms 4m前",
-		"  虚拟A",
+		"  家A物理（物理局域网，实际会选） ✓4ms 刚刚",
+		"  虚拟A（虚拟局域网）",
 		"目标：NAS",
-		"  虚拟A ✓4ms 2h前 旧",
+		"  只能经虚拟局域网到达：虚拟A",
+		"  虚拟A（虚拟局域网） ✓4ms 旧",
 		"目标：隔离设备",
 		"  无共同网络，不可达",
 		"目标：" + fixture.unregisteredID + "（未登记入口）",
@@ -467,9 +482,10 @@ func TestQueryTopologyPairDetailsDefault(t *testing.T) {
 	}
 }
 
-// TestQueryTopologyPairActualSelectionUsesDialSuccessCache 确认服务器目标
-// 的「实际会选」沿用统一拨号候选规划：同级网络里仍有效的成功地址会排到
-// 登记顺序之前；查询本身不改变成功地址缓存。
+// TestQueryTopologyPairActualSelectionUsesDialSuccessCache 确认服务器目
+// 标上「sshmgr 真正拨号时会优先尝试的网络」的标记沿用真实拨号的候选地
+// 址规划：同级网络里仍有效的成功地址会排到登记顺序之前；查询本身不改变
+// 成功地址缓存。
 func TestQueryTopologyPairActualSelectionUsesDialSuccessCache(t *testing.T) {
 	fixture := newQueryTopologyFixture(t)
 	if _, err := fixture.store.AddSite("家B", ""); err != nil {
@@ -492,6 +508,9 @@ func TestQueryTopologyPairActualSelectionUsesDialSuccessCache(t *testing.T) {
 	}
 	workServer, err := fixture.store.GetServerByName("入口一")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.SaveEntryPin(workServer, []byte("anchor")); err != nil {
 		t.Fatal(err)
 	}
 	localDevicePath, err := roles.LocalDevicePath()
@@ -517,7 +536,8 @@ func TestQueryTopologyPairActualSelectionUsesDialSuccessCache(t *testing.T) {
 	if isError {
 		t.Fatalf("query_topology 失败：%s", text)
 	}
-	if !strings.Contains(text, "家B物理（实际会选）") || strings.Contains(text, "家A物理（实际会选）") {
+	if !strings.Contains(text, "家B物理（物理局域网，实际会选）") ||
+		strings.Contains(text, "家A物理（物理局域网，实际会选）") {
 		t.Fatalf("成功地址缓存应让同级网络家B物理排在前面：\n%s", text)
 	}
 	after, err := os.ReadFile(cachePath)
@@ -529,7 +549,104 @@ func TestQueryTopologyPairActualSelectionUsesDialSuccessCache(t *testing.T) {
 	}
 }
 
-// TestQueryTopologyPairDetail 覆盖展开档：设备角色、网络成员地址、标称带
+// TestQueryTopologyPairUnanchoredEntryPrefersVirtualLan 确认「实际会
+// 选」（sshmgr 真正拨号时会优先尝试的网络）沿用真实拨号的首个信任规则：条目还没有主机密钥锚时，即使两台设备同在物
+// 理局域网，也只保留虚拟局域网候选。
+func TestQueryTopologyPairUnanchoredEntryPrefersVirtualLan(t *testing.T) {
+	fixture := newQueryTopologyFixture(t)
+	workServer, err := fixture.store.GetServerByName("入口一")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned, err := fixture.store.GetEntryPin(workServer); err != nil || pinned != nil {
+		t.Fatalf("测试前提是条目尚无锚：pin=%v err=%v", pinned, err)
+	}
+
+	text, isError := fixture.callQuery(t, map[string]any{
+		"from": "self", "to": []string{workServer.ID},
+	})
+	if isError {
+		t.Fatalf("query_topology 失败：%s", text)
+	}
+	if !strings.Contains(text, "虚拟A（虚拟局域网，实际会选）") ||
+		strings.Contains(text, "家A物理（物理局域网，实际会选）") {
+		t.Fatalf("未锚定条目应只标虚拟局域网为实际会选：\n%s", text)
+	}
+}
+
+// TestQueryTopologyPairSkipsSuccessCacheForOtherOrigin 确认出发点不是本实
+// 例所在设备时，不读本实例的成功地址缓存：缓存记录的是本实例拨出的结
+// 果，不代表别的出发点，因此只按登记顺序标记。
+func TestQueryTopologyPairSkipsSuccessCacheForOtherOrigin(t *testing.T) {
+	fixture := newQueryTopologyFixture(t)
+	if _, err := fixture.store.AddSite("家B", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddNetwork(models.Network{
+		Name: "家B物理", Type: models.NetworkPhysical, SiteName: "家B",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.AddDevice("缓存目标设备", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, membership := range []struct{ network, address string }{
+		{"家B物理", "192.0.2.14"},
+	} {
+		if _, err := fixture.store.AddNetworkMembership("工作设备", membership.network, membership.address); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, membership := range []struct{ network, address string }{
+		{"家A物理", "192.0.2.31"}, {"家B物理", "192.0.2.32"},
+	} {
+		if _, err := fixture.store.AddNetworkMembership("缓存目标设备", membership.network, membership.address); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetResult, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "缓存目标入口", Host: "192.0.2.132", Port: 22, User: "deploy",
+		AuthMethod: models.AuthPassword,
+	}, nil, nil, "缓存目标设备")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.GrantServers(fixture.profileID, []string{targetResult.ServerID}); err != nil {
+		t.Fatal(err)
+	}
+	localDevicePath, err := roles.LocalDevicePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := fixture.store.GetServerByName("缓存目标入口")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sshbroker.NewFileDialSuccessCache(
+		filepath.Join(filepath.Dir(localDevicePath), "ssh-dial-successes.json"),
+	).Record(target, sshbroker.DialSuccessRecord{
+		Address: "192.0.2.32", SucceededAt: time.Now(), Duration: 5 * time.Millisecond,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	originServer, err := fixture.store.GetServerByName("入口一")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text, isError := fixture.callQuery(t, map[string]any{
+		"from": originServer.ID, "to": []string{targetResult.ServerID},
+	})
+	if isError {
+		t.Fatalf("query_topology 失败：%s", text)
+	}
+	if !strings.Contains(text, "家A物理（物理局域网，实际会选）") ||
+		strings.Contains(text, "家B物理（物理局域网，实际会选）") {
+		t.Fatalf("非本实例出发点不应使用本实例成功地址缓存：\n%s", text)
+	}
+}
+
+// TestQueryTopologyPairDetail 覆盖 detail=true 展开参数：设备角色、网络成员地址、标称带
 // 宽与是否按流量计费；服务器条目的 ExposeHost 决定地址明文或隐藏，不受
 // 管设备地址始终隐藏，网段不进入输出。
 func TestQueryTopologyPairDetail(t *testing.T) {
@@ -568,6 +685,9 @@ func TestQueryTopologyPairDetail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := fixture.store.SaveEntryPin(workServer, []byte("anchor")); err != nil {
+		t.Fatal(err)
+	}
 
 	text, isError := fixture.callQuery(t, map[string]any{
 		"from": "self", "detail": true,
@@ -578,23 +698,23 @@ func TestQueryTopologyPairDetail(t *testing.T) {
 	}
 	for _, wanted := range []string{
 		"角色：受管设备（入口一、入口二）",
-		"家A物理（实际会选） 地址：隐藏；标称带宽：1000 Mbit/s；不按流量计费",
-		"虚拟A 地址：隐藏；标称带宽：未登记；按流量计费",
+		"家A物理（物理局域网，实际会选） 地址：hidden；标称带宽：1000 Mbit/s；不按流量计费",
+		"虚拟A（虚拟局域网） 地址：hidden；标称带宽：未登记；按流量计费",
 		"角色：不受管设备",
-		"家A物理（实际会选） 地址：192.0.2.21；标称带宽：1000 Mbit/s；不按流量计费",
+		"家A物理（物理局域网，实际会选） 地址：192.0.2.21；标称带宽：1000 Mbit/s；不按流量计费",
 	} {
 		if !strings.Contains(text, wanted) {
-			t.Fatalf("展开档缺少 %q：\n%s", wanted, text)
+			t.Fatalf("detail=true 展开参数输出缺少 %q：\n%s", wanted, text)
 		}
 	}
 	for _, forbidden := range []string{"192.0.2.2\n", "100.64.0.", "网段："} {
 		if strings.Contains(text, forbidden) {
-			t.Fatalf("展开档不应包含 %q：\n%s", forbidden, text)
+			t.Fatalf("detail=true 展开参数输出不应包含 %q：\n%s", forbidden, text)
 		}
 	}
 }
 
-// TestQueryTopologyGroupDetailExposeHostCombination 覆盖分组展开档：同一
+// TestQueryTopologyGroupDetailExposeHostCombination 覆盖分组视图 detail=true 展开参数：同一
 // 设备多个已授权条目里任一条目开启 ExposeHost 就显示地址，全部关闭则隐
 // 藏；不受管设备地址始终隐藏。
 func TestQueryTopologyGroupDetailExposeHostCombination(t *testing.T) {
@@ -608,8 +728,8 @@ func TestQueryTopologyGroupDetailExposeHostCombination(t *testing.T) {
 	if isError {
 		t.Fatalf("query_topology 失败：%s", text)
 	}
-	if !strings.Contains(text, "工作设备 [入口一、入口二] 角色：受管设备（入口一、入口二） 家A物理 地址：隐藏") ||
-		!strings.Contains(text, "NAS 角色：不受管设备 虚拟A 地址：隐藏") {
+	if !strings.Contains(text, "工作设备 [入口一、入口二] 角色：受管设备（入口一、入口二） 家A物理 地址：hidden") ||
+		!strings.Contains(text, "NAS 角色：不受管设备 虚拟A 地址：hidden") {
 		t.Fatalf("全部条目关闭 ExposeHost 时分组地址应隐藏：\n%s", text)
 	}
 
@@ -622,14 +742,14 @@ func TestQueryTopologyGroupDetailExposeHostCombination(t *testing.T) {
 		t.Fatalf("query_topology 失败：%s", text)
 	}
 	if !strings.Contains(text, "工作设备 [入口一、入口二] 角色：受管设备（入口一、入口二） 家A物理 地址：192.0.2.2；标称带宽：未登记；不按流量计费") ||
-		!strings.Contains(text, "NAS 角色：不受管设备 虚拟A 地址：隐藏；标称带宽：未登记；不按流量计费") {
+		!strings.Contains(text, "NAS 角色：不受管设备 虚拟A 地址：hidden；标称带宽：未登记；不按流量计费") {
 		t.Fatalf("任一条目开启 ExposeHost 时分组地址显示不正确：\n%s", text)
 	}
 }
 
-// TestQueryTopologyPairTargetRejections 覆盖目标拒绝与去重习惯：未知、授权
-// 范围外服务器编号、按设备名指称的授权外受管设备都返回同一种错误，不泄
-// 露条目或设备存在；重复目标只呈现一次。
+// TestQueryTopologyPairTargetRejections 覆盖目标拒绝与去重习惯：未知与授
+// 权范围外服务器编号返回同一种错误，不泄露条目或设备存在；设备上全部条
+// 目都在授权外时仍可按设备名查询，只是不列出条目；重复目标只呈现一次。
 func TestQueryTopologyPairTargetRejections(t *testing.T) {
 	fixture := newQueryTopologyFixture(t)
 	external, err := fixture.store.GetServerByName("外部入口")
@@ -642,7 +762,7 @@ func TestQueryTopologyPairTargetRejections(t *testing.T) {
 	}
 
 	var firstError string
-	for _, target := range []string{external.ID, "not-a-target", "授权外设备"} {
+	for _, target := range []string{external.ID, "not-a-target"} {
 		text, isError := fixture.callQuery(t, map[string]any{
 			"from": "self", "to": []string{workServer.ID, target},
 		})
@@ -662,6 +782,17 @@ func TestQueryTopologyPairTargetRejections(t *testing.T) {
 	}
 
 	text, isError := fixture.callQuery(t, map[string]any{
+		"from": "self", "to": []string{"授权外设备"},
+	})
+	if isError || !strings.Contains(text, "目标：授权外设备\n") ||
+		!strings.Contains(text, "  家A物理（物理局域网）\n") {
+		t.Fatalf("全部条目在授权外的设备应按设备名查询且不列条目：\n%s error=%v", text, isError)
+	}
+	if strings.Contains(text, "外部入口") || strings.Contains(text, external.ID) {
+		t.Fatalf("授权外条目不应出现在逐对输出：\n%s", text)
+	}
+
+	text, isError = fixture.callQuery(t, map[string]any{
 		"from": "self", "to": []string{workServer.ID, workServer.ID},
 	})
 	if isError {
@@ -797,7 +928,8 @@ func TestQueryTopologyClientCacheAndOldAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, isError = call(map[string]any{"from": "self"})
-	if !isError || !strings.Contains(text, "本机未登记设备，请 owner 补登记") {
+	if !isError || !strings.Contains(text, "客户端实例没有记录本机设备") ||
+		!strings.Contains(text, "重新拉取缓存") {
 		t.Fatalf("客户端实例未记录设备时的错误 = %q error=%v", text, isError)
 	}
 

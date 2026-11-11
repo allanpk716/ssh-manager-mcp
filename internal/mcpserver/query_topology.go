@@ -12,6 +12,7 @@ import (
 	"ssh-manager-mcp/internal/dialdevice"
 	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/probe"
 	"ssh-manager-mcp/internal/probeobserve"
 	"ssh-manager-mcp/internal/proberesults"
 	"ssh-manager-mcp/internal/sshbroker"
@@ -39,7 +40,7 @@ func QueryTopologyForProfile(st *store.Store, profileID, from string, to []strin
 		return "", errors.New("from 不能为空")
 	}
 	if st.IsReadOnly() && st.CacheRecommendedVersion() == "" {
-		return "", errSharedStorageAuthorityTooOld
+		return "", errTopologyAndSharedStorageAuthorityTooOld
 	}
 
 	origin, err := resolveQueryTopologyOrigin(st, profileID, from)
@@ -63,7 +64,6 @@ func QueryTopologyForProfile(st *store.Store, profileID, from string, to []strin
 type queryTopologyDevice struct {
 	device       *models.Device
 	entries      []*models.DeviceServer
-	managed      bool
 	networks     map[string]bool
 	networkTypes map[string]models.NetworkType
 }
@@ -76,7 +76,7 @@ type queryTopologyView struct {
 	unreachable  []string
 	unregistered []string
 	now          time.Time
-	observations map[string]proberesults.Observation
+	observations map[queryTopologyObservationKey]proberesults.Observation
 	networks     map[string]*models.Network
 	detail       bool
 }
@@ -91,66 +91,42 @@ type queryTopologyPairTarget struct {
 }
 
 type queryTopologyPairView struct {
-	origin       *models.Device
-	targets      []queryTopologyPairTarget
-	now          time.Time
-	observations map[string]proberesults.Observation
-	networks     map[string]*models.Network
-	detail       bool
+	origin *models.Device
+	// originUsesLocalSuccessCache 表示出发点就是本实例所在设备；只有这
+	// 时，标记 sshmgr 真正拨号时会优先尝试的网络才读本实例的成功地址
+	// 缓存。
+	originUsesLocalSuccessCache bool
+	targets                     []queryTopologyPairTarget
+	now                         time.Time
+	observations                map[queryTopologyObservationKey]proberesults.Observation
+	networks                    map[string]*models.Network
+	detail                      bool
 }
 
 func resolveQueryTopologyOrigin(st *store.Store, profileID, from string) (*models.Device, error) {
-	if from == "self" {
-		current, err := dialdevice.Current(st, bridgeCacheInstance())
-		if err != nil {
-			return nil, err
-		}
-		if !current.Known || current.Device == nil {
-			return nil, errors.New("本机未登记设备，请 owner 补登记（sshmgr devices local set）")
-		}
-		return current.Device, nil
-	}
-
-	if err := gateServer(st, profileID, from); err != nil {
-		return nil, err
-	}
-	server, err := st.GetServer(from)
-	if errors.Is(err, sql.ErrNoRows) || server == nil {
-		return nil, fmt.Errorf("服务器 %s 不存在", from)
-	}
+	origin, err := dialdevice.ResolveOrigin(st, bridgeCacheInstance(), from, func(serverID string) error {
+		return gateServer(st, profileID, serverID)
+	})
 	if err != nil {
 		return nil, err
 	}
-	if server.DeviceID == "" {
-		return nil, errors.New("起点服务器未关联拓扑设备，请 owner 补登记")
-	}
-	devices, err := st.ListDevices(store.DeviceFilter{})
-	if err != nil {
-		return nil, err
-	}
-	for _, device := range devices {
-		if device.ID == server.DeviceID {
-			return device, nil
-		}
-	}
-	return nil, fmt.Errorf("起点服务器 %s 关联的拓扑设备已不存在，请 owner 补登记", from)
+	return origin.Device, nil
 }
 
 func buildQueryTopologyPairView(st *store.Store, profileID string, origin *models.Device, rawTargets []string, detail bool) (*queryTopologyPairView, error) {
-	allowedIDs, err := st.ServersForProfile(profileID)
+	allowed, err := queryTopologyAllowedServers(st, profileID)
 	if err != nil {
 		return nil, err
-	}
-	allowed := make(map[string]bool, len(allowedIDs))
-	for _, id := range allowedIDs {
-		allowed[id] = true
 	}
 	allServers, err := st.ListServers()
 	if err != nil {
 		return nil, err
 	}
 
-	view := &queryTopologyPairView{origin: origin, now: time.Now(), detail: detail}
+	view := &queryTopologyPairView{
+		origin: origin, now: time.Now(), detail: detail,
+		originUsesLocalSuccessCache: queryTopologyOriginUsesLocalSuccessCache(st, bridgeCacheInstance(), origin),
+	}
 	seen := make(map[string]bool, len(rawTargets))
 	for _, raw := range rawTargets {
 		target := strings.TrimSpace(raw)
@@ -176,7 +152,7 @@ func buildQueryTopologyPairView(st *store.Store, profileID string, origin *model
 				})
 				continue
 			}
-			device, err := deviceByID(st, server.DeviceID)
+			device, err := dialdevice.ByID(st, server.DeviceID)
 			if err != nil {
 				return nil, err
 			}
@@ -187,7 +163,9 @@ func buildQueryTopologyPairView(st *store.Store, profileID string, origin *model
 				label: device.Name, device: device, server: server,
 				entries: deviceServerEntries(allServers, allowed, device.ID),
 			})
-			view.setActualNetwork(st, &view.targets[len(view.targets)-1])
+			if err := view.setActualNetwork(st, &view.targets[len(view.targets)-1]); err != nil {
+				return nil, err
+			}
 			continue
 		}
 
@@ -206,9 +184,8 @@ func buildQueryTopologyPairView(st *store.Store, profileID string, origin *model
 		if len(entries) > 0 {
 			return nil, fmt.Errorf("受管设备请用服务器编号指称：%s", device.Name)
 		}
-		if hasDeviceServer(allServers, device.ID) {
-			return nil, errors.New("目标不存在或不在授权范围内")
-		}
+		// 设备上的服务器条目全部在授权外时，与不受管设备一样按设备名指
+		// 称；授权外条目的名字、编号与地址都不进入输出。
 		view.targets = append(view.targets, queryTopologyPairTarget{
 			label: device.Name, device: device, entries: entries,
 		})
@@ -220,52 +197,82 @@ func buildQueryTopologyPairView(st *store.Store, profileID string, origin *model
 	}
 	view.observations = observations
 	if detail {
-		networks, err := st.ListNetworks(store.NetworkFilter{})
+		view.networks, err = queryTopologyNetworks(st)
 		if err != nil {
 			return nil, err
-		}
-		view.networks = make(map[string]*models.Network, len(networks))
-		for _, network := range networks {
-			view.networks[network.Name] = network
 		}
 	}
 	return view, nil
 }
 
-// setActualNetwork 按统一服务器条目拨号规划标记当前会先尝试的共同网络。
-// 成功地址缓存读取失败时，统一拨号入口也会继续按登记顺序尝试；这里同样
-// 不让辅助缓存把只读查询变成失败。
-func (view *queryTopologyPairView) setActualNetwork(st *store.Store, target *queryTopologyPairTarget) {
+// setActualNetwork 按真实拨号会使用的最终候选计划，标记当前会先尝试的
+// 共同网络。成功地址缓存读取失败时，真实拨号也会继续按登记顺序尝试；这
+// 里同样不让辅助缓存把只读查询变成失败。
+func (view *queryTopologyPairView) setActualNetwork(st *store.Store, target *queryTopologyPairTarget) error {
 	if target == nil || target.server == nil || target.device == nil {
-		return
+		return nil
 	}
-	plan := sshbroker.PlanServerDialAddresses(
-		target.device.Memberships, view.origin.Memberships, target.server.Host,
-	)
-	records, present, err := dialplan.NewStoreSource(st, bridgeCacheInstance()).ServerDialSuccess(target.server)
-	if err == nil && present {
-		plan = sshbroker.PlanServerDialAddressesWithSuccess(
-			target.device.Memberships, view.origin.Memberships, target.server.Host,
-			records, time.Now(),
-		)
+	var successCache sshbroker.DialSuccessCacheSource
+	if view.originUsesLocalSuccessCache {
+		successCache = dialplan.NewStoreSource(st, bridgeCacheInstance())
 	}
-	if len(plan.Candidates) > 0 {
-		target.selected = plan.Candidates[0].NetworkName
+	planned, err := sshbroker.PlanServerDialCandidates(sshbroker.ServerDialPlanInput{
+		Server: target.server, HostKeys: st,
+		Topology: sshbroker.DialTopology{
+			TargetMemberships: target.device.Memberships,
+			DialerMemberships: view.origin.Memberships,
+			DialerKnown:       true,
+		},
+		SuccessCache: successCache,
+		Now:          view.now,
+	})
+	if err != nil {
+		return err
 	}
+	if len(planned.Plan.Candidates) > 0 {
+		target.selected = planned.Plan.Candidates[0].NetworkName
+	}
+	return nil
 }
 
-// deviceByID 从完整设备列表里按内部标识符取设备；完整列表带有网络成员。
-func deviceByID(st *store.Store, id string) (*models.Device, error) {
-	devices, err := st.ListDevices(store.DeviceFilter{})
+// queryTopologyOriginUsesLocalSuccessCache 判断出发点是否就是本实例所在
+// 设备。成功地址缓存记录的是本实例拨出的结果；出发点换成别的设备时不读
+// 它，只按登记顺序与锚定规则规划。
+func queryTopologyOriginUsesLocalSuccessCache(st *store.Store, instance string, origin *models.Device) bool {
+	if origin == nil {
+		return false
+	}
+	current, err := dialdevice.Current(st, instance)
+	if err != nil || !current.Known || current.Device == nil {
+		return false
+	}
+	return current.Device.ID == origin.ID
+}
+
+// queryTopologyAllowedServers 返回当前授权范围内的服务器编号集合。
+func queryTopologyAllowedServers(st *store.Store, profileID string) (map[string]bool, error) {
+	allowedIDs, err := st.ServersForProfile(profileID)
 	if err != nil {
 		return nil, err
 	}
-	for _, device := range devices {
-		if device.ID == id {
-			return device, nil
-		}
+	allowed := make(map[string]bool, len(allowedIDs))
+	for _, id := range allowedIDs {
+		allowed[id] = true
 	}
-	return nil, nil
+	return allowed, nil
+}
+
+// queryTopologyNetworks 按名字索引网络登记，供展开参数显示带宽与计费。
+func queryTopologyNetworks(st *store.Store) (map[string]*models.Network, error) {
+	networks, err := st.ListNetworks(store.NetworkFilter{})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*models.Network, len(networks))
+	for _, network := range networks {
+		out[network.Name] = network
+	}
+	return out, nil
 }
 
 // deviceServerEntries 收集一台设备上当前授权范围内的服务器条目摘要。
@@ -289,39 +296,19 @@ func deviceServerEntries(allServers []*models.Server, allowed map[string]bool, d
 	return entries
 }
 
-func hasDeviceServer(allServers []*models.Server, deviceID string) bool {
-	for _, server := range allServers {
-		if server.DeviceID == deviceID {
-			return true
-		}
-	}
-	return false
-}
-
 func buildQueryTopologyView(st *store.Store, profileID string, origin *models.Device, detail bool) (*queryTopologyView, error) {
 	devices, err := st.ListDevices(store.DeviceFilter{})
 	if err != nil {
 		return nil, err
 	}
-	allowedIDs, err := st.ServersForProfile(profileID)
+	allowed, err := queryTopologyAllowedServers(st, profileID)
 	if err != nil {
 		return nil, err
-	}
-	allowed := make(map[string]bool, len(allowedIDs))
-	for _, id := range allowedIDs {
-		allowed[id] = true
 	}
 	allServers, err := st.ListServers()
 	if err != nil {
 		return nil, err
 	}
-	managedDevices := make(map[string]bool, len(allServers))
-	for _, server := range allServers {
-		if server.DeviceID != "" {
-			managedDevices[server.DeviceID] = true
-		}
-	}
-
 	view := &queryTopologyView{
 		origin: origin, now: time.Now(), detail: detail,
 		physical: make(map[string][]queryTopologyDevice),
@@ -335,15 +322,9 @@ func buildQueryTopologyView(st *store.Store, profileID string, origin *models.De
 		if device.ID == origin.ID {
 			continue
 		}
-		managed := managedDevices[device.ID]
 		entries := deviceServerEntries(allServers, allowed, device.ID)
-		// 受管设备只要没有任何当前授权条目就整台不显示；不受管设备与客
-		// 户端实例没有服务器授权边界，按设备名照常显示。
-		if managed && len(entries) == 0 {
-			continue
-		}
 		candidates = append(candidates, queryTopologyDevice{
-			device: device, entries: entries, managed: managed,
+			device: device, entries: entries,
 			networks: networkSet(device), networkTypes: networkTypes(device),
 		})
 	}
@@ -380,17 +361,14 @@ func buildQueryTopologyView(st *store.Store, profileID string, origin *models.De
 			}
 			continue
 		}
-		view.unreachable = append(view.unreachable, queryDeviceLabel(candidate))
+		view.unreachable = append(view.unreachable, queryTopologyDeviceLabel(candidate.device, candidate.entries))
 	}
 
-	for _, id := range allowedIDs {
-		server, err := st.GetServer(id)
-		if err != nil || server == nil {
+	for _, server := range allServers {
+		if server.DeviceID != "" || !allowed[server.ID] {
 			continue
 		}
-		if server.DeviceID == "" {
-			view.unregistered = append(view.unregistered, server.ID+"（"+server.Name+"）")
-		}
+		view.unregistered = append(view.unregistered, server.ID+"（"+server.Name+"）")
 	}
 	sort.Slice(view.unregistered, func(i, j int) bool { return view.unregistered[i] < view.unregistered[j] })
 
@@ -400,13 +378,9 @@ func buildQueryTopologyView(st *store.Store, profileID string, origin *models.De
 	}
 	view.observations = observations
 	if detail {
-		networks, err := st.ListNetworks(store.NetworkFilter{})
+		view.networks, err = queryTopologyNetworks(st)
 		if err != nil {
 			return nil, err
-		}
-		view.networks = make(map[string]*models.Network, len(networks))
-		for _, network := range networks {
-			view.networks[network.Name] = network
 		}
 	}
 	return view, nil
@@ -447,8 +421,8 @@ func networkLabels(device *models.Device) []string {
 	return append(physical, virtual...)
 }
 
-func queryTopologyObservations(originDeviceID string) (map[string]proberesults.Observation, error) {
-	out := make(map[string]proberesults.Observation)
+func queryTopologyObservations(originDeviceID string) (map[queryTopologyObservationKey]proberesults.Observation, error) {
+	out := make(map[queryTopologyObservationKey]proberesults.Observation)
 	results, found, err := probeobserve.ResultsFor(bridgeCacheInstance())
 	if err != nil || !found {
 		return out, err
@@ -458,13 +432,19 @@ func queryTopologyObservations(originDeviceID string) (map[string]proberesults.O
 		return nil, err
 	}
 	for _, observation := range observations {
-		key := observation.TargetDeviceID + "\x1f" + observation.Network
+		key := queryTopologyObservationKey{TargetDeviceID: observation.TargetDeviceID, Network: observation.Network}
 		if current, exists := out[key]; exists && current.ObservedAt.After(observation.ObservedAt) {
 			continue
 		}
 		out[key] = observation
 	}
 	return out, nil
+}
+
+// queryTopologyObservationKey 按「目标设备 + 网络」索引本实例保存的观察。
+type queryTopologyObservationKey struct {
+	TargetDeviceID string
+	Network        string
 }
 
 func renderQueryTopologyView(view *queryTopologyView) string {
@@ -498,23 +478,37 @@ func renderQueryTopologyPairView(view *queryTopologyPairView) string {
 			lines = append(lines, "  无共同网络，不可达")
 			continue
 		}
+		var virtualOnly []string
+		hasPhysical := false
+		for _, network := range common {
+			if network.networkType == models.NetworkPhysical {
+				hasPhysical = true
+				continue
+			}
+			if network.networkType == models.NetworkVirtual {
+				virtualOnly = append(virtualOnly, network.name)
+			}
+		}
+		if !hasPhysical && len(virtualOnly) > 0 {
+			lines = append(lines, "  只能经虚拟局域网到达："+strings.Join(virtualOnly, "、"))
+		}
 		selected := ""
 		if target.server != nil {
 			selected = target.selected
 		}
-		for _, networkName := range common {
-			label := networkName
-			if label == selected {
-				label += "（实际会选）"
+		for _, network := range common {
+			label := network.name + "（" + networkTypeLabel(network.networkType) + "）"
+			if network.name == selected {
+				label = network.name + "（" + networkTypeLabel(network.networkType) + "，实际会选）"
 			}
 			line := label
 			if view.detail {
 				line += " " + queryTopologyNetworkDetail(
-					view, target, networkName,
+					view, target, network.name,
 				)
 			}
 			line += " " + queryTopologyObservationLabel(
-				view.observations, view.now, target.device.ID, networkName,
+				view.observations, view.now, target.device.ID, network.name,
 			)
 			lines = append(lines, "  "+strings.TrimSpace(line))
 		}
@@ -527,32 +521,37 @@ func queryTopologyPairTargetLabel(target queryTopologyPairTarget) string {
 	if target.unregistered || target.device == nil {
 		return target.label
 	}
-	if len(target.entries) == 0 {
-		return target.device.Name
-	}
-	names := make([]string, 0, len(target.entries))
-	for _, entry := range target.entries {
-		names = append(names, entry.Name)
-	}
-	return target.device.Name + " [" + strings.Join(names, "、") + "]"
+	return queryTopologyDeviceLabel(target.device, target.entries)
 }
 
-func commonQueryNetworks(originNetworks map[string]bool, device *models.Device) []string {
-	var physical, virtual []string
+type queryTopologyNetwork struct {
+	name        string
+	networkType models.NetworkType
+}
+
+func commonQueryNetworks(originNetworks map[string]bool, device *models.Device) []queryTopologyNetwork {
+	var physical, virtual []queryTopologyNetwork
 	for _, membership := range device.Memberships {
 		if membership == nil || !originNetworks[membership.NetworkName] {
 			continue
 		}
 		switch membership.NetworkType {
 		case models.NetworkPhysical:
-			physical = append(physical, membership.NetworkName)
+			physical = append(physical, queryTopologyNetwork{name: membership.NetworkName, networkType: models.NetworkPhysical})
 		case models.NetworkVirtual:
-			virtual = append(virtual, membership.NetworkName)
+			virtual = append(virtual, queryTopologyNetwork{name: membership.NetworkName, networkType: models.NetworkVirtual})
 		}
 	}
-	sort.Strings(physical)
-	sort.Strings(virtual)
+	sort.Slice(physical, func(i, j int) bool { return physical[i].name < physical[j].name })
+	sort.Slice(virtual, func(i, j int) bool { return virtual[i].name < virtual[j].name })
 	return append(physical, virtual...)
+}
+
+func networkTypeLabel(networkType models.NetworkType) string {
+	if networkType == models.NetworkVirtual {
+		return "虚拟局域网"
+	}
+	return "物理局域网"
 }
 
 func queryTopologyDeviceRole(device *models.Device, entries []*models.DeviceServer) string {
@@ -604,7 +603,7 @@ func queryTopologyNetworkFields(
 		if membership == nil || membership.NetworkName != networkName {
 			continue
 		}
-		label := "隐藏"
+		label := "hidden"
 		if expose {
 			label = "未登记"
 			if membership.Address != "" {
@@ -618,7 +617,7 @@ func queryTopologyNetworkFields(
 		addresses = append(addresses, label)
 	}
 	if len(addresses) == 0 {
-		addresses = append(addresses, "隐藏")
+		addresses = append(addresses, "hidden")
 	}
 
 	bandwidth := "标称带宽：未登记"
@@ -642,9 +641,9 @@ func appendGroup(lines []string, title string, networkNames []string,
 	for _, networkName := range networkNames {
 		lines = append(lines, "  "+networkName)
 		for _, candidate := range groups[networkName] {
-			line := queryDeviceLabel(candidate) + " " + observationLabel(view, candidate.device.ID, networkName)
+			line := queryTopologyDeviceLabel(candidate.device, candidate.entries) + " " + observationLabel(view, candidate.device.ID, networkName)
 			if view.detail {
-				line = queryDeviceLabel(candidate) + " 角色：" +
+				line = queryTopologyDeviceLabel(candidate.device, candidate.entries) + " 角色：" +
 					queryTopologyDeviceRole(candidate.device, candidate.entries) + " " + networkName +
 					" " + queryTopologyGroupNetworkDetail(view, candidate, networkName) +
 					" " + observationLabel(view, candidate.device.ID, networkName)
@@ -664,18 +663,20 @@ func sortedNetworkNames(groups map[string][]queryTopologyDevice) []string {
 	return names
 }
 
-func queryDeviceLabel(candidate queryTopologyDevice) string {
-	labels := make([]string, 0, len(candidate.entries)+1)
-	if candidate.device.ClientName != "" {
-		labels = append(labels, "客户端实例："+candidate.device.ClientName)
+// queryTopologyDeviceLabel 是分组视图与逐对视图共用的设备行标签：设备名
+// 后跟已授权服务器条目名；客户端实例设备同时标出客户端实例名。
+func queryTopologyDeviceLabel(device *models.Device, entries []*models.DeviceServer) string {
+	labels := make([]string, 0, len(entries)+1)
+	if device.ClientName != "" {
+		labels = append(labels, "客户端实例："+device.ClientName)
 	}
-	for _, entry := range candidate.entries {
+	for _, entry := range entries {
 		labels = append(labels, entry.Name)
 	}
 	if len(labels) == 0 {
-		return candidate.device.Name
+		return device.Name
 	}
-	return candidate.device.Name + " [" + strings.Join(labels, "、") + "]"
+	return device.Name + " [" + strings.Join(labels, "、") + "]"
 }
 
 func observationLabel(view *queryTopologyView, targetDeviceID, network string) string {
@@ -683,9 +684,9 @@ func observationLabel(view *queryTopologyView, targetDeviceID, network string) s
 }
 
 func queryTopologyObservationLabel(
-	observations map[string]proberesults.Observation, now time.Time, targetDeviceID, network string,
+	observations map[queryTopologyObservationKey]proberesults.Observation, now time.Time, targetDeviceID, network string,
 ) string {
-	observation, exists := observations[targetDeviceID+"\x1f"+network]
+	observation, exists := observations[queryTopologyObservationKey{TargetDeviceID: targetDeviceID, Network: network}]
 	if !exists || observation.ObservedAt.IsZero() {
 		return ""
 	}
@@ -701,26 +702,9 @@ func queryTopologyObservationLabel(
 	if observation.OK {
 		marker = "✓"
 	}
-	age := relativeObservationAge(now, observation.ObservedAt)
-	if now.Sub(observation.ObservedAt) > 10*time.Minute {
-		age += " 旧"
-	}
+	age := probe.ObservationAgeLabel(now, observation.ObservedAt)
 	parts := []string{marker + detail, age}
 	return strings.TrimSpace(strings.Join(parts, " "))
-}
-
-func relativeObservationAge(now, observedAt time.Time) string {
-	age := now.Sub(observedAt)
-	switch {
-	case age < time.Minute:
-		return "刚刚"
-	case age < time.Hour:
-		return strconv.Itoa(int(age/time.Minute)) + "m前"
-	case age < 24*time.Hour:
-		return strconv.Itoa(int(age/time.Hour)) + "h前"
-	default:
-		return strconv.Itoa(int(age/(24*time.Hour))) + "d前"
-	}
 }
 
 func nonEmptyList(values []string, emptyLabel string) []string {

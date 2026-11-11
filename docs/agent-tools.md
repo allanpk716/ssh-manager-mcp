@@ -711,8 +711,8 @@ v0.20.0+)。无参数。**平时你不需要调它**——owner 更新磁盘二�
 | 字段 | 含义 |
 |---|---|
 | `from` | 出发点：`self` 表示当前 sshmgr 实例所在设备；也可以填授权范围内某台服务器条目的编号，工具先检查授权，再换算到该条目所属设备 |
-| `to` | 可选目标列表；关联服务器条目的设备用服务器编号指称，不受管设备与客户端实例用设备名指称。传入后只输出出发点到这些目标的逐对详情，不输出全局邻居分组 |
-| `detail` | 可选展开档，默认关闭；打开后展开网络成员地址、网络标称带宽、是否按流量计费与设备角色 |
+| `to` | 可选目标列表；关联服务器条目的设备用服务器编号指称，不受管设备与客户端实例用设备名指称。设备上的全部服务器条目都不在你的授权范围时，这台设备仍可用设备名指称，但不会列出任何条目名。传入后只输出出发点到这些目标的逐对详情，不输出全局邻居分组 |
+| `detail` | 可选的 `detail=true` 展开参数，默认关闭；打开后展开网络成员地址、网络标称带宽、是否按流量计费与设备角色 |
 
 输出先列出出发点所属网络，再分四类：
 
@@ -722,27 +722,37 @@ v0.20.0+)。无参数。**平时你不需要调它**——owner 更新磁盘二�
 - 无共同网络不可达：没有登记共同网络的设备压成一行。
 - 未登记服务器：授权范围内没有关联设备的服务器条目压成一行。
 
+设备上的服务器条目全部在授权外时，这台设备仍按设备名出现在相应分组，
+不列出任何授权外条目名，也不显示其地址。
+
 可达设备一行同时列出这台设备上全部已授权服务器条目名，并附本实例保存的
 最新「探测结果」通否、耗时与相对年龄；没有观察时留空，不猜测可达性。观
-察超过 10 分钟标「旧」。本工具不主动探测、不建立 SSH 连接、不写审计、不
-推进快照修订号；需要现场结论时调用 `probe_connectivity`。
+察年龄与连通探测工具的结果行格式一致：10 分钟内显示「刚刚」，超过 10
+分钟显示「旧」。本工具不主动探测、不建立 SSH 连接、不写审计、不推进快
+照修订号；需要现场结论时调用 `probe_connectivity`。
 
 传入 `to` 时，每个目标列出全部共同网络，物理局域网在前、虚拟局域网在
-后，并附该网络上的最新本地「探测结果」。目标来自服务器编号时，会标出统
-一按服务器条目拨号入口当前会先尝试的网络；同级网络会先看仍有效的成功地
-址缓存，再看登记顺序。目标是不受管设备或客户端实例时只按共同网络排序，
-不伪造「实际会选」。只能经虚拟局域网到达的目标会明确列出所走网络；无共
-同网络输出不可达；未关联设备的服务器输出未登记。
+后；每个网络名都标注是物理局域网还是虚拟局域网，并附该网络上的最新本
+地「探测结果」。目标只有共同虚拟局域网时，先单独一行写明「只能经虚拟
+局域网到达：网络名」。目标来自服务器编号时，会标出「实际会选」——也
+就是 sshmgr 真正拨号时会优先尝试的网络；它沿用按服务器条目拨号的共用
+入口（`ConnectServerEntry`）的候选地址规划：物理局域网优先，同级先看
+仍有效的成功地址缓存，再看登记顺序；条目还没有主机密钥锚时只保留虚拟
+局域网候选。出发点不是本实例所在设备时，不读本实例的成功地址缓存，只
+按登记顺序与主机密钥锚规则标记。目标是不受管设备或客户端实例时只按共
+同网络排序，不标「实际会选」。无共同网络输出不可达；未关联设备的服务
+器输出未登记。
 
-默认档不输出地址。`detail=true` 时，网络标称带宽未填写就显示「未登记」，
+默认不输出地址。`detail=true` 时，网络标称带宽未填写就显示「未登记」，
 不显示为零；地址显示遵守服务器条目的 `ExposeHost` 设置（它表示是否向
-agent 披露这台服务器条目的主机地址）。逐对目标来自服务器编号时，以该条
-目的设置决定这台设备地址是明文还是隐藏；不受管设备与客户端实例地址一律
-隐藏。分组视图同一设备有多个已授权条目时，任一条目开启 `ExposeHost` 就
-显示地址，全部关闭则隐藏。网段始终不显示。
+agent 披露这台服务器条目的主机地址），地址被隐藏时显示 `hidden`。逐对
+目标来自服务器编号时，以该条目的设置决定这台设备地址是明文还是隐藏；
+不受管设备与客户端实例地址一律隐藏。分组视图同一设备有多个已授权条目
+时，任一条目开启 `ExposeHost` 就显示地址，全部关闭则隐藏。网段始终不
+显示。
 
-客户端缓存快照没有推荐版本时，本工具返回「权威端版本过旧，不支持网络拓
-扑与共享存储，请先升级权威端」。
+客户端缓存快照没有推荐版本时，本工具返回「权威端版本过旧，不支持网络
+拓扑与共享存储，请先升级权威端」。
 
 ## 错误对照表（每条给"你该做什么"）
 
@@ -882,7 +892,7 @@ HEAD，后续重构以符号名为准）：
 | 每次工具调用全程审计（project/server/action/status/命令/耗时） | `internal/mcpserver/core.go:81-89` 等；../README.md "What the agent gets" |
 | 命令策略门在取凭据、建 SSH 连接之前（拦截 / 需确认都不建连接，拦截零字节到服务器）；判定内核是纯函数，权威端与客户端同一条代码路径，离线用最后一次拉到的规则 | `internal/mcpserver/policygate.go`（policyJudge）；`internal/mcpserver/core.go`（ExecCommandForProfile 的 gate 段）；`internal/mcpserver/bgtools.go`（后台同款门）；`internal/policy/policy.go`（Evaluate） |
 | probe_connectivity：只测 TCP 建连与耗时、只探测登记过的共同网络组合（不测兜底主机）、结果只存发起实例本地；经服务器探测执行固定命令、不经命令策略但写审计 | 规格 #142；ADR 0007（命令策略是护栏不是安全边界） |
-| query_topology：按出发点输出所属网络、同在物理局域网、只能经虚拟局域网到达、无共同网络不可达与未登记服务器五段；传入 to 时输出逐对全部共同网络、网络属性与统一拨号实际选址标记；detail 展开地址与设备角色，地址遵守 ExposeHost 主机披露开关；可达行附本实例最新探测结果；只读登记、成功地址缓存与本地观察，不探测、不建 SSH、不写审计、不改成功地址缓存与快照修订号；旧权威端快照固定报错 | 规格 #234、票 #241、票 #242；`internal/mcpserver/query_topology.go`（QueryTopologyForProfile）；`internal/sshbroker/entrydial.go`（PlanServerDialAddressesWithSuccess）；`internal/mcpserver/server.go`（query_topology 注册） |
+| query_topology：按出发点输出所属网络、同在物理局域网、只能经虚拟局域网到达、无共同网络不可达与未登记服务器五段；传入 to 时输出逐对全部共同网络、网络属性，并标记 sshmgr 真正拨号时会优先尝试的网络（与按服务器条目拨号的共用入口同一条候选地址规划）；`detail=true` 展开参数显示地址与设备角色，地址遵守 ExposeHost 主机披露开关；可达行附本实例最新探测结果；只读登记、成功地址缓存与本地观察，不探测、不建 SSH、不写审计、不改成功地址缓存与快照修订号；旧权威端快照固定报错 | 规格 #234、票 #241、票 #242；`internal/mcpserver/query_topology.go`（QueryTopologyForProfile）；`internal/sshbroker/entrydial.go`（PlanServerDialCandidates）；`internal/mcpserver/server.go`（query_topology 注册） |
 | list_shares：默认只读登记与挂载点约定、不做任何现场检测；可选现场检测参数对可见 Linux 与 macOS 可挂载服务器并发只读检测，报告已挂载、未挂载、配置缺失、不可达（附原因说明）四种状态；可挂载范围是挂载密码机密项可写入列表与会话可见服务器取交集，交集为空不返回；旧权威端快照按 ADR 0014 报错 | `internal/mcpserver/list_shares.go`（ListSharesForProfile / annotateSharedStorageMountChecks）；`internal/sharemount/check.go`（固定检测命令）；`internal/store/shared_storage.go`（SharedStorageMountPoint）；`internal/mcpserver/run.go`（hydrateCacheStore 设置快照推荐版本） |
 | mount_share：共享存储持久挂载（Linux 写 fstab 与仅 root 可读凭据文件，macOS 写 autofs 间接映射）；服务器级目录锁带 owner 文件与过期回收；撤销标记版本号不低于快照版本号时拒绝；Linux 先在 /var/run 临时挂载点试挂成功才改写正式配置；macOS 映射改写后先卸载旧 smbfs 挂载再刷新；已挂载且一致时幂等 no-change；密码只经提权会话标准输入写入，结果与审计不含地址；不提供卸载 | 规格 #198、#212；`internal/sharemount/`（service.go / linux.go / darwin.go / marker.go / lock.go / check.go）；`internal/mcpserver/mount_share.go` |
 | query_software_inventory：按 profile 可见范围查询软件清单（含监听端口、暴露级别、来源、采集时间与设备采集状态）；客户端在线查询权威端，不可达时固定报错、不回退本地数据 | 票 #185；`internal/mcpserver/softwareinventory.go`；`internal/mcpserver/serve_softwareinventory.go`；`internal/clientops/softwareinventory_forward.go` |

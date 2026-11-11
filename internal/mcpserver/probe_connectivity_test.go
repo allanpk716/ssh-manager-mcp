@@ -339,7 +339,7 @@ func TestProbeConnectivityRejections(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, isError = fixture.callProbe(t, map[string]any{"from": "self", "targets": []string{"NAS"}})
-	if !isError || !strings.Contains(text, "本机未登记设备") {
+	if !isError || !strings.Contains(text, "本机未设定设备") {
 		t.Fatalf("self without device result = %q %v", text, isError)
 	}
 
