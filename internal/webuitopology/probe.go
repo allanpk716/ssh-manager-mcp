@@ -217,7 +217,6 @@ func (r *probeRunner) runProbe(instance string, task *webui.TopologyProbeTaskSta
 		finish("error", "打开拓扑数据失败："+err.Error())
 		return
 	}
-	defer closeStore()
 	results := r.deps.ResultsFor(instance)
 	service := r.deps.NewService(st, instance, results)
 	start := time.Now()
@@ -231,6 +230,9 @@ func (r *probeRunner) runProbe(instance string, task *webui.TopologyProbeTaskSta
 		TS: start, ServerID: originServerID, Action: "probe-connectivity", Status: status,
 		Source: store.AuditSourceWebUI, Command: store.MarshalAuditSummary(summary),
 	})
+	// 先关闭后台写连接，再把任务标记为完成；页面收到完成状态后立即读取叠
+	// 加，才不会与后台连接的数据库锁竞争。
+	closeStore()
 	switch {
 	case probeErr != nil:
 		finish("error", probeErr.Error())

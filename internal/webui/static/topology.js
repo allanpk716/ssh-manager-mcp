@@ -24,7 +24,13 @@
     data: null,
     cy: null,
     view: "physical",
-    probe: { origin: "self", overlay: null, taskID: null, taskState: "idle" },
+    probe: {
+      origin: "self",
+      overlay: null,
+      overlaysByOrigin: {},
+      taskID: null,
+      taskState: "idle",
+    },
     savedBeforeDrag: null,
     saving: false,
     transitioning: false,
@@ -1266,6 +1272,7 @@
           if (state.probe.origin !== origin) {
             return;
           }
+          state.probe.overlaysByOrigin[origin] = overlay;
           state.probe.overlay = overlay;
           updateProbePresentation();
         },
@@ -1310,7 +1317,9 @@
       }
       showDeviceDetail(state.selectedDetailDevice);
     }, function () {
-      setProbeStatus("error", "切换探测起点失败，请稍后重试。");
+      if (state.probe.origin === origin) {
+        setProbeStatus("error", "切换探测起点失败，请稍后重试。");
+      }
     });
   }
 
@@ -2500,7 +2509,7 @@
     if (probeOriginSelect !== null) {
       probeOriginSelect.addEventListener("change", function () {
         state.probe.origin = probeOriginSelect.value || "self";
-        state.probe.overlay = null;
+        state.probe.overlay = state.probe.overlaysByOrigin[state.probe.origin] || null;
         updateProbePresentation();
         loadProbeOriginData();
       });
