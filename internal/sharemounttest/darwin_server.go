@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	DarwinUnmountMarker  = "SSHMGR-DARWIN-UNMOUNT"
-	DarwinReselectMarker = "SSHMGR-DARWIN-RESELECT"
+	DarwinUnmountMarker   = "SSHMGR-DARWIN-UNMOUNT"
+	DarwinReselectMarker  = "SSHMGR-DARWIN-RESELECT"
+	DarwinEnumerateMarker = "SSHMGR-DARWIN-ENUM"
 )
 
 type DarwinServer struct {
@@ -65,6 +66,8 @@ func (s *DarwinServer) Handler(command string, stdin io.Reader) (string, string,
 		return probeOutput(command, s.ReachableAddresses), "", 0
 	case strings.Contains(command, DarwinReselectMarker):
 		return s.reselect(command, input)
+	case strings.Contains(command, DarwinEnumerateMarker):
+		return s.enumerateOutput(), "", 0
 	case strings.Contains(command, DarwinUnmountMarker):
 		if s.LockHeld {
 			return "", DarwinUnmountMarker + " lock-timeout", 87
@@ -157,6 +160,24 @@ func (s *DarwinServer) reselect(command string, input []byte) (string, string, i
 func (s *DarwinServer) reselectOutput(result string) string {
 	return fmt.Sprintf("%s result=%s selected=1 version=%d\n",
 		DarwinReselectMarker, result, s.ShareVersion)
+}
+
+// enumerateOutput 按固定枚举协议汇报当前状态。枚举是只读操作：不改任何
+// 字段，也不写状态变化历史。
+func (s *DarwinServer) enumerateOutput() string {
+	var out strings.Builder
+	if s.hasManagedMapEntry() {
+		fmt.Fprintf(&out, "%s entry=%s version=%d\n",
+			DarwinEnumerateMarker, url.PathEscape(s.ShareName), s.ShareVersion)
+	}
+	if s.RevokedMarker != "" {
+		fmt.Fprintf(&out, "%s revoked=%s version=%d\n",
+			DarwinEnumerateMarker, url.PathEscape(s.ShareName), s.ShareVersion)
+	}
+	if s.Mounted {
+		fmt.Fprintf(&out, "%s mount=%s\n", DarwinEnumerateMarker, s.ShareName)
+	}
+	return out.String()
 }
 
 func (s *DarwinServer) State() DarwinServerState {

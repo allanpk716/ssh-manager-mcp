@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	LinuxUnmountMarker  = "SSHMGR-LINUX-UNMOUNT"
-	LinuxReselectMarker = "SSHMGR-LINUX-RESELECT"
+	LinuxUnmountMarker   = "SSHMGR-LINUX-UNMOUNT"
+	LinuxReselectMarker  = "SSHMGR-LINUX-RESELECT"
+	LinuxEnumerateMarker = "SSHMGR-LINUX-ENUM"
 )
 
 type BusyProcess struct {
@@ -75,6 +76,8 @@ func (s *LinuxServer) Handler(command string, stdin io.Reader) (string, string, 
 		return probeOutput(command, s.ReachableAddresses), "", 0
 	case strings.Contains(command, LinuxReselectMarker):
 		return s.reselect(command, input)
+	case strings.Contains(command, LinuxEnumerateMarker):
+		return s.enumerateOutput(), "", 0
 	case strings.Contains(command, LinuxUnmountMarker):
 		if s.LockHeld {
 			return "", LinuxUnmountMarker + " lock-timeout", 87
@@ -161,6 +164,28 @@ func (s *LinuxServer) reselect(command string, input []byte) (string, string, in
 func (s *LinuxServer) reselectOutput(result string) string {
 	return fmt.Sprintf("%s result=%s selected=1 version=%d\n",
 		LinuxReselectMarker, result, s.ShareVersion)
+}
+
+// enumerateOutput 按固定枚举协议汇报当前状态。枚举是只读操作：不改任何
+// 字段，也不写状态变化历史。
+func (s *LinuxServer) enumerateOutput() string {
+	var out strings.Builder
+	if s.hasManagedFstabEntry() {
+		credentials := "no"
+		if s.Credential != "" {
+			credentials = "yes"
+		}
+		fmt.Fprintf(&out, "%s entry=%s version=%d credentials=%s\n",
+			LinuxEnumerateMarker, url.PathEscape(s.ShareName), s.ShareVersion, credentials)
+	}
+	if s.RevokedMarker != "" {
+		fmt.Fprintf(&out, "%s revoked=%s version=%d\n",
+			LinuxEnumerateMarker, url.PathEscape(s.ShareName), s.ShareVersion)
+	}
+	if s.Mounted {
+		fmt.Fprintf(&out, "%s mount=%s\n", LinuxEnumerateMarker, s.ShareName)
+	}
+	return out.String()
 }
 
 func requestedVersion(command string) int64 {
