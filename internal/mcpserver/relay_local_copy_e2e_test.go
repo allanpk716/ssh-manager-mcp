@@ -12,6 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -541,9 +542,561 @@ func TestRelayFileDarwinLocalCopySuccess(t *testing.T) {
 	}
 }
 
-// TestRelayFileLocalCopyRejectsInvalidViaAndWindows 钉住本地拷贝路径上的
-// via 与 Windows 拷贝必须明确报错，不能悄悄改变模式或自动挂载。
-func TestRelayFileLocalCopyRejectsInvalidViaAndWindows(t *testing.T) {
+// TestRelayFileWindowsPowerShellLocalCopySuccess 钉住 Windows 本地拷贝的公
+// 共行为：选址探测、盘符映射与 robocopy 在同一条命令封装内，密码只经标准
+// 输入送达，任务输出不携带注入状态行。
+func TestRelayFileWindowsPowerShellLocalCopySuccess(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, false)
+	session := environment.openSession(t)
+	sourceRemote := `Z:\Reports\source.bin`
+	targetRemote := "C:/Users/Public/target.bin"
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("windows payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_share_address": `\\192.0.2.10\datasets\Reports\source.bin`,
+			"to_server_id":       environment.windowsID,
+			"to_path":            targetRemote,
+		},
+	})
+	if err != nil {
+		t.Fatalf("调用 relay_file：%v", err)
+	}
+	if result.IsError {
+		t.Fatalf("relay_file 失败：%s", toolResultText(result))
+	}
+	if strings.Contains(toolResultText(result), "mount-password") ||
+		strings.Contains(toolResultText(result), networkDriveStatusPrefix) {
+		t.Fatalf("启动结果泄漏密码或注入状态标记：%s", toolResultText(result))
+	}
+	var output RelayOutput
+	unmarshalToolJSON(t, result, &output)
+	if output.TaskID == "" || output.Mode != relayLocalCopyMode || !output.RestartAfterInterruption {
+		t.Fatalf("启动输出 = %+v，期待 Windows 本地拷贝任务", output)
+	}
+	stdout, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second)
+	if status != bgStatusDone || errorText != "" {
+		t.Fatalf("Windows 本地拷贝终态 = %q 错误 = %q 输出 =\n%s", status, errorText, stdout)
+	}
+	for _, forbidden := range []string{"mount-password", networkDriveStatusPrefix} {
+		if strings.Contains(stdout, forbidden) {
+			t.Fatalf("任务输出泄漏 %q：\n%s", forbidden, stdout)
+		}
+	}
+	if !strings.Contains(stdout, "本地拷贝模式") || !strings.Contains(stdout, "robocopy ") {
+		t.Fatalf("任务输出缺少本地拷贝说明或 robocopy 安全输出：\n%s", stdout)
+	}
+
+	commands := environment.fake.recordedCommands()
+	if len(commands) != 2 {
+		t.Fatalf("远端命令数 = %d，期待一次选址探测和一条同会话封装命令：%q", len(commands), commands)
+	}
+	wrapped := commands[1]
+	scripts := encodedCommandScripts(wrapped)
+	if len(scripts) != 1 {
+		t.Fatalf("封装内脚本数 = %d，期待一个盘符映射脚本和一个拷贝脚本：%q", len(scripts), wrapped)
+	}
+	if !strings.Contains(wrapped, "New-SmbMapping") ||
+		!strings.Contains(wrapped, `AddArgument('\\192.0.2.10\datasets')`) ||
+		!strings.Contains(wrapped, "-Persistent $false") ||
+		!strings.Contains(scripts[0], "robocopy") {
+		t.Fatalf("盘符映射与 robocopy 不在同一条命令封装内：%s", wrapped)
+	}
+	inputs := environment.fake.recordedInputs()
+	if len(inputs) != 2 || string(inputs[0]) != "" || string(inputs[1]) != "mount-password" {
+		t.Fatalf("标准输入帧 = %q，期待密码只在封装命令里出现", inputs)
+	}
+	if strings.Contains(wrapped, "mount-password") {
+		t.Fatalf("封装命令文本泄漏密码：%s", wrapped)
+	}
+	if strings.Contains(strings.ToLower(wrapped), "net use") {
+		t.Fatalf("Windows 本地拷贝不应使用 net use：%s", wrapped)
+	}
+	if content, err := os.ReadFile(environment.hostPath(targetRemote)); err != nil ||
+		string(content) != "windows payload" {
+		t.Fatalf("Windows 目标文件内容 = %q err=%v", content, err)
+	}
+	if _, err := os.Stat(environment.hostPath(targetRemote + relayPartialSuffix)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Windows 半成品在成功后应移除：stat err=%v", err)
+	}
+
+	auditRows, err := environment.store.QueryAudit(store.AuditFilter{
+		Actions: []string{"relay-bg-start", "relay-bg-end"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditRows) != 2 || auditRows[0].Status != "ok" || auditRows[1].Status != "ok" {
+		t.Fatalf("Windows 本地拷贝审计行 = %#v", auditRows)
+	}
+	var endRow *store.AuditRow
+	for index := range auditRows {
+		if auditRows[index].Action == "relay-bg-end" {
+			endRow = &auditRows[index]
+			break
+		}
+	}
+	if endRow == nil || len(endRow.InjectedShareNames) != 1 ||
+		endRow.InjectedShareNames[0] != "datasets" {
+		t.Fatalf("Windows 本地拷贝终态审计应记录已注入共享名：%#v", endRow)
+	}
+	for _, row := range auditRows {
+		if strings.Contains(row.Command, "mount-password") ||
+			strings.Contains(row.Command, networkDriveStatusPrefix) {
+			t.Fatalf("审计行泄漏密码或注入状态标记：%+v", row)
+		}
+	}
+}
+
+// TestRelayFileWindowsCmdLocalCopyTargetShare 钉住 cmd 默认外壳与共享地址
+// 作为目标端时的对称行为；映射与 robocopy 仍保持在同一条 SSH 命令会话内。
+func TestRelayFileWindowsCmdLocalCopyTargetShare(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, false)
+	windowsServer, err := environment.store.GetServer(environment.windowsID)
+	if err != nil || windowsServer == nil {
+		t.Fatalf("读取 Windows 服务器：server=%v err=%v", windowsServer, err)
+	}
+	windowsServer.ShellType = models.ShellWindowsCmd
+	if err := environment.store.UpdateServer(windowsServer); err != nil {
+		t.Fatal(err)
+	}
+	session := environment.openSession(t)
+	sourceRemote := "C:/Users/Public/source.bin"
+	targetRemote := `Z:\Reports\target.bin`
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("cmd payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_server_id":   environment.windowsID,
+			"from_path":        sourceRemote,
+			"to_share_address": `\\192.0.2.10\datasets\Reports\target.bin`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("调用 relay_file：%v", err)
+	}
+	if result.IsError {
+		t.Fatalf("relay_file 失败：%s", toolResultText(result))
+	}
+	var output RelayOutput
+	unmarshalToolJSON(t, result, &output)
+	if output.Mode != relayLocalCopyMode || !output.RestartAfterInterruption {
+		t.Fatalf("启动输出 = %+v，期待本地拷贝模式", output)
+	}
+	stdout, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second)
+	if status != bgStatusDone || errorText != "" {
+		t.Fatalf("cmd 本地拷贝终态 = %q 错误 = %q 输出 =\n%s", status, errorText, stdout)
+	}
+	if strings.Contains(stdout, networkDriveStatusPrefix) || strings.Contains(stdout, "mount-password") {
+		t.Fatalf("cmd 任务输出泄漏内部标记或密码：\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "robocopy ") {
+		t.Fatalf("cmd 任务输出缺少 robocopy 安全输出：\n%s", stdout)
+	}
+
+	commands := environment.fake.recordedCommands()
+	if len(commands) != 2 {
+		t.Fatalf("cmd 远端命令数 = %d，期待选址探测与一条同会话封装命令：%q", len(commands), commands)
+	}
+	scripts := encodedCommandScripts(commands[1])
+	if len(scripts) != 2 {
+		t.Fatalf("cmd 封装内脚本数 = %d，期待盘符映射与拷贝各一个：%q", len(scripts), commands[1])
+	}
+	if !strings.Contains(scripts[0], "New-SmbMapping") ||
+		!strings.Contains(scripts[0], `AddArgument('\\192.0.2.10\datasets')`) ||
+		!strings.Contains(scripts[0], "-Persistent $false") ||
+		!strings.Contains(scripts[1], "robocopy") {
+		t.Fatalf("cmd 封装脚本没有先后包含盘符映射与 robocopy：%q", scripts)
+	}
+	if content, err := os.ReadFile(environment.hostPath(targetRemote)); err != nil ||
+		string(content) != "cmd payload" {
+		t.Fatalf("共享目标文件内容 = %q err=%v", content, err)
+	}
+}
+
+// TestRelayFileWindowsLocalCopyStopAndRerun 钉住 Windows 本地拷贝复用传输
+// 任务面：停止保留半成品，重跑从头覆盖，运行中同目标冲突沿用既有保护。
+func TestRelayFileWindowsLocalCopyStopAndRerun(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, false)
+	session := environment.openSession(t)
+	sourceRemote := `Z:\Reports\first-source.bin`
+	targetRemote := "C:/Users/Public/target.bin"
+	prepareSource := func(content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(environment.hostPath(sourceRemote), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prepareSource("first run")
+	blockCopy := make(chan struct{})
+	environment.fake.blockCopy = blockCopy
+	environment.fake.keepPartial = true
+	arguments := map[string]any{
+		"from_share_address": `\\192.0.2.10\datasets\Reports\first-source.bin`,
+		"to_server_id":       environment.windowsID,
+		"to_path":            targetRemote,
+	}
+	start := func() RelayOutput {
+		t.Helper()
+		result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+			Name: "relay_file", Arguments: arguments,
+		})
+		if err != nil || result.IsError {
+			t.Fatalf("relay_file：err=%v result=%+v", err, result.Content)
+		}
+		var output RelayOutput
+		unmarshalToolJSON(t, result, &output)
+		return output
+	}
+
+	first := start()
+	relayE2EWaitLine(t, session, first.TaskID, "robocopy ", 30*time.Second)
+	partialDirectory := environment.hostPath(targetRemote + relayPartialSuffix)
+	partialFile := filepath.Join(partialDirectory, "first-source.bin")
+	if content, err := os.ReadFile(partialFile); err != nil || string(content) != "first run" {
+		t.Fatalf("停止前 Windows 半成品 = %q err=%v", content, err)
+	}
+	if _, err := os.Stat(environment.hostPath(targetRemote)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Windows 拷贝完成前目标真名不应出现：stat err=%v", err)
+	}
+
+	conflictResult, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file", Arguments: arguments,
+	})
+	if err != nil {
+		t.Fatalf("同目标冲突调用：%v", err)
+	}
+	if !conflictResult.IsError || !strings.Contains(toolResultText(conflictResult), "relay conflict") ||
+		!strings.Contains(toolResultText(conflictResult), first.TaskID) {
+		t.Fatalf("同目标冲突报错 = %s", toolResultText(conflictResult))
+	}
+	stopResult, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "exec_stop", Arguments: map[string]any{"task_id": first.TaskID},
+	})
+	if err != nil || stopResult.IsError {
+		t.Fatalf("exec_stop：err=%v result=%+v", err, stopResult.Content)
+	}
+	close(blockCopy)
+	if _, status, _ := relayE2EPoll(t, session, first.TaskID, 30*time.Second); status != bgStatusStopped {
+		t.Fatalf("停止后的 Windows 任务终态不是 stopped")
+	}
+	if _, err := os.Stat(partialDirectory); err != nil {
+		t.Fatalf("停止后 Windows 半成品应保留：stat err=%v", err)
+	}
+	if _, err := os.Stat(environment.hostPath(targetRemote)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("停止后真名不应出现：stat err=%v", err)
+	}
+
+	sourceRemote = `Z:\Reports\second-source.bin`
+	prepareSource("second complete run")
+	arguments["from_share_address"] = `\\192.0.2.10\datasets\Reports\second-source.bin`
+	restart := start()
+	stdout, status, errorText := relayE2EPoll(t, session, restart.TaskID, 30*time.Second)
+	if status != bgStatusDone || errorText != "" {
+		t.Fatalf("Windows 重跑终态 = %q 错误 = %q 输出 =\n%s", status, errorText, stdout)
+	}
+	if content, err := os.ReadFile(environment.hostPath(targetRemote)); err != nil ||
+		string(content) != "second complete run" {
+		t.Fatalf("Windows 重跑目标 = %q err=%v", content, err)
+	}
+	if _, err := os.Stat(partialDirectory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Windows 重跑成功后半成品目录应移除：stat err=%v", err)
+	}
+}
+
+// TestRelayFileWindowsLocalCopyRobocopyExitCodes 钉住 robocopy 的退出码约
+// 定：0 到 7 都按成功继续改名，8 及以上才让任务失败。
+func TestRelayFileWindowsLocalCopyRobocopyExitCodes(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, false)
+	session := environment.openSession(t)
+	sourceRemote := "C:/Users/Public/source.bin"
+	targetRemote := `Z:\Reports\target.bin`
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	start := func() RelayOutput {
+		t.Helper()
+		result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+			Name: "relay_file",
+			Arguments: map[string]any{
+				"from_server_id":   environment.windowsID,
+				"from_path":        sourceRemote,
+				"to_share_address": `\\192.0.2.10\datasets\Reports\target.bin`,
+			},
+		})
+		if err != nil || result.IsError {
+			t.Fatalf("relay_file：err=%v result=%+v", err, result.Content)
+		}
+		var output RelayOutput
+		unmarshalToolJSON(t, result, &output)
+		return output
+	}
+
+	for exitCode := 0; exitCode <= 7; exitCode++ {
+		t.Run(fmt.Sprintf("成功退出码%d", exitCode), func(t *testing.T) {
+			environment.fake.mu.Lock()
+			environment.fake.robocopyExit = exitCode
+			environment.fake.mu.Unlock()
+			output := start()
+			_, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second)
+			if status != bgStatusDone || errorText != "" {
+				t.Fatalf("退出码 %d 的终态 = %q 错误 = %q", exitCode, status, errorText)
+			}
+			if content, err := os.ReadFile(environment.hostPath(targetRemote)); err != nil ||
+				string(content) != "payload" {
+				t.Fatalf("退出码 %d 后目标文件 = %q err=%v", exitCode, content, err)
+			}
+		})
+	}
+	t.Run("失败退出码8", func(t *testing.T) {
+		if err := os.Remove(environment.hostPath(targetRemote)); err != nil {
+			t.Fatal(err)
+		}
+		environment.fake.mu.Lock()
+		environment.fake.robocopyExit = 8
+		environment.fake.mu.Unlock()
+		output := start()
+		_, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second)
+		if status != bgStatusFailed || !strings.Contains(errorText, "退出码 8") {
+			t.Fatalf("失败退出码终态 = %q 错误 = %q", status, errorText)
+		}
+		if _, err := os.Stat(environment.hostPath(targetRemote)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("失败退出码不应产生真名目标：stat err=%v", err)
+		}
+	})
+}
+
+// TestRelayFileWindowsLocalCopyRejectsDirectory 钉住共享地址无论作为源端
+// 还是目标端，目录都只得到失败任务，不会被 robocopy 当目录同步任务执行。
+func TestRelayFileWindowsLocalCopyRejectsDirectory(t *testing.T) {
+	for name, arguments := range map[string]map[string]any{
+		"源端目录": {
+			"from_share_address": `\\192.0.2.10\datasets\Reports`,
+			"to_server_id":       "__windows__",
+			"to_path":            "C:/Users/Public/target.bin",
+		},
+		"目标端目录": {
+			"from_server_id":   "__windows__",
+			"from_path":        "C:/Users/Public/source.bin",
+			"to_share_address": `\\192.0.2.10\datasets\Reports`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			environment := newRelayLocalCopyEnv(t, false)
+			session := environment.openSession(t)
+			if arguments["to_server_id"] == "__windows__" {
+				arguments["to_server_id"] = environment.windowsID
+			}
+			if arguments["from_server_id"] == "__windows__" {
+				arguments["from_server_id"] = environment.windowsID
+			}
+			if err := os.MkdirAll(environment.hostPath(`Z:\Reports`), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(environment.hostPath("C:/Users/Public/source.bin")), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(environment.hostPath("C:/Users/Public/source.bin"), []byte("payload"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+				Name: "relay_file", Arguments: arguments,
+			})
+			if err != nil || result.IsError {
+				t.Fatalf("relay_file：err=%v result=%+v", err, result.Content)
+			}
+			var output RelayOutput
+			unmarshalToolJSON(t, result, &output)
+			stdout, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second)
+			if status != bgStatusFailed {
+				t.Fatalf("目录端点终态 = %q 错误 = %q 输出 =\n%s", status, errorText, stdout)
+			}
+			if !strings.Contains(stdout, "source-not-regular") &&
+				!strings.Contains(stdout, "target-directory") {
+				t.Fatalf("目录端点输出 = %q", stdout)
+			}
+			if _, err := os.Stat(environment.hostPath("C:/Users/Public/target.bin")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("目录源端不应产生目标文件：stat err=%v", err)
+			}
+		})
+	}
+}
+
+// TestRelayFileWindowsLocalCopyMappingFailures 钉住盘符注入失败的既有分
+// 类呈现；认证失败会进入进程内暂停，后续启动不再携带旧密码重试。
+func TestRelayFileWindowsLocalCopyMappingFailures(t *testing.T) {
+	resetAuthenticationPause := func() {
+		networkDriveAuthenticationPauseState.Lock()
+		networkDriveAuthenticationPauseState.versions = map[string]int64{}
+		networkDriveAuthenticationPauseState.Unlock()
+	}
+	resetAuthenticationPause()
+	t.Cleanup(resetAuthenticationPause)
+
+	t.Run("盘符被占用", func(t *testing.T) {
+		environment := newRelayLocalCopyEnv(t, false)
+		session := environment.openSession(t)
+		environment.fake.mu.Lock()
+		environment.fake.mapStatus = "error-85"
+		environment.fake.mu.Unlock()
+		if err := os.MkdirAll(filepath.Dir(environment.hostPath(`Z:\Reports\source.bin`)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(environment.hostPath(`Z:\Reports\source.bin`), []byte("payload"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+			Name: "relay_file",
+			Arguments: map[string]any{
+				"from_share_address": `\\192.0.2.10\datasets\Reports\source.bin`,
+				"to_server_id":       environment.windowsID,
+				"to_path":            "C:/Users/Public/target.bin",
+			},
+		})
+		if err != nil || result.IsError {
+			t.Fatalf("relay_file：err=%v result=%+v", err, result.Content)
+		}
+		var output RelayOutput
+		unmarshalToolJSON(t, result, &output)
+		stdout, status, _ := relayE2EPoll(t, session, output.TaskID, 30*time.Second)
+		if status != bgStatusFailed {
+			t.Fatalf("盘符占用后的任务终态 = %q 输出 =\n%s", status, stdout)
+		}
+		for _, want := range []string{"网络盘符 Z", "在这台服务器上已被占用"} {
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("盘符占用警告 = %q，期待包含 %q", stdout, want)
+			}
+		}
+		if strings.Contains(stdout, networkDriveStatusPrefix) || strings.Contains(stdout, "mount-password") {
+			t.Fatalf("盘符占用任务输出泄漏内部标记或密码：\n%s", stdout)
+		}
+	})
+
+	t.Run("认证失败后暂停", func(t *testing.T) {
+		environment := newRelayLocalCopyEnv(t, false)
+		session := environment.openSession(t)
+		environment.fake.mu.Lock()
+		environment.fake.mapStatus = "error-86"
+		environment.fake.mu.Unlock()
+		sourceHost := environment.hostPath(`Z:\Reports\source.bin`)
+		if err := os.MkdirAll(filepath.Dir(sourceHost), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(sourceHost, []byte("payload"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		start := func() RelayOutput {
+			t.Helper()
+			result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+				Name: "relay_file",
+				Arguments: map[string]any{
+					"from_share_address": `\\192.0.2.10\datasets\Reports\source.bin`,
+					"to_server_id":       environment.windowsID,
+					"to_path":            "C:/Users/Public/target.bin",
+				},
+			})
+			if err != nil || result.IsError {
+				t.Fatalf("relay_file：err=%v result=%+v", err, result.Content)
+			}
+			var output RelayOutput
+			unmarshalToolJSON(t, result, &output)
+			return output
+		}
+		first := start()
+		firstOutput, status, _ := relayE2EPoll(t, session, first.TaskID, 30*time.Second)
+		if status != bgStatusFailed || !strings.Contains(firstOutput, "共享密码认证失败，已暂停注入") {
+			t.Fatalf("认证失败任务 = %q 输出 =\n%s", status, firstOutput)
+		}
+		if err := os.Remove(sourceHost); err != nil {
+			t.Fatal(err)
+		}
+		second := start()
+		secondOutput, status, _ := relayE2EPoll(t, session, second.TaskID, 30*time.Second)
+		if status != bgStatusFailed || !strings.Contains(secondOutput, "因认证失败已暂停注入") {
+			t.Fatalf("暂停后的任务 = %q 输出 =\n%s", status, secondOutput)
+		}
+		commands := environment.fake.recordedCommands()
+		inputs := environment.fake.recordedInputs()
+		if len(commands) != 3 || strings.Contains(commands[2], "New-SmbMapping") {
+			t.Fatalf("认证失败暂停后仍尝试旧密码或选址：%q", commands)
+		}
+		if len(inputs) != 3 || string(inputs[2]) != "" {
+			t.Fatalf("认证失败暂停后的标准输入 = %q，期待没有旧密码", inputs)
+		}
+		for _, command := range commands {
+			if strings.Contains(command, "mount-password") {
+				t.Fatalf("远端命令文本泄漏密码：%s", command)
+			}
+		}
+	})
+}
+
+// TestRelayFileWindowsLocalCopyEscapesQuoteCharacters 钉住生成脚本按
+// PowerShell 单引号规则转义路径，特殊字符不改变参数边界。
+func TestRelayFileWindowsLocalCopyEscapesQuoteCharacters(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, false)
+	session := environment.openSession(t)
+	sourceRemote := `Z:\Reports\source 'quoted'.bin`
+	targetRemote := "C:/Users/Public/target 'quoted'.bin"
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("quoted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_share_address": `\\192.0.2.10\datasets\Reports\source 'quoted'.bin`,
+			"to_server_id":       environment.windowsID,
+			"to_path":            targetRemote,
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("relay_file：err=%v result=%+v", err, result.Content)
+	}
+	var output RelayOutput
+	unmarshalToolJSON(t, result, &output)
+	if _, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second); status != bgStatusDone ||
+		errorText != "" {
+		t.Fatalf("带单引号路径的 Windows 本地拷贝失败：%s", errorText)
+	}
+	commands := environment.fake.recordedCommands()
+	scripts := encodedCommandScripts(commands[len(commands)-1])
+	copyScript := scripts[len(scripts)-1]
+	if !strings.Contains(copyScript, `$__sshmgr_source = 'Z:\Reports\source ''quoted''.bin'`) ||
+		!strings.Contains(copyScript, `$__sshmgr_target = 'C:\Users\Public\target ''quoted''.bin'`) {
+		t.Fatalf("PowerShell 路径没有安全转义单引号：%s", copyScript)
+	}
+	if content, err := os.ReadFile(environment.hostPath(targetRemote)); err != nil ||
+		string(content) != "quoted" {
+		t.Fatalf("带单引号路径的目标内容 = %q err=%v", content, err)
+	}
+}
+
+// TestRelayFileLocalCopyRejectsInvalidVia 钉住另一端可直接挂载时的 via 约
+// 束：这时在另一端本地拷贝，不能再指定共享地址端点。
+func TestRelayFileLocalCopyRejectsInvalidVia(t *testing.T) {
 	environment := newRelayLocalCopyEnv(t, true)
 	session := environment.openSession(t)
 	cases := []struct {
@@ -561,15 +1114,6 @@ func TestRelayFileLocalCopyRejectsInvalidViaAndWindows(t *testing.T) {
 			},
 			wantError: "另一端可挂载共享时直接在另一端执行本地拷贝，不能再用 via 指定共享地址端点",
 		},
-		{
-			name: "Windows 本地拷贝尚未支持",
-			arguments: map[string]any{
-				"from_share_address": `\\192.0.2.10\datasets\Reports\source.bin`,
-				"to_server_id":       environment.windowsID,
-				"to_path":            "C:/Users/Public/target.bin",
-			},
-			wantError: "Windows 服务器的共享地址本地拷贝尚未支持",
-		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -580,7 +1124,7 @@ func TestRelayFileLocalCopyRejectsInvalidViaAndWindows(t *testing.T) {
 				t.Fatalf("调用 relay_file：%v", err)
 			}
 			if !result.IsError {
-				t.Fatalf("relay_file 应明确拒绝尚未支持的情形：%+v", result.Content)
+				t.Fatalf("relay_file 应拒绝无效 via：%+v", result.Content)
 			}
 			text := toolResultText(result)
 			if !strings.Contains(text, testCase.wantError) {
