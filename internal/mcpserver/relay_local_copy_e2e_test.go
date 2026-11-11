@@ -541,9 +541,9 @@ func TestRelayFileDarwinLocalCopySuccess(t *testing.T) {
 	}
 }
 
-// TestRelayFileLocalCopyUnsupportedEndpoints 钉住本票未实现的选择与 Windows
-// 路径必须明确报错，不能悄悄回退或自动挂载。
-func TestRelayFileLocalCopyUnsupportedEndpoints(t *testing.T) {
+// TestRelayFileLocalCopyRejectsInvalidViaAndWindows 钉住本地拷贝路径上的
+// via 与 Windows 拷贝必须明确报错，不能悄悄改变模式或自动挂载。
+func TestRelayFileLocalCopyRejectsInvalidViaAndWindows(t *testing.T) {
 	environment := newRelayLocalCopyEnv(t, true)
 	session := environment.openSession(t)
 	cases := []struct {
@@ -552,14 +552,14 @@ func TestRelayFileLocalCopyUnsupportedEndpoints(t *testing.T) {
 		wantError string
 	}{
 		{
-			name: "via 尚未支持",
+			name: "本地拷贝不能使用 via",
 			arguments: map[string]any{
 				"from_server_id":   environment.serverID,
 				"from_path":        "/mnt/sshmgr/datasets/ordinary/source.bin",
 				"to_share_address": `\\192.0.2.10\datasets\Reports\target.bin`,
 				"via":              environment.serverID,
 			},
-			wantError: "via 指定共享地址端点服务器的流式回退尚未支持",
+			wantError: "另一端可挂载共享时直接在另一端执行本地拷贝，不能再用 via 指定共享地址端点",
 		},
 		{
 			name: "Windows 本地拷贝尚未支持",
@@ -569,15 +569,6 @@ func TestRelayFileLocalCopyUnsupportedEndpoints(t *testing.T) {
 				"to_path":            "C:/Users/Public/target.bin",
 			},
 			wantError: "Windows 服务器的共享地址本地拷贝尚未支持",
-		},
-		{
-			name: "另一端不可挂载时回退尚未支持",
-			arguments: map[string]any{
-				"from_server_id":   environment.notMountableID,
-				"from_path":        "/tmp/source.bin",
-				"to_share_address": `\\192.0.2.10\datasets\Reports\target.bin`,
-			},
-			wantError: "服务器 不可挂载服务器 不在共享存储 datasets 的可挂载范围内；另一端不可挂载时的流式回退尚未支持",
 		},
 	}
 	for _, testCase := range cases {
@@ -598,9 +589,34 @@ func TestRelayFileLocalCopyUnsupportedEndpoints(t *testing.T) {
 		})
 	}
 	if commands := environment.fake.recordedCommands(); len(commands) != 0 {
-		t.Fatalf("尚未支持的情形不应连接服务器：%#v", commands)
+		t.Fatalf("本地拷贝拒绝路径不应连接服务器：%#v", commands)
 	}
 	if environment.connections.Load() != 0 {
-		t.Fatalf("尚未支持的情形不应建立 SSH 连接：%d", environment.connections.Load())
+		t.Fatalf("本地拷贝拒绝路径不应建立 SSH 连接：%d", environment.connections.Load())
+	}
+
+	environment.fake.mounted = false
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_server_id":   environment.notMountableID,
+			"from_path":        "/tmp/source.bin",
+			"to_share_address": `\\192.0.2.10\datasets\Reports\target.bin`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("调用 relay_file：%v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("无已挂载端点应拒绝：%+v", result.Content)
+	}
+	text := toolResultText(result)
+	for _, want := range []string{
+		"没有可作为共享地址端点的已实际挂载 Linux 或 macOS 服务器",
+		"请先在当前授权范围内可挂载", "调整授权",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("无候选错误 = %q，期待包含 %q", text, want)
+		}
 	}
 }

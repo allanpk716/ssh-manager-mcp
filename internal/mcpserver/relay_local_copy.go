@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,12 +22,35 @@ import (
 
 const relayLocalCopyMode = "local_copy"
 
-// RelayForProfile 的共享地址分支：在一个已实际挂载共享的 Linux 或 macOS
-// 端点上启动固定本地拷贝命令。任务仍使用后台任务表与中继的运行中工件
-// 冲突键，不建立第二套任务面。
+type relayShareFallbackMetadata struct {
+	ShareName          string
+	EndpointServerID   string
+	EndpointServerName string
+}
+
+func relayShareFallbackEndpointID(metadata *relayShareFallbackMetadata) string {
+	if metadata == nil {
+		return ""
+	}
+	return metadata.EndpointServerID
+}
+
+func relayShareFallbackNotice(metadata *relayShareFallbackMetadata) string {
+	if metadata == nil {
+		return ""
+	}
+	return fmt.Sprintf(
+		"流式转发：共享地址由服务器 %s（%s）暴露；中断、停止或失败后按目标端块清单续传",
+		metadata.EndpointServerName, metadata.EndpointServerID)
+}
+
+// RelayForProfile 的共享地址分支：另一端可挂载时，在一个已实际挂载共享的
+// Linux 或 macOS 端点上启动固定本地拷贝命令；另一端不可挂载时，选择已挂载
+// 端点后递归复用既有流式中继。任务仍使用后台任务表与中继的运行中工件冲
+// 突键，不建立第二套任务面。
 func relayLocalCopyForProfile(
 	ctx context.Context, st *store.Store, tm *TaskManager, projectID, profileID string,
-	in RelayInput, hk ...sshbroker.HostKeyStore,
+	in RelayInput, chunkBytes int64, hk ...sshbroker.HostKeyStore,
 ) (RelayOutput, error) {
 	if in.FromShareAddress != "" && (in.FromServerID != "" || in.FromPath != "") {
 		return RelayOutput{}, errors.New("from_share_address、from_server_id 与 from_path 不能同时作为源端使用")
@@ -60,9 +84,6 @@ func relayLocalCopyForProfile(
 		})
 	}()
 
-	if in.Via != "" {
-		return RelayOutput{}, errors.New("via 指定共享地址端点服务器的流式回退尚未支持")
-	}
 	sourceShareAddress, targetShareAddress := in.FromShareAddress, in.ToShareAddress
 	serverID := in.FromServerID
 	ordinaryPath := in.FromPath
@@ -107,9 +128,32 @@ func relayLocalCopyForProfile(
 	}
 	shareName = resolved.Share.Name
 	if !sharedStorageMountableOnServer(resolved.Share, serverID) {
-		return RelayOutput{}, fmt.Errorf(
-			"服务器 %s 不在共享存储 %s 的可挂载范围内；另一端不可挂载时的流式回退尚未支持",
-			server.Name, shareName)
+		endpoint, fallbackErr := selectRelayShareFallbackEndpoint(
+			ctx, st, profileID, resolved.Share, in.Via, hk...)
+		if fallbackErr != nil {
+			return RelayOutput{}, fallbackErr
+		}
+		endpointPath := path.Clean(resolved.PathOnServer(endpoint.ShellType))
+		metadata := &relayShareFallbackMetadata{
+			ShareName: resolved.Share.Name, EndpointServerID: endpoint.ID,
+			EndpointServerName: endpoint.Name,
+		}
+		relayInput := in
+		relayInput.relayShareFallback = metadata
+		relayInput.Via = ""
+		if sourceShareAddress != "" {
+			relayInput.FromShareAddress = ""
+			relayInput.FromServerID = endpoint.ID
+			relayInput.FromPath = endpointPath
+		} else {
+			relayInput.ToShareAddress = ""
+			relayInput.ToServerID = endpoint.ID
+			relayInput.ToPath = endpointPath
+		}
+		// 递归进入既有流式中继后，启动与终态审计由那条路径完整记录；
+		// 这里不能再落一条共享地址预处理的启动审计。
+		startOwned = true
+		return RelayForProfile(ctx, st, tm, projectID, profileID, relayInput, chunkBytes, hk...)
 	}
 	if server.ShellType.IsWindows() {
 		return RelayOutput{}, errors.New("Windows 服务器的共享地址本地拷贝尚未支持")
@@ -117,6 +161,9 @@ func relayLocalCopyForProfile(
 	if !strings.HasPrefix(ordinaryPath, "/") {
 		return RelayOutput{}, fmt.Errorf(
 			"共享地址另一端的路径 %q 在 Linux 或 macOS 服务器上必须是以 / 开头的绝对路径", ordinaryPath)
+	}
+	if in.Via != "" {
+		return RelayOutput{}, errors.New("另一端可挂载共享时直接在另一端执行本地拷贝，不能再用 via 指定共享地址端点")
 	}
 	sharedPath := path.Clean(resolved.PathOnServer(server.ShellType))
 	if sourceShareAddress != "" {
@@ -276,6 +323,156 @@ func sharedStorageMountableOnServer(share *models.SharedStorage, serverID string
 		}
 	}
 	return false
+}
+
+type relayShareEndpointCandidate struct {
+	server   *models.Server
+	physical bool
+}
+
+func selectRelayShareFallbackEndpoint(
+	ctx context.Context, st *store.Store, profileID string,
+	share *models.SharedStorage, via string, hk ...sshbroker.HostKeyStore,
+) (*models.Server, error) {
+	allowedIDs, err := st.ServersForProfile(profileID)
+	if err != nil {
+		return nil, err
+	}
+	allowed := make(map[string]bool, len(allowedIDs))
+	for _, serverID := range allowedIDs {
+		allowed[serverID] = true
+	}
+	if via != "" {
+		return selectRelayShareFallbackEndpointByVia(ctx, st, share, via, allowed, hk...)
+	}
+
+	providerMemberships, err := st.ListNetworkMembershipsByRegistration(share.DeviceName)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]relayShareEndpointCandidate, 0, len(share.MountableServers))
+	for _, mountable := range share.MountableServers {
+		if !allowed[mountable.ID] {
+			continue
+		}
+		server, serverErr := st.GetServer(mountable.ID)
+		if serverErr != nil {
+			return nil, serverErr
+		}
+		if server == nil || server.ShellType.IsWindows() {
+			continue
+		}
+		physical, physicalErr := relayShareEndpointOnPhysicalNetwork(st, server, providerMemberships)
+		if physicalErr != nil {
+			return nil, physicalErr
+		}
+		candidates = append(candidates, relayShareEndpointCandidate{server: server, physical: physical})
+	}
+	sort.SliceStable(candidates, func(left, right int) bool {
+		if candidates[left].physical != candidates[right].physical {
+			return candidates[left].physical
+		}
+		if candidates[left].server.Name != candidates[right].server.Name {
+			return candidates[left].server.Name < candidates[right].server.Name
+		}
+		return candidates[left].server.ID < candidates[right].server.ID
+	})
+	for _, candidate := range candidates {
+		mounted, mountedErr := relayShareActuallyMounted(ctx, st, candidate.server, share, hk...)
+		if mountedErr == nil && mounted {
+			return candidate.server, nil
+		}
+	}
+	return nil, errors.New(strings.Join([]string{
+		"没有可作为共享地址端点的已实际挂载 Linux 或 macOS 服务器",
+		"请先在当前授权范围内可挂载这处共享的服务器上调用 mount_share，或请 owner 调整授权后重试",
+		"Windows 服务器不能承担这个端点：它的共享盘符只存在于命令会话，relay_file 的独立文件传输会话看不到",
+	}, "；"))
+}
+
+func selectRelayShareFallbackEndpointByVia(
+	ctx context.Context, st *store.Store, share *models.SharedStorage,
+	via string, allowed map[string]bool, hk ...sshbroker.HostKeyStore,
+) (*models.Server, error) {
+	if !allowed[via] {
+		return nil, errors.New("via 指定的服务器不存在或不在当前授权范围内")
+	}
+	server, err := st.GetServer(via)
+	if err != nil || server == nil {
+		return nil, errors.New("via 指定的服务器不存在或不在当前授权范围内")
+	}
+	if !sharedStorageMountableOnServer(share, via) {
+		return nil, fmt.Errorf(
+			"via 指定的服务器 %s 不在共享存储 %s 的可挂载范围内", server.Name, share.Name)
+	}
+	if server.ShellType.IsWindows() {
+		return nil, fmt.Errorf(
+			"via 指定的服务器 %s 是 Windows；Windows 的共享盘符只存在于命令会话，relay_file 的独立文件传输会话看不到，不能作为共享地址端点",
+			server.Name)
+	}
+	mounted, mountedErr := relayShareActuallyMounted(ctx, st, server, share, hk...)
+	if mountedErr != nil {
+		return nil, fmt.Errorf("via 指定的服务器 %s 现场检查失败：%w", server.Name, mountedErr)
+	}
+	if !mounted {
+		return nil, fmt.Errorf(
+			"via 指定的服务器 %s 尚未实际挂载共享存储 %s；请先调用 mount_share 再重试",
+			server.Name, share.Name)
+	}
+	return server, nil
+}
+
+func relayShareEndpointOnPhysicalNetwork(
+	st *store.Store, server *models.Server, providerMemberships []*models.NetworkMembership,
+) (bool, error) {
+	if server.DeviceID == "" {
+		return false, nil
+	}
+	device, err := st.GetDeviceByID(server.DeviceID)
+	if err != nil {
+		return false, err
+	}
+	if device == nil {
+		return false, nil
+	}
+	endpointMemberships, err := st.ListNetworkMembershipsByRegistration(device.Name)
+	if err != nil {
+		return false, err
+	}
+	plan := sshbroker.PlanCommonNetworkAddresses(providerMemberships, endpointMemberships)
+	for _, candidate := range plan.Candidates {
+		if candidate.Source == sshbroker.DialAddressPhysical {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func relayShareActuallyMounted(
+	ctx context.Context, st *store.Store, server *models.Server, share *models.SharedStorage,
+	hk ...sshbroker.HostKeyStore,
+) (bool, error) {
+	auth, err := vault.AuthForServer(st, server)
+	if err != nil {
+		return false, err
+	}
+	dialSource := dialplan.NewStoreSource(st, "")
+	client, _, connectErr := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: server, Auth: auth, HostKeys: hostKeyStoreFor(st, hk), KeepAlive: true,
+		SuccessCache: dialSource, Topology: dialSource,
+	})
+	if connectErr != nil {
+		return false, connectErr
+	}
+	defer client.Close()
+	checkService := &sharemount.Service{RemoteExec: relayLocalCopyCheckExec(client, st, server)}
+	checkResult, checkErr := checkService.Check(ctx, sharemount.CheckRequest{
+		Server: server, Shares: []*models.SharedStorage{share},
+	})
+	if checkErr != nil {
+		return false, checkErr
+	}
+	return len(checkResult.States) == 1 && checkResult.States[0].Mounted, nil
 }
 
 func relayLocalCopyInspect(

@@ -327,8 +327,11 @@ type RelayInput struct {
 	ToServerID       string `json:"to_server_id,omitempty" jsonschema:"destination server id from list_servers; omit it when to_share_address is set"`
 	ToPath           string `json:"to_path,omitempty" jsonschema:"absolute destination path on the destination server (POSIX /... or Windows drive root C:/...); its parent directory is created if missing; an existing file at the path is replaced on completion; omit it when to_share_address is set"`
 	ToShareAddress   string `json:"to_share_address,omitempty" jsonschema:"one SMB shared address (\\\\host\\share\\subpath or smb://host/share/subpath) as the destination endpoint; mutually exclusive with to_server_id and to_path"`
-	Via              string `json:"via,omitempty" jsonschema:"reserved server id for a future streaming-relay fallback endpoint; Linux and macOS local copies do not use it"`
+	Via              string `json:"via,omitempty" jsonschema:"optional stable server id overriding automatic selection of the actually mounted Linux or macOS endpoint that exposes a shared address to the streaming relay; it is rejected for a local copy and must identify a visible, mountable, actually mounted server"`
 	Fresh            bool   `json:"fresh,omitempty" jsonschema:"for streaming_relay, discard any existing partial/manifest at the destination and restart from byte 0; local_copy always restarts from byte 0"`
+	// relayShareFallback 只在共享地址被翻译成已挂载服务器上的路径后由内部
+	// 调用填充；它让既有流式中继在输出与审计里说明本次选择，不参与工具输入。
+	relayShareFallback *relayShareFallbackMetadata
 }
 
 // RelayOutput is the relay_file tool output (Plan 47; spec §1.1 schema
@@ -344,6 +347,7 @@ type RelayOutput struct {
 	ResumedChunks            int    `json:"resumed_chunks" jsonschema:"chunks already complete per the streaming manifest; always 0 for local_copy"`
 	ChunkBytes               int64  `json:"chunk_bytes" jsonschema:"the streaming chunk size in bytes (from SSHMGR_TRANSFER_CHUNK at server construction); 0 for local_copy"`
 	SpaceCheck               string `json:"space_check" jsonschema:"destination free-space pre-flight: 'ok' or 'unavailable' (for streaming_relay, unavailable means proceeding is safe because a full disk stops at a chunk boundary and can resume later; for local_copy, unavailable means cp may fail and require a restart)"`
+	ShareEndpointServerID    string `json:"share_endpoint_server_id,omitempty" jsonschema:"server id selected to expose the shared address to the streaming relay; empty for ordinary streaming relays and local copies"`
 }
 
 // ErrNotInProfile is returned when an agent requests a server outside its Profile (iron rule).
