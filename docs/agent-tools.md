@@ -197,6 +197,8 @@ JSON 转义、压缩、加密等变换后的值，也不防 agent 有意绕开�
 **拓扑字段只是登记信息**——它们说明 owner 把机器、站点和网络登记在什么
 位置，**不代表当前可达**；可达性与地址不由 `list_servers` 判断。拓扑字段
 只含名字，不含地址，也不受 host 披露开关影响。
+要把这些登记按一个出发点整理成邻居分组，用 `query_topology`；要取得现场
+连通结论，用 `probe_connectivity`。
 
 **永不含凭据**——任何字段都不出现密码/私钥，也不出现拓扑地址。空字符串/
 空数组的字段表示"没有"，不是错误。哪些 server 会出现在你的清单里、owner
@@ -702,6 +704,30 @@ v0.20.0+)。无参数。**平时你不需要调它**——owner 更新磁盘二�
 - 每个地址超时 1.5 秒（`SSHMGR_SSH_ADDRESS_TIMEOUT`）、整次调用总时限
   30 秒、最多 5 个目标并发；超时或被打断的地址标「探测未完成」。
 
+### query_topology
+
+只读查询一个出发点的邻居分组。参数：
+
+| 字段 | 含义 |
+|---|---|
+| `from` | 出发点：`self` 表示当前 sshmgr 实例所在设备；也可以填授权范围内某台服务器条目的编号，工具先检查授权，再换算到该条目所属设备 |
+
+输出先列出出发点所属网络，再分四类：
+
+- 同在物理局域网：按网络名分组；同在物理局域网与虚拟局域网的设备只进物
+  理局域网组。
+- 只能经虚拟局域网到达：设备在每个共同虚拟局域网下各出现一行。
+- 无共同网络不可达：没有登记共同网络的设备压成一行。
+- 未登记服务器：授权范围内没有关联设备的服务器条目压成一行。
+
+可达设备一行同时列出这台设备上全部已授权服务器条目名，并附本实例保存的
+最新「探测结果」通否、耗时与相对年龄；没有观察时留空，不猜测可达性。观
+察超过 10 分钟标「旧」。本工具不主动探测、不建立 SSH 连接、不写审计、不
+推进快照修订号；需要现场结论时调用 `probe_connectivity`。
+
+客户端缓存快照没有推荐版本时，本工具返回「权威端版本过旧，不支持网络拓
+扑与共享存储，请先升级权威端」。
+
 ## 错误对照表（每条给"你该做什么"）
 
 | 报错 | 含义 | 你该做 |
@@ -840,6 +866,7 @@ HEAD，后续重构以符号名为准）：
 | 每次工具调用全程审计（project/server/action/status/命令/耗时） | `internal/mcpserver/core.go:81-89` 等；../README.md "What the agent gets" |
 | 命令策略门在取凭据、建 SSH 连接之前（拦截 / 需确认都不建连接，拦截零字节到服务器）；判定内核是纯函数，权威端与客户端同一条代码路径，离线用最后一次拉到的规则 | `internal/mcpserver/policygate.go`（policyJudge）；`internal/mcpserver/core.go`（ExecCommandForProfile 的 gate 段）；`internal/mcpserver/bgtools.go`（后台同款门）；`internal/policy/policy.go`（Evaluate） |
 | probe_connectivity：只测 TCP 建连与耗时、只探测登记过的共同网络组合（不测兜底主机）、结果只存发起实例本地；经服务器探测执行固定命令、不经命令策略但写审计 | 规格 #142；ADR 0007（命令策略是护栏不是安全边界） |
+| query_topology：按出发点输出所属网络、同在物理局域网、只能经虚拟局域网到达、无共同网络不可达与未登记服务器五段；可达行附本实例最新探测结果；只读登记与本地观察，不探测、不建 SSH、不写审计、不改快照修订号；旧权威端快照固定报错 | 规格 #234、票 #241；`internal/mcpserver/query_topology.go`（QueryTopologyForProfile）；`internal/mcpserver/server.go`（query_topology 注册） |
 | list_shares：默认只读登记与挂载点约定、不做任何现场检测；可选现场检测参数对可见 Linux 与 macOS 可挂载服务器并发只读检测，报告已挂载、未挂载、配置缺失、不可达（附原因说明）四种状态；可挂载范围是挂载密码机密项可写入列表与会话可见服务器取交集，交集为空不返回；旧权威端快照按 ADR 0014 报错 | `internal/mcpserver/list_shares.go`（ListSharesForProfile / annotateSharedStorageMountChecks）；`internal/sharemount/check.go`（固定检测命令）；`internal/store/shared_storage.go`（SharedStorageMountPoint）；`internal/mcpserver/run.go`（hydrateCacheStore 设置快照推荐版本） |
 | mount_share：共享存储持久挂载（Linux 写 fstab 与仅 root 可读凭据文件，macOS 写 autofs 间接映射）；服务器级目录锁带 owner 文件与过期回收；撤销标记版本号不低于快照版本号时拒绝；Linux 先在 /var/run 临时挂载点试挂成功才改写正式配置；macOS 映射改写后先卸载旧 smbfs 挂载再刷新；已挂载且一致时幂等 no-change；密码只经提权会话标准输入写入，结果与审计不含地址；不提供卸载 | 规格 #198、#212；`internal/sharemount/`（service.go / linux.go / darwin.go / marker.go / lock.go / check.go）；`internal/mcpserver/mount_share.go` |
 | query_software_inventory：按 profile 可见范围查询软件清单（含监听端口、暴露级别、来源、采集时间与设备采集状态）；客户端在线查询权威端，不可达时固定报错、不回退本地数据 | 票 #185；`internal/mcpserver/softwareinventory.go`；`internal/mcpserver/serve_softwareinventory.go`；`internal/clientops/softwareinventory_forward.go` |
