@@ -1962,6 +1962,78 @@ func TestNetworkDriveInjectionSkipsServerOutsideWritableList(t *testing.T) {
 	}
 }
 
+// TestNetworkDriveInjectionStopsAfterServerLeavesWritableList 钉住撤销的
+// Windows 侧效果：同一条服务先完成一次注入，owner 把服务器移出挂载密码机
+// 密项可写入列表（共享存储版本号随之加一）后，下一条命令不探测、不映射、
+// 不输出共享警告，行为与从未登记时一致。
+func TestNetworkDriveInjectionStopsAfterServerLeavesWritableList(t *testing.T) {
+	fixture := seedNetworkDriveVault(t, nil)
+	call := func() (string, []struct {
+		Share string `json:"share"`
+		Drive string `json:"drive"`
+	}) {
+		t.Helper()
+		result, err := fixture.clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+			Name: "exec_command",
+			Arguments: map[string]any{
+				"server_id": fixture.serverID, "command": "Get-ChildItem S:\\datasets",
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.IsError {
+			t.Fatalf("exec_command failed: %+v", result.Content)
+		}
+		var output struct {
+			Stdout                string `json:"stdout"`
+			InjectedNetworkDrives []struct {
+				Share string `json:"share"`
+				Drive string `json:"drive"`
+			} `json:"injected_network_drives"`
+		}
+		unmarshalToolJSON(t, result, &output)
+		return output.Stdout, output.InjectedNetworkDrives
+	}
+
+	beforeOutput, beforeInjected := call()
+	if beforeOutput != "user-command-output\n" || len(beforeInjected) != 1 {
+		t.Fatalf("first output = %q, injected = %#v, want one injected drive", beforeOutput, beforeInjected)
+	}
+	if err := fixture.store.DisallowSecrets(
+		[]string{"DATASETS_MOUNT_PASSWORD"}, []string{"windows-web"}, store.CLISource(),
+	); err != nil {
+		t.Fatalf("disallow the mount password for the target server: %v", err)
+	}
+
+	afterOutput, afterInjected := call()
+	if afterOutput != "plain-command-output\n" {
+		t.Fatalf("output after revoke = %q, want only the user command output without a share warning", afterOutput)
+	}
+	if len(afterInjected) != 0 {
+		t.Fatalf("injected_network_drives after revoke = %#v, want none", afterInjected)
+	}
+	commands, inputs := fixture.fake.recorded()
+	if len(commands) != 3 {
+		t.Fatalf("remote commands = %#v, want one probe and one mapping before revoke, then only the user command", commands)
+	}
+	if strings.Contains(commands[2], "probe-one") || strings.Contains(commands[2], "New-SmbMapping") ||
+		strings.Contains(commands[2], "SSHMGR-SMBMAP") {
+		t.Fatalf("command after revoke still contains an injection step: %q", commands[2])
+	}
+	if len(inputs[2]) != 0 {
+		t.Fatalf("standard input after revoke = %q, want empty", inputs[2])
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 审计查询按编号倒序返回：第一行是撤销后的第二条命令。
+	if len(rows) != 2 || len(rows[0].InjectedShareNames) != 0 {
+		t.Fatalf("audit rows = %#v, want the second exec to record no injected share", rows)
+	}
+}
+
 // TestNetworkDriveInjectionLeavesPosixServerUnchanged 钉住非 Windows 服务器
 // 的行为边界：即使在可写名单内也不探测、不映射、不改变命令与输出。
 func TestNetworkDriveInjectionLeavesPosixServerUnchanged(t *testing.T) {

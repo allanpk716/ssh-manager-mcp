@@ -9,8 +9,8 @@ import (
 )
 
 // SharedStorageSet 按登记标识符比较快照里的共享存储。新增、删除或不再
-// 可见、版本号变化分别成句；提示只使用共享名、共享存储版本号、变更说明
-// 与服务器名，不读取挂载账号用户名、地址或密码。
+// 可见、服务器被移出可挂载范围、版本号变化分别成句；提示只使用共享名、
+// 共享存储版本号、变更说明与服务器名，不读取挂载账号用户名、地址或密码。
 type SharedStorageSet struct{}
 
 // Describe 返回共享存储差异的描述分句。profile 视角下可挂载范围与授权
@@ -25,13 +25,22 @@ func (SharedStorageSet) Describe(old, fresh *store.Snapshot) []string {
 	for _, freshShare := range freshShares {
 		oldShare, exists := oldShares[freshShare.id]
 		if exists {
-			if freshShare.version != oldShare.version {
+			revoked := sharedStorageRevokedServers(old, fresh, oldShare, freshShare)
+			if freshShare.version != oldShare.version || len(revoked) > 0 {
 				changed = append(changed, freshShare.name)
-				changedDetails[freshShare.name] = sharedStorageVersionText(
-					oldShare, freshShare,
-					sharedStorageMountableServers(old, oldShare),
-					sharedStorageMountableServers(fresh, freshShare),
-				)
+				var details []string
+				if len(revoked) > 0 {
+					details = append(details, fmt.Sprintf(
+						"共享存储 %s 已从服务器 %s 撤销", freshShare.name, strings.Join(revoked, "、"),
+					))
+				}
+				if freshShare.version != oldShare.version {
+					details = append(details, sharedStorageVersionText(
+						oldShare, freshShare,
+						sharedStorageMountableServers(fresh, freshShare),
+					))
+				}
+				changedDetails[freshShare.name] = strings.Join(details, "；")
 			}
 			continue
 		}
@@ -53,23 +62,54 @@ func (SharedStorageSet) Describe(old, fresh *store.Snapshot) []string {
 	return parts
 }
 
-// sharedStorageVersionText 生成版本号变化的分句。可提醒的服务器名取新旧
-// 两份可挂载清单的并集，再排序去重；没有变更说明或没有可确定的服务器时
-// 省略对应子句。
+// sharedStorageVersionText 生成版本号变化的分句。可提醒的服务器名取新快
+// 照仍可挂载的服务器：被移出的服务器由撤销分句单独说明，不再列入「可能
+// 需要更新」；没有变更说明或没有可确定的服务器时省略对应子句。
 func sharedStorageVersionText(
 	oldShare, freshShare sharedStorageSummary,
-	oldServers, freshServers []string,
+	freshServers []string,
 ) string {
 	var text strings.Builder
 	fmt.Fprintf(&text, "共享存储 %s 版本 %d → %d", freshShare.name, oldShare.version, freshShare.version)
 	if freshShare.changeNote != "" {
 		text.WriteString("，说明：" + freshShare.changeNote)
 	}
-	servers := sortedStringUnion(oldServers, freshServers)
+	servers := append([]string(nil), freshServers...)
+	sort.Strings(servers)
 	if len(servers) > 0 {
 		text.WriteString("；以下服务器上的挂载可能需要更新：" + strings.Join(servers, "、"))
 	}
 	return text.String()
+}
+
+// sharedStorageRevokedServers 返回仍在新快照可见、但已不能挂载某处共享
+// 存储的服务器名。服务器条目本身消失的情况不属于撤销，由服务器集合比较
+// 项负责说明。
+func sharedStorageRevokedServers(old, fresh *store.Snapshot, oldShare, freshShare sharedStorageSummary) []string {
+	oldServers := sharedStorageMountableServers(old, oldShare)
+	freshServers := sharedStorageMountableServers(fresh, freshShare)
+	if len(oldServers) == 0 {
+		return nil
+	}
+	freshSet := make(map[string]struct{}, len(freshServers))
+	for _, name := range freshServers {
+		freshSet[name] = struct{}{}
+	}
+	visible := make(map[string]struct{}, len(fresh.Servers))
+	for _, server := range fresh.Servers {
+		visible[server.Name] = struct{}{}
+	}
+	var revoked []string
+	for _, name := range oldServers {
+		if _, stillAllowed := freshSet[name]; stillAllowed {
+			continue
+		}
+		if _, stillVisible := visible[name]; stillVisible {
+			revoked = append(revoked, name)
+		}
+	}
+	sort.Strings(revoked)
+	return revoked
 }
 
 // sharedStorageMountableServers 返回这份快照里某处共享存储可挂载的服务器
@@ -97,20 +137,6 @@ func sharedStorageMountableServers(snap *store.Snapshot, share sharedStorageSumm
 	}
 	sort.Strings(names)
 	return names
-}
-
-func sortedStringUnion(left, right []string) []string {
-	seen := make(map[string]struct{}, len(left)+len(right))
-	var out []string
-	for _, value := range append(append([]string(nil), left...), right...) {
-		if _, exists := seen[value]; exists {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // sharedStorageSummary 只保留比较需要的共享存储信息，刻意不携带挂载账号

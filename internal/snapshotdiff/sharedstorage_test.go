@@ -120,12 +120,12 @@ func TestDefaultHintSharedStorageVersionChanged(t *testing.T) {
 			wantSentence: "机密项 NAS_MOUNT_PASSWORD 的可写入服务器列表已变化：新增 web；共享存储 datasets 版本 2 → 5，说明：更换挂载密码；以下服务器上的挂载可能需要更新：gpu、web",
 		},
 		{
-			name:         "可挂载范围缩小也提醒旧服务器",
+			name:         "可挂载范围缩小时单独提示撤销",
 			oldServers:   []string{"server-gpu", "server-web"},
 			freshServers: []string{"server-gpu"},
 			freshVersion: 3,
 			changeNote:   "缩小可挂载范围",
-			wantSentence: "机密项 NAS_MOUNT_PASSWORD 的可写入服务器列表已变化：删除 web；共享存储 datasets 版本 2 → 3，说明：缩小可挂载范围；以下服务器上的挂载可能需要更新：gpu、web",
+			wantSentence: "机密项 NAS_MOUNT_PASSWORD 的可写入服务器列表已变化：删除 web；共享存储 datasets 已从服务器 web 撤销；共享存储 datasets 版本 2 → 3，说明：缩小可挂载范围；以下服务器上的挂载可能需要更新：gpu",
 		},
 		{
 			name:         "可写入关联指向不可见服务器时不列出",
@@ -166,6 +166,40 @@ func TestDefaultHintSharedStorageVersionChanged(t *testing.T) {
 			}
 			assertNoSharedStorageLeak(t, got)
 		})
+	}
+}
+
+// TestDefaultHintSharedStorageServerRevoked 覆盖可挂载范围缩小的专门提
+// 示：仍在快照内可见、但不再可挂载的服务器得到「已从服务器撤销」分句；
+// 直接从快照消失的服务器不叫撤销，交给服务器集合比较项说明。
+func TestDefaultHintSharedStorageServerRevoked(t *testing.T) {
+	old := sharedStorageHintSnapshot(10, "server-gpu", "server-web")
+	old.SharedStorages = []store.SnapshotSharedStorage{sharedStorageHintShare(2, "旧说明")}
+	fresh := sharedStorageHintSnapshot(11, "server-gpu")
+	fresh.SharedStorages = []store.SnapshotSharedStorage{sharedStorageHintShare(2, "旧说明")}
+
+	got := Default().Hint(old, fresh)
+	want := "权威端配置已更新（修订号 10 → 11）：机密项 NAS_MOUNT_PASSWORD 的可写入服务器列表已变化：删除 web；共享存储 datasets 已从服务器 web 撤销"
+	if got != want {
+		t.Fatalf("变更提示 = %q，应为 %q", got, want)
+	}
+	assertNoSharedStorageLeak(t, got)
+}
+
+// TestDefaultHintSharedStorageInvisibleServerIsNotRevoked 钉住撤销分句的
+// 边界：服务器条目本身从新快照消失时，只按服务器集合比较项报告，不再追
+// 加共享存储的撤销分句。
+func TestDefaultHintSharedStorageInvisibleServerIsNotRevoked(t *testing.T) {
+	old := sharedStorageHintSnapshot(10, "server-gpu", "server-web")
+	old.SharedStorages = []store.SnapshotSharedStorage{sharedStorageHintShare(2, "旧说明")}
+	fresh := sharedStorageHintSnapshot(11, "server-gpu")
+	fresh.Servers = []store.SnapshotServer{{ID: "server-gpu", Name: "gpu"}}
+	fresh.SharedStorages = []store.SnapshotSharedStorage{sharedStorageHintShare(2, "旧说明")}
+
+	got := Default().Hint(old, fresh)
+	want := "权威端配置已更新（修订号 10 → 11）：删除服务器 web；机密项 NAS_MOUNT_PASSWORD 的可写入服务器列表已变化：删除 web"
+	if got != want {
+		t.Fatalf("变更提示 = %q，应为 %q", got, want)
 	}
 }
 
