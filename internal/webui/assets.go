@@ -18,7 +18,10 @@ type assetURLs map[string]string
 
 // hashedAssetFiles 是唯一的静态资源登记表；third-party.json 是清单文件，
 // 不作为可访问资源分发。
-var hashedAssetFiles = []string{"htmx.min.js", "app.css", "app.js", "secrets-matrix.js"}
+var hashedAssetFiles = []string{
+	"htmx.min.js", "app.css", "app.js", "secrets-matrix.js",
+	"cytoscape.min.js", "topology.css", "topology.js",
+}
 
 // loadAssets 计算每个静态资源的内容哈希并生成带哈希的地址。内容变化后地址
 // 随之变化，浏览器不会继续使用旧版本的脚本或样式。

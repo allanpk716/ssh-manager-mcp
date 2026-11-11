@@ -10,6 +10,9 @@
 <script src="{{index .Assets "htmx.min.js"}}" defer></script>
 <script src="{{index .Assets "app.js"}}" defer></script>
 <script src="{{index .Assets "secrets-matrix.js"}}" defer></script>
+{{if .TopologyPage}}<link rel="stylesheet" href="{{index .Assets "topology.css"}}">
+<script src="{{index .Assets "cytoscape.min.js"}}" defer></script>
+<script src="{{index .Assets "topology.js"}}" defer></script>{{end}}
 </head>
 <body>
 <header class="site-header">
@@ -32,6 +35,7 @@
 </nav>{{end}}
 {{if .Caps.ShowSecretsArea}}<nav class="main-nav" aria-label="机密项区域"><a href="/ui/secrets/">机密项</a></nav>{{end}}
 {{if .Caps.ShowSoftwareInventoryArea}}<nav class="main-nav" aria-label="软件清单区域"><a href="/ui/software-inventory/">软件清单</a></nav>{{end}}
+{{if .Caps.ShowTopologyArea}}<nav class="main-nav" aria-label="网络拓扑区域"><a href="/ui/topology/">网络拓扑</a></nav>{{end}}
 {{if .Caps.ShowOpsArea}}<nav class="main-nav" aria-label="运维区域">
 <a href="/ui/ops/">运维</a>
 {{if .Caps.CanManageBackups}}<a href="/ui/ops/backup">备份</a>{{end}}

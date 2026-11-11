@@ -101,8 +101,11 @@ type Config struct {
 	// SoftwareInventory 是软件清单页来源。单机与权威端提供；客户端不提
 	// 供，导航与路由都不出现。
 	SoftwareInventory SoftwareInventorySource
-	Access            AccessStore
-	Ops               OpsStore
+	// Topology 是网络拓扑页来源。三种角色都提供；初始化向导等没有拓扑
+	// 数据的构造不提供，导航与路由都不出现。
+	Topology TopologySource
+	Access   AccessStore
+	Ops      OpsStore
 	// MachineInit 是单机升级为权威端时调用的初始化模块适配器。适配器内部
 	// 调用 machineinit.Initialize 并把权威端作为目标角色；本包不写 role.json。
 	MachineInit MachineInitializer
@@ -208,6 +211,9 @@ type capabilities struct {
 	// ShowSoftwareInventoryArea 控制是否显示「软件清单」区域入口；只有
 	// 单机或权威端配置软件清单来源时才显示。
 	ShowSoftwareInventoryArea bool
+	// ShowTopologyArea 控制是否显示「网络拓扑」区域入口；三种角色只要提
+	// 供拓扑来源就显示，客户端入口同样可见但页面只读。
+	ShowTopologyArea bool
 	// CanManageProfiles 控制是否显示 Profile 页入口与写操作。
 	CanManageProfiles bool
 	// CanManageProjects 控制是否显示项目令牌页入口与写操作。
@@ -243,6 +249,7 @@ func capabilitiesForConfig(cfg Config) capabilities {
 	caps := capabilitiesForRole(cfg.Role)
 	caps.ShowSecretsArea = cfg.Secrets != nil
 	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
+	caps.ShowTopologyArea = cfg.Topology != nil
 	return caps
 }
 
@@ -342,6 +349,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 		h.mux.HandleFunc(startPath, h.handleStart)
 		h.mux.HandleFunc("/ui/assets/", h.handleAsset)
 		h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
+		h.registerTopologyRoutes()
 		h.registerAccessRoutes()
 		h.registerServerRoutes()
 		h.registerSecretRoutes()

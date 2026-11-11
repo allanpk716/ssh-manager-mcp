@@ -1,0 +1,23 @@
+{{define "content"}}
+<section class="topology-page" data-topology-page>
+<header class="topology-toolbar">
+<h1>网络拓扑</h1>
+<div class="topology-views" role="group" aria-label="拓扑视图切换">
+<button type="button" class="topology-view active" data-view="physical">物理视图</button>
+<button type="button" class="topology-view" data-view="virtual">虚拟视图</button>
+<button type="button" class="topology-view" data-view="overlay">叠加视图</button>
+</div>
+<p class="topology-hint">画布支持平移与缩放；点设备、站点或网络查看详情。</p>
+</header>
+{{if not .Caps.CanWrite}}<p class="topology-readonly">拓扑为只读视图；网络成员的修改请到权威端 Web UI 做。</p>{{end}}
+<div class="topology-body">
+<div class="topology-canvas-wrap"><div id="topology-canvas" class="topology-canvas" role="application" aria-label="网络拓扑画布" data-view="physical"></div></div>
+<aside class="topology-tray" aria-label="未归类设备">
+<h2>未归类设备</h2>
+<ul class="topology-tray-list"></ul>
+<p class="topology-tray-empty">全部设备都已归入物理局域网。</p>
+</aside>
+<aside class="topology-detail" aria-label="拓扑详情" hidden></aside>
+</div>
+</section>
+{{end}}
