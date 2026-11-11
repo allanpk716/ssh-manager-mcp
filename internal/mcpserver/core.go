@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path"
@@ -18,6 +17,7 @@ import (
 	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
+	"ssh-manager-mcp/internal/secretfill"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -537,42 +537,40 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 	return
 }
 
-// UploadContentForProfile (Plan 33, spec rev3 §2) writes INLINE content to
-// remotePath on serverID iff serverID is in profileID (iron rule). The
-// execution order is pinned: ① param-level validation (encoding enum,
-// remote_path absolute, base64 single-line — these reflect only the CALLER'S
-// OWN input, leak nothing about any server, and hence run BEFORE the gate;
-// the denied-first principle constrains CONTENT-level errors: cap/base64) →
-// ② profile gate → ③ cap pre-check (two-stage for base64; connect-free, zero
-// bytes move, no remote file) → ④ GetServer → AuthForServer (no_credential)
-// → HostKeyTOFU → ConnectServerEntry (Plan 31 redaction at the source) → ⑤ WriteFile
-// (parent creation INSIDE, one watchdog, checked Close) → ⑥ audit + {bytes}.
+// UploadContentForProfile 把调用方直接提交的内容写入远端文件；目标服务
+// 器必须已在 profile 授权集合内。执行顺序固定：① 参数校验；② profile
+// 授权检查；③ 大小预检与 Base64 解码；④ 读取本地服务器条目、填入机密
+// 项占位符并按填值后的字节复查大小；⑤ 取凭据并连接目标服务器；⑥ 写
+// 入文件；⑦ 写审计。前四步都不访问目标服务器。
 //
 // cap arrives from the NewServerFromSource-resolved env seam
 // (SSHMGR_UPLOAD_CONTENT_MAX); tests pass small caps directly.
 //
-// Statuses mirror upload: denied / auth_error / no_credential /
-// hostkey_mismatch / connect_error / cancelled / ok / error (param
-// validation, cap refusal, base64 errors, WriteFile failures → error).
+// 审计状态沿用上传工具：profile 或机密项授权拒绝为 denied；缺凭据为
+// no_credential；主机密钥不匹配、连接失败和取消各有固定值；参数错误、
+// 大小超限、Base64 错误、机密项读取失败和写入失败为 error。
 //
-// Audit %d branch value table (spec rev3 §5): ok + text refusal =
-// len(content); base64 coarse refusal = est (exact for every
-// decoder-accepted input); unreachable defensive fine-check = len(decoded);
-// decode failure + single-line rejection + param errors = 0.
+// 审计里的字节数在成功时等于填值后的实际写入字节数；超限拒绝等于触发
+// 拒绝的那次大小检查值；参数和解码失败为 0。
 func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64, hk ...sshbroker.HostKeyStore) (out UploadContentOutput, err error) {
 	if encoding == "" {
 		encoding = "text"
 	}
 	byteCount := int64(0) // feeds the refusal error AND the audit Command (see table above)
 	var status string
+	var filledSecretNames []string
 	start := time.Now()
 	defer func() {
 		if status == "" {
 			status = "error"
 		}
+		auditCommand := fmt.Sprintf("inline %d bytes -> %s", byteCount, remotePath)
+		if len(filledSecretNames) > 0 {
+			auditCommand += "; secrets=" + strings.Join(filledSecretNames, ",")
+		}
 		_ = st.WriteAudit(store.AuditRow{
 			TS: start, ProjectID: projectID, ServerID: serverID, Action: "upload-content",
-			Command: fmt.Sprintf("inline %d bytes -> %s", byteCount, remotePath),
+			Command: auditCommand,
 			Status:  status, DurationMS: time.Since(start).Milliseconds(),
 		})
 	}()
@@ -600,7 +598,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	// decoder-accepted input (single line is pinned by ①), so the fine check
 	// below is defensive-only — unreachable from public input, kept per spec
 	// rev3 §2.1.
-	var r io.Reader
+	var contentBytes []byte
 	switch encoding {
 	case "text":
 		byteCount = int64(len(content))
@@ -608,7 +606,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 			status = "error"
 			return UploadContentOutput{}, fmt.Errorf("content (%d bytes) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
 		}
-		r = strings.NewReader(content)
+		contentBytes = []byte(content)
 	default: // base64
 		padCount := int64(0)
 		for i := len(content) - 1; i >= 0 && content[i] == '=' && padCount < 2; i-- {
@@ -630,19 +628,39 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 			status = "error"
 			return UploadContentOutput{}, fmt.Errorf("content (%d bytes decoded) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
 		}
-		r = bytes.NewReader(decoded)
+		contentBytes = decoded
 	}
 
-	// ④ server + credential + host key + connect — the same chain every broker
-	// tool walks (DownloadForProfile verbatim; Plan 31 redaction lives in
-	// sshbroker.ConnectServerEntry at the source).
+	// ④ 机密项占位符在取得服务器凭据和发起连接前填值。这里读取的是本地
+	// vault 或客户端缓存快照，不访问网络。
 	srv, serr := st.GetServer(serverID)
 	if serr != nil || srv == nil {
 		status = "error"
 		err = fmt.Errorf("server %s not found", serverID)
 		return
 	}
+	filled := secretfill.Fill(ctx, contentBytes, secretfill.ServerRef{ID: srv.ID, Name: srv.Name}, secretfill.NewStoreSource(st))
+	filledSecretNames = filled.Names
+	if fillErr := filled.Err(); fillErr != nil {
+		for _, problem := range filled.Problems {
+			if problem.Kind == secretfill.ProblemMissingOrNotAllowed {
+				status = "denied"
+			}
+		}
+		err = fillErr
+		return
+	}
+	contentBytes = filled.Content
+	byteCount = int64(len(contentBytes))
+	if byteCount > cap {
+		status = "error"
+		return UploadContentOutput{}, fmt.Errorf("content (%d bytes) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
+	}
+	r := bytes.NewReader(contentBytes)
 
+	// ⑤ server + credential + host key + connect — the same chain every broker
+	// tool walks (DownloadForProfile verbatim; Plan 31 redaction lives in
+	// sshbroker.ConnectServerEntry at the source).
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
 		if errors.Is(aerr, vault.ErrNoCredential) {
@@ -677,7 +695,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	}
 	defer cli.Close()
 
-	// ⑤ write (parent creation + checked Close live inside WriteFile).
+	// ⑥ write (parent creation + checked Close live inside WriteFile).
 	if werr := cli.WriteFile(ctx, remotePath, r); werr != nil {
 		if errors.Is(werr, context.Canceled) {
 			status = "cancelled"
@@ -688,8 +706,12 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return
 	}
 	status = "ok"
+	if filledSecretNames == nil {
+		filledSecretNames = []string{}
+	}
 	out = UploadContentOutput{
 		Bytes:                 byteCount,
+		FilledSecretNames:     filledSecretNames,
 		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
 	}
 	return

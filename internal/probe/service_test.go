@@ -359,8 +359,18 @@ func TestServiceTargetServerIDCaseCorrectionHint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrongCase := strings.ToUpper(grantedResult.ServerID)
-	if wrongCase == grantedResult.ServerID {
+	wrongCase := []byte(grantedResult.ServerID)
+	for index, char := range wrongCase {
+		if char >= 'A' && char <= 'Z' {
+			wrongCase[index] = char + ('a' - 'A')
+			break
+		}
+		if char >= 'a' && char <= 'z' {
+			wrongCase[index] = char - ('a' - 'A')
+			break
+		}
+	}
+	if string(wrongCase) == grantedResult.ServerID {
 		t.Fatalf("server id %q has no case variant", grantedResult.ServerID)
 	}
 	service, _ := fixture.service((&fakeLocalDial{}).dial)
@@ -375,7 +385,7 @@ func TestServiceTargetServerIDCaseCorrectionHint(t *testing.T) {
 		return fmt.Errorf("server %s not in your profile", serverID)
 	}
 
-	_, err = service.Probe(context.Background(), Request{From: "self", Targets: []string{wrongCase}})
+	_, err = service.Probe(context.Background(), Request{From: "self", Targets: []string{string(wrongCase)}})
 	if err == nil || !strings.Contains(err.Error(), "did you mean") || !strings.Contains(err.Error(), grantedResult.ServerID) {
 		t.Fatalf("wrong-case target must carry the case correction hint, got %v", err)
 	}
