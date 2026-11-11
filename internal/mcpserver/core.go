@@ -611,6 +611,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		}
 		contentBytes = decoded
 	}
+	byteCount = int64(len(contentBytes))
 
 	// ④ 机密项占位符在取得服务器凭据和发起连接前填值。这里读取的是本地
 	// vault 或客户端缓存快照，不访问网络。
@@ -622,15 +623,15 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	}
 	filled := secretfill.Fill(ctx, contentBytes, secretfill.ServerRef{ID: srv.ID, Name: srv.Name}, secretfill.NewStoreSource(st, profileServerIDs))
 	filledSecretNames = filled.Names
-	byteCount = int64(len(filled.ProjectedContent))
+	projectedByteCount := int64(len(filled.ProjectedContent))
 	fillErr := filled.Err()
 	if store.AuthorityTooOld(st) && secretFillResultUsesPlaceholder(filled) {
 		status = "denied"
 		err = secretfill.ErrAuthorityTooOld
 		return
 	}
-	if byteCount > cap {
-		sizeErr := fmt.Errorf("content (%d bytes) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
+	if projectedByteCount > cap {
+		sizeErr := fmt.Errorf("content (%d bytes) exceeds upload-content cap %d — refused before transfer", projectedByteCount, cap)
 		if fillErr == nil {
 			err = sizeErr
 		} else {
@@ -703,6 +704,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return
 	}
 	status = "ok"
+	byteCount = int64(len(filled.Content))
 	if filledSecretNames == nil {
 		filledSecretNames = []string{}
 	}

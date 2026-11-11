@@ -872,6 +872,7 @@ func TestUploadContentSecretFillSizeChecksAfterSubstitution(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 || rows[0].Action != "upload-content" || rows[0].Status != "denied" ||
+		!strings.Contains(rows[0].Command, "inline 73 bytes -> "+overTarget) ||
 		!strings.Contains(rows[0].Command, "secrets=V,MISSING") {
 		t.Fatalf("over-cap denied audit row = %+v", rows)
 	}
