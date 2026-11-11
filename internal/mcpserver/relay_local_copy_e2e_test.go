@@ -1131,23 +1131,38 @@ func TestRelayFileWindowsLocalCopyRejectsPartialFile(t *testing.T) {
 }
 
 // TestRelayFileWindowsLocalCopyRejectsDirectory 钉住共享地址无论作为源端
-// 还是目标端，目录都只得到失败任务，不会被 robocopy 当目录同步任务执行。
+// 还是目标端，目录都在 robocopy 之前以可识别退出码失败，任务终态给出与
+// Linux/macOS 相同的目录指引，不会被 robocopy 当目录同步任务执行。
 func TestRelayFileWindowsLocalCopyRejectsDirectory(t *testing.T) {
-	for name, arguments := range map[string]map[string]any{
-		"源端目录": {
-			"from_share_address": `\\192.0.2.10\datasets\Reports`,
-			"to_server_id":       "__windows__",
-			"to_path":            "C:/Users/Public/target.bin",
+	cases := []struct {
+		name        string
+		arguments   map[string]any
+		wantMessage string
+	}{
+		{
+			name: "源端目录",
+			arguments: map[string]any{
+				"from_share_address": `\\192.0.2.10\datasets\Reports`,
+				"to_server_id":       "__windows__",
+				"to_path":            "C:/Users/Public/target.bin",
+			},
+			wantMessage: "源路径 Z:\\Reports 是目录；relay_file 只支持常规文件，请先把目录打包成一个文件",
 		},
-		"目标端目录": {
-			"from_server_id":   "__windows__",
-			"from_path":        "C:/Users/Public/source.bin",
-			"to_share_address": `\\192.0.2.10\datasets\Reports`,
+		{
+			name: "目标端目录",
+			arguments: map[string]any{
+				"from_server_id":   "__windows__",
+				"from_path":        "C:/Users/Public/source.bin",
+				"to_share_address": `\\192.0.2.10\datasets\Reports`,
+			},
+			wantMessage: "目标路径 Z:\\Reports 是目录；relay_file 只支持常规文件，请先打包目录再传输",
 		},
-	} {
-		t.Run(name, func(t *testing.T) {
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
 			environment := newRelayLocalCopyEnv(t, false)
 			session := environment.openSession(t)
+			arguments := testCase.arguments
 			if arguments["to_server_id"] == "__windows__" {
 				arguments["to_server_id"] = environment.windowsID
 			}
@@ -1176,9 +1191,11 @@ func TestRelayFileWindowsLocalCopyRejectsDirectory(t *testing.T) {
 			if status != bgStatusFailed {
 				t.Fatalf("目录端点终态 = %q 错误 = %q 输出 =\n%s", status, errorText, stdout)
 			}
-			if !strings.Contains(stdout, "source-not-regular") &&
-				!strings.Contains(stdout, "target-directory") {
-				t.Fatalf("目录端点输出 = %q", stdout)
+			if !strings.Contains(errorText, testCase.wantMessage) {
+				t.Fatalf("目录端点终态提示 = %q，期待包含 %q", errorText, testCase.wantMessage)
+			}
+			if !strings.Contains(stdout, "是目录") {
+				t.Fatalf("目录端点输出缺少清楚提示：\n%s", stdout)
 			}
 			if _, err := os.Stat(environment.hostPath("C:/Users/Public/target.bin")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("目录源端不应产生目标文件：stat err=%v", err)

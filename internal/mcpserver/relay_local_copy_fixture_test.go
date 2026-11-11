@@ -276,12 +276,16 @@ func (environment *relayLocalCopyEnv) serveRobocopyScript(
 	targetHost := environment.hostPath(target)
 	partialHost := environment.hostPath(target + relayPartialSuffix)
 	sourceInfo, err := os.Stat(sourceHost)
-	if err != nil || sourceInfo.IsDir() {
-		stdout.Write([]byte("source-not-regular\n"))
+	if err != nil {
+		fmt.Fprintf(stdout, "源路径 %s 不是常规文件；relay_file 只支持常规文件\n", source)
 		return 3
 	}
+	if sourceInfo.IsDir() {
+		fmt.Fprintf(stdout, "源路径 %s 是目录；relay_file 只支持常规文件，请先把目录打包成一个文件\n", source)
+		return 2
+	}
 	if targetInfo, err := os.Stat(targetHost); err == nil && targetInfo.IsDir() {
-		stdout.Write([]byte("target-directory\n"))
+		fmt.Fprintf(stdout, "目标路径 %s 是目录；relay_file 只支持常规文件，请先打包目录再传输\n", target)
 		return 4
 	}
 	if partialInfo, err := os.Lstat(partialHost); err == nil && !partialInfo.IsDir() {

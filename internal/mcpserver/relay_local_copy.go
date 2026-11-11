@@ -639,16 +639,27 @@ func buildRelayWindowsLocalCopyCommand(sourcePath, targetPath string) string {
 	sourceDirectory := windowsDriveRootDirectory(windowsRemotePath(path.Dir(sourcePath)))
 	sourceName := path.Base(sourcePath)
 	partialDirectory := windowsDriveRootDirectory(target + relayPartialSuffix)
+	sourceDirectoryNotice := fmt.Sprintf(
+		"源路径 %s 是目录；relay_file 只支持常规文件，请先把目录打包成一个文件", source)
+	sourceNotRegularNotice := fmt.Sprintf(
+		"源路径 %s 不是常规文件；relay_file 只支持常规文件", source)
+	targetDirectoryNotice := fmt.Sprintf(
+		"目标路径 %s 是目录；relay_file 只支持常规文件，请先打包目录再传输", target)
 	script := strings.Join([]string{
 		"$ErrorActionPreference = 'Stop'",
 		"$__sshmgr_source = " + sshbroker.PowerShellSingleQuote(source),
 		"$__sshmgr_target = " + sshbroker.PowerShellSingleQuote(target),
 		"$__sshmgr_robocopy_source_directory = " + sshbroker.PowerShellSingleQuote(sourceDirectory),
 		"$__sshmgr_source_name = " + sshbroker.PowerShellSingleQuote(sourceName),
-		"if (-not (Test-Path -LiteralPath $__sshmgr_source -PathType Leaf)) { [Console]::Out.WriteLine('source-not-regular'); exit 3 }",
+		"if (Test-Path -LiteralPath $__sshmgr_source -PathType Container) { [Console]::Out.WriteLine(" +
+			sshbroker.PowerShellSingleQuote(sourceDirectoryNotice) + "); exit 2 }",
+		"if (-not (Test-Path -LiteralPath $__sshmgr_source -PathType Leaf)) { [Console]::Out.WriteLine(" +
+			sshbroker.PowerShellSingleQuote(sourceNotRegularNotice) + "); exit 3 }",
 		"$__sshmgr_source_item = Get-Item -LiteralPath $__sshmgr_source -Force",
-		"if ($null -eq $__sshmgr_source_item -or -not ($__sshmgr_source_item -is [System.IO.FileInfo]) -or (($__sshmgr_source_item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) { [Console]::Out.WriteLine('source-not-regular'); exit 3 }",
-		"if (Test-Path -LiteralPath $__sshmgr_target -PathType Container) { [Console]::Out.WriteLine('target-directory'); exit 4 }",
+		"if ($null -eq $__sshmgr_source_item -or -not ($__sshmgr_source_item -is [System.IO.FileInfo]) -or (($__sshmgr_source_item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) { [Console]::Out.WriteLine(" +
+			sshbroker.PowerShellSingleQuote(sourceNotRegularNotice) + "); exit 3 }",
+		"if (Test-Path -LiteralPath $__sshmgr_target -PathType Container) { [Console]::Out.WriteLine(" +
+			sshbroker.PowerShellSingleQuote(targetDirectoryNotice) + "); exit 4 }",
 		"$__sshmgr_partial_directory = " + sshbroker.PowerShellSingleQuote(partialDirectory),
 		"if (Test-Path -LiteralPath $__sshmgr_partial_directory -PathType Leaf) { [Console]::Out.WriteLine(" +
 			sshbroker.PowerShellSingleQuote("Windows 本地拷贝的半成品暂存位置 "+partialDirectory+" 不是目录；请先处理这个文件后重试") +
@@ -758,6 +769,17 @@ func runRelayWindowsLocalCopyTask(
 // Linux/macOS 本地拷贝一致的操作提示；未知退出码仍按通用失败呈现。
 func relayWindowsLocalCopyExitMessage(code int, sourcePath, targetPath string) string {
 	switch code {
+	case 2:
+		return fmt.Sprintf(
+			"源路径 %s 是目录；relay_file 只支持常规文件，请先把目录打包成一个文件",
+			windowsRemotePath(sourcePath))
+	case 3:
+		return fmt.Sprintf(
+			"源路径 %s 不是常规文件；relay_file 只支持常规文件", windowsRemotePath(sourcePath))
+	case 4:
+		return fmt.Sprintf(
+			"目标路径 %s 是目录；relay_file 只支持常规文件，请先打包目录再传输",
+			windowsRemotePath(targetPath))
 	case 5:
 		return fmt.Sprintf(
 			"Windows 本地拷贝的半成品暂存位置 %s 不是目录；请先处理这个文件后重试",
