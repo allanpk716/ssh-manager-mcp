@@ -12,8 +12,11 @@ import (
 	"unicode/utf8"
 )
 
+// PlaceholderPrefix 是上传内容中机密项占位符的固定前缀。
+const PlaceholderPrefix = "{{sshmgr-secret:"
+
 var (
-	placeholderPrefix = []byte("{{sshmgr-secret:")
+	placeholderPrefix = []byte(PlaceholderPrefix)
 	placeholderSuffix = []byte("}}")
 )
 
