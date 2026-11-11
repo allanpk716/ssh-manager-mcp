@@ -185,42 +185,11 @@ type origin struct {
 }
 
 func (s *Service) resolveOrigin(from string) (*origin, error) {
-	if from == "self" {
-		current, err := dialdevice.Current(s.Store, s.Instance)
-		if err != nil {
-			return nil, err
-		}
-		if !current.Known || current.Device == nil {
-			return nil, fmt.Errorf("本机未登记设备，请 owner 补登记（sshmgr devices local set）")
-		}
-		return &origin{device: current.Device}, nil
-	}
-	if s.GateServer != nil {
-		if err := s.GateServer(from); err != nil {
-			return nil, err
-		}
-	}
-	server, err := s.Store.GetServer(from)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("服务器 %s 不存在", from)
-	}
+	resolved, err := dialdevice.ResolveOrigin(s.Store, s.Instance, from, s.GateServer)
 	if err != nil {
 		return nil, err
 	}
-	if server == nil {
-		return nil, fmt.Errorf("服务器 %s 不存在", from)
-	}
-	if server.DeviceID == "" {
-		return nil, fmt.Errorf("起点服务器未关联拓扑设备，请 owner 补登记")
-	}
-	device, err := deviceByID(s.Store, server.DeviceID)
-	if err != nil {
-		return nil, err
-	}
-	if device == nil {
-		return nil, fmt.Errorf("起点服务器 %s 关联的拓扑设备已不存在，请 owner 补登记", from)
-	}
-	return &origin{device: device, server: server, remote: true}, nil
+	return &origin{device: resolved.Device, server: resolved.Server, remote: resolved.Remote}, nil
 }
 
 // resolvedTarget 是解析后的探测目标。
@@ -260,7 +229,7 @@ func (s *Service) resolveTargets(raw []string) ([]resolvedTarget, error) {
 			if server.DeviceID == "" {
 				return nil, fmt.Errorf("目标服务器 %s 未关联拓扑设备，请 owner 补登记", base)
 			}
-			device, err := deviceByID(s.Store, server.DeviceID)
+			device, err := dialdevice.ByID(s.Store, server.DeviceID)
 			if err != nil {
 				return nil, err
 			}
@@ -552,19 +521,6 @@ func ctxDeadline(ctx context.Context) time.Time {
 		return deadline
 	}
 	return time.Now().Add(DefaultTotalDeadline)
-}
-
-func deviceByID(st *store.Store, id string) (*models.Device, error) {
-	devices, err := st.ListDevices(store.DeviceFilter{})
-	if err != nil {
-		return nil, err
-	}
-	for _, device := range devices {
-		if device.ID == id {
-			return device, nil
-		}
-	}
-	return nil, nil
 }
 
 // annotateTarget 给一个目标补充「登记与实际不一致」与物理局域网绕行说明。

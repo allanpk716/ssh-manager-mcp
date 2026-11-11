@@ -15,7 +15,8 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// DialAddressSource 标明一个候选地址来自哪一级选址优先级。
+// DialAddressSource 标明一个候选地址来自哪一级挑选优先级：物理局域
+// 网、虚拟局域网或兜底主机。
 type DialAddressSource string
 
 const (
@@ -26,6 +27,10 @@ const (
 	// DialAddressFallback 表示服务器条目登记的兜底主机。
 	DialAddressFallback DialAddressSource = "fallback"
 )
+
+// ErrFirstTrustNoCommonVirtualLan 表示服务器条目还没有主机密钥锚，首次
+// 锚定只能经虚拟局域网，但当前拨号设备与目标没有共同虚拟局域网。
+var ErrFirstTrustNoCommonVirtualLan = errors.New("首次锚定只能经虚拟局域网；当前拨号设备与目标没有共同虚拟局域网。请用带外锚定，或先从虚拟局域网内的机器连接一次。")
 
 // FallbackOnlyReason 解释为什么拓扑规划后仍只剩兜底主机。
 type FallbackOnlyReason string
@@ -229,6 +234,19 @@ func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.Netw
 	return plan
 }
 
+// OrderServerDialPlanWithSuccess 只按成功地址缓存重排已有候选计划的同级地
+// 址。按服务器条目拨号的共用入口（ConnectServerEntry）在首次锚定过
+// 滤等调整之后调用它，保证只读预览与真实拨
+// 号使用同一条排序规则。
+func OrderServerDialPlanWithSuccess(
+	plan DialAddressPlan, records []DialSuccessRecord, now time.Time,
+) DialAddressPlan {
+	if fallbackOnlyDialPlan(plan) {
+		return plan
+	}
+	return orderPlanWithDialSuccess(plan, records, now)
+}
+
 func networkSequencesByRegistration(memberships []*models.NetworkMembership) map[string]int {
 	ordered := make([]*models.NetworkMembership, 0, len(memberships))
 	for _, membership := range memberships {
@@ -278,7 +296,8 @@ type DialSuccessCacheResolver interface {
 	ResolveDialSuccessCache() (DialSuccessCacheSource, error)
 }
 
-// DialAttemptOutcome 是统一拨号入口对一个候选地址的观察结论。Category 使
+// DialAttemptOutcome 是按服务器条目拨号的共用入口（ConnectServerEntry）
+// 对一个候选地址的观察结论。Category 使
 // 用连通探测的共用错误分类；连接成功时为空。Detail 附人可读说明（例如
 // 主机密钥不同）。
 type DialAttemptOutcome struct {
@@ -288,7 +307,8 @@ type DialAttemptOutcome struct {
 	Duration time.Duration
 }
 
-// DialAttemptObserver 接收统一拨号入口实际试过的每个拓扑候选地址的观察。
+// DialAttemptObserver 接收按服务器条目拨号的共用入口（ConnectServerEntry）
+// 实际试过的每个拓扑候选地址的观察。
 // 兜底主机不属于任何登记网络，不会交给观察者；观察记录失败不影响连接。
 type DialAttemptObserver interface {
 	ObserveDialAttempt(server *models.Server, candidate DialAddress, outcome DialAttemptOutcome)
@@ -361,59 +381,63 @@ func ResolveAddressTimeout() (time.Duration, error) {
 	return timeout, nil
 }
 
-// ConnectServerEntry 是 sshmgr 发起 SSH 连接的统一生产入口：按目标服务器
-// 条目规划候选地址、逐个试连，返回已建立的客户端与连接说明。主机密钥与
-// 条目锚不一致的地址会被跳过；说明只用网络名加序号或「兜底地址」指称，
-// 不泄露 IP 或域名。连接成功的地址会写入请求显式携带的成功地址缓存。
-func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []string, error) {
-	addressTimeout := req.AddressTimeout
-	if addressTimeout == 0 {
-		resolved, err := ResolveAddressTimeout()
-		if err != nil {
-			return nil, nil, err
-		}
-		addressTimeout = resolved
+// ServerDialPlanInput 是一次不建立连接的按服务器条目拨号候选规划输入。
+type ServerDialPlanInput struct {
+	Server *models.Server
+	// HostKeys 读取服务器条目当前的主机密钥锚与虚拟局域网候选地址。
+	HostKeys HostKeyStore
+	// Topology 是目标设备与拨号设备的网络成员视图。
+	Topology DialTopology
+	// SuccessCache 用来把仍有效的成功地址排到同级前面；空值表示不读取。
+	SuccessCache DialSuccessCacheSource
+	// Now 用来判断成功地址记录是否仍有效。
+	Now time.Time
+}
+
+// ServerDialPlanResult 是候选计划，加上本次规划实际解析出的成功地址缓
+// 存；连接成功或主机密钥不一致时，调用方写回这个缓存。
+type ServerDialPlanResult struct {
+	Plan         DialAddressPlan
+	SuccessCache DialSuccessCacheSource
+}
+
+// PlanServerDialCandidates 计算按服务器条目拨号实际会尝试的最终候选地
+// 址计划：共同网络地址与兜底主机、条目尚无主机密钥锚时只保留虚拟局域网
+// 候选、仍有效的成功地址缓存重排。真实拨号入口与只读拓扑查询共用这一条
+// 规划；本函数不建立连接、不写任何缓存，缓存读取失败时与真实拨号一致，
+// 告警后继续按已排好的顺序规划。
+func PlanServerDialCandidates(input ServerDialPlanInput) (ServerDialPlanResult, error) {
+	dialerMemberships := input.Topology.DialerMemberships
+	if !input.Topology.DialerKnown {
+		dialerMemberships = nil
 	}
-	plan := PlanServerDialAddresses(nil, nil, req.Server.Host)
-	var targetMemberships []*models.NetworkMembership
-	if req.Topology != nil {
-		topology, err := req.Topology.ServerDialTopology(req.Server)
-		if err != nil {
-			return nil, nil, err
-		}
-		dialerMemberships := topology.DialerMemberships
-		if !topology.DialerKnown {
-			dialerMemberships = nil
-		}
-		targetMemberships = topology.TargetMemberships
-		plan = PlanServerDialAddresses(targetMemberships, dialerMemberships, req.Server.Host)
-		if !topology.DialerKnown && topology.DialerUnknownReason != "" {
-			plan.FallbackOnlyReason = topology.DialerUnknownReason
-		}
+	plan := PlanServerDialAddresses(input.Topology.TargetMemberships, dialerMemberships, input.Server.Host)
+	if !input.Topology.DialerKnown && input.Topology.DialerUnknownReason != "" {
+		plan.FallbackOnlyReason = input.Topology.DialerUnknownReason
 	}
-	pin, err := req.HostKeys.GetEntryPin(req.Server)
+	pin, err := input.HostKeys.GetEntryPin(input.Server)
 	if err != nil {
-		return nil, nil, err
+		return ServerDialPlanResult{}, err
 	}
 	if pin == nil {
-		firstTrustNeedsVirtualLan := hasVirtualLanAddress(targetMemberships)
+		firstTrustNeedsVirtualLan := hasVirtualLanAddress(input.Topology.TargetMemberships)
 		if !firstTrustNeedsVirtualLan {
-			virtualLan, err := req.HostKeys.EntryVirtualLanAddresses(req.Server)
+			virtualLan, err := input.HostKeys.EntryVirtualLanAddresses(input.Server)
 			if err != nil {
-				return nil, nil, err
+				return ServerDialPlanResult{}, err
 			}
 			firstTrustNeedsVirtualLan = len(virtualLan) > 0
 		}
 		if firstTrustNeedsVirtualLan {
 			plan = keepVirtualLanCandidates(plan)
 			if len(plan.Candidates) == 0 {
-				return nil, nil, errors.New("首次锚定只能经虚拟局域网；当前拨号设备与目标没有共同虚拟局域网。请用带外锚定，或先从虚拟局域网内的机器连接一次。")
+				return ServerDialPlanResult{}, ErrFirstTrustNoCommonVirtualLan
 			}
 		}
 	}
 	var successCache DialSuccessCacheSource
-	if req.SuccessCache != nil && !fallbackOnlyDialPlan(plan) {
-		successCache = req.SuccessCache
+	if input.SuccessCache != nil && !fallbackOnlyDialPlan(plan) {
+		successCache = input.SuccessCache
 		if resolver, ok := successCache.(DialSuccessCacheResolver); ok {
 			resolved, err := resolver.ResolveDialSuccessCache()
 			if err != nil {
@@ -425,14 +449,48 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		}
 	}
 	if successCache != nil {
-		records, present, err := successCache.ServerDialSuccess(req.Server)
+		records, present, err := successCache.ServerDialSuccess(input.Server)
 		if err != nil {
 			warnDialSuccessCacheFailure("读取", err)
 		}
 		if present {
-			plan = orderPlanWithDialSuccess(plan, records, time.Now())
+			plan = OrderServerDialPlanWithSuccess(plan, records, input.Now)
 		}
 	}
+	return ServerDialPlanResult{Plan: plan, SuccessCache: successCache}, nil
+}
+
+// ConnectServerEntry 是 sshmgr 发起 SSH 连接的统一生产入口（所有按服务
+// 器条目发起的连接都走这里）：按目标服务器条目规划候选地址、逐个试连，
+// 返回已建立的客户端与连接说明。主机密钥与
+// 条目锚不一致的地址会被跳过；说明只用网络名加序号或「兜底地址」指称，
+// 不泄露 IP 或域名。连接成功的地址会写入请求显式携带的成功地址缓存。
+func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []string, error) {
+	addressTimeout := req.AddressTimeout
+	if addressTimeout == 0 {
+		resolved, err := ResolveAddressTimeout()
+		if err != nil {
+			return nil, nil, err
+		}
+		addressTimeout = resolved
+	}
+	var topology DialTopology
+	if req.Topology != nil {
+		resolved, err := req.Topology.ServerDialTopology(req.Server)
+		if err != nil {
+			return nil, nil, err
+		}
+		topology = resolved
+	}
+	planned, err := PlanServerDialCandidates(ServerDialPlanInput{
+		Server: req.Server, HostKeys: req.HostKeys, Topology: topology,
+		SuccessCache: req.SuccessCache, Now: time.Now(),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	plan := planned.Plan
+	successCache := planned.SuccessCache
 	observer := req.Observer
 	if observer == nil {
 		if resolver, ok := req.Topology.(DialObserverResolver); ok && resolver != nil {
@@ -552,7 +610,8 @@ func keepVirtualLanCandidates(plan DialAddressPlan) DialAddressPlan {
 	return plan
 }
 
-// orderPlanWithDialSuccess 只重排同一选址级别内部的地址：仍有效且仍在候选
+// orderPlanWithDialSuccess 只重排同一优先级级别（物理局域网、虚拟局域
+// 网、兜底主机）内部的地址：仍有效且仍在候选
 // 里的成功地址按记录耗时从短到长排在前面，其余地址保持原登记顺序。
 func orderPlanWithDialSuccess(plan DialAddressPlan, records []DialSuccessRecord, now time.Time) DialAddressPlan {
 	durationByAddress := make(map[string]time.Duration, len(records))

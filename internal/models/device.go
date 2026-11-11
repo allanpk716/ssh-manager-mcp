@@ -23,6 +23,8 @@ type DeviceServer struct {
 	User   string
 	Port   int
 	Pinned bool
+	// ExposeHost 表示是否向 agent 披露这台服务器条目的主机地址。
+	ExposeHost bool
 }
 
 // NetworkMembership 是一台设备在某个网络里的身份及地址。地址可以是 IP 或

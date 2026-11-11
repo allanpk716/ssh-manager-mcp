@@ -48,9 +48,10 @@ func sharedStorageUnreachableNote(reason string) string {
 	}
 }
 
-// errSharedStorageAuthorityTooOld 是新客户端连着旧权威端时的固定报错
-// （ADR 0014：快照没有推荐版本字段时，网络拓扑与共享存储工具整体降级）。
-var errSharedStorageAuthorityTooOld = errors.New(
+// errTopologyAndSharedStorageAuthorityTooOld 是新客户端连着旧权威端时的固
+// 定报错（ADR 0014：快照没有推荐版本字段时，网络拓扑与共享存储工具整体
+// 降级）。
+var errTopologyAndSharedStorageAuthorityTooOld = errors.New(
 	"权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端",
 )
 
@@ -115,7 +116,7 @@ func ListSharesForProfile(
 	hk sshbroker.HostKeyStore,
 ) (ListSharesOutput, error) {
 	if st.IsReadOnly() && st.CacheRecommendedVersion() == "" {
-		return emptyListSharesOutput(), errSharedStorageAuthorityTooOld
+		return emptyListSharesOutput(), errTopologyAndSharedStorageAuthorityTooOld
 	}
 	if input.CheckServer != "" && !input.LiveCheck {
 		return emptyListSharesOutput(), errors.New("只检测指定服务器时必须开启现场检测，请同时设置 live_check 为 true")

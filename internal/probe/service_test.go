@@ -270,7 +270,7 @@ func TestServiceNoCommonNetworkAndMismatchNotes(t *testing.T) {
 }
 
 // TestServiceSelfWithoutRegisteredDeviceFails: 本机没有登记设备时以 self 起
-// 点直接报错，不退回兜底地址。
+// 点直接报错，不退回兜底地址，并按原因给出 owner 补登记提示。
 func TestServiceSelfWithoutRegisteredDeviceFails(t *testing.T) {
 	fixture := newServiceFixture(t)
 	if _, err := roles.ClearLocalDevice(); err != nil {
@@ -278,7 +278,8 @@ func TestServiceSelfWithoutRegisteredDeviceFails(t *testing.T) {
 	}
 	service, _ := fixture.service((&fakeLocalDial{}).dial)
 	if _, err := service.Probe(context.Background(), Request{From: "self", Targets: []string{"NAS"}}); err == nil ||
-		!strings.Contains(err.Error(), "本机未登记设备") {
+		!strings.Contains(err.Error(), "本机未设定设备") ||
+		!strings.Contains(err.Error(), "sshmgr devices local set") {
 		t.Fatalf("self without a local device error = %v", err)
 	}
 }
