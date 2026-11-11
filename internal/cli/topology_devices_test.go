@@ -470,9 +470,10 @@ func TestDevicesRemovePreviewsAndCascadesSharedStorages(t *testing.T) {
 	out := runCli(t, "devices", "rm", "NAS", "--yes")
 	groups := []string{
 		"共享存储：\n  datasets",
+		"Linux 与 macOS 服务器（将删除配置并卸载）：",
 		"linux-web（所属设备 Web 主机，系统类型 Linux 或 macOS）",
+		"Windows 服务器（将随快照同步停止注入）：",
 		"windows-web（所属设备 Web 主机，系统类型 Windows）",
-		"不会去服务器上卸载",
 	}
 	position := -1
 	for _, want := range groups {
