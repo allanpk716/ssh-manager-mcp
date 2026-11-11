@@ -1094,6 +1094,51 @@ func TestRelayFileWindowsLocalCopyEscapesQuoteCharacters(t *testing.T) {
 	}
 }
 
+// TestRelayFileWindowsLocalCopyEscapesCurlyQuoteCharacters 钉住 PowerShell
+// 服务器把弯单引号也当字符串定界符：路径含弯单引号时必须双写转义，不能
+// 让路径片段跳出字符串注入语句。
+func TestRelayFileWindowsLocalCopyEscapesCurlyQuoteCharacters(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, false)
+	session := environment.openSession(t)
+	sourceRemote := `Z:\Reports\source ’quoted‘.bin`
+	targetRemote := `C:/Users/Public/target ‚quoted‛.bin`
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("curly"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_share_address": `\\192.0.2.10\datasets\Reports\source ’quoted‘.bin`,
+			"to_server_id":       environment.windowsID,
+			"to_path":            targetRemote,
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("relay_file：err=%v 失败=%s", err, toolResultText(result))
+	}
+	var output RelayOutput
+	unmarshalToolJSON(t, result, &output)
+	if _, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second); status != bgStatusDone ||
+		errorText != "" {
+		t.Fatalf("带弯单引号路径的 Windows 本地拷贝失败：%s", errorText)
+	}
+	commands := environment.fake.recordedCommands()
+	scripts := encodedCommandScripts(commands[len(commands)-1])
+	copyScript := scripts[len(scripts)-1]
+	if !strings.Contains(copyScript, `$__sshmgr_source = 'Z:\Reports\source ’’quoted‘‘.bin'`) ||
+		!strings.Contains(copyScript, `$__sshmgr_target = 'C:\Users\Public\target ‚‚quoted‛‛.bin'`) {
+		t.Fatalf("PowerShell 路径没有双写弯单引号：%s", copyScript)
+	}
+	if content, err := os.ReadFile(environment.hostPath(targetRemote)); err != nil ||
+		string(content) != "curly" {
+		t.Fatalf("带弯单引号路径的目标内容 = %q err=%v", content, err)
+	}
+}
+
 // TestRelayFileLocalCopyRejectsInvalidVia 钉住另一端可直接挂载时的 via 约
 // 束：这时在另一端本地拷贝，不能再指定共享地址端点。
 func TestRelayFileLocalCopyRejectsInvalidVia(t *testing.T) {

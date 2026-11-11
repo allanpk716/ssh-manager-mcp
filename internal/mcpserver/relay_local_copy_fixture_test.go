@@ -343,7 +343,20 @@ func relayWindowsScriptString(script, variable string) string {
 	if match == nil {
 		return ""
 	}
-	return strings.ReplaceAll(match[1], "''", "'")
+	return unescapePowerShellSingleQuotes(match[1])
+}
+
+// unescapePowerShellSingleQuotes 按 PowerShell 的单引号转义规则还原脚本里的
+// 字符串值：ASCII 单引号与四个弯单引号写成两次都表示一个字面量字符。
+func unescapePowerShellSingleQuotes(value string) string {
+	replacer := strings.NewReplacer(
+		"''", "'",
+		"‘‘", "‘",
+		"’’", "’",
+		"‚‚", "‚",
+		"‛‛", "‛",
+	)
+	return replacer.Replace(value)
 }
 
 func (environment *relayLocalCopyEnv) serveInspectCommand(command string, stdout io.Writer) int {

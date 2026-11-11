@@ -2,8 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf16"
 
 	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
@@ -605,10 +602,6 @@ func windowsRemotePath(remotePath string) string {
 	return strings.ReplaceAll(remotePath, `/`, `\`)
 }
 
-func powerShellRemoteSingleQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
-}
-
 // buildRelayWindowsLocalCopyCommand 生成跨 PowerShell 与 cmd 都可执行的
 // PowerShell 拷贝脚本。robocopy 只接受“源目录 + 目标目录 + 文件名”，因此
 // `<目标>.sshmgr-partial` 用作半成品暂存目录；成功后把其中的文件移动成目标
@@ -622,24 +615,24 @@ func buildRelayWindowsLocalCopyCommand(sourcePath, targetPath string) string {
 	partialDirectory := target + relayPartialSuffix
 	script := strings.Join([]string{
 		"$ErrorActionPreference = 'Stop'",
-		"$__sshmgr_source = " + powerShellRemoteSingleQuote(source),
-		"$__sshmgr_target = " + powerShellRemoteSingleQuote(target),
-		"$__sshmgr_robocopy_source_directory = " + powerShellRemoteSingleQuote(sourceDirectory),
-		"$__sshmgr_source_name = " + powerShellRemoteSingleQuote(sourceName),
+		"$__sshmgr_source = " + sshbroker.PowerShellSingleQuote(source),
+		"$__sshmgr_target = " + sshbroker.PowerShellSingleQuote(target),
+		"$__sshmgr_robocopy_source_directory = " + sshbroker.PowerShellSingleQuote(sourceDirectory),
+		"$__sshmgr_source_name = " + sshbroker.PowerShellSingleQuote(sourceName),
 		"if (-not (Test-Path -LiteralPath $__sshmgr_source -PathType Leaf)) { [Console]::Out.WriteLine('source-not-regular'); exit 3 }",
 		"$__sshmgr_source_item = Get-Item -LiteralPath $__sshmgr_source -Force",
 		"if ($null -eq $__sshmgr_source_item -or -not ($__sshmgr_source_item -is [System.IO.FileInfo]) -or (($__sshmgr_source_item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) { [Console]::Out.WriteLine('source-not-regular'); exit 3 }",
 		"if (Test-Path -LiteralPath $__sshmgr_target -PathType Container) { [Console]::Out.WriteLine('target-directory'); exit 4 }",
-		"$__sshmgr_partial_directory = " + powerShellRemoteSingleQuote(partialDirectory),
+		"$__sshmgr_partial_directory = " + sshbroker.PowerShellSingleQuote(partialDirectory),
 		"if (Test-Path -LiteralPath $__sshmgr_partial_directory -PathType Leaf) { Remove-Item -LiteralPath $__sshmgr_partial_directory -Force }",
 		"New-Item -ItemType Directory -Path $__sshmgr_partial_directory -Force | Out-Null",
 		"Get-ChildItem -LiteralPath $__sshmgr_partial_directory -Force | Where-Object { -not $_.PSIsContainer } | Remove-Item -Force",
 		"[Console]::Out.WriteLine('本地拷贝模式：中断、停止或失败后不能续传，重跑会从文件开头覆盖旧半成品')",
 		"[Console]::Out.WriteLine('robocopy ' + $__sshmgr_robocopy_source_directory + ' ' + $__sshmgr_partial_directory + ' ' + $__sshmgr_source_name)",
 		"& robocopy " + strings.Join([]string{
-			powerShellRemoteSingleQuote(sourceDirectory),
-			powerShellRemoteSingleQuote(partialDirectory),
-			powerShellRemoteSingleQuote(sourceName),
+			sshbroker.PowerShellSingleQuote(sourceDirectory),
+			sshbroker.PowerShellSingleQuote(partialDirectory),
+			sshbroker.PowerShellSingleQuote(sourceName),
 			"'/NFL'", "'/NDL'", "'/NJH'", "'/NJS'", "'/NP'", "'/R:1'", "'/W:1'",
 		}, " "),
 		"$__sshmgr_robocopy_exit = $LASTEXITCODE",
@@ -648,17 +641,7 @@ func buildRelayWindowsLocalCopyCommand(sourcePath, targetPath string) string {
 		"Remove-Item -LiteralPath $__sshmgr_partial_directory",
 		"exit 0",
 	}, "\n")
-	return "powershell -NoProfile -NonInteractive -EncodedCommand " +
-		base64.StdEncoding.EncodeToString(powerShellUTF16LERemote(script))
-}
-
-func powerShellUTF16LERemote(script string) []byte {
-	units := utf16.Encode([]rune(script))
-	blob := make([]byte, len(units)*2)
-	for index, unit := range units {
-		binary.LittleEndian.PutUint16(blob[index*2:], unit)
-	}
-	return blob
+	return sshbroker.PowerShellEncodedCommand(script)
 }
 
 func runRelayWindowsLocalCopyTask(
