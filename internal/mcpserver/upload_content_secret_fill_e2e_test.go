@@ -702,7 +702,6 @@ func TestUploadContentSecretAuthorizationRejectsBeforeConnectAndAuditsNames(t *t
 	for _, want := range []string{
 		"机密项 EMPTY_LIST 不存在，或不允许写入服务器 real",
 		"机密项 OUTSIDE_LIST 不存在，或不允许写入服务器 real",
-		"它当前没有可写入服务器。请 owner 到权威端把 real 加入该机密项的可写入服务器列表",
 		"它当前可写入服务器：visible-server。请 owner 到权威端把 real 加入该机密项的可写入服务器列表",
 	} {
 		if !strings.Contains(errorText, want) {
@@ -1137,6 +1136,68 @@ func (l *fileInfoLister) ListAt(out []os.FileInfo, offset int64) (int, error) {
 	}
 	out[0] = l.info
 	return 1, nil
+}
+
+func TestUploadContentInvisibleSecretMatchesMissingNameError(t *testing.T) {
+	st := newStore(t)
+	var connections atomic.Int64
+	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Connections: &connections})
+	t.Cleanup(cleanup)
+	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
+	profileID, err := st.AddProfile("agent-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	server, tunnels, tasks, err := NewServer(st, profileID, "project-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tunnels.CloseAll)
+	t.Cleanup(tasks.CloseAll)
+	clientSession := connectInMemoryMCPClient(t, server)
+
+	upload := func(target string) string {
+		result, callErr := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+			Name: "upload_content",
+			Arguments: map[string]any{
+				"server_id":   serverID,
+				"content":     "token: {{sshmgr-secret:INVISIBLE_SECRET}}\n",
+				"remote_path": target,
+			},
+		})
+		if callErr != nil {
+			t.Fatal(callErr)
+		}
+		if !result.IsError {
+			t.Fatalf("upload_content unexpectedly succeeded: %+v", result.Content)
+		}
+		return toolResultText(result)
+	}
+	missingText := upload(toSlash(filepath.Join(t.TempDir(), "missing.yaml")))
+
+	if err := st.AddSecret("INVISIBLE_SECRET", "", []byte("12345678"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	listResult, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "list_secrets", Arguments: map[string]any{},
+	})
+	if err != nil || listResult.IsError {
+		t.Fatalf("list_secrets failed: err=%v result=%q", err, toolResultText(listResult))
+	}
+	if got := toolResultText(listResult); got != "没有可用的机密项" {
+		t.Fatalf("list_secrets for invisible secret = %q", got)
+	}
+
+	hiddenText := upload(toSlash(filepath.Join(t.TempDir(), "hidden.yaml")))
+	if hiddenText != missingText {
+		t.Fatalf("invisible secret error differs from missing-name error:\nmissing: %q\nhidden: %q", missingText, hiddenText)
+	}
+	if connections.Load() != 0 {
+		t.Fatalf("rejected uploads connected to target %d times", connections.Load())
+	}
 }
 
 func TestUploadContentSecretReadFailureRejectsBeforeConnectAndAuditsError(t *testing.T) {
