@@ -28,6 +28,10 @@ const (
 	DialAddressFallback DialAddressSource = "fallback"
 )
 
+// ErrFirstTrustNoCommonVirtualLan 表示服务器条目还没有主机密钥锚，首次
+// 锚定只能经虚拟局域网，但当前拨号设备与目标没有共同虚拟局域网。
+var ErrFirstTrustNoCommonVirtualLan = errors.New("首次锚定只能经虚拟局域网；当前拨号设备与目标没有共同虚拟局域网。请用带外锚定，或先从虚拟局域网内的机器连接一次。")
+
 // FallbackOnlyReason 解释为什么拓扑规划后仍只剩兜底主机。
 type FallbackOnlyReason string
 
@@ -427,7 +431,7 @@ func PlanServerDialCandidates(input ServerDialPlanInput) (ServerDialPlanResult, 
 		if firstTrustNeedsVirtualLan {
 			plan = keepVirtualLanCandidates(plan)
 			if len(plan.Candidates) == 0 {
-				return ServerDialPlanResult{}, errors.New("首次锚定只能经虚拟局域网；当前拨号设备与目标没有共同虚拟局域网。请用带外锚定，或先从虚拟局域网内的机器连接一次。")
+				return ServerDialPlanResult{}, ErrFirstTrustNoCommonVirtualLan
 			}
 		}
 	}

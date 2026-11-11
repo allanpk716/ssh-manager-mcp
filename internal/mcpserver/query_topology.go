@@ -88,6 +88,9 @@ type queryTopologyPairTarget struct {
 	server       *models.Server
 	unregistered bool
 	selected     string
+	// dialFailureReason 记录这一个目标按服务器条目规划拨号失败的简短原
+	// 因；查询仍继续输出其他目标。
+	dialFailureReason string
 }
 
 type queryTopologyPairView struct {
@@ -227,6 +230,10 @@ func (view *queryTopologyPairView) setActualNetwork(st *store.Store, target *que
 		Now:          view.now,
 	})
 	if err != nil {
+		if errors.Is(err, sshbroker.ErrFirstTrustNoCommonVirtualLan) {
+			target.dialFailureReason = "真正拨号会失败：这个服务器条目还没有主机密钥锚，首次连接只能经虚拟局域网，而出发点与它没有共同虚拟局域网"
+			return nil
+		}
 		return err
 	}
 	if len(planned.Plan.Candidates) > 0 {
@@ -476,6 +483,9 @@ func renderQueryTopologyPairView(view *queryTopologyPairView) string {
 		common := commonQueryNetworks(originNetworks, target.device)
 		if len(common) == 0 {
 			lines = append(lines, "  无共同网络，不可达")
+			if target.dialFailureReason != "" {
+				lines = append(lines, "  "+target.dialFailureReason)
+			}
 			continue
 		}
 		var virtualOnly []string
@@ -511,6 +521,9 @@ func renderQueryTopologyPairView(view *queryTopologyPairView) string {
 				view.observations, view.now, target.device.ID, network.name,
 			)
 			lines = append(lines, "  "+strings.TrimSpace(line))
+		}
+		if target.dialFailureReason != "" {
+			lines = append(lines, "  "+target.dialFailureReason)
 		}
 	}
 	lines = append(lines, "本工具不主动探测；需要现场结论请调用 probe_connectivity。")

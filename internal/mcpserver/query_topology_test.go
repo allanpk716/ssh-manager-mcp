@@ -267,13 +267,13 @@ func TestQueryTopologySelfGroups(t *testing.T) {
 		"所属网络：家A物理（物理局域网，站点：家A）、虚拟A（虚拟局域网）",
 		"同在物理局域网：",
 		"  家A物理",
-		"    工作设备 [入口一、入口二] ✓4ms 刚刚",
+		"    工作设备 [入口一、入口二] ✓4ms 4分钟前",
 		"    授权外设备",
 		"    无观察设备",
-		"    旧观察设备 ✓4ms 旧",
+		"    旧观察设备 ✓4ms 3天前 旧",
 		"只能经虚拟局域网到达：",
 		"  虚拟A",
-		"    NAS ✓4ms 旧",
+		"    NAS ✓4ms 2小时前 旧",
 		"无共同网络不可达：隔离设备",
 		"未登记服务器：" + fixture.unregisteredID + "（未登记入口）",
 		"本工具不主动探测；需要现场结论请调用 probe_connectivity。",
@@ -444,11 +444,11 @@ func TestQueryTopologyPairDetailsDefault(t *testing.T) {
 	want := strings.Join([]string{
 		"出发点：笔记本",
 		"目标：工作设备 [入口一、入口二]",
-		"  家A物理（物理局域网，实际会选） ✓4ms 刚刚",
+		"  家A物理（物理局域网，实际会选） ✓4ms 4分钟前",
 		"  虚拟A（虚拟局域网）",
 		"目标：NAS",
 		"  只能经虚拟局域网到达：虚拟A",
-		"  虚拟A（虚拟局域网） ✓4ms 旧",
+		"  虚拟A（虚拟局域网） ✓4ms 2小时前 旧",
 		"目标：隔离设备",
 		"  无共同网络，不可达",
 		"目标：" + fixture.unregisteredID + "（未登记入口）",
@@ -571,6 +571,71 @@ func TestQueryTopologyPairUnanchoredEntryPrefersVirtualLan(t *testing.T) {
 	if !strings.Contains(text, "虚拟A（虚拟局域网，实际会选）") ||
 		strings.Contains(text, "家A物理（物理局域网，实际会选）") {
 		t.Fatalf("未锚定条目应只标虚拟局域网为实际会选：\n%s", text)
+	}
+}
+
+// TestQueryTopologyPairUnanchoredWithoutCommonVirtualLanContinues 确认一个
+// 服务器目标还没有主机密钥锚、且与出发点没有共同虚拟局域网时，只在这个
+// 目标下说明真正拨号会失败；其他目标与整次查询照常输出。
+func TestQueryTopologyPairUnanchoredWithoutCommonVirtualLanContinues(t *testing.T) {
+	fixture := newQueryTopologyFixture(t)
+	if _, err := fixture.store.AddDevice("未锚定物理设备", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, membership := range []struct{ network, address string }{
+		{"家A物理", "192.0.2.41"},
+		{"虚拟B", "100.64.1.41"},
+	} {
+		if _, err := fixture.store.AddNetworkMembership(
+			"未锚定物理设备", membership.network, membership.address,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unanchoredResult, err := fixture.store.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "未锚定物理入口", Host: "192.0.2.141", Port: 22, User: "deploy",
+		AuthMethod: models.AuthPassword,
+	}, nil, nil, "未锚定物理设备")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.GrantServers(fixture.profileID, []string{unanchoredResult.ServerID}); err != nil {
+		t.Fatal(err)
+	}
+	unanchored, err := fixture.store.GetServerByName("未锚定物理入口")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned, err := fixture.store.GetEntryPin(unanchored); err != nil || pinned != nil {
+		t.Fatalf("测试前提是条目尚无锚：pin=%v err=%v", pinned, err)
+	}
+	workServer, err := fixture.store.GetServerByName("入口一")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.SaveEntryPin(workServer, []byte("anchor")); err != nil {
+		t.Fatal(err)
+	}
+
+	text, isError := fixture.callQuery(t, map[string]any{
+		"from": "self", "to": []string{workServer.ID, unanchored.ID},
+	})
+	if isError {
+		t.Fatalf("单个目标不能让整次 query_topology 失败：%s", text)
+	}
+	want := strings.Join([]string{
+		"出发点：笔记本",
+		"目标：工作设备 [入口一、入口二]",
+		"  家A物理（物理局域网，实际会选）",
+		"  虚拟A（虚拟局域网）",
+		"目标：未锚定物理设备 [未锚定物理入口]",
+		"  家A物理（物理局域网）",
+		"  真正拨号会失败：这个服务器条目还没有主机密钥锚，首次连接只能经虚拟局域网，而出发点与它没有共同虚拟局域网",
+		"本工具不主动探测；需要现场结论请调用 probe_connectivity。",
+		"",
+	}, "\n")
+	if text != want {
+		t.Fatalf("逐对输出不符\n得到：\n%s\n期待：\n%s", text, want)
 	}
 }
 
