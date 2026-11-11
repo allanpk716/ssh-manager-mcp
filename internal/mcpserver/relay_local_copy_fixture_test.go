@@ -45,6 +45,16 @@ type relayLocalCopyFakeServer struct {
 	keepPartial  bool
 }
 
+// takeBlockCopy 在锁内取出并清空阻塞通道：停止后重跑的第二个会话与第一个
+// 会话并发运行，只有第一个会话会被阻塞。
+func (fake *relayLocalCopyFakeServer) takeBlockCopy() chan struct{} {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	blockCopy := fake.blockCopy
+	fake.blockCopy = nil
+	return blockCopy
+}
+
 func newRelayLocalCopyEnv(t *testing.T, mounted bool) *relayLocalCopyEnv {
 	t.Helper()
 	environment := &relayLocalCopyEnv{
@@ -319,9 +329,8 @@ func (environment *relayLocalCopyEnv) serveRobocopyScript(
 	if robocopyExit >= 8 {
 		return robocopyExit
 	}
-	if environment.fake.blockCopy != nil {
-		<-environment.fake.blockCopy
-		environment.fake.blockCopy = nil
+	if blockCopy := environment.fake.takeBlockCopy(); blockCopy != nil {
+		<-blockCopy
 		if environment.fake.keepPartial {
 			return 0
 		}
@@ -468,9 +477,8 @@ func (environment *relayLocalCopyEnv) serveCopyCommand(
 	}
 	fmt.Fprintln(stdout, "本地拷贝模式：中断、停止或失败后不能续传，重跑会从文件开头覆盖旧半成品")
 	fmt.Fprintf(stdout, "cp -- '%s' '%s'\n", sourceRemote, partialRemote)
-	if environment.fake.blockCopy != nil {
-		<-environment.fake.blockCopy
-		environment.fake.blockCopy = nil
+	if blockCopy := environment.fake.takeBlockCopy(); blockCopy != nil {
+		<-blockCopy
 		if environment.fake.keepPartial {
 			return 0
 		}
