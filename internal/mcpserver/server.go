@@ -77,6 +77,9 @@ var BrokerTools = []string{
 	// [20] — 共享存储持久挂载（规格 #198）：固定命令完成 Linux 与 macOS
 	// 的首次挂载、按新快照更新与重新挂载，不经过命令策略，也不能卸载。
 	"mount_share",
+	// [21] — 出发点分组视图（票 #241）：只读网络拓扑登记与本地探测结果，
+	// 不主动探测。
+	"query_topology",
 }
 
 // cacheOnlyTools names BrokerTools entries that ONLY the cache face registers
@@ -198,7 +201,7 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
 			Name:        BrokerTools[0], // "list_servers"
-			Description: "List the SSH servers you may use. ALWAYS call this first to discover server ids and capabilities before exec_command. Returns id/name/host/user/has_sudo (host is \"hidden\" unless the owner exposed it — address servers via id, never by host), plus owner-provided context: role, services (what's deployed), location, hardware, caveats (special handling — read before acting), tags, description, and topology registration fields device/site/networks. Topology names mean two entries may share one machine or network; they are registered information only and do NOT mean the server is currently reachable. Never includes credentials or topology addresses.",
+			Description: "List the SSH servers you may use. ALWAYS call this first to discover server ids and capabilities before exec_command. Returns id/name/host/user/has_sudo (host is \"hidden\" unless the owner exposed it — address servers via id, never by host), plus owner-provided context: role, services (what's deployed), location, hardware, caveats (special handling — read before acting), tags, description, and topology registration fields device/site/networks. Topology names mean two entries may share one machine or network; they are registered information only and do NOT mean the server is currently reachable. Use query_topology to turn these registrations into a neighbor view with locally stored observations, or probe_connectivity for a current on-site result. Never includes credentials or topology addresses.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListServersOutput, error) {
 			st := storeFromContext(ctx, storeFn)
@@ -284,6 +287,30 @@ func NewServerFromSourceWithHints(storeFn func() *store.Store, profileID, projec
 				}, emptyListSharesOutput(), nil
 			}
 			return nil, out, nil
+		},
+	)
+
+	addTrackedTool(srv, busy, storeFn, hkFn,
+		&mcp.Tool{
+			Name:        BrokerTools[21], // "query_topology"
+			Description: "Read-only network topology query. With only `from`, return that origin device's neighbor groups; with `to`, return pairwise connectivity details from the origin to those targets. `from` is \"self\" (the device where this sshmgr instance runs) or a server id from list_servers; each `to` item is a server id for a managed device, or a device name for an unmanaged device or client instance; detail=true expands addresses, registered network bandwidth, metering, and device roles. Reads only topology registrations, the dial success address cache, and this instance's locally stored probe observations; it never probes and never opens an SSH connection. For a current on-site connectivity result, call probe_connectivity.",
+		},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in QueryTopologyInput) (*mcp.CallToolResult, any, error) {
+			st := storeFromContext(ctx, storeFn)
+			var to []string
+			if in.To != nil {
+				to = *in.To
+			}
+			text, err := QueryTopologyForProfile(st, profileID, in.From, to, in.Detail)
+			if err != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				}, nil, nil
+			}
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: text}},
+			}, nil, nil
 		},
 	)
 

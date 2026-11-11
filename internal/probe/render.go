@@ -9,13 +9,33 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
-// ObservationAgeLabel 是观察时间的相对呈现：超过 10 分钟加「旧」字样。本工
-// 具返回的都是新测结果；这个约定供读取接口与后续查询工具共用。
+// StaleObservationAge 是一次观察被判为「旧」的时间阈值。
+const StaleObservationAge = 10 * time.Minute
+
+// ObservationAgeLabel 是观察时间的相对呈现：先按分钟、小时、天向下取整，
+// 超过 StaleObservationAge 时追加「旧」字样。连通探测工具返回的都是新测
+// 结果，仍会显示为「刚刚」；这个约定供读取接口与后续查询工具共用。
 func ObservationAgeLabel(now, observedAt time.Time) string {
-	if observedAt.IsZero() || now.Sub(observedAt) > 10*time.Minute {
+	if observedAt.IsZero() {
 		return "旧"
 	}
-	return "刚刚"
+	age := now.Sub(observedAt)
+	if age < time.Minute {
+		return "刚刚"
+	}
+	label := ""
+	switch {
+	case age < time.Hour:
+		label = fmt.Sprintf("%d分钟前", int64(age/time.Minute))
+	case age < 24*time.Hour:
+		label = fmt.Sprintf("%d小时前", int64(age/time.Hour))
+	default:
+		label = fmt.Sprintf("%d天前", int64(age/(24*time.Hour)))
+	}
+	if age > StaleObservationAge {
+		return label + " 旧"
+	}
+	return label
 }
 
 // Text 渲染紧凑文本：一个目标一组，每个共同网络的每个地址一行；地址用
