@@ -76,6 +76,9 @@ func relayLocalCopyForProfile(
 	ctx context.Context, st *store.Store, tm *TaskManager, projectID, profileID string,
 	in RelayInput, chunkBytes int64, hk ...sshbroker.HostKeyStore,
 ) (RelayOutput, error) {
+	if in.Via != "" && in.FromShareAddress == "" && in.ToShareAddress == "" {
+		return RelayOutput{}, errors.New("via 只能与共享地址端点一起使用")
+	}
 	if in.FromShareAddress != "" && (in.FromServerID != "" || in.FromPath != "") {
 		return RelayOutput{}, errors.New("from_share_address、from_server_id 与 from_path 不能同时作为源端使用")
 	}

@@ -57,6 +57,17 @@ func TestRelayFileSharedEndpointInputRules(t *testing.T) {
 			},
 			wantError: "源端和目标端不能都是共享地址；请先用 query_topology 查询实际路径，再在可挂载共享的服务器上用 exec_command 拷贝",
 		},
+		{
+			name: "只传 via 而没有共享地址端点时说明用法",
+			arguments: map[string]any{
+				"from_server_id": env.srcID,
+				"from_path":      "/tmp/source.bin",
+				"to_server_id":   env.dstID,
+				"to_path":        "/tmp/target.bin",
+				"via":            env.dstID,
+			},
+			wantError: "via 只能与共享地址端点一起使用",
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
