@@ -56,12 +56,22 @@ func darwinMountPoint(shareName string) string {
 // buildDarwinMountCommand 生成 macOS autofs 固定命令。密码只经提权会话的
 // 标准输入进入远端脚本，再由脚本按字节百分号编码；它绝不进入命令文本。
 func buildDarwinMountCommand(share *models.SharedStorage, candidates []*Candidate) string {
+	return buildDarwinMountCommandWithOptions(share, candidates, mountCommandOptions{})
+}
+
+func buildDarwinMountCommandWithOptions(
+	share *models.SharedStorage, candidates []*Candidate, options mountCommandOptions,
+) string {
 	shareName := sshbroker.POSIXShellQuote(share.Name)
 	mountUser := sshbroker.POSIXShellQuote(share.MountUser)
 	mountPoint := sshbroker.POSIXShellQuote(darwinMountPoint(share.Name))
 	marker := sshbroker.POSIXShellQuote(sharedStorageMarkerOptions(share.Name, share.Version))
 	shareValue := sshbroker.POSIXShellQuote(url.PathEscape(share.Name))
 	versionValue := sshbroker.POSIXShellQuote(strconv.FormatInt(share.Version, 10))
+	forceValue := "no"
+	if options.Force {
+		forceValue = "yes"
+	}
 
 	return `set -eu
 sshmgr_exit_missing_command=` + strconv.Itoa(darwinExitMissingCommand) + `
@@ -78,6 +88,7 @@ sshmgr_expected_version=` + versionValue + `
 share_name=` + shareName + `
 mount_user=` + mountUser + `
 mount_point=` + mountPoint + `
+sshmgr_force=` + forceValue + `
 ` + candidateAddressVariablesScript(candidates) + `
 sshmgr_map_candidate=''
 sshmgr_cleanup() {
@@ -196,7 +207,7 @@ if [ "$sshmgr_after_marker" -ne 0 ]; then
 fi
 
 ` + remoteVersionGuardScript(darwinMountMarker, darwinExitRemoteNewer) + `
-` + candidateAddressSelectionScript(candidates) + `
+` + candidateAddressSelectionScript(candidates, !options.PreferFirstCandidate) + `
 
 sshmgr_existing_configuration=no
 if [ "$sshmgr_managed_count" -eq 1 ] &&
@@ -235,6 +246,7 @@ if [ "$sshmgr_existing_configuration" = yes ] && [ "$sshmgr_reset" = no ] &&
   exit 0
 fi
 
+` + darwinReselectBusyScript(options) + `
 sshmgr_build_entry_line() {
   sshmgr_entry_line=$(printf '%s -fstype=smbfs ://%s:%s@%s/%s\n' \
     "$share_name" "$mount_user" "$sshmgr_encoded_password" \
@@ -296,16 +308,7 @@ if [ "$sshmgr_reset" = yes ]; then
   printf '%s %s\n' ` + sshbroker.POSIXShellQuote(darwinMountRoot) + ` ` + sshbroker.POSIXShellQuote(darwinMapFile) + ` >> ` + sshbroker.POSIXShellQuote(darwinAutoMaster) + `
 fi
 
-if [ "$sshmgr_managed_count" -gt 0 ] && [ "$sshmgr_existing_configuration" = no ]; then
-  ` + mountTableCheckScript(CheckSystemDarwin) + `  if [ "$sshmgr_mounted" = yes ]; then
-    if ! umount "$mount_point" >/dev/null 2>&1; then
-      if ! diskutil unmount force "$mount_point" >/dev/null 2>&1; then
-        echo ` + darwinMountMarker + ` unmount-failed >&2
-        exit ` + strconv.Itoa(darwinExitUnmountFailed) + `
-      fi
-    fi
-  fi
-fi
+` + darwinReselectUnmountScript(options) + `
 
 automount -cv
 ` + mountTableCheckScript(CheckSystemDarwin) + `if [ "$sshmgr_mounted" != yes ]; then

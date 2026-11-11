@@ -10,16 +10,21 @@ import (
 	"sync"
 )
 
-const DarwinUnmountMarker = "SSHMGR-DARWIN-UNMOUNT"
+const (
+	DarwinUnmountMarker  = "SSHMGR-DARWIN-UNMOUNT"
+	DarwinReselectMarker = "SSHMGR-DARWIN-RESELECT"
+)
 
 type DarwinServer struct {
 	mu sync.Mutex
 
-	ShareName       string
-	ShareVersion    int64
-	MapLines        []string
-	AutoMasterLines []string
-	Mounted         bool
+	ShareName    string
+	ShareVersion int64
+	// ReachableAddresses 模拟从目标服务器探测 TCP 445 成功的共享地址。
+	ReachableAddresses []string
+	MapLines           []string
+	AutoMasterLines    []string
+	Mounted            bool
 
 	RevokedMarker     string
 	RevokedMarkerPath string
@@ -40,6 +45,7 @@ type DarwinServerState struct {
 	RevokedMarkerPath string
 	History           []string
 	Commands          []string
+	StandardInputs    [][]byte
 }
 
 func (s *DarwinServer) Handler(command string, stdin io.Reader) (string, string, int) {
@@ -55,6 +61,10 @@ func (s *DarwinServer) Handler(command string, stdin io.Reader) (string, string,
 	switch {
 	case strings.TrimSpace(command) == "uname -s":
 		return "Darwin\n", "", 0
+	case strings.Contains(command, "sshmgr_probe_one"):
+		return probeOutput(command, s.ReachableAddresses), "", 0
+	case strings.Contains(command, DarwinReselectMarker):
+		return s.reselect(command, input)
 	case strings.Contains(command, DarwinUnmountMarker):
 		if s.LockHeld {
 			return "", DarwinUnmountMarker + " lock-timeout", 87
@@ -90,6 +100,57 @@ func (s *DarwinServer) Handler(command string, stdin io.Reader) (string, string,
 	}
 }
 
+func (s *DarwinServer) reselect(command string, input []byte) (string, string, int) {
+	if s.LockHeld {
+		return "", DarwinReselectMarker + " lock-timeout", 87
+	}
+	if !s.hasManagedMapEntry() {
+		return "", DarwinReselectMarker + " not-managed", 89
+	}
+	targetAddress := firstCandidateAddress(command)
+	currentAddress := ""
+	for _, line := range s.MapLines {
+		if strings.HasPrefix(line, s.managedMarkerPrefix()) {
+			continue
+		}
+		if strings.Contains(line, "@") {
+			currentAddress = strings.SplitN(strings.SplitN(line, "@", 2)[1], "/", 2)[0]
+			break
+		}
+	}
+	if currentAddress == targetAddress {
+		return s.reselectOutput("no-change"), "", 0
+	}
+	force := strings.Contains(command, "sshmgr_force=yes")
+	if len(s.BusyProcesses) > 0 && !force {
+		output := s.reselectOutput("busy")
+		for _, process := range s.BusyProcesses {
+			output += fmt.Sprintf("SSHMGR-PROCESS pid=%s user=%s command=%s\n",
+				process.ProcessID, process.User, process.Command)
+		}
+		return output, "", 0
+	}
+	if len(s.BusyProcesses) > 0 && !s.ForceSucceeds {
+		return "", DarwinReselectMarker + " force-unmount-failed", 85
+	}
+	s.unmount()
+	password := strings.TrimSpace(string(input))
+	s.MapLines = []string{
+		fmt.Sprintf("# sshmgr-share=%s;sshmgr-version=%d", url.PathEscape(s.ShareName), s.ShareVersion),
+		fmt.Sprintf("%s -fstype=smbfs ://mount-user:%s@%s/%s",
+			s.ShareName, url.PathEscape(password), targetAddress, s.ShareName),
+	}
+	s.AutoMasterLines = append(s.AutoMasterLines, "/mnt/sshmgr /etc/sshmgr/auto_share")
+	s.Mounted = true
+	s.History = append(s.History, "write-configuration", "mount", "reload-automount")
+	return s.reselectOutput("update-success"), "", 0
+}
+
+func (s *DarwinServer) reselectOutput(result string) string {
+	return fmt.Sprintf("%s result=%s selected=1 version=%d\n",
+		DarwinReselectMarker, result, s.ShareVersion)
+}
+
 func (s *DarwinServer) State() DarwinServerState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,6 +162,7 @@ func (s *DarwinServer) State() DarwinServerState {
 		RevokedMarkerPath: s.RevokedMarkerPath,
 		History:           append([]string(nil), s.History...),
 		Commands:          append([]string(nil), s.Commands...),
+		StandardInputs:    append([][]byte(nil), s.Inputs...),
 	}
 }
 

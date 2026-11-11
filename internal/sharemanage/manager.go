@@ -17,8 +17,8 @@ import (
 var ErrWindowsUnmountUnsupported = errors.New(
 	"Windows 服务器不能执行共享存储卸载：sshmgr 不在其上留下任何持久改动")
 
-// Manager 是共享存储 owner 管理模块的入口。当前提供卸载；撤销、重选地
-// 址与残留检查在后续票里继续挂到同一个入口下。
+// Manager 是共享存储 owner 管理模块的入口。当前提供卸载与重选地址；撤
+// 销与残留检查在后续票里继续挂到同一个入口下。
 type Manager struct {
 	store   *store.Store
 	mounter *sharemount.Service

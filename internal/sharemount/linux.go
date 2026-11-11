@@ -73,6 +73,12 @@ func linuxTrialMountPoint(shareName string) string {
 // 效。地址、共享名与挂载账号全部经单引号包装；挂载密码只由调用方经标准
 // 输入传入，绝不出现在返回的命令文本里。
 func buildLinuxMountCommand(share *models.SharedStorage, candidates []*Candidate) string {
+	return buildLinuxMountCommandWithOptions(share, candidates, mountCommandOptions{})
+}
+
+func buildLinuxMountCommandWithOptions(
+	share *models.SharedStorage, candidates []*Candidate, options mountCommandOptions,
+) string {
 	shareName := sshbroker.POSIXShellQuote(share.Name)
 	mountPoint := sshbroker.POSIXShellQuote(linuxMountPoint(share.Name))
 	credential := sshbroker.POSIXShellQuote(linuxCredentialPath(share.ID))
@@ -80,6 +86,10 @@ func buildLinuxMountCommand(share *models.SharedStorage, candidates []*Candidate
 	fstabMarker := strings.ReplaceAll(sharedStorageMarkerOptions(share.Name, share.Version), ";", ",")
 	shareValue := sshbroker.POSIXShellQuote(url.PathEscape(share.Name))
 	versionValue := sshbroker.POSIXShellQuote(strconv.FormatInt(share.Version, 10))
+	forceValue := "no"
+	if options.Force {
+		forceValue = "yes"
+	}
 
 	command := `set -eu
 sshmgr_exit_missing_cifs=` + strconv.Itoa(linuxExitMissingCIFS) + `
@@ -99,6 +109,7 @@ share_name=` + shareName + `
 credential_file=` + credential + `
 mount_point=` + mountPoint + `
 candidate_count=` + strconv.Itoa(len(candidates)) + `
+sshmgr_force=` + forceValue + `
 ` + candidateAddressVariablesScript(candidates) + `
 install -d -m 755 "$mount_point"
 
@@ -152,7 +163,7 @@ while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
 done < /etc/fstab
 
 ` + remoteVersionGuardScript(linuxMountMarker, linuxExitRemoteNewer) + `
-` + candidateAddressSelectionScript(candidates) + `
+` + candidateAddressSelectionScript(candidates, !options.PreferFirstCandidate) + `
 
 sshmgr_selected_version=''
 if [ "$sshmgr_selected_address" = "$sshmgr_existing_address" ]; then
@@ -174,11 +185,12 @@ if [ "$sshmgr_existing_line" = "$sshmgr_fstab_line" ] && [ -n "$sshmgr_remote_ve
   exit 0
 fi
 
+` + linuxReselectBusyScript(options) + `
 sshmgr_prepare_remount() {
   if [ "$sshmgr_managed_count" -gt 0 ]; then
     sshmgr_automount_unit=$(systemd-escape -p --suffix=automount "$mount_point")
     systemctl stop "$sshmgr_automount_unit" >/dev/null 2>&1 || true
-    umount "$mount_point" >/dev/null 2>&1 || true
+` + linuxReselectUnmountScript(options) + `
   fi
 }
 sshmgr_write_credentials() {

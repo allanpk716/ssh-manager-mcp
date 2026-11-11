@@ -12,7 +12,10 @@ import (
 	"sync"
 )
 
-const LinuxUnmountMarker = "SSHMGR-LINUX-UNMOUNT"
+const (
+	LinuxUnmountMarker  = "SSHMGR-LINUX-UNMOUNT"
+	LinuxReselectMarker = "SSHMGR-LINUX-RESELECT"
+)
 
 type BusyProcess struct {
 	ProcessID string
@@ -26,6 +29,8 @@ type LinuxServer struct {
 	ShareID      string
 	ShareName    string
 	ShareVersion int64
+	// ReachableAddresses 模拟从目标服务器探测 TCP 445 成功的共享地址。
+	ReachableAddresses []string
 
 	Credential string
 	FstabLines []string
@@ -50,6 +55,7 @@ type LinuxServerState struct {
 	RevokedMarkerPath string
 	History           []string
 	Commands          []string
+	StandardInputs    [][]byte
 }
 
 func (s *LinuxServer) Handler(command string, stdin io.Reader) (string, string, int) {
@@ -65,6 +71,10 @@ func (s *LinuxServer) Handler(command string, stdin io.Reader) (string, string, 
 	switch {
 	case strings.TrimSpace(command) == "uname -s":
 		return "Linux\n", "", 0
+	case strings.Contains(command, "sshmgr_probe_one"):
+		return probeOutput(command, s.ReachableAddresses), "", 0
+	case strings.Contains(command, LinuxReselectMarker):
+		return s.reselect(command, input)
 	case strings.Contains(command, LinuxUnmountMarker):
 		if s.LockHeld {
 			return "", LinuxUnmountMarker + " lock-timeout", 87
@@ -98,6 +108,54 @@ func (s *LinuxServer) Handler(command string, stdin io.Reader) (string, string, 
 	}
 }
 
+func (s *LinuxServer) reselect(command string, input []byte) (string, string, int) {
+	if s.LockHeld {
+		return "", LinuxReselectMarker + " lock-timeout", 87
+	}
+	if !s.hasManagedFstabEntry() {
+		return "", LinuxReselectMarker + " not-managed", 89
+	}
+	targetAddress := firstCandidateAddress(command)
+	currentAddress := ""
+	for _, line := range s.FstabLines {
+		if strings.Contains(line, "sshmgr-share="+s.ShareName+",") ||
+			strings.Contains(line, "sshmgr-share="+s.ShareName+";") {
+			currentAddress = strings.SplitN(strings.SplitN(line, "//", 2)[1], "/", 2)[0]
+			break
+		}
+	}
+	if currentAddress == targetAddress {
+		return s.reselectOutput("no-change"), "", 0
+	}
+	force := strings.Contains(command, "sshmgr_force=yes")
+	if len(s.BusyProcesses) > 0 && !force {
+		output := s.reselectOutput("busy")
+		for _, process := range s.BusyProcesses {
+			output += fmt.Sprintf("SSHMGR-PROCESS pid=%s user=%s command=%s\n",
+				process.ProcessID, process.User, process.Command)
+		}
+		return output, "", 0
+	}
+	if len(s.BusyProcesses) > 0 && !s.ForceSucceeds {
+		return "", LinuxReselectMarker + " force-unmount-failed", 85
+	}
+	s.unmount()
+	password := strings.TrimSpace(string(input))
+	s.FstabLines = []string{fmt.Sprintf(
+		"//%s/%s /mnt/sshmgr/%s cifs credentials=/etc/sshmgr/shares/%s.credentials,vers=3.1.1,sshmgr-share=%s,sshmgr-version=%d,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0",
+		targetAddress, s.ShareName, s.ShareName, s.ShareID, s.ShareName, s.ShareVersion,
+	)}
+	s.Credential = "username=mount-user\npassword=" + password + "\n"
+	s.Mounted = true
+	s.History = append(s.History, "write-configuration", "mount")
+	return s.reselectOutput("update-success"), "", 0
+}
+
+func (s *LinuxServer) reselectOutput(result string) string {
+	return fmt.Sprintf("%s result=%s selected=1 version=%d\n",
+		LinuxReselectMarker, result, s.ShareVersion)
+}
+
 func (s *LinuxServer) State() LinuxServerState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -109,6 +167,7 @@ func (s *LinuxServer) State() LinuxServerState {
 		RevokedMarkerPath: s.RevokedMarkerPath,
 		History:           append([]string(nil), s.History...),
 		Commands:          append([]string(nil), s.Commands...),
+		StandardInputs:    append([][]byte(nil), s.Inputs...),
 	}
 }
 
