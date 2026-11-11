@@ -292,6 +292,12 @@ func (s *Store) DeleteNetwork(name string) ([]string, error) {
 	if _, err := tx.Exec(`DELETE FROM network_memberships WHERE network_id=?`, network.ID); err != nil {
 		return nil, err
 	}
+	if _, err := tx.Exec(
+		`DELETE FROM container_layout_coordinates WHERE entity_type=? AND entity_id=?`,
+		LayoutEntityNetwork, network.ID,
+	); err != nil {
+		return nil, err
+	}
 	if _, err := tx.Exec(`DELETE FROM networks WHERE id=?`, network.ID); err != nil {
 		return nil, err
 	}
@@ -390,6 +396,12 @@ func (s *Store) DeleteSite(name string) error {
 	}
 	if len(networkNames) > 0 {
 		return fmt.Errorf("站点 %s 下还有物理局域网：%s；请先删除或改归属这些网络", site.Name, strings.Join(networkNames, "、"))
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM container_layout_coordinates WHERE entity_type=? AND entity_id=?`,
+		LayoutEntitySite, site.ID,
+	); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM sites WHERE id=?`, site.ID); err != nil {
 		return err

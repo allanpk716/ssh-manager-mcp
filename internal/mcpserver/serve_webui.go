@@ -129,7 +129,8 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		SoftwareInventory: webuisoftwareinventory.FromOpener(func() (*store.Store, func(), error) {
 			return st, func() {}, nil
 		}),
-		Topology: webuitopology.FromStore(st),
+		Topology:       webuitopology.FromStore(st),
+		TopologyWriter: webuitopology.WriterFromStore(st),
 		Access: webuiaccess.FromManager(access.New(st, access.WithServeCertFingerprint(func() (string, error) {
 			return fingerprint, nil
 		}))),

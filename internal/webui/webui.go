@@ -104,8 +104,11 @@ type Config struct {
 	// Topology 是网络拓扑页来源。三种角色都提供；初始化向导等没有拓扑
 	// 数据的构造不提供，导航与路由都不出现。
 	Topology TopologySource
-	Access   AccessStore
-	Ops      OpsStore
+	// TopologyWriter 是拓扑布局保存与重置入口。单机与权威端提供；客户端
+	// 不提供，布局写路由不存在。
+	TopologyWriter TopologyWriter
+	Access         AccessStore
+	Ops            OpsStore
 	// MachineInit 是单机升级为权威端时调用的初始化模块适配器。适配器内部
 	// 调用 machineinit.Initialize 并把权威端作为目标角色；本包不写 role.json。
 	MachineInit MachineInitializer

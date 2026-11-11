@@ -5,8 +5,10 @@ package webuitopology
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -363,4 +365,178 @@ func TestStoreSourceReportsUnknownLocalDevice(t *testing.T) {
 	if cloud.CandidateNotice == "" {
 		t.Fatalf("本机设备未知时候选地址应有可读提示：%+v", cloud)
 	}
+}
+
+func TestSourcesReturnContainerLayoutCoordinates(t *testing.T) {
+	st, _, profileID, tokenID := seedVault(t)
+	siteID := ""
+	for _, site := range mustListSites(t, st) {
+		if site.Name == "家A" {
+			siteID = site.ID
+		}
+	}
+	networkID := ""
+	for _, network := range mustListNetworks(t, st) {
+		if network.Name == "虚拟网" {
+			networkID = network.ID
+		}
+	}
+	layout := store.ViewLayoutInput{
+		Containers: []store.ContainerLayoutInput{
+			{EntityType: store.LayoutEntitySite, EntityID: siteID, X: 21, Y: 31},
+			{EntityType: store.LayoutEntityNetwork, EntityID: networkID, X: 41, Y: 51},
+		},
+	}
+	if err := st.SaveViewLayout("virtual", layout, "127.0.0.1"); err != nil {
+		t.Fatalf("保存容器布局失败：%v", err)
+	}
+
+	data, err := FromStore(st).Topology("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.ContainerLayoutCoordinates) != 2 {
+		t.Fatalf("权威端来源应返回容器坐标：%+v", data.ContainerLayoutCoordinates)
+	}
+	byKey := make(map[string]webui.TopologyContainerLayoutCoordinate, 2)
+	for _, coordinate := range data.ContainerLayoutCoordinates {
+		byKey[coordinate.EntityType+"/"+coordinate.EntityID] = coordinate
+	}
+	if byKey["site/"+siteID].X != 21 || byKey["site/"+siteID].Y != 31 ||
+		byKey["network/"+networkID].X != 41 || byKey["network/"+networkID].Y != 51 {
+		t.Fatalf("权威端来源的容器坐标错误：%+v", data.ContainerLayoutCoordinates)
+	}
+
+	snapshot, err := st.ExportSnapshotForProfile(profileID, false, tokenID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientData, err := FromClientSnapshot(func(string) (*store.Snapshot, error) {
+		return snapshot, nil
+	}).Topology("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clientData.ContainerLayoutCoordinates) != 2 {
+		t.Fatalf("客户端来源应返回快照里的容器坐标：%+v", clientData.ContainerLayoutCoordinates)
+	}
+}
+
+func TestTopologyWriterSavesAndResetsLayout(t *testing.T) {
+	st, _, _, _ := seedVault(t)
+	writer := WriterFromStore(st)
+	siteID := ""
+	for _, site := range mustListSites(t, st) {
+		if site.Name == "家A" {
+			siteID = site.ID
+		}
+	}
+	device := deviceByName2(t, st, "工作站")
+	save := webui.TopologyLayoutSave{
+		ViewKey: "physical",
+		Devices: []webui.TopologyLayoutCoordinate{{DeviceID: device.ID, X: 7.5, Y: -2}},
+		Containers: []webui.TopologyContainerLayoutCoordinate{
+			{EntityType: "site", EntityID: siteID, X: 100, Y: 200},
+		},
+	}
+	if err := writer.SaveTopologyLayout(save, webui.TopologyWriteSource{RemoteAddress: "192.0.2.9"}); err != nil {
+		t.Fatalf("保存布局失败：%v", err)
+	}
+	deviceRows, err := st.ListDeviceLayoutCoordinates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	containerRows, err := st.ListContainerLayoutCoordinates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deviceRows) != 1 || deviceRows[0].ViewKey != "physical" || deviceRows[0].X != 7.5 {
+		t.Fatalf("适配层保存后的设备坐标错误：%+v", deviceRows)
+	}
+	if len(containerRows) != 1 || containerRows[0].EntityType != "site" || containerRows[0].X != 100 {
+		t.Fatalf("适配层保存后的容器坐标错误：%+v", containerRows)
+	}
+	audits := layoutAuditRows(t, st)
+	if len(audits) != 1 || audits[0].Action != "topology.layout.save" ||
+		audits[0].Source != store.AuditSourceWebUI || audits[0].SourceIP != "192.0.2.9" {
+		t.Fatalf("适配层保存布局的审计行错误：%+v", audits)
+	}
+
+	if err := writer.ResetTopologyLayout("physical", webui.TopologyWriteSource{RemoteAddress: "192.0.2.9"}); err != nil {
+		t.Fatalf("重置布局失败：%v", err)
+	}
+	deviceRows, err = st.ListDeviceLayoutCoordinates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	containerRows, err = st.ListContainerLayoutCoordinates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deviceRows) != 0 || len(containerRows) != 0 {
+		t.Fatalf("重置后应清空该视图坐标：%+v %+v", deviceRows, containerRows)
+	}
+	audits = layoutAuditRows(t, st)
+	if len(audits) != 2 || audits[0].Action != "topology.layout.reset" ||
+		audits[0].Source != store.AuditSourceWebUI {
+		t.Fatalf("适配层重置布局的审计行错误：%+v", audits)
+	}
+
+	// 引用不存在的设备按接口约定换算成内容非法错误。
+	invalid := webui.TopologyLayoutSave{
+		ViewKey: "physical",
+		Devices: []webui.TopologyLayoutCoordinate{{DeviceID: "missing-device", X: 1, Y: 2}},
+	}
+	err = writer.SaveTopologyLayout(invalid, webui.TopologyWriteSource{})
+	if !errors.Is(err, webui.ErrTopologyLayoutInvalid) {
+		t.Fatalf("引用不存在设备的错误应为内容非法，实际：%v", err)
+	}
+}
+
+func mustListSites(t *testing.T, st *store.Store) []*models.Site {
+	t.Helper()
+	sites, err := st.ListSites()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sites
+}
+
+func mustListNetworks(t *testing.T, st *store.Store) []*models.Network {
+	t.Helper()
+	networks, err := st.ListNetworks(store.NetworkFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return networks
+}
+
+func deviceByName2(t *testing.T, st *store.Store, name string) *models.Device {
+	t.Helper()
+	devices, err := st.ListDevices(store.DeviceFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, device := range devices {
+		if device.Name == name {
+			return device
+		}
+	}
+	t.Fatalf("库里找不到设备 %s", name)
+	return nil
+}
+
+func layoutAuditRows(t *testing.T, st *store.Store) []store.AuditRow {
+	t.Helper()
+	rows, err := st.AuditRows(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var matched []store.AuditRow
+	for _, row := range rows {
+		if strings.HasPrefix(row.Action, "topology.layout.") {
+			matched = append(matched, row)
+		}
+	}
+	return matched
 }

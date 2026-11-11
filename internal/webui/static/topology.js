@@ -1,5 +1,6 @@
 // 网络拓扑页面脚本：读取内部只读 JSON 接口，用 Cytoscape.js 呈现物理视
-// 图、虚拟视图与叠加视图。本票只读，拖动只影响本次浏览，不保存布局。
+// 图、虚拟视图与叠加视图。可编辑角色拖动结束后把该视图的全部坐标保存到
+// 权威端；客户端与手机只读查看，不提供保存入口。
 (function () {
   "use strict";
 
@@ -12,8 +13,10 @@
   var trayList = page === null ? null : page.querySelector(".topology-tray-list");
   var trayEmpty = page === null ? null : page.querySelector(".topology-tray-empty");
   var viewButtons = page === null ? [] : Array.prototype.slice.call(page.querySelectorAll(".topology-view"));
+  var statusElement = page === null ? null : page.querySelector("[data-topology-status]");
+  var resetButton = page === null ? null : page.querySelector("[data-topology-reset]");
 
-  var state = { data: null, cy: null, view: "physical" };
+  var state = { data: null, cy: null, view: "physical", savedBeforeDrag: null, saving: false };
   var coarsePointer = window.matchMedia("(pointer: coarse)");
 
   function escapeHTML(value) {
@@ -56,6 +59,29 @@
 
   function typeLabel(type) {
     return type === "physical" ? "物理局域网" : "虚拟局域网";
+  }
+
+  // canEditLayout 判断当前角色与指针类型是否允许改布局：客户端只读，手机
+  // 不能拖动；重置按钮同样遵循这两个限制。
+  function canEditLayout() {
+    if (page === null) {
+      return false;
+    }
+    return page.getAttribute("data-layout-editable") === "true" && !coarsePointer.matches;
+  }
+
+  function csrfToken() {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    return meta === null ? "" : meta.getAttribute("content") || "";
+  }
+
+  function showLayoutStatus(message, isError) {
+    if (statusElement === null) {
+      return;
+    }
+    statusElement.textContent = message;
+    statusElement.classList.toggle("error", isError === true);
+    statusElement.hidden = message === "";
   }
 
   function indexData(data) {
@@ -349,6 +375,41 @@
     return null;
   }
 
+  function savedContainerCoordinate(entityType, entityID) {
+    var coordinates = state.data.container_layout_coordinates || [];
+    for (var i = 0; i < coordinates.length; i += 1) {
+      if (coordinates[i].view_key === state.view &&
+        coordinates[i].entity_type === entityType && coordinates[i].entity_id === entityID) {
+        return { x: coordinates[i].x, y: coordinates[i].y };
+      }
+    }
+    return null;
+  }
+
+  function applySavedContainerPositions(positions) {
+    var i;
+    for (i = 0; i < state.data.sites.length; i += 1) {
+      var savedSite = savedContainerCoordinate("site", state.data.sites[i].id);
+      if (savedSite !== null) {
+        positions["site:" + state.data.sites[i].id] = savedSite;
+      }
+    }
+    for (i = 0; i < state.data.networks.length; i += 1) {
+      var network = state.data.networks[i];
+      var savedNetwork = savedContainerCoordinate("network", network.id);
+      if (savedNetwork === null) {
+        continue;
+      }
+      if (positions["network:" + network.id] !== undefined) {
+        positions["network:" + network.id] = savedNetwork;
+      }
+      if (positions["vnet:" + network.id] !== undefined) {
+        positions["vnet:" + network.id] = savedNetwork;
+      }
+    }
+    return positions;
+  }
+
   function targetPositions(index, elements, view) {
     var positions = {};
     var perRow = 3;
@@ -414,7 +475,7 @@
           positions[extraDevices[i]] = { x: 220 + column * deviceWidth, y: 60 + row * deviceHeight };
         }
       }
-      return positions;
+      return applySavedContainerPositions(positions);
     }
 
     var siteCount = state.data.sites.length;
@@ -452,7 +513,7 @@
         positions["vnet:" + overlayNetworks[i].id] = { x: 120 + i * 240, y: 40 };
       }
     }
-    return positions;
+    return applySavedContainerPositions(positions);
   }
 
   function styleForView() {
@@ -484,41 +545,354 @@
       button.classList.toggle("active", button.getAttribute("data-view") === view);
     });
     if (state.cy === null) {
+      updateLayoutAttribute();
       return;
     }
     var index = indexData(state.data);
-    var oldPositions = {};
-    state.cy.nodes().forEach(function (node) {
-      oldPositions[node.id()] = node.position();
-    });
     var elements = elementsForView(index, view);
+    // 每个视图的坐标各自保存；切换时不携带上一个视图的位置，重画后从当
+    // 前位置动画过渡到本视图的保存坐标或自动排布。
+    var previousPositions = {};
+    state.cy.nodes().forEach(function (node) {
+      var previous = node.position();
+      previousPositions[node.id()] = { x: previous.x, y: previous.y };
+    });
     state.cy.json({ elements: [] });
     state.cy.add(elements);
     var positions = targetPositions(index, elements, view);
     state.cy.nodes().forEach(function (node) {
+      if (node.data("placeholder") || node.isParent()) {
+        return;
+      }
       var target = positions[node.id()] || { x: 0, y: 0 };
-      var old = oldPositions[node.id()];
-      if (old !== undefined && !node.isParent()) {
-        node.position({ x: old.x, y: old.y });
+      var previous = previousPositions[node.id()];
+      if (previous !== undefined) {
+        node.position({ x: previous.x, y: previous.y });
       } else {
         node.position(target);
       }
     });
+    // Cytoscape.js 的集合动画不支持按元素返回位置的函数；逐个节点给出目
+    // 标坐标，过渡动画才能真正把节点带到本视图的保存坐标或自动排布。
     state.cy
       .nodes()
       .filter(function (node) {
-        return !node.isParent();
+        return !node.isParent() && !node.data("placeholder");
       })
-      .animate(
-        {
-          position: function (node) {
-            return positions[node.id()] || node.position();
-          },
-        },
-        { duration: 320, easing: "ease-in-out-cubic" }
-      );
+      .forEach(function (node) {
+        var target = positions[node.id()];
+        if (target === undefined) {
+          return;
+        }
+        node.animate(
+          { position: { x: target.x, y: target.y } },
+          { duration: 320, easing: "ease-in-out-cubic" }
+        );
+      });
     state.cy.fit(undefined, 48);
     updateCanvasSummary();
+    updateLayoutAttribute();
+    // 过渡动画结束后再写一次布局摘要，页面外读到的是落定后的坐标。
+    window.setTimeout(updateLayoutAttribute, 360);
+  }
+
+  // currentLayout 把当前视图里可见的设备与容器坐标整理成一次保存载荷。
+  // 分身不保存：同一台设备的本体节点是这个视图里的唯一坐标来源。
+  function currentLayout() {
+    var devices = [];
+    var containers = [];
+    if (state.cy !== null) {
+      state.cy.nodes().forEach(function (node) {
+        var data = node.data();
+        if (data.placeholder) {
+          return;
+        }
+        var position = node.position();
+        if (data.device !== undefined && !data.clone) {
+          devices.push({ device_id: data.device, x: position.x, y: position.y });
+          return;
+        }
+        if (data.site !== undefined) {
+          // 复合容器渲染出的框由子节点决定；保存框的中心而不是节点内部
+          // 的存储坐标，避免子节点移动后留下过期值。
+          var box = node.boundingBox();
+          containers.push({
+            entity_type: "site", entity_id: data.site,
+            x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2,
+          });
+          return;
+        }
+        if (data.network !== undefined &&
+          (node.id().indexOf("network:") === 0 || node.id().indexOf("vnet:") === 0)) {
+          var networkBox = node.boundingBox();
+          containers.push({
+            entity_type: "network", entity_id: data.network,
+            x: (networkBox.x1 + networkBox.x2) / 2, y: (networkBox.y1 + networkBox.y2) / 2,
+          });
+        }
+      });
+    }
+    devices.sort(function (a, b) { return a.device_id < b.device_id ? -1 : 1; });
+    containers.sort(function (a, b) {
+      if (a.entity_type !== b.entity_type) {
+        return a.entity_type < b.entity_type ? -1 : 1;
+      }
+      return a.entity_id < b.entity_id ? -1 : 1;
+    });
+    return { view: state.view, devices: devices, containers: containers };
+  }
+
+  // updateLayoutAttribute 把当前布局写进 data 属性；浏览器测试用它断言保存
+  // 与重绘后的坐标，不接触画布内部对象。
+  function updateLayoutAttribute() {
+    if (state.data === null) {
+      return;
+    }
+    container.setAttribute("data-layout-json", JSON.stringify(currentLayout()));
+  }
+
+  // rememberSavedLayout 在保存成功后同步本地数据，让切换视图再切回来时仍
+  // 看到刚保存的坐标。
+  function rememberSavedLayout(layout) {
+    state.data.layout_coordinates = (state.data.layout_coordinates || []).filter(function (coordinate) {
+      return coordinate.view_key !== layout.view;
+    });
+    state.data.container_layout_coordinates = (state.data.container_layout_coordinates || []).filter(
+      function (coordinate) {
+        return coordinate.view_key !== layout.view;
+      }
+    );
+    layout.devices.forEach(function (coordinate) {
+      state.data.layout_coordinates.push({
+        view_key: layout.view, device_id: coordinate.device_id, x: coordinate.x, y: coordinate.y,
+      });
+    });
+    layout.containers.forEach(function (coordinate) {
+      state.data.container_layout_coordinates.push({
+        view_key: layout.view, entity_type: coordinate.entity_type,
+        entity_id: coordinate.entity_id, x: coordinate.x, y: coordinate.y,
+      });
+    });
+  }
+
+  function forgetSavedLayout(view) {
+    state.data.layout_coordinates = (state.data.layout_coordinates || []).filter(function (coordinate) {
+      return coordinate.view_key !== view;
+    });
+    state.data.container_layout_coordinates = (state.data.container_layout_coordinates || []).filter(
+      function (coordinate) {
+        return coordinate.view_key !== view;
+      }
+    );
+  }
+
+  // saveCurrentLayout 一次提交当前视图的全部坐标。保存进行中不重复发起；
+  // 失败时保留画布现状并提示，下一次拖动会再试一次。
+  function saveCurrentLayout() {
+    if (!canEditLayout() || state.saving) {
+      return;
+    }
+    var layout = currentLayout();
+    state.saving = true;
+    fetch("/ui/api/topology/layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json", "X-CSRF-Token": csrfToken() },
+      credentials: "same-origin",
+      body: JSON.stringify(layout),
+    })
+      .then(function (response) {
+        if (response.status === 204) {
+          return null;
+        }
+        return response.json().catch(function () {
+          return { error: "保存布局失败，请稍后重试。" };
+        });
+      })
+      .then(function (payload) {
+        state.saving = false;
+        if (payload === null) {
+          rememberSavedLayout(layout);
+          updateLayoutAttribute();
+          showLayoutStatus("布局已保存。", false);
+          return;
+        }
+        showLayoutStatus(payload.error || "保存布局失败，请稍后重试。", true);
+      })
+      .catch(function () {
+        state.saving = false;
+        showLayoutStatus("保存布局失败，请检查网络后重试。", true);
+      });
+  }
+
+  // resetCurrentLayout 先确认再清空当前视图保存的坐标，随后按自动排布重画。
+  function resetCurrentLayout() {
+    if (!canEditLayout() || state.data === null) {
+      return;
+    }
+    var viewLabel = state.view === "physical" ? "物理视图" : state.view === "virtual" ? "虚拟视图" : "叠加视图";
+    if (!window.confirm("确定要重置" + viewLabel + "的布局吗？该视图保存的全部坐标会被清除。")) {
+      return;
+    }
+    fetch("/ui/api/topology/layout/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json", "X-CSRF-Token": csrfToken() },
+      credentials: "same-origin",
+      body: JSON.stringify({ view: state.view }),
+    })
+      .then(function (response) {
+        if (response.status === 204) {
+          return null;
+        }
+        return response.json().catch(function () {
+          return { error: "重置布局失败，请稍后重试。" };
+        });
+      })
+      .then(function (payload) {
+        if (payload === null) {
+          forgetSavedLayout(state.view);
+          applyView(state.view);
+          showLayoutStatus("布局已重置。", false);
+          return;
+        }
+        showLayoutStatus(payload.error || "重置布局失败，请稍后重试。", true);
+      })
+      .catch(function () {
+        showLayoutStatus("重置布局失败，请检查网络后重试。", true);
+      });
+  }
+
+  // isContainerNode 判断节点是否是站点区域或网络分组框；重叠检查只对这两
+  // 类实体生效。
+  function isContainerNode(node) {
+    var data = node.data();
+    return data.placeholder !== true &&
+      ((data.site !== undefined && node.id().indexOf("site:") === 0) ||
+        (data.network !== undefined &&
+          (node.id().indexOf("network:") === 0 || node.id().indexOf("vnet:") === 0)));
+  }
+
+  // overlappingContainer 返回与指定容器明显重叠的另一个容器节点；交叠面积
+  // 超过较小框面积的四分之一视为明显重叠。嵌套关系不算重叠：网络分组框
+  // 本来就画在所属站点区域里。
+  function overlappingContainer(node) {
+    if (state.cy === null || !isContainerNode(node)) {
+      return null;
+    }
+    var box = node.boundingBox();
+    var containers = state.cy.nodes().filter(function (candidate) {
+      if (candidate.id() === node.id() || !isContainerNode(candidate)) {
+        return false;
+      }
+      // 只要一方是另一方的祖先，就是嵌套而不是区域重叠。
+      if (candidate.ancestors().contains(node) || node.ancestors().contains(candidate)) {
+        return false;
+      }
+      return true;
+    });
+    var found = null;
+    containers.forEach(function (candidate) {
+      if (found !== null) {
+        return;
+      }
+      var other = candidate.boundingBox();
+      var width = Math.min(box.x2, other.x2) - Math.max(box.x1, other.x1);
+      var height = Math.min(box.y2, other.y2) - Math.max(box.y1, other.y1);
+      if (width <= 0 || height <= 0) {
+        return;
+      }
+      var intersection = width * height;
+      var areaA = (box.x2 - box.x1) * (box.y2 - box.y1);
+      var areaB = (other.x2 - other.x1) * (other.y2 - other.y1);
+      if (intersection > Math.min(areaA, areaB) * 0.25) {
+        found = candidate;
+      }
+    });
+    return found;
+  }
+
+  // restorePositions 把整幅画布恢复到拖动前的坐标；站点或网络拖动时子节点
+  // 会一起移动，只还原容器本身不够。
+  function restorePositions(positions) {
+    if (state.cy === null || positions === null) {
+      return;
+    }
+    state.cy.nodes().forEach(function (node) {
+      var target = positions[node.id()];
+      // 只还原子节点：复合容器的框由子节点决定，直接设置父节点会把子
+      // 树再平移一次。先停掉未完成的过渡动画，避免动画把还原结果改掉。
+      if (target !== undefined && !node.data("placeholder") && !node.isParent()) {
+        node.stop();
+        node.position({ x: target.x, y: target.y });
+      }
+    });
+  }
+
+  function snapshotPositions() {
+    var positions = {};
+    if (state.cy === null) {
+      return positions;
+    }
+    state.cy.nodes().forEach(function (node) {
+      // position() 返回的是节点内部坐标对象的引用；必须复制，否则节点移
+      // 动后这份「拖动前快照」会跟着变成新坐标。
+      var position = node.position();
+      positions[node.id()] = { x: position.x, y: position.y };
+    });
+    return positions;
+  }
+
+  // moveEntityTo 是页面外脚本与浏览器测试的拖动接缝：把一个实体移动到指定
+  // 坐标，并走与手动拖动相同的保存路径。
+  function moveEntityTo(entityType, entityID, x, y) {
+    if (state.cy === null || !canEditLayout()) {
+      return;
+    }
+    var prefixes = entityType === "site"
+      ? ["site:"]
+      : entityType === "network"
+        ? ["network:", "vnet:"]
+        : ["device:"];
+    var node = null;
+    for (var i = 0; i < prefixes.length; i += 1) {
+      var candidate = state.cy.getElementById(prefixes[i] + entityID);
+      if (!candidate.empty()) {
+        node = candidate;
+        break;
+      }
+    }
+    if (node === null) {
+      return;
+    }
+    // 先停掉视图切换可能还没完成的过渡动画，再记下拖动前坐标；否则动画
+    // 会把新位置改回旧目标。
+    if (node.isParent()) {
+      node.descendants().forEach(function (child) {
+        child.stop();
+      });
+    }
+    node.stop();
+    state.savedBeforeDrag = snapshotPositions();
+    if (node.isParent()) {
+      // 复合容器的框由子节点决定：把整个子树平移，让框中心落在目标坐
+      // 标，与手动拖动容器时的整体移动一致。
+      var box = node.boundingBox();
+      var deltaX = x - (box.x1 + box.x2) / 2;
+      var deltaY = y - (box.y1 + box.y2) / 2;
+      // 给复合容器设置坐标会把整个子树平移同样的差值。
+      var stored = node.position();
+      node.position({ x: stored.x + deltaX, y: stored.y + deltaY });
+    } else {
+      node.position({ x: x, y: y });
+    }
+    var overlap = overlappingContainer(node);
+    if (overlap !== null) {
+      restorePositions(state.savedBeforeDrag);
+      updateLayoutAttribute();
+      showLayoutStatus("区域与其他区域明显重叠，已还原本次移动。", true);
+      return;
+    }
+    updateLayoutAttribute();
+    saveCurrentLayout();
   }
 
   // updateCanvasSummary 把画布当前可见的节点摘要写进 data 属性与无障碍标
@@ -550,13 +924,17 @@
   }
 
   function updateGrabbable() {
+    var canEdit = canEditLayout();
+    if (resetButton !== null) {
+      resetButton.hidden = !canEdit;
+    }
     if (state.cy === null) {
+      container.setAttribute("data-grabbable", canEdit ? "true" : "false");
       return;
     }
-    var canGrab = !coarsePointer.matches;
-    container.setAttribute("data-grabbable", canGrab ? "true" : "false");
+    container.setAttribute("data-grabbable", canEdit ? "true" : "false");
     state.cy.nodes().forEach(function (node) {
-      node.grabbable(canGrab && !node.data("placeholder"));
+      node.grabbable(canEdit && !node.data("placeholder"));
     });
   }
 
@@ -589,7 +967,12 @@
     });
     var positions = targetPositions(index, state.cy.elements().jsons(), state.view);
     state.cy.nodes().forEach(function (node) {
-      var target = positions[node.id()] || { x: 0, y: 0 };
+      var target = positions[node.id()];
+      if (node.data("placeholder") || target === undefined) {
+        return;
+      }
+      // 复合容器的框由子节点决定，子节点的保存坐标已经还原了整个子树的
+      // 位置；单独定位父节点会把子树再推一次。
       if (!node.isParent()) {
         node.position(target);
       }
@@ -614,7 +997,29 @@
         hideDetail();
       }
     });
+    // 拖动开始先记下整幅画布坐标：容器明显重叠时要整体还原，设备拖动失
+    // 败时也不丢其它节点的位置。
+    state.cy.on("grab", "node", function () {
+      state.savedBeforeDrag = snapshotPositions();
+    });
+    state.cy.on("dragfree", "node", function (event) {
+      if (!canEditLayout()) {
+        return;
+      }
+      var node = event.target;
+      node.stop();
+      var overlap = overlappingContainer(node);
+      if (overlap !== null) {
+        restorePositions(state.savedBeforeDrag);
+        updateLayoutAttribute();
+        showLayoutStatus("区域与其他区域明显重叠，已还原本次拖动。", true);
+        return;
+      }
+      updateLayoutAttribute();
+      saveCurrentLayout();
+    });
     state.cy.fit(undefined, 48);
+    updateLayoutAttribute();
   }
 
   function renderTray(index) {
@@ -866,6 +1271,9 @@
         });
       });
     }
+    if (resetButton !== null) {
+      resetButton.addEventListener("click", resetCurrentLayout);
+    }
     if (page !== null) {
       page.addEventListener("click", function (event) {
         var target = event.target;
@@ -877,6 +1285,12 @@
         if (trayButton !== null) {
           showDeviceDetail(trayButton.getAttribute("data-device"));
         }
+      });
+      // 页面外的脚本或测试可以用这个事件请求移动一个实体，与在画布里拖动
+      // 等价；只读角色与手机视口忽略它。
+      page.addEventListener("topology:move", function (event) {
+        var detail = event.detail || {};
+        moveEntityTo(detail.entity_type, detail.entity_id, detail.x, detail.y);
       });
     }
   }
