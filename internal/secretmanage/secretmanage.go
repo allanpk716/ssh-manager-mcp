@@ -112,3 +112,9 @@ func (m *Manager) List(filter ListFilter) ([]store.SecretView, error) {
 	views = store.FilterSecretsByServer(views, serverName)
 	return store.FilterSecretsByQuery(views, filter.Query), nil
 }
+
+// SecretDeliveryRecords 返回引用指定机密项的下发记录，供 owner 的命令行
+// 与 Web UI 共用；查询结果只含模板、哈希与元数据，不含机密项值。
+func (m *Manager) SecretDeliveryRecords(secretName string) ([]store.SecretDeliveryRecord, error) {
+	return m.st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{SecretName: secretName})
+}

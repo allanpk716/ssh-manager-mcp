@@ -71,6 +71,14 @@ func (s managerStore) ListSecrets(_, query, server string) ([]webui.SecretRow, e
 	return secretRows(views), nil
 }
 
+func (s managerStore) SecretDeliveryRecords(secretName string) ([]webui.SecretDeliveryRecordRow, error) {
+	records, err := s.manager.SecretDeliveryRecords(secretName)
+	if err != nil {
+		return nil, err
+	}
+	return deliveryRecordRows(records), nil
+}
+
 func (s managerStore) AddSecret(name, note, environmentName string, value []byte, source webui.SecretWriteSource) error {
 	return secretFormError(s.manager.AddSecret(
 		name, note, environmentName, value, secretmanage.WebUISource(source.RemoteAddress),
@@ -161,6 +169,15 @@ func (s openerStore) ListSecrets(instance, query, server string) ([]webui.Secret
 	return managerStore{manager: manager}.ListSecrets(instance, query, server)
 }
 
+func (s openerStore) SecretDeliveryRecords(secretName string) ([]webui.SecretDeliveryRecordRow, error) {
+	manager, closeStore, err := s.open()
+	if err != nil {
+		return nil, err
+	}
+	defer closeStore()
+	return managerStore{manager: manager}.SecretDeliveryRecords(secretName)
+}
+
 type writerOpenerStore struct {
 	open func() (*secretmanage.Manager, func(), error)
 }
@@ -239,6 +256,26 @@ func authorizationCells(target []webui.SecretAuthorizationCell) []secretmanage.A
 		})
 	}
 	return cells
+}
+
+func deliveryRecordRows(records []store.SecretDeliveryRecord) []webui.SecretDeliveryRecordRow {
+	rows := make([]webui.SecretDeliveryRecordRow, 0, len(records))
+	for _, record := range records {
+		row := webui.SecretDeliveryRecordRow{
+			ServerName: record.ServerName, Path: record.Path,
+			Template: string(record.Template), FileSHA256: record.FileSHA256,
+			WrittenAt:              record.WrittenAt,
+			InitiatingDeviceName:   record.InitiatingDeviceName,
+			InitiatingInstanceName: record.InitiatingInstanceName,
+		}
+		for _, secret := range record.Secrets {
+			row.Secrets = append(row.Secrets, webui.SecretDeliverySecretRow{
+				Name: secret.Name, ValueVersion: secret.ValueVersion, Deleted: secret.Deleted,
+			})
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 func previewView(preview secretmanage.AuthorizationPreview) webui.SecretAuthorizationPreview {

@@ -71,6 +71,31 @@ type SecretSource interface {
 	ListSecrets(instance, query, server string) ([]SecretRow, error)
 }
 
+// SecretDeliverySecretRow 是页面展示的一个下发记录机密项引用。
+type SecretDeliverySecretRow struct {
+	Name         string
+	ValueVersion int64
+	Deleted      bool
+}
+
+// SecretDeliveryRecordRow 是机密项详情页的一条下发记录展示行。
+type SecretDeliveryRecordRow struct {
+	ServerName             string
+	Path                   string
+	Template               string
+	FileSHA256             string
+	WrittenAt              time.Time
+	InitiatingDeviceName   string
+	InitiatingInstanceName string
+	Secrets                []SecretDeliverySecretRow
+}
+
+// SecretDeliveryRecordSource 由持有权威 vault 或本机 vault 的机密项来源实
+// 现；客户端快照来源不实现，也不提供权威端下发记录查询。
+type SecretDeliveryRecordSource interface {
+	SecretDeliveryRecords(secretName string) ([]SecretDeliveryRecordRow, error)
+}
+
 // SecretWriteSource 描述一次机密项写请求的来源地址，适配层把它写进审计行。
 type SecretWriteSource struct {
 	RemoteAddress string

@@ -841,6 +841,7 @@ func TestSecretsClientRefused(t *testing.T) {
 		{"secrets", "set", "API_TOKEN", "--stdin"},
 		{"secrets", "edit", "API_TOKEN", "--note", "x"},
 		{"secrets", "rm", "API_TOKEN"},
+		{"secrets", "records"},
 		{"secrets", "allow", "--secrets", "API_TOKEN", "--servers", "web1"},
 		{"secrets", "disallow", "--secrets", "API_TOKEN", "--servers", "web1"},
 	}
@@ -985,6 +986,122 @@ func TestSecretsRmListsDeliveryRecordsBeforeDelete(t *testing.T) {
 			records[0].Secrets[0].Name != "API_TOKEN" || !records[0].Secrets[0].Deleted {
 			t.Fatalf("删除机密项后%s查询应保留记录并标注已删除：%+v", name, records)
 		}
+	}
+}
+
+// TestSecretsRecordsListsAndFiltersDeliveryRecords 覆盖 owner 的下发记录查
+// 看：无参数、按机密项、按服务器与组合筛选都从同一查询口读取；指定机密项
+// 时展开模板、哈希与值版本号，且任何输出都不出现机密项值。
+func TestSecretsRecordsListsAndFiltersDeliveryRecords(t *testing.T) {
+	dbPath, mk := newSecretsEnv(t)
+	seedSecretServers(t)
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
+	mustSecretsCli(t, testSecretValueB, "secrets", "add", "RETIRED_TOKEN", "--note", "已下线", "--stdin")
+	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN,RETIRED_TOKEN", "--servers", "web1,web2")
+
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"web1", "web2"} {
+		srv, err := st.GetServerByName(name)
+		if err != nil || srv == nil {
+			t.Fatalf("找不到服务器条目 %s：%v", name, err)
+		}
+		if err := st.GrantServers(profileID, []string{srv.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	web1 := mustServerID(t, st, "web1")
+	web2 := mustServerID(t, st, "web2")
+	seedRecord := func(serverID, path string, writtenAt int64, name string, version int64) {
+		t.Helper()
+		hashSuffix := "dead"
+		if strings.HasPrefix(path, "/srv/") {
+			hashSuffix = "beef"
+		}
+		_, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
+			ServerID: serverID, Path: path,
+			Template:   []byte("token: {{sshmgr-secret:" + name + "}}\n"),
+			FileSHA256: strings.Repeat("4", 60) + hashSuffix,
+			WrittenAt:  time.Unix(writtenAt, 0),
+			Secrets: []store.SecretDeliverySecret{{
+				Name: name, ValueVersion: version,
+			}},
+			InitiatingDeviceName:   "office-laptop",
+			InitiatingInstanceName: "agent-a",
+			AuthorizationProfileID: profileID,
+		}, store.CLISource())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedRecord(web1, "/etc/api.yml", 1760000800, "API_TOKEN", 1)
+	seedRecord(web2, "/srv/api.yml", 1760000900, "API_TOKEN", 2)
+	seedRecord(web1, "/etc/old.yml", 1760000700, "RETIRED_TOKEN", 1)
+	if err := st.DeleteSecret("RETIRED_TOKEN", store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out := mustSecretsCli(t, "", "secrets", "records")
+	for _, want := range []string{
+		"下发记录（登记失败的历史写入会缺漏，不承诺完整）",
+		"web1", "web2", "/etc/api.yml", "/srv/api.yml", "/etc/old.yml",
+		"API_TOKEN", "RETIRED_TOKEN（已删除）",
+		"写入时间 2025-10-09", "发起设备 office-laptop", "实例 agent-a",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("records 输出缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, testSecretValueA) || strings.Contains(out, strings.TrimSuffix(testSecretValueB, "\n")) {
+		t.Fatalf("records 输出不得出现机密项值：\n%s", out)
+	}
+
+	out = mustSecretsCli(t, "", "secrets", "records", "--server", "web2")
+	if !strings.Contains(out, "/srv/api.yml") || strings.Contains(out, "/etc/api.yml") ||
+		strings.Contains(out, "/etc/old.yml") {
+		t.Fatalf("按服务器筛选应只留下 web2 的记录：\n%s", out)
+	}
+
+	out = mustSecretsCli(t, "", "secrets", "records", "API_TOKEN")
+	if !strings.Contains(out, "/etc/api.yml") || !strings.Contains(out, "/srv/api.yml") ||
+		strings.Contains(out, "/etc/old.yml") {
+		t.Fatalf("按机密项筛选应只留下 API_TOKEN 的记录：\n%s", out)
+	}
+
+	out = mustSecretsCli(t, "", "secrets", "records", "API_TOKEN", "--server", web1)
+	for _, want := range []string{
+		"/etc/api.yml", "模板原文：token: {{sshmgr-secret:API_TOKEN}}",
+		"文件 SHA-256 哈希：" + strings.Repeat("4", 60) + "dead",
+		"值版本号：API_TOKEN=1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("机密项详情缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "/srv/api.yml") || strings.Contains(out, "/etc/old.yml") {
+		t.Fatalf("组合筛选应同时按机密项与服务器生效：\n%s", out)
+	}
+	if strings.Contains(out, testSecretValueA) || strings.Contains(out, strings.TrimSuffix(testSecretValueB, "\n")) {
+		t.Fatalf("机密项详情不得出现机密项值：\n%s", out)
+	}
+
+	out = mustSecretsCli(t, "", "secrets", "records", "--server", "db1")
+	if !strings.Contains(out, "没有符合条件的下发记录") {
+		t.Fatalf("空状态必须明确说明没有记录：\n%s", out)
+	}
+
+	help := mustSecretsCli(t, "", "secrets", "records", "--help")
+	if !strings.Contains(help, "登记失败") || !strings.Contains(help, "不承诺完整") {
+		t.Fatalf("帮助文字必须说明记录可能缺漏：\n%s", help)
 	}
 }
 
