@@ -409,6 +409,10 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
   你拿到的只是**前缀**；`stdout_bytes` / `stderr_bytes` 是**真实总字节数**。
   此时要 **refine**——改跑 `tail -n 200 <file>`、`head -n`、`grep <pattern>`
   拿你要的那段，**不要**原样重跑硬拉全量（会再吃 1 MiB 前缀，白费）。
+- `exec_command` 不改写命令文本。命令里写着 `\\<主机>\<共享名>\<子路径>`
+  或 `smb://<主机>/<共享名>/<子路径>` 时，先用 `query_topology` 查询：
+  `from` 填这台服务器的编号，`to` 填这个共享地址，再把返回的实际路径放
+  进命令。
 
 ### download_file
 
@@ -620,6 +624,8 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
   重启后所有 task_id 一并失效，把在跑的活当作全死了重新安排。
 - 选型：短命令（≤5 分钟、马上要全量输出）→ `exec_command`；长活 / 要增量
   输出 → `exec_background` + `exec_output` 轮询。
+- `exec_background` 同样不改写命令文本。需要把共享地址换成服务器上的实
+  际路径时，先用 `query_topology` 查询，再组命令。
 
 ### exec_output
 
@@ -755,6 +761,34 @@ agent 披露这台服务器条目的主机地址），地址被隐藏时显示 `
 
 客户端缓存快照没有推荐版本时，本工具返回「权威端版本过旧，不支持网络
 拓扑与共享存储，请先升级权威端」。
+
+### query_topology 的共享地址翻译
+
+`from` 填授权范围内一台服务器条目的编号，`to` 只填一个共享地址时，本工
+具改为输出这台服务器上的实际路径：
+
+```text
+服务器：<服务器条目名>
+共享存储：<共享名>（提供方设备：<设备名>）
+可挂载：是
+实际路径：<按挂载点约定翻译后的路径>
+本翻译只读登记数据；是否已现场挂载请用 list_shares 的现场检测确认。
+```
+
+- 共享地址接受 `\\<主机>\<共享名>\<子路径>` 与
+  `smb://<主机>/<共享名>/<子路径>`，两种写法等价；共享名、主机名与分隔
+  符的大小写差异不改变指称。
+- 主机只用于在提供方设备的网络成员地址里识别共享存储，不参与实际挂载
+  地址选择，输出也不显示任何地址。
+- 「主机加共享名」对上多个共享存储时，工具列出提供方设备名与共享名的
+  候选并报错，不做猜测。
+- 当前授权范围看不到目标服务器，或这台服务器不在共享存储的可挂载范围
+  内时，工具报错；授权外查询不展开共享存储详情。
+- Linux 与 macOS 返回 `/mnt/sshmgr/<共享名>/<子路径>`；Windows 返回登记
+  盘符下的对应路径，例如 `Z:\<子路径>`。
+- 共享地址不能与普通目标混用，一次也只能查询一个共享地址。
+- 翻译只读登记数据，不主动探测、不建立 SSH 连接、不改变远端状态，也不
+  证明共享当时已经挂载。
 
 ## 错误对照表（每条给"你该做什么"）
 
@@ -894,7 +928,7 @@ HEAD，后续重构以符号名为准）：
 | 每次工具调用全程审计（project/server/action/status/命令/耗时） | `internal/mcpserver/core.go:81-89` 等；../README.md "What the agent gets" |
 | 命令策略门在取凭据、建 SSH 连接之前（拦截 / 需确认都不建连接，拦截零字节到服务器）；判定内核是纯函数，权威端与客户端同一条代码路径，离线用最后一次拉到的规则 | `internal/mcpserver/policygate.go`（policyJudge）；`internal/mcpserver/core.go`（ExecCommandForProfile 的 gate 段）；`internal/mcpserver/bgtools.go`（后台同款门）；`internal/policy/policy.go`（Evaluate） |
 | probe_connectivity：只测 TCP 建连与耗时、只探测登记过的共同网络组合（不测兜底主机）、结果只存发起实例本地；经服务器探测执行固定命令、不经命令策略但写审计 | 规格 #142；ADR 0007（命令策略是护栏不是安全边界） |
-| query_topology：按出发点输出所属网络、同在物理局域网、只能经虚拟局域网到达、无共同网络不可达与未登记服务器五段；传入 to 时输出逐对全部共同网络、网络属性，并标记 sshmgr 真正拨号时会优先尝试的网络（与按服务器条目拨号的共用入口同一条候选地址规划）；`detail=true` 展开参数显示地址与设备角色，地址遵守 ExposeHost 主机披露开关；可达行附本实例最新探测结果；只读登记、成功地址缓存与本地观察，不探测、不建 SSH、不写审计、不改成功地址缓存与快照修订号；旧权威端快照固定报错 | 规格 #234、票 #241、票 #242；`internal/mcpserver/query_topology.go`（QueryTopologyForProfile）；`internal/sshbroker/entrydial.go`（PlanServerDialCandidates）；`internal/mcpserver/server.go`（query_topology 注册） |
+| query_topology：按出发点输出所属网络、同在物理局域网、只能经虚拟局域网到达、无共同网络不可达与未登记服务器五段；传入 to 时输出逐对全部共同网络、网络属性，并标记 sshmgr 真正拨号时会优先尝试的网络（与按服务器条目拨号的共用入口同一条候选地址规划）；`detail=true` 展开参数显示地址与设备角色，地址遵守 ExposeHost 主机披露开关；可达行附本实例最新探测结果；只读登记、成功地址缓存与本地观察，不探测、不建 SSH、不写审计、不改成功地址缓存与快照修订号；旧权威端快照固定报错；`from` 为服务器编号且 `to` 为唯一共享地址时，按挂载点约定翻译成这台服务器上的实际路径并说明是否可挂载，主机只用于识别共享存储 | 规格 #234、票 #241、票 #242、票 #243；`internal/mcpserver/query_topology.go`（QueryTopologyForProfile）；`internal/shareaddress/address.go`（Parse 与 Resolve）；`internal/sshbroker/entrydial.go`（PlanServerDialCandidates）；`internal/mcpserver/server.go`（query_topology 注册） |
 | list_shares：默认只读登记与挂载点约定、不做任何现场检测；可选现场检测参数对可见 Linux 与 macOS 可挂载服务器并发只读检测，报告已挂载、未挂载、配置缺失、不可达（附原因说明）四种状态；可挂载范围是挂载密码机密项可写入列表与会话可见服务器取交集，交集为空不返回；旧权威端快照按 ADR 0014 报错 | `internal/mcpserver/list_shares.go`（ListSharesForProfile / annotateSharedStorageMountChecks）；`internal/sharemount/check.go`（固定检测命令）；`internal/store/shared_storage.go`（SharedStorageMountPoint）；`internal/mcpserver/run.go`（hydrateCacheStore 设置快照推荐版本） |
 | mount_share：共享存储持久挂载（Linux 写 fstab 与仅 root 可读凭据文件，macOS 写 autofs 间接映射）；服务器级目录锁带 owner 文件与过期回收；撤销标记版本号不低于快照版本号时拒绝；Linux 先在 /var/run 临时挂载点试挂成功才改写正式配置；macOS 映射改写后先卸载旧 smbfs 挂载再刷新；已挂载且一致时幂等 no-change；密码只经提权会话标准输入写入，结果与审计不含地址；不提供卸载 | 规格 #198、#212；`internal/sharemount/`（service.go / linux.go / darwin.go / marker.go / lock.go / check.go）；`internal/mcpserver/mount_share.go` |
 | query_software_inventory：按 profile 可见范围查询软件清单（含监听端口、暴露级别、来源、采集时间与设备采集状态）；客户端在线查询权威端，不可达时固定报错、不回退本地数据 | 票 #185；`internal/mcpserver/softwareinventory.go`；`internal/mcpserver/serve_softwareinventory.go`；`internal/clientops/softwareinventory_forward.go` |
