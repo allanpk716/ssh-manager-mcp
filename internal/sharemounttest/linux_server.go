@@ -12,7 +12,10 @@ import (
 	"sync"
 )
 
-const LinuxUnmountMarker = "SSHMGR-LINUX-UNMOUNT"
+const (
+	LinuxUnmountMarker   = "SSHMGR-LINUX-UNMOUNT"
+	LinuxEnumerateMarker = "SSHMGR-LINUX-ENUM"
+)
 
 type BusyProcess struct {
 	ProcessID string
@@ -65,6 +68,8 @@ func (s *LinuxServer) Handler(command string, stdin io.Reader) (string, string, 
 	switch {
 	case strings.TrimSpace(command) == "uname -s":
 		return "Linux\n", "", 0
+	case strings.Contains(command, LinuxEnumerateMarker):
+		return s.enumerateOutput(), "", 0
 	case strings.Contains(command, LinuxUnmountMarker):
 		if s.LockHeld {
 			return "", LinuxUnmountMarker + " lock-timeout", 87
@@ -96,6 +101,28 @@ func (s *LinuxServer) Handler(command string, stdin io.Reader) (string, string, 
 	default:
 		return "", "unexpected command: " + command, 90
 	}
+}
+
+// enumerateOutput 按固定枚举协议汇报当前状态。枚举是只读操作：不改任何
+// 字段，也不写状态变化历史。
+func (s *LinuxServer) enumerateOutput() string {
+	var out strings.Builder
+	if s.hasManagedFstabEntry() {
+		credentials := "no"
+		if s.Credential != "" {
+			credentials = "yes"
+		}
+		fmt.Fprintf(&out, "%s entry=%s version=%d credentials=%s\n",
+			LinuxEnumerateMarker, url.PathEscape(s.ShareName), s.ShareVersion, credentials)
+	}
+	if s.RevokedMarker != "" {
+		fmt.Fprintf(&out, "%s revoked=%s version=%d\n",
+			LinuxEnumerateMarker, url.PathEscape(s.ShareName), s.ShareVersion)
+	}
+	if s.Mounted {
+		fmt.Fprintf(&out, "%s mount=%s\n", LinuxEnumerateMarker, s.ShareName)
+	}
+	return out.String()
 }
 
 func (s *LinuxServer) State() LinuxServerState {
