@@ -18,22 +18,25 @@ const (
 )
 
 var (
-	ErrUnmountUnsupportedSystem = errors.New("目标服务器操作系统不支持共享存储卸载")
-	ErrUnmountSSH               = errors.New("连接目标服务器或执行固定卸载命令失败")
-	ErrUnmountNotManaged        = errors.New("目标服务器上没有这个共享名的 sshmgr 挂载配置")
-	ErrUnmountLockTimeout       = errors.New("另一个共享存储操作正在进行，请稍后再试")
-	ErrUnmountFailed            = errors.New("卸载共享存储挂载点失败")
-	ErrUnmountOutputInvalid     = errors.New("共享存储固定卸载命令返回了不合法结论")
+	ErrUnmountUnsupportedSystem  = errors.New("目标服务器操作系统不支持共享存储卸载")
+	ErrUnmountSSH                = errors.New("连接目标服务器或执行固定卸载命令失败")
+	ErrUnmountNotManaged         = errors.New("目标服务器上没有这个共享名的 sshmgr 挂载配置")
+	ErrUnmountLockTimeout        = errors.New("另一个共享存储操作正在进行，请稍后再试")
+	ErrUnmountFailed             = errors.New("卸载共享存储挂载点失败")
+	ErrUnmountOutputInvalid      = errors.New("共享存储固定卸载命令返回了不合法结论")
+	ErrUnmountRemoteVersionNewer = errors.New("目标服务器上的共享存储版本号比刚提交的版本号更新，已停止清理")
 )
 
 // UnmountRequest 是一次 owner 卸载调用的远端目标。WriteRevokedMarker 由
 // 管理模块按登记与可挂载范围判定；这里只负责在目标服务器上执行固定命令。
 type UnmountRequest struct {
-	Server             *models.Server
-	ShareName          string
-	Version            int64
-	Force              bool
-	WriteRevokedMarker bool
+	Server                   *models.Server
+	ShareName                string
+	Version                  int64
+	Force                    bool
+	WriteRevokedMarker       bool
+	SkipUnmount              bool
+	RejectRemoteVersionNewer bool
 }
 
 // BusyProcess 是占用挂载点的进程。命令名来自远端固定命令输出，不包含
@@ -120,6 +123,8 @@ func linuxUnmountExitCodeError(exitCode int) error {
 		return ErrUnmountLockTimeout
 	case 89:
 		return ErrUnmountNotManaged
+	case 91:
+		return ErrUnmountRemoteVersionNewer
 	default:
 		return fmt.Errorf("Linux 固定卸载命令失败（退出码 %d）", exitCode)
 	}
@@ -133,9 +138,27 @@ func darwinUnmountExitCodeError(exitCode int) error {
 		return ErrUnmountLockTimeout
 	case 89:
 		return ErrUnmountNotManaged
+	case 91:
+		return ErrUnmountRemoteVersionNewer
 	default:
 		return fmt.Errorf("macOS 固定卸载命令失败（退出码 %d）", exitCode)
 	}
+}
+
+func unmountModeFlags(request UnmountRequest) (force, skipUnmount, rejectRemoteVersionNewer string) {
+	force = "no"
+	if request.Force {
+		force = "yes"
+	}
+	skipUnmount = "no"
+	if request.SkipUnmount {
+		skipUnmount = "yes"
+	}
+	rejectRemoteVersionNewer = "no"
+	if request.RejectRemoteVersionNewer {
+		rejectRemoteVersionNewer = "yes"
+	}
+	return force, skipUnmount, rejectRemoteVersionNewer
 }
 
 func buildLinuxUnmountCommand(request UnmountRequest) string {
@@ -145,10 +168,7 @@ func buildLinuxUnmountCommand(request UnmountRequest) string {
 	expectedShare := sshbroker.POSIXShellQuote(url.PathEscape(request.ShareName))
 	revokedMarker := sshbroker.POSIXShellQuote(
 		linuxCredentialRoot + "/" + url.PathEscape(request.ShareName) + ".revoked")
-	force := "no"
-	if request.Force {
-		force = "yes"
-	}
+	force, skipUnmount, rejectRemoteVersionNewer := unmountModeFlags(request)
 	writeMarker := "no"
 	if request.WriteRevokedMarker {
 		writeMarker = "yes"
@@ -160,6 +180,8 @@ mount_point=` + mountPoint + `
 sshmgr_expected_share=` + expectedShare + `
 sshmgr_version=` + version + `
 sshmgr_force=` + force + `
+sshmgr_skip_unmount=` + skipUnmount + `
+sshmgr_reject_remote_version_newer=` + rejectRemoteVersionNewer + `
 sshmgr_write_revoked_marker=` + writeMarker + `
 sshmgr_fstab_candidate=''
 sshmgr_cleanup() {
@@ -213,6 +235,11 @@ sshmgr_write_version=$sshmgr_version
 if [ "$sshmgr_write_version" -eq 0 ]; then
   sshmgr_write_version=$((sshmgr_remote_version+1))
 fi
+if [ "$sshmgr_reject_remote_version_newer" = yes ] &&
+   [ "$sshmgr_remote_version" -gt "$sshmgr_version" ]; then
+  echo ` + linuxUnmountMarker + ` remote-version-newer >&2
+  exit 91
+fi
 sshmgr_fstab_candidate=/etc/fstab.sshmgr.$$
 : > "$sshmgr_fstab_candidate"
 while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
@@ -244,6 +271,10 @@ if [ "$sshmgr_write_revoked_marker" = yes ]; then
     "$sshmgr_expected_share" "$sshmgr_write_version" > ` + revokedMarker + `
   chown root:root ` + revokedMarker + `
   chmod 400 ` + revokedMarker + `
+fi
+if [ "$sshmgr_skip_unmount" = yes ]; then
+  echo ` + linuxUnmountMarker + ` result=success version=$sshmgr_write_version
+  exit 0
 fi
 
 sshmgr_automount_unit=$(systemd-escape -p --suffix=automount "$mount_point")
@@ -304,10 +335,7 @@ func buildDarwinUnmountCommand(request UnmountRequest) string {
 	revokedMarker := sshbroker.POSIXShellQuote(
 		"/etc/sshmgr/" + url.PathEscape(request.ShareName) + ".revoked")
 	version := sshbroker.POSIXShellQuote(strconv.FormatInt(request.Version, 10))
-	force := "no"
-	if request.Force {
-		force = "yes"
-	}
+	force, skipUnmount, rejectRemoteVersionNewer := unmountModeFlags(request)
 	writeMarker := "no"
 	if request.WriteRevokedMarker {
 		writeMarker = "yes"
@@ -319,6 +347,8 @@ mount_point=` + mountPoint + `
 sshmgr_expected_share=` + expectedShare + `
 sshmgr_version=` + version + `
 sshmgr_force=` + force + `
+sshmgr_skip_unmount=` + skipUnmount + `
+sshmgr_reject_remote_version_newer=` + rejectRemoteVersionNewer + `
 sshmgr_write_revoked_marker=` + writeMarker + `
 sshmgr_map_candidate=''
 sshmgr_auto_candidate=''
@@ -364,6 +394,11 @@ sshmgr_write_version=$sshmgr_version
 if [ "$sshmgr_write_version" -eq 0 ]; then
   sshmgr_write_version=$((sshmgr_remote_version+1))
 fi
+if [ "$sshmgr_reject_remote_version_newer" = yes ] &&
+   [ "$sshmgr_remote_version" -gt "$sshmgr_version" ]; then
+  echo ` + darwinUnmountMarker + ` remote-version-newer >&2
+  exit 91
+fi
 if [ ! -f /etc/auto_master ]; then
   touch /etc/auto_master
 fi
@@ -404,6 +439,11 @@ if ! grep -q '^# sshmgr-share=' /etc/sshmgr/auto_share; then
   done < /etc/auto_master
   mv "$sshmgr_auto_candidate" /etc/auto_master
   sshmgr_auto_candidate=''
+fi
+if [ "$sshmgr_skip_unmount" = yes ]; then
+  automount -cv >/dev/null 2>&1
+  echo ` + darwinUnmountMarker + ` result=success version=$sshmgr_write_version
+  exit 0
 fi
 
 ` + darwinProcessListScript() + mountTableCheckScript(CheckSystemDarwin) + `if [ "$sshmgr_mounted" = yes ]; then
