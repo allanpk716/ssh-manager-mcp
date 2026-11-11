@@ -84,7 +84,7 @@ func (s *Store) RevokeSharedStorageMount(
 	}
 	if err := writeAuditTx(tx, OwnerAuditRowAt(at, "share-revoke", map[string]any{
 		"share": loaded.Name, "server": serverName, "version": loaded.Version,
-		"unmount": unmount, "force": force,
+		"unmount": unmount, "force": force, "password_changed": false,
 	})); err != nil {
 		return nil, err
 	}

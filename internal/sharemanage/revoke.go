@@ -19,22 +19,29 @@ type RevokeRequest struct {
 	Server  string
 	Unmount bool
 	Force   bool
+	// NewPassword 为空指针表示不换密码；非空时与移出可挂载范围在同一
+	// 事务里提交，绝不进入结构化结果。
+	NewPassword []byte
 }
 
 // RevokeResult 是撤销登记与远端清理的安全结论，不包含共享地址、挂载账号
 // 或密码。
 type RevokeResult struct {
-	ShareName      string
-	ServerID       string
-	ServerName     string
-	System         string
-	Result         string
-	Version        int64
-	Unmount        bool
-	Force          bool
-	MountPreserved bool
-	BusyProcesses  []sharemount.BusyProcess
-	Notices        []string
+	ShareName       string
+	ServerID        string
+	ServerName      string
+	System          string
+	Result          string
+	Version         int64
+	Unmount         bool
+	Force           bool
+	MountPreserved  bool
+	PasswordChanged bool
+	// RemainingMountServers 是撤销后仍可挂载的 Linux 与 macOS 服务
+	// 器名，它们需要等 agent 按新版本号重新挂载后才会使用新密码。
+	RemainingMountServers []string
+	BusyProcesses         []sharemount.BusyProcess
+	Notices               []string
 }
 
 // RevokeRemoteRequest 是登记已提交后的远端撤销步骤。删除提供方设备的
@@ -76,14 +83,30 @@ func (m *Manager) Revoke(ctx context.Context, request RevokeRequest) (*RevokeRes
 			server.Name, share.Name)
 	}
 
-	revoked, err := m.store.RevokeSharedStorageMount(
-		share.ID, server.ID, request.Unmount, request.Force, store.CLISource())
+	var revoked *models.SharedStorage
+	if request.NewPassword == nil {
+		revoked, err = m.store.RevokeSharedStorageMount(
+			share.ID, server.ID, request.Unmount, request.Force, store.CLISource())
+	} else {
+		revoked, err = m.store.RevokeSharedStorageMountAndPassword(
+			share.ID, server.ID, request.Unmount, request.Force, request.NewPassword,
+			store.CLISource())
+	}
 	if err != nil {
 		return nil, err
 	}
 	result := &RevokeResult{
 		ShareName: revoked.Name, ServerID: server.ID, ServerName: server.Name,
 		Version: revoked.Version, Unmount: request.Unmount, Force: request.Force,
+		PasswordChanged: request.NewPassword != nil,
+	}
+	for _, candidate := range revoked.MountableServers {
+		if !models.NormalizeShellType(string(candidate.ShellType)).IsWindows() {
+			result.RemainingMountServers = append(result.RemainingMountServers, candidate.Name)
+		}
+	}
+	if result.PasswordChanged {
+		result.Notices = append(result.Notices, "桌面上手动添加的共享连接也需要更换密码")
 	}
 	if models.NormalizeShellType(string(server.ShellType)).IsWindows() {
 		result.System = "Windows"
