@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -24,9 +25,12 @@ func TestStaticAssetsServedWithHashedURLsAndLongCache(t *testing.T) {
 	root := h.(*handler)
 
 	for name, urlPath := range map[string]string{
-		"htmx.min.js": root.assets["htmx.min.js"],
-		"app.css":     root.assets["app.css"],
-		"app.js":      root.assets["app.js"],
+		"htmx.min.js":      root.assets["htmx.min.js"],
+		"app.css":          root.assets["app.css"],
+		"app.js":           root.assets["app.js"],
+		"topology.css":     root.assets["topology.css"],
+		"cytoscape.min.js": root.assets["cytoscape.min.js"],
+		"topology.js":      root.assets["topology.js"],
 	} {
 		want, err := staticFS.ReadFile("static/" + name)
 		if err != nil {
@@ -57,10 +61,11 @@ func TestStaticAssetsServedWithHashedURLsAndLongCache(t *testing.T) {
 }
 
 func TestPagesReferenceHashedAssetURLs(t *testing.T) {
-	h, _, err := New(Config{
+	h, startup, err := New(Config{
 		Role:        RoleStandalone,
 		Servers:     &stubServerSource{},
 		Access:      &stubAccessStore{},
+		Topology:    &stubTopologySource{data: &TopologyData{}},
 		VersionHint: func() string { return "" },
 		Port:        18080,
 	})
@@ -73,7 +78,7 @@ func TestPagesReferenceHashedAssetURLs(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	page := string(body)
-	for _, name := range hashedAssetFiles {
+	for _, name := range []string{"htmx.min.js", "app.css", "app.js", "secrets-matrix.js"} {
 		urlPath := root.assets[name]
 		if !strings.Contains(page, urlPath) {
 			t.Fatalf("页面应引用带哈希的静态资源地址 %q：\n%s", urlPath, page)
@@ -82,6 +87,32 @@ func TestPagesReferenceHashedAssetURLs(t *testing.T) {
 	for _, banned := range []string{"https://cdn", "http://cdn", "unpkg.com", "googleapis.com"} {
 		if strings.Contains(page, banned) {
 			t.Fatalf("页面不得引用外部内容分发网络 %q", banned)
+		}
+	}
+
+	// 拓扑图专用的 Cytoscape.js 与页面脚本只在拓扑页加载，避免其它页面背
+	// 上无关的静态资源。
+	session := exchangeStartupToken(t, h, startup.URL("127.0.0.1:18080"))
+	sessionCookies := session.Cookies()
+	session.Body.Close()
+	topologyRequest := httptest.NewRequest(http.MethodGet, "/ui/topology/", nil)
+	topologyRequest.Host = "127.0.0.1:18080"
+	topologyRequest.AddCookie(sessionCookies[0])
+	topologyRecorder := httptest.NewRecorder()
+	h.ServeHTTP(topologyRecorder, topologyRequest)
+	topologyResp := topologyRecorder.Result()
+	topologyBody, _ := io.ReadAll(topologyResp.Body)
+	topologyResp.Body.Close()
+	topologyPage := string(topologyBody)
+	for _, name := range []string{"topology.css", "cytoscape.min.js", "topology.js"} {
+		urlPath := root.assets[name]
+		if !strings.Contains(topologyPage, urlPath) {
+			t.Fatalf("拓扑页应引用带哈希的静态资源地址 %q：\n%s", urlPath, topologyPage)
+		}
+	}
+	for _, banned := range []string{"https://cdn", "http://cdn", "unpkg.com", "googleapis.com", "jsdelivr.net"} {
+		if strings.Contains(topologyPage, banned) {
+			t.Fatalf("拓扑页不得引用外部内容分发网络 %q", banned)
 		}
 	}
 }

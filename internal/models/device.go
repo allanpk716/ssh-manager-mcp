@@ -41,7 +41,7 @@ type NetworkMembership struct {
 }
 
 // DeviceLayoutCoordinate 是拓扑图某个视图里一台设备的坐标。视图用字符串
-// 键区分，坐标由拓扑图写入；本阶段只随设备删除与备份导出使用。
+// 键区分，坐标由拓扑图页面写入；拓扑图页面与设备删除、备份导出读取。
 type DeviceLayoutCoordinate struct {
 	ViewKey   string
 	DeviceID  string

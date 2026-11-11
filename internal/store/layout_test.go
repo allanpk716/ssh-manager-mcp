@@ -10,6 +10,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 func TestDeviceLayoutCoordinatesSnapshotRoundTripAndClientDelivery(t *testing.T) {
@@ -105,5 +108,79 @@ func TestDeviceLayoutCoordinatesSnapshotRoundTripAndClientDelivery(t *testing.T)
 	if !reflect.DeepEqual(restored.DeviceLayoutCoordinates, want) {
 		t.Fatalf("layout coordinates changed after import: got %+v want %+v",
 			restored.DeviceLayoutCoordinates, want)
+	}
+}
+
+func TestListDeviceLayoutCoordinatesReturnsEveryViewSorted(t *testing.T) {
+	dir := t.TempDir()
+	masterKey, err := GenerateMasterKey()
+	if err != nil {
+		t.Fatalf("generate master key: %v", err)
+	}
+	st, err := Open(filepath.Join(dir, "store.db"), masterKey)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	first, err := st.AddDevice("工作站", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := st.AddDevice("NAS", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []struct {
+		view   string
+		device string
+		x, y   float64
+	}{
+		{"physical", second.ID, 30, 40},
+		{"overlay", first.ID, 1, 2},
+		{"physical", first.ID, 10, 20},
+		{"virtual", first.ID, -5, 7},
+	}
+	for _, row := range rows {
+		if _, err := st.db.Exec(
+			`INSERT INTO device_layout_coordinates(view_key,device_id,x,y,created_at,updated_at)
+			 VALUES(?,?,?,?,1000,1001)`,
+			row.view, row.device, row.x, row.y,
+		); err != nil {
+			t.Fatalf("seed coordinate %s/%s: %v", row.view, row.device, err)
+		}
+	}
+
+	got, err := st.ListDeviceLayoutCoordinates()
+	if err != nil {
+		t.Fatalf("list layout coordinates: %v", err)
+	}
+	byKey := make(map[string]models.DeviceLayoutCoordinate, len(got))
+	for _, coordinate := range got {
+		key := coordinate.ViewKey + "/" + coordinate.DeviceID
+		if _, exists := byKey[key]; exists {
+			t.Fatalf("同一视图与设备出现重复坐标：%s", key)
+		}
+		byKey[key] = coordinate
+	}
+	wantCoordinates := []struct {
+		view   string
+		device string
+		x, y   float64
+	}{
+		{"overlay", first.ID, 1, 2},
+		{"physical", first.ID, 10, 20},
+		{"physical", second.ID, 30, 40},
+		{"virtual", first.ID, -5, 7},
+	}
+	for _, want := range wantCoordinates {
+		coordinate, ok := byKey[want.view+"/"+want.device]
+		if !ok {
+			t.Fatalf("缺少坐标 %s/%s，实际：%+v", want.view, want.device, byKey)
+		}
+		if coordinate.X != want.x || coordinate.Y != want.y ||
+			!coordinate.CreatedAt.Equal(time.Unix(1000, 0)) || !coordinate.UpdatedAt.Equal(time.Unix(1001, 0)) {
+			t.Fatalf("坐标 %s/%s = %+v，want x=%v y=%v 创建时间=1000 更新时间=1001",
+				want.view, want.device, coordinate, want.x, want.y)
+		}
 	}
 }

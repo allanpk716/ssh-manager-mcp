@@ -90,3 +90,27 @@ func deviceLayoutCoordinatesForDeviceTx(tx *sql.Tx, deviceID string) ([]*models.
 	}
 	return out, rows.Err()
 }
+
+// ListDeviceLayoutCoordinates 返回全部视图的全部设备坐标，按视图与设备排
+// 序，供拓扑图页面只读呈现；读取不改变快照修订号。
+func (s *Store) ListDeviceLayoutCoordinates() ([]models.DeviceLayoutCoordinate, error) {
+	rows, err := s.db.Query(`
+		SELECT view_key,device_id,x,y,created_at,updated_at
+		FROM device_layout_coordinates ORDER BY view_key,device_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]models.DeviceLayoutCoordinate, 0)
+	for rows.Next() {
+		var coordinate models.DeviceLayoutCoordinate
+		var created, updated int64
+		if err := rows.Scan(&coordinate.ViewKey, &coordinate.DeviceID, &coordinate.X,
+			&coordinate.Y, &created, &updated); err != nil {
+			return nil, err
+		}
+		coordinate.CreatedAt, coordinate.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
+		out = append(out, coordinate)
+	}
+	return out, rows.Err()
+}

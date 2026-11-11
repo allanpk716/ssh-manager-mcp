@@ -1,0 +1,270 @@
+/* 网络拓扑页面专用样式。画布用 Cytoscape.js 渲染，页面元素只承载工具
+   栏、未归类设备托盘与详情面板。 */
+.topology-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: calc(100vh - 210px);
+}
+
+.topology-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.topology-toolbar h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.topology-views {
+  display: inline-flex;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.topology-view {
+  border: 0;
+  background: transparent;
+  padding: 6px 12px;
+}
+
+.topology-view.active {
+  background: var(--accent, #2f6fed);
+  color: #fff;
+}
+
+.topology-hint {
+  margin: 0;
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-readonly {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--warning-border, #b58105);
+  border-radius: 6px;
+  background: var(--warning-bg, #fff7e6);
+}
+
+.topology-body {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px 320px;
+  gap: 12px;
+  flex: 1;
+  min-height: 480px;
+}
+
+.topology-body.detail-open {
+  grid-template-columns: minmax(0, 1fr) 240px;
+}
+
+.topology-canvas-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 480px;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f6f7f9;
+}
+
+.topology-canvas {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+}
+
+.topology-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--danger, #b42318);
+  white-space: pre-wrap;
+}
+
+.topology-tray {
+  border: 1px dashed var(--border, #c8ccd4);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow: auto;
+}
+
+.topology-tray h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.topology-tray-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.topology-tray-item {
+  width: 100%;
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: #fff;
+  padding: 6px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.topology-tray-item:hover {
+  border-color: var(--accent, #2f6fed);
+}
+
+.topology-tray-item .tray-kind {
+  display: block;
+  font-size: 12px;
+  color: var(--muted, #667085);
+}
+
+.topology-tray-empty {
+  margin: 4px 0 0;
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-detail {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px 16px;
+  overflow: auto;
+}
+
+.topology-detail[hidden] {
+  display: none;
+}
+
+.topology-detail h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.topology-detail h3 {
+  margin: 16px 0 6px;
+  font-size: 14px;
+}
+
+.topology-detail dl,
+.topology-detail ul {
+  margin: 0;
+  padding: 0;
+}
+
+.topology-detail ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.topology-detail dt {
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-detail dd {
+  margin: 0 0 6px;
+}
+
+.topology-detail .detail-close {
+  float: right;
+}
+
+.topology-detail .local-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--accent-soft, #e5efff);
+  color: var(--accent-strong, #1746a2);
+  font-size: 12px;
+}
+
+.topology-detail .candidate-source {
+  color: var(--muted, #667085);
+  font-size: 12px;
+}
+
+.topology-detail .candidate-notice {
+  color: var(--warning-text, #8a5a00);
+}
+
+@media (max-width: 980px) {
+  .topology-body,
+  .topology-body.detail-open {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .topology-canvas-wrap {
+    min-height: 420px;
+    flex: 1;
+  }
+
+  .topology-tray {
+    max-height: 160px;
+  }
+
+  .topology-detail {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 55vh;
+    border-radius: 12px 12px 0 0;
+    box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.16);
+    z-index: 20;
+  }
+}
+
+/* Cytoscape.js 3.35 给内部画布层写内联样式；内容安全策略只允许同源样式，
+   所以这里按该版本固定的层结构预先给出同样的规则。升级 Cytoscape.js 时
+   需要一并核对这些选择器。 */
+.topology-canvas > div {
+  position: relative;
+  z-index: 0;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+.topology-canvas > div > canvas {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+  outline-style: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+.topology-canvas > div > canvas[data-id="layer0"] { z-index: 3; }
+.topology-canvas > div > canvas[data-id="layer1"] { z-index: 2; }
+.topology-canvas > div > canvas[data-id="layer2"] { z-index: 1; }
+.topology-canvas > div > canvas[data-id="layer3"] { z-index: 0; }
+
+/* 上一段的补充：Cytoscape.js 给画布容器加这个类名并要求相对定位；页面脚
+   本会用同名标记节点阻止它插入内联样式表。 */
+.topology-canvas.__________cytoscape_container {
+  position: absolute;
+}

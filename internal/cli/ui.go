@@ -18,9 +18,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/machineinit"
+	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiops"
+	"ssh-manager-mcp/internal/webuitopology"
 )
 
 // uiOpenBrowser 是「用系统默认浏览器打开网址」的可替换依赖；测试注入替身，
@@ -69,6 +72,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource            webui.SecretSource
 		secretWriter            webui.SecretWriter
 		softwareInventorySource webui.SoftwareInventorySource
+		topologySource          webui.TopologySource
 		resolvedInstance        string
 		machineInit             webui.MachineInitializer
 	)
@@ -92,6 +96,13 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretSource = standaloneUISecretStore()
 		secretWriter = standaloneUISecretWriter()
 		softwareInventorySource = standaloneUISoftwareInventoryStore()
+		topologySource = webuitopology.FromStoreOpener(func() (*store.Store, func(), error) {
+			st, err := openUnlockedStore()
+			if err != nil {
+				return nil, nil, err
+			}
+			return st, func() { _ = st.Close() }, nil
+		})
 		opsSource = standaloneUIOpsStoreWithUpdates(uiUpdateService(webui.RoleStandalone, ""))
 		machineInit = standaloneMachineInitializer{}
 		initializing = destination.Kind == machineinit.UIDestinationInitializationWizard || serverWizard
@@ -102,6 +113,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		}
 		webRole = webui.RoleClient
 		servers = clientUIServerSource{}
+		topologySource = webuitopology.FromClientSnapshot(clientops.LoadCacheSnapshotFor)
 		secretSource = clientUISecretSource{}
 		opsSource = webuiops.ClientPageStoreWithUpdates(
 			uiUpdateService(webui.RoleClient, resolvedInstance), uiClientPull)
@@ -135,6 +147,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		Secrets:           secretSource,
 		SecretsWriter:     secretWriter,
 		SoftwareInventory: softwareInventorySource,
+		Topology:          topologySource,
 		VersionHint:       versionHint,
 		Port:              port,
 		Access:            accessSource,
