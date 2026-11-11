@@ -5,6 +5,7 @@ package webui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -50,7 +51,10 @@ func topologyFixture() *TopologyData {
 			{DeviceID: "device-1", NetworkID: "net-1", Address: "192.168.1.20", RegistrationOrder: 1},
 		},
 		LayoutCoordinates: []TopologyLayoutCoordinate{{ViewKey: "physical", DeviceID: "device-1", X: 12.5, Y: -3}},
-		LocalDevice:       TopologyLocalDevice{Known: true, DeviceID: "device-1", DeviceName: "工作站"},
+		ContainerLayoutCoordinates: []TopologyContainerLayoutCoordinate{{
+			ViewKey: "physical", EntityType: "site", EntityID: "site-1", X: 120, Y: 80,
+		}},
+		LocalDevice: TopologyLocalDevice{Known: true, DeviceID: "device-1", DeviceName: "工作站"},
 	}
 }
 
@@ -332,6 +336,16 @@ type stubTopologyWriter struct {
 	networkAddCalls   [][2]string
 	nextNotFoundError bool
 	nextPlainError    error
+
+	saveView    string
+	saveLayout  TopologyLayoutSave
+	saveSource  TopologyWriteSource
+	saveErr     error
+	saveCalls   int
+	resetView   string
+	resetSource TopologyWriteSource
+	resetErr    error
+	resetCalls  int
 }
 
 func (w *stubTopologyWriter) AddNetworkMembership(device, network, address string) (string, error) {
@@ -362,6 +376,18 @@ func (w *stubTopologyWriter) RemovePhysicalNetworkMemberships(device string) (st
 func (w *stubTopologyWriter) AddPhysicalNetwork(name, site string) (string, error) {
 	w.networkAddCalls = append(w.networkAddCalls, [2]string{name, site})
 	return "已登记网络", w.nextError()
+}
+
+func (w *stubTopologyWriter) SaveTopologyLayout(save TopologyLayoutSave, source TopologyWriteSource) error {
+	w.saveCalls++
+	w.saveView, w.saveLayout, w.saveSource = save.ViewKey, save, source
+	return w.saveErr
+}
+
+func (w *stubTopologyWriter) ResetTopologyLayout(view string, source TopologyWriteSource) error {
+	w.resetCalls++
+	w.resetView, w.resetSource = view, source
+	return w.resetErr
 }
 
 func (w *stubTopologyWriter) nextError() error {
@@ -642,5 +668,144 @@ func TestTopologyPageEditableFlagFollowsWriterInjection(t *testing.T) {
 				t.Fatalf("只读角色的拓扑页不得出现可编辑标记：\n%s", content)
 			}
 		})
+	}
+}
+
+func sessionCSRFTokenForTopology(t *testing.T, uiHandler http.Handler) string {
+	t.Helper()
+	root := uiHandler.(*handler)
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	if root.session == nil {
+		t.Fatal("回环处理器没有会话")
+	}
+	return root.session.csrf
+}
+
+func TestTopologyLayoutSaveEndpointValidatesAndCallsWriter(t *testing.T) {
+	writer := &stubTopologyWriter{}
+	uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", writer)
+	resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
+	cookies := resp.Cookies()
+	resp.Body.Close()
+	csrf := sessionCSRFTokenForTopology(t, uiHandler)
+
+	body := `{"view":"physical","devices":[{"device_id":"device-1","x":12.5,"y":-3}],"containers":[{"entity_type":"site","entity_id":"site-1","x":20,"y":30}]}`
+	saved := postTopologyJSON(t, uiHandler, cookies[0], csrf, topologyLayoutPath, body)
+	saved.Body.Close()
+	if saved.StatusCode != http.StatusNoContent {
+		t.Fatalf("布局保存状态码 = %d，应为 204", saved.StatusCode)
+	}
+	if writer.saveCalls != 1 || writer.saveView != "physical" {
+		t.Fatalf("保存请求未到达写来源：%+v", writer)
+	}
+	if len(writer.saveLayout.Devices) != 1 || writer.saveLayout.Devices[0].DeviceID != "device-1" ||
+		writer.saveLayout.Devices[0].X != 12.5 || writer.saveLayout.Devices[0].Y != -3 {
+		t.Fatalf("保存的设备坐标错误：%+v", writer.saveLayout.Devices)
+	}
+	if len(writer.saveLayout.Containers) != 1 || writer.saveLayout.Containers[0].EntityType != "site" ||
+		writer.saveLayout.Containers[0].EntityID != "site-1" ||
+		writer.saveLayout.Containers[0].X != 20 || writer.saveLayout.Containers[0].Y != 30 {
+		t.Fatalf("保存的容器坐标错误：%+v", writer.saveLayout.Containers)
+	}
+	if writer.saveSource.RemoteAddress != "192.0.2.1" {
+		t.Fatalf("保存请求来源地址错误：%+v", writer.saveSource)
+	}
+
+	cases := []struct {
+		name   string
+		path   string
+		body   string
+		status int
+	}{
+		{name: "未知视图", path: topologyLayoutPath, body: `{"view":"主视图"}`, status: http.StatusUnprocessableEntity},
+		{name: "非法实体类型", path: topologyLayoutPath,
+			body:   `{"view":"physical","containers":[{"entity_type":"device","entity_id":"device-1","x":1,"y":2}]}`,
+			status: http.StatusUnprocessableEntity},
+		{name: "设备缺横坐标", path: topologyLayoutPath,
+			body: `{"view":"physical","devices":[{"device_id":"device-1","y":2}]}`, status: http.StatusBadRequest},
+		{name: "JSON 不合法", path: topologyLayoutPath, body: `{`, status: http.StatusBadRequest},
+		{name: "重置未知视图", path: topologyLayoutResetPath, body: `{"view":"主视图"}`, status: http.StatusUnprocessableEntity},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			response := postTopologyJSON(t, uiHandler, cookies[0], csrf, tc.path, tc.body)
+			defer response.Body.Close()
+			if response.StatusCode != tc.status {
+				t.Fatalf("状态码 = %d，应为 %d", response.StatusCode, tc.status)
+			}
+			var payload map[string]string
+			if err := json.NewDecoder(response.Body).Decode(&payload); err != nil || payload["error"] == "" {
+				t.Fatalf("应返回带中文错误的 JSON：%v %v", err, payload)
+			}
+		})
+	}
+}
+
+func TestTopologyLayoutResetEndpointCallsWriter(t *testing.T) {
+	writer := &stubTopologyWriter{}
+	uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", writer)
+	resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
+	cookies := resp.Cookies()
+	resp.Body.Close()
+	csrf := sessionCSRFTokenForTopology(t, uiHandler)
+
+	response := postTopologyJSON(t, uiHandler, cookies[0], csrf, topologyLayoutResetPath, `{"view":"virtual"}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("布局重置状态码 = %d，应为 204", response.StatusCode)
+	}
+	if writer.resetCalls != 1 || writer.resetView != "virtual" || writer.resetSource.RemoteAddress != "192.0.2.1" {
+		t.Fatalf("重置请求未到达写来源：%+v", writer)
+	}
+}
+
+func TestTopologyLayoutWriteRequiresCSRFAndWritableRole(t *testing.T) {
+	// 客户端角色不注册布局写路由。
+	client, clientStartup := newTopologyTestHandler(t, RoleClient, &stubTopologySource{data: &TopologyData{}}, "")
+	resp := exchangeStartupToken(t, client, clientStartup.URL("127.0.0.1:18080"))
+	cookies := resp.Cookies()
+	resp.Body.Close()
+	clientCSRF := sessionCSRFTokenForTopology(t, client)
+	for _, path := range []string{topologyLayoutPath, topologyLayoutResetPath} {
+		notFound := postTopologyJSON(t, client, cookies[0], clientCSRF, path, `{"view":"physical"}`)
+		notFound.Body.Close()
+		if notFound.StatusCode != http.StatusNotFound {
+			t.Fatalf("客户端布局写路由 %s 状态码 = %d，应为 404", path, notFound.StatusCode)
+		}
+	}
+
+	// 可写角色缺防跨站请求伪造令牌时拒绝。
+	writeHandler, writeStartup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: &TopologyData{}}, "", &stubTopologyWriter{})
+	resp = exchangeStartupToken(t, writeHandler, writeStartup.URL("127.0.0.1:18080"))
+	cookies = resp.Cookies()
+	resp.Body.Close()
+	forbidden := postTopologyJSON(t, writeHandler, cookies[0], "", topologyLayoutPath, `{"view":"physical"}`)
+	forbidden.Body.Close()
+	if forbidden.StatusCode != http.StatusForbidden {
+		t.Fatalf("缺防跨站请求伪造令牌的布局保存状态码 = %d，应为 403", forbidden.StatusCode)
+	}
+}
+
+func TestTopologyLayoutWriterErrorsMapToClientErrors(t *testing.T) {
+	writer := &stubTopologyWriter{saveErr: ErrTopologyLayoutInvalid}
+	uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: &TopologyData{}}, "", writer)
+	resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
+	cookies := resp.Cookies()
+	resp.Body.Close()
+	csrf := sessionCSRFTokenForTopology(t, uiHandler)
+
+	rejected := postTopologyJSON(t, uiHandler, cookies[0], csrf, topologyLayoutPath,
+		`{"view":"physical","devices":[{"device_id":"missing","x":1,"y":2}]}`)
+	rejected.Body.Close()
+	if rejected.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("内容非法的保存状态码 = %d，应为 422", rejected.StatusCode)
+	}
+
+	writer.saveErr = errors.New("数据库不可用")
+	failed := postTopologyJSON(t, uiHandler, cookies[0], csrf, topologyLayoutPath, `{"view":"physical"}`)
+	failed.Body.Close()
+	if failed.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("写来源失败的状态码 = %d，应为 500", failed.StatusCode)
 	}
 }

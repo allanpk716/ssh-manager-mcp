@@ -104,8 +104,8 @@ type Config struct {
 	// Topology 是网络拓扑页来源。三种角色都提供；初始化向导等没有拓扑
 	// 数据的构造不提供，导航与路由都不出现。
 	Topology TopologySource
-	// TopologyWriter 是网络拓扑页写操作来源。单机与权威端提供；客户端不
-	// 提供，拖动归类与网络成员编辑接口不注册。
+	// TopologyWriter 是网络拓扑页写操作来源：布局保存与重置、拖动归类与
+	// 网络成员编辑。单机与权威端提供；客户端不提供，写路由也不注册。
 	TopologyWriter TopologyWriter
 	Access         AccessStore
 	Ops            OpsStore

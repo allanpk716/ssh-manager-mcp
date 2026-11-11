@@ -132,6 +132,74 @@ func (w storeWriter) AddPhysicalNetwork(name, site string) (string, error) {
 	}}.AddPhysicalNetwork(name, site)
 }
 
+// SaveTopologyLayout 保存一个视图的完整布局，并写一条来源为 Web UI 的审计。
+func (w openerWriter) SaveTopologyLayout(save webui.TopologyLayoutSave, source webui.TopologyWriteSource) error {
+	_, err := withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		input := store.ViewLayoutInput{
+			Devices:    make([]store.DeviceLayoutInput, 0, len(save.Devices)),
+			Containers: make([]store.ContainerLayoutInput, 0, len(save.Containers)),
+		}
+		for _, coordinate := range save.Devices {
+			input.Devices = append(input.Devices, store.DeviceLayoutInput{
+				DeviceID: coordinate.DeviceID, X: coordinate.X, Y: coordinate.Y,
+			})
+		}
+		for _, coordinate := range save.Containers {
+			input.Containers = append(input.Containers, store.ContainerLayoutInput{
+				EntityType: coordinate.EntityType, EntityID: coordinate.EntityID,
+				X: coordinate.X, Y: coordinate.Y,
+			})
+		}
+		if err := st.SaveViewLayout(save.ViewKey, input, source.RemoteAddress); err != nil {
+			return "", mapLayoutError(err)
+		}
+		return "", nil
+	})
+	return err
+}
+
+// ResetTopologyLayout 清空一个视图保存的全部坐标，并写一条来源为 Web UI
+// 的审计。
+func (w openerWriter) ResetTopologyLayout(view string, source webui.TopologyWriteSource) error {
+	_, err := withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		if err := st.ResetViewLayout(view, source.RemoteAddress); err != nil {
+			return "", mapLayoutError(err)
+		}
+		return "", nil
+	})
+	return err
+}
+
+// SaveTopologyLayout 在已打开的存储上保存一个视图的完整布局。
+func (w storeWriter) SaveTopologyLayout(save webui.TopologyLayoutSave, source webui.TopologyWriteSource) error {
+	return openerWriter{open: func() (*store.Store, func(), error) {
+		return w.store, func() {}, nil
+	}}.SaveTopologyLayout(save, source)
+}
+
+// ResetTopologyLayout 在已打开的存储上清空一个视图保存的全部坐标。
+func (w storeWriter) ResetTopologyLayout(view string, source webui.TopologyWriteSource) error {
+	return openerWriter{open: func() (*store.Store, func(), error) {
+		return w.store, func() {}, nil
+	}}.ResetTopologyLayout(view, source)
+}
+
+// mapLayoutError 把存储层的布局校验错误换算成 Web UI 的内容非法错误；其
+// 它错误原样返回，让处理器按服务器错误处理。
+func mapLayoutError(err error) error {
+	switch {
+	case errors.Is(err, store.ErrLayoutViewInvalid),
+		errors.Is(err, store.ErrLayoutEntityInvalid),
+		errors.Is(err, store.ErrLayoutEntityDuplicate),
+		errors.Is(err, store.ErrLayoutCoordinateInvalid),
+		errors.Is(err, store.ErrLayoutEntityMissing),
+		errors.Is(err, store.ErrLayoutIdentifierInvalid):
+		return fmt.Errorf("%w：%v", webui.ErrTopologyLayoutInvalid, err)
+	default:
+		return err
+	}
+}
+
 // withStoreWriter 打开存储、执行写操作并统一把存储层的名称不存在错误换
 // 成 Web UI 接口的分类错误；其余错误原样返回，让接口层按 400 显示。
 func withStoreWriter(open func() (*store.Store, func(), error), run func(*store.Store) (string, error)) (string, error) {

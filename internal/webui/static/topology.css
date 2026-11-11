@@ -492,3 +492,26 @@ dialog.topology-dialog::backdrop {
   color: #fff;
   padding: 5px 12px;
 }
+
+/* 布局保存与重置（票 #248）。 */
+.topology-layout-status {
+  margin: 0;
+  color: var(--muted, #667085);
+  font-size: 13px;
+}
+
+.topology-layout-status.error {
+  color: var(--danger, #b42318);
+}
+
+.topology-reset {
+  border: 1px solid var(--border, #c8ccd4);
+  border-radius: 6px;
+  background: transparent;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.topology-reset:hover {
+  background: var(--accent-soft, #eef3ff);
+}

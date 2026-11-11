@@ -10,7 +10,8 @@ import (
 )
 
 // 拓扑图页面与内部 JSON 接口的路径。JSON 接口只供拓扑图页面使用，不对外、
-// 不承诺兼容；写接口只供拓扑图页面的拖动归类与网络成员编辑使用。
+// 不承诺兼容；写接口只供拓扑图页面的布局保存、拖动归类与网络成员编辑使
+// 用，并且只给可写角色注册。
 const (
 	topologyPath    = "/ui/topology/"
 	topologyAPIPath = "/ui/api/topology"
@@ -25,6 +26,13 @@ const (
 	// topologyWriteMaxRequestBody 限制拓扑写请求的请求体；这里只有设备名、
 	// 网络名与地址，不需要更大的内容。
 	topologyWriteMaxRequestBody = 64 << 10
+
+	topologyLayoutPath      = "/ui/api/topology/layout"
+	topologyLayoutResetPath = "/ui/api/topology/layout/reset"
+
+	// topologyLayoutMaxBytes 限制一次布局保存的请求体大小；三种视图的坐标
+	// 数量以拓扑实体数量为上限，远小于这个值。
+	topologyLayoutMaxBytes = 1 << 20
 )
 
 // TopologySite 是拓扑图里的一个站点，只携带只读呈现需要的字段。
@@ -101,13 +109,22 @@ type TopologyMembership struct {
 	RegistrationOrder int64  `json:"registration_order"`
 }
 
-// TopologyLayoutCoordinate 是既有布局坐标里的一行。容器坐标随布局保存票
-// 落地；本结构只承载当前已经存在的设备坐标。
+// TopologyLayoutCoordinate 是布局坐标里的一台设备坐标。
 type TopologyLayoutCoordinate struct {
 	ViewKey  string  `json:"view_key"`
 	DeviceID string  `json:"device_id"`
 	X        float64 `json:"x"`
 	Y        float64 `json:"y"`
+}
+
+// TopologyContainerLayoutCoordinate 是布局坐标里的一个站点区域或网络分组
+// 框坐标。EntityType 是 site 或 network。
+type TopologyContainerLayoutCoordinate struct {
+	ViewKey    string  `json:"view_key"`
+	EntityType string  `json:"entity_type"`
+	EntityID   string  `json:"entity_id"`
+	X          float64 `json:"x"`
+	Y          float64 `json:"y"`
 }
 
 // TopologyLocalDevice 是运行时解析的本机设备。拓扑数据本身不设「权威端所
@@ -121,12 +138,13 @@ type TopologyLocalDevice struct {
 
 // TopologyData 是拓扑图页面一次读取到的全部只读数据。
 type TopologyData struct {
-	Sites             []TopologySite             `json:"sites"`
-	Networks          []TopologyNetwork          `json:"networks"`
-	Devices           []TopologyDevice           `json:"devices"`
-	Memberships       []TopologyMembership       `json:"memberships"`
-	LayoutCoordinates []TopologyLayoutCoordinate `json:"layout_coordinates"`
-	LocalDevice       TopologyLocalDevice        `json:"local_device"`
+	Sites                      []TopologySite                      `json:"sites"`
+	Networks                   []TopologyNetwork                   `json:"networks"`
+	Devices                    []TopologyDevice                    `json:"devices"`
+	Memberships                []TopologyMembership                `json:"memberships"`
+	LayoutCoordinates          []TopologyLayoutCoordinate          `json:"layout_coordinates"`
+	ContainerLayoutCoordinates []TopologyContainerLayoutCoordinate `json:"container_layout_coordinates"`
+	LocalDevice                TopologyLocalDevice                 `json:"local_device"`
 }
 
 // TopologySource 是 Web UI 读取拓扑数据的唯一入口。instance 是客户端缓存
@@ -143,9 +161,19 @@ type TopologyNameNotFoundError struct {
 
 func (e *TopologyNameNotFoundError) Error() string { return e.Message }
 
-// TopologyWriter 是 Web UI 修改网络拓扑成员与新建物理局域网的唯一入口。
-// 单机与权威端由拓扑来源适配层实现；客户端不提供，写路由也不注册。每个
-// 方法返回可直接显示的中文提示，错误提示与命令行等价面一致。
+// TopologyWriteSource 描述一次拓扑图写请求的来源地址，适配层把它写进审计行。
+type TopologyWriteSource struct {
+	RemoteAddress string
+}
+
+// ErrTopologyLayoutInvalid 表示布局请求引用了不存在的实体或内容非法；处理
+// 器把它换算成面向浏览器的客户端错误。
+var ErrTopologyLayoutInvalid = errors.New("布局请求内容无效")
+
+// TopologyWriter 是 Web UI 修改网络拓扑的唯一入口：布局保存与重置、网络
+// 成员编辑与新建物理局域网。单机与权威端由拓扑来源适配层实现；客户端不
+// 提供，写路由也不注册。网络成员方法返回可直接显示的中文提示，错误提示
+// 与命令行等价面一致。
 type TopologyWriter interface {
 	AddNetworkMembership(device, network, address string) (string, error)
 	EditNetworkMembership(device, network, address string) (string, error)
@@ -153,6 +181,11 @@ type TopologyWriter interface {
 	MoveNetworkMembership(device, fromNetwork, toNetwork, address string) (string, error)
 	RemovePhysicalNetworkMemberships(device string) (string, error)
 	AddPhysicalNetwork(name, site string) (string, error)
+	// SaveTopologyLayout 保存一个视图的完整布局并写一条来源为 Web UI 的审计。
+	SaveTopologyLayout(save TopologyLayoutSave, source TopologyWriteSource) error
+	// ResetTopologyLayout 清空一个视图保存的全部坐标并写一条来源为 Web UI
+	// 的审计。
+	ResetTopologyLayout(view string, source TopologyWriteSource) error
 }
 
 // registerTopologyRoutes 注册拓扑图页面与只读数据接口。没有拓扑来源的构
@@ -172,6 +205,8 @@ func (h *handler) registerTopologyRoutes() {
 	h.mux.HandleFunc(topologyMembershipMovePath, h.requireSession(h.handleTopologyMembershipMove))
 	h.mux.HandleFunc(topologyMembershipRemovePhysicalPath, h.requireSession(h.handleTopologyMembershipRemovePhysical))
 	h.mux.HandleFunc(topologyNetworkAddPath, h.requireSession(h.handleTopologyNetworkAdd))
+	h.mux.HandleFunc(topologyLayoutPath, h.requireSession(h.handleTopologyLayoutSave))
+	h.mux.HandleFunc(topologyLayoutResetPath, h.requireSession(h.handleTopologyLayoutReset))
 }
 
 // handleTopologyPage 渲染网络拓扑页面。页面数据由浏览器脚本从只读接口读
@@ -382,4 +417,167 @@ func (h *handler) handleTopologyNetworkAdd(w http.ResponseWriter, r *http.Reques
 	h.writeTopologyResult(w, func() (string, error) {
 		return h.cfg.TopologyWriter.AddPhysicalNetwork(request.Name, request.Site)
 	})
+}
+
+// TopologyLayoutSave 是一次布局保存请求的载荷：一个视图的全部设备与容器
+// 坐标，保存时整体替换该视图。
+type TopologyLayoutSave struct {
+	ViewKey    string                              `json:"view"`
+	Devices    []TopologyLayoutCoordinate          `json:"devices,omitempty"`
+	Containers []TopologyContainerLayoutCoordinate `json:"containers,omitempty"`
+}
+
+// topologyLayoutResetRequest 是布局重置请求的载荷。
+type topologyLayoutResetRequest struct {
+	ViewKey string `json:"view"`
+}
+
+// validTopologyView 判断视图键是否属于拓扑图页面的三种视图。
+func validTopologyView(view string) bool {
+	return view == "physical" || view == "virtual" || view == "overlay"
+}
+
+// decodeTopologyLayoutBody 解析并做处理器层校验。引用是否存在由写来源在存
+// 储事务里判断。
+func decodeTopologyLayoutBody(r *http.Request, payload any) error {
+	body, err := io.ReadAll(io.LimitReader(r.Body, topologyLayoutMaxBytes+1))
+	if err != nil {
+		return errTopologyLayoutBadRequest
+	}
+	if len(body) > topologyLayoutMaxBytes {
+		return errTopologyLayoutTooLarge
+	}
+	if err := json.Unmarshal(body, payload); err != nil {
+		return errTopologyLayoutBadRequest
+	}
+	return nil
+}
+
+var (
+	errTopologyLayoutBadRequest = errors.New("请求体不是合法的布局 JSON")
+	errTopologyLayoutTooLarge   = errors.New("布局请求内容过大")
+)
+
+// topologyLayoutSaveRequest 是布局保存请求的线上形态。横纵坐标用指针区
+// 分「没给」与「值为 0」，两者都是非法请求与合法坐标的区别。
+type topologyLayoutSaveRequest struct {
+	ViewKey    string                           `json:"view"`
+	Devices    []topologyLayoutDeviceRequest    `json:"devices"`
+	Containers []topologyLayoutContainerRequest `json:"containers"`
+}
+
+type topologyLayoutDeviceRequest struct {
+	DeviceID string   `json:"device_id"`
+	X        *float64 `json:"x"`
+	Y        *float64 `json:"y"`
+}
+
+type topologyLayoutContainerRequest struct {
+	EntityType string   `json:"entity_type"`
+	EntityID   string   `json:"entity_id"`
+	X          *float64 `json:"x"`
+	Y          *float64 `json:"y"`
+}
+
+// handleTopologyLayoutSave 处理一次布局保存。防跨站请求伪造校验在进入处理
+// 器之前已经完成；这里只接受 JSON 请求体。
+func (h *handler) handleTopologyLayoutSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeTopologyJSONError(w, http.StatusMethodNotAllowed, "布局保存接口只接受 POST 请求。")
+		return
+	}
+	var request topologyLayoutSaveRequest
+	if err := decodeTopologyLayoutBody(r, &request); err != nil {
+		h.writeTopologyLayoutJSONRequestError(w, err)
+		return
+	}
+	if !validTopologyView(request.ViewKey) {
+		h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局视图只能是物理视图、虚拟视图或叠加视图。")
+		return
+	}
+	save := TopologyLayoutSave{
+		ViewKey:    request.ViewKey,
+		Devices:    make([]TopologyLayoutCoordinate, 0, len(request.Devices)),
+		Containers: make([]TopologyContainerLayoutCoordinate, 0, len(request.Containers)),
+	}
+	for _, coordinate := range request.Devices {
+		if strings.TrimSpace(coordinate.DeviceID) == "" {
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的设备坐标缺少设备标识。")
+			return
+		}
+		if coordinate.X == nil || coordinate.Y == nil {
+			h.writeTopologyJSONError(w, http.StatusBadRequest, "布局里的设备坐标必须同时给出横坐标与纵坐标。")
+			return
+		}
+		save.Devices = append(save.Devices, TopologyLayoutCoordinate{
+			DeviceID: coordinate.DeviceID, X: *coordinate.X, Y: *coordinate.Y,
+		})
+	}
+	for _, coordinate := range request.Containers {
+		if coordinate.EntityType != "site" && coordinate.EntityType != "network" {
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的容器坐标只能是站点或网络。")
+			return
+		}
+		if strings.TrimSpace(coordinate.EntityID) == "" {
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的容器坐标缺少站点或网络标识。")
+			return
+		}
+		if coordinate.X == nil || coordinate.Y == nil {
+			h.writeTopologyJSONError(w, http.StatusBadRequest, "布局里的容器坐标必须同时给出横坐标与纵坐标。")
+			return
+		}
+		save.Containers = append(save.Containers, TopologyContainerLayoutCoordinate{
+			EntityType: coordinate.EntityType, EntityID: coordinate.EntityID,
+			X: *coordinate.X, Y: *coordinate.Y,
+		})
+	}
+	if err := h.cfg.TopologyWriter.SaveTopologyLayout(save, TopologyWriteSource{
+		RemoteAddress: remoteIP(r),
+	}); err != nil {
+		if errors.Is(err, ErrTopologyLayoutInvalid) {
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局引用的站点、网络或设备不存在，请刷新页面后重试。")
+			return
+		}
+		h.writeTopologyJSONError(w, http.StatusInternalServerError, "保存布局失败，请稍后重试。")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleTopologyLayoutReset 处理一次布局重置。
+func (h *handler) handleTopologyLayoutReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeTopologyJSONError(w, http.StatusMethodNotAllowed, "布局重置接口只接受 POST 请求。")
+		return
+	}
+	var request topologyLayoutResetRequest
+	if err := decodeTopologyLayoutBody(r, &request); err != nil {
+		h.writeTopologyLayoutJSONRequestError(w, err)
+		return
+	}
+	if !validTopologyView(request.ViewKey) {
+		h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局视图只能是物理视图、虚拟视图或叠加视图。")
+		return
+	}
+	if err := h.cfg.TopologyWriter.ResetTopologyLayout(request.ViewKey, TopologyWriteSource{
+		RemoteAddress: remoteIP(r),
+	}); err != nil {
+		if errors.Is(err, ErrTopologyLayoutInvalid) {
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局重置请求内容无效，请刷新页面后重试。")
+			return
+		}
+		h.writeTopologyJSONError(w, http.StatusInternalServerError, "重置布局失败，请稍后重试。")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeTopologyLayoutJSONRequestError 把请求体解析错误换算成对应的客户端错
+// 误状态码。
+func (h *handler) writeTopologyLayoutJSONRequestError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errTopologyLayoutTooLarge) {
+		h.writeTopologyJSONError(w, http.StatusRequestEntityTooLarge, err.Error())
+		return
+	}
+	h.writeTopologyJSONError(w, http.StatusBadRequest, err.Error())
 }
