@@ -19,6 +19,7 @@ import (
 	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/secretfill"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
@@ -791,10 +792,14 @@ func registerSecretDelivery(
 	if deliveryRecorder == nil {
 		hostname, err := os.Hostname()
 		if err != nil || hostname == "" {
-			hostname = "local machine"
+			hostname = "本机"
 		}
 		recordInput.InitiatingDeviceName = hostname
-		recordInput.InitiatingInstanceName = "single-machine broker"
+		// 本机直接登记只发生在单机部署与权威端本机工具面；按本机角色区分两者。
+		recordInput.InitiatingInstanceName = "单机部署"
+		if state, err := roles.Load(); err == nil && state != nil && state.Role == roles.RoleServer {
+			recordInput.InitiatingInstanceName = "权威端本机"
+		}
 		if _, err := st.RecordSecretDelivery(recordInput, store.AgentSource()); err != nil {
 			result.Reason = "下发记录登记失败：" + err.Error()
 			return result
