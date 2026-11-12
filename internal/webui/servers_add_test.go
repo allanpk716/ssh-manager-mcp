@@ -2,11 +2,13 @@ package webui
 
 import (
 	"bytes"
+	"html"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +25,78 @@ func (stubAddTopologySource) Topology(string, string) (*TopologyData, error) {
 		},
 		Devices: []TopologyDevice{{ID: "device-1", Name: "工作站", Kind: "server"}},
 	}, nil
+}
+
+func TestServerAddTypeKeepsTopologyContext(t *testing.T) {
+	h, cookie := newServersTestHandlerWithTopology(t, RoleStandalone, newStubServerStore(), &stubServerWriter{})
+	page := serversGet(t, h, cookie, "/ui/add?network="+url.QueryEscape("虚拟网")+"&return_to="+url.QueryEscape("/ui/topology/"))
+
+	hrefPattern := regexp.MustCompile(`href="([^"]+)"`)
+	hrefs := hrefPattern.FindAllStringSubmatch(page, -1)
+	var serverHref, deviceHref string
+	for _, match := range hrefs {
+		value, err := url.QueryUnescape(html.UnescapeString(match[1]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasSuffix(value, "/ui/servers/new") || strings.Contains(value, "/ui/servers/new?") {
+			serverHref = value
+		}
+		if strings.HasSuffix(value, "/ui/devices/new") || strings.Contains(value, "/ui/devices/new?") {
+			deviceHref = value
+		}
+	}
+	for name, href := range map[string]string{"服务器": serverHref, "其他设备": deviceHref} {
+		parsed, err := url.Parse(href)
+		if err != nil {
+			t.Fatalf("%s新增地址无效：%v", name, err)
+		}
+		if parsed.Path != "/ui/servers/new" && parsed.Path != "/ui/devices/new" {
+			t.Fatalf("%s新增地址错误：%s", name, href)
+		}
+		if got := parsed.Query().Get("network"); got != "虚拟网" {
+			t.Fatalf("%s新增地址应保留网络上下文，实际 %q：%s", name, got, href)
+		}
+		if got := parsed.Query().Get("return_to"); got != "/ui/topology/" {
+			t.Fatalf("%s新增地址应保留返回画布位置，实际 %q：%s", name, got, href)
+		}
+	}
+}
+
+func TestAddResultCanReturnToTopology(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-new"] = &ServerDetailView{ID: "srv-new", Name: "same-device", User: "deploy"}
+	writer := &stubServerWriter{}
+	h, cookie := newServersTestHandlerWithTopology(t, RoleStandalone, store, writer)
+	formPage := serversGet(t, h, cookie, "/ui/servers/new?device="+url.QueryEscape("工作站"))
+
+	serverForm := url.Values{
+		"csrf_token": {hiddenInputValue(t, formPage, "csrf_token")},
+		"name":       {"same-device"}, "user": {"deploy"}, "port": {"22"},
+		"shell": {"auto"}, "credential_action": {"none"},
+		"device_choice": {"existing"}, "existing_device": {"工作站"}, "return_to": {"/ui/topology/"},
+	}
+	serverResponse := serversPost(t, h, cookie, "/ui/servers/new", serverForm)
+	if serverResponse.StatusCode != http.StatusSeeOther || !strings.Contains(serverResponse.Header.Get("Location"), "return_to=%2Fui%2Ftopology%2F") {
+		t.Fatalf("服务器保存后应携带画布返回位置，状态码=%d 跳转=%s", serverResponse.StatusCode, serverResponse.Header.Get("Location"))
+	}
+	serverResult := serversGet(t, h, cookie, serverResponse.Header.Get("Location"))
+	if !strings.Contains(serverResult, `href="/ui/topology/">返回网络拓扑`) {
+		t.Fatalf("服务器新增结果应提供返回网络拓扑入口：\n%s", serverResult)
+	}
+
+	deviceForm := url.Values{
+		"csrf_token": {hiddenInputValue(t, formPage, "csrf_token")}, "device_name": {"画布设备"},
+		"return_to": {"/ui/topology/"},
+	}
+	deviceResponse := serversPost(t, h, cookie, "/ui/devices/new", deviceForm)
+	if deviceResponse.StatusCode != http.StatusSeeOther || !strings.Contains(deviceResponse.Header.Get("Location"), "return_to=%2Fui%2Ftopology%2F") {
+		t.Fatalf("其他设备保存后应携带画布返回位置，状态码=%d 跳转=%s", deviceResponse.StatusCode, deviceResponse.Header.Get("Location"))
+	}
+	deviceResult := serversGet(t, h, cookie, deviceResponse.Header.Get("Location"))
+	if !strings.Contains(deviceResult, `href="/ui/topology/">返回网络拓扑`) {
+		t.Fatalf("其他设备新增结果应提供返回网络拓扑入口：\n%s", deviceResult)
+	}
 }
 
 func TestServerAddFormReadsPastedOrUploadedPrivateKey(t *testing.T) {
@@ -142,6 +216,64 @@ func TestServerAddEntryRoleMatrixAndCSRF(t *testing.T) {
 		if body, status := serversGetStatus(t, client, clientCookie, target); status != http.StatusNotFound {
 			t.Fatalf("客户端新增路由 %s 状态码 = %d，应为 404：%s", target, status, body)
 		}
+	}
+}
+
+func TestServerAddFormAppliesValidTopologyContext(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{}
+	h, cookie := newServersTestHandlerWithTopology(t, RoleStandalone, store, writer)
+
+	physical := serversGet(t, h, cookie, "/ui/servers/new?network="+url.QueryEscape("家A局域网")+"&return_to="+url.QueryEscape("/ui/topology/"))
+	for _, want := range []string{
+		`<option value="家A" selected>`,
+		`<option value="家A局域网" selected>`,
+		`<input type="hidden" name="return_to" value="/ui/topology/">`,
+	} {
+		if !strings.Contains(physical, want) {
+			t.Fatalf("物理局域网入口应预选站点与网络，缺少 %q：\n%s", want, physical)
+		}
+	}
+
+	virtual := serversGet(t, h, cookie, "/ui/devices/new?network="+url.QueryEscape("虚拟网"))
+	if !strings.Contains(virtual, `<option value="虚拟网" selected>`) {
+		t.Fatalf("虚拟局域网入口应预选第一个虚拟网络成员：\n%s", virtual)
+	}
+
+	device := serversGet(t, h, cookie, "/ui/servers/new?device="+url.QueryEscape("工作站"))
+	for _, want := range []string{
+		`id="device-existing" name="device_choice" value="existing" checked`,
+		`<option value="工作站" selected>`,
+	} {
+		if !strings.Contains(device, want) {
+			t.Fatalf("设备详情入口应预选已有设备，缺少 %q：\n%s", want, device)
+		}
+	}
+	if len(writer.adds) != 0 || len(writer.otherAdds) != 0 {
+		t.Fatalf("打开表单不应写入数据：%+v %+v", writer.adds, writer.otherAdds)
+	}
+}
+
+func TestServerAddFormRejectsMissingTopologyContext(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{}
+	h, cookie := newServersTestHandlerWithTopology(t, RoleStandalone, store, writer)
+
+	for _, target := range []string{
+		"/ui/servers/new?network=" + url.QueryEscape("不存在的网络"),
+		"/ui/devices/new?network=" + url.QueryEscape("不存在的网络"),
+		"/ui/servers/new?device=" + url.QueryEscape("不存在的设备"),
+	} {
+		body, status := serversGetStatus(t, h, cookie, target)
+		if status != http.StatusNotFound {
+			t.Fatalf("不存在的新增上下文 %s 状态码 = %d，应为 404", target, status)
+		}
+		if !strings.Contains(body, "不存在") {
+			t.Fatalf("不存在的新增上下文应返回中文说明：\n%s", body)
+		}
+	}
+	if len(writer.adds) != 0 || len(writer.otherAdds) != 0 {
+		t.Fatalf("无效上下文不应写入数据：%+v %+v", writer.adds, writer.otherAdds)
 	}
 }
 
@@ -331,6 +463,25 @@ func newServersTestHandlerWithConnectionTester(
 		Role: role, Servers: store, ServerWriter: writer,
 		ServerConnectionTester: tester, Access: &stubAccessStore{},
 		VersionHint: func() string { return "" }, Port: 18080,
+	})
+	if err != nil {
+		t.Fatalf("构造 Web UI Handler 失败：%v", err)
+	}
+	response := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookies := response.Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("应签发会话 cookie，实际 %d", len(cookies))
+	}
+	return handler, cookies[0]
+}
+
+func newServersTestHandlerWithTopology(
+	t *testing.T, role Role, store ServerSource, writer ServerWriter,
+) (http.Handler, *http.Cookie) {
+	t.Helper()
+	handler, startup, err := New(Config{
+		Role: role, Servers: store, ServerWriter: writer, Topology: stubAddTopologySource{},
+		Access: &stubAccessStore{}, VersionHint: func() string { return "" }, Port: 18080,
 	})
 	if err != nil {
 		t.Fatalf("构造 Web UI Handler 失败：%v", err)

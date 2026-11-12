@@ -1590,6 +1590,28 @@
     detailOpen(true);
   }
 
+  function addFormHref(path, context) {
+    var query = new URLSearchParams();
+    Object.keys(context).forEach(function (key) {
+      query.set(key, context[key]);
+    });
+    query.set("return_to", "/ui/topology/");
+    return path + "?" + query.toString();
+  }
+
+  function detailAddLinkHTML(label, path, context) {
+    if (!canEdit) {
+      return "";
+    }
+    return (
+      '<div class="detail-add"><a href="' +
+      addFormHref(path, context) +
+      '">' +
+      label +
+      "</a></div>"
+    );
+  }
+
   function candidateDetailHTML(device) {
     var html = '<section class="detail-candidates" data-device="' + escapeHTML(device.id) + '">';
     html += "<h3>候选 SSH 地址（当前起点：" + escapeHTML(probeOriginLabel()) + "）</h3>";
@@ -1658,6 +1680,8 @@
       html += "<dt>客户端实例</dt><dd>" + escapeHTML(device.client_name) + "</dd>";
     }
     html += "</dl>";
+
+    html += detailAddLinkHTML("在此设备上新增服务器条目", "/ui/servers/new", { device: device.name });
 
     var memberships = index.membershipsByDevice[device.id] || [];
     if (!canEdit) {
@@ -1811,6 +1835,7 @@
       html += "<dt>备注</dt><dd>" + escapeHTML(network.note) + "</dd>";
     }
     html += "</dl><h3>成员</h3><ul>";
+    html += detailAddLinkHTML("在此新增", "/ui/add", { network: network.name });
     if (members.length === 0) {
       html += "<li>暂无成员设备。</li>";
     }

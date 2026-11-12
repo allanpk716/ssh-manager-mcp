@@ -36,6 +36,7 @@ type pageData struct {
 	Servers                          []ServerRow
 	ServerList                       []ServerListEntry
 	ServerAdd                        *serverAddView
+	AddTypeChoice                    *addTypeChoiceView
 	ServerAddResult                  *ServerAddResultView
 	OtherDeviceAddResult             *OtherDeviceAddResultView
 	NextSteps                        []NextStep

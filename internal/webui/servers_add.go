@@ -24,6 +24,38 @@ type serverAddView struct {
 	HasCredential  bool
 	VirtualMembers []int
 	DeviceOnly     bool
+	ReturnTo       string
+}
+
+// addTypeChoiceView 是新增类型选择页的两个入口地址。拓扑画布带上下文进入
+// 时，两个地址都保留网络与返回位置，保证选择服务器或其他设备后仍使用同一
+// 份预选内容。
+type addTypeChoiceView struct {
+	ServerHref      string
+	OtherDeviceHref string
+}
+
+const topologyReturnPath = "/ui/topology/"
+
+func normalizeAddReturnPath(value string) string {
+	if value == topologyReturnPath || value == "/ui/topology" {
+		return topologyReturnPath
+	}
+	return ""
+}
+
+func addFormHref(path, network, returnTo string) string {
+	query := url.Values{}
+	if network != "" {
+		query.Set("network", network)
+	}
+	if returnTo != "" {
+		query.Set("return_to", returnTo)
+	}
+	if len(query) == 0 {
+		return path
+	}
+	return path + "?" + query.Encode()
 }
 
 func (h *handler) handleServerAddType(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +63,14 @@ func (h *handler) handleServerAddType(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "新增类型选择页只接受 GET 请求。")
 		return
 	}
-	h.renderPage(w, r, http.StatusOK, "servers-add-type.tmpl", pageData{Title: "新增"})
+	network := strings.TrimSpace(r.URL.Query().Get("network"))
+	returnTo := normalizeAddReturnPath(r.URL.Query().Get("return_to"))
+	h.renderPage(w, r, http.StatusOK, "servers-add-type.tmpl", pageData{
+		Title: "新增", AddTypeChoice: &addTypeChoiceView{
+			ServerHref:      addFormHref(serverAddFormPath, network, returnTo),
+			OtherDeviceHref: addFormHref(deviceAddFormPath, network, returnTo),
+		},
+	})
 }
 
 func (h *handler) handleServerAddForm(w http.ResponseWriter, r *http.Request) {
@@ -73,20 +112,32 @@ func (h *handler) renderAddForm(
 	w http.ResponseWriter, r *http.Request, submitted *ServerAddForm, notice string, status int, deviceOnly bool,
 ) {
 	view := &serverAddView{Notice: notice, VirtualMembers: []int{0, 1, 2}, DeviceOnly: deviceOnly}
-	if submitted == nil && !deviceOnly {
-		view.Form = defaultServerAddForm()
-	} else if submitted == nil {
-		view.Form = defaultOtherDeviceAddForm()
-	} else {
-		view.Form = submitted
-		view.HasCredential = serverAddFormWritesCredential(*submitted)
-	}
+	var topology *TopologyData
 	if h.cfg.Topology != nil {
-		topology, err := h.cfg.Topology.Topology(h.requestClientInstance(r), "")
+		var err error
+		topology, err = h.cfg.Topology.Topology(h.requestClientInstance(r), "")
 		if err != nil {
 			h.renderError(w, r, http.StatusInternalServerError, "读取新增选项失败", "读取站点、网络与设备失败，请稍后重试。")
 			return
 		}
+	}
+	if submitted == nil {
+		if deviceOnly {
+			view.Form = defaultOtherDeviceAddForm()
+		} else {
+			view.Form = defaultServerAddForm()
+		}
+		if title, message := applyAddFormContext(view.Form, r.URL.Query(), topology, deviceOnly); title != "" {
+			h.renderError(w, r, http.StatusNotFound, title, message)
+			return
+		}
+		view.ReturnTo = view.Form.ReturnTo
+	} else {
+		view.Form = submitted
+		view.HasCredential = serverAddFormWritesCredential(*submitted)
+		view.ReturnTo = submitted.ReturnTo
+	}
+	if topology != nil {
 		view.Sites, view.Networks, view.Devices = topology.Sites, topology.Networks, topology.Devices
 	}
 	if !deviceOnly && h.cfg.Access != nil {
@@ -106,6 +157,52 @@ func (h *handler) renderAddForm(
 		title = "新增其他设备"
 	}
 	h.renderPage(w, r, status, "servers-add.tmpl", pageData{Title: title, ServerAdd: view})
+}
+
+// applyAddFormContext 把拓扑画布带来的网络或设备上下文写进表单默认值。
+// 名称不存在时返回错误页标题与说明，避免把无效名称带进保存请求。
+func applyAddFormContext(form *ServerAddForm, query url.Values, topology *TopologyData, deviceOnly bool) (string, string) {
+	networkName := strings.TrimSpace(query.Get("network"))
+	deviceName := strings.TrimSpace(query.Get("device"))
+	form.ReturnTo = normalizeAddReturnPath(query.Get("return_to"))
+	if networkName == "" && deviceName == "" {
+		return "", ""
+	}
+	if topology == nil {
+		return "新增上下文不存在", "读取不到选择的网络或设备，请回到网络拓扑后重新进入。"
+	}
+	if networkName != "" && deviceName != "" {
+		return "新增上下文无效", "不能同时预选网络与设备，请回到网络拓扑后重新进入。"
+	}
+	if networkName != "" {
+		for _, network := range topology.Networks {
+			if network.Name != networkName {
+				continue
+			}
+			switch network.Type {
+			case "physical":
+				form.SiteName = network.SiteName
+				form.PhysicalNetwork = network.Name
+			case "virtual":
+				form.VirtualNetworkNames = []string{network.Name}
+			default:
+				return "新增上下文无效", "选择的网络类型不支持预选，请回到网络拓扑后重新进入。"
+			}
+			return "", ""
+		}
+		return "网络不存在", "选择的物理局域网或虚拟局域网不存在，请回到网络拓扑后重新进入。"
+	}
+	if deviceOnly {
+		return "新增上下文无效", "设备详情入口只能新增服务器条目，请从类型选择页新增其他设备。"
+	}
+	for _, device := range topology.Devices {
+		if device.Name == deviceName {
+			form.DeviceChoice = "existing"
+			form.ExistingDeviceName = device.Name
+			return "", ""
+		}
+	}
+	return "设备不存在", "选择的设备不存在，请回到网络拓扑后重新进入。"
 }
 
 func defaultServerAddForm() *ServerAddForm {
@@ -175,6 +272,7 @@ func (h *handler) handleServerAddFormPost(w http.ResponseWriter, r *http.Request
 			ServerWriteSource{RemoteAddress: remoteIP(r)},
 		)
 	}
+	result.ReturnTo = form.ReturnTo
 	http.Redirect(w, r, serverAddResultPath+"?"+serverAddResultQuery(result, taskID, probeShell).Encode(), http.StatusSeeOther)
 }
 
@@ -219,6 +317,7 @@ func (h *handler) parseServerAddForm(r *http.Request) ServerAddForm {
 	form.KeyPassphrase = r.PostFormValue("key_passphrase")
 	form.SudoPassword = r.PostFormValue("sudo_password")
 	parseDeviceFields(&form, r)
+	form.ReturnTo = normalizeAddReturnPath(r.PostFormValue("return_to"))
 	form.ProfileIDs = trimmedValues(r.PostForm["profile_id"])
 	return form
 }
@@ -238,13 +337,19 @@ func (h *handler) handleOtherDeviceAddFormPost(w http.ResponseWriter, r *http.Re
 		h.renderError(w, r, http.StatusInternalServerError, "新增其他设备失败", "新增其他设备失败，请稍后重试。")
 		return
 	}
-	http.Redirect(w, r, deviceAddResultPath+"?device="+url.QueryEscape(result.DeviceName), http.StatusSeeOther)
+	result.ReturnTo = form.ReturnTo
+	resultQuery := url.Values{"device": {result.DeviceName}}
+	if result.ReturnTo != "" {
+		resultQuery.Set("return_to", result.ReturnTo)
+	}
+	http.Redirect(w, r, deviceAddResultPath+"?"+resultQuery.Encode(), http.StatusSeeOther)
 }
 
 func (h *handler) parseOtherDeviceAddForm(r *http.Request) ServerAddForm {
 	form := *defaultOtherDeviceAddForm()
 	form.DeviceNote = strings.TrimSpace(r.PostFormValue("note"))
 	parseDeviceFields(&form, r)
+	form.ReturnTo = normalizeAddReturnPath(r.PostFormValue("return_to"))
 	return form
 }
 
@@ -359,6 +464,7 @@ func (h *handler) handleServerAddResult(w http.ResponseWriter, r *http.Request) 
 		AnchorCopied:             r.URL.Query().Get("anchor") == "copy",
 		AnchorCopyFromServerName: r.URL.Query().Get("anchor_from"),
 		AnchorCopyConflict:       r.URL.Query().Get("anchor") == "conflict",
+		ReturnTo:                 normalizeAddReturnPath(r.URL.Query().Get("return_to")),
 	}
 	probeShell := r.URL.Query().Get("shell") == "auto"
 	taskID := strings.TrimSpace(r.URL.Query().Get("task"))
@@ -413,6 +519,9 @@ func serverAddResultQuery(result *ServerAddResultView, taskID string, probeShell
 	if len(result.ProfileNames) > 0 {
 		query.Set("profiles", strings.Join(result.ProfileNames, ","))
 	}
+	if result.ReturnTo != "" {
+		query.Set("return_to", result.ReturnTo)
+	}
 	switch {
 	case result.AnchorCopied:
 		query.Set("anchor", "copy")
@@ -436,8 +545,10 @@ func (h *handler) handleOtherDeviceAddResult(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	h.renderPage(w, r, http.StatusOK, "devices-add-result.tmpl", pageData{
-		Title:                "新增其他设备结果 · " + deviceName,
-		OtherDeviceAddResult: &OtherDeviceAddResultView{DeviceName: deviceName},
+		Title: "新增其他设备结果 · " + deviceName,
+		OtherDeviceAddResult: &OtherDeviceAddResultView{
+			DeviceName: deviceName, ReturnTo: normalizeAddReturnPath(r.URL.Query().Get("return_to")),
+		},
 	})
 }
 

@@ -5,6 +5,7 @@
 {{if .ServerAdd.Notice}}<div class="operation-refusal"><p>{{.ServerAdd.Notice}}</p></div>{{end}}
 <form method="post" action="{{if .ServerAdd.DeviceOnly}}/ui/devices/new{{else}}/ui/servers/new{{end}}" {{if .ServerAdd.DeviceOnly}}class="device-form"{{else}}enctype="multipart/form-data" class="server-form"{{end}}>
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="return_to" value="{{.ServerAdd.ReturnTo}}">
 {{if .ServerAdd.HasCredential}}<input type="hidden" name="resume_credentials" value="1">{{end}}
 {{if .ServerAdd.DeviceOnly}}
 <fieldset>

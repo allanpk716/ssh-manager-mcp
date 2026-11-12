@@ -147,6 +147,21 @@
   font-size: 15px;
 }
 
+.topology-tray-add {
+  margin: 0 0 8px;
+}
+
+.topology-tray-add a,
+.topology-detail .detail-add a {
+  display: inline-block;
+  border: 1px solid var(--accent, #2f6fed);
+  border-radius: 6px;
+  background: var(--accent, #2f6fed);
+  color: #fff;
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
 .topology-tray-list {
   list-style: none;
   margin: 0;
@@ -230,6 +245,10 @@
   float: right;
 }
 
+.topology-detail .detail-add {
+  margin: 10px 0;
+}
+
 .topology-detail .local-badge {
   display: inline-block;
   margin-left: 6px;
@@ -275,6 +294,13 @@
     border-radius: 12px 12px 0 0;
     box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.16);
     z-index: 20;
+  }
+}
+
+@media (max-width: 980px) and (pointer: coarse) {
+  .topology-tray-add,
+  .topology-detail .detail-add {
+    display: none;
   }
 }
 

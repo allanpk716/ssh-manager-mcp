@@ -91,6 +91,7 @@ type ServerAddForm struct {
 	VirtualAddresses    []string
 	ProfileIDs          []string
 	DeviceNote          string
+	ReturnTo            string
 }
 
 // OtherDeviceAddForm 是新增不受管设备的提交值；只包含设备备注与位置组，
@@ -108,6 +109,7 @@ type OtherDeviceAddForm struct {
 // OtherDeviceAddResultView 是不受管设备保存后的结果数据。
 type OtherDeviceAddResultView struct {
 	DeviceName string
+	ReturnTo   string
 }
 
 // ServerAddResultView 是新增成功后的结果页数据。本票只显示待连接测试；后
@@ -122,6 +124,7 @@ type ServerAddResultView struct {
 	AnchorCopied             bool
 	AnchorCopyFromServerName string
 	AnchorCopyConflict       bool
+	ReturnTo                 string
 }
 
 // ServerEditForm 是编辑提交。指针字段为 nil 表示这个字段没有变化；凭据动

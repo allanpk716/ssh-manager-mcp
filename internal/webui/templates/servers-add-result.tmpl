@@ -23,7 +23,9 @@
 </div>
 <div class="inline-form">
 <a class="button-link" href="/ui/servers/{{.ServerAddResult.Detail.ID}}">查看服务器详情</a>
+{{if .ServerAddResult.ReturnTo}}<a class="button-link" href="{{.ServerAddResult.ReturnTo}}">返回网络拓扑</a>{{else}}
 <a class="button-link" href="/ui/">返回服务器列表</a>
+{{end}}
 </div>
 </section>
 {{end}}
