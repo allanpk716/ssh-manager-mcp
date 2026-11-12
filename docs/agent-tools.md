@@ -266,15 +266,20 @@ Windows 服务器不做持久挂载。目标服务器在共享存储挂载密码
 PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准输入送
 达，不出现在 sshmgr 发出的远端命令文本、审计、工具返回、错误文本或任务
 日志里，也不出现在目标机任何进程的命令行参数中。
+`relay_file` 的 Windows 共享地址本地拷贝会创建同一种注入命令会话；这不是
+独立文件传输会话。
+历史上实现票 #74 写的 `net use` 已被规格 #205 的真机结论取代：实际映射
+由 PowerShell 的 `New-SmbMapping` 完成。
 
 - 命令里可以直接使用 `S:\目录` 这类固定盘符路径；PowerShell 与 cmd 服务
   器都支持。映射失败不阻止原命令执行，只在输出末尾追加警告，说明共享
   名、盘符与原因。
 - 盘符只在这条命令的 SSH 会话内可见。桌面会话、Windows 服务、计划任务、
-  `upload_file` / `upload_content` / `download_file` / `relay_file` 的独立
-  文件传输会话、端口转发，以及命令结束后仍在运行的进程都看不到它。要把
-  文件放进或取出共享，先在 `exec_command` 或 `exec_background` 的命令会话
-  里复制到本机可见路径，再调用文件传输工具。
+  `upload_file` / `upload_content` / `download_file` 的独立文件传输会话、
+  流式中继会话、端口转发，以及命令结束后仍在运行的进程都看不到它。要把
+  文件放进或取出共享，一端直接给 `relay_file` 共享地址、另一端给 Windows
+  服务器路径时会走本地拷贝；也可以先在 `exec_command` 或 `exec_background`
+  的命令会话里复制到本机可见路径，再调用其他文件传输工具。
 - `sudo=true` 的 Windows 提权层不注入网络盘符，输出会说明
   「Windows 提权层不注入网络盘符」。
 - `exec_context` 的 `planned_network_drives` 与
@@ -409,6 +414,10 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
   你拿到的只是**前缀**；`stdout_bytes` / `stderr_bytes` 是**真实总字节数**。
   此时要 **refine**——改跑 `tail -n 200 <file>`、`head -n`、`grep <pattern>`
   拿你要的那段，**不要**原样重跑硬拉全量（会再吃 1 MiB 前缀，白费）。
+- `exec_command` 不改写命令文本。命令里写着 `\\<主机>\<共享名>\<子路径>`
+  或 `smb://<主机>/<共享名>/<子路径>` 时，先用 `query_topology` 查询：
+  `from` 填这台服务器的编号，`to` 填这个共享地址，再把返回的实际路径放
+  进命令。
 
 ### download_file
 
@@ -484,36 +493,69 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
 
 ### relay_file
 
-把**大文件**从一台服务器**经 broker 中继**到另一台——源也可以是 **broker 本机
-盘**（`from_server_id` 省略/留空）。**零上下文大文件通道**：文件字节只在 broker
-持有的两条 SSH 连接间分块流式转发，**工具结果、`exec_output`、审计里都只有
-元数据**（task_id / 块数 / 进度 / 摘要），文件内容永远不进你的上下文。适用：
+把**大文件**从一台服务器传到另一台——源也可以是 **broker 本机盘**
+（`from_server_id` 省略/留空），或一端直接给共享地址。常规路径走 **经 broker
+的中继**；一端是共享地址、另一端是可挂载这处共享的服务器时，走这台服务器
+上的本地拷贝。**零上下文大文件通道**：工具结果、
+`exec_output`、审计里都只有元数据（task_id / 模式 / 块数 / 进度 / 摘要），
+文件内容永远不进你的上下文。适用：
 文件超过 `upload_file` 的 1 MiB 单文件帽（模型权重、GB 级产物），或文件在一台
 机上、必须落到另一台机（在线机下载好 → 送真空离线机）。**无 ssh 二进制直接
 对应物**：`scp serverA:file serverB:` 形似，但那是两端直连、两端都要操作者的
 凭据；relay 是 broker 代理、凭据不出 vault——属 Broker-specific 能力。
 
-- **参数**：`to_server_id` + `to_path`（绝对路径，目标恒为远程服务器）+ 源二选一：
+- **参数**：`to_server_id` + `to_path`（绝对路径，目标恒为远程服务器）+ 源三选一：
   `from_server_id` + `from_path`（该机上的绝对路径），或只给 `from_path`
-  （**broker 所在机器**上的绝对路径）。路径 `/` 开头或 Windows 盘符形 `C:/`。
+  （**broker 所在机器**上的绝对路径），或 `from_share_address`（一个共享地
+  址）。目标也可以把 `to_server_id` + `to_path` 换成 `to_share_address`。共享
+  地址写成 `\\<主机>\<共享名>\<子路径>` 或
+  `smb://<主机>/<共享名>/<子路径>`；一次最多一端是共享地址，且不能与同一
+  端的普通路径字段同给。常规路径 `/` 开头或 Windows 盘符形 `C:/`。
   目标父目录不存在会自动创建；完成后**原子替换**目标路径上已存在的文件
   （真名出现 = 传完的可见保证）。同源同径（from==to 同机同路径）会被拒
   （自我覆盖 no-op）。
 - **三件套用法**：调用立即返回 `task_id`（`exec_background` 同款形态）——
   `exec_output(task_id)` 轮询逐块进度与最终摘要，`exec_stop(task_id)` 中途停。
   relay 任务占**同一张后台任务表**（每 project 32 上限、任务表纯进程内
-  **broker 重启即失**——但进度不丢：重跑 relay_file 同参数即续传，断点锚在
-  目标端盘上）。单任务时长上限 **72 小时**（常量；到点 = 可续传的 timeout 终态）。
-- **续传语义（核心）**：中断 / 停止 / 失败都会在目标端留下
+  **broker 重启即失**）。启动结果的 `mode` 区分 `streaming_relay` 与
+  `local_copy`；`restart_after_interruption` 写明中断后是否必须从头重跑。
+  单任务时长上限 **72 小时**。
+- **共享地址本地拷贝**：`mode="local_copy"`。Linux 与 macOS 先用挂载工具
+  同款的只读现场检查确认另一端服务器已实际挂载这处共享，再执行固定 `cp`
+  命令；尚未挂载时报错并提示先调用幂等的 `mount_share`，不会自动挂载。
+  Windows 不要求预先挂载：sshmgr 在同一条 SSH 命令会话里先用 `New-SmbMapping`
+  映射 owner 登记的固定盘符，再执行固定 `robocopy` 命令。`robocopy` 的退出码
+  0 到 7 视为成功，8 及以上按失败呈现；盘符只在这条拷贝会话内可见，不在目标
+  机留下持久映射。两种系统都先保留
+  `<目标路径>.sshmgr-partial` 这个半成品对象（Windows 因 robocopy 的参数
+  形态是暂存目录，Linux 与 macOS 是半成品文件），成功后才让目标真名出现；它不
+  生成块清单、不续传，中断、停止、失败或重跑都从文件开头覆盖旧半成品。
+  Windows 重跑只删除暂存目录里与源文件同名的旧半成品文件，不动其他内容；
+  成功后暂存目录为空才删除，不空则保留并在任务输出里提示，任务仍算成功。
+  本地
+  拷贝与流式中继共用同一目标路径和半成品的运行中冲突保护；本地拷贝路径不能
+  给 `via`。两端都是共享地址仍会明确报错。
+- **共享地址流式回退**：另一端不在共享存储的可挂载范围内时，`mode` 回到
+  `streaming_relay`。sshmgr 只在当前 profile 可见、可挂载且现场检查确认已实
+  际挂载的 Linux 或 macOS 服务器中选择一台，把共享地址翻译成它上面的路径，
+  再复用既有流式中继；启动结果用 `share_endpoint_server_id` 写明选中的端点
+  服务器。未指定 `via` 时，优先选择与共享提供方设备同在物理局域网的服务
+  器，并列时按服务器名字升序取第一台。`via` 接收稳定服务器标识符并覆盖自
+  动选择；它指定的服务器也必须可见、可挂载且已实际挂载，否则按原因报错。
+  没有任何已实际挂载候选时，先在可挂载服务器上调用 `mount_share`，或请
+  owner 调整授权；不会自动挂载，也不会选未挂载服务器。Windows 不能作为这
+  个端点，因为它的共享盘符只存在于命令会话，流式中继使用的独立文件传输
+  会话看不到。
+- **流式中继的续传语义（核心）**：中断 / 停止 / 失败都会在目标端留下
   `<to_path>.sshmgr-partial` + `<to_path>.sshmgr-manifest.json`（已完成块清单
   ——**续传唯一事实源**，落在目标盘、不随 broker 死）。**重跑 relay_file 同参数
   = 只补缺失块**；返回里的 `resumed_chunks` 就是接上的已完成块数。块大小来自
   broker 构造期 env `SSHMGR_TRANSFER_CHUNK`（缺省 256 MiB，越界 broker 拒启动）
   ——**续传两端块网格必须一致**，改过 env 的重跑会被拒（错误指引还原 env 或
   `fresh=true`）。
-- **`fresh=true`**：丢弃目标端 partial + manifest，从 byte 0 重传。只在该放弃
+- **流式中继的 `fresh=true`**：丢弃目标端 partial + manifest，从 byte 0 重传。只在该放弃
   进度时用——清单不符 / 非常态残留的错误文本都会明示 "pass fresh=true"。
-- **双摘要验证配方（重要）**：最后一行进度带摘要，按任务形态二选一：
+- **流式中继的双摘要验证配方（重要）**：最后一行进度带摘要，按任务形态二选一：
   - 本任务**从 byte 0 连续流到 EOF**（fresh 起步或空清单自愈）→ 报
     `file_sha256`——直接 `exec sha256sum <to_path>` 比对即可；
   - **续传了已完成块**的任务报**块 merkle 根**（`root=sha256:…`）——每块写盘时
@@ -525,10 +567,12 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
   `relay_file` 送到离线机 → 在离线机 `exec sha256sum` 与 `exec_output` 里的
   `file_sha256` 比对——全程零字节过你的上下文。
 - **无 sudo**：SFTP 通道，root 属主目标路径不可写。
-- **`space_check` 字段**：`"unavailable"` = 目标端报告不了剩余空间（部分
-  Windows 目标）——**知情继续是安全的**：盘真满只是停在某块边界，腾空间后续传。
-  空间**已知不足**则是 refusal（错误带 avail/need 证据，零字节移动）。
-- **posix-rename 硬依赖**：目标端 SFTP 服务端必须支持
+- **`space_check` 字段**：流式中继里 `"unavailable"` 表示目标端报告不了剩
+  余空间（部分 Windows 目标）——**知情继续是安全的**：盘真满只是停在某块
+  边界，腾空间后续传。本地拷贝里它表示目标报告不了剩余空间，盘真满会让
+  拷贝命令失败，重跑从头开始。空间**已知不足**则是 refusal（错误带
+  avail/need 证据，零字节移动）。
+- **流式中继的 posix-rename 硬依赖**：目标端 SFTP 服务端必须支持
   `posix-rename@openssh.com`（OpenSSH 全系含 Win32 端口都支持；非 OpenSSH 系
   sftp 目标出局）——不支持的任务启动即 failed，错误明示 "lacks posix-rename"，
   无参数可绕。
@@ -536,6 +580,13 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
   **无害但占盘**——`exec rm <to_path>.sshmgr-partial <to_path>.sshmgr-manifest.json`
   清掉。例外：真名已在 + manifest 残留 = 提交成功后的无害碎片，随手删 manifest
   即可。
+- **本地拷贝的残留清理**：不打算重跑时，Linux 与 macOS 上只剩
+  `<目标路径>.sshmgr-partial` 半成品文件，用
+  `exec rm <目标路径>.sshmgr-partial` 清掉。Windows 上
+  `<目标路径>.sshmgr-partial` 是暂存目录，半成品文件是目录里与源文件同名
+  的那个文件；清理时删除暂存目录中的这个文件（例如
+  `Remove-Item -LiteralPath '<目标路径>.sshmgr-partial\<源文件名>'`），
+  不要把整个目录连同目录里其他内容一起删。本地拷贝不会生成 manifest。
 
 ### update_server_metadata
 
@@ -620,6 +671,8 @@ tunnel_id 是绑定在 broker 进程上的不透明句柄。
   重启后所有 task_id 一并失效，把在跑的活当作全死了重新安排。
 - 选型：短命令（≤5 分钟、马上要全量输出）→ `exec_command`；长活 / 要增量
   输出 → `exec_background` + `exec_output` 轮询。
+- `exec_background` 同样不改写命令文本。需要把共享地址换成服务器上的实
+  际路径时，先用 `query_topology` 查询，再组命令。
 
 ### exec_output
 
@@ -756,6 +809,36 @@ agent 披露这台服务器条目的主机地址），地址被隐藏时显示 `
 客户端缓存快照没有推荐版本时，本工具返回「权威端版本过旧，不支持网络
 拓扑与共享存储，请先升级权威端」。
 
+### query_topology 的共享地址翻译
+
+`from` 填授权范围内一台服务器条目的编号，`to` 只填一个共享地址时，本工
+具改为输出这台服务器上的实际路径：
+
+```text
+服务器：<服务器条目名>
+共享存储：<共享名>（提供方设备：<设备名>）
+可挂载：是
+实际路径：<按挂载点约定翻译后的路径>
+本翻译只读登记数据；是否已现场挂载请用 list_shares 的现场检测确认。
+```
+
+- 共享地址接受 `\\<主机>\<共享名>\<子路径>` 与
+  `smb://<主机>/<共享名>/<子路径>`，两种写法等价；共享名、主机名与分隔
+  符的大小写差异不改变指称。
+- 主机只用于在提供方设备的网络成员地址里识别共享存储，不参与实际挂载
+  地址选择，输出也不显示任何地址。
+- 「主机加共享名」对上多个共享存储时，工具列出提供方设备名与共享名的
+  候选并报错，不做猜测。
+- 当前授权范围看不到目标服务器，或这台服务器不在共享存储的可挂载范围
+  内时，工具报错；授权外查询不展开共享存储详情。
+- Linux 与 macOS 返回 `/mnt/sshmgr/<共享名>/<子路径>`；Windows 返回登记
+  盘符下的对应路径，例如 `Z:\<子路径>`。
+- 共享地址不能与普通目标混用，一次也只能查询一个共享地址。
+- 翻译只读登记数据，不主动探测、不建立 SSH 连接、不改变远端状态，也不
+  证明共享当时已经挂载。
+- `relay_file` 也接受共享地址作为源端或目标端；它会另行完成本地拷贝前的
+  检查或注入，不使用这个查询工具的翻译结果。
+
 ## 错误对照表（每条给"你该做什么"）
 
 | 报错 | 含义 | 你该做 |
@@ -881,6 +964,7 @@ HEAD，后续重构以符号名为准）：
 | stdio 模式 token 无效 → broker 进程起不来（stderr `invalid or unknown token` 后退出） | `internal/mcpserver/run.go:29-35`；`internal/cli/mcp.go:70-73` |
 | 工具报错形态 = IsError=true + 错误文本（非传输层错误） | `internal/mcpserver/server.go:83-89` |
 | relay_file 三件套/零上下文：工具描述即口径（task_id 立返；结果/exec_output 只有元数据零文件内容）；第 12 个工具单源注册 | `internal/mcpserver/server.go:298`（描述模板 `%d`=构造期块大小）；`internal/mcpserver/relay.go:55`（RelayForProfile preflight ①–⑨） |
+| relay_file 共享地址端点：一端给共享地址、另一端服务器可挂载该共享时在该服务器上本地拷贝——Linux 与 macOS 用固定 `cp` 命令（要求已实际挂载），Windows 在同一条 SSH 命令会话里用 `New-SmbMapping` 注入盘符后执行固定 `robocopy` 命令（退出码 0 到 7 视为成功）；另一端不可挂载（含执行实例本地源）时按物理局域网优先、名字排序、`via` 覆盖选择已实际挂载的 Linux 或 macOS 端点并复用流式中继；目标端是共享地址时冲突判定额外登记共享存储标识符与规范化子路径 | 规格 #235、票 #244、#245、#246；`internal/mcpserver/relay_local_copy.go`（RelayForProfile 共享地址分支）；`internal/shareaddress/address.go`（共享地址解析与挂载点翻译）；`internal/sshbroker/injection.go`（盘符注入与 PowerShell 转义） |
 | relay 块大小 env seam：缺省 256 MiB、[16 MiB, 1 GiB] 之外构造失败（fail-closed）；`SSHMGR_TRANSFER_PARALLEL` v1 只接受 1 | `internal/mcpserver/relayenv.go:30,53`（resolveRelayChunk / resolveRelayParallel） |
 | relay 单任务 72h 常量上限（非 env）；块数闸 16384（超出 refusal + 指引 raise SSHMGR_TRANSFER_CHUNK） | `internal/mcpserver/relayenv.go:69,76`（relayRunCap / relayMaxChunks）；`internal/mcpserver/relay.go:524` |
 | relay 续传进度行（`relay plan: … (resumed N)` / `chunk i/n ok` / `relay done: root=… [file_sha256=…]`）经任务 stdout → exec_output 可见；file_sha256 仅 byte0→EOF 全程任务有，续传任务只有块 merkle 根 | `internal/mcpserver/relay.go:726,966-968` |
@@ -894,7 +978,7 @@ HEAD，后续重构以符号名为准）：
 | 每次工具调用全程审计（project/server/action/status/命令/耗时） | `internal/mcpserver/core.go:81-89` 等；../README.md "What the agent gets" |
 | 命令策略门在取凭据、建 SSH 连接之前（拦截 / 需确认都不建连接，拦截零字节到服务器）；判定内核是纯函数，权威端与客户端同一条代码路径，离线用最后一次拉到的规则 | `internal/mcpserver/policygate.go`（policyJudge）；`internal/mcpserver/core.go`（ExecCommandForProfile 的 gate 段）；`internal/mcpserver/bgtools.go`（后台同款门）；`internal/policy/policy.go`（Evaluate） |
 | probe_connectivity：只测 TCP 建连与耗时、只探测登记过的共同网络组合（不测兜底主机）、结果只存发起实例本地；经服务器探测执行固定命令、不经命令策略但写审计 | 规格 #142；ADR 0007（命令策略是护栏不是安全边界） |
-| query_topology：按出发点输出所属网络、同在物理局域网、只能经虚拟局域网到达、无共同网络不可达与未登记服务器五段；传入 to 时输出逐对全部共同网络、网络属性，并标记 sshmgr 真正拨号时会优先尝试的网络（与按服务器条目拨号的共用入口同一条候选地址规划）；`detail=true` 展开参数显示地址与设备角色，地址遵守 ExposeHost 主机披露开关；可达行附本实例最新探测结果；只读登记、成功地址缓存与本地观察，不探测、不建 SSH、不写审计、不改成功地址缓存与快照修订号；旧权威端快照固定报错 | 规格 #234、票 #241、票 #242；`internal/mcpserver/query_topology.go`（QueryTopologyForProfile）；`internal/sshbroker/entrydial.go`（PlanServerDialCandidates）；`internal/mcpserver/server.go`（query_topology 注册） |
+| query_topology：按出发点输出所属网络、同在物理局域网、只能经虚拟局域网到达、无共同网络不可达与未登记服务器五段；传入 to 时输出逐对全部共同网络、网络属性，并标记 sshmgr 真正拨号时会优先尝试的网络（与按服务器条目拨号的共用入口同一条候选地址规划）；`detail=true` 展开参数显示地址与设备角色，地址遵守 ExposeHost 主机披露开关；可达行附本实例最新探测结果；只读登记、成功地址缓存与本地观察，不探测、不建 SSH、不写审计、不改成功地址缓存与快照修订号；旧权威端快照固定报错；`from` 为服务器编号且 `to` 为唯一共享地址时，按挂载点约定翻译成这台服务器上的实际路径并说明是否可挂载，主机只用于识别共享存储 | 规格 #234、票 #241、票 #242、票 #243；`internal/mcpserver/query_topology.go`（QueryTopologyForProfile）；`internal/shareaddress/address.go`（Parse 与 Resolve）；`internal/sshbroker/entrydial.go`（PlanServerDialCandidates）；`internal/mcpserver/server.go`（query_topology 注册） |
 | list_shares：默认只读登记与挂载点约定、不做任何现场检测；可选现场检测参数对可见 Linux 与 macOS 可挂载服务器并发只读检测，报告已挂载、未挂载、配置缺失、不可达（附原因说明）四种状态；可挂载范围是挂载密码机密项可写入列表与会话可见服务器取交集，交集为空不返回；旧权威端快照按 ADR 0014 报错 | `internal/mcpserver/list_shares.go`（ListSharesForProfile / annotateSharedStorageMountChecks）；`internal/sharemount/check.go`（固定检测命令）；`internal/store/shared_storage.go`（SharedStorageMountPoint）；`internal/mcpserver/run.go`（hydrateCacheStore 设置快照推荐版本） |
 | mount_share：共享存储持久挂载（Linux 写 fstab 与仅 root 可读凭据文件，macOS 写 autofs 间接映射）；服务器级目录锁带 owner 文件与过期回收；撤销标记版本号不低于快照版本号时拒绝；Linux 先在 /var/run 临时挂载点试挂成功才改写正式配置；macOS 映射改写后先卸载旧 smbfs 挂载再刷新；已挂载且一致时幂等 no-change；密码只经提权会话标准输入写入，结果与审计不含地址；不提供卸载 | 规格 #198、#212；`internal/sharemount/`（service.go / linux.go / darwin.go / marker.go / lock.go / check.go）；`internal/mcpserver/mount_share.go` |
 | query_software_inventory：按 profile 可见范围查询软件清单（含监听端口、暴露级别、来源、采集时间与设备采集状态）；客户端在线查询权威端，不可达时固定报错、不回退本地数据 | 票 #185；`internal/mcpserver/softwareinventory.go`；`internal/mcpserver/serve_softwareinventory.go`；`internal/clientops/softwareinventory_forward.go` |

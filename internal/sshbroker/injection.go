@@ -313,10 +313,25 @@ func buildInjectionFrames(shellType models.ShellType, environments []Environment
 	return frames
 }
 
-// powerShellSingleQuote 把值安全嵌入 PowerShell 单引号字符串；单引号本身
-// 双写转义，其余字符原样保留。
-func powerShellSingleQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+// powerShellQuoteDelimiters 是 PowerShell 会当作单引号字符串定界符的全部
+// 字符：ASCII 单引号与四个弯单引号。任一字符在字符串里出现两次即写字两
+// 次，表示一个字面量字符。
+const powerShellQuoteDelimiters = "'‘’‚‛"
+
+// PowerShellSingleQuote 把值安全嵌入 PowerShell 单引号字符串；全部单引号
+// 类定界符（ASCII 单引号与四个弯单引号）双写转义，其余字符原样保留。
+func PowerShellSingleQuote(value string) string {
+	var builder strings.Builder
+	builder.Grow(len(value) + 2)
+	builder.WriteByte('\'')
+	for _, character := range value {
+		if strings.ContainsRune(powerShellQuoteDelimiters, character) {
+			builder.WriteRune(character)
+		}
+		builder.WriteRune(character)
+	}
+	builder.WriteByte('\'')
+	return builder.String()
 }
 
 // NetworkDriveMappingTimeout 是远端 New-SmbMapping 异步调用的等待上限。
@@ -364,9 +379,9 @@ func writePowerShellNetworkDrive(wrapper *strings.Builder, drive NetworkDriveInj
 	wrapper.WriteString("  try {\n")
 	wrapper.WriteString("    $__sshmgr_pipeline = [PowerShell]::Create()\n")
 	wrapper.WriteString("    $null = $__sshmgr_pipeline.AddScript('param($a,$b,$c,$d) New-SmbMapping -LocalPath $a -RemotePath $b -UserName $c -Password $d -Persistent $false')\n")
-	fmt.Fprintf(wrapper, "    $null = $__sshmgr_pipeline.AddArgument(%s)\n", powerShellSingleQuote(drive.Drive+":"))
-	fmt.Fprintf(wrapper, "    $null = $__sshmgr_pipeline.AddArgument(%s)\n", powerShellSingleQuote(`\\`+drive.Address+`\`+drive.ShareName))
-	fmt.Fprintf(wrapper, "    $null = $__sshmgr_pipeline.AddArgument(%s)\n", powerShellSingleQuote(drive.UserName))
+	fmt.Fprintf(wrapper, "    $null = $__sshmgr_pipeline.AddArgument(%s)\n", PowerShellSingleQuote(drive.Drive+":"))
+	fmt.Fprintf(wrapper, "    $null = $__sshmgr_pipeline.AddArgument(%s)\n", PowerShellSingleQuote(`\\`+drive.Address+`\`+drive.ShareName))
+	fmt.Fprintf(wrapper, "    $null = $__sshmgr_pipeline.AddArgument(%s)\n", PowerShellSingleQuote(drive.UserName))
 	wrapper.WriteString("    $null = $__sshmgr_pipeline.AddArgument($__sshmgr_password)\n")
 	wrapper.WriteString("    $__sshmgr_task = $__sshmgr_pipeline.BeginInvoke()\n")
 	fmt.Fprintf(wrapper, "    if (-not $__sshmgr_task.Wait(%d)) {\n", NetworkDriveMappingTimeout.Milliseconds())
@@ -485,12 +500,14 @@ func writeWindowsCmdNetworkDrives(wrapper *strings.Builder, drives []NetworkDriv
 		script.WriteString("Remove-Variable __sshmgr_utf8\n")
 		script.WriteString("Remove-Variable __sshmgr_read\n")
 		script.WriteString("Remove-Variable __sshmgr_count\n")
-		wrapper.WriteString(encodeWindowsCmdPowerShellScript(script.String()))
+		wrapper.WriteString(PowerShellEncodedCommand(script.String()))
 		wrapper.WriteString("\n")
 	}
 }
 
-func encodeWindowsCmdPowerShellScript(script string) string {
+// PowerShellEncodedCommand 把 PowerShell 脚本封装成跨 PowerShell 与 cmd 都
+// 能直接执行的 EncodedCommand 形态：脚本先按 UTF-16LE 编码，再整体 base64。
+func PowerShellEncodedCommand(script string) string {
 	return "powershell -NoProfile -NonInteractive -EncodedCommand " +
 		base64.StdEncoding.EncodeToString(powerShellUTF16LE(script))
 }
