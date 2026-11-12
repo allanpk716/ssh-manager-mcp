@@ -493,6 +493,52 @@ func TestRecordSecretDeliveryReplacesSamePathAndNormalizesPathKey(t *testing.T) 
 	}
 }
 
+func TestRecordSecretDeliveryWindowsSFTPRealPathUsesOneRecord(t *testing.T) {
+	s, _, profileID := seedSecretDeliveryVault(t)
+	windowsID, err := s.AddServer(&models.Server{
+		Name: "windows-realpath", Host: "192.0.2.12", Port: 22, User: "deploy",
+		AuthMethod: models.AuthPassword, ShellType: models.ShellPowerShell,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantServers(profileID, []string{windowsID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AllowSecrets([]string{"API_TOKEN"}, []string{"windows-realpath"}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{"/C:/Data/App.conf", `C:\Data\App.conf`, "c:/data/app.conf"}
+	for index, path := range paths {
+		result, err := s.RecordSecretDelivery(SecretDeliveryRecordInput{
+			ServerID: windowsID, Path: path,
+			Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+			FileSHA256: strings.Repeat("1", 64),
+			WrittenAt:  time.Unix(int64(1760000100+index), 0),
+			Secrets: []SecretDeliverySecret{{
+				Name: "API_TOKEN", ValueVersion: 1,
+			}},
+			InitiatingDeviceName:   "office-laptop",
+			InitiatingInstanceName: "agent-a",
+			AuthorizationProfileID: profileID,
+		}, CLISource())
+		if err != nil {
+			t.Fatalf("登记 Windows 路径 %q 失败：%v", path, err)
+		}
+		if index > 0 && !result.Replaced {
+			t.Fatalf("Windows 路径 %q 应替换同一路径的旧记录", path)
+		}
+	}
+	records, err := s.SecretDeliveryRecords(SecretDeliveryRecordFilter{ServerID: windowsID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Path != "c:/data/app.conf" ||
+		string(records[0].Template) != "token: {{sshmgr-secret:API_TOKEN}}" {
+		t.Fatalf("Windows SFTP realpath 三种写法应保留同一条最新记录，实际：%+v", records)
+	}
+}
+
 func TestRecordSecretDeliveryStoresQueryableRecord(t *testing.T) {
 	s, serverID, profileID := seedSecretDeliveryVault(t)
 	writtenAt := time.Unix(1760000000, 0)

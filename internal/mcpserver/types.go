@@ -216,7 +216,7 @@ type UploadContentOutput struct {
 	ConnectionNotesOutput
 	Bytes                int64    `json:"bytes" jsonschema:"bytes written to the remote file (after secret placeholders are filled)"`
 	FilledSecretNames    []string `json:"filled_secret_names,omitempty" jsonschema:"secret names filled into the file, deduplicated in first-appearance order; values are never included"`
-	DeliveryRecordStatus string   `json:"delivery_record_status" jsonschema:"delivery-record status: recorded means the owner's delivery record was registered; not_recorded means registration was unnecessary or failed"`
+	DeliveryRecordStatus string   `json:"delivery_record_status,omitempty" jsonschema:"delivery-record status: recorded means the owner's delivery record was registered; not_recorded means registration failed"`
 	DeliveryRecordReason string   `json:"delivery_record_reason,omitempty" jsonschema:"why delivery_record_status is not_recorded; empty when the delivery record was registered"`
 }
 

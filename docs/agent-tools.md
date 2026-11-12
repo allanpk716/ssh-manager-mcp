@@ -493,8 +493,9 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
   客户端经设备码提交权威端。登记失败时文件**不回滚、不排队、不暂存、不自动
   补发**，结果仍为成功上传，并用 `delivery_record_status="not_recorded"` 和
   `delivery_record_reason` 说明原因。因此权威端离线期间的记录可能缺漏。
-  登记成功时 `delivery_record_status="recorded"`。不含占位符的内容不登记，
-  也不会清理同路径的旧记录；`upload_file` 与 `relay_file` 同样不登记、不清理。
+  登记成功时 `delivery_record_status="recorded"`。不含占位符的内容不返回
+  这两个字段，不会清理同路径的旧记录；`upload_file` 与 `relay_file`
+  同样不登记、不清理。
   结果不返回写入后文件哈希或机密项值版本号。
 
 > 传输上限（8 MiB 解码后）对两形态一致；stdio 的对端是本机 agent 进程、

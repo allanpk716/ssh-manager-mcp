@@ -19,6 +19,7 @@ import (
 	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/secretfill"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
@@ -571,7 +572,7 @@ func uploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	byteCount := int64(0) // 只供审计使用；成功后改为实际写入字节数
 	var status string
 	var filledSecretNames []string
-	deliveryRecordStatus := "not_recorded"
+	var deliveryRecordStatus, deliveryReason string
 	start := time.Now()
 	defer func() {
 		if status == "" {
@@ -722,74 +723,103 @@ func uploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	if filledSecretNames == nil {
 		filledSecretNames = []string{}
 	}
-	deliveryStatus := deliveryRecordStatus
-	deliveryReason := "内容不含机密项占位符，无需登记"
 	if len(filledSecretNames) > 0 {
-		deliveryReason = ""
-		finalPath, rerr := cli.RealRemotePath(ctx, remotePath)
-		if rerr != nil {
-			deliveryReason = "解析服务器上的最终路径失败，未登记下发记录：" + rerr.Error()
-		} else {
-			digest := sha256.Sum256(filled.Content)
-			deliverySecrets := make([]store.SecretDeliverySecret, 0, len(filledSecretNames))
-			for _, name := range filledSecretNames {
-				version, exists := filled.ValueVersions[name]
-				if !exists || version <= 0 {
-					deliveryReason = "机密项值版本号不可用，未登记下发记录"
-					break
-				}
-				deliverySecrets = append(deliverySecrets, store.SecretDeliverySecret{
-					Name: name, ValueVersion: version,
-				})
-			}
-			if deliveryReason == "" {
-				recordInput := store.SecretDeliveryRecordInput{
-					ServerID: serverID, Path: finalPath, Template: templateContent,
-					FileSHA256: hex.EncodeToString(digest[:]), Secrets: deliverySecrets,
-					WrittenAt:              time.Now(),
-					AuthorizationProfileID: profileID, TemplateLimitBytes: cap,
-				}
-				if deliveryRecorder == nil {
-					hostname, herr := os.Hostname()
-					if herr != nil || hostname == "" {
-						hostname = "local machine"
-					}
-					recordInput.InitiatingDeviceName = hostname
-					recordInput.InitiatingInstanceName = "single-machine broker"
-					_, registerErr := st.RecordSecretDelivery(recordInput, store.AgentSource())
-					rerr = registerErr
-					if rerr == nil {
-						deliveryStatus = "recorded"
-					}
-				} else {
-					outcome, registerErr := deliveryRecorder.RecordSecretDeliveryForBroker(ctx, recordInput)
-					if registerErr != nil {
-						rerr = registerErr
-						deliveryReason = outcome.Reason
-						if deliveryReason == "" {
-							deliveryReason = registerErr.Error()
-						}
-					} else if outcome.Recorded {
-						deliveryStatus = "recorded"
-					} else {
-						deliveryReason = outcome.Reason
-					}
-				}
-				if deliveryRecorder == nil && rerr != nil {
-					deliveryReason = "下发记录登记失败：" + rerr.Error()
-				}
-			}
-		}
+		deliveryRecordStatus = secretDeliveryStatusNotRecorded
+		registration := registerSecretDelivery(ctx, st, deliveryRecorder, cli, secretDeliveryRegistrationRequest{
+			ServerID: serverID, ProfileID: profileID, RemotePath: remotePath,
+			Filled: filled, Template: templateContent, TemplateLimitBytes: cap,
+		})
+		deliveryRecordStatus = registration.Status
+		deliveryReason = registration.Reason
 	}
 	out = UploadContentOutput{
 		Bytes:                 byteCount,
 		FilledSecretNames:     filledSecretNames,
-		DeliveryRecordStatus:  deliveryStatus,
+		DeliveryRecordStatus:  deliveryRecordStatus,
 		DeliveryRecordReason:  deliveryReason,
 		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
 	}
-	deliveryRecordStatus = deliveryStatus
 	return
+}
+
+type secretDeliveryRegistrationRequest struct {
+	ServerID           string
+	ProfileID          string
+	RemotePath         string
+	Filled             secretfill.Result
+	Template           []byte
+	TemplateLimitBytes int64
+}
+
+type secretDeliveryRegistration struct {
+	Status string
+	Reason string
+}
+
+// registerSecretDelivery 在文件写入成功后尽力登记下发记录，并把登记状态
+// 与未登记原因整理成 upload_content 的输出字段。
+func registerSecretDelivery(
+	ctx context.Context,
+	st *store.Store,
+	deliveryRecorder SecretDeliveryRecorder,
+	cli *sshbroker.Client,
+	request secretDeliveryRegistrationRequest,
+) secretDeliveryRegistration {
+	result := secretDeliveryRegistration{Status: secretDeliveryStatusNotRecorded}
+	finalPath, err := cli.RealRemotePath(ctx, request.RemotePath)
+	if err != nil {
+		result.Reason = "解析服务器上的最终路径失败，未登记下发记录：" + err.Error()
+		return result
+	}
+	digest := sha256.Sum256(request.Filled.Content)
+	deliverySecrets := make([]store.SecretDeliverySecret, 0, len(request.Filled.Names))
+	for _, name := range request.Filled.Names {
+		version, exists := request.Filled.ValueVersions[name]
+		if !exists || version <= 0 {
+			result.Reason = "机密项值版本号不可用，未登记下发记录"
+			return result
+		}
+		deliverySecrets = append(deliverySecrets, store.SecretDeliverySecret{
+			Name: name, ValueVersion: version,
+		})
+	}
+	recordInput := store.SecretDeliveryRecordInput{
+		ServerID: request.ServerID, Path: finalPath, Template: request.Template,
+		FileSHA256: hex.EncodeToString(digest[:]), Secrets: deliverySecrets,
+		WrittenAt: time.Now(), AuthorizationProfileID: request.ProfileID,
+		TemplateLimitBytes: request.TemplateLimitBytes,
+	}
+	if deliveryRecorder == nil {
+		hostname, err := os.Hostname()
+		if err != nil || hostname == "" {
+			hostname = "本机"
+		}
+		recordInput.InitiatingDeviceName = hostname
+		// 本机直接登记只发生在单机部署与权威端本机工具面；按本机角色区分两者。
+		recordInput.InitiatingInstanceName = "单机部署"
+		if state, err := roles.Load(); err == nil && state != nil && state.Role == roles.RoleServer {
+			recordInput.InitiatingInstanceName = "权威端本机"
+		}
+		if _, err := st.RecordSecretDelivery(recordInput, store.AgentSource()); err != nil {
+			result.Reason = "下发记录登记失败：" + err.Error()
+			return result
+		}
+		result.Status = secretDeliveryStatusRecorded
+		return result
+	}
+	outcome, err := deliveryRecorder.RecordSecretDeliveryForBroker(ctx, recordInput)
+	switch {
+	case err != nil:
+		result.Reason = outcome.Reason
+		if result.Reason == "" {
+			result.Reason = err.Error()
+		}
+	case outcome.Recorded:
+		result.Status = secretDeliveryStatusRecorded
+	default:
+		result.Reason = outcome.Reason
+	}
+	return result
 }
 
 // secretFillResultUsesPlaceholder 判断内容是否包含合法机密项占位符，或以

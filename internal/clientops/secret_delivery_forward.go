@@ -188,7 +188,7 @@ func (f *SecretDeliveryForwarder) RecordSecretDelivery(
 }
 
 // RecordSecretDeliveryForBroker 把面向 HTTP 接口的转发结果适配成工具层的
-// 下发记录登记能力。呈现原因不包含机密值或传输层诊断细节。
+// 下发记录登记能力。返回给 agent 的原因不包含机密值或传输层诊断细节。
 func (f *SecretDeliveryForwarder) RecordSecretDeliveryForBroker(
 	ctx context.Context, input store.SecretDeliveryRecordInput,
 ) (mcpserver.SecretDeliveryRegistrationOutcome, error) {
