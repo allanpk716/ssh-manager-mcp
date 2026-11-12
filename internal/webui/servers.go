@@ -90,6 +90,24 @@ type ServerAddForm struct {
 	VirtualNetworkNames []string
 	VirtualAddresses    []string
 	ProfileIDs          []string
+	DeviceNote          string
+}
+
+// OtherDeviceAddForm 是新增不受管设备的提交值；只包含设备备注与位置组，
+// 不携带 SSH、凭据、profile、shell 或连接测试字段。
+type OtherDeviceAddForm struct {
+	Name                string
+	Note                string
+	SiteName            string
+	PhysicalNetwork     string
+	PhysicalAddress     string
+	VirtualNetworkNames []string
+	VirtualAddresses    []string
+}
+
+// OtherDeviceAddResultView 是不受管设备保存后的结果数据。
+type OtherDeviceAddResultView struct {
+	DeviceName string
 }
 
 // ServerAddResultView 是新增成功后的结果页数据。本票只显示待连接测试；后
@@ -277,6 +295,7 @@ type ServerCompleteResultView struct {
 // 理模块适配实现；客户端不注册写路由，也不实现这个接口。
 type ServerWriter interface {
 	AddServer(form ServerAddForm, source ServerWriteSource) (*ServerAddResultView, error)
+	AddOtherDevice(form OtherDeviceAddForm, source ServerWriteSource) (*OtherDeviceAddResultView, error)
 	EditServer(id string, form ServerEditForm, source ServerWriteSource) (*ServerEditResultView, *ServerEditConflictView, error)
 	DeleteServerPreview(identifier string) (*ServerDeletePreviewView, error)
 	DeleteServer(identifier, digest string, source ServerWriteSource) error
@@ -293,6 +312,8 @@ const (
 	serverAddTypePath   = "/ui/add"
 	serverAddFormPath   = "/ui/servers/new"
 	serverAddResultPath = "/ui/servers/new/result"
+	deviceAddFormPath   = "/ui/devices/new"
+	deviceAddResultPath = "/ui/devices/new/result"
 	serversImportPath   = "/ui/servers/import"
 	serversPlanPath     = "/ui/servers/import/plan"
 	serversRunPath      = "/ui/servers/import/run"
@@ -310,6 +331,8 @@ func (h *handler) registerServerRoutes() {
 	h.mux.HandleFunc(serverAddTypePath, h.requireSession(h.handleServerAddType))
 	h.mux.HandleFunc(serverAddFormPath, h.requireSession(h.handleServerAddForm))
 	h.mux.HandleFunc(serverAddResultPath, h.requireSession(h.handleServerAddResult))
+	h.mux.HandleFunc(deviceAddFormPath, h.requireSession(h.handleOtherDeviceAddForm))
+	h.mux.HandleFunc(deviceAddResultPath, h.requireSession(h.handleOtherDeviceAddResult))
 	h.mux.HandleFunc(serversImportPath, h.requireSession(h.handleServerImport))
 	h.mux.HandleFunc(serversPlanPath, h.requireSession(h.handleServerImportPlan))
 	h.mux.HandleFunc(serversRunPath, h.requireSession(h.handleServerImportRun))

@@ -42,6 +42,20 @@ type AddResult struct {
 	AnchorCopy    *store.ServerAnchorCopy
 }
 
+// OtherDeviceAddRequest 是新增不受管设备的提交：只登记设备、备注与网络成
+// 员，不创建服务器条目或连接测试任务。
+type OtherDeviceAddRequest struct {
+	DeviceName  string
+	Note        string
+	SiteName    string
+	Memberships []NetworkMembershipInput
+}
+
+// OtherDeviceAddResult 是不受管设备保存后的结果。
+type OtherDeviceAddResult struct {
+	DeviceName string
+}
+
 // Add 保存一台服务器、所属设备、新设备的网络成员与 profile 授权。先做整
 // 份校验，再复用存储层与访问管理模块的既有写路径；凭据与服务器条目由存储
 // 层在同一个事务里写入。
@@ -102,6 +116,41 @@ func (m *Manager) Add(req AddRequest, src Source) (*AddResult, error) {
 	}, nil
 }
 
+// AddOtherDevice 保存一台不受管设备与它的网络成员。先做整份校验，再复用
+// 设备与网络成员的既有存储路径；这条路径不写服务器审计。
+func (m *Manager) AddOtherDevice(req OtherDeviceAddRequest, src Source) (*OtherDeviceAddResult, error) {
+	req.DeviceName = strings.TrimSpace(req.DeviceName)
+	req.Note = strings.TrimSpace(req.Note)
+	req.SiteName = strings.TrimSpace(req.SiteName)
+	if req.DeviceName == "" {
+		return nil, &FieldError{Field: "device", CLI: "device name is required", Page: "设备名不能为空。"}
+	}
+	if _, err := m.st.GetDevice(req.DeviceName); err == nil {
+		return nil, &FieldError{Field: "device", CLI: "device name already exists", Page: "设备名已存在：" + req.DeviceName + "。"}
+	} else if !errors.Is(err, store.ErrDeviceNotFound) {
+		return nil, err
+	}
+	memberships, _, err := m.prepareNetworkMemberships(req.SiteName, req.Memberships)
+	if err != nil {
+		return nil, err
+	}
+	device, err := m.st.AddDeviceWithSource(req.DeviceName, req.Note, "", storeWriteSource(src))
+	if err != nil {
+		if errors.Is(err, store.ErrDeviceNameExists) {
+			return nil, &FieldError{Field: "device", CLI: "device name already exists", Page: "设备名已存在：" + req.DeviceName + "。"}
+		}
+		return nil, err
+	}
+	for _, membership := range memberships {
+		if _, err := m.st.AddNetworkMembershipWithSource(
+			device.Name, membership.Network, membership.Address, storeWriteSource(src),
+		); err != nil {
+			return nil, err
+		}
+	}
+	return &OtherDeviceAddResult{DeviceName: device.Name}, nil
+}
+
 func storeWriteSource(src Source) store.WriteSource {
 	if src.kind == store.AuditSourceWebUI {
 		return store.WebUISource(src.addr)
@@ -150,69 +199,9 @@ func (m *Manager) prepareAdd(req AddRequest) (preparedAdd, error) {
 	if err := validateAddCredentials(req); err != nil {
 		return preparedAdd{}, err
 	}
-	networks, err := m.st.ListNetworks(store.NetworkFilter{})
+	memberships, networkByName, err := m.prepareNetworkMemberships(req.SiteName, req.Memberships)
 	if err != nil {
 		return preparedAdd{}, err
-	}
-	networkByName := make(map[string]models.Network, len(networks))
-	for _, network := range networks {
-		networkByName[network.Name] = *network
-	}
-	memberships := make([]NetworkMembershipInput, 0, len(req.Memberships))
-	seen := make(map[string]struct{})
-	for _, membership := range req.Memberships {
-		membership.Network = strings.TrimSpace(membership.Network)
-		membership.Address = strings.TrimSpace(membership.Address)
-		if membership.Network == "" && membership.Address == "" {
-			continue
-		}
-		if membership.Network == "" || membership.Address == "" {
-			return preparedAdd{}, &FieldError{Field: "memberships", CLI: "network membership requires network and address", Page: "网络成员必须同时填写网络与地址。"}
-		}
-		network, ok := networkByName[membership.Network]
-		if !ok {
-			return preparedAdd{}, &FieldError{Field: "memberships", CLI: fmt.Sprintf("network %q not found", membership.Network), Page: "网络不存在：" + membership.Network + "。"}
-		}
-		key := strings.ToLower(network.Name + "/" + membership.Address)
-		if _, duplicate := seen[key]; duplicate {
-			return preparedAdd{}, &FieldError{Field: "memberships", CLI: "duplicate network address in request", Page: "同一网络里提交了重复地址：" + membership.Address + "。"}
-		}
-		seen[key] = struct{}{}
-		existing, err := m.st.ListNetworkMembershipsForNetwork(network.Name)
-		if err != nil {
-			return preparedAdd{}, err
-		}
-		for _, item := range existing {
-			if strings.EqualFold(item.Address, membership.Address) {
-				return preparedAdd{}, &FieldError{
-					Field: "memberships",
-					CLI:   fmt.Sprintf("network %s address %s is used by device %s", network.Name, membership.Address, item.DeviceName),
-					Page:  fmt.Sprintf("网络 %s 的地址 %s 已被设备 %s 占用。", network.Name, membership.Address, item.DeviceName),
-				}
-			}
-		}
-		memberships = append(memberships, membership)
-	}
-	if req.SiteName != "" {
-		physical := ""
-		for _, membership := range memberships {
-			if network, ok := networkByName[membership.Network]; ok && network.Type == models.NetworkPhysical {
-				physical = membership.Network
-				if network.SiteName != req.SiteName {
-					return preparedAdd{}, &FieldError{
-						Field: "site", CLI: "physical network does not belong to site",
-						Page: "物理局域网不属于所选站点，请重新选择。",
-					}
-				}
-				break
-			}
-		}
-		if physical == "" {
-			return preparedAdd{}, &FieldError{
-				Field: "site", CLI: "site requires a physical network membership",
-				Page: "填写站点时必须同时填写物理局域网与地址；只填虚拟局域网时请不填站点。",
-			}
-		}
 	}
 
 	deviceMemberships := make([]*models.NetworkMembership, 0)
@@ -282,6 +271,76 @@ func (m *Manager) prepareAdd(req AddRequest) (preparedAdd, error) {
 		}
 	}
 	return preparedAdd{server: req.Server, deviceName: deviceName, memberships: memberships}, nil
+}
+
+func (m *Manager) prepareNetworkMemberships(
+	siteName string, requested []NetworkMembershipInput,
+) ([]NetworkMembershipInput, map[string]models.Network, error) {
+	networks, err := m.st.ListNetworks(store.NetworkFilter{})
+	if err != nil {
+		return nil, nil, err
+	}
+	networkByName := make(map[string]models.Network, len(networks))
+	for _, network := range networks {
+		networkByName[network.Name] = *network
+	}
+	memberships := make([]NetworkMembershipInput, 0, len(requested))
+	seen := make(map[string]struct{})
+	for _, membership := range requested {
+		membership.Network = strings.TrimSpace(membership.Network)
+		membership.Address = strings.TrimSpace(membership.Address)
+		if membership.Network == "" && membership.Address == "" {
+			continue
+		}
+		if membership.Network == "" || membership.Address == "" {
+			return nil, nil, &FieldError{Field: "memberships", CLI: "network membership requires network and address", Page: "网络成员必须同时填写网络与地址。"}
+		}
+		network, ok := networkByName[membership.Network]
+		if !ok {
+			return nil, nil, &FieldError{Field: "memberships", CLI: fmt.Sprintf("network %q not found", membership.Network), Page: "网络不存在：" + membership.Network + "。"}
+		}
+		key := strings.ToLower(network.Name + "/" + membership.Address)
+		if _, duplicate := seen[key]; duplicate {
+			return nil, nil, &FieldError{Field: "memberships", CLI: "duplicate network address in request", Page: "同一网络里提交了重复地址：" + membership.Address + "。"}
+		}
+		seen[key] = struct{}{}
+		existing, err := m.st.ListNetworkMembershipsForNetwork(network.Name)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, item := range existing {
+			if strings.EqualFold(item.Address, membership.Address) {
+				return nil, nil, &FieldError{
+					Field: "memberships",
+					CLI:   fmt.Sprintf("network %s address %s is used by device %s", network.Name, membership.Address, item.DeviceName),
+					Page:  fmt.Sprintf("网络 %s 的地址 %s 已被设备 %s 占用。", network.Name, membership.Address, item.DeviceName),
+				}
+			}
+		}
+		memberships = append(memberships, membership)
+	}
+	if siteName != "" {
+		physical := ""
+		for _, membership := range memberships {
+			if network, ok := networkByName[membership.Network]; ok && network.Type == models.NetworkPhysical {
+				physical = membership.Network
+				if network.SiteName != siteName {
+					return nil, nil, &FieldError{
+						Field: "site", CLI: "physical network does not belong to site",
+						Page: "物理局域网不属于所选站点，请重新选择。",
+					}
+				}
+				break
+			}
+		}
+		if physical == "" {
+			return nil, nil, &FieldError{
+				Field: "site", CLI: "site requires a physical network membership",
+				Page: "填写站点时必须同时填写物理局域网与地址；只填虚拟局域网时请不填站点。",
+			}
+		}
+	}
+	return memberships, networkByName, nil
 }
 
 func validateAddCredentials(req AddRequest) error {
