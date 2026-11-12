@@ -163,6 +163,7 @@ type ExecContextOutput struct {
 	UninjectedEnvironmentVariables []UninjectedEnvironmentVariable `json:"uninjected_environment_variables" jsonschema:"environment variables this execution layer cannot inject, with reasons; empty means none"`
 	PlannedNetworkDrives           []PlannedNetworkDrive           `json:"planned_network_drives" jsonschema:"Windows network drives a normal-layer command is planned to map; empty means none"`
 	UninjectedNetworkDrives        []UninjectedNetworkDrive        `json:"uninjected_network_drives" jsonschema:"Windows network drives this execution layer will not inject, with reasons; empty means none"`
+	NetworkDrivePreviewNote        string                          `json:"network_drive_preview_note,omitempty" jsonschema:"why network drive preview is empty; present when the authority is too old for topology and shared storage"`
 }
 
 // DownloadInput is the download_file tool input.

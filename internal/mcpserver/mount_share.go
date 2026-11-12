@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sharemount"
 	"ssh-manager-mcp/internal/sshbroker"
@@ -134,8 +135,8 @@ func MountShareForProfile(
 		})
 	}()
 
-	if st.IsReadOnly() && st.CacheRecommendedVersion() == "" {
-		return nil, errTopologyAndSharedStorageAuthorityTooOld
+	if st.CacheAuthorityTooOld() {
+		return nil, clientfeatures.ErrTopologyAndSharedStorageAuthorityTooOld
 	}
 	st, snapshotMayBeStale = ensureMountShareSnapshotFresh(ctx, st, snapshotSyncer, storeSource)
 	found, err := st.GetSharedStorage(shareName)

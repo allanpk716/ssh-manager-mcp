@@ -45,6 +45,9 @@ func devicesProbeCmd() *cobra.Command {
 				defer opened.Close()
 				st = opened
 			}
+			if err := refuseWhenClientCacheAuthorityTooOld(st); err != nil {
+				return err
+			}
 
 			service := &probe.Service{Store: st, Instance: instance}
 			if results, ok, pathErr := probeobserve.ResultsFor(instance); pathErr == nil && ok {
@@ -97,6 +100,7 @@ func openClientProbeStore(instance string) (*store.Store, func(), error) {
 		_ = auditFile.Close()
 		return nil, nil, err
 	}
+	temporary.Store.SetCacheRecommendedVersion(snapshot.RecommendedVersion)
 	temporary.Store.SetReadOnly(auditFile)
 	return temporary.Store, func() {
 		_ = temporary.Close()

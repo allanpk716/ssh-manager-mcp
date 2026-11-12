@@ -34,6 +34,9 @@ func devicesListCmd() *cobra.Command {
 				return err
 			}
 			defer closeStore()
+			if err := refuseWhenClientCacheAuthorityTooOld(s); err != nil {
+				return err
+			}
 			devices, err := s.ListDevices(store.DeviceFilter{
 				Site: site, Network: network, Unassigned: unassigned,
 			})
@@ -516,6 +519,9 @@ func devicesShowCmd() *cobra.Command {
 				return err
 			}
 			defer closeStore()
+			if err := refuseWhenClientCacheAuthorityTooOld(s); err != nil {
+				return err
+			}
 			device, err := s.GetDevice(args[0])
 			if err != nil {
 				return err

@@ -276,7 +276,7 @@ func TestCacheTokensBind(t *testing.T) {
 }
 
 // TestCacheTokensLsShowsClientVersion：旧设备码表自动加「客户端版本」列；
-// 已声明版本的设备码显示版本，从未声明的设备码显示固定的旧版提示。
+// 展示文字按功能起始支持版本推算缺失功能。
 func TestCacheTokensLsShowsClientVersion(t *testing.T) {
 	dir := t.TempDir()
 	mk, _ := store.GenerateMasterKey()
@@ -320,7 +320,15 @@ func TestCacheTokensLsShowsClientVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE cache_tokens SET client_version='9.8.7' WHERE id='ct-new'`); err != nil {
+	if _, err := db.Exec(`UPDATE cache_tokens SET client_version='v0.21.1' WHERE id='ct-new'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,profile_id,client_version,last_pull_at,created_at,updated_at)
+		VALUES ('ct-current','laptop-current',x'00',x'00','currXXX','active','p1','v0.22.0',1000,1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,profile_id,client_version,last_pull_at,created_at,updated_at)
+		VALUES ('ct-dev','laptop-dev',x'00',x'00','devrXXXX','active','p1','dev',1000,1,1)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -337,9 +345,13 @@ func TestCacheTokensLsShowsClientVersion(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"laptop-new",
-		"client_version=9.8.7",
+		"client_version=v0.21.1（旧版客户端:不支持机密项、网络拓扑、共享存储）",
+		"laptop-current",
+		"client_version=v0.22.0",
+		"laptop-dev",
+		"client_version=dev",
 		"laptop-old",
-		"client_version=旧版客户端:不支持机密项",
+		"client_version=旧版客户端:不支持机密项、网络拓扑、共享存储",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("cache-tokens ls missing %q:\n%s", want, got)

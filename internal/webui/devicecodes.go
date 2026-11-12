@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"ssh-manager-mcp/internal/clientfeatures"
 )
 
 // defaultServePort 是权威端主监听的默认端口；拉取命令按它兜底，serve 进
@@ -38,13 +40,10 @@ func (s AccessDeviceCodeSummary) LastPullText() string {
 	return s.LastPullAt.Format("2006-01-02 15:04:05")
 }
 
-// ClientVersionText 返回最近客户端版本的展示文字；空值表示未知或旧版客
-// 户端没有声明版本。
+// ClientVersionText 返回最近客户端版本的展示文字；空值与低于功能起始支
+// 持版本的值都会带出缺失功能清单。
 func (s AccessDeviceCodeSummary) ClientVersionText() string {
-	if s.ClientVersion == "" {
-		return "未声明"
-	}
-	return s.ClientVersion
+	return clientfeatures.ClientVersionLabel(s.ClientVersion)
 }
 
 // AccessDeviceIssueView 是设备码签发表单的渲染数据；Name 与 ProfileID 在

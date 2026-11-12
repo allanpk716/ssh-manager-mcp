@@ -754,13 +754,19 @@ func checkClientVersions() []doctorCheck {
 		return nil
 	}
 	recommended := state.Snapshot.RecommendedVersion
-	if recommended == "" {
-		recommended = "未记录"
+	if state.AuthorityTooOld() {
+		recommended = "权威端过旧，未提供推荐版本"
+	}
+	detail := fmt.Sprintf("客户端版本 %s；推荐版本 %s", buildinfo.Version, recommended)
+	if hint := updater.VersionMismatchHint(
+		buildinfo.Version, state.Snapshot.RecommendedVersion, state.AuthorityTooOld(),
+	); hint != "" {
+		detail += "；" + hint
 	}
 	return []doctorCheck{{
 		Name:   "client-versions",
 		Status: statusInfo,
-		Detail: fmt.Sprintf("客户端版本 %s；推荐版本 %s", buildinfo.Version, recommended),
+		Detail: detail,
 	}}
 }
 

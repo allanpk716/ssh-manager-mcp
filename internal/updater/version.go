@@ -138,11 +138,18 @@ func CompareVersions(a, b Version) int {
 }
 
 // VersionMismatchHint 比较客户端二进制版本与权威端下发的推荐版本。空字符串
-// 表示不提示：两边相等，或任一边不是可解析的发布版本（例如 dev）。
-func VersionMismatchHint(clientVersion, recommendedVersion string) string {
+// 表示不提示：两边相等，或任一边不是可解析的发布版本（例如 dev）。权威端
+// 过旧且客户端是可解析发布版本时，提示先升级权威端。
+// authorityTooOld 由调用方显式传入：单机与权威端模式下推荐版本也可能为
+// 空，不能单凭推荐版本为空推出权威端过旧；同时 updater 不能依赖
+// clientfeatures，否则会形成依赖环（clientfeatures 已经依赖 updater）。
+func VersionMismatchHint(clientVersion, recommendedVersion string, authorityTooOld bool) string {
 	client, err := ParseVersion(clientVersion)
 	if err != nil {
 		return ""
+	}
+	if authorityTooOld {
+		return "客户端比权威端新，建议先升级权威端"
 	}
 	recommended, err := ParseVersion(recommendedVersion)
 	if err != nil {

@@ -25,6 +25,20 @@ type cacheLinuxMountServer struct {
 func (f *cacheLinuxMountServer) handler(command string, stdin io.Reader) (string, string, int) {
 	stdinBytes, _ := io.ReadAll(stdin)
 	switch {
+	case strings.Contains(command, "__SSHMGR_CTX_"):
+		start := strings.Index(command, "__SSHMGR_CTX_") + len("__SSHMGR_CTX_")
+		nonce := command[start:]
+		if end := strings.IndexByte(nonce, ':'); end >= 0 {
+			nonce = nonce[:end]
+		}
+		marker := "__SSHMGR_CTX_" + nonce + ":"
+		return strings.Join([]string{
+			marker + "id", "uid=1000(u) gid=1000(u) groups=1000(u)",
+			marker + "tty", "no-tty",
+			marker + "uidmap", "0 0 4294967295",
+			marker + "lsm", "unconfined",
+			marker + "proc", "pid=4242 ppid=4241 comm=bash",
+		}, "\n") + "\n", "", 0
 	case strings.TrimSpace(command) == "uname -s":
 		return "Linux\n", "", 0
 	case strings.Contains(command, "sshmgr_probe_one "):

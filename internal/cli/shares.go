@@ -104,6 +104,9 @@ func sharesListCmd() *cobra.Command {
 				return err
 			}
 			defer closeStore()
+			if err := refuseWhenClientCacheAuthorityTooOld(s); err != nil {
+				return err
+			}
 			shares, err := s.ListSharedStorages(store.SharedStorageFilter{Device: device, Server: server})
 			if err != nil {
 				return err
@@ -207,6 +210,9 @@ func sharesShowCmd() *cobra.Command {
 				return err
 			}
 			defer closeStore()
+			if err := refuseWhenClientCacheAuthorityTooOld(s); err != nil {
+				return err
+			}
 			share, err := s.GetSharedStorage(args[0])
 			if err != nil {
 				return err

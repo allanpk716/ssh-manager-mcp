@@ -626,7 +626,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	filledSecretNames = filled.Names
 	projectedByteCount := int64(len(filled.ProjectedContent))
 	fillErr := filled.Err()
-	if store.AuthorityTooOld(st) && secretFillResultUsesPlaceholder(filled) {
+	if st.CacheAuthorityTooOld() && secretFillResultUsesPlaceholder(filled) {
 		status = "denied"
 		err = secretfill.ErrAuthorityTooOld
 		return

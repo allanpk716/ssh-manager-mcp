@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/paths"
 
 	_ "modernc.org/sqlite"
@@ -126,11 +127,11 @@ func (s *Store) SetCacheRecommendedVersion(version string) {
 // 缓存形态与旧权威端快照都返回空串。
 func (s *Store) CacheRecommendedVersion() string { return s.cacheRecommendedVersion }
 
-// AuthorityTooOld 判断当前实例连接的权威端是否过旧。唯一条件是当前实例
-// 正在使用客户端缓存，且缓存快照没有携带推荐版本；单机模式下本机就是
-// 权威端，恒返回否。版本号查询接口返回 404 不参与这个判断。
-func AuthorityTooOld(s *Store) bool {
-	return s != nil && s.IsReadOnly() && s.CacheRecommendedVersion() == ""
+// CacheAuthorityTooOld 判断当前只读客户端缓存是否来自旧权威端。非缓存
+// 形态本机就是权威端或单机部署，恒为否。版本号查询接口返回 404 不参与
+// 这个判断。
+func (s *Store) CacheAuthorityTooOld() bool {
+	return s != nil && s.readOnly && clientfeatures.AuthorityTooOld(s.cacheRecommendedVersion)
 }
 
 // DefaultStorePath returns the on-disk vault location (program-fixed, spec §3.1/§5.1).

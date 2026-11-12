@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/dialdevice"
 	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
@@ -41,8 +42,8 @@ func QueryTopologyForProfile(st *store.Store, profileID, from string, to []strin
 	if strings.TrimSpace(from) == "" {
 		return "", errors.New("from 不能为空")
 	}
-	if st.IsReadOnly() && st.CacheRecommendedVersion() == "" {
-		return "", errTopologyAndSharedStorageAuthorityTooOld
+	if st.CacheAuthorityTooOld() {
+		return "", clientfeatures.ErrTopologyAndSharedStorageAuthorityTooOld
 	}
 
 	origin, err := resolveQueryTopologyOrigin(st, profileID, from)

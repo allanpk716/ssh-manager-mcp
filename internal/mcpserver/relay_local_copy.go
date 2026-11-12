@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/shareaddress"
@@ -88,8 +89,8 @@ func relayLocalCopyForProfile(
 	if in.FromShareAddress != "" && in.ToShareAddress != "" {
 		return RelayOutput{}, errors.New("源端和目标端不能都是共享地址；请先用 query_topology 查询实际路径，再在可挂载共享的服务器上用 exec_command 拷贝")
 	}
-	if st.IsReadOnly() && st.CacheRecommendedVersion() == "" {
-		return RelayOutput{}, errTopologyAndSharedStorageAuthorityTooOld
+	if st.CacheAuthorityTooOld() {
+		return RelayOutput{}, clientfeatures.ErrTopologyAndSharedStorageAuthorityTooOld
 	}
 	start := time.Now()
 	status := "error"

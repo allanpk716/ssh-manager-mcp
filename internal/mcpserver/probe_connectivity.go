@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/probe"
 	"ssh-manager-mcp/internal/probeobserve"
 	"ssh-manager-mcp/internal/sshbroker"
@@ -30,6 +31,9 @@ func bridgeCacheInstance() string {
 // 编号必须在该授权范围内；只要工具正常返回，审计状态就是成功，单个目标
 // 不通不算失败。
 func ProbeConnectivityForProfile(ctx context.Context, st *store.Store, projectID, profileID, from string, targets []string, hk sshbroker.HostKeyStore) (string, error) {
+	if st.CacheAuthorityTooOld() {
+		return "", clientfeatures.ErrTopologyAndSharedStorageAuthorityTooOld
+	}
 	start := time.Now()
 	status := "error"
 	var originServerID string
