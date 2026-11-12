@@ -70,8 +70,8 @@ func cacheMetaForwarderFor(instance string) (*clientops.MetadataForwarder, error
 }
 
 // cacheSecretDeliveryForwarderFor 解析实例的拉取凭据并构造下发记录转发器。
-// 缺少凭据得到会在登记时报「未登记」的形态；固定证书配明文地址这类硬性
-// 配置错误在启动时报错。
+// 缺少拉取凭据时，转发器可以构造成功，但登记时会固定返回「未登记」；
+// 固定证书却配置了明文 HTTP 地址属于配置错误，启动时直接报错。
 func cacheSecretDeliveryForwarderFor(instance string) (*clientops.SecretDeliveryForwarder, error) {
 	cred, err := clientops.ReadCacheCredFor(instance)
 	if err != nil || cred == nil {

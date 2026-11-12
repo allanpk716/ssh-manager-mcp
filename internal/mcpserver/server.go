@@ -34,7 +34,7 @@ type MetadataEditor interface {
 }
 
 // SecretDeliveryRegistrationOutcome 是 upload_content 在文件已写入后的下发
-// 记录登记结果。Reason 只在未登记时携带可呈现原因，不含机密值。
+// 记录登记结果。Reason 只在未登记时携带返回给 agent 的原因，不含机密值。
 type SecretDeliveryRegistrationOutcome struct {
 	Recorded bool
 	Reason   string
@@ -47,6 +47,11 @@ type SecretDeliveryRecorder interface {
 		ctx context.Context, input store.SecretDeliveryRecordInput,
 	) (SecretDeliveryRegistrationOutcome, error)
 }
+
+const (
+	secretDeliveryStatusRecorded    = "recorded"
+	secretDeliveryStatusNotRecorded = "not_recorded"
+)
 
 // BrokerTools is the canonical set of MCP tools the broker exposes (the agent's
 // broker-tool surface). NewServer registers exactly these tools, in this order,
@@ -491,7 +496,7 @@ func NewServerFromSourceWithDeliveryRecorder(storeFn func() *store.Store, profil
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
 			Name:        BrokerTools[9], // "upload_content"
-			Description: fmt.Sprintf("Upload inline content as a file on a server — the cross-machine path (upload_file reads from the broker's own filesystem; use upload_content to push content YOU hold). Pass the server's id (from list_servers) + the content + the absolute destination path (must start with / or a Windows drive root like C:/; parent directories are created; an existing file is overwritten). encoding: 'text' (default, UTF-8 — invalid sequences are replaced with U+FFFD, not byte-exact) or 'base64' (exact bytes — SINGLE-LINE standard base64 with padding; use it for binary, non-UTF-8 or byte-exact content). Secret placeholders: only upload_content fills {{sshmgr-secret:NAME}} placeholders with the current secret values. After a filled file is written, sshmgr tries its best to register a secret delivery record for the owner; registration can be missed while the authority is unreachable, and failure never rolls back or retries the file. delivery_record_status is 'recorded' when that record was registered and 'not_recorded' otherwise; delivery_record_reason explains the latter. Content without a placeholder is not registered, and neither it nor upload_file/relay_file deletes an older record for the path. Capped at %d bytes decoded — larger payloads are refused before transfer; for bigger files place them where the broker can reach and use upload_file. No sudo: root-owned paths are not writable. Concurrent writes to the same path are not atomic — avoid racing another upload. On failure the remote file may be left partially written — verify and clean up yourself. This separate file transfer session cannot see Windows network drives mapped for exec_command or exec_background.", uploadCap),
+			Description: fmt.Sprintf("Upload inline content as a file on a server — the cross-machine path (upload_file reads from the broker's own filesystem; use upload_content to push content YOU hold). Pass the server's id (from list_servers) + the content + the absolute destination path (must start with / or a Windows drive root like C:/; parent directories are created; an existing file is overwritten). encoding: 'text' (default, UTF-8 — invalid sequences are replaced with U+FFFD, not byte-exact) or 'base64' (exact bytes — SINGLE-LINE standard base64 with padding; use it for binary, non-UTF-8 or byte-exact content). Secret placeholders: only upload_content fills {{sshmgr-secret:NAME}} placeholders with the current secret values. After a filled file is written, sshmgr tries its best to register a secret delivery record for the owner; registration can be missed while the authority is unreachable, and failure never rolls back or retries the file. For filled writes, delivery_record_status is 'recorded' when that record was registered and 'not_recorded' otherwise, with delivery_record_reason explaining the latter. Content without a placeholder returns no delivery-record fields and is not registered; neither it nor upload_file/relay_file deletes an older record for the path. Capped at %d bytes decoded — larger payloads are refused before transfer; for bigger files place them where the broker can reach and use upload_file. No sudo: root-owned paths are not writable. Concurrent writes to the same path are not atomic — avoid racing another upload. On failure the remote file may be left partially written — verify and clean up yourself. This separate file transfer session cannot see Windows network drives mapped for exec_command or exec_background.", uploadCap),
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in UploadContentInput) (*mcp.CallToolResult, UploadContentOutput, error) {
 			st := storeFromContext(ctx, storeFn)
