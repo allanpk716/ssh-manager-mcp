@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -184,6 +185,18 @@ func (f *SecretDeliveryForwarder) RecordSecretDelivery(
 	default:
 		return secretDeliveryFailure(SecretDeliveryUnreachable, "", SecretDeliveryUnreachableText, fmt.Errorf("authority returned %d", response.StatusCode))
 	}
+}
+
+// RecordSecretDeliveryForBroker 把面向 HTTP 接口的转发结果适配成工具层的
+// 下发记录登记能力。呈现原因不包含机密值或传输层诊断细节。
+func (f *SecretDeliveryForwarder) RecordSecretDeliveryForBroker(
+	ctx context.Context, input store.SecretDeliveryRecordInput,
+) (mcpserver.SecretDeliveryRegistrationOutcome, error) {
+	result, err := f.RecordSecretDelivery(ctx, input)
+	if err == nil {
+		return mcpserver.SecretDeliveryRegistrationOutcome{Recorded: true}, nil
+	}
+	return mcpserver.SecretDeliveryRegistrationOutcome{Reason: result.Message}, err
 }
 
 func secretDeliveryFailure(

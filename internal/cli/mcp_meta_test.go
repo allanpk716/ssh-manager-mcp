@@ -6,8 +6,12 @@ package cli
 // flavor whose Edit fails closed with the §2.1 main message.
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	clientops "ssh-manager-mcp/internal/clientops"
+	"ssh-manager-mcp/internal/store"
 )
 
 func TestCacheMetaForwarderFor_MissingCredentialFailsClosed(t *testing.T) {
@@ -26,6 +30,27 @@ func TestCacheMetaForwarderFor_MissingCredentialFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "NOT applied anywhere") {
 		t.Fatalf("the main message must state the nothing-applied guarantee: %v", err)
+	}
+}
+
+func TestCacheSecretDeliveryForwarderFor_MissingCredentialFailsClosed(t *testing.T) {
+	forwarder, err := cacheSecretDeliveryForwarderFor("no-such-instance-delivery-record")
+	if err != nil {
+		t.Fatalf("缺少凭据必须构造固定报错的转发器，实际错误：%v", err)
+	}
+	if forwarder == nil {
+		t.Fatal("转发器不能为空")
+	}
+	result, err := forwarder.RecordSecretDelivery(context.Background(), store.SecretDeliveryRecordInput{
+		ServerID: "server-1", Path: "/etc/app/config.yaml",
+		Template: []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+		Secrets:  []store.SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 1}},
+	})
+	if err == nil || result.Status != clientops.SecretDeliveryUnreachable {
+		t.Fatalf("缺少凭据的登记结果 = %+v error=%v，应固定按权威端不可达报告", result, err)
+	}
+	if !strings.Contains(err.Error(), "没有登记，也没有保存本地状态") {
+		t.Fatalf("缺少凭据的错误文本应说明未登记且无本地状态：%v", err)
 	}
 }
 

@@ -55,7 +55,7 @@ func (source *StoreSource) Secrets(_ context.Context, names []string) (SourceRes
 		ReadFailedNames: visibleFailed,
 	}
 	for name, value := range values {
-		secret := Secret{Name: name, Value: value.Value}
+		secret := Secret{Name: name, Value: value.Value, ValueVersion: value.ValueVersion}
 		for _, serverID := range value.WritableServerIDs {
 			if !source.serverIndex[serverID] {
 				continue

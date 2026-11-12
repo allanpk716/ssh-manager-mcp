@@ -214,8 +214,10 @@ type UploadContentInput struct {
 type UploadContentOutput struct {
 	MaskedOutput
 	ConnectionNotesOutput
-	Bytes             int64    `json:"bytes" jsonschema:"bytes written to the remote file (after secret placeholders are filled)"`
-	FilledSecretNames []string `json:"filled_secret_names,omitempty" jsonschema:"secret names filled into the file, deduplicated in first-appearance order; values are never included"`
+	Bytes                int64    `json:"bytes" jsonschema:"bytes written to the remote file (after secret placeholders are filled)"`
+	FilledSecretNames    []string `json:"filled_secret_names,omitempty" jsonschema:"secret names filled into the file, deduplicated in first-appearance order; values are never included"`
+	DeliveryRecordStatus string   `json:"delivery_record_status" jsonschema:"delivery-record status: recorded means the owner's delivery record was registered; not_recorded means registration was unnecessary or failed"`
+	DeliveryRecordReason string   `json:"delivery_record_reason,omitempty" jsonschema:"why delivery_record_status is not_recorded; empty when the delivery record was registered"`
 }
 
 // ForwardInput is the forward_port tool input. forward_port opens a local TCP

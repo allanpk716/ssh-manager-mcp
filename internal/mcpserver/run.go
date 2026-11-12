@@ -314,11 +314,20 @@ type CacheRefresher interface {
 // mountSnapshotSyncer 是挂载共享存储前的快照保鲜能力（票 #203）；单机与
 // 权威端不传。
 func RunStdioCacheWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, mountSnapshotSyncer MountShareSnapshotSyncer, startBackground func(CacheRefresher) func(), inventoryQuerier ...SoftwareInventoryQuerier) error {
+	return RunStdioCacheWithRefresherAndDeliveryRecorder(
+		token, snap, auditPath, reload, fwdBinder, device, metaEditor, mountSnapshotSyncer,
+		startBackground, nil, inventoryQuerier...,
+	)
+}
+
+// RunStdioCacheWithRefresherAndDeliveryRecorder 在缓存桥中注入下发记录转
+// 发能力；生产入口由命令行按客户端实例构造，测试可以直接驱动同一装配。
+func RunStdioCacheWithRefresherAndDeliveryRecorder(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, mountSnapshotSyncer MountShareSnapshotSyncer, startBackground func(CacheRefresher) func(), deliveryRecorder SecretDeliveryRecorder, inventoryQuerier ...SoftwareInventoryQuerier) error {
 	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor, mountSnapshotSyncer, inventoryQuerier)
+	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor, deliveryRecorder, mountSnapshotSyncer, inventoryQuerier)
 	if err != nil {
 		af.Close()
 		return err
@@ -360,11 +369,19 @@ func NewCacheBroker(token string, snap *store.Snapshot, auditPath string, reload
 // cleanup 的契约与 NewCacheBroker 相同。mountSnapshotSyncer 是挂载前快照
 // 保鲜能力;生产装配由 cli 层传入,测试可省略。
 func NewCacheBrokerWithRefresher(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, mountSnapshotSyncer MountShareSnapshotSyncer, inventoryQuerier ...SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, CacheRefresher, func(), error) {
+	return NewCacheBrokerWithRefresherAndDeliveryRecorder(
+		token, snap, auditPath, reload, fwdBinder, device, metaEditor, mountSnapshotSyncer, nil, inventoryQuerier...,
+	)
+}
+
+// NewCacheBrokerWithRefresherAndDeliveryRecorder 构建带下发记录转发能力的
+// 缓存桥，返回形状与 NewCacheBrokerWithRefresher 完全一致。
+func NewCacheBrokerWithRefresherAndDeliveryRecorder(token string, snap *store.Snapshot, auditPath string, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, mountSnapshotSyncer MountShareSnapshotSyncer, deliveryRecorder SecretDeliveryRecorder, inventoryQuerier ...SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, CacheRefresher, func(), error) {
 	af, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor, mountSnapshotSyncer, inventoryQuerier)
+	srv, tunnels, tasks, h, err := newCacheBroker(token, snap, af, reload, fwdBinder, device, metaEditor, deliveryRecorder, mountSnapshotSyncer, inventoryQuerier)
 	if err != nil {
 		af.Close()
 		return nil, nil, nil, nil, nil, err
@@ -377,7 +394,7 @@ func NewCacheBrokerWithRefresher(token string, snap *store.Snapshot, auditPath s
 // exported NewCacheBroker so the tested wiring cannot drift from the served
 // wiring. The binder is invoked once with the holder's Current; the resulting
 // wrapper is a process-lifetime value (it captures no store pointer).
-func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, mountSnapshotSyncer MountShareSnapshotSyncer, inventoryQuerier []SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, *cacheStoreHolder, error) {
+func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func() (*store.Snapshot, bool, error), fwdBinder HostKeyStoreBinder, device string, metaEditor MetadataEditor, deliveryRecorder SecretDeliveryRecorder, mountSnapshotSyncer MountShareSnapshotSyncer, inventoryQuerier []SoftwareInventoryQuerier) (*mcp.Server, *TunnelManager, *TaskManager, *cacheStoreHolder, error) {
 	h, project, err := newCacheStoreHolderFromSnapshot(token, snap, af, reload, device)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -395,7 +412,7 @@ func newCacheBroker(token string, snap *store.Snapshot, af *os.File, reload func
 	if len(inventoryQuerier) > 0 && inventoryQuerier[0] != nil {
 		inventory = inventoryQuerier[0]
 	}
-	srv, tunnels, tasks, err := NewServerFromSourceWithHints(h.Current, project.ProfileID, project.ID, hkFn, metaEditor, inventory, mountSnapshotSyncer, h.changeHint, h.versionHint)
+	srv, tunnels, tasks, err := NewServerFromSourceWithDeliveryRecorder(h.Current, project.ProfileID, project.ID, hkFn, metaEditor, inventory, mountSnapshotSyncer, deliveryRecorder, h.changeHint, h.versionHint)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
