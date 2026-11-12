@@ -416,6 +416,12 @@ func normalizeSecretDeliveryPath(path string, windows bool) (string, string) {
 		return path, path
 	}
 	normalized := strings.ReplaceAll(path, `\`, `/`)
+	if len(normalized) >= 4 && normalized[0] == '/' &&
+		((normalized[1] >= 'A' && normalized[1] <= 'Z') ||
+			(normalized[1] >= 'a' && normalized[1] <= 'z')) &&
+		normalized[2] == ':' && normalized[3] == '/' {
+		normalized = normalized[1:]
+	}
 	return normalized, strings.ToLower(normalized)
 }
 

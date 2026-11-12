@@ -1709,13 +1709,19 @@ func TestUploadContentForProfileNoLeakConnectError(t *testing.T) {
 // host:port shape and the audit must hold one error-status row.
 func TestUploadContentForProfileNoLeakSFTPMidFailure(t *testing.T) {
 	st, pid, srvID, root := ucSeed(t)
+	if err := st.AddSecret("MIDFAIL_TOKEN", "", []byte("mid-failure-secret"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"MIDFAIL_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
 
 	blocker := root + "/blocker"
 	if err := os.WriteFile(filepath.FromSlash(blocker), []byte("i am a regular file"), 0o600); err != nil {
 		t.Fatalf("plant blocker file: %v", err)
 	}
 
-	_, err := UploadContentForProfile(context.Background(), st, "proj-test", pid, srvID, "data", blocker+"/sub/f.txt", "", 1<<20)
+	_, err := UploadContentForProfile(context.Background(), st, "proj-test", pid, srvID, "token={{sshmgr-secret:MIDFAIL_TOKEN}}", blocker+"/sub/f.txt", "", 1<<20)
 	if err == nil {
 		t.Fatal("regular file in parent chain: want SFTP mkdir failure")
 	}
@@ -1735,6 +1741,13 @@ func TestUploadContentForProfileNoLeakSFTPMidFailure(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no error-status row; rows=%+v", rows)
+	}
+	records, err := st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("写入失败不应登记下发记录，实际：%+v", records)
 	}
 }
 

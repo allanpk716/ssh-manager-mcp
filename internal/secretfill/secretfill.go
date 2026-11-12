@@ -31,11 +31,12 @@ type ServerRef struct {
 	Name string
 }
 
-// Secret 是一个机密项的当前值与可写入服务器列表。Value 只允许留在进程
-// 内存中，绝不能序列化到工具结果、日志或审计。
+// Secret 是一个机密项的当前值、当前值版本号与可写入服务器列表。Value
+// 只允许留在进程内存中，绝不能序列化到工具结果、日志或审计。
 type Secret struct {
 	Name            string
 	Value           []byte
+	ValueVersion    int64
 	WritableServers []ServerRef
 }
 
@@ -82,12 +83,15 @@ type Problem struct {
 
 func (p Problem) Error() string { return p.Message }
 
-// Result 是填值结果。Names 按首次出现顺序去重；有 Problem 时 Content 为
-// 空，调用方不得把任何部分写出或返回。ProjectedContent 只供调用方做连
-// 接前的大小预检：有未解析占位符时保留原文，已读到的值只留在进程内。
+// Result 是填值结果。Names 按首次出现顺序去重，ValueVersions 记录这些
+// 名字对应的当前值版本号；两者只供登记不含值的下发记录使用。有 Problem
+// 时 Content 为空，调用方不得把任何部分写出或返回。ProjectedContent 只供
+// 调用方做连接前的大小预检：有未解析占位符时保留原文，已读到的值只留在
+// 进程内。
 type Result struct {
 	Content          []byte
 	Names            []string
+	ValueVersions    map[string]int64
 	Problems         []Problem
 	ProjectedContent []byte
 }
@@ -148,6 +152,10 @@ func Fill(ctx context.Context, content []byte, target ServerRef, source Source) 
 	readFailed := make(map[string]bool, len(sourceResult.ReadFailedNames))
 	for _, name := range sourceResult.ReadFailedNames {
 		readFailed[name] = true
+	}
+	result.ValueVersions = make(map[string]int64, len(sourceResult.Secrets))
+	for name, secret := range sourceResult.Secrets {
+		result.ValueVersions[name] = secret.ValueVersion
 	}
 	for _, item := range references {
 		switch {
