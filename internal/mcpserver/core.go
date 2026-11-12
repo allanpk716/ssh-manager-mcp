@@ -330,6 +330,7 @@ func contains(haystack []string, needle string) bool {
 // connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
 // download has neither sudo nor a command deadline.
 func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, path string, hk ...sshbroker.HostKeyStore) (out DownloadOutput, err error) {
+	path = normalizeRemotePath(path)
 	var status string
 	start := time.Now()
 	defer func() {
@@ -436,15 +437,17 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 // PARENT to pre-exist. Before the transfer this function MkdirAll's the parent
 // of remotePath (cli.MkdirAll — broker primitive over SFTP), matching the
 // `scp --parents` UX so an agent can target a freshly-named destination without
-// a preparatory exec_command. remotePath is a POSIX path; path.Dir (not
-// filepath.Dir) computes the parent so the gate stays correct on a Windows broker
-// host too (the remote's path convention is always POSIX).
+// a preparatory exec_command. remotePath is normalized before use: POSIX paths
+// stay unchanged, while Windows drive paths use forward slashes. path.Dir (not
+// filepath.Dir) computes the parent from that slash form so the behavior stays
+// correct on a Windows broker host too.
 //
 // Statuses: denied (out-of-profile), auth_error, no_credential (credential-
 // less server, Plan 20 C0 — Plan 21 A1 unified with exec), hostkey_mismatch,
 // connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
 // upload has neither sudo nor a command deadline.
 func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, localPath, remotePath string, hk ...sshbroker.HostKeyStore) (out UploadOutput, err error) {
+	remotePath = normalizeRemotePath(remotePath)
 	var status string
 	start := time.Now()
 	defer func() {
@@ -554,6 +557,7 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 // 取或 Base64 解码后的拒绝为填值前模板字节数，避免间接暴露机密值长度；
 // 更早失败为 0。
 func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64, hk ...sshbroker.HostKeyStore) (out UploadContentOutput, err error) {
+	remotePath = normalizeRemotePath(remotePath)
 	if encoding == "" {
 		encoding = "text"
 	}
@@ -581,7 +585,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return UploadContentOutput{}, fmt.Errorf("encoding must be \"text\" or \"base64\", got %q", encoding)
 	}
 	if remotePath == "" || !isAbsRemotePath(remotePath) {
-		return UploadContentOutput{}, fmt.Errorf("remote_path must be an absolute path starting with /")
+		return UploadContentOutput{}, fmt.Errorf("remote_path must be an absolute path: /dir/file, or a Windows drive path such as C:/dir/file (backslashes are accepted and converted)")
 	}
 	if encoding == "base64" && strings.ContainsAny(content, "\r\n") {
 		return UploadContentOutput{}, fmt.Errorf("base64 content must be single-line standard base64 with padding — join lines and resend")
@@ -746,6 +750,26 @@ func isAbsRemotePath(p string) bool {
 	return len(p) >= 3 &&
 		((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) &&
 		p[1] == ':' && p[2] == '/'
+}
+
+// normalizeRemotePath 统一文件工具收到的远端路径写法。GitHub issue 47 的背
+// 景是 Windows 盘符路径里的反斜杠曾被原样传给 SFTP，导致目标路径被误处
+// 理；因此盘符加冒号后跟斜杠或反斜杠的路径会把全部反斜杠换成正斜杠。
+// 以正斜杠开头的路径可能是 Linux 或 macOS 路径，其中反斜杠是合法文件名
+// 字符，必须原样保留。其他输入不在这里改写；是否拒绝相对路径由调用方
+// 决定。该规则不依赖服务器条目的 shell 类型。
+func normalizeRemotePath(remotePath string) string {
+	if strings.HasPrefix(remotePath, "/") {
+		return remotePath
+	}
+	if len(remotePath) >= 3 &&
+		((remotePath[0] >= 'A' && remotePath[0] <= 'Z') ||
+			(remotePath[0] >= 'a' && remotePath[0] <= 'z')) &&
+		remotePath[1] == ':' &&
+		(remotePath[2] == '/' || remotePath[2] == '\\') {
+		return strings.ReplaceAll(remotePath, `\`, `/`)
+	}
+	return remotePath
 }
 
 // ForwardForProfile opens a `ssh -L` tunnel through serverID iff serverID is in
