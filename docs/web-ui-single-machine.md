@@ -53,7 +53,7 @@ sshmgr ui
 | **服务器**（首页） | 列表与详情；「只看需要注意」过滤（无凭据、未填角色、缺私钥口令等 ⚠ 项置顶）；「导入 SSH 配置」；「逐台补全需要注意的服务器」；行内「编辑 / 删除」 | `servers ls` / `servers import` / `servers edit` / `servers rm` |
 | **访问 → Profile** | 「新增 profile」表单；行内「调整授权」（勾选服务器保存）；「删除」（被项目/设备码引用时拒绝并点名） | `profiles add` / `profiles grant` / `profiles revoke` / `profiles rm` |
 | **访问 → 项目令牌** | 「签发新项目令牌」（名称 + 绑定 profile）→ **token 一次性展示页**（令牌与 `.mcp.json` 片段各带「复制」按钮）；行内「轮换 / 停用 / 重新启用 / 吊销（勾选确认）/ 删除（仅已吊销）」 | `projects add` / `rotate` / `disable` / `enable` / `revoke` / `delete` |
-| **机密项** | 列表（只显示名字与备注）；新增、查看值、可写服务器矩阵、删除 | `secrets` 命令组 |
+| **机密项** | 列表（只显示名字与备注）；新增、详情（含只读下发记录）、可写服务器矩阵、删除 | `secrets` 命令组（含 `secrets records`） |
 | **运维** | 备份（状态 / 立即备份 / 校验最新备份 / 编辑备份配置）、设置、升级；**升级为权威端**入口（见下） | `backup` / `settings` / `update` / `sshmgr init --role server` |
 | **审计** | 按条件查询 vault 审计日志 | `sshmgr audit` |
 

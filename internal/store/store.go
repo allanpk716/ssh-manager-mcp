@@ -1021,6 +1021,26 @@ CREATE TABLE IF NOT EXISTS secret_server_allow (
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   PRIMARY KEY (secret_id, server_id)
 );
+CREATE TABLE IF NOT EXISTS secret_delivery_records (
+  id TEXT PRIMARY KEY,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  path_key TEXT NOT NULL,
+  template BLOB NOT NULL,
+  file_sha256 TEXT NOT NULL,
+  written_at INTEGER NOT NULL,
+  initiating_device_name TEXT NOT NULL,
+  initiating_instance_name TEXT NOT NULL,
+  recorded_at INTEGER NOT NULL,
+  UNIQUE (server_id, path_key)
+);
+CREATE TABLE IF NOT EXISTS secret_delivery_record_secrets (
+  record_id TEXT NOT NULL REFERENCES secret_delivery_records(id) ON DELETE CASCADE,
+  secret_id TEXT NOT NULL,
+  secret_name TEXT NOT NULL,
+  value_version INTEGER NOT NULL CHECK(value_version > 0),
+  PRIMARY KEY (record_id, secret_id)
+);
 CREATE TABLE IF NOT EXISTS shared_storages (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

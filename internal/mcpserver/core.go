@@ -976,7 +976,7 @@ func joinAuditCommand(remoteHost string, remotePort int, tunID string) string {
 // and stops an accidental huge value from ballooning the serve body limit
 // (that scaling is registered in threat-model per spec §6).
 const (
-	uploadContentCapDefault int64 = 8 << 20 // 8 MiB
+	uploadContentCapDefault int64 = store.UploadContentDefaultLimitBytes
 	uploadContentCapMax     int64 = 1 << 30 // 1 GiB
 )
 

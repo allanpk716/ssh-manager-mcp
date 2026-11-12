@@ -3,6 +3,7 @@ package cli
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -99,5 +100,82 @@ func seedDeviceDeleteSharedStorage(t *testing.T, dbPath string, masterKey []byte
 		[]string{"DATASETS_MOUNT_PASSWORD"}, []string{"linux-web", "windows-web"}, store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestDevicesRemovePreviewListsDeliveryRecords 设备删除预览列出该设备全部
+// 服务器条目的下发记录；确认删除后记录随条目消失，输出不含机密项值。
+func TestDevicesRemovePreviewListsDeliveryRecords(t *testing.T) {
+	dbPath, masterKey := withCliStoreEnv(t)
+	st, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("API_TOKEN", "接口令牌", []byte("device-secret-value-9f21"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := func(name, path string) {
+		t.Helper()
+		added, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: name, Host: "127.0.0.1", Port: 1, User: "deploy",
+		}, nil, nil, "工作站")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.GrantServers(profileID, []string{added.ServerID}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.AllowSecrets([]string{"API_TOKEN"}, []string{name}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
+			ServerID: added.ServerID, Path: path,
+			Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+			FileSHA256: strings.Repeat("5", 64), WrittenAt: time.Unix(1760001000, 0),
+			Secrets:              []store.SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 1}},
+			InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+			AuthorizationProfileID: profileID,
+		}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("work-a", "/etc/app/a.yml")
+	seed("work-b", "/etc/app/b.yml")
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runCli(t, "devices", "rm", "工作站", "--yes")
+	for _, want := range []string{
+		"会随之删除的下发记录：",
+		"work-a：/etc/app/a.yml（机密项 API_TOKEN）",
+		"work-b：/etc/app/b.yml（机密项 API_TOKEN）",
+		"已删除设备 工作站",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("设备删除预览缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "device-secret-value-9f21") {
+		t.Fatalf("设备删除预览不得出现机密项值：\n%s", out)
+	}
+	after, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Close()
+	records, err := after.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("设备删除后下发记录应随服务器条目删除：%+v", records)
 	}
 }
