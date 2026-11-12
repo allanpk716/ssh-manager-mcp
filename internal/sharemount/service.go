@@ -366,37 +366,51 @@ func (s *Service) defaultRemoteExec(
 	}
 	defer client.Close()
 
-	deadline, hasDeadline := ctx.Deadline()
-	if !hasDeadline {
-		deadline = time.Now().Add(DefaultTimeout)
-	}
 	maxBytes := s.MaxOutputBytes
 	if maxBytes <= 0 {
 		maxBytes = MaxOutputBytes
 	}
-	if !request.Privileged {
-		result, err := client.Exec(ctx, request.Command, time.Until(deadline), maxBytes)
+	return RemoteExecOverClient(client, s.Store, server, maxBytes)(ctx, server, request)
+}
+
+// RemoteExecOverClient 返回在一条已经建立的 SSH 连接上执行共享存储固定
+// 命令的注入点；提权请求经 sudo 标准输入送入机密值。共享地址本地拷贝与
+// 挂载工具共用这一条路径，不另建远程执行通道。
+func RemoteExecOverClient(
+	client *sshbroker.Client, st *store.Store, server *models.Server, maxOutputBytes int64,
+) RemoteExecFunc {
+	return func(ctx context.Context, _ *models.Server, request RemoteExecRequest) (RemoteExecResult, error) {
+		if maxOutputBytes <= 0 {
+			maxOutputBytes = MaxOutputBytes
+		}
+		deadline, hasDeadline := ctx.Deadline()
+		if !hasDeadline {
+			deadline = time.Now().Add(DefaultTimeout)
+		}
+		if !request.Privileged {
+			result, err := client.Exec(ctx, request.Command, time.Until(deadline), maxOutputBytes)
+			return remoteResultFrom(result), err
+		}
+		if server.SudoCredentialID == "" {
+			return RemoteExecResult{}, ErrNoSudo
+		}
+		credential, err := st.GetCredential(server.SudoCredentialID)
+		if err != nil {
+			return RemoteExecResult{}, fmt.Errorf("读取 sudo 凭据失败：%w", err)
+		}
+		if credential == nil {
+			return RemoteExecResult{}, fmt.Errorf("服务器条目 %s 的 sudo 凭据不存在", server.Name)
+		}
+		result, err := client.ExecSudo(
+			ctx, request.Command, credential.Secret, time.Until(deadline), maxOutputBytes,
+			sshbroker.WithSudoStandardInput(request.StandardInput),
+		)
+		if err == nil && result.Sudo != nil && result.Sudo.Outcome != sshbroker.SudoElevated {
+			return remoteResultFrom(result), &RemoteSudoFailure{Diagnostic: fmt.Sprintf(
+				"sudo 提权未完成（%s）：%s", result.Sudo.Outcome, result.Sudo.Diagnostic)}
+		}
 		return remoteResultFrom(result), err
 	}
-	if server.SudoCredentialID == "" {
-		return RemoteExecResult{}, ErrNoSudo
-	}
-	credential, err := s.Store.GetCredential(server.SudoCredentialID)
-	if err != nil {
-		return RemoteExecResult{}, fmt.Errorf("读取 sudo 凭据失败：%w", err)
-	}
-	if credential == nil {
-		return RemoteExecResult{}, fmt.Errorf("服务器条目 %s 的 sudo 凭据不存在", server.Name)
-	}
-	result, err := client.ExecSudo(
-		ctx, request.Command, credential.Secret, time.Until(deadline), maxBytes,
-		sshbroker.WithSudoStandardInput(request.StandardInput),
-	)
-	if err == nil && result.Sudo != nil && result.Sudo.Outcome != sshbroker.SudoElevated {
-		return remoteResultFrom(result), &RemoteSudoFailure{Diagnostic: fmt.Sprintf(
-			"sudo 提权未完成（%s）：%s", result.Sudo.Outcome, result.Sudo.Diagnostic)}
-	}
-	return remoteResultFrom(result), err
 }
 
 func remoteResultFrom(result sshbroker.ExecResult) RemoteExecResult {
