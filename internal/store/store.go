@@ -126,6 +126,13 @@ func (s *Store) SetCacheRecommendedVersion(version string) {
 // 缓存形态与旧权威端快照都返回空串。
 func (s *Store) CacheRecommendedVersion() string { return s.cacheRecommendedVersion }
 
+// AuthorityTooOld 判断当前实例连接的权威端是否过旧。唯一条件是当前实例
+// 正在使用客户端缓存，且缓存快照没有携带推荐版本；单机模式下本机就是
+// 权威端，恒返回否。版本号查询接口返回 404 不参与这个判断。
+func AuthorityTooOld(s *Store) bool {
+	return s != nil && s.IsReadOnly() && s.CacheRecommendedVersion() == ""
+}
+
 // DefaultStorePath returns the on-disk vault location (program-fixed, spec §3.1/§5.1).
 // SSHMGR_STORE overrides (test/migrate). Falls back to paths pkg (Win
 // C:\ProgramData\ssh-manager\store.db; Unix /var/lib/ssh-manager/store.db).
