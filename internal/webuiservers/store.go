@@ -142,6 +142,90 @@ type writerAdapter struct {
 	open managerOpener
 }
 
+func (w writerAdapter) AddServer(form webui.ServerAddForm, source webui.ServerWriteSource) (*webui.ServerAddResultView, error) {
+	var result *webui.ServerAddResultView
+	err := withManager(w.open, func(manager *servermanage.Manager) error {
+		var addErr error
+		result, addErr = AddServerView(manager, form, source)
+		return addErr
+	})
+	return result, err
+}
+
+// AddServerView 执行新增并换成页面数据；字段错误换成表单可显示的中文错误。
+func AddServerView(manager *servermanage.Manager, form webui.ServerAddForm, source webui.ServerWriteSource) (*webui.ServerAddResultView, error) {
+	shell := form.Shell
+	if shell == "auto" || shell == "" {
+		shell = string(models.ShellPOSIX)
+	}
+	req := servermanage.AddRequest{
+		Server: models.Server{
+			Name: form.Name, User: form.User, Host: form.Host, Port: form.Port,
+			ShellType: models.ShellType(shell), Tags: form.Tags,
+			Description: form.Description, Location: form.Location, Hardware: form.Hardware,
+			Services: form.Services, Role: form.Role, Caveats: form.Caveats,
+			ExposeHost: form.ExposeHost,
+		},
+		DeviceName:     form.DeviceName,
+		SiteName:       siteNameForAddForm(form),
+		ExistingDevice: form.DeviceChoice == "existing",
+		ProfileIDs:     form.ProfileIDs,
+	}
+	if req.ExistingDevice {
+		req.DeviceName = form.ExistingDeviceName
+	}
+	switch form.CredentialAction {
+	case "password":
+		req.LoginCredential = &models.Credential{Type: models.CredPassword, Secret: []byte(form.Password)}
+	case "key":
+		req.LoginCredential = &models.Credential{
+			Type: models.CredPrivateKey, Secret: []byte(form.KeyContent),
+			Passphrase: []byte(form.KeyPassphrase),
+		}
+	}
+	if form.SudoPassword != "" {
+		req.SudoCredential = &models.Credential{Type: models.CredPassword, Secret: []byte(form.SudoPassword)}
+	}
+	if form.DeviceChoice != "existing" && form.PhysicalNetwork != "" && form.PhysicalAddress != "" {
+		req.Memberships = append(req.Memberships, servermanage.NetworkMembershipInput{
+			Network: form.PhysicalNetwork, Address: form.PhysicalAddress,
+		})
+	}
+	for i := range form.VirtualNetworkNames {
+		if i >= len(form.VirtualAddresses) {
+			break
+		}
+		if form.DeviceChoice == "existing" || form.VirtualNetworkNames[i] == "" || form.VirtualAddresses[i] == "" {
+			continue
+		}
+		req.Memberships = append(req.Memberships, servermanage.NetworkMembershipInput{
+			Network: form.VirtualNetworkNames[i], Address: form.VirtualAddresses[i],
+		})
+	}
+	added, err := manager.Add(req, servermanage.WebUISource(source.RemoteAddress))
+	if err != nil {
+		var fieldErr *servermanage.FieldError
+		if errors.As(err, &fieldErr) {
+			return nil, &webui.ServerFormError{Message: fieldErr.Page}
+		}
+		return nil, err
+	}
+	detail, err := DetailView(manager, added.ServerID)
+	if err != nil {
+		return nil, err
+	}
+	return &webui.ServerAddResultView{
+		Detail: detail, DeviceName: added.DeviceName, ProfileNames: added.ProfileNames,
+	}, nil
+}
+
+func siteNameForAddForm(form webui.ServerAddForm) string {
+	if form.DeviceChoice == "existing" {
+		return ""
+	}
+	return form.SiteName
+}
+
 func (w writerAdapter) EditServer(id string, form webui.ServerEditForm, source webui.ServerWriteSource) (*webui.ServerEditResultView, *webui.ServerEditConflictView, error) {
 	var result *webui.ServerEditResultView
 	var conflict *webui.ServerEditConflictView

@@ -1,0 +1,18 @@
+{{define "content"}}
+<section class="server-add-result">
+<h1>已保存，待连接测试</h1>
+<div class="operation-result">
+<p>服务器条目 <strong>{{.ServerAddResult.Detail.Name}}</strong> 已保存；连接测试与首次锚定会在下一步接入。</p>
+<dl class="detail-list">
+<div><dt>连接</dt><dd>{{.ServerAddResult.Detail.User}}@{{.ServerAddResult.Detail.Host}}:{{.ServerAddResult.Detail.Port}}</dd></div>
+<div><dt>所属设备</dt><dd>{{if .ServerAddResult.DeviceName}}{{.ServerAddResult.DeviceName}}{{else}}未显示{{end}}</dd></div>
+<div><dt>profile 授权</dt><dd>{{if .ServerAddResult.ProfileNames}}{{joinTags .ServerAddResult.ProfileNames}}{{else}}未授权{{end}}</dd></div>
+<div><dt>状态</dt><dd>待连接测试</dd></div>
+</dl>
+</div>
+<div class="inline-form">
+<a class="button-link" href="/ui/servers/{{.ServerAddResult.Detail.ID}}">查看服务器详情</a>
+<a class="button-link" href="/ui/">返回服务器列表</a>
+</div>
+</section>
+{{end}}

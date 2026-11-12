@@ -350,6 +350,7 @@ type session struct {
 	clientInstance string
 	accessFlash    *AccessFlash
 	opsBackupFlash *OpsBackupFlash
+	serverAddDraft *ServerAddForm
 	generation     int64
 	lastActive     time.Time
 	lastVerified   time.Time
@@ -474,6 +475,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if isSecretValueUpload(r) {
 		r.Body = http.MaxBytesReader(w, r.Body, secretUploadMaxRequestBody)
 	}
+	if isServerAddFormPost(r) {
+		r.Body = http.MaxBytesReader(w, r.Body, secretUploadMaxRequestBody)
+	}
 	hostOK := hostAllowed(r.Host, h.cfg.Port)
 	if h.cfg.Role == RoleServer {
 		hostOK = h.authorityHostAllowed(r.Host)
@@ -494,6 +498,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mux.ServeHTTP(w, r)
+}
+
+func isServerAddFormPost(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == serverAddFormPath
 }
 
 // writeRequestAllowed 统一校验所有写请求：非 GET、HEAD、OPTIONS 都必须来自

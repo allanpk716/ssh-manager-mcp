@@ -35,6 +35,8 @@ type pageData struct {
 	Authenticated                    bool
 	Servers                          []ServerRow
 	ServerList                       []ServerListEntry
+	ServerAdd                        *serverAddView
+	ServerAddResult                  *ServerAddResultView
 	NextSteps                        []NextStep
 	AttentionFilter                  bool
 	ServerDetail                     *ServerDetailView

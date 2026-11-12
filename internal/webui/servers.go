@@ -57,6 +57,49 @@ type ServerWriteSource struct {
 	RemoteAddress string
 }
 
+// ServerAddForm 是新增服务器表单的提交值。凭据字段只在处理器内存中短暂保
+// 留，用于权威端重新验证后的一次续交；模板与审计都不回显它们。
+type ServerAddForm struct {
+	Name        string
+	User        string
+	Host        string
+	Port        int
+	Shell       string
+	Description string
+	Location    string
+	Hardware    string
+	Services    string
+	Role        string
+	Caveats     string
+	Tags        []string
+	ExposeHost  bool
+
+	CredentialAction string
+	Password         string
+	KeySource        string
+	KeyContent       string
+	KeyPassphrase    string
+	SudoPassword     string
+
+	DeviceChoice        string
+	SiteName            string
+	DeviceName          string
+	ExistingDeviceName  string
+	PhysicalNetwork     string
+	PhysicalAddress     string
+	VirtualNetworkNames []string
+	VirtualAddresses    []string
+	ProfileIDs          []string
+}
+
+// ServerAddResultView 是新增成功后的结果页数据。本票只显示待连接测试；后
+// 续连接测试票会在同一路径接入任务状态。
+type ServerAddResultView struct {
+	Detail       *ServerDetailView
+	DeviceName   string
+	ProfileNames []string
+}
+
 // ServerEditForm 是编辑提交。指针字段为 nil 表示这个字段没有变化；凭据动
 // 作是 keep、password、key、key-passphrase、clear 之一。
 type ServerEditForm struct {
@@ -227,6 +270,7 @@ type ServerCompleteResultView struct {
 // ServerWriter 是 Web UI 修改服务器数据的唯一入口。单机与权威端由服务器管
 // 理模块适配实现；客户端不注册写路由，也不实现这个接口。
 type ServerWriter interface {
+	AddServer(form ServerAddForm, source ServerWriteSource) (*ServerAddResultView, error)
 	EditServer(id string, form ServerEditForm, source ServerWriteSource) (*ServerEditResultView, *ServerEditConflictView, error)
 	DeleteServerPreview(identifier string) (*ServerDeletePreviewView, error)
 	DeleteServer(identifier, digest string, source ServerWriteSource) error
@@ -240,6 +284,9 @@ type ServerWriter interface {
 
 const (
 	serversPrefix       = "/ui/servers/"
+	serverAddTypePath   = "/ui/add"
+	serverAddFormPath   = "/ui/servers/new"
+	serverAddResultPath = "/ui/servers/new/result"
 	serversImportPath   = "/ui/servers/import"
 	serversPlanPath     = "/ui/servers/import/plan"
 	serversRunPath      = "/ui/servers/import/run"
@@ -254,6 +301,9 @@ func (h *handler) registerServerRoutes() {
 	if h.cfg.ServerWriter == nil {
 		return
 	}
+	h.mux.HandleFunc(serverAddTypePath, h.requireSession(h.handleServerAddType))
+	h.mux.HandleFunc(serverAddFormPath, h.requireSession(h.handleServerAddForm))
+	h.mux.HandleFunc(serverAddResultPath, h.requireSession(h.handleServerAddResult))
 	h.mux.HandleFunc(serversImportPath, h.requireSession(h.handleServerImport))
 	h.mux.HandleFunc(serversPlanPath, h.requireSession(h.handleServerImportPlan))
 	h.mux.HandleFunc(serversRunPath, h.requireSession(h.handleServerImportRun))

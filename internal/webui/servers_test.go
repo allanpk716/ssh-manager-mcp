@@ -72,6 +72,7 @@ func (s *stubServerStore) ServerDetail(_ string, identifier string) (*ServerDeta
 }
 
 type stubServerWriter struct {
+	adds         []ServerAddForm
 	edits        []ServerEditForm
 	deletes      []string
 	importRuns   []stubImportRun
@@ -83,6 +84,15 @@ type stubServerWriter struct {
 	editErr      error
 	deleteDigest string
 	deleteErr    error
+}
+
+func (w *stubServerWriter) AddServer(form ServerAddForm, source ServerWriteSource) (*ServerAddResultView, error) {
+	w.adds = append(w.adds, form)
+	return &ServerAddResultView{
+		Detail:       &ServerDetailView{ID: "srv-new", Name: form.Name, User: form.User, Host: form.Host, Port: form.Port},
+		DeviceName:   form.DeviceName,
+		ProfileNames: []string{"运维"},
+	}, nil
 }
 
 type stubImportRun struct {

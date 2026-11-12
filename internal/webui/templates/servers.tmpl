@@ -12,6 +12,7 @@
 <div class="inline-form server-actions">
 {{if .AttentionFilter}}<a class="button-link" href="/ui/">显示全部服务器</a>{{else}}<a class="button-link" href="/ui/?attention=1">只看需要注意</a>{{end}}
 {{if .Caps.CanWrite}}
+<a class="button-link primary" href="/ui/servers/new">新增服务器</a>
 <a class="button-link" href="/ui/servers/import">导入 SSH 配置</a>
 <a class="button-link" href="/ui/servers/complete?{{completeQueue .ServerList}}&amp;position=0">逐台补全需要注意的服务器</a>
 {{end}}

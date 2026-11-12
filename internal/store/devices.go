@@ -243,7 +243,45 @@ func (s *Store) AddServerWithCredentialsToDevice(
 		return nil, err
 	}
 	defer tx.Rollback()
-	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName)
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, deviceName == "", WriteSource{})
+	if err != nil {
+		return nil, err
+	}
+	return added, tx.Commit()
+}
+
+// AddServerWithCredentialsToNewDevice 创建一台新设备并同事务保存服务器条
+// 目。deviceName 为空时沿用服务器名并自动避让重名；非空时必须是不存在的
+// 设备名。
+func (s *Store) AddServerWithCredentialsToNewDevice(
+	srv *models.Server, cred, sudo *models.Credential, deviceName string,
+) (*AddServerDeviceResult, error) {
+	return s.addServerWithCredentialsToNewDevice(srv, cred, sudo, deviceName, WriteSource{})
+}
+
+// AddServerWithCredentialsToNewDeviceWithSource 与新设备路径相同，并把同一
+// 事务里的设备登记审计行标为指定来源。
+func (s *Store) AddServerWithCredentialsToNewDeviceWithSource(
+	srv *models.Server, cred, sudo *models.Credential, deviceName string, source WriteSource,
+) (*AddServerDeviceResult, error) {
+	return s.addServerWithCredentialsToNewDevice(srv, cred, sudo, deviceName, source)
+}
+
+func (s *Store) addServerWithCredentialsToNewDevice(
+	srv *models.Server, cred, sudo *models.Credential, deviceName string, source WriteSource,
+) (*AddServerDeviceResult, error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
+	if err := validateServerText(srv); err != nil {
+		return nil, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, true, source)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +292,7 @@ func (s *Store) AddServerWithCredentialsToDevice(
 // 凭据、所属设备、条目与锚复制共用一个事务。deviceName 为空时自动生成
 // 同名设备（重名追加数字后缀），非空时关联已有设备。
 func (s *Store) addServerWithCredentialsToDeviceTx(
-	tx *sql.Tx, srv *models.Server, cred, sudo *models.Credential, deviceName string,
+	tx *sql.Tx, srv *models.Server, cred, sudo *models.Credential, deviceName string, createDevice bool, source WriteSource,
 ) (*AddServerDeviceResult, error) {
 	srv.CredentialID, srv.AuthMethod = "", ""
 	if cred != nil {
@@ -275,8 +313,21 @@ func (s *Store) addServerWithCredentialsToDeviceTx(
 	created := false
 	device := &models.Device{Name: strings.TrimSpace(deviceName)}
 	var err error
-	if device.Name == "" {
-		device.Name, err = availableDeviceNameTx(tx, srv.Name)
+	if createDevice {
+		if device.Name != "" {
+			existing, lookupErr := deviceByNameTx(tx, device.Name)
+			if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) && !errors.Is(lookupErr, ErrDeviceNotFound) {
+				return nil, lookupErr
+			}
+			if lookupErr == nil && existing != nil {
+				return nil, fmt.Errorf("device %q already exists", device.Name)
+			}
+		}
+		baseName := srv.Name
+		if device.Name != "" {
+			baseName = device.Name
+		}
+		device.Name, err = availableDeviceNameTx(tx, baseName)
 		if err != nil {
 			return nil, err
 		}
@@ -293,7 +344,7 @@ func (s *Store) addServerWithCredentialsToDeviceTx(
 		if err := insertDeviceTx(tx, device); err != nil {
 			return nil, err
 		}
-		if err := writeTopologyAuditTx(tx, s.nowTime(), "device.add", deviceAuditSummary(device)); err != nil {
+		if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.add", deviceAuditSummary(device), source); err != nil {
 			return nil, err
 		}
 	}

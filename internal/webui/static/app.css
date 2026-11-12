@@ -891,6 +891,34 @@ h1 {
   color: var(--color-muted);
 }
 
+.server-form:has(#device-existing:checked) .new-device-fields,
+.server-form:has(#device-new:checked) .existing-device-fields {
+  display: none;
+}
+
+.membership-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr);
+  gap: var(--space-small);
+}
+
+.profile-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-small);
+}
+
+.metadata-details,
+.server-add details {
+  margin-bottom: var(--space-medium);
+}
+
+.metadata-details summary,
+.server-add details summary {
+  color: var(--color-accent);
+  cursor: pointer;
+}
+
 .muted {
   color: var(--color-muted);
 }
@@ -907,6 +935,10 @@ h1 {
   .server-form,
   .confirm-form {
     padding: var(--space-small);
+  }
+
+  .membership-row {
+    grid-template-columns: 1fr;
   }
 }
 

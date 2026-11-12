@@ -110,6 +110,69 @@ func TestServersAddCreatesOrUsesDevice(t *testing.T) {
 	}
 }
 
+// TestServersAddUsesDevicePhysicalAddressAsFallback 覆盖命令行与表单一致的
+// 兜底主机规则：指定已有设备时可以不给主机地址；有物理局域网成员则取第一
+// 个物理地址，没有物理地址则保存为空。
+func TestServersAddUsesDevicePhysicalAddressAsFallback(t *testing.T) {
+	dbPath, masterKey := withCliStoreEnv(t)
+	st, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSite("家A", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "家A局域网", Type: models.NetworkPhysical, SiteName: "家A"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("工作站", "虚拟网", "100.64.0.20"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runCli(t, "servers", "add", "--name", "web", "--user", "deploy", "--device", "工作站")
+	st, err = store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv, err := st.GetServerByName("web")
+	if err != nil || srv == nil {
+		t.Fatalf("servers add 应保存服务器条目：%v %+v", err, srv)
+	}
+	if srv.Host != "192.168.1.20" {
+		t.Fatalf("兜底主机应取第一个物理局域网地址：%+v", srv)
+	}
+
+	if _, err := st.RemoveNetworkMembership("工作站", "家A局域网"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runCli(t, "servers", "add", "--name", "db", "--user", "deploy", "--device", "工作站")
+	st, err = store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv, err = st.GetServerByName("db")
+	if err != nil || srv == nil || srv.Host != "" {
+		t.Fatalf("没有物理局域网地址时兜底主机应为空：%v %+v", err, srv)
+	}
+}
+
 // TestServerDeviceAnchorCopySamePort 覆盖同端口兄弟条目的锚复制：新条目
 // 尚无锚时复制既有锚，命令输出、锚来源信息与审计都写明来源条目。
 func TestServerDeviceAnchorCopySamePort(t *testing.T) {
