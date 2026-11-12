@@ -281,25 +281,28 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return len(p), nil // always accept — cap is advisory within a file (see above)
 }
 
-// WriteFile writes r to remotePath over SFTP, creating the PARENT directory
-// first (scp --parents UX) — both under ONE watchdog: ctx cancellation closes
-// the sftp client, unblocking an in-flight op (Upload's watchdog pattern).
-// Plan 33 spec rev3 §2.2, three load-bearing pins:
-//   - parent via PURE POSIX path.Dir — never filepath.ToSlash (a backslash is
-//     a legal POSIX filename char; on a Windows broker ToSlash would rewrite
-//     /tmp/a\b into /tmp/a/b and create the WRONG parent, and the behavior
-//     would drift with the broker's OS. Upload's existing Client.MkdirAll
-//     carries that debt — registered in spec §8, not fixed here);
-//   - sc.Create truncates an existing file (overwrite semantics, upload_file
-//     parity);
-//   - out.Close is EXPLICIT and CHECKED: SFTP write failures can surface only
-//     at Close (flush/final packet), so success = io.Copy OK AND Close OK; a
-//     Close error IS a write failure. (Upload's uploadFile uses a bare
-//     `defer out.Close()` — registered debt, not fixed here.)
+// WriteFile 通过 SFTP 把 r 写入 remotePath，并按需要创建父目录。上下文取
+// 消时会关闭 SFTP 客户端，让正在等待远端响应的操作返回错误。这里固定三
+// 点行为：
+//   - 计算父目录只用 POSIX 的 path.Dir，不用 filepath.ToSlash；反斜杠在
+//     POSIX 文件名中是普通字符，转换会把合法名字误拆成目录；
+//   - 目标已存在时截断后覆盖，保持上传文件的既有语义；
+//   - 必须检查 Close 的返回值；SFTP 写入错误可能只在关闭句柄、刷新最终
+//     数据包时出现。
 //
-// On any failure the remote may hold a partially-written file and/or the
-// created parent dir — cleanup is the caller's job (scp parity).
+// 任一步失败时，远端都可能留下半写文件或已创建的父目录；清理由调用方
+// 决定。
 func (c *Client) WriteFile(ctx context.Context, remotePath string, r io.Reader) error {
+	return c.WriteFileWithCreateMode(ctx, remotePath, r, 0)
+}
+
+// WriteFileWithCreateMode 把 r 写入 remotePath。createMode 为 0 时保持既有
+// 写入行为；非 0 时只有新建文件才设置权限，覆盖已有文件保留原权限。
+// 使用的 github.com/pkg/sftp 客户端没有公开“创建文件时携带权限”的接口，
+// 因此先用独占创建判断文件是否新建：独占创建成功后、写入任何字节前设置
+// 权限；因文件已存在而失败时改走覆盖打开。仍有一个残留窗口：远端服务器
+// 刚创建出的空文件会短暂使用服务器默认权限，之后才被收紧。
+func (c *Client) WriteFileWithCreateMode(ctx context.Context, remotePath string, r io.Reader, createMode os.FileMode) error {
 	sc, err := sftp.NewClient(c.c)
 	if err != nil {
 		return fmt.Errorf("sftp client: %w", err)
@@ -311,7 +314,7 @@ func (c *Client) WriteFile(ctx context.Context, remotePath string, r io.Reader) 
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = sc.Close() // unblock in-flight sftp op → WriteFile errors (Upload watchdog pattern)
+			_ = sc.Close() // 关闭客户端，解除正在阻塞的 SFTP 操作
 		case <-done:
 		}
 	}()
@@ -319,7 +322,26 @@ func (c *Client) WriteFile(ctx context.Context, remotePath string, r io.Reader) 
 	if err := sc.MkdirAll(path.Dir(remotePath)); err != nil {
 		return fmt.Errorf("mkdir parent: %w", err)
 	}
-	out, err := sc.Create(remotePath)
+	var out *sftp.File
+	if createMode == 0 {
+		out, err = sc.Create(remotePath)
+	} else {
+		out, err = sc.OpenFile(remotePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+		switch {
+		case err == nil:
+			err = out.Chmod(createMode)
+			if err != nil {
+				_ = out.Close()
+				return err
+			}
+		default:
+			// SFTP 版本 3 没有单独的“文件已存在”状态码；独占创建因已
+			// 存在而失败时通常表现为普通失败。这里改试覆盖打开，若目标确
+			// 实不能打开，第二次调用会返回真实错误。覆盖打开不带创建标志：
+			// 独占创建若因其他原因失败，不能在这里以默认权限新建文件。
+			out, err = sc.OpenFile(remotePath, os.O_WRONLY|os.O_TRUNC)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -327,7 +349,7 @@ func (c *Client) WriteFile(ctx context.Context, remotePath string, r io.Reader) 
 		_ = out.Close()
 		return err
 	}
-	if err := out.Close(); err != nil { // checked Close — spec rev3 §2.2
+	if err := out.Close(); err != nil { // 写入错误可能延迟到关闭句柄时出现
 		return fmt.Errorf("close: %w", err)
 	}
 	return nil

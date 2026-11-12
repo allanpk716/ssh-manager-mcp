@@ -142,11 +142,12 @@ func withMaskOnlyOutputSchema(tool *mcp.Tool) {
 	}
 }
 
-// maskerFromStore 读取当前 store 的机密项值集合并构建遮蔽器。
-func maskerFromStore(st *store.Store, commandExecution bool) (secretmask.Masker, error) {
+// maskerFromStore 读取当前 store 的机密项值集合并构建遮蔽器。读取失败可跳过
+// 的工具必须自己在业务路径里逐项报告机密项读取失败。
+func maskerFromStore(st *store.Store, maySkipReadFailure bool) (secretmask.Masker, error) {
 	var rows []store.SecretValuesForMasking
 	var err error
-	if commandExecution {
+	if maySkipReadFailure {
 		rows, err = st.SecretValuesForCommandMasking()
 	} else {
 		rows, err = st.SecretValuesForMasking()
@@ -167,7 +168,7 @@ func maskerFromStore(st *store.Store, commandExecution bool) (secretmask.Masker,
 }
 
 func newMaskingCall(st *store.Store, input any) (maskingCall, error) {
-	masker, err := maskerFromStore(st, commandExecutionInput(input))
+	masker, err := maskerFromStore(st, commandExecutionInput(input) || uploadContentInput(input))
 	if err != nil {
 		return maskingCall{}, fmt.Errorf("read secret values for masking: %w", err)
 	}
@@ -175,6 +176,15 @@ func newMaskingCall(st *store.Store, input any) (maskingCall, error) {
 		masker:          masker,
 		currentServerID: currentServerIDForInput(st, input),
 	}, nil
+}
+
+func uploadContentInput(input any) bool {
+	switch input.(type) {
+	case UploadContentInput, *UploadContentInput:
+		return true
+	default:
+		return false
+	}
 }
 
 func commandExecutionInput(input any) bool {

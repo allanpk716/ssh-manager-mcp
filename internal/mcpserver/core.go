@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path"
@@ -18,6 +17,7 @@ import (
 	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
+	"ssh-manager-mcp/internal/secretfill"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -537,47 +537,46 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 	return
 }
 
-// UploadContentForProfile (Plan 33, spec rev3 §2) writes INLINE content to
-// remotePath on serverID iff serverID is in profileID (iron rule). The
-// execution order is pinned: ① param-level validation (encoding enum,
-// remote_path absolute, base64 single-line — these reflect only the CALLER'S
-// OWN input, leak nothing about any server, and hence run BEFORE the gate;
-// the denied-first principle constrains CONTENT-level errors: cap/base64) →
-// ② profile gate → ③ cap pre-check (two-stage for base64; connect-free, zero
-// bytes move, no remote file) → ④ GetServer → AuthForServer (no_credential)
-// → HostKeyTOFU → ConnectServerEntry (Plan 31 redaction at the source) → ⑤ WriteFile
-// (parent creation INSIDE, one watchdog, checked Close) → ⑥ audit + {bytes}.
+// UploadContentForProfile 把调用方直接提交的内容写入远端文件；目标服务
+// 器必须已在 profile 授权集合内。执行顺序固定：① 参数校验；② profile
+// 授权检查；③ 读取文本字节或解码 Base64；④ 读取本地服务器条目、填入
+// 机密项占位符并按填值后的字节数检查大小上限；⑤ 取凭据并连接目标服务
+// 器；⑥ 写入文件；⑦ 写审计。前四步都不访问目标服务器。
 //
-// cap arrives from the NewServerFromSource-resolved env seam
-// (SSHMGR_UPLOAD_CONTENT_MAX); tests pass small caps directly.
+// 大小上限由 NewServerFromSource 从环境变量 SSHMGR_UPLOAD_CONTENT_MAX
+// 解析；测试直接传入较小的上限。
 //
-// Statuses mirror upload: denied / auth_error / no_credential /
-// hostkey_mismatch / connect_error / cancelled / ok / error (param
-// validation, cap refusal, base64 errors, WriteFile failures → error).
+// 审计状态沿用上传工具：profile 或机密项授权拒绝为 denied；缺凭据为
+// no_credential；主机密钥不匹配、连接失败和取消各有固定值；参数错误、
+// 大小超限、Base64 错误、机密项读取失败和写入失败为 error。
 //
-// Audit %d branch value table (spec rev3 §5): ok + text refusal =
-// len(content); base64 coarse refusal = est (exact for every
-// decoder-accepted input); unreachable defensive fine-check = len(decoded);
-// decode failure + single-line rejection + param errors = 0.
+// 审计里的字节数在成功时等于填值后的实际写入字节数；已完成文本字节读
+// 取或 Base64 解码后的拒绝为填值前模板字节数，避免间接暴露机密值长度；
+// 更早失败为 0。
 func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64, hk ...sshbroker.HostKeyStore) (out UploadContentOutput, err error) {
 	if encoding == "" {
 		encoding = "text"
 	}
-	byteCount := int64(0) // feeds the refusal error AND the audit Command (see table above)
+	byteCount := int64(0) // 只供审计使用；成功后改为实际写入字节数
 	var status string
+	var filledSecretNames []string
 	start := time.Now()
 	defer func() {
 		if status == "" {
 			status = "error"
 		}
+		auditCommand := fmt.Sprintf("inline %d bytes -> %s", byteCount, remotePath)
+		if len(filledSecretNames) > 0 {
+			auditCommand += "; secrets=" + strings.Join(filledSecretNames, ",")
+		}
 		_ = st.WriteAudit(store.AuditRow{
 			TS: start, ProjectID: projectID, ServerID: serverID, Action: "upload-content",
-			Command: fmt.Sprintf("inline %d bytes -> %s", byteCount, remotePath),
+			Command: auditCommand,
 			Status:  status, DurationMS: time.Since(start).Milliseconds(),
 		})
 	}()
 
-	// ① param-level validation (before the gate — caller's own input only).
+	// ① 参数校验只依赖调用方自己提交的输入，先于 profile 授权检查执行。
 	if encoding != "text" && encoding != "base64" {
 		return UploadContentOutput{}, fmt.Errorf("encoding must be \"text\" or \"base64\", got %q", encoding)
 	}
@@ -588,66 +587,79 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return UploadContentOutput{}, fmt.Errorf("base64 content must be single-line standard base64 with padding — join lines and resend")
 	}
 
-	// ② iron rule: server must be in profile. Gate BEFORE any connect or cred lookup.
-	if gerr := gateServer(st, profileID, serverID); gerr != nil {
+	// ② 目标服务器必须属于 profile 授权集合；先检查，再读取凭据或连接。
+	profileServerIDs, gerr := st.ServersForProfile(profileID)
+	if gerr != nil {
+		return UploadContentOutput{}, gerr
+	}
+	if gerr := gateServerIn(profileServerIDs, serverID); gerr != nil {
 		if errors.Is(gerr, ErrNotInProfile) {
 			status = "denied"
 		}
 		return UploadContentOutput{}, gerr
 	}
 
-	// ③ cap pre-check + decode (connect-free). base64's est is EXACT for every
-	// decoder-accepted input (single line is pinned by ①), so the fine check
-	// below is defensive-only — unreachable from public input, kept per spec
-	// rev3 §2.1.
-	var r io.Reader
+	// ③ Base64 解码。大小上限在下一步按占位符填值后的内容检查。
+	var contentBytes []byte
 	switch encoding {
 	case "text":
-		byteCount = int64(len(content))
-		if byteCount > cap {
-			status = "error"
-			return UploadContentOutput{}, fmt.Errorf("content (%d bytes) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
-		}
-		r = strings.NewReader(content)
+		contentBytes = []byte(content)
 	default: // base64
-		padCount := int64(0)
-		for i := len(content) - 1; i >= 0 && content[i] == '=' && padCount < 2; i-- {
-			padCount++
-		}
-		est := int64(len(content))/4*3 - padCount
-		if est > cap {
-			byteCount = est
-			status = "error"
-			return UploadContentOutput{}, fmt.Errorf("content (%d bytes decoded) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
-		}
 		decoded, derr := base64.StdEncoding.DecodeString(content)
 		if derr != nil {
 			byteCount = 0
 			return UploadContentOutput{}, fmt.Errorf("invalid base64 content: %v", derr)
 		}
-		byteCount = int64(len(decoded))
-		if byteCount > cap { // defensive fine check — see comment above
-			status = "error"
-			return UploadContentOutput{}, fmt.Errorf("content (%d bytes decoded) exceeds upload-content cap %d — refused before transfer", byteCount, cap)
-		}
-		r = bytes.NewReader(decoded)
+		contentBytes = decoded
 	}
+	byteCount = int64(len(contentBytes))
 
-	// ④ server + credential + host key + connect — the same chain every broker
-	// tool walks (DownloadForProfile verbatim; Plan 31 redaction lives in
-	// sshbroker.ConnectServerEntry at the source).
+	// ④ 机密项占位符在取得服务器凭据和发起连接前填值。这里读取的是本地
+	// vault 或客户端缓存快照，不访问网络。
 	srv, serr := st.GetServer(serverID)
 	if serr != nil || srv == nil {
 		status = "error"
 		err = fmt.Errorf("server %s not found", serverID)
 		return
 	}
+	filled := secretfill.Fill(ctx, contentBytes, secretfill.ServerRef{ID: srv.ID, Name: srv.Name}, secretfill.NewStoreSource(st, profileServerIDs))
+	filledSecretNames = filled.Names
+	projectedByteCount := int64(len(filled.ProjectedContent))
+	fillErr := filled.Err()
+	if store.AuthorityTooOld(st) && secretFillResultUsesPlaceholder(filled) {
+		status = "denied"
+		err = secretfill.ErrAuthorityTooOld
+		return
+	}
+	if projectedByteCount > cap {
+		sizeErr := fmt.Errorf("content (%d bytes) exceeds upload-content cap %d — refused before transfer", projectedByteCount, cap)
+		if fillErr == nil {
+			err = sizeErr
+		} else {
+			err = errors.Join(fillErr, sizeErr)
+		}
+	} else {
+		err = fillErr
+	}
+	if err != nil {
+		for _, problem := range filled.Problems {
+			if problem.Kind == secretfill.ProblemInvalidFormat ||
+				problem.Kind == secretfill.ProblemMissingOrNotAllowed {
+				status = "denied"
+			}
+		}
+		return
+	}
+	contentBytes = filled.Content
+	r := bytes.NewReader(contentBytes)
 
+	// ⑤ 取凭据、校验主机密钥并连接目标服务器；目标主机明文在连接层生成
+	// 错误时统一遮蔽。
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
 		if errors.Is(aerr, vault.ErrNoCredential) {
-			// Credential-less server (Plan 20 C0): refused BEFORE any connect —
-			// the error carries the configure-a-credential hint for the agent.
+			// 没有登记凭据的服务器在任何连接前拒绝；错误文本包含配置凭据
+			// 的提示。
 			status = "no_credential"
 			err = aerr
 			return
@@ -677,8 +689,12 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	}
 	defer cli.Close()
 
-	// ⑤ write (parent creation + checked Close live inside WriteFile).
-	if werr := cli.WriteFile(ctx, remotePath, r); werr != nil {
+	// ⑥ 写入文件；父目录创建和关闭结果检查都在写入函数内完成。
+	var createMode os.FileMode
+	if len(filledSecretNames) > 0 && !srv.ShellType.IsWindows() {
+		createMode = 0o600
+	}
+	if werr := cli.WriteFileWithCreateMode(ctx, remotePath, r, createMode); werr != nil {
 		if errors.Is(werr, context.Canceled) {
 			status = "cancelled"
 		} else {
@@ -688,11 +704,30 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return
 	}
 	status = "ok"
+	byteCount = int64(len(filled.Content))
+	if filledSecretNames == nil {
+		filledSecretNames = []string{}
+	}
 	out = UploadContentOutput{
 		Bytes:                 byteCount,
+		FilledSecretNames:     filledSecretNames,
 		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
 	}
 	return
+}
+
+// secretFillResultUsesPlaceholder 判断内容是否包含合法机密项占位符，或以
+// 机密项占位符前缀开头的非法片段。旧权威端判断只对这类内容生效。
+func secretFillResultUsesPlaceholder(result secretfill.Result) bool {
+	if len(result.Names) > 0 {
+		return true
+	}
+	for _, problem := range result.Problems {
+		if problem.Kind == secretfill.ProblemInvalidFormat {
+			return true
+		}
+	}
+	return false
 }
 
 // isAbsRemotePath reports whether remotePath is absolute in the TARGET's path

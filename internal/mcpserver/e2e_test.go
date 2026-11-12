@@ -362,14 +362,21 @@ func TestE2EUploadContentFullFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	capStr := fmt.Sprint(8 << 20)
-	descOK := false
+	descriptions := make(map[string]string, len(lt.Tools))
 	for _, tl := range lt.Tools {
-		if tl.Name == "upload_content" && strings.Contains(tl.Description, "Capped at "+capStr+" bytes decoded") {
-			descOK = true
-		}
+		descriptions[tl.Name] = tl.Description
 	}
-	if !descOK {
+	if !strings.Contains(descriptions["upload_content"], "Capped at "+capStr+" bytes decoded") {
 		t.Fatalf("upload_content description does not embed the resolved cap %q", capStr)
+	}
+	for name, fragment := range map[string]string{
+		"upload_content": "only upload_content fills {{sshmgr-secret:NAME}} placeholders",
+		"upload_file":    "Secret placeholders such as {{sshmgr-secret:NAME}} are transferred byte-for-byte as literal text",
+		"relay_file":     "Secret placeholders such as {{sshmgr-secret:NAME}} are transferred byte-for-byte as literal text",
+	} {
+		if !strings.Contains(descriptions[name], fragment) {
+			t.Fatalf("%s description is missing %q", name, fragment)
+		}
 	}
 
 	// base64 binary upload → byte-exact landing with parent creation.
@@ -394,6 +401,46 @@ func TestE2EUploadContentFullFlow(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.FromSlash(target)); !bytes.Equal(got, bin) {
 		t.Fatalf("e2e bytes = %x, want %x", got, bin)
+	}
+	controlPath := filepath.Join(t.TempDir(), "permission-control")
+	controlFile, err := os.OpenFile(controlPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o666)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controlFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	controlInfo, err := os.Stat(controlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialInfo, err := os.Stat(filepath.FromSlash(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initialInfo.Mode().Perm() != controlInfo.Mode().Perm() {
+		t.Fatalf("no-secret new-file mode = %v, want existing default %v", initialInfo.Mode().Perm(), controlInfo.Mode().Perm())
+	}
+	// 无机密项引用时不套用机密项写入的 0600 规则；覆盖保留既有权限。
+	if err := os.Chmod(filepath.FromSlash(target), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	res, err = cliSess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "upload_content",
+		Arguments: map[string]any{
+			"server_id":   srvID,
+			"content":     base64.StdEncoding.EncodeToString(bin),
+			"remote_path": target,
+			"encoding":    "base64",
+		},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("overwrite upload_content: err=%v res=%+v", err, res.Content)
+	}
+	if info, err := os.Stat(filepath.FromSlash(target)); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm() != 0o640 {
+		t.Fatalf("no-secret overwrite mode = %v, want retained 0640", info.Mode().Perm())
 	}
 }
 
