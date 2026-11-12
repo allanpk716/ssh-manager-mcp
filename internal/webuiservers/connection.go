@@ -19,6 +19,7 @@ const connectionTaskRetention = 32
 // 页面的「启动任务、后台执行、页面轮询」模式，实际连接与锚定全部委托服务
 // 器管理模块的统一拨号路径。
 type connectionTester struct {
+	ctx   context.Context
 	open  managerOpener
 	mu    sync.Mutex
 	tasks map[string]*webui.ServerConnectionTestStatus
@@ -27,21 +28,39 @@ type connectionTester struct {
 
 // ConnectionTesterFromManager 返回绑定固定服务器管理模块的连接测试入口。
 func ConnectionTesterFromManager(manager *servermanage.Manager) webui.ServerConnectionTester {
-	return &connectionTester{
-		open:  fixedManagerOpener(manager),
-		tasks: map[string]*webui.ServerConnectionTestStatus{},
-	}
+	return ConnectionTesterFromManagerWithContext(manager, context.Background())
+}
+
+// ConnectionTesterFromManagerWithContext 让后台连接测试跟随 Web UI 服务的
+// 关闭上下文取消。
+func ConnectionTesterFromManagerWithContext(
+	manager *servermanage.Manager, ctx context.Context,
+) webui.ServerConnectionTester {
+	return newConnectionTester(fixedManagerOpener(manager), ctx)
 }
 
 // ConnectionTesterFromOpener 每个任务重新打开存储，供单机回环 Web UI 使
 // 用，避免后台任务长期占用存储句柄。
 func ConnectionTesterFromOpener(open managerOpener) webui.ServerConnectionTester {
-	return &connectionTester{open: open, tasks: map[string]*webui.ServerConnectionTestStatus{}}
+	return ConnectionTesterFromOpenerWithContext(open, context.Background())
+}
+
+// ConnectionTesterFromOpenerWithContext 与 ConnectionTesterFromOpener 相同，
+// 并让任务继承调用方的关闭上下文。
+func ConnectionTesterFromOpenerWithContext(open managerOpener, ctx context.Context) webui.ServerConnectionTester {
+	return newConnectionTester(open, ctx)
+}
+
+func newConnectionTester(open managerOpener, ctx context.Context) *connectionTester {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &connectionTester{ctx: ctx, open: open, tasks: map[string]*webui.ServerConnectionTestStatus{}}
 }
 
 // StartServerTest 立即登记并启动后台任务；它不等待连接完成。
 func (r *connectionTester) StartServerTest(
-	instance, serverID string, probeShell bool, source webui.ServerWriteSource,
+	serverID string, probeShell bool, source webui.ServerWriteSource, anchor webui.ServerConnectionAnchor,
 ) (string, error) {
 	if serverID == "" {
 		return "", fmt.Errorf("服务器标识不能为空")
@@ -52,13 +71,14 @@ func (r *connectionTester) StartServerTest(
 	}
 	task := &webui.ServerConnectionTestStatus{
 		ID: id, State: webui.ServerConnectionTestRunning, ServerID: serverID,
-		ProbeShell: probeShell,
+		ProbeShell: probeShell, AnchorCopied: anchor.Copied,
+		AnchorCopyFromServerName: anchor.FromServerName, AnchorCopyConflict: anchor.Conflict,
 	}
 	r.mu.Lock()
 	r.tasks[id] = task
 	r.order = append(r.order, id)
 	r.mu.Unlock()
-	go r.runConnectionTest(instance, task, source)
+	go r.runConnectionTest(task, source)
 	return id, nil
 }
 
@@ -75,19 +95,16 @@ func (r *connectionTester) ServerTestStatus(taskID string) (*webui.ServerConnect
 	return &status, true
 }
 
-func (r *connectionTester) runConnectionTest(
-	instance string, task *webui.ServerConnectionTestStatus, source webui.ServerWriteSource,
-) {
+func (r *connectionTester) runConnectionTest(task *webui.ServerConnectionTestStatus, source webui.ServerWriteSource) {
 	var result *servermanage.ConnectionTestResult
 	var err error
 	operation := func(manager *servermanage.Manager) error {
-		result, err = manager.TestConnection(context.Background(), servermanage.ConnectionTestRequest{
+		result, err = manager.TestConnection(r.ctx, servermanage.ConnectionTestRequest{
 			Identifier: task.ServerID, ProbeShell: task.ProbeShell,
 			Source: servermanage.WebUISource(source.RemoteAddress),
 		})
 		return err
 	}
-	_ = instance
 	runErr := withManager(r.open, operation)
 	r.finishConnectionTest(task, result, runErr)
 }

@@ -6,7 +6,8 @@
 <form method="post" action="{{if .ServerAdd.DeviceOnly}}/ui/devices/new{{else}}/ui/servers/new{{end}}" {{if .ServerAdd.DeviceOnly}}class="device-form"{{else}}enctype="multipart/form-data" class="server-form"{{end}}>
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="return_to" value="{{.ServerAdd.ReturnTo}}">
-{{if .ServerAdd.HasCredential}}<input type="hidden" name="resume_credentials" value="1">{{end}}
+{{if or .ServerAdd.HasCredential .ServerAdd.HasStagedCredential}}<input type="hidden" name="resume_credentials" value="1">{{end}}
+{{if .ServerAdd.HasStagedCredential}}<div class="inline-form staged-credentials"><button type="submit" name="clear_staged_credentials" value="1">清除已暂存的凭据</button><span>清除后保留其他字段，登录凭据需重新填写。</span></div>{{end}}
 {{if .ServerAdd.DeviceOnly}}
 <fieldset>
 <legend>设备</legend>
@@ -62,7 +63,7 @@
 <p class="muted">不填这一组时，设备没有任何网络成员，会进入未归类设备托盘。</p>
 <div class="form-field"><label for="add-site">站点</label>
 <select id="add-site" name="site">
-<option value="">不填位置组</option>
+<option value="">不填站点</option>
 {{range .ServerAdd.Sites}}<option value="{{.Name}}" {{if eq $.ServerAdd.Form.SiteName .Name}}selected{{end}}>{{.Name}}</option>{{end}}
 </select></div>
 <div class="form-field"><label for="add-physical-network">物理局域网</label>
@@ -84,6 +85,7 @@
 <div class="form-field"><label for="add-virtual-address-{{$index}}">地址</label><input id="add-virtual-address-{{$index}}" name="virtual_address" value="{{($form.VirtualAddressValue $index)}}"></div>
 </div>
 {{end}}
+<div class="inline-form"><button type="submit" name="add_virtual_member" value="1">再添加一个虚拟局域网成员</button></div>
 </fieldset>
 </fieldset>
 {{if not .ServerAdd.DeviceOnly}}

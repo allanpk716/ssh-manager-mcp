@@ -80,6 +80,7 @@ type ServerAddForm struct {
 	KeyContent       string
 	KeyPassphrase    string
 	SudoPassword     string
+	KeyFileError     error
 
 	DeviceChoice        string
 	SiteName            string
@@ -89,12 +90,18 @@ type ServerAddForm struct {
 	PhysicalAddress     string
 	VirtualNetworkNames []string
 	VirtualAddresses    []string
-	ProfileIDs          []string
-	DeviceNote          string
-	ReturnTo            string
+	// VirtualMemberRows 只在按下「再添加一个虚拟局域网成员」后使用，控制
+	// 服务端渲染的行数；正常保存请求不携带它。
+	VirtualMemberRows int
+	ProfileIDs        []string
+	DeviceNote        string
+	ReturnTo          string
+	// StagedCredential 表示这份表单值来自重新验证后的一次性暂存；只控制页
+	// 面提示，不随表单提交。
+	StagedCredential bool
 }
 
-// OtherDeviceAddForm 是新增不受管设备的提交值；只包含设备备注与位置组，
+// OtherDeviceAddForm 是新增不受管设备的提交值；只包含设备备注与站点信息，
 // 不携带 SSH、凭据、profile、shell 或连接测试字段。
 type OtherDeviceAddForm struct {
 	Name                string
@@ -112,12 +119,13 @@ type OtherDeviceAddResultView struct {
 	ReturnTo   string
 }
 
-// ServerAddResultView 是新增成功后的结果页数据。本票只显示待连接测试；后
-// 续连接测试票会在同一路径接入任务状态。
+// ServerAddResultView 是新增成功后的结果页数据；连接测试任务提供轮询状态
+// 与保存事务携带的锚复制事实。
 type ServerAddResultView struct {
 	Detail                   *ServerDetailView
 	DeviceName               string
 	ProfileNames             []string
+	ProfileNamesUnavailable  bool
 	ConnectionTest           *ServerConnectionTestStatus
 	ConnectionTestNotice     string
 	ConnectionTestPollPath   string
@@ -316,12 +324,15 @@ const (
 	serverAddFormPath   = "/ui/servers/new"
 	serverAddResultPath = "/ui/servers/new/result"
 	deviceAddFormPath   = "/ui/devices/new"
-	deviceAddResultPath = "/ui/devices/new/result"
-	serversImportPath   = "/ui/servers/import"
-	serversPlanPath     = "/ui/servers/import/plan"
-	serversRunPath      = "/ui/servers/import/run"
-	serversCompletePath = "/ui/servers/complete"
-	serversResultPath   = "/ui/servers/complete/result"
+	// serverAddFormMaxRequestBody 是服务器与其他设备新增表单自己的请求体
+	// 上限；机密项上传沿用更小的机密值上限与专属错误说明。
+	serverAddFormMaxRequestBody = 128 * 1024
+	deviceAddResultPath         = "/ui/devices/new/result"
+	serversImportPath           = "/ui/servers/import"
+	serversPlanPath             = "/ui/servers/import/plan"
+	serversRunPath              = "/ui/servers/import/run"
+	serversCompletePath         = "/ui/servers/complete"
+	serversResultPath           = "/ui/servers/complete/result"
 )
 
 // registerServerRoutes 注册服务器页路由。列表与详情所有角色可用；写路由只

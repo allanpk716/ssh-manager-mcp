@@ -27,11 +27,23 @@ type ServerConnectionTestStatus struct {
 	ShellDetected     string                    `json:"shell_detected,omitempty"`
 	ShellEvidence     string                    `json:"shell_evidence,omitempty"`
 	ShellNotice       string                    `json:"shell_notice,omitempty"`
+	// AnchorCopied 与 AnchorCopyConflict 描述保存事务里复制的既有锚；它们
+	// 只随本任务在进程内传递，不来自结果页网址查询参数。
+	AnchorCopied             bool   `json:"anchor_copied,omitempty"`
+	AnchorCopyFromServerName string `json:"anchor_copy_from_server,omitempty"`
+	AnchorCopyConflict       bool   `json:"anchor_copy_conflict,omitempty"`
+}
+
+// ServerConnectionAnchor 是启动连接测试时随任务保存的锚复制事实。
+type ServerConnectionAnchor struct {
+	Copied         bool
+	FromServerName string
+	Conflict       bool
 }
 
 // ServerConnectionTester 是新增服务器后启动与读取连接测试任务的唯一入口。
 // 实现必须立即返回任务标识；测试在后台执行，不能阻塞表单提交返回。
 type ServerConnectionTester interface {
-	StartServerTest(instance, serverID string, probeShell bool, source ServerWriteSource) (string, error)
+	StartServerTest(serverID string, probeShell bool, source ServerWriteSource, anchor ServerConnectionAnchor) (string, error)
 	ServerTestStatus(taskID string) (*ServerConnectionTestStatus, bool)
 }

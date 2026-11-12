@@ -234,7 +234,7 @@ func TestServersAddUsesDevicePhysicalAddressAsFallback(t *testing.T) {
 	}
 }
 
-// TestServerDeviceAnchorCopySamePort 覆盖同端口兄弟条目的锚复制：新条目
+// TestServerDeviceAnchorCopySamePort 覆盖同一设备、同一端口的其他服务器条目的锚复制：新条目
 // 尚无锚时复制既有锚，命令输出、锚来源信息与审计都写明来源条目。
 func TestServerDeviceAnchorCopySamePort(t *testing.T) {
 	dbPath, masterKey := withCliStoreEnv(t)
@@ -263,10 +263,10 @@ func TestServerDeviceAnchorCopySamePort(t *testing.T) {
 	}
 	summary := topologyAuditSummary(t, rows[0])
 	wantSummary := map[string]any{
-		"entry":   "deploy",
-		"host":    "192.0.2.10:22",
-		"主机密钥指纹":  fingerprint,
-		"来源服务器条目": "root",
+		"entry":       "deploy",
+		"host":        "192.0.2.10:22",
+		"fingerprint": fingerprint,
+		"来源服务器条目":     "root",
 	}
 	if !reflect.DeepEqual(summary, wantSummary) {
 		t.Fatalf("anchor copy audit summary = %#v, want %#v", summary, wantSummary)
@@ -299,7 +299,7 @@ func TestDevicesMoveServerCopiesAnchor(t *testing.T) {
 	}
 }
 
-// TestServerDeviceAnchorCopyConflict 覆盖多个同端口兄弟条目的锚互不一致：
+// TestServerDeviceAnchorCopyConflict 覆盖同一设备、同一端口的多个服务器条目锚互不一致：
 // 不复制、不落锚，并在命令结果里逐项提示。
 func TestServerDeviceAnchorCopyConflict(t *testing.T) {
 	withCliStoreEnv(t)
@@ -313,7 +313,7 @@ func TestServerDeviceAnchorCopyConflict(t *testing.T) {
 
 	out := runCli(t, "servers", "add", "--name", "deploy", "--host", "192.0.2.10",
 		"--user", "deploy", "--device", "机器")
-	if !strings.Contains(out, "同端口兄弟条目的主机密钥锚不一致，未复制；请手工确认后锚定") {
+	if !strings.Contains(out, "同一设备、同一端口的其他服务器条目主机密钥锚不一致，未复制；请手工确认后锚定") {
 		t.Fatalf("conflicting sibling anchors must be reported and not copied:\n%s", out)
 	}
 	out = runCli(t, "servers", "pin-hostkey", "deploy")

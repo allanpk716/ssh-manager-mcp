@@ -146,6 +146,23 @@ func TestManagerAddServerUsesExistingDeviceAndDerivesFallbackHost(t *testing.T) 
 	}
 }
 
+func TestFallbackHostFromMembershipsUsesFirstPhysicalAddress(t *testing.T) {
+	host, ok := FallbackHostFromMemberships([]*models.NetworkMembership{
+		{NetworkType: models.NetworkVirtual, Address: "100.64.0.20"},
+		{NetworkType: models.NetworkPhysical, Address: "192.168.1.21"},
+		{NetworkType: models.NetworkPhysical, Address: "192.168.1.22"},
+	})
+	if !ok || host != "192.168.1.21" {
+		t.Fatalf("兜底主机应取第一个物理局域网地址：host=%q ok=%v", host, ok)
+	}
+	host, ok = FallbackHostFromMemberships([]*models.NetworkMembership{
+		{NetworkType: models.NetworkVirtual, Address: "100.64.0.20"},
+	})
+	if ok || host != "" {
+		t.Fatalf("只有虚拟局域网成员时不得虚构兜底主机：host=%q ok=%v", host, ok)
+	}
+}
+
 // TestManagerAddServerWithoutProfilesStaysInvisible 证明不选 profile 是合法
 // 保存：条目保留，但没有任何 profile 能看到它。
 func TestManagerAddServerWithoutProfilesStaysInvisible(t *testing.T) {

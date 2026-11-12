@@ -496,6 +496,40 @@ func TestConnectServerEntryFailureLabelsEveryPlannedCandidate(t *testing.T) {
 	}
 }
 
+// TestConnectServerEntryFailureLabelsSinglePlannedCandidate: 首次锚定只保留
+// 一个虚拟局域网候选时，失败说明仍要指称这个地址，而不是退回裸底层错误。
+func TestConnectServerEntryFailureLabelsSinglePlannedCandidate(t *testing.T) {
+	srv := entryAt("srv-a", "198.51.100.10", 2202)
+	original := lowLevelDial
+	lowLevelDial = func(_ context.Context, _ string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+		return nil, errors.New("dial 100.64.10.5:2202: refused")
+	}
+	t.Cleanup(func() { lowLevelDial = original })
+
+	_, _, err := ConnectServerEntry(context.Background(), ServerDialRequest{
+		Server: srv, Auth: PasswordAuth("pw"), HostKeys: &fakeHostKeyStore{},
+		Topology: StaticDialTopology{
+			TargetMemberships: []*models.NetworkMembership{
+				membershipAt("target", "network-virtual", "虚拟局域网", models.NetworkVirtual, "100.64.10.5", 1),
+			},
+			DialerKnown: true,
+			DialerMemberships: []*models.NetworkMembership{
+				membershipAt("dialer", "network-virtual", "虚拟局域网", models.NetworkVirtual, "100.64.10.2", 2),
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("single candidate failed: want an error")
+	}
+	var dialErr *ServerDialError
+	if !errors.As(err, &dialErr) || len(dialErr.Failures) != 1 {
+		t.Fatalf("单候选失败也应返回逐地址汇总：%v", err)
+	}
+	if !strings.Contains(err.Error(), "全部候选地址连接失败：\n虚拟局域网 第1个地址：") {
+		t.Fatalf("单候选失败说明应包含地址指称：%q", err.Error())
+	}
+}
+
 // TestConnectServerEntryDeletedLocalDeviceHint: 本机设备设定指向的设备已被
 // 删除时，兜底地址失败要明确提示重新设定本机设备，而不是只提示补登记共同
 // 网络。

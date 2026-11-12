@@ -75,12 +75,10 @@ func serversAddCmd() *cobra.Command {
 				if len(memberships) == 0 {
 					return errors.New("指定已有设备但没有网络成员时，必须提供兜底主机")
 				}
-				for _, membership := range memberships {
-					if membership.NetworkType == models.NetworkPhysical {
-						host = membership.Address
-						break
-					}
-				}
+				host, _ = servermanage.FallbackHostFromMemberships(memberships)
+			}
+			if host == "" && device == "" {
+				return errors.New("必须提供 --host，或提供 --device 并确保该设备已有网络成员")
 			}
 			// Audit summary (owner whitelist: name/host/port/user only —
 			// credential values are excluded by construction). Built once from

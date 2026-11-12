@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -23,6 +24,10 @@ import (
 
 // readRand is a seam for tests (not overridden in production).
 var readRand = func(b []byte) (int, error) { return rand.Read(b) }
+
+// openMu 把同一进程内的 vault 打开、结构检查与结构迁移串行化。多个连接
+// 并发打开同一个 SQLite 文件时，结构检查本身可能短暂相遇并报数据库锁定。
+var openMu sync.Mutex
 
 // newID returns a short random base64url id.
 func newID() string {
@@ -143,6 +148,8 @@ func DefaultStorePath() (string, error) {
 
 // Open opens (or creates) the vault at path and ensures the schema. The master key decrypts credentials.
 func Open(path string, masterKey []byte) (*Store, error) {
+	openMu.Lock()
+	defer openMu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}

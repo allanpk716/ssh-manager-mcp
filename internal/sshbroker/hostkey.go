@@ -40,6 +40,12 @@ type HostKeyStore interface {
 	SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string, marshaledKey []byte) error
 }
 
+type hostKeyStoreWithSource interface {
+	SaveEntryPinAtHandshakeWithSource(
+		srv *models.Server, handshakeAddr string, marshaledKey []byte, source store.WriteSource,
+	) error
+}
+
 // HostKeyTOFU returns a trust-on-first-use host-key callback bound to st and one
 // server entry. First connection: records the key on the entry. Subsequent:
 // must satisfy the stored anchor under the system-wide dual-mode semantics
@@ -48,6 +54,18 @@ type HostKeyStore interface {
 // both fingerprints in the text. 条目改地址时锚不动，新地址上是另一台机器就
 // 会在这里报密钥不一致。
 func HostKeyTOFU(st HostKeyStore, srv *models.Server) (ssh.HostKeyCallback, error) {
+	return hostKeyTOFU(st, srv, store.WriteSource{})
+}
+
+// HostKeyTOFUWithSource 与 HostKeyTOFU 相同；支持来源的存储会把首次锚定
+// 审计标为指定来源。
+func HostKeyTOFUWithSource(
+	st HostKeyStore, srv *models.Server, source store.WriteSource,
+) (ssh.HostKeyCallback, error) {
+	return hostKeyTOFU(st, srv, source)
+}
+
+func hostKeyTOFU(st HostKeyStore, srv *models.Server, source store.WriteSource) (ssh.HostKeyCallback, error) {
 	return func(hostname string, _ net.Addr, remote ssh.PublicKey) error {
 		marshaled := remote.Marshal()
 		pin, err := st.GetEntryPin(srv)
@@ -64,7 +82,12 @@ func HostKeyTOFU(st HostKeyStore, srv *models.Server) (ssh.HostKeyCallback, erro
 			if len(vlan) > 0 && !store.ContainsSSHAddress(vlan, handshakeAddr, srv.Port) {
 				return fmt.Errorf("服务器 %q 首次锚定只能使用虚拟局域网地址，实际握手地址是 %s", srv.Name, handshakeAddr)
 			}
-			if err := st.SaveEntryPinAtHandshake(srv, handshakeAddr, marshaled); err != nil {
+			if sourced, ok := st.(hostKeyStoreWithSource); ok {
+				err = sourced.SaveEntryPinAtHandshakeWithSource(srv, handshakeAddr, marshaled, source)
+			} else {
+				err = st.SaveEntryPinAtHandshake(srv, handshakeAddr, marshaled)
+			}
+			if err != nil {
 				if errors.Is(err, store.ErrEntryPinMismatch) {
 					stored, readErr := st.GetEntryPin(srv)
 					if readErr != nil {

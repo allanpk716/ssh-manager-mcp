@@ -205,6 +205,14 @@ func (s *Store) SaveEntryPin(srv *models.Server, marshaledKey []byte) error {
 // SSH 返回的握手地址传进来，避免多地址条目固定记录兜底地址。首次锚定只
 // 新增：并发竞争时已有一致锚则成功返回，不同锚则报锚不一致。
 func (s *Store) SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string, marshaledKey []byte) error {
+	return s.SaveEntryPinAtHandshakeWithSource(srv, handshakeAddr, marshaledKey, WriteSource{})
+}
+
+// SaveEntryPinAtHandshakeWithSource 与 SaveEntryPinAtHandshake 相同，并把
+// 首次锚定审计行标为指定来源。
+func (s *Store) SaveEntryPinAtHandshakeWithSource(
+	srv *models.Server, handshakeAddr string, marshaledKey []byte, source WriteSource,
+) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -213,13 +221,16 @@ func (s *Store) SaveEntryPinAtHandshake(srv *models.Server, handshakeAddr string
 		return err
 	}
 	defer tx.Rollback()
+	audit := AuditRow{
+		TS: time.Now(), ServerID: srv.ID, Action: "pin-tofu",
+		Command: fmt.Sprintf("entry=%s(%s) handshake=%s fp=%s source=%s",
+			srv.Name, srv.ID, handshakeAddr, PinFingerprint(marshaledKey, PinFormatBlob), PinSourceTofu),
+		Status: "ok",
+	}
+	audit.Source = source.kind
+	audit.SourceIP = source.address
 	inserted, err := insertEntryPinWithAuditTx(tx, srv.ID, handshakeAddr, marshaledKey,
-		PinFormatBlob, PinSourceTofu, "", AuditRow{
-			TS: time.Now(), ServerID: srv.ID, Action: "pin-tofu",
-			Command: fmt.Sprintf("entry=%s(%s) handshake=%s fp=%s source=%s",
-				srv.Name, srv.ID, handshakeAddr, PinFingerprint(marshaledKey, PinFormatBlob), PinSourceTofu),
-			Status: "ok",
-		})
+		PinFormatBlob, PinSourceTofu, "", audit)
 	if err != nil {
 		return err
 	}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
@@ -57,53 +56,32 @@ type OtherDeviceAddResult struct {
 }
 
 // Add 保存一台服务器、所属设备、新设备的网络成员与 profile 授权。先做整
-// 份校验，再复用存储层与访问管理模块的既有写路径；凭据与服务器条目由存储
-// 层在同一个事务里写入。
+// 份校验；全部数据写入复用存储层的同一个事务，失败整体回滚。
 func (m *Manager) Add(req AddRequest, src Source) (*AddResult, error) {
 	prepared, err := m.prepareAdd(req)
 	if err != nil {
 		_ = m.writeAudit("server.add", addAuditSummary(req), err, src)
 		return nil, err
 	}
-	var added *store.AddServerDeviceResult
-	if req.ExistingDevice {
-		added, err = m.st.AddServerWithCredentialsToDevice(
-			&prepared.server, req.LoginCredential, req.SudoCredential, prepared.deviceName,
-		)
-	} else {
-		added, err = m.st.AddServerWithCredentialsToNewDeviceWithSource(
-			&prepared.server, req.LoginCredential, req.SudoCredential, prepared.deviceName, storeWriteSource(src),
-		)
+	membershipWrites := make([]store.NetworkMembershipWrite, 0, len(prepared.memberships))
+	for _, membership := range prepared.memberships {
+		membershipWrites = append(membershipWrites, store.NetworkMembershipWrite{
+			Network: membership.Network, Address: membership.Address,
+		})
 	}
+	added, err := m.st.AddServerWithRelations(store.AddServerRelationsRequest{
+		Server:          prepared.server,
+		LoginCredential: req.LoginCredential,
+		SudoCredential:  req.SudoCredential,
+		DeviceName:      prepared.deviceName,
+		ExistingDevice:  req.ExistingDevice,
+		Memberships:     membershipWrites,
+		ProfileIDs:      req.ProfileIDs,
+		Source:          storeWriteSource(src),
+	})
 	if err != nil {
 		_ = m.writeAudit("server.add", addAuditSummary(req), err, src)
 		return nil, err
-	}
-	for _, membership := range prepared.memberships {
-		if _, err := m.st.AddNetworkMembershipWithSource(
-			added.Device.Name, membership.Network, membership.Address, storeWriteSource(src),
-		); err != nil {
-			return nil, err
-		}
-	}
-	profileNames := make([]string, 0, len(req.ProfileIDs))
-	if len(req.ProfileIDs) > 0 {
-		profiles, err := m.st.ListProfiles()
-		if err != nil {
-			return nil, err
-		}
-		profileNameByID := make(map[string]string, len(profiles))
-		for _, profile := range profiles {
-			profileNameByID[profile.ID] = profile.Name
-		}
-		accessManager := access.New(m.st)
-		for _, profileID := range req.ProfileIDs {
-			_, err := accessManager.GrantServers(profileID, []string{added.ServerID}, accessSource(src))
-			if err != nil {
-				return nil, err
-			}
-			profileNames = append(profileNames, profileNameByID[profileID])
-		}
 	}
 	if err := m.writeAudit("server.add", addAuditSummary(req), nil, src); err != nil {
 		return nil, err
@@ -111,13 +89,13 @@ func (m *Manager) Add(req AddRequest, src Source) (*AddResult, error) {
 	return &AddResult{
 		ServerID: added.ServerID, ServerName: prepared.server.Name,
 		DeviceName: added.Device.Name, CreatedDevice: added.CreatedDevice,
-		ProfileNames: profileNames,
+		ProfileNames: added.ProfileNames,
 		AnchorCopy:   added.AnchorCopy,
 	}, nil
 }
 
-// AddOtherDevice 保存一台不受管设备与它的网络成员。先做整份校验，再复用
-// 设备与网络成员的既有存储路径；这条路径不写服务器审计。
+// AddOtherDevice 保存一台不受管设备与它的网络成员。先做整份校验；设备与
+// 全部网络成员由存储层在同一个事务里写入，这条路径不写服务器审计。
 func (m *Manager) AddOtherDevice(req OtherDeviceAddRequest, src Source) (*OtherDeviceAddResult, error) {
 	req.DeviceName = strings.TrimSpace(req.DeviceName)
 	req.Note = strings.TrimSpace(req.Note)
@@ -134,19 +112,21 @@ func (m *Manager) AddOtherDevice(req OtherDeviceAddRequest, src Source) (*OtherD
 	if err != nil {
 		return nil, err
 	}
-	device, err := m.st.AddDeviceWithSource(req.DeviceName, req.Note, "", storeWriteSource(src))
+	membershipWrites := make([]store.NetworkMembershipWrite, 0, len(memberships))
+	for _, membership := range memberships {
+		membershipWrites = append(membershipWrites, store.NetworkMembershipWrite{
+			Network: membership.Network, Address: membership.Address,
+		})
+	}
+	device, err := m.st.AddOtherDeviceWithMemberships(store.AddOtherDeviceRequest{
+		Name: req.DeviceName, Note: req.Note,
+		Memberships: membershipWrites, Source: storeWriteSource(src),
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrDeviceNameExists) {
 			return nil, &FieldError{Field: "device", CLI: "device name already exists", Page: "设备名已存在：" + req.DeviceName + "。"}
 		}
 		return nil, err
-	}
-	for _, membership := range memberships {
-		if _, err := m.st.AddNetworkMembershipWithSource(
-			device.Name, membership.Network, membership.Address, storeWriteSource(src),
-		); err != nil {
-			return nil, err
-		}
 	}
 	return &OtherDeviceAddResult{DeviceName: device.Name}, nil
 }
@@ -156,6 +136,17 @@ func storeWriteSource(src Source) store.WriteSource {
 		return store.WebUISource(src.addr)
 	}
 	return store.CLISource()
+}
+
+// FallbackHostFromMemberships 从设备已有网络成员里推导兜底主机：按登记顺
+// 序取第一个物理局域网地址；只有虚拟局域网成员时返回未推导。
+func FallbackHostFromMemberships(memberships []*models.NetworkMembership) (string, bool) {
+	for _, membership := range memberships {
+		if membership != nil && membership.NetworkType == models.NetworkPhysical {
+			return membership.Address, true
+		}
+	}
+	return "", false
 }
 
 type preparedAdd struct {
@@ -232,12 +223,7 @@ func (m *Manager) prepareAdd(req AddRequest) (preparedAdd, error) {
 		}
 	}
 	if req.Server.Host == "" {
-		for _, membership := range deviceMemberships {
-			if membership.NetworkType == models.NetworkPhysical {
-				req.Server.Host = membership.Address
-				break
-			}
-		}
+		req.Server.Host, _ = FallbackHostFromMemberships(deviceMemberships)
 		for _, membership := range memberships {
 			if network, ok := networkByName[membership.Network]; ok && network.Type == models.NetworkPhysical {
 				req.Server.Host = membership.Address

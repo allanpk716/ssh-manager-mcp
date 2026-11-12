@@ -234,6 +234,9 @@ test("桌面端切换三视图并查看托盘、角标与详情", async ({ page,
     await expect(detail).toContainText("192.168.1.0/24");
     await expect(detail).toContainText("1000 Mbit/s");
     await expect(detail).toContainText("按流量计费是");
+    const addLink = detail.getByRole("link", { name: "在此新增" });
+    await expect(addLink).toBeVisible();
+    expect(await addLink.evaluate((element) => element.parentElement?.tagName)).not.toBe("UL");
 
     await selectTopologyEntity(page, "topology:select-site", "家A");
     // 探测叠加用例给家A局域网补了一台「探测机」，成员数随之增加。

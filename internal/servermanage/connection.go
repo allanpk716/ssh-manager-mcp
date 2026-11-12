@@ -49,10 +49,11 @@ func (m *Manager) TestConnection(
 	var detected models.ShellType
 	var evidence string
 	var notes []string
+	writeSource := storeWriteSource(req.Source)
 	if req.ProbeShell {
-		detected, evidence, notes, err = shellprobe.ProbeServer(ctx, m.st, srv)
+		detected, evidence, notes, err = shellprobe.ProbeServerWithSource(ctx, m.st, srv, writeSource)
 	} else {
-		notes, err = shellprobe.ConnectServer(ctx, m.st, srv)
+		notes, err = shellprobe.ConnectServerWithSource(ctx, m.st, srv, writeSource)
 	}
 	result := &ConnectionTestResult{
 		ConnectionNotes: notes,
@@ -60,7 +61,7 @@ func (m *Manager) TestConnection(
 		ShellEvidence:   evidence,
 	}
 	if err != nil {
-		m.applyAnchorView(result, before, srv.ID)
+		m.applyAnchorFacts(result, srv.ID)
 		_ = m.writeConnectionTestAudit(req.Source, srv.Name, "error", result.AnchorFingerprint, string(detected), err)
 		return result, err
 	}
@@ -71,7 +72,7 @@ func (m *Manager) TestConnection(
 			Identifier: srv.ID, ExpectedRevision: srv.Revision, CheckRevision: true,
 			Shell: &detectedText,
 		}, req.Source); err != nil {
-			m.applyAnchorView(result, before, srv.ID)
+			m.applyAnchorFacts(result, srv.ID)
 			_ = m.writeConnectionTestAudit(req.Source, srv.Name, "error", result.AnchorFingerprint, string(detected), err)
 			return result, err
 		}
@@ -97,24 +98,21 @@ func (m *Manager) TestConnection(
 	return result, nil
 }
 
-func (m *Manager) applyAnchorView(result *ConnectionTestResult, before *store.PinMeta, serverID string) {
+// applyAnchorFacts 只补充失败结果仍可确认的锚事实；锚定结论只在连接测试成
+// 功后由调用方设置。
+func (m *Manager) applyAnchorFacts(result *ConnectionTestResult, serverID string) {
 	after, err := m.st.GetEntryPinMeta(serverID)
 	if err != nil || after == nil {
 		return
 	}
 	result.AnchorFingerprint = store.PinFingerprint(after.Blob, after.Format)
 	result.HandshakeAddress = after.HandshakeAddr
-	if before == nil {
-		result.AnchorResult = "首次连接已记录主机密钥锚"
-	} else {
-		result.AnchorResult = "已按现有主机密钥锚完成校验"
-	}
 }
 
 func (m *Manager) writeConnectionTestAudit(source Source, name, status, fingerprint, shell string, err error) error {
 	summary := map[string]any{"name": name, "result": status}
 	if fingerprint != "" {
-		summary["主机密钥指纹"] = fingerprint
+		summary["fingerprint"] = fingerprint
 	}
 	if shell != "" {
 		summary["shell"] = shell

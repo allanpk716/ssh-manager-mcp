@@ -33,15 +33,27 @@ func (s *Store) addNetworkMembership(
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
-	address = strings.TrimSpace(address)
-	if address == "" {
-		return nil, &TopologyValidationError{Message: "网络成员地址不能为空"}
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	membership, err := s.addNetworkMembershipTx(tx, deviceName, networkName, address, source)
+	if err != nil {
+		return nil, err
+	}
+	return membership, tx.Commit()
+}
+
+// addNetworkMembershipTx 在调用方事务里登记一个网络成员；成员行与审计行
+// 随外层事务一起提交或回滚。
+func (s *Store) addNetworkMembershipTx(
+	tx *sql.Tx, deviceName, networkName, address string, source WriteSource,
+) (*models.NetworkMembership, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return nil, &TopologyValidationError{Message: "网络成员地址不能为空"}
+	}
 	device, err := deviceByNameTx(tx, deviceName)
 	if err != nil {
 		return nil, err
@@ -101,7 +113,7 @@ func (s *Store) addNetworkMembership(
 	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.member-add", membershipAuditSummary(membership), source); err != nil {
 		return nil, err
 	}
-	return membership, tx.Commit()
+	return membership, nil
 }
 
 // AllVirtualNetworkAddresses 返回拓扑里所有设备在虚拟局域网中的成员地址。

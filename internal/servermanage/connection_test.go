@@ -171,6 +171,10 @@ func TestManagerConnectionTestAnchorsVirtualAddressAndWritesShell(t *testing.T) 
 	if err != nil || len(rows) != 1 || rows[0].Status != "ok" || rows[0].Source != store.AuditSourceWebUI {
 		t.Fatalf("连接测试应有成功审计行：%v %+v", err, rows)
 	}
+	if !strings.Contains(rows[0].Command, `"fingerprint"`) ||
+		strings.Contains(rows[0].Command, `"主机密钥指纹"`) {
+		t.Fatalf("连接测试审计的指纹摘要键应与其他审计一致：%s", rows[0].Command)
+	}
 	for _, row := range rows {
 		if strings.Contains(row.Command, "login-secret") {
 			t.Fatalf("审计不得包含登录密码：%+v", row)
@@ -249,6 +253,9 @@ func TestManagerConnectionTestHostKeyMismatchSkipsWithoutCredentials(t *testing.
 	result, err := manager.TestConnection(context.Background(), ConnectionTestRequest{Identifier: added.ServerID})
 	if err == nil || len(result.ConnectionNotes) != 2 {
 		t.Fatalf("两个不一致地址都应被跳过：%v %+v", err, result)
+	}
+	if result.AnchorResult != "" {
+		t.Fatalf("连接失败时不得显示锚定校验成功：%+v", result)
 	}
 	for _, note := range result.ConnectionNotes {
 		if !strings.Contains(note, "呈现了不同的主机密钥，已跳过") {
@@ -350,8 +357,8 @@ func TestManagerConnectionTestAuthenticationFailureKeepsSavedRows(t *testing.T) 
 		Identifier: added.ServerID, ProbeShell: true,
 	})
 	testErr := err
-	if err == nil || result.AnchorResult == "" {
-		t.Fatalf("认证失败应返回错误；主机密钥锚可按首次信任保留：%v %+v", err, result)
+	if err == nil || result.AnchorFingerprint == "" || result.AnchorResult != "" {
+		t.Fatalf("认证失败应返回错误；锚事实可保留但不显示校验成功：%v %+v", err, result)
 	}
 	saved, err := st.GetServer(added.ServerID)
 	if err != nil || saved.ShellType != models.ShellPOSIX || saved.AuthMethod != models.AuthPassword ||

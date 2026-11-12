@@ -1,6 +1,7 @@
 package webuiservers
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/testsshd"
 	"ssh-manager-mcp/internal/webui"
@@ -49,9 +51,9 @@ func TestConnectionTesterRunsServerManagerTestInBackground(t *testing.T) {
 	}
 
 	tester := ConnectionTesterFromManager(manager)
-	taskID, err := tester.StartServerTest("", added.ServerID, true, webui.ServerWriteSource{
+	taskID, err := tester.StartServerTest(added.ServerID, true, webui.ServerWriteSource{
 		RemoteAddress: "192.0.2.8",
-	})
+	}, webui.ServerConnectionAnchor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,10 +77,40 @@ func TestConnectionTesterRunsServerManagerTestInBackground(t *testing.T) {
 	if strings.Contains(rows[0].Command, "login-secret") {
 		t.Fatalf("连接测试审计不得包含登录密码：%+v", rows[0])
 	}
+	pinRows, err := st.QueryAudit(store.AuditFilter{Actions: []string{"pin-tofu"}})
+	if err != nil || len(pinRows) != 1 || pinRows[0].Source != store.AuditSourceWebUI ||
+		pinRows[0].SourceIP != "192.0.2.8" {
+		t.Fatalf("首次锚定审计应标明 Web UI 来源：%v %+v", err, pinRows)
+	}
 }
 
-// TestWriterAddServerCopiesSiblingAnchor 覆盖挂到已有设备时的兄弟条目锚复
-// 制：结果页数据带来源条目，存储与审计沿用既有 pin-copy 路径。
+func TestConnectionTesterFromOpenerUsesShutdownContext(t *testing.T) {
+	manager, st := newAdapterManager(t)
+	added, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "shutdown", User: "deploy", Host: "127.0.0.1", Port: 1, ShellType: models.ShellPOSIX,
+	}, &models.Credential{Type: models.CredPassword, Secret: []byte("login-secret")}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	tester := ConnectionTesterFromOpenerWithContext(func() (*servermanage.Manager, func(), error) {
+		return manager, func() {}, nil
+	}, ctx)
+
+	taskID, err := tester.StartServerTest(added.ServerID, true, webui.ServerWriteSource{}, webui.ServerConnectionAnchor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := waitConnectionTestStatus(t, tester, taskID)
+	if status.State != webui.ServerConnectionTestFailed || !strings.Contains(status.Message, "context canceled") {
+		t.Fatalf("已关闭的任务应继承关闭上下文并立即失败：%+v", status)
+	}
+}
+
+// TestWriterAddServerCopiesSiblingAnchor 覆盖挂到已有设备时的同一设备、同
+// 一端口的其他服务器条目锚复制：结果页数据带来源条目，存储与审计沿用既
+// 有 pin-copy 路径。
 func TestWriterAddServerCopiesSiblingAnchor(t *testing.T) {
 	manager, st := newAdapterManager(t)
 	if _, err := st.AddDevice("工作站", "", ""); err != nil {
@@ -113,11 +145,17 @@ func TestWriterAddServerCopiesSiblingAnchor(t *testing.T) {
 	}
 	pin, err := st.GetEntryPinMeta(result.Detail.ID)
 	if err != nil || pin == nil || string(pin.Blob) != string(anchor) {
-		t.Fatalf("新条目应复制同设备同端口兄弟锚：%v %+v", err, pin)
+		t.Fatalf("新条目应复制同一设备、同一端口的其他服务器条目锚：%v %+v", err, pin)
 	}
 	rows, err := st.QueryAudit(store.AuditFilter{Actions: []string{"pin-copy"}})
-	if err != nil || len(rows) != 1 || !strings.Contains(rows[0].Command, `"来源服务器条目":"sibling"`) {
+	if err != nil || len(rows) != 1 || rows[0].Source != store.AuditSourceWebUI ||
+		rows[0].SourceIP != "192.0.2.6" ||
+		!strings.Contains(rows[0].Command, `"来源服务器条目":"sibling"`) {
 		t.Fatalf("锚复制审计应带来源条目：%v %+v", err, rows)
+	}
+	if !strings.Contains(rows[0].Command, `"fingerprint"`) ||
+		strings.Contains(rows[0].Command, `"主机密钥指纹"`) {
+		t.Fatalf("锚复制审计的指纹摘要键应使用英文键名：%s", rows[0].Command)
 	}
 }
 

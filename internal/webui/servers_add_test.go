@@ -2,6 +2,7 @@ package webui
 
 import (
 	"bytes"
+	"errors"
 	"html"
 	"io"
 	"mime/multipart"
@@ -18,13 +19,24 @@ type stubAddTopologySource struct{}
 
 func (stubAddTopologySource) Topology(string, string) (*TopologyData, error) {
 	return &TopologyData{
-		Sites: []TopologySite{{ID: "site-1", Name: "家A"}},
+		Sites: []TopologySite{{ID: "site-1", Name: "家A"}, {ID: "site-2", Name: "虚拟站点"}},
 		Networks: []TopologyNetwork{
 			{ID: "net-physical", Name: "家A局域网", Type: "physical", SiteName: "家A"},
-			{ID: "net-virtual", Name: "虚拟网", Type: "virtual"},
+			{ID: "net-virtual", Name: "虚拟网", Type: "virtual", SiteName: "虚拟站点"},
 		},
 		Devices: []TopologyDevice{{ID: "device-1", Name: "工作站", Kind: "server"}},
 	}, nil
+}
+
+type erroringDetailServerSource struct {
+	*stubServerStore
+	err   error
+	calls int
+}
+
+func (s *erroringDetailServerSource) ServerDetail(_ string, _ string) (*ServerDetailView, error) {
+	s.calls++
+	return nil, s.err
 }
 
 func TestServerAddTypeKeepsTopologyContext(t *testing.T) {
@@ -99,6 +111,77 @@ func TestAddResultCanReturnToTopology(t *testing.T) {
 	}
 }
 
+func TestServerAddResultReportsStorageReadFailure(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-new"] = &ServerDetailView{ID: "srv-new", Name: "web", User: "deploy"}
+	source := &erroringDetailServerSource{stubServerStore: store, err: errors.New("database is locked")}
+	h, cookie := newServersTestHandler(t, RoleStandalone, source, &stubServerWriter{})
+
+	body, status := serversGetStatus(t, h, cookie, "/ui/servers/new/result?server=srv-new")
+	if status != http.StatusInternalServerError {
+		t.Fatalf("读取失败应返回 500，实际 %d：%s", status, body)
+	}
+	if !strings.Contains(body, "读取服务器详情失败") {
+		t.Fatalf("读取失败应向 owner 说明详情读取失败：%s", body)
+	}
+	if source.calls != 1 {
+		t.Fatalf("读取失败不应重试，实际调用 %d 次", source.calls)
+	}
+}
+
+func TestServerAddResultUsesStoredFactsInsteadOfQueryParameters(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-new"] = &ServerDetailView{
+		ID: "srv-new", Name: "web", User: "deploy", Host: "192.0.2.20", Port: 22,
+		DeviceName: "真实设备", HasDevice: true,
+	}
+	tester := &stubServerConnectionTester{status: &ServerConnectionTestStatus{
+		ID: "task-1", State: ServerConnectionTestFailed, ServerID: "srv-new",
+	}}
+	h, cookie := newServersTestHandlerWithConnectionTester(t, RoleStandalone, store, &stubServerWriter{}, tester)
+
+	page := serversGet(t, h, cookie, "/ui/servers/new/result?server=srv-new&task=task-1"+
+		"&device="+url.QueryEscape("网址声称的设备")+
+		"&profiles="+url.QueryEscape("网址声称的profile")+
+		"&anchor=copy&anchor_from="+url.QueryEscape("网址声称的来源"))
+	for _, banned := range []string{"网址声称的设备", "网址声称的profile", "网址声称的来源", "已从服务器条目"} {
+		if strings.Contains(page, banned) {
+			t.Fatalf("结果页不得把网址查询参数当事实显示，包含 %q：%s", banned, page)
+		}
+	}
+	if !strings.Contains(page, "真实设备") || !strings.Contains(page, "未授权") {
+		t.Fatalf("结果页应显示存储中的设备与授权状态：%s", page)
+	}
+}
+
+func TestServerAddResultCarriesAnchorCopyThroughConnectionTask(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-new"] = &ServerDetailView{ID: "srv-new", Name: "web", User: "deploy"}
+	writer := &stubServerWriter{anchorCopied: true, anchorFrom: "sibling"}
+	tester := &stubServerConnectionTester{}
+	h, cookie := newServersTestHandlerWithConnectionTester(t, RoleStandalone, store, writer, tester)
+	formPage := serversGet(t, h, cookie, "/ui/servers/new")
+	response := serversPost(t, h, cookie, "/ui/servers/new", url.Values{
+		"csrf_token": {hiddenInputValue(t, formPage, "csrf_token")},
+		"name":       {"web"}, "user": {"deploy"}, "port": {"22"}, "host": {"192.0.2.20"},
+		"shell": {"auto"}, "credential_action": {"none"},
+	})
+	readResponseBody(t, response)
+	if len(tester.starts) != 1 || !tester.starts[0].anchor.Copied ||
+		tester.starts[0].anchor.FromServerName != "sibling" {
+		t.Fatalf("锚复制事实应随连接测试任务携带：%+v", tester.starts)
+	}
+
+	tester.status = &ServerConnectionTestStatus{
+		ID: "task-1", State: ServerConnectionTestRunning, ServerID: "srv-new",
+		AnchorCopied: true, AnchorCopyFromServerName: "sibling",
+	}
+	page := serversGet(t, h, cookie, response.Header.Get("Location"))
+	if !strings.Contains(page, "已从服务器条目 sibling 复制同端口主机密钥锚") {
+		t.Fatalf("结果页应显示任务携带的锚复制来源：%s", page)
+	}
+}
+
 func TestServerAddFormReadsPastedOrUploadedPrivateKey(t *testing.T) {
 	store := newStubServerStore()
 	writer := &stubServerWriter{}
@@ -141,6 +224,141 @@ func TestServerAddFormReadsPastedOrUploadedPrivateKey(t *testing.T) {
 	}
 	if len(writer.adds) != 1 || writer.adds[0].KeySource != "file" || writer.adds[0].KeyContent != "PRIVATE KEY BODY" {
 		t.Fatalf("应读取上传的私钥文件：%+v", writer.adds)
+	}
+}
+
+type failingMultipartFile struct{}
+
+func (failingMultipartFile) Read([]byte) (int, error) { return 0, errors.New("disk went away") }
+func (failingMultipartFile) ReadAt([]byte, int64) (int, error) {
+	return 0, errors.New("disk went away")
+}
+func (failingMultipartFile) Seek(int64, int) (int64, error) {
+	return 0, errors.New("disk went away")
+}
+func (failingMultipartFile) Close() error { return nil }
+
+func TestReadPrivateKeyFileReportsReadFailure(t *testing.T) {
+	content, err := readPrivateKeyFile(failingMultipartFile{})
+	if err == nil || content != "" || !strings.Contains(err.Error(), "disk went away") {
+		t.Fatalf("私钥文件读取失败应返回底层错误，content=%q err=%v", content, err)
+	}
+}
+
+func TestServerAddFormHasItsOwnRequestBodyLimitAndMessage(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{}
+	h, cookie := newServersTestHandler(t, RoleStandalone, store, writer)
+	formPage := serversGet(t, h, cookie, "/ui/servers/new")
+	csrf := hiddenInputValue(t, formPage, "csrf_token")
+
+	form := url.Values{
+		"csrf_token": {csrf}, "name": {"too-large"}, "user": {"deploy"}, "port": {"22"},
+		"shell": {"auto"}, "credential_action": {"none"},
+		"description": {strings.Repeat("说明", 50*1024)},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/ui/servers/new", strings.NewReader(form.Encode()))
+	req.Host = "127.0.0.1:18080"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://127.0.0.1:18080")
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	response := rec.Result()
+	body := readResponseBody(t, response)
+	if response.StatusCode != http.StatusRequestEntityTooLarge ||
+		!strings.Contains(body, "新增服务器表单过大") {
+		t.Fatalf("新增服务器表单应有独立上限与错误说明，状态码=%d：%s", response.StatusCode, body)
+	}
+	if len(writer.adds) != 0 {
+		t.Fatalf("超限请求不得保存服务器：%+v", writer.adds)
+	}
+}
+
+func TestAddFormsCanAppendVirtualNetworkMemberWithoutScript(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{}
+	h, cookie := newServersTestHandlerWithTopology(t, RoleStandalone, store, writer)
+	formPage := serversGet(t, h, cookie, "/ui/servers/new")
+	csrf := hiddenInputValue(t, formPage, "csrf_token")
+
+	serverForm := url.Values{
+		"csrf_token": {csrf}, "name": {"web"}, "user": {"deploy"}, "port": {"22"},
+		"shell": {"auto"}, "credential_action": {"password"}, "password": {"login-secret"},
+		"device_choice": {"new"}, "device_name": {"工作站"},
+		"virtual_network":    {"虚拟网", "虚拟网", "虚拟网"},
+		"virtual_address":    {"100.64.0.1", "100.64.0.2", "100.64.0.3"},
+		"add_virtual_member": {"1"},
+	}
+	serverResponse := serversPost(t, h, cookie, "/ui/servers/new", serverForm)
+	serverBody := readResponseBody(t, serverResponse)
+	if serverResponse.StatusCode != http.StatusOK {
+		t.Fatalf("服务器表单应原样回显并追加一行，状态码=%d：%s", serverResponse.StatusCode, serverBody)
+	}
+	for _, want := range []string{
+		`id="add-virtual-network-3"`, `id="add-virtual-address-3"`,
+		`value="100.64.0.1"`, `value="100.64.0.3"`, "再添加一个虚拟局域网成员",
+	} {
+		if !strings.Contains(serverBody, want) {
+			t.Fatalf("服务器表单应保留三个成员并显示第四行，缺少 %q：%s", want, serverBody)
+		}
+	}
+	if strings.Contains(serverBody, "login-secret") {
+		t.Fatalf("追加行时不得回显登录凭据：%s", serverBody)
+	}
+
+	deviceForm := url.Values{
+		"csrf_token": {csrf}, "device_name": {"交换机"},
+		"virtual_network":    {"虚拟网", "虚拟网", "虚拟网"},
+		"virtual_address":    {"100.64.1.1", "100.64.1.2", "100.64.1.3"},
+		"add_virtual_member": {"1"},
+	}
+	deviceResponse := serversPost(t, h, cookie, "/ui/devices/new", deviceForm)
+	deviceBody := readResponseBody(t, deviceResponse)
+	if deviceResponse.StatusCode != http.StatusOK {
+		t.Fatalf("其他设备表单应原样回显并追加一行，状态码=%d：%s", deviceResponse.StatusCode, deviceBody)
+	}
+	if !strings.Contains(deviceBody, `id="add-virtual-network-3"`) ||
+		!strings.Contains(deviceBody, `value="100.64.1.3"`) {
+		t.Fatalf("其他设备表单应保留三个成员并显示第四行：%s", deviceBody)
+	}
+	if len(writer.adds) != 0 || len(writer.otherAdds) != 0 {
+		t.Fatalf("追加行按钮不得保存数据：%+v %+v", writer.adds, writer.otherAdds)
+	}
+}
+
+func TestServerAddAppendMemberKeepsCredentialForFinalSubmit(t *testing.T) {
+	store := newStubServerStore()
+	writer := &stubServerWriter{}
+	h, cookie := newServersTestHandlerWithTopology(t, RoleStandalone, store, writer)
+	formPage := serversGet(t, h, cookie, "/ui/servers/new")
+	csrf := hiddenInputValue(t, formPage, "csrf_token")
+
+	appendForm := url.Values{
+		"csrf_token": {csrf}, "name": {"web"}, "user": {"deploy"}, "port": {"22"},
+		"shell": {"auto"}, "credential_action": {"password"}, "password": {"login-secret"},
+		"device_choice": {"new"}, "device_name": {"工作站"},
+		"virtual_network": {"虚拟网"}, "virtual_address": {"100.64.0.1"},
+		"add_virtual_member": {"1"},
+	}
+	appended := serversPost(t, h, cookie, "/ui/servers/new", appendForm)
+	appendedBody := readResponseBody(t, appended)
+	if appended.StatusCode != http.StatusOK {
+		t.Fatalf("追加虚拟局域网成员应回显表单，状态码=%d：%s", appended.StatusCode, appendedBody)
+	}
+
+	saveForm := url.Values{
+		"csrf_token": {csrf}, "name": {"web"}, "user": {"deploy"}, "port": {"22"},
+		"shell": {"auto"}, "credential_action": {"password"}, "resume_credentials": {"1"},
+		"device_choice": {"new"}, "device_name": {"工作站"},
+		"virtual_network": {"虚拟网", "虚拟网"}, "virtual_address": {"100.64.0.1", "100.64.0.2"},
+	}
+	saved := serversPost(t, h, cookie, "/ui/servers/new", saveForm)
+	savedBody := readResponseBody(t, saved)
+	if saved.StatusCode != http.StatusSeeOther || len(writer.adds) != 1 ||
+		writer.adds[0].Password != "login-secret" {
+		t.Fatalf("追加行后最终提交应沿用刚才填写的登录密码，状态码=%d 写入=%+v 页面=%s",
+			saved.StatusCode, writer.adds, savedBody)
 	}
 }
 
@@ -236,8 +454,9 @@ func TestServerAddFormAppliesValidTopologyContext(t *testing.T) {
 	}
 
 	virtual := serversGet(t, h, cookie, "/ui/devices/new?network="+url.QueryEscape("虚拟网"))
-	if !strings.Contains(virtual, `<option value="虚拟网" selected>`) {
-		t.Fatalf("虚拟局域网入口应预选第一个虚拟网络成员：\n%s", virtual)
+	if !strings.Contains(virtual, `<option value="虚拟网" selected>`) ||
+		!strings.Contains(virtual, `<option value="虚拟站点" selected>`) {
+		t.Fatalf("虚拟局域网入口应预选第一个虚拟网络成员与所属站点：\n%s", virtual)
 	}
 
 	device := serversGet(t, h, cookie, "/ui/servers/new?device="+url.QueryEscape("工作站"))
@@ -346,6 +565,173 @@ func TestAuthorityServerAddCredentialPreservesSubmittedFieldsAfterReverify(t *te
 	}
 }
 
+func newAuthorityServerAddDraftTest(
+	t *testing.T, writer *stubServerWriter, now *time.Time,
+) (http.Handler, *http.Cookie) {
+	t.Helper()
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: newStubServerStore(), ServerWriter: writer,
+		Topology: stubAddTopologySource{}, Access: &stubAccessStore{}, Auth: auth,
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		AllowedHosts:           []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time { return *now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+	return handler, cookie
+}
+
+func authorityServerAddDraftForm(t *testing.T, handler http.Handler, cookie *http.Cookie) url.Values {
+	t.Helper()
+	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/new", cookie)
+	body := readResponseBody(t, page)
+	return url.Values{
+		"csrf_token": {hiddenInputValue(t, body, "csrf_token")},
+		"name":       {"web"}, "user": {"deploy"}, "port": {"22"}, "shell": {"auto"},
+		"credential_action": {"password"}, "password": {"first-secret"},
+		"description": {"保留的说明"}, "device_choice": {"new"},
+	}
+}
+
+func authorityCompleteReverify(t *testing.T, handler http.Handler, cookie *http.Cookie, form url.Values) string {
+	t.Helper()
+	response := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/new", form, cookie)
+	readResponseBody(t, response)
+	if response.StatusCode != http.StatusSeeOther || !strings.Contains(response.Header.Get("Location"), "/ui/reverify") {
+		t.Fatalf("未验证提交应跳转重新验证，状态码=%d 跳转=%s", response.StatusCode, response.Header.Get("Location"))
+	}
+	reverify := authorityGet(t, handler, "127.0.0.1:7879", response.Header.Get("Location"), cookie)
+	reverifyBody := readResponseBody(t, reverify)
+	verified := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/reverify", url.Values{
+		"csrf_token": {hiddenInputValue(t, reverifyBody, "csrf_token")},
+		"password":   {"correct-password"},
+		"next":       {hiddenInputValue(t, reverifyBody, "next")},
+	}, cookie)
+	readResponseBody(t, verified)
+	if verified.StatusCode != http.StatusSeeOther {
+		t.Fatalf("重新验证状态码=%d", verified.StatusCode)
+	}
+	return verified.Header.Get("Location")
+}
+
+func TestAuthorityServerAddDraftExpiresAfterFiveMinutes(t *testing.T) {
+	writer := &stubServerWriter{}
+	now := time.Unix(1800000000, 0)
+	handler, cookie := newAuthorityServerAddDraftTest(t, writer, &now)
+	now = now.Add(6 * time.Minute)
+	form := authorityServerAddDraftForm(t, handler, cookie)
+	resumePath := authorityCompleteReverify(t, handler, cookie, form)
+
+	now = now.Add(6 * time.Minute)
+	page := authorityGet(t, handler, "127.0.0.1:7879", resumePath, cookie)
+	body := readResponseBody(t, page)
+	if strings.Contains(body, `name="resume_credentials"`) || strings.Contains(body, "first-secret") {
+		t.Fatalf("超过五分钟的凭据草稿不得继续暂存：%s", body)
+	}
+	if !strings.Contains(body, "暂存的登录凭据已超过五分钟") {
+		t.Fatalf("过期页面应说明凭据草稿已失效：%s", body)
+	}
+
+	resumedForm := url.Values{
+		"csrf_token": {hiddenInputValue(t, body, "csrf_token")},
+		"name":       {"web"}, "user": {"deploy"}, "port": {"22"}, "shell": {"auto"},
+		"credential_action": {"password"}, "resume_credentials": {"1"},
+		"description": {"保留的说明"}, "device_choice": {"new"},
+	}
+	response := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/new", resumedForm, cookie)
+	responseBody := readResponseBody(t, response)
+	if response.StatusCode != http.StatusBadRequest || !strings.Contains(responseBody, "暂存的登录凭据已超过五分钟") ||
+		len(writer.adds) != 0 {
+		t.Fatalf("过期草稿不得被再次使用，状态码=%d 写入=%+v 页面=%s", response.StatusCode, writer.adds, responseBody)
+	}
+}
+
+func TestAuthorityServerAddDraftIsUsedOnce(t *testing.T) {
+	writer := &stubServerWriter{}
+	now := time.Unix(1800000000, 0)
+	handler, cookie := newAuthorityServerAddDraftTest(t, writer, &now)
+	now = now.Add(6 * time.Minute)
+	form := authorityServerAddDraftForm(t, handler, cookie)
+	resumePath := authorityCompleteReverify(t, handler, cookie, form)
+	page := readResponseBody(t, authorityGet(t, handler, "127.0.0.1:7879", resumePath, cookie))
+	saveForm := url.Values{
+		"csrf_token": {hiddenInputValue(t, page, "csrf_token")},
+		"name":       {"web"}, "user": {"deploy"}, "port": {"22"}, "shell": {"auto"},
+		"credential_action": {"password"}, "resume_credentials": {"1"},
+		"description": {"保留的说明"}, "device_choice": {"new"},
+	}
+	saved := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/new", saveForm, cookie)
+	readResponseBody(t, saved)
+	if saved.StatusCode != http.StatusSeeOther || len(writer.adds) != 1 || writer.adds[0].Password != "first-secret" {
+		t.Fatalf("重新验证后的第一次提交应使用草稿，状态码=%d 写入=%+v", saved.StatusCode, writer.adds)
+	}
+
+	second := cloneURLValues(saveForm)
+	second.Set("name", "web2")
+	response := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/new", second, cookie)
+	responseBody := readResponseBody(t, response)
+	if response.StatusCode != http.StatusBadRequest || !strings.Contains(responseBody, "暂存的登录凭据已超过五分钟") {
+		t.Fatalf("草稿读取一次后不得继续使用，状态码=%d 页面=%s", response.StatusCode, responseBody)
+	}
+	if len(writer.adds) != 1 || writer.adds[0].Password != "first-secret" {
+		t.Fatalf("只应保存第一次重新验证后的提交：%+v", writer.adds)
+	}
+}
+
+func TestAuthorityServerAddDraftCanBeCleared(t *testing.T) {
+	writer := &stubServerWriter{}
+	now := time.Unix(1800000000, 0)
+	handler, cookie := newAuthorityServerAddDraftTest(t, writer, &now)
+	now = now.Add(6 * time.Minute)
+	form := authorityServerAddDraftForm(t, handler, cookie)
+	resumePath := authorityCompleteReverify(t, handler, cookie, form)
+	page := readResponseBody(t, authorityGet(t, handler, "127.0.0.1:7879", resumePath, cookie))
+	if !strings.Contains(page, `name="clear_staged_credentials"`) {
+		t.Fatalf("续交页面应提供清除暂存凭据的入口：%s", page)
+	}
+
+	clearForm := url.Values{
+		"csrf_token": {hiddenInputValue(t, page, "csrf_token")},
+		"name":       {"web"}, "user": {"deploy"}, "port": {"22"}, "shell": {"auto"},
+		"credential_action": {"password"}, "password": {"new-secret"},
+		"clear_staged_credentials": {"1"},
+		"description":              {"清除后说明"}, "device_choice": {"new"},
+	}
+	cleared := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/new", clearForm, cookie)
+	clearedBody := readResponseBody(t, cleared)
+	if cleared.StatusCode != http.StatusOK || !strings.Contains(clearedBody, "已清除暂存的登录凭据") ||
+		len(writer.adds) != 0 {
+		t.Fatalf("owner 应能主动清除草稿，状态码=%d 写入=%+v 页面=%s", cleared.StatusCode, writer.adds, clearedBody)
+	}
+	if strings.Contains(clearedBody, "new-secret") || strings.Contains(clearedBody, `name="resume_credentials"`) {
+		t.Fatalf("清除后页面不得继续暂存或暗示沿用登录凭据：%s", clearedBody)
+	}
+
+	second := cloneURLValues(clearForm)
+	second.Set("name", "web2")
+	second.Del("clear_staged_credentials")
+	second.Set("resume_credentials", "1")
+	response := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/new", second, cookie)
+	responseBody := readResponseBody(t, response)
+	if response.StatusCode != http.StatusBadRequest || !strings.Contains(responseBody, "暂存的登录凭据已超过五分钟") {
+		t.Fatalf("草稿清除后不得继续使用，状态码=%d 页面=%s", response.StatusCode, responseBody)
+	}
+	if len(writer.adds) != 0 {
+		t.Fatalf("清除后不得保存任何提交：%+v", writer.adds)
+	}
+}
+
+func cloneURLValues(source url.Values) url.Values {
+	out := make(url.Values, len(source))
+	for key, values := range source {
+		out[key] = append([]string(nil), values...)
+	}
+	return out
+}
+
 // TestServerAddResultPollsConnectionTest 覆盖保存后的公共页面边界：表单提交
 // 先返回结果页，连接测试任务在后台进行，结果页按现有 htmx 轮询模式刷新。
 func TestServerAddResultPollsConnectionTest(t *testing.T) {
@@ -423,10 +809,10 @@ func TestServerAddResultShowsConnectionTestOutcome(t *testing.T) {
 }
 
 type stubServerConnectionStart struct {
-	instance   string
 	serverID   string
 	probeShell bool
 	source     ServerWriteSource
+	anchor     ServerConnectionAnchor
 }
 
 type stubServerConnectionTester struct {
@@ -435,10 +821,10 @@ type stubServerConnectionTester struct {
 }
 
 func (s *stubServerConnectionTester) StartServerTest(
-	instance, serverID string, probeShell bool, source ServerWriteSource,
+	serverID string, probeShell bool, source ServerWriteSource, anchor ServerConnectionAnchor,
 ) (string, error) {
 	s.starts = append(s.starts, stubServerConnectionStart{
-		instance: instance, serverID: serverID, probeShell: probeShell, source: source,
+		serverID: serverID, probeShell: probeShell, source: source, anchor: anchor,
 	})
 	return "task-1", nil
 }

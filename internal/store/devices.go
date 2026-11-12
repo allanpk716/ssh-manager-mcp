@@ -53,7 +53,7 @@ type AddServerDeviceResult struct {
 	AnchorCopy    *ServerAnchorCopy
 }
 
-// ServerAnchorCopy 描述设备内兄弟条目锚复制的判定结果。
+// ServerAnchorCopy 描述同一设备内其他服务器条目锚复制的判定结果。
 type ServerAnchorCopy struct {
 	Copied         bool
 	FromServerName string
@@ -75,15 +75,26 @@ func (s *Store) addDevice(name, note, client string, source WriteSource) (*model
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
-	name = strings.TrimSpace(name)
-	if err := validateTopologyName("设备", name); err != nil {
-		return nil, err
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	device, err := s.addDeviceTx(tx, name, note, client, source)
+	if err != nil {
+		return nil, err
+	}
+	return device, tx.Commit()
+}
+
+// addDeviceTx 在调用方事务里登记设备；数据行与审计行随外层事务提交。
+func (s *Store) addDeviceTx(
+	tx *sql.Tx, name, note, client string, source WriteSource,
+) (*models.Device, error) {
+	name = strings.TrimSpace(name)
+	if err := validateTopologyName("设备", name); err != nil {
+		return nil, err
+	}
 	if err := ensureDeviceNameAvailableTx(tx, name, ""); err != nil {
 		return nil, err
 	}
@@ -93,6 +104,7 @@ func (s *Store) addDevice(name, note, client string, source WriteSource) (*model
 		Note: strings.TrimSpace(note),
 	}
 	if client != "" {
+		var err error
 		device.ClientTokenID, device.ClientName, err = activeClientTx(tx, client)
 		if err != nil {
 			return nil, err
@@ -108,7 +120,7 @@ func (s *Store) addDevice(name, note, client string, source WriteSource) (*model
 	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.add", deviceAuditSummary(device), source); err != nil {
 		return nil, err
 	}
-	return device, tx.Commit()
+	return device, nil
 }
 
 // insertDeviceTx 写入一台设备；自动生成与手工登记共用这一份列映射。
@@ -219,7 +231,7 @@ func (s *Store) MoveServerToDevice(serverIdentifier, deviceName string) (*Server
 		return nil, err
 	}
 	srv.DeviceID = target.ID
-	anchorCopy, err := s.copySiblingEntryPinTx(tx, srv)
+	anchorCopy, err := s.copySiblingEntryPinTx(tx, srv, WriteSource{})
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +264,7 @@ func (s *Store) AddServerWithCredentialsToDevice(
 		return nil, err
 	}
 	defer tx.Rollback()
-	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, deviceName == "", WriteSource{})
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, deviceName == "", CLISource())
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +341,7 @@ func (s *Store) addServerWithCredentialsToDeviceTx(
 				return nil, lookupErr
 			}
 			if lookupErr == nil && existing != nil {
-				return nil, fmt.Errorf("device %q already exists", device.Name)
+				return nil, fmt.Errorf("%w: %q already exists", ErrDeviceNameExists, device.Name)
 			}
 		}
 		baseName := srv.Name
@@ -363,7 +375,7 @@ func (s *Store) addServerWithCredentialsToDeviceTx(
 		return nil, err
 	}
 	srv.ID = id
-	anchorCopy, err := s.copySiblingEntryPinTx(tx, srv)
+	anchorCopy, err := s.copySiblingEntryPinTx(tx, srv, source)
 	if err != nil {
 		return nil, err
 	}
@@ -372,9 +384,11 @@ func (s *Store) addServerWithCredentialsToDeviceTx(
 	}, nil
 }
 
-// copySiblingEntryPinTx 在同一个事务里判断并复制同设备、同端口兄弟条目
+// copySiblingEntryPinTx 在同一个事务里判断并复制同设备、同端口的其他服务器条目
 // 的锚。目标条目已有锚、没有可复制锚、或多个兄弟锚互不一致时不覆盖。
-func (s *Store) copySiblingEntryPinTx(tx *sql.Tx, srv *models.Server) (*ServerAnchorCopy, error) {
+func (s *Store) copySiblingEntryPinTx(
+	tx *sql.Tx, srv *models.Server, source WriteSource,
+) (*ServerAnchorCopy, error) {
 	existing, err := loadEntryPinMeta(tx, srv.ID)
 	if err != nil {
 		return nil, err
@@ -421,8 +435,8 @@ func (s *Store) copySiblingEntryPinTx(tx *sql.Tx, srv *models.Server) (*ServerAn
 		return &ServerAnchorCopy{AnchorConflict: true}, nil
 	}
 
-	source := siblings[0]
-	handshakeAddr := source.pin.HandshakeAddr
+	sibling := siblings[0]
+	handshakeAddr := sibling.pin.HandshakeAddr
 	if handshakeAddr == "" {
 		handshakeAddr = EntryFallbackAddr(srv)
 	}
@@ -431,19 +445,21 @@ func (s *Store) copySiblingEntryPinTx(tx *sql.Tx, srv *models.Server) (*ServerAn
 		ServerID: srv.ID,
 		Action:   "pin-copy",
 		Command: MarshalAuditSummary(map[string]any{
-			"entry":   srv.Name,
-			"host":    EntryFallbackAddr(srv),
-			"主机密钥指纹":  PinFingerprint(source.pin.Blob, source.pin.Format),
-			"来源服务器条目": source.name,
+			"entry":       srv.Name,
+			"host":        EntryFallbackAddr(srv),
+			"fingerprint": PinFingerprint(sibling.pin.Blob, sibling.pin.Format),
+			"来源服务器条目":     sibling.name,
 		}),
 		Status: "ok",
 	}
+	audit.Source = source.kind
+	audit.SourceIP = source.address
 	inserted, err := insertEntryPinWithAuditTx(tx, srv.ID, handshakeAddr,
-		source.pin.Blob, source.pin.Format, source.pin.Source, source.pin.Device, audit)
+		sibling.pin.Blob, sibling.pin.Format, sibling.pin.Source, sibling.pin.Device, audit)
 	if err != nil {
 		return nil, err
 	}
-	return &ServerAnchorCopy{Copied: inserted, FromServerName: source.name}, nil
+	return &ServerAnchorCopy{Copied: inserted, FromServerName: sibling.name}, nil
 }
 
 // ListServersForDevice 返回一台设备关联的服务器条目摘要，按条目名字排序。

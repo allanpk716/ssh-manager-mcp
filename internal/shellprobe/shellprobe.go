@@ -88,6 +88,13 @@ const (
 // 为空串表示无法判定(见 Detect)。owner 的 CLI 诊断命令直接调它
 // (ADR 0003)。
 func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (models.ShellType, string, []string, error) {
+	return ProbeServerWithSource(parent, st, srv, store.CLISource())
+}
+
+// ProbeServerWithSource 与 ProbeServer 相同；首次锚定审计使用指定来源。
+func ProbeServerWithSource(
+	parent context.Context, st *store.Store, srv *models.Server, source store.WriteSource,
+) (models.ShellType, string, []string, error) {
 	auth, err := vault.AuthForServer(st, srv)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("resolve credential: %w", err)
@@ -96,7 +103,7 @@ func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (m
 	defer cancel()
 	dialSource := dialplan.NewStoreSource(st, "")
 	cli, connectionNotes, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
-		Server: srv, Auth: auth, HostKeys: st,
+		Server: srv, Auth: auth, HostKeys: st, HostKeyWriteSource: source,
 		SuccessCache: dialSource,
 		Topology:     dialSource,
 	})
@@ -125,6 +132,13 @@ func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (m
 // ConnectServer 只建立按服务器条目的 SSH 连接并立即关闭，供不需要探测
 // shell 的调用方复用同一条统一拨号、首次锚定与连接说明路径。
 func ConnectServer(parent context.Context, st *store.Store, srv *models.Server) ([]string, error) {
+	return ConnectServerWithSource(parent, st, srv, store.CLISource())
+}
+
+// ConnectServerWithSource 与 ConnectServer 相同；首次锚定审计使用指定来源。
+func ConnectServerWithSource(
+	parent context.Context, st *store.Store, srv *models.Server, source store.WriteSource,
+) ([]string, error) {
 	auth, err := vault.AuthForServer(st, srv)
 	if err != nil {
 		return nil, fmt.Errorf("resolve credential: %w", err)
@@ -133,7 +147,7 @@ func ConnectServer(parent context.Context, st *store.Store, srv *models.Server) 
 	defer cancel()
 	dialSource := dialplan.NewStoreSource(st, "")
 	cli, connectionNotes, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
-		Server: srv, Auth: auth, HostKeys: st,
+		Server: srv, Auth: auth, HostKeys: st, HostKeyWriteSource: source,
 		SuccessCache: dialSource,
 		Topology:     dialSource,
 	})

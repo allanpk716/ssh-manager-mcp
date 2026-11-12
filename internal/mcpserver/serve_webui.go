@@ -124,7 +124,7 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		Role: webui.RoleServer, Port: port,
 		Servers:                serveWebUIServerSource{store: st},
 		ServerWriter:           webuiservers.WriterFromManager(servermanage.New(st)),
-		ServerConnectionTester: webuiservers.ConnectionTesterFromManager(servermanage.New(st)),
+		ServerConnectionTester: webuiservers.ConnectionTesterFromManagerWithContext(servermanage.New(st), ctx),
 		Secrets:                webuisecrets.FromManager(secretmanage.New(st)),
 		SecretsWriter:          webuisecrets.WriterFromManager(secretmanage.New(st)),
 		SoftwareInventory: webuisoftwareinventory.FromOpener(func() (*store.Store, func(), error) {

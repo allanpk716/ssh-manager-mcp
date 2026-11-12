@@ -1835,7 +1835,6 @@
       html += "<dt>备注</dt><dd>" + escapeHTML(network.note) + "</dd>";
     }
     html += "</dl><h3>成员</h3><ul>";
-    html += detailAddLinkHTML("在此新增", "/ui/add", { network: network.name });
     if (members.length === 0) {
       html += "<li>暂无成员设备。</li>";
     }
@@ -1845,6 +1844,7 @@
       html += "<li>" + escapeHTML(name) + " · " + escapeHTML(membership.address) + "</li>";
     });
     html += "</ul>";
+    html += detailAddLinkHTML("在此新增", "/ui/add", { network: network.name });
     showDetailHTML(html);
   }
 
