@@ -3,7 +3,9 @@ package mcpserver
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -544,7 +546,8 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 // 器必须已在 profile 授权集合内。执行顺序固定：① 参数校验；② profile
 // 授权检查；③ 读取文本字节或解码 Base64；④ 读取本地服务器条目、填入
 // 机密项占位符并按填值后的字节数检查大小上限；⑤ 取凭据并连接目标服务
-// 器；⑥ 写入文件；⑦ 写审计。前四步都不访问目标服务器。
+// 器；⑥ 写入文件；⑦ 尽力登记机密项下发记录；⑧ 写审计。前四步都
+// 不访问目标服务器。
 //
 // 大小上限由 NewServerFromSource 从环境变量 SSHMGR_UPLOAD_CONTENT_MAX
 // 解析；测试直接传入较小的上限。
@@ -557,6 +560,10 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 // 取或 Base64 解码后的拒绝为填值前模板字节数，避免间接暴露机密值长度；
 // 更早失败为 0。
 func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64, hk ...sshbroker.HostKeyStore) (out UploadContentOutput, err error) {
+	return uploadContentForProfile(ctx, st, projectID, profileID, serverID, content, remotePath, encoding, cap, nil, hk...)
+}
+
+func uploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64, deliveryRecorder SecretDeliveryRecorder, hk ...sshbroker.HostKeyStore) (out UploadContentOutput, err error) {
 	remotePath = normalizeRemotePath(remotePath)
 	if encoding == "" {
 		encoding = "text"
@@ -564,6 +571,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	byteCount := int64(0) // 只供审计使用；成功后改为实际写入字节数
 	var status string
 	var filledSecretNames []string
+	deliveryRecordStatus := "not_recorded"
 	start := time.Now()
 	defer func() {
 		if status == "" {
@@ -572,6 +580,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		auditCommand := fmt.Sprintf("inline %d bytes -> %s", byteCount, remotePath)
 		if len(filledSecretNames) > 0 {
 			auditCommand += "; secrets=" + strings.Join(filledSecretNames, ",")
+			auditCommand += "; delivery-record=" + deliveryRecordStatus
 		}
 		_ = st.WriteAudit(store.AuditRow{
 			TS: start, ProjectID: projectID, ServerID: serverID, Action: "upload-content",
@@ -654,6 +663,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		}
 		return
 	}
+	templateContent := append([]byte(nil), contentBytes...)
 	contentBytes = filled.Content
 	r := bytes.NewReader(contentBytes)
 
@@ -712,11 +722,73 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	if filledSecretNames == nil {
 		filledSecretNames = []string{}
 	}
+	deliveryStatus := deliveryRecordStatus
+	deliveryReason := "内容不含机密项占位符，无需登记"
+	if len(filledSecretNames) > 0 {
+		deliveryReason = ""
+		finalPath, rerr := cli.RealRemotePath(ctx, remotePath)
+		if rerr != nil {
+			deliveryReason = "解析服务器上的最终路径失败，未登记下发记录：" + rerr.Error()
+		} else {
+			digest := sha256.Sum256(filled.Content)
+			deliverySecrets := make([]store.SecretDeliverySecret, 0, len(filledSecretNames))
+			for _, name := range filledSecretNames {
+				version, exists := filled.ValueVersions[name]
+				if !exists || version <= 0 {
+					deliveryReason = "机密项值版本号不可用，未登记下发记录"
+					break
+				}
+				deliverySecrets = append(deliverySecrets, store.SecretDeliverySecret{
+					Name: name, ValueVersion: version,
+				})
+			}
+			if deliveryReason == "" {
+				recordInput := store.SecretDeliveryRecordInput{
+					ServerID: serverID, Path: finalPath, Template: templateContent,
+					FileSHA256: hex.EncodeToString(digest[:]), Secrets: deliverySecrets,
+					WrittenAt:              time.Now(),
+					AuthorizationProfileID: profileID, TemplateLimitBytes: cap,
+				}
+				if deliveryRecorder == nil {
+					hostname, herr := os.Hostname()
+					if herr != nil || hostname == "" {
+						hostname = "local machine"
+					}
+					recordInput.InitiatingDeviceName = hostname
+					recordInput.InitiatingInstanceName = "single-machine broker"
+					_, registerErr := st.RecordSecretDelivery(recordInput, store.AgentSource())
+					rerr = registerErr
+					if rerr == nil {
+						deliveryStatus = "recorded"
+					}
+				} else {
+					outcome, registerErr := deliveryRecorder.RecordSecretDeliveryForBroker(ctx, recordInput)
+					if registerErr != nil {
+						rerr = registerErr
+						deliveryReason = outcome.Reason
+						if deliveryReason == "" {
+							deliveryReason = registerErr.Error()
+						}
+					} else if outcome.Recorded {
+						deliveryStatus = "recorded"
+					} else {
+						deliveryReason = outcome.Reason
+					}
+				}
+				if deliveryRecorder == nil && rerr != nil {
+					deliveryReason = "下发记录登记失败：" + rerr.Error()
+				}
+			}
+		}
+	}
 	out = UploadContentOutput{
 		Bytes:                 byteCount,
 		FilledSecretNames:     filledSecretNames,
+		DeliveryRecordStatus:  deliveryStatus,
+		DeliveryRecordReason:  deliveryReason,
 		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
 	}
+	deliveryRecordStatus = deliveryStatus
 	return
 }
 

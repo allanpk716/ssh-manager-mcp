@@ -69,6 +69,17 @@ func cacheMetaForwarderFor(instance string) (*clientops.MetadataForwarder, error
 	return clientops.NewMetadataForwarder(*cred)
 }
 
+// cacheSecretDeliveryForwarderFor 解析实例的拉取凭据并构造下发记录转发器。
+// 缺少凭据得到会在登记时报「未登记」的形态；固定证书配明文地址这类硬性
+// 配置错误在启动时报错。
+func cacheSecretDeliveryForwarderFor(instance string) (*clientops.SecretDeliveryForwarder, error) {
+	cred, err := clientops.ReadCacheCredFor(instance)
+	if err != nil || cred == nil {
+		return clientops.NewSecretDeliveryForwarder(clientops.CacheCred{})
+	}
+	return clientops.NewSecretDeliveryForwarder(*cred)
+}
+
 // cacheSoftwareInventoryForwarderFor 解析实例的拉取凭据并构造软件清单在
 // 线查询转发器（票 #185）——cacheForwarderFor 的又一个同构：缺凭据得到
 // 固定报错的形态，硬性配置错误（固定证书配明文地址）在启动时报错。
@@ -190,6 +201,12 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				// 下发记录只在含机密项占位符且文件写入成功后登记；这里在启动
+				// 阶段构造转发器，工具调用阶段不再读取实例凭据。
+				deliveryForwarder, err := cacheSecretDeliveryForwarderFor(instance)
+				if err != nil {
+					return err
+				}
 				// 票 #185：软件清单查询转发器在同一处解析实例凭据。客户端
 				// 的清单查询永远在线，权威端不可达时按固定文本报错。
 				inventoryForwarder, err := cacheSoftwareInventoryForwarderFor(instance)
@@ -202,7 +219,7 @@ func newMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				err = mcpserver.RunStdioCacheWithRefresher(token, snap, auditPath, rel.Check,
+				err = mcpserver.RunStdioCacheWithRefresherAndDeliveryRecorder(token, snap, auditPath, rel.Check,
 					clientops.ForwardingHostKeys(fwd), cacheForwardDeviceFor(instance), mfwd, mountSnapshotSyncer,
 					func(refresher mcpserver.CacheRefresher) func() {
 						return clientops.StartSnapshotPoller(clientops.SnapshotPollerConfig{
@@ -216,11 +233,12 @@ func newMCPCmd() *cobra.Command {
 								}
 							},
 						})
-					}, inventoryForwarder)
+					}, deliveryForwarder, inventoryForwarder)
 				// Release the pinned transports' idle connections on shutdown
 				// (the forwarders have served their last call by now).
 				fwd.Close()
 				mfwd.Close()
+				deliveryForwarder.Close()
 				inventoryForwarder.Close()
 				return err
 			}

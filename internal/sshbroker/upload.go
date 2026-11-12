@@ -354,3 +354,30 @@ func (c *Client) WriteFileWithCreateMode(ctx context.Context, remotePath string,
 	}
 	return nil
 }
+
+// RealRemotePath 在写入成功后请求 SFTP 服务器规范化 remotePath。返回值是
+// 服务器认定的最终绝对路径，可能随服务器实现解析符号链接或调整 Windows
+// 盘符写法。
+func (c *Client) RealRemotePath(ctx context.Context, remotePath string) (string, error) {
+	sc, err := sftp.NewClient(c.c)
+	if err != nil {
+		return "", fmt.Errorf("sftp client: %w", err)
+	}
+	defer sc.Close()
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = sc.Close()
+		case <-done:
+		}
+	}()
+
+	resolved, err := sc.RealPath(remotePath)
+	if err != nil {
+		return "", fmt.Errorf("realpath: %w", err)
+	}
+	return resolved, nil
+}
