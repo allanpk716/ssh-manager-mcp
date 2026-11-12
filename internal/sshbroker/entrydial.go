@@ -575,7 +575,7 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			dialErr.Hint = "本机设备设定指向的设备已不存在，请重新设定本机设备。"
 		}
 	}
-	return nil, nil, dialErr
+	return nil, notes, dialErr
 }
 
 func warnDialSuccessCacheFailure(action string, err error) {

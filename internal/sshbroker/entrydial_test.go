@@ -523,7 +523,8 @@ func TestConnectServerEntryDeletedLocalDeviceHint(t *testing.T) {
 }
 
 // TestConnectServerEntryFailureLabelsSkippedHostKeyMismatch: 全部候选的主机
-// 密钥都与锚不一致时，逐地址错误用统一的短说明，不输出指纹，也不泄露地址。
+// 密钥都与锚不一致时，逐地址错误与连接说明都用统一的短说明，不输出指纹，
+// 也不泄露地址。
 func TestConnectServerEntryFailureLabelsSkippedHostKeyMismatch(t *testing.T) {
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 	original := lowLevelDial
@@ -561,7 +562,11 @@ func TestConnectServerEntryFailureLabelsSkippedHostKeyMismatch(t *testing.T) {
 	if strings.Contains(err.Error(), "SHA256") {
 		t.Fatalf("aggregate failure text must not carry fingerprints: %q", err.Error())
 	}
-	if len(notes) != 0 {
-		t.Fatalf("failed connect must not return success-path connection notes, got %q", notes)
+	wantNotes := []string{
+		"家A局域网 第1个地址呈现了不同的主机密钥，已跳过",
+		"兜底地址呈现了不同的主机密钥，已跳过",
+	}
+	if strings.Join(notes, "\n") != strings.Join(wantNotes, "\n") {
+		t.Fatalf("failure notes = %q, want %q", notes, wantNotes)
 	}
 }

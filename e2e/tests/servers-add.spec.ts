@@ -24,11 +24,14 @@ test("从页头新增服务器并复用已有设备的网络成员", async ({ pa
     await page.locator('input[name="profile_id"]').check();
 
     await page.getByRole("button", { name: "保存并进入待连接测试" }).click();
-    await expect(page.getByRole("heading", { name: "已保存，待连接测试" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /已保存，连接测试/ })).toBeVisible();
     await expect(page.getByText("same-device")).toBeVisible();
     await expect(page.getByText("deploy@192.168.1.20:22")).toBeVisible();
     await expect(page.getByText("工作站")).toBeVisible();
     await expect(page.locator("#content dd").filter({ hasText: "运维" })).toBeVisible();
+    await expect(page.getByText("未验证", { exact: true })).toBeVisible();
+    await expect(page.getByText("shell 未验证", { exact: false })).toBeVisible();
+    await expect(page.locator("#content")).not.toContainText("browser-new-secret");
   } finally {
     await ui.close();
   }
@@ -55,11 +58,14 @@ test("手机从服务器列表新增并粘贴私钥", async ({ page, isMobile },
     await page.locator('input[name="profile_id"]').check();
     await page.getByRole("button", { name: "保存并进入待连接测试" }).click();
 
-    await expect(page.getByRole("heading", { name: "已保存，待连接测试" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /已保存，连接测试/ })).toBeVisible();
     await expect(page.getByText("mobile-web")).toBeVisible();
     await expect(page.getByText("deploy@192.168.1.40:22")).toBeVisible();
     await expect(page.getByText("手机登记设备")).toBeVisible();
     await expect(page.locator("#content dd").filter({ hasText: "运维" })).toBeVisible();
+    await expect(page.getByText("未验证", { exact: true })).toBeVisible();
+    await expect(page.getByText("shell 未验证", { exact: false })).toBeVisible();
+    await expect(page.locator("#content")).not.toContainText(key);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(2);
     await expect(page.locator("canvas")).toHaveCount(0);

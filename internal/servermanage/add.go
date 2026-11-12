@@ -39,6 +39,7 @@ type AddResult struct {
 	DeviceName    string
 	CreatedDevice bool
 	ProfileNames  []string
+	AnchorCopy    *store.ServerAnchorCopy
 }
 
 // Add 保存一台服务器、所属设备、新设备的网络成员与 profile 授权。先做整
@@ -97,6 +98,7 @@ func (m *Manager) Add(req AddRequest, src Source) (*AddResult, error) {
 		ServerID: added.ServerID, ServerName: prepared.server.Name,
 		DeviceName: added.Device.Name, CreatedDevice: added.CreatedDevice,
 		ProfileNames: profileNames,
+		AnchorCopy:   added.AnchorCopy,
 	}, nil
 }
 

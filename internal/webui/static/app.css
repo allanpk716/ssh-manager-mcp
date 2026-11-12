@@ -1007,6 +1007,11 @@ h1 {
   color: var(--color-muted);
 }
 
+.connection-test-error p {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
 .update-form {
   margin: var(--space-medium) 0;
 }

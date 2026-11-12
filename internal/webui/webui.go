@@ -118,6 +118,8 @@ type Config struct {
 	// ServerWriter 是服务器页写操作来源。单机与权威端必须提供；客户端不提
 	// 供，写路由不存在。
 	ServerWriter ServerWriter
+	// ServerConnectionTester 启动并读取新增服务器后的自动连接测试任务。
+	ServerConnectionTester ServerConnectionTester
 	// Secrets 是机密项页读取来源；三种角色都必须提供。
 	Secrets SecretSource
 	// SecretsWriter 是机密项写操作来源。单机与权威端必须提供；客户端不提

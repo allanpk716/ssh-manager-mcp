@@ -213,3 +213,132 @@ func TestAuthorityServerAddCredentialPreservesSubmittedFieldsAfterReverify(t *te
 		t.Fatalf("重新验证后的提交应使用暂存凭据并保留字段：%+v", writer.adds)
 	}
 }
+
+// TestServerAddResultPollsConnectionTest 覆盖保存后的公共页面边界：表单提交
+// 先返回结果页，连接测试任务在后台进行，结果页按现有 htmx 轮询模式刷新。
+func TestServerAddResultPollsConnectionTest(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-new"] = &ServerDetailView{
+		ID: "srv-new", Name: "web", User: "deploy", Host: "192.0.2.20", Port: 22, Shell: "posix",
+	}
+	writer := &stubServerWriter{}
+	tester := &stubServerConnectionTester{}
+	h, cookie := newServersTestHandlerWithConnectionTester(t, RoleStandalone, store, writer, tester)
+	formPage := serversGet(t, h, cookie, "/ui/servers/new")
+	form := url.Values{
+		"csrf_token": {hiddenInputValue(t, formPage, "csrf_token")},
+		"name":       {"web"}, "user": {"deploy"}, "port": {"22"}, "host": {"192.0.2.20"},
+		"shell": {"auto"}, "credential_action": {"none"},
+	}
+	resp := serversPost(t, h, cookie, "/ui/servers/new", form)
+	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "task=task-1") {
+		t.Fatalf("保存后应立即进入连接测试结果页，状态码=%d 跳转=%s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if len(tester.starts) != 1 || tester.starts[0].serverID != "srv-new" || !tester.starts[0].probeShell {
+		t.Fatalf("应立即启动一次自动 shell 连接测试：%+v", tester.starts)
+	}
+
+	page := serversGet(t, h, cookie, resp.Header.Get("Location"))
+	body := page
+	for _, want := range []string{"连接测试进行中", "已验证状态等待测试完成", `hx-get="/ui/servers/new/result?`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("结果页应显示进行中任务并继续轮询，缺少 %q：\n%s", want, body)
+		}
+	}
+}
+
+// TestServerAddResultShowsConnectionTestOutcome 覆盖结果页对成功与失败的
+// 呈现：成功显示已验证、指纹、锚定与 shell 结论；失败保留条目并明确未验证。
+func TestServerAddResultShowsConnectionTestOutcome(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-new"] = &ServerDetailView{
+		ID: "srv-new", Name: "web", User: "deploy", Host: "192.0.2.20", Port: 22, Shell: "posix",
+	}
+	tester := &stubServerConnectionTester{}
+	h, cookie := newServersTestHandlerWithConnectionTester(t, RoleStandalone, store, &stubServerWriter{}, tester)
+
+	tester.status = &ServerConnectionTestStatus{
+		ID: "task-1", State: ServerConnectionTestSucceeded, ServerID: "srv-new", ProbeShell: true,
+		AnchorFingerprint: "SHA256:known-host-key-fingerprint", AnchorResult: "首次连接已记录主机密钥锚",
+		HandshakeAddress: "100.64.0.20:22", ShellDetected: "powershell",
+		ShellEvidence: "PowerShell 输出了版本表", ConnectionNotes: []string{"物理网络 第1个地址呈现了不同的主机密钥，已跳过"},
+	}
+	success := serversGet(t, h, cookie, "/ui/servers/new/result?server=srv-new&task=task-1")
+	for _, want := range []string{
+		"已验证", "SHA256:known-host-key-fingerprint", "首次连接已记录主机密钥锚",
+		"100.64.0.20:22", "shell 类型已保存为 powershell", "PowerShell 输出了版本表",
+		"物理网络 第1个地址呈现了不同的主机密钥，已跳过",
+	} {
+		if !strings.Contains(success, want) {
+			t.Fatalf("成功结果页缺少 %q：\n%s", want, success)
+		}
+	}
+	if strings.Contains(success, "hx-get=\"/ui/servers/new/result?") {
+		t.Fatalf("已完成任务不应继续轮询：\n%s", success)
+	}
+
+	tester.status = &ServerConnectionTestStatus{
+		ID: "task-1", State: ServerConnectionTestFailed, ServerID: "srv-new", ProbeShell: true,
+		Message:         "全部候选地址连接失败：\n兜底地址：连接超时",
+		ConnectionNotes: []string{"虚拟网络 第1个地址呈现了不同的主机密钥，已跳过"},
+	}
+	failure := serversGet(t, h, cookie, "/ui/servers/new/result?server=srv-new&task=task-1")
+	for _, want := range []string{"未验证", "全部候选地址连接失败", "兜底地址：连接超时", "shell 未验证", "默认 POSIX"} {
+		if !strings.Contains(failure, want) {
+			t.Fatalf("失败结果页缺少 %q：\n%s", want, failure)
+		}
+	}
+}
+
+type stubServerConnectionStart struct {
+	instance   string
+	serverID   string
+	probeShell bool
+	source     ServerWriteSource
+}
+
+type stubServerConnectionTester struct {
+	starts []stubServerConnectionStart
+	status *ServerConnectionTestStatus
+}
+
+func (s *stubServerConnectionTester) StartServerTest(
+	instance, serverID string, probeShell bool, source ServerWriteSource,
+) (string, error) {
+	s.starts = append(s.starts, stubServerConnectionStart{
+		instance: instance, serverID: serverID, probeShell: probeShell, source: source,
+	})
+	return "task-1", nil
+}
+
+func (s *stubServerConnectionTester) ServerTestStatus(taskID string) (*ServerConnectionTestStatus, bool) {
+	if taskID != "task-1" {
+		return nil, false
+	}
+	if s.status != nil {
+		return s.status, true
+	}
+	return &ServerConnectionTestStatus{
+		ID: taskID, State: ServerConnectionTestRunning, ServerID: "srv-new", ProbeShell: true,
+	}, true
+}
+
+func newServersTestHandlerWithConnectionTester(
+	t *testing.T, role Role, store ServerSource, writer ServerWriter, tester ServerConnectionTester,
+) (http.Handler, *http.Cookie) {
+	t.Helper()
+	handler, startup, err := New(Config{
+		Role: role, Servers: store, ServerWriter: writer,
+		ServerConnectionTester: tester, Access: &stubAccessStore{},
+		VersionHint: func() string { return "" }, Port: 18080,
+	})
+	if err != nil {
+		t.Fatalf("构造 Web UI Handler 失败：%v", err)
+	}
+	response := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+	cookies := response.Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("应签发会话 cookie，实际 %d", len(cookies))
+	}
+	return handler, cookies[0]
+}

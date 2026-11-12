@@ -216,7 +216,7 @@ func TestHandlerImportGrantsProfileByID(t *testing.T) {
 
 // TestHandlerAddServerSavesDeviceMembershipAndAuthorization 用真实 vault 覆
 // 盖新增表单：粘贴私钥、新建设备、多个网络成员与 profile 授权一次保存，结
-// 果页停留在待连接测试状态。
+// 果页保持未验证状态。
 func TestHandlerAddServerSavesDeviceMembershipAndAuthorization(t *testing.T) {
 	_, st, h := newIntegrationHandler(t)
 	if _, err := st.AddSite("家A", ""); err != nil {
@@ -273,7 +273,7 @@ func TestHandlerAddServerSavesDeviceMembershipAndAuthorization(t *testing.T) {
 	}
 	result := h.do(http.MethodGet, resp.Header.Get("Location"), nil)
 	resultBody := integrationBody(t, result)
-	if result.StatusCode != http.StatusOK || !strings.Contains(resultBody, "待连接测试") ||
+	if result.StatusCode != http.StatusOK || !strings.Contains(resultBody, "未验证") ||
 		!strings.Contains(resultBody, "工作站") || strings.Contains(resultBody, string(keyPEM)) ||
 		strings.Contains(resultBody, "sudo-secret") {
 		t.Fatalf("结果页应待连接测试且不回显凭据，状态码=%d：\n%s", result.StatusCode, resultBody)

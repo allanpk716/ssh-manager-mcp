@@ -216,7 +216,17 @@ func AddServerView(manager *servermanage.Manager, form webui.ServerAddForm, sour
 	}
 	return &webui.ServerAddResultView{
 		Detail: detail, DeviceName: added.DeviceName, ProfileNames: added.ProfileNames,
+		AnchorCopied:             added.AnchorCopy != nil && added.AnchorCopy.Copied,
+		AnchorCopyFromServerName: anchorCopySourceName(added),
+		AnchorCopyConflict:       added.AnchorCopy != nil && added.AnchorCopy.AnchorConflict,
 	}, nil
+}
+
+func anchorCopySourceName(added *servermanage.AddResult) string {
+	if added == nil || added.AnchorCopy == nil || !added.AnchorCopy.Copied {
+		return ""
+	}
+	return added.AnchorCopy.FromServerName
 }
 
 func siteNameForAddForm(form webui.ServerAddForm) string {

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // serverAddView 是新增服务器表单页的渲染数据。表单值用于校验失败后保留
@@ -140,7 +141,15 @@ func (h *handler) handleServerAddFormPost(w http.ResponseWriter, r *http.Request
 	if sess := h.currentSession(r); sess != nil {
 		h.setServerAddDraft(sess, nil)
 	}
-	http.Redirect(w, r, serverAddResultPath+"?"+serverAddResultQuery(result).Encode(), http.StatusSeeOther)
+	taskID := ""
+	probeShell := form.Shell == "" || form.Shell == "auto"
+	if h.cfg.ServerConnectionTester != nil {
+		taskID, _ = h.cfg.ServerConnectionTester.StartServerTest(
+			h.requestClientInstance(r), result.Detail.ID, probeShell,
+			ServerWriteSource{RemoteAddress: remoteIP(r)},
+		)
+	}
+	http.Redirect(w, r, serverAddResultPath+"?"+serverAddResultQuery(result, taskID, probeShell).Encode(), http.StatusSeeOther)
 }
 
 func isServerFormError(err error) bool {
@@ -248,27 +257,80 @@ func (h *handler) handleServerAddResult(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	identifier := strings.TrimSpace(r.URL.Query().Get("server"))
-	detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), identifier)
+	detail, err := h.serverAddResultDetail(r, identifier)
 	if err != nil || detail == nil || identifier == "" {
 		h.renderError(w, r, http.StatusNotFound, "服务器不存在", "新增结果对应的服务器不存在，请从服务器列表重新进入。")
 		return
 	}
 	view := &ServerAddResultView{
 		Detail: detail, DeviceName: r.URL.Query().Get("device"),
-		ProfileNames: parseTags(r.URL.Query().Get("profiles")),
+		ProfileNames:             parseTags(r.URL.Query().Get("profiles")),
+		ConnectionTestPollPath:   r.URL.RequestURI(),
+		AnchorCopied:             r.URL.Query().Get("anchor") == "copy",
+		AnchorCopyFromServerName: r.URL.Query().Get("anchor_from"),
+		AnchorCopyConflict:       r.URL.Query().Get("anchor") == "conflict",
+	}
+	probeShell := r.URL.Query().Get("shell") == "auto"
+	taskID := strings.TrimSpace(r.URL.Query().Get("task"))
+	if taskID != "" && h.cfg.ServerConnectionTester != nil {
+		if status, ok := h.cfg.ServerConnectionTester.ServerTestStatus(taskID); ok &&
+			status != nil && status.ServerID == identifier {
+			view.ConnectionTest = status
+		} else {
+			view.ConnectionTestNotice = "连接测试结果已失效，服务器条目仍保持未验证。"
+			view.ConnectionTest = &ServerConnectionTestStatus{
+				State: ServerConnectionTestFailed, ServerID: identifier, ProbeShell: probeShell,
+			}
+		}
+	} else {
+		view.ConnectionTestNotice = "连接测试未启动，服务器条目仍保持未验证。"
+		view.ConnectionTest = &ServerConnectionTestStatus{
+			State: ServerConnectionTestFailed, ServerID: identifier, ProbeShell: probeShell,
+		}
 	}
 	h.renderPage(w, r, http.StatusOK, "servers-add-result.tmpl", pageData{
 		Title: "新增结果 · " + detail.Name, ServerAddResult: view,
 	})
 }
 
-func serverAddResultQuery(result *ServerAddResultView) url.Values {
+// serverAddResultDetail 读取刚保存条目的详情。保存、后台测试与结果页读取会
+// 分别打开单机 vault；极短窗口内读到空结果时重试几次，避免刚提交的成功保
+// 存被误报成不存在。真实不存在的条目最终仍返回 404。
+func (h *handler) serverAddResultDetail(r *http.Request, identifier string) (*ServerDetailView, error) {
+	var detail *ServerDetailView
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		detail, err = h.cfg.Servers.ServerDetail(h.requestClientInstance(r), identifier)
+		if err == nil && detail != nil {
+			return detail, nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return detail, err
+}
+
+func serverAddResultQuery(result *ServerAddResultView, taskID string, probeShell bool) url.Values {
 	query := url.Values{"server": {result.Detail.ID}}
+	if taskID != "" {
+		query.Set("task", taskID)
+	}
+	if probeShell {
+		query.Set("shell", "auto")
+	}
 	if result.DeviceName != "" {
 		query.Set("device", result.DeviceName)
 	}
 	if len(result.ProfileNames) > 0 {
 		query.Set("profiles", strings.Join(result.ProfileNames, ","))
+	}
+	switch {
+	case result.AnchorCopied:
+		query.Set("anchor", "copy")
+		if result.AnchorCopyFromServerName != "" {
+			query.Set("anchor_from", result.AnchorCopyFromServerName)
+		}
+	case result.AnchorCopyConflict:
+		query.Set("anchor", "conflict")
 	}
 	return query
 }

@@ -20,9 +20,11 @@ import (
 
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/machineinit"
+	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiops"
+	"ssh-manager-mcp/internal/webuiservers"
 	"ssh-manager-mcp/internal/webuitopology"
 )
 
@@ -67,6 +69,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		webRole                 webui.Role
 		servers                 webui.ServerSource
 		serverWriter            webui.ServerWriter
+		serverTester            webui.ServerConnectionTester
 		accessSource            webui.AccessStore
 		opsSource               webui.OpsStore
 		secretSource            webui.SecretSource
@@ -101,6 +104,13 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		webRole = webui.RoleStandalone
 		servers = standaloneUIServerSource{}
 		serverWriter = standaloneUIServerWriter()
+		serverTester = webuiservers.ConnectionTesterFromOpener(func() (*servermanage.Manager, func(), error) {
+			st, closeStore, err := openStoreForUI()
+			if err != nil {
+				return nil, nil, err
+			}
+			return servermanage.New(st), closeStore, nil
+		})
 		accessSource = standaloneUIAccessStore()
 		secretSource = standaloneUISecretStore()
 		secretWriter = standaloneUISecretWriter()
@@ -153,22 +163,23 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	config := webui.Config{
-		Role:              webRole,
-		Servers:           servers,
-		ServerWriter:      serverWriter,
-		Secrets:           secretSource,
-		SecretsWriter:     secretWriter,
-		SoftwareInventory: softwareInventorySource,
-		Topology:          topologySource,
-		TopologyWriter:    topologyWriter,
-		TopologyProbe:     topologyProbe,
-		VersionHint:       versionHint,
-		Port:              port,
-		Access:            accessSource,
-		Ops:               opsSource,
-		MachineInit:       machineInit,
-		RequestShutdown:   requestShutdown,
-		ClientInstance:    resolvedInstance,
+		Role:                   webRole,
+		Servers:                servers,
+		ServerWriter:           serverWriter,
+		ServerConnectionTester: serverTester,
+		Secrets:                secretSource,
+		SecretsWriter:          secretWriter,
+		SoftwareInventory:      softwareInventorySource,
+		Topology:               topologySource,
+		TopologyWriter:         topologyWriter,
+		TopologyProbe:          topologyProbe,
+		VersionHint:            versionHint,
+		Port:                   port,
+		Access:                 accessSource,
+		Ops:                    opsSource,
+		MachineInit:            machineInit,
+		RequestShutdown:        requestShutdown,
+		ClientInstance:         resolvedInstance,
 	}
 	if initializing {
 		executablePath, err := os.Executable()

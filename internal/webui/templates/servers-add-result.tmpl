@@ -1,14 +1,25 @@
 {{define "content"}}
-<section class="server-add-result">
-<h1>已保存，待连接测试</h1>
+<section class="server-add-result"{{if and .ServerAddResult.ConnectionTest (eq .ServerAddResult.ConnectionTest.State "running")}} id="server-add-result" hx-get="{{.ServerAddResult.ConnectionTestPollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<h1>{{if .ServerAddResult.ConnectionTest}}{{if eq .ServerAddResult.ConnectionTest.State "running"}}已保存，连接测试进行中{{else if eq .ServerAddResult.ConnectionTest.State "succeeded"}}已保存，连接测试完成{{else}}已保存，连接测试未通过{{end}}{{else}}已保存，连接测试未启动{{end}}</h1>
 <div class="operation-result">
-<p>服务器条目 <strong>{{.ServerAddResult.Detail.Name}}</strong> 已保存；连接测试与首次锚定会在下一步接入。</p>
+<p>服务器条目 <strong>{{.ServerAddResult.Detail.Name}}</strong> 已保存；连接测试失败不会删除条目，owner 可以稍后补网络、凭据或手工锚定。</p>
 <dl class="detail-list">
 <div><dt>连接</dt><dd>{{.ServerAddResult.Detail.User}}@{{.ServerAddResult.Detail.Host}}:{{.ServerAddResult.Detail.Port}}</dd></div>
 <div><dt>所属设备</dt><dd>{{if .ServerAddResult.DeviceName}}{{.ServerAddResult.DeviceName}}{{else}}未显示{{end}}</dd></div>
 <div><dt>profile 授权</dt><dd>{{if .ServerAddResult.ProfileNames}}{{joinTags .ServerAddResult.ProfileNames}}{{else}}未授权{{end}}</dd></div>
-<div><dt>状态</dt><dd>待连接测试</dd></div>
+<div><dt>状态</dt><dd>{{if .ServerAddResult.ConnectionTest}}{{if eq .ServerAddResult.ConnectionTest.State "running"}}已验证状态等待测试完成{{else if eq .ServerAddResult.ConnectionTest.State "succeeded"}}已验证{{else}}未验证{{end}}{{else}}未验证{{end}}</dd></div>
+{{if .ServerAddResult.ConnectionTest}}
+{{if .ServerAddResult.ConnectionTest.AnchorFingerprint}}<div><dt>主机密钥指纹</dt><dd>{{.ServerAddResult.ConnectionTest.AnchorFingerprint}}</dd></div>{{end}}
+{{if .ServerAddResult.ConnectionTest.AnchorResult}}<div><dt>锚定结果</dt><dd>{{.ServerAddResult.ConnectionTest.AnchorResult}}{{if .ServerAddResult.ConnectionTest.HandshakeAddress}}（真实握手地址 {{.ServerAddResult.ConnectionTest.HandshakeAddress}}）{{end}}</dd></div>{{end}}
+{{if .ServerAddResult.ConnectionTest.ProbeShell}}<div><dt>shell 测试</dt><dd>{{if .ServerAddResult.ConnectionTest.ShellDetected}}shell 类型已保存为 {{.ServerAddResult.ConnectionTest.ShellDetected}}{{else if .ServerAddResult.ConnectionTest.ShellNotice}}{{.ServerAddResult.ConnectionTest.ShellNotice}}{{else if eq .ServerAddResult.ConnectionTest.State "failed"}}连接失败，shell 未验证；条目保持默认 POSIX 标注。{{else}}正在执行两条固定探测命令{{end}}</dd></div>{{end}}
+{{end}}
 </dl>
+{{if .ServerAddResult.ConnectionTest.ConnectionNotes}}<div class="notice notice-info"><p>连接说明：</p><ul>{{range .ServerAddResult.ConnectionTest.ConnectionNotes}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+{{if .ServerAddResult.ConnectionTest.ShellEvidence}}<div class="notice notice-info"><p>shell 判定依据：{{.ServerAddResult.ConnectionTest.ShellEvidence}}</p></div>{{end}}
+{{if .ServerAddResult.ConnectionTest.Message}}<div class="notice notice-error connection-test-error"><p>{{.ServerAddResult.ConnectionTest.Message}}</p></div>{{end}}
+{{if .ServerAddResult.AnchorCopied}}<div class="notice notice-success"><p>已从服务器条目 {{.ServerAddResult.AnchorCopyFromServerName}} 复制同端口主机密钥锚。</p></div>{{end}}
+{{if .ServerAddResult.AnchorCopyConflict}}<div class="notice notice-warning"><p>同端口兄弟条目的主机密钥锚不一致，未复制；请手工确认后锚定。</p></div>{{end}}
+{{if .ServerAddResult.ConnectionTestNotice}}<div class="notice notice-warning"><p>{{.ServerAddResult.ConnectionTestNotice}}</p></div>{{end}}
 </div>
 <div class="inline-form">
 <a class="button-link" href="/ui/servers/{{.ServerAddResult.Detail.ID}}">查看服务器详情</a>

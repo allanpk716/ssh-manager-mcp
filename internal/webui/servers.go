@@ -95,9 +95,15 @@ type ServerAddForm struct {
 // ServerAddResultView 是新增成功后的结果页数据。本票只显示待连接测试；后
 // 续连接测试票会在同一路径接入任务状态。
 type ServerAddResultView struct {
-	Detail       *ServerDetailView
-	DeviceName   string
-	ProfileNames []string
+	Detail                   *ServerDetailView
+	DeviceName               string
+	ProfileNames             []string
+	ConnectionTest           *ServerConnectionTestStatus
+	ConnectionTestNotice     string
+	ConnectionTestPollPath   string
+	AnchorCopied             bool
+	AnchorCopyFromServerName string
+	AnchorCopyConflict       bool
 }
 
 // ServerEditForm 是编辑提交。指针字段为 nil 表示这个字段没有变化；凭据动

@@ -101,7 +101,7 @@ func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (m
 		Topology:     dialSource,
 	})
 	if err != nil {
-		return "", "", nil, fmt.Errorf("connect: %w", err)
+		return "", "", connectionNotes, fmt.Errorf("connect: %w", err)
 	}
 	defer cli.Close()
 	osRes, err := cli.Exec(ctx, CmdOSExpand, probeExecTimeout, probeMaxBytes)
@@ -120,4 +120,26 @@ func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (m
 	}
 	detected, evidence := Detect(Probes{OSExpand: osRes.Stdout, PSVar: psRes.Stdout})
 	return detected, evidence, connectionNotes, nil
+}
+
+// ConnectServer 只建立按服务器条目的 SSH 连接并立即关闭，供不需要探测
+// shell 的调用方复用同一条统一拨号、首次锚定与连接说明路径。
+func ConnectServer(parent context.Context, st *store.Store, srv *models.Server) ([]string, error) {
+	auth, err := vault.AuthForServer(st, srv)
+	if err != nil {
+		return nil, fmt.Errorf("resolve credential: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(parent, probeShellDeadline)
+	defer cancel()
+	dialSource := dialplan.NewStoreSource(st, "")
+	cli, connectionNotes, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+		Server: srv, Auth: auth, HostKeys: st,
+		SuccessCache: dialSource,
+		Topology:     dialSource,
+	})
+	if err != nil {
+		return connectionNotes, fmt.Errorf("connect: %w", err)
+	}
+	cli.Close()
+	return connectionNotes, nil
 }
