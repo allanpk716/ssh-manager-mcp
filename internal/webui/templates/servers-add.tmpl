@@ -1,11 +1,18 @@
 {{define "content"}}
-<section class="server-add">
-<h1>新增服务器</h1>
+<section class="{{if .ServerAdd.DeviceOnly}}device-add{{else}}server-add{{end}}">
+<h1>{{if .ServerAdd.DeviceOnly}}新增其他设备{{else}}新增服务器{{end}}</h1>
 {{if .ServerAdd.NeedsReverify}}<div class="operation-refusal"><p>提交任何非空凭据前需要重新验证管理员口令。<a href="{{.ServerAdd.ReverifyPath}}">重新验证管理员口令</a>。</p></div>{{end}}
 {{if .ServerAdd.Notice}}<div class="operation-refusal"><p>{{.ServerAdd.Notice}}</p></div>{{end}}
-<form method="post" action="/ui/servers/new" enctype="multipart/form-data" class="server-form">
+<form method="post" action="{{if .ServerAdd.DeviceOnly}}/ui/devices/new{{else}}/ui/servers/new{{end}}" {{if .ServerAdd.DeviceOnly}}class="device-form"{{else}}enctype="multipart/form-data" class="server-form"{{end}}>
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 {{if .ServerAdd.HasCredential}}<input type="hidden" name="resume_credentials" value="1">{{end}}
+{{if .ServerAdd.DeviceOnly}}
+<fieldset>
+<legend>设备</legend>
+<div class="form-field"><label for="add-device-name">设备名</label><input id="add-device-name" name="device_name" value="{{.ServerAdd.Form.DeviceName}}" required></div>
+<div class="form-field"><label for="add-device-note">备注</label><textarea id="add-device-note" name="note" rows="3">{{.ServerAdd.Form.DeviceNote}}</textarea></div>
+</fieldset>
+{{else}}
 <fieldset>
 <legend>连接信息</legend>
 <div class="form-field"><label for="add-name">名称</label><input id="add-name" name="name" value="{{.ServerAdd.Form.Name}}" required></div>
@@ -48,6 +55,7 @@
 </select>
 <p class="muted">选择已有设备时沿用它的站点与全部网络成员。</p></div>
 </fieldset>
+{{end}}
 <fieldset class="new-device-fields">
 <legend>站点与网络成员</legend>
 <p class="muted">不填这一组时，设备没有任何网络成员，会进入未归类设备托盘。</p>
@@ -77,6 +85,7 @@
 {{end}}
 </fieldset>
 </fieldset>
+{{if not .ServerAdd.DeviceOnly}}
 <details class="metadata-details">
 <summary>说明、标签与主机可见性</summary>
 <div class="form-field"><label for="add-description">说明</label><input id="add-description" name="description" value="{{.ServerAdd.Form.Description}}"></div>
@@ -95,7 +104,8 @@
 {{range .ServerAdd.Profiles}}<label class="grant-choice"><input type="checkbox" name="profile_id" value="{{.ID}}" {{if ($.ServerAdd.Form.HasProfileID .ID)}}checked{{end}}> {{.Name}}</label>{{end}}
 </div>
 </details>
-<div class="inline-form"><button type="submit">保存并进入待连接测试</button><a class="button-link" href="/ui/">取消</a></div>
+{{end}}
+<div class="inline-form"><button type="submit">{{if .ServerAdd.DeviceOnly}}保存设备{{else}}保存并进入待连接测试{{end}}</button><a class="button-link" href="/ui/">取消</a></div>
 </form>
 </section>
 {{end}}

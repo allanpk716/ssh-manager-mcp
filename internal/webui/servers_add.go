@@ -22,6 +22,7 @@ type serverAddView struct {
 	ReverifyPath   string
 	HasCredential  bool
 	VirtualMembers []int
+	DeviceOnly     bool
 }
 
 func (h *handler) handleServerAddType(w http.ResponseWriter, r *http.Request) {
@@ -52,13 +53,29 @@ func (h *handler) handleServerAddForm(w http.ResponseWriter, r *http.Request) {
 	} else if sess := h.currentSession(r); sess != nil {
 		h.setServerAddDraft(sess, nil)
 	}
-	h.renderAddForm(w, r, submitted, notice, http.StatusOK)
+	h.renderAddForm(w, r, submitted, notice, http.StatusOK, false)
 }
 
-func (h *handler) renderAddForm(w http.ResponseWriter, r *http.Request, submitted *ServerAddForm, notice string, status int) {
-	view := &serverAddView{Notice: notice, VirtualMembers: []int{0, 1, 2}}
-	if submitted == nil {
+func (h *handler) handleOtherDeviceAddForm(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		h.handleOtherDeviceAddFormPost(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "新增其他设备页只接受 GET 与 POST 请求。")
+		return
+	}
+	h.renderAddForm(w, r, nil, "", http.StatusOK, true)
+}
+
+func (h *handler) renderAddForm(
+	w http.ResponseWriter, r *http.Request, submitted *ServerAddForm, notice string, status int, deviceOnly bool,
+) {
+	view := &serverAddView{Notice: notice, VirtualMembers: []int{0, 1, 2}, DeviceOnly: deviceOnly}
+	if submitted == nil && !deviceOnly {
 		view.Form = defaultServerAddForm()
+	} else if submitted == nil {
+		view.Form = defaultOtherDeviceAddForm()
 	} else {
 		view.Form = submitted
 		view.HasCredential = serverAddFormWritesCredential(*submitted)
@@ -71,7 +88,7 @@ func (h *handler) renderAddForm(w http.ResponseWriter, r *http.Request, submitte
 		}
 		view.Sites, view.Networks, view.Devices = topology.Sites, topology.Networks, topology.Devices
 	}
-	if h.cfg.Access != nil {
+	if !deviceOnly && h.cfg.Access != nil {
 		profiles, err := h.cfg.Access.ListProfiles()
 		if err != nil {
 			h.renderError(w, r, http.StatusInternalServerError, "读取 profile 失败", "读取 profile 授权选项失败，请稍后重试。")
@@ -79,15 +96,23 @@ func (h *handler) renderAddForm(w http.ResponseWriter, r *http.Request, submitte
 		}
 		view.Profiles = profiles
 	}
-	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+	if !deviceOnly && h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
 		view.NeedsReverify = true
 		view.ReverifyPath = reverifyPath(serverAddFormPath + "?resume=1")
 	}
-	h.renderPage(w, r, status, "servers-add.tmpl", pageData{Title: "新增服务器", ServerAdd: view})
+	title := "新增服务器"
+	if deviceOnly {
+		title = "新增其他设备"
+	}
+	h.renderPage(w, r, status, "servers-add.tmpl", pageData{Title: title, ServerAdd: view})
 }
 
 func defaultServerAddForm() *ServerAddForm {
 	return &ServerAddForm{Port: 22, Shell: "auto", DeviceChoice: "new", CredentialAction: "none"}
+}
+
+func defaultOtherDeviceAddForm() *ServerAddForm {
+	return &ServerAddForm{DeviceChoice: "new"}
 }
 
 func (h *handler) handleServerAddFormPost(w http.ResponseWriter, r *http.Request) {
@@ -101,8 +126,9 @@ func (h *handler) handleServerAddFormPost(w http.ResponseWriter, r *http.Request
 	if form.Port < 1 || form.Port > 65535 {
 		fieldErrors = append(fieldErrors, "端口必须在 1 到 65535 之间。")
 	}
+	fieldErrors = append(fieldErrors, deviceFieldErrors(form)...)
 	if len(fieldErrors) > 0 {
-		h.renderAddForm(w, r, &form, strings.Join(fieldErrors, " "), http.StatusBadRequest)
+		h.renderAddForm(w, r, &form, strings.Join(fieldErrors, " "), http.StatusBadRequest, false)
 		return
 	}
 	if r.PostFormValue("resume_credentials") == "1" {
@@ -131,7 +157,7 @@ func (h *handler) handleServerAddFormPost(w http.ResponseWriter, r *http.Request
 	result, err := h.cfg.ServerWriter.AddServer(form, ServerWriteSource{RemoteAddress: remoteIP(r)})
 	if err != nil {
 		if isServerFormError(err) {
-			h.renderAddForm(w, r, &form, err.Error(), http.StatusBadRequest)
+			h.renderAddForm(w, r, &form, err.Error(), http.StatusBadRequest, false)
 			return
 		}
 		h.renderError(w, r, http.StatusInternalServerError, "新增服务器失败", "新增服务器失败，请稍后重试。")
@@ -183,6 +209,37 @@ func (h *handler) parseServerAddForm(r *http.Request) ServerAddForm {
 	}
 	form.KeyPassphrase = r.PostFormValue("key_passphrase")
 	form.SudoPassword = r.PostFormValue("sudo_password")
+	parseDeviceFields(&form, r)
+	form.ProfileIDs = trimmedValues(r.PostForm["profile_id"])
+	return form
+}
+
+func (h *handler) handleOtherDeviceAddFormPost(w http.ResponseWriter, r *http.Request) {
+	form := h.parseOtherDeviceAddForm(r)
+	if fieldErrors := deviceFieldErrors(form); len(fieldErrors) > 0 {
+		h.renderAddForm(w, r, &form, strings.Join(fieldErrors, " "), http.StatusBadRequest, true)
+		return
+	}
+	result, err := h.cfg.ServerWriter.AddOtherDevice(otherDeviceAddForm(form), ServerWriteSource{RemoteAddress: remoteIP(r)})
+	if err != nil {
+		if isServerFormError(err) {
+			h.renderAddForm(w, r, &form, err.Error(), http.StatusBadRequest, true)
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "新增其他设备失败", "新增其他设备失败，请稍后重试。")
+		return
+	}
+	http.Redirect(w, r, deviceAddResultPath+"?device="+url.QueryEscape(result.DeviceName), http.StatusSeeOther)
+}
+
+func (h *handler) parseOtherDeviceAddForm(r *http.Request) ServerAddForm {
+	form := *defaultOtherDeviceAddForm()
+	form.DeviceNote = strings.TrimSpace(r.PostFormValue("note"))
+	parseDeviceFields(&form, r)
+	return form
+}
+
+func parseDeviceFields(form *ServerAddForm, r *http.Request) {
 	form.DeviceChoice = r.PostFormValue("device_choice")
 	if form.DeviceChoice != "existing" {
 		form.DeviceChoice = "new"
@@ -194,8 +251,41 @@ func (h *handler) parseServerAddForm(r *http.Request) ServerAddForm {
 	form.PhysicalAddress = strings.TrimSpace(r.PostFormValue("physical_address"))
 	form.VirtualNetworkNames = trimmedValues(r.PostForm["virtual_network"])
 	form.VirtualAddresses = trimmedValues(r.PostForm["virtual_address"])
-	form.ProfileIDs = trimmedValues(r.PostForm["profile_id"])
-	return form
+}
+
+func otherDeviceAddForm(form ServerAddForm) OtherDeviceAddForm {
+	return OtherDeviceAddForm{
+		Name: form.DeviceName, Note: form.DeviceNote, SiteName: form.SiteName,
+		PhysicalNetwork: form.PhysicalNetwork, PhysicalAddress: form.PhysicalAddress,
+		VirtualNetworkNames: form.VirtualNetworkNames, VirtualAddresses: form.VirtualAddresses,
+	}
+}
+
+func deviceFieldErrors(form ServerAddForm) []string {
+	if form.DeviceChoice == "existing" {
+		return nil
+	}
+	var fieldErrors []string
+	if (form.PhysicalNetwork == "") != (form.PhysicalAddress == "") {
+		fieldErrors = append(fieldErrors, "网络成员必须同时填写网络与地址。")
+	}
+	if form.SiteName != "" && (form.PhysicalNetwork == "" || form.PhysicalAddress == "") {
+		fieldErrors = append(fieldErrors, "填写站点时必须同时填写物理局域网与地址。")
+	}
+	for index, network := range form.VirtualNetworkNames {
+		address := ""
+		if index < len(form.VirtualAddresses) {
+			address = form.VirtualAddresses[index]
+		}
+		if network == "" && address == "" {
+			continue
+		}
+		if network == "" || address == "" {
+			fieldErrors = append(fieldErrors, "网络成员必须同时填写网络与地址。")
+			break
+		}
+	}
+	return fieldErrors
 }
 
 func trimmedValues(values []string) []string {
@@ -271,6 +361,22 @@ func serverAddResultQuery(result *ServerAddResultView) url.Values {
 		query.Set("profiles", strings.Join(result.ProfileNames, ","))
 	}
 	return query
+}
+
+func (h *handler) handleOtherDeviceAddResult(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "其他设备新增结果页只接受 GET 请求。")
+		return
+	}
+	deviceName := strings.TrimSpace(r.URL.Query().Get("device"))
+	if deviceName == "" {
+		h.renderError(w, r, http.StatusNotFound, "设备不存在", "新增结果对应的设备不存在，请重新新增。")
+		return
+	}
+	h.renderPage(w, r, http.StatusOK, "devices-add-result.tmpl", pageData{
+		Title:                "新增其他设备结果 · " + deviceName,
+		OtherDeviceAddResult: &OtherDeviceAddResultView{DeviceName: deviceName},
+	})
 }
 
 func (h *handler) serverAddDraft(r *http.Request) *ServerAddForm {

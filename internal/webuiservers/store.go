@@ -152,6 +152,56 @@ func (w writerAdapter) AddServer(form webui.ServerAddForm, source webui.ServerWr
 	return result, err
 }
 
+func (w writerAdapter) AddOtherDevice(
+	form webui.OtherDeviceAddForm, source webui.ServerWriteSource,
+) (*webui.OtherDeviceAddResultView, error) {
+	var result *webui.OtherDeviceAddResultView
+	err := withManager(w.open, func(manager *servermanage.Manager) error {
+		request := servermanage.OtherDeviceAddRequest{
+			DeviceName: form.Name, Note: form.Note, SiteName: form.SiteName,
+			Memberships: membershipInputs(
+				form.PhysicalNetwork, form.PhysicalAddress,
+				form.VirtualNetworkNames, form.VirtualAddresses,
+			),
+		}
+		added, addErr := manager.AddOtherDevice(request, servermanage.WebUISource(source.RemoteAddress))
+		if addErr != nil {
+			var fieldErr *servermanage.FieldError
+			if errors.As(addErr, &fieldErr) {
+				return &webui.ServerFormError{Message: fieldErr.Page}
+			}
+			return addErr
+		}
+		result = &webui.OtherDeviceAddResultView{DeviceName: added.DeviceName}
+		return nil
+	})
+	return result, err
+}
+
+func membershipInputs(
+	physicalNetwork, physicalAddress string, virtualNetworks, virtualAddresses []string,
+) []servermanage.NetworkMembershipInput {
+	memberships := make([]servermanage.NetworkMembershipInput, 0)
+	if physicalNetwork != "" || physicalAddress != "" {
+		memberships = append(memberships, servermanage.NetworkMembershipInput{
+			Network: physicalNetwork, Address: physicalAddress,
+		})
+	}
+	for index, network := range virtualNetworks {
+		address := ""
+		if index < len(virtualAddresses) {
+			address = virtualAddresses[index]
+		}
+		if network == "" && address == "" {
+			continue
+		}
+		memberships = append(memberships, servermanage.NetworkMembershipInput{
+			Network: network, Address: address,
+		})
+	}
+	return memberships
+}
+
 // AddServerView 执行新增并换成页面数据；字段错误换成表单可显示的中文错误。
 func AddServerView(manager *servermanage.Manager, form webui.ServerAddForm, source webui.ServerWriteSource) (*webui.ServerAddResultView, error) {
 	shell := form.Shell
@@ -186,21 +236,11 @@ func AddServerView(manager *servermanage.Manager, form webui.ServerAddForm, sour
 	if form.SudoPassword != "" {
 		req.SudoCredential = &models.Credential{Type: models.CredPassword, Secret: []byte(form.SudoPassword)}
 	}
-	if form.DeviceChoice != "existing" && form.PhysicalNetwork != "" && form.PhysicalAddress != "" {
-		req.Memberships = append(req.Memberships, servermanage.NetworkMembershipInput{
-			Network: form.PhysicalNetwork, Address: form.PhysicalAddress,
-		})
-	}
-	for i := range form.VirtualNetworkNames {
-		if i >= len(form.VirtualAddresses) {
-			break
-		}
-		if form.DeviceChoice == "existing" || form.VirtualNetworkNames[i] == "" || form.VirtualAddresses[i] == "" {
-			continue
-		}
-		req.Memberships = append(req.Memberships, servermanage.NetworkMembershipInput{
-			Network: form.VirtualNetworkNames[i], Address: form.VirtualAddresses[i],
-		})
+	if form.DeviceChoice != "existing" {
+		req.Memberships = membershipInputs(
+			form.PhysicalNetwork, form.PhysicalAddress,
+			form.VirtualNetworkNames, form.VirtualAddresses,
+		)
 	}
 	added, err := manager.Add(req, servermanage.WebUISource(source.RemoteAddress))
 	if err != nil {

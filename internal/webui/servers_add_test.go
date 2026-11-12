@@ -138,7 +138,7 @@ func TestServerAddEntryRoleMatrixAndCSRF(t *testing.T) {
 		!strings.Contains(clientList, "修改需到权威端 Web UI 去做") {
 		t.Fatalf("客户端不应显示新增入口，且应提示到权威端修改：\n%s", clientList)
 	}
-	for _, target := range []string{"/ui/add", "/ui/servers/new"} {
+	for _, target := range []string{"/ui/add", "/ui/servers/new", "/ui/devices/new"} {
 		if body, status := serversGetStatus(t, client, clientCookie, target); status != http.StatusNotFound {
 			t.Fatalf("客户端新增路由 %s 状态码 = %d，应为 404：%s", target, status, body)
 		}

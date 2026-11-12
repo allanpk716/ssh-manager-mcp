@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -83,6 +84,66 @@ func TestDevicesMoveServerCoversAssociateAndMove(t *testing.T) {
 	out = runCli(t, "devices", "show", "机器B")
 	if !strings.Contains(out, "服务器条目：deploy（用户 deploy，端口 22，未锚定）") {
 		t.Fatalf("target device show must list the moved server entry:\n%s", out)
+	}
+}
+
+// TestOtherDeviceWebUIAndCLICreateSameTopologyData 用同一种数据形状分别走
+// Web UI 背后的服务器管理模块与既有 devices 命令，证明不受管设备路径最终
+// 写的是同一份设备与网络成员数据。
+func TestOtherDeviceWebUIAndCLICreateSameTopologyData(t *testing.T) {
+	dbPath, masterKey := withCliStoreEnv(t)
+	st, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSite("家A", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "家A局域网", Type: models.NetworkPhysical, SiteName: "家A"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := servermanage.New(st).AddOtherDevice(servermanage.OtherDeviceAddRequest{
+		DeviceName: "Web 网络存储", Note: "共享照片与备份", SiteName: "家A",
+		Memberships: []servermanage.NetworkMembershipInput{
+			{Network: "家A局域网", Address: "192.168.1.70"},
+			{Network: "虚拟网", Address: "100.64.0.70"},
+		},
+	}, servermanage.WebUISource("192.0.2.7")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runCli(t, "devices", "add", "命令行网络存储", "--note", "共享照片与备份")
+	runCli(t, "devices", "member", "add", "命令行网络存储", "--network", "家A局域网", "--address", "192.168.1.71")
+	runCli(t, "devices", "member", "add", "命令行网络存储", "--network", "虚拟网", "--address", "100.64.0.71")
+
+	out := runCli(t, "devices", "show", "Web 网络存储")
+	for _, want := range []string{"备注：共享照片与备份", "家A局域网", "192.168.1.70", "虚拟网", "100.64.0.70"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("devices show 应显示 Web UI 保存的同一份数据，缺少 %q：\n%s", want, out)
+		}
+	}
+
+	st, err = store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, name := range []string{"Web 网络存储", "命令行网络存储"} {
+		device, err := st.GetDevice(name)
+		if err != nil || device == nil || device.Note != "共享照片与备份" || device.ClientName != "" {
+			t.Fatalf("两条入口应保存同样的设备字段：%v %+v", err, device)
+		}
+		memberships, err := st.ListNetworkMembershipsByRegistration(name)
+		if err != nil || len(memberships) != 2 ||
+			memberships[0].NetworkName != "家A局域网" || memberships[1].NetworkName != "虚拟网" {
+			t.Fatalf("两条入口应保存同样的网络成员：%v %+v", err, memberships)
+		}
 	}
 }
 

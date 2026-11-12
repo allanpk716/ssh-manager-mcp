@@ -63,6 +63,15 @@ type ServerAnchorCopy struct {
 // AddDevice 登记一台设备。客户端实例按名字解析成设备码标识符；设备行与
 // 审计行在同一个事务里提交。
 func (s *Store) AddDevice(name, note, client string) (*models.Device, error) {
+	return s.addDevice(name, note, client, WriteSource{})
+}
+
+// AddDeviceWithSource 与 AddDevice 相同，并把设备登记审计行标为指定来源。
+func (s *Store) AddDeviceWithSource(name, note, client string, source WriteSource) (*models.Device, error) {
+	return s.addDevice(name, note, client, source)
+}
+
+func (s *Store) addDevice(name, note, client string, source WriteSource) (*models.Device, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -96,7 +105,7 @@ func (s *Store) AddDevice(name, note, client string) (*models.Device, error) {
 	if err := insertDeviceTx(tx, device); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.add", deviceAuditSummary(device)); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.add", deviceAuditSummary(device), source); err != nil {
 		return nil, err
 	}
 	return device, tx.Commit()
